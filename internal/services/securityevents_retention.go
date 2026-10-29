@@ -152,9 +152,15 @@ func threatRollupBackfillPending(database *sql.DB) (bool, error) {
 		}
 		return true, nil
 	}
-	rebuilding, err := nonEmpty(ThreatRollupRebuildFromKey)
-	if err != nil || rebuilding {
-		return rebuilding, err
+	// 重建键「存在即 pending」：空/空白值属于损坏的半写状态，不能被
+	// 解读为无重建意图，否则其余 ready 键齐全时会误删尚未固化的原始事件。
+	var rebuildMarker int
+	err := database.QueryRow(`SELECT 1 FROM metrics_state WHERE key=? LIMIT 1`, ThreatRollupRebuildFromKey).Scan(&rebuildMarker)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return false, err
+	}
+	if err == nil {
+		return true, nil
 	}
 	for _, key := range []string{
 		ThreatRollupTargetReadyKey,

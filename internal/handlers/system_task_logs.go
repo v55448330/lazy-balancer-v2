@@ -11,6 +11,10 @@ import (
 	"lazy-balancer-v2/internal/taskengine"
 )
 
+// beforeSystemTaskLogDBQuery 关停交错测试缝（生产 no-op）：落在局部
+// 句柄快照与查询之间，证明不再二次读取包级 db.DB。
+var beforeSystemTaskLogDBQuery = func() {}
+
 // systemTaskLogPathResolver 任务日志路径批量解析入口：普通注册任务直接按
 // 任务 ID；cert-job 动态工作项一次全表预载 job_id→rule_id，供批量调用方
 // （logstats 逐任务解析）复用避免 N+1。单条入口（GetSystemTaskLogs）走
@@ -44,11 +48,13 @@ func (r *systemTaskLogPathResolver) resolve(taskID string) (string, error) {
 		return "", nil
 	}
 	if !r.certJobsLoaded {
-		if db.DB == nil {
+		database := db.DB
+		if database == nil {
 			r.certJobRuleIDs = map[string]string{}
 			r.certJobsLoaded = true
 		} else {
-			rows, err := db.DB.Query(`SELECT id, rule_id FROM cert_jobs`)
+			beforeSystemTaskLogDBQuery()
+			rows, err := database.Query(`SELECT id, rule_id FROM cert_jobs`)
 			if err != nil {
 				return "", err
 			}
@@ -86,15 +92,17 @@ func systemTaskLogPath(taskID string) (string, error) {
 	if !strings.HasPrefix(taskID, "cert-job:") {
 		return taskengine.TaskLogPath(taskID), nil
 	}
-	if db.DB == nil {
-		return "", nil
-	}
 	jobID, ok := parseCertJobTaskID(taskID)
 	if !ok {
 		return "", nil
 	}
+	database := db.DB
+	if database == nil {
+		return "", nil
+	}
+	beforeSystemTaskLogDBQuery()
 	var ruleID string
-	err := db.DB.QueryRow(`SELECT rule_id FROM cert_jobs WHERE id=?`, jobID).Scan(&ruleID)
+	err := database.QueryRow(`SELECT rule_id FROM cert_jobs WHERE id=?`, jobID).Scan(&ruleID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return "", nil

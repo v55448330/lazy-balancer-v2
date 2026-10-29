@@ -1,6 +1,7 @@
 package taskengine
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strings"
@@ -14,18 +15,18 @@ import (
 // 阈值由 services 注入 task_log_size_mb（默认 10MB）；保留期清理由
 // log-cleanup 另行负责，不参与尺寸滚动。尺寸函数存于 taskLogConf
 // （与目录同一把读写锁——裸全局在测试并发下存在数据竞争）。
-func SetTaskLogSizeBytesFn(fn func() int64) {
+func SetTaskLogSizeBytesFn(fn func(context.Context) int64) {
 	taskLogConf.Lock()
 	taskLogConf.sizeFn = fn
 	taskLogConf.Unlock()
 }
 
-func taskLogSizeBytes() int64 {
+func taskLogSizeBytes(ctx context.Context) int64 {
 	taskLogConf.RLock()
 	fn := taskLogConf.sizeFn
 	taskLogConf.RUnlock()
 	if fn != nil {
-		return fn()
+		return fn(ctx)
 	}
 	// 未注入时的回退与治理默认值同源（services 读库侧同样引用
 	// db.DefaultTaskLogSizeMB）：默认值只有一处定义，禁止在本包写第二份字面量。
@@ -137,7 +138,13 @@ func RemoveTaskLogIfModifiedBefore(path string, cutoff time.Time) (bool, error) 
 // rotateTaskLogBeforeWrite 并把锁外取到的阈值传入——持锁读库会把同条件的
 // 其他日志写者一起拖到 busy_timeout。
 func RotateTaskLogBeforeWrite(path string, incoming int64, keep int) (bool, error) {
-	return rotateTaskLogBeforeWrite(path, incoming, keep, taskLogSizeBytes())
+	return RotateTaskLogBeforeWriteContext(context.Background(), path, incoming, keep)
+}
+
+// RotateTaskLogBeforeWriteContext 与 RotateTaskLogBeforeWrite 同语义，
+// 阈值数据库读取消费调用方上下文。
+func RotateTaskLogBeforeWriteContext(ctx context.Context, path string, incoming int64, keep int) (bool, error) {
+	return rotateTaskLogBeforeWrite(path, incoming, keep, taskLogSizeBytes(ctx))
 }
 
 // rotateTaskLogBeforeWrite 与 RotateTaskLogBeforeWrite 同语义，阈值由调用方

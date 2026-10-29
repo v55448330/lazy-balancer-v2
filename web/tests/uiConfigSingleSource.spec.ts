@@ -10,13 +10,13 @@ import { createLatestReadSession } from '../src/utils/viewAsyncState.ts'
 // - Dashboard 规则列表刷新失败但保留缓存时，必须明示「展示上次结果」；
 // - OIDC 配置读取的回填必须只接受最新一轮请求（迟到的旧响应不得回滚表单）。
 
-test('全局 DNS 提供商：表单入口与过度承诺文案已移除，键仍按库值回传', () => {
+test('全局 DNS 提供商：表单入口、过度承诺文案与保存传播均已移除', () => {
   // 「不得回流」断言走剥注释视图：注释里写一句历史说明不得把用例改红。
   const page = code('src/views/settings/FreeCertificates.vue')
   assert.doesNotMatch(page, /v-model="global\.dns_provider"/, '死配置不得继续呈现为可改')
   assert.doesNotMatch(page, /创建规则时默认使用/, '文案不得承诺不存在的全局默认机制')
   const save = member(page, 'const handleSave = async')
-  assert.match(save, /dns_provider: global\.value\.dns_provider/, '保存仍按库值回传，避免静默改写存量列')
+  assert.doesNotMatch(save, /dns_provider: global\.value\.dns_provider/, '保存不得继续传播退役字段')
 })
 
 test('Dashboard 规则卡：刷新失败且有缓存时明示陈旧，首轮失败仍报「采集失败」', () => {

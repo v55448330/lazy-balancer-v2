@@ -92,10 +92,7 @@ export function threatScreenWritePayload(input: {
 }
 
 /**
- * ACME 全局设置保存载荷：三个数值输入清空后按 0 提交（不携带 null）；
- * dns_provider 仅在当前后端唯一接受的枚举值 dnspod 时携带。存量/导入的
- * 非 dnspod 值没有 UI 入口，原样回传会让整卡保存永久 400——省略键后由
- * 后端 COALESCE 保留现值，不在前端静默改写。
+ * ACME 全局设置保存载荷：三个数值输入清空后按 0 提交（不携带 null）。
  */
 export function acmeGlobalWritePayload(input: {
   email: string
@@ -103,14 +100,12 @@ export function acmeGlobalWritePayload(input: {
   renewalDays: number | null | undefined
   renewalAttempts: number | null | undefined
   defaultCAProviderId: number
-  dns_provider: string
 }): {
   acme_email: string
   cert_expiry_days: number
   cert_renewal_days: number
   cert_renewal_attempts: number
   default_ca_provider_id: number
-  dns_provider?: 'dnspod'
   source: 'acme'
 } {
   return {
@@ -119,7 +114,6 @@ export function acmeGlobalWritePayload(input: {
     cert_renewal_days: numberOr(input.renewalDays, 0),
     cert_renewal_attempts: numberOr(input.renewalAttempts, 0),
     default_ca_provider_id: input.defaultCAProviderId,
-    ...(input.dns_provider === 'dnspod' ? { dns_provider: 'dnspod' as const } : {}),
     source: 'acme' as const,
   }
 }

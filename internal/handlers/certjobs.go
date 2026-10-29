@@ -444,8 +444,10 @@ func (h *Handlers) retryCertJobByID(c *gin.Context, id int) {
 		}
 		return
 	}
-	auditFailureWithRule := func(result string) {
-		recordAudit(c, "重试失败", "证书任务", services.FormatAuditDetail(services.AuditJobPart(id), services.AuditRulePart(ruleID), services.AuditResultPart(result)))
+	auditFailureWithRule := func(result string, detail ...string) {
+		parts := append([]string{services.AuditJobPart(id), services.AuditRulePart(ruleID)}, detail...)
+		parts = append(parts, services.AuditResultPart(result))
+		recordAudit(c, "重试失败", "证书任务", services.FormatAuditDetail(parts...))
 	}
 	// 冷却门禁与文案共用同一 now：分别取墙钟会让边界（<1s 剩余）出现
 	// 「门禁说冷却中、文案说 0s」的自相矛盾。
@@ -542,7 +544,11 @@ func (h *Handlers) retryCertJobByID(c *gin.Context, id int) {
 	})
 	if err != nil {
 		services.Logf("error", "Manual retry enqueue failed for job %d: %v", id, err)
-		auditFailureWithRule("enqueue_failed")
+		if changed && cooldownActive && forceRetry {
+			auditFailureWithRule("enqueue_failed", "手动越过 CA 冷却")
+		} else {
+			auditFailureWithRule("enqueue_failed")
+		}
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to enqueue retry"})
 		return
 	}
@@ -1215,7 +1221,7 @@ func readCertJobLogFile(path string) (string, error) {
 		startOffset = info.Size() - maxBytes
 	}
 
-	f, err := os.Open(path)
+	f, _, err := openRegularLogFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return "", nil

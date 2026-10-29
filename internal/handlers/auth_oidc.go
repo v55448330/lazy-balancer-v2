@@ -1521,6 +1521,8 @@ func (h *Handlers) OIDCSettingsUpdate(c *gin.Context) {
 	}
 	if len(migration.conflicts) > 0 {
 		services.Logf("warn", "OIDC 设置保存被拒绝：服务地址归一后与既有身份行冲突（%d 个 subject）", len(migration.conflicts))
+		recordAudit(c, "更新失败", "OIDC 配置", services.FormatAuditDetail(
+			"服务地址归一与既有身份行冲突", "subject："+strings.Join(migration.conflicts, "、"), services.AuditResultPart("failure")))
 		c.JSON(http.StatusConflict, models.APIResponse{
 			Code:    409,
 			Message: fmt.Sprintf("服务地址归一后与既有身份记录冲突（%d 个 subject 已存在归一值身份行），请先人工合并重复账号再保存", len(migration.conflicts)),
@@ -1843,6 +1845,12 @@ func (h *Handlers) OIDCSettingsDelete(c *gin.Context) {
 	} else {
 		oidcProviderInvalidate(cfg.Issuer)
 	}
+	var oidcIdentityRows int
+	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM users WHERE auth_provider='oidc'`).Scan(&oidcIdentityRows); err != nil {
+		services.Logf("error", "OIDC 配置删除前统计存量身份行失败: %v", err)
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取 OIDC 身份记录失败"})
+		return
+	}
 	if err := saveOIDCConfig(OIDCConfig{}); err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "删除 OIDC 配置失败"})
 		return
@@ -1868,8 +1876,15 @@ func (h *Handlers) OIDCSettingsDelete(c *gin.Context) {
 		detail += fmt.Sprintf("（删除前：服务地址 %s；Client ID %s；Client Secret %s；启用状态 %s）",
 			yn(cfg.Issuer), yn(cfg.ClientID), secretState, enabledState)
 	}
+	if oidcIdentityRows > 0 {
+		detail = services.FormatAuditDetail(detail, fmt.Sprintf("存量 OIDC 身份行 %d 条已不可登录", oidcIdentityRows))
+	}
 	recordAudit(c, "删除", "OIDC 配置", services.FormatAuditDetail(detail, services.AuditResultPart("success")))
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "OIDC 配置已删除"})
+	message := "OIDC 配置已删除"
+	if oidcIdentityRows > 0 {
+		message = fmt.Sprintf("OIDC 配置已删除；%d 个存量 OIDC 用户已无法登录。重新配置同一 issuer 可恢复原身份绑定；改用不同 issuer 会按新身份重新开户。请删除不再需要的残留用户。", oidcIdentityRows)
+	}
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: message, Data: gin.H{"oidc_identity_rows": oidcIdentityRows}})
 }
 
 // sanitizeOIDCReturnTo 归一 OIDC 登录的 return_to

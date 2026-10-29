@@ -2521,6 +2521,69 @@ func TestRestoreCertJobs_roundtripsCanonicalDatetimeFormat(t *testing.T) {
 	}
 }
 
+// 行级 epoch 守卫必须同时比对部署退避簿记：快照之后由部署失败推进的
+// deployment_attempts/deployment_available_after 是部署链（本请求之外的写者）
+// 在快照之后产生的真实成果，补偿按快照整行重写会把它回退——退避窗口提前
+// （多一次部署 + 一次 /load），窗口还可能退回 NULL 使该行只能靠 30s 补扫/
+// 重启恢复（advanceCertificateDeploymentWindow 的存在即证明该形态是降级态）。
+func TestRestoreCertJobs_preservesDeploymentBackoffAdvancedAfterSnapshot(t *testing.T) {
+	_, database := newClusterTestService(t)
+	const ruleID = "lb_restore_deploy_backoff"
+	if _, err := database.Exec(`INSERT INTO lb_rules (caddy_id,name,domain,protocol,listen_port,enabled,enable_tls,tls_source) VALUES (?, 'backoff', 'backoff.example.com', 'http', 8080, 1, 1, 'acme_dns')`, ruleID); err != nil {
+		t.Fatalf("seed rule: %v", err)
+	}
+	now := time.Now().UTC()
+	certPEM, keyPEM := certificatePairForDomains(t, now.Add(-time.Hour), now.Add(90*24*time.Hour), "backoff.example.com")
+	result, err := database.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,message,cert_pem,key_pem,expires_at,deployment_attempts,deployment_available_after)
+		VALUES (?, 'backoff.example.com', 'downloaded', '部署失败 [attempt=1/5]: reload failed', ?, ?, datetime('now','+90 days'), 1, datetime('now','+5 minutes'))`, ruleID, certPEM, keyPEM)
+	if err != nil {
+		t.Fatalf("seed job: %v", err)
+	}
+	jobID, err := result.LastInsertId()
+	if err != nil {
+		t.Fatalf("read job id: %v", err)
+	}
+	snapshot, err := SnapshotCertJobsForRule(ruleID)
+	if err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	// Given：快照之后部署链再次失败——材料与状态不变（同一份材料重试），
+	// 只有簿记列推进（deploymentFailedFrom 的写回形态）。
+	if _, err := database.Exec(`UPDATE cert_jobs SET deployment_attempts=2, message='部署失败 [attempt=2/5]: reload failed', deployment_available_after=datetime('now','+30 minutes') WHERE id=?`, jobID); err != nil {
+		t.Fatalf("simulate deployment failure: %v", err)
+	}
+
+	// When
+	if err := RestoreCertJobsForRule(snapshot); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+
+	// Then：快照后推进的部署退避簿记不得被回退
+	var attempts int
+	var message string
+	var availableAfter sql.NullString
+	if err := database.QueryRow(`SELECT COALESCE(deployment_attempts,0), COALESCE(message,''), CAST(deployment_available_after AS TEXT) FROM cert_jobs WHERE id=?`, jobID).
+		Scan(&attempts, &message, &availableAfter); err != nil {
+		t.Fatalf("read restored job: %v", err)
+	}
+	if attempts != 2 || !strings.Contains(message, "attempt=2") {
+		t.Fatalf("deployment_attempts=%d message=%q, want 2 且含 attempt=2（快照后部署失败推进的簿记被回退）", attempts, message)
+	}
+	if !availableAfter.Valid {
+		t.Fatal("deployment_available_after 被回退为 NULL（该行失去周期通道，只能靠补扫/重启恢复）")
+	}
+	window, parseErr := time.Parse("2006-01-02 15:04:05", availableAfter.String)
+	if parseErr != nil {
+		t.Fatalf("deployment_available_after=%q 非规范格式: %v", availableAfter.String, parseErr)
+	}
+	if window.Before(now.Add(20 * time.Minute)) {
+		t.Fatalf("deployment_available_after=%s 早于快照后推进的窗口（want 约 +30 分钟，不得退回快照的 +5 分钟）", window)
+	}
+	if _, preserved := snapshot.preserved[int(jobID)]; !preserved {
+		t.Fatalf("行 %d 未记入 snapshot.preserved——补偿重排队会把已推进的退避当成在途任务重签", jobID)
+	}
+}
+
 func TestCertificateService_rescanLogsScanAndIterationFailures(t *testing.T) {
 	t.Run("scan error", func(t *testing.T) {
 		_, database := newClusterTestService(t)

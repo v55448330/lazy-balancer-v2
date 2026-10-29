@@ -952,8 +952,8 @@ func TestOversizedResponseMessageDistinguishesExportConfig(t *testing.T) {
 	if !strings.Contains(postNoPaginationResult, "无分页参数") || strings.Contains(postNoPaginationResult, "请改用分页或专用导出工具") {
 		t.Fatalf("POST 无分页工具 result=%s, want 「无分页参数」指引而非通用分页文案", postNoPaginationResult)
 	}
-	if !strings.Contains(previewResult, "source") || strings.Contains(previewResult, "请改用分页或专用导出工具") {
-		t.Fatalf("preview_config result=%s, want 拆小 source 的可执行指引", previewResult)
+	if !strings.Contains(previewResult, "分批预览") || strings.Contains(previewResult, "source") || strings.Contains(previewResult, "请改用分页或专用导出工具") {
+		t.Fatalf("preview_config result=%s, want 按字段分批的可执行指引", previewResult)
 	}
 	if !strings.Contains(ruleLogsResult, "log-stream") || strings.Contains(ruleLogsResult, "请改用对应的单条查询工具") {
 		t.Fatalf("get_rule_logs result=%s, want REST log-stream 增益续读指引（不得指向自身）", ruleLogsResult)

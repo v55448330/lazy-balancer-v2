@@ -467,3 +467,13 @@ test('2D 光流池满时拒绝新弧线，不淘汰已开始动画', () => {
   assert.doesNotMatch(spawn, /arcs\.shift\(\)/, 'spawnArc 不得淘汰已开始弧线')
 })
 
+
+test('2D 拖拽捕获指针并在取消或捕获丢失时清理手势', () => {
+  const src = code('src/utils/threatScene.ts')
+  const down = src.slice(src.indexOf('function onPointerDown('), src.indexOf('function onPointerMove('))
+  assert.match(down, /canvas\.setPointerCapture\(event\.pointerId\)/, '拖出画布后仍须持续接收同一指针事件')
+  for (const type of ['pointercancel', 'lostpointercapture']) {
+    assert.match(src, new RegExp(`canvas\\.addEventListener\\('${type}', onPointerUp\\)`), `${type} 必须清理拖拽态`)
+    assert.match(src, new RegExp(`canvas\\.removeEventListener\\('${type}', onPointerUp\\)`), `${type} 监听必须随 dispose 摘除`)
+  }
+})

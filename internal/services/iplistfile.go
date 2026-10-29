@@ -308,7 +308,7 @@ func writeIPListFile(scope string, merged []string) (string, error) {
 	}
 	existing, readErr := os.ReadFile(path)
 	if readErr == nil && string(existing) == content {
-		// 同字节跳写仍须归一权限：存量投影由 os.CreateTemp 生成（恒 0600），
+		// 同字节跳写仍须归一权限：atomicfile 临时产物恒为调用方指定模式，
 		// 内容不再变化的名单永远走不到重写路径，Caddy 换 uid 部署时读不到。
 		// chmod 幂等且不改 mtime（内容未变，wafiplist 不重建）。
 		if err := os.Chmod(path, 0o644); err != nil {
@@ -321,11 +321,10 @@ func writeIPListFile(scope string, merged []string) (string, error) {
 		return "", err
 	}
 	// 唯一临时名 + fsync + rename + 父目录同步单源走 writeFileAtomicSynced
-	// （internal/atomicfile）：此前本函数自带一份手抄实现（CreateTemp/Chmod/
-	// Write/Sync/Close/Rename/syncParentDir），与回滚路径的成功语义靠注释对齐，
-	// 任一侧调整 fsync 顺序或权限策略即分叉——掉电窗口下会留下 0 字节投影
-	// （wafiplist 把空文件当「永不命中」，deny/blacklist 即静默 fail-open）。
-	// 单源实现同时保证跨进程可读的 0644（@ipListFast 是跨进程读文件协议）。
+	// （internal/atomicfile），与回滚路径共享同一成功语义。掉电窗口下不得留下
+	// 0 字节投影（wafiplist 把空文件当「永不命中」，deny/blacklist 即静默
+	// fail-open）。单源实现同时保证跨进程可读的 0644（@ipListFast 是跨进程
+	// 读文件协议）。
 	if readErr != nil && errors.Is(readErr, os.ErrNotExist) {
 		// 写前不存在＝本轮渲染新建：登记进回滚清单（写失败时回滚删除对不存在
 		// 文件的删除是幂等跳过，宁可多登记也不漏删在役文件）。
@@ -448,13 +447,11 @@ const ipListGCInterval = time.Hour
 //     scope 仍可能命中（用户手放同形名），但不再吞未知前缀文件。
 var ipListProjectedFileName = regexp.MustCompile(`^(u-[A-Za-z0-9][A-Za-z0-9._-]*|p[0-9]+-(acl|trust|bl|crsxc-([0-9]+|[0-9a-f]{12}))|tp)(-[0-9a-f]{12})?\.txt$`)
 
-// ipListTempFileName 匹配 writeIPListFile 的临时文件名形态
-// （CreateTemp(IPListDataDir, scope+"-*.tmp")：<投影 scope>-<随机数字>.tmp）。
-// GC 只委托删除本模块拥有的临时文件——目录内的无关
-// .tmp（运维投放的 ops-notes.tmp 等）一律不动；24h 超龄门槛仍保护在役写入
-// （在役 tmp 恒新鲜）。scope 白名单与 ipListProjectedFileName 同源
-// 同款收口：旧哈希后缀只挂已知 scope，不吞任意前缀）。
-var ipListTempFileName = regexp.MustCompile(`^(u-[A-Za-z0-9][A-Za-z0-9._-]*|p[0-9]+-(acl|trust|bl|crsxc-([0-9]+|[0-9a-f]{12}))|tp)(-[0-9a-f]{12})?-[0-9]+\.tmp$`)
+// ipListTempFileName 匹配 internal/atomicfile.WriteAtomic 的真实临时名：
+// `.<投影文件名>-<随机数字>.tmp`（例如 `.p12-acl.txt-12345.tmp`）。
+// GC 只删除本模块拥有的临时文件——目录内的无关 .tmp 一律不动；24h 超龄
+// 门槛仍保护在役写入。scope 白名单与 ipListProjectedFileName 同源收口。
+var ipListTempFileName = regexp.MustCompile(`^\.(u-[A-Za-z0-9][A-Za-z0-9._-]*|p[0-9]+-(acl|trust|bl|crsxc-([0-9]+|[0-9a-f]{12}))|tp)(-[0-9a-f]{12})?\.txt-[0-9]+\.tmp$`)
 
 // ipListRenderRefs 记录本进程渲染引用过的投影文件及最近引用时间：一次全量
 // 配置渲染会重新投影全部在役名单（同字节跳写也计引用），故「长期
@@ -554,11 +551,10 @@ func gcStaleIPListFiles(now time.Time, maxAge time.Duration) (removed int) {
 		}
 		deleted = append(deleted, full)
 	}
-	// 顺带清理超龄崩溃残留的投影临时文件（CreateTemp 半截
-	// .tmp 无引用语义，超龄即可删；在役写入的 .tmp 恒新鲜，不受影响）。
+	// 顺带清理超龄崩溃残留的投影临时文件（atomicfile 半截 .tmp 无引用语义，
+	// 超龄即可删；在役写入的 .tmp 恒新鲜，不受影响）。
 	for _, entry := range entries {
-		// 名字形态门——只回收本模块 CreateTemp 产出的临时文件，
-		// 无关 .tmp 不碰（旧实现仅按后缀匹配，会删除目录内任意超龄 .tmp）。
+		// 名字形态门——只回收本模块 atomicfile 产物，无关 .tmp 不碰。
 		if entry.IsDir() || !ipListTempFileName.MatchString(entry.Name()) {
 			continue
 		}

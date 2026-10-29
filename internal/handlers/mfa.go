@@ -193,7 +193,7 @@ func (h *Handlers) MFAVerifyLogin(c *gin.Context) {
 	if _, err := db.DB.Exec("UPDATE users SET login_failed_attempts=0, login_locked_until=NULL WHERE id=?", userID); err != nil {
 		services.Logf("warn", "MFA 登录成功清零登录失败计数与锁定失败: user_id=%d: %v", userID, err)
 	}
-	h.respondLoginWithMFA(c, user, passwordVersion, time.Now().Unix(), true)
+	h.respondLoginWithMFA(c, user, passwordVersion, time.Now().Unix(), true, "")
 }
 
 // —— 自助端点（JWT）——
@@ -392,10 +392,13 @@ func (h *Handlers) MFAActivate(c *gin.Context) {
 		if errors.Is(verr, services.ErrMFANoPendingSecret) {
 			// 业务态哨兵（未 setup/pending 被并发覆盖）→ 400 业务文案，
 			// 与 verify 四入口的 ErrMFANotEnabled→400 同口径——不得折叠成 500。
+			recordAudit(c, "认证拒绝", "用户认证", services.FormatAuditDetail("绑定 MFA", verr.Error(), services.AuditResultPart("failure")))
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: verr.Error()})
 			return
 		}
 		if verr != nil {
+			services.Logf("error", "MFA 读取 pending 绑定状态失败: user_id=%d: %v", userID, verr)
+			recordAudit(c, "认证拒绝", "用户认证", services.FormatAuditDetail("绑定 MFA", "验证服务故障", services.AuditResultPart("failure")))
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "MFA 验证服务暂时不可用，请稍后重试"})
 			return
 		}
@@ -406,9 +409,15 @@ func (h *Handlers) MFAActivate(c *gin.Context) {
 		if ferr != nil {
 			// 失败计数未落库 = DB 硬闸失效；fail-closed 500，不得以「验证码错误」
 			// 回应让爆破继续。内存窗口（上方记账）仍限制尝试速率。
+			recordAudit(c, "认证拒绝", "用户认证", services.FormatAuditDetail("记录 MFA 绑定失败次数", services.AuditResultPart("failure")))
 			mfaInternalFailure(c, "记录 MFA 绑定失败次数", ferr)
 			return
 		}
+		failureDetail := "绑定 MFA 验证码错误"
+		if invalidated {
+			failureDetail += "，绑定已作废"
+		}
+		recordAudit(c, "认证拒绝", "用户认证", services.FormatAuditDetail(failureDetail, services.AuditResultPart("failure")))
 		if invalidated {
 			c.JSON(http.StatusUnauthorized, models.APIResponse{Code: 401, Message: "验证码错误次数过多，绑定已作废，请重新开始绑定"})
 			return
@@ -421,9 +430,11 @@ func (h *Handlers) MFAActivate(c *gin.Context) {
 	codes, err := services.MFAActivate(userID)
 	if err != nil {
 		if errors.Is(err, services.ErrMFANoPendingSecret) || errors.Is(err, services.ErrMFASecretChanged) {
+			recordAudit(c, "认证拒绝", "用户认证", services.FormatAuditDetail("激活 MFA", err.Error(), services.AuditResultPart("failure")))
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 			return
 		}
+		recordAudit(c, "认证拒绝", "用户认证", services.FormatAuditDetail("激活 MFA", services.AuditResultPart("failure")))
 		mfaInternalFailure(c, "激活", err)
 		return
 	}
@@ -548,11 +559,9 @@ func (h *Handlers) MFAVerifyStep(c *gin.Context) {
 	// ——基础设施故障与并发删除/行缺失（sql.ErrNoRows）一律 500 fail-closed；
 	// 仅读成功但 is_enabled=0 才 401「用户不可用」。（行缺失已在上一段
 	// services.MFAVerifyTOTPCode 的同行查询先失败并走 500，此分支属纵深防御）
-	// 列清单来自单源（auth_provider 与登录路径同口径）——漏列会让所有
-	// step-up 响应的 auth_provider 变成 ""，且存量 OIDC 行（mfa_enabled=1）在
-	// verify-step 成功后丢掉 auth_method=oidc 声明（middleware 的 MFA 门短路与
-	// 集群票据直通依赖该声明）；is_setup_admin 同列清单载入，避免本路径响应
-	// 与其他用户读取端点口径分裂。
+	// 列清单来自单源（auth_provider 与登录路径同口径），保证 step-up 响应与
+	// 其他用户读取端点一致。auth_method 不从行内 provider 重推：必须沿用当前
+	// 会话声明，避免导入混合行在验码后获得 OIDC 的本地 MFA 写门豁免。
 	user, err := db.ScanUserRow(db.DB.QueryRow(`SELECT `+db.UserRowColumns("")+` FROM users WHERE id=?`, userID), &meta)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取用户信息失败"})
@@ -562,7 +571,7 @@ func (h *Handlers) MFAVerifyStep(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, models.APIResponse{Code: 401, Message: "用户不可用"})
 		return
 	}
-	h.respondLoginWithMFA(c, user, meta.PasswordVersion, time.Now().Unix(), false)
+	h.respondLoginWithMFA(c, user, meta.PasswordVersion, time.Now().Unix(), false, c.GetString("auth_method"))
 }
 
 // —— 写操作 step-up 判定（路由守卫与 handler 内联副本的单源）——
@@ -593,6 +602,26 @@ type MFAStepUpDecision struct {
 // MFA 免码窗的边界）；单源在此，判定与响应头共用。
 func mfaStepUpSecondsAgo(elapsed time.Duration) int64 {
 	return int64(math.Ceil(elapsed.Seconds()))
+}
+
+const mfaFutureTimestampWarnInterval = 60 * time.Second
+
+var mfaFutureTimestampWarningLog struct {
+	mu   sync.Mutex
+	last time.Time
+}
+
+// logMFAFutureTimestampWarning 对持续时钟回拨按全局 60s 窗口留痕；请求拒绝
+// 判定不受节流影响。全局单槽避免用户 ID 键值随异常会话无界增长。
+func logMFAFutureTimestampWarning(userID int, elapsed time.Duration) {
+	mfaFutureTimestampWarningLog.mu.Lock()
+	defer mfaFutureTimestampWarningLog.mu.Unlock()
+	now := time.Now()
+	if !mfaFutureTimestampWarningLog.last.IsZero() && now.Sub(mfaFutureTimestampWarningLog.last) < mfaFutureTimestampWarnInterval {
+		return
+	}
+	mfaFutureTimestampWarningLog.last = now
+	services.Logf("warn", "MFA step-up 时间戳在未来（时钟回拨？），按未验证处理: user_id=%d age=%s", userID, elapsed)
 }
 
 // DecideMFAStepUp 判定请求是否需要 MFA step-up 及是否已在宽限窗内通过。
@@ -648,7 +677,7 @@ func DecideMFAStepUp(c *gin.Context, covered bool, database *sql.DB, mfaEnabledC
 		if elapsed < 0 {
 			// 时钟回拨/VM 快照恢复会让旧 mfa_ts 落在未来：负年龄不得等价于
 			// 「刚验证」。按未验证处理（fail-safe），并留痕以便定位时序故障。
-			services.Logf("warn", "MFA step-up 时间戳在未来（时钟回拨？），按未验证处理: user_id=%d age=%s", userID, elapsed)
+			logMFAFutureTimestampWarning(userID, elapsed)
 			return MFAStepUpDecision{Applies: true}, nil
 		}
 		if elapsed < mfaStepUpGraceWindow {

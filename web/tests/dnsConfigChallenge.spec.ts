@@ -78,11 +78,16 @@ test('基线与表单同源裁剪：隐藏键不得进入基线键集', () => {
 
   const page = code('src/views/settings/FreeCertificates.vue')
   const open = section(page, 'const openConfigDialog = (config?: CertConfig) => {', '\nconst ')
+  // 分支语义是契约（隐藏键裁剪走同一字段归一、否则浅拷贝库值），整段三元原样不是：
+  // 格式化换行/空格即假红，而两条分支互换才是真回归。
+  const initial = section(open, 'const initialCredentials =', 'form.value = {')
+  assert.match(initial, /canPruneHidden\s*\?/, '裁剪门必须由 canPruneHidden 判定')
   assert.match(
-    open,
-    /const initialCredentials = canPruneHidden \? applyCredentialFieldChange\(providerFields, parsedCreds\) : \{ \.\.\.parsedCreds \}/,
+    initial,
+    /\?\s*applyCredentialFieldChange\(providerFields, parsedCreds\)/,
     '表单初值与基线必须来自同一次归一',
   )
+  assert.match(initial, /:\s*\{\s*\.\.\.parsedCreds\s*\}/, '非裁剪分支必须浅拷贝库值')
   assert.match(open, /dns_credentials: initialCredentials,/, '表单使用归一后的凭证')
   assert.match(open, /dnsCredentials: legacyEmptyCredentials\.value \? null : \{ \.\.\.initialCredentials \}/, '基线取同一份归一结果的拷贝')
   assert.doesNotMatch(

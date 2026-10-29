@@ -408,12 +408,14 @@ const remove = async () => {
   if (isReadOnly.value || saving.value || loadFailed.value) return
   await runExclusive(() => saving.value, (locked) => { saving.value = locked }, async () => {
     try {
-      await ElMessageBox.confirm('删除后 OIDC 登录入口消失（已创建的 OIDC 用户保留，可另行管理）。确认删除？', '删除 OIDC 配置', { type: 'warning' })
+      await ElMessageBox.confirm('删除后 OIDC 登录入口消失，已创建的 OIDC 用户将保留但无法登录。重新配置同一 issuer 可恢复原身份绑定；改用不同 issuer 会重新开户。确认删除？', '删除 OIDC 配置', { type: 'warning' })
     } catch { return }
+    let message = '已删除'
     try {
-      await request.delete('/settings/oidc')
+      const res = await request.delete<{ message?: string }>('/settings/oidc')
+      message = res.message || message
     } catch { /* 拦截器已提示 */ return }
-    mfaAwareSuccess('已删除')
+    mfaAwareSuccess(message)
     form.issuer = ''; form.clientId = ''; form.clientSecret = ''; form.displayName = ''
     form.allowedEmailDomains = ''; form.allowedGroups = ''
     probe.checked = false; probe.ok = false; lastTest.value = null

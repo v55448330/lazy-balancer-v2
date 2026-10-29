@@ -1155,31 +1155,66 @@ func clampAuditRetentionMonthsOnStartup() {
 // 滞后于 DB 的窗口( 用户裁定:自愈配置恢复须与启动初始化同一流程)。
 const caddyRestartTriggerFile = "/tmp/caddy-restarted"
 
-// caddyRestartWatcherStarted 幂等守卫（注释曾称幂等但无守卫——
-// 第二调用点会产生双 watcher）。
+// caddyRestartWatcherStarted 幂等守卫；cancel/done 让进程关停能在 db.Close
+// 之前停止轮询并等待在途轮次结束。
 var caddyRestartWatcherStarted atomic.Bool
+var caddyRestartWatcherMu sync.Mutex
+var caddyRestartWatcherCancel context.CancelFunc
+var caddyRestartWatcherDone chan struct{}
 
 // caddyRestartProcessStart 进程启动时刻
 // mtime 早于此的文件属上一进程生命周期残留——删除不执行（启动应用已在启动
 // 流程完成，重放无意义）。
 var caddyRestartProcessStart = time.Now()
 
-// caddyRestartWatcherLoop 是 watcher 循环体（测试缝：用例注入空跑替身，
+// caddyRestartWatcherLoop 是 watcher 循环体（测试缝：用例注入替身，
 // 避免真实的 2s 轮询 stat 泄漏到后续用例）。
-var caddyRestartWatcherLoop = func(h *Handlers) {
+var caddyRestartWatcherLoop = func(h *Handlers, ctx context.Context) {
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
 	for {
-		time.Sleep(2 * time.Second)
-		h.caddyRestartWatcherOnce(caddyRestartTriggerFile, caddyRestartProcessStart)
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			h.caddyRestartWatcherOnce(caddyRestartTriggerFile, caddyRestartProcessStart)
+		}
 	}
 }
 
 // StartCaddyRestartWatcher 启动 Caddy 重启监听(2s 轮询 trigger 文件)。
 // 幂等(已运行不重启);main.go 在启动应用完成后调用。
 func (h *Handlers) StartCaddyRestartWatcher() {
+	caddyRestartWatcherMu.Lock()
+	defer caddyRestartWatcherMu.Unlock()
 	if !caddyRestartWatcherStarted.CompareAndSwap(false, true) {
 		return
 	}
-	go caddyRestartWatcherLoop(h)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	caddyRestartWatcherCancel = cancel
+	caddyRestartWatcherDone = done
+	go func() {
+		defer close(done)
+		caddyRestartWatcherLoop(h, ctx)
+	}()
+}
+
+// StopCaddyRestartWatcher 停止轮询并返回在途轮次的退出通知。调用方必须在
+// db.Close 前等待返回通道；重复停止返回同一已关闭/将关闭通道。
+func (h *Handlers) StopCaddyRestartWatcher() <-chan struct{} {
+	caddyRestartWatcherMu.Lock()
+	defer caddyRestartWatcherMu.Unlock()
+	done := caddyRestartWatcherDone
+	if done == nil {
+		done = make(chan struct{})
+		close(done)
+		return done
+	}
+	if caddyRestartWatcherStarted.CompareAndSwap(true, false) && caddyRestartWatcherCancel != nil {
+		caddyRestartWatcherCancel()
+	}
+	return done
 }
 
 // caddyRestartBackoff 是 caddy-restart 重试的退避状态（指数退避 + 落行降频）：

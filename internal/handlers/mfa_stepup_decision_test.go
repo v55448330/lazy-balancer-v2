@@ -148,6 +148,50 @@ func TestDecideMFAStepUp_shortCircuits(t *testing.T) {
 	}
 }
 
+func TestDecideMFAStepUp_futureTimestampWarnIsThrottled(t *testing.T) {
+	newBackupTestHandlers(t)
+	seedStepUpUsers(t)
+	setMfaWriteGuard(t, true)
+	reset := func() {
+		mfaFutureTimestampWarningLog.mu.Lock()
+		mfaFutureTimestampWarningLog.last = time.Time{}
+		mfaFutureTimestampWarningLog.mu.Unlock()
+	}
+	reset()
+	t.Cleanup(reset)
+	logs := captureLog(t)
+	decide := func() {
+		t.Helper()
+		c := stepUpContext(t, http.MethodPut, "/api/v1/config", map[string]any{
+			"auth_type": "jwt",
+			"user_id":   float64(1),
+			"mfa_ts":    float64(time.Now().Add(10 * time.Minute).Unix()),
+		})
+		decision, err := DecideMFAStepUp(c, true, db.DB, services.MFAUserEnabled)
+		if err != nil || !decision.Applies || decision.Verified {
+			t.Fatalf("future timestamp decision=%+v err=%v, want unverified applies", decision, err)
+		}
+	}
+
+	// Given 同一时钟回拨状态下连续两个写请求。
+	decide()
+	decide()
+	// Then 两个请求都被 fail-safe 拒绝，但 60 秒窗口内只留一条 warn。
+	if got := strings.Count(logs.String(), "MFA step-up 时间戳在未来"); got != 1 {
+		t.Fatalf("future timestamp warnings=%d, want 1; logs=%q", got, logs.String())
+	}
+
+	// When 上一告警已超过节流窗口。
+	mfaFutureTimestampWarningLog.mu.Lock()
+	mfaFutureTimestampWarningLog.last = time.Now().Add(-61 * time.Second)
+	mfaFutureTimestampWarningLog.mu.Unlock()
+	decide()
+	// Then 新窗口重新留痕，避免永久静默。
+	if got := strings.Count(logs.String(), "MFA step-up 时间戳在未来"); got != 2 {
+		t.Fatalf("warnings after window=%d, want 2; logs=%q", got, logs.String())
+	}
+}
+
 func TestDecideMFAStepUp_guardDisabled(t *testing.T) {
 	newBackupTestHandlers(t)
 	seedStepUpUsers(t)

@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 
+	ip2regionService "github.com/lionsoul2014/ip2region/binding/golang/service"
+
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/taskengine"
 )
@@ -119,6 +121,28 @@ func TestIP2RegionUpdateRun_success(t *testing.T) {
 	}
 }
 
+func TestIP2RegionUpdate_installReusesValidatedSearcher(t *testing.T) {
+	m := newTestIP2RegionManager(t)
+	seedIP2RegionVersionRow(t, "v3.0.0", true)
+	writeTestXDB(t, ip2regionLivePath, testSegments)
+	m.downloadXDB = fakeIP2RegionDownload(t, true)
+
+	originalOpen := openValidatedIP2RegionSearcherForUpdate
+	validationCalls := 0
+	openValidatedIP2RegionSearcherForUpdate = func(path string) (*ip2regionService.Ip2Region, error) {
+		validationCalls++
+		return originalOpen(path)
+	}
+	t.Cleanup(func() { openValidatedIP2RegionSearcherForUpdate = originalOpen })
+
+	if err := m.downloadAndInstall(context.Background(), "v3.1.0"); err != nil {
+		t.Fatalf("download and install: %v", err)
+	}
+	if validationCalls != 1 {
+		t.Fatalf("validated xdb opens=%d, want exactly one full load shared by validation and hot swap", validationCalls)
+	}
+}
+
 // 取消落在「安装段已落盘、Caddy 重载尚未执行」的窗口：未重载即未生效——
 // live xdb、版本行、sidecar 必须回滚到同代基线，reloader 不得被调用。
 func TestIP2RegionUpdateRun_cancelAfterInstallRollsBackSameGeneration(t *testing.T) {
@@ -133,13 +157,13 @@ func TestIP2RegionUpdateRun_cancelAfterInstallRollsBackSameGeneration(t *testing
 	t.Cleanup(func() { reloadIP2RegionSearcher = oldReload })
 	cancelIssued := false
 	reloadCalls := 0
-	reloadIP2RegionSearcher = func() error {
+	reloadIP2RegionSearcher = func(searcher *ip2regionService.Ip2Region) error {
 		reloadCalls++
 		if reloadCalls == 1 {
 			// 安装段末的内存热换完成后立刻取消（该窗口即用户点取消的落点）。
 			cancelIssued = m.CancelRunning()
 		}
-		return Reload()
+		return installValidatedIP2RegionSearcher(searcher, ip2regionLivePath)
 	}
 	m.fetchLatestTag = func(context.Context) (string, error) { return "v3.1.0", nil }
 	m.downloadXDB = fakeIP2RegionDownload(t, true)
@@ -519,12 +543,12 @@ func TestIP2RegionUpdateRun_installReloadFailureGoesToRollback(t *testing.T) {
 	}
 	oldReload := reloadIP2RegionSearcher
 	reloadCalls := 0
-	reloadIP2RegionSearcher = func() error {
+	reloadIP2RegionSearcher = func(searcher *ip2regionService.Ip2Region) error {
 		reloadCalls++
 		if reloadCalls == 1 {
 			return errors.New("forced: install hot-swap failure")
 		}
-		return Reload()
+		return installValidatedIP2RegionSearcher(searcher, ip2regionLivePath)
 	}
 	t.Cleanup(func() { reloadIP2RegionSearcher = oldReload })
 
@@ -578,12 +602,12 @@ func TestIP2RegionUpdateRun_rollbackReloadSkippedWhenReloaderNil(t *testing.T) {
 	}
 	oldReload := reloadIP2RegionSearcher
 	reloadCalls := 0
-	reloadIP2RegionSearcher = func() error {
+	reloadIP2RegionSearcher = func(searcher *ip2regionService.Ip2Region) error {
 		reloadCalls++
 		if reloadCalls == 1 {
 			return errors.New("forced: install hot-swap failure")
 		}
-		return Reload()
+		return installValidatedIP2RegionSearcher(searcher, ip2regionLivePath)
 	}
 	t.Cleanup(func() { reloadIP2RegionSearcher = oldReload })
 
@@ -639,12 +663,12 @@ func TestIP2RegionUpdateRun_rollbackRenameSuccessReloadFailKeepsBaseline(t *test
 
 	oldReload := reloadIP2RegionSearcher
 	reloadCalls := 0
-	reloadIP2RegionSearcher = func() error {
+	reloadIP2RegionSearcher = func(searcher *ip2regionService.Ip2Region) error {
 		reloadCalls++
 		if reloadCalls == 2 {
 			return errors.New("forced: post-rename hot-swap failure")
 		}
-		return Reload()
+		return installValidatedIP2RegionSearcher(searcher, ip2regionLivePath)
 	}
 	t.Cleanup(func() { reloadIP2RegionSearcher = oldReload })
 
@@ -723,12 +747,12 @@ func TestIP2RegionUpdateRun_rollbackCopySuccessReloadFailKeepsBaseline(t *testin
 	t.Cleanup(func() { osRename = oldRename })
 	oldReload := reloadIP2RegionSearcher
 	reloadCalls := 0
-	reloadIP2RegionSearcher = func() error {
+	reloadIP2RegionSearcher = func(searcher *ip2regionService.Ip2Region) error {
 		reloadCalls++
 		if reloadCalls == 2 {
 			return errors.New("forced: post-copy hot-swap failure")
 		}
-		return Reload()
+		return installValidatedIP2RegionSearcher(searcher, ip2regionLivePath)
 	}
 	t.Cleanup(func() { reloadIP2RegionSearcher = oldReload })
 
@@ -799,7 +823,7 @@ func TestIP2RegionUpdateRun_rollbackDistCopySuccessReloadFailKeepsBaseline(t *te
 
 	oldReload := reloadIP2RegionSearcher
 	reloadCalls := 0
-	reloadIP2RegionSearcher = func() error {
+	reloadIP2RegionSearcher = func(searcher *ip2regionService.Ip2Region) error {
 		reloadCalls++
 		if reloadCalls == 1 {
 			// 安装热换时点：.bak 已创建（downloadAndInstall 备份先于热换），
@@ -1124,7 +1148,7 @@ func TestWriteIP2RegionUpdateLog_rotatesBeforeWriteAtSize(t *testing.T) {
 	dir := t.TempDir()
 	taskengine.SetLogDir(dir)
 	t.Cleanup(func() { taskengine.SetLogDir("") })
-	taskengine.SetTaskLogSizeBytesFn(func() int64 { return 64 })
+	taskengine.SetTaskLogSizeBytesFn(func(context.Context) int64 { return 64 })
 	t.Cleanup(func() { taskengine.SetTaskLogSizeBytesFn(nil) })
 
 	path := taskengine.TaskLogPath("ip2region")
@@ -1156,7 +1180,7 @@ func TestWriteIP2RegionUpdateLog_rotatesBeforeWriteAtSize(t *testing.T) {
 	}
 
 	// tee 单点：放宽阈值后 100 行写入应恰 100 行
-	taskengine.SetTaskLogSizeBytesFn(func() int64 { return 1 << 20 })
+	taskengine.SetTaskLogSizeBytesFn(func(context.Context) int64 { return 1 << 20 })
 	for range 100 {
 		WriteIP2RegionUpdateLog("INFO", "tee", "y")
 	}
@@ -1450,12 +1474,12 @@ func TestIP2RegionUpdateRun_rollbackWithUnknownPreviousVersionWritesSentinel(t *
 	}
 	oldReload := reloadIP2RegionSearcher
 	reloadCalls := 0
-	reloadIP2RegionSearcher = func() error {
+	reloadIP2RegionSearcher = func(searcher *ip2regionService.Ip2Region) error {
 		reloadCalls++
 		if reloadCalls == 1 {
 			return errors.New("forced: install hot-swap failure")
 		}
-		return Reload()
+		return installValidatedIP2RegionSearcher(searcher, ip2regionLivePath)
 	}
 	t.Cleanup(func() { reloadIP2RegionSearcher = oldReload })
 
@@ -1495,7 +1519,9 @@ func TestIP2RegionUpdateRun_rollbackWithUnknownPreviousVersionWritesSentinel(t *
 		fetched++
 		return "v3.1.0", nil
 	}
-	reloadIP2RegionSearcher = func() error { return nil }
+	reloadIP2RegionSearcher = func(searcher *ip2regionService.Ip2Region) error {
+		return installValidatedIP2RegionSearcher(searcher, ip2regionLivePath)
+	}
 	m.run("manual", nil)
 	if fetched == 0 {
 		t.Fatal("回滚后的下一轮未重新拉取远端 tag（被「已是最新」短路）")

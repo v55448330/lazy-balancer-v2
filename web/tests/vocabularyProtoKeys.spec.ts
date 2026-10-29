@@ -45,7 +45,21 @@ const UNANNOTATED_VOCABULARY_TABLES = [
   'src/utils/certJobStatus.ts#CERT_JOB_STATUS_LABELS',
 ] as const
 
-// 违规读点 = 出现 `NAME[` 且同一表达式内没有自有属性判定。
+// 词表读点计数（`NAME[` 出现在非声明行）。
+// `owner` 非空时只统计该文件：同名 Record 表分布在多个模块时，按名全仓计数会把
+// B 文件的读取算给 A 文件的死表（`reads > 0` 恒真）；不传 owner = 全仓口径（
+// 词表被别的模块合法消费，如 chartTheme.statusColor 只在消费方读取）。
+const tableReads = (textByFile: ReadonlyMap<string, string>, name: string, owner?: string): number => {
+  let reads = 0
+  for (const [file, text] of textByFile) {
+    if (owner !== undefined && file !== owner) continue
+    for (const line of text.split('\n')) {
+      if (line.includes(`${name}[`) && !line.includes(`const ${name}:`)) reads += 1
+    }
+  }
+  return reads
+}
+
 // 仅换行三元的 `? NAME[k]` 可向上一行借守卫；相邻独立语句不得互相借守卫。
 const unguardedReads = (lines: readonly string[], name: string): number[] =>
   lines.flatMap((line, index) => {
@@ -88,6 +102,18 @@ test('判据自检：裸下标被抓、单行/换行三元放行', () => {
   )
 })
 
+test('判据自检：同名词表的读取不得跨文件互相救活（死表必红）', () => {
+  const sources = new Map([
+    ['src/utils/a.ts', "const statusLabels: Record<string, string> = { deny: '拒绝' }"],
+    ['src/views/B.vue', "const statusLabels: Record<string, string> = { allow: '放行' }\nconst label = statusLabels[key] ?? '—'"],
+  ])
+  assert.equal(tableReads(sources, 'statusLabels'), 1, '全仓计数会把 B 的读取算给 A 的死表（这就是要防的假绿）')
+  assert.equal(tableReads(sources, 'statusLabels', 'src/utils/a.ts'), 0, '重名时只看所属文件：A 的死表必须报 0')
+  assert.equal(tableReads(sources, 'statusLabels', 'src/views/B.vue'), 1, '真有读点的表仍计 1')
+  // 声明行本身不算读点（否则任何词表都恒 live）
+  assert.equal(tableReads(new Map([['a.ts', 'const T: Record<string, string> = {}']]), 'T'), 0)
+})
+
 test('全仓 Record<string, …> 表：展示词表读取全部过 hasOwn（目录扫描）', () => {
   const files = webFiles('src', ['.ts', '.vue'])
   assert.ok(files.length >= 150, `扫描面过小（${files.length} 个文件）——目录枚举失效`)
@@ -109,16 +135,21 @@ test('全仓 Record<string, …> 表：展示词表读取全部过 hasOwn（目�
   }
 
   const strippedByFile = new Map(files.map((file) => [file, code(file)]))
+  // 重名表（同名 Record 表出现在多个文件）的读点只能算进各自的文件。
+  const filesDeclaringName = new Map<string, Set<string>>()
+  for (const table of tables) {
+    const owners = filesDeclaringName.get(table.name) ?? new Set<string>()
+    owners.add(table.file)
+    filesDeclaringName.set(table.name, owners)
+  }
   const offenders: string[] = []
-  for (const { key, name } of tables) {
+  for (const { key, name, file } of tables) {
     if ((NON_VOCABULARY_RECORD_TABLES as readonly string[]).includes(key)) continue
-    let reads = 0
-    for (const [file, stripped] of strippedByFile) {
-      const lines = stripped.split('\n')
-      reads += lines.filter((line) => line.includes(`${name}[`) && !line.includes(`const ${name}:`)).length
-      for (const index of unguardedReads(lines, name)) offenders.push(`${file}:${index + 1} ${name}`)
+    const shared = (filesDeclaringName.get(name)?.size ?? 0) > 1
+    assert.ok(tableReads(strippedByFile, name, shared ? file : undefined) > 0, `${key} 无读取点——死词表要么删掉，要么接上消费面`)
+    for (const [owner, stripped] of strippedByFile) {
+      for (const index of unguardedReads(stripped.split('\n'), name)) offenders.push(`${owner}:${index + 1} ${name}`)
     }
-    assert.ok(reads > 0, `${key} 无读取点——死词表要么删掉，要么接上消费面`)
   }
   assert.deepEqual(offenders, [], '展示词表读取未过 hasOwn：原型键命中原生函数，兜底与标签展示同时失真')
 })

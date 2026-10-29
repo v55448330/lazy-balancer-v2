@@ -47,6 +47,97 @@ func TestImportPartialSuccess_messageKeepsPhaseOnce(t *testing.T) {
 	}
 }
 
+// 部分成功响应的阶段描述（「证书任务恢复失败」）只允许出现在单源函数内：
+// 响应主文案/warnings 由 importPartialSuccessMessage/importPartialSuccessWarning
+// 给出，错误正文由协调器的 importFailurePhaseDescription 给出。v1 旧备份导入
+// 曾自行内联两份同义文案（「配置已导入，但…」/「数据库已提交，但…」），措辞与
+// 单源（「（部分完成）：」）分叉——只改单源时 v1 会静默漂移。
+func TestImportPartialSuccess_wordingHasSingleSource(t *testing.T) {
+	const fragment = "证书任务恢复失败"
+	allowed := map[string]bool{
+		"importPartialSuccessMessage":   true,
+		"importPartialSuccessWarning":   true,
+		"importFailurePhaseDescription": true,
+	}
+	// 扫描面=整个 handlers 包的非测试源文件（与悬挂文案同口径）：文案被搬到
+	// 其他响应/审计写点、或抽成包级常量都会命中。
+	paths, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fset := token.NewFileSet()
+	singleSourceHits := 0
+	var offenders []string
+	scannedFiles := 0
+	inspectLiterals := func(label string, node ast.Node) {
+		ast.Inspect(node, func(n ast.Node) bool {
+			lit, ok := n.(*ast.BasicLit)
+			if !ok || lit.Kind != token.STRING {
+				return true
+			}
+			value, unquoteErr := strconv.Unquote(lit.Value)
+			if unquoteErr != nil {
+				value = strings.Trim(lit.Value, `"`)
+			}
+			if strings.Contains(value, fragment) {
+				offenders = append(offenders, label+"："+value)
+			}
+			return true
+		})
+	}
+	for _, path := range paths {
+		if strings.HasSuffix(path, "_test.go") {
+			continue
+		}
+		// apidocs.go 是 OpenAPI 文档正文与示例（描述「何时返回 partial」），
+		// 不是响应构造面：示例随修复同步改，但不参与单源判据。
+		if path == "apidocs.go" {
+			continue
+		}
+		file, err := parser.ParseFile(fset, path, nil, 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v", path, err)
+		}
+		scannedFiles++
+		for _, decl := range file.Decls {
+			switch d := decl.(type) {
+			case *ast.FuncDecl:
+				if d.Body == nil {
+					continue
+				}
+				if allowed[d.Name.Name] {
+					// 正向控制：单源函数体内必须真的含阶段描述，否则命中数
+					// 为零时负向断言（offenders 空）无意义。
+					ast.Inspect(d.Body, func(n ast.Node) bool {
+						lit, ok := n.(*ast.BasicLit)
+						if !ok || lit.Kind != token.STRING {
+							return true
+						}
+						value, _ := strconv.Unquote(lit.Value)
+						if strings.Contains(value, fragment) {
+							singleSourceHits++
+						}
+						return true
+					})
+					continue
+				}
+				inspectLiterals(path+" "+d.Name.Name, d.Body)
+			case *ast.GenDecl:
+				inspectLiterals(path+" "+d.Tok.String(), d)
+			}
+		}
+	}
+	if scannedFiles == 0 {
+		t.Fatal("扫描面为空（handlers 包源文件未读到）")
+	}
+	if singleSourceHits < 3 {
+		t.Fatalf("单源函数仅命中 %d 条阶段描述（want ≥3：响应主文案/warnings/协调器阶段描述各一条）——判据或函数边界失效", singleSourceHits)
+	}
+	if len(offenders) > 0 {
+		t.Fatalf("部分成功阶段描述在单源函数外重复出现（改措辞会漂移）:\n%s", strings.Join(offenders, "\n"))
+	}
+}
+
 // 证书任务 CA 提供商悬挂文案单源：两档字面量只允许出现在
 // certJobProviderDanglingWarnings 内（响应/审计/预览都必须调它）。
 func TestCertJobProviderDangling_wordingHasSingleSource(t *testing.T) {

@@ -40,7 +40,7 @@ func wafFileStartupWritesAllowed(label string) bool {
 
 // ReconcileWafFileCrashLeftovers 收敛「规则库文件先落盘、事务随后才提交」这个
 // 窗口里进程被 SIGKILL/断电留下的残留。启动（以及手动重载）时调用一次，
-// 三项互相独立、全部幂等：
+// 四项互相独立、全部幂等：
 //
 //  1. 导入快照临时目录 <tmp>/lbbak-waf-snapshot-*：导入成功即 discard，崩溃
 //     则永久残留——目录里是导入前的 CRS 树/威胁名单/xdb 副本（可达数十 MB）。
@@ -49,12 +49,15 @@ func wafFileStartupWritesAllowed(label string) bool {
 //     展示与集群 ref（wafFilesRefDiffers）与在役库不符。
 //  3. security_threat_sources 里已不存在的 threat-*.iplist/.fast 残留：DB 无
 //     记录而文件仍被 WAF 加载，集群 ref 也会认为本端持有该源。
+//  4. live rules 下点前缀 .conf：同步打包/哈希按瞬态名跳过，Coraza 的
+//     Include glob 却会加载；只清理这个可执行但未纳管的交集，保留其它留底。
 //
-// 「早于本进程启动」是三项共同的判据（见 processStartedAt）：在途导入/更新的
+// 「早于本进程启动」是前三项共同的判据（见 processStartedAt）：在途导入/更新的
 // 产物晚于启动时刻，不会被误收敛。第 2、3 项改 DB/执行面引用，与 CRS 对账
-// 同口径只在主节点执行；第 1 项是纯节点本地磁盘清理，任何角色都做。
+// 同口径只在主节点执行；第 1、4 项是纯节点本地磁盘清理，任何角色都做。
 func ReconcileWafFileCrashLeftovers() {
 	pruneStaleWafSnapshotDirs()
+	pruneUnmanagedHiddenCRSConf()
 	if !wafFileStartupWritesAllowed("WAF 文件崩溃残留对账") {
 		return
 	}
@@ -89,6 +92,39 @@ func pruneStaleWafSnapshotDirs() {
 		fmt.Sprintf("启动对账清理 %d 个导入崩溃残留的 WAF 文件快照目录（进程在导入提交前退出留下的副本）", removed), "")
 }
 
+// pruneUnmanagedHiddenCRSConf 清理 live rules 下不会被同步打包/哈希纳管、
+// 却会被 Coraza Include rules/*.conf 加载的点前缀规则文件。其它隐藏标记、
+// 管理员留底与正式规则均保留；仅删除这个「可执行但不可见」的交集。
+func pruneUnmanagedHiddenCRSConf() {
+	rulesDir := filepath.Join(crsLiveDir, "rules")
+	entries, err := os.ReadDir(rulesDir)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			Logf("warn", "CRS live 未纳管规则扫描失败 %s: %v", rulesDir, err)
+		}
+		return
+	}
+	removed := 0
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasPrefix(name, ".") || !strings.HasSuffix(name, ".conf") {
+			continue
+		}
+		path := filepath.Join(rulesDir, name)
+		if err := os.Remove(path); err != nil {
+			Logf("warn", "CRS live 未纳管点前缀规则清理失败 %s: %v", path, err)
+			continue
+		}
+		removed++
+	}
+	if removed == 0 {
+		return
+	}
+	Logf("warn", "已清理 %d 个 live 中不参与同步校验但会被 Include 加载的点前缀 .conf", removed)
+	RecordAuditLog("system", "清理", "规则库",
+		fmt.Sprintf("启动对账清理 %d 个未纳管但会被 Coraza 加载的点前缀 .conf", removed), "")
+}
+
 // reconcileIP2RegionVersionFromDiskMarker 按磁盘的 .version 伴生标记校正版本行。
 //
 // 分工：磁盘是在役库的事实来源（GeoIP 判决用的是它），版本行驱动展示与集群
@@ -116,7 +152,10 @@ func reconcileIP2RegionVersionFromDiskMarker() {
 	if current == tag {
 		return
 	}
-	SetIP2RegionVersion(tag)
+	if err := SetIP2RegionVersion(tag); err != nil {
+		Logf("warn", "ip2region: 启动对账版本行校正失败（保留原记录，不写成功审计）: %v", err)
+		return
+	}
 	Logf("warn", "ip2region: 启动对账把版本行从 %q 校正为磁盘标记 %q（文件已在导入提交前落盘、进程随后退出）", current, tag)
 	RecordAuditLog("system", "更新", "IP数据库",
 		fmt.Sprintf("启动对账：live 库版本标记为 %q 而版本行为 %q，已按在役库校正版本行", tag, current), "")

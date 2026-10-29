@@ -183,7 +183,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessageBox } from 'element-plus'
 import { Plus } from '@element-plus/icons-vue'
 import { request } from '@/utils/api'
 import { showSaveResult } from '@/utils/saveResult'
@@ -305,7 +305,7 @@ const refreshAfterWrite = async (): Promise<void> => {
   await loadAll()
 }
 const trustApi = useTrustAssociation({ getList: () => ipLists.value, onChanged: refreshAfterWrite })
-const { ensureListAndJoin, removeFromSideRef } = trustApi
+const { ensureListAndJoin, joinSpecificList, removeFromSideRef } = trustApi
 
 const activeAddSide = ref<IpQuickSide | null>(null)
 const selectedTargetKey = ref('')
@@ -323,27 +323,23 @@ const executeAdd = async (): Promise<void> => {
   if (!side || actionBusy.value) return
   const target = model.value[side].targets.find((item) => item.key === selectedTargetKey.value)
   if (!target) return
-  if (target.kind === 'list') {
-    const title = sections.find((item) => item.side === side)?.title ?? '目标'
-    try {
-      await ElMessageBox.confirm(`将把 ${trimmedIp.value} 加入${title}「${target.name}」，保存后立即影响相关策略的访问控制。是否继续？`, '确认添加', {
-        type: 'warning', confirmButtonText: '确认添加', cancelButtonText: '取消',
-      })
-    } catch { return }
-  }
+  const verb = side === 'deny' ? '拦截' : side === 'allow' ? '放行' : '信任'
   actionBusy.value = true
+  let done = false
   try {
     if (target.kind === 'list' && target.listId) {
-      const res = await request.post<APIResponse<{ added: boolean }>>(`/security/ip-lists/${target.listId}/ips`, { value: trimmedIp.value })
-      if (res.data?.added) showSaveResult(res as unknown as { message?: string }, `已将 ${trimmedIp.value} 加入「${target.name}」`)
-      else ElMessage.info(`该 IP 已在「${target.name}」中`)
-      await refreshAfterWrite()
+      done = await joinSpecificList({ id: target.listId, name: target.name, entry_count: target.entryCount }, trimmedIp.value, verb)
     } else if (target.policyId) {
       const policy = policies.value.find((item) => item.id === target.policyId)
-      if (policy) await ensureListAndJoin(policy, trimmedIp.value, side)
+      if (policy) done = await ensureListAndJoin(policy, trimmedIp.value, side)
     }
-    activeAddSide.value = null
-    selectedTargetKey.value = ''
+    // 取消、写入失败及关联半态都保留目标面板，便于用户修正或重试。
+    if (done) {
+      activeAddSide.value = null
+      selectedTargetKey.value = ''
+    }
+  } catch {
+    // 共享写入链已处理取消与全局错误提示；非预期异常同样不得逃逸事件处理器。
   } finally {
     actionBusy.value = false
   }
@@ -467,9 +463,11 @@ const onPopoverShow = (): void => {
   eventCount.value = null
   activeAddSide.value = null
   selectedTargetKey.value = ''
-  void loadAll()
-  void loadAutoban()
-  void loadEventCount()
+  void (async () => {
+    // 自动封禁定位复用本次名单快照；并发首开会因快照尚空再发一次相同 GET。
+    await loadAll()
+    await Promise.all([loadAutoban(), loadEventCount()])
+  })()
 }
 const retryAll = (): void => { void loadAll() }
 </script>

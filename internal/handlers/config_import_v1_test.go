@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -468,8 +469,12 @@ func TestImportV1Config_reports_partial_failure_when_certificate_job_recovery_fa
 	// When
 	router.ServeHTTP(response, request)
 
-	// Then
-	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "配置已导入，但证书任务恢复失败") || !strings.Contains(response.Body.String(), "requeue failed") || !strings.Contains(response.Body.String(), `"partial":true`) {
+	// Then：message 与 warnings 必须来自 importPartialSuccess* 单源（与 v2 出口
+	// 同措辞）——「（部分完成）：」是主文案口径，「数据库已提交，但…」是 warning 口径。
+	if response.Code != http.StatusOK ||
+		!strings.Contains(response.Body.String(), "配置已导入（部分完成）：证书任务恢复失败: requeue failed") ||
+		!strings.Contains(response.Body.String(), "数据库已提交，但证书任务恢复失败: requeue failed") ||
+		!strings.Contains(response.Body.String(), `"partial":true`) {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 	}
 }
@@ -705,5 +710,30 @@ func TestConfigImportLimitMessage_derivesFromConfiguredLimit(t *testing.T) {
 	maxConfigImportBytes = 128 << 20
 	if got, want := configImportLimitMessage(), "备份文件不能超过 128MB"; got != want {
 		t.Fatalf("message=%q, want %q（生产默认值）", got, want)
+	}
+}
+
+func TestImportV1ConfigSurvivesRequestCancellationAfterSessionStarts(t *testing.T) {
+	h := newBackupTestHandlers(t)
+	backup := `{"proxy_config":{"config":[{"pk":1,"fields":{"proxy_name":"new-rule","protocol":true,"listen":18443,"server_name":"example.test","status":true,"upstream_list":[1]}}]},"upstream_config":{"config":[{"pk":1,"fields":{"status":true,"address":"127.0.0.1","port":9000,"weight":100}}]}}`
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	hookCalled := false
+	configImportAfterSessionHook = func() {
+		hookCalled = true
+		cancel()
+	}
+	t.Cleanup(func() { configImportAfterSessionHook = nil })
+	router := gin.New()
+	router.POST("/config/import/v1", h.ImportV1Config)
+	request := httptest.NewRequest(http.MethodPost, "/config/import/v1", strings.NewReader(backup)).WithContext(ctx)
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if !hookCalled {
+		t.Fatal("v1 import must expose the same after-session cancellation point as v2")
+	}
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want import to finish on session context", response.Code, response.Body.String())
 	}
 }

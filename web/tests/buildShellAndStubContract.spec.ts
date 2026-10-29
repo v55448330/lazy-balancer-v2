@@ -10,7 +10,7 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
 import { calls, resetCalls, EL_MESSAGE_METHODS, STUB_ELEMENT, STUB_SAVE_RESULT_DEPS, type StubCall } from './_stubs.ts'
-import { code } from './_helpers.ts'
+import { code, stripComments } from './_helpers.ts'
 
 const webRoot = new URL('../', import.meta.url)
 
@@ -26,9 +26,12 @@ test('index.html 保留挂载点、入口脚本与首帧标题（否则运行期
   assert.match(branding, /document\.title = `\$\{appName\.value\} V2`/, '运行期标题必须同形')
 })
 
+// 判据跑在剥注释视图上：注释里提到的 `test(`/`assert.` 都不是用例或断言
+// （否则空壳 spec 只要在注释里写够 assert 就能绕过门禁）。占位断言同样剔除。
 const emptySpecReason = (text: string): string | null => {
-  const testCount = (text.match(/^\s*test\s*\(/gm) ?? []).length
-  const withoutPlaceholders = text.replace(/\bassert\.ok\(\s*true\s*\)/g, '')
+  const stripped = stripComments(text)
+  const testCount = (stripped.match(/^\s*test\s*\(/gm) ?? []).length
+  const withoutPlaceholders = stripped.replace(/\bassert\.ok\(\s*true\s*\)/g, '')
   const assertCount = (withoutPlaceholders.match(/\bassert\./g) ?? []).length
   if (testCount === 0) return 'test=0'
   if (assertCount < testCount) return `test=${testCount}，有效 assert=${assertCount}`
@@ -38,6 +41,9 @@ const emptySpecReason = (text: string): string | null => {
 test('空 spec 判据自检：占位断言违规，缩进的真实用例合规', () => {
   assert.match(emptySpecReason("test('x', () => { assert.ok(true) })") ?? '', /有效 assert=0/)
   assert.equal(emptySpecReason("  test('x', () => { assert.equal(1, 1) })"), null)
+  // 注释里的 assert 不计入有效断言；注释掉的用例也不计入用例数
+  assert.match(emptySpecReason("test('x', () => {\n  // assert.equal(1, 1)\n  doWork()\n})") ?? '', /有效 assert=0/)
+  assert.equal(emptySpecReason("// test('x', () => { assert.equal(1, 1) })"), 'test=0')
 })
 
 test('每个 spec 都含 test( 与 assert（防空用例文件混入，递归扫描子目录）', () => {
@@ -51,10 +57,11 @@ test('每个 spec 都含 test( 与 assert（防空用例文件混入，递归扫
   const offenders: string[] = []
   for (const name of files) {
     const text = readFileSync(`${specDir}${name}`, 'utf8')
-    // 可量化口径：顶层用例数与断言数。注释里的 `test(` 不在行首、注释里的
+    // 可量化口径：顶层用例数与有效断言数（判据内部先剥注释——注释里提到的
+    // `test(` 与 `assert.` 都不是用例/断言，见 emptySpecReason）。
     const reason = emptySpecReason(text)
     if (reason !== null) offenders.push(`${name}（${reason}）`)
-    }
+  }
   assert.deepEqual(offenders, [], '空 spec / 占位断言 / 有效断言少于用例数的文件不得入库')
 })
 

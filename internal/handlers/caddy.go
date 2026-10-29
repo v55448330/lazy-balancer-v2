@@ -25,6 +25,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/mail"
 	"net/url"
 	"os"
 	"os/exec"
@@ -375,8 +376,8 @@ func (h *Handlers) GetConfig(c *gin.Context) {
 	//（DDL DEFAULT+启动回填+此处）——改参数绑定 db.Default* 常量单源化，
 	// 常量变更不再需要三处同步。日志体量/保留期/JWT、威胁大屏与安全事件
 	// 默认值同样走参数绑定；非治理列（log 级别/布尔等）字面量原状。
-	err := db.DB.QueryRow(`
-		SELECT id, caddy_config, dns_provider,
+	err := db.DB.QueryRowContext(c.Request.Context(), `
+		SELECT id, caddy_config,
 		       COALESCE(acme_email,'') as acme_email, COALESCE(cert_expiry_days,?) as cert_expiry_days,
 		       COALESCE(cert_renewal_days,?) as cert_renewal_days,
 		       COALESCE(cert_renewal_attempts,?) as cert_renewal_attempts,
@@ -436,7 +437,7 @@ func (h *Handlers) GetConfig(c *gin.Context) {
 		db.DefaultThreatScreenMode, db.DefaultThreatTrafficSampleN,
 		db.DefaultSecurityEventsRetentionDays, db.DefaultSecurityEventsRowCap,
 	).Scan(
-		&cfg.ID, &cfg.CaddyConfig, &cfg.DNSProvider,
+		&cfg.ID, &cfg.CaddyConfig,
 		&cfg.ACMEEmail, &cfg.CertExpiryDays, &cfg.CertRenewalDays, &cfg.CertRenewalAttempts, &cfg.DefaultCAProviderID,
 		&cfg.LogLevel,
 		&cfg.CaddyLogLevel, &cfg.CaddyLogSizeMB,
@@ -490,9 +491,31 @@ func (h *Handlers) GetUpstreamHealth(c *gin.Context) {
 // 此前 preview 仅共用受信代理校验，可对保存必 400
 // 的载荷给出「可变更」的清单。现保存与预览调用同一实现——数值范围、日志级别
 // 枚举归一、时区、采样契约、安全事件保留值域、代理 URL 白名单全部同一组校验。
+func normalizeACMEEmail(raw string) (string, error) {
+	email := strings.TrimSpace(raw)
+	if len(email) > 254 {
+		return "", errors.New("ACME 邮箱长度不能超过 254 字符")
+	}
+	if email == "" {
+		return "", nil
+	}
+	parsed, err := mail.ParseAddress(email)
+	if err != nil || parsed.Name != "" || parsed.Address != email {
+		return "", errors.New("ACME 邮箱格式无效")
+	}
+	return email, nil
+}
+
 func validateUpdateConfigRequest(req *models.UpdateConfigRequest) error {
 	if err := validateTrustedProxyFields(req); err != nil {
 		return err
+	}
+	if req.ACMEEmail != nil {
+		email, err := normalizeACMEEmail(*req.ACMEEmail)
+		if err != nil {
+			return err
+		}
+		*req.ACMEEmail = email
 	}
 
 	if req.LogLevel != nil {
@@ -526,7 +549,7 @@ func validateUpdateConfigRequest(req *models.UpdateConfigRequest) error {
 		if err := validateAccessLogFormat(*req.AccessLogFormat); err != nil {
 			return err
 		}
-		// 写侧归一强制携带 X-API-Key 脱敏行（渲染层另有恒等
+		// 写侧归一强制携带 API Key 头脱敏行（渲染层另有恒等
 		// 不变量兜底旧库/直接改库/导入形态）——落库值即所见，UI 不再需要
 		// 猜测渲染层偷偷追加了什么。空格式保持为空（=「不裁剪原生字段」，
 		// 渲染层仍注入脱敏行）。
@@ -542,14 +565,6 @@ func validateUpdateConfigRequest(req *models.UpdateConfigRequest) error {
 	// 此前仅 ≥100 下限,天文值可落库使轮转实效、日志无限增长。
 	if req.CaddyLogSizeMB != nil && (*req.CaddyLogSizeMB < 100 || *req.CaddyLogSizeMB > 10240) {
 		return errors.New("Caddy 日志大小需在 100-10240MB 之间")
-	}
-
-	if req.DNSProvider != nil {
-		switch *req.DNSProvider {
-		case "dnspod":
-		default:
-			return errors.New("无效的 DNS 提供商")
-		}
 	}
 
 	// 上界取 services.CertRenewalDaysMax（安全上限）而非旧的 90=证书寿命：
@@ -730,7 +745,7 @@ func (h *Handlers) PreviewConfigUpdate(c *gin.Context) {
 		writeUpdateConfigValidationFailure(c, err, false)
 		return
 	}
-	old, err := loadConfigSnapshot()
+	old, err := loadConfigSnapshot(c.Request.Context())
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取当前配置失败"})
 		return
@@ -856,7 +871,7 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 		return
 	}
 
-	old, err := loadConfigSnapshot()
+	old, err := loadConfigSnapshot(caddyWriteCtx(c))
 	if err != nil {
 		// 保存端点服务端失败分支留痕（操作者归因 + 错误详情），
 		// 此前仅成功路径写审计；动作复用既有 danger 词条「更新失败」。
@@ -926,7 +941,6 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 	// 不再可被写入；存量列由启动迁移删除。
 	res, err := tx.Exec(`
 			UPDATE global_config SET
-				dns_provider = COALESCE(?, dns_provider),
 				acme_email = CASE WHEN ? IS NULL THEN acme_email ELSE NULLIF(?, '') END,
 				cert_expiry_days = COALESCE(?, cert_expiry_days),
 				cert_renewal_days = COALESCE(?, cert_renewal_days),
@@ -973,7 +987,7 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 				security_events_row_cap = COALESCE(?, security_events_row_cap),
 				updated_at = datetime('now')
 			WHERE id = 1
-		`, req.DNSProvider, req.ACMEEmail, req.ACMEEmail, req.CertExpiryDays, req.CertRenewalDays, req.CertRenewalAttempts, req.DefaultCAProviderID, req.DefaultCAProviderID, req.LogLevel,
+		`, req.ACMEEmail, req.ACMEEmail, req.CertExpiryDays, req.CertRenewalDays, req.CertRenewalAttempts, req.DefaultCAProviderID, req.DefaultCAProviderID, req.LogLevel,
 		req.CaddyLogLevel, req.CaddyLogSizeMB,
 		req.RequestBodyMaxSizeMB, req.HTTPReadTimeout, req.HTTPWriteTimeout, req.HTTPIdleTimeout,
 		req.UpstreamKeepaliveTimeout, req.ProxyDialTimeout, req.ProxyResponseHeaderTimeout, req.ProxyReadTimeout, req.ProxyWriteTimeout, req.ProxyStreamTimeout, req.ProxyFlushInterval, req.ProxyStreamCloseDelay,
@@ -1222,7 +1236,7 @@ func (h *Handlers) GetCaddyStatus(c *gin.Context) {
 	if db.DB != nil {
 		// 读取失败不再静默吞——apply_error 缺失会让
 		// 状态接口丢失真实失败横幅,需 warn 留痕。
-		if err := db.DB.QueryRow(`SELECT COALESCE(caddy_apply_error,'') FROM global_config WHERE id=1`).Scan(&applyError); err != nil {
+		if err := db.DB.QueryRowContext(c.Request.Context(), `SELECT COALESCE(caddy_apply_error,'') FROM global_config WHERE id=1`).Scan(&applyError); err != nil {
 			services.Logf("warn", "GetCaddyStatus: 读取 caddy_apply_error 失败(状态接口 apply_error 字段为空): %v", err)
 		}
 	}
@@ -1858,7 +1872,7 @@ func normalizeAccessLogRedaction(format string) string {
 // 载荷、LKG/集群快照与变更计划——上限族（规则 name/description、受信网段总量、
 // IP 名单条数）对该字段逐条成立，唯独它此前无规模门。按 bytes + 物理行数计
 // （DSL 以行分隔，行数与字节数决定放大倍数），口径为落库值：非空白 DSL 写侧
-// 归一后恒含一行 X-API-Key 脱敏规则（故门在归一时前后各过一次）；空白串原样
+// 归一后恒含一行 API Key 头脱敏规则（故门在归一时前后各过一次）；空白串原样
 // 落库，同按原始长度计数。
 const (
 	maxAccessLogFormatBytes = 16 * 1024

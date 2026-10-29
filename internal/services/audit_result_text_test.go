@@ -144,7 +144,7 @@ func TestAuditResultText_dynamicCallSitesTripwire(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 15 处动态入口（结果码为变量、原因文本只进 detail），逐项取值域：
+	// 16 处动态入口（结果码为变量、原因文本只进 detail），逐项取值域：
 	//   certificates.go IssueCertificate 的 auditFailure 闭包 1 处
 	//     （blocked/conflict/failed/invalid_request/skipped）
 	//   caproviders.go 测试 CA 提供商 6 处（provider_error/register_failed/
@@ -159,9 +159,11 @@ func TestAuditResultText_dynamicCallSitesTripwire(t *testing.T) {
 	//     auditFailureWithRule 各 1，取值域见 auditDynamicResultCodes 的
 	//     证书任务重试/删除失败组）
 	//   certjobs.go DeleteCertJob 1 处——失败出口闭包
+	//   cluster_status.go ReportClusterNode 的 recordDetached 闭包 1 处——
+	//     脱离请求的失败/拒绝/成功归因（success/failed/blocked）
 	// 取值域逐项登记在 auditDynamicResultCodes，新增码仍受
 	// TestAuditResultText_auditFailureLiteralsRegistered 与本表约束。
-	const want = 15
+	const want = 16
 	// 注释与常数同步门：上面那条「N 处」此前写成 12 而枚举与常数都是 15——
 	// 维护者读注释判断「面有多大」时会误判漏枚举。注释数字必须等于 want。
 	source, err := os.ReadFile("audit_result_text_test.go")

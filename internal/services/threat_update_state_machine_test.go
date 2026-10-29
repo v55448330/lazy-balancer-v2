@@ -31,7 +31,7 @@ func TestThreatUpdate_demoteMidRun_doesNotWriteSourceRow(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	changed, failed := GetThreatUpdateManager().updateOneSource(ctx, threatSourceRow{id: id, name: "ustc", url: url}, "manual", "2026.10.20 00:00:00")
+	changed, failed, _ := GetThreatUpdateManager().updateOneSource(ctx, threatSourceRow{id: id, name: "ustc", url: url}, "manual", "2026.10.20 00:00:00")
 
 	if changed || failed {
 		t.Fatalf("changed=%v failed=%v, want (false,false)（demote 中止非故障）", changed, failed)

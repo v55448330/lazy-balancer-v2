@@ -125,8 +125,8 @@ test('OIDC 删除复用同一 saving 写通道并覆盖确认、删除与最终�
   const remove = section(page, 'const remove = async', 'const copy = async')
   assert.match(remove, /runExclusive\(/)
   assert.match(remove, /saving\.value/)
-  for (const operation of ['ElMessageBox.confirm', "request.delete('/settings/oidc')", 'await load()']) {
-    assert.ok(remove.includes(operation), `删除写通道缺少 ${operation}`)
+  for (const operation of [/ElMessageBox\.confirm/, /request\.delete[<(]/, /await load\(\)/]) {
+    assert.ok(operation.test(remove), `删除写通道缺少 ${operation}`)
   }
 })
 

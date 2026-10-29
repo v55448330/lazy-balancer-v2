@@ -1,7 +1,6 @@
 package middleware
 
 import (
-	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -21,24 +20,9 @@ func TestMCPEndpointRateLimited(t *testing.T) {
 	withIsolatedRateLimitBuckets(t)
 
 	key := "lb_sk_mcp-ratelimit-secret"
-	hash := sha256.Sum256([]byte(key))
-	if _, err := db.DB.Exec(`INSERT INTO users (id,username,password_hash,role,is_enabled) VALUES (31,'mcp-ratelimit','x','admin',1)`); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.DB.Exec(`INSERT INTO api_keys (name,key_hash,key_prefix,created_by,is_enabled,mcp_enabled,mcp_ip_whitelist)
-		VALUES ('mcp-ratelimit',?,?,31,1,1,'')`, hex.EncodeToString(hash[:]), key[:12]); err != nil {
-		t.Fatal(err)
-	}
-
-	initialize := []byte(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"ratelimit","version":"1"}}}`)
+	seedMCPRateLimitKeys(t, key)
 	send := func() *httptest.ResponseRecorder {
-		recorder := httptest.NewRecorder()
-		request := httptest.NewRequest(http.MethodPost, "/api/v1/mcp", bytes.NewReader(initialize))
-		request.Header.Set("Content-Type", "application/json")
-		request.Header.Set("Accept", "application/json, text/event-stream")
-		request.Header.Set("X-API-Key", key)
-		router.ServeHTTP(recorder, request)
-		return recorder
+		return sendMCPInitialize(router, key)
 	}
 
 	for i := range mcpRateLimitPerMinute {
@@ -55,6 +39,11 @@ func TestMCPEndpointRateLimited(t *testing.T) {
 	if overLimit.Code != http.StatusTooManyRequests {
 		t.Fatalf("超过限额的请求 status=%d body=%q, want 429", overLimit.Code, overLimit.Body.String())
 	}
+	retryAfter := overLimit.Header().Get("Retry-After")
+	retrySeconds, err := json.Number(retryAfter).Int64()
+	if err != nil || retrySeconds < 1 || retrySeconds > 60 {
+		t.Fatalf("429 Retry-After=%q, want integer seconds in [1,60]", retryAfter)
+	}
 	var payload struct {
 		Code    int    `json:"code"`
 		Message string `json:"message"`
@@ -65,4 +54,71 @@ func TestMCPEndpointRateLimited(t *testing.T) {
 	if payload.Code != http.StatusTooManyRequests || payload.Message == "" {
 		t.Fatalf("429 形态不合规: %+v", payload)
 	}
+}
+
+func TestMCPRateLimitSeparatesKeysAtSameSourceIP(t *testing.T) {
+	router := newMiddlewareTestRouter(t)
+	withIsolatedRateLimitBuckets(t)
+	firstKey := "lb_sk_mcp-ratelimit-first"
+	secondKey := "lb_sk_mcp-ratelimit-second"
+	seedMCPRateLimitKeys(t, firstKey, secondKey)
+
+	for attempt := 1; attempt <= mcpRateLimitPerMinute; attempt++ {
+		if response := sendMCPInitialize(router, firstKey); response.Code != http.StatusOK {
+			t.Fatalf("first key attempt %d status=%d body=%q, want 200", attempt, response.Code, response.Body.String())
+		}
+	}
+	if response := sendMCPInitialize(router, secondKey); response.Code != http.StatusOK {
+		t.Fatalf("second key at same IP status=%d body=%q, want independent budget", response.Code, response.Body.String())
+	}
+}
+
+func TestMCPAuthenticatedRequestsDoNotConsumeAnonymousFailureBudget(t *testing.T) {
+	router := newMiddlewareTestRouter(t)
+	withIsolatedRateLimitBuckets(t)
+	key := "lb_sk_mcp-ratelimit-authenticated"
+	seedMCPRateLimitKeys(t, key)
+
+	for attempt := 1; attempt < mcpRateLimitPerMinute; attempt++ {
+		if response := sendMCPInitialize(router, ""); response.Code != http.StatusUnauthorized {
+			t.Fatalf("anonymous attempt %d status=%d body=%q, want 401", attempt, response.Code, response.Body.String())
+		}
+	}
+	if response := sendMCPInitialize(router, key); response.Code != http.StatusOK {
+		t.Fatalf("authenticated request status=%d body=%q, want 200", response.Code, response.Body.String())
+	}
+	if response := sendMCPInitialize(router, ""); response.Code != http.StatusUnauthorized {
+		t.Fatalf("anonymous request after authenticated success status=%d body=%q, want 401 with reservation rolled back", response.Code, response.Body.String())
+	}
+	if response := sendMCPInitialize(router, ""); response.Code != http.StatusTooManyRequests {
+		t.Fatalf("anonymous request beyond failure budget status=%d body=%q, want 429", response.Code, response.Body.String())
+	}
+}
+
+const mcpRateLimitInitialize = `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"ratelimit","version":"1"}}}`
+
+func seedMCPRateLimitKeys(t *testing.T, keys ...string) {
+	t.Helper()
+	if _, err := db.DB.Exec(`INSERT INTO users (id,username,password_hash,role,is_enabled) VALUES (31,'mcp-ratelimit','x','admin',1)`); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range keys {
+		hash := sha256.Sum256([]byte(key))
+		if _, err := db.DB.Exec(`INSERT INTO api_keys (name,key_hash,key_prefix,created_by,is_enabled,mcp_enabled,mcp_ip_whitelist)
+			VALUES (?,?,?,31,1,1,'')`, key, hex.EncodeToString(hash[:]), key[:12]); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func sendMCPInitialize(router http.Handler, key string) *httptest.ResponseRecorder {
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/mcp", strings.NewReader(mcpRateLimitInitialize))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Accept", "application/json, text/event-stream")
+	if key != "" {
+		request.Header.Set("X-API-Key", key)
+	}
+	router.ServeHTTP(recorder, request)
+	return recorder
 }

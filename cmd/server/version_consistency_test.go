@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"testing"
 )
 
@@ -39,7 +40,7 @@ var versionAnchors = []versionAnchor{
 	},
 	{
 		file:        "README.md",
-		pattern:     regexp.MustCompile(`--build-arg VERSION=(v[0-9]+\.[0-9]+\.[0-9]+)`),
+		pattern:     regexp.MustCompile(`(?m)--build-arg VERSION=(v[0-9]+\.[0-9]+\.[0-9]+)(?:\s|$)`),
 		minimumHits: 1,
 		note:        "README.md 构建示例 build-arg",
 	},
@@ -51,7 +52,7 @@ var versionAnchors = []versionAnchor{
 	},
 	{
 		file:        "README.en.md",
-		pattern:     regexp.MustCompile(`--build-arg VERSION=(v[0-9]+\.[0-9]+\.[0-9]+)`),
+		pattern:     regexp.MustCompile(`(?m)--build-arg VERSION=(v[0-9]+\.[0-9]+\.[0-9]+)(?:\s|$)`),
 		minimumHits: 1,
 		note:        "README.en.md 构建示例 build-arg",
 	},
@@ -110,5 +111,36 @@ func TestVersionHardcodingPointsMatchDockerfileArg(t *testing.T) {
 					anchor.file, anchor.note, got, version)
 			}
 		}
+	}
+}
+
+var dockerfileRuntimeVersionBridge = regexp.MustCompile(`(?m)^ENV APP_VERSION=\$\{VERSION\}\s*$`)
+
+func TestReadmeBuildArgRejectsChannelSuffix(t *testing.T) {
+	candidate := []byte("docker buildx build --build-arg VERSION=v2.3.10-beta -t v55448330/lazy-balancer-v2:v2.3.10-beta .")
+	for _, anchor := range versionAnchors {
+		if anchor.file != "README.md" && anchor.file != "README.en.md" {
+			continue
+		}
+		if !strings.Contains(anchor.note, "build-arg") {
+			continue
+		}
+		if anchor.pattern.Match(candidate) {
+			t.Errorf("%s build-arg anchor accepts a channel-suffixed version", anchor.file)
+		}
+	}
+}
+
+func TestDockerfileRuntimeVersionBridgePresent(t *testing.T) {
+	root := repoRootForVersionTest(t)
+	dockerfile, err := os.ReadFile(filepath.Join(root, "Dockerfile"))
+	if err != nil {
+		t.Fatalf("read Dockerfile: %v", err)
+	}
+	if hits := dockerfileRuntimeVersionBridge.FindAll(dockerfile, -1); len(hits) != 1 {
+		t.Fatalf("Dockerfile ENV APP_VERSION=${VERSION} bridge hits=%d, want 1", len(hits))
+	}
+	if dockerfileRuntimeVersionBridge.Match([]byte("ARG VERSION=v2.3.10\n")) {
+		t.Fatal("bridge anchor must reject a Dockerfile with the ENV line removed")
 	}
 }

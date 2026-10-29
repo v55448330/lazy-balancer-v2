@@ -254,8 +254,6 @@ test('零外部消费的符号不得再导出（导出面 = 消费面）', () =>
     ['src/utils/threatShared.ts', 'PolysBounds'],
     ['src/utils/threatShared.ts', 'ProvinceGridDot'],
     ['src/utils/triggeredFilter.ts', 'TriggeredCategory'],
-    ['src/utils/trustRemoval.ts', 'TrustRemovalList'],
-    ['src/utils/trustRemoval.ts', 'TrustRemovalPlan'],
     ['src/utils/trustedProxyRanges.ts', 'TrustedProxyExpansion'],
     ['src/utils/updaterName.ts', 'UpdaterUserLike'],
   ]

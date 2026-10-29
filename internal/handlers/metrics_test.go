@@ -247,7 +247,7 @@ func TestLoadRuleUpstreams_returns_scan_error(t *testing.T) {
 	}
 
 	// When
-	_, err := loadRuleUpstreams("lb_scan")
+	_, err := loadRuleUpstreams(context.Background(), "lb_scan")
 
 	// Then
 	if err == nil {
@@ -266,7 +266,7 @@ func TestLoadRuleUpstreams_coalesces_nullable_columns(t *testing.T) {
 	}
 
 	// When
-	upstreams, err := loadRuleUpstreams("lb_nullable")
+	upstreams, err := loadRuleUpstreams(context.Background(), "lb_nullable")
 
 	// Then
 	if err != nil {

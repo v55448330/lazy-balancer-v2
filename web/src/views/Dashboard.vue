@@ -891,19 +891,22 @@ let rulesVersion = 0
 // （realtime/connections/metrics）仍 5s。
 const SLOW_LANE_INTERVAL_MS = 15000
 let lastSlowLaneAt = 0
-const slowLaneDue = (): boolean => {
-  const now = Date.now()
-  if (now - lastSlowLaneAt < SLOW_LANE_INTERVAL_MS) return false
-  lastSlowLaneAt = now
-  return true
-}
+const slowLaneDue = (): boolean => Date.now() - lastSlowLaneAt >= SLOW_LANE_INTERVAL_MS
 
 // /rules 与 /config/health 都是慢车道：必须脱离轮询数组 fire-and-forget，否则
 // 大规则集/DB 抖动（最长 30s）会让同一轮资源、曲线与 Caddy 状态全部延后。
 let rulesSlowLaneInFlight = false
+let pendingSlowLane = false
 const fetchRulesSlowLane = (roundSignal?: AbortSignal): void => {
-  if (disposed || rulesSlowLaneInFlight) return
+  if (disposed) return
+  if (rulesSlowLaneInFlight) {
+    // 在途期间只保留一个补跑需求；窗口时间不得提前推进，否则本次刷新会被
+    // 直接吃掉并再等待一个完整周期。补跑使用页级 signal，不继承已结束轮次。
+    pendingSlowLane = true
+    return
+  }
   rulesSlowLaneInFlight = true
+  lastSlowLaneAt = Date.now()
   void request.get('/rules', { signal: roundSignal ?? dashboardPolling.signal, silent: true }).then((res) => {
     if (disposed) return
     if (!res.data) {
@@ -924,6 +927,9 @@ const fetchRulesSlowLane = (roundSignal?: AbortSignal): void => {
     void fetchRuleHealth(currentRules, version, roundSignal)
   }).catch(() => { if (!disposed) rulesUnavailable.value = true }).finally(() => {
     rulesSlowLaneInFlight = false
+    if (!pendingSlowLane || disposed) return
+    pendingSlowLane = false
+    fetchRulesSlowLane()
   })
 }
 

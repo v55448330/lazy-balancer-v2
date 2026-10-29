@@ -3,6 +3,9 @@ package ownership
 import (
 	"encoding/json"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -680,4 +683,43 @@ func TestNew_rejectsEmptyDataDir(t *testing.T) {
 	if _, err := New(""); err == nil {
 		t.Fatal("New(\"\") 必须报错")
 	}
+}
+
+func TestStore_writeAtomicUsesSharedPrimitive(t *testing.T) {
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "store.go", nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fn := ownershipFuncDeclForTest(file, "writeAtomic")
+	if fn == nil {
+		t.Fatal("writeAtomic not found")
+	}
+	usesSharedPrimitive := false
+	ast.Inspect(fn, func(node ast.Node) bool {
+		call, ok := node.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		selector, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || selector.Sel.Name != "WriteAtomic" {
+			return true
+		}
+		if pkg, ok := selector.X.(*ast.Ident); ok && pkg.Name == "atomicfile" {
+			usesSharedPrimitive = true
+		}
+		return true
+	})
+	if !usesSharedPrimitive {
+		t.Fatal("ownership persistence must delegate temporary-file cleanup and durability to atomicfile.WriteAtomic")
+	}
+}
+
+func ownershipFuncDeclForTest(file *ast.File, name string) *ast.FuncDecl {
+	for _, decl := range file.Decls {
+		if fn, ok := decl.(*ast.FuncDecl); ok && fn.Name.Name == name {
+			return fn
+		}
+	}
+	return nil
 }

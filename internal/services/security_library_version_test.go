@@ -98,7 +98,9 @@ func TestSetIP2RegionVersion_missingRowKeepsAutoUpdateDefault(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	SetIP2RegionVersion("v9.9.9")
+	if err := SetIP2RegionVersion("v9.9.9"); err != nil {
+		t.Fatal(err)
+	}
 
 	var auto int
 	if err := db.DB.QueryRow("SELECT auto_update FROM security_ip2region_version WHERE id=1").Scan(&auto); err != nil {

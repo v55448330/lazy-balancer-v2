@@ -1,6 +1,8 @@
 package handlers
 
 import (
+	"context"
+
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
 	"lazy-balancer-v2/internal/services"
@@ -8,7 +10,6 @@ import (
 
 type configSnapshot struct {
 	ACMEEmail                  string
-	DNSProvider                string
 	CertExpiryDays             int
 	CertRenewalDays            int
 	CertRenewalAttempts        int
@@ -90,7 +91,7 @@ func fieldAffectsCaddy(field string) bool {
 	return false
 }
 
-func loadConfigSnapshot() (configSnapshot, error) {
+func loadConfigSnapshot(ctx context.Context) (configSnapshot, error) {
 	// 库值唯一真相（批 1+2）：类型①值型列（caddy_log_size_mb/request_body/
 	// http 三超时）直读——变更预览展示库值原样，不再 COALESCE 数值默认掩盖
 	//（NOT NULL DEFAULT+每启动回填报证不可达；upstream_keepalive_timeout 为
@@ -98,7 +99,7 @@ func loadConfigSnapshot() (configSnapshot, error) {
 	var old configSnapshot
 	// 证书到期/续签天数/重试次数三列兜底统一绑定 db.Default*（caddy.go 与
 	// 集群快照同口径）；缺行仍整体报错（预览面拒绝「以零值快照误报全字段变更」）。
-	err := db.DB.QueryRow(`SELECT COALESCE(acme_email,''), COALESCE(dns_provider,'dnspod'),
+	err := db.DB.QueryRowContext(ctx, `SELECT COALESCE(acme_email,''),
 		COALESCE(cert_expiry_days,?), COALESCE(cert_renewal_days,?), COALESCE(cert_renewal_attempts,?),
 		COALESCE(default_ca_provider_id,0), COALESCE(log_level,'info'),
 		COALESCE(timezone,?),
@@ -119,7 +120,7 @@ func loadConfigSnapshot() (configSnapshot, error) {
 		FROM global_config WHERE id=1`, db.DefaultCertExpiryDays, db.DefaultCertRenewalDays, db.DefaultCertRenewalAttempts, db.DefaultTimezone,
 		db.DefaultTaskLogSizeMB, db.DefaultAuditLogSizeMB, db.DefaultRuntimeLogSizeMB, db.DefaultAuditRetentionMonths, db.DefaultJWTExpireMinutes,
 		db.DefaultThreatScreenMode, db.DefaultThreatTrafficSampleN, db.DefaultSecurityEventsRetentionDays, db.DefaultSecurityEventsRowCap).Scan(
-		&old.ACMEEmail, &old.DNSProvider,
+		&old.ACMEEmail,
 		&old.CertExpiryDays, &old.CertRenewalDays, &old.CertRenewalAttempts,
 		&old.DefaultCAProviderID, &old.LogLevel,
 		&old.Timezone,
@@ -171,7 +172,6 @@ func planConfigChanges(req models.UpdateConfigRequest, old configSnapshot) confi
 	}
 
 	add("acme_email", "ACME邮箱", req.ACMEEmail != nil && *req.ACMEEmail != old.ACMEEmail)
-	add("dns_provider", "DNS提供商", req.DNSProvider != nil && *req.DNSProvider != old.DNSProvider)
 	// global_config.dns_credentials 为遗留列：读路径不回显、写路径已移除，
 	// 不再参与变更清单/字段级审计归因（签发凭证的唯一来源是
 	// certificate_configs.dns_credentials）。

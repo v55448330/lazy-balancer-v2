@@ -110,6 +110,10 @@ var auditDynamicResultCodes = []string{
 	"queue_unavailable", "enqueue_failed", "status_read_failed", "state_changed",
 	"in_flight", "not_retryable", "rule_state_read_failed", "guarded_active_rule",
 	"disable_failed", "disable_verify_failed", "delete_failed", "query_failed",
+	// handlers/cluster_status.go ReportClusterNode 的 recordDetached 闭包
+	// （脱离请求的失败/拒绝/成功三态；主节点门拒绝先解码再判，故结果码
+	// 由分支计算后以动态实参进入 AuditResultPart）
+	"success",
 }
 
 func AuditResultText(result string) string {

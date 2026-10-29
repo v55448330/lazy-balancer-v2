@@ -251,7 +251,7 @@ func TestTaskLogsHousekeeping_runsWhileSizeEvalInFlight(t *testing.T) {
 
 	entered := make(chan struct{})
 	release := make(chan struct{})
-	taskengine.SetTaskLogSizeBytesFn(func() int64 {
+	taskengine.SetTaskLogSizeBytesFn(func(context.Context) int64 {
 		close(entered)
 		<-release
 		return int64(^uint64(0) >> 1)
@@ -672,6 +672,48 @@ func TestRuntimeLogCleanupOnce_countsAppMetadataFailures(t *testing.T) {
 	}
 	if _, err := os.Stat(stale); err != nil {
 		t.Fatalf("无法判定过期的副本不得被删除: %v", err)
+	}
+}
+
+// 任务日志元数据失败必须可定位、计数并进入摘要/错误面，且不得删除无法
+// 判定保留期的文件；注入缝与应用日志副本侧同形。
+func TestTaskLogsHousekeeping_countsMetadataFailures(t *testing.T) {
+	logs := captureLogf(t)
+	dir := t.TempDir()
+	logFile := filepath.Join(dir, "app.log")
+	tasksDir := filepath.Join(dir, "tasks")
+	if err := os.MkdirAll(tasksDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stale := filepath.Join(tasksDir, "stale.log")
+	if err := os.WriteFile(stale, []byte("old\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	oldInfo := taskLogEntryInfo
+	taskLogEntryInfo = func(os.DirEntry) (os.FileInfo, error) {
+		return nil, errors.New("injected task stat failure")
+	}
+	t.Cleanup(func() { taskLogEntryInfo = oldInfo })
+
+	res := taskLogsHousekeepingWithRetention(logFile, 3, nil)
+	if res.InfoFailed != 1 {
+		t.Fatalf("InfoFailed=%d, want 1", res.InfoFailed)
+	}
+	if len(res.Deleted) != 0 {
+		t.Fatalf("Deleted=%v, want empty", res.Deleted)
+	}
+	if summary := res.Summary(); !strings.Contains(summary, "元数据读取失败 1 个") {
+		t.Fatalf("摘要必须披露元数据读取失败: %q", summary)
+	}
+	agg := RuntimeCleanupResult{TaskLogs: res}
+	if err := agg.Err(); err == nil || !strings.Contains(err.Error(), "任务日志元数据读取失败 1 个") {
+		t.Fatalf("Err()=%v, want task metadata failure", err)
+	}
+	if !strings.Contains(logs.String(), stale) || !strings.Contains(logs.String(), "元数据") {
+		t.Fatalf("逐文件告警必须指出失败路径: %q", logs.String())
+	}
+	if _, err := os.Stat(stale); err != nil {
+		t.Fatalf("无法判定过期的任务日志不得删除: %v", err)
 	}
 }
 

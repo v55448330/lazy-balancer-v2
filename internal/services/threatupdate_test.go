@@ -1109,7 +1109,7 @@ func TestUpdateOneSource_healPreservesRawHash(t *testing.T) {
 		t.Fatal(err)
 	}
 	m := &ThreatUpdateManager{}
-	if _, failed := m.updateOneSource(context.Background(), threatSourceRow{id: id, name: "ustc"}, "manual", time.Now().UTC().Format(crsTimeLayout)); failed {
+	if _, failed, _ := m.updateOneSource(context.Background(), threatSourceRow{id: id, name: "ustc"}, "manual", time.Now().UTC().Format(crsTimeLayout)); failed {
 		t.Fatal("heal update failed")
 	}
 	var raw string

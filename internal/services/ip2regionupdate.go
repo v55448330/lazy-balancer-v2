@@ -557,7 +557,9 @@ func (m *IP2RegionUpdateManager) runWithContext(runCtx context.Context, trigger 
 		slotErr = errors.Join(slotErr, fmt.Errorf("%w: 状态行写入失败: %w", errScheduleSlotNotAdvanced, err))
 	}
 	m.setSlotAdvanceError(slotErr)
-	SetIP2RegionVersion(tag)
+	if err := SetIP2RegionVersion(tag); err != nil {
+		Logf("error", "ip2region update: failed to store version: %v", err)
+	}
 	// 主节点补写.version sidecar——waffiles_sync 的
 	// BuildWafFileRef（ref.IP2RegionTag）与从节点 rewriteVersionIfMissingOrStale
 	// 都假设它存在。 后首写已随安装段（wafFileMu 互斥区）完成，此处
@@ -578,11 +580,11 @@ func (m *IP2RegionUpdateManager) runWithContext(runCtx context.Context, trigger 
 // 空/过期才推进（委托 advanceVersionSlotIfDue 的「未来槽不污染」门）——手动轮
 // 失败由引擎退避重投同一槽，业务不抢先推进（手动**成功**按 schedule.go 成功门
 // 推进，不经过本函数）。
-func (m *IP2RegionUpdateManager) advanceSlotIfAuto(trigger string) {
+func (m *IP2RegionUpdateManager) advanceSlotIfAuto(trigger string) error {
 	if trigger != "auto" {
-		return
+		return nil
 	}
-	advanceVersionSlotIfDue("security_ip2region_version")
+	return advanceVersionSlotIfDue("security_ip2region_version")
 }
 
 // backupIP2RegionXDB 备份 live xdb：优先硬链接（同目录同文件系统零拷贝，
@@ -647,8 +649,8 @@ func (m *IP2RegionUpdateManager) cancel(cause error, trigger string, runCtx cont
 		Logf("error", "ip2region update: failed to record cancellation: %v", err)
 	}
 	if userCancelledRun(runCtx) {
-		// advanceSlotIfAuto 自带「仅 auto、仅空/过期槽」门：手动取消不动预约。
-		m.advanceSlotIfAuto(trigger)
+		// advanceSlotIfAuto 自带「仅 auto、仅空/过期槽」门；失败显式上报重试。
+		m.setSlotAdvanceError(m.advanceSlotIfAuto(trigger))
 	}
 	m.syncInstalledVersionToState()
 	m.mu.Lock()
@@ -701,9 +703,16 @@ func (m *IP2RegionUpdateManager) downloadAndInstall(parent context.Context, tag 
 	}
 
 	m.setStage(IP2RegionStatusInstalling, "校验并安装数据库")
-	if err := validateIP2RegionXDB(staged); err != nil {
-		return err
+	validatedSearcher, err := openValidatedIP2RegionSearcherForUpdate(staged)
+	if err != nil {
+		return fmt.Errorf("校验 ip2region xdb: %w", err)
 	}
+	searcherInstalled := false
+	defer func() {
+		if !searcherInstalled {
+			validatedSearcher.Close()
+		}
+	}()
 	// 记录新工件摘要，供回滚全败时 fail-open 前置校验。
 	if sum, sumErr := sha256File(staged); sumErr == nil {
 		m.newXdbSha = sum
@@ -782,9 +791,10 @@ func (m *IP2RegionUpdateManager) downloadAndInstall(parent context.Context, tag 
 	// rename 后内存热换失败不得静默吞掉——磁盘已是新库而内存仍是旧
 	// 库，必须按安装失败处理（sentinel 标记），由 run() 走与 reloader 失败相同
 	// 的回滚路径。Reload 失败时旧 searcher 保持服役（ip2region.go Reload 语义）。
-	if err := reloadIP2RegionSearcher(); err != nil {
+	if err := reloadIP2RegionSearcher(validatedSearcher); err != nil {
 		return fmt.Errorf("%w: %v", errIP2RegionReload, err)
 	}
+	searcherInstalled = true
 	return nil
 }
 
@@ -848,11 +858,13 @@ func (m *IP2RegionUpdateManager) rollbackXDB() (restored bool, distRestore bool,
 	}
 	wafFileMu.Unlock()
 	if restored || distRestore {
-		if rErr := reloadIP2RegionSearcher(); rErr != nil {
-			// 磁盘已是基线，热换失败不得反转回滚结论：Reload 失败时旧
-			// searcher 保持服役；若安装阶段热换曾成功，内存 searcher 以新数据
-			// 滞后，在下次更新安装或重启后收敛（无周期性 reload；Caddy 侧
-			// geoip 随 reloader 重试收敛）。
+		searcher, openErr := openValidatedIP2RegionSearcher(ip2regionLivePath)
+		if openErr != nil {
+			Logf("error", "ip2region update: reload after rollback failed (%v); disk baseline restored; keeping the current searcher", openErr)
+		} else if rErr := reloadIP2RegionSearcher(searcher); rErr != nil {
+			searcher.Close()
+			// 磁盘已是基线，热换失败不得反转回滚结论：旧 searcher 保持服役；
+			// 若安装阶段热换曾成功，内存 searcher 以新数据滞后，在下次更新或重启收敛。
 			Logf("error", "ip2region update: reload after rollback failed (%v); disk baseline restored; if the install-time hot-swap succeeded, the in-memory searcher lags until the next update install or restart (Caddy-side geoip converges with the reloader)", rErr)
 		}
 	}
@@ -1012,7 +1024,9 @@ func (m *IP2RegionUpdateManager) successAfterReloadFailOpen(tag string, reloadEr
 		slotErr = errors.Join(slotErr, fmt.Errorf("%w: 状态行写入失败: %w", errScheduleSlotNotAdvanced, err))
 	}
 	m.setSlotAdvanceError(slotErr)
-	SetIP2RegionVersion(tag)
+	if err := SetIP2RegionVersion(tag); err != nil {
+		Logf("error", "ip2region update: failed to store version: %v", err)
+	}
 	// fail-open 成功同样补写 sidecar（与 success() 同因）。
 	if err := rewriteVersionIfMissingOrStale(ip2regionLivePath+".version", tag); err != nil {
 		Logf("error", "ip2region update: failed to write .version sidecar: %v", err)
@@ -1026,14 +1040,20 @@ func (m *IP2RegionUpdateManager) successAfterReloadFailOpen(tag string, reloadEr
 	WriteIP2RegionUpdateLog("INFO", string(IP2RegionStatusSuccess), fmt.Sprintf("ip2region 已更新到 %s（%s）", tag, warn))
 }
 
+// openValidatedIP2RegionSearcherForUpdate 让更新用例测量完整装载次数；
+// 生产默认与统一校验入口一致。
+var openValidatedIP2RegionSearcherForUpdate = openValidatedIP2RegionSearcher
+
 // validateIP2RegionXDB opens the staged xdb and performs a probe search.
 // recover 兜底：结构自检门只覆盖已知布局（头/向量索引/段索引指针），绑定库
 // 对内容缓冲区的其余无边界切片（段数据 dataPtr 带外等）仍以 panic 呈现
 // ——校验必须把 panic 转成错误并留堆栈，绝不让待安装工件崩溃进程。
 func validateIP2RegionXDB(path string) error {
-	if _, err := openValidatedIP2RegionSearcher(path); err != nil {
+	searcher, err := openValidatedIP2RegionSearcher(path)
+	if err != nil {
 		return fmt.Errorf("校验 ip2region xdb: %w", err)
 	}
+	searcher.Close()
 	return nil
 }
 

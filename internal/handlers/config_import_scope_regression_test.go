@@ -126,6 +126,11 @@ func TestUsersLoginCredentialGates(t *testing.T) {
 			wantIn: []string{"users 第 2 行", "oidc_issuer"},
 		},
 		{
+			name:   "OIDC 用户不得携带本地密码哈希",
+			rows:   []map[string]any{validAdmin, {"id": 7, "username": "oidc-with-password", "password_hash": "local-hash", "role": "user", "is_enabled": 1, "auth_provider": "oidc", "oidc_subject": "sub-7", "oidc_issuer": "https://idp.example.com"}},
+			wantIn: []string{"users 第 2 行", "OIDC", "password_hash"},
+		},
+		{
 			name:   "启用 MFA 但密钥为空",
 			rows:   []map[string]any{validAdmin, {"id": 4, "username": "mfa-user", "password_hash": "hash", "role": "user", "is_enabled": 1, "mfa_enabled": 1, "mfa_secret": ""}},
 			wantIn: []string{"users 第 2 行", "mfa_secret"},

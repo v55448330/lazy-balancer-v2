@@ -173,7 +173,7 @@
  </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { CopyDocument, Key, Monitor, RefreshRight, Select, VideoPause, VideoPlay } from '@element-plus/icons-vue'
 import DialogHeader from '@/components/DialogHeader.vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -373,6 +373,13 @@ const registerToken = ref<ClusterRegisterToken | null>(null)
 const closeTokenDialog = createOneTimeSecretCloseGuard({
   message: '注册令牌仅此一次显示，关闭后将无法再次查看。已复制并妥善保存？',
   title: '保存注册令牌',
+})
+
+// 同一设置页跨账号复用时，一次性凭据不得留给下一位登录用户；
+// watch 仅在 user.id 实际变化时触发，同账号资料刷新不影响已打开弹框。
+watch(() => authStore.user?.id, () => {
+  registerToken.value = null
+  tokenDialogVisible.value = false
 })
 // 写门单源在 utils/clusterWriteGate（角色独立参与）：stores/auth 的
 // readOnlyReason 先判节点模式，从节点上任何角色都只得到 'slave'——只按 reason

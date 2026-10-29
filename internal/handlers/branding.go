@@ -672,7 +672,7 @@ func SeedDefaultBlockPage(dataDir string) (bool, error) {
 		// 写同步表 security_block_pages，从节点瞬时读错会让本地渲染覆盖主端
 		// 同步内容。与下方「owned by master」语义一致。
 		services.Logf("warn", "branding：读取节点角色失败，跳过默认拦截页播种: %v", roleErr)
-		return false, nil
+		return false, fmt.Errorf("读取节点角色: %w", roleErr)
 	}
 	if !isMaster {
 		// The default block page content is owned by the master and arrives on

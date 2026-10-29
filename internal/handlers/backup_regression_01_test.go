@@ -520,7 +520,7 @@ func TestRestoreRejectsOversizedFileBeforeImport(t *testing.T) {
 	if err := os.Truncate(path, maxConfigImportBytes+1); err != nil {
 		t.Fatal(err)
 	}
-	id, err := insertAutoBackupRow(filename, "success", maxConfigImportBytes+1, `["users"]`, "manual", "", "test")
+	id, err := insertAutoBackupRow(context.Background(), filename, "success", maxConfigImportBytes+1, `["users"]`, "manual", "", "test")
 	if err != nil {
 		t.Fatal(err)
 	}

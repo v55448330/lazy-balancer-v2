@@ -44,6 +44,14 @@ func TestTerminalStatus_demoteSkipPrecedesCancellation(t *testing.T) {
 	}
 }
 
+func TestTerminalStatusScheduleSlotFailurePrecedesCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if got := terminalStatus(ctx, ErrScheduleSlotNotAdvanced); got != "failed" {
+		t.Fatalf("slot advance failure status=%q, want failed to trigger retry", got)
+	}
+}
+
 // skipped 终态同样落 message——跳过原因此前只进
 // 任务日志 [done] 行，task_runs.message 恒空，任务历史页丢失「为何跳过」。
 func TestRunNow_skippedRunCarriesSkipReason(t *testing.T) {

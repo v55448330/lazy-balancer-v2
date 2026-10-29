@@ -386,18 +386,18 @@ const handleSubmit = async () => {
     ElMessage.warning('两次输入的新密码不一致')
     return
   }
-  try {
-    await ElMessageBox.confirm(
-      editingUser.value
-        ? `将更新用户「${form.value.username}」的账号资料与权限，是否继续？`
-        : `将创建用户「${form.value.username}」（角色：${form.value.role === 'admin' ? '管理员' : '普通用户'}），是否继续？`,
-      editingUser.value ? '确认编辑用户' : '确认创建用户',
-      { type: 'warning', confirmButtonText: '确认保存', cancelButtonText: '取消' },
-    )
-  } catch { return }
   submittingUserId.value = editingUser.value?.id ?? null
   submitting.value = true
   try {
+    try {
+      await ElMessageBox.confirm(
+        editingUser.value
+          ? `将更新用户「${form.value.username}」的账号资料与权限，是否继续？`
+          : `将创建用户「${form.value.username}」（角色：${form.value.role === 'admin' ? '管理员' : '普通用户'}），是否继续？`,
+        editingUser.value ? '确认编辑用户' : '确认创建用户',
+        { type: 'warning', confirmButtonText: '确认保存', cancelButtonText: '取消' },
+      )
+    } catch { return }
     if (editingUser.value) {
       const editingSelfRow = editingUser.value.id === authStore.user?.id
       // OIDC 用户的 username/display_name/password 源自 IdP(后端守卫必 400)——
@@ -469,9 +469,12 @@ const deleteUser = async (row: UserListItem) => {
   if (isReadOnly.value || submitting.value || submittingUserId.value === id || operatingUserIds.value.has(id) || switchingIds.value.has(id)) return
   operatingUserIds.value.add(id)
   try {
-    await ElMessageBox.confirm(`将删除用户「${row.username}」。删除后无法恢复，该用户的会话与 API 密钥将失效。`, '删除用户', { type: 'warning', confirmButtonText: '确认删除', cancelButtonText: '取消' })
-    await request.delete(`/users/${id}`)
-    mfaAwareSuccess('删除成功')
+    const consequence = row.auth_provider === 'oidc'
+      ? '同一身份下次 SSO 登录会重新开户（默认普通用户，原角色与禁用状态不继承）。如需撤销访问并保留原身份，请取消并改用禁用。'
+      : '删除后无法恢复，该用户的会话与 API 密钥将失效。'
+    await ElMessageBox.confirm(`将删除用户「${row.username}」。${consequence}`, '删除用户', { type: 'warning', confirmButtonText: '确认删除', cancelButtonText: '取消' })
+    const res = await request.delete<APIResponse>(`/users/${id}`)
+    mfaAwareSuccess(res.message || '删除成功')
     fetchUsers()
   } catch (error: unknown) {
     if (isCancelError(error)) return
@@ -489,19 +492,23 @@ const handleToggleStatus = async (id: number, isEnabled: boolean) => {
   // 占位先于确认（同 TaskMonitor 范式）：确认框悬挂期也属「操作在途」，
   // 没有门时连点会叠出第二个确认框并重复写状态。
   switchingIds.value.add(id)
+  const row = users.value.find((item) => item.id === id)
   try {
     if (!isEnabled) {
       // 禁用与删除同为破坏性操作，与 deleteUser/toggleRule 保持同款二次确认。
       try {
-        await ElMessageBox.confirm(`将禁用用户「${users.value.find((item) => item.id === id)?.username || id}」。禁用后该用户无法登录，但账号与配置保留。`, '禁用用户', { type: 'warning', confirmButtonText: '确认禁用', cancelButtonText: '取消' })
+        const consequence = row?.auth_provider === 'oidc'
+          ? 'SSO 登录将被拒绝；原身份、角色与绑定保留，重新启用即可恢复。'
+          : '禁用后该用户无法登录，但账号与配置保留。'
+        await ElMessageBox.confirm(`将禁用用户「${row?.username || id}」。${consequence}`, '禁用用户', { type: 'warning', confirmButtonText: '确认禁用', cancelButtonText: '取消' })
       } catch {
         // 取消确认时回滚乐观开关——el-switch 已先行翻转 row.is_enabled。
         rollbackUserStatus(users.value, id, isEnabled)
         return
       }
     }
-    await request.put(`/users/${id}/status`, { is_enabled: isEnabled })
-    mfaAwareSuccess(isEnabled ? '已启用用户' : '已禁用用户')
+    const res = await request.put<APIResponse>(`/users/${id}/status`, { is_enabled: isEnabled })
+    mfaAwareSuccess(res.message || (isEnabled ? '已启用用户' : '已禁用用户'))
     fetchUsers()
   } catch (e) {
     rollbackUserStatus(users.value, id, isEnabled)
@@ -583,11 +590,6 @@ const resetPassword = async (row: UserListItem) => {
     if (!r.ok) return
     newPassword = r.newPwd ?? ''
     if (newPassword) {
-      try {
-        await ElMessageBox.confirm(`将为「${row.username}」重置密码，重置后该用户的全部登录会话将被吊销。确认重置？`, '确认重置密码', {
-          type: 'warning', confirmButtonText: '确认重置', cancelButtonText: '取消',
-        })
-      } catch { return }
       await request.post(`/users/${row.id}/reset-password`, { new_password: newPassword })
       if (isSelf) {
         // 管理员重置本人密码:重置端点递增 pwd_ver 吊销自身会话——干净登出

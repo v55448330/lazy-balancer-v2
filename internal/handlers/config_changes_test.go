@@ -1,7 +1,9 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -52,9 +54,18 @@ func TestPlanConfigChanges_ignoresLegacyDNSCredentials(t *testing.T) {
 	if err := json.Unmarshal([]byte(body), &req); err != nil {
 		t.Fatalf("decode request: %v", err)
 	}
-	plan := planConfigChanges(req, configSnapshot{DNSProvider: "dnspod"})
+	plan := planConfigChanges(req, configSnapshot{})
 	if plan.Changed {
 		t.Fatalf("legacy dns_provider 未变化时报了变更: %#v", plan.SectionChanges)
+	}
+}
+
+func TestLoadConfigSnapshotCanceledContext(t *testing.T) {
+	newBackupTestHandlers(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := loadConfigSnapshot(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("snapshot error=%v, want context.Canceled", err)
 	}
 }
 
@@ -186,7 +197,9 @@ func TestLoadConfigSnapshot_columnsAndScanTargetsMatchStructFields(t *testing.T)
 			return true
 		}
 		switch selector.Sel.Name {
-		case "QueryRow":
+		// ctx 化后生产代码统一 QueryRowContext（不得回退无 ctx 形态——
+		// 关停/取消时必须能中断快照读取）；两种形态都必须是「SQL 字面量 + 绑定值」。
+		case "QueryRow", "QueryRowContext":
 			for _, arg := range call.Args {
 				literal, ok := arg.(*ast.BasicLit)
 				if ok && literal.Kind == token.STRING {
@@ -197,6 +210,9 @@ func TestLoadConfigSnapshot_columnsAndScanTargetsMatchStructFields(t *testing.T)
 			}
 			// QueryRow 参数 = SQL 字面量 + 绑定值；绑定值个数 = ? 占位符数。
 			bindArgs = len(call.Args) - 1
+			if selector.Sel.Name == "QueryRowContext" {
+				bindArgs--
+			}
 		case "Scan":
 			scanCount = len(call.Args)
 			for _, arg := range call.Args {

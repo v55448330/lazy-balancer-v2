@@ -1,20 +1,27 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { code, enclosingOpenTag, section } from './_helpers.ts'
+import { code, cssDeclarations, enclosingOpenTag, section } from './_helpers.ts'
 
 test('任务监控：KPI 不再显示证书工作项括注，筛选组右对齐，操作列保持单行', () => {
   const page = code('src/views/settings/TaskMonitor.vue')
   assert.doesNotMatch(page, /（不含证书工作项）|（含证书工作项）/)
   assert.match(page, /<div class="tm-filter-group">/)
   assert.match(page, /class-name="tm-op-cell"/)
-  const filterCss = section(page, '.tm-filter-group {', '}')
-  for (const declaration of ['display: flex', 'align-items: center', 'gap: 10px', 'margin-left: auto']) {
-    assert.ok(filterCss.includes(declaration), `筛选组样式缺少 ${declaration}`)
-  }
-  for (const declaration of ['display: flex', 'flex-wrap: nowrap']) {
-    assert.ok(section(page, '.tm-nowrap-table .tm-op-cell .cell) {', '}').includes(declaration), `操作列样式缺少 ${declaration}`)
-  }
-  assert.ok(section(page, '.tm-nowrap-table .tm-op-cell .el-button) {', '}').includes('margin-left: 0'))
+  // 样式按「声明集」判定：单行整串或「首个 } 收尾」的切片在换行重排、增删声明、
+  // 属性顺序调整时都会假红/截断，而界面没变（声明集与排版形态无关）。
+  assert.deepEqual(
+    Object.fromEntries(cssDeclarations(page, '.tm-filter-group')),
+    { display: 'flex', 'align-items': 'center', gap: '10px', 'margin-left': 'auto' },
+    '筛选组必须靠右对齐并单行排布',
+  )
+  const opCell = cssDeclarations(page, ':deep(.tm-nowrap-table .tm-op-cell .cell)')
+  assert.equal(opCell.get('display'), 'flex')
+  assert.equal(opCell.get('flex-wrap'), 'nowrap', '操作列必须保持单行（换行会把每行撑高）')
+  assert.equal(
+    cssDeclarations(page, ':deep(.tm-nowrap-table .tm-op-cell .el-button)').get('margin-left'),
+    '0',
+    '操作按钮不得再左缩进（否则单行也会溢出）',
+  )
   // 「运行」按钮的 tooltip 必须只在有冷却原因时才出现（`:disabled` 门）：
   // 恒定出现的空 tooltip 会吞掉悬停/焦点提示。按标签配对判定包裹关系，
   // 不用 `[\s\S]{0,300}` 这类距离型正则——标记一变长它就可能恒真（永远放行）。
@@ -30,7 +37,12 @@ test('任务监控：KPI 不再显示证书工作项括注，筛选组右对齐�
 
 test('安全总览 Top10 源 IP 展示近 10 分钟/近 1 小时/近 24 小时频率', () => {
   const page = code('src/views/security/SecurityOverview.vue')
-  assert.match(page, /recent_10m: number; recent_1h: number; recent_24h: number/)
+  // 按字段逐个判定（后端响应字段名即契约）：单行整串钉在格式化/加字段/加可选
+  // 标记时即假红，而列的绑定关系没变。
+  const topIp = section(page, 'interface TopIP', '}')
+  for (const field of ['recent_10m', 'recent_1h', 'recent_24h']) {
+    assert.match(topIp, new RegExp(`\\b${field}\\??:\\s*number\\b`), `TopIP 必须声明后端字段 ${field}`)
+  }
   assert.doesNotMatch(page, /prop="frequency"/)
   assert.match(page, /prop="blocked" label="拦截" width="100"/)
   assert.match(page, /prop="detected" label="检测" width="100"/)

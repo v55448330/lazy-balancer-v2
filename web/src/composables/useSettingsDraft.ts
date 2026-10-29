@@ -51,9 +51,9 @@ const adminTlsCertError = ref('')
 const adminTlsUnavailable = ref(false)
 const stagedAdminTlsCert = ref<StagedAdminTlsCert | null>(null)
 
-let draftIdentity: number | null = null
+let draftIdentity: number | null | undefined
 const resetSettingsDraft = (): void => {
-  draftIdentity = null
+  draftIdentity = undefined
   githubTokenInput.value = ''
   githubTokenClearPending.value = false
   securityEventsRetentionDirty.value = false
@@ -81,7 +81,9 @@ export const useSettingsDraft = () => ({
 
 /** 身份变化时清空草稿；首次挂载只记录身份，不清空页内暂存。 */
 export const syncSettingsDraftIdentity = (userId: number | null): void => {
-  if (draftIdentity !== null && userId !== null && userId !== draftIdentity) {
+  // null 是换号过程中的真实中间态，也必须清掉上一身份的草稿；undefined
+  // 仅表示尚未记录过身份，避免首次挂载误清当前页内输入。
+  if (draftIdentity !== undefined && userId !== draftIdentity) {
     resetSettingsDraft()
   }
   draftIdentity = userId

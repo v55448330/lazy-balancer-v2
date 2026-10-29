@@ -294,9 +294,9 @@ var configBackupProtectedConfigKeys = map[string]bool{
 	// db.go:2285/2346 启动迁移 Scan int）——同口径纳入保护。
 	"threat_traffic_sample_unified_migrated": true,
 	"security_events_retention_migrated":     true,
-	// global_config.dns_credentials 为退役列（读路径不回显、写路径已移除、
-	// 列由启动迁移删除）：导出剔除 + 导入跳过，避免旧备份把不可见凭证
-	// 写回并被后续备份继续外带。
+	// global_config.dns_provider/dns_credentials 为退役列：导出剔除 + 导入跳过，
+	// 避免旧备份把零运行时消费的配置写回并继续传播。
+	"dns_provider":    true,
 	"dns_credentials": true,
 }
 
@@ -1127,12 +1127,15 @@ func validateV2BackupMCPIPWhitelist(rows []map[string]any) error {
 		if !exists {
 			continue
 		}
-		_, dropped, err := parseImportedMCPIPWhitelist(raw)
+		normalized, dropped, err := parseImportedMCPIPWhitelist(raw)
 		if err != nil {
 			return fmt.Errorf("api_keys 第 %d 行的 IP 白名单 %v 无效（%v），请修正备份中该 Key 的白名单后重试", index+1, raw, err)
 		}
 		if len(dropped) > 0 {
 			return fmt.Errorf("api_keys 第 %d 行的 IP 白名单含无效条目 %v（需为 CIDR），请修正后重试", index+1, dropped)
+		}
+		if len(normalized) > apiKeyMaxWhitelistEntries {
+			return fmt.Errorf("api_keys 第 %d 行的 IP 白名单最多 %d 条，实际 %d 条，请修正后重试", index+1, apiKeyMaxWhitelistEntries, len(normalized))
 		}
 	}
 	return nil
@@ -1991,8 +1994,8 @@ func validateV2BackupNodeRows(rows []map[string]any) error {
 // 唯一提前判据——不可登录的管理员一旦落库，导入事务又会递增
 // password_version 吊销全部会话，面板将永久锁死（只能改库恢复）。
 //
-// 口径为「最低可用门」而非 bcrypt 严格门：OIDC JIT 行合法持有空哈希，
-// 历史导出中的占位哈希不额外放大风险（密码校验本身失败即拒绝登录）。
+// 口径为「最低可用门」而非 bcrypt 严格门：OIDC JIT 行必须持有空哈希，
+// 防止混合身份行经密码登录取得 OIDC 会话声明并绕过本地 MFA 写门。
 func validateV2BackupUserRows(rows []map[string]any) error {
 	for index, row := range rows {
 		line := fmt.Sprintf("备份校验失败：users 第 %d 行", index+1)
@@ -2016,6 +2019,9 @@ func validateV2BackupUserRows(rows []map[string]any) error {
 				return fmt.Errorf("%s 本地用户的 password_hash 不能为空（该账号将无法登录）", line)
 			}
 		case "oidc":
+			if backupString(row["password_hash"]) != "" {
+				return fmt.Errorf("%s OIDC 用户的 password_hash 必须为空（不得携带本地密码凭据）", line)
+			}
 			if strings.TrimSpace(backupString(row["oidc_subject"])) == "" || strings.TrimSpace(backupString(row["oidc_issuer"])) == "" {
 				return fmt.Errorf("%s OIDC 用户必须同时携带 oidc_subject 与 oidc_issuer（缺一无法登录）", line)
 			}
@@ -2030,15 +2036,16 @@ func validateV2BackupUserRows(rows []map[string]any) error {
 }
 
 // backupUserLoginCapable 判定备份行是否为「可登录」账号（管理员可用性门用）：
-// local 需非空 password_hash，oidc 需完整 subject+issuer；启用 MFA 的行还需
-// 非空密钥，否则登录恒卡在 MFA 校验。
+// local 需非空 password_hash，oidc 需空密码哈希及完整 subject+issuer；启用 MFA
+// 的行还需非空密钥，否则登录恒卡在 MFA 校验。
 func backupUserLoginCapable(user map[string]any) bool {
 	if backupBooleanEnabled(user["mfa_enabled"]) && strings.TrimSpace(backupString(user["mfa_secret"])) == "" {
 		return false
 	}
 	switch backupString(user["auth_provider"]) {
 	case "oidc":
-		return strings.TrimSpace(backupString(user["oidc_subject"])) != "" &&
+		return backupString(user["password_hash"]) == "" &&
+			strings.TrimSpace(backupString(user["oidc_subject"])) != "" &&
 			strings.TrimSpace(backupString(user["oidc_issuer"])) != ""
 	default:
 		return backupString(user["password_hash"]) != ""
@@ -3974,6 +3981,17 @@ func validateV2BackupRuntimeSettings(config map[string]any, tables map[string][]
 	if config == nil {
 		return nil
 	}
+	if raw, exists := config["acme_email"]; exists && raw != nil {
+		text, ok := raw.(string)
+		if !ok {
+			return fmt.Errorf("备份的 acme_email 必须为字符串")
+		}
+		email, err := normalizeACMEEmail(text)
+		if err != nil {
+			return fmt.Errorf("备份的 acme_email 无效: %w", err)
+		}
+		config["acme_email"] = email
+	}
 	if raw, exists := config["sync_interval"]; exists && raw != nil {
 		value, ok := backupInteger(raw)
 		if !ok || value < 10 || value > 86400 {
@@ -4104,7 +4122,7 @@ func validateV2BackupRuntimeSettings(config map[string]any, tables map[string][]
 	// access_log_format 导入侧此前零校验——手造
 	// 备份可落库「删除 request>remote_ip/uri/headers」的格式，日志统计与 UA
 	// 统计静默失效（保存侧 caddy.go UpdateConfig 有 validateAccessLogFormat
-	// 门）。与保存侧同门同序：规模门 → 语义门 → 归一强制携带 X-API-Key 脱敏行
+	// 门）。与保存侧同门同序：规模门 → 语义门 → 归一强制携带 API Key 头脱敏行
 	// → 落库值再过一次规模门（归一可能多出脱敏行；渲染层另有恒等不变量兜底，
 	// 导入落库值即所见）。
 	if raw, exists := config["access_log_format"]; exists && raw != nil {

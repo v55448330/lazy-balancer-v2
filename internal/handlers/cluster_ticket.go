@@ -61,7 +61,7 @@ func (h *Handlers) GenerateClusterLoginTicket(c *gin.Context) {
 		return
 	}
 	response, err := h.clusterService.GenerateLoginTicket(c.Request.Context(), models.ClusterLoginTicketClaims{
-		UserID: int(contextUserID(c)), Username: c.GetString("username"), NodeID: nodeID,
+		UserID: int(contextUserID(c)), Username: c.GetString("username"), AuthMethod: c.GetString("auth_method"), NodeID: nodeID,
 	}, time.Now())
 	if err != nil {
 		status := http.StatusInternalServerError
@@ -147,7 +147,7 @@ func (h *Handlers) TicketLogin(c *gin.Context) {
 		c.JSON(status, models.APIResponse{Code: status, Message: message})
 		return
 	}
-	h.respondLogin(c, user, passwordVersion)
+	h.respondLoginWithMFA(c, user, passwordVersion, 0, true, claims.AuthMethod)
 }
 
 func recordTicketLoginFailure(c *gin.Context, username, reason string) {

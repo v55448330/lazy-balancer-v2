@@ -1801,9 +1801,8 @@ func TestAPIDocs_auditLogsExampleKeysMatchImplementation(t *testing.T) {
 }
 
 // 废弃字段响应面收敛：upstreams.dynamic_dns（写侧恒 0 的废弃列）与全局
-// dns_provider/dns_credentials（签发链不消费的遗留字段，凭证恒空）不再随
-// API 响应下发——消费者不得据恒假值做判定。DB 列与导入/快照兼容不受影响
-// （缺省即零值）。
+// dns_provider/dns_credentials（签发链不消费的遗留字段）不再随 API 响应
+// 下发——消费者不得据恒假值做判定。全局 DB 列由启动迁移删除。
 func TestDeprecatedFields_omittedFromAPIResponses(t *testing.T) {
 	upstreamJSON, err := json.Marshal(models.Upstream{Host: "127.0.0.1", Port: 9000})
 	if err != nil {

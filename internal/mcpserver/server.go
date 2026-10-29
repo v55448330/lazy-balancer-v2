@@ -119,7 +119,6 @@ const updateUserSchema = `{"type":"object","required":["id"],"properties":{"id":
 const createAPIKeySchema = `{"type":"object","required":["name"],"properties":{"name":{"type":"string","description":"密钥名称"},"expires_at":{"type":["string","null"],"description":"过期时间（RFC3339），null=永不过期"},"mcp_enabled":{"type":"boolean","description":"允许该 Key 调 MCP"},"read_only":{"type":"boolean","description":"只读 Key（仅查询与读探测工具）"},"mcp_ip_whitelist":{"type":"array","items":{"type":"string"},"description":"来源 IP 白名单（CIDR，约束该 Key 的全部 REST 与 MCP 调用）"}},"additionalProperties":true}`
 const updateAPIKeyStatusSchema = `{"type":"object","required":["id"],"properties":{"id":{"type":"integer","description":"密钥 ID"},"is_enabled":{"type":"boolean"},"mcp_enabled":{"type":"boolean"},"read_only":{"type":"boolean"},"mcp_ip_whitelist":{"type":"array","items":{"type":"string"},"description":"来源 IP 白名单（CIDR）"}},"additionalProperties":true,"description":"四个字段均可选但至少提交一个"}`
 
-const previewConfigSchema = `{"type":"object","properties":{"source":{"type":"string","description":"配置分区标识（如 caddy/basic/security，分区字段清单同 update_config）"}},"additionalProperties":true,"description":"预览配置变更（不写库不触发 Caddy）；分区字段同 update_config 的 properties"}`
 const validateConfigSchema = `{"type":"object","description":"完整 Caddy 配置 JSON 本体（无固定子集——校验目标是任意 Caddy 配置）","additionalProperties":true}`
 
 // updateCaddyConfigSchema 必须与 REST 绑定形态一致：PutCaddyConfig 解的是
@@ -238,9 +237,8 @@ var tools = []toolSpec{
 	{"create_certificate_config", "创建 DNS 证书配置", http.MethodPost, "/certificate-configs", nil, nil, createCertificateConfigSchema},
 	{"update_certificate_config", "更新指定 DNS 证书配置", http.MethodPut, "/certificate-configs/{id}", []string{"id"}, nil, updateCertificateConfigSchema},
 	{"delete_certificate_config", "删除指定 DNS 证书配置", http.MethodDelete, "/certificate-configs/{id}", []string{"id"}, nil, idSchema("id", "配置 ID", "integer")},
-	// handler 要求 body 携带 domain（测试用的域名）——此前
-	// schema 只有 id（additionalProperties:false），经 MCP 调用恒 400「请求参数
-	// 无效」。id 进路径、domain 进 body（转发器按 pathParams 分流）。
+	// ID 路径只测试已存配置：handler 从数据库读取 provider/credentials，
+	// 不消费请求体里的同名字段；schema 仅暴露 id 与测试域名。
 	{"test_certificate_config", "测试指定 DNS 证书配置", http.MethodPost, "/certificate-configs/{id}/test", []string{"id"}, nil, `{"type":"object","required":["id","domain"],"properties":{"id":{"type":"integer","description":"配置 ID"},"domain":{"type":"string","description":"用于测试的域名，如 example.com"}},"additionalProperties":false}`},
 	{"list_dns_providers", "列出支持的 DNS 提供商", http.MethodGet, "/dns-providers", nil, nil, emptySchema},
 	{"list_ca_providers", "列出全部 CA 提供商", http.MethodGet, "/ca-providers", nil, nil, emptySchema},
@@ -298,7 +296,7 @@ const InternalAuthHeader = "X-Lazy-Balancer-Internal-MCP-Auth"
 //   - get_metrics_history / get_rule_metrics_history：可选 queryArgs 只收窄维度
 //     （rule_id/interval/range），没有 page/page_size，收敛范围靠选窗与单规则过滤；
 //   - get_caddy_logs：可选 queryArgs 只有 type，尾部日志超限只能换专用读通道；
-//   - preview_config：POST 整份预览（source 为配置分区），无分页参数；
+//   - preview_config：POST 字段级差异预览，无分页参数；
 //   - get_rule_logs：GET 尾读最近 1000 行，无分页参数——它本身就是该类单条工具，
 //     通用文案「改用对应的单条查询工具」对它指向自己，只能给 REST 增量读通道。
 //
@@ -309,7 +307,7 @@ var noPaginationToolHints = map[string]string{
 	"get_metrics_history":      "历史指标超过 MCP 通道 4 MiB 上限：本工具无分页参数——请传 rule_id 收窄到单条规则（或改用 get_rule_metrics_history 的 range 选窗），或经管理面板查看趋势",
 	"get_rule_metrics_history": "规则历史指标超过 MCP 通道 4 MiB 上限：本工具无分页参数——请缩短 range（1h/6h）后重试，或经管理面板查看趋势",
 	"get_caddy_logs":           "Caddy 日志超过 MCP 通道 4 MiB 上限：本工具无分页参数——请改用 get_rule_logs 按规则查看（尾读最近 1000 行），或经管理面板查看完整日志",
-	"preview_config":           "预览结果超过 MCP 通道 4 MiB 上限：本工具无分页参数——请拆小 source（按配置分区分批预览），或经管理面板预览完整差异",
+	"preview_config":           "预览结果超过 MCP 通道 4 MiB 上限：本工具无分页参数——请减少单次提交的字段后分批预览，或经管理面板预览完整差异",
 	"get_rule_logs":            "规则日志超过 MCP 通道 4 MiB 上限：本工具无分页参数（尾读最近 1000 行）——请经 REST /rules/{caddy_id}/log-stream 增量续读，或经管理面板查看完整日志",
 }
 
@@ -365,7 +363,7 @@ func ClientIPFromContext(ctx context.Context) string {
 
 // serverInstructions 随 initialize 响应下发给客户端，说明认证方式、权限范围与常用流程，
 // 让 Agent 在首次选工具前就能选对路径、减少试错往返
-const serverInstructions = `Lazy Balancer V2 负载均衡管理接口。认证：X-API-Key 头或 Authorization: Bearer lb_sk_...，Key 需开启 MCP 功能。
+const serverInstructions = `Lazy Balancer V2 负载均衡管理接口。认证：` + accesslog.APIKeyHeaderName + ` 头或 Authorization: Bearer lb_sk_...，Key 需开启 MCP 功能。
 
 权限范围：
 - 只读 Key（read_only）可调用 GET 查询类工具（export_config 与 get_caddy_config 除外——导出含用户/密钥哈希、原始 Caddy 配置可能含内联私钥，二者与写操作同级隐藏）及 3 个读探测 POST 工具；其中 parse_certificate 对非管理员开放，validate_import/preview_config 需 Key 属主为管理员（属 admin 组路由，非管理员调用恒 403 且 tools/list 不展示）；其余写工具（POST/PUT/PATCH/DELETE）需非只读 Key
@@ -380,7 +378,7 @@ const serverInstructions = `Lazy Balancer V2 负载均衡管理接口。认证�
 - 快速看全局指标：get_metrics_overview（轻量）；get_metrics_dashboard 为全量聚合，数据量大，非必要不用
 - 修改规则前先 get_rule 取完整现状；delete_rule 不可恢复，调用前必须确认
 
-错误约定：401=密钥无效/缺失或使用 JWT；403=未开启 MCP/IP 白名单拦截/只读 Key 越权/从节点非集群写工具；缺参/缺密钥/传输失败与 REST 业务错误均以 IsError+文本返回（含具体 message，读后修正重试）；协议层暂不启用 input_schema 校验（不产生 -32602），schema 仅作构参契约——先读 schema 再调用，不要猜测字段名。
+错误约定：401=密钥无效/缺失或使用 JWT；403=未开启 MCP/IP 白名单拦截/只读 Key 越权/从节点非集群写工具；429=每 API Key 每分钟 120 次请求，同一来源 IP 另有每分钟 120 次匿名/认证失败预算（仅 401 计入，成功请求回滚，Key 之间互不占额），响应为 REST 形态并携带 Retry-After 秒数，须按该值等待并指数退避后重试；缺参/缺密钥/传输失败与 REST 业务错误均以 IsError+文本返回（含具体 message，读后修正重试）；协议层暂不启用 input_schema 校验（不产生 -32602），schema 仅作构参契约——先读 schema 再调用，不要猜测字段名。
 
 完整操作手册：resources/read 读取 lazy-balancer://docs/ops-playbook（接入/scope/工作流/排障/纪律/性能建议）。`
 
@@ -442,15 +440,19 @@ const setRuleSecurityPoliciesSchema = `{"type":"object","required":["caddy_id","
 // 避免工具层出现后端会拒绝或静默回退的取值。
 const ruleMetricsHistorySchema = `{"type":"object","required":["caddy_id"],"properties":{"caddy_id":{"type":"string","description":"规则 Caddy ID"},"range":{"type":"string","enum":["1h","6h","24h","7d"],"default":"24h","description":"时间范围，默认 24h"}},"additionalProperties":false}`
 
-// dns_provider/dns_credentials 是全局配置遗留字段——证书签发链
-// 实际消费 certificate_configs 表的 DNS 凭证,标注防 Agent 误把凭证写进全局配置。
-const updateConfigSchemaTemplate = `{"type":"object","properties":{"source":{"type":"string"},"dns_provider":{"type":"string","description":"遗留字段，签发链不消费；DNS 凭证配置请用 certificate_configs 系列"},"dns_credentials":{"type":"string","description":"遗留字段，签发链不消费；DNS 凭证配置请用 certificate_configs 系列"},"acme_email":{"type":"string"},"cert_expiry_days":{"type":"integer"},"cert_renewal_days":{"type":"integer"},"cert_renewal_attempts":{"type":"integer"},"server_map_lat":{"type":"number","minimum":-90,"maximum":90,"description":"威胁大屏本站纬度（-90~90，0=未设置）"},"server_map_lon":{"type":"number","minimum":-180,"maximum":180,"description":"威胁大屏本站经度（-180~180，0=未设置）"},"threat_screen_mode":{"type":"string","enum":["map","globe"],"description":"威胁大屏模式：map=平面地图，globe=三维地球"},"threat_traffic_sample_n":{"type":"integer","enum":[-1,0],"description":"大屏光流采样：-1=自适应（低流量等价全量），0=关闭"},"security_events_retention_days":{"type":"integer","minimum":1,"maximum":%[1]d,"description":"安全事件保留天数（1-%[1]d）"},"security_events_row_cap":{"type":"integer","minimum":1,"maximum":%[2]d,"description":"安全事件最大行数（1-%[2]d 行）"},"log_level":{"type":"string"},"caddy_log_level":{"type":"string"},"caddy_log_size_mb":{"type":"integer"},"request_body_max_size_mb":{"type":"integer"},"http_read_timeout":{"type":"integer"},"http_write_timeout":{"type":"integer"},"http_idle_timeout":{"type":"integer"},"upstream_keepalive_timeout":{"type":"integer"},"proxy_dial_timeout":{"type":"integer","minimum":0},"proxy_response_header_timeout":{"type":"integer","minimum":0},"proxy_read_timeout":{"type":"integer","minimum":0},"proxy_write_timeout":{"type":"integer","minimum":0},"proxy_stream_timeout":{"type":"integer","minimum":0},"proxy_flush_interval":{"type":"integer","minimum":-1},"proxy_stream_close_delay":{"type":"integer","minimum":0},"server_tokens_hidden":{"type":"boolean"},"trusted_proxy_enabled":{"type":"boolean","description":"受信代理（CDN 真实 IP 还原）总开关"},"trusted_proxy_ranges":{"type":"string","description":"受信代理网段（JSON 字符串数组文本，如 [\"203.0.113.0/24\"]；裸 IP 自动补 /32 或 /128；仅这些来源的 X-Forwarded-For 被采信）"},"trusted_proxy_range_refs":{"type":"string","description":"受信代理引用的 IP 地址列表 id（JSON 整数数组文本，如 [3,7]；与 trusted_proxy_ranges 合并生效）"},"trusted_proxy_headers":{"type":"string","description":"真实 IP 取值头（JSON 字符串数组文本，如 [\"X-Forwarded-For\",\"X-Real-IP\"]；按数组顺序取值）"},"trusted_proxy_strict":{"type":"boolean","description":"严格模式：非受信来源的伪造头一律拒绝"},"task_log_size_mb":{"type":"integer"},"runtime_log_size_mb":{"type":"integer"},"access_log_json":{"type":"boolean"},"access_log_format":{"type":"string"},"audit_retention_months":{"type":"integer"},"jwt_expire_minutes":{"type":"integer"},"timezone":{"type":"string"},"default_ca_provider_id":{"type":"integer"},"audit_log_size_mb":{"type":"integer"},"mfa_write_guard":{"type":"boolean"},"mfa_lockout_enabled":{"type":"boolean"},"github_proxy_url":{"type":"string","enum":["https://v4.gh-proxy.org/","https://axisnow.gh-proxy.org/","https://cdn.gh-proxy.org/"]},"github_token":{"type":"string","description":"可选 GITHUB_TOKEN（认证后 GitHub API 限流 60→5000 次/小时）；空串=清除已配置令牌，非空=覆盖，省略=保持现值；响应面仅以 has_github_token 显隐"}},"additionalProperties":false}`
+// DNS 凭证仅由 certificate_configs 系列工具管理；全局 update_config 不暴露
+// 已退役的 dns_provider/dns_credentials 字段。
+const updateConfigSchemaTemplate = `{"type":"object","properties":{"source":{"type":"string","description":"审计归因段落标签（basic/cluster/acme/caddy；其他值归为全局配置），不筛选字段或预览内容"},"acme_email":{"type":"string"},"cert_expiry_days":{"type":"integer"},"cert_renewal_days":{"type":"integer"},"cert_renewal_attempts":{"type":"integer"},"server_map_lat":{"type":"number","minimum":-90,"maximum":90,"description":"威胁大屏本站纬度（-90~90，0=未设置）"},"server_map_lon":{"type":"number","minimum":-180,"maximum":180,"description":"威胁大屏本站经度（-180~180，0=未设置）"},"threat_screen_mode":{"type":"string","enum":["map","globe"],"description":"威胁大屏模式：map=平面地图，globe=三维地球"},"threat_traffic_sample_n":{"type":"integer","enum":[-1,0],"description":"大屏光流采样：-1=自适应（低流量等价全量），0=关闭"},"security_events_retention_days":{"type":"integer","minimum":1,"maximum":%[1]d,"description":"安全事件保留天数（1-%[1]d）"},"security_events_row_cap":{"type":"integer","minimum":1,"maximum":%[2]d,"description":"安全事件最大行数（1-%[2]d 行）"},"log_level":{"type":"string"},"caddy_log_level":{"type":"string"},"caddy_log_size_mb":{"type":"integer"},"request_body_max_size_mb":{"type":"integer"},"http_read_timeout":{"type":"integer"},"http_write_timeout":{"type":"integer"},"http_idle_timeout":{"type":"integer"},"upstream_keepalive_timeout":{"type":"integer"},"proxy_dial_timeout":{"type":"integer","minimum":0},"proxy_response_header_timeout":{"type":"integer","minimum":0},"proxy_read_timeout":{"type":"integer","minimum":0},"proxy_write_timeout":{"type":"integer","minimum":0},"proxy_stream_timeout":{"type":"integer","minimum":0},"proxy_flush_interval":{"type":"integer","minimum":-1},"proxy_stream_close_delay":{"type":"integer","minimum":0},"server_tokens_hidden":{"type":"boolean"},"trusted_proxy_enabled":{"type":"boolean","description":"受信代理（CDN 真实 IP 还原）总开关"},"trusted_proxy_ranges":{"type":"string","description":"受信代理网段（JSON 字符串数组文本，如 [\"203.0.113.0/24\"]；裸 IP 自动补 /32 或 /128；仅这些来源的 X-Forwarded-For 被采信）"},"trusted_proxy_range_refs":{"type":"string","description":"受信代理引用的 IP 地址列表 id（JSON 整数数组文本，如 [3,7]；与 trusted_proxy_ranges 合并生效）"},"trusted_proxy_headers":{"type":"string","description":"真实 IP 取值头（JSON 字符串数组文本，如 [\"X-Forwarded-For\",\"X-Real-IP\"]；按数组顺序取值）"},"trusted_proxy_strict":{"type":"boolean","description":"严格模式：非受信来源的伪造头一律拒绝"},"task_log_size_mb":{"type":"integer"},"runtime_log_size_mb":{"type":"integer"},"access_log_json":{"type":"boolean"},"access_log_format":{"type":"string"},"audit_retention_months":{"type":"integer"},"jwt_expire_minutes":{"type":"integer"},"timezone":{"type":"string"},"default_ca_provider_id":{"type":"integer"},"audit_log_size_mb":{"type":"integer"},"mfa_write_guard":{"type":"boolean"},"mfa_lockout_enabled":{"type":"boolean"},"github_proxy_url":{"type":"string","enum":["https://v4.gh-proxy.org/","https://axisnow.gh-proxy.org/","https://cdn.gh-proxy.org/"]},"github_token":{"type":"string","description":"可选 GITHUB_TOKEN（认证后 GitHub API 限流 60→5000 次/小时）；空串=清除已配置令牌，非空=覆盖，省略=保持现值；响应面仅以 has_github_token 显隐"}},"additionalProperties":false}`
 
 // updateConfigSchema 的安全事件保留边界由 db.Max* 常量直接注入（上限单源：
 // 写侧校验 caddy.go / 导入钳制 config_backup.go / 从端 apply 归一
 // cluster_apply.go 同族引用）。模板用序号占位而非「字面量原文作查找键」——
 // 后者一旦模板描述被润色就静默 no-op，此后上调 db.Max* 会让 schema 停在旧上限。
 var updateConfigSchema = fmt.Sprintf(updateConfigSchemaTemplate, db.MaxSecurityEventsRetentionDays, db.MaxSecurityEventsRowCap)
+
+// preview_config 与 update_config 绑定同一 UpdateConfigRequest；schema 复用
+// 同一字段契约，差别仅由工具描述说明预览不写库。
+var previewConfigSchema = updateConfigSchema
 
 // NewForTest 无内部鉴权密钥的装配入口，仅供测试夹具使用。
 // 生产装配唯一走 NewWithInternalAuth（网关注入内部鉴权密钥）。名字显式带
@@ -504,6 +506,9 @@ func forward(ctx context.Context, client *http.Client, baseURL, internalAuthSecr
 		pathValue := strings.TrimSpace(scalarString(value))
 		if pathValue == "" {
 			return toolCallError("缺少参数 %s", name)
+		}
+		if strings.Contains(pathValue, "/") {
+			return toolCallError("参数非法 %s：路径段不能包含 /", name)
 		}
 		path = strings.ReplaceAll(path, "{"+name+"}", url.PathEscape(pathValue))
 	}

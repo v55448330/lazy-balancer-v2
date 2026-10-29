@@ -297,10 +297,12 @@ func nextAutoBackupSlotContext(ctx context.Context, now time.Time) (time.Time, b
 		// 时追不上下一槽，下次执行恒显示过去时刻）。从槽步进还消除了月末日历
 		// 归一溢出：1/31.AddDate(0,1,0)=3/3 → 回落 3 月槽，2 月槽消失；
 		// due 恒为当月合法槽（day 已在读侧收敛到 1..28），+1 月不会溢出。
-		step := due.Add(24 * time.Hour)
+		// daily/weekly 按本地日历步进，不能使用 24h/7×24h 的绝对时长：
+		// DST 回退周会早一小时并折回已执行槽。AddDate 保留本地 HH:MM。
+		step := due.AddDate(0, 0, 1)
 		switch row.freq {
 		case "weekly":
-			step = due.Add(7 * 24 * time.Hour)
+			step = due.AddDate(0, 0, 7)
 		case "monthly":
 			step = due.AddDate(0, 1, 0)
 		}

@@ -431,6 +431,85 @@ func TestCRSUpdate_recordsReloadFailureAudit(t *testing.T) {
 	}
 }
 
+func TestCRSUpdateRun_reloadFailureRemovesNewAuxiliaryFiles(t *testing.T) {
+	m := newTestCRSManager(t)
+	seedCRSVersionRow(t, "v4.14.0", true)
+	writeTestFile(t, filepath.Join(m.crsDir, "rules", crsRulesProbeFile), "SecRule old")
+	m.fetchLatestTag = func(context.Context) (string, error) { return "v4.15.0", nil }
+	m.downloadTarball = fakeCRSDownload(t, map[string]string{
+		"coreruleset-4.15.0/crs-setup.conf.example":     "# new setup",
+		"coreruleset-4.15.0/rules/" + crsRulesProbeFile: "# init probe\n",
+	})
+	m.reloader = func() error { return errors.New("reload boom") }
+
+	m.run("manual", nil)
+
+	if data, err := os.ReadFile(filepath.Join(m.crsDir, "rules", crsRulesProbeFile)); err != nil || string(data) != "SecRule old" {
+		t.Fatalf("rules rollback data=%q err=%v", data, err)
+	}
+	for _, name := range []string{"crs-setup.conf", "crs-setup.stock.conf"} {
+		if _, err := os.Stat(filepath.Join(m.crsDir, name)); !os.IsNotExist(err) {
+			t.Errorf("%s survived rollback although it did not exist before the update (stat err=%v)", name, err)
+		}
+	}
+}
+
+func TestCRSUpdateRun_internalSwapFailureRemovesNewAuxiliaryFiles(t *testing.T) {
+	m := newTestCRSManager(t)
+	seedCRSVersionRow(t, "v4.14.0", true)
+	writeTestFile(t, filepath.Join(m.crsDir, "rules", crsRulesProbeFile), "SecRule old")
+	m.downloadTarball = fakeCRSDownload(t, map[string]string{
+		"coreruleset-4.15.0/crs-setup.conf.example":     "# new setup",
+		"coreruleset-4.15.0/rules/" + crsRulesProbeFile: "# init probe\n",
+	})
+	if _, err := db.DB.Exec(`DROP TABLE security_crs_version`); err != nil {
+		t.Fatalf("force version-read failure: %v", err)
+	}
+
+	if err := m.downloadAndInstall(context.Background(), "v4.15.0"); err == nil {
+		t.Fatal("internal swap failure must be returned")
+	}
+	for _, name := range []string{"crs-setup.conf", "crs-setup.stock.conf"} {
+		if _, err := os.Stat(filepath.Join(m.crsDir, name)); !os.IsNotExist(err) {
+			t.Errorf("%s survived internal swap rollback although it was newly created (stat err=%v)", name, err)
+		}
+	}
+}
+
+func TestCRSUpdateRun_unexpectedAuxiliaryStatFailureAbortsInstall(t *testing.T) {
+	for _, name := range []string{"crs-setup.conf", "crs-setup.stock.conf"} {
+		t.Run(name, func(t *testing.T) {
+			m := newTestCRSManager(t)
+			seedCRSVersionRow(t, "v4.14.0", true)
+			writeTestFile(t, filepath.Join(m.crsDir, "rules", crsRulesProbeFile), "SecRule old")
+			m.downloadTarball = fakeCRSDownload(t, map[string]string{
+				"coreruleset-4.15.0/crs-setup.conf.example":     "# new setup",
+				"coreruleset-4.15.0/rules/" + crsRulesProbeFile: "# init probe\n",
+			})
+			originalStat := statCRSUpdateFile
+			statCRSUpdateFile = func(path string) (os.FileInfo, error) {
+				if filepath.Base(path) == name {
+					return nil, errors.New("forced stat failure")
+				}
+				return os.Stat(path)
+			}
+			t.Cleanup(func() { statCRSUpdateFile = originalStat })
+			reloaderCalled := false
+			m.reloader = func() error { reloaderCalled = true; return nil }
+
+			if err := m.downloadAndInstall(context.Background(), "v4.15.0"); err == nil {
+				t.Fatal("unexpected stat failure must abort installation without a restorable baseline")
+			}
+			if reloaderCalled {
+				t.Fatal("reloader must not run after an aborted stat failure")
+			}
+			if data, err := os.ReadFile(filepath.Join(m.crsDir, "rules", crsRulesProbeFile)); err != nil || string(data) != "SecRule old" {
+				t.Fatalf("old rules changed after stat failure: %q, %v", data, err)
+			}
+		})
+	}
+}
+
 // 重载失败回滚（树还原 + VERSION 标记 + DB 版本行）
 // 必须在同一 wafFileMu 临界区内完成——旧实现 restoreBackup 取锁后立即释放，
 // 标记/版本行锁外写（持锁读者可见「旧树+新标记」，并发导入可被覆盖标记）。

@@ -75,9 +75,7 @@ func TestRenderDeterminism_geoipViewByteIdentical(t *testing.T) {
 		t.Fatalf("marshal tree: %v", err)
 	}
 	dir := t.TempDir()
-	oldLive := ip2regionLivePath
-	ip2regionLivePath = filepath.Join(dir, "ip2region.xdb")
-	t.Cleanup(func() { ip2regionLivePath = oldLive })
+	t.Cleanup(OverrideWafLivePathsForTest(crsLiveDir, filepath.Join(dir, "ip2region.xdb")))
 	if err := os.WriteFile(ip2regionLivePath+".regions.json", treeJSON, 0o644); err != nil {
 		t.Fatalf("write tree cache: %v", err)
 	}

@@ -1976,6 +1976,20 @@ func (p *auditPipeline) flushIPCSafely() {
 	p.ipc.flushIfDue(time.Now())
 }
 
+// flushIPCNowSafely 是收尾路径的无条件冲刷：批龄门只适用于周期刷新，
+// Cleanup 返回前必须尝试交付已处理但尚未到周期的残留批。
+func (p *auditPipeline) flushIPCNowSafely() {
+	if p.ipc == nil {
+		return
+	}
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			auditDropLogf("audit writer: recovered panic while shipping security events for %s: %v", p.target, recovered)
+		}
+	}()
+	p.ipc.flush()
+}
+
 // closeIPC 收尾 IPC 出货器：投递残留批次、封存 spool、关空闲连接（仅 drain
 // 退出时调用一次）。
 func (p *auditPipeline) closeIPC() {
@@ -2152,7 +2166,7 @@ func (p *auditPipeline) flush() {
 	// IPC 模式：把残留批次投递出去（收尾语义 = 已入队行尽量送达 DB，成功不
 	// 落文件；失败按降级链进 spool/文件）。pendingLines 为空时零成本返回。
 	if p.ipc != nil && p.ipc.pendingLines() > 0 {
-		p.flushIPCSafely()
+		p.flushIPCNowSafely()
 	}
 }
 

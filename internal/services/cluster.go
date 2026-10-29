@@ -1150,6 +1150,10 @@ func notifyMasterDetach(ctx context.Context, masterURL, token, expectedPin strin
 		return
 	}
 	resp.Body.Close()
+	if isHTTPRedirect(resp.StatusCode) {
+		Logf("info", "cluster detach notify rejected: %d（重定向未跟随，旧主节点记录可能残留）", resp.StatusCode)
+		return
+	}
 	if resp.StatusCode >= http.StatusBadRequest {
 		Logf("info", "cluster detach notify rejected: %d", resp.StatusCode)
 	}

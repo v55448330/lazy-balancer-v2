@@ -146,9 +146,7 @@ func TestGenerateCaddyConfig_crsPoolFingerprintEvaluatedOncePerBatch(t *testing.
 	if err := os.WriteFile(xdb, []byte("fake-xdb-bytes"), 0o644); err != nil {
 		t.Fatalf("seed ip2region: %v", err)
 	}
-	oldXdb := ip2regionLivePath
-	ip2regionLivePath = xdb
-	t.Cleanup(func() { ip2regionLivePath = oldXdb })
+	t.Cleanup(OverrideWafLivePathsForTest(crsLiveDir, xdb))
 	_, database := newClusterTestService(t)
 	for i, id := range []string{"lb_fp_a", "lb_fp_b", "lb_fp_c"} {
 		seedHTTPRuleForGeneration(t, database, id, id+".example.test", 18080+i)

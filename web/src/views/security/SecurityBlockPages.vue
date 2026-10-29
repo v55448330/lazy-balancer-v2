@@ -17,7 +17,7 @@
     <el-alert v-if="loadError" type="error" :closable="false" show-icon class="polling-error-alert error-banner">
       <template #title>
         <div class="polling-error-title">
-          <span>拦截页面加载失败：列表为空不代表没有页面</span>
+          <span>{{ pages.length > 0 ? '拦截页面加载失败：当前显示的是上次成功结果' : '拦截页面加载失败：列表为空不代表没有页面' }}</span>
           <el-button link type="danger" :loading="loading" @click="fetchData">立即重试</el-button>
         </div>
       </template>

@@ -29,6 +29,8 @@ func newThreatScreenRouter(t *testing.T, metricsURL string) *gin.Engine {
 	router := gin.New()
 	router.GET("/security/overview/threat-screen", h.GetSecurityThreatScreen)
 	router.GET("/security/events/feed", h.GetSecurityEventFeed)
+	router.GET("/security/events/toast-summary", h.GetSecurityEventToastSummary)
+	router.GET("/security/overview", h.GetSecurityOverview)
 	return router
 }
 
@@ -93,6 +95,97 @@ type threatScreenPayload struct {
 			Value  int    `json:"value"`
 		} `json:"top_targets"`
 	} `json:"data"`
+}
+
+func TestSecurityEventReads_tolerateNullAndIgnoreMissingClientIP(t *testing.T) {
+	setupSecurityPolicyTestDB(t)
+	resetThreatActiveSourcesCacheForTest()
+	t.Cleanup(resetThreatActiveSourcesCacheForTest)
+	router := newThreatScreenRouter(t, newThreatMetricsServer(t).URL)
+	now := time.Now().UTC().Truncate(time.Second).Format("2006-01-02 15:04:05")
+	seed := func(clientIP, action any) {
+		t.Helper()
+		if _, err := db.MetricsDB.Exec(`INSERT INTO security_events
+			(event_time, client_ip, method, uri, event_type, rule_triggered, rule_msg, action, duration_us, anomaly_score)
+			VALUES (?, ?, 'GET', '/a', 'crs', '942100', 'SQL Injection', ?, NULL, NULL)`, now, clientIP, action); err != nil {
+			t.Fatalf("seed event: %v", err)
+		}
+	}
+	seed(nil, nil)
+	seed("", "blocked")
+	seed("   ", "blocked")
+	seed("10.0.0.8", "blocked")
+	seed("93.184.216.7", "blocked")
+
+	for _, path := range []string{
+		"/security/events/feed",
+		"/security/events/toast-summary",
+		"/security/overview",
+		"/security/overview/threat-screen?hours=1",
+	} {
+		recorder := getRequest(t, router, path)
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("%s status=%d body=%s, want NULL-tolerant 200", path, recorder.Code, recorder.Body.String())
+		}
+	}
+
+	feed := getRequest(t, router, "/security/events/feed")
+	var feedBody feedPayload
+	if err := json.Unmarshal(feed.Body.Bytes(), &feedBody); err != nil {
+		t.Fatal(err)
+	}
+	if len(feedBody.Data.Events) != 1 || feedBody.Data.Events[0].ClientIP != "93.184.216.7" {
+		t.Fatalf("feed events=%+v, want only the addressed public source", feedBody.Data.Events)
+	}
+	toast := getRequest(t, router, "/security/events/toast-summary")
+	var toastBody struct {
+		Data struct {
+			Groups []struct {
+				ClientIP string `json:"client_ip"`
+			} `json:"groups"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(toast.Body.Bytes(), &toastBody); err != nil {
+		t.Fatal(err)
+	}
+	if len(toastBody.Data.Groups) != 1 || toastBody.Data.Groups[0].ClientIP != "93.184.216.7" {
+		t.Fatalf("toast groups=%+v, want only the addressed public source", toastBody.Data.Groups)
+	}
+	overview := getRequest(t, router, "/security/overview")
+	var overviewBody struct {
+		Data struct {
+			TopIPs []struct {
+				IP string `json:"ip"`
+			} `json:"top_ips"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(overview.Body.Bytes(), &overviewBody); err != nil {
+		t.Fatal(err)
+	}
+	foundPublicTopIP := false
+	for _, row := range overviewBody.Data.TopIPs {
+		if strings.TrimSpace(row.IP) == "" {
+			t.Fatalf("top IPs contain a missing source: %+v", overviewBody.Data.TopIPs)
+		}
+		foundPublicTopIP = foundPublicTopIP || row.IP == "93.184.216.7"
+	}
+	if !foundPublicTopIP {
+		t.Fatalf("top IPs=%+v, want the addressed public source", overviewBody.Data.TopIPs)
+	}
+	threat := getRequest(t, router, "/security/overview/threat-screen?hours=1")
+	var threatBody threatScreenPayload
+	if err := json.Unmarshal(threat.Body.Bytes(), &threatBody); err != nil {
+		t.Fatal(err)
+	}
+	if threatBody.Data.TotalEvents != 1 || threatBody.Data.BlockedEvents != 1 {
+		t.Fatalf("rollup totals=(%d,%d), want (1,1); missing sources must not pollute rollup dimensions", threatBody.Data.TotalEvents, threatBody.Data.BlockedEvents)
+	}
+	if len(threatBody.Data.TopAttackTypes) != 1 || threatBody.Data.TopAttackTypes[0].Value != 1 {
+		t.Fatalf("rollup attack families=%+v, want only the public event family", threatBody.Data.TopAttackTypes)
+	}
+	if threatBody.Data.ActiveSources != 1 {
+		t.Fatalf("active sources=%d, want 1; NULL/blank/reserved sources must not count", threatBody.Data.ActiveSources)
+	}
 }
 
 func TestGetSecurityThreatScreen_reservedIPsExcludedEverywhere(t *testing.T) {
@@ -2582,6 +2675,8 @@ func TestThreatScreenAttackFlow_filtersReservedAndDisclosesGap(t *testing.T) {
 	}
 	// 第一条为保留地址（必须被过滤），第二条为公网地址。
 	services.ThreatScreenAttackFlowAppendForTest("10.0.0.5", "blocked", "942100")
+	services.ThreatScreenAttackFlowAppendForTest("", "blocked", "942100")
+	services.ThreatScreenAttackFlowAppendForTest("   ", "blocked", "942100")
 	publicSeq := services.ThreatScreenAttackFlowAppendForTest("185.199.108.9", "blocked", "942100")
 
 	gin.SetMode(gin.TestMode)

@@ -69,6 +69,14 @@ test('v4-mapped 变体与后端归一口径一致（mapped /96 折算即全空�
   assert.equal(trustedProxyExpansion(['::ffff:0.0.0.1/96', '0.0.0.0/0'], []).union, 1)
 })
 
+test('IPv4 主机位变体先规范化再判全空间，与后端 canonical 一致', () => {
+  for (const value of ['0.0.0.1/8', '0.5.6.7/8', '127.255.255.255/0']) {
+    assert.match(trustedProxyRangeError(value), /全部地址空间/, `${value} 规范化后覆盖全空间，后端必然拒绝`)
+  }
+  assert.match(trustedProxyRangeError('10.0.0.0/4'), /最小允许 \/8/, '非全空间的过宽网段仍走最小前缀文案')
+  assert.equal(trustedProxyRangeError('203.0.113.7/24'), '', '普通主机位变体不得误拒')
+})
+
 test('内联网段条数上限与后端 inline 上限一致', () => {
   const atLimit = Array.from({ length: TRUSTED_PROXY_MAX_INLINE_ENTRIES }, (_, i) => `10.${i}.0.0/16`)
   assert.equal(trustedProxyRangesError(atLimit), '')
@@ -225,7 +233,9 @@ test('非法/空条目不计入并集（由网段判据逐条点名）', () => {
 
 test('跨栈对表：请求头与总量判据与 Go 侧同值', () => {
   const handler = repoCode('internal/handlers/config_trustedproxy.go')
-  assert.match(handler, /len\(entries\) > 8/, '请求头条数上限须对表')
+  const headers = handler.slice(handler.indexOf('func normalizeTrustedProxyHeaders'))
+  assert.match(headers, /len\(normalized\) > 8/, '请求头条数上限须按去重后条目对表')
+  assert.match(headers, /strings\.ToLower\(entry\)/, '请求头去重须忽略大小写')
   assert.match(handler, /\^\[A-Za-z0-9-\]\{1,64\}\$/, '请求头字符集须对表')
   assert.match(handler, /trustedProxyMaxTotalCIDRs = 2000/, '总量上限须对表')
   const gate = section(handler, 'func trustedProxyTotalGate', 'func trustedProxyInlinePrefixes')

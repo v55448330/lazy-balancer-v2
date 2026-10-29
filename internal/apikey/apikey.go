@@ -37,12 +37,12 @@ func IsAPIKeyAuthorization(value string) bool {
 	return ok
 }
 
-// FromHeader 按约定顺序提取 API Key：X-API-Key 头（头名单源
+// FromHeader 按约定顺序提取 API Key：专用 API Key 头（头名单源
 // accesslog.APIKeyHeaderName）优先；否则 Authorization 头必须是大小写无关的
 // Bearer 方案加 lb_sk_ 凭据，并去掉方案前缀。
 // 返回空串表示请求未携带 API Key（JWT 或匿名请求）。
 func FromHeader(header http.Header) string {
-	if key := header.Get(accesslog.APIKeyHeaderName); key != "" {
+	if key := strings.TrimSpace(header.Get(accesslog.APIKeyHeaderName)); key != "" {
 		return key
 	}
 	key, _ := apiKeyFromAuthorization(header.Get("Authorization"))

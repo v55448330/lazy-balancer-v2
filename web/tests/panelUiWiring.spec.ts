@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { code, member, openTags, section, stripComments, source } from './_helpers.ts'
+import { code, cssDeclarations, elementAt, member, openTags, section, stripComments, source } from './_helpers.ts'
 
 test('当前密码错误在页面本地 toast，拦截器复用精确分类', () => {
   const profile = code('src/components/ProfileDialog.vue')
@@ -124,19 +124,16 @@ test('大屏显性披露回填未完成与汇总陈旧', () => {
   // 原断言只钉 `?: boolean` 类型声明（类型契约由 vue-tsc 承担）。
   // 改为钉渲染接线：两个标志各自绑定独立横幅且文案区分（回填未完成 vs 汇总延迟）。
   const text = code('src/views/security/ThreatScreen.vue')
-  assert.match(
-    text,
-    /v-if="stats\?\.backfill_incomplete"[\s\S]{0,400}?历史统计回填尚未完成/,
-    '回填未完成必须渲染显性横幅',
-  )
-  assert.match(
-    text,
-    /v-if="stats\?\.rollup_stale"[\s\S]{0,200}?统计汇总更新延迟/,
-    '汇总陈旧必须渲染独立横幅（不得与回填提示合并或静默）',
-  )
+  // 按「条件所在元素」取段（elementAt）：距离窗口不表达包裹关系——文案迁到相邻
+  // 元素仍可能落在窗口内（假绿），元素加个属性又可能落到窗口外（假红）。
+  const banner = (condition: string): string => elementAt(text, 'div', text.indexOf(condition))
+  assert.match(banner('v-if="stats?.backfill_incomplete"'), /历史统计回填尚未完成/, '回填未完成必须渲染显性横幅（文案在该条件元素内）')
+  assert.match(banner('v-if="stats?.rollup_stale"'), /统计汇总更新延迟/, '汇总陈旧必须渲染独立横幅（不得与回填提示合并或静默）')
   // 原始表覆盖受限是独立信号（不参与回填/缓存判定）：走自己的信息提示并披露
   // 覆盖起点，不得泛化成同一条「回填未完成」告警。
-  assert.match(text, /v-if="stats\?\.raw_coverage_limited[\s\S]{0,300}?raw_coverage_from/)
+  const coverage = banner('v-if="stats?.raw_coverage_limited')
+  assert.match(coverage, /stats\?\.raw_coverage_from/, '覆盖受限提示必须披露覆盖起点')
+  assert.doesNotMatch(coverage, /历史统计回填尚未完成/, '覆盖受限不得复用回填横幅文案（两者是独立信号）')
   assert.doesNotMatch(text, /rawCoverageGap/, '原始覆盖受限必须与回填未完成彻底解耦')
 })
 
@@ -311,10 +308,12 @@ test('SecurityBindingEditor 先声明 props/emits 再派生 computed', () => {
   assert.ok(subtitleIdx > emitIdx, 'bindSubtitle 必须在 props 之后声明（不得依赖 TDZ 惰性求值）')
 })
 
-test('总览总量卡片按 includes_reserved 切换口径 tooltip（含/不含私网双文案）', () => {
+test('总览总量卡片按 includes_reserved 切换口径 tooltip（同一计算文案两处复用）', () => {
   const text = code('src/views/security/SecurityOverview.vue')
-  assert.ok([...text.matchAll(/overview\.includes_reserved \? '总量含私网\/保留地址事件/g)].length >= 2, '今日拦截与今日检测两处都须按 includes_reserved 切换口径 tooltip')
-  assert.ok([...text.matchAll(/与大屏同口径（分钟汇总）：不含私网\/保留地址事件/g)].length >= 2, 'rollup 口径（不含私网）文案两处都须存在')
+  assert.match(text, /const todayCountTip = computed\(\(\) => overview\.value\.includes_reserved/)
+  assert.match(text, /总量含私网\/保留地址事件/)
+  assert.match(text, /与大屏同口径（分钟汇总）：不含私网\/保留地址事件/)
+  assert.equal([...text.matchAll(/<el-tooltip :content="todayCountTip"/g)].length, 2, '今日拦截与今日检测两处必须消费同一计算文案')
 })
 
 test('自动封禁预置名单条目数标注含已到期条目', () => {
@@ -392,11 +391,14 @@ test('改回原值后「待重试」标记消失', () => {
 test('掩码私钥不得误报「请提供私钥」', () => {
   const text = code('src/views/Rules.vue')
   const validate = member(text, 'const validateCertificate = async (')
-  const keyEmpty = validate.indexOf('if (!keyPEM) {')
-  assert.ok(keyEmpty > 0)
-  const branch = validate.slice(keyEmpty, keyEmpty + 260)
-  assert.match(branch, /if \(wizardForm\.tlsKeySet\) return/, '掩码私钥形态必须跳过错误提示')
-  assert.match(branch, /请提供私钥 \(KEY\)/)
+  // 分支按花括号配对取段（不是「if 之后 260 字符」）：定长窗口会越过本分支进入
+  // 证书格式分支，于是相邻分支的证据也被当成本分支的证据。
+  const branch = member(validate, 'if (!keyPEM) {')
+  const guardAt = branch.indexOf('if (wizardForm.tlsKeySet) return')
+  const errorAt = branch.indexOf('certInfo.error')
+  assert.ok(guardAt > 0, '掩码私钥形态必须跳过错误提示')
+  assert.ok(errorAt > guardAt, '掩码私钥的 return 必须先于错误文案（顺序倒置即误报）')
+  assert.match(branch.slice(errorAt), /^certInfo\.error = '请提供私钥 \(KEY\)'/, '非掩码形态仍须提示请提供私钥')
 })
 
 test('信任语义单源：事件详情与流程副标题共用 trustHitMode', () => {
@@ -437,7 +439,15 @@ test('辅助端点部分失败必须有可见横幅', () => {
 test('阶段 2 拦截页文案按 429 语义分支', () => {
   const text = code('src/views/security/SecurityPolicies.vue')
   assert.match(text, /editorPolicyType === 'stage2' \? '不使用自定义页面（429 空响应体）'/)
-  assert.match(text, /d\.rate_limit_enabled[\s\S]{0,120}限流 429 返回空响应体/)
+  // 断言挂在三元臂上（条件 → 臂内文案），条件侧带否定边界：窗口型写法在这里
+  // 恒真——把条件取反（`!d.rate_limit_enabled`）后两段文字距离照样成立。
+  const blockPageRow = section(text, "{ label: '拦截页面', value: d.block_page_id > 0", "{ label: '归因口径'")
+  assert.match(
+    blockPageRow,
+    /(?<![!.\w])d\.rate_limit_enabled\s*\?\s*'不使用自定义页面：限流 429 返回空响应体（[^']*）'/,
+    '限流启用且无自定义页面时必须说明 429 空响应体（不得落进其他分支或被取反）',
+  )
+  assert.match(blockPageRow, /:\s*'不使用自定义页面（Caddy 默认 403）'/, '限流关闭时仍是 Caddy 默认 403')
 })
 
 test('安全规则预设项可键盘操作（折叠头 button + 标签/模板键盘语义）', () => {
@@ -445,8 +455,18 @@ test('安全规则预设项可键盘操作（折叠头 button + 标签/模板键
   assert.match(text, /<button type="button" class="preset-header" :aria-expanded="!uaCollapsed\[idx\]"/)
   assert.match(text, /<button type="button" class="preset-header" :aria-expanded="!regexCollapsed\[idx\]"/)
   assert.match(text, /class="preset-tag" role="button" tabindex="0" @click="cond\.pattern = t\.value" @keydown\.enter\.prevent="activateOnce\(\$event, \(\) => \{ cond\.pattern = t\.value \}\)" @keydown\.space\.prevent="activateOnce\(\$event, \(\) => \{ cond\.pattern = t\.value \}\)"/, '快捷标签长按不得按重复率反复写入')
-  assert.match(text, /<el-button v-for="p in REGEX_PRESETS"[\s\S]{0,120}class="regex-preset-link"/)
-  assert.match(text, /\.preset-header:focus-visible,[\s\S]{0,200}outline: 2px solid #409eff/)
+  // 预设按钮按「同一个开标签的属性集」判定：属性书写顺序与新增属性都不影响，
+  // 而距离窗口（`[\s\S]{0,120}`）在加一个属性时就会假红。
+  const presetButton = openTags(text, 'el-button').find((tag) => tag.includes('v-for="p in REGEX_PRESETS"'))
+  assert.ok(presetButton !== undefined, 'REGEX_PRESETS 必须逐个渲染为 el-button')
+  assert.match(presetButton, /\bclass="regex-preset-link"/, '预设按钮必须复用 regex-preset-link 样式')
+  // 焦点环：三个可键盘操作的控件共用同一条规则——选择器逐个列名，声明按属性集比对
+  // （不钉选择器书写顺序与单行排版）。
+  const focusSelectors = section(text, '.preset-header:focus-visible,', '.regex-preset-link:focus-visible')
+  for (const selector of ['.preset-header:focus-visible', '.preset-tag:focus-visible']) {
+    assert.ok(focusSelectors.includes(selector), `焦点规则必须覆盖 ${selector}（键盘用户看不到焦点位置）`)
+  }
+  assert.equal(cssDeclarations(text, '.regex-preset-link:focus-visible').get('outline'), '2px solid #409eff')
 })
 
 test('两引擎共享国家点阵空间网格', () => {
@@ -488,10 +508,12 @@ test('明细失败位脱离展开区且按钮恒可见（可按类别重试）',
   }
   // force 重试同样突破已附着锁
   assert.match(member(text, 'const ensureDetails = async ('), /if \(detailsAttached\.value && !force\) return/)
-  // 全源失败分支保留失败位
-  const allFailed = text.indexOf("if (policyRes.status === 'rejected' && customRes.status === 'rejected' && crsRes.status === 'rejected')")
-  assert.ok(allFailed > 0)
-  assert.match(text.slice(allFailed, allFailed + 260), /detailFailedSources\.value = failedSources/)
+  // 全源失败分支保留失败位（按 if 块配对取段，不是「锚点 + 260 字符」——窗口
+  // 会越出本分支，把紧随其后的成功分支赋值也算进来）。
+  const allFailed = member(text, "if (policyRes.status === 'rejected' && customRes.status === 'rejected'")
+  assert.match(allFailed, /detailFailedSources\.value = failedSources/, '全源失败必须保留失败位（面板级说明与重试按钮据此可见）')
+  assert.match(allFailed, /return/, '全源失败必须提前返回')
+  assert.doesNotMatch(allFailed, /detailsAttached\.value = true/, '全源失败不得置已附着（弹框会被锁死且不可重试）')
 })
 
 test('计分动作模板分支已删除（后端合法动作仅 block/log/pass）', () => {

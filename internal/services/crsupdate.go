@@ -100,6 +100,11 @@ type CRSUpdateManager struct {
 	setupBakCreated bool
 	stockBakCreated bool
 
+	// setup/stock 在更新前明确不存在且本次交换成功后创建时，回滚须删除新文件，
+	// 否则旧 rules 会与新 setup/stock 组成混合代。stat 错误不等于不存在，不标记。
+	setupRemoveOnRollback bool
+	stockRemoveOnRollback bool
+
 	reloader func() error
 	// runCancel 取消当前运行中的下载阶段（任务监控手动取消，v2.3.4）：
 	// 用户取消路径携带 ErrUserCancelled 原因，取消终态据此推进排程槽。
@@ -583,33 +588,37 @@ func (m *CRSUpdateManager) runWithContext(runCtx context.Context, trigger string
 // 未来槽（配置变更/自定义槽）不被回拨污染。
 // 此前失败不推进：过期槽经 NextSlotFn 步进（coveredSlotStepPast）每 tick 重算
 // 永远领先 now 一步，due 判定窗口零宽，排程永久停摆（10-06 失败后停摆 5 天实证）。
-func (m *CRSUpdateManager) advanceSlotIfAuto(trigger string) {
+func (m *CRSUpdateManager) advanceSlotIfAuto(trigger string) error {
 	if trigger != "auto" {
-		return
+		return nil
 	}
-	advanceVersionSlotIfDue("security_crs_version")
+	return advanceVersionSlotIfDue("security_crs_version")
 }
 
 // advanceVersionSlotIfDue 版本表槽推进共享实现（CRS/IP2Region 同构）：空或过期
 // 才写紧邻下一排程槽；auto_update=0 不动（IIF 兜底）。排程不可读时不写——写
 // 路径不得用默认排程覆盖用户的预约（失败已由严格读单源留痕）。
-func advanceVersionSlotIfDue(table string) {
+func advanceVersionSlotIfDue(table string) error {
 	var cur string
 	if err := db.DB.QueryRow(`SELECT COALESCE(next_update,'') FROM ` + table + ` WHERE id=1`).Scan(&cur); err != nil {
-		return
+		return fmt.Errorf("%w: %v", errScheduleSlotNotAdvanced, err)
 	}
 	if cur != "" {
 		// 双布局（crsTimeLayout + RFC3339）单源解析：单布局会把旧备份/快照
 		// 带入的 RFC3339 未来槽解析失败并按「过期」覆写；同族读取面
 		// （versionTableNextUpdate/earliestEnabledSourceUpdate）均能正确解析。
 		if t := parseUTCSlot(cur); !t.IsZero() && t.After(time.Now().UTC()) {
-			return // 未来槽不污染
+			return nil // 未来槽不污染
 		}
 	}
-	slotSQL, slotArgs := versionTableSlotAdvanceAssign(table)
-	if _, err := db.DB.Exec(`UPDATE `+table+` SET `+slotSQL+` WHERE id=1`, slotArgs...); err != nil {
-		Logf("warn", "推进排程槽失败（%s）: %v", table, err)
+	slotSQL, slotArgs, slotErr := versionTableSlotAdvanceAssign(table)
+	if slotErr != nil {
+		return slotErr
 	}
+	if _, err := db.DB.Exec(`UPDATE `+table+` SET `+slotSQL+` WHERE id=1`, slotArgs...); err != nil {
+		return fmt.Errorf("%w: %v", errScheduleSlotNotAdvanced, err)
+	}
+	return nil
 }
 
 // crsRestorePointCreated 报告本运行是否真的动过 live 树——restoreBackup 的
@@ -671,9 +680,9 @@ func (m *CRSUpdateManager) cancel(cause error, restore bool, trigger string, run
 		Logf("error", "crs update: failed to record cancellation: %v", err)
 	}
 	if userCancelledRun(runCtx) {
-		// 用户取消=显式放弃本槽（与失败同源）；advanceSlotIfAuto 自带
-		// 「仅 auto、仅空/过期槽」门，手动取消与未来槽不动。
-		m.advanceSlotIfAuto(trigger)
+		// 用户取消=显式放弃本槽（与失败同源）；推进失败必须显式上报，
+		// 让引擎释放已消费槽并退避重试。
+		m.setSlotAdvanceError(m.advanceSlotIfAuto(trigger))
 	}
 	m.syncInstalledVersionToState()
 	m.mu.Lock()

@@ -58,6 +58,20 @@ test('慢规则请求不阻塞本轮图表与资源请求', () => {
   assert.match(text, /const fetchRulesSlowLane =[\s\S]*request\.get\('\/rules'/)
 })
 
+test('慢车道在途窗口保留 pending 并在收尾立即补跑', () => {
+  const text = code(DASHBOARD)
+  const due = section(text, 'const slowLaneDue =', 'let rulesSlowLaneInFlight')
+  assert.doesNotMatch(due, /lastSlowLaneAt\s*=/, '窗口判定不得提前消费时间窗；只有真正发请求才推进')
+
+  const slowLane = section(text, 'const fetchRulesSlowLane =', 'const fetchAllData =')
+  assert.match(slowLane, /if \(rulesSlowLaneInFlight\) \{\s*pendingSlowLane = true\s*return\s*\}/, '在途期间到达的窗口必须记 pending，不得直接丢弃')
+  assert.match(slowLane, /rulesSlowLaneInFlight = true\s*lastSlowLaneAt = Date\.now\(\)/, '实际发请求时才推进慢车道时间窗')
+  const finallyAt = slowLane.indexOf('}).finally(() => {')
+  const pendingResetAt = slowLane.indexOf('pendingSlowLane = false', finallyAt)
+  const rerunAt = slowLane.indexOf('fetchRulesSlowLane()', pendingResetAt)
+  assert.ok(finallyAt > 0 && pendingResetAt > finallyAt && rerunAt > pendingResetAt, '收尾必须先消费 pending 再补跑，持续失败也不得热循环')
+})
+
 test('实时流量图 tooltip 与坐标轴都标明每秒速率', () => {
   const text = code(DASHBOARD)
   assert.match(text, /const formatTrafficRate = \(value: number\): string => `\$\{formatBytes\(value\)\}\/s`/)

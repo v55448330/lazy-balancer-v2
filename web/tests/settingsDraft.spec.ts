@@ -10,7 +10,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { resetSettingsDraft, useSettingsDraft } from '../src/composables/useSettingsDraft.ts'
+import { resetSettingsDraft, syncSettingsDraftIdentity, useSettingsDraft } from '../src/composables/useSettingsDraft.ts'
 import { securityEventsWritePayload } from '../src/utils/configValues.ts'
 import { code, section } from './_helpers.ts'
 
@@ -124,6 +124,34 @@ test('会话身份切换必须清空设置草稿（同标签页票据换号不�
   assert.match(draft, /syncSettingsDraftIdentity/, '草稿单例必须提供身份同步入口')
   assert.match(settings, /syncSettingsDraftIdentity/, '设置页必须在身份变化时调用同步')
   assert.match(settings, /watch\(\(\) => authStore\.user\?\.id/, '必须监听实际用户 ID，而非仅在卸载时复位')
+})
+
+test('会话身份进入 null 或换成不同用户时都清空草稿，首次记录身份保留页内暂存', () => {
+  resetSettingsDraft()
+  const draft = useSettingsDraft()
+  draft.githubTokenInput.value = 'initial-input'
+  syncSettingsDraftIdentity(11)
+  assert.equal(draft.githubTokenInput.value, 'initial-input', '首次挂载只记录身份')
+
+  syncSettingsDraftIdentity(null)
+  assert.equal(draft.githubTokenInput.value, '', '退出到 null 中间态必须立即清空')
+  assert.equal(draft.stagedAdminTlsCert.value, null)
+  assert.deepEqual(draft.adminTlsSaved.value, { enabled: false, mode: 'selfsigned' })
+
+  draft.githubTokenInput.value = 'account-b-input'
+  syncSettingsDraftIdentity(12)
+  assert.equal(draft.githubTokenInput.value, '', 'null 后进入新账号仍从干净草稿开始')
+
+  draft.githubTokenInput.value = 'account-b-next-input'
+  syncSettingsDraftIdentity(13)
+  assert.equal(draft.githubTokenInput.value, '', '不经过 null 的直接换号也必须清空')
+  resetSettingsDraft()
+})
+
+test('换号后管理面板证书派生缓存必须重新读取', () => {
+  const basic = code('src/views/settings/BasicSettings.vue')
+  const identityWatch = section(basic, 'watch(() => authStore.user?.id', '\n})')
+  assert.match(identityWatch, /loadAdminTls\(\)/, '新账号不得沿用上一账号的证书读态')
 })
 
 test('Settings.vue 仅在离开设置页时复位草稿', () => {

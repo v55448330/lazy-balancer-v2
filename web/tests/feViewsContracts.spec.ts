@@ -26,6 +26,14 @@ test('downloaded 锁提示与启停/删除禁用口径一致', () => {
   assert.doesNotMatch(active, /'downloaded'/, 'downloaded 必须继续阻塞启停/删除')
 })
 
+test('规则状态开关的禁用原因复用证书任务锁提示', () => {
+  const statusColumn = section(rules, '<el-table-column label="状态"', '</el-table-column>')
+  const tooltip = section(statusColumn, '<el-tooltip', '</el-tooltip>')
+  assert.match(tooltip, /:disabled="!isReadOnly && !isCertJobActive\(certJobMap\[row\.caddy_id\]\?\.status\) && !ruleTogglePending\[row\.caddy_id\]"/)
+  assert.match(tooltip, /:content="isReadOnly \? readOnlyMessage : ruleTogglePending\[row\.caddy_id\] \? '规则状态更新中，请稍候' : certJobLockTooltip\(row as Rule, '证书申请中，请等待完成或失败后再启停规则'\)"/)
+  assert.match(statusColumn, /<el-switch[\s\S]*?:disabled="isReadOnly \|\| isCertJobActive\(certJobMap\[row\.caddy_id\]\?\.status\) \|\| ruleTogglePending\[row\.caddy_id\]"/)
+})
+
 test('旧请求失败不得覆盖新请求的错误状态', () => {
   const fetchRules = section(rules, 'const fetchRules = async', 'const fetchCertInfo')
   assert.match(fetchRules, /catch \(error: unknown\)[\s\S]*?if \(axios\.isCancel\(error\) \|\| disposed \|\| requestSeq !== rulesRequestSeq\) return[\s\S]*?rulesLoadError\.value = true/)
@@ -58,7 +66,7 @@ test('五个错误横幅重试按钮绑定各自真实在途状态', () => {
     ['fetchRules', 'loading'],
     ['retryAuxData', 'auxDataRetryLoading'],
   ] as const) {
-    assert.match(rules, new RegExp(`<el-button link type="danger" :loading="${flag}" @click="${handler}">立即重试</el-button>`), `${handler} 必须绑定 ${flag}`)
+    assert.match(rules, new RegExp(`<el-button link type="danger" :loading="${flag}" @click="${handler}(?:\\(\\))?">立即重试</el-button>`), `${handler} 必须绑定 ${flag}`)
   }
   for (const handler of ['retryCertPolling', 'retryCertInfo', 'retryHealthPolling', 'retryAuxData']) {
     const body = member(rules, `const ${handler} =`)
@@ -78,6 +86,20 @@ test('安全策略绑定横幅重试按钮绑定绑定数据自身的在途状�
   const fetch = section(rules, 'const fetchSecurityBindings =', 'const retrySecurityBindings')
   assert.match(fetch, /securityBindingsLoading\.value = true/, '取数入口必须置在途')
   assert.match(fetch, /finally[\s\S]*?securityBindingsLoading\.value = false/, '取数入口必须收尾在途')
+})
+
+test('规则写后只刷新绑定，安全目录仅首屏与显式重试加载', () => {
+  const fetchRules = section(rules, 'const fetchRules = async', 'const fetchCertInfo')
+  assert.match(fetchRules, /includeSecurityCatalog = false/, '常规规则刷新默认不得加载安全目录')
+  assert.match(fetchRules, /void fetchSecurityBindings\(includeSecurityCatalog\)/)
+
+  const fetchBindings = section(rules, 'const fetchSecurityBindings =', 'const retrySecurityBindings')
+  for (const type of ['SecurityStagePolicy\\[\\]', 'SecurityStageIPList\\[\\]', 'SecurityStageBlockPage\\[\\]']) {
+    assert.match(fetchBindings, new RegExp(`includeSecurityCatalog \\? request\\.get<APIResponse<${type}>>`), '安全目录请求必须由首屏/显式重试开关门控')
+  }
+  assert.equal((fetchBindings.match(/: Promise\.resolve\(null\)/g) ?? []).length, 3, '默认绑定刷新不得发起三个安全目录请求')
+  assert.match(section(rules, 'const retrySecurityBindings =', 'const lockPopovers'), /fetchSecurityBindings\(true\)/, '显式重试必须同时恢复失败的安全目录')
+  assert.match(section(rules, 'onMounted\(\(\) =>', 'onUnmounted'), /void fetchRules\(true\)/, '首屏必须加载安全目录以构建锁摘要')
 })
 
 test('Keys 从节点判据走 isSlaveNode，四个写控件均解释禁用原因', () => {

@@ -4,6 +4,7 @@ package services
 // 更新日志同源（三端点读任务日志文件）。
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
@@ -207,13 +208,13 @@ func TestGetTaskLogSizeBytes_readFailureNotCached(t *testing.T) {
 	if _, err := db.DB.Exec(`ALTER TABLE global_config RENAME TO global_config_v87_to06`); err != nil {
 		t.Fatal(err)
 	}
-	if got := getTaskLogSizeBytes(); got != 10<<20 {
+	if got := getTaskLogSizeBytes(context.Background()); got != 10<<20 {
 		t.Fatalf("读库失败降级=%d, want 10MB", got)
 	}
 	if _, err := db.DB.Exec(`ALTER TABLE global_config_v87_to06 RENAME TO global_config`); err != nil {
 		t.Fatal(err)
 	}
-	if got := getTaskLogSizeBytes(); got != 20<<20 {
+	if got := getTaskLogSizeBytes(context.Background()); got != 20<<20 {
 		t.Fatalf("读库恢复后阈值=%d, want 20MB（失败的 10MB 回退值被缓存钉死整窗口）", got)
 	}
 }
@@ -230,10 +231,10 @@ func TestGetTaskLogSizeBytes_readFailureLoggedOnceAndRecovers(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := captureLogf(t)
-	if got := getTaskLogSizeBytes(); got != 10<<20 {
+	if got := getTaskLogSizeBytes(context.Background()); got != 10<<20 {
 		t.Fatalf("读库失败降级=%d, want 10MB", got)
 	}
-	if got := getTaskLogSizeBytes(); got != 10<<20 {
+	if got := getTaskLogSizeBytes(context.Background()); got != 10<<20 {
 		t.Fatalf("读库失败降级=%d, want 10MB", got)
 	}
 	if n := strings.Count(out.String(), "读取任务日志大小配置失败"); n != 1 {
@@ -244,7 +245,7 @@ func TestGetTaskLogSizeBytes_readFailureLoggedOnceAndRecovers(t *testing.T) {
 		t.Fatal(err)
 	}
 	out.Reset()
-	_ = getTaskLogSizeBytes()
+	_ = getTaskLogSizeBytes(context.Background())
 	if !strings.Contains(out.String(), "读取任务日志大小配置已恢复") {
 		t.Fatalf("恢复后必须补一条恢复留痕: %q", out.String())
 	}

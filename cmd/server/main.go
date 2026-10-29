@@ -390,10 +390,15 @@ func run() error {
 		// 并存安全。
 		signal.Stop(quit)
 		cancelThreatRollupWarmer()
+		// watcher 与 warmer 共享同一个最长 2s 的等待段：先取消 watcher，
+		// 再按真实剩余预算等待两者，db.Close 前不得再触发 DB 写入或 Caddy /load。
+		caddyRestartWatcherDone := h.StopCaddyRestartWatcher()
+		workerStop := newSharedShutdownSegment(shutdown, threatWarmerStopSegmentMax, trailingStopReserve)
+		awaitChannelWithin("Caddy 重启 watcher", caddyRestartWatcherDone, workerStop())
 		// warmer 只在轮次之间检查 ctx：在途固化批不会被打断，可能继续读写到
 		// db.Close 之后（"database is closed" 告警 + 该批回滚）。与同层 worker
-		// 一致按剩余预算有界等待，且不动收尾段预留。
-		if !handlers.WaitThreatRollupWarmer(shutdown.segmentReserving(threatWarmerStopSegmentMax, trailingStopReserve)) {
+		// 一致按共享段的实际剩余预算有界等待，且不动收尾段预留。
+		if !handlers.WaitThreatRollupWarmer(workerStop()) {
 			services.Logf("warn", "威胁大屏 rollup warmer 未在关停预算内退出，放弃等待（进程继续退出）")
 		}
 		// 事件摄入与其余 worker 同生命周期——db.Close 前 cancel，
@@ -559,9 +564,9 @@ func newRestartSignal() (<-chan struct{}, func()) {
 //
 // 实际 defer 顺序（与 cleanup defer 体逐行对应）：
 //
-//	HTTP ≤10s → Caddy 排水 ≤2s → 威胁大屏 warmer ≤2s
-//	→ 引擎排空 = 剩余 − trailingStopReserve
+//	HTTP ≤10s → Caddy 排水 ≤2s → Caddy watcher/威胁大屏 warmer 共享 ≤2s
 //	→ 安全事件 IPC 关停 ≤0.5s
+//	→ 引擎排空 = 剩余 − trailingStopReserve
 //	→ 引擎句柄清理 = min(≤5s, 剩余 − trailingStopReserve)
 //	→ metrics 清理等待 = min(≤3s, 剩余 − trailingStopReserve)
 //	→ metrics 采集 ≤2s → 时区 ≤1s → 日志轮转 ≤1s
@@ -572,7 +577,7 @@ func newRestartSignal() (<-chan struct{}, func()) {
 // 时区/日志轮转两段在预算归 0 时直接跳过（Stop*Within 的 within<=0 语义是
 // 无界等待，不能把 segment() 的 0 传进去）。
 //
-// 最坏 10+2+2+2+0+0+2+1+1+5 = 25s ≤ 30s grace（引擎吃满时两处
+// 最坏 10+2+2+0.5+1.5+0+0+2+1+1+5 = 25s ≤ 30s grace（引擎吃满时两处
 // segmentReserving 段按设计归 0）。deadline 之外还有 engineHandleSwapGrace
 // (50ms) 与各 select 定时器的调度余量。唯一事实源是
 // shutdown_budget_test.go 的 fake-clock 最坏路径断言——本注释只是导读；
@@ -605,10 +610,9 @@ const (
 	// grace，可观测上不改变关停总壁钟，但不允许已停引擎的句柄活过 db.Close。
 	engineHandleSwapGrace = 50 * time.Millisecond
 	// trailingStopReserve 引擎排空必须为后续收尾段预留的预算：metrics/时区/
-	// 日志轮转等待 + ACME 收尾，外加引擎排空之后的安全事件 IPC 关停段
-	// （ipcStopSegmentMax 排在引擎排空与两处不可预算等待之间——不并入预留
-	// 就会从 ACME 段里扣，收尾段被挤短）。
-	trailingStopReserve = metricsStopSegmentMax + tzStopSegmentMax + logRotateStopSegmentMax + acmeStopSegmentMax + ipcStopSegmentMax
+	// 日志轮转等待 + ACME 收尾。安全事件 IPC 在引擎前排空，已有独立段预算，
+	// 不得重复计入此处（否则会双重扣减引擎排空段）。
+	trailingStopReserve = metricsStopSegmentMax + tzStopSegmentMax + logRotateStopSegmentMax + acmeStopSegmentMax
 )
 
 // shutdownBudget 进程关停的单一时间预算。
@@ -663,6 +667,21 @@ func (b *shutdownBudget) segmentReserving(max, reserveAfter time.Duration) time.
 		return r
 	}
 	return max
+}
+
+// newSharedShutdownSegment 把多个顺序等待放进同一个绝对时间段：第一等待
+// 消耗的时间会从后续等待中扣除，禁止各自重新获得一份完整段预算。
+func newSharedShutdownSegment(b *shutdownBudget, max, reserveAfter time.Duration) func() time.Duration {
+	if b.now == nil {
+		b.now = time.Now
+	}
+	deadline := b.now().Add(b.segmentReserving(max, reserveAfter))
+	return func() time.Duration {
+		if remaining := deadline.Sub(b.now()); remaining > 0 {
+			return remaining
+		}
+		return 0
+	}
 }
 
 // engineDrain 引擎排空上限 = 剩余预算 − 收尾段预留（metrics/时区/日志轮转

@@ -46,10 +46,7 @@ func seedWafBundleSources(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(src, "crs", "VERSION"), []byte("v4.14.0"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	oldLive, oldXdb := crsLiveDir, ip2regionLivePath
-	crsLiveDir = filepath.Join(src, "crs")
-	ip2regionLivePath = filepath.Join(src, "ip2region.xdb")
-	t.Cleanup(func() { crsLiveDir, ip2regionLivePath = oldLive, oldXdb })
+	t.Cleanup(OverrideWafLivePathsForTest(filepath.Join(src, "crs"), filepath.Join(src, "ip2region.xdb")))
 	if err := os.WriteFile(ip2regionLivePath, []byte("fake-xdb-bytes"), 0o644); err != nil {
 		t.Fatal(err)
 	}

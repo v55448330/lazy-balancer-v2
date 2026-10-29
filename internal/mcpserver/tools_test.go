@@ -330,7 +330,6 @@ func TestWriteToolSchemasDeclareBodyFields(t *testing.T) {
 		{"update_api_key_status", []string{"id"}, []string{"id", "is_enabled", "mcp_enabled", "read_only", "mcp_ip_whitelist"}},
 		{"bind_security_policy", []string{"id", "rule_caddy_id"}, []string{"id", "rule_caddy_id"}},
 		{"remove_ip_from_list", []string{"id", "value"}, []string{"id", "value"}},
-		{"preview_config", nil, []string{"source"}},
 		{"import_config", nil, []string{"meta", "config", "tables"}},
 		{"validate_import", nil, []string{"meta", "config", "tables"}},
 	}
@@ -593,7 +592,7 @@ func TestOversizedResponseMessageFollowsPaginationCapability(t *testing.T) {
 	}
 	// 每个登记的工具都必须回专用 hint（不得落进通用分支）。
 	for name, want := range map[string]string{
-		"preview_config": "source",
+		"preview_config": "分批预览",
 		"get_rule_logs":  "log-stream",
 	} {
 		message := oversizedResponseMessage(toolSpecsByName[name])

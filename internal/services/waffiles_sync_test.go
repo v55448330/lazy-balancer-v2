@@ -31,6 +31,13 @@ func skipChmodFaultInjectionIfRoot(t *testing.T) {
 	}
 }
 
+func mustMkdirAll(t *testing.T, path string) {
+	t.Helper()
+	if err := os.MkdirAll(path, 0o755); err != nil {
+		t.Fatalf("fixture mkdir %s: %v", path, err)
+	}
+}
+
 func TestSanitizeBundleVersion(t *testing.T) {
 	tests := []struct {
 		name, input, want string
@@ -68,11 +75,7 @@ func TestBuildWafFileBundleInLockChecked_reportsRefReadFailure(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(crsDir, "VERSION"), 0755); err != nil {
 		t.Fatal(err)
 	}
-	oldLive := crsLiveDir
-	oldXdb := ip2regionLivePath
-	crsLiveDir = crsDir
-	ip2regionLivePath = filepath.Join(src, "ip2region.xdb")
-	t.Cleanup(func() { crsLiveDir, ip2regionLivePath = oldLive, oldXdb })
+	t.Cleanup(OverrideWafLivePathsForTest(crsDir, filepath.Join(src, "ip2region.xdb")))
 
 	WafFileLock().Lock()
 	_, complete := BuildWafFileBundleInLockChecked()
@@ -103,12 +106,8 @@ func TestWafFileBundleRoundTrip(t *testing.T) {
 		}
 	}
 
-	oldLive := crsLiveDir
-	oldXdb := ip2regionLivePath
-	crsLiveDir = filepath.Join(src, "crs")
-	ip2regionLivePath = filepath.Join(src, "ip2region.xdb")
-	defer func() { crsLiveDir, ip2regionLivePath = oldLive, oldXdb }()
-	os.WriteFile(ip2regionLivePath, []byte("fake-xdb-bytes"), 0644)
+	t.Cleanup(OverrideWafLivePathsForTest(filepath.Join(src, "crs"), filepath.Join(src, "ip2region.xdb")))
+	writeTestFile(t, ip2regionLivePath, "fake-xdb-bytes")
 
 	bundle := BuildWafFileBundle()
 	if bundle == nil || len(bundle.CRSTarGz) == 0 || len(bundle.Xdb) == 0 {
@@ -127,7 +126,7 @@ func TestWafFileBundleRoundTrip(t *testing.T) {
 
 	// First apply to an empty live dir → both components changed
 	os.RemoveAll(filepath.Join(src, "crs"))
-	os.MkdirAll(filepath.Join(src, "crs"), 0755)
+	mustMkdirAll(t, filepath.Join(src, "crs"))
 	os.Remove(ip2regionLivePath)
 	crsChanged, xdbChanged, _, err := ApplyWafFileBundle(bundle)
 	if err != nil || !crsChanged || !xdbChanged {
@@ -156,16 +155,12 @@ func TestWafFileBundleRoundTrip(t *testing.T) {
 func TestApplyWafFileBundleRejectsTamperedBytes(t *testing.T) {
 	src := t.TempDir()
 	srcRules := filepath.Join(src, "crs", "rules")
-	os.MkdirAll(srcRules, 0755)
-	os.WriteFile(filepath.Join(srcRules, "a.conf"), []byte("SecRule X 1"), 0644)
-	os.WriteFile(filepath.Join(src, "crs", "VERSION"), []byte("v4.14.0"), 0644)
+	mustMkdirAll(t, srcRules)
+	writeTestFile(t, filepath.Join(srcRules, "a.conf"), "SecRule X 1")
+	writeTestFile(t, filepath.Join(src, "crs", "VERSION"), "v4.14.0")
 
-	oldLive := crsLiveDir
-	oldXdb := ip2regionLivePath
-	crsLiveDir = filepath.Join(src, "crs")
-	ip2regionLivePath = filepath.Join(src, "ip2region.xdb")
-	defer func() { crsLiveDir, ip2regionLivePath = oldLive, oldXdb }()
-	os.WriteFile(ip2regionLivePath, []byte("fake-xdb-bytes"), 0644)
+	t.Cleanup(OverrideWafLivePathsForTest(filepath.Join(src, "crs"), filepath.Join(src, "ip2region.xdb")))
+	writeTestFile(t, ip2regionLivePath, "fake-xdb-bytes")
 
 	bundle := BuildWafFileBundle()
 	if bundle == nil || len(bundle.CRSTarGz) == 0 || len(bundle.Xdb) == 0 {
@@ -175,9 +170,8 @@ func TestApplyWafFileBundleRejectsTamperedBytes(t *testing.T) {
 	// Target live tree: empty, ready to receive the sync.
 	dst := t.TempDir()
 	dstRules := filepath.Join(dst, "crs", "rules")
-	crsLiveDir = filepath.Join(dst, "crs")
-	ip2regionLivePath = filepath.Join(dst, "ip2region.xdb")
-	os.MkdirAll(crsLiveDir, 0755)
+	t.Cleanup(OverrideWafLivePathsForTest(filepath.Join(dst, "crs"), filepath.Join(dst, "ip2region.xdb")))
+	mustMkdirAll(t, crsLiveDir)
 
 	// Tampered CRS tar.gz: declared hash unchanged, bytes differ.
 	tampered := *bundle
@@ -185,7 +179,7 @@ func TestApplyWafFileBundleRejectsTamperedBytes(t *testing.T) {
 	if err := untarGzTo(bundle.CRSTarGz, tamperDir, ""); err != nil {
 		t.Fatalf("untar bundle: %v", err)
 	}
-	os.WriteFile(filepath.Join(tamperDir, "rules", "a.conf"), []byte("SecRule X EVIL"), 0644)
+	writeTestFile(t, filepath.Join(tamperDir, "rules", "a.conf"), "SecRule X EVIL")
 	data, _, err := tarGzDir(tamperDir)
 	if err != nil {
 		t.Fatalf("re-archive tampered: %v", err)
@@ -339,9 +333,7 @@ func TestApplyWafFileBundle_rejectsCRSWithoutDeclaredHash(t *testing.T) {
 	// 整树哈希校验，未验证字节会直接安装进 live CRS 树。必须与 xdb 分支
 	// 对称拒绝，不得落盘。
 	dst := t.TempDir()
-	oldLive, oldXdb := crsLiveDir, ip2regionLivePath
-	crsLiveDir, ip2regionLivePath = filepath.Join(dst, "crs"), filepath.Join(dst, "ip2region.xdb")
-	defer func() { crsLiveDir, ip2regionLivePath = oldLive, oldXdb }()
+	t.Cleanup(OverrideWafLivePathsForTest(filepath.Join(dst, "crs"), filepath.Join(dst, "ip2region.xdb")))
 	bundle := &WafFileBundle{CRSTarGz: rawTarGz(t, []tarEntry{{name: "rules/evil.conf", body: []byte("SecRule X EVIL")}}), CRSSha256: ""}
 	if _, _, _, err := ApplyWafFileBundle(bundle); err == nil || !strings.Contains(err.Error(), "缺少声明哈希") {
 		t.Fatalf("error=%v, want missing declared hash rejection", err)
@@ -359,14 +351,11 @@ func TestBuildWafFileRef_sanitizesMalformedIP2RegionTag(t *testing.T) {
 	// Given：live 树存在，.version 附带畸形版本串（含换行注入）
 	src := t.TempDir()
 	rules := filepath.Join(src, "crs", "rules")
-	os.MkdirAll(rules, 0755)
-	os.WriteFile(filepath.Join(rules, "a.conf"), []byte("SecRule X 1"), 0644)
-	oldLive, oldXdb := crsLiveDir, ip2regionLivePath
-	crsLiveDir = filepath.Join(src, "crs")
-	ip2regionLivePath = filepath.Join(src, "ip2region.xdb")
-	defer func() { crsLiveDir, ip2regionLivePath = oldLive, oldXdb }()
-	os.WriteFile(ip2regionLivePath, []byte("fake-xdb-bytes"), 0644)
-	os.WriteFile(ip2regionLivePath+".version", []byte("v3.17.0\nINJECTED"), 0644)
+	mustMkdirAll(t, rules)
+	writeTestFile(t, filepath.Join(rules, "a.conf"), "SecRule X 1")
+	t.Cleanup(OverrideWafLivePathsForTest(filepath.Join(src, "crs"), filepath.Join(src, "ip2region.xdb")))
+	writeTestFile(t, ip2regionLivePath, "fake-xdb-bytes")
+	writeTestFile(t, ip2regionLivePath+".version", "v3.17.0\nINJECTED")
 
 	// When：构建引用
 	ref := BuildWafFileRef()
@@ -384,14 +373,11 @@ func TestBuildWafFileRef_keepsWellFormedIP2RegionTag(t *testing.T) {
 	// Given：live 树存在，.version 为合法 [0-9.]+ 形版本串
 	src := t.TempDir()
 	rules := filepath.Join(src, "crs", "rules")
-	os.MkdirAll(rules, 0755)
-	os.WriteFile(filepath.Join(rules, "a.conf"), []byte("SecRule X 1"), 0644)
-	oldLive, oldXdb := crsLiveDir, ip2regionLivePath
-	crsLiveDir = filepath.Join(src, "crs")
-	ip2regionLivePath = filepath.Join(src, "ip2region.xdb")
-	defer func() { crsLiveDir, ip2regionLivePath = oldLive, oldXdb }()
-	os.WriteFile(ip2regionLivePath, []byte("fake-xdb-bytes"), 0644)
-	os.WriteFile(ip2regionLivePath+".version", []byte("3.17.0\n"), 0644)
+	mustMkdirAll(t, rules)
+	writeTestFile(t, filepath.Join(rules, "a.conf"), "SecRule X 1")
+	t.Cleanup(OverrideWafLivePathsForTest(filepath.Join(src, "crs"), filepath.Join(src, "ip2region.xdb")))
+	writeTestFile(t, ip2regionLivePath, "fake-xdb-bytes")
+	writeTestFile(t, ip2regionLivePath+".version", "3.17.0\n")
 
 	// When：构建引用
 	ref := BuildWafFileRef()
@@ -409,9 +395,7 @@ func TestApplyWafFileBundle_rejectsXdbWithoutDeclaredHash(t *testing.T) {
 	// 声明哈希为空但携带 xdb 内容——非法主节点构造（合法
 	// BuildWafFileBundle 恒成对设置），必须拒绝整包而非裸写原始字节。
 	dst := t.TempDir()
-	oldLive, oldXdb := crsLiveDir, ip2regionLivePath
-	crsLiveDir, ip2regionLivePath = filepath.Join(dst, "crs"), filepath.Join(dst, "ip2region.xdb")
-	defer func() { crsLiveDir, ip2regionLivePath = oldLive, oldXdb }()
+	t.Cleanup(OverrideWafLivePathsForTest(filepath.Join(dst, "crs"), filepath.Join(dst, "ip2region.xdb")))
 	bundle := &WafFileBundle{Xdb: []byte("raw-bytes"), IP2RegionSha: ""}
 	if _, _, _, err := ApplyWafFileBundle(bundle); err == nil || !strings.Contains(err.Error(), "缺少声明哈希") {
 		t.Fatalf("error=%v, want missing declared hash rejection", err)
@@ -429,23 +413,19 @@ func TestApplyWafFileBundle_preservesVersionFileRawBytes(t *testing.T) {
 	// 「安全数据持续同步失败」）。
 	src := t.TempDir()
 	srcRules := filepath.Join(src, "master-crs", "rules")
-	os.MkdirAll(srcRules, 0755)
-	os.WriteFile(filepath.Join(srcRules, "a.conf"), []byte("SecRule X 1"), 0644)
-	os.WriteFile(filepath.Join(src, "master-crs", "VERSION"), []byte("v4.99.0\n"), 0644)
+	mustMkdirAll(t, srcRules)
+	writeTestFile(t, filepath.Join(srcRules, "a.conf"), "SecRule X 1")
+	writeTestFile(t, filepath.Join(src, "master-crs", "VERSION"), "v4.99.0\n")
 
-	oldLive, oldXdb := crsLiveDir, ip2regionLivePath
-	crsLiveDir = filepath.Join(src, "master-crs")
-	ip2regionLivePath = filepath.Join(src, "ip2region.xdb")
+	t.Cleanup(OverrideWafLivePathsForTest(filepath.Join(src, "master-crs"), filepath.Join(src, "ip2region.xdb")))
 	bundle := BuildWafFileBundle()
 	if bundle == nil || bundle.CRSVersion != "v4.99.0" {
 		t.Fatalf("bundle CRSVersion=%q, want trimmed v4.99.0", bundle.CRSVersion)
 	}
-	crsLiveDir, ip2regionLivePath = oldLive, oldXdb
 
 	dst := t.TempDir()
-	crsLiveDir, ip2regionLivePath = filepath.Join(dst, "crs"), filepath.Join(dst, "ip2region.xdb")
-	defer func() { crsLiveDir, ip2regionLivePath = oldLive, oldXdb }()
-	os.MkdirAll(crsLiveDir, 0755)
+	t.Cleanup(OverrideWafLivePathsForTest(filepath.Join(dst, "crs"), filepath.Join(dst, "ip2region.xdb")))
+	mustMkdirAll(t, crsLiveDir)
 
 	crsChanged, _, _, err := ApplyWafFileBundle(bundle)
 	if err != nil || !crsChanged {
@@ -467,12 +447,12 @@ func TestUntarGzTo_midCopyFailure_restoresPureOldTree(t *testing.T) {
 	// 让 copyDir 在复制完 a-new.conf 后失败。
 	// Given：非空旧树 + 含一个新文件的同步包 + staging 内预置只读子目录
 	destDir := filepath.Join(t.TempDir(), "crs")
-	os.MkdirAll(filepath.Join(destDir, "rules"), 0755)
-	os.WriteFile(filepath.Join(destDir, "old.conf"), []byte("SecRule OLD"), 0644)
+	mustMkdirAll(t, filepath.Join(destDir, "rules"))
+	writeTestFile(t, filepath.Join(destDir, "old.conf"), "SecRule OLD")
 	// 完整 CRS 树形态（探针文件）：备份完整性门通过后才进入恢复拷贝路径。
-	os.WriteFile(filepath.Join(destDir, "rules", crsRulesProbeFile), []byte("SecRule INIT"), 0644)
+	writeTestFile(t, filepath.Join(destDir, "rules", crsRulesProbeFile), "SecRule INIT")
 	newTree := t.TempDir()
-	os.WriteFile(filepath.Join(newTree, "a-new.conf"), []byte("SecRule NEW"), 0644)
+	writeTestFile(t, filepath.Join(newTree, "a-new.conf"), "SecRule NEW")
 	data, _, err := tarGzDir(newTree)
 	if err != nil {
 		t.Fatal(err)
@@ -717,17 +697,17 @@ func TestUntarGzTo_nonEmptyDest_removesStaleFiles(t *testing.T) {
 	// 兜底分支必须先清空 destDir 再复制。
 	// Given：非空目标树，含新包中不存在的陈旧文件与子目录
 	destDir := t.TempDir()
-	os.MkdirAll(filepath.Join(destDir, "rules"), 0755)
-	os.WriteFile(filepath.Join(destDir, "rules", "stale.conf"), []byte("SecRule STALE"), 0644)
-	os.WriteFile(filepath.Join(destDir, "rules", "kept.conf"), []byte("SecRule OLD"), 0644)
-	os.MkdirAll(filepath.Join(destDir, "stale-dir"), 0755)
-	os.WriteFile(filepath.Join(destDir, "stale-dir", "gone.conf"), []byte("SecRule GONE"), 0644)
+	mustMkdirAll(t, filepath.Join(destDir, "rules"))
+	writeTestFile(t, filepath.Join(destDir, "rules", "stale.conf"), "SecRule STALE")
+	writeTestFile(t, filepath.Join(destDir, "rules", "kept.conf"), "SecRule OLD")
+	mustMkdirAll(t, filepath.Join(destDir, "stale-dir"))
+	writeTestFile(t, filepath.Join(destDir, "stale-dir", "gone.conf"), "SecRule GONE")
 
 	// 新包：kept.conf 内容更新 + 新增文件，不含 stale.conf / stale-dir/
 	newTree := t.TempDir()
-	os.MkdirAll(filepath.Join(newTree, "rules"), 0755)
-	os.WriteFile(filepath.Join(newTree, "rules", "kept.conf"), []byte("SecRule NEW"), 0644)
-	os.WriteFile(filepath.Join(newTree, "rules", "added.conf"), []byte("SecRule ADDED"), 0644)
+	mustMkdirAll(t, filepath.Join(newTree, "rules"))
+	writeTestFile(t, filepath.Join(newTree, "rules", "kept.conf"), "SecRule NEW")
+	writeTestFile(t, filepath.Join(newTree, "rules", "added.conf"), "SecRule ADDED")
 	data, declaredSum, err := tarGzDir(newTree)
 	if err != nil {
 		t.Fatal(err)
@@ -787,14 +767,13 @@ func TestRewriteVersionIfMissingOrStale_emptyTagClearsStaleSidecar(t *testing.T)
 func TestApplyWafFileBundle_emptyMasterTagConvergesSectionHash(t *testing.T) {
 	// 主端：crs + xdb 齐备但无 .version（BuildWafFileRef 的 tag 保持为空）。
 	master := t.TempDir()
-	os.MkdirAll(filepath.Join(master, "crs", "rules"), 0755)
-	os.WriteFile(filepath.Join(master, "crs", "rules", "a.conf"), []byte("SecRule X 1"), 0644)
-	os.WriteFile(filepath.Join(master, "crs", "VERSION"), []byte("v4.28.0"), 0644)
+	mustMkdirAll(t, filepath.Join(master, "crs", "rules"))
+	writeTestFile(t, filepath.Join(master, "crs", "rules", "a.conf"), "SecRule X 1")
+	writeTestFile(t, filepath.Join(master, "crs", "VERSION"), "v4.28.0")
 	masterXdb := filepath.Join(master, "ip2region.xdb")
-	os.WriteFile(masterXdb, []byte("same-xdb-bytes"), 0644)
+	writeTestFile(t, masterXdb, "same-xdb-bytes")
 
-	oldLive, oldXdb := crsLiveDir, ip2regionLivePath
-	crsLiveDir, ip2regionLivePath = filepath.Join(master, "crs"), masterXdb
+	t.Cleanup(OverrideWafLivePathsForTest(filepath.Join(master, "crs"), masterXdb))
 	masterRef := BuildWafFileRef()
 	bundle := BuildWafFileBundle()
 	if masterRef == nil || bundle == nil || masterRef.IP2RegionTag != "" {
@@ -803,13 +782,12 @@ func TestApplyWafFileBundle_emptyMasterTagConvergesSectionHash(t *testing.T) {
 
 	// 从端：内容与主端完全一致，仅残留陈旧 .version 标签。
 	slave := t.TempDir()
-	crsLiveDir, ip2regionLivePath = filepath.Join(slave, "crs"), filepath.Join(slave, "ip2region.xdb")
-	defer func() { crsLiveDir, ip2regionLivePath = oldLive, oldXdb }()
-	os.MkdirAll(filepath.Join(crsLiveDir, "rules"), 0755)
-	os.WriteFile(filepath.Join(crsLiveDir, "rules", "a.conf"), []byte("SecRule X 1"), 0644)
-	os.WriteFile(filepath.Join(crsLiveDir, "VERSION"), []byte("v4.28.0"), 0644)
-	os.WriteFile(ip2regionLivePath, []byte("same-xdb-bytes"), 0644)
-	os.WriteFile(ip2regionLivePath+".version", []byte("v3.16.0"), 0644)
+	t.Cleanup(OverrideWafLivePathsForTest(filepath.Join(slave, "crs"), filepath.Join(slave, "ip2region.xdb")))
+	mustMkdirAll(t, filepath.Join(crsLiveDir, "rules"))
+	writeTestFile(t, filepath.Join(crsLiveDir, "rules", "a.conf"), "SecRule X 1")
+	writeTestFile(t, filepath.Join(crsLiveDir, "VERSION"), "v4.28.0")
+	writeTestFile(t, ip2regionLivePath, "same-xdb-bytes")
+	writeTestFile(t, ip2regionLivePath+".version", "v3.16.0")
 
 	if _, _, _, err := ApplyWafFileBundle(bundle); err != nil {
 		t.Fatalf("apply bundle with empty master tag: %v", err)
@@ -1061,11 +1039,7 @@ func TestBuildWafFileRef_readFailureIsExplicit(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(crsDir, "rules", "a.conf"), []byte("SecRule X 1"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	oldLive := crsLiveDir
-	oldXdb := ip2regionLivePath
-	crsLiveDir = crsDir
-	ip2regionLivePath = filepath.Join(src, "ip2region.xdb")
-	t.Cleanup(func() { crsLiveDir, ip2regionLivePath = oldLive, oldXdb })
+	t.Cleanup(OverrideWafLivePathsForTest(crsDir, filepath.Join(src, "ip2region.xdb")))
 
 	// 回归形状：完好树 → ref 含 CRS 分量。
 	ref := BuildWafFileRef()
@@ -1163,9 +1137,7 @@ func TestBuildWafFileBundleResponse_incompleteBundleNotCached(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(crsDir, "rules", "REQUEST-901.conf"), []byte("SecRule x"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	oldLive := crsLiveDir
-	crsLiveDir = crsDir
-	t.Cleanup(func() { crsLiveDir = oldLive })
+	t.Cleanup(OverrideWafLivePathsForTest(crsDir, ip2regionLivePath))
 
 	ref := BuildWafFileRef()
 	if ref == nil || ref.CRSSha256 == "" {
@@ -1287,10 +1259,7 @@ func TestApplyWafFileBundle_tamperedThreatEntryRejectedBeforeOthers(t *testing.T
 	defer restoreWaf()
 
 	xdbDir := t.TempDir()
-	oldXdbPath, oldCrsDir := ip2regionLivePath, crsLiveDir
-	ip2regionLivePath = filepath.Join(xdbDir, "ip2region.xdb")
-	crsLiveDir = filepath.Join(xdbDir, "crs")
-	t.Cleanup(func() { ip2regionLivePath, crsLiveDir = oldXdbPath, oldCrsDir })
+	t.Cleanup(OverrideWafLivePathsForTest(filepath.Join(xdbDir, "crs"), filepath.Join(xdbDir, "ip2region.xdb")))
 
 	xdb := []byte("fake-xdb-bytes")
 	xdbSum := sha256.Sum256(xdb)

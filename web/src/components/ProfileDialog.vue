@@ -143,15 +143,18 @@ const saveProfile = async () => {
   if (profileForm.value.password && !profileForm.value.currentPassword) { authStore.showToast('warning', '请输入当前密码'); return }
   if (profileForm.value.password && profileForm.value.password !== profileForm.value.passwordConfirm) { authStore.showToast('warning', '两次输入的新密码不一致'); return }
   const passwordChanged = Boolean(profileForm.value.password)
-  try {
-    await ElMessageBox.confirm(
-      passwordChanged ? '将保存个人资料并修改密码，保存后需要重新登录。确认继续？' : '将保存个人资料修改，是否继续？',
-      '保存个人资料',
-      { type: 'warning', confirmButtonText: '确认保存', cancelButtonText: '取消' },
-    )
-  } catch { return }
+  // 占位先于确认：确认框悬挂期按钮已进入在途态，第二击不会再叠一个确认框。
   saving.value = true
   try {
+    if (passwordChanged) {
+      try {
+        await ElMessageBox.confirm(
+          '将保存个人资料并修改密码，保存后需要重新登录。确认继续？',
+          '保存个人资料',
+          { type: 'warning', confirmButtonText: '确认保存', cancelButtonText: '取消' },
+        )
+      } catch { return }
+    }
     await request.patch('/users/me', {
       display_name: profileForm.value.display_name,
       ...(profileForm.value.password && { password: profileForm.value.password, current_password: profileForm.value.currentPassword }),

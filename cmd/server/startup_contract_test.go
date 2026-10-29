@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestRunMain_healthcheckBypassesServiceStartup(t *testing.T) {
@@ -45,6 +46,8 @@ func TestRunMain_nonHealthcheckUsesNormalStartup(t *testing.T) {
 		t.Fatalf("exit=%d serveCalled=%v, want normal startup exactly once", code, serveCalled)
 	}
 }
+
+const dockerHealthcheckTimeout = 5 * time.Second
 
 func TestHealthcheckTimeout_twoAttemptsFitDockerBudget(t *testing.T) {
 	if budget := 2 * healthcheckTimeout; budget >= dockerHealthcheckTimeout {

@@ -89,6 +89,7 @@ lazy-balancer://docs/ops-playbook
 | 413 | 请求体超过 1 MiB |
 | 401 | API Key 无效 |
 | 403 | MCP 未启用 / IP 不在白名单 / 只读 Key 调写工具 ；非 admin 属主的写工具 403；从节点非集群写工具 403 |
+| 429 | 每 API Key 每分钟 120 次请求；同一来源 IP 另有每分钟 120 次匿名/认证失败预算（仅 401 计入，成功请求回滚，Key 之间互不占额）；响应为 REST 形态而非 JSON-RPC error，按 `Retry-After` 秒数等待并指数退避后重试 |
 
 ## 仅 REST 可用的能力
 

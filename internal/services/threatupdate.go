@@ -67,6 +67,7 @@ type ThreatUpdateManager struct {
 	lastStartedAt   string
 	lastFinishedAt  string
 	lastTaskOutcome string // success / failed / ""（未跑过）
+	scheduleSlotErr error
 	// lastRunEmptySources 标记本轮「启用源均未到期，无更新」。它是**审计动作
 	// 的附加语义**而非终态：零到期源轮按成功轮落定（task_runs=success），审计
 	// 动作仍记「更新」，detail 显式声明「无到期源」——与爬虫族同口径。
@@ -231,6 +232,12 @@ func (m *ThreatUpdateManager) RunUpdate(trigger string, rc *taskengine.RunContex
 		m.mu.Unlock()
 	}()
 	m.runWithContext(runCtx, trigger, rc)
+	m.mu.Lock()
+	slotErr := m.scheduleSlotErr
+	m.mu.Unlock()
+	if slotErr != nil {
+		return slotErr
+	}
 	// 失败终态回传引擎（镜像 crs/ip2region wire Run
 	// 体读 StatusSnapshot 判 failed 的口径）——恒返 nil 时引擎 task_runs 把
 	// 失败轮记成 success。
@@ -372,6 +379,7 @@ func (m *ThreatUpdateManager) runWithContext(runCtx context.Context, trigger str
 	m.lastTrigger = trigger
 	m.lastStartedAt = time.Now().UTC().Format(crsTimeLayout)
 	m.lastRunEmptySources = false
+	m.scheduleSlotErr = nil
 	m.mu.Unlock()
 	// 起点角色复查：调度器 tick 的 is_master
 	// 守卫与更新启动之间存在 demote 竞态窗口——从节点继续执行会写
@@ -442,12 +450,23 @@ func (m *ThreatUpdateManager) runWithContext(runCtx context.Context, trigger str
 			}
 			break
 		}
-		changed, failed := m.updateOneSource(runCtx, source, trigger, runStartedAt)
+		changed, failed, abort := m.updateOneSource(runCtx, source, trigger, runStartedAt)
 		// 判定面只需「是否有源变化」。旧实现逐源查
 		// 一次名单 id 只被 len() 消费（元素从不读取），且 id 查询失败时该源的
 		// 变化被静默排除出收敛面——纯冗余 + 可观测性缺口，查询已删除。
 		anyChanged = anyChanged || changed
 		anyFailed = anyFailed || failed
+		switch abort {
+		case threatSourceAbortDemoted:
+			demoted = true
+		case threatSourceAbortCancelled:
+			cancelled = true
+		case threatSourceAbortRoleLost:
+			roleLost = true
+		}
+		if abort != threatSourceAbortNone {
+			break
+		}
 	}
 	// 中止点归一：末源在途取消时循环自然结束（无下一轮顶部
 	// 检查）——补判一次取消源；demote 优先于源失败（中止非故障）。
@@ -467,7 +486,22 @@ func (m *ThreatUpdateManager) runWithContext(runCtx context.Context, trigger str
 	// 更新永久静默停摆。demote/导入排空/进程停止的取消不推进（引擎侧同样不
 	// 消费槽，恢复后到期轮补跑）。
 	if cancelled && userCancelledRun(runCtx) {
-		advanceSourceSlotsAfterUserCancel("security_threat_sources", trigger, threatSourceRegistryNames(), threatNextSlotStrict)
+		err := advanceSourceSlotsAfterUserCancel("security_threat_sources", trigger, threatSourceRegistryNames(), threatNextSlotStrict)
+		m.mu.Lock()
+		m.scheduleSlotErr = err
+		m.mu.Unlock()
+	}
+	// 收尾投影是主节点写面动作，必须与源写库共用同一角色门。取消轮仍需
+	// 收敛此前已提交源，因此使用脱离取消信号的上下文，只复核角色新鲜度。
+	if !demoted && !roleLost && anyChanged {
+		switch gerr := updateRunWriteGate(context.WithoutCancel(runCtx)); {
+		case errors.Is(gerr, errRunRoleUndecidable):
+			roleLost = true
+			AppendThreatUpdateLog("WARN", "failed", "角色读取失败，无法判定本节点是否主节点，跳过名单投影收敛（引用方由后续轮次收敛）")
+		case errors.Is(gerr, taskengine.ErrTaskSkipped):
+			demoted = true
+			AppendThreatUpdateLog("WARN", "skipped", "节点已降级为从节点，跳过名单投影收敛（从节点零写，引用方由主节点收敛）")
+		}
 	}
 	m.mu.Lock()
 	m.lastFinishedAt = time.Now().UTC().Format(crsTimeLayout)
@@ -617,13 +651,24 @@ func ipListsReferencedByEnabledPolicyLabeled(logPrefix string, listIDs []int) bo
 	return false
 }
 
+// threatSourceAbort 把源级写门中止原因传回运行级状态机，避免用
+// (changed=false, failed=false) 同时承载正常未变化、降级与手动取消。
+type threatSourceAbort uint8
+
+const (
+	threatSourceAbortNone threatSourceAbort = iota
+	threatSourceAbortDemoted
+	threatSourceAbortCancelled
+	threatSourceAbortRoleLost
+)
+
 // updateOneSource 下载→解析→写内置名单→更新行状态；失败仅影响该源。
-// 返回（名单内容是否变化， 是否失败）。
-func (m *ThreatUpdateManager) updateOneSource(ctx context.Context, source threatSourceRow, trigger string, runStartedAt string) (bool, bool) {
+// 返回（名单内容是否变化，是否失败，写门中止原因）。
+func (m *ThreatUpdateManager) updateOneSource(ctx context.Context, source threatSourceRow, trigger string, runStartedAt string) (bool, bool, threatSourceAbort) {
 	if _, err := db.DB.Exec(`UPDATE security_threat_sources SET update_status='running', message='', trigger=?, started_at=?, last_checked=?, updated_at=datetime('now') WHERE id=?`,
 		trigger, runStartedAt, runStartedAt, source.id); err != nil {
 		Logf("error", "威胁情报库: 标记源 %s 运行中失败: %v", source.name, err)
-		return false, true
+		return false, true, threatSourceAbortNone
 	}
 	AppendThreatUpdateLog("INFO", "downloading", fmt.Sprintf("下载 %s（%s）", source.name, source.url))
 
@@ -666,6 +711,7 @@ func (m *ThreatUpdateManager) updateOneSource(ctx context.Context, source threat
 	}
 	finished := time.Now().UTC().Format(crsTimeLayout)
 	if err != nil {
+		abort := threatSourceAbortCancelled
 		if ctx.Err() != nil {
 			switch master, known := updateRunRole(); {
 			case !known:
@@ -674,21 +720,22 @@ func (m *ThreatUpdateManager) updateOneSource(ctx context.Context, source threat
 				// 任务监控可见，旧形态并入 cancelled 会把 DB 故障误报为
 				// 手动取消。
 				AppendThreatUpdateLog("WARN", "failed", fmt.Sprintf("角色读取失败，无法判定源 %s 中止原因（降级/手动取消不可判定），源行保留运行态由后续轮收敛", source.name))
-				return false, true
+				return false, true, threatSourceAbortRoleLost
 			case !master:
 				// demote 中止从节点零写（降级零写 裁定=从节点零写优先）：
 				// 不写源行终态（从节点 DB 由集群同步收敛），仅以任务日志
 				// 「降级中止」留痕；源行滞留 running 由下次主节点同步覆盖。
 				AppendThreatUpdateLog("WARN", "skipped", fmt.Sprintf("节点已降级，源 %s 更新降级中止（从节点零写，源行由集群同步收敛）", source.name))
+				abort = threatSourceAbortDemoted
 			default:
 				cancelSourceRow(source.id, finished, ctx.Err())
 				AppendThreatUpdateLog("WARN", "cancelled", fmt.Sprintf("源 %s 更新已手动取消（保留上次快照）", source.name))
 			}
-			return false, false
+			return false, false, abort
 		}
 		failSourceRow(source.id, finished, err, trigger)
 		AppendThreatUpdateLog("ERROR", "failed", fmt.Sprintf("源 %s 更新失败: %v", source.name, err))
-		return false, true
+		return false, true, threatSourceAbortNone
 	}
 
 	// 两层哈希（2026-09-24 用户裁定）：原始字节哈希一致 → 内容必然未变，
@@ -725,9 +772,9 @@ func (m *ThreatUpdateManager) updateOneSource(ctx context.Context, source threat
 			// 内容未变化不得用本次原始解析条数覆盖源行（源行口径=
 			// 上次聚合后条数，与内置名单行数一致）。
 			if err := markSourceSuccess(source.id, -1, finished, trigger); err != nil {
-				return false, true
+				return false, true, threatSourceAbortNone
 			}
-			return false, false
+			return false, false, threatSourceAbortNone
 		}
 	}
 
@@ -744,13 +791,13 @@ func (m *ThreatUpdateManager) updateOneSource(ctx context.Context, source threat
 	if gerr := threatEntryShrinkGuard(source.id, len(merged)); gerr != nil {
 		failSourceRow(source.id, finished, gerr, trigger)
 		AppendThreatUpdateLog("ERROR", "failed", fmt.Sprintf("源 %s 更新失败: %v", source.name, gerr))
-		return false, true
+		return false, true, threatSourceAbortNone
 	}
 	changed, werr := writeThreatSystemList(source.name, merged)
 	if werr != nil {
 		failSourceRow(source.id, finished, fmt.Errorf("写入内置名单失败: %w", werr), trigger)
 		AppendThreatUpdateLog("ERROR", "failed", fmt.Sprintf("源 %s 写入名单失败: %v", source.name, werr))
-		return false, true
+		return false, true, threatSourceAbortNone
 	}
 	// 未变化也留痕（2026-09-24 用户裁定）：源级一条「未变化」日志，
 	// 否则日志只见成功不见比对结论，无法区分「未拉取」与「未变化」。
@@ -771,26 +818,26 @@ func (m *ThreatUpdateManager) updateOneSource(ctx context.Context, source threat
 		if errors.Is(markErr, errScheduleSlotNotAdvanced) {
 			AppendThreatUpdateLog("ERROR", "failed", fmt.Sprintf("源 %s 已更新但排程不可读，本轮排程槽未推进（引擎将退避重投）", source.name))
 		}
-		return changed, true
+		return changed, true, threatSourceAbortNone
 	}
-	return changed, false
+	return changed, false, threatSourceAbortNone
 }
 
 // threatWriteGateAbort 成功写路径复核（updateRunWriteGate）未通过的统一处置：
-// 已降级/手动取消=零写中止（failed=false——中止非故障，由 run 循环顶部/归一
-// 检查归因落 skipped/cancelled）；角色不可判定=按源失败（failed=true，
-// 任务可见，不误报取消/降级）。三态语义与爬虫族下载期归因同一口径。
-func threatWriteGateAbort(source string, gerr error) (bool, bool) {
+// 已降级/手动取消=零写中止（failed=false，中止原因由返回值直接交给 run）；
+// 角色不可判定=按源失败（failed=true + roleLost，任务可见且不收敛）。
+// 三态语义与爬虫族下载期归因同一口径。
+func threatWriteGateAbort(source string, gerr error) (bool, bool, threatSourceAbort) {
 	switch {
 	case errors.Is(gerr, errRunRoleUndecidable):
 		AppendThreatUpdateLog("WARN", "failed", fmt.Sprintf("角色读取失败，无法判定本节点是否主节点，源 %s 结果未写库（防降级窗口从节点写主库）", source))
-		return false, true
+		return false, true, threatSourceAbortRoleLost
 	case errors.Is(gerr, taskengine.ErrTaskSkipped):
 		AppendThreatUpdateLog("WARN", "skipped", fmt.Sprintf("节点已降级，源 %s 结果未写库（从节点零写，由集群同步收敛）", source))
-		return false, false
+		return false, false, threatSourceAbortDemoted
 	default:
 		AppendThreatUpdateLog("WARN", "cancelled", fmt.Sprintf("源 %s 更新已手动取消（结果未写库，保留上次快照）", source))
-		return false, false
+		return false, false, threatSourceAbortCancelled
 	}
 }
 

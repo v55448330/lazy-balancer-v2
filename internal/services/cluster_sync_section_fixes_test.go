@@ -99,6 +99,15 @@ func TestRecordAppliedSectionHashes_unchangedBranchInsertsMissingRow(t *testing.
 	if count != len(syncSections) {
 		t.Fatalf("applied rows=%d, want %d（unchanged 分支行缺失时必须补插）", count, len(syncSections))
 	}
+	for _, sec := range syncSections {
+		var stored string
+		if err := database.QueryRow(`SELECT hash FROM cluster_applied_sections WHERE section=?`, sec.Key).Scan(&stored); err != nil {
+			t.Fatalf("read applied hash for %s: %v", sec.Key, err)
+		}
+		if want := "hash-" + sec.Key; stored != want {
+			t.Fatalf("applied hash for %s=%q, want %q", sec.Key, stored, want)
+		}
+	}
 }
 
 // 业务摘要行不得输出字面量「<nil>」。

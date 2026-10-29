@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -49,6 +50,28 @@ func loadSystemListIDs() (map[string]int, error) {
 		return nil, err
 	}
 	return ids, nil
+}
+
+// findDuplicateIPListName 在写事务内按 Unicode simple case folding 查重。
+// SQLite LOWER 只折叠 ASCII，应用层 EqualFold 才能兑现名称忽略大小写唯一的契约。
+func findDuplicateIPListName(ctx context.Context, tx *sql.Tx, candidate string, excludeID int64) (name string, system, found bool, err error) {
+	rows, err := tx.QueryContext(ctx, `SELECT name, COALESCE(system,0) FROM security_ip_lists WHERE id<>?`, excludeID)
+	if err != nil {
+		return "", false, false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		if err := rows.Scan(&name, &system); err != nil {
+			return "", false, false, err
+		}
+		if strings.EqualFold(name, candidate) {
+			return name, system, true, nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return "", false, false, err
+	}
+	return "", false, false, nil
 }
 
 // parseIPListRefsIDs 宽松解析 refs JSON 为 id 列表：畸形/空 → nil（重启用悬空
@@ -851,18 +874,16 @@ func (h *Handlers) CreateIPList(c *gin.Context) {
 		return
 	}
 	defer tx.Rollback()
-	var dup int
-	if err := tx.QueryRowContext(caddyWriteCtx(c), "SELECT COUNT(*) FROM security_ip_lists WHERE LOWER(name)=LOWER(?)", req.Name).Scan(&dup); err != nil {
+	dupName, sysDup, dup, err := findDuplicateIPListName(caddyWriteCtx(c), tx, req.Name, 0)
+	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
 		return
 	}
-	if dup > 0 {
+	if dup {
 		// 与内置威胁名单重名给出专属提示（2026-09-24 用户裁定：用户名单
 		// 不允许与内置名单重名——选择器分组依赖名字区分归属）
-		var sysDupName string
-		if err := tx.QueryRowContext(caddyWriteCtx(c), "SELECT name FROM security_ip_lists WHERE LOWER(name)=LOWER(?) AND system=1", req.Name).Scan(&sysDupName); err == nil && sysDupName != "" {
-			// 保留名提示按命中的内置名单名分流。
-			c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: fmt.Sprintf("该名称为%s保留，请换一个名称", builtinIPListLabel(sysDupName))})
+		if sysDup {
+			c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: fmt.Sprintf("该名称为%s保留，请换一个名称", builtinIPListLabel(dupName))})
 			return
 		}
 		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "IP 列表名称已存在"})
@@ -1030,18 +1051,15 @@ func (h *Handlers) UpdateIPList(c *gin.Context) {
 			return
 		}
 	}
-	var dup int
-	if err := tx.QueryRowContext(caddyWriteCtx(c), "SELECT COUNT(*) FROM security_ip_lists WHERE LOWER(name)=LOWER(?) AND id<>?", name, id).Scan(&dup); err != nil {
+	dupName, sysDup, dup, err := findDuplicateIPListName(caddyWriteCtx(c), tx, name, listID)
+	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
 		return
 	}
-	if dup > 0 {
-		// 改名撞内置名单同 Create 口径给专属提示（问题
-		// 同一裁定语义在更新路径此前退化为通用提示）。
-		var sysDupName string
-		if err := tx.QueryRowContext(caddyWriteCtx(c), "SELECT name FROM security_ip_lists WHERE LOWER(name)=LOWER(?) AND system=1", name).Scan(&sysDupName); err == nil && sysDupName != "" {
-			// 保留名提示按命中的内置名单名分流。
-			c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: fmt.Sprintf("该名称为%s保留，请换一个名称", builtinIPListLabel(sysDupName))})
+	if dup {
+		// 改名撞内置名单同 Create 口径给专属提示。
+		if sysDup {
+			c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: fmt.Sprintf("该名称为%s保留，请换一个名称", builtinIPListLabel(dupName))})
 			return
 		}
 		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "IP 列表名称已存在"})

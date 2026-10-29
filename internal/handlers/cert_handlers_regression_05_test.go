@@ -188,6 +188,39 @@ func TestRetryCertJob_forceAuditOnlyWhenCooldownActuallyActive(t *testing.T) {
 	}
 }
 
+// Given force 重试已迁移 waiting_ca 任务并清空冷却，随后 CA provider 解析失败。
+// When 入队返回 changed=true + error。
+// Then 失败审计仍须记录本次实际发生的手动越冷，不得只剩 enqueue_failed。
+func TestRetryCertJob_forceFailureAuditKeepsCooldownOverride(t *testing.T) {
+	h := newBackupTestHandlers(t)
+	services.ResetCAQueueManagerForTest()
+	services.InitCAQueueManager(func() error { return nil }, t.TempDir())
+	services.GetCAQueueManager().Start()
+	t.Cleanup(services.ResetCAQueueManagerForTest)
+	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enabled,enable_tls,tls_source,ca_provider_id)
+		VALUES ('lb_force_failure','cooling','http','force-failure.example.test',8080,1,1,'acme_dns',999);
+		INSERT INTO ca_providers (id,name,provider,directory_url,enabled) VALUES (999,'disabled CA','letsencrypt','https://invalid.example/directory',0);
+		INSERT INTO cert_jobs (rule_id,domain,status,ca_provider_id,ca_available_after,updated_at)
+		VALUES ('lb_force_failure','force-failure.example.test','waiting_ca',999,datetime('now','+1 hour'),datetime('now','-2 hours'))`); err != nil {
+		t.Fatalf("seed cooling job with unavailable provider: %v", err)
+	}
+	router := gin.New()
+	router.POST("/jobs/:id/retry", h.RetryCertJob)
+
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/jobs/1/retry?force=true", nil))
+	if recorder.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d body=%s, want 500 provider resolution failure", recorder.Code, recorder.Body.String())
+	}
+	var detail string
+	if err := db.AuditDB.QueryRow(`SELECT COALESCE(detail,'') FROM audit_log WHERE action='重试失败' AND resource='证书任务' ORDER BY id DESC LIMIT 1`).Scan(&detail); err != nil {
+		t.Fatalf("read retry failure audit: %v", err)
+	}
+	if !strings.Contains(detail, "手动越过 CA 冷却") {
+		t.Fatalf("audit detail=%q, want 手动越过 CA 冷却（状态迁移已发生）", detail)
+	}
+}
+
 // 解析端点体积超限映射 413（其余同域写端点同口径），不得折成 400「格式非法」。
 func TestParseCertificate_oversizeBodyMaps413(t *testing.T) {
 	h := newBackupTestHandlers(t)

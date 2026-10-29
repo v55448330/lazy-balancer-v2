@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -53,8 +54,11 @@ func (h *Handlers) RestartService(c *gin.Context) {
 }
 
 func (h *Handlers) GetSystemInfo(c *gin.Context) {
-	brandingCfg := loadBrandingConfig(h.cfg.DataDir)
-	version := h.cfg.Version
+	dataDir, version := "", ""
+	if h.cfg != nil {
+		dataDir, version = h.cfg.DataDir, h.cfg.Version
+	}
+	brandingCfg := loadBrandingConfig(dataDir)
 	if brandingCfg.Version != "" {
 		version = brandingCfg.Version
 	}
@@ -76,8 +80,9 @@ func (h *Handlers) GetSystemInfo(c *gin.Context) {
 	// 角色查询失败/库未装配时不得静默呈现 master——
 	// 排障窗口里「显示主节点」会把方向引偏（同域写门 requireMasterNode 对同一
 	// 故障响亮 500）。三态化：unknown 并留 warn。
+	database := db.DB
 	switch {
-	case db.DB == nil:
+	case database == nil:
 		services.Logf("warn", "system info: 数据库未装配，节点角色未知（node_mode=unknown）")
 		info.NodeMode = "unknown"
 	default:
@@ -86,7 +91,7 @@ func (h *Handlers) GetSystemInfo(c *gin.Context) {
 		// （同 getOutboundIP 口径）——否则任一登录用户反复中断本端点即可逐请求
 		// 放大一条 warn，污染排障面。
 		roleCtx, cancel := context.WithTimeout(context.WithoutCancel(c.Request.Context()), 2*time.Second)
-		isMaster, err := services.RoleOf(roleCtx, db.DB)
+		isMaster, err := services.RoleOf(roleCtx, database)
 		cancel()
 		if err != nil {
 			services.LogConfigReadFailure("system-role", err)
@@ -135,6 +140,27 @@ func (h *Handlers) GetConnectionStats(c *gin.Context) {
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: stats})
 }
 
+var errNonRegularLogFile = errors.New("非常规日志文件")
+
+// openRegularLogFile 非阻塞打开日志并在已打开 fd 上判定文件类型。
+// 无写端 FIFO 会让普通 os.Open 永久阻塞；常规文件读取不受 O_NONBLOCK 影响。
+func openRegularLogFile(path string) (*os.File, os.FileInfo, error) {
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, nil, err
+	}
+	info, err := f.Stat()
+	if err != nil {
+		_ = f.Close()
+		return nil, nil, err
+	}
+	if !info.Mode().IsRegular() {
+		_ = f.Close()
+		return nil, nil, fmt.Errorf("%w: %s mode=%v", errNonRegularLogFile, path, info.Mode())
+	}
+	return f, info, nil
+}
+
 func (h *Handlers) GetAppLogs(c *gin.Context) {
 	// 运行日志路径经 logPaths 统一口径——LOG_FILE 空串
 	// 时兜底默认运行日志(与 GetLogStats 同源),消除空串路径读出的恒空 200。
@@ -147,25 +173,19 @@ func (h *Handlers) GetAppLogs(c *gin.Context) {
 	// 永久占一个 goroutine/连接，任意登录用户可低成本耗尽资源）。O_NONBLOCK
 	// 使打开本身不阻塞（常规文件读取不受该标志影响），随后以 f.Stat() 的
 	// mode 判定类型并取 size——不存在「检查后替换」的窗口。
-	f, err := os.OpenFile(logPath, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	f, info, err := openRegularLogFile(logPath)
 	if err != nil {
-		if os.IsNotExist(err) {
+		switch {
+		case os.IsNotExist(err):
 			c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: map[string]string{"content": ""}})
-			return
+		case errors.Is(err, errNonRegularLogFile):
+			c.JSON(http.StatusInternalServerError, systemInternalFailure("读取日志失败", err))
+		default:
+			c.JSON(http.StatusInternalServerError, systemInternalFailure("打开日志文件失败", err))
 		}
-		c.JSON(http.StatusInternalServerError, systemInternalFailure("打开日志文件失败", err))
 		return
 	}
 	defer f.Close()
-	info, err := f.Stat()
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, systemInternalFailure("读取日志失败", err))
-		return
-	}
-	if !info.Mode().IsRegular() {
-		c.JSON(http.StatusInternalServerError, systemInternalFailure("读取日志失败", fmt.Errorf("非常规文件: %s mode=%v", logPath, info.Mode())))
-		return
-	}
 	startOffset := int64(0)
 	if info.Size() > maxBytes {
 		startOffset = info.Size() - maxBytes

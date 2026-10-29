@@ -85,9 +85,11 @@ test('组级 @keydown handler 逐条登记（新增未登记的手写键盘路�
   )
 })
 
-test('AccessibleLink 仍保留自身 repeat 守卫（范式源头不得退化）', () => {
+test('AccessibleLink 复用共享 repeat 守卫（不保留第二份实现）', () => {
   const wrapper = code('src/components/common/AccessibleLink.vue')
-  assert.match(wrapper, /if \(event\.repeat\) return/)
+  assert.match(wrapper, /import \{ activateOnce \} from '@\/utils\/keyboardActivate'/)
+  assert.match(wrapper, /activateOnce\(event,/)
+  assert.equal((code('src/utils/keyboardActivate.ts').match(/if \(event\.repeat\) return/g) ?? []).length, 1)
 })
 
 test('rovingTabindex：选中项是唯一 tab stop，选中项不可用时退到首个可用项', () => {

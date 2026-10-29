@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -97,5 +98,33 @@ func TestDownloadAutoBackup_missingFileAuditsRejectionNotDelivery(t *testing.T) 
 	}
 	if filename := rows[0]["filename"].(string); !strings.Contains(failures[0], filename) {
 		t.Fatalf("审计 detail=%q 必须含备份文件名 %q", failures[0], filename)
+	}
+}
+
+type interruptedDownloadWriter struct {
+	*httptest.ResponseRecorder
+	err error
+}
+
+func (w *interruptedDownloadWriter) Write([]byte) (int, error) { return 0, w.err }
+
+func TestDownloadAutoBackupDoesNotAuditSuccessWhenDeliveryFails(t *testing.T) {
+	h := newAutoBackupTestHandlers(t)
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.GET("/api/v1/auto-backup/:id/download", h.DownloadAutoBackup)
+	if _, err := h.RunAutoBackupOnce(context.Background(), "manual", "system", 0); err != nil {
+		t.Fatalf("RunAutoBackupOnce: %v", err)
+	}
+	rows := autoBackupRows(t, "WHERE trigger_type='manual'")
+	if len(rows) != 1 {
+		t.Fatalf("manual rows=%d, want 1", len(rows))
+	}
+	id := rows[0]["id"].(int64)
+	before := downloadAuditCount(t)
+	rec := &interruptedDownloadWriter{ResponseRecorder: httptest.NewRecorder(), err: errors.New("client disconnected")}
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/v1/auto-backup/%d/download", id), nil))
+	if got := downloadAuditCount(t); got != before {
+		t.Fatalf("successful delivery audits before=%d after=%d, want unchanged", before, got)
 	}
 }

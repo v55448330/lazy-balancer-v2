@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -10,12 +11,21 @@ import (
 
 // TaskLogf 业务摘要行（INFO 级，统一 tee 到 tasks/{id}.log）。
 func TaskLogf(taskID, stage, format string, args ...any) {
-	taskengine.TeeTaskLogTime(taskID, "INFO", stage, fmt.Sprintf(format, args...))
+	TaskLogfContext(context.Background(), taskID, stage, format, args...)
+}
+
+// TaskLogfContext 是 TaskLogf 的任务上下文形态，日志阈值读取随任务取消。
+func TaskLogfContext(ctx context.Context, taskID, stage, format string, args ...any) {
+	taskengine.TeeTaskLogTimeContext(ctx, taskID, "INFO", stage, fmt.Sprintf(format, args...))
 }
 
 // TaskLogfWarn 业务告警行（WARN 级；状态变化/失败类信号使用）。
 func TaskLogfWarn(taskID, stage, format string, args ...any) {
-	taskengine.TeeTaskLogTime(taskID, "WARN", stage, fmt.Sprintf(format, args...))
+	TaskLogfWarnContext(context.Background(), taskID, stage, format, args...)
+}
+
+func TaskLogfWarnContext(ctx context.Context, taskID, stage, format string, args ...any) {
+	taskengine.TeeTaskLogTimeContext(ctx, taskID, "WARN", stage, fmt.Sprintf(format, args...))
 }
 
 // writeUpdateLog 更新流水日志单实现（时间戳/级别/阶段口径唯一来源——
@@ -60,7 +70,7 @@ func InvalidateTaskLogSizeCache() {
 // beforeTaskLogSizeQuery 保留任务日志阈值查询前注入缝，供关停交错回归测试使用。
 var beforeTaskLogSizeQuery = func() {}
 
-func getTaskLogSizeBytes() int64 {
+func getTaskLogSizeBytes(ctx context.Context) int64 {
 	// 未初始化库回退治理默认值（db.DefaultTaskLogSizeMB）；与多数配置读取
 	// helper 的 db.DB==nil 守卫一致。
 	defaultBytes := int64(db.DefaultTaskLogSizeMB) * 1024 * 1024
@@ -69,9 +79,13 @@ func getTaskLogSizeBytes() int64 {
 	if database == nil {
 		return defaultBytes
 	}
-	return taskLogSizeCache.get(func() (int64, error) {
+	return taskLogSizeCache.getCtx(ctx, func(queryCtx context.Context) (int64, error) {
 		var sizeMB int
-		if err := database.QueryRow("SELECT COALESCE(task_log_size_mb, ?) FROM global_config WHERE id = 1", db.DefaultTaskLogSizeMB).Scan(&sizeMB); err != nil {
+		if err := database.QueryRowContext(queryCtx, "SELECT COALESCE(task_log_size_mb, ?) FROM global_config WHERE id = 1", db.DefaultTaskLogSizeMB).Scan(&sizeMB); err != nil {
+			// 任务取消/关停不是配置故障：静默回退默认值，不得污染状态转换日志。
+			if queryCtx.Err() != nil {
+				return 0, queryCtx.Err()
+			}
 			// SetTaskLogSizeBytesFn 在每次任务日志写入前求值，主库持续故障时
 			// 裸 warn 会按写入行数洪泛并与全项目去重口径漂移。
 			if lvl := logStateTransition("task-log-size-refresh", true); lvl != "" {

@@ -372,6 +372,34 @@ func TestUpdateIPList_fullReplaceAnd404(t *testing.T) {
 	}
 }
 
+func TestIPListNames_unicodeCaseInsensitiveUniqueness(t *testing.T) {
+	setupSecurityPolicyTestDB(t)
+	router := newIPListRouter(t)
+
+	first := postJSON(t, router, "/security/ip-lists", map[string]any{"name": "Ä", "entries": "[]"})
+	if first.Code != http.StatusOK {
+		t.Fatalf("create first status=%d body=%s", first.Code, first.Body.String())
+	}
+	duplicate := postJSON(t, router, "/security/ip-lists", map[string]any{"name": "ä", "entries": "[]"})
+	if duplicate.Code != http.StatusConflict {
+		t.Fatalf("Unicode case variant create status=%d body=%s, want 409", duplicate.Code, duplicate.Body.String())
+	}
+
+	secondID := seedIPListRow(t, "另一个名单", "[]")
+	rename := putJSON(t, router, fmt.Sprintf("/security/ip-lists/%d", secondID), map[string]any{"name": "ä"})
+	if rename.Code != http.StatusConflict {
+		t.Fatalf("Unicode case variant rename status=%d body=%s, want 409", rename.Code, rename.Body.String())
+	}
+	var firstID int64
+	if err := db.DB.QueryRow(`SELECT id FROM security_ip_lists WHERE name='Ä'`).Scan(&firstID); err != nil {
+		t.Fatal(err)
+	}
+	self := putJSON(t, router, fmt.Sprintf("/security/ip-lists/%d", firstID), map[string]any{"name": "ä"})
+	if self.Code != http.StatusOK {
+		t.Fatalf("case-only self rename status=%d body=%s, want 200", self.Code, self.Body.String())
+	}
+}
+
 func TestDeleteIPList_referenceGuard(t *testing.T) {
 	setupSecurityPolicyTestDB(t)
 	router := newIPListRouter(t)

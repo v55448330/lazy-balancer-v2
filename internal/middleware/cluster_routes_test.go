@@ -184,6 +184,9 @@ func TestClusterMachineEndpoints_rateLimitBeforeAuthentication(t *testing.T) {
 			if response.Code != http.StatusTooManyRequests || !bytes.Contains(response.Body.Bytes(), []byte("集群机器接口请求过于频繁")) {
 				t.Fatalf("31st status=%d body=%s, want machine-endpoint 429", response.Code, response.Body.String())
 			}
+			if retryAfter := response.Header().Get("Retry-After"); retryAfter == "" {
+				t.Fatal("machine-endpoint 429 must include Retry-After")
+			}
 		})
 	}
 }

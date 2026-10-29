@@ -84,6 +84,12 @@ func sectionPayloadFor(key string, s *models.ClusterSnapshot) interface{} {
 		// 间永久乒乓(每两轮一次无退避全量重拉),击穿兜底重拉降频;文件态
 		// 漂移由 wafFilesDrifted 专用通道(含退避与标签自愈)独占,版本行与文件
 		// 差量通道随安全防护开关(cluster_apply.go/cluster_sync.go)。
+		bindings := s.SecurityBindings
+		if s.MasterSyncSwitches != nil && !s.MasterSyncSwitches.Rules {
+			// rules 关闭时 apply 有意保留本地绑定；绑定差异不属于本节点实际
+			// 落库形态，主端与本地重建必须同时排除，避免记账在两个口径间振荡。
+			bindings = nil
+		}
 		return struct {
 			Policies       json.RawMessage             `json:"policies"`
 			Bindings       json.RawMessage             `json:"bindings"`
@@ -100,7 +106,7 @@ func sectionPayloadFor(key string, s *models.ClusterSnapshot) interface{} {
 			// 且每次相关版本 bump 多一轮全量重放）。三面（下发值/哈希输入/从端
 			// 落库值）经同一组归一函数收敛后，稳态哈希一致。
 			canonicalizeSecurityPolicyRows(s.SecurityPolicies),
-			s.SecurityBindings,
+			bindings,
 			s.SecurityCustomRules,
 			normalizeSnapshotBlockPagesForHash(s.SecurityBlockPages),
 			s.SecurityIPLists,

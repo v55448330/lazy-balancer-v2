@@ -209,6 +209,32 @@ func TestAuditPipeline_IPCSuccessShipsAndWritesNoFile(t *testing.T) {
 	}
 }
 
+func TestAuditPipeline_IPCShutdownFlushesYoungBatch(t *testing.T) {
+	dir := t.TempDir()
+	socketPath := shortSocketPath(t)
+	oldInterval := auditIPCFlushInterval
+	auditIPCFlushInterval = time.Hour
+	t.Cleanup(func() { auditIPCFlushInterval = oldInterval })
+	spoolDir := filepath.Join(dir, "spool")
+	srv := startTestIngestServer(t, socketPath, http.StatusNoContent)
+	enableTestAuditIPC(t, socketPath, spoolDir)
+	closeTestAuditPipelines(t)
+	auditLastFlushNano.Store(0)
+	t.Cleanup(func() { auditLastFlushNano.Store(0) })
+
+	p, err := acquireAuditPipeline(filepath.Join(dir, "audit.log"), 0o644)
+	if err != nil {
+		t.Fatalf("acquire pipeline: %v", err)
+	}
+	enqueueCanned(p, `{"tx":"shutdown-young-batch"}`)
+	FlushAuditPipelines()
+
+	bodies := srv.bodies()
+	if len(bodies) != 1 || !strings.Contains(bodies[0], `{"tx":"shutdown-young-batch"}`) {
+		t.Fatalf("shutdown returned before delivering the young IPC batch: bodies=%v", bodies)
+	}
+}
+
 // Given: IPC 端点不可达（socket 不存在）
 // When: 审计行投递失败
 // Then: 整批行写入 spool（可补采），审计文件不被创建，计数 ipc_failed=spool_written=N。

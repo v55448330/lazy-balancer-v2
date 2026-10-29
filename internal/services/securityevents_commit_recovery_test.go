@@ -12,6 +12,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -120,8 +121,9 @@ func TestSecurityEventsIngestion_commitFailureReleasesLeakedTransaction(t *testi
 	dir := t.TempDir()
 	logPath := filepath.Join(dir, "audit.log")
 	offsetPath := filepath.Join(dir, "security_events.offset")
-	if err := os.WriteFile(logPath, []byte(securityEventsFixtureBlocked+"\n"), 0o644); err != nil {
-		t.Fatal(err)
+	noID := strings.Replace(securityEventsFixtureBlocked, `"id": "tx-blocked-1",`, `"id": "",`, 1)
+	withDropped := strings.TrimSuffix(securityEventsFixtureBlocked, "}") + `,"messages_dropped":4}`
+	if err := os.WriteFile(logPath, []byte(noID+"\n"+withDropped+"\n"), 0o644); err != nil {
 	}
 	oldAuditLog, oldAuditOffset := auditLogPath, securityEventsOffsetPath
 	auditLogPath, securityEventsOffsetPath = logPath, offsetPath
@@ -140,6 +142,9 @@ func TestSecurityEventsIngestion_commitFailureReleasesLeakedTransaction(t *testi
 	status := SecurityEventsIngestionHealthSnapshot()
 	if status.LastError == "" {
 		t.Fatalf("提交失败必须进入健康快照: %+v", status)
+	}
+	if status.MessagesDropped != 0 || status.SkippedRegions != 0 {
+		t.Fatalf("failed commit published health deltas early: messages=%d skipped=%d, want 0/0", status.MessagesDropped, status.SkippedRegions)
 	}
 
 	// Then 失败分支已补发 ROLLBACK——池上不残留未提交行，连接可继续服务。
@@ -162,5 +167,9 @@ func TestSecurityEventsIngestion_commitFailureReleasesLeakedTransaction(t *testi
 	}
 	if count != 1 {
 		t.Fatalf("恢复轮行数=%d, want 1", count)
+	}
+	status = SecurityEventsIngestionHealthSnapshot()
+	if status.MessagesDropped != 4 || status.SkippedRegions != 1 || !status.DataLoss {
+		t.Fatalf("committed health: messages=%d skipped=%d data_loss=%v, want 4/1/true", status.MessagesDropped, status.SkippedRegions, status.DataLoss)
 	}
 }

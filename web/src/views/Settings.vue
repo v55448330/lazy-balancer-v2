@@ -37,7 +37,7 @@
       <CaddyGlobalSettings
         v-model:settings="settings"
         :config-loaded="configLoaded"
-        @save="handleSaveCaddy"
+        :on-save="handleSaveCaddy"
       />
     </div>
     <ClusterSettings
@@ -47,7 +47,7 @@
       v-else-if="activeTab === 'certificates'"
       v-model:global="global"
       :config-loaded="configLoaded"
-      @save="handleSaveCertificates"
+      :on-save="handleSaveCertificates"
     />
   </div>
 </template>
@@ -87,7 +87,6 @@ type CertificateConfig = Pick<GlobalConfigData,
   | 'cert_renewal_days'
   | 'cert_renewal_attempts'
   | 'default_ca_provider_id'
-  | 'dns_provider'
 >
 type SettingsConfig = Omit<GlobalConfigData, keyof CertificateConfig>
 
@@ -137,7 +136,6 @@ const global = ref<CertificateConfig>({
   cert_renewal_days: 30,
   cert_renewal_attempts: 5,
   default_ca_provider_id: 0,
-  dns_provider: 'dnspod',
 })
 
 // 标题/描述/页键映射单源见 utils/settingsPages（AppLayout 面包屑共用同一份）
@@ -219,7 +217,6 @@ const applyCertKeys = (data: ConfigPayload) => {
   global.value.cert_renewal_days = data.cert_renewal_days ?? 30
   global.value.cert_renewal_attempts = data.cert_renewal_attempts ?? 5
   global.value.default_ca_provider_id = data.default_ca_provider_id ?? 0
-  global.value.dns_provider = data.dns_provider || 'dnspod'
 }
 
 const configLoaded = ref(false)
@@ -258,6 +255,7 @@ const refreshConfigSection = async (apply: (data: ConfigPayload) => void) => {
     }
   } catch (error) {
     console.error('Failed to fetch settings:', error)
+    if (requestSeq === settingsRequestSeq) configLoadFailed.value = true
   }
 }
 

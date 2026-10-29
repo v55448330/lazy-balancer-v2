@@ -10,6 +10,7 @@ import {
   pathRuleShadowWarning,
   shadowedByIndex,
 } from '../src/utils/pathRulesEditor.ts'
+import { code, member } from './_helpers.ts'
 
 // 路径规则编辑器（向导「自定义路由」）的行内判定：重复/互相遮蔽/模式切换归一/
 // 跳转地址校验。组件此前把这四段逻辑写死在 SFC 里，零测试覆盖——遮蔽提示错了
@@ -139,4 +140,15 @@ test('跳转地址形状按原串判定（前导空格行内即拒，不拖到�
     '301 跳转需要填写跳转地址',
     '仅空判使用 trim（纯空白仍算未填）',
   )
+})
+
+test('行内诊断按行缓存，模板不重复调用全表校验函数', () => {
+  const editor = code('src/components/rules/PathRulesEditor.vue')
+  const diagnostics = member(editor, 'const rowDiagnostics = computed')
+  assert.match(diagnostics, /pathRules\.value\.map/, '每次响应式求值应只生成一次行级诊断数组')
+  assert.match(diagnostics, /pathRuleRowError\(pathRules\.value, index\)/)
+  assert.match(diagnostics, /pathRuleShadowWarning\(pathRules\.value, index\)/)
+  assert.match(diagnostics, /upstreamError\(index\)/)
+  assert.match(diagnostics, /pathRuleResponseError\(pathRules\.value\[index\]\)/)
+  assert.doesNotMatch(editor, /pathRuleRowError\(pathRules, index\)|pathRuleShadowWarning\(pathRules, index\)|pathRuleResponseError\(rule\)/, '模板不得再逐属性重复求值')
 })

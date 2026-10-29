@@ -189,3 +189,34 @@ func TestSecurityEventsGenerationGuard_resetsMessagesDroppedOnReplay(t *testing.
 		t.Fatalf("重放后 messages_dropped=%d, want 4（单遍真实总量）", got)
 	}
 }
+
+func TestSecurityEventsMessagesDropped_replayCountsOnlyNewInsert(t *testing.T) {
+	logPath, offsetPath := stallSetup(t)
+	content := strings.TrimSuffix(securityEventsFixtureBlocked, "}") + `,"messages_dropped":4}` + "\n"
+	if err := os.WriteFile(logPath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	securityEventsMessagesDropped.Store(0)
+	t.Cleanup(func() { securityEventsMessagesDropped.Store(0) })
+	tailer := securityEventsNewTailer(logPath, offsetPath)
+	if err := tailer.securityEventsTick(); err != nil {
+		t.Fatalf("first tick: %v", err)
+	}
+	if got := securityEventsMessagesDropped.Load(); got != 4 {
+		t.Fatalf("first messages_dropped=%d, want 4", got)
+	}
+
+	// When：同代 offset 丢失导致整行重放，INSERT OR IGNORE 会忽略既有事件。
+	if err := os.Remove(offsetPath); err != nil {
+		t.Fatal(err)
+	}
+	replayed := securityEventsNewTailer(logPath, offsetPath)
+	if err := replayed.securityEventsTick(); err != nil {
+		t.Fatalf("replay tick: %v", err)
+	}
+
+	// Then：忽略行没有产生新的落库事实，健康计数不得翻倍。
+	if got := securityEventsMessagesDropped.Load(); got != 4 {
+		t.Fatalf("replayed messages_dropped=%d, want 4", got)
+	}
+}

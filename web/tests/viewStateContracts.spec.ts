@@ -145,7 +145,9 @@ test('登录：创建管理员与自动登录分阶段，OIDC 保持深链', () 
   //（回调侧据此拒绝构造链接投递的令牌）
   assert.match(login, /withOidcAppNonce\(`\/\$\{authStore\.currentPage\}`, nonce\)/, 'OIDC return_to 必须携带当前页面键与本轮 nonce')
   assert.match(login, /sessionStorage\.setItem\(OIDC_APP_NONCE_KEY, nonce\)/, 'nonce 必须落到本标签页 sessionStorage')
-  assert.match(login, /watch\(mfaUseRecovery, \(\) => \{[\s\S]{0,120}mfaCode\.value = ''/, '通道切换清空验证码')
+  // 清空必须发生在 `watch(mfaUseRecovery, …)` 的回调体内（按回调块配对取段）：
+  // 距离窗口会把 120 字符内另一个 handler 的清空算作本 watch 的行为。
+  assert.match(member(login, 'watch(mfaUseRecovery, () => {'), /mfaCode\.value = ''/, '通道切换清空验证码')
 })
 
 test('集群节点 tooltip：四项库版本名称与规则库列表同源，缺失显示 —', () => {
@@ -166,7 +168,16 @@ test('审计日志分页在总数收缩后自动夹紧', () => {
   const page = code('src/views/AuditLog.vue')
   const fetch = section(page, 'const fetchLogs = async', 'onMounted')
   assert.match(fetch, /const maxPage = Math\.max\(1, Math\.ceil\(nextTotal \/ targetPageSize\)\)/)
-  assert.match(fetch, /page\.value = maxPage[\s\S]{0,80}void fetchLogs\(\)/)
+  // 夹紧 → 按新页重取 → 提前返回必须同在一个 `if (targetPage > maxPage)` 块内且
+  // 顺序固定：距离窗口（≤80 字符）跨不进/跨得进本块都说不清，且漏 `return` 时
+  // 仍可能命中（继续落地越界页数据）。
+  const clamp = member(fetch, 'if (targetPage > maxPage) {')
+  const clampAt = clamp.indexOf('page.value = maxPage')
+  const refetchAt = clamp.indexOf('void fetchLogs()')
+  const returnAt = clamp.indexOf('return')
+  assert.ok(clampAt > 0 && refetchAt > clampAt, '夹紧后必须按新页码重取（el-pagination 不会自己发 current-change）')
+  assert.ok(returnAt > refetchAt, '重取后必须提前返回，不得继续落地越界页数据')
+  assert.doesNotMatch(clamp, /logs\.value = /, '越界分支不得落地列表数据')
 })
 
 test('IP 快捷弹框不再调用不存在的 popover.open()', () => {
@@ -316,8 +327,8 @@ test('可访问名：CodeEditor 暴露 ariaLabel、帮助角标键盘可达', ()
 
 test('IP 快捷弹层打开即清旧事件计数（行复用不串上一 IP）', () => {
   const page = code('src/views/security/IPLocationAction.vue')
-  const show = section(page, 'const onPopoverShow', 'void loadEventCount()')
-  assert.match(show, /eventCount\.value = null/, '必须先清空再取数')
+  const show = member(page, 'const onPopoverShow =')
+  assert.ok(show.indexOf('eventCount.value = null') < show.indexOf('loadEventCount()'), '必须先清空再取数')
 })
 
 test('触发详情：策略 GET 的 catch 有会话序号守卫（与同函数其余 await 同口径）', () => {

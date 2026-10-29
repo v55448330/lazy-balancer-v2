@@ -698,6 +698,46 @@ func TestEngine_CancelAfterFailureDoesNotConsumeDueSlot(t *testing.T) {
 	}
 }
 
+func TestEngineUserCancelSlotAdvanceFailureRetriesSameSlot(t *testing.T) {
+	e := newTestEngine(t)
+	pastSlot := time.Now().Add(-time.Minute)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var runs atomic.Int32
+	var slotCalls atomic.Int32
+	if err := e.Register(Descriptor{ID: "t-cancel-slot-error", Family: "t", Name: "取消槽推进失败重试", Kind: KindScheduled,
+		Cancelable: true,
+		NextSlotFn: func() time.Time {
+			if slotCalls.Add(1) == 2 {
+				return time.Time{} // 取消后的排程读取也瞬时失败；恢复后必须重评并重投。
+			}
+			return pastSlot
+		},
+		Run: func(RunContext) error {
+			if runs.Add(1) == 1 {
+				close(started)
+				<-release
+				return ErrScheduleSlotNotAdvanced
+			}
+			return nil
+		}}); err != nil {
+		t.Fatal(err)
+	}
+	e.SetRole(true)
+	e.StartLoop("t-cancel-slot-error")
+	e.tick()
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("automatic run did not start")
+	}
+	if !e.Cancel("t-cancel-slot-error") {
+		t.Fatal("cancel must succeed")
+	}
+	close(release)
+	waitForEngine(t, "slot failure retries the consumed slot", 3*time.Second, func() bool { return runs.Load() >= 2 })
+}
+
 func TestEngine_CancelEndpointsRespectTaskRole(t *testing.T) {
 	e := newTestEngine(t)
 	started := make(chan struct{})
@@ -830,7 +870,7 @@ func TestEngine_TaskLogUnwritableDirCircuitBreaker(t *testing.T) {
 	oldProbe := taskLogDirProbeInterval.Load()
 	taskLogDirProbeInterval.Store(int64(20 * time.Millisecond))
 	t.Cleanup(func() { taskLogDirProbeInterval.Store(oldProbe) })
-	SetTaskLogSizeBytesFn(func() int64 { return 1 << 20 })
+	SetTaskLogSizeBytesFn(func(context.Context) int64 { return 1 << 20 })
 	t.Cleanup(func() { SetTaskLogSizeBytesFn(nil) })
 
 	dir := t.TempDir()
@@ -883,7 +923,7 @@ func TestEngine_TaskLogPathCircuitBreakerIsolatesOtherFiles(t *testing.T) {
 	oldProbe := taskLogDirProbeInterval.Load()
 	taskLogDirProbeInterval.Store(int64(20 * time.Millisecond))
 	t.Cleanup(func() { taskLogDirProbeInterval.Store(oldProbe) })
-	SetTaskLogSizeBytesFn(func() int64 { return 1 << 20 })
+	SetTaskLogSizeBytesFn(func(context.Context) int64 { return 1 << 20 })
 	t.Cleanup(func() { SetTaskLogSizeBytesFn(nil) })
 
 	dir := t.TempDir()
@@ -939,7 +979,7 @@ func TestEngine_TaskLogPathCircuitBreakerIsolatesOtherFiles(t *testing.T) {
 func TestEngine_TaskLogSizeThresholdReadOutsidePathLock(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "lock-order.log")
 	var lockedDuringSize atomic.Bool
-	SetTaskLogSizeBytesFn(func() int64 {
+	SetTaskLogSizeBytesFn(func(context.Context) int64 {
 		lock := lockTaskLogPath(path)
 		if lock.TryLock() {
 			lock.Unlock()
@@ -950,7 +990,7 @@ func TestEngine_TaskLogSizeThresholdReadOutsidePathLock(t *testing.T) {
 	})
 	t.Cleanup(func() { SetTaskLogSizeBytesFn(nil) })
 
-	appendTaskLogLine(path, "line")
+	appendTaskLogLine(context.Background(), path, "line")
 	if lockedDuringSize.Load() {
 		t.Fatal("尺寸阈值在持有路径锁时求值（读库会阻塞全部任务日志写入）")
 	}

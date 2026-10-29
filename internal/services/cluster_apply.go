@@ -453,11 +453,9 @@ func (s *SyncService) applySnapshot(ctx context.Context, snapshot models.Cluster
 	// 安全节替换 security_ip_lists 后重建爬虫运行快照（插件只读
 	// /app/data/crawler-ip-lists.json，不从 DB 派生；无此钩子时从节点/升主/
 	// 导入后执行面停在旧代或缺失，爬虫豁免/伪装判定与主节点分裂）。快照写
-	// 失败不回滚已提交快照——留痕后由下次更新/重启收敛。
+	// 失败不回滚已提交快照——稳定 304 会按失败计数有界重试并显式上报。
 	if switches.Security && !skip.skip("security") {
-		if err := rebuildCrawlerSnapshotForSync(); err != nil {
-			Logf("warn", "集群同步：爬虫运行快照重建失败（DB 已应用，插件按旧快照运行至下次收敛）: %v", err)
-		}
+		s.rebuildCrawlerSnapshotForSyncWithState(ctx)
 	}
 	// Caddy 重载必须在事务提交之后：buildWafHandler 等安全配置读取走 db.DB，
 	// 提交前的事务内生成看不到本次写入的 security_* 表。重载失败仅记录，
@@ -787,7 +785,7 @@ func replaceSnapshotTx(ctx context.Context, tx *sql.Tx, snapshot models.ClusterS
 	// 记账（不随快照同步）。users 节清表前读出，回插后回写（见
 	// restoreLocalLoginLockouts），避免主节点无关的 users 变更意外解锁从节点
 	// 被锁账户。
-	var localLoginLockouts map[string]loginLockoutState
+	var localLoginLockouts map[int]loginLockoutState
 	var localAPIKeyLastUsed map[int]sql.NullString
 	if !skip.skip("users") {
 		preserved, err := readLocalLoginLockouts(ctx, tx)
@@ -996,25 +994,26 @@ type loginLockoutState struct {
 	lastLogin sql.NullString
 }
 
-// readLocalLoginLockouts 在 users 节清表前读出存量 username → 登录记账。
-// username 与主节点快照口径一致（UNIQUE 列），作为重放后回写的连接键。
-func readLocalLoginLockouts(ctx context.Context, tx *sql.Tx) (map[string]loginLockoutState, error) {
+// readLocalLoginLockouts 在 users 节清表前读出存量用户 ID → 登录记账。
+// 用户身份由快照保留的 ID 承载：同名删除重建是不同身份，不能继承旧锁；
+// 同一 ID 改名则仍是同一身份，本地锁与最后登录必须保留。
+func readLocalLoginLockouts(ctx context.Context, tx *sql.Tx) (map[int]loginLockoutState, error) {
 	// 新1:同时读出 mfa_last_timestep——users 节重放若用
 	// 主节点旧值覆盖,从节点已消费的 TOTP 码在 ±1 容差窗内重新可用,击穿
 	// 重放防护;回写侧取 MAX 保留(见 restoreLocalLoginLockouts)。
-	rows, err := tx.QueryContext(ctx, "SELECT username, COALESCE(login_failed_attempts,0), login_locked_until, COALESCE(mfa_last_timestep,0), last_login FROM users")
+	rows, err := tx.QueryContext(ctx, "SELECT id, COALESCE(login_failed_attempts,0), login_locked_until, COALESCE(mfa_last_timestep,0), last_login FROM users")
 	if err != nil {
 		return nil, fmt.Errorf("读取本地登录锁定记账: %w", err)
 	}
 	defer rows.Close()
-	lockouts := make(map[string]loginLockoutState)
+	lockouts := make(map[int]loginLockoutState)
 	for rows.Next() {
-		var username string
+		var id int
 		var state loginLockoutState
-		if err := rows.Scan(&username, &state.failedAttempts, &state.lockedUntil, &state.mfaLastTimestep, &state.lastLogin); err != nil {
+		if err := rows.Scan(&id, &state.failedAttempts, &state.lockedUntil, &state.mfaLastTimestep, &state.lastLogin); err != nil {
 			return nil, fmt.Errorf("扫描本地登录锁定记账: %w", err)
 		}
-		lockouts[username] = state
+		lockouts[id] = state
 	}
 	return lockouts, rows.Err()
 }
@@ -1056,18 +1055,18 @@ func restoreLocalAPIKeyLastUsed(ctx context.Context, tx *sql.Tx, used map[int]sq
 	return nil
 }
 
-// restoreLocalLoginLockouts 在 users 节重插完成后按 username 回写本地登录记账。
-// 主节点已删除（或改名）的用户 UPDATE 命中 0 行——删除语义由快照回放保持，
-// 本地记账不复活用户。
-func restoreLocalLoginLockouts(ctx context.Context, tx *sql.Tx, lockouts map[string]loginLockoutState) error {
-	for username, state := range lockouts {
+// restoreLocalLoginLockouts 在 users 节重插完成后按用户 ID 回写本地登录记账。
+// 主节点已删除的用户 UPDATE 命中 0 行——删除语义由快照回放保持，
+// 本地记账不复活用户；同名但不同 ID 的新用户不会继承旧用户状态。
+func restoreLocalLoginLockouts(ctx context.Context, tx *sql.Tx, lockouts map[int]loginLockoutState) error {
+	for id, state := range lockouts {
 		// 新1:mfa_last_timestep 取 MAX(本地, 快照值)——timestep 随墙钟
 		// 单调,取 max 不产生锁死(禁用/重置置 0 时旧值 < 未来码 step,安全);
 		// 重放防护窗不再被主节点旧值重开。
 		if _, err := tx.ExecContext(ctx, `UPDATE users SET login_failed_attempts=?, login_locked_until=?, mfa_last_timestep=MAX(COALESCE(mfa_last_timestep,0),?),
 			last_login=CASE WHEN ? IS NULL THEN last_login WHEN last_login IS NULL THEN ? WHEN last_login < ? THEN ? ELSE last_login END
-			WHERE username=?`, state.failedAttempts, state.lockedUntil, state.mfaLastTimestep, state.lastLogin, state.lastLogin, state.lastLogin, state.lastLogin, username); err != nil {
-			return fmt.Errorf("回写用户 %s 的本地登录锁定记账: %w", username, err)
+			WHERE id=?`, state.failedAttempts, state.lockedUntil, state.mfaLastTimestep, state.lastLogin, state.lastLogin, state.lastLogin, state.lastLogin, id); err != nil {
+			return fmt.Errorf("回写用户 %d 的本地登录锁定记账: %w", id, err)
 		}
 	}
 	return nil
@@ -2016,9 +2015,6 @@ func updateSnapshotSettings(ctx context.Context, tx *sql.Tx, snapshot models.Clu
 	}
 	if settings.DefaultCAProviderID != nil {
 		addBase("default_ca_provider_id", *settings.DefaultCAProviderID)
-	}
-	if settings.DNSProvider != nil {
-		addBase("dns_provider", *settings.DNSProvider)
 	}
 	if settings.SyncInterval != nil {
 		addBase("sync_interval", normalizeSyncInterval(*settings.SyncInterval))

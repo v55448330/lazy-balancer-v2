@@ -139,7 +139,9 @@ func scrapeOverviewMetrics(metricsURL string) ([]RateLimitHostBlocks, []RateLimi
 		if r := recover(); r != nil {
 			overviewMetricsCache.Lock()
 			call.err = fmt.Errorf("抓取限流指标 panic: %v", r)
-			delete(overviewMetricsCache.inflight, metricsURL)
+			if overviewMetricsCache.inflight[metricsURL] == call {
+				delete(overviewMetricsCache.inflight, metricsURL)
+			}
 			overviewMetricsCache.Unlock()
 			close(call.done)
 			panic(r)
@@ -150,7 +152,11 @@ func scrapeOverviewMetrics(metricsURL string) ([]RateLimitHostBlocks, []RateLimi
 
 	overviewMetricsCache.Lock()
 	call.blocks, call.hostServer, call.err = blocks, byServer, err
-	delete(overviewMetricsCache.inflight, metricsURL)
+	// 作废旧代际会把 inflight 表清空并允许新调用登记；旧调用完成只能
+	// 删除自己的条目，不能误摘新代际的单飞登记。
+	if overviewMetricsCache.inflight[metricsURL] == call {
+		delete(overviewMetricsCache.inflight, metricsURL)
+	}
 	// 代际校验：作废（重载）后完成的旧代际抓取只回给本轮调用方，不入缓存
 	// ——否则下一次请求在 TTL 内再次读到重载前的累计计数。
 	if err == nil && overviewMetricsCache.generation == call.generation {

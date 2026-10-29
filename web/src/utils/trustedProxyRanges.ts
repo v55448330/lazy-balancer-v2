@@ -67,7 +67,10 @@ export const trustedProxyRangeError = (rawValue: string): string => {
     if (mapped.bits < TRUSTED_PROXY_MIN_PREFIX_BITS.ipv4) return MIN_PREFIX_BITS_MESSAGE
     return ''
   }
-  if (ALL_SPACE_PREFIXES.includes(value)) return '覆盖全部地址空间，等同信任任意来源'
+  const canonical = trustedProxyPrefixKey(value)
+  if (canonical !== null && ALL_SPACE_PREFIXES.some((prefix) => trustedProxyPrefixKey(prefix) === canonical)) {
+    return '覆盖全部地址空间，等同信任任意来源'
+  }
   if (bitsText === undefined) return ''
   const minBits = isIpv6 ? TRUSTED_PROXY_MIN_PREFIX_BITS.ipv6 : TRUSTED_PROXY_MIN_PREFIX_BITS.ipv4
   if (bits < minBits) return MIN_PREFIX_BITS_MESSAGE

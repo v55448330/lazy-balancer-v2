@@ -119,8 +119,8 @@ func (m *CRSUpdateManager) cleanupLegacyCRSTransient() {
 	// backup-2026.bak、ops-notes.bak、tree.old 之类是管理员手工留底（改
 	// overrides 前自备份/运维备注），旧实现一次成功更新后把它们静默删除，
 	// 日志也只报「cleaned N」不点名——数据丢失且不可归因。
-	// 非具名的点前缀文件同样不在此删除——waf 同步 tar 的 skipWafSyncTransient
-	// 过滤另行兜底（重构：单次 ReadDir + 具名集合判断）。
+	// 非具名的点前缀文件不在此删除（保留非可执行留底）；其中会被 Coraza
+	// Include 加载的 .conf 由启动对账 pruneUnmanagedHiddenCRSConf 专项清理。
 	legacyNames := map[string]bool{
 		".staging":                   true, // crsTransientPath(liveDir, ".staging")
 		"rules.bak":                  true, // 备份目录（事务化生成）
@@ -149,13 +149,19 @@ func (m *CRSUpdateManager) cleanupLegacyCRSTransient() {
 	}
 }
 
+// statCRSUpdateFile 仅替换更新备份点的文件状态读取，供异常 I/O 形状钉测。
+var statCRSUpdateFile = os.Stat
+
 func (m *CRSUpdateManager) downloadAndInstall(parent context.Context, tag string) error {
+
 	// 每次运行重置：restoreBackup 仅消费本运行创建的备份（1.1 +
 	// 收敛至全四件套：rules/setup/stock/overrides）。
 	m.overridesBakCreated = false
 	m.rulesBakCreated = false
 	m.setupBakCreated = false
 	m.stockBakCreated = false
+	m.setupRemoveOnRollback = false
+	m.stockRemoveOnRollback = false
 	m.setStage(CRSStatusDownloading, fmt.Sprintf("下载 %s", tag))
 	staging := crsTransientPath(m.liveDir(), ".staging")
 	if err := os.RemoveAll(staging); err != nil {
@@ -237,24 +243,36 @@ func (m *CRSUpdateManager) downloadAndInstall(parent context.Context, tag string
 	}
 	setupPath := filepath.Join(m.liveDir(), "crs-setup.conf")
 	setupBak := crsTransientPath(m.liveDir(), "crs-setup.conf.bak")
-	if _, err := os.Stat(setupPath); err == nil {
+	setupMissing := false
+	if _, err := statCRSUpdateFile(setupPath); err == nil {
 		if err := copyFile(setupPath, setupBak); err != nil {
 			m.restoreBackup()
 			return fmt.Errorf("备份 crs-setup.conf: %w", err)
 		}
 		m.setupBakCreated = true // 本运行已创建
+	} else if os.IsNotExist(err) {
+		setupMissing = true
+	} else {
+		m.restoreBackup()
+		return fmt.Errorf("读取 crs-setup.conf 状态: %w", err)
 	}
 	// stock 基线同点备份：回滚只恢复 rules/setup/overrides 会让
 	// stock 基线停留在新版本，下次迁移的 diff 基线错位——两版之间上游改动过
 	// 的默认行被误判为用户自定义迁入 overrides，上游默认值变更被静默回退。
 	stockPath := filepath.Join(m.liveDir(), "crs-setup.stock.conf")
 	stockBak := crsTransientPath(m.liveDir(), "crs-setup.stock.conf.bak")
-	if _, err := os.Stat(stockPath); err == nil {
+	stockMissing := false
+	if _, err := statCRSUpdateFile(stockPath); err == nil {
 		if err := copyFile(stockPath, stockBak); err != nil {
 			m.restoreBackup()
 			return fmt.Errorf("备份 crs-setup.stock.conf: %w", err)
 		}
 		m.stockBakCreated = true // 本运行已创建
+	} else if os.IsNotExist(err) {
+		stockMissing = true
+	} else {
+		m.restoreBackup()
+		return fmt.Errorf("读取 crs-setup.stock.conf 状态: %w", err)
 	}
 
 	// Migrate user customizations out of the live setup before the new stock
@@ -313,6 +331,8 @@ func (m *CRSUpdateManager) downloadAndInstall(parent context.Context, tag string
 	// 在 wafFileMu 互斥段内执行（lbbak 导入 untarGzTo 交换同一棵树，交错产
 	// 混合/残缺 rules 树）；网络下载与 Caddy 重载在锁外。
 	// 版本行随交换段（锁内）落库，prevTag 由交换段锁内读出返回。
+	m.setupRemoveOnRollback = setupMissing
+	m.stockRemoveOnRollback = stockMissing
 	prevTag, err := m.swapCRSTreeFromStaging(staging, setupPath, pendingOverrides, tag)
 	if err != nil {
 		return err
@@ -743,6 +763,13 @@ func (m *CRSUpdateManager) restoreBackupInLock() bool {
 			// 状态，不得按「无需还原」处理。
 			auxRestored = false
 		}
+	} else if m.setupRemoveOnRollback {
+		if err := os.Remove(setupPath); err != nil && !os.IsNotExist(err) {
+			Logf("error", "crs update: failed to remove newly installed crs-setup.conf during rollback: %v", err)
+			auxRestored = false
+		} else {
+			m.setupRemoveOnRollback = false
+		}
 	}
 	stockPath := filepath.Join(m.liveDir(), "crs-setup.stock.conf")
 	stockBak := crsTransientPath(m.liveDir(), "crs-setup.stock.conf.bak")
@@ -761,6 +788,13 @@ func (m *CRSUpdateManager) restoreBackupInLock() bool {
 		} else {
 			// 同 setup 段：本运行备份已不在=未还原。
 			auxRestored = false
+		}
+	} else if m.stockRemoveOnRollback {
+		if err := os.Remove(stockPath); err != nil && !os.IsNotExist(err) {
+			Logf("error", "crs update: failed to remove newly installed crs-setup.stock.conf during rollback: %v", err)
+			auxRestored = false
+		} else {
+			m.stockRemoveOnRollback = false
 		}
 	}
 	overridesPath := filepath.Join(m.liveDir(), "zz-user-overrides.conf")

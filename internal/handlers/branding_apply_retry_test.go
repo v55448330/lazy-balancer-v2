@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -100,6 +101,48 @@ func TestBrandingRoleReadFailureAllowsRetryAfterWindow(t *testing.T) {
 	expireBrandingSyncWindow()
 	if !brandingSyncGateAllow(dir) {
 		t.Fatal("角色读取失败必须清指纹：恢复后下一轮要能重试")
+	}
+}
+
+// Given 默认拦截页播种时节点角色读取失败。
+// When 角色存储恢复后再次执行同一播种。
+// Then 首轮必须返回错误供 GetBranding 标记 syncFailed，恢复轮方可重试并写入新品牌。
+func TestSeedDefaultBlockPage_roleReadFailureIsRetryable(t *testing.T) {
+	initBrandingTestDB(t)
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "branding.json"), []byte(`{"app_name":"恢复后品牌"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	resetBrandingStore()
+	t.Cleanup(resetBrandingStore)
+	if _, err := db.DB.Exec(`ALTER TABLE global_config RENAME TO global_config_hidden`); err != nil {
+		t.Fatalf("hide global_config: %v", err)
+	}
+	hidden := true
+	t.Cleanup(func() {
+		if hidden {
+			_, _ = db.DB.Exec(`ALTER TABLE global_config_hidden RENAME TO global_config`)
+		}
+	})
+
+	if _, err := SeedDefaultBlockPage(dir); err == nil {
+		t.Fatal("角色读取失败必须返回 error（否则调用方消费指纹且不再重试）")
+	}
+	if _, err := db.DB.Exec(`ALTER TABLE global_config_hidden RENAME TO global_config`); err != nil {
+		t.Fatalf("restore global_config: %v", err)
+	}
+	hidden = false
+
+	changed, err := SeedDefaultBlockPage(dir)
+	if err != nil {
+		t.Fatalf("restore seed: %v", err)
+	}
+	if !changed {
+		t.Fatal("角色恢复后的重试未更新默认拦截页")
+	}
+	content, _ := defaultBlockPageRow(t)
+	if !strings.Contains(content, "恢复后品牌") {
+		t.Fatalf("default block page missing retried branding: %s", content)
 	}
 }
 

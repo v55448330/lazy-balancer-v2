@@ -1,19 +1,19 @@
-// 「取消信任」的安全结论新鲜度：条目缓存 TTL 只约束「谁去重拉」，不约束
-// 「谁能拿旧值下结论」——长开弹层（>60s）期间另一标签页/另一管理员在受引用
-// 名单里增删覆盖该 IP 的 CIDR 时，直接读组件本地副本会漏报残余信任（把「引擎
-// 仍信任」谎报成「已取消信任」）。
+// 共享名单条目缓存的**新鲜度**契约：TTL 只约束「谁去重拉」，不约束「谁能拿旧值
+// 下结论」——长开弹层（>60s）期间另一标签页/另一管理员在受引用名单里增删覆盖该
+// IP 的 CIDR 时，直接读组件本地副本会漏报（把「仍被信任」当成「已解除」）。
 //
-// 因此 planTrustRemoval 前必须按 TTL 强制补齐本策略信任侧引用的名单条目，并在
-// 补齐失败（条目缺失）时拒绝出结论。本文件验证两件事：
-//   1. securityStages 的「补齐后仍缺失」判据（失败面单源）行为正确；
-//   2. IPLocationAction 的决策路径确实先补齐、且失败分支禁用动作并释放 busy。
+// 因此消费方（事件详情 IP 弹框）必须在出任何结论前按 TTL 强制补齐引用名单条目，
+// 并在补齐失败（条目缺失）时拒绝出结论。本文件验证「补齐后仍缺失」判据
+// （securityStages.ensureSharedEntriesMissing，失败面单源）的行为：
+//   · 补齐成功 → 空清单，缓存按 id 回填、TTL 内不重复回源；
+//   · 单名单失败 → 回报该 id 且不留失败缓存，重试成功即清空回报；
+//   · TTL 过期 → 旧值不算就绪，必须重拉后才能回报空清单。
 //
-// 运行：cd web && node --test tests/trustRemovalFreshness.spec.ts
+// 运行：cd web && node --test tests/sharedEntriesFreshness.spec.ts
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { source } from './_helpers.ts'
 import {
   ensureSharedEntriesMissing,
   ensureSharedEntries,
@@ -73,17 +73,4 @@ test('TTL 过期：过期缓存不算就绪（必须重拉后才回报空清单�
     Date.now = realNow
     invalidateSharedEntriesCache()
   }
-})
-
-
-// 文档钉：planTrustRemoval 的输入契约必须声明 listEntries 的新鲜度要求——它是
-// 本函数「不谎报已取消信任」承诺的前提条件，删掉这句话会让后续调用方以为可以直接
-// 传组件本地副本。
-test('文档钉：planTrustRemoval 的 listEntries 契约声明新鲜度要求', () => {
-  const removal = source('src/utils/trustRemoval.ts')
-  const fieldAt = removal.indexOf('readonly listEntries')
-  assert.ok(fieldAt > 0, 'planTrustRemoval 入参必须含 listEntries')
-  const field = removal.slice(removal.lastIndexOf('/**', fieldAt), fieldAt)
-  assert.match(field, /必须新鲜/, 'listEntries 契约必须显式要求新鲜条目')
-  assert.match(field, /不得出结论/, '契约必须声明拉取失败时不得出结论')
 })

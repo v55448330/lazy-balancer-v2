@@ -46,10 +46,10 @@
                 size="small"
                 :aria-label="`路径规则 ${index + 1} 的路径`"
                 placeholder="例如：/api"
-                :class="{ 'is-error-input': pathRuleRowError(pathRules, index) }"
+                :class="{ 'is-error-input': rowDiagnostics[index]?.pathError }"
               />
-              <span v-if="pathRuleRowError(pathRules, index)" class="path-field-error">{{ pathRuleRowError(pathRules, index) }}</span>
-              <span v-else-if="pathRuleShadowWarning(pathRules, index)" class="path-field-warning">{{ pathRuleShadowWarning(pathRules, index) }}</span>
+              <span v-if="rowDiagnostics[index]?.pathError" class="path-field-error">{{ rowDiagnostics[index]?.pathError }}</span>
+              <span v-else-if="rowDiagnostics[index]?.shadow" class="path-field-warning">{{ rowDiagnostics[index]?.shadow }}</span>
             </div>
           </label>
 
@@ -65,9 +65,9 @@
                 size="small"
                 :aria-label="`路径规则 ${index + 1} 的上游路径`"
                 placeholder="留空=原样转发"
-                :class="{ 'is-error-input': upstreamError(index) }"
+                :class="{ 'is-error-input': rowDiagnostics[index]?.upstreamError }"
               />
-              <span v-if="upstreamError(index)" class="path-field-error">{{ upstreamError(index) }}</span>
+              <span v-if="rowDiagnostics[index]?.upstreamError" class="path-field-error">{{ rowDiagnostics[index]?.upstreamError }}</span>
             </div>
           </label>
         </div>
@@ -116,8 +116,8 @@
           <label class="rule-field" style="flex: 1;">
             <span class="rule-field-label">跳转地址</span>
             <div class="rule-field-control">
-              <el-input v-model="rule.redirect_to" size="small" placeholder="https://example.com/new 或 /new/" :aria-label="`路径规则 ${index + 1} 的跳转地址`" :class="{ 'is-error-input': pathRuleResponseError(rule) }" />
-              <span v-if="pathRuleResponseError(rule)" class="path-field-error">{{ pathRuleResponseError(rule) }}</span>
+              <el-input v-model="rule.redirect_to" size="small" placeholder="https://example.com/new 或 /new/" :aria-label="`路径规则 ${index + 1} 的跳转地址`" :class="{ 'is-error-input': rowDiagnostics[index]?.responseError }" />
+              <span v-if="rowDiagnostics[index]?.responseError" class="path-field-error">{{ rowDiagnostics[index]?.responseError }}</span>
             </div>
           </label>
         </div>
@@ -172,6 +172,7 @@
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue'
 import { ArrowDown, ArrowUp, Delete, Plus } from '@element-plus/icons-vue'
 import FieldHelpIcon from '@/components/common/FieldHelpIcon.vue'
 import DialogSectionHeader from '@/components/DialogSectionHeader.vue'
@@ -200,6 +201,15 @@ const upstreamError = (index: number): string => {
   if (!rule) return ''
   return upstreamPathRuleError(rule.upstream_path ?? '') ?? ''
 }
+
+// 每轮响应式求值只为每行计算一次诊断；模板多属性读取共享结果，
+// 不再为同一行重复执行全表重复/遮蔽扫描。
+const rowDiagnostics = computed(() => pathRules.value.map((_, index) => ({
+  pathError: pathRuleRowError(pathRules.value, index),
+  shadow: pathRuleShadowWarning(pathRules.value, index),
+  upstreamError: upstreamError(index),
+  responseError: pathRuleResponseError(pathRules.value[index]),
+})))
 
 const addRule = (): void => {
   pathRules.value.push({ match_type: 'prefix', path: '/', upstream_path: '', sort_order: pathRules.value.length, upstreams: null, response_mode: 'forward', response_status: 200, response_body: '', response_content_type: '', redirect_to: '' })

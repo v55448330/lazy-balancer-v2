@@ -158,6 +158,10 @@ var auditLogRotationBeforeTailIngest func()
 // 仅测试注入）：断言复制前闸门已提交的区间不会被二次解析。
 var auditLogRotatedIngestFrom func(from int64)
 
+// auditLogFileStat 活审计文件元数据读取缝；测试注入非 ENOENT 故障，
+// 生产始终使用 os.Stat。
+var auditLogFileStat = os.Stat
+
 // rotateAuditLogIfNeeded 在审计日志超过大小阈值时轮转：先把当前日志复制到
 // 暂存名 .1.new，成功后滚动历史副本（.4→.5 … .1→.2）并把暂存归档提升为 .1，
 // 最后截断原文件（copytruncate）。复制/提升失败不改变归档代际、不截断活文件。
@@ -235,8 +239,15 @@ func rotateAuditLogIfNeeded(ctx context.Context) (total int, rotErr error) {
 			_ = os.Remove(securityEventsPendingDeltaPath())
 		}
 	}
-	info, err := os.Stat(auditLogPath)
-	if err != nil || info.Size() == 0 {
+	info, err := auditLogFileStat(auditLogPath)
+	if errors.Is(err, os.ErrNotExist) {
+		return total, nil
+	}
+	if err != nil {
+		throttledAuditFailureLogf("audit log rotation: active file stat failed: %v", err)
+		return total, fmt.Errorf("stat active audit log: %w", err)
+	}
+	if info.Size() == 0 {
 		return total, nil
 	}
 	maxBytes := auditLogSizeBytes(ctx)
@@ -246,9 +257,9 @@ func rotateAuditLogIfNeeded(ctx context.Context) (total int, rotErr error) {
 	// 轮转前记录已持久化的摄取偏移：tick 读到 EOF 后、复制完成前 Coraza 新写入
 	// 的事件只存在于 .1，活文件截断后 tailer 重置偏移也不会再读 .1，需在归档后
 	// 从 [persistedOffset, .1 size) 区间补采。
-	// 读取失败不得静默按 0 补采：0 起点会把整个.1
-	// 重灌 security_events（transaction_id 唯一索引去重兜底，量级=全文件重复
-	// 解析）——留 warn 供诊断，行为保持 0 兜底（轮转不能因读取失败而阻塞）。
+	// 读取失败不得静默按 0 补采：0 起点会把整个 .1 重灌 security_events
+	// （transaction_id 唯一索引去重兜底），因此必须留 warn。偏移仍按 0 兜底；
+	// 但待摄取积压超过下方复制前闸门时，本轮会推迟复制与轮转，下轮续试。
 	persistedOffset, offErr := securityEventsReadOffset(securityEventsOffsetPath)
 	if offErr != nil {
 		throttledAuditFailureLogf("audit log rotation: 读取摄取偏移失败，补采起点退化为 0: %v", offErr)

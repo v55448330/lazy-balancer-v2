@@ -159,8 +159,8 @@ export const useTrustAssociation = (options: {
     return done
   }
 
-  /** 单击动作：把 IP 加入策略指定侧的列表（自动解析/创建目标列表并关联） */
-  const ensureListAndJoin = async (policy: TrustPolicyLike, ip: string, side: ListSide): Promise<void> => {
+  /** 单击动作：把 IP 加入策略指定侧的列表；仅完整完成返回 true，取消/失败/半态均返回 false。 */
+  const ensureListAndJoin = async (policy: TrustPolicyLike, ip: string, side: ListSide): Promise<boolean> => {
     const cfg = SIDE_CONFIG[side]
     // 单数 resolveSideList 已删（唯一内部消费点内联为 plural 首项）
     const existing = resolveSideLists(policy, side)[0] ?? null
@@ -168,7 +168,7 @@ export const useTrustAssociation = (options: {
       const opt: IpListOption = { id: existing.id, name: existing.name, entry_count: 0 }
       const done = await addIpToList(ip, opt, { verb: cfg.verb, successText: `已${cfg.verb}——已加入列表「${existing.name}」` })
       if (done) await options.onChanged?.()
-      return
+      return done
     }
     const tip = side === 'trust' && policy.ip_whitelist_enabled === false ? '（注意：该策略信任名单当前未启用，加入后暂不生效）' : ''
     // 历史裁定：同侧仅系统内置名单时同样走本出口——此时「尚未关联」不成立，
@@ -189,7 +189,7 @@ export const useTrustAssociation = (options: {
     const createName = isNameTaken(auto.name) ? resolveScopedListName(policy.name, cfg.suffix, policy.id, isNameTaken) : auto.name
     // 确认框弹出前即占位——双击不再叠两个确认框/重复创建
     // （原 creating 在 confirm 之后才置位）。
-    if (creating.value) return
+    if (creating.value) return false
     creating.value = true
     try {
       try {
@@ -201,7 +201,7 @@ export const useTrustAssociation = (options: {
           { confirmButtonText: '确定', cancelButtonText: '取消', type: 'info' },
         )
       } catch {
-        return
+        return false
       }
       // 确认后才取最新引用：快照留在弹框弹出前的策略行上，确认期间别处新增的
       // 名单引用会在「快照 + 本次目标」拼装时被覆盖掉。读取失败则整单放弃
@@ -209,7 +209,7 @@ export const useTrustAssociation = (options: {
       const latestRefs = await fetchLatestPolicyRefs(policy.id, cfg.refField)
       if (latestRefs === null) {
         ElMessage.error('策略当前引用状态读取失败，本次未做任何修改；请关闭后重试')
-        return
+        return false
       }
       // 名单侧同样按最新状态复核：弹框打开时的复用判据只代表当时——确认期间
       // 另一管理员/另一标签把同名名单关联到别的策略（或受信代理网段）后，写入
@@ -219,7 +219,7 @@ export const useTrustAssociation = (options: {
         const latestList = await fetchLatestListRefs(reuse.id)
         if (latestList === null) {
           ElMessage.error(`列表「${reuse.name}」当前引用状态读取失败，本次未做任何修改；请关闭后重试`)
-          return
+          return false
         }
         if (!isAutoListReusable(latestList, policy.id)) {
           ElMessage.warning(`列表「${reuse.name}」已被其它策略或受信代理网段引用，本次改为新建「${createName}」`)
@@ -241,7 +241,7 @@ export const useTrustAssociation = (options: {
             // 半态显性披露：条目已就绪，重试只会补关联（幂等，不重复写入）
             ElMessage.error(`已把 ${ip} 加入列表「${reuse.name}」，但策略关联失败；条目已就绪，重试不会重复添加`)
             await options.onChanged?.()
-            return
+            return false
           }
         }
         // 后端幂等：IP 已存在且生效中时返回 added=false 且不做任何写入
@@ -260,7 +260,7 @@ export const useTrustAssociation = (options: {
           mfaAwareSuccess(`已关联既有「${reuse.name}」——该 IP 已在列表中，未重复添加`)
         }
         await options.onChanged?.()
-        return
+        return true
       }
       // 新建路径：建单即播种条目（后端 CreateIPListRequest.entries 支持），写序为
       // 「创建（含 IP）→ 关联 refs」。原先是 创建空名单 → 关联 → 加入 IP：加入
@@ -275,21 +275,23 @@ export const useTrustAssociation = (options: {
       const newId = created.data?.id
       if (!newId) {
         ElMessage.error(`列表「${createName}」创建响应异常，请重试`)
-        return
+        return false
       }
       const assocRes = await request.put(`/security/policies/${policy.id}`, { [cfg.refField]: JSON.stringify([...latestRefs, newId]) }).catch(() => null)
       if (!assocRes) {
         ElMessage.error(`列表「${createName}」已创建并加入 ${ip}，但策略关联失败；重试将复用该名单`)
         await options.onChanged?.()
-        return
+        return false
       }
       // 关联是最后一步：退化后缀弹警告，正常成功用动作口径文案（响应 message 是
       // 策略更新的通用文案，不能拿来当本次动作的反馈）。
       if (assocRes.message?.includes(CADDY_APPLY_FAILED_MARKER)) showSaveResult(assocRes, '')
       else mfaAwareSuccess(`已创建「${createName}」并加入 ${ip}`)
       await options.onChanged?.()
+      return true
     } catch {
       // 失败提示由全局拦截器弹出
+      return false
     } finally {
       creating.value = false
     }

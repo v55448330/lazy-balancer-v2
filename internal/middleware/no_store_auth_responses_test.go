@@ -1,8 +1,13 @@
 package middleware
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -16,26 +21,47 @@ import (
 // 缓存或中间反代留存后回放给另一个使用者即凭据泄露。这些路由必须逐条声明
 // Cache-Control: no-store，而未携带凭据的业务响应不得被顺手降级（no-store
 // 会连带禁用浏览器缓存，业务列表因此每次都重新取数）。
+type noStoreRouteCase struct {
+	name         string
+	method       string
+	path         string
+	registration string
+	body         string
+	withToken    bool
+	wantStatus   []int
+}
+
 func TestAuthenticationResponsesAreNotStored(t *testing.T) {
 	router := newMiddlewareTestRouter(t)
 	token, spareToken := seedNoStoreAuthUser(t)
 
-	cases := []struct {
-		name       string
-		method     string
-		path       string
-		body       string
-		withToken  bool
-		wantStatus []int
-	}{
+	cases := []noStoreRouteCase{
 		{name: "login", method: http.MethodPost, path: "/api/v1/auth/login", body: `{"username":"nobody","password":"x"}`},
 		{name: "ticket login", method: http.MethodPost, path: "/api/v1/auth/ticket-login", body: `{"ticket":"bogus"}`},
 		{name: "mfa verify", method: http.MethodPost, path: "/api/v1/auth/mfa/verify", body: `{"username":"nobody","code":"000000"}`},
+		{name: "setup", method: http.MethodPost, path: "/api/v1/auth/setup", body: `{}`},
+		{name: "oidc login", method: http.MethodGet, path: "/api/v1/auth/oidc/login"},
+		{name: "oidc callback", method: http.MethodGet, path: "/api/v1/auth/oidc/callback?code=bogus&state=bogus"},
 		{name: "current user", method: http.MethodGet, path: "/api/v1/users/me", withToken: true, wantStatus: []int{http.StatusOK}},
 		{name: "self update", method: http.MethodPatch, path: "/api/v1/users/me", body: `{}`, withToken: true},
+		{name: "user update", method: http.MethodPut, path: "/api/v1/users/999999", registration: "/api/v1/users/:id", body: `{}`, withToken: true},
+		{name: "user reset password", method: http.MethodPost, path: "/api/v1/users/999999/reset-password", registration: "/api/v1/users/:id/reset-password", body: `{}`, withToken: true},
 		{name: "mfa status", method: http.MethodGet, path: "/api/v1/auth/mfa/status", withToken: true, wantStatus: []int{http.StatusOK}},
+		{name: "mfa setup", method: http.MethodPost, path: "/api/v1/auth/mfa/setup", body: `{}`, withToken: true},
+		{name: "mfa activate", method: http.MethodPost, path: "/api/v1/auth/mfa/activate", body: `{}`, withToken: true},
+		{name: "mfa disable", method: http.MethodPost, path: "/api/v1/auth/mfa/disable", body: `{}`, withToken: true},
+		{name: "mfa recovery codes", method: http.MethodPost, path: "/api/v1/auth/mfa/recovery-codes", body: `{}`, withToken: true},
+		{name: "mfa verify step", method: http.MethodPost, path: "/api/v1/auth/mfa/verify-step", body: `{}`, withToken: true},
 		{name: "self api key list", method: http.MethodGet, path: "/api/v1/users/me/api-keys", withToken: true, wantStatus: []int{http.StatusOK}},
+		{name: "self api key create", method: http.MethodPost, path: "/api/v1/users/me/api-keys", body: `{}`, withToken: true},
 		{name: "api key list", method: http.MethodGet, path: "/api/v1/api-keys", withToken: true, wantStatus: []int{http.StatusOK}},
+		{name: "api key create", method: http.MethodPost, path: "/api/v1/api-keys", body: `{}`, withToken: true},
+		{name: "admin mfa reset", method: http.MethodPost, path: "/api/v1/users/999999/mfa/reset", registration: "/api/v1/users/:id/mfa/reset", body: `{}`, withToken: true},
+		{name: "rule list contains private keys", method: http.MethodGet, path: "/api/v1/rules", withToken: true, wantStatus: []int{http.StatusOK}},
+		{name: "rule detail contains private keys", method: http.MethodGet, path: "/api/v1/rules/missing", registration: "/api/v1/rules/:caddy_id", withToken: true},
+		{name: "certificate configs contain credentials", method: http.MethodGet, path: "/api/v1/certificate-configs", withToken: true, wantStatus: []int{http.StatusOK}},
+		{name: "ca provider list contains credentials", method: http.MethodGet, path: "/api/v1/ca-providers", withToken: true, wantStatus: []int{http.StatusOK}},
+		{name: "ca provider detail contains credentials", method: http.MethodGet, path: "/api/v1/ca-providers/999999", registration: "/api/v1/ca-providers/:id", withToken: true},
 		{name: "logout", method: http.MethodPost, path: "/api/v1/auth/logout", withToken: true, wantStatus: []int{http.StatusOK}},
 	}
 	for _, tc := range cases {
@@ -61,18 +87,87 @@ func TestAuthenticationResponsesAreNotStored(t *testing.T) {
 		})
 	}
 
-	// 非认证响应：不得带 no-store。
+	assertNoStoreRouteCoverage(t, cases)
+
+	// 不含凭据的业务响应：不得被顺手降级。
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodGet, "/api/v1/rules", nil)
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/dns-providers", nil)
 	// 上面的 logout 用例已撤销 token，这里必须用未撤销的第二枚（同一用户
 	// 不同令牌串=不同撤销指纹）。
 	request.Header.Set("Authorization", "Bearer "+spareToken)
 	router.ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusOK {
-		t.Fatalf("rules status=%d body=%q, want 200", recorder.Code, recorder.Body.String())
+		t.Fatalf("dns-providers status=%d body=%q, want 200", recorder.Code, recorder.Body.String())
 	}
 	if got := recorder.Header().Get("Cache-Control"); got != "" {
-		t.Fatalf("非认证响应 Cache-Control=%q, want 空", got)
+		t.Fatalf("非凭据响应 Cache-Control=%q, want 空", got)
+	}
+}
+
+func assertNoStoreRouteCoverage(t *testing.T, cases []noStoreRouteCase) {
+	t.Helper()
+	expected := make(map[string]bool, len(cases))
+	for _, tc := range cases {
+		path, _, _ := strings.Cut(tc.path, "?")
+		if tc.registration != "" {
+			path = tc.registration
+		}
+		expected[tc.method+" "+path] = true
+	}
+	source, err := os.ReadFile("middleware.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	file, err := parser.ParseFile(token.NewFileSet(), "middleware.go", source, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	actual := make(map[string]bool)
+	ast.Inspect(file, func(node ast.Node) bool {
+		call, ok := node.(*ast.CallExpr)
+		if !ok || len(call.Args) < 2 {
+			return true
+		}
+		selector, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		switch selector.Sel.Name {
+		case http.MethodGet, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
+		default:
+			return true
+		}
+		pathLiteral, ok := call.Args[0].(*ast.BasicLit)
+		if !ok || pathLiteral.Kind != token.STRING {
+			return true
+		}
+		path, err := strconv.Unquote(pathLiteral.Value)
+		if err != nil || strings.HasPrefix(path, "/cluster/") {
+			return true
+		}
+		for _, arg := range call.Args[1:] {
+			ast.Inspect(arg, func(argNode ast.Node) bool {
+				middlewareCall, ok := argNode.(*ast.CallExpr)
+				if !ok {
+					return true
+				}
+				if ident, ok := middlewareCall.Fun.(*ast.Ident); ok && ident.Name == "noStoreResponse" {
+					actual[selector.Sel.Name+" /api/v1"+path] = true
+				}
+				return true
+			})
+		}
+		return true
+	})
+	for route := range expected {
+		if !actual[route] {
+			t.Errorf("%s 测试声明了 no-store 契约，但路由未挂载", route)
+		}
+	}
+	for route := range actual {
+		if !expected[route] {
+			t.Errorf("%s 挂载了 noStoreResponse，但敏感响应测试矩阵未覆盖", route)
+		}
 	}
 }
 

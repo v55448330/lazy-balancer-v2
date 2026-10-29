@@ -47,7 +47,7 @@
       <template #title>
         <div class="polling-error-title">
           <span>负载均衡规则加载失败，下方「暂无规则」不代表真实状态</span>
-          <el-button link type="danger" :loading="loading" @click="fetchRules">立即重试</el-button>
+          <el-button link type="danger" :loading="loading" @click="fetchRules()">立即重试</el-button>
         </div>
       </template>
     </el-alert>
@@ -339,14 +339,21 @@
         </el-table-column>
         <el-table-column label="状态" width="64" align="center">
           <template #default="{ row }">
-            <el-switch
-              v-model="row.enabled"
-              :loading="ruleTogglePending[row.caddy_id]"
-              :disabled="isReadOnly || isCertJobActive(certJobMap[row.caddy_id]?.status) || ruleTogglePending[row.caddy_id]"
-              :aria-label="`${row.name} 的启用状态`"
-              @change="toggleRule(row as Rule)"
-              class="status-switch"
-            />
+            <el-tooltip
+              :disabled="!isReadOnly && !isCertJobActive(certJobMap[row.caddy_id]?.status) && !ruleTogglePending[row.caddy_id]"
+              :content="isReadOnly ? readOnlyMessage : ruleTogglePending[row.caddy_id] ? '规则状态更新中，请稍候' : certJobLockTooltip(row as Rule, '证书申请中，请等待完成或失败后再启停规则')"
+            >
+              <div>
+                <el-switch
+                  v-model="row.enabled"
+                  :loading="ruleTogglePending[row.caddy_id]"
+                  :disabled="isReadOnly || isCertJobActive(certJobMap[row.caddy_id]?.status) || ruleTogglePending[row.caddy_id]"
+                  :aria-label="`${row.name} 的启用状态`"
+                  @change="toggleRule(row as Rule)"
+                  class="status-switch"
+                />
+              </div>
+            </el-tooltip>
           </template>
         </el-table-column>
         <el-table-column label="操作" width="172" fixed="right" align="center">
@@ -1163,14 +1170,14 @@
       <template #header>
         <DialogHeader :icon="Tickets" :title="`访问日志 - ${ruleLogRuleName}`" subtitle="负载均衡规则请求访问日志" />
       </template>
+      <div class="log-toolbar">
+        <el-switch v-model="ruleLogAutoRefresh" active-text="自动刷新" />
+        <el-button type="primary" :loading="ruleLogLoading" size="small" @click="refreshRuleLogs">
+          <el-icon><RefreshRight /></el-icon>刷新
+        </el-button>
+      </div>
       <el-tabs v-model="ruleLogTab" @tab-change="onRuleLogTabChange">
         <el-tab-pane label="日志" name="log">
-          <div class="log-toolbar">
-            <el-switch v-model="ruleLogAutoRefresh" active-text="自动刷新" />
-            <el-button type="primary" :loading="ruleLogLoading" size="small" @click="refreshRuleLogs">
-              <el-icon><RefreshRight /></el-icon>刷新
-            </el-button>
-          </div>
           <div ref="ruleLogContainerRef" class="dialog-panel rule-log-viewer" v-html="ruleLogHtml" />
         </el-tab-pane>
         <el-tab-pane label="统计" name="stats">
@@ -1542,30 +1549,30 @@ const securityBindingsError = ref(false)
 // 绑定数据未就绪时禁止打开编辑器：组件预选空集 + 全量替换语义会把
 // 「加载失败/未完成」保存成「解除全部绑定」。
 const securityBindingsLoading = ref(true)
-const fetchSecurityBindings = async () => {
+const fetchSecurityBindings = async (includeSecurityCatalog = false) => {
   securityBindingsLoading.value = true
   try {
     const [bindingsRes, policiesRes, ipListRes, blockPagesRes] = await Promise.all([
       request.get<APIResponse<typeof securityBindings.value>>('/security/bindings'),
-      request.get<APIResponse<SecurityStagePolicy[]>>('/security/policies'),
-      request.get<APIResponse<SecurityStageIPList[]>>('/security/ip-lists'),
-      request.get<APIResponse<SecurityStageBlockPage[]>>('/security/block-pages'),
+      includeSecurityCatalog ? request.get<APIResponse<SecurityStagePolicy[]>>('/security/policies') : Promise.resolve(null),
+      includeSecurityCatalog ? request.get<APIResponse<SecurityStageIPList[]>>('/security/ip-lists') : Promise.resolve(null),
+      includeSecurityCatalog ? request.get<APIResponse<SecurityStageBlockPage[]>>('/security/block-pages') : Promise.resolve(null),
     ])
     if (bindingsRes.data) securityBindings.value = bindingsRes.data
-    if (policiesRes.data) securityPolicies.value = policiesRes.data
-    if (ipListRes.data) ipLists.value = ipListRes.data
-    if (blockPagesRes.data) blockPages.value = blockPagesRes.data
+    if (policiesRes?.data) securityPolicies.value = policiesRes.data
+    if (ipListRes?.data) ipLists.value = ipListRes.data
+    if (blockPagesRes?.data) blockPages.value = blockPagesRes.data
     securityBindingsError.value = false
   } catch {
-    // 四端点任一失败时保持的数据为空，锁图标会渲染成「未绑定」、
-    // 流程投影全灰——整体静默等于把加载失败伪装成真实安全状态。改为显性横幅
-    // （模板带「重新加载」），全局拦截器仍会 toast 一次具体错误。
+    // 首屏/显式重试时任一安全端点失败都必须显性化：保持的数据可能为空，
+    // 静默会把加载失败伪装成「未绑定」。常规规则写后只刷新 bindings，不再
+    // 重拉与本次写无关的策略、名单和拦截页目录。
     securityBindingsError.value = true
   } finally {
     securityBindingsLoading.value = false
   }
 }
-const retrySecurityBindings = (): void => { void fetchSecurityBindings() }
+const retrySecurityBindings = (): void => { void fetchSecurityBindings(true) }
 
 // 锁摘要 popover 实例登记（el-popover 组件公开 hide() 方法，其实例类型未导出——
 // 命名校验后落登记表；跳转流程弹框前显式关闭，防 popover 残留遮挡）
@@ -1654,7 +1661,7 @@ let rulesRequestSeq = 0
 // 更新者显示名走 utils/updaterName 单源
 const getUpdaterName = (userId?: number) => updaterName(users.value, userId)
 
-const fetchRules = async () => {
+const fetchRules = async (includeSecurityCatalog = false) => {
   if (disposed) return
   const requestSeq = ++rulesRequestSeq
   loading.value = true
@@ -1663,7 +1670,7 @@ const fetchRules = async () => {
     if (disposed || requestSeq !== rulesRequestSeq) return
     rules.value = res.data || []
     rulesLoadError.value = false
-    void fetchSecurityBindings()
+    void fetchSecurityBindings(includeSecurityCatalog)
     // Fetch health status after rules are loaded
     void healthPolling.run()
     // Fetch certificate info for TLS-enabled rules
@@ -4158,7 +4165,7 @@ onMounted(() => {
     searchQuery.value = rs
     window.history.replaceState(null, '', window.location.pathname)
   }
-  void fetchRules()
+  void fetchRules(true)
   void fetchUsers()
   void fetchCertConfigs()
   void fetchCAProviders()

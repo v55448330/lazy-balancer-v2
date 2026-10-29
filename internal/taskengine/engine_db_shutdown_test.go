@@ -25,7 +25,9 @@ func TestTaskRunsReadsSnapshotHandleAcrossShutdown(t *testing.T) {
 		read func()
 	}{
 		{"History", func() { e.History("t-shutdown", 5) }},
+		{"RecoverOrphans", func() { e.RecoverOrphans() }},
 		{"RunOverview", func() { e.RunOverview() }},
+		{"Stats24h", func() { e.Stats24h("t-shutdown") }},
 		{"Stats24hHourlySeries", func() { e.Stats24hHourlySeries() }},
 	}
 	for _, tc := range cases {

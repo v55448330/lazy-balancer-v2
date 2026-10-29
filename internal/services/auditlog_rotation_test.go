@@ -794,3 +794,39 @@ func TestRotateAuditLog_gateIngestAdvancesRotatedIngestStart(t *testing.T) {
 		}
 	}
 }
+
+// 活文件 Stat 的非 ENOENT 错误不能与「文件为空/不存在」同形静默返回；
+// 否则持续 I/O 故障会同时隐藏错误并阻止轮转。
+func TestRotateAuditLog_statFailureIsReturned(t *testing.T) {
+	logs := captureLogf(t)
+	dir := t.TempDir()
+	oldPath, oldOffset, oldStat := auditLogPath, securityEventsOffsetPath, auditLogFileStat
+	auditLogPath = filepath.Join(dir, "audit.log")
+	securityEventsOffsetPath = filepath.Join(dir, "security-events.offset")
+	injected := errors.New("injected audit stat failure")
+	called := false
+	auditLogFileStat = func(path string) (os.FileInfo, error) {
+		called = true
+		if path != auditLogPath {
+			t.Fatalf("stat path=%q, want %q", path, auditLogPath)
+		}
+		return nil, injected
+	}
+	t.Cleanup(func() {
+		auditLogPath, securityEventsOffsetPath, auditLogFileStat = oldPath, oldOffset, oldStat
+	})
+
+	total, err := rotateAuditLogIfNeeded(context.Background())
+	if !called {
+		t.Fatal("active audit log stat was not exercised")
+	}
+	if total != 0 {
+		t.Fatalf("ingested=%d, want 0", total)
+	}
+	if !errors.Is(err, injected) {
+		t.Fatalf("err=%v, want injected stat failure", err)
+	}
+	if !strings.Contains(logs.String(), injected.Error()) {
+		t.Fatalf("stat failure must be logged: %q", logs.String())
+	}
+}

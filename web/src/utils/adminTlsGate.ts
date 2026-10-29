@@ -21,7 +21,7 @@ interface AdminTlsDialogCertState {
   readonly mode: string
   readonly certFile: unknown
   readonly keyFile: unknown
-  readonly certInfo: { readonly days_left: number } | null
+  readonly certInfo: { readonly days_left: number; readonly expired?: boolean } | null
 }
 
 /**
@@ -49,7 +49,9 @@ export const adminTlsConfirmDisabled = (
 ): boolean => {
   if (form.mode !== 'upload') return false
   if (adminTlsReusesSavedCert(stored, form)) return false
-  return form.certInfo == null || form.certInfo.days_left <= 0
+  if (form.certInfo == null) return true
+  // 后端 expired 是权威有效期判据；days_left 向零截断，0 仍可能表示不足 24 小时的有效证书。
+  return form.certInfo.expired ?? form.certInfo.days_left < 0
 }
 
 interface AdminTlsPendingState {

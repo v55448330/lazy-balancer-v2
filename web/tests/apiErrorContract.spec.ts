@@ -313,7 +313,7 @@ const NON_ENVELOPE_SITES: Record<string, number> = {
   'internal/handlers/system.go#GetSystemMetrics#call:systemInternalFailure': 1,
   'internal/handlers/system.go#GetRealtimeTraffic#call:systemInternalFailure': 1,
   'internal/handlers/system.go#GetConnectionStats#call:systemInternalFailure': 1,
-  'internal/handlers/system.go#GetAppLogs#call:systemInternalFailure': 5,
+  'internal/handlers/system.go#GetAppLogs#call:systemInternalFailure': 4,
   'internal/middleware/middleware.go#SetupRouter#literal:gin.H': 1,
 }
 

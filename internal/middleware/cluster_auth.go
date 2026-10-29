@@ -69,16 +69,15 @@ func registrationAuth(database *sql.DB) gin.HandlerFunc {
 }
 
 // bearerToken 从 Authorization 头提取 Bearer 令牌（单源：clusterTokenAuth /
-// registrationAuth / jwtAuth / 凭据指纹共用）。
+// registrationAuth / jwtAuth / 凭据指纹共用；API Key 传输由 apikey 包按同一
+// Fields 口径解析）。
 //
 // RFC 7235 §2.1：auth-scheme 大小写不敏感——"bearer x" / "BEARER x" 与
-// "Bearer x" 等价；此前按精确前缀匹配会把小写 scheme 的手写客户端/第三方
-// 集成拒为「认证格式无效」（错误指向令牌格式，误导排障方向）。裸 token（无
-// scheme）与空令牌仍一律返回 ""（由调用方按既有契约拒绝）。
+// "Bearer x" 等价；方案与凭据按字段归一，拒绝裸 token、空令牌与额外字段。
 func bearerToken(authorization string) string {
-	scheme, token, found := strings.Cut(authorization, " ")
-	if !found || !strings.EqualFold(scheme, "Bearer") {
+	fields := strings.Fields(authorization)
+	if len(fields) != 2 || !strings.EqualFold(fields[0], "Bearer") {
 		return ""
 	}
-	return strings.TrimSpace(token)
+	return fields[1]
 }

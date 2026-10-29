@@ -105,6 +105,10 @@ func TestGetSystemTaskHistory_mapsCertJobRowToRunRecord(t *testing.T) {
 	if run.DurationMs != 5000 {
 		t.Fatalf("duration_ms=%d, want 5000", run.DurationMs)
 	}
+	recorder, response = getTaskHistory(t, h.GetSystemTaskHistory, "cert-job:%20"+strconv.FormatInt(jobID, 10))
+	if recorder.Code != http.StatusOK || len(response.Data.Runs) != 1 {
+		t.Fatalf("trimmed ID status=%d runs=%d, want 200/1", recorder.Code, len(response.Data.Runs))
+	}
 }
 
 func TestGetSystemTaskHistory_certJobMissingAndInvalidIDs(t *testing.T) {

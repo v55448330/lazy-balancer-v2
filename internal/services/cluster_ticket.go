@@ -131,9 +131,9 @@ func (s *ClusterService) GenerateLoginTicket(ctx context.Context, claims models.
 		// 已批准但令牌待交付：与「不存在」（404）区分，见 ErrNodeTokenPending。
 		return models.ClusterLoginTicketResponse{}, ErrNodeTokenPending
 	}
-	// 已批准但从未上报/已离线与「节点不存在
-	// 或未审批」是两类问题——前者 handler 映射 409 + 「确认从节点在线后重试」，
-	// 后者维持 404。keyHash 为空（从未取得集群令牌）仍按不存在处理。
+	// 已批准节点按令牌与在线状态分三类：未交付令牌已在上方返回
+	// ErrNodeTokenPending；此处仅处理已交付令牌后的离线判定（409），
+	// 未审批/不存在仍在上方按 ErrNodeNotFound（404）处理。
 	if ComputeNodeStatus(approved, lastSeen.Time, syncInterval, now) != "online" {
 		return models.ClusterLoginTicketResponse{}, ErrNodeOffline
 	}

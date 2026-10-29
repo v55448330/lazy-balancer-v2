@@ -77,3 +77,32 @@ func TestRemoveRuleLogFiles_absentRuleIsSuccess(t *testing.T) {
 		t.Fatalf("不存在的规则日志应返回 nil: %v", err)
 	}
 }
+
+// 认领与删除必须覆盖同一文件族：外来 logrotate 可留下任意代次及压缩后缀，
+// 不能只认 .1..5 就让清理摘要把仍在盘上的副本报成已收敛。
+func TestRemoveRuleLogFiles_removesAllRecognizedShiftRotations(t *testing.T) {
+	dir := t.TempDir()
+	t.Cleanup(SetRuleLogDirForTest(dir))
+	removed := []string{"lb_legacy.log.12", "lb_legacy.log.3.gz", "lb_legacy.log.4.zst"}
+	for _, name := range removed {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("old"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	const sibling = "lb_legacy_other.log.12.gz"
+	if err := os.WriteFile(filepath.Join(dir, sibling), []byte("keep"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := RemoveRuleLogFiles("lb_legacy"); err != nil {
+		t.Fatalf("remove recognized rotations: %v", err)
+	}
+	for _, name := range removed {
+		if _, err := os.Stat(filepath.Join(dir, name)); !os.IsNotExist(err) {
+			t.Fatalf("recognized rotation %s remains: %v", name, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(dir, sibling)); err != nil {
+		t.Fatalf("sibling rule log must remain: %v", err)
+	}
+}

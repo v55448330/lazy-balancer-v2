@@ -13,7 +13,7 @@ import {
   TRIGGERED_FAMILY_SEGMENTS,
   serializeTriggeredFilter,
 } from '../src/utils/triggeredFilter.ts'
-import { code, repoCode, section } from './_helpers.ts'
+import { code, openTags, repoCode, section } from './_helpers.ts'
 
 test('空选 = 不过滤（不发 rule_triggered）', () => {
   assert.equal(serializeTriggeredFilter([]), null)
@@ -94,7 +94,11 @@ test('事件页「全选」是并集语义：保留自定义规则 ID（不得�
   // 替换语义（checked ? [...八类] : []），半选态点「全选」会把自定义 tag 丢掉，
   // 筛选结果集被改写而界面只表现为「勾上了全选」。
   const page = code('src/views/security/SecurityEvents.vue')
-  assert.match(page, /v-model="filters\.rule_triggered"[\s\S]{0,400}allow-create/, '该筛选必须允许自定义 tag（本用例的前提）')
+  // allow-create 必须落在绑定 `filters.rule_triggered` 的**同一个** el-select 上：
+  // 距离窗口（≤400 字符）会把页面别处的另一个 el-select 的 allow-create 算进来。
+  const triggerSelect = openTags(page, 'el-select').find((tag) => tag.includes('v-model="filters.rule_triggered"'))
+  assert.ok(triggerSelect !== undefined, '触发阶段筛选项必须绑定 filters.rule_triggered')
+  assert.match(triggerSelect, /\sallow-create(?:\s|\/?>)/, '该筛选必须允许自定义 tag（本用例的前提）')
   const toggle = section(page, 'const toggleTriggeredAll = (checked: CheckboxValueType) => {', '\n}')
   assert.match(
     toggle,

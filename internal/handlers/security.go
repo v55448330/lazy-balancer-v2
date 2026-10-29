@@ -3936,6 +3936,12 @@ func formatIP2RegionLocation(region string) string {
 // 各消费面必须逐点相等，否则会出现「入口不排、出口才排」的配额挤占）。
 func isReservedIP(ip string) bool { return services.IsReservedClientIP(ip) }
 
+// isMissingOrReservedIP 统一威胁事件消费面的无地址/保留地址过滤：
+// 空串与纯空白不是可归属的真实来源，且不得绕过保留地址排除口径。
+func isMissingOrReservedIP(ip string) bool {
+	return strings.TrimSpace(ip) == "" || isReservedIP(ip)
+}
+
 // ruleTriggeredFamilyPrefixes 触发规则筛选的 family 标签 → ID 精确值集合
 // （单 ID 族全部由 legacyRuleFamilies 派生——族归属只有一处定义；
 // 「WAF 规则（CRS）」为复合 GLOB 条件单独处理，不在此表；「自定义规则」无

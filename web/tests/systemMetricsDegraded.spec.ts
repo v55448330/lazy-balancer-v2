@@ -45,8 +45,9 @@ test('资源卡进度行为：正常值、超限封顶、降级与不限额隐�
   assert.equal(metricProgressPercent(41.2, false), 41.2)
   assert.equal(metricProgressPercent(122, false), 100, '普通资源进度条只在视觉层封顶')
   assert.equal(metricProgressPercent(0, true), null, '采集失败不得继续画 0% 进度条')
-  assert.equal(pidsProgressPercent(57.8, 4096, false), 57.8)
-  assert.equal(pidsProgressPercent(122, 4096, false), 100)
+  // pids 进度条的「正常值原样 / 超限封顶」判据只在下方「进程配额展示函数」用例里
+  // 断言一次（那里与 pidsPercentLabel 同入参对照，才说明「文本保留超限、进度条封顶」）；
+  // 此处只留 pids 的两条 null 臂，避免同一封顶路径维护两份。
   assert.equal(pidsProgressPercent(12, 0, false), null, '不限额不画进度')
   assert.equal(pidsProgressPercent(12, 4096, true), null, 'pids 采集失败不画进度')
 })

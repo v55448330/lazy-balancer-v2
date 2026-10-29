@@ -312,7 +312,7 @@ func TestPruneAutoBackups_trimsSuccessByKeepAndFailedAtTwenty(t *testing.T) {
 	}
 
 	// When
-	pruneAutoBackups(dir, 2, 20)
+	pruneAutoBackups(context.Background(), dir, 2, 20)
 
 	// Then: success 仅留最新 2 个(文件+行同删)
 	rows := autoBackupRows(t, "WHERE status='success' ORDER BY created_at DESC")
@@ -458,14 +458,14 @@ func TestLoadAutoBackupKeepSetting_outOfRangeFallsBack(t *testing.T) {
 		if _, err := db.DB.Exec(`UPDATE global_config SET auto_backup_keep=? WHERE id=1`, stored); err != nil {
 			t.Fatal(err)
 		}
-		if got, known := loadAutoBackupKeepSetting(); !known || got != 7 {
+		if got, known := loadAutoBackupKeepSetting(context.Background()); !known || got != 7 {
 			t.Fatalf("stored keep=%d loaded=%d known=%v, want fallback 7 (known)", stored, got, known)
 		}
 	}
 	if _, err := db.DB.Exec(`UPDATE global_config SET auto_backup_keep=30 WHERE id=1`); err != nil {
 		t.Fatal(err)
 	}
-	if got, known := loadAutoBackupKeepSetting(); !known || got != 30 {
+	if got, known := loadAutoBackupKeepSetting(context.Background()); !known || got != 30 {
 		t.Fatalf("stored keep=30 loaded=%d known=%v, want 30 (known)", got, known)
 	}
 }
@@ -497,7 +497,7 @@ func TestLoadAutoBackupSectionsSetting_normalizesLegacyKeys(t *testing.T) {
 	if _, err := db.DB.Exec(`UPDATE global_config SET auto_backup_sections='["users","global_config","rules","waf_files","security"]' WHERE id=1`); err != nil {
 		t.Fatal(err)
 	}
-	got, err := loadAutoBackupSectionsSetting()
+	got, err := loadAutoBackupSectionsSetting(context.Background())
 	if err != nil {
 		t.Fatalf("load legacy sections: %v", err)
 	}
@@ -1047,11 +1047,16 @@ func TestRunAutoBackupOnce_prunesToKeepSetting(t *testing.T) {
 	}
 
 	// When: keep=1 下连跑两次(同秒冲突由文件名 -2 后缀消化)
-	if _, err := h.RunAutoBackupOnce(context.Background(), "schedule", "system", 0); err != nil {
+	firstRun, err := h.RunAutoBackupOnce(context.Background(), "schedule", "system", 0)
+	if err != nil {
 		t.Fatalf("first run: %v", err)
 	}
-	if _, err := h.RunAutoBackupOnce(context.Background(), "schedule", "system", 0); err != nil {
+	secondRun, err := h.RunAutoBackupOnce(context.Background(), "schedule", "system", 0)
+	if err != nil {
 		t.Fatalf("second run: %v", err)
+	}
+	if firstRun.Filename == "" || secondRun.Filename == "" {
+		t.Fatalf("filename 缺失: first=%q second=%q", firstRun.Filename, secondRun.Filename)
 	}
 
 	// Then: 仅最新 1 个 success 行与文件幸存
@@ -1064,8 +1069,14 @@ func TestRunAutoBackupOnce_prunesToKeepSetting(t *testing.T) {
 	if err != nil || len(matches) != 1 || filepath.Base(matches[0]) != survivor {
 		t.Fatalf("success files=%v err=%v, want exactly survivor %s", matches, err, survivor)
 	}
-	if !strings.HasSuffix(survivor, "-2.lbbak") {
-		t.Fatalf("keep=1 幸存者=%q, want 第二次执行的 -2 文件（不是较旧首轮）", survivor)
+	// 幸存者必须是「第二次执行」产出的那个文件，而不是较旧的首轮。
+	// 不钉 "-2" 后缀：两轮是否落在同一秒取决于运行机器负载（全量包测试下
+	// 跨秒是常态），按后缀断言会变成时间相关的假红；这里按执行序等价判定。
+	if survivor != secondRun.Filename {
+		t.Fatalf("keep=1 幸存者=%q, want 第二次执行产出 %q（首轮为 %q）", survivor, secondRun.Filename, firstRun.Filename)
+	}
+	if survivor == firstRun.Filename {
+		t.Fatalf("keep=1 幸存者回落到首轮文件 %q（应保留最新一次）", survivor)
 	}
 	// failed 行按 20 上限一并裁剪
 	var failed int
@@ -1112,13 +1123,13 @@ func TestPruneAutoBackups_fileRemovalOutcomes(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, filename := range []string{blocked, missing, normal} {
-		if _, err := insertAutoBackupRow(filename, "success", 128, `["users"]`, "manual", "", "v9.9.9-test"); err != nil {
+		if _, err := insertAutoBackupRow(context.Background(), filename, "success", 128, `["users"]`, "manual", "", "v9.9.9-test"); err != nil {
 			t.Fatal(err)
 		}
 	}
 
 	// When
-	pruneAutoBackups(dir, 0, 20)
+	pruneAutoBackups(context.Background(), dir, 0, 20)
 
 	// Then:删除失败的行保留下轮重试;缺失/正常删除的行照常清除
 	if rows := autoBackupRows(t, "WHERE filename=?", blocked); len(rows) != 1 {
@@ -1356,7 +1367,7 @@ func TestNextAutoBackupFilename_statFailureIsNotAvailable(t *testing.T) {
 	now := time.Date(2026, 10, 18, 12, 0, 0, 0, time.Local)
 
 	// When/Then 非 NotExist 的 Stat 错误必须 fail-visible。
-	if _, err := nextAutoBackupFilename(notDirectory, "auto", now); err == nil || !strings.Contains(err.Error(), "检查备份文件名") {
+	if _, err := nextAutoBackupFilename(context.Background(), notDirectory, "auto", now); err == nil || !strings.Contains(err.Error(), "检查备份文件名") {
 		t.Fatalf("err=%v, want explicit stat failure", err)
 	}
 }
@@ -1368,7 +1379,7 @@ func TestNextAutoBackupFilename_errorsWhenAllVariantsTaken(t *testing.T) {
 	now := time.Date(2026, 10, 18, 12, 0, 0, 0, time.Local)
 	base := "lbbak-auto-" + now.Format("20060102-150405")
 
-	name, err := nextAutoBackupFilename(h.cfg.BackupDir, "auto", now)
+	name, err := nextAutoBackupFilename(context.Background(), h.cfg.BackupDir, "auto", now)
 	if err != nil {
 		t.Fatalf("empty dir must allocate: %v", err)
 	}
@@ -1385,7 +1396,7 @@ func TestNextAutoBackupFilename_errorsWhenAllVariantsTaken(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := nextAutoBackupFilename(h.cfg.BackupDir, "auto", now); err == nil {
+	if _, err := nextAutoBackupFilename(context.Background(), h.cfg.BackupDir, "auto", now); err == nil {
 		t.Fatal("exhausted variants must return error instead of reusing an existing name")
 	}
 }
@@ -1397,7 +1408,7 @@ func TestNextAutoBackupFilename_skipsFilenameReservedByDatabaseRow(t *testing.T)
 	if _, err := db.DB.Exec(`INSERT INTO auto_backups (filename,status,trigger_type) VALUES (?,'success','schedule')`, base+".lbbak"); err != nil {
 		t.Fatal(err)
 	}
-	name, err := nextAutoBackupFilename(h.cfg.BackupDir, "auto", now)
+	name, err := nextAutoBackupFilename(context.Background(), h.cfg.BackupDir, "auto", now)
 	if err != nil {
 		t.Fatal(err)
 	}

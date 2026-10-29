@@ -18,9 +18,7 @@ func TestCRSUpdateManager_liveDirFollowsConfiguredWafDirs(t *testing.T) {
 		t.Fatalf("liveDir()=%q, want 全局 crsLiveDir=%q", got, crsLiveDir)
 	}
 	late := filepath.Join(t.TempDir(), "late-waf", "crs")
-	old := crsLiveDir
-	crsLiveDir = late
-	t.Cleanup(func() { crsLiveDir = old })
+	t.Cleanup(OverrideWafLivePathsForTest(late, ip2regionLivePath))
 	if got := m.liveDir(); got != late {
 		t.Fatalf("构造后改 ConfigureWafDirs 必须立即生效: liveDir()=%q want %q", got, late)
 	}

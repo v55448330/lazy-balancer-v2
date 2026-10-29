@@ -226,8 +226,12 @@ func TestLoadOrCreateAccountKey_fails_closed_on_unparseable_key(t *testing.T) {
 			if string(got) != string(tc.content) {
 				t.Fatalf("key file was overwritten: got %q, want original %q", got, tc.content)
 			}
-			if _, statErr := os.Stat(keyPath + ".tmp"); !os.IsNotExist(statErr) {
-				t.Fatalf("leftover tmp file after failed load: %v", statErr)
+			leftovers, globErr := filepath.Glob(filepath.Join(filepath.Dir(keyPath), "."+filepath.Base(keyPath)+"-*.tmp"))
+			if globErr != nil {
+				t.Fatal(globErr)
+			}
+			if len(leftovers) != 0 {
+				t.Fatalf("leftover tmp files after failed load: %v", leftovers)
 			}
 		})
 	}

@@ -62,6 +62,21 @@ func TestGetConfig_omits_retiredGlobalDNSCredentials(t *testing.T) {
 	}
 }
 
+func TestGetConfigOmitsRetiredGlobalDNSProvider(t *testing.T) {
+	h := newBackupTestHandlers(t)
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodGet, "/config", nil)
+	h.GetConfig(c)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if strings.Contains(recorder.Body.String(), `"dns_provider"`) {
+		t.Fatalf("response contains retired dns_provider: %s", recorder.Body.String())
+	}
+}
+
 // 设置页读路径 SQL 默认值字面量是治理默认值的第三次复制
 // （DDL DEFAULT+启动回填+此处）——改参数绑定 db.Default* 常量后，本扫描钉
 // 防字面量回流：GetConfig 函数体内治理列名旁不得再出现写死默认值字面量。

@@ -14,7 +14,7 @@ func TestReleaseRateLimitReservation_ignoresStaleWindow(t *testing.T) {
 
 	base := time.Now()
 	const ip, scope, limit = "198.51.100.9", "generation-probe", 10
-	oldBucket, oldGeneration, ok := reserveRateLimitBucket(ip, scope, base, limit)
+	oldBucket, oldGeneration, ok, _ := reserveRateLimitBucket(ip, scope, base, limit)
 	if !ok {
 		t.Fatal("首轮预占应放行")
 	}
@@ -23,7 +23,7 @@ func TestReleaseRateLimitReservation_ignoresStaleWindow(t *testing.T) {
 	}
 
 	// When 跨窗：同一桶被新一轮请求重置并重新计数
-	newBucket, newGeneration, ok := reserveRateLimitBucket(ip, scope, base.Add(2*time.Minute), limit)
+	newBucket, newGeneration, ok, _ := reserveRateLimitBucket(ip, scope, base.Add(2*time.Minute), limit)
 	if !ok {
 		t.Fatal("新窗口预占应放行")
 	}
@@ -50,12 +50,29 @@ func TestReleaseRateLimitReservation_ignoresStaleWindow(t *testing.T) {
 	}
 
 	// 失败语义（401）保留额度——同窗口
-	keptBucket, keptGeneration, ok := reserveRateLimitBucket(ip, scope, base.Add(3*time.Minute), limit)
+	keptBucket, keptGeneration, ok, _ := reserveRateLimitBucket(ip, scope, base.Add(3*time.Minute), limit)
 	if !ok {
 		t.Fatal("新窗口预占应放行")
 	}
 	releaseRateLimitReservation(keptBucket, keptGeneration, true)
 	if keptBucket.count != 1 {
 		t.Fatalf("失败请求不得回滚预占：count=%d, want 1", keptBucket.count)
+	}
+}
+
+func TestReserveRateLimitBucket_computesRetryAfterWithRejection(t *testing.T) {
+	withIsolatedRateLimitBuckets(t)
+	now := time.Now()
+	const ip, scope = "198.51.100.10", "retry-after-atomic"
+	loginRateBuckets.Lock()
+	loginRateBuckets.entries[ip+"|"+scope] = &loginRateBucket{count: 1, until: now.Add(17 * time.Second)}
+	loginRateBuckets.Unlock()
+
+	_, _, allowed, retryAfter := reserveRateLimitBucket(ip, scope, now, 1)
+	if allowed {
+		t.Fatal("bucket at its limit must reject the reservation")
+	}
+	if retryAfter != 17 {
+		t.Fatalf("Retry-After=%d, want 17 from the rejection critical section", retryAfter)
 	}
 }

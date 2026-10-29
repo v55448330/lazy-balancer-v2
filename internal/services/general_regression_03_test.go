@@ -532,7 +532,7 @@ func TestRenewalScan_logsWhenQueueInactive(t *testing.T) {
 }
 
 func TestIPListTempFileName_forms(t *testing.T) {
-	for _, name := range []string{"u-deny-123.tmp", "u-deny-lb_x-987.tmp", "p12-acl-55.tmp", "p12-acl-deadbeef1234-55.tmp", "tp-42.tmp"} {
+	for _, name := range []string{".u-deny.txt-123.tmp", ".u-deny-lb_x.txt-987.tmp", ".p12-acl.txt-55.tmp", ".p12-acl-deadbeef1234.txt-55.tmp", ".tp.txt-42.tmp"} {
 		if !ipListTempFileName.MatchString(name) {
 			t.Fatalf("投影临时文件 %q 应命中 GC regex", name)
 		}

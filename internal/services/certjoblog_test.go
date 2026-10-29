@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log"
@@ -24,7 +25,7 @@ func useCertJobLogTestEnv(t *testing.T, thresholdBytes int64) {
 	taskengine.SetLogDir(filepath.Join(t.TempDir(), "logs", "tasks"))
 	// 阈值注入缝直接替换 taskengine 的读取函数，绕过 getTaskLogSizeBytes/缓存
 	// （后缓存内部结构不可直接写入；本注入缝已完全覆盖阈值取值）。
-	taskengine.SetTaskLogSizeBytesFn(func() int64 { return thresholdBytes })
+	taskengine.SetTaskLogSizeBytesFn(func(context.Context) int64 { return thresholdBytes })
 	t.Cleanup(func() {
 		taskengine.SetLogDir(oldDir)
 		taskengine.SetTaskLogSizeBytesFn(nil)

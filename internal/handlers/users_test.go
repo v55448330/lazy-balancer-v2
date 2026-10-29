@@ -707,3 +707,41 @@ func TestToggleUserStatus_sameValueDoesNotRevokeSessionsOrChallenges(t *testing.
 		})
 	}
 }
+
+func TestDeleteUser_oidcResponseExplainsRebindAndDisableAlternative(t *testing.T) {
+	h := newBackupTestHandlers(t)
+	seedUserAuditTest(t, 1, "admin", "admin", true)
+	if _, err := db.DB.Exec(`INSERT INTO users (id,username,password_hash,role,is_enabled,auth_provider,oidc_subject,oidc_issuer)
+		VALUES (7,'sso-user','','user',1,'oidc','sub-7','https://idp.example.com')`); err != nil {
+		t.Fatal(err)
+	}
+
+	response := serveUserMutation(h, http.MethodDelete, "/users/7", "", 1, h.DeleteUser)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200", response.Code, response.Body.String())
+	}
+	for _, want := range []string{"重新开户", "禁用"} {
+		if !strings.Contains(response.Body.String(), want) {
+			t.Fatalf("delete response=%s, want recovery/rebind hint containing %q", response.Body.String(), want)
+		}
+	}
+}
+
+func TestToggleUserStatus_oidcDisableResponseExplainsRestore(t *testing.T) {
+	h := newBackupTestHandlers(t)
+	seedUserAuditTest(t, 1, "admin", "admin", true)
+	if _, err := db.DB.Exec(`INSERT INTO users (id,username,password_hash,role,is_enabled,auth_provider,oidc_subject,oidc_issuer)
+		VALUES (7,'sso-user','','user',1,'oidc','sub-7','https://idp.example.com')`); err != nil {
+		t.Fatal(err)
+	}
+
+	response := serveUserMutation(h, http.MethodPut, "/users/7", `{"is_enabled":false}`, 1, h.ToggleUserStatus)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200", response.Code, response.Body.String())
+	}
+	for _, want := range []string{"重新启用", "原身份"} {
+		if !strings.Contains(response.Body.String(), want) {
+			t.Fatalf("disable response=%s, want restore hint containing %q", response.Body.String(), want)
+		}
+	}
+}

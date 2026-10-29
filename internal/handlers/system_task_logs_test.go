@@ -132,3 +132,52 @@ func TestParseCertJobTaskID_shapesUnified(t *testing.T) {
 		}
 	}
 }
+
+// 关停窗口在「判定句柄」与「执行查询」之间置 nil 时，两条任务日志
+// 路径都必须继续使用同一局部快照，不得二次解引用包级 db.DB。
+func TestSystemTaskLogPaths_snapshotHandleAcrossShutdown(t *testing.T) {
+	newBackupTestHandlers(t)
+	if _, err := db.DB.Exec(`INSERT INTO cert_jobs (rule_id,domain,status) VALUES ('lb_shutdown','shutdown.example','queued')`); err != nil {
+		t.Fatal(err)
+	}
+	database := db.DB
+	previous := beforeSystemTaskLogDBQuery
+	t.Cleanup(func() {
+		beforeSystemTaskLogDBQuery = previous
+		db.DB = database
+		db.SetDB(database)
+	})
+	cases := []struct {
+		name string
+		read func() (string, error)
+	}{
+		{name: "resolver", read: func() (string, error) {
+			resolver := &systemTaskLogPathResolver{}
+			return resolver.resolve("cert-job:1")
+		}},
+		{name: "single", read: func() (string, error) { return systemTaskLogPath("cert-job:1") }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			db.DB = database
+			called := false
+			beforeSystemTaskLogDBQuery = func() {
+				called = true
+				db.DB = nil
+			}
+			defer func() {
+				beforeSystemTaskLogDBQuery = previous
+				if recovered := recover(); recovered != nil {
+					t.Fatalf("shutdown interleaving panic: %v", recovered)
+				}
+			}()
+			path, err := tc.read()
+			if !called {
+				t.Fatal("shutdown interleaving hook was not exercised")
+			}
+			if err != nil || path != services.CertJobLogPath("lb_shutdown") {
+				t.Fatalf("path=%q err=%v", path, err)
+			}
+		})
+	}
+}

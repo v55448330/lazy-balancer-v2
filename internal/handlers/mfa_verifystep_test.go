@@ -14,6 +14,7 @@ import (
 	"lazy-balancer-v2/internal/services"
 
 	"github.com/gin-gonic/gin"
+	jwt "github.com/golang-jwt/jwt/v5"
 	"github.com/pquerna/otp"
 	"github.com/pquerna/otp/totp"
 )
@@ -172,5 +173,51 @@ func TestMFAVerifyStep_preservesAuthProvider(t *testing.T) {
 	}
 	if !strings.Contains(payload.Token, ".") {
 		t.Fatalf("token=%q 不是 JWT", payload.Token)
+	}
+}
+
+func TestMFAVerifyStep_preservesCurrentSessionAuthMethod(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		currentMethod string
+		wantMethod    any
+	}{
+		{name: "local password session on imported mixed row", currentMethod: "", wantMethod: nil},
+		{name: "legitimate OIDC session", currentMethod: "oidc", wantMethod: "oidc"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newBackupTestHandlers(t)
+			h.cfg.JWTSecret = "test-secret"
+			secret := seedMfaVerifyStepUser(t)
+			if _, err := db.DB.Exec("UPDATE users SET auth_provider='oidc' WHERE id=1"); err != nil {
+				t.Fatal(err)
+			}
+			router := gin.New()
+			router.POST("/auth/mfa/verify-step", func(c *gin.Context) {
+				c.Set("user_id", 1)
+				c.Set("username", "operator")
+				c.Set("auth_type", "jwt")
+				if tc.currentMethod != "" {
+					c.Set("auth_method", tc.currentMethod)
+				}
+				h.MFAVerifyStep(c)
+			})
+			recorder := postMfaVerifyStep(router, fmt.Sprintf(`{"code":%q}`, currentTOTPCode(t, secret)))
+			if recorder.Code != http.StatusOK {
+				t.Fatalf("status=%d body=%s, want 200", recorder.Code, recorder.Body.String())
+			}
+			var payload models.LoginResponse
+			if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+				t.Fatal(err)
+			}
+			parsed, err := jwt.Parse(payload.Token, func(token *jwt.Token) (any, error) { return []byte("test-secret"), nil })
+			if err != nil || !parsed.Valid {
+				t.Fatalf("parse step-up token: %v", err)
+			}
+			claims := parsed.Claims.(jwt.MapClaims)
+			if got := claims["auth_method"]; got != tc.wantMethod {
+				t.Fatalf("auth_method=%v, want %v (current session method %q)", got, tc.wantMethod, tc.currentMethod)
+			}
+		})
 	}
 }

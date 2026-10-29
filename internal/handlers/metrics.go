@@ -222,6 +222,15 @@ func loadCaddyMetricsSnapshot(ctx context.Context, url string, cacheFailure bool
 	return result.body, result.err
 }
 
+// caddyMetricsSnapshot 读取当前配置的指标快照。未注入 cfg 的嵌入/测试
+// 装配形态返回可解析的零值样本，而不是裸解引用 panic。
+func (h *Handlers) caddyMetricsSnapshot(ctx context.Context, cacheFailure bool) ([]byte, error) {
+	if h.cfg == nil {
+		return []byte("caddy_http_requests_total 0\n"), nil
+	}
+	return loadCaddyMetricsSnapshot(ctx, h.cfg.CaddyMetricsURL, cacheFailure)
+}
+
 // resetMetricsDashboardCacheForTest 测试缝：清空面板缓存与共享抓取快照
 // （生产不调用；两者同属指标读路径，隔离必须同步，否则跨用例读到上一夹具
 // 的抓取字节）。
@@ -296,7 +305,7 @@ func storeMetricsDashboardOutcome(url string, outcome metricsDashboardOutcome, n
 }
 
 func (h *Handlers) buildMetricsDashboard(ctx context.Context) metricsDashboardOutcome {
-	body, err := loadCaddyMetricsSnapshot(ctx, h.cfg.CaddyMetricsURL, false)
+	body, err := h.caddyMetricsSnapshot(ctx, false)
 	if err != nil {
 		services.Logf("warn", "采集 Caddy 指标失败: %v", err)
 		return metricsDashboardOutcome{status: http.StatusBadGateway, message: "采集 Caddy 指标失败"}
@@ -313,7 +322,11 @@ func (h *Handlers) buildMetricsDashboard(ctx context.Context) metricsDashboardOu
 		listenPort           int
 		enableTLS, enabled   bool
 	}
-	ruleRows, err := db.DB.QueryContext(ctx, `
+	database := db.DB
+	if database == nil {
+		return metricsDashboardOutcome{status: http.StatusInternalServerError, message: "读取规则指标配置失败"}
+	}
+	ruleRows, err := database.QueryContext(ctx, `
 		SELECT caddy_id, COALESCE(domain,''), listen_port, COALESCE(protocol,''), COALESCE(enable_tls,0), IIF(enabled IN ('1',1),1,0)
 		FROM lb_rules ORDER BY caddy_id`)
 	if err != nil {
@@ -335,7 +348,7 @@ func (h *Handlers) buildMetricsDashboard(ctx context.Context) metricsDashboardOu
 		return metricsDashboardOutcome{status: http.StatusInternalServerError, message: "读取规则指标配置失败"}
 	}
 
-	upstreamRows, err := db.DB.QueryContext(ctx, `
+	upstreamRows, err := database.QueryContext(ctx, `
 		SELECT rule_id, COALESCE(host,''), COALESCE(port,0), COALESCE(enabled,0)
 		FROM upstreams u WHERE `+services.UpstreamEnabledSQLPredicate)
 	if err != nil {
@@ -393,7 +406,12 @@ func (h *Handlers) GetRuleMetrics(c *gin.Context) {
 	ruleID := c.Param("caddy_id")
 
 	var rule models.LbRule
-	err := db.DB.QueryRow(`SELECT COALESCE(domain,''), listen_port, COALESCE(protocol,''), COALESCE(enable_tls,0) FROM lb_rules WHERE caddy_id = ?`, ruleID).Scan(
+	database := db.DB
+	if database == nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "数据库未初始化"})
+		return
+	}
+	err := database.QueryRowContext(c.Request.Context(), `SELECT COALESCE(domain,''), listen_port, COALESCE(protocol,''), COALESCE(enable_tls,0) FROM lb_rules WHERE caddy_id = ?`, ruleID).Scan(
 		&rule.Domain, &rule.ListenPort, &rule.Protocol, &rule.EnableTLS)
 	// 错误分类走 dbQueryNotFound 单源（errors.Is 支持 %w 包装）——此前直接
 	// 比较 sql.ErrNoRows 并与 500 共用「数据库错误」，包装过的 ErrNoRows 会被
@@ -402,7 +420,7 @@ func (h *Handlers) GetRuleMetrics(c *gin.Context) {
 		return
 	}
 
-	body, err := loadCaddyMetricsSnapshot(c.Request.Context(), h.cfg.CaddyMetricsURL, true)
+	body, err := h.caddyMetricsSnapshot(c.Request.Context(), true)
 	if err != nil {
 		caddyMetricsError(c, err)
 		return
@@ -411,7 +429,7 @@ func (h *Handlers) GetRuleMetrics(c *gin.Context) {
 	var metrics gin.H
 	var parseErr error
 	if rule.Protocol == "tcp" {
-		upstreams, err := loadRuleUpstreams(ruleID)
+		upstreams, err := loadRuleUpstreams(c.Request.Context(), ruleID)
 		if err != nil {
 			writeInternalError(c, http.StatusInternalServerError, "读取规则上游失败", err)
 			return
@@ -518,7 +536,12 @@ func metricsHistoryRange(value string) (string, int, int) {
 func (h *Handlers) GetRuleMetricsHistory(c *gin.Context) {
 	caddyID := c.Param("caddy_id")
 	var protocol string
-	if err := db.DB.QueryRow("SELECT COALESCE(protocol,'') FROM lb_rules WHERE caddy_id = ?", caddyID).Scan(&protocol); dbQueryNotFound(c, err, "规则不存在", "GetRuleMetricsHistory query rule") {
+	database := db.DB
+	if database == nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "数据库未初始化"})
+		return
+	}
+	if err := database.QueryRowContext(c.Request.Context(), "SELECT COALESCE(protocol,'') FROM lb_rules WHERE caddy_id = ?", caddyID).Scan(&protocol); dbQueryNotFound(c, err, "规则不存在", "GetRuleMetricsHistory query rule") {
 		return
 	}
 	if protocol != "http" {
@@ -526,14 +549,15 @@ func (h *Handlers) GetRuleMetricsHistory(c *gin.Context) {
 		return
 	}
 	modifier, bucketSeconds, bucketCount := metricsHistoryRange(c.DefaultQuery("range", "24h"))
-	if db.MetricsDB == nil {
+	metricsDB := db.MetricsDB
+	if metricsDB == nil {
 		// MetricsDB 未装配（单测/嵌入形态）不得
 		// nil-deref panic——对齐家族（GetIPEventCount/GetRuleStageStats）
 		// 返回空数据 200。
 		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"protocol": protocol, "supported": true, "bucket_interval_seconds": bucketSeconds, "rows": []any{}}})
 		return
 	}
-	rows, err := db.MetricsDB.Query(`
+	rows, err := metricsDB.QueryContext(c.Request.Context(), `
 		WITH ranked AS (
 			SELECT CAST(strftime('%s', timestamp) AS INTEGER) / ? AS bucket,
 			       requests_total, requests_2xx, requests_3xx, requests_4xx, requests_5xx, requests_blocked, bytes_in, bytes_out,
@@ -608,7 +632,8 @@ func (h *Handlers) GetMetricsHistory(c *gin.Context) {
 	var rows *sql.Rows
 	var err error
 
-	if db.MetricsDB == nil {
+	metricsDB := db.MetricsDB
+	if metricsDB == nil {
 		// 未装配形态返回空列表 `[]`（同
 		// 空结果形态），不得 nil-deref panic。
 		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: []any{}})
@@ -616,7 +641,7 @@ func (h *Handlers) GetMetricsHistory(c *gin.Context) {
 	}
 
 	if ruleID != "" {
-		rows, err = db.MetricsDB.Query(`
+		rows, err = metricsDB.QueryContext(c.Request.Context(), `
 			WITH ranked AS (
 				SELECT CAST(strftime('%s', timestamp) AS INTEGER) / ? AS bucket,
 				       requests_total, requests_2xx, requests_3xx, requests_4xx, requests_5xx, bytes_in, bytes_out,
@@ -633,7 +658,7 @@ func (h *Handlers) GetMetricsHistory(c *gin.Context) {
 			      FROM ranked WHERE sample_rank = 1 ORDER BY bucket DESC LIMIT ?) ORDER BY bucket
 		`, bucketSeconds, bucketSeconds, ruleID, interval, bucketSeconds, metricsHistoryBuckets)
 	} else {
-		rows, err = db.MetricsDB.Query(`
+		rows, err = metricsDB.QueryContext(c.Request.Context(), `
 			WITH per_ts AS (
 				SELECT timestamp, SUM(requests_total) AS requests_total, SUM(requests_2xx) AS requests_2xx,
 				       SUM(requests_3xx) AS requests_3xx, SUM(requests_4xx) AS requests_4xx,
@@ -705,7 +730,7 @@ func (h *Handlers) GetMetricsHistory(c *gin.Context) {
 }
 
 func (h *Handlers) GetCaddyMetrics(c *gin.Context) {
-	body, err := loadCaddyMetricsSnapshot(c.Request.Context(), h.cfg.CaddyMetricsURL, true)
+	body, err := h.caddyMetricsSnapshot(c.Request.Context(), true)
 	if err != nil {
 		caddyMetricsError(c, err)
 		return
@@ -720,7 +745,7 @@ func (h *Handlers) GetCaddyMetrics(c *gin.Context) {
 }
 
 func (h *Handlers) GetHostMetrics(c *gin.Context) {
-	body, err := loadCaddyMetricsSnapshot(c.Request.Context(), h.cfg.CaddyMetricsURL, true)
+	body, err := h.caddyMetricsSnapshot(c.Request.Context(), true)
 	if err != nil {
 		caddyMetricsError(c, err)
 		return
@@ -734,8 +759,12 @@ func (h *Handlers) GetHostMetrics(c *gin.Context) {
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: metrics})
 }
 
-func loadRuleUpstreams(ruleID string) ([]models.Upstream, error) {
-	rows, err := db.DB.Query(`
+func loadRuleUpstreams(ctx context.Context, ruleID string) ([]models.Upstream, error) {
+	database := db.DB
+	if database == nil {
+		return nil, fmt.Errorf("数据库未初始化")
+	}
+	rows, err := database.QueryContext(ctx, `
 		SELECT COALESCE(id,0), COALESCE(rule_id,''), COALESCE(host,''), COALESCE(port,0), COALESCE(weight,0),
 		       COALESCE(dynamic_dns,0), COALESCE(enabled,0), COALESCE(protocol,''),
 		       COALESCE(max_connections,0)

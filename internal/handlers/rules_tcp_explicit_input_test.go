@@ -118,6 +118,83 @@ func TestUpdateRule_tcpStoredHealthCheckHostSelfHeals(t *testing.T) {
 	}
 }
 
+// Given 同协议 TCP 编辑显式提交任一 HTTP-only 死字段。
+// When UpdateRule 保存。
+// Then 与 CreateRule 同口径 400 点名拒绝，不得先清零再返回 200。
+func TestUpdateRule_tcpExplicitHTTPOnlyFieldsRejected(t *testing.T) {
+	cases := []struct {
+		column string
+		value  string
+		want   string
+	}{
+		{column: "dynamic_dns", value: "true", want: "动态上游"},
+		{column: "custom_routes_enabled", value: "true", want: "自定义路径规则"},
+		{column: "proxy_dial_timeout", value: "1", want: "HTTP 代理超时"},
+		{column: "proxy_response_header_timeout", value: "1", want: "HTTP 代理超时"},
+		{column: "proxy_read_timeout", value: "1", want: "HTTP 代理超时"},
+		{column: "proxy_write_timeout", value: "1", want: "HTTP 代理超时"},
+		{column: "proxy_stream_timeout", value: "1", want: "HTTP 代理超时"},
+		{column: "proxy_flush_interval", value: "1", want: "HTTP 代理超时"},
+		{column: "proxy_stream_close_delay", value: "1", want: "HTTP 代理超时"},
+	}
+	for index, tc := range cases {
+		t.Run(tc.column, func(t *testing.T) {
+			handler, _, _ := newAuditRuleHandlers(t, 0)
+			caddyID := "lb_tcp_explicit_" + tc.column
+			seedTCPRuleForExplicitInput(t, caddyID, 18200+index, false, "weighted_round_robin", "")
+			_, put := newTCPRuleRouter(handler)
+
+			rec := put(caddyID, `{"`+tc.column+`":`+tc.value+`}`)
+			if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), tc.want) {
+				t.Fatalf("status=%d body=%s, want 400 包含 %q", rec.Code, rec.Body.String(), tc.want)
+			}
+			var stored int
+			if err := db.DB.QueryRow(`SELECT `+tc.column+` FROM lb_rules WHERE caddy_id=?`, caddyID).Scan(&stored); err != nil {
+				t.Fatalf("read rejected field: %v", err)
+			}
+			if stored != 0 {
+				t.Fatalf("%s=%d, want 原值 0（拒绝请求不得写库）", tc.column, stored)
+			}
+		})
+	}
+}
+
+// Given HTTP→TCP 协议切换同时显式提交 HTTP-only 字段。
+// When 协议切换分支执行死字段归一。
+// Then 显式值仍须留给保存门拒绝；只有未提交的存量值才自动清零。
+func TestUpdateRule_httpToTCPExplicitHTTPOnlyFieldsRejected(t *testing.T) {
+	cases := []struct {
+		name  string
+		value string
+		want  string
+	}{
+		{name: "dynamic_dns", value: "true", want: "动态上游"},
+		{name: "custom_routes_enabled", value: "true", want: "自定义路径规则"},
+		{name: "proxy_dial_timeout", value: "1", want: "HTTP 代理超时"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			handler, _, _ := newAuditRuleHandlers(t, 0)
+			caddyID := "lb_switch_explicit_" + tc.name
+			seedAuditRule(t, caddyID, "switch", "switch-"+tc.name+".example.test", 18300, false, "manual", false)
+			seedAuditUpstream(t, caddyID)
+			_, put := newTCPRuleRouter(handler)
+
+			rec := put(caddyID, `{"protocol":"tcp","`+tc.name+`":`+tc.value+`}`)
+			if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), tc.want) {
+				t.Fatalf("status=%d body=%s, want 400 包含 %q", rec.Code, rec.Body.String(), tc.want)
+			}
+			var protocol string
+			if err := db.DB.QueryRow(`SELECT protocol FROM lb_rules WHERE caddy_id=?`, caddyID).Scan(&protocol); err != nil {
+				t.Fatal(err)
+			}
+			if protocol != "http" {
+				t.Fatalf("protocol=%q, want 原值 http（拒绝请求不得写库）", protocol)
+			}
+		})
+	}
+}
+
 func seedPolicyAndBinding(t *testing.T, caddyID string) {
 	t.Helper()
 	result, err := db.DB.Exec(`INSERT INTO security_policies (name,policy_type,mode,enabled) VALUES ('tcp-binding-policy','stage1','blocking',1)`)

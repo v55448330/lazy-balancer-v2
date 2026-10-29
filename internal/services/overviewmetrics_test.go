@@ -329,6 +329,96 @@ func TestScrapeRateLimitBlocks_singleFlight(t *testing.T) {
 	}
 }
 
+// 作废旧代际后，旧抓取完成只能清理自己的单飞登记，不能摘掉新代际的
+// 在途调用；否则第三个请求会在新抓取尚未完成时重复抓 /metrics。
+func TestScrapeRateLimitBlocks_staleCompletionKeepsNewInflight(t *testing.T) {
+	resetOverviewMetricsCacheForTest()
+	oldTTL := overviewMetricsCacheTTL
+	overviewMetricsCacheTTL = 0
+	t.Cleanup(func() {
+		overviewMetricsCacheTTL = oldTTL
+		resetOverviewMetricsCacheForTest()
+	})
+
+	firstStarted := make(chan struct{})
+	secondStarted := make(chan struct{})
+	unexpectedThirdFetch := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	releaseSecond := make(chan struct{})
+	var firstRelease, secondRelease, thirdSignal sync.Once
+	releaseOld := func() { firstRelease.Do(func() { close(releaseFirst) }) }
+	releaseNew := func() { secondRelease.Do(func() { close(releaseSecond) }) }
+	t.Cleanup(releaseOld)
+	t.Cleanup(releaseNew)
+
+	var hits atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		switch hits.Add(1) {
+		case 1:
+			close(firstStarted)
+			<-releaseFirst
+		case 2:
+			close(secondStarted)
+			<-releaseSecond
+		default:
+			thirdSignal.Do(func() { close(unexpectedThirdFetch) })
+		}
+		_, _ = w.Write([]byte(rateLimit429MetricsFixture))
+	}))
+	t.Cleanup(server.Close)
+
+	firstDone := make(chan error, 1)
+	go func() {
+		_, err := ScrapeRateLimitBlocks(server.URL)
+		firstDone <- err
+	}()
+	waitForSignal(t, firstStarted, "旧代际抓取未开始")
+	InvalidateOverviewMetricsCache()
+
+	secondDone := make(chan error, 1)
+	go func() {
+		_, err := ScrapeRateLimitBlocks(server.URL)
+		secondDone <- err
+	}()
+	waitForSignal(t, secondStarted, "新代际抓取未开始")
+	releaseOld()
+	if err := <-firstDone; err != nil {
+		t.Fatalf("旧代际抓取返回错误: %v", err)
+	}
+
+	thirdWaiting := make(chan struct{})
+	oldHook := overviewMetricsWaiterHook
+	var waiterOnce sync.Once
+	overviewMetricsWaiterHook = func() { waiterOnce.Do(func() { close(thirdWaiting) }) }
+	t.Cleanup(func() { overviewMetricsWaiterHook = oldHook })
+	thirdDone := make(chan error, 1)
+	go func() {
+		_, err := ScrapeRateLimitBlocks(server.URL)
+		thirdDone <- err
+	}()
+
+	joinedNewCall := false
+	select {
+	case <-thirdWaiting:
+		joinedNewCall = true
+	case <-unexpectedThirdFetch:
+	case <-time.After(2 * time.Second):
+	}
+	releaseNew()
+	if err := <-secondDone; err != nil {
+		t.Fatalf("新代际抓取返回错误: %v", err)
+	}
+	if err := <-thirdDone; err != nil {
+		t.Fatalf("第三请求返回错误: %v", err)
+	}
+	if !joinedNewCall {
+		t.Fatal("旧代际完成删除了新代际登记，第三请求未加入既有单飞")
+	}
+	if got := hits.Load(); got != 2 {
+		t.Fatalf("抓取次数=%d, want 2（旧完成不得诱发第三次抓取）", got)
+	}
+}
+
 // host 标签归一是「带端口部署的规则限流计数恒 0」的修复载体：metrics 的
 // host 是原文 r.Host（可能带 :port / IPv6 方括号），lb_rules.domain 不带端口。
 func TestNormalizeMetricsHost(t *testing.T) {

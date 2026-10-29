@@ -1341,14 +1341,12 @@ func TestSyncService_Pull_refetchesFullSnapshotOnWafFileDrift(t *testing.T) {
 	masterXdb := filepath.Join(masterTree, "ip2region.xdb")
 	os.WriteFile(masterXdb, []byte("master-xdb-bytes"), 0644)
 
-	oldLive, oldXdb := crsLiveDir, ip2regionLivePath
-	crsLiveDir, ip2regionLivePath = filepath.Join(masterTree, "crs"), masterXdb
+	t.Cleanup(OverrideWafLivePathsForTest(filepath.Join(masterTree, "crs"), masterXdb))
 	ref := BuildWafFileRef()
 	bundle := BuildWafFileBundle()
 	// 模拟 apply 期失败后的从节点：本地文件树为空（从未收敛）。
 	slaveTree := t.TempDir()
-	crsLiveDir, ip2regionLivePath = filepath.Join(slaveTree, "crs"), filepath.Join(slaveTree, "ip2region.xdb")
-	defer func() { crsLiveDir, ip2regionLivePath = oldLive, oldXdb }()
+	t.Cleanup(OverrideWafLivePathsForTest(filepath.Join(slaveTree, "crs"), filepath.Join(slaveTree, "ip2region.xdb")))
 	os.MkdirAll(crsLiveDir, 0755)
 	if ref == nil || bundle == nil {
 		t.Fatal("master ref/bundle must build")
@@ -1431,15 +1429,13 @@ func TestSyncService_Pull_convergesVersionTagOnlyWafDrift(t *testing.T) {
 	os.WriteFile(masterXdb, []byte("same-xdb-bytes"), 0644)
 	os.WriteFile(masterXdb+".version", []byte("v3.17.0audit"), 0644)
 
-	oldLive, oldXdb := crsLiveDir, ip2regionLivePath
-	crsLiveDir, ip2regionLivePath = filepath.Join(masterTree, "crs"), masterXdb
+	t.Cleanup(OverrideWafLivePathsForTest(filepath.Join(masterTree, "crs"), masterXdb))
 	ref := BuildWafFileRef()
 	bundle := BuildWafFileBundle()
 
 	// 从节点：内容与主节点完全一致（tar/xdb sha 相同），仅 .version 标签陈旧。
 	slaveTree := t.TempDir()
-	crsLiveDir, ip2regionLivePath = filepath.Join(slaveTree, "crs"), filepath.Join(slaveTree, "ip2region.xdb")
-	defer func() { crsLiveDir, ip2regionLivePath = oldLive, oldXdb }()
+	t.Cleanup(OverrideWafLivePathsForTest(filepath.Join(slaveTree, "crs"), filepath.Join(slaveTree, "ip2region.xdb")))
 	os.MkdirAll(filepath.Join(crsLiveDir, "rules"), 0755)
 	os.WriteFile(filepath.Join(crsLiveDir, "rules", "a.conf"), []byte("SecRule X 1"), 0644)
 	os.WriteFile(filepath.Join(crsLiveDir, "VERSION"), []byte("v4.28.0"), 0644)
@@ -1559,14 +1555,21 @@ func TestSyncService_Pull_wafRepullPersistentFailureBackoffAndRecovery(t *testin
 	masterXdb := filepath.Join(masterTree, "ip2region.xdb")
 	os.WriteFile(masterXdb, []byte("master-xdb-bytes"), 0644)
 
-	oldLive, oldXdb := crsLiveDir, ip2regionLivePath
-	crsLiveDir, ip2regionLivePath = filepath.Join(masterTree, "crs"), masterXdb
+	t.Cleanup(OverrideWafLivePathsForTest(filepath.Join(masterTree, "crs"), masterXdb))
+	// 安全节应用后置会重建爬虫运行快照（写进程级默认路径
+	// /app/data/crawler-ip-lists.json）。测试宿主不存在该目录时重建恒失败，
+	// crawlerSnapshotFailures 会在本用例的 9 轮内达到阈值，
+	// persistCrawlerSnapshotFailure 的文案随即覆盖 last_sync_error，
+	// 抢走本用例要断言的 WAF 持续失败文案。指向临时目录让该副作用成功
+	// （无爬虫名单行时写空集合），本用例只钉 WAF 兜底重拉的状态机与可见性。
+	oldCrawlerFile := crawlerIPListFile
+	crawlerIPListFile = filepath.Join(t.TempDir(), "crawler-ip-lists.json")
+	t.Cleanup(func() { crawlerIPListFile = oldCrawlerFile })
 	ref := BuildWafFileRef()
 	bundle := BuildWafFileBundle()
 	// 从节点本地文件树为空（从未收敛），持续拉取失败期间保持分叉。
 	slaveTree := t.TempDir()
-	crsLiveDir, ip2regionLivePath = filepath.Join(slaveTree, "crs"), filepath.Join(slaveTree, "ip2region.xdb")
-	defer func() { crsLiveDir, ip2regionLivePath = oldLive, oldXdb }()
+	t.Cleanup(OverrideWafLivePathsForTest(filepath.Join(slaveTree, "crs"), filepath.Join(slaveTree, "ip2region.xdb")))
 	os.MkdirAll(crsLiveDir, 0755)
 	if ref == nil || bundle == nil {
 		t.Fatal("master ref/bundle must build")
@@ -2059,10 +2062,8 @@ func TestWafFilesDrifted_nullRefAppliedHashExempt(t *testing.T) {
 	// 模拟主节点无文件的已应用哈希(payload=纯 ref=nil → sha256("null"))
 	seedAppliedWafRefHash(t, database, wafFilesNullRefHash)
 	// 从节点残留一个文件(本地 ref 非 nil)
-	oldCrs, oldXdb := crsLiveDir, ip2regionLivePath
 	tmp := t.TempDir()
-	crsLiveDir, ip2regionLivePath = filepath.Join(tmp, "crs"), filepath.Join(tmp, "ip2region.xdb")
-	defer func() { crsLiveDir, ip2regionLivePath = oldCrs, oldXdb }()
+	t.Cleanup(OverrideWafLivePathsForTest(filepath.Join(tmp, "crs"), filepath.Join(tmp, "ip2region.xdb")))
 	os.MkdirAll(filepath.Join(crsLiveDir, "rules"), 0755)
 	os.WriteFile(filepath.Join(crsLiveDir, "rules", "a.conf"), []byte("residual"), 0644)
 

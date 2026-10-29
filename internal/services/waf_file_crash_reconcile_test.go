@@ -81,9 +81,7 @@ func TestReconcileIP2RegionVersionFromDiskMarker_adoptsDiskGeneration(t *testing
 	if err := os.WriteFile(xdbPath+".version", []byte("20260101"), 0o644); err != nil {
 		t.Fatalf("seed xdb marker: %v", err)
 	}
-	oldPath := ip2regionLivePath
-	ip2regionLivePath = xdbPath
-	t.Cleanup(func() { ip2regionLivePath = oldPath })
+	t.Cleanup(OverrideWafLivePathsForTest(crsLiveDir, xdbPath))
 	if _, err := db.DB.Exec(`DELETE FROM security_ip2region_version`); err != nil {
 		t.Fatalf("clear version row: %v", err)
 	}
@@ -113,9 +111,7 @@ func TestReconcileIP2RegionVersionFromDiskMarker_ignoresCurrentProcessInstall(t 
 	if err := os.WriteFile(xdbPath+".version", []byte("20260101"), 0o644); err != nil {
 		t.Fatalf("seed xdb marker: %v", err)
 	}
-	oldPath := ip2regionLivePath
-	ip2regionLivePath = xdbPath
-	t.Cleanup(func() { ip2regionLivePath = oldPath })
+	t.Cleanup(OverrideWafLivePathsForTest(crsLiveDir, xdbPath))
 	if _, err := db.DB.Exec(`DELETE FROM security_ip2region_version`); err != nil {
 		t.Fatalf("clear version row: %v", err)
 	}
@@ -186,9 +182,6 @@ func TestPruneOrphanThreatFiles_keepsCurrentProcessWrites(t *testing.T) {
 	if _, err := os.Stat(inFlight); err != nil {
 		t.Fatalf("本进程写入的名单文件不得删除: %v", err)
 	}
-	if strings.Contains(dir, "lbbak-waf-snapshot") {
-		t.Fatalf("夹具目录不符预期: %s", dir)
-	}
 }
 
 // 启动入口接线：三项残留必须由 ReconcileWafFileCrashLeftovers 一次收敛
@@ -219,9 +212,7 @@ func TestReconcileWafFileCrashLeftovers_entryPrunesAllThreeResidues(t *testing.T
 	if err := os.WriteFile(xdbPath+".version", []byte("20260101"), 0o644); err != nil {
 		t.Fatalf("seed xdb marker: %v", err)
 	}
-	oldXdb := ip2regionLivePath
-	ip2regionLivePath = xdbPath
-	t.Cleanup(func() { ip2regionLivePath = oldXdb })
+	t.Cleanup(OverrideWafLivePathsForTest(crsLiveDir, xdbPath))
 	if _, err := db.DB.Exec(`UPDATE security_ip2region_version SET version='20251012' WHERE id=1`); err != nil {
 		t.Fatalf("seed stale version row: %v", err)
 	}
@@ -249,5 +240,148 @@ func TestReconcileWafFileCrashLeftovers_entryPrunesAllThreeResidues(t *testing.T
 	}
 	if _, err := os.Stat(orphan); !os.IsNotExist(err) {
 		t.Fatalf("③ 孤儿名单文件未清理，err=%v", err)
+	}
+}
+
+func TestReconcileIP2RegionVersionFromDiskMarker_writeFailureDoesNotClaimSuccess(t *testing.T) {
+	withLeftoverProcessStart(t)
+	if err := initSecurityEventsTestDB(t, t.TempDir()); err != nil {
+		t.Fatalf("init db: %v", err)
+	}
+	xdbPath := filepath.Join(t.TempDir(), "ip2region.xdb")
+	if err := os.WriteFile(xdbPath, []byte("xdb-bytes"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(xdbPath+".version", []byte("20260101"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(OverrideWafLivePathsForTest(filepath.Join(t.TempDir(), "crs"), xdbPath))
+	if _, err := db.DB.Exec(`UPDATE security_ip2region_version SET version='20251012' WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB.Exec(`CREATE TRIGGER reject_version_reconcile BEFORE UPDATE OF version ON security_ip2region_version
+		BEGIN SELECT RAISE(ABORT, 'injected version write failure'); END`); err != nil {
+		t.Fatal(err)
+	}
+	logs := captureLogf(t)
+
+	reconcileIP2RegionVersionFromDiskMarker()
+
+	current, err := GetIP2RegionVersion()
+	if err != nil || current != "20251012" {
+		t.Fatalf("version=%q err=%v, want old row preserved after failed write", current, err)
+	}
+	var successAudits int
+	if err := db.AuditDB.QueryRow(`SELECT COUNT(*) FROM audit_log WHERE resource='IP数据库' AND detail LIKE '%已按在役库校正版本行%'`).Scan(&successAudits); err != nil {
+		t.Fatal(err)
+	}
+	if successAudits != 0 {
+		t.Fatalf("success audits=%d, want 0 when version update failed", successAudits)
+	}
+	if !strings.Contains(logs.String(), "校正失败") {
+		t.Fatalf("logs=%q, want visible reconciliation failure", logs.String())
+	}
+}
+
+func TestReconcileWafFileCrashLeftovers_slaveOnlyPrunesLocalSnapshots(t *testing.T) {
+	withLeftoverProcessStart(t)
+	if err := initSecurityEventsTestDB(t, t.TempDir()); err != nil {
+		t.Fatalf("init db: %v", err)
+	}
+	if _, err := db.DB.Exec(`UPDATE global_config SET is_master=0 WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
+	snapshotParent := t.TempDir()
+	oldParent := wafSnapshotParentDir
+	wafSnapshotParentDir = func() string { return snapshotParent }
+	t.Cleanup(func() { wafSnapshotParentDir = oldParent })
+	leftover := filepath.Join(snapshotParent, "lbbak-waf-snapshot-crash")
+	if err := os.MkdirAll(leftover, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	xdbPath := filepath.Join(t.TempDir(), "ip2region.xdb")
+	if err := os.WriteFile(xdbPath, []byte("xdb-bytes"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(xdbPath+".version", []byte("20260101"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(OverrideWafLivePathsForTest(filepath.Join(t.TempDir(), "crs"), xdbPath))
+	if _, err := db.DB.Exec(`UPDATE security_ip2region_version SET version='20251012' WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
+	threatDir := t.TempDir()
+	t.Cleanup(OverrideThreatWafDirForTest(threatDir))
+	if _, err := db.DB.Exec(`DELETE FROM security_threat_sources`); err != nil {
+		t.Fatal(err)
+	}
+	orphan := filepath.Join(threatDir, "threat-removed.iplist")
+	if err := os.WriteFile(orphan, []byte("1.2.3.4\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ReconcileWafFileCrashLeftovers()
+
+	if _, err := os.Stat(leftover); !os.IsNotExist(err) {
+		t.Fatalf("local snapshot must still be pruned on slave, err=%v", err)
+	}
+	if current, err := GetIP2RegionVersion(); err != nil || current != "20251012" {
+		t.Fatalf("slave version=%q err=%v, want unchanged master-owned row", current, err)
+	}
+	if _, err := os.Stat(orphan); err != nil {
+		t.Fatalf("slave must not prune cluster-owned threat reference: %v", err)
+	}
+}
+
+func TestReconcileWafFileCrashLeftovers_removesHiddenLiveConf(t *testing.T) {
+	withLeftoverProcessStart(t)
+	if err := initSecurityEventsTestDB(t, t.TempDir()); err != nil {
+		t.Fatalf("init db: %v", err)
+	}
+	crsDir := t.TempDir()
+	rulesDir := filepath.Join(crsDir, "rules")
+	if err := os.MkdirAll(rulesDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	hidden := filepath.Join(rulesDir, ".unmanaged.conf")
+	normal := filepath.Join(rulesDir, "REQUEST-900.conf")
+	marker := filepath.Join(rulesDir, ".keep-marker")
+	for path, body := range map[string]string{hidden: "SecRule X 1", normal: "SecRule X 2", marker: "keep"} {
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(OverrideWafLivePathsForTest(crsDir, filepath.Join(t.TempDir(), "ip2region.xdb")))
+	matches, err := filepath.Glob(filepath.Join(rulesDir, "*.conf"))
+	if err != nil || len(matches) != 2 {
+		t.Fatalf("fixture glob=(%v,%v), want hidden file visible to coraza Include semantics", matches, err)
+	}
+
+	ReconcileWafFileCrashLeftovers()
+
+	if _, err := os.Stat(hidden); !os.IsNotExist(err) {
+		t.Fatalf("unmanaged hidden .conf must be removed from live rules, err=%v", err)
+	}
+	for _, path := range []string{normal, marker} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("managed/backup file %s must be preserved: %v", path, err)
+		}
+	}
+}
+
+func TestWafFileStartupWritesAllowed_roleFailureFailsClosed(t *testing.T) {
+	if err := initSecurityEventsTestDB(t, t.TempDir()); err != nil {
+		t.Fatalf("init db: %v", err)
+	}
+	if _, err := db.DB.Exec(`DROP TABLE global_config`); err != nil {
+		t.Fatal(err)
+	}
+	logs := captureLogf(t)
+
+	if wafFileStartupWritesAllowed("测试对账") {
+		t.Fatal("role read failure must fail closed")
+	}
+	if !strings.Contains(logs.String(), "读取节点角色失败") {
+		t.Fatalf("logs=%q, want explicit role-read failure", logs.String())
 	}
 }

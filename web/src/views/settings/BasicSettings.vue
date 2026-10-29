@@ -238,6 +238,7 @@
         <div v-if="adminTlsForm.mode === 'selfsigned'" class="info-note-bar"><span class="info-note-desc">自动生成自签名证书，浏览器会提示不受信任；集群同步会自动跳过自签验证</span></div>
       </el-form>
       <template #footer>
+        <div class="form-tip-line">确定后仅暂存，仍需在基础设置页点击「保存」生效；保存后服务将重启</div>
         <el-button @click="adminTlsDialogVisible = false">取消</el-button>
         <el-button type="primary" :disabled="adminTlsConfirmBlocked" @click="confirmAdminTls">确定</el-button>
       </template>
@@ -279,10 +280,10 @@
       <div v-if="importValidating" v-loading="true" class="import-validating">正在校验备份文件...</div>
 
       <template v-if="importValidation && !importValidating">
-        <div v-if="!importValidation.valid" class="info-note-bar import-alert"><span class="info-note-desc">{{ importValidation.error || '备份文件校验失败' }}</span></div>
+        <div v-if="!importValidation.valid && importPreviewSelected" class="info-note-bar import-alert"><span class="info-note-desc">{{ importValidation.error || '备份文件校验失败' }}</span></div>
         <!-- 预览无效时分类 chip 保持可见可用——取消勾选坏行分类后
-             revalidateImport 自动重校验恢复 valid 即解锁确认（「未选分类
-             坏行不误拒」契约的 UI 可达面）；空分类选择仍由确认时拦截 -->
+             revalidateImport 自动重校验恢复 valid 即解锁确认；0 分类时保留
+             校验对象与 chip，仅隐藏预览并禁用确认，用户可直接重新勾选。 -->
         <div class="import-result">
           <div class="import-sections">
             <div class="import-sections-label">导入分类（未选分类保持现状）</div>
@@ -295,7 +296,7 @@
               >{{ sec.label }}</button>
             </div>
             <el-text v-if="importValidation.type === 'v1'" type="info" size="small" class="import-v1-hint">V1 备份仅支持负载均衡规则导入</el-text>
-            <el-text v-else-if="!importValidation.valid" type="warning" size="small" class="import-v1-hint">校验未通过——取消勾选包含异常数据的分类后将自动重新校验</el-text>
+            <el-text v-else-if="!importValidation.valid && importPreviewSelected" type="warning" size="small" class="import-v1-hint">校验未通过——取消勾选包含异常数据的分类后将自动重新校验</el-text>
           </div>
           <!-- 0 选择时摘要/冲突/覆盖范围必须一并隐藏（否则与「本次不会
                覆盖任何数据」并存，展示的是上次选择的陈旧预览）。 -->
@@ -330,7 +331,7 @@
             <div v-if="importValidation.type !== 'v1'" class="info-note-bar import-alert"><span class="info-note-desc">{{ importSections.length === BACKUP_SECTIONS.length ? '导入将覆盖当前全部配置（规则、用户、密钥、证书任务、节点拓扑）' : `将仅覆盖所选分类：${importSections.map((k) => BACKUP_SECTIONS.find((s) => s.key === k)?.label || k).join('、')}，未选分类保持现状` }}</span></div>
             <div v-else class="info-note-bar" style="margin-top: 4px"><span class="info-note-desc">仅导入负载均衡规则，其他数据不受影响</span></div>
           </template>
-          <div v-else-if="importValidation.valid" class="info-note-bar import-alert"><span class="info-note-desc">未选择导入分类——本次导入不会覆盖任何数据（请至少选择一个分类）</span></div>
+          <div v-else-if="!importPreviewSelected" class="info-note-bar import-alert"><span class="info-note-desc">未选择导入分类——本次导入不会覆盖任何数据（请至少选择一个分类）</span></div>
         </div>
       </template>
 
@@ -618,11 +619,6 @@ const openExportDialog = (): void => {
 }
 const exportBackup = async (): Promise<void> => {
   if (backupDisabled.value || exporting.value) return
-  try {
-    await ElMessageBox.confirm(`将按所选分类导出配置备份，导出内容可能包含证书私钥及敏感凭证，请妥善保存。确认导出？`, '导出配置备份', {
-      type: 'warning', confirmButtonText: '确认导出', cancelButtonText: '取消',
-    })
-  } catch { return }
   exporting.value = true
   try {
     // 备份含全部证书与私钥，体积可能很大，禁用 30s 默认超时
@@ -806,13 +802,14 @@ const saveAutoBackupSettings = async (): Promise<boolean> => {
     ElMessage.warning('自动备份设置尚未加载完成，暂不能保存')
     return false
   }
-  try {
-    await ElMessageBox.confirm(`将保存自动备份设置${autoBackupForm.value.enabled ? '并启用定时备份' : '，定时备份保持关闭'}，是否继续？`, '保存自动备份设置', {
-      type: 'warning', confirmButtonText: '确认保存', cancelButtonText: '取消',
-    })
-  } catch { return false }
+  // 占位先于确认：确认框悬挂期按钮已进入在途态，第二击不会再叠一个确认框。
   autoBackupSaving.value = true
   try {
+    try {
+      await ElMessageBox.confirm(`将保存自动备份设置${autoBackupForm.value.enabled ? '并启用定时备份' : '，定时备份保持关闭'}，是否继续？`, '保存自动备份设置', {
+        type: 'warning', confirmButtonText: '确认保存', cancelButtonText: '取消',
+      })
+    } catch { return false }
     await request.put('/settings/auto-backup', { ...autoBackupForm.value, sections: autoBackupSections.value })
     autoBackupSavedSections.value = [...autoBackupSections.value]
     autoBackupNextRunAt.value = null
@@ -836,16 +833,17 @@ const runAutoBackupNow = async (): Promise<void> => {
     ElMessage.warning('自动备份设置尚未加载或已保存的备份范围为空，暂不能立即备份')
     return
   }
+  // 占位先于确认：确认框悬挂期按钮已进入在途态，第二击不会再叠一个确认框。
+  autoBackupRunning.value = true
   // 异步契约：202 只代表已受理，不代表完成——记录基线 id，轮询
   // 备份列表直到出现本次新增的 manual 行（成功/失败都算落定）或 60s 超时。
-  try {
-    await ElMessageBox.confirm('将按最近一次已保存的自动备份设置立即生成一份配置备份，是否继续？', '立即备份', {
-      type: 'warning', confirmButtonText: '立即备份', cancelButtonText: '取消',
-    })
-  } catch { return }
-  autoBackupRunning.value = true
   const baselineId = autoBackupRows.value.reduce((max, row) => Math.max(max, Number(row.id) || 0), 0)
   try {
+    try {
+      await ElMessageBox.confirm('将按最近一次已保存的自动备份设置立即生成一份配置备份，是否继续？', '立即备份', {
+        type: 'warning', confirmButtonText: '立即备份', cancelButtonText: '取消',
+      })
+    } catch { return }
     await request.post('/auto-backup/run')
     mfaAwareSuccess('备份已开始，完成后将自动刷新列表')
     const deadline = Date.now() + 60000
@@ -1208,11 +1206,10 @@ const revalidateImport = async (): Promise<void> => {
     return
   }
   // 校验不消费分类（仅负载规则）；空选择无可导内容（确认时拦截）——不重发。
-  // 同时必须清掉上一轮校验摘要/错误并推进序号：否则取消全选后旧的「不可导入」
-  // 错误条仍显示，且在途旧响应落地时又会把陈旧摘要写回。
+  // 保留校验对象以维持分类 chip 可点；模板按 importPreviewSelected 隐藏旧摘要、
+  // 冲突与错误并禁用确认。推进序号使在途旧响应失效，避免重新勾选前写回陈旧预览。
   if (sections.length === 0) {
     importValidationSeq++
-    importValidation.value = null
     return
   }
   if (importValidation.value?.type === 'v1') return
@@ -1742,13 +1739,8 @@ const notifyTlsRestarting = (toHttps: boolean) => {
 }
 
 // 弹窗「确定」仅暂存证书选择，不发请求；随底部「保存」统一提交
-const confirmAdminTls = async () => {
+const confirmAdminTls = () => {
   if (adminTlsConfirmBlocked.value) return
-  try {
-    await ElMessageBox.confirm('将暂存当前 HTTPS 证书配置；返回基础设置后还需点击「保存」，保存后服务将重启。确认继续？', '确认证书配置', {
-      type: 'warning', confirmButtonText: '确认', cancelButtonText: '取消',
-    })
-  } catch { return }
   const { mode, certFile, keyFile, certInfo } = adminTlsForm.value
   tlsDialogFromToggle = false
   adminTls.value.mode = mode
@@ -1760,6 +1752,10 @@ const confirmAdminTls = async () => {
 }
 
 loadAdminTls()
+// 草稿身份复位后，派生读态也必须换到新账号；null 中间态无需发未认证请求。
+watch(() => authStore.user?.id, (userId, previousUserId) => {
+  if (userId != null && userId !== previousUserId) void loadAdminTls()
+})
 const restarting = ref(false)
 
 const handleRestart = async () => {

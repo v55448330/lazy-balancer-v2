@@ -11,13 +11,11 @@ import (
 // 全量构建需要整树 tar.gz + xdb 全读 + 威胁文件哈希。廉价签名（路径+大小+
 // mtime）未变时必须短路，签名变化时才重建。
 func TestBuildWafFileRef_cheapSignatureShortCircuitsFullBuild(t *testing.T) {
-	oldCrs, oldXdb, oldWaf := crsLiveDir, ip2regionLivePath, wafDir
-	defer func() { crsLiveDir, ip2regionLivePath, wafDir = oldCrs, oldXdb, oldWaf }()
-
 	dir := t.TempDir()
-	crsLiveDir = filepath.Join(dir, "crs")
-	ip2regionLivePath = filepath.Join(dir, "ip2region.xdb")
+	t.Cleanup(OverrideWafLivePathsForTest(filepath.Join(dir, "crs"), filepath.Join(dir, "ip2region.xdb")))
+	oldWaf := wafDir
 	wafDir = filepath.Join(dir, "waf")
+	t.Cleanup(func() { wafDir = oldWaf })
 	rulesDir := filepath.Join(crsLiveDir, "rules")
 	if err := os.MkdirAll(rulesDir, 0o755); err != nil {
 		t.Fatal(err)
@@ -30,11 +28,7 @@ func TestBuildWafFileRef_cheapSignatureShortCircuitsFullBuild(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	wafFileRefCache.mu.Lock()
-	wafFileRefCache.valid = false
-	wafFileRefCache.sig = ""
-	wafFileRefCache.ref = nil
-	wafFileRefCache.mu.Unlock()
+	invalidateWafFileRefCache()
 	wafFileRefFullBuilds.Store(0)
 
 	first := BuildWafFileRef()
@@ -76,16 +70,15 @@ func TestBuildWafFileRef_cheapSignatureShortCircuitsFullBuild(t *testing.T) {
 // （主端发旧字节给从端=静默分叉，或用旧哈希标注新字节=从端整包拒绝且无
 // 自愈路径）。
 func TestBuildWafFileRef_ttlRecoversFromSameSizeSameMtimeRewrite(t *testing.T) {
-	oldCrs, oldXdb, oldWaf := crsLiveDir, ip2regionLivePath, wafDir
-	t.Cleanup(func() { crsLiveDir, ip2regionLivePath, wafDir = oldCrs, oldXdb, oldWaf })
 	oldTTL := wafFileRefCacheTTL
 	wafFileRefCacheTTL = time.Minute
 	t.Cleanup(func() { wafFileRefCacheTTL = oldTTL })
 
 	dir := t.TempDir()
-	crsLiveDir = filepath.Join(dir, "crs")
-	ip2regionLivePath = filepath.Join(dir, "ip2region.xdb")
+	t.Cleanup(OverrideWafLivePathsForTest(filepath.Join(dir, "crs"), filepath.Join(dir, "ip2region.xdb")))
+	oldWaf := wafDir
 	wafDir = filepath.Join(dir, "waf")
+	t.Cleanup(func() { wafDir = oldWaf })
 	rulesDir := filepath.Join(crsLiveDir, "rules")
 	for _, d := range []string{rulesDir, wafDir} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
@@ -105,10 +98,7 @@ func TestBuildWafFileRef_ttlRecoversFromSameSizeSameMtimeRewrite(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wafFileRefCache.mu.Lock()
-	wafFileRefCache.valid = false
-	wafFileRefCache.validatedAt = time.Time{}
-	wafFileRefCache.mu.Unlock()
+	invalidateWafFileRefCache()
 
 	first := BuildWafFileRef()
 	if first == nil || first.CRSSha256 == "" {
@@ -135,12 +125,11 @@ func TestBuildWafFileRef_ttlRecoversFromSameSizeSameMtimeRewrite(t *testing.T) {
 }
 
 func TestWafRefStatSignature_tracksCRSVersionWithoutRules(t *testing.T) {
-	oldCrs, oldXdb, oldWaf := crsLiveDir, ip2regionLivePath, wafDir
-	t.Cleanup(func() { crsLiveDir, ip2regionLivePath, wafDir = oldCrs, oldXdb, oldWaf })
 	root := t.TempDir()
-	crsLiveDir = filepath.Join(root, "crs")
-	ip2regionLivePath = filepath.Join(root, "missing.xdb")
+	t.Cleanup(OverrideWafLivePathsForTest(filepath.Join(root, "crs"), filepath.Join(root, "missing.xdb")))
+	oldWaf := wafDir
 	wafDir = filepath.Join(root, "waf")
+	t.Cleanup(func() { wafDir = oldWaf })
 	if err := os.MkdirAll(crsLiveDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -185,12 +174,11 @@ func TestWafRefStatSignature_tracksCRSVersionWithoutRules(t *testing.T) {
 // waf_files 节哈希与从端漂移判定，「等长改写且保留 mtime/mode」时命中旧
 // 引用会让主从节哈希暂时不对齐（多一轮全量重拉才自愈）。
 func TestWafRefStatSignature_tracksIP2RegionVersionContent(t *testing.T) {
-	oldCrs, oldXdb, oldWaf := crsLiveDir, ip2regionLivePath, wafDir
-	t.Cleanup(func() { crsLiveDir, ip2regionLivePath, wafDir = oldCrs, oldXdb, oldWaf })
 	root := t.TempDir()
-	crsLiveDir = filepath.Join(root, "crs") // 不创建：rules 缺失形态下 tag 仍须入签名
-	ip2regionLivePath = filepath.Join(root, "ip2region.xdb")
+	t.Cleanup(OverrideWafLivePathsForTest(filepath.Join(root, "crs"), filepath.Join(root, "ip2region.xdb"))) // 不创建 rules：缺失形态下 tag 仍须入签名
+	oldWaf := wafDir
 	wafDir = filepath.Join(root, "waf")
+	t.Cleanup(func() { wafDir = oldWaf })
 	if err := os.WriteFile(ip2regionLivePath, []byte("xdb"), 0o644); err != nil {
 		t.Fatal(err)
 	}

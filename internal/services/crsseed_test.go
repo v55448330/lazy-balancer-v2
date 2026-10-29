@@ -351,10 +351,10 @@ func TestReconcileCRSState_nilDatabaseIsNoOp(t *testing.T) {
 	db.DB = nil
 	t.Cleanup(func() { db.DB = oldDB })
 	root := t.TempDir()
-	oldLive, oldSnapshot := crsLiveDir, crsSnapshotDir
-	crsLiveDir = filepath.Join(root, "waf", "crs")
+	t.Cleanup(OverrideWafLivePathsForTest(filepath.Join(root, "waf", "crs"), ip2regionLivePath))
+	oldSnapshot := crsSnapshotDir
 	crsSnapshotDir = filepath.Join(root, "data", "crs")
-	t.Cleanup(func() { crsLiveDir, crsSnapshotDir = oldLive, oldSnapshot })
+	t.Cleanup(func() { crsSnapshotDir = oldSnapshot })
 	// 健康 live 树 + 缺失快照是「自愈会创建快照」的可观察形态：角色读取失败
 	// 后若仍继续对账，快照目录会被建出来。
 	writeTestFile(t, filepath.Join(crsLiveDir, "rules", crsRulesProbeFile), "SecRule live")

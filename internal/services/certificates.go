@@ -337,18 +337,22 @@ func restoreCertJobsForRule(ctx context.Context, snapshot CertJobsSnapshot) erro
 	return nil
 }
 
-// certJobState 是恢复流程行级 epoch 判定所需的当前行最小视图。
+// certJobState 是恢复流程行级 epoch 判定所需的当前行最小视图
+// （含部署退避簿记：快照后由部署失败推进的 attempts/窗口同样是真实成果）。
 type certJobState struct {
-	id              int
-	status          string
-	certPEM, keyPEM string
-	domain          string
+	id                       int
+	status                   string
+	certPEM, keyPEM          string
+	domain                   string
+	deploymentAttempts       int
+	deploymentAvailableAfter sql.NullTime
 }
 
 // loadCertJobStatesTx 在恢复事务内读出该规则当前全部 cert_jobs 行的判定视图
 // （按 id 升序，保证日志顺序稳定）。
 func loadCertJobStatesTx(ctx context.Context, tx *sql.Tx, ruleID string) ([]certJobState, error) {
-	rows, err := tx.QueryContext(ctx, `SELECT id, status, COALESCE(cert_pem,''), COALESCE(key_pem,''), COALESCE(domain,'')
+	rows, err := tx.QueryContext(ctx, `SELECT id, status, COALESCE(cert_pem,''), COALESCE(key_pem,''), COALESCE(domain,''),
+		COALESCE(deployment_attempts,0), deployment_available_after
 		FROM cert_jobs WHERE rule_id=? ORDER BY id`, ruleID)
 	if err != nil {
 		return nil, err
@@ -357,7 +361,8 @@ func loadCertJobStatesTx(ctx context.Context, tx *sql.Tx, ruleID string) ([]cert
 	var states []certJobState
 	for rows.Next() {
 		var state certJobState
-		if err := rows.Scan(&state.id, &state.status, &state.certPEM, &state.keyPEM, &state.domain); err != nil {
+		if err := rows.Scan(&state.id, &state.status, &state.certPEM, &state.keyPEM, &state.domain,
+			&state.deploymentAttempts, &state.deploymentAvailableAfter); err != nil {
 			return nil, err
 		}
 		states = append(states, state)
@@ -382,9 +387,11 @@ func certJobRowPreservedOnRestore(current certJobState, snapshot certJobSnapshot
 
 // certJobStateAdvancedSinceSnapshot 判定当前行是否承载了快照之后才产生的签发/
 // 部署成果：证书材料与快照不同（新签发/续期写入了新 PEM），或材料
-// 相同但已推进到 issued（快照后完成了部署提交）。命中即不回滚该行——否则刚完成
-// 的续期/部署会被旧快照抹掉，磁盘/Caddy 与 DB 分叉。无材料的行恒不视为推进：
-// 状态/重试次数的变化正是本函数要修的 UPSERT 覆写形态。
+// 相同但已推进到 issued（快照后完成了部署提交），或材料相同但部署退避簿记
+// 已推进（快照后部署失败推进了 deployment_attempts/后续窗口）。命中即不回滚
+// 该行——否则刚完成的续期/部署会被旧快照抹掉，磁盘/Caddy 与 DB 分叉，退避
+// 窗口也会被提前。无材料的行恒不视为推进：状态/重试次数的变化正是本函数要修的
+// UPSERT 覆写形态。
 func certJobStateAdvancedSinceSnapshot(current certJobState, snapshot certJobSnapshot) bool {
 	currentCert := strings.TrimSpace(current.certPEM)
 	currentKey := strings.TrimSpace(current.keyPEM)
@@ -394,7 +401,23 @@ func certJobStateAdvancedSinceSnapshot(current certJobState, snapshot certJobSna
 	if currentCert != strings.TrimSpace(snapshot.certPEM.String) || currentKey != strings.TrimSpace(snapshot.keyPEM.String) {
 		return true
 	}
-	return current.status == "issued" && snapshot.status != "issued"
+	if current.status == "issued" && snapshot.status != "issued" {
+		return true
+	}
+	// 部署退避簿记同属「快照后的真实成果」：部署链在同一份材料上连续失败时只推进
+	// deployment_attempts 并把窗口后移（状态/材料不变，见 deploymentFailedFrom /
+	// advanceCertificateDeploymentWindow）。按快照整行重写会把它回退——退避窗口
+	// 提前（多一次部署 + 一次 /load），窗口还可能从有值退回 NULL，使该行只剩补扫/
+	// 重启通道。无材料的行已在上面提前返回：材料是部署失败写回的伴随物，无材料
+	// 即不是部署链成果（状态/重试次数的变化正是本函数要修的 UPSERT 覆写形态）。
+	if current.deploymentAttempts > snapshot.deploymentAttempts {
+		return true
+	}
+	if current.deploymentAvailableAfter.Valid &&
+		(!snapshot.deploymentAvailableAfter.Valid || current.deploymentAvailableAfter.Time.After(snapshot.deploymentAvailableAfter.Time)) {
+		return true
+	}
+	return false
 }
 
 // certJobsSnapshotEraMatchesRule 判定规则当前状态是否仍属于快照时代：快照按 id
@@ -1185,7 +1208,8 @@ func withActiveCertServiceTick(taskID, stage string, fn func(s *CertificateServi
 // —— 引擎单轮 tick（certificates.go 四 ticker 的循环体；引擎接管节拍）——
 
 // CertRenewalScanOnce 续期扫描（临期证书入队）。
-// 扫描/入队前置读失败必须上抛（Run 返回 error → task_runs 失败终态）。
+// 前置查询、结果集迭代与入队门禁失败必须上抛（Run 返回 error → task_runs 失败终态）。
+// 逐行 Scan/现有证书选择读失败按行跳过并计数，任务日志摘要必须显式披露跳过行数。
 // 服务缺失时**不得记成功**：此时续期链完全停摆（ACME 证书到期无人处理），
 // 必须落可见业务行并返回 ErrTaskSkipped（task_runs=skipped，非成功）。
 func CertRenewalScanOnce(ctx context.Context) error {
@@ -1289,7 +1313,7 @@ func CertWaitingCATickOnce(ctx context.Context) error {
 			if gateErr := writeGate(); gateErr != nil {
 				strandedErr = gateErr
 			} else if qm := GetCAQueueManager(); qm != nil {
-				stranded, strandedErr = qm.requeueStrandedQueuedJobs()
+				stranded, strandedErr = qm.requeueStrandedQueuedJobs(writeGate)
 			}
 		}
 		if !aborted(waitingErr) && !aborted(strandedErr) {

@@ -449,20 +449,21 @@ func normalizeTrustedProxyHeaders(raw string) (string, error) {
 	if err := json.Unmarshal([]byte(raw), &entries); err != nil {
 		return "", fmt.Errorf("受信代理请求头必须是 JSON 数组: %v", err)
 	}
-	if len(entries) > 8 {
-		return "", fmt.Errorf("受信代理请求头条数上限 8（当前 %d）", len(entries))
-	}
 	seen := make(map[string]struct{}, len(entries))
 	normalized := make([]string, 0, len(entries))
 	for _, entry := range entries {
 		if !trustedProxyHeaderPattern.MatchString(entry) {
 			return "", fmt.Errorf("无效的受信代理请求头: %s（仅允许字母/数字/连字符，1-64 字符）", entry)
 		}
-		if _, dup := seen[entry]; dup {
+		key := strings.ToLower(entry)
+		if _, dup := seen[key]; dup {
 			continue
 		}
-		seen[entry] = struct{}{}
+		seen[key] = struct{}{}
 		normalized = append(normalized, entry)
+	}
+	if len(normalized) > 8 {
+		return "", fmt.Errorf("受信代理请求头条数上限 8（当前 %d）", len(normalized))
 	}
 	out, err := json.Marshal(normalized)
 	if err != nil {

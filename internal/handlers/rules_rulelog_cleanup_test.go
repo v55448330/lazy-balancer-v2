@@ -22,6 +22,9 @@ import (
 // When 删除规则。
 // Then 删除照常 200（不阻断），且「清理失败/规则日志」操作审计留痕并点名路径。
 func TestDeleteRule_ruleLogCleanupFailureAudited(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root 忽略目录权限位，无法构造规则日志清理失败")
+	}
 	handler, _, _ := newAuditRuleHandlers(t, 0)
 	seedAuditRule(t, "lb_rulelog", "rulelog", "rulelog.example.test", 18091, true, "manual", false)
 	seedAuditUpstream(t, "lb_rulelog")

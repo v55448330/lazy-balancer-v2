@@ -213,8 +213,11 @@ func InitIP2Region() {
 					tag = v
 				}
 			}
-			SetIP2RegionVersion(tag)
-			Logf("info", "ip2region: DB 版本种子值已同步为 %s", tag)
+			if err := SetIP2RegionVersion(tag); err != nil {
+				Logf("warn", "ip2region: DB 版本种子值同步失败: %v", err)
+			} else {
+				Logf("info", "ip2region: DB 版本种子值已同步为 %s", tag)
+			}
 		}
 	}
 
@@ -255,15 +258,25 @@ func Reload() error {
 		Logf("error", "ip2region: reload failed: %v (keeping current searcher)", err)
 		return err
 	}
+	return installValidatedIP2RegionSearcher(searcher, ip2regionLivePath)
+}
+
+// installValidatedIP2RegionSearcher 接管已校验 searcher 的所有权并原子热换。
+func installValidatedIP2RegionSearcher(searcher *ip2regionService.Ip2Region, sourcePath string) error {
+	if searcher == nil {
+		return errors.New("不能热换空 IP2Region searcher")
+	}
 	ip2regionMu.Lock()
-	swapIP2RegionSearcher(searcher, ip2regionLivePath)
+	swapIP2RegionSearcher(searcher, sourcePath)
 	ip2regionMu.Unlock()
 	return nil
 }
 
-// reloadIP2RegionSearcher 是测试 seam（镜像 crsinstall.go 的 osRename）：
-// 更新/回滚管线经它调用 Reload，测试可注入内存热换失败。
-var reloadIP2RegionSearcher = Reload
+// reloadIP2RegionSearcher 是更新/回滚的热换缝：调用方已完成统一校验，
+// 成功时由本函数接管 searcher，失败时调用方负责 Close。
+var reloadIP2RegionSearcher = func(searcher *ip2regionService.Ip2Region) error {
+	return installValidatedIP2RegionSearcher(searcher, ip2regionLivePath)
+}
 
 // swapIP2RegionSearcher installs the new searcher and closes the old one.
 // Callers must hold ip2regionMu. Closing happens under ip2regionSearchMu so a
@@ -339,7 +352,7 @@ func GetIP2RegionVersion() (string, error) {
 }
 
 // SetIP2RegionVersion records the installed GeoIP database version and caches provinces.
-func SetIP2RegionVersion(version string) {
+func SetIP2RegionVersion(version string) error {
 	// 插入不写 auto_update——沿用 schema DEFAULT TRUE（与迁移播种
 	// ensureIP2RegionVersionRow 的 TRUE、用户裁定一致）；硬编码 0 会让
 	// 「行缺失 + Init 先跑」形态静默关闭自动更新。
@@ -347,6 +360,7 @@ func SetIP2RegionVersion(version string) {
 		VALUES (1, ?, datetime('now'))
 		ON CONFLICT(id) DO UPDATE SET version=excluded.version, updated_at=excluded.updated_at`, version); err != nil {
 		Logf("error", "ip2region: failed to store version %q: %v", version, err)
+		return err
 	}
 	provinces := GetIP2RegionProvinces()
 	if data, err := json.Marshal(provinces); err == nil {
@@ -356,6 +370,7 @@ func SetIP2RegionVersion(version string) {
 	}
 	// 版本更新即新库——树缓存同步重建。
 	writeRegionTreeCache(regionTreeFromXDB(ip2regionLivePath))
+	return nil
 }
 
 // writeProvincesCache atomically writes the province JSON cache by writing to a
@@ -819,11 +834,8 @@ func GetIP2RegionRegionTree() *IP2RegionRegionTree {
 	ip2regionMu.RLock()
 	sourcePath := ip2regionSearcherSource
 	ip2regionMu.RUnlock()
-	// 扫描源取 live 优先、在役来源兜底：只读降级节点（从节点/写入失败：live
-	// 缺失、searcher 来自 waf.dist）下此前直接回退 regions.json——该派生缓存
-	// 同样不落盘，于是每次都返回 nil，UI/校验退化为 336 点采样的粗粒度省份
-	// （采不到的城市/海外国家整族不可选）。在役来源与 live searcher 同内容，
-	// 扫描它不改变任何判定口径，只是把降级节点的树补齐。
+	// live 优先；live 缺失或扫描失败时，在役 searcher 的来源是同一内容代际的
+	// 第二读取源。仅文件缓存兜底会让只读降级节点丧失完整地域树。
 	scanPath := ip2regionLivePath
 	fi, err := os.Stat(scanPath)
 	if err != nil || scanPath == "" {
@@ -836,21 +848,32 @@ func GetIP2RegionRegionTree() *IP2RegionRegionTree {
 			return getCachedRegionTree()
 		}
 	}
-	key := scanPath + "|" + fmt.Sprintf("%d:%d", fi.Size(), fi.ModTime().UnixNano())
-	regionTreeMemoMu.Lock()
-	if regionTreeMemo != nil && regionTreeMemoKey == key {
-		tree := regionTreeMemo
+	scan := func(path string, info os.FileInfo) *IP2RegionRegionTree {
+		key := path + "|" + fmt.Sprintf("%d:%d", info.Size(), info.ModTime().UnixNano())
+		regionTreeMemoMu.Lock()
+		if regionTreeMemo != nil && regionTreeMemoKey == key {
+			tree := regionTreeMemo
+			regionTreeMemoMu.Unlock()
+			return tree
+		}
 		regionTreeMemoMu.Unlock()
+		tree := regionTreeFromXDB(path)
+		if tree != nil {
+			regionTreeMemoMu.Lock()
+			regionTreeMemo, regionTreeMemoKey = tree, key
+			regionTreeMemoMu.Unlock()
+		}
 		return tree
 	}
-	regionTreeMemoMu.Unlock()
-	tree := regionTreeFromXDB(scanPath)
+	tree := scan(scanPath, fi)
+	if tree == nil && sourcePath != "" && sourcePath != scanPath {
+		if sourceInfo, sourceErr := os.Stat(sourcePath); sourceErr == nil {
+			tree = scan(sourcePath, sourceInfo)
+		}
+	}
 	if tree == nil {
 		return getCachedRegionTree()
 	}
-	regionTreeMemoMu.Lock()
-	regionTreeMemo, regionTreeMemoKey = tree, key
-	regionTreeMemoMu.Unlock()
 	return tree
 }
 

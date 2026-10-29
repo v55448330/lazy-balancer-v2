@@ -776,8 +776,8 @@ function setWindow(hours: number): void {
 const screenMode = ref('map')
 // 采样配置单源：-1=自适应、0=关闭（全量/固定 2-64 已退役，存量值归一为 -1）。
 const flowSampleN = ref(-1)
-// 自适应档位（1 全量 / 4 / 8）；非自适应配置直接取配置值，0=关闭不申请逐请求采集。
-const activeSampleN = ref(1)
+// 自适应档位（1 全量 / 4 / 8）；配置到达前与读取失败均保持 0，不得首帧默认全量。
+const activeSampleN = ref(0)
 const flowSampleLabel = computed(() => {
   if (flowSampleN.value === 0) return 'OFF'
   const n = activeSampleN.value

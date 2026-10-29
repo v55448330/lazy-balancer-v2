@@ -312,7 +312,6 @@ interface GlobalCertificateConfig {
   cert_renewal_days: number
   cert_renewal_attempts: number
   default_ca_provider_id: number
-  dns_provider: string
 }
 
 interface ConfigPreviewResponse {
@@ -330,7 +329,11 @@ const global = defineModel<GlobalCertificateConfig>('global', { required: true }
 // 父级 /config 加载完成前禁止保存——表单此刻仍是默认值，补填
 // 邮箱后保存会把 30/30/5/dnspod 等默认续签参数静默覆盖已定制值。
 // 与 BasicSettings/CaddyGlobalSettings 同一 configLoaded 契约。
-const props = defineProps<{ configLoaded: boolean }>()
+const props = defineProps<{
+  configLoaded: boolean
+  /** 父级在保存成功后回填 /config；必须 await 完成再解冻表单。 */
+  onSave?: () => void | Promise<void>
+}>()
 const emit = defineEmits<{
   (e: 'save'): void
 }>()
@@ -874,7 +877,6 @@ const handleSave = async () => {
       renewalDays: global.value.cert_renewal_days,
       renewalAttempts: global.value.cert_renewal_attempts,
       defaultCAProviderId: global.value.default_ca_provider_id,
-      dns_provider: global.value.dns_provider,
     })
     const preview = await request.post<ConfigPreviewResponse>('/config/preview', payload)
     if (preview.data?.changed) {
@@ -888,7 +890,11 @@ const handleSave = async () => {
     const saveResp = await request.put('/config', payload)
     const saveMessage = (saveResp as unknown as { message?: string }).message ?? ''
     mfaAwareSuccess(saveMessage.includes('配置无变化') ? saveMessage : '保存成功')
-    emit('save')
+    // 等待父级回填后再由 finally 解冻，避免迟到的 /config 覆盖在途编辑；
+    // 未传回调的旧调用方保留事件兜底。
+    const parentRefresh = props.onSave
+    if (parentRefresh) await parentRefresh()
+    if (!parentRefresh) emit('save')
   } catch (error) {
     if (error !== 'cancel' && error !== 'close') {
       console.error('Failed to save certificate settings:', error)

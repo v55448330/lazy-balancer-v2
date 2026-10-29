@@ -931,6 +931,47 @@ func TestImportConfigBackup_ignoresDeadMetricsRetentionDaysKey(t *testing.T) {
 	}
 }
 
+func TestImportConfigBackupIgnoresRetiredGlobalDNSProvider(t *testing.T) {
+	for _, value := range []any{"legacy-provider", 0, false} {
+		t.Run(fmt.Sprintf("%T", value), func(t *testing.T) {
+			preserveApplicationLogLevel(t, "")
+			h := newBackupTestHandlers(t)
+			completeTables := make(map[string][]map[string]any, len(configBackupTables))
+			for _, table := range configBackupTables {
+				completeTables[table] = []map[string]any{}
+			}
+			completeTables["users"] = []map[string]any{{"id": 1, "username": "admin", "password_hash": "hash", "role": "admin", "is_enabled": 1}}
+			importCfg := map[string]any{"dns_provider": value, "log_level": "warn"}
+			backupPayload := configBackup{
+				Meta:   configBackupMeta{App: "lazy-balancer-v2", Version: 2, ExportedAt: "2026-08-19T00:00:00Z"},
+				Config: importCfg,
+				Tables: completeTables,
+			}
+			backupPayload.Meta.Checksum = checksumBackupPayload(t, completeTables, importCfg)
+			body, err := json.Marshal(backupPayload)
+			if err != nil {
+				t.Fatal(err)
+			}
+			router := gin.New()
+			router.POST("/config/import", h.ImportConfigBackup)
+			response := httptest.NewRecorder()
+			request := httptest.NewRequest(http.MethodPost, "/config/import", strings.NewReader(string(body)))
+			request.Header.Set("Content-Type", "application/json")
+			router.ServeHTTP(response, request)
+			if response.Code != http.StatusOK {
+				t.Fatalf("import status=%d body=%s", response.Code, response.Body.String())
+			}
+			var logLevel string
+			if err := db.DB.QueryRow("SELECT COALESCE(log_level,'') FROM global_config WHERE id=1").Scan(&logLevel); err != nil {
+				t.Fatal(err)
+			}
+			if logLevel != "warn" {
+				t.Fatalf("log_level=%q, want warn", logLevel)
+			}
+		})
+	}
+}
+
 func TestImportConfigBackup_remaps_rule_updated_by_to_restored_user(t *testing.T) {
 	// Given
 	h := newBackupTestHandlers(t)

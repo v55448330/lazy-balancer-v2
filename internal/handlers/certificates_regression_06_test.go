@@ -142,6 +142,34 @@ func TestUpdateCertificateConfig_unchangedLegacyPartialCredentialsAreNotRevalida
 	}
 }
 
+// Given 禁用配置携带 provider 已不接受的历史凭证，直接 API 原样回传并启用。
+// When 保存禁用→启用状态迁移。
+// Then 必须在落库前重新执行 provider 校验；保持原启用态的兼容豁免不得覆盖启用门。
+func TestUpdateCertificateConfig_enablingRevalidatesUnchangedLegacyCredentials(t *testing.T) {
+	h := newBackupTestHandlers(t)
+	result, err := db.DB.Exec(`INSERT INTO certificate_configs (name,dns_provider,dns_credentials,enabled)
+		VALUES ('legacy-disabled','dnspod','{"auth_mode":"dnspod","app_id":"","app_token":""}',0)`)
+	if err != nil {
+		t.Fatalf("seed disabled legacy config: %v", err)
+	}
+	id, err := result.LastInsertId()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	response := putCertificateConfig(t, h, id, `{"enabled":true,"dns_credentials":{"auth_mode":"dnspod","app_id":"","app_token":""}}`)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s, want 400（启用前必须重验原样提交的历史凭证）", response.Code, response.Body.String())
+	}
+	var enabled bool
+	if err := db.DB.QueryRow(`SELECT enabled FROM certificate_configs WHERE id=?`, id).Scan(&enabled); err != nil {
+		t.Fatal(err)
+	}
+	if enabled {
+		t.Fatal("无效历史凭证的配置被启用")
+	}
+}
+
 // Given 批量目标中一个非法域名（必然失败）+ 一个 CA 冷却中的任务（跳过）。
 // When all=true 未带 force。
 // Then 500 响应必须同时携带失败与跳过计数/文案，不得只报「全部失败」。

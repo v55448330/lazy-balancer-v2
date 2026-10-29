@@ -9,7 +9,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { registerModuleHooks, repoCode } from './_helpers.ts'
+import { code, member, registerModuleHooks, repoCode, waitForMicrotasks } from './_helpers.ts'
 import { installStubHost, STUB_API, STUB_ELEMENT, STUB_SAVE_RESULT } from './_stubs.ts'
 
 type Harness = {
@@ -152,7 +152,7 @@ test('无同侧列表：确认后创建（建单即带 IP）→ 关联 refs，�
     },
   })
   const policy = { id: 5, name: '策略 A', ip_whitelist_refs: '', ip_whitelist_enabled: false }
-  await ensureListAndJoin(policy, '203.0.113.9', 'trust')
+  assert.equal(await ensureListAndJoin(policy, '203.0.113.9', 'trust'), true, '完整创建并关联后才返回完成')
 
   assert.equal(confirmArgs.length, 1)
   const [message, title] = confirmArgs[0]
@@ -234,9 +234,10 @@ test('同名未引用列表复用而非重复创建（仍关联并加入）', as
   assert.match(String(callsOf('showSaveResult')[0].args?.[1]), /已关联既有/)
 })
 
-// 后端创建判重是 `LOWER(name)=LOWER(?)`（ASCII 大小写折叠）——前端复用既有名单
-// 的查找必须同口径，否则策略名仅差大小写时（允许存在）会错过既有名单、转而创建，
-// 换来一条 409 且本次加入不发生（弹框一次性，无改用既有名单的出口）。
+// 后端判重按 ASCII 大小写折叠（写事务内逐名比对，曾为 SQL 的
+// `LOWER(name)=LOWER(?)`）——前端复用既有名单的查找必须同口径，否则策略名仅差
+// 大小写时（允许存在）会错过既有名单、转而创建，换来一条 409 且本次加入不发生
+// （弹框一次性，无改用既有名单的出口）。
 test('同名判据与后端同口径：仅 ASCII 大小写不同也复用既有名单', async () => {
   const { posts, puts } = reset()
   const existing = [...lists, { id: 77, name: 'demo-白名单', ref_policies: [] }]
@@ -380,7 +381,7 @@ test('加入指定列表：写入在途时重入被拒（adding 锁经 joinSpeci
   })
   const target = { id: 3, name: '办公网段', entry_count: 5 }
   const first = joinSpecificList(target, '203.0.113.9', '信任')
-  await new Promise<void>((done) => setTimeout(done, 0))
+  await waitForMicrotasks(() => posts.length === 1, '在途写入已发出 POST')
   assert.equal(await joinSpecificList(target, '203.0.113.9', '信任'), false, '在途重入必须立即拒绝')
   resolve({ data: { added: true } })
   assert.equal(await first, true)
@@ -394,7 +395,7 @@ test('创建路径取消确认：不创建/不关联/不加入，重入锁释放
     throw new Error('cancel')
   }
   const { creating, ensureListAndJoin } = useTrustAssociation({ getList: () => lists })
-  await ensureListAndJoin({ id: 5, name: '策略 A', ip_whitelist_refs: '' }, '203.0.113.9', 'trust')
+  assert.equal(await ensureListAndJoin({ id: 5, name: '策略 A', ip_whitelist_refs: '' }, '203.0.113.9', 'trust'), false, '取消必须向调用方返回未完成')
   assert.deepEqual(posts, [])
   assert.deepEqual(puts, [])
   assert.equal(creating.value, false)
@@ -749,8 +750,22 @@ test('移除动作取消：不发请求、不刷新、释放占位（取消无�
   assert.equal(creating.value, false, '占位必须在取消路径释放（否则按钮永久灰死）')
 })
 
-test('跨栈：自动名单名上限与 ASCII 大小写折叠判据对表后端', () => {
+test('跨栈：自动名单名上限与查重口径对表后端', () => {
   const go = repoCode('internal/handlers/securityiplists.go')
   assert.match(go, /\bipListMaxNameLength\s*=\s*50\b/, '前端 50 rune 截断预算必须跟随后端写门')
-  assert.match(go, /WHERE LOWER\(name\)=LOWER\(\?\)/, '前端同名复用必须沿用 SQLite ASCII 大小写折叠')
+  // 查重落在写事务内的应用层比对（`strings.EqualFold`，Unicode simple folding），
+  // 不再是 SQL 的 `LOWER(name)=LOWER(?)`（SQLite 只折叠 ASCII）。两端口径因此只在
+  // 「名称仅差非 ASCII 大小写」这一形态上分叉：前端复用判据只折叠 ASCII 而选择新建，
+  // 随后被后端 409 拦下（fail-closed，不会产生重名数据）。改动任一端须重判该形态。
+  const dedup = member(go, 'func findDuplicateIPListName(')
+  assert.match(dedup, /strings\.EqualFold\(name, candidate\)/, '后端查重必须走应用层 EqualFold（SQL LOWER 不折叠非 ASCII）')
+  assert.match(dedup, /WHERE id<>\?/, '更新路径的自身排除必须落在查询里（不得靠调用方过滤）')
+  assert.doesNotMatch(go, /LOWER\(name\)\s*=\s*LOWER\(\?\)/, '查重不得退回 SQL LOWER 口径')
+  const create = member(go, 'func (h *Handlers) CreateIPList(')
+  const update = member(go, 'func (h *Handlers) UpdateIPList(')
+  for (const [name, body] of [['Create', create], ['Update', update]] as const) {
+    assert.match(body, /findDuplicateIPListName\(/, `${name} 必须走同一查重单源（两份实现会分叉 409 文案与口径）`)
+  }
+  const fe = code('src/composables/useTrustAssociation.ts')
+  assert.match(fe, /name\.replace\(\/\[A-Z\]\/g, \(c\) => c\.toLowerCase\(\)\)/, '前端同名复用只折叠 ASCII（与其比较的名单名口径一致）')
 })

@@ -58,7 +58,7 @@ func TestThreatEntryShrinkGuard_rejectsParseableCollapsedList(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	changed, failed := GetThreatUpdateManager().updateOneSource(context.Background(),
+	changed, failed, _ := GetThreatUpdateManager().updateOneSource(context.Background(),
 		threatSourceRow{id: id, name: "ustc", url: server.URL}, "manual", "2026-10-22 00:00:00")
 
 	if !failed || changed {
@@ -87,7 +87,7 @@ func TestThreatEntryShrinkGuard_rejectsParseableCollapsedList(t *testing.T) {
 	if _, err := db.DB.Exec(`UPDATE security_threat_sources SET entry_count=20, raw_hash='' WHERE id=?`, id); err != nil {
 		t.Fatal(err)
 	}
-	changed, failed = GetThreatUpdateManager().updateOneSource(context.Background(),
+	changed, failed, _ = GetThreatUpdateManager().updateOneSource(context.Background(),
 		threatSourceRow{id: id, name: "ustc", url: server.URL}, "manual", "2026-10-22 00:00:00")
 	if failed || !changed {
 		t.Fatalf("恰好一半应放行: changed=%v failed=%v", changed, failed)

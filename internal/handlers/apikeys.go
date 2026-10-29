@@ -54,6 +54,10 @@ func requireAPIKeyStepUp(c *gin.Context) bool {
 // apiKeyMaxPerUser 每用户 API Key 数量配额。
 const apiKeyMaxPerUser = 50
 
+// apiKeyMaxWhitelistEntries 限制单 Key 白名单条目数，约束写库体积与
+// 鉴权侧单次 CIDR 扫描/解析缓存的常驻成本。
+const apiKeyMaxWhitelistEntries = 256
+
 // apiKeyWhitelistCachePurge 由 middleware 包注入（middleware 导入 handlers，
 // 反向会成环——①）：删除/禁用 Key 时按 keyID 前缀清扫白名单 CIDR
 // 解析缓存（条目永不再命中却永久驻留=无界累积）。nil=未装配（单测直连
@@ -279,6 +283,10 @@ func createAPIKeyForUser(c *gin.Context, userID int) {
 			return
 		}
 	}
+	if len(req.MCPIPWhitelist) > apiKeyMaxWhitelistEntries {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: fmt.Sprintf("MCP IP 白名单最多 %d 条", apiKeyMaxWhitelistEntries)})
+		return
+	}
 	whitelist, err := services.NormalizeCIDRs(req.MCPIPWhitelist)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "MCP IP 白名单无效: " + err.Error()})
@@ -415,6 +423,10 @@ func updateAPIKeyStatus(c *gin.Context, currentUserOnly bool) {
 	// 同源：请求原值含重复/未压缩 CIDR，直接计数会虚报）。
 	whitelistCount := 0
 	if req.MCPIPWhitelist != nil {
+		if len(*req.MCPIPWhitelist) > apiKeyMaxWhitelistEntries {
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: fmt.Sprintf("MCP IP 白名单最多 %d 条", apiKeyMaxWhitelistEntries)})
+			return
+		}
 		whitelist, err := services.NormalizeCIDRs(*req.MCPIPWhitelist)
 		if err != nil {
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "MCP IP 白名单无效: " + err.Error()})

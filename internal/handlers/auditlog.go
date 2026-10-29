@@ -206,8 +206,12 @@ func cachedAuditLogTotal(ctx context.Context, database *sql.DB, where string, ar
 // 返回载荷与降级形态同键集：partial 仅在本轮任一列查询/扫描/迭代失败时为
 // true（故障轮载荷不得写入缓存，由调用方按 fetchErr 判定）。
 func fetchAuditLogOptions(ctx context.Context) (map[string]interface{}, error) {
+	database := db.AuditDB
+	if database == nil {
+		return auditOptionsPayload(nil, nil, nil, true), fmt.Errorf("审计库未初始化")
+	}
 	fetchDistinct := func(column string, limit int) ([]auditOptionRow, error) {
-		rows, err := db.AuditDB.QueryContext(ctx, `
+		rows, err := database.QueryContext(ctx, `
 			SELECT `+column+`, COUNT(*) AS cnt FROM audit_log
 			WHERE `+column+` != ''
 			GROUP BY `+column+`
@@ -387,7 +391,8 @@ func (h *Handlers) GetAuditLogs(c *gin.Context) {
 	}
 	// 与 GetAuditLogOptions 同口径的 nil 守卫。降级形态与正常路径同键集：
 	// total_stale=true（计数不可信）+ partial=true，消费方无需按状态切换解码。
-	if db.AuditDB == nil {
+	auditDB := db.AuditDB
+	if auditDB == nil {
 		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "审计库未就绪",
 			Data: auditLogListPayload([]map[string]any{}, 0, true, true, page, pageSize)})
 		return
@@ -402,7 +407,10 @@ func (h *Handlers) GetAuditLogs(c *gin.Context) {
 	// info）——此前两分支都直接 Logf("error")，带外写入非法时区后审计页每次
 	// 轮询都记一条 error 淹没真实故障，且恢复无「已恢复」信号（与日志统计
 	// 阈值读取同域口径分裂）。读失败与「值非法」用不同 key 区分。
-	if err := db.DB.QueryRowContext(c.Request.Context(), "SELECT COALESCE(timezone,?) FROM global_config WHERE id=1", db.DefaultTimezone).Scan(&tzStr); err != nil {
+	mainDB := db.DB
+	if mainDB == nil {
+		services.LogConfigReadFailure("audit-log-timezone", fmt.Errorf("审计日志筛选时区读取失败（按 UTC 继续）: 数据库未初始化"))
+	} else if err := mainDB.QueryRowContext(c.Request.Context(), "SELECT COALESCE(timezone,?) FROM global_config WHERE id=1", db.DefaultTimezone).Scan(&tzStr); err != nil {
 		services.LogConfigReadFailure("audit-log-timezone", fmt.Errorf("审计日志筛选时区读取失败（按 UTC 继续）: %w", err))
 	} else if l, lerr := time.LoadLocation(tzStr); lerr == nil {
 		services.LogConfigReadRecovered("audit-log-timezone")
@@ -420,13 +428,13 @@ func (h *Handlers) GetAuditLogs(c *gin.Context) {
 	// total 走 5s 进程缓存（键=筛选条件签名）：百万行审计库下每请求一次
 	// 全表 COUNT(*) 是首屏固定成本，翻页/筛选反复支付；行数是展示与翻页
 	// 锚点，短陈旧不可感知，响应以 total_stale 披露来源（不静默）。
-	total, totalStale, err := cachedAuditLogTotal(c.Request.Context(), db.AuditDB, where, args)
+	total, totalStale, err := cachedAuditLogTotal(c.Request.Context(), auditDB, where, args)
 	if err != nil {
 		writeInternalError(c, http.StatusInternalServerError, "查询操作日志失败", fmt.Errorf("统计操作日志总数: %w", err))
 		return
 	}
 
-	rows, err := db.AuditDB.QueryContext(c.Request.Context(), `
+	rows, err := auditDB.QueryContext(c.Request.Context(), `
 		SELECT id,
 		       COALESCE(username, ''),
 		       action,
@@ -481,14 +489,17 @@ func (h *Handlers) GetAuditLogs(c *gin.Context) {
 	// display_name 富化失败同样置 partial=true：列表已静默退化为 username，
 	// 消费方必须能感知「部分降级」（与文档 partial 语义一致）。
 	displayNameDegraded := false
-	if len(usernames) > 0 {
+	if len(usernames) > 0 && mainDB == nil {
+		displayNameDegraded = true
+	}
+	if len(usernames) > 0 && mainDB != nil {
 		args := make([]interface{}, 0, len(usernames))
 		placeholders := make([]string, 0, len(usernames))
 		for name := range usernames {
 			placeholders = append(placeholders, "?")
 			args = append(args, name)
 		}
-		userRows, err := db.DB.QueryContext(c.Request.Context(), "SELECT username, COALESCE(NULLIF(TRIM(display_name), ''), username) FROM users WHERE username IN ("+strings.Join(placeholders, ",")+")", args...)
+		userRows, err := mainDB.QueryContext(c.Request.Context(), "SELECT username, COALESCE(NULLIF(TRIM(display_name), ''), username) FROM users WHERE username IN ("+strings.Join(placeholders, ",")+")", args...)
 		if err != nil {
 			displayNameDegraded = true
 			services.Logf("error", "GetAuditLogs: failed to enrich usernames, using usernames: %v", err)

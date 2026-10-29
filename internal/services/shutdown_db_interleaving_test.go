@@ -23,9 +23,9 @@ func TestRecordAuditLog_shutdownBetweenHandleCheckAndExecDoesNotPanic(t *testing
 	logs := captureLogf(t)
 	auditDB := db.AuditDB
 	previous := beforeAuditLogExec
-	called := false
+	calls := 0
 	beforeAuditLogExec = func() {
-		called = true
+		calls++
 		db.AuditDB = nil
 		_ = auditDB.Close()
 	}
@@ -34,11 +34,14 @@ func TestRecordAuditLog_shutdownBetweenHandleCheckAndExecDoesNotPanic(t *testing
 	requireNoPanic(t, func() {
 		RecordAuditLog("system", "测试", "审计", "关停交错", "127.0.0.1")
 	})
-	if !called {
-		t.Fatal("audit exec interleaving was not exercised")
+	if calls != 1 {
+		t.Fatalf("audit exec interleaving calls=%d, want 1", calls)
 	}
-	if !strings.Contains(logs.String(), "audit log write skipped") {
-		t.Fatalf("nil 审计句柄分支未留痕: %q", logs.String())
+	if !strings.Contains(logs.String(), "audit log write failed") {
+		t.Fatalf("快照句柄在 Exec 前关闭时必须走写入失败留痕: %q", logs.String())
+	}
+	if strings.Contains(logs.String(), "audit log write skipped") {
+		t.Fatalf("hook 不得落在句柄快照之前并提前走 nil 分支: %q", logs.String())
 	}
 }
 
@@ -94,7 +97,7 @@ func TestGetTaskLogSizeBytes_shutdownBetweenHandleCheckAndQueryFallsBack(t *test
 	})
 
 	var got int64
-	requireNoPanic(t, func() { got = getTaskLogSizeBytes() })
+	requireNoPanic(t, func() { got = getTaskLogSizeBytes(context.Background()) })
 	if !called {
 		t.Fatal("task log threshold interleaving was not exercised")
 	}

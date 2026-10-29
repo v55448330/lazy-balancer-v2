@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"golang.org/x/crypto/bcrypt"
@@ -105,4 +106,39 @@ func wrongTOTPCode(t *testing.T, secret string) string {
 		return "000000"
 	}
 	return "000001"
+}
+
+func TestLogout_revocationWriteFailureWritesAuditAndLog(t *testing.T) {
+	h := newBackupTestHandlers(t)
+	if _, err := db.DB.Exec(`CREATE TRIGGER reject_logout_revocation BEFORE INSERT ON revoked_jti
+		BEGIN SELECT RAISE(FAIL, 'revocation write blocked'); END`); err != nil {
+		t.Fatalf("install revocation failure trigger: %v", err)
+	}
+	logs := captureLog(t)
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/auth/logout", nil)
+	ctx.Set("auth_type", "jwt")
+	ctx.Set("username", "operator")
+	ctx.Set("token_revocation_hash", "sha256:logout-failure")
+	ctx.Set("token_expires_at", time.Now().Add(time.Hour))
+
+	// When 吊销记录写库失败。
+	h.Logout(ctx)
+
+	// Then 500 不变，但失败同时进入运行日志与操作审计。
+	if recorder.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d body=%s, want 500", recorder.Code, recorder.Body.String())
+	}
+	if !strings.Contains(logs.String(), "登出") || !strings.Contains(logs.String(), "失败") {
+		t.Fatalf("logout failure log=%q, want revocation failure detail", logs.String())
+	}
+	var count int
+	if err := db.AuditDB.QueryRow(`SELECT COUNT(*) FROM audit_log WHERE action='登出' AND resource='用户认证' AND detail LIKE '%失败%'`).Scan(&count); err != nil {
+		t.Fatalf("query logout audit: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("logout failure audit rows=%d, want 1", count)
+	}
 }

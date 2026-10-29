@@ -54,6 +54,35 @@ func middlewareFuncDecl(file *ast.File, name string) *ast.FuncDecl {
 	return nil
 }
 
+func middlewareIntExpression(file *ast.File, expr ast.Expr) (int, bool) {
+	if literal, ok := expr.(*ast.BasicLit); ok && literal.Kind == token.INT {
+		value, err := strconv.Atoi(literal.Value)
+		return value, err == nil
+	}
+	ident, ok := expr.(*ast.Ident)
+	if !ok {
+		return 0, false
+	}
+	for _, decl := range file.Decls {
+		gen, ok := decl.(*ast.GenDecl)
+		if !ok || gen.Tok != token.CONST {
+			continue
+		}
+		for _, spec := range gen.Specs {
+			values, ok := spec.(*ast.ValueSpec)
+			if !ok {
+				continue
+			}
+			for i, name := range values.Names {
+				if name.Name == ident.Name && i < len(values.Values) {
+					return middlewareIntExpression(file, values.Values[i])
+				}
+			}
+		}
+	}
+	return 0, false
+}
+
 // clusterRateLimitCallLimit 从函数体内的 clusterRateLimit(scope, limit, msg)
 // 调用派生限额：直接挂载与包装器共用同一实参口径。
 func clusterRateLimitCallLimit(fn *ast.FuncDecl) int {
@@ -232,6 +261,21 @@ func middlewareRouteRegistrations(t *testing.T, source []byte) map[string]middle
 				registration.rateLimitMounted = true
 				registration.rateLimitPerMin = machineCredentialLimit
 				registration.rateLimitIPPerMin = machineIPLimit
+			case "mcpSourceRateLimit":
+				limit, ok := middlewareIntExpression(file, &ast.Ident{Name: "mcpRateLimitPerMinute"})
+				if !ok {
+					continue
+				}
+				registration.rateLimitMounted = true
+				registration.rateLimitIPPerMin = limit
+			case "mcpAPIKeyRateLimit":
+				limit, ok := middlewareIntExpression(file, &ast.Ident{Name: "mcpRateLimitPerMinute"})
+				if !ok {
+					continue
+				}
+				registration.rateLimitMounted = true
+				registration.rateLimitKey = "mcp"
+				registration.rateLimitPerMin = limit
 			case "clusterRateLimit":
 				if len(middlewareCall.Args) < 2 {
 					continue
@@ -240,15 +284,11 @@ func middlewareRouteRegistrations(t *testing.T, source []byte) map[string]middle
 				if !ok {
 					continue
 				}
-				limitLiteral, ok := middlewareCall.Args[1].(*ast.BasicLit)
-				if !ok || limitLiteral.Kind != token.INT {
+				limit, ok := middlewareIntExpression(file, middlewareCall.Args[1])
+				if !ok {
 					continue
 				}
 				scope, err := strconv.Unquote(scopeLiteral.Value)
-				if err != nil {
-					continue
-				}
-				limit, err := strconv.Atoi(limitLiteral.Value)
 				if err != nil {
 					continue
 				}
@@ -335,6 +375,8 @@ func TestMiddlewareRouteRegistrations_includesClosureAndMultiLineForms(t *testin
 	// clusterMachineRateLimit 的限额在实现体常量块，callee 名都不带数字。
 	// 合成常量取 7/77（与生产的 30/300 不同），派生数只能来自实现体。
 	synthetic := []byte(`package middleware
+const syntheticRateLimit = 43
+
 
 func clusterRegisterRateLimit() gin.HandlerFunc {
 	return clusterRateLimit("register", 7, "合成注册限流")
@@ -360,6 +402,7 @@ func assemble(v1 *Group, h *Handlers) {
 	v1.GET("/limited", clusterRateLimit("synthetic", 42, "合成限流"), h.LimitedHandler)
 	v1.POST("/register-limited", clusterRegisterRateLimit(), h.RegisterHandler)
 	v1.GET("/machine-limited", clusterMachineRateLimit("synthetic-machine", clusterCredentialFromToken), h.MachineHandler)
+	v1.GET("/named-constant-limited", clusterRateLimit("synthetic-const", syntheticRateLimit, "合成常量限流"), h.NamedConstantHandler)
 }
 `)
 	syntheticRoutes := middlewareRouteRegistrations(t, synthetic)
@@ -372,6 +415,10 @@ func assemble(v1 *Group, h *Handlers) {
 	limited := syntheticRoutes["GET /limited"]
 	if !limited.rateLimitMounted || limited.rateLimitKey != "synthetic" || limited.rateLimitPerMin != 42 {
 		t.Errorf("限流挂载解析=%+v, want synthetic/42", limited)
+	}
+	namedConstant := syntheticRoutes["GET /named-constant-limited"]
+	if !namedConstant.rateLimitMounted || namedConstant.rateLimitKey != "synthetic-const" || namedConstant.rateLimitPerMin != 43 {
+		t.Errorf("命名常量限流解析=%+v, want synthetic-const/43", namedConstant)
 	}
 	register := syntheticRoutes["POST /register-limited"]
 	if !register.rateLimitMounted || register.rateLimitKey != "register" || register.rateLimitPerMin != 7 {
@@ -408,7 +455,7 @@ func TestAPIDocs_rateLimitedRoutesDocument429AndNumbers(t *testing.T) {
 	for _, route := range apiDocRoutes {
 		documented[route.Method+" "+route.Path] = route
 	}
-	limited, loginBucketRouted, machineFamilyRouted := 0, false, false
+	limited, loginBucketRouted, machineFamilyRouted, mcpDualRouted := 0, false, false, false
 	for key, registration := range middlewareRouteRegistrations(t, middlewareSourceForTest(t)) {
 		if !registration.rateLimitMounted {
 			continue
@@ -419,6 +466,9 @@ func TestAPIDocs_rateLimitedRoutesDocument429AndNumbers(t *testing.T) {
 		}
 		if registration.rateLimitIPPerMin > 0 {
 			machineFamilyRouted = true
+		}
+		if key == "POST /mcp" && registration.rateLimitPerMin > 0 && registration.rateLimitIPPerMin > 0 {
+			mcpDualRouted = true
 		}
 		route, ok := documented[key]
 		if !ok {
@@ -473,6 +523,9 @@ func TestAPIDocs_rateLimitedRoutesDocument429AndNumbers(t *testing.T) {
 	}
 	if !machineFamilyRouted {
 		t.Fatal("未能从 middleware.go 派生集群机器接口双档限流（包装器形态变化，扫描器需跟进）")
+	}
+	if !mcpDualRouted {
+		t.Fatal("未能从 middleware.go 派生 MCP 的 Key+IP 双档限流")
 	}
 }
 

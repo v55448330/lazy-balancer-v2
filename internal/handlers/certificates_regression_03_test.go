@@ -539,6 +539,55 @@ func TestIssueCertificate_waitingCACoolingRequiresForce(t *testing.T) {
 	}
 }
 
+// Given force 定向/批量签发已迁移冷却任务（changed=true），随后 provider 解析失败。
+// When 签发入口返回 500。
+// Then 两种失败审计都必须保留「手动越过 CA 冷却」；只有 changed=false 才不得记。
+func TestIssueCertificate_forceFailureAuditKeepsCooldownOverride(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		all  bool
+	}{
+		{name: "targeted"},
+		{name: "batch", all: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newBackupTestHandlers(t)
+			initIssueQueue(t)
+			ruleID := "lb_force_failure_" + tc.name
+			domain := "force-failure-" + tc.name + ".example"
+			seedIssueRule(t, ruleID, domain)
+			if _, err := db.DB.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,ca_available_after,updated_at)
+				VALUES (?,?,'waiting_ca',datetime('now','+1 hour'),datetime('now','-2 hours'))`, ruleID, domain); err != nil {
+				t.Fatalf("seed cooling job: %v", err)
+			}
+			oldCreate := createOrRequeueCertJob
+			createOrRequeueCertJob = func(string, string, int, *services.CAQueueManager) (int, bool, error) {
+				return 1, true, fmt.Errorf("provider resolution failed")
+			}
+			t.Cleanup(func() { createOrRequeueCertJob = oldCreate })
+			router := gin.New()
+			router.POST("/certificates/issue", h.IssueCertificate)
+			body := `{"caddy_id":"` + ruleID + `"}`
+			if tc.all {
+				body = `{"all":true}`
+			}
+
+			recorder := httptest.NewRecorder()
+			router.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/certificates/issue?force=true", strings.NewReader(body)))
+			if recorder.Code != http.StatusInternalServerError {
+				t.Fatalf("status=%d body=%s, want 500 provider resolution failure", recorder.Code, recorder.Body.String())
+			}
+			var detail string
+			if err := db.AuditDB.QueryRow(`SELECT COALESCE(detail,'') FROM audit_log WHERE action='触发签发' AND resource='证书' ORDER BY id DESC LIMIT 1`).Scan(&detail); err != nil {
+				t.Fatalf("read issue failure audit: %v", err)
+			}
+			if !strings.Contains(detail, "手动越过 CA 冷却") {
+				t.Fatalf("audit detail=%q, want 手动越过 CA 冷却（changed=true,error）", detail)
+			}
+		})
+	}
+}
+
 // Given 批量签发中唯一目标处于 CA 限流退避窗口。
 // When all=true（未带 force）。
 // Then 409 且如实给出 skipped_waiting_ca 计数，任务不被重排。

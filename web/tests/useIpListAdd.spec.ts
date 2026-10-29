@@ -10,7 +10,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { registerModuleHooks } from './_helpers.ts'
+import { registerModuleHooks, waitForMicrotasks } from './_helpers.ts'
 import { installStubHost, STUB_API, STUB_ELEMENT, STUB_SAVE_RESULT } from './_stubs.ts'
 
 type Harness = {
@@ -30,11 +30,6 @@ registerModuleHooks({
 const { useIpListAdd } = await import('../src/composables/useIpListAdd.ts')
 
 const list = { id: 7, name: '办公网', entry_count: 3 }
-const tick = (): Promise<void> => {
-  const { promise, resolve } = Promise.withResolvers<void>()
-  setTimeout(resolve, 0)
-  return promise
-}
 
 const reset = (): void => {
   stubHost.reset()
@@ -127,7 +122,7 @@ test('写入在途时重入直接拒绝（双击只产生一次 POST）', async 
   }
   const { adding, addIpToList } = useIpListAdd()
   const first = addIpToList('1.2.3.4', list)
-  await tick()
+  await waitForMicrotasks(() => adding.value, '在途写入置位重入锁')
   assert.equal(adding.value, true, '在途期间重入锁必须置位')
   assert.equal(await addIpToList('1.2.3.4', list), false, '重入必须立即拒绝')
   resolve({ data: { added: true } })
@@ -151,7 +146,7 @@ test('确认框未决时重入直接拒绝（双击只叠一个确认框）', as
   }
   const { adding, addIpToList } = useIpListAdd()
   const first = addIpToList('1.2.3.4', list)
-  await tick()
+  await waitForMicrotasks(() => adding.value, '确认框弹出前置位重入锁')
   assert.equal(adding.value, true, '确认框尚未决时锁必须已置位（原实现在确认后才置位）')
   assert.equal(await addIpToList('1.2.3.4', list), false, '确认期间重入必须立即拒绝')
   assert.equal(confirms, 1, '双击不得叠第二个确认框')

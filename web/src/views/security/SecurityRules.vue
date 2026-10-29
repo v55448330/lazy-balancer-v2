@@ -1431,10 +1431,11 @@ const importEntriesFromText = (text: string): void => {
     ElMessage.error('文件为空或没有可解析的内容，已取消导入')
     return
   }
-  // 与保存口径一致：值与备注均为空的占位行先行移除，导入后表格不留空行
-  ipListForm.value.entries = ipListForm.value.entries.filter((e) => e.value.trim() !== '' || e.remark.trim() !== '')
-  const existing = new Set(ipListForm.value.entries.map((e) => e.value.trim()).filter((v) => v !== ''))
-  let success = 0
+  // 与保存口径一致：值与备注均为空的占位行先行移除；先解析候选，
+  // 上限门通过前不改写表单，避免超限文件只留下无法保存的部分导入。
+  const cleanedEntries = ipListForm.value.entries.filter((e) => e.value.trim() !== '' || e.remark.trim() !== '')
+  const existing = new Set(cleanedEntries.map((e) => e.value.trim()).filter((v) => v !== ''))
+  const candidates: Array<{ value: string; remark: string }> = []
   let invalid = 0
   let duplicate = 0
   const remarkTooLongLines: number[] = []
@@ -1445,9 +1446,17 @@ const importEntriesFromText = (text: string): void => {
     if ('error' in parsed) { invalid++; remarkTooLongLines.push(line.no); continue }
     if (existing.has(parsed.value)) { duplicate++; continue }
     existing.add(parsed.value)
-    ipListForm.value.entries.push({ value: parsed.value, remark: parsed.remark })
-    success++
+    candidates.push({ value: parsed.value, remark: parsed.remark })
   }
+  const activeExistingCount = cleanedEntries.filter((e) => !e.expires_at || !autobanEntryExpired(e.expires_at)).length
+  const remaining = Math.max(0, IP_LIST_MAX_ENTRIES - activeExistingCount)
+  if (candidates.length > remaining) {
+    ElMessage.warning(`本次可导入 ${candidates.length} 条，超过当前剩余额度 ${remaining} 条（每个列表最多 ${IP_LIST_MAX_ENTRIES} 条生效条目），已取消导入`)
+    return
+  }
+  ipListForm.value.entries = cleanedEntries
+  ipListForm.value.entries.push(...candidates)
+  const success = candidates.length
   ipListEntryPage.value = Math.ceil(ipListForm.value.entries.length / ipListEntryPageSize)
   const tooLongLineNos = remarkTooLongLines.slice(0, 10).join('、') + (remarkTooLongLines.length > 10 ? ' 等' : '')
   const tooLongNote = remarkTooLongLines.length > 0
@@ -1784,19 +1793,9 @@ const ensureScheduleTz = async () => {
   }
 }
 
-const confirmScheduleSave = async (libraryName: string): Promise<boolean> => {
-  try {
-    await ElMessageBox.confirm(`将保存${libraryName}的定时更新设置，后续按新排程自动更新。是否继续？`, '保存定时更新设置', {
-      type: 'warning', confirmButtonText: '确认保存', cancelButtonText: '取消',
-    })
-    return true
-  } catch { return false }
-}
-
 const savingCRSSchedule = ref(false)
 const saveCRSSchedule = async ({ days, time }: { days: number[]; time: string }) => {
   if (crsScheduleHint.value) { ElMessage.warning(crsScheduleHint.value); return }
-  if (!(await confirmScheduleSave('CRS 规则库'))) return
   savingCRSSchedule.value = true
   try {
     await request.put('/security/crs/schedule', { days, time })
@@ -1808,7 +1807,6 @@ const saveCRSSchedule = async ({ days, time }: { days: number[]; time: string })
 const savingIP2RegionSchedule = ref(false)
 const saveIP2RegionSchedule = async ({ days, time }: { days: number[]; time: string }) => {
   if (ip2regionScheduleHint.value) { ElMessage.warning(ip2regionScheduleHint.value); return }
-  if (!(await confirmScheduleSave('IP 地理库'))) return
   savingIP2RegionSchedule.value = true
   try {
     await request.put('/security/ip2region/schedule', { days, time })
@@ -1820,7 +1818,6 @@ const saveIP2RegionSchedule = async ({ days, time }: { days: number[]; time: str
 const savingThreatSchedule = ref(false)
 const saveThreatSchedule = async ({ days, time }: { days: number[]; time: string }) => {
   if (threatScheduleHint.value) { ElMessage.warning(threatScheduleHint.value); return }
-  if (!(await confirmScheduleSave('威胁情报库'))) return
   savingThreatSchedule.value = true
   try {
     await request.put('/security/threat-lib/schedule', { days, time })
@@ -1832,7 +1829,6 @@ const saveThreatSchedule = async ({ days, time }: { days: number[]; time: string
 const savingCrawlerSchedule = ref(false)
 const saveCrawlerSchedule = async ({ days, time }: { days: number[]; time: string }) => {
   if (crawlerScheduleHint.value) { ElMessage.warning(crawlerScheduleHint.value); return }
-  if (!(await confirmScheduleSave('爬虫地址库'))) return
   savingCrawlerSchedule.value = true
   try {
     await request.put('/security/crawler-lib/schedule', { days, time })
@@ -1999,12 +1995,12 @@ onUnmounted(() => {
 .crs-card :deep(.el-card__header) .crs-header { display: flex; justify-content: space-between; align-items: center; width: 100%; }
 .crs-card :deep(.el-card__header) .crs-header-title { display: flex; align-items: center; gap: 12px; }
 .rule-condition-row {
-  display: flex; gap: 10px; margin-bottom: 10px; align-items: flex-start; flex-wrap: wrap;
+  display: flex; gap: 10px; margin-bottom: 10px; align-items: center; flex-wrap: wrap;
   padding: 12px; background: #f9fafb; border: 1px solid #e5e7eb;
   position: relative; transition: border-color 0.2s;
 }
 .rule-condition-row:hover { border-color: #d1d5db; }
-.rule-condition-row .el-button--danger { margin-left: auto; }
+.rule-condition-row .el-button--danger { margin-left: auto; align-self: center; }
 
 /* 弹框头库专属色（DialogHeader tone-class 透传；:deep 穿透子组件——本页弹框未 append-to-body） */
 :deep(.dh-icon.lib-icon--crs) { background: #eff6ff; color: #3b82f6; }

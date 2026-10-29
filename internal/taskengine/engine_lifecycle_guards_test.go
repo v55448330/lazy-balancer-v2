@@ -12,6 +12,7 @@ package taskengine
 //     DB message 已有 truncMsg(500)，日志行须有统一上限。
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -202,7 +203,7 @@ func TestTaskLogAppendOversizedLineDoesNotForceRotation(t *testing.T) {
 	dir := t.TempDir()
 	SetLogDir(dir)
 	t.Cleanup(func() { SetLogDir("") })
-	SetTaskLogSizeBytesFn(func() int64 { return 16 * 1024 })
+	SetTaskLogSizeBytesFn(func(context.Context) int64 { return 16 * 1024 })
 	t.Cleanup(func() { SetTaskLogSizeBytesFn(nil) })
 
 	path := filepath.Join(dir, "t-long-rot.log")

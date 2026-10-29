@@ -1239,7 +1239,7 @@ func loadExistingRollup(tx *sql.Tx, minuteStr string) (map[threatRollupKey]int, 
 func aggregateEvents(tx *sql.Tx, from, to time.Time, afterID int64) (map[threatRollupKey]int, map[string]int, int, error) {
 	agg := map[threatRollupKey]int{}
 	targetAgg := map[string]int{}
-	rawQuery := `SELECT client_ip, COALESCE(NULLIF(rule_name,''), COALESCE(rule_triggered,'')), COALESCE(rule_triggered,''), COALESCE(rule_msg,''), action, COALESCE(rule_caddy_id,''), COUNT(*)
+	rawQuery := `SELECT COALESCE(client_ip,''), COALESCE(NULLIF(rule_name,''), COALESCE(rule_triggered,'')), COALESCE(rule_triggered,''), COALESCE(rule_msg,''), COALESCE(action,''), COALESCE(rule_caddy_id,''), COUNT(*)
 		FROM security_events
 		WHERE event_time >= ? AND event_time < ?`
 	args := []any{from.Format("2006-01-02 15:04:05"), to.Format("2006-01-02 15:04:05")}
@@ -1261,7 +1261,7 @@ func aggregateEvents(tx *sql.Tx, from, to time.Time, afterID int64) (map[threatR
 			rows.Close()
 			return nil, nil, 0, err
 		}
-		if isReservedIP(ip) {
+		if isMissingOrReservedIP(ip) {
 			continue
 		}
 		if !services.SecurityEventCountsAsAttack(action, ruleTriggered) {
@@ -1850,6 +1850,13 @@ func (h *Handlers) GetSecurityThreatScreen(c *gin.Context) {
 			firstErr = err
 		}
 	}
+	// 查询失败不留下半轮缓存：聚合可能已写入、后续 Top3/活跃源/recent_rate
+	// 才失败；下一轮必须整体重算，不能混用上一轮聚合与新一轮 Top3。
+	defer func() {
+		if firstErr != nil {
+			invalidateThreatScreenRollupCaches()
+		}
+	}()
 
 	// v2.3.8 rollup 路径：懒固化后单次扫描 rollup 产出全部维度（总量/拦截/
 	// 国家/省/攻击族/规则/小时——原 5 条原始表窗口扫描合并为 1 条 rollup 扫
@@ -2058,7 +2065,7 @@ func (h *Handlers) GetThreatScreenAttackFlow(c *gin.Context) {
 	for _, ev := range events {
 		// 入口已排除保留地址（见 securityevents 入环前的同一判据）；此处保留
 		// 兜底过滤，覆盖入环前收敛之前写入的旧条目。
-		if isReservedIP(ev.ClientIP) {
+		if isMissingOrReservedIP(ev.ClientIP) {
 			continue
 		}
 		location := enrichIPLocation(ev.ClientIP)
@@ -2161,7 +2168,7 @@ func (h *Handlers) GetSecurityEventToastSummary(c *gin.Context) {
 		hook()
 	}
 	rows, err := db.MetricsDB.Query(`
-		SELECT client_ip, action, COALESCE(rule_triggered,''), COALESCE(rule_msg,''),
+		SELECT COALESCE(client_ip,''), COALESCE(action,''), COALESCE(rule_triggered,''), COALESCE(rule_msg,''),
 		       COUNT(*), MAX(id), AVG(COALESCE(duration_us,0))
 		FROM (
 			SELECT client_ip, action, rule_triggered, rule_msg, duration_us, id
@@ -2200,7 +2207,7 @@ func (h *Handlers) GetSecurityEventToastSummary(c *gin.Context) {
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "安全事件查询失败"})
 			return
 		}
-		if isReservedIP(ip) {
+		if isMissingOrReservedIP(ip) {
 			continue
 		}
 		attackType := categorizeAttack(ruleTriggered, ruleMsg)
@@ -2335,7 +2342,7 @@ func (h *Handlers) GetSecurityEventFeed(c *gin.Context) {
 			e.IPLocation = enrichIPLocation(e.ClientIP)
 			// 保留/私网 IP 不进大屏事件流（v4 裁定，与聚合口径一致）；游标
 			// 语义不受影响——next_since_id 恒为已扫描最大 id，被过滤行只是跳过。
-			if isReservedIP(e.ClientIP) {
+			if isMissingOrReservedIP(e.ClientIP) {
 				continue
 			}
 			// 爬虫放行不是攻击：不进大屏事件流（与聚合口径一致）；游标照常
@@ -2355,7 +2362,7 @@ func (h *Handlers) GetSecurityEventFeed(c *gin.Context) {
 		return scanned, lastID
 	}
 
-	const selectCols = `SELECT id, event_time, client_ip, action, COALESCE(rule_name,''), COALESCE(rule_triggered,''), COALESCE(rule_msg,''), COALESCE(event_type,''), COALESCE(duration_us,0), COALESCE(anomaly_score,0)
+	const selectCols = `SELECT id, event_time, COALESCE(client_ip,''), COALESCE(action,''), COALESCE(rule_name,''), COALESCE(rule_triggered,''), COALESCE(rule_msg,''), COALESCE(event_type,''), COALESCE(duration_us,0), COALESCE(anomaly_score,0)
 		FROM security_events`
 	hasMore := false
 	if sinceID <= 0 {

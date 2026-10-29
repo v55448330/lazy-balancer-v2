@@ -25,11 +25,11 @@ import (
 // 复位引用缓存与其全量构建计数（测试收尾同样复位，避免包级状态污染后续用例）。
 func installWafRefCacheFixture(t *testing.T) string {
 	t.Helper()
-	oldCrs, oldXdb, oldWaf := crsLiveDir, ip2regionLivePath, wafDir
 	dir := t.TempDir()
-	crsLiveDir = filepath.Join(dir, "crs")
-	ip2regionLivePath = filepath.Join(dir, "ip2region.xdb")
+	t.Cleanup(OverrideWafLivePathsForTest(filepath.Join(dir, "crs"), filepath.Join(dir, "ip2region.xdb")))
+	oldWaf := wafDir
 	wafDir = filepath.Join(dir, "waf")
+	t.Cleanup(func() { wafDir = oldWaf })
 	rulesDir := filepath.Join(crsLiveDir, "rules")
 	for _, d := range []string{rulesDir, wafDir} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
@@ -41,21 +41,13 @@ func installWafRefCacheFixture(t *testing.T) string {
 		t.Fatalf("write rule: %v", err)
 	}
 	resetWafRefCacheForTest()
-	t.Cleanup(func() {
-		crsLiveDir, ip2regionLivePath, wafDir = oldCrs, oldXdb, oldWaf
-		resetWafRefCacheForTest()
-	})
+	t.Cleanup(resetWafRefCacheForTest)
 	return rulePath
 }
 
 // resetWafRefCacheForTest 复位引用缓存与全量构建计数（单源，用例前后各一次）。
 func resetWafRefCacheForTest() {
-	wafFileRefCache.mu.Lock()
-	wafFileRefCache.valid = false
-	wafFileRefCache.sig = ""
-	wafFileRefCache.ref = nil
-	wafFileRefCache.validatedAt = time.Time{}
-	wafFileRefCache.mu.Unlock()
+	invalidateWafFileRefCache()
 	wafFileRefFullBuilds.Store(0)
 }
 

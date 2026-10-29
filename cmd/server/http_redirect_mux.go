@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -13,6 +14,7 @@ import (
 
 const maxProtocolSniffers = 128
 const maxHTTPRedirectHeaderBytes = 16 << 10
+const maxHTTPRedirectBodyDrainBytes = 8 << 10
 
 // prefixConn replays the bytes Peek consumed so the TLS handshake is intact.
 type prefixConn struct {
@@ -159,6 +161,7 @@ func redirectHTTP(reader *bufio.Reader, connection net.Conn) {
 		return
 	}
 	host := ""
+	var contentLength int64
 	location := "/"
 	parts := strings.Fields(head)
 	if len(parts) >= 2 {
@@ -172,7 +175,11 @@ func redirectHTTP(reader *bufio.Reader, connection net.Conn) {
 		if line == "\r\n" || line == "\n" {
 			break
 		}
-		if strings.HasPrefix(strings.ToLower(line), "host:") {
+		lowerLine := strings.ToLower(line)
+		if strings.HasPrefix(lowerLine, "content-length:") {
+			contentLength, _ = strconv.ParseInt(strings.TrimSpace(line[len("content-length:"):]), 10, 64)
+		}
+		if strings.HasPrefix(lowerLine, "host:") {
 			host = strings.TrimSpace(line[len("host:"):])
 			// Host 行内裸 CR 等控制字符不得反射进 Location：TrimSpace 只去首尾，
 			// 中置 CR 曾原样进响应头。中置空格（0x20）同族——TrimSpace 同样剔
@@ -189,6 +196,10 @@ func redirectHTTP(reader *bufio.Reader, connection net.Conn) {
 		// 使用）。按 HTTP 语义返回 400 并关闭——也不反射原始畸形 Host。
 		_, _ = connection.Write([]byte("HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\nCache-Control: no-store\r\n\r\n"))
 		return
+	}
+	if contentLength > 0 {
+		drain := min(contentLength, int64(maxHTTPRedirectBodyDrainBytes))
+		_, _ = io.CopyN(io.Discard, reader, drain)
 	}
 	response := fmt.Sprintf("HTTP/1.1 302 Found\r\nContent-Length: 0\r\nConnection: close\r\nLocation: https://%s%s\r\nCache-Control: no-store\r\n\r\n", host, location)
 	_, _ = connection.Write([]byte(response))

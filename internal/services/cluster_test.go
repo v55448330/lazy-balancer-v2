@@ -1359,7 +1359,7 @@ func TestUpdateSnapshotSettings_legacyAbsentFieldsPreserveEntireLocalRow(t *test
 		log_level='warn',task_log_size_mb=77,audit_log_size_mb=78,runtime_log_size_mb=79,
 		audit_retention_months=8,jwt_expire_minutes=777,timezone='UTC',acme_email='local@example.test',
 		cert_expiry_days=44,cert_renewal_days=45,cert_renewal_attempts=6,default_ca_provider_id=88,
-		dns_provider='local-dns',sync_interval=321,
+		sync_interval=321,
 		admin_tls_enabled=1,admin_tls_mode='upload',admin_tls_cert='local-cert',admin_tls_key='local-key',
 		mfa_write_guard=1,mfa_lockout_enabled=1,github_proxy_url='https://local.proxy',oidc_config='{"issuer":"local"}',
 		branding_json='{"app_name":"local"}',caddy_config='{"apps":{}}',access_log_json=0,

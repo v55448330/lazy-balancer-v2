@@ -430,14 +430,15 @@ func globalConfigInt(column string, fallback int64) int64 {
 	// nil 守卫:guardConfiguredJSONBody 经本函数
 	// 读配置,无 DB 脚手架的测试/调用形态下 db.DB 为 nil,QueryRow 直接 panic
 	// ——nil 与读失败同口径回退默认值。
-	if db.DB == nil {
+	database := db.DB
+	if database == nil {
 		return fallback
 	}
 	var v int64
 	// 读失败回退默认必须留痕（此前静默——库故障窗口阈值展示/滚动
 	// 口径失真零信号）；接 services 单源状态转换留痕（首报 warn+恢复 info，
 	// 面板轮询不刷屏）。nil 与读失败同口径回退默认值。
-	if err := db.DB.QueryRow("SELECT COALESCE("+column+",?) FROM global_config WHERE id=1", fallback).Scan(&v); err != nil {
+	if err := database.QueryRow("SELECT COALESCE("+column+",?) FROM global_config WHERE id=1", fallback).Scan(&v); err != nil {
 		services.LogConfigReadFailure("config-read-"+column, err)
 		return fallback
 	}
@@ -735,8 +736,8 @@ func (h *Handlers) GetLogStats(c *gin.Context) {
 
 	// DB 体量按库文件大小近似；行数供 UI 显示条目规模
 	if want("audit") {
-		if db.AuditDB != nil {
-			if n, ok := cachedLogTableCount(db.AuditDB, "logstats-audit-count", "SELECT COUNT(*) FROM audit_log"); ok {
+		if auditDB := db.AuditDB; auditDB != nil {
+			if n, ok := cachedLogTableCount(auditDB, "logstats-audit-count", "SELECT COUNT(*) FROM audit_log"); ok {
 				byKey("audit").Rows = &n
 			} else if info := byKey("audit"); info != nil {
 				// 与 security_events 行同口径：计数失败显式披露，避免消费方把
@@ -749,8 +750,8 @@ func (h *Handlers) GetLogStats(c *gin.Context) {
 		}
 	}
 	if want("security_events") {
-		if db.MetricsDB != nil {
-			if n, ok := cachedLogTableCount(db.MetricsDB, "logstats-security-events-count", "SELECT COUNT(*) FROM security_events"); ok {
+		if metricsDB := db.MetricsDB; metricsDB != nil {
+			if n, ok := cachedLogTableCount(metricsDB, "logstats-security-events-count", "SELECT COUNT(*) FROM security_events"); ok {
 				byKey("security_events").Rows = &n
 			} else if info := byKey("security_events"); info != nil {
 				// 计数失败显式披露：此前响应只是缺席 rows，前端遂静默从

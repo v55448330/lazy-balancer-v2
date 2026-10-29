@@ -11,6 +11,10 @@ package config
 import (
 	"errors"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -124,27 +128,133 @@ func TestJWTSecretPersistIsAtomicOnDisk(t *testing.T) {
 	}
 }
 
-// 生产代码不得再出现直写落盘形态（第二种形态即缺陷形态；测试文件可自便）。
+// 生产快照不得绕过 atomicfile；专用日志、下载与已有事务型格式转换必须显式
+// 登记理由。AST 扫描避免注释假阳性，并覆盖 WriteFile/Create/CreateTemp 与带写
+// 标志的 OpenFile（只读 OpenFile 不是落盘写入）。
 func TestConfigProductionSourcesHaveNoDirectFileWrite(t *testing.T) {
-	files, err := filepath.Glob("*.go")
-	if err != nil {
-		t.Fatalf("glob sources: %v", err)
+	exempt := map[string]string{
+		"db/permissions.go":               "SQLite 文件预建与权限校正，不替换既有快照",
+		"handlers/caddy.go":               "监督器 pause 标记协议",
+		"handlers/config_backup_lbbak.go": "备份包临时解包与 WAF 目录事务恢复",
+		"services/auditlog_rotation.go":   "审计日志轮转专用流式复制",
+		"services/caddy.go":               "CLI 校验临时输入",
+		"services/certjoblog.go":          "证书任务追加日志",
+		"services/certstore.go":           "证书双文件一致性专用实现",
+		"services/cluster_sync.go":        "集群 TLS 信任锚专用临时文件",
+		"services/crshttp.go":             "CRS 下载落盘",
+		"services/crsinstall.go":          "CRS 安装/回滚事务",
+		"services/crsrelease.go":          "CRS 发布快照专用实现",
+		"services/ip2regionhttp.go":       "IP 数据库下载落盘",
+		"services/logrotate.go":           "追加型轮转日志",
+		"services/securityevents.go":      "安全事件追加日志",
+		"services/threatupdate.go":        "威胁库更新临时文件与备份",
+		"services/waffiles_sync.go":       "WAF 文件树同步专用实现",
+		"taskengine/engine.go":            "任务追加日志",
+		"testsupport/tmpdir.go":           "测试环境临时目录可写探针",
 	}
 	scanned := 0
-	for _, file := range files {
-		if strings.HasSuffix(file, "_test.go") {
-			continue
+	err := filepath.WalkDir("..", func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
 		}
-		data, err := os.ReadFile(file)
-		if err != nil {
-			t.Fatalf("read %s: %v", file, err)
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") || strings.HasSuffix(entry.Name(), "_test.go") {
+			return nil
 		}
 		scanned++
-		if strings.Contains(string(data), "os.WriteFile(") {
-			t.Fatalf("%s 出现 os.WriteFile 直写：落盘必须走 internal/atomicfile", file)
+		calls, err := directFileWriteCalls(path)
+		if err != nil {
+			return err
 		}
+		if len(calls) == 0 {
+			return nil
+		}
+		rel, err := filepath.Rel("..", path)
+		if err != nil {
+			return err
+		}
+		rel = filepath.ToSlash(rel)
+		if reason, ok := exempt[rel]; ok {
+			t.Logf("%s: %d direct-write call(s), exemption: %s", rel, len(calls), reason)
+			return nil
+		}
+		t.Errorf("%s 出现直写落盘 %v：快照必须走 internal/atomicfile，专用形态须登记 Ruling", rel, calls)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("scan production sources: %v", err)
 	}
-	if scanned == 0 {
-		t.Fatal("未扫描到任何生产源文件（glob 面漂移会让本门空转）")
+	if scanned < 100 {
+		t.Fatalf("仅扫描到 %d 个生产源文件，递归扫描面退化", scanned)
+	}
+}
+
+func directFileWriteCalls(path string) ([]string, error) {
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, path, nil, 0)
+	if err != nil {
+		return nil, err
+	}
+	var calls []string
+	ast.Inspect(file, func(node ast.Node) bool {
+		call, ok := node.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		selector, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		pkg, ok := selector.X.(*ast.Ident)
+		if !ok || pkg.Name != "os" {
+			return true
+		}
+		writeCall := selector.Sel.Name == "WriteFile" || selector.Sel.Name == "Create" || selector.Sel.Name == "CreateTemp"
+		if selector.Sel.Name == "OpenFile" && len(call.Args) >= 2 {
+			ast.Inspect(call.Args[1], func(flagNode ast.Node) bool {
+				if ident, ok := flagNode.(*ast.Ident); ok {
+					switch ident.Name {
+					case "O_WRONLY", "O_RDWR", "O_CREATE", "O_APPEND", "O_TRUNC":
+						writeCall = true
+					}
+				}
+				return true
+			})
+		}
+		if writeCall {
+			calls = append(calls, fmt.Sprintf("%s:%d os.%s", path, fset.Position(call.Pos()).Line, selector.Sel.Name))
+		}
+		return true
+	})
+	return calls, nil
+}
+
+func TestDirectFileWriteCallScan_discriminatesWriteForms(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sample.go")
+	source := `package sample
+import "os"
+// os.WriteFile("comment-only", nil, 0600)
+func sample() {
+	_ = os.WriteFile
+	_ = os.WriteFile("direct", nil, 0600)
+	_, _ = os.CreateTemp("", "temporary")
+	_, _ = os.OpenFile("read", os.O_RDONLY, 0)
+	_, _ = os.OpenFile("write", os.O_CREATE|os.O_WRONLY, 0600)
+}
+`
+	if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	calls, err := directFileWriteCalls(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(calls) != 3 {
+		t.Fatalf("direct write calls=%v, want WriteFile/CreateTemp/write-OpenFile only", calls)
+	}
+	joined := strings.Join(calls, "\n")
+	for _, want := range []string{":6 os.WriteFile", ":7 os.CreateTemp", ":9 os.OpenFile"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("scanner missing %s: %v", want, calls)
+		}
 	}
 }

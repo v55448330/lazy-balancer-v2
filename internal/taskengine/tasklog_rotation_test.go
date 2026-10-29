@@ -1,6 +1,7 @@
 package taskengine
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,7 +16,7 @@ func TestAppendTaskLogLine_rotatesBeforeWriteAtConfiguredThreshold(t *testing.T)
 	dir := t.TempDir()
 	SetLogDir(dir)
 	t.Cleanup(func() { SetLogDir("") })
-	SetTaskLogSizeBytesFn(func() int64 { return 64 })
+	SetTaskLogSizeBytesFn(func(context.Context) int64 { return 64 })
 	t.Cleanup(func() { SetTaskLogSizeBytesFn(nil) })
 	if err := os.WriteFile(filepath.Join(dir, "a.log"), []byte(strings.Repeat("a", 60)), 0o644); err != nil {
 		t.Fatal(err)
@@ -140,7 +141,7 @@ func TestTaskLogSizeFallbackUsesDBDefault(t *testing.T) {
 	SetTaskLogSizeBytesFn(nil)
 	t.Cleanup(func() { SetTaskLogSizeBytesFn(nil) })
 	want := int64(db.DefaultTaskLogSizeMB) * 1024 * 1024
-	if got := taskLogSizeBytes(); got != want {
+	if got := taskLogSizeBytes(context.Background()); got != want {
 		t.Fatalf("任务日志尺寸回退=%d, want %d（须引用 db.DefaultTaskLogSizeMB）", got, want)
 	}
 }

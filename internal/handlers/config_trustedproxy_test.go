@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -191,6 +192,29 @@ func TestUpdateConfig_trustedProxy_rejectsInvalidHeaders(t *testing.T) {
 		if response.Code != http.StatusBadRequest {
 			t.Fatalf("headers=%s status=%d body=%s, want 400", headers, response.Code, response.Body.String())
 		}
+	}
+}
+
+func TestNormalizeTrustedProxyHeadersDeduplicatesCaseInsensitivelyBeforeLimit(t *testing.T) {
+	raw := `["CF-Connecting-IP","cf-connecting-ip","X-One","x-one","X-Two","x-two","X-Three","x-three","X-Four"]`
+	normalized, err := normalizeTrustedProxyHeaders(raw)
+	if err != nil {
+		t.Fatalf("duplicates must be removed before applying the 8-entry limit: %v", err)
+	}
+	var headers []string
+	if err := json.Unmarshal([]byte(normalized), &headers); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"CF-Connecting-IP", "X-One", "X-Two", "X-Three", "X-Four"}
+	if !reflect.DeepEqual(headers, want) {
+		t.Fatalf("headers=%v, want %v", headers, want)
+	}
+}
+
+func TestNormalizeTrustedProxyHeadersRejectsNineUniqueEntries(t *testing.T) {
+	raw := `["X-One","X-Two","X-Three","X-Four","X-Five","X-Six","X-Seven","X-Eight","X-Nine"]`
+	if _, err := normalizeTrustedProxyHeaders(raw); err == nil {
+		t.Fatal("nine unique headers must still be rejected")
 	}
 }
 

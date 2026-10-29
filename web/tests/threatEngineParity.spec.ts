@@ -78,7 +78,17 @@ test('地球 hover/click 命中必须复用点阵 bbox 预筛，且静止态不�
   assert.match(hover, /countryHit\(/, 'hover 拾取必须走预筛单源')
   assert.doesNotMatch(hover, /THREAT_COUNTRIES\.find\(/, 'hover 不得再全表逐个射线')
   assert.match(hover, /const autoRotate = globe\.controls\(\)\.autoRotate/, '读自转状态')
-  assert.match(hover, /autoRotate\s*&&\s*hoverPoint\s*&&\s*now\s*-\s*lastHoverPick\s*>=\s*120/, '仅自转时复测静止指针')
+  // 「仅自转时复测静止指针」的三个条件与复测间隔分开判：把三元表达式整串钉死会让
+  // 调换条件顺序、提取间隔常量、改注释都假红，而语义（自转 ∧ 有指针 ∧ 距上次复测
+  // 超过间隔）没变。间隔本身只判量级——复测是渲染节拍级的去抖，不该被钉成魔法数。
+  const flat = hover.replace(/\s+/g, ' ')
+  for (const condition of ['autoRotate', 'hoverPoint', 'now - lastHoverPick >=']) {
+    assert.ok(flat.includes(condition), `静止指针复测守卫缺少条件：${condition}`)
+  }
+  const repick = /now - lastHoverPick >= (\d+)/.exec(flat)
+  assert.ok(repick !== null, '复测间隔必须存在')
+  const repickMs = Number(repick[1])
+  assert.ok(repickMs >= 16 && repickMs <= 500, `复测间隔必须是渲染节拍级的去抖（实际 ${repickMs}ms）`)
 })
 
 test('下钻态点击的手势输入集与地图一致：不得排除下钻国', () => {
@@ -142,7 +152,20 @@ test('地图光流只保留单航次状态，不含不可达的多航次分支',
 test('地球光流叠加层复用地图的像素线宽/尾迹/粒子口径', () => {
   const overlay = member(globeSrc, 'function drawFlowOverlay(')
   assert.match(overlay, /flowArcTierWidth\(arc\.tier\)/, '3D 光流线宽必须沿用显式三档')
-  assert.match(overlay, /ctx\.globalAlpha\s*=\s*alpha\s*\*\s*\(0\.05\s*\+\s*0\.95\s*\*\s*ratio\)/, '尾迹必须尾隐头亮（沿弧长分段，避免直线渐变裁剪）')
+  // 尾迹必须尾隐头亮：把实现里的 alpha 表达式**求值**再判两点（尾≈0.05·alpha、
+  // 头=alpha）与单调性。整串公式钉在改常量、换成查表或重排括号时即假红，而这条
+  // 可见效果没变；求值判据只对「尾隐头亮」这一语义负责。
+  const trailExprs = [...overlay.matchAll(/ctx\.globalAlpha\s*=\s*alpha\s*\*\s*([^\n;]+)/g)]
+    .map((match) => match[1].trim())
+    .filter((expr) => /\bratio\b/.test(expr))
+  assert.equal(trailExprs.length, 1, '尾迹 alpha 必须只有一处按 ratio 渐变')
+  const alphaAt = (ratio: number): number => Number(new Function('alpha', 'ratio', `return ${trailExprs[0]}`)(1, ratio))
+  const atTail = alphaAt(0)
+  const atMid = alphaAt(0.5)
+  const atHead = alphaAt(1)
+  assert.ok(Math.abs(atTail - 0.05) < 1e-9, `尾端应几乎透明（实际 ${atTail}）——否则弧尾拖成实线`)
+  assert.ok(Math.abs(atHead - 1) < 1e-9, `头部必须完全不透明（实际 ${atHead}）`)
+  assert.ok(atTail < atMid && atMid < atHead, `沿弧长必须单调变亮（实际 ${atTail} → ${atMid} → ${atHead}）`)
   assert.match(overlay, /FLOW_PARTICLES/, '必须绘制同地图亮头粒子')
   assert.doesNotMatch(globeSrc, /arcStroke\('strokeW'/, '3D tube 弧线必须退役，避免双套样式')
 })

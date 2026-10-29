@@ -4,6 +4,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	jwt "github.com/golang-jwt/jwt/v5"
 
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/services"
@@ -151,5 +153,80 @@ func TestTicketLogin_auditDoesNotLeakSubmittedTicket(t *testing.T) {
 	}
 	if !strings.Contains(detail, "登录票据") {
 		t.Fatalf("audit detail=%q, want 归因文案", detail)
+	}
+}
+
+func TestTicketLogin_preservesTicketSessionAuthMethod(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		authMethod string
+		want       any
+	}{
+		{name: "local password origin on mixed identity row", authMethod: "", want: nil},
+		{name: "OIDC origin", authMethod: "oidc", want: "oidc"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newBackupTestHandlers(t)
+			h.cfg.JWTSecret = "test-secret"
+			seedUserAuditTest(t, 3, "alice", "admin", true)
+			if _, err := db.DB.Exec(`UPDATE users SET auth_provider='oidc',mfa_enabled=1 WHERE id=3`); err != nil {
+				t.Fatal(err)
+			}
+			clusterToken := "lb_cluster_ticket-auth-method"
+			key := sha256.Sum256([]byte(clusterToken))
+			if _, err := db.DB.Exec(`INSERT INTO nodes (id,name,ip_address,port,status,is_approved,cluster_token_hash,last_seen)
+				VALUES (7,'slave','10.0.0.7',8000,'online',1,?,datetime('now'))`, hex.EncodeToString(key[:])); err != nil {
+				t.Fatal(err)
+			}
+			masterRouter := gin.New()
+			masterRouter.POST("/cluster/nodes/:id/login-ticket", func(c *gin.Context) {
+				c.Set("user_id", 3)
+				c.Set("username", "alice")
+				c.Set("role", "admin")
+				c.Set("auth_type", "jwt")
+				c.Set("mfa_ts", float64(time.Now().Unix()))
+				if tc.authMethod != "" {
+					c.Set("auth_method", tc.authMethod)
+				}
+				h.GenerateClusterLoginTicket(c)
+			})
+			issued := httptest.NewRecorder()
+			masterRouter.ServeHTTP(issued, httptest.NewRequest(http.MethodPost, "/cluster/nodes/7/login-ticket", nil))
+			if issued.Code != http.StatusOK {
+				t.Fatalf("issue status=%d body=%s, want 200", issued.Code, issued.Body.String())
+			}
+			var ticket struct {
+				Ticket string `json:"ticket"`
+			}
+			if err := json.Unmarshal(issued.Body.Bytes(), &ticket); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := db.DB.Exec(`UPDATE global_config SET is_master=0, cluster_token=?, registration_id=7 WHERE id=1`, clusterToken); err != nil {
+				t.Fatal(err)
+			}
+			router := gin.New()
+			router.POST("/auth/ticket-login", h.TicketLogin)
+			recorder := httptest.NewRecorder()
+			request := httptest.NewRequest(http.MethodPost, "/auth/ticket-login", strings.NewReader(`{"ticket":"`+ticket.Ticket+`"}`))
+			request.Header.Set("Content-Type", "application/json")
+			router.ServeHTTP(recorder, request)
+			if recorder.Code != http.StatusOK {
+				t.Fatalf("status=%d body=%s, want 200", recorder.Code, recorder.Body.String())
+			}
+			var body struct {
+				Token string `json:"token"`
+			}
+			if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+				t.Fatal(err)
+			}
+			parsed, err := jwt.Parse(body.Token, func(token *jwt.Token) (any, error) { return []byte("test-secret"), nil })
+			if err != nil || !parsed.Valid {
+				t.Fatalf("parse ticket session: %v", err)
+			}
+			claims := parsed.Claims.(jwt.MapClaims)
+			if got := claims["auth_method"]; got != tc.want {
+				t.Fatalf("auth_method=%v, want %v", got, tc.want)
+			}
+		})
 	}
 }

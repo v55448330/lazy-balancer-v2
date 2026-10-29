@@ -8,7 +8,7 @@ import assert from 'node:assert/strict'
 
 import { createOneTimeSecretCloseGuard } from '../src/utils/oneTimeSecretGuard.ts'
 import { SECURITY_DESCRIPTION_MAX_RUNES, SECURITY_NAME_MAX_RUNES } from '../src/utils/securityLimits.ts'
-import { code, repoCode, section } from './_helpers.ts'
+import { code, openTags, repoCode, section } from './_helpers.ts'
 
 // ── 一次性凭据关闭守卫（单源） ─────────────────────────────────
 // 直接驱动守卫：确认框替身记录调用与文案，done 记录是否真正关闭弹框。
@@ -97,10 +97,11 @@ test('三处一次性凭据弹框都经同一守卫（注册令牌/密钥明文/
 })
 
 // ── 无障碍链接：按键自动重复 ───────────────────────────────────
-test('AccessibleLink 过滤 event.repeat（长按不得按系统重复率反复激活）', () => {
+test('AccessibleLink 经共享守卫过滤 event.repeat（长按不得反复激活）', () => {
   const wrapper = code('src/components/common/AccessibleLink.vue')
   const activate = section(wrapper, 'const activate = (event: KeyboardEvent): void => {', '\n}')
-  assert.match(activate, /if \(event\.repeat\) return/, '首行必须过滤自动重复')
+  assert.match(activate, /activateOnce\(event,/, '重复键过滤必须复用 keyboardActivate 单源')
+  assert.match(code('src/utils/keyboardActivate.ts'), /if \(event\.repeat\) return/)
 })
 
 test('规则名入口复用 AccessibleLink（不再手写 <a role=button>）', () => {
@@ -195,7 +196,11 @@ test('自定义规则名称/描述上限与后端 rune 常量逐值对表（前�
 test('服务控制四选一卡片暴露 radio 语义与选中态', () => {
   const cluster = code('src/views/settings/ClusterSettings.vue')
   assert.match(cluster, /class="service-control-grid" role="radiogroup" aria-label="服务控制操作"/)
-  assert.match(cluster, /role="radio"[\s\S]{0,120}:aria-checked="serviceControlAction === item\.value"/)
+  // 选中态必须落在同一个开标签上：距离窗口（`[\s\S]{0,120}`）在两属性之间插入
+  // `v-if`/`v-else` 或调换书写顺序时假红，也可能跨到相邻分支的元素上。
+  const radioCard = openTags(cluster, 'div').find((tag) => /\srole="radio"/.test(tag))
+  assert.ok(radioCard !== undefined, '服务控制卡片必须暴露 role="radio"')
+  assert.match(radioCard, /:aria-checked="serviceControlAction === item\.value"/, 'radio 语义必须带选中态（读屏听不到选中）')
 })
 
 // ── 无障碍族级残余 ──────────────────────────────────────────

@@ -17,6 +17,9 @@ func TestFromHeader_extractionRules(t *testing.T) {
 		want          string
 	}{
 		{"x-api-key wins", "lb_sk_direct", "Bearer lb_sk_other", "lb_sk_direct"},
+		{"x-api-key trims surrounding whitespace", " \tlb_sk_direct \t", "", "lb_sk_direct"},
+		{"blank x-api-key falls back to bearer", " \t ", "Bearer lb_sk_bearer", "lb_sk_bearer"},
+		{"blank x-api-key without bearer", " \t", "", ""},
 		{"bearer api key", "", "Bearer lb_sk_bearer", "lb_sk_bearer"},
 		// 方案与凭据之间多写空白的手工客户端（"Bearer   <key>"）必须照常
 		// 提取：凭据拿去哈希比对，残留空白会表现为「密钥无效」，把排障方向

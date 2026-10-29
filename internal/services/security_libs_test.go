@@ -91,14 +91,15 @@ func TestGenerateCaddyConfig_missingSecurityLibs_disablesSecurityChain(t *testin
 	}
 
 	// 库齐全 → 整族安全处理器与信任直通包裹都在场，后续缺席断言具备反证力。
-	crsDirectivesDir, ip2regionLivePath = crsDir, xdb
+	crsDirectivesDir = crsDir
+	t.Cleanup(OverrideWafLivePathsForTest(crsLiveDir, xdb))
 	assertSecurityArtifacts(render(), true)
 	// CRS 缺失 → 安全链整体不渲染，不得残留限流/计数/计时/信任包裹。
 	crsDirectivesDir = filepath.Join(tmp, "crs-missing")
 	assertSecurityArtifacts(render(), false)
 	// CRS 恢复 + IP2Region 缺失 → 同样整族不渲染。
 	crsDirectivesDir = crsDir
-	ip2regionLivePath = filepath.Join(tmp, "missing.xdb")
+	t.Cleanup(OverrideWafLivePathsForTest(crsLiveDir, filepath.Join(tmp, "missing.xdb")))
 	assertSecurityArtifacts(render(), false)
 }
 

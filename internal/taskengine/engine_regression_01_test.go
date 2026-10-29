@@ -5,6 +5,7 @@ package taskengine
 // 语义。
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -60,7 +61,7 @@ func TestAppendTaskLogLine_concurrentRotationKeepsAllLines(t *testing.T) {
 	SetLogDir(dir)
 	t.Cleanup(func() { SetLogDir("") })
 	// 200 行 × 50B = 10000B，阈值 6000B → 恰好一次滚动（余量不触发第二次）。
-	SetTaskLogSizeBytesFn(func() int64 { return 6000 })
+	SetTaskLogSizeBytesFn(func(context.Context) int64 { return 6000 })
 	t.Cleanup(func() { SetTaskLogSizeBytesFn(nil) })
 
 	path := filepath.Join(dir, "concurrent.log")
@@ -72,7 +73,7 @@ func TestAppendTaskLogLine_concurrentRotationKeepsAllLines(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for range perWriter {
-				appendTaskLogLine(path, line)
+				appendTaskLogLine(context.Background(), path, line)
 			}
 		}()
 	}

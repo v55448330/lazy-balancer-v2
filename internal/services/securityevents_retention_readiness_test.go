@@ -12,6 +12,7 @@ package services
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -55,5 +56,39 @@ func TestSecurityEventsRetentionCleanup_readinessProbeFailureFailsTask(t *testin
 	}
 	if result.Events != 0 || result.Aggregates() != 0 {
 		t.Fatalf("result=%+v, want 零删除计数", result)
+	}
+}
+
+func TestSecurityEventsRetentionCleanup_emptyRebuildMarkerDefersDeletion(t *testing.T) {
+	for _, value := range []string{"", "   "} {
+		t.Run(fmt.Sprintf("value_%q", value), func(t *testing.T) {
+			// Given：重建意图键存在但值损坏为空，其余就绪键齐全。
+			setupSecurityEventsRetentionTestDB(t)
+			seedRollupReadyState(t)
+			if _, err := db.DB.Exec(`UPDATE global_config SET security_events_retention_days=30 WHERE id=1`); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := db.MetricsDB.Exec(`INSERT INTO security_events (event_time, client_ip, event_type) VALUES
+				(datetime('now', '-40 days'), '198.51.100.11', 'expired')`); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := db.MetricsDB.Exec(`INSERT INTO metrics_state (key,value) VALUES (?,?)`, ThreatRollupRebuildFromKey, value); err != nil {
+				t.Fatal(err)
+			}
+
+			// When
+			result, err := SecurityEventsRetentionCleanupDetail(context.Background())
+
+			// Then：存在即 pending，空值不是「无重建意图」，不得删除原始事件。
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !result.AgeDeferred || !result.RowCapDeferred {
+				t.Fatalf("result=%+v, want both trims deferred for present empty rebuild key", result)
+			}
+			if got := countSecurityEventsByType(t, "expired"); got != 1 {
+				t.Fatalf("expired events=%d, want 1 (raw events must survive damaged rebuild state)", got)
+			}
+		})
 	}
 }

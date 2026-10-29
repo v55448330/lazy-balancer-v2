@@ -433,9 +433,9 @@ func TestIPListGC_tempOwnershipBothWays(t *testing.T) {
 		t.Cleanup(func() { _ = os.Remove(p) })
 		return p
 	}
-	staleOwned := seed("p1-acl-12345.tmp", 48*time.Hour)
-	staleOwnedUnion := seed("u-bl-42.tmp", 48*time.Hour)
-	freshOwned := seed("u-deny-lb_x-777.tmp", time.Minute)
+	staleOwned := seed(".p1-acl.txt-12345.tmp", 48*time.Hour)
+	staleOwnedUnion := seed(".u-bl.txt-42.tmp", 48*time.Hour)
+	freshOwned := seed(".u-deny-lb_x.txt-777.tmp", time.Minute)
 	unrelated := seed("ops-notes.tmp", 48*time.Hour)
 
 	gcStaleIPListFiles(now, 24*time.Hour)

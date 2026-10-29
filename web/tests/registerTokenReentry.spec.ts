@@ -15,7 +15,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { code, member } from './_helpers.ts'
+import { code, member, section } from './_helpers.ts'
 
 const SETTINGS = 'src/views/settings/ClusterSettings.vue'
 
@@ -31,6 +31,14 @@ test('生成注册令牌：在途门与只读门并列，置位先于请求', ()
   // 收尾释放占位：失败路径也要放开，否则一次 5xx 之后按钮永久卡住
   const finallyBlock = body.slice(body.indexOf('} finally {'))
   assert.match(finallyBlock, /tokenLoading\.value = false/)
+})
+
+test('账号变化立即清空注册令牌并关闭弹框', () => {
+  const text = code(SETTINGS)
+  const identityWatch = section(text, 'watch(() => authStore.user?.id', 'const isReadOnlyProp')
+  assert.match(identityWatch, /registerToken\.value = null/)
+  assert.match(identityWatch, /tokenDialogVisible\.value = false/)
+  assert.doesNotMatch(identityWatch, /immediate:\s*true/, '同账号的初始化或资料刷新不得关闭已打开的令牌弹框')
 })
 
 test('与同文件其它写入口同构：只读门 + 在途门 + 置位 + finally 释放', () => {

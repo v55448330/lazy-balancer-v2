@@ -140,11 +140,6 @@ watch([() => props.modelValue, step], ([visible, current]) => {
 const activate = async (): Promise<void> => {
   // 按钮已按 6 位禁用；函数内保留短路作为纵深兜底（脚本/键盘直触路径）。
   if (code.value.length !== 6 || loading.value) return
-  try {
-    await ElMessageBox.confirm('将启用两步验证并生成一次性恢复代码，确认继续？', '启用 MFA', {
-      type: 'warning', confirmButtonText: '验证并启用', cancelButtonText: '取消',
-    })
-  } catch { return }
   loading.value = true
   try {
     const res = await request.post<APIResponse<{ recovery_codes: string[] }>>('/auth/mfa/activate', { code: code.value }, { silent: true })

@@ -130,6 +130,10 @@ var ErrTaskSkipped = errors.New("taskengine: 任务跳过")
 // 取消生效前落定，取消轮会被误记 success。TriggerTaskAsync 对本哨兵与
 // context.Canceled 静默分类（不补记「触发失败」）。
 var ErrRunCancelled = errors.New("taskengine: 任务已取消")
+
+// ErrScheduleSlotNotAdvanced 标记业务未能推进已被取消/执行的排程槽。
+// 该错误必须覆盖取消终态并释放已消费槽，让引擎按失败退避重投。
+var ErrScheduleSlotNotAdvanced = errors.New("taskengine: 排程槽未推进")
 var ErrNotFound = errors.New("taskengine: 任务未注册")
 var ErrEngineStopped = errors.New("taskengine: 引擎已停止")
 var ErrNotMaster = errors.New("taskengine: 该操作仅允许在主节点执行")
@@ -1024,13 +1028,12 @@ func (e *Engine) RearmLoop(id string, hasWork ...bool) {
 	wasOn := r.loopEnabled
 	if bypassStop {
 		r.loopEnabled = true
-		// 新工作唤醒=显式恢复调度：仅在自愈已用尽时重置预算（普通唤醒
-		// 不得清零崩溃循环的退避预算）。
-		if r.restartExhausted {
+		if !wasOn {
+			// 关→开是新一代调度，与 StartLoop 同口径获得完整自愈预算。
+			// StopLoop 会清 restartExhausted 的展示标记，不能再以该标记判断
+			// 是否需要复位；已开启任务的普通唤醒仍保留当前退避预算。
 			r.abnormalRestarts = 0
 			r.restartExhausted = false
-		}
-		if !wasOn {
 			// 越过「已停止」=重新接受本任务的预约：与 StartLoop 的关→开
 			// 过渡同口径清空 Scheduled 槽消费水位/失败退避/求值节拍。缺这一步
 			// 时，停止前 schedDoneSlot 已等于当前 due 槽（成功落定未推进槽/
@@ -1157,7 +1160,7 @@ func (e *Engine) startDaemon(id string, r *registration, ctx context.Context, ca
 	e.mu.RUnlock()
 	// 调用方已在锁内完成 running 占位与 cancel 登记。
 	runID := globalInsertRun(id, r.desc.Family, "auto")
-	taskLogAppend(id, "[start] 常驻启动")
+	taskLogAppendContext(ctx, id, "[start] 常驻启动")
 	// 2026-10-01 用户裁定：启动即记 success（启动是既成事实——成功列体现
 	// 启动计数；原实现落 running 终态随停止更新，运行期成功列恒 0）
 	e.finishRun(runID, "success", 0)
@@ -1235,17 +1238,17 @@ func (e *Engine) startDaemon(id string, r *registration, ctx context.Context, ca
 			// 异常退出（非取消）：补记 failed 行（真实时长与错误）
 			failID := globalInsertRunAt(id, r.desc.Family, "auto", start.In(engineLocPtr()).Format("2006-01-02 15:04:05"), "")
 			e.finishRunWithMessage(failID, "failed", dur, truncMsg(err))
-			taskLogAppend(id, fmt.Sprintf("[done] failed 耗时=%dms 触发=auto 错误=%s", dur, err.Error()))
+			taskLogAppendContext(ctx, id, fmt.Sprintf("[done] failed 耗时=%dms 触发=auto 错误=%s", dur, err.Error()))
 			switch {
 			case relaunchDelay > 0:
-				taskLogAppend(id, fmt.Sprintf("[restart] 常驻异常退出，%s 后第 %d/%d 次自动重启",
+				taskLogAppendContext(ctx, id, fmt.Sprintf("[restart] 常驻异常退出，%s 后第 %d/%d 次自动重启",
 					relaunchDelay, relaunchAttempt, len(e.daemonRestartDelays)))
 			case abnormalExhausted:
-				taskLogAppend(id, fmt.Sprintf("[done] 常驻任务异常退出，自动重启 %d 次已用尽且已停止调度（需手动重启）",
+				taskLogAppendContext(ctx, id, fmt.Sprintf("[done] 常驻任务异常退出，自动重启 %d 次已用尽且已停止调度（需手动重启）",
 					len(e.daemonRestartDelays)))
 			}
 		} else {
-			taskLogAppend(id, fmt.Sprintf("[done] stopped 耗时=%dms 触发=auto（取消/正常退出）", dur))
+			taskLogAppendContext(ctx, id, fmt.Sprintf("[done] stopped 耗时=%dms 触发=auto（取消/正常退出）", dur))
 		}
 		if relaunchIntent {
 			// restart 意图落地——新代经统一 CAS 入口接续
@@ -1479,12 +1482,14 @@ func (e *Engine) History(id string, limit int) []RunRecord {
 }
 
 func (e *Engine) RecoverOrphans() int64 {
-	// 与同文件其余 7 处导出 DB 函数同形的 nil 防护
-	// （曾唯一裸用 db.DB——装配顺序变化即 nil panic）。
-	if db.DB == nil {
+	// 与同文件其余导出 DB 函数同形：单次快照后判定并使用，关闭窗口内
+	// 包级句柄被置 nil 也不会在两次解引用之间 panic。
+	database := db.DB
+	if database == nil {
 		return 0
 	}
-	res, err := db.DB.Exec(`UPDATE task_runs SET status='interrupted', finished_at=?, message=COALESCE(message,'')||'（进程重启回收）' WHERE status='running'`, engineNowStr())
+	beforeTaskRunsRead()
+	res, err := database.Exec(`UPDATE task_runs SET status='interrupted', finished_at=?, message=COALESCE(message,'')||'（进程重启回收）' WHERE status='running'`, engineNowStr())
 	if err != nil {
 		log.Printf("WARNING: taskengine: 回收中断任务失败（残留 running 行）: %v", err)
 		return 0
@@ -1703,9 +1708,9 @@ func (e *Engine) executeRun(res *runReservation, id, trigger, operator string) (
 	// 执行起点。
 	switch trigger {
 	case "manual", "startup":
-		taskLogAppend(id, fmt.Sprintf("[start] %s触发", map[bool]string{true: "启动", false: "手动"}[trigger == "startup"]))
+		taskLogAppendContext(ctx, id, fmt.Sprintf("[start] %s触发", map[bool]string{true: "启动", false: "手动"}[trigger == "startup"]))
 	case "caddy-restart":
-		taskLogAppend(id, "[start] Caddy重启触发")
+		taskLogAppendContext(ctx, id, "[start] Caddy重启触发")
 	}
 	runErr := runGuarded(r.desc.Run, rc)
 	status := terminalStatus(ctx, runErr)
@@ -1717,7 +1722,7 @@ func (e *Engine) executeRun(res *runReservation, id, trigger, operator string) (
 	if status == "failed" && runErr != nil {
 		msg += " 错误=" + runErr.Error()
 	}
-	taskLogAppend(id, msg)
+	taskLogAppendContext(ctx, id, msg)
 
 	// Scheduled：Run 已写新槽——重算缓存。 同族收敛：NextSlotFn 含
 	// DB 查询——锁外先求值（求值期间 running 仍=true，tick 自然跳过本轮，
@@ -1735,9 +1740,19 @@ func (e *Engine) executeRun(res *runReservation, id, trigger, operator string) (
 		r.mu.Lock()
 		prevSlot := r.nextScheduledTime
 		r.nextScheduledTime = nextSlot
+		if status == "failed" && errors.Is(runErr, ErrScheduleSlotNotAdvanced) {
+			// 用户取消时已先消费本槽；槽推进失败必须释放水位并立即重评。
+			// NextSlotFn 同时瞬时读失败时沿用已知的到期槽进入 1s/5s/30s
+			// 退避，既保证恢复后重投，也避免持久 DB 故障形成零间隔重试风暴。
+			r.schedDoneSlot = time.Time{}
+			r.schedSlotEvalAt = time.Time{}
+			if nextSlot.IsZero() {
+				nextSlot = prevSlot
+				r.nextScheduledTime = prevSlot
+			}
+		}
 		switch {
 		case (status == "failed" || status == "skipped") && slotDueForBackoff(nextSlot, prevSlot, time.Now()):
-			// 「已到期槽未推进+本轮失败/跳过」兜底退避：业务侧未推进槽的
 			// 失败轮（如装配缺陷响亮失败、nil-manager）与降级跳过轮（如
 			// Run 体首行角色门 return ErrTaskSkipped）此前每 tick 重投——
 			// 1s 节拍下 ≈8.6 万行 task_runs/天。未来槽（手动触发轮在预约
@@ -1770,9 +1785,9 @@ func (e *Engine) executeRun(res *runReservation, id, trigger, operator string) (
 			if warnDue {
 				r.schedBackoffLastWarnAt = time.Now()
 				if auto {
-					taskLogAppend(id, fmt.Sprintf("[warn] 排程槽未推进且本轮%s，退避 %s 后重投（连续 %d 轮；业务 Run 早退须推进槽，见任务引擎标准）", outcome, delay, streak))
+					taskLogAppendContext(ctx, id, fmt.Sprintf("[warn] 排程槽未推进且本轮%s，退避 %s 后重投（连续 %d 轮；业务 Run 早退须推进槽，见任务引擎标准）", outcome, delay, streak))
 				} else {
-					taskLogAppend(id, fmt.Sprintf("[warn] 排程槽未推进且本轮手动%s，退避 %s 后重投（手动轮不计入自动停调预算）", outcome, delay))
+					taskLogAppendContext(ctx, id, fmt.Sprintf("[warn] 排程槽未推进且本轮手动%s，退避 %s 后重投（手动轮不计入自动停调预算）", outcome, delay))
 				}
 			}
 			if auto && streak >= scheduledFailStreakStopLimit {
@@ -1791,7 +1806,7 @@ func (e *Engine) executeRun(res *runReservation, id, trigger, operator string) (
 				if recoverHint == "" {
 					recoverHint = "任务页调度开关或重启进程"
 				}
-				taskLogAppend(id, fmt.Sprintf("[error] 排程槽连续 %d 轮未推进且本轮%s，已停止该任务调度（修复失败原因后重新开启调度：%s）", scheduledFailStreakStopLimit, outcome, recoverHint))
+				taskLogAppendContext(ctx, id, fmt.Sprintf("[error] 排程槽连续 %d 轮未推进且本轮%s，已停止该任务调度（修复失败原因后重新开启调度：%s）", scheduledFailStreakStopLimit, outcome, recoverHint))
 			}
 		default:
 			r.schedFailStreak = 0
@@ -1898,6 +1913,9 @@ func terminalStatus(ctx context.Context, err error) string {
 	// 非故障放弃必须先于通用 cancelled，才能与用户主动取消区分。
 	if errors.Is(err, ErrTaskSkipped) {
 		return "skipped"
+	}
+	if errors.Is(err, ErrScheduleSlotNotAdvanced) {
+		return "failed"
 	}
 	if ctx.Err() != nil || errors.Is(err, ErrRunCancelled) {
 		return "cancelled"
@@ -2254,7 +2272,7 @@ type taskLogPathCircuit struct {
 var taskLogConf = struct {
 	sync.RWMutex
 	dir    string
-	sizeFn func() int64
+	sizeFn func(context.Context) int64
 	// dirDown：目录级不可用（无法创建）。恢复判定=真实写入链全通。
 	dirDown      bool
 	dirNextProbe time.Time
@@ -2367,7 +2385,7 @@ func SanitizeTaskLogLine(line string) string {
 
 // appendTaskLogLine 打开→追加→关闭共享实现（taskLogAppend
 // 与 TeeTaskLog 曾双份同形四步；MkdirAll 幂等，保留逐行兜底形态不变）。
-func appendTaskLogLine(path, line string) {
+func appendTaskLogLine(ctx context.Context, path, line string) {
 	// 换行归一再截断：两者都必须先于滚动判定——否则巨型单行会先
 	// 触发滚动、再把超限活动文件写出来，后续每行都反复触发滚动。
 	line = SanitizeTaskLogLine(line)
@@ -2402,7 +2420,7 @@ func appendTaskLogLine(path, line string) {
 	// 阈值必须在取路径锁之前求值：缓存未命中时 taskLogSizeBytes 会读库
 	// （最坏占满 busy_timeout）——持「按路径日志锁」读库会让全部任务日志
 	// 写入在各自 pathLock 内排队等同一把缓存锁（任务体被日志拖住）。
-	sizeLimit := taskLogSizeBytes()
+	sizeLimit := taskLogSizeBytes(ctx)
 	// 按路径互斥包住「stat→rotate→append」整段——锁只覆盖滚动判定
 	// 与本次写入，不同任务日志路径互不阻塞。
 	pathLock := lockTaskLogPath(path)
@@ -2507,11 +2525,15 @@ func taskLogNoteWriteSuccess(path, dir string) {
 }
 
 func taskLogAppend(taskID, line string) {
+	taskLogAppendContext(context.Background(), taskID, line)
+}
+
+func taskLogAppendContext(ctx context.Context, taskID, line string) {
 	path := TaskLogPath(taskID)
 	if path == "" {
 		return
 	}
-	appendTaskLogLine(path, engineLogTimeStr()+" "+line)
+	appendTaskLogLine(ctx, path, engineLogTimeStr()+" "+line)
 }
 
 // ---- DB 落库 ----
@@ -2773,12 +2795,14 @@ const taskRunsStats24hSelect = `COUNT(*),
 // RunOverview 的批量聚合（同 SQL 单源 taskRunsStats24hSelect）。
 func (e *Engine) Stats24h(taskID string) TaskRunsStats {
 	var st TaskRunsStats
-	if db.DB == nil {
+	database := db.DB
+	if database == nil {
 		return st
 	}
+	beforeTaskRunsRead()
 	// Scan 错误不得静默丢弃——与同文件 History/
 	// RunOverview 同口径留痕（计数降级为零值，视图仍可用）。
-	if err := db.DB.QueryRow(`SELECT `+taskRunsStats24hSelect+`
+	if err := database.QueryRow(`SELECT `+taskRunsStats24hSelect+`
 		FROM task_runs WHERE task_id=? AND started_at > datetime(?, '-1 day')`, taskID, engineNowStr()).Scan(&st.Runs, &st.Success, &st.Fail); err != nil {
 		log.Printf("WARNING: taskengine: 24h 统计查询失败（%s 计数降级为零）: %v", taskID, err)
 	}
@@ -3004,13 +3028,21 @@ func PurgeTaskRuns(ctx context.Context, days int) (int64, error) {
 // ---- 业务侧日志 helper ----
 
 func TeeTaskLogTime(taskID, level, stage, message string) {
-	TeeTaskLog(taskID, engineLogTimeStr(), level, stage, message)
+	TeeTaskLogTimeContext(context.Background(), taskID, level, stage, message)
+}
+
+func TeeTaskLogTimeContext(ctx context.Context, taskID, level, stage, message string) {
+	TeeTaskLogContext(ctx, taskID, engineLogTimeStr(), level, stage, message)
 }
 
 func TeeTaskLog(taskID, timestamp, level, stage, message string) {
+	TeeTaskLogContext(context.Background(), taskID, timestamp, level, stage, message)
+}
+
+func TeeTaskLogContext(ctx context.Context, taskID, timestamp, level, stage, message string) {
 	path := TaskLogPath(taskID)
 	if path == "" {
 		return
 	}
-	appendTaskLogLine(path, fmt.Sprintf("%s [%s] %s - %s", timestamp, level, stage, message))
+	appendTaskLogLine(ctx, path, fmt.Sprintf("%s [%s] %s - %s", timestamp, level, stage, message))
 }

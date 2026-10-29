@@ -681,7 +681,7 @@ var freshOriginalColumns = map[string][]string{
 	"cert_jobs":                  {"id", "rule_id", "domain", "status", "message", "expires_at", "cert_pem", "key_pem", "created_at", "updated_at"},
 	"certificate_configs":        {"id", "name", "dns_provider", "dns_credentials", "enabled", "created_at", "updated_at"},
 	"cluster_register_tokens":    {"id", "token_hash", "expires_at", "used_at", "created_by", "created_at"},
-	"global_config":              {"id", "caddy_config", "dns_provider", "log_level", "is_master", "master_url", "sync_interval", "last_sync", "updated_at"},
+	"global_config":              {"id", "caddy_config", "log_level", "is_master", "master_url", "sync_interval", "last_sync", "updated_at"},
 	"lb_rules":                   {"id", "name", "description", "protocol", "listen_port", "strategy", "enable_dns_server", "dns_server", "health_check_path", "health_check_interval", "health_check_timeout", "health_check_unhealthy_threshold", "health_check_healthy_threshold", "host_header", "enable_tls", "enable_compress", "compress_types", "enabled", "created_by", "created_at", "updated_at"},
 	"mfa_challenges":             {"token", "user_id", "expires_at", "consumed", "created_at"},
 	"nodes":                      {"id", "name", "mode", "ip_address", "port", "is_approved", "sync_interval", "status", "last_seen", "created_at"},

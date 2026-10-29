@@ -185,7 +185,7 @@ func TestThreatUpdateOneSource_inTaskRetry_succeedsAfterTransientFailures(t *tes
 	}
 
 	m := GetThreatUpdateManager()
-	_, failed := m.updateOneSource(context.Background(), threatSourceRow{id: 1, name: "ustc", url: srv.URL}, "auto", taskRunStartedAt(nil))
+	_, failed, _ := m.updateOneSource(context.Background(), threatSourceRow{id: 1, name: "ustc", url: srv.URL}, "auto", taskRunStartedAt(nil))
 
 	if failed {
 		t.Fatal("源更新失败, want 任务内重试后成功")

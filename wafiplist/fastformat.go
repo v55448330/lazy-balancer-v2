@@ -29,6 +29,12 @@ const fastFileChecksumFlag = 1 << 0
 // fastFileCRCTable 是 crc32c（Castagnoli）查表（包级共享，只读）。
 var fastFileCRCTable = crc32.MakeTable(crc32.Castagnoli)
 
+// 目录同步缝仅用于故障注入；生产语义仍是 rename 后尽力同步并显性告警。
+var (
+	fastFileDirOpen = os.Open
+	fastFileDirSync = func(dir *os.File) error { return dir.Sync() }
+)
+
 // maxFastFileBytes 是 ReadFastFile 读取前的体积硬上限（历史
 // 审计）：.fast 是跨进程输入（节点回传/从节点回退），不能只依赖写侧自律——
 // 异常/恶意超大文件必须先过 Stat 体积门，再进入读取与内容校验。与文本名单
@@ -183,8 +189,8 @@ func WriteFastFile(path string, v4, v6 []netip.Prefix) error {
 		_ = os.Remove(tmpName)
 		return fmt.Errorf("fastfile rename: %w", err)
 	}
-	if dir, derr := os.Open(filepath.Dir(path)); derr == nil {
-		if serr := dir.Sync(); serr != nil {
+	if dir, derr := fastFileDirOpen(filepath.Dir(path)); derr == nil {
+		if serr := fastFileDirSync(dir); serr != nil {
 			// Ruling（与 internal/atomicfile 互相对照）：rename 已生效，新 .fast
 			// 可见且内容完整（写侧 fsync 已完成），目录 fsync 失败只影响「掉电后
 			// rename 本身是否持久」。atomicfile 的簿记文件选择上抛 error 让调用方

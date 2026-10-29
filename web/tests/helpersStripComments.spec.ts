@@ -18,6 +18,9 @@ test('section：缺 start / 缺 end / 顺序倒置一律抛错（边界不得空
   assert.equal(section('abc', 'a', 'c'), 'ab')
 })
 
+// member() 的**基础形状**自测单源在本文件（helper 自己的 spec）；其它 spec 只钉
+// 自己依赖的增量形态（如 threatGlobe 的顶层 `;` 声明与声明头注释配对），避免同一
+// 判据在两个文件各写一遍后口径漂移。
 test('member：缺 marker / 无函数体 / 括号不平衡一律抛错', () => {
   assert.throws(() => member('const a = 1\n', 'const b'), /missing member/)
   assert.throws(() => member('const a = 1\n', 'const a'), /member has no body/)
@@ -188,13 +191,11 @@ test('脚本存在性断言文件禁止裸 source()/repoSource() 回流', () => 
     'importFailure.spec.ts',
     'importPreview.spec.ts',
   ]
+  // 只钉「裸调用」这一形态：裸**导入**已由下方递归扫描（offenders，未见
+  // allowedRaw 即失败）严格蕴含——`locked` 里没有一个文件登记在 allowedRaw，
+  // 在这里再写一遍导入断言是同一结论的第二份实现，删掉不会放宽守卫。
   for (const name of locked) {
     const text = readFileSync(new URL(`./${name}`, import.meta.url), 'utf8')
-    assert.doesNotMatch(
-      text,
-      /import \{[^}]*\b(?:source|repoSource)\b[^}]*\} from '\.\/_helpers\.ts'/,
-      `${name} 不得导入裸 source/repoSource`,
-    )
     assert.doesNotMatch(text, /(^|[^A-Za-z_.])(?:source|repoSource)\(/m, `${name} 仍有裸取源调用`)
   }
 
@@ -225,10 +226,6 @@ test('脚本存在性断言文件禁止裸 source()/repoSource() 回流', () => 
     // 注释文案钉：断言对象是过时注释本身，剥注释后无法判定（用例名标注文档钉）。
     'feCoreContracts.spec.ts',
     'settingsWiringContracts.spec.ts',
-    // 除代码存在性钉（走 code()）外，含一条注释契约钉：planTrustRemoval 的
-    // listEntries 必须显式声明「条目必须新鲜、拉取失败不得出结论」——断言对象
-    // 是注释文字本身。
-    'trustRemovalFreshness.spec.ts',
     // 省界文件头注释与真实资源计数一致性钉。
     'admin1Provinces.spec.ts',
     // 覆盖率门槛说明（scripts/test-all.sh 的注释）与 package.json 数值的
@@ -237,6 +234,8 @@ test('脚本存在性断言文件禁止裸 source()/repoSource() 回流', () => 
     // 模板类型门守卫：断言对象是模板里的诊断屏蔽注释（vue-ignore / ts-expect-error
     // 指令），剥注释后这些屏蔽手段不可见（用例名标注「不得…绕过」）。
     'templateTypeGate.spec.ts',
+    // 注释文案钉：断言 allow 空名单的 fail-closed 说明，剥注释后无法判定。
+    'securityStagesModel.spec.ts',
   ])
   // 本文件自身含判据的合成样本字符串（非真实导入），排除自扫描。
   const offenders = specFiles.filter((name) => name !== 'helpersStripComments.spec.ts' && rawImport.test(readSpec(name)) && !allowedRaw.has(name))

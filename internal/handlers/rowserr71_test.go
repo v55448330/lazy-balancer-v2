@@ -229,14 +229,16 @@ func (deleteKeyFakeTx) Rollback() error { return nil }
 
 type deleteTargetUserRows struct{ done bool }
 
-func (deleteTargetUserRows) Columns() []string { return []string{"username", "role", "is_enabled"} }
-func (*deleteTargetUserRows) Close() error     { return nil }
+func (deleteTargetUserRows) Columns() []string {
+	return []string{"username", "role", "is_enabled", "auth_provider"}
+}
+func (*deleteTargetUserRows) Close() error { return nil }
 func (r *deleteTargetUserRows) Next(dest []driver.Value) error {
 	if r.done {
 		return io.EOF
 	}
 	r.done = true
-	dest[0], dest[1], dest[2] = "victim", "user", int64(1)
+	dest[0], dest[1], dest[2], dest[3] = "victim", "user", int64(1), "local"
 	return nil
 }
 

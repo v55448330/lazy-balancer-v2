@@ -4,6 +4,7 @@ package middleware
 // "|" 分隔保证 keyID=3 不误伤 "30|…" 前缀；其他 Key 的条目不受影响。
 
 import (
+	"fmt"
 	"net"
 	"testing"
 )
@@ -32,6 +33,31 @@ func TestPurgeAPIKeyWhitelistCache_sweepsByKeyIDPrefix(t *testing.T) {
 	}
 	if _, ok := apiKeyWhitelistCache.Load(`30|["10.0.0.0/8"]`); !ok {
 		t.Fatal("keyID=30 的条目被误伤（前缀必须含 | 分隔）")
+	}
+}
+
+func TestAPIKeyWhitelistCache_boundsEntriesAndAllowsReplacement(t *testing.T) {
+	withIsolatedAPIKeyWhitelistCache(t)
+	_, network, _ := net.ParseCIDR("10.0.0.0/8")
+
+	// Given 缓存达到 1024 条上限后再写入一个新键。
+	for i := range 1024 {
+		apiKeyWhitelistCache.Store(fmt.Sprintf("key-%d", i), []*net.IPNet{network})
+	}
+	apiKeyWhitelistCache.Store("overflow", []*net.IPNet{network})
+
+	// Then 新键不越过全局上限，已有键仍可替换更新。
+	remaining := 0
+	apiKeyWhitelistCache.Range(func(_, _ any) bool { remaining++; return true })
+	if remaining != 1024 {
+		t.Fatalf("cache entries=%d, want bounded 1024", remaining)
+	}
+	if _, ok := apiKeyWhitelistCache.Load("overflow"); ok {
+		t.Fatal("overflow key must not be cached beyond the global bound")
+	}
+	apiKeyWhitelistCache.Store("key-0", "replacement")
+	if got, ok := apiKeyWhitelistCache.Load("key-0"); !ok || got != "replacement" {
+		t.Fatalf("existing entry at capacity was not replaceable: got=%v ok=%v", got, ok)
 	}
 }
 

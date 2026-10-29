@@ -316,14 +316,14 @@ const retryJob = async (row: CertJob) => {
   const message = isWaitingCA
     ? '任务当前处于"等待 CA"状态（可能仍在频率冷却中）。确定要立即重新签发吗？如果使用同一 CA 且冷却未到，可能再次被拒绝。'
     : `确定要对域名 ${row.domain} 重新签发证书吗？`
-  try {
-    await ElMessageBox.confirm(message, '重签确认', { type: isWaitingCA ? 'warning' : 'info' })
-  } catch {
-    return
-  }
-  if (disposed || retryingJobIds.value.has(row.id)) return
   retryingJobIds.value = new Set(retryingJobIds.value).add(row.id)
   try {
+    try {
+      await ElMessageBox.confirm(message, '重签确认', { type: isWaitingCA ? 'warning' : 'info' })
+    } catch {
+      return
+    }
+    if (disposed) return
     // 上方确认对话框已是显式用户确认；force=true 让服务端越过 waiting_ca
     // 的 CA 冷却门（未确认的直接调用会被 429 拒绝并提示剩余冷却时长）。
     await request.post(`/certificates/jobs/${row.id}/retry?force=true`, undefined, { signal: jobsPolling.signal })

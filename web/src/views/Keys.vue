@@ -564,13 +564,13 @@ async function createKey() {
     return
   }
 
-  try {
-    await ElMessageBox.confirm(`将创建 API 密钥「${name}」，密钥明文仅展示一次，请确认权限范围并妥善保存。是否继续？`, '创建 API 密钥', {
-      type: 'warning', confirmButtonText: '确认创建', cancelButtonText: '取消',
-    })
-  } catch { return }
   creating.value = true
   try {
+    try {
+      await ElMessageBox.confirm(`将创建 API 密钥「${name}」，密钥明文仅展示一次，请确认权限范围并妥善保存。是否继续？`, '创建 API 密钥', {
+        type: 'warning', confirmButtonText: '确认创建', cancelButtonText: '取消',
+      })
+    } catch { return }
     const payload: CreateAPIKeyInput = {
       name,
       mcp_enabled: createForm.value.mcp_enabled,
@@ -625,13 +625,13 @@ const saveFeatures = async (): Promise<void> => {
     featureWhitelistError.value = whitelist.error
     return
   }
-  try {
-    await ElMessageBox.confirm(`将更新 API 密钥「${featureTarget.value.name}」的 MCP 开关、只读权限和 IP 白名单，新的访问范围立即生效。确认保存？`, '保存功能配置', {
-      type: 'warning', confirmButtonText: '确认保存', cancelButtonText: '取消',
-    })
-  } catch { return }
   featureSaving.value = true
   try {
+    try {
+      await ElMessageBox.confirm(`将更新 API 密钥「${featureTarget.value.name}」的 MCP 开关、只读权限和 IP 白名单，新的访问范围立即生效。确认保存？`, '保存功能配置', {
+        type: 'warning', confirmButtonText: '确认保存', cancelButtonText: '取消',
+      })
+    } catch { return }
     const payload: UpdateAPIKeyInput = {
       mcp_enabled: featureForm.value.mcp_enabled,
       read_only: isAdmin.value ? featureForm.value.read_only : true,

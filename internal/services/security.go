@@ -3227,7 +3227,39 @@ func validateCustomRulePattern(operator, pattern string) error {
 		}
 		return fmt.Errorf("该运算符不支持以反斜杠结尾的匹配内容，请改用正则运算符（如 `\\$`）表达")
 	}
+	if operator == "regex" && hasEmptyRegexAlternative(pattern) {
+		return fmt.Errorf("正则包含空分支（连续 ||），会匹配任意请求；请使用单个 | 或移除空分支")
+	}
 	return nil
+}
+
+// hasEmptyRegexAlternative 只识别未转义且不在字符类内的连续 ||。
+// 该形态会产生一个永真空分支，等价于无条件下发拒绝/检测，几乎所有情况都是误写。
+func hasEmptyRegexAlternative(pattern string) bool {
+	escaped, inClass := false, false
+	for i := 0; i+1 < len(pattern); i++ {
+		c := pattern[i]
+		if escaped {
+			escaped = false
+			continue
+		}
+		if c == '\\' {
+			escaped = true
+			continue
+		}
+		if c == '[' {
+			inClass = true
+			continue
+		}
+		if c == ']' {
+			inClass = false
+			continue
+		}
+		if c == '|' && pattern[i+1] == '|' && !inClass {
+			return true
+		}
+	}
+	return false
 }
 
 func escapeCorazaPattern(pattern string) string {

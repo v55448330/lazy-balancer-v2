@@ -577,6 +577,7 @@ export function createThreatScene(container: HTMLElement, opts?: ThreatSceneOpti
     dragLast = canvasPoint(event)
     dragStart = dragLast
     canvas.style.cursor = 'grabbing'
+    canvas.setPointerCapture(event.pointerId)
   }
 
   function onPointerMove(event: PointerEvent): void {
@@ -644,6 +645,8 @@ export function createThreatScene(container: HTMLElement, opts?: ThreatSceneOpti
   window.addEventListener('pointerup', onPointerUp)
   canvas.addEventListener('click', onClick)
   canvas.addEventListener('wheel', onWheel, { passive: false })
+  canvas.addEventListener('pointercancel', onPointerUp)
+  canvas.addEventListener('lostpointercapture', onPointerUp)
 
   // ---- 下钻 ----
   function clearProvinceLayer(): void {
@@ -1277,6 +1280,8 @@ export function createThreatScene(container: HTMLElement, opts?: ThreatSceneOpti
       canvas.removeEventListener('pointerleave', onPointerLeave)
       canvas.removeEventListener('click', onClick)
       canvas.removeEventListener('wheel', onWheel)
+      canvas.removeEventListener('pointercancel', onPointerUp)
+      canvas.removeEventListener('lostpointercapture', onPointerUp)
       hoverTip.remove()
       // 提前释放离屏位图后备存储（GC 前即可归还内存）
       drillHoverPathByKey = null

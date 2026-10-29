@@ -352,60 +352,79 @@ func securityEventsSpoolCountEntriesCached(path string, info os.FileInfo) (int64
 	}
 	var offset, entries int64
 	lineHasContent := false
-	if ok && info.Size() >= cached.offset && !cached.lineHasContent {
-		// spool 只追加：上一缓存以换行收尾时可安全从旧 EOF 续读。
-		offset, entries = cached.offset, cached.entries
+	if ok && info.Size() > cached.offset {
+		// spool 只追加：无论上次以完整行还是半行收尾，都只读取旧 EOF
+		// 之后的新增字节。半行已计入 cached.entries；续读结果会再次计入
+		// 该条（无论它本轮是否完成），合并时减去这次重叠。
+		offset, entries, lineHasContent = cached.offset, cached.entries, cached.lineHasContent
 	}
-	n, hasContent, err := securityEventsSpoolCountEntriesFrom(path, offset, lineHasContent)
+	result, err := securityEventsSpoolCountEntriesFrom(path, offset, lineHasContent)
 	if err != nil {
 		return 0, err
 	}
-	entries += n
+	entries += result.entries
+	if lineHasContent && result.entries > 0 {
+		entries--
+	}
 	securityEventsSpoolCountCache.files[path] = securityEventsSpoolCountCacheEntry{
-		size: info.Size(), mod: info.ModTime(), offset: info.Size(), entries: entries, lineHasContent: hasContent,
+		size: result.offset, mod: result.mod, offset: result.offset, entries: entries, lineHasContent: result.lineHasContent,
 	}
 	return entries, nil
 }
 
+type securityEventsSpoolCountResult struct {
+	entries        int64
+	offset         int64
+	mod            time.Time
+	lineHasContent bool
+}
+
 // securityEventsSpoolCountEntriesFrom 流式读取指定偏移后的新增内容；末行无
-// 换行同样计入。调用方负责把返回的 lineHasContent 用于后续追加重叠判定。
-func securityEventsSpoolCountEntriesFrom(path string, offset int64, lineHasContent bool) (int64, bool, error) {
+// 换行同样计入。返回实际读取到的 EOF 与文件状态，调用方不得拿读取前的
+// Info.Size 充当 offset——Info 与 Read 之间的并发追加会使两者分叉。
+func securityEventsSpoolCountEntriesFrom(path string, offset int64, lineHasContent bool) (securityEventsSpoolCountResult, error) {
+	result := securityEventsSpoolCountResult{offset: offset, lineHasContent: lineHasContent}
 	f, err := os.Open(path)
 	if err != nil {
-		return 0, false, err
+		return result, err
 	}
 	defer f.Close()
 	if _, err := f.Seek(offset, io.SeekStart); err != nil {
-		return 0, false, err
+		return result, err
 	}
 	buf := make([]byte, 64<<10)
-	var entries int64
 	for {
 		n, rerr := f.Read(buf)
 		securityEventsSpoolEntryReadBytesForTest.Add(int64(n))
+		result.offset += int64(n)
 		for _, b := range buf[:n] {
 			switch b {
 			case '\n':
-				if lineHasContent {
-					entries++
+				if result.lineHasContent {
+					result.entries++
 				}
-				lineHasContent = false
+				result.lineHasContent = false
 			case ' ', '\t', '\r':
 			default:
-				lineHasContent = true
+				result.lineHasContent = true
 			}
 		}
 		if errors.Is(rerr, io.EOF) {
 			break
 		}
 		if rerr != nil {
-			return entries, lineHasContent, rerr
+			return result, rerr
 		}
 	}
-	if lineHasContent {
-		entries++
+	if result.lineHasContent {
+		result.entries++
 	}
-	return entries, lineHasContent, nil
+	info, err := f.Stat()
+	if err != nil {
+		return result, err
+	}
+	result.mod = info.ModTime()
+	return result, nil
 }
 
 // SecurityEventsSpoolStatus 返回带缓存（TTL 内复用，补采/封存后失效）的
@@ -583,10 +602,12 @@ func drainSecurityEventsSpool(ctx context.Context) (int, error) {
 		}
 	}
 	ingested := 0
+	hasSealed := false
 	for _, f := range files {
 		if !f.sealed {
 			continue
 		}
+		hasSealed = true
 		if ctx != nil && ctx.Err() != nil {
 			// 停机/引擎取消：已入库的清零计数，未入库的留待下一轮。
 			return ingested, nil
@@ -610,7 +631,9 @@ func drainSecurityEventsSpool(ctx context.Context) (int, error) {
 		}
 	}
 	securityEventsSpoolRecordSuccess(ingested)
-	if len(files) > 0 {
+	if hasSealed {
+		// 只有 sealed 集合可能被本轮删除；active-only 空补采不改变文件，
+		// 保留状态 TTL，避免健康轮询每 2s 重扫正在增长的 active 文件。
 		invalidateSecurityEventsSpoolStatus()
 	}
 	return ingested, nil

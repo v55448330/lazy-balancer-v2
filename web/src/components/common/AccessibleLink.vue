@@ -15,6 +15,8 @@
 </template>
 
 <script setup lang="ts">
+import { activateOnce } from '@/utils/keyboardActivate'
+
 // 外观契约与 el-link 一致：这些 props 必须声明（未声明的属性会落进 attrs 被
 // 静默吞掉，模板类型检查也看不到调用方传了什么），声明后显式转发给 el-link。
 const props = withDefaults(defineProps<{
@@ -26,20 +28,21 @@ const props = withDefaults(defineProps<{
   underline: 'never',
 })
 
-// 键盘激活：Enter/Space → 合成 click（浏览器对无 href 的 <a> 不提供默认激活行为）。
-// 必须过滤按键自动重复：长按会按系统重复率反复合成 click，落到切换/取数类动作上
-// 会来回切换（结果取决于按住多久）或重复发请求。
+// 键盘激活：Enter/Space → 合成 click（浏览器对无 href 的 <a> 不提供默认激活行为），
+// 长按过滤统一走 activateOnce，避免与其它键盘入口产生第二套守卫语义。
 const activate = (event: KeyboardEvent): void => {
-  if (event.repeat) return
-  const target = event.currentTarget
-  if (target instanceof HTMLElement) target.click()
+  activateOnce(event, () => {
+    const target = event.currentTarget
+    if (target instanceof HTMLElement) target.click()
+  })
 }
 </script>
 
 <style scoped>
-/* 键盘焦点必须可见；hover/active 与 IP 快捷弹框触发入口一致。 */
+/* 键盘焦点必须可见；浅底统一，文字色仅 primary/danger 使用主色，其余保留类型语义。 */
 .el-link { padding: 1px 3px; margin: -1px -3px; border-radius: 3px; transition: background .15s, color .15s; }
-.el-link:hover { background: var(--el-color-primary-light-9, #ecf5ff); color: var(--el-color-primary, #409eff); text-decoration: none; }
+.el-link:hover { background: var(--el-color-primary-light-9, #ecf5ff); text-decoration: none; }
+.el-link--primary:hover, .el-link--danger:hover { color: var(--el-color-primary, #409eff); }
 .el-link:active { background: var(--el-color-primary-light-8, #d9ecff); }
 .el-link:focus-visible { outline: 2px solid var(--el-color-primary); outline-offset: 2px; border-radius: 2px; }
 </style>

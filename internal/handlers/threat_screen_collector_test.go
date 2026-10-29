@@ -201,7 +201,11 @@ func TestControlThreatScreenCollector_localLeaseFailureKeepsTier(t *testing.T) {
 func TestControlThreatScreenCollector_deleteQueryLeaseIDFallback(t *testing.T) {
 	services.ResetThreatScreenAttackFlowForTest()
 	t.Cleanup(services.ResetThreatScreenAttackFlowForTest)
+	gotRawQuery := ""
 	admin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodDelete {
+			gotRawQuery = r.URL.RawQuery
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"enabled":true}`))
 	}))
@@ -233,6 +237,50 @@ func TestControlThreatScreenCollector_deleteQueryLeaseIDFallback(t *testing.T) {
 	}
 	if got := services.ThreatScreenAttackFlowSampleN(); got != 0 {
 		t.Fatalf("空体 DELETE 后 sample_n=%d, want 0（必须用 ?lease_id= 回退释放）", got)
+	}
+	if gotRawQuery != "lease_id=tab-query" {
+		t.Fatalf("admin RawQuery=%q, want lease_id=tab-query（本地与 Caddy 必须释放同一租约）", gotRawQuery)
+	}
+}
+
+func TestControlThreatScreenCollector_rejectsInvalidRequestBeforeAdmin(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		want int
+	}{
+		{name: "body over 4KB", body: strings.Repeat(" ", 4097), want: http.StatusRequestEntityTooLarge},
+		{name: "malformed JSON", body: `{bad json`, want: http.StatusBadRequest},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			services.ResetThreatScreenAttackFlowForTest()
+			t.Cleanup(services.ResetThreatScreenAttackFlowForTest)
+			adminCalls := 0
+			admin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				adminCalls++
+				_, _ = w.Write([]byte(`{"enabled":true}`))
+			}))
+			defer admin.Close()
+			h := &Handlers{cfg: &config.Config{CaddyAdminURL: admin.URL}}
+			gin.SetMode(gin.TestMode)
+			r := gin.New()
+			r.POST("/security/overview/threat-screen/collector", h.ControlThreatScreenCollector)
+
+			req := httptest.NewRequest(http.MethodPost, "/security/overview/threat-screen/collector", strings.NewReader(tc.body))
+			rec := httptest.NewRecorder()
+			r.ServeHTTP(rec, req)
+
+			if rec.Code != tc.want {
+				t.Fatalf("status=%d body=%s, want %d", rec.Code, rec.Body.String(), tc.want)
+			}
+			if adminCalls != 0 {
+				t.Fatalf("admin calls=%d, want 0 for locally rejected request", adminCalls)
+			}
+			if got := services.ThreatScreenAttackFlowSampleN(); got != 0 {
+				t.Fatalf("sample_n=%d, want unchanged 0", got)
+			}
+		})
 	}
 }
 

@@ -24,7 +24,11 @@ test('提交后不即时清空令牌，确认成功/关闭弹框统一清理', (
   const submit = section(page, 'const submitRegistration = async', '</script>')
   assert.doesNotMatch(submit, /form\.register_token = ''/, '取消确认/入口守卫早退会丢失已粘贴令牌')
   // 成功受理（父级 POST 成功）后清空；关闭弹框兜底清理
-  assert.match(page, /watch\(\(\) => props\.registrationSucceeded, \(\) => \{ form\.register_token = '' \}\)/)
+  assert.match(
+    page,
+    /watch\(\s*\(\) => props\.registrationSucceeded,\s*\(\) => \{\s*form\.register_token = ''\s*\},?\s*\)/,
+    '父级受理成功后必须清空一次性令牌',
+  )
   const watcher = section(page, 'watch(registrationOpen, (open) => {', 'const handleModeChange')
   assert.match(watcher, /if \(!open\)[\s\S]*form\.register_token = ''/)
   const parent = code('src/views/settings/ClusterSettings.vue')

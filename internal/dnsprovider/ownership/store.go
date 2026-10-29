@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"lazy-balancer-v2/internal/atomicfile"
 	"lazy-balancer-v2/internal/dnsname"
 )
 
@@ -429,43 +430,11 @@ func (s *Store) save(current state) error {
 	return s.writeAtomic(data)
 }
 
-// writeAtomic writes one complete snapshot. The caller must hold fileMu; the
-// fixed temporary path is safe precisely because Store and Replace share it.
+// writeAtomic writes one complete snapshot through the shared primitive so
+// every failure path removes its uniquely named temporary file.
 func (s *Store) writeAtomic(data []byte) error {
-	tmp := s.path + ".tmp"
-	file, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
-	if err != nil {
+	if err := atomicfile.WriteAtomic(s.path, data, 0600); err != nil {
 		return fmt.Errorf("write DNS ownership: %w", err)
 	}
-	if _, err := file.Write(data); err != nil {
-		return fmt.Errorf("write DNS ownership: %w", errors.Join(err, file.Close()))
-	}
-	// fsync before the rename so a crash never swaps in an empty or
-	// half-written file (same durability contract as certstore.go /
-	// cluster_apply.go)
-	if err := file.Sync(); err != nil {
-		return fmt.Errorf("sync DNS ownership: %w", errors.Join(err, file.Close()))
-	}
-	if err := file.Close(); err != nil {
-		return fmt.Errorf("close DNS ownership: %w", err)
-	}
-	if err := os.Rename(tmp, s.path); err != nil {
-		removeErr := os.Remove(tmp)
-		return fmt.Errorf("replace DNS ownership: %w", errors.Join(err, removeErr))
-	}
-	if err := syncParentDir(s.path); err != nil {
-		return fmt.Errorf("sync DNS ownership directory: %w", err)
-	}
 	return nil
-}
-
-func syncParentDir(path string) error {
-	dir, err := os.Open(filepath.Dir(path))
-	if err != nil {
-		return err
-	}
-	if err := dir.Sync(); err != nil {
-		return errors.Join(err, dir.Close())
-	}
-	return dir.Close()
 }

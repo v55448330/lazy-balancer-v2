@@ -281,7 +281,7 @@ func GetCrawlerUpdateManager() *CrawlerUpdateManager { return crawlerUpdateManag
 // 任一源失败记录失败态但**不回滚其它源**（与威胁库同语义：失败保留上次快照）。
 // 任务时间源=task_runs.started_at（经 RunID，配置时区墙钟→UTC 存储）：
 // 源 started_at/last_checked 与任务监控为同一时刻；业务流水统一写任务日志。
-func (m *CrawlerUpdateManager) RunUpdate(ctx context.Context, rc taskengine.RunContext) error {
+func (m *CrawlerUpdateManager) RunUpdate(ctx context.Context, rc taskengine.RunContext) (runErr error) {
 	operator := rc.Operator
 	if operator == "" {
 		operator = "system"
@@ -299,7 +299,9 @@ func (m *CrawlerUpdateManager) RunUpdate(ctx context.Context, rc taskengine.RunC
 	// demote/导入排空/进程停止的取消不推进（引擎侧同样不消费槽，恢复后补跑）。
 	defer func() {
 		if outcome == "cancelled" && userCancelledRun(ctx) {
-			advanceSourceSlotsAfterUserCancel("security_crawler_sources", rc.Trigger, nil, crawlerNextSlotStrict)
+			if err := advanceSourceSlotsAfterUserCancel("security_crawler_sources", rc.Trigger, nil, crawlerNextSlotStrict); err != nil {
+				runErr = errors.Join(runErr, err)
+			}
 		}
 	}()
 	defer func() {

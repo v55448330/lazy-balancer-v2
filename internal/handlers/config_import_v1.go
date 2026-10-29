@@ -858,6 +858,11 @@ func (h *Handlers) ImportV1Config(c *gin.Context) {
 		return
 	}
 	defer session.close()
+	// 会话建立后与 v2 共用独立 ctx：请求断连不得取消已开始的写事务。
+	ctx = session.ctx
+	if configImportAfterSessionHook != nil {
+		configImportAfterSessionHook()
+	}
 	// v1 全量导入替换规则面：允许导入后清理消失规则产物。
 	session.replaceRuleArtifacts = true
 	tx := session.tx
@@ -972,9 +977,11 @@ func (h *Handlers) ImportV1Config(c *gin.Context) {
 			recordAudit(c, "重载", "Caddy服务", "导入配置后自动重载")
 			h.recordCaddyApplyResult(nil)
 			// 提交已落地：imported 是真实已提交条数（回滚路径相反，不报条数）。
-			// message/warnings 只带阶段说明与真实原因（不重复动作词）。
-			partialWarnings := append(append([]string{}, allWarnings...), "数据库已提交，但证书任务恢复失败: "+importFailureCause(err))
-			c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "配置已导入，但证书任务恢复失败: " + importFailureCause(err), Data: gin.H{
+			// message/warnings 只带阶段说明与真实原因（不重复动作词）——与 v2
+			// 出口共用 importPartialSuccess* 单源（此前 v1 自行内联两份同义文案，
+			// 措辞「，但」与单源的「（部分完成）：」分叉，只改单源会静默漂移）。
+			partialWarnings := append(append([]string{}, allWarnings...), importPartialSuccessWarning(err))
+			c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: importPartialSuccessMessage("导入", err), Data: gin.H{
 				"imported": imported, "disabled_conflicts": disabledConflicts,
 				"partial": true, "warnings": partialWarnings,
 			}})

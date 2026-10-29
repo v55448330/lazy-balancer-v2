@@ -7,7 +7,7 @@ import {
   importConfirmMessage,
   normalizeBackupSectionKeys,
 } from '../src/utils/backupSections.ts'
-import { code, repoCode, section } from './_helpers.ts'
+import { code, elementSlice, openTags, repoCode, section } from './_helpers.ts'
 
 // 设置页备份面回归守卫：导入入口/超大文件拒绝、lbbak Blob 直传、还原文案按分类、
 // 下次备份调度口径、立即备份的卸载收尾，以及备份四分类前后端单源一致性。
@@ -54,7 +54,17 @@ test('还原文案按备份分类，失败行不显示下载', () => {
   assert.match(restore, /autoBackupScopeText\(row\)/)
   assert.match(restore, /覆盖该备份包含的分类/)
   assert.doesNotMatch(restore, /覆盖当前全部配置/)
-  assert.match(page, /<el-button v-if="row\.status === 'success'" link type="primary" size="small" :disabled="autoBackupActionBusy" @click="downloadAutoBackup\(row(?: as [A-Za-z]+)?\)">下载<\/el-button>/)
+  // 属性序与字面空隙不是契约（格式工具栏/换行重排即批量假红）：按「标签 + 属性集」
+  // 判定，按钮身份由 @click 处理器认领。
+  const downloads = openTags(page, 'el-button').filter((tag) => tag.includes('@click="downloadAutoBackup('))
+  assert.equal(downloads.length, 1, '备份行的下载按钮必须唯一')
+  const [download] = downloads
+  assert.match(download, /\bv-if="row\.status === 'success'"/, '只有成功行显示下载')
+  assert.match(download, /(?:^|\s)link(?=\s|\/?>)/, 'link 形态按钮')
+  assert.match(download, /\btype="primary"/)
+  assert.match(download, /\bsize="small"/)
+  assert.match(download, /:disabled="autoBackupActionBusy"/, '执行中必须禁用')
+  assert.match(elementSlice(page, page.indexOf(download), 'el-button'), />下载<\/el-button>/, '按钮文案')
 })
 
 test('下次备份只消费调度器返回值并标明补跑', () => {
@@ -93,12 +103,18 @@ test('立即备份轮询在组件卸载后终止且不再弹结果', () => {
   assert.ok(branchAt > guardAt, '二次复查必须出现在结果提示分支之前（否则卸载后仍会弹 toast）')
 })
 
-// 取消到 0 个分类时，预览摘要/冲突必须与按钮同门：revalidateImport 早退会让
-// 面板继续展示上一次选择的摘要，且确认按钮可点（点了才提示）。
-test('0 分类选择隐藏陈旧预览并把确认按钮置灰', () => {
+// 取消到 0 个分类时，chip 必须保留以便重新勾选；摘要/冲突与确认按钮同门隐藏，
+// 空选择提示替代校验错误，避免继续展示上一次分类集合的预览。
+test('0 分类选择保留 chip、隐藏陈旧预览并禁用确认', () => {
   assert.match(page, /const importPreviewSelected = computed<boolean>\(\(\) => importSections\.value\.length > 0\)/)
+  assert.match(page, /<template v-if="importValidation && !importValidating">/)
+  assert.match(page, /@click="toggleImportSection\(sec\.key\)"/)
+  assert.match(page, /v-if="!importValidation\.valid && importPreviewSelected"/)
+  assert.match(page, /v-else-if="!importValidation\.valid && importPreviewSelected"/)
   assert.match(page, /<template v-if="importValidation\.valid && importPreviewSelected">/)
-  assert.match(page, /v-else-if="importValidation\.valid" class="info-note-bar import-alert"><span class="info-note-desc">未选择导入分类/)
+  assert.match(page, /v-else-if="!importPreviewSelected" class="info-note-bar import-alert"><span class="info-note-desc">未选择导入分类/)
+  const toggle = section(page, 'const toggleImportSection', 'const toggleExportSection')
+  assert.match(toggle, /if \(validation\.type === 'v1' && key !== 'rules'\) return/, 'V1 取消唯一分类后仍必须允许重新勾选规则')
   const button = section(page, ':disabled="!importValidation?.valid', ':loading="importing"')
   assert.match(button, /!importPreviewSelected/)
   // 与同卡其余写入口同门：只读 ∪ 非主节点（从节点导入必然 403）

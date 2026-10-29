@@ -40,12 +40,22 @@ test('AccessibleLink：role/tabindex/Enter+Space 激活 + 焦点可见', () => {
   assert.match(code('src/components/common/AccessibleLink.vue'), /\.el-link:focus-visible/)
 })
 
-test('AccessibleLink：默认无下划线，hover 与 IP 快捷入口同款浅底主色', () => {
+test('AccessibleLink 复用键盘激活去重单源', () => {
+  const wrapper = code('src/components/common/AccessibleLink.vue')
+  assert.match(wrapper, /import \{ activateOnce \} from '@\/utils\/keyboardActivate'/)
+  assert.match(wrapper, /activateOnce\(event, \(\) =>/)
+  const activate = section(wrapper, 'const activate = ', '</script>')
+  assert.doesNotMatch(activate, /event\.repeat/, '组件不得再保留第二份重复键守卫')
+})
+
+test('AccessibleLink：统一浅底，只有 primary/danger 在 hover 时使用主色文字', () => {
   const wrapper = code('src/components/common/AccessibleLink.vue')
   assert.match(wrapper, /withDefaults\(defineProps/)
   assert.match(wrapper, /underline: 'never'/)
   assert.doesNotMatch(wrapper, /readonly underline\?: boolean/)
-  assert.match(wrapper, /\.el-link:hover \{ background: var\(--el-color-primary-light-9, #ecf5ff\); color: var\(--el-color-primary, #409eff\); text-decoration: none;/)
+  assert.match(wrapper, /\.el-link:hover \{ background: var\(--el-color-primary-light-9, #ecf5ff\); text-decoration: none;/)
+  assert.match(wrapper, /\.el-link--primary:hover, \.el-link--danger:hover \{ color: var\(--el-color-primary, #409eff\);/)
+  assert.doesNotMatch(wrapper, /\.el-link:hover \{[^}]*color:/, 'info/success/warning/default 必须保留 Element Plus 类型色')
   assert.match(wrapper, /\.el-link:active \{ background: var\(--el-color-primary-light-8, #d9ecff\);/)
 })
 
@@ -155,9 +165,14 @@ test('ACME 全局设置保存：CA 列表未就绪先报加载态，不误报「
 
 test('免费证书：CA 提供商测试先确认再发起写操作', () => {
   const page = code('src/views/settings/FreeCertificates.vue')
-  const test = section(page, 'const testCAProvider = async', 'const openConfigDialog')
-  assert.match(test, /await ElMessageBox\.confirm\(/)
-  assert.ok(test.indexOf('await ElMessageBox.confirm(') < test.indexOf('testingCAId.value = p.id'), '确认必须先于测试 loading 与请求')
+  // 不得命名为 test：会遮蔽 `node:test` 的 test，用例体内再声明子用例时会得到
+  // `TypeError: test is not a function` 而不是断言失败。
+  const providerTestBody = section(page, 'const testCAProvider = async', 'const openConfigDialog')
+  assert.match(providerTestBody, /await ElMessageBox\.confirm\(/)
+  assert.ok(
+    providerTestBody.indexOf('await ElMessageBox.confirm(') < providerTestBody.indexOf('testingCAId.value = p.id'),
+    '确认必须先于测试 loading 与请求',
+  )
 })
 
 test('免费证书：编辑 CA 与 DNS 提供商弹框保存前先确认', () => {

@@ -1,14 +1,16 @@
 package main
 
-// 起无有效 Host 不再回退监听地址（0.0.0.0 不可用），统一按 400 拒绝。
+// 缺失或畸形 Host 时不再回退监听地址（0.0.0.0 不可用），统一按 400 拒绝。
 
 import (
 	"bufio"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 )
 
 // assertMalformedHostRejected 断言畸形/缺失 Host 的请求得到 400 且无 Location。
@@ -73,4 +75,43 @@ func TestRedirectHTTP_validHostStillRedirects(t *testing.T) {
 	}
 	_ = io.Closer(client).Close()
 	<-done
+}
+
+type redirectMemoryConn struct {
+	reader *strings.Reader
+	output strings.Builder
+}
+
+func newRedirectMemoryConn(input string) *redirectMemoryConn {
+	return &redirectMemoryConn{reader: strings.NewReader(input)}
+}
+
+func (c *redirectMemoryConn) Read(p []byte) (int, error)       { return c.reader.Read(p) }
+func (c *redirectMemoryConn) Write(p []byte) (int, error)      { return c.output.Write(p) }
+func (c *redirectMemoryConn) Close() error                     { return nil }
+func (c *redirectMemoryConn) LocalAddr() net.Addr              { return nil }
+func (c *redirectMemoryConn) RemoteAddr() net.Addr             { return nil }
+func (c *redirectMemoryConn) SetDeadline(time.Time) error      { return nil }
+func (c *redirectMemoryConn) SetReadDeadline(time.Time) error  { return nil }
+func (c *redirectMemoryConn) SetWriteDeadline(time.Time) error { return nil }
+
+func TestRedirectHTTPDrainsBoundedRequestBody(t *testing.T) {
+	const bodySize = 8 * 1024
+	request := fmt.Sprintf("POST /upload HTTP/1.1\r\nHost: public.example\r\nContent-Length: %d\r\n\r\n%s", bodySize, strings.Repeat("x", bodySize))
+	connection := newRedirectMemoryConn(request)
+	redirectHTTP(bufio.NewReader(connection), connection)
+	if connection.reader.Len() != 0 {
+		t.Fatalf("request body left unread: %d bytes", connection.reader.Len())
+	}
+	if !strings.HasPrefix(connection.output.String(), "HTTP/1.1 302 Found\r\n") {
+		t.Fatalf("unexpected response: %q", connection.output.String())
+	}
+}
+
+func TestRedirectHTTPEmptyBodyDoesNotWait(t *testing.T) {
+	connection := newRedirectMemoryConn("GET / HTTP/1.1\r\nHost: public.example\r\n\r\n")
+	redirectHTTP(bufio.NewReader(connection), connection)
+	if !strings.HasPrefix(connection.output.String(), "HTTP/1.1 302 Found\r\n") {
+		t.Fatalf("unexpected response: %q", connection.output.String())
+	}
 }

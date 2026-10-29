@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { code, codeSection, section } from './_helpers.ts'
+import { code, codeSection, member, section } from './_helpers.ts'
 import { clampPassiveHealthCheckTimeout } from '../src/utils/ruleWizard.ts'
 
 const page = code('src/views/Rules.vue')
@@ -138,5 +138,9 @@ test('规则更新成功后展示后端 data.warnings（可用性变更不能只
   assert.match(wizard, /request\.put<APIResponse<\{ warnings\?: string\[\] \}>>\(/, '更新必须声明 warnings 载荷')
   assert.match(wizard, /submitWarnings = updateRes\.data\?\.warnings \?\? \[\]/, '必须读取后端 warnings')
   assert.match(wizard, /if \(submitWarnings\.length > 0\) \{/, '有披露时才弹框（无披露不打扰）')
-  assert.match(wizard, /ElMessageBox\.alert\([\s\S]{0,220}submitWarnings\.map/, '披露必须逐条展示')
+  // 披露必须逐条成行：断言挂在 alert 的首参上（条件块内按块配对取段），
+  // 距离窗口只证明「两段文字在同页且相距 ≤220 字符」——文案换到别的元素/别处
+  // 的 `submitWarnings.map` 仍会绿。
+  const disclosure = member(wizard, 'if (submitWarnings.length > 0) {')
+  assert.match(disclosure, /ElMessageBox\.alert\(\s*h\('div', submitWarnings\.map\(/, '披露必须逐条展示（alert 消息由 warnings 逐条生成）')
 })

@@ -97,3 +97,56 @@ test('多个候选目标全部保留，由组件要求用户显式选择', () =>
   const model = buildIpQuickModel('203.0.113.7', policies, [list({ id: 10, name: 'A' }), list({ id: 11, name: 'B' })], { 10: [], 11: [] })
   assert.deepEqual(model.deny.targets.map((target) => target.name), ['A', 'B'])
 })
+
+// 混合策略（兼容旧版的存量组）与「摘要缺 policy_type」是既有库里的真实形态：
+// 两侧判定一旦丢掉 mixed/缺省分支，这些策略在弹框里既不显示已存在来源、也不给
+// 任何可点目标——用户会以为该 IP 不在任何 ACL 里。
+test('混合策略：ACL 两侧与信任侧都参与来源与目标', () => {
+  const policies = [policy({
+    name: '混合策略',
+    policy_type: 'mixed',
+    ip_acl_mode: 'deny',
+    ip_acl_list: '["203.0.113.7"]',
+    ip_acl_list_refs: '[10]',
+    ip_whitelist: '[]',
+    ip_whitelist_refs: '[12]',
+  })]
+  const lists = [list({ id: 10, name: '黑名单 A' }), list({ id: 12, name: '信任 A', entry_count: 3 })]
+  const model = buildIpQuickModel('203.0.113.7', policies, lists, { 10: [], 12: [] })
+  assert.deepEqual(model.deny.sources.map((source) => source.kind), ['inline'], '混合策略的 ACL 内联精确条目必须显示为来源')
+  assert.deepEqual(model.deny.targets.map((target) => target.name), ['黑名单 A'], '未命中的引用名单必须是可加入目标')
+  assert.deepEqual(model.trust.targets.map((target) => target.name), ['信任 A'], '混合策略的信任侧同理由信任名单承接')
+  // allow 侧不参与：ip_acl_mode=deny 的单侧语义对混合策略同样成立
+  assert.deepEqual(model.allow.sources, [])
+  assert.deepEqual(model.allow.targets, [])
+})
+
+test('策略类型缺省（精简载荷）：按混合口径同时支持 ACL 与信任侧', () => {
+  const policies = [
+    policy({ id: 7, name: '缺省类型（ACL）', policy_type: undefined, ip_acl_mode: 'deny', ip_acl_list_refs: '[10]' }),
+    policy({ id: 8, name: '缺省类型（信任）', policy_type: undefined, ip_whitelist_refs: '[12]' }),
+  ]
+  const model = buildIpQuickModel('203.0.113.7', policies, [list({ id: 10, name: '黑名单 A' }), list({ id: 12, name: '信任 A' })], { 10: [], 12: [] })
+  // 两侧都要出现「加入既有名单」入口（只剩「新建名单」出口说明该侧被判为不支持）
+  assert.ok(
+    model.deny.targets.some((target) => target.kind === 'list' && target.name === '黑名单 A'),
+    '缺省类型不得把 ACL 侧判为「不支持」',
+  )
+  assert.ok(
+    model.trust.targets.some((target) => target.kind === 'list' && target.name === '信任 A'),
+    '缺省类型不得把信任侧判为「不支持」',
+  )
+})
+
+test('目标排序：名单入口在前、策略出口在后（同类按名称）', () => {
+  // 一个可写名单 + 一条无可写引用的策略（出「新建名单」出口）：list 必须排在前，
+  // 否则用户在高亮处看到的是「新建名单」而不是已有的同名名单。
+  // 顺序刻意让「新建名单」出口先入表：不排序时它会排在名单前面。
+  const policies = [
+    policy({ id: 2, name: '乙', ip_acl_list_refs: '[]' }),
+    policy({ id: 1, name: '甲', ip_acl_list_refs: '[10]' }),
+  ]
+  const model = buildIpQuickModel('203.0.113.7', policies, [list({ id: 10, name: 'Z 名单' })], { 10: [] })
+  assert.deepEqual(model.deny.targets.map((target) => target.kind), ['list', 'policy'])
+  assert.equal(model.deny.targets[0].name, 'Z 名单')
+})

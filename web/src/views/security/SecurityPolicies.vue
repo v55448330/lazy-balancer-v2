@@ -3279,6 +3279,7 @@ async function openDialog(row?: PolicySummary) {
     .then((res) => { if (openSeq !== policyDialogOpenSeq) return; allRules.value = res.data || [] })
     .catch(() => { /* 刷新失败保留快照兜底 */ })
   originalBoundRules.value = [...boundRules.value]
+  wizardSnapshot = wizardStateSnapshot()
   currentStep.value = WIZARD_STEP.BASIC
   dialogVisible.value = true
 }
@@ -3288,6 +3289,24 @@ const resetForm = () => {
   ipACLList.value = []; ipWhitelist.value = []; ipWhitelistEnabled.value = false; ipBlacklistSelf.value = []; ipACLListRefs.value = []; ipWhitelistRefs.value = []; geoipCountries.value = []; crsRuleGroups.value = []; crsExcludedRows.value = []; selectedCustomRules.value = []; boundRules.value = []; editingId.value = null
   stageOverrideEdits.value = {}; stageOverrideSaving.value = {}; stageOverrideFailed.value = {}; stageOverrideSkipped.value = {}
 }
+
+let wizardSnapshot = ''
+const wizardStateSnapshot = (): string => JSON.stringify({
+  form: form.value,
+  ipACLList: ipACLList.value,
+  ipWhitelist: ipWhitelist.value,
+  ipWhitelistEnabled: ipWhitelistEnabled.value,
+  ipBlacklistSelf: ipBlacklistSelf.value,
+  ipACLListRefs: ipACLListRefs.value,
+  ipWhitelistRefs: ipWhitelistRefs.value,
+  geoipCountries: geoipCountries.value,
+  crsRuleGroups: crsRuleGroups.value,
+  crsExcludedRows: crsExcludedRows.value,
+  selectedCustomRules: selectedCustomRules.value,
+  boundRules: boundRules.value,
+  pendingOverrideRules: pendingOverrideRules.value,
+})
+const wizardDirty = computed(() => dialogVisible.value && wizardSnapshot !== '' && wizardStateSnapshot() !== wizardSnapshot)
 
 const resetWizard = () => {
   currentStep.value = WIZARD_STEP.BASIC
@@ -3301,10 +3320,18 @@ const resetWizard = () => {
   stageOverrideSaving.value = {}
   stageOverrideFailed.value = {}
   stageOverrideSkipped.value = {}
+  wizardSnapshot = ''
 }
 
 const beforeWizardClose = (done: () => void): void => {
-  if (!saving.value) done()
+  if (saving.value) return
+  if (!wizardDirty.value) {
+    done()
+    return
+  }
+  void ElMessageBox.confirm('有未保存的修改，关闭将丢弃本次编辑。是否继续？', '放弃修改', {
+    type: 'warning', confirmButtonText: '放弃修改', cancelButtonText: '继续编辑',
+  }).then(() => done()).catch(() => { /* 继续编辑：保留当前弹框与全部暂存 */ })
 }
 
 const handleSave = async () => {

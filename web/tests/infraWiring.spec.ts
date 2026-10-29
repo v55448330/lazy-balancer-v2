@@ -68,7 +68,13 @@ test('文档钉：轮询诊断 API 与生产守卫分离（无消费面必须标
   // 保留时必须有明确标注，避免读者误以为有生产调用方。
   // 文档钉（断言对象是注释文字）：改用 raw 视图读标注，符号存在性另由 code 视图钉。
   const taskDoc = source('src/composables/usePollingTask.ts')
-  assert.match(taskDoc, /诊断\/测试用[\s\S]{0,80}isDisposed/, 'isDisposed 必须标注为诊断/测试用')
+  // 文档钉必须落在 `isDisposed` 自己那条注释上：`诊断/测试用 … {0,80} isDisposed`
+  // 这种距离窗口在别的成员注释离得够近时照样命中（把无关说明当成本符号的标注）。
+  const isDisposedAt = taskDoc.indexOf('readonly isDisposed')
+  assert.ok(isDisposedAt > 0, 'isDisposed 必须存在')
+  const isDisposedDoc = taskDoc.slice(taskDoc.lastIndexOf('/**', isDisposedAt), isDisposedAt)
+  assert.match(isDisposedDoc, /\/\*\*(?:(?!\*\/)[\s\S])*\*\/\s*$/, 'isDisposed 的文档注释必须紧邻声明')
+  assert.match(isDisposedDoc, /诊断\/测试用/, 'isDisposed 必须标注为诊断/测试用')
   assert.match(code('src/composables/usePollingTask.ts'), /isDisposed/, 'isDisposed 必须存在')
   const flightDoc = source('src/utils/sessionSingleFlight.ts')
   const requestBlock = section(flightDoc, 'interface SessionSingleFlight', '\n}')

@@ -245,12 +245,8 @@ func IsValidThreatScreenMode(mode string) bool {
 type GlobalConfig struct {
 	ID          int    `json:"id"`
 	CaddyConfig string `json:"caddy_config"`
-	// DNSProvider 是全局配置遗留字段——签发链唯一凭证来源是
-	// certificate_configs 表；响应面已收敛（omitempty，空值不下发；
-	// 集群快照走 ClusterBasicSettings 独立字段，不受此收敛影响）。DNS 凭证
-	// 正文不属于该响应模型：/config 面向全部登录用户，凭证列只存
+	// DNS 凭证正文不属于该响应模型：/config 面向全部登录用户，凭证只存
 	// certificate_configs。
-	DNSProvider                string `json:"dns_provider,omitempty"`
 	ACMEEmail                  string `json:"acme_email"`
 	CertExpiryDays             int    `json:"cert_expiry_days"`
 	CertRenewalDays            int    `json:"cert_renewal_days"`
@@ -619,11 +615,9 @@ type UpdateRuleRequest struct {
 }
 
 type UpdateConfigRequest struct {
-	Source      string  `json:"source"`
-	DNSProvider *string `json:"dns_provider"`
-	// global_config.dns_credentials 已退役（列由启动迁移删除）：签发链唯一凭证
-	// 来源是 certificate_configs（DNS 凭证在证书配置页维护），请求体携带
-	// dns_credentials 键不存在对应字段，不产生任何写入。
+	Source string `json:"source"`
+	// global_config.dns_provider/dns_credentials 已退役（列由启动迁移删除）：
+	// 签发链唯一凭证来源是 certificate_configs；请求体携带旧键不会产生写入。
 	ACMEEmail                  *string `json:"acme_email"`
 	CertExpiryDays             *int    `json:"cert_expiry_days"`
 	CertRenewalDays            *int    `json:"cert_renewal_days"`

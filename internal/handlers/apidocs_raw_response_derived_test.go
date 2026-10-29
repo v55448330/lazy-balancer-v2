@@ -61,6 +61,22 @@ func handlerMediaTypes(t *testing.T, fn *ast.FuncDecl, decls map[string]*ast.Fun
 				index = 1
 			case "DataFromReader":
 				index = 2
+			case "Header":
+				// 流式交付（io.Copy 直写 c.Writer）用 Header("Content-Type", …) 声明
+				// 媒体类型——与 c.Data/DataFromReader 同属「handler 实际发射面」，
+				// 必须同样派生，否则改用流式后该端点的文档契约失去对表。
+				if len(call.Args) == 2 {
+					key, keyOK := call.Args[0].(*ast.BasicLit)
+					value, valueOK := call.Args[1].(*ast.BasicLit)
+					if keyOK && valueOK && key.Kind == token.STRING && value.Kind == token.STRING {
+						if name, err := strconv.Unquote(key.Value); err == nil && strings.EqualFold(name, "Content-Type") {
+							if mediaType, verr := strconv.Unquote(value.Value); verr == nil {
+								media = append(media, mediaType)
+							}
+						}
+					}
+				}
+				return true
 			}
 			if index >= 0 && len(call.Args) > index {
 				if literal, ok := call.Args[index].(*ast.BasicLit); ok && literal.Kind == token.STRING {

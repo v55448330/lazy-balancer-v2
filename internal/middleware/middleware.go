@@ -21,6 +21,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"lazy-balancer-v2/internal/accesslog"
 	"lazy-balancer-v2/internal/apikey"
 	"lazy-balancer-v2/internal/config"
 	"lazy-balancer-v2/internal/db"
@@ -233,12 +234,56 @@ func (limiter *authenticationAuditLimiter) reset() {
 	limiter.mu.Unlock()
 }
 
-// apiKeyWhitelistCache：API Key IP 白名单的
-// CIDR 解析结果缓存——原实现每请求对每条 CIDR 调 net.ParseCIDR。
-// 键 = keyID + "|" + 白名单原串：键含白名单内容，白名单变更自动产生新键，
-// 无需失效；旧键规模有界（Key 数 × 历史白名单版本数）。解析失败不缓存
-// （下次请求仍重新解析并 500），保持「白名单配置无效→500」语义不变。
-var apiKeyWhitelistCache sync.Map
+// apiKeyWhitelistCacheMaxEntries 是全部 Key/历史白名单版本共享的解析缓存硬上限。
+// 达到上限后新键仍逐请求解析并正常鉴权，只是不驻留；已有键可原位替换。
+const apiKeyWhitelistCacheMaxEntries = 1024
+
+// apiKeyWhitelistCIDRCache 提供与 sync.Map 相同的本域所需操作，并强制全局
+// 条目上限。Range 使用快照，允许回调内 Delete（按 keyID/全量清扫）。
+type apiKeyWhitelistCIDRCache struct {
+	mu      sync.RWMutex
+	entries map[any]any
+}
+
+func (c *apiKeyWhitelistCIDRCache) Store(key, value any) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if _, exists := c.entries[key]; !exists && len(c.entries) >= apiKeyWhitelistCacheMaxEntries {
+		return
+	}
+	c.entries[key] = value
+}
+
+func (c *apiKeyWhitelistCIDRCache) Load(key any) (any, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	value, ok := c.entries[key]
+	return value, ok
+}
+
+func (c *apiKeyWhitelistCIDRCache) Delete(key any) {
+	c.mu.Lock()
+	delete(c.entries, key)
+	c.mu.Unlock()
+}
+
+func (c *apiKeyWhitelistCIDRCache) Range(fn func(key, value any) bool) {
+	c.mu.RLock()
+	snapshot := make(map[any]any, len(c.entries))
+	for key, value := range c.entries {
+		snapshot[key] = value
+	}
+	c.mu.RUnlock()
+	for key, value := range snapshot {
+		if !fn(key, value) {
+			return
+		}
+	}
+}
+
+// apiKeyWhitelistCache：API Key IP 白名单的 CIDR 解析结果缓存。
+// 键 = keyID + "|" + 白名单原串；解析失败不缓存，保持配置无效→500 语义。
+var apiKeyWhitelistCache = apiKeyWhitelistCIDRCache{entries: make(map[any]any)}
 
 // PurgeAPIKeyWhitelistCache 按 keyID 前缀清扫白名单 CIDR 解析缓存
 // 删除/禁用 Key 后其历史白名单版本条目永不再命中却永久
@@ -441,9 +486,17 @@ func clusterRateLimit(scope string, limit int, message string) gin.HandlerFunc {
 		}
 		bucket.count++
 		exceeded := bucket.count > limit
+		retryAfterSeconds := 0
+		if exceeded {
+			retryAfterSeconds = int((bucket.until.Sub(now) + time.Second - time.Nanosecond) / time.Second)
+			if retryAfterSeconds < 1 {
+				retryAfterSeconds = 1
+			}
+		}
 		bucket.mu.Unlock()
 
 		if exceeded {
+			c.Header("Retry-After", strconv.Itoa(retryAfterSeconds))
 			c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{"code": http.StatusTooManyRequests, "message": message})
 			return
 		}
@@ -455,11 +508,44 @@ func clusterRegisterRateLimit() gin.HandlerFunc {
 	return clusterRateLimit("register", 30, "注册请求过于频繁，请稍后再试")
 }
 
-// mcpRateLimitPerMinute 是 MCP 端点的按 IP 额度。MCP 是机器接口（LLM 工具
-// 调用一次会话内连续多次往返），比人工写端点频繁得多，故取公开只读宽桶的
-// 量级（120/min，与 branding 桶同档）；同时仍是每秒级上限，单个身份无法线速
-// 灌满内部 API 与审计库。
+// MCP 使用双档限流：认证前的 IP 桶只保留 401 失败预算，认证后的 Key 桶为
+// 每个身份提供独立的 120/min 请求额度。同出口多 Key 不互相挤占，成功请求也
+// 不消耗匿名失败预算；体读与 MCP 转发仍在两道限流之后。
 const mcpRateLimitPerMinute = 120
+
+func mcpSourceRateLimit() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		now := time.Now()
+		bucket, generation, allowed, retryAfter := reserveRateLimitBucket(c.ClientIP(), "mcp|ip", now, mcpRateLimitPerMinute)
+		if !allowed {
+			abortMCPRateLimit(c, retryAfter)
+			return
+		}
+		defer func() {
+			failed := c.Writer.Status() == http.StatusUnauthorized
+			releaseRateLimitReservation(bucket, generation, failed)
+		}()
+		c.Next()
+	}
+}
+
+func mcpAPIKeyRateLimit() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		now := time.Now()
+		scope := "mcp|key:" + strconv.Itoa(c.GetInt("api_key_id"))
+		_, _, allowed, retryAfter := reserveRateLimitBucket(c.ClientIP(), scope, now, mcpRateLimitPerMinute)
+		if !allowed {
+			abortMCPRateLimit(c, retryAfter)
+			return
+		}
+		c.Next()
+	}
+}
+
+func abortMCPRateLimit(c *gin.Context, retryAfter int) {
+	c.Header("Retry-After", strconv.Itoa(retryAfter))
+	c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{"code": http.StatusTooManyRequests, "message": "MCP 请求过于频繁，请稍后再试"})
+}
 
 // noStoreResponse 让响应不可被任何缓存留存（浏览器回退缓存、中间反代）。
 // 只挂在返回会话令牌、身份/MFA 秘密或一次性明文凭据的路由上——不是全局头：
@@ -496,18 +582,19 @@ func clusterMachineRateLimit(scope string, source clusterCredentialSource) gin.H
 		fingerprint := clusterCredentialFingerprint(c, source)
 		var credentialBucket *loginRateBucket
 		var credentialGeneration uint64
+		var credentialRetryAfter int
 		if fingerprint != "" {
 			var allowed bool
-			credentialBucket, credentialGeneration, allowed = reserveRateLimitBucket(ip, scope+"|credential:"+fingerprint, now, credentialLimit)
+			credentialBucket, credentialGeneration, allowed, credentialRetryAfter = reserveRateLimitBucket(ip, scope+"|credential:"+fingerprint, now, credentialLimit)
 			if !allowed {
-				abortClusterMachineRateLimit(c)
+				abortClusterMachineRateLimit(c, credentialRetryAfter)
 				return
 			}
 		}
-		ipBucket, ipGeneration, ipAllowed := reserveRateLimitBucket(ip, scope+"|ip", now, ipLimit)
+		ipBucket, ipGeneration, ipAllowed, ipRetryAfter := reserveRateLimitBucket(ip, scope+"|ip", now, ipLimit)
 		if !ipAllowed {
 			releaseRateLimitReservation(credentialBucket, credentialGeneration, false)
-			abortClusterMachineRateLimit(c)
+			abortClusterMachineRateLimit(c, ipRetryAfter)
 			return
 		}
 		// 归还必须写在 defer 里：handler panic 时控制流不经过 c.Next() 之后的
@@ -541,7 +628,7 @@ func clusterCredentialFingerprint(c *gin.Context, source clusterCredentialSource
 	return hex.EncodeToString(hash[:])
 }
 
-func reserveRateLimitBucket(ip, scope string, now time.Time, limit int) (*loginRateBucket, uint64, bool) {
+func reserveRateLimitBucket(ip, scope string, now time.Time, limit int) (*loginRateBucket, uint64, bool, int) {
 	key := ip + "|" + scope
 	loginRateBuckets.Lock()
 	bucket, exists := loginRateBuckets.entries[key]
@@ -563,10 +650,14 @@ func reserveRateLimitBucket(ip, scope string, now time.Time, limit int) (*loginR
 		bucket.generation++
 	}
 	if bucket.count >= limit {
-		return bucket, bucket.generation, false
+		retryAfter := int((bucket.until.Sub(now) + time.Second - time.Nanosecond) / time.Second)
+		if retryAfter < 1 {
+			retryAfter = 1
+		}
+		return bucket, bucket.generation, false, retryAfter
 	}
 	bucket.count++
-	return bucket, bucket.generation, true
+	return bucket, bucket.generation, true, 0
 }
 
 func releaseRateLimitReservation(bucket *loginRateBucket, generation uint64, failed bool) {
@@ -583,7 +674,8 @@ func releaseRateLimitReservation(bucket *loginRateBucket, generation uint64, fai
 	}
 }
 
-func abortClusterMachineRateLimit(c *gin.Context) {
+func abortClusterMachineRateLimit(c *gin.Context, retryAfter int) {
+	c.Header("Retry-After", strconv.Itoa(retryAfter))
 	c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{"code": http.StatusTooManyRequests, "message": "集群机器接口请求过于频繁，请稍后再试"})
 }
 
@@ -626,9 +718,11 @@ func startLoginRateLimitCleanup() {
 // c.Error() 附带的错误（param.ErrorMessage）有值时追加尾部列——
 // 无消费者时 c.Error 等同死调用（v2.3.8 formatter 重写曾丢失该列）。
 func requestLogFormatter(param gin.LogFormatterParams) string {
+	// gin 在 Path 中拼接 RawQuery；OIDC code/state 与检索条件不得进入 stdout。
+	path, _, _ := strings.Cut(param.Path, "?")
 	line := fmt.Sprintf("[%s] %3d | %13v | %15s | %-7s %#v",
 		param.TimeStamp.In(services.CurrentLocation()).Format("2006/01/02 15:04:05"),
-		param.StatusCode, param.Latency, param.ClientIP, param.Method, param.Path)
+		param.StatusCode, param.Latency, param.ClientIP, param.Method, path)
 	if msg := strings.TrimSpace(param.ErrorMessage); msg != "" {
 		line += " | " + msg
 	}
@@ -748,7 +842,7 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 		// /mcp：限流先于认证与请求体读取——未认证流量不得先花掉 1 MiB 体读
 		// 与一次密钥点查（此前该端点唯一无限流，单个 IP 可线速灌内部 API 与
 		// 审计库）。apiKeyAuth → mcpAccessGuard 的次序不变。
-		v1.POST("/mcp", clusterRateLimit("mcp", mcpRateLimitPerMinute, "MCP 请求过于频繁，请稍后再试"), apiKeyAuth(db.DB), mcpAccessGuard(), func(c *gin.Context) {
+		v1.POST("/mcp", mcpSourceRateLimit(), apiKeyAuth(db.DB), mcpAPIKeyRateLimit(), mcpAccessGuard(), func(c *gin.Context) {
 			c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 1<<20)
 			body, err := io.ReadAll(c.Request.Body)
 			if err != nil {
@@ -817,8 +911,8 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 		// 不受影响），与 oidc 两条公开端点同口径。
 		v1.GET("/branding", clusterRateLimit("branding", 120, "品牌配置查询过于频繁，请稍后再试"), h.GetBranding)
 		v1.POST("/cluster/register", clusterRegisterRateLimit(), h.RegisterClusterNode)
-		v1.GET("/cluster/register/:id/status", clusterMachineRateLimit("registration-status", clusterCredentialFromRegistration), registrationAuth(db.DB), h.GetClusterRegistrationStatus)
-		v1.GET("/cluster/sync/snapshot", clusterMachineRateLimit("sync-snapshot", clusterCredentialFromToken), clusterTokenAuth(db.DB), h.GetClusterSnapshot)
+		v1.GET("/cluster/register/:id/status", clusterMachineRateLimit("registration-status", clusterCredentialFromRegistration), noStoreResponse(), registrationAuth(db.DB), h.GetClusterRegistrationStatus)
+		v1.GET("/cluster/sync/snapshot", clusterMachineRateLimit("sync-snapshot", clusterCredentialFromToken), noStoreResponse(), clusterTokenAuth(db.DB), h.GetClusterSnapshot)
 		v1.GET("/cluster/sync/waf-files", clusterMachineRateLimit("sync-waf-files", clusterCredentialFromToken), clusterTokenAuth(db.DB), h.GetClusterWafFiles)
 		v1.POST("/cluster/registration/confirm", clusterMachineRateLimit("registration-confirm", clusterCredentialFromToken), clusterTokenAuth(db.DB), h.ConfirmClusterRegistration)
 		v1.POST("/cluster/nodes/report", clusterMachineRateLimit("node-report", clusterCredentialFromToken), clusterTokenAuth(db.DB), h.ReportClusterNode)
@@ -1020,8 +1114,8 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 				business.GET("/config/health", h.GetUpstreamHealth)
 
 				// Rules
-				business.GET("/rules", h.ListRules)
-				business.GET("/rules/:caddy_id", h.GetRule)
+				business.GET("/rules", noStoreResponse(), h.ListRules)
+				business.GET("/rules/:caddy_id", noStoreResponse(), h.GetRule)
 				business.GET("/rules/:caddy_id/caddy-config", h.GetRuleCaddyConfig)
 				business.GET("/rules/:caddy_id/metrics-history", h.GetRuleMetricsHistory)
 				business.GET("/rules/:caddy_id/log-stream", h.GetRuleLogStream)
@@ -1038,13 +1132,13 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 				business.POST("/rules/:caddy_id/duplicate", h.DuplicateRule)
 
 				// Certificate Configs
-				business.GET("/certificate-configs", h.ListCertificateConfigs)
+				business.GET("/certificate-configs", noStoreResponse(), h.ListCertificateConfigs)
 				business.POST("/certificate-configs", h.CreateCertificateConfig)
 				business.PUT("/certificate-configs/:id", h.UpdateCertificateConfig)
 				business.DELETE("/certificate-configs/:id", h.DeleteCertificateConfig)
 				business.GET("/dns-providers", h.ListDNSProviders)
-				business.GET("/ca-providers", h.ListCAProviders)
-				business.GET("/ca-providers/:id", h.GetCAProvider)
+				business.GET("/ca-providers", noStoreResponse(), h.ListCAProviders)
+				business.GET("/ca-providers/:id", noStoreResponse(), h.GetCAProvider)
 				business.POST("/certificate-configs/test", h.TestCertificateConfig)
 				business.POST("/certificate-configs/:id/test", h.TestCertificateConfig)
 
@@ -1212,7 +1306,7 @@ func corsMiddleware() gin.HandlerFunc {
 			c.Header("Vary", "Origin")
 		}
 		c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
-		c.Header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-API-Key, X-Cluster-Token, X-Registration-Secret")
+		c.Header("Access-Control-Allow-Headers", "Content-Type, Authorization, "+accesslog.APIKeyHeaderName+", X-Cluster-Token, X-Registration-Secret")
 
 		if c.Request.Method == "OPTIONS" {
 			c.AbortWithStatus(http.StatusNoContent)

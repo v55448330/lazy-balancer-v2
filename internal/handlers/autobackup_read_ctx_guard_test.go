@@ -40,6 +40,13 @@ func TestAuditLogAndAutoBackupReadsConsumeRequestContext(t *testing.T) {
 			file: "autobackup.go", fn: "func (h *Handlers) DeleteAutoBackup(c *gin.Context) {",
 			markers: []string{"BeginTx(c.Request.Context()"},
 		},
+		{file: "caddy.go", fn: "func (h *Handlers) GetConfig(c *gin.Context) {", markers: []string{"QueryRowContext(c.Request.Context()"}},
+		{file: "caddy.go", fn: "func (h *Handlers) GetCaddyStatus(c *gin.Context) {", markers: []string{"QueryRowContext(c.Request.Context()"}},
+		{file: "config_changes.go", fn: "func loadConfigSnapshot(ctx context.Context) (configSnapshot, error) {", markers: []string{"QueryRowContext(ctx"}},
+		{file: "autobackup.go", fn: "func loadAutoBackupSectionsSetting(ctx context.Context) ([]string, error) {", markers: []string{"QueryRowContext(ctx"}},
+		{file: "autobackup.go", fn: "func loadAutoBackupKeepSetting(ctx context.Context) (keep int, known bool) {", markers: []string{"QueryRowContext(ctx"}},
+		{file: "autobackup.go", fn: "func nextAutoBackupFilename(ctx context.Context, dir, trigger string, now time.Time) (string, error) {", markers: []string{"QueryRowContext(ctx"}},
+		{file: "autobackup.go", fn: "func pruneAutoBackupStatus(ctx context.Context, dir, status string, keep int) int {", markers: []string{"QueryContext(ctx", "ExecContext(ctx"}},
 	}
 	sawFunction := 0
 	for _, test := range tests {

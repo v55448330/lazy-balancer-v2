@@ -665,15 +665,16 @@ func (m *CAQueueManager) requeueLifecycleStrandedJobs() {
 // requeueWaitingCAJobs 负责，此处不碰。返回（本轮实际重入队的任务数, error）
 // ——动作计数供 30s 补扫摘要，读失败上抛使补扫轮记失败终态（此前读失败只打
 // 应用日志，任务监控全绿而滞留任务永不重入队）。
-func (m *CAQueueManager) requeueStrandedQueuedJobs() (int, error) {
-	return m.requeueStrandedJobs(`j.status='queued'`, "周期巡检发现队列外滞留，重新排队", "CA queue periodic scan")
+func (m *CAQueueManager) requeueStrandedQueuedJobs(gates ...func() error) (int, error) {
+	return m.requeueStrandedJobs(`j.status='queued'`, "周期巡检发现队列外滞留，重新排队", "CA queue periodic scan", gates...)
 }
 
 // requeueStrandedJobs 是 Resume 与周期巡检共用的滞留任务重入队实现：按 whereClause
 // 扫描任务，逐个经 IsJobActive（在途/滞行任务防双执行）与
 // certJobRuleApplicable（孤儿交周期 sweep 禁用）守卫后，以归一化转换 +
-// EnqueueIfActive 重排队。返回本轮实际重入队的任务数。
-func (m *CAQueueManager) requeueStrandedJobs(whereClause, message, logPrefix string) (requeued int, err error) {
+// EnqueueIfActive 重排队。周期巡检传入的 gate 在每个任务的实际写点前复核。
+// 返回本轮实际重入队的任务数。
+func (m *CAQueueManager) requeueStrandedJobs(whereClause, message, logPrefix string, gates ...func() error) (requeued int, err error) {
 	if db.DB == nil {
 		return 0, nil
 	}
@@ -740,14 +741,22 @@ func (m *CAQueueManager) requeueStrandedJobs(whereClause, message, logPrefix str
 		}
 		// 状态已 'queued' 的任务也走一次归一化转换（'queued'→'queued' 幂等），
 		// 让 EnqueueIfActive 以 changed=true 真正入队；并发改过状态的行由
-		// transitionJob 的 WHERE status IN (...) 守卫跳过。
+		// transitionJob 的 WHERE status IN (...) 守卫跳过。写门放在 transition
+		// 闭包首行，使入队准入之后、数据库迁移之前仍有一次逐项角色/取消复核。
+		var gateErr error
 		_, changed, err := m.EnqueueIfActive(job.providerID, job.id, job.ruleID, job.domain, func() (int, bool, error) {
+			if gateErr = runCertWaitingCAWriteGate(gates); gateErr != nil {
+				return job.id, false, gateErr
+			}
 			err := transitionJob(db.DB, job.id, []string{job.status}, "queued", map[string]any{"message": message})
 			if errors.Is(err, ErrJobTransitionConflict) {
 				return job.id, false, nil
 			}
 			return job.id, err == nil, err
 		})
+		if gateErr != nil {
+			return requeued, gateErr
+		}
 		if err != nil {
 			actionErr = errors.Join(actionErr, fmt.Errorf("重排滞留任务 %d（规则 %s）: %w", job.id, job.ruleID, err))
 			Logf("error", "%s: requeue stranded job %d failed: %v", logPrefix, job.id, err)

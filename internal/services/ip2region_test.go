@@ -383,7 +383,9 @@ func Test_GetSetIP2RegionVersion_roundtrip(t *testing.T) {
 	}
 
 	// When the version is stored
-	SetIP2RegionVersion("2026-08-12")
+	if err := SetIP2RegionVersion("2026-08-12"); err != nil {
+		t.Fatal(err)
+	}
 
 	// Then it reads back
 	if got, err := GetIP2RegionVersion(); err != nil || got != "2026-08-12" {
@@ -436,6 +438,34 @@ func Test_GetIP2RegionRegionTree_memoizes_until_xdb_stat_changes(t *testing.T) {
 	}
 	if fourth := GetIP2RegionRegionTree(); fourth != third {
 		t.Fatal("post-rescan steady state must hit memo again")
+	}
+}
+
+func Test_GetIP2RegionRegionTree_corruptLiveFallsBackToActiveSource(t *testing.T) {
+	dir := t.TempDir()
+	live := filepath.Join(dir, "live.xdb")
+	dist := filepath.Join(dir, "dist.xdb")
+	withIP2RegionPaths(t, live, dist)
+	resetRegionTreeMemoForTest(t)
+	writeTestXDB(t, dist, []xdbSegment{{startIP: 0x72727200, endIP: 0x727272FF, region: "中国|广东省|深圳市|0|CN"}})
+	if err := os.WriteFile(live, []byte("corrupt-live"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ip2regionMu.Lock()
+	ip2regionSearcherSource = dist
+	ip2regionMu.Unlock()
+	t.Cleanup(func() {
+		ip2regionMu.Lock()
+		ip2regionSearcherSource = ""
+		ip2regionMu.Unlock()
+	})
+
+	tree := GetIP2RegionRegionTree()
+	if tree == nil || len(tree.Cities["广东省"]) != 1 || tree.Cities["广东省"][0] != "深圳市" {
+		t.Fatalf("tree=%+v, want active-source provinces and cities after corrupt live scan", tree)
+	}
+	if again := GetIP2RegionRegionTree(); again != tree {
+		t.Fatal("successful active-source fallback must be memoized")
 	}
 }
 
@@ -556,9 +586,7 @@ func TestWriteRegionTreeCache_writeFailureLogsWarn(t *testing.T) {
 		t.Fatal(err)
 	}
 	live := filepath.Join(notADir, "ip2region.xdb")
-	old := ip2regionLivePath
-	ip2regionLivePath = live
-	t.Cleanup(func() { ip2regionLivePath = old })
+	t.Cleanup(OverrideWafLivePathsForTest(crsLiveDir, live))
 	logDir := t.TempDir()
 	taskengine.SetLogDir(logDir)
 	t.Cleanup(func() { taskengine.SetLogDir("") })

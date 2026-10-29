@@ -618,7 +618,9 @@ func ensureSecurityEventsTransactionIndex(db *sql.DB) error {
 			return fmt.Errorf("failed to deduplicate security_events transaction IDs: %w", err)
 		}
 		removed, _ := result.RowsAffected()
-		log.Printf("WARN: security_events 表存在重复 transaction_id（%s），已去重删除 %d 行（保留每事务最早行）并继续创建唯一索引", strings.Join(duplicates, ", "), removed)
+		detail := fmt.Sprintf("启动迁移：security_events 重复 transaction_id（%s）已去重删除 %d 行（保留每事务最早行）", strings.Join(duplicates, ", "), removed)
+		log.Printf("WARN: %s并继续创建唯一索引", detail)
+		recordSystemAudit("启动迁移", "安全事件", detail)
 	}
 	if err := ensureUniqueIndex(db, "idx_security_events_transaction", securityEventsTransactionIndexSQL); err != nil {
 		return fmt.Errorf("failed to create security_events transaction index: %w", err)

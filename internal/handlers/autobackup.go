@@ -53,9 +53,9 @@ func autoBackupSafeFilename(name string) bool {
 // 为全量备份（否则管理员原以为只导局部，实际把全部凭证写入备份文件）。
 // 存量行可能携带三分类合并前的 legacy 键(global_config/waf_files)——读出即
 // 归一(2026-09-19 用户裁定),调度器/导出器消费当前分类口径,无需迁移存量行。
-func loadAutoBackupSectionsSetting() ([]string, error) {
+func loadAutoBackupSectionsSetting(ctx context.Context) ([]string, error) {
 	var raw sql.NullString
-	if err := db.DB.QueryRow(`SELECT auto_backup_sections FROM global_config WHERE id=1`).Scan(&raw); err != nil {
+	if err := db.DB.QueryRowContext(ctx, `SELECT auto_backup_sections FROM global_config WHERE id=1`).Scan(&raw); err != nil {
 		return nil, fmt.Errorf("读取备份范围: %w", err)
 	}
 	return decodeAutoBackupSectionsRaw(raw)
@@ -137,9 +137,9 @@ func normalizeAutoBackupDay(frequency string, day int) int {
 //     越界值归一，与读失败语义不同（后者不删任何文件）。
 //
 // 读失败/恢复留痕走 services 状态转换单源（首报 warn、恢复 info）。
-func loadAutoBackupKeepSetting() (keep int, known bool) {
+func loadAutoBackupKeepSetting(ctx context.Context) (keep int, known bool) {
 	var raw int
-	if err := db.DB.QueryRow(`SELECT COALESCE(auto_backup_keep,7) FROM global_config WHERE id=1`).Scan(&raw); err != nil {
+	if err := db.DB.QueryRowContext(ctx, `SELECT COALESCE(auto_backup_keep,7) FROM global_config WHERE id=1`).Scan(&raw); err != nil {
 		services.LogConfigReadFailure("auto-backup-keep", err)
 		return autoBackupKeepDefault, false
 	}
@@ -164,7 +164,7 @@ const autoBackupNameVariants = 200
 // HHMMSS.lbbak，同秒冲突追加 -2..-200（调度与手动同秒串行执行的场景）。
 // 200 个变体全冲突时必须报错，不得回退到基础名
 // （可能是已存在文件）——否则后续 os.Rename 会覆盖既有备份。
-func nextAutoBackupFilename(dir, trigger string, now time.Time) (string, error) {
+func nextAutoBackupFilename(ctx context.Context, dir, trigger string, now time.Time) (string, error) {
 	base := autoBackupFilenameBase(trigger, now)
 	for i := range autoBackupNameVariants {
 		name := base + ".lbbak"
@@ -177,8 +177,15 @@ func nextAutoBackupFilename(dir, trigger string, now time.Time) (string, error) 
 			return "", fmt.Errorf("检查备份文件名 %s: %w", name, err)
 		}
 		var exists int
-		if db.DB != nil && db.DB.QueryRow(`SELECT COUNT(*) FROM auto_backups WHERE filename=?`, name).Scan(&exists) == nil && exists > 0 {
-			continue
+		if db.DB != nil {
+			var queryErr error
+			queryErr = db.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM auto_backups WHERE filename=?`, name).Scan(&exists)
+			if queryErr != nil && ctx.Err() != nil {
+				return "", ctx.Err()
+			}
+			if queryErr == nil && exists > 0 {
+				continue
+			}
 		}
 		return name, nil
 	}
@@ -187,8 +194,8 @@ func nextAutoBackupFilename(dir, trigger string, now time.Time) (string, error) 
 
 // appVersion 为系统真实版本（cfg.Version，不受 branding.json 版本覆盖影响，
 // 2026-09-21 用户裁定备份列表「版本号」列）；存量行缺省为空串，前端显示「—」。
-func insertAutoBackupRow(filename, status string, sizeBytes int64, sectionsJSON, triggerType, message, appVersion string) (int64, error) {
-	res, err := db.DB.Exec(`INSERT INTO auto_backups (filename, status, size_bytes, sections, trigger_type, message, app_version) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+func insertAutoBackupRow(ctx context.Context, filename, status string, sizeBytes int64, sectionsJSON, triggerType, message, appVersion string) (int64, error) {
+	res, err := db.DB.ExecContext(ctx, `INSERT INTO auto_backups (filename, status, size_bytes, sections, trigger_type, message, app_version) VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		filename, status, sizeBytes, sectionsJSON, triggerType, message, appVersion)
 	if err != nil {
 		return 0, err
@@ -198,8 +205,8 @@ func insertAutoBackupRow(filename, status string, sizeBytes int64, sectionsJSON,
 
 // pruneAutoBackupStatus 裁剪单一状态：按 created_at/id 倒序保留 keep 个，
 // 多余者文件+行同删；文件删除失败保留行供下轮重试。
-func pruneAutoBackupStatus(dir, status string, keep int) int {
-	rows, err := db.DB.Query(`SELECT id, filename FROM auto_backups WHERE status=? ORDER BY created_at DESC, id DESC`, status)
+func pruneAutoBackupStatus(ctx context.Context, dir, status string, keep int) int {
+	rows, err := db.DB.QueryContext(ctx, `SELECT id, filename FROM auto_backups WHERE status=? ORDER BY created_at DESC, id DESC`, status)
 	if err != nil {
 		services.Logf("warn", "自动备份裁剪：读取 %s 行失败: %v", status, err)
 		return 0
@@ -231,6 +238,9 @@ func pruneAutoBackupStatus(dir, status string, keep int) int {
 			continue
 		}
 		r := all[idx]
+		if err := ctx.Err(); err != nil {
+			return removed
+		}
 		if autoBackupSafeFilename(r.filename) {
 			if err := os.Remove(filepath.Join(dir, r.filename)); err != nil && !errors.Is(err, os.ErrNotExist) {
 				// 文件删除失败(非 ErrNotExist)保留行
@@ -239,7 +249,7 @@ func pruneAutoBackupStatus(dir, status string, keep int) int {
 				continue
 			}
 		}
-		if _, err := db.DB.Exec(`DELETE FROM auto_backups WHERE id=?`, r.id); err != nil {
+		if _, err := db.DB.ExecContext(ctx, `DELETE FROM auto_backups WHERE id=?`, r.id); err != nil {
 			services.Logf("warn", "自动备份裁剪：删除行失败 id=%d: %v", r.id, err)
 			continue
 		}
@@ -256,14 +266,14 @@ func logAutoBackupPrune(removedSuccess, removedFailed int) {
 
 // pruneAutoBackups 内务裁剪：success 行保留 keepSuccess 个、failed 行保留
 // keepFailed 个。成功备份与失败备份都会进入对应入口，持续失败不再无界增长。
-func pruneAutoBackups(dir string, keepSuccess, keepFailed int) {
-	removedSuccess := pruneAutoBackupStatus(dir, "success", keepSuccess)
-	removedFailed := pruneAutoBackupStatus(dir, "failed", keepFailed)
+func pruneAutoBackups(ctx context.Context, dir string, keepSuccess, keepFailed int) {
+	removedSuccess := pruneAutoBackupStatus(ctx, dir, "success", keepSuccess)
+	removedFailed := pruneAutoBackupStatus(ctx, dir, "failed", keepFailed)
 	logAutoBackupPrune(removedSuccess, removedFailed)
 }
 
-func pruneFailedAutoBackups(dir string) {
-	removedFailed := pruneAutoBackupStatus(dir, "failed", autoBackupFailedRowsKeep)
+func pruneFailedAutoBackups(ctx context.Context, dir string) {
+	removedFailed := pruneAutoBackupStatus(ctx, dir, "failed", autoBackupFailedRowsKeep)
 	logAutoBackupPrune(0, removedFailed)
 }
 
@@ -402,10 +412,10 @@ func (h *Handlers) RunAutoBackupOnce(ctx context.Context, trigger, operator stri
 	// 而不是被文件名 Stat 抢先变成无法归因的命名错误。
 	if err := os.MkdirAll(dir, autoBackupDirPerm); err != nil {
 		failureName := autoBackupFilenameBase(trigger, now) + ".lbbak.unavailable"
-		if _, ierr := insertAutoBackupRow(failureName, "failed", 0, "[]", trigger, "创建备份目录失败: "+err.Error(), h.cfg.Version); ierr != nil {
+		if _, ierr := insertAutoBackupRow(ctx, failureName, "failed", 0, "[]", trigger, "创建备份目录失败: "+err.Error(), h.cfg.Version); ierr != nil {
 			services.Logf("warn", "自动备份：failed 行落库失败: %v", ierr)
 		} else {
-			pruneFailedAutoBackups(dir)
+			pruneFailedAutoBackups(ctx, dir)
 		}
 		services.Logf("warn", "%s失败：创建备份目录失败（%s）", action, err)
 		services.RecordAuditLog(operator, "备份失败", "配置备份", services.FormatAuditDetail(
@@ -413,7 +423,7 @@ func (h *Handlers) RunAutoBackupOnce(ctx context.Context, trigger, operator stri
 		return autoBackupRowView{}, fmt.Errorf("创建备份目录失败: %w", err)
 	}
 	convergeAutoBackupDirPermissions(dir)
-	filename, ferr := nextAutoBackupFilename(dir, trigger, now)
+	filename, ferr := nextAutoBackupFilename(ctx, dir, trigger, now)
 	if ferr != nil {
 		// 无安全可归因文件名，不落 failed 行；审计与任务日志留痕。
 		services.Logf("warn", "%s失败：生成备份文件名：%v", action, ferr)
@@ -423,11 +433,11 @@ func (h *Handlers) RunAutoBackupOnce(ctx context.Context, trigger, operator stri
 	}
 	fail := func(stage string, err error) error {
 		wrapped := fmt.Errorf("%s: %w", stage, err)
-		if _, ierr := insertAutoBackupRow(filename, "failed", 0, "[]", trigger, stage+": "+err.Error(), h.cfg.Version); ierr != nil {
+		if _, ierr := insertAutoBackupRow(ctx, filename, "failed", 0, "[]", trigger, stage+": "+err.Error(), h.cfg.Version); ierr != nil {
 			services.Logf("warn", "自动备份：failed 行落库失败: %v", ierr)
 		} else {
 			// 持续失败也必须执行 failed 配额裁剪，不能等下一次成功才收敛。
-			pruneFailedAutoBackups(dir)
+			pruneFailedAutoBackups(ctx, dir)
 		}
 		services.Logf("warn", "%s失败：%s（%s）", action, stage, err)
 		services.RecordAuditLog(operator, "备份失败", "配置备份", services.FormatAuditDetail(
@@ -441,7 +451,7 @@ func (h *Handlers) RunAutoBackupOnce(ctx context.Context, trigger, operator stri
 	if err := cleanupAutoBackupTempFiles(dir); err != nil {
 		services.Logf("warn", "自动备份：清理残留临时文件失败（不阻断本次备份）: %v", err)
 	}
-	sections, err := loadAutoBackupSectionsSetting()
+	sections, err := loadAutoBackupSectionsSetting(ctx)
 	if err != nil {
 		return autoBackupRowView{}, fail("读取备份范围", err)
 	}
@@ -478,7 +488,7 @@ func (h *Handlers) RunAutoBackupOnce(ctx context.Context, trigger, operator stri
 	}
 	// exportedSections 是 []string，encoding/json 不会产生 unsupported type/value。
 	sectionsJSON, _ := json.Marshal(exportedSections)
-	id, err := insertAutoBackupRow(filename, "success", int64(len(payload)), string(sectionsJSON), trigger, countsSummary, h.cfg.Version)
+	id, err := insertAutoBackupRow(ctx, filename, "success", int64(len(payload)), string(sectionsJSON), trigger, countsSummary, h.cfg.Version)
 	if err != nil {
 		// 文件已写、行未落——删除孤儿文件保持两侧一致，审计留痕后按失败返回。
 		if removeErr := os.Remove(finalPath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
@@ -491,8 +501,8 @@ func (h *Handlers) RunAutoBackupOnce(ctx context.Context, trigger, operator stri
 	// 文件+行同删;裁剪失败仅告警不翻转本次成功结果。
 	// 保留份数读取失败时跳过本轮裁剪（保守方向：未知保留意愿下不得删文件
 	// ——库抖动一轮不该按默认值淘汰用户配置的更多份数），下一轮读通后自然收敛。
-	if keep, known := loadAutoBackupKeepSetting(); known {
-		pruneAutoBackups(dir, keep, autoBackupFailedRowsKeep)
+	if keep, known := loadAutoBackupKeepSetting(ctx); known {
+		pruneAutoBackups(ctx, dir, keep, autoBackupFailedRowsKeep)
 		backupTee("prune", "过期备份裁剪完成（按保留份数设置）")
 	} else {
 		backupTee("prune", "读取保留份数失败，本轮跳过过期备份裁剪（不删除任何文件）")
@@ -503,7 +513,7 @@ func (h *Handlers) RunAutoBackupOnce(ctx context.Context, trigger, operator stri
 		fmt.Sprintf("大小：%d 字节", len(payload)), services.AuditResultPart("success")), "")
 	// 行视图在 TryLock 持有区内取——调用方回查「最新 manual 行」在并发手动
 	// 备份下会取到他人行。
-	view, verr := scanAutoBackupRowView(db.DB.QueryRow(`SELECT `+autoBackupRowColumns+` FROM auto_backups WHERE id=?`, id))
+	view, verr := scanAutoBackupRowView(db.DB.QueryRowContext(ctx, `SELECT `+autoBackupRowColumns+` FROM auto_backups WHERE id=?`, id))
 	if verr != nil {
 		// 留 warn(备份已落盘,视图扫描失败不再静默)
 		services.Logf("warn", "自动备份行视图扫描失败(备份已落盘): %v", verr)
@@ -1147,10 +1157,17 @@ func (h *Handlers) DownloadAutoBackup(c *gin.Context) {
 		failRestoreFileAccess(c, true, subject, "读取备份文件失败: "+err.Error(), http.StatusInternalServerError, err)
 		return
 	}
+	c.Header("Cache-Control", "no-store, private")
+	c.Header("Content-Type", "application/octet-stream")
+	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=%q", view.Filename))
+	c.Header("Content-Length", strconv.FormatInt(fi.Size(), 10))
+	c.Status(http.StatusOK)
+	if _, err := io.Copy(c.Writer, f); err != nil {
+		services.Logf("warn", "备份下载交付中断 #%d %s: %v", view.ID, view.Filename, err)
+		recordAudit(c, "下载失败", "配置备份", services.FormatAuditDetail(
+			fmt.Sprintf("备份 #%d", view.ID), "文件："+view.Filename, "交付中断："+err.Error(), services.AuditResultPart("failure")))
+		return
+	}
 	recordAudit(c, "备份下载", "配置备份", services.FormatAuditDetail(
 		fmt.Sprintf("备份 #%d", view.ID), "文件："+view.Filename, "含凭证与证书材料，请加密保管", services.AuditResultPart("success")))
-	c.Header("Cache-Control", "no-store, private")
-	c.DataFromReader(http.StatusOK, fi.Size(), "application/octet-stream", f, map[string]string{
-		"Content-Disposition": fmt.Sprintf("attachment; filename=%q", view.Filename),
-	})
 }

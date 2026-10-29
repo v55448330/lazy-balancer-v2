@@ -200,11 +200,21 @@ const definitionFiles = DEFINITION_DIRS.flatMap((dir) => webFiles(dir, SOURCE_EX
 const definitionSources = new Map(definitionFiles.map((file) => [file, code(file)] as const))
 const consumerFiles = [...webFiles('src', SOURCE_EXTENSIONS), ...webFiles('tests', ['.ts'])]
 
+// 测试基建（`tests/_helpers.ts` / `_stubs.ts`）的导出口径与 src 相同：具名导出必须
+// 有本文件之外的消费方。src 侧残留（如 ADAPTIVE_SAMPLE_TIERS）由上面的门禁自动
+// 拦下，tests 侧此前零门禁——helper 失去消费方后只会无声膨胀。
+const TEST_INFRA_FILES = ['tests/_helpers.ts', 'tests/_stubs.ts'] as const
+const testInfraSources = new Map(TEST_INFRA_FILES.map((file) => [file, code(file)] as const))
+
+/** 消费面 token 索引（src + tests 全量扫描，两次调用共用同一份结果）。 */
+let consumerTokenIndex: Map<string, Set<string>> | null = null
+const indexConsumers = (): Map<string, Set<string>> => {
+  consumerTokenIndex ??= indexSources(new Map(consumerFiles.map((file) => [file, code(file)] as const)))
+  return consumerTokenIndex
+}
+
 test('定义目录的每个具名导出都有定义文件之外的消费方', () => {
-  const { checked, unused } = findUnusedExports(
-    definitionSources,
-    indexSources(new Map(consumerFiles.map((file) => [file, code(file)] as const))),
-  )
+  const { checked, unused } = findUnusedExports(definitionSources, indexConsumers())
   // 扫描面自检：解析器失效（正则不再匹配）会让清单恒空——那是最容易发生的假绿。
   assert.ok(definitionFiles.length >= 100, `定义面文件数异常偏少（${definitionFiles.length}），扫描目录配置已失效`)
   assert.ok(checked >= 400, `解析到的具名导出异常偏少（${checked}），导出声明正则已失效`)
@@ -212,6 +222,16 @@ test('定义目录的每个具名导出都有定义文件之外的消费方', ()
     unused,
     [],
     '零外部消费的导出必须改为模块私有（确需跨模块导出时先落消费方）：\n' + unused.join('\n'),
+  )
+})
+
+test('测试基建（_helpers/_stubs）的具名导出同样必须有本文件之外的消费方', () => {
+  const { checked, unused } = findUnusedExports(testInfraSources, indexConsumers())
+  assert.ok(checked >= 25, `测试基建解析到的导出异常偏少（${checked}），导出声明正则已失效`)
+  assert.deepEqual(
+    unused,
+    [],
+    '零消费的测试基建导出必须删掉（helper 失去消费方后只会无声膨胀）：\n' + unused.join('\n'),
   )
 })
 

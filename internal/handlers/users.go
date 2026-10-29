@@ -416,9 +416,9 @@ func (h *Handlers) DeleteUser(c *gin.Context) {
 		}
 	}()
 
-	var targetUsername, targetRole string
+	var targetUsername, targetRole, targetProvider string
 	var targetEnabled bool
-	if err := tx.QueryRowContext(c.Request.Context(), "SELECT username, role, is_enabled FROM users WHERE id = ?", id).Scan(&targetUsername, &targetRole, &targetEnabled); err != nil {
+	if err := tx.QueryRowContext(c.Request.Context(), "SELECT username, role, is_enabled, COALESCE(auth_provider,'local') FROM users WHERE id = ?", id).Scan(&targetUsername, &targetRole, &targetEnabled, &targetProvider); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "用户不存在"})
 		} else {
@@ -499,7 +499,11 @@ func (h *Handlers) DeleteUser(c *gin.Context) {
 	services.MFAClearVerifyAttempts(id)
 
 	recordAudit(c, "删除", "用户", services.AuditUserPart(id, targetUsername))
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "用户删除成功"})
+	message := "用户删除成功"
+	if targetProvider == "oidc" {
+		message = "OIDC 用户已删除；同一身份下次 SSO 登录会重新开户（默认普通用户，原角色与禁用状态不继承）。如需撤销访问并保留原身份，请改用禁用。"
+	}
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: message})
 }
 
 func (h *Handlers) ToggleUserStatus(c *gin.Context) {
@@ -562,9 +566,9 @@ func (h *Handlers) ToggleUserStatus(c *gin.Context) {
 			services.Logf("error", "ToggleUserStatus rollback failed for id=%d: %v", id, err)
 		}
 	}()
-	var statusUsername string
+	var statusUsername, statusProvider string
 	var wasEnabled bool
-	if err := tx.QueryRowContext(c.Request.Context(), "SELECT username, is_enabled FROM users WHERE id = ?", id).Scan(&statusUsername, &wasEnabled); err != nil {
+	if err := tx.QueryRowContext(c.Request.Context(), "SELECT username, is_enabled, COALESCE(auth_provider,'local') FROM users WHERE id = ?", id).Scan(&statusUsername, &wasEnabled, &statusProvider); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "用户不存在"})
 		} else {
@@ -626,7 +630,13 @@ func (h *Handlers) ToggleUserStatus(c *gin.Context) {
 		status = "enabled"
 	}
 	recordAudit(c, "修改状态", "用户", services.FormatAuditDetail(services.AuditUserPart(id, statusUsername), services.AuditResultPart(status)))
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "用户状态更新成功"})
+	message := "用户状态更新成功"
+	if statusProvider == "oidc" && !enable {
+		message = "OIDC 用户已禁用，SSO 登录将被拒绝；重新启用可恢复原身份、角色与绑定，无需删除后重新开户。"
+	} else if statusProvider == "oidc" {
+		message = "OIDC 用户已重新启用，可继续使用原 SSO 身份登录。"
+	}
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: message})
 }
 
 // ResetUserPassword 重置密码（管理员重置任意用户 / 非管理员重置本人）。

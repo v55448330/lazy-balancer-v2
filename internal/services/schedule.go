@@ -88,7 +88,7 @@ const (
 // 走引擎的退避重投（1s/5s/30s）；连续 4 轮仍未推进即由引擎停调
 // （ScheduleStopReasonFailStreak），读恢复后需在业务页重新保存一次或重启
 // 进程重新武装——不是静默停摆，但也不是无人工自愈。
-var errScheduleSlotNotAdvanced = errors.New("本轮排程槽未推进（排程不可读或状态行写入失败）")
+var errScheduleSlotNotAdvanced = fmt.Errorf("本轮排程槽未推进（排程不可读或状态行写入失败）: %w", taskengine.ErrScheduleSlotNotAdvanced)
 
 // userCancelledRun 本轮是否由用户显式取消（任务监控「取消」/前端取消入口）。
 // 引擎在用户取消路径给运行 ctx 标记 ErrUserCancelled 取消原因；demote 中止/
@@ -109,25 +109,26 @@ func userCancelledRun(ctx context.Context) bool {
 // 必须 ⊆ 运行域，否则取消路径会把注册表外的惰性槽重新写回，与启动期清理、
 // 读侧寻槽、保存排程的收窄互相抵消。slotOf 取严格读形态——排程不可读时本轮
 // 不推进（失败已由严格读单源留痕），不得用默认排程覆盖用户的预约。
-func advanceSourceSlotsAfterUserCancel(table, trigger string, names []string, slotOf func(time.Time) (string, error)) {
+func advanceSourceSlotsAfterUserCancel(table, trigger string, names []string, slotOf func(time.Time) (string, error)) error {
 	if trigger != "auto" {
 		// 手动轮不改变预约（引擎侧同样不消费手动轮的槽）。
-		return
+		return nil
 	}
 	// 引擎运行体内（后台）写路径：与读侧同源走原子句柄。
 	database := db.GetDB()
 	if database == nil {
-		return
+		return fmt.Errorf("%w: 数据库未初始化", errScheduleSlotNotAdvanced)
 	}
 	slot, err := slotOf(time.Now().UTC())
 	if err != nil {
-		return
+		return fmt.Errorf("%w: %v", errScheduleSlotNotAdvanced, err)
 	}
 	nameClause, nameArgs := sourceNameSetClause("name", names, false)
 	if _, err := database.Exec(`UPDATE `+table+` SET next_update=IIF(`+slotAdvanceGateSQL+`, ?, next_update) WHERE update_enabled=1`+nameClause,
 		append([]any{trigger, slot}, nameArgs...)...); err != nil {
-		Logf("warn", "用户取消后推进排程槽失败（%s）: %v", table, err)
+		return fmt.Errorf("%w: %v", errScheduleSlotNotAdvanced, err)
 	}
+	return nil
 }
 
 // setVersionTableAutoUpdate 版本表族（CRS/IP2Region）自动更新开关的单源写侧：
@@ -556,12 +557,12 @@ func versionTableSlotSuccessAssign(table, trigger string) (string, []any, error)
 
 // versionTableSlotAdvanceAssign 版本表族失败/取消落的赋值片段与参数
 // （IIF(auto_update=1, ?, next_update)：仅开自动更新的行才推进）。
-func versionTableSlotAdvanceAssign(table string) (string, []any) {
+func versionTableSlotAdvanceAssign(table string) (string, []any, error) {
 	slot, err := versionTableNextSlotStrict(table, time.Now().UTC())
 	if err != nil {
-		return noopSlotAssignSQL, nil
+		return noopSlotAssignSQL, nil, fmt.Errorf("%w: %v", errScheduleSlotNotAdvanced, err)
 	}
-	return versionTableSlotAdvanceSQL, []any{slot}
+	return versionTableSlotAdvanceSQL, []any{slot}, nil
 }
 
 // versionTableScheduleTx 事务内读取版本表排程两列并归一（与 versionTableSchedule

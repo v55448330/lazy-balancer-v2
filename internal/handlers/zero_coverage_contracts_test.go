@@ -298,7 +298,7 @@ func TestStartCaddyRestartWatcher_secondCallStartsNoSecondLoop(t *testing.T) {
 	starts := make(chan struct{}, 2)
 	// 替身循环：登记一次启动后挂起，既证明「起了一个」也不让真实 2s 轮询
 	// 泄漏到后续用例。
-	caddyRestartWatcherLoop = func(*Handlers) {
+	caddyRestartWatcherLoop = func(*Handlers, context.Context) {
 		starts <- struct{}{}
 		<-release
 	}

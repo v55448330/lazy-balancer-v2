@@ -7,7 +7,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { section, code } from './_helpers.ts'
+import { lastSection, section, code } from './_helpers.ts'
 
 test('/admin-tls 响应类型声明 cert_info_error', () => {
   const api = code('src/utils/api.ts')
@@ -37,7 +37,11 @@ test('设置页消费 cert_info_error 并渲染错误条', () => {
 
 test('/admin-tls 保存成功后回读服务端状态：损坏横幅与复用门随新证书复位', () => {
   const page = code('src/views/settings/BasicSettings.vue')
-  const tls = section(page, 'if (tlsPending) {', '} else {')
+  // 同一行形态出现两次：`/config/preview` 的 changes 拼装（首个命中）与真正的
+  // `/admin-tls` 提交段（最后一处）。从首个命中切会跨过两段之间的 PUT /config、
+  // 父级刷新与令牌回写——回读被挪进预览块（早于落库就回读）也能满足断言。
+  const tls = lastSection(page, 'if (tlsPending) {', '} else {')
+  assert.match(tls, /request\.put\('\/admin-tls'/, '切片必须是 /admin-tls 提交段（身份自检）')
   // 成功态以唯一读路径回填：新证书可解析时后端不再下发 cert_info_error，
   // adminTlsCertBroken / adminTlsConfirmBlocked 随之复位。
   assert.match(tls, /await loadAdminTls\(\)/, '保存成功必须重跑读路径')

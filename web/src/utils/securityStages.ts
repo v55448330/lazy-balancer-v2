@@ -393,18 +393,15 @@ export const hasTrustEntries = (p: { ip_whitelist?: string; ip_whitelist_refs?: 
 
 // 阶段 1 · IP 访问控制谓词（信任除外——2026-09-21 用户裁定：信任恒归独立阶段 0）：
 // 能力口径以 **`ip_acl_enabled && (内联 ∪ 引用非空)`，或遗留黑名单非空** 为准
-// （与后端 models.PolicyTypeFeatures 同源）——空名单的启用策略不记账为「有 IP
-// 管控面」（其渲染产物为空交集，能力上不产生该阶段）；原始字段缺失时回退
-// `has_ip_control` 摘要标志。has_ip_control 摘要标志含信任（镜像后端发射语义），
-// 阶段归属判定不得直接消费它——否则纯信任策略会在阶段 1 投出空行并被误判为 mixed。
+// （与后端 models.PolicyTypeFeatures 同源）；原始字段缺失时回退 `has_ip_control`
+// 摘要标志。摘要标志含信任（镜像后端发射语义），阶段归属判定不得直接消费它，
+// 否则纯信任策略会在阶段 1 投出空行并被误判为 mixed。
 //
 // （分层命名，有意分歧，勿「统一」）：本函数是**内容门**（类型推断 +
-// 阶段能力投影），不是摘要展示口径。后端 `SecurityPolicyHasIPControl`
-// （internal/services/security.go）对 `ip_acl_enabled` **开启即 true**——差异形态
-// 仅「显式开启 ACL 但名单为空」：该形态不产生任何 ACL 渲染产物（安全等价），
-// 故阶段 1 不得按摘要标志出空组；而列表页「未启用 ACL / 未启用」文案属摘要
-// 展示，应消费后端 `has_ip_control`。禁止把本函数改为「开启即 true」——那会让
-// 阶段 1 虚增空组并污染类型推断。
+// 阶段能力投影），不是摘要展示口径。deny/绕过 + 空名单不产生拦截，内容门排除
+// 空组与后端效果等价；allow + 空名单则是引擎否定空集、**fail-closed 恒拒**。
+// Create/Update/备份导入三门均拒绝 allow 空名单，仅带外改库/旧版本遗留可达；
+// 本函数仍不为该形态虚增空组，但不得再把所有空名单统称为「零渲染安全等价」。
 export const hasIPACLControl = (p: {
   has_ip_control?: boolean
   ip_acl_enabled?: boolean
@@ -571,8 +568,8 @@ const buildStage1Rows = (
   stagePages?: RuleStagePages | null,
 ): StageRow[] => {
   const rows: StageRow[] = []
-  // 内容门：启用但名单空不产生 ACL 渲染产物，故不出
-  // 阶段 1 空组——与列表页摘要展示（后端 has_ip_control，开启即 true）分层。
+  // 内容门：deny/绕过 + 空名单不产生拦截，故不出空组；allow + 空名单虽 fail-closed
+  // 恒拒，但正常写门不可达，此处同样维持已裁定的内容投影分层。
   if (policy && hasIPACLControl(policy)) {
     // 阶段 1 不再承载信任名单（阶段 0 独立；契约：阶段 1 策略创建/显式切换时服务端归一清除）
     rows.push({ label: 'IP 访问控制', detail: formatAclModeDetail(ipLists, policy) })
@@ -1312,7 +1309,7 @@ export async function ensureSharedEntries(ids: Iterable<number>, loader: (id: nu
  * `ensureSharedEntries` 对单名单失败保持「未缓存」而不抛出——调用方必须把这种
  * 缺失显性化为失败（禁用动作/拒绝出结论），否则条目缺失会退化成「未命中名单」
  * 或「无残余信任」的业务结论。本函数是该失败判定的单源：命中展示
- * （IPLocationAction 加载态）与安全决策（「取消信任」计划）两处共用，避免各自
+ * （IPLocationAction 加载态）与写后核对两条通路共用，避免各自
  * 手写 `!(id in sharedEntriesCache)` 时的口径漂移。
  *
  * 注意：这里判的是「补齐后仍不新鲜」而不只是「不在缓存里」——过期缓存同样不可
@@ -1400,7 +1397,8 @@ export const SECURITY_BULK_LIMITS = { policyBindings: 100, ruleBlockPages: 500 }
 export const MAX_POLICIES_PER_RULE = 8
 
 /** 绑定行的最小形状（策略类型由策略摘要推断，精简载荷缺摘要时回退限流标志）。
- *  仅作本文件 hasOtherStage2Binding 的入参约束——全仓零外部消费，不导出。 */
+ *  仅作本文件 hasOtherStage2Binding 的入参约束——形状不外泄，故不导出
+ *  （谓词本身由规则侧编辑器与策略向导两处导入）。 */
 interface PolicyBindingRef {
   policy_id: number
   rate_limit_enabled?: boolean

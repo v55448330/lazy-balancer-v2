@@ -11,7 +11,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"strconv"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -36,11 +35,12 @@ func (h *Handlers) ListSystemTasks(c *gin.Context) {
 // 403「仅允许在主节点执行」会把排障方向指向集群角色（与 requireMaster 及
 // requireAutoBackupMaster 的 ② 先例同形）。
 func requireMasterNode(c *gin.Context) bool {
-	if db.DB == nil {
+	database := db.DB
+	if database == nil {
 		clusterError(c, http.StatusInternalServerError, "节点角色查询失败", nil)
 		return false
 	}
-	isMaster, err := services.RoleOf(c.Request.Context(), db.DB)
+	isMaster, err := services.RoleOf(c.Request.Context(), database)
 	return requireMasterResult(c, isMaster, err, masterGateOptions{
 		queryFailure: "节点角色查询失败",
 		forbidden:    "该操作仅允许在主节点执行",
@@ -107,12 +107,12 @@ func (h *Handlers) TriggerSystemTask(c *gin.Context) {
 	// 可自动调度（签发守护消费）即可手动调度（证书可重签发）。复用重试核心
 	//（在途 409/退役 429/冷却 429/规则禁用 409 同一门），审计「重试」归人。
 	if strings.HasPrefix(id, "cert-job:") {
-		jobID, err := strconv.Atoi(strings.TrimPrefix(id, "cert-job:"))
-		if err != nil || jobID <= 0 {
+		jobID, ok := parseCertJobTaskID(id)
+		if !ok || jobID > int64(^uint(0)>>1) {
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Invalid job ID"})
 			return
 		}
-		h.retryCertJobByID(c, jobID)
+		h.retryCertJobByID(c, int(jobID))
 		return
 	}
 	// 终态：触发全经任务引擎（CanTrigger 语义族——单飞/主节点门/历史统一）
@@ -369,21 +369,22 @@ func (h *Handlers) GetSystemTaskHistory(c *gin.Context) {
 // finished_at=updated_at、duration=两者差、trigger=queue）。cert_jobs 时间戳
 // 为 UTC（RFC3339），统一转配置时区墙串——与引擎族 started_at 的展示口径一致。
 func (h *Handlers) certJobRunHistory(c *gin.Context, taskID string) {
-	jobID, err := strconv.Atoi(strings.TrimPrefix(taskID, "cert-job:"))
-	if err != nil || jobID <= 0 {
+	jobID, ok := parseCertJobTaskID(taskID)
+	if !ok {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Invalid job ID"})
 		return
 	}
 	// 库句柄缺失属「服务暂不可用」而非任务不存在——与 requireMasterNode
 	// 的角色读失败同口径 500；裸用 db.DB 会 nil 解引用 panic（gin.Recovery
 	// 兜成 500 + 栈噪声）。
-	if db.DB == nil {
+	database := db.DB
+	if database == nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "数据库未初始化"})
 		return
 	}
 	var status, message string
 	var createdAt, updatedAt sql.NullString
-	if err := db.DB.QueryRow(`SELECT status, COALESCE(message,''), created_at, updated_at FROM cert_jobs WHERE id=?`, jobID).
+	if err := database.QueryRow(`SELECT status, COALESCE(message,''), created_at, updated_at FROM cert_jobs WHERE id=?`, jobID).
 		Scan(&status, &message, &createdAt, &updatedAt); dbQueryNotFound(c, err, "任务不存在", "certJobRunHistory query job") {
 		return
 	}
@@ -449,7 +450,7 @@ func (h *Handlers) GetSystemTaskLogs(c *gin.Context) {
 		if info.Size() > tail {
 			startOffset = info.Size() - tail
 		}
-		file, err := os.Open(path)
+		file, _, err := openRegularLogFile(path)
 		if err != nil {
 			failRead("open", err)
 			return

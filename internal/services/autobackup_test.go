@@ -531,6 +531,53 @@ func TestAutoBackupNextSlot_dailyWeeklyStepFromExecutedSlot(t *testing.T) {
 	}
 }
 
+func TestAutoBackupNextSlotDailyWeeklyAcrossDSTFallback(t *testing.T) {
+	loc, err := time.LoadLocation("Europe/Berlin")
+	if err != nil {
+		t.Skipf("tzdata unavailable: %v", err)
+	}
+	cases := []struct {
+		name    string
+		freq    string
+		day     int
+		lastRun string
+		now     time.Time
+		want    time.Time
+	}{
+		{
+			name: "daily", freq: "daily", day: 1,
+			lastRun: "2026-10-24T03:30:00+02:00",
+			now:     time.Date(2026, 10, 24, 12, 0, 0, 0, loc),
+			want:    time.Date(2026, 10, 25, 3, 30, 0, 0, loc),
+		},
+		{
+			name: "weekly", freq: "weekly", day: 7,
+			lastRun: "2026-10-18T03:30:00+02:00",
+			now:     time.Date(2026, 10, 20, 9, 0, 0, 0, loc),
+			want:    time.Date(2026, 10, 25, 3, 30, 0, 0, loc),
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			setupAutoBackupTestDB(t)
+			if _, err := ConfigureLocation("Europe/Berlin"); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := db.DB.Exec(`UPDATE global_config SET auto_backup_enabled=1, auto_backup_frequency=?,
+				auto_backup_time='03:30', auto_backup_day=?, auto_backup_last_run=? WHERE id=1`, tc.freq, tc.day, tc.lastRun); err != nil {
+				t.Fatal(err)
+			}
+			slot, ok := nextAutoBackupSlot(tc.now)
+			if !ok {
+				t.Fatal("enabled schedule must have a next slot")
+			}
+			if !slot.Equal(tc.want) {
+				t.Fatalf("slot=%s, want %s", slot.Format(time.RFC3339), tc.want.Format(time.RFC3339))
+			}
+		})
+	}
+}
+
 // 自动备份开关读失败必须留痕（首报一次）：引擎先求值 EnabledFn 再求值
 // NextSlotFn，EnabledFn 读错即 LoopOn=false 短路——nextAutoBackupSlot 的
 // schedule-read-auto-backup 告警永远不会被求值，静默 fail-closed 让「库故障」

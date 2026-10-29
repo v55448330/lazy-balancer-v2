@@ -916,6 +916,8 @@ func TestSecurityEventsTickSkipsTransactionWithoutIDAndContinues(t *testing.T) {
 		t.Fatal(err)
 	}
 	tailer := securityEventsNewTailer(logPath, offsetPath)
+	SecurityEventsSetIngestionHealthForTest(SecurityEventsIngestionStatus{})
+	t.Cleanup(func() { SecurityEventsSetIngestionHealthForTest(SecurityEventsIngestionStatus{}) })
 
 	// When：运行一次摄取
 	if err := tailer.securityEventsTick(); err != nil {
@@ -938,6 +940,10 @@ func TestSecurityEventsTickSkipsTransactionWithoutIDAndContinues(t *testing.T) {
 	}
 	if len(got) != 1 || got[0].tx != "tx-clean-1" || got[0].uri != "/upload" {
 		t.Fatalf("rows=%+v, want single tx-clean-1 /upload（空 id 事务必须跳过）", got)
+	}
+	status := SecurityEventsIngestionHealthSnapshot()
+	if status.SkippedRegions != 1 || !status.DataLoss {
+		t.Fatalf("health after malformed transaction: skipped=%d data_loss=%v, want 1/true", status.SkippedRegions, status.DataLoss)
 	}
 }
 
@@ -3305,6 +3311,12 @@ func TestSecurityEventsAttribution_IPFamilyCapabilityTruthTable(t *testing.T) {
 	if _, err := db.DB.Exec(`UPDATE security_policies SET geoip_mode='deny', geoip_countries='["海外"]' WHERE id=6`); err != nil {
 		t.Fatal(err)
 	}
+	// refs-only deny 的能力口径是**被引用名单实际解析出条目**（渲染侧 refs 合并
+	// 集非空才发射 id:2）。夹具必须种入真实名单，悬空引用解析为空集时该策略
+	// 物理上零发射面、不构成能力——那正是 empty-resolved 用例钉住的形状。
+	if _, err := db.DB.Exec(`INSERT INTO security_ip_lists (id,name,entries) VALUES (9,'refs-only-deny','[{"value":"203.0.113.0/24"}]')`); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := db.DB.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id,policy_id) VALUES
 		('lb_off',1),('lb_off',2),
 		('lb_refs',1),('lb_refs',3),
@@ -3368,9 +3380,9 @@ func TestSecurityEventsAttribution_CustomFamilyCapabilityPreference(t *testing.T
 		t.Fatal(err)
 	}
 	if _, err := db.DB.Exec(`INSERT INTO security_custom_rules (id, name, description, conditions, action, score, enabled) VALUES
-		(20,'启用规则A','', '[]','block',5,1),
-		(21,'启用规则B','', '[]','block',5,1),
-		(22,'启用规则C','', '[]','pass',5,1),
+		(20,'启用规则A','', '[{"target":"uri","operator":"contains","pattern":"/a"}]','block',5,1),
+		(21,'启用规则B','', '[{"target":"uri","operator":"contains","pattern":"/b"}]','block',5,1),
+		(22,'启用规则C','', '[{"target":"uri","operator":"contains","pattern":"/c"}]','pass',5,1),
 		(30,'停用规则','', '[]','block',5,0)`); err != nil {
 		t.Fatal(err)
 	}
@@ -3454,7 +3466,7 @@ func TestSecurityEventsFallbackGate_CustomFamilyTruthTable(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := db.DB.Exec(`INSERT INTO security_custom_rules (id, name, description, conditions, action, score, enabled) VALUES
-		(20,'启用规则','', '[]','block',5,1),
+		(20,'启用规则','', '[{"target":"uri","operator":"contains","pattern":"/x"}]','block',5,1),
 		(30,'停用规则','', '[]','block',5,0)`); err != nil {
 		t.Fatal(err)
 	}
@@ -3557,6 +3569,31 @@ func TestSecurityEventsFallbackGate_CustomFamilyTruthTable(t *testing.T) {
 			got := pid == truthPolicyID
 			if got != tc.want {
 				t.Fatalf("attributable(mode=%s,ref=%s,%s,%s)=%v (pid=%d), want %v", tc.mode, tc.ref, tc.action, tc.id, got, pid, tc.want)
+			}
+		})
+	}
+}
+
+func TestSecurityEventsCustomRulesEventSurface_requiresEmittableRule(t *testing.T) {
+	const validCondition = `{"target":"uri","operator":"contains","pattern":"/x"}`
+	cases := []struct {
+		name string
+		rule string
+		want bool
+	}{
+		{name: "valid enabled", rule: `{"id":20,"name":"ok","enabled":true,"action":"block","score":5,"conditions":[` + validCondition + `]}`, want: true},
+		{name: "disabled valid", rule: `{"id":20,"name":"ok","enabled":false,"action":"block","score":5,"conditions":[` + validCondition + `]}`, want: false},
+		{name: "empty conditions", rule: `{"id":20,"name":"empty","enabled":true,"action":"block","score":5,"conditions":[]}`, want: false},
+		{name: "invalid target", rule: `{"id":20,"name":"bad-target","enabled":true,"action":"block","score":5,"conditions":[{"target":"bogus","operator":"contains","pattern":"/x"}]}`, want: false},
+		{name: "invalid operator", rule: `{"id":20,"name":"bad-operator","enabled":true,"action":"block","score":5,"conditions":[{"target":"uri","operator":"bogus","pattern":"/x"}]}`, want: false},
+		{name: "quote in name", rule: `{"id":20,"name":"bad\"name","enabled":true,"action":"block","score":5,"conditions":[` + validCondition + `]}`, want: false},
+		{name: "emit id out of range", rule: `{"id":790000,"name":"reserved","enabled":true,"action":"block","score":5,"conditions":[` + validCondition + `]}`, want: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := &models.SecurityPolicy{Mode: "blocking", CustomRules: json.RawMessage(`[` + tc.rule + `]`)}
+			if got := securityEventsCustomRulesEventSurface(p); got != tc.want {
+				t.Fatalf("surface=%v, want %v for enabled-but-unemittable rule %s", got, tc.want, tc.rule)
 			}
 		})
 	}

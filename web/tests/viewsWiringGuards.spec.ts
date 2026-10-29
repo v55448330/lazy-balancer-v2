@@ -157,7 +157,7 @@ test('管理 TLS 读取失败显性化，开关禁用至加载成功', () => {
 
 test('Caddy 全局配置卡接入 configLoaded 双重门控', () => {
   const card = code('src/views/settings/CaddyGlobalSettings.vue')
-  assert.match(card, /defineProps<\{ configLoaded: boolean \}>/)
+  assert.match(card, /defineProps<\{\s*configLoaded: boolean/)
   assert.match(card, /:disabled="isReadOnly \|\| !props\.configLoaded"/)
   const save = section(card, 'const handleSave = async', 'if (isReadOnly.value || saving.value) return')
   assert.match(save, /!props\.configLoaded/, 'configLoaded 门必须早于常规写守卫')
@@ -170,6 +170,16 @@ test('任一 /config 成功读取恢复 configLoaded，失败可重试', () => {
   const block = section(text, 'const refreshConfigSection', 'const handleSaveBasic')
   assert.match(block, /configLoaded\.value = true/, '卡片保存后刷新成功必须恢复保存门')
   assert.match(text, /configLoadFailed/)
+})
+
+test('保存后配置回读失败复用可见横幅且不被旧请求污染', () => {
+  const text = code('src/views/Settings.vue')
+  const refresh = section(text, 'const refreshConfigSection', 'const handleSaveBasic')
+  const catchAt = refresh.indexOf('} catch (error) {')
+  assert.ok(catchAt > 0, '配置回读必须保留失败分支')
+  assert.match(refresh.slice(catchAt), /if \(requestSeq === settingsRequestSeq\) configLoadFailed\.value = true/, '最新回读失败必须置位既有横幅；过期失败不得污染新状态')
+  assert.match(text, /configBannerVisible = computed\(\(\) => configLoadFailed\.value && settingsTabConsumesConfig\(activeTab\.value\)\)/, '横幅仍只出现在消费配置的标签页')
+  assert.match(refresh, /configLoadFailed\.value = false/, '后续成功回读必须恢复并收起横幅')
 })
 
 test('policy_id=0 展示「无策略归属」而非「策略已删除」', () => {
@@ -301,7 +311,7 @@ test('build 门禁：先跑测试与覆盖率门限、再跑 src 基线与 tests
 
 test('证书卡：ACME 证书卡接入 configLoaded 双重门控（与 Basic/Caddy 同契约）', () => {
   const card = code('src/views/settings/FreeCertificates.vue')
-  assert.match(card, /defineProps<\{ configLoaded: boolean \}>/)
+  assert.match(card, /defineProps<\{\s*configLoaded: boolean/)
   assert.match(card, /:disabled="isReadOnly \|\| !props\.configLoaded"/)
   const save = section(card, 'const handleSave = async', 'if (isReadOnly.value) return')
   assert.match(save, /!props\.configLoaded/, 'configLoaded 门必须早于常规写守卫')

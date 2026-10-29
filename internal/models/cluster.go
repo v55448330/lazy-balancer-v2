@@ -181,11 +181,12 @@ type ClusterLoginTicketRequest struct {
 }
 
 type ClusterLoginTicketClaims struct {
-	UserID    int    `json:"user_id"`
-	Username  string `json:"username"`
-	NodeID    int    `json:"node_id"`
-	JTI       string `json:"jti"`
-	ExpiresAt int64  `json:"expires_at"`
+	UserID     int    `json:"user_id"`
+	Username   string `json:"username"`
+	AuthMethod string `json:"auth_method,omitempty"`
+	NodeID     int    `json:"node_id"`
+	JTI        string `json:"jti"`
+	ExpiresAt  int64  `json:"expires_at"`
 }
 
 // 集群服务控制动作（主节点 → 从节点）：Caddy 进程启停与应用进程重启。
@@ -384,7 +385,6 @@ type ClusterBasicSettings struct {
 	CertRenewalDays            *int    `json:"cert_renewal_days,omitempty"`
 	CertRenewalAttempts        *int    `json:"cert_renewal_attempts,omitempty"`
 	DefaultCAProviderID        *int    `json:"default_ca_provider_id,omitempty"`
-	DNSProvider                *string `json:"dns_provider,omitempty"`
 	SyncInterval               *int    `json:"sync_interval,omitempty"`
 	CaddyLogLevel              *string `json:"caddy_log_level,omitempty"`
 	CaddyLogSizeMB             *int    `json:"caddy_log_size_mb,omitempty"`

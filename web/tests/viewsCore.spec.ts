@@ -126,6 +126,16 @@ test('onRuleLogDialogClosed 停本地轮询定时器（不再 5s 空转）', () 
   assert.match(closed, /ruleLogTail\.stop\(\)/)
 })
 
+test('日志与统计共用弹框级自动刷新工具栏', () => {
+  const dialog = section(rules, 'v-model="ruleLogDialogVisible"', '</el-dialog>')
+  const toolbarAt = dialog.indexOf('<div class="log-toolbar">')
+  const tabsAt = dialog.indexOf('<el-tabs')
+  assert.ok(toolbarAt >= 0 && tabsAt >= 0, '日志弹框必须有共享工具栏与标签页')
+  assert.ok(toolbarAt < tabsAt, '自动刷新与手动刷新必须位于两个标签页之外，切到统计仍可见可操作')
+  assert.equal((dialog.match(/v-model="ruleLogAutoRefresh"/g) ?? []).length, 1, '两个标签页必须复用同一开关实例')
+  assert.equal((dialog.match(/@click="refreshRuleLogs"/g) ?? []).length, 1, '两个标签页必须复用同一手动刷新入口')
+})
+
 // ============ 配置预览负载策略走标签单源 ============
 
 test('配置预览使用 getStrategyLabel，不再直出枚举键', () => {
@@ -414,7 +424,8 @@ test('只读 Key 工具清单与后端只读探测集一致', () => {
   const claimed = claim[2].split('；')[0].split(' / ').map((name) => name.trim()).sort()
   assert.deepEqual(claimed, probeTools, '文案清单必须与后端只读探测集逐一相同')
   assert.equal(Number(claim[1]), probeTools.length, '文案数量必须等于后端集合成员数')
-  assert.doesNotMatch(keys, /5 个读探测 POST 工具/)
+  // 不再负钉历史数值（原 `/5 个读探测 POST 工具/`）：上面两条正反双向对表已完整
+  // 覆盖该不变量，硬编码「5」只会让后端合法扩展到 5 个探针时假红。
 })
 
 // 本套件的前提守卫：node --test 没有 .vue 装载器，spec 一律不得 import SFC

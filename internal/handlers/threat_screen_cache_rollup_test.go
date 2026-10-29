@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -135,5 +136,33 @@ func TestThreatScreenRollupCaches_shareTTL(t *testing.T) {
 	if threatRollupDimAggregateTTL > time.Minute {
 		t.Fatalf("threatRollupDimAggregateTTL=%v, want <= 1 分钟（大屏轮询复用窗口，不得超出轮询一个数量级）",
 			threatRollupDimAggregateTTL)
+	}
+}
+
+func TestGetSecurityThreatScreen_queryFailureInvalidatesRollupCaches(t *testing.T) {
+	// Given：聚合查询可以成功并写缓存，但后续 top_targets 因主库缺表失败。
+	setupSecurityPolicyTestDB(t)
+	t.Cleanup(resetThreatScreenCachesForTest)
+	router := newThreatScreenRouter(t, newThreatMetricsServer(t).URL)
+	seedThreatRuleEvent(t, utcStringAgo(time.Minute), "93.184.216.7", "lb_aaa", "blocked")
+	if _, err := db.DB.Exec(`DROP TABLE lb_rules`); err != nil {
+		t.Fatal(err)
+	}
+
+	// When：本轮整卡 500。
+	recorder := getRequest(t, router, "/security/overview/threat-screen")
+	if recorder.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d body=%s, want 500", recorder.Code, recorder.Body.String())
+	}
+
+	// Then：已写入的半轮聚合也必须失效，下一轮不得混用旧聚合与新 Top3。
+	threatRollupDimAggregateCacheMu.Lock()
+	aggLeft := len(threatRollupDimAggregateCache)
+	threatRollupDimAggregateCacheMu.Unlock()
+	topTargetsCacheMu.Lock()
+	targetsLeft := len(topTargetsCache)
+	topTargetsCacheMu.Unlock()
+	if aggLeft != 0 || targetsLeft != 0 {
+		t.Fatalf("cache entries after 500: aggregate=%d top_targets=%d, want both 0", aggLeft, targetsLeft)
 	}
 }

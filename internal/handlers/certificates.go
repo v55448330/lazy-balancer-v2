@@ -453,7 +453,8 @@ func (h *Handlers) UpdateCertificateConfig(c *gin.Context) {
 	// 原启用态时不借旧空值阻断；但从禁用转为启用、变更 provider 或显式提交
 	// 凭据仍必须过 provider 校验。非空损坏 JSON 与其他无效存量行维持 400。
 	legacyEmptyUnchanged := oldCredentials == "" && req.DNSCredentials == nil && effectiveProvider == oldProvider
-	enablingLegacyEmpty := legacyEmptyUnchanged && req.Enabled != nil && *req.Enabled && !oldEnabled
+	enabling := req.Enabled != nil && *req.Enabled && !oldEnabled
+	enablingLegacyEmpty := legacyEmptyUnchanged && enabling
 	// 生效凭证与库值语义相等（显式提交但未改动凭证）时不重新校验：历史行
 	// （导入/旧版本）可能存有当前 provider 不再接受的形态（如部分空串），非
 	// admin 编辑表单原样回传（省略键/掩码/空串）不得 400——这是「保持库值」而
@@ -461,7 +462,7 @@ func (h *Handlers) UpdateCertificateConfig(c *gin.Context) {
 	// 改名/其它字段更新沿用下方 legacyEmpty/既有校验口径。
 	effectiveCredentialsJSON, _ := json.Marshal(effectiveCredentials)
 	credentialsUnchangedFromStored := req.DNSCredentials != nil && oldCredentials != "" && effectiveProvider == oldProvider &&
-		services.CredentialsSemanticallyEqual(string(effectiveCredentialsJSON), oldCredentials)
+		services.CredentialsSemanticallyEqual(string(effectiveCredentialsJSON), oldCredentials) && !enabling
 	if (!legacyEmptyUnchanged || enablingLegacyEmpty) && !credentialsUnchangedFromStored {
 		if _, err := provider.BuildCredentialsJSON(effectiveCredentials); err != nil {
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
@@ -1137,10 +1138,16 @@ func (h *Handlers) IssueCertificate(c *gin.Context) {
 			// 共用 certEnqueueErrorResponse 单源映射；其余才是 500，且响应只回
 			// 固定前缀（底层错误只进运行日志）。
 			statusCode, message := certEnqueueErrorResponse("创建签发任务失败", err)
+			auditMessage := message
+			if changed && forceCAOverride {
+				// changed=true,error 表示冷却窗口已在 provider 解析前清空；
+				// 失败审计仍须留下本次实际发生的手动越冷。
+				auditMessage += "，手动越过 CA 冷却"
+			}
 			if statusCode == http.StatusConflict {
-				auditFailure("skipped", message)
+				auditFailure("skipped", auditMessage)
 			} else {
-				auditFailure("failed", message)
+				auditFailure("failed", auditMessage)
 			}
 			c.JSON(statusCode, models.APIResponse{Code: statusCode, Message: message})
 			return
@@ -1268,6 +1275,11 @@ func (h *Handlers) IssueCertificate(c *gin.Context) {
 				continue
 			}
 			jobID, changed, err := createOrRequeueCertJob(target.ruleID, canonicalDomain, 0, qm)
+			// changed=true 即表示冷却窗口已清空，即使随后 provider 解析失败，
+			// 本次手动越冷也已实际发生；changed=false 不得置位。
+			if changed && cooldownOverriddenThisTarget {
+				forceCAOverride = true
+			}
 			if err != nil {
 				if errors.Is(err, services.ErrCertRuleStateConflict) {
 					conflictFailed++
@@ -1301,11 +1313,6 @@ func (h *Handlers) IssueCertificate(c *gin.Context) {
 					skippedUnsupported++
 				}
 				continue
-			}
-			// 入队成功才真实清空了 CA 退避窗口（upsert 的写侧口径），此刻的
-			// force 才是「越过冷却」事实；失败/跳过目标由上面的计数器归因。
-			if cooldownOverriddenThisTarget {
-				forceCAOverride = true
 			}
 			queued++
 		}

@@ -162,6 +162,9 @@ type SyncService struct {
 	// last_sync_error（节点页面可见），并把兜底重拉降频为每 wafRepullEvery
 	// 轮一次；收敛后清零恢复正常。
 	wafRepullFailures atomic.Int32
+	// crawlerSnapshotFailures 记录爬虫运行快照连续重建失败轮数；稳定 304
+	// 也据此重试，达到阈值后与 WAF 一样显式报错并降频。
+	crawlerSnapshotFailures atomic.Int32
 	// reloadRepullFailures：重载失败 marker 触发的补偿
 	// 全量重拉的连续失败计数——与 wafRepullFailures 同款节流（5 轮后降频为
 	// 每 10 轮），防止 Caddy /load 持续故障时每同步周期全量重拉+全表重写+
@@ -626,9 +629,10 @@ func (s *SyncService) startLocked(resume bool) {
 	s.cancel = cancel
 	done := make(chan struct{})
 	s.done = done
-	// 角色切换/重启复用同一实例：清零 WAF 兜底重拉连续未收敛计数，
-	// 避免陈旧计数让新会话首次漂移重拉被降频延迟。
+	// 角色切换/重启复用同一实例：清零文件兜底重拉连续未收敛计数，
+	// 避免陈旧计数让新会话首次补偿被降频延迟。
 	s.wafRepullFailures.Store(0)
+	s.crawlerSnapshotFailures.Store(0)
 	s.reloadRepullFailures.Store(0)
 	s.state.Store(uint32(syncStateRunning))
 	go func() {
@@ -676,6 +680,7 @@ func (s *SyncService) Stop() {
 	s.pullWG.Wait()
 	// 防御性清零：与 startLocked 配对，确保 Stop 后实例处于干净状态。
 	s.wafRepullFailures.Store(0)
+	s.crawlerSnapshotFailures.Store(0)
 	s.reloadRepullFailures.Store(0)
 	s.resetSyncFailureAuditThrottle()
 	if syncLifecycleState(s.state.Load()) != syncStateHalted {
@@ -956,6 +961,10 @@ func (s *SyncService) Pull(ctx context.Context) (result SyncResult, err error) {
 				s.persistWafRepullFailure(ctx)
 				return
 			}
+			if err == nil && s.crawlerSnapshotPersistentlyFailed() {
+				s.persistCrawlerSnapshotFailure(ctx)
+				return
+			}
 			s.recordSyncError(ctx, err, nil)
 		}
 	}()
@@ -1075,6 +1084,7 @@ func (s *SyncService) Pull(ctx context.Context) (result SyncResult, err error) {
 				// 持续失败降频期：本轮跳过兜底重拉（last_sync_error 已保持
 				// 「安全数据持续同步失败」可见，每 wafRepullEvery 轮再尝试）。
 			}
+			s.reconcileCrawlerSnapshotAfterFailure(ctx)
 		}
 		break
 	}
@@ -1275,6 +1285,53 @@ func (s *SyncService) wafRepullPersistentlyFailed() bool {
 	return s.wafRepullFailures.Load() >= wafRepullMaxFailures
 }
 
+const crawlerSnapshotFailureMessagePrefix = "爬虫运行快照重建失败"
+
+func (s *SyncService) crawlerSnapshotPersistentlyFailed() bool {
+	return s.crawlerSnapshotFailures.Load() >= wafRepullMaxFailures
+}
+
+// reconcileCrawlerSnapshotAfterFailure 在安全节已应用但运行快照写失败后，
+// 让稳定 304 也推进补偿；计数兼作退避时钟，安全开关关闭时不写文件。
+func (s *SyncService) reconcileCrawlerSnapshotAfterFailure(ctx context.Context) {
+	failures := s.crawlerSnapshotFailures.Load()
+	if failures == 0 {
+		return
+	}
+	switches, err := readSyncSwitches(ctx, s.db)
+	if err != nil {
+		Logf("warn", "读取同步开关失败，爬虫运行快照补偿本轮跳过: %v", err)
+		return
+	}
+	if !switches.Security {
+		return
+	}
+	next := failures + 1
+	if !backoffDue(next) {
+		s.crawlerSnapshotFailures.Store(next)
+		return
+	}
+	s.rebuildCrawlerSnapshotForSyncWithState(ctx)
+}
+
+func (s *SyncService) rebuildCrawlerSnapshotForSyncWithState(ctx context.Context) {
+	if err := rebuildCrawlerSnapshotForSync(); err != nil {
+		s.crawlerSnapshotFailures.Add(1)
+		Logf("warn", "集群同步：爬虫运行快照重建失败（DB 已应用，插件按旧快照运行至下次收敛）: %v", err)
+		if s.crawlerSnapshotPersistentlyFailed() {
+			s.persistCrawlerSnapshotFailure(ctx)
+		}
+		return
+	}
+	s.crawlerSnapshotFailures.Store(0)
+	s.clearSyncFailureMessage(ctx, crawlerSnapshotFailureMessagePrefix)
+}
+
+func (s *SyncService) persistCrawlerSnapshotFailure(ctx context.Context) {
+	message := fmt.Sprintf("%s（已连续 %d 轮未收敛）", crawlerSnapshotFailureMessagePrefix, s.crawlerSnapshotFailures.Load())
+	s.combineOrReplaceSyncError(ctx, message, models.SyncErrorCodeTransportError)
+}
+
 // wafRepullFailureMessagePrefix 是「安全数据持续同步失败」上表面文案的前缀：
 // 计数清零时必须同时剥离该文案，否则运营方手工修复文件后错误永驻。
 const wafRepullFailureMessagePrefix = "安全数据持续同步失败"
@@ -1289,28 +1346,26 @@ func (s *SyncService) trackWafRepullConvergence(ctx context.Context) bool {
 		return true
 	}
 	s.wafRepullFailures.Store(0)
-	s.clearWafRepullFailureMessage(ctx)
+	s.clearSyncFailureMessage(ctx, wafRepullFailureMessagePrefix)
 	return false
 }
 
-// clearWafRepullFailureMessage 从 last_sync_error 中剥离 WAF 专项文案：
-// · 仅 WAF 文案 → 整体清空；
-// · 与 apply_ok_reload_failed 标记组合（"marker | 同步失败（已连续 N 次）: …"）
-//
-//	→ 只保留标记段，标记的补偿重拉语义不受影响。
-func (s *SyncService) clearWafRepullFailureMessage(ctx context.Context) {
+// clearSyncFailureMessage 从 last_sync_error 中剥离指定自愈文案：
+// · 仅有该文案 → 整体清空；
+// · 与 apply_ok_reload_failed 标记组合时只保留标记段，补偿重拉语义不变。
+func (s *SyncService) clearSyncFailureMessage(ctx context.Context, prefix string) {
 	var stored string
 	if err := s.db.QueryRowContext(context.WithoutCancel(ctx), "SELECT COALESCE(last_sync_error,'') FROM global_config WHERE id=1").Scan(&stored); err != nil {
 		// 读失败=无法判定文案形态：本轮跳过清理（方向安全），留痕避免自愈
 		// 文案永久残留却无信号。
-		Logf("warn", "读取 last_sync_error 失败（WAF 专项文案清理已跳过）: %v", err)
+		Logf("warn", "读取 last_sync_error 失败（同步专项文案清理已跳过）: %v", err)
 		return
 	}
 	if stored == "" {
 		return
 	}
 	msg, _ := decodeSyncError(stored)
-	if !strings.Contains(msg, wafRepullFailureMessagePrefix) {
+	if !strings.Contains(msg, prefix) {
 		return
 	}
 	if idx := strings.Index(msg, " | "); idx >= 0 {
@@ -1658,10 +1713,9 @@ func (s *SyncService) recordSyncError(ctx context.Context, pullErr, reportErr er
 		if s.syncPostCommitFailureMarkerPresent(ctx) {
 			return
 		}
-		// 安全数据持续同步失败期间（连续 ≥wafRepullMaxFailures 轮未收敛）：
-		// 不清空 last_sync_error，保持「安全数据持续同步失败」消息在节点
-		// 页面可见（重拉轮由 Pull defer 刷新文案，此处兜底降频期轮次）。
-		if s.wafRepullPersistentlyFailed() {
+		// 安全数据/爬虫运行快照持续失败期间（达到连续失败阈值）：
+		// 不清空 last_sync_error，保持专项失败消息在节点页面可见。
+		if s.wafRepullPersistentlyFailed() || s.crawlerSnapshotPersistentlyFailed() {
 			return
 		}
 		s.persistSyncError(ctx, "", "")
@@ -2103,6 +2157,11 @@ func (s *SyncService) pollRegistration(ctx context.Context) {
 	}
 	if err := json.Unmarshal(regBody, &envelope); err != nil {
 		Logf("error", "注册状态轮询响应解析失败（HTTP %d，主节点可能被前置代理替换响应）: %v", resp.StatusCode, err)
+		s.combineOrReplaceSyncError(ctx, fmt.Sprintf("注册状态响应解析失败（HTTP %d，主节点可能被前置代理替换响应）", resp.StatusCode), models.SyncErrorCodeTransportError)
+		return
+	}
+	if envelope.Data.Status != "pending" && envelope.Data.Status != "approved" && envelope.Data.Status != "rejected" {
+		s.combineOrReplaceSyncError(ctx, fmt.Sprintf("注册状态响应缺少有效 status（%q，主节点可能被前置代理替换响应）", envelope.Data.Status), models.SyncErrorCodeTransportError)
 		return
 	}
 	if envelope.Data.Status == "rejected" {

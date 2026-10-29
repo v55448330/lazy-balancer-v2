@@ -70,4 +70,11 @@ func TestTriggerSystemTask_certJobRowDisabledRejected(t *testing.T) {
 	if response.Code != http.StatusConflict {
 		t.Fatalf("status=%d body=%s, want 409（已退役证书任务不能重试）", response.Code, response.Body.String())
 	}
+	// 与日志/历史入口共用 TrimSpace+ParseInt 口径：空白归一后的同一 ID
+	// 必须到达业务重试门，而不是在解析层提前 400。
+	response = httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/system/tasks/cert-job:%201/trigger", nil))
+	if response.Code != http.StatusConflict {
+		t.Fatalf("trimmed ID status=%d body=%s, want 409", response.Code, response.Body.String())
+	}
 }

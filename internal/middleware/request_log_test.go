@@ -35,6 +35,25 @@ func TestRequestLogFormatterPrintsMethodAndPathOnce(t *testing.T) {
 	}
 }
 
+func TestRequestLogFormatterOmitsQueryCredentials(t *testing.T) {
+	line := requestLogFormatter(gin.LogFormatterParams{
+		TimeStamp:  time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC),
+		Method:     "GET",
+		StatusCode: 302,
+		Latency:    time.Millisecond,
+		ClientIP:   "192.0.2.1",
+		Path:       "/api/v1/auth/oidc/callback?code=oidc-code-secret&state=oidc-state-secret",
+	})
+	for _, secret := range []string{"oidc-code-secret", "oidc-state-secret"} {
+		if strings.Contains(line, secret) {
+			t.Fatalf("query credential %q leaked into request log: %q", secret, line)
+		}
+	}
+	if !strings.Contains(line, `"/api/v1/auth/oidc/callback"`) {
+		t.Fatalf("route path missing after query redaction: %q", line)
+	}
+}
+
 // c.Error() 附加的错误须有日志落点——formatter 尾部追加 ErrorMessage 列
 // （有值才输出）；无错误时列结构不变（上方列结构钉测覆盖）。
 func TestRequestLogFormatterAppendsErrorMessage(t *testing.T) {

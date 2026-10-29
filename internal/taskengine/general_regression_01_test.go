@@ -91,6 +91,32 @@ func TestEngine_DaemonManualRestartResetsAbnormalBudget(t *testing.T) {
 	}
 }
 
+// Given 常驻任务的异常重拉预算已用尽，随后用户停止并由业务侧以新工作唤醒。
+// When 新一代首次异常退出。
+// Then 它必须获得完整的新预算，而不是沿用上一代计数立即再次停调。
+func TestEngine_DaemonRearmAfterStopStartsFreshRestartBudget(t *testing.T) {
+	e := newTestEngineWithOptions(t, Options{TickInterval: 10 * time.Millisecond,
+		DaemonRestartDelays: []time.Duration{20 * time.Millisecond}})
+	var runs atomic.Int32
+	const id = "t-rearm-fresh-budget"
+	e.Register(Descriptor{ID: id, Family: "t", Name: "唤醒后新预算", Kind: KindDaemon, RunsOn: RoleAny,
+		Run: func(RunContext) error { runs.Add(1); return errors.New("boom") }})
+
+	e.StartLoop(id)
+	waitForEngine(t, "上一代首次执行与一次重拉", 2*time.Second, func() bool { return runs.Load() >= 2 })
+	waitForEngine(t, "上一代预算用尽停调", 2*time.Second, func() bool {
+		meta, ok := e.Lookup(id)
+		return ok && !meta.LoopOn
+	})
+
+	e.StopLoop(id)
+	e.RearmLoop(id, true)
+
+	// 修复前 abnormalRestarts 仍为 2：新一代第 3 次执行后立即再次用尽，
+	// 永远等不到第 4 次执行。正确行为是第 3 次后再重拉一次。
+	waitForEngine(t, "新一代首次异常后仍按新预算重拉", 2*time.Second, func() bool { return runs.Load() >= 4 })
+}
+
 // 任务元数据，不得让任务监控整页 500（修复前裸调 Ever*/NextSlot/EnabledFn）。
 func TestEngine_MetadataFnPanicIsolated(t *testing.T) {
 	e := newTestEngine(t)

@@ -19,11 +19,36 @@ test('basic save awaits the parent config refresh while the form stays frozen', 
   const page = basic()
   assert.match(page, /onSave\?: \(\) => void \| Promise<void>/)
   const save = section(page, 'const handleSave = async', '</script>')
-  assert.match(save, /const parentRefresh = props\.onSave\s*if \(parentRefresh\) await parentRefresh\(\)/, 'the parent refresh callback must be awaited')
+  // 两次独立匹配 + 顺序：把 `\s*` 当紧邻契约的写法在换行/注释整理后假红。
+  const refreshAt = save.indexOf('const parentRefresh = props.onSave')
+  assert.ok(refreshAt >= 0, 'save 必须取父级刷新回调')
+  assert.match(save, /if \(parentRefresh\)/, '父级刷新必须有存在性守卫')
+  const awaitedAt = save.indexOf('await parentRefresh()')
+  assert.ok(awaitedAt > refreshAt, 'the parent refresh callback must be awaited')
   assert.doesNotMatch(save, /await props\.onSave\?\.\(\)/)
   assert.match(page, /const formFrozen = computed\(\(\) => isReadOnly\.value \|\| saving\.value\)/)
   const parent = code('src/views/Settings.vue')
   assert.match(section(parent, 'const handleSaveBasic = async', 'const handleSaveCaddy'), /await refreshConfigSection\(applyBasicKeys\)/)
+})
+
+test('Caddy and ACME saves await parent refreshes before unfreezing', () => {
+  const parent = code('src/views/Settings.vue')
+  const cases = [
+    { page: caddy(), handler: 'handleSaveCaddy', binding: ':on-save="handleSaveCaddy"' },
+    { page: certificates(), handler: 'handleSaveCertificates', binding: ':on-save="handleSaveCertificates"' },
+  ]
+  for (const item of cases) {
+    assert.match(item.page, /onSave\?: \(\) => void \| Promise<void>/)
+    const save = section(item.page, 'const handleSave = async', '</script>')
+    const refreshAt = save.indexOf('const parentRefresh = props.onSave')
+    const awaitedAt = save.indexOf('await parentRefresh()')
+    const emitAt = save.indexOf("if (!parentRefresh) emit('save')")
+    assert.ok(refreshAt >= 0 && awaitedAt > refreshAt, 'the parent refresh callback must be awaited')
+    assert.ok(emitAt > awaitedAt, 'no-callback fallback must follow the awaited refresh')
+    assert.ok(save.indexOf('await parentRefresh()') < save.indexOf('} finally {'), 'parent refresh must finish before the finally block unfreezes the form')
+    assert.match(parent, new RegExp(item.binding.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
+    assert.match(section(parent, `const ${item.handler} = async`, 'const syncActiveTabFromPage'), /await refreshConfigSection\(/)
+  }
 })
 
 test('threat screen display normalization is submitted only after an actual edit', () => {
@@ -65,9 +90,11 @@ test('auto-backup save rechecks node mode after the dialog is open', () => {
   assert.match(section(page, 'const runAutoBackupNow = async', 'const downloadAutoBackup'), /if \(backupDisabled\.value \|\| autoBackupRunning\.value\) return/)
 })
 
-test('deselecting every import category clears stale validation and invalidates older reads', () => {
+test('deselecting every import category keeps chips available and invalidates older reads', () => {
   const revalidate = section(basic(), 'const revalidateImport = async', 'const confirmImport')
-  assert.match(revalidate, /if \(sections\.length === 0\) \{\s*importValidationSeq\+\+\s*importValidation\.value = null\s*return\s*\}/)
+  const emptySelection = section(revalidate, 'if (sections.length === 0) {', "if (importValidation.value?.type === 'v1') return")
+  assert.match(emptySelection, /importValidationSeq\+\+/)
+  assert.doesNotMatch(emptySelection, /importValidation\.value = null/, 'clearing validation removes the only controls that can restore a category')
 })
 
 test('Caddy numeric clear operations produce numbers instead of null payload values', () => {
@@ -120,7 +147,12 @@ test('referenced trusted-proxy lists reuse range validation and name invalid ent
 
 test('manual trusted-header edits detach the selected CDN preset', () => {
   const page = caddy()
-  assert.match(page, /const onTrustedHeadersEdit = \(values: string\[\]\): void => \{\s*trustedPresetKey\.value = ''\s*trustedHeaders\.value = values\s*\}/)
+  // 先脱钩预设、后回写头列表（顺序是契约，单行形态与右侧字面不是）。
+  const edit = section(page, 'const onTrustedHeadersEdit = ', 'const applyTrustedPreset')
+  const detachAt = /trustedPresetKey\.value = ['"]{2}/.exec(edit)?.index ?? -1
+  const writeAt = /trustedHeaders\.value\s*=/.exec(edit)?.index ?? -1
+  assert.ok(detachAt >= 0, '手动编辑必须清空预设选择')
+  assert.ok(writeAt > detachAt, '清预设必须先于回写头列表（否则预设会被重新套用）')
   assert.match(page, /:model-value="trustedHeaders"[\s\S]*@update:model-value="onTrustedHeadersEdit"/)
 })
 
@@ -133,7 +165,6 @@ test('ACME numeric clear operations produce numbers instead of null payload valu
     renewalDays: undefined,
     renewalAttempts: 5,
     defaultCAProviderId: 2,
-    dns_provider: 'dnspod',
   })
   assert.equal(payload.cert_expiry_days, 0)
   assert.equal(payload.cert_renewal_days, 0)
@@ -142,12 +173,10 @@ test('ACME numeric clear operations produce numbers instead of null payload valu
   assert.match(certificates(), /acmeGlobalWritePayload\(\{/)
 })
 
-test('unsupported legacy ACME DNS providers are omitted instead of rejected or rewritten', () => {
+test('retired global ACME DNS provider is never propagated', () => {
   const { acmeGlobalWritePayload } = configValues
-  const base = { email: 'admin@example.com', expiryDays: 30, renewalDays: 30, renewalAttempts: 5, defaultCAProviderId: 2 }
-  assert.equal(acmeGlobalWritePayload({ ...base, dns_provider: 'dnspod' }).dns_provider, 'dnspod')
-  assert.equal('dns_provider' in acmeGlobalWritePayload({ ...base, dns_provider: 'local-dns' }), false)
-  assert.equal('dns_provider' in acmeGlobalWritePayload({ ...base, dns_provider: '' }), false)
+  const payload = acmeGlobalWritePayload({ email: 'admin@example.com', expiryDays: 30, renewalDays: 30, renewalAttempts: 5, defaultCAProviderId: 2 })
+  assert.equal('dns_provider' in payload, false)
 })
 
 test('certificate dialog entry functions defend read-only mode', () => {

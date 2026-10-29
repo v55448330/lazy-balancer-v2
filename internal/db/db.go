@@ -607,7 +607,6 @@ func createTables() error {
 	CREATE TABLE IF NOT EXISTS global_config (
 		id INTEGER PRIMARY KEY CHECK (id = 1),
 		caddy_config TEXT DEFAULT '{}',
-		dns_provider VARCHAR(50) DEFAULT 'dnspod',
 		acme_email VARCHAR(255),
 		log_level VARCHAR(10) DEFAULT 'info',
 		is_master BOOLEAN DEFAULT TRUE,
@@ -1968,9 +1967,9 @@ func runMigrations() error {
 	//   写点与读点均已移除（核实全仓零写零读），存量库启动时删除。
 	// - lb_rules.ip_acl_mode / ip_acl_list 为规则级 IP 访问控制的遗留列，规则级 IP ACL 早已
 	//   迁入 security_policies（策略级 ip_acl_* 仍在使用），这两列不再被读取或写入。
-	// - global_config.dns_credentials：全局 DNS 凭证退役列——读路径不回显、写路径已移除、
-	//   备份三面排除、集群快照模型/装载/apply 与版本触发器 OF 清单均已摘除，签发链唯一
-	//   凭证来源是 certificate_configs.dns_credentials。存量值随列一并删除（比置空更彻底）。
+	// - global_config.dns_provider/dns_credentials：全局 DNS 配置退役列——签发链
+	//   唯一来源是 certificate_configs；读写、备份、集群快照与版本触发器均摘除，
+	//   存量值随列一并删除。
 	deadColumnDrops := []struct{ table, column string }{
 		{"task_runs", "stage"},              // 零写入方死列
 		{"task_runs", "entry_count"},        // 零写入方死列
@@ -1979,6 +1978,7 @@ func runMigrations() error {
 		{"security_custom_rules", "status_code"},
 		{"global_config", "admin_tls_acme_rule_id"},
 		{"global_config", "admin_tls_port"},
+		{"global_config", "dns_provider"},
 		{"global_config", "dns_credentials"}, // 全局 DNS 凭证退役列（凭证源=certificate_configs）
 		{"lb_rules", "ip_acl_mode"},
 		{"lb_rules", "ip_acl_list"},
@@ -3200,6 +3200,7 @@ func migrateSystemIPListUniqueIndex() error {
 		if err != nil {
 			return err
 		}
+		deferUniqueIndex := false
 		if len(remap) > 0 {
 			// 条目并入必须先于删行：重复行携带的已入库 IP（自动封禁名单尤其
 			// 如此）会随整行删除而静默消失=静默解封。
@@ -3207,27 +3208,51 @@ func migrateSystemIPListUniqueIndex() error {
 			if err != nil {
 				return err
 			}
-			deleted := make([]string, 0, len(remap))
-			for id := range remap {
-				deleted = append(deleted, strconv.Itoa(id))
+			deferUniqueIndex = len(unparseableRows) > 0
+			safeRemap := remap
+			if deferUniqueIndex {
+				// 任一行 entries 不可解析都无法证明并集无损：整组保留原行，
+				// 唯一索引延期到下次启动；其它可证明无损的组仍可收敛。
+				deferredKeeps := make(map[int]bool)
+				for _, id := range unparseableRows {
+					if keep, ok := remap[id]; ok {
+						deferredKeeps[keep] = true
+					} else {
+						deferredKeeps[id] = true
+					}
+				}
+				safeRemap = make(map[int]int)
+				for drop, keep := range remap {
+					if !deferredKeeps[keep] {
+						safeRemap[drop] = keep
+					}
+				}
 			}
-			sort.Strings(deleted) // 仅稳定语句文本（日志/取证可复现）
-			if _, err := tx.Exec(`DELETE FROM security_ip_lists WHERE system=1 AND id IN (` + strings.Join(deleted, ",") + `)`); err != nil {
-				return fmt.Errorf("dedupe system ip lists: %w", err)
+			if len(safeRemap) > 0 {
+				deleted := make([]string, 0, len(safeRemap))
+				for id := range safeRemap {
+					deleted = append(deleted, strconv.Itoa(id))
+				}
+				sort.Strings(deleted) // 仅稳定语句文本（日志/取证可复现）
+				if _, err := tx.Exec(`DELETE FROM security_ip_lists WHERE system=1 AND id IN (` + strings.Join(deleted, ",") + `)`); err != nil {
+					return fmt.Errorf("dedupe system ip lists: %w", err)
+				}
+				if err := rewriteSystemIPListRefs(tx, safeRemap); err != nil {
+					return fmt.Errorf("rewrite system ip list references: %w", err)
+				}
+				dedupeDetail = fmt.Sprintf("启动迁移：security_ip_lists 重复的 system=1 名单行已去重（被引用行优先保留，引用已重写）：%d 条；删除行条目已并入保留行 %d 条（身份重复跳过 %d 条）",
+					len(safeRemap), mergedEntries, skippedEntries)
+			} else {
+				dedupeDetail = "启动迁移：security_ip_lists 去重延期"
 			}
-			if err := rewriteSystemIPListRefs(tx, remap); err != nil {
-				return fmt.Errorf("rewrite system ip list references: %w", err)
-			}
-			dedupeDetail = fmt.Sprintf("启动迁移：security_ip_lists 重复的 system=1 名单行已去重（被引用行优先保留，引用已重写）：%d 条；删除行条目已并入保留行 %d 条（身份重复跳过 %d 条）",
-				len(remap), mergedEntries, skippedEntries)
 			if len(unparseableRows) > 0 {
 				sort.Ints(unparseableRows)
 				ids := make([]string, 0, len(unparseableRows))
 				for _, id := range unparseableRows {
 					ids = append(ids, strconv.Itoa(id))
 				}
-				dedupeDetail += fmt.Sprintf("；%d 行条目形态无法解析，未并入（行 id：%s，请人工核对）", len(unparseableRows), strings.Join(ids, ","))
-				log.Printf("WARN: IP 名单去重时有 %d 行条目形态无法解析（行 id：%s），其条目未并入保留行，请人工核对", len(unparseableRows), strings.Join(ids, ","))
+				dedupeDetail += fmt.Sprintf("；%d 行条目形态无法解析，所属重复组已整组保留（行 id：%s，请人工核对）", len(unparseableRows), strings.Join(ids, ","))
+				log.Printf("WARN: IP 名单去重时有 %d 行条目形态无法解析（行 id：%s），所属重复组已整组保留，唯一索引延期建立，请人工核对", len(unparseableRows), strings.Join(ids, ","))
 			}
 		}
 		// 历史遗留的可视化兜底：早前「删重复行→重写引用→建索引」非原子执行时
@@ -3241,8 +3266,10 @@ func migrateSystemIPListUniqueIndex() error {
 			systemIPListDanglingRefs.Add(int64(dangling))
 			log.Printf("WARN: 发现 %d 处策略引用指向不存在的 IP 名单 id；渲染期对应名单条目会整体消失，请在策略里重新选择名单（迁移不自动改引用）", dangling)
 		}
-		if err := ensureUniqueIndex(tx, "u_security_ip_lists_system_name", systemIPListSystemNameIndexSQL); err != nil {
-			return fmt.Errorf("create unique system ip list index: %w", err)
+		if !deferUniqueIndex {
+			if err := ensureUniqueIndex(tx, "u_security_ip_lists_system_name", systemIPListSystemNameIndexSQL); err != nil {
+				return fmt.Errorf("create unique system ip list index: %w", err)
+			}
 		}
 		return nil
 	})
@@ -3319,14 +3346,22 @@ func systemIPListEntryIdentity(entry models.IPListEntry) string {
 }
 
 // parseIPListEntriesRaw 解析名单行 entries 文本：空白视为空列表（列默认 '[]',
-// 带外 NULL/空串等价于「无条目」），其余解析失败才是形态不可用。
+// 带外 NULL/空串等价于「无条目」）；兼容旧版纯字符串数组，只有两种已知
+// 形态都解析失败才视为不可用并触发整组保留。
 func parseIPListEntriesRaw(raw string) ([]models.IPListEntry, error) {
 	if strings.TrimSpace(raw) == "" {
 		return nil, nil
 	}
 	var entries []models.IPListEntry
 	if err := json.Unmarshal([]byte(raw), &entries); err != nil {
-		return nil, err
+		var legacy []string
+		if legacyErr := json.Unmarshal([]byte(raw), &legacy); legacyErr != nil {
+			return nil, err
+		}
+		entries = make([]models.IPListEntry, len(legacy))
+		for i, value := range legacy {
+			entries[i].Value = value
+		}
 	}
 	return entries, nil
 }
@@ -3383,9 +3418,8 @@ func mergeSystemIPListEntries(tx *sql.Tx, remap map[int]int) (merged int, skippe
 	for _, keep := range keepIDs {
 		entries, err := parseIPListEntriesRaw(rawByID[keep])
 		if err != nil {
-			// 保留行本身形态无法解析：整组跳过（覆盖会把脏值固化成新值），
-			// 全部被删行计入未并入清单。
-			unparseable = append(unparseable, droppedByKeep[keep]...)
+			// 保留行本身形态无法解析：整组跳过并点名保留行。
+			unparseable = append(unparseable, keep)
 			continue
 		}
 		seen := make(map[string]struct{}, len(entries))
@@ -3393,24 +3427,32 @@ func mergeSystemIPListEntries(tx *sql.Tx, remap map[int]int) (merged int, skippe
 			seen[systemIPListEntryIdentity(entry)] = struct{}{}
 		}
 		changed := false
+		groupUnparseable := false
+		groupMerged, groupSkipped := 0, 0
 		for _, drop := range droppedByKeep[keep] {
 			dropped, err := parseIPListEntriesRaw(rawByID[drop])
 			if err != nil {
 				unparseable = append(unparseable, drop)
+				groupUnparseable = true
 				continue
 			}
 			for _, entry := range dropped {
 				identity := systemIPListEntryIdentity(entry)
 				if _, ok := seen[identity]; ok {
-					skipped++
+					groupSkipped++
 					continue
 				}
 				seen[identity] = struct{}{}
 				entries = append(entries, entry)
-				merged++
+				groupMerged++
 				changed = true
 			}
 		}
+		if groupUnparseable {
+			continue
+		}
+		merged += groupMerged
+		skipped += groupSkipped
 		if !changed {
 			continue
 		}
@@ -5329,7 +5371,7 @@ func normalizeRuleTimestampsMigration() error {
 // 「有脏数据但探测看不到 → 永远不清」或反之，且日志全绿。
 // 可空的布尔列（enable_compress/request_body_max_size_mb/
 // upstream_keepalive_timeout/server_tokens_hidden/dynamic_dns/enable_tls/
-// tls_http_redirect）用 COALESCE(col,-1)<>0，可空 TEXT 列用 COALESCE(col,”)：
+// tls_http_redirect/log_enabled）用 COALESCE(col,-1)<>0，可空 TEXT 列用 COALESCE(col,”)：
 // 裸 =1 / <>0 在三值逻辑下对带外 NULL 行恒为 NULL，会同时逃过探测与复位
 // （-1 让 NULL 保持“非规范值”，归一后恒为零值形态）。
 const tcpDeadFieldsStalePredicate = `protocol='tcp' AND (
@@ -5344,7 +5386,7 @@ const tcpDeadFieldsStalePredicate = `protocol='tcp' AND (
 		OR COALESCE(tls_cert,'')<>'' OR COALESCE(tls_key,'')<>''
 		OR COALESCE(block_page_stage1_id,0)<>0 OR COALESCE(block_page_stage1_status,0)<>0
 		OR COALESCE(block_page_stage3_id,0)<>0 OR COALESCE(block_page_stage3_status,0)<>0
-		OR COALESCE(log_enabled,0)<>0
+		OR COALESCE(log_enabled,-1)<>0
 	)`
 
 // TCPRuleDeadFieldsResetSQL：TCP 行 HTTP 专属死值清零（HTTP 头/健康检查/

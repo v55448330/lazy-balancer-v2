@@ -7,7 +7,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
 import { autobanStateLabel, autobanStatValue, isAutobanIneffective, suggestionBand } from '../src/utils/autobanStatus.ts'
-import { code, section } from './_helpers.ts'
+import { code, elementSlice, section } from './_helpers.ts'
 
 test('启用且 ban_effective === false 时展示黄条', () => {
   assert.equal(isAutobanIneffective({ enabled: true, ban_effective: false }), true)
@@ -86,13 +86,25 @@ test('状态读取失败：状态标签与六项数值一律显示「—」，�
   assert.match(page, /autobanStatValue\(autobanStatusError, autobanStatus\.banned_today/, '今日封禁必须走未知态单源')
   assert.match(page, /autobanStatValue\(autobanStatusError, autobanStatus\.list_entries/, '名单数必须走未知态单源')
   assert.match(page, /autobanStateLabel\(autobanStatusError, autobanStatus\.enabled, autobanStatus\.dry_run\)/, '状态标签必须区分未知')
-  // 主节点徽章在错误态同样不可信（is_master 初值 false 会显示「仅主节点调度」）
-  assert.match(page, /v-if="!autobanStatusLoading && !autobanStatusError && !autobanStatus\.is_master"/)
+  // 主节点徽章在错误态同样不可信——徽章判据（含错误态门）在下方专用用例里按条件集判定。
 })
 
 test('状态首次加载期间不渲染主节点徽章，避免刷新时参数区先右移再回位', () => {
   const page = code('src/views/security/SecurityEvents.vue')
-  assert.match(page, /v-if="!autobanStatusLoading && !autobanStatusError && !autobanStatus\.is_master"/)
+  // 按「条件集」判定：徽章渲染必须同时要求「非加载中 ∧ 非错误 ∧ 已确认为从节点」。
+  // 逐字整串钉（含条件顺序）在调整顺序或改用计算属性时假红，而这三条缺任何一条
+  // 都会让初值（loading=true / is_master=false）把参数区先右移再回位。
+  const labelAt = page.indexOf('仅主节点调度')
+  assert.ok(labelAt > 0, '前置：从节点徽章必须存在（否则本断言空转）')
+  const badge = elementSlice(page, page.lastIndexOf('<el-tag', labelAt), 'el-tag')
+  const guard = /v-if="([^"]+)"/.exec(badge)
+  assert.ok(guard !== null, '徽章必须由 v-if 守卫')
+  const conditions = guard[1].split('&&').map((part) => part.trim())
+  assert.deepEqual(
+    [...conditions].sort(),
+    ['!autobanStatus.is_master', '!autobanStatusError', '!autobanStatusLoading'],
+    '徽章三个条件缺一不可（加载中/错误态都不得按初值渲染）',
+  )
 })
 
 test('参数区按内容自然宽度紧跟标题，不用 flex:1 抢占剩余空间', () => {

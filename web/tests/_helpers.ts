@@ -257,6 +257,101 @@ export const section = (text: string, startMarker: string, endMarker: string): s
 }
 
 /**
+ * 与 `section` 相同，但从 startMarker 的**最后一次**命中处起切。
+ *
+ * 用于同一行形态在文件里出现多次、而只有最后一处才是断言对象的场景：首个命中
+ * 往往落在语义不同的相邻块里，切片会跨块延伸，后续 `match` 可被错误位置的代码
+ * 满足（假绿）、`doesNotMatch` 也可能扫到无关区间。写入段「先预览、后提交」这类
+ * 顺序结构（`if (tlsPending) { …预览… }` / `…` / `if (tlsPending) { …提交… }`）
+ * 正是此形态。
+ *
+ * 调用方仍应对切片做身份自检（如断言段内存在该段独有的写入目标），单点「最后
+ * 一处」不构成语义锚。
+ */
+export const lastSection = (text: string, startMarker: string, endMarker: string): string => {
+  let start = -1
+  for (let at = indexOfOutsideComments(text, startMarker); at >= 0; at = indexOfOutsideComments(text, startMarker, start + 1)) {
+    start = at
+  }
+  if (start < 0) throw new Error(`missing start marker: ${startMarker}`)
+  const end = indexOfOutsideComments(text, endMarker, start + startMarker.length)
+  if (end <= start) throw new Error(`missing end marker: ${endMarker} after last ${startMarker}`)
+  return text.slice(start, end)
+}
+
+/**
+ * 取 `selector` 对应的 CSS 规则**块内声明文本**（花括号按配对收尾，`@media`
+ * 嵌套安全；返回内容不含选择器与最外层花括号）。
+ *
+ * 选择器与 `{` 之间只允许空白：`.ipm-source` 不得命中 `.ipm-source-list` 这类
+ * 前缀更长的选择器（否则断言读的是另一条规则，静默跑在错对象上）。
+ *
+ * 用 `section(text, '.x {', '}')` 钉样式时，终止标记是「第一个 `}`」——规则一旦
+ * 多一条嵌套声明（`&:hover { … }`）切片就在那里截断，后续 `doesNotMatch` 恒真；
+ * 而单行整串钉（`.x { margin: 11px 0 3px;`）在换行重排后假红。两者都该改走
+ * 本函数 + `cssDecls` 的「声明集」判定：样式证据与排版形态无关。
+ *
+ * 与 `cssDecls` 同为 `cssDeclarations` 的内部构件（导出面 = 消费面：用例侧只用
+ * 组合形态；确有单用需求时再导出）。
+ */
+const cssRule = (text: string, selector: string): string => {
+  let from = 0
+  for (;;) {
+    const at = indexOfOutsideComments(text, selector, from)
+    if (at < 0) throw new Error(`missing selector: ${selector}`)
+    const after = at + selector.length
+    const rest = text.slice(after, after + 8)
+    from = after
+    if (!/^\s*\{/.test(rest)) continue
+    const open = after + rest.indexOf('{')
+    let depth = 0
+    for (let i = open; i < text.length; i++) {
+      if (text[i] === '{') depth += 1
+      else if (text[i] === '}') {
+        depth -= 1
+        if (depth === 0) return text.slice(open + 1, i)
+      }
+    }
+    throw new Error(`selector 的规则块不平衡: ${selector}`)
+  }
+}
+
+/**
+ * CSS 声明表（属性 → 值，空白归一）：嵌套块（`@media`/`&:hover`）里的声明不参与，
+ * 只收顶层声明。断言的正确形态是「这条属性存在且值是这个」，而非属性书写顺序
+ * 与单行排版——后者在重排属性、改用 CSS 变量时假红，界面却没变。
+ * `cssRule` 的内部构件（导出面 = 消费面，用例侧只用 `cssDeclarations`）。
+ */
+const cssDecls = (block: string): Map<string, string> => {
+  const decls = new Map<string, string>()
+  let depth = 0
+  let buf = ''
+  const flush = (): void => {
+    const decl = buf.trim()
+    buf = ''
+    if (!decl) return
+    const colon = decl.indexOf(':')
+    if (colon < 0) return
+    decls.set(decl.slice(0, colon).trim(), decl.slice(colon + 1).trim().replace(/\s+/g, ' '))
+  }
+  for (const ch of block) {
+    if (ch === '{') { depth += 1; continue }
+    if (ch === '}') { depth -= 1; continue }
+    if (depth > 0) continue
+    if (ch === ';') { flush(); continue }
+    buf += ch
+  }
+  flush()
+  return decls
+}
+
+/**
+ * 取某条 CSS 规则的声明表（`cssRule` + `cssDecls` 的组合，最常用形态）。
+ */
+export const cssDeclarations = (text: string, selector: string): Map<string, string> =>
+  cssDecls(cssRule(text, selector))
+
+/**
  * 提取文本中某个标签的全部**开标签**（`<name …>`，引号内的 `>` 不截断）。
  *
  * 结构断言必须按「开标签属性集」逐属性判定：把两个属性写进同一条正则的字面
@@ -294,6 +389,22 @@ export const elementSlice = (text: string, openTagAt: number, tag: string): stri
     depth += 1
   }
   throw new Error(`<${tag}> 在偏移 ${openTagAt} 处不平衡（缺闭合标签）`)
+}
+
+/**
+ * `offset` 所在元素的完整切片（开标签取 offset 之前最近的 `<tag`，其余按
+ * `elementSlice` 配对）。
+ *
+ * 「这个条件元素渲染了这段文案」这类断言不能写成距离型窗口
+ * （`/v-if="x"[\s\S]{0,400}文案/`）：文案落在相邻元素上仍可能命中（假绿），
+ * 元素加个属性又可能落到窗口外（假红）。按元素取段与字符数无关。
+ */
+export const elementAt = (text: string, tag: string, offset: number): string => {
+  const opener = new RegExp(`<${tag}\\b`, 'g')
+  let at = -1
+  for (const match of text.slice(0, offset).matchAll(opener)) at = match.index!
+  if (at < 0) throw new Error(`offset ${offset} 之前没有 <${tag}>（元素边界找错对象）`)
+  return elementSlice(text, at, tag)
 }
 
 /**

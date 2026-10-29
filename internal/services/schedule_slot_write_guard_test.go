@@ -81,7 +81,10 @@ func TestVersionTableSlotAdvance_scheduleReadFailureKeepsExistingSlot(t *testing
 	setCRSSlot(t, expired)
 
 	restore := injectScheduleReadFailure(t, "security_crs_version", "schedule_days")
-	advanceVersionSlotIfDue("security_crs_version")
+	err := advanceVersionSlotIfDue("security_crs_version")
+	if !errors.Is(err, errScheduleSlotNotAdvanced) {
+		t.Fatalf("advance error=%v, want explicit unadvanced-slot failure", err)
+	}
 	if got := crsNextUpdate(t); got != expired {
 		t.Fatalf("排程不可读时 next_update=%q, want 保持原值 %q（不得按默认排程回写）", got, expired)
 	}
@@ -89,6 +92,67 @@ func TestVersionTableSlotAdvance_scheduleReadFailureKeepsExistingSlot(t *testing
 	restore()
 	advanceVersionSlotIfDue("security_crs_version")
 	assertFutureSlot(t, "读恢复后的 CRS 槽", crsNextUpdate(t))
+}
+
+func TestSourceSlotCancelScheduleReadFailureReturnsError(t *testing.T) {
+	newClusterTestService(t)
+	setupThreatTest(t, nil, nil, nil)
+	restore := injectScheduleReadFailure(t, "global_config", "threat_schedule_days")
+	defer restore()
+	err := advanceSourceSlotsAfterUserCancel("security_threat_sources", "auto", threatSourceRegistryNames(), threatNextSlotStrict)
+	if !errors.Is(err, errScheduleSlotNotAdvanced) {
+		t.Fatalf("cancel advance error=%v, want explicit unadvanced-slot failure", err)
+	}
+}
+
+func TestCRSCancelScheduleReadFailureReportsSlotError(t *testing.T) {
+	m := newTestCRSManager(t)
+	seedCRSVersionRow(t, "v4.30.0", true)
+	setCRSSlot(t, expiredSlot())
+	restore := injectScheduleReadFailure(t, "security_crs_version", "schedule_days")
+	defer restore()
+	runCtx, cancel := context.WithCancelCause(context.Background())
+	cancel(taskengine.ErrUserCancelled)
+	m.cancel(context.Canceled, false, "auto", runCtx)
+	if err := m.ScheduleSlotError(); !errors.Is(err, errScheduleSlotNotAdvanced) {
+		t.Fatalf("ScheduleSlotError=%v, want cancellation advance failure", err)
+	}
+}
+
+func TestIP2RegionCancelScheduleReadFailureReportsSlotError(t *testing.T) {
+	m := newTestIP2RegionManager(t)
+	seedIP2RegionVersionRow(t, "v3.0.0", true)
+	if _, err := db.DB.Exec(`UPDATE security_ip2region_version SET next_update=? WHERE id=1`, expiredSlot()); err != nil {
+		t.Fatal(err)
+	}
+	restore := injectScheduleReadFailure(t, "security_ip2region_version", "schedule_days")
+	defer restore()
+	runCtx, cancel := context.WithCancelCause(context.Background())
+	cancel(taskengine.ErrUserCancelled)
+	m.cancel(context.Canceled, "auto", runCtx)
+	if err := m.ScheduleSlotError(); !errors.Is(err, errScheduleSlotNotAdvanced) {
+		t.Fatalf("ScheduleSlotError=%v, want cancellation advance failure", err)
+	}
+}
+
+func TestThreatRunUpdateRoleCheckDoesNotDeadlock(t *testing.T) {
+	newClusterTestService(t)
+	if _, err := db.DB.Exec(`UPDATE security_threat_sources SET update_enabled=0`); err != nil {
+		t.Fatal(err)
+	}
+	m := &ThreatUpdateManager{}
+	done := make(chan error, 1)
+	go func() {
+		done <- m.RunUpdate("manual", &taskengine.RunContext{Ctx: context.Background()})
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("RunUpdate returned unexpected error: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("RunUpdate deadlocked before role/source processing")
+	}
 }
 
 // Given 版本表槽已过期且 auto 开启。When 排程列读不出来且成功落库路径写状态。

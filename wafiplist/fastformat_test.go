@@ -1,7 +1,10 @@
 package wafiplist
 
 import (
+	"bytes"
 	"encoding/binary"
+	"errors"
+	"log"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -573,5 +576,41 @@ func TestWriteFastFile_selfEnforcesReadCaps(t *testing.T) {
 	}
 	if len(state.V4) != len(prefixes) {
 		t.Fatalf("loaded v4=%d, want %d", len(state.V4), len(prefixes))
+	}
+}
+
+func TestWriteFastFile_directoryDurabilityFailureWarnsAndKeepsReadableArtifact(t *testing.T) {
+	for _, failure := range []string{"open", "sync"} {
+		t.Run(failure, func(t *testing.T) {
+			originalOpen, originalSync := fastFileDirOpen, fastFileDirSync
+			t.Cleanup(func() {
+				fastFileDirOpen, fastFileDirSync = originalOpen, originalSync
+			})
+			boom := errors.New("forced directory durability failure")
+			if failure == "open" {
+				fastFileDirOpen = func(string) (*os.File, error) { return nil, boom }
+			} else {
+				fastFileDirSync = func(*os.File) error { return boom }
+			}
+			var logs bytes.Buffer
+			originalOutput, originalFlags := log.Writer(), log.Flags()
+			log.SetOutput(&logs)
+			log.SetFlags(0)
+			t.Cleanup(func() {
+				log.SetOutput(originalOutput)
+				log.SetFlags(originalFlags)
+			})
+
+			path := filepath.Join(t.TempDir(), "list.fast")
+			if err := WriteFastFile(path, []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")}, nil); err != nil {
+				t.Fatalf("post-rename durability failure must preserve the established success semantics: %v", err)
+			}
+			if _, err := ReadFastFile(path); err != nil {
+				t.Fatalf("replacement artifact must remain readable: %v", err)
+			}
+			if !strings.Contains(logs.String(), "durability unconfirmed") {
+				t.Fatalf("durability failure must be visible in logs: %q", logs.String())
+			}
+		})
 	}
 }

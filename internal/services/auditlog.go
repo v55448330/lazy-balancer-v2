@@ -23,7 +23,6 @@ var ConfigFieldSections = map[string]string{
 	"cert_renewal_days":      "ACME配置",
 	"cert_renewal_attempts":  "ACME配置",
 	"default_ca_provider_id": "ACME配置",
-	"dns_provider":           "ACME配置",
 
 	"caddy_log_level":               "Caddy配置",
 	"caddy_log_size_mb":             "Caddy配置",
@@ -199,7 +198,6 @@ func RecordAuditLog(username, action, resource, detail, ipAddress string) {
 	action = sanitizeAuditIdentity(action)
 	resource = sanitizeAuditIdentity(resource)
 	ipAddress = sanitizeAuditIdentity(ipAddress)
-	beforeAuditLogExec()
 	auditDB := db.AuditDB
 	if auditDB == nil {
 		Logf("warn", "audit log write skipped: audit database is not initialized")

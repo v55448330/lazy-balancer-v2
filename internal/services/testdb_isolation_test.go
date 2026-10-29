@@ -18,6 +18,14 @@ import (
 // 返回新库句柄（调用方不需要时可直接忽略返回值）。
 func setupIsolatedDB(t *testing.T) *sql.DB {
 	t.Helper()
+	// 全局 CA 队列管理器的 ticker 跨用例存活：上个用例启动后未 Stop 的实例会在
+	// 本用例的临时库上继续扫 cert_jobs，先把同 id 任务改走状态，随后本用例的
+	// Resume 归一化转换（queued→queued）撞上 WHERE status IN(...) 冲突被跳过，
+	// 表现为假红（本轮实测：TestCAQueueManager_Resume_requeuesLifecycleStrandedJobs
+	// 间歇失败，同一次运行的日志里同时出现全局 "CA queue periodic scan"）。
+	// 进入用例先停掉遗留实例，退出时同样停掉，避免把泄漏传给下一个用例。
+	ResetCAQueueManagerForTest()
+	t.Cleanup(ResetCAQueueManagerForTest)
 	oldDB, oldMetricsDB, oldAuditDB, oldCurrent := db.DB, db.MetricsDB, db.AuditDB, db.GetDB()
 	if err := db.Initialize(t.TempDir()); err != nil {
 		t.Fatalf("initialize test database: %v", err)

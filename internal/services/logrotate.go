@@ -200,6 +200,9 @@ func (w *RotatingFileWriter) Close() error {
 // 与 auditLogCopyFile 同款测试缝）。默认即 os.DirEntry.Info。
 var appLogEntryInfo = func(entry os.DirEntry) (os.FileInfo, error) { return entry.Info() }
 
+// taskLogEntryInfo 是任务日志元数据采集的注入点，与应用日志副本侧同形。
+var taskLogEntryInfo = func(entry os.DirEntry) (os.FileInfo, error) { return entry.Info() }
+
 // RuntimeCleanupResult 单轮运行日志清理结果（log-cleanup 任务日志展示明细——
 // 2026-10-01 用户裁定：清理了哪个文件必须可见；单轮执行体=
 // RuntimeLogCleanupOnce，由任务引擎 log-cleanup 族按 24h 节拍驱动）。
@@ -472,9 +475,10 @@ func taskLogsHousekeepingWithRetention(logFile string, months int, monthsErr err
 			if e.IsDir() {
 				continue
 			}
-			info, err := e.Info()
+			info, err := taskLogEntryInfo(e)
 			if err != nil {
 				result.InfoFailed++
+				Logf("warn", "任务日志清理：读取 %s 元数据失败: %v", filepath.Join(d, e.Name()), err)
 				continue
 			}
 			all = append(all, fileInfo{path: filepath.Join(d, e.Name()), dir: d, name: e.Name(), info: info})

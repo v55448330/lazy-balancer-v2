@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -577,6 +578,36 @@ func TestGetSystemTaskLogs_hidesInternalErrorDetails(t *testing.T) {
 	}
 	if !strings.Contains(applogs.String(), "任务日志读取失败（crs, stat）") {
 		t.Fatalf("原始错误未进应用日志: %s", applogs.String())
+	}
+}
+
+// 无写端 FIFO 不得把任务日志请求永久阻塞在 open(2)；与运行日志端点
+// 同口径，必须非阻塞打开并在已打开 fd 上拒绝非常规文件。
+func TestGetSystemTaskLogs_fifoDoesNotBlock(t *testing.T) {
+	dir := t.TempDir()
+	oldLogDir := taskengine.LogDir()
+	taskengine.SetLogDir(dir)
+	t.Cleanup(func() { taskengine.SetLogDir(oldLogDir) })
+	if err := syscall.Mkfifo(filepath.Join(dir, "crs.log"), 0o600); err != nil {
+		t.Skipf("mkfifo 不可用: %v", err)
+	}
+	h := &Handlers{}
+	router := gin.New()
+	router.GET("/system/tasks/:id/logs", h.GetSystemTaskLogs)
+
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/system/tasks/crs/logs", nil))
+		done <- rec
+	}()
+	select {
+	case rec := <-done:
+		if rec.Code != http.StatusInternalServerError || !strings.Contains(rec.Body.String(), "任务日志读取失败") {
+			t.Fatalf("status=%d body=%s, want 500 固定文案", rec.Code, rec.Body.String())
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("任务日志 FIFO 打开被阻塞")
 	}
 }
 

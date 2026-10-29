@@ -36,7 +36,7 @@ func TestThreatUpdateOneSource_demoteAtWriteGate_zeroWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	changed, failed := GetThreatUpdateManager().updateOneSource(context.Background(), threatSourceRow{id: id, name: "ustc", url: url}, "manual", "2026.10.22 00:00:00")
+	changed, failed, _ := GetThreatUpdateManager().updateOneSource(context.Background(), threatSourceRow{id: id, name: "ustc", url: url}, "manual", "2026.10.22 00:00:00")
 
 	if changed || failed {
 		t.Fatalf("changed=%v failed=%v, want (false,false)（降级中止非故障）", changed, failed)
@@ -78,7 +78,7 @@ func TestThreatUpdateOneSource_roleUndecidableAtWriteGate_failsLoudly(t *testing
 		t.Fatal(err)
 	}
 
-	changed, failed := GetThreatUpdateManager().updateOneSource(context.Background(), threatSourceRow{id: id, name: "ustc", url: url}, "manual", "2026.10.22 00:00:00")
+	changed, failed, _ := GetThreatUpdateManager().updateOneSource(context.Background(), threatSourceRow{id: id, name: "ustc", url: url}, "manual", "2026.10.22 00:00:00")
 
 	if !failed || changed {
 		t.Fatalf("changed=%v failed=%v, want (false,true)（角色不可判定按失败落定，不得写库）", changed, failed)
@@ -160,7 +160,7 @@ func TestThreatUpdateOneSource_roleUndecidableOnCancel_noSourceRowWrite(t *testi
 		t.Fatal(err)
 	}
 
-	changed, failed := GetThreatUpdateManager().updateOneSource(ctx, threatSourceRow{id: id, name: "ustc", url: url}, "manual", "2026.10.22 00:00:00")
+	changed, failed, _ := GetThreatUpdateManager().updateOneSource(ctx, threatSourceRow{id: id, name: "ustc", url: url}, "manual", "2026.10.22 00:00:00")
 
 	if !failed || changed {
 		t.Fatalf("changed=%v failed=%v, want (false,true)（取消归因不可判定按失败落定）", changed, failed)
@@ -254,7 +254,7 @@ func TestThreatUpdateOneSource_corruptTextAndFast_noSilentZeroing(t *testing.T) 
 		t.Fatal(err)
 	}
 
-	changed, failed := GetThreatUpdateManager().updateOneSource(context.Background(), threatSourceRow{id: id, name: "ustc", url: url}, "manual", "2026.10.22 00:00:00")
+	changed, failed, _ := GetThreatUpdateManager().updateOneSource(context.Background(), threatSourceRow{id: id, name: "ustc", url: url}, "manual", "2026.10.22 00:00:00")
 
 	if !failed {
 		t.Fatalf("双故障+下载失败必须按源失败落定，得到 changed=%v failed=%v", changed, failed)
@@ -321,7 +321,7 @@ func TestThreatUpdateOneSource_demotedHealPath_zeroWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	changed, failed := GetThreatUpdateManager().updateOneSource(context.Background(), threatSourceRow{id: id, name: "ustc", url: url}, "manual", "2026.10.22 00:00:00")
+	changed, failed, _ := GetThreatUpdateManager().updateOneSource(context.Background(), threatSourceRow{id: id, name: "ustc", url: url}, "manual", "2026.10.22 00:00:00")
 
 	if changed || failed {
 		t.Fatalf("changed=%v failed=%v, want (false,false)（降级中止非故障）", changed, failed)
@@ -350,7 +350,7 @@ func TestThreatUpdateOneSource_roleUndecidableHealPath_failsLoudly(t *testing.T)
 		t.Fatal(err)
 	}
 
-	changed, failed := GetThreatUpdateManager().updateOneSource(context.Background(), threatSourceRow{id: id, name: "ustc", url: url}, "manual", "2026.10.22 00:00:00")
+	changed, failed, _ := GetThreatUpdateManager().updateOneSource(context.Background(), threatSourceRow{id: id, name: "ustc", url: url}, "manual", "2026.10.22 00:00:00")
 
 	if changed || !failed {
 		t.Fatalf("changed=%v failed=%v, want (false,true)（角色不可判定按失败落定）", changed, failed)

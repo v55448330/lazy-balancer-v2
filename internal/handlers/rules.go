@@ -2079,6 +2079,17 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	// validateStrategyForProtocol 显式 400（与 CreateRule 契约一致），只有
 	// 未提交/存量死值才自愈为 weighted_round_robin。
 	strategySubmitted := req.Strategy != ""
+	// TCP 死字段是否在请求中显式提供必须在任何归一/合并前记录：
+	// 显式值交保存门 400，未提交或存量死值才允许自愈清零。
+	dynamicDNSSubmitted := req.DynamicDNS != nil
+	customRoutesEnabledSubmitted := req.CustomRoutesEnabled != nil
+	proxyDialTimeoutSubmitted := req.ProxyDialTimeout != nil
+	proxyResponseHeaderTimeoutSubmitted := req.ProxyResponseHeaderTimeout != nil
+	proxyReadTimeoutSubmitted := req.ProxyReadTimeout != nil
+	proxyWriteTimeoutSubmitted := req.ProxyWriteTimeout != nil
+	proxyStreamTimeoutSubmitted := req.ProxyStreamTimeout != nil
+	proxyFlushIntervalSubmitted := req.ProxyFlushInterval != nil
+	proxyStreamCloseDelaySubmitted := req.ProxyStreamCloseDelay != nil
 	if req.Strategy == "" {
 		req.Strategy = existingRule.Strategy
 	}
@@ -2271,23 +2282,39 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 				req.Strategy = "weighted_round_robin"
 			}
 			// HTTP 专属死配置字段统一由下方最终协议 tcp 块的
-			// tcpDeadFieldReset 清单处置（这里只保留协议形态切换自身需要的
-			// 归一：路径规则/代理超时/DNS——它们由 validateRuleFeatures 对
-			// tcp 显式拒绝，不属静默弃置清单）。
-			req.CustomRoutesEnabled = &disabled
+			// tcpDeadFieldReset 清单处置。协议切换只清零未提交/存量值；
+			// 显式值必须原样留给 validateRuleFeatures 400，不得在此吞掉。
+			if !customRoutesEnabledSubmitted {
+				req.CustomRoutesEnabled = &disabled
+			}
 			emptyPathRules := []models.PathRule{}
 			req.PathRules = &emptyPathRules
-			req.ProxyDialTimeout = &zero
-			req.ProxyResponseHeaderTimeout = &zero
-			req.ProxyReadTimeout = &zero
-			req.ProxyWriteTimeout = &zero
-			req.ProxyStreamTimeout = &zero
-			req.ProxyFlushInterval = &zero
-			req.ProxyStreamCloseDelay = &zero
-			// DNS 动态上游是 HTTP 语义,切换即清零(dynamic_dns 残留
-			// 会让 validateRuleFeatures 恒拒协议切换,且永不消费的脏配置随
-			// 快照/导出放大)。
-			req.DynamicDNS = &disabled
+			if !proxyDialTimeoutSubmitted {
+				req.ProxyDialTimeout = &zero
+			}
+			if !proxyResponseHeaderTimeoutSubmitted {
+				req.ProxyResponseHeaderTimeout = &zero
+			}
+			if !proxyReadTimeoutSubmitted {
+				req.ProxyReadTimeout = &zero
+			}
+			if !proxyWriteTimeoutSubmitted {
+				req.ProxyWriteTimeout = &zero
+			}
+			if !proxyStreamTimeoutSubmitted {
+				req.ProxyStreamTimeout = &zero
+			}
+			if !proxyFlushIntervalSubmitted {
+				req.ProxyFlushInterval = &zero
+			}
+			if !proxyStreamCloseDelaySubmitted {
+				req.ProxyStreamCloseDelay = &zero
+			}
+			// DNS 动态上游是 HTTP 语义；未提交/存量值切换即清零，
+			// 显式 dynamic_dns 则交保存门拒绝。
+			if !dynamicDNSSubmitted {
+				req.DynamicDNS = &disabled
+			}
 			req.EnableDnsServer = &disabled
 			req.DnsServer = &empty
 			req.DnsFamily = ""
@@ -2372,14 +2399,41 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 			req.NTLMCompatible = &tcpZero
 		}
 		deadFields := updateRuleTCPDeadFields(&req)
-		// 显式提交的 HTTP-only 值不静默弃置：Strategy=cookie 交
-		// validateStrategyForProtocol、health_check_host 交保存门，均显式 400
-		// （与 CreateRule 契约一致）。只有未提交/存量死值走自愈归零。
+		// 显式提交的 HTTP-only 值不静默弃置：Strategy、health_check_host、
+		// 动态上游、自定义路径与代理超时族均交保存门 400（与 CreateRule
+		// 契约一致）。只有未提交/存量死值走自愈归零。
 		if strategySubmitted {
 			deadFields.Strategy = nil
 		}
 		if healthCheckHostSubmitted {
 			deadFields.HealthCheckHost = nil
+		}
+		if dynamicDNSSubmitted {
+			deadFields.DynamicDNS = nil
+		}
+		if customRoutesEnabledSubmitted {
+			deadFields.CustomRoutesEnabled = nil
+		}
+		if proxyDialTimeoutSubmitted {
+			deadFields.ProxyDialTimeout = nil
+		}
+		if proxyResponseHeaderTimeoutSubmitted {
+			deadFields.ProxyResponseHeaderTimeout = nil
+		}
+		if proxyReadTimeoutSubmitted {
+			deadFields.ProxyReadTimeout = nil
+		}
+		if proxyWriteTimeoutSubmitted {
+			deadFields.ProxyWriteTimeout = nil
+		}
+		if proxyStreamTimeoutSubmitted {
+			deadFields.ProxyStreamTimeout = nil
+		}
+		if proxyFlushIntervalSubmitted {
+			deadFields.ProxyFlushInterval = nil
+		}
+		if proxyStreamCloseDelaySubmitted {
+			deadFields.ProxyStreamCloseDelay = nil
 		}
 		tcpDeadFieldReset(req.Protocol, deadFields)
 		// 重试窗口是 http/tcp 共用字段（方案 C），http 侧
@@ -3151,9 +3205,10 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		if qm := services.GetCAQueueManager(); qm != nil {
 			// 有界取消等待不得占住全局 Caddy 操作锁；队列屏障阻止
 			// 等待期间的新任务入队，panic 时 defer 先恢复锁再走补偿链。
-			blockToken := qm.BlockJobsForRule(caddyID)
-			h.caddyOpMu.Unlock()
 			func() {
+				blockToken := qm.BlockJobsForRule(caddyID)
+				defer qm.UnblockJobsForRule(caddyID, blockToken)
+				h.caddyOpMu.Unlock()
 				defer h.caddyOpMu.Lock()
 				if updateRuleLockWindowHook != nil {
 					updateRuleLockWindowHook(caddyID, 1)
@@ -3164,7 +3219,6 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 					services.Logf("warn", "UpdateRule cert job cancel for %s failed: %v (continuing)", caddyID, err)
 				}
 			}()
-			qm.UnblockJobsForRule(caddyID, blockToken)
 			// 放锁窗口内可能已并发删除本规则；继续后续迁移/补偿会把它复活。
 			// 中止只跳过补偿与成功收尾——本次 /load 已真实发生，仍须落重载审计。
 			if abortIfRuleDeleted(c, caddyID) {
@@ -3252,12 +3306,13 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 			var inFlightJobID int
 			if scanErr := db.DB.QueryRow(`SELECT id FROM cert_jobs WHERE rule_id=? ORDER BY id DESC LIMIT 1`, caddyID).Scan(&inFlightJobID); scanErr == nil && inFlightJobID > 0 {
 				// 取消等待在途签发退出；worker 部署尾段需要同一 CaddyOpLock。
-				// 持锁等待会形成 30–60s 等待环并阻塞全部配置写（历史
-				// 与 DeleteRule/DisableRule/DeleteCertJob 同构）
-				// 先释放全局锁，有界取消后再取回，迁移事务仍在锁内。
-				h.caddyOpMu.Unlock()
-				cancelCertJob(inFlightJobID)
-				h.caddyOpMu.Lock()
+				// 持锁等待会形成 30–60s 等待环并阻塞全部配置写。闭包 defer
+				// 保证 cancel panic 时先恢复锁，入口 defer 才不会二次 Unlock。
+				func() {
+					h.caddyOpMu.Unlock()
+					defer h.caddyOpMu.Lock()
+					cancelCertJob(inFlightJobID)
+				}()
 				if updateRuleLockWindowHook != nil {
 					updateRuleLockWindowHook(caddyID, 2)
 				}
@@ -5313,9 +5368,10 @@ func (h *Handlers) DisableRule(c *gin.Context) {
 
 	// 取消仍在排队或执行中的签发协程，避免已禁用规则继续占用 CA 配额
 	if qm := services.GetCAQueueManager(); qm != nil {
-		blockToken := qm.BlockJobsForRule(caddyID)
-		h.caddyOpMu.Unlock()
 		func() {
+			blockToken := qm.BlockJobsForRule(caddyID)
+			defer qm.UnblockJobsForRule(caddyID, blockToken)
+			h.caddyOpMu.Unlock()
 			defer h.caddyOpMu.Lock()
 			if disableRuleLockWindowHook != nil {
 				disableRuleLockWindowHook(caddyID)
@@ -5326,7 +5382,6 @@ func (h *Handlers) DisableRule(c *gin.Context) {
 				services.Logf("error", "DisableRule certificate cancellation timed out for caddy_id=%s: %v", caddyID, err)
 			}
 		}()
-		qm.UnblockJobsForRule(caddyID, blockToken)
 		// 删除复核：放锁窗口内并发的 DeleteRule 可完整提交（含证书任务/绑定
 		// 清理）——此时不得再写「禁用」成功审计（会留下指向已不存在规则的
 		// 成功留痕），按冲突中止；与 UpdateRule 同用 abortIfRuleDeleted。

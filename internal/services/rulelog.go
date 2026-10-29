@@ -304,15 +304,15 @@ func RemoveRuleLogFiles(ruleID string) error {
 		}
 	}
 	remove(base)
-	// .1..5 为历史 lumberjack 位移式副本兜底：规则访问日志的唯一生产者
-	// Caddy FileWriter 恒用时间戳命名（下方 removeTimberjackRotations），
-	// 保留删除仅为清理旧版本/外来 logrotate 残留，不新增该形态生产者。
+	// .1..5 保留确定性逐项错误聚合；其余代次与压缩移位副本由下方
+	// 同目录扫描补齐。生产写者只有 timberjack 时间戳命名，这些移位形态
+	// 仅服务旧版本/外来 logrotate 残留。
 	for i := 1; i <= 5; i++ {
 		remove(fmt.Sprintf("%s.%d", base, i))
 	}
-	// timberjack 时间戳副本(<id>-<ts>-<reason>[_N].log[.gz|.zst],至多
-	// roll_keep=5 份)此前永久残留——按前缀+完整时间戳+reason 尾部清扫。
-	if err := removeTimberjackRotations(base); err != nil {
+	// 所有副本形态复用 ruleLogComponentOf 的认领口径，避免「认作孤儿却
+	// 不在删除面」导致摘要假成功。
+	if err := removeRuleLogRotations(base); err != nil {
 		errs = append(errs, err)
 	}
 	return errors.Join(errs...)
@@ -374,11 +374,12 @@ func ruleLogLiveIDsForOwnership() (map[string]bool, error) {
 	return liveRuleIDs(context.Background())
 }
 
-// removeTimberjackRotations 删除 base 同目录下 <base去扩展名>-<ts>-<reason>.log
-// 形态的 timberjack 轮转副本。目录不存在=无副本（nil）；读目录/删除失败聚合返回。
-func removeTimberjackRotations(base string) error {
+// removeRuleLogRotations 删除 base 的全部已识别轮转副本。认领与孤儿扫描
+// 共用 ruleLogComponentOf，覆盖任意移位代次、压缩后缀与 timberjack 时间戳
+// 副本；目录不存在=无副本（nil），读目录/删除失败聚合返回。
+func removeRuleLogRotations(base string) error {
 	dir := filepath.Dir(base)
-	stem := strings.TrimSuffix(filepath.Base(base), filepath.Ext(base))
+	component := strings.TrimSuffix(filepath.Base(base), filepath.Ext(base))
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -411,13 +412,8 @@ func removeTimberjackRotations(base string) error {
 	}
 	for _, e := range entries {
 		name := e.Name()
-		if !strings.HasPrefix(name, stem+"-") {
-			continue
-		}
-		// 时间戳形状守卫：只有完整 <ts>-size.log 尾部才是本规则的轮转副本；
-		// 兄弟规则（caddy_id 以本 stem 为前缀，如 lb_abc 与 lb_abc-1/
-		// lb_abc-extra）的副本尾部不匹配 -> 保留。
-		if !timberjackRotationSuffix.MatchString(name[len(stem):]) {
+		owner, ok := ruleLogComponentOf(name)
+		if !ok || owner != component {
 			continue
 		}
 		// 归属反解：若整段主体本身是一条存活规则的 caddy_id，该文件是那条

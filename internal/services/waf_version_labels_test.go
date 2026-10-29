@@ -78,11 +78,8 @@ func TestSyncSwitchGuard_threatOnlyUpdateWarns(t *testing.T) {
 }
 
 func TestWafFilesRefVersionLabelsDiffer_labelsOnly(t *testing.T) {
-	oldCRS, oldXdb := crsLiveDir, ip2regionLivePath
 	dir := t.TempDir()
-	crsLiveDir = dir
-	ip2regionLivePath = filepath.Join(dir, "ip2region.xdb")
-	t.Cleanup(func() { crsLiveDir, ip2regionLivePath = oldCRS, oldXdb })
+	t.Cleanup(OverrideWafLivePathsForTest(dir, filepath.Join(dir, "ip2region.xdb")))
 
 	if err := os.WriteFile(filepath.Join(dir, "VERSION"), []byte("v4.28.0\n"), 0644); err != nil {
 		t.Fatal(err)

@@ -424,10 +424,10 @@ func InitTaskEngine(watchdogAdminURL, runtimeLogFile string) *taskengine.Engine 
 			// 单文件删除失败全部只打应用日志；waf-audit 归摄取链路管理。
 			res, line := logCleanupRound(rc.Ctx, logFile)
 			if err := res.Err(); err != nil {
-				TaskLogfWarn("log-cleanup", "cleanup", "%s", line)
+				TaskLogfWarnContext(rc.Ctx, "log-cleanup", "cleanup", "%s", line)
 				return err
 			}
-			TaskLogf("log-cleanup", "cleanup", "%s", line)
+			TaskLogfContext(rc.Ctx, "log-cleanup", "cleanup", "%s", line)
 			return nil
 		},
 	})
@@ -447,10 +447,10 @@ func InitTaskEngine(watchdogAdminURL, runtimeLogFile string) *taskengine.Engine 
 			// 失败传播：两段清理任一失败都让 task_runs 落 failed，且摘要行
 			// 不得称「清理完成」（失败轮谎报完成会把排障方向带偏）。
 			if err != nil {
-				TaskLogfWarn("audit-retention", "cleanup", "清理未完成：审计日志已删除 %d 条、任务运行历史已删除 %d 行后中止，错误：%v", auditDeleted, runsDeleted, err)
+				TaskLogfWarnContext(rc.Ctx, "audit-retention", "cleanup", "清理未完成：审计日志已删除 %d 条、任务运行历史已删除 %d 行后中止，错误：%v", auditDeleted, runsDeleted, err)
 				return err
 			}
-			TaskLogf("audit-retention", "cleanup", "清理完成：审计日志 %d 条、任务运行历史 %d 行（无过期数据时为 0）", auditDeleted, runsDeleted)
+			TaskLogfContext(rc.Ctx, "audit-retention", "cleanup", "清理完成：审计日志 %d 条、任务运行历史 %d 行（无过期数据时为 0）", auditDeleted, runsDeleted)
 			return nil
 		},
 	})
@@ -470,18 +470,18 @@ func InitTaskEngine(watchdogAdminURL, runtimeLogFile string) *taskengine.Engine 
 			// 失败轮不得写「清理完成」——task_runs 已落
 			// failed，任务日志称完成会把排障方向带偏。
 			if err != nil {
-				TaskLogfWarn("security-events-retention", "cleanup", "安全事件保留清理失败：本轮已删除事件 %d 条 · 聚合/高水位 %d 行后中止（保留期与条数上限），错误：%v", retention.Events, retention.Aggregates(), err)
+				TaskLogfWarnContext(rc.Ctx, "security-events-retention", "cleanup", "安全事件保留清理失败：本轮已删除事件 %d 条 · 聚合/高水位 %d 行后中止（保留期与条数上限），错误：%v", retention.Events, retention.Aggregates(), err)
 				return err
 			}
 			// 按构成披露：聚合/高水位删除不计入事件数时，仅报「删除 N 条事件」
 			// 会让停摆后首次清理显示 0（运维误判保留策略未生效）。
-			TaskLogf("security-events-retention", "cleanup", "安全事件保留清理完成：删除事件 %d 条 · 聚合 %d 行 · 被攻击目标聚合 %d 行 · 分钟状态键 %d 个（保留期与条数上限，无过期为 0）", retention.Events, retention.Rollup, retention.TargetRollup, retention.Highwater)
+			TaskLogfContext(rc.Ctx, "security-events-retention", "cleanup", "安全事件保留清理完成：删除事件 %d 条 · 聚合 %d 行 · 被攻击目标聚合 %d 行 · 分钟状态键 %d 个（保留期与条数上限，无过期为 0）", retention.Events, retention.Rollup, retention.TargetRollup, retention.Highwater)
 			if retention.AgeDeferred {
-				TaskLogf("security-events-retention", "cleanup", "年龄裁剪本轮跳过：等待预聚合（大屏窗口）回填完成后执行，过期原始事件暂不删除")
+				TaskLogfContext(rc.Ctx, "security-events-retention", "cleanup", "年龄裁剪本轮跳过：等待预聚合（大屏窗口）回填完成后执行，过期原始事件暂不删除")
 			}
 			// 行帽延后必须可见：否则运维会把「行数未收敛」当成清理失效。
 			if retention.RowCapDeferred {
-				TaskLogf("security-events-retention", "cleanup", "行帽裁剪本轮跳过：等待预聚合（大屏窗口）回填完成后执行，原始事件暂不按行数上限裁剪")
+				TaskLogfContext(rc.Ctx, "security-events-retention", "cleanup", "行帽裁剪本轮跳过：等待预聚合（大屏窗口）回填完成后执行，原始事件暂不按行数上限裁剪")
 			}
 			return nil
 		},
@@ -501,10 +501,10 @@ func InitTaskEngine(watchdogAdminURL, runtimeLogFile string) *taskengine.Engine 
 			deletedRules, err := PurgeOrphanMetricsHistory(rc.Ctx)
 			// 失败轮不得写「清理完成」（task_runs 已落 failed）。
 			if err != nil {
-				TaskLogfWarn("metrics-orphan-cleanup", "cleanup", "孤儿规则指标清理失败：本轮已清理 %d 个规则后中止，错误：%v", deletedRules, err)
+				TaskLogfWarnContext(rc.Ctx, "metrics-orphan-cleanup", "cleanup", "孤儿规则指标清理失败：本轮已清理 %d 个规则后中止，错误：%v", deletedRules, err)
 				return err
 			}
-			TaskLogf("metrics-orphan-cleanup", "cleanup", "孤儿规则指标清理完成：删除 %d 个规则的历史指标（无残留为 0）", deletedRules)
+			TaskLogfContext(rc.Ctx, "metrics-orphan-cleanup", "cleanup", "孤儿规则指标清理完成：删除 %d 个规则的历史指标（无残留为 0）", deletedRules)
 			return nil
 		},
 	})
@@ -587,7 +587,7 @@ func InitTaskEngine(watchdogAdminURL, runtimeLogFile string) *taskengine.Engine 
 					}
 					return nil
 				}
-				TaskLogf("cert-waiting-ca", "idle", "证书任务全部终态，自动停止补扫")
+				TaskLogfContext(rc.Ctx, "cert-waiting-ca", "idle", "证书任务全部终态，自动停止补扫")
 				// 审计项：用户显式开启该任务时，本轮自停会覆盖引擎内存
 				// loopEnabled，但 task_loop_prefs 仍记 enabled=1——重启后按偏好
 				// 复活、下一轮又因无活自停（空转）。自停即把偏好同步写回关闭，
@@ -596,9 +596,9 @@ func InitTaskEngine(watchdogAdminURL, runtimeLogFile string) *taskengine.Engine 
 				// （无记录=默认关闭，不新建行；业务驱动任务不适用本任务）。
 				if prefs := loadTaskLoopPrefs(); prefs["cert-waiting-ca"] {
 					if err := RecordTaskLoopPref("cert-waiting-ca", false); err != nil {
-						TaskLogfWarn("cert-waiting-ca", "idle", "写回调度偏好失败（重启后可能空转一轮）：%v", err)
+						TaskLogfWarnContext(rc.Ctx, "cert-waiting-ca", "idle", "写回调度偏好失败（重启后可能空转一轮）：%v", err)
 					} else {
-						TaskLogf("cert-waiting-ca", "idle", "已把用户开启的调度偏好同步回关闭：无在途证书任务；有任务入队时自动唤醒")
+						TaskLogfContext(rc.Ctx, "cert-waiting-ca", "idle", "已把用户开启的调度偏好同步回关闭：无在途证书任务；有任务入队时自动唤醒")
 					}
 				}
 				return nil
@@ -755,7 +755,7 @@ func InitTaskEngine(watchdogAdminURL, runtimeLogFile string) *taskengine.Engine 
 				// success（装配顺序缺陷被静默吞掉，CRS 永不更新）且不推进
 				// 排程槽——过期槽每 tick 重投。失败落定+任务日志行+auto
 				// 推进槽（与 m.advanceSlotIfAuto 同口径）。
-				TaskLogfWarn("crs", "failed", "CRS 更新管理器未初始化（InitCRSUpdateManager 必须先于 InitTaskEngine）")
+				TaskLogfWarnContext(rc.Ctx, "crs", "failed", "CRS 更新管理器未初始化（InitCRSUpdateManager 必须先于 InitTaskEngine）")
 				if rc.Trigger == "auto" {
 					advanceVersionSlotIfDue("security_crs_version")
 				}
@@ -769,6 +769,9 @@ func InitTaskEngine(watchdogAdminURL, runtimeLogFile string) *taskengine.Engine 
 			if snap := m.StatusSnapshot(); snap.Status == string(CRSStatusSkipped) {
 				// demote 中止落 skipped 终态而非 success
 				return taskengine.ErrTaskSkipped
+			}
+			if serr := m.ScheduleSlotError(); serr != nil {
+				return serr
 			}
 			if snap := m.StatusSnapshot(); snap.Status == string(CRSStatusCancelled) {
 				// 用户取消确定性落 cancelled（引擎 ctx 取消生效前的竞态窗
@@ -841,7 +844,7 @@ func InitTaskEngine(watchdogAdminURL, runtimeLogFile string) *taskengine.Engine 
 			if m == nil {
 				// 响亮失败（与 threat/crs 族同构）：return nil=静默 success
 				// 吞掉装配顺序缺陷，且不推进排程槽（过期槽每 tick 重投）。
-				TaskLogfWarn("ip2region", "failed", "IP2Region 更新管理器未初始化（InitIP2RegionUpdateManager 必须先于 InitTaskEngine）")
+				TaskLogfWarnContext(rc.Ctx, "ip2region", "failed", "IP2Region 更新管理器未初始化（InitIP2RegionUpdateManager 必须先于 InitTaskEngine）")
 				if rc.Trigger == "auto" {
 					advanceVersionSlotIfDue("security_ip2region_version")
 				}
@@ -855,6 +858,9 @@ func InitTaskEngine(watchdogAdminURL, runtimeLogFile string) *taskengine.Engine 
 			if snap := m.StatusSnapshot(); snap.Status == string(IP2RegionStatusSkipped) {
 				// demote 中止落 skipped 终态而非 success
 				return taskengine.ErrTaskSkipped
+			}
+			if serr := m.ScheduleSlotError(); serr != nil {
+				return serr
 			}
 			if snap := m.StatusSnapshot(); snap.Status == string(IP2RegionStatusCancelled) {
 				// 用户取消确定性落 cancelled（与 CRS/威胁族同口径）。

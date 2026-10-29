@@ -357,6 +357,15 @@ func (s *ClusterService) loadSectionHashInputs(ctx context.Context, store snapsh
 	if err := s.loadSnapshotGlobalSettings(ctx, store, snapshot); err != nil {
 		return err
 	}
+	// 本地重建与主端快照使用同一开关口径：rules 关闭时 security 哈希
+	// 排除有意保留的本地绑定，确保与实际 apply 后的数据形态一致。
+	switches, switchErr := readSyncSwitches(ctx, store)
+	if switchErr != nil {
+		return fmt.Errorf("读取节哈希同步开关: %w", switchErr)
+	}
+	snapshot.MasterSyncSwitches = &models.ClusterSyncSwitchesPayload{
+		Users: switches.Users, Rules: switches.Rules, Security: switches.Security,
+	}
 	var err error
 	// (security 节 payload 为纯表域——文件态由 wafFilesDrifted 专用通道比对,
 	// 与漂移守卫的轻量约束一致:不调用 BuildWafFileRef 的全树哈希。)
@@ -662,7 +671,7 @@ func (s *ClusterService) loadSnapshotGlobalSettings(ctx context.Context, store s
 		COALESCE(log_level,'info'),
 		COALESCE(task_log_size_mb,10), COALESCE(audit_log_size_mb,10), COALESCE(runtime_log_size_mb,100), COALESCE(audit_retention_months,3), COALESCE(jwt_expire_minutes,20), COALESCE(timezone,?),
 		COALESCE(acme_email,''), COALESCE(cert_expiry_days,?), COALESCE(cert_renewal_days,?), COALESCE(cert_renewal_attempts,?),
-		COALESCE(default_ca_provider_id,0), COALESCE(dns_provider,''), COALESCE(sync_interval,60),
+		COALESCE(default_ca_provider_id,0), COALESCE(sync_interval,60),
 		COALESCE(admin_tls_enabled,0), COALESCE(admin_tls_mode,'selfsigned'), COALESCE(admin_tls_cert,''), COALESCE(admin_tls_key,''),
 		COALESCE(mfa_write_guard,0), COALESCE(mfa_lockout_enabled,0), COALESCE(github_proxy_url,'https://v4.gh-proxy.org/'),
 		COALESCE(oidc_config,'')
@@ -670,7 +679,7 @@ func (s *ClusterService) loadSnapshotGlobalSettings(ctx context.Context, store s
 		&snapshot.BasicSettings.LogLevel,
 		&snapshot.BasicSettings.TaskLogSizeMB, &snapshot.BasicSettings.AuditLogSizeMB, &snapshot.BasicSettings.RuntimeLogSizeMB, &snapshot.BasicSettings.AuditRetentionMonths, &snapshot.BasicSettings.JWTExpireMinutes, &snapshot.BasicSettings.Timezone,
 		&snapshot.BasicSettings.ACMEEmail, &snapshot.BasicSettings.CertExpiryDays, &snapshot.BasicSettings.CertRenewalDays, &snapshot.BasicSettings.CertRenewalAttempts,
-		&snapshot.BasicSettings.DefaultCAProviderID, &snapshot.BasicSettings.DNSProvider, &snapshot.BasicSettings.SyncInterval,
+		&snapshot.BasicSettings.DefaultCAProviderID, &snapshot.BasicSettings.SyncInterval,
 		&snapshot.BasicSettings.AdminTLSEnabled, &snapshot.BasicSettings.AdminTLSMode, &snapshot.BasicSettings.AdminTLSCert, &snapshot.BasicSettings.AdminTLSKey,
 		&snapshot.BasicSettings.MFAWriteGuard, &snapshot.BasicSettings.MFALockoutEnabled, &snapshot.BasicSettings.GitHubProxyURL, &snapshot.BasicSettings.OIDCConfig)
 	if err != nil {

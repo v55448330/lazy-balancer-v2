@@ -64,7 +64,16 @@ func legacyContainsRule(policy *models.SecurityPolicy, ruleTriggered, clientIP s
 			}
 			aclList = inline
 		}
-		nonEmpty := len(aclList) > 0 || ipListRefsNonEmpty(policy.IPACLListRefs)
+		// 「名单非空」按**实际生效条目**判定（渲染面同口径）：空白条目与
+		// refs JSON 存在本身都不构成发射面——被引用的名单解析为空集时
+		// deny 渲染出空 @ipListFast（零匹配），allow 渲染出恒拒面。
+		nonEmpty := false
+		for _, entry := range aclList {
+			if strings.TrimSpace(entry) != "" {
+				nonEmpty = true
+				break
+			}
+		}
 		if policy.IPACLMode == "allow" {
 			return !nonEmpty
 		}
@@ -355,6 +364,35 @@ func TestSecurityEventsIPFamilyEventSurface_usesIndexedCapability(t *testing.T) 
 				t.Fatalf("surface=%v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestSecurityEventsACLReferences_emptyResolvedListHasNoEntries(t *testing.T) {
+	newPolicy := func(mode string) *models.SecurityPolicy {
+		return &models.SecurityPolicy{
+			ID: 1, IPACLEnabled: true, IPACLMode: mode,
+			IPACLList: `[]`, IPACLListRefs: `[7]`, MergedACLList: []string{},
+		}
+	}
+
+	// allow 空生效集是恒拒面；refs JSON 非空不能把真实空集改成非空。
+	if got := securityEventsPolicyContainsRule(newPolicy("allow"), "2", "198.51.100.9"); !got {
+		t.Fatal("allow policy with refs resolving to an empty list must own its fail-closed id:2 event")
+	}
+	// deny 空生效集没有匹配面，contains 与 fallback 能力层均不得认领。
+	deny := newPolicy("deny")
+	if got := securityEventsPolicyContainsRule(deny, "2", ""); got {
+		t.Fatal("deny policy with an empty resolved reference must not claim id:2")
+	}
+	if got := securityEventsIPFamilyEventSurface(deny, "blocked", "2"); got {
+		t.Fatal("deny policy with an empty resolved reference must not gain fallback capability")
+	}
+
+	// 回归：同一引用解析出真实条目时保持既有能力。
+	deny.MergedACLList = []string{"203.0.113.0/24"}
+	deny.ACLIPIndex = models.SecurityPolicyIPListIndex{}
+	if got := securityEventsIPFamilyEventSurface(deny, "blocked", "2"); !got {
+		t.Fatal("non-empty resolved reference must remain ACL-capable")
 	}
 }
 

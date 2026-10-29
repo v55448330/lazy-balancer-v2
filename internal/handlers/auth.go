@@ -274,13 +274,7 @@ func (h *Handlers) Login(c *gin.Context) {
 		services.Logf("warn", "登录成功清零登录失败计数与锁定失败: user_id=%d: %v", user.ID, err)
 	}
 
-	h.respondLogin(c, user, meta.PasswordVersion)
-}
-
-func (h *Handlers) respondLogin(c *gin.Context, user models.User, passwordVersion int64) {
-	// D-新6：last_login 更新与「登录成功」审计仅登录路径——step-up
-	// （verify-step）复用本函数时不再记假登录/刷新 last_login。
-	h.respondLoginWithMFA(c, user, passwordVersion, 0, true)
+	h.respondLoginWithMFA(c, user, meta.PasswordVersion, 0, true, "")
 }
 
 // loginExpireMinutes 读取 global_config.jwt_expire_minutes 并钳制到合法区间
@@ -359,7 +353,7 @@ func signSessionJWT(secret string, userID int, username, role string, passwordVe
 // respondLoginWithMFA 携带 mfa_ts 声明签发（0=未验证/不写入——非 MFA 用户登录、
 // MFA 首次签发在 verify 成功时传 now；票据登录暂传 0）。isLogin=false 时跳过
 // 登录审计与 last_login 更新（verify-step 的 step-up 场景， D-新6）。
-func (h *Handlers) respondLoginWithMFA(c *gin.Context, user models.User, passwordVersion int64, mfaTs int64, isLogin bool) {
+func (h *Handlers) respondLoginWithMFA(c *gin.Context, user models.User, passwordVersion int64, mfaTs int64, isLogin bool, authMethod string) {
 	// node_mode 仅用于登录响应体的展示字段（JWT claim 已删除——
 	// jwtAuth 不消费，客户端声明无意义；响应体 NodeMode 保留）。
 	// 三态化：角色查询失败/库未装配不得静默呈现 master——写闸与 /system/info
@@ -376,12 +370,8 @@ func (h *Handlers) respondLoginWithMFA(c *gin.Context, user models.User, passwor
 		nodeMode = "slave"
 	}
 
-	// v2.3.0:OIDC 会话经票据登录(集群快捷登录)到对端节点时保持身份语义
-	// ——auth_method 声明随签发透传(缺省=local),写保护/MFA 门/前端 UI 同口径。
-	authMethod := ""
-	if user.AuthProvider == "oidc" {
-		authMethod = "oidc"
-	}
+	// authMethod 由实际认证路径显式传入：本地密码登录即使读到导入遗留的
+	// auth_provider=oidc 混合行，也不能获得 OIDC 的 MFA 写门豁免。
 	tokenString, _, err := signSessionJWT(h.cfg.JWTSecret, user.ID, user.Username, user.Role, passwordVersion, mfaTs, authMethod)
 	if err != nil {
 		services.RecordAuditLog(user.Username, "登录失败", "用户认证", services.AuditResultPart("internal_error"), c.ClientIP())
@@ -439,6 +429,8 @@ func (h *Handlers) Logout(c *gin.Context) {
 		return
 	}
 	if _, err := db.DB.Exec("INSERT INTO revoked_jti (jti_hash,expires_at) VALUES (?,?) ON CONFLICT(jti_hash) DO UPDATE SET expires_at=excluded.expires_at", revocationHash, expiresAtTime.UTC().Format(models.RevokedTokenTimeFormat)); err != nil {
+		services.Logf("error", "登出吊销会话失败（令牌尚未吊销）: username=%s: %v", usernameStr, err)
+		services.RecordAuditLog(usernameStr, "登出", "用户认证", services.AuditResultPart("failure"), c.ClientIP())
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "登出失败"})
 		return
 	}

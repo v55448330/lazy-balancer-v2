@@ -46,11 +46,6 @@ func (h *Handlers) ReportClusterNode(c *gin.Context) {
 	if rejectNodeWriteDuringImport(c) {
 		return
 	}
-	// 与快照端点对称加 requireMaster——降级主节点残留 nodes 行时,
-	// 旧从节点上报照常写入(无审批),再提升后旧令牌静默重组集群。
-	if !h.requireMaster(c) {
-		return
-	}
 	var req models.ClusterReport
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, clusterReportMaxBytes)
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -58,9 +53,26 @@ func (h *Handlers) ReportClusterNode(c *gin.Context) {
 		return
 	}
 	nodeID := c.GetInt("cluster_node_id")
+	recordDetached := func(result string) {
+		services.RecordAuditLog("system", "脱离", "集群节点", services.FormatAuditDetail(fmt.Sprintf("节点 %d", nodeID), services.AuditResultPart(result)), c.ClientIP())
+	}
+	// 与快照端点对称加 requireMaster——降级主节点残留 nodes 行时,
+	// 旧从节点上报照常写入(无审批),再提升后旧令牌静默重组集群。
+	// detached 需先解码再进门，才能给主节点门的拒绝留下同资源失败审计。
+	if !h.requireMaster(c) {
+		if req.Detached {
+			result := "failed"
+			if c.Writer.Status() == http.StatusForbidden {
+				result = "blocked"
+			}
+			recordDetached(result)
+		}
+		return
+	}
 	if req.Detached {
 		if err := h.clusterService.DeleteNode(c.Request.Context(), nodeID); err != nil {
 			if errors.Is(err, services.ErrNotMasterNode) {
+				recordDetached("blocked")
 				clusterMasterForbidden(c, err)
 				return
 			}
@@ -71,10 +83,11 @@ func (h *Handlers) ReportClusterNode(c *gin.Context) {
 				c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "节点已不在集群"})
 				return
 			}
+			recordDetached("failed")
 			clusterError(c, http.StatusInternalServerError, "节点脱离处理失败", err)
 			return
 		}
-		services.RecordAuditLog("system", "脱离", "集群节点", services.FormatAuditDetail(fmt.Sprintf("节点 %d", nodeID), services.AuditResultPart("success")), c.ClientIP())
+		recordDetached("success")
 		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "节点已脱离集群"})
 		return
 	}

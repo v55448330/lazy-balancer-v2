@@ -6,6 +6,7 @@ package services
 // 异步触发错误分类。
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -78,14 +79,14 @@ func TestInvalidateTaskLogSizeCache_usesNewValueImmediately(t *testing.T) {
 		t.Fatal(err)
 	}
 	InvalidateTaskLogSizeCache()
-	if got := getTaskLogSizeBytes(); got != 10<<20 {
+	if got := getTaskLogSizeBytes(context.Background()); got != 10<<20 {
 		t.Fatalf("初始阈值=%d want 10MB", got)
 	}
 	if _, err := db.DB.Exec(`UPDATE global_config SET task_log_size_mb=20 WHERE id=1`); err != nil {
 		t.Fatal(err)
 	}
 	InvalidateTaskLogSizeCache()
-	if got := getTaskLogSizeBytes(); got != 20<<20 {
+	if got := getTaskLogSizeBytes(context.Background()); got != 20<<20 {
 		t.Fatalf("缓存失效后阈值=%d want 20MB（仍命中旧缓存）", got)
 	}
 }

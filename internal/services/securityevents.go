@@ -822,6 +822,16 @@ func securityEventsLoadMappings() (map[string]securityEventsRuleRef, map[string]
 	// refs-only deny 策略无法认领自己的 id:2 事件（MergedACLList 恒空，回退
 	// inline 判定失败，事件错挂到绑定顺序首条启用策略）。
 	resolvePolicyIPListRefs(policies, nil)
+	// 映射会同时交给 IPC 批摄取与 live 尾读。所有懒解析字段必须在代际
+	// 发布前构建完成；之后共享策略及其分析结果只读，跨通道命中同一份缓存，
+	// 不引入第二份分析缓存，也不让首事件读者看到半初始化状态。
+	for _, p := range policies {
+		securityEventsPolicyCRSGroups(p)
+		policyCustomRulesCached(p, nil)
+		securityEventsPolicyCustomEmitIDs(p)
+		securityEventsPolicyACLIndex(p)
+		securityEventsPolicyBlacklistIndex(p)
+	}
 	if err := polRows.Err(); err != nil {
 		return nil, nil, nil, fmt.Errorf("security events: iterate policies: %w", err)
 	}
@@ -1113,7 +1123,7 @@ func securityEventsPolicyContainsRuleWithExclusions(policy *models.SecurityPolic
 		if !acl.OK {
 			return false
 		}
-		nonEmpty := acl.Entries > 0 || ipListRefsNonEmpty(policy.IPACLListRefs)
+		nonEmpty := acl.NonEmpty
 		if policy.IPACLMode == "allow" {
 			// 空 allow 名单发射的是 fail-closed 恒拒面，事件应由该策略认领；
 			// 非空 allow 的 id:2 仍保持既有「不拥有」口径。
@@ -1307,10 +1317,9 @@ func securityEventsRuleIsCRSFamily(ruleTriggered string) bool {
 // 规则整条跳过（security.go「if !cr.Enabled { continue }」，合成段 1000000+ 同
 // 一循环同一过滤），无启用自定义规则的策略物理上不产任何自定义族事件
 // （blocked/logged 同判）。策略粒度能力，与 IP 族 surface 同口径：规则 id 归属
-// 与名单成员一样归 contains（custom_rules 引用集比对），此处只核「是否存在启用
-// 规则」——停用/悬空引用均不计能力。读取经 policyCustomRulesCached（store=nil
-// 回退 db.DB，与 contains 读 CustomRules 原文同库同口径；摄取 tick 单线程、
-// 策略对象每 tick 重载，惰性解析单 tick 内按策略记忆化，零事件 tick 零查询）。
+// 规则」——停用/悬空引用均不计能力。共享映射在代际发布前已构建该缓存；
+// 独立策略仍在首次调用时解析并复用，读取统一经 policyCustomRulesCached
+// （store=nil 回退 db.DB，与 contains 读 CustomRules 原文同库同口径）。
 // 返回 false 不代表事件归零：attribute 层能力首选层落空后仍经「模式/动作门」
 // 归属（摄取必有归属）。
 func securityEventsCustomRulesEventSurface(p *models.SecurityPolicy) bool {
@@ -1318,7 +1327,7 @@ func securityEventsCustomRulesEventSurface(p *models.SecurityPolicy) bool {
 		return false
 	}
 	for _, cr := range policyCustomRulesCached(p, nil) {
-		if cr.Enabled {
+		if customRuleEmittable(cr) {
 			return true
 		}
 	}
@@ -1367,7 +1376,7 @@ func securityEventsIPFamilyEventSurface(p *models.SecurityPolicy, action, ruleTr
 	// 名单判据走每 tick 一次的解析快照（ACL 前缀集/原始条目数），逐事件
 	// 不再重解析名单或重复 Unmarshal 黑名单；NonEmpty 与 mergedACLList 同源。
 	aclIndex := securityEventsPolicyACLIndex(p)
-	aclCapable := p.IPACLEnabled && (p.IPACLMode == "allow" || aclIndex.NonEmpty || ipListRefsNonEmpty(p.IPACLListRefs))
+	aclCapable := p.IPACLEnabled && (p.IPACLMode == "allow" || aclIndex.NonEmpty)
 	switch n {
 	case 2:
 		if p.IPACLMode == "deny" && aclCapable {
@@ -2353,6 +2362,11 @@ func (t *securityEventsTailer) securityEventsProcessPass(ctx context.Context, f 
 	// batchInserted 当前未提交事务内实际插入数；仅在 commit 成功后并入
 	// passInsertedTotal。回滚/提交失败的行不得计入任务日志。
 	batchInserted := 0
+	// 健康丢失量同样属于本事务的提交后效果：忽略行/回滚/提交失败均不得
+	// 累加；skip 在解析期只记录 pending，commit 成功才发布到进程级健康位。
+	var batchMessagesDropped uint64
+	var batchSkippedBytes int64
+	var batchSkippedRegions int
 	// 任何返回路径都回填本 pass 实际插入数——补采（归档/活文件尾部）
 	// 的 delta 摄取同样产生 lastIngested，供任务日志「摄取 N 条」消费。
 	defer func() { t.lastIngested = passInsertedTotal }()
@@ -2427,6 +2441,13 @@ func (t *securityEventsTailer) securityEventsProcessPass(ctx context.Context, f 
 		securityEventsIngestCommits.Add(1)
 		passInsertedTotal += batchInserted
 		batchInserted = 0
+		securityEventsMessagesDropped.Add(batchMessagesDropped)
+		if batchSkippedBytes > 0 || batchSkippedRegions > 0 {
+			securityEventsRecordSkips(batchSkippedBytes, batchSkippedRegions)
+		}
+		batchMessagesDropped = 0
+		batchSkippedBytes = 0
+		batchSkippedRegions = 0
 		// 归并状态并入共享表必须持锁（批内 lookup 已取锁，此处 acquire 对已持有
 		// 的形态是幂等 no-op，同时把「record 必须在持有期内」钉在本函数内）。
 		hold.acquire()
@@ -2526,7 +2547,8 @@ func (t *securityEventsTailer) securityEventsProcessPass(ctx context.Context, f 
 						t.tailConsumedTo = info.Size()
 						return offset, nil
 					}
-					securityEventsRecordSkips(next-offset, 1)
+					batchSkippedBytes += next - offset
+					batchSkippedRegions++
 					Logf("error", "security events ingestion: skipping unreadable audit data before offset %d: %v", next, err)
 					offset = next
 					decoderStart = next
@@ -2585,7 +2607,8 @@ func (t *securityEventsTailer) securityEventsProcessPass(ctx context.Context, f 
 				// 以偏移变化自然重置计数，恢复完整宽限。
 				t.stallOffset, t.stallCount = next, securityEventsDecodeStallLimit+1
 			}
-			securityEventsRecordSkips(next-offset, 1)
+			batchSkippedBytes += next - offset
+			batchSkippedRegions++
 			Logf("error", "security events ingestion: skipping unreadable audit data before offset %d (stalled %d ticks): %v", next, t.stallCount, err)
 			offset = next
 			decoderStart = next
@@ -2600,6 +2623,8 @@ func (t *securityEventsTailer) securityEventsProcessPass(ctx context.Context, f 
 		docEnd := decoderStart + decoder.InputOffset()
 		rec, perr := securityEventsParseTransaction(raw)
 		if perr != nil {
+			batchSkippedBytes += docEnd - offset
+			batchSkippedRegions++
 			// 空 transaction_id 是数据质量问题而非摄取故障，debug 级记录即可；
 			// 其余畸形事务仍按 error 级提示。
 			level := "error"
@@ -2608,9 +2633,6 @@ func (t *securityEventsTailer) securityEventsProcessPass(ctx context.Context, f 
 			}
 			Logf(level, "security events ingestion: skipping malformed transaction id=%s: %v", securityEventsTransactionID(raw), perr)
 		} else {
-			if rec.messagesDropped > 0 {
-				securityEventsMessagesDropped.Add(uint64(rec.messagesDropped))
-			}
 			rule := securityEventsRuleRef{}
 			if rec.AttributionRuleID != "" {
 				rule = rulesByID[rec.AttributionRuleID]
@@ -2686,7 +2708,7 @@ func (t *securityEventsTailer) securityEventsProcessPass(ctx context.Context, f 
 						attackFlowBatch[idx].action = rec.Action
 						attackFlowBatch[idx].ruleTriggered = rec.RuleTriggered
 					} else if SecurityEventCountsAsAttack(rec.Action, rec.RuleTriggered) &&
-						!IsReservedClientIP(rec.ClientIP) {
+						strings.TrimSpace(rec.ClientIP) != "" && !IsReservedClientIP(rec.ClientIP) {
 						attackFlowIndex[dedupeKey] = len(attackFlowBatch)
 						attackFlowBatch = append(attackFlowBatch, threatScreenAttackFlowItem{
 							at:            time.Unix(prev.atSec, 0).UTC(),
@@ -2729,6 +2751,7 @@ func (t *securityEventsTailer) securityEventsProcessPass(ctx context.Context, f 
 				// entryAutobanAction 记录本行实际喂入的动作（跨 pass 改判决策依据）。
 				entryAutobanAction := autobanFedUnknown
 				if affected == 1 {
+					batchMessagesDropped += uint64(rec.messagesDropped)
 					eventAt, _ := time.ParseInLocation("2006-01-02 15:04:05", rec.EventTime, time.UTC)
 					if eventAt.IsZero() {
 						eventAt = time.Now().UTC()
@@ -2757,7 +2780,7 @@ func (t *securityEventsTailer) securityEventsProcessPass(ctx context.Context, f 
 					// 高频内网扫描会占满环与单轮 limit，把真实外网攻击弧挤出
 					// 窗口（静默表现为「攻击变少」）。
 					if threatScreenAttackFlowSampleN.Load() > 0 && SecurityEventCountsAsAttack(rec.Action, rec.RuleTriggered) &&
-						!IsReservedClientIP(rec.ClientIP) {
+						strings.TrimSpace(rec.ClientIP) != "" && !IsReservedClientIP(rec.ClientIP) {
 						// key 携带请求去重键（不可去重时为 0）：跨批改判据此在环内
 						// 原地更新本条目，而不是再追加一条。
 						var flowKey uint64
@@ -3224,7 +3247,8 @@ func securityEventsAuditWriterStatsFailurePath() string {
 var securityEventsProcessStart = time.Now()
 
 // securityEventsMessagesDropped 是写侧单行 messages 截断量的进程级累计：
-// 摄取每解析一行按行内 messages_dropped 递增。被写侧省略的命中条目无法回填，
+// 仅在实际插入随事务提交成功后按行内 messages_dropped 递增；INSERT OR IGNORE
+// 忽略的重放行、回滚与提交失败均不重复放大。被写侧省略的命中条目无法回填，
 // 只能作为丢失事实披露（与写侧计数同为一等健康信号）。
 var securityEventsMessagesDropped atomic.Uint64
 

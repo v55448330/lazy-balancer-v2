@@ -52,20 +52,16 @@ test('member() 跳过字符串/模板量/注释中的大括号：字面量不参
   assert.doesNotMatch(body, /const after/, '字面量/注释中的 { 不得使切片越界')
 })
 
-test('member() 形状不符时硬失败，不静默返回错误切片', () => {
-  // 单表达式箭头体没有块体：`{\n` 会顺延到下一个成员，切片越界后
-  // doesNotMatch 假绿 / match 命中邻接代码假绿——必须抛错而不是返回。
-  assert.throws(
-    () => member(['const f = () => ({ a: 1 })', 'const g = (): void => {', '  done()', '}'].join('\n'), 'const f = '),
-    /has no block body/,
-  )
-  // 顶层 `;` 结束的声明同理（左花括号属于对象字面量，不是成员体）
+// member() 的基础形状自测（缺 marker / 单表达式箭头 / 括号不平衡）单源在
+// tests/helpersStripComments.spec.ts（该文件是 helper 自己的 spec）。这里只钉本
+// 文件依赖的增量形态：顶层 `;` 声明不是成员体、声明头里的注释与模板量不参与配对。
+test('member() 声明边界：顶层 ; 声明不是成员体，声明头注释/模板量不参与配对', () => {
+  // 顶层 `;` 结束的声明：左花括号属于对象字面量，不是成员体——若当成块体会截出
+  // 一段「看起来有内容」的切片，后续 doesNotMatch 假绿。
   assert.throws(
     () => member(['const cfg = { a: 1 };', 'function next(): void {', '  done()', '}'].join('\n'), 'const cfg = '),
     /has no block body/,
   )
-  // marker 不存在：必须指名报错，不得返回空串让断言空转
-  assert.throws(() => member('function a(): void {\n}', 'function b('), /missing member/)
   // 声明头里的 // 注释、块注释、模板量都不参与配对，仍须取到完整函数体
   const header = [
     'function withHeader(',

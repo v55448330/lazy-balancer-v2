@@ -22,10 +22,7 @@ func TestApplyWafFileBundle_invalidatesCRSRuleCount(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(src, "crs", "VERSION"), []byte("v4.14.0"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	oldLive, oldXdb := crsLiveDir, ip2regionLivePath
-	t.Cleanup(func() { crsLiveDir, ip2regionLivePath = oldLive, oldXdb })
-	crsLiveDir = filepath.Join(src, "crs")
-	ip2regionLivePath = filepath.Join(src, "ip2region.xdb")
+	t.Cleanup(OverrideWafLivePathsForTest(filepath.Join(src, "crs"), filepath.Join(src, "ip2region.xdb")))
 
 	bundle := BuildWafFileBundle()
 	if bundle == nil || len(bundle.CRSTarGz) == 0 {
@@ -46,7 +43,7 @@ func TestApplyWafFileBundle_invalidatesCRSRuleCount(t *testing.T) {
 		t.Fatalf("预热 RuleCount=%d, want 0", got)
 	}
 
-	crsLiveDir = liveDir
+	t.Cleanup(OverrideWafLivePathsForTest(liveDir, ip2regionLivePath))
 	changed, _, _, err := ApplyWafFileBundle(bundle)
 	if err != nil || !changed {
 		t.Fatalf("apply crsChanged=%v err=%v", changed, err)
@@ -67,10 +64,7 @@ func TestApplyWafFileBundle_failureInvalidatesCRSRuleCount(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(liveDir, "rules", "REQUEST-900.conf"), []byte("SecRule old\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	oldLive, oldXdb := crsLiveDir, ip2regionLivePath
-	t.Cleanup(func() { crsLiveDir, ip2regionLivePath = oldLive, oldXdb })
-	crsLiveDir = liveDir
-	ip2regionLivePath = filepath.Join(t.TempDir(), "ip2region.xdb")
+	t.Cleanup(OverrideWafLivePathsForTest(liveDir, filepath.Join(t.TempDir(), "ip2region.xdb")))
 
 	m := newCRSUpdateManager(func() error { return nil })
 	m.crsDir = liveDir

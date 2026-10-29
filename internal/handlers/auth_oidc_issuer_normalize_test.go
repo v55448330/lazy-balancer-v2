@@ -243,6 +243,13 @@ func TestOIDCSettingsUpdate_rejectsIdentityIssuerMigrationConflict(t *testing.T)
 	if !strings.Contains(stored, legacyIssuer) {
 		t.Fatalf("冲突拒绝时不得写回配置（仍应保留原值）：%s", stored)
 	}
+	var auditDetail string
+	if err := db.AuditDB.QueryRow(`SELECT detail FROM audit_log WHERE action='更新失败' AND resource='OIDC 配置' ORDER BY id DESC LIMIT 1`).Scan(&auditDetail); err != nil {
+		t.Fatalf("issuer conflict must write failure audit: %v", err)
+	}
+	if !strings.Contains(auditDetail, "user-sub-1") || !strings.Contains(auditDetail, "失败") {
+		t.Fatalf("issuer conflict audit detail=%q, want subject and failure", auditDetail)
+	}
 }
 
 // Given 旧 issuer 下已有一行被禁用的 OIDC 身份。
@@ -331,5 +338,38 @@ func TestOIDCSettingsUpdate_countsRawIssuerStaleIdentitiesOnIssuerChange(t *test
 	}
 	if response.Data.StaleIdentityRows != 1 {
 		t.Fatalf("stale_identity_rows=%d body=%s, want raw-only row counted as 1", response.Data.StaleIdentityRows, rec.Body.String())
+	}
+}
+
+func TestOIDCSettingsDelete_reportsResidualIdentitiesAndRecovery(t *testing.T) {
+	router, _ := setupOIDCTest(t, newMockIdP(t))
+	for _, subject := range []string{"sub-1", "sub-2"} {
+		if _, err := db.DB.Exec(`INSERT INTO users (username,password_hash,role,is_enabled,auth_provider,oidc_subject,oidc_issuer)
+			VALUES (?, '', 'user', 1, 'oidc', ?, 'https://idp.example.com')`, "sso-"+subject, subject); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodDelete, "/api/v1/settings/oidc", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200", recorder.Code, recorder.Body.String())
+	}
+	var response struct {
+		Message string `json:"message"`
+		Data    struct {
+			OIDCIdentityRows int `json:"oidc_identity_rows"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Data.OIDCIdentityRows != 2 {
+		t.Fatalf("oidc_identity_rows=%d body=%s, want 2", response.Data.OIDCIdentityRows, recorder.Body.String())
+	}
+	for _, want := range []string{"无法登录", "同一 issuer", "重新开户"} {
+		if !strings.Contains(response.Message, want) {
+			t.Fatalf("delete message=%q, want recovery/rebind hint containing %q", response.Message, want)
+		}
 	}
 }

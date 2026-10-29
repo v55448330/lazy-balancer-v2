@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -284,4 +285,31 @@ func TestGetSecurityEventToastSummary_excludesEventsArrivingAfterMaxRead(t *test
 	if next != lateID {
 		t.Fatalf("第二轮 next_id=%d, want %d", next, lateID)
 	}
+}
+
+func TestAPIDocs_toastSummaryZeroCursorMatchesBoundedLatestSemantics(t *testing.T) {
+	for _, route := range apiDocRoutes {
+		if route.Method != http.MethodGet || route.Path != "/security/events/toast-summary" {
+			continue
+		}
+		if strings.Contains(route.Description, "since_id=0 非 baseline 从最早记录扫描") {
+			t.Fatalf("zero-cursor documentation promises an unbounded oldest-first replay: %s", route.Description)
+		}
+		for _, want := range []string{"since_id=0 非 baseline 从最新记录倒序聚合", "最多 1200 条", "更老事件跳过"} {
+			if !strings.Contains(route.Description, want) {
+				t.Errorf("toast-summary documentation missing %q: %s", want, route.Description)
+			}
+		}
+		contract := apiDocContracts["GET /security/events/toast-summary"]
+		for _, parameter := range contract.queryParameters {
+			if parameter.name != "since_id" {
+				continue
+			}
+			if strings.Contains(parameter.description, "从最早记录扫描") || !strings.Contains(parameter.description, "从最新记录倒序聚合") {
+				t.Errorf("since_id query documentation contradicts bounded latest-first aggregation: %s", parameter.description)
+			}
+		}
+		return
+	}
+	t.Fatal("toast-summary route missing from API documentation")
 }
