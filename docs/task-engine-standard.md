@@ -5,7 +5,7 @@
 >
 > 口径说明：本文是工程标准文档（不在 README 用户文档索引内），用于工程实现与裁定溯源；面向用户/官网的文案不得引用内部流程口径。
 
-## 0. 职责与边界（v2.1，用户裁定 2026-10-30）
+## 0. 职责与边界（v2.2，用户裁定 2026-10-30）
 
 **原则**：统一任务引擎提供通用全生命周期能力（调度、单飞、角色、启停、取消、运行历史、日志滚动、状态镜像、导入屏障）；任务与业务逻辑解耦；**禁止引擎外的调度与生命周期入口**。
 
@@ -41,20 +41,38 @@
 - 子资源只允许**状态与准入策略**（pending/在途/并发上限/最小间隔）留在业务域。
 - 子资源的**泵**必须由宿主 daemon 的 `RunTicker` 的 `fn` 遍历驱动（如 `Manager.DispatchOnce`），不得 `go queue.loop()`。
 
-### 0.5 违规反例（禁止复现，已在本仓发生过）
+### 0.5 分类：违规（必须修）与范围外（定义排除）
 
-| 反例 | 位置 | 违规点 |
-|---|---|---|
-| 每个 CA 提供商一个 `go q.loop()` | `internal/services/caqueue.go:1163-1166` | 子资源自建 goroutine；不在引擎注册表；不可枚举/停止/观测 |
-| manager 内自建 goroutine 由 Run 体等待 | `crsupdate.go:348-361`、`ip2regionupdate.go:173-176` | 擦边：执行实现外溢；须登记豁免理由（见 §6.4） |
-| legacy `RecordRunStart/Finish` 直写 `task_runs` | `handlers/autobackup.go:354-366` | 第二写点；仅允许装配/测试兜底，生产必须走引擎 RunID |
+**违规 = 独立于任务运行、自行定期触发工作的循环。必须改为注册任务，无例外、无豁免、无「后续迁移」。**
+
+| 违规项（当前存在） | 位置 |
+|---|---|
+| 每个 CA 提供商一个 `go q.loop()` | `internal/services/caqueue.go:1163-1166` |
+| `MetricsService.Start` 30s 抓取 + 24h 清理 | `internal/services/services.go:79-114` |
+| rollup warmer 60s（启动即首轮） | `internal/handlers/security_threat_screen.go:1085-1124` |
+| caddy-restart 触发源 2s 轮询 | `internal/handlers/handlers.go:1175-1203` |
+| API-Key last_used 1min flush + 1h 清理 | `internal/db/apikey_last_used.go:76-125` |
+| 运行日志尺寸阈值 30s | `internal/services/logrotate.go:41-92` |
+| 时区/日志级别 30s | `internal/services/tz.go:48-92` |
+| 限流桶内存清扫 1min | `internal/middleware/middleware.go:703-708` |
+| legacy `RecordRunStart/Finish` 直写 `task_runs` | `internal/handlers/autobackup.go:354-366` |
+
+**范围外（不是调度器，不构成任何豁免）**：
+
+| 类别 | 判据 |
+|---|---|
+| 任务体内的子 goroutine | 由 Run 派生、被 Run 同步等待、随 Run 的 ctx 结束（如 crs/ip2region manager 的执行协程）——属执行实现 |
+| 单次运行内的有界轮询/等待 | 随本次 Run ctx 结束（如 acme 3–5s 传播/验证轮询） |
+| 一次性 goroutine | 有 `WaitGroup`/deadline 收口，不跨调用存活 |
+| 引擎内部 ticker | 引擎自身实现（`engine.go:1960`），不属于"任务外挂调度器" |
+| 生命周期 Teardown | 停止/关闭路径的清理（如 `db.Close` 内的 flusher 停止） |
 
 ### 0.6 机器守卫（缺一即视为未完成）
 
-1. 注册表断言：每个 `Daemon` 的 `Run` 必须调用 `RunTicker` 或命中 §6.4 豁免登记（否则单测失败）。
-2. 静态扫描：`internal/services`、`internal/handlers`、`caddygeoip` 等业务目录禁止新增 `go func()` 常驻循环与 `time.NewTicker`（一次性/有界工具需 `//loop-exempt: <理由>` 且入 §6.4）。
+1. 注册表断言：每个 `Daemon` 的 `Run` 必须调用 `RunTicker`（或为范围外的阻塞协议循环，须在 §6.4 范围表登记判据，而非豁免申请）。
+2. 静态扫描：`internal/services`、`internal/handlers`、`internal/db`、`internal/middleware` 禁止存在 `time.NewTicker` / 常驻 `go func()` / `time.AfterFunc` 自续循环（§6.4 范围外形态须以 `//scope-exempt: <类别>` 标注并命中范围表判据，不得新增第四类）。
 3. 子资源循环守卫：禁止 `go <queue|worker>.loop()` 形态。
-4. 唤醒守卫：业务侧只允许 `WakeTask/RearmLoop/StopLoop`；`StartLoop` 仅限控制面与 §5 裁定的角色路径。
+4. 唤醒守卫：业务侧只允许 `WakeTask/RearmLoop/StopLoop`；`StartLoop` 仅限控制面（用户操作）。执行「禁止任何业务事件/角色翻转/导入/就绪路径调用 StartLoop」。
 
 ## 1. 四类型定义
 
@@ -381,27 +399,35 @@ task_runs 保留 90 天（audit-retention 每日清理）。`Engine.Stop` 先取
 | `Engine.IsRunning` | 诊断投影（`Run 存活 或 loopEnabled∧roleAllows`），**不得**用作「是否正在执行」判据——该语义用 `IsTaskInFlight` |
 | `RoleSlaveOnly` | 仅测试注册使用（生产 19 任务全集只有 RoleAny/RoleMasterOnly） |
 
-### 6.4 循环豁免登记（缺理由即违规）
+### 6.4 范围外形态登记（判据，不是豁免）
 
-| 位置 | 形态 | 豁免理由 | 停止路径 |
-|---|---|---|---|
-| `db/apikey_last_used.go:76-125` | 1min flush + 1h 清理 | db 层写合并缓冲；引擎依赖 db，反向注册成环 | `db.Close`→stopAPIKeyLastUsedFlusher |
-| `services/logrotate.go:41-92` | 30s | 为引擎写日志提供阈值，装配序在引擎前 | `StopLogRotateWithin` |
-| `services/tz.go:48-92` | 30s | 引擎 `SetLocation` 依赖它 | `StopTimezoneRefreshWithin` |
-| `middleware/middleware.go:703-708` | 1min | 请求路径内存清扫，无落盘无记录语义 | 随进程消亡 |
-| `handlers/handlers.go:1175-1203` | 2s | Caddy 崩溃自愈的**触发源监听**；工作体已走 Oneshot `caddy-restart` | `StopCaddyRestartWatcher` |
-| `taskengine_wire.go:1046-1068` | 60s | 角色对账，设计目标即"不受用户可停止的看门狗影响" | `te.Done()`/`StopTaskEngine` 有界等待 |
-| `acme/issuer.go:461/615/852` | 3–5s | 单次签发内的有界轮询（纯等待工具） | 随签发 ctx |
-
-### 6.5 待归口清单（已知缺口，逐项完成后从本表删除）
-
-| 位置 | 现状 | 目标 |
+| 形态 | 判据（机器可判） | 现有示例 |
 |---|---|---|
-| `services/caqueue.go:1163-1166` per-provider `go q.loop()` | 子资源自建泵 | 归 `cert-issuance` daemon 的 `RunTicker`（`Manager.DispatchOnce`） |
-| `services/services.go:79-114` `MetricsService.Start` | main.go 手工 goroutine | 新 daemon `metrics-collector`（RunsOn=RoleAny） |
-| `handlers/security_threat_screen.go:1085-1124` rollup warmer | main.go 手工 goroutine | 并入 `security-events-ingestion` daemon |
+| 任务体内子协程 | 由 Run 派生 + Run 同步等待 + ctx 结束即止 | `crsupdate.go:348-361`、`ip2regionupdate.go:173-176` |
+| 运行内有界轮询 | 存活期 ⊆ 单次 Run，且带宽上限 | `acme/issuer.go:461/615/852` |
+| 一次性协程 | `WaitGroup`/deadline 收口 | `cluster_apply.go:31-34`、`config_import_coordinator.go:594-598` |
+| 引擎内部 tick | 位于 `internal/taskengine` | `engine.go:934/1960` |
+| Teardown 清理 | 仅在停止/关闭路径执行 | `db.Close` 内 flusher 停止 |
+
+新增任何超出上表的循环形态 = 违规，必须先注册任务。
+
+### 6.5 归口台账（全部为必做项，完成后只保留"已完成"记录）
+
+| # | 违规项 | 目标注册任务 | 状态 |
+|---|---|---|---|
+| 1 | per-provider `go q.loop()` | `cert-issuance`（Daemon + `RunTicker` 遍历 `DispatchOnce`） | 待做 |
+| 2 | `MetricsService.Start`（30s + 24h） | 新 daemon `metrics-collector`（RunsOn=RoleAny；24h 清理拆 `Periodic`） | 待做 |
+| 3 | rollup warmer（60s） | 并入 `security-events-ingestion` daemon（同 2s/60s 域） | 待做 |
+| 4 | caddy-restart 触发源（2s） | 新 daemon `caddy-restart-watcher`（Daemon 生命周期只落 1 行，无 task_runs 噪音） | 待做 |
+| 5 | API-Key last_used（1min/1h） | 新 daemon `apikey-usage-flusher`（循环移出 db 包，db 只暴露 flush/cleanup 函数） | 待做 |
+| 6 | 运行日志尺寸阈值（30s） | 新 daemon `runtime-log-threshold`（装配序调整：daemon 先于日志消费启动） | 待做 |
+| 7 | 时区/日志级别（30s） | 新 daemon `runtime-tz-refresh` | 待做 |
+| 8 | 限流桶内存清扫（1min） | 新 daemon `ratelimit-bucket-sweep`（middleware 暴露 sweep 函数） | 待做 |
+| 9 | legacy `RecordRunStart/Finish` | 删除该兜底：`engineRunID<=0` 时响亮失败，不再自写 `task_runs` | 待做 |
 
 ## 7. 修订记录
+
+- **v2.2（2026-10-30，用户裁定「标准即底线，不得有例外/待办/可接受」）**：删除 §6.4「豁免登记」与一切"后续迁移/可接受"口径，改为**范围外形态判据**（任务体内子协程/运行内有界轮询/一次性协程/引擎内部 tick/Teardown，均按定义排除，不构成豁免）；§0.5 重写为「违规（必须修）／范围外（定义排除）」二分，列出 9 项既有违规；§6.5 改为**归口台账（全部必做）**；§0.6 守卫取消"命中豁免"出口，`StartLoop` 仅限控制面；取消 `BecomeSlave` 强制 `StartLoop` 例外（保持用户停止态 + 显式提示）。
 
 - **v2.1（2026-10-30，用户裁定）**：新增 §0「职责与边界」——归口矩阵、唯一许可的四种执行形态（`RunTicker`）、唤醒协议、子资源归属、违规反例、机器守卫；新增 §6.4 循环豁免登记与 §6.5 待归口清单（per-provider 队列泵 / metrics 采集 / rollup warmer）。起因：`caqueue.go:1163` 每提供商自建 goroutine 绕开引擎，导致不可枚举/不可停止/不可观测，并让证书签发派发节拍长期游离于引擎之外。
 
