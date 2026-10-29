@@ -6,12 +6,13 @@ go 1.26.0
 // 实际约束机制分两层：
 //  1. MVS floor：下方 require 是构建图的版本下限——其他依赖要求更低版本时
 //     取高者；当前 Caddy v2.11.7 的传递图为 cel.dev/cel-go 0.32.0、grpc
-//     1.83.2（与本 floor 等值），otel 1.46.0、x/net 0.60.0、x/crypto 0.57.0
-//     （高于本 floor），因此下方 9 条 require（5 个模块族：cel-go / otel /
-//     x/crypto / x/net / grpc；otel 族含 otel 本体 + exporters×2 + metric +
-//     trace 五个独立 require）今日均不产生抬升（2 等值 + 7 低于），仅在未来
-//     传递图下移时才生效（caddygeoip/go.mod 实测同结论）。维护 floor 时五个
-//     otel 子模块必须同代次一起改，漏改其一即族内版本分裂。
+//     1.83.2（与本 floor 等值）、otel 1.46.0（高于本 floor），x/net 0.60.0、
+//     x/crypto 0.57.0、go-jose/v4 4.1.5（低于本 floor）。因此下方 10 条
+//     require（6 个模块族：cel-go / go-jose / otel / x-crypto / x-net / grpc；
+//     otel 族含 otel 本体 + exporters×2 + metric + trace 五个独立 require）
+//     今日为 2 等值 + 5 低于 + 3 抬升——抬升的三条是漏洞修复下限，必须盖过
+//     上游传递图（x/net 0.60→0.62、x/crypto 0.57→0.58、go-jose/v4 4.1.5→4.1.6）。
+//     维护 floor 时五个 otel 子模块必须同代次一起改，漏改其一即族内版本分裂。
 //  2. 构建期断言：Dockerfile 的 `go version -m` 检查（阈值与下方 require 同值）
 //     才是实际门禁——不达标直接失败。断言另含 github.com/corazawaf/coraza/v3
 //     的区间 [v3.8.1, v3.9)：安全拦截判定依赖 coraza tx.ID 长度=16，该 pin 在
@@ -28,12 +29,13 @@ go 1.26.0
 // require 代次一致即可——新增或升级 require 后执行 `go mod download` 刷新。
 require (
 	cel.dev/cel-go v0.32.0
+	github.com/go-jose/go-jose/v4 v4.1.6
 	go.opentelemetry.io/otel v1.45.0
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc v1.45.0
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp v1.45.0
 	go.opentelemetry.io/otel/metric v1.45.0
 	go.opentelemetry.io/otel/trace v1.45.0
-	golang.org/x/crypto v0.56.0
-	golang.org/x/net v0.58.0
+	golang.org/x/crypto v0.58.0
+	golang.org/x/net v0.62.0
 	google.golang.org/grpc v1.83.2
 )
