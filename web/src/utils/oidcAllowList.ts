@@ -32,3 +32,26 @@ export const parseGroupAllowList = (raw: string): string[] =>
 
 /** 数组 → 编辑文本（换行分隔，组名含空格也能无损往返）。 */
 export const formatAllowList = (values?: readonly string[]): string => (values ?? []).join('\n')
+
+// 面板侧白名单预算：名单整块落库并随集群快照搬运，OIDC 回调按
+// 组名单条数 × 声明条数线性扫描。数值与后端 normalizeOIDCAllowed*
+// （oidcAllowListMaxEntries / oidcAllowListEntryMaxRunes）同口径——
+// web/tests/oidcAllowList.spec.ts 有跨栈常量钉，改一处必须同步另一处。
+export const OIDC_ALLOW_LIST_MAX_ENTRIES = 100
+export const OIDC_ALLOW_LIST_ENTRY_MAX_CHARS = 128
+
+/**
+ * 预算校验：合法返回 null，超限返回可直接展示的中文提示（与后端 400 文案同
+ * 口径：条目数点位上限与当前条数，单条按**字符**计而非字节）。
+ */
+export const validateAllowList = (label: string, values: readonly string[]): string | null => {
+  if (values.length > OIDC_ALLOW_LIST_MAX_ENTRIES) {
+    return `${label}最多 ${OIDC_ALLOW_LIST_MAX_ENTRIES} 条（当前 ${values.length} 条）`
+  }
+  for (const value of values) {
+    if ([...value].length > OIDC_ALLOW_LIST_ENTRY_MAX_CHARS) {
+      return `${label}单条最多 ${OIDC_ALLOW_LIST_ENTRY_MAX_CHARS} 个字符`
+    }
+  }
+  return null
+}

@@ -328,3 +328,34 @@ test('C11 引号字段闭合后的残留被拒绝（合法/首字段残留/备�
   assert.equal(parseIpListEntryLine('"10.0.0.4","备注",', isValidCidr), null)
   assert.equal(parseIpListEntryLine('"10.0.0.4","备注",   ', isValidCidr), null)
 })
+
+// 导出物会被 Excel/Sheets/WPS 直接打开：备注以 `= + - @ \t \r` 开头时是公式（或
+// DDE）入口，纯文本导出即静默求值。中和=前置单引号；导入侧对称剥离以维持逐字
+// 往返，且不得吞掉用户真正的字面单引号（按「前导引号串 + 公式字符」判定）。
+test('导出中和单元格公式前导字符，导入对称剥离（往返逐字相等）', () => {
+  for (const risky of ['=1+1', '+SUM(A1)', '-1+2', '@SUM(A1)']) {
+    const line = formatIpListEntryLine('10.0.0.1', risky)
+    assert.equal(line, `10.0.0.1,'${risky}`, `${risky} 必须前置单引号中和（表格软件打开即求值）`)
+    assert.deepEqual(parseIpListEntryLine(line, isValidCidr), { value: '10.0.0.1', remark: risky }, `${risky} 中和后必须逐字往返`)
+  }
+  // 非前导形态不受影响（不误加引号）
+  assert.equal(formatIpListEntryLine('10.0.0.1', 'a=b'), '10.0.0.1,a=b')
+  assert.equal(formatIpListEntryLine('10.0.0.1', 'a-b'), '10.0.0.1,a-b')
+  // 制表符前缀的公式形态同样中和（部分工具先剥空白再识别公式），且仍按首尾空白加引号
+  const tabbed = formatIpListEntryLine('10.0.0.1', '\t=cmd|/c calc')
+  assert.equal(tabbed, '10.0.0.1,"\'\t=cmd|/c calc"')
+  assert.deepEqual(parseIpListEntryLine(tabbed, isValidCidr), { value: '10.0.0.1', remark: '\t=cmd|/c calc' })
+})
+
+test('字面单引号不被中和标记吞掉（引号串长度判定）', () => {
+  for (const remark of ["'=1+1", "''=1", "'普通备注", "'", "'="]) {
+    const line = formatIpListEntryLine('10.0.0.1', remark)
+    assert.deepEqual(parseIpListEntryLine(line, isValidCidr), { value: '10.0.0.1', remark }, `${JSON.stringify(remark)} 往返漂移（导出 ${JSON.stringify(line)}）`)
+  }
+})
+
+test('中和与 CSV 引号包裹共存（含逗号的公式形态）', () => {
+  const line = formatIpListEntryLine('10.0.0.1', '=1,2')
+  assert.equal(line, `10.0.0.1,"'=1,2"`, '先中和再按 RFC4180 包裹')
+  assert.deepEqual(parseIpListEntryLine(line, isValidCidr), { value: '10.0.0.1', remark: '=1,2' })
+})

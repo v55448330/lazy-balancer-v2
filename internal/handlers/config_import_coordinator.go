@@ -753,7 +753,7 @@ func (session *configImportSession) cleanupContext() context.Context {
 
 // absentRuleIDs 返回 ids 中在 queryer 视图里已不存在的子集（判定按视图单源：
 // 事务视图用于提交前收集，已提交视图用于锁外复核）。
-func absentRuleIDs(ctx context.Context, q importCleanupQueryer, ids []string) ([]string, error) {
+func absentRuleIDs(ctx context.Context, q rowsQueryer, ids []string) ([]string, error) {
 	if len(ids) == 0 {
 		return nil, nil
 	}
@@ -896,14 +896,16 @@ func (plan *importArtifactCleanupPlan) empty() bool {
 	return plan == nil || (len(plan.disappeared) == 0 && len(plan.withoutMaterial) == 0)
 }
 
-// importCleanupQueryer 让同一套判定查询既跑在导入事务视图（提交前收集）也
-// 跑在已提交视图（锁外复核）上。
-type importCleanupQueryer interface {
+// rowsQueryer 是「同一套判定查询既跑在事务视图也跑在已提交视图上」的查询面：
+// 导入清理既在导入事务（提交前收集）又在锁外已提交视图复核，证书配置的引用
+// 守卫同样一份查询既跑写入事务又在删除路径跑已提交库。两者共用本接口，避免
+// 每个域各写一份同形接口（形状变化时漏改一处即编译期静默分叉）。
+type rowsQueryer interface {
 	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
 }
 
 // ruleIDsFromQueryer 读取规则集（queryer=导入事务或已提交库）。
-func ruleIDsFromQueryer(ctx context.Context, q importCleanupQueryer) ([]string, error) {
+func ruleIDsFromQueryer(ctx context.Context, q rowsQueryer) ([]string, error) {
 	rows, err := q.QueryContext(ctx, "SELECT caddy_id FROM lb_rules")
 	if err != nil {
 		return nil, err
@@ -1090,7 +1092,7 @@ func (session *configImportSession) runPostCommitCleanup(plan *importArtifactCle
 // 查询面固定为两条（规则集 + 材料行集）并在内存中配对：原实现逐规则 2 次查询
 // （域名 + 任务材料）是 N+1，千级规则导入在持 caddyOpMu 的提交窗口里放大 2N 次
 // DB 往返，把配置写/重载全部阻塞在该窗口。
-func rulesWithoutUsableCertMaterial(ctx context.Context, q importCleanupQueryer) ([]string, error) {
+func rulesWithoutUsableCertMaterial(ctx context.Context, q rowsQueryer) ([]string, error) {
 	rows, err := q.QueryContext(ctx,
 		`SELECT caddy_id, COALESCE(tls_source,''), COALESCE(tls_cert,''), COALESCE(tls_key,''), COALESCE(domain,'') FROM lb_rules`)
 	if err != nil {

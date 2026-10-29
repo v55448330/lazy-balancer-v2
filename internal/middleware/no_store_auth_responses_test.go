@@ -62,6 +62,15 @@ func TestAuthenticationResponsesAreNotStored(t *testing.T) {
 		{name: "certificate configs contain credentials", method: http.MethodGet, path: "/api/v1/certificate-configs", withToken: true, wantStatus: []int{http.StatusOK}},
 		{name: "ca provider list contains credentials", method: http.MethodGet, path: "/api/v1/ca-providers", withToken: true, wantStatus: []int{http.StatusOK}},
 		{name: "ca provider detail contains credentials", method: http.MethodGet, path: "/api/v1/ca-providers/999999", registration: "/api/v1/ca-providers/:id", withToken: true},
+		// 一次性机器凭据：register-tokens 回一次性注册令牌明文、login-ticket 回
+		// 一次性 HMAC 票据明文，两者被缓存即等于把凭据交给下一个使用者。
+		// 机器侧两条（registration status / sync snapshot）已挂 no-store，
+		// 一并纳入对账矩阵（AST 对账不再按 /cluster/ 前缀整体豁免）。
+		// 注意：必须排在 logout 之前——logout 用例会撤销本矩阵共用的 token。
+		{name: "cluster register token", method: http.MethodPost, path: "/api/v1/cluster/register-tokens", body: `{}`, withToken: true},
+		{name: "cluster login ticket", method: http.MethodPost, path: "/api/v1/cluster/nodes/999999/login-ticket", registration: "/api/v1/cluster/nodes/:id/login-ticket", body: `{}`, withToken: true},
+		{name: "cluster registration status", method: http.MethodGet, path: "/api/v1/cluster/register/999999/status", registration: "/api/v1/cluster/register/:id/status", withToken: true},
+		{name: "cluster sync snapshot", method: http.MethodGet, path: "/api/v1/cluster/sync/snapshot", withToken: true},
 		{name: "logout", method: http.MethodPost, path: "/api/v1/auth/logout", withToken: true, wantStatus: []int{http.StatusOK}},
 	}
 	for _, tc := range cases {
@@ -142,7 +151,11 @@ func assertNoStoreRouteCoverage(t *testing.T, cases []noStoreRouteCase) {
 			return true
 		}
 		path, err := strconv.Unquote(pathLiteral.Value)
-		if err != nil || strings.HasPrefix(path, "/cluster/") {
+		// 不再按 /cluster/ 前缀整体跳过：机器凭据类响应同样是一次性明文，
+		// 「集群路由默认免检」会让新增的 noStoreResponse 挂载无声逃过对账。
+		// 未在测试矩阵声明却挂了 no-store 的路由一律报错（下方 actual 反向
+		// 对账），新增者必须把它连同断言一起加进 cases。
+		if err != nil {
 			return true
 		}
 		for _, arg := range call.Args[1:] {

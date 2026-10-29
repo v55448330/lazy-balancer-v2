@@ -13,6 +13,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"lazy-balancer-v2/internal/db"
+	"lazy-balancer-v2/internal/services"
 )
 
 // certJobRereadFailingConnector 返回一个按语句路由的假 db.DB：任务行 SELECT 正常
@@ -336,4 +337,161 @@ func TestListCertificates_healthyRowsStillReturn200(t *testing.T) {
 	if !strings.Contains(response.Body.String(), "good.example.test") {
 		t.Fatalf("body=%s, want 正常行返回", response.Body.String())
 	}
+}
+
+// assertCaddyOpLockFree 断言全局 Caddy 写锁当前空闲：TryLock 成功即证明
+// DeleteCertJob 的该出口已配对释放（持锁泄漏会让后续规则/配置写与 Caddy
+// 启停全部挂起，只能重启进程）。
+func assertCaddyOpLockFree(t *testing.T, exit string) {
+	t.Helper()
+	if !services.CaddyOpLock.TryLock() {
+		t.Fatalf("%s 出口后 caddyOpMu 仍被持有——DeleteCertJob 必须在所有出口释放全局写锁", exit)
+	}
+	services.CaddyOpLock.Unlock()
+}
+
+// DeleteCertJob 每个出口都必须释放 caddyOpMu：表驱动探针逐个出口断言
+// TryLock 成功（成功路径、404、409、500 全覆盖）。
+func TestDeleteCertJob_releasesCaddyOpLockOnEveryExit(t *testing.T) {
+	seedActiveACMEJob := func(t *testing.T) {
+		t.Helper()
+		if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enabled,enable_tls,tls_source)
+			VALUES ('lb_lockprobe','lockprobe','http','lockprobe.example.test',8080,1,1,'acme_dns');
+			INSERT INTO cert_jobs (rule_id,domain,status) VALUES ('lb_lockprobe','lockprobe.example.test','failed')`); err != nil {
+			t.Fatalf("seed rule and job: %v", err)
+		}
+	}
+	seedRetiredJob := func(t *testing.T) {
+		t.Helper()
+		if _, err := db.DB.Exec(`INSERT INTO cert_jobs (rule_id,domain,status)
+			VALUES ('lb_lockprobe_disabled','lockprobe.example.test','disabled')`); err != nil {
+			t.Fatalf("seed retired job: %v", err)
+		}
+	}
+
+	cases := []struct {
+		name string
+		url  string
+		// setup 在夹具后运行（含钩子/触发器），返回期望状态码。
+		setup func(t *testing.T) int
+	}{
+		{
+			name: "200 deleted",
+			url:  "/jobs/1",
+			setup: func(t *testing.T) int {
+				seedRetiredJob(t)
+				return http.StatusOK
+			},
+		},
+		{
+			name: "404 job not found",
+			url:  "/jobs/424242",
+			setup: func(t *testing.T) int {
+				return http.StatusNotFound
+			},
+		},
+		{
+			name: "409 guarded active rule",
+			url:  "/jobs/1",
+			setup: func(t *testing.T) int {
+				seedActiveACMEJob(t)
+				return http.StatusConflict
+			},
+		},
+		{
+			name: "409 state changed between read and flip",
+			url:  "/jobs/1",
+			setup: func(t *testing.T) int {
+				seedRetiredJob(t)
+				previous := deleteCertJobPreDisableHook
+				deleteCertJobPreDisableHook = func(id int) {
+					// worker 在 SELECT 与 disabled 翻转之间推进状态 → CAS 0 行。
+					_, _ = db.DB.Exec("UPDATE cert_jobs SET status='validated' WHERE id=?", id)
+				}
+				t.Cleanup(func() { deleteCertJobPreDisableHook = previous })
+				return http.StatusConflict
+			},
+		},
+		{
+			name: "404 row disappears before flip",
+			url:  "/jobs/1",
+			setup: func(t *testing.T) int {
+				seedRetiredJob(t)
+				previous := deleteCertJobPreDisableHook
+				deleteCertJobPreDisableHook = func(id int) {
+					_, _ = db.DB.Exec("DELETE FROM cert_jobs WHERE id=?", id)
+				}
+				t.Cleanup(func() { deleteCertJobPreDisableHook = previous })
+				return http.StatusNotFound
+			},
+		},
+		{
+			name: "500 disable failure",
+			url:  "/jobs/1",
+			setup: func(t *testing.T) int {
+				seedRetiredJob(t)
+				if _, err := db.DB.Exec(`CREATE TRIGGER lockprobe_block_disable BEFORE UPDATE ON cert_jobs
+					WHEN NEW.status='disabled' BEGIN SELECT RAISE(ABORT,'模拟禁用写失败'); END`); err != nil {
+					t.Fatalf("install abort trigger: %v", err)
+				}
+				return http.StatusInternalServerError
+			},
+		},
+		{
+			name: "500 delete failure with recovery",
+			url:  "/jobs/1",
+			setup: func(t *testing.T) int {
+				seedRetiredJob(t)
+				if _, err := db.DB.Exec(`CREATE TRIGGER lockprobe_block_delete BEFORE DELETE ON cert_jobs
+					BEGIN SELECT RAISE(ABORT,'模拟删除失败'); END`); err != nil {
+					t.Fatalf("install abort trigger: %v", err)
+				}
+				return http.StatusInternalServerError
+			},
+		},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			assertCaddyOpLockFree(t, "前置")
+			h := newBackupTestHandlers(t)
+			wantStatus := tt.setup(t)
+			router := gin.New()
+			router.DELETE("/jobs/:id", h.DeleteCertJob)
+			response := httptest.NewRecorder()
+
+			router.ServeHTTP(response, httptest.NewRequest(http.MethodDelete, tt.url, nil))
+
+			if response.Code != wantStatus {
+				t.Fatalf("status=%d body=%s, want %d", response.Code, response.Body.String(), wantStatus)
+			}
+			assertCaddyOpLockFree(t, tt.name)
+		})
+	}
+}
+
+// 临界区内发生 panic（钩子/运行时错误）时，defer 兜底必须释放全局写锁——
+// 手动配对的下一次回归（新增出口忘记 Unlock）会在这里锁死整条 Caddy 写链。
+func TestDeleteCertJob_releasesCaddyOpLockOnPanic(t *testing.T) {
+	assertCaddyOpLockFree(t, "前置")
+	h := newBackupTestHandlers(t)
+	if _, err := db.DB.Exec(`INSERT INTO cert_jobs (rule_id,domain,status)
+		VALUES ('lb_lockprobe_panic','panic.example.test','disabled')`); err != nil {
+		t.Fatalf("seed retired job: %v", err)
+	}
+	previous := deleteCertJobPreDisableHook
+	deleteCertJobPreDisableHook = func(int) { panic("模拟临界区内的运行时 panic") }
+	t.Cleanup(func() { deleteCertJobPreDisableHook = previous })
+	router := gin.New() // 无 Recovery 中间件：panic 直接上抛到测试
+	router.DELETE("/jobs/:id", h.DeleteCertJob)
+
+	func() {
+		defer func() {
+			if recovered := recover(); recovered == nil {
+				t.Fatal("期望 panic 上抛（夹具前提：无 Recovery 中间件）")
+			}
+		}()
+		router.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodDelete, "/jobs/1", nil))
+	}()
+
+	assertCaddyOpLockFree(t, "panic 展开")
 }

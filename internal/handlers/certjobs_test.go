@@ -975,7 +975,7 @@ func TestGetCertJobLogs_capsTotalResponseBytes(t *testing.T) {
 
 // 读取预算：从最新文件累计到响应上限即停止读更旧轮转（更旧内容必然落在
 // 尾窗之外）。夹具给当前 + .1 + .2 + .3 各 1KB，预算 2KB ⇒ 只读当前与 .1。
-func TestReadCertJobLogTail_stopsAtByteBudget(t *testing.T) {
+func TestReadRotatedLogTail_stopsAtByteBudget(t *testing.T) {
 	dir := t.TempDir()
 	base := filepath.Join(dir, "certjob-budget.log")
 	lineFor := func(tag string) string {
@@ -991,7 +991,7 @@ func TestReadCertJobLogTail_stopsAtByteBudget(t *testing.T) {
 		}
 	}
 
-	content, truncated, err := readCertJobLogTail(base, 5, 2<<10)
+	content, truncated, err := readRotatedLogTail(base, 5, 128<<10, 500, 2<<10)
 	if err != nil {
 		t.Fatalf("read tail: %v", err)
 	}
@@ -1006,7 +1006,7 @@ func TestReadCertJobLogTail_stopsAtByteBudget(t *testing.T) {
 	}
 
 	// 正向对照：预算充足时全量按旧→新拼接且不标记截断。
-	content, truncated, err = readCertJobLogTail(base, 5, 16<<10)
+	content, truncated, err = readRotatedLogTail(base, 5, 128<<10, 500, 16<<10)
 	if err != nil {
 		t.Fatalf("read tail with full budget: %v", err)
 	}
@@ -1020,17 +1020,17 @@ func TestReadCertJobLogTail_stopsAtByteBudget(t *testing.T) {
 
 // 非 ENOENT 的 I/O 错误必须上抛（「读不出」与「无日志」不可区分会让排障
 // 误判为「尚无签发日志」）：用同名目录制造 read 失败。
-func TestReadCertJobLogTail_reportsIOErrors(t *testing.T) {
+func TestReadRotatedLogTail_reportsIOErrors(t *testing.T) {
 	dir := t.TempDir()
 	base := filepath.Join(dir, "certjob-ioerr.log")
 	if err := os.Mkdir(base+".1", 0o755); err != nil {
 		t.Fatalf("mkdir fake rotated file: %v", err)
 	}
-	if _, _, err := readCertJobLogTail(base, 2, 16<<10); err == nil {
+	if _, _, err := readRotatedLogTail(base, 2, 128<<10, 500, 16<<10); err == nil {
 		t.Fatal("轮转副本是目录时必须返回 I/O 错误，而不是当作无日志")
 	}
 	// 文件不存在不是错误。
-	if content, _, err := readCertJobLogTail(filepath.Join(dir, "absent.log"), 2, 16<<10); err != nil || content != "" {
+	if content, _, err := readRotatedLogTail(filepath.Join(dir, "absent.log"), 2, 128<<10, 500, 16<<10); err != nil || content != "" {
 		t.Fatalf("缺失文件必须返回 (\"\", nil)，实得 content=%q err=%v", content, err)
 	}
 }

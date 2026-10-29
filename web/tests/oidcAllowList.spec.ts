@@ -8,7 +8,14 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { formatAllowList, parseDomainAllowList, parseGroupAllowList } from '../src/utils/oidcAllowList.ts'
+import {
+  formatAllowList,
+  parseDomainAllowList,
+  parseGroupAllowList,
+  validateAllowList,
+  OIDC_ALLOW_LIST_ENTRY_MAX_CHARS,
+  OIDC_ALLOW_LIST_MAX_ENTRIES,
+} from '../src/utils/oidcAllowList.ts'
 import { repoCode } from './_helpers.ts'
 
 test('邮箱域：空白/半角与全角逗号分号/顿号/换行均作分隔符', () => {
@@ -58,4 +65,34 @@ test('字段名与后端 auth_oidc.go 的 json tag 同源（跨栈钉）', () =>
   const go = repoCode('internal/handlers/auth_oidc.go')
   assert.ok(go.includes('json:"allowed_email_domains"'), '后端字段 allowed_email_domains 缺失')
   assert.ok(go.includes('json:"allowed_groups"'), '后端字段 allowed_groups 缺失')
+})
+
+// 白名单预算（与后端 normalizeOIDCAllowed* 同口径）：条目数与单条长度是
+// 配置体积/回调扫描成本的唯一量门，UI 侧必须在提交前拦下——保存门会先跑一次
+// discovery 探测，超限输入不该先花那几秒再吃 400。
+test('白名单预算：超过 100 条拒收并点名上限与当前条数', () => {
+  const overflow = Array.from({ length: OIDC_ALLOW_LIST_MAX_ENTRIES + 1 }, (_, i) => `g${i}`)
+  const message = validateAllowList('允许的组', overflow)
+  assert.ok(message, '超限必须返回提示')
+  assert.match(message, /最多 100 条/)
+  assert.match(message, /当前 101 条/)
+  // 边界值合法
+  assert.equal(validateAllowList('允许的组', overflow.slice(0, OIDC_ALLOW_LIST_MAX_ENTRIES)), null)
+})
+
+test('白名单预算：单条超长拒收（按字符计，中文组名不得按字节误判）', () => {
+  assert.equal(validateAllowList('允许的 email 域', ['x'.repeat(OIDC_ALLOW_LIST_ENTRY_MAX_CHARS)]), null)
+  const tooLong = validateAllowList('允许的 email 域', ['x'.repeat(OIDC_ALLOW_LIST_ENTRY_MAX_CHARS + 1)])
+  assert.ok(tooLong)
+  assert.match(tooLong, /最多 128 个字符/)
+  // 128 个中文字符 = 384 字节：按字节判定会误拒，必须按字符数
+  assert.equal(validateAllowList('允许的组', ['组'.repeat(OIDC_ALLOW_LIST_ENTRY_MAX_CHARS)]), null)
+})
+
+test('白名单预算：与后端常量同源（跨栈钉，漂移即两边口径分叉）', () => {
+  const go = repoCode('internal/handlers/auth_oidc.go')
+  assert.ok(go.includes('oidcAllowListMaxEntries = 100'), '后端条目上限应为 100')
+  assert.ok(go.includes('oidcAllowListEntryMaxRunes = 128'), '后端单条上限应为 128 rune')
+  assert.equal(OIDC_ALLOW_LIST_MAX_ENTRIES, 100)
+  assert.equal(OIDC_ALLOW_LIST_ENTRY_MAX_CHARS, 128)
 })

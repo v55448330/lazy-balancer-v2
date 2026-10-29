@@ -156,7 +156,10 @@ test('manual trusted-header edits detach the selected CDN preset', () => {
   assert.match(page, /:model-value="trustedHeaders"[\s\S]*@update:model-value="onTrustedHeadersEdit"/)
 })
 
-test('ACME numeric clear operations produce numbers instead of null payload values', () => {
+// 清空 el-input-number 回写 null：此前按 0 提交，而写侧门 cert_expiry_days 1-365、
+// cert_renewal_attempts 1-10（cert_renewal_days 0 虽合法但语义是「每次扫描都重签」）
+// ——整卡保存被拒/被静默改义。未提供的数值必须省略键，由后端 COALESCE 保持现值。
+test('ACME numeric clear operations omit the key instead of submitting 0', () => {
   const { acmeGlobalWritePayload } = configValues
   assert.equal(typeof acmeGlobalWritePayload, 'function')
   const payload = acmeGlobalWritePayload({
@@ -166,11 +169,17 @@ test('ACME numeric clear operations produce numbers instead of null payload valu
     renewalAttempts: 5,
     defaultCAProviderId: 2,
   })
-  assert.equal(payload.cert_expiry_days, 0)
-  assert.equal(payload.cert_renewal_days, 0)
-  assert.equal(payload.cert_renewal_attempts, 5)
+  assert.equal('cert_expiry_days' in payload, false, '清空的有效期天数必须省略键（0 撞后端 1-365 门）')
+  assert.equal('cert_renewal_days' in payload, false, '清空的续签天数必须省略键（0=每次扫描重签）')
+  assert.equal(payload.cert_renewal_attempts, 5, '未清空的数值照常携带')
   assert.equal(payload.acme_email, 'admin@example.com')
   assert.match(certificates(), /acmeGlobalWritePayload\(\{/)
+  // 三个数值输入都必须能表达「清空」（v-model 回写 null 时省略键）
+  const allCleared = acmeGlobalWritePayload({
+    email: 'admin@example.com', expiryDays: null, renewalDays: null, renewalAttempts: null, defaultCAProviderId: 2,
+  })
+  assert.equal('cert_expiry_days' in allCleared || 'cert_renewal_days' in allCleared || 'cert_renewal_attempts' in allCleared, false, '三个数值全部清空时一个都不许携带')
+  assert.match(code('src/utils/configValues.ts'), /const acmeNumberField = /, '省略逻辑必须收敛到单处 helper，不得逐字段各写一遍')
 })
 
 test('retired global ACME DNS provider is never propagated', () => {

@@ -15,10 +15,8 @@
 </template>
 
 <script setup lang="ts">
-import { ref, shallowRef } from 'vue'
-import { watchDebounced } from '@vueuse/core'
-import { highlightCode } from '@/utils/highlight'
-import { escapeHtml, withCodeTrailingBreak } from '@/utils/escape'
+import { ref } from 'vue'
+import { useDebouncedHighlight } from '@/composables/useDebouncedHighlight'
 
 const props = withDefaults(defineProps<{
   readonly modelValue: string
@@ -38,24 +36,15 @@ const preRef = ref<HTMLElement | null>(null)
 
 // textarea 的文字是透明的（color: transparent），屏幕上可见文本全部来自高亮层。
 // 因此高亮层必须同时承担「即时回显」：键入/首帧先写入转义纯文本，Prism 全文
-// 高亮再按防抖结果覆盖（与 SyntaxHighlight 首帧同形）——否则字符要等到
-// 下一轮防抖（最长 500ms）才出现。
-const highlighted = shallowRef(withCodeTrailingBreak(escapeHtml(props.modelValue), props.modelValue))
-const updateHighlight = (): void => {
-  highlighted.value = withCodeTrailingBreak(highlightCode(props.modelValue, props.language), props.modelValue)
-}
-// Prism 全文高亮在停顿后执行，连续输入最长每 500ms 补一次，避免每个键击都
-// 阻塞主线程。组件卸载时 watchDebounced 自动清理定时器。
-watchDebounced(
-  () => [props.modelValue, props.language] as const,
-  updateHighlight,
-  { debounce: 160, maxWait: 500, immediate: true },
-)
+// 高亮再按防抖结果覆盖——否则字符要等到下一轮防抖（最长 500ms）才出现。
+// 管线（转义首帧 + 160/500ms 防抖 + 尾换行补齐）与 SyntaxHighlight 同一单源；
+// trailingBreak 让高亮层与相邻 textarea 逐行对齐。
+const { highlighted, setSyncedRaw } = useDebouncedHighlight(() => props.modelValue, () => props.language, { trailingBreak: true })
 
 const onInput = (e: Event) => {
   const value = (e.target as HTMLTextAreaElement).value
   // 同步纯文本兜底：防抖高亮尚未落地时，键入字符也必须立刻可见。
-  highlighted.value = withCodeTrailingBreak(escapeHtml(value), value)
+  setSyncedRaw(value)
   emit('update:modelValue', value)
 }
 

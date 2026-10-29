@@ -8,9 +8,7 @@ package handlers
 import (
 	"database/sql"
 	"errors"
-	"io"
 	"net/http"
-	"os"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -432,61 +430,22 @@ func (h *Handlers) GetSystemTaskLogs(c *gin.Context) {
 		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"content": ""}})
 		return
 	}
-	// 尾部 256KB（日志弹框消费口径，防超长载荷）。先 Seek 再限量读，
-	// 不把最大 1GB 的任务日志整文件读入内存。
-	const tail = 256 << 10
-	var data []byte
+	// 尾部 256KB（日志弹框消费口径，防超长载荷）：分段读，绝不整文件读入
+	// 内存。读取策略与证书任务日志共用 readRotatedLogTail（同尺度、同残行
+	// 口径、同「总长 ≤ 预算」硬保证），本端点只提供阶段归因与文案。
 	// 原始文件系统错误只入库内日志（业务读面对全部登录用户可见，不泄露
 	// 挂载路径/权限细节），对外固定文案 + 保留 500 语义（不改为 404/200，
 	// 避免与「任务不存在」混淆）。
-	failRead := func(stage string, err error) {
-		services.Logf("error", "任务日志读取失败（%s, %s）: %v", id, stage, err)
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "任务日志读取失败"})
-	}
-	info, statErr := os.Stat(path)
-	switch {
-	case statErr == nil:
-		startOffset := int64(0)
-		if info.Size() > tail {
-			startOffset = info.Size() - tail
-		}
-		file, _, err := openRegularLogFile(path)
-		if err != nil {
-			failRead("open", err)
-			return
-		}
-		defer file.Close()
-		if _, err := file.Seek(startOffset, io.SeekStart); err != nil {
-			failRead("seek", err)
-			return
-		}
-		data, err = io.ReadAll(io.LimitReader(file, int64(tail)))
-		if err != nil {
-			failRead("read", err)
-			return
-		}
-		data = tailLogWindow(file, data, startOffset)
-	case errors.Is(statErr, os.ErrNotExist):
-		// 活动文件缺失（外部删除，或轮转 rename 完成后写入失败）不得直接
-		// 返回空——轮转副本（.1…）可能仍有内容，落入下方统一拼接。
-	default:
-		failRead("stat", statErr)
-		return
-	}
+	const tail = 256 << 10
 	keep := 1 // 普通任务写侧 RotateTaskLogBeforeWrite(..., 1)
 	if strings.HasPrefix(id, "cert-job:") {
 		keep = certJobLogMaxRotatedBackups
 	}
-	content, oldestCut := prependTaskLogRotations(path, string(data), keep, tail)
-	// 活动文件与每代副本读取时已按行边界处理；只有预算下推切断最旧
-	// 内容时，拼接结果的首行才可能是残段。辅助函数保证总长度 ≤ tail，
-	// 因此这里直接按切断标志丢首行，不再保留不可达的超预算分支。
-	if oldestCut {
-		if idx := strings.IndexByte(content, '\n'); idx >= 0 {
-			content = content[idx+1:]
-		} else {
-			content = ""
-		}
+	content, _, readErr := readRotatedLogTail(path, keep, tail, 0, tail)
+	if readErr != nil {
+		services.Logf("error", "任务日志读取失败（%s, %s）: %v", id, "read", readErr)
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "任务日志读取失败"})
+		return
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"content": content}})
 }

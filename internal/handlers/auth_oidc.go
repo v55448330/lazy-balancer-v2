@@ -122,6 +122,13 @@ const (
 	// oidcDisplayNameMaxRunes 登录页展示名预算，与设置页输入框 maxlength 30
 	// 同源：保存侧超限 400，公开状态端点对存量坏值按同一预算截断。
 	oidcDisplayNameMaxRunes = 30
+	// oidcAllowListMaxEntries 访问白名单（allowed_groups /
+	// allowed_email_domains）的条目上限，与 apiKeyMaxWhitelistEntries 同族：
+	// 名单整块落进 global_config 单列、随集群快照搬运，OIDC 回调按
+	// len(AllowedGroups)×len(claims.Groups) 线性扫描。
+	oidcAllowListMaxEntries = 100
+	// oidcAllowListEntryMaxRunes 单条白名单项长度上限（域名字面量远短于此）。
+	oidcAllowListEntryMaxRunes = 128
 )
 
 // oidcStateMaxEntries 在册 state 条目上限（未认证泛洪内存封顶;
@@ -453,7 +460,7 @@ func normalizeOIDCGroupValues(raw []string) []string {
 var oidcAllowedDomainRe = regexp.MustCompile(`^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$`)
 
 // normalizeOIDCAllowedDomains 写入侧规范化 email 域名单：trim+小写、去空去重、
-// 逐条形态校验。顺序保持（管理语义：列表即配置）。
+// 逐条形态校验、条目数与单项长度预算。顺序保持（管理语义：列表即配置）。
 func normalizeOIDCAllowedDomains(raw []string) ([]string, error) {
 	out := make([]string, 0, len(raw))
 	seen := map[string]struct{}{}
@@ -461,6 +468,9 @@ func normalizeOIDCAllowedDomains(raw []string) ([]string, error) {
 		d := strings.ToLower(strings.TrimSpace(item))
 		if d == "" {
 			continue
+		}
+		if truncateRunes(d, oidcAllowListEntryMaxRunes) != d {
+			return nil, fmt.Errorf("允许的 email 域条目过长（最多 %d 字符）", oidcAllowListEntryMaxRunes)
 		}
 		if !oidcAllowedDomainRe.MatchString(d) || strings.Contains(d, "..") {
 			return nil, fmt.Errorf("允许的 email 域 %q 无效（应形如 example.com）", item)
@@ -471,12 +481,15 @@ func normalizeOIDCAllowedDomains(raw []string) ([]string, error) {
 		seen[d] = struct{}{}
 		out = append(out, d)
 	}
+	if len(out) > oidcAllowListMaxEntries {
+		return nil, fmt.Errorf("允许的 email 域最多 %d 条（当前 %d 条）", oidcAllowListMaxEntries, len(out))
+	}
 	return out, nil
 }
 
 // normalizeOIDCAllowedGroups 写入侧规范化组名单：trim、去空去重
-// （组名大小写敏感——IdP 组声明原样匹配）。
-func normalizeOIDCAllowedGroups(raw []string) []string {
+// （组名大小写敏感——IdP 组声明原样匹配）、条目数与单项长度预算。
+func normalizeOIDCAllowedGroups(raw []string) ([]string, error) {
 	out := make([]string, 0, len(raw))
 	seen := map[string]struct{}{}
 	for _, item := range raw {
@@ -484,13 +497,19 @@ func normalizeOIDCAllowedGroups(raw []string) []string {
 		if g == "" {
 			continue
 		}
+		if truncateRunes(g, oidcAllowListEntryMaxRunes) != g {
+			return nil, fmt.Errorf("允许的组条目过长（最多 %d 字符）", oidcAllowListEntryMaxRunes)
+		}
 		if _, dup := seen[g]; dup {
 			continue
 		}
 		seen[g] = struct{}{}
 		out = append(out, g)
 	}
-	return out
+	if len(out) > oidcAllowListMaxEntries {
+		return nil, fmt.Errorf("允许的组最多 %d 条（当前 %d 条）", oidcAllowListMaxEntries, len(out))
+	}
+	return out, nil
 }
 
 // normalizeOIDCIssuer 通用规范化：去首尾空白与尾斜杠；主机按 RFC 3986 归一到
@@ -865,7 +884,10 @@ func (h *Handlers) OIDCLogin(c *gin.Context) {
 		fail("OIDC 配置读取失败")
 		return
 	}
-	if !cfg.Enabled || cfg.Issuer == "" {
+	// 启用门与 status 端点、保存侧启用门同源（usable）：库值可经导入/快照
+	// 绕过保存门，此时 status 已隐藏按钮，公开入口若只判 Enabled+Issuer 非空
+	// 仍会 302 跳 IdP（client_id 为空 → 用户停在 IdP 报错页）。
+	if err := cfg.usable(); err != nil {
 		fail("OIDC 未启用")
 		return
 	}
@@ -1147,7 +1169,8 @@ func (h *Handlers) OIDCCallback(c *gin.Context) {
 		fail("OIDC 配置读取失败", "")
 		return
 	}
-	if !cfg.Enabled || cfg.Issuer == "" {
+	// 同 login：启用门单源（usable），不完整配置下不得继续走到 discovery/换码。
+	if err := cfg.usable(); err != nil {
 		fail("OIDC 未启用", "")
 		return
 	}
@@ -1486,7 +1509,12 @@ func (h *Handlers) OIDCSettingsUpdate(c *gin.Context) {
 		cfg.AllowedEmailDomains = domains
 	}
 	if req.AllowedGroups != nil {
-		cfg.AllowedGroups = normalizeOIDCAllowedGroups(*req.AllowedGroups)
+		groups, gerr := normalizeOIDCAllowedGroups(*req.AllowedGroups)
+		if gerr != nil {
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: gerr.Error()})
+			return
+		}
+		cfg.AllowedGroups = groups
 	}
 	// 启用前置门与公开状态共用 usable：issuer 合规且 client_id/secret 齐备。
 	if cfg.Enabled {

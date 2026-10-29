@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -205,7 +206,7 @@ func respondStoredDNSCredentialsCorrupted(c *gin.Context, configID int, cause er
 func (h *Handlers) ListCertificateConfigs(c *gin.Context) {
 	rows, err := db.DB.Query("SELECT id, name, dns_provider, COALESCE(dns_credentials,''), COALESCE(enabled,1), created_at, updated_at FROM certificate_configs ORDER BY id")
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to query configs"})
+		writeInternalError(c, http.StatusInternalServerError, "读取证书配置列表失败", err)
 		return
 	}
 	defer rows.Close()
@@ -288,7 +289,7 @@ func (h *Handlers) CreateCertificateConfig(c *gin.Context) {
 	`, name, req.DNSProvider, string(credsJSON), req.Enabled)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to create config"})
+		writeInternalError(c, http.StatusInternalServerError, "创建证书配置失败", err)
 		return
 	}
 
@@ -307,6 +308,35 @@ const certificateConfigMaxListedReferences = 5
 type certificateConfigRuleRef struct {
 	caddyID string
 	domain  string
+}
+
+// queryCertificateConfigRuleRefs 读取引用某证书配置的规则（caddy_id + domain）。
+// 禁用守卫（事务视图）与删除守卫（已提交视图）曾各有一份 24 行同构实现
+// （Query → 逐行 Scan → Err → Close 四道收口各写一遍），改一处漏一处的风险
+// 与错误映射分叉都随份数增长——收敛为单一实现，出口错误由调用方统一映射。
+// q 传 *sql.Tx（守卫与写入同事务）或 *sql.DB（无事务视图）。
+func queryCertificateConfigRuleRefs(ctx context.Context, q rowsQueryer, query string, args ...any) ([]certificateConfigRuleRef, error) {
+	rows, err := q.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	references := make([]certificateConfigRuleRef, 0, 4)
+	for rows.Next() {
+		var ref certificateConfigRuleRef
+		if err := rows.Scan(&ref.caddyID, &ref.domain); err != nil {
+			return nil, err
+		}
+		references = append(references, ref)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	// 显式 Close 的错误同样上抛（defer 那次是幂等的兜底）。
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	return references, nil
 }
 
 func formatCertificateConfigReferences(references []certificateConfigRuleRef, referenceKind, verb string) string {
@@ -362,7 +392,7 @@ func (h *Handlers) UpdateCertificateConfig(c *gin.Context) {
 	//提交导致的清单失真（镜像 事务内旧行模式）。
 	tx, err := db.DB.BeginTx(c.Request.Context(), nil)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to update config"})
+		writeInternalError(c, http.StatusInternalServerError, "更新证书配置失败", err)
 		return
 	}
 	committed := false
@@ -476,28 +506,10 @@ func (h *Handlers) UpdateCertificateConfig(c *gin.Context) {
 	// enable_tls=1 的规则：TLS 关闭的规则不消费 ACME 证书
 	//（签发/续期/渲染证书门均以 enable_tls=1 为前提），点名它属误报。
 	if req.Enabled != nil && !*req.Enabled && oldEnabled {
-		refs, err := tx.QueryContext(c.Request.Context(), `SELECT caddy_id, COALESCE(domain,'') FROM lb_rules WHERE acme_config_id=? AND enabled=1 AND tls_source='acme_dns' AND IIF(enable_tls IN ('1',1),1,0)=1 ORDER BY caddy_id`, id)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to check rule references"})
-			return
-		}
-		var references []certificateConfigRuleRef
-		for refs.Next() {
-			var ref certificateConfigRuleRef
-			if err := refs.Scan(&ref.caddyID, &ref.domain); err != nil {
-				refs.Close()
-				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to check rule references"})
-				return
-			}
-			references = append(references, ref)
-		}
-		if err := refs.Err(); err != nil {
-			refs.Close()
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to check rule references"})
-			return
-		}
-		if err := refs.Close(); err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to check rule references"})
+		references, refsErr := queryCertificateConfigRuleRefs(c.Request.Context(), tx,
+			`SELECT caddy_id, COALESCE(domain,'') FROM lb_rules WHERE acme_config_id=? AND enabled=1 AND tls_source='acme_dns' AND IIF(enable_tls IN ('1',1),1,0)=1 ORDER BY caddy_id`, id)
+		if refsErr != nil {
+			writeInternalError(c, http.StatusInternalServerError, "检查规则引用失败", refsErr)
 			return
 		}
 		if len(references) > 0 {
@@ -568,11 +580,11 @@ func (h *Handlers) UpdateCertificateConfig(c *gin.Context) {
 	args = append(args, id)
 
 	if _, err := tx.ExecContext(c.Request.Context(), query, args...); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to update config"})
+		writeInternalError(c, http.StatusInternalServerError, "更新证书配置失败", err)
 		return
 	}
 	if err := tx.Commit(); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to update config"})
+		writeInternalError(c, http.StatusInternalServerError, "提交证书配置变更失败", err)
 		return
 	}
 	committed = true
@@ -621,28 +633,10 @@ func (h *Handlers) DeleteCertificateConfig(c *gin.Context) {
 	// （2026-09-05 证书域审计裁定）：删除前检查规则引用（全部规则，不限
 	// enabled）——被引用的配置删除后，关联规则下一次续签/首签会以
 	//「未选择可用的 DNS 提供商」静默失败，必须 409 显式列出引用方。
-	refs, refErr := db.DB.Query(`SELECT caddy_id, COALESCE(domain,'') FROM lb_rules WHERE acme_config_id=? ORDER BY caddy_id`, id)
+	references, refErr := queryCertificateConfigRuleRefs(c.Request.Context(), db.DB,
+		`SELECT caddy_id, COALESCE(domain,'') FROM lb_rules WHERE acme_config_id=? ORDER BY caddy_id`, id)
 	if refErr != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to check rule references"})
-		return
-	}
-	var references []certificateConfigRuleRef
-	for refs.Next() {
-		var ref certificateConfigRuleRef
-		if err := refs.Scan(&ref.caddyID, &ref.domain); err != nil {
-			refs.Close()
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to check rule references"})
-			return
-		}
-		references = append(references, ref)
-	}
-	if err := refs.Err(); err != nil {
-		refs.Close()
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to check rule references"})
-		return
-	}
-	if err := refs.Close(); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to check rule references"})
+		writeInternalError(c, http.StatusInternalServerError, "检查规则引用失败", refErr)
 		return
 	}
 	if len(references) > 0 {
@@ -654,7 +648,7 @@ func (h *Handlers) DeleteCertificateConfig(c *gin.Context) {
 		deleteCertificateConfigPreDeleteHook()
 	}
 	if _, err := db.DB.Exec("DELETE FROM certificate_configs WHERE id = ?", id); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to delete config"})
+		writeInternalError(c, http.StatusInternalServerError, "删除证书配置失败", err)
 		return
 	}
 	recordAudit(c, "删除", "DNS配置", services.FormatAuditDetail(fmt.Sprintf("配置 %d", id), name, provider))
@@ -733,7 +727,7 @@ func (h *Handlers) TestCertificateConfig(c *gin.Context) {
 		if credentials != "" {
 			if uerr := json.Unmarshal([]byte(credentials), &creds); uerr != nil {
 				recordAudit(c, "测试失败", "DNS配置", services.FormatAuditDetail(fmt.Sprintf("配置 %d", id), configName, provider, services.AuditResultPart("storage_corrupted")))
-				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "存储的 DNS 凭证已损坏，请重新填写完整凭证后保存"})
+				writeInternalError(c, http.StatusInternalServerError, "存储的 DNS 凭证已损坏，请重新填写完整凭证后保存", uerr)
 				return
 			}
 		}
@@ -804,7 +798,7 @@ func (h *Handlers) ListCertificates(c *gin.Context) {
 	// 「total 大于本页条数」始终表示存在更多行。
 	var total int64
 	if err := db.DB.QueryRow("SELECT COUNT(*) FROM cert_jobs j"+whereClause, args...).Scan(&total); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "查询证书任务失败"})
+		writeInternalError(c, http.StatusInternalServerError, "统计证书任务失败", err)
 		return
 	}
 	// cert_pem 只取首证书块（与 /certificates/jobs 同一单源投影）：expires_at
@@ -821,7 +815,7 @@ func (h *Handlers) ListCertificates(c *gin.Context) {
 	queryArgs := append(append([]any{}, args...), pageSize, offset)
 	rows, err := db.DB.Query(query, queryArgs...)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "查询证书任务失败"})
+		writeInternalError(c, http.StatusInternalServerError, "查询证书任务失败", err)
 		return
 	}
 	defer rows.Close()
@@ -847,7 +841,7 @@ func (h *Handlers) ListCertificates(c *gin.Context) {
 			"expires_at": expiresAtText, "not_after": certJobNotAfter(expiresAt.NullTime, certPEM), "updated_at": updatedAt})
 	}
 	if err := rows.Err(); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "遍历证书任务失败"})
+		writeInternalError(c, http.StatusInternalServerError, "遍历证书任务失败", err)
 		return
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"certificates": certs, "total": total, "page": page, "page_size": pageSize}})
@@ -915,7 +909,7 @@ func (h *Handlers) IssueCertificate(c *gin.Context) {
 	qm := services.GetCAQueueManager()
 	if qm == nil {
 		auditFailure("failed", "CA 队列未初始化")
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "CA 队列未初始化"})
+		writeInternalError(c, http.StatusInternalServerError, "CA 队列未初始化", errors.New("CA queue manager not initialized"))
 		return
 	}
 	// 队列暂停必须 409 点名原因——EnqueueIfActive 的
@@ -1414,7 +1408,11 @@ func (h *Handlers) IssueCertificate(c *gin.Context) {
 				// 交代跳过归因，否则用户会把「冷却/退役跳过」误判为系统故障。
 				message += "；" + skipNote
 			}
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: message, Data: gin.H{
+			// 底层明细（SQL/队列内部态）已在上方 Logf 单点留痕，这里走 internalError
+			// 装配（cause=nil 表示已就地记过），再补 Data 计数——5xx 的自定义
+			// payload 与统一留痕口径并存。
+			response := internalError("", message, nil)
+			response.Data = gin.H{
 				"queued":             0,
 				"redeployed":         0,
 				"failed":             len(failed),
@@ -1425,7 +1423,8 @@ func (h *Handlers) IssueCertificate(c *gin.Context) {
 				"skipped_other":      skippedUnsupported,
 				"skipped_retired":    skippedRetired,
 				"enqueue_conflict":   enqueueConflict,
-			}})
+			}
+			c.JSON(response.Code, response)
 			return
 		}
 		if queued == 0 && redeployed > 0 {

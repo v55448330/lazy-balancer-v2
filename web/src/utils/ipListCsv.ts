@@ -4,14 +4,40 @@
 // 此模块是导出/导入共用的字段级单源。
 
 /**
+ * 表格软件按公式求值的形态：可选的前导 `\t`/`\r`（部分工具先剥空白再识别公式）
+ * 之后紧跟 `= + - @`。纯空白开头（如制表符缩进）不是公式入口，不得中和——
+ * 否则「首尾空白加引号保真」的往返契约会被无故改写。
+ */
+const CSV_FORMULA_LEADING = /^[\t\r]*[=+\-@]/
+
+/**
  * 备注字段导出：换行归一为空格（导入端按行切分，多行备注无法回读），
  * 含逗号、双引号或首尾空白时按 RFC4180 包裹并双写内部引号。
  * 首尾空白必须加引号：导入侧对未加引号的字段做 trim 归一，不加引号会让
  * 「导出→导入」丢失备注的两端空格（模块声明的是逐字往返）。
+ *
+ * 公式中和：以 `= + - @`（或其前带 `\t`/`\r`）开头的备注在表格软件里是公式/DDE
+ * 入口，纯文本导出即静默求值。中和=在**引号串之前**再前置一个单引号；导入侧
+ * readUnneutralized 按同一判据剥一个，往返逐字相等，且字面单引号不会被吞
+ * （`'=x` 导出为 `''=x`，回读仍是 `'=x`）。
  */
 function formatCsvRemark(remark: string): string {
   const singleLine = remark.replace(/[\r\n]+/g, ' ')
-  return /[",]|^\s|\s$/.test(singleLine) ? `"${singleLine.replace(/"/g, '""')}"` : singleLine
+  const neutralized = neutralizeCsvFormula(singleLine)
+  return /[",]|^\s|\s$/.test(singleLine) ? `"${neutralized.replace(/"/g, '""')}"` : neutralized
+}
+
+/** 前导单引号串之后紧跟公式形态 → 前置一个单引号（表格软件视整串为文本）。 */
+function neutralizeCsvFormula(value: string): string {
+  const quotes = /^'*/.exec(value)?.[0] ?? ''
+  return CSV_FORMULA_LEADING.test(value.slice(quotes.length)) ? `'${value}` : value
+}
+
+/** 导入侧对称剥离：前导引号串非空且其后紧跟公式形态时剥掉一个引号。 */
+function readUnneutralized(value: string): string {
+  const quotes = /^'*/.exec(value)?.[0] ?? ''
+  if (quotes === '') return value
+  return CSV_FORMULA_LEADING.test(value.slice(quotes.length)) ? value.slice(1) : value
 }
 
 /** 导出一行（第一列 IP/CIDR，第二列备注；备注为空保留尾随逗号）。 */
@@ -95,6 +121,9 @@ export function parseIpListEntryLine(
     if (!/^\s*$/.test(remark.slice(field.next))) return null
     remark = field.text
   }
+  // 导出侧为防表格软件求值而前置的单引号在此对称剥离（未悬挂公式字符的字面
+  // 单引号原样保留）——往返逐字相等。
+  remark = readUnneutralized(remark)
   if (Array.from(remark).length > ipListRemarkMaxLength) {
     return { error: 'remark_too_long' }
   }

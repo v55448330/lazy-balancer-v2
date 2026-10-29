@@ -465,6 +465,25 @@ func TestAutobanStatus_suggestionsCarryIPLocation(t *testing.T) {
 
 // ---- 预置名单例外 ----
 
+// Given 观察轮尚未产出任何建议（autobanSuggestions 为空）。
+// When 读 /security/autoban/status。
+// Then 原始响应必须是 suggestions:[]（文档/前端契约是数组），不得是 null——
+// 解码成切片断言判不出 nil 与空切片，必须做字节级判定。
+func TestAutobanStatus_emptySuggestionsSerializeAsArray(t *testing.T) {
+	router := newAutobanTestEnv(t)
+	services.AutobanSetSuggestionsForTest(nil)
+	t.Cleanup(func() { services.AutobanSetSuggestionsForTest(nil) })
+
+	rec := getRequest(t, router, "/security/autoban/status")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"suggestions":[]`) {
+		t.Fatalf("body=%s, want suggestions 序列化为空数组（null 与文档/前端数组契约不符）", rec.Body.String())
+	}
+}
+
 func TestAutobanPreset_deleteRejected(t *testing.T) {
 	router := newAutobanTestEnv(t)
 	rec := deleteRequest(t, router, fmt.Sprintf("/security/ip-lists/%d", autobanPresetID(t)))

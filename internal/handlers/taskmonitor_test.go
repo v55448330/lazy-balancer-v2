@@ -576,7 +576,10 @@ func TestGetSystemTaskLogs_hidesInternalErrorDetails(t *testing.T) {
 			t.Fatalf("响应体回显内部细节 %q: %s", leaked, body)
 		}
 	}
-	if !strings.Contains(applogs.String(), "任务日志读取失败（crs, stat）") {
+	// 读取失败与证书任务日志共用 readRotatedLogTail：阶段标签统一为 read
+	//（stat/open/seek/read 的细分只留在被包裹的错误原文里），原始错误（含
+	// permission denied 与路径）仍必须进应用日志。
+	if !strings.Contains(applogs.String(), "任务日志读取失败（crs, read）") {
 		t.Fatalf("原始错误未进应用日志: %s", applogs.String())
 	}
 }

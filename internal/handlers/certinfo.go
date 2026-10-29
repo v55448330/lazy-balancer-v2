@@ -20,7 +20,9 @@ func (h *Handlers) GetRuleCertInfo(c *gin.Context) {
 	caddyID := c.Param("caddy_id")
 	info, err := services.GetRuleCertInfo(caddyID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取规则证书信息失败"})
+		// 底层原因由服务层就地记录（services.GetRuleCertInfo 自带 Logf），
+		// 这里传 nil 避免同一错误双行；仍走统一写点保证「5xx 只有一种形态」。
+		writeInternalError(c, http.StatusInternalServerError, "读取规则证书信息失败", nil)
 		return
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: info})
@@ -70,7 +72,7 @@ func (h *Handlers) GetRulesCertInfo(c *gin.Context) {
 			?
 		FROM lb_rules WHERE caddy_id IN (%s)`, placeholders), queryArgs...)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "批量读取规则证书配置失败"})
+		writeInternalError(c, http.StatusInternalServerError, "批量读取规则证书配置失败", err)
 		return
 	}
 	defer rows.Close()
@@ -88,13 +90,13 @@ func (h *Handlers) GetRulesCertInfo(c *gin.Context) {
 	for rows.Next() {
 		var rule ruleCertificate
 		if err := rows.Scan(&rule.id, &rule.enabled, &rule.enableTLS, &rule.source, &rule.domains, &rule.certPEM, &rule.expiryDays); err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "批量读取规则证书配置失败"})
+			writeInternalError(c, http.StatusInternalServerError, "批量读取规则证书配置失败", err)
 			return
 		}
 		rules[rule.id] = rule
 	}
 	if err := rows.Err(); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "批量读取规则证书配置失败"})
+		writeInternalError(c, http.StatusInternalServerError, "批量读取规则证书配置失败", err)
 		return
 	}
 
@@ -105,7 +107,7 @@ func (h *Handlers) GetRulesCertInfo(c *gin.Context) {
 		WHERE rule_id IN (%s) AND %s
 		ORDER BY rule_id, updated_at DESC, id DESC`, placeholders, services.CertJobMaterialPredicateSQL("")), args...)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "批量读取签发证书失败"})
+		writeInternalError(c, http.StatusInternalServerError, "批量读取签发证书失败", err)
 		return
 	}
 	defer jobRows.Close()
@@ -115,7 +117,7 @@ func (h *Handlers) GetRulesCertInfo(c *gin.Context) {
 		var id string
 		var candidate services.CertificateCandidate
 		if err := jobRows.Scan(&id, &candidate.ID, &candidate.Status, &candidate.CertPEM, &candidate.KeyPEM, &candidate.UpdatedAt, &candidate.Domain); err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "批量读取签发证书失败"})
+			writeInternalError(c, http.StatusInternalServerError, "批量读取签发证书失败", err)
 			return
 		}
 		// 候选查询已由 CertJobMaterialPredicateSQL 排除 disabled 行，
@@ -124,7 +126,7 @@ func (h *Handlers) GetRulesCertInfo(c *gin.Context) {
 		candidates[id] = append(candidates[id], candidate)
 	}
 	if err := jobRows.Err(); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "批量读取签发证书失败"})
+		writeInternalError(c, http.StatusInternalServerError, "批量读取签发证书失败", err)
 		return
 	}
 

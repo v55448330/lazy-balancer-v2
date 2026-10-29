@@ -682,7 +682,9 @@ const autobanSuggestionDisplayCap = 50
 func AutobanSuggestions() []AutobanSuggestion {
 	autobanMu.Lock()
 	defer autobanMu.Unlock()
-	out := append([]AutobanSuggestion(nil), autobanSuggestions...)
+	// 空集也返回非 nil 空切片：JSON 序列化契约是数组（null 与前端/文档的
+	// 数组契约不符），调用方不得各自补空切片——单源收在这里。
+	out := append([]AutobanSuggestion{}, autobanSuggestions...)
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Count != out[j].Count {
 			return out[i].Count > out[j].Count

@@ -165,6 +165,11 @@ func (h *Handlers) UpdateUser(c *gin.Context) {
 	// 同样跳过，见下方 UPDATE 分支），不得整单 400。故门控前移到事务内读到
 	// 旧值之后再判。
 	passwordChangeRequested := req.Password != nil && *req.Password != ""
+	// 密码门先于策略校验（单源门，见 oidcManagedWriteGate）：OIDC 用户的密码
+	// 不归本地管，弱密码不得先报「长度不能少于 N 位」。
+	if oidcManagedWriteGate(c, id, oidcManagedWriteFields{PasswordChanged: passwordChangeRequested}) {
+		return
+	}
 	if req.Password != nil {
 		if err := validatePasswordPolicy(*req.Password); err != nil {
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
@@ -217,16 +222,13 @@ func (h *Handlers) UpdateUser(c *gin.Context) {
 			return
 		}
 	}
-	if usernameChanged || displayNameChanged || passwordChangeRequested {
-		oidcUser, err := isOIDCUser(c.Request.Context(), id)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取用户身份失败"})
-			return
-		}
-		if oidcUser {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "OIDC 用户的用户名、显示名与密码由认证服务管理，请前往 OIDC 服务修改"})
-			return
-		}
+	// username/display_name 门在事务内读到旧值之后再判（值变化判定，密码门
+	// 已在上方先于策略校验处走同一单源门）。
+	if oidcManagedWriteGate(c, id, oidcManagedWriteFields{
+		UsernameChanged:    usernameChanged,
+		DisplayNameChanged: displayNameChanged,
+	}) {
+		return
 	}
 	var passwordHash string
 	if passwordChangeRequested {
@@ -269,12 +271,21 @@ func (h *Handlers) UpdateUser(c *gin.Context) {
 		changed = append(changed, "密码")
 	}
 	if len(sets) > 0 {
+		// 降级最后一个启用管理员：单源判定先行（同一事务内，写锁已由
+		// BEGIN IMMEDIATE 持有，不存在并发窗口）。
+		if oldEnabled && oldRole == "admin" && req.Role != nil && *req.Role == "user" {
+			hasOther, err := ensureOtherEnabledAdmin(c.Request.Context(), tx, id)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "更新用户失败"})
+				return
+			}
+			if !hasOther {
+				c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "不能移除最后一个已启用管理员"})
+				return
+			}
+		}
 		args = append(args, id)
 		query := "UPDATE users SET " + strings.Join(sets, ", ") + " WHERE id = ?"
-		if oldEnabled && oldRole == "admin" && req.Role != nil && *req.Role == "user" {
-			query += " AND EXISTS (SELECT 1 FROM users WHERE id <> ? AND role = 'admin' AND is_enabled = 1)"
-			args = append(args, id)
-		}
 		result, err := tx.ExecContext(c.Request.Context(), query, args...)
 		if err != nil {
 			if isUniqueConstraintError(err) {
@@ -361,6 +372,70 @@ func isOIDCUser(ctx context.Context, userID int) (bool, error) {
 	return provider == "oidc", nil
 }
 
+// oidcManagedWriteFields 本次请求实际改动的 IdP 源属性（调用方已按「值是否
+// 真的变化」判定过——携带与库中同值的字段属无变更局部更新，不算改动）。
+type oidcManagedWriteFields struct {
+	UsernameChanged    bool
+	DisplayNameChanged bool
+	PasswordChanged    bool
+}
+
+// oidcManagedWriteGate OIDC 托管身份（auth_provider='oidc'）写保护门的唯一
+// 实现：用户名/显示名/密码源自 IdP，本地改这些属性一律 400；身份读取失败
+// 映射 500（无法判定身份来源时不得让写继续，也不得折叠成 400 放行）。
+// 返回 true 表示已写出响应，调用方立即 return。
+//
+// 调用点约定：**必须先于密码策略校验**——否则「OIDC 用户 + 弱密码」会先撞
+// 「密码长度不能少于 N 位」，把「这账号的密码不归本地管」误报成「换个长点的
+// 密码就行」（两条改密路径曾各自实现且次序不同）。
+func oidcManagedWriteGate(c *gin.Context, userID int, fields oidcManagedWriteFields) bool {
+	if !fields.UsernameChanged && !fields.DisplayNameChanged && !fields.PasswordChanged {
+		return false
+	}
+	oidcUser, err := isOIDCUser(c.Request.Context(), userID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取用户身份失败"})
+		return true
+	}
+	if !oidcUser {
+		return false
+	}
+	c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: oidcManagedWriteMessage(fields)})
+	return true
+}
+
+// oidcManagedWriteMessage 按本次实际改动的属性拼装文案（单源）：admin 路径与
+// 自助路径改同一组属性时必须得到同一句话，不因各自手写而措辞分叉。
+func oidcManagedWriteMessage(fields oidcManagedWriteFields) string {
+	attrs := make([]string, 0, 3)
+	if fields.UsernameChanged {
+		attrs = append(attrs, "用户名")
+	}
+	if fields.DisplayNameChanged {
+		attrs = append(attrs, "显示名")
+	}
+	if fields.PasswordChanged {
+		attrs = append(attrs, "密码")
+	}
+	return "OIDC 用户的" + strings.Join(attrs, "、") + "由认证服务管理，请前往 OIDC 服务修改"
+}
+
+// ensureOtherEnabledAdmin 「至少保留一个启用管理员」不变量的唯一判定：同一
+// 事务内判断除 excludeID 之外是否还有已启用管理员。三个写端点（改角色、启停、
+// 删除）共用这一份判定，不再各自内联 EXISTS/COUNT SQL。
+//
+// 判定与后续写在同一事务内完成；事务由 DSN 的 _txlock=immediate 串行化
+// （BEGIN IMMEDIATE 即持写锁），故「先查后写」不存在 TOCTOU 窗口——并发互删
+// 用例（TestDeleteUser_concurrentMutualDeletionKeepsOneAdministrator）与
+// 并发互相降级用例是该保证的行为网。
+func ensureOtherEnabledAdmin(ctx context.Context, tx *sql.Tx, excludeID int) (bool, error) {
+	var others int
+	if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM users WHERE id <> ? AND role = 'admin' AND is_enabled = 1", excludeID).Scan(&others); err != nil {
+		return false, err
+	}
+	return others > 0, nil
+}
+
 // setupAdminProtected 判定目标用户是否为受保护的 break-glass 管理入口
 // （初始化创建的首个管理员，按 users.is_setup_admin 标记判定；标记缺失的
 // 旧库回落到 db.SetupAdminFallbackUserID）。读库失败必须 500 fail-closed——
@@ -427,12 +502,12 @@ func (h *Handlers) DeleteUser(c *gin.Context) {
 		return
 	}
 	if targetRole == "admin" && targetEnabled {
-		var otherAdmins int
-		if err := tx.QueryRowContext(c.Request.Context(), "SELECT COUNT(*) FROM users WHERE id <> ? AND role = 'admin' AND is_enabled = 1", id).Scan(&otherAdmins); err != nil {
+		hasOther, err := ensureOtherEnabledAdmin(c.Request.Context(), tx, id)
+		if err != nil {
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "删除用户失败"})
 			return
 		}
-		if otherAdmins == 0 {
+		if !hasOther {
 			c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "不能删除最后一个已启用管理员"})
 			return
 		}
@@ -566,9 +641,9 @@ func (h *Handlers) ToggleUserStatus(c *gin.Context) {
 			services.Logf("error", "ToggleUserStatus rollback failed for id=%d: %v", id, err)
 		}
 	}()
-	var statusUsername, statusProvider string
+	var statusUsername, statusRole, statusProvider string
 	var wasEnabled bool
-	if err := tx.QueryRowContext(c.Request.Context(), "SELECT username, is_enabled, COALESCE(auth_provider,'local') FROM users WHERE id = ?", id).Scan(&statusUsername, &wasEnabled, &statusProvider); err != nil {
+	if err := tx.QueryRowContext(c.Request.Context(), "SELECT username, role, is_enabled, COALESCE(auth_provider,'local') FROM users WHERE id = ?", id).Scan(&statusUsername, &statusRole, &wasEnabled, &statusProvider); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "用户不存在"})
 		} else {
@@ -590,8 +665,22 @@ func (h *Handlers) ToggleUserStatus(c *gin.Context) {
 		query = "UPDATE users SET is_enabled = 1, login_failed_attempts = 0, login_locked_until = NULL" + versionBump + " WHERE id = ?"
 		args = []any{id}
 	} else {
-		query = "UPDATE users SET is_enabled = 0" + versionBump + " WHERE id = ? AND (role <> 'admin' OR is_enabled = 0 OR EXISTS (SELECT 1 FROM users WHERE id <> ? AND role = 'admin' AND is_enabled = 1))"
-		args = []any{id, id}
+		// 停用最后一个启用管理员：单源判定先行（同一事务内，写锁已由
+		// BEGIN IMMEDIATE 持有）。目标不是「启用中的管理员」时该判定必然通过
+		// （不变量保证至少一个启用管理员存在），与旧内联 EXISTS 的谓词等价。
+		if wasEnabled && statusRole == "admin" {
+			hasOther, checkErr := ensureOtherEnabledAdmin(c.Request.Context(), tx, id)
+			if checkErr != nil {
+				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "更新用户状态失败"})
+				return
+			}
+			if !hasOther {
+				c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "不能禁用最后一个已启用管理员"})
+				return
+			}
+		}
+		query = "UPDATE users SET is_enabled = 0" + versionBump + " WHERE id = ?"
+		args = []any{id}
 	}
 	result, err := tx.ExecContext(c.Request.Context(), query, args...)
 	if err != nil {

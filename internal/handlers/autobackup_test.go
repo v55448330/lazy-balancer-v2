@@ -551,6 +551,91 @@ func TestRunAutoBackupOnce_reportsSectionsReadFailure(t *testing.T) {
 	}
 }
 
+// Given 引擎在「读取备份范围」窗口取消（角色降级/停止）。
+// When RunAutoBackupOnce 返回。
+// Then 按取消返回（context.Canceled），零 failed 行、零「备份失败」审计、零文件
+// ——读取阶段与构建/写盘的取消口径必须同形，取消不是备份失败。
+func TestRunAutoBackupOnce_cancelDuringSectionsReadLeavesNoFailedRowOrAudit(t *testing.T) {
+	h := newAutoBackupTestHandlers(t)
+	failedAuditsBefore := countAutoBackupAudit(t, "备份失败")
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	previousHook := autoBackupBeforeSectionsReadHook
+	autoBackupBeforeSectionsReadHook = func() { cancel() }
+	t.Cleanup(func() { autoBackupBeforeSectionsReadHook = previousHook })
+
+	_, err := h.RunAutoBackupOnce(ctx, "manual", "admin", 0)
+
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err=%v, want context.Canceled（读取阶段取消按取消返回）", err)
+	}
+	var rows int
+	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM auto_backups`).Scan(&rows); err != nil {
+		t.Fatalf("count rows: %v", err)
+	}
+	if rows != 0 {
+		t.Fatalf("auto_backups rows=%d, want 0（取消不得落 failed 行）", rows)
+	}
+	if got := countAutoBackupAudit(t, "备份失败"); got != failedAuditsBefore {
+		t.Fatalf("备份失败审计 %d→%d，取消不得记备份失败", failedAuditsBefore, got)
+	}
+	entries, readErr := os.ReadDir(h.cfg.BackupDir)
+	if readErr != nil {
+		t.Fatalf("read backup dir: %v", readErr)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("备份目录残留 %d 个文件，取消不得留下任何文件", len(entries))
+	}
+}
+
+// Given 备份表被写坏到超过列表窗口（1 条 success 在最旧 + 250 条更新 failed）。
+// When 读设置端点。
+// Then 列表不超过窗口上限并标记 truncated，且 last_success_at 仍取真实最近
+// success 行（不得因窗口截断而误报 null）。
+func TestAutoBackupSettings_limitsListAndKeepsLastSuccessBeyondWindow(t *testing.T) {
+	h := newAutoBackupTestHandlers(t)
+	const successCreatedAt = "2026-01-01 00:00:00"
+	if _, err := db.DB.Exec(`INSERT INTO auto_backups (filename,status,size_bytes,sections,trigger_type,message,app_version,created_at)
+		VALUES ('old-success.lbbak','success',1,'[]','manual','','','` + successCreatedAt + `')`); err != nil {
+		t.Fatalf("seed success row: %v", err)
+	}
+	for i := range 250 {
+		if _, err := db.DB.Exec(`INSERT INTO auto_backups (filename,status,size_bytes,sections,trigger_type,message,app_version,created_at)
+			VALUES (?, 'failed', 0, '[]', 'schedule', '模拟失败', '', ?)`,
+			fmt.Sprintf("failed-%03d.lbbak", i), fmt.Sprintf("2026-02-01 00:00:%02d", i%60)); err != nil {
+			t.Fatalf("seed failed row %d: %v", i, err)
+		}
+	}
+
+	response := serveAutoBackupJSON(t, h, http.MethodGet, "/settings/auto-backup", "/settings/auto-backup", "", h.AutoBackupSettings)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	var body struct {
+		Data struct {
+			Backups          []json.RawMessage `json:"backups"`
+			BackupsTruncated bool              `json:"backups_truncated"`
+			LastSuccessAt    *string           `json:"last_success_at"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v body=%s", err, response.Body.String())
+	}
+	if len(body.Data.Backups) != autoBackupListLimit {
+		t.Fatalf("backups=%d, want %d（列表必须按窗口上限截断）", len(body.Data.Backups), autoBackupListLimit)
+	}
+	if !body.Data.BackupsTruncated {
+		t.Fatal("backups_truncated=false，超窗口时必须显式标记截断")
+	}
+	if body.Data.LastSuccessAt == nil {
+		t.Fatal("last_success_at=null，want 最近一次 success 行（不得因列表截断误报 null）")
+	}
+	if *body.Data.LastSuccessAt != successCreatedAt {
+		t.Fatalf("last_success_at=%q, want %q", *body.Data.LastSuccessAt, successCreatedAt)
+	}
+}
+
 func TestUpdateAutoBackupSettings_enableSetsWatermarkNotImmediateRun(t *testing.T) {
 	// 2026-09-19 用户裁定:启用不得立即触发补跑——off→on 置水位线(=now),
 	// 下一次执行=启用后的下一个到期槽;仅手动触发/停机跨槽补跑属预期。
@@ -1259,7 +1344,7 @@ func (backupListFailingConn) QueryContext(_ context.Context, query string, _ []d
 type backupSettingsRow struct{ done bool }
 
 func (r *backupSettingsRow) Columns() []string {
-	return []string{"enabled", "frequency", "time", "day", "keep", "sections", "last_run"}
+	return []string{"enabled", "frequency", "time", "day", "keep", "sections", "last_run", "last_success_at"}
 }
 
 func (r *backupSettingsRow) Close() error { return nil }
@@ -1269,7 +1354,7 @@ func (r *backupSettingsRow) Next(dest []driver.Value) error {
 		return io.EOF
 	}
 	r.done = true
-	row := []driver.Value{int64(0), "daily", "03:00", int64(1), int64(7), nil, nil}
+	row := []driver.Value{int64(0), "daily", "03:00", int64(1), int64(7), nil, nil, nil}
 	copy(dest, row)
 	return nil
 }

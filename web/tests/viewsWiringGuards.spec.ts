@@ -686,8 +686,15 @@ test('OIDC 设置卡：访问白名单字段（email 域 / 用户组）读回显
   assert.match(load, /form\.allowedEmailDomains = formatAllowList\(res\.data\.allowed_email_domains\)/)
   assert.match(load, /form\.allowedGroups = formatAllowList\(res\.data\.allowed_groups\)/)
   const save = section(page, 'const save = async', '\nconst ')
-  assert.match(save, /allowed_email_domains: parseDomainAllowList\(form\.allowedEmailDomains\)/)
-  assert.match(save, /allowed_groups: parseGroupAllowList\(form\.allowedGroups\)/)
+  // 白名单在保存前只解析一次（预算校验与载荷共用同一份解析结果，避免
+  // 「校验的是旧文本、提交的是新文本」）。
+  assert.match(save, /const allowedEmailDomains = parseDomainAllowList\(form\.allowedEmailDomains\)/)
+  assert.match(save, /const allowedGroups = parseGroupAllowList\(form\.allowedGroups\)/)
+  assert.match(save, /allowed_email_domains: allowedEmailDomains/)
+  assert.match(save, /allowed_groups: allowedGroups/)
+  // 预算校验必须在提交前拦住（后端同样 400，但保存门会先跑一次 discovery 探测）
+  assert.match(save, /validateAllowList\('允许的 email 域', allowedEmailDomains\)/)
+  assert.match(save, /validateAllowList\('允许的组', allowedGroups\)/)
   // 局部 PUT（启用/暂停/删除）不得携带键——契约：缺省=不动、[]=清除
   const toggle = section(page, 'const toggleEnabled', '\nconst ')
   assert.match(toggle, /request\.put\('\/settings\/oidc', \{ enabled: on \}\)/)

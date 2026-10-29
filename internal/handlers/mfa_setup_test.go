@@ -154,10 +154,14 @@ func (mfaPendingWriteFailingConn) ExecContext(_ context.Context, query string, _
 // TestMFASetup_pendingWriteFailure_returns500：pending 写入失败必须显式 500
 // 「保存 MFA 密钥失败」，不得 200 返回 secret 而 pending 为空。
 // 修复前：两段写的清空语句失败即整体跳过，200 + 空 pending + 用户扫码白扫。
+// 基础设施故障分支还必须双留痕（服务端日志 + 认证
+// 拒绝审计）——同族 MFAActivate 已如此，此处曾零日志零审计，DB 只读/磁盘满
+// 期间用户持续 500 而管理员无法区分「扫码失败」与「写库故障」。
 func TestMFASetup_pendingWriteFailure_returns500(t *testing.T) {
 	// Given 真库种子用户 + 写入路径注入故障的假 DB
 	h := newBackupTestHandlers(t)
 	seedMfaSetupUser(t)
+	logs := captureLog(t)
 	fake := sql.OpenDB(mfaPendingWriteFailingConnector{})
 	t.Cleanup(func() { _ = fake.Close() })
 	orig := db.DB
@@ -168,12 +172,54 @@ func TestMFASetup_pendingWriteFailure_returns500(t *testing.T) {
 	// When
 	rec := postRaw(router, "/auth/mfa/setup", `{}`)
 
-	// Then 500 + 保存 MFA 密钥失败（修复前：200 + secret 但 pending 未落库）
+	// Then 500 + 统一故障文案（mfaInternalFailure；修复前：200 + secret 但 pending 未落库）
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("status=%d body=%s, want 500（pending 写入失败不得返回 200）", rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), "保存 MFA 密钥失败") {
-		t.Fatalf("body=%s, want 包含「保存 MFA 密钥失败」", rec.Body.String())
+	if !strings.Contains(rec.Body.String(), "MFA 操作失败") {
+		t.Fatalf("body=%s, want 包含统一故障文案「MFA 操作失败」", rec.Body.String())
+	}
+	// Then 服务端日志留痕（含具体失败操作名，便于与真实故障对账）
+	if !strings.Contains(logs.String(), "保存 MFA 密钥 失败") {
+		t.Fatalf("logs=%q, want 含「保存 MFA 密钥 失败」", logs.String())
+	}
+	// Then 认证拒绝审计留痕（与 MFAActivate 的存储故障同口径）
+	if got := mfaActivateAuditCount(t, "保存 MFA 密钥"); got != 1 {
+		t.Fatalf("audit rows=%d, want 1 containing 保存 MFA 密钥", got)
+	}
+}
+
+// TestMFASetup_generateSecretFailureWritesLog：密钥生成失败同样是基础设施
+// 故障，必须留日志（不写审计——未产生任何状态变更，与 MFAActivate 的
+// 「读取 pending 故障」分支同口径）。生成器经测试缝注入（crypto/rand 故障
+// 无法在测试里自然构造）。
+func TestMFASetup_generateSecretFailureWritesLog(t *testing.T) {
+	// Given
+	h := newBackupTestHandlers(t)
+	seedMfaSetupUser(t)
+	logs := captureLog(t)
+	original := mfaGenerateSecretForTest
+	mfaGenerateSecretForTest = func(string) (string, string, error) {
+		return "", "", errors.New("注入的密钥生成故障")
+	}
+	t.Cleanup(func() { mfaGenerateSecretForTest = original })
+	router := mfaSetupTestRouter(h)
+
+	// When
+	rec := postRaw(router, "/auth/mfa/setup", `{}`)
+
+	// Then 500 + 统一故障文案 + 日志留痕（修复前：零日志）
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d body=%s, want 500", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "MFA 操作失败") {
+		t.Fatalf("body=%s, want 包含统一故障文案「MFA 操作失败」", rec.Body.String())
+	}
+	if !strings.Contains(logs.String(), "生成 MFA 密钥 失败") {
+		t.Fatalf("logs=%q, want 含「生成 MFA 密钥 失败」", logs.String())
+	}
+	if !strings.Contains(logs.String(), "注入的密钥生成故障") {
+		t.Fatalf("logs=%q, want 携带底层错误", logs.String())
 	}
 }
 

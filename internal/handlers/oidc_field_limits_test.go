@@ -5,6 +5,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -47,6 +48,95 @@ func TestOIDCSettingsUpdate_rejectsOversizedFreeTextFields(t *testing.T) {
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s, want 200（上限值本身合法）", rec.Code, rec.Body.String())
+	}
+}
+
+// OIDC 访问白名单的条目数与单项长度预算：名单整块落进 global_config 单列、
+// 随集群快照搬运，每次 OIDC 回调按 len(AllowedGroups)×len(claims.Groups)
+// 线性扫描——无上限时一次误粘贴就能把回调路径放大成 O(n×m)（与 api key
+// 白名单 256 上限同族）。数值 100 条 / 128 rune 为审计建议值。
+func TestOIDCSettingsUpdate_rejectsOversizedAllowLists(t *testing.T) {
+	router, _ := setupOIDCTest(t, newMockIdP(t))
+	groupList := func(n int) string {
+		items := make([]string, 0, n)
+		for i := range n {
+			items = append(items, fmt.Sprintf(`"g%03d"`, i))
+		}
+		return "[" + strings.Join(items, ",") + "]"
+	}
+	domainList := func(n int) string {
+		items := make([]string, 0, n)
+		for i := range n {
+			items = append(items, fmt.Sprintf(`"d%03d.example.com"`, i))
+		}
+		return "[" + strings.Join(items, ",") + "]"
+	}
+	cases := []struct {
+		name string
+		body string
+		want string
+	}{
+		{"allowed_email_domains 条目数超限", `{"allowed_email_domains":` + domainList(oidcAllowListMaxEntries+1) + `}`, "允许的 email 域"},
+		{"allowed_groups 条目数超限", `{"allowed_groups":` + groupList(oidcAllowListMaxEntries+1) + `}`, "允许的组"},
+		{"allowed_email_domains 单项超长", `{"allowed_email_domains":["` + strings.Repeat("a", oidcAllowListEntryMaxRunes) + `.com"]}`, "允许的 email 域"},
+		{"allowed_groups 单项超长", `{"allowed_groups":["` + strings.Repeat("g", oidcAllowListEntryMaxRunes+1) + `"]}`, "允许的组"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPut, "/api/v1/settings/oidc", strings.NewReader(tc.body))
+			req.Header.Set("Content-Type", "application/json")
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, req)
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status=%d body=%s, want 400", rec.Code, rec.Body.String())
+			}
+			if !strings.Contains(rec.Body.String(), tc.want) {
+				t.Fatalf("message=%s, want 点名 %q", rec.Body.String(), tc.want)
+			}
+		})
+	}
+
+	// 边界值本身合法：100 条 + 单项恰好 128 rune 必须落库成功。
+	boundaryDomain := strings.Repeat("b", oidcAllowListEntryMaxRunes-4) + ".com" // 恰 128 rune
+	body := `{"allowed_email_domains":` + domainList(oidcAllowListMaxEntries) +
+		`,"allowed_groups":["` + strings.Repeat("g", oidcAllowListEntryMaxRunes) + `","` + boundaryDomain + `"]}`
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/settings/oidc", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200（边界值本身合法）", rec.Code, rec.Body.String())
+	}
+}
+
+// 已落库的超限旧值（带外写入/历史版本）读侧必须照常工作——写侧上限不得把
+// 存量配置变成 500/panic（读侧只做逐条比较，不施加上限）。
+func TestOIDCStatus_toleratesOversizedStoredAllowLists(t *testing.T) {
+	router, _ := setupOIDCTest(t, newMockIdP(t))
+	legacyGroups := make([]string, 0, oidcAllowListMaxEntries*3)
+	for i := range oidcAllowListMaxEntries * 3 {
+		legacyGroups = append(legacyGroups, fmt.Sprintf("legacy-group-%03d", i))
+	}
+	if err := saveOIDCConfig(OIDCConfig{
+		Enabled: true, Issuer: "https://idp.example.com", ClientID: "cid", ClientSecret: "sec",
+		AllowedGroups:       legacyGroups,
+		AllowedEmailDomains: []string{strings.Repeat("a", oidcAllowListEntryMaxRunes) + ".com"},
+	}); err != nil {
+		t.Fatalf("seed stored config: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/auth/oidc/status", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status code=%d body=%s, want 200（存量超限值不得让读侧失败）", rec.Code, rec.Body.String())
+	}
+
+	cfg, err := loadOIDCConfig()
+	if err != nil {
+		t.Fatalf("load stored config: %v", err)
+	}
+	if allowed, reason := oidcAccessAllowed(cfg, oidcAccessClaims{Groups: []string{"nobody"}}); allowed {
+		t.Fatalf("超限存量组名单下不得放行未知组（reason=%s）", reason)
 	}
 }
 

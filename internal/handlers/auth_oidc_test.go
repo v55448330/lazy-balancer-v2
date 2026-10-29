@@ -60,6 +60,10 @@ type mockIdP struct {
 	// lastNonce 兜底同值)。
 	nonceMu          sync.Mutex
 	nonceByChallenge map[string]string
+	// requests 出站请求计数：任何打到本 IdP 的请求都 +1（含 discovery）。
+	// 用于钉「启用门拒绝时一次出站都没有」——只看 302 目标无法区
+	// 「拦在门前」与「跳转后才发现配置不全」。
+	requests atomic.Int64
 }
 
 func newMockIdP(t *testing.T) *mockIdP {
@@ -175,7 +179,10 @@ func newMockIdP(t *testing.T) *mockIdP {
 			"id_token": signed,
 		})
 	})
-	m.server = httptest.NewServer(mux)
+	m.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		m.requests.Add(1)
+		mux.ServeHTTP(w, r)
+	}))
 	m.issuer = m.server.URL
 	t.Cleanup(m.server.Close)
 	return m

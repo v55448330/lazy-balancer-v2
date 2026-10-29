@@ -1001,6 +1001,13 @@ func TestRetryCertificateDeployment_missingExpiryRejectsMalformedPEM(t *testing.
 func TestCertIssuer_deploymentFailed_backs_off_then_slowRetriesAtMaxAttempts(t *testing.T) {
 	// Given
 	jobID, ruleID := seedCertificateJob(t, "downloaded")
+	// 退避次数从 DB 重算：其它用例遗留的异步 deploymentRetry 若在同一库上回写
+	// deployment_attempts，会让本用例的延迟序列整体后移一位（实测偶发
+	// 「retry 6 delay=1m4s want 32s」）。前置归零 + 每轮断言计数，使残留回写
+	// 立即以「计数不符」显性失败，而不是伪装成退避算法错。
+	if _, err := db.DB.Exec(`UPDATE cert_jobs SET deployment_attempts=0, deployment_available_after=NULL WHERE id=?`, jobID); err != nil {
+		t.Fatalf("reset deployment attempts: %v", err)
+	}
 	issuer := NewCertIssuer(nil)
 	// deploymentFailed 的再调度是异步 go deploymentRetry，
 	// 回调内裸写切片与已修的两处同型竞态——channel 收集 + 有界等待。

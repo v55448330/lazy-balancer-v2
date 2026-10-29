@@ -124,3 +124,21 @@ test('编辑用户只填确认密码：必须拦下并提示，不得静默丢�
   assert.ok(missingAt >= 0, 'Users 必须消费单源拦截')
   assert.ok(mismatchAt > missingAt, '空新密码的拦截必须先于「两次不一致」判定')
 })
+
+// 个人资料弹框同形态：validatePassword('') 返回 null（留空=不修改），载荷省略
+// password（后端保留原密码）却回报「保存成功」——用户以为改了密码（假成功）。
+// 与用户管理共用同一单源拦截，且必须先于「两次不一致」判定。
+test('个人资料只填确认密码：必须拦下并提示，不得回报成功', () => {
+  const page = code('src/components/ProfileDialog.vue')
+  assert.match(page, /import \{[^}]*missingNewPasswordMessage[^}]*\} from '@\/utils\/credentials'/, '必须消费 credentials 单源')
+  const body = section(page, 'const saveProfile = async', 'const confirmMfaAction')
+  const missingAt = body.indexOf('missingNewPasswordMessage(')
+  const mismatchAt = body.indexOf('password !== profileForm.value.passwordConfirm')
+  const busyAt = body.indexOf('saving.value = true')
+  assert.ok(missingAt >= 0, 'ProfileDialog 必须消费单源拦截')
+  assert.ok(mismatchAt > missingAt, '空新密码的拦截必须先于「两次不一致」判定')
+  assert.ok(busyAt > missingAt, '拦截必须先于在途占位（不弹确认框、不发写请求）')
+  const guard = body.slice(missingAt, busyAt)
+  assert.match(guard, /showToast\('warning', \w+\)/, '命中时必须给出提示')
+  assert.match(guard, /return/, '命中时不得继续提交')
+})

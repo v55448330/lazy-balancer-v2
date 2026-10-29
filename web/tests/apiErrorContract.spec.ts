@@ -314,6 +314,9 @@ const NON_ENVELOPE_SITES: Record<string, number> = {
   'internal/handlers/system.go#GetRealtimeTraffic#call:systemInternalFailure': 1,
   'internal/handlers/system.go#GetConnectionStats#call:systemInternalFailure': 1,
   'internal/handlers/system.go#GetAppLogs#call:systemInternalFailure': 4,
+  // 批量签发全失败：响应体经 internalError 装配后补 Data 计数（保留失败明细），
+  // 首 token 是局部变量而非可解析信封；底层原因已在同一分支 Logf 留痕。
+  'internal/handlers/certificates.go#IssueCertificate#var:response': 1,
   'internal/middleware/middleware.go#SetupRouter#literal:gin.H': 1,
 }
 
@@ -333,8 +336,12 @@ const MIN_ENVELOPES: Record<(typeof SCAN_DIRS)[number], number> = {
   // 行不存在、查询失败）收敛为 failAutoBackupAccess 单源（净 -2）。
   // ④登录里 MFA 标记的独立查询并入 db.UserRowColumns 单源用户查询
   // （fail-closed 500 保留在同一查询的错误分支，净 -1）。
-  // 叠加上其它调用点增补后实测 1305。
-  'internal/handlers': 1305,
+  // ⑤OIDC 写保护门收敛为 oidcManagedWriteGate 单源（两条改密路径各 2 处
+  // 内联 500/400 移入门内，净 -4）；MFASetup 两条基础设施故障分支改走
+  // mfaInternalFailure（净 -1，另一处移入日志/审计单源）——文件级
+  // auth.go -4 / users.go +4 / mfa.go -2 / auth_oidc.go +1。
+  // 叠加上其它调用点增补（含证书族与自动备份族继续收敛）后实测 1293。
+  'internal/handlers': 1293,
   'internal/middleware': 43,
 }
 

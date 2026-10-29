@@ -227,3 +227,47 @@ func TestAPIDocs_readOnlyKeyClaimMatchesWhitelistMethodsAndGroups(t *testing.T) 
 		t.Errorf("API Key 行仍只声明 POST 豁免（DELETE 释放采集租约同样放行）: %s", row)
 	}
 }
+
+// syncedGlobalConfigWriterDocs 是「写 global_config 同步列」的 admin 组端点，
+// 与 middleware 的 isSynchronizedWrite 清单同集合（该处判定 bump 集群版本）。
+// 这些端点的从节点写门挂在网关（admin 组 readOnlyGuard），handler 内没有
+// requireMasterNode 之类的二次判定——文档若只写 403 admin_required，排障会把
+// 「从节点只读」误读成「权限不足」。
+var syncedGlobalConfigWriterDocs = []string{
+	"PUT /config",
+	"PUT /caddy/config",
+	"PUT /cluster/settings",
+	"PUT /admin-tls",
+	"PUT /settings/auto-backup",
+	"PUT /settings/oidc",
+	"DELETE /settings/oidc",
+}
+
+// 写门文档一致性：同步列写端点的 403 必须点名「从节点只读」（写门在网关），
+// 只写 admin_required 会让从节点侧保存失败被误归因为角色问题。
+func TestAPIDocs_syncedConfigWritersDocumentSlaveReadOnly(t *testing.T) {
+	index := map[string]apiDocRoute{}
+	for _, route := range apiDocRoutes {
+		index[route.Method+" "+route.Path] = route
+	}
+	for _, key := range syncedGlobalConfigWriterDocs {
+		route, ok := index[key]
+		if !ok {
+			t.Errorf("文档缺少路由 %s", key)
+			continue
+		}
+		documented := false
+		for _, entry := range route.Errors {
+			if !strings.HasPrefix(entry, "403") {
+				continue
+			}
+			if strings.Contains(entry, "从节点只读") || strings.Contains(entry, "slave") {
+				documented = true
+				break
+			}
+		}
+		if !documented {
+			t.Errorf("%s 的 403 未点名「从节点只读」（写门在网关 readOnlyGuard）errors=%v", key, route.Errors)
+		}
+	}
+}

@@ -92,7 +92,18 @@ export function threatScreenWritePayload(input: {
 }
 
 /**
- * ACME 全局设置保存载荷：三个数值输入清空后按 0 提交（不携带 null）。
+ * 清空数值输入（el-input-number 回写 null/undefined）→ 省略该键。
+ *
+ * 不得按 0 提交：cert_expiry_days 的写侧门是 1-365、cert_renewal_attempts 是
+ * 1-10（0 直接被 400 拒，整卡保存失败）；cert_renewal_days 的 0 虽合法，语义
+ * 却是「每次扫描都重签」并触发 CA 重复证书限流——清空不是「设为 0」。
+ * 省略键由后端 COALESCE 保持现值（caddy.go UpdateConfig）。
+ */
+const acmeNumberField = <K extends string>(key: K, value: number | null | undefined): Partial<Record<K, number>> =>
+  value === null || value === undefined ? {} : { [key]: value } as Partial<Record<K, number>>
+
+/**
+ * ACME 全局设置保存载荷：三个数值输入清空后省略键（保持现值，不再提交 0）。
  */
 export function acmeGlobalWritePayload(input: {
   email: string
@@ -102,17 +113,20 @@ export function acmeGlobalWritePayload(input: {
   defaultCAProviderId: number
 }): {
   acme_email: string
-  cert_expiry_days: number
-  cert_renewal_days: number
-  cert_renewal_attempts: number
+  cert_expiry_days?: number
+  cert_renewal_days?: number
+  cert_renewal_attempts?: number
   default_ca_provider_id: number
   source: 'acme'
 } {
+  const expiryDays = acmeNumberField('cert_expiry_days', input.expiryDays)
+  const renewalDays = acmeNumberField('cert_renewal_days', input.renewalDays)
+  const renewalAttempts = acmeNumberField('cert_renewal_attempts', input.renewalAttempts)
   return {
     acme_email: input.email.trim(),
-    cert_expiry_days: numberOr(input.expiryDays, 0),
-    cert_renewal_days: numberOr(input.renewalDays, 0),
-    cert_renewal_attempts: numberOr(input.renewalAttempts, 0),
+    ...expiryDays,
+    ...renewalDays,
+    ...renewalAttempts,
     default_ca_provider_id: input.defaultCAProviderId,
     source: 'acme' as const,
   }

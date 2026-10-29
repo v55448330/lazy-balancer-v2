@@ -284,6 +284,18 @@ func mfaInternalFailure(c *gin.Context, op string, err error) {
 	c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "MFA 操作失败，请稍后重试"})
 }
 
+// mfaGenerateSecretForTest 密钥生成故障的测试缝：crypto/rand 故障无法在用例
+// 里自然构造，而「生成失败必须留痕」的可观测契约需要该分支可达。生产恒为
+// nil（直连 services.MFAGenerateSecret）。
+var mfaGenerateSecretForTest func(accountName string) (string, string, error)
+
+func mfaGenerateSecret(accountName string) (string, string, error) {
+	if mfaGenerateSecretForTest != nil {
+		return mfaGenerateSecretForTest(accountName)
+	}
+	return services.MFAGenerateSecret(accountName)
+}
+
 func (h *Handlers) MFASetup(c *gin.Context) {
 	// users 表在导入全量替代表清单内：MFA 状态列随表替换，窗口内写入会被
 	// 静默覆盖（用户以为 MFA 已启用实被回滚）或阻塞至 busy_timeout——与
@@ -339,16 +351,21 @@ func (h *Handlers) MFASetup(c *gin.Context) {
 	if username == "" {
 		username = strconv.FormatInt(contextUserID(c), 10)
 	}
-	secret, uri, err := services.MFAGenerateSecret(username)
+	secret, uri, err := mfaGenerateSecret(username)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "生成 MFA 密钥失败"})
+		// 基础设施故障（crypto/rand 不可用）：固定文案 + 服务端日志留痕，
+		// 与同族 MFAActivate 三态口径一致；未产生状态变更故不写审计。
+		mfaInternalFailure(c, "生成 MFA 密钥", err)
 		return
 	}
 	// 单条 UPDATE 原子落库（新密钥 + 失败计数清零同生共死）——此前
 	// 两段写（先清后设）在首成次败时已返回 200+secret 而 pending 为空，用户
 	// 扫码后 activate 必报「没有待激活的 MFA 密钥」，且两语句间存在瞬时空窗。
 	if _, err := db.DB.Exec("UPDATE users SET mfa_pending_secret=?, mfa_pending_fails=0 WHERE id=?", secret, userID); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "保存 MFA 密钥失败"})
+		// DB 只读/磁盘满/WAL 长占期间用户点「启用 MFA」持续 500：只回固定文案
+		// 而无日志无审计，管理员无法区分「扫码失败」与「写库故障」。
+		recordAudit(c, "认证拒绝", "用户认证", services.FormatAuditDetail("保存 MFA 密钥", services.AuditResultPart("failure")))
+		mfaInternalFailure(c, "保存 MFA 密钥", err)
 		return
 	}
 	// 已启用用户重绑时本步轮换 pending 密钥：此前零留痕，随后 activate 恒记

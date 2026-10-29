@@ -91,15 +91,15 @@
         <div class="cred-row">
           <div class="cred-row__label">邮箱域</div>
           <div class="cred-row__field">
-            <el-input v-model="form.allowedEmailDomains" placeholder="example.com, corp.example.org（逗号分隔；留空=不限制）" clearable />
-            <div class="form-tip-line">仅这些邮箱域的用户可登录（写入侧自动去空白、转小写并去重）；邮箱还须由认证服务标记为已验证（email_verified=true），未验证的邮箱一律拒登</div>
+            <el-input v-model="form.allowedEmailDomains" placeholder="example.com, corp.example.org（逗号分隔；留空=不限制）" :maxlength="allowListMaxChars" clearable />
+            <div class="form-tip-line">仅这些邮箱域的用户可登录（写入侧自动去空白、转小写并去重）；邮箱还须由认证服务标记为已验证（email_verified=true），未验证的邮箱一律拒登；最多 {{ OIDC_ALLOW_LIST_MAX_ENTRIES }} 条、单条 ≤{{ OIDC_ALLOW_LIST_ENTRY_MAX_CHARS }} 个字符</div>
           </div>
         </div>
         <div class="cred-row">
           <div class="cred-row__label">用户组</div>
           <div class="cred-row__field">
-            <el-input v-model="form.allowedGroups" placeholder="ops, Domain Admins（逗号分隔；留空=不限制）" clearable />
-            <div class="form-tip-line">仅这些 IdP 用户组的成员可登录（组名大小写敏感；组名可含空格，仅按逗号/分号/换行分隔）</div>
+            <el-input v-model="form.allowedGroups" placeholder="ops, Domain Admins（逗号分隔；留空=不限制）" :maxlength="allowListMaxChars" clearable />
+            <div class="form-tip-line">仅这些 IdP 用户组的成员可登录（组名大小写敏感；组名可含空格，仅按逗号/分号/换行分隔）；最多 {{ OIDC_ALLOW_LIST_MAX_ENTRIES }} 条、单条 ≤{{ OIDC_ALLOW_LIST_ENTRY_MAX_CHARS }} 个字符</div>
           </div>
         </div>
       </div>
@@ -132,7 +132,7 @@ import DialogHeader from '@/components/DialogHeader.vue'
 import { request, mfaAwareSuccess, ApiRequestError } from '@/utils/api'
 import { copyText } from '@/utils/copy'
 import { useAuthStore } from '@/stores/auth'
-import { formatAllowList, parseDomainAllowList, parseGroupAllowList } from '@/utils/oidcAllowList'
+import { formatAllowList, parseDomainAllowList, parseGroupAllowList, validateAllowList, OIDC_ALLOW_LIST_ENTRY_MAX_CHARS, OIDC_ALLOW_LIST_MAX_ENTRIES } from '@/utils/oidcAllowList'
 import { createOidcProbeGuard, isOidcProbeFresh, oidcProbeKey } from '@/utils/oidcProbe'
 import { createLatestReadSession, runExclusive } from '@/utils/viewAsyncState'
 import type { OidcProbeToken, OidcProbeValues } from '@/utils/oidcProbe'
@@ -176,6 +176,11 @@ const callbackNodes = computed(() => [
   { label: '回调地址（本节点）', url: callbackUrl.value },
   ...slaveOrigins.value,
 ])
+
+// 白名单输入框的粗粒度闸：100 条 ×（128 字符 + 分隔符）。精确口径是
+// validateAllowList 的「条目数 / 单条字符数」校验，这里只防一次误粘贴就把
+// 载荷撑到几十 KB（保存侧仍会被后端 400 拦住，但那时已白跑一次探测）。
+const allowListMaxChars = OIDC_ALLOW_LIST_MAX_ENTRIES * (OIDC_ALLOW_LIST_ENTRY_MAX_CHARS + 1)
 
 const probeGuard = createOidcProbeGuard()
 const currentProbeValues = (): OidcProbeValues => ({
@@ -342,6 +347,13 @@ const save = async () => {
   if (!form.issuer.trim()) { ElMessage.warning('请填写服务地址'); return }
   if (!form.clientId.trim()) { ElMessage.warning('请填写 Client ID'); return }
   if (!hasSecret.value && !form.clientSecret) { ElMessage.warning('请填写 Client Secret'); return }
+  // 白名单预算本地先拦：保存门要先跑一次 discovery 探测，超限输入不该先花
+  // 那几秒再吃后端 400（后端同样校验，这里只是把反馈提前）。
+  const allowedEmailDomains = parseDomainAllowList(form.allowedEmailDomains)
+  const allowedGroups = parseGroupAllowList(form.allowedGroups)
+  const allowListError = validateAllowList('允许的 email 域', allowedEmailDomains)
+    ?? validateAllowList('允许的组', allowedGroups)
+  if (allowListError) { ElMessage.warning(allowListError); return }
   // 在途门须先于探测与二次确认置位——discovery 常 0.2–2s，这段窗口内
   // 按钮 loading 缺席会让连点叠出两个确认框与两条 PUT。
   saving.value = true
@@ -370,8 +382,8 @@ const save = async () => {
       enabled: true,
       display_name: form.displayName,
       // 整表保存始终携带白名单（[]=清除）；缺省键语义仅用于局部 PUT（启用/暂停/删除）。
-      allowed_email_domains: parseDomainAllowList(form.allowedEmailDomains),
-      allowed_groups: parseGroupAllowList(form.allowedGroups),
+      allowed_email_domains: allowedEmailDomains,
+      allowed_groups: allowedGroups,
     }
     if (form.clientSecret) payload.client_secret = form.clientSecret
     await request.put('/settings/oidc', payload)

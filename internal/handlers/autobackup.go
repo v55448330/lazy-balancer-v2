@@ -33,6 +33,15 @@ var autoBackupRunMu sync.Mutex
 // autoBackupFailedRowsKeep:failed 行保留上限（内务裁剪，与 keep 无关）。
 const autoBackupFailedRowsKeep = 20
 
+// autoBackupListLimit 设置端点备份列表的窗口上限：DESC 取前 N 行。正常态由
+// 内务裁剪把行数收敛到 keep(≤30)+failed(20)，本上限只对「裁剪长期失效/带外
+// 灌行」的异常态兜底，避免单次响应随表增长无限序列化。
+const autoBackupListLimit = 200
+
+// autoBackupBeforeSectionsReadHook 测试钩子（生产恒 nil）：在读取备份范围之前
+// 运行——用于确定性地模拟「取消恰好发生在该读取窗口」。
+var autoBackupBeforeSectionsReadHook func()
+
 // HH:MM 校验统一走 services.ValidScheduleHHMM（原本地正则与调度侧解析
 // 函数双实现，已收敛）。
 
@@ -451,8 +460,18 @@ func (h *Handlers) RunAutoBackupOnce(ctx context.Context, trigger, operator stri
 	if err := cleanupAutoBackupTempFiles(dir); err != nil {
 		services.Logf("warn", "自动备份：清理残留临时文件失败（不阻断本次备份）: %v", err)
 	}
+	if autoBackupBeforeSectionsReadHook != nil {
+		autoBackupBeforeSectionsReadHook()
+	}
 	sections, err := loadAutoBackupSectionsSetting(ctx)
 	if err != nil {
+		// 取消发生在读取备份范围时，不能按「备份失败」归因：ctx 错误会以
+		// 「读取备份范围: context.Canceled」形态冒出来，落 failed 行与「备份失败」
+		// 审计会把角色降级/引擎停止记成用户可见的备份故障（构建与写盘检查点
+		// 早按取消短路，此处此前是唯一漏口）。
+		if cerr := ctx.Err(); cerr != nil {
+			return autoBackupRowView{}, cerr
+		}
 		return autoBackupRowView{}, fail("读取备份范围", err)
 	}
 	payload, exportedSections, countsSummary, _, err := h.buildLbbakExport(ctx, sections)
@@ -619,12 +638,19 @@ func (h *Handlers) AutoBackupSettings(c *gin.Context) {
 	var freq, hhmm string
 	var day, keep int
 	var sectionsRaw, lastRun sql.NullString
+	var lastSuccessRaw any
 	// 读路径消费请求 context：客户端断开即中止（与本端点其它族、审计列表
 	// 的取消契约同边——同端点两套口径会让「取消传播」无法用单一断言覆盖）。
+	// last_success_at 用同一查询里的标量子查询取（DESC 首条 success），而不是
+	// 从下面截断后的列表推导：列表有窗口上限，success 行落在窗口之外时推导
+	// 会误报 null（「从未成功备份」）。子查询与列表窗口彻底解耦，且仍是零额外
+	// 往返。
 	if err := db.DB.QueryRowContext(c.Request.Context(), `SELECT COALESCE(auto_backup_enabled,0), COALESCE(auto_backup_frequency,'daily'),
 		COALESCE(auto_backup_time,'03:00'), COALESCE(auto_backup_day,1), COALESCE(auto_backup_keep,7),
-		auto_backup_sections, auto_backup_last_run FROM global_config WHERE id=1`).
-		Scan(&enabled, &freq, &hhmm, &day, &keep, &sectionsRaw, &lastRun); err != nil {
+		auto_backup_sections, auto_backup_last_run,
+		(SELECT created_at FROM auto_backups WHERE status='success' ORDER BY created_at DESC, id DESC LIMIT 1)
+		FROM global_config WHERE id=1`).
+		Scan(&enabled, &freq, &hhmm, &day, &keep, &sectionsRaw, &lastRun, &lastSuccessRaw); err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取自动备份设置失败: " + err.Error()})
 		return
 	}
@@ -650,7 +676,9 @@ func (h *Handlers) AutoBackupSettings(c *gin.Context) {
 		sections = allBackupSectionKeys()
 	}
 	backups := []autoBackupRowView{}
-	rows, err := db.DB.QueryContext(c.Request.Context(), `SELECT `+autoBackupRowColumns+` FROM auto_backups ORDER BY created_at DESC, id DESC`)
+	// 窗口上限 +1 探测截断：多取一行即可判定「还有更旧的未返回」，无需
+	// 额外 COUNT 查询。
+	rows, err := db.DB.QueryContext(c.Request.Context(), `SELECT `+autoBackupRowColumns+` FROM auto_backups ORDER BY created_at DESC, id DESC LIMIT ?`, autoBackupListLimit+1)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取备份列表失败: " + err.Error()})
 		return
@@ -670,21 +698,25 @@ func (h *Handlers) AutoBackupSettings(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取备份列表失败: " + err.Error()})
 		return
 	}
+	backupsTruncated := false
+	if len(backups) > autoBackupListLimit {
+		backups = backups[:autoBackupListLimit]
+		backupsTruncated = true
+	}
 	var lastRunValue *string
 	if lastRun.Valid {
 		// 水位线回传响应面（此前扫描后零消费恒 null）。
 		lastRunValue = &lastRun.String
 	}
 	// last_run 是调度水位线（off→on=now，2026-09-19 裁定），不是
-	// 执行事实；「上次执行」必须取最近一次 success 备份行。列表已 DESC 加载，
-	// 直接取首条 success（零额外查询），失败行不得入选。
+	// 执行事实；「上次执行」取最近一次 success 备份行——由上面的标量子查询
+	// 提供（与列表窗口解耦），失败行不入选。
 	var lastSuccessValue *string
-	for i := range backups {
-		if backups[i].Status == "success" {
-			createdAt := backups[i].CreatedAt
-			lastSuccessValue = &createdAt
-			break
-		}
+	if lastSuccessRaw != nil {
+		// 格式单源：与列表行同一 formatAutoBackupTimestamp（驱动对该 DATETIME
+		// 列可能回 time.Time、也可能回字符串，二者都必须收敛到同一墙面格式）。
+		createdAt := formatAutoBackupTimestamp(lastSuccessRaw)
+		lastSuccessValue = &createdAt
 	}
 	now := time.Now()
 	var nextRunValue *string
@@ -698,6 +730,9 @@ func (h *Handlers) AutoBackupSettings(c *gin.Context) {
 		"enabled": enabled, "frequency": freq, "time": hhmm, "day": day, "keep": keep,
 		"sections": sections, "last_run": lastRunValue, "last_success_at": lastSuccessValue,
 		"next_run_at": nextRunValue, "catch_up_due": catchUpDue, "backups": backups,
+		// 列表窗口（autoBackupListLimit）截断标记：正常态恒 false（内务裁剪把
+		// 行数收敛到 keep+failed 上限），true 表示「还有更旧的备份未返回」。
+		"backups_truncated": backupsTruncated,
 	}})
 }
 

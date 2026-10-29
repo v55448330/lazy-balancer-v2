@@ -69,3 +69,25 @@ test('AppLayout 接线：窄屏入口可切换、状态由单源派生', () => {
   assert.match(layout, /:aria-label="accountTriggerLabel\(menuDisplayName\)"/, '折叠态入口必须有无障碍名称')
   assert.match(layout, /退出登录/)
 })
+
+// 子菜单间距的多轮叠加：`.el-sub-menu.is-opened{margin-bottom:0!important}` 曾被
+// 同特异性、后置的 `.el-sub-menu.is-opened{margin-bottom:4px!important}` 完全覆盖
+// ——前一条恒死，读代码会误判「展开态间距为 0」；随后两条又都是基础规则的同值
+// 复述。真源只保留 `.el-sub-menu` 基础规则，展开态不得再单写一份。
+test('侧栏子菜单间距：is-opened 不再复述 margin-bottom（无被覆盖的死规则）', () => {
+  const layout = code('src/components/layout/AppLayout.vue')
+  const style = section(layout, '<style', '</style>')
+  assert.match(
+    style,
+    /\.layout-menu :deep\(\.el-sub-menu\) \{\s*margin-top: 4px !important;\s*margin-bottom: 4px !important;/,
+    '基础规则必须是间距唯一真源',
+  )
+  const openedRules = [...style.matchAll(/\.el-sub-menu\.is-opened\)\s*\{([^}]*)\}/g)]
+    .map((match) => match[1] ?? '')
+  const withMarginBottom = openedRules.filter((rule) => /margin-bottom/.test(rule))
+  assert.equal(
+    withMarginBottom.length,
+    0,
+    `展开态不得再单写 margin-bottom（当前 ${withMarginBottom.length} 处：同特异性后置规则会让其中一条恒死）`,
+  )
+})

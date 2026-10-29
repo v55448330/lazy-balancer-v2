@@ -591,3 +591,124 @@ func TestSanitizeOIDCErrorParam_shapes(t *testing.T) {
 		}
 	}
 }
+
+// OIDC 托管身份的写保护门必须单源且次序一致：两条改密路径（管理员
+// PUT /users/:id 与自助 PATCH /users/me）面对「OIDC 用户 + 不满足密码策略的
+// 短密码」时，必须给出同一文案。旧实现里管理员路径先跑密码策略校验，同一请求
+// 先返回「密码长度不能少于 N 位」（把「这账号的密码根本不归本地管」掩盖成
+// 「换个长点的密码就行」），且两条路径的 OIDC 文案措辞也不同。
+func TestOIDCManagedWriteGate_sameMessageAcrossPasswordPaths(t *testing.T) {
+	h := newBackupTestHandlers(t)
+	seedUserAuditTest(t, 1, "admin", "admin", true)
+	if _, err := db.DB.Exec(`INSERT INTO users (id,username,password_hash,role,is_enabled,auth_provider,display_name) VALUES (7,'sso-alice','','user',1,'oidc','IdP Name')`); err != nil {
+		t.Fatal(err)
+	}
+
+	adminRec := serveUserMutation(h, http.MethodPut, "/users/7", `{"password":"Ab1"}`, 1, h.UpdateUser)
+	selfRec := serveUserMutation(h, http.MethodPatch, "/users/7", `{"password":"Ab1","current_password":"whatever"}`, 7, h.UpdateCurrentUser)
+
+	if adminRec.Code != http.StatusBadRequest || selfRec.Code != http.StatusBadRequest {
+		t.Fatalf("admin=%d self=%d, want 均为 400（OIDC 托管密码不可本地改）", adminRec.Code, selfRec.Code)
+	}
+	adminMessage := apiResponseMessage(t, adminRec.Body.Bytes())
+	selfMessage := apiResponseMessage(t, selfRec.Body.Bytes())
+	if !strings.Contains(adminMessage, "OIDC") || !strings.Contains(selfMessage, "OIDC") {
+		t.Fatalf("admin=%q self=%q, want 均为 OIDC 门文案（管理员路径不得先报密码策略）", adminMessage, selfMessage)
+	}
+	if adminMessage != selfMessage {
+		t.Fatalf("admin=%q self=%q, want 同一文案（写保护门须单源）", adminMessage, selfMessage)
+	}
+
+	// 显示名路径同规则：两条端点改 OIDC 用户显示名得到同一文案。
+	adminNameRec := serveUserMutation(h, http.MethodPut, "/users/7", `{"display_name":"AdminSet"}`, 1, h.UpdateUser)
+	selfNameRec := serveUserMutation(h, http.MethodPatch, "/users/7", `{"display_name":"SelfSet"}`, 7, h.UpdateCurrentUser)
+	if adminNameRec.Code != http.StatusBadRequest || selfNameRec.Code != http.StatusBadRequest {
+		t.Fatalf("admin=%d self=%d, want 均为 400", adminNameRec.Code, selfNameRec.Code)
+	}
+	adminNameMessage := apiResponseMessage(t, adminNameRec.Body.Bytes())
+	selfNameMessage := apiResponseMessage(t, selfNameRec.Body.Bytes())
+	if adminNameMessage != selfNameMessage {
+		t.Fatalf("admin=%q self=%q, want 同一文案", adminNameMessage, selfNameMessage)
+	}
+}
+
+// apiResponseMessage 取 APIResponse.Message（错误响应体唯一可变文案位）。
+func apiResponseMessage(t *testing.T, body []byte) string {
+	t.Helper()
+	var parsed struct {
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		t.Fatalf("decode response %q: %v", string(body), err)
+	}
+	return parsed.Message
+}
+
+// OIDC 公开入口（login / callback）的启用门必须与 status 端点、保存侧启用门
+// 同源（OIDCConfig.usable）：库值可经配置导入/集群快照/带外改库绕过面板保存
+// 门，此时 status 已按「未启用」隐藏按钮，但直接访问公开入口仍会 302 跳 IdP
+// （client_id 为空 → 用户停在 IdP 报错页）或误报「服务不可达」。
+func TestOIDCPublicEntries_useSameEnableGateAsStatus(t *testing.T) {
+	// issuer 形状按用例选择：凭证缺失的两例必须用**可达**的 mock IdP 地址
+	// （回环 http 合法），否则「旧实现会跳转」这件事根本观测不到——出站计数
+	// 与 302 目标都要落在同一个 mock 上才有判别力。
+	cases := []struct {
+		name         string
+		useIdPIssuer bool
+		cfg          func(issuer string) OIDCConfig
+	}{
+		{"client_id 空", true, func(issuer string) OIDCConfig {
+			return OIDCConfig{Enabled: true, Issuer: issuer, ClientID: "  ", ClientSecret: "s"}
+		}},
+		{"client_secret 空", true, func(issuer string) OIDCConfig {
+			return OIDCConfig{Enabled: true, Issuer: issuer, ClientID: "cid", ClientSecret: ""}
+		}},
+		{"issuer 非回环 http", false, func(string) OIDCConfig {
+			return OIDCConfig{Enabled: true, Issuer: "http://idp.example.com", ClientID: "cid", ClientSecret: "s"}
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			idp := newMockIdP(t)
+			router, _ := setupOIDCTest(t, idp)
+			issuer := "http://idp.example.com"
+			if tc.useIdPIssuer {
+				issuer = idp.issuer
+			}
+			// 直接写库（模拟导入/快照/带外写入绕过保存门）。
+			if err := saveOIDCConfig(tc.cfg(issuer)); err != nil {
+				t.Fatalf("seed stored config: %v", err)
+			}
+			idp.requests.Store(0)
+
+			// status 必须按未启用呈现（按钮隐藏），这是本次对齐的基线。
+			statusRec := httptest.NewRecorder()
+			router.ServeHTTP(statusRec, httptest.NewRequest(http.MethodGet, "/api/v1/auth/oidc/status", nil))
+			if statusRec.Code != http.StatusOK || !strings.Contains(statusRec.Body.String(), `"enabled":false`) {
+				t.Fatalf("status=%d body=%s, want 200 enabled=false", statusRec.Code, statusRec.Body.String())
+			}
+
+			// login：必须回前端登录页错误位，且一次 IdP 出站都不得发生。
+			loginRec := httptest.NewRecorder()
+			router.ServeHTTP(loginRec, httptest.NewRequest(http.MethodGet, "/api/v1/auth/oidc/login", nil))
+			loginLocation := loginRec.Header().Get("Location")
+			if loginRec.Code != http.StatusFound || !strings.Contains(loginLocation, "#/login?oidc_error=") {
+				t.Fatalf("login status=%d location=%q, want 302 回前端登录页错误位", loginRec.Code, loginLocation)
+			}
+			if got := idp.requests.Load(); got != 0 {
+				t.Fatalf("login 出站请求=%d, want 0（启用门必须停在跳转前）", got)
+			}
+
+			// callback：同样回前端错误页，不得出站。
+			callbackRec := httptest.NewRecorder()
+			router.ServeHTTP(callbackRec, httptest.NewRequest(http.MethodGet, "/api/v1/auth/oidc/callback?code=x&state=y", nil))
+			callbackLocation := callbackRec.Header().Get("Location")
+			if callbackRec.Code != http.StatusFound || !strings.Contains(callbackLocation, "#/oidc/callback?error=") {
+				t.Fatalf("callback status=%d location=%q, want 302 回前端错误页", callbackRec.Code, callbackLocation)
+			}
+			if got := idp.requests.Load(); got != 0 {
+				t.Fatalf("callback 出站请求=%d, want 0", got)
+			}
+		})
+	}
+}

@@ -822,8 +822,21 @@ func (h *Handlers) DeleteCertJob(c *gin.Context) {
 	// caddyOpMu 覆盖 查询→守卫→disabled 翻转
 	// →删除 全程（与 EnableRule 的互斥域不变，翻转与 DELETE 仍同一临界区）；
 	// 在途取消等待（qm.CancelJob ≤30s）移出临界区（见下方取消点注释），
-	// 本函数改手动配对解锁。
+	// 本函数按「标志 + defer 闭包」释放，见下。
 	h.caddyOpMu.Lock()
+	// 释放走「标志 + defer 闭包」：临界区内有 9 个显式出口（404/409/500 各态）
+	// 与一处失败恢复重取锁，纯手动配对时任何一个新增出口忘写 Unlock 都会把
+	// 全局 Caddy 写锁永久占住（规则/配置写与 Caddy 启停全部挂起，只能重启
+	// 进程）；panic 展开同理。defer 兜底 + releaseCaddyOp 幂等标记保证所有
+	// 出口（含 panic）都释放，且不会重复解锁。
+	caddyOpHeld := true
+	releaseCaddyOp := func() {
+		if caddyOpHeld {
+			h.caddyOpMu.Unlock()
+			caddyOpHeld = false
+		}
+	}
+	defer releaseCaddyOp()
 	operationLock := certJobOperationLock(id)
 	operationLock.Lock()
 	// per-job 锁改为手动配对——失败恢复分支必须在不持有
@@ -840,7 +853,7 @@ func (h *Handlers) DeleteCertJob(c *gin.Context) {
 	var ruleID, domain, status, certPEM, keyPEM string
 	var caProviderID int
 	if err := db.DB.QueryRow("SELECT rule_id, domain, status, COALESCE(ca_provider_id,0), COALESCE(cert_pem,''), COALESCE(key_pem,'') FROM cert_jobs WHERE id = ?", id).Scan(&ruleID, &domain, &status, &caProviderID, &certPEM, &keyPEM); err != nil {
-		h.caddyOpMu.Unlock()
+		releaseCaddyOp()
 		result := "query_failed"
 		if errors.Is(err, sql.ErrNoRows) {
 			result = "job_not_found"
@@ -865,13 +878,13 @@ func (h *Handlers) DeleteCertJob(c *gin.Context) {
 			WHERE caddy_id=? AND enabled=1 AND enable_tls=1 AND tls_source='acme_dns'
 			  AND lower(replace(domain,' ','')) IN (?,?)`,
 			ruleID, domain, reversedCertJobDomain(domain)).Scan(&active); err != nil {
-			h.caddyOpMu.Unlock()
+			releaseCaddyOp()
 			auditFailure("rule_state_read_failed")
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to check rule state"})
 			return
 		}
 		if active > 0 {
-			h.caddyOpMu.Unlock()
+			releaseCaddyOp()
 			auditFailure("guarded_active_rule")
 			c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: message})
 			return
@@ -882,14 +895,14 @@ func (h *Handlers) DeleteCertJob(c *gin.Context) {
 	}
 	result, err := db.DB.Exec("UPDATE cert_jobs SET status='disabled', updated_at=datetime('now') WHERE id=? AND status=?", id, status)
 	if err != nil {
-		h.caddyOpMu.Unlock()
+		releaseCaddyOp()
 		auditFailure("disable_failed")
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to disable job"})
 		return
 	}
 	rowsAffected, err := result.RowsAffected()
 	if err != nil {
-		h.caddyOpMu.Unlock()
+		releaseCaddyOp()
 		auditFailure("disable_verify_failed")
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to verify disabled job"})
 		return
@@ -902,19 +915,19 @@ func (h *Handlers) DeleteCertJob(c *gin.Context) {
 		var currentStatus string
 		scanErr := db.DB.QueryRow("SELECT status FROM cert_jobs WHERE id=?", id).Scan(&currentStatus)
 		if errors.Is(scanErr, sql.ErrNoRows) {
-			h.caddyOpMu.Unlock()
+			releaseCaddyOp()
 			auditFailure("job_not_found")
 			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "Job not found"})
 			return
 		}
 		if scanErr != nil {
-			h.caddyOpMu.Unlock()
+			releaseCaddyOp()
 			services.Logf("error", "DeleteCertJob reread job %d status failed: %v", id, scanErr)
 			auditFailure("status_read_failed")
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取任务状态失败"})
 			return
 		}
-		h.caddyOpMu.Unlock()
+		releaseCaddyOp()
 		auditFailure("state_changed")
 		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "任务状态已变更，请刷新后重试"})
 		return
@@ -936,7 +949,7 @@ func (h *Handlers) DeleteCertJob(c *gin.Context) {
 		// 的建任务/渲染物化互斥，避免「判定无材料 → 并发启用重建任务 → 文件被删」。
 		cleanupOrphanedCertMaterialAfterJobDelete(ruleID)
 	}
-	h.caddyOpMu.Unlock()
+	releaseCaddyOp()
 	cancelCertJob(id)
 	deploymentRegistrationPending := false
 	if err != nil {
@@ -955,6 +968,7 @@ func (h *Handlers) DeleteCertJob(c *gin.Context) {
 		// 走 CAS 0 行的「已被并发移离 disabled」归因，语义自洽。
 		releaseOperationLock()
 		h.caddyOpMu.Lock()
+		caddyOpHeld = true
 		operationLock.Lock()
 		operationLockHeld = true
 		if deleteCertJobPreRestoreHook != nil {
@@ -1034,7 +1048,7 @@ func (h *Handlers) DeleteCertJob(c *gin.Context) {
 				services.WakeCertWaitingCAForEnqueuedJob()
 			}
 		}
-		h.caddyOpMu.Unlock()
+		releaseCaddyOp()
 		// 登记在 caddyOpMu 之外执行：scheduleDeploymentRetry 可能对在途部署
 		// 回调做有界等待，持全局锁会拖住规则/配置写与 Caddy 启停。
 		if deploymentRegistrationPending {
@@ -1103,7 +1117,7 @@ func (h *Handlers) GetCertJobLogs(c *gin.Context) {
 	// 响应上限：从最新文件开始累计，达到 256KB 即停止读更旧文件（更旧内容
 	// 必然落在尾窗之外，读了也会被裁掉）。此前 6 次读 ≈768KB/请求，100 个
 	// 失败任务刷新一轮即 ~600 次读、~76MB IO。
-	content, truncated, readErr := readCertJobLogTail(logPath, certJobLogMaxRotatedBackups, certJobLogsMaxResponseBytes)
+	content, truncated, readErr := readRotatedLogTail(logPath, certJobLogMaxRotatedBackups, 128<<10, 500, certJobLogsMaxResponseBytes)
 	if readErr != nil {
 		// 读不出与「尚无日志」必须可区分（与 services.rulelog 同口径）：
 		// 恒 200 空内容会让排障把权限漂移/目录被替换误判为「没有签发记录」。
@@ -1112,14 +1126,8 @@ func (h *Handlers) GetCertJobLogs(c *gin.Context) {
 		return
 	}
 
-	if len(content) > certJobLogsMaxResponseBytes {
-		content = content[len(content)-certJobLogsMaxResponseBytes:]
-		// 丢弃首个残行：截断点落在行中间时首个片段不是完整日志行。
-		if idx := strings.Index(content, "\n"); idx >= 0 {
-			content = content[idx+1:]
-		}
-		truncated = true
-	}
+	// 截断点与残行由 readRotatedLogTail 内部处理（结果恒 ≤ 预算、首个残段
+	// 已丢弃），这里只负责提示行。
 	if truncated {
 		content = "[日志过长，仅显示最近 256KB]\n" + content
 	}
@@ -1127,83 +1135,88 @@ func (h *Handlers) GetCertJobLogs(c *gin.Context) {
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: map[string]interface{}{"content": content, "truncated": truncated}})
 }
 
-// readCertJobLogTail 从最新（活动文件 → .1 → .2 …）逐份读取，累计达到
-// budget 后停止——更旧的轮转内容只可能落在响应尾窗之外。返回值按最旧→最新
-// 顺序拼接；truncated 表示确有更旧内容未读取（存在被跳过的备份文件）。
-// 文件不存在不是错误（「尚无日志」是正常态），其余 I/O 错误上抛。
-func readCertJobLogTail(path string, maxBackups, budget int) (string, bool, error) {
-	newestFirst := make([]string, 0, maxBackups+1)
-	head, err := readCertJobLogFile(path)
-	if err != nil {
-		return "", false, err
+// readRotatedLogTail 读取「活动日志 + N 代轮转副本（.1…N）」的尾部窗口，返回
+// 按最旧→最新顺序拼接的内容。两条日志读取路径（证书任务日志、统一任务引擎
+// 日志）此前各有一套策略且语义不同——一套从最新往回累计、越界后由调用方再
+// 裁一次总长并丢残行；另一套从最旧往前前置、逐文件裁到剩余预算。同一批用户
+// 可见的日志从两个端点出来时刻度不同、残行处理不同，任一处调整都会分叉。
+//
+// 契约（唯一实现）：
+//   - 结果总长恒 ≤ budget（硬保证，调用方无需再裁）；
+//   - truncated=true 表示「确有更新/更旧内容未纳入」（预算切断或存在未读的
+//     更旧副本），且此时首个残行（可能是半个 UTF-8 字符）已在内部丢弃；
+//   - 活动文件与各代副本各保留尾部 128KB/500 行（见 readCertJobLogFile）；
+//   - 文件不存在=空（「尚无日志」是正常态，不是错误）；非 ENOENT 的 I/O 错误
+//     与「路径是目录」一律上抛——吞掉会让「读不出」与「无日志」不可区分。
+func readRotatedLogTail(path string, maxBackups, perFileBytes, perFileLines, budget int) (string, bool, error) {
+	if budget <= 0 {
+		return "", false, nil
 	}
-	newestFirst = append(newestFirst, head)
-	total := len(head)
-	truncated := false
-	for i := 1; i <= maxBackups; i++ {
-		if total >= budget {
-			for j := i; j <= maxBackups; j++ {
-				if _, err := os.Stat(fmt.Sprintf("%s.%d", path, j)); err == nil {
-					truncated = true
-					break
-				}
-			}
-			break
+	newestFirst := make([]string, 0, maxBackups+1)
+	total := 0
+	// 两种截断来源必须分开：本文件内容被预算切断（cutAtBudget——需要丢首残行）
+	// 与「更旧的轮转副本整个没纳入」（skippedOlder——已纳入的内容仍完整）。
+	// 合并成一个标志会把后者也当残行处理，白吃掉一行真实日志。
+	cutAtBudget := false
+	skippedOlder := false
+	for generation := range maxBackups + 1 {
+		filePath := path
+		if generation > 0 {
+			filePath = fmt.Sprintf("%s.%d", path, generation)
 		}
-		backup, err := readCertJobLogFile(fmt.Sprintf("%s.%d", path, i))
+		remaining := budget - total
+		if remaining <= 0 {
+			// 预算已用尽：后续代数只在存在时标记截断，不再读内容。
+			if _, err := os.Stat(filePath); err == nil {
+				skippedOlder = true
+			}
+			continue
+		}
+		content, err := readLogTailWindow(filePath, perFileBytes, perFileLines)
 		if err != nil {
 			return "", false, err
 		}
-		if backup == "" {
+		if content == "" {
 			continue
 		}
-		newestFirst = append(newestFirst, backup)
-		total += len(backup)
+		if len(content) > remaining {
+			// 更旧内容只能落在尾窗之外：保留该副本尾部剩余预算。
+			content = content[len(content)-remaining:]
+			cutAtBudget = true
+		}
+		newestFirst = append(newestFirst, content)
+		total += len(content)
 	}
 	var builder strings.Builder
 	builder.Grow(total)
 	for i := len(newestFirst) - 1; i >= 0; i-- {
 		builder.WriteString(newestFirst[i])
 	}
-	return builder.String(), truncated, nil
-}
-
-// prependTaskLogRotations 按 maxBackups 把 .1～.N 逐代前置到活动日志
-// 内容之前，最终顺序恒为最旧→最新→活动文件。普通任务写侧 keep=1，
-// 证书任务 keep=5；调用方必须传本族真实保留数，禁止统一扫满证书代数。
-// 轮转代数读失败按「该代缺失」处理并留 warn（展示型接口，不因单个历史
-// 文件不可读丢掉新一代内容）。
-//
-// budget 是拼接后的总字节上限（响应 256KiB 预算）：累计长度已达上限即停止读
-// 更旧副本，且只取该副本尾部剩余预算的部分。第二个返回值表示最旧内容是否
-// 在字节预算处被切断；调用方据此丢弃响应首行残段（含可能的半个 UTF-8 字符）。
-func prependTaskLogRotations(path, content string, maxBackups, budget int) (string, bool) {
-	truncated := false
-	for i := 1; i <= maxBackups; i++ {
-		remaining := budget - len(content)
-		if remaining <= 0 {
-			break
-		}
-		backup, err := readCertJobLogFile(fmt.Sprintf("%s.%d", path, i))
-		if err != nil {
-			services.Logf("warn", "读取任务日志轮转副本失败（%s.%d）: %v", path, i, err)
-			continue
-		}
-		if len(backup) > remaining {
-			backup = backup[len(backup)-remaining:]
-			truncated = true
-		}
-		if backup != "" {
-			content = backup + content
+	content := builder.String()
+	if cutAtBudget {
+		// 预算切点落在输出首部：首个片段不是完整日志行，丢弃。
+		if idx := strings.IndexByte(content, '\n'); idx >= 0 {
+			content = content[idx+1:]
+		} else {
+			content = ""
 		}
 	}
-	return content, truncated
+	return content, cutAtBudget || skippedOlder, nil
 }
 
 // readCertJobLogFile 读取单个日志文件的尾部窗口（128KB/500 行）。
 // 文件不存在返回 ("", nil)；其余 I/O 错误（权限、目录被替换、磁盘只读）
 // 必须上抛——吞掉会让「读不出」与「无日志」不可区分。
 func readCertJobLogFile(path string) (string, error) {
+	return readLogTailWindow(path, 128*1024, 500)
+}
+
+// readLogTailWindow 读取单个日志文件的尾部窗口：最多 maxBytes 字节、最多
+// maxLines 行（maxLines<=0 = 不限行数）。单文件窗口由调用方决定——证书任务
+// 日志与统一任务引擎日志对「单个文件保留多少」的历史约定不同（128KB/500 行
+// vs 256KB 无行数上限）；轮转拼接策略（readRotatedLogTail）统一，单文件窗口
+// 保持各自的用户可见面不变。
+func readLogTailWindow(path string, maxBytes, maxLines int) (string, error) {
 	info, err := os.Stat(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -1215,10 +1228,10 @@ func readCertJobLogFile(path string) (string, error) {
 		return "", fmt.Errorf("read %s: 路径是目录而非日志文件", path)
 	}
 
-	const maxBytes = 128 * 1024
+	windowBytes := int64(maxBytes)
 	startOffset := int64(0)
-	if info.Size() > maxBytes {
-		startOffset = info.Size() - maxBytes
+	if info.Size() > windowBytes {
+		startOffset = info.Size() - windowBytes
 	}
 
 	f, _, err := openRegularLogFile(path)
@@ -1234,14 +1247,16 @@ func readCertJobLogFile(path string) (string, error) {
 		return "", fmt.Errorf("seek %s: %w", path, err)
 	}
 
-	data, err := io.ReadAll(io.LimitReader(f, int64(maxBytes)))
+	data, err := io.ReadAll(io.LimitReader(f, windowBytes))
 	if err != nil {
 		return "", fmt.Errorf("read %s: %w", path, err)
 	}
 
 	data = tailLogWindow(f, data, startOffset)
 
-	const maxLines = 500
+	if maxLines <= 0 {
+		return string(data), nil
+	}
 	lines := strings.Split(string(data), "\n")
 	if len(lines) > maxLines {
 		lines = lines[len(lines)-maxLines:]

@@ -105,7 +105,7 @@ import DialogHeader from '@/components/DialogHeader.vue'
 import MfaBindingWizard from '@/components/MfaBindingWizard.vue'
 import { request, mfaAwareSuccess, ApiRequestError } from '@/utils/api'
 import { isCurrentPasswordRejection } from '@/utils/profileUpdate'
-import { validatePassword } from '@/utils/credentials'
+import { missingNewPasswordMessage, validatePassword } from '@/utils/credentials'
 import { useAuthStore } from '@/stores/auth'
 import type { APIResponse } from '@/types'
 
@@ -140,6 +140,11 @@ const saveProfile = async () => {
   if (isReadOnly.value || saving.value) return
   const passwordError = validatePassword(profileForm.value.password)
   if (passwordError) { authStore.showToast('warning', passwordError); return }
+  // 「只填确认框、新密码留空」：validatePassword('') = null（留空=不修改），载荷会
+  // 省略 password（后端保留原密码）却回报「保存成功」——界面上的假成功。拦截必须
+  // 先于「两次不一致」判定，否则该形态被当成不一致话术。
+  const missingNewPassword = missingNewPasswordMessage(profileForm.value.password, profileForm.value.passwordConfirm)
+  if (missingNewPassword) { authStore.showToast('warning', missingNewPassword); return }
   if (profileForm.value.password && !profileForm.value.currentPassword) { authStore.showToast('warning', '请输入当前密码'); return }
   if (profileForm.value.password && profileForm.value.password !== profileForm.value.passwordConfirm) { authStore.showToast('warning', '两次输入的新密码不一致'); return }
   const passwordChanged = Boolean(profileForm.value.password)

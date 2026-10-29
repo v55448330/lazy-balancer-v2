@@ -10,8 +10,10 @@ package handlers
 import (
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strconv"
 	"strings"
 	"testing"
@@ -390,5 +392,135 @@ func TestEnableRule_rejectsNonIssuableACMEDomain(t *testing.T) {
 	}
 	if enabled != 0 {
 		t.Fatalf("enabled=%d, want 0（被拒规则不得启用）", enabled)
+	}
+}
+
+// 证书/DNS 配置族的 5xx 出口必须走 writeInternalError（统一写点）：
+// 裸写 `c.JSON(http.StatusInternalServerError, ...)` 只回文案，底层原因
+// （SQL/表列/文件路径与 errno）连运行日志都不留，排障只能靠猜——错误码契约
+// 允许固定文案，但不允许「服务端也无痕」。
+func TestCertificateDomain_5xxExitsRouteThroughWriteInternalError(t *testing.T) {
+	const rawLiteral = "c.JSON(http.StatusInternalServerError"
+	for _, file := range []string{"certificates.go", "certinfo.go"} {
+		source, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatalf("read %s: %v", file, err)
+		}
+		content := string(source)
+		for offset := 0; ; {
+			idx := strings.Index(content[offset:], rawLiteral)
+			if idx < 0 {
+				break
+			}
+			position := offset + idx
+			line := 1 + strings.Count(content[:position], "\n")
+			t.Errorf("%s:%d 裸写 5xx——必须走 writeInternalError(c, status, 固定文案, err) 以留痕底层原因", file, line)
+			offset = position + len(rawLiteral)
+		}
+	}
+}
+
+// Given 批量 cert-info 的服务层读故障（cert_jobs 表缺失）。
+// When 调用批量端点。
+// Then 500 固定文案不外泄内部文本，且底层原因写进运行日志。
+func TestGetRulesCertInfo_500LogsUnderlyingCause(t *testing.T) {
+	h := newBackupTestHandlers(t)
+	if _, err := db.DB.Exec(`DROP TABLE cert_jobs`); err != nil {
+		t.Fatalf("drop cert_jobs: %v", err)
+	}
+	var logs strings.Builder
+	previous := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(previous) })
+
+	router := gin.New()
+	router.POST("/rules/cert-info", h.GetRulesCertInfo)
+	request := httptest.NewRequest(http.MethodPost, "/rules/cert-info", strings.NewReader(`{"caddy_ids":["lb_missing"]}`))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d body=%s, want 500", response.Code, response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), "批量读取签发证书失败") {
+		t.Fatalf("body=%s, want 固定失败文案", response.Body.String())
+	}
+	assertBodyHides(t, response.Body.String(), "cert_jobs", "no such table", "sql:")
+	if !strings.Contains(logs.String(), "cert_jobs") {
+		t.Fatalf("5xx 必须把底层原因写进运行日志，实得 %q", logs.String())
+	}
+}
+
+// Given 单规则 cert-info 的服务层读故障（lb_rules 表缺失）。
+// When 调用单规则端点。
+// Then 500 固定文案且底层原因进运行日志（与批量端点同口径）。
+func TestGetRuleCertInfo_500LogsUnderlyingCause(t *testing.T) {
+	h := newBackupTestHandlers(t)
+	if _, err := db.DB.Exec(`DROP TABLE lb_rules`); err != nil {
+		t.Fatalf("drop lb_rules: %v", err)
+	}
+	var logs strings.Builder
+	previous := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(previous) })
+
+	router := gin.New()
+	router.GET("/rules/:caddy_id/cert-info", h.GetRuleCertInfo)
+	response := httptest.NewRecorder()
+
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/rules/lb_missing/cert-info", nil))
+
+	if response.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d body=%s, want 500", response.Code, response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), "读取规则证书信息失败") {
+		t.Fatalf("body=%s, want 固定失败文案", response.Body.String())
+	}
+	assertBodyHides(t, response.Body.String(), "lb_rules", "no such table", "sql:")
+	if !strings.Contains(logs.String(), "lb_rules") {
+		t.Fatalf("5xx 必须把底层原因写进运行日志，实得 %q", logs.String())
+	}
+}
+
+// Given 引用检查所需的 lb_rules 表不可用（存储故障）。
+// When 禁用仍在被引用的证书配置（触发引用守卫查询）。
+// Then 500 固定中文文案 + 底层原因进运行日志（此前英文 raw 5xx 且无留痕）。
+func TestUpdateCertificateConfig_referenceGuardFailureLogsCause(t *testing.T) {
+	h := newBackupTestHandlers(t)
+	var configID int64
+	if _, err := db.DB.Exec(`INSERT INTO certificate_configs (name,dns_provider,dns_credentials,enabled)
+		VALUES ('lockprobe-config','dnspod','{"auth_mode":"dnspod","app_id":"12345","app_token":"token-value"}',1)`); err != nil {
+		t.Fatalf("seed certificate config: %v", err)
+	}
+	if err := db.DB.QueryRow(`SELECT MAX(id) FROM certificate_configs`).Scan(&configID); err != nil {
+		t.Fatalf("read seeded certificate config: %v", err)
+	}
+	if _, err := db.DB.Exec(`DROP TABLE lb_rules`); err != nil {
+		t.Fatalf("drop lb_rules: %v", err)
+	}
+	var logs strings.Builder
+	previous := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(previous) })
+
+	router := gin.New()
+	router.PUT("/certificate-configs/:id", h.UpdateCertificateConfig)
+	request := httptest.NewRequest(http.MethodPut, "/certificate-configs/"+strconv.FormatInt(configID, 10), strings.NewReader(`{"enabled":false}`))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d body=%s, want 500", response.Code, response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), "检查规则引用失败") {
+		t.Fatalf("body=%s, want 固定中文归因", response.Body.String())
+	}
+	assertBodyHides(t, response.Body.String(), "lb_rules", "no such table", "sql:", "Failed to")
+	if !strings.Contains(logs.String(), "lb_rules") {
+		t.Fatalf("5xx 必须把底层原因写进运行日志，实得 %q", logs.String())
 	}
 }

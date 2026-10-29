@@ -531,10 +531,6 @@ onUnmounted(() => {
   width: 17px;
 }
 
-.layout-menu :deep(.el-sub-menu.is-opened) {
-  margin-bottom: 0 !important;
-}
-
 .layout-menu :deep(.el-sub-menu__title + .el-menu) {
   margin-top: 0 !important;
   padding-top: 0 !important;
@@ -542,10 +538,6 @@ onUnmounted(() => {
 
 .layout-menu :deep(.el-sub-menu) {
   margin-top: 4px !important;
-  margin-bottom: 4px !important;
-}
-
-.layout-menu :deep(.el-sub-menu.is-opened) {
   margin-bottom: 4px !important;
 }
 

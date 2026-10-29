@@ -444,23 +444,30 @@ func loginRateLimit() gin.HandlerFunc {
 	return clusterRateLimit("login", 10, "登录尝试过于频繁，请稍后再试")
 }
 
-// acquireRateLimitBucket 在首次记账时创建；容量满按 LRU 淘汰最久未命中的
-// 桶腾位（不再 fail-open——新来源照常限流且内存有界）。
+// getOrCreateRateLimitBucketLocked 取桶并在首次记账时创建；容量满按 LRU 淘汰
+// 最久未命中的桶腾位（不再 fail-open——新来源照常限流且内存有界）。
+// 命中与新建都刷新 lastUsed（LRU 依据）。**调用方必须已持 loginRateBuckets
+// 的 map 锁**——本函数不做加锁，两个入口（acquireRateLimitBucket 的普通取桶、
+// reserveRateLimitBucket 的预占取桶）共用这一份淘汰/建桶/刷新逻辑。
+func getOrCreateRateLimitBucketLocked(ip, scope string, now time.Time) *loginRateBucket {
+	key := ip + "|" + scope
+	bucket, exists := loginRateBuckets.entries[key]
+	if !exists {
+		if len(loginRateBuckets.entries) >= rateLimitBucketCapacity {
+			evictLeastRecentlyUsedRateLimitBucketLocked()
+		}
+		bucket = &loginRateBucket{until: now.Add(time.Minute)}
+		loginRateBuckets.entries[key] = bucket
+	}
+	bucket.lastUsed.Store(now.UnixNano())
+	return bucket
+}
+
+// acquireRateLimitBucket 取桶（持 map 锁的入口，见 getOrCreateRateLimitBucketLocked）。
 func acquireRateLimitBucket(ip, scope string, now time.Time) *loginRateBucket {
 	loginRateBuckets.Lock()
 	defer loginRateBuckets.Unlock()
-	key := ip + "|" + scope
-	if bucket, ok := loginRateBuckets.entries[key]; ok {
-		bucket.lastUsed.Store(now.UnixNano())
-		return bucket
-	}
-	if len(loginRateBuckets.entries) >= rateLimitBucketCapacity {
-		evictLeastRecentlyUsedRateLimitBucketLocked()
-	}
-	bucket := &loginRateBucket{until: now.Add(time.Minute)}
-	bucket.lastUsed.Store(now.UnixNano())
-	loginRateBuckets.entries[key] = bucket
-	return bucket
+	return getOrCreateRateLimitBucketLocked(ip, scope, now)
 }
 
 // clusterRegisterRateLimit 注册端点限流:唯一公开、
@@ -629,18 +636,10 @@ func clusterCredentialFingerprint(c *gin.Context, source clusterCredentialSource
 }
 
 func reserveRateLimitBucket(ip, scope string, now time.Time, limit int) (*loginRateBucket, uint64, bool, int) {
-	key := ip + "|" + scope
 	loginRateBuckets.Lock()
-	bucket, exists := loginRateBuckets.entries[key]
-	if !exists {
-		// 容量满不再 fail-open 跳过限流——LRU 淘汰腾位后照常预占。
-		if len(loginRateBuckets.entries) >= rateLimitBucketCapacity {
-			evictLeastRecentlyUsedRateLimitBucketLocked()
-		}
-		bucket = &loginRateBucket{until: now.Add(time.Minute)}
-		loginRateBuckets.entries[key] = bucket
-	}
-	bucket.lastUsed.Store(now.UnixNano())
+	// 取桶与建桶走单源 helper（容量满不再 fail-open 跳过限流——LRU 淘汰腾位后
+	// 照常预占）；随即在持桶锁后立刻放掉 map 锁，预占段的桶锁不阻塞其它来源。
+	bucket := getOrCreateRateLimitBucketLocked(ip, scope, now)
 	bucket.mu.Lock()
 	loginRateBuckets.Unlock()
 	defer bucket.mu.Unlock()
@@ -981,10 +980,12 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 				admin.PUT("/ca-providers/:id", h.UpdateCAProvider)
 				admin.POST("/ca-providers/:id/test", h.TestCAProvider)
 
-				admin.POST("/cluster/register-tokens", h.GenerateClusterRegisterToken)
+				// 一次性机器凭据：响应体是注册令牌 / 登录票据明文，被浏览器
+				// 回退缓存或中间反代留存即等于把凭据交给下一个使用者。
+				admin.POST("/cluster/register-tokens", noStoreResponse(), h.GenerateClusterRegisterToken)
 				admin.POST("/cluster/nodes/:id/approve", h.ApproveClusterNode)
 				admin.POST("/cluster/nodes/:id/reject", h.RejectClusterNode)
-				admin.POST("/cluster/nodes/:id/login-ticket", h.GenerateClusterLoginTicket)
+				admin.POST("/cluster/nodes/:id/login-ticket", noStoreResponse(), h.GenerateClusterLoginTicket)
 				admin.PUT("/cluster/nodes/:id/access-url", h.UpdateClusterNodeAccessURL)
 				admin.PUT("/cluster/nodes/:id/site", h.UpdateClusterNodeSiteCoordinates)
 				admin.POST("/cluster/nodes/:id/service", h.ControlClusterNodeService)

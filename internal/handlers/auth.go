@@ -567,16 +567,11 @@ func (h *Handlers) UpdateCurrentUser(c *gin.Context) {
 	// UpdateUser 同构）：非空密码恒视为改密尝试（门前置，保持 OIDC 400
 	// 先于当前密码校验）；display_name 与库中同值属无变更的局部更新，
 	// 在事务内读到旧值后再判（见下方 displayNameChanged）。
-	if req.Password != "" {
-		oidcUser, err := isOIDCUser(c.Request.Context(), userIDInt)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取用户身份失败"})
-			return
-		}
-		if oidcUser {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "OIDC 用户的显示名与密码由认证服务管理，请前往 OIDC 服务修改"})
-			return
-		}
+	// 密码门先于密码策略校验（单源门，见 oidcManagedWriteGate）：OIDC 用户的
+	// 密码不归本地管，弱密码不得先报「长度不能少于 N 位」；次序与管理员路径
+	// 一致，两条端点对同一改动给出同一文案。
+	if oidcManagedWriteGate(c, userIDInt, oidcManagedWriteFields{PasswordChanged: req.Password != ""}) {
+		return
 	}
 	if err := validatePasswordPolicy(req.Password); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
@@ -640,16 +635,8 @@ func (h *Handlers) UpdateCurrentUser(c *gin.Context) {
 	// OIDC 门的 display_name 侧（值变化判定，见上方注释）：同值提交属无
 	// 变更局部更新放行；改值才拦。与下方 UPDATE 分支同一谓词。
 	displayNameChanged := req.DisplayName != nil && *req.DisplayName != oldDisplayName
-	if displayNameChanged {
-		oidcUser, err := isOIDCUser(c.Request.Context(), userIDInt)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取用户身份失败"})
-			return
-		}
-		if oidcUser {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "OIDC 用户的显示名与密码由认证服务管理，请前往 OIDC 服务修改"})
-			return
-		}
+	if oidcManagedWriteGate(c, userIDInt, oidcManagedWriteFields{DisplayNameChanged: displayNameChanged}) {
+		return
 	}
 
 	changed := []string{}
