@@ -282,3 +282,47 @@ func TestPurgeOrphanRuleLogs_keepsLiveRuleWhoseIDLooksLikeRotationCopy(t *testin
 		t.Fatalf("存活规则 %s 的活动日志被孤儿清理误删: %v", lookalikeID, err)
 	}
 }
+
+// 已删「类副本 ID」规则（caddy_id = 存活前缀 + 真实轮转尾，字母表内、备份
+// 导入可达）在同前缀规则存活时的残留：其活动文件在词法上等价于前缀规则的
+// 轮转副本——剥尾主体落进存活集、整段主体落进死亡集，旧判据按剥尾主体归属，
+// 文件永不清理且摘要照常称收敛。归属第三态把这类文件安全交给已删主体：
+// 存活规则的活动文件恒为 <其主体>.log，而本文件整段主体解码非存活，故不可
+// 能是任何存活规则的活动文件（字母表安全门同时排除 %hex 编码与带点毫秒尾
+// 形态）；扫描与删除之间的并发轮转由删除侧 os.Remove 吞 ENOENT 兜底。
+func TestPurgeOrphanRuleLogs_purgesLookalikeResidueWhilePrefixLive(t *testing.T) {
+	_, database := newClusterTestService(t)
+	dir := t.TempDir()
+	t.Cleanup(SetRuleLogDirForTest(dir))
+	if _, err := database.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,listen_port,enabled) VALUES ('lb_pref','pref','http',18098,1)`); err != nil {
+		t.Fatalf("seed prefix rule: %v", err)
+	}
+	const lookalikeGone = "lb_pref-20260102T030405-size"
+	residue := []string{lookalikeGone + ".log", lookalikeGone + ".log.2"}
+	for _, name := range residue {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("{}\n"), 0o644); err != nil {
+			t.Fatalf("seed %s: %v", name, err)
+		}
+	}
+	liveFile := "lb_pref.log"
+	if err := os.WriteFile(filepath.Join(dir, liveFile), []byte("{}\n"), 0o644); err != nil {
+		t.Fatalf("seed %s: %v", liveFile, err)
+	}
+
+	result := PurgeOrphanRuleLogs(context.Background())
+
+	if result.ScanError != "" {
+		t.Fatalf("ScanError=%q, want 空", result.ScanError)
+	}
+	if len(result.Purged) != 1 || result.Purged[0] != lookalikeGone {
+		t.Fatalf("Purged=%v, want [%s]（同前缀存活时已删类副本 ID 的残留必须收敛）", result.Purged, lookalikeGone)
+	}
+	for _, name := range residue {
+		if _, err := os.Stat(filepath.Join(dir, name)); !os.IsNotExist(err) {
+			t.Fatalf("类副本 ID 残留 %s 未删除（err=%v）", name, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(dir, liveFile)); err != nil {
+		t.Fatalf("存活前缀规则的活动文件被误删: %v", err)
+	}
+}

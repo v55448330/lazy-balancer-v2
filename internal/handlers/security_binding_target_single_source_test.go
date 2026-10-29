@@ -129,6 +129,7 @@ func TestRuleBindingTarget_helpersAreSingleSource(t *testing.T) {
 		{"func (h *Handlers) BulkUpdatePolicyBindings(c *gin.Context) {", "loadRuleBindingTarget"},
 		{"func (h *Handlers) BatchBindSecurityPolicies(c *gin.Context) {", "loadRuleBindingTarget"},
 		{"func (h *Handlers) SplitSecurityPolicy(c *gin.Context) {", "bindingCountExcluding"},
+		{"func (h *Handlers) SplitSecurityPolicy(c *gin.Context) {", "loadRuleBindingTarget"},
 	}
 	for _, consumer := range consumers {
 		body, ok := handlerFunctionBody(source, consumer.signature)

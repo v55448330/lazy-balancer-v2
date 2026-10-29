@@ -295,6 +295,41 @@ func TestCountEnabledCustomRulesBatch_countsOnlyEmittable(t *testing.T) {
 	}
 }
 
+// 摘要批量计数必须把 condition_logic 读进发射判据：带外改库/旧版本遗留的
+// 非法 condition_logic（写侧/导入门 400，仅带外可达）会让发射侧整条跳过，
+// 批量 SQL 漏选该列时判据恒空串 → 计数虚报（UI 宣称 N 条、引擎零发射）。
+func TestCountEnabledCustomRulesBatch_skipsInvalidConditionLogic(t *testing.T) {
+	_, database := newClusterTestService(t)
+	insertWithLogic := func(name, logic string) int {
+		t.Helper()
+		res, err := database.Exec(`INSERT INTO security_custom_rules (name, conditions, condition_logic, action, score, enabled)
+			VALUES (?, '[{"target":"uri","operator":"regex","pattern":"^/x$"}]', ?, 'block', 5, 1)`, name, logic)
+		if err != nil {
+			t.Fatal(err)
+		}
+		id, _ := res.LastInsertId()
+		return int(id)
+	}
+	xorID := insertWithLogic("xor-rule", "xor")
+	andID := insertWithLogic("and-rule", "and")
+
+	raw, _ := json.Marshal([]int{xorID})
+	counts := CountEnabledCustomRulesBatch([]*models.SecurityPolicy{{
+		ID: 900001, CustomRules: json.RawMessage(raw),
+	}})
+	if counts[0] != 0 {
+		t.Fatalf("count=%d, want 0（condition_logic=xor 发射侧整条跳过，摘要不得虚报）", counts[0])
+	}
+	// 合法值（and/or/''）形态不受影响
+	raw2, _ := json.Marshal([]int{andID})
+	counts = CountEnabledCustomRulesBatch([]*models.SecurityPolicy{{
+		ID: 900002, CustomRules: json.RawMessage(raw2),
+	}})
+	if counts[0] != 1 {
+		t.Fatalf("count=%d, want 1（合法 condition_logic 照常计数）", counts[0])
+	}
+}
+
 // 库目录注入必须同步派生规则索引目录（否则跨包测试的索引指向生产路径→空索引）。
 func TestSetSecurityLibsDirsForTest_forwardsRuleIndexDir(t *testing.T) {
 	dir := t.TempDir()

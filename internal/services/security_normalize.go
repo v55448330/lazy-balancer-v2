@@ -5,9 +5,50 @@ import (
 	"database/sql"
 	"fmt"
 	"strconv"
+	"strings"
 
 	"lazy-balancer-v2/internal/db"
 )
+
+// security_policies 枚举列合法值集合（单一出处）：写侧白名单（handlers
+// validateSecurityPolicyEnums，跨包 400 语义）、归一回填语句、脏行谓词、渲染
+// 守卫（security.go 经 securityEnumValid）与 ValidBlockStatusCode 全部查同一
+// 集合，新增枚举值只改这里。此前四处字面量并列，漏改回填会每次启动把用户新
+// 启用的值静默归一关闭。一致性由 security_enum_sets_test.go 钉死。
+var (
+	securityModes            = []string{"off", "custom_only", "detection", "blocking"}
+	securityIPACLModes       = []string{"allow", "deny", "绕过"}
+	securityGeoIPModes       = []string{"off", "allow", "deny"}
+	securityBlockStatusCodes = []int{0, 400, 401, db.DefaultBlockStatusCode, 404, 503}
+)
+
+// securityEnumSQLList 把字符串枚举集合渲染成 SQL IN 片段（'a','b'）。
+func securityEnumSQLList(set []string) string {
+	quoted := make([]string, len(set))
+	for i, v := range set {
+		quoted[i] = "'" + v + "'"
+	}
+	return strings.Join(quoted, ",")
+}
+
+// securityBlockStatusCodeSQLList 把拦截状态码集合渲染成 SQL IN 片段（0,400,…）。
+func securityBlockStatusCodeSQLList() string {
+	nums := make([]string, len(securityBlockStatusCodes))
+	for i, v := range securityBlockStatusCodes {
+		nums[i] = strconv.Itoa(v)
+	}
+	return strings.Join(nums, ",")
+}
+
+// securityEnumValid 报告 v 是否属于枚举集合（渲染守卫与归一消费端共用同一判定）。
+func securityEnumValid(set []string, v string) bool {
+	for _, allowed := range set {
+		if v == allowed {
+			return true
+		}
+	}
+	return false
+}
 
 // legacySecurityEnumBackfills 把之前落库的枚举空串行归一到 Create 侧
 // 默认值：空串行在发射端零产出规则而 UI 宣称控制已启用，且
@@ -25,9 +66,9 @@ var legacySecurityEnumBackfills = []string{
 	"UPDATE security_policies SET ip_acl_mode=TRIM(ip_acl_mode) WHERE ip_acl_mode IS NOT NULL AND ip_acl_mode<>TRIM(ip_acl_mode)",
 	"UPDATE security_policies SET mode=TRIM(mode) WHERE mode IS NOT NULL AND mode<>TRIM(mode)",
 	"UPDATE security_policies SET geoip_mode=TRIM(geoip_mode) WHERE geoip_mode IS NOT NULL AND geoip_mode<>TRIM(geoip_mode)",
-	"UPDATE security_policies SET ip_acl_mode='deny' WHERE COALESCE(TRIM(ip_acl_mode),'') NOT IN ('allow','deny','绕过')",
-	"UPDATE security_policies SET mode='off' WHERE COALESCE(TRIM(mode),'') NOT IN ('off','custom_only','detection','blocking')",
-	"UPDATE security_policies SET geoip_mode='deny' WHERE COALESCE(TRIM(geoip_mode),'') NOT IN ('off','allow','deny')",
+	fmt.Sprintf("UPDATE security_policies SET ip_acl_mode='deny' WHERE COALESCE(TRIM(ip_acl_mode),'') NOT IN (%s)", securityEnumSQLList(securityIPACLModes)),
+	fmt.Sprintf("UPDATE security_policies SET mode='off' WHERE COALESCE(TRIM(mode),'') NOT IN (%s)", securityEnumSQLList(securityModes)),
+	fmt.Sprintf("UPDATE security_policies SET geoip_mode='deny' WHERE COALESCE(TRIM(geoip_mode),'') NOT IN (%s)", securityEnumSQLList(securityGeoIPModes)),
 	// 之前落库的 threshold=0 行——UI 显示 0、发射端 >0 判断
 	// 跳过阈值 SecAction 而 CRS 回落默认 5（「UI 宣称 0、实际 5」的展示/行为
 	// 漂移，与空串枚举行同型）。归一到 Create 侧 max1(x,5) 的默认值 5。
@@ -45,7 +86,7 @@ var legacySecurityEnumBackfills = []string{
 	// 库值唯一真相（批 3）：从 `=429` 扩为枚举外全集（写侧白名单 0/400/401/
 	// 403/404/503，0=未设置跟随默认 403 为类型②省略型合法值）——旧备份/带外
 	// 脏值（如 418）随启动归一，渲染层不再消费枚举外状态码。
-	fmt.Sprintf("UPDATE security_policies SET block_status_code=%d WHERE block_status_code IS NOT NULL AND block_status_code NOT IN (0,400,401,%d,404,503)", db.DefaultBlockStatusCode, db.DefaultBlockStatusCode),
+	fmt.Sprintf("UPDATE security_policies SET block_status_code=%d WHERE block_status_code IS NOT NULL AND block_status_code NOT IN (%s)", db.DefaultBlockStatusCode, securityBlockStatusCodeSQLList()),
 	// rate_limit_rps 历史脏行（enabled=1 &
 	// rps<1，修复前 Update 缺陷可落库）绑定启用规则时整份配置生成失败
 	// （渲染层 fail-visible）。启动归一关停业务开关——rps 库值保持原样
@@ -57,11 +98,12 @@ var legacySecurityEnumBackfills = []string{
 // ValidBlockStatusCode 报告 v 是否为拦截状态码合法值：写侧
 // validateSecurityPolicyEnums 白名单（400/401/403/404/503）+ 0=未设置跟随
 // 默认 403（类型②省略型合法值，批 3 Ruling）。导入门（handlers）与集群
-// apply 门共用本谓词。
+// apply 门共用本谓词；合法值集合单一出处=securityBlockStatusCodes。
 func ValidBlockStatusCode(v int) bool {
-	switch v {
-	case 0, 400, 401, 403, 404, 503:
-		return true
+	for _, allowed := range securityBlockStatusCodes {
+		if v == allowed {
+			return true
+		}
 	}
 	return false
 }
@@ -84,23 +126,29 @@ type securityEnumRow struct {
 }
 
 // securityEnumDirtyRows 选出枚举列非法或带首尾空白的策略行——谓词与
-// legacySecurityEnumBackfills 的三个枚举条目同源（TRIM 后不在白名单，或
-// 需要先 trim）。归一本身是保护语义变更（mode 非法→off 会停发该策略全部
+// legacySecurityEnumBackfills 的三个枚举条目同源：枚举白名单片段直接由
+// 同一集合变量生成（securityEnumSQLList/securityBlockStatusCodeSQLList），
+// 不存在第二份字面量。归一本身是保护语义变更（mode 非法→off 会停发该策略全部
 // 规则；ip_acl_mode 空→deny 会突然开始按名单拦截），只报总条数无法定位
 // 「哪条策略、哪个字段、从什么值变成什么值」，故在变更前后各取一次快照。
 func securityEnumDirtyRows(ctx context.Context, tx *sql.Tx) ([]securityEnumRow, error) {
-	rows, err := tx.QueryContext(ctx, `SELECT id, COALESCE(name,''), COALESCE(ip_acl_mode,''), COALESCE(mode,''), COALESCE(geoip_mode,''),
+	const dirtyPredicate = `SELECT id, COALESCE(name,''), COALESCE(ip_acl_mode,''), COALESCE(mode,''), COALESCE(geoip_mode,''),
 			COALESCE(rate_limit_enabled,0), COALESCE(anomaly_threshold,0), COALESCE(block_status_code,0)
 		FROM security_policies
 		WHERE (ip_acl_mode IS NOT NULL AND ip_acl_mode<>TRIM(ip_acl_mode))
 		   OR (mode IS NOT NULL AND mode<>TRIM(mode))
 		   OR (geoip_mode IS NOT NULL AND geoip_mode<>TRIM(geoip_mode))
-		   OR COALESCE(TRIM(ip_acl_mode),'') NOT IN ('allow','deny','绕过')
-		   OR COALESCE(TRIM(mode),'') NOT IN ('off','custom_only','detection','blocking')
-		   OR COALESCE(TRIM(geoip_mode),'') NOT IN ('off','allow','deny')
+		   OR COALESCE(TRIM(ip_acl_mode),'') NOT IN (%s)
+		   OR COALESCE(TRIM(mode),'') NOT IN (%s)
+		   OR COALESCE(TRIM(geoip_mode),'') NOT IN (%s)
 		   OR (COALESCE(rate_limit_enabled,0)=1 AND COALESCE(rate_limit_rps,0)<1)
 		   OR COALESCE(anomaly_threshold,0)<=0
-		   OR COALESCE(block_status_code,0) NOT IN (0,400,401,`+strconv.Itoa(db.DefaultBlockStatusCode)+`,404,503)`)
+		   OR COALESCE(block_status_code,0) NOT IN (%s)`
+	rows, err := tx.QueryContext(ctx, fmt.Sprintf(dirtyPredicate,
+		securityEnumSQLList(securityIPACLModes),
+		securityEnumSQLList(securityModes),
+		securityEnumSQLList(securityGeoIPModes),
+		securityBlockStatusCodeSQLList()))
 	if err != nil {
 		return nil, err
 	}

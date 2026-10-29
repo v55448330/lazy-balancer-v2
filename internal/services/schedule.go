@@ -253,7 +253,7 @@ func RearmScheduleSlotsAfterTimezoneChange() {
 		}
 	}
 	// 威胁/爬虫源表：逐启用行重排（行键不同——威胁按 id、爬虫按 name）。
-	// 威胁族带注册表名过滤（与读侧寻槽、首槽武装同源）：注册表外启用行的槽
+	// 两族均带注册表名过滤（与读侧寻槽、首槽武装同源）：注册表外启用行的槽
 	// 不属于运行域，重排只会把被清理的惰性槽又写回去。
 	// 槽函数取严格形态（与版本表族同口径）：排程不可读时整表跳过——fail-soft
 	// 变体会把用户的「星期几 + HH:MM」写成默认 04:00 的未来槽（一次性越档
@@ -265,7 +265,7 @@ func RearmScheduleSlotsAfterTimezoneChange() {
 		names  []string
 	}{
 		{"security_threat_sources", "id", threatNextSlotStrict, threatSourceRegistryNames()},
-		{"security_crawler_sources", "name", crawlerNextSlotStrict, nil},
+		{"security_crawler_sources", "name", crawlerNextSlotStrict, crawlerSourceRegistryNames()},
 	} {
 		slot, slotErr := st.slotFn(now)
 		if slotErr != nil {
@@ -841,10 +841,12 @@ func earliestThreatNextUpdate() string {
 	return earliestEnabledSourceUpdate("security_threat_sources", threatSourceRegistryNames())
 }
 
-// earliestCrawlerNextUpdate 爬虫族运行域=全部启用行（crawlerDueSources 不按
-// 名单过滤），槽域与运行域天然一致，不做名过滤。
+// earliestCrawlerNextUpdate 爬虫族槽域=内置名全集（crawlerSourceRegistryNames），
+// 与运行域同源：RunUpdate 入口把未知名行收敛出运行域
+// （filterBuiltinCrawlerSources，槽不再被推进），槽域必须同步收窄——否则带外
+// 未知名行的惰性槽会让引擎逐 tick 空转（与威胁族同机理）。
 func earliestCrawlerNextUpdate() string {
-	return earliestEnabledSourceUpdate("security_crawler_sources", nil)
+	return earliestEnabledSourceUpdate("security_crawler_sources", crawlerSourceRegistryNames())
 }
 
 // setVersionTableSchedule 版本表排程保存 + 保存即重排（auto_update 关闭时也

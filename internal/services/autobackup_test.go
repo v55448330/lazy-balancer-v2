@@ -754,3 +754,57 @@ func TestAutoBackupScheduled_advancesOutOfBandInvalidWatermark(t *testing.T) {
 		t.Fatalf("slot=%v 早于已写水位线 %v", slot, got)
 	}
 }
+
+// 平面格式水位线落在「Go 读侧判据」与「SQL 写守卫判据」的夹缝。可复现形态
+// 是空格分隔 + 时区后缀（SQLite datetime 家族合法、datetime('now')/带外工具
+// 直写可达）：glebarez 驱动回读只归一 T 分隔形态，空格形态原样回来——
+// 读侧 time.Parse(RFC3339) 失败 ⇒ 按「从未跑过」每 tick 重跑全量备份；写守卫
+// 的 datetime() 却解析成功且晚于目标槽 ⇒ 推进条件恒不成立——水位线既不推进
+// 也不自愈（纯平面无时区形态会被驱动回读归一成 RFC3339，不构成夹缝）。
+// 判据单源（parseAutoBackupWatermark，读侧接受 SQLite datetime 文本按 UTC）
+// + 写侧 CAS 后：已覆盖槽立即让位、下一槽落在未来，且下一轮真实执行把库值
+// 改写为 RFC3339。
+func TestAutoBackupScheduled_plainFormatWatermarkCoveredAndSelfHeals(t *testing.T) {
+	setupAutoBackupTestDB(t)
+	if _, err := db.DB.Exec(`UPDATE global_config SET auto_backup_enabled=1, auto_backup_frequency='daily', auto_backup_time='03:00', auto_backup_last_run='2026-09-20 03:00:07 +00:00'
+		WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
+	var calls []string
+	setAutoBackupTestExecutor(t, &calls, nil)
+
+	// Then 1：平面值按 UTC 解析 ⇒ 今日槽（03:00:00）已被 03:00:07 覆盖，
+	// 下一槽必须在未来（修复前返回今日已过去的 03:00 槽 ⇒ 每 tick 重跑）。
+	now := time.Date(2026, 9, 20, 3, 0, 8, 0, time.UTC)
+	slot, ok := nextAutoBackupSlot(now)
+	if !ok {
+		t.Fatal("ok=false, want 未来槽")
+	}
+	if !slot.After(now) {
+		t.Fatalf("slot=%v 不晚于 now=%v：平面水位线未被认领，调度器每 tick 重跑全量备份", slot, now)
+	}
+
+	// Then 2：下一轮真实执行（明日槽晚于平面水位线）照常推进，库值改写为
+	// RFC3339——写守卫与读侧同判据，不再被平面值卡死。
+	startedAt := time.Date(2026, 9, 21, 3, 0, 10, 0, time.UTC)
+	if err := runAutoBackupScheduledAt(context.Background(), 0, startedAt); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if len(calls) != 1 {
+		t.Fatalf("calls=%v, want 单次执行", calls)
+	}
+	var lastRun string
+	if err := db.DB.QueryRow(`SELECT auto_backup_last_run FROM global_config WHERE id=1`).Scan(&lastRun); err != nil {
+		t.Fatalf("read last_run: %v", err)
+	}
+	written, perr := time.Parse(time.RFC3339, lastRun)
+	if perr != nil {
+		t.Fatalf("last_run=%q 仍为平面/非法形态：写守卫必须与读侧同判据推进", lastRun)
+	}
+	if want := time.Date(2026, 9, 21, 3, 0, 0, 0, time.UTC); !written.Equal(want) {
+		t.Fatalf("last_run=%v, want 本轮槽 %v", written, want)
+	}
+	if slot, ok := nextAutoBackupSlot(startedAt); !ok || !slot.After(startedAt) {
+		t.Fatalf("slot=%v ok=%v: 改写后下一槽必须在未来", slot, ok)
+	}
+}

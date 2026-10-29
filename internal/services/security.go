@@ -277,10 +277,9 @@ func buildCorazaDirectivesWithIndex(p *models.SecurityPolicy, store caddyConfigS
 	// 「仅 IP 控制/空串」分支——blocking 宣称与实际零 WAF 发射漂移。写侧/导入
 	// 已 400、启动归一把枚举外全集收敛为 off，此处为两窗口之间的带外脏行留痕
 	// （60s 限流与同族 geoip_countries/crs_rule_groups 同口径，不 fail-visible：
-	// 一行脏数据不得拖垮整份配置生成）。
-	switch p.Mode {
-	case "off", "custom_only", "detection", "blocking":
-	default:
+	// 一行脏数据不得拖垮整份配置生成）。合法值判定查归一/写侧同一集合
+	// （securityModes，security_normalize.go 单一出处）。
+	if !securityEnumValid(securityModes, p.Mode) {
 		msg := fmt.Sprintf("策略 %q（#%d）mode 非枚举值 %q，WAF 面按无模式渲染（疑似带外直写/旧快照，启动归一将收敛为 off）", p.Name, p.ID, p.Mode)
 		if auditFailureShouldLog(msg) {
 			Logf("warn", "%s", msg)
@@ -447,9 +446,8 @@ func buildCorazaDirectivesWithIndex(p *models.SecurityPolicy, store caddyConfigS
 		// 渲染守卫：ip_acl_mode 非三态枚举时 ACL 开关已开但下方发射 switch
 		// 零规则——「已启用 IP 访问控制」静默零强制。写侧/导入 400、启动归一
 		// 收敛为 deny，此处为带外脏行留痕（60s 限流，可用性优先不 fail-visible）。
-		switch p.IPACLMode {
-		case "allow", "deny", "绕过":
-		default:
+		// 合法值判定查归一/写侧同一集合（securityIPACLModes）。
+		if !securityEnumValid(securityIPACLModes, p.IPACLMode) {
 			msg := fmt.Sprintf("策略 %q（#%d）ip_acl_mode 非枚举值 %q，ACL 已启用但无规则发射（疑似带外直写/旧快照，启动归一将收敛为 deny）", p.Name, p.ID, p.IPACLMode)
 			if auditFailureShouldLog(msg) {
 				Logf("warn", "%s", msg)
@@ -1425,7 +1423,9 @@ func CountEnabledCustomRulesBatch(policies []*models.SecurityPolicy) []int {
 	}
 	// 与单策略路径同判据（customRuleEmittable）：只查 enabled 会把「存在但
 	// 发射侧必跳过」的规则计进摘要，UI 宣称 N 条而引擎零发射。列集与
-	// resolvePolicyCustomRules 同一查询形态，判据单一。
+	// resolvePolicyCustomRules 同一查询形态（含 condition_logic——发射判据
+	// customRuleEmissionIssue 对非法条件关系整条跳过，漏选该列会让带外
+	// 脏行计数虚报），判据单一。
 	emittable := make(map[int]bool, len(ids))
 	for start := 0; start < len(ids); start += policyCustomRuleChunkSize {
 		end := start + policyCustomRuleChunkSize
@@ -1438,17 +1438,17 @@ func CountEnabledCustomRulesBatch(policies []*models.SecurityPolicy) []int {
 		for i, id := range chunk {
 			args[i] = id
 		}
-		rows, err := db.DB.Query("SELECT id, name, COALESCE(conditions,'[]'), COALESCE(action,'block'), COALESCE(score,5), COALESCE(enabled,1) FROM security_custom_rules WHERE id IN ("+placeholders+")", args...)
+		rows, err := db.DB.Query("SELECT id, name, COALESCE(conditions,'[]'), COALESCE(NULLIF(condition_logic,''),'and'), COALESCE(action,'block'), COALESCE(score,5), COALESCE(enabled,1) FROM security_custom_rules WHERE id IN ("+placeholders+")", args...)
 		if err != nil {
 			Logf("warn", "策略列表: 批量读取自定义规则失败（该块计数为 0）: %v", err)
 			continue
 		}
 		for rows.Next() {
 			var id int
-			var name, conditionsJSON, action string
+			var name, conditionsJSON, action, conditionLogic string
 			var score int
 			var on bool
-			if err := rows.Scan(&id, &name, &conditionsJSON, &action, &score, &on); err != nil {
+			if err := rows.Scan(&id, &name, &conditionsJSON, &conditionLogic, &action, &score, &on); err != nil {
 				Logf("warn", "策略列表: 自定义规则行扫描失败（该行丢弃）: %v", err)
 				continue
 			}
@@ -1459,7 +1459,7 @@ func CountEnabledCustomRulesBatch(policies []*models.SecurityPolicy) []int {
 				continue
 			}
 			emittable[id] = customRuleEmittable(models.CustomRule{
-				ID: id, Name: name, Conditions: conditions, Action: action, Score: score, Enabled: on,
+				ID: id, Name: name, ConditionLogic: conditionLogic, Conditions: conditions, Action: action, Score: score, Enabled: on,
 			})
 		}
 		if err := rows.Err(); err != nil {
@@ -2130,9 +2130,9 @@ func buildIPPrecheckDirectives(policies []*models.SecurityPolicy, denyStatus int
 		//   true，链首发射 !@ipMatch deny）。
 		// - allow+空名单：PolicyHasGeoIP 为 false 时整链不发射=全放行
 		//   （fail-open，最危险方向）——fail-visible 拒绝生成。
-		switch p.GeoIPMode {
-		case "", "off", "allow", "deny":
-		default:
+		// 枚举外非空值判定查归一/写侧同一集合（securityGeoIPModes）；空串保持
+		// 静默兼容（同步从节点等归一窗口外的遗留形态，行为与归一目标一致）。
+		if p.GeoIPMode != "" && !securityEnumValid(securityGeoIPModes, p.GeoIPMode) {
 			msg := fmt.Sprintf("策略 %q（#%d）geoip_mode 非枚举值 %q，地域控制按关闭处理（疑似带外直写/旧快照）", p.Name, p.ID, p.GeoIPMode)
 			if auditFailureShouldLog(msg) {
 				Logf("warn", "%s", msg)

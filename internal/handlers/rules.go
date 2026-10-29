@@ -2629,13 +2629,12 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 			return
 		}
 	}
-	// 同端口 TLS/明文混布拦截(更新方向)——nil=保留现值,合并后判定。
+	// 同端口 TLS/明文混布拦截(更新方向)。EnableTLS 的「nil=保留现值」合并
+	// 已在更新入口完成（req.EnableTLS == nil 时替换为 &existingRule.EnableTLS），
+	// 此处恒非 nil——直接解引用；运行期兜底分支不可达（死代码），保留只会
+	// 让读侧误以为此处仍接受 nil 语义。
 	if req.Protocol == "http" {
-		effTLS := existingRule.EnableTLS
-		if req.EnableTLS != nil {
-			effTLS = *req.EnableTLS
-		}
-		if err := checkPortTLSMix(caddyID, req.ListenPort, effTLS); err != nil {
+		if err := checkPortTLSMix(caddyID, req.ListenPort, *req.EnableTLS); err != nil {
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 			return
 		}

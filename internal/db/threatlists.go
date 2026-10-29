@@ -81,12 +81,13 @@ var threatSystemListLegacyNames = map[string]string{
 // 空串=无冲突或冲突已解除。
 const threatListTakeoverSkipMarkerColumn = "threat_list_takeover_skip_fp"
 
-// readThreatListTakeoverSkipMarker 读已告警指纹集合：列/行缺失或读失败一律
-// 返回空集（按「未告警」处理——最多多留一条审计，不影响正确性）。
-func readThreatListTakeoverSkipMarker() map[string]struct{} {
+// readThreatListTakeoverSkipMarker 读已告警指纹集合。读失败（单行缺失/库忙等）
+// 返回错误交由调用方点名留痕后按空集继续——错误与「确无已告警指纹」是两种
+// 状态，静默折叠成空集会让「同一僵持态只留一条审计」失效且无排查线索。
+func readThreatListTakeoverSkipMarker() (map[string]struct{}, error) {
 	stored := ""
 	if err := DB.QueryRow(`SELECT COALESCE(` + threatListTakeoverSkipMarkerColumn + `,'') FROM global_config WHERE id=1`).Scan(&stored); err != nil {
-		return map[string]struct{}{}
+		return nil, err
 	}
 	seen := make(map[string]struct{})
 	for _, fingerprint := range strings.Split(stored, ";") {
@@ -94,19 +95,26 @@ func readThreatListTakeoverSkipMarker() map[string]struct{} {
 			seen[fingerprint] = struct{}{}
 		}
 	}
-	return seen
+	return seen, nil
 }
 
 // writeThreatListTakeoverSkipMarker 覆盖写指纹集合（空集写空串即清除）；
-// 失败只告警不阻断启动（下次启动重报）。
+// 失败只告警不阻断启动（下次启动重报）。UPDATE 命中 0 行=global_config 单行
+// 缺失或不可写，同样只告警——否则指纹从未落库而调用方毫无信号，重复审计
+// 退化为无头案。
 func writeThreatListTakeoverSkipMarker(fingerprints map[string]struct{}) {
 	sorted := make([]string, 0, len(fingerprints))
 	for fingerprint := range fingerprints {
 		sorted = append(sorted, fingerprint)
 	}
 	sort.Strings(sorted)
-	if _, err := DB.Exec(`UPDATE global_config SET `+threatListTakeoverSkipMarkerColumn+`=? WHERE id=1`, strings.Join(sorted, ";")); err != nil {
+	res, err := DB.Exec(`UPDATE global_config SET `+threatListTakeoverSkipMarkerColumn+`=? WHERE id=1`, strings.Join(sorted, ";"))
+	if err != nil {
 		log.Printf("启动迁移：威胁名单占名冲突告警指纹写入失败（下次启动将重报）: %v", err)
+		return
+	}
+	if n, rerr := res.RowsAffected(); rerr == nil && n == 0 {
+		log.Printf("WARN: 启动迁移：global_config 单行缺失或不可写，威胁名单占名冲突告警指纹无法持久化（下次启动将重报）")
 	}
 }
 
@@ -129,8 +137,14 @@ func threatListTakeoverSkipFingerprint(canonical, legacy string) string {
 func migrateThreatSystemListNames() error {
 	renamedUserLists := 0
 	// 已知僵持态集合（本次启动观察到的）与已告警集合（上次落库的）：
-	// 集合相等即不再写审计，只在变化时留痕并覆盖 marker。
-	reportedSkips := readThreatListTakeoverSkipMarker()
+	// 集合相等即不再写审计，只在变化时留痕并覆盖 marker。读取失败按未告警
+	// 继续（fail-open 语义不变），但必须点名留痕——静默折叠成空集时，
+	// 「同一僵持态只留一条审计」失效且无从排查。
+	reportedSkips, err := readThreatListTakeoverSkipMarker()
+	if err != nil {
+		log.Printf("WARN: 启动迁移：威胁名单占名冲突告警指纹读取失败（按未告警继续，同一冲突可能重报一条审计）: %v", err)
+		reportedSkips = map[string]struct{}{}
+	}
 	observedSkips := make(map[string]struct{})
 	for _, sl := range ThreatSystemLists() {
 		legacy, ok := threatSystemListLegacyNames[sl.Name]

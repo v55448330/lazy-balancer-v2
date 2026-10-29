@@ -142,6 +142,60 @@ func TestSplitSecurityPolicy_threeChildrenAndRemap(t *testing.T) {
 	}
 }
 
+// 协议门（与四个绑定写路径同一单源判定 loadRuleBindingTarget）：拆分重映射
+// 不得把 legacy TCP 绑定复制到子策略——TCP 链（buildTCPServer）不消费安全
+// 策略，复制即「UI 宣称受保护、运行态零强制」+ 挤占 maxBindingsPerRule 额度。
+// 带外形态：正常写路径已有协议门，TCP 绑定行只能来自旧版本遗留/带外直写。
+func TestSplitSecurityPolicy_tcpBindingSkippedAndOriginalKept(t *testing.T) {
+	setupSecurityPolicyTestDB(t)
+	router := splitRouter(t)
+	mixedID := seedSplitFixture(t) // lb_s1/lb_s2（http）已绑定
+	// legacy TCP 绑定（带外直写形状）
+	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,listen_port,enabled) VALUES ('lb_s3_tcp','s3','tcp',9000,1)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id,policy_id) VALUES ('lb_s3_tcp',?)`, mixedID); err != nil {
+		t.Fatal(err)
+	}
+
+	response := postSplit(t, router, mixedID)
+	if response.Code != http.StatusOK {
+		t.Fatalf("split status=%d body=%s, want 200", response.Code, response.Body.String())
+	}
+	var payload splitPayload
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode: %v (body=%s)", err, response.Body.String())
+	}
+	// http 规则照常重映射（回归形状）；TCP 规则进 skipped 保留原绑定
+	if payload.Data.Remapped != 2 {
+		t.Fatalf("remapped=%d, want 2（仅 http 规则重映射）", payload.Data.Remapped)
+	}
+	skippedTCP := false
+	for _, s := range payload.Data.Skipped {
+		rid, _ := s["rule_id"].(string)
+		if rid == "lb_s3_tcp" {
+			skippedTCP = true
+			if reason, _ := s["reason"].(string); !strings.Contains(reason, "仅支持绑定 HTTP") {
+				t.Fatalf("tcp skipped reason=%q, want 含「仅支持绑定 HTTP」", reason)
+			}
+		}
+	}
+	if !skippedTCP {
+		t.Fatalf("TCP 规则未进 skipped: %+v", payload.Data.Skipped)
+	}
+	if payload.Data.DeletedOriginal {
+		t.Fatal("原 mixed 策略必须保留（skipped 规则的原绑定仍在生效）")
+	}
+	// 子策略不得绑定 TCP 规则；原绑定仍在
+	if bound := queryBoundPolicyIDs(t, "lb_s3_tcp"); len(bound) != 1 || bound[0] != mixedID {
+		t.Fatalf("tcp 绑定=%v, want 仅原 mixed 策略 %d", bound, mixedID)
+	}
+	// http 规则三个子策略绑定照常
+	if bound := queryBoundPolicyIDs(t, "lb_s1"); len(bound) != 3 {
+		t.Fatalf("http 规则绑定数=%d, want 3（三个子策略）", len(bound))
+	}
+}
+
 func TestSplitSecurityPolicy_partialGroups(t *testing.T) {
 	setupSecurityPolicyTestDB(t)
 	router := splitRouter(t)
@@ -448,6 +502,13 @@ func TestSplitSecurityPolicy_skipsRuleWithExistingStage2(t *testing.T) {
 	}
 	if _, err := db.DB.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id,policy_id) VALUES ('lb_clean',?)`, mixedID); err != nil {
 		t.Fatal(err)
+	}
+	// 协议门前置：重映射目标必须是真实存在的 HTTP 规则（正常写路径的绑定
+	// 恒满足；缺行=悬挂绑定，会被协议门判「规则不存在」进 skipped）。
+	for _, rule := range []string{"lb_dual", "lb_dual2", "lb_clean"} {
+		if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,listen_port,enabled) VALUES (?,?, 'http', 8080, 1)`, rule, rule); err != nil {
+			t.Fatalf("seed http rule %s: %v", rule, err)
+		}
 	}
 
 	// When

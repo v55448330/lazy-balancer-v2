@@ -106,6 +106,41 @@ func migrateCrawlerIPListNames() error {
 	return nil
 }
 
+// crawlerSourceRegistryNames 内置源名全集（crawlerBotSources 单一事实源）。
+// 排程槽域与 RunUpdate 运行域同用此集合（与威胁族 threatSourceRegistryNames
+// 同机理）：运行体不处理的行（带外未知名，filterBuiltinCrawlerSources 跳过）
+// 不得驱动寻槽/首槽武装/时区重排——否则其永不推进的惰性槽会让任务空转。
+func crawlerSourceRegistryNames() []string {
+	names := make([]string, 0, len(crawlerBotSources))
+	for _, src := range crawlerBotSources {
+		names = append(names, src.Name)
+	}
+	return names
+}
+
+// filterBuiltinCrawlerSources 过滤未知名源行：源表行的写入口只有种子/导入
+// canonical 覆盖（UI 仅改 update_enabled、导入侧拒绝未知名），带外 INSERT 的
+// 未知名行没有官方段可对照，合理性门原样放行——等于带外一行即可让任务每日
+// 抓取任意地址，并把解析结果写成新的 system=1 名单（名不在备份 system 名单
+// 白名单内，连带封死备份导入恢复通道）。更新任务入口用它把运行域收敛到内置
+// 集合，判定与导入侧同一事实源（CanonicalCrawlerSource→crawlerBotSources）；
+// 未知名按名去重返回，由调用方留痕。
+func filterBuiltinCrawlerSources(sources []crawlerSource) (kept []crawlerSource, unknown []string) {
+	kept = make([]crawlerSource, 0, len(sources))
+	seen := make(map[string]struct{})
+	for _, src := range sources {
+		if _, _, ok := CanonicalCrawlerSource(src.Name); ok {
+			kept = append(kept, src)
+			continue
+		}
+		if _, dup := seen[src.Name]; !dup {
+			seen[src.Name] = struct{}{}
+			unknown = append(unknown, src.Name)
+		}
+	}
+	return kept, unknown
+}
+
 // crawlerDueSources 读取本次任务应处理的启用源：manual=全部；auto=仅
 // next_update 为空或已到期者。排程只读 security_crawler_sources，不触碰威胁源。
 func crawlerDueSources(trigger string) ([]crawlerSource, error) {

@@ -103,10 +103,12 @@ func allBackupSectionKeys() []string {
 }
 
 const (
-	autoBackupKeepDefault = 7
+	// 默认值绑定 db 治理常量（库值唯一真相）：handlers 局部常量只允许引用，
+	// 不得再持第二份数字字面量——改默认值后设置页显示/归一与 DDL/调度静默分叉。
+	autoBackupKeepDefault = db.DefaultAutoBackupKeep
 	autoBackupKeepMin     = 1
 	autoBackupKeepMax     = 30
-	autoBackupDayDefault  = 1
+	autoBackupDayDefault  = db.DefaultAutoBackupDay
 )
 
 func autoBackupKeepValid(keep int) bool {
@@ -148,7 +150,7 @@ func normalizeAutoBackupDay(frequency string, day int) int {
 // 读失败/恢复留痕走 services 状态转换单源（首报 warn、恢复 info）。
 func loadAutoBackupKeepSetting(ctx context.Context) (keep int, known bool) {
 	var raw int
-	if err := db.DB.QueryRowContext(ctx, `SELECT COALESCE(auto_backup_keep,7) FROM global_config WHERE id=1`).Scan(&raw); err != nil {
+	if err := db.DB.QueryRowContext(ctx, `SELECT COALESCE(auto_backup_keep,`+strconv.Itoa(db.DefaultAutoBackupKeep)+`) FROM global_config WHERE id=1`).Scan(&raw); err != nil {
 		services.LogConfigReadFailure("auto-backup-keep", err)
 		return autoBackupKeepDefault, false
 	}
@@ -645,8 +647,8 @@ func (h *Handlers) AutoBackupSettings(c *gin.Context) {
 	// 从下面截断后的列表推导：列表有窗口上限，success 行落在窗口之外时推导
 	// 会误报 null（「从未成功备份」）。子查询与列表窗口彻底解耦，且仍是零额外
 	// 往返。
-	if err := db.DB.QueryRowContext(c.Request.Context(), `SELECT COALESCE(auto_backup_enabled,0), COALESCE(auto_backup_frequency,'daily'),
-		COALESCE(auto_backup_time,'03:00'), COALESCE(auto_backup_day,1), COALESCE(auto_backup_keep,7),
+	if err := db.DB.QueryRowContext(c.Request.Context(), `SELECT COALESCE(auto_backup_enabled,`+strconv.Itoa(db.DefaultAutoBackupEnabled)+`), COALESCE(auto_backup_frequency,'`+db.DefaultAutoBackupFrequency+`'),
+		COALESCE(auto_backup_time,'`+db.DefaultAutoBackupTime+`'), COALESCE(auto_backup_day,`+strconv.Itoa(db.DefaultAutoBackupDay)+`), COALESCE(auto_backup_keep,`+strconv.Itoa(db.DefaultAutoBackupKeep)+`),
 		auto_backup_sections, auto_backup_last_run,
 		(SELECT created_at FROM auto_backups WHERE status='success' ORDER BY created_at DESC, id DESC LIMIT 1)
 		FROM global_config WHERE id=1`).

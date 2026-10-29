@@ -1,8 +1,8 @@
 package services
 
-// 排程槽域 = 运行域：威胁族的槽只取内置注册表源名的最早槽，注册表外的启用行
-// 不得把「最早槽」钉在过去（那会让 auto 轮恒投递、运行体零到期源提前返回、
-// 槽永不被消费 → 威胁库自动更新静默停摆）。
+// 排程槽域 = 运行域：威胁/爬虫两族的槽只取内置注册表源名的最早槽，注册表外
+// 的启用行不得把「最早槽」钉在过去（那会让 auto 轮恒投递、运行体零到期源提前
+// 返回、槽永不被消费 → 自动更新静默停摆/空转）。
 
 import (
 	"testing"
@@ -46,19 +46,33 @@ func mustThreatDueSources(t *testing.T) []threatSourceRow {
 	return sources
 }
 
-func TestEarliestCrawlerSlotCountsAllEnabledSources(t *testing.T) {
+func TestEarliestCrawlerSlotIgnoresUnregisteredSources(t *testing.T) {
 	_, database := newClusterTestService(t)
-	// 爬虫族运行域=全部启用行（不按名单过滤），槽域必须保持同一语义。
-	if _, err := database.Exec(`UPDATE security_crawler_sources SET update_enabled=0`); err != nil {
-		t.Fatalf("disable crawler sources: %v", err)
+	// 内置源全部停用（避免干扰），再种一条内置名行作为回归形状锚点。
+	if err := ensureCrawlerSources(); err != nil {
+		t.Fatal(err)
 	}
+	if _, err := database.Exec(`UPDATE security_crawler_sources SET update_enabled=0,
+		next_update='2031-01-02 03:04:05' WHERE name='googlebot'`); err != nil {
+		t.Fatalf("seed builtin sources: %v", err)
+	}
+	// 注册表外的启用行，槽已过期（应用升级改名/迁表遗留、带外直写的形态）。
 	if _, err := database.Exec(`INSERT INTO security_crawler_sources (name, url, update_enabled, next_update)
-		VALUES ('crawler-any','https://crawler.example/list.txt',1,'2030-05-06 07:08:09')`); err != nil {
-		t.Fatalf("seed crawler source: %v", err)
+		VALUES ('crawler-any','https://crawler.example/list.txt',1,'2020-01-01 00:00:00')`); err != nil {
+		t.Fatalf("seed unregistered source: %v", err)
 	}
 
-	if got, want := earliestCrawlerNextUpdate(), "2030-05-06 07:08:09"; got != want {
-		t.Fatalf("earliest crawler slot=%q, want %q（爬虫族不做名过滤）", got, want)
+	// Then：注册表外的过期槽不参与（运行体 filterBuiltinCrawlerSources 不处理
+	// 该行=槽无推进写点，纳入槽域会让 auto 轮恒投递、运行体空转）。
+	if got := earliestCrawlerNextUpdate(); got != "" {
+		t.Fatalf("earliest crawler slot=%q, want 空（槽域必须等于内置名运行域）", got)
+	}
+	// 内置名行仍驱动寻槽（回归形状）。
+	if _, err := database.Exec(`UPDATE security_crawler_sources SET update_enabled=1 WHERE name='googlebot'`); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := earliestCrawlerNextUpdate(), "2031-01-02 03:04:05"; got != want {
+		t.Fatalf("earliest crawler slot=%q, want %q（内置名行不得被门误伤）", got, want)
 	}
 }
 

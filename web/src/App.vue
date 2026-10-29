@@ -90,21 +90,24 @@ onMounted(async () => {
   const oidcToken = oidcCallback ? (fragment.get('token') ?? '') : ''
   const oidcExpiresAt = oidcCallback ? (fragment.get('expires_at') ?? '') : ''
   const oidcReturn = splitOidcReturnTo(oidcCallback ? (fragment.get('return_to') ?? '') : '')
-  // 后端回调失败以 error 片段 302 回前端。必须当场提示——
-  // 原实现写入 sessionStorage 只在 Login 挂载时消费一次；已持有效会话的用户
-  // 回跳时 init() 成功、Login 不挂载，错误既不提示也不清除，等之后登出才看到
-  // 一条过期的「OIDC 登录失败」。此处提示后即从 hash 剥离（下方 delete），
-  // sessionStorage 通道不再使用。文案经白名单映射：fragment 内容不可信，
-  // 任意链接都能在面板里投放提示文案（见 oidcErrorMessage）。
-  const oidcError = oidcCallback ? (fragment.get('error') ?? '') : ''
+  // 后端回调失败以 error 片段 302 回前端；登录跳转失败以 `#/login?oidc_error=`
+  // 回前端。两条失败通道都必须在此当场提示并从 hash 剥离——原 error 通道写入
+  // sessionStorage 只在 Login 挂载时消费一次；oidc_error 通道则只由 Login 挂载
+  // 侧读取。已持有效会话的用户回跳时 init() 成功、Login 不挂载，错误既不提示
+  // 也不清除，等之后登出/刷新才看到一条过期的「OIDC 登录失败」。本预处理先于
+  // 路由视图执行，两条通道在这里单源消费（见下方 delete）。文案经白名单映射：
+  // fragment 内容不可信，任意链接都能在面板里投放提示文案（见 oidcErrorMessage）。
+  const oidcErrorParam = fragment.get('oidc_error') ?? ''
+  const oidcError = oidcErrorParam || (oidcCallback ? (fragment.get('error') ?? '') : '')
   if (oidcError) ElMessage.error(`OIDC 登录失败：${oidcErrorMessage(oidcError)}`)
-  if (hasLoginTicket || oidcCallback) {
+  if (hasLoginTicket || oidcCallback || oidcErrorParam) {
     fragment.delete('login_ticket')
     fragment.delete('token')
     fragment.delete('return_to')
     fragment.delete('expires_at')
     fragment.delete('oidc')
     fragment.delete('error')
+    fragment.delete('oidc_error')
     const remainingHash = fragment.toString()
     window.history.replaceState({}, '', `${url.pathname}${url.search}${remainingHash ? `#${remainingHash}` : ''}`)
   }

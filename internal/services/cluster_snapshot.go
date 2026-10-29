@@ -668,14 +668,14 @@ func (s *ClusterService) loadSnapshotGlobalSettings(ctx context.Context, store s
 	var caddyConfig string
 	var brandingJSON string
 	err := store.QueryRowContext(ctx, `SELECT COALESCE(cluster_version,0), COALESCE(caddy_config,'{}'), COALESCE(branding_json,''),
-		COALESCE(log_level,'info'),
+		COALESCE(log_level,?),
 		COALESCE(task_log_size_mb,10), COALESCE(audit_log_size_mb,10), COALESCE(runtime_log_size_mb,100), COALESCE(audit_retention_months,3), COALESCE(jwt_expire_minutes,20), COALESCE(timezone,?),
 		COALESCE(acme_email,''), COALESCE(cert_expiry_days,?), COALESCE(cert_renewal_days,?), COALESCE(cert_renewal_attempts,?),
 		COALESCE(default_ca_provider_id,0), COALESCE(sync_interval,60),
 		COALESCE(admin_tls_enabled,0), COALESCE(admin_tls_mode,'selfsigned'), COALESCE(admin_tls_cert,''), COALESCE(admin_tls_key,''),
 		COALESCE(mfa_write_guard,0), COALESCE(mfa_lockout_enabled,0), COALESCE(github_proxy_url,'https://v4.gh-proxy.org/'),
 		COALESCE(oidc_config,'')
-		FROM global_config WHERE id=1`, db.DefaultTimezone, db.DefaultCertExpiryDays, db.DefaultCertRenewalDays, db.DefaultCertRenewalAttempts).Scan(&snapshot.Version, &caddyConfig, &brandingJSON,
+		FROM global_config WHERE id=1`, db.DefaultLogLevel, db.DefaultTimezone, db.DefaultCertExpiryDays, db.DefaultCertRenewalDays, db.DefaultCertRenewalAttempts).Scan(&snapshot.Version, &caddyConfig, &brandingJSON,
 		&snapshot.BasicSettings.LogLevel,
 		&snapshot.BasicSettings.TaskLogSizeMB, &snapshot.BasicSettings.AuditLogSizeMB, &snapshot.BasicSettings.RuntimeLogSizeMB, &snapshot.BasicSettings.AuditRetentionMonths, &snapshot.BasicSettings.JWTExpireMinutes, &snapshot.BasicSettings.Timezone,
 		&snapshot.BasicSettings.ACMEEmail, &snapshot.BasicSettings.CertExpiryDays, &snapshot.BasicSettings.CertRenewalDays, &snapshot.BasicSettings.CertRenewalAttempts,

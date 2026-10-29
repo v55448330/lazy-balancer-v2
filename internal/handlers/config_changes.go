@@ -101,7 +101,7 @@ func loadConfigSnapshot(ctx context.Context) (configSnapshot, error) {
 	// 集群快照同口径）；缺行仍整体报错（预览面拒绝「以零值快照误报全字段变更」）。
 	err := db.DB.QueryRowContext(ctx, `SELECT COALESCE(acme_email,''),
 		COALESCE(cert_expiry_days,?), COALESCE(cert_renewal_days,?), COALESCE(cert_renewal_attempts,?),
-		COALESCE(default_ca_provider_id,0), COALESCE(log_level,'info'),
+		COALESCE(default_ca_provider_id,0), COALESCE(log_level,?),
 		COALESCE(timezone,?),
 		COALESCE(caddy_log_level,'info'), caddy_log_size_mb, request_body_max_size_mb,
 		http_read_timeout, http_write_timeout, http_idle_timeout,
@@ -117,7 +117,7 @@ func loadConfigSnapshot(ctx context.Context) (configSnapshot, error) {
 		COALESCE(mfa_lockout_enabled,0),
 		COALESCE(trusted_proxy_enabled,0), COALESCE(trusted_proxy_ranges,'[]'), COALESCE(trusted_proxy_range_refs,'[]'), COALESCE(trusted_proxy_headers,'[]'), COALESCE(trusted_proxy_strict,1),
 		COALESCE(server_map_lat,0), COALESCE(server_map_lon,0), COALESCE(threat_screen_mode,?), COALESCE(threat_traffic_sample_n,?), COALESCE(security_events_retention_days,?), COALESCE(security_events_row_cap,?)
-		FROM global_config WHERE id=1`, db.DefaultCertExpiryDays, db.DefaultCertRenewalDays, db.DefaultCertRenewalAttempts, db.DefaultTimezone,
+		FROM global_config WHERE id=1`, db.DefaultCertExpiryDays, db.DefaultCertRenewalDays, db.DefaultCertRenewalAttempts, db.DefaultLogLevel, db.DefaultTimezone,
 		db.DefaultTaskLogSizeMB, db.DefaultAuditLogSizeMB, db.DefaultRuntimeLogSizeMB, db.DefaultAuditRetentionMonths, db.DefaultJWTExpireMinutes,
 		db.DefaultThreatScreenMode, db.DefaultThreatTrafficSampleN, db.DefaultSecurityEventsRetentionDays, db.DefaultSecurityEventsRowCap).Scan(
 		&old.ACMEEmail,

@@ -7,6 +7,8 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"log"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -3909,5 +3911,55 @@ func TestMigrateOidcIdentityUniqueIndex_auditConvergesAndNamesDuplicates(t *test
 	}
 	if marker := readMarker(); marker != "" {
 		t.Fatalf("冲突解除后 marker=%q, want 空", marker)
+	}
+}
+
+// OIDC 重复身份指纹 marker 与威胁名单占名冲突指纹同族：读写双向静默失败
+// 会让「同一重复集合只留一条审计」退化为每次启动重报且无排查线索。
+// global_config 单行缺失（带外形态）时按未告警继续（fail-open 语义不变），
+// 但读侧折叠空串、写侧 0 行更新都必须点名家上路。
+func TestOIDCDupIdentityMarker_persistenceFailureDisclosed(t *testing.T) {
+	openMigrationTestDB(t)
+	if err := createTables(); err != nil {
+		t.Fatalf("create tables: %v", err)
+	}
+	// 生产启动序：ensureNewColumns 补全局标记列（列在位而单行缺失=0 行更新形态）。
+	if err := ensureNewColumns(newColumnsRegistry, nil); err != nil {
+		t.Fatalf("add new columns: %v", err)
+	}
+	seedDuplicate := func(username string) {
+		t.Helper()
+		if _, err := DB.Exec(`INSERT INTO users (username, password_hash, role, is_enabled, auth_provider, oidc_subject, oidc_issuer)
+			VALUES (?, 'x', 'user', 1, 'oidc', 'sub-dup', 'https://idp.example.com')`, username); err != nil {
+			t.Fatalf("seed duplicate %s: %v", username, err)
+		}
+	}
+	seedDuplicate("dup-a")
+	seedDuplicate("dup-b")
+	// global_config 单行缺失=指纹读写双向失败的带外形态。
+	drainSystemAuditBuffer()
+
+	var logBuf strings.Builder
+	log.SetOutput(&logBuf)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+
+	if err := migrateOidcIdentityUniqueIndex(); err != nil {
+		t.Fatalf("migrate: %v（marker 不可用必须按未告警继续，不得中止启动）", err)
+	}
+	log.SetOutput(os.Stderr)
+	logs := logBuf.String()
+
+	// 读侧：点名指纹读取失败（此前静默折成空串）。
+	if !strings.Contains(logs, "OIDC 重复身份告警指纹读取失败") {
+		t.Fatalf("日志缺少读侧指纹读取失败留痕: %q", logs)
+	}
+	// 写侧：点名单行缺失/不可写导致指纹无法持久化（此前 0 行更新零信号）。
+	if !strings.Contains(logs, "无法持久化") {
+		t.Fatalf("日志缺少写侧指纹持久化失败留痕: %q", logs)
+	}
+	// fail-open 语义不变：审计仍留一条点名重复身份的留痕。
+	entries := drainSystemAuditBuffer()
+	if len(entries) != 1 || entries[0].resource != "用户" || !strings.Contains(entries[0].detail, "重复 OIDC 身份") {
+		t.Fatalf("重复身份审计=%+v, want 降级下仍留一条点名留痕", entries)
 	}
 }

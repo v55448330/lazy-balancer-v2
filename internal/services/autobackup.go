@@ -57,7 +57,7 @@ func AutoBackupEnabledState() (enabled, known bool) {
 		return false, false
 	}
 	var v int
-	if err := db.DB.QueryRow(`SELECT COALESCE(auto_backup_enabled,0) FROM global_config WHERE id=1`).Scan(&v); err != nil {
+	if err := db.DB.QueryRow(`SELECT COALESCE(auto_backup_enabled,` + strconv.Itoa(db.DefaultAutoBackupEnabled) + `) FROM global_config WHERE id=1`).Scan(&v); err != nil {
 		logScheduleReadFailure("schedule-read-auto-backup-enabled", err)
 		return false, false
 	}
@@ -75,7 +75,7 @@ type autoBackupConfigWriter interface {
 // 共用；off→on 保留既有水位线语义——停用期不追补）。
 func writeAutoBackupEnabled(w autoBackupConfigWriter, enabled bool) error {
 	var previous int
-	if err := w.QueryRow(`SELECT COALESCE(auto_backup_enabled,0) FROM global_config WHERE id=1`).Scan(&previous); err != nil {
+	if err := w.QueryRow(`SELECT COALESCE(auto_backup_enabled,` + strconv.Itoa(db.DefaultAutoBackupEnabled) + `) FROM global_config WHERE id=1`).Scan(&previous); err != nil {
 		return err
 	}
 	if _, err := w.Exec(`UPDATE global_config SET auto_backup_enabled=?, updated_at=datetime('now') WHERE id=1`, enabled); err != nil {
@@ -224,8 +224,8 @@ func loadAutoBackupSettingsContext(ctx context.Context) (autoBackupSettingsRow, 
 	if db.DB == nil {
 		return row, sql.ErrConnDone
 	}
-	err := db.DB.QueryRowContext(ctx, `SELECT COALESCE(auto_backup_enabled,0), COALESCE(auto_backup_frequency,'daily'),
-		COALESCE(auto_backup_time,'03:00'), COALESCE(auto_backup_day,1), auto_backup_last_run
+	err := db.DB.QueryRowContext(ctx, `SELECT COALESCE(auto_backup_enabled,`+strconv.Itoa(db.DefaultAutoBackupEnabled)+`), COALESCE(auto_backup_frequency,'`+db.DefaultAutoBackupFrequency+`'),
+		COALESCE(auto_backup_time,'`+db.DefaultAutoBackupTime+`'), COALESCE(auto_backup_day,`+strconv.Itoa(db.DefaultAutoBackupDay)+`), auto_backup_last_run
 		FROM global_config WHERE id=1`).
 		Scan(&row.enabled, &row.freq, &row.hhmm, &row.day, &lastRun)
 	if err != nil {
@@ -239,7 +239,7 @@ func loadAutoBackupSettingsContext(ctx context.Context) (autoBackupSettingsRow, 
 	row.day = normalizeAutoBackupDay(row.freq, row.day)
 
 	if lastRun.Valid && lastRun.String != "" {
-		if parsed, perr := time.Parse(time.RFC3339, lastRun.String); perr == nil {
+		if parsed, ok := parseAutoBackupWatermark(lastRun.String); ok {
 			row.lastRun = &parsed
 		} else {
 			// 非法形态按「未跑过」处理——下一个到期槽立即补跑，不静默停摆。
@@ -249,6 +249,37 @@ func loadAutoBackupSettingsContext(ctx context.Context) (autoBackupSettingsRow, 
 		}
 	}
 	return row, nil
+}
+
+// autoBackupWatermarkLayouts 是水位线文本的唯一形态表：写侧产出的 RFC3339，
+// 与 SQLite datetime 文本族（无时区后缀按 UTC——SQLite datetime() 同口径；
+// 时区后缀 "+08:00"/"Z" 按偏移折算）。带外工具与 datetime('now') 产出空格
+// 分隔形态；glebarez 驱动回读只归一 T 分隔形态，空格形态会原样到达读侧。
+var autoBackupWatermarkLayouts = []string{
+	time.RFC3339,
+	"2006-01-02 15:04:05",
+	"2006-01-02 15:04:05Z07:00",
+	"2006-01-02 15:04:05 Z07:00",
+	"2006-01-02 15:04:05.999999999",
+	"2006-01-02 15:04:05.999999999Z07:00",
+	"2006-01-02 15:04:05.999999999 Z07:00",
+}
+
+// parseAutoBackupWatermark 是水位线「是否已跑过」的唯一判据（读侧与写守卫
+// 共用）：NULL/空串/不可解析返回 ok=false——读侧按「从未跑过」立即补跑，
+// 写侧允许被本槽覆盖。此前读侧只认 RFC3339、写守卫用 SQLite datetime()，
+// 两判据不等价：空格+时区后缀形态（datetime() 合法）读侧每 tick 判「未跑」
+// 重跑全量备份，写守卫又因该值晚于目标槽拒绝覆盖——水位线既不推进也不自愈。
+func parseAutoBackupWatermark(raw string) (time.Time, bool) {
+	if raw == "" {
+		return time.Time{}, false
+	}
+	for _, layout := range autoBackupWatermarkLayouts {
+		if t, err := time.ParseInLocation(layout, raw, time.UTC); err == nil {
+			return t, true
+		}
+	}
+	return time.Time{}, false
 }
 
 // nextAutoBackupSlot 计算自动备份的下一执行槽（复用 autoBackupDueSlot
@@ -377,11 +408,19 @@ func advanceAutoBackupWatermark(startedAt time.Time) error {
 		return nil
 	}
 	formatted := slot.Format(time.RFC3339)
-	// 「是否已跑过」的判据与读侧 loadAutoBackupSettings 同源：NULL/空串/非法形态
-	// 一律按「从未跑过」处理，允许被本槽覆盖。datetime(非法值) 为 NULL，若只写
-	// `datetime(last_run) < datetime(?)`，带外非法值会让条件恒不成立、Exec 仍成功
-	// ⇒ 水位线永不推进，调度器每个 tick 判到期并重跑一次完整备份。
-	if _, err := db.DB.Exec(`UPDATE global_config SET auto_backup_last_run=? WHERE id=1 AND (auto_backup_last_run IS NULL OR auto_backup_last_run='' OR datetime(auto_backup_last_run) IS NULL OR datetime(auto_backup_last_run) < datetime(?))`, formatted, formatted); err != nil {
+	// 「是否已跑过」的判据单源 parseAutoBackupWatermark（与读侧同一函数）：
+	// 本轮已求值 ok=true ⇒ 既有水位线可解析且早于本槽（仅前进，不倒退、不
+	// 重复入账）。写守卫以 CAS 落地同判据：NULL/空串/原值未变才覆盖——带外
+	// 并发推进（原值已变，含写入了更晚槽）时本更新不生效，不回退他人记账。
+	// 此前 SQL 守卫用 datetime() 判「更早」，与读侧 time.Parse(RFC3339) 不等价：
+	// 空格+时区后缀形态（datetime() 合法且晚于目标槽）读侧每 tick 判「未跑」
+	// 重跑全量备份、写侧却拒绝覆盖——水位线永不推进也不自愈。
+	var raw sql.NullString
+	if err := db.DB.QueryRow(`SELECT auto_backup_last_run FROM global_config WHERE id=1`).Scan(&raw); err != nil {
+		Logf("warn", "自动备份：读取 auto_backup_last_run 失败: %v", err)
+		return fmt.Errorf("读取自动备份水位线（槽 %s）失败: %w", formatted, err)
+	}
+	if _, err := db.DB.Exec(`UPDATE global_config SET auto_backup_last_run=? WHERE id=1 AND (auto_backup_last_run IS NULL OR auto_backup_last_run='' OR auto_backup_last_run=?)`, formatted, raw.String); err != nil {
 		Logf("warn", "自动备份：更新 auto_backup_last_run 失败: %v", err)
 		return fmt.Errorf("更新自动备份水位线（槽 %s）失败: %w", formatted, err)
 	}

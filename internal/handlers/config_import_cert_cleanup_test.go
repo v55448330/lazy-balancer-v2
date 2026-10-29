@@ -247,3 +247,29 @@ func TestRulesWithoutUsableCertMaterial_abortsOnMaterialRowScanFailure(t *testin
 		}
 	}
 }
+
+// tls_source IS NULL 的存量行按渲染口径是 manual（读取口径全族单源
+// COALESCE(tls_source,'manual')）：渲染按 manual 供证，导入清理判定不得把它当
+// 「无材料」删掉仍在服务的证书文件。带外形态：写侧恒写 manual/acme_dns，
+// NULL 只能来自旧版本遗留/带外直写。
+func TestCleanupRulesWithoutUsableCertMaterial_nullTLSSourceKept(t *testing.T) {
+	newBackupTestHandlers(t)
+	certDir := t.TempDir()
+	t.Cleanup(services.SetCertDirForTest(certDir))
+
+	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,domain,protocol,listen_port,enabled,enable_tls,tls_source,tls_cert,tls_key)
+		VALUES ('lb_mat_nullsrc','nullsrc','null.example.test','http',8088,1,1,NULL,'CERT','KEY')`); err != nil {
+		t.Fatalf("seed tls_source=NULL rule: %v", err)
+	}
+	if err := services.WriteCertFiles("lb_mat_nullsrc", "CERT", "KEY"); err != nil {
+		t.Fatalf("write cert files: %v", err)
+	}
+
+	cleaned := cleanupCertFilesWithoutMaterial(context.Background(), t)
+	if cleaned != 0 {
+		t.Fatalf("cleaned=%d, want 0（tls_source=NULL 且 cert/key 非空按渲染口径=manual，不得进待删集）", cleaned)
+	}
+	if _, err := os.Stat(filepath.Join(certDir, "lb_mat_nullsrc.crt")); err != nil {
+		t.Fatalf("仍在服务的证书文件被误删: %v", err)
+	}
+}

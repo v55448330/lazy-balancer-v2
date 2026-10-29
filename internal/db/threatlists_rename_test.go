@@ -1,6 +1,8 @@
 package db
 
 import (
+	"log"
+	"os"
 	"strings"
 	"testing"
 )
@@ -149,6 +151,56 @@ func TestThreatSystemListRename_skipsTakeoverWhenCanonicalHeldBySystemRow(t *tes
 		t.Fatalf("二次执行: %v", err)
 	}
 	_ = drainSystemAuditBuffer()
+}
+
+// 占名冲突指纹 marker 的读写失败必须显性留痕：读侧把错误折叠成空集、写侧
+// UPDATE 命中 0 行不判——「同一僵持态只留一条审计」会退化为每次启动重报且
+// 无排查线索。global_config 单行缺失（带外形态）时按未告警继续（fail-open
+// 语义不变），但两个方向都要点名家上路。
+func TestThreatSystemListRename_markerPersistenceFailureDisclosed(t *testing.T) {
+	openMigrationTestDB(t)
+	if err := createTables(); err != nil {
+		t.Fatalf("create tables: %v", err)
+	}
+	// 生产启动序：ensureNewColumns 补全局标记列（列在位而单行缺失=0 行更新形态）。
+	if err := ensureNewColumns(newColumnsRegistry, nil); err != nil {
+		t.Fatalf("add new columns: %v", err)
+	}
+	if _, err := DB.Exec("CREATE UNIQUE INDEX IF NOT EXISTS u_security_ip_lists_system_name ON security_ip_lists(name) WHERE system=1"); err != nil {
+		t.Fatalf("create unique index: %v", err)
+	}
+	newName := ThreatListNameBySource("ustc")
+	if _, err := DB.Exec(`INSERT INTO security_ip_lists (name, description, category, entries, system, created_at, updated_at) VALUES
+		('威胁情报库-中科大黑 IP', '旧', '恶意 IP', '[]', 1, datetime('now'), datetime('now')),
+		(?, '另一 system 行', '恶意 IP', '[]', 1, datetime('now'), datetime('now'))`, newName); err != nil {
+		t.Fatal(err)
+	}
+	// global_config 单行缺失=指纹读写双向失败的带外形态（读 no rows/写 0 行更新）。
+	drainSystemAuditBuffer()
+
+	var logBuf strings.Builder
+	log.SetOutput(&logBuf)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+
+	if err := migrateThreatSystemListNames(); err != nil {
+		t.Fatalf("migrate: %v（marker 不可用必须按未告警继续，不得中止启动）", err)
+	}
+	log.SetOutput(os.Stderr)
+	logs := logBuf.String()
+
+	// 读侧：点名指纹读取失败（此前静默折成空集）。
+	if !strings.Contains(logs, "占名冲突告警指纹读取失败") {
+		t.Fatalf("日志缺少读侧指纹读取失败留痕: %q", logs)
+	}
+	// 写侧：点名单行缺失/不可写导致指纹无法持久化（此前 0 行更新零信号）。
+	if !strings.Contains(logs, "无法持久化") {
+		t.Fatalf("日志缺少写侧指纹持久化失败留痕: %q", logs)
+	}
+	// fail-open 语义不变：审计仍留一条跳过接管。
+	entries := drainSystemAuditBuffer()
+	if len(entries) != 1 || entries[0].resource != "IP 名单" || !strings.Contains(entries[0].detail, "跳过接管") {
+		t.Fatalf("占名冲突审计=%+v, want 降级下仍留一条跳过接管告警", entries)
+	}
 }
 
 func TestThreatSystemListRename_returnsConflictScanError(t *testing.T) {

@@ -70,6 +70,8 @@ func TestFreshSchemaDefaults_MatchGovernedConstants(t *testing.T) {
 		{"global_config", "auto_backup_time", "'" + DefaultAutoBackupTime + "'", 0},
 		{"global_config", "auto_backup_day", fmt.Sprint(DefaultAutoBackupDay), 0},
 		{"global_config", "auto_backup_keep", fmt.Sprint(DefaultAutoBackupKeep), 0},
+		// 应用日志级别：fresh DDL DEFAULT 与面板读侧 COALESCE 绑定参数同源。
+		{"global_config", "log_level", "'" + DefaultLogLevel + "'", 0},
 	}
 	for _, tc := range cases {
 		var dflt *string
@@ -814,18 +816,18 @@ func TestGovernedDefaultLiteralsBoundInConsumers(t *testing.T) {
 		},
 		{
 			file:      "../handlers/config_changes.go",
-			forbidden: []string{`COALESCE(timezone,'Asia/Shanghai')`},
-			required:  []string{"db.DefaultTimezone"},
+			forbidden: []string{`COALESCE(timezone,'Asia/Shanghai')`, `COALESCE(log_level,'info')`},
+			required:  []string{"db.DefaultTimezone", "db.DefaultLogLevel"},
 		},
 		{
 			file:      "../services/cluster_snapshot.go",
-			forbidden: []string{`COALESCE(timezone,'Asia/Shanghai')`},
-			required:  []string{"db.DefaultTimezone"},
+			forbidden: []string{`COALESCE(timezone,'Asia/Shanghai')`, `COALESCE(log_level,'info')`},
+			required:  []string{"db.DefaultTimezone", "db.DefaultLogLevel"},
 		},
 		{
 			file:      "../services/tz.go",
-			forbidden: []string{`COALESCE(timezone,'Asia/Shanghai')`},
-			required:  []string{"db.DefaultTimezone"},
+			forbidden: []string{`COALESCE(timezone,'Asia/Shanghai')`, `COALESCE(log_level,'info')`},
+			required:  []string{"db.DefaultTimezone", "db.DefaultLogLevel"},
 		},
 		// 启动期时区读侧（进程时区基准）同属消费侧：漏登记时 DDL 默认值变更
 		// 后运行期时间轴与面板展示时间轴静默分叉。
@@ -968,6 +970,34 @@ func TestGovernedDefaultLiteralsBoundInConsumers(t *testing.T) {
 			required: []string{
 				"db.DefaultAutoBackupEnabled", "db.DefaultAutoBackupFrequency",
 				"db.DefaultAutoBackupDay",
+			},
+		},
+		{
+			// 调度读侧（EnabledFn/NextSlotFn/写开关读旧值）的 COALESCE 兜底
+			// 必须绑定治理常量：字面量第二参数是 DDL/启动回填之外的第二份
+			// 副本，改默认值后调度行为与设置页静默分叉。
+			file: "../services/autobackup.go",
+			forbidden: []string{
+				"COALESCE(auto_backup_enabled,0)", "COALESCE(auto_backup_frequency,'daily')",
+				"COALESCE(auto_backup_time,'03:00')", "COALESCE(auto_backup_day,1)",
+			},
+			required: []string{
+				"db.DefaultAutoBackupEnabled", "db.DefaultAutoBackupFrequency",
+				"db.DefaultAutoBackupTime", "db.DefaultAutoBackupDay",
+			},
+		},
+		{
+			// 设置页读侧与 keep/day 归一口径的默认值同一常量族：handlers 局部
+			// 常量只允许「引用 db 治理常量」，不得再持数字字面量。
+			file: "../handlers/autobackup.go",
+			forbidden: []string{
+				"COALESCE(auto_backup_enabled,0)", "COALESCE(auto_backup_frequency,'daily')",
+				"COALESCE(auto_backup_time,'03:00')", "COALESCE(auto_backup_day,1)",
+				"COALESCE(auto_backup_keep,7)",
+			},
+			required: []string{
+				"db.DefaultAutoBackupEnabled", "db.DefaultAutoBackupFrequency",
+				"db.DefaultAutoBackupTime", "db.DefaultAutoBackupDay", "db.DefaultAutoBackupKeep",
 			},
 		},
 	}

@@ -324,16 +324,16 @@ func hasASCIIPrefixFold(value []byte, prefix string) bool {
 // 配置时区（尤其 DST 时区）此前最长要等 30s ticker 才生效，期间日志时间戳落在
 // FixedZone+8 占位时区；装配点即时刷新消除该窗口，导入新时区亦即时生效。
 func ApplyLogLevel() {
-	level := "info"
+	level := db.DefaultLogLevel
 	if db.DB != nil {
-		if err := db.DB.QueryRow("SELECT COALESCE(log_level,'info') FROM global_config WHERE id=1").Scan(&level); err != nil {
+		if err := db.DB.QueryRow("SELECT COALESCE(log_level,?) FROM global_config WHERE id=1", db.DefaultLogLevel).Scan(&level); err != nil {
 			// 读失败不得静默降级：warn/error 配置失效会放大日志量，与「配置
 			// 读失败必须留痕」同族。状态转换口径（首报 warn + 恢复 info）避免
 			// 每次装配刷屏。
 			if lvl := logStateTransition("log-level-refresh", true); lvl != "" {
 				Logf(lvl, "读取日志级别配置失败，按 info 应用: %v", err)
 			}
-			level = "info"
+			level = db.DefaultLogLevel
 		} else if lvl := logStateTransition("log-level-refresh", false); lvl != "" {
 			Logf(lvl, "读取日志级别配置已恢复")
 		}

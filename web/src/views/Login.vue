@@ -156,7 +156,7 @@ import AppLogo from '@/components/AppLogo.vue'
 import AccessibleLink from '@/components/common/AccessibleLink.vue'
 import { appName, appVersion } from '@/utils/branding'
 import { validatePassword, validateUsername } from '@/utils/credentials'
-import { OIDC_APP_NONCE_KEY, createOidcAppNonce, oidcErrorMessage, withOidcAppNonce } from '@/utils/oidcCallback'
+import { OIDC_APP_NONCE_KEY, createOidcAppNonce, withOidcAppNonce } from '@/utils/oidcCallback'
 import type { FormInstance, FormRules, InputOtpInstance } from 'element-plus'
 
 interface SetupStatusResponse {
@@ -319,26 +319,9 @@ const loadOidcStatus = async (): Promise<void> => {
   }
 }
 onMounted(async () => {
-  // OIDC 跳转失败(302)经 hash query 携带 oidc_error——展示后从
-  // hash 清除(参照回调错误链的一次性语义)。
-  try {
-    const hash = window.location.hash
-    const qIndex = hash.indexOf('?')
-    if (qIndex >= 0) {
-      const params = new URLSearchParams(hash.slice(qIndex + 1))
-      const oidcError = params.get('oidc_error')
-      if (oidcError) {
-        // 文案经白名单映射：hash query 内容不可信（任意链接可投放提示文案）。
-        ElMessage.error(`OIDC 登录失败：${oidcErrorMessage(oidcError)}`)
-        params.delete('oidc_error')
-        const rest = params.toString()
-        // rest 为空串时不拼「?」——避免 URL 残留「#/?」。
-        window.history.replaceState(null, '', window.location.pathname + hash.slice(0, qIndex) + (rest ? `?${rest}` : ''))
-      }
-    }
-  } catch { /* 隐私模式 */ }
-  // 回调失败不再经 sessionStorage 传递——App 在解析 hash 时
-  // 当场提示（已持有效会话、Login 不挂载的路径也能看到），此读取通道随之删除。
+  // oidc_error 通道由 App 的 hash 预处理单源消费（本预处理先于路由视图执行，
+  // 已持有效会话、本组件不挂载的形态也能提示并从 hash 剥离）；回调失败不经
+  // sessionStorage 传递——App 解析 hash 时当场提示，这两条读取通道随之删除。
   await loadOidcStatus()
 })
 let oidcRedirectTimer: ReturnType<typeof setTimeout> | null = null

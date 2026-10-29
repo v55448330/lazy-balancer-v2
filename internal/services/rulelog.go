@@ -466,8 +466,20 @@ func removeRuleLogRotations(base string) error {
 	for _, e := range entries {
 		name := e.Name()
 		owner, ok := ruleLogComponentOf(name)
-		if !ok || owner != component {
+		if !ok {
 			continue
+		}
+		// 剥尾主体 ≠ 待删规则时的唯一可删形态：类副本 ID 规则（待删规则
+		// caddy_id = 存活前缀 + 真实轮转尾）的文件——其整段主体恰为本规则
+		// ID，剥尾主体落在存活前缀上。整段主体（字母表安全门）不等于本规则
+		// ID 的一律跳过：前缀规则本体的活动文件 <前缀>.log 与其轮转副本
+		// 不得被连带删除。TOCTOU（扫描后文件被并发改写/替换）由下方
+		// os.Remove 吞 ENOENT 兜底。
+		if owner != component {
+			body, _ := ruleLogFileBody(name)
+			if body != component {
+				continue
+			}
 		}
 		// 归属反解：若整段主体本身是另一条存活规则的 caddy_id，该文件是那条
 		// 规则的活文件/副本（构造 ID 恰好以 <完整时间戳>-<reason> 结尾），
@@ -596,8 +608,16 @@ func PurgeOrphanRuleLogs(ctx context.Context) RuleLogHousekeepingResult {
 		// <完整时间戳>-<reason> 结尾时，其活动文件在词法上等价于前缀规则的
 		// 轮转副本，前缀规则已删除时会被误判为孤儿——整段主体是存活规则 ID
 		// 则归属它，不清理。
+		// 第三态：整段主体解码为已删规则、剥尾主体却是存活前缀——已删「类
+		// 副本 ID」规则（caddy_id = 存活前缀 + 真实轮转尾）的残留永不收敛。
+		// 可安全归属给已删主体：存活规则的活动文件恒为 <其主体>.log，而本
+		// 文件整段主体解码非存活，故不可能是任何存活规则的活动文件（字母表
+		// 安全门排除 %hex 编码与带点毫秒尾形态）；扫描与删除之间并发轮转的
+		// TOCTOU 由删除侧 os.Remove 吞 ENOENT 兜底。
 		if copyStem := timberjackRotationCopyStem(e.Name()); copyStem != "" && copyStem != component && fileComponentSafe(copyStem) {
 			if ownerID := decodeFileComponent(copyStem); liveIDs[ownerID] {
+				ruleID = ownerID
+			} else if liveIDs[ruleID] {
 				ruleID = ownerID
 			}
 		}
@@ -664,6 +684,29 @@ func ruleLogComponentOf(name string) (string, bool) {
 		return "", false
 	}
 	return base, true
+}
+
+// ruleLogFileBody 还原文件名的整段主体（encodeFileComponent 的**编码形态**，
+// 与 lb_rules.caddy_id 经 encodeFileComponent 一一对应，可直接比对）：剥压缩
+// 后缀与移位代次后取 .log 前段——与 ruleLogComponentOf 的前半段同变换，但
+// **不做** timberjack 尾剥离。删除侧「类副本 ID 规则」的删除面用它把
+// <主体>.log[.<n>][.gz|.zst] 整族认领回来（剥尾主体落在存活前缀上，owner
+// 比对不到待删规则本身）。
+func ruleLogFileBody(name string) (string, bool) {
+	core := name
+	for _, suffix := range []string{".gz", ".zst"} {
+		core = strings.TrimSuffix(core, suffix)
+	}
+	if dot := strings.LastIndexByte(core, '.'); dot > 0 && dot < len(core)-1 && ruleLogAllDigits(core[dot+1:]) {
+		if trimmed := core[:dot]; strings.HasSuffix(trimmed, ".log") {
+			core = trimmed
+		}
+	}
+	stem, ok := strings.CutSuffix(core, ".log")
+	if !ok || stem == "" || strings.Contains(stem, ".") {
+		return "", false
+	}
+	return stem, true
 }
 
 // ruleLogAllDigits 报告 s 是否全部为 ASCII 数字（非空）。

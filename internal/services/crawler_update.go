@@ -363,6 +363,12 @@ func (m *CrawlerUpdateManager) RunUpdate(ctx context.Context, rc taskengine.RunC
 		outcome = "failed"
 		return err
 	}
+	// 内置名门（带外边角）：未知名源行跳过——不下载、不写名单，按名留痕一次。
+	// 危害与判定单源说明见 filterBuiltinCrawlerSources。
+	sources, unknownNames := filterBuiltinCrawlerSources(sources)
+	for _, name := range unknownNames {
+		TaskLogfWarn("crawlerbot-update", "checking", "源 %s 非内置爬虫源（疑似带外直写），本轮跳过：不下载、不写名单；请核对 security_crawler_sources 该行", name)
+	}
 	if len(sources) == 0 {
 		// 与威胁族口径一致：无到期源按成功轮处理（task_runs 不记 skip），
 		// 任务日志只留一条 INFO 业务摘要——此前写 skipped 级行与 task_runs

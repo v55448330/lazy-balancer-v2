@@ -548,6 +548,83 @@ func TestGetAuditLogs_500BodyHidesDriverDetails(t *testing.T) {
 
 // COUNT 与明细查询两个早期失败面也必须走统一 5xx 写点：响应保持固定文案，
 // 运行日志区分操作名并保留底层原因，避免线上只有前端 500 而无法排障。
+// 时区读取失败/非法值时时间筛选按 UTC 解析（整体偏移）——降级必须并入
+// partial 披露，消费方按「时间筛选可能整体偏移」感知，而不是静默拿到
+// 偏移结果；合法时区不得误报降级。
+func TestGetAuditLogs_timezoneDegradedDisclosedInPartial(t *testing.T) {
+	for _, tc := range []struct {
+		name, timezone string
+		wantPartial    bool
+	}{
+		{name: "非法时区披露降级", timezone: "Not/AZone", wantPartial: true},
+		{name: "合法时区不置降级", timezone: "Asia/Shanghai", wantPartial: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// Given 主库时区为 tc.timezone 的双库夹具 + 一条已知 UTC 时间行
+			resetAuditLogCountCacheForTest()
+			t.Cleanup(resetAuditLogCountCacheForTest)
+			oldDB, oldAuditDB := db.DB, db.AuditDB
+			mainDB, err := sql.Open("sqlite", t.TempDir()+"/main.db")
+			if err != nil {
+				t.Fatal(err)
+			}
+			auditDB, err := sql.Open("sqlite", t.TempDir()+"/audit.db")
+			if err != nil {
+				t.Fatal(err)
+			}
+			db.DB, db.AuditDB = mainDB, auditDB
+			t.Cleanup(func() {
+				db.DB, db.AuditDB = oldDB, oldAuditDB
+				_ = mainDB.Close()
+				_ = auditDB.Close()
+			})
+			if _, err := mainDB.Exec("CREATE TABLE global_config (id INTEGER PRIMARY KEY, timezone VARCHAR(50)); INSERT INTO global_config VALUES (1, ?)", tc.timezone); err != nil {
+				t.Fatal(err)
+			}
+			// users 表就位：display_name 富化成功——partial 的唯一来源必须是时区降级。
+			if _, err := mainDB.Exec("CREATE TABLE users (username VARCHAR(50) PRIMARY KEY, display_name VARCHAR(100)); INSERT INTO users VALUES ('admin', '管理员')"); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := auditDB.Exec("CREATE TABLE audit_log (id INTEGER PRIMARY KEY AUTOINCREMENT, username VARCHAR(50), action VARCHAR(50), resource VARCHAR(100), detail TEXT, ip_address VARCHAR(45), created_at DATETIME DEFAULT CURRENT_TIMESTAMP)"); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := auditDB.Exec("INSERT INTO audit_log (username, action, resource, detail, ip_address, created_at) VALUES ('admin', '登录成功', '用户认证', '', '127.0.0.1', '2026-07-19 12:00:00')"); err != nil {
+				t.Fatal(err)
+			}
+			gin.SetMode(gin.TestMode)
+			router := gin.New()
+			router.GET("/audit-logs", (&Handlers{}).GetAuditLogs)
+
+			// When 带时间范围筛选请求（解析时区=配置时区，降级时按 UTC）
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, httptest.NewRequest(http.MethodGet,
+				"/audit-logs?page=1&page_size=10&start_time=2026-07-19%2000:00:00&end_time=2026-07-19%2023:59:59", nil))
+
+			// Then 200 + partial 披露时区降级 + 数据不因披露被吞
+			if response.Code != http.StatusOK {
+				t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+			}
+			var body struct {
+				Data struct {
+					Partial bool `json:"partial"`
+					List    []struct {
+						CreatedAt string `json:"created_at"`
+					} `json:"list"`
+				} `json:"data"`
+			}
+			if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			if body.Data.Partial != tc.wantPartial {
+				t.Fatalf("partial=%v, want %v（时区=%q）", body.Data.Partial, tc.wantPartial, tc.timezone)
+			}
+			if len(body.Data.List) != 1 || body.Data.List[0].CreatedAt != "2026-07-19 12:00:00" {
+				t.Fatalf("list=%+v, want 原始 UTC 行原样返回（披露不吞数据）", body.Data.List)
+			}
+		})
+	}
+}
+
 func TestGetAuditLogs_queryFailuresLogOperationAndCause(t *testing.T) {
 	cases := []struct {
 		name      string

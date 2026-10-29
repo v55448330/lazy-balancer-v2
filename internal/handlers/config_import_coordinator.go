@@ -1086,7 +1086,10 @@ func (session *configImportSession) runPostCommitCleanup(plan *importArtifactCle
 
 // rulesWithoutUsableCertMaterial 返回「仍存在但已无任何可用证书材料」的规则
 // id：手动证书材料在库（tls_source=manual 且 cert/key 非空）或有域名适用的
-// 任务材料时跳过。只做判定不删文件——判定集在导入事务视图内收集、删除动作在
+// 任务材料时跳过。tls_source 读取口径与渲染/写侧全族一致
+// （COALESCE(tls_source,'manual')）：NULL 存量行按渲染口径视为 manual——渲染
+// 会按 manual 供证，清理判定若按空串处理会把仍在服务的证书文件删掉（磁盘/DB
+// 分叉）。只做判定不删文件——判定集在导入事务视图内收集、删除动作在
 // 锁外执行或复核（见 collectPostCommitCleanup/runPostCommitCleanup）。
 //
 // 查询面固定为两条（规则集 + 材料行集）并在内存中配对：原实现逐规则 2 次查询
@@ -1094,7 +1097,7 @@ func (session *configImportSession) runPostCommitCleanup(plan *importArtifactCle
 // DB 往返，把配置写/重载全部阻塞在该窗口。
 func rulesWithoutUsableCertMaterial(ctx context.Context, q rowsQueryer) ([]string, error) {
 	rows, err := q.QueryContext(ctx,
-		`SELECT caddy_id, COALESCE(tls_source,''), COALESCE(tls_cert,''), COALESCE(tls_key,''), COALESCE(domain,'') FROM lb_rules`)
+		`SELECT caddy_id, COALESCE(tls_source,'manual'), COALESCE(tls_cert,''), COALESCE(tls_key,''), COALESCE(domain,'') FROM lb_rules`)
 	if err != nil {
 		return nil, fmt.Errorf("读取规则证书形态: %w", err)
 	}
@@ -1154,7 +1157,9 @@ func rulesWithoutUsableCertMaterial(ctx context.Context, q rowsQueryer) ([]strin
 			continue
 		}
 		// 域名适用性复核（旧域残留行不算可用材料）——与 certJobRuleApplicable
-		// 同语义：两侧均须可规范化且规范形式全等。
+		// 同语义：两侧均须可规范化且规范形式全等。口径声明：域名等值是比
+		// 证书覆盖更严的近似（证书 SAN 可能覆盖规则域名之外的名称，反向不
+		// 成立——任务域名与规则域名等价才认定材料可用），误删方向从严。
 		usable := 0
 		ruleCanonical, ruleErr := services.CanonicalACMEDomains(rule.domain)
 		if ruleErr == nil {

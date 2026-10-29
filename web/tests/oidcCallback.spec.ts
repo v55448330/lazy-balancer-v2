@@ -228,12 +228,12 @@ test('App：return_to 导航只在令牌真正落地后执行（拒绝/取消都
   assert.doesNotMatch(rejectBranch, /tokenApplied = true/, '拒绝分支不得置位导航门')
 })
 
-test('App / Login：失败文案都经白名单映射，不直接拼接 fragment 原文', () => {
-  for (const view of ['src/App.vue', 'src/views/Login.vue']) {
-    const text = code(view)
-    assert.match(text, /oidcErrorMessage\(/, `${view} 未走文案白名单`)
-    assert.doesNotMatch(text, /OIDC 登录失败：\$\{oidc(?:Error|_error)\}/, `${view} 仍原样透出 fragment 文案`)
-  }
+test('App：失败文案都经白名单映射，不直接拼接 fragment 原文', () => {
+  // 两条失败通道（回调 error / 登录跳转 oidc_error）已统一由 App 的 hash
+  // 预处理单源消费，Login 挂载侧读取点已删除（见下一用例）。
+  const text = code('src/App.vue')
+  assert.match(text, /oidcErrorMessage\(/, 'src/App.vue 未走文案白名单')
+  assert.doesNotMatch(text, /OIDC 登录失败：\$\{oidc(?:Error|_error)\}/, 'src/App.vue 仍原样透出 fragment 文案')
 })
 
 test('Login：发起登录时写入本标签页 nonce 并随 return_to 往返', () => {
@@ -243,4 +243,21 @@ test('Login：发起登录时写入本标签页 nonce 并随 return_to 往返', 
   // 存储键名本身是跨标签页契约：改名会让已在途的 return_to 往返读到空 nonce
   assert.equal(OIDC_APP_NONCE_KEY, 'oidc_app_nonce')
   assert.match(start, /withOidcAppNonce\(`\/\$\{authStore\.currentPage\}`, nonce\)/)
+})
+
+// `#/login?oidc_error=` 通道（后端登录跳转失败 302 回前端）必须在 App.vue
+// hash 预处理里统一识别并剥离：该预处理先于路由视图执行——已持有效会话的
+// 用户 init() 成功、Login 不挂载，旧实现把消费点放在 Login 挂载侧，错误既
+// 不提示也不从 hash 清除（刷新/复制链接反复看到过期失败）。
+test('App 统一消费 login 通道 oidc_error（不依赖 Login 挂载）', () => {
+  const app = code('src/App.vue')
+  // 识别：预处理即读取该参数（文案与回调 error 同走白名单映射）
+  assert.match(app, /fragment\.get\('oidc_error'\)/, 'App.vue hash 预处理未识别 oidc_error')
+  // 剥离：并入统一 delete 分支，且分支条件涵盖「仅 oidc_error」形态
+  assert.match(app, /fragment\.delete\('oidc_error'\)/, 'oidc_error 未并入统一剥离')
+  assert.match(app, /hasLoginTicket \|\| oidcCallback \|\| oidcErrorParam/, '剥离分支条件未涵盖仅 oidc_error 形态')
+  // 通道单源上收：Login 挂载侧消费点删除（App 先行解析并剥离后，二次读取
+  // 只会读到空——双消费点让「提示语义」在两条挂载路径间分叉）
+  const login = code('src/views/Login.vue')
+  assert.ok(!login.includes('oidc_error'), 'Login.vue 不得再消费 oidc_error（通道已上收 App.vue）')
 })

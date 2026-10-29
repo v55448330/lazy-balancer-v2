@@ -256,6 +256,11 @@ type systemAuditEntry struct {
 	action   string
 	resource string
 	detail   string
+	// once 标记「同详情全生命周期只落一条」的一次性判据：flush 时 audit_log
+	// 已有逐字相同的系统审计即跳过。用于只能人工处置的启动迁移僵持态——
+	// 该状态每次启动都重新进入，不设判据会逐字重写同一条审计，audit_log 随
+	// 重启线性增长；详情里的行 id/指纹集合变化（新脏数据）自然产生新详情并重报。
+	once bool
 }
 
 var systemAuditBuffer struct {
@@ -270,8 +275,26 @@ const systemAuditBufferCap = 10000
 func recordSystemAudit(action, resource, detail string) {
 	systemAuditBuffer.mu.Lock()
 	defer systemAuditBuffer.mu.Unlock()
-	systemAuditBuffer.entries = append(systemAuditBuffer.entries, systemAuditEntry{action, resource, detail})
+	systemAuditBuffer.entries = append(systemAuditBuffer.entries, systemAuditEntry{action: action, resource: resource, detail: detail})
 	trimSystemAuditBufferLocked()
+}
+
+func recordSystemAuditOnce(action, resource, detail string) {
+	systemAuditBuffer.mu.Lock()
+	defer systemAuditBuffer.mu.Unlock()
+	systemAuditBuffer.entries = append(systemAuditBuffer.entries, systemAuditEntry{action, resource, detail, true})
+	trimSystemAuditBufferLocked()
+}
+
+// systemAuditAlreadyRecorded 报告 audit_log 是否已有一条逐字相同的系统审计
+// （username='system'）。查询失败按「未记录」处理（fail-open：最多多留一条
+// 审计，不影响正确性）；action 列有索引，同 action 的系统审计量级极小，
+// 逐字比对成本可忽略。
+func systemAuditAlreadyRecorded(entry systemAuditEntry) bool {
+	var one int
+	err := AuditDB.QueryRow(`SELECT 1 FROM audit_log WHERE username='system' AND action=? AND resource=? AND detail=? LIMIT 1`,
+		entry.action, entry.resource, entry.detail).Scan(&one)
+	return err == nil
 }
 
 func systemAuditBufferLen() int {
@@ -311,6 +334,12 @@ func flushSystemAuditLogs() {
 	}
 	var failed []systemAuditEntry
 	for _, entry := range entries {
+		// 一次性判据：同详情系统审计已落库即跳过（僵持态每次启动重新缓冲，
+		// 不跳过会随重启线性重复）。同批先落的行也参与判重，同进程重复缓冲
+		// 同样收敛。
+		if entry.once && systemAuditAlreadyRecorded(entry) {
+			continue
+		}
 		if _, err := AuditDB.Exec("INSERT INTO audit_log (username, action, resource, detail, ip_address) VALUES ('system', ?, ?, ?, '')",
 			entry.action, entry.resource, entry.detail); err != nil {
 			log.Printf("system audit log write failed: %v", err)

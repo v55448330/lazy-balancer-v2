@@ -3418,7 +3418,8 @@ func resolveSplitChild(ctx context.Context, tx *sql.Tx, p *models.SecurityPolicy
 // SplitSecurityPolicy 混合策略一键拆分迁移（2026-09-20 用户裁定）：仅 mixed
 // 策略可用——按特征组生成「原名（阶段 N）」单职子策略（空组不生成；阶段 1/3
 // 子策略继承拦截页，阶段 2 恒 429、拦截页继承原策略——2026-09-25 用户裁
-// 定可配），全量重映射绑定（每条规则删原绑定+插全部子策略绑定；合并后超
+// 定可配），全量重映射绑定（每条规则删原绑定+插全部子策略绑定；协议门
+// loadRuleBindingTarget 判非 HTTP 规则/规则不存在的进 skipped、合并后超
 // maxBindingsPerRule 上限的规则进 skipped
 // 并保留原绑定），无 skipped 才删除原策略（仍有规则引用时保留并在响应
 // 标记）。单事务一次
@@ -3710,6 +3711,26 @@ func (h *Handlers) SplitSecurityPolicy(c *gin.Context) {
 	remapped := 0
 	skipped := make([]skippedRule, 0)
 	for _, ruleID := range boundRules {
+		// 协议门（与四个绑定写路径同一单源判定 loadRuleBindingTarget）：TCP
+		// 规则不走 WAF/IP 访问控制/限流链（buildTCPServer 不消费安全策略），
+		// 子策略复制绑定即「UI 宣称受保护、运行态零强制」+ 挤占
+		// maxBindingsPerRule 额度——进 skipped 保留原绑定（与上限/stage2 门
+		// 同口径）。带外形态：正常写路径已有协议门，非 HTTP 绑定行只能来自
+		// 旧版本遗留/带外直写；规则行已删的悬挂绑定同门跳过，避免把悬挂行
+		// 复制成 N 份子策略绑定污染绑定消费方。
+		target, terr := loadRuleBindingTarget(caddyWriteCtx(c), tx, ruleID)
+		if terr != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", terr)})
+			return
+		}
+		if !target.exists {
+			skipped = append(skipped, skippedRule{ruleID, "规则不存在"})
+			continue
+		}
+		if !target.http {
+			skipped = append(skipped, skippedRule{ruleID, "安全策略仅支持绑定 HTTP 规则（TCP 规则不经过 WAF/IP 访问控制/限流链）"})
+			continue
+		}
 		existingCount, cerr := bindingCountExcluding(caddyWriteCtx(c), tx, ruleID, p.ID)
 		if cerr != nil {
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", cerr)})

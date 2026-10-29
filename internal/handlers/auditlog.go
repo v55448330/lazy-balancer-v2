@@ -386,6 +386,10 @@ func (h *Handlers) GetAuditLogs(c *gin.Context) {
 	// 列筛选：操作人/操作/对象/IP 模糊匹配，keyword 搜详情，
 	// 时间范围为配置时区的本地时间（created_at 按 UTC 存储，比较前换算）。
 	loc := time.UTC
+	// tzDegraded 记录「本次筛选未能按配置时区解析」：时间范围整体按 UTC 偏移
+	// 属部分降级，必须并入 partial 披露——否则用户按本地时间筛选却整体偏移
+	// 且响应无任何信号。
+	tzDegraded := false
 	var tzStr string
 	// 时区读取失败/非法值的留痕走 services 状态转换单源（首报 warn、恢复
 	// info）——此前两分支都直接 Logf("error")，带外写入非法时区后审计页每次
@@ -393,14 +397,17 @@ func (h *Handlers) GetAuditLogs(c *gin.Context) {
 	// 阈值读取同域口径分裂）。读失败与「值非法」用不同 key 区分。
 	mainDB := db.DB
 	if mainDB == nil {
+		tzDegraded = true
 		services.LogConfigReadFailure("audit-log-timezone", fmt.Errorf("审计日志筛选时区读取失败（按 UTC 继续）: 数据库未初始化"))
 	} else if err := mainDB.QueryRowContext(c.Request.Context(), "SELECT COALESCE(timezone,?) FROM global_config WHERE id=1", db.DefaultTimezone).Scan(&tzStr); err != nil {
+		tzDegraded = true
 		services.LogConfigReadFailure("audit-log-timezone", fmt.Errorf("审计日志筛选时区读取失败（按 UTC 继续）: %w", err))
 	} else if l, lerr := time.LoadLocation(tzStr); lerr == nil {
 		services.LogConfigReadRecovered("audit-log-timezone")
 		services.LogConfigReadRecovered("audit-log-timezone-value")
 		loc = l
 	} else {
+		tzDegraded = true
 		services.LogConfigReadRecovered("audit-log-timezone")
 		services.LogConfigReadFailure("audit-log-timezone-value", fmt.Errorf("审计日志筛选时区 %q 非法（按 UTC 继续）: %w", tzStr, lerr))
 	}
@@ -514,5 +521,5 @@ func (h *Handlers) GetAuditLogs(c *gin.Context) {
 		}
 	}
 
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: auditLogListPayload(logs, total, totalStale, displayNameDegraded, page, pageSize)})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: auditLogListPayload(logs, total, totalStale, displayNameDegraded || tzDegraded, page, pageSize)})
 }

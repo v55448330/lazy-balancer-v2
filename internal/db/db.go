@@ -126,6 +126,11 @@ const (
 	// 特殊值（返回 UTC），读侧 COALESCE 只兜 NULL——空串落库会让全站展示/
 	// 审计窗口静默切 UTC，故写侧拒绝、启动归一、DDL DEFAULT 三处同口径。
 	DefaultTimezone = "Asia/Shanghai"
+	// DefaultLogLevel 是 global_config.log_level 的治理默认：fresh DDL
+	// DEFAULT、面板读侧（tz.go / config_changes.go / cluster_snapshot.go）
+	// 的 COALESCE 绑定参数三处同源。应用日志级别枚举校验归 services 持有，
+	// db 不反向依赖；此常量只固定「未设置时落到哪一档」。
+	DefaultLogLevel = "info"
 	// DefaultScheduleDays/Time 是任务级排程（CRS/IP2Region 版本表、威胁/爬虫
 	// 源表）的治理默认：fresh DDL DEFAULT、迁移补列与 services 读失败兜底同源，
 	// db_truth_defaults_test 双向钉死字面量。
@@ -3195,12 +3200,15 @@ func migrateSystemIPListUniqueIndex() error {
 	// 该名单条目整体消失：少拦/少放）。事务化后中途失败整体回滚，下次启动重算
 	// remap 仍能修好引用。
 	var dedupeDetail string
+	// deferUniqueIndex 由事务闭包置位、闭包外消费（延期态的审计走一次性
+	// 判据——同一条「延期」详情不得随重启逐字重写）。
+	var deferUniqueIndex bool
 	err = withWriteTx("system ip list unique index", func(tx *sql.Tx) error {
 		remap, err := planSystemIPListDedupe(tx)
 		if err != nil {
 			return err
 		}
-		deferUniqueIndex := false
+		deferUniqueIndex = false
 		if len(remap) > 0 {
 			// 条目并入必须先于删行：重复行携带的已入库 IP（自动封禁名单尤其
 			// 如此）会随整行删除而静默消失=静默解封。
@@ -3281,7 +3289,14 @@ func migrateSystemIPListUniqueIndex() error {
 		// 删除整行属用户可见数据改写（重复行可能携带已入库 IP 条目）：与
 		// cert_jobs 去重/域名归一同口径落「全操作审计」，不只留进程 stdout。
 		// 只在事务提交后留痕——回滚的迁移不得留下「已去重」审计。
-		recordSystemAudit("启动迁移", "IP 名单", dedupeDetail)
+		// 延期态只能人工处置且每次启动都重新进入（唯一索引被刻意不建），
+		// 同一条「延期+无法解析行 id」详情只落一条审计；正常去重态是一次性
+		// 数据改写，索引建好后启动即短路，保持原有逐次留痕。
+		if deferUniqueIndex {
+			recordSystemAuditOnce("启动迁移", "IP 名单", dedupeDetail)
+		} else {
+			recordSystemAudit("启动迁移", "IP 名单", dedupeDetail)
+		}
 	}
 	return nil
 }
@@ -4571,20 +4586,28 @@ var (
 // （global_config，newColumns 登记）。空串=未告警或冲突已解除。
 const oidcDupIdentityMarkerColumn = "oidc_dup_identity_fp"
 
-// readOIDCDupIdentityMarker 读已告警指纹：列/行缺失或读失败一律返回空串
-// （按「未告警」处理——最多多留一条审计，不影响正确性）。
-func readOIDCDupIdentityMarker() string {
+// readOIDCDupIdentityMarker 读已告警指纹：读失败返回错误交由调用方点名留痕
+// 后按「未告警」处理——错误与「确无已告警指纹」是两种状态，静默折叠成空串
+// 会让「同一重复集合只留一条审计」失效且无排查线索（与威胁名单占名冲突
+// 指纹同族同口径）。
+func readOIDCDupIdentityMarker() (string, error) {
 	var stored string
 	if err := DB.QueryRow(`SELECT COALESCE(` + oidcDupIdentityMarkerColumn + `,'') FROM global_config WHERE id=1`).Scan(&stored); err != nil {
-		return ""
+		return "", err
 	}
-	return stored
+	return stored, nil
 }
 
 // writeOIDCDupIdentityMarker 写指纹；失败只告警不阻断启动（下次启动重报）。
+// UPDATE 命中 0 行=global_config 单行缺失或不可写，同样只告警。
 func writeOIDCDupIdentityMarker(fingerprint string) {
-	if _, err := DB.Exec(`UPDATE global_config SET `+oidcDupIdentityMarkerColumn+`=? WHERE id=1`, fingerprint); err != nil {
+	res, err := DB.Exec(`UPDATE global_config SET `+oidcDupIdentityMarkerColumn+`=? WHERE id=1`, fingerprint)
+	if err != nil {
 		log.Printf("启动迁移：OIDC 重复身份告警指纹写入失败（下次启动将重报）: %v", err)
+		return
+	}
+	if n, rerr := res.RowsAffected(); rerr == nil && n == 0 {
+		log.Printf("WARN: 启动迁移：global_config 单行缺失或不可写，OIDC 重复身份告警指纹无法持久化（下次启动将重报）")
 	}
 }
 
@@ -4636,8 +4659,12 @@ func migrateOidcIdentityUniqueIndex() error {
 		// 该僵持态只能人工处置（合并/删除重复行后重启），每次重启都重写一条
 		// 一模一样的审计会冲淡真实信号——指纹命中只留 WARN，指纹变化（新增
 		// 重复或人工部分合并后残留）才重报。账号面板据此可见「为何登录身份
-		// 可能落到不同行」。
-		if readOIDCDupIdentityMarker() != fingerprint {
+		// 可能落到不同行」。读取失败按未告警继续（fail-open 不变），但点名留痕。
+		stored, rerr := readOIDCDupIdentityMarker()
+		if rerr != nil {
+			log.Printf("WARN: 启动迁移：OIDC 重复身份告警指纹读取失败（按未告警继续，同一重复集合可能重报一条审计）: %v", rerr)
+		}
+		if rerr != nil || stored != fingerprint {
 			detail := fmt.Sprintf("启动迁移：users 存在重复 OIDC 身份(%s)，已跳过 u_oidc_identity 唯一索引（同一身份登录可能随机落到重复行之一）；请人工合并重复行后重启", fingerprint)
 			recordSystemAudit("启动迁移", "用户", detail)
 			writeOIDCDupIdentityMarker(fingerprint)
@@ -4645,7 +4672,7 @@ func migrateOidcIdentityUniqueIndex() error {
 		return nil
 	}
 	// 冲突已解除（人工合并后重启）：清除指纹，未来复发可重新上报。
-	if readOIDCDupIdentityMarker() != "" {
+	if stored, rerr := readOIDCDupIdentityMarker(); rerr == nil && stored != "" {
 		writeOIDCDupIdentityMarker("")
 	}
 	if err := ensureUniqueIndex(DB, "u_oidc_identity", oidcIdentityIndexSQL); err != nil {
