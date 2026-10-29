@@ -492,6 +492,10 @@ func TestMaterializeAllCertsFromDB_repairs_mismatched_downloaded_pair(t *testing
 	}
 }
 
+// 口径：6h 文件对账的判据是「文件是否存在」，**不比对内容/权限**——这与启动
+// 物化（内容 + 权限判定 changed）有意不同：对账只负责文件缺失自愈，避免每 6h
+// 无条件重写全部证书对。内容分叉由 apply/导入/启动物化修复，见
+// reconcileMissingCertFiles 的文档。
 func TestReconcileMissingCertFiles_rebuilds_deleted_files(t *testing.T) {
 	// Given：已签发 ACME 任务在 DB 中持有 cert_pem/key_pem，但磁盘文件缺失（模拟被清理）
 	_, database := newClusterTestService(t)
@@ -629,7 +633,10 @@ func TestMaterializeAllCertsFromDB_latest_inapplicable_row_does_not_shadow_older
 }
 
 // 零写（内容与权限已一致）不得计入「恢复」审计/任务日志——否则每次
-// 启动都报「恢复 N 个」，真实恢复事件被稀释。
+// 启动都报「恢复 N 个」，真实恢复事件被稀释。changed 由单源判据
+// certPairMatchesSnapshot 给出（writeCertFiles 直接返回），本用例钉的是
+// changed→计数 的消费口径，判据本身的矩阵见
+// TestMaterializeCertPair_zeroWriteMatrix。
 func TestMaterializeAllCertsFromDB_counts_only_actual_writes(t *testing.T) {
 	_, database := newClusterTestService(t)
 	useTemporaryCertDir(t)

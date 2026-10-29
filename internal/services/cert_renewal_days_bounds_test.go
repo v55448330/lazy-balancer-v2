@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -99,7 +100,7 @@ func TestCheckExpiration_legacyWindowAboveSafeMaxDoesNotChurnDaily(t *testing.T)
 
 	service := NewCertificateService()
 	resetCertificateServiceForTest(t)
-	jobs, _, err := service.CheckExpiration()
+	jobs, _, err := service.CheckExpiration(context.Background())
 	if err != nil {
 		t.Fatalf("check expiration: %v", err)
 	}

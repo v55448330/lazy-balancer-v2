@@ -215,3 +215,88 @@ func TestConsumeClusterTicketJTI_storageContract(t *testing.T) {
 		t.Fatalf("未过期行被误删（剩余行数=%d）——重放窗口重新打开", countRows())
 	}
 }
+
+// 安全驳回①：本节点已升主（或本地没有集群令牌）时必须整体驳回。主节点同样有
+// used_login_tickets 表、也可能匹配到相同 registration_id，缺该守卫时主节点会
+// 接受本应只发给从节点的票据；两条入口共用同一驳回分支，任一侧失效都必须红。
+func TestClusterLoginTicketRejectsOnMasterNode(t *testing.T) {
+	now := time.Date(2026, 7, 31, 12, 0, 0, 0, time.UTC)
+	cases := []struct {
+		name string
+		sql  string
+	}{
+		{"promoted to master", "UPDATE global_config SET is_master=1 WHERE id=1"},
+		{"cluster token cleared", "UPDATE global_config SET cluster_token='' WHERE id=1"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			service, ticket := issueClusterLoginTicket(t, now)
+			if _, err := service.db.Exec(tc.sql); err != nil {
+				t.Fatal(err)
+			}
+			claims, user, passwordVersion, err := service.ValidateLoginTicket(context.Background(), ticket, now)
+			if !errors.Is(err, ErrInvalidLoginTicket) {
+				t.Fatalf("error=%v, want ErrInvalidLoginTicket", err)
+			}
+			// 角色不符的分支尚未验签：不得凭空归因（审计 actor 只能取自可信载荷）。
+			if claims != (models.ClusterLoginTicketClaims{}) {
+				t.Fatalf("驳回分支不得返回 claims: %#v", claims)
+			}
+			if user != (models.User{}) || passwordVersion != 0 {
+				t.Fatalf("驳回分支不得返回用户: user=%#v passwordVersion=%d", user, passwordVersion)
+			}
+			// 驳回发生在消费 jti 之前：恢复从节点角色后同一票据仍必须可用
+			// （否则主从切换窗口会把合法票据烧掉，用户被锁在门外）。
+			if _, err := service.db.Exec("UPDATE global_config SET is_master=0, cluster_token=? WHERE id=1", "lb_cluster_login-ticket-secret"); err != nil {
+				t.Fatal(err)
+			}
+			if _, _, _, err := service.ValidateLoginTicket(context.Background(), ticket, now); err != nil {
+				t.Fatalf("驳回不得消费票据，恢复从节点后应可校验: %v", err)
+			}
+		})
+	}
+}
+
+// 安全驳回②：载荷已验签（身份可信）但本地用户已禁用/改名时必须整体驳回，
+// 且 claims 随错误返回——「谁的票据被拒」是票据审计唯一可归因字段；
+// 同时钉住具体哨兵（泛化的 ErrInvalidLoginTicket 无法区分用户不可用与
+// 签名/重放失败，handler 的 409 文案与排障口径依赖它）。
+func TestClusterLoginTicketRejectsUnavailableUserAndKeepsClaims(t *testing.T) {
+	now := time.Date(2026, 7, 31, 12, 0, 0, 0, time.UTC)
+	cases := []struct {
+		name string
+		sql  string
+	}{
+		{"disabled user", "UPDATE users SET is_enabled=0 WHERE id=3"},
+		{"renamed user", "UPDATE users SET username='mallory' WHERE id=3"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			service, ticket := issueClusterLoginTicket(t, now)
+			if _, err := service.db.Exec(tc.sql); err != nil {
+				t.Fatal(err)
+			}
+			claims, user, _, err := service.ValidateLoginTicket(context.Background(), ticket, now)
+			if !errors.Is(err, ErrLoginTicketUserUnavailable) {
+				t.Fatalf("error=%v, want ErrLoginTicketUserUnavailable", err)
+			}
+			if !errors.Is(err, ErrInvalidLoginTicket) {
+				t.Fatalf("error=%v, want 同时满足 errors.Is(err, ErrInvalidLoginTicket)（handler 分类入口）", err)
+			}
+			if claims.UserID != 3 || claims.Username != "alice" {
+				t.Fatalf("已验签载荷必须随错误返回（审计归因契约）: %#v", claims)
+			}
+			if user != (models.User{}) {
+				t.Fatalf("驳回分支不得返回用户: user=%#v", user)
+			}
+			// 反证：用户态被拒时票据不得被消费——用户被临时禁用不应烧掉票据
+			// （恢复启用后同一票据仍可使用）。校验路径的 jti 消费点在用户判定之后。
+			if _, err := service.db.Exec("UPDATE users SET is_enabled=1, username='alice' WHERE id=3"); err != nil {
+				t.Fatal(err)
+			}
+			if _, _, _, err := service.ValidateLoginTicket(context.Background(), ticket, now); err != nil {
+				t.Fatalf("用户不可用驳回不得消费票据，恢复后应可校验: %v", err)
+			}
+		})
+	}
+}

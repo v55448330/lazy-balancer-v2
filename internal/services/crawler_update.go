@@ -654,20 +654,24 @@ const crawlerSlotSuccessSQL = `next_update=IIF(` + slotSuccessGateSQL + `, ?, ne
 // 旧值，调用方必须把本轮按失败返回给任务引擎（成功轮不推进槽却回 success
 // 会被引擎消费本槽——该族自动更新静默停摆，见 errScheduleSlotNotAdvanced）。
 func crawlerSlotSuccessAssign(trigger string) (string, []any, error) {
-	slot, err := crawlerNextSlotStrict(time.Now().UTC())
+	slotSQL, slotArgs, err := slotAssign(crawlerSlotSuccessSQL, trigger, 2, func() (string, error) {
+		return crawlerNextSlotStrict(time.Now().UTC())
+	})
 	if err != nil {
 		return noopSlotAssignSQL, nil, fmt.Errorf("%w: %v", errScheduleSlotNotAdvanced, err)
 	}
-	return crawlerSlotSuccessSQL, []any{trigger, trigger, slot}, nil
+	return slotSQL, slotArgs, nil
 }
 
 // crawlerSlotAdvanceAssign 爬虫源族失败落的赋值片段与参数（仅 auto 推进）。
 func crawlerSlotAdvanceAssign(trigger string) (string, []any) {
-	slot, err := crawlerNextSlotStrict(time.Now().UTC())
+	slotSQL, slotArgs, err := slotAssign(crawlerSlotAdvanceSQL, trigger, 1, func() (string, error) {
+		return crawlerNextSlotStrict(time.Now().UTC())
+	})
 	if err != nil {
 		return noopSlotAssignSQL, nil
 	}
-	return crawlerSlotAdvanceSQL, []any{trigger, slot}
+	return slotSQL, slotArgs
 }
 
 // markCrawlerSourceSuccess 源成功态：entry_count 更新 + version=成功日期 +

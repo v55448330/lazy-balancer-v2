@@ -68,7 +68,12 @@ func TestTaskLogsHousekeeping_certjobsExemptFromSizeRotation(t *testing.T) {
 	t.Cleanup(InvalidateTaskLogSizeCache)
 
 	logsDir := t.TempDir()
-	certDir := logsDir + "/tasks/certjobs"
+	// 清理面取 CertJobLogDir（与写入侧同源）——必须注入任务日志目录，否则
+	// 用例播种的 certjobs 目录不在扫描面内，「不尺寸轮转」断言会空转。
+	oldTaskLogDir := taskengine.LogDir()
+	taskengine.SetLogDir(logsDir + "/tasks")
+	t.Cleanup(func() { taskengine.SetLogDir(oldTaskLogDir) })
+	certDir := CertJobLogDir()
 	if err := os.MkdirAll(certDir, 0o755); err != nil {
 		t.Fatal(err)
 	}

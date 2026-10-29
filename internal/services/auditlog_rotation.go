@@ -96,23 +96,15 @@ func auditFailureThrottleKey(msg string) string {
 }
 
 // auditFailureShouldLog 判定失败消息 msg 现在是否应放行输出，并记录放行时间。
-// 键为归一化消息（auditFailureThrottleKey）。窗口判定与过期回收复用
-// throttleWarnAllowed 的同源实现；本族因额外有键数上限，按「先判重复 →
-// 回收 → 判上限 → 记录」的历史顺序展开：被抑制的消息不触发清扫/重置。
+// 键为归一化消息（auditFailureThrottleKey）。窗口判定、过期回收与键数上限
+// 全部委托 throttleWarnAllowedCapped（与其它告警族同一顺序：判重复 → 回收 →
+// 判上限 → 记录，被抑制的消息不触发清扫/重置）——此前是手写副本，注释声称
+// 复用同源实现而实际只复用了回收段。
 func auditFailureShouldLog(msg string) bool {
 	auditFailureLogMu.Lock()
 	defer auditFailureLogMu.Unlock()
-	key := auditFailureThrottleKey(msg)
-	now := auditFailureLogClock()
-	if last, ok := auditFailureLogTimes[key]; ok && now.Sub(last) < auditFailureLogWindow {
-		return false
-	}
-	throttleWarnEvict(auditFailureLogTimes, now, auditFailureLogWindow)
-	if len(auditFailureLogTimes) > auditFailureLogEvictCap {
-		auditFailureLogTimes = make(map[string]time.Time)
-	}
-	auditFailureLogTimes[key] = now
-	return true
+	return throttleWarnAllowedCapped(&auditFailureLogTimes, auditFailureThrottleKey(msg), auditFailureLogClock(),
+		auditFailureLogWindow, auditFailureLogWindow, auditFailureLogEvictCap)
 }
 
 // throttledAuditFailureLogf 以 auditFailureShouldLog 限流后输出失败日志。

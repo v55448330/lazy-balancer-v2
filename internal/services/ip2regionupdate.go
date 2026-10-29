@@ -79,12 +79,12 @@ type IP2RegionUpdateManager struct {
 	runCancel   context.CancelCauseFunc
 	downloadXDB func(ctx context.Context, tag, destPath string, progress downloadProgressFunc) error
 
-	// scheduleSlotErr 本运行「排程槽未推进」的原因：排程不可读（写路径严格
-	// 读排程失败）或状态行写入失败（槽随之未落地）。setSlotAdvanceError
-	// 置位；Run 体把本轮按失败返回给任务引擎——成功轮不推进槽却回 success
-	// 会被引擎记入本槽消费水位，此后同一槽永不再投递（该族自动更新静默
-	// 停摆，没有下一轮可以自愈）。每次运行起点清空。
-	scheduleSlotErr error
+	// slots 本运行「排程槽未推进」的原因：排程不可读（写路径严格读排程失败）
+	// 或状态行写入失败（槽随之未落地）。与 CRS 族共用同一记录器实现
+	// （versionTableSlotRecorder）；Run 体把本轮按失败返回给任务引擎——成功轮
+	// 不推进槽却回 success 会被引擎记入本槽消费水位，此后同一槽永不再投递
+	// （该族自动更新静默停摆，没有下一轮可以自愈）。每次运行起点清空。
+	slots versionTableSlotRecorder
 }
 
 var (
@@ -188,9 +188,7 @@ func (m *IP2RegionUpdateManager) StartUpdate(trigger string, rc *taskengine.RunC
 }
 
 func (m *IP2RegionUpdateManager) IsRunning() bool {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.running
+	return versionTableTaskIsRunning(&m.mu, &m.running)
 }
 
 func (m *IP2RegionUpdateManager) setStage(status IP2RegionUpdateStatus, message string) {
@@ -271,9 +269,7 @@ func (m *IP2RegionUpdateManager) runWithContext(runCtx context.Context, trigger 
 
 	// 每次运行起点清空「排程槽未推进」状态：上一轮的读失败不得让本轮成功
 	// 轮仍被引擎判失败（读恢复后必须立即自愈）。
-	m.mu.Lock()
-	m.scheduleSlotErr = nil
-	m.mu.Unlock()
+	m.slots.set(nil, ip2RegionUpdateLogFamily)
 
 	// 函数内 recover：本 defer 注册在上方审计 defer 之后，恢复先于审计执行
 	// ——panic 轮先落定 failed 终态，审计读到终态（此前 goroutine 层 recover

@@ -9,6 +9,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
 	"lazy-balancer-v2/internal/services"
 )
@@ -422,7 +423,7 @@ func clusterVersionTriggerStatements() []clusterVersionTrigger {
 			// NULL 兜底与写闸（readonly.go 的 COALESCE(is_master,1)）对齐——
 			// NULL 视为主节点。db.go 一次性回填生效后此处为纵深防御：回填前
 			// 历史库 NULL 行两层判定不再分裂（写闸放行写、触发器却不 bump 版本）。
-			whenClause := "(SELECT COALESCE(is_master,1) FROM global_config WHERE id=1)=1"
+			whenClause := db.MasterRoleConditionSQL
 			if operation == "UPDATE" {
 				// 运行态/簿记列一律排除在 OF 之外（单源：clusterVersionRuntimeColumns）。
 				// SQLite 的 UPDATE OF 只要列出现在 SET 即触发（与值是否变化无关），

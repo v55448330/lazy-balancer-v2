@@ -339,32 +339,12 @@ func getACMECertInfo(caddyID, ruleDomain string) (*models.RuleCertInfo, error) {
 	// global_config 读 + 重复 X509 解析。
 	now := time.Now()
 	expiryDays := GetCertExpiryThreshold()
-	rows, err := db.DB.Query(`
-		SELECT id, status, COALESCE(cert_pem, ''), COALESCE(key_pem, ''),
-		       COALESCE(julianday(COALESCE(updated_at, created_at)), 0), COALESCE(domain, '')
-		FROM cert_jobs
-		WHERE rule_id = ? AND `+CertJobMaterialPredicateSQL("")+`
-		ORDER BY updated_at DESC, id DESC`, caddyID)
+	// 候选装载单源（loadCertificateCandidates）：列序/行装配/Leaf 预解析与
+	// 续期扫描、渲染补查同口径；查询与扫描错误统一上抛（handler 500）。
+	candidates, err := loadCertificateCandidates(nil, db.DB, caddyID, CertJobMaterialPredicateSQL(""))
 	if err != nil {
 		Logf("error", "GetRuleCertInfo: failed to read ACME certificates for %s: %v", caddyID, err)
 		return nil, fmt.Errorf("读取规则 %s 的 ACME 证书: %w", caddyID, err)
-	}
-	defer rows.Close()
-	candidates := make([]CertificateCandidate, 0)
-	for rows.Next() {
-		var candidate CertificateCandidate
-		if err := rows.Scan(&candidate.ID, &candidate.Status, &candidate.CertPEM, &candidate.KeyPEM, &candidate.UpdatedAt, &candidate.Domain); err != nil {
-			Logf("error", "GetRuleCertInfo: failed to scan ACME certificate for %s: %v", caddyID, err)
-			return nil, fmt.Errorf("解析规则 %s 的 ACME 证书行: %w", caddyID, err)
-		}
-		// 候选查询已由 CertJobMaterialPredicateSQL 排除 disabled 行，
-		// 此处无需再判状态——预解析一次供选择与过期回退共用。
-		candidate.Leaf = ParseCertificateLeaf(candidate.CertPEM, candidate.KeyPEM)
-		candidates = append(candidates, candidate)
-	}
-	if err := rows.Err(); err != nil {
-		Logf("error", "GetRuleCertInfo: failed to iterate ACME certificates for %s: %v", caddyID, err)
-		return nil, fmt.Errorf("遍历规则 %s 的 ACME 证书: %w", caddyID, err)
 	}
 	if certPEM, selected := SelectRuleCertificate(candidates, ruleDomain, now); selected {
 		info := FormatRuleCertInfo(certPEM, "acme_dns", ruleDomain, caddyID, expiryDays, now)

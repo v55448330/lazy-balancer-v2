@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"lazy-balancer-v2/internal/taskengine"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
@@ -18,6 +19,50 @@ import (
 const CRSBundledVersion = "v4.28.0"
 
 var ErrCRSUpdateRunning = errors.New("CRS 更新任务正在进行中")
+
+// crsUpdateLogFamily / ip2RegionUpdateLogFamily 排程槽未推进日志的族前缀
+// （versionTableSlotRecorder 的单一实现按族区分文案，其余逐字相同）。
+const (
+	crsUpdateLogFamily       = "crs update"
+	ip2RegionUpdateLogFamily = "ip2region update"
+)
+
+// versionTableSlotRecorder 版本表两族更新管理器（CRS / IP2Region）共用的
+// 「排程槽未推进」记录器：状态枚举、版本读取与回滚钩子由各管理器承担，本类型
+// 只承载「本轮成功落库但排程槽未推进」的原因，供任务引擎 Run 体按失败返回
+// （引擎需要失败才能退避重投同一槽，而不是把本槽记入消费水位）。
+// 此前两族各有一份逐字相同的 setSlotAdvanceError/ScheduleSlotError 实现
+// （仅族前缀不同），任一侧改动都会让两族调度契约漂移。
+type versionTableSlotRecorder struct {
+	mu  sync.Mutex
+	err error
+}
+
+// set 记录本轮原因（nil=槽已推进）并留痕；family 只用于日志前缀。
+func (r *versionTableSlotRecorder) set(err error, family string) {
+	r.mu.Lock()
+	r.err = err
+	r.mu.Unlock()
+	if err != nil {
+		Logf("error", "%s: 本轮排程槽未推进（引擎按 1s/5s/30s 退避重投；连续 4 轮仍未推进即停调，需在业务页重新保存自动更新或重启进程恢复）: %v", family, err)
+	}
+}
+
+// get 返回本轮原因（nil=已推进或本轮未成功落库）。
+func (r *versionTableSlotRecorder) get() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.err
+}
+
+// versionTableTaskIsRunning 两族 IsRunning 的单一实现：锁与标志由调用方注入
+// ——running 必须与 runCancel/state 在同一临界区维护（StartUpdate 的
+// 「检查并置位」与 CancelRunning 的读取都依赖该原子性），不得搬到独立锁。
+func versionTableTaskIsRunning(mu *sync.Mutex, running *bool) bool {
+	mu.Lock()
+	defer mu.Unlock()
+	return *running
+}
 
 type CRSUpdateStatus string
 
@@ -116,12 +161,12 @@ type CRSUpdateManager struct {
 	// 之后再改全局，构造期快照会让更新写相位与渲染读相位分叉。
 	crsDir string
 
-	// scheduleSlotErr 本运行「排程槽未推进」的原因：排程不可读（写路径严格
-	// 读排程失败）或状态行写入失败（槽随之未落地）。setSlotAdvanceError
-	// 置位；Run 体把本轮按失败返回给任务引擎——成功轮不推进槽却回 success
-	// 会被引擎记入本槽消费水位，此后同一槽永不再投递（该族自动更新静默
-	// 停摆，没有下一轮可以自愈）。每次运行起点清空。
-	scheduleSlotErr error
+	// slots 本运行「排程槽未推进」的原因：排程不可读（写路径严格读排程失败）
+	// 或状态行写入失败（槽随之未落地）。与 IP2Region 族共用同一记录器实现
+	// （versionTableSlotRecorder）；Run 体把本轮按失败返回给任务引擎——成功轮
+	// 不推进槽却回 success 会被引擎记入本槽消费水位，此后同一槽永不再投递
+	// （该族自动更新静默停摆，没有下一轮可以自愈）。每次运行起点清空。
+	slots versionTableSlotRecorder
 
 	latestMu         sync.Mutex
 	latestTag        string
@@ -303,9 +348,30 @@ func (m *CRSUpdateManager) StartUpdate(trigger string, rc *taskengine.RunContext
 	go func() {
 		defer close(done)
 		defer runCancel(nil)
+		// 自建 goroutine 不被引擎 runGuarded 覆盖——未捕获 panic=整个
+		// admin 进程退出。正常路径由 runWithContext 内部 recover 先行落定
+		// failed 终态（审计同口径），此处仅兜底（defer 自身 panic 等）。
+		defer func() {
+			if r := recover(); r != nil {
+				Logf("error", "crs update: run panicked: %v\n%s", r, debug.Stack())
+				m.recoverRunPanic(r)
+			}
+		}()
 		m.runWithContext(runCtx, trigger, rc)
 	}()
 	return done, nil
+}
+
+// recoverRunPanic 把更新 goroutine 的 panic 收敛为 failed 终态（两层 recover
+// 共用）：db 未初始化（启动早期/测试缝）时无版本行可写，只落内存终态与更新
+// 日志——不得因 panic 的恢复路径本身再 panic。
+func (m *CRSUpdateManager) recoverRunPanic(r any) {
+	cause := fmt.Errorf("更新任务内部异常（已拦截进程级崩溃）: %v", r)
+	if db.DB == nil {
+		m.setStage(CRSStatusFailed, cause.Error())
+		return
+	}
+	m.fail(cause, false)
 }
 
 // updateRunBaseContext 任务运行上下文基座（CRS/IP2Region 同源）
@@ -319,9 +385,7 @@ func updateRunBaseContext(rc *taskengine.RunContext) context.Context {
 }
 
 func (m *CRSUpdateManager) IsRunning() bool {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.running
+	return versionTableTaskIsRunning(&m.mu, &m.running)
 }
 
 func (m *CRSUpdateManager) setStage(status CRSUpdateStatus, message string) {
@@ -423,9 +487,18 @@ func (m *CRSUpdateManager) runWithContext(runCtx context.Context, trigger string
 
 	// 每次运行起点清空「排程槽未推进」状态：上一轮的读失败不得让本轮成功
 	// 轮仍被引擎判失败（读恢复后必须立即自愈）。
-	m.mu.Lock()
-	m.scheduleSlotErr = nil
-	m.mu.Unlock()
+	m.slots.set(nil, crsUpdateLogFamily)
+
+	// 函数内 recover：本 defer 注册在上方审计 defer 之后 → 恢复先于审计执行
+	// （panic 轮先落定 failed 终态，审计读到失败语义而不是 checking 等中间
+	// 阶段被记成「更新」）。外层 goroutine 的 recover 退化为兜底（defer 自身
+	// panic 等形态）。
+	defer func() {
+		if r := recover(); r != nil {
+			Logf("error", "crs update: run panicked: %v\n%s", r, debug.Stack())
+			m.recoverRunPanic(r)
+		}
+	}()
 
 	// 起点角色复查：调度器 tick 的 is_master 守卫与更新启动之间存在
 	// demote 竞态窗口——tick 越过守卫、更新刚发出时节点被降级，从节点继续执行
@@ -748,21 +821,14 @@ func (m *CRSUpdateManager) CancelRunning() bool {
 // 状态行改成 failed：更新本身可能已成功，失败的是调度契约；引擎需要失败才能
 // 退避重投同一槽，而不是把本槽记入消费水位）。
 func (m *CRSUpdateManager) setSlotAdvanceError(err error) {
-	m.mu.Lock()
-	m.scheduleSlotErr = err
-	m.mu.Unlock()
-	if err != nil {
-		Logf("error", "crs update: 本轮排程槽未推进（引擎按 1s/5s/30s 退避重投；连续 4 轮仍未推进即停调，需在业务页重新保存自动更新或重启进程恢复）: %v", err)
-	}
+	m.slots.set(err, crsUpdateLogFamily)
 }
 
 // ScheduleSlotError 本运行成功落库但排程槽未推进的原因（nil=槽已推进或本轮
 // 未成功）。驱动任务引擎 Run 体在状态为 success 时复核：非 nil 时返回该错误，
 // 让引擎按失败退避重投而不是消费本槽。
 func (m *CRSUpdateManager) ScheduleSlotError() error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.scheduleSlotErr
+	return m.slots.get()
 }
 
 // StatusSnapshot returns the in-memory task view, falling back to the stored

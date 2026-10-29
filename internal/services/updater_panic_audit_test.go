@@ -99,6 +99,64 @@ func TestThreatRunUpdate_panicRoundAuditsFailureOnce(t *testing.T) {
 	}
 }
 
+// 更新 goroutine 内的 panic（拉取/安装/reloader 等任意环节）必须被拦截并落定
+// failed 终态——裸 goroutine 的未捕获 panic=整个 admin 进程退出。IP2Region 与
+// 威胁族已有两层 recover，CRS 族此前完全没有：同类异常直接把进程带走。
+func TestCRSStartUpdate_recoversPanickingRun(t *testing.T) {
+	m := newTestCRSManager(t)
+	seedCRSVersionRow(t, "v4.14.0", true)
+	m.fetchLatestTag = func(context.Context) (string, error) { panic("injected fetch panic") }
+
+	done, err := m.StartUpdate("manual", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitUpdateTestSignal(t, done, "panic 恢复的 CRS 更新")
+
+	_, status, message, _, _, _, _ := crsVersionRow(t)
+	if status != "failed" {
+		t.Fatalf("status=%q, want failed（panic 必须落定失败终态）", status)
+	}
+	if !strings.Contains(message, "injected fetch panic") {
+		t.Fatalf("message=%q, want 携带 panic 内容", message)
+	}
+	if m.IsRunning() {
+		t.Fatal("running 标记必须已复位")
+	}
+}
+
+// panic 轮的终态审计必须与正常失败同口径：action=「更新失败」、恰 1 条、
+// 详文为中文阶段（不得读到 checking 等中间阶段被记成「更新」）。
+func TestCRSStartUpdate_panicRoundAuditsFailureOnce(t *testing.T) {
+	m := newTestCRSManager(t)
+	seedCRSVersionRow(t, "v4.14.0", true)
+	m.fetchLatestTag = func(context.Context) (string, error) { panic("injected fetch panic") }
+
+	done, err := m.StartUpdate("manual", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitUpdateTestSignal(t, done, "panic 轮 CRS 更新")
+
+	var rows int
+	if err := db.AuditDB.QueryRow(`SELECT COUNT(*) FROM audit_log WHERE resource='CRS规则库'`).Scan(&rows); err != nil {
+		t.Fatal(err)
+	}
+	if rows != 1 {
+		t.Fatalf("panic 轮审计条数=%d, want 1（终态单记）", rows)
+	}
+	var action, detail string
+	if err := db.AuditDB.QueryRow(`SELECT action, COALESCE(detail,'') FROM audit_log WHERE resource='CRS规则库'`).Scan(&action, &detail); err != nil {
+		t.Fatal(err)
+	}
+	if action != "更新失败" {
+		t.Fatalf("action=%q, want 更新失败（panic 必须落失败语义）", action)
+	}
+	if !strings.Contains(detail, "更新失败（触发：manual）") {
+		t.Fatalf("detail=%q, want 中文阶段前缀", detail)
+	}
+}
+
 // 安装前版本行读故障必须中止安装（不得以 unknown 哨兵继续），且 live xdb 与
 // 版本行都不被改动——否则重载失败回滚会把真实 tag 覆写成哨兵。
 func TestIP2RegionDownloadAndInstall_abortsOnVersionRowReadFault(t *testing.T) {

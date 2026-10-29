@@ -136,9 +136,8 @@ func TestClient_RegisterAccount_keeps_rotated_predecessor_key(t *testing.T) {
 
 // EAB HMAC 轮换后旧代的账户密钥必须保留：它是不同账户身份（目录/邮箱/KID 相同
 // 但 HMAC 摘要不同），删掉会让旧账户身份无法恢复。这里断言的是「身份不同即
-// 保留」，与 mtime 无关——清理删除分支（metadata==want 且 keyPath!=当前路径）
-// 在当前路径公式下不可达，是路径公式变更时的迁移钩子（见
-// removeStaleAccountKeys 注释），因此不能用 mtime 断言它的行为。
+// 保留」——本包不存在任何陈旧密钥回收机制（见 accountKeyMetadata 的退役裁定），
+// 因此不存在可被 mtime 触发的删除行为可断言。
 func TestClient_RegisterAccount_keeps_predecessor_identity_key(t *testing.T) {
 	// Given
 	var server *httptest.Server

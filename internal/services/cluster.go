@@ -284,13 +284,18 @@ func tokenHash(token string) string {
 // 原因：handler 的 requireMaster 与本次写之间没有共享锁，BecomeSlave 可在窗口内
 // 提交 is_master=0——带该条件的写语句在降级后恒 0 行，消除「降级后仍审批/
 // 上报/改访问地址」的 TOCTOU 类别。
-const masterRoleConditionSQL = `(SELECT COALESCE(is_master,1) FROM global_config WHERE id=1)=1`
+//
+// 谓词本体在 db 包（db.MasterRoleConditionSQL / db.SlaveRoleConditionSQL）：
+// db 的后台 flusher 与 middleware 的触发器 WHEN 也用同一条口径，三处不得各
+// 写一份（同 TCPRuleDeadFieldsResetSQL 的跨包单源模式）。此处保留包内别名只为
+// 让本包的写语句读起来仍是「services 自己的角色条件」。
+const masterRoleConditionSQL = db.MasterRoleConditionSQL
 
 // slaveRoleConditionSQL 是 masterRoleConditionSQL 的逆谓词：从端专有状态
 // （同步错误、补偿标记）只能在从节点语境落库。升主会清空这些列，若在途的
 // 从端写（persistSyncError 走 WithoutCancel 以跨 Stop 取消存活）不带该条件，
 // 升主提交后会被旧从端写回，而全仓没有第二处清空点（只剩降级/导入）。
-const slaveRoleConditionSQL = `(SELECT COALESCE(is_master,1) FROM global_config WHERE id=1)=0`
+const slaveRoleConditionSQL = db.SlaveRoleConditionSQL
 
 // masterScopeMissError 在带 SQL 角色条件的读写命中 0 行后复核角色：
 // 已降级统一返回 403 哨兵；主节点下的 0 行由调用方提供 NotFound/内部错误语义。
@@ -345,8 +350,7 @@ func (s *ClusterService) GenerateRegisterToken(ctx context.Context, createdBy in
 	if inserted != 1 {
 		// 事务内复核角色（同事务视图，回滚不会翻转已提交的降级）：降级窗口
 		// 统一 ErrNotMasterNode(403)；主节点下的 0 行是内部错误。
-		var masterNow bool
-		roleErr := tx.QueryRowContext(ctx, "SELECT COALESCE(is_master,1) FROM global_config WHERE id=1").Scan(&masterNow)
+		masterNow, roleErr := db.IsMasterNode(ctx, tx)
 		_ = tx.Rollback()
 		if roleErr != nil {
 			return "", time.Time{}, fmt.Errorf("复核节点角色: %w", roleErr)
@@ -411,9 +415,10 @@ func (s *ClusterService) RegisterNode(ctx context.Context, req models.ClusterReg
 	defer func() { _ = tx.Rollback() }()
 
 	// 事务内角色复核（SQL 级）。降级已提交则拒绝注册/覆盖，避免
-	// 旧主节点在降级窗口继续写入节点簿记。
-	var masterNow bool
-	if err := tx.QueryRowContext(ctx, "SELECT COALESCE(is_master,1) FROM global_config WHERE id=1").Scan(&masterNow); err != nil {
+	// 旧主节点在降级窗口继续写入节点簿记。读同一事务视图（db.IsMasterNode
+	// 接受 *sql.Tx），跨事务句柄会看到降级前/后的另一个快照。
+	masterNow, err := db.IsMasterNode(ctx, tx)
+	if err != nil {
 		return models.ClusterRegistration{}, fmt.Errorf("复核节点角色: %w", err)
 	}
 	if !masterNow {
@@ -1084,11 +1089,21 @@ func nodeOfflineThresholdSeconds(database *sql.DB) int {
 	if database != nil {
 		var raw sql.NullInt64
 		if err := database.QueryRow("SELECT sync_interval FROM global_config WHERE id = 1").Scan(&raw); err != nil {
+			// 状态转换口径（首报 warn + 恢复 info）与同函数另三条 DB 派生指标
+			// 一致：30s 一轮的采集直接把 warn 打出去会以同一条消息刷屏，而
+			// 恢复时零信号——阈值长期按默认值计算这件事会永久隐身。
 			if !errors.Is(err, sql.ErrNoRows) {
-				Logf("warn", "updateOverview: 读取 sync_interval 失败，离线阈值按默认 %ds 计: %v", defaultSyncIntervalSeconds, err)
+				if lvl := logStateTransition("overview-count-sync-interval", true); lvl != "" {
+					Logf(lvl, "updateOverview: 读取 sync_interval 失败，离线阈值按默认 %ds 计: %v", defaultSyncIntervalSeconds, err)
+				}
 			}
-		} else if raw.Valid {
-			interval = int(raw.Int64)
+		} else {
+			if lvl := logStateTransition("overview-count-sync-interval", false); lvl != "" {
+				Logf(lvl, "updateOverview: 读取 sync_interval 已恢复，离线阈值按库值计算")
+			}
+			if raw.Valid {
+				interval = int(raw.Int64)
+			}
 		}
 	}
 	return int(nodeOfflineThreshold(interval).Seconds())

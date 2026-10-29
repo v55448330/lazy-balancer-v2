@@ -42,10 +42,22 @@ func CertJobLogDir() string {
 	return target
 }
 
+// certJobLogMigrateLink 是旧目录迁移的落位原语（测试缝：var 而非直接调用，
+// 供用例模拟「并发写者在落位前抢建同名文件」的竞态窗口）。os.Link 在目标已
+// 存在时返回 EEXIST——这为「迁移落位」与「写侧创建同名文件」提供了原子仲裁点：
+// 不再有 Stat→Rename 的 check-then-act 窗口。
+var certJobLogMigrateLink = os.Link
+
 // migrateLegacyCertJobLogs 一次性迁移：源=任务日志目录的父目录（容器内即
 // /app/logs——tasks 的宿主根，与固化期 certjob-* 的实际落点）。
 // 扫描/搬移失败记日志继续（旧文件残留无害——读侧已切新目录，
-// 清理面按新目录扫描）；目标同名文件已存在视为新数据，跳过不覆盖。
+// 清理面按新目录扫描）。
+//
+// 落位用链接而非 rename：写侧以 O_CREATE|O_APPEND 创建目标文件，rename 会在
+// 「目标不存在」判定之后无条件覆盖——写者在这两步之间建好并写入的行被旧文件
+// 整体顶掉（丢行）。os.Link 的 EEXIST 即「新数据已落位（或写者正在写）」，
+// 迁移让位跳过，旧文件留在原处等下次启动再试（此时目标已存在，仍跳过）；
+// 链接成功后再删源文件，数据不经过复制（同一 inode）。
 func migrateLegacyCertJobLogs(legacyRoot, target string) {
 	entries, err := os.ReadDir(legacyRoot)
 	if err != nil {
@@ -65,11 +77,19 @@ func migrateLegacyCertJobLogs(legacyRoot, target string) {
 			}
 		}
 		dst := filepath.Join(target, name)
-		if _, err := os.Stat(dst); err == nil {
-			continue // 新目录已有同名文件（升级后已写入）——不覆盖
+		source := filepath.Join(legacyRoot, name)
+		// 原子落位（见上）：EEXIST = 新数据/并发写者已建同名文件，让位不覆盖。
+		if linkErr := certJobLogMigrateLink(source, dst); linkErr != nil {
+			if errors.Is(linkErr, os.ErrExist) {
+				continue // 新目录已有同名文件（升级后已写入/写者占用）——不覆盖
+			}
+			certJobLogWarnf("cert job log: migrate legacy %s failed: %v", name, linkErr)
+			continue
 		}
-		if err := os.Rename(filepath.Join(legacyRoot, name), dst); err != nil {
-			certJobLogWarnf("cert job log: migrate legacy %s failed: %v", name, err)
+		if removeErr := os.Remove(source); removeErr != nil {
+			// 数据已在目标（同一 inode 的硬链接），源文件残留仅多一份目录项；
+			// 下次启动因目标已存在而跳过——不影响正确性，必须留痕。
+			certJobLogWarnf("cert job log: remove migrated legacy %s failed: %v", name, removeErr)
 			continue
 		}
 		moved++

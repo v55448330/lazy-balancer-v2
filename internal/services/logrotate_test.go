@@ -170,7 +170,12 @@ func TestTaskLogsHousekeeping_waitsForCertJobWriteLock(t *testing.T) {
 	}
 	base := t.TempDir()
 	logFile := filepath.Join(base, "app.log")
-	certDir := filepath.Join(base, "tasks", "certjobs")
+	// certjobs 清理面与写入侧同源（CertJobLogDir ← taskengine.LogDir）：用例必须
+	// 注入任务日志目录，否则播种的 certjobs 目录不在扫描面内，断言会空转。
+	oldTaskLogDir := taskengine.LogDir()
+	taskengine.SetLogDir(filepath.Join(base, "tasks"))
+	t.Cleanup(func() { taskengine.SetLogDir(oldTaskLogDir) })
+	certDir := CertJobLogDir()
 	if err := os.MkdirAll(certDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -770,5 +775,48 @@ func TestRuntimeLogCleanupOnce_doesNotTouchWafAuditFallback(t *testing.T) {
 	}
 	if _, err := os.Stat(logPath + ".1"); !os.IsNotExist(err) {
 		t.Fatalf("log-cleanup 不得轮转 audit.log（.1 不应存在）: %v", err)
+	}
+}
+
+// certjobs 扫描面内只认证书任务日志文件：CertJobLogDir 在「任务日志目录未注入」
+// 的降级形态回退到日志根（写入侧此时直接把 certjob-*.log 写在根下），此时扫描面
+// 覆盖了应用/访问日志所在的目录——非 certjob-* 的过期文件必须留给各自的清理链，
+// 不得按任务日志口径二次删除。
+func TestTaskLogsHousekeeping_certDirIgnoresNonCertJobFiles(t *testing.T) {
+	initServicesDB(t)
+	useCertJobLogTestEnv(t, 1<<20)
+	dir := CertJobLogDir()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("seed certjobs dir: %v", err)
+	}
+	foreign := filepath.Join(dir, "app.log.2020-01-01")
+	if err := os.WriteFile(foreign, []byte("foreign\n"), 0o644); err != nil {
+		t.Fatalf("seed foreign file: %v", err)
+	}
+	stale := time.Now().AddDate(-10, 0, 0)
+	if err := os.Chtimes(foreign, stale, stale); err != nil {
+		t.Fatalf("backdate foreign file: %v", err)
+	}
+	certExpired := CertJobLogPath("lb_certdir_expired")
+	if err := os.WriteFile(certExpired, []byte("line\n"), 0o644); err != nil {
+		t.Fatalf("seed cert job log: %v", err)
+	}
+	if err := os.Chtimes(certExpired, stale, stale); err != nil {
+		t.Fatalf("backdate cert job log: %v", err)
+	}
+
+	res := taskLogsHousekeeping(filepath.Join(filepath.Dir(taskengine.LogDir()), "lazy-balancer.log"))
+
+	// Then：证书任务日志被删，非 certjob-* 文件原样保留
+	if _, err := os.Stat(certExpired); !os.IsNotExist(err) {
+		t.Fatalf("过期证书任务日志未删除: stat err=%v", err)
+	}
+	if _, err := os.Stat(foreign); err != nil {
+		t.Fatalf("非证书任务日志文件被本清理面删除: %v", err)
+	}
+	for _, name := range res.Deleted {
+		if name == filepath.Base(foreign) {
+			t.Fatalf("Deleted=%v 不得包含非证书任务日志 %s", res.Deleted, name)
+		}
 	}
 }

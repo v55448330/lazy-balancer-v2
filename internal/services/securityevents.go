@@ -1463,18 +1463,25 @@ func securityEventsPolicyACLIndex(p *models.SecurityPolicy) models.SecurityPolic
 	}
 	idx := models.SecurityPolicyIPListIndex{Built: true}
 	idx.NonEmpty = len(mergedACLList(p)) > 0
-	list := p.MergedACLList
 	idx.OK = true
+	list := p.MergedACLList
+	var rawInline []string
+	inlineErr := json.Unmarshal([]byte(p.IPACLList), &rawInline)
 	if len(list) == 0 {
-		var inline []string
-		if err := json.Unmarshal([]byte(p.IPACLList), &inline); err != nil {
+		if inlineErr != nil {
 			idx.OK = false
 		} else {
-			list = inline
+			list = rawInline
 		}
 	}
 	if idx.OK {
 		idx.Entries = len(list)
+		// 无引用形态：合并集只来自 inline 且已在加载期做过 CIDR 归并（同族
+		// 兄弟归并/覆盖剔除）——「原始条目数」口径必须取 inline 原始条目，
+		// 否则条目数随归并缩水；带引用时取合并集（含引用条目）。
+		if !ipListRefsNonEmpty(p.IPACLListRefs) {
+			idx.Entries = len(rawInline)
+		}
 		idx.Prefixes = securityEventsIPPrefixSet(list)
 	}
 	p.ACLIPIndex = idx

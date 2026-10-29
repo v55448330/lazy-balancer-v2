@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -428,6 +430,43 @@ func TestResolvePolicyIPListRefs_iterationErrorFailsClosed(t *testing.T) {
 	}
 }
 
+// 无引用形态（绝大多数策略）同样必须在加载路径一次展开并附加合并集：旧实现
+// refIDs 为空即早退，MergedACLList/MergedWhitelist 恒为 nil，发射端每次调用
+// mergedWhitelist/mergedACLList 都重跑 json.Unmarshal + aggregateIPEntries
+// ——摄取侧按「规则×策略」逐次调用，接收侧信任并集聚合成本随事件吞吐放大。
+func TestResolvePolicyIPListRefs_attachesInlineOnlyMergeWithoutRefs(t *testing.T) {
+	newClusterTestService(t)
+	p := &models.SecurityPolicy{
+		ID:           1,
+		Name:         "inline-only",
+		IPACLEnabled: true,
+		IPACLMode:    "deny",
+		IPACLList:    `["198.51.100.7"]`,
+		IPWhitelist:  json.RawMessage(`["203.0.113.1","203.0.113.0/24"]`),
+	}
+
+	resolvePolicyIPListRefs([]*models.SecurityPolicy{p}, nil)
+
+	if p.MergedWhitelist == nil || p.MergedACLList == nil {
+		t.Fatalf("无引用形态必须附加合并集（MergedWhitelist=%v MergedACLList=%v）", p.MergedWhitelist, p.MergedACLList)
+	}
+	// 合并即聚合：203.0.113.1 被 203.0.113.0/24 覆盖，同类兄弟归并。
+	if want := []string{"203.0.113.0/24"}; !reflect.DeepEqual(p.MergedWhitelist, want) {
+		t.Fatalf("MergedWhitelist=%v, want %v（与 mergedWhitelist 的 inline-only 回退逐字等价）", p.MergedWhitelist, want)
+	}
+	// 单地址条目在合并时按 /32 规范化（aggregateIPEntries 的 CIDR 归并）。
+	if want := []string{"198.51.100.7/32"}; !reflect.DeepEqual(p.MergedACLList, want) {
+		t.Fatalf("MergedACLList=%v, want %v", p.MergedACLList, want)
+	}
+	// 发射端取值零分配：已附加时 mergedWhitelist 直接返回（不得每次重跑解析+聚合）。
+	if allocs := testing.AllocsPerRun(50, func() { _ = mergedWhitelist(p) }); allocs != 0 {
+		t.Fatalf("mergedWhitelist 每次调用分配=%v, want 0（合并集已附加，不得重跑 json.Unmarshal+聚合）", allocs)
+	}
+	if allocs := testing.AllocsPerRun(50, func() { _ = mergedACLList(p) }); allocs != 0 {
+		t.Fatalf("mergedACLList 每次调用分配=%v, want 0", allocs)
+	}
+}
+
 // 畸形 refs 静默 fail-open ——
 
 // 全形状：畸形（非 JSON / 错元素类型）/空/合法 + deny/allow 两种 ACL 语义。
@@ -535,5 +574,99 @@ func TestIPListRefs_identicalColumnsShareExpansion(t *testing.T) {
 	}
 	if got := shared[2].MergedACLList; len(got) != 2 || got[0] != "198.51.100.0/24" || got[1] != "203.0.113.0/24" {
 		t.Fatalf("不同 inline 的策略不得复用他人展开: %v", got)
+	}
+}
+
+// 文本代际的一次读取内只允许解析一遍：可解析率门与坏行剔除必须共用同一份
+// 扫描结果。旧实现在同一批 vals 上分别调用「算比率」与「剔除坏行」，条目被
+// 重复解析 2–3 遍（20 万条名单每次渲染多付 1–2 次全量 ParseIPEntry）。
+func TestReadThreatIplistPath_parsesTextOncePerRead(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "threat-ustc.iplist")
+	// 无 .fast 同名文件 → 走文本代际；2/3 行合法（≥ threatMinParseRatio）。
+	writeTestFile(t, path, "203.0.113.0/24\n198.51.100.7\nnot-an-ip\n")
+
+	threatTextScanRunsForTest.Store(0)
+	vals, err := readThreatIplistPath(path)
+	if err != nil {
+		t.Fatalf("readThreatIplistPath: %v", err)
+	}
+	if want := []string{"203.0.113.0/24", "198.51.100.7"}; !reflect.DeepEqual(vals, want) {
+		t.Fatalf("vals=%v, want %v（不可解析行必须剔除）", vals, want)
+	}
+	if got := threatTextScanRunsForTest.Load(); got != 3 {
+		t.Fatalf("条目解析次数=%d, want 3（一次读取只解析一遍；重复解析说明比率门与坏行剔除各扫一次）", got)
+	}
+}
+
+// 分批 IN 查询只允许一套实现：渲染装载与摘要存在性判定曾各持一份同构的
+// 「切块 + 拼占位符 + 迭代错误捕获」，任一侧修正（如 rows.Err fail-closed）
+// 都会单边漂移。两边现在只通过 forEachIPListChunk 分批。
+func TestIPListChunking_singleImplementation(t *testing.T) {
+	files, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var offenders []string
+	for _, name := range files {
+		if strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		data, readErr := os.ReadFile(name)
+		if readErr != nil {
+			t.Fatalf("读取 %s 失败: %v", name, readErr)
+		}
+		if n := strings.Count(string(data), "start += ipListChunkSize"); n > 0 {
+			offenders = append(offenders, fmt.Sprintf("%s(%d)", name, n))
+		}
+	}
+	if len(offenders) != 1 || offenders[0] != "securityiplists.go(1)" {
+		t.Fatalf("分批 IN 查询的切块循环散落多份: %v——必须只在 forEachIPListChunk 内出现一次", offenders)
+	}
+}
+
+// 跨块形态：ipListChunkSize 之外的 id 必须全部装载（分批边界不得漏行），
+// 且块内迭代错误按块 fail-closed 并上抛首个错误——两条装载路径共用同一实现，
+// 本用例同时覆盖渲染装载与摘要存在性判定。
+func TestIPListChunking_crossChunkLoadsAndFailsClosed(t *testing.T) {
+	_, database := newClusterTestService(t)
+	oldChunk := ipListChunkSize
+	ipListChunkSize = 2
+	t.Cleanup(func() { ipListChunkSize = oldChunk })
+
+	var ids []int64
+	for i := 0; i < 5; i++ {
+		res, err := database.Exec(`INSERT INTO security_ip_lists (name, category, entries, system, created_at, updated_at)
+			VALUES (?, '常规', ?, 0, datetime('now'), datetime('now'))`, fmt.Sprintf("跨块列表%d", i), fmt.Sprintf(`[{"value":"203.0.113.%d"}]`, i+1))
+		if err != nil {
+			t.Fatalf("seed list: %v", err)
+		}
+		id, err := res.LastInsertId()
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, id)
+	}
+
+	entries, failed, err := loadIPListEntriesVia(database, ids)
+	if err != nil {
+		t.Fatalf("跨块装载失败: %v", err)
+	}
+	if len(failed) != 0 {
+		t.Fatalf("跨块装载不得有失败块: %v", failed)
+	}
+	for _, id := range ids {
+		if _, ok := entries[id]; !ok {
+			t.Fatalf("列表 id=%d 未装载（分批边界漏行）", id)
+		}
+	}
+	presence, failedPresence := loadIPListRefPresenceVia(database, ids)
+	if len(failedPresence) != 0 {
+		t.Fatalf("摘要存在性判定不得有失败块: %v", failedPresence)
+	}
+	for _, id := range ids {
+		if !presence[id] {
+			t.Fatalf("列表 id=%d 在摘要口径必须判为有生效条目", id)
+		}
 	}
 }

@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"lazy-balancer-v2/internal/atomicfile"
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
 	"net/http"
@@ -813,16 +814,28 @@ func ApplyWafFileBundle(bundle *WafFileBundle) (crsChanged, xdbChanged, threatCh
 		}
 	}
 	// RDB 文件化：从节点写威胁库 .fast 文件（直接使用，零编译）
-	// 落盘阶段只做原子写：全部结构/哈希/路径校验已在 planThreatFastWrites 内
-	// 完成，任何一条不合法都会在 CRS/xdb/威胁库任何文件写入之前整包拒绝。
+	// 落盘阶段分两相位：全部暂存（写 temp+fsync，live 面不变）成功后才统一
+	// rename。结构/哈希/路径校验已在 planThreatFastWrites 内完成，但落盘本身
+	// 仍会失败（盘满/权限/IO 错）——旧的逐条「写一条生效一条」会让前序条目在
+	// 后续失败时真实生效，与错误文案承诺的「拒绝整包」矛盾，主从威胁面就此
+	// 分叉到下一次成功同步。
+	staged := make([]*atomicfile.Staged, 0, len(threatWrites))
 	for _, tw := range threatWrites {
-		// changed 标志先置后写——后续写失败时函数整体携 error 返回，
+		f, stageErr := wafBundleStage(tw.path, tw.content, 0644)
+		if stageErr != nil {
+			for _, prev := range staged {
+				prev.Abort()
+			}
+			return crsChanged, xdbChanged, threatChanged, fmt.Errorf("暂存威胁库 .fast %s: %w", tw.name, stageErr)
+		}
+		staged = append(staged, f)
+	}
+	for i, tw := range threatWrites {
+		// changed 标志先置后写——后续提交失败时函数整体携 error 返回，
 		// 两个调用方（cluster_apply 的 aerr 分支 / lbbak 导入）err 路径均不
 		// 消费 changed 标志，无需逐 err 路径置回。
 		threatChanged = true
-		// 单源原子落盘（tmp+fsync+父目录 fsync；临时文件点前缀，
-		// 不会被 waf bundle 打包）。
-		if err := writeFileAtomicSynced(tw.path, tw.content, 0644); err != nil {
+		if err := staged[i].Commit(); err != nil {
 			return crsChanged, xdbChanged, threatChanged, fmt.Errorf("写威胁库 .fast %s: %w", tw.name, err)
 		}
 	}
@@ -835,6 +848,10 @@ type threatFastWrite struct {
 	path    string
 	content []byte
 }
+
+// wafBundleStage 威胁库 .fast 批量落盘的暂存原语（默认 atomicfile.Stage：
+// 写 temp+fsync，不 rename）。测试注入第二份暂存失败，断言「live 面零改动」。
+var wafBundleStage = atomicfile.Stage
 
 // planThreatFastWrites 预检威胁库条目并产出待写项：名称白名单（仅三个内置源
 // 名——含路径分隔符/`..`/绝对路径的 name 会逃出 wafDir）、重复名、空内容与

@@ -446,9 +446,13 @@ func logCleanupDetail(res RuntimeCleanupResult) string {
 // 执行）——不变量：本函数永不在保留期未知时删除任何文件。
 func taskLogsHousekeepingWithRetention(logFile string, months int, monthsErr error) TaskLogHousekeepingResult {
 	result := TaskLogHousekeepingResult{}
-	// tasks 根 + certjobs 子目录统一扫描（证书任务日志并入任务日志体系）
+	// tasks 根 + certjobs 子目录统一扫描（证书任务日志并入任务日志体系）。
+	// certjobs 目录必须与写入侧同源（CertJobLogDir）而不能按 logFile 再推导一次：
+	// 两条各自成立的推导在生产恰好重合，任何布局变更（日志根迁移/嵌入式把
+	// logFile 指向别处）都会让清理面与落盘目录错位——证书日志永不过期删除，
+	// 且与「目录尚未产生日志」同形，无任何告警。
 	dir := filepath.Join(filepath.Dir(logFile), "tasks")
-	certDir := filepath.Join(dir, "certjobs")
+	certDir := CertJobLogDir()
 	dirs := []string{dir, certDir}
 	type fileInfo struct {
 		path string
@@ -527,8 +531,12 @@ func taskLogsHousekeepingWithRetention(logFile string, months int, monthsErr err
 				if removed {
 					result.Deleted = append(result.Deleted, f.name)
 				}
-				continue
 			}
+			// certjobs 目录（或写入侧降级时的日志根，见 CertJobLogDir 的回退）
+			// 内只认证书任务日志文件：其余文件不属本清理面的保留期语义，交给
+			// 各自的清理链——否则降级形态下日志根里的应用/访问日志副本会被
+			// 按任务日志口径二次删除。
+			continue
 		}
 		removed, err := taskengine.RemoveTaskLogIfModifiedBefore(f.path, cutoff)
 		if err != nil {

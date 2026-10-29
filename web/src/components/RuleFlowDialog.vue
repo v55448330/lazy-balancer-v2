@@ -83,7 +83,9 @@
                 <div class="flow-kv-grid">
                   <div class="flow-kv"><span class="flow-kv-label">签发者</span><span class="flow-kv-value" :title="certInfo.issuer">{{ certInfo.issuer || '-' }}</span></div>
                   <div class="flow-kv"><span class="flow-kv-label">证书域名</span><span class="flow-kv-value" :title="certInfo.domains">{{ certInfo.domains || '-' }}</span></div>
-                  <div class="flow-kv"><span class="flow-kv-label">到期时间</span><span class="flow-kv-value">{{ certInfo.not_after || '-' }}</span></div>
+                  <!-- 到期时间与规则列表同口径（formatDate=配置时区换算）：后端 not_after 是
+                       UTC 墙钟串，直出会让弹框与列表相差一个时区偏移。 -->
+                  <div class="flow-kv"><span class="flow-kv-label">到期时间</span><span class="flow-kv-value">{{ formatDate(certInfo.not_after) || '-' }}</span></div>
                   <div class="flow-kv">
                     <span class="flow-kv-label">剩余天数</span>
                     <span class="flow-kv-value" :class="{ 'is-expired': certInfo.status === 'expired' }">
@@ -381,6 +383,7 @@ import { ElMessage } from 'element-plus'
 import DialogHeader from '@/components/DialogHeader.vue'
 import DialogSectionHeader from '@/components/DialogSectionHeader.vue'
 import { request } from '@/utils/api'
+import { formatDate } from '@/utils/date'
 import type { APIResponse } from '@/types'
 import type { RuleFlowPathRule } from '@/types/rules'
 import { hostPortKey } from '@/utils/upstreamKeys'

@@ -544,3 +544,45 @@ func TestSecurityEventsCRSExclusionIPIndex_matchesLegacyScan(t *testing.T) {
 		}
 	}
 }
+
+// 无引用形态的策略在加载期也会拿到已归并的合并集（inline 单源展开）：
+// ACL 索引的「原始条目数」口径必须仍取 inline 原始条目——归并会把同族前缀
+// 收进一条（203.0.113.1/32 ⊂ 203.0.113.0/24），条目数随归并缩水即失真。
+// 参考形态（带引用）仍取合并集，与逐事件判定同源。
+func TestSecurityEventsPolicyACLIndex_inlineOnlyKeepsRawEntryCount(t *testing.T) {
+	newClusterTestService(t)
+
+	inlineOnly := &models.SecurityPolicy{
+		ID:           1,
+		Name:         "inline-only",
+		IPACLEnabled: true,
+		IPACLMode:    "deny",
+		IPACLList:    `["203.0.113.1","203.0.113.0/24","198.51.100.7"]`,
+	}
+	resolvePolicyIPListRefs([]*models.SecurityPolicy{inlineOnly}, nil)
+	if len(inlineOnly.MergedACLList) != 2 {
+		t.Fatalf("合并集=%v, want 2 条（1/32 被 /24 覆盖并归并）", inlineOnly.MergedACLList)
+	}
+	idx := securityEventsPolicyACLIndex(inlineOnly)
+	if !idx.OK || !idx.NonEmpty {
+		t.Fatalf("idx=%+v, want OK 且非空", idx)
+	}
+	if idx.Entries != 3 {
+		t.Fatalf("Entries=%d, want 3（原始条目数，不得取归并后的 2）", idx.Entries)
+	}
+
+	// 引用形态：条目数与前缀集取合并集（与逐事件判定同源）。
+	withRefs := &models.SecurityPolicy{
+		ID:            2,
+		Name:          "refs",
+		IPACLEnabled:  true,
+		IPACLMode:     "deny",
+		IPACLList:     `[]`,
+		IPACLListRefs: `[7]`,
+		MergedACLList: []string{"198.51.100.0/24"},
+	}
+	refsIdx := securityEventsPolicyACLIndex(withRefs)
+	if !refsIdx.OK || refsIdx.Entries != 1 {
+		t.Fatalf("引用形态 idx=%+v, want Entries=1（合并集）", refsIdx)
+	}
+}

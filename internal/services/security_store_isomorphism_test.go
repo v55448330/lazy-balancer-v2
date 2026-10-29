@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -360,5 +362,48 @@ func TestLoadSecurityPolicyContext_toleratesNullBlockPageContent(t *testing.T) {
 		t.Fatalf("block page 90 missing from context")
 	} else if content != "" {
 		t.Fatalf("block page 90 content = %q, want COALESCE 归一化后的 %q", content, "")
+	}
+}
+
+// 策略整行的列清单必须单源：单主键加载（scanSecurityPolicyByID）与批量预载
+// （loadSecurityPolicyContext）曾各持一份 32 列 SELECT+Scan，列序在
+// ip_whitelist / ip_whitelist_enabled 处对调——两路径字段级一致的契约没有
+// 任何机械防线，新增/重排列只改一侧即静默错位。
+// 本守卫：策略行 SELECT 只允许在 securityPolicyRowColumns 常量里出现一次。
+func TestSecurityPolicyRowColumns_singleSourceSelect(t *testing.T) {
+	// 标记取「整行 SELECT 独有」的相邻列对：全表 dump（cluster_snapshot，带 AS
+	// 别名）与事件摄取的部分投影（securityevents，19 列子集）是另外两种形状，
+	// 不属于本守卫口径。
+	const marker = "COALESCE(waf_check_response,0), COALESCE(log_request_body,0)"
+	files, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var offenders []string
+	for _, name := range files {
+		if strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		data, readErr := os.ReadFile(name)
+		if readErr != nil {
+			t.Fatalf("读取 %s 失败: %v", name, readErr)
+		}
+		if n := strings.Count(string(data), marker); n > 0 {
+			offenders = append(offenders, fmt.Sprintf("%s(%d)", name, n))
+		}
+	}
+	if len(offenders) != 1 || !strings.HasPrefix(offenders[0], "security.go(") || offenders[0] != "security.go(1)" {
+		t.Fatalf("策略行 SELECT 列清单散落多份: %v——必须只由 securityPolicyRowColumns 单源提供（scanSecurityPolicyRow 统一扫描）", offenders)
+	}
+
+	// 列序单源：白名单开关列必须排在白名单 JSON 列之前（与 scanSecurityPolicyRow
+	// 的 Scan 目标一致），防止「改常量不改 Scan」的错位。
+	enabledIdx := strings.Index(securityPolicyRowColumns, "COALESCE(ip_whitelist_enabled,1)")
+	whitelistIdx := strings.Index(securityPolicyRowColumns, "COALESCE(ip_whitelist,'[]')")
+	if enabledIdx < 0 || whitelistIdx < 0 {
+		t.Fatalf("列常量为空或缺列: %q", securityPolicyRowColumns)
+	}
+	if enabledIdx > whitelistIdx {
+		t.Fatal("列序漂移：ip_whitelist_enabled 必须在 ip_whitelist 之前（与 scanSecurityPolicyRow 的 Scan 目标一致）")
 	}
 }

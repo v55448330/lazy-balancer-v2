@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
 	"lazy-balancer-v2/internal/netutil"
 )
@@ -145,10 +146,14 @@ func (s *ClusterService) ValidateServiceControlTicket(ctx context.Context, ticke
 		return fmt.Errorf("开始服务控制票据事务: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	var isMaster bool
+	// 角色走 db.IsMasterNode（单源谓词 + 接受 *sql.Tx），凭证在同一事务内另读。
+	isMaster, err := db.IsMasterNode(ctx, tx)
+	if err != nil {
+		return fmt.Errorf("读取从节点凭证: %w", err)
+	}
 	var clusterToken string
 	var registrationID int
-	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(is_master,1),COALESCE(cluster_token,''),COALESCE(registration_id,0) FROM global_config WHERE id=1`).Scan(&isMaster, &clusterToken, &registrationID); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(cluster_token,''),COALESCE(registration_id,0) FROM global_config WHERE id=1`).Scan(&clusterToken, &registrationID); err != nil {
 		return fmt.Errorf("读取从节点凭证: %w", err)
 	}
 	if isMaster || clusterToken == "" {

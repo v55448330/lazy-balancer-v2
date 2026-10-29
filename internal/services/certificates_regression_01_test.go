@@ -108,10 +108,10 @@ func TestRenewalScan_queriesReturnErrorOnBrokenSchema(t *testing.T) {
 	}
 
 	s := &CertificateService{}
-	if _, _, err := s.CheckExpiration(); err == nil {
+	if _, _, err := s.CheckExpiration(context.Background()); err == nil {
 		t.Fatal("CheckExpiration 在 cert_jobs 缺失时返回 nil error（吞错）")
 	}
-	if _, _, err := s.checkFailedFirstIssuance(3); err == nil {
+	if _, _, err := s.checkFailedFirstIssuance(context.Background(), 3); err == nil {
 		t.Fatal("checkFailedFirstIssuance 在 cert_jobs 缺失时返回 nil error（吞错）")
 	}
 }
@@ -129,7 +129,7 @@ func TestRenewalScan_rowScanFailuresReturnSkippedCount(t *testing.T) {
 	}
 
 	s := &CertificateService{}
-	jobs, skipped, err := s.CheckExpiration()
+	jobs, skipped, err := s.CheckExpiration(context.Background())
 	if err != nil {
 		t.Fatalf("CheckExpiration err=%v（逐行畸形不应升级为查询错误）", err)
 	}

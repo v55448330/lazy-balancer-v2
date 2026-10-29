@@ -97,3 +97,16 @@ func TestWafFileWriters_crs_tree_swap_blocks_while_waf_file_lock_held(t *testing
 		return m.downloadAndInstall(context.Background(), "v4.15.0")
 	})
 }
+
+// Given wafFileMu 被预持（模拟并发的 lbbak 导入 / 集群同步文件相位）。
+// When 启动对账的崩溃残留收敛执行（快照目录清理 / 点前缀 .conf 清理 / 孤儿威胁
+// 名单删除——三项都直接改写 live 文件面）。
+// Then 必须阻塞至锁释放：对账在锁外删 live 文件会与在途导入/同步的「写入→
+// 提交」窗口交错，删掉对方刚 rename 的产物或读到半完成的树。
+func TestWafFileReconcile_crashLeftovers_block_while_waf_file_lock_held(t *testing.T) {
+	setupIsolatedDB(t)
+	probeBlocksUnderWafFileLock(t, "崩溃残留对账（快照/点前缀规则/孤儿威胁名单）", func() error {
+		ReconcileWafFileCrashLeftovers()
+		return nil
+	})
+}

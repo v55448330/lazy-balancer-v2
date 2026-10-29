@@ -1666,47 +1666,31 @@ func (s *CertificateService) recoverCertJobs(ctx context.Context) {
 // 但迭代错误表明结果集不完整，按失败处理。
 // ctx 取消即中止（返回包装后的取消错误）；每个重建写点前另经
 // certReconcileWriteGate 复核节点角色（扫描期降级不得继续写盘）。
+//
+// 判据口径（与启动物化**有意不同**，不得据此推断两侧等价）：
+//   - 行选择：与 MaterializeAllCertsFromDB 同源（latestApplicableACMECertMaterials），
+//     每规则取最新且域名适用的一行；
+//   - 写判据：本函数**不比对内容**——只在证书/私钥文件缺失时重建，文件存在即
+//     跳过，即使磁盘内容与库内 PEM 不一致（内容修复由 apply/导入的物化路径与
+//     启动物化负责，它们的判据是内容 + 权限）。对账的职责是「文件缺失自愈」，
+//     每 6h 无条件重写全部证书对会造成无谓写放大。
 func reconcileMissingCertFiles(ctx context.Context, dbh *sql.DB) (int, error) {
-	// 多行规则必须按 certJobRuleApplicable 同语义过滤——
-	// 否则灾备重建内容取决于扫描顺序,可能重建旧域证书且无自愈。
-	rows, err := dbh.QueryContext(ctx, `SELECT j.rule_id, j.domain, COALESCE(j.cert_pem,''), COALESCE(j.key_pem,''), COALESCE(r.domain,'') AS rule_domain
-		FROM cert_jobs j
-		JOIN lb_rules r ON r.caddy_id=j.rule_id
-		WHERE `+CertJobMaterialPredicateSQL("j")+`
-		  AND r.enabled=1 AND r.enable_tls=1 AND r.tls_source='acme_dns'
-		ORDER BY j.rule_id, j.updated_at DESC, j.id DESC`)
-	if err != nil {
-		Logf("error", "cert reconcile: query issued certificates failed: %v", err)
-		return 0, fmt.Errorf("查询已签发证书任务: %w", err)
+	materials, scanFailures, selectErr := latestApplicableACMECertMaterials(ctx, dbh, "cert reconcile")
+	if selectErr != nil {
+		Logf("error", "cert reconcile: query issued certificates failed: %v", selectErr)
+		return 0, fmt.Errorf("查询已签发证书任务: %w", selectErr)
 	}
-	defer rows.Close()
 	rebuilt := 0
 	// 逐行物化失败聚合器：健康行继续重建，失败行让本轮返回错误（失败终态）。
 	var actionErr error
-	// 单行读失败与逐行物化失败同权（同族 rescane/requeueWaitingCAJobs 口径）：
+	// 单行读失败与逐行物化失败同权（同族 rescan/requeueWaitingCAJobs 口径）：
 	// 只写应用日志时本轮仍报「对账完成」，而某行根本没被检查过——运维从任务
 	// 监控看不出「本轮有行未检查」。
-	scanFailures := 0
-	seenRules := make(map[string]bool)
-	for rows.Next() {
-		var ruleID, domain, certPEM, keyPEM, ruleDomain string
-		if err := rows.Scan(&ruleID, &domain, &certPEM, &keyPEM, &ruleDomain); err != nil {
-			Logf("error", "cert reconcile: scan certificate row failed: %v", err)
-			scanFailures++
-			actionErr = errors.Join(actionErr, fmt.Errorf("读取待对账证书任务行: %w", err))
-			continue
-		}
-		// 同 rule_id 多行只取首个**适用**行（ORDER BY updated_at DESC）。
-		// 先 seen 后适用性会让最新旧域行短路较旧的适用行。
-		if seenRules[ruleID] {
-			continue
-		}
-		// 域名适用性校验——任务签发域名与规则当前域名不一致时重建
-		// 会写入不匹配证书。
-		if !certJobRuleApplicable(true, ruleDomain, domain) {
-			continue
-		}
-		seenRules[ruleID] = true
+	if scanFailures > 0 {
+		actionErr = errors.Join(actionErr, fmt.Errorf("读取待对账证书任务行: %d 行读取失败（本轮未检查）", scanFailures))
+	}
+	for _, material := range materials {
+		ruleID, domain, certPEM, keyPEM := material.RuleID, material.Domain, material.CertPEM, material.KeyPEM
 		certPath, keyPath := CertFilePaths(ruleID)
 		if certPath == "" {
 			continue
@@ -1738,13 +1722,6 @@ func reconcileMissingCertFiles(ctx context.Context, dbh *sql.DB) (int, error) {
 		}
 		rebuilt++
 		Logf("info", "证书文件缺失，已从数据库重建: %s", domain)
-	}
-	if err := rows.Err(); err != nil {
-		Logf("error", "cert reconcile: iterate issued certificates failed: %v", err)
-		if rebuilt > 0 {
-			RecordAuditLog("system", "重建", "证书文件", FormatAuditDetail(AuditSourcePart("runtime_reconcile"), fmt.Sprintf("重建 %d 个证书文件", rebuilt)), "")
-		}
-		return rebuilt, fmt.Errorf("遍历已签发证书任务: %w", err)
 	}
 	if rebuilt > 0 {
 		RecordAuditLog("system", "重建", "证书文件", FormatAuditDetail(AuditSourcePart("runtime_reconcile"), fmt.Sprintf("重建 %d 个证书文件", rebuilt)), "")
@@ -2354,8 +2331,8 @@ func (s *CertificateService) renewExpiringCertificates(ctx context.Context) erro
 	// CheckExpiration locks s.mu internally; the loop below only touches the
 	// DB and the queue, so holding s.mu here would deadlock the renewal.
 	maxAttempts := getCertRenewalAttempts()
-	jobs, skippedExpiring, scanErr := s.CheckExpiration()
-	firstIssuance, skippedFirstIssuance, firstErr := s.checkFailedFirstIssuance(maxAttempts)
+	jobs, skippedExpiring, scanErr := s.CheckExpiration(ctx)
+	firstIssuance, skippedFirstIssuance, firstErr := s.checkFailedFirstIssuance(ctx, maxAttempts)
 	if scanErr != nil || firstErr != nil {
 		// 候选查询/遍历失败时结果集不可信，
 		// 摘要行必须如实报「扫描失败」并终止本轮（错误细节已入应用日志），
@@ -2365,6 +2342,13 @@ func (s *CertificateService) renewExpiringCertificates(ctx context.Context) erro
 			detail = firstErr
 		} else if firstErr != nil {
 			detail = errors.Join(scanErr, firstErr)
+		}
+		// 取消/超时不是故障：导入排空（PauseScheduling → CancelInFlightRuns →
+		// WaitInFlightRuns）与停机都会取消 ctx，摘要必须与「查询/遍历出错」区分，
+		// 否则一次正常排空在任务监控里呈现为续期扫描失败。
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			TaskLogf("cert-renewal-scan", "scan", "续期中止：扫描阶段已取消（%v），本轮未入队任何任务", ctxErr)
+			return detail
 		}
 		TaskLogf("cert-renewal-scan", "scan", "扫描失败：续期候选查询/遍历出错（%v），本轮未执行续期，下一周期重试", detail)
 		return detail
@@ -2729,12 +2713,20 @@ func warnRenewalWindowNotExecutable(ruleID string, windowDays int, effective, li
 // 逐行 Scan 失败计数返回（scanSkipped），
 // 迭代级 rows.Err() 显式上抛——此前两者都只进应用日志甚至完全静默，巡检
 // 摘要把失败轮伪装成「无候选」。
-func scanRenewalCandidates(rows *sql.Rows, days int, warnPrefix string) (jobs []models.CertJob, scanSkipped int, err error) {
+func scanRenewalCandidates(ctx context.Context, rows *sql.Rows, days int, warnPrefix string) (jobs []models.CertJob, scanSkipped int, err error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	now := time.Now()
 	selectedByRule := make(map[string]CertificateSelection)
 	selectionLoaded := make(map[string]bool)
 	selectionFailed := make(map[string]bool)
 	for rows.Next() {
+		// 逐行取消检查：候选集在千行规模下逐行做域名规范化 + 逐规则证书选择，
+		// 取消只在循环结束才生效等于让导入排空等整轮扫描（见 CheckExpiration）。
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return jobs, scanSkipped, fmt.Errorf("%s: %w", warnPrefix, ctxErr)
+		}
 		var j models.CertJob
 		var ruleDomain string
 		if err := rows.Scan(
@@ -2757,7 +2749,7 @@ func scanRenewalCandidates(rows *sql.Rows, days int, warnPrefix string) (jobs []
 		}
 		if !selectionLoaded[j.RuleID] {
 			var err error
-			selection, selected, err = selectStoredRuleCertificate(context.Background(), j.RuleID, ruleDomain, now)
+			selection, selected, err = selectStoredRuleCertificate(ctx, j.RuleID, ruleDomain, now)
 			if err != nil {
 				selectionFailed[j.RuleID] = true
 				// 与相邻 Scan 失败同口径计数：读失败的行被移出候选集后，
@@ -2798,9 +2790,15 @@ func scanRenewalCandidates(rows *sql.Rows, days int, warnPrefix string) (jobs []
 	return jobs, scanSkipped, nil
 }
 
-func (s *CertificateService) CheckExpiration() ([]models.CertJob, int, error) {
+// CheckExpiration 返回临期/待重试候选。ctx 由续期巡检的 RunContext 透传并
+// 贯穿**整个**装载阶段（查询 + 逐候选证书选择），取消即中止——否则导入排空的
+// WaitInFlightRuns 要等最长 6h 的候选装载跑完才返回。
+func (s *CertificateService) CheckExpiration(ctx context.Context) ([]models.CertJob, int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if ctx == nil {
+		ctx = context.Background()
+	}
 
 	// 告警 + 非正回退语义收敛于 GetCertRenewalDays。
 	days := GetCertRenewalDays()
@@ -2808,7 +2806,7 @@ func (s *CertificateService) CheckExpiration() ([]models.CertJob, int, error) {
 	// 历史/导入的 issued + NULL expires_at 也必须进入候选扫描。
 	// scanRenewalCandidates 会按 PEM 的真实 NotAfter 跳过仍在窗口外的证书；
 	// 临期或材料缺失的行则进入续期，不再因 NULL 永久失联。
-	rows, err := db.DB.Query(`
+	rows, err := db.DB.QueryContext(ctx, `
 		SELECT j.id, j.rule_id, j.domain, j.status, j.expires_at, COALESCE(j.ca_provider_id,0), COALESCE(j.renewal_attempts,0), j.ca_available_after, COALESCE(j.last_error_code,''),r.domain
 		FROM cert_jobs j
 		JOIN lb_rules r ON r.caddy_id=j.rule_id
@@ -2830,7 +2828,7 @@ func (s *CertificateService) CheckExpiration() ([]models.CertJob, int, error) {
 	}
 	defer rows.Close()
 
-	return scanRenewalCandidates(rows, days, "cert expiration check")
+	return scanRenewalCandidates(ctx, rows, days, "cert expiration check")
 }
 
 const firstIssuanceRetryCooldownMinutes = 30
@@ -2839,14 +2837,17 @@ const firstIssuanceRetryCooldownMinutes = 30
 // 已过冷却期且未达最大重试次数的证书任务，供续期巡检自动重试。规则筛选与
 // 已有证书判读逻辑与 CheckExpiration 保持一致。
 // 查询/遍历失败显式上抛（同 CheckExpiration），不得吞成「无候选」。
-func (s *CertificateService) checkFailedFirstIssuance(maxAttempts int) ([]models.CertJob, int, error) {
+func (s *CertificateService) checkFailedFirstIssuance(ctx context.Context, maxAttempts int) ([]models.CertJob, int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if ctx == nil {
+		ctx = context.Background()
+	}
 
 	// 告警 + 非正回退语义收敛于 GetCertRenewalDays。
 	days := GetCertRenewalDays()
 
-	rows, err := db.DB.Query(`
+	rows, err := db.DB.QueryContext(ctx, `
 		SELECT j.id, j.rule_id, j.domain, j.status, j.expires_at, COALESCE(j.ca_provider_id,0), COALESCE(j.renewal_attempts,0), j.ca_available_after, COALESCE(j.last_error_code,''),r.domain
 		FROM cert_jobs j
 		JOIN lb_rules r ON r.caddy_id=j.rule_id
@@ -2863,32 +2864,14 @@ func (s *CertificateService) checkFailedFirstIssuance(maxAttempts int) ([]models
 	}
 	defer rows.Close()
 
-	return scanRenewalCandidates(rows, days, "failed first-issuance check")
+	return scanRenewalCandidates(ctx, rows, days, "failed first-issuance check")
 }
 
 // selectStoredRuleCertificate 是「规则现有证书选择」的入口（测试缝：var 而非
 // 函数声明——注入读失败以验证续期扫描的失败行归因；生产恒为本实现）。
 var selectStoredRuleCertificate = func(ctx context.Context, ruleID, ruleDomains string, now time.Time) (CertificateSelection, bool, error) {
-	rows, err := db.DB.QueryContext(ctx, `SELECT id,domain,status,COALESCE(cert_pem,''),COALESCE(key_pem,''),
-		COALESCE(julianday(COALESCE(updated_at,created_at)),0)
-		FROM cert_jobs WHERE rule_id=? AND `+CertJobMaterialPredicateSQL(""), ruleID)
+	candidates, err := loadCertificateCandidates(ctx, db.DB, ruleID, CertJobMaterialPredicateSQL(""))
 	if err != nil {
-		return CertificateSelection{}, false, err
-	}
-	defer rows.Close()
-	candidates := make([]CertificateCandidate, 0)
-	for rows.Next() {
-		var candidate CertificateCandidate
-		if err := rows.Scan(&candidate.ID, &candidate.Domain, &candidate.Status, &candidate.CertPEM, &candidate.KeyPEM, &candidate.UpdatedAt); err != nil {
-			return CertificateSelection{}, false, err
-		}
-		// 候选装载统一预解析 Leaf，选择走快路径。
-		if candidate.Status != "disabled" {
-			candidate.Leaf = ParseCertificateLeaf(candidate.CertPEM, candidate.KeyPEM)
-		}
-		candidates = append(candidates, candidate)
-	}
-	if err := rows.Err(); err != nil {
 		return CertificateSelection{}, false, err
 	}
 	selection, selected := selectCertificate(candidates, ruleDomains, now)

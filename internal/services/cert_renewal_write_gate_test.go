@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/taskengine"
@@ -155,4 +157,71 @@ func countCertJobMaxAttemptsAuditRows(t *testing.T) int {
 		t.Fatalf("count audit rows: %v", err)
 	}
 	return n
+}
+
+// 候选装载阶段必须可取消：ctx 由引擎 RunContext 透传（配置导入/还原的
+// PauseScheduling → CancelInFlightRuns → WaitInFlightRuns 只有在扫描的**每个**
+// 阶段消费 ctx 时才不会被最长 6h 的候选装载推迟）。此前 ctx 只作用于写循环，
+// 装载阶段对取消完全无感：导入排空要等整轮 SQL 扫描 + 逐规则证书选择跑完才
+// 能返回。本用例在候选装载的中途取消，断言装载立即停止（第二行不再请求证书
+// 选择）且一行都未入队。
+func TestCertRenewalScan_canceledDuringCandidateLoadStopsScan(t *testing.T) {
+	_, database := newClusterTestService(t)
+	ResetCAQueueManagerForTest()
+	InitCAQueueManager(func() error { return nil })
+	GetCAQueueManager().Start()
+	t.Cleanup(ResetCAQueueManagerForTest)
+	oldLogDir := taskengine.LogDir()
+	taskengine.SetLogDir(filepath.Join(t.TempDir(), "tasks"))
+	t.Cleanup(func() { taskengine.SetLogDir(oldLogDir) })
+	// 两条临期任务：第一条的证书选择回调里取消 ctx（导入排空/停机落在装载窗口）。
+	for _, ruleID := range []string{"lb_cancel_load_a", "lb_cancel_load_b"} {
+		if _, err := database.Exec(`INSERT INTO lb_rules (caddy_id,name,domain,protocol,listen_port,enabled,enable_tls,tls_source)
+			VALUES (?,?,?,'http',8080,1,1,'acme_dns')`, ruleID, ruleID, ruleID+".example.com"); err != nil {
+			t.Fatalf("seed rule %s: %v", ruleID, err)
+		}
+		if _, err := database.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,expires_at,ca_provider_id)
+			VALUES (?,?, 'issued', datetime('now','+1 day'),1)`, ruleID, ruleID+".example.com"); err != nil {
+			t.Fatalf("seed job %s: %v", ruleID, err)
+		}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	original := selectStoredRuleCertificate
+	t.Cleanup(func() { selectStoredRuleCertificate = original })
+	var selectionCalls int32
+	selectStoredRuleCertificate = func(context.Context, string, string, time.Time) (CertificateSelection, bool, error) {
+		atomic.AddInt32(&selectionCalls, 1)
+		cancel() // 装载第一行时被取消
+		return CertificateSelection{}, false, nil
+	}
+
+	// When
+	resetCertificateServiceForTest(t)
+	err := NewCertificateService().renewExpiringCertificates(ctx)
+
+	// Then：取消错误上抛，装载在取消后立即停止（第二行不再选择），零入队。
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err=%v, want 取消错误（候选装载阶段必须消费 ctx）", err)
+	}
+	if got := atomic.LoadInt32(&selectionCalls); got != 1 {
+		t.Fatalf("证书选择调用 %d 次, want 1（取消后装载必须早退，不得扫完整个候选集）", got)
+	}
+	rows, err := database.Query("SELECT status FROM cert_jobs WHERE rule_id LIKE 'lb_cancel_load_%'")
+	if err != nil {
+		t.Fatalf("read job statuses: %v", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var status string
+		if err := rows.Scan(&status); err != nil {
+			t.Fatalf("scan status: %v", err)
+		}
+		if status != "issued" {
+			t.Fatalf("status=%q, want issued（取消轮不得入队/写库）", status)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate statuses: %v", err)
+	}
 }

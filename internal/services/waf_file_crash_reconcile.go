@@ -56,13 +56,20 @@ func wafFileStartupWritesAllowed(label string) bool {
 // 产物晚于启动时刻，不会被误收敛。第 2、3 项改 DB/执行面引用，与 CRS 对账
 // 同口径只在主节点执行；第 1、4 项是纯节点本地磁盘清理，任何角色都做。
 func ReconcileWafFileCrashLeftovers() {
-	pruneStaleWafSnapshotDirs()
-	pruneUnmanagedHiddenCRSConf()
-	if !wafFileStartupWritesAllowed("WAF 文件崩溃残留对账") {
-		return
-	}
-	reconcileIP2RegionVersionFromDiskMarker()
-	pruneOrphanThreatFiles()
+	// 四项都直接改写 live 文件面（快照目录/点前缀 .conf/孤儿威胁名单），与
+	// 在途导入/集群同步的「写入→提交」窗口共用同一批文件：锁外删除会删掉
+	// 对方刚 rename 的产物，或读到半完成的树。三项均幂等，重复对账无副作用。
+	// 锁序：本函数只在启动/手动重载路径调用，调用方不持 CaddyOpLock（与导入
+	// 路径同向：排空→wafFileMu），不构成 AB-BA。
+	withWafFileLock(func() {
+		pruneStaleWafSnapshotDirs()
+		pruneUnmanagedHiddenCRSConf()
+		if !wafFileStartupWritesAllowed("WAF 文件崩溃残留对账") {
+			return
+		}
+		reconcileIP2RegionVersionFromDiskMarker()
+		pruneOrphanThreatFiles()
+	})
 }
 
 // pruneStaleWafSnapshotDirs 删除上一次运行遗留的导入快照目录。

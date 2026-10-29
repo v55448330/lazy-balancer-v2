@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"strconv"
 	"testing"
 	"time"
@@ -37,7 +38,7 @@ func TestCheckExpiration_lifetimeJustAboveWindowDoesNotRenewDaily(t *testing.T) 
 			seedRenewalWindowJob(t, database, "lb_blind_"+suffix, "blind-"+suffix+".example.com",
 				notBefore, notBefore.Add(lifetime))
 
-			jobs, skipped, err := NewCertificateService().CheckExpiration()
+			jobs, skipped, err := NewCertificateService().CheckExpiration(context.Background())
 			if err != nil {
 				t.Fatalf("check expiration: %v", err)
 			}

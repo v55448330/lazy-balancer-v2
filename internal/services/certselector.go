@@ -1,8 +1,10 @@
 package services
 
 import (
+	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"database/sql"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -25,6 +27,89 @@ type CertificateCandidate struct {
 type CertificateSelection struct {
 	Candidate   CertificateCandidate
 	Certificate *x509.Certificate
+}
+
+// CertificateCandidateColumnList 是 cert_jobs 候选装载的规范列序单源（顺序即
+// Scan 顺序）：id, domain, status, cert_pem, key_pem, updated_at(julianday)。
+// 所有候选装载（续期扫描、证书信息端点、渲染补查与批量渲染、配置巡检）都必须
+// 用本常量拼 SQL——列序在某一处漂移会让 Scan 静默错位（PEM 落进 status 之类），
+// 且只有该入口出问题。带 rule_id 前缀的批量查询写作 "rule_id, " + 本常量。
+const CertificateCandidateColumnList = `id, domain, status, COALESCE(cert_pem, ''), COALESCE(key_pem, ''), COALESCE(julianday(COALESCE(updated_at, created_at)), 0)`
+
+// NewCertificateCandidate 装配一行 cert_jobs 候选并统一 Leaf 预解析策略：
+// disabled 行不解析（不参与选择，解析纯属浪费），其余行解析一次供
+// selectCertificate 走快路径并与过期回退共用。leafCache 非空时按 PEM 内容复用
+// 本轮内的解析结果（同一证书挂在多条规则下的批量装载、60s 巡检节拍）；传 nil
+// 表示不缓存。
+func NewCertificateCandidate(id int64, domain, status, certPEM, keyPEM string, updatedAt float64, leafCache map[string]*x509.Certificate) CertificateCandidate {
+	candidate := CertificateCandidate{ID: id, Domain: domain, Status: status, CertPEM: certPEM, KeyPEM: keyPEM, UpdatedAt: updatedAt}
+	if status == "disabled" {
+		return candidate
+	}
+	leafKey := certPEM + "\x00" + keyPEM
+	if leafCache != nil {
+		if leaf, cached := leafCache[leafKey]; cached {
+			candidate.Leaf = leaf
+			return candidate
+		}
+	}
+	candidate.Leaf = ParseCertificateLeaf(certPEM, keyPEM)
+	if leafCache != nil {
+		leafCache[leafKey] = candidate.Leaf
+	}
+	return candidate
+}
+
+// certJobCandidateQuerier 是候选装载的查询面：*sql.DB / *sql.Tx / caddyConfigStore
+// 均满足 Query；额外提供 QueryContext 者（*sql.DB/*sql.Tx）优先使用——续期扫描
+// 的取消必须能作用到查询本身（见 CheckExpiration）。
+type certJobCandidateQuerier interface {
+	Query(query string, args ...any) (*sql.Rows, error)
+}
+
+type certJobCandidateContextQuerier interface {
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+}
+
+// loadCertificateCandidates 按规则装载 ACME 证书候选（列序/行装配/预解析单源）。
+// predicateSQL 由调用方给出（材料谓词 CertJobMaterialPredicateSQL，或需保留
+// disabled 行的 certJobCandidatePredicateSQL）；错误原样上抛——语义由调用方
+// 决定：渲染补查记 warn 返 nil、证书信息端点 500、续期扫描计入扫描失败。
+func loadCertificateCandidates(ctx context.Context, q certJobCandidateQuerier, ruleID, predicateSQL string) ([]CertificateCandidate, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	query := `SELECT ` + CertificateCandidateColumnList + `
+		FROM cert_jobs
+		WHERE rule_id = ? AND ` + predicateSQL + `
+		ORDER BY updated_at DESC, id DESC`
+	var (
+		rows *sql.Rows
+		err  error
+	)
+	if ctxQuerier, ok := q.(certJobCandidateContextQuerier); ok {
+		rows, err = ctxQuerier.QueryContext(ctx, query, ruleID)
+	} else {
+		rows, err = q.Query(query, ruleID)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	candidates := make([]CertificateCandidate, 0)
+	for rows.Next() {
+		var id int64
+		var domain, status, certPEM, keyPEM string
+		var updatedAt float64
+		if scanErr := rows.Scan(&id, &domain, &status, &certPEM, &keyPEM, &updatedAt); scanErr != nil {
+			return nil, scanErr
+		}
+		candidates = append(candidates, NewCertificateCandidate(id, domain, status, certPEM, keyPEM, updatedAt, nil))
+	}
+	if rowsErr := rows.Err(); rowsErr != nil {
+		return nil, rowsErr
+	}
+	return candidates, nil
 }
 
 // ParseCertificateLeaf 解析候选证书为 Leaf。tls.X509KeyPair 会同时校验

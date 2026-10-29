@@ -217,9 +217,12 @@ func (s *SyncService) applySnapshot(ctx context.Context, snapshot models.Cluster
 	// 任何未来新增的 apply 调用方也在写库前中止）。零值守卫=直接调用
 	// applySnapshot 的测试路径，跳过。
 	if guard := s.applyGuard; guard.MasterURL != "" || guard.Token != "" {
-		var isMaster bool
+		isMaster, roleErr := db.IsMasterNode(ctx, tx)
+		if roleErr != nil {
+			return fmt.Errorf("复核同步角色: %w", roleErr)
+		}
 		var masterURL, token string
-		if err := tx.QueryRowContext(ctx, `SELECT COALESCE(is_master,1), COALESCE(master_url,''), COALESCE(cluster_token,'') FROM global_config WHERE id=1`).Scan(&isMaster, &masterURL, &token); err != nil {
+		if err := tx.QueryRowContext(ctx, `SELECT COALESCE(master_url,''), COALESCE(cluster_token,'') FROM global_config WHERE id=1`).Scan(&masterURL, &token); err != nil {
 			return fmt.Errorf("复核同步角色: %w", err)
 		}
 		if isMaster || masterURL != guard.MasterURL || token != guard.Token {
@@ -232,7 +235,7 @@ func (s *SyncService) applySnapshot(ctx context.Context, snapshot models.Cluster
 	if snapshot.MasterSyncSwitches != nil {
 		if _, err := tx.ExecContext(ctx, `UPDATE global_config SET
 			sync_users=1, sync_rules=?, sync_security=?
-			WHERE id=1 AND COALESCE(is_master,1)=0`,
+			WHERE id=1 AND `+slaveRoleConditionSQL,
 			snapshot.MasterSyncSwitches.Rules, snapshot.MasterSyncSwitches.Security); err != nil {
 			return fmt.Errorf("镜像同步开关: %w", err)
 		}
@@ -255,7 +258,7 @@ func (s *SyncService) applySnapshot(ctx context.Context, snapshot models.Cluster
 			return fmt.Errorf("读取本节点注册编号: %w", err)
 		}
 		if site, ok := snapshot.NodeSites[registrationID]; ok {
-			if _, err := tx.ExecContext(ctx, `UPDATE global_config SET server_map_lat=?, server_map_lon=? WHERE id=1 AND COALESCE(is_master,1)=0`, site.ServerMapLat, site.ServerMapLon); err != nil {
+			if _, err := tx.ExecContext(ctx, `UPDATE global_config SET server_map_lat=?, server_map_lon=? WHERE id=1 AND `+slaveRoleConditionSQL, site.ServerMapLat, site.ServerMapLon); err != nil {
 				return fmt.Errorf("应用本节点站点坐标: %w", err)
 			}
 		}
@@ -885,7 +888,7 @@ func replaceSnapshotTx(ctx context.Context, tx *sql.Tx, snapshot models.ClusterS
 			return err
 		}
 	} else if snapshot.BasicSettings.SyncInterval != nil {
-		if _, err := tx.ExecContext(ctx, `UPDATE global_config SET sync_interval=? WHERE id=1 AND COALESCE(is_master,1)=0`, normalizeSyncInterval(*snapshot.BasicSettings.SyncInterval)); err != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE global_config SET sync_interval=? WHERE id=1 AND `+slaveRoleConditionSQL, normalizeSyncInterval(*snapshot.BasicSettings.SyncInterval)); err != nil {
 			return fmt.Errorf("写入同步间隔: %w", err)
 		}
 	}

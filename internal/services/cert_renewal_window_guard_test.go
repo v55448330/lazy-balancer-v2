@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"database/sql"
 	"testing"
 	"time"
@@ -42,7 +43,7 @@ func TestCheckExpiration_skipsRenewalWindowCoveringCertificateLifetime(t *testin
 		seedRenewalWindowJob(t, database, "lb_window_90", "window90.example.com",
 			now.Add(-time.Hour), now.Add(88*24*time.Hour-time.Hour))
 
-		jobs, _, err := NewCertificateService().CheckExpiration()
+		jobs, _, err := NewCertificateService().CheckExpiration(context.Background())
 		if err != nil {
 			t.Fatalf("check expiration: %v", err)
 		}
@@ -57,7 +58,7 @@ func TestCheckExpiration_skipsRenewalWindowCoveringCertificateLifetime(t *testin
 		seedRenewalWindowJob(t, database, "lb_window_30", "window30.example.com",
 			now.Add(-time.Hour), now.Add(19*24*time.Hour))
 
-		jobs, _, err := NewCertificateService().CheckExpiration()
+		jobs, _, err := NewCertificateService().CheckExpiration(context.Background())
 		if err != nil {
 			t.Fatalf("check expiration: %v", err)
 		}
@@ -74,7 +75,7 @@ func TestCheckExpiration_skipsRenewalWindowCoveringCertificateLifetime(t *testin
 		seedRenewalWindowJob(t, database, "lb_window_protect", "windowprotect.example.com",
 			now.Add(-19*24*time.Hour), now.Add(24*time.Hour))
 
-		jobs, _, err := NewCertificateService().CheckExpiration()
+		jobs, _, err := NewCertificateService().CheckExpiration(context.Background())
 		if err != nil {
 			t.Fatalf("check expiration: %v", err)
 		}
@@ -95,7 +96,7 @@ func TestCheckExpiration_skipsRenewalWindowCoveringCertificateLifetime(t *testin
 		seedRenewalWindowJob(t, database, "lb_window_grace_in", "windowgracein.example.com",
 			notAfter.Add(-80*24*time.Hour), notAfter)
 
-		jobs, _, err := NewCertificateService().CheckExpiration()
+		jobs, _, err := NewCertificateService().CheckExpiration(context.Background())
 		if err != nil {
 			t.Fatalf("check expiration: %v", err)
 		}
@@ -111,7 +112,7 @@ func TestCheckExpiration_skipsRenewalWindowCoveringCertificateLifetime(t *testin
 		seedRenewalWindowJob(t, database, "lb_window_grace_out", "windowgraceout.example.com",
 			notAfter.Add(-90*24*time.Hour), notAfter)
 
-		jobs, _, err := NewCertificateService().CheckExpiration()
+		jobs, _, err := NewCertificateService().CheckExpiration(context.Background())
 		if err != nil {
 			t.Fatalf("check expiration: %v", err)
 		}

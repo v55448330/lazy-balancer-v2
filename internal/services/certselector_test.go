@@ -142,7 +142,7 @@ func TestCertificateService_CheckExpiration_skipsRenewal_whenSelectedCertificate
 
 	// When
 	resetCertificateServiceForTest(t)
-	jobs, _, scanErr := NewCertificateService().CheckExpiration()
+	jobs, _, scanErr := NewCertificateService().CheckExpiration(context.Background())
 	if scanErr != nil {
 		t.Fatalf("CheckExpiration: %v", scanErr)
 	}

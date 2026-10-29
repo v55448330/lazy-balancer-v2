@@ -31,7 +31,7 @@ func TestCheckExpiration_selectionFailureSkipsRemainingRowsOfRule(t *testing.T) 
 	}
 	t.Cleanup(func() { selectStoredRuleCertificate = original })
 
-	jobs, skipped, err := (&CertificateService{}).CheckExpiration()
+	jobs, skipped, err := (&CertificateService{}).CheckExpiration(context.Background())
 	if err != nil {
 		t.Fatalf("CheckExpiration: %v", err)
 	}

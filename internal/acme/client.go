@@ -175,6 +175,16 @@ func acmeAccountKeyPath(dataDir, directoryURL, email, eabKID string, eabKey []by
 	return filepath.Join(dataDir, "acme_accounts", hex.EncodeToString(sum[:])+".key")
 }
 
+// accountKeyMetadata 是账户密钥的溯源旁注（落盘为 <keyPath>.json）：记录密钥
+// 属于哪个 directory|email|KID|HMAC 摘要组合，供运维人工比对历史密钥的账户
+// 身份；产品代码不消费它（本包不做陈旧密钥自动回收）。
+//
+// 裁定：轮换后的旧 HMAC 密钥必须保留（字节级残留无害；删除会让旧账户身份无法
+// 恢复）。路径公式含 HMAC 摘要（见 acmeAccountKeyPath），同 directory+email+KID
+// 不同 HMAC 是不同的账户身份，按「metadata 与当前配置不同」选出的陈旧密钥同样
+// 不得删除。本包曾有的 removeStaleAccountKeys 删除分支在当前路径公式下恒不可
+// 达（metadata 与当前配置相同的唯一文件就是本账户密钥本身），该清理机制已整体
+// 退役——不得按「长时间未使用/配置不匹配」等判据复活它。
 type accountKeyMetadata struct {
 	DirectoryURL string `json:"directory_url"`
 	Email        string `json:"email"`
@@ -222,9 +232,8 @@ func loadOrCreateAccountKey(dataDir, directoryURL, email, eabKID string, eabKey 
 			created = fmt.Sprintf("，首次注册时间: %s", fi.ModTime().Format("2006-01-02 15:04:05"))
 		}
 		logf("info", "ACME 账户密钥 %s 已加载%s", filepath.Base(keyPath), created)
-		// 元数据只服务 removeStaleAccountKeys 的卫生
-		// 清理（mtime=最近使用时间），刷新失败（只读挂载/权限漂移）不得连坐
-		// 签发主路径——镜像注册侧「清理失败仅记 warn」的同族口径。
+		// 元数据是账户密钥的溯源旁注（见 accountKeyMetadata），产品代码不消费；
+		// 刷新失败（只读挂载/权限漂移）不得连坐签发主路径。
 		if err := writeAccountKeyMetadata(keyPath, directoryURL, email, eabKID, eabKeyDigestOf(eabKey)); err != nil {
 			logf("warn", "acme: 刷新账户密钥元数据失败（密钥可用，不影响本次签发）: %v", err)
 		}
@@ -248,8 +257,7 @@ func loadOrCreateAccountKey(dataDir, directoryURL, email, eabKID string, eabKey 
 	if err := accountKeyWrite(keyPath, pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: der}), 0600); err != nil {
 		return nil, fmt.Errorf("写入 ACME 账户密钥: %w", err)
 	}
-	// 与既有密钥路径同口径——密钥已
-	// 落盘即可用，元数据仅是卫生清理的输入，写失败只记 warn。
+	// 密钥已落盘即可用，元数据（溯源旁注）写失败只记 warn。
 	if err := writeAccountKeyMetadata(keyPath, directoryURL, email, eabKID, eabKeyDigestOf(eabKey)); err != nil {
 		logf("warn", "acme: 写入账户密钥元数据失败（密钥可用，不影响本次签发）: %v", err)
 	}
@@ -263,15 +271,6 @@ func eabKeyDigestOf(eabKey []byte) string {
 		return ""
 	}
 	return eabKeyDigestRaw(eabKey)
-}
-
-// accountEABKeyDigest 计算 EAB HMAC 密钥摘要（无 EAB 时为空——路径公式对空 key
-// 亦产生确定摘要，但元数据统一记空串以与「无 EAB」want 匹配；空/非空恒一致）。
-func (c *Client) accountEABKeyDigest() string {
-	if c.eab == nil {
-		return ""
-	}
-	return eabKeyDigestOf(c.eab.Key)
 }
 
 func writeAccountKeyMetadata(keyPath, directoryURL, email, eabKID, eabKeyDigest string) error {
@@ -318,94 +317,6 @@ func (c *Client) RegisterAccount(ctx context.Context) error {
 			return fmt.Errorf("acme: 验证复用现有账户失败: %w", regErr)
 		}
 		logf("info", "ACME 账户已注册，复用现有账户（directory: %s）", c.DirectoryURL)
-	}
-	// 清理失效账户密钥是卫生动作，注册三分支已成功——
-	// 清理失败仅记 warn，不得连坐注册结果（残留密钥下一轮注册时再清理）。
-	if err := c.removeStaleAccountKeys(); err != nil {
-		logf("warn", "acme: 清理失效账户密钥失败（不影响本次注册）: %v", err)
-	}
-	return nil
-}
-
-// staleAccountKeyIdleThreshold 是 removeStaleAccountKeys 清理密钥前的最小闲置时长
-// （当前账户密钥路径公式使该清理恒为空操作，见函数内守卫注释；阈值保留
-// 以备路径公式变更时启用），
-// 不得小于签发执行预算封顶（caExecutionTimeoutFor 上限 caExecutionTimeoutMax=60min），
-// 否则会误删在途签发的账户密钥，取 1h。
-const staleAccountKeyIdleThreshold = time.Hour
-
-func (c *Client) removeStaleAccountKeys() error {
-	acmeAccountKeyMu.Lock()
-	defer acmeAccountKeyMu.Unlock()
-	entries, err := os.ReadDir(filepath.Dir(c.accountKeyPath))
-	if err != nil {
-		return fmt.Errorf("读取 ACME 账户目录: %w", err)
-	}
-	want := accountKeyMetadata{DirectoryURL: c.DirectoryURL, Email: c.Email, EABKID: c.eabKID, EABKeyDigest: c.accountEABKeyDigest()}
-	// 多 CA 提供商各有独立队列、可并发签发：其他任务（元数据≠本任务）的账户密钥
-	// 可能正在使用。密钥元数据在每次加载/创建时都会重写，其 mtime 即最近使用时间；
-	// 在途签发执行预算至多 60min（caExecutionTimeoutFor 按域名数缩放，封顶
-	// caExecutionTimeoutMax），mtime 必然不旧于 1h 阈值——仅清理闲置超 1h 的
-	// 密钥，避免误删并发任务密钥导致重试/重启后密钥反复再生。
-	// 备查：系统时钟回拨 >1h 时在途密钥 mtime 会早于 cutoff 而被误删，
-	// 后果仅是账户密钥换新并重新注册（账户 churn），无证书/数据损失，无安全影响。
-	cutoff := time.Now().Add(-staleAccountKeyIdleThreshold)
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".key.json") {
-			continue
-		}
-		metadataPath := filepath.Join(filepath.Dir(c.accountKeyPath), entry.Name())
-		data, err := os.ReadFile(metadataPath)
-		if err != nil {
-			// 单条目读/解析失败不再中止整轮清理——与下方 stat 失败的
-			// 「跳过+日志」同口径（原口径会使任一损坏元数据永久阻塞该提供商注册）。
-			logf("warn", "acme: 读取账户密钥元数据 %s 失败，跳过: %v", entry.Name(), err)
-			continue
-		}
-		var metadata accountKeyMetadata
-		if err := json.Unmarshal(data, &metadata); err != nil {
-			logf("warn", "acme: 解析账户密钥元数据 %s 失败，跳过: %v", entry.Name(), err)
-			continue
-		}
-		keyPath := strings.TrimSuffix(metadataPath, ".json")
-		// 裁定：轮换后的旧 HMAC 密钥必须保留（字节级残留
-		// 无害；删除会让旧账户身份无法恢复）。
-		if metadata != want {
-			continue
-		}
-		// 本分支恒真（不可达）：账户密钥路径公式含 directory|email|KID|HMAC
-		// 摘要，metadata == want 即 metadataPath 就是本账户密钥文件。保留该显式
-		// 分支作为路径公式未来变更时的迁移钩子，避免公式放宽后误删在用密钥。
-		if keyPath == c.accountKeyPath {
-			continue
-		}
-		info, err := entry.Info()
-		if err != nil {
-			// 单条目 stat 失败（权限/外部并发删除）不应中止整轮清理
-			// 跳过该条目并记日志，下一轮注册时自愈。
-			logf("warn", "清理 ACME 账户密钥：读取元数据状态失败，跳过 %s: %v", entry.Name(), err)
-			continue
-		}
-		if info.ModTime().After(cutoff) {
-			continue
-		}
-		if err := removeStaleAccountKeyPair(keyPath, metadataPath); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// removeStaleAccountKeyPair 删除一对失效账户密钥及其元数据。两个删除同口径容忍
-// os.ErrNotExist：读取元数据到执行删除之间存在外部
-// 清理窗口（其他进程的 RegisterAccount/手工清理），文件已消失即目标终态，不算
-// 失败——此前仅 key 删除容忍，元数据删除在窗口内报错会中止整轮清理。
-func removeStaleAccountKeyPair(keyPath, metadataPath string) error {
-	if err := os.Remove(keyPath); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("删除失效 ACME 账户密钥 %s: %w", filepath.Base(keyPath), err)
-	}
-	if err := os.Remove(metadataPath); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("删除失效 ACME 账户密钥元数据 %s: %w", filepath.Base(metadataPath), err)
 	}
 	return nil
 }

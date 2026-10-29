@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -766,5 +767,51 @@ func TestCurrentCRSVersionForLog_matchesVersionRow(t *testing.T) {
 	seedCRSVersionRow(t, "", false)
 	if got := CurrentCRSVersionForLog(); got != CRSBundledVersion {
 		t.Fatalf("空版本 CurrentCRSVersionForLog()=%q, want bundled %q", got, CRSBundledVersion)
+	}
+}
+
+// 版本表两族（CRS / IP2Region）的「排程槽未推进」记录器与 IsRunning 必须是
+// 单一实现：曾各持一份逐字相同的代码（仅日志前缀不同），任一侧改动都会让
+// 两族的调度契约（成功轮未推进槽=按失败返回、running 原子置位/复位）漂移。
+func TestVersionTableSlotRecorder_singleSourceSemantics(t *testing.T) {
+	var rec versionTableSlotRecorder
+	if err := rec.get(); err != nil {
+		t.Fatalf("初始原因=%v, want nil", err)
+	}
+	cause := errors.New("排程不可读")
+	rec.set(cause, crsUpdateLogFamily)
+	if err := rec.get(); !errors.Is(err, cause) {
+		t.Fatalf("set 后读取=%v, want %v", err, cause)
+	}
+	// 每次运行起点清空：上一轮的读失败不得让本轮成功轮仍被判失败。
+	rec.set(nil, crsUpdateLogFamily)
+	if err := rec.get(); err != nil {
+		t.Fatalf("清空后读取=%v, want nil", err)
+	}
+
+	var mu sync.Mutex
+	running := false
+	if versionTableTaskIsRunning(&mu, &running) {
+		t.Fatal("running=false 时必须返回 false")
+	}
+	running = true
+	if !versionTableTaskIsRunning(&mu, &running) {
+		t.Fatal("running=true 时必须返回 true")
+	}
+}
+
+// 两族管理器的 ScheduleSlotError 必须委托同一记录器（改动任一侧字段/锁口径
+// 都会在此断言处暴露）。
+func TestVersionTableSlotRecorder_bothFamiliesDelegate(t *testing.T) {
+	crs := newTestCRSManager(t)
+	ip := newTestIP2RegionManager(t)
+	cause := errors.New("状态行写入失败")
+	crs.setSlotAdvanceError(cause)
+	ip.setSlotAdvanceError(cause)
+	if err := crs.ScheduleSlotError(); !errors.Is(err, cause) {
+		t.Fatalf("CRS ScheduleSlotError=%v, want %v", err, cause)
+	}
+	if err := ip.ScheduleSlotError(); !errors.Is(err, cause) {
+		t.Fatalf("IP2Region ScheduleSlotError=%v, want %v", err, cause)
 	}
 }

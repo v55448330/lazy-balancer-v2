@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"strings"
@@ -71,6 +72,69 @@ func CertJobMaterialPredicateSQL(alias string) string {
 // 正向与取反共用同一表达式，不得另写条件组合。
 func certJobMissingMaterialPredicateSQL(alias string) string {
 	return "NOT COALESCE(" + CertJobMaterialPredicateSQL(alias) + ", 0)"
+}
+
+// ACMECertMaterialRow 是一条「每规则最新且域名适用」的 ACME 证书材料行。
+type ACMECertMaterialRow struct {
+	RuleID     string
+	Domain     string
+	RuleDomain string
+	CertPEM    string
+	KeyPEM     string
+}
+
+// latestApplicableACMECertMaterials 单源选择「每规则最新且域名适用」的一行 ACME
+// 证书材料：启动物化（MaterializeAllCertsFromDB）与 6h 文件对账
+// （reconcileMissingCertFiles）共用。两处此前各写一份同构 SELECT + seenRules
+// 循环，选择顺序的陷阱（先 seen 后适用性会让最新旧域行短路较旧的适用行，整条
+// 规则被跳过）在两侧必须同时正确——单源后不可能只修一侧。
+//
+// 返回 materials（每规则一行）、scanFailures（逐行读失败数，该行已跳过）与
+// 查询/迭代错误。逐行读失败与逐行动作失败在调用方同权处理：对账把它并进失败
+// 轮，启动物化只留痕继续。warnPrefix 仅区分告警来源文案。
+func latestApplicableACMECertMaterials(ctx context.Context, dbh *sql.DB, warnPrefix string) ([]ACMECertMaterialRow, int, error) {
+	if dbh == nil {
+		return nil, 0, errors.New("证书材料选择：数据库句柄为空")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	rows, err := dbh.QueryContext(ctx, `SELECT j.rule_id, COALESCE(j.domain,''), COALESCE(j.cert_pem,''), COALESCE(j.key_pem,''), COALESCE(r.domain,'')
+		FROM cert_jobs j
+		JOIN lb_rules r ON r.caddy_id=j.rule_id
+		WHERE `+CertJobMaterialPredicateSQL("j")+`
+		  AND r.enabled=1 AND r.enable_tls=1 AND r.tls_source='acme_dns'
+		ORDER BY j.rule_id, j.updated_at DESC, j.id DESC`)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	materials := make([]ACMECertMaterialRow, 0)
+	seenRules := make(map[string]bool)
+	scanFailures := 0
+	for rows.Next() {
+		var material ACMECertMaterialRow
+		if scanErr := rows.Scan(&material.RuleID, &material.Domain, &material.CertPEM, &material.KeyPEM, &material.RuleDomain); scanErr != nil {
+			scanFailures++
+			Logf("error", "%s: scan certificate row failed, skipping: %v", warnPrefix, scanErr)
+			continue
+		}
+		// 同 rule_id 多行只取首个**适用**行（ORDER BY updated_at DESC, id DESC）。
+		// 先 seen 后适用性会让最新旧域行短路较旧的适用行——整条规则被跳过、证书
+		// 文件不物化；判定顺序是选择语义的一部分，不得调换。
+		if seenRules[material.RuleID] {
+			continue
+		}
+		if !certJobRuleApplicable(true, material.RuleDomain, material.Domain) {
+			continue
+		}
+		seenRules[material.RuleID] = true
+		materials = append(materials, material)
+	}
+	if rowsErr := rows.Err(); rowsErr != nil {
+		return materials, scanFailures, rowsErr
+	}
+	return materials, scanFailures, nil
 }
 
 // CertJobMaterialUsable 是 CertJobMaterialPredicateSQL 的 Go 侧等价判定，供

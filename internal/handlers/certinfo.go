@@ -101,8 +101,7 @@ func (h *Handlers) GetRulesCertInfo(c *gin.Context) {
 	}
 
 	jobRows, err := db.DB.QueryContext(c.Request.Context(), fmt.Sprintf(`
-		SELECT rule_id, id, status, COALESCE(cert_pem,''), COALESCE(key_pem,''),
-		       COALESCE(julianday(COALESCE(updated_at, created_at)), 0), COALESCE(domain,'')
+		SELECT rule_id, `+services.CertificateCandidateColumnList+`
 		FROM cert_jobs
 		WHERE rule_id IN (%s) AND %s
 		ORDER BY rule_id, updated_at DESC, id DESC`, placeholders, services.CertJobMaterialPredicateSQL("")), args...)
@@ -114,16 +113,17 @@ func (h *Handlers) GetRulesCertInfo(c *gin.Context) {
 	candidates := make(map[string][]services.CertificateCandidate, len(rules))
 	now := time.Now()
 	for jobRows.Next() {
-		var id string
-		var candidate services.CertificateCandidate
-		if err := jobRows.Scan(&id, &candidate.ID, &candidate.Status, &candidate.CertPEM, &candidate.KeyPEM, &candidate.UpdatedAt, &candidate.Domain); err != nil {
+		var ruleID string
+		var id int64
+		var domain, status, certPEM, keyPEM string
+		var updatedAt float64
+		if err := jobRows.Scan(&ruleID, &id, &domain, &status, &certPEM, &keyPEM, &updatedAt); err != nil {
 			writeInternalError(c, http.StatusInternalServerError, "批量读取签发证书失败", err)
 			return
 		}
-		// 候选查询已由 CertJobMaterialPredicateSQL 排除 disabled 行，
-		// 此处无需再判状态——装载阶段预解析一次，选择与过期回退共用同一 Leaf。
-		candidate.Leaf = services.ParseCertificateLeaf(candidate.CertPEM, candidate.KeyPEM)
-		candidates[id] = append(candidates[id], candidate)
+		// 行装配与 Leaf 预解析策略单源（services.NewCertificateCandidate）：批量与
+		// 单规则端点的候选必须逐字段同值，否则同一张证书在两处给出相反结论。
+		candidates[ruleID] = append(candidates[ruleID], services.NewCertificateCandidate(id, domain, status, certPEM, keyPEM, updatedAt, nil))
 	}
 	if err := jobRows.Err(); err != nil {
 		writeInternalError(c, http.StatusInternalServerError, "批量读取签发证书失败", err)

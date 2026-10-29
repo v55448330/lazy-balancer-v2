@@ -40,20 +40,13 @@ func (m *IP2RegionUpdateManager) StatusSnapshot() IP2RegionUpdateStatusSnapshot 
 // 本身可能已成功；失败的是调度契约，引擎需要失败才能退避重投同一槽，而不是
 // 把本槽记入消费水位）。
 func (m *IP2RegionUpdateManager) setSlotAdvanceError(err error) {
-	m.mu.Lock()
-	m.scheduleSlotErr = err
-	m.mu.Unlock()
-	if err != nil {
-		Logf("error", "ip2region update: 本轮排程槽未推进（引擎按 1s/5s/30s 退避重投；连续 4 轮仍未推进即停调，需在业务页重新保存自动更新或重启进程恢复）: %v", err)
-	}
+	m.slots.set(err, ip2RegionUpdateLogFamily)
 }
 
 // ScheduleSlotError 本运行成功落库但排程槽未推进的原因（nil=槽已推进或本轮
 // 未成功）。驱动任务引擎 Run 体在状态为 success 时复核：非 nil 时返回该错误。
 func (m *IP2RegionUpdateManager) ScheduleSlotError() error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.scheduleSlotErr
+	return m.slots.get()
 }
 
 func ip2RegionStoredStatusSnapshot() IP2RegionUpdateStatusSnapshot {

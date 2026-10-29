@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
 	"net"
 	"net/url"
@@ -52,11 +53,7 @@ func RoleOf(ctx context.Context, database *sql.DB) (bool, error) {
 	if database == nil {
 		return false, errors.New("读取节点模式: 数据库未初始化")
 	}
-	var isMaster bool
-	if err := database.QueryRowContext(ctx, "SELECT COALESCE(is_master,1) FROM global_config WHERE id=1").Scan(&isMaster); err != nil {
-		return false, fmt.Errorf("读取节点模式: %w", err)
-	}
-	return isMaster, nil
+	return db.IsMasterNode(ctx, database)
 }
 
 // IsMaster 读取节点角色（ClusterService 便捷包装，语义见 RoleOf）。

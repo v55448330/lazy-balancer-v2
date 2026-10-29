@@ -494,3 +494,103 @@ func TestLockCertJobLog_reclaimsEntryAfterRelease(t *testing.T) {
 		t.Fatal("日志写锁条目未回收（键空间随历史规则无界增长）")
 	}
 }
+
+// housekeeping 的证书日志扫描目录必须与写入侧同源（CertJobLogDir），不得按
+// 应用日志路径独立推导：两条推导各自成立时生产环境恰好一致（都在
+// {任务日志目录}/certjobs），但任何一侧的目录布局变更（镜像内日志根迁移、
+// 测试/嵌入式把 logFile 指向别处）都会让清理面与实际落盘目录错位——文件永不
+// 过期删除且无任何告警（扫描不到目录等同空目录）。
+func TestTaskLogsHousekeeping_scansCertJobLogDirFromSameSource(t *testing.T) {
+	// Given：写入侧目录由 taskengine.LogDir 注入；logFile 落在无关目录树
+	initServicesDB(t)
+	useCertJobLogTestEnv(t, 1<<20)
+	dir := CertJobLogDir()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("seed certjobs dir: %v", err)
+	}
+	expiredPath := CertJobLogPath("lb_same_source_expired")
+	if err := os.WriteFile(expiredPath, []byte("line\n"), 0o644); err != nil {
+		t.Fatalf("seed expired log: %v", err)
+	}
+	stale := time.Now().AddDate(-10, 0, 0)
+	if err := os.Chtimes(expiredPath, stale, stale); err != nil {
+		t.Fatalf("backdate expired log: %v", err)
+	}
+	unrelatedLogFile := filepath.Join(t.TempDir(), "lazy-balancer.log")
+
+	// When
+	result := taskLogsHousekeeping(unrelatedLogFile)
+
+	// Then：过期文件被删（扫描面来自 CertJobLogDir，而非 unrelatedLogFile 推导）
+	if _, err := os.Stat(expiredPath); !os.IsNotExist(err) {
+		t.Fatalf("过期证书任务日志仍在（扫描目录与写入目录不同源）: stat err=%v", err)
+	}
+	deleted := false
+	for _, name := range result.Deleted {
+		if name == filepath.Base(expiredPath) {
+			deleted = true
+		}
+	}
+	if !deleted {
+		t.Fatalf("Deleted=%v, want %s", result.Deleted, filepath.Base(expiredPath))
+	}
+}
+
+// 迁移落位必须对「并发写者先建同名文件」原子让位：写侧以
+// O_CREATE|O_APPEND 建目标文件，迁移若用 Stat→Rename 的 check-then-act，
+// 写者在两步之间创建并写入的行会被旧文件整体覆盖（丢行）。注入的链接原语在
+// 落位前模拟写者抢占（真实 os.Link 随即返回 EEXIST），断言迁移放弃且两侧内容
+// 都在。
+func TestCertJobLogDir_migrationYieldsToConcurrentWriter(t *testing.T) {
+	base := t.TempDir()
+	legacyDir := filepath.Join(base, "logs")
+	tasksDir := filepath.Join(legacyDir, "tasks")
+	target := filepath.Join(tasksDir, "certjobs")
+	if err := os.MkdirAll(tasksDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	old := taskengine.LogDir()
+	oldMigrated := certJobLogMigrated.Load()
+	oldLink := certJobLogMigrateLink
+	taskengine.SetLogDir(tasksDir)
+	certJobLogMigrated.Store(false) // 每进程一次的迁移在本测试内重放
+	t.Cleanup(func() {
+		taskengine.SetLogDir(old)
+		certJobLogMigrated.Store(oldMigrated)
+		certJobLogMigrateLink = oldLink
+	})
+	const name = "certjob-lb_race.log"
+	legacy := []byte("legacy line\n")
+	concurrent := []byte("concurrent writer line\n")
+	if err := os.WriteFile(filepath.Join(legacyDir, name), legacy, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	certJobLogMigrateLink = func(src, dst string) error {
+		calls++
+		// 竞态窗口：写者在迁移落位前创建并写入同名文件
+		if err := os.WriteFile(dst, concurrent, 0o644); err != nil {
+			t.Fatalf("simulate concurrent writer: %v", err)
+		}
+		return oldLink(src, dst)
+	}
+
+	// When
+	if dir := CertJobLogDir(); dir != target {
+		t.Fatalf("CertJobLogDir=%q, want %q", dir, target)
+	}
+
+	// Then：迁移确实尝试过落位，且写者内容未被旧文件覆盖
+	if calls == 0 {
+		t.Fatal("迁移未走链接落位原语（check-then-rename 竞态未消除）")
+	}
+	data, err := os.ReadFile(filepath.Join(target, name))
+	if err != nil || string(data) != string(concurrent) {
+		t.Fatalf("并发写入行被迁移覆盖: data=%q err=%v, want %q", data, err, concurrent)
+	}
+	// 旧文件留在原处（未迁移，内容不丢）
+	data, err = os.ReadFile(filepath.Join(legacyDir, name))
+	if err != nil || string(data) != string(legacy) {
+		t.Fatalf("让位时旧文件应保留原处: data=%q err=%v, want %q", data, err, legacy)
+	}
+}

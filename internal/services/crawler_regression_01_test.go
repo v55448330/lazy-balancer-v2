@@ -154,3 +154,32 @@ func TestRefreshCrawlerSources_refreshesCanonicalURLAndPreservesState(t *testing
 		t.Fatalf("update_enabled=%d, want 0（用户开关必须保留）", enabled)
 	}
 }
+
+// display_name 与 url/format 同为代码文案的 canonical 投影：只做 ALTER/INSERT
+// 种子时，代码改名永远到不了存量库（源表展示名与名单名同源不变量在存量行上
+// 长期分叉）。启动刷新必须把存量行的 display_name 归一到代码文案，且不得触碰
+// 用户开关与状态列。
+func TestRefreshCrawlerSources_refreshesCanonicalDisplayName(t *testing.T) {
+	_, database := newClusterTestService(t)
+	if _, err := database.Exec(`INSERT INTO security_crawler_sources (name, display_name, url, format, update_enabled, update_status, entry_count)
+		VALUES ('gptbot', 'GPTBot（旧文案）', 'https://openai.com/gptbot.json', 'json', 1, 'success', 42)`); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := refreshCrawlerSources(); err != nil {
+		t.Fatalf("refreshCrawlerSources: %v", err)
+	}
+
+	var displayName, updateStatus string
+	var enabled, entryCount int
+	if err := database.QueryRow(`SELECT display_name, update_enabled, update_status, entry_count FROM security_crawler_sources WHERE name='gptbot'`).
+		Scan(&displayName, &enabled, &updateStatus, &entryCount); err != nil {
+		t.Fatal(err)
+	}
+	if want := crawlerDisplayName("gptbot"); displayName != want {
+		t.Fatalf("display_name=%q, want 代码文案 %q（改名必须到达存量库）", displayName, want)
+	}
+	if enabled != 1 || updateStatus != "success" || entryCount != 42 {
+		t.Fatalf("用户开关/状态列被改写: enabled=%d update_status=%q entry_count=%d", enabled, updateStatus, entryCount)
+	}
+}

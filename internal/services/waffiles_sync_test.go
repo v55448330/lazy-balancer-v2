@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"lazy-balancer-v2/internal/atomicfile"
 	"lazy-balancer-v2/internal/models"
 )
 
@@ -1277,5 +1278,59 @@ func TestApplyWafFileBundle_tamperedThreatEntryRejectedBeforeOthers(t *testing.T
 	}
 	if _, statErr := os.Stat(ip2regionLivePath); !os.IsNotExist(statErr) {
 		t.Fatalf("威胁条目损坏时 IP2Region 库已落盘（部分应用），stat err=%v", statErr)
+	}
+}
+
+// 预检全过后进入落盘阶段：第二条写失败（盘满/权限/IO 错的真实形态）不得留下
+// 第一条已生效的半更新威胁库——错误文案承诺「拒绝整包」，逐条原子写却让前序
+// 条目真实生效，主从不一致会一直保持到下一次成功同步。
+// 修复=落盘分两相位：全部暂存（写 temp+fsync）成功后才统一 rename。
+func TestApplyWafFileBundle_stagingFailureLeavesNoPartialThreatFiles(t *testing.T) {
+	dst := t.TempDir()
+	restoreWaf := OverrideThreatWafDirForTest(dst)
+	defer restoreWaf()
+
+	first := []byte("203.0.113.0/24\n")
+	second := []byte("198.51.100.0/24\n")
+	firstSum := sha256.Sum256(first)
+	secondSum := sha256.Sum256(second)
+	bundle := &WafFileBundle{
+		ThreatFiles: []models.ThreatFileEntry{
+			{Name: "ustc", Sha256: hex.EncodeToString(firstSum[:]), Content: first},
+			{Name: "firehol_l1", Sha256: hex.EncodeToString(secondSum[:]), Content: second},
+		},
+	}
+
+	// 注入：第二条的暂存失败（等价 ENOSPC），第一条暂存成功。
+	oldStage := wafBundleStage
+	calls := 0
+	wafBundleStage = func(path string, data []byte, mode os.FileMode) (*atomicfile.Staged, error) {
+		calls++
+		if calls == 2 {
+			return nil, errors.New("injected staging failure")
+		}
+		return atomicfile.Stage(path, data, mode)
+	}
+	t.Cleanup(func() { wafBundleStage = oldStage })
+
+	_, _, _, err := ApplyWafFileBundle(bundle)
+	if err == nil || !strings.Contains(err.Error(), "injected staging failure") {
+		t.Fatalf("error=%v, want 注入的暂存失败", err)
+	}
+	for _, name := range []string{"ustc", "firehol_l1"} {
+		live := filepath.Join(dst, "threat-"+name+".iplist.fast")
+		if _, statErr := os.Stat(live); !os.IsNotExist(statErr) {
+			t.Fatalf("暂存阶段失败时 %s 已生效（半更新威胁库），stat err=%v", name, statErr)
+		}
+	}
+	// 暂存残留（含第一条已成功的 temp）必须全部清理。
+	entries, readErr := os.ReadDir(dst)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	for _, e := range entries {
+		if strings.HasSuffix(e.Name(), ".tmp") {
+			t.Fatalf("暂存失败后残留临时文件 %s", e.Name())
+		}
 	}
 }

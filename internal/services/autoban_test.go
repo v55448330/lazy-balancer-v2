@@ -1488,6 +1488,28 @@ func TestAutobanRunCycle_capacityDropOnManualOnlyListIsVisible(t *testing.T) {
 	if got := len(presetEntries(t)); got != 3 {
 		t.Fatalf("名单=%d 条, want 3（手动条目不得被挤、新封被丢弃）", got)
 	}
+
+	// 第二轮：被丢弃的候选必须与挤出条目同口径清桶（丢弃=本轮不封，计数桶
+	// 不清则每 60s 轮重复落同一批容量审计+WARN，真实告警被自身噪音淹没）。
+	if err := RunAutobanCycle(taskengine.RunContext{Trigger: "auto"}); err != nil {
+		t.Fatalf("RunAutobanCycle(2): %v", err)
+	}
+	if n := countAutobanCapacityAudits(t); n != 1 {
+		t.Fatalf("连续两轮容量收敛审计行=%d, want 1（丢弃后必须清桶，不得每轮重复留痕）", n)
+	}
+	if got := strings.Count(readTaskLog(t, AutobanTaskID), "容量收敛："); got != 1 {
+		t.Fatalf("容量收敛 WARN 行=%d, want 1（第二轮不得重复落容量告警）", got)
+	}
+}
+
+// countAutobanCapacityAudits 统计容量收敛系统审计行数。
+func countAutobanCapacityAudits(t *testing.T) int {
+	t.Helper()
+	var n int
+	if err := db.AuditDB.QueryRow(`SELECT COUNT(*) FROM audit_log WHERE action='容量收敛' AND username='system'`).Scan(&n); err != nil {
+		t.Fatalf("count audit: %v", err)
+	}
+	return n
 }
 
 // ---- 计数分级日志：热路径零日志 / 每轮摘要活跃数 / 过期汇总一行 ----

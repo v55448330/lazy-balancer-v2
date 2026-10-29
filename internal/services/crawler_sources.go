@@ -48,14 +48,17 @@ func ensureCrawlerSources() error {
 	return nil
 }
 
-// refreshCrawlerSources 启动期按 name 刷新内置源的 canonical url/format
-// URL/解析格式修正必须到达存量部署，否则旧实例
-// 继续每日产出错误名单。用户只能改 update_enabled，状态/排程/开关列保持原值。
+// refreshCrawlerSources 启动期按 name 刷新内置源的 canonical url/format/展示名。
+// URL/解析格式修正必须到达存量部署，否则旧实例继续每日产出错误名单；
+// display_name 与名单名同一事实源（crawlerDisplayName），只靠 INSERT OR IGNORE
+// 种子时代码改名永远到不了存量行，源表展示名与名单名长期分叉。
+// 用户只能改 update_enabled，状态/排程/开关列保持原值。
 func refreshCrawlerSources() error {
 	for _, src := range crawlerBotSources {
-		if _, err := db.DB.Exec(`UPDATE security_crawler_sources SET url=?, format=?, updated_at=datetime('now')
-			WHERE name=? AND (COALESCE(url,'')<>? OR COALESCE(format,'')<>?)`,
-			src.URL, src.Format, src.Name, src.URL, src.Format); err != nil {
+		displayName := crawlerDisplayName(src.Name)
+		if _, err := db.DB.Exec(`UPDATE security_crawler_sources SET url=?, format=?, display_name=?, updated_at=datetime('now')
+			WHERE name=? AND (COALESCE(url,'')<>? OR COALESCE(format,'')<>? OR COALESCE(display_name,'')<>?)`,
+			src.URL, src.Format, displayName, src.Name, src.URL, src.Format, displayName); err != nil {
 			return err
 		}
 	}

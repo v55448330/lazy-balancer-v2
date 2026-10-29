@@ -415,25 +415,17 @@ func expectedRenderedRules() (map[string]string, error) {
 		}
 		for certRows.Next() {
 			var ruleID string
-			var candidate CertificateCandidate
-			if scanErr := certRows.Scan(&ruleID, &candidate.ID, &candidate.Domain, &candidate.Status, &candidate.CertPEM, &candidate.KeyPEM, &candidate.UpdatedAt); scanErr != nil {
+			var id int64
+			var domain, status, certPEM, keyPEM string
+			var updatedAt float64
+			if scanErr := certRows.Scan(&ruleID, &id, &domain, &status, &certPEM, &keyPEM, &updatedAt); scanErr != nil {
 				closeErr := certRows.Close()
 				return nil, fmt.Errorf("解析 ACME 证书候选失败: %w", errors.Join(scanErr, closeErr))
 			}
-			// 与渲染装载同口径预解析（certReady 对每条规则只做选择，
-			// 但同一候选集会在多次巡检比较中重复使用）。同一证书挂在多条规则下
-			// （certRows 逐规则返回）时按 PEM 内容在本轮内去重解析——60s 节拍
-			// 的固定 X.509 解析开销随候选数×规则数增长。
-			if candidate.Status != "disabled" {
-				leafKey := candidate.CertPEM + "\x00" + candidate.KeyPEM
-				if leaf, cached := leafCache[leafKey]; cached {
-					candidate.Leaf = leaf
-				} else {
-					candidate.Leaf = ParseCertificateLeaf(candidate.CertPEM, candidate.KeyPEM)
-					leafCache[leafKey] = candidate.Leaf
-				}
-			}
-			acmeCerts[ruleID] = append(acmeCerts[ruleID], candidate)
+			// 行装配与预解析单源（NewCertificateCandidate）：同一证书挂在多条
+			// 规则下（certRows 逐规则返回）时按 PEM 内容在本轮内复用解析结果——
+			// 60s 节拍的固定 X.509 解析开销随候选数×规则数增长。
+			acmeCerts[ruleID] = append(acmeCerts[ruleID], NewCertificateCandidate(id, domain, status, certPEM, keyPEM, updatedAt, leafCache))
 		}
 		if rowsErr := certRows.Err(); rowsErr != nil {
 			closeErr := certRows.Close()

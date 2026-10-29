@@ -1,6 +1,7 @@
 package services
 
 import (
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -8,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
@@ -157,10 +159,52 @@ func expandPolicyIPRefs(p *models.SecurityPolicy, listsByID map[int64][]string) 
 	return exp
 }
 
-// LoadIPListEntriesByID 以一次查询批量加载 IP 地址列表条目值（仅 value）。
-// ids 为空或数据库未初始化时返回空映射；缺失的 id 不出现在结果中。
-// loadIPListEntriesVia：唯一装载实现（曾声明与 loadIPListEntries 双实现，
-// 后者零调用已删——；渲染与严格校验统一走 Via 错误通道）。
+// ipListChunkFailure 一块分批查询的失败（查询或行迭代错误）。调用方按各自
+// 严格模式口径处置该块 id：渲染把整块标记为装载失败，摘要同判。
+type ipListChunkFailure struct {
+	ids   []int64
+	cause error
+}
+
+// forEachIPListChunk 按 ipListChunkSize 分批执行「SELECT <columns> FROM
+// security_ip_lists WHERE id IN (...)」，每块仅在有可见行时调用 scanRows
+// （回调内自建 Next/Scan 循环，行级失败由回调自行处置），块级失败收集返回。
+// 渲染装载与摘要存在性判定共用同一分批、占位符构造与迭代错误捕获——两者
+// 差异只剩列清单与行处理。
+func forEachIPListChunk(store caddyConfigStore, ids []int64, columns string, scanRows func(rows *sql.Rows)) []ipListChunkFailure {
+	if len(ids) == 0 {
+		return nil
+	}
+	var failures []ipListChunkFailure
+	for start := 0; start < len(ids); start += ipListChunkSize {
+		end := start + ipListChunkSize
+		if end > len(ids) {
+			end = len(ids)
+		}
+		chunk := ids[start:end]
+		placeholders := strings.Repeat("?,", len(chunk))
+		placeholders = placeholders[:len(placeholders)-1]
+		args := make([]interface{}, len(chunk))
+		for i, id := range chunk {
+			args[i] = id
+		}
+		rows, err := store.Query("SELECT "+columns+" FROM security_ip_lists WHERE id IN ("+placeholders+")", args...)
+		if err != nil {
+			failures = append(failures, ipListChunkFailure{ids: chunk, cause: fmt.Errorf("store 查询 security_ip_lists: %w", err)})
+			continue
+		}
+		scanRows(rows)
+		// 迭代错误必须显式捕获——rows.Next() 因错误（而非 EOF）返回 false 时
+		// 静默走掉会让装载集合缺行而 failedIDs 不置位，引用策略拿到「静默缺内容
+		// 的合并集」绕过 IPRefMissing 严格模式（ACL/信任面静默收窄零留痕）。
+		if err := rows.Err(); err != nil {
+			failures = append(failures, ipListChunkFailure{ids: chunk, cause: fmt.Errorf("store 迭代 security_ip_lists: %w", err)})
+		}
+		rows.Close()
+	}
+	return failures
+}
+
 // store 感知装载（审计）——store 非-nil（v2 导入事务视图）经其查询，
 // nil 回退 db.DB。镜像 resolvePolicyIPListRefs 的回退逻辑。
 func loadIPListEntriesVia(store caddyConfigStore, ids []int64) (map[int64][]string, map[int64]bool, error) {
@@ -176,28 +220,7 @@ func loadIPListEntriesVia(store caddyConfigStore, ids []int64) (map[int64][]stri
 		return entries, failed, nil
 	}
 	var firstErr error
-	for start := 0; start < len(ids); start += ipListChunkSize {
-		end := start + ipListChunkSize
-		if end > len(ids) {
-			end = len(ids)
-		}
-		chunk := ids[start:end]
-		placeholders := strings.Repeat("?,", len(chunk))
-		placeholders = placeholders[:len(placeholders)-1]
-		args := make([]interface{}, len(chunk))
-		for i, id := range chunk {
-			args[i] = id
-		}
-		rows, err := store.Query("SELECT id, COALESCE(entries,'[]'), COALESCE(system,0), COALESCE(name,'') FROM security_ip_lists WHERE id IN ("+placeholders+")", args...)
-		if err != nil {
-			if firstErr == nil {
-				firstErr = fmt.Errorf("store 查询 security_ip_lists: %w", err)
-			}
-			for _, id := range chunk {
-				failed[id] = true
-			}
-			continue
-		}
+	failures := forEachIPListChunk(store, ids, "id, COALESCE(entries,'[]'), COALESCE(system,0), COALESCE(name,'')", func(rows *sql.Rows) {
 		for rows.Next() {
 			var id int64
 			var raw string
@@ -262,21 +285,16 @@ func loadIPListEntriesVia(store caddyConfigStore, ids []int64) (map[int64][]stri
 				entries[id] = vals
 			}
 		}
-		// 迭代错误必须显式捕获——rows.Next() 因错误
-		// （而非 EOF）返回 false 时静默走掉会让装载集合缺行而 failedIDs 不置位，
-		// 引用策略拿到「静默缺内容的合并集」绕过 IPRefMissing 严格模式
-		// （ACL/信任面静默收窄零留痕）。与查询失败分支同口径：warn+整块
-		// fail-closed（全入 failedIDs）+首错上抛。
-		if err := rows.Err(); err != nil {
-			Logf("error", "渲染: security_ip_lists 迭代失败（本块 %d 个列表全部按装载失败处理）: %v", len(chunk), err)
-			for _, id := range chunk {
-				failed[id] = true
-			}
-			if firstErr == nil {
-				firstErr = fmt.Errorf("store 迭代 security_ip_lists: %w", err)
-			}
+	})
+	// 块级失败按渲染口径整块 fail-closed（全入 failedIDs）+首错上抛。
+	for _, f := range failures {
+		Logf("error", "渲染: security_ip_lists 分批装载失败（本块 %d 个列表全部按装载失败处理）: %v", len(f.ids), f.cause)
+		for _, id := range f.ids {
+			failed[id] = true
 		}
-		rows.Close()
+		if firstErr == nil {
+			firstErr = f.cause
+		}
 	}
 	if firstErr != nil {
 		return entries, failed, firstErr
@@ -296,48 +314,53 @@ func parseIPListEntriesStrict(raw string) ([]models.IPListEntry, error) {
 	return list, nil
 }
 
-// usableThreatTextEntries 剔除威胁名单文本里不可解析的行并留痕（与下载解析
-// 只收合法行的口径对齐）。文本分支此前把坏行原样交给聚合与 @ipListFast 投影：
-// 严格解析遇坏行整份失败（无缓存时 deny 方向按未命中=不拦；allow 否定算子
-// 则全拒），与下载/自愈路径「不可解析即丢弃」分叉。
-func usableThreatTextEntries(path string, vals []string) []string {
-	kept := make([]string, 0, len(vals))
-	dropped := 0
+// threatTextScanRunsForTest 统计文本名单条目被解析的总次数（生产零消费，仅
+// 原子自增）：钉住「一次读取内只解析一遍」——旧实现在同一份文本上先算可解析
+// 率、再剔除坏行（各自全量遍历），同一批条目被解析 2–3 遍。
+var threatTextScanRunsForTest atomic.Int64
+
+// threatTextScan 文本代际的单遍扫描结果：一次遍历同时产出「剔除不可解析行后
+// 的渲染集」与「可解析条数/总条数」，让可解析率门与坏行剔除共用同一份结果。
+type threatTextScan struct {
+	kept   []string
+	parsed int
+	total  int
+}
+
+// scanThreatTextEntries 单遍解析文本名单条目（与下载解析同口径：不可解析即
+// 丢弃，只收合法行）。文本被截断/损坏（乱码行）时解析率显著低于正常名单，
+// 调用方据此决定是否改用 .fast 代际——旧实现在同一份 vals 上分别调用
+// 「算比率」与「剔除坏行」两个函数，条目被重复解析 2–3 遍。
+func scanThreatTextEntries(vals []string) threatTextScan {
+	scan := threatTextScan{kept: make([]string, 0, len(vals)), total: len(vals)}
 	for _, v := range vals {
+		threatTextScanRunsForTest.Add(1)
 		if _, err := wafiplist.ParseIPEntry(v); err != nil {
-			dropped++
 			continue
 		}
-		kept = append(kept, v)
+		scan.parsed++
+		scan.kept = append(scan.kept, v)
 	}
-	if dropped > 0 {
-		Logf("warn", "威胁名单 %s 有 %d/%d 行不可解析，已从渲染集剔除（与下载解析同口径）", path, dropped, len(vals))
-	}
-	return kept
+	return scan
 }
 
-// threatTextParseRatio 文本可解析率（渲染侧口径）：与下载解析的
-// threatMinParseRatio 同源——文本被截断/损坏（乱码行）时解析率显著低于
-// 正常名单，渲染若直接采用会让拦截面静默缩水。返回 (可解析条数, 总条数)，
-// 调用方按需算比率并打印真实分子（旧实现只返回比率，日志两个参数都用
-// len(vals)，恒打印 N/N=100% 自相矛盾）。
-func threatTextParseRatio(vals []string) (parsed, total int) {
-	total = len(vals)
-	for _, v := range vals {
-		if _, err := wafiplist.ParseIPEntry(v); err == nil {
-			parsed++
-		}
-	}
-	return parsed, total
-}
-
-// threatTextParseRatioValue 可解析率比值（0..1；空文本为 0）。
-func threatTextParseRatioValue(vals []string) float64 {
-	parsed, total := threatTextParseRatio(vals)
-	if total == 0 {
+// ratio 可解析率比值（0..1；空文本为 0）——与下载解析的 threatMinParseRatio
+// 同一判据。
+func (s threatTextScan) ratio() float64 {
+	if s.total == 0 {
 		return 0
 	}
-	return float64(parsed) / float64(total)
+	return float64(s.parsed) / float64(s.total)
+}
+
+// discarded 被剔除的不可解析行数。
+func (s threatTextScan) discarded() int { return s.total - s.parsed }
+
+// logDiscarded 坏行剔除留痕（剔除=渲染集静默缩水，必须可见）。
+func (s threatTextScan) logDiscarded(path string) {
+	if dropped := s.discarded(); dropped > 0 {
+		Logf("warn", "威胁名单 %s 有 %d/%d 行不可解析，已从渲染集剔除（与下载解析同口径）", path, dropped, s.total)
+	}
 }
 
 // readThreatIplistPath 按代际读取威胁名单文件：文本与
@@ -392,28 +415,29 @@ func readThreatIplistPath(iplistPath string) ([]string, error) {
 		if err != nil {
 			return nil, err
 		}
-		if threatTextParseRatioValue(vals) >= threatMinParseRatio {
-			return usableThreatTextEntries(iplistPath, vals), nil
+		// 单遍扫描：可解析率门与坏行剔除共用同一份结果（旧实现同一份 vals
+		// 被解析 2–3 遍）。
+		scan := scanThreatTextEntries(vals)
+		if scan.ratio() >= threatMinParseRatio {
+			scan.logDiscarded(iplistPath)
+			return scan.kept, nil
 		}
 		if fastErr == nil {
 			fastVals, fastReadErr := readFast()
 			if fastReadErr == nil {
-				parsed, total := threatTextParseRatio(vals)
 				Logf("warn", "威胁名单 %s 文本可解析率 %d/%d 低于 %.0f%%（疑似损坏），改用 .fast",
-					iplistPath, parsed, total, threatMinParseRatio*100)
+					iplistPath, scan.parsed, scan.total, threatMinParseRatio*100)
 				return fastVals, nil
 			}
-			parsed, total := threatTextParseRatio(vals)
 			Logf("error", "威胁名单 %s 文本可解析率 %d/%d 低于 %.0f%% 且 .fast 不可读（引用策略将跳过渲染）: %v",
-				iplistPath, parsed, total, threatMinParseRatio*100, fastReadErr)
+				iplistPath, scan.parsed, scan.total, threatMinParseRatio*100, fastReadErr)
 			return nil, fmt.Errorf("威胁名单 %s 文本可解析率 %d/%d 低于 %.0f%% 且 .fast 不可读: %w",
-				iplistPath, parsed, total, threatMinParseRatio*100, fastReadErr)
+				iplistPath, scan.parsed, scan.total, threatMinParseRatio*100, fastReadErr)
 		}
-		parsed, total := threatTextParseRatio(vals)
 		Logf("error", "威胁名单 %s 文本可解析率 %d/%d 低于 %.0f%% 且无 .fast 可回退（引用策略将跳过渲染，等待下次威胁库更新重建）",
-			iplistPath, parsed, total, threatMinParseRatio*100)
+			iplistPath, scan.parsed, scan.total, threatMinParseRatio*100)
 		return nil, fmt.Errorf("威胁名单 %s 文本可解析率 %d/%d 低于 %.0f%% 且无 .fast 可回退（等待下次威胁库更新重建）",
-			iplistPath, parsed, total, threatMinParseRatio*100)
+			iplistPath, scan.parsed, scan.total, threatMinParseRatio*100)
 	}
 	if fastErr == nil {
 		vals, err := readFast()
@@ -428,15 +452,16 @@ func readThreatIplistPath(iplistPath string) ([]string, error) {
 			if textReadErr != nil {
 				return nil, textReadErr
 			}
-			if threatTextParseRatioValue(textVals) >= threatMinParseRatio {
+			textScan := scanThreatTextEntries(textVals)
+			if textScan.ratio() >= threatMinParseRatio {
 				Logf("warn", "威胁名单 %s 的 .fast 读取失败（回退 .iplist 文本）: %v", fastPath, err)
-				return usableThreatTextEntries(iplistPath, textVals), nil
+				textScan.logDiscarded(iplistPath)
+				return textScan.kept, nil
 			}
-			parsed, total := threatTextParseRatio(textVals)
 			Logf("error", "威胁名单 %s 的 .fast 读取失败且文本可解析率 %d/%d 低于 %.0f%%（引用策略将跳过渲染）: %v",
-				iplistPath, parsed, total, threatMinParseRatio*100, err)
+				iplistPath, textScan.parsed, textScan.total, threatMinParseRatio*100, err)
 			return nil, fmt.Errorf("威胁名单 %s 的 .fast 不可读且文本可解析率 %d/%d 低于 %.0f%%: %w",
-				iplistPath, parsed, total, threatMinParseRatio*100, err)
+				iplistPath, textScan.parsed, textScan.total, threatMinParseRatio*100, err)
 		}
 		return nil, err
 	}
@@ -524,6 +549,10 @@ func IsThreatSystemListName(listName string) bool {
 	return threatSourceByListName(listName) != ""
 }
 
+// LoadIPListEntriesByID 以一次查询批量加载 IP 地址列表条目值（仅 value）。
+// ids 为空或数据库未初始化时返回空映射；缺失的 id 不出现在结果中。
+// loadIPListEntriesVia：唯一装载实现（渲染与严格校验统一走 Via 错误通道），
+// 本函数只是 store=db.DB 的薄包装。
 func LoadIPListEntriesByID(ids []int64) (map[int64][]string, error) {
 	if len(ids) == 0 || db.DB == nil {
 		return map[int64][]string{}, nil
@@ -655,27 +684,7 @@ func ResolvePolicyIPListRefsForSummary(policies []*models.SecurityPolicy) {
 func loadIPListRefPresenceVia(store caddyConfigStore, ids []int64) (map[int64]bool, map[int64]bool) {
 	presence := make(map[int64]bool, len(ids))
 	failed := make(map[int64]bool)
-	for start := 0; start < len(ids); start += ipListChunkSize {
-		end := start + ipListChunkSize
-		if end > len(ids) {
-			end = len(ids)
-		}
-		chunk := ids[start:end]
-		placeholders := strings.Repeat("?,", len(chunk))
-		placeholders = placeholders[:len(placeholders)-1]
-		args := make([]interface{}, len(chunk))
-		for i, id := range chunk {
-			args[i] = id
-		}
-		rows, err := store.Query(`SELECT id, COALESCE(system,0), COALESCE(name,''), COALESCE(entries,'[]')
-			FROM security_ip_lists WHERE id IN (`+placeholders+`)`, args...)
-		if err != nil {
-			Logf("error", "摘要: security_ip_lists 存在性查询失败（本块 %d 个列表按装载失败处理）: %v", len(chunk), err)
-			for _, id := range chunk {
-				failed[id] = true
-			}
-			continue
-		}
+	failures := forEachIPListChunk(store, ids, "id, COALESCE(system,0), COALESCE(name,''), COALESCE(entries,'[]')", func(rows *sql.Rows) {
 		for rows.Next() {
 			var id int64
 			var system int
@@ -714,13 +723,12 @@ func loadIPListRefPresenceVia(store caddyConfigStore, ids []int64) (map[int64]bo
 			}
 			presence[id] = effective > 0
 		}
-		if err := rows.Err(); err != nil {
-			Logf("error", "摘要: security_ip_lists 迭代失败（本块 %d 个列表按装载失败处理）: %v", len(chunk), err)
-			for _, id := range chunk {
-				failed[id] = true
-			}
+	})
+	for _, f := range failures {
+		Logf("error", "摘要: security_ip_lists 分批存在性查询失败（本块 %d 个列表按装载失败处理）: %v", len(f.ids), f.cause)
+		for _, id := range f.ids {
+			failed[id] = true
 		}
-		rows.Close()
 	}
 	return presence, failed
 }
@@ -756,25 +764,35 @@ func resolvePolicyIPListRefs(policies []*models.SecurityPolicy, store caddyConfi
 			refIDs = append(refIDs, id)
 		}
 	}
-	if len(refIDs) == 0 {
-		return
-	}
-	effective := store
-	if effective == nil {
-		effective = db.DB
-	}
-	if effective == nil {
-		return
-	}
-	listsByID, failedIDs, loadErr := loadIPListEntriesVia(effective, refIDs)
-	markLoadFailure := func(p *models.SecurityPolicy, id int64) {
-		refErr := fmt.Sprintf("策略 %q 引用的 IP 列表(id=%d)装载失败", p.Name, id)
-		if loadErr != nil {
-			refErr += fmt.Sprintf(": %v", loadErr)
+	// 无引用形态（绝大多数策略）：不再早退——inline 合并集同样在此一次展开并
+	// 附加（幂等：expandPolicyIPRefs 在空 listsByID 下与 mergedWhitelist 的
+	// inline-only 回退逐字等价）。此前早退让 MergedACLList/MergedWhitelist
+	// 恒为 nil，发射端每次调用 mergedWhitelist 都重跑 json.Unmarshal +
+	// aggregateIPEntries——摄取侧按「规则×策略」逐次调用，万条级名单的聚合
+	// 成本随事件吞吐线性放大。
+	var listsByID map[int64][]string
+	var failedIDs map[int64]bool
+	// 仅「确实有引用」时才定义：failedIDs 为空映射时循环内的失败分支不可达。
+	var markLoadFailure func(p *models.SecurityPolicy, id int64)
+	if len(refIDs) > 0 {
+		effective := store
+		if effective == nil {
+			effective = db.DB
 		}
-		if auditFailureShouldLog(refErr) {
-			Logf("error", "%s——该策略将被跳过渲染", refErr)
-			RecordAuditLog("system", "渲染跳过", "安全策略", refErr+"，已跳过该策略渲染", "")
+		if effective == nil {
+			return
+		}
+		var loadErr error
+		listsByID, failedIDs, loadErr = loadIPListEntriesVia(effective, refIDs)
+		markLoadFailure = func(p *models.SecurityPolicy, id int64) {
+			refErr := fmt.Sprintf("策略 %q 引用的 IP 列表(id=%d)装载失败", p.Name, id)
+			if loadErr != nil {
+				refErr += fmt.Sprintf(": %v", loadErr)
+			}
+			if auditFailureShouldLog(refErr) {
+				Logf("error", "%s——该策略将被跳过渲染", refErr)
+				RecordAuditLog("system", "渲染跳过", "安全策略", refErr+"，已跳过该策略渲染", "")
+			}
 		}
 	}
 	// 展开结果按「四条来源列完全相同」在本次调用内

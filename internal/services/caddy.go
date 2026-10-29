@@ -1665,38 +1665,21 @@ func loadSecurityPolicyContext(store caddyConfigStore) (*securityPolicyContext, 
 		for i, policyID := range distinctPolicyIDs {
 			args[i] = policyID
 		}
-		rows, err := store.Query(`
-			SELECT id, name, COALESCE(description,''), COALESCE(mode,'off'), COALESCE(anomaly_threshold,0),
-			       COALESCE(ip_acl_mode,''), COALESCE(ip_acl_list,'[]'), COALESCE(ip_acl_enabled,0), COALESCE(ip_whitelist,'[]'), COALESCE(ip_whitelist_enabled,1), COALESCE(ip_blacklist,'[]'),
-			       COALESCE(rate_limit_enabled,0), COALESCE(rate_limit_rps,0), COALESCE(rate_limit_burst,0),
-			       COALESCE(crs_rule_groups,'[]'), COALESCE(crs_excluded_rules,'[]'), COALESCE(custom_rules,'[]'),
-		COALESCE(block_page_id,0), COALESCE(block_status_code,0), enabled, COALESCE(created_at,''), COALESCE(updated_at,''),
-			       COALESCE(geoip_countries,'[]'), COALESCE(geoip_mode,'off'), COALESCE(geoip_crawler_exempt,0), COALESCE(geoip_crawler_engines,'[]'), COALESCE(waf_check_response,0), COALESCE(log_request_body,0),
-			       COALESCE(ip_acl_list_refs,'[]'), COALESCE(ip_whitelist_refs,'[]'), COALESCE(policy_type,''), COALESCE(trust_detection,0)
+		// 整行装载与单主键加载同源（securityPolicyRowColumns + scanSecurityPolicyRow）：
+		// 批量与逐条读路径的列序/字段级装配不得分叉，否则同一条策略在两个入口
+		// 给出不同字段值（历史事故形态）。
+		rows, err := store.Query(`SELECT `+securityPolicyRowColumns+`
 		FROM security_policies WHERE id IN (`+placeholders+`) AND enabled = 1`, args...)
 		if err != nil {
 			return nil, err
 		}
 		for rows.Next() {
-			var p models.SecurityPolicy
-			var ipWhitelist, ipBlacklist, crsRuleGroups, crsExcludedRules, customRules, geoipCountries, crawlerEnginesRaw string
-			if err := rows.Scan(&p.ID, &p.Name, &p.Description, &p.Mode, &p.AnomalyThreshold,
-				&p.IPACLMode, &p.IPACLList, &p.IPACLEnabled, &ipWhitelist, &p.IPWhitelistEnabled, &ipBlacklist,
-				&p.RateLimitEnabled, &p.RateLimitRPS, &p.RateLimitBurst,
-				&crsRuleGroups, &crsExcludedRules, &customRules,
-				&p.BlockPageID, &p.BlockStatusCode, &p.Enabled, &p.CreatedAt, &p.UpdatedAt,
-				&geoipCountries, &p.GeoIPMode, &p.GeoIPCrawlerExempt, &crawlerEnginesRaw, &p.WAFCheckResponse, &p.LogRequestBody, &p.IPACLListRefs, &p.IPWhitelistRefs, &p.PolicyType, &p.TrustDetection); err != nil {
+			p, scanErr := scanSecurityPolicyRow(rows)
+			if scanErr != nil {
 				_ = rows.Close()
-				return nil, err
+				return nil, scanErr
 			}
-			p.IPWhitelist = json.RawMessage(ipWhitelist)
-			p.IPBlacklist = json.RawMessage(ipBlacklist)
-			p.CRSRuleGroups = json.RawMessage(crsRuleGroups)
-			p.CRSExcludedRules = json.RawMessage(crsExcludedRules)
-			p.CustomRules = json.RawMessage(customRules)
-			p.GeoIPCountries = json.RawMessage(geoipCountries)
-			p.GeoIPCrawlerEngines = json.RawMessage(crawlerEnginesRaw)
-			policiesByID[p.ID] = &p
+			policiesByID[p.ID] = p
 		}
 		if err := rows.Err(); err != nil {
 			_ = rows.Close()
@@ -2060,8 +2043,7 @@ func mergeTrustedProxyServerFields(servers map[string]interface{}, store caddyCo
 // var（非 const）：谓词由 CertJobMaterialPredicateSQL（带 alias 的函数）单源
 // 生成——本查询在包初始化时求值一次。
 var acmeCertCandidatesQuery = `
-	SELECT rule_id, id, domain, status, cert_pem, key_pem,
-	       COALESCE(julianday(COALESCE(updated_at, created_at)), 0)
+	SELECT rule_id, ` + CertificateCandidateColumnList + `
 	FROM cert_jobs
 	WHERE ` + CertJobMaterialPredicateSQL("") + `
 	  AND rule_id IN (SELECT caddy_id FROM lb_rules WHERE enabled = 1 AND enable_tls = 1 AND tls_source = 'acme_dns')
@@ -2320,17 +2302,15 @@ func generateCaddyConfigWithCertSource(store, certSource caddyConfigStore, rules
 		}
 		for certRows.Next() {
 			var ruleID string
-			var candidate CertificateCandidate
-			if scanErr := certRows.Scan(&ruleID, &candidate.ID, &candidate.Domain, &candidate.Status, &candidate.CertPEM, &candidate.KeyPEM, &candidate.UpdatedAt); scanErr != nil {
+			var id int64
+			var domain, status, certPEM, keyPEM string
+			var updatedAt float64
+			if scanErr := certRows.Scan(&ruleID, &id, &domain, &status, &certPEM, &keyPEM, &updatedAt); scanErr != nil {
 				closeErr := certRows.Close()
 				return generationFailure("读取 ACME 证书阶段解析失败: %v", errors.Join(scanErr, closeErr))
 			}
-			// 装载阶段统一预解析（disabled 候选由 selectCertificate
-			// 直接跳过，无需付解析成本），选择/后续复用走 Leaf 快路径。
-			if candidate.Status != "disabled" {
-				candidate.Leaf = ParseCertificateLeaf(candidate.CertPEM, candidate.KeyPEM)
-			}
-			acmeCerts[ruleID] = append(acmeCerts[ruleID], candidate)
+			// 行装配与预解析单源（disabled 候选由 selectCertificate 直接跳过）。
+			acmeCerts[ruleID] = append(acmeCerts[ruleID], NewCertificateCandidate(id, domain, status, certPEM, keyPEM, updatedAt, nil))
 		}
 		if rowsErr := certRows.Err(); rowsErr != nil {
 			closeErr := certRows.Close()
@@ -3281,34 +3261,9 @@ func buildCaddyLogging(level string, sizeMB int) map[string]interface{} {
 // 重复）；status 过滤由调用方 selectCertificate 后置执行。查询/解析失败仅记
 // 日志返回 nil（调用点按无证书渲染/判定，语义不变）。
 func acmeCertCandidatesForRule(store caddyConfigStore, ruleID string) []CertificateCandidate {
-	rows, err := store.Query(`
-		SELECT id, domain, status, cert_pem, key_pem,
-		       COALESCE(julianday(COALESCE(updated_at, created_at)), 0)
-		FROM cert_jobs
-		WHERE rule_id=?
-		  AND `+certJobCandidatePredicateSQL("")+`
-		ORDER BY updated_at DESC, id DESC`, ruleID)
+	candidates, err := loadCertificateCandidates(nil, store, ruleID, certJobCandidatePredicateSQL(""))
 	if err != nil {
-		Logf("warn", "ACME 证书候选查询失败（规则 %s，按无证书处理）: %v", ruleID, err)
-		return nil
-	}
-	defer rows.Close()
-	candidates := make([]CertificateCandidate, 0)
-	for rows.Next() {
-		var candidate CertificateCandidate
-		if err := rows.Scan(&candidate.ID, &candidate.Domain, &candidate.Status, &candidate.CertPEM, &candidate.KeyPEM, &candidate.UpdatedAt); err != nil {
-			Logf("warn", "ACME 证书候选解析失败（规则 %s）: %v", ruleID, err)
-			return nil
-		}
-		// 与批量装载同口径预解析 Leaf（规则候选可能被
-		// loadACMECertificateFromStore 的多个消费点多轮选择）。
-		if candidate.Status != "disabled" {
-			candidate.Leaf = ParseCertificateLeaf(candidate.CertPEM, candidate.KeyPEM)
-		}
-		candidates = append(candidates, candidate)
-	}
-	if err := rows.Err(); err != nil {
-		Logf("warn", "ACME 证书候选遍历失败（规则 %s）: %v", ruleID, err)
+		Logf("warn", "ACME 证书候选装载失败（规则 %s，按无证书处理）: %v", ruleID, err)
 		return nil
 	}
 	return candidates

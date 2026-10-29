@@ -25,37 +25,73 @@ import (
 // emitted Include directives always use the container path.
 var crsDirectivesDir = defaultCRSLiveDir
 
+// securityPolicyRowColumns 安全策略整行的列清单唯一真相：单主键加载
+// （scanSecurityPolicyByID）与批量预载（loadSecurityPolicyContext）共用同一
+// 列序与同一 scanSecurityPolicyRow。此前两处各维护一份 32 列 SELECT + Scan，
+// 列序在 ip_whitelist / ip_whitelist_enabled 处对调——字段错位风险没有任何
+// 机械防线（两路径的读结果必须在字段级一致）。
+const securityPolicyRowColumns = `id, name, COALESCE(description,''), COALESCE(mode,'off'), COALESCE(anomaly_threshold,0),
+		COALESCE(ip_acl_mode,''), COALESCE(ip_acl_list,'[]'), COALESCE(ip_acl_enabled,0),
+		COALESCE(ip_whitelist_enabled,1), COALESCE(ip_whitelist,'[]'), COALESCE(ip_blacklist,'[]'),
+		COALESCE(rate_limit_enabled,0), COALESCE(rate_limit_rps,0), COALESCE(rate_limit_burst,0),
+		COALESCE(crs_rule_groups,'[]'), COALESCE(crs_excluded_rules,'[]'), COALESCE(custom_rules,'[]'),
+		COALESCE(block_page_id,0), COALESCE(block_status_code,0), enabled, COALESCE(created_at,''), COALESCE(updated_at,''),
+		COALESCE(geoip_countries,'[]'), COALESCE(geoip_mode,'off'), COALESCE(geoip_crawler_exempt,0), COALESCE(geoip_crawler_engines,'[]'),
+		COALESCE(waf_check_response,0), COALESCE(log_request_body,0),
+		COALESCE(ip_acl_list_refs,'[]'), COALESCE(ip_whitelist_refs,'[]'), COALESCE(policy_type,''), COALESCE(trust_detection,0)`
+
+// securityPolicyRowScanner 策略行扫描目标：*sql.Row 与 *sql.Rows 同时满足
+// （单查与批量预载走同一段 Scan）。
+type securityPolicyRowScanner interface {
+	Scan(dest ...any) error
+}
+
+// scanSecurityPolicyRow 按 securityPolicyRowColumns 的列序扫描一行策略并把
+// JSON 文本列转为 json.RawMessage。列序只有这一处——新增列必须同时改常量与
+// 本函数的 Scan 目标，两路径不可能再各自漂移。
+func scanSecurityPolicyRow(scanner securityPolicyRowScanner) (*models.SecurityPolicy, error) {
+	var p models.SecurityPolicy
+	var ipWhitelist, ipBlacklist, crsRuleGroups, crsExcludedRules, customRules, geoipCountries, crawlerEnginesRaw string
+	if err := scanner.Scan(&p.ID, &p.Name, &p.Description, &p.Mode, &p.AnomalyThreshold,
+		&p.IPACLMode, &p.IPACLList, &p.IPACLEnabled,
+		&p.IPWhitelistEnabled, &ipWhitelist, &ipBlacklist,
+		&p.RateLimitEnabled, &p.RateLimitRPS, &p.RateLimitBurst,
+		&crsRuleGroups, &crsExcludedRules, &customRules,
+		&p.BlockPageID, &p.BlockStatusCode, &p.Enabled, &p.CreatedAt, &p.UpdatedAt,
+		&geoipCountries, &p.GeoIPMode, &p.GeoIPCrawlerExempt, &crawlerEnginesRaw,
+		&p.WAFCheckResponse, &p.LogRequestBody,
+		&p.IPACLListRefs, &p.IPWhitelistRefs, &p.PolicyType, &p.TrustDetection); err != nil {
+		return nil, err
+	}
+	p.IPWhitelist = json.RawMessage(ipWhitelist)
+	p.IPBlacklist = json.RawMessage(ipBlacklist)
+	p.CRSRuleGroups = json.RawMessage(crsRuleGroups)
+	p.CRSExcludedRules = json.RawMessage(crsExcludedRules)
+	p.CustomRules = json.RawMessage(customRules)
+	p.GeoIPCountries = json.RawMessage(geoipCountries)
+	p.GeoIPCrawlerEngines = json.RawMessage(crawlerEnginesRaw)
+	return &p, nil
+}
+
 // scanSecurityPolicyByID 按主键加载一条 enabled 策略行，并把 JSON 文本列转为
 // json.RawMessage；行缺失或 disabled 时返回 nil。GetSecurityPoliciesForRule 与
 // 测试辅助 GetSecurityPolicyForRule（security_policy_helpers_test.go）共用本扫描，
-// 保证两条读路径字段级一致。
+// 保证两条读路径字段级一致（列序单源见 securityPolicyRowColumns）。
 //
 // 库值唯一真相（批 3）：anomaly_threshold 列 COALESCE(...,0) 是「无效哨兵」
 // 而非默认值——NULL→0 与带外 <=0 同归渲染层显性报错（BuildCorazaDirectives
 // fail-visible），不再是旧口径的 COALESCE(...,5) 写死兜底。速率/状态列的
 // COALESCE(...,0) 是类型②省略型/条件消费的规范化（0=未启用/未设置）。
 func scanSecurityPolicyByID(policyID int) *models.SecurityPolicy {
-	var p models.SecurityPolicy
-	var ipWhitelist, ipBlacklist, crsRuleGroups, crsExcludedRules, customRules, geoipCountries, crawlerEnginesRaw string
-	err := db.DB.QueryRow(`SELECT id, name, COALESCE(description,''), COALESCE(mode,'off'), COALESCE(anomaly_threshold,0), COALESCE(ip_acl_mode,''), COALESCE(ip_acl_list,'[]'), COALESCE(ip_acl_enabled,0), COALESCE(ip_whitelist_enabled,1), COALESCE(ip_whitelist,'[]'), COALESCE(ip_blacklist,'[]'),
-		COALESCE(rate_limit_enabled,0), COALESCE(rate_limit_rps,0), COALESCE(rate_limit_burst,0), COALESCE(crs_rule_groups,'[]'), COALESCE(crs_excluded_rules,'[]'), COALESCE(custom_rules,'[]'), COALESCE(block_page_id,0), COALESCE(block_status_code,0), enabled, COALESCE(created_at,''), COALESCE(updated_at,''), COALESCE(geoip_countries,'[]'), COALESCE(geoip_mode,'off'), COALESCE(geoip_crawler_exempt,0), COALESCE(geoip_crawler_engines,'[]'), COALESCE(waf_check_response,0), COALESCE(log_request_body,0), COALESCE(ip_acl_list_refs,'[]'), COALESCE(ip_whitelist_refs,'[]'), COALESCE(policy_type,''), COALESCE(trust_detection,0)
-		FROM security_policies WHERE id=? AND enabled=1`, policyID).
-		Scan(&p.ID, &p.Name, &p.Description, &p.Mode, &p.AnomalyThreshold, &p.IPACLMode, &p.IPACLList, &p.IPACLEnabled, &p.IPWhitelistEnabled, &ipWhitelist, &ipBlacklist,
-			&p.RateLimitEnabled, &p.RateLimitRPS, &p.RateLimitBurst, &crsRuleGroups, &crsExcludedRules, &customRules, &p.BlockPageID, &p.BlockStatusCode, &p.Enabled, &p.CreatedAt, &p.UpdatedAt, &geoipCountries, &p.GeoIPMode, &p.GeoIPCrawlerExempt, &crawlerEnginesRaw, &p.WAFCheckResponse, &p.LogRequestBody, &p.IPACLListRefs, &p.IPWhitelistRefs, &p.PolicyType, &p.TrustDetection)
+	p, err := scanSecurityPolicyRow(db.DB.QueryRow(`SELECT `+securityPolicyRowColumns+`
+		FROM security_policies WHERE id=? AND enabled=1`, policyID))
 	if err != nil {
 		if !errors.Is(err, sql.ErrNoRows) {
 			Logf("error", "scanSecurityPolicyByID: 读取安全策略 #%d 失败: %v", policyID, err)
 		}
 		return nil
 	}
-	p.IPWhitelist = json.RawMessage(ipWhitelist)
-	p.IPBlacklist = json.RawMessage(ipBlacklist)
-	p.CRSExcludedRules = json.RawMessage(crsExcludedRules)
-	p.CRSRuleGroups = json.RawMessage(crsRuleGroups)
-	p.CustomRules = json.RawMessage(customRules)
-	p.GeoIPCountries = json.RawMessage(geoipCountries)
-	p.GeoIPCrawlerEngines = json.RawMessage(crawlerEnginesRaw)
-	return &p
+	return p
 }
 
 // GetSecurityPoliciesForRule returns all enabled policies bound to a rule,

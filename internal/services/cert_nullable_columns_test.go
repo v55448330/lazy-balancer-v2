@@ -55,7 +55,7 @@ func TestCertJobNullableIntegerColumns_readAsZero(t *testing.T) {
 	}
 
 	// When：续签扫描。
-	jobs, skipped, err := service.CheckExpiration()
+	jobs, skipped, err := service.CheckExpiration(context.Background())
 	if err != nil {
 		t.Fatalf("续签扫描不得因单行 NULL 失败: %v", err)
 	}

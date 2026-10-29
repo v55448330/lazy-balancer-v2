@@ -968,7 +968,7 @@ func TestCertificateService_renewExpiringCertificates_usesRenewalFlowForIssuedMi
 	done := make(chan struct{})
 	resetCertificateServiceForTest(t)
 	service := NewCertificateService()
-	if jobs, _, err := service.CheckExpiration(); err != nil || len(jobs) != 1 || jobs[0].RuleID != "lb_issued_null_flow" {
+	if jobs, _, err := service.CheckExpiration(context.Background()); err != nil || len(jobs) != 1 || jobs[0].RuleID != "lb_issued_null_flow" {
 		t.Fatalf("renewal candidates=%v err=%v, want issued NULL job", jobs, err)
 	}
 	go func() {
@@ -1541,7 +1541,7 @@ func TestCertificateService_CheckExpiration_returns_only_current_enabled_acme_do
 
 	// When
 	resetCertificateServiceForTest(t)
-	jobs, _, scanErr := NewCertificateService().CheckExpiration()
+	jobs, _, scanErr := NewCertificateService().CheckExpiration(context.Background())
 	if scanErr != nil {
 		t.Fatalf("CheckExpiration: %v", scanErr)
 	}
@@ -1581,7 +1581,7 @@ func TestCertificateService_CheckExpiration_includes_issued_missing_expiry(t *te
 
 	// When
 	resetCertificateServiceForTest(t)
-	jobs, _, scanErr := NewCertificateService().CheckExpiration()
+	jobs, _, scanErr := NewCertificateService().CheckExpiration(context.Background())
 	if scanErr != nil {
 		t.Fatalf("CheckExpiration: %v", scanErr)
 	}
@@ -1637,7 +1637,7 @@ func TestCertificateService_CheckExpiration_compares_offset_and_fractional_times
 
 	// When
 	resetCertificateServiceForTest(t)
-	jobs, _, scanErr := NewCertificateService().CheckExpiration()
+	jobs, _, scanErr := NewCertificateService().CheckExpiration(context.Background())
 	if scanErr != nil {
 		t.Fatalf("CheckExpiration: %v", scanErr)
 	}
@@ -1680,7 +1680,7 @@ func TestCertificateService_CheckExpiration_respects_ca_cooldown_for_waiting_ca(
 
 	// When
 	resetCertificateServiceForTest(t)
-	jobs, _, scanErr := NewCertificateService().CheckExpiration()
+	jobs, _, scanErr := NewCertificateService().CheckExpiration(context.Background())
 	if scanErr != nil {
 		t.Fatalf("CheckExpiration: %v", scanErr)
 	}

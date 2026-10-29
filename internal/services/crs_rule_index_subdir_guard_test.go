@@ -31,3 +31,38 @@ func TestCRSSubdirRuleGuard_detectsNestedConf(t *testing.T) {
 	}
 	_ = os.RemoveAll(sub)
 }
+
+// 缓存键只聚合顶层 .conf 的 stat，子目录守卫是「契约被打破」的检测手段：
+// 它必须在重建路径执行一次，不得在每次缓存键求值（=每次渲染取值）时递归
+// 遍历整棵子目录树——稳态成本与「命中缓存即零工作」的文档口径不符。
+func TestCRSSubdirRuleGuard_cacheHitDoesNotWalkSubdirs(t *testing.T) {
+	dir := t.TempDir()
+	writeTestFile(t, filepath.Join(dir, "REQUEST-900.conf"), "SecRule ARGS \"@rx x\" \"id:910001,phase:2,pass\"\n")
+	sub := filepath.Join(dir, "nested")
+	writeTestFile(t, filepath.Join(sub, "REQUEST-901.conf"), "SecRule ARGS \"@rx y\" \"id:910002,phase:2,pass\"\n")
+
+	oldDir, oldCache, oldKey := CRSRuleIndexDir, crsRuleIndexCache, crsRuleIndexKey
+	CRSRuleIndexDir = dir
+	crsRuleIndexMu.Lock()
+	crsRuleIndexCache, crsRuleIndexKey = nil, ""
+	crsRuleIndexMu.Unlock()
+	t.Cleanup(func() {
+		CRSRuleIndexDir = oldDir
+		crsRuleIndexMu.Lock()
+		crsRuleIndexCache, crsRuleIndexKey = oldCache, oldKey
+		crsRuleIndexMu.Unlock()
+	})
+
+	crsSubdirGuardWalks.Store(0)
+	// 首次取值=重建：守卫必须执行（检出子目录 .conf）。
+	_ = GetCRSRuleIndex()
+	rebuildWalks := crsSubdirGuardWalks.Load()
+	if rebuildWalks == 0 {
+		t.Fatal("重建路径必须执行子目录守卫（子目录 .conf 是契约破裂，必须可检出）")
+	}
+	// 第二次取值=缓存命中：不得再递归遍历子目录。
+	_ = GetCRSRuleIndex()
+	if got := crsSubdirGuardWalks.Load(); got != rebuildWalks {
+		t.Fatalf("缓存命中路径的子目录遍历次数=%d（重建时 %d）——命中必须零递归遍历", got, rebuildWalks)
+	}
+}

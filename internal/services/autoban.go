@@ -768,6 +768,11 @@ type autobanMergeOutcome struct {
 	// Expired 一起清计数桶，否则旧计数仍 ≥ 阈值 → 下轮零新事件立即重封，
 	// 形成「挤出→重封→再挤出」轮转；同时供容量收敛留痕点名身份）
 	DroppedNew int // 容量不足丢弃的新封数
+	// DroppedIPs 被容量截断丢弃的候选 IP（与 EvictedIPs 同口径：调用方须清
+	// 其计数桶。不清则同一批攻击者每轮都重新达标、每 60s 轮重复落同一份容量
+	// 审计+WARN，真实告警被自身噪音淹没；清桶后需在新窗口内重新累计，攻击
+	// 流量会再次达标，容量释放后仍可正常封禁）。
+	DroppedIPs []string
 	Total      int // merge 后名单总条数
 	Changed    bool
 }
@@ -967,6 +972,9 @@ func autobanMergeEntries(cfg AutobanConfig, candidates []AutobanSuggestion) (aut
 			keep = 0
 		}
 		out.DroppedNew = len(toAdd) - keep
+		for _, dropped := range toAdd[keep:] {
+			out.DroppedIPs = append(out.DroppedIPs, dropped.Value)
+		}
 		toAdd = toAdd[:keep]
 		break
 	}
@@ -1161,6 +1169,9 @@ func autobanFlushPendingReload(force bool) {
 func autobanApplyMergeOutcomeLocked(reason string, out autobanMergeOutcome, observe func()) autobanReloadState {
 	AutobanForgetIPs(out.Expired)
 	AutobanForgetIPs(out.EvictedIPs)
+	// 容量丢弃与挤出一并处：丢弃=本轮不封，计数桶不清则同一批候选每轮都重新
+	// 达标，重复落容量审计/WARN（且名单内容不变时 Changed=false，留痕纯噪音）。
+	AutobanForgetIPs(out.DroppedIPs)
 	if observe != nil {
 		observe()
 	}

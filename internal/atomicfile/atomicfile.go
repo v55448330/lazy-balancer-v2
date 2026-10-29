@@ -37,17 +37,26 @@ var (
 	dirSync   = (*os.File).Sync
 )
 
-// WriteAtomic 原子且持久地写入 path（覆盖既有内容）。mode 为最终文件权限
-// （显式 chmod，不受进程 umask 影响）。目录必须已存在。
-func WriteAtomic(path string, data []byte, mode os.FileMode) error {
+// Staged 是一次「已写临时文件并 fsync、尚未 rename」的落盘。多文件批量落盘
+// 用它把失败窗口压到提交之前：全部 staging 成功后才统一 Commit，任一 staging
+// 失败只 Abort（live 文件面零改动）——逐文件 WriteAtomic 时第二份写失败会留下
+// 第一份已生效的半应用状态。
+type Staged struct {
+	tmp  string
+	path string
+}
+
+// Stage 写同目录临时文件、设权并 fsync 数据（不 rename：目标保持不变）。
+// 目录必须已存在。失败时清理临时文件并返回错误（与 WriteAtomic 同契约）。
+func Stage(path string, data []byte, mode os.FileMode) (*Staged, error) {
 	dir := filepath.Dir(path)
 	tmp, err := createTemp(dir, "."+filepath.Base(path)+"-*.tmp")
 	if err != nil {
-		return err
+		return nil, err
 	}
 	tmpName := tmp.Name()
-	fail := func(cause error) error {
-		return errors.Join(cause, fileClose(tmp), removePath(tmpName))
+	fail := func(cause error) (*Staged, error) {
+		return nil, errors.Join(cause, fileClose(tmp), removePath(tmpName))
 	}
 	if err := fileChmod(tmp, mode); err != nil {
 		return fail(err)
@@ -60,13 +69,44 @@ func WriteAtomic(path string, data []byte, mode os.FileMode) error {
 	}
 	if err := fileClose(tmp); err != nil {
 		_ = removePath(tmpName)
-		return err
+		return nil, err
 	}
-	if err := renamePath(tmpName, path); err != nil {
+	return &Staged{tmp: tmpName, path: path}, nil
+}
+
+// Commit 把暂存文件 rename 到目标并 fsync 父目录（rename 后父目录同步失败仍
+// 返回错误——post-rename 策略见包注释）。
+func (s *Staged) Commit() error {
+	if s == nil || s.tmp == "" {
+		return nil
+	}
+	tmpName := s.tmp
+	if err := renamePath(tmpName, s.path); err != nil {
 		_ = removePath(tmpName)
+		s.tmp = ""
 		return err
 	}
-	return SyncParent(path)
+	s.tmp = ""
+	return SyncParent(s.path)
+}
+
+// Abort 丢弃尚未提交的暂存文件（幂等；已提交时目标保持不变）。
+func (s *Staged) Abort() {
+	if s == nil || s.tmp == "" {
+		return
+	}
+	_ = removePath(s.tmp)
+	s.tmp = ""
+}
+
+// WriteAtomic 原子且持久地写入 path（覆盖既有内容）。mode 为最终文件权限
+// （显式 chmod，不受进程 umask 影响）。目录必须已存在。
+func WriteAtomic(path string, data []byte, mode os.FileMode) error {
+	staged, err := Stage(path, data, mode)
+	if err != nil {
+		return err
+	}
+	return staged.Commit()
 }
 
 // SyncParent 对 path 所在目录做 fsync：rename 只改目录项，目录本身的持久化

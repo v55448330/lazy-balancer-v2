@@ -404,10 +404,10 @@ func crsRuleIndexCacheKey(version string) string {
 	var modeFold uint32
 	for _, entry := range entries {
 		// CRS 发行契约=扁平 rules/ 目录（键只聚合顶层 .conf 的 stat）：子目录
-		// .conf 不进键，其增删改不会触发索引重建——检测到即 WARN（与
-		// buildCRSRuleIndex 同一守卫）。
+		// .conf 不进键，其增删改不会触发索引重建。本键在**每次渲染取值**时
+		// 求值，不得在此递归遍历子目录——契约破裂的检测放在重建路径
+		// （buildCRSRuleIndex，与同一守卫同源），命中缓存即零额外工作。
 		if entry.IsDir() {
-			warnCRSSubdirRuleFiles(filepath.Join(CRSRuleIndexDir, entry.Name()))
 			continue
 		}
 		if !strings.HasSuffix(entry.Name(), ".conf") {
@@ -434,11 +434,17 @@ func crsRuleIndexCacheKey(version string) string {
 	return fmt.Sprintf("%s|%s|%d|%d|%d|%d", version, CRSRuleIndexDir, count, maxMtime, totalSize, modeFold)
 }
 
+// crsSubdirGuardWalks 统计子目录守卫的调用次数（生产零消费，仅原子自增）：
+// 钉住「只在重建路径执行」——缓存键求值发生在每次渲染取值上，键里递归遍历
+// 子目录会把稳态成本从零变成逐轮全树 Walk。
+var crsSubdirGuardWalks atomic.Int64
+
 // warnCRSSubdirRuleFiles 检测子目录内是否存在 .conf 规则文件：CRS 发行契约
 // 是扁平 rules/ 目录，索引/缓存键只扫顶层；rule_count 与完整性探针递归全树
 // ——子目录规则会让「组存在性 400」与计数口径分叉。返回是否命中（供守卫
 // 测试），命中时告警（节流，避免每次索引重建刷屏）。
 func warnCRSSubdirRuleFiles(dir string) bool {
+	crsSubdirGuardWalks.Add(1)
 	found := false
 	_ = filepath.WalkDir(dir, func(_ string, d fs.DirEntry, err error) error {
 		if err != nil {

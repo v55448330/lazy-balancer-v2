@@ -110,16 +110,16 @@ func startAPIKeyLastUsedFlusher() {
 }
 
 // cleanupExpiredRegistrationSecrets 每小时清理过期注册密钥。nodes 是集群拓扑
-// 簿记表，本写必须带 SQL 级主节点角色条件（与 services.masterRoleConditionSQL
-// 同口径——db 包不能反向 import services，谓词逐字内联）：flusher 主/从两角色
-// 都在跑，无条件时从端会经此旁路写拓扑数据，破坏「从端零写」不变量。
+// 簿记表，本写必须带 SQL 级主节点角色条件（MasterRoleConditionSQL，与
+// services/middleware 同一单源）：flusher 主/从两角色都在跑，无条件时从端会
+// 经此旁路写拓扑数据，破坏「从端零写」不变量。
 func cleanupExpiredRegistrationSecrets(ctx context.Context, database *sql.DB) error {
 	if _, err := database.ExecContext(ctx, `UPDATE nodes
 		SET registration_secret=NULL, registration_secret_expires_at=NULL
 		WHERE registration_secret IS NOT NULL
 		  AND registration_secret_expires_at IS NOT NULL
 		  AND registration_secret_expires_at<=datetime('now')
-		  AND (SELECT COALESCE(is_master,1) FROM global_config WHERE id=1)=1`); err != nil {
+		  AND `+MasterRoleConditionSQL); err != nil {
 		return fmt.Errorf("cleanup expired cluster registration secrets: %w", err)
 	}
 	return nil
