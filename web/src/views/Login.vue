@@ -505,11 +505,12 @@ onMounted(async () => {
   margin-bottom: 28px;
 }
 
+/* 直角标识：外层半径会把 SVG 方块的四角裁圆，必须与 AppLogo 的 rx=0 同口径。 */
 .logo-wrapper {
   width: 64px;
   height: 64px;
   margin: 0 auto 16px;
-  border-radius: 14px;
+  border-radius: 0;
   overflow: hidden;
   box-shadow: 0 4px 12px rgba(59, 130, 246, 0.25);
 }
