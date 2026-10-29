@@ -22,6 +22,8 @@
       <CaddyConfig v-else-if="currentPage === 'caddy'" />
       <Users v-else-if="currentPage === 'users'" />
       <AuditLog v-else-if="currentPage === 'audit-log'" />
+      <!-- 兜底：PAGE_IDS 新增键但漏接线（或深链带旧键）时给出可见提示，不留白屏 -->
+      <el-empty v-else description="页面不存在" />
     </AppLayout>
   </el-config-provider>
 </template>

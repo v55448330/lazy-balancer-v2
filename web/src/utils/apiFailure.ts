@@ -103,10 +103,17 @@ interface MfaStepUpCoordinator {
 export const createMfaStepUp = (openPrompt: () => Promise<string | null>): MfaStepUpCoordinator => {
   let pending: Promise<string | null> | null = null
   let refresh: Promise<void> | null = null
+  // 刷新句柄的轮次令牌：prompt() 开新一轮即推进。finally 只有在自己仍是
+  // 当前轮次时才清空句柄——旧轮在途请求 settle 会晚于新一轮注册，无条件清空
+  // 会把新一轮句柄抹掉，随后同码新 428 会再发一次 verify-step（后端按
+  // mfa_last_timestep 拒绝同码并计失败）。
+  let refreshRound = 0
 
   const prompt = (): Promise<string | null> => {
     if (pending) return pending
-    // 新一轮弹码意味着新验证码：作废旧刷新句柄，确认后的等待者各自重试原请求。
+    // 新一轮弹码意味着新验证码：推进令牌并作废旧刷新句柄（旧句柄自己的
+    // finally 因令牌不匹配而只作废自己，不会清空新一轮注册的句柄）。
+    refreshRound += 1
     refresh = null
     const created = openPrompt().then(
       (code) => {
@@ -126,8 +133,9 @@ export const createMfaStepUp = (openPrompt: () => Promise<string | null>): MfaSt
 
   const ensureRefresh = (code: string, refreshFn: (code: string) => Promise<void>): Promise<void> => {
     if (!refresh) {
+      const round = refreshRound
       refresh = refreshFn(code).finally(() => {
-        refresh = null
+        if (refreshRound === round) refresh = null
       })
     }
     return refresh

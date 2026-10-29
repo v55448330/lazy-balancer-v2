@@ -210,7 +210,7 @@ body {
 
 /* 信息说明横幅统一模式（2026-09-25 用户裁定）：全站信息说明框同形——虚线边框
    浅灰底、12px 600 主文字、无图标；语义同 SecurityPolicies .stage-projection-bar */
-.info-note-bar { margin: 8px 0 12px; padding: 8px 12px; background: #f8fafc; border: 1px dashed #e5e7eb; border-radius: 8px; font-size: 12px; line-height: 1.55; }
+.info-note-bar { margin: 8px 0 12px; padding: 8px 12px; background: #f8fafc; border: 1px dashed #e5e7eb; font-size: 12px; line-height: 1.55; }
 .info-note-bar:first-child { margin-top: 0; }
 .info-note-desc { font-weight: 600; color: #374151; line-height: 1.55; }
 .info-note-sub { display: block; font-weight: 400; color: #6b7280; line-height: 1.55; }
@@ -439,6 +439,5 @@ body .rule-lock-popper :is(.lock-stage, .lock-policy-group) { border-radius: 0; 
   color: white;
   background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
   padding: 2px 6px;
-  border-radius: 3px;
   letter-spacing: 0.5px;
 }

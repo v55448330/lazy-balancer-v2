@@ -291,10 +291,11 @@ export const lastSection = (text: string, startMarker: string, endMarker: string
  * 而单行整串钉（`.x { margin: 11px 0 3px;`）在换行重排后假红。两者都该改走
  * 本函数 + `cssDecls` 的「声明集」判定：样式证据与排版形态无关。
  *
- * 与 `cssDecls` 同为 `cssDeclarations` 的内部构件（导出面 = 消费面：用例侧只用
- * 组合形态；确有单用需求时再导出）。
+ * 与 `cssDecls` 同为 `cssDeclarations` 的内部构件。导出它只为一类场景：
+ * **负断言必须覆盖嵌套块**（`&:hover { flex-wrap: nowrap }` 里的声明不进顶层
+ * 声明表，只用 `cssDeclarations` 会让「不得 nowrap」在嵌套块里恒真）。
  */
-const cssRule = (text: string, selector: string): string => {
+export const cssRule = (text: string, selector: string): string => {
   let from = 0
   for (;;) {
     const at = indexOfOutsideComments(text, selector, from)
@@ -667,8 +668,11 @@ const memberBlockOpen = (text: string, start: number, marker: string): number =>
  * 必须跳过字符串/模板量/注释里的括号：`const s = '}'` 或注释里的孤立 `}`
  * 会让切片提前收尾（后续 doesNotMatch 假绿）；孤立 `{` 则越界吞下相邻函数
  * （match 假绿）。模板量里的 `${...}` 是表达式，其内部括号按代码计。
+ *
+ * 导出给「按块切分」的判据使用（例如把 spec 按用例块切片后逐块计数）：
+ * 块边界必须由括号配对决定，空白行/缩进等文本启发式会把块截断。
  */
-const matchBrace = (text: string, open: number): number => {
+export const matchBrace = (text: string, open: number): number => {
   type Mode = 'code' | 'line' | 'block' | 'single' | 'double' | 'template'
   let mode: Mode = 'code'
   let depth = 0

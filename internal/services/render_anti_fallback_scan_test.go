@@ -74,7 +74,6 @@ var antiFallbackScanTargets = map[string][]string{
 	"security.go": {
 		"BuildCorazaDirectives",
 		"buildCorazaDirectivesWithIndex",
-		"buildWafHandlerWithPolicy",
 		"buildIPPrecheckDirectives",
 		"emitBodyProcessorRules",
 		"emitCustomRules",

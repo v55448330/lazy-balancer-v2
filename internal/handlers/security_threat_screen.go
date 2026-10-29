@@ -1123,16 +1123,6 @@ func StartThreatRollupWarmer(ctx context.Context) {
 	}()
 }
 
-// resetThreatRollupWarmerForTest 测试缝：复位 warmer 启动标志（生产不调用）。
-func resetThreatRollupWarmerForTest() {
-	threatRollupWarmerStarted.Store(false)
-	threatRollupReadyAt.Store(0)
-	threatRollupReadyDB.Store(nil)
-	threatRollupReadyGeneration.Store("")
-	threatRollupRequestedHours.Store(0)
-	threatRollupRequestedHoursAt.Store(0)
-}
-
 // threatRollupBlockedAction 大屏 blocked 计数的 action 取值单一事实源：
 // queryThreatRecentBlocked（SUM 路径）与主扫描（Go 侧逐行累加）共用——
 // 两侧口径漂移会被同一钉测捕获。

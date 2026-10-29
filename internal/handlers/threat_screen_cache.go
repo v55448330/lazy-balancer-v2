@@ -235,16 +235,6 @@ func invalidateThreatScreenRollupCaches() {
 	topTargetsCache.Reset()
 }
 
-// resetThreatScreenCachesForTest 测试缝：清空大屏进程内缓存（生产不调用）。
-func resetThreatScreenCachesForTest() {
-	topTargetsCache.Reset()
-	threatRollupDimAggregateCache.Reset()
-	threatTrafficCache.Range(func(key, _ any) bool {
-		threatTrafficCache.Delete(key)
-		return true
-	})
-}
-
 // ---- rollup 维度聚合（大屏同屏全部维度）：SQL 侧聚合 + 30s 缓存 ----
 
 // threatRollupDimAggregateTTL 与安全总览/规则阶段统计同族（30s）：大屏 30s

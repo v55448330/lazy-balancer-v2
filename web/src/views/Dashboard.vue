@@ -483,6 +483,7 @@ import DialogHeader from '@/components/DialogHeader.vue'
 import DialogSectionHeader from '@/components/DialogSectionHeader.vue'
 import { usePollingTask } from '@/composables/usePollingTask'
 import { httpStatusColors } from '@/utils/chartTheme'
+import { resolveNodeRole } from '@/utils/nodeRole'
 import { buildRuleMetricsUnavailable, METRIC_RELOAD_RESET_NOTE, ruleMetricCellTitle } from '@/utils/dashboardMetrics'
 import { degradedMetricLabels, degradedMetricParts, metricProgressPercent, pidsPercentLabel, pidsProgressPercent, pidsTooltipText, pidsValueTone } from '@/utils/systemMetrics'
 import AccessibleLink from '@/components/common/AccessibleLink.vue'
@@ -575,13 +576,11 @@ const connTimestamps = ref<number[]>([])
 // 节点角色三态（fail-closed 展示）——nodeMode 为 null（/config 首拉失败
 // 或 15s 重试窗口内）时不显示「主节点」：同页写控件按 readOnlyReason（含
 // 'unknown'）隐藏，展示层不能反向宣告「主节点」误导运维。
-const nodeModeRole = computed<'master' | 'slave' | 'unknown'>(() => {
-  if (authStore.nodeMode === 'master') return 'master'
-  if (authStore.nodeMode === 'slave') return 'slave'
-  return 'unknown'
-})
-const nodeModeLabel = computed(() => nodeModeRole.value === 'master' ? '主节点' : nodeModeRole.value === 'slave' ? '从节点' : '节点角色未知')
-const nodeModeTagType = computed(() => nodeModeRole.value === 'master' ? 'success' : nodeModeRole.value === 'slave' ? 'warning' : 'info')
+// 三态派生的判据单源在 utils/nodeRole（行为用例穷举 master/slave/null/undefined）
+const nodeRoleView = computed(() => resolveNodeRole(authStore.nodeMode))
+const nodeModeRole = computed(() => nodeRoleView.value.role)
+const nodeModeLabel = computed(() => nodeRoleView.value.label)
+const nodeModeTagType = computed(() => nodeRoleView.value.tagType)
 
 // caddyStatus 取值 running/stopped/unknown，样式类须映射——原先直接拼
 // caddyStatus 使 `.status-tag.info`（未知态灰底）零命中。

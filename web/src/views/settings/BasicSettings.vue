@@ -513,6 +513,7 @@ import { createLatestReadSession } from '@/utils/viewAsyncState'
 import { importFailureLines, importFailureReport } from '@/utils/importFailure'
 import { importSummaryLabel } from '@/utils/importSummaryLabels'
 import { MFA_SCOPE_GROUPS } from '@/utils/mfaScopeGroups'
+import { saveBlob } from '@/utils/download'
 import { Setting, InfoFilled, Check, View, Upload, Download, Timer, Lock, Document } from '@element-plus/icons-vue'
 import DialogHeader from '@/components/DialogHeader.vue'
 import DialogSectionHeader from '@/components/DialogSectionHeader.vue'
@@ -626,13 +627,7 @@ const exportBackup = async (): Promise<void> => {
       responseType: 'blob', timeout: 0,
       params: { sections: exportSections.value.join(',') },
     })
-    const url = URL.createObjectURL(blob)
-    const link = document.createElement('a')
-    link.href = url
-    link.download = `lazy-balancer-backup-${formatDateShort(new Date())}.lbbak`
-    link.click()
-    // Safari 下立即回收 objectURL 会截断下载文件，延迟 1s 再释放
-    setTimeout(() => URL.revokeObjectURL(url), 1000)
+    saveBlob(blob, `lazy-balancer-backup-${formatDateShort(new Date())}.lbbak`)
     exportDialogVisible.value = false
     mfaAwareSuccess('配置备份已导出')
   } catch {
@@ -892,13 +887,7 @@ const downloadAutoBackup = async (row: AutoBackupRow): Promise<void> => {
   try {
     // 备份含证书与私钥，体积可能较大，禁用 30s 默认超时
     const blob = await request.get<Blob>(`/auto-backup/${row.id}/download`, { responseType: 'blob', timeout: 0 })
-    const url = URL.createObjectURL(blob)
-    const link = document.createElement('a')
-    link.href = url
-    link.download = row.filename
-    link.click()
-    // Safari 下立即回收 objectURL 会截断下载文件，延迟 1s 再释放
-    setTimeout(() => URL.revokeObjectURL(url), 1000)
+    saveBlob(blob, row.filename)
   } catch {
     // 全局拦截器已提示（含 Blob 错误体解析）
   }

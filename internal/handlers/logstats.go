@@ -221,14 +221,6 @@ func logStatsVolumeReadRecovered(key string) {
 	services.Logf("info", "日志体量读取已恢复（%s）", key)
 }
 
-// resetLogStatsVolumeStateForTest 仅供测试隔离（跨用例的注入失败状态不得
-// 让后续断言的「首报」被去重成 0 条）。
-func resetLogStatsVolumeStateForTest() {
-	logStatsVolumeState.Lock()
-	logStatsVolumeState.failed = nil
-	logStatsVolumeState.Unlock()
-}
-
 // dirStats 单个基名日志文件的体量归并结果。
 type dirStats struct {
 	Active   int64
@@ -416,14 +408,6 @@ type logStatsRowCountEntry struct {
 var logStatsRowCounts struct {
 	sync.Mutex
 	entries map[string]logStatsRowCountEntry
-}
-
-// resetLogStatsRowCountCacheForTest 仅供测试隔离（跨用例的 DB 交换后不得
-// 读到上一夹具的行数）。
-func resetLogStatsRowCountCacheForTest() {
-	logStatsRowCounts.Lock()
-	logStatsRowCounts.entries = nil
-	logStatsRowCounts.Unlock()
 }
 
 // cachedLogTableCount 返回表行数（TTL 缓存 + 读失败留痕）。ok=false 表示

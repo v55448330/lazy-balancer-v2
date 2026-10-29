@@ -449,10 +449,14 @@ echo "== frontend coverage/tests/typecheck/build =="
 # 本门绿、npm run build 红）。vue-tsc 看不到模板编译期错误，发布契约要求
 # 真实 vite build，故整条 build 链都在门内。
 #
-# test:coverage 用 node 内建门限：阈值 80/91/93（行/分支/函数），分母是
-# `src/**/*.ts` 全量（tests/** 已排除）——换分母后实测水位贴阈值（余量不足
-# 1pp，实测值见 `npm run test:coverage` 的表尾），故改动分母/删 spec 必须
-# 同步复核阈值，不要再引用含 tests/** 分母时期的历史口径（那组数字已退役）。
+# test:coverage 用 node 内建门限：阈值 80/91/88（行/分支/函数），分母是
+# `src/**/*.ts` 全量（tests/** 已排除），且由 tests/coverageLoadSentinel.spec.ts
+# 逐个装载把「未被行为用例 import 的模块」也拉进分母（此前它们完全不进表，
+# 新增零测试源文件不会拉低任何指标）。函数面因此从 93 下调到 88：装载哨兵把
+# api.ts / highlight.ts / restart.ts 等未被覆盖的导出计为 0%。
+# 实测水位贴阈值（余量不足 1pp，实测值见 `npm run test:coverage` 的表尾），故
+# 改动分母/删 spec 必须同步复核阈值，不要再引用含 tests/** 分母时期的历史口径
+# （那组数字已退役）。
 # 唯一事实源是
 # web/package.json 的 test:coverage 参数，本注释只是说明；两者一致性由
 # web/tests/coverageThresholdSource.spec.ts 的阈值口径钉双向对账。

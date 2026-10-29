@@ -111,9 +111,7 @@ func TestEngine_RearmLoopDoesNotReplaceRunningDaemon(t *testing.T) {
 	}
 
 	close(exit) // 正常退出：旧形态会按 pendingRestart 换代重启
-	if !waitDaemonNotRunning(t, e, id, 2*time.Second) {
-		t.Fatal("常驻任务正常退出后 running 位未归零")
-	}
+	waitDaemonNotRunning(t, e, id, 2*time.Second, "常驻任务正常退出后 running 位未归零")
 	if got := starts.Load(); got != 1 {
 		t.Fatalf("RearmLoop 后 Run 正常退出仍被换代重启：启动次数=%d, want 1", got)
 	}

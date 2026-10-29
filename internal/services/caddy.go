@@ -4478,7 +4478,8 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig, sec
 	// R 次 SELECT+stat 收敛到 1 次）；无上下文路径（单规则预检等）退化为
 	// 链内闭包缓存（每链至多一次——零安全策略/非 http 链零开销；http 链
 	// 首个策略求值时计算（全 off 策略的 http 链
-	// 仍付一次 SELECT+2×stat——实参求值在 buildWafHandlerWithPolicy 调用前，
+	// 仍付一次 SELECT+2×stat——实参求值在 WAF handler 构建调用
+	// （buildWafHandlerWithIndex）前，
 	// 真惰性需改 BuildCorazaDirectives 签名,安全关键函数不值,裁定接受））。
 	var chainFingerprint string
 	needFingerprint := func() string {

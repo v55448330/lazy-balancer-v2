@@ -57,14 +57,6 @@ var auditOptionsCache struct {
 	payload   map[string]interface{}
 }
 
-// resetAuditOptionsCacheForTest 仅供测试隔离。
-func resetAuditOptionsCacheForTest() {
-	auditOptionsCache.Lock()
-	defer auditOptionsCache.Unlock()
-	auditOptionsCache.expiresAt = time.Time{}
-	auditOptionsCache.payload = nil
-}
-
 func (h *Handlers) GetAuditLogOptions(c *gin.Context) {
 	// 审计库未装配时降级为空结果——同包日志统计
 	// （GetLogStats）与审计写路径都有 nil 守卫，此处此前裸解引用会把生命周期
@@ -145,14 +137,6 @@ type auditLogCountEntry struct {
 var auditLogCounts struct {
 	sync.Mutex
 	entries map[string]auditLogCountEntry
-}
-
-// resetAuditLogCountCacheForTest 仅供测试隔离（跨用例的审计库交换后不得
-// 读到上一夹具的计数）。
-func resetAuditLogCountCacheForTest() {
-	auditLogCounts.Lock()
-	auditLogCounts.entries = nil
-	auditLogCounts.Unlock()
 }
 
 func auditLogCountCacheKey(where string, args []interface{}) string {

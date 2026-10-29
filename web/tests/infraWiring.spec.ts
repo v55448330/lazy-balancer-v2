@@ -35,6 +35,29 @@ test('App.vue 设置分支由 settingsTabOfPage 派生（新增分页不会静�
   assert.doesNotMatch(app, /currentPage === 'settings-basic' \|\|/, '不得回退为逐键字面量分支')
 })
 
+test('App.vue 页面分支与 PAGE_IDS 机械对表（漏分支不得静默空白页）', () => {
+  const app = code('src/App.vue')
+  const layoutStart = app.indexOf('<AppLayout v-else>')
+  const layoutEnd = app.indexOf('</AppLayout>')
+  assert.ok(layoutStart > 0 && layoutEnd > layoutStart, 'AppLayout 区块必须存在')
+  const layout = app.slice(layoutStart, layoutEnd)
+  const ids = PAGE_IDS as readonly string[]
+  for (const id of ids) {
+    if (id.startsWith('settings-')) continue
+    // threat-screen 是 AppLayout 之外的全屏分支（隐藏侧栏顶栏）
+    const host = id === 'threat-screen' ? app : layout
+    assert.match(host, new RegExp(`currentPage === '${id}'`), `PAGE_IDS 的 ${id} 缺少渲染分支（会渲染空白页）`)
+  }
+  assert.ok(ids.some((id) => id.startsWith('settings-')), 'PAGE_IDS 必须包含设置分页键')
+  assert.match(layout, /<Settings v-else-if="settingsTabOfPage\(currentPage\) !== null" \/>/, '设置分页由派生分支统一覆盖')
+  // 兜底分支：分支漏写（新增页面键未接线）时至少给出可见提示，而不是白屏
+  assert.match(layout, /<el-empty v-else description="页面不存在" \/>/, 'AppLayout 末尾必须有未知页面的兜底提示')
+  // 反向：模板里的页面键字面量必须都在 PAGE_IDS 内（拼错/改名残留同样静默空白）
+  for (const match of app.matchAll(/currentPage === '([^']+)'/g)) {
+    assert.ok(ids.includes(match[1] as string), `模板分支 ${match[1]} 不在 PAGE_IDS（拼错或改名残留）`)
+  }
+})
+
 test('侧栏菜单文案与面包屑同源：模板取 NAV_LABELS，pageTitle 由 NAV_ITEMS 派生', () => {
   const layout = code('src/components/layout/AppLayout.vue')
   const nav = section(layout, 'const NAV_ITEMS', 'const settingsPageTitles')

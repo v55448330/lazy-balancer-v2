@@ -12,7 +12,7 @@ import { IP_LIST_MAX_ENTRIES, canSaveIpList, needsEmptyListConfirm } from '../sr
 import { formatIpListEntryLine, ipListRemarkMaxLength, parseIpListEntryLine } from '../src/utils/ipListCsv.ts'
 // 注入本测试自己的正则会让「IPv6 CIDR」被文档化成
 // 非法值，与生产注入的 isValidCidr（SecurityRules.vue CSV 导入）语义相反。
-import { isValidCidr } from '../src/utils/ruleValidation.ts'
+import { isValidCidr } from '../src/utils/ipAddress.ts'
 import {
   ensureSharedEntries,
   invalidateSharedEntriesCache,

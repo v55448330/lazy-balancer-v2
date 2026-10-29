@@ -1,4 +1,5 @@
 import { upstreamDedupeKey } from './upstreamKeys.ts'
+import { isValidV4, isValidV6 } from './ipAddress.ts'
 
 type PathUpstreamInput = {
   readonly protocol: 'http' | 'https'
@@ -36,43 +37,7 @@ export const isValidHostName = (value: string): boolean => {
 }
 
 
-const isValidIpv4 = (value: string): boolean => {
-  const segments = value.split('.')
-  if (segments.length !== 4) return false
-  return segments.every((segment) => {
-    if (!/^\d{1,3}$/.test(segment)) return false
-    const octet = Number(segment)
-    return octet >= 0 && octet <= 255 && String(octet) === segment
-  })
-}
-
-const isValidIpv6 = (value: string): boolean => {
-  if (!value.includes(':') || value.includes('%')) return false
-  try {
-    return new URL(`http://[${value}]/`).hostname.length > 0
-  } catch {
-    return false
-  }
-}
-
-export const isValidCidr = (rawValue: string): boolean => {
-  const value = rawValue.trim()
-  if (!value) return false
-  const parts = value.split('/')
-  if (parts.length > 2) return false
-
-  const address = parts[0] ?? ''
-  const isIpv4 = isValidIpv4(address)
-  const isIpv6 = !isIpv4 && isValidIpv6(address)
-  if (!isIpv4 && !isIpv6) return false
-  if (parts.length === 1) return true
-
-  const prefixText = parts[1] ?? ''
-  if (!/^\d+$/.test(prefixText)) return false
-  const prefix = Number(prefixText)
-  return prefix >= 0 && prefix <= (isIpv4 ? 32 : 128)
-}
-
+// 地址/CIDR 解析单源在 utils/ipAddress（写侧严格口径，拒前导零与 %zone）。
 // M32：与后端 internal/handlers/rule_features.go:323-350 同源的路径归一键——
 // prefix 渲染为 [路径, 路径/*] 双 matcher 故尾部的 / 与 * 一并剥离（Go
 // TrimRight cutset 语义），exact 仅剥尾 /；剥空回退 "/"。
@@ -203,7 +168,7 @@ export const validatePathRules = (rules: readonly PathRuleInput[]): string | nul
       if (!address) return `第 ${rowNumber} 条路径的自定义上游地址不能为空`
       // 上游地址接受 IP 字面量与主机名（isValidHostName 有意排除 IP 字面量——
       // SNI 语义不需要，上游地址需要），与后端 isValidHost 同形。
-      if (!(isValidIpv4(address) || isValidIpv6(address) || isValidHostName(address))) {
+      if (!(isValidV4(address) || isValidV6(address) || isValidHostName(address))) {
         return `第 ${rowNumber} 条路径的自定义上游主机「${address}」无效`
       }
       if (upstream.port < 1 || upstream.port > 65535) return `第 ${rowNumber} 条路径的自定义上游端口无效`

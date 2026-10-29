@@ -7,7 +7,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { code, codeSection, member, repoCode, section, source } from './_helpers.ts'
+import { code, codeSection, member, repoCode, section, source, webFiles } from './_helpers.ts'
 
 test('个人资料弹框不再保留无人消费的自动聚焦契约', () => {
   const dialog = code('src/components/ProfileDialog.vue')
@@ -94,6 +94,15 @@ test('文档钉：信任侧冲突警告的门控位置与注释一致（computed
   assert.match(alert, /trustEnabledInEditor\.value \? mergeIpEntries/, '实现口径：信任关闭时条目零生效，阶段 0 恒启用')
   assert.match(page, /const trustEnabledInEditor = computed\(\(\) => trustEnabledForPolicyType\(editorPolicyType\.value, ipWhitelistEnabled\.value\)\)/, '告警/预览必须复用保存载荷同一谓词')
   assert.match(page, /ipBlacklistSelf\.value, trustEnabledInEditor\.value\)\)/, 'Step 4 冲突检测的本策略允许侧同样走单源门')
+})
+
+// 同一条不变量被两份 spec 逐字重复钉住时，改动要维护两处副本，而任何一侧的
+// 失效（切片形态变化、断言被弱化）都不会被另一侧发现——重复的守卫在心理上
+// 提供「已覆盖」的错觉。声明级判据只留单源，消费侧各钉自己的面。
+test('trustEnabledInEditor 的声明级判据只在一份 spec 里落地', () => {
+  const declaration = /const trustEnabledInEditor = computed/
+  const holders = webFiles('tests', ['.spec.ts']).filter((file) => declaration.test(code(file)))
+  assert.deepEqual(holders, ['tests/frontendWiringContracts.spec.ts'], '声明级判据必须单源（其余 spec 只钉各自的消费面）')
 })
 
 

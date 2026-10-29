@@ -42,6 +42,22 @@ test('信息横幅注释不引用已删除的样式类（文档钉）', () => {
   assert.doesNotMatch(source('src/styles/main.css'), /bound-rule-alert/)
 })
 
+test('全站直角铁律：信息横幅与产品徽章不得在类自身声明圆角', () => {
+  const css = source('src/styles/main.css')
+  // teleport 到 body 的宿主（ElMessageBox 根 / ElPopover popper / ElDrawer 根）
+  // 不匹配 #app 与 .el-dialog__body 的直角清单——类自身若写圆角，同一 class
+  // 在那些上下文会按该值生效，与全站直角裁定相反（放错宿主即突变）。
+  for (const cls of ['.info-note-bar', '.v2-badge']) {
+    const rule = section(css, `${cls} {`, '}')
+    const rounded = rule.match(/border-radius:\s*([^;]+)/)
+    assert.equal(rounded, null, `${cls} 不得在规则内声明 border-radius（当前 ${rounded?.[1] ?? ''}）`)
+  }
+  // 形状由直角清单统一给定：两个类必须仍在 #app 的直角枚举里。
+  const appSquare = section(css, '#app :is(', ') { border-radius: 0; }')
+  assert.match(appSquare, /\.info-note-bar/, '信息横幅须留在 #app 直角清单')
+  assert.match(appSquare, /\.v2-badge/, '产品徽章须留在 #app 直角清单')
+})
+
 test('规则先于指标落地时保持待定，不写成采集失败', () => {
   const text = code(DASHBOARD)
   const applied = section(text, 'rules.value = res.data || []', 'const version = ++rulesVersion')

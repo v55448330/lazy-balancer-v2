@@ -1079,12 +1079,52 @@ func snapshotAuditHeaders(hs map[string][]string) (map[string][]string, int64) {
 	return out, total + int64(len(`"_lb_dropped_headers":[""]`)+len(marker)+1)
 }
 
+// jsonStringLengthPreservingByte 标记「JSON 转义后仍输出原字节、长度计 1」的
+// 字节：可打印 ASCII（0x20-0x7e）与 DEL(0x7f) 中不含 " \ < > & 的部分。
+// 其余字节（控制字符、六个转义字符、全部非 ASCII 字节）都要走慢路径，
+// 非 ASCII 一并保守拦下——U+2028/U+2029 计 6 字节、非法 UTF-8 替换为
+// U+FFFD（3 字节），只有解码 rune 才能判定。
+var jsonStringLengthPreservingByte = func() (t [256]bool) {
+	for c := 0x20; c < 0x80; c++ {
+		t[c] = true
+	}
+	for _, c := range []byte{'"', '\\', '<', '>', '&'} {
+		t[c] = false
+	}
+	return t
+}()
+
+// jsonStringEscapeFreePrefixLen 返回 s 中「转义后长度不变」的最长前缀长度
+// （memchr 式快路径）：请求头/URI/方法/ASCII body 等常规取值整串无触发字节，
+// 调用方据此直接取 len，不必逐字节进转义分支；命中触发字节则从该处交回
+// jsonStringEscapedLenSlow 解码。
+func jsonStringEscapeFreePrefixLen(s string) int {
+	for i := range len(s) {
+		if !jsonStringLengthPreservingByte[s[i]] {
+			return i
+		}
+	}
+	return len(s)
+}
+
 // jsonStringEscapedLen 返回 s 经 encoding/json 字符串编码后的精确字节数
 // （不含两侧引号），与 json.Marshal 的转义规则逐一对齐：引号/反斜杠与
 // \b\f\n\r\t 双字节短转义，其余控制字符与 HTML 安全字符 <>& 按 \u00XX
 // 六字节，U+2028/U+2029 按 \u202X 六字节，非法 UTF-8 字节替换为
 // U+FFFD（3 字节）。等值性由随机串对拍测试钉住；纯字节扫描零分配。
+// 无转义触发字节的前缀（绝大多数请求取值）走
+// jsonStringEscapeFreePrefixLen 快路径，只有触发字节之后才逐字节解码。
 func jsonStringEscapedLen(s string) int {
+	prefix := jsonStringEscapeFreePrefixLen(s)
+	if prefix == len(s) {
+		return prefix
+	}
+	return prefix + jsonStringEscapedLenSlow(s[prefix:])
+}
+
+// jsonStringEscapedLenSlow 是 jsonStringEscapedLen 的完整慢路径：逐字节/逐
+// rune 累加转义后长度（快路径命中的残留段从这里开始算）。
+func jsonStringEscapedLenSlow(s string) int {
 	n := 0
 	for i := 0; i < len(s); {
 		c := s[i]
@@ -1779,8 +1819,9 @@ func estimateAuditMessageBytes(m plugintypes.AuditLogMessage) int64 {
 	return n
 }
 
-// estimateAuditSnapshotBytes 估算快照驻留字节（请求路径可付：只做 len 求和
-// 与固定开销累加，零分配）。口径见上方常量：内容 + 语法/容器固定开销，对
+// estimateAuditSnapshotBytes 估算快照驻留字节（请求路径可付：零分配；无转义
+// 触发字节的字符串段按 len 直接计入，命中触发字节的段才逐字节解码转义长度，
+// 见 jsonStringEscapedLen）。口径见上方常量：内容 + 语法/容器固定开销，对
 // 文件/messages 条目数是保守上界；header 段直接用快照侧已算出的精确序列化
 // 字节（HeadersBytes_），不再按条固定开销重估——后者在头部密集时高估数倍，
 // 会把实际 ~131KiB 的双向 header 表估成 ~700KiB 并越过单条上限整行丢弃。
@@ -2018,43 +2059,22 @@ func (p *auditPipeline) writeWriterStatsIfDue(now time.Time) {
 	}
 	// 先清脏标记再读计数：读到计数后到达的新失败会重新置脏，不丢更新。
 	p.statsDirty.Store(false)
-	ipcSent, ipcFailed, spoolWritten, spoolErrs := p.ipc.counters()
 	dropped := p.dropped.Load()
 	ioErrors := p.ioErrors.Load()
-	mode := "file"
-	if p.ipc != nil {
-		mode = "ipc"
-	}
+	// 侧车字段集合 = 根服务读侧的解析集合（internal/services/securityevents.go
+	// 的 securityEventsObserveAuditWriterStats：dropped / io_errors /
+	// format_errors / written_at）。本进程的 IPC/spool 过程量（投递成功/失败、
+	// spool 写入/失败、可补采/真丢、模式）没有消费方，写出去只会与读侧的失败
+	// 窗口形成两套丢事件口径——需要暴露新语义时先让读侧解析，再同步本结构体。
 	payload := struct {
 		Dropped      uint64 `json:"dropped"`
 		IOErrors     uint64 `json:"io_errors"`
 		FormatErrors uint64 `json:"format_errors"`
-		IPCSent      uint64 `json:"ipc_sent"`
-		IPCFailed    uint64 `json:"ipc_failed"`
-		SpoolWritten uint64 `json:"spool_written"`
-		SpoolErrors  uint64 `json:"spool_errors"`
-		// 健康语义的两分口径（读侧不得把两类混成一个「写侧故障」）：
-		//   - recoverable：已安全落在 spool 里、等根服务补采的行——数据没丢，
-		//     面板应报「补采中/延迟」而不是「丢事件」；
-		//   - lost：真丢（入队丢弃 + 落盘 IO 错误）。spool_errors 的行已尝试
-		//     文件兜底：文件写成功则不计入 lost，写失败已在 io_errors 里。
-		// ipc_failed 只是「本次投递失败」的过程量：同批行随后变成
-		// spool_written（可补采）或 spool_errors（再转文件兜底）。
-		Recoverable uint64 `json:"recoverable"`
-		Lost        uint64 `json:"lost"`
-		Mode        string `json:"mode"`
-		WrittenAt   string `json:"written_at"`
+		WrittenAt    string `json:"written_at"`
 	}{
 		Dropped:      dropped,
 		IOErrors:     ioErrors,
 		FormatErrors: p.formatErrors.Load(),
-		IPCSent:      ipcSent,
-		IPCFailed:    ipcFailed,
-		SpoolWritten: spoolWritten,
-		SpoolErrors:  spoolErrs,
-		Recoverable:  spoolWritten,
-		Lost:         dropped + ioErrors,
-		Mode:         mode,
 		WrittenAt:    now.UTC().Format(time.RFC3339),
 	}
 	body, err := json.Marshal(payload)
@@ -2756,8 +2776,10 @@ func (s *auditSpool) close() error {
 }
 
 // auditIPCShipper 是 IPC 出货器：攒批 + POST + 失败落 spool + 最后兜底文件。
-// 计数器（sent/failed/spooled/spoolErrs）就是侧车文件的 ipc_sent / ipc_failed /
-// spool_written / spool_errors 四个字段的来源，健康语义见 writeWriterStatsIfDue。
+// 计数器（sent/failed/spooled/spoolErrs）是本进程的投递/兜底过程量：只供
+// shipper 内部与测试观测（counters），**不写入跨进程侧车**——侧车只暴露根服务
+// 读方实际解析的 dropped/io_errors/format_errors/written_at，见
+// writeWriterStatsIfDue。
 type auditIPCShipper struct {
 	socket   string
 	client   *http.Client
@@ -2979,7 +3001,8 @@ func (s *auditIPCShipper) close() {
 	}
 }
 
-// counters 返回四个 IPC/spool 计数（侧车文件字段来源）。
+// counters 返回四个 IPC/spool 过程计数（投递成功/失败、spool 写入/失败），
+// 供 shipper 内部与测试观测；不进入跨进程侧车（见 writeWriterStatsIfDue）。
 func (s *auditIPCShipper) counters() (sent, failed, spooled, spoolErrs uint64) {
 	if s == nil {
 		return 0, 0, 0, 0

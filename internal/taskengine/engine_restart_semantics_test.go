@@ -1,6 +1,7 @@
 package taskengine
 
 import (
+	"fmt"
 	"os"
 	"strings"
 	"sync/atomic"
@@ -25,18 +26,18 @@ func daemonRunning(e *Engine, id string) bool {
 	return r.running
 }
 
-// waitDaemonNotRunning 等待真实 running 位归 false。
-func waitDaemonNotRunning(t *testing.T, e *Engine, id string, timeout time.Duration) bool {
+// waitDaemonNotRunning 等待真实 running 位归 false。what 描述失败场景——
+// waitForEngine 超时会带着它失败，调用方无需 `if !...` 外壳（旧布尔返回恒为
+// true，造就死分支）。
+func waitDaemonNotRunning(t *testing.T, e *Engine, id string, timeout time.Duration, what string) {
 	t.Helper()
-	waitForEngine(t, "daemon running=false", timeout, func() bool { return !daemonRunning(e, id) })
-	return true
+	waitForEngine(t, what, timeout, func() bool { return !daemonRunning(e, id) })
 }
 
-// waitNotRunning 等待 IsRunning(id)==false。
-func waitNotRunning(t *testing.T, e *Engine, id string, timeout time.Duration) bool {
+// waitNotRunning 等待 IsRunning(id)==false（what 同上承载失败场景）。
+func waitNotRunning(t *testing.T, e *Engine, id string, timeout time.Duration, what string) {
 	t.Helper()
-	waitForEngine(t, "IsRunning=false", timeout, func() bool { return !e.IsRunning(id) })
-	return true
+	waitForEngine(t, what, timeout, func() bool { return !e.IsRunning(id) })
 }
 
 // Given RoleAny 常驻已运行 + 三连同角色 SetRole 重申（生产启动/翻转形态）。
@@ -59,9 +60,7 @@ func TestEngine_SetRoleReassertionDoesNotReviveStoppedDaemon(t *testing.T) {
 	e.SetRole(true)
 	e.SetRole(true)
 	e.StopLoop("t-ra")
-	if !waitNotRunning(t, e, "t-ra", time.Second) {
-		t.Fatal("StopLoop 后 daemon 应停止")
-	}
+	waitNotRunning(t, e, "t-ra", time.Second, "StopLoop 后 daemon 应停止")
 	// 停止后 300ms 内不得复活（误栽 pendingRestart 的复活面）
 	time.Sleep(300 * time.Millisecond)
 	if e.IsRunning("t-ra") {
@@ -92,9 +91,7 @@ func TestEngine_DemoteTripleSetRoleDoesNotReviveOnSlave(t *testing.T) {
 	e.SetRole(false)
 	e.SetRole(false)
 	e.SetRole(false)
-	if !waitNotRunning(t, e, "t-mo", time.Second) {
-		t.Fatal("demote 后 master-only daemon 不得在从节点继续/复活运行")
-	}
+	waitNotRunning(t, e, "t-mo", time.Second, "demote 后 master-only daemon 不得在从节点继续/复活运行")
 	time.Sleep(300 * time.Millisecond)
 	if e.IsRunning("t-mo") {
 		t.Fatal("demote 后 master-only daemon 在从节点复活——违反禁签发不变量")
@@ -119,9 +116,7 @@ func TestEngine_StopPreventsRestart(t *testing.T) {
 	e.SetRole(true) // 生产启动期恒有的角色重申
 	e.Stop()
 	// Stop 后 cleanup 消费 pendingRestart 的路径必须被 stopped 门拦下
-	if !waitDaemonNotRunning(t, e, "t-sp", 500*time.Millisecond) {
-		t.Fatal("Engine.Stop 后不得复活 daemon（teardown 复活面）")
-	}
+	waitDaemonNotRunning(t, e, "t-sp", 500*time.Millisecond, "Engine.Stop 后不得复活 daemon（teardown 复活面）")
 }
 
 // Given master-only Periodic（interval 1h）在从节点 StartLoop。
@@ -166,9 +161,8 @@ func TestEngine_StopLoopImmediatelyAfterStartEventuallyStops(t *testing.T) {
 		e.StopLoop("t-w")
 		e.StartLoop("t-w") // restart 过渡（pendingRestart 消费路径）
 		e.StopLoop("t-w")
-		if !waitNotRunning(t, e, "t-w", 400*time.Millisecond) {
-			t.Fatalf("第 %d 次 restart 过渡中 StopLoop：daemon 未停止（首停信号丢失——cancel 登记滞后窗口）", i+1)
-		}
+		waitNotRunning(t, e, "t-w", 400*time.Millisecond,
+			fmt.Sprintf("第 %d 次 restart 过渡中 StopLoop：daemon 未停止（首停信号丢失——cancel 登记滞后窗口）", i+1))
 	}
 }
 
@@ -209,9 +203,7 @@ func TestEngine_DaemonRunPanicRecordsFailedWithBackoff(t *testing.T) {
 		return rec != nil && rec.Status == "failed"
 	})
 	// 退避窗口内不得紧循环（真实运行位归 false 后保持）
-	if !waitDaemonNotRunning(t, e, "t-dpanic", time.Second) {
-		t.Fatal("daemon panic 后必须退出运行（不得紧循环）")
-	}
+	waitDaemonNotRunning(t, e, "t-dpanic", time.Second, "daemon panic 后必须退出运行（不得紧循环）")
 	time.Sleep(200 * time.Millisecond)
 	if daemonRunning(e, "t-dpanic") {
 		t.Fatal("daemon panic 后在退避窗口内被立即重启——紧循环风险")

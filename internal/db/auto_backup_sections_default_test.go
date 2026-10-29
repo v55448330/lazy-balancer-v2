@@ -30,13 +30,10 @@ func TestAutoBackupSectionsDefault_isSingleSource(t *testing.T) {
 	if got := strings.Count(codeText, literal); got != 1 {
 		t.Fatalf("分类默认字面量出现 %d 次, want 1（仅常量定义；其余处须引用 DefaultAutoBackupSections）", got)
 	}
-	// 常量定义 + fresh DDL + newColumns 补列 + 解析 helper = 4 处引用（迁移经
-	// helper 按值复用单源）。迁移此前手抄四分类字面量：改常量后只升级存量
-	// 用户的默认范围，新库/带外 NULL 行仍是旧口径。
-	if got := strings.Count(codeText, "DefaultAutoBackupSections"); got != 4 {
-		t.Fatalf("DefaultAutoBackupSections 代码引用次数=%d, want 4（常量定义 + fresh DDL + 补列 + 解析 helper）", got)
-	}
-
+	// 这里不再断言「标识符引用次数 == 4」：引用次数是**实现形态**的快照，任何
+	// 合法新增引用（新的解析 helper、快照装载路径多读一次）都会假红，而真正要
+	// 防的「手抄第二份字面量」已由上面的字面量计数（必须恰好 1 处）+ 下面的 DDL
+	// 默认值行为断言完全覆盖。
 	// 行为面：fresh 表的列默认值必须等于常量（串接错误会在建表期静默落空）。
 	database := openMigrationTestDB(t)
 	if err := createTables(); err != nil {

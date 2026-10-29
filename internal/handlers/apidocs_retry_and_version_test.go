@@ -61,6 +61,72 @@ func TestAPIDocRoutes_deleteRetrySemanticsExhaustive(t *testing.T) {
 	}
 }
 
+// 写方法（POST/PUT/PATCH/DELETE）的重试语义穷尽性：每条写端点的文案必须落在
+// 已登记的重试语义词上（新增任意文案即红），且
+//   - PUT/PATCH 不得声称「可能创建新资源」（方法派生幂等，除非登记为特例）；
+//   - 携带 POST 兜底创建类文案的端点必须登记进 createLikeWriteDocRoutes
+//     （默认分支不得吞未登记路由）；
+//   - 登记表不得残留已不存在/已改类的端点。
+func TestAPIDocRoutes_writeRetrySemanticsExhaustive(t *testing.T) {
+	// 语义词登记表：新增一种重试口径必须出现在这里（否则这段文案从未被复审）。
+	knownPhrases := []string{
+		"可安全重试：",
+		"不可安全重试：",
+		"不可盲目安全重试：",
+		"改密请求不可重放：",
+		"是否可安全重试取决于 JSON-RPC 方法",
+	}
+	createLike := apiDocRetryByMethod[http.MethodPost]
+	covered := 0
+	usedCreateLike := make(map[string]bool, len(createLikeWriteDocRoutes))
+	for _, route := range apiDocRoutes {
+		if _, write := apiDocRetryByMethod[route.Method]; !write {
+			continue
+		}
+		covered++
+		key := route.Method + " " + route.Path
+		description := operationDescription(route)
+		matched := false
+		for _, phrase := range knownPhrases {
+			if strings.Contains(description, phrase) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			t.Errorf("%s 的重试语义未落在已登记口径上（新增文案需登记）: %q", key, description)
+			continue
+		}
+		if route.Method == http.MethodPost {
+			if strings.Contains(description, createLike) {
+				usedCreateLike[key] = true
+				if _, registered := createLikeWriteDocRoutes[key]; !registered {
+					t.Errorf("%s 落进 POST 兜底创建类文案但未在 createLikeWriteDocRoutes 登记（默认分支不得吞未登记路由）: %q", key, description)
+				}
+			}
+			continue
+		}
+		if strings.Contains(description, createLike) {
+			t.Errorf("%s 是 %s，却用 POST 的「可能创建新资源」文案——PUT/PATCH/DELETE 语义由方法派生，特例请显式 case: %q", key, route.Method, description)
+		}
+	}
+	if covered == 0 {
+		t.Fatal("写端点集合为空——绊线的输入面已消失")
+	}
+	documented := make(map[string]struct{}, covered)
+	for _, route := range apiDocRoutes {
+		documented[route.Method+" "+route.Path] = struct{}{}
+	}
+	for key := range createLikeWriteDocRoutes {
+		if _, ok := documented[key]; !ok {
+			t.Errorf("createLikeWriteDocRoutes 登记了不存在的写端点 %s（拼写漂移会让穷尽性绊线失去对照）", key)
+		}
+		if !usedCreateLike[key] {
+			t.Errorf("%s 已登记但文案不再是创建类兜底（改类后须同步删登记）", key)
+		}
+	}
+}
+
 // 白名单不得残留已删除的路由（登记项必须仍是文档中的 DELETE 端点）。
 func TestAPIDocRoutes_idempotentDeleteWhitelistHasNoStaleEntries(t *testing.T) {
 	documented := make(map[string]struct{}, len(apiDocRoutes))

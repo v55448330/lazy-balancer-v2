@@ -293,6 +293,7 @@ func TestLibUpdateLogs_readTaskLogWithRotation(t *testing.T) {
 // 让同一触发文件被执行两次全量渲染 + /load）。断言启动次数而非标志位——
 // 标志位区分不了「第二次提前返回」与「第二次又起了一个 goroutine」。
 func TestStartCaddyRestartWatcher_secondCallStartsNoSecondLoop(t *testing.T) {
+	withIsolatedGlobal(t)
 	oldLoop := caddyRestartWatcherLoop
 	release := make(chan struct{})
 	starts := make(chan struct{}, 2)
@@ -466,8 +467,13 @@ func TestGetSystemTaskStats24hSeries_bothBranches(t *testing.T) {
 	// 分支二：有引擎 → 24 桶、时间升序，且已落库的运行进入对应小时桶。
 	// 引擎装配本身可能写当日启动行，故不在当前小时断零；改为在窗口内
 	// 5 小时前种一组已知计数，按桶键精确断言。
+	//
+	// 种子必须按**引擎时区**取墙钟：分桶键是 task_runs.started_at（引擎时区
+	// 墙钟串，写侧见 engineNowStr），用进程本地时区取 time.Now() 在非整小时
+	// 偏移的机器上（TZ=Asia/Kolkata +5:30）会落进相邻小时桶 → 与本用例的
+	// seededHour 断言确定性地错位（假红）。
 	initTaskEngineForTest(t)
-	seededAt := time.Now().Add(-5 * time.Hour)
+	seededAt := time.Now().In(services.CurrentLocation()).Add(-5 * time.Hour)
 	seededHour := seededAt.Format("2006-01-02 15") + ":00:00"
 	for _, status := range []string{"success", "success", "failed"} {
 		if _, err := db.DB.Exec(`INSERT INTO task_runs (task_id, family, status, started_at) VALUES ('stats-series-probe','test',?,?)`, status, seededHour); err != nil {

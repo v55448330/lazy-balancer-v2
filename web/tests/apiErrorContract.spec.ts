@@ -70,12 +70,16 @@ const HTTP_STATUS: Record<string, number> = {
 const CALL_SITE = /\bc\.(?:JSON|AbortWithStatusJSON)\(\s*((?:http\.Status[A-Za-z]+)|[A-Za-z_][\w.]*)\s*,\s*/g
 
 /**
- * 宽口径响应调用点计数（只认方法名，不看首实参形态）。CALL_SITE 只枚举
+ * 宽口径响应调用点计数（只认方法名，不看接收者与首实参形态）。CALL_SITE 只枚举
  * 「http.StatusX / 标识符首实参」两形态——更复杂的首实参（类型转换、链式
  * 表达式等）在两个集合里同时消失，`calls = pairs + registered` 恒等式仍成立。
- * 宽窄计数必须相等，否则该文件存在未进面的响应站点（显式失败而非静默漏计）。
+ *
+ * 接收者必须与 CALL_SITE 解耦：两处都写死 `c.` 时，`ctx.JSON(...)`（自定义
+ * `*gin.Context` 形参名、包装器）在宽窄两侧同时少计 1，恒等式照样成立——该站点
+ * 既不被业务码⇄状态同值校验，也不进对账。宽口径只看「<标识符>.JSON(」，
+ * 非 `c.` 接收者会以「宽 ≠ 窄」显式报错，而不是静默漏计。
  */
-const RESPONSE_CALL_SITE = /\bc\.(?:JSON|AbortWithStatusJSON)\(/g
+const RESPONSE_CALL_SITE = /\b[A-Za-z_]\w*\.(?:JSON|AbortWithStatusJSON)\(/g
 
 /** 载荷首 token 的信封形态（`Code:`/`"code":` 之后必须能解出业务码）。 */
 const ENVELOPE_LITERAL = /^(?:models\.APIResponse\{\s*Code:|gin\.H\{\s*"(?:code|Code)"\s*:)\s*((?:http\.Status[A-Za-z]+)|[A-Za-z_][\w.]*|\d+)/
@@ -266,6 +270,12 @@ test('扫描器形态自测：同行/多行、两种方法/信封、字面量/�
   assert.deepEqual(unresolved.sites.map((site) => site.shape), ['var:response'])
   const helperPayload = scan('c.JSON(http.StatusInternalServerError, systemInternalFailure("读取失败", err))')
   assert.deepEqual(helperPayload.sites.map((site) => site.shape), ['call:systemInternalFailure'])
+  // 接收者无关的宽口径：非 `c.` 接收者（自定义 *gin.Context 形参名/包装器）必须
+  // 被宽口径计入而窄口径不计——两侧计数不等即显式报红，而不是同时少计 1 后
+  // 恒等式照旧成立（该站点的业务码⇄状态同值完全没有校验）。
+  const foreign = 'ctx.JSON(http.StatusConflict, models.APIResponse{Code: 409})'
+  assert.equal([...foreign.matchAll(CALL_SITE)].length, 0, '窄口径只解析 c. 接收者')
+  assert.equal([...foreign.matchAll(RESPONSE_CALL_SITE)].length, 1, '宽口径必须与接收者无关（ctx./w. 等同样入对账面）')
   // 旧合法信封不得遮蔽最后一次函数/多返回值赋值；只有最后赋值仍为信封才可证明。
   for (const fixture of [
     'resp := models.APIResponse{Code: 0}\n\tresp = buildResponse()\n\tc.JSON(http.StatusOK, resp)',

@@ -10,7 +10,7 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
 import { calls, resetCalls, EL_MESSAGE_METHODS, STUB_ELEMENT, STUB_SAVE_RESULT_DEPS, type StubCall } from './_stubs.ts'
-import { code, stripComments } from './_helpers.ts'
+import { code, matchBrace, stripComments } from './_helpers.ts'
 
 const webRoot = new URL('../', import.meta.url)
 
@@ -27,22 +27,94 @@ test('index.html 保留挂载点、入口脚本与首帧标题（否则运行期
 })
 
 // 判据跑在剥注释视图上：注释里提到的 `test(`/`assert.` 都不是用例或断言
-// （否则空壳 spec 只要在注释里写够 assert 就能绕过门禁）。占位断言同样剔除。
+// （否则空壳 spec 只要在注释里写够 assert 就能绕过门禁）。
+//
+// 计数按**用例块**（`test(` 起、括号配对止）逐块进行，不是文件级总和：文件级
+// 口径下一个用例写 10 条断言 + 9 个空体用例仍全绿（断言集中即可整体通过），
+// 而门禁的真实语义是「每个用例都断言了点什么」。
+//
+// 占位断言剔除两类：恒真的 `assert.ok(true)`，以及两侧共用一个字面量的自反
+// 形态（`assert.equal(1, 1)` / `assert.deepEqual([], [])`）——它们编译通过、
+// 执行通过，却不含任何被测语义。
+const EMPTY_SPEC_PLACEHOLDERS = [
+  /\bassert\.ok\(\s*true\s*\)/g,
+  /\bassert\.(?:equal|strictEqual|deepEqual|deepStrictEqual|notEqual)\(\s*([^,;()]+?)\s*,\s*\1\s*\)/g,
+]
+
+const testBlocks = (stripped: string): string[] => {
+  const blocks: string[] = []
+  const opener = /^[ \t]*(?:test|it)\s*\(/gm
+  for (const match of stripped.matchAll(opener)) {
+    const at = match.index ?? 0
+    // 用例体起点 = 用例名/回调之后第一个**代码里的** `{`。直接 indexOf('{')
+    // 会命中标题字符串里的花括号（`test('… ${} …')`），把块起点提前到名字里、
+    // 配对收尾落在标题内——该用例因此被判定为「零断言」（真断言被切掉）。
+    const brace = bodyBrace(stripped, at)
+    if (brace < 0) continue
+    const close = matchBrace(stripped, brace)
+    if (close < 0) return [stripped.slice(at)] // 不平衡：整段视为一个块，交由断言判红
+    blocks.push(stripped.slice(at, close + 1))
+  }
+  return blocks
+}
+
+/** 从 `from` 起首个不在字符串字面量内的 `{`（-1 = 没有）。 */
+const bodyBrace = (stripped: string, from: number): number => {
+  let quote: string | null = null
+  for (let i = from; i < stripped.length; i++) {
+    const ch = stripped[i]
+    if (quote !== null) {
+      if (ch === '\\') i++
+      else if (ch === quote) quote = null
+      continue
+    }
+    if (ch === "'" || ch === '"' || ch === '`') {
+      quote = ch
+      continue
+    }
+    if (ch === '{') return i
+  }
+  return -1
+}
+
+const exampleCount = (block: string): number => {
+  let withoutPlaceholders = block
+  for (const pattern of EMPTY_SPEC_PLACEHOLDERS) withoutPlaceholders = withoutPlaceholders.replace(pattern, '')
+  return (withoutPlaceholders.match(/\bassert\./g) ?? []).length
+}
+
 const emptySpecReason = (text: string): string | null => {
   const stripped = stripComments(text)
-  const testCount = (stripped.match(/^\s*test\s*\(/gm) ?? []).length
-  const withoutPlaceholders = stripped.replace(/\bassert\.ok\(\s*true\s*\)/g, '')
-  const assertCount = (withoutPlaceholders.match(/\bassert\./g) ?? []).length
-  if (testCount === 0) return 'test=0'
-  if (assertCount < testCount) return `test=${testCount}，有效 assert=${assertCount}`
+  const blocks = testBlocks(stripped)
+  if (blocks.length === 0) return 'test=0'
+  const emptyBlocks = blocks.filter((block) => exampleCount(block) === 0)
+  if (emptyBlocks.length > 0) {
+    return `test=${blocks.length}，其中 ${emptyBlocks.length} 个用例无有效 assert`
+  }
   return null
 }
 
-test('空 spec 判据自检：占位断言违规，缩进的真实用例合规', () => {
-  assert.match(emptySpecReason("test('x', () => { assert.ok(true) })") ?? '', /有效 assert=0/)
-  assert.equal(emptySpecReason("  test('x', () => { assert.equal(1, 1) })"), null)
+test('空 spec 判据自检：占位断言/自反断言/空用例体均违规，逐用例有真断言才合规', () => {
+  assert.match(emptySpecReason("test('x', () => { assert.ok(true) })") ?? '', /1 个用例无有效 assert/)
+  assert.match(emptySpecReason("test('x', () => { assert.equal(1, 1) })") ?? '', /1 个用例无有效 assert/)
+  assert.match(emptySpecReason("test('x', () => { assert.deepEqual([], []) })") ?? '', /1 个用例无有效 assert/)
+  assert.equal(emptySpecReason("  test('x', () => { assert.equal(value, 1) })"), null)
+  // 断言集中在同一个用例：文件级口径判绿，逐块口径必须判违规
+  assert.match(
+    emptySpecReason(
+      "test('a', () => { assert.equal(run(), 1) })\n"
+      + "test('b', () => {})\n"
+      + "test('c', () => { assert.equal(1, 1) })\n",
+    ) ?? '',
+    /test=3，其中 2 个用例无有效 assert/,
+  )
+  // 每个用例各一条真断言必须放行
+  assert.equal(
+    emptySpecReason("test('a', () => { assert.equal(run(), 1) })\ntest('b', () => { assert.ok(run()) })"),
+    null,
+  )
   // 注释里的 assert 不计入有效断言；注释掉的用例也不计入用例数
-  assert.match(emptySpecReason("test('x', () => {\n  // assert.equal(1, 1)\n  doWork()\n})") ?? '', /有效 assert=0/)
+  assert.match(emptySpecReason("test('x', () => {\n  // assert.equal(1, 1)\n  doWork()\n})") ?? '', /无有效 assert/)
   assert.equal(emptySpecReason("// test('x', () => { assert.equal(1, 1) })"), 'test=0')
 })
 

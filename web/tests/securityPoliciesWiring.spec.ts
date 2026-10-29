@@ -5,7 +5,7 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { code, section } from './_helpers.ts'
+import { code, member, section } from './_helpers.ts'
 import { STAGE_BLOCK_STATUS_OPTIONS, hasStage3Features, parseCrsFilename, parseUnknownStrings } from '../src/utils/securityStages.ts'
 
 const page = code('src/views/security/SecurityPolicies.vue')
@@ -19,7 +19,9 @@ test('G3 谓词：mode 三态 ∪ 自定义规则引用非空（与后端 Policy
 })
 
 test('阶段 3 chip 消费 G3 单源谓词（引用数口径，含禁用规则）', () => {
-  const chip = section(page, 'const stage3ChipOn', '\n\n')
+  // 切片必须按花括号配对取成员体：空白行（`'\n\n'`）作终点时，声明一旦长成
+  // 多行块（块体内出现空行）就被截断，后续负断言在截断段上恒真空转。
+  const chip = member(page, 'const stage3ChipOn = ')
   assert.match(chip, /hasStage3Features\(row\.mode, row\.custom_rules_ref_count/, '判定必须用引用数（与后端 G3 逐字对齐）')
   assert.match(chip, /custom_rules_ref_count \?\? row\.custom_rules_count/, '旧后端缺摘要字段时回退启用计数')
   assert.doesNotMatch(chip, /row\.has_waf/)

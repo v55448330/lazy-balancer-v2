@@ -425,16 +425,6 @@ func brandingSyncMarkFailed() {
 	brandingSyncMu.Unlock()
 }
 
-// resetBrandingSyncGateForTest 清空采样门状态（跨用例隔离）。
-func resetBrandingSyncGateForTest() {
-	brandingSyncMu.Lock()
-	brandingSyncLast = time.Time{}
-	brandingSyncDataDir = ""
-	brandingSyncFingerprint = ""
-	brandingSyncMu.Unlock()
-	brandingApplyPending.Store(false)
-}
-
 // brandingApplyPending 记录「幂等同步已把库内渲染输入改掉，但 Caddy 应用尚未
 // 成功」的待办。同步本身幂等且已落库，重试轮 Sync/Seed 会返回 changed=false，
 // 即 needApply=false——只靠 needApply 判定时应用失败的重试永远不会发生。

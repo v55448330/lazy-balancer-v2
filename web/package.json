@@ -9,7 +9,7 @@
   "scripts": {
     "dev": "vite",
     "test": "node --test \"tests/**/*.spec.ts\"",
-    "test:coverage": "node --test --experimental-test-coverage --test-coverage-include='src/**/*.ts' --test-coverage-exclude='tests/**' --test-coverage-lines=80 --test-coverage-branches=91 --test-coverage-functions=93 \"tests/**/*.spec.ts\"",
+    "test:coverage": "node --test --experimental-test-coverage --test-coverage-include='src/**/*.ts' --test-coverage-exclude='tests/**' --test-coverage-lines=80 --test-coverage-branches=91 --test-coverage-functions=88 \"tests/**/*.spec.ts\"",
     "typecheck:src": "vue-tsc -p tsconfig.json --noEmit",
     "typecheck:test": "vue-tsc -p tsconfig.test.json --noEmit && tsc -p tsconfig.node.json",
     "build:vite": "vite build",

@@ -399,6 +399,7 @@ import { serializeWhitelist } from '@/utils/apiKeyWhitelist'
 import { parseWhitelist } from '@/utils/apiKeyWhitelist'
 import { copyText } from '@/utils/copy'
 import { createOneTimeSecretCloseGuard } from '@/utils/oneTimeSecretGuard'
+import { saveBlob } from '@/utils/download'
 import { ElMessageBox, ElMessage } from 'element-plus'
 import { CircleCheckFilled, Connection, CopyDocument, Delete, Document, Key, Plus, Setting, SetUp, SwitchButton, VideoPlay } from '@element-plus/icons-vue'
 import type { APIKey, APIResponse, CreateAPIKeyInput, MCPToolSpec, UpdateAPIKeyInput } from '@/types'
@@ -475,13 +476,7 @@ const downloadMCPPlaybook = async (): Promise<void> => {
   mcpPlaybookDownloading.value = true
   try {
     const blob = await request.get<Blob>('/mcp/ops-playbook', { responseType: 'blob' })
-    const url = URL.createObjectURL(blob)
-    const link = document.createElement('a')
-    link.href = url
-    link.download = 'lazy-balancer-mcp-ops-playbook.md'
-    link.click()
-    // Safari 下立即回收 objectURL 会截断下载文件，延迟 1s 再释放（与 BasicSettings 导出一致）
-    setTimeout(() => URL.revokeObjectURL(url), 1000)
+    saveBlob(blob, 'lazy-balancer-mcp-ops-playbook.md')
   } catch (error: unknown) {
     // 全局拦截器已弹 toast（blob 错误体会被解析出后端 message），这里仅记录
     console.error('Failed to download MCP playbook:', error)

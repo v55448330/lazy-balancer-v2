@@ -3121,3 +3121,62 @@ func TestAuditItemMaxBytes_coversAllClientControlledSegments(t *testing.T) {
 		t.Fatalf("余量口径漂移：非 messages 段 + 余量 + messages 下限后仍余 %d 字节未被任何段声明", slack)
 	}
 }
+
+// 请求路径上的字节估算只关心「转义后长度」，绝大多数取值（URI/方法/协议/
+// 版本/ASCII body）不含任何转义触发字节，整串可直接取 len——快路径必须先
+// 扫出「转义后长度不变」的前缀长度，命中触发字节才进入逐字节转义分支。
+func TestJSONStringEscapeFreePrefixLen(t *testing.T) {
+	cases := []struct {
+		in   string
+		want int
+	}{
+		{"", 0},
+		{"GET", 3},
+		{"/api/v1/rules?x=1&y=2", 17}, // '&' 是触发字节
+		{"a\"b", 1},
+		{"a\\b", 1},
+		{"a<b", 1},
+		{"a>b", 1},
+		{"a\nb", 1},
+		{"a\x00b", 1},
+		{"a\x7fb", 3}, // DEL 不在 json.Marshal 的转义集内
+		{"中文", 0},     // 非 ASCII 交回慢路径判定（U+2028/非法 UTF-8 需特殊处理）
+		{"abc中", 3},   // 前缀可快跳过，非 ASCII 处停
+		{strings.Repeat("a", 64), 64},
+	}
+	for _, tc := range cases {
+		if got := jsonStringEscapeFreePrefixLen(tc.in); got != tc.want {
+			t.Fatalf("jsonStringEscapeFreePrefixLen(%q)=%d, want %d", tc.in, got, tc.want)
+		}
+		// 前缀长度必须与「整串转义长度」自洽：前缀部分逐字节计 1。
+		if prefix := jsonStringEscapeFreePrefixLen(tc.in); prefix < len(tc.in) {
+			quoted, err := json.Marshal(tc.in)
+			if err != nil {
+				t.Fatalf("json.Marshal(%q): %v", tc.in, err)
+			}
+			if got, want := jsonStringEscapedLen(tc.in), len(quoted)-2; got != want {
+				t.Fatalf("jsonStringEscapedLen(%q)=%d, want %d", tc.in, got, want)
+			}
+		}
+	}
+}
+
+func BenchmarkJSONStringEscapedLen_plainASCII64KiB(b *testing.B) {
+	body := strings.Repeat("abcdefghij", auditBodyMaxBytes/10)
+	b.SetBytes(int64(len(body)))
+	b.ReportAllocs()
+	for b.Loop() {
+		if n := jsonStringEscapedLen(body); n != len(body) {
+			b.Fatalf("len=%d, want %d", n, len(body))
+		}
+	}
+}
+
+func BenchmarkJSONStringEscapedLen_escapedASCII64KiB(b *testing.B) {
+	body := strings.Repeat(`a<b>c&d"e\f`, auditBodyMaxBytes/10)
+	b.SetBytes(int64(len(body)))
+	b.ReportAllocs()
+	for b.Loop() {
+		_ = jsonStringEscapedLen(body)
+	}
+}

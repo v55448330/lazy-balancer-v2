@@ -169,6 +169,7 @@ func TestGetThreatScreenTraffic_shortTTLCacheHit(t *testing.T) {
 }
 
 func TestGetThreatScreenTraffic_cacheExpires(t *testing.T) {
+	withIsolatedGlobal(t)
 	// Given: 缓存 TTL 缩短至 50ms（测试缝）
 	old := threatTrafficCacheTTL
 	threatTrafficCacheTTL = 50 * time.Millisecond

@@ -140,11 +140,17 @@ test('请求头非法形态立即报错（空格/下划线/空/超长，与后�
   assert.match(trustedProxyHeaderError('X Forwarded For'), /非法请求头名/)
 })
 
-test('请求头条数上限按原始条数计（重复项也计入，与后端去重前判定一致）', () => {
+test('请求头条数上限按小写去重后条数计（与后端 len(normalized) > 8 同口径）', () => {
   const nine = Array.from({ length: TRUSTED_PROXY_MAX_HEADERS + 1 }, (_, i) => `X-Forwarded-${i}`)
   assert.match(trustedProxyHeadersError(nine), /最多 8 条/)
-  const duplicateNine = ['X-Forwarded-For', 'X-Forwarded-For', 'X-Real-IP', 'A', 'B', 'C', 'D', 'E', 'F']
-  assert.match(trustedProxyHeadersError(duplicateNine), /最多 8 条/, '去重前 9 条后端必然拒绝')
+  // 9 条含 1 条大小写重复 → 后端归一为 8 条并接受，前端不得硬拦
+  const dedupedEight = ['X-Forwarded-For', 'x-forwarded-for', 'X-Real-IP', 'A', 'B', 'C', 'D', 'E', 'F']
+  assert.equal(trustedProxyHeadersError(dedupedEight), '', '去重后 8 条必须放行（后端 PUT 200）')
+  // 10 条含 1 条大小写重复 → 去重后 9 条：后端必然 400，前端须先拦
+  const dedupedNine = ['X-Forwarded-For', 'x-forwarded-for', 'X-Real-IP', 'A', 'B', 'C', 'D', 'E', 'F', 'G']
+  assert.match(trustedProxyHeadersError(dedupedNine), /最多 8 条（去重后 9 条/, '去重后 9 条后端必然拒绝')
+  // 字符集逐条点名不受去重影响（重复项同样要点名，后端逐条校验字符集）
+  assert.match(trustedProxyHeadersError(['X_Forwarded_For', 'X_Forwarded_For']), /X_Forwarded_For（/)
 })
 
 test('请求头汇总文案逐条点名非法值', () => {
@@ -236,6 +242,19 @@ test('跨栈对表：请求头与总量判据与 Go 侧同值', () => {
   const headers = handler.slice(handler.indexOf('func normalizeTrustedProxyHeaders'))
   assert.match(headers, /len\(normalized\) > 8/, '请求头条数上限须按去重后条目对表')
   assert.match(headers, /strings\.ToLower\(entry\)/, '请求头去重须忽略大小写')
+  // 前端条数门必须与后端同一口径（先去重再判数）：按原始条数判会硬拦后端
+  // 必然接受的配置（9 条含 1 条大小写重复 → 后端归一为 8 条）。
+  const tsHeaders = section(
+    code('src/utils/trustedProxyRanges.ts'),
+    'export const trustedProxyHeadersError',
+    '\n}\n',
+  )
+  assert.match(
+    tsHeaders,
+    /new Set\(values\.map\(\(value\) => value\.toLowerCase\(\)\)\)\.size/,
+    '请求头条数门须按小写去重后条数判定（与后端 len(normalized) 对表）',
+  )
+  assert.doesNotMatch(tsHeaders, /values\.length > TRUSTED_PROXY_MAX_HEADERS/, '不得按原始条数判上限')
   assert.match(handler, /\^\[A-Za-z0-9-\]\{1,64\}\$/, '请求头字符集须对表')
   assert.match(handler, /trustedProxyMaxTotalCIDRs = 2000/, '总量上限须对表')
   const gate = section(handler, 'func trustedProxyTotalGate', 'func trustedProxyInlinePrefixes')
@@ -261,15 +280,20 @@ test('组件接线：请求头与总量行内提示 + 保存门', () => {
   assert.match(card, /重新加载名单条目/, '条目加载失败必须给出一键重试入口（不得只让用户刷新整页）')
   assert.match(card, /上限 \{\{ TRUSTED_PROXY_MAX_TOTAL_ENTRIES \}\}/, '展示上限与判据常量同源')
   const save = section(card, 'const handleSave = async', 'const preview = await request.post')
-  assert.ok(save.indexOf('trustedHeadersError.value') > 0, '保存门必须拦非法请求头')
-  assert.ok(save.indexOf('trustedTotalError.value') > 0, '保存门必须拦总量超限')
-  assert.ok(
-    save.indexOf('trustedTotalError.value') < save.indexOf('buildCaddyConfigPayload'),
-    '校验必须早于载荷组装与任何写请求',
-  )
-  // 估算越限只提示不 return：硬门之后紧跟 saving 置位，两者之间不能再有 return
+  const headersIdx = save.indexOf('trustedHeadersError.value')
+  const errorIdx = save.indexOf('trustedTotalError.value')
+  const payloadIdx = save.indexOf('buildCaddyConfigPayload')
+  assert.ok(headersIdx > 0, '保存门必须拦非法请求头')
+  assert.ok(errorIdx > 0, '保存门必须拦总量超限')
+  assert.ok(errorIdx < payloadIdx, '校验必须早于载荷组装与任何写请求')
+  // 估算越限只提示不 return：硬门之后紧跟 saving 置位，两者之间不能再有 return。
+  // 首尾标记都必须**先证明存在**：indexOf 缺 marker 返回 -1，`save.slice(warnIdx, -1)`
+  // 会退化成「从提示到末尾全部内容」，负断言恒真空转（估算提示被提前 return 掉
+  // 也判绿）。方向断言保证窗口是 [提示, 置位) 而不是被写反的空窗。
   const warnIdx = save.indexOf('trustedTotalWarning.value')
-  assert.ok(warnIdx > save.indexOf('trustedTotalError.value'), '提示在硬门之后')
-  const between = save.slice(warnIdx, save.indexOf('saving.value = true'))
+  const savingIdx = save.indexOf('saving.value = true')
+  assert.ok(warnIdx > errorIdx, '提示在硬门之后')
+  assert.ok(savingIdx > warnIdx, '终点标记（saving 置位）必须存在且在提示之后（缺失时负断言会空转）')
+  const between = save.slice(warnIdx, savingIdx)
   assert.doesNotMatch(between, /\breturn\b/, '估算越限不得拦保存（判定权在后端）')
 })

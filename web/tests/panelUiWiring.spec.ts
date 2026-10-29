@@ -375,10 +375,18 @@ test('阶段页覆盖写前重读库值（未编辑阶段取最新，不旧快�
   assert.match(block, /avoid|避免覆盖他人修改|无法读取最新规则/)
 })
 
-test('阶段 0 预览信任名单恒启用（与保存侧 trustEnabledForPolicyType 同口径）', () => {
+test('阶段 0 预览信任名单恒启用（载荷消费侧）', () => {
+  // 「computed 声明与 trustEnabledForPolicyType 同形」这条不变量只由
+  // frontendWiringContracts 的文档钉持有（见该文件的「文档钉：信任侧冲突警告」
+  // 用例 + 本文件末尾的重复声明门）。此处只钉载荷消费：预览/保存都读同一个
+  // computed，不得各自再写一份谓词。
   const text = code('src/views/security/SecurityPolicies.vue')
-  assert.match(text, /const trustEnabledInEditor = computed\(\(\) => trustEnabledForPolicyType\(editorPolicyType\.value, ipWhitelistEnabled\.value\)\)/)
   assert.match(text, /ip_whitelist_enabled: trustEnabledInEditor\.value/)
+  assert.doesNotMatch(
+    text,
+    /ip_whitelist_enabled: trustEnabledForPolicyType\(/,
+    '载荷必须读 computed 单源，不得在提交处重算谓词',
+  )
 })
 
 test('改回原值后「待重试」标记消失', () => {

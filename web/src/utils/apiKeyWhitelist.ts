@@ -3,7 +3,7 @@
 //
 // 归一规则：单个地址补全前缀（IPv4 → /32，IPv6 → /128），已带前缀原样保留。
 // 校验：逐行 isValidCidr（与安全策略同一实现）；空行忽略；报错带原始行号。
-import { isValidCidr } from './ruleValidation.ts'
+import { isValidCidr } from './ipAddress.ts'
 
 export const normalizeCidr = (rawValue: string): string => {
   const value = rawValue.trim()

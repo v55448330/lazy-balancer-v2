@@ -89,8 +89,13 @@ func TestThreatActiveSourcesCacheTTL_coversPollingInterval(t *testing.T) {
 		t.Fatalf("STATS_POLL_MS=%q 非法", match[1])
 	}
 	polling := time.Duration(pollMs) * time.Millisecond
-	if threatActiveSourcesCacheTTL < polling {
-		t.Fatalf("threatActiveSourcesCacheTTL=%v, want >= %v（与大屏轮询同周期，否则缓存永不命中）", threatActiveSourcesCacheTTL, polling)
+	// 判据是「轮询周期 + 一整轮余量」而不是 >= polling：等值时第二轮请求恰落在
+	// 到期边界上（±调度 jitter 即 miss），缓存退化为每轮必 miss，而判据本身仍绿。
+	// 前端同一判据（web/tests/threatFullscreenUi.spec.ts）按同一倍数对表。
+	minimumTTL := polling * 3 / 2
+	if threatActiveSourcesCacheTTL < minimumTTL {
+		t.Fatalf("threatActiveSourcesCacheTTL=%v, want >= %v（轮询周期 %v 的 1.5 倍，否则到期边界上必然 miss）",
+			threatActiveSourcesCacheTTL, minimumTTL, polling)
 	}
 }
 

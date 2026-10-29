@@ -175,11 +175,6 @@ type ruleStageStatsCacheKey struct {
 // 约束，上限 256 超限整体重建（长尾规则集膨胀下内存封顶）。
 var ruleStageStatsCache = newTTLCache[ruleStageStatsCacheKey, ruleStageStatsSnapshot](256)
 
-// resetRuleStageStatsCacheForTest 测试缝：清空缓存（生产不调用）。
-func resetRuleStageStatsCacheForTest() {
-	ruleStageStatsCache.Reset()
-}
-
 // loadRuleStageStats 返回单规则近 24h 的阶段分桶计数与分段耗时（命中缓存时
 // 零查询）。分桶口径：阶段 1={2,4,7,8,14}∪[800000,900000) 预检段（
 // IsStage1PrecheckID 单一事实源），429 由 ratelimit_blocks_reload 单独供给
@@ -294,11 +289,6 @@ type securityOverviewAggCacheKey struct {
 // securityOverviewAggCache 键含时区/日界/库句柄（键空间随时区与日界变化）：
 // 写入时顺带清扫过期项防 map 无限增长。
 var securityOverviewAggCache = newTTLCache[securityOverviewAggCacheKey, securityOverviewAggregates](0)
-
-// resetSecurityOverviewAggCacheForTest 测试缝：清空总览聚合缓存（生产不调用）。
-func resetSecurityOverviewAggCacheForTest() {
-	securityOverviewAggCache.Reset()
-}
 
 // securityOverviewTodayCounts 今日拦截/检测计数单源：优先读分钟 rollup
 // （与威胁大屏同源，与原始表规模解耦——行帽触顶时原始表只剩最近若干

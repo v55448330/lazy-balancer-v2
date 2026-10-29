@@ -152,6 +152,36 @@ test('新一轮弹码作废旧刷新句柄（旧在途请求仍会跑完但不�
   await old
 })
 
+test('旧轮句柄 settle 不得清空新一轮句柄（同码不得发起第二次 verify-step）', async () => {
+  const firstRefresh = deferred<void>()
+  const secondRefresh = deferred<void>()
+  const calls: string[] = []
+  const stepUp = createMfaStepUp(async () => (calls.length === 0 ? '111111' : '222222'))
+
+  // 第一轮：111111 的 verify-step 在途（并发 428 的另一条仍在等后端）
+  const first = stepUp.ensureRefresh('111111', (code) => { calls.push(code); return firstRefresh.promise })
+  // 第二轮弹码先返回 → 新验证码 222222 的 verify-step 注册为新句柄
+  await stepUp.prompt()
+  const second = stepUp.ensureRefresh('222222', (code) => { calls.push(code); return secondRefresh.promise })
+  assert.deepEqual(calls, ['111111', '222222'])
+
+  // 旧轮 settle：finally 只能作废自己的句柄，不得把第二轮在途句柄清成 null
+  firstRefresh.resolve()
+  await first
+
+  // 同一新码的后续并发 428 必须复用在途句柄（后端按 mfa_last_timestep
+  // 拒绝同码重放并计失败，重放会让验证码正确也报错）
+  const reused = stepUp.ensureRefresh('222222', (code) => { calls.push(code); return Promise.resolve() })
+  assert.equal(reused, second, '同码必须复用同一个在途句柄')
+  assert.deepEqual(calls, ['111111', '222222'], '同码不得发起第二次 verify-step')
+
+  secondRefresh.resolve()
+  await Promise.all([reused, second])
+  // 第二轮确实完成后才允许同码重新刷新（不缓存失败/完成态）
+  await stepUp.ensureRefresh('222222', (code) => { calls.push(code); return Promise.resolve() })
+  assert.deepEqual(calls, ['111111', '222222', '222222'])
+})
+
 test('旧身份迟到的 428 不弹码、不刷新、不重放', async () => {
   let current = false
   const calls: string[] = []

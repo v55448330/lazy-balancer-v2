@@ -1477,23 +1477,6 @@ func CountEnabledCustomRulesBatch(policies []*models.SecurityPolicy) []int {
 	return counts
 }
 
-// buildWafHandlerWithPolicy returns the coraza WAF handler for the given policy,
-// or nil when the policy is nil or emits no directives. Callers pass a policy
-// from the batch-preloaded context so generation stays on the store/tx channel.
-// store 与策略预载同源：自定义规则读取必须沿同一 store——tx 内生成
-// 时 db.DB 看不到未提交的 security_custom_rules 行，会静默丢失 WAF 规则。
-// store=nil 时由 resolvePolicyCustomRules 回退 db.DB（非批量路径保持现状）。
-// stage0DetectionTrust 契约（始终发射收敛，2026-10-15）：nil=无 stage0 保留
-// 检测策略（不发射 id:12）；非 nil（可空切片）=存在——恒发射 id:12（空集
-// 文件算子永不命中=与无规则等价，空↔非空纯内容变化走热路径）。
-func buildWafHandlerWithPolicy(ruleCaddyID string, policy *models.SecurityPolicy, store caddyConfigStore, crsFp string, multiPolicy bool, blockStatus int, bodyLimitMB int, stage0DetectionTrust []string, scopedCaches ...scopedCRSListCache) (map[string]interface{}, error) {
-	var scopedCache scopedCRSListCache
-	if len(scopedCaches) > 0 {
-		scopedCache = scopedCaches[0]
-	}
-	return buildWafHandlerWithIndex(ruleCaddyID, policy, store, crsFp, multiPolicy, blockStatus, bodyLimitMB, stage0DetectionTrust, nil, scopedCache)
-}
-
 // buildWafHandlerWithIndex 是带生成上下文级 CRS 规则索引的变体（批量生成
 // 路径专用）：索引指纹键每轮只算一次，而不是逐（规则×策略）一次。
 func buildWafHandlerWithIndex(ruleCaddyID string, policy *models.SecurityPolicy, store caddyConfigStore, crsFp string, multiPolicy bool, blockStatus int, bodyLimitMB int, stage0DetectionTrust []string, chainIndex func() *CRSRuleIndex, scopedCache scopedCRSListCache) (map[string]interface{}, error) {

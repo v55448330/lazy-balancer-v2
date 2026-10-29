@@ -10,14 +10,21 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { section, code } from './_helpers.ts'
+import { cssDeclarations, cssRule, section, code } from './_helpers.ts'
 
 test('状态码列超高时换行，不裁掉 Block badge', () => {
   const page = code('src/views/Dashboard.vue')
-  const rules = section(page, '.status-codes {', '}')
-  assert.match(rules, /flex-wrap: wrap/, '必须与列注释承诺的换行兜底一致')
-  assert.doesNotMatch(rules, /nowrap/, 'nowrap 会让 flex-shrink:0 的 badge 溢出')
-  assert.doesNotMatch(rules, /overflow: hidden/, 'overflow:hidden 静默裁掉末尾 badge（含 title 不可达）')
+  // 声明表判定：`section(page, '.status-codes {', '}')` 的终止标记是第一个 `}`，
+  // 规则一旦多一条嵌套块（`&:hover { … }`）切片就在那里截断，随后两条负断言
+  // 恒真；按属性/值判定与排版、属性顺序无关。
+  const decls = cssDeclarations(page, '.status-codes')
+  assert.equal(decls.get('flex-wrap'), 'wrap', '必须与列注释承诺的换行兜底一致')
+  assert.equal(decls.has('overflow'), false, 'overflow:hidden 静默裁掉末尾 badge（含 title 不可达）')
+  // 嵌套块里的声明不进顶层声明表，负断言必须覆盖整块文本：
+  // `&:hover { flex-wrap: nowrap }` 与现代槽内 min-width 同样会裁掉 badge。
+  const block = cssRule(page, '.status-codes')
+  assert.doesNotMatch(block, /nowrap/, 'nowrap 会让 flex-shrink:0 的 badge 溢出（含嵌套块）')
+  assert.doesNotMatch(block, /overflow:\s*hidden/, 'overflow:hidden 静默裁掉末尾 badge（含嵌套块）')
   assert.match(page, /class="status-code status-blocked"/, 'Block badge 必须仍在列内')
 })
 

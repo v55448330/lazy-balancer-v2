@@ -126,12 +126,6 @@ type caddyMetricsSnapshot struct {
 	expiresAt time.Time
 }
 
-func resetCaddyMetricsSnapshotCacheForTest() {
-	caddyMetricsSnapshots.Lock()
-	caddyMetricsSnapshots.entries = nil
-	caddyMetricsSnapshots.Unlock()
-}
-
 var caddyMetricsSnapshots struct {
 	sync.Mutex
 	entries map[string]caddyMetricsSnapshot
@@ -229,19 +223,6 @@ func (h *Handlers) caddyMetricsSnapshot(ctx context.Context, cacheFailure bool) 
 		return []byte("caddy_http_requests_total 0\n"), nil
 	}
 	return loadCaddyMetricsSnapshot(ctx, h.cfg.CaddyMetricsURL, cacheFailure)
-}
-
-// resetMetricsDashboardCacheForTest 测试缝：清空面板缓存与共享抓取快照
-// （生产不调用；两者同属指标读路径，隔离必须同步，否则跨用例读到上一夹具
-// 的抓取字节）。
-func resetMetricsDashboardCacheForTest() {
-	metricsDashboardState.Lock()
-	metricsDashboardState.url = ""
-	metricsDashboardState.outcome = metricsDashboardOutcome{}
-	metricsDashboardState.expiresAt = time.Time{}
-	metricsDashboardState.valid = false
-	metricsDashboardState.Unlock()
-	resetCaddyMetricsSnapshotCacheForTest()
 }
 
 func (h *Handlers) GetMetricsDashboard(c *gin.Context) {

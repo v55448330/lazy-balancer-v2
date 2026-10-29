@@ -167,7 +167,7 @@ func spoolLines(t *testing.T, dir string) []string {
 // Given: 面板侧 UDS 端点返回 204
 // When: 审计行经 drain 格式化后投递
 // Then: body=行+末尾 \n，成功即不落任何文件（审计文件不存在、spool 无文件），
-// 且计数落在 ipc_sent。
+// 且 shipper 计数 sent=1。
 func TestAuditPipeline_IPCSuccessShipsAndWritesNoFile(t *testing.T) {
 	dir := t.TempDir()
 	socketPath := shortSocketPath(t)
@@ -237,7 +237,7 @@ func TestAuditPipeline_IPCShutdownFlushesYoungBatch(t *testing.T) {
 
 // Given: IPC 端点不可达（socket 不存在）
 // When: 审计行投递失败
-// Then: 整批行写入 spool（可补采），审计文件不被创建，计数 ipc_failed=spool_written=N。
+// Then: 整批行写入 spool（可补采），审计文件不被创建，shipper 计数 failed=spooled=N。
 func TestAuditPipeline_IPCFailureSpoolsLines(t *testing.T) {
 	dir := t.TempDir()
 	socketPath := shortSocketPath(t) // 不监听：连接必然失败
@@ -279,7 +279,7 @@ func TestAuditPipeline_IPCFailureSpoolsLines(t *testing.T) {
 
 // Given: spool 字节预算被压到极小（模拟 spool 满）
 // When: IPC 失败行无法写入 spool
-// Then: 逐行计 spool_errors、行退回审计文件兜底（不丢行），审计文件不再为空。
+// Then: 逐行计 shipper 的 spoolErrs、行退回审计文件兜底（不丢行），审计文件不再为空。
 func TestAuditPipeline_SpoolFullCountsAndFallsBackToAuditFile(t *testing.T) {
 	dir := t.TempDir()
 	socketPath := shortSocketPath(t) // 不监听：IPC 必然失败
@@ -387,9 +387,10 @@ func TestAuditPipeline_SpoolRotatesSealedFiles(t *testing.T) {
 
 // Given: IPC 成功投递
 // When: 侧车计数写盘
-// Then: 侧车带 ipc_sent/spool_written/spool_errors/mode/recoverable/lost 字段
-// （读侧据此区分「可补采」与「真丢」）。
-func TestAuditPipeline_WriterStatsCarriesIPCCounters(t *testing.T) {
+// Then: 侧车只带读方消费的 dropped/io_errors/format_errors/written_at，不带
+// IPC/spool 过程量（ipc_sent/ipc_failed/spool_written/spool_errors/
+// recoverable/lost/mode）——本进程过程量仍由 counters 观测，但不进跨进程口径。
+func TestAuditPipeline_WriterStatsOmitsProcessCounters(t *testing.T) {
 	dir := t.TempDir()
 	socketPath := shortSocketPath(t)
 	spoolDir := filepath.Join(dir, "spool")
@@ -409,34 +410,31 @@ func TestAuditPipeline_WriterStatsCarriesIPCCounters(t *testing.T) {
 	waitPipelineDrained(t, p)
 	p.ipc.flush()
 	p.statsDirty.Store(true)
+	if sent, _, _, _ := p.ipc.counters(); sent != 1 {
+		t.Fatalf("ipc sent=%d, want 1", sent)
+	}
 
 	statsPath := auditWriterStatsPath(target)
 	deadline := time.Now().Add(3 * time.Second)
 	var raw []byte
 	for time.Now().Before(deadline) {
-		if data, err := os.ReadFile(statsPath); err == nil && strings.Contains(string(data), `"ipc_sent"`) {
+		if data, err := os.ReadFile(statsPath); err == nil && strings.Contains(string(data), `"written_at"`) {
 			raw = data
 			break
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
 	if raw == nil {
-		t.Fatalf("侧车未写出 ipc_sent 字段")
+		t.Fatalf("侧车未写出 written_at 字段")
 	}
-	var got struct {
-		IPCSent      uint64 `json:"ipc_sent"`
-		IPCFailed    uint64 `json:"ipc_failed"`
-		SpoolWritten uint64 `json:"spool_written"`
-		SpoolErrors  uint64 `json:"spool_errors"`
-		Recoverable  uint64 `json:"recoverable"`
-		Lost         uint64 `json:"lost"`
-		Mode         string `json:"mode"`
-	}
+	var got map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &got); err != nil {
 		t.Fatalf("侧车 JSON 非法: %v (%s)", err, raw)
 	}
-	if got.IPCSent != 1 || got.Mode != "ipc" || got.Lost != 0 || got.Recoverable != 0 {
-		t.Fatalf("stats=%+v, want ipc_sent=1 mode=ipc lost=0 recoverable=0", got)
+	for _, key := range []string{"ipc_sent", "ipc_failed", "spool_written", "spool_errors", "recoverable", "lost", "mode"} {
+		if _, ok := got[key]; ok {
+			t.Fatalf("侧车不得携带无读方的过程量键 %q: %s", key, raw)
+		}
 	}
 }
 

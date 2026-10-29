@@ -23,8 +23,18 @@ func TestCorazaDependencyVersions_matchRootModule(t *testing.T) {
 	root := read("../go.mod")
 	leaf := read("go.mod")
 	plugin := read("../caddygeoip/go.mod")
-	for _, module := range []string{"github.com/goccy/go-json", "google.golang.org/protobuf"} {
-		pattern := regexp.MustCompile(`(?m)^\s*` + regexp.QuoteMeta(module) + `\s+(v[^\s]+)`)
+	// coraza 与它的 libinjection 后端同样跨模块共享：预检（面板）与运行引擎
+	// （Caddy 插件）版本分叉时，同一份规则集的检测结果会按路径不同——排障口径
+	// 直接分家。正则已支持带 /v3 的路径式模块名。
+	for _, module := range []string{
+		"github.com/goccy/go-json",
+		"google.golang.org/protobuf",
+		"github.com/corazawaf/coraza/v3",
+		"github.com/corazawaf/libinjection-go",
+	} {
+		// `require` 前缀可有可无：单条 `require X vY` 与 require 块内的裸行都要认
+		// （漏认时 leaf 侧恒为空 → 平价断言对该模块静默失效）。
+		pattern := regexp.MustCompile(`(?m)^\s*(?:require\s+)?` + regexp.QuoteMeta(module) + `\s+(v[^\s]+)`)
 		rootMatch := pattern.FindStringSubmatch(root)
 		leafMatch := pattern.FindStringSubmatch(leaf)
 		pluginMatch := pattern.FindStringSubmatch(plugin)

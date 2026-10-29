@@ -519,7 +519,7 @@ const trustedRangesTotalCount = computed(() => trustedExpansion.value.union)
 // 与后端 services.TrustedProxy* / normalizeTrustedProxyRanges 对表）——
 // 原实现只在预览/PUT 时被整组拒绝，用户只拿到一次 toast 且无法定位是哪一条。
 const trustedRangesError = computed(() => trustedProxyRangesError(trustedRanges.value))
-// 请求头与总量同源判据：条数 ≤8 / 字符集（后端去重前判定）与「内联 ∪ 引用展开」
+// 请求头与总量同源判据：条数 ≤8（后端按小写去重后判定）/ 字符集与「内联 ∪ 引用展开」
 // ≤2000（后端去重前缀并集口径）——未知条目按条数估算，只在已知超限时拦。
 const trustedHeadersError = computed(() => trustedProxyHeadersError(trustedHeaders.value))
 const trustedTotalError = computed(() => trustedProxyTotalError(trustedRanges.value, referencedLists.value))

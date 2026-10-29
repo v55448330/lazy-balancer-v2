@@ -539,6 +539,24 @@ type CreateRuleRequest struct {
 	Enabled *bool `json:"enabled,omitempty"`
 }
 
+// UpdateRuleRequest 是部分更新（PUT = 提交即生效，未提交字段保留存量）的请求
+// 载体，清空语义只有两种形态，不得混用：
+//
+//  1. 三态字段（指针/集合）：省略（nil）=保留原值，显式零值=清空。指针字段
+//     如 Description/HostHeader/HealthCheckHost 等；集合字段 PathRules 用
+//     nil/空数组区分；Upstreams 省略=保留存量（空数组会被「至少一个启用的
+//     上游」写侧校验 400，不存在「清空上游」的合法形态）。
+//  2. 不可清空字段族（值类型，零值一律按「未提交」合并存量，见
+//     handlers.UpdateRule 的合并块）：Name、Protocol、Domain、ListenPort、
+//     Strategy、DnsFamily、HealthCheckInterval、HealthCheckTimeout、
+//     TLSSource、ACMEConfigID、TLSCert、TLSKey、CompressTypes、
+//     ExpectedUpdatedAt。这些字段的保存终态要么必填、要么必须落在合法值域，
+//     「空」没有业务含义（端口/名称/域名/策略/健康检查间隔等）或由实体开关
+//     表达（关闭压缩用 EnableCompress、清除证书材料用切换 TLSSource）。
+//     API/MCP 客户端因此无法把它们清空——这是有意的契约，不是遗漏；
+//     清空语义登记由 models 包的
+//     TestUpdateRuleRequest_clearSemanticsRegisteredAndDocumented 守门，
+//     新增值类型字段若未决定语义（指针化或登记到本注释）即测试红。
 type UpdateRuleRequest struct {
 	Name string `json:"name"`
 	// HostHeader/Description/DnsServer/HealthCheckPath 指针化——

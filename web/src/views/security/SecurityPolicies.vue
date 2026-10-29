@@ -983,7 +983,7 @@ import type { CascaderOption, CascaderProps, CascaderValue, LazyLoad } from 'ele
 import { request, ApiRequestError, mfaAwareSuccess } from '@/utils/api'
 import { showSaveResult } from '@/utils/saveResult'
 import { CADDY_APPLY_FAILED_MARKER, mergeBulkResults, policySaveResultMessage, stageOverrideDraftPending } from '@/utils/bulkApplyResult'
-import { isValidCidr } from '@/utils/ruleValidation'
+import { isValidCidr } from '@/utils/ipAddress'
 import { popperViewportSafe } from '@/utils/popper'
 import { formatDate } from '@/utils/date'
 import { useAuthStore } from '@/stores/auth'
@@ -1177,7 +1177,9 @@ const { pagedItems: pagedPolicies } = useClampedPagination(filteredPolicies, pol
 // 引用非空，见 utils/securityStages.hasStage3Features）。判定必须用引用数
 // （custom_rules_ref_count，含禁用条目）；custom_rules_count 只数启用规则，
 // 「mode=off 且引用规则全部禁用」的边界会少标一条子策略。
-const stage3ChipOn = (row: PolicySummary): boolean => hasStage3Features(row.mode, row.custom_rules_ref_count ?? row.custom_rules_count)
+const stage3ChipOn = (row: PolicySummary): boolean => {
+  return hasStage3Features(row.mode, row.custom_rules_ref_count ?? row.custom_rules_count)
+}
 
 
 // ── 阶段页覆盖：投影条与预览步自历史起只出摘要（「将应用于 N 条已关联规则」），

@@ -9,7 +9,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { code, section } from './_helpers.ts'
+import { code, matchBrace, section } from './_helpers.ts'
 
 const page = code('src/views/security/SecurityPolicies.vue')
 
@@ -42,7 +42,23 @@ test('打开前重取快照，失败则不打开（旧快照的 delta 不等于�
   assert.ok(refreshAt > 0, '必须打开前刷新一次快照')
   assert.ok(visibleAt > refreshAt, '刷新成功后才可打开')
   assert.match(open, /ElMessage\.error\('规则绑定数据刷新失败，已取消打开；请稍后重试'\)/)
-  assert.match(open, /finally \{ bindRulesOpening\.value = false \}/)
+  // 就绪门的释放必须落在 finally 段内：仅做存在性匹配时，把
+  // `bindRulesOpening.value = false` 挪到 try 成功路径（失败/提前 return 时门
+  // 永久关闭）或干脆删掉 finally 都照样命中同名片段。按「try 段 → finally 段」
+  // 的花括号配对取段后分别断言。
+  const tryAt = open.indexOf(' try {')
+  assert.ok(tryAt > 0, '打开函数必须有 try 段')
+  const tryOpen = open.indexOf('{', tryAt)
+  const tryClose = matchBrace(open, tryOpen)
+  assert.ok(tryClose > tryOpen, 'try 段括号必须闭合')
+  const successPath = open.slice(tryOpen, tryClose + 1)
+  assert.doesNotMatch(successPath, /bindRulesOpening\.value = false/, '释放不得写在 try 成功路径（失败/提前 return 时门永久禁用）')
+  const finallyAt = open.indexOf(' finally {', tryClose)
+  assert.ok(finallyAt > tryClose, '必须有 finally 段并被释放（否则入口永久禁用）')
+  const finallyOpen = open.indexOf('{', finallyAt)
+  const finallyClose = matchBrace(open, finallyOpen)
+  assert.ok(finallyClose > finallyOpen, 'finally 段括号必须闭合')
+  assert.match(open.slice(finallyOpen, finallyClose + 1), /bindRulesOpening\.value = false/, 'finally 必须释放就绪门')
 
   const refresh = section(page, 'const refreshBindingsSnapshot = async', 'const openBindRulesDialog = async')
   assert.match(refresh, /request\.get<APIResponse<Record<string, BindingInfo\[\]>>>\('\/security\/bindings'\)/)

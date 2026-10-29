@@ -73,25 +73,46 @@ func TestEngine_ScheduledAdvancedSlotFailureNoBackoff(t *testing.T) {
 	}
 }
 
-// 回归形状：成功轮清零退避状态（failed 退避不被成功轮继承），且「成功 +
-// 槽未推进」按「同一槽只执行一次」消费——不再每 tick 重投（旧语义「成功
-// 不受退避约束、每 tick 到期」在 tick=1s 下最坏 8.6 万行 task_runs/天，
-// 已裁定为槽消费语义）。
+// Given Scheduled 任务 Run 首轮失败且未推进槽（登记失败退避）。
+// When 退避窗口过后重投的下一轮成功。
+// Then 退避状态被清零（schedRetryAfter 归零、schedFailStreak==0）并按「同一槽
+// 只执行一次」消费本槽——失败退避不得被后续成功轮继承（否则一次失败后，
+// 每个成功轮都还被节流窗口压住，且 streak 无界累积提前触发停调）。
 func TestEngine_ScheduledSuccessClearsBackoff(t *testing.T) {
 	e := newTestEngine(t)
 	pastSlot := time.Now().Add(-time.Minute)
 	var runs atomic.Int32
-	e.Register(Descriptor{ID: "t-ok-slot", Family: "t", Name: "成功不推进槽", Kind: KindScheduled,
+	if err := e.Register(Descriptor{ID: "t-ok-clears", Family: "t", Name: "成功清零退避", Kind: KindScheduled,
 		NextSlotFn: func() time.Time { return pastSlot },
 		Run: func(rc RunContext) error {
-			runs.Add(1)
+			if runs.Add(1) == 1 {
+				return errors.New("boom")
+			}
 			return nil
-		}})
+		}}); err != nil {
+		t.Fatal(err)
+	}
 	e.SetRole(true)
-	e.StartLoop("t-ok-slot")
+	e.StartLoop("t-ok-clears")
 
+	waitForEngine(t, "首轮失败", 2*time.Second, func() bool { return runs.Load() == 1 })
+	// 失败轮登记退避（首档 streak=1 + 非零 retryAfter）。
+	waitForEngine(t, "失败退避已登记（streak=1、retryAfter 非零）", time.Second, func() bool {
+		s := fieldSnapshot(t, e, "t-ok-clears")
+		return s.streak == 1 && !s.retry.IsZero()
+	})
+	// 退避窗口（首档 1s）衰减后重投，本轮成功。
+	waitForEngine(t, "退避后的成功轮", 3*time.Second, func() bool { return runs.Load() == 2 })
+	waitForEngine(t, "成功轮清零退避状态", time.Second, func() bool {
+		s := fieldSnapshot(t, e, "t-ok-clears")
+		return s.streak == 0 && s.retry.IsZero()
+	})
+	if s := fieldSnapshot(t, e, "t-ok-clears"); s.streak != 0 || !s.retry.IsZero() {
+		t.Fatalf("成功轮未清零退避: streak=%d retry=%v", s.streak, s.retry)
+	}
+	// 成功消费本槽后不得再重投（槽消费语义与本文件首个用例同口径）。
 	time.Sleep(350 * time.Millisecond)
-	if got := runs.Load(); got != 1 {
-		t.Fatalf("成功轮消费本槽（同一槽只执行一次，不再每 tick 到期重投）, got %d, want 1", got)
+	if got := runs.Load(); got != 2 {
+		t.Fatalf("成功消费本槽后重投：执行 %d 次, want 2", got)
 	}
 }

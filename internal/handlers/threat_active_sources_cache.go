@@ -2,10 +2,11 @@ package handlers
 
 // 威胁大屏「活跃攻击源」计数缓存：近 10 分钟原始事件表按 client_ip 去重
 // （GROUP BY 全窗口扫描 + 逐行私网排除），大屏 30s 轮询下是重复的重查询。
-// 键取窗口起点的分钟锚点 + TTL 30s（与 30s 轮询同周期）：同一分钟内的重复
-// 请求复用结果，窗口跨分钟即换键。秒级入参在键上截到分钟——分钟内的窗口
-// 前移不换键（由 TTL 兜住陈旧上界）。失败不缓存（错误显式上抛由大屏整卡
-// 500）。
+// 键取窗口起点的分钟锚点 + TTL 45s（比 30s 轮询留一轮余量）：同一分钟锚点内
+// 的重复请求复用结果，窗口跨分钟即换键。TTL 与轮询同值时第二轮落在到期边界上
+// （±jitter 即 miss），缓存退化为「每轮必 miss」。秒级入参在键上截到分钟——
+// 分钟内的窗口前移不换键（由 TTL 兜住陈旧上界）。失败不缓存（错误显式上抛由
+// 大屏整卡 500）。
 
 import (
 	"database/sql"
@@ -15,10 +16,13 @@ import (
 	"lazy-balancer-v2/internal/services"
 )
 
-// threatActiveSourcesCacheTTL 缓存有效期（30s，与安全总览/规则阶段统计缓存
-// 同族）：大屏 30s 轮询在同一窗口锚点内命中一次，热路径的 10 分钟窗口全扫
-// 不再每轮发生。var 供测试缩短/关闭。
-var threatActiveSourcesCacheTTL = 30 * time.Second
+// threatActiveSourcesCacheTTL 缓存有效期（45s = 大屏 30s 轮询周期的 1.5 倍）：
+// 同一分钟锚点内的第二次请求必须确定性命中，热路径的 10 分钟窗口全扫才真的
+// 不再每轮发生。取「轮询周期 + 一整轮余量」而不是等值——等值时第二轮恰在
+// 到期边界（±调度 jitter 即 miss），缓存收益归零且没有任何用例能发现。
+// 跨栈对表见 web/tests/threatFullscreenUi.spec.ts 与
+// threat_screen_cache_rollup_test.go（两侧都按 1.5 倍下限判）。var 供测试缩短/关闭。
+var threatActiveSourcesCacheTTL = 45 * time.Second
 
 // threatMinuteAnchor 把秒级/任意形态的窗口起点截到分钟锚点（缓存键口径）。
 // 小于 16 字符的异形值（带外写库/异形导入的 event_time）按原样返回，不得
@@ -148,11 +152,6 @@ func (c *ttlCache[K, V]) ExpireMatching(match func(K) bool) {
 // threatActiveSourcesCache 键含窗口锚点（每分钟新键），条目数上限 4：同屏
 // 多维度并行取数时会短暂产生多个键，超限整体重建（有界增长优先于精确逐出）。
 var threatActiveSourcesCache = newTTLCache[threatActiveSourcesKey, int](4)
-
-// resetThreatActiveSourcesCacheForTest 测试缝：清空缓存（生产不调用）。
-func resetThreatActiveSourcesCacheForTest() {
-	threatActiveSourcesCache.Reset()
-}
 
 // threatActiveSourcesCount 返回窗口内非保留地址的去重源 IP 数（命中缓存时
 // 零查询）。activeSince 为窗口起点（UTC 墙钟串）。

@@ -1242,19 +1242,6 @@ var caddyRestartBackoff struct {
 // caddyRestartStat 是触发文件探测入口（测试缝：注入 stat 失败形态）。
 var caddyRestartStat = os.Stat
 
-// resetCaddyRestartBackoffForTest 测试缝：复位退避状态（生产不调用）。
-func resetCaddyRestartBackoffForTest() {
-	caddyRestartBackoff.mu.Lock()
-	caddyRestartBackoff.attempts = 0
-	caddyRestartBackoff.nextAttempt = time.Time{}
-	caddyRestartBackoff.lastStatus = ""
-	caddyRestartBackoff.triggerMod = time.Time{}
-	caddyRestartBackoff.appliedMod = time.Time{}
-	caddyRestartBackoff.removalWarned = time.Time{}
-	caddyRestartBackoff.statWarned = false
-	caddyRestartBackoff.mu.Unlock()
-}
-
 // markCaddyRestartTriggerApplied 记录「该 mtime 的触发事件已成功应用」：
 // 触发文件删除失败（只读/异常挂载）时，watcher 据此不再每个 tick 重跑全量
 // 渲染 + /load。成功收尾会把退避清零/置 ok，若只按文件存在与否判定，下一轮

@@ -35,11 +35,16 @@ func shrinkSlotEvalFloor(t *testing.T, d time.Duration) {
 func TestEngine_ScheduledSuccessConsumesStaleSlot(t *testing.T) {
 	e := newTestEngine(t)
 	pastSlot := time.Now().Add(-time.Minute)
+	ran := make(chan struct{}, 4)
 	var runs atomic.Int32
 	if err := e.Register(Descriptor{ID: "t-once", Family: "t", Name: "成功消费槽", Kind: KindScheduled,
 		NextSlotFn: func() time.Time { return pastSlot },
 		Run: func(rc RunContext) error {
 			runs.Add(1)
+			select {
+			case ran <- struct{}{}:
+			default:
+			}
 			return nil
 		}}); err != nil {
 		t.Fatal(err)
@@ -47,7 +52,19 @@ func TestEngine_ScheduledSuccessConsumesStaleSlot(t *testing.T) {
 	e.SetRole(true)
 	e.StartLoop("t-once")
 
-	time.Sleep(350 * time.Millisecond)
+	// 首轮事件驱动等待（固定 sleep 猜首轮时点在慢机器上会把「还没跑到」
+	// 误判成「不重投」）。
+	select {
+	case <-ran:
+	case <-time.After(2 * time.Second):
+		t.Fatal("首槽未执行")
+	}
+	// 负断言同样事件驱动：观察窗口（≈30 ticks）内再出现一次执行即失败。
+	select {
+	case <-ran:
+		t.Fatalf("同一过期槽成功落定后仍重投（执行 %d 次）", runs.Load())
+	case <-time.After(350 * time.Millisecond):
+	}
 	if got := runs.Load(); got != 1 {
 		t.Fatalf("同一过期槽成功落定后不得重投, got %d, want 1", got)
 	}
@@ -65,11 +82,16 @@ func TestEngine_ScheduledAdvancedPastSlotRefiresOnce(t *testing.T) {
 	slot1 := time.Now().Add(-2 * time.Minute)
 	var slot atomic.Value
 	slot.Store(slot1)
+	ran := make(chan struct{}, 4)
 	var runs atomic.Int32
 	if err := e.Register(Descriptor{ID: "t-refire", Family: "t", Name: "槽推进再投", Kind: KindScheduled,
 		NextSlotFn: func() time.Time { return slot.Load().(time.Time) },
 		Run: func(rc RunContext) error {
 			runs.Add(1)
+			select {
+			case ran <- struct{}{}:
+			default:
+			}
 			return nil
 		}}); err != nil {
 		t.Fatal(err)
@@ -77,11 +99,24 @@ func TestEngine_ScheduledAdvancedPastSlotRefiresOnce(t *testing.T) {
 	e.SetRole(true)
 	e.StartLoop("t-refire")
 
-	waitForEngine(t, "首槽执行", 2*time.Second, func() bool { return runs.Load() == 1 })
-	// 业务推进到新的过期槽（槽值变化=新排程）——地板周期内重评后应再投一次。
-	slot.Store(time.Now().Add(-time.Minute))
-	waitForEngine(t, "新槽再投", 2*time.Second, func() bool { return runs.Load() == 2 })
-	time.Sleep(200 * time.Millisecond)
+	// 恰好两次执行：先收满两次事件，再做「水位不再上涨」的负断言
+	// （固定 sleep + 精确计数在慢机器上会把「还没跑到」误判成「不重投」）。
+	for i := 0; i < 2; i++ {
+		select {
+		case <-ran:
+		case <-time.After(2 * time.Second):
+			t.Fatalf("第 %d 次执行未发生", i+1)
+		}
+		// 首槽之后业务推进到新的过期槽（槽值变化=新排程）——地板周期内重评后应再投一次。
+		if i == 0 {
+			slot.Store(time.Now().Add(-time.Minute))
+		}
+	}
+	select {
+	case <-ran:
+		t.Fatalf("新槽消费后仍重投（执行 %d 次, want 2）", runs.Load())
+	case <-time.After(200 * time.Millisecond):
+	}
 	if got := runs.Load(); got != 2 {
 		t.Fatalf("新槽消费后不得再重投, got %d, want 2", got)
 	}

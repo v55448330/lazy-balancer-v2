@@ -191,13 +191,13 @@ func TestEngineGate_modeAndControlShapes(t *testing.T) {
 		}
 		compileForEngineGate(t, directives)
 	})
-	// ⑥ SecRequestBodyLimit 追加行（buildWafHandlerWithPolicy 在
+	// ⑥ SecRequestBodyLimit 追加行（buildWafHandlerWithIndex 在
 	// BuildCorazaDirectives 产物尾部拼接，门禁直调 BuildCorazaDirectives 不经
 	// 此——本用例走上层取 handler.directives 送编译）
 	t.Run("request-body-limit-appended", func(t *testing.T) {
-		handler, wafErr := buildWafHandlerWithPolicy("lb_gate", &models.SecurityPolicy{AnomalyThreshold: 5, Mode: "blocking"}, nil, "", false, 0, 8, nil)
+		handler, wafErr := buildWafHandlerWithIndex("lb_gate", &models.SecurityPolicy{AnomalyThreshold: 5, Mode: "blocking"}, nil, "", false, 0, 8, nil, nil, scopedCRSListCache{})
 		if wafErr != nil {
-			t.Fatalf("buildWafHandlerWithPolicy err=%v", wafErr)
+			t.Fatalf("buildWafHandlerWithIndex err=%v", wafErr)
 		}
 		if handler == nil {
 			t.Fatal("blocking policy must yield a waf handler")

@@ -6,7 +6,7 @@
  *   `TrustedProxyPrefixCanonical`（Masked 剥主机位 + v4-mapped 折等价 v4）；
  * - `internal/handlers/config_trustedproxy.go` 的 `normalizeTrustedProxyRanges`
  *   （内联网段上限 64 条，裸 IP 由后端补 /32 或 /128）、
- *   `normalizeTrustedProxyHeaders`（请求头条数 ≤8、字符集
+ *   `normalizeTrustedProxyHeaders`（请求头条数 ≤8（小写去重后）、字符集
  *   `^[A-Za-z0-9-]{1,64}$`）与 `trustedProxyMaxTotalCIDRs`
  *   （内联 + 引用展开 ≤2000）。
  *
@@ -18,7 +18,7 @@
  * 由后端兜底（前端误拒比晚失败更糟——会挡住合法配置）。
  */
 
-import { isValidCidr } from './ruleValidation.ts'
+import { isValidCidr, parseIPv4Octets, parseIPv6Groups } from './ipAddress.ts'
 
 /** 允许的最小前缀长度（/29 覆盖 Cloudflare 官方最宽回源段）。
  *  导出供跨栈对表测试与后端 TrustedProxyMinPrefixBits 直接同值比对。 */
@@ -28,7 +28,8 @@ export const TRUSTED_PROXY_MIN_PREFIX_BITS = { ipv4: 8, ipv6: 29 } as const
  *  导出供跨栈对表测试与后端 normalizeTrustedProxyRanges 同值比对。 */
 export const TRUSTED_PROXY_MAX_INLINE_ENTRIES = 64
 
-/** 请求头条数上限（后端按去重前的原始条数判定）。
+/** 请求头条数上限（按小写去重后的条数计——后端 normalizeTrustedProxyHeaders
+ *  先 strings.ToLower 去重、再判 len(normalized) > 8）。
  *  导出供跨栈对表测试与后端 normalizeTrustedProxyHeaders 同值比对。 */
 export const TRUSTED_PROXY_MAX_HEADERS = 8
 
@@ -101,15 +102,20 @@ export const trustedProxyHeaderError = (rawValue: string): string =>
 
 /**
  * 整组请求头校验：空串=通过，否则为「逐项点名」的汇总文案。
- * 条数按原始条数判定（后端先判条数上限、后去重，重复项同样占额度）。
+ * 条数按**小写去重后**的条数判定（后端 normalizeTrustedProxyHeaders 先
+ * strings.ToLower 去重、再判 len(normalized) > 8）；按原始条数判会把后端
+ * 必然接受的配置硬拦（9 条含 1 条大小写重复 → 归一为 8 条）。
+ * 字符集仍逐条点名：后端在去重前对每一条做字符集校验。
  */
 export const trustedProxyHeadersError = (values: readonly string[]): string => {
   const parts = values
     .map((value) => ({ value, error: trustedProxyHeaderError(value) }))
     .filter((item) => item.error !== '')
     .map((item) => `${item.value || '(空)'}（${item.error}）`)
-  if (values.length > TRUSTED_PROXY_MAX_HEADERS) {
-    parts.push(`最多 ${TRUSTED_PROXY_MAX_HEADERS} 条（当前 ${values.length} 条，重复项也按原始条数计）`)
+  const uniqueCount = new Set(values.map((value) => value.toLowerCase())).size
+  if (uniqueCount > TRUSTED_PROXY_MAX_HEADERS) {
+    const merged = uniqueCount < values.length ? '，重复项已合并' : ''
+    parts.push(`最多 ${TRUSTED_PROXY_MAX_HEADERS} 条（去重后 ${uniqueCount} 条${merged}）`)
   }
   return parts.length === 0 ? '' : `受信代理请求头不可用：${parts.join('；')}`
 }
@@ -168,47 +174,6 @@ interface TrustedProxyExpansion {
   readonly maxUnresolvedEntryCount: number
 }
 
-const ipv4Octets = (address: string): readonly number[] | null => {
-  const parts = address.split('.')
-  if (parts.length !== 4) return null
-  const octets = parts.map((part) => (/^\d{1,3}$/.test(part) ? Number(part) : Number.NaN))
-  return octets.some((octet) => !Number.isInteger(octet) || octet > 255) ? null : octets
-}
-
-/** IPv6 地址 → 8 个十六进制组（小写、去前导零）；无法解析返回 null。
- *  内嵌 IPv4 尾（`::ffff:1.2.3.4`）按 32 位折算成两个组——使同一地址的不同
- *  书写形态落到同一键上（后端 netip 解析后同样视为同一 Addr）。 */
-const ipv6Groups = (address: string): readonly number[] | null => {
-  const text = address.trim().toLowerCase()
-  if (!text.includes(':')) return null
-  const lastColon = text.lastIndexOf(':')
-  let normalized = text
-  if (text.slice(lastColon + 1).includes('.')) {
-    const octets = ipv4Octets(text.slice(lastColon + 1))
-    if (!octets) return null
-    const high = ((octets[0] ?? 0) << 8) | (octets[1] ?? 0)
-    const low = ((octets[2] ?? 0) << 8) | (octets[3] ?? 0)
-    normalized = `${text.slice(0, lastColon + 1)}${high.toString(16)}:${low.toString(16)}`
-  }
-  const doubleColon = normalized.indexOf('::')
-  let groupsText: readonly string[]
-  if (doubleColon >= 0) {
-    if (normalized.indexOf('::', doubleColon + 1) >= 0) return null
-    const left = normalized.slice(0, doubleColon)
-    const right = normalized.slice(doubleColon + 2)
-    const leftGroups = left === '' ? [] : left.split(':')
-    const rightGroups = right === '' ? [] : right.split(':')
-    const missing = 8 - leftGroups.length - rightGroups.length
-    if (missing < 0) return null
-    groupsText = [...leftGroups, ...Array.from({ length: missing }, () => '0'), ...rightGroups]
-  } else {
-    groupsText = normalized.split(':')
-  }
-  if (groupsText.length !== 8) return null
-  const groups = groupsText.map((group) => (/^[0-9a-f]{1,4}$/.test(group) ? Number.parseInt(group, 16) : Number.NaN))
-  return groups.some((group) => Number.isNaN(group)) ? null : groups
-}
-
 /** IPv4 字节按前缀长度掩码成网络地址串（主机位归零）。 */
 const maskV4Octets = (octets: readonly number[], bits: number): string =>
   octets
@@ -237,7 +202,7 @@ const maskV6Groups = (groups: readonly number[], bits: number): readonly number[
  * 非映射形态返回 null（主机位不影响全空间/最小前缀判定，调用方自行掩码）。
  */
 const mappedV4Prefix = (address: string, bits: number): { readonly network: string; readonly bits: number } | null => {
-  const groups = ipv6Groups(address)
+  const groups = parseIPv6Groups(address.trim(), { allowZone: false })
   if (!groups) return null
   const isMapped =
     groups[0] === 0 && groups[1] === 0 && groups[2] === 0 && groups[3] === 0 && groups[4] === 0 && groups[5] === 0xffff
@@ -262,13 +227,13 @@ export const trustedProxyPrefixKey = (rawValue: string): string | null => {
   const slash = value.indexOf('/')
   const address = slash < 0 ? value : value.slice(0, slash)
   const bitsText = slash < 0 ? '' : value.slice(slash + 1)
-  const v4 = ipv4Octets(address)
+  const v4 = parseIPv4Octets(address, { allowLeadingZeros: true })
   if (v4) {
     const bits = bitsText === '' ? 32 : Number(bitsText)
     if (!Number.isInteger(bits) || bits < 0 || bits > 32) return null
     return `v4:${maskV4Octets(v4, bits)}/${bits}`
   }
-  const v6 = ipv6Groups(address)
+  const v6 = parseIPv6Groups(address.trim(), { allowZone: false })
   if (!v6) return null
   const bits = bitsText === '' ? 128 : Number(bitsText)
   if (!Number.isInteger(bits) || bits < 0 || bits > 128) return null

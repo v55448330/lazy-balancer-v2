@@ -712,12 +712,13 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { request, mfaAwareSuccess } from '@/utils/api'
 import { formatBytes } from '@/utils/formatBytes'
 import { showSaveResult } from '@/utils/saveResult'
-import { isValidCidr } from '@/utils/ruleValidation'
+import { isValidCidr } from '@/utils/ipAddress'
 import { IP_LIST_MAX_ENTRIES, canSaveIpList, mergeConcurrentBanEntries, needsEmptyListConfirm } from '@/utils/ipListSaveGuard'
 import { CUSTOM_RULE_MAX_CONDITIONS, CUSTOM_RULE_MAX_PATTERN_BYTES, canAddCondition, patternByteLength, patternOverLimit } from '@/utils/customRuleLimits'
 import { formatIpListEntryLine, ipListRemarkMaxLength, parseIpListEntryLine } from '@/utils/ipListCsv'
 import { popperViewportSafe } from '@/utils/popper'
 import { activateOnce } from '@/utils/keyboardActivate'
+import { saveBlob } from '@/utils/download'
 import { useAuthStore } from '@/stores/auth'
 
 import { useClampedPagination } from '@/composables/useClampedPagination'
@@ -1483,13 +1484,7 @@ const exportIpListEntries = (): void => {
   // 转义与导入解析同源（utils/ipListCsv）
   const csv = `\uFEFF${entries.map((e) => formatIpListEntryLine(e.value, e.remark)).join('\r\n')}`
   const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' })
-  const url = URL.createObjectURL(blob)
-  const link = document.createElement('a')
-  link.href = url
-  link.download = 'ip-list.csv'
-  link.click()
-  // Safari 下立即回收 objectURL 会截断下载文件，延迟释放（与 BasicSettings/Keys 导出一致）
-  setTimeout(() => URL.revokeObjectURL(url), 1000)
+  saveBlob(blob, 'ip-list.csv')
 }
 
 const PATTERN_PLACEHOLDERS: Record<string, string> = {

@@ -9,7 +9,6 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
 import {
-  aclAssociateSides,
   attachStageDetails,
   blockPageStageCanIntercept,
   addressAllowDenyConflictText,
@@ -260,18 +259,6 @@ test('IPv6 CIDR：前缀位匹配生效且只作用于同族', () => {
   assert.equal(entryMatchesIp('203.0.113.0/24', '203.0.114.7'), false)
   // 精确条目（无 /）仍按串相等
   assert.equal(entryMatchesIp('2001:db8::1', '2001:db8::1'), true)
-})
-
-// IP 快捷处置动作的模式门控——
-// ip_acl_list_refs 是黑/白共用字段：名单本身无黑白属性，语义由 ip_acl_mode
-// 决定（渲染只对 allow/deny 发射拒绝规则；绕过=免检测、空模式不发射）。
-// 同一字段上同时给「拦截」「放行」两个动作会在模式生效后反转用户意图。
-test('ACL 加入动作：deny 只给拦截、allow 只给放行，绕过/空/未知不给动作', () => {
-  assert.deepEqual(aclAssociateSides('deny'), { deny: true, allow: false })
-  assert.deepEqual(aclAssociateSides('allow'), { deny: false, allow: true })
-  assert.deepEqual(aclAssociateSides('绕过'), { deny: false, allow: false })
-  assert.deepEqual(aclAssociateSides(''), { deny: false, allow: false })
-  assert.deepEqual(aclAssociateSides(undefined), { deny: false, allow: false })
 })
 
 // 事件详情预取名单集合——
@@ -585,12 +572,18 @@ test('禁用规则：阶段模型携带 ruleDisabled 且不影响阶段内容', 
   assert.equal(enabledModel.ruleDisabled, false)
   const disabledModel = buildStageModel([binding], [policy], [], [], null, false)
   assert.equal(disabledModel.ruleDisabled, true)
-  // 绑定与阶段页保留：阶段内容不因禁用而消失（启用后生效的「保留配置」口径）
+  // 绑定与阶段页保留：阶段内容不因禁用而消失（启用后生效的「保留配置」口径）。
+  // 期望必须是绝对锚：两侧都取自 buildStageModel，整体退化（阶段/组全空）时
+  // 恒等成立——「禁用不影响内容」就变成了「两边都为空」的自证。
   assert.equal(disabledModel.hasAnyPolicy, true)
-  assert.deepEqual(
-    disabledModel.stages.map((stage) => stage.groups.length),
-    enabledModel.stages.map((stage) => stage.groups.length),
-  )
+  assert.equal(disabledModel.stages.length, 4, '四阶段模型不得退化')
+  assert.deepEqual(disabledModel.stages.map((stage) => stage.groups.length), [0, 1, 0, 0], '阶段 1 的 ACL 组必须在禁用态保留')
+  assert.deepEqual(enabledModel.stages.map((stage) => stage.groups.length), [0, 1, 0, 0])
+  assert.deepEqual(disabledModel.stages[1].groups[0]?.rows.map((row) => [row.label, row.detail]), [
+    ['IP 访问控制', '黑名单模式 · 1 条'],
+    ['爬虫豁免', '未启用'],
+    ['拦截页', '未配置（跟随绑定链首个有效页，无则默认 403）'],
+  ])
   // 缺省（未知态）不得宣称已禁用
   assert.equal(buildStageModel([binding], [policy], [], []).ruleDisabled, false)
 })
@@ -695,9 +688,17 @@ test('多策略绑定链：同阶段两条策略出两组且按绑定顺序编�
     ],
     '组顺序=绑定链顺序（policy_id ASC），且序号为 1-based',
   )
+  // 明细行必须是绝对期望：与 groups[0] 互相比较在两侧同源退化（两组都只出
+  // 组元数据、或整段 rows 为空）时恒等成立，等于什么都没钉。
+  const fullRows = [
+    ['IP 访问控制', '黑名单模式 · 1 条'],
+    ['爬虫豁免', '未启用'],
+    ['拦截页', '未配置（跟随绑定链首个有效页，无则默认 403）'],
+  ]
+  assert.deepEqual(model.stages[1].groups[0]?.rows.map((row) => [row.label, row.detail]), fullRows)
   assert.deepEqual(
     model.stages[1].groups[1]?.rows.map((row) => [row.label, row.detail]),
-    model.stages[1].groups[0]?.rows.map((row) => [row.label, row.detail]),
+    fullRows,
     '第二条策略的明细行必须与同形首条策略一样完整，不得只出组元数据',
   )
   // 阶段 0 不在评估链内：无 override 概念，且无阶段 0 策略时为空组集合

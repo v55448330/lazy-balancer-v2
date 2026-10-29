@@ -6,7 +6,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { code, repoCode, section } from './_helpers.ts'
+import { code, enclosingOpenTag, repoCode, section } from './_helpers.ts'
 import { ingestionWarningMessage } from '../src/utils/ingestionHealth.ts'
 
 const healthy = {
@@ -158,8 +158,16 @@ test('三处视图消费同源 helper（禁止各自判定）', () => {
     assert.match(text, /import \{ ingestionWarningMessage, type IngestionHealth \} from '@\/utils\/ingestionHealth'/, `${file} 必须导入同源 helper`)
     assert.match(text, /ingestionWarningMessage\(/, `${file} 必须调用同源 helper`)
     // 提示条只用全局 info-note-bar 体系（禁止新造/局部覆盖样式）。
+    // 必须按「渲染 ingestionWarning 的那个元素」判类名：距离型窗口
+    // （`class="info-note-bar…"[\s\S]*?ingestionWarning`）在事件页恒真——页面上
+    // 有多条 info-note-bar（自动封禁/统计窗口/请求体横幅），提示条换成任意
+    // 自定义类名也照样命中。
     const template = text.slice(0, text.indexOf('<script'))
-    assert.match(template, /class="info-note-bar[^"]*"[\s\S]*?ingestionWarning/, `${file} 提示条必须复用全局 info-note-bar 类`)
+    const at = template.indexOf('ingestionWarning')
+    assert.ok(at > 0, `${file} 模板必须在元素上消费 ingestionWarning`)
+    const bar = enclosingOpenTag(template, 'div', at)
+    assert.ok(bar !== null, `${file} ingestionWarning 必须落在提示条元素内`)
+    assert.match(bar, /class="info-note-bar(?: [^"]*)?"/, `${file} 提示条必须复用全局 info-note-bar 类`)
   }
 })
 

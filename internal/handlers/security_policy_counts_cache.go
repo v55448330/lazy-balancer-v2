@@ -41,13 +41,6 @@ var (
 	securityPolicy24hCountsCache = map[securityPolicy24hCountsKey]securityPolicy24hCountsEntry{}
 )
 
-// resetSecurityPolicy24hCountsCacheForTest 测试缝：清空缓存（生产不调用）。
-func resetSecurityPolicy24hCountsCacheForTest() {
-	securityPolicy24hCountsMu.Lock()
-	securityPolicy24hCountsCache = map[securityPolicy24hCountsKey]securityPolicy24hCountsEntry{}
-	securityPolicy24hCountsMu.Unlock()
-}
-
 // loadSecurityPolicy24hCounts 返回近 24h 每策略的 blocked / 触发（blocked+logged）
 // 计数（命中缓存时零查询）。归因口径同 securityEventsAttributePolicy（多策略 CRS
 // 重叠按 policy_id ASC 首绑定归因）——展示层记账口径，非引擎级判定。

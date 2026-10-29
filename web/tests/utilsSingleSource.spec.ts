@@ -281,3 +281,54 @@ test('CRS 规则索引响应类型只声明消费面（version 不再声明）',
   assert.match(data, /rules: CrsRuleIndexEntry\[\]/)
   assert.doesNotMatch(data, /\bversion\b/, '零消费字段不得留在响应类型里')
 })
+
+// Blob 下载（导出备份 / 自动备份 / IP 名单 CSV / MCP 手册）此前四份逐字重复：
+// createObjectURL → a.click → setTimeout(revoke, 1000)，同一知识点四份拷贝——
+// 任一处改进（文件名清洗、失败卸载）都不会传播。Safari 延迟回收只允许一份。
+test('Blob 下载单源：四路导出共用 saveBlob', async () => {
+  const { saveBlob } = await import('../src/utils/download.ts')
+  const created: Array<{ href: string; download: string; click: () => void }> = []
+  const clicked: string[] = []
+  const revoked: string[] = []
+  const host = globalThis as unknown as { document?: unknown }
+  const originalDocument = host.document
+  const originalCreate = URL.createObjectURL
+  const originalRevoke = URL.revokeObjectURL
+  let objectUrls = 0
+  host.document = {
+    createElement: (tag: string) => {
+      const el = { tag, href: '', download: '', click: (): void => { clicked.push(el.download) } }
+      created.push(el)
+      return el
+    },
+  }
+  URL.createObjectURL = (): string => { objectUrls++; return 'blob:unit-test' }
+  URL.revokeObjectURL = (url: string): void => { revoked.push(url) }
+  try {
+    const blob = new Blob(['x'])
+    saveBlob(blob, 'lazy-balancer-backup.lbbak')
+    assert.equal(objectUrls, 1, '每次保存各建一个 objectURL')
+    assert.equal(created[0]?.href, 'blob:unit-test')
+    assert.deepEqual(clicked, ['lazy-balancer-backup.lbbak'], '下载名必须透传到 a.download')
+    assert.deepEqual(revoked, [], '不得立即回收（Safari 下会截断下载）')
+    await new Promise((resolve) => setTimeout(resolve, 1100))
+    assert.deepEqual(revoked, ['blob:unit-test'], '延迟 1s 后必须回收')
+  } finally {
+    URL.createObjectURL = originalCreate
+    URL.revokeObjectURL = originalRevoke
+    if (originalDocument === undefined) delete host.document
+    else host.document = originalDocument
+  }
+
+  for (const path of ['src/views/Keys.vue', 'src/views/security/SecurityRules.vue', 'src/views/settings/BasicSettings.vue']) {
+    const text = code(path)
+    assert.match(text, /import \{ saveBlob \} from '@\/utils\/download'/, `${path} 必须共用 saveBlob`)
+    assert.doesNotMatch(text, /URL\.createObjectURL/, `${path} 不得自建 objectURL 下载`)
+    assert.doesNotMatch(text, /URL\.revokeObjectURL/, `${path} 不得自管 objectURL 回收`)
+  }
+  assert.equal(
+    code('src/views/settings/BasicSettings.vue').match(/saveBlob\(/g)?.length,
+    2,
+    '配置导出与自动备份下载两处都必须走单源',
+  )
+})

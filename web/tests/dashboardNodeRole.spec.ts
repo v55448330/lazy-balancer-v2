@@ -22,14 +22,17 @@ test('角色未知分支位于配置正常/异常之前，且文案与 tag 形�
   assert.match(unknownBranch, /<el-tag type="info" size="small" effect="plain">/)
 })
 
-test('三态节点角色派生根源于 nodeMode，null 归 unknown', () => {
-  const role = section(dashboard, 'const nodeModeRole', 'const nodeModeTagType')
-  assert.match(role, /authStore\.nodeMode === 'master'/)
-  assert.match(role, /authStore\.nodeMode === 'slave'/)
-  assert.match(role, /'unknown'/)
-  const tag = section(dashboard, 'const nodeModeTagType', '\nconst ')
-  assert.match(tag, /:\s*'info'\)/, '未知角色必须用 info tag 形态')
+test('三态节点角色派生单源：判据在 utils/nodeRole，视图只消费', () => {
+  // 判据本身由 nodeRole.spec.ts 的四态行为用例钉住（方向+文案+tag 色）。
+  // 此前这里钉「=== 'master' / === 'slave' 出现过」——两支互换仍绿。
+  assert.match(dashboard, /const nodeRoleView = computed\(\(\) => resolveNodeRole\(authStore\.nodeMode\)\)/, '视图必须消费单源派生')
+  assert.match(dashboard, /const nodeModeRole = computed\(\(\) => nodeRoleView\.value\.role\)/)
+  assert.match(dashboard, /const nodeModeLabel = computed\(\(\) => nodeRoleView\.value\.label\)/)
+  assert.match(dashboard, /const nodeModeTagType = computed\(\(\) => nodeRoleView\.value\.tagType\)/)
+  assert.doesNotMatch(dashboard, /nodeMode === 'master'/, '判据不得回流到视图（第二份口径）')
   assert.match(dashboard, /:type="nodeModeTagType"/, '模板必须消费派生 tag 类型')
-  assert.match(dashboard, /'节点角色未知'/)
+  // 文案/tag 方向由 nodeRole.spec.ts 的四态期望钉住；视图里不得再出现第二份
+  // '主节点'/'从节点' 文案映射（写在这里就会与单源分叉）。
+  assert.doesNotMatch(dashboard, /nodeModeRole\.value === 'master'/, '视图不得按角色值再派生一次')
   assert.doesNotMatch(dashboard, /isSlave \? 'warning' : 'success'/, '二态表达式必须退役')
 })

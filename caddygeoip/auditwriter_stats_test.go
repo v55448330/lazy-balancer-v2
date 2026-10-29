@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sort"
 	"testing"
 	"time"
 )
@@ -100,5 +101,51 @@ func TestAuditPipeline_writerStatsFailureMarker(t *testing.T) {
 	}
 	if _, serr := os.Stat(auditWriterStatsPath(target)); serr != nil {
 		t.Fatalf("恢复后侧车计数文件必须存在: %v", serr)
+	}
+}
+
+// 侧车文件是跨进程契约：唯一的读方是根服务的摄取 tick
+// （internal/services/securityevents.go 的 securityEventsObserveAuditWriterStats），
+// 它只解析 dropped / io_errors / format_errors / written_at 四个键。写侧因此
+// 只允许这四键：本进程的 IPC/spool 过程量（曾经的 ipc_sent/ipc_failed/
+// spool_written/spool_errors/recoverable/lost/mode）没有任何消费方，写出去等于
+// 让「读侧据此区分可补采与真丢」变成不实契约，并与读侧的失败窗口
+// （dropped+io_errors+format_errors）形成两套丢事件口径。
+// 新增侧车字段的前置条件是先让读侧消费（改上述解析结构体），此断言随之为红。
+func TestAuditPipeline_writerStatsSidecarCarriesOnlyReaderConsumedKeys(t *testing.T) {
+	closeTestAuditPipelines(t)
+	oldInterval := auditWriterStatsInterval
+	auditWriterStatsInterval = 0
+	t.Cleanup(func() { auditWriterStatsInterval = oldInterval })
+
+	target := filepath.Join(t.TempDir(), "audit.log")
+	p, err := acquireAuditPipeline(target, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.reportDropped("queue full")
+	p.writeWriterStatsIfDue(time.Now())
+
+	raw, err := os.ReadFile(auditWriterStatsPath(target))
+	if err != nil {
+		t.Fatalf("侧车未写出: %v", err)
+	}
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		t.Fatalf("侧车 JSON 非法: %v (%s)", err, raw)
+	}
+	got := make([]string, 0, len(payload))
+	for key := range payload {
+		got = append(got, key)
+	}
+	sort.Strings(got)
+	want := []string{"dropped", "format_errors", "io_errors", "written_at"}
+	if len(got) != len(want) {
+		t.Fatalf("侧车键集合=%v, want %v（多出的键无读方消费，属死口径）", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("侧车键集合=%v, want %v", got, want)
+		}
 	}
 }

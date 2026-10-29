@@ -18,6 +18,7 @@ import (
 )
 
 func TestCaddyRestartWatcherStopWaitsForLoopExit(t *testing.T) {
+	withIsolatedGlobal(t)
 	oldLoop := caddyRestartWatcherLoop
 	started := make(chan struct{})
 	caddyRestartWatcherStarted.Store(false)

@@ -5,6 +5,7 @@
 // 即 v2.3.1 逐策略归因默认层）。
 import type { RuleFlowPathRule } from '@/types/rules'
 import { hasOwn } from './hasOwn.ts'
+import { toV4Long, toV6BigInt } from './ipAddress.ts'
 
 interface SecurityStageIPListEntry { value: string; remark?: string }
 export interface SecurityStageIPList {
@@ -547,11 +548,6 @@ export const formatAclModeDetail = (
 //   · deny 策略上点「放行」→ 条目进入黑名单，变成拦截。
 // 动作集合按当前模式收窄：deny→仅拦截；allow→仅放行；绕过/空/未知→不给动作
 // （绕过 条目语义是免检测，空模式 ACL 不发射任何拒绝规则）。
-export const aclAssociateSides = (mode: string | undefined): { deny: boolean; allow: boolean } => ({
-  deny: mode === 'deny',
-  allow: mode === 'allow',
-})
-
 // 拦截页回落文案（i18n 单源）：渲染侧的真实回落不是「默认 403」——403/429 错误
 // 路由取**绑定链中首个「启用且有非空页」的策略**（internal/services/caddy.go
 // buildBlockPageErrorRoute / buildRateLimitErrorRoute），可能正是同链其他策略；
@@ -1048,56 +1044,8 @@ export const compareVersion = (a: string, b: string): number => {
 }
 
 // —— CIDR 感知 IP 匹配（用户验收：威胁库条目为 CIDR，精确串匹配漏报） ——
-const ipv4ToLong = (ip: string): number => {
-  const parts = ip.split('.').map(Number)
-  if (parts.length !== 4 || parts.some(p => Number.isNaN(p) || p < 0 || p > 255)) return -1
-  return (((parts[0] << 24) | (parts[1] << 16) | (parts[2] << 8) | parts[3]) >>> 0)
-}
-
-// IPv6 → 128 位整数：支持 '::' 压缩、嵌入 IPv4 尾（::ffff:1.2.3.4）
-// 与 %zone（丢弃）；拒绝多段 '::'/多余组/非法十六进制。无压缩形态必须恰好 8 组。
-const ipv6ToBigInt = (raw: string): bigint | null => {
-  const zone = raw.indexOf('%')
-  const addr = (zone >= 0 ? raw.slice(0, zone) : raw).trim()
-  if (!addr.includes(':') || addr.includes('[') || addr.includes(']')) return null
-  const parseGroups = (text: string): bigint[] | null => {
-    const out: bigint[] = []
-    const parts = text.split(':')
-    for (let i = 0; i < parts.length; i++) {
-      const part = parts[i]
-      if (part === '') return null
-      if (part.includes('.')) {
-        // 嵌入 IPv4 只能出现在最后一组，展开为两个 16 位组
-        if (i !== parts.length - 1) return null
-        const v4 = ipv4ToLong(part)
-        if (v4 < 0) return null
-        const wide = BigInt(v4 >>> 0)
-        out.push(wide >> 16n, wide & 0xffffn)
-        continue
-      }
-      if (!/^[0-9a-fA-F]{1,4}$/.test(part)) return null
-      out.push(BigInt(`0x${part}`))
-    }
-    return out
-  }
-  const halves = addr.split('::')
-  if (halves.length > 2) return null
-  let groups: bigint[] | null
-  if (halves.length === 2) {
-    const head = halves[0] === '' ? [] : parseGroups(halves[0])
-    const tail = halves[1] === '' ? [] : parseGroups(halves[1])
-    if (head === null || tail === null) return null
-    const missing = 8 - head.length - tail.length
-    if (missing < 1) return null
-    groups = [...head, ...Array.from({ length: missing }, () => 0n), ...tail]
-  } else {
-    groups = parseGroups(addr)
-    if (groups === null || groups.length !== 8) return null
-  }
-  let out = 0n
-  for (const group of groups) out = (out << 16n) | group
-  return out
-}
+// 地址解析单源 in utils/ipAddress：事件侧需要 %zone 宽容与「按数值收前导零」
+// 的历史口径（引擎上报形态），由 toV4Long / toV6BigInt 显式表达。
 
 // 补正：IPv6 CIDR 按前 N 位比较——此前仅 IPv4，IPv6 CIDR
 // 条目在命中定位/残余信任判定侧恒漏报（取消信任后 CIDR 仍信任却报「已恢复拦截」）。
@@ -1113,12 +1061,12 @@ const parseCidrUncached = (cidr: string): ParsedCidr | null => {
   if (!Number.isInteger(bits) || bits < 0) return null
   if (base.includes(':')) {
     if (bits > 128) return null
-    const baseLong = ipv6ToBigInt(base)
+    const baseLong = toV6BigInt(base)
     if (baseLong === null) return null
     return { family: 6, base: baseLong, bits }
   }
   if (bits > 32) return null
-  const baseLong = ipv4ToLong(base)
+  const baseLong = toV4Long(base)
   if (baseLong < 0) return null
   return { family: 4, base: baseLong, bits }
 }
@@ -1140,12 +1088,12 @@ const parseCidr = (cidr: string): ParsedCidr | null => {
 
 const parsedCidrContains = (parsed: ParsedCidr, ip: string): boolean => {
   if (parsed.family === 4) {
-    const ipLong = ipv4ToLong(ip.trim())
+    const ipLong = toV4Long(ip.trim())
     if (ipLong < 0) return false
     const mask = parsed.bits === 0 ? 0 : (~0 << (32 - parsed.bits)) >>> 0
     return (ipLong & mask) === (parsed.base & mask)
   }
-  const ipLong = ipv6ToBigInt(ip)
+  const ipLong = toV6BigInt(ip)
   if (ipLong === null) return false
   if (parsed.bits === 0) return true
   const shift = BigInt(128 - parsed.bits)
@@ -1164,8 +1112,8 @@ const ipInCidr = (ip: string, cidr: string): boolean => {
  */
 export const createIpMatcher = (ip: string): ((entry: string) => boolean) => {
   const trimmed = ip.trim()
-  const v4 = ipv4ToLong(trimmed)
-  const v6 = v4 < 0 ? ipv6ToBigInt(trimmed) : null
+  const v4 = toV4Long(trimmed)
+  const v6 = v4 < 0 ? toV6BigInt(trimmed) : null
   return (entry) => {
     if (entry === trimmed) return true
     if (!entry.includes('/')) return false

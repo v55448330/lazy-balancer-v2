@@ -720,18 +720,97 @@ var idempotentDeleteDocRoutes = map[string]struct{}{
 	"DELETE /settings/oidc":                             {},
 }
 
+// apiDocRetryByMethod 是「重试语义」的方法级默认文案（单源）。
+//
+// 只有与默认不同的特例才进 operationDescription 的 switch：PUT/PATCH 未列出时
+// 不再是 POST 的「可能创建新资源」文案（那是与 handler 事实相反的断言）。
+var apiDocRetryByMethod = map[string]string{
+	http.MethodPost:   "不可安全重试：重复调用可能创建新资源或再次触发操作。",
+	http.MethodPut:    "可安全重试：相同请求重复调用保持相同目标状态。",
+	http.MethodPatch:  "可安全重试：相同请求重复调用保持相同目标状态。",
+	http.MethodDelete: "不可安全重试：首次删除成功，重复调用返回 404。",
+}
+
+// createLikeWriteDocRoutes 是「调用即可能创建资源/再次触发动作」的写端点登记表
+// （当前全部是 POST）：它们的重试文案沿用 POST 的兜底语义。
+//
+// 绊线用途：文档里携带这段兜底文案的写端点必须在此登记——新增端点掉进默认分支
+// 时用例立刻红，维护者被迫当场判断「它到底是不是创建类」（真创建→登记；可安全
+// 重试/不可盲目重试→在 operationDescription 里给专用文案）。不登记即无人过问的
+// 默认吞并，正是这份文档最容易腐化的形态。
+//
+// 语义边界：PUT/PATCH/DELETE 的文案由 apiDocRetryByMethod 派生，不进本表。
+var createLikeWriteDocRoutes = map[string]struct{}{
+	"POST /auth/login":                                {},
+	"POST /auth/ticket-login":                         {},
+	"POST /auth/mfa/verify":                           {},
+	"POST /auth/mfa/setup":                            {},
+	"POST /auth/mfa/activate":                         {},
+	"POST /auth/mfa/disable":                          {},
+	"POST /auth/mfa/recovery-codes":                   {},
+	"POST /auth/mfa/verify-step":                      {},
+	"POST /users/:id/mfa/reset":                       {},
+	"POST /auth/setup":                                {},
+	"POST /users":                                     {},
+	"POST /users/:id/reset-password":                  {},
+	"POST /users/me/api-keys":                         {},
+	"POST /api-keys":                                  {},
+	"POST /config/import":                             {},
+	"POST /system/tasks/:id/trigger":                  {},
+	"POST /system/tasks/:id/toggle":                   {},
+	"POST /system/tasks/:id/control":                  {},
+	"POST /system/tasks/:id/cancel":                   {},
+	"POST /auto-backup/run":                           {},
+	"POST /auto-backup/:id/restore":                   {},
+	"POST /config/reload":                             {},
+	"POST /rules":                                     {},
+	"POST /certificate-configs":                       {},
+	"POST /certificates/jobs/current":                 {},
+	"POST /cluster/nodes/:id/approve":                 {},
+	"POST /cluster/nodes/:id/reject":                  {},
+	"POST /cluster/nodes/:id/service":                 {},
+	"POST /cluster/nodes/:id/forget-pin":              {},
+	"POST /cluster/service-control":                   {},
+	"POST /cluster/mode":                              {},
+	"POST /cluster/promote":                           {},
+	"POST /cluster/sync/pull":                         {},
+	"POST /cluster/forget-pins":                       {},
+	"POST /cluster/nodes/report":                      {},
+	"POST /caddy/start":                               {},
+	"POST /caddy/stop":                                {},
+	"POST /caddy/restart":                             {},
+	"POST /system/restart":                            {},
+	"POST /config/import/v1":                          {},
+	"POST /security/overview/threat-screen/collector": {},
+	"POST /security/policies/batch-bind":              {},
+	"POST /rules/batch-block-pages":                   {},
+	"POST /security/policies/:id/split":               {},
+	"POST /security/policies":                         {},
+	"POST /security/policies/:id/bind":                {},
+	"POST /security/policies/:id/bindings/bulk":       {},
+	"POST /security/custom-rules":                     {},
+	"POST /security/block-pages":                      {},
+	"POST /security/ip-lists":                         {},
+	"POST /security/ip-lists/:id/remove-ip":           {},
+	"POST /security/crs/update":                       {},
+	"POST /security/ip2region/update":                 {},
+	"POST /security/threat-lib/update":                {},
+	"POST /security/crawler-lib/update":               {},
+}
+
 func operationDescription(route apiDocRoute) string {
 	description := route.Description
 	if route.Method != http.MethodPost && route.Method != http.MethodPut && route.Method != http.MethodDelete && route.Method != http.MethodPatch {
 		return description
 	}
-	// 默认按方法归族：DELETE 是资源型删除（首次成功、重复 404），不创建资源。
-	// 旧实现靠 switch 逐条枚举 DELETE，新增删除端点会静默掉进「可能创建新
-	// 资源」的默认文案；现在默认文案由方法决定，幂等删除单独登记白名单。
-	retry := "不可安全重试：重复调用可能创建新资源或再次触发操作。"
-	if route.Method == http.MethodDelete {
-		retry = "不可安全重试：首次删除成功，重复调用返回 404。"
-	}
+	// 默认按方法归族，不再逐条枚举：
+	//   - DELETE 是资源型删除（首次成功、重复 404），不创建资源；幂等删除另
+	//     登记 idempotentDeleteDocRoutes；
+	//   - PUT/PATCH 的语义就是「同请求重发保持目标态」——新增写端点若掉进
+	//     POST 的「可能创建新资源」默认文案，文档会与 handler 事实相反（此前
+	//     靠 switch 逐条枚举全部 PUT/PATCH 才没有暴露，漏登记一条即错）。
+	// 逐条 switch 只保留**与默认不同**的特例。
+	retry := apiDocRetryByMethod[route.Method]
 	key := route.Method + " " + route.Path
 	switch key {
 	case "POST /auth/logout":
@@ -752,20 +831,10 @@ func operationDescription(route apiDocRoute) string {
 		retry = "不可盲目安全重试：重复调用可能返回 429 或再次排队签发任务。"
 	case "POST /certificates/jobs/:id/retry":
 		retry = "不可盲目安全重试：重复调用可能返回 409 或 429。"
-	case "PUT /users/:id", "PUT /users/:id/status", "PUT /config", "PUT /rules/:caddy_id", "PUT /cluster/settings", "PUT /cluster/nodes/:id/access-url", "PUT /cluster/nodes/:id/site", "PUT /certificate-configs/:id", "PUT /ca-providers/:id", "PUT /caddy/config", "PUT /admin-tls", "PUT /settings/oidc",
-		"PUT /settings/auto-backup", "PUT /security/policies/:id", "PUT /security/rules/:caddy_id/policies", "PUT /security/custom-rules/:id", "PUT /security/block-pages/:id", "PUT /security/ip-lists/:id", "PUT /security/crs/auto-update", "PUT /security/ip2region/auto-update",
-		"PUT /security/threat-lib/auto-update", "PUT /security/threat-lib/:id/flags", "PUT /security/crs/schedule", "PUT /security/ip2region/schedule", "PUT /security/threat-lib/schedule",
-		// 爬虫库同族三条状态型 PUT 与自动封禁配置写
-		// （同参数重发保持目标态，窗口/口径不变时不会二次重置计数器）。
-		"PUT /security/crawler-lib/auto-update", "PUT /security/crawler-lib/schedule", "PUT /security/crawler-lib/:id/flags", "PUT /security/autoban":
-		retry = "可安全重试：相同请求重复调用保持相同目标状态。"
 	case "PATCH /users/me":
 		// 改密是本组唯一的非幂等语义：密码变更后旧会话令牌立即失效，
 		// 自动重试会拿旧密码/旧令牌继续打，把一次成功变成一串 401。
 		retry = "改密请求不可重放：密码变更后旧会话令牌立即失效，请勿自动重试；仅修改显示名等无密码变更的请求可安全重试。"
-	case "PATCH /users/me/api-keys/:id", "PATCH /api-keys/:id/status":
-		// PATCH 语义化部分更新与 PUT 同格幂等。
-		retry = "可安全重试：相同请求重复调用保持相同目标状态。"
 	case "POST /security/ip-lists/:id/ips":
 		// 幂等追加——条目已存在时返回 added=false,不重复落行。
 		retry = "可安全重试：重复追加同一条目返回 added=false，不产生重复数据。"
