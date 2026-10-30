@@ -450,3 +450,10 @@ body .rule-lock-popper :is(.lock-stage, .lock-policy-group) { border-radius: 0; 
   background: #ecfeff;
   border-color: #a5f3fc;
 }
+
+/* HTTP 协议徽标（蓝）：与 TCP 徽标成对的共用单源（关联规则列表/选择器等）。 */
+.proto-http-tag {
+  color: #1d4ed8;
+  background: #eff6ff;
+  border-color: #bfdbfe;
+}

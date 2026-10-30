@@ -208,7 +208,7 @@
         <el-button v-if="!isReadOnly" type="warning" @click="openMigrateFromView">更新迁移</el-button>
       </template>
     </el-dialog>
-    <el-dialog v-model="dialogVisible" class="dialog-body-inset" width="min(950px, 94vw)" top="5vh" :close-on-click-modal="false" :before-close="beforeWizardClose" @close="resetWizard">
+    <el-dialog v-model="dialogVisible" class="dialog-body-inset policy-wizard-dialog" width="min(950px, 94vw)" top="5vh" :close-on-click-modal="false" :before-close="beforeWizardClose" @close="resetWizard">
       <template #header>
         <DialogHeader :icon="Lock" :title="editingId ? (isReadOnly ? '查看策略' : '编辑策略') : '新建策略'"
           :subtitle="EDITOR_SUBTITLES[editorPolicyType]" tone="primary" />
@@ -691,6 +691,8 @@
                   <div v-for="row in boundRuleRows" :key="row.caddyId" class="bound-rule-row">
                     <div class="bound-rule-head">
                       <span class="bound-rule-name">{{ row.name }}</span>
+                      <span class="proto-tcp-tag rule-proto-badge" v-if="row.protocol === 'tcp'">TCP</span>
+                      <span v-else class="proto-http-tag rule-proto-badge">HTTP</span>
                       <span class="bound-rule-meta">{{ row.domain || '-' }}:{{ row.listenPort }}</span>
                       <el-button v-if="!isReadOnly" size="small" link type="danger" class="bound-rule-remove" @click="removeBoundRule(row.caddyId)">移除</el-button>
                     </div>
@@ -1029,7 +1031,7 @@ interface RuleBoundPolicy { id: number; name: string; mode: string; enabled: boo
 interface CustomRuleRef { id: number; action: string }
 interface ChainEntry { policyId: number | null; name: string; enabled: boolean; isSelf: boolean; blockPageId?: number; blockStatusCode?: number }
 interface BlockPageNote { kind: 'active' | 'disabled' | 'warning' | 'info'; text: string }
-interface BoundRuleRow { caddyId: string; name: string; domain: string; listenPort: number; chain: ChainEntry[]; blockPageNotes: BlockPageNote[]; mergedCount: number; showPerfTip: boolean; hints: string[]; infoHints: string[] }
+interface BoundRuleRow { caddyId: string; name: string; protocol: string; domain: string; listenPort: number; chain: ChainEntry[]; blockPageNotes: BlockPageNote[]; mergedCount: number; showPerfTip: boolean; hints: string[]; infoHints: string[] }
 interface BlockPage { id: number; name: string; content?: string }
 
 const blockPages = ref<BlockPage[]>([])
@@ -3039,6 +3041,7 @@ const boundRuleRows = computed<BoundRuleRow[]>(() => boundRules.value.map((caddy
   return {
     caddyId,
     name: rule?.name || caddyId,
+    protocol: rule?.protocol || 'http',
     domain: rule?.domain || '',
     listenPort: rule?.listen_port ?? 0,
     chain,
@@ -4007,6 +4010,22 @@ onMounted(async () => {
 /* 兜底：关联规则多时 popper 可超视口——flip 回退之外由内部滚动承接*/
 .policy-rules-popper { max-height: 60vh; overflow-y: auto; }
 .policy-rules-popper .el-dropdown-menu { padding: 4px 0; }
+
+/* 策略向导弹框正文限高滚动：关联规则多时内容不得超出视口（用户实测超屏）。 */
+.policy-wizard-dialog .el-dialog__body {
+  max-height: calc(100vh - 220px);
+  overflow-y: auto;
+}
+
+/* 已关联规则行的协议徽标（TCP 青/HTTP 蓝全局单源 + 间距）。 */
+.rule-proto-badge {
+  margin: 0 6px 0 4px;
+  font-size: 11px;
+  line-height: 18px;
+  padding: 0 5px;
+  border: 1px solid;
+  flex-shrink: 0;
+}
 .policy-rules-popper .el-dropdown-menu__item { font-size: 12px; line-height: 1.6; }
 /* reference 是真按钮（原为无激活行为的 span）：清掉 UA 按钮外观，保留文本外观
    与焦点环；键盘激活交给 el-dropdown 的 click 触发 */

@@ -241,11 +241,12 @@
           </template>
         </el-table-column>
         <!-- OPTIONS 为最长方法名(7 字符),90 定宽 -->
-        <!-- TCP（L4 断连）事件徽标（青色全局单源，2026-10-31 用户裁定移入本列）：
-             TCP 无方法语义——徽标 + 「—」占位（与请求详情弹框口径一致） -->
+        <!-- 方法列统一纯文本：TCP（L4 断连）事件无方法语义，显示协议名 TCP；
+             HTTP 事件显示 GET/POST 等——不加协议徽标（用户裁定：要加都加，
+             要么都不加；取都不加）。 -->
         <el-table-column prop="method" label="方法" width="90" align="center">
           <template #default="{ row }">
-            <template v-if="row.event_type === 'tcp'"><el-tag size="small" effect="plain" class="proto-tcp-tag event-proto-tag">TCP</el-tag>—</template>
+            <template v-if="row.event_type === 'tcp'">TCP</template>
             <span v-else>{{ row.method }}</span>
           </template>
         </el-table-column>

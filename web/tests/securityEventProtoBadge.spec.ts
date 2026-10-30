@@ -1,6 +1,6 @@
-// 事件日志/详情弹框的协议徽标口径（2026-10-31 用户裁定）：
-//   ①事件列表 TCP 徽标从「规则」列移到「方法」列——规则列只留规则名，
-//     方法列对 TCP 事件显示青色徽标（全局 .proto-tcp-tag 单源）+「—」；
+// 事件日志/详情弹框的协议口径（2026-10-31 用户二次裁定）：
+//   ①事件列表方法列统一纯文本——TCP 事件显示「TCP」，HTTP 显示 GET/POST，
+//     不加协议徽标（用户裁定：要加都加，要么都不加；取都不加）；
 //   ②触发详情弹框与请求详情弹框显示规则协议类型（TCP/HTTP），
 //     数据源 = event_type 既有字段；防御式：字段缺失不显示徽标。
 //
@@ -20,11 +20,11 @@ test('事件列表：规则列不再放 TCP 徽标', () => {
   assert.match(ruleColumn, /AccessibleLink/, '规则名链接保持')
 })
 
-test('事件列表：方法列承载 TCP 徽标 + 「—」占位', () => {
+test('事件列表：方法列统一纯文本（TCP 协议名，无徽标无占位符）', () => {
   const methodColumn = section(events, 'label="方法"', 'label="URI"')
   assert.match(methodColumn, /row\.event_type === 'tcp'/)
-  assert.match(methodColumn, /class="proto-tcp-tag event-proto-tag">TCP<\/el-tag>/, 'TCP 徽标走全局单源')
-  assert.match(methodColumn, /—/, 'TCP 事件无方法语义，占位「—」')
+  assert.doesNotMatch(methodColumn, /proto-tcp-tag|el-tag/, '方法列不加协议徽标（用户裁定都不加）')
+  assert.doesNotMatch(methodColumn, />—</, '无「—」占位符')
 })
 
 test('触发详情弹框：命中概览显示协议徽标（TCP 青 / HTTP 蓝）', () => {
