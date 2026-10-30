@@ -275,6 +275,17 @@ type securityOverviewAggregates struct {
 	topIPs           []models.SecurityTopIP
 	attackTypes      []models.SecurityAttackType
 	attackTypesStage []models.SecurityAttackType
+	// 日界窗口计数与正常请求差分（同 30s 缓存体：键含日界/时区/库句柄，
+	// 与趋势聚合同缓存生命周期）。todayBlockedTCP 自 handler 逐请求直算
+	// 下沉进缓存（同款原始表窗口，口径不变）。
+	todayBlockedTCP     int
+	yesterdayBlocked    int
+	yesterdayBlockedTCP int
+	yesterdayDetected   int
+	normalTodayHTTP     int
+	normalTodayTCP      int
+	normalYesterdayHTTP int
+	normalYesterdayTCP  int
 }
 
 type securityOverviewAggCacheKey struct {
@@ -359,6 +370,183 @@ func threatRawCoverageStart(database *sql.DB) (string, error) {
 	var earliest string
 	err := database.QueryRow(`SELECT COALESCE(MIN(event_time),'') FROM security_events`).Scan(&earliest)
 	return earliest, err
+}
+
+// ---- 昨日窗口计数与正常请求差分（30s 聚合缓存体；口径披露见
+// models.SecurityOverview 对应字段注释与 apidocs）----
+
+// securityOverviewDayWindowCounts 原始表单日窗口 [from,to) 的拦截/检测计数
+// （攻击面谓词同今日直算分支；窗口两端由调用方按本地日界换 UTC 文本）。
+func securityOverviewDayWindowCounts(database *sql.DB, from, to time.Time) (blocked, detected int, err error) {
+	err = database.QueryRow(`SELECT COALESCE(SUM(action='blocked'),0), COALESCE(SUM(action='logged'),0)
+		FROM security_events
+		WHERE event_time >= ? AND event_time < ? AND `+services.AttackEventSQLPredicate("rule_triggered", "action"),
+		from.UTC().Format(securityOverviewEventTimeLayout), to.UTC().Format(securityOverviewEventTimeLayout)).
+		Scan(&blocked, &detected)
+	return blocked, detected, err
+}
+
+// securityOverviewDayWindowTCPBlocked 原始表窗口 TCP 拦截拆分
+// （event_type='tcp' AND action='blocked'，与今日 TCP 直算同款，仅换窗口；
+// to 为零值表示无上界——今日口径与切换前逐字一致）。
+func securityOverviewDayWindowTCPBlocked(database *sql.DB, from, to time.Time) (int, error) {
+	query := `SELECT COUNT(*) FROM security_events
+		WHERE event_type='tcp' AND action='blocked' AND event_time >= ?`
+	args := []any{from.UTC().Format(securityOverviewEventTimeLayout)}
+	if !to.IsZero() {
+		query += ` AND event_time < ?`
+		args = append(args, to.UTC().Format(securityOverviewEventTimeLayout))
+	}
+	var blocked int
+	err := database.QueryRow(query, args...).Scan(&blocked)
+	return blocked, err
+}
+
+// securityOverviewEventTimeLayout metrics 库时间文本统一格式（与采集写侧
+// datetime('now') 同形状，UTC 文本比较）。
+const securityOverviewEventTimeLayout = "2006-01-02 15:04:05"
+
+// clampedDelta int64 单调差分：cur<prev（计数器随 /load/重启归零）取 cur，
+// 否则 cur−prev（与 services.DeltaUint64 同一钳制语义的带符号变体——
+// metrics_history 列为 INTEGER，语义同源不得各写各的钳制方向）。
+func clampedDelta(cur, prev int64) int64 {
+	if cur < prev {
+		return cur
+	}
+	return cur - prev
+}
+
+// securityOverviewGlobalSampleAt 取全局行（rule_id IS NULL）在 at 时刻前
+// （含 at）的末样本 requests_total；at 为零值=不限时取最新样本。无样本
+// ok=false（样本积累中口径，不算错误）。
+func securityOverviewGlobalSampleAt(database *sql.DB, at time.Time) (total int64, ok bool, err error) {
+	query := `SELECT requests_total FROM metrics_history WHERE rule_id IS NULL`
+	args := []any{}
+	if !at.IsZero() {
+		query += ` AND timestamp <= ?`
+		args = append(args, at.UTC().Format(securityOverviewEventTimeLayout))
+	}
+	query += ` ORDER BY timestamp DESC, id DESC LIMIT 1`
+	err = database.QueryRow(query, args...).Scan(&total)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, err
+	}
+	return total, true, nil
+}
+
+// securityOverviewBlockedAnchorAt 取各规则在 at 时刻前（含 at；零值=不限时）
+// 末样本的 requests_blocked 累计 map（无样本的规则不在 map 中=0 基线）。
+// 「每规则末样本」经 MAX(id) 子查询连接取行（同时间戳双行时按写入序取末行，
+// 不依赖 SQLite bare-column 行为）。
+func securityOverviewBlockedAnchorAt(database *sql.DB, at time.Time) (map[string]int64, error) {
+	inner := `SELECT rule_id, MAX(id) AS id FROM metrics_history WHERE rule_id IS NOT NULL`
+	args := []any{}
+	if !at.IsZero() {
+		inner += ` AND timestamp <= ?`
+		args = append(args, at.UTC().Format(securityOverviewEventTimeLayout))
+	}
+	inner += ` GROUP BY rule_id`
+	rows, err := database.Query(`SELECT m.rule_id, m.requests_blocked FROM metrics_history m
+		JOIN (`+inner+`) t ON m.id = t.id`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	anchor := map[string]int64{}
+	for rows.Next() {
+		var ruleID string
+		var blocked int64
+		if err := rows.Scan(&ruleID, &blocked); err != nil {
+			return nil, err
+		}
+		anchor[ruleID] = blocked
+	}
+	return anchor, rows.Err()
+}
+
+// securityOverviewBlockedDelta 窗口 [from,to]（to 零值=最新样本）内 per-rule
+// requests_blocked 累计差分之和（每规则钳制后求和；起点无样本的规则按 0
+// 基线——窗口内新出现的规则的累计全部落在窗口内）。
+func securityOverviewBlockedDelta(database *sql.DB, from, to time.Time) (int64, error) {
+	startAnchor, err := securityOverviewBlockedAnchorAt(database, from)
+	if err != nil {
+		return 0, err
+	}
+	endAnchor, err := securityOverviewBlockedAnchorAt(database, to)
+	if err != nil {
+		return 0, err
+	}
+	var sum int64
+	for ruleID, endVal := range endAnchor {
+		sum += clampedDelta(endVal, startAnchor[ruleID])
+	}
+	return sum, nil
+}
+
+// securityOverviewNormalHTTPDiff 正常请求（HTTP）差分：今日=最新累计−今日
+// 起点前末样本−今日被拦差分；昨日=今日起点前末样本−昨日起点前末样本−昨日
+// 被拦差分。样本不足（锚不到昨日起点前末样本，即指标历史短于 2 天）→ 双
+// 返回 0（样本积累中）。总请求/被拦差分均带重置钳制（clampedDelta）；被拦
+// 差分极端大于总请求差分（口径差异形态）时结果钳零（正常请求数不出负数）。
+func securityOverviewNormalHTTPDiff(database *sql.DB, ydayStart, todayStart time.Time) (today, yesterday int, err error) {
+	anchorYday, okYday, err := securityOverviewGlobalSampleAt(database, ydayStart)
+	if err != nil {
+		return 0, 0, err
+	}
+	if !okYday {
+		return 0, 0, nil
+	}
+	anchorToday, okToday, err := securityOverviewGlobalSampleAt(database, todayStart)
+	if err != nil {
+		return 0, 0, err
+	}
+	latest, okLatest, err := securityOverviewGlobalSampleAt(database, time.Time{})
+	if err != nil {
+		return 0, 0, err
+	}
+	if !okToday || !okLatest {
+		return 0, 0, nil
+	}
+	blockedYday, err := securityOverviewBlockedDelta(database, ydayStart, todayStart)
+	if err != nil {
+		return 0, 0, err
+	}
+	blockedToday, err := securityOverviewBlockedDelta(database, todayStart, time.Time{})
+	if err != nil {
+		return 0, 0, err
+	}
+	today = clampedNonNegative(int(clampedDelta(latest, anchorToday)) - int(blockedToday))
+	yesterday = clampedNonNegative(int(clampedDelta(anchorToday, anchorYday)) - int(blockedYday))
+	return today, yesterday, nil
+}
+
+// clampedNonNegative 差分口径的负值钳零：被拦差分极端大于总请求差分
+// （限流 429 等口径差异形态）时正常请求数不出负数（口径见 apidocs 披露）。
+func clampedNonNegative(v int) int {
+	if v < 0 {
+		return 0
+	}
+	return v
+}
+
+// securityOverviewNormalTCPDiff 正常 TCP 连接差分：lb_l4_conn_history 全局
+// 行（rule_id=”）allowed 的日窗口求和（写侧差分落库时已含重置钳制，读侧
+// 直接求和；per-rule 行只做归因明细，不参与全局求和）。
+func securityOverviewNormalTCPDiff(database *sql.DB, ydayStart, todayStart time.Time) (today, yesterday int, err error) {
+	layout := securityOverviewEventTimeLayout
+	if err := database.QueryRow(`SELECT COALESCE(SUM(allowed),0) FROM lb_l4_conn_history
+		WHERE rule_id='' AND timestamp >= ?`, todayStart.UTC().Format(layout)).Scan(&today); err != nil {
+		return 0, 0, err
+	}
+	if err := database.QueryRow(`SELECT COALESCE(SUM(allowed),0) FROM lb_l4_conn_history
+		WHERE rule_id='' AND timestamp >= ? AND timestamp < ?`,
+		ydayStart.UTC().Format(layout), todayStart.UTC().Format(layout)).Scan(&yesterday); err != nil {
+		return 0, 0, err
+	}
+	return today, yesterday, nil
 }
 
 // securityOverviewResponse 在不改变公共 SecurityOverview 模型的前提下，为
@@ -723,6 +911,36 @@ func loadSecurityOverviewAggregates(metricsDB *sql.DB, today time.Time, todaySta
 		srcErr = famErr
 	}
 
+	// 日界窗口计数与正常请求差分（同缓存体同失效语义）：昨日窗口/正常请求
+	// 查询失败与趋势聚合失败同口径上抛（不缓存失败轮，调用方聚合成 500）。
+	// yesterday_detected_tcp 恒 0（L4 不产 logged，契约常量不回填）。
+	// 注意 dayStarts 形状：[0..6]=今日−6..今日、[7]=明日 0 点（趋势窗口
+	// 排他上界）——今日起点=dayStarts[6]，昨日起点=dayStarts[5]。
+	var dayCounts securityOverviewAggregates
+	ydayStart := dayStarts[5]
+	todayDayStart := dayStarts[6]
+	var dayErr error
+	dayCounts.yesterdayBlocked, dayCounts.yesterdayDetected, dayErr = securityOverviewDayWindowCounts(metricsDB, ydayStart, todayDayStart)
+	if dayErr != nil && srcErr == nil {
+		srcErr = dayErr
+	}
+	dayCounts.yesterdayBlockedTCP, dayErr = securityOverviewDayWindowTCPBlocked(metricsDB, ydayStart, todayDayStart)
+	if dayErr != nil && srcErr == nil {
+		srcErr = dayErr
+	}
+	dayCounts.todayBlockedTCP, dayErr = securityOverviewDayWindowTCPBlocked(metricsDB, todayDayStart, time.Time{})
+	if dayErr != nil && srcErr == nil {
+		srcErr = dayErr
+	}
+	dayCounts.normalTodayHTTP, dayCounts.normalYesterdayHTTP, dayErr = securityOverviewNormalHTTPDiff(metricsDB, ydayStart, todayDayStart)
+	if dayErr != nil && srcErr == nil {
+		srcErr = dayErr
+	}
+	dayCounts.normalTodayTCP, dayCounts.normalYesterdayTCP, dayErr = securityOverviewNormalTCPDiff(metricsDB, ydayStart, todayDayStart)
+	if dayErr != nil && srcErr == nil {
+		srcErr = dayErr
+	}
+
 	topIPs := make([]models.SecurityTopIP, 0, len(src.topRows))
 	for _, row := range src.topRows {
 		topIPs = append(topIPs, models.SecurityTopIP{
@@ -765,7 +983,20 @@ func loadSecurityOverviewAggregates(metricsDB *sql.DB, today time.Time, todaySta
 		attackTypes = attackTypes[:10]
 	}
 
-	data := securityOverviewAggregates{trend: src.trend, topIPs: topIPs, attackTypes: attackTypes, attackTypesStage: attackTypesStage}
+	data := securityOverviewAggregates{
+		trend:               src.trend,
+		topIPs:              topIPs,
+		attackTypes:         attackTypes,
+		attackTypesStage:    attackTypesStage,
+		todayBlockedTCP:     dayCounts.todayBlockedTCP,
+		yesterdayBlocked:    dayCounts.yesterdayBlocked,
+		yesterdayBlockedTCP: dayCounts.yesterdayBlockedTCP,
+		yesterdayDetected:   dayCounts.yesterdayDetected,
+		normalTodayHTTP:     dayCounts.normalTodayHTTP,
+		normalTodayTCP:      dayCounts.normalTodayTCP,
+		normalYesterdayHTTP: dayCounts.normalYesterdayHTTP,
+		normalYesterdayTCP:  dayCounts.normalYesterdayTCP,
+	}
 	if srcErr != nil {
 		return data, srcErr
 	}
@@ -775,11 +1006,22 @@ func loadSecurityOverviewAggregates(metricsDB *sql.DB, today time.Time, todaySta
 
 // cloneSecurityOverviewAggregates 复制四组切片（元素为值类型，浅复制切片即
 // 深拷贝）——缓存读写两侧都必须用副本，缓存条目与响应构造不得共享底层数组。
+// 日界窗口/差分字段为值类型，随结构体赋值自然复制（不得遗漏——漏带会让
+// 缓存命中路径返回零值计数）。
 func cloneSecurityOverviewAggregates(in securityOverviewAggregates) securityOverviewAggregates {
-	return securityOverviewAggregates{
-		trend:            slices.Clone(in.trend),
-		topIPs:           slices.Clone(in.topIPs),
-		attackTypes:      slices.Clone(in.attackTypes),
-		attackTypesStage: slices.Clone(in.attackTypesStage),
+	out := securityOverviewAggregates{
+		trend:               slices.Clone(in.trend),
+		topIPs:              slices.Clone(in.topIPs),
+		attackTypes:         slices.Clone(in.attackTypes),
+		attackTypesStage:    slices.Clone(in.attackTypesStage),
+		todayBlockedTCP:     in.todayBlockedTCP,
+		yesterdayBlocked:    in.yesterdayBlocked,
+		yesterdayBlockedTCP: in.yesterdayBlockedTCP,
+		yesterdayDetected:   in.yesterdayDetected,
+		normalTodayHTTP:     in.normalTodayHTTP,
+		normalTodayTCP:      in.normalTodayTCP,
+		normalYesterdayHTTP: in.normalYesterdayHTTP,
+		normalYesterdayTCP:  in.normalYesterdayTCP,
 	}
+	return out
 }

@@ -887,7 +887,7 @@ func TestLoadSecurityOverviewAggregates_doesNotCacheFailures(t *testing.T) {
 
 	// When 故障消除后用完全相同的键重试。
 	if _, err := db.MetricsDB.Exec(`CREATE TABLE security_events (
-		event_time DATETIME, action TEXT, client_ip TEXT, rule_triggered TEXT, rule_msg TEXT
+		event_time DATETIME, action TEXT, client_ip TEXT, rule_triggered TEXT, rule_msg TEXT, event_type TEXT DEFAULT ''
 	)`); err != nil {
 		t.Fatalf("recreate events table: %v", err)
 	}

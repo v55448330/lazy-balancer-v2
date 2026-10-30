@@ -376,9 +376,40 @@ type SecurityOverview struct {
 	// TodayBlockedTCP 是今日拦截的 TCP 协议拆分（event_type='tcp'，原始表
 	// 直算——rollup 表无 event_type 维度；TCP 为新增事件族，行帽裁剪对历史
 	// 无影响）。HTTP 拆分由消费方按 合计−TCP 计算（契约 C5）。
-	TodayBlockedTCP int    `json:"today_blocked_tcp"`
-	ActivePolicies  int    `json:"active_policies"`
-	CRSVersion      string `json:"crs_version"`
+	TodayBlockedTCP int `json:"today_blocked_tcp"`
+	// YesterdayBlocked/YesterdayDetected 昨日拦截/检测合计（本地日界窗口
+	// [昨日 0 点, 今日 0 点)，原始表直算，攻击面谓词同今日直算分支）。口径
+	// 披露：走原始表单日窗口，保留期/行帽极端裁剪下可能少计（覆盖起点由
+	// raw_coverage_from 既有披露承载）；计入口径与 trend 一致（含保留地址）。
+	YesterdayBlocked int `json:"yesterday_blocked"`
+	// YesterdayBlockedTCP 昨日拦截的 TCP 协议拆分（event_type='tcp' AND
+	// action='blocked'，原始表窗口直算；L4 无检测概念，无 logged 拆分面）。
+	YesterdayBlockedTCP int `json:"yesterday_blocked_tcp"`
+	YesterdayDetected   int `json:"yesterday_detected"`
+	// YesterdayDetectedTCP 恒 0：L4（TCP）不产 logged 事件（拒绝=断连，
+	// 无检测态），字段为协议拆分布局对称保留（口径披露，勿用数据回填）。
+	YesterdayDetectedTCP int `json:"yesterday_detected_tcp"`
+	// NormalToday 今日正常请求 = HTTP 差分口径：今日 caddy_http_requests_total
+	// 累计差分 − 今日 per-rule requests_blocked 累计差分。口径披露：①与安全
+	// 事件表不逐一对账（含限流 429 等差异）；②计数器随 /load/重启归零，差分
+	// 已钳制（区间内样本值下降视为重置，增量取后端样本当前值，不出现负数）；
+	// ③指标历史样本不足（短于 2 天，锚不到昨日起点前样本）时返回 0（样本
+	// 积累中）。TCP 连接不计入本字段（见 NormalTodayTCP）。
+	NormalToday int `json:"normal_today"`
+	// NormalTodayHTTP = NormalToday（同值；字段为前端「HTTP/TCP」布局对称
+	// 保留，语义即今日正常 HTTP 请求）。
+	NormalTodayHTTP int `json:"normal_today_http"`
+	// NormalTodayTCP 今日正常 TCP 连接 = lb_l4_conn_history 全局行（rule_id=''
+	// ）allowed 的今日本地日界差分（写侧 30s 差分落库时已含 /load 归零钳制：
+	// 重置后首个差分取当前值，不出现负数）。
+	NormalTodayTCP int `json:"normal_today_tcp"`
+	// NormalYesterday/NormalYesterdayHTTP/NormalYesterdayTCP 昨日同口径
+	// （HTTP=总请求差分−被拦差分；样本不足同返回 0；TCP=allowed 日差分）。
+	NormalYesterday     int    `json:"normal_yesterday"`
+	NormalYesterdayHTTP int    `json:"normal_yesterday_http"`
+	NormalYesterdayTCP  int    `json:"normal_yesterday_tcp"`
+	ActivePolicies      int    `json:"active_policies"`
+	CRSVersion          string `json:"crs_version"`
 	// CRSAvailable/IP2RegionAvailable：库文件级可用性（缺库降级感知面，
 	// 2026-09-24 裁定）——版本号是历史更新记录，库缺失时前端状态标签改「缺失」
 	CRSAvailable       bool                 `json:"crs_available"`

@@ -2,11 +2,8 @@ package handlers
 
 import (
 	"database/sql"
-	"encoding/json"
 	"errors"
-	"io"
 	"maps"
-	"net/http"
 	"slices"
 	"sort"
 	"strconv"
@@ -260,16 +257,16 @@ func invalidateThreatScreenRollupCaches() {
 // 快照（按 admin URL）与本次快照逐字段相减；计数器重置（任意字段 cur<prev）
 // 视为整体重置，差分取 cur（不出负数）。countries 为模块侧采样口径（默认每
 // 16 连接取 1），响应以 sampled:true 披露；allowed/denied 全量差分。
+//
+// 抓取与差分单源在 services（FetchL4ConnStats/DeltaUint64）：指标采集任务
+// （lb_l4_conn_history 30s 伴生落库）与大屏 serve 差分共用同一实现与钳制
+// 语义，各自维护独立基线（l4TrafficLastServe 只是大屏 serve 侧的消费进度）。
 
-type l4TrafficRuleCounters struct {
-	AllowedTotal uint64            `json:"allowed_total"`
-	DeniedTotal  uint64            `json:"denied_total"`
-	Countries    map[string]uint64 `json:"countries"`
-}
+type l4TrafficRuleCounters = services.L4TrafficRuleCounters
+type l4TrafficRawSnapshot = services.L4TrafficRawSnapshot
 
-type l4TrafficRawSnapshot struct {
-	Rules map[string]l4TrafficRuleCounters `json:"rules"`
-}
+// deltaUint64 重置钳制单源（services.DeltaUint64）。
+var deltaUint64 = services.DeltaUint64
 
 var (
 	// l4TrafficDeltaMu 守护按 admin URL 的「上次已消费」状态；同一 URL 的
@@ -279,32 +276,13 @@ var (
 	l4TrafficLastServe = map[string]l4TrafficRawSnapshot{}
 )
 
-// deltaUint64 单调差分：cur<prev（/load 归零形态）取 cur，否则 cur-prev。
-func deltaUint64(cur, prev uint64) uint64 {
-	if cur < prev {
-		return cur
-	}
-	return cur - prev
-}
-
 // fetchL4ConnStats 抓取一次 L4 连接计数原始快照；任何失败（不可达/非
 // 200/解码失败）ok=false 并告警——超时 2s，不阻塞大屏轮询协程（与
 // traffic-stats 抓取同容错：旧 Caddy 二进制无该端点=静默跳过）。
 func fetchL4ConnStats(adminURL string) (l4TrafficRawSnapshot, bool) {
-	client := &http.Client{Timeout: 2 * time.Second}
-	resp, err := client.Get(adminURL + "/lb/l4-conn-stats")
+	snap, err := services.FetchL4ConnStats(adminURL)
 	if err != nil {
-		services.Logf("warn", "threat-screen l4 traffic: admin fetch failed: %v", err)
-		return l4TrafficRawSnapshot{}, false
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		services.Logf("warn", "threat-screen l4 traffic: admin status %d", resp.StatusCode)
-		return l4TrafficRawSnapshot{}, false
-	}
-	var snap l4TrafficRawSnapshot
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&snap); err != nil {
-		services.Logf("warn", "threat-screen l4 traffic: decode failed: %v", err)
+		services.Logf("warn", "threat-screen l4 traffic: %v", err)
 		return l4TrafficRawSnapshot{}, false
 	}
 	return snap, true

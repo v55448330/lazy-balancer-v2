@@ -5115,15 +5115,6 @@ func (h *Handlers) GetSecurityOverview(c *gin.Context) {
 		blocked, detected, fromRollup, err := securityOverviewTodayCounts(db.MetricsDB, todayStart, now)
 		trackErr(err)
 		overview.TodayBlocked, overview.TodayDetected, todayFromRollup = blocked, detected, fromRollup
-		// TCP 协议拆分（契约 C5）：原始表直算（rollup 无 event_type 维度；
-		// 口径披露见 SecurityOverview.TodayBlockedTCP 注释）。查询失败并入
-		// trackErr（显性报错口径），不静默回零。
-		var tcpBlocked int
-		if err := db.MetricsDB.QueryRow(`SELECT COUNT(*) FROM security_events
-			WHERE event_type='tcp' AND action='blocked' AND event_time >= ?`, todayStartUTC).Scan(&tcpBlocked); err != nil {
-			trackErr(err)
-		}
-		overview.TodayBlockedTCP = tcpBlocked
 		coverageFrom, err := threatRawCoverageStart(db.MetricsDB)
 		trackErr(err)
 		rawCoverageFrom = coverageFrom
@@ -5216,6 +5207,20 @@ func (h *Handlers) GetSecurityOverview(c *gin.Context) {
 	overview.TopIPs = agg.topIPs
 	overview.AttackTypes = agg.attackTypes
 	overview.AttackTypesStage = agg.attackTypesStage
+	// 日界窗口计数与正常请求差分（30s 聚合缓存体同源）：today_blocked_tcp
+	// 自逐请求直算下沉进缓存（同款原始表窗口，口径不变）；昨日窗口与正常
+	// 请求字段口径披露见 models.SecurityOverview 对应字段注释。
+	overview.TodayBlockedTCP = agg.todayBlockedTCP
+	overview.YesterdayBlocked = agg.yesterdayBlocked
+	overview.YesterdayBlockedTCP = agg.yesterdayBlockedTCP
+	overview.YesterdayDetected = agg.yesterdayDetected
+	overview.YesterdayDetectedTCP = 0 // 恒 0：L4 不产 logged 事件（契约常量）
+	overview.NormalToday = agg.normalTodayHTTP
+	overview.NormalTodayHTTP = agg.normalTodayHTTP
+	overview.NormalTodayTCP = agg.normalTodayTCP
+	overview.NormalYesterday = agg.normalYesterdayHTTP
+	overview.NormalYesterdayHTTP = agg.normalYesterdayHTTP
+	overview.NormalYesterdayTCP = agg.normalYesterdayTCP
 
 	if firstErr != nil {
 		services.Logf("error", "security overview: query failed: %v", firstErr)

@@ -37,6 +37,11 @@ type MetricsService struct {
 	lastTotal     int64
 	lastSampleAt  time.Time
 	hasLastSample bool
+	// L4（TCP）连接历史伴生采集（SetL4AdminURL 接线；详见 l4connstats.go）。
+	l4AdminURL string
+	l4Mu       sync.Mutex
+	l4Last     map[string]L4TrafficRawSnapshot
+	l4Missing  map[string]bool
 }
 
 // caddyMetricsScrapeTimeout 是 Caddy admin /metrics 的唯一抓取预算单源。
@@ -54,7 +59,9 @@ func NewMetricsService(metricsURL string, interval int) *MetricsService {
 		client: &http.Client{
 			Timeout: caddyMetricsScrapeTimeout,
 		},
-		overview: models.MetricsOverview{},
+		overview:  models.MetricsOverview{},
+		l4Last:    map[string]L4TrafficRawSnapshot{},
+		l4Missing: map[string]bool{},
 	}
 }
 
@@ -188,6 +195,10 @@ func IsGeoIPPassSeries(line string) bool {
 }
 
 func (m *MetricsService) collect() {
+	// L4（TCP）连接历史伴生采集先行：不依赖 /metrics 采集成功（Caddy
+	// 可达性之外互相独立——/metrics 解析/入库失败不丢 L4 差分样本）。
+	m.collectL4ConnHistory()
+
 	// 三项 DB 派生指标先于 /metrics 采集刷新——Caddy 未就绪或
 	// /metrics 不可达时它们仍然准确，只有流量样本受影响。
 	m.refreshDBOverviewMetrics()
@@ -835,6 +846,14 @@ func (m *MetricsService) cleanupHistory() error {
 	if err := db.CleanupMetricsHistory(retentionDays); err != nil {
 		if lvl := logStateTransition("metrics-history-cleanup", true); lvl != "" {
 			Logf(lvl, "Failed to clean up metrics history: %v", err)
+		}
+		return err
+	}
+	// L4 连接计数历史同保留期同任务体（独立表，同 7 天窗口）：失败同口径
+	// 上抛进任务失败终态，不得静默继续。
+	if err := db.CleanupL4ConnHistory(retentionDays); err != nil {
+		if lvl := logStateTransition("metrics-history-cleanup", true); lvl != "" {
+			Logf(lvl, "Failed to clean up l4 conn history: %v", err)
 		}
 		return err
 	}

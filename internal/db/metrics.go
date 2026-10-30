@@ -454,6 +454,22 @@ func initMetricsSchema(db *sql.DB) error {
 	CREATE INDEX IF NOT EXISTS idx_metrics_timestamp ON metrics_history(timestamp);
 	CREATE INDEX IF NOT EXISTS idx_metrics_rule_timestamp ON metrics_history(rule_id, timestamp);
 
+	-- L4（TCP）连接计数历史：metrics 采集任务 30s 轮伴生抓 admin
+	-- /lb/l4-conn-stats，差分增量落库（per-rule 行 + 全局聚合行 rule_id=''）。
+	-- 存储的是**差分增量**而非累计快照（重置钳制在写侧完成：计数器随 /load
+	-- 归零后首个差分取当前值），读侧直接按日窗口 SUM。保留 7 天，
+	-- CleanupL4ConnHistory 挂在 metrics-history-cleanup 同一任务体。
+	CREATE TABLE IF NOT EXISTS lb_l4_conn_history (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		timestamp DATETIME NOT NULL,
+		rule_id TEXT DEFAULT '',
+		allowed INTEGER DEFAULT 0,
+		denied INTEGER DEFAULT 0
+	);
+
+	CREATE INDEX IF NOT EXISTS idx_l4_conn_history_timestamp ON lb_l4_conn_history(timestamp);
+	CREATE INDEX IF NOT EXISTS idx_l4_conn_history_rule_timestamp ON lb_l4_conn_history(rule_id, timestamp);
+
 	CREATE TABLE IF NOT EXISTS security_events (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		event_time DATETIME NOT NULL DEFAULT (datetime('now')),
@@ -770,6 +786,34 @@ func CleanupMetricsHistory(retentionDays int) error {
 		}
 		// 批间短暂让出写锁，避免长时间阻塞摄取 INSERT（与
 		// securityEventsRetentionCleanup 同口径）。
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// CleanupL4ConnHistory 按 retentionDays 分批删除过期的 lb_l4_conn_history 行
+// （与 CleanupMetricsHistory 同批次参数/同让出节奏——同库同故障形态同口径，
+// 由 metrics-history-cleanup 任务体相邻调用）。MetricsDB 为 nil 早退 nil
+// （与 CleanupMetricsHistory 守卫口径一致）。
+func CleanupL4ConnHistory(retentionDays int) error {
+	if MetricsDB == nil {
+		return nil
+	}
+	cutoff := time.Now().UTC().AddDate(0, 0, -retentionDays).Format("2006-01-02 15:04:05")
+	for {
+		res, err := MetricsDB.Exec(
+			"DELETE FROM lb_l4_conn_history WHERE id IN (SELECT id FROM lb_l4_conn_history WHERE timestamp < ? LIMIT ?)",
+			cutoff, cleanupMetricsHistoryBatch,
+		)
+		if err != nil {
+			return fmt.Errorf("delete expired l4 conn history: %w", err)
+		}
+		affected, err := res.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("count deleted l4 conn history rows: %w", err)
+		}
+		if affected == 0 {
+			return nil
+		}
 		time.Sleep(10 * time.Millisecond)
 	}
 }

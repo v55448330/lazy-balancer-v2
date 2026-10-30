@@ -222,6 +222,10 @@ func run() error {
 	services.InitIP2Region()
 	services.InitIP2RegionUpdateManager(services.TrackBackgroundReload(services.BackgroundApplyIP2Region, caddyReloader))
 	metricsService := services.NewMetricsService(cfg.CaddyMetricsURL, cfg.MetricsInterval)
+	// L4（TCP）连接历史伴生采集的抓取地址（admin /lb/l4-conn-stats）：指标
+	// 地址可独立于 admin（caddy_metrics_url 支持独立 HTTPS 指标端点），不能
+	// 从 metricsURL 推导 admin 基址。
+	metricsService.SetL4AdminURL(cfg.CaddyAdminURL)
 	syncService := services.NewSyncService(db.DB, cfg, caddyService)
 	lifecycle := newRuntimeLifecycle(syncService, func() lifecycleWorker {
 		return services.NewCertificateService()

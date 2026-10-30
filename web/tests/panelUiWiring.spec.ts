@@ -324,12 +324,12 @@ test('SecurityBindingEditor 先声明 props/emits 再派生 computed', () => {
   assert.ok(subtitleIdx > emitIdx, 'bindSubtitle 必须在 props 之后声明（不得依赖 TDZ 惰性求值）')
 })
 
-test('总览总量卡片按 includes_reserved 切换口径 tooltip（同一计算文案两处复用）', () => {
+test('总览总量卡片按 includes_reserved 切换口径 tooltip（重设计后仅拦截列保留）', () => {
   const text = code('src/views/security/SecurityOverview.vue')
   assert.match(text, /const todayCountTip = computed\(\(\) => overview\.value\.includes_reserved/)
   assert.match(text, /总量含私网\/保留地址事件/)
   assert.match(text, /与大屏同口径（分钟汇总）：不含私网\/保留地址事件/)
-  assert.equal([...text.matchAll(/<el-tooltip :content="todayCountTip"/g)].length, 2, '今日拦截与今日检测两处必须消费同一计算文案')
+  assert.equal([...text.matchAll(/<el-tooltip :content="todayCountTip"/g)].length, 1, '重设计后仅拦截列保留口径 tooltip')
 })
 
 test('自动封禁预置名单条目数标注含已到期条目', () => {

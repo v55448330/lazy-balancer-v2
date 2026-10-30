@@ -62,9 +62,9 @@ test('拦截页刷新失败横幅区分旧快照与空列表', () => {
   assert.match(page, /pages\.length > 0 \? '拦截页面加载失败：当前显示的是上次成功结果' : '拦截页面加载失败：列表为空不代表没有页面'/)
 })
 
-test('安全总览今日计数 tooltip 使用同一计算文案', () => {
+test('安全总览今日计数 tooltip 仅拦截列保留（同一计算文案单源）', () => {
   const page = code('src/views/security/SecurityOverview.vue')
   assert.match(page, /const todayCountTip = computed\(/)
-  assert.equal((page.match(/<el-tooltip :content="todayCountTip"/g) ?? []).length, 2)
+  assert.equal((page.match(/<el-tooltip :content="todayCountTip"/g) ?? []).length, 1, '重设计后仅拦截列保留口径 tooltip')
   assert.equal((page.match(/总量含私网\/保留地址事件/g) ?? []).length, 1, '完整口径文案只能保留一份')
 })

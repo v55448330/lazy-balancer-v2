@@ -34,20 +34,21 @@
       <span class="info-note-desc">{{ ingestionWarning }}</span>
     </div>
 
-    <!-- 运行状态条：防护三指标 + 规则库四状态合并单面板——横向分列、竖分隔，
-         数值大字与协议彩点贴今日拦截；库状态降为状态点+版本（去卡片套卡片）。 -->
+    <!-- 运行状态条：防护三 KPI（拦截/检测/正常请求）等分栅格 + 规则库四状态合并单面板。
+         每列四行同构：标签 / 今日主数值 / 昨日对比 / 协议拆分（防御式：缺字段行隐藏）。 -->
     <div class="mb-5"><el-card shadow="always" class="overview-card status-strip-card">
       <div class="status-strip">
         <div class="status-guard">
           <div class="guard-item">
             <div class="strip-label">
-              今日拦截
+              拦截
               <el-tooltip :content="todayCountTip" placement="top">
                 <el-icon class="stat-box__tip"><InfoFilled /></el-icon>
               </el-tooltip>
             </div>
             <div class="strip-value is-danger">{{ fmtStatNum(overview.today_blocked) }}</div>
-            <!-- 协议拆分（L4 阶段 0/1 披露）：HTTP = 合计 − TCP；响应缺字段或 TCP=0 时隐藏 -->
+            <div v-if="yesterdayBlocked !== null" class="strip-sub">昨日 {{ fmtStatNum(yesterdayBlocked) }}</div>
+            <!-- 协议拆分（L4 阶段 0/1 披露，今日口径）：HTTP = 合计 − TCP；响应缺字段或 TCP=0 时隐藏 -->
             <div v-if="todayBlockedSplit" class="strip-sub">
               <span class="proto-split-item"><i class="proto-dot proto-dot--http"></i>HTTP {{ fmtStatNum(todayBlockedSplit.http) }}</span>
               <span class="proto-split-item"><i class="proto-dot proto-dot--tcp"></i>TCP {{ fmtStatNum(todayBlockedSplit.tcp) }}</span>
@@ -55,18 +56,24 @@
           </div>
           <div class="strip-divider"></div>
           <div class="guard-item">
-            <div class="strip-label">
-              今日检测
-              <el-tooltip :content="todayCountTip" placement="top">
-                <el-icon class="stat-box__tip"><InfoFilled /></el-icon>
-              </el-tooltip>
-            </div>
+            <div class="strip-label">检测</div>
             <div class="strip-value is-warning">{{ fmtStatNum(overview.today_detected) }}</div>
+            <div v-if="yesterdayDetected !== null" class="strip-sub">昨日 {{ fmtStatNum(yesterdayDetected) }}</div>
+            <!-- TCP 恒 0：单 HTTP 点，保持三列四行同构 -->
+            <div class="strip-sub">
+              <span class="proto-split-item"><i class="proto-dot proto-dot--http"></i>HTTP {{ fmtStatNum(overview.today_detected) }}</span>
+            </div>
           </div>
           <div class="strip-divider"></div>
           <div class="guard-item">
-            <div class="strip-label">活跃策略</div>
-            <div class="strip-value">{{ fmtStatNum(overview.active_policies) }}</div>
+            <div class="strip-label">正常请求</div>
+            <div class="strip-value">{{ fmtStatNum(overview.normal_today) }}</div>
+            <div v-if="normalYesterday !== null" class="strip-sub">昨日 {{ fmtStatNum(normalYesterday) }}</div>
+            <!-- 字段缺失（旧后端）整行隐藏 -->
+            <div v-if="normalTodaySplit" class="strip-sub">
+              <span class="proto-split-item"><i class="proto-dot proto-dot--http"></i>HTTP {{ fmtStatNum(normalTodaySplit.http) }}</span>
+              <span class="proto-split-item"><i class="proto-dot proto-dot--tcp"></i>TCP {{ fmtStatNum(normalTodaySplit.tcp) }}</span>
+            </div>
           </div>
         </div>
         <div class="status-lib">
@@ -104,13 +111,12 @@
       </div>
     </el-card>
     </div>
-    </div>
 
     <div v-if="overview.backfill_incomplete" class="info-note-bar">
       <span class="info-note-desc">原始事件仅保留自 {{ overview.raw_coverage_from }}，更早区间无法重建，7 天趋势 / Top 10 源 IP / 攻击类型统计可能少计</span>
     </div>
 
-    <el-row :gutter="20" class="mb-5">
+    <el-row :gutter="20" class="mb-5 charts-row">
       <el-col :xs="24" :md="16">
         <el-card shadow="always">
           <template #header>
@@ -134,7 +140,7 @@
               <div class="card-title">
                 <el-icon class="title-icon"><PieChart /></el-icon>
                 <span>攻击类型分布（近 7 天）</span>
-                <el-checkbox v-model="attackByStage" size="small" style="margin-left: 12px">按阶段展示</el-checkbox>
+                <el-checkbox v-model="attackByStage" size="small" class="header-checkbox">按阶段展示</el-checkbox>
               </div>
             </div>
           </template>
@@ -266,6 +272,7 @@
         <el-table-column prop="last_time" label="最后攻击" width="170" :formatter="(row: TopIP) => formatDate(row.last_time)" />
       </el-table>
     </el-card>
+  </div>
 </template>
 
 <script setup lang="ts">
@@ -295,6 +302,11 @@ interface Overview {
   crs_available?: boolean; ip2region_available?: boolean; update_status?: string
   trend: TrendPoint[]; top_ips: TopIP[]; attack_types: AttackType[]; attack_types_stage: AttackType[]
   raw_coverage_from?: string; backfill_incomplete?: boolean
+  // 三 KPI 栏契约字段（昨日对比 + 正常请求，防御式消费：旧后端缺字段 → 对应行隐藏）
+  yesterday_blocked?: number; yesterday_blocked_tcp?: number
+  yesterday_detected?: number; yesterday_detected_tcp?: number
+  normal_today?: number; normal_today_http?: number; normal_today_tcp?: number
+  normal_yesterday?: number; normal_yesterday_http?: number; normal_yesterday_tcp?: number
   // 今日拦截的 TCP（L4 断连）份额：旧后端缺失 → 协议拆分行整行隐藏（防御式）。
   // 原始表直算（不走 rollup——rollup 无 event_type 维度），极端量级下行帽裁剪可能少计。
   today_blocked_tcp?: number
@@ -332,6 +344,22 @@ const todayBlockedSplit = computed<{ http: number; tcp: number } | null>(() => {
   const tcp = overview.value.today_blocked_tcp
   if (typeof tcp !== 'number' || !Number.isFinite(tcp) || tcp <= 0) return null
   return { http: Math.max(0, overview.value.today_blocked - tcp), tcp }
+})
+
+// 昨日对比行共用门（三列 lockstep）：数值字段缺失/非有限数 → null（行隐藏，防御旧后端）
+const statOrNull = (v: number | undefined): number | null =>
+  typeof v === 'number' && Number.isFinite(v) ? v : null
+const yesterdayBlocked = computed(() => statOrNull(overview.value.yesterday_blocked))
+const yesterdayDetected = computed(() => statOrNull(overview.value.yesterday_detected))
+const normalYesterday = computed(() => statOrNull(overview.value.normal_yesterday))
+
+// 正常请求协议拆分：HTTP/TCP 两字段齐备才显示（字段缺失整行隐藏，防御旧后端）
+const normalTodaySplit = computed<{ http: number; tcp: number } | null>(() => {
+  const http = overview.value.normal_today_http
+  const tcp = overview.value.normal_today_tcp
+  if (typeof http !== 'number' || !Number.isFinite(http)) return null
+  if (typeof tcp !== 'number' || !Number.isFinite(tcp)) return null
+  return { http, tcp }
 })
 const todayCountTip = computed(() => overview.value.includes_reserved
   ? '总量含私网/保留地址事件（内网扫描、文档测试段等也会计入，与大屏排除口径不同）'
@@ -560,9 +588,11 @@ onMounted(() => { void reloadAll() })
 }
 
 .chart-container { height: 260px; }
-.chart-container { height: 260px; }
-.chart-container { height: 260px; }
-.chart-container { height: 260px; }
+/* 趋势与攻击类型分布同行：两卡 height:100% 拉伸等高（el-col flex 拉伸）。 */
+.charts-row .el-card { height: 100%; }
+/* 卡头「按阶段展示」checkbox 行内紧凑：高度钉到卡头标题行，不撑高卡头
+   （同行等高后，卡头高度差会把两卡内容区顶得参差）。 */
+.header-checkbox { height: 20px; margin-left: 12px; }
 .events-row .el-card { height: 100%; }
 .rate-limit-total { display: flex; align-items: baseline; justify-content: space-between; padding: 0 4px 10px; }
 .rate-limit-total .stat-label { font-size: 13px; color: var(--text-secondary); margin-bottom: 0; }
