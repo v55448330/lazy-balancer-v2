@@ -50,7 +50,7 @@ docker run -d --name lazy-balancer \
   v55448330/lazy-balancer-v2:latest
 ```
 
-> 镜像标签:`latest` 指向最近一次**稳定版**(无通道后缀);测试版标签带 `-beta` 后缀(形如 `:v2.3.9-beta`),需要尝鲜或复现问题时请显式指定该标签。
+> 镜像标签:`latest` 指向最近一次**稳定版**(无通道后缀);测试版标签带 `-beta` 后缀(形如 `:v2.4.0-beta`),需要尝鲜或复现问题时请显式指定该标签。
 >
 > **容器初始化**：新镜像已内置 init 进程（回收健康检查等被遗弃的子进程），并改用二进制自带健康检查，无需再加 `--init`。若固定使用更早的镜像，请务必追加 `--init`。启动示例已默认 `--pids-limit=4096`（cgroup PID 配额，按线程计数）并同时设置 `--ulimit nproc=4096:4096`（容器内 `RLIMIT_NPROC`）；两者只作用于容器，宿主系统 ulimit 无需修改，实际可创建任务数取较低者。可按部署规模调整。
 
@@ -87,9 +87,9 @@ docker compose up -d
 # 3) 或直接构建并推送镜像：VERSION=正式版本号（面板展示口径）；镜像 tag 可带
 #    -beta 通道后缀——两者刻意不同，判定口径「tag 去掉通道后缀 == APP_VERSION」
 docker buildx build --platform linux/amd64,linux/arm64 \
-  --build-arg VERSION=v2.3.9 \
+  --build-arg VERSION=v2.4.0 \
   --provenance=false --sbom=false \
-  -t v55448330/lazy-balancer-v2:v2.3.9 -t v55448330/lazy-balancer-v2:latest --push .   # 稳定版；测试通道把 tag 换成 :v2.3.9-beta
+  -t v55448330/lazy-balancer-v2:v2.4.0-beta --push .   # 测试通道；稳定版当前为 v2.3.9
 ```
 </details>
 

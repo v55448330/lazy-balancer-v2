@@ -255,7 +255,7 @@ COPY geoipnames/crawler-ip-lists.seed.json /app/waf.dist/crawler-ip-lists.seed.j
 # 位置约束：ARG/ENV 必须停在上方 CRS/xdb 下载层之后。VERSION 每次发版必变，
 # 提前注入会让 apk 与三条外网下载全部缓存失效（见上方层序说明）——移动前
 # 先确认没有更早的层消费它（当前仅 ENV 自身与运行期二进制消费）。
-ARG VERSION=v2.3.9
+ARG VERSION=v2.4.0
 ENV APP_VERSION=${VERSION}
 
 # 以下各层只随各自产物变化：CRS/xdb 层已在上方固化，不受影响。

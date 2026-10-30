@@ -14,7 +14,7 @@ interface BrandingResponse {
 export const appName = ref('Lazy Balancer')
 const footerText = ref('Lazy Balancer V2 · Copyright © 2026 XiaoBao')
 // 发版检查单——发版时需同步 bump 此回退版本。
-export const appVersion = ref('v2.3.9')
+export const appVersion = ref('v2.4.0')
 const footerUsesDefault = ref(true)
 
 export const footerHtml = computed(() => {

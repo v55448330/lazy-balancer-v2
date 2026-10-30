@@ -3940,8 +3940,8 @@ const fetchLogStream = async () => {
   if (!targetMaps) return
   logStatsInFlight.value = true
   try {
-    const res = await request.get<APIResponse<RuleLogStreamData>>(`/rules/${targetId}/log-stream`, { params: { offset: targetOffset }, signal: healthPolling.signal, silent: true })
-    if (disposed || requestSeq !== ruleLogRequestSeq || !ruleLogDialogVisible.value || ruleLogTab.value !== 'stats' || ruleLogCaddyId.value !== targetId || logStatsMaps.value !== targetMaps) return
+    const res = await request.get<APIResponse<RuleLogStreamData>>(`/rules/${targetId}/log-stream`, { params: { offset: targetOffset }, signal: healthPolling.signal, timeout: 8000, silent: true })
+    if (disposed || requestSeq !== ruleLogRequestSeq || !ruleLogDialogVisible.value || ruleLogTab.value !== 'stats' || ruleLogCaddyId.value !== targetId) return
     const lines: string[] = res.data?.lines || []
     if (lines.length) {
       const completed = await consumeLogLinesChunked(lines, targetMaps, () => (
@@ -3950,7 +3950,6 @@ const fetchLogStream = async () => {
         && ruleLogDialogVisible.value
         && ruleLogTab.value === 'stats'
         && ruleLogCaddyId.value === targetId
-        && logStatsMaps.value === targetMaps
       ))
       if (!completed) return
       rebuildStatsView(targetMaps)
@@ -3958,7 +3957,7 @@ const fetchLogStream = async () => {
     logStatsOffset.value = res.data?.offset ?? targetOffset
     ruleLogStatsError.value = ''
   } catch (error: unknown) {
-    if (disposed || axios.isCancel(error) || requestSeq !== ruleLogRequestSeq || !ruleLogDialogVisible.value || ruleLogTab.value !== 'stats' || ruleLogCaddyId.value !== targetId || logStatsMaps.value !== targetMaps) return
+    if (disposed || axios.isCancel(error) || requestSeq !== ruleLogRequestSeq || !ruleLogDialogVisible.value || ruleLogTab.value !== 'stats' || ruleLogCaddyId.value !== targetId) return
     console.error('Failed to fetch log stream:', error)
     ruleLogStatsError.value = error instanceof Error ? error.message : '请稍后重试'
   } finally {
@@ -3968,6 +3967,9 @@ const fetchLogStream = async () => {
 
 const startLogStats = async () => {
   if (disposed) return
+  // 激活去重：加载中的重复激活（重复 emit/快速切 tab）直接合并到在途轮，
+  // 避免「第二次激活重置 offset=0 → 第一次响应被守卫丢弃 → 统计从全量历史重灌」。
+  if (ruleLogStatsLoading.value) return
   const targetId = ruleLogCaddyId.value
   if (!targetId) return
   // 单飞锁随本轮请求所有权移交：错误态「重试」会自增 ruleLogRequestSeq，
@@ -3989,12 +3991,12 @@ const startLogStats = async () => {
     // 承诺「自 started_at 起实时统计」，若把弹框打开前的最近 1000 行灌进同一
     // 组桶，total/Top 会把数小时前的历史流量算成「本次观察」，两次打开读数
     // 也不可比。窗口口径 = 打开时刻起（log-stream 增量是纯实时的）。
-    const res = await request.get<APIResponse<RuleLogData>>(`/rules/${targetId}/logs`, { signal: healthPolling.signal, silent: true })
-    if (disposed || requestSeq !== ruleLogRequestSeq || !ruleLogDialogVisible.value || ruleLogTab.value !== 'stats' || ruleLogCaddyId.value !== targetId || logStatsMaps.value !== maps) return
+    const res = await request.get<APIResponse<RuleLogData>>(`/rules/${targetId}/logs`, { signal: healthPolling.signal, timeout: 8000, silent: true })
+    if (disposed || requestSeq !== ruleLogRequestSeq || !ruleLogDialogVisible.value || ruleLogTab.value !== 'stats' || ruleLogCaddyId.value !== targetId) return
     rebuildStatsView(maps)
     logStatsOffset.value = res.data?.offset ?? 0
   } catch (error: unknown) {
-    if (disposed || requestSeq !== ruleLogRequestSeq || !ruleLogDialogVisible.value || ruleLogTab.value !== 'stats' || ruleLogCaddyId.value !== targetId || logStatsMaps.value !== maps) return
+    if (disposed || requestSeq !== ruleLogRequestSeq || !ruleLogDialogVisible.value || ruleLogTab.value !== 'stats' || ruleLogCaddyId.value !== targetId) return
     console.error('Failed to init log stats:', error)
     ruleLogStatsError.value = error instanceof Error ? error.message : '请稍后重试'
   } finally {
