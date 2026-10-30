@@ -3935,7 +3935,7 @@ onMounted(async () => {
 .rule-picker-item:last-child { border-bottom: none; }
 .rule-picker-item :deep(.el-checkbox) { width: 100%; height: auto; padding: 4px 0; }
 .rule-picker-name { font-weight: 500; color: #1f2937; }
-.rule-picker-proto { margin-left: 6px; }
+.rule-picker-proto { margin-right: 8px; vertical-align: middle; }
 .rule-picker-meta { margin-left: 8px; font-size: 12px; color: #9ca3af; font-family: monospace; }
 
 .rule-picker-pagination { display: flex; justify-content: flex-end; margin-top: 12px; }
@@ -4034,7 +4034,7 @@ onMounted(async () => {
 }
 
 /* 已关联规则行的协议徽标（TCP 青/HTTP 蓝全局单源 + 间距）。 */
-.rule-proto-badge { margin-right: 6px; flex-shrink: 0; }
+.rule-proto-badge { margin-right: 8px; vertical-align: middle; flex-shrink: 0; }
 .policy-rules-popper .el-dropdown-menu__item { font-size: 12px; line-height: 1.6; }
 /* reference 是真按钮（原为无激活行为的 span）：清掉 UA 按钮外观，保留文本外观
    与焦点环；键盘激活交给 el-dropdown 的 click 触发 */
