@@ -692,9 +692,9 @@
                 <div v-if="boundRuleRows.length > 0" class="bound-rule-list">
                   <div v-for="row in boundRuleRows" :key="row.caddyId" class="bound-rule-row">
                     <div class="bound-rule-head">
+                      <el-tag v-if="row.protocol === 'tcp'" size="small" effect="plain" class="proto-tcp-tag rule-proto-badge">TCP</el-tag>
+                      <el-tag v-else size="small" type="primary" effect="plain" class="rule-proto-badge">HTTP</el-tag>
                       <span class="bound-rule-name">{{ row.name }}</span>
-                      <span class="proto-tcp-tag rule-proto-badge" v-if="row.protocol === 'tcp'">TCP</span>
-                      <span v-else class="proto-http-tag rule-proto-badge">HTTP</span>
                       <span class="bound-rule-meta">{{ row.domain || '-' }}:{{ row.listenPort }}</span>
                       <el-button v-if="!isReadOnly" size="small" link type="danger" class="bound-rule-remove" @click="removeBoundRule(row.caddyId)">移除</el-button>
                     </div>
@@ -897,10 +897,10 @@
           <el-checkbox-group v-model="pickerSelected">
             <div v-for="rule in pickerPagedRules" :key="rule.caddy_id" class="rule-picker-item">
               <el-checkbox :value="rule.caddy_id" :disabled="pickerMeta(rule).blockReason !== ''">
-                <span class="rule-picker-name">{{ rule.name }}</span>
-                <!-- 行协议徽标（混排后逐行可辨识）：TCP 青 = 全局 proto-tcp-tag 单源；HTTP 蓝 = el-tag primary -->
+                <!-- 行协议徽标在规则名左（用户裁定）：TCP 青/HTTP 蓝 = 事件日志方法列同款 el-tag 单源 -->
                 <el-tag v-if="rule.protocol === 'tcp'" size="small" effect="plain" class="proto-tcp-tag rule-picker-proto">TCP</el-tag>
                 <el-tag v-else size="small" type="primary" effect="plain" class="rule-picker-proto">HTTP</el-tag>
+                <span class="rule-picker-name">{{ rule.name }}</span>
                 <span class="rule-picker-meta">{{ rule.domain || '-' }}:{{ rule.listen_port }}</span>
               </el-checkbox>
               <!-- 每条候选规则展示当前绑定链（policy_id ASC，1-based）与本策略落点；
@@ -4034,14 +4034,7 @@ onMounted(async () => {
 }
 
 /* 已关联规则行的协议徽标（TCP 青/HTTP 蓝全局单源 + 间距）。 */
-.rule-proto-badge {
-  margin: 0 6px 0 4px;
-  font-size: 11px;
-  line-height: 18px;
-  padding: 0 5px;
-  border: 1px solid;
-  flex-shrink: 0;
-}
+.rule-proto-badge { margin-right: 6px; flex-shrink: 0; }
 .policy-rules-popper .el-dropdown-menu__item { font-size: 12px; line-height: 1.6; }
 /* reference 是真按钮（原为无激活行为的 span）：清掉 UA 按钮外观，保留文本外观
    与焦点环；键盘激活交给 el-dropdown 的 click 触发 */

@@ -93,10 +93,10 @@
               :disabled="saving || pickerWouldExceed(rule)"
               @change="toggleRule(rule.caddy_id, $event)"
             >
-              <span class="picker-rule-name">{{ rule.name }}</span>
-              <!-- 行协议徽标（混排后逐行可辨识）：TCP 青 = 全局 proto-tcp-tag 单源；HTTP 蓝 = el-tag primary -->
+              <!-- 行协议徽标在规则名左（用户裁定）：事件日志方法列同款 el-tag -->
               <el-tag v-if="rule.protocol === 'tcp'" size="small" effect="plain" class="proto-tcp-tag picker-proto-tag">TCP</el-tag>
               <el-tag v-else size="small" type="primary" effect="plain" class="picker-proto-tag">HTTP</el-tag>
+              <span class="picker-rule-name">{{ rule.name }}</span>
               <span class="picker-rule-meta">{{ rule.domain || '-' }}:{{ rule.listen_port }}</span>
             </el-checkbox>
             <el-tooltip v-if="pickerWouldExceed(rule)" :content="rowBlockReasons.get(rule.caddy_id) ?? ''" placement="top">
