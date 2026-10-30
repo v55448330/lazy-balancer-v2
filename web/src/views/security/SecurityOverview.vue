@@ -3,7 +3,6 @@
     <div class="page-header">
       <div class="header-left">
         <h2 class="page-title">
-          <el-icon class="title-icon"><DataAnalysis /></el-icon>
           安全总览
         </h2>
         <p class="page-desc">安全防护统计概览</p>
@@ -36,7 +35,7 @@
 
     <!-- 运行状态条：防护三指标 + 规则库四状态合并单面板——横向分列、竖分隔，
          数值大字与协议彩点贴今日拦截；库状态降为状态点+版本（去卡片套卡片）。 -->
-    <el-card shadow="never" class="overview-card status-strip-card">
+    <div class="mb-5"><el-card shadow="always" class="overview-card status-strip-card">
       <div class="status-strip">
         <div class="status-guard">
           <div class="guard-item">
@@ -101,7 +100,7 @@
             <el-tag v-else-if="crawlerStatus" :type="libraryStatusTagType(crawlerStatus)" size="small" effect="plain" disable-transitions>{{ libraryStatusLabel(crawlerStatus) }}</el-tag>
           </div>
         </div>
-    </el-card>
+    </el-card></div>
 
     <div v-if="overview.backfill_incomplete" class="info-note-bar">
       <span class="info-note-desc">原始事件仅保留自 {{ overview.raw_coverage_from }}，更早区间无法重建，7 天趋势 / Top 10 源 IP / 攻击类型统计可能少计</span>
@@ -109,7 +108,7 @@
 
     <el-row :gutter="20" class="mb-5">
       <el-col :xs="24" :md="16">
-        <el-card shadow="never">
+        <el-card shadow="always">
           <template #header>
             <div class="card-header">
               <div class="card-title">
@@ -124,7 +123,7 @@
         </el-card>
       </el-col>
       <el-col :xs="24" :md="8">
-        <el-card shadow="never">
+        <el-card shadow="always">
           <template #header>
             <div class="card-header">
               <div class="card-title">
@@ -143,7 +142,7 @@
 
     <el-row :gutter="20" class="mb-5 events-row">
       <el-col :xs="24" :md="16">
-        <el-card shadow="never">
+        <el-card shadow="always">
           <template #header>
             <div class="card-header">
               <div class="card-title">
@@ -184,7 +183,7 @@
         </el-card>
       </el-col>
       <el-col :xs="24" :md="8">
-        <el-card shadow="never">
+        <el-card shadow="always">
           <template #header>
             <div class="card-header">
               <div class="card-title">
@@ -220,7 +219,7 @@
       </el-col>
     </el-row>
 
-    <el-card shadow="never">
+    <el-card shadow="always">
       <template #header>
         <div class="card-header">
           <div class="card-title">
@@ -263,7 +262,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
-import { DataAnalysis, Monitor, InfoFilled } from '@element-plus/icons-vue'
+import { Monitor, InfoFilled } from '@element-plus/icons-vue'
 import { request } from '@/utils/api'
 import { useAuthStore } from '@/stores/auth'
 import IPLocationAction from '@/views/security/IPLocationAction.vue'
@@ -487,8 +486,7 @@ onMounted(() => { void reloadAll() })
 /* 统一卡体系：全页 el-card 一律直角细边、无投影、卡头 14px/600、body 18×24。
  * 状态条与图表/事件/Top10 卡共用同一容器观感（用户裁定彻底重设计）。 */
 .overview-card.el-card,
-.el-card { --el-card-border-color: #ebeef5; --el-card-border-radius: 0; box-shadow: none; }
-.el-card.is-always-shadow { box-shadow: none; }
+.el-card { --el-card-border-color: #ebeef5; --el-card-border-radius: 0; }
 .status-strip-card.el-card { border: 1px solid #ebeef5; }
 .card-header { display: flex; align-items: center; justify-content: space-between; }
 .card-title { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; color: #111827; }
