@@ -63,8 +63,8 @@
                        或 TCP=0 时整行隐藏（防御式）；today_blocked 为全协议合计
                        （rollup 无 event_type 维度，TCP 事件同样聚合），HTTP = 合计 − TCP -->
                   <div v-if="todayBlockedSplit" class="stat-box__proto-split">
-                    <span class="proto-http-tag proto-count-chip">HTTP {{ todayBlockedSplit.http }}</span>
-                    <span class="proto-tcp-tag proto-count-chip">TCP {{ todayBlockedSplit.tcp }}</span>
+                    <span class="proto-split-item"><i class="proto-dot proto-dot--http"></i>HTTP {{ todayBlockedSplit.http }}</span>
+                    <span class="proto-split-item"><i class="proto-dot proto-dot--tcp"></i>TCP {{ todayBlockedSplit.tcp }}</span>
                   </div>
                 </div>
               </div>
@@ -228,7 +228,7 @@
               <IPLocationAction :ip="row.client_ip" :location="row.ip_location" />
               </template>
             </el-table-column>
-            <el-table-column label="协议" width="80" align="center">
+            <el-table-column label="协议" width="80">
               <template #default="{ row }">
                 <el-tag v-if="row.event_type === 'tcp'" size="small" effect="plain" class="proto-tcp-tag event-proto-tag">TCP</el-tag>
                 <el-tag v-else size="small" effect="plain" type="primary" class="event-proto-tag">HTTP</el-tag>
@@ -596,10 +596,12 @@ onMounted(() => { void reloadAll() })
 .stat-box__body { flex: 1; min-width: 0; }
 .stat-box__value { font-size: 20px; font-weight: 700; line-height: 1.3; }
 .stat-box__label { font-size: 12px; color: var(--text-secondary); margin-top: 2px; }
-/* 今日拦截协议拆分：双计数胶囊（HTTP 蓝/TCP 青，全局单源配色）——chip 内部
- * 不换行，行内允许换行（窄卡时两枚胶囊各占一行也不破样式）。 */
-.stat-box__proto-split { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
-.proto-count-chip { font-size: 11px; line-height: 18px; padding: 0 6px; border: 1px solid; font-variant-numeric: tabular-nums; }
+/* 今日拦截协议拆分：彩点+数字单行（无框，窄卡不溢出；颜色对齐协议徽标）。 */
+.stat-box__proto-split { display: flex; align-items: center; gap: 12px; margin-top: 4px; font-size: 12px; color: var(--text-secondary); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.proto-split-item { display: inline-flex; align-items: center; }
+.proto-dot { width: 6px; height: 6px; border-radius: 50%; margin-right: 4px; }
+.proto-dot--http { background: #409eff; }
+.proto-dot--tcp { background: #0e7490; }
 /* TCP 徽标与规则名同 cell 的间距 */
 .event-proto-tag { margin-right: 6px; }
 .stat-box__tip { font-size: 12px; vertical-align: -1px; margin-left: 2px; color: var(--text-secondary); cursor: help; }

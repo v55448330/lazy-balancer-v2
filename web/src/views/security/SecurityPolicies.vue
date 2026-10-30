@@ -687,10 +687,8 @@
                   <span :class="{ 'rule-picker-placeholder': boundRules.length === 0 }">{{ boundRules.length > 0 ? `已选 ${boundRules.length} 条` : '选择要关联的负载均衡规则' }}</span>
                   <el-icon class="rule-picker-arrow"><ArrowDown /></el-icon>
                 </div>
-                <div v-if="boundRuleWarnPerf || hasTcpBoundRule" class="bound-rule-warnings">
-                  <div v-if="boundRuleWarnPerf" class="rule-warn-line is-warn">已关联规则存在绑定 3 条以上策略：处理链逐层叠加，可能影响转发性能</div>
-                  <div v-if="hasTcpBoundRule" class="rule-warn-line is-info">TCP 规则拦截=断连（无拦截页）；CDN 回源需开启 PROXY protocol</div>
-                </div>
+                <div v-if="boundRuleWarnPerf" class="info-note-bar"><span class="info-note-desc">已关联规则存在绑定 3 条以上策略：处理链逐层叠加，可能影响转发性能</span></div>
+                <div v-if="hasTcpBoundRule" class="info-note-bar"><span class="info-note-desc">TCP 规则拦截=断连（无拦截页）；CDN 回源需开启 PROXY protocol</span></div>
                 <div v-if="boundRuleRows.length > 0" class="bound-rule-list">
                   <div v-for="row in boundRuleRows" :key="row.caddyId" class="bound-rule-row">
                     <div class="bound-rule-head">
@@ -3873,7 +3871,7 @@ onMounted(async () => {
 
 .bound-rule-list { display: flex; flex-direction: column; gap: 10px; margin-top: 8px; }
 /* 关联规则步骤：列表定高自滚——本步唯一滚动容器，弹框 body 不再出第二条滚动条 */
-.policy-wizard-dialog .bound-rule-list { max-height: calc(100vh - 420px); min-height: 200px; overflow-y: auto; }
+.policy-wizard-dialog .bound-rule-list { max-height: 40vh; min-height: 200px; overflow-y: auto; padding-right: 4px; }
 .bound-rule-row { border: 1px solid #ebeef5; padding: 12px; }
 .bound-rule-head { display: flex; align-items: center; gap: 8px; }
 .bound-rule-name { font-weight: 500; color: #1f2937; font-size: 13px; }
