@@ -41,7 +41,7 @@ services:
   # README「快速开始」的 Docker Desktop 命令（bridge + -p 8000/80/443/443-udp
   # + named volume）启动，而非直接 docker compose up。
   lazy-balancer:
-    image: v55448330/lazy-balancer-v2:v2.3.9-beta
+    image: v55448330/lazy-balancer-v2:v2.3.9
     logging: *common-logging
     build:
       context: .
@@ -52,7 +52,7 @@ services:
         # web/src/utils/branding.ts 的 appVersion 回退值；发布时另需 buildx
         # --build-arg 显式传参。以上各处须同步递增。
         # VERSION=正式版本号（v2.3.9，镜像内 APP_VERSION 同口径）；beta 通道
-        # 只在 image tag 上加 -beta 后缀（上方两处 tag=v2.3.9-beta）。
+        # 测试通道在 image tag 上加 -beta 后缀（如 v2.3.9-beta）。
         VERSION: v2.3.9
     container_name: lazy-balancer
     network_mode: host
@@ -83,7 +83,7 @@ services:
   # Desktop 的默认注入。Docker < 20.10 不认 host-gateway 时，改填宿主 LAN 地址，
   # 例如 http://192.168.1.10:8000（host 网络下主节点直接监听宿主端口）。
   lazy-balancer-slave:
-    image: v55448330/lazy-balancer-v2:v2.3.9-beta
+    image: v55448330/lazy-balancer-v2:v2.3.9
     logging: *common-logging
     container_name: lazy-balancer-slave
     # 宿主网关别名：bridge 网络内解析 host.docker.internal 到宿主，Linux 宿主

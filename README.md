@@ -89,7 +89,7 @@ docker compose up -d
 docker buildx build --platform linux/amd64,linux/arm64 \
   --build-arg VERSION=v2.3.9 \
   --provenance=false --sbom=false \
-  -t v55448330/lazy-balancer-v2:v2.3.9-beta --push .   # 测试通道；稳定版去掉 -beta
+  -t v55448330/lazy-balancer-v2:v2.3.9 -t v55448330/lazy-balancer-v2:latest --push .   # 稳定版；测试通道把 tag 换成 :v2.3.9-beta
 ```
 </details>
 
