@@ -52,19 +52,19 @@
               <div class="stat-box stat-box--danger">
                 <div class="stat-box__icon"><el-icon><CircleClose /></el-icon></div>
                 <div class="stat-box__body">
-                  <div class="stat-box__value">{{ overview.today_blocked }}</div>
                   <div class="stat-box__label">
                     今日拦截
                     <el-tooltip :content="todayCountTip" placement="top">
                       <el-icon class="stat-box__tip"><InfoFilled /></el-icon>
                     </el-tooltip>
                   </div>
+                  <div class="stat-box__value">{{ fmtStatNum(overview.today_blocked) }}</div>
                   <!-- 协议拆分行（L4 阶段 0/1 披露）：响应无 today_blocked_tcp 字段（旧后端）
                        或 TCP=0 时整行隐藏（防御式）；today_blocked 为全协议合计
                        （rollup 无 event_type 维度，TCP 事件同样聚合），HTTP = 合计 − TCP -->
                   <div v-if="todayBlockedSplit" class="stat-box__proto-split">
-                    <span class="proto-split-item"><i class="proto-dot proto-dot--http"></i>HTTP {{ todayBlockedSplit.http }}</span>
-                    <span class="proto-split-item"><i class="proto-dot proto-dot--tcp"></i>TCP {{ todayBlockedSplit.tcp }}</span>
+                    <span class="proto-split-item"><i class="proto-dot proto-dot--http"></i>HTTP {{ fmtStatNum(todayBlockedSplit.http) }}</span>
+                    <span class="proto-split-item"><i class="proto-dot proto-dot--tcp"></i>TCP {{ fmtStatNum(todayBlockedSplit.tcp) }}</span>
                   </div>
                 </div>
               </div>
@@ -73,13 +73,13 @@
               <div class="stat-box stat-box--warning">
                 <div class="stat-box__icon"><el-icon><Warning /></el-icon></div>
                 <div class="stat-box__body">
-                  <div class="stat-box__value">{{ overview.today_detected }}</div>
                   <div class="stat-box__label">
                     今日检测
                     <el-tooltip :content="todayCountTip" placement="top">
                       <el-icon class="stat-box__tip"><InfoFilled /></el-icon>
                     </el-tooltip>
                   </div>
+                  <div class="stat-box__value">{{ fmtStatNum(overview.today_detected) }}</div>
                 </div>
               </div>
             </div>
@@ -87,8 +87,8 @@
               <div class="stat-box stat-box--primary">
                 <div class="stat-box__icon"><el-icon><Lock /></el-icon></div>
                 <div class="stat-box__body">
-                  <div class="stat-box__value">{{ overview.active_policies }}</div>
                   <div class="stat-box__label">活跃策略</div>
+                  <div class="stat-box__value">{{ fmtStatNum(overview.active_policies) }}</div>
                 </div>
               </div>
             </div>
@@ -220,7 +220,7 @@
               </div>
             </template>
           </el-alert>
-          <el-table v-else :data="blockedEvents" stripe :header-cell-style="{ background: '#f9fafb' }" empty-text="">
+          <el-table v-else :data="blockedEvents" stripe :header-cell-style="{ background: '#f9fafb', textAlign: 'left' }" :cell-style="{ textAlign: 'left' }" empty-text="">
             <template #empty><el-empty description="暂无拦截事件" :image-size="60" /></template>
             <el-table-column prop="event_time" label="时间" width="170" :formatter="(row: SecurityEvent) => formatDate(row.event_time)" />
             <el-table-column label="来源 IP" min-width="150">
@@ -379,6 +379,9 @@ const overview = ref<Overview>({ today_blocked: 0, today_detected: 0, active_pol
 const overviewError = ref(false)
 const ingestionWarning = computed(() => ingestionWarningMessage(overview.value.ingestion))
 // 今日拦截协议拆分：TCP 份额缺失（旧后端）/为 0 时 null → 整行隐藏；
+// 统计数值千分位（7 位数在 20px 卡内不破版式）
+const fmtStatNum = (n: number | undefined): string => (typeof n === 'number' ? n.toLocaleString('en-US') : '—')
+
 // today_blocked 是全协议合计，HTTP = 合计 − TCP（负值钳 0，防 rollup 滞后瞬间为负）
 const todayBlockedSplit = computed<{ http: number; tcp: number } | null>(() => {
   const tcp = overview.value.today_blocked_tcp
@@ -595,7 +598,8 @@ onMounted(() => { void reloadAll() })
 }
 .stat-box__body { flex: 1; min-width: 0; }
 .stat-box__value { font-size: 20px; font-weight: 700; line-height: 1.3; }
-.stat-box__label { font-size: 12px; color: var(--text-secondary); margin-top: 2px; }
+.stat-box__label { font-size: 12px; color: var(--text-secondary); }
+.stat-box__value { margin-top: 2px; }
 /* 今日拦截协议拆分：彩点+数字单行（无框，窄卡不溢出；颜色对齐协议徽标）。 */
 .stat-box__proto-split { display: flex; align-items: center; gap: 12px; margin-top: 4px; font-size: 12px; color: var(--text-secondary); white-space: nowrap; font-variant-numeric: tabular-nums; }
 .proto-split-item { display: inline-flex; align-items: center; }

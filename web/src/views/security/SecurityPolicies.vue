@@ -3935,7 +3935,8 @@ onMounted(async () => {
 .rule-picker-item:last-child { border-bottom: none; }
 .rule-picker-item :deep(.el-checkbox) { width: 100%; height: auto; padding: 4px 0; }
 .rule-picker-name { font-weight: 500; color: #1f2937; }
-.rule-picker-proto { margin-right: 8px; vertical-align: middle; }
+.rule-picker-item :deep(.el-checkbox__label) { display: inline-flex; align-items: center; gap: 8px; }
+.rule-picker-proto { margin: 0; flex-shrink: 0; }
 .rule-picker-meta { margin-left: 8px; font-size: 12px; color: #9ca3af; font-family: monospace; }
 
 .rule-picker-pagination { display: flex; justify-content: flex-end; margin-top: 12px; }

@@ -555,7 +555,8 @@ const submit = async (): Promise<void> => {
 .picker-rule-name { font-weight: 500; color: #1f2937; }
 .picker-rule-meta { margin-left: 8px; font-size: 12px; color: #9ca3af; }
 .picker-cap-icon { color: var(--el-color-warning); }
-.picker-proto-tag { margin-right: 8px; vertical-align: middle; }
+.picker-rule-item :deep(.el-checkbox__label) { display: inline-flex; align-items: center; gap: 8px; }
+.picker-proto-tag { margin: 0; flex-shrink: 0; }
 .picker-rule-block { color: #e6a23c; }
 .picker-rule-detail { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; margin: 2px 0 2px 24px; }
 .picker-bind-group { display: inline-flex; align-items: center; gap: 4px; }
