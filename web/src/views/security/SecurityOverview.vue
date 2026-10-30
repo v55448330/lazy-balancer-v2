@@ -3,6 +3,7 @@
     <div class="page-header">
       <div class="header-left">
         <h2 class="page-title">
+          <el-icon class="title-icon"><DataAnalysis /></el-icon>
           安全总览
         </h2>
         <p class="page-desc">安全防护统计概览</p>
@@ -100,7 +101,10 @@
             <el-tag v-else-if="crawlerStatus" :type="libraryStatusTagType(crawlerStatus)" size="small" effect="plain" disable-transitions>{{ libraryStatusLabel(crawlerStatus) }}</el-tag>
           </div>
         </div>
-    </el-card></div>
+      </div>
+    </el-card>
+    </div>
+    </div>
 
     <div v-if="overview.backfill_incomplete" class="info-note-bar">
       <span class="info-note-desc">原始事件仅保留自 {{ overview.raw_coverage_from }}，更早区间无法重建，7 天趋势 / Top 10 源 IP / 攻击类型统计可能少计</span>
@@ -112,6 +116,7 @@
           <template #header>
             <div class="card-header">
               <div class="card-title">
+                <el-icon class="title-icon"><TrendCharts /></el-icon>
                 <span>7 天拦截趋势</span>
               </div>
             </div>
@@ -127,6 +132,7 @@
           <template #header>
             <div class="card-header">
               <div class="card-title">
+                <el-icon class="title-icon"><PieChart /></el-icon>
                 <span>攻击类型分布（近 7 天）</span>
                 <el-checkbox v-model="attackByStage" size="small" style="margin-left: 12px">按阶段展示</el-checkbox>
               </div>
@@ -146,6 +152,7 @@
           <template #header>
             <div class="card-header">
               <div class="card-title">
+                <el-icon class="title-icon"><Warning /></el-icon>
                 <span>最近拦截事件</span>
               </div>
               <AccessibleLink type="primary" @click="goToEvents">查看全部</AccessibleLink>
@@ -187,6 +194,7 @@
           <template #header>
             <div class="card-header">
               <div class="card-title">
+                <el-icon class="title-icon"><Odometer /></el-icon>
                 <span>限流拦截</span>
               </div>
             <el-tooltip placement="top" content="按 429 响应计（含上游自返 429）；自最近一次配置重载以来累计">
@@ -223,6 +231,7 @@
       <template #header>
         <div class="card-header">
           <div class="card-title">
+            <el-icon class="title-icon"><Location /></el-icon>
             <span>Top 10 源 IP（近 7 天）</span>
           </div>
         </div>
@@ -257,12 +266,11 @@
         <el-table-column prop="last_time" label="最后攻击" width="170" :formatter="(row: TopIP) => formatDate(row.last_time)" />
       </el-table>
     </el-card>
-  </div>
 </template>
 
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
-import { Monitor, InfoFilled } from '@element-plus/icons-vue'
+import { DataAnalysis, TrendCharts, PieChart, Location, Warning, Odometer, Monitor, InfoFilled } from '@element-plus/icons-vue'
 import { request } from '@/utils/api'
 import { useAuthStore } from '@/stores/auth'
 import IPLocationAction from '@/views/security/IPLocationAction.vue'
@@ -497,54 +505,61 @@ onMounted(() => { void reloadAll() })
 /* 规则库状态 4 块：桌面单行等宽；紧凑图标/间距/字号保证版本与库名不换行。
    中屏 2×2、手机单列，避免 3+1 的孤立末行。 */
 .lib-stat-row { gap: 12px; }
-.lib-stat-row .status-strip-card :deep(.el-card__body) { padding: 18px 24px; }
-/* 等宽栅格：组内各列 flex:1 严格等宽，分隔线=列右边框（不占列）；
- * 全部顶对齐——今日拦截的协议拆分行只向下延伸，不影响其他列对齐。 */
+.lib-stat-row .status-strip-card :deep(.el-card__body) { padding: 20px 24px; }
+/* 左右分区：左=防护三 KPI（横排大数值，竖分隔线），右=规则库竖清单。
+ * 两种信息各自形态，不再互相挤压。 */
 .status-strip { display: flex; align-items: stretch; }
-.strip-group { display: flex; flex: 1 1 auto; min-width: 0; }
-.strip-group--libs { flex: 0 0 auto; min-width: 0; }
-.strip-group--libs .strip-item { flex: 1 1 0; }
-.strip-item {
+.status-guard { flex: 1 1 auto; display: flex; align-items: stretch; min-width: 0; }
+.guard-item {
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 4px 32px 0;
+  border-right: 1px solid #f0f0f0;
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  flex: 1 1 0;
-  min-width: 0;
-  padding: 2px 24px 0;
-  border-right: 1px solid #f0f0f0;
 }
-.strip-item:first-child { padding-left: 0; }
-.strip-item:last-child { border-right: none; padding-right: 0; }
-.strip-divider.is-v { width: 1px; background: #f0f0f0; flex: 0 0 auto; margin: 0 8px; }
+.guard-item:first-child { padding-left: 0; }
+.guard-item:last-child { border-right: none; }
+.strip-divider { width: 1px; background: #f0f0f0; margin: 0 32px; flex-shrink: 0; }
 .strip-label { font-size: 12px; color: var(--text-secondary); display: flex; align-items: center; }
 .strip-value {
-  font-size: 24px;
+  font-size: 26px;
   font-weight: 800;
   line-height: 1.25;
-  margin-top: 6px;
-  font-variant-numeric: tabular-nums;
+  margin-top: 8px;
   letter-spacing: 0.3px;
-  color: #303133;
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
+  color: #303133;
 }
 .strip-value.is-danger { color: #f56c6c; }
 .strip-value.is-warning { color: #e6a23c; }
-.strip-sub { display: flex; align-items: center; gap: 14px; margin-top: 6px; font-size: 12px; color: var(--text-secondary); white-space: nowrap; font-variant-numeric: tabular-nums; }
-.strip-lib { display: flex; align-items: center; margin-top: 6px; }
-.strip-lib-value { font-size: 14px; font-weight: 600; color: #303133; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.status-dot { width: 7px; height: 7px; border-radius: 50%; margin-right: 5px; flex-shrink: 0; }
+.strip-sub { display: flex; align-items: center; gap: 14px; margin-top: 8px; font-size: 12px; color: var(--text-secondary); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.proto-split-item { display: inline-flex; align-items: center; }
+.proto-dot { width: 6px; height: 6px; border-radius: 50%; margin-right: 5px; }
+.proto-dot--http { background: #409eff; }
+.proto-dot--tcp { background: #0e7490; }
+.status-lib { flex: 0 0 430px; border-left: 1px solid #f0f0f0; padding-left: 32px; display: flex; flex-direction: column; justify-content: center; gap: 10px; }
+.lib-row { display: flex; align-items: center; gap: 8px; font-size: 13px; min-width: 0; }
+.status-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
 .status-dot.is-up { background: #67c23a; }
 .status-dot.is-down { background: #f56c6c; }
-.strip-item.is-lib .el-tag { margin-top: 6px; align-self: flex-start; }
+.lib-name { color: var(--text-secondary); flex-shrink: 0; }
+.lib-ver { font-weight: 600; color: #303133; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
+.lib-row .el-tag { margin-left: auto; flex-shrink: 0; }
 @media (max-width: 1500px) {
-  .strip-item { padding: 2px 16px 0; }
-  .strip-value { font-size: 20px; }
+  .guard-item { padding: 4px 20px 0; }
+  .strip-divider { margin: 0 20px; }
+  .strip-value { font-size: 22px; }
+  .status-lib { flex-basis: 360px; padding-left: 20px; }
 }
 @media (max-width: 1400px) {
-  .status-strip { flex-direction: column; gap: 16px; }
-  .strip-divider.is-v { width: 100%; height: 1px; margin: 0; }
+  .status-strip { flex-direction: column; gap: 20px; }
+  .status-lib { border-left: none; padding-left: 0; flex-basis: auto; }
 }
 
+.chart-container { height: 260px; }
 .chart-container { height: 260px; }
 .chart-container { height: 260px; }
 .chart-container { height: 260px; }
