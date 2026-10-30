@@ -38,8 +38,8 @@
          数值大字与协议彩点贴今日拦截；库状态降为状态点+版本（去卡片套卡片）。 -->
     <el-card shadow="never" class="overview-card status-strip-card">
       <div class="status-strip">
-        <div class="strip-group">
-          <div class="strip-item">
+        <div class="status-guard">
+          <div class="guard-item">
             <div class="strip-label">
               今日拦截
               <el-tooltip :content="todayCountTip" placement="top">
@@ -47,15 +47,14 @@
               </el-tooltip>
             </div>
             <div class="strip-value is-danger">{{ fmtStatNum(overview.today_blocked) }}</div>
-            <!-- 协议拆分（L4 阶段 0/1 披露）：响应无 today_blocked_tcp 字段（旧后端）
-                 或 TCP=0 时隐藏（防御式）；HTTP = 合计 − TCP -->
+            <!-- 协议拆分（L4 阶段 0/1 披露）：HTTP = 合计 − TCP；响应缺字段或 TCP=0 时隐藏 -->
             <div v-if="todayBlockedSplit" class="strip-sub">
               <span class="proto-split-item"><i class="proto-dot proto-dot--http"></i>HTTP {{ fmtStatNum(todayBlockedSplit.http) }}</span>
               <span class="proto-split-item"><i class="proto-dot proto-dot--tcp"></i>TCP {{ fmtStatNum(todayBlockedSplit.tcp) }}</span>
             </div>
           </div>
           <div class="strip-divider"></div>
-          <div class="strip-item">
+          <div class="guard-item">
             <div class="strip-label">
               今日检测
               <el-tooltip :content="todayCountTip" placement="top">
@@ -65,53 +64,43 @@
             <div class="strip-value is-warning">{{ fmtStatNum(overview.today_detected) }}</div>
           </div>
           <div class="strip-divider"></div>
-          <div class="strip-item">
+          <div class="guard-item">
             <div class="strip-label">活跃策略</div>
             <div class="strip-value">{{ fmtStatNum(overview.active_policies) }}</div>
           </div>
         </div>
-        <div class="strip-divider is-v"></div>
-        <div class="strip-group strip-group--libs">
-          <div class="strip-item is-lib">
-            <div class="strip-label">CRS 规则集</div>
-            <div class="strip-lib">
-              <i class="status-dot" :class="overview.crs_available === false ? 'is-down' : 'is-up'"></i>
-              <span class="strip-lib-value">{{ overview.crs_available === false ? '未安装' : overview.crs_version }}</span>
-            </div>
+        <div class="status-lib">
+          <div class="lib-row">
+            <i class="status-dot" :class="overview.crs_available === false ? 'is-down' : 'is-up'"></i>
+            <span class="lib-name">CRS 规则集</span>
+            <span class="lib-ver">{{ overview.crs_available === false ? '未安装' : overview.crs_version }}</span>
             <el-tag v-if="overview.crs_available === false" type="danger" size="small" effect="plain" disable-transitions>未安装</el-tag>
             <el-tag v-else-if="overview.update_status" :type="libraryStatusTagType(overview.update_status)" size="small" effect="plain" disable-transitions>{{ libraryStatusLabel(overview.update_status) }}</el-tag>
           </div>
-          <div class="strip-item is-lib">
-            <div class="strip-label">IP 地理库</div>
-            <div class="strip-lib">
-              <i class="status-dot" :class="overview.ip2region_available === false || ip2regionError ? 'is-down' : 'is-up'"></i>
-              <span class="strip-lib-value">{{ overview.ip2region_available === false || ip2regionVersion === 'unknown' ? '未安装' : ip2regionVersion === 'bundled' ? '内置版本' : ip2regionVersion }}</span>
-            </div>
+          <div class="lib-row">
+            <i class="status-dot" :class="overview.ip2region_available === false || ip2regionError ? 'is-down' : 'is-up'"></i>
+            <span class="lib-name">IP 地理库</span>
+            <span class="lib-ver">{{ overview.ip2region_available === false || ip2regionVersion === 'unknown' ? '未安装' : ip2regionVersion === 'bundled' ? '内置版本' : ip2regionVersion }}</span>
             <el-tag v-if="ip2regionError" type="danger" size="small" effect="plain" disable-transitions>加载失败</el-tag>
             <el-tag v-else-if="overview.ip2region_available === false" type="danger" size="small" effect="plain" disable-transitions>未安装</el-tag>
             <el-tag v-else-if="ip2regionVersion === 'unknown'" type="info" size="small" effect="plain" disable-transitions>未安装</el-tag>
             <el-tag v-else-if="ip2regionStatus" :type="libraryStatusTagType(ip2regionStatus)" size="small" effect="plain" disable-transitions>{{ libraryStatusLabel(ip2regionStatus) }}</el-tag>
           </div>
-          <div class="strip-item is-lib">
-            <div class="strip-label">威胁情报库</div>
-            <div class="strip-lib">
-              <i class="status-dot" :class="threatError ? 'is-down' : 'is-up'"></i>
-              <span class="strip-lib-value">{{ threatError ? '—' : (threatLatestVersion || '未更新') }}</span>
-            </div>
+          <div class="lib-row">
+            <i class="status-dot" :class="threatError ? 'is-down' : 'is-up'"></i>
+            <span class="lib-name">威胁情报库</span>
+            <span class="lib-ver">{{ threatError ? '—' : (threatLatestVersion || '未更新') }}</span>
             <el-tag v-if="threatError" type="danger" size="small" effect="plain" disable-transitions>加载失败</el-tag>
             <el-tag v-else-if="threatStatus" :type="libraryStatusTagType(threatStatus)" size="small" effect="plain" disable-transitions>{{ libraryStatusLabel(threatStatus) }}</el-tag>
           </div>
-          <div class="strip-item is-lib">
-            <div class="strip-label">爬虫地址库</div>
-            <div class="strip-lib">
-              <i class="status-dot" :class="crawlerError ? 'is-down' : 'is-up'"></i>
-              <span class="strip-lib-value">{{ crawlerError ? '—' : (crawlerLatestVersion || '未更新') }}</span>
-            </div>
+          <div class="lib-row">
+            <i class="status-dot" :class="crawlerError ? 'is-down' : 'is-up'"></i>
+            <span class="lib-name">爬虫地址库</span>
+            <span class="lib-ver">{{ crawlerError ? '—' : (crawlerLatestVersion || '未更新') }}</span>
             <el-tag v-if="crawlerError" type="danger" size="small" effect="plain" disable-transitions>加载失败</el-tag>
             <el-tag v-else-if="crawlerStatus" :type="libraryStatusTagType(crawlerStatus)" size="small" effect="plain" disable-transitions>{{ libraryStatusLabel(crawlerStatus) }}</el-tag>
           </div>
         </div>
-      </div>
     </el-card>
 
     <div v-if="overview.backfill_incomplete" class="info-note-bar">
@@ -120,11 +109,10 @@
 
     <el-row :gutter="20" class="mb-5">
       <el-col :xs="24" :md="16">
-        <el-card shadow="always">
+        <el-card shadow="never">
           <template #header>
             <div class="card-header">
               <div class="card-title">
-                <el-icon class="title-icon"><TrendCharts /></el-icon>
                 <span>7 天拦截趋势</span>
               </div>
             </div>
@@ -136,11 +124,10 @@
         </el-card>
       </el-col>
       <el-col :xs="24" :md="8">
-        <el-card shadow="always">
+        <el-card shadow="never">
           <template #header>
             <div class="card-header">
               <div class="card-title">
-                <el-icon class="title-icon"><PieChart /></el-icon>
                 <span>攻击类型分布（近 7 天）</span>
                 <el-checkbox v-model="attackByStage" size="small" style="margin-left: 12px">按阶段展示</el-checkbox>
               </div>
@@ -156,11 +143,10 @@
 
     <el-row :gutter="20" class="mb-5 events-row">
       <el-col :xs="24" :md="16">
-        <el-card shadow="always">
+        <el-card shadow="never">
           <template #header>
             <div class="card-header">
               <div class="card-title">
-                <el-icon class="title-icon"><Warning /></el-icon>
                 <span>最近拦截事件</span>
               </div>
               <AccessibleLink type="primary" @click="goToEvents">查看全部</AccessibleLink>
@@ -198,11 +184,10 @@
         </el-card>
       </el-col>
       <el-col :xs="24" :md="8">
-        <el-card shadow="always">
+        <el-card shadow="never">
           <template #header>
             <div class="card-header">
               <div class="card-title">
-                <el-icon class="title-icon"><Odometer /></el-icon>
                 <span>限流拦截</span>
               </div>
             <el-tooltip placement="top" content="按 429 响应计（含上游自返 429）；自最近一次配置重载以来累计">
@@ -235,11 +220,10 @@
       </el-col>
     </el-row>
 
-    <el-card shadow="always">
+    <el-card shadow="never">
       <template #header>
         <div class="card-header">
           <div class="card-title">
-            <el-icon class="title-icon"><Location /></el-icon>
             <span>Top 10 源 IP（近 7 天）</span>
           </div>
         </div>
@@ -279,7 +263,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
-import { DataAnalysis, TrendCharts, PieChart, Location, Warning, Odometer, Monitor, InfoFilled } from '@element-plus/icons-vue'
+import { DataAnalysis, Monitor, InfoFilled } from '@element-plus/icons-vue'
 import { request } from '@/utils/api'
 import { useAuthStore } from '@/stores/auth'
 import IPLocationAction from '@/views/security/IPLocationAction.vue'
@@ -500,6 +484,14 @@ onMounted(() => { void reloadAll() })
 </script>
 
 <style scoped>
+/* 统一卡体系：全页 el-card 一律直角细边、无投影、卡头 14px/600、body 18×24。
+ * 状态条与图表/事件/Top10 卡共用同一容器观感（用户裁定彻底重设计）。 */
+.overview-card.el-card,
+.el-card { --el-card-border-color: #ebeef5; --el-card-border-radius: 0; box-shadow: none; }
+.el-card.is-always-shadow { box-shadow: none; }
+.status-strip-card.el-card { border: 1px solid #ebeef5; }
+.card-header { display: flex; align-items: center; justify-content: space-between; }
+.card-title { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; color: #111827; }
 /* 等宽统计卡行:flex 五列严格等宽(原 el-col 5/5/5/5/4 末卡窄 20%) */
 .overview-card { height: 100%; }
 .stat-row { display: flex; gap: 16px; }
