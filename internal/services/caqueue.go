@@ -1876,7 +1876,8 @@ func ResolveCAProviderID(id int) (int, error) {
 //   - renewal_attempts+1；
 //   - 写 ca_available_after 退避窗口：429 用 CA 的 Retry-After（computeBackoff
 //     内封顶 3h），其它失败走自有阶梯 1h/2h/3h（同封顶）；
-//   - 写 last_error_code/message/任务日志/审计；
+//   - 写 last_error_code/message/任务日志/审计：任务日志 429 非上限=WARN、
+//     429 达上限与其余失败=ERROR；审计动作 429=「签发限流」、其余=「签发失败」；
 //   - 达 cert_renewal_attempts 上限：ca_available_after=NULL（停止自动重试），
 //     message 追加上限说明；
 //   - 窗口写入成功即唤醒 cert-waiting-ca 补扫（failed+窗口到期重排的唯一
@@ -1914,16 +1915,18 @@ func recordJobFailure(jobID int, fromSet []string, message, errorCode string, re
 		}
 		return
 	}
-	// 留痕分档保持既有口径：429 非上限=签发限流（WARN），其余=签发失败（ERROR）；
-	// 达上限一律 ERROR 并以 max_attempts 结果码单列（与续期扫描上限分支一致）。
+	// 留痕分档：429 非上限=签发限流（WARN，含恢复时间）；429 达上限（窗口
+	// NULL、自动重试停止）=任务日志升为 ERROR 并以 max_attempts 结果码单列，
+	// 审计动作维持「签发限流」（用户裁定）；其余=签发失败（ERROR）。
 	level := "ERROR"
 	auditDetail := []string{AuditJobPart(jobID), AuditResultPart("failed")}
 	if errorCode == "429" {
-		level = "WARN"
-		auditDetail = []string{AuditJobPart(jobID), fmt.Sprintf("第 %d 次限流", attempts)}
 		if window > 0 {
-			auditDetail = append(auditDetail, fmt.Sprintf("恢复时间：%s", time.Now().Add(window).In(CurrentLocation()).Format("2006-01-02 15:04:05")))
+			level = "WARN"
+			auditDetail = []string{AuditJobPart(jobID), fmt.Sprintf("第 %d 次限流", attempts),
+				fmt.Sprintf("恢复时间：%s", time.Now().Add(window).In(CurrentLocation()).Format("2006-01-02 15:04:05"))}
 		} else {
+			// 达上限：level 保持默认 ERROR，仅把明细换成 max_attempts 结果码。
 			auditDetail = []string{AuditJobPart(jobID), AuditResultPart("max_attempts")}
 		}
 	}
@@ -1932,8 +1935,6 @@ func recordJobFailure(jobID int, fromSet []string, message, errorCode string, re
 	switch errorCode {
 	case "429":
 		RecordAuditLog("system", "签发限流", "证书任务", FormatAuditDetail(auditDetail...), "")
-	case "issuance_failed":
-		RecordAuditLog("system", "签发失败", "证书任务", FormatAuditDetail(auditDetail...), "")
 	default:
 		RecordAuditLog("system", "签发失败", "证书任务", FormatAuditDetail(auditDetail...), "")
 	}

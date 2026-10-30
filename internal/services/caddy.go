@@ -3759,8 +3759,10 @@ func healthCheckCore(rule SingleRuleConfig) (healthCheckValues, error) {
 
 // passiveHealthCheck 被动健康检查块单源（协议专属键由调用方追加）。
 // 披露：被动熔断窗口复用主动探测间隔（fail_duration=interval*3），无独立配置项
-// ——interval=60s 时失败上游被熔断 180s，interval=1s 时仅 3s。UI/文档未声明该
-// 耦合；如需独立控制需新增值型列（schema+写侧+渲染三件套），当前裁定仅披露不新增。
+// ——interval=60s 时失败上游被熔断 180s，interval=1s 时仅 3s。UI 已披露
+// （Rules.vue 提示「仅被动熔断，异常节点会周期恢复并重新接收流量」+
+// healthCheckSummary.ts「恢复窗口 = 检查间隔的 3 倍」）；如需独立控制需新增
+// 值型列（schema+写侧+渲染三件套），当前裁定仅披露不新增。
 func passiveHealthCheck(interval, failing int) map[string]interface{} {
 	return map[string]interface{}{
 		"fail_duration": fmt.Sprintf("%ds", interval*3),
@@ -4959,6 +4961,21 @@ const (
 )
 
 func (s *CaddyService) refreshIPListProjectionsInLock(store caddyConfigStore) (IPListProjectionOutcome, error) {
+	// 渲染串行锁（锁图结论）：三个刷新入口（FromTxInLock/InLock/自取锁
+	// 变体）都汇入本函数，这里是唯一咽喉点。renderMu 现有持有者只有两处
+	// ——单规则只读预检渲染（GenerateSingleRuleCaddyConfig）与 CLI 校验的
+	// 快照/回滚段（SnapshotIPListProjections，经 beginIPListProjectionPass）；
+	// 本刷新链（generateCaddyConfigWithCertSource 的投影写盘副作用）不重入
+	// renderMu（二者仅被 handlers 预检/保存链调用，刷新路径零触达），故在此
+	// 直接取锁不构成自死锁——无需改走「给预检补 CaddyOpLock」的替代方案
+	// （那会让只读预检与全部 Caddy 操作互斥）。全仓锁序保持
+	// CaddyOpLock→renderMu 单向（renderMu 持有段内不取 CaddyOpLock）。
+	// 没有这把共同互斥锁时，刷新渲染与预检渲染/快照回滚窗口交错：刷新新建
+	// 的投影会被在途回滚清单误收（Restore 删除在役文件），两轮渲染的投影
+	// 写盘互相穿插（钉测：TestRefreshIPListProjections_serializesWithProjection
+	// Snapshot）。
+	ipListProjectionRenderMu.Lock()
+	defer ipListProjectionRenderMu.Unlock()
 	// rulesWrittenInTx=false：本路径全部调用方（名单写路径 tx / 后台任务 db.DB）
 	// 均不触碰 lb_rules——名单-only 变更的规则视图与已提交视图恒一致，
 	// ACME 谓词 miss 补查在本路径是纯冗余。

@@ -126,10 +126,24 @@ func TestCRSUpdateRun_success(t *testing.T) {
 		"coreruleset-4.15.0/plugins/empty-config.conf":  "# plugin\n",
 	})
 	reloads := 0
-	m.reloader = func() error { reloads++; return nil }
+	// 重载窗口内存态：reloader 执行瞬间 StatusSnapshot 必须显示 reloading
+	// （对齐 ip2region 的 setStage+日志双轨——只写更新日志不改内存态时，
+	// 状态端点在重载窗口仍显示进入前的阶段）。
+	reloadWindowStatus := ""
+	m.reloader = func() error {
+		reloads++
+		reloadWindowStatus = m.StatusSnapshot().Status
+		return nil
+	}
 
-	// When a manual update runs to completion
-	m.run("manual", nil)
+	// When a manual update runs to completion——走生产入口 StartUpdate
+	// （StatusSnapshot 只在 trigger/startedAt 已登记时读内存态；run() 直调
+	// 路径永远回退库行，观测不到重载窗口）。
+	done, serr := m.StartUpdate("manual", nil)
+	if serr != nil {
+		t.Fatalf("StartUpdate()=%v, want nil", serr)
+	}
+	<-done
 
 	// Then the DB row reflects success at the new version
 	version, status, message, finishedAt, _, _, _ := crsVersionRow(t)
@@ -144,6 +158,9 @@ func TestCRSUpdateRun_success(t *testing.T) {
 	}
 	if finishedAt == "" {
 		t.Fatal("finished_at empty after success")
+	}
+	if reloadWindowStatus != string(CRSStatusReloading) {
+		t.Fatalf("重载窗口内存态=%q, want %q（重载阶段必须随更新日志双轨写入内存态）", reloadWindowStatus, CRSStatusReloading)
 	}
 
 	// And the live tree was swapped; the new stock setup replaced the old one

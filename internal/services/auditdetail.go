@@ -203,6 +203,9 @@ var auditSourceTextMap = map[string]string{
 	"deployment_material_lost": "来源：证书材料丢失",
 	// 签发执行期发现任务域名与规则当前域名不匹配（并发兜底）：退役旧任务。
 	"domain_mismatch": "来源：规则域名变更",
+	// 配置导入/还原提交链：备份携带的 waiting_ca 存量在 finish 阶段保窗归一
+	// 为 failed 的留痕行（handlers/config_backup.go 导入归一审计）。
+	"config_import": "来源：配置导入",
 }
 
 func AuditSourcePart(source string) string {

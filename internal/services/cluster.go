@@ -751,6 +751,8 @@ func restoreClusterSyncSchedulingAfterDemote() {
 			FormatAuditDetail("已停止：切从后不会同步，请手动开启", AuditResultPart("warning")), "")
 		return
 	}
+	// 角色恢复：非唤醒——仅恢复角色翻转前已开启的调度（loopEnabled 保留语义），
+	// 业务事件不得借道此处 StartLoop 唤醒（标准 v2.2 §0.6-4 例外仅此一类）。
 	te.StartLoop("cluster-sync")
 	// StartLoop 只按角色换代 daemon；Halted 的 SyncService 对 Start 是 no-op
 	// （startLocked(resume=false) 直接返回），从节点数据会永久不收敛。复活
@@ -794,6 +796,7 @@ func (s *ClusterService) Promote(ctx context.Context) error {
 	promoted := false
 	defer func() {
 		if !promoted && te != nil && clusterSyncWasOn {
+			// 角色恢复：非唤醒——提升失败回滚只恢复翻转前已开启态。
 			te.StartLoop("cluster-sync")
 		}
 	}()
@@ -897,6 +900,7 @@ func (s *ClusterService) Promote(ctx context.Context) error {
 	if te != nil {
 		te.SetRole(true)
 		if clusterSyncWasOn {
+			// 角色恢复：非唤醒——升主只恢复翻转前已开启态（偏好保留语义）。
 			te.StartLoop("cluster-sync")
 		} else {
 			// cluster-sync 两角色语义不同：从端=拉取，主端=服务面巡检（从节点

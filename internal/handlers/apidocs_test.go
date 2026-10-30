@@ -1074,11 +1074,21 @@ func TestBuildOpenAPIYAML_tasksPathParametersStayString(t *testing.T) {
 		{"/system/tasks/{id}/cancel", "post"},
 	} {
 		parameters := document.Paths[operation.path][operation.method].Parameters
-		if len(parameters) != 1 || parameters[0].Name != "id" || parameters[0].In != "path" {
+		// trigger 额外携带 ?force（cert-job 行冷却 429 的越权通道，查询参数）；
+		// 本钉测关注的是 :id 保持 string（任务 ID 如 "threat"、"cert-job:5"），
+		// 因此按名定位 id 参数而非断言参数个数。
+		idIndex := -1
+		for i := range parameters {
+			if parameters[i].Name == "id" {
+				idIndex = i
+				break
+			}
+		}
+		if idIndex < 0 || parameters[idIndex].In != "path" {
 			t.Fatalf("%s %s parameters=%+v", operation.method, operation.path, parameters)
 		}
-		if parameters[0].Schema.Type != "string" {
-			t.Errorf("%s %s id schema type=%q, want string (task IDs such as \"threat\" or \"cert-job:5\" are strings)", operation.method, operation.path, parameters[0].Schema.Type)
+		if parameters[idIndex].Schema.Type != "string" {
+			t.Errorf("%s %s id schema type=%q, want string (task IDs such as \"threat\" or \"cert-job:5\" are strings)", operation.method, operation.path, parameters[idIndex].Schema.Type)
 		}
 	}
 	// 回归形状：数字 :id 路由不受 tasks 分流影响，保持 integer。

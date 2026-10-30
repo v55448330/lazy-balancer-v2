@@ -270,10 +270,14 @@ export const loadCertManualBannerDismissed = (): Set<string> => {
   }
 }
 
-/** 持久化已关闭指纹集（最旧先淘汰，上限 200）；写失败静默（下次横幅重现，无害）。 */
+/** 持久化已关闭指纹集（最旧先淘汰，上限 200）。写前重读 localStorage 合并：
+ *  双标签页各持内存副本，后保存方若直接整写会覆盖先保存方已落库的 dismiss
+ *  （另一标签的横幅因此重现）——合并=先存量后本次（Set 保序），再按上限淘汰
+ *  最旧。写失败静默（下次横幅重现，无害）。 */
 export const saveCertManualBannerDismissed = (fingerprints: Iterable<string>): void => {
   try {
-    const items = [...fingerprints].slice(-CERT_MANUAL_BANNER_STORAGE_LIMIT)
+    const merged = new Set([...loadCertManualBannerDismissed(), ...fingerprints])
+    const items = [...merged].slice(-CERT_MANUAL_BANNER_STORAGE_LIMIT)
     localStorage.setItem(CERT_MANUAL_BANNER_STORAGE_KEY, JSON.stringify(items))
   } catch {
     // 隐私模式/配额失败：不阻塞页面，横幅下次照常出现

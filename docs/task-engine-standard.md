@@ -23,7 +23,7 @@
 
 | 形态 | 适用 | 禁止 |
 |---|---|---|
-| `Daemon` + **`taskengine.RunTicker(ctx, interval, wake, fn)`** | 高频/事件驱动常驻（<1min 节拍） | 业务体内手写 `for/select/ticker` |
+| `Daemon` + **`taskengine.RunTicker(ctx, interval, wake, fn)`** | 高频/事件驱动常驻（节拍不限——daemon 形态零 task_runs 噪音） | 业务体内手写 `for/select/ticker` |
 | `Daemon` + 自管理阻塞循环（仅当循环含协议状态机，如从节点拉取） | 长生命周期连接/同步 | 为绕开 `RunTicker` 而自建 |
 | `Periodic`（`IntervalFn`） | 节拍 ≥10s 的轮询 | 用高频 Periodic 制造 task_runs 噪音 |
 | `Scheduled` / `Oneshot` | 排程/手动 | 借 BootSync 绕过调度 |
@@ -32,7 +32,7 @@
 
 ### 0.3 唤醒协议
 
-- 业务事件只能表达三种意图：**唤醒**（`WakeTask(id)`，等价 `RearmLoop(id, hasWork)`）、**停止**（`StopLoop(id)`）、**复位节拍**（`RearmLoop(id,false)`）。
+- 业务事件只能表达三种意图：**唤醒**（`RearmLoop(id, hasWork=true)`）、**停止**（`StopLoop(id)`）、**复位节拍**（`RearmLoop(id,false)`）。
 - 业务**不得**在事件里直接执行任务体，也不得用 `StartLoop` 越过用户停止态。
 - 唤醒信号是"提示"：错过唤醒只会延迟下一次节拍，不得导致漏执行（引擎按库内时间/到期判定兜底）。
 
@@ -45,17 +45,17 @@
 
 **违规 = 独立于任务运行、自行定期触发工作的循环。必须改为注册任务，无例外、无豁免、无「后续迁移」。**
 
-| 违规项（当前存在） | 位置 |
-|---|---|
-| 每个 CA 提供商一个 `go q.loop()` | `internal/services/caqueue.go:1163-1166` |
-| `MetricsService.Start` 30s 抓取 + 24h 清理 | `internal/services/services.go:79-114` |
-| rollup warmer 60s（启动即首轮） | `internal/handlers/security_threat_screen.go:1085-1124` |
-| caddy-restart 触发源 2s 轮询 | `internal/handlers/handlers.go:1175-1203` |
-| API-Key last_used 1min flush + 1h 清理 | `internal/db/apikey_last_used.go:76-125` |
-| 运行日志尺寸阈值 30s | `internal/services/logrotate.go:41-92` |
-| 时区/日志级别 30s | `internal/services/tz.go:48-92` |
-| 限流桶内存清扫 1min | `internal/middleware/middleware.go:703-708` |
-| legacy `RecordRunStart/Finish` 直写 `task_runs` | `internal/handlers/autobackup.go:354-366` |
+| 违规项（v2.2 立案） | 立案位置（修复前） | 状态 |
+|---|---|---|
+| 每个 CA 提供商一个 `go q.loop()` | `internal/services/caqueue.go:1163-1166` | 已归口 → `cert-issuance` daemon `RunTicker` 派发泵 |
+| `MetricsService.Start` 30s 抓取 + 24h 清理 | `internal/services/services.go:79-114` | 已归口 → `metrics-collector` daemon + `metrics-history-cleanup` Periodic |
+| rollup warmer 60s（启动即首轮） | `internal/handlers/security_threat_screen.go:1085-1124` | 已归口 → `threat-rollup-warmer` daemon |
+| caddy-restart 触发源 2s 轮询 | `internal/handlers/handlers.go:1175-1203` | 已归口 → `caddy-restart-watcher` daemon |
+| API-Key last_used 1min flush + 1h 清理 | `internal/db/apikey_last_used.go:76-125` | 已归口 → `apikey-usage-flusher` daemon |
+| 运行日志尺寸阈值 30s | `internal/services/logrotate.go:41-92` | 已归口 → `runtime-log-threshold` daemon |
+| 时区/日志级别 30s | `internal/services/tz.go:48-92` | 已归口 → `runtime-tz-refresh` daemon |
+| 限流桶内存清扫 1min | `internal/middleware/middleware.go:703-708` | 已归口 → `ratelimit-bucket-sweep` daemon |
+| legacy `RecordRunStart/Finish` 直写 `task_runs` | `internal/handlers/autobackup.go:354-366` | 已归口 → 符号删除（`task_runs` 唯一写方=引擎） |
 
 **范围外（不是调度器，不构成任何豁免）**：
 
@@ -69,10 +69,10 @@
 
 ### 0.6 机器守卫（缺一即视为未完成）
 
-1. 注册表断言：每个 `Daemon` 的 `Run` 必须调用 `RunTicker`（或为范围外的阻塞协议循环，须在 §6.4 范围表登记判据，而非豁免申请）。
-2. 静态扫描：`internal/services`、`internal/handlers`、`internal/db`、`internal/middleware` 禁止存在 `time.NewTicker` / 常驻 `go func()` / `time.AfterFunc` 自续循环（§6.4 范围外形态须以 `//scope-exempt: <类别>` 标注并命中范围表判据，不得新增第四类）。
+1. 注册表断言：每个 `Daemon` 的 `Run` 必须调用 `RunTicker`（或为范围外的阻塞协议循环，须在 §6.4 范围表登记判据，而非豁免申请）。钉测：`internal/services/taskengine_scope_guards_test.go`（登记表=机器可查常量清单，与本节/§2/§6.4 同步）。
+2. 静态扫描：`internal/services`、`internal/handlers`、`internal/db`、`internal/middleware` 禁止存在 `time.NewTicker` / 常驻 `go func()` / `time.AfterFunc` 自续循环（§6.4 范围外形态须以 `//scope-exempt: <类别>` 标注并命中范围表判据，不得新增第四类）。钉测同上（零命中判红，词表外类别判红）。
 3. 子资源循环守卫：禁止 `go <queue|worker>.loop()` 形态。
-4. 唤醒守卫：业务侧只允许 `WakeTask/RearmLoop/StopLoop`；`StartLoop` 仅限控制面（用户操作）。执行「禁止任何业务事件/角色翻转/导入/就绪路径调用 StartLoop」。
+4. 唤醒守卫：业务侧只允许 `RearmLoop/StopLoop`；业务事件路径禁止 `StartLoop`——仅控制面（用户操作）与**角色翻转恢复已开启态**（`loopEnabled` 保留语义，promote/demote 恢复分支）除外。执行「禁止任何业务事件/导入/就绪路径调用 StartLoop」。
 
 ## 1. 四类型定义
 
@@ -158,7 +158,7 @@ type Descriptor struct {
 
 已删除：`SilentProbes`/`RecordFailuresOnly`/`SignalledWork`/`AsKind`/`Cadence`/`Singleton`——Kind 单独决定全部行为；`ToggleFn`/`ToggleName`（2026-10-11）——v2.0 调度开关统一（StartLoop/StopLoop）后声明族零消费退役，TaskMeta/TaskInfo 的 `toggleable`/`toggle_name` 序列化字段一并删除；`ManualRun`（勘误）——手动触发能力由 Kind 派生（DescribeAll `CanTrigger`），声明字段无消费；`TaskMeta.Enabled`（任务监控只认 `loop_on`，`Lookup/DescribeAll` 不再求值 `EnabledFn`）——`Descriptor.EnabledFn` 仍保留为 Scheduled/Periodic 调度门。
 
-## 2. 任务清单（19 注册任务；实时全集以 `DescribeAll` 为准）
+## 2. 任务清单（27 注册任务；实时全集以 `DescribeAll` 为准）
 
 ### 定时（5）——排程槽驱动，Run 纯业务
 
@@ -180,13 +180,22 @@ failed 行（没有执行就没有 task_runs 记录）。该形态的可观测�
 （1s→5s→30s 封顶，连续失败节流 WARN）——但那要求 Run 至少执行过一次；
 纯排程读取失败（连首轮都无法投递）不在退避覆盖面内。
 
-### 常驻（3）——Run 阻塞自管理循环
+### 常驻（10）——Run 阻塞至停止（`RunTicker` 节拍或自管理阻塞循环）
 
 | 任务 | Run 体 | 实际工作 |
 |---|---|---|
-| security-events-ingestion | `runIngestionLoop(ctx)`（内部 2s ticker） | 尾读 coraza 审计日志 |
-| cert-issuance | daemonLifecycleRun（真实 StartACME/StopACME 挂钩——B 完全标准化） | CAQueueManager+证书 worker（引擎 daemon 即生命周期所有者）——**RunsOn=MasterOnly** |
-| cluster-sync | Run 体按角色分流：从节点=daemonLifecycleRun（真实 SyncService.Start/Stop 挂钩，Halted/Resume 内部状态机保留）；主节点=masterSyncServingLifecycleRun（服务面巡检：节点在线/版本滞后） | **RunsOn=RoleAny + RestartOnRoleFlip**（2026-10-03 裁定：两角色同启停语义，角色翻转换代重启使 Run 分支与角色同步切换；原「RunsOn=SlaveOnly」口径已随主节点巡检引入过期） |
+| security-events-ingestion | `runIngestionLoop(ctx)`（形态② 自管理循环，内部 2s ticker） | 尾读 coraza 审计日志 |
+| cert-issuance | daemonLifecycleRun（真实 StartACME/StopACME 挂钩——B 完全标准化）+ `RunTicker(100ms, WakeCh, DispatchOnce)` 派发泵 | CAQueueManager+证书 worker（引擎 daemon 即生命周期所有者）——**RunsOn=MasterOnly** |
+| cluster-sync | Run 体按角色分流：从节点=daemonLifecycleRun（真实 SyncService.Start/Stop 挂钩，Halted/Resume 内部状态机保留）；主节点=masterSyncServingLifecycleRun（服务面巡检：节点在线/版本滞后，`masterSyncServingLoop` 内部 ticker） | **RunsOn=RoleAny + RestartOnRoleFlip**（2026-10-03 裁定：两角色同启停语义，角色翻转换代重启使 Run 分支与角色同步切换；原「RunsOn=SlaveOnly」口径已随主节点巡检引入过期） |
+| metrics-collector | `RunTicker(cfg.MetricsInterval)`（bootstrap 立即首轮） | Caddy admin `/metrics` 抓取与仪表盘聚合 |
+| threat-rollup-warmer | `RunTicker(60s)`（启动即首轮） | 威胁大屏分钟级 rollup 预固化（就绪后请求路径不再懒固化） |
+| caddy-restart-watcher | `RunTicker(2s)` | 探测监督器 Caddy 重启触发文件 → `caddy-restart` 触发执行与启动一致的配置载入（失败退避 2s→30s） |
+| ratelimit-bucket-sweep | `RunTicker(60s)` | 删除已过窗的登录限流内存桶 |
+| apikey-usage-flusher | `RunTicker(60s)`（附表清理 1h 业务闸门，非第二调度源） | `api_keys.last_used` 批量落库 + 过期吊销 JWT/集群注册密钥清理 |
+| runtime-log-threshold | `RunTicker(30s)`（装配期同步首跑 `RefreshRuntimeLogSizeOnce`） | `global_config.runtime_log_size_mb` 应用到运行日志滚动阈值 |
+| runtime-tz-refresh | `RunTicker(30s)`（装配期同步首跑 `RefreshTimezoneOnce`） | `global_config.timezone` 应用到面板/任务/审计展示时区 |
+
+运行期常驻族 7 个 daemon（metrics-collector/threat-rollup-warmer/caddy-restart-watcher/ratelimit-bucket-sweep/apikey-usage-flusher/runtime-log-threshold/runtime-tz-refresh）与其余运行期循环任务（metrics-history-cleanup）描述符与工作体在 `taskengine_wire_runtime.go`；跨包工作体经 `Set*` 钩子注入（main 在 `InitTaskEngine` 前装配），钩子未接线时空载体阻塞至停止（零 task_runs 噪音）。
 
 系统启动即运行（默认 StartLoop）；关闭调度=启动也不运行；允许手动停止和启用。
 
@@ -208,7 +217,7 @@ failed 行（真实时长与错误）；取消/正常停止不增行。
 且状态列呈现 `failed`（修复前恒 `idle`「空闲」，采集/签发静默停摆无信号）；
 显式停止调度后回 `idle`。
 
-### 循环（10）——固定间隔，每轮独立执行+记录
+### 循环（11）——固定间隔，每轮独立执行+记录
 
 | 任务 | 间隔 |
 |---|---|
@@ -221,6 +230,7 @@ failed 行（真实时长与错误）；取消/正常停止不增行。
 | audit-retention | 24h |
 | security-events-retention | 24h |
 | metrics-orphan-cleanup | 24h（已删除规则的残留历史指标收敛清理，单轮限量分批） |
+| metrics-history-cleanup | 24h（>7 天指标历史清理，5000 行/批让锁推进；失败进任务失败终态） |
 | autoban | 60s（调度唯一前提=业务启用：PUT 保存联动启停+启动按库实态对齐，Descriptor 无 EnabledFn；观察模式默认开） |
 
 
@@ -362,7 +372,6 @@ task_runs 保留 90 天（audit-retention 每日清理）。`Engine.Stop` 先取
 - `TaskLogf(taskID, stage, format, ...)` — 业务摘要行（tee 到任务日志）
 - `taskengine.TeeTaskLog` — 分阶段流水
 - `taskRunStartedAt(rc)` — 业务状态表开始/检查时刻唯一时间源：回读 `task_runs.started_at` 并归一 UTC；threat/CRS/IP2Region/crawler 共用
-- `RecordRunStart/RecordRunFinish` — legacy 直调路径（引擎外执行）
 
 ### 6.1 统一日志滚动与统计（2026-10-17 用户裁定）
 
@@ -397,35 +406,41 @@ task_runs 保留 90 天（audit-retention 每日清理）。`Engine.Stop` 先取
 | `Engine.Stats24h` | 任务视图走 `Engine.RunOverview` 批量聚合（同 SQL 单源） |
 | `Engine.Trigger` | 同步驱动测试；生产走异步入口 |
 | `Engine.IsRunning` | 诊断投影（`Run 存活 或 loopEnabled∧roleAllows`），**不得**用作「是否正在执行」判据——该语义用 `IsTaskInFlight` |
-| `RoleSlaveOnly` | 仅测试注册使用（生产 19 任务全集只有 RoleAny/RoleMasterOnly） |
+| `RoleSlaveOnly` | 仅测试注册使用（生产 27 任务全集只有 RoleAny/RoleMasterOnly） |
 
 ### 6.4 范围外形态登记（判据，不是豁免）
 
 | 形态 | 判据（机器可判） | 现有示例 |
 |---|---|---|
-| 任务体内子协程 | 由 Run 派生 + Run 同步等待 + ctx 结束即止 | `crsupdate.go:348-361`、`ip2regionupdate.go:173-176` |
-| 运行内有界轮询 | 存活期 ⊆ 单次 Run，且带宽上限 | `acme/issuer.go:461/615/852` |
-| 一次性协程 | `WaitGroup`/deadline 收口 | `cluster_apply.go:31-34`、`config_import_coordinator.go:594-598` |
+| 任务体内子协程 | 由 Run 派生 + Run 同步等待 + ctx 结束即止 | `internal/services/crsupdate.go:348-361`、`internal/services/ip2regionupdate.go:173-176` |
+| 运行内有界轮询 | 存活期 ⊆ 单次 Run，且带宽上限 | `internal/acme/issuer.go:491/645/883` |
+| 一次性协程 | `WaitGroup`/deadline 收口 | `internal/services/cluster_apply.go:31-34`、`internal/handlers/config_import_coordinator.go:594-598` |
 | 引擎内部 tick | 位于 `internal/taskengine` | `engine.go:934/1960` |
 | Teardown 清理 | 仅在停止/关闭路径执行 | `db.Close` 内 flusher 停止 |
+| daemon Run 体自管理阻塞循环（§0.2 形态②） | Run 派生 + ctx 取消即退 + Run 存活即任务运行中 | `runIngestionLoop`（securityevents.go）、`masterSyncServingLoop`（cluster_masterserving.go） |
+| 引擎附属对账循环 | 位于 internal/services、服务于引擎自身角色/状态收敛、不受用户停止看门狗影响、有代际停机与有界排空（判据可机器识别：函数名+代际停机断言） | `taskengine_wire.go` `startRoleReconciler` |
 
 新增任何超出上表的循环形态 = 违规，必须先注册任务。
+
+`//scope-exempt: <类别>` 标注词表（与守卫钉测 `internal/services/taskengine_scope_guards_test.go` 的常量词表逐字同步，词表外类别=变相豁免即违规）：`daemon-run-body-loop`（daemon Run 体自管理阻塞循环，§0.2 形态②）、`engine-reconciler`（引擎附属对账循环）、`one-shot-deadline-callback`（一次性延迟回调，canceled/deadline 收口，不跨调用自续）、`one-shot-bounded-poll`（单次调用内有界轮询，deadline 收口）。
 
 ### 6.5 归口台账（全部为必做项，完成后只保留"已完成"记录）
 
 | # | 违规项 | 目标注册任务 | 状态 |
 |---|---|---|---|
-| 1 | per-provider `go q.loop()` | `cert-issuance`（Daemon + `RunTicker` 遍历 `DispatchOnce`） | 已完成 |
-| 2 | `MetricsService.Start`（30s + 24h） | 新 daemon `metrics-collector`（RunsOn=RoleAny；24h 清理拆 `Periodic`） | 待做 |
-| 3 | rollup warmer（60s） | 并入 `security-events-ingestion` daemon（同 2s/60s 域） | 待做 |
-| 4 | caddy-restart 触发源（2s） | 新 daemon `caddy-restart-watcher`（Daemon 生命周期只落 1 行，无 task_runs 噪音） | 待做 |
-| 5 | API-Key last_used（1min/1h） | 新 daemon `apikey-usage-flusher`（循环移出 db 包，db 只暴露 flush/cleanup 函数） | 待做 |
-| 6 | 运行日志尺寸阈值（30s） | 新 daemon `runtime-log-threshold`（装配序调整：daemon 先于日志消费启动） | 待做 |
-| 7 | 时区/日志级别（30s） | 新 daemon `runtime-tz-refresh` | 待做 |
-| 8 | 限流桶内存清扫（1min） | 新 daemon `ratelimit-bucket-sweep`（middleware 暴露 sweep 函数） | 待做 |
-| 9 | legacy `RecordRunStart/Finish` | 删除该兜底：`engineRunID<=0` 时响亮失败，不再自写 `task_runs` | 待做 |
+| 1 | per-provider `go q.loop()` | `cert-issuance`（Daemon + `RunTicker` 遍历 `DispatchOnce`） | 已完成（`taskengine_wire.go` cert-issuance Run：`RunTicker(100ms, WakeCh, DispatchOnce)`；工作体 `caqueue.go` `DispatchOnce` 单源） |
+| 2 | `MetricsService.Start`（30s + 24h） | 新 daemon `metrics-collector`（RunsOn=RoleAny；24h 清理拆 `Periodic`） | 已完成（`taskengine_wire_runtime.go`：`metrics-collector` daemon + `metrics-history-cleanup` Periodic；工作体 `services.go`/`metrics.go`） |
+| 3 | rollup warmer（60s） | 独立 daemon `threat-rollup-warmer`（实际实现未并入 `security-events-ingestion`——60s 预热与 2s 摄取节拍/生命周期不同域，独立 daemon 各自启停且零 task_runs 噪音） | 已完成（`taskengine_wire_runtime.go`；工作体 `handlers.RunThreatRollupWarmerRound`） |
+| 4 | caddy-restart 触发源（2s） | 新 daemon `caddy-restart-watcher`（Daemon 生命周期只落 1 行，无 task_runs 噪音） | 已完成（`taskengine_wire_runtime.go`；工作体 `handlers.CaddyRestartWatcherOnce`） |
+| 5 | API-Key last_used（1min/1h） | 新 daemon `apikey-usage-flusher`（循环移出 db 包，db 只暴露 flush/cleanup 函数） | 已完成（`taskengine_wire_runtime.go` `runAPIKeyUsageFlusher`；db 只暴露 `FlushAPIKeyLastUsed`/`CleanupAPIKeyAuxTables`） |
+| 6 | 运行日志尺寸阈值（30s） | 新 daemon `runtime-log-threshold`（装配序调整：daemon 先于日志消费启动） | 已完成（`taskengine_wire_runtime.go`；装配期同步首跑与 daemon 节拍共用 `RefreshRuntimeLogSizeOnce`） |
+| 7 | 时区/日志级别（30s） | 新 daemon `runtime-tz-refresh` | 已完成（`taskengine_wire_runtime.go`；`RefreshTimezoneOnce` 同 Once 口径） |
+| 8 | 限流桶内存清扫（1min） | 新 daemon `ratelimit-bucket-sweep`（middleware 暴露 sweep 函数） | 已完成（`taskengine_wire_runtime.go`；工作体 `middleware.SweepRateLimitBuckets`） |
+| 9 | legacy `RecordRunStart/Finish` | 删除该兜底：`engineRunID<=0` 时响亮失败，不再自写 `task_runs` | 已完成（`internal/taskengine` 符号删除，`task_runs` 唯一写方=引擎终态路径） |
 
 ## 7. 修订记录
+
+- **v2.3（2026-10-30，标准回写与守卫落地）**：按代码实况回写——§0.5 违规表 9 项全部「已归口」并注明去向；§6.5 台账 9 项全部「已完成（实现位置）」，#3 目标口径按实际实现改写（独立 `threat-rollup-warmer` daemon，未并入 ingestion——60s 预热与 2s 摄取不同节拍/生命周期域）；§2 重写为 27 任务（定时 5/常驻 10/循环 11/触发 1）并补齐 8 个运行期任务行；§6.4 行号更新（`internal/acme/issuer.go:491/645/883`；`internal/handlers/config_import_coordinator.go:594-598` 标包路径）并新增「daemon Run 体自管理阻塞循环（形态②）」「引擎附属对账循环」两判据行与 `//scope-exempt` 标注词表（登记 `startRoleReconciler`）；§0.6-1/2 守卫钉测落地（`taskengine_scope_guards_test.go`：注册表断言+静态扫描+词表外类别判红）；§0.2 daemon 形态「节拍不限（零 task_runs 噪音）」；§0.3 删除 `WakeTask` 字样统一为 `RearmLoop(id, hasWork)`；§0.6-4 唤醒守卫措辞改为「业务事件路径禁止 StartLoop；控制面与角色翻转恢复已开启态除外」；legacy `RecordRunStart/Finish` 符号删除（§6/§6.3 不再登记）；钩子未接线的 runtime daemon 契约改为空载体阻塞至停止（零 task_runs 噪音、不触发 premature-exit 重拉）。
 
 - **v2.2（2026-10-30，用户裁定「标准即底线，不得有例外/待办/可接受」）**：删除 §6.4「豁免登记」与一切"后续迁移/可接受"口径，改为**范围外形态判据**（任务体内子协程/运行内有界轮询/一次性协程/引擎内部 tick/Teardown，均按定义排除，不构成豁免）；§0.5 重写为「违规（必须修）／范围外（定义排除）」二分，列出 9 项既有违规；§6.5 改为**归口台账（全部必做）**；§0.6 守卫取消"命中豁免"出口，`StartLoop` 仅限控制面；取消 `BecomeSlave` 强制 `StartLoop` 例外（保持用户停止态 + 显式提示）。
 

@@ -358,7 +358,10 @@ func (m *CRSUpdateManager) downloadAndInstall(parent context.Context, tag string
 	// 先写后失败的版本行回滚——不回滚则
 	// currentCRSVersion() 已为新 tag，下轮自动更新短路「已是最新」、失败被掩盖
 	// 且永不重试（直到重启）。旧 tag 由交换段锁内读出（prevTag）。
-	WriteCRSUpdateLog("INFO", string(CRSStatusReloading), "应用新规则并重载 Caddy")
+	// setStage 双轨（对齐 ip2regionupdate.go 的重载段）：内存态与更新日志同点
+	// 写入——只写日志时 StatusSnapshot 在重载窗口仍显示进入前的阶段，
+	// 状态端点/任务监控看不到 reloading。
+	m.setStage(CRSStatusReloading, "应用新规则并重载 Caddy")
 	if m.reloader != nil {
 		err := m.reloader()
 		recordSystemReloadAudit("crs_update", err)

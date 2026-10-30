@@ -149,13 +149,13 @@ func TestTaskEngineWire_SecurityLibrariesFirstSlotArmed(t *testing.T) {
 	}
 }
 
-// Given 存在 waiting_ca 证书任务且 ca_available_after 非空。
+// Given 存在 failed 证书任务（统一失败语义后的现役形态）且退避窗口仍在未来。
 // When 读取 Descriptor 与任务视图。
 // Then Periodic 不携带 NextSlotFn；视图层仍解析最近 CA 可用时间。
 func TestTaskEngineWire_CertWaitingCANextSlotResolves(t *testing.T) {
 	te := newWireTestEngine(t)
 	future := time.Now().UTC().Add(2 * time.Hour).Format(crsTimeLayout)
-	if _, err := db.DB.Exec(`INSERT INTO cert_jobs (rule_id, domain, status, ca_available_after) VALUES ('r1','a.example.com','waiting_ca',?)`, future); err != nil {
+	if _, err := db.DB.Exec(`INSERT INTO cert_jobs (rule_id, domain, status, ca_available_after) VALUES ('r1','a.example.com','failed',?)`, future); err != nil {
 		t.Fatal(err)
 	}
 	meta, ok := te.Lookup("cert-waiting-ca")
@@ -168,7 +168,7 @@ func TestTaskEngineWire_CertWaitingCANextSlotResolves(t *testing.T) {
 	for _, ti := range collectEngineFamilies(te) {
 		if ti.ID == "cert-waiting-ca" {
 			if ti.NextRunAt == "" {
-				t.Fatal("waiting_ca 存在时视图 NextRunAt 应非空（最近 CA 可用时间）")
+				t.Fatal("failed 行携带未到期窗口时视图 NextRunAt 应非空（最近 CA 可用时间）")
 			}
 			return
 		}

@@ -73,6 +73,7 @@ func masterSyncServingLoop(ctx context.Context) {
 		lagSince:       map[int64]time.Time{},
 	}
 	masterSyncServingRound(ctx, time.Now(), w) // 启动即首轮
+	//scope-exempt: daemon-run-body-loop —— §0.2 形态② daemon Run 体自管理阻塞循环（主节点服务面巡检，ctx 取消即退）
 	ticker := time.NewTicker(masterSyncInspectInterval)
 	defer ticker.Stop()
 	for {

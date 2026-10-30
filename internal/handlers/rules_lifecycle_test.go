@@ -893,10 +893,17 @@ func TestListRules_omitsTLSMaterialAndDerivationHits(t *testing.T) {
 }
 
 // 治理默认值单源：治理默认值列绑定 db.Default* 常量（源码不得回流写死字面量）。
+// 覆盖面=rule_features.go 的 lbRuleColumns + rules.go 的 UpdateRule 存量合并查询
+// （读侧 COALESCE 默认值与 schema DEFAULT/写侧校验同源）。strategy/tls_source/
+// compress_types 三处文本默认值在 db 包无常量，保持字面量（rules.go 查询注释说明）。
 func TestLbRuleColumns_governedDefaultsBindConstants(t *testing.T) {
 	src, err := os.ReadFile("rule_features.go")
 	if err != nil {
 		t.Fatalf("read rule_features.go: %v", err)
+	}
+	rulesSrc, err := os.ReadFile("rules.go")
+	if err != nil {
+		t.Fatalf("read rules.go: %v", err)
 	}
 	for _, literal := range []string{
 		"COALESCE(health_check_interval,10)",
@@ -905,24 +912,31 @@ func TestLbRuleColumns_governedDefaultsBindConstants(t *testing.T) {
 		"COALESCE(health_check_healthy_threshold,2)",
 		"COALESCE(tcp_try_interval,250)",
 	} {
-		if strings.Contains(string(src), literal) {
-			t.Fatalf("rule_features.go 仍含写死治理默认值 %q（应绑定 db.Default* 常量）", literal)
+		for name, content := range map[string]string{"rule_features.go": string(src), "rules.go": string(rulesSrc)} {
+			if strings.Contains(content, literal) {
+				t.Fatalf("%s 仍含写死治理默认值 %q（应绑定 db.Default* 常量）", name, literal)
+			}
 		}
 	}
 	bindings := []struct {
 		fragment string
 		value    int
+		constRef string
 	}{
-		{"COALESCE(health_check_interval,%d)", db.DefaultHealthCheckInterval},
-		{"COALESCE(health_check_timeout,%d)", db.DefaultHealthCheckTimeout},
-		{"COALESCE(health_check_unhealthy_threshold,%d)", db.DefaultHealthCheckUnhealthyThreshold},
-		{"COALESCE(health_check_healthy_threshold,%d)", db.DefaultHealthCheckHealthyThreshold},
-		{"COALESCE(tcp_try_interval,%d)", db.DefaultTCPTryInterval},
+		{"COALESCE(health_check_interval,%d)", db.DefaultHealthCheckInterval, "db.DefaultHealthCheckInterval"},
+		{"COALESCE(health_check_timeout,%d)", db.DefaultHealthCheckTimeout, "db.DefaultHealthCheckTimeout"},
+		{"COALESCE(health_check_unhealthy_threshold,%d)", db.DefaultHealthCheckUnhealthyThreshold, "db.DefaultHealthCheckUnhealthyThreshold"},
+		{"COALESCE(health_check_healthy_threshold,%d)", db.DefaultHealthCheckHealthyThreshold, "db.DefaultHealthCheckHealthyThreshold"},
+		{"COALESCE(tcp_try_interval,%d)", db.DefaultTCPTryInterval, "db.DefaultTCPTryInterval"},
 	}
 	for _, binding := range bindings {
 		want := fmt.Sprintf(binding.fragment, binding.value)
 		if !strings.Contains(lbRuleColumns, want) {
 			t.Fatalf("lbRuleColumns 缺少常量绑定后的列 %q", want)
+		}
+		// rules.go 的内联查询走 db.go 迁移同款 fmt.Sprint 拼接绑定。
+		if !strings.Contains(string(rulesSrc), "fmt.Sprint("+binding.constRef+")") {
+			t.Fatalf("rules.go 缺少常量绑定 %q（UpdateRule 存量合并查询）", binding.constRef)
 		}
 	}
 }

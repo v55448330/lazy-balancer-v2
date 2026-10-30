@@ -6,6 +6,7 @@ package services
 
 import (
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -191,4 +192,73 @@ func TestTaskLoopPrefs_staleRowPurgedAndTimestampUsesConfigWallClock(t *testing.
 	if delta := time.Since(got); delta > time.Minute || delta < -time.Minute {
 		t.Fatalf("updated_at=%q 与配置时区墙钟相差 %v（应为墙钟，非 UTC datetime('now')）", updatedAt, delta)
 	}
+}
+
+// Given 用户显式停止 runtime 生命周期 daemon（metrics-collector、
+// runtime-tz-refresh）并落偏好；When 经完整 InitTaskEngine 装配路径重启引擎；
+// Then ①偏好行仍在（装配期不得把已注册任务的停止偏好当注册表外残行删除）
+// ②两个任务保持停止态（loop_on=false、无新执行行）③默认应启动的 runtime
+// 任务（ratelimit-bucket-sweep）正常拉起且首跑执行。
+func TestInitTaskEngine_runtimeDaemonStopPrefSurvivesReinit(t *testing.T) {
+	te := newWireTestEngine(t)
+	for _, id := range []string{"metrics-collector", "runtime-tz-refresh"} {
+		if !te.IsRunning(id) {
+			t.Fatalf("前置态：%s 应在默认启动清单内运行", id)
+		}
+	}
+	for _, id := range []string{"metrics-collector", "runtime-tz-refresh"} {
+		te.StopLoop(id)
+		if err := RecordTaskLoopPref(id, false); err != nil {
+			t.Fatalf("record pref(%s): %v", id, err)
+		}
+	}
+	var sweeps atomic.Int32
+	SetRateLimitBucketSweep(func() int { sweeps.Add(1); return 0 })
+	t.Cleanup(func() { SetRateLimitBucketSweep(nil) })
+
+	// 基线在上一代引擎完全停机、执行行全部落定之后捕获：daemon 取消完成时
+	// 的落行是异步的，停机前快照会把 te1 自己的收尾行误记为复活执行。
+	StopTaskEngine()
+	before := map[string]int{
+		"metrics-collector":  taskRunCountForTest(t, "metrics-collector"),
+		"runtime-tz-refresh": taskRunCountForTest(t, "runtime-tz-refresh"),
+	}
+
+	te2 := InitTaskEngine("", t.TempDir()+"/app.log")
+
+	// ① 偏好行仍在：装配期不得把已注册任务的停止偏好当注册表外残行删除。
+	prefs := loadTaskLoopPrefs()
+	for _, id := range []string{"metrics-collector", "runtime-tz-refresh"} {
+		enabled, ok := prefs[id]
+		if !ok {
+			t.Fatalf("偏好行丢失：%s 的显式停止偏好被装配期清理误删", id)
+		}
+		if enabled {
+			t.Fatalf("偏好行 %s 应为停止（enabled=0），实际 enabled=1", id)
+		}
+	}
+
+	// ② 停止态保持：默认启动清单与注册期拉起都不得复活显式停止的 daemon。
+	for _, id := range []string{"metrics-collector", "runtime-tz-refresh"} {
+		meta, ok := te2.Lookup(id)
+		if !ok {
+			t.Fatalf("任务 %s 未注册", id)
+		}
+		if meta.LoopOn {
+			t.Fatalf("显式停止的 %s 重启后被复活（loop_on=true）", id)
+		}
+		if te2.IsRunning(id) {
+			t.Fatalf("显式停止的 %s 重启后处于运行态", id)
+		}
+		if after := taskRunCountForTest(t, id); after != before[id] {
+			t.Fatalf("停止态 %s 不得产生新执行行：task_runs %d -> %d", id, before[id], after)
+		}
+	}
+
+	// ③ 默认应启动的 runtime 任务正常拉起且首跑执行（bootstrap 立即一轮）。
+	meta, ok := te2.Lookup("ratelimit-bucket-sweep")
+	if !ok || !meta.LoopOn {
+		t.Fatalf("默认启动的 runtime 任务 ratelimit-bucket-sweep 未拉起（registered=%v loop_on=%v）", ok, meta.LoopOn)
+	}
+	waitForCond(t, 3*time.Second, func() bool { return sweeps.Load() >= 1 })
 }

@@ -2576,8 +2576,8 @@ func globalInsertRunAt(taskID, family, trigger, startedAt, operator string) int6
 }
 
 // updateTaskRunTerminal 任务运行终态的唯一 UPDATE 写点（finishRun /
-// finishRunWithMessage / RecordRunFinish 三入口共用，避免 SQL/告警文案三份
-// 同形漂移）。nil 库与非法 runID 守卫内置；空 message 不写 message 列
+// finishRunWithMessage 两入口共用，避免 SQL/告警文案双份同形漂移）。nil 库与
+// 非法 runID 守卫内置；空 message 不写 message 列
 // （既有行语义：无消息=NULL，读侧 COALESCE 归一为空串）。
 //
 // 更新失败按有界退避重试（SQLITE_BUSY/瞬断）——无条件放弃会让该行滞留
@@ -2635,18 +2635,6 @@ func (e *Engine) finishRun(runID int64, status string, durMs int64) {
 }
 
 func (e *Engine) finishRunWithMessage(runID int64, status string, durMs int64, message string) {
-	updateTaskRunTerminal(runID, status, durMs, message)
-}
-
-// RecordRunStart/Finish 族侧记录（legacy 路径：非引擎调用的直接执行）
-func RecordRunStart(taskID, family, trigger string) int64 {
-	return globalInsertRun(taskID, family, trigger)
-}
-
-func RecordRunFinish(runID int64, status string, durMs int64, message string) {
-	// 与同文件其余导出 DB 函数同形的 nil 防护——
-	// legacy 直调路径在装配顺序变化/测试环境下 db.DB 可能为 nil（裸 Exec
-	// 即 panic）。
 	updateTaskRunTerminal(runID, status, durMs, message)
 }
 

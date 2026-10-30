@@ -219,6 +219,21 @@ test('需人工横幅指纹：行 id+updated_at；localStorage 记忆后新增/�
   }
 })
 
+test('双标签 dismiss 不互覆：save 前重读 localStorage 合并', () => {
+  const browser = installBrowserHost({ localStorage: new Map() })
+  try {
+    saveCertManualBannerDismissed(['3:2026-10-30T01:00:00Z'])
+    // 模拟另一标签页（内存副本不含上一条）关闭自己的行后保存——后保存方
+    // 不得覆盖先保存方已落库的指纹（否则另一标签的横幅重现）。
+    saveCertManualBannerDismissed(['9:2026-10-30T05:00:00Z'])
+    const merged = loadCertManualBannerDismissed()
+    assert.ok(merged.has('3:2026-10-30T01:00:00Z'), '先保存标签的 dismiss 不得被覆盖')
+    assert.ok(merged.has('9:2026-10-30T05:00:00Z'), '后保存标签的 dismiss 照常落库')
+  } finally {
+    browser.restore()
+  }
+})
+
 test('CertJobs.vue 消费面接线：派生 hover/failed-only 重试列/冷却列档位/横幅指纹', () => {
   const page = code('src/views/settings/CertJobs.vue')
   // 状态列：标签与 hover 都走派生单源（SFC 侧薄包装与 renewalAt/statusType 同约定）

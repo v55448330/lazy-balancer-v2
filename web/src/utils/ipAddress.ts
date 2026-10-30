@@ -138,12 +138,30 @@ export const canonicalV6Text = (value: string): string | null => {
   return groups === null ? null : compressV6Groups(groups)
 }
 
-/** IPv4 → 32 位无符号整数；无法解析返回 -1（调用方以此为非法哨兵）。 */
+/** 事件侧宽容 IPv4 解析单源（toV4Long 的实现基座）。
+ *  既定口径（与 toV6BigInt 同族，事件匹配侧不收紧——securityStages 事件匹配
+ *  消费引擎上报形态）：首尾空白容忍、`%zone` 丢弃、前导零按十进制数值收。
+ *  与 split+Number 的历史写法的本质差异：空段/空白段/非十进制形态（`0x1`、
+ *  `1e2`、`+1`）一律拒绝——Number('')===0 会把 `1.2.3.`、`1. .2.3` 放行为
+ *  0 段，制造从未存在于引擎上报中的地址。写侧预校验不得用本函数（用
+ *  parseIPv4Octets({allowLeadingZeros:false})）。模块私有——唯一消费方是
+ *  同文件的 toV4Long（exportSurface 守卫禁止零外部消费的导出）。 */
+const parseIPv4Lenient = (address: string): readonly number[] | null => {
+  const text = address.trim()
+  const zone = text.indexOf('%')
+  const body = zone >= 0 ? text.slice(0, zone) : text
+  if (!/^\d{1,3}(\.\d{1,3}){3}$/.test(body)) return null
+  const octets = body.split('.').map((part) => Number(part))
+  if (octets.some((octet) => octet > 255)) return null
+  return octets
+}
+
+/** IPv4 → 32 位无符号整数；无法解析返回 -1（调用方以此为非法哨兵）。
+ *  走事件侧宽容单源 parseIPv4Lenient（zone 宽容 + 前导零按数值 + 空段拒绝）。 */
 export const toV4Long = (address: string): number => {
-  const parts = address.split('.').map(Number)
-  if (parts.length !== 4 || parts.some((part) => Number.isNaN(part) || part < 0 || part > 255)) return -1
-  const [a = 0, b = 0, c = 0, d = 0] = parts
-  return (((a << 24) | (b << 16) | (c << 8) | d) >>> 0)
+  const octets = parseIPv4Lenient(address)
+  if (!octets) return -1
+  return (((octets[0]! << 24) | (octets[1]! << 16) | (octets[2]! << 8) | octets[3]!) >>> 0)
 }
 
 /** IPv6 → 128 位无符号整数；无法解析返回 null。`%zone` 丢弃（引擎上报的

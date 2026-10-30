@@ -676,6 +676,7 @@ func (s *CertificateService) scheduleDelayedReload(jobID int, ruleID string, del
 	entry := &delayedReloadTimer{}
 	s.delayedReloads[jobID] = entry
 	ctx := s.ctx
+	//scope-exempt: one-shot-deadline-callback —— 单次部署生效延迟重载（canceled/stopping 收口，不跨调用自续）
 	entry.timer = time.AfterFunc(delay, func() {
 		s.timerMu.Lock()
 		if s.delayedReloads[jobID] == entry {
@@ -785,6 +786,7 @@ func (s *CertificateService) scheduleDeploymentRetry(jobID int, ruleID string, d
 		}
 		entry := &deploymentTimer{done: make(chan struct{}), ruleID: ruleID}
 		entry.ctx, entry.cancel = context.WithCancel(s.ctx)
+		//scope-exempt: one-shot-deadline-callback —— 单次部署重试延迟回调（canceled/stopping 收口，补扫/Resume 兜底）
 		entry.timer = time.AfterFunc(delay, func() {
 			s.timerMu.Lock()
 			if s.deploymentTimers[jobID] == entry {
@@ -1530,7 +1532,8 @@ type waitingCACandidate struct {
 // 候选谓词（B2 失败语义统一）：status='failed' 且退避窗口（ca_available_after）
 // 已到期。窗口 NULL 的 failed 行不收：已达 cert_renewal_attempts 上限的行停止
 // 自动重试（仅手动），NULL 只可能来自上限终态/导入/旧备份——上限行有续期巡检
-// 的上限分支告警，导入行有启动恢复/手动重试通道，不需要本扫描复活。
+// 的上限分支告警；导入行经导入期归一为 failed（db.NormalizeWaitingCACertJobs），
+// 带窗口的行走本补扫自动通道，启动迁移兜底旧库存量。
 func (s *CertificateService) scanWaitingCACandidates() ([]waitingCACandidate, []error, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1774,6 +1777,10 @@ func CountNonTerminalCertJobs(ctx context.Context) (int, error) {
 }
 
 func requeueNonTerminalCertJobs(ctx context.Context, deploymentRetry func(int, issuedCertificate, time.Duration) error) error {
+	// waiting_ca 子句已删除（此前按冷却窗口放行）：waiting_ca 由启动迁移
+	//（db_migration_cert_failure）先行归一为 failed，配置导入/还原提交后
+	// 也经 db.NormalizeWaitingCACertJobs 归一——本查询时库内不存在
+	// waiting_ca 行，不再防御（防御反而掩盖归一断链）。
 	rows, err := db.DB.QueryContext(ctx, `
 		SELECT j.id, j.rule_id, j.domain, j.status, COALESCE(j.ca_provider_id,0), COALESCE(j.deployment_attempts,0), j.deployment_available_after,
 		       COALESCE(r.domain,''), CASE WHEN r.caddy_id IS NOT NULL AND r.enabled=1 AND r.enable_tls=1 AND r.tls_source='acme_dns' THEN 1 ELSE 0 END,
@@ -1781,7 +1788,6 @@ func requeueNonTerminalCertJobs(ctx context.Context, deploymentRetry func(int, i
 		FROM cert_jobs j
 		LEFT JOIN lb_rules r ON r.caddy_id=j.rule_id
 		WHERE j.status != 'disabled'
-		  AND (j.status != 'waiting_ca' OR j.ca_available_after IS NULL OR datetime(j.ca_available_after) <= datetime('now'))
 	`)
 	if err != nil {
 		return fmt.Errorf("query non-terminal certificate jobs: %w", err)
@@ -2846,8 +2852,10 @@ func (s *CertificateService) CheckExpiration(ctx context.Context) ([]models.Cert
 const firstIssuanceRetryCooldownMinutes = 30
 
 // checkFailedFirstIssuance 返回首次签发失败（expires_at IS NULL，从未签发成功）、
-// 已过冷却期且未达最大重试次数的证书任务，供续期巡检自动重试。规则筛选与
-// 已有证书判读逻辑与 CheckExpiration 保持一致。
+// 已过冷却期、退避窗口已到期（或 NULL）且未达最大重试次数的证书任务，供续期
+// 巡检自动重试。窗口门与 CheckExpiration 的 failed 行门控同口径：窗口仍在未来
+// 的行（含 429 Retry-After）不进入候选，否则首发失败行会绕过退避窗口反复撞 CA。
+// 规则筛选与已有证书判读逻辑与 CheckExpiration 保持一致。
 // 查询/遍历失败显式上抛（同 CheckExpiration），不得吞成「无候选」。
 func (s *CertificateService) checkFailedFirstIssuance(ctx context.Context, maxAttempts int) ([]models.CertJob, int, error) {
 	s.mu.Lock()
@@ -2867,6 +2875,7 @@ func (s *CertificateService) checkFailedFirstIssuance(ctx context.Context, maxAt
 		  AND j.expires_at IS NULL
 		  AND COALESCE(j.renewal_attempts,0) < ?
 		  AND datetime(COALESCE(j.updated_at,j.created_at)) <= datetime('now', '-' || ? || ' minutes')
+		  AND (j.ca_available_after IS NULL OR datetime(j.ca_available_after) <= datetime('now'))
 		  AND r.enabled=1 AND r.enable_tls=1 AND r.tls_source='acme_dns'
 		ORDER BY j.updated_at ASC
 	`, maxAttempts, firstIssuanceRetryCooldownMinutes)

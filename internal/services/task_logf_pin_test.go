@@ -199,7 +199,7 @@ var expectedTaskKinds = map[string]taskengine.Kind{
 
 // Given v2.0 四类型标准全量注册。
 // When DescribeAll。
-// Then Kind 映射：定时 5、循环 10、常驻 3、触发 1；cert-waiting-ca 默认 LoopOn=false。
+// Then Kind 映射：定时 5、循环 11、常驻 10、触发 1；cert-waiting-ca 默认 LoopOn=false。
 func TestTaskEngineWire_KindMapping(t *testing.T) {
 	te := newWireTestEngine(t)
 	got := map[string]taskengine.TaskMeta{}

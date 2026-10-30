@@ -6,11 +6,12 @@ package services
 // 按 task-engine 标准 v2.2 归口为注册任务。唯一许可的执行形态=Daemon +
 // taskengine.RunTicker（或 Periodic）。
 //
-// 【由 InitTaskEngine 调用】registerRuntimeLifecycleTasks(te)（调用接线由主审
-// 完成）。推荐插入点：InitTaskEngine 尾部 ResumeScheduling() 之后、
-// startRoleReconciler(te) 之前——此时偏好已应用、调度已恢复，StartLoop 语义
-// 与默认启动清单一致。本函数自带偏好门（显式停止的 daemon 不启动），插在
-// applyTaskLoopPrefs 之前/之后均安全。
+// 【由 InitTaskEngine 调用】registerRuntimeLifecycleTasks(te, taskLoopPrefs)。
+// 插入点：默认启动清单 StartLoop 之后、applyTaskLoopPrefs 之前——消费调用方
+// 在装配起点读取的同一份偏好快照（函数内不二次查表，两段装配共用单一读取）。
+// 显式停止的 daemon 注册即保持停止（跳过 StartLoop，无偏好行=默认启动清单
+// 照常）；注册先于偏好套用，偏好行此时已归属注册表内任务，不会被套用阶段的
+// 注册表外残行清理误删。
 //
 // 装配期同步首跑：runtime-log-threshold 与 runtime-tz-refresh 的阈值/时区
 // 读取在注册时同步执行一次（同一 Once 函数），避免 daemon 异步首跑前面板
@@ -22,9 +23,10 @@ package services
 //   - SetCaddyRestartWatcherRound   handlers.CaddyRestartWatcherOnce 闭包
 //   - SetRateLimitBucketSweep       middleware.SweepRateLimitBuckets 闭包
 //
-// 钩子未接线（测试/极早窗口）时 daemon Run 立即返回 nil（空闲、零噪音、
-// 不产任务行）——生产 main 在 InitTaskEngine 之前完成全部注入；db 直连工作体
-// （apikey flusher/时区/日志阈值）无钩子、恒工作。
+// 钩子未接线（测试/极早窗口）时 daemon Run 以空载体阻塞至 ctx.Done——零
+// task_runs 噪音，也不得以「立即净返回」制造 premature-exit 异常信号（烧自愈
+// 预算→停调）。生产 main 在 InitTaskEngine 之前完成全部注入，空载体仅在测试
+// /极早窗口出现；db 直连工作体（apikey flusher/时区/日志阈值）无钩子、恒工作。
 
 import (
 	"context"
@@ -101,7 +103,9 @@ func currentRateLimitBucketSweep() func() int {
 
 // registerRuntimeLifecycleTasks 注册运行期生命周期任务族并按默认启动清单拉起
 // （用户显式停止的 daemon 经偏好门跳过——见文件头「由 InitTaskEngine 调用」）。
-func registerRuntimeLifecycleTasks(te *taskengine.Engine) {
+// taskLoopPrefs 为调用方在装配起点读取的偏好快照，是本函数启动决策的唯一
+// 事实源（函数内不二次查表）。
+func registerRuntimeLifecycleTasks(te *taskengine.Engine, taskLoopPrefs map[string]bool) {
 	// 装配期同步首跑（避免阈值/时区空窗——与 daemon 节拍共用同一 Once 函数）。
 	RefreshRuntimeLogSizeOnce()
 	RefreshTimezoneOnce()
@@ -116,7 +120,9 @@ func registerRuntimeLifecycleTasks(te *taskengine.Engine) {
 		Run: func(rc taskengine.RunContext) error {
 			m := currentMetricsCollector()
 			if m == nil {
-				return nil // 未接线（测试/未装配）：零工作；生产装配先于 InitTaskEngine
+				// 未接线（测试/极早窗口）：空载体阻塞至停止（零噪音、不触发自愈重拉）。
+				<-rc.Ctx.Done()
+				return nil
 			}
 			taskengine.RunTicker(rc.Ctx, m.tickerInterval(), nil, func(context.Context) { m.collect() })
 			return nil
@@ -150,6 +156,8 @@ func registerRuntimeLifecycleTasks(te *taskengine.Engine) {
 		Run: func(rc taskengine.RunContext) error {
 			round := currentThreatRollupWarmerRound()
 			if round == nil {
+				// 未接线（测试/极早窗口）：空载体阻塞至停止（零噪音、不触发自愈重拉）。
+				<-rc.Ctx.Done()
 				return nil
 			}
 			taskengine.RunTicker(rc.Ctx, time.Minute, nil, func(context.Context) {
@@ -171,6 +179,8 @@ func registerRuntimeLifecycleTasks(te *taskengine.Engine) {
 		Run: func(rc taskengine.RunContext) error {
 			round := currentCaddyRestartWatcherRound()
 			if round == nil {
+				// 未接线（测试/极早窗口）：空载体阻塞至停止（零噪音、不触发自愈重拉）。
+				<-rc.Ctx.Done()
 				return nil
 			}
 			taskengine.RunTicker(rc.Ctx, 2*time.Second, nil, func(context.Context) { round() })
@@ -188,6 +198,8 @@ func registerRuntimeLifecycleTasks(te *taskengine.Engine) {
 		Run: func(rc taskengine.RunContext) error {
 			sweep := currentRateLimitBucketSweep()
 			if sweep == nil {
+				// 未接线（测试/极早窗口）：空载体阻塞至停止（零噪音、不触发自愈重拉）。
+				<-rc.Ctx.Done()
 				return nil
 			}
 			taskengine.RunTicker(rc.Ctx, time.Minute, nil, func(context.Context) { _ = sweep() })
@@ -235,9 +247,8 @@ func registerRuntimeLifecycleTasks(te *taskengine.Engine) {
 	})
 
 	// 默认启动清单（常驻/循环族默认运行；用户显式停止的按偏好保持停止，
-	// 语义与 InitTaskEngine 内置默认清单一致——先读偏好再 StartLoop，
-	// 不留假启动记录）。
-	taskLoopPrefs := loadTaskLoopPrefs()
+	// 语义与 InitTaskEngine 内置默认清单一致——先查偏好再 StartLoop，
+	// 不留假启动记录；偏好来自调用方传入的快照，函数内不二次查表）。
 	for _, id := range []string{
 		"metrics-collector", "metrics-history-cleanup",
 		"threat-rollup-warmer", "caddy-restart-watcher",

@@ -4022,14 +4022,21 @@ func TestOIDCDupIdentityMarker_persistenceFailureDisclosed(t *testing.T) {
 // B2：ACME 失败语义统一——存量 waiting_ca 行迁移为 failed（waiting_ca 停车
 // 状态退役）。保留 message/次数/窗口/错误码：窗口仍在未来的行由 30s 补扫按
 // 到期重排；已达上限（窗口 NULL）的行停留 failed 仅手动重试。
+// 窗口已过期的行同步把 message 追加终态说明——否则「message 说等待冷却、
+// 冷却却已过」的显示滞后会误导排障（幂等：已含标记不重复追加）。
 func TestMigrateCertJobsWaitingCA_convertsToFailedAndRetainsFields(t *testing.T) {
 	database := openMigrationTestDB(t)
 	createLegacyCertJobs(t, database, "'queued'",
 		"'queued','failed','waiting_ca','issued','disabled'")
+	// 窗口一律用相对 now 的表达式——写死墙钟日期会在日期翻越后窗口过期、
+	// 断言反向（未来窗加注/过期窗不加注）。
 	if _, err := database.Exec(`INSERT INTO cert_jobs (rule_id, domain, status, message, renewal_attempts, ca_available_after, last_error_code) VALUES
-		('lb_w1', 'w1.example', 'waiting_ca', '等待 CA 频率限制冷却', 2, '2026-10-30 12:00:00', '429'),
+		('lb_w1', 'w1.example', 'waiting_ca', '等待 CA 频率限制冷却', 2, datetime('now','+2 hours'), '429'),
 		('lb_w2', 'w2.example', 'waiting_ca', 'CA 频率限制，已达到最大重试次数 5', 5, NULL, '429'),
-		('lb_f1', 'f1.example', 'failed', '普通失败', 1, NULL, NULL)`); err != nil {
+		('lb_w3', 'w3.example', 'waiting_ca', '等待 CA 频率限制冷却', 3, datetime('now','-2 hours'), '429'),
+		('lb_f1', 'f1.example', 'failed', '普通失败', 1, NULL, NULL),
+		('lb_f2', 'f2.example', 'failed', '退避窗口到期未重排', 1, datetime('now','-1 minute'), NULL),
+		('lb_f3', 'f3.example', 'failed', '退避窗口到期未重排（冷却已过期，可直接重试）', 1, datetime('now','-1 minute'), NULL)`); err != nil {
 		t.Fatalf("seed legacy waiting_ca jobs: %v", err)
 	}
 
@@ -4038,41 +4045,60 @@ func TestMigrateCertJobsWaitingCA_convertsToFailedAndRetainsFields(t *testing.T)
 		t.Fatalf("migrate waiting_ca jobs: %v", err)
 	}
 
-	// Then：waiting_ca 行转 failed，其余字段原样保留；failed 行不受影响。
-	rows, err := database.Query(`SELECT rule_id, status, COALESCE(message,''), COALESCE(renewal_attempts,0), ca_available_after, COALESCE(last_error_code,'')
+	// Then：waiting_ca 行转 failed，其余字段原样保留；窗口已过期的行 message
+	// 追加终态说明；窗口在未来的行与 NULL 窗口行不加注。
+	readMessages := func() []string {
+		t.Helper()
+		rows, err := database.Query(`SELECT rule_id, status, COALESCE(message,''), COALESCE(renewal_attempts,0), ca_available_after, COALESCE(last_error_code,'')
 		FROM cert_jobs ORDER BY id`)
-	if err != nil {
-		t.Fatalf("read migrated jobs: %v", err)
-	}
-	defer rows.Close()
-	type row struct {
-		ruleID, status, message, errorCode string
-		attempts                           int
-		window                             any
-	}
-	var got []row
-	for rows.Next() {
-		var r row
-		if err := rows.Scan(&r.ruleID, &r.status, &r.message, &r.attempts, &r.window, &r.errorCode); err != nil {
-			t.Fatalf("scan migrated job: %v", err)
+		if err != nil {
+			t.Fatalf("read migrated jobs: %v", err)
 		}
-		got = append(got, r)
+		defer rows.Close()
+		type row struct {
+			ruleID, status, message, errorCode string
+			attempts                           int
+			window                             any
+		}
+		var got []row
+		for rows.Next() {
+			var r row
+			if err := rows.Scan(&r.ruleID, &r.status, &r.message, &r.attempts, &r.window, &r.errorCode); err != nil {
+				t.Fatalf("scan migrated job: %v", err)
+			}
+			got = append(got, r)
+		}
+		if err := rows.Err(); err != nil {
+			t.Fatalf("iterate migrated jobs: %v", err)
+		}
+		if len(got) != 6 {
+			t.Fatalf("rows=%d, want 6", len(got))
+		}
+		if got[0].ruleID != "lb_w1" || got[0].status != "failed" || got[0].message != "等待 CA 频率限制冷却" || got[0].attempts != 2 || got[0].window == nil || got[0].errorCode != "429" {
+			t.Fatalf("lb_w1=%+v, want failed + 字段保留（含窗口，窗口在未来不加注）", got[0])
+		}
+		if got[1].ruleID != "lb_w2" || got[1].status != "failed" || got[1].attempts != 5 || got[1].window != nil || got[1].message != "CA 频率限制，已达到最大重试次数 5" {
+			t.Fatalf("lb_w2=%+v, want failed + NULL 窗口保留（已达上限仅手动重试，不加注）", got[1])
+		}
+		if got[2].ruleID != "lb_w3" || got[2].status != "failed" || got[2].message != "等待 CA 频率限制冷却（冷却已过期，可直接重试）" || got[2].window == nil {
+			t.Fatalf("lb_w3=%+v, want failed + 窗口保留 + message 追加过期终态说明", got[2])
+		}
+		if got[3].ruleID != "lb_f1" || got[3].status != "failed" || got[3].message != "普通失败" || got[3].window != nil {
+			t.Fatalf("lb_f1=%+v, want failed 行零改动（NULL 窗口不加注）", got[3])
+		}
+		if got[4].ruleID != "lb_f2" || got[4].status != "failed" || got[4].message != "退避窗口到期未重排（冷却已过期，可直接重试）" {
+			t.Fatalf("lb_f2=%+v, want 存量 failed 过期行 message 同步追加终态说明", got[4])
+		}
+		if got[5].ruleID != "lb_f3" || got[5].status != "failed" || got[5].message != "退避窗口到期未重排（冷却已过期，可直接重试）" {
+			t.Fatalf("lb_f3=%+v, want 已含标记的行不重复追加", got[5])
+		}
+		messages := make([]string, len(got))
+		for i, r := range got {
+			messages[i] = r.message
+		}
+		return messages
 	}
-	if err := rows.Err(); err != nil {
-		t.Fatalf("iterate migrated jobs: %v", err)
-	}
-	if len(got) != 3 {
-		t.Fatalf("rows=%d, want 3", len(got))
-	}
-	if got[0].ruleID != "lb_w1" || got[0].status != "failed" || got[0].message != "等待 CA 频率限制冷却" || got[0].attempts != 2 || got[0].window == nil || got[0].errorCode != "429" {
-		t.Fatalf("lb_w1=%+v, want failed + 字段保留（含窗口）", got[0])
-	}
-	if got[1].ruleID != "lb_w2" || got[1].status != "failed" || got[1].attempts != 5 || got[1].window != nil {
-		t.Fatalf("lb_w2=%+v, want failed + NULL 窗口保留（已达上限仅手动重试）", got[1])
-	}
-	if got[2].ruleID != "lb_f1" || got[2].status != "failed" || got[2].message != "普通失败" {
-		t.Fatalf("lb_f2=%+v, want failed 行零改动", got[2])
-	}
+	first := readMessages()
 
 	// 改写存量状态必须留痕（系统审计）。
 	audited := false
@@ -4085,8 +4111,50 @@ func TestMigrateCertJobsWaitingCA_convertsToFailedAndRetainsFields(t *testing.T)
 		t.Fatal("waiting_ca→failed 迁移缺少系统审计记录")
 	}
 
-	// 幂等：二次执行零改动零报错。
+	// 幂等：二次执行零改动零报错（含 message 追加不重复）。
 	if err := migrateCertJobsWaitingCA(); err != nil {
 		t.Fatalf("re-migrate: %v", err)
+	}
+	for i, message := range readMessages() {
+		if message != first[i] {
+			t.Fatalf("二次迁移后第 %d 行 message=%q, want 与首轮一致（幂等零改动）", i, message)
+		}
+	}
+}
+
+// 配置导入/还原与启动迁移共用 NormalizeWaitingCACertJobs：waiting_ca 行保窗
+// 归一为 failed（保留 message/次数/窗口/错误码），返回归一行数，二次执行零命中。
+func TestMigrateCertJobsWaitingCA_normalizeHelperPreservesFieldsAndCounts(t *testing.T) {
+	database := openMigrationTestDB(t)
+	createLegacyCertJobs(t, database, "'queued'",
+		"'queued','failed','waiting_ca','issued','disabled'")
+	if _, err := database.Exec(`INSERT INTO cert_jobs (rule_id, domain, status, message, renewal_attempts, ca_available_after, last_error_code) VALUES
+		('lb_n1', 'n1.example', 'waiting_ca', '等待 CA 冷却', 1, datetime('now','+1 hour'), '429'),
+		('lb_n2', 'n2.example', 'failed', '普通失败', 2, NULL, NULL)`); err != nil {
+		t.Fatalf("seed waiting_ca job: %v", err)
+	}
+
+	changed, err := NormalizeWaitingCACertJobs()
+	if err != nil {
+		t.Fatalf("normalize: %v", err)
+	}
+	if changed != 1 {
+		t.Fatalf("changed=%d, want 1（仅 waiting_ca 行）", changed)
+	}
+	var status, message, errorCode string
+	var attempts int
+	var window any
+	if err := database.QueryRow(`SELECT status, COALESCE(message,''), COALESCE(renewal_attempts,0), COALESCE(last_error_code,''), ca_available_after FROM cert_jobs WHERE rule_id='lb_n1'`).Scan(&status, &message, &attempts, &errorCode, &window); err != nil {
+		t.Fatalf("read normalized job: %v", err)
+	}
+	if status != "failed" || message != "等待 CA 冷却" || attempts != 1 || errorCode != "429" || window == nil {
+		t.Fatalf("job=(status=%s message=%s attempts=%d code=%s window=%v), want failed 且保窗保字段", status, message, attempts, errorCode, window)
+	}
+	again, err := NormalizeWaitingCACertJobs()
+	if err != nil {
+		t.Fatalf("re-normalize: %v", err)
+	}
+	if again != 0 {
+		t.Fatalf("二次归一 changed=%d, want 0（幂等零命中）", again)
 	}
 }

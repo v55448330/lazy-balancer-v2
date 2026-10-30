@@ -272,10 +272,10 @@ func (h *Handlers) CancelSystemTask(c *gin.Context) {
 }
 
 // ControlSystemTask 常驻循环启停（admin；body {"action":"start|stop|restart"}）。
-// 现形态——Controllable = Kind==Daemon（引擎元数据驱动），
-// 仅常驻族（security-events-ingestion/cert-issuance/cluster-sync）可控；Periodic
-// 族（cert-waiting-ca 等）启停走 toggle 端点，本端点对其恒 400。v2.0 前
-// 「Continuous 族可控」注释已随四类型标准作废。
+// 现形态——Controllable = Kind==Daemon（引擎元数据驱动），Kind=daemon 恒可控；
+// 可控族清单以 GET /system/tasks 下发的 controllable 字段为准，不在注释/文档
+// 硬编码任务 ID。Periodic 族（cert-waiting-ca 等）启停走 toggle 端点，本端点
+// 对其恒 400。v2.0 前「Continuous 族可控」注释已随四类型标准作废。
 func (h *Handlers) ControlSystemTask(c *gin.Context) {
 	if configImportBusy() {
 		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "配置导入进行中，暂不能启停任务"})

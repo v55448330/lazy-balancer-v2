@@ -200,13 +200,15 @@ func TestEngine_RunNowNextSlotFnPanicIsolated(t *testing.T) {
 	}
 }
 
-// nil 库句柄下终态写入不得 panic（函数同形防护）。
-func TestRecordRunFinish_NilDBNoPanic(t *testing.T) {
+// nil 库句柄下终态写入不得 panic（引擎终态写路径 updateTaskRunTerminal 的
+// 函数同形防护；legacy RecordRunFinish 直写旁路已按 task-engine 标准 v2.2
+// 删除——task_runs 唯一写方=引擎，终态保护断言随迁本路径）。
+func TestEngine_TerminalWriteNilDBNoPanic(t *testing.T) {
 	old := db.DB
 	db.DB = nil
 	t.Cleanup(func() { db.DB = old })
-	RecordRunFinish(1, "success", 1, "")
-	RecordRunFinish(1, "failed", 1, "boom")
+	updateTaskRunTerminal(1, "success", 1, "")
+	updateTaskRunTerminal(1, "failed", 1, "boom")
 }
 
 // CancelInFlightRuns 取消全部在途非常驻 Run（导入前排空），常驻族

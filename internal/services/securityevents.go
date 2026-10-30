@@ -1956,8 +1956,9 @@ type securityEventsDedupeEntry struct {
 	atSec int64
 	// autobanAction 是该请求实际喂入自动封禁的动作（autobanFed* 常量）：
 	// 跨 pass 改判时据此决定是否补喂 blocked——不变量「一请求只计一次」：
-	// blocked 已计；logged 在 scope=all 已计、scope=blocked 未计；被信任豁免的
-	// logged 从未计数。空值=重放行（喂入历史不可知），按「logged 未豁免」处理。
+	// blocked 已计；logged 在 scope=all 已计、scope=blocked 未计；被信任豁免
+	// 的 logged 与阶段门预筛剔除的阶段 1 事件从未计数。空值=重放行（喂入
+	// 历史不可知），按「logged 未豁免」处理。
 	autobanAction string
 }
 
@@ -1968,6 +1969,9 @@ const (
 	autobanFedUnknown = ""
 	// autobanFedLoggedExempt 喂入的 logged 被 rule 级信任豁免（未计数）。
 	autobanFedLoggedExempt = "logged-exempt"
+	// autobanFedStageFiltered 喂入侧按阶段门预筛剔除（阶段 1 预检事件从未
+	// 构造 feed 条目、从未计数）：跨 pass 改判时与信任豁免同判「未计须补」。
+	autobanFedStageFiltered = "stage-filtered"
 )
 
 // securityEventsRequestDeduper 是跨 pass/跨摄取通道复用的请求级去重表。
@@ -2388,9 +2392,11 @@ func (t *securityEventsTailer) securityEventsProcessPass(ctx context.Context, f 
 	// 时 autobanObserveBatch 零动作（未启用/从节点等门在函数内收敛）。
 	// 按请求级去重键聚合：同一请求的多个引擎事务只喂一条；被批内改判的行
 	// 用 autobanIndex 定位并替换原条目（不能一请求喂两次，否则阈值仍被放大）。
-	// 阶段过滤不在构造侧：阶段 1 预检事件也随批喂入，由 autoban 咽喉点的
-	// 阶段 3 族门（autobanStage3Eligible）统一剔除——其判据与本文件归因
-	// 谓词（securityEventsRuleIsCustomFamily/securityEventsRuleIsCRSFamily）
+	// 阶段过滤在喂入侧按同一判据预筛：阶段 1 预检事件不构造 feed 条目，账目
+	// 记 stage-filtered（从未计数）——否则跨批改判会把「被阶段门剔除」误读
+	// 成「logged 已计」而漏补喂（WAF 拦截永不计数）。咽喉点的阶段 3 族门
+	// （autobanStage3Eligible）保留为第二道闸，判据与本文件归因谓词
+	// （securityEventsRuleIsCustomFamily/securityEventsRuleIsCRSFamily）
 	// 同源，只收 WAF（阶段 3）事件。
 	var autobanBatch []autobanFeedItem
 	autobanIndex := map[uint64]int{}
@@ -2409,16 +2415,17 @@ func (t *securityEventsTailer) securityEventsProcessPass(ctx context.Context, f 
 	}
 	// crossPassUpgradeNeedsBlockedFeed 判定跨 pass 改判是否需要补喂 blocked
 	// （本批缓冲里没有该请求的条目=上一 pass 已提交）。不变量「一请求只计
-	// 一次」：已喂 blocked 不再补；被信任豁免的 logged 从未计数必须补；其余
-	// logged 只在 scope=blocked 下未计（scope=all 已计 1，补则双计）。口径
-	// 每 pass 只读一次库（升级是罕见形态，仍避免逐事件 SELECT）。
+	// 一次」：已喂 blocked 不再补；被信任豁免与被阶段门预筛剔除的 logged
+	// 从未计数必须补；其余 logged 只在 scope=blocked 下未计（scope=all 已计
+	// 1，补则双计）。口径每 pass 只读一次库（升级是罕见形态，仍避免逐事件
+	// SELECT）。
 	crossPassAutobanScopeLoaded := false
 	crossPassAutobanScope := ""
 	crossPassUpgradeNeedsBlockedFeed := func(prevAction string) bool {
 		switch prevAction {
 		case "blocked":
 			return false
-		case autobanFedLoggedExempt:
+		case autobanFedLoggedExempt, autobanFedStageFiltered:
 			return true
 		}
 		if !crossPassAutobanScopeLoaded {
@@ -2773,20 +2780,28 @@ func (t *securityEventsTailer) securityEventsProcessPass(ctx context.Context, f 
 					if eventAt.IsZero() {
 						eventAt = time.Now().UTC()
 					}
-					trustExempt := rec.Action == "logged" && trustMatcher.trusted(rule.caddyID, rec.ClientIP)
-					if dedupeable {
-						autobanIndex[dedupeKey] = len(autobanBatch)
-					}
-					autobanBatch = append(autobanBatch, autobanFeedItem{
-						IP:            rec.ClientIP,
-						Action:        rec.Action,
-						RuleTriggered: rec.RuleTriggered,
-						At:            eventAt,
-						TrustExempt:   trustExempt,
-					})
-					entryAutobanAction = rec.Action
-					if trustExempt {
-						entryAutobanAction = autobanFedLoggedExempt
+					// 咽喉点判据逐条回写账目：阶段 3 族事件照旧喂入；阶段 1
+					// 预检事件不构造 feed 条目（咽喉点本也会剔除），账目标记
+					// stage-filtered——跨批/批内改判升级为 blocked 时据此补喂
+					// 且补喂条目必过阶段门（改判结论来自 WAF 引擎）。
+					if autobanStage3Eligible(rec.RuleTriggered) {
+						trustExempt := rec.Action == "logged" && trustMatcher.trusted(rule.caddyID, rec.ClientIP)
+						if dedupeable {
+							autobanIndex[dedupeKey] = len(autobanBatch)
+						}
+						autobanBatch = append(autobanBatch, autobanFeedItem{
+							IP:            rec.ClientIP,
+							Action:        rec.Action,
+							RuleTriggered: rec.RuleTriggered,
+							At:            eventAt,
+							TrustExempt:   trustExempt,
+						})
+						entryAutobanAction = rec.Action
+						if trustExempt {
+							entryAutobanAction = autobanFedLoggedExempt
+						}
+					} else {
+						entryAutobanAction = autobanFedStageFiltered
 					}
 					// 光流环只收「计入攻击」的事件：爬虫豁免是 pass,log
 					// 放行（每个已验证爬虫请求都是一条 logged 事件），不过滤
@@ -3675,6 +3690,7 @@ func securityEventsPollOnce(ctx context.Context) (int, error) {
 // 轮转跟随，阻塞直到 ctx 取消。引擎 StartLoop 时启动一次（Run=本函数），
 // StopLoop 时 ctx 取消返回。
 func runIngestionLoop(ctx context.Context) error {
+	//scope-exempt: daemon-run-body-loop —— §0.2 形态② daemon Run 体自管理阻塞循环（2s 尾读+轮转跟随，ctx 取消即退）
 	ticker := time.NewTicker(securityEventsPollInterval)
 	defer ticker.Stop()
 	var lastRotateFailureSummaryAt time.Time

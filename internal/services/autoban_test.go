@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -324,15 +325,45 @@ func TestAutobanStage3Eligible(t *testing.T) {
 		{"GeoIP 普通预检段", "800123", false},
 		{"爬虫伪装段", "850012", false},
 		{"CRS 段", "942100", true},
+		{"CRS 段上界 999999", "999999", true},
 		{"自定义规则发射id（DB id+10000）", "12345", true},
 		{"本地合成自定义规则段", "1000003", true},
 		{"非数值token", "-", false},
 		{"空token", "", false},
 	}
+	// OR 条件分支高段按发射公式构造（3000000+父发射id×64+分支序号，与
+	// handlers 侧 CustomRuleORConditionIDBase/customRuleMaxConditions 同式）：
+	// DB 父规则 id 42 → 发射 id 10042；合成父（旧内嵌规则）发射 id 1000001
+	// → 分支落入 67xxxxxx（8 位、6 开头）。
+	cases = append(cases,
+		struct {
+			name string
+			id   string
+			want bool
+		}{"OR分支（DB父规则42，序号0）", strconv.Itoa(3000000 + 10042*64 + 0), true},
+		struct {
+			name string
+			id   string
+			want bool
+		}{"OR分支（DB父规则42，非零序号）", strconv.Itoa(3000000 + 10042*64 + 5), true},
+		struct {
+			name string
+			id   string
+			want bool
+		}{"OR分支（合成父1000001，67xxxxxx段）", strconv.Itoa(3000000 + 1000001*64 + 0), true},
+	)
 	for _, tc := range cases {
 		if got := autobanStage3Eligible(tc.id); got != tc.want {
 			t.Errorf("autobanStage3Eligible(%q)=%v, want %v（%s）", tc.id, got, tc.want, tc.name)
 		}
+	}
+	// CRS 段界 [900000,1000000) 的上界钉死：999999 计入、1000000 划归自定义
+	// 合成段（不属 CRS，但同属阶段 3——阶段门判定不回退）。
+	if !securityEventsRuleIsCRSFamily("999999") {
+		t.Error(`securityEventsRuleIsCRSFamily("999999")=false, want true（CRS 上界）`)
+	}
+	if securityEventsRuleIsCRSFamily("1000000") {
+		t.Error(`securityEventsRuleIsCRSFamily("1000000")=true, want false（上界右开）`)
 	}
 }
 

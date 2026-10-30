@@ -43,7 +43,7 @@ func newRuntimeLifecycleTestEngineWithSeed(t *testing.T, seed func()) *taskengin
 	if seed != nil {
 		seed()
 	}
-	registerRuntimeLifecycleTasks(te)
+	registerRuntimeLifecycleTasks(te, loadTaskLoopPrefs())
 	return te
 }
 
@@ -89,8 +89,10 @@ func TestRuntimeLifecycleMetricsCollector_bootstrapIntervalAndStop(t *testing.T)
 	}))
 	t.Cleanup(server.Close)
 
-	te := newRuntimeLifecycleTestEngine(t)
+	// 先接线再装配：钩子未接线=空载体阻塞至停止（无新代消费），装配后才接线
+	// 不会有新代读取——接线必须先于注册期 StartLoop。
 	SetMetricsCollector(NewMetricsService(server.URL, 1)) // 1s 节拍便于观测
+	te := newRuntimeLifecycleTestEngine(t)
 
 	// bootstrap：立即首跑（不等 1s 节拍）。
 	waitForCond(t, 2*time.Second, func() bool { return hits.Load() >= 1 })
@@ -114,10 +116,11 @@ func TestRuntimeLifecycleMetricsCollector_bootstrapIntervalAndStop(t *testing.T)
 	}
 }
 
-// 钩子型 daemon（warmer/watcher/清扫）：未接线时空闲（Run 立即返回零噪音）；
-// 接线后 bootstrap 立即执行一轮；StopLoop 后不再执行。
+// 钩子型 daemon（warmer/watcher/清扫）：未接线时空载体阻塞至停止（零工作零噪音）；
+// 接线经重启换代消费（StopLoop→StartLoop=用户可见路径）；接线后 bootstrap
+// 立即执行一轮；StopLoop 后不再执行。
 func TestRuntimeLifecycleHookDaemons_idleWhenUnwiredAndBootstrapWhenWired(t *testing.T) {
-	te := newRuntimeLifecycleTestEngine(t) // 钩子全 nil：空闲形态
+	te := newRuntimeLifecycleTestEngine(t) // 钩子全 nil：空载体形态
 
 	// 未接线：daemon 已启动但零工作（60s/2s 节拍都不产生副作用——用短窗计数
 	// 稳定性证明 RunTicker 根本没进工作体）。

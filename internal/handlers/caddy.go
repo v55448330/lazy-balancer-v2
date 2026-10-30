@@ -298,6 +298,7 @@ func startCaddy(adminURL string) error {
 	go func() { exited <- cmd.Wait() }()
 	deadline := time.NewTimer(3 * time.Second)
 	defer deadline.Stop()
+	//scope-exempt: one-shot-bounded-poll —— 单次调用内有界就绪轮询（3s deadline 收口，不跨调用存活）
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 	for {

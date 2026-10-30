@@ -14,6 +14,7 @@ package services
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -365,10 +366,17 @@ func seenByRule(t *testing.T, ruleID string, seen map[int]bool) bool {
 	return seen[jobID]
 }
 
-// TestFailureSemantics_firstIssuanceRetryUnchanged（RED 7）：首次签发失败
-// （无材料）行为不变——failed + 次数 +1 + 30 分钟首发重试冷却（窗口列照写，
-// 但首发重试通道仍按 updated_at+30min 判定）。
-func TestFailureSemantics_firstIssuanceRetryUnchanged(t *testing.T) {
+// TestFailureSemantics_firstIssuanceRetryWindowGate：首次签发失败重试通道
+// 叠加退避窗口门，三形状：
+//
+//	① 退避窗口未到期——即使已过 30 分钟首发冷却也不选（不再只按 updated_at
+//	  判定，否则首发失败行绕过退避窗口反复撞 CA）；
+//	② 退避窗口已到期——照常选出；
+//	③ NULL 窗口行——30 分钟首发冷却期满后选出，冷却期内不选。
+//
+// 写侧语义不变（failed + renewal_attempts+1 + expires_at NULL + 窗口照写），
+// 前置断言保留。
+func TestFailureSemantics_firstIssuanceRetryWindowGate(t *testing.T) {
 	_, database := newClusterTestService(t)
 	resetCertificateServiceForTest(t)
 	seedRuleWithCAProvider(t, "lb_first", "first.example.test", 1)
@@ -395,25 +403,72 @@ func TestFailureSemantics_firstIssuanceRetryUnchanged(t *testing.T) {
 	if expiresOK {
 		t.Fatal("首发失败行 expires_at 必须保持 NULL")
 	}
+	if !windowOK {
+		t.Fatal("首发失败必须写退避窗口（写侧语义不变）")
+	}
 
 	maxAttempts := getCertRenewalAttempts()
-	// 刚失败：30 分钟首发冷却未到，不得进入自动重试。
-	if jobs, _, err := NewCertificateService().checkFailedFirstIssuance(context.Background(), maxAttempts); err != nil {
+	// 刚失败：退避窗口（阶梯第一档）与 30 分钟首发冷却均未到期——不选。
+	jobs, _, err := NewCertificateService().checkFailedFirstIssuance(context.Background(), maxAttempts)
+	if err != nil {
 		t.Fatalf("checkFailedFirstIssuance: %v", err)
-	} else {
-		for _, j := range jobs {
-			if j.ID == int(jobID) {
-				t.Fatal("首发失败后 30 分钟内不得进入自动重试候选")
-			}
+	}
+	for _, j := range jobs {
+		if j.ID == int(jobID) {
+			t.Fatal("退避窗口未到期的首发失败行不得进入自动重试候选")
 		}
 	}
-	// 冷却期满（回拨 updated_at）：照常进入首发重试（行为不变）。
+
+	// 三形状候选行：updated_at 均已过 30 分钟首发冷却，仅退避窗口状态不同。
+	seedRuleWithCAProvider(t, "lb_win_future", "win-future.example.test", 1)
+	seedRuleWithCAProvider(t, "lb_win_due", "win-due.example.test", 1)
+	seedRuleWithCAProvider(t, "lb_win_null", "win-null.example.test", 1)
+	seedRuleWithCAProvider(t, "lb_win_fresh", "win-fresh.example.test", 1)
+	if _, err := database.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,ca_provider_id,ca_available_after,updated_at) VALUES
+		('lb_win_future','win-future.example.test','failed',1,datetime('now','+1 hour'),datetime('now','-31 minutes')),
+		('lb_win_due','win-due.example.test','failed',1,datetime('now','-1 minute'),datetime('now','-31 minutes')),
+		('lb_win_null','win-null.example.test','failed',1,NULL,datetime('now','-31 minutes')),
+		('lb_win_fresh','win-fresh.example.test','failed',1,NULL,datetime('now','-1 minute'))`); err != nil {
+		t.Fatalf("seed window shapes: %v", err)
+	}
+	// 真实写侧首发行同步放开冷却，仅保留退避窗口——单变量隔离形状①。
 	if _, err := database.Exec(`UPDATE cert_jobs SET updated_at=datetime('now','-31 minutes') WHERE id=?`, jobID); err != nil {
 		t.Fatal(err)
 	}
-	jobs, _, err := NewCertificateService().checkFailedFirstIssuance(context.Background(), maxAttempts)
+
+	jobs, _, err = NewCertificateService().checkFailedFirstIssuance(context.Background(), maxAttempts)
 	if err != nil {
-		t.Fatalf("checkFailedFirstIssuance after cooldown: %v", err)
+		t.Fatalf("checkFailedFirstIssuance shapes: %v", err)
+	}
+	seen := map[int]bool{}
+	for _, j := range jobs {
+		seen[j.ID] = true
+	}
+	for _, shape := range []struct {
+		ruleID string
+		want   bool
+		note   string
+	}{
+		{"lb_first", false, "①退避窗口未到期"},
+		{"lb_win_future", false, "①退避窗口未到期"},
+		{"lb_win_due", true, "②退避窗口已到期"},
+		{"lb_win_null", true, "③NULL 窗口冷却期满"},
+		{"lb_win_fresh", false, "③NULL 窗口冷却期内"},
+	} {
+		if seenByRule(t, shape.ruleID, seen) != shape.want {
+			t.Fatalf("%s：%s 行在候选中与预期不符（want 含=%v）", shape.note, shape.ruleID, shape.want)
+		}
+	}
+
+	// 首发行窗口与冷却均放开后照常进入候选（窗口到期选出的真实写侧形状）。
+	if _, err := database.Exec(`UPDATE cert_jobs
+		SET updated_at=datetime('now','-31 minutes'), ca_available_after=datetime('now','-1 minute')
+		WHERE id=?`, jobID); err != nil {
+		t.Fatal(err)
+	}
+	jobs, _, err = NewCertificateService().checkFailedFirstIssuance(context.Background(), maxAttempts)
+	if err != nil {
+		t.Fatalf("checkFailedFirstIssuance after window due: %v", err)
 	}
 	found := false
 	for _, j := range jobs {
@@ -422,7 +477,92 @@ func TestFailureSemantics_firstIssuanceRetryUnchanged(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Fatal("首发冷却期满后必须进入自动重试候选（行为不变）")
+		t.Fatal("退避窗口到期后的首发失败行必须进入自动重试候选")
+	}
+}
+
+// TestFailureSemantics_rateLimitMaxAttempts_logLevels：429 留痕分档——
+// 未达上限=任务日志 WARN + 审计「签发限流」；达上限（窗口 NULL、自动重试
+// 停止）=任务日志必须升为 ERROR（429 一律 WARN 会把终态淹没在限流噪音里，
+// 与其它失败同口径），审计动作维持「签发限流」并以 max_attempts 结果码单列。
+func TestFailureSemantics_rateLimitMaxAttempts_logLevels(t *testing.T) {
+	_, database := newClusterTestService(t)
+	resetCertificateServiceForTest(t)
+	useTemporaryCertJobLogDir(t)
+	maxAttempts := getCertRenewalAttempts()
+
+	// 对照形状：未达上限的 429 维持 WARN（含恢复时间）。
+	seedRuleWithCAProvider(t, "lb_rl_warn", "rl-warn.example.test", 1)
+	warnRes, err := database.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,renewal_attempts,ca_provider_id)
+		VALUES ('lb_rl_warn','rl-warn.example.test','queued',?,1)`, maxAttempts-2)
+	if err != nil {
+		t.Fatalf("seed warn job: %v", err)
+	}
+	warnID, _ := warnRes.LastInsertId()
+	handleQueueExecutionError(int(warnID), &CAProviderRateLimitError{RetryAfter: 30 * time.Minute, Reason: "limited"})
+	warnLog, err := os.ReadFile(CertJobLogPath("lb_rl_warn"))
+	if err != nil {
+		t.Fatalf("read warn cert job log: %v", err)
+	}
+	if !strings.Contains(string(warnLog), "[WARN] failed - ") {
+		t.Fatalf("未达上限的 429 任务日志应为 WARN 级:\n%s", warnLog)
+	}
+
+	// 达上限形状：第 maxAttempts 次限流 → 窗口 NULL + ERROR 日志 + max_attempts 审计。
+	seedRuleWithCAProvider(t, "lb_rl_max", "rl-max.example.test", 1)
+	maxRes, err := database.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,renewal_attempts,ca_provider_id)
+		VALUES ('lb_rl_max','rl-max.example.test','queued',?,1)`, maxAttempts-1)
+	if err != nil {
+		t.Fatalf("seed max job: %v", err)
+	}
+	maxID, _ := maxRes.LastInsertId()
+	handleQueueExecutionError(int(maxID), &CAProviderRateLimitError{RetryAfter: time.Hour, Reason: "limited"})
+
+	var status string
+	var attempts int
+	var windowOK bool
+	if err := database.QueryRow(`SELECT status, COALESCE(renewal_attempts,0), ca_available_after IS NOT NULL
+		FROM cert_jobs WHERE id=?`, maxID).Scan(&status, &attempts, &windowOK); err != nil {
+		t.Fatalf("read max job: %v", err)
+	}
+	if status != "failed" || attempts != maxAttempts {
+		t.Fatalf("status=%q attempts=%d, want failed/%d", status, attempts, maxAttempts)
+	}
+	if windowOK {
+		t.Fatal("达上限的失败行窗口必须为 NULL（停止自动重试）")
+	}
+	maxLog, err := os.ReadFile(CertJobLogPath("lb_rl_max"))
+	if err != nil {
+		t.Fatalf("read max cert job log: %v", err)
+	}
+	if !strings.Contains(string(maxLog), "[ERROR] failed - ") {
+		t.Fatalf("429 达上限的任务日志必须为 ERROR 级:\n%s", maxLog)
+	}
+	if strings.Contains(string(maxLog), "[WARN]") {
+		t.Fatalf("429 达上限不得再记 WARN:\n%s", maxLog)
+	}
+	// 对照形状审计：未达上限 429=「第 N 次限流」+ 恢复时间。
+	var warnDetail string
+	if err := db.AuditDB.QueryRow(`SELECT detail FROM audit_log WHERE action='签发限流' AND resource='证书任务' AND detail LIKE ? ORDER BY id DESC LIMIT 1`,
+		fmt.Sprintf("任务 %d；%%", warnID)).Scan(&warnDetail); err != nil {
+		t.Fatalf("未达上限的 429 必须留「签发限流」审计行: %v", err)
+	}
+	if !strings.Contains(warnDetail, "恢复时间") {
+		t.Fatalf("未达上限审计明细=%q, want 含恢复时间", warnDetail)
+	}
+
+	// 达上限审计：动作维持「签发限流」，结果码渲染为「达到最大重试次数」
+	//（AuditResultPart 映射），且不再带恢复时间。
+	var detail string
+	if err := db.AuditDB.QueryRow(`SELECT detail FROM audit_log WHERE action='签发限流' AND resource='证书任务' AND detail LIKE ? ORDER BY id DESC LIMIT 1`,
+		fmt.Sprintf("任务 %d；%%", maxID)).Scan(&detail); err != nil {
+		t.Fatalf("429 达上限必须留「签发限流」审计行: %v", err)
+	}
+	if !strings.Contains(detail, "达到最大重试次数") {
+		t.Fatalf("达上限审计明细=%q, want 含「达到最大重试次数」结果", detail)
+	}
+	if strings.Contains(detail, "恢复时间") {
+		t.Fatalf("达上限审计明细不应再带恢复时间: %q", detail)
 	}
 }
 

@@ -308,6 +308,50 @@ func TestSecurityEventsTick_crossPassUpgradeDoesNotDoubleCountUnderAllScope(t *t
 	}
 }
 
+// 跨批「阶段 1 logged → WAF blocked」在 scope=all 下必须补喂：阶段 1 预检
+// 事件被自动封禁的阶段门剔除、从未计数，账目若把它记成「logged 已计」，
+// 跨批改判时会据账目判「已计」而跳过补喂——WAF 拦截永不计数（库内事件显示
+// blocked，计数为 0，UI 无迹可查）。
+func TestSecurityEventsTick_crossPassUpgradeFeedsAutobanAfterStageFilteredLogged(t *testing.T) {
+	logPath, offsetPath := seedSecurityEventsDedupeDB(t)
+	installDedupeAutobanFixture(t)
+	setAutobanConfigRaw(t, true, 1, 60, "1h", "all", false)
+
+	// 800123 属 GeoIP 预检段（阶段 1）：logged 随批喂入但被阶段门剔除。
+	writeSecurityEventsDedupeLog(t, logPath,
+		securityEventsDedupeNowFixture("tx-stage-a", "0077aabbccddeeff", "/split", "logged", 800123))
+	tailer := securityEventsNewTailer(logPath, offsetPath)
+	runSecurityEventsDedupeTick(t, tailer)
+	if got := autobanCountForTest("45.33.32.9"); got != 0 {
+		t.Fatalf("阶段 1 logged 被阶段门剔除，count=%d, want 0", got)
+	}
+
+	// 同一请求（共享计时头）在下一批被 WAF 拦截改判：必须补喂计数。
+	appendDedupeLogDoc(t, logPath, tailer, securityEventsDedupeNowFixture("tx-stage-b", "0077aabbccddeeff", "/split", "blocked", 949110))
+	if got := autobanCountForTest("45.33.32.9"); got != 1 {
+		t.Fatalf("阶段 1 logged 后的 WAF blocked 改判必须补喂计数，count=%d, want 1", got)
+	}
+}
+
+// 同批形态与跨批一致：阶段 1 logged 与 WAF blocked 落在同一批时同样恰好计 1
+// （两条喂入路径的口径不得分叉）。
+func TestSecurityEventsTick_samePassUpgradeFeedsAutobanAfterStageFilteredLogged(t *testing.T) {
+	for _, scope := range []string{"all", "blocked"} {
+		t.Run(scope, func(t *testing.T) {
+			logPath, offsetPath := seedSecurityEventsDedupeDB(t)
+			installDedupeAutobanFixture(t)
+			setAutobanConfigRaw(t, true, 1, 60, "1h", scope, false)
+			writeSecurityEventsDedupeLog(t, logPath,
+				securityEventsDedupeNowFixture("tx-stage-same-a", "0088aabbccddeeff", "/same", "logged", 800123),
+				securityEventsDedupeNowFixture("tx-stage-same-b", "0088aabbccddeeff", "/same", "blocked", 949110))
+			runSecurityEventsDedupeTick(t, securityEventsNewTailer(logPath, offsetPath))
+			if got := autobanCountForTest("45.33.32.9"); got != 1 {
+				t.Fatalf("scope=%s 同批阶段过滤改判 count=%d, want 1", scope, got)
+			}
+		})
+	}
+}
+
 // 受信 IP 的 logged 被豁免（未计数）：随后非信任的 blocked 改判必须补喂
 // （scope=all 下同样如此——此前被豁免 ≠ 已计数）。
 func TestSecurityEventsTick_crossPassUpgradeFeedsBlockedAfterTrustExemptLogged(t *testing.T) {

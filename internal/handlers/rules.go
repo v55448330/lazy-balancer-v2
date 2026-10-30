@@ -1969,6 +1969,11 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	// 默认改到合并之后：存量端口优先，仅在合并后仍为 0（理论上不可达）时兜底。
 
 	// Fill in missing fields from database so validation and the update use complete data.
+	// 治理默认值单源：health_check_*/tcp_try_interval 五处 COALESCE 默认值绑定
+	// db.Default*（与 schema DEFAULT/写侧校验/迁移同源，写死字面量被
+	// TestLbRuleColumns_governedDefaultsBindConstants 拒绝）；strategy/tls_source/
+	// compress_types 三处文本默认值 db 包无常量，保持字面量（收紧或抽常量需先
+	// 补 db 包常量再改此处，三处同进退）。
 	var existingRule models.LbRule
 	err := db.DB.QueryRow(`
 		SELECT COALESCE(protocol,''), COALESCE(domain,''), listen_port, COALESCE(strategy,'weighted_round_robin'),
@@ -1976,9 +1981,9 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 			COALESCE(ca_provider_id,0),
 			COALESCE(enable_tls,0), COALESCE(tls_http_redirect,0),
 			COALESCE(dynamic_dns,0), COALESCE(enable_dns_server,0), COALESCE(dns_server,''), COALESCE(dns_family,'ipv4'),
-			COALESCE(health_check_path,''), COALESCE(health_check_interval,10), COALESCE(health_check_timeout,2),
-			COALESCE(health_check_unhealthy_threshold,3), COALESCE(health_check_healthy_threshold,2),
-			COALESCE(enable_active_health_check,0), COALESCE(tcp_health_check_port,0), COALESCE(tcp_proxy_protocol,0), COALESCE(tcp_try_duration,0), COALESCE(tcp_try_interval,250),
+			COALESCE(health_check_path,''), COALESCE(health_check_interval,`+fmt.Sprint(db.DefaultHealthCheckInterval)+`), COALESCE(health_check_timeout,`+fmt.Sprint(db.DefaultHealthCheckTimeout)+`),
+			COALESCE(health_check_unhealthy_threshold,`+fmt.Sprint(db.DefaultHealthCheckUnhealthyThreshold)+`), COALESCE(health_check_healthy_threshold,`+fmt.Sprint(db.DefaultHealthCheckHealthyThreshold)+`),
+			COALESCE(enable_active_health_check,0), COALESCE(tcp_health_check_port,0), COALESCE(tcp_proxy_protocol,0), COALESCE(tcp_try_duration,0), COALESCE(tcp_try_interval,`+fmt.Sprint(db.DefaultTCPTryInterval)+`),
 	COALESCE(request_body_max_size_mb,0), COALESCE(upstream_keepalive_timeout,0), COALESCE(server_tokens_hidden,0), COALESCE(ntlm_compatible,0), COALESCE(upstream_force_http1,0),
 		COALESCE(custom_routes_enabled,0),
 		COALESCE(proxy_dial_timeout,0), COALESCE(proxy_response_header_timeout,0), COALESCE(proxy_read_timeout,0), COALESCE(proxy_write_timeout,0), COALESCE(proxy_stream_timeout,0), COALESCE(proxy_flush_interval,0), COALESCE(proxy_stream_close_delay,0),

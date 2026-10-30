@@ -898,6 +898,20 @@ func (recovery *importQueueRecovery) finish() error {
 		recovery.hold = false
 		services.EndConfigImportHold()
 	}
+	// 导入提交可能带回旧备份的 waiting_ca 存量（waiting_ca 停车状态已退役，
+	// 启动迁移只覆盖启动路径）：停摆统计与恢复重排消费这些行之前先保窗归一
+	// 为 failed（db.NormalizeWaitingCACertJobs 单源，与启动迁移同谓词）。
+	// 失败上抛=importPhaseQueue 阶段错误（数据已提交，不否决导入，与既有
+	// finish 语义一致——队列侧恢复问题必须显性可见，不得静默跳过）。
+	normalized, err := db.NormalizeWaitingCACertJobs()
+	if err != nil {
+		return fmt.Errorf("归一导入带入的 waiting_ca 证书任务失败: %w", err)
+	}
+	if normalized > 0 {
+		detail := fmt.Sprintf("备份携带 %d 条 waiting_ca 证书任务，已按失败语义统一保窗归一为 failed（保留消息/重试次数/退避窗口）", normalized)
+		services.Logf("info", "配置导入/还原：%s", detail)
+		services.RecordAuditLog("system", "导入归一", "证书任务", services.FormatAuditDetail(services.AuditSourcePart("config_import"), detail), "")
+	}
 	if recovery.manager == nil || !recovery.wasActive {
 		recovery.stalledNonTerminal, recovery.stalledUnknown = countStalledNonTerminalCertJobs()
 		return nil

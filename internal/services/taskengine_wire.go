@@ -1,7 +1,8 @@
 package services
 
 // 任务引擎接线（v2.0 四类型标准）：Kind 决定调度/记录/日志——零 flag。
-// 注册全集 19：定时(5)/常驻(3)/循环(10)/触发(1)——以 DescribeAll 输出为准。
+// 注册全集 27：定时(5)/常驻(10)/循环(11)/触发(1)——含 taskengine_wire_runtime.go
+// 的 8 个运行期常驻族；以 DescribeAll 输出为准。
 // 触发(1)：仅手动/代码触发
 // 默认调度关闭——入队时唤醒，全部终态自动停。
 
@@ -1037,6 +1038,12 @@ func InitTaskEngine(watchdogAdminURL, runtimeLogFile string) *taskengine.Engine 
 	// 套用用户显式启停偏好——覆盖默认启动清单（停止态不复活；
 	// 用户主动开启的默认关闭任务恢复调度）；业务驱动任务跳过。
 	// 复用上方已读取的偏好快照，不再二次查表。
+	// 运行期常驻族（metrics 采集/清理、rollup 预热、caddy-restart 监听、
+	// 限流桶清扫、API-Key 用量落盘、日志阈值、时区刷新）——标准 v2.2 §6.5
+	// 归口项；描述符与工作体在同包 taskengine_wire_runtime.go。注册必须先于
+	// 偏好套用并消费同一份偏好快照：显式停止的 daemon 注册即保持停止；偏好行
+	// 也因此已归属注册表内任务，不会被套用阶段当注册表外残行清理。
+	registerRuntimeLifecycleTasks(te, taskLoopPrefs)
 	applyTaskLoopPrefs(te, taskLoopPrefs)
 	// 业务驱动任务启动均按业务实态对齐（唯一清单见 businessTaskDrivers）。
 	SyncBusinessTaskDrivers()
@@ -1049,11 +1056,6 @@ func InitTaskEngine(watchdogAdminURL, runtimeLogFile string) *taskengine.Engine 
 	// BootSync 完成后解除 tick 暂停——此前 ticker 在
 	// NewEngine 即起跑，周期/定时任务可在配置载入前执行首轮。
 	te.ResumeScheduling()
-	// 运行期常驻族（metrics 采集/清理、rollup 预热、caddy-restart 监听、
-	// 限流桶清扫、API-Key 用量落盘、日志阈值、时区刷新）——标准 v2.2 §6.5
-	// 归口项；描述符与工作体在同包 taskengine_wire_runtime.go。自带偏好门，
-	// 因此须在 ResumeScheduling 之后、角色对账之前注册并启动。
-	registerRuntimeLifecycleTasks(te)
 	startRoleReconciler(te)
 	return te
 }
@@ -1079,6 +1081,7 @@ func startRoleReconciler(te *taskengine.Engine) <-chan struct{} {
 	roleReconcilerState.Unlock()
 	go func() {
 		defer close(done)
+		//scope-exempt: engine-reconciler —— §6.4 引擎附属对账循环（代际停机：te.Done()/IsStopped 即退；关停经 roleReconcilerState 有界排空）
 		ticker := time.NewTicker(roleReconcilerInterval)
 		defer ticker.Stop()
 		for {

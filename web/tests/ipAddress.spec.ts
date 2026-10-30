@@ -79,6 +79,27 @@ test('toV4Long / toV6BigInt：折叠为整数，非法形态返回哨兵', () =>
   assert.equal(toV6BigInt('zz::1'), null)
 })
 
+test('toV4Long 走事件侧宽容单源：zone 宽容、前导零按数值、空段/空白拒绝', () => {
+  // 缺陷修复：空段/空白段不得被 Number('')===0 / Number(' ')===0 放行为 0 段
+  for (const bad of ['1.2.3.', '1..2.3', '.1.2.3', '1. .2.3', '  .2.3.4', '1.2.3.4.']) {
+    assert.equal(toV4Long(bad), -1, `${bad} 必须解析失败（空段/空白段拒绝）`)
+  }
+  // 事件侧既定口径保留：首尾空白、%zone 丢弃、前导零按十进制数值
+  assert.equal(toV4Long(' 1.2.3.4 '), 16909060)
+  assert.equal(toV4Long('1.2.3.4%eth0'), 16909060, '引擎上报的链路本地形态带 zone（与 toV6BigInt 同口径）')
+  assert.equal(toV4Long('01.002.000.4'), (1 << 24) | (2 << 16) | 4, '前导零按数值收（事件匹配侧不收紧）')
+  // 非十进制形态拒绝（Number 的十六进制/指数写法不进事件匹配）
+  assert.equal(toV4Long('0x1.2.3.4'), -1)
+  assert.equal(toV4Long('1e2.2.3.4'), -1)
+  assert.equal(toV4Long('+1.2.3.4'), -1)
+  // 单源绑定：toV4Long 必须经宽容单源实现（不得回落 split+Number；单源模块
+  // 私有，导出面只有 toV4Long——exportSurface 禁止零外部消费导出）
+  const util = code('src/utils/ipAddress.ts')
+  assert.match(util, /^const parseIPv4Lenient = /m)
+  assert.doesNotMatch(util, /export const parseIPv4Lenient/)
+  assert.match(util, /parseIPv4Lenient\(address\)/, 'toV4Long 必须消费宽容单源')
+})
+
 test('canonicalV6Text：等价写法归一到同一压缩串，非 IPv6 返回 null', () => {
   const canonical = canonicalV6Text('2001:0db8:0:0:0:0:0:80')
   assert.equal(canonical, '2001:db8::80')

@@ -123,6 +123,9 @@ func TestImportConfigBackup_noStalledWarningWhenCertQueueActive(t *testing.T) {
 
 // 文案单源自检：披露句里的数量必须取自实测统计（不是写死的 1），
 // 多行任务时数量随之变化——否则「N 个」会与实际停滞任务数脱节。
+// waiting_ca 存量不计入停滞数：备份携带的 waiting_ca 行在 finish 阶段先经
+// 保窗归一为 failed（停车状态退役，走 failed+窗口补扫通道），不再属于
+// 「进行中却无 worker」的停滞面。
 func TestImportConfigBackup_stalledWarningCountsAllNonTerminalJobs(t *testing.T) {
 	services.ResetCAQueueManagerForTest()
 	services.InitCAQueueManager(func() error { return nil }, t.TempDir())
@@ -135,13 +138,16 @@ func TestImportConfigBackup_stalledWarningCountsAllNonTerminalJobs(t *testing.T)
 				"listen_port": 8497, "enabled": 1, "enable_tls": 1, "tls_source": "acme_dns", "acme_config_id": 97},
 			{"caddy_id": "lb_stalledb", "name": "stalledb", "protocol": "http", "domain": "stal3.example.test",
 				"listen_port": 8498, "enabled": 1, "enable_tls": 1, "tls_source": "acme_dns", "acme_config_id": 97},
+			{"caddy_id": "lb_stalledc", "name": "stalledc", "protocol": "http", "domain": "stal4.example.test",
+				"listen_port": 8496, "enabled": 1, "enable_tls": 1, "tls_source": "acme_dns", "acme_config_id": 97},
 		},
 		"certificate_configs": {
 			{"id": 97, "name": "stalled-dns-2", "dns_provider": "dnspod", "enabled": 1},
 		},
 		"cert_jobs": {
 			{"rule_id": "lb_stalleda", "domain": "stal2.example.test", "status": "creating_order"},
-			{"rule_id": "lb_stalledb", "domain": "stal3.example.test", "status": "waiting_ca"},
+			{"rule_id": "lb_stalledb", "domain": "stal3.example.test", "status": "queued"},
+			{"rule_id": "lb_stalledc", "domain": "stal4.example.test", "status": "waiting_ca", "message": "等待 CA 冷却", "ca_available_after": "2026-01-01 00:00:00"},
 		},
 	}, EmptyConfigIfNil: true})
 
@@ -155,5 +161,22 @@ func TestImportConfigBackup_stalledWarningCountsAllNonTerminalJobs(t *testing.T)
 	}
 	if !strings.Contains(strings.Join(decodeImportWarnings(t, response), "\n"), "恢复该任务后才会继续推进") {
 		t.Fatalf("warnings 缺少可操作指引（恢复签发任务后才会推进）")
+	}
+	// waiting_ca 行已在 finish 阶段保窗归一为 failed（message 保留，窗口不在
+	// 本断言面——由 NormalizeWaitingCACertJobs 单元钉）。
+	var status, message string
+	if err := db.DB.QueryRow(`SELECT status, COALESCE(message,'') FROM cert_jobs WHERE rule_id='lb_stalledc'`).Scan(&status, &message); err != nil {
+		t.Fatalf("read imported waiting_ca job: %v", err)
+	}
+	if status != "failed" || message != "等待 CA 冷却" {
+		t.Fatalf("waiting_ca 行=(%s,%q), want failed 且 message 保留（导入期保窗归一）", status, message)
+	}
+	// 归一动作必须留操作审计（响应 warnings 不携带归一信息，审计是唯一追溯面）。
+	var normalizedAudit int
+	if err := db.AuditDB.QueryRow(`SELECT COUNT(*) FROM audit_log WHERE action='导入归一' AND resource='证书任务'`).Scan(&normalizedAudit); err != nil {
+		t.Fatalf("read normalize audit: %v", err)
+	}
+	if normalizedAudit != 1 {
+		t.Fatalf("导入归一审计行=%d, want 1（waiting_ca 归一必须留痕）", normalizedAudit)
 	}
 }

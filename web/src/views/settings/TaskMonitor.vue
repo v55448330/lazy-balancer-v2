@@ -382,7 +382,7 @@ import { useClampedPagination } from '@/composables/useClampedPagination'
 import { createLatestReadSession } from '@/utils/viewAsyncState'
 import { hasOwn } from '@/utils/hasOwn'
 import { statusColor } from '@/utils/chartTheme'
-import { certJobStatusLabel, certJobRetryReady, type CertJobStatus } from '@/utils/certJobStatus'
+import { certJobRetryReady } from '@/utils/certJobStatus'
 import { CERT_QUEUE_VISIBLE_JOBS, certQueueHasLive, certQueueIsBusy, certQueueMoreCount } from '@/utils/certQueue'
 import DialogHeader from '@/components/DialogHeader.vue'
 import DialogSectionHeader from '@/components/DialogSectionHeader.vue'
@@ -920,13 +920,16 @@ const categoryTagType = (c: string): 'primary' | 'success' | 'warning' | 'info' 
 // 英文 token——补中文标签，未列触发值仍回退原文。
 const triggerLabels: Record<string, string> = { manual: '手动', auto: '自动', schedule: '排程', queue: '队列', startup: '启动', 'caddy-restart': 'Caddy重启' }
 const triggerLabel = (t: string) => (hasOwn(triggerLabels, t) ? triggerLabels[t] : t) || '—'
-// 结果串双源：引擎 task_runs 结果（success/failed/…/skipped）+ cert-job 动态行
-// 的 cert_jobs 状态机（issued/validating/…）——前者未命中时回退 certJobStatusLabel
+// 结果词表=引擎 task_runs 结果域自有映射（running/success/failed/cancelled/
+// skipped/interrupted，与 GET /system/tasks/:id/history 的 status 枚举同源）；
+// 未知值显性回显「未知」——不借用 cert_jobs 状态机词表（issued/waiting_ca 等
+// 属证书业务域，进了结果列只会域错位误导；cert-job 动态行的业务状态由任务
+// 名称/详情的业务文本承载）。
 const resultLabels: Record<string, string> = { success: '成功', failed: '失败', cancelled: '已取消', interrupted: '中断', running: '运行中', skipped: '已跳过' }
 const statusResultLabel = (r: string): string =>
-  hasOwn(resultLabels, r) ? resultLabels[r]! : certJobStatusLabel(r as CertJobStatus)
+  hasOwn(resultLabels, r) ? resultLabels[r]! : '未知'
 const resultTagType = (r: string): 'success' | 'danger' | 'info' | 'warning' =>
-  r === 'success' || r === 'issued' ? 'success' : r === 'failed' ? 'danger' : r === 'cancelled' ? 'warning' : 'info'
+  r === 'success' ? 'success' : r === 'failed' ? 'danger' : r === 'cancelled' ? 'warning' : 'info'
 
 // 时间显示（时区基本原则 2026-10-11 用户重申）：task_runs 由引擎按**配置时区**
 // 写入无时区字符串（engineNowStr=CurrentLocation）——原样渲染即配置时区，禁止

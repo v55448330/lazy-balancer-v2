@@ -387,9 +387,13 @@ func collectEngineFamilies(te *taskengine.Engine) []TaskInfo {
 		}
 		if m.ID == "cert-waiting-ca" && m.RoleApplicable && db.DB != nil {
 			// 仅展示「下次 CA 可用时间」，不参与 Periodic 调度；Descriptor 不再携带
-			// Scheduled 专用 NextSlotFn。
+			// Scheduled 专用 NextSlotFn。扫描口径=「仍有待消费的退避窗口」：
+			// failed 是统一失败语义后的现役形态（窗口到期前由 cert-waiting-ca
+			// 补扫重排），waiting_ca 仅覆盖旧备份/导入存量遗留行；且只统计窗口
+			// 仍在未来的行——已到期窗口即将被重排，展示成「下次可用」会误导。
 			var at string
-			if err := db.DB.QueryRow(`SELECT COALESCE(MIN(NULLIF(ca_available_after,'')),'') FROM cert_jobs WHERE status='waiting_ca'`).Scan(&at); err != nil {
+			if err := db.DB.QueryRow(`SELECT COALESCE(MIN(NULLIF(ca_available_after,'')),'') FROM cert_jobs
+				WHERE status IN ('failed','waiting_ca') AND ca_available_after IS NOT NULL AND datetime(ca_available_after)>datetime('now')`).Scan(&at); err != nil {
 				// 查询失败不得静默丢弃（否则页面「—」与「无 waiting_ca 任务」
 				// 不可区分）：按失败态转换留痕（首报 WARNING，恢复补 INFO）。
 				if lvl := logStateTransition(taskMonitorWaitingCALogKey, true); lvl != "" {
