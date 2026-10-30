@@ -5354,15 +5354,21 @@ func ensureClusterAppliedSections() error {
 }
 
 func migrateTCPRuleSecurityPolicyBindings() error {
-	// TCP 渲染链零消费策略绑定，绑定写接口、协议切换、导入和复制均已在保存
-	// 侧阻断新行；旧版本切换前产生的行只会抬高策略 rule_count/绑定视图。
-	// 仅删除指向 TCP 规则的绑定，HTTP 与无对应规则的历史行保持不变。
+	// L4 阶段 0/1 语义：TCP 规则可绑定 stage0/stage1 特征策略（渲染链消费），
+	// 仅清理指向「含 G2（限流）/G3（WAF）特征」策略的绑定——这类绑定在 TCP
+	// 渲染链零效果（预检 coraza/限流/WAF 都是 HTTP 链专属），只会虚增策略
+	// rule_count/绑定视图。stage0/stage1 绑定为合法状态，保留。
 	// 删除改变同步表 security_policy_bindings：在同一事务内沿用现有
 	// cluster_version bump 表达式，让从端按既有版本门于下一轮收敛。
-	// 先探测再开事务：重复启动无 TCP 绑定时零写入、零版本扰动。
+	// 先探测再开事务：重复启动无待清理绑定时零写入、零版本扰动。
 	var stale int
-	if err := DB.QueryRow(`SELECT COUNT(*) FROM security_policy_bindings
-		WHERE rule_caddy_id IN (SELECT caddy_id FROM lb_rules WHERE protocol='tcp')`).Scan(&stale); err != nil {
+	if err := DB.QueryRow(`SELECT COUNT(*) FROM security_policy_bindings b
+		JOIN lb_rules r ON r.caddy_id=b.rule_caddy_id AND r.protocol='tcp'
+		JOIN security_policies p ON p.id=b.policy_id
+		WHERE (COALESCE(p.rate_limit_enabled,0)=1 AND COALESCE(p.rate_limit_rps,0)>0)
+			OR COALESCE(p.mode,'off') IN ('blocking','detection','custom_only')
+			OR CASE WHEN json_valid(COALESCE(p.custom_rules,'[]')) AND json_type(COALESCE(p.custom_rules,'[]'))='array'
+				THEN json_array_length(COALESCE(p.custom_rules,'[]')) ELSE 0 END > 0`).Scan(&stale); err != nil {
 		return fmt.Errorf("failed to inspect TCP rule policy bindings: %w", err)
 	}
 	if stale == 0 {
@@ -5370,8 +5376,7 @@ func migrateTCPRuleSecurityPolicyBindings() error {
 	}
 	var removed int64
 	if err := withWriteTx("TCP rule policy binding cleanup", func(tx *sql.Tx) error {
-		res, err := tx.Exec(`DELETE FROM security_policy_bindings
-		WHERE rule_caddy_id IN (SELECT caddy_id FROM lb_rules WHERE protocol='tcp')`)
+		res, err := tx.Exec(TCPRuleUnsupportedBindingPruneSQL)
 		if err != nil {
 			return fmt.Errorf("failed to delete TCP rule policy bindings: %w", err)
 		}
@@ -5391,7 +5396,7 @@ func migrateTCPRuleSecurityPolicyBindings() error {
 	if removed > 0 {
 		// 用户策略绑定被删除须留痕（与 TCP 死字段/跨模式 TLS 残留等姊妹迁移
 		// 同口径：聚合一行 + 事务内实际变更计数）。
-		detail := fmt.Sprintf("存量 TCP 规则安全策略绑定已清理：%d 条（TCP 渲染链零消费策略绑定；删除后同事务推进 cluster_version 让从端收敛）", removed)
+		detail := fmt.Sprintf("存量 TCP 规则上 L4 不支持的策略绑定（限流/WAF 特征）已清理：%d 条（阶段 0/1 绑定保留；删除后同事务推进 cluster_version 让从端收敛）", removed)
 		log.Print(detail)
 		recordSystemAudit("启动迁移", "安全策略", detail)
 	}
@@ -5406,6 +5411,30 @@ func migrateTCPRuleSecurityPolicyBindings() error {
 //
 // 不 bump cluster_version：纯表示层格式归一，每节点本地启动迁移各自收敛；
 // 同版本前提下快照节哈希在两侧一致（归一是确定性的），无需版本门触发重拉。
+// TCPRuleUnsupportedBindingPruneSQL 是「TCP 规则上 L4 不支持的策略绑定」清理
+// 语句单一事实源（L4 阶段 0/1 语义）：TCP 规则可绑定 stage0/stage1 特征策略
+// （信任/IP ACL/黑名单/GeoIP，渲染链 buildTCPSecurityRoutes 消费），仅当绑定
+// 的策略携带 G2（限流：rate_limit_enabled=1 且 rps>0）或 G3（WAF：mode∈
+// blocking/detection/custom_only 或自定义规则引用数组非空）特征时清理。
+// 特征判定与 models.PolicyTypeFeatures 同语义（G2/G3 字面量口径）；
+// custom_rules 仅认 JSON 数组形态（对象旧形态与 models.CustomRulesRefCount
+// 同判 0）；畸形 JSON 经 json_valid 门按 0 计（与渲染侧「不认领」口径一致）。
+// 消费方：启动迁移 migrateTCPRuleSecurityPolicyBindings、导入事务
+// pruneTCPRuleBindings、保存/启用终态收口（handlers 共用本常量，禁止第二份
+// 字面量）。指向已删除策略的悬挂绑定不在本语句范围（悬挂族通用清理管辖）。
+// 删除粒度=（规则,策略）对：谓词必须以 EXISTS 关联到外层行的 policy_id——
+// 「IN (SELECT rule_caddy_id …)」投影只含规则 id，任一策略命中会把该规则上
+// 的 stage0/1 合法绑定一并清除（RED 钉测抓出的第一版缺陷）。
+const TCPRuleUnsupportedBindingPruneSQL = `DELETE FROM security_policy_bindings
+	WHERE EXISTS (
+		SELECT 1 FROM lb_rules r
+		JOIN security_policies p ON p.id = security_policy_bindings.policy_id
+		WHERE r.caddy_id = security_policy_bindings.rule_caddy_id AND r.protocol='tcp'
+			AND ((COALESCE(p.rate_limit_enabled,0)=1 AND COALESCE(p.rate_limit_rps,0)>0)
+				OR COALESCE(p.mode,'off') IN ('blocking','detection','custom_only')
+				OR CASE WHEN json_valid(COALESCE(p.custom_rules,'[]')) AND json_type(COALESCE(p.custom_rules,'[]'))='array'
+					THEN json_array_length(COALESCE(p.custom_rules,'[]')) ELSE 0 END > 0))`
+
 func normalizeRuleTimestampsMigration() error {
 	for _, table := range []string{"lb_rules", "path_rules"} {
 		for _, col := range []string{"created_at", "updated_at"} {

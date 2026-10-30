@@ -39,8 +39,9 @@ func TestStartupLegacyMigrations_secondStartWriteFree(t *testing.T) {
 		VALUES ('lb_tcp_1','tcp 规则','tcp', 9000, 'dead.example', 1, '1.1.1.1')`)
 	// 存量 https 协议规则（TLS-only 旧形态）。
 	mustExec(`INSERT INTO lb_rules (caddy_id, name, protocol, listen_port) VALUES ('lb_https_1','https 规则','https', 8443)`)
-	// 存量 TCP 策略绑定（旧版本 HTTP→TCP 切换遗留）。
-	mustExec(`INSERT INTO security_policies (id, name) VALUES (1, 'legacy policy')`)
+	// 存量 TCP 策略绑定（旧版本 HTTP→TCP 切换遗留）：策略需携带 G2/G3 特征
+	// 才在新语义（L4 阶段 0/1）下被启动迁移清理。
+	mustExec(`INSERT INTO security_policies (id, name, mode) VALUES (1, 'legacy policy', 'blocking')`)
 	mustExec(`INSERT INTO security_policy_bindings (rule_caddy_id, policy_id) VALUES ('lb_tcp_1', 1)`)
 
 	// Given 首轮启动迁移（存量数据命中全部四条迁移）。

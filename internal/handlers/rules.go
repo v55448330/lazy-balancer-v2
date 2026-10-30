@@ -3077,28 +3077,22 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "证书申请中，请等待完成或失败后再修改规则"})
 		return
 	}
-	// TCP 终态一律解除安全策略绑定（不只协议切换）——TCP 渲染链
-	// （buildTCPProxyRoute）不加载策略，残留绑定会在策略页 rule_count/绑定视图
-	// 中显示为生效而运行态零防护；绑定写接口又拒绝 TCP，用户无法在面板内自救。
-	// 存量/带外改库写入的 TCP 绑定同样在此收口（启用端点同族清理）。
-	// 同协议 HTTP 编辑保留绑定（对照行为由 general_regression_02_test.go 的
-	// TestProtocolSwitchToTCPDropsSecurityBindings 钉住）。
+	// TCP 终态收口（不只协议切换）——按 L4 阶段 0/1 语义（契约 C4）只清理
+	// 「含 G2（限流）/G3（WAF）特征」的绑定：这类绑定在 TCP 渲染链零效果
+	//（预检 coraza/限流/WAF 均为 HTTP 链专属），只会虚增策略 rule_count/
+	// 绑定视图。stage0/stage1 特征绑定是合法状态，保留（渲染由
+	// buildTCPSecurityRoutes 消费）。存量/带外改库写入的违规绑定同样在此
+	// 收口（启用端点/导入/启动迁移共用 db.TCPRuleUnsupportedBindingPruneSQL
+	// 单源谓词）。同协议 HTTP 编辑保留绑定（对照行为由
+	// general_regression_02_test.go 的 TestProtocolSwitchToTCPDropsSecurityBindings
+	// 钉住）。
 	var droppedBindings int64
 	if req.Protocol == "tcp" {
-		result, err := tx.Exec("DELETE FROM security_policy_bindings WHERE rule_caddy_id = ?", caddyID)
+		affected, err := pruneTCPUnsupportedBindings(caddyWriteCtx(c), tx)
 		if err != nil {
 			rollbackRuleWriteTx(tx, "UpdateRule", caddyID)
 			services.Logf("error", "UpdateRule security_policy_bindings cleanup error for caddy_id=%s: %v", caddyID, err)
 			recordRuleWriteFailure(c, "更新", "写入数据库失败（清理安全策略绑定）", err)
-			writeInternalError(c, http.StatusInternalServerError, "写入数据库失败（清理安全策略绑定）", nil)
-			return
-		}
-		// 影响行数读失败时绑定已删除——不能当 0 跳过审计（审计与事实不符）。
-		affected, raErr := result.RowsAffected()
-		if raErr != nil {
-			rollbackRuleWriteTx(tx, "UpdateRule", caddyID)
-			services.Logf("error", "UpdateRule security_policy_bindings RowsAffected error for caddy_id=%s: %v", caddyID, raErr)
-			recordRuleWriteFailure(c, "更新", "确认安全策略绑定清理结果失败", raErr)
 			writeInternalError(c, http.StatusInternalServerError, "写入数据库失败（清理安全策略绑定）", nil)
 			return
 		}

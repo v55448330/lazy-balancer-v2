@@ -28,6 +28,8 @@ import {
   isWafDurationFamily,
   missingSharedEntryIds,
   pickDefaultPolicyTab,
+  policySupportsTcp,
+  TCP_BIND_UNSUPPORTED_REASON,
   triggerStageFamily,
   trustHitMode,
   type SecurityPolicyType,
@@ -906,4 +908,18 @@ test('明细 · 条目合并与 ACL 名单计数：内联优先去重、引用�
   assert.equal(closedDetails?.aclLists, undefined)
   assert.equal(closedDetails?.aclInlineCount, undefined)
   assert.deepEqual(closedDetails?.blacklistEntries, ['7.7.7.7'])
+})
+
+// ---- TCP（L4）绑定阶段门：仅阶段 0/1 单职策略可绑；限流/WAF/混合含不支持能力 ----
+
+test('TCP 绑定门：stage0/stage1 放开，stage2/stage3/mixed/未知类型一律拒绝', () => {
+  assert.equal(policySupportsTcp('stage0'), true)
+  assert.equal(policySupportsTcp('stage1'), true)
+  assert.equal(policySupportsTcp('stage2'), false)
+  assert.equal(policySupportsTcp('stage3'), false)
+  assert.equal(policySupportsTcp('mixed'), false)
+  // 精简载荷缺类型 → fail-closed（不可绑）
+  assert.equal(policySupportsTcp(undefined), false)
+  // 拒绝原因文案与后端 400 同款（编辑器/向导选择器单源引用）
+  assert.equal(TCP_BIND_UNSUPPORTED_REASON, '该策略含 TCP 不支持的能力（限流/WAF）')
 })

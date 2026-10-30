@@ -338,6 +338,7 @@ func seedTCPBindingMigrationDB(t *testing.T) *sql.DB {
 		('lb_audit_http','http-rule','http',8080,'gzip'),
 		('lb_audit_tcp_a','tcp-a','tcp',9001,''),
 		('lb_audit_tcp_b','tcp-b','tcp',9002,'');
+		INSERT INTO security_policies (id,name,mode) VALUES (7,'audit-blocking','blocking');
 		INSERT INTO security_policy_bindings (rule_caddy_id,policy_id) VALUES
 		('lb_audit_http',7),('lb_audit_tcp_a',7),('lb_audit_tcp_b',7);`); err != nil {
 		t.Fatalf("seed bindings: %v", err)

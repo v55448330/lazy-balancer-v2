@@ -102,6 +102,7 @@ func ConfigureWafDirs(dataDir string) {
 	// 容器/非默认 data_dir 部署必须显式设置这两个 env（见下方启动期告警）。
 	securityEventsIPCSocketPath = filepath.Join(dataDir, "security-events.sock")
 	securityEventsSpoolDir = filepath.Join(dataDir, "security-events-spool")
+	securityEventsL4SpoolDir = filepath.Join(dataDir, "security-events-spool-l4")
 	for _, item := range []struct{ name, path string }{
 		{SecurityEventsIPCSocketEnv, securityEventsIPCSocketPath},
 		{SecurityEventsSpoolDirEnv, securityEventsSpoolDir},
@@ -438,20 +439,22 @@ const ipListGCInterval = time.Hour
 //     字符类收 `_`，并收大写与 `.`（v2 导入可携带大写/
 //     含点 rule id，旧字符类使这类孤儿永不回收；白名单仍不含路径分隔符，
 //     纯单段文件名，无路径逃逸面）；升级前旧全局名 u-deny.txt 等同字符类
-//     天然覆盖，由 24h GC 过渡回收）；精确白名单，用户手放文件不碰；
+//     天然覆盖，由 24h GC 过渡回收）、l4-(trust|deny|bl|allow)-<ruleCaddyID>
+//     （L4 阶段 0/1 安全路由投影，规则身份编入 scope——与 u-* 同一粒度铁律）；
+//     精确白名单，用户手放文件不碰；
 //   - 旧内容寻址 <已知 scope>-sha256[:12].txt——迁移过渡分支：改造前落盘的
 //     旧哈希文件由既有 24h GC 自然回收（不写迁移）。后缀只允许
 //     挂在上述已知 scope 形态之后——原 `|.+-[0-9a-f]{12}` 会把运维投放的
 //     backup-deadbeef1234.txt 一律当作自身投影删除，且「旧文件清尽后自行
 //     失效」的注释不成立（分支恒命中任意前缀）。旧文件清尽后该分支对已知
 //     scope 仍可能命中（用户手放同形名），但不再吞未知前缀文件。
-var ipListProjectedFileName = regexp.MustCompile(`^(u-[A-Za-z0-9][A-Za-z0-9._-]*|p[0-9]+-(acl|trust|bl|crsxc-([0-9]+|[0-9a-f]{12}))|tp)(-[0-9a-f]{12})?\.txt$`)
+var ipListProjectedFileName = regexp.MustCompile(`^(u-[A-Za-z0-9][A-Za-z0-9._-]*|p[0-9]+-(acl|trust|bl|crsxc-([0-9]+|[0-9a-f]{12}))|tp|l4-(trust|deny|bl|allow)-[A-Za-z0-9][A-Za-z0-9._-]*)(-[0-9a-f]{12})?\.txt$`)
 
 // ipListTempFileName 匹配 internal/atomicfile.WriteAtomic 的真实临时名：
 // `.<投影文件名>-<随机数字>.tmp`（例如 `.p12-acl.txt-12345.tmp`）。
 // GC 只删除本模块拥有的临时文件——目录内的无关 .tmp 一律不动；24h 超龄
 // 门槛仍保护在役写入。scope 白名单与 ipListProjectedFileName 同源收口。
-var ipListTempFileName = regexp.MustCompile(`^\.(u-[A-Za-z0-9][A-Za-z0-9._-]*|p[0-9]+-(acl|trust|bl|crsxc-([0-9]+|[0-9a-f]{12}))|tp)(-[0-9a-f]{12})?\.txt-[0-9]+\.tmp$`)
+var ipListTempFileName = regexp.MustCompile(`^\.(u-[A-Za-z0-9][A-Za-z0-9._-]*|p[0-9]+-(acl|trust|bl|crsxc-([0-9]+|[0-9a-f]{12}))|tp|l4-(trust|deny|bl|allow)-[A-Za-z0-9][A-Za-z0-9._-]*)(-[0-9a-f]{12})?\.txt-[0-9]+\.tmp$`)
 
 // ipListRenderRefs 记录本进程渲染引用过的投影文件及最近引用时间：一次全量
 // 配置渲染会重新投影全部在役名单（同字节跳写也计引用），故「长期

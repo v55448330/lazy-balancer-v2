@@ -175,8 +175,8 @@ func TestSplitSecurityPolicy_tcpBindingSkippedAndOriginalKept(t *testing.T) {
 		rid, _ := s["rule_id"].(string)
 		if rid == "lb_s3_tcp" {
 			skippedTCP = true
-			if reason, _ := s["reason"].(string); !strings.Contains(reason, "仅支持绑定 HTTP") {
-				t.Fatalf("tcp skipped reason=%q, want 含「仅支持绑定 HTTP」", reason)
+			if reason, _ := s["reason"].(string); !strings.Contains(reason, "TCP 不支持的能力") {
+				t.Fatalf("tcp skipped reason=%q, want 含「TCP 不支持的能力」（G2/G3 特征绑定拒绝，L4 阶段 0/1 门）", reason)
 			}
 		}
 	}

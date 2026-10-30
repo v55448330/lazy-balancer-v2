@@ -114,3 +114,52 @@ export function bucketTerminology(windowHours: number): {
     }
     : { unit: '小时', peakLabel: '峰值时段', countLabel: '有事件小时', windowLabel: `${windowHours} 小时` }
 }
+
+/**
+ * TCP（L4）流量差分的消费面归一（threat-screen traffic 响应 `l4` 键）。
+ *
+ * 后端（A1 契约）已在服务端完成差分——`rules`/`countries` 都是本次轮询的
+ * **增量值**（admin /load 或计数器重置按重置后值计，不会出负数），前端不得
+ * 再做第二次差分：
+ *   - `countries`：放行连接按国家差分，键为中文国家名（与同响应 `countries`
+ *     键完全同口径）——只并入正常弧通道（setTraffic），因 1/16 采样、未经还原，
+ *     不入 QPS/累计线。
+ *   - `rules`：逐规则 `allowed`/`denied` 全量差分——调用方聚合后放行并入正常
+ *     QPS/累计、拒绝并入攻击 QPS/累计（攻击披露面）。
+ *
+ * 防御口径：`l4` 键缺省（旧后端/available=false）/空对象 → 全零结果，调用方
+ * 无 l4 数据；非法形状逐字段容忍（非数值按 0），未知字段忽略。
+ */
+interface L4TrafficDelta {
+  /** 正常弧通道条目（中文国家名 → 放行连接差分，采样口径仅作弧线可视化） */
+  readonly countryArcs: { name: string; count: number }[]
+  /** 全量差分合计：放行连接数（本次轮询增量） */
+  readonly allowed: number
+  /** 全量差分合计：拒绝（断连）连接数（本次轮询增量） */
+  readonly denied: number
+}
+
+export function l4TrafficDelta(l4: unknown): L4TrafficDelta {
+  if (typeof l4 !== 'object' || l4 === null) return { countryArcs: [], allowed: 0, denied: 0 }
+  const shaped = l4 as { countries?: unknown; rules?: unknown }
+  const countryArcs: { name: string; count: number }[] = []
+  if (typeof shaped.countries === 'object' && shaped.countries !== null) {
+    for (const [name, value] of Object.entries(shaped.countries as Record<string, unknown>)) {
+      if (typeof name !== 'string' || name === '') continue
+      const count = typeof value === 'number' && Number.isFinite(value) ? value : 0
+      if (count > 0) countryArcs.push({ name, count })
+    }
+  }
+  let allowed = 0
+  let denied = 0
+  if (typeof shaped.rules === 'object' && shaped.rules !== null) {
+    for (const entry of Object.values(shaped.rules as Record<string, unknown>)) {
+      if (typeof entry !== 'object' || entry === null) continue
+      const a = (entry as { allowed?: unknown }).allowed
+      const d = (entry as { denied?: unknown }).denied
+      if (typeof a === 'number' && Number.isFinite(a) && a > 0) allowed += a
+      if (typeof d === 'number' && Number.isFinite(d) && d > 0) denied += d
+    }
+  }
+  return { countryArcs, allowed, denied }
+}

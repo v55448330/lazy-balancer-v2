@@ -134,6 +134,12 @@
           <el-option label="拦截" value="blocked" />
           <el-option label="检测" value="logged" />
         </el-select>
+        <!-- 协议类型筛选：TCP（L4 断连事件）/HTTP（waf 口径，含带外 NULL 归并）；
+             值原样透传 event_type 查询参数（后端精确匹配） -->
+        <el-select v-model="filters.event_type" placeholder="类型" clearable style="width: 86px">
+          <el-option label="TCP" value="tcp" />
+          <el-option label="HTTP" value="waf" />
+        </el-select>
         <!-- （用户需求）：规则 ID 筛选替换为三列（负载规则/触发规则/策略）
              服务端筛选（rule_name/rule_triggered/policy_name LIKE）。 -->
         <el-input v-model="filters.rule_name" placeholder="负载规则" clearable style="width: 100px" @keyup.enter="applyFilters" />
@@ -201,6 +207,8 @@
         </el-table-column>
         <el-table-column label="规则" min-width="130">
           <template #default="{ row }">
+            <!-- TCP（L4 断连）事件徽标（青色全局单源）：与 HTTP 事件混排须可辨识 -->
+            <el-tag v-if="row.event_type === 'tcp'" size="small" effect="plain" class="proto-tcp-tag event-proto-tag">TCP</el-tag>
             <AccessibleLink v-if="row.rule_name || row.rule_caddy_id" type="primary" @click="goToRule(row as SecurityEvent)">{{ row.rule_name || row.rule_caddy_id || '—' }}</AccessibleLink>
             <span v-else>—</span>
           </template>
@@ -336,10 +344,10 @@
           <div class="dialog-panel dialog-panel--flush">
             <el-descriptions :column="2" border size="small">
               <el-descriptions-item label="时间">{{ ctxEvent.event_time ? formatDate(ctxEvent.event_time) : '—' }}</el-descriptions-item>
-              <el-descriptions-item label="方法">{{ ctxEvent.method || '—' }}</el-descriptions-item>
+              <el-descriptions-item label="方法">{{ ctxIsTcp ? '—（TCP 连接）' : (ctxEvent.method || '—') }}</el-descriptions-item>
               <el-descriptions-item label="客户端 IP">{{ ctxEvent.client_ip || '—' }}</el-descriptions-item>
               <el-descriptions-item label="归属地">{{ ctxEvent.ip_location || '—' }}</el-descriptions-item>
-              <el-descriptions-item label="URI" :span="2">{{ ctxEvent.uri || '—' }}</el-descriptions-item>
+              <el-descriptions-item label="URI" :span="2">{{ ctxIsTcp ? '—（TCP 连接）' : (ctxEvent.uri || '—') }}</el-descriptions-item>
               <el-descriptions-item label="触发规则">{{ [ctxEvent.rule_name, ctxEvent.rule_triggered ? `id:${ctxEvent.rule_triggered}` : ''].filter(Boolean).join(' · ') || '—' }}</el-descriptions-item>
               <el-descriptions-item label="所属策略">{{ ctxEvent.policy_name || '—' }}</el-descriptions-item>
               <el-descriptions-item label="动作">
@@ -354,7 +362,8 @@
           </div>
         </section>
 
-        <section class="ctx-detail-section">
+        <!-- TCP（L4）事件无请求语义：请求头/请求体区块整段隐藏（连接级事件无 HTTP 明细） -->
+        <section v-if="!ctxIsTcp" class="ctx-detail-section">
           <DialogSectionHeader title="请求头" />
           <template v-if="ctxHeadersParsed.failed">
             <div class="info-note-bar ctx-banner"><span class="info-note-desc">请求头记录解析失败，以下为原始内容</span></div>
@@ -390,7 +399,7 @@
           <div v-else class="dialog-panel"><div class="ctx-empty">暂无请求头记录</div></div>
         </section>
 
-        <section class="ctx-detail-section">
+        <section v-if="!ctxIsTcp" class="ctx-detail-section">
           <DialogSectionHeader title="请求体" />
           <div v-if="ctxBodyParsed.state === 'empty'" class="dialog-panel"><div class="ctx-empty">{{ ctxBodyEmptyText }}</div></div>
           <template v-else>
@@ -733,6 +742,9 @@ const ingestionWarning = computed(() => ingestionWarningMessage(ingestionStatus.
 // —— 请求上下文详情弹框（策略「记录请求体」开启后事件携带 request_headers/request_body）——
 const ctxDialogVisible = ref(false)
 const ctxEvent = ref<SecurityEvent | null>(null)
+// TCP（L4 断连）事件：无请求语义——method/uri 空、无请求头/请求体，
+// 详情弹框按连接级形态渲染（占位符 + 隐藏 headers/body 区块）。
+const ctxIsTcp = computed(() => ctxEvent.value?.event_type === 'tcp')
 // 敏感头逐行显示状态（key = 小写头名）：默认掩码 ••••••，眼睛图标点击切换
 const ctxRevealed = ref<Set<string>>(new Set())
 
@@ -857,7 +869,7 @@ const logStorageRefreshKey = ref(0)
 // 触发阶段筛选为固定预置八类（用户裁定：固定预置值，不接受任意值）。
 // 令牌 → 后端族段映射与序列化单源在 utils/triggeredFilter
 // 原实现内联在本文件、无行为测试）。
-const filters = ref({ action: '', ip: '', uri: '', rule_name: '', rule_triggered: [...TRIGGERED_CATEGORIES] as string[], policy_name: '', timeRange: null as [string, string] | null })
+const filters = ref({ action: '', event_type: '', ip: '', uri: '', rule_name: '', rule_triggered: [...TRIGGERED_CATEGORIES] as string[], policy_name: '', timeRange: null as [string, string] | null })
 
 // 头部全选复选框三态：八类全中=全选；部分中=半选
 const triggeredCheckAll = computed(() => TRIGGERED_CATEGORIES.every((c) => filters.value.rule_triggered.includes(c)))
@@ -888,7 +900,7 @@ const applyFilters = () => {
 }
 
 const resetFilters = () => {
-  filters.value = { action: '', ip: '', uri: '', rule_name: '', rule_triggered: [...TRIGGERED_CATEGORIES], policy_name: '', timeRange: null }
+  filters.value = { action: '', event_type: '', ip: '', uri: '', rule_name: '', rule_triggered: [...TRIGGERED_CATEGORIES], policy_name: '', timeRange: null }
   page.value = 1
   fetchEvents()
 }
@@ -914,6 +926,7 @@ const fetchEvents = async () => {
   try {
     const p = new URLSearchParams({ page: String(page.value), page_size: String(pageSize.value) })
     if (filters.value.action) p.set('action', filters.value.action)
+    if (filters.value.event_type) p.set('event_type', filters.value.event_type)
     if (filters.value.ip) p.set('ip', filters.value.ip)
     if (filters.value.rule_name) p.set('rule_name', filters.value.rule_name)
     // 触发规则：全选（八类全中且无自定义 tag）或空选 = 不过滤，不发送参数；
@@ -982,6 +995,8 @@ const refreshPage = (): void => {
 .filter-actions .el-button { padding-left: 12px; padding-right: 12px; }
 .filter-actions .el-button + .el-button { margin-left: 8px; }
 .cell-tip { cursor: help; border-bottom: 1px dashed #c0c4cc; }
+/* TCP 协议徽标与规则名链接的间距（cell inline-flex 全局基线上） */
+.event-proto-tag { margin-right: 6px; }
 .cell-tip:focus-visible { outline: 2px solid var(--el-color-primary); outline-offset: 2px; border-radius: 2px; }
 
 

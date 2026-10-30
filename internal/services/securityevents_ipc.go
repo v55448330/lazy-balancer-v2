@@ -53,8 +53,12 @@ const (
 
 	// DefaultSecurityEventsIPCSocket / DefaultSecurityEventsSpoolDir 是容器默认
 	// 形态（data_dir=/app/data）。自定义 data_dir 经 ConfigureWafDirs 派生。
-	DefaultSecurityEventsIPCSocket = "/app/data/security-events.sock"
-	DefaultSecurityEventsSpoolDir  = "/app/data/security-events-spool"
+	// DefaultSecurityEventsL4SpoolDir 是 L4 写侧（caddyl4sec shipper，任务契约
+	// 独立目录）的 fallback spool——面板补采扫描按目录清单两处都扫，漏扫即
+	// spooled L4 行永不入库。
+	DefaultSecurityEventsIPCSocket  = "/app/data/security-events.sock"
+	DefaultSecurityEventsSpoolDir   = "/app/data/security-events-spool"
+	DefaultSecurityEventsL4SpoolDir = DefaultSecurityEventsSpoolDir + "-l4"
 
 	// DefaultSecurityEventsSpoolMaxEntries / DefaultSecurityEventsSpoolMaxBytes
 	// 与写侧默认值同源（100k 条 / 64MiB）。
@@ -95,6 +99,7 @@ var errSecurityEventsBatchIncomplete = errors.New("security events: batch ingest
 var (
 	securityEventsIPCSocketPath = DefaultSecurityEventsIPCSocket
 	securityEventsSpoolDir      = DefaultSecurityEventsSpoolDir
+	securityEventsL4SpoolDir    = DefaultSecurityEventsL4SpoolDir
 )
 
 // SecurityEventsIPCSocketPath 返回 IPC socket 路径（env 优先，其次派生值）。
@@ -113,13 +118,38 @@ func SecurityEventsSpoolDir() string {
 	return securityEventsSpoolDir
 }
 
+// SecurityEventsL4SpoolDirEnv 是 L4 写侧（caddyl4sec shipper）spool 目录的环境
+// 变量名（默认派生 <data_dir>/security-events-spool-l4，与 A2 写侧任务契约
+// 的独立目录同值；容器默认形态两侧逐字节一致）。
+const SecurityEventsL4SpoolDirEnv = "LB_SECURITY_EVENTS_L4_SPOOL_DIR"
+
+// securityEventsL4SpoolDirValue 返回 L4 spool 目录（env 优先，其次派生值）。
+func securityEventsL4SpoolDirValue() string {
+	if v := strings.TrimSpace(os.Getenv(SecurityEventsL4SpoolDirEnv)); v != "" {
+		return v
+	}
+	return securityEventsL4SpoolDir
+}
+
+// securityEventsSpoolDirs 是补采扫描的目录清单（主目录在前，L4 目录随后；
+// 同值去重——env 覆盖把两目录指到同一处时不得重复扫描同一文件）。文件级
+// 因果序由调用方按名字（unixnano 时间戳形态）全局排序保持。
+func securityEventsSpoolDirs() []string {
+	dirs := []string{SecurityEventsSpoolDir()}
+	if l4 := securityEventsL4SpoolDirValue(); l4 != dirs[0] {
+		dirs = append(dirs, l4)
+	}
+	return dirs
+}
+
 // EnsureSecurityEventsSpoolDir 启动期建 spool 目录（0700，与写侧同用户同容器）：
 // 写侧 IPC 失败时要能立刻落盘兜底，不能等第一次失败才发现目录不存在。
 // 权限口径与审计数据目录一致（仅本用户可读写）。
 func EnsureSecurityEventsSpoolDir() error {
-	dir := SecurityEventsSpoolDir()
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return fmt.Errorf("创建安全事件待补采目录 %s 失败: %w", dir, err)
+	for _, dir := range securityEventsSpoolDirs() {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return fmt.Errorf("创建安全事件待补采目录 %s 失败: %w", dir, err)
+		}
 	}
 	return nil
 }
@@ -288,17 +318,33 @@ func resetSecurityEventsSpoolEntryCountCacheForTest() {
 // 另按 (size,mtime,append offset) 缓存：未变化文件零读取，追加中的 active 文件
 // 只读新增字节，避免每 10s 重读整批 sealed 文件。
 func securityEventsSpoolStatusFresh() SecurityEventsSpoolStatus {
-	dir := SecurityEventsSpoolDir()
+	dirs := securityEventsSpoolDirs()
 	limitEntries, limitBytes := securityEventsSpoolLimits()
-	status := SecurityEventsSpoolStatus{Dir: dir, LimitEntries: limitEntries, LimitBytes: limitBytes}
+	status := SecurityEventsSpoolStatus{Dir: dirs[0], LimitEntries: limitEntries, LimitBytes: limitBytes}
+	seen := map[string]struct{}{}
+	for _, dir := range dirs {
+		securityEventsSpoolStatusFreshIn(dir, &status, seen)
+	}
+	securityEventsSpoolCountCache.Lock()
+	for path := range securityEventsSpoolCountCache.files {
+		if _, ok := seen[path]; !ok {
+			delete(securityEventsSpoolCountCache.files, path)
+		}
+	}
+	securityEventsSpoolCountCache.Unlock()
+	status.Saturated = (limitEntries > 0 && status.Entries >= limitEntries) ||
+		(limitBytes > 0 && status.Bytes >= limitBytes)
+	return status
+}
+
+func securityEventsSpoolStatusFreshIn(dir string, status *SecurityEventsSpoolStatus, seen map[string]struct{}) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if !os.IsNotExist(err) {
 			status.Unavailable = true
 		}
-		return status
+		return
 	}
-	seen := map[string]struct{}{}
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
@@ -334,16 +380,6 @@ func securityEventsSpoolStatusFresh() SecurityEventsSpoolStatus {
 		}
 		status.Entries += n
 	}
-	securityEventsSpoolCountCache.Lock()
-	for path := range securityEventsSpoolCountCache.files {
-		if _, ok := seen[path]; !ok {
-			delete(securityEventsSpoolCountCache.files, path)
-		}
-	}
-	securityEventsSpoolCountCache.Unlock()
-	status.Saturated = (limitEntries > 0 && status.Entries >= limitEntries) ||
-		(limitBytes > 0 && status.Bytes >= limitBytes)
-	return status
 }
 
 func securityEventsSpoolCountEntriesCached(path string, info os.FileInfo) (int64, error) {
@@ -478,7 +514,19 @@ type securityEventsSpoolFile struct {
 // listSecurityEventsSpoolFiles 列出 spool 中的 active/sealed 文件（按名字排序：
 // sealed-<unixnano> 字典序≈时间序，补采按顺序保持因果）。
 func listSecurityEventsSpoolFiles() ([]securityEventsSpoolFile, error) {
-	dir := SecurityEventsSpoolDir()
+	var files []securityEventsSpoolFile
+	for _, dir := range securityEventsSpoolDirs() {
+		dirFiles, err := listSecurityEventsSpoolFilesIn(dir)
+		if err != nil {
+			return nil, err
+		}
+		files = append(files, dirFiles...)
+	}
+	sort.Slice(files, func(i, j int) bool { return files[i].name < files[j].name })
+	return files, nil
+}
+
+func listSecurityEventsSpoolFilesIn(dir string) ([]securityEventsSpoolFile, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -514,7 +562,6 @@ func listSecurityEventsSpoolFiles() ([]securityEventsSpoolFile, error) {
 		f.mod = info.ModTime()
 		files = append(files, f)
 	}
-	sort.Slice(files, func(i, j int) bool { return files[i].name < files[j].name })
 	return files, nil
 }
 

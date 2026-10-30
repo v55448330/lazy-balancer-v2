@@ -1350,6 +1350,16 @@ export const SECURITY_BULK_LIMITS = { policyBindings: 100, ruleBlockPages: 500 }
 // 冲突检测注释/夹紧）共用，前两份本地常量各写一遍，后端调整时易漏改。
 export const MAX_POLICIES_PER_RULE = 8
 
+// ── TCP（L4）绑定阶段门（阶段 0/1 放开） ──
+// TCP 规则仅可绑定阶段 0（信任名单）/阶段 1（IP 访问控制/地域拦截）单职策略；
+// 限流（stage2）/WAF（stage3）/混合（mixed）含 TCP 不支持的能力（L4 无请求语义，
+// 无 429/WAF 引擎面）。与后端绑定校验同源（400 文案同款），拒绝动作=断连。
+// SecurityBindingEditor（规则侧分区置灰 + 策略侧选择器）与 SecurityPolicies
+// （向导关联规则选择器）共用本谓词，禁止第二份类型清单。
+export const TCP_BIND_UNSUPPORTED_REASON = '该策略含 TCP 不支持的能力（限流/WAF）'
+export const policySupportsTcp = (type: SecurityPolicyType | undefined): boolean =>
+  type === 'stage0' || type === 'stage1'
+
 /** 绑定行的最小形状（策略类型由策略摘要推断，精简载荷缺摘要时回退限流标志）。
  *  仅作本文件 hasOtherStage2Binding 的入参约束——形状不外泄，故不导出
  *  （谓词本身由规则侧编辑器与策略向导两处导入）。 */

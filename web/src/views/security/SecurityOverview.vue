@@ -59,6 +59,10 @@
                       <el-icon class="stat-box__tip"><InfoFilled /></el-icon>
                     </el-tooltip>
                   </div>
+                  <!-- 协议拆分行（L4 阶段 0/1 披露）：响应无 today_blocked_tcp 字段（旧后端）
+                       或 TCP=0 时整行隐藏（防御式）；today_blocked 为全协议合计
+                       （rollup 无 event_type 维度，TCP 事件同样聚合），HTTP = 合计 − TCP -->
+                  <div v-if="todayBlockedSplit" class="stat-box__proto-split">HTTP {{ todayBlockedSplit.http }} · TCP {{ todayBlockedSplit.tcp }}</div>
                 </div>
               </div>
             </div>
@@ -222,7 +226,10 @@
               </template>
             </el-table-column>
             <el-table-column label="规则" min-width="160" show-overflow-tooltip>
-              <template #default="{ row }">{{ row.rule_name || row.rule_caddy_id || '—' }}</template>
+              <template #default="{ row }">
+                <!-- TCP（L4 断连）事件同款青色徽标（全局单源） -->
+                <el-tag v-if="row.event_type === 'tcp'" size="small" effect="plain" class="proto-tcp-tag event-proto-tag">TCP</el-tag><span>{{ row.rule_name || row.rule_caddy_id || '—' }}</span>
+              </template>
             </el-table-column>
             <el-table-column label="策略" min-width="140" show-overflow-tooltip>
               <template #default="{ row }">{{ row.policy_name || '—' }}</template>
@@ -337,13 +344,16 @@ interface Overview {
   crs_available?: boolean; ip2region_available?: boolean; update_status?: string
   trend: TrendPoint[]; top_ips: TopIP[]; attack_types: AttackType[]; attack_types_stage: AttackType[]
   raw_coverage_from?: string; backfill_incomplete?: boolean
+  // 今日拦截的 TCP（L4 断连）份额：旧后端缺失 → 协议拆分行整行隐藏（防御式）。
+  // 原始表直算（不走 rollup——rollup 无 event_type 维度），极端量级下行帽裁剪可能少计。
+  today_blocked_tcp?: number
   // includes_reserved：后端口径披露——true=今日计数回退原始表直算（含私网/保留
   // 地址事件）；false=走分钟 rollup 与大屏同口径（不含私网）。tooltip 按此切换文案
   includes_reserved?: boolean
   // ingestion：与事件列表同源的采集健康位（见 utils/ingestionHealth）
   ingestion?: IngestionHealth
 }
-interface SecurityEvent { id: number; event_time: string; client_ip: string; rule_caddy_id: string; rule_name: string; policy_name: string; ip_location?: string }
+interface SecurityEvent { id: number; event_time: string; client_ip: string; rule_caddy_id: string; rule_name: string; policy_name: string; ip_location?: string; event_type?: string }
 
 const attackByStage = ref(true)
 
@@ -362,6 +372,13 @@ const overview = ref<Overview>({ today_blocked: 0, today_detected: 0, active_pol
 // 误当「无攻击」，用户目标与 后端显式报错对齐。
 const overviewError = ref(false)
 const ingestionWarning = computed(() => ingestionWarningMessage(overview.value.ingestion))
+// 今日拦截协议拆分：TCP 份额缺失（旧后端）/为 0 时 null → 整行隐藏；
+// today_blocked 是全协议合计，HTTP = 合计 − TCP（负值钳 0，防 rollup 滞后瞬间为负）
+const todayBlockedSplit = computed<{ http: number; tcp: number } | null>(() => {
+  const tcp = overview.value.today_blocked_tcp
+  if (typeof tcp !== 'number' || !Number.isFinite(tcp) || tcp <= 0) return null
+  return { http: Math.max(0, overview.value.today_blocked - tcp), tcp }
+})
 const todayCountTip = computed(() => overview.value.includes_reserved
   ? '总量含私网/保留地址事件（内网扫描、文档测试段等也会计入，与大屏排除口径不同）'
   : '与大屏同口径（分钟汇总）：不含私网/保留地址事件，含当前分钟截至最近一次汇总的事件（滞后约 1 分钟）')
@@ -573,6 +590,10 @@ onMounted(() => { void reloadAll() })
 .stat-box__body { flex: 1; min-width: 0; }
 .stat-box__value { font-size: 20px; font-weight: 700; line-height: 1.3; }
 .stat-box__label { font-size: 12px; color: var(--text-secondary); margin-top: 2px; }
+/* 今日拦截协议拆分行（HTTP N · TCP N）：弱化小字 + 等宽数字 */
+.stat-box__proto-split { font-size: 12px; color: var(--text-secondary); margin-top: 2px; font-variant-numeric: tabular-nums; }
+/* TCP 徽标与规则名同 cell 的间距 */
+.event-proto-tag { margin-right: 6px; }
 .stat-box__tip { font-size: 12px; vertical-align: -1px; margin-left: 2px; color: var(--text-secondary); cursor: help; }
 
 .stat-box--danger .stat-box__icon { background: #fef0f0; color: #f56c6c; }

@@ -2984,7 +2984,13 @@ func generateCaddyConfigWithCertSource(store, certSource caddyConfigStore, rules
 				MaxConnections: u.MaxConnections,
 			})
 		}
-		tcpServer, tcpErr := buildTCPServer(ruleConfig)
+		// L4 安全段（契约 C2）：绑定启用策略集经批量预载上下文透传——
+		// 事务视图渲染（含热路径重渲染）与 HTTP 链同一 store 读取；缺库
+		// 降级门在 buildTCPSecurityRoutesWithDegradation 内按批次一次告警。
+		tcpServer, tcpErr := buildTCPServer(ruleConfig, &tcpSecurityRenderInput{
+			policies: policiesForRule(securityCtx, ruleConfig.CaddyID),
+			ctx:      securityCtx,
+		})
 		if tcpErr != nil {
 			return generationFailure("build TCP server for rule %s: %v", ruleConfig.CaddyID, tcpErr)
 		}
@@ -3668,7 +3674,13 @@ func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{}
 
 		servers[serverName] = server
 	} else {
-		tcpServer, tcpErr := buildTCPServer(rule)
+		// L4 安全段（契约 C2）：单规则形态读已提交视图绑定策略（与
+		// mergeTrustedProxyServerFields 的 db.DB 只读语义同口径；db.DB 缺失
+		// 时 GetSecurityPoliciesForRule 返回 nil → 纯 proxy 形状）。预检渲染
+		// 与生产渲染同构——G2/G3 带外残留在 L4 链零贡献，不阻塞预检。
+		tcpServer, tcpErr := buildTCPServer(rule, &tcpSecurityRenderInput{
+			policies: GetSecurityPoliciesForRule(rule.CaddyID),
+		})
 		if tcpErr != nil {
 			return map[string]interface{}{"error": tcpErr}
 		}
@@ -5180,11 +5192,12 @@ func normalizeWeights(weights []int) []int {
 	return out
 }
 
-// buildTCPProxyRoute generates the layer4 proxy handler and route for a TCP rule.
+// buildTCPProxyHandler 生成 layer4 proxy handler（buildTCPProxyRoute 的
+// handler 单源；L4 安全路由的信任直通与兜底路由复用同一 handler 实例）。
 // 库值唯一真相（批 1+2）：健康检查族与 tcp_try_interval 为类型①值型列，渲染
 // 直读零兜底——<=0 返回显性错误（调用方 generationFailure/单规则 error 形态），
 // 原 10s/3s/2s/2s/250ms 写死兜底废除。
-func buildTCPProxyRoute(rule SingleRuleConfig) (map[string]interface{}, error) {
+func buildTCPProxyHandler(rule SingleRuleConfig) (map[string]interface{}, error) {
 	upstreamList := make([]interface{}, 0)
 	for _, u := range rule.Upstreams {
 		if !u.Enabled {
@@ -5272,7 +5285,16 @@ func buildTCPProxyRoute(rule SingleRuleConfig) (map[string]interface{}, error) {
 		healthChecks["active"] = active
 	}
 	proxyHandler["health_checks"] = healthChecks
+	return proxyHandler, nil
+}
 
+// buildTCPProxyRoute 是「单 proxy 路由」形态单源（无安全段的现状回归形状；
+// L4 安全路由经 tcpSecurityRouteList 组装，兜底路由同构）。
+func buildTCPProxyRoute(rule SingleRuleConfig) (map[string]interface{}, error) {
+	proxyHandler, err := buildTCPProxyHandler(rule)
+	if err != nil {
+		return nil, err
+	}
 	route := map[string]interface{}{
 		"handle": []interface{}{proxyHandler},
 	}
@@ -5283,13 +5305,20 @@ func buildTCPProxyRoute(rule SingleRuleConfig) (map[string]interface{}, error) {
 }
 
 // buildTCPServer generates a layer4 server entry (listen + routes) for a TCP rule.
-func buildTCPServer(rule SingleRuleConfig) (map[string]interface{}, error) {
-	proxyRoute, err := buildTCPProxyRoute(rule)
+// securityCtxs 携带绑定启用策略集与批量生成上下文（契约 C2）：绑定非空时
+// routes=信任直通→deny→黑名单→allow 交集外→逐策略 GeoIP→兜底采样+proxy
+// 短路链；无绑定/缺库降级时与既有单 proxy 形状逐字节一致（现状回归形状）。
+func buildTCPServer(rule SingleRuleConfig, securityCtxs ...*tcpSecurityRenderInput) (map[string]interface{}, error) {
+	proxyHandler, err := buildTCPProxyHandler(rule)
+	if err != nil {
+		return nil, err
+	}
+	routes, err := tcpSecurityRouteList(rule, proxyHandler, securityCtxs...)
 	if err != nil {
 		return nil, err
 	}
 	return map[string]interface{}{
 		"listen": []string{fmt.Sprintf(":%d", rule.ListenPort)},
-		"routes": []interface{}{proxyRoute},
+		"routes": routes,
 	}, nil
 }

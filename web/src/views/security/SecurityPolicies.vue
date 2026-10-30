@@ -716,8 +716,9 @@
                          用户裁定 A 改为向导内延迟生效——改选只暂存，随向导「保存」收尾按
                          4 字段分组调 POST /rules/batch-block-pages（单事务一次渲染；单次
                          rule_ids ≤500 分片；skipped 规则保持待重试）。旧语义「变更即 PUT」
-                         已废弃：会绕过向导保存、不进配置预览、文案误导。 -->
-                    <div v-if="!isReadOnly && editableOverrideStages.length > 0" class="stage-override-editors">
+                         已废弃：会绕过向导保存、不进配置预览、文案误导。
+                         TCP 规则不出编辑器：L4 拒绝=断连无拦截页，阶段页字段恒清零。 -->
+                    <div v-if="!isReadOnly && editableOverrideStages.length > 0 && !isTcpBoundRule(row.caddyId)" class="stage-override-editors">
                       <div v-for="stage in editableOverrideStages" :key="stage" class="stage-override-line">
                         <span class="stage-override-label">阶段 {{ stage }} 拦截页覆盖</span>
                         <el-select
@@ -890,25 +891,27 @@
         <div class="rule-picker-list">
           <el-checkbox-group v-model="pickerSelected">
             <div v-for="rule in pickerPagedRules" :key="rule.caddy_id" class="rule-picker-item">
-              <el-checkbox :value="rule.caddy_id" :disabled="pickerMeta(rule.caddy_id).blockReason !== ''">
+              <el-checkbox :value="rule.caddy_id" :disabled="pickerMeta(rule).blockReason !== ''">
                 <span class="rule-picker-name">{{ rule.name }}</span>
+                <!-- TCP 规则协议徽标（与规则页协议列同 warning 口径）：放开后选择器混排 HTTP/TCP，须可辨识 -->
+                <el-tag v-if="rule.protocol === 'tcp'" size="small" type="warning" effect="plain" class="rule-picker-proto">TCP</el-tag>
                 <span class="rule-picker-meta">{{ rule.domain || '-' }}:{{ rule.listen_port }}</span>
               </el-checkbox>
               <!-- 每条候选规则展示当前绑定链（policy_id ASC，1-based）与本策略落点；
                    后端必然拒绝的形态（绑定条数上限 / 阶段 2 限流唯一门）在选择阶段
                    禁用并逐条说明原因——冲突在整批提交时会让本片全部失败。 -->
               <div class="rule-binding-preview">
-                <span v-if="pickerMeta(rule.caddy_id).blockReason" class="rule-binding-limit">{{ pickerMeta(rule.caddy_id).blockReason }}</span>
+                <span v-if="pickerMeta(rule).blockReason" class="rule-binding-limit">{{ pickerMeta(rule).blockReason }}</span>
                 <template v-else>
                   <span
-                    v-for="(entry, idx) in pickerMeta(rule.caddy_id).chain"
+                    v-for="(entry, idx) in pickerMeta(rule).chain"
                     :key="entry.policyId ?? 'self'"
                     class="binding-order-chip"
                     :class="{ 'is-self': entry.isSelf, 'is-disabled': !entry.enabled, 'is-trust': isStage0ChainEntry(entry) }"
                   >{{ chainChipText(entry, idx) }}</span>
                   <!-- 阶段 0 排位语义：信任 IP 在任何策略判定前直达上游/进入检测，与绑定顺序无关 -->
                   <span v-if="editorPolicyType === 'stage0'" class="rule-binding-landing rule-binding-landing--trust">阶段 0·拦截判定前优先生效</span>
-                  <span v-else class="rule-binding-landing">本策略排第 {{ pickerMeta(rule.caddy_id).selfPos }} 位</span>
+                  <span v-else class="rule-binding-landing">本策略排第 {{ pickerMeta(rule).selfPos }} 位</span>
                 </template>
               </div>
             </div>
@@ -995,7 +998,7 @@ import SecurityBindingEditor from '@/components/SecurityBindingEditor.vue'
 import DialogHeader from '@/components/DialogHeader.vue'
 import DialogSectionHeader from '@/components/DialogSectionHeader.vue'
 import AccessibleLink from '@/components/common/AccessibleLink.vue'
-import { POLICY_TYPE_LABELS, POLICY_TYPE_SHORT_LABELS, STAGE_BLOCK_STATUS_OPTIONS, addressAllowDenyConflictText, blockPageMissing, blockPageStageCanIntercept, buildStageModel, chunkForBulk, customRuleCanBlockInMode, entriesIntersect, ensureSharedEntries, formatAclModeDetail, hasGeoIPControl, hasIPACLControl, hasOtherStage2Binding, hasStage3Features, hasTrustEntries, inferPolicyType, mergeIpEntryCount, mergeIpEntryValues, parseCrsFilename, parseIPList, parseRefIds, parseUnknownIds, parseUnknownStrings, pickDefaultPolicyTab, sharedEntriesCache, subscribeSharedEntriesCache, trustHitMode, wafModeLabel, IP_LIST_CATEGORIES, MAX_POLICIES_PER_RULE, SECURITY_BULK_LIMITS, resolveBlockPageAttribution, type BlockPageAttribution, type BlockPageStage } from '@/utils/securityStages'
+import { POLICY_TYPE_LABELS, POLICY_TYPE_SHORT_LABELS, STAGE_BLOCK_STATUS_OPTIONS, addressAllowDenyConflictText, blockPageMissing, blockPageStageCanIntercept, buildStageModel, chunkForBulk, customRuleCanBlockInMode, entriesIntersect, ensureSharedEntries, formatAclModeDetail, hasGeoIPControl, hasIPACLControl, hasOtherStage2Binding, hasStage3Features, hasTrustEntries, inferPolicyType, mergeIpEntryCount, mergeIpEntryValues, parseCrsFilename, parseIPList, parseRefIds, parseUnknownIds, parseUnknownStrings, pickDefaultPolicyTab, sharedEntriesCache, subscribeSharedEntriesCache, trustHitMode, wafModeLabel, IP_LIST_CATEGORIES, MAX_POLICIES_PER_RULE, policySupportsTcp, TCP_BIND_UNSUPPORTED_REASON, SECURITY_BULK_LIMITS, resolveBlockPageAttribution, type BlockPageAttribution, type BlockPageStage } from '@/utils/securityStages'
 import type { RuleStageModel, SecurityPolicyType, SecurityStagePolicy, SecurityStageCustomRule, CrsRuleFileOption } from '@/utils/securityStages'
 import { fetchAllCrsRuleFiles } from '@/utils/crsRuleFiles'
 import { updaterName } from '@/utils/updaterName'
@@ -2371,14 +2374,15 @@ const prevStep = (): void => {
 }
 
 const pickerFilteredRules = computed(() => {
-  // 安全策略仅对 HTTP 规则生效（TCP 走 L4 链不经过 WAF/ACL/限流），选择器只列 HTTP
-  const httpRules = allRules.value.filter((rule) => rule.protocol === 'http')
+  // 阶段 0/1 放开后 TCP 规则可绑定；含限流/WAF 特征的策略对 TCP 不可绑——
+  // 该形态在选择侧由 pickerMeta 置灰并给行内原因（不再只列 HTTP）
   const query = pickerSearch.value.trim().toLowerCase()
-  if (!query) return httpRules
-  return httpRules.filter((rule) =>
+  const matched = (rule: Rule): boolean =>
     rule.name.toLowerCase().includes(query)
     || (rule.domain || '').toLowerCase().includes(query)
-    || rule.caddy_id.toLowerCase().includes(query))
+    || rule.caddy_id.toLowerCase().includes(query)
+  if (!query) return [...allRules.value]
+  return allRules.value.filter(matched)
 })
 
 const pickerPagedRules = computed(() => {
@@ -2392,7 +2396,7 @@ watch(pickerSearch, () => {
 
 // 全选作用于当前搜索筛选出且可选择的全部规则（跨分页；已达绑定上限/限流冲突的
 // 规则不可选，不参与全选），selection 存于 pickerSelected 与分页无关
-const pickerSelectableRules = computed(() => pickerFilteredRules.value.filter((rule) => pickerMeta(rule.caddy_id).blockReason === ''))
+const pickerSelectableRules = computed(() => pickerFilteredRules.value.filter((rule) => pickerMeta(rule).blockReason === ''))
 const pickerFilteredSelectedCount = computed(() => {
   const selected = new Set(pickerSelected.value)
   return pickerSelectableRules.value.reduce((count, rule) => count + (selected.has(rule.caddy_id) ? 1 : 0), 0)
@@ -2521,16 +2525,21 @@ const buildDisplayChain = (caddyId: string): ChainEntry[] => {
 
 // 选择器单条规则元信息：绑定链、本策略落点（1-based）、不可选原因（空串=可选）。
 // 判据与后端 bulk 校验同源（冲突整批 400，故必须在选择阶段就置灰）：
-// ①阶段 2（限流）策略 → 该规则已绑定其它限流策略（每规则仅一条，与
-// SecurityBindingEditor.pickerBlockReason 同源谓词）；②每规则绑定条数上限。
+// ①TCP 规则 × 含限流/WAF 特征策略（阶段 2/3/混合）→ TCP_BIND_UNSUPPORTED_REASON
+// （与 SecurityBindingEditor.pickerBlockReason 同谓词同文案）；
+// ②阶段 2（限流）策略 → 该规则已绑定其它限流策略（每规则仅一条，与
+// SecurityBindingEditor.pickerBlockReason 同源谓词）；③每规则绑定条数上限。
 // 本策略已在绑定中的规则重选不新增绑定，恒可选。
-const pickerMeta = (caddyId: string): { chain: ChainEntry[]; selfPos: number; blockReason: string } => {
+const pickerMeta = (rule: Rule): { chain: ChainEntry[]; selfPos: number; blockReason: string } => {
+  const caddyId = rule.caddy_id
   const existing = securityBindings.value[caddyId] || []
   const selfBound = editingId.value !== null && existing.some((b) => b.policy_id === editingId.value)
   const chain = buildDisplayChain(caddyId)
   let blockReason = ''
   if (!selfBound) {
-    if (editorPolicyType.value === 'stage2'
+    if (rule.protocol === 'tcp' && !policySupportsTcp(editorPolicyType.value)) {
+      blockReason = TCP_BIND_UNSUPPORTED_REASON
+    } else if (editorPolicyType.value === 'stage2'
       && hasOtherStage2Binding(existing, editingId.value, (id) => policyTypeById.value.get(id))) {
       blockReason = '该规则已绑定其它限流策略（每规则仅一条），需先解绑'
     } else if (existing.length >= MAX_POLICIES_PER_RULE) {
@@ -2981,6 +2990,10 @@ const blockPageNotes = (caddyId: string, chain: ChainEntry[]): BlockPageNote[] =
 }
 
 // Step 4 已关联规则的逐条视图：绑定链 + 拦截页面生效标注 + 冲突提示
+// TCP 绑定行判定（阶段页覆盖编辑器隐藏门）：L4 无拦截页语义
+const isTcpBoundRule = (caddyId: string): boolean =>
+  allRules.value.find((r) => r.caddy_id === caddyId)?.protocol === 'tcp'
+
 const boundRuleRows = computed<BoundRuleRow[]>(() => boundRules.value.map((caddyId) => {
   const rule = allRules.value.find((r) => r.caddy_id === caddyId)
   const chain = buildDisplayChain(caddyId)
@@ -2993,6 +3006,11 @@ const boundRuleRows = computed<BoundRuleRow[]>(() => boundRules.value.map((caddy
   // 非错误，声明归因语义（与渲染层逐阶段对齐：阶段 3 逐策略，阶段 1/2 首位有页）
   const combos = new Set(enabledEntries.map((e) => `${e.blockPageId ?? 0}:${e.blockStatusCode || 403}`))
   const infoHints: string[] = []
+  if (rule?.protocol === 'tcp') {
+    // TCP（L4）规则能力注记：拒绝动作=断连（无 HTTP 拦截页/状态码面）；
+    // CDN 回源真实客户端 IP 依赖上游连接的 PROXY protocol（回源对端是 CDN 时必须开启）
+    infoHints.push('拦截=断连，无拦截页；CDN 回源需开启 PROXY protocol')
+  }
   if (enabledEntries.length > 1 && combos.size > 1) {
     infoHints.push('这些策略的拦截页/状态码不同——阶段 3（WAF）按实际触发的策略显示，阶段 1/2 由绑定链首位有页策略显示')
   }
@@ -3885,6 +3903,7 @@ onMounted(async () => {
 .rule-picker-item:last-child { border-bottom: none; }
 .rule-picker-item :deep(.el-checkbox) { width: 100%; height: auto; padding: 4px 0; }
 .rule-picker-name { font-weight: 500; color: #1f2937; }
+.rule-picker-proto { margin-left: 6px; }
 .rule-picker-meta { margin-left: 8px; font-size: 12px; color: #9ca3af; font-family: monospace; }
 
 .rule-picker-pagination { display: flex; justify-content: flex-end; margin-top: 12px; }

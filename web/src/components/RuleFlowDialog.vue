@@ -9,7 +9,12 @@
     @open="onDialogOpen"
   >
     <template #header>
-      <DialogHeader :icon="Connection" title="处理流程" :subtitle="target?.name" />
+      <div class="flow-header">
+        <DialogHeader :icon="Connection" title="处理流程" :subtitle="target?.name" />
+        <!-- 协议徽标：HTTP 蓝 / TCP 青（全局 proto-tcp-tag 单源） -->
+        <el-tag v-if="isTcp" size="small" effect="plain" class="proto-tcp-tag flow-proto-badge">TCP</el-tag>
+        <el-tag v-else size="small" effect="plain" type="primary" class="flow-proto-badge">{{ protocolLabel }}</el-tag>
+      </div>
     </template>
 
     <div v-if="target" class="flow-body">
@@ -18,8 +23,8 @@
         <span class="info-note-sub">绑定与阶段页保留，启用后生效；当前该规则不产生任何 listener 路由，下方阶段按「保留配置」展示。</span>
       </div>
       <div v-if="isTcp" class="info-note-bar info-note-bar--inset">
-        <span class="info-note-desc">TCP 规则无 HTTP 安全链</span>
-        <span class="info-note-sub">TCP（L4）流量不经信任名单、IP 访问控制、限流与 WAF 阶段，接入后直接转发至上游。</span>
+        <span class="info-note-desc">TCP 规则支持阶段 0/1 安全能力</span>
+        <span class="info-note-sub">TCP（L4）流量支持信任名单（阶段 0）与 IP 访问控制/地域拦截（阶段 1）；拒绝动作=断连（无拦截页），限流与 WAF 阶段不适用。</span>
       </div>
 
       <!-- 纵向时间线：接入 → 阶段 0 → 阶段 1 → 阶段 2 → 阶段 3 → 上游 -->
@@ -156,7 +161,8 @@
                 </div>
               </el-collapse-transition>
             </div>
-            <div class="flow-panel-footnote">「直通上游」模式：信任 IP 命中后跳过全部后续安全阶段，不产生任何安全事件（故无计数 chip）；「保留检测记录」模式：继续评估后续全部阶段但不拦截，命中事件动作记为检测</div>
+            <div v-if="isTcp" class="flow-panel-footnote">信任直通=连接直达上游：命中的连接直接转发（不产生安全事件，故无计数 chip）；未命中继续进入阶段 1 判定</div>
+            <div v-else class="flow-panel-footnote">「直通上游」模式：信任 IP 命中后跳过全部后续安全阶段，不产生任何安全事件（故无计数 chip）；「保留检测记录」模式：继续评估后续全部阶段但不拦截，命中事件动作记为检测</div>
             </template>
             <div v-else class="flow-detail-line">未启用——未绑定信任名单策略，请求直接进入阶段 1</div>
           </div>
@@ -165,6 +171,10 @@
         <!-- 阶段 1/2/3 面板 -->
         <el-collapse-transition v-if="node.key.startsWith('stage') && node.key !== 'stage0'">
           <div v-if="activeNode === node.key && typedStageByKey(node.key)" class="flow-panel dialog-panel tl-panel">
+              <!-- TCP 规则阶段 2/3 整组灰态：无 429/WAF 引擎面，面板只出不适用说明
+                   （无策略组/明细/计数——绑定侧已拒绝此类策略） -->
+              <div v-if="isTcp && typedStageByKey(node.key)!.stage >= 2" class="flow-stage-empty">TCP 规则不适用（TCP 仅支持阶段 0/1：信任名单 · IP 访问控制/地域拦截）</div>
+              <template v-else>
               <div class="flow-panel-head">
                 <DialogSectionHeader :title="typedStageByKey(node.key)!.title" />
                 <div class="flow-panel-meta">
@@ -273,8 +283,9 @@
               </template>
               <div v-else class="flow-stage-empty">该阶段未启用（无策略配置对应能力）</div>
               <div class="flow-panel-footnote">
-                {{ typedStageByKey(node.key)!.stage === 1 ? stage1Footnote : `未通过即终止${typedStageByKey(node.key)!.footnote ? `；${typedStageByKey(node.key)!.footnote}` : ''}` }}
+                {{ typedStageByKey(node.key)!.stage === 1 ? (isTcp ? TCP_STAGE1_FOOTNOTE : stage1Footnote) : `未通过即终止${typedStageByKey(node.key)!.footnote ? `；${typedStageByKey(node.key)!.footnote}` : ''}` }}
               </div>
+              </template>
           </div>
         </el-collapse-transition>
 
@@ -699,7 +710,19 @@ const flowNodes = computed<FlowNode[]>(() => {
   if (!target) return []
   const access: FlowNode = { key: 'access', title: '接入', subtitle: `${protocolLabel.value} · 端口 ${target.listenPort}`, tone: 'primary', icon: Connection }
   const upstream: FlowNode = { key: 'upstream', title: '上游', subtitle: target.upstreamSummary, tone: 'primary', icon: TopRight }
-  if (isTcp.value) return [access, upstream]
+  if (isTcp.value) {
+    // TCP（L4）阶段 0/1 放开：节点与 HTTP 同构（同图标/色阶/灰态语义）；
+    // 阶段 2/3 恒出但灰态「不适用」——L4 无 429/WAF 引擎面（绑定侧已拒绝此类策略）。
+    const s1 = typedStagePanels.value.find((s) => s.stage === 1)
+    return [
+      access,
+      { key: 'stage0', title: STAGE_TITLES[0], subtitle: stageZero.value ? stageZeroSubtitle.value : '未启用', tone: 'green', icon: CircleCheck, disabled: !stageZero.value },
+      { key: 'stage1', title: STAGE_TITLES[1], subtitle: s1?.enabled ? '命中即断连（无拦截页）' : '未启用', tone: 'blue', icon: Key, disabled: !s1?.enabled },
+      { key: 'stage2', title: STAGE_TITLES[2], subtitle: 'TCP 规则不适用', tone: 'orange', icon: Odometer, disabled: true },
+      { key: 'stage3', title: STAGE_TITLES[3], subtitle: 'TCP 规则不适用', tone: 'red', icon: Aim, disabled: true },
+      upstream,
+    ]
+  }
   const nodes: FlowNode[] = [access]
   // 阶段 0 与 1/2/3 同构恒出：未绑定信任策略时灰态「未启用」（用户裁定 2026-09-21——
   // 流程图必须完整呈现五个环节，缺环节比灰态更误导）
@@ -747,6 +770,10 @@ const stage1Footnote = computed(() => {
 })
 
 const stageSub = (stage: 1 | 2 | 3): string => stageSubLabel(stage)
+
+// TCP 规则阶段 1 脚注：L4 无 HTTP 拦截页/状态码面——拒绝动作是断连（close），
+// 不是 403；替换 HTTP 版 stage1Footnote（预检链序文案对 TCP 不适用）。
+const TCP_STAGE1_FOOTNOTE = '拒绝动作=断连（连接直接关闭，无拦截页/状态码）；名单/地域未命中的连接直达上游'
 
 // 计数取数（弹框打开与面板「重试」共用）：失败置 statsFailed，使「请求失败」
 // 与「成功但载荷为空」可区分（此前两者同落 stats=null，统一渲染成 '—'）。
@@ -840,6 +867,10 @@ const retryCertInfo = (): void => {
 
 <style scoped>
 .flow-body { display: flex; flex-direction: column; gap: 0; }
+
+/* 头部协议徽标：HTTP 蓝（el-tag primary）/ TCP 青（全局 proto-tcp-tag 单源） */
+.flow-header { display: flex; align-items: center; gap: 10px; }
+.flow-proto-badge { flex-shrink: 0; }
 
 /* ── 纵向时间线：图标圆点 + 阶段色阶 + 竖向连接线流动粒子 + 错峰进场 ── */
 @keyframes tl-row-in {

@@ -441,3 +441,12 @@ body .rule-lock-popper :is(.lock-stage, .lock-policy-group) { border-radius: 0; 
   padding: 2px 6px;
   letter-spacing: 0.5px;
 }
+
+/* TCP 协议徽标（青色）：事件日志/安全总览/流程弹框头共用单源。挂在 el-tag 上
+ * （EP 无青色语义色），直角随全局 tag 基线；暗色大屏 feed 用各自的 scoped 徽标
+ * （浅底色在暗背景上不可读），不消费本类。 */
+.proto-tcp-tag {
+  color: #0e7490;
+  background: #ecfeff;
+  border-color: #a5f3fc;
+}

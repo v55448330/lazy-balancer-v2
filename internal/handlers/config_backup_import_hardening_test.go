@@ -53,7 +53,7 @@ func TestImportConfigBackup_postImportRuleBindingView(t *testing.T) {
 			t.Fatal(err)
 		}
 		body := buildBackup(t, backupFixtureOptions{Sections: []string{"security"}, Tables: map[string][]map[string]any{
-			"security_policies":        {{"id": 7, "name": "restored", "mode": "off", "enabled": 1}},
+			"security_policies":        {{"id": 7, "name": "restored", "mode": "blocking", "enabled": 1}},
 			"security_policy_bindings": {{"rule_caddy_id": "lb_live", "policy_id": 7}},
 		}, Config: nil})
 
@@ -80,7 +80,7 @@ func TestImportConfigBackup_postImportRuleBindingView(t *testing.T) {
 		seedAdminShared(t)
 		if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,strategy,enabled)
 			VALUES ('lb_old','old','http','old.example.test',18082,'weighted_round_robin',0);
-			INSERT INTO security_policies (id,name,mode,enabled) VALUES (7,'live-policy','off',1);
+			INSERT INTO security_policies (id,name,mode,enabled) VALUES (7,'live-policy','blocking',1);
 			INSERT INTO security_policy_bindings (rule_caddy_id,policy_id) VALUES ('lb_old',7),('lb_new',7)`); err != nil {
 			t.Fatal(err)
 		}
@@ -749,14 +749,14 @@ func TestSecurityOnlyImportDropsTCPRuleBindings(t *testing.T) {
 		VALUES ('lb_live_tcp','tcp-live','tcp','tcp.example.test',19000,1)`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.DB.Exec(`INSERT INTO security_policies (id,name,mode,enabled) VALUES (7,'live-policy','off',1)`); err != nil {
+	if _, err := db.DB.Exec(`INSERT INTO security_policies (id,name,mode,enabled) VALUES (7,'live-policy','blocking',1)`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.DB.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id,policy_id) VALUES ('lb_live_tcp',7)`); err != nil {
 		t.Fatal(err)
 	}
 	body := buildBackup(t, backupFixtureOptions{Sections: []string{"security"}, Tables: map[string][]map[string]any{
-		"security_policies":        {{"id": 7, "name": "restored", "mode": "off", "enabled": 1}},
+		"security_policies":        {{"id": 7, "name": "restored", "mode": "blocking", "enabled": 1}},
 		"security_policy_bindings": {{"rule_caddy_id": "lb_live_tcp", "policy_id": 7}},
 	}, Config: nil})
 
@@ -769,7 +769,7 @@ func TestSecurityOnlyImportDropsTCPRuleBindings(t *testing.T) {
 		t.Fatal(err)
 	}
 	if bindings != 0 {
-		t.Fatalf("TCP 绑定条数=%d, want 0（TCP 渲染链不消费策略，绑定为死绑定）", bindings)
+		t.Fatalf("TCP 绑定条数=%d, want 0（G3 特征绑定对 L4 不支持，导入收口清理）", bindings)
 	}
 }
 

@@ -206,7 +206,13 @@ test('服务控制四选一卡片暴露 radio 语义与选中态', () => {
 // ── 无障碍族级残余 ──────────────────────────────────────────
 test('TCP 锁图标有名称、规则开关有名称', () => {
   const rules = code('src/views/Rules.vue')
-  assert.match(rules, /acl-lock-icon--tcp" tabindex="0" role="img" aria-label="TCP 规则不支持安全策略"/)
+  // TCP 锁与 HTTP 同构（阶段 0/1 放开）：灰 placeholder 锁退役，
+  // TCP 走同一 popover 锁（role=button + 流程弹框 aria 名称，键盘语义共享）
+  assert.doesNotMatch(rules, /acl-lock-icon--tcp/)
+  assert.doesNotMatch(rules, /TCP 规则不支持安全策略/)
+  const reference = section(rules, '<template #reference>', '</template>')
+  assert.match(reference, /role="button"/)
+  assert.match(reference, /:aria-label="`查看「\$\{row\.name\}」的安全处理流程`"/)
   assert.match(rules, /:aria-label="`\$\{row\.name\} 的启用状态`"/)
 })
 

@@ -53,7 +53,7 @@ var antiFallbackScanTargets = map[string][]string{
 		"GenerateSingleRuleCaddyConfig",
 		"generateHTTPRouteObjects",
 		"buildHTTPHandleChain",
-		"buildTCPProxyRoute",
+		"buildTCPProxyHandler",
 		"buildTCPServer",
 		"buildRateLimitHandler",
 		"buildBlockPageAttributionRoute",
@@ -156,7 +156,7 @@ var antiFallbackAllowlist = map[string]map[string]string{
 		"status = 200":               "path rule ResponseStatus=0→200：类型②省略型（写侧允许 0=未配置并声明默认），非无效库值兜底——见该处 Ruling 披露",
 		`contentType = "text/plain"`: "path rule ResponseContentType 空=未配置→text/plain：类型②省略型（写侧允许空并声明默认），非无效库值兜底——G3 Ruling 披露",
 	},
-	"buildTCPProxyRoute": {
+	"buildTCPProxyHandler": {
 		`strategy = "weighted_round_robin"`: "TCP 负载策略空串=未配置→默认加权轮询：类型②省略型（写侧归一单源，渲染层承担省略替换；cookie 策略对 layer4 不可用另行归一）——G3 Ruling 披露",
 	},
 	"formatRuleCertInfo": {

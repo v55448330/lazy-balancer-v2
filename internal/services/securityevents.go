@@ -282,7 +282,7 @@ func securityEventsParseTransaction(raw json.RawMessage) (*securityEventRecord, 
 		ClientIP:      tx.ClientIP,
 		Method:        tx.Request.Method,
 		URI:           tx.Request.URI,
-		EventType:     "waf",
+		EventType:     securityEventsProtocolEventType(tx.Request.Headers),
 		Action:        "logged",
 	}
 	rec.AttributionRuleID = securityEventsFirstHeader(tx.Request.Headers, "x-lb-rule-id")
@@ -367,6 +367,19 @@ func securityEventsUnixTimestampUTC(ts int64) string {
 		sec = ts
 	}
 	return time.Unix(sec, nsec).UTC().Format("2006-01-02 15:04:05")
+}
+
+// securityEventsProtocolEventType 把审计事务的 X-LB-Protocol 头映射为
+// event_type（契约 C1）：字面 tcp（大小写不敏感）= L4 合成审计行 → 'tcp'；
+// 头缺失/其他值/空值按 'waf'（向后兼容：HTTP 预检/引擎事务不带该头）。
+// 这是 event_type 的唯一改判点——归因/去重/评分/族分类零新增，全部复用
+// 既有分支（X-LB-Rule-ID 归因、transaction.id 去重、id 2/4/7=12 与
+// 800xxx=6 评分谓词）。
+func securityEventsProtocolEventType(headers map[string][]string) string {
+	if strings.EqualFold(securityEventsFirstHeader(headers, "x-lb-protocol"), "tcp") {
+		return "tcp"
+	}
+	return "waf"
 }
 
 func securityEventsFirstHeader(headers map[string][]string, name string) string {
@@ -762,6 +775,26 @@ func securityEventsLoadMappings() (map[string]securityEventsRuleRef, map[string]
 	}
 	if err := rows.Err(); err != nil {
 		return nil, nil, nil, fmt.Errorf("security events: iterate rules: %w", err)
+	}
+
+	// TCP 规则（L4 阶段 0/1）：无 Host 可做域归因，但注入头归因
+	// （X-LB-Rule-ID → rulesByID）按 caddy_id 直查，必须含 TCP 规则——
+	// 否则 L4 拦截事件 rule_caddy_id/policy 全空（端到端实证实锤）。
+	// TCP 无域名维度，caddy_id 直查不含域名键。
+	tcpRows, err := db.DB.Query(`SELECT caddy_id, COALESCE(name,'') FROM lb_rules WHERE protocol='tcp' ORDER BY COALESCE(enabled,0) ASC, COALESCE(created_at,'') ASC, caddy_id ASC`)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("security events: load tcp rules: %w", err)
+	}
+	defer tcpRows.Close()
+	for tcpRows.Next() {
+		var caddyID, name string
+		if err := tcpRows.Scan(&caddyID, &name); err != nil {
+			return nil, nil, nil, fmt.Errorf("security events: scan tcp rule: %w", err)
+		}
+		rules[caddyID] = securityEventsRuleRef{caddyID: caddyID, name: name}
+	}
+	if err := tcpRows.Err(); err != nil {
+		return nil, nil, nil, fmt.Errorf("security events: iterate tcp rules: %w", err)
 	}
 
 	// v2.2.0 多策略归因：一个 lb_rule 可绑多个策略，按 policy_id ASC 排序，

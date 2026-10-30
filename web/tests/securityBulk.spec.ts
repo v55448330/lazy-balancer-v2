@@ -74,7 +74,7 @@ test('A4 分片请求按方向独立提交：每片对向数组为空且两向�
 test('存量多限流绑定保存时收敛为界面展示的首条', () => {
   const editor = code('src/components/SecurityBindingEditor.vue')
   assert.match(editor, /bindStage2\.value\.slice\(0, 1\)/, '提交集不得继续携带界面不可见的第二条限流策略')
-  const total = section(editor, 'const ruleModeTotal = computed', 'const pickerHttpRules')
+  const total = section(editor, 'const ruleModeTotal = computed', 'const pickerCandidateRules')
   assert.match(total, /Math\.min\(1, bindStage2\.value\.length\)/, '策略总数必须按唯一化后的限流绑定计数')
 })
 

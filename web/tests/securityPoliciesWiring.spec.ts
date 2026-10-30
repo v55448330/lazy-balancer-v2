@@ -145,15 +145,15 @@ test('限流唯一门：选择器与提交门共用同一谓词，业务 400 不
   assert.match(editor, /hasOtherStage2Binding\(current, props\.policyId/)
   assert.match(page, /hasOtherStage2Binding,/)
 
-  const meta = section(page, 'const pickerMeta = (caddyId: string)', 'return { chain, selfPos:')
+  const meta = section(page, 'const pickerMeta = (rule: Rule)', 'return { chain, selfPos:')
   assert.match(meta, /editorPolicyType\.value === 'stage2'/, '仅阶段 2 策略触发限流唯一门')
   assert.match(meta, /hasOtherStage2Binding\(existing, editingId\.value/)
   assert.match(meta, /该规则已绑定其它限流策略（每规则仅一条），需先解绑/)
 
   // 选择器渲染/全选集合必须按 blockReason 判据（原 wouldExceed 只剩条数上限）
-  assert.match(page, /:disabled="pickerMeta\(rule\.caddy_id\)\.blockReason !== ''"/)
-  assert.match(page, /v-if="pickerMeta\(rule\.caddy_id\)\.blockReason" class="rule-binding-limit"/)
-  assert.match(page, /pickerMeta\(rule\.caddy_id\)\.blockReason === ''/)
+  assert.match(page, /:disabled="pickerMeta\(rule\)\.blockReason !== ''"/)
+  assert.match(page, /v-if="pickerMeta\(rule\)\.blockReason" class="rule-binding-limit"/)
+  assert.match(page, /pickerMeta\(rule\)\.blockReason === ''/)
   assert.doesNotMatch(page, /\.wouldExceed/, '按元信息单一原因判据收敛，不留双口径')
 
   // 提交门镜像：阶段 2 新增绑定先本地拒绝，不让「策略已落库＋绑定 400」发生

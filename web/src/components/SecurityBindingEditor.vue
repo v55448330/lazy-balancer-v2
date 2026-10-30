@@ -36,16 +36,18 @@
           :model-value="section.single ? (section.selection.value[0] ?? null) : section.selection.value"
           :multiple="!section.single"
           :clearable="section.single"
-          :disabled="saving"
+          :disabled="saving || section.tcpLocked === true"
           :placeholder="section.single ? '选择策略（单选，换选=替换）' : '选择策略（可多选）'"
           style="width: 100%"
           @update:model-value="section.single ? (section.selection.value = $event == null ? [] : [Number($event)]) : (section.selection.value = $event)"
         >
-          <el-option v-for="policy in section.options" :key="policy.id" :value="policy.id" :label="policy.name">
+          <el-option v-for="policy in section.options" :key="policy.id" :value="policy.id" :label="policy.name" :disabled="section.tcpLocked === true">
             <span>{{ policy.name }}</span>
             <el-tag size="small" effect="plain" :type="policy.enabled ? 'success' : 'info'" class="bind-state-tag">{{ policy.enabled ? '启用' : '已禁用' }}</el-tag>
           </el-option>
         </el-select>
+        <!-- TCP 规则的阶段 2/3 分区置灰 + 行内原因（L4 无 429/WAF 引擎面，后端同门 400） -->
+        <div v-if="section.tcpLocked === true" class="form-tip-line">{{ TCP_BIND_UNSUPPORTED_REASON }}</div>
         <div v-if="section.single" class="form-tip-line">每条规则最多绑定一条限流策略（后端对多限流绑定一律 400，消息原样透出）</div>
         <div v-if="section.options.length === 0" class="form-tip-line">暂无该类策略，到「安全防护 → 安全策略」页创建</div>
       </div>
@@ -84,13 +86,18 @@
               @change="toggleRule(rule.caddy_id, $event)"
             >
               <span class="picker-rule-name">{{ rule.name }}</span>
+              <!-- TCP 协议徽标（与规则页协议列同 warning 口径）：混列 HTTP/TCP 后须可辨识 -->
+              <el-tag v-if="rule.protocol === 'tcp'" size="small" type="warning" effect="plain" class="picker-proto-tag">TCP</el-tag>
               <span class="picker-rule-meta">{{ rule.domain || '-' }}:{{ rule.listen_port }}</span>
             </el-checkbox>
             <el-tooltip v-if="pickerWouldExceed(rule)" :content="rowBlockReasons.get(rule.caddy_id) ?? ''" placement="top">
               <el-icon class="picker-cap-icon"><WarningFilled /></el-icon>
             </el-tooltip>
           </div>
+          <!-- 不可选原因行内直出（与 SecurityPolicies 选择器同口径）：tooltip 对触屏/读屏不足 -->
           <div class="picker-rule-detail">
+            <span v-if="pickerWouldExceed(rule)" class="picker-bind-none picker-rule-block">{{ rowBlockReasons.get(rule.caddy_id) }}</span>
+            <template v-else>
             <template v-for="stage in STAGE_ORDER" :key="stage">
               <span v-if="boundPoliciesByType(rule, stage).length > 0" class="picker-bind-group">
                 <em class="picker-bind-stage">{{ POLICY_TYPE_SHORT_LABELS[stage] }}</em>
@@ -110,9 +117,10 @@
             <el-tooltip v-if="overrideBadge(rule, 3)" :content="overrideBadge(rule, 3)!.title" placement="top">
               <el-tag size="small" :type="overrideBadge(rule, 3)!.broken ? 'danger' : 'warning'" effect="plain" class="picker-override-tag">阶段 3 页：{{ overrideBadge(rule, 3)!.text }}</el-tag>
             </el-tooltip>
+            </template>
           </div>
         </div>
-        <el-empty v-if="pickerFilteredRules.length === 0" description="无可选 HTTP 规则" :image-size="60" />
+        <el-empty v-if="pickerFilteredRules.length === 0" description="无可选规则" :image-size="60" />
       </div>
       <el-pagination
         v-model:current-page="pickerPage"
@@ -166,6 +174,8 @@ import {
   POLICY_TYPE_SHORT_LABELS,
   inferPolicyType,
   hasOtherStage2Binding,
+  policySupportsTcp,
+  TCP_BIND_UNSUPPORTED_REASON,
   resolveStageOverride,
   chunkForBulk,
   SECURITY_BULK_LIMITS,
@@ -220,7 +230,7 @@ const emit = defineEmits<{
 const bindSubtitle = computed(() =>
   props.mode === 'rule'
     ? `${props.rule?.name ?? ''} · 按阶段分区选择，多条策略按阶段 0→3 顺序、同阶段内按策略 ID 升序执行`
-    : `${props.policyName ?? ''} · 选择要绑定该策略的 HTTP 规则（全量重置该策略的绑定集）`
+    : `${props.policyName ?? ''} · 选择要绑定该策略的规则（全量重置该策略的绑定集；TCP 规则仅可绑阶段 0/1 策略）`
 )
 
 const saving = ref(false)
@@ -238,11 +248,15 @@ const policiesByType = computed<Record<SecurityPolicyType, BindingEditorPolicy[]
 })
 
 // 可选策略过滤 mixed：混合组不出现在可选区（已绑定的 mixed 由只读区展示）
-const stageSections = computed(() => [
+// TCP 规则（阶段 0/1 放开）：阶段 2/3 分区整体置灰（tcpLocked）——限流/WAF
+// 在 L4 无引擎面，后端同门 400；行内原因 = TCP_BIND_UNSUPPORTED_REASON 单源。
+const isTcpRule = computed(() => props.rule?.protocol === 'tcp')
+interface StageSection { type: SecurityPolicyType; title: string; options: BindingEditorPolicy[]; selection: typeof bindStage0; single?: boolean; tcpLocked?: boolean }
+const stageSections = computed<StageSection[]>(() => [
   { type: 'stage0' as const, title: '阶段 0 · 信任名单（直通上游 / 保留检测记录）', options: policiesByType.value.stage0, selection: bindStage0 },
   { type: 'stage1' as const, title: '阶段 1 · IP 访问控制', options: policiesByType.value.stage1, selection: bindStage1 },
-  { type: 'stage2' as const, title: '阶段 2 · 限流（拦截恒 429）', options: policiesByType.value.stage2, selection: bindStage2, single: true as const },
-  { type: 'stage3' as const, title: '阶段 3 · WAF（自定义规则 / CRS）', options: policiesByType.value.stage3, selection: bindStage3 },
+  { type: 'stage2' as const, title: '阶段 2 · 限流（拦截恒 429）', options: policiesByType.value.stage2, selection: bindStage2, single: true as const, tcpLocked: isTcpRule.value },
+  { type: 'stage3' as const, title: '阶段 3 · WAF（自定义规则 / CRS）', options: policiesByType.value.stage3, selection: bindStage3, tcpLocked: isTcpRule.value },
 ])
 
 // 当前规则已绑定的 mixed 策略（只读 tag，不可增减）
@@ -259,12 +273,13 @@ const pickerSearch = ref('')
 const pickerPage = ref(1)
 const pickerSelected = ref<string[]>([])
 
-// 安全策略仅对 HTTP 规则生效（TCP 走 L4 链不经过 WAF/ACL/限流）
-const pickerHttpRules = computed(() => props.rules.filter((rule) => rule.protocol === 'http'))
+// 阶段 0/1 放开后 TCP 规则可绑定；含限流/WAF 特征的策略（stage2/3/混合）对 TCP
+// 不可绑——选择器混列 HTTP/TCP，TCP 形态在 pickerBlockReason 置灰并给行内原因
+const pickerCandidateRules = computed(() => props.rules)
 const pickerFilteredRules = computed(() => {
   const query = pickerSearch.value.trim().toLowerCase()
-  if (!query) return pickerHttpRules.value
-  return pickerHttpRules.value.filter((rule) =>
+  if (!query) return pickerCandidateRules.value
+  return pickerCandidateRules.value.filter((rule) =>
     rule.name.toLowerCase().includes(query)
     || (rule.domain || '').toLowerCase().includes(query)
     || rule.caddy_id.toLowerCase().includes(query))
@@ -288,12 +303,17 @@ const currentPolicyType = computed<SecurityPolicyType | null>(() => {
 
 // 规则不可选原因（空串=可选）。判据与后端 bulk 校验同源：批量提交整批拒绝，
 // 故凡后端必然拒绝的形态都在选择阶段置灰，避免「全选→保存→整片不生效」。
-// ①阶段 2（限流）策略：该规则已绑定其它限流策略；②每规则策略总数已达上限。
+// ①TCP 规则 × 含限流/WAF 特征策略（stage2/3/混合）→ TCP_BIND_UNSUPPORTED_REASON
+// （与 SecurityPolicies.pickerMeta 同谓词同文案）；
+// ②阶段 2（限流）策略：该规则已绑定其它限流策略；③每规则策略总数已达上限。
 const pickerBlockReason = (rule: BindingEditorRule): string => {
   if (props.mode !== 'policy' || props.policyId == null) return ''
   const current = props.bindings[rule.caddy_id] || []
   if (current.some((b) => b.policy_id === props.policyId)) return ''
   if (pickerSelected.value.includes(rule.caddy_id)) return ''
+  if (rule.protocol === 'tcp' && !policySupportsTcp(currentPolicyType.value ?? undefined)) {
+    return TCP_BIND_UNSUPPORTED_REASON
+  }
   if (currentPolicyType.value === 'stage2'
     && hasOtherStage2Binding(current, props.policyId, (id) => policyTypeById.value.get(id))) {
     return '该规则已绑定其它限流策略（每规则仅一条），需先解绑'
@@ -385,12 +405,16 @@ const onOpen = (): void => {
     bindStage2.value = []
     bindStage3.value = []
     // 当前绑定预选：按策略类型分桶回填；mixed 不进可选桶（只读区另行展示，
-    // 绑定引用了已删除策略时静默落出——保存即清理死绑定）
+    // 绑定引用了已删除策略时静默落出——保存即清理死绑定）。
+    // TCP 规则的阶段 2/3 分区已置灰：旧数据残留的此类绑定不回填可写桶
+    //（不可选状态下的预选值会被「保存」全量替换语义静默清掉——与后端同门清理一致）
+    const tcpLocked = props.rule?.protocol === 'tcp'
     const boundIdSet = new Set((props.rule ? props.bindings[props.rule.caddy_id] : null)?.map((b) => b.policy_id) ?? [])
     const buckets: Record<'stage0' | 'stage1' | 'stage2' | 'stage3', typeof bindStage0> = { stage0: bindStage0, stage1: bindStage1, stage2: bindStage2, stage3: bindStage3 }
     for (const policy of props.policies) {
       const type = inferPolicyType(policy)
       if (type === 'mixed') continue
+      if (tcpLocked && (type === 'stage2' || type === 'stage3')) continue
       if (boundIdSet.has(policy.id)) buckets[type].value.push(policy.id)
     }
     return
@@ -401,7 +425,7 @@ const onOpen = (): void => {
   pickerPage.value = 1
   pickerSelected.value = pid == null
     ? []
-    : pickerHttpRules.value
+    : pickerCandidateRules.value
         .filter((rule) => (props.bindings[rule.caddy_id] || []).some((b) => b.policy_id === pid))
         .map((rule) => rule.caddy_id)
 }
@@ -450,7 +474,7 @@ const submit = async (): Promise<void> => {
   const selected = new Set(pickerSelected.value)
   const toBind: string[] = []
   const toUnbind: string[] = []
-  for (const rule of pickerHttpRules.value) {
+  for (const rule of pickerCandidateRules.value) {
     const current = (props.bindings[rule.caddy_id] || []).map((b) => b.policy_id)
     const has = current.includes(pid)
     const want = selected.has(rule.caddy_id)
@@ -506,6 +530,8 @@ const submit = async (): Promise<void> => {
 .picker-rule-name { font-weight: 500; color: #1f2937; }
 .picker-rule-meta { margin-left: 8px; font-size: 12px; color: #9ca3af; }
 .picker-cap-icon { color: var(--el-color-warning); }
+.picker-proto-tag { margin-left: 6px; }
+.picker-rule-block { color: #e6a23c; }
 .picker-rule-detail { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; margin: 2px 0 2px 24px; }
 .picker-bind-group { display: inline-flex; align-items: center; gap: 4px; }
 .picker-bind-stage { font-style: normal; font-size: 12px; color: #6b7280; }

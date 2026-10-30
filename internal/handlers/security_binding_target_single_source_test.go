@@ -42,31 +42,34 @@ func TestRuleBindingTarget_tcpRuleRejectedByEveryBindingEntry(t *testing.T) {
 	setupSecurityPolicyTestDB(t)
 	router := newBindingTargetRouter(t)
 	seedTCPRule(t, "lb_target_tcp")
+	// G3 特征策略（mode=blocking）对 TCP 绑定仍整族拒绝（L4 阶段 0/1 能力门，
+	// 文案=「TCP 不支持的能力」）；stage0/stage1 特征策略的放行形状由
+	// l4_security_binding_gate_test.go 钉住。
 	policyID := createMultiPolicy(t, router, "target-tcp-policy")
 
 	// 单规则替换
 	recorder := putJSON(t, router, "/security/rules/lb_target_tcp/policies", map[string]any{"policy_ids": []int{policyID}})
-	if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), "仅支持绑定 HTTP") {
-		t.Fatalf("setRule status=%d body=%s, want 400 含「仅支持绑定 HTTP」", recorder.Code, recorder.Body.String())
+	if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), "TCP 不支持的能力") {
+		t.Fatalf("setRule status=%d body=%s, want 400 含「TCP 不支持的能力」", recorder.Code, recorder.Body.String())
 	}
 	// 单条绑定
 	recorder = postJSON(t, router, "/security/policies/"+strconv.Itoa(policyID)+"/bind", map[string]any{"rule_caddy_id": "lb_target_tcp"})
-	if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), "仅支持绑定 HTTP") {
-		t.Fatalf("bind status=%d body=%s, want 400 含「仅支持绑定 HTTP」", recorder.Code, recorder.Body.String())
+	if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), "TCP 不支持的能力") {
+		t.Fatalf("bind status=%d body=%s, want 400 含「TCP 不支持的能力」", recorder.Code, recorder.Body.String())
 	}
 	// 策略侧批量
 	recorder = postJSON(t, router, "/security/policies/"+strconv.Itoa(policyID)+"/bindings/bulk", map[string]any{"bind": []string{"lb_target_tcp"}})
-	if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), "仅支持绑定 HTTP") {
-		t.Fatalf("bulk status=%d body=%s, want 400 含「仅支持绑定 HTTP」", recorder.Code, recorder.Body.String())
+	if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), "TCP 不支持的能力") {
+		t.Fatalf("bulk status=%d body=%s, want 400 含「TCP 不支持的能力」", recorder.Code, recorder.Body.String())
 	}
-	// 规则侧批量：TCP 进 skipped（200 分项报告）
+	// 规则侧批量：TCP+G3 进 skipped（200 分项报告）
 	recorder = postJSON(t, router, "/security/policies/batch-bind", map[string]any{"rule_ids": []string{"lb_target_tcp"}, "policy_ids": []int{policyID}})
-	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), "TCP 规则不经过安全链") {
-		t.Fatalf("batch-bind status=%d body=%s, want 200 skipped「TCP 规则不经过安全链」", recorder.Code, recorder.Body.String())
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), "TCP 不支持的能力") {
+		t.Fatalf("batch-bind status=%d body=%s, want 200 skipped「TCP 不支持的能力」", recorder.Code, recorder.Body.String())
 	}
-	// 终态一致：任何入口都不得落库绑定。
+	// 终态一致：任何入口都不得落库 G2/G3 绑定。
 	if bound := queryBoundPolicyIDs(t, "lb_target_tcp"); len(bound) != 0 {
-		t.Fatalf("TCP 规则落库绑定 %v, want 空", bound)
+		t.Fatalf("TCP 规则落库 G2/G3 绑定 %v, want 空", bound)
 	}
 }
 

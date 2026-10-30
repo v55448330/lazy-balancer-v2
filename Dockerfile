@@ -26,7 +26,7 @@ ENV GOTOOLCHAIN=auto
 # 架构（本阶段已固定在 BUILDPLATFORM 上执行，必须显式指定产物平台）。
 ARG TARGETOS=linux
 ARG TARGETARCH
-# xcaddy 阶段只需四个本地目录（--with 引用），窄化 COPY 面——整目录复制会让
+# xcaddy 阶段只需五个本地目录（--with 引用），窄化 COPY 面——整目录复制会让
 # 任何前端/文档变更 bust 该层并重跑 xcaddy build（缓存挂载兜底仍需分钟级增量
 # 编译）。backend 阶段同样用显式清单（见该阶段注释）。geoipnames 是零依赖
 # 共享表库——
@@ -36,6 +36,7 @@ COPY caddygeoip/ caddygeoip/
 COPY caddydeps/ caddydeps/
 COPY wafiplist/ wafiplist/
 COPY geoipnames/ geoipnames/
+COPY caddyl4sec/ caddyl4sec/
 # 双缓存挂载（模块+编译缓存）按 builder 持久（lazy-builder GC 48h）：
 # 根治冷缓存全量重编 42 分钟——命中缓存后增量编译只需数分钟。
 # 3 次重试兜底镜像源偶发供应与 sum.golang.org 校验不符的比特
@@ -56,7 +57,8 @@ RUN --mount=type=cache,target=/go/pkg/mod \
       --with lazy-balancer-v2/caddygeoip=./caddygeoip \
       --with lazy-balancer-v2/caddydeps=./caddydeps \
       --with lazy-balancer-v2/wafiplist=./wafiplist \
-      --with lazy-balancer-v2/geoipnames=./geoipnames; then \
+      --with lazy-balancer-v2/geoipnames=./geoipnames \
+      --with lazy-balancer-v2/caddyl4sec=./caddyl4sec; then \
       built=1; break; \
     fi; \
     echo ">>> xcaddy build 第 ${attempt}/3 次失败，10s 后重试" >&2; \
@@ -127,7 +129,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 # 内容，整目录复制会让任意一处非 Go 变更 bust 本层与随后的 Go 编译层。
 # go.mod/go.sum 已在上方下载层复制（本阶段内，同在清单范围），此处不再重复。
 # 清单必须覆盖 go list 派生到的全部顶层 Go 目录（cmd/internal/caddygeoip/
-# caddydeps/wafiplist/geoipnames）——scripts/check-dockerfile-copy-manifest.sh
+# caddydeps/wafiplist/geoipnames/caddyl4sec）——scripts/check-dockerfile-copy-manifest.sh
 # 按 backend 阶段切块，比对清单与受控 + 未跟踪（未被 .gitignore 忽略）的顶层
 # Go 目录，与 test-all 同口径；新增顶层 Go 目录必须同步本行。
 COPY cmd/ ./cmd/
@@ -136,6 +138,7 @@ COPY caddygeoip/ ./caddygeoip/
 COPY caddydeps/ ./caddydeps/
 COPY wafiplist/ ./wafiplist/
 COPY geoipnames/ ./geoipnames/
+COPY caddyl4sec/ ./caddyl4sec/
 COPY config/ ./config/
 WORKDIR /app/cmd/server
 # 双缓存挂载（模块+编译缓存，lazy-builder GC 48h）：增量编译只重编改动包；

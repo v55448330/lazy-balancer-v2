@@ -2,8 +2,11 @@ package handlers
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
+	"io"
 	"maps"
+	"net/http"
 	"slices"
 	"sort"
 	"strconv"
@@ -13,6 +16,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"golang.org/x/sync/singleflight"
 
+	"lazy-balancer-v2/geoipnames"
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/services"
 )
@@ -189,7 +193,9 @@ var threatTrafficCacheTTL = time.Second
 var threatTrafficGroup singleflight.Group
 
 type threatTrafficCacheEntry struct {
-	data      gin.H
+	// data 是缓存载荷：traffic 主体为 gin.H，L4 原始快照为
+	// l4TrafficRawSnapshot（键前缀区分）；取值处按键身份断言。
+	data      any
 	expiresAt time.Time
 }
 
@@ -198,11 +204,22 @@ var threatTrafficCache sync.Map // key: admin URL（去尾斜杠）
 var errThreatTrafficFetch = errors.New("threat traffic fetch failed")
 
 // threatTrafficSnapshot 带缓存地取流量快照：TTL 命中直返；miss 经 singleflight
-// 合并并发后抓取；抓取失败不缓存（ok=false，调用方走降级响应）。
+// 合并并发后抓取；抓取失败不缓存（ok=false，调用方走降级响应）。命中后并入
+// L4 连接计数差分（l4 键，契约 C5；l4 抓取失败静默跳过，主体不受影响）。
 func threatTrafficSnapshot(adminURL string) (gin.H, bool) {
+	data, ok := threatTrafficSnapshotCached(adminURL)
+	if !ok {
+		return nil, false
+	}
+	attachL4TrafficDelta(adminURL, data)
+	return data, true
+}
+
+func threatTrafficSnapshotCached(adminURL string) (gin.H, bool) {
 	if v, ok := threatTrafficCache.Load(adminURL); ok {
 		if entry, ok := v.(threatTrafficCacheEntry); ok && time.Now().Before(entry.expiresAt) {
-			return entry.data, true
+			data, _ := entry.data.(gin.H)
+			return data, true
 		}
 	}
 	result, err, _ := threatTrafficGroup.Do(adminURL, func() (any, error) {
@@ -234,6 +251,129 @@ func threatTrafficSnapshot(adminURL string) (gin.H, bool) {
 func invalidateThreatScreenRollupCaches() {
 	threatRollupDimAggregateCache.Reset()
 	topTargetsCache.Reset()
+}
+
+// ---- L4（TCP）连接计数差分（契约 C3/C5）----
+//
+// caddy admin /lb/l4-conn-stats 的计数器随 /load 重建归零（Caddy 既有行为，
+// 与 HTTP traffic-stats 同口径）。端点在 serve 时输出**差分值**：上次已消费
+// 快照（按 admin URL）与本次快照逐字段相减；计数器重置（任意字段 cur<prev）
+// 视为整体重置，差分取 cur（不出负数）。countries 为模块侧采样口径（默认每
+// 16 连接取 1），响应以 sampled:true 披露；allowed/denied 全量差分。
+
+type l4TrafficRuleCounters struct {
+	AllowedTotal uint64            `json:"allowed_total"`
+	DeniedTotal  uint64            `json:"denied_total"`
+	Countries    map[string]uint64 `json:"countries"`
+}
+
+type l4TrafficRawSnapshot struct {
+	Rules map[string]l4TrafficRuleCounters `json:"rules"`
+}
+
+var (
+	// l4TrafficDeltaMu 守护按 admin URL 的「上次已消费」状态；同一 URL 的
+	// 每次 serve 各自消费增量（缓存命中同样推进）——单客户端大屏轮询语义
+	// 精确，多客户端并存时各自看到子序列增量（与累计口径的既有行为同界）。
+	l4TrafficDeltaMu   sync.Mutex
+	l4TrafficLastServe = map[string]l4TrafficRawSnapshot{}
+)
+
+// deltaUint64 单调差分：cur<prev（/load 归零形态）取 cur，否则 cur-prev。
+func deltaUint64(cur, prev uint64) uint64 {
+	if cur < prev {
+		return cur
+	}
+	return cur - prev
+}
+
+// fetchL4ConnStats 抓取一次 L4 连接计数原始快照；任何失败（不可达/非
+// 200/解码失败）ok=false 并告警——超时 2s，不阻塞大屏轮询协程（与
+// traffic-stats 抓取同容错：旧 Caddy 二进制无该端点=静默跳过）。
+func fetchL4ConnStats(adminURL string) (l4TrafficRawSnapshot, bool) {
+	client := &http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Get(adminURL + "/lb/l4-conn-stats")
+	if err != nil {
+		services.Logf("warn", "threat-screen l4 traffic: admin fetch failed: %v", err)
+		return l4TrafficRawSnapshot{}, false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		services.Logf("warn", "threat-screen l4 traffic: admin status %d", resp.StatusCode)
+		return l4TrafficRawSnapshot{}, false
+	}
+	var snap l4TrafficRawSnapshot
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&snap); err != nil {
+		services.Logf("warn", "threat-screen l4 traffic: decode failed: %v", err)
+		return l4TrafficRawSnapshot{}, false
+	}
+	return snap, true
+}
+
+// threatL4Snapshot 带缓存地取 L4 原始快照：复用 traffic 的 1s TTL 缓存与
+// singleflight（键前缀 l4|，与主体抓取同组不对 admin 放大并发）。
+func threatL4Snapshot(adminURL string) (l4TrafficRawSnapshot, bool) {
+	key := "l4|" + adminURL
+	if v, ok := threatTrafficCache.Load(key); ok {
+		if entry, ok := v.(threatTrafficCacheEntry); ok && time.Now().Before(entry.expiresAt) {
+			snap, _ := entry.data.(l4TrafficRawSnapshot)
+			return snap, true
+		}
+	}
+	result, err, _ := threatTrafficGroup.Do(key, func() (any, error) {
+		if v, ok := threatTrafficCache.Load(key); ok {
+			if entry, ok := v.(threatTrafficCacheEntry); ok && time.Now().Before(entry.expiresAt) {
+				return entry.data, nil
+			}
+		}
+		snap, ok := fetchL4ConnStats(adminURL)
+		if !ok {
+			return nil, errThreatTrafficFetch
+		}
+		threatTrafficCache.Store(key, threatTrafficCacheEntry{data: snap, expiresAt: time.Now().Add(threatTrafficCacheTTL)})
+		return snap, nil
+	})
+	if err != nil {
+		return l4TrafficRawSnapshot{}, false
+	}
+	snap, ok := result.(l4TrafficRawSnapshot)
+	return snap, ok
+}
+
+// attachL4TrafficDelta 把 L4 差分并入 traffic 响应（l4 键，契约 C5）：
+//   - rules.<cid>.{allowed,denied} 全量差分（未采样）；
+//   - countries.<中文名> 放行连接按国家差分（采样口径，键与主体 countries
+//     同口径翻译/过滤），由前端并入 normal 弧通道；
+//   - sampled:true 披露 countries 未经还原。
+//
+// l4 端点缺失/不可达（旧二进制）→ 空对象，traffic 主体不受影响。
+func attachL4TrafficDelta(adminURL string, data gin.H) {
+	snap, ok := threatL4Snapshot(adminURL)
+	rulesOut := make(map[string]map[string]uint64)
+	countriesOut := make(map[string]uint64)
+	if ok {
+		for cid, counters := range snap.Rules {
+			prev := l4TrafficLastServe[adminURL].Rules[cid]
+			allowed := deltaUint64(counters.AllowedTotal, prev.AllowedTotal)
+			denied := deltaUint64(counters.DeniedTotal, prev.DeniedTotal)
+			rulesOut[cid] = map[string]uint64{"allowed": allowed, "denied": denied}
+			for country, sampled := range counters.Countries {
+				if country == "" || country == "Reserved" || country == "0" {
+					continue
+				}
+				key := geoipnames.CountryChinese(country)
+				countriesOut[key] += deltaUint64(sampled, prev.Countries[country])
+			}
+		}
+	}
+	l4TrafficDeltaMu.Lock()
+	l4TrafficLastServe[adminURL] = snap
+	l4TrafficDeltaMu.Unlock()
+	data["l4"] = gin.H{
+		"rules":     rulesOut,
+		"countries": countriesOut,
+		"sampled":   true,
+	}
 }
 
 // ---- rollup 维度聚合（大屏同屏全部维度）：SQL 侧聚合 + 30s 缓存 ----

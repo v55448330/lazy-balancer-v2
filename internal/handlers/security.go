@@ -2574,8 +2574,15 @@ func (h *Handlers) BindRuleToPolicy(c *gin.Context) {
 		return
 	}
 	if !target.http {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "安全策略仅支持绑定 HTTP 规则（TCP 规则不经过 WAF/IP 访问控制/限流链）"})
-		return
+		// L4 阶段 0/1（契约 C4）：TCP 规则可绑定 stage0/stage1 特征策略；
+		// 含 G2（限流）/G3（WAF）特征的策略仍拒绝（能力门单源）。
+		if msg, gateErr := tcpSecurityBindingGate(caddyWriteCtx(c), tx, []int{policyIDInt}); gateErr != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", gateErr)})
+			return
+		} else if msg != "" {
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: msg})
+			return
+		}
 	}
 	// 上限守卫：POST additive 与 PUT 同上限——一规则最多绑定
 	// maxBindingsPerRule 条策略。重绑已存在的 (rule,policy) 对保持幂等 200
@@ -2702,6 +2709,74 @@ func loadRuleBindingTarget(ctx context.Context, tx *sql.Tx, ruleCaddyID string) 
 	return ruleBindingTarget{exists: exists > 0, protocol: protocol, http: protocol == "http"}, nil
 }
 
+// tcpSecurityBindingGate 是 TCP 规则绑定的能力门单源（契约 C4）：TCP 渲染链
+// 只消费阶段 0/1 特征（信任/IP ACL/黑名单/GeoIP，buildTCPSecurityRoutes），
+// 含 G2（限流）/G3（WAF）特征的策略绑定 TCP 即「UI 宣称受保护、运行态零强制」
+// ——整族 400 拒绝，文案「该策略含 TCP 不支持的能力（限流/WAF）」。在调用方
+// 事务视图内整行装载（securityPolicySelectColumns + scanSecurityPolicy 单源）
+// 并按 models.PolicyTypeFeatures 判组。返回 ""=放行；非空=面向用户的 400
+// 文案（取首个违规策略，确定性=id 升序）；err=数据库错误（调用方映射 500）。
+// HTTP 规则不走本门（策略族全量合法）。
+func tcpSecurityBindingGate(ctx context.Context, tx *sql.Tx, policyIDs []int) (string, error) {
+	uniqueIDs := normalizePolicyIDs(policyIDs)
+	if len(uniqueIDs) == 0 {
+		return "", nil
+	}
+	const chunkLimit = 500 // 32766 绑定变量上限分块（与 validateIPListRefsExistence 同型）
+	for start := 0; start < len(uniqueIDs); start += chunkLimit {
+		end := start + chunkLimit
+		if end > len(uniqueIDs) {
+			end = len(uniqueIDs)
+		}
+		chunk := uniqueIDs[start:end]
+		placeholders := make([]string, len(chunk))
+		args := make([]interface{}, len(chunk))
+		for i, id := range chunk {
+			placeholders[i] = "?"
+			args[i] = id
+		}
+		rows, err := tx.QueryContext(ctx, "SELECT "+securityPolicySelectColumns+" FROM security_policies WHERE id IN ("+strings.Join(placeholders, ",")+") ORDER BY id", args...)
+		if err != nil {
+			return "", err
+		}
+		for rows.Next() {
+			var p models.SecurityPolicy
+			if scanErr := scanSecurityPolicy(rows, &p); scanErr != nil {
+				rows.Close()
+				return "", scanErr
+			}
+			fs := models.PolicyTypeFeatures(&p)
+			if fs.G2 || fs.G3 {
+				rows.Close()
+				return fmt.Sprintf("策略 %q（#%d）含 TCP 不支持的能力（限流/WAF），仅阶段 0/1 特征策略可绑定 TCP 规则", p.Name, p.ID), nil
+			}
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return "", err
+		}
+		rows.Close()
+	}
+	return "", nil
+}
+
+// pruneTCPUnsupportedBindings 是「TCP 规则上 L4 不支持绑定」清理的 handlers
+// 侧单源包装（SQL 字面量=db.TCPRuleUnsupportedBindingPruneSQL，与启动迁移/
+// 导入事务/终态收口族共用同一份谓词）。返回删除条数；计数读失败按 0 计并
+// WARN（DELETE 已成功，错误不得独吞——与悬挂绑定清理同口径）。
+func pruneTCPUnsupportedBindings(ctx context.Context, tx *sql.Tx) (int64, error) {
+	result, err := tx.ExecContext(ctx, db.TCPRuleUnsupportedBindingPruneSQL)
+	if err != nil {
+		return 0, fmt.Errorf("清理 TCP 规则 L4 不支持的安全策略绑定失败: %w", err)
+	}
+	dropped, countErr := result.RowsAffected()
+	if countErr != nil {
+		services.Logf("warn", "清理 TCP 规则 L4 不支持的安全策略绑定：读取影响行数失败（按 0 计，清理动作已成功）: %v", countErr)
+		return 0, nil
+	}
+	return dropped, nil
+}
+
 // bindingCountExcluding 统计单规则上「除 excludePolicyID 之外」的绑定数——
 // 绑定上限判定与拆分重映射的合并判定单源（合并后是否超 maxBindingsPerRule）。
 func bindingCountExcluding(ctx context.Context, tx *sql.Tx, ruleCaddyID string, excludePolicyID int) (int, error) {
@@ -2767,7 +2842,14 @@ func setRulePoliciesInTx(ctx context.Context, tx *sql.Tx, ruleCaddyID string, po
 		return "规则不存在", nil
 	}
 	if !target.http {
-		return "安全策略仅支持绑定 HTTP 规则（TCP 规则不经过 WAF/IP 访问控制/限流链）", nil
+		// L4 阶段 0/1（契约 C4）：TCP 绑定走能力门（G2/G3 特征拒绝）。
+		// 门通过后必须继续走到下方共享写入段——提前 return 会让绑定静默
+		// 丢失却返回 200（端到端实证实锤的 P0，修复含回归测试）。
+		if msg, gateErr := tcpSecurityBindingGate(ctx, tx, uniqueIDs); gateErr != nil {
+			return "", gateErr
+		} else if msg != "" {
+			return msg, nil
+		}
 	}
 	if len(uniqueIDs) > 0 {
 		placeholders := make([]string, len(uniqueIDs))
@@ -3005,7 +3087,12 @@ func (h *Handlers) BulkUpdatePolicyBindings(c *gin.Context) {
 			return "规则不存在: " + ruleCaddyID, nil
 		}
 		if bind && !target.http {
-			return ruleCaddyID + ": 安全策略仅支持绑定 HTTP 规则（TCP 规则不经过 WAF/IP 访问控制/限流链）", nil
+			// L4 阶段 0/1（契约 C4）：TCP 绑定走能力门；拒绝=分项 reason。
+			if msg, gateErr := tcpSecurityBindingGate(caddyWriteCtx(c), tx, []int{policyID}); gateErr != nil {
+				return "", gateErr
+			} else if msg != "" {
+				return ruleCaddyID + ": " + msg, nil
+			}
 		}
 		if bind {
 			if _, already := boundToPolicy[ruleCaddyID]; !already && bindCounts[ruleCaddyID] >= maxBindingsPerRule {
@@ -3183,8 +3270,17 @@ func (h *Handlers) BatchBindSecurityPolicies(c *gin.Context) {
 			continue
 		}
 		if !target.http {
-			skipped = append(skipped, skippedRule{ruleCaddyID, "TCP 规则不经过安全链"})
-			continue
+			// L4 阶段 0/1（契约 C4）：TCP 绑定走能力门；拒绝进 skipped 分项
+			//（与 split 重映射同文案同口径）。
+			msg, terr := tcpSecurityBindingGate(caddyWriteCtx(c), tx, uniqueIDs)
+			if terr != nil {
+				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", terr)})
+				return
+			}
+			if msg != "" {
+				skipped = append(skipped, skippedRule{ruleCaddyID, msg})
+				continue
+			}
 		}
 
 		existingRows, err := tx.QueryContext(caddyWriteCtx(c), "SELECT policy_id FROM security_policy_bindings WHERE rule_caddy_id=? ORDER BY policy_id", ruleCaddyID)
@@ -3732,8 +3828,13 @@ func (h *Handlers) SplitSecurityPolicy(c *gin.Context) {
 			continue
 		}
 		if !target.http {
-			skipped = append(skipped, skippedRule{ruleID, "安全策略仅支持绑定 HTTP 规则（TCP 规则不经过 WAF/IP 访问控制/限流链）"})
-			continue
+			// L4 阶段 0/1（契约 C4）：TCP 规则可重映射 stage0/stage1 子策略；
+			// 拆分产出含 G2/G3 特征子策略（=源策略 features.G2/G3）时进
+			// skipped 保留原绑定（能力门单源，与四个绑定写路径同口径）。
+			if features.G2 || features.G3 {
+				skipped = append(skipped, skippedRule{ruleID, "该策略含 TCP 不支持的能力（限流/WAF），仅阶段 0/1 特征策略可绑定 TCP 规则"})
+				continue
+			}
 		}
 		existingCount, cerr := bindingCountExcluding(caddyWriteCtx(c), tx, ruleID, p.ID)
 		if cerr != nil {
@@ -4269,6 +4370,13 @@ func (h *Handlers) ListSecurityEvents(c *gin.Context) {
 	if action := c.Query("action"); action != "" {
 		where += " AND action=?"
 		args = append(args, action)
+	}
+	// event_type 类型筛选（L4 阶段 0/1，契约 C5）：tcp=精确匹配；waf 与其他
+	// 值按 COALESCE(event_type,'waf') 比较——摄取口径「缺失按 waf」，带外
+	// NULL/空串行归 waf 而不是静默消失。
+	if eventType := strings.TrimSpace(c.Query("event_type")); eventType != "" {
+		where += " AND COALESCE(event_type,'waf')=?"
+		args = append(args, eventType)
 	}
 	if ip := strings.TrimSpace(c.Query("ip")); ip != "" {
 		// 前端输入为完整 IP：精确匹配，避免 LIKE 子串把 1.2.3.4 匹配到 11.2.3.40
@@ -5007,6 +5115,15 @@ func (h *Handlers) GetSecurityOverview(c *gin.Context) {
 		blocked, detected, fromRollup, err := securityOverviewTodayCounts(db.MetricsDB, todayStart, now)
 		trackErr(err)
 		overview.TodayBlocked, overview.TodayDetected, todayFromRollup = blocked, detected, fromRollup
+		// TCP 协议拆分（契约 C5）：原始表直算（rollup 无 event_type 维度；
+		// 口径披露见 SecurityOverview.TodayBlockedTCP 注释）。查询失败并入
+		// trackErr（显性报错口径），不静默回零。
+		var tcpBlocked int
+		if err := db.MetricsDB.QueryRow(`SELECT COUNT(*) FROM security_events
+			WHERE event_type='tcp' AND action='blocked' AND event_time >= ?`, todayStartUTC).Scan(&tcpBlocked); err != nil {
+			trackErr(err)
+		}
+		overview.TodayBlockedTCP = tcpBlocked
 		coverageFrom, err := threatRawCoverageStart(db.MetricsDB)
 		trackErr(err)
 		rawCoverageFrom = coverageFrom

@@ -89,10 +89,9 @@
                    含完整阶段链路，信息面覆盖本摘要）；trigger-keys 置空是关掉 EP
                    默认的 Enter/Space 开关 popover（否则同键既开弹框又弹只读面板）。
                    2026-09-21 用户裁定：HTTP/HTTPS 规则恒显示锁（未绑定=warning 黄锁，
-                   四阶段灰态「未启用」；绑定=is-allow 绿锁现状）；TCP 规则显示灰色锁
-                   （2026-10-10 用户裁定，无弹框，hover 提示不支持原因）。 -->
+                   四阶段灰态「未启用」；绑定=is-allow 绿锁现状）；TCP 规则与 HTTP 同构
+                   （阶段 0/1 放开）：未绑/已绑同色阶，阶段 2/3 恒灰态「不适用」。 -->
               <el-popover
-                v-if="row.protocol === 'http'"
                 :ref="(el: unknown) => setLockPopover(row.caddy_id, el)"
                 placement="right-start"
                 trigger="hover"
@@ -123,8 +122,11 @@
                   <template v-for="stage in ruleStageModel(row as Rule).stages" :key="stage.stage">
                     <div class="lock-stage">
                       <div class="lock-stage-head" :class="`lock-stage-head--s${stage.stage}`">{{ stage.title }}</div>
+                      <!-- TCP 规则阶段 2/3 恒灰态「不适用」（L4 无限流/WAF 引擎面，绑定侧已门）——
+                           组有无均不落「未启用」（未启用=可绑未绑，语义不同） -->
+                      <div v-if="row.protocol === 'tcp' && stage.stage >= 2" class="lock-stage-line lock-stage-empty">不适用（TCP 仅支持阶段 0/1）</div>
                       <!-- 四阶段恒出（2026-09-21 用户裁定：与流程弹框同口径）——空阶段灰态「未启用」不再整段缺席 -->
-                      <div v-if="stage.groups.length === 0" class="lock-stage-line lock-stage-empty">未启用</div>
+                      <div v-else-if="stage.groups.length === 0" class="lock-stage-line lock-stage-empty">未启用</div>
                       <!-- 按策略分小组（2026-09-21 用户裁定）：策略名做弱化小标题，该策略的阶段能力行
                            （含拦截页行）逐行挂其下，信息密度与流程弹框面板一致；单策略绑定时免分组框
                            保持紧凑。阶段 3 的 WAF 模式由投影首行（WAF（拦截/检测/仅自定义））承载，
@@ -150,17 +152,6 @@
                   <div class="lock-summary-hint"><el-button link type="primary" @click="openFlowFromLock(row as Rule)">查看完整处理流程 →</el-button></div>
                 </div>
               </el-popover>
-              <!-- TCP 灰色锁（2026-10-10 用户裁定）：无弹框，hover 提示不支持原因。
-                   它不是动作入口（无流程弹框可开），语义按「带名称的图形」暴露给
-                   读屏/键盘：纯装饰的 tabindex 可聚焦却无 role/名称，屏幕阅读器只
-                   读出「锁」图标而没有「为什么」 -->
-              <el-tooltip
-                v-else-if="row.protocol === 'tcp'"
-                placement="top"
-                content="TCP 规则不支持安全策略"
-              >
-                <el-icon :size="14" class="acl-lock-icon acl-lock-icon--tcp" tabindex="0" role="img" aria-label="TCP 规则不支持安全策略"><Lock /></el-icon>
-              </el-tooltip>
               <!-- 规则名入口复用 AccessibleLink：手写 <a role=button> 缺按键自动重复
                    守卫与统一焦点环（同页曾有两套键盘语义） -->
               <AccessibleLink class="rule-name-link" :title="row.name" @click="viewConfig(row as Rule)">{{ row.name }}</AccessibleLink>
@@ -384,10 +375,10 @@
                 </el-button>
                 </div>
               </el-tooltip>
-              <!-- TCP 不再 v-if 隐藏（与只读禁用同构）：不可用项禁用 + hover 原因 -->
-              <el-tooltip :disabled="row.protocol === 'http' && !isReadOnly && !securityBindingsLoading && !securityBindingsError" :content="row.protocol === 'tcp' ? 'TCP 规则不经过安全链' : securityBindingsLoading ? '安全策略绑定加载中…' : securityBindingsError ? '安全策略绑定加载失败，请先点击上方重新加载' : readOnlyMessage">
+              <!-- TCP（阶段 0/1）与 HTTP 同入口；含 2/3 特征策略的拒绝由编辑器选择侧置灰 + 后端 400 承接 -->
+              <el-tooltip :disabled="!isReadOnly && !securityBindingsLoading && !securityBindingsError" :content="securityBindingsLoading ? '安全策略绑定加载中…' : securityBindingsError ? '安全策略绑定加载失败，请先点击上方重新加载' : readOnlyMessage">
                 <div>
-                <el-button type="primary" link size="small" :disabled="row.protocol === 'tcp' || isReadOnly || saving || securityBindingsLoading || securityBindingsError" @click="openBindDialog(row as Rule)">
+                <el-button type="primary" link size="small" :disabled="isReadOnly || saving || securityBindingsLoading || securityBindingsError" @click="openBindDialog(row as Rule)">
                   安全
                 </el-button>
                 </div>
@@ -3656,7 +3647,8 @@ const openFlowDialog = (rule: Rule): void => {
     health: health ? { healthy: health.healthy, unhealthy: health.unhealthy, degraded: health.degraded, unknown: health.unknown, na: health.na, total: health.total } : undefined,
     upstreamHealth,
   }
-  flowDialogModel.value = rule.protocol === 'http' ? ruleStageModel(rule) : null
+  // TCP（阶段 0/1）与 HTTP 同构传模型：弹框按协议渲染阶段 2/3 灰态
+  flowDialogModel.value = ruleStageModel(rule)
   flowDialogVisible.value = true
 }
 
@@ -4228,7 +4220,6 @@ onUnmounted(() => {
 .acl-lock-icon:focus-visible { outline: 2px solid var(--el-color-primary); outline-offset: 2px; border-radius: 2px; }
 .acl-lock-icon.is-allow { color: var(--el-color-success); }
 .acl-lock-icon.is-unbound { color: var(--el-color-warning); }
-.acl-lock-icon--tcp { color: var(--el-text-color-placeholder); cursor: default; }
 .rule-name-link { 
   font-weight: 500; 
   color: #111827; 

@@ -2480,7 +2480,9 @@ func TestNormalizeRuleTimestampsMigration_preservesMalformedAndCanonicalizesVali
 }
 
 func TestRunMigrations_removesLegacyTCPRulePolicyBindings(t *testing.T) {
-	// Given 真实旧库数据形态：HTTP 绑定、TCP 惰性绑定、无对应规则的历史绑定。
+	// Given 真实旧库数据形态：HTTP 绑定、TCP 惰性绑定、无对应规则的历史绑定；
+	// 新语义（L4 阶段 0/1）下 TCP 仅清理「含 G2/G3 特征策略」的绑定，
+	// stage0/1 特征绑定保留。
 	database := openMigrationTestDB(t)
 	if err := createTables(); err != nil {
 		t.Fatalf("create tables: %v", err)
@@ -2490,9 +2492,14 @@ func TestRunMigrations_removesLegacyTCPRulePolicyBindings(t *testing.T) {
 		('lb_bind_http','http-rule','http',8080);
 		INSERT INTO lb_rules (caddy_id,name,protocol,listen_port,compress_types) VALUES
 		('lb_bind_tcp','tcp-rule','tcp',9000,'');
+		INSERT INTO security_policies (id,name,mode) VALUES
+		(7,'legacy-blocking','blocking'),
+		(8,'legacy-stage0','off');
+		UPDATE security_policies SET ip_whitelist='["10.9.9.9/32"]' WHERE id=8;
 		INSERT INTO security_policy_bindings (rule_caddy_id,policy_id) VALUES
 		('lb_bind_http',7),
 		('lb_bind_tcp',7),
+		('lb_bind_tcp',8),
 		('lb_bind_missing',7)`); err != nil {
 		t.Fatalf("seed legacy rules and policy bindings: %v", err)
 	}
@@ -2502,21 +2509,23 @@ func TestRunMigrations_removesLegacyTCPRulePolicyBindings(t *testing.T) {
 		t.Fatalf("run migrations: %v", err)
 	}
 
-	// Then 仅 TCP 规则绑定被清理；HTTP 与无规则绑定原样保留。
-	assertBindingRows := func() (httpRows, tcpRows, missingRows int) {
+	// Then 仅 TCP 规则上「G2/G3 特征策略」的绑定被清理；HTTP、
+	// TCP 的 stage0 绑定与无规则历史绑定原样保留。
+	assertBindingRows := func() (httpRows, tcpG3, tcpStage0, missingRows int) {
 		t.Helper()
 		if err := database.QueryRow(`SELECT
 			SUM(CASE WHEN rule_caddy_id='lb_bind_http' THEN 1 ELSE 0 END),
-			SUM(CASE WHEN rule_caddy_id='lb_bind_tcp' THEN 1 ELSE 0 END),
+			SUM(CASE WHEN rule_caddy_id='lb_bind_tcp' AND policy_id=7 THEN 1 ELSE 0 END),
+			SUM(CASE WHEN rule_caddy_id='lb_bind_tcp' AND policy_id=8 THEN 1 ELSE 0 END),
 			SUM(CASE WHEN rule_caddy_id='lb_bind_missing' THEN 1 ELSE 0 END)
-			FROM security_policy_bindings`).Scan(&httpRows, &tcpRows, &missingRows); err != nil {
+			FROM security_policy_bindings`).Scan(&httpRows, &tcpG3, &tcpStage0, &missingRows); err != nil {
 			t.Fatalf("count policy bindings: %v", err)
 		}
-		return httpRows, tcpRows, missingRows
+		return httpRows, tcpG3, tcpStage0, missingRows
 	}
-	httpRows, tcpRows, missingRows := assertBindingRows()
-	if httpRows != 1 || tcpRows != 0 || missingRows != 1 {
-		t.Fatalf("bindings after migration http/tcp/missing=%d/%d/%d, want 1/0/1", httpRows, tcpRows, missingRows)
+	httpRows, tcpG3, tcpStage0, missingRows := assertBindingRows()
+	if httpRows != 1 || tcpG3 != 0 || tcpStage0 != 1 || missingRows != 1 {
+		t.Fatalf("bindings after migration http/tcpG3/tcpStage0/missing=%d/%d/%d/%d, want 1/0/1/1", httpRows, tcpG3, tcpStage0, missingRows)
 	}
 	var clusterVersion int
 	if err := database.QueryRow(`SELECT cluster_version FROM global_config WHERE id=1`).Scan(&clusterVersion); err != nil {
@@ -2530,9 +2539,9 @@ func TestRunMigrations_removesLegacyTCPRulePolicyBindings(t *testing.T) {
 	if err := runMigrations(); err != nil {
 		t.Fatalf("repeat migrations: %v", err)
 	}
-	httpRows, tcpRows, missingRows = assertBindingRows()
-	if httpRows != 1 || tcpRows != 0 || missingRows != 1 {
-		t.Fatalf("bindings after repeated migration http/tcp/missing=%d/%d/%d, want 1/0/1", httpRows, tcpRows, missingRows)
+	httpRows, tcpG3, tcpStage0, missingRows = assertBindingRows()
+	if httpRows != 1 || tcpG3 != 0 || tcpStage0 != 1 || missingRows != 1 {
+		t.Fatalf("bindings after repeated migration http/tcpG3/tcpStage0/missing=%d/%d/%d/%d, want 1/0/1/1", httpRows, tcpG3, tcpStage0, missingRows)
 	}
 	if err := database.QueryRow(`SELECT cluster_version FROM global_config WHERE id=1`).Scan(&clusterVersion); err != nil {
 		t.Fatalf("read cluster_version after repeat: %v", err)
@@ -2552,6 +2561,7 @@ func TestMigrateTCPRuleSecurityPolicyBindings_clusterBumpFailureRollsBack(t *tes
 		INSERT INTO lb_rules (caddy_id,name,protocol,listen_port,compress_types) VALUES
 		('lb_bind_atomic_http','http-rule','http',8080,'gzip'),
 		('lb_bind_atomic_tcp','tcp-rule','tcp',9000,'');
+		INSERT INTO security_policies (id,name,mode) VALUES (7,'legacy-blocking','blocking');
 		INSERT INTO security_policy_bindings (rule_caddy_id,policy_id) VALUES
 		('lb_bind_atomic_http',7),('lb_bind_atomic_tcp',7);
 		CREATE TRIGGER fail_tcp_binding_version_bump
@@ -2605,7 +2615,7 @@ func TestMigrateTCPRuleSecurityPolicyBindings_clusterBumpFailureRollsBack(t *tes
 		t.Fatalf("after retry tcp/http/version=%d/%d/%d, want 0/1/1", tcpBindings, httpBindings, version)
 	}
 	entries := drainSystemAuditBuffer()
-	if len(entries) != 1 || !strings.Contains(entries[0].detail, "安全策略绑定") {
+	if len(entries) != 1 || !strings.Contains(entries[0].detail, "策略绑定") || !strings.Contains(entries[0].detail, "阶段 0/1 绑定保留") {
 		t.Fatalf("重试成功应恰留一条聚合审计: %+v", entries)
 	}
 }

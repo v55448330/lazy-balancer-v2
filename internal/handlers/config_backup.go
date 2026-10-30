@@ -1294,10 +1294,12 @@ func normalizeRuleRowsForTransport(ctx context.Context, tx *sql.Tx) (int64, erro
 		WHERE COALESCE(tls_source,'manual')<>'acme_dns' AND COALESCE(ca_provider_id,0)<>0`); err != nil {
 		return 0, fmt.Errorf("规则跨模式 CA 提供商引用归一失败: %w", err)
 	}
-	// TCP 规则的安全策略绑定不参与渲染（buildTCPProxyRoute 无策略
-	// 加载），绑定写接口又拒绝 TCP——残留绑定会在策略页 rule_count/绑定视图中
-	// 显示生效而运行态零防护。导入事务内按导入后规则视图清理。
-	droppedBindings, err := pruneTCPRuleBindings(ctx, tx)
+	// TCP 规则的安全策略绑定收口按 L4 阶段 0/1 语义（契约 C4）：只清理
+	// 「含 G2（限流）/G3（WAF）特征」的绑定——阶段 0/1 绑定由 TCP 渲染链
+	//（buildTCPSecurityRoutes）消费，为合法状态；违规绑定会在策略页
+	// rule_count/绑定视图中显示生效而运行态零强制。谓词单源=
+	// db.TCPRuleUnsupportedBindingPruneSQL（与启动迁移/终态收口共用）。
+	droppedBindings, err := pruneTCPUnsupportedBindings(ctx, tx)
 	if err != nil {
 		return 0, err
 	}
@@ -1308,31 +1310,6 @@ func normalizeRuleRowsForTransport(ctx context.Context, tx *sql.Tx) (int64, erro
 		return 0, fmt.Errorf("规则时间戳归一失败: %w", err)
 	}
 	return droppedBindings, nil
-}
-
-// pruneTCPRuleBindings 清理导入后规则视图中 TCP 规则的策略绑定
-// 不变量：TCP 渲染链不消费策略，绑定为死绑定）。幂等——无命中返回 0。
-//
-// 本清理原本只随 normalizeRuleRowsForTransport
-// 在「备份携带 lb_rules」时执行；仅导入「安全防护」分类（lb_rules 缺席）而
-// security_policy_bindings 被携带时，指向 live TCP 规则的绑定仍会插入并存活，
-// 策略页 rule_count/绑定视图宣称生效而运行态零防护。故 v2 导入把本步从
-// hasRules 门中提出，无条件执行一次（与 collectPostCommitCleanup 的事务内
-// 幂等重复无害同型）。
-func pruneTCPRuleBindings(ctx context.Context, tx *sql.Tx) (int64, error) {
-	result, err := tx.ExecContext(ctx, `DELETE FROM security_policy_bindings
-		WHERE rule_caddy_id IN (SELECT caddy_id FROM lb_rules WHERE protocol='tcp')`)
-	if err != nil {
-		return 0, fmt.Errorf("清理 TCP 规则安全策略绑定失败: %w", err)
-	}
-	// DELETE 已成功：计数失败只影响审计/响应里的条数展示，不影响导入结果
-	// ——按 0 计并留痕（与同文件悬挂绑定清理同口径，不得独吞错误）。
-	dropped, countErr := result.RowsAffected()
-	if countErr != nil {
-		services.Logf("warn", "清理 TCP 规则安全策略绑定：读取影响行数失败（按 0 计，清理动作已成功）: %v", countErr)
-		return 0, nil
-	}
-	return dropped, nil
 }
 
 type importRuntimeSnapshot struct {
@@ -6399,9 +6376,9 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 	} else if _, bindingsCarried := backup.Tables["security_policy_bindings"]; bindingsCarried {
 		// 规则表缺席（如仅导入「安全防护」）时上面的归一不跑，
 		// 但 security_policy_bindings 被携带——指向 live TCP 规则的绑定会随
-		// 插入存活，必须在插入后清理（幂等）。绑定表也缺席的分类导入不得顺手
-		// 改写安全绑定。
-		droppedTCPBindings, err = pruneTCPRuleBindings(ctx, tx)
+		// 插入存活，必须在插入后按 L4 阶段 0/1 语义收口（幂等）。绑定表也
+		// 缺席的分类导入不得顺手改写安全绑定。
+		droppedTCPBindings, err = pruneTCPUnsupportedBindings(ctx, tx)
 		if err != nil {
 			err = failImportTx(c, session, action, "", err, http.StatusInternalServerError, action+"失败")
 			return

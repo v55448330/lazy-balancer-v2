@@ -82,7 +82,7 @@ test('共享定时更新编辑器：保存中冻结星期、时间与保存入�
 
 test('绑定编辑器：保存中冻结策略/规则选择与分页（含函数级守卫）', () => {
   const page = code('src/components/SecurityBindingEditor.vue')
-  assert.ok(openTags(page, 'el-select').some((tag) => tag.includes(':multiple="!section.single"') && tag.includes(':disabled="saving"')))
+  assert.ok(openTags(page, 'el-select').some((tag) => tag.includes(':multiple="!section.single"') && tag.includes(':disabled="saving || section.tcpLocked === true"')))
   assert.ok(openTags(page, 'el-input').some((tag) => tag.includes('class="picker-search"') && tag.includes(':disabled="saving"')))
   assert.match(page, /:disabled="pickerSelectableRules\.length === 0 \|\| saving"/)
   assert.match(page, /:disabled="saving \|\| pickerWouldExceed\(rule\)"/)

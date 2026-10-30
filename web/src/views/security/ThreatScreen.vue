@@ -92,6 +92,8 @@
           <div v-for="event in filteredFeed" :key="event.id" class="event" :data-sev="sevOf(event)">
             <div class="ev-top">
               <span>{{ formatFeedTime(event.event_time) }}</span>
+              <!-- TCP（L4 断连）事件青色徽标：与 HTTP 攻击事件混排须可辨识 -->
+              <span v-if="event.event_type === 'tcp'" class="proto-tcp">TCP</span>
               <span class="sev" :class="'sev-' + sevOf(event)">{{ sevLabel(event) }}</span>
               <span class="act" :class="'act-' + event.action">{{ eventActionShort(event.action) }}</span>
             </div>
@@ -285,7 +287,7 @@
             <polyline class="normal-stroke" :points="normalPoints"></polyline>
             <polyline class="attack-stroke" :points="attackPoints"></polyline>
           </svg>
-          <div class="traffic-legend"><span class="sw normal"></span>正常<span class="sw attack"></span>攻击</div>
+          <div class="traffic-legend"><span class="sw normal"></span>正常<span class="sw attack"></span>攻击<span class="sw tcp"></span><span title="TCP 拒绝连接=断连（无 HTTP 拦截页），计入攻击通道；放行连接并入正常通道">TCP 断连</span></div>
           <div class="timeline-axis"><span>90s 前</span><span>现在</span></div>
         </div>
       </div>
@@ -305,7 +307,7 @@ import { createVisibilityIntervals } from '@/composables/useVisibilityIntervals'
 import { useCountUp } from '@/composables/useCountUp'
 import { formatDate } from '@/utils/date'
 import { eventActionFull, eventActionShort } from '@/utils/eventAction'
-import { trafficDelta, formatRecentRate, hourlyBucketLabel, bucketTerminology, type TrafficBaseline } from '@/utils/threatScreenMetrics'
+import { trafficDelta, formatRecentRate, hourlyBucketLabel, bucketTerminology, l4TrafficDelta, type TrafficBaseline } from '@/utils/threatScreenMetrics'
 import { anomalySeverity, overlayDetectionGrade, zeroScoreSeverity, type AnomalySeverity } from '@/utils/severityScale'
 import { displayThreatScreenMode } from '@/utils/configValues'
 import { flowTimestamp, normalizeTrafficSampleN, reconstructObservedRate, stepAdaptiveSample, nextFlowCursor, planFlowEvents, freshFlowEvents } from '@/utils/threatFlowRules'
@@ -356,6 +358,8 @@ interface FeedEvent {
   rule_triggered?: string
   /** 后端 trigger_type（阶段/触发类型的权威映射，security_threat_screen.go 下发）。 */
   trigger_type?: string
+  /** TCP（L4 断连）事件标记：行内出青色 TCP 徽标（event_type 缺省=waf，不显示）。 */
+  event_type?: string
   anomaly_score?: number
 }
 
@@ -708,6 +712,9 @@ const filteredFeed = computed(() =>
 // （trafficScreenMetrics.trafficDelta）；计数器回退=曲线断开重建。
 let trafficBaseline: TrafficBaseline | null = null
 const trafficError = ref(false)
+// TCP（L4）QPS 差分的间隔基准：与 HTTP 基线独立（l4 键缺省/降级轮次不推进间隔，
+// 下轮起算；QPS 按真实轮询间隔折算）。
+let l4PrevAt = 0
 const trafficSampled = ref(false)
 // collecting=false 表示 Caddy 侧采集租约未生效（累计计数冻结）：此时不得把
 // 冻结的累计当作实时流量，也不推进「累计」展示。
@@ -718,6 +725,9 @@ const trafficTask = usePollingTask(async ({ signal, isCurrent }) => {
     available?: boolean
     sample_n?: number
     collecting?: boolean
+    /** TCP（L4）连接计数差分（后端已差分；形状见 threatScreenMetrics.l4TrafficDelta）。
+     *  旧后端/admin 不可达时键缺省——按「无 l4 数据」处理。 */
+    l4?: unknown
   }>>('/security/overview/threat-screen/traffic', { silent: true, signal })
   if (!isCurrent()) return
   if (res.data?.available === false) {
@@ -734,6 +744,19 @@ const trafficTask = usePollingTask(async ({ signal, isCurrent }) => {
   const countries = res.data?.countries ?? {}
   const now = Date.now()
   const sample = trafficDelta(trafficBaseline, countries, now, sampleN)
+  // TCP（L4）差分（后端已差分，禁止二次差分）：countries 并入正常弧通道（青色
+  // 正常弧，两种采样模式都出——放行的 TCP 连接不产生事件流，采样模式下没有
+  // 事件源，只能走本通道）；rules allowed/denied 全量差分并入正常/攻击 QPS 与
+  // 累计（拒绝=断连并入攻击披露面）。l4 键缺省（旧后端/admin 不可达）= 全零无感。
+  const l4 = l4TrafficDelta(res.data?.l4)
+  let l4AllowedQps = 0
+  let l4DeniedQps = 0
+  if (l4PrevAt > 0 && now > l4PrevAt) {
+    const elapsedSec = (now - l4PrevAt) / 1000
+    l4AllowedQps = l4.allowed / elapsedSec
+    l4DeniedQps = l4.denied / elapsedSec
+  }
+  l4PrevAt = now
   // 基线必须取 trafficDelta **归一后**的计数（缺失/非数值→0），
   // 不得从原始响应重建——否则缺字段时基线存 undefined，差分恒 NaN 且静默丢国。
   trafficBaseline = {
@@ -754,12 +777,17 @@ const trafficTask = usePollingTask(async ({ signal, isCurrent }) => {
     return
   }
   // 采样关闭时用累计计数器生成地区聚合正常光流；开启逐请求事件流后，
-  // 正常光流由 flowTask 消费事件生成，避免两条数据源重复画弧。
-  if (flowSampleN.value === 0) threatMap?.setTraffic(sample.normalDeltas)
-  normalTotal.value += sample.normalTotal
-  attackTotal.value += sample.attackTotal
-  normalWindow.value = [...normalWindow.value, sample.normalQps].slice(-NORMAL_WINDOW_MAX)
-  attackWindow.value = [...attackWindow.value, sample.attackQps].slice(-NORMAL_WINDOW_MAX)
+  // 正常光流由 flowTask 消费事件生成（HTTP），TCP 放行连接无事件源、恒走本通道，
+  // 避免两条数据源重复画弧。
+  if (flowSampleN.value === 0) {
+    threatMap?.setTraffic([...sample.normalDeltas, ...l4.countryArcs])
+  } else if (l4.countryArcs.length > 0) {
+    threatMap?.setTraffic(l4.countryArcs)
+  }
+  normalTotal.value += sample.normalTotal + l4.allowed
+  attackTotal.value += sample.attackTotal + l4.denied
+  normalWindow.value = [...normalWindow.value, sample.normalQps + l4AllowedQps].slice(-NORMAL_WINDOW_MAX)
+  attackWindow.value = [...attackWindow.value, sample.attackQps + l4DeniedQps].slice(-NORMAL_WINDOW_MAX)
 }, { interval: 1500, onError: () => { trafficError.value = true } })
 
 function setWindow(hours: number): void {
@@ -1426,6 +1454,8 @@ onBeforeUnmount(() => {
 .ev-top { display: flex; justify-content: flex-start; align-items: center; gap: 10px; font-size: 11px; color: #56709f; font-variant-numeric: tabular-nums; }
 .ev-top .act { margin-left: auto; }
 .sev { font-size: 10px; line-height: 1; padding: 3px 6px; border: 1px solid; }
+/* TCP（L4 断连）事件徽标：青色（与正常弧/流量线同族青，区分于 HTTP 攻击事件） */
+.proto-tcp { font-size: 10px; line-height: 1; padding: 3px 6px; border: 1px solid rgba(56, 189, 248, 0.55); color: #7dd3fc; background: rgba(56, 189, 248, 0.1); }
 .sev-high { color: #ff4d5e; border-color: rgba(255, 77, 94, 0.5); background: rgba(255, 77, 94, 0.12); }
 .sev-mid { color: #ffb020; border-color: rgba(255, 176, 32, 0.5); background: rgba(255, 176, 32, 0.12); }
 .sev-low { color: #3ddc84; border-color: rgba(61, 220, 132, 0.5); background: rgba(61, 220, 132, 0.12); }
@@ -1594,6 +1624,8 @@ onBeforeUnmount(() => {
 .traffic-legend .sw { width: 8px; height: 2px; display: inline-block; }
 .traffic-legend .sw.normal { background: #38bdf8; }
 .traffic-legend .sw.attack { background: #e25454; margin-left: 6px; }
+/* TCP 断连条目：虚线红 swatch（计入攻击通道），margin 与攻击条目同节奏 */
+.traffic-legend .sw.tcp { background: repeating-linear-gradient(90deg, #e25454 0 3px, transparent 3px 6px); margin-left: 6px; }
 .act { margin-left: auto; font: 10px/1 mono, monospace; padding: 2px 5px; border-radius: 3px; border: 1px solid; }
 .act-blocked { color: #ff8a8a; border-color: rgba(226, 84, 84, 0.5); background: rgba(226, 84, 84, 0.12); }
 .act-logged { color: #ffd166; border-color: rgba(255, 209, 102, 0.45); background: rgba(255, 209, 102, 0.08); }

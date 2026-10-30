@@ -612,3 +612,89 @@ test('CRS 源码片段定位单源在 securityStages（本地子串匹配实现�
   assert.match(trigger, /extractCrsRuleSnippet\(res\.data\?\.content \|\| '', ev\.rule_triggered\)/)
   assert.doesNotMatch(trigger, /const extractRuleSnippet = /)
 })
+
+// ---- L4 阶段0/1 前端接线批次：TCP 锁同构 / 流程弹框 TCP 渲染 / 事件徽标 / 大屏图例 ----
+
+test('TCP 锁与 HTTP 同构：灰 placeholder 退役，阶段 2/3 恒「不适用」', () => {
+  const rules = code('src/views/Rules.vue')
+  // 锁 popover 不再按协议分叉：TCP 与 HTTP 共用同一 popover（v-if 分支移除）
+  assert.doesNotMatch(rules, /v-if="row\.protocol === 'http'"/)
+  // 灰色 placeholder 锁与「不支持」tooltip 退役（含 --tcp 修饰类）
+  assert.doesNotMatch(rules, /TCP 规则不支持安全策略/)
+  assert.doesNotMatch(rules, /acl-lock-icon--tcp/)
+  // 锁色三态（未绑/禁用=黄 is-unbound，已绑=绿 is-allow）对 TCP 与 HTTP 同一表达式
+  assert.match(rules, /ruleDisabled \? 'is-unbound' : ruleStageModel\(row as Rule\)\.hasAnyPolicy \? 'is-allow' : 'is-unbound'/)
+  // TCP 规则阶段 2/3 恒灰态文案（组有无均不落「未启用」分支）
+  assert.match(rules, /不适用（TCP 仅支持阶段 0\/1）/)
+})
+
+test('规则行「安全」绑定入口与流程弹框对 TCP 放开', () => {
+  const rules = code('src/views/Rules.vue')
+  // 绑定按钮禁用条件不再含 TCP（含 2/3 特征策略的拒绝由后端 400 + 编辑器置灰承接）
+  assert.doesNotMatch(rules, /:disabled="row\.protocol === 'tcp'/)
+  assert.doesNotMatch(rules, /TCP 规则不经过安全链/)
+  // 流程弹框模型不再按协议置空
+  assert.match(rules, /flowDialogModel\.value = ruleStageModel\(rule\)/)
+})
+
+test('流程弹框 TCP：协议徽标、阶段 0/1 明细、阶段 2/3 整组灰态', () => {
+  const dialog = code('src/components/RuleFlowDialog.vue')
+  // 标题旁协议徽标：TCP 青（全局 proto-tcp-tag），HTTP 蓝（el-tag primary）
+  assert.match(dialog, /proto-tcp-tag/)
+  assert.match(dialog, /<el-tag v-else[^>]*type="primary"/)
+  // 阶段 0 标注信任直通语义、阶段 1 拒绝动作=断连、阶段 2/3 整组灰态
+  assert.match(dialog, /信任直通=连接直达上游/)
+  assert.match(dialog, /断连/)
+  assert.match(dialog, /TCP 规则不适用/)
+})
+
+test('事件日志 TCP：类型筛选 + 青色徽标 + 详情弹框 TCP 形态', () => {
+  const events = code('src/views/security/SecurityEvents.vue')
+  // 类型筛选加 TCP（HTTP=waf 口径），筛选值透传 event_type 查询参数
+  assert.match(events, /<el-option label="TCP" value="tcp" \/>/)
+  assert.match(events, /<el-option label="HTTP" value="waf" \/>/)
+  assert.match(events, /p\.set\('event_type', filters\.value\.event_type\)/)
+  // TCP 事件行青色徽标
+  assert.match(events, /proto-tcp-tag/)
+  // 详情弹框：空 method/uri 显示 TCP 连接占位、隐藏请求头/请求体区块
+  assert.match(events, /—（TCP 连接）/)
+  const ctx = section(events, 'const ctxEvent = ref<SecurityEvent', 'const page = ref(1)')
+  assert.match(ctx, /ctxIsTcp/)
+})
+
+test('安全总览 TCP：今日拦截协议拆分行 + 最近事件徽标', () => {
+  const overview = code('src/views/security/SecurityOverview.vue')
+  // 拆分行消费 today_blocked_tcp，响应缺字段（旧后端）整行隐藏
+  assert.match(overview, /today_blocked_tcp/)
+  assert.match(overview, /HTTP \{\{ .* \}\} · TCP \{\{ /)
+  // 最近拦截事件列表同款青色徽标
+  assert.match(overview, /proto-tcp-tag/)
+})
+
+test('威胁大屏 TCP：l4 差分并入正常弧 + feed 徽标 + 底部图例「TCP 断连」', () => {
+  const screen = code('src/views/security/ThreatScreen.vue')
+  // l4 键差分（后端已差分）并入 setTraffic 正常弧通道（两种采样模式都覆盖）
+  assert.match(screen, /l4TrafficDelta\(/)
+  assert.match(screen, /setTraffic\(/)
+  // feed 事件 event_type==='tcp' 青色徽标
+  assert.match(screen, /event_type === 'tcp'/)
+  // 底部流量图例新增「TCP 断连」条目
+  assert.match(screen, /TCP 断连/)
+})
+
+test('TCP 绑定门谓词与文案单源（securityStages）', () => {
+  const stages = code('src/utils/securityStages.ts')
+  assert.match(stages, /export const policySupportsTcp = /)
+  assert.match(stages, /该策略含 TCP 不支持的能力（限流\/WAF）/)
+  // 两个绑定入口共用谓词，不得各写第二份
+  assert.match(code('src/components/SecurityBindingEditor.vue'), /policySupportsTcp/)
+  assert.match(code('src/views/security/SecurityPolicies.vue'), /policySupportsTcp/)
+  // 编辑器规则侧：TCP 规则的阶段 2/3 分区置灰 + 行内提示（文案走单源常量）
+  const editor = code('src/components/SecurityBindingEditor.vue')
+  assert.match(editor, /TCP_BIND_UNSUPPORTED_REASON/)
+  // 策略向导选择器放开 TCP（不再只列 HTTP）
+  const policies = code('src/views/security/SecurityPolicies.vue')
+  assert.doesNotMatch(policies, /选择器只列 HTTP/)
+  // 向导关联规则步骤 TCP 行内标注
+  assert.match(policies, /拦截=断连，无拦截页；CDN 回源需开启 PROXY protocol/)
+})

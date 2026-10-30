@@ -140,9 +140,15 @@ func TestGetThreatScreenTraffic_timeoutGuard(t *testing.T) {
 }
 
 func TestGetThreatScreenTraffic_shortTTLCacheHit(t *testing.T) {
-	// Given: admin 端点计数器 + 1s TTL 进程内缓存
+	// Given: admin 端点计数器 + 1s TTL 进程内缓存（计数仅统计 traffic-stats
+	// 主路径——l4-conn-stats 是同轮伴生抓取，缺失时静默跳过，不参与主体
+	// 抓取次数断言）
 	var hits int32
 	admin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/lb/l4-conn-stats" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
 		atomic.AddInt32(&hits, 1)
 		_, _ = w.Write([]byte(`{"countries":{"中国":{"attack":1,"normal":2}},"sample_n":1}`))
 	}))
@@ -176,6 +182,10 @@ func TestGetThreatScreenTraffic_cacheExpires(t *testing.T) {
 	t.Cleanup(func() { threatTrafficCacheTTL = old })
 	var hits int32
 	admin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/lb/l4-conn-stats" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
 		atomic.AddInt32(&hits, 1)
 		_, _ = w.Write([]byte(`{"countries":{"中国":{"attack":1,"normal":2}},"sample_n":1}`))
 	}))
@@ -194,9 +204,14 @@ func TestGetThreatScreenTraffic_cacheExpires(t *testing.T) {
 }
 
 func TestGetThreatScreenTraffic_failureNotCached(t *testing.T) {
-	// Given: 首次请求 admin 返回 502，第二次恢复
+	// Given: traffic-stats 首次请求返回 502，第二次恢复（l4 伴生端点恒 404，
+	// 不参与失败序列）
 	var hits int32
 	admin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/lb/l4-conn-stats" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
 		if atomic.AddInt32(&hits, 1) == 1 {
 			w.WriteHeader(http.StatusBadGateway)
 			return

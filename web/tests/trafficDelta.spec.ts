@@ -7,7 +7,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { trafficDelta, formatRecentRate, hourlyBucketLabel, type TrafficBaseline } from '../src/utils/threatScreenMetrics.ts'
+import { trafficDelta, formatRecentRate, hourlyBucketLabel, l4TrafficDelta, type TrafficBaseline } from '../src/utils/threatScreenMetrics.ts'
 
 function baseline(counts: Record<string, { normal: number; attack?: number }>, at: number, sampleN = 1): TrafficBaseline {
   return {
@@ -149,4 +149,30 @@ test('D 趋势桶 tooltip 原样展示真实槽标签（小时 HH:MM / 日 MM-DD
   assert.equal(hourlyBucketLabel('10-12'), '10-12')
   // 空标签不得改写后端真实格式
   assert.equal(hourlyBucketLabel(''), '')
+})
+
+// ---- E. TCP（L4）流量差分归一（后端已差分，前端只做消费面归一） ----
+
+test('E1 l4 键缺省/空对象 = 无 l4 数据（旧后端与 admin 不可达降级无感）', () => {
+  assert.deepEqual(l4TrafficDelta(undefined), { countryArcs: [], allowed: 0, denied: 0 })
+  assert.deepEqual(l4TrafficDelta(null), { countryArcs: [], allowed: 0, denied: 0 })
+  assert.deepEqual(l4TrafficDelta({}), { countryArcs: [], allowed: 0, denied: 0 })
+  assert.deepEqual(l4TrafficDelta('bad'), { countryArcs: [], allowed: 0, denied: 0 })
+})
+
+test('E2 countries 并入正常弧通道（中文国家名，非法值按 0 丢弃），rules 全量差分聚合', () => {
+  const r = l4TrafficDelta({
+    rules: { 'lb-a': { allowed: 12, denied: 3 }, 'lb-b': { allowed: 5, denied: 2 }, bad: null },
+    countries: { 中国: 30, 美国: 7, 俄罗斯: -1, 异常: 'x' },
+    sampled: true,
+  })
+  // 负值（计数回退防线后的残影）与非数值丢弃；正差分保留顺序
+  assert.deepEqual(r.countryArcs, [{ name: '中国', count: 30 }, { name: '美国', count: 7 }])
+  assert.equal(r.allowed, 17)
+  assert.equal(r.denied, 5)
+})
+
+test('E3 差分值不再二次差分：同一形状两次调用结果一致（无基线参与）', () => {
+  const shape = { rules: { r: { allowed: 4, denied: 1 } }, countries: { 日本: 2 } }
+  assert.deepEqual(l4TrafficDelta(shape), l4TrafficDelta(shape))
 })
