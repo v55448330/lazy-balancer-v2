@@ -8,13 +8,29 @@
     </template>
     <div class="polling-error-meta">{{ jobsPollingErrorDescription }}</div>
   </el-alert>
+  <!-- 需人工横幅（2026-10-30 裁定）：仅本页存在「需人工」行（failed 且无 CA 冷却
+       且失败次数达上限）时出现；× 按「行 id+updated_at」指纹记 localStorage
+       （单源 utils/certJobStatus），新增/变化的需人工行重新出现。 -->
+  <el-alert v-if="manualBannerRows.length > 0" type="warning" show-icon class="manual-banner" @close="dismissManualBanner">
+    <template #title>
+      <div class="polling-error-title">
+        <span>本页 {{ manualBannerRows.length }} 条证书任务自动重试已达上限，需人工处理</span>
+        <el-button link type="warning" @click="showManualOnly">查看</el-button>
+      </div>
+    </template>
+  </el-alert>
+  <!-- 查看后的筛选态：仅显示本页命中的需人工行（服务端分页不动），可清除 -->
+  <div v-if="manualFilterActive" class="info-note-bar">
+    <span class="info-note-desc">已筛选：需人工任务（本页 {{ manualRows.length }} 条，自动重试已达上限）</span>
+    <el-button link type="primary" @click="manualFilterActive = false">清除筛选</el-button>
+  </div>
   <!-- 宽度观测容器：容器变窄时按优先级隐藏低价值列（见 utils/certJobColumns）。
        收敛下限 619px（不可让位列合计）；更窄时切 overflow-x:auto——「日志/重签」
        操作列可达性优先于无滚动条目标（overflow:hidden 会把操作列硬裁到不可见）。 -->
   <div ref="tableWrapRef" class="cert-jobs-wrap" :class="{ 'cert-jobs-wrap--scroll': tableBelowMinWidth }">
   <el-table
     v-if="loading || jobs.length > 0"
-    :data="jobs"
+    :data="filteredJobs"
     row-key="id"
     size="small"
     v-loading="loading"
@@ -34,9 +50,11 @@
     </el-table-column>
     <el-table-column prop="status" label="状态" width="84" align="center">
       <template #default="{ row }">
-        <!-- message 不再单列：hover 状态标签看失败原因/在途说明（空则不挂空 tooltip） -->
-        <el-tooltip :disabled="!row.message" :content="row.message">
-          <span><el-tag :type="statusType(row.status)" size="small">{{ certJobStatusLabel(row.status) }}</el-tag></span>
+        <!-- hover=派生口径（2026-10-30 裁定：旧证书/失败次数/下次重试，实现单源
+             utils/certJobStatus）；CA 原文（message）只在「日志」对话框呈现，
+             不再挂状态标签。在途行回落在途说明（stage 文本）。 -->
+        <el-tooltip :disabled="!statusHover(row as CertJob)" :content="statusHover(row as CertJob)">
+          <span><el-tag :type="statusType(row.status)" size="small">{{ rowStatusLabel(row as CertJob) }}</el-tag></span>
         </el-tooltip>
       </template>
     </el-table-column>
@@ -76,16 +94,19 @@
     </el-table-column>
     <el-table-column label="重试次数" width="80" align="center">
       <template #default="{ row }">
-        <!-- 冷却列让位时，等待 CA 的冷却值并入本格 tooltip -->
-        <el-tooltip :disabled="visibleColumns.has('cooling') || !coolingHint(row as CertJobListItem)" :content="coolingHint(row as CertJobListItem)">
-          <span v-if="row.renewal_attempts && row.renewal_attempts > 0" class="cell-text">{{ row.renewal_attempts }}</span>
+        <!-- 仅终态失败显示 N（= renewal_attempts，上限=续签重试次数配置）；
+             在途/成功/禁用显示 -。冷却列让位时，等待 CA 的冷却值并入本格 tooltip -->
+        <el-tooltip :disabled="visibleColumns.has('cooling') || !coolingHint(row as CertJob)" :content="coolingHint(row as CertJob)">
+          <span v-if="attemptsCell(row as CertJob)" class="cell-text">{{ attemptsCell(row as CertJob) }}</span>
           <span v-else class="cell-empty">-</span>
         </el-tooltip>
       </template>
     </el-table-column>
     <el-table-column v-if="visibleColumns.has('cooling')" label="冷却时间" min-width="90" show-overflow-tooltip>
       <template #default="{ row }">
-        <span v-if="row.status === 'waiting_ca' && row.ca_available_after" class="cell-text">{{ formatCoolingTime(row.ca_available_after) }}</span>
+        <!-- waiting_ca=剩余倒计时；终态失败=「档位 · 时刻」（computeBackoff 同规则
+             推导，429 实际间隔更短时显示实际间隔，单源 certJobCooldownCell） -->
+        <span v-if="coolingCell(row as CertJob)" class="cell-text">{{ coolingCell(row as CertJob) }}</span>
         <span v-else class="cell-empty">-</span>
       </template>
     </el-table-column>
@@ -143,7 +164,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, computed } from 'vue'
+import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
 import { Timer } from '@element-plus/icons-vue'
 import DialogHeader from '@/components/DialogHeader.vue'
 import { request, mfaAwareSuccess } from '@/utils/api'
@@ -155,7 +176,7 @@ import { escapeHtml } from '@/utils/escape'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAuthStore } from '@/stores/auth'
 import type { APIResponse, CertJobsPage, CertJobListItem } from '@/types'
-import { certJobStatusLabel, certJobStatusTone, certJobRetryReady } from '@/utils/certJobStatus'
+import { certJobStatusTone, certJobRetryReady, certJobManualNeeded, certJobRowStatusLabel, certJobStatusHover, certJobCooldownCell, certManualBannerFingerprint, loadCertManualBannerDismissed, saveCertManualBannerDismissed, CERT_JOB_RENEWAL_ATTEMPTS_FALLBACK } from '@/utils/certJobStatus'
 import type { CertJobStatus } from '@/utils/certJobStatus'
 import { certJobEffectiveNotAfter, certJobRenewalAt, certRenewalWindowConverged, certRenewalWindowDays } from '@/utils/certJobExpiry'
 import { usePollingTask } from '@/composables/usePollingTask'
@@ -185,6 +206,41 @@ const coolingHint = (row: CertJob): string => {
   return `冷却：${formatCoolingTime(row.ca_available_after)}`
 }
 
+// ── 续签语境派生口径（2026-10-30 裁定，单源 utils/certJobStatus）─────────
+
+// 续签重试上限（hover「上限 M」/需人工判定/横幅门）。auth store 的 /config 投影
+// 只携带 cert_renewal_days（投影面不含 cert_renewal_attempts），这里一次性拉取
+// （非轮询；任意登录用户可读，失败保持兜底值=db.DefaultCertRenewalAttempts 同值）。
+const renewalAttemptsCap = ref(CERT_JOB_RENEWAL_ATTEMPTS_FALLBACK)
+
+// 配置时区 HH:mm（冷却列「时刻」与 hover「下次自动重试」共用）：ca_available_after
+// 是 RFC3339/UTC 族，走 formatDate 换算配置时区后截取时分。
+const clockHHmm = (iso: string): string => {
+  const full = formatDate(iso)
+  const matched = /(\d{2}:\d{2}):\d{2}$/.exec(full)
+  return matched ? matched[1] : ''
+}
+
+// 状态标签：failed 细分（需人工/续签失败/失败），其余沿用全表（≤4 字约束）。
+const rowStatusLabel = (row: CertJob): string => certJobRowStatusLabel(row, renewalAttemptsCap.value)
+
+// 状态 hover：四态走派生单源；其余在途行回落在途说明（message 为 stage 文本，
+// CA 原文只随 failed 形态出现，已被派生口径替代）。
+const statusHover = (row: CertJob): string =>
+  certJobStatusHover(row, renewalAttemptsCap.value, Date.now(), clockHHmm) || row.message || ''
+
+// 重试次数列：仅终态失败显示 N（renewal_attempts omitempty 缺失时按无数据显示 -）。
+const attemptsCell = (row: CertJob): string =>
+  row.status === 'failed' && typeof row.renewal_attempts === 'number' ? String(row.renewal_attempts) : ''
+
+// 冷却时间列：waiting_ca=剩余倒计时（既有文案）；终态失败=档位·时刻（computeBackoff
+// 同规则，429 实际间隔更短时显示实际间隔）；其余 -。
+const coolingCell = (row: CertJob): string => {
+  if (row.status === 'waiting_ca' && row.ca_available_after) return formatCoolingTime(row.ca_available_after)
+  if (row.status === 'failed') return certJobCooldownCell(row, clockHHmm)
+  return ''
+}
+
 const jobs = ref<CertJob[]>([])
 const loading = ref(false)
 // cert_renewal_days 改读 authStore.fetchConfig 消费面（曾挂载整取
@@ -194,6 +250,33 @@ const currentPage = ref(1)
 const pageSize = ref(20)
 const total = ref(0)
 const retryingJobIds = ref(new Set<number>())
+
+// ── 需人工横幅（可关闭）+ 筛选 ─────────────────────────────
+let dismissedManualFingerprints = loadCertManualBannerDismissed()
+const manualFilterActive = ref(false)
+
+const manualRows = computed(() => jobs.value.filter((row) => certJobManualNeeded(row, renewalAttemptsCap.value)))
+// 横幅只列未被关闭指纹命中的行：同一行 updated_at 再变化（新一轮失败）→ 新指纹重现。
+const manualBannerRows = computed(() =>
+  manualRows.value.filter((row) => !dismissedManualFingerprints.has(certManualBannerFingerprint(row))))
+// 「查看」= 本页需人工行筛选（服务端分页不动；命中集为空自动退出筛选态）。
+const filteredJobs = computed(() => (manualFilterActive.value ? manualRows.value : jobs.value))
+
+watch(manualRows, (rows) => {
+  if (manualFilterActive.value && rows.length === 0) manualFilterActive.value = false
+})
+
+const showManualOnly = (): void => {
+  manualFilterActive.value = true
+}
+
+const dismissManualBanner = (): void => {
+  dismissedManualFingerprints = new Set([
+    ...dismissedManualFingerprints,
+    ...manualBannerRows.value.map((row) => certManualBannerFingerprint(row)),
+  ])
+  saveCertManualBannerDismissed(dismissedManualFingerprints)
+}
 
 const logDialogVisible = ref(false)
 const logContent = ref('')
@@ -400,6 +483,14 @@ const retryJobsPolling = async (): Promise<void> => {
 onMounted(() => {
   void jobsPolling.run()
   jobsPolling.start()
+  // 续签重试上限（cert_renewal_attempts）：一次性 /config 拉取，失败保持兜底值
+  // CERT_JOB_RENEWAL_ATTEMPTS_FALLBACK（db.DefaultCertRenewalAttempts 同值）。
+  request.get<APIResponse<{ cert_renewal_attempts?: number }>>('/config', { silent: true, signal: jobsPolling.signal })
+    .then((res) => {
+      const attempts = res.data?.cert_renewal_attempts
+      if (typeof attempts === 'number' && attempts > 0) renewalAttemptsCap.value = attempts
+    })
+    .catch(() => { /* 读取失败保持兜底上限 */ })
   // 容器宽度观测：驱动列让位（避免任何宽度下出现水平滚动条）
   const wrap = tableWrapRef.value
   if (!wrap) return

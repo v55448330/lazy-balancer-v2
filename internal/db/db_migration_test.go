@@ -4018,3 +4018,75 @@ func TestOIDCDupIdentityMarker_persistenceFailureDisclosed(t *testing.T) {
 		t.Fatalf("重复身份审计=%+v, want 降级下仍留一条点名留痕", entries)
 	}
 }
+
+// B2：ACME 失败语义统一——存量 waiting_ca 行迁移为 failed（waiting_ca 停车
+// 状态退役）。保留 message/次数/窗口/错误码：窗口仍在未来的行由 30s 补扫按
+// 到期重排；已达上限（窗口 NULL）的行停留 failed 仅手动重试。
+func TestMigrateCertJobsWaitingCA_convertsToFailedAndRetainsFields(t *testing.T) {
+	database := openMigrationTestDB(t)
+	createLegacyCertJobs(t, database, "'queued'",
+		"'queued','failed','waiting_ca','issued','disabled'")
+	if _, err := database.Exec(`INSERT INTO cert_jobs (rule_id, domain, status, message, renewal_attempts, ca_available_after, last_error_code) VALUES
+		('lb_w1', 'w1.example', 'waiting_ca', '等待 CA 频率限制冷却', 2, '2026-10-30 12:00:00', '429'),
+		('lb_w2', 'w2.example', 'waiting_ca', 'CA 频率限制，已达到最大重试次数 5', 5, NULL, '429'),
+		('lb_f1', 'f1.example', 'failed', '普通失败', 1, NULL, NULL)`); err != nil {
+		t.Fatalf("seed legacy waiting_ca jobs: %v", err)
+	}
+
+	// When
+	if err := migrateCertJobsWaitingCA(); err != nil {
+		t.Fatalf("migrate waiting_ca jobs: %v", err)
+	}
+
+	// Then：waiting_ca 行转 failed，其余字段原样保留；failed 行不受影响。
+	rows, err := database.Query(`SELECT rule_id, status, COALESCE(message,''), COALESCE(renewal_attempts,0), ca_available_after, COALESCE(last_error_code,'')
+		FROM cert_jobs ORDER BY id`)
+	if err != nil {
+		t.Fatalf("read migrated jobs: %v", err)
+	}
+	defer rows.Close()
+	type row struct {
+		ruleID, status, message, errorCode string
+		attempts                           int
+		window                             any
+	}
+	var got []row
+	for rows.Next() {
+		var r row
+		if err := rows.Scan(&r.ruleID, &r.status, &r.message, &r.attempts, &r.window, &r.errorCode); err != nil {
+			t.Fatalf("scan migrated job: %v", err)
+		}
+		got = append(got, r)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate migrated jobs: %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("rows=%d, want 3", len(got))
+	}
+	if got[0].ruleID != "lb_w1" || got[0].status != "failed" || got[0].message != "等待 CA 频率限制冷却" || got[0].attempts != 2 || got[0].window == nil || got[0].errorCode != "429" {
+		t.Fatalf("lb_w1=%+v, want failed + 字段保留（含窗口）", got[0])
+	}
+	if got[1].ruleID != "lb_w2" || got[1].status != "failed" || got[1].attempts != 5 || got[1].window != nil {
+		t.Fatalf("lb_w2=%+v, want failed + NULL 窗口保留（已达上限仅手动重试）", got[1])
+	}
+	if got[2].ruleID != "lb_f1" || got[2].status != "failed" || got[2].message != "普通失败" {
+		t.Fatalf("lb_f2=%+v, want failed 行零改动", got[2])
+	}
+
+	// 改写存量状态必须留痕（系统审计）。
+	audited := false
+	for _, entry := range drainSystemAuditBuffer() {
+		if strings.Contains(entry.detail, "waiting_ca") && strings.Contains(entry.detail, "failed") {
+			audited = true
+		}
+	}
+	if !audited {
+		t.Fatal("waiting_ca→failed 迁移缺少系统审计记录")
+	}
+
+	// 幂等：二次执行零改动零报错。
+	if err := migrateCertJobsWaitingCA(); err != nil {
+		t.Fatalf("re-migrate: %v", err)
+	}
+}

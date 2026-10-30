@@ -173,14 +173,21 @@ func collectCertJobRows() ([]TaskInfo, bool) {
 			}
 		}
 		runs24h := success + fail
-		// 执行时间口径与历史端点同源（started=created_at/finished=updated_at/
-		// duration=差），不得各自映射。
-		startedAt, finishedAt, durationMs := CertJobRunTimes(createdAt, updatedAt)
+		// 执行时间口径（2026-10-30 裁定）：cert-job 动态行无独立运行轮次——
+		// 执行时间列与「最近执行」呈现 updated_at（最近状态变更），不再把
+		// created_at 当开始时间（排队中的行会停在创建时刻，与「最近一次实际
+		// 变化」相去甚远）；耗时无意义恒 0。历史端点（handlers.certJobRunHistory）
+		// 仍按 started=created_at/finished=updated_at 呈现完整区间
+		// （CertJobRunTimes 单源不动），两处语义差异由行 Description 注明。
+		_, finishedAt, _ := CertJobRunTimes(createdAt, updatedAt)
 		ti := TaskInfo{
-			ID:       fmt.Sprintf("cert-job:%d", id),
-			Name:     "ACME 签发 · " + domain,
-			Category: "证书",
-			Kind:     taskengine.KindOneshot, // 动态签发行=按需触发的工作项
+			ID:   fmt.Sprintf("cert-job:%d", id),
+			Name: "ACME 签发 · " + domain,
+			// 语义注明随任务名 hover tooltip 下发（TaskMonitor 名称列 tooltip
+			// 渲染 Description）：执行时间=最近状态变更，非任务启动时间。
+			Description: "证书签发工作项：执行时间为最近状态变更时间（updated_at），非任务启动时间",
+			Category:    "证书",
+			Kind:        taskengine.KindOneshot, // 动态签发行=按需触发的工作项
 			// 触发语义（2026-10-11 用户裁定）：cert-job 行视为触发任务——可自动
 			// 调度（签发守护消费）即可手动调度（证书可重签发）；重试门（在途 409/
 			// 退役 429/冷却 429）由 TriggerSystemTask 的 cert-job 分支复用承担。
@@ -190,7 +197,7 @@ func collectCertJobRows() ([]TaskInfo, bool) {
 			// 证书签发工作项只由主节点消费（从节点禁签发）——角色读取失败
 			// 时按主节点处理（与上方行可见性判据同向）。
 			RoleApplicable: isMaster == 1,
-			LastRun: &TaskRunInfo{StartedAt: startedAt, FinishedAt: finishedAt, DurationMs: durationMs,
+			LastRun: &TaskRunInfo{StartedAt: finishedAt, FinishedAt: finishedAt, DurationMs: 0,
 				Trigger: "queue", Result: status, Message: message},
 		}
 		ti.Runs24h, ti.Success24h, ti.Fail24h = runs24h, success, fail

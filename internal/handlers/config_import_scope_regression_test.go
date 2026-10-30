@@ -410,7 +410,7 @@ func TestRunAutoBackupOnce_convergesExistingDirPermissions(t *testing.T) {
 	}
 	h.cfg.BackupDir = dir
 
-	if _, err := h.RunAutoBackupOnce(context.Background(), "manual", "system", 0); err != nil {
+	if _, err := h.RunAutoBackupOnce(context.Background(), "manual", "system", 1); err != nil {
 		t.Fatalf("RunAutoBackupOnce: %v", err)
 	}
 	info, err := os.Stat(dir)

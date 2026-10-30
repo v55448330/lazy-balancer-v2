@@ -342,28 +342,18 @@ func writeAutoBackupPayload(ctx context.Context, path string, payload []byte) er
 // operator 为审计操作者:调度路径传 system,手动触发传当前登录用户
 // (2026-09-20 用户反馈:手动备份审计恒 system,看不出是谁点的)。
 // engineRunID>0=调用方（引擎 runNow/调度 tick）已落 task_runs 行——本函数
-// 跳过自记自收尾（-④ 单写方，行终态由引擎按返回错误落）。
+// 跳过自记自收尾（-④ 单写方，行终态由引擎按返回错误落）。engineRunID<=0
+// 属非法调用（绕过引擎的执行）——显性报错且不写 task_runs（legacy
+// RecordRunStart/Finish 直写旁路已按 task-engine 标准 v2.2 删除，
+// task_runs 的唯一写方是引擎）。
 // ctx 来自引擎 Run 上下文：demote/停止时取消在途备份
 // （buildLbbakExport 与写盘检查点消费），取消不落 failed 行。
 func (h *Handlers) RunAutoBackupOnce(ctx context.Context, trigger, operator string, engineRunID int64) (row autoBackupRowView, err error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	histRun := int64(0)
-	histT0 := time.Now()
 	if engineRunID <= 0 {
-		histRun = taskengine.RecordRunStart("auto-backup", "backup", trigger)
-		defer func() {
-			status, msg := "success", ""
-			switch {
-			case errors.Is(err, context.Canceled):
-				// 取消（角色降级/引擎停止）落 cancelled，不得记 success。
-				status, msg = "cancelled", err.Error()
-			case err != nil:
-				status, msg = "failed", err.Error()
-			}
-			taskengine.RecordRunFinish(histRun, status, time.Since(histT0).Milliseconds(), msg)
-		}()
+		return autoBackupRowView{}, fmt.Errorf("auto-backup 仅允许经任务引擎执行（engineRunID 缺失，trigger=%q）", trigger)
 	}
 	// 任务日志 tee（手动/自动备份各阶段在 tasks/auto-backup.log 留痕）
 	backupTee := func(stage, msg string) {

@@ -903,6 +903,7 @@ func TestImportConfigBackup_rejectsWhenCertDrainIncomplete(t *testing.T) {
 	services.ResetCAQueueManagerForTest()
 	services.InitCAQueueManager(func() error { return nil })
 	services.GetCAQueueManager().Start()
+	startCertQueueDispatchForTest(t)
 	t.Cleanup(services.ResetCAQueueManagerForTest)
 	// 登记一个「执行中」条目（不响应取消的 issuer 形态）：PauseAndDrain 退役
 	// 该队列后 active 仍非空 → 返回 false。
@@ -920,6 +921,7 @@ func TestImportConfigBackup_rejectsWhenCertDrainIncomplete(t *testing.T) {
 	services.ResetCAQueueManagerForTest()
 	services.InitCAQueueManager(func() error { return nil })
 	services.GetCAQueueManager().Start()
+	startCertQueueDispatchForTest(t)
 	h2 := newBackupTestHandlers(t)
 	if rec := importBackupShared(h2, t, legacyBackupJSON(t, nil, nil, nil)); rec.Code != http.StatusOK {
 		t.Fatalf("drained import status=%d body=%s, want 200", rec.Code, rec.Body.String())

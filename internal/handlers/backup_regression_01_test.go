@@ -74,7 +74,7 @@ func TestFailedBackupRowsPrunedWithoutSuccess(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i := range autoBackupFailedRowsKeep + 2 {
-		if _, err := h.RunAutoBackupOnce(context.Background(), "manual", "tester", 0); err == nil {
+		if _, err := h.RunAutoBackupOnce(context.Background(), "manual", "tester", 1); err == nil {
 			t.Fatalf("failure %d unexpectedly succeeded", i)
 		}
 	}
@@ -549,7 +549,7 @@ func TestAutoBackupCleansOnlyOwnedTempFiles(t *testing.T) {
 	if err := os.WriteFile(unrelated, []byte("keep"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := h.RunAutoBackupOnce(context.Background(), "manual", "tester", 0); err != nil {
+	if _, err := h.RunAutoBackupOnce(context.Background(), "manual", "tester", 1); err != nil {
 		t.Fatalf("backup failed: %v", err)
 	}
 	for _, name := range owned {

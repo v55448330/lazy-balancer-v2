@@ -17,6 +17,12 @@ func TestDatabaseFilenameConstants_matchRealInitializedFiles(t *testing.T) {
 		}
 		AuditDB, MetricsDB = oldAuditDB, oldMetricsDB
 	})
+	// 同包其它用例会把全局 DB 换成临时库并在收尾关闭；若无序残留一个「已关闭
+	// 但非 nil」的句柄，InitializeAuditDB 缓冲落盘会撞 sql: database is closed。
+	// 句柄已关闭时显式归零，让装配按全新进程语义重建（本用例只验证文件名常量）。
+	if DB != nil && DB.Ping() != nil {
+		DB = nil
+	}
 	dataDir := t.TempDir()
 	if err := InitializeAuditDB(dataDir); err != nil {
 		t.Fatalf("initialize audit database: %v", err)

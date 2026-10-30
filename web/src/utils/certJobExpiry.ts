@@ -9,6 +9,7 @@
 // 「剩 N 天」，运维会误判为未签发并重复触发签发。
 
 interface CertJobExpiryFields {
+  rule_id?: string | number
   expires_at?: string | null
   not_after?: string | null
 }
@@ -52,12 +53,18 @@ export const certRenewalWindowConverged = (days: number): boolean =>
   certRenewalWindowDays(days) !== days
 
 /**
- * 自动重签时间 = 到期时刻前「实际生效窗口」天，返回 ISO 原值（列内紧凑格式与
- * tooltip 完整格式各自取用，不在 helper 里预先格式化）。
+ * 自动重签时间 = 到期时刻前「实际生效窗口」天再按规则抖动提前 0–6h，返回 ISO
+ * 原值（列内紧凑格式与 tooltip 完整格式各自取用，不在 helper 里预先格式化）。
  *
  * 窗口必须经 certRenewalWindowDays 收敛：配置侧允许 84–88 天（上限按 90 天
  * 寿命留两天余量），而这已超过后端可执行窗口——按库值直算会把「自动重签
  * 时间」显示成签发后 2–6 天（已经过去的日期），与扫描实际行为相反。
+ *
+ * 抖动（2026-10-30 裁定）：jitter = FNV-1a32(rule_id) % 21600（0–6h，确定性），
+ * 后端续签扫描按 expires_at − 窗口 − jitter 判到期（internal/services/certjitter.go
+ * 标准库 hash/fnv 同算法），本列必须显示同一时刻——固定向量表两侧各持一份
+ * （certJobExpiry.spec.ts / certjitter_test.go）。rule_id 缺失（旧响应/无主键
+ * 消费方）退化为 0 抖动（原口径）。
  *
  * 畸形时间/非法天数一律返回空串——`new Date(NaN).toISOString()` 会抛
  * RangeError 并中断整行渲染。
@@ -68,5 +75,24 @@ export const certJobRenewalAt = (job: CertJobExpiryFields, renewalDays: number):
   const expiry = new Date(expiryValue)
   if (Number.isNaN(expiry.getTime())) return ''
   if (!Number.isFinite(renewalDays)) return ''
-  return new Date(expiry.getTime() - certRenewalWindowDays(renewalDays) * 24 * 60 * 60 * 1000).toISOString()
+  const jitterMs = certRenewalJitterSeconds(job.rule_id) * 1000
+  return new Date(expiry.getTime() - certRenewalWindowDays(renewalDays) * 24 * 60 * 60 * 1000 - jitterMs).toISOString()
+}
+
+/**
+ * 续签抖动（秒）：FNV-1a 32-bit(rule_id) % 21600（0–6h）。与后端
+ * internal/services/certjitter.go（标准库 hash/fnv）同算法同模数；Math.imul
+ * 做 32 位乘法、>>> 0 归一 uint32，TextEncoder 保证非 ASCII rule_id 按同一
+ * UTF-8 字节序列参与散列。null/undefined（字段缺失的退化形态）返回 0。
+ */
+export const certRenewalJitterSeconds = (ruleId: string | number | null | undefined): number => {
+  if (ruleId === null || ruleId === undefined) return 0
+  const bytes = new TextEncoder().encode(String(ruleId))
+  // FNV-1a 32 位偏移基与素数（0x811c9dc5 / 0x01000193）
+  let hash = 0x811c9dc5
+  for (const byte of bytes) {
+    hash ^= byte
+    hash = Math.imul(hash, 0x01000193) >>> 0
+  }
+  return hash % 21600
 }

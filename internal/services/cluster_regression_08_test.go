@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"lazy-balancer-v2/internal/config"
+	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
 )
 
@@ -542,7 +543,7 @@ func TestSyncService_applySnapshot_rechecksRoleInsideTransaction(t *testing.T) {
 // 回归钉
 // ---------------------------------------------------------------------------
 
-func TestClusterService_BecomeSlave_startsStoppedClusterSyncLoop(t *testing.T) {
+func TestBecomeSlave_keepsUserStoppedClusterSyncWithManualEnableHint(t *testing.T) {
 	_, database := newClusterTestService(t)
 	probe := &roleLifecycleProbe{}
 	te := wireClusterLifecycleEngineForTest(t, probe, false)
@@ -557,19 +558,32 @@ func TestClusterService_BecomeSlave_startsStoppedClusterSyncLoop(t *testing.T) {
 		return false
 	})
 	probe.syncStarts.Store(0)
+	logs := captureServiceLog(t)
 
 	service := NewClusterService(database, "")
 	if err := service.BecomeSlave(context.Background(), "https://master.example", models.ClusterRegistration{RegistrationID: 9, RegistrationSecret: "secret"}); err != nil {
 		t.Fatalf("become slave: %v", err)
 	}
 
-	// 切从后首轮同步必须真实发生（daemon 拉起 → StartSync）。
-	waitForCond(t, 2*time.Second, func() bool { return probe.syncStarts.Load() == 1 })
-	if meta, ok := te.Lookup("cluster-sync"); !ok || !meta.LoopOn {
-		t.Fatalf("cluster-sync loop_on=%v, want re-enabled after demote", meta.LoopOn)
+	// 角色翻转不得复活用户停止态（task-engine 标准 v2.2 §5）：调度保持停止、
+	// 同步生命周期零调用，且以 warn + 操作审计显式提示「切从后不会同步，
+	// 请手动开启」（不静默脱管）；偏好表不回写 enabled=1。
+	if meta, ok := te.Lookup("cluster-sync"); !ok || meta.LoopOn {
+		t.Fatalf("cluster-sync loop_on=%v, want 保持用户停止态", meta.LoopOn)
 	}
-	if enabled, ok := loadTaskLoopPrefs()["cluster-sync"]; !ok || !enabled {
-		t.Fatalf("cluster-sync preference persisted=%v found=%v, want enabled", enabled, ok)
+	assertCounterStable(t, &probe.syncStarts, 0, 100*time.Millisecond)
+	if enabled, ok := loadTaskLoopPrefs()["cluster-sync"]; ok && enabled {
+		t.Fatalf("cluster-sync preference=%v found=%v, want 保持关闭（不得回写启用）", enabled, ok)
+	}
+	if got := strings.Count(logs.String(), "切从后不会同步，请手动开启"); got != 1 {
+		t.Fatalf("保持停止提示 warn=%d 条, want 1: %s", got, logs.String())
+	}
+	var audits int
+	if err := db.AuditDB.QueryRow(`SELECT COUNT(*) FROM audit_log WHERE action='同步停止' AND detail LIKE '%切从后不会同步，请手动开启%'`).Scan(&audits); err != nil {
+		t.Fatalf("read audit log: %v", err)
+	}
+	if audits != 1 {
+		t.Fatalf("切从保持停止的显式审计=%d 行, want 1", audits)
 	}
 }
 

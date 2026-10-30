@@ -5,7 +5,9 @@ package services
 // 驱动，把引擎角色收敛到 DB 单源角色。
 
 import (
+	"strings"
 	"testing"
+	"time"
 
 	"lazy-balancer-v2/internal/db"
 )
@@ -117,8 +119,9 @@ func assertRoleSideEffectsApplied(t *testing.T) {
 	}
 }
 
-// 降级方向（DB=从、引擎=主）：对账必须做 BecomeSlave 的配套半边，并恢复
-// 从端拉取调度（主节点期间曾被用户停掉的 cluster-sync 不得延续到从端）。
+// 降级方向（DB=从、引擎=主）：对账必须做 BecomeSlave 的配套半边。用户显式
+// 停止的 cluster-sync 保持停止（角色翻转不得复活用户停止态——task-engine
+// 标准 v2.2 §5），并以 warn 显式提示手动开启，不得静默脱管。
 func TestReconcileTaskEngineRole_demoteAppliesSideEffects(t *testing.T) {
 	te := newWireTestEngine(t)
 	if !te.IsMaster() {
@@ -132,6 +135,18 @@ func TestReconcileTaskEngineRole_demoteAppliesSideEffects(t *testing.T) {
 	if _, err := db.DB.Exec(`UPDATE global_config SET is_master=0 WHERE id=1`); err != nil {
 		t.Fatalf("seed slave db state: %v", err)
 	}
+	// 用户停止态在引擎内存的投影：把偏好应用到引擎（等价启动时 applyTaskLoopPrefs
+	// 已把「显式停止」落到 loopEnabled=false），随后对账才走 demote 分支。
+	applyTaskLoopPrefs(te, loadTaskLoopPrefs())
+	waitForCond(t, 2*time.Second, func() bool {
+		for _, meta := range te.DescribeAll() {
+			if meta.ID == "cluster-sync" && !meta.Running && !meta.LoopOn {
+				return true
+			}
+		}
+		return false
+	})
+	logs := captureServiceLog(t)
 
 	reconcileTaskEngineRole()
 
@@ -139,15 +154,14 @@ func TestReconcileTaskEngineRole_demoteAppliesSideEffects(t *testing.T) {
 		t.Fatal("DB=从时引擎必须降级")
 	}
 	assertRoleSideEffectsApplied(t)
-	var enabled int
-	if err := db.DB.QueryRow(`SELECT enabled FROM task_loop_prefs WHERE task_id='cluster-sync'`).Scan(&enabled); err != nil {
-		t.Fatalf("read loop pref: %v", err)
+	if meta, ok := te.Lookup("cluster-sync"); !ok || meta.LoopOn {
+		t.Fatalf("切从后 cluster-sync 必须保持用户停止态: %+v", meta)
 	}
-	if enabled != 1 {
-		t.Fatalf("切从后 cluster-sync 持久偏好必须恢复为启用, got %d", enabled)
+	if enabled, ok := loadTaskLoopPrefs()["cluster-sync"]; ok && enabled {
+		t.Fatalf("切从后 cluster-sync 持久偏好不得回写启用, got %v (found=%v)", enabled, ok)
 	}
-	if meta, ok := te.Lookup("cluster-sync"); !ok || !meta.LoopOn {
-		t.Fatalf("切从后 cluster-sync 调度必须开启: %+v", meta)
+	if got := strings.Count(logs.String(), "切从后不会同步，请手动开启"); got != 1 {
+		t.Fatalf("保持停止提示 warn=%d 条, want 1: %s", got, logs.String())
 	}
 }
 

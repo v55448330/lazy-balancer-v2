@@ -51,6 +51,7 @@ func TestUpdateRule_restores_issued_cert_pem_when_enqueue_fails_after_domain_mig
 	services.ResetCAQueueManagerForTest()
 	services.InitCAQueueManager(nil, t.TempDir())
 	services.GetCAQueueManager().Start()
+	startCertQueueDispatchForTest(t)
 	t.Cleanup(services.ResetCAQueueManagerForTest)
 	oldCreate := createOrRequeueCertJobVerified
 	createOrRequeueCertJobVerified = func(string, string, int, *services.CAQueueManager) (int, bool, error) {

@@ -176,6 +176,7 @@ func TestRetryCertJob_rejects_inactive_rule_atomically(t *testing.T) {
 	services.ResetCAQueueManagerForTest()
 	services.InitCAQueueManager(func() error { return nil }, t.TempDir())
 	services.GetCAQueueManager().Start()
+	startCertQueueDispatchForTest(t)
 	t.Cleanup(services.ResetCAQueueManagerForTest)
 	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enabled,enable_tls,tls_source)
 		VALUES ('lb_retired','retired','http','retired.example.test',8080,0,1,'acme_dns');
@@ -204,6 +205,7 @@ func TestRetryCertJob_concurrent_status_change_returns_refresh_message(t *testin
 	services.ResetCAQueueManagerForTest()
 	services.InitCAQueueManager(func() error { return nil }, t.TempDir())
 	services.GetCAQueueManager().Start()
+	startCertQueueDispatchForTest(t)
 	t.Cleanup(services.ResetCAQueueManagerForTest)
 	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enabled,enable_tls,tls_source)
 		VALUES ('lb_race','race','http','race.example.test',8080,1,1,'acme_dns');
@@ -251,6 +253,7 @@ func TestRetryCertJob_wakesCertWaitingCA(t *testing.T) {
 	services.ResetCAQueueManagerForTest()
 	services.InitCAQueueManager(func() error { return nil }, t.TempDir())
 	services.GetCAQueueManager().Start()
+	startCertQueueDispatchForTest(t)
 	t.Cleanup(services.ResetCAQueueManagerForTest)
 	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enabled,enable_tls,tls_source)
 		VALUES ('lb_wake','wake','http','wake.example.test',8080,1,1,'acme_dns');
@@ -279,6 +282,7 @@ func TestRetryCertJob_accepts_www_first_rule_domain(t *testing.T) {
 	services.ResetCAQueueManagerForTest()
 	services.InitCAQueueManager(func() error { return nil }, t.TempDir())
 	services.GetCAQueueManager().Start()
+	startCertQueueDispatchForTest(t)
 	t.Cleanup(services.ResetCAQueueManagerForTest)
 	// cert_jobs.domain 存排序规范形式，lb_rules.domain 保留用户 www 在前的输入顺序
 	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enabled,enable_tls,tls_source)
@@ -588,6 +592,7 @@ func TestDeleteCertJob_restores_downloaded_job_with_material_when_delete_fails(t
 	services.ResetCAQueueManagerForTest()
 	services.InitCAQueueManager(func() error { return nil }, t.TempDir())
 	services.GetCAQueueManager().Start()
+	startCertQueueDispatchForTest(t)
 	t.Cleanup(services.ResetCAQueueManagerForTest)
 	// 删除路径先 cancelCertJob 取消挂起的部署 timer——恢复必须重新登记立即
 	// 部署重试，否则只能等 6h 续期扫描/启动恢复接手。
@@ -692,6 +697,7 @@ func TestRetryCertJob_does_not_acquire_caddyOpMu(t *testing.T) {
 	services.ResetCAQueueManagerForTest()
 	services.InitCAQueueManager(func() error { return nil }, t.TempDir())
 	services.GetCAQueueManager().Start()
+	startCertQueueDispatchForTest(t)
 	t.Cleanup(services.ResetCAQueueManagerForTest)
 	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enabled,enable_tls,tls_source)
 		VALUES ('lb_lockprobe','lockprobe','http','lockprobe.example.test',8080,0,1,'acme_dns');
@@ -731,6 +737,7 @@ func TestRetryCertJob_reread_row_deleted_returns_404(t *testing.T) {
 	services.ResetCAQueueManagerForTest()
 	services.InitCAQueueManager(func() error { return nil }, t.TempDir())
 	services.GetCAQueueManager().Start()
+	startCertQueueDispatchForTest(t)
 	t.Cleanup(services.ResetCAQueueManagerForTest)
 	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enabled,enable_tls,tls_source)
 		VALUES ('lb_reread','reread','http','reread.example.test',8080,1,1,'acme_dns');
@@ -767,6 +774,7 @@ func TestRetryCertJob_blocked_by_rule_deletion_returns_409(t *testing.T) {
 	services.ResetCAQueueManagerForTest()
 	services.InitCAQueueManager(func() error { return nil }, t.TempDir())
 	services.GetCAQueueManager().Start()
+	startCertQueueDispatchForTest(t)
 	t.Cleanup(services.ResetCAQueueManagerForTest)
 	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enabled,enable_tls,tls_source)
 		VALUES ('lb_blocked','blocked','http','blocked.example.test',8080,1,1,'acme_dns');
@@ -802,6 +810,7 @@ func TestRetryCertJob_active_job_returns_queue_busy_message(t *testing.T) {
 	services.ResetCAQueueManagerForTest()
 	services.InitCAQueueManager(func() error { return nil }, t.TempDir())
 	services.GetCAQueueManager().Start()
+	startCertQueueDispatchForTest(t)
 	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enabled,enable_tls,tls_source)
 		VALUES ('lb_blocker','blocker','http','blocker.example.test',8080,1,1,'acme_dns'),
 		       ('lb_active','active','http','active.example.test',8080,1,1,'acme_dns');
@@ -1431,6 +1440,7 @@ func TestRetryCertJob_waitingCACoolingRequiresForce(t *testing.T) {
 	services.ResetCAQueueManagerForTest()
 	services.InitCAQueueManager(func() error { return nil }, t.TempDir())
 	services.GetCAQueueManager().Start()
+	startCertQueueDispatchForTest(t)
 	t.Cleanup(services.ResetCAQueueManagerForTest)
 	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enabled,enable_tls,tls_source)
 		VALUES ('lb_cooling','cooling','http','cooling.example.test',8080,1,1,'acme_dns');

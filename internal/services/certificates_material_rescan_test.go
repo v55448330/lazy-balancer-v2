@@ -27,10 +27,10 @@ func TestRescanDroppedDeploymentRetries_requeuesLostMaterialJob(t *testing.T) {
 	qm.Start()
 
 	// 预置该 provider 的队列并置空执行体：补扫只负责把行转 queued 并交给
-	// 队列，断言不需要真实签发（且不得发起网络请求）。
+	// 队列，断言不需要真实签发（且不得发起网络请求）。自建泵已退役，无
+	// loop 可启。
 	q := newCAQueue(models.CAProvider{ID: 9, Name: "provider-9", Provider: "letsencrypt"}, func() error { return nil }, t.TempDir())
 	q.executeFn = func(context.Context, queueItem, models.CAProvider) error { return nil }
-	go q.loop()
 	qm.mu.Lock()
 	qm.queues[9] = q
 	qm.mu.Unlock()
@@ -90,7 +90,6 @@ func TestRequeueNonTerminalCertJobs_requeuesDownloadedJobWithoutMaterial(t *test
 
 	q := newCAQueue(models.CAProvider{ID: 10, Name: "provider-10", Provider: "letsencrypt"}, func() error { return nil }, t.TempDir())
 	q.executeFn = func(context.Context, queueItem, models.CAProvider) error { return nil }
-	go q.loop()
 	qm.mu.Lock()
 	qm.queues[10] = q
 	qm.mu.Unlock()

@@ -163,6 +163,7 @@ func TestRetryCertJob_forceAuditOnlyWhenCooldownActuallyActive(t *testing.T) {
 	services.ResetCAQueueManagerForTest()
 	services.InitCAQueueManager(func() error { return nil }, t.TempDir())
 	services.GetCAQueueManager().Start()
+	startCertQueueDispatchForTest(t)
 	t.Cleanup(services.ResetCAQueueManagerForTest)
 	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enabled,enable_tls,tls_source)
 		VALUES ('lb_expired_cooling','cooling','http','expired-cooling.example.test',8080,1,1,'acme_dns');
@@ -196,6 +197,7 @@ func TestRetryCertJob_forceFailureAuditKeepsCooldownOverride(t *testing.T) {
 	services.ResetCAQueueManagerForTest()
 	services.InitCAQueueManager(func() error { return nil }, t.TempDir())
 	services.GetCAQueueManager().Start()
+	startCertQueueDispatchForTest(t)
 	t.Cleanup(services.ResetCAQueueManagerForTest)
 	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enabled,enable_tls,tls_source,ca_provider_id)
 		VALUES ('lb_force_failure','cooling','http','force-failure.example.test',8080,1,1,'acme_dns',999);

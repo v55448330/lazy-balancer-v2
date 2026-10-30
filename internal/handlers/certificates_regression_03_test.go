@@ -364,6 +364,7 @@ func initIssueQueue(t *testing.T) *services.CAQueueManager {
 	services.ResetCAQueueManagerForTest()
 	services.InitCAQueueManager(func() error { return nil }, t.TempDir())
 	services.GetCAQueueManager().Start()
+	startCertQueueDispatchForTest(t)
 	t.Cleanup(services.ResetCAQueueManagerForTest)
 	return services.GetCAQueueManager()
 }
@@ -519,7 +520,9 @@ func TestIssueCertificate_waitingCACoolingRequiresForce(t *testing.T) {
 	response = httptest.NewRecorder()
 	router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/certificates/issue?force=true", strings.NewReader(`{"caddy_id":"lb_ca_cooling"}`)))
 
-	// Then：受理 + 越过冷却留痕
+	// Then：受理 + 越过冷却留痕；真实队列执行（测试环境 CA 预检必败：
+	// ACME email 未配置）按 B2 失败语义统一重新落 failed 并写入**新的**
+	// 退避窗口——「越过冷却重排」与「重排后的真实失败」两个事实都要可见。
 	if response.Code != http.StatusOK {
 		t.Fatalf("force issue status=%d body=%s, want 200", response.Code, response.Body.String())
 	}
@@ -530,12 +533,25 @@ func TestIssueCertificate_waitingCACoolingRequiresForce(t *testing.T) {
 	if !strings.Contains(detail, "手动越过 CA 冷却") {
 		t.Fatalf("audit detail=%q, want 手动越过 CA 冷却留痕", detail)
 	}
-	var cleared sql.NullTime
-	if err := db.DB.QueryRow("SELECT ca_available_after FROM cert_jobs WHERE rule_id=?", "lb_ca_cooling").Scan(&cleared); err != nil {
-		t.Fatalf("read cleared window: %v", err)
+	// 轮询等待异步执行收敛（失败终态 + 次数 +1）——轮询窗口内未收敛按失败论。
+	var refreshedStatus string
+	var refreshed sql.NullTime
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if err := db.DB.QueryRow("SELECT status, COALESCE(renewal_attempts,0), ca_available_after FROM cert_jobs WHERE rule_id=?", "lb_ca_cooling").
+			Scan(&refreshedStatus, &attempts, &refreshed); err != nil {
+			t.Fatalf("read refreshed job: %v", err)
+		}
+		if refreshedStatus == "failed" && attempts >= 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("status=%q attempts=%d, want force 重排后重新失败（failed/1+，B2 失败语义统一：真实执行失败写新退避窗口）", refreshedStatus, attempts)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
-	if cleared.Valid {
-		t.Fatalf("ca_available_after=%v, want 清空（重排后重新计时）", cleared)
+	if !refreshed.Valid {
+		t.Fatalf("ca_available_after=%v, want 非空（重新失败必须写新退避窗口，1h 阶梯第一档）", refreshed)
 	}
 }
 

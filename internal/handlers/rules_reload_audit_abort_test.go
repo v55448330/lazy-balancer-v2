@@ -24,6 +24,7 @@ func startRuleLockWindowQueue(t *testing.T) {
 	services.ResetCAQueueManagerForTest()
 	services.InitCAQueueManager(nil, t.TempDir())
 	services.GetCAQueueManager().Start()
+	startCertQueueDispatchForTest(t)
 	t.Cleanup(services.ResetCAQueueManagerForTest)
 }
 

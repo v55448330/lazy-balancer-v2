@@ -463,9 +463,10 @@ func (h *Handlers) retryCertJobByID(c *gin.Context, id int) {
 		return
 	}
 
-	// waiting_ca 的 CA 冷却（429 退避 1-3h）有明确到期时间——手动重试默认
-	// 不得静默越过：冷却未到期且未显式 force 时 429 并给出剩余时长；
-	// force=true（前端确认对话框已明示风险）显式越过并留审计痕迹。
+	// CA 退避窗口（failed/waiting_ca 行的 ca_available_after，429=Retry-After
+	// 封顶 3h、其余 1h/2h/3h 阶梯——B2 失败语义统一后失败统一落 failed）有明确
+	// 到期时间——手动重试默认不得静默越过：冷却未到期且未显式 force 时 429 并
+	// 给出剩余时长；force=true（前端确认对话框已明示风险）显式越过并留审计痕迹。
 	forceRetry := c.Query("force") == "true"
 	// 冷却是否真的未到期——429 判定与「手动越过 CA 冷却」审计片段共用同一
 	// 布尔：冷却已自然到期时带 force 的重试并未越过任何东西，记入会让越权
@@ -692,8 +693,8 @@ func certJobRetryCooldown(status string) (time.Duration, bool) {
 }
 
 // certJobRetryRemainingSeconds 是「此刻剩余冷却（秒）」的 handlers 侧入口：
-// 通用窗口按 updated_at（缺失回退 created_at）扣减，waiting_ca 并入 CA 限流
-// 退避窗口（1–3h，远晚于通用冷却）。策略单源在
+// 通用窗口按 updated_at（缺失回退 created_at）扣减，failed/waiting_ca 行并入
+// CA 退避窗口（1–3h，远晚于通用冷却）。策略单源在
 // services.CertJobRetryRemainingSeconds——列表下发值与任务监控证书行共用同一
 // 判据（0=现在可重试，null=永久不可重试），不得各写一份。
 func certJobRetryRemainingSeconds(status string, updatedAt, createdAt, caAvailableAfter sql.NullTime, now time.Time) (int64, bool) {

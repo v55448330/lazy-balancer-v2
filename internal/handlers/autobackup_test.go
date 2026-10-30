@@ -106,6 +106,31 @@ func autoBackupRows(t *testing.T, where string, args ...any) []map[string]any {
 	return out
 }
 
+// engineRunID<=0 属绕过引擎的非法调用：必须显性报错且不写 task_runs
+// （legacy RecordRunStart/Finish 直写旁路已删除——task_runs 唯一写方=引擎）。
+func TestRunAutoBackupOnce_missingEngineRunIDRejectedWithoutTaskRuns(t *testing.T) {
+	h := newAutoBackupTestHandlers(t)
+
+	_, err := h.RunAutoBackupOnce(context.Background(), "manual", "system", 0)
+	if err == nil || !strings.Contains(err.Error(), "engineRunID") {
+		t.Fatalf("err=%v, want engineRunID 缺失显性错误", err)
+	}
+	var runs int
+	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM task_runs WHERE task_id='auto-backup'`).Scan(&runs); err != nil {
+		t.Fatal(err)
+	}
+	if runs != 0 {
+		t.Fatalf("task_runs auto-backup 行数=%d, want 0（直写旁路不得复活）", runs)
+	}
+	var backups int
+	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM auto_backups`).Scan(&backups); err != nil {
+		t.Fatal(err)
+	}
+	if backups != 0 {
+		t.Fatalf("auto_backups 行数=%d, want 0（拒绝发生在任何写之前）", backups)
+	}
+}
+
 func TestRunAutoBackupOnce_successWritesFileRowAndAudit(t *testing.T) {
 	// Given: 主节点测试实例 + 可写备份目录
 	h := newAutoBackupTestHandlers(t)
@@ -114,7 +139,7 @@ func TestRunAutoBackupOnce_successWritesFileRowAndAudit(t *testing.T) {
 	}
 
 	// When
-	if _, err := h.RunAutoBackupOnce(context.Background(), "manual", "system", 0); err != nil {
+	if _, err := h.RunAutoBackupOnce(context.Background(), "manual", "system", 1); err != nil {
 		t.Fatalf("RunAutoBackupOnce: %v", err)
 	}
 
@@ -158,7 +183,7 @@ func TestRunAutoBackupOnce_recordsRealAppVersion(t *testing.T) {
 	h.cfg.Version = "v9.9.9-test"
 
 	// When
-	if _, err := h.RunAutoBackupOnce(context.Background(), "manual", "system", 0); err != nil {
+	if _, err := h.RunAutoBackupOnce(context.Background(), "manual", "system", 1); err != nil {
 		t.Fatalf("RunAutoBackupOnce: %v", err)
 	}
 
@@ -190,7 +215,7 @@ func TestRunAutoBackupOnce_failureRecordsFailedRowAndAudit(t *testing.T) {
 	h.cfg.BackupDir = blocked
 
 	// When
-	_, err := h.RunAutoBackupOnce(context.Background(), "schedule", "system", 0)
+	_, err := h.RunAutoBackupOnce(context.Background(), "schedule", "system", 1)
 
 	// Then: 返回错误 + failed 行 + 自动备份审计(失败留痕)
 	if err == nil {
@@ -222,7 +247,7 @@ func TestRunAutoBackupOnce_writeFailureRemovesFinalFile(t *testing.T) {
 	t.Cleanup(func() { autoBackupWriteFile = oldWrite })
 
 	for attempt := 1; attempt <= 2; attempt++ {
-		if _, err := h.RunAutoBackupOnce(context.Background(), "schedule", "system", 0); err == nil || !strings.Contains(err.Error(), "fsync") {
+		if _, err := h.RunAutoBackupOnce(context.Background(), "schedule", "system", 1); err == nil || !strings.Contains(err.Error(), "fsync") {
 			t.Fatalf("attempt %d error=%v, want injected fsync failure", attempt, err)
 		}
 		matches, err := filepath.Glob(filepath.Join(h.cfg.BackupDir, "*.lbbak"))
@@ -255,7 +280,7 @@ func TestRunAutoBackupOnce_cancelCleanupFailureLogsFilename(t *testing.T) {
 	t.Cleanup(func() { autoBackupWriteFile = oldWrite })
 	logs := captureLog(t)
 
-	_, err := h.RunAutoBackupOnce(ctx, "schedule", "system", 0)
+	_, err := h.RunAutoBackupOnce(ctx, "schedule", "system", 1)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("err=%v, want context.Canceled", err)
 	}
@@ -282,7 +307,7 @@ func TestRunAutoBackupOnce_rowFailureCleanupFailureLogsFilename(t *testing.T) {
 	}
 	logs := captureLog(t)
 
-	_, err := h.RunAutoBackupOnce(context.Background(), "schedule", "system", 0)
+	_, err := h.RunAutoBackupOnce(context.Background(), "schedule", "system", 1)
 	if err == nil || !strings.Contains(err.Error(), "备份记录写入失败") {
 		t.Fatalf("err=%v, want row insertion failure", err)
 	}
@@ -518,7 +543,7 @@ func TestRunAutoBackupOnce_rejectsDamagedSections(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err := h.RunAutoBackupOnce(context.Background(), "manual", "tester", 0)
+	_, err := h.RunAutoBackupOnce(context.Background(), "manual", "tester", 1)
 
 	if err == nil || !strings.Contains(err.Error(), "备份范围") {
 		t.Fatalf("RunAutoBackupOnce err=%v, want damaged-sections error", err)
@@ -544,7 +569,7 @@ func TestRunAutoBackupOnce_reportsSectionsReadFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err := h.RunAutoBackupOnce(context.Background(), "schedule", "system", 0)
+	_, err := h.RunAutoBackupOnce(context.Background(), "schedule", "system", 1)
 
 	if err == nil || !strings.Contains(err.Error(), "读取备份范围") {
 		t.Fatalf("RunAutoBackupOnce err=%v, want sections read failure", err)
@@ -564,7 +589,7 @@ func TestRunAutoBackupOnce_cancelDuringSectionsReadLeavesNoFailedRowOrAudit(t *t
 	autoBackupBeforeSectionsReadHook = func() { cancel() }
 	t.Cleanup(func() { autoBackupBeforeSectionsReadHook = previousHook })
 
-	_, err := h.RunAutoBackupOnce(ctx, "manual", "admin", 0)
+	_, err := h.RunAutoBackupOnce(ctx, "manual", "admin", 1)
 
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("err=%v, want context.Canceled（读取阶段取消按取消返回）", err)
@@ -1020,7 +1045,7 @@ func TestRestoreAutoBackup_restoresBackedUpState(t *testing.T) {
 	if _, err := db.DB.Exec("INSERT INTO upstreams (rule_id,host,port,weight,enabled) VALUES ('lb_restore','127.0.0.1',9000,1,1)"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := h.RunAutoBackupOnce(context.Background(), "manual", "system", 0); err != nil {
+	if _, err := h.RunAutoBackupOnce(context.Background(), "manual", "system", 1); err != nil {
 		t.Fatalf("run backup: %v", err)
 	}
 	var id int64
@@ -1108,7 +1133,7 @@ func TestRunAutoBackupOnce_concurrentRunRejected(t *testing.T) {
 	if !autoBackupRunMu.TryLock() {
 		t.Fatal("前置锁定失败")
 	}
-	_, err := h.RunAutoBackupOnce(context.Background(), "manual", "system", 0)
+	_, err := h.RunAutoBackupOnce(context.Background(), "manual", "system", 1)
 	autoBackupRunMu.Unlock()
 	if err == nil || !strings.Contains(err.Error(), "正在执行") {
 		t.Fatalf("err=%v, want 已有任务执行中报错", err)
@@ -1132,11 +1157,11 @@ func TestRunAutoBackupOnce_prunesToKeepSetting(t *testing.T) {
 	}
 
 	// When: keep=1 下连跑两次(同秒冲突由文件名 -2 后缀消化)
-	firstRun, err := h.RunAutoBackupOnce(context.Background(), "schedule", "system", 0)
+	firstRun, err := h.RunAutoBackupOnce(context.Background(), "schedule", "system", 1)
 	if err != nil {
 		t.Fatalf("first run: %v", err)
 	}
-	secondRun, err := h.RunAutoBackupOnce(context.Background(), "schedule", "system", 0)
+	secondRun, err := h.RunAutoBackupOnce(context.Background(), "schedule", "system", 1)
 	if err != nil {
 		t.Fatalf("second run: %v", err)
 	}
@@ -1291,7 +1316,7 @@ func TestRunAutoBackupOnce_backupDirPerm0700(t *testing.T) {
 	h := newAutoBackupTestHandlers(t)
 	h.cfg.BackupDir = filepath.Join(t.TempDir(), "backup-nested")
 
-	if _, err := h.RunAutoBackupOnce(context.Background(), "manual", "system", 0); err != nil {
+	if _, err := h.RunAutoBackupOnce(context.Background(), "manual", "system", 1); err != nil {
 		t.Fatalf("RunAutoBackupOnce: %v", err)
 	}
 	info, err := os.Stat(h.cfg.BackupDir)

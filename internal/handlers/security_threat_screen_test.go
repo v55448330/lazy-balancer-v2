@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -1643,20 +1642,15 @@ func TestGetSecurityThreatScreen_topTargetsQueryFailureReturns500(t *testing.T) 
 	}
 }
 
-func TestStartThreatRollupWarmer_takesOverFixation(t *testing.T) {
-	// Given: 窗口内 1 条事件；warmer 以已取消 ctx 启动（立即退出不执行固化，
-	// 但启动标志置位）；幂等二次启动不 panic。
-	// 启动标志 ≠ 已有可用覆盖——首轮从未成功时请求路径必须
+func TestThreatRollupWarmer_takesOverFixation(t *testing.T) {
+	// Given: 窗口内 1 条事件；「warmer 已接管但首轮从未成功」形态（daemon
+	// 首轮失败即此状态）——启动标志 ≠ 已有可用覆盖，请求路径必须
 	// 沿用懒固化（不得返回全零「无攻击」大屏）。
 	setupSecurityPolicyTestDB(t)
 	t.Cleanup(resetThreatRollupWarmerForTest)
 	router := newThreatScreenRouter(t, newThreatMetricsServer(t).URL)
 	seedThreatScreenEvent(t, utcStringAgo(5*time.Minute), "93.184.216.7", "942100", "SQL Injection", "blocked")
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // 已取消：warmer 立即退出（不执行固化），仅置启动标志
-	StartThreatRollupWarmer(ctx)
-	StartThreatRollupWarmer(ctx) // 幂等：CAS 标志，重复启动为空操作
-	threatRollupWarmerWg.Wait()  // 确认协程已退出（后续请求路径断言无并发固化）
+	threatRollupWarmerStarted.Store(true)
 
 	// When/Then: warmer 未完成首轮 → 请求路径懒固化兜底（total=1）
 	recorder := getRequest(t, router, "/security/overview/threat-screen")
@@ -1694,33 +1688,25 @@ func TestStartThreatRollupWarmer_takesOverFixation(t *testing.T) {
 	}
 }
 
-func TestStartThreatRollupWarmer_runsImmediately(t *testing.T) {
+func TestThreatRollupWarmerRound_fixatesImmediately(t *testing.T) {
 	// Given: 窗口内 1 条事件
 	setupSecurityPolicyTestDB(t)
 	t.Cleanup(resetThreatRollupWarmerForTest)
 	seedThreatScreenEvent(t, utcStringAgo(2*time.Minute), "93.184.216.7", "942100", "SQL Injection", "blocked")
-	ctx, cancel := context.WithCancel(context.Background())
-	// 先取消并等待协程退出，再让 DB 清理运行（cleanup LIFO：本注册晚于
-	// setupSecurityPolicyTestDB 的换库清理，故先于其执行）。
-	t.Cleanup(func() {
-		cancel()
-		threatRollupWarmerWg.Wait()
-	})
 
-	// When
-	StartThreatRollupWarmer(ctx)
+	// When: warmer 单轮工作体同步执行（daemon RunTicker bootstrap 的立即首跑
+	// 语义等价——不等首个 60s 节拍）。
+	if err := RunThreatRollupWarmerRound(); err != nil {
+		t.Fatalf("warmer round: %v", err)
+	}
 
-	// Then: 启动即固化一次（不等首个 60s tick）——轮询等待 rollup 行出现
-	deadline := time.Now().Add(2 * time.Second)
-	for {
-		var n int
-		if err := db.MetricsDB.QueryRow(`SELECT COALESCE(SUM(count),0) FROM security_event_rollup`).Scan(&n); err == nil && n >= 1 {
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("warmer 未在启动后立即固化（rollup 仍为空）")
-		}
-		time.Sleep(10 * time.Millisecond)
+	// Then: rollup 行已出现（固化即入行，无需轮询等待后台协程）。
+	var n int
+	if err := db.MetricsDB.QueryRow(`SELECT COALESCE(SUM(count),0) FROM security_event_rollup`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n < 1 {
+		t.Fatalf("rollup=%d, want >=1（warmer 单轮须立即固化）", n)
 	}
 }
 

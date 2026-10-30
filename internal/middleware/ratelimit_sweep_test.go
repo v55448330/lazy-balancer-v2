@@ -18,7 +18,7 @@ func TestSweepExpiredRateLimitBuckets_onlyRemovesClosedWindows(t *testing.T) {
 	loginRateBuckets.entries["192.0.2.2|login"] = active
 	loginRateBuckets.Unlock()
 
-	if removed := sweepExpiredRateLimitBuckets(now); removed != 1 {
+	if removed := SweepRateLimitBuckets(now); removed != 1 {
 		t.Fatalf("removed=%d, want 1（仅过窗桶可删）", removed)
 	}
 	loginRateBuckets.Lock()
@@ -38,7 +38,7 @@ func TestSweepExpiredRateLimitBuckets_onlyRemovesClosedWindows(t *testing.T) {
 // TestSweepExpiredRateLimitBuckets_emptyTable 钉住空表安全（无锁序反转、返回 0）。
 func TestSweepExpiredRateLimitBuckets_emptyTable(t *testing.T) {
 	withIsolatedRateLimitBuckets(t)
-	if removed := sweepExpiredRateLimitBuckets(time.Now()); removed != 0 {
+	if removed := SweepRateLimitBuckets(time.Now()); removed != 0 {
 		t.Fatalf("removed=%d, want 0", removed)
 	}
 }

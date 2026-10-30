@@ -75,7 +75,7 @@ func TestRunAutoBackupOnce_rejectsNonAbsoluteBackupDir(t *testing.T) {
 
 	for _, dir := range []string{"", "relative/backups"} {
 		h.cfg.BackupDir = dir
-		_, err := h.RunAutoBackupOnce(context.Background(), "manual", "tester", 0)
+		_, err := h.RunAutoBackupOnce(context.Background(), "manual", "tester", 1)
 		if err == nil {
 			t.Fatalf("BackupDir=%q 必须 fail-fast（相对/空路径会在 CWD 上执行文件操作）", dir)
 		}

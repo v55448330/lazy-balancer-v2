@@ -2388,6 +2388,10 @@ func (t *securityEventsTailer) securityEventsProcessPass(ctx context.Context, f 
 	// 时 autobanObserveBatch 零动作（未启用/从节点等门在函数内收敛）。
 	// 按请求级去重键聚合：同一请求的多个引擎事务只喂一条；被批内改判的行
 	// 用 autobanIndex 定位并替换原条目（不能一请求喂两次，否则阈值仍被放大）。
+	// 阶段过滤不在构造侧：阶段 1 预检事件也随批喂入，由 autoban 咽喉点的
+	// 阶段 3 族门（autobanStage3Eligible）统一剔除——其判据与本文件归因
+	// 谓词（securityEventsRuleIsCustomFamily/securityEventsRuleIsCRSFamily）
+	// 同源，只收 WAF（阶段 3）事件。
 	var autobanBatch []autobanFeedItem
 	autobanIndex := map[uint64]int{}
 	// pendingDedupe 是本事务内已落库/已改判的归并状态——只在 commit 成功后

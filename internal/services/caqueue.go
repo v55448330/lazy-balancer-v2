@@ -12,6 +12,7 @@ import (
 
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
+	"lazy-balancer-v2/internal/taskengine"
 )
 
 // CAQueueManager schedules ACME issuance jobs per CA provider.
@@ -20,6 +21,11 @@ type CAQueueManager struct {
 	queues        map[int]*caQueue
 	retiredQueues []retiredCAQueue
 	zombieJobs    map[int]zombieJob
+	// wakeCh 是 cert-issuance daemon RunTicker 的派发唤醒通道（缓冲 1，非阻塞
+	// 投递=合并抖动）。队列自建泵（stopCh/wakeCh/loopDone + go q.loop()）已按
+	// task-engine 标准 v2.2 违规项 #1 退役：派发统一由守护节拍/唤醒经
+	// DispatchOnce 驱动，入队只投递唤醒提示。
+	wakeCh chan struct{}
 	// reservedJobs 是「已通过在途/活跃/规则屏障判定、正在锁外完成状态迁移与
 	// provider 解析」的 jobID 预留集合。在途判定放锁外执行期间它必须仍算在途，
 	// 否则并发 Retry/规则重建会看到 isJobActiveLocked=false 而二次入队。
@@ -141,6 +147,7 @@ func InitCAQueueManager(reloader func() error, dataDir ...string) {
 		compensationCtx, compensationCancel := context.WithCancel(context.Background())
 		caQueueManager = &CAQueueManager{
 			queues: make(map[int]*caQueue),
+			wakeCh: make(chan struct{}, 1),
 			// 活动态由 cert-issuance 守护生命周期派生，初始化即为
 			// 停止。唯一激活点=StartACME 的 Start()（daemon Run 经
 			// StartACME/StopACME 挂钩）；从节点启动、用户停止证书签发后重启
@@ -818,11 +825,11 @@ func (m *CAQueueManager) MarkJobRunningForTest(ruleID string, jobID int) {
 	defer m.mu.Unlock()
 	if len(m.queues) == 0 {
 		// 队列惰建（Enqueue 时按 provider 创建）；测试缝自建一个零值 provider
-		// 队列以承载标记，Stop（ResetCAQueueManagerForTest）会正常收走其 loop。
+		// 队列以承载标记（自建泵已退役，无 loop 可启；Stop 经
+		// ResetCAQueueManagerForTest 取消其 ctx 收尾）。
 		q := newCAQueue(models.CAProvider{}, m.reloader, m.dataDir)
 		q.manager = m
 		m.queues[q.provider.ID] = q
-		go q.loop()
 	}
 	for _, queue := range m.queues {
 		queue.mu.Lock()
@@ -1139,7 +1146,8 @@ func (m *CAQueueManager) resolveEnqueueProvider(providerID int, jobID int, ruleI
 			Logf("warn", "CA queue: job %d 只差部署，CA Provider 不可用（%v）——保持待部署，由部署补扫接管", jobID, err)
 			return models.CAProvider{}, fmt.Errorf("%w: %w", errCAProviderUnavailable, err)
 		}
-		failJob(jobID, fmt.Sprintf("CA Provider 不可用: %v", err))
+		// 准入前失败（尚未开始执行，零新材料产出）。
+		failJob(jobID, fmt.Sprintf("CA Provider 不可用: %v", err), false)
 		return models.CAProvider{}, fmt.Errorf("%w: %w", errCAProviderUnavailable, err)
 	}
 	Logf("info", "CA queue Enqueue job=%d providerID=%d resolved=%s (%s)", jobID, providerID, provider.Name, provider.Provider)
@@ -1163,7 +1171,6 @@ func (m *CAQueueManager) enqueueResolvedLocked(provider models.CAProvider, jobID
 		q = newCAQueue(provider, m.reloader, m.dataDir)
 		q.manager = m
 		m.queues[provider.ID] = q
-		go q.loop()
 	} else {
 		// 队列缓存的 provider 快照可能早于用户修改的凭证/配置，每次入队刷新
 		q.mu.Lock()
@@ -1179,6 +1186,9 @@ func (m *CAQueueManager) enqueueResolvedLocked(provider models.CAProvider, jobID
 		ruleID:  ruleID,
 		domains: domains,
 	})
+	// 唤醒统一走守护通道：入队只投递提示（非阻塞合并），派发由 cert-issuance
+	// daemon 的 RunTicker 经 DispatchOnce 执行（自建泵 go q.loop() 已退役）。
+	m.Wake()
 }
 
 func (m *CAQueueManager) enqueueCompensation(providerID int, jobID int, ruleID, domains string) error {
@@ -1306,11 +1316,8 @@ type caQueue struct {
 	lastOrder       time.Time
 	reloader        func() error
 	mu              sync.Mutex
-	stopCh          chan struct{}
-	wakeCh          chan struct{}
 	ctx             context.Context
 	cancel          context.CancelFunc
-	loopDone        chan struct{}
 	executions      sync.WaitGroup
 	stopping        bool
 	executeFn       func(context.Context, queueItem, models.CAProvider) error
@@ -1347,9 +1354,6 @@ func newCAQueue(provider models.CAProvider, reloader func() error, dataDir ...st
 		cancels:         make(map[int]context.CancelFunc),
 		executionDone:   make(map[int]chan struct{}),
 		runningRules:    make(map[int]string),
-		stopCh:          make(chan struct{}),
-		wakeCh:          make(chan struct{}, 1),
-		loopDone:        make(chan struct{}),
 		ctx:             ctx,
 		cancel:          cancel,
 	}
@@ -1367,26 +1371,94 @@ func (q *caQueue) enqueue(item queueItem) {
 	}
 	q.pending = append(q.pending, item)
 	q.active[item.jobID] = struct{}{}
+	// 唤醒不在这里投递：队列自建 wakeCh 已随泵退役，入队侧统一由
+	// Manager.enqueueResolvedLocked → Manager.Wake() 提示守护（错过唤醒只
+	// 延迟到下一个 100ms 节拍，不漏执行）。
+}
+
+// DispatchOnce 驱动全部活跃队列各执行一轮派发——cert-issuance daemon 的
+// RunTicker 以 100ms 节拍/唤醒调用本函数（task-engine 标准 v2.2 §0.4：子资源
+// 泵由宿主 daemon 的 fn 遍历驱动）。非阻塞语义与 provider 闸门（并发上限/
+// 最小间隔/版本化快照重载）保持自建泵退役前口径；ctx 已取消时直接返回——
+// 守护停泵后不得再新起签发执行。nil 接收方（守护未装配/测试环境）为 no-op。
+func (m *CAQueueManager) DispatchOnce(ctx context.Context) {
+	if m == nil || ctx == nil || ctx.Err() != nil {
+		return
+	}
+	m.mu.Lock()
+	queues := make([]*caQueue, 0, len(m.queues))
+	for _, q := range m.queues {
+		queues = append(queues, q)
+	}
+	m.mu.Unlock()
+	for _, q := range queues {
+		q.tick()
+	}
+}
+
+// Wake 向 cert-issuance daemon 投递派发唤醒提示（非阻塞；通道满=已有待消费
+// 唤醒，合并抖动不堆积）。入队路径经本函数提示守护，不再操作任何队列自建
+// 通道。守护未装配（wakeCh 为 nil）或直构管理器（测试）时为 no-op——向 nil
+// 通道的非阻塞发送恒走 default 分支。
+func (m *CAQueueManager) Wake() {
+	if m == nil {
+		return
+	}
 	select {
-	case q.wakeCh <- struct{}{}:
+	case m.wakeCh <- struct{}{}:
 	default:
 	}
 }
 
-func (q *caQueue) loop() {
-	defer close(q.loopDone)
-	ticker := time.NewTicker(100 * time.Millisecond)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-q.stopCh:
-			return
-		case <-q.wakeCh:
-			q.tick()
-		case <-ticker.C:
-			q.tick()
-		}
+// WakeCh 返回守护派发唤醒通道（只读）。nil=守护未装配，RunTicker 以纯节拍
+// 运行（唤醒触发源缺位只影响即时性，不漏派发——下一节拍兜底）。
+func (m *CAQueueManager) WakeCh() <-chan struct{} {
+	if m == nil {
+		return nil
 	}
+	return m.wakeCh
+}
+
+// CAQueueProviderStatus 单个 provider 队列的只读计数投影。
+type CAQueueProviderStatus struct {
+	ProviderID   int    `json:"provider_id"`
+	ProviderName string `json:"provider_name"`
+	Pending      int    `json:"pending"`
+	Running      int    `json:"running"`
+}
+
+// CAQueueStatusSnapshot 全部队列的只读投影：cert-issuance 的 StatusFn 消费
+// （任务监控展示派发活动），零写副作用。
+type CAQueueStatusSnapshot struct {
+	Active    bool                    `json:"active"`
+	Pending   int                     `json:"pending"`
+	Running   int                     `json:"running"`
+	Providers []CAQueueProviderStatus `json:"providers"`
+}
+
+// StatusSnapshot 汇总活跃队列的 pending/running 与各提供商计数。
+// 退役队列/僵尸任务不投影（异常滞行有独立日志与在途保护，不属派发活动面）。
+func (m *CAQueueManager) StatusSnapshot() CAQueueStatusSnapshot {
+	if m == nil {
+		return CAQueueStatusSnapshot{}
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	snap := CAQueueStatusSnapshot{Active: m.active, Providers: make([]CAQueueProviderStatus, 0, len(m.queues))}
+	for _, q := range m.queues {
+		q.mu.Lock()
+		p := CAQueueProviderStatus{
+			ProviderID:   q.provider.ID,
+			ProviderName: q.provider.Name,
+			Pending:      len(q.pending),
+			Running:      q.running,
+		}
+		q.mu.Unlock()
+		snap.Pending += p.Pending
+		snap.Running += p.Running
+		snap.Providers = append(snap.Providers, p)
+	}
+	return snap
 }
 
 func (q *caQueue) tick() {
@@ -1508,7 +1580,9 @@ func (m *CAQueueManager) failPendingProviderUnavailable(items []queueItem, messa
 		if m.beforeProviderUnavailableFail != nil {
 			m.beforeProviderUnavailableFail()
 		}
-		failJob(item.jobID, message)
+		// 旧尝试失败时新尝试可能在途且已产出新材料——producedNewMaterial=true
+		// 保留行状态判据兜底（downloaded+材料行不被终态化）。
+		failJob(item.jobID, message, true)
 	}
 }
 
@@ -1545,7 +1619,8 @@ func (q *caQueue) execute(execution queueExecution) {
 	defer func() {
 		if r := recover(); r != nil {
 			Logf("error", "CA queue panic for job %d: %v", item.jobID, r)
-			failJob(item.jobID, fmt.Sprintf("调度器异常: %v", r))
+			// panic 时执行体状态不可知——保留行状态判据兜底。
+			failJob(item.jobID, fmt.Sprintf("调度器异常: %v", r), true)
 		}
 		q.mu.Lock()
 		q.running--
@@ -1591,7 +1666,8 @@ func (q *caQueue) handleExecutionCancellation(execution queueExecution) {
 	// 但不得把行留在 creating_* 等非终态；按取消终态收敛。drain 走上面的
 	// q.ctx 分支 requeue，不进入这里。
 	if execution.ctx.Err() != nil {
-		failJob(execution.item.jobID, "证书任务已取消")
+		// 取消前执行体可能已产出新材料——保留行状态判据兜底。
+		failJob(execution.item.jobID, "证书任务已取消", true)
 	}
 }
 
@@ -1605,10 +1681,13 @@ func (q *caQueue) handleExecutionCancellation(execution queueExecution) {
 // failJob 语义。
 func handleExecutionTimeout(jobID int) {
 	const message = "执行超时：证书材料已落库，等待重新部署"
-	if deferDeploymentForMaterialBearingJob(jobID, "execution_timeout", message) {
+	// 超时路径无法从执行体回传「是否产出新材料」——以行状态判据兜底
+	//（producedNewMaterial=true 保留既有保护：材料已落库后超时不得终态化，
+	// 否则新证书从全部自动恢复通道摘除）。
+	if deferDeploymentForMaterialBearingJob(jobID, "execution_timeout", message, true) {
 		return
 	}
-	failJobTransition(jobID, nonTerminalJobStatuses, "证书签发执行超时")
+	recordJobFailure(jobID, nonTerminalJobStatuses, "证书签发执行超时", "execution_timeout", 0)
 }
 
 func (q *caQueue) stop() {
@@ -1618,15 +1697,16 @@ func (q *caQueue) stop() {
 		return
 	}
 	q.stopping = true
+	// 自建泵已退役：stop 只取消队列 ctx（在途执行据此收敛），派发循环随
+	// cert-issuance daemon 的 RunTicker ctx 一并停止。
 	q.cancel()
-	close(q.stopCh)
 }
 
 func (q *caQueue) wait(deadline time.Time) bool {
-	<-q.loopDone
-	// executions.Wait 必须套上限：issuer 异常不响应 ctx 取消时 Wait 永不返回，
-	// PauseAndDrain/进程 Stop 会被永久挂起（与 CancelJob 同口径）。上限由
-	// 调用方以共享截止时间传入——多队列串行等待不得各自重新计时。
+	// 自建泵退役后无 loopDone 可等：只等在途执行退出。executions.Wait 必须套
+	// 上限：issuer 异常不响应 ctx 取消时 Wait 永不返回，PauseAndDrain/进程
+	// Stop 会被永久挂起（与 CancelJob 同口径）。上限由调用方以共享截止时间
+	// 传入——多队列串行等待不得各自重新计时。
 	done := make(chan struct{})
 	go func() {
 		q.executions.Wait()
@@ -1695,10 +1775,16 @@ func handleQueueExecutionError(jobID int, err error) {
 	}
 	var rateLimitErr *CAProviderRateLimitError
 	if errors.As(err, &rateLimitErr) {
-		markJobWaitingCA(jobID, rateLimitErr.RetryAfter)
+		// 429 与其它失败统一落 failed（waiting_ca 退役）：Retry-After 决定
+		// 退避窗口，last_error_code='429'。
+		failJobRateLimited(jobID, rateLimitErr.RetryAfter)
 		return
 	}
-	failJob(jobID, fmt.Sprintf("CA 签发失败: %v", err))
+	// 走到这里的执行体错误（含 issuer.Issue 的签发失败）本次执行均未
+	// 产出新材料（材料落库后的失败全部以 certificateDeploymentError/角色错误
+	// 形态在上方拦截）——续签失败不得被「材料在身部署生命周期」判据当成部署
+	// 失败折回 issued，必须落 failed + 阶梯退避窗口。
+	failJob(jobID, fmt.Sprintf("CA 签发失败: %v", err), false)
 }
 
 // jobExists returns true if a cert_jobs row with the given id still exists.
@@ -1785,56 +1871,87 @@ func ResolveCAProviderID(id int) (int, error) {
 	return provider.ID, nil
 }
 
-func markJobWaitingCA(jobID int, retryAfter time.Duration) {
+// recordJobFailure 是「签发失败」终态迁移的统一写侧（B2 失败语义统一：
+// 429 与其它失败同语义，waiting_ca 停车状态退役——任何失败都落 failed）：
+//   - renewal_attempts+1；
+//   - 写 ca_available_after 退避窗口：429 用 CA 的 Retry-After（computeBackoff
+//     内封顶 3h），其它失败走自有阶梯 1h/2h/3h（同封顶）；
+//   - 写 last_error_code/message/任务日志/审计；
+//   - 达 cert_renewal_attempts 上限：ca_available_after=NULL（停止自动重试），
+//     message 追加上限说明；
+//   - 窗口写入成功即唤醒 cert-waiting-ca 补扫（failed+窗口到期重排的唯一
+//     周期属主；达上限不唤醒——没有待消费的窗口）。
+func recordJobFailure(jobID int, fromSet []string, message, errorCode string, retryAfter time.Duration) {
+	// 上限只读一次并复用：getCertRenewalAttempts 每次都点查 global_config（含
+	// 越界留痕分支），CA 故障时 N 个任务同轮失败会白读 2N 次并重复写降级告警。
+	// 该函数恒返回正数（无效值降级默认并留痕），故无需再判零。
 	maxAttempts := getCertRenewalAttempts()
-
-	var attempts int
-	if err := db.DB.QueryRow("SELECT COALESCE(renewal_attempts,0) FROM cert_jobs WHERE id=?", jobID).Scan(&attempts); err != nil {
-		Logf("error", "CA queue: failed to read attempts for job %d: %v", jobID, err)
+	attempts := currentRenewalAttempts(jobID) + 1
+	var window time.Duration
+	if attempts < maxAttempts {
+		window = computeBackoff(attempts, retryAfter)
+	} else {
+		message = maxRenewalAttemptsMessage(message, maxAttempts)
 	}
-	attempts++
-
-	cooling := computeBackoff(attempts, retryAfter)
-	// 库内写规范 UTC（available），日志/审计展示跟随部署时区
-	//（global_config.timezone，tz.go 周期刷新）——旧硬编码 UTC+8 在配置
-	// 非 Asia/Shanghai 的部署里展示时间漂移。
-	available := time.Now().Add(cooling).UTC()
-	display := available.In(CurrentLocation())
-
-	if attempts >= maxAttempts {
-		message := fmt.Sprintf("CA 频率限制，已达到最大重试次数 %d", maxAttempts)
-		err := transitionJob(db.DB, jobID, nonTerminalJobStatuses, "failed", map[string]any{
-			"message":            message,
-			"renewal_attempts":   attempts,
-			"ca_available_after": nil,
-			"last_error_code":    nil,
-		})
-		if err != nil && !errors.Is(err, ErrJobTransitionConflict) {
-			Logf("error", "CA queue: failed to mark job %d as failed at max attempts: %v", jobID, err)
-			return
-		}
-		if err == nil {
-			WriteCertJobLog(jobID, "ERROR", "failed", message)
-			RecordAuditLog("system", "签发失败", "证书任务", FormatAuditDetail(AuditJobPart(jobID), AuditResultPart("max_attempts")), "")
+	message = truncateJobMessage(message)
+	fields := map[string]any{
+		"message":          message,
+		"renewal_attempts": attempts,
+		"last_error_code":  errorCode,
+	}
+	if window > 0 {
+		// 库内写规范 UTC（available），日志/审计展示跟随部署时区
+		//（global_config.timezone，tz.go 周期刷新）——旧硬编码 UTC+8 在配置
+		// 非 Asia/Shanghai 的部署里展示时间漂移。
+		fields["ca_available_after"] = time.Now().Add(window).UTC().Format("2006-01-02 15:04:05")
+	} else {
+		fields["ca_available_after"] = nil
+	}
+	err := transitionJob(db.DB, jobID, fromSet, "failed", fields)
+	if err != nil {
+		if !errors.Is(err, ErrJobTransitionConflict) {
+			Logf("error", "CA queue: failed to record job %d failure: %v", jobID, err)
 		}
 		return
 	}
+	// 留痕分档保持既有口径：429 非上限=签发限流（WARN），其余=签发失败（ERROR）；
+	// 达上限一律 ERROR 并以 max_attempts 结果码单列（与续期扫描上限分支一致）。
+	level := "ERROR"
+	auditDetail := []string{AuditJobPart(jobID), AuditResultPart("failed")}
+	if errorCode == "429" {
+		level = "WARN"
+		auditDetail = []string{AuditJobPart(jobID), fmt.Sprintf("第 %d 次限流", attempts)}
+		if window > 0 {
+			auditDetail = append(auditDetail, fmt.Sprintf("恢复时间：%s", time.Now().Add(window).In(CurrentLocation()).Format("2006-01-02 15:04:05")))
+		} else {
+			auditDetail = []string{AuditJobPart(jobID), AuditResultPart("max_attempts")}
+		}
+	}
+	WriteCertJobLog(jobID, level, "failed", message)
+	// 审计动作必须是字面量（操作日志词汇表单源校验：动态表达式无法核白名单）。
+	switch errorCode {
+	case "429":
+		RecordAuditLog("system", "签发限流", "证书任务", FormatAuditDetail(auditDetail...), "")
+	case "issuance_failed":
+		RecordAuditLog("system", "签发失败", "证书任务", FormatAuditDetail(auditDetail...), "")
+	default:
+		RecordAuditLog("system", "签发失败", "证书任务", FormatAuditDetail(auditDetail...), "")
+	}
+	if window > 0 {
+		rearmCertWaitingCAAfterFailure(true)
+	}
+}
 
-	// available 已是 UTC（上方写入侧口径），不再重复调 .UTC()。
-	err := transitionJob(db.DB, jobID, nonTerminalJobStatuses, "waiting_ca", map[string]any{
-		"message":            "等待 CA 频率限制冷却",
-		"ca_available_after": available.Format("2006-01-02 15:04:05"),
-		"last_error_code":    "429",
-		"renewal_attempts":   attempts,
-	})
-	if err != nil && !errors.Is(err, ErrJobTransitionConflict) {
-		Logf("error", "CA queue: failed to mark job %d as waiting_ca: %v", jobID, err)
-		return
-	}
-	if err == nil {
-		WriteCertJobLog(jobID, "WARN", "waiting_ca", fmt.Sprintf("CA 频率限制，第 %d 次，将在 %s 后重试", attempts, display.Format("2006-01-02 15:04:05 -07:00")))
-		RecordAuditLog("system", "签发限流", "证书任务", FormatAuditDetail(AuditJobPart(jobID), fmt.Sprintf("第 %d 次限流", attempts), fmt.Sprintf("恢复时间：%s", display.Format("2006-01-02 15:04:05"))), "")
-	}
+// StartDispatchForTest 仅供测试装配：以引擎 RunTicker 同一实现驱动派发。
+// 生产唯一驱动方是 cert-issuance daemon 的 Run（标准 §6.5 #1）。
+func (m *CAQueueManager) StartDispatchForTest(ctx context.Context) {
+	go taskengine.RunTicker(ctx, 100*time.Millisecond, m.WakeCh(), m.DispatchOnce)
+}
+
+// failJobRateLimited 把 CA 限流（429）按统一失败语义落 failed：退避窗口取
+// Retry-After（缺省回落自有阶梯，computeBackoff 内封顶 3h），last_error_code='429'。
+func failJobRateLimited(jobID int, retryAfter time.Duration) {
+	recordJobFailure(jobID, nonTerminalJobStatuses, "CA 频率限制，冷却到期后自动重签", "429", retryAfter)
 }
 
 // maxRenewalAttemptsMessage 在续签失败累计达到上限时追加终态说明，
@@ -1849,22 +1966,11 @@ func maxRenewalAttemptsMessage(message string, maxAttempts int) string {
 }
 
 // failJobTransition 是失败终态迁移的共享实现（起
-// failJobFromStatus 无调用方已删除，本函数唯一消费方为 failJob）：尝试次数
-// 封顶文案、消息截断、UPDATE、留痕。
+// failJobFromStatus 无调用方已删除）：统一经 recordJobFailure 落
+// failed——renewal_attempts+1、自有阶梯退避窗口（1h/2h/3h 封顶 3h）、
+// last_error_code/message/任务日志/审计；达上限窗口 NULL。
 func failJobTransition(jobID int, fromSet []string, message string) {
-	// 上限只读一次并复用：getCertRenewalAttempts 每次都点查 global_config（含
-	// 越界留痕分支），CA 故障时 N 个任务同轮失败会白读 2N 次并重复写降级告警。
-	// 该函数恒返回正数（无效值降级默认并留痕），故无需再判零。
-	maxAttempts := getCertRenewalAttempts()
-	if attempts := currentRenewalAttempts(jobID); attempts+1 >= maxAttempts {
-		message = maxRenewalAttemptsMessage(message, maxAttempts)
-	}
-	message = truncateJobMessage(message)
-	err := transitionJob(db.DB, jobID, fromSet, "failed", map[string]any{
-		"message":          message,
-		"renewal_attempts": jobSQLExpression("COALESCE(renewal_attempts,0)+1"),
-	})
-	recordFailedJobTransition(jobID, message, err)
+	recordJobFailure(jobID, fromSet, message, "issuance_failed", 0)
 }
 
 // failJob 把任务标记为 failed（来源=任意非终态状态）。
@@ -1875,18 +1981,28 @@ func failJobTransition(jobID int, fromSet []string, message string) {
 // 跳过终态、对账只重建 issued/downloaded）→ 材料搁浅且规则无 TLS。与执行超时/
 // 生命周期取消同口径：保持可部署态并把部署窗口推到 now，由 30s 补扫接管。
 // 代价=失败路径多一次单行读（失败本就是低频路径）。
-func failJob(jobID int, message string) {
-	if deferDeploymentForMaterialBearingJob(jobID, "deployment_deferred", "签发失败："+message+"（证书材料已落库，等待重新部署）") {
+//
+// producedNewMaterial：本次执行是否产出新材料（由 certissuer 传入）。
+// 只有「本次执行确实产出新材料 ∧ 行处于部署生命周期 ∧ 材料在库」才降级为
+// 部署延迟——带旧材料的续签失败（本次执行零产出）必须落 failed，不得被
+// 当成部署失败折回 issued。
+func failJob(jobID int, message string, producedNewMaterial bool) {
+	if deferDeploymentForMaterialBearingJob(jobID, "deployment_deferred", "部署延迟："+message+"（证书材料已落库，等待重新部署）", producedNewMaterial) {
 		return
 	}
 	failJobTransition(jobID, nonTerminalJobStatuses, message)
 }
 
-// deferDeploymentForMaterialBearingJob 在任务持有证书材料且处于部署生命周期时
-// 把「终态失败」降级为「保持可部署态 + 立即重排部署」。返回 true 表示已按部署
-// 重试语义处理，调用方不得再写 failed。读失败/状态不符返回 false（维持既有
-// failJob 语义，不因一次读故障把行留在非终态）。
-func deferDeploymentForMaterialBearingJob(jobID int, logCode, message string) bool {
+// deferDeploymentForMaterialBearingJob 在「本次执行产出新材料 ∧ 任务持有证书
+// 材料 ∧ 处于部署生命周期」时把「终态失败」降级为「保持可部署态 + 立即重排
+// 部署」。返回 true 表示已按部署重试语义处理，调用方不得再写 failed。读失败/
+// 判据不符返回 false（维持失败语义，不因一次读故障把行留在非终态）。
+// producedNewMaterial 为 false 时直接返回 false：材料是历史/上一轮残留，
+// 失败行必须落 failed 终态（续签失败不是部署失败）。
+func deferDeploymentForMaterialBearingJob(jobID int, logCode, message string, producedNewMaterial bool) bool {
+	if !producedNewMaterial {
+		return false
+	}
 	status, hasMaterial, found, err := loadCertJobDeploymentState(jobID)
 	if err != nil || !found {
 		return false
@@ -1919,16 +2035,4 @@ func currentRenewalAttempts(jobID int) int {
 		return 0
 	}
 	return attempts
-}
-
-func recordFailedJobTransition(jobID int, message string, err error) {
-	if err != nil && !errors.Is(err, ErrJobTransitionConflict) {
-		Logf("error", "CA queue: failed to mark job %d as failed: %v", jobID, err)
-		return
-	}
-	if err != nil {
-		return
-	}
-	WriteCertJobLog(jobID, "ERROR", "failed", message)
-	RecordAuditLog("system", "签发失败", "证书任务", FormatAuditDetail(AuditJobPart(jobID), AuditResultPart("failed")), "")
 }

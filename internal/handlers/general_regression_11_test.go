@@ -126,7 +126,7 @@ func TestRunAutoBackupOnce_cancelledContextWritesNothing(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, err := h.RunAutoBackupOnce(ctx, "schedule", "system", 0)
+	_, err := h.RunAutoBackupOnce(ctx, "schedule", "system", 1)
 	if err == nil || !strings.Contains(err.Error(), "context canceled") {
 		t.Fatalf("err=%v, want context canceled", err)
 	}
@@ -162,7 +162,7 @@ func TestRunAutoBackupOnce_writeFailureLeavesNoTmp(t *testing.T) {
 		t.Cleanup(func() { autoBackupWriteFile = orig })
 
 		// When
-		if _, err := h.RunAutoBackupOnce(context.Background(), "manual", "system", 0); err == nil {
+		if _, err := h.RunAutoBackupOnce(context.Background(), "manual", "system", 1); err == nil {
 			t.Fatal("落盘失败应返回错误")
 		}
 
@@ -196,7 +196,7 @@ func TestRunAutoBackupOnce_writeFailureLeavesNoTmp(t *testing.T) {
 		}
 
 		// When
-		if _, err := h.RunAutoBackupOnce(context.Background(), "manual", "system", 0); err == nil {
+		if _, err := h.RunAutoBackupOnce(context.Background(), "manual", "system", 1); err == nil {
 			t.Fatal("只读备份目录下应写盘失败")
 		}
 

@@ -32,7 +32,8 @@ func seedAutobanCandidate(t *testing.T) {
 	if _, err := db.DB.Exec(`INSERT OR IGNORE INTO security_ip_lists (name, entries, system) VALUES (?, '[]', 1)`, AutobanPresetListName); err != nil {
 		t.Fatalf("seed preset list: %v", err)
 	}
-	autobanObserveEvent("203.0.113.5", "blocked", "id:911100")
+	// 2026-10-30 阶段 3 口径后非数值 token 不再计数，候选前置喂 CRS 形态 id。
+	autobanObserveEvent("203.0.113.5", "blocked", "942100")
 }
 
 // Given 达标候选在册，merge 前节点已降级（暂存重载钩子里置 is_master=0）。

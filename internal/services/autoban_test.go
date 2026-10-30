@@ -275,10 +275,11 @@ func TestAutobanObserve_gates(t *testing.T) {
 	})
 }
 
-// Given 验证爬虫豁免与爬虫伪装拦截同时进入自动封禁喂入。
-// When 按来源资格过滤。
-// Then 只排除真实豁免段，伪装 deny 与普通 WAF 事件继续计数，畸形 ID 不误排除。
-func TestAutobanObserve_crawlerSpoofRemainsEligible(t *testing.T) {
+// Given 阶段 1 预检族（爬虫豁免/爬虫伪装）与非数值 token 随批喂入。
+// When 按阶段 3 口径过滤（2026-10-30 用户裁定：自动封禁只收 WAF 事件）。
+// Then 阶段 1 三族（普通 GeoIP/爬虫豁免/爬虫伪装）与非数值 token 一律不计，
+// 仅 WAF 族（CRS/自定义规则）计数。
+func TestAutobanObserve_stage1PrecheckFamilyExcluded(t *testing.T) {
 	installAutobanFixture(t, "2026-10-14 10:00:00")
 	setAutobanConfigRaw(t, true, 1, 5, "1h", "all", true)
 
@@ -292,13 +293,68 @@ func TestAutobanObserve_crawlerSpoofRemainsEligible(t *testing.T) {
 
 	autobanMu.Lock()
 	defer autobanMu.Unlock()
-	if autobanWindows["203.0.113.10"] != nil {
-		t.Fatal("验证爬虫豁免事件不得进入自动封禁计数")
-	}
-	for _, ip := range []string{"203.0.113.11", "203.0.113.12", "203.0.113.13", "203.0.113.14"} {
-		if w := autobanWindows[ip]; w == nil || w.Count != 1 {
-			t.Fatalf("%s 计数=%+v, want 1（伪装/普通/畸形 ID 不得误排除）", ip, w)
+	for _, ip := range []string{"203.0.113.10", "203.0.113.11", "203.0.113.12", "203.0.113.14"} {
+		if w := autobanWindows[ip]; w != nil {
+			t.Fatalf("%s 阶段 1/非数值事件不得进入自动封禁计数，got %+v", ip, w)
 		}
+	}
+	if w := autobanWindows["203.0.113.13"]; w == nil || w.Count != 1 {
+		t.Fatalf("203.0.113.13 计数=%+v, want 1（CRS WAF 事件照常计数）", w)
+	}
+}
+
+// ---- 阶段 3 口径（2026-10-30 用户裁定）：自动封禁只收 WAF（阶段 3）事件 ----
+//
+// 阶段 1 预检（IP 访问控制/威胁情报/GeoIP/爬虫豁免/伪装）的拦截是策略主动
+// 拒绝，不是攻击证据：同一 IP 被阶段 1 反复拒绝不得累计触发自动封禁（封禁
+// 名单与拦截策略重复表达同一结论，且同一 IP 被重复累计/重复进名单）。
+
+// TestAutobanStage3Eligible 单源判据：仅 WAF 族计入——自定义规则族
+// （id+10000 发射段、本地合成段 ≥1000000、OR 分支高段）∪ CRS 9xxxxx 段；
+// 阶段 1 固定 id、GeoIP 8xxxxx 三族、非数值 token 一律不计。
+func TestAutobanStage3Eligible(t *testing.T) {
+	cases := []struct {
+		name string
+		id   string
+		want bool
+	}{
+		{"阶段1固定id2（ACL 拒绝带）", "2", false},
+		{"阶段1固定id8（GeoIP 链）", "8", false},
+		{"阶段1防御性包含id3", "3", false},
+		{"GeoIP 普通预检段", "800123", false},
+		{"爬虫伪装段", "850012", false},
+		{"CRS 段", "942100", true},
+		{"自定义规则发射id（DB id+10000）", "12345", true},
+		{"本地合成自定义规则段", "1000003", true},
+		{"非数值token", "-", false},
+		{"空token", "", false},
+	}
+	for _, tc := range cases {
+		if got := autobanStage3Eligible(tc.id); got != tc.want {
+			t.Errorf("autobanStage3Eligible(%q)=%v, want %v（%s）", tc.id, got, tc.want, tc.name)
+		}
+	}
+}
+
+// TestAutobanObserveBatch_stage1DoesNotCount 端到端：同一 IP 阶段 1 拦截 3 次
+// + WAF 拦截 1 次，阈值 3 → 计数只 +1、不得达标（首喂/跨 pass 改判补喂/批量
+// 改判三条路径统一经 autobanObserveBatch 咽喉点过滤）。
+func TestAutobanObserveBatch_stage1DoesNotCount(t *testing.T) {
+	installAutobanFixture(t, "2026-10-14 10:00:00")
+	setAutobanConfigRaw(t, true, 3, 5, "1h", "all", true)
+
+	autobanObserveBatch([]autobanFeedItem{
+		{IP: "203.0.113.40", Action: "blocked", RuleTriggered: "2"},
+		{IP: "203.0.113.40", Action: "blocked", RuleTriggered: "8"},
+		{IP: "203.0.113.40", Action: "blocked", RuleTriggered: "800123"},
+		{IP: "203.0.113.40", Action: "blocked", RuleTriggered: "942100"},
+	})
+
+	autobanMu.Lock()
+	defer autobanMu.Unlock()
+	w := autobanWindows["203.0.113.40"]
+	if w == nil || w.Count != 1 || w.Reached {
+		t.Fatalf("阶段 1 事件被计入：%+v, want Count=1 且未达标（仅 WAF 事件计数，阈值 3 不得触发封禁）", w)
 	}
 }
 

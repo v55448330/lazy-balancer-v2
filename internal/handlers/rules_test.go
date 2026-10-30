@@ -80,6 +80,7 @@ func TestCreateRule_enabledACMECreatesCertJob(t *testing.T) {
 	services.ResetCAQueueManagerForTest()
 	services.InitCAQueueManager(func() error { return nil }, t.TempDir())
 	services.GetCAQueueManager().Start()
+	startCertQueueDispatchForTest(t)
 	t.Cleanup(services.ResetCAQueueManagerForTest)
 	if _, err := db.DB.Exec(`INSERT OR REPLACE INTO certificate_configs (id, name, dns_provider, dns_credentials, enabled) VALUES (1, 'test-dns', 'dnspod', '{}', 1)`); err != nil {
 		t.Fatal(err)

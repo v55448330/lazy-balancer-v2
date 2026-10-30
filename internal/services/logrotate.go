@@ -17,82 +17,47 @@ import (
 
 var runtimeLogSizeMB atomic.Int64
 
-var runtimeLogSizeRefresh backgroundWorker
-
-const runtimeLogSizeRefreshLogLabel = "logrotate refresh"
-
-// init 只落兜底阈值（100MB）。worker 不再随包初始化自启
-// init 先于 main 的 db.Initialize，首次 refresh 必撞 nil 库空转，启动后
-// 最长 30s 按兜底 100MB 滚动）——首次刷新由 main 在 db.Initialize 后
-// 显式 StartLogRotate 触发，首读即真实库值。
+// init 只落兜底阈值（100MB）。阈值刷新不再随包初始化自启（init 先于 main 的
+// db.Initialize，首次 refresh 必撞 nil 库空转，启动后最长 30s 按兜底 100MB
+// 滚动）——运行期刷新由 runtime-log-threshold daemon 的 RunTicker 驱动，
+// 装配期首跑由 registerRuntimeLifecycleTasks 同步调用 RefreshRuntimeLogSizeOnce
+// （首读即真实库值，装配期不留兜底窗口）。
 func init() {
 	runtimeLogSizeMB.Store(db.DefaultRuntimeLogSizeMB)
 }
 
-// logRotateRestartWaitMax 是 StartLogRotate 重启路径等待旧 worker 退出的预算
-// （与关停路径 StopLogRotateWithin 的 1s 段预算同量级）。旧 worker 卡在 DB
-// busy_timeout 时不得无界挂起刷新链启动——超时放弃等待并 warn，残留 goroutine
-// 由下一次 Stop/进程退出收尾（与 StopLogRotateWithin 的可重启语义一致）。
-const logRotateRestartWaitMax = 1 * time.Second
-
-// StartLogRotate 启动运行日志尺寸刷新 worker（幂等：重复调用先停旧 worker）。
-// 不返回 done 通道：唯一生产调用方（main 启动链）与测试都不消费——关停同步
-// 语义由 StopLogRotateWithin 承担，返回一个无人读取的通道只会诱导误用。
-func StartLogRotate(ctx context.Context) {
-	workerCtx, done := runtimeLogSizeRefresh.replace(ctx, logRotateRestartWaitMax, runtimeLogSizeRefreshLogLabel)
-	go func() {
-		defer close(done)
-		refresh := func() {
-			// 后台 worker 可能存活到测试/关停收尾之后：此时全局 DB 句柄已
-			// Close，database/sql 在 conn 阶段会 panic。尺寸刷新属于尽力而为，
-			// 不得拖垮进程；转为错误留痕并由下一轮重试。
-			defer func() {
-				if r := recover(); r != nil {
-					if logStateTransition("runtime-log-size-refresh", true) != "" {
-						Logf("warn", "refresh runtime log size panic: %v", r)
-					}
-				}
-			}()
-			database := db.GetDB()
-			if database == nil {
-				return
-			}
-			var mb int
-			if err := database.QueryRow("SELECT COALESCE(runtime_log_size_mb,?) FROM global_config WHERE id=1", db.DefaultRuntimeLogSizeMB).Scan(&mb); err != nil {
-				// 持久失败（如迁移窗口缺列）不再每 30s 一行 info。
-				if logStateTransition("runtime-log-size-refresh", true) != "" {
-					Logf("warn", "refresh runtime log size: %v", err)
-				}
-				return
-			}
-			if logStateTransition("runtime-log-size-refresh", false) != "" {
-				Logf("info", "refresh runtime log size recovered")
-			}
-			if mb > 0 {
-				runtimeLogSizeMB.Store(int64(mb))
-			}
-		}
-		refresh()
-		ticker := time.NewTicker(30 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ticker.C:
-				refresh()
-			case <-workerCtx.Done():
-				return
+// RefreshRuntimeLogSizeOnce 单轮读取并应用运行日志尺寸阈值
+// （runtime-log-threshold daemon 的 RunTicker 工作体；装配期首跑同函数）。
+// 后台轮可能存活到测试/关停收尾之后：此时全局 DB 句柄已 Close，database/sql
+// 在 conn 阶段会 panic。尺寸刷新属于尽力而为，不得拖垮进程；转为错误留痕
+// 并由下一轮重试。持久失败不再每 30s 一行 info（logStateTransition 状态
+// 转换口径）。
+func RefreshRuntimeLogSizeOnce() {
+	defer func() {
+		if r := recover(); r != nil {
+			if logStateTransition("runtime-log-size-refresh", true) != "" {
+				Logf("warn", "refresh runtime log size panic: %v", r)
 			}
 		}
 	}()
-}
-
-// StopLogRotateWithin 有界停止日志尺寸刷新 worker：cancel 后最多等待 within
-// （within<=0=无界）。超时放弃等待并 warn——进程
-// 退出路径用：残留 goroutine 随进程消亡，cancel/done 字段保留，worker 最终
-// 退出后可再次调用完成清零（可重启语义不变）。返回 true=worker 已退出且
-// 状态清零。
-func StopLogRotateWithin(within time.Duration) bool {
-	return runtimeLogSizeRefresh.stopWithin(within, runtimeLogSizeRefreshLogLabel)
+	database := db.GetDB()
+	if database == nil {
+		return
+	}
+	var mb int
+	if err := database.QueryRow("SELECT COALESCE(runtime_log_size_mb,?) FROM global_config WHERE id=1", db.DefaultRuntimeLogSizeMB).Scan(&mb); err != nil {
+		// 持久失败（如迁移窗口缺列）不再每 30s 一行 info。
+		if logStateTransition("runtime-log-size-refresh", true) != "" {
+			Logf("warn", "refresh runtime log size: %v", err)
+		}
+		return
+	}
+	if logStateTransition("runtime-log-size-refresh", false) != "" {
+		Logf("info", "refresh runtime log size recovered")
+	}
+	if mb > 0 {
+		runtimeLogSizeMB.Store(int64(mb))
+	}
 }
 
 // RotatingFileWriter writes to a log file and rotates it once it exceeds the

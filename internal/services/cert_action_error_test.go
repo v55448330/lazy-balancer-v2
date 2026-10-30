@@ -73,7 +73,7 @@ func TestCertificateService_requeueWaitingCAJobs_reportsActionFailure(t *testing
 	useCertActionErrorQueueManager(t)
 	seedRuleWithCAProvider(t, "lb_waiting_fail", "waiting-fail.example.test", 1)
 	if _, err := database.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,ca_available_after,ca_provider_id)
-		VALUES ('lb_waiting_fail','waiting-fail.example.test','waiting_ca',datetime('now','-1 minute'),1)`); err != nil {
+		VALUES ('lb_waiting_fail','waiting-fail.example.test','failed',datetime('now','-1 minute'),1)`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := database.Exec(`CREATE TRIGGER reject_waiting_requeue
@@ -95,7 +95,7 @@ func TestCertificateService_requeueWaitingCAJobs_reportsOrphanDisableFailure(t *
 	_, database := newClusterTestService(t)
 	useCertActionErrorQueueManager(t)
 	if _, err := database.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,ca_available_after,ca_provider_id)
-		VALUES ('lb_waiting_orphan','waiting-orphan.example.test','waiting_ca',datetime('now','-1 minute'),1)`); err != nil {
+		VALUES ('lb_waiting_orphan','waiting-orphan.example.test','failed',datetime('now','-1 minute'),1)`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := database.Exec(`CREATE TRIGGER reject_orphan_disable

@@ -107,6 +107,7 @@ func TestUpdateRule_orphanACME_pendingJobStillConverges200(t *testing.T) {
 	services.ResetCAQueueManagerForTest()
 	services.InitCAQueueManager(func() error { return nil }, t.TempDir())
 	services.GetCAQueueManager().Start()
+	startCertQueueDispatchForTest(t)
 	t.Cleanup(services.ResetCAQueueManagerForTest)
 	certPEM, keyPEM, err := generateTestCert("pend.example.test", time.Now().Add(-time.Hour), time.Now().Add(24*time.Hour))
 	if err != nil {
@@ -135,6 +136,7 @@ func TestUpdateRule_disableViaUpdate_preservesFailedCertJob(t *testing.T) {
 	services.ResetCAQueueManagerForTest()
 	services.InitCAQueueManager(func() error { return nil }, t.TempDir())
 	services.GetCAQueueManager().Start()
+	startCertQueueDispatchForTest(t)
 	t.Cleanup(services.ResetCAQueueManagerForTest)
 
 	response := putUpdateRule(t, harness, "lb_a86_disupd", `{"name":"after","enabled":false}`)
@@ -371,6 +373,7 @@ func TestUpdateRule_orphanACME_downloadedJobConverges200(t *testing.T) {
 	services.ResetCAQueueManagerForTest()
 	services.InitCAQueueManager(func() error { return nil }, t.TempDir())
 	services.GetCAQueueManager().Start()
+	startCertQueueDispatchForTest(t)
 	t.Cleanup(services.ResetCAQueueManagerForTest)
 	certPEM, keyPEM, err := generateTestCert("down.example.test", time.Now().Add(-time.Hour), time.Now().Add(24*time.Hour))
 	if err != nil {

@@ -3,9 +3,12 @@ package services
 // 证书任务重试冷却的服务端单源策略（列表下发 / 服务端门禁 / 任务监控动态行
 // 三处共用）：
 //   - disabled：不可重试（永久条件，不是限流），下发侧为 null（不可判定）；
-//   - issued / waiting_ca：无通用冷却，但 waiting_ca 还要并入 CA 限流退避窗口
-//     （ca_available_after，1–3h，远晚于通用冷却）；
-//   - queued 15 分钟、failed 5 分钟、其余执行态 2 分钟（均自 updated_at 起算，
+//   - issued：无通用冷却；
+//   - failed：通用冷却 5 分钟自 updated_at 起算，但行带 CA 退避窗口
+//     （ca_available_after，B2 失败语义统一后所有失败都写：429=Retry-After
+//     封顶 3h，其余 1h/2h/3h 阶梯）时并入窗口——窗口远晚于通用冷却；
+//   - waiting_ca（仅旧备份/导入存量）：无通用冷却，并入 CA 退避窗口；
+//   - queued 15 分钟、其余执行态 2 分钟（均自 updated_at 起算，
 //     与重试门同一基准）。
 //
 // 两个列表接口（/certificates/jobs 与 /system/tasks 的证书行动态行）统一下发
@@ -37,17 +40,24 @@ func CertJobRetryCooldown(status string) (time.Duration, bool) {
 	}
 }
 
-// CertJobCAcooldownActive 报告任务是否仍处于 CA 限流退避窗口（waiting_ca 且
-// ca_available_after 未到期）。「任务重试」与「手动触发签发」两个入口必须共用
-// 本判据：同状态同语义却一个要求 force、另一个直接重排，会让规则列表的
-// 「重新签发」静默越过冷却、清空 ca_available_after 并继续消耗 CA 配额。
+// CertJobCAcooldownActive 报告任务是否仍处于 CA 退避窗口（ca_available_after
+// 未到期）。B2 失败语义统一后 waiting_ca 停车状态退役：失败统一落 failed 并
+// 携带退避窗口（429=Retry-After 封顶 3h，其余 1h/2h/3h 阶梯）——窗口判据按
+// failed 判定；waiting_ca 仅保留给旧备份/导入带来的存量行（迁移前历史形态），
+// 窗口语义不变。「任务重试」与「手动触发签发」两个入口必须共用本判据：同状态
+// 同语义却一个要求 force、另一个直接重排，会让规则列表的「重新签发」静默越过
+// 冷却、清空 ca_available_after 并继续消耗 CA 配额。
 func CertJobCAcooldownActive(status string, caAvailableAfter sql.NullTime, now time.Time) bool {
-	return status == "waiting_ca" && caAvailableAfter.Valid && now.Before(caAvailableAfter.Time)
+	if !caAvailableAfter.Valid || !now.Before(caAvailableAfter.Time) {
+		return false
+	}
+	return status == "failed" || status == "waiting_ca"
 }
 
 // CertJobRetryRemaining 返回「此刻还剩多少冷却」：通用窗口按 updated_at（缺失
 // 回退 created_at，两列都缺失按刚更新计满窗口，与重试门的 fail-closed 同口径）
-// 扣减已流逝时间；waiting_ca 在 CA 退避窗口内直接取 ca_available_after 的剩余。
+// 扣减已流逝时间；行带 CA 退避窗口（failed/waiting_ca + ca_available_after）
+// 时在窗口内直接取 ca_available_after 的剩余。
 // ok=false 表示永久不可重试（下发侧应表达为 null，而不是「0=现在可重试」）。
 func CertJobRetryRemaining(status string, updatedAt, createdAt, caAvailableAfter sql.NullTime, now time.Time) (time.Duration, bool) {
 	window, retryable := CertJobRetryCooldown(status)

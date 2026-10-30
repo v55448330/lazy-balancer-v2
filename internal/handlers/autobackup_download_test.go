@@ -39,7 +39,7 @@ func TestDownloadAutoBackup_streamsFileAndAuditsAfterOpen(t *testing.T) {
 	router := gin.New()
 	router.GET("/api/v1/auto-backup/:id/download", h.DownloadAutoBackup)
 
-	if _, err := h.RunAutoBackupOnce(context.Background(), "manual", "system", 0); err != nil {
+	if _, err := h.RunAutoBackupOnce(context.Background(), "manual", "system", 1); err != nil {
 		t.Fatalf("RunAutoBackupOnce: %v", err)
 	}
 	rows := autoBackupRows(t, "WHERE trigger_type='manual'")
@@ -75,7 +75,7 @@ func TestDownloadAutoBackup_missingFileAuditsRejectionNotDelivery(t *testing.T) 
 	router := gin.New()
 	router.GET("/api/v1/auto-backup/:id/download", h.DownloadAutoBackup)
 
-	if _, err := h.RunAutoBackupOnce(context.Background(), "manual", "system", 0); err != nil {
+	if _, err := h.RunAutoBackupOnce(context.Background(), "manual", "system", 1); err != nil {
 		t.Fatalf("RunAutoBackupOnce: %v", err)
 	}
 	rows := autoBackupRows(t, "WHERE trigger_type='manual'")
@@ -113,7 +113,7 @@ func TestDownloadAutoBackupDoesNotAuditSuccessWhenDeliveryFails(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	router.GET("/api/v1/auto-backup/:id/download", h.DownloadAutoBackup)
-	if _, err := h.RunAutoBackupOnce(context.Background(), "manual", "system", 0); err != nil {
+	if _, err := h.RunAutoBackupOnce(context.Background(), "manual", "system", 1); err != nil {
 		t.Fatalf("RunAutoBackupOnce: %v", err)
 	}
 	rows := autoBackupRows(t, "WHERE trigger_type='manual'")

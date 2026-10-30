@@ -11,7 +11,8 @@
 // 以「同一桶内累计」为准，UI/API 文案统一称「固定窗口」。
 //
 // 数据流：security-events-ingestion 提交点（securityEventsProcessPass 每批
-// Commit 后）喂 autobanObserveBatch（主节点+启用+口径+WAF 事件四重过滤）→
+// Commit 后）喂 autobanObserveBatch（主节点+启用+口径+WAF 阶段 3 事件五重
+// 过滤）→
 // 固定窗口计数器；autoban 任务（60s 循环、主节点；调度唯一前提=业务启用——
 // PUT 保存联动启停，Descriptor 无 EnabledFn，Run 体首行业务门兜底）每轮
 // 评估候选并执行「观察建议或名单 merge」。merge 读改写+收敛全程持
@@ -548,9 +549,11 @@ func autobanActionMatches(scope, action string) bool {
 	}
 }
 
-// autobanObserveBatch 摄取提交点喂入（每批 Commit 后调用）。四重门：主节点 +
-// 启用 + WAF 事件（rule_triggered 非空）+ 口径。任一门不过整批跳过；批内
-// 逐条按口径过滤。
+// autobanObserveBatch 摄取提交点喂入（每批 Commit 后调用）。五重门：主节点 +
+// 启用 + WAF 事件（rule_triggered 非空）+ 口径 + 阶段 3 族。任一门不过整批
+// 跳过；批内逐条按口径过滤。阶段 3 族门与逐事件门收敛在
+// autobanObserveEventScopedAt——首喂、跨 pass 改判补喂、批量改判三条喂入
+// 路径统一经此，判据单点维护。
 func autobanObserveBatch(items []autobanFeedItem) {
 	if len(items) == 0 || !autobanIsMaster() {
 		return
@@ -572,8 +575,22 @@ func autobanObserveBatch(items []autobanFeedItem) {
 	}
 }
 
-// autobanSourceEligible 只排除真实验证爬虫豁免事件；伪装爬虫是实际 deny，
-// 与普通 WAF 事件一样进入计数。分类复用摄取评分的 ID 编解码单源。
+// autobanStage3Eligible 报告事件是否属阶段 3（WAF 引擎）事件族——自动封禁
+// 只消费 WAF 命中（2026-10-30 用户裁定）：CRS 段 [900000,1000000) ∪ 自定义
+// 规则族（id+10000 发射段、本地合成段 ≥1000000、OR 分支高段）。为什么只收
+// 阶段 3：阶段 1 预检（固定 id {2,3,4,5,7,8,12,14} 与 GeoIP 8xxxxx 三族）的
+// 拦截是策略主动拒绝——IP 名单/地域/信任名单命中即断，不是攻击证据；计入会
+// 让同一 IP 被重复累计、与既有拦截策略重复表达同一结论。段界全部复用事件归因
+// 单源谓词 securityEventsRuleIsCustomFamily / securityEventsRuleIsCRSFamily
+// （与 securityevents.go 归因口径同一事实源），禁止在此复写字面量段界；非数值
+// token 一律不计。
+func autobanStage3Eligible(ruleTriggered string) bool {
+	return securityEventsRuleIsCustomFamily(ruleTriggered) || securityEventsRuleIsCRSFamily(ruleTriggered)
+}
+
+// autobanSourceEligible 只排除真实验证爬虫豁免事件（810xxx 豁免段）。该段已被
+// autobanStage3Eligible 的阶段门整体排除，本门按 2026-10-30 用户裁定显式保留
+// 为独立条款（「爬虫豁免规则仍不计」），不依赖阶段段界的巧合。
 func autobanSourceEligible(ruleTriggered string) bool {
 	return !securityEventsIsCrawlerExemptRule(ruleTriggered)
 }
@@ -582,7 +599,8 @@ func autobanObserveEventScopedAt(cfg AutobanConfig, ip, action, ruleTriggered st
 	// 窗口无效（<=0，消费侧护栏）跳过计数——不落写死兜底（旧 5 分钟
 	// 兜底已删，-③）。
 	window := time.Duration(cfg.WindowMinutes) * time.Minute
-	if ip == "" || ruleTriggered == "" || window <= 0 || !autobanActionMatches(cfg.Scope, action) || !autobanSourceEligible(ruleTriggered) {
+	if ip == "" || ruleTriggered == "" || window <= 0 || !autobanActionMatches(cfg.Scope, action) ||
+		!autobanStage3Eligible(ruleTriggered) || !autobanSourceEligible(ruleTriggered) {
 		return
 	}
 	now := autobanNow()

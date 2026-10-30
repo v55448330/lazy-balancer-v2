@@ -131,6 +131,15 @@ func daemonLifecycleRun(rc taskengine.RunContext, start, stop func()) error {
 // certJobsActiveFn 测试缝；生产=certJobsActive。
 var certJobsActiveFn = certJobsActive
 
+// rearmCertWaitingCAAfterFailure 失败写窗后唤醒 cert-waiting-ca 补扫的入口
+// （测试缝；生产=经 TaskEngine().RearmLoop 有活唤醒——确有窗口待消费时越过
+// 「已停止」态，hasWork=false 零动作不隐式开启调度）。
+var rearmCertWaitingCAAfterFailure = func(hasWork bool) {
+	if te := TaskEngine(); te != nil {
+		te.RearmLoop("cert-waiting-ca", hasWork)
+	}
+}
+
 // TaskEngine 返回全局引擎实例（未初始化返回 nil——测试环境）。
 func TaskEngine() *taskengine.Engine { return taskEnginePtr.Load() }
 
@@ -624,10 +633,14 @@ func InitTaskEngine(watchdogAdminURL, runtimeLogFile string) *taskengine.Engine 
 		Run:         func(rc taskengine.RunContext) error { return runIngestionLoop(rc.Ctx) },
 	})
 
-	// 证书签发：daemonLifecycleRun 真实生命周期挂钩（StartACME/StopACME——
-	// 队列+证书 worker+active 指针随调度开关/角色启停；幂等守卫吸收角色链
-	// 双调用）。RunsOn=MasterOnly：从节点禁签发——daemon 不在从节点启动
-	// （promote 经 SetRole 自动拉起），状态显示实态（从节点=空闲）。
+	// 证书签发：真实生命周期挂钩（StartACME/StopACME——队列+证书 worker+
+	// active 指针随调度开关/角色启停；幂等守卫吸收角色链双调用）+ 引擎承载
+	// 的派发泵（task-engine 标准 v2.2 违规项 #1 修复）：RunTicker 以 100ms
+	// 节拍/唤醒遍历全部 provider 队列派发（DispatchOnce），入队经
+	// CAQueueManager.Wake() 提示。停下时按 stopCertIssuanceLifecycle 既有
+	// 语义收尾（StopACME→queue.Stop→PauseAndDrain 有界等待在途执行退出）。
+	// RunsOn=MasterOnly：从节点禁签发——daemon 不在从节点启动（promote 经
+	// SetRole 自动拉起），状态显示实态（从节点=空闲）。
 	mustRegisterTask(te, taskengine.Descriptor{
 		ID:          "cert-issuance",
 		Family:      "certificates",
@@ -637,10 +650,26 @@ func InitTaskEngine(watchdogAdminURL, runtimeLogFile string) *taskengine.Engine 
 		Kind:        taskengine.KindDaemon,
 		RunsOn:      taskengine.RoleMasterOnly,
 		Run: func(rc taskengine.RunContext) error {
-			// B 完全标准化：真实生命周期挂钩（StartACME/StopACME 语义——队列+
-			// 证书 worker+active 指针；幂等守卫吸收角色链双调用）。启动经导入
-			// 屏障门（导入期间延迟，结束后补启动）。
-			return daemonLifecycleRun(rc, startCertIssuanceLifecycle, stopCertIssuanceLifecycle)
+			// 启动经导入屏障门（导入期间延迟，结束后补启动）；stop 恒执行
+			// （deferred）：start 半启动后 panic 也必须清理——已启动的 ACME
+			// 队列不得残留运行。
+			defer stopCertIssuanceLifecycle()
+			startCertIssuanceLifecycle()
+			// 派发泵归口引擎节拍：唤醒通道由队列管理器单源提供；管理器未装配
+			//（nil）时 WakeCh/DispatchOnce 均安全退化为纯节拍空转。
+			qm := GetCAQueueManager()
+			taskengine.RunTicker(rc.Ctx, 100*time.Millisecond, qm.WakeCh(), qm.DispatchOnce)
+			return nil
+		},
+		// 只读投影（CAQueueStatusSnapshot）：有在途执行或待派发任务时镜像
+		// running，任务监控把签发队列活动呈现为「运行中」；空闲返回空串回落
+		// 引擎执行实态（词表归一见 taskmonitor：非 idle/running/failed 值不得
+		// 直通状态列，故计数细节不入镜像词）。
+		StatusFn: func() string {
+			if snap := GetCAQueueManager().StatusSnapshot(); snap.Running > 0 || snap.Pending > 0 {
+				return "running"
+			}
+			return ""
 		},
 	})
 
@@ -1020,6 +1049,11 @@ func InitTaskEngine(watchdogAdminURL, runtimeLogFile string) *taskengine.Engine 
 	// BootSync 完成后解除 tick 暂停——此前 ticker 在
 	// NewEngine 即起跑，周期/定时任务可在配置载入前执行首轮。
 	te.ResumeScheduling()
+	// 运行期常驻族（metrics 采集/清理、rollup 预热、caddy-restart 监听、
+	// 限流桶清扫、API-Key 用量落盘、日志阈值、时区刷新）——标准 v2.2 §6.5
+	// 归口项；描述符与工作体在同包 taskengine_wire_runtime.go。自带偏好门，
+	// 因此须在 ResumeScheduling 之后、角色对账之前注册并启动。
+	registerRuntimeLifecycleTasks(te)
 	startRoleReconciler(te)
 	return te
 }

@@ -29,7 +29,7 @@ func TestFailJobTruncatesMessage(t *testing.T) {
 	jobID, _ := seedCertificateJob(t, "queued")
 	longDetail := strings.Repeat("中", 400) + strings.Repeat("detail:", 300)
 
-	failJob(jobID, longDetail)
+	failJob(jobID, longDetail, false)
 
 	var message string
 	if err := db.DB.QueryRow("SELECT message FROM cert_jobs WHERE id=?", jobID).Scan(&message); err != nil {

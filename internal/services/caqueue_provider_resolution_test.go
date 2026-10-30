@@ -12,12 +12,12 @@ import (
 // 直构 &CAQueueManager{queues: …} 的用例只断言解析/入队/落库，若让
 // enqueueLocked → newCAQueue 用默认执行体（NewCertIssuer(...).Issue）建队列，
 // 用例会把真实 ACME 流程拉到网络，结果依赖外部服务与网络时延。
-// loop 必须照常启动：Stop/PauseAndDrain 都要等 loopDone 关闭。
+// 自建泵已退役（task-engine 标准 v2.2 违规项 #1）：不启 loop，断言全为
+// 同步读、零调度竞态。
 func stubProviderQueueWithoutIssuance(t *testing.T, manager *CAQueueManager, provider models.CAProvider) *caQueue {
 	t.Helper()
 	queue := newCAQueue(provider, func() error { return nil }, t.TempDir())
 	queue.executeFn = func(context.Context, queueItem, models.CAProvider) error { return nil }
-	go queue.loop()
 	t.Cleanup(queue.stop)
 	manager.mu.Lock()
 	manager.queues[provider.ID] = queue

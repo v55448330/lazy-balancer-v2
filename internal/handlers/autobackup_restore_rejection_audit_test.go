@@ -49,7 +49,7 @@ func restoreRouter(h *Handlers) *gin.Engine {
 // seedManualBackup 生成一条真实手动备份行并返回行视图字段。
 func seedManualBackup(t *testing.T, h *Handlers) (int64, string) {
 	t.Helper()
-	if _, err := h.RunAutoBackupOnce(context.Background(), "manual", "system", 0); err != nil {
+	if _, err := h.RunAutoBackupOnce(context.Background(), "manual", "system", 1); err != nil {
 		t.Fatalf("RunAutoBackupOnce: %v", err)
 	}
 	rows := autoBackupRows(t, "WHERE trigger_type='manual'")

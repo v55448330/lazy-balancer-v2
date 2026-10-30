@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"context"
 	"fmt"
 	"net/http"
 	"testing"
@@ -25,17 +24,16 @@ func TestThreatRollup_wideWindowBackfillsUnderWarmer(t *testing.T) {
 	// 30h 前的事件：在 24h 常态窗口之外、7d 窗口之内。
 	seedThreatScreenEvent(t, utcStringAgo(30*time.Hour), "93.184.216.7", "942100", "SQL Injection", "blocked")
 
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(func() {
-		cancel()
-		threatRollupWarmerWg.Wait()
-	})
-	StartThreatRollupWarmer(ctx)
+	// warmer 单轮工作体同步执行（节拍归 threat-rollup-warmer daemon）：
+	// 入口置位已接管标志，请求路径按持久 coverage 续做。
+	if err := RunThreatRollupWarmerRound(); err != nil {
+		t.Fatalf("warmer round: %v", err)
+	}
 
 	// 回填按有界批推进（单次最多 24h 旧侧）：轮询请求直至旧侧补齐——这正是
 	// 「按持久 coverage 续做」的契约（旧实现永不补齐，任何轮次都是 0）。
 	var payload threatScreenR79Payload
-	for attempt := 0; attempt < 3; attempt++ {
+	for range 3 {
 		payload = getThreatScreenR79(t, router, "/security/overview/threat-screen?hours=168")
 		if payload.Data.Hours != 168 {
 			t.Fatalf("hours=%d, want 168", payload.Data.Hours)
@@ -56,10 +54,9 @@ func TestThreatRollup_unreadyWarmerFallsBackToLazyFixation(t *testing.T) {
 	router := newThreatScreenRouter(t, newThreatMetricsServer(t).URL)
 	seedThreatScreenEvent(t, utcStringAgo(5*time.Minute), "93.184.216.7", "942100", "SQL Injection", "blocked")
 
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // warmer 立即退出：从未完成首轮
-	StartThreatRollupWarmer(ctx)
-	threatRollupWarmerWg.Wait()
+	// 「warmer 已接管但首轮从未成功」形态：直接置位标志（daemon 首轮失败即
+	// 此状态）——不得把「已启动」当作「已有覆盖」。
+	threatRollupWarmerStarted.Store(true)
 
 	payload := getThreatScreenR79(t, router, "/security/overview/threat-screen")
 	if payload.Data.TotalEvents != 1 {

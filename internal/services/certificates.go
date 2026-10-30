@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1260,8 +1261,10 @@ func certScanDatabaseReady() bool {
 	return db.DB != nil
 }
 
-// certJobsActive 报告是否存在非终态证书任务（issued/failed/disabled 之外）——
-// 含 stranded queued / 断链 downloaded / 停车 waiting_ca 全部孤儿形态。
+// certJobsActive 报告是否存在需要周期通道的证书任务——issued/disabled 之外的
+// 状态，外加「failed + ca_available_after 非空」（B2 失败语义统一：退避窗口
+// 未到期的失败行由 cert-waiting-ca 30s 补扫按到期重排，属在途信号）；failed +
+// 窗口 NULL 是终态（已达上限仅手动重试），不计入。
 func certJobsActive() bool {
 	if db.DB == nil {
 		// 启动/测试装配窗口没有可执行的数据库工作；与查询错误的「宁扫勿漏」
@@ -1269,7 +1272,9 @@ func certJobsActive() bool {
 		return false
 	}
 	var n int
-	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM cert_jobs WHERE status NOT IN ('issued','failed','disabled')`).Scan(&n); err != nil {
+	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM cert_jobs
+		WHERE status NOT IN ('issued','failed','disabled')
+		   OR (status = 'failed' AND ca_available_after IS NOT NULL)`).Scan(&n); err != nil {
 		return true // 判定失败按有活处理——宁扫勿漏（安全网语义）
 	}
 	return n > 0
@@ -1500,9 +1505,10 @@ func CertReconcileOnce(ctx context.Context) error {
 	return nil
 }
 
-// requeueWaitingCAJobs re-enqueues cert jobs parked in 'waiting_ca' once
-// their CA cooling period has elapsed. This covers first-time issuance jobs
-// (expires_at IS NULL) that renewExpiringCertificates cannot see.
+// requeueWaitingCAJobs re-enqueues cert jobs whose CA retry window (failed +
+// ca_available_after) has elapsed. B2 失败语义统一后 waiting_ca 停车状态退役：
+// 429/其它失败统一落 failed 并携带退避窗口，本扫描即「failed + 窗口到期重排」
+// 的唯一周期属主（首次签发失败的 30 分钟冷却与临期续签仍由续期巡检通道负责）。
 // 返回（冷却到期重排队数, 孤儿禁用数）——供 30s 补扫节拍的动作计数摘要
 // （无动作不写空转行）。
 // 返回（冷却到期重排队数, 孤儿禁用数, error）：查询/迭代/关闭/单行读取失败都
@@ -1521,13 +1527,10 @@ type waitingCACandidate struct {
 // scanWaitingCACandidates 在 s.mu 内完成「查询 → 读全量候选 → 关闭结果集」，
 // 逐任务处置与入队留给调用方在锁外执行。
 //
-// 候选谓词与孤儿 sweep 同口径：规则删除/迁移/停用后的 waiting_ca 任务不得重排
-// 签发（ruleBound 由调用方判定）。冷却时刻缺席（ca_available_after IS NULL）的
-// waiting_ca 行同样收进来：正常运行期 markJobWaitingCA 恒写非空冷却时刻，NULL
-// 只可能来自导入/旧备份/带外改库，而这类行此前没有任何周期通道（补扫要求非空、
-// requeueStrandedQueuedJobs 只收 queued、续期扫描只收有到期时间的行），只能在
-// 重启/Resume/手动重试时收敛。沉降阈值 10min 与启动恢复的 deploymentWindowNullSettle
-// 同款：刚被外部写入行不得与在途写侧竞争。
+// 候选谓词（B2 失败语义统一）：status='failed' 且退避窗口（ca_available_after）
+// 已到期。窗口 NULL 的 failed 行不收：已达 cert_renewal_attempts 上限的行停止
+// 自动重试（仅手动），NULL 只可能来自上限终态/导入/旧备份——上限行有续期巡检
+// 的上限分支告警，导入行有启动恢复/手动重试通道，不需要本扫描复活。
 func (s *CertificateService) scanWaitingCACandidates() ([]waitingCACandidate, []error, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1538,12 +1541,9 @@ func (s *CertificateService) scanWaitingCACandidates() ([]waitingCACandidate, []
 		       CASE WHEN r.caddy_id IS NOT NULL AND r.enabled=1 AND r.enable_tls=1 AND r.tls_source='acme_dns' THEN 1 ELSE 0 END
 		FROM cert_jobs j
 		LEFT JOIN lb_rules r ON r.caddy_id=j.rule_id
-		WHERE j.status = 'waiting_ca'
-		  AND (
-			(j.ca_available_after IS NOT NULL AND datetime(j.ca_available_after) <= datetime('now'))
-			OR (j.ca_available_after IS NULL
-			    AND datetime(COALESCE(j.updated_at,j.created_at)) <= datetime('now','-10 minutes'))
-		  )
+		WHERE j.status = 'failed'
+		  AND j.ca_available_after IS NOT NULL
+		  AND datetime(j.ca_available_after) <= datetime('now')
 	`)
 	if err != nil {
 		Logf("error", "waiting_ca scan: query failed: %v", err)
@@ -1610,7 +1610,11 @@ func (s *CertificateService) requeueWaitingCAJobs(gates ...func() error) (requeu
 			return requeued, disabled, gateErr
 		}
 		if !certJobRuleApplicable(job.ruleBound, job.ruleDomain, job.domain) {
-			if err := transitionJob(db.DB, job.id, nonTerminalJobStatuses, "disabled", map[string]any{"message": "关联规则已不再使用当前 ACME 证书任务"}); err != nil {
+			// B2 失败语义统一：failed（带退避窗口）行是本扫描的合法候选，
+			// 孤儿形态同样收敛到 disabled——from 集合=非终态全集+failed
+			//（nonTerminalJobStatuses 不含终态 failed，直接复用会 0 行命中）。
+			disableFrom := append(slices.Clone(nonTerminalJobStatuses), "failed")
+			if err := transitionJob(db.DB, job.id, disableFrom, "disabled", map[string]any{"message": "关联规则已不再使用当前 ACME 证书任务"}); err != nil {
 				if !errors.Is(err, ErrJobTransitionConflict) {
 					actionErr = errors.Join(actionErr, fmt.Errorf("禁用孤儿 CA 冷却任务 %d: %w", job.id, err))
 					Logf("error", "waiting_ca scan: disable orphaned job %d failed: %v", job.id, err)
@@ -1622,7 +1626,14 @@ func (s *CertificateService) requeueWaitingCAJobs(gates ...func() error) (requeu
 			continue
 		}
 		_, changed, err := qm.EnqueueIfActive(job.caProviderID, job.id, job.ruleID, job.domain, func() (int, bool, error) {
-			err := transitionJob(db.DB, job.id, []string{"waiting_ca"}, "queued", map[string]any{"message": "冷却结束，重新排队签发"})
+			// 窗口/错误码残留清理与续期巡检的重排迁移同字段集：failed→queued
+			// 后若以非 429 原因再次失败，recordJobFailure 会写新窗口/错误码，
+			// 旧值不得跨失败轮残留（UI/导出看到与当前轮矛盾的窗口）。
+			err := transitionJob(db.DB, job.id, []string{"failed"}, "queued", map[string]any{
+				"message":            "冷却结束，重新排队签发",
+				"ca_available_after": nil,
+				"last_error_code":    nil,
+			})
 			if errors.Is(err, ErrJobTransitionConflict) {
 				return job.id, false, nil
 			}
@@ -2405,29 +2416,12 @@ func (s *CertificateService) renewExpiringCertificates(ctx context.Context) erro
 			return errors.Join(actionErr, gateErr)
 		}
 		if j.RenewalAttempts >= maxAttempts {
-			if j.Status == "waiting_ca" {
-				// 终态迁移与 caqueue.markJobWaitingCA 的上限分支同字段集
-				// ——清 ca_available_after/last_error_code，避免 failed 行残留冷却
-				// 时间与 429 错误码（UI/导出看到与终态矛盾的残留字段）。
-				if err := transitionJob(db.DB, j.ID, []string{"waiting_ca"}, "failed", map[string]any{
-					"message":            "已达到最大重试次数，请检查 CA 配置后手动重签",
-					"ca_available_after": nil,
-					"last_error_code":    nil,
-				}); err != nil {
-					if !errors.Is(err, ErrJobTransitionConflict) {
-						actionErr = errors.Join(actionErr, fmt.Errorf("续期任务 %d（规则 %s）转为失败终态: %w", j.ID, j.RuleID, err))
-					}
-					Logf("error", "Renewal: failed to convert waiting_ca job %d to failed: %v", j.ID, err)
-				} else {
-					RecordAuditLog("system", "签发失败", "证书任务", FormatAuditDetail(AuditJobPart(j.ID), AuditRulePart(j.RuleID), AuditResultPart("max_attempts")), "")
-				}
-			} else {
-				// issued/failed 任务无终局转换可做——此前
-				// 零状态变化/零日志/零审计，每 6h 被重复选出并入摘要后静默
-				// continue。留 warn 痕使「仅手动重试可达」对操作者可见（幂等：
-				// 6h 一条，重置 renewal_attempts 才会再进自动重试）。
-				Logf("warn", "证书任务 %d 已达最大重试次数（%d），仅手动重试可达", j.ID, maxAttempts)
-			}
+			// B2 失败语义统一：waiting_ca 停车状态已退役（迁移后存量无此状态，
+			// 失败统一落 failed 且达上限时窗口已为 NULL）——不再有 waiting_ca→
+			// failed 的终局转换可做；issued/failed 一律留 warn 痕使「仅手动重试
+			// 可达」对操作者可见（幂等：每 6h 一条，重置 renewal_attempts 才会
+			// 再进自动重试）。
+			Logf("warn", "证书任务 %d 已达最大重试次数（%d），仅手动重试可达", j.ID, maxAttempts)
 			continue
 		}
 
@@ -2445,10 +2439,10 @@ func (s *CertificateService) renewExpiringCertificates(ctx context.Context) erro
 			source = "first_issuance_retry"
 		}
 		_, changed, err := qm.EnqueueIfActive(j.CAProviderID, j.ID, j.RuleID, j.Domain, func() (int, bool, error) {
-			// 冷却残留必须与 markJobWaitingCA/上限分支同字段集清理：
-			// waiting_ca→queued 后若以非 429 原因失败，failed 行仍带旧 429
-			// 错误码与过期冷却时刻，导出/备份/未来消费方会看到与终态矛盾的字段。
-			err := transitionJob(db.DB, j.ID, []string{"issued", "failed", "waiting_ca"}, "queued", map[string]any{
+			// 冷却残留必须与 recordJobFailure（统一失败写侧）的字段集对齐：
+			// failed→queued 后若以非 429 原因再次失败，会写入新窗口/错误码，
+			// 旧值不得跨失败轮残留（导出/备份/未来消费方看到矛盾字段）。
+			err := transitionJob(db.DB, j.ID, []string{"issued", "failed"}, "queued", map[string]any{
 				"message":            message,
 				"ca_available_after": nil,
 				"last_error_code":    nil,
@@ -2720,6 +2714,7 @@ func scanRenewalCandidates(ctx context.Context, rows *sql.Rows, days int, warnPr
 		ctx = context.Background()
 	}
 	now := time.Now()
+	window := time.Duration(days) * 24 * time.Hour
 	selectedByRule := make(map[string]CertificateSelection)
 	selectionLoaded := make(map[string]bool)
 	selectionFailed := make(map[string]bool)
@@ -2768,7 +2763,6 @@ func scanRenewalCandidates(ctx context.Context, rows *sql.Rows, days int, warnPr
 		if selected {
 			canonicalSelected, selectedErr := CanonicalACMEDomains(selection.Candidate.Domain)
 			if selectedErr == nil && canonicalSelected == canonicalRule {
-				window := time.Duration(days) * 24 * time.Hour
 				// 窗口门按证书实际寿命收敛（单源 certRenewalWindowForLifetime）：
 				// 配置窗口与真实寿命接近时，原样入队会让相邻两次续签间隔退化到
 				// 小时级（每日/亚日级整轮重签 → CA 重复证书限流 → 续签链终止）。
@@ -2781,6 +2775,15 @@ func scanRenewalCandidates(ctx context.Context, rows *sql.Rows, days int, warnPr
 					continue
 				}
 			}
+		}
+		// 抖动闸门（2026-10-30 裁定）：入队判据 = expires_at − renewalDays −
+		// jitter(rule_id) ≤ now（即 expires_at 晚于 now+窗口+自身抖动的行本轮
+		// 跳过），各规则的入队时刻按 rule_id 确定性摊开在 6h 区间，不再在窗口
+		// 边界扎堆。jitter 单源 certjitter.go（前后端同算法+固定向量表）；前端
+		// 「自动重签时间」显示同一时刻。无 expires_at 的行（首次签发重试）旁路。
+		// 收敛只发生在 PEM 分支（恒弱于原始窗口），本门不会把已判到期的行拦回。
+		if j.ExpiresAt.Valid && j.ExpiresAt.Time.After(now.Add(window).Add(certRenewalJitter(j.RuleID))) {
+			continue
 		}
 		jobs = append(jobs, j)
 	}
@@ -2808,20 +2811,27 @@ func (s *CertificateService) CheckExpiration(ctx context.Context) ([]models.Cert
 	// 历史/导入的 issued + NULL expires_at 也必须进入候选扫描。
 	// scanRenewalCandidates 会按 PEM 的真实 NotAfter 跳过仍在窗口外的证书；
 	// 临期或材料缺失的行则进入续期，不再因 NULL 永久失联。
+	//
+	// 预筛窗口按「窗口 + 抖动上界」放宽 +6h（certRenewalJitter，2026-10-30 裁定）：
+	// 各规则的入队时刻按 rule_id 确定性提前最多 6h，预筛不放宽会把这些行整轮
+	// 排除、抖动沦为死字母；逐行闸门在 scanRenewalCandidates 按各规则自身抖动收敛。
 	rows, err := db.DB.QueryContext(ctx, `
 		SELECT j.id, j.rule_id, j.domain, j.status, j.expires_at, COALESCE(j.ca_provider_id,0), COALESCE(j.renewal_attempts,0), j.ca_available_after, COALESCE(j.last_error_code,''),r.domain
 		FROM cert_jobs j
 		JOIN lb_rules r ON r.caddy_id=j.rule_id
 		WHERE (
 			(j.expires_at IS NOT NULL
-			 AND datetime(j.expires_at) <= datetime('now', '+' || ? || ' days')
-			 AND j.status IN ('issued', 'failed', 'waiting_ca'))
+			 AND datetime(j.expires_at) <= datetime('now', '+' || ? || ' days', '+' || ? || ' seconds')
+			 AND j.status IN ('issued', 'failed'))
 			OR (j.expires_at IS NULL AND j.status = 'issued')
 		  )
-		  AND (j.status != 'waiting_ca' OR j.ca_available_after IS NULL OR datetime(j.ca_available_after) <= datetime('now'))
+		  -- B2 失败语义统一：waiting_ca 退役。failed 行按退避窗口门控——
+		  -- 窗口在未来的行（含 429 Retry-After，最长 3h）不进入续期候选，
+		  -- 到期（或 NULL=已达上限，仅告警不重排）的行照常选出。
+		  AND (j.status != 'failed' OR j.ca_available_after IS NULL OR datetime(j.ca_available_after) <= datetime('now'))
 		  AND r.enabled=1 AND r.enable_tls=1 AND r.tls_source='acme_dns'
 		ORDER BY j.expires_at ASC
-	`, days)
+	`, days, certRenewalJitterWindowSeconds)
 	if err != nil {
 		// 查询失败显式上抛（此前 return nil 被巡检当成「无候选」
 		// 并写假成功摘要）。

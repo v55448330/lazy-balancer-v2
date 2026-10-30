@@ -32,29 +32,6 @@ func TestShutdownWithTimeout_syncSegmentIsCappedAndACMEKeepsBudget(t *testing.T)
 	}
 }
 
-// TestStopWithinIfBudgeted_skipsWhenBudgetExhausted 钉住「segment()=0 不传给
-// Stop*Within」：被调方把 within<=0 当无界等待，直接传 0 会把预算门反转。
-func TestStopWithinIfBudgeted_skipsWhenBudgetExhausted(t *testing.T) {
-	calls := 0
-	stop := func(time.Duration) bool { calls++; return true }
-
-	if stopWithinIfBudgeted(0, stop) {
-		t.Fatal("预算为 0 时不应执行停止")
-	}
-	if stopWithinIfBudgeted(-time.Second, stop) {
-		t.Fatal("负预算时不应执行停止")
-	}
-	if calls != 0 {
-		t.Fatalf("预算耗尽时仍调用了停止 %d 次", calls)
-	}
-	if !stopWithinIfBudgeted(500*time.Millisecond, stop) {
-		t.Fatal("正预算时必须执行停止")
-	}
-	if calls != 1 {
-		t.Fatalf("正预算时停止调用 %d 次, want 1", calls)
-	}
-}
-
 // TestStartACME_waitsForInFlightStopBeforeNewGeneration 钉住跨代隔离：
 // 关停等待超时（停止 goroutine 仍在跑）后，StartACME 必须先等它收尾再拉起新
 // 一代——否则在途 queue.Stop 会关掉新一代队列（证书签发静默停摆）。

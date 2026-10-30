@@ -52,7 +52,7 @@ func TestRunAutoBackupOnce_skipsPruneWhenKeepSettingUnreadable(t *testing.T) {
 	}
 
 	// When 跑一轮备份。
-	if _, err := h.RunAutoBackupOnce(context.Background(), "schedule", "system", 0); err != nil {
+	if _, err := h.RunAutoBackupOnce(context.Background(), "schedule", "system", 1); err != nil {
 		t.Fatalf("备份失败（读取保留份数失败不得阻断备份本体）: %v", err)
 	}
 
@@ -72,7 +72,7 @@ func TestRunAutoBackupOnce_skipsPruneWhenKeepSettingUnreadable(t *testing.T) {
 	if _, err := db.DB.Exec(`ALTER TABLE global_config RENAME COLUMN auto_backup_keep_unavailable TO auto_backup_keep`); err != nil {
 		t.Fatalf("restore keep column: %v", err)
 	}
-	if _, err := h.RunAutoBackupOnce(context.Background(), "schedule", "system", 0); err != nil {
+	if _, err := h.RunAutoBackupOnce(context.Background(), "schedule", "system", 1); err != nil {
 		t.Fatalf("恢复后备份失败: %v", err)
 	}
 

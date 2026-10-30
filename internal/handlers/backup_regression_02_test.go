@@ -634,6 +634,7 @@ func TestV1ImportQueueFailureStillConverges(t *testing.T) {
 	services.ResetCAQueueManagerForTest()
 	services.InitCAQueueManager(func() error { return nil }, t.TempDir())
 	services.GetCAQueueManager().Start()
+	startCertQueueDispatchForTest(t)
 	t.Cleanup(services.ResetCAQueueManagerForTest)
 	// 注入队列恢复失败（与 v2 钉测同一测试缝）。
 	oldRequeue := requeueNonTerminalCertJobs

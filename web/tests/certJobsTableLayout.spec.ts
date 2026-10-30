@@ -7,7 +7,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { section, code } from './_helpers.ts'
+import { section, code, member } from './_helpers.ts'
 import {
   CERT_JOB_COLUMNS_MIN_WIDTH,
   CERT_JOB_COLUMN_WIDTHS,
@@ -53,12 +53,19 @@ const COLUMN_IDS: Record<string, CertJobColumnId> = {
 /** 固定宽列（不参与「宽容器占满」的均分）；其余为弹性 min-width 列。 */
 const FIXED_COLUMNS: Partial<Record<CertJobColumnId, true>> = { status: true, attempts: true, actions: true }
 
-test('消息列已删除：message 由状态标签 hover tooltip 承载', () => {
+test('状态列 hover=派生口径（2026-10-30 裁定）：CA 原文只在「日志」对话框', () => {
   assert.doesNotMatch(tableBody, /label="消息"/)
   const status = columnBody('状态')
-  assert.match(status, /<el-tooltip[^>]*:disabled="!row\.message"/, 'message 为空时不得挂空 tooltip')
-  assert.match(status, /:content="row\.message"/)
-  assert.match(status, /certJobStatusLabel\(row\.status\)/)
+  // 旧契约（:content="row.message"）会把 CA 原文挂上状态标签——终态失败的
+  // message 即 CA 错误原文，只在「日志」对话框呈现。
+  assert.doesNotMatch(status, /row\.message/, '状态列模板不得直接消费 message（CA 原文）')
+  assert.match(status, /:disabled="!statusHover\(row(?: as [A-Za-z]+)?\)"/, '派生 hover 为空时不得挂空 tooltip')
+  assert.match(status, /:content="statusHover\(row(?: as [A-Za-z]+)?\)"/)
+  assert.match(status, /rowStatusLabel\(row(?: as [A-Za-z]+)?\)/, '标签必须走细分单源包装（失败/续签失败/需人工）')
+  // 脚本侧：四态走 certJobStatusHover 单源，其余在途行保留在途说明（stage 文本）
+  const hoverFn = member(page, 'const statusHover')
+  assert.match(hoverFn, /certJobStatusHover\(/, '四态 hover 必须经 utils 单源派生')
+  assert.match(hoverFn, /row\.message/, '非四态在途行保留在途说明 tooltip')
 })
 
 test('列宽基线取自 CERT_JOB_COLUMN_WIDTHS 单源（弹性 min-width / 固定 width）', () => {

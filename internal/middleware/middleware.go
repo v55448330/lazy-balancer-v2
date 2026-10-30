@@ -678,13 +678,15 @@ func abortClusterMachineRateLimit(c *gin.Context, retryAfter int) {
 	c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{"code": http.StatusTooManyRequests, "message": "集群机器接口请求过于频繁，请稍后再试"})
 }
 
-var loginRateLimitCleanupOnce sync.Once
-
-// sweepExpiredRateLimitBuckets 删除已过窗（until 早于 now）的限流桶，返回删除
+// SweepRateLimitBuckets 删除已过窗（until 早于 now）的限流桶，返回删除
 // 数量。锁序与调用链一致：先 map 锁、再逐桶锁；桶在两次加锁之间被淘汰是良性的
 // ——本次请求的计数落在已脱表桶上，本分钟该来源少记 1 次（下一请求新建桶
 // count=1），不构成限流绕过。
-func sweepExpiredRateLimitBuckets(now time.Time) int {
+//
+// 节拍归 ratelimit-bucket-sweep daemon（RunTicker 60s）——原 SetupRouter 自建
+// 的 1min goroutine 泵已按 task-engine 标准 v2.2 退役，middleware 只保留
+// 无状态工作体。
+func SweepRateLimitBuckets(now time.Time) int {
 	removed := 0
 	loginRateBuckets.Lock()
 	defer loginRateBuckets.Unlock()
@@ -697,18 +699,6 @@ func sweepExpiredRateLimitBuckets(now time.Time) int {
 		bucket.mu.Unlock()
 	}
 	return removed
-}
-
-func startLoginRateLimitCleanup() {
-	loginRateLimitCleanupOnce.Do(func() {
-		go func() {
-			ticker := time.NewTicker(time.Minute)
-			defer ticker.Stop()
-			for range ticker.C {
-				sweepExpiredRateLimitBuckets(time.Now())
-			}
-		}()
-	})
 }
 
 // requestLogFormatter 请求日志行格式（独立函数以便格式钉测试消费）。
@@ -767,7 +757,6 @@ func (g recordingRouterGroup) DELETE(path string, handlers ...gin.HandlerFunc) {
 }
 
 func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
-	startLoginRateLimitCleanup()
 	services.ApplyLogLevel()
 
 	r := gin.New()

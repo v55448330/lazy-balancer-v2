@@ -217,6 +217,9 @@ test('脚本存在性断言文件禁止裸 source()/repoSource() 回流', () => 
   assert.doesNotMatch("import * as helpers from '../src/utils/hasOwn.ts'", rawImport, '判据误伤非 _helpers 的命名空间导入')
   const readSpec = (name: string): string => readFileSync(new URL(`./${name}`, import.meta.url), 'utf8')
   const allowedRaw = new Set([
+    // 删除类守卫：语义是「符号不得再出现」，连注释/字符串残留也算审计残留，
+    // 剥注释视图会放过这类残留。
+    'aclAssociateSidesRemoved.spec.ts',
     // 全体断言为模板文案/文档注释钉（用例名标注「文档钉」）；代码存在性断言
     // 一律走 code()/repoCode()，注释掉实现必须能红。
     'frontendWiringContracts.spec.ts',

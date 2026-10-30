@@ -36,6 +36,14 @@ type Logger interface {
 	Log(stage, message string)
 }
 
+// FileOnlyLogger 是 Logger 的可选扩展：LogFileOnly 只写任务日志文件、
+// 不改任务行状态——签发错误路径的 DNS 清理等「非生命周期推进」阶段使用。
+// 实现方：services.jobLogger。Logger 实现未实现本接口时（测试桩），错误路径
+// 清理回退 Log。
+type FileOnlyLogger interface {
+	LogFileOnly(stage, message string)
+}
+
 // logf 是包级日志接缝（镜像 services/certjoblog.go certJobLogWarnf
 // 先例）：默认落到标准 log（stdout）；acme 是独立 module 边界（services 反向
 // 依赖 acme，acme 不得回依赖），故由 cmd/server/main.go 装配时注入

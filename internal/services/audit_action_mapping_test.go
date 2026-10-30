@@ -358,8 +358,9 @@ func loadFrontendAuditTone(t *testing.T) *frontendAuditTone {
 		t.Fatalf("read %s: %v", frontendAuditToneSource, err)
 	}
 	tone := parseFrontendAuditTone(t, data, frontendAuditToneSource)
-	// 当前单源登记 68 条；等值门同时拦截整表漏解析与未经审查的新增/删除。
-	const registeredExceptionCount = 68
+	// 当前单源登记 69 条（新增「同步停止」：切从后 cluster-sync 保持用户停止态）；
+	// 等值门同时拦截整表漏解析与未经审查的新增/删除。
+	const registeredExceptionCount = 69
 	if len(tone.exceptions) != registeredExceptionCount {
 		t.Fatalf("%s 解析漂移：例外表解析到 %d 条（登记值 %d）——请同步审查映射并更新解析", frontendAuditToneSource, len(tone.exceptions), registeredExceptionCount)
 	}

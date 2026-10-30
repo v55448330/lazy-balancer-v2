@@ -26,6 +26,7 @@ func TestIssueCertificate_batchSkipsCooldownFailedJobs(t *testing.T) {
 	services.ResetCAQueueManagerForTest()
 	services.InitCAQueueManager(func() error { return nil }, t.TempDir())
 	services.GetCAQueueManager().Start()
+	startCertQueueDispatchForTest(t)
 	t.Cleanup(services.ResetCAQueueManagerForTest)
 	// Given：两条 ACME 规则各有一个 failed 任务——cool44 失败于 1 分钟前（冷却中），
 	// ready44 失败于 10 分钟前（已过 5 分钟冷却）

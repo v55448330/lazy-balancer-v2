@@ -323,6 +323,7 @@ func TestBeginConfigImport_preservesStoppedCAQueue(t *testing.T) {
 	t.Cleanup(services.ResetCAQueueManagerForTest)
 	services.InitCAQueueManager(func() error { return nil })
 	services.GetCAQueueManager().Start()
+	startCertQueueDispatchForTest(t)
 	manager := services.GetCAQueueManager()
 	manager.PauseAndDrain()
 	if manager.IsActive() {
@@ -351,6 +352,7 @@ func TestBeginConfigImport_certQueueDrainTimeoutAudits(t *testing.T) {
 	t.Cleanup(services.ResetCAQueueManagerForTest)
 	services.InitCAQueueManager(func() error { return nil })
 	services.GetCAQueueManager().Start()
+	startCertQueueDispatchForTest(t)
 	// 执行中且不响应取消的条目：PauseAndDrain 退役队列后 active 仍非空。
 	services.GetCAQueueManager().MarkJobRunningForTest("rule-drain", 4242)
 

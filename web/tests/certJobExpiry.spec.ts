@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { certJobEffectiveNotAfter, certJobRenewalAt, certRenewalWindowConverged, certRenewalWindowDays } from '../src/utils/certJobExpiry.ts'
+import { certJobEffectiveNotAfter, certJobRenewalAt, certRenewalJitterSeconds, certRenewalWindowConverged, certRenewalWindowDays } from '../src/utils/certJobExpiry.ts'
 import { repoCode } from './_helpers.ts'
 
 // 后端 expires_at 为 null、not_after 由 PEM 派生的形态（导入/旧备份/集群回插）：
@@ -82,4 +82,46 @@ test('自动重签时间套用收敛：88 天显示到期前 7 天（不再是�
   const job = { not_after: '2026-12-31T00:00:00Z' }
   assert.equal(certJobRenewalAt(job, 88), '2026-12-24T00:00:00.000Z')
   assert.equal(certJobRenewalAt(job, 83), '2026-10-09T00:00:00.000Z')
+})
+
+// ── 续签抖动（2026-10-30 裁定）：jitter = FNV-1a32(rule_id) % 21600（0–6h，
+// 确定性）。后端续签扫描按 expires_at − 窗口 − jitter 判到期，前端「自动重签
+// 时间」显示同一时刻——固定向量表与 internal/services/certjitter_test.go 同字面量，
+// 任一侧算法/模数漂移即两侧同时红。 ─────────────────────────────
+test('续签抖动固定向量（与 internal/services/certjitter_test.go 同一字面量表）', () => {
+  const cases: ReadonlyArray<readonly [string, number]> = [
+    ['', 1861],
+    ['lb_tm_queued', 3393],
+    ['web-frontend', 13088],
+    ['规则-中文', 20819],
+    ['rule-1', 7281],
+    ['cluster-node-2', 15507],
+    ['lb_restore_deploy_backoff', 15367],
+  ]
+  for (const [ruleID, want] of cases) {
+    assert.equal(certRenewalJitterSeconds(ruleID), want, `jitter(${JSON.stringify(ruleID)}) 跨栈固定向量`)
+  }
+})
+
+test('抖动值域 [0, 6h)；rule_id 缺失时为 0（旧响应/无主键消费方退化）', () => {
+  for (let i = 0; i < 64; i++) {
+    const got = certRenewalJitterSeconds(`rule-${i}`)
+    assert.ok(got >= 0 && got < 21600, `jitter(rule-${i})=${got} 越界 [0,21600)`)
+  }
+  assert.equal(certRenewalJitterSeconds(undefined), 0)
+  assert.equal(certRenewalJitterSeconds(null), 0)
+})
+
+test('自动重签时间扣除抖动：到期 − 窗口 − jitter（与扫描入队同一时刻）', () => {
+  // rule-1 → 7281s（固定向量）
+  const expect = new Date(Date.parse('2026-12-31T00:00:00Z') - 30 * 86_400_000 - 7281_000).toISOString()
+  assert.equal(certJobRenewalAt({ rule_id: 'rule-1', not_after: '2026-12-31T00:00:00Z' }, 30), expect)
+  // 无 rule_id → 无抖动（既有向量保持原口径）
+  assert.equal(certJobRenewalAt({ not_after: '2026-12-31T00:00:00Z' }, 30), '2026-12-01T00:00:00.000Z')
+})
+
+test('抖动实现与后端同源（跨栈夹具：标准库 FNV-1a + 6h 模数）', () => {
+  const go = repoCode('internal/services/certjitter.go')
+  assert.match(go, /certRenewalJitterWindowSeconds = 6 \* 60 \* 60/, '模数必须是 6h')
+  assert.match(go, /fnv\.New32a\(\)/, '后端实现必须是标准库 FNV-1a（与前端手写实现同算法）')
 })

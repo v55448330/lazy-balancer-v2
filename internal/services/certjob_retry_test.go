@@ -61,6 +61,16 @@ func TestCertJobRetryRemaining_fourStatesWithTimePassage(t *testing.T) {
 			wantRemaining: 90*time.Second + 900*time.Millisecond, wantSeconds: 91, wantRetryable: true,
 		},
 		{
+			name: "failed CA 退避窗口内取剩余（B2 失败语义统一）", status: "failed",
+			updatedAt: ago(0), createdAt: ago(0), caAvailableAt: until(2 * time.Hour),
+			wantRemaining: 2 * time.Hour, wantSeconds: 7200, wantRetryable: true,
+		},
+		{
+			name: "failed CA 退避窗口已到期回落通用冷却", status: "failed",
+			updatedAt: ago(4 * time.Minute), createdAt: ago(30 * time.Minute), caAvailableAt: ago(time.Minute),
+			wantRemaining: time.Minute, wantSeconds: 60, wantRetryable: true,
+		},
+		{
 			name: "failed 冷却窗口内按 updated_at 扣减", status: "failed",
 			updatedAt: ago(4 * time.Minute), createdAt: ago(30 * time.Minute), caAvailableAt: missing,
 			wantRemaining: time.Minute, wantSeconds: 60, wantRetryable: true,

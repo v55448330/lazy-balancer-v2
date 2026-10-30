@@ -170,10 +170,6 @@ func captureHandlerGlobalSeams() map[string]any {
 		"configBackupExportAfterDBSnapshot": handlerGlobalPointer(configBackupExportAfterDBSnapshot),
 		"maxLbbakTotalBytes":                maxLbbakTotalBytes,
 		"newLbbakWafFileSnapshotDir":        handlerGlobalPointer(newLbbakWafFileSnapshotDir),
-		// 重启 watcher 的替身循环与启动标志：漏复位会让后续用例看到「已在跑」
-		// （幂等门把真正的首次启动吃掉），或让替身循环一直被当真实循环调用。
-		"caddyRestartWatcherLoop":    handlerGlobalPointer(caddyRestartWatcherLoop),
-		"caddyRestartWatcherStarted": caddyRestartWatcherStarted.Load(),
 		// 大屏流量缓存的 TTL 旋钮：漏复位后后续用例按 50ms 过期跑（缓存命中
 		// 断言随机失效），失败用例看起来与被测逻辑无关。
 		"threatTrafficCacheTTL": threatTrafficCacheTTL,

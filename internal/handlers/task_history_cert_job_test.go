@@ -181,9 +181,13 @@ func TestGetSystemTaskHistory_certJobFlatUTCLayout(t *testing.T) {
 
 // Given 同一 cert_jobs 行（created_at/updated_at 均存在）；引擎已装配以便取列表。
 // When 分别请求任务列表与 cert-job 历史。
-// Then 三个时间字段逐字段相等（列表=历史同源映射）。此前列表把 updated_at
-// 当开始时间且 DurationMs 恒 0，同一行在列表与历史呈现互相矛盾的时间语义。
-func TestCertJobTimes_listMatchesHistory(t *testing.T) {
+// Then 两处口径按 2026-10-30 裁定分叉：历史端点保持完整区间
+// （started=created_at/finished=updated_at/duration=区间）；列表行无独立运行
+// 轮次——started=finished=updated_at（最近状态变更）、DurationMs=0，语义差异
+// 由行 Description 注明（任务名 hover tooltip 呈现）。此前列表与历史曾逐字段
+// 相等（同源 CertJobRunTimes started=created_at 口径），裁定后列表的「执行
+// 时间」不再读 created_at（排队中的行停在创建时刻，与最近一次实际变化相悖）。
+func TestCertJobTimes_listShowsUpdatedAtHistoryKeepsInterval(t *testing.T) {
 	h := newBackupTestHandlers(t)
 	initTaskEngineForTest(t)
 	useTaskHistoryShanghaiLocation(t)
@@ -204,6 +208,11 @@ func TestCertJobTimes_listMatchesHistory(t *testing.T) {
 		t.Fatalf("历史 status=%d runs=%d, want 200/1", recorder.Code, len(history.Data.Runs))
 	}
 	run := history.Data.Runs[0]
+	// 历史端点：完整区间口径不动（started=created_at/finished=updated_at/duration=差）。
+	if run.StartedAt != "2026-10-20 12:00:00" || run.FinishedAt != "2026-10-20 12:00:05" || run.DurationMs != 5000 {
+		t.Fatalf("历史时间口径=(%q,%q,%d), want started=created_at/finished=updated_at/duration=5000",
+			run.StartedAt, run.FinishedAt, run.DurationMs)
+	}
 
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
@@ -216,7 +225,8 @@ func TestCertJobTimes_listMatchesHistory(t *testing.T) {
 	var payload struct {
 		Data struct {
 			Tasks []struct {
-				ID      string `json:"id"`
+				ID string `json:"id"`
+				// 执行时间口径（2026-10-30 裁定）：最近状态变更，见下断言。
 				LastRun *struct {
 					StartedAt  string `json:"started_at"`
 					FinishedAt string `json:"finished_at"`
@@ -242,13 +252,9 @@ func TestCertJobTimes_listMatchesHistory(t *testing.T) {
 	if lastRun == nil {
 		t.Fatalf("列表缺少 %s 行", taskID)
 	}
-	if lastRun.StartedAt != run.StartedAt || lastRun.FinishedAt != run.FinishedAt || lastRun.DurationMs != run.DurationMs {
-		t.Fatalf("列表时间=(%q,%q,%d) 与历史=(%q,%q,%d) 不一致（须同源映射）",
-			lastRun.StartedAt, lastRun.FinishedAt, lastRun.DurationMs,
-			run.StartedAt, run.FinishedAt, run.DurationMs)
-	}
-	if run.StartedAt != "2026-10-20 12:00:00" || run.FinishedAt != "2026-10-20 12:00:05" || run.DurationMs != 5000 {
-		t.Fatalf("时间口径=(%q,%q,%d), want started=created_at/finished=updated_at/duration=5000",
-			run.StartedAt, run.FinishedAt, run.DurationMs)
+	// 列表口径：执行时间=updated_at（配置时区 +8 的同一墙串），无独立轮次语义。
+	if lastRun.StartedAt != "2026-10-20 12:00:05" || lastRun.FinishedAt != "2026-10-20 12:00:05" || lastRun.DurationMs != 0 {
+		t.Fatalf("列表时间=(%q,%q,%d), want started=finished=updated_at(12:00:05)/duration=0",
+			lastRun.StartedAt, lastRun.FinishedAt, lastRun.DurationMs)
 	}
 }

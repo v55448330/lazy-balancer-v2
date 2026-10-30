@@ -17,12 +17,12 @@ func TestCertJobNullableIntegerColumns_readAsZero(t *testing.T) {
 	GetCAQueueManager().Start()
 	t.Cleanup(ResetCAQueueManagerForTest)
 
-	// 两条孤儿 waiting_ca（无对应规则）→ 走禁用分支、不触碰 CA provider；
+	// 两条孤儿 failed+窗口到期行（无对应规则）→ 走禁用分支、不触碰 CA provider；
 	// 首行三列全 NULL。整轮必须同时处置两行且不返回错误。
 	if _, err := database.Exec(`INSERT INTO cert_jobs (id,rule_id,domain,status,ca_provider_id,renewal_attempts,deployment_attempts,ca_available_after,updated_at)
-		VALUES (901,'lb_null_orphan','orphan-null.example','waiting_ca',NULL,NULL,NULL,datetime('now','-1 minute'),datetime('now')),
-		       (902,'lb_null_orphan','orphan-sibling.example','waiting_ca',0,0,0,datetime('now','-1 minute'),datetime('now'))`); err != nil {
-		t.Fatalf("seed orphan waiting_ca rows: %v", err)
+		VALUES (901,'lb_null_orphan','orphan-null.example','failed',NULL,NULL,NULL,datetime('now','-1 minute'),datetime('now')),
+		       (902,'lb_null_orphan','orphan-sibling.example','failed',0,0,0,datetime('now','-1 minute'),datetime('now'))`); err != nil {
+		t.Fatalf("seed orphan failed rows: %v", err)
 	}
 	// 启动恢复行：queued 孤儿，三列全 NULL。
 	if _, err := database.Exec(`INSERT INTO cert_jobs (id,rule_id,domain,status,ca_provider_id,renewal_attempts,deployment_attempts,updated_at)
@@ -42,9 +42,9 @@ func TestCertJobNullableIntegerColumns_readAsZero(t *testing.T) {
 	service := NewCertificateService()
 	resetCertificateServiceForTest(t)
 
-	// When：30s 补扫（waiting_ca 冷却到期）。
+	// When：30s 补扫（failed 行 CA 退避窗口到期）。
 	if requeued, disabled, err := service.requeueWaitingCAJobs(); err != nil {
-		t.Fatalf("waiting_ca 补扫不得因单行 NULL 失败: %v", err)
+		t.Fatalf("CA 冷却补扫不得因单行 NULL 失败: %v", err)
 	} else if requeued != 0 || disabled != 2 {
 		t.Fatalf("requeued=%d disabled=%d, want 0/2（两行孤儿都应被处置）", requeued, disabled)
 	}

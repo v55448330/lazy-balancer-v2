@@ -293,7 +293,7 @@ func TestCreateOrRequeueCertJob_requeues_downloaded_job(t *testing.T) {
 	manager := &CAQueueManager{queues: make(map[int]*caQueue), active: true}
 	queue := newCAQueue(models.CAProvider{ID: 1}, nil)
 	queue.executeFn = func(context.Context, queueItem, models.CAProvider) error { return nil }
-	go queue.loop()
+	// 自建泵已退役：断言只看同步入队落库（行转 queued），无需派发执行。
 	manager.queues[1] = queue
 	t.Cleanup(manager.Stop)
 
@@ -854,7 +854,7 @@ func TestCertificateService_periodic_scans_do_not_mutate_jobs_while_queue_paused
 	if _, err := database.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,expires_at,ca_provider_id) VALUES ('lb_paused_renewal','lb_paused_renewal.example.com','issued',datetime('now','+1 day'),1)`); err != nil {
 		t.Fatalf("seed paused renewal job: %v", err)
 	}
-	if _, err := database.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,ca_available_after,ca_provider_id) VALUES ('lb_paused_waiting','lb_paused_waiting.example.com','waiting_ca',datetime('now','-1 minute'),1)`); err != nil {
+	if _, err := database.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,ca_available_after,ca_provider_id) VALUES ('lb_paused_waiting','lb_paused_waiting.example.com','failed',datetime('now','-1 minute'),1)`); err != nil {
 		t.Fatalf("seed paused waiting job: %v", err)
 	}
 	service := NewCertificateService()
@@ -867,13 +867,13 @@ func TestCertificateService_periodic_scans_do_not_mutate_jobs_while_queue_paused
 		t.Fatalf("续期扫描在队列暂停时不得失败: %v", err)
 	}
 	if requeued, disabled, err := service.requeueWaitingCAJobs(); err != nil {
-		t.Fatalf("waiting_ca 重排在队列暂停时不得失败: %v", err)
+		t.Fatalf("冷却到期行重排在队列暂停时不得失败: %v", err)
 	} else if requeued != 0 || disabled != 0 {
 		t.Fatalf("requeued=%d disabled=%d, want 0/0（暂停门必须拦住全部重排）", requeued, disabled)
 	}
 
 	// Then
-	for ruleID, wantStatus := range map[string]string{"lb_paused_renewal": "issued", "lb_paused_waiting": "waiting_ca"} {
+	for ruleID, wantStatus := range map[string]string{"lb_paused_renewal": "issued", "lb_paused_waiting": "failed"} {
 		var status string
 		if err := database.QueryRow("SELECT status FROM cert_jobs WHERE rule_id=?", ruleID).Scan(&status); err != nil {
 			t.Fatalf("read paused job %s: %v", ruleID, err)
@@ -1153,7 +1153,7 @@ func TestCertificateService_waitingCALogsScanAndIterationFailures(t *testing.T) 
 		InitCAQueueManager(func() error { return nil })
 		t.Cleanup(ResetCAQueueManagerForTest)
 		if _, err := database.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,ca_available_after,ca_provider_id)
-			VALUES ('lb_bad_waiting','bad.example','waiting_ca',datetime('now','-1 minute'),'not-an-integer')`); err != nil {
+			VALUES ('lb_bad_waiting','bad.example','failed',datetime('now','-1 minute'),'not-an-integer')`); err != nil {
 			t.Fatal(err)
 		}
 		logs := captureApplicationLogs(t)
@@ -1192,12 +1192,14 @@ func TestCertificateService_waitingCALogsScanAndIterationFailures(t *testing.T) 
 			VALUES ('lb_waiting_ok','waiting-ok','ok.example.test','http',8443,1,1,'acme_dns')`); err != nil {
 			t.Fatalf("seed rule: %v", err)
 		}
-		// 畸形行（ca_provider_id 为文本）+ 可读行同轮存在。
-		if _, err := database.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,ca_available_after,ca_provider_id)
-			VALUES ('lb_bad_waiting','bad.example','waiting_ca',datetime('now','-1 minute'),'not-an-integer')`); err != nil {
+		// 畸形行（ca_provider_id 为文本）+ 可读行同轮存在。可读行用高位唯一 ID：
+		// 测试库重建后自增 ID 从 1 起，前序用例遗留的在途签发 goroutine 会按
+		// 旧 ID 改写新库同 ID 行（跨用例全局态串扰），高位 ID 与其错开。
+		if _, err := database.Exec(`INSERT INTO cert_jobs (id,rule_id,domain,status,ca_available_after,ca_provider_id)
+			VALUES (907101,'lb_bad_waiting','bad.example','failed',datetime('now','-1 minute'),'not-an-integer')`); err != nil {
 			t.Fatal(err)
 		}
-		goodID := seedOrphanCertJob(t, "lb_waiting_ok", "ok.example.test", "waiting_ca")
+		goodID := seedOrphanCertJobWithID(t, 907102, "lb_waiting_ok", "ok.example.test", "failed")
 		if _, err := database.Exec(`UPDATE cert_jobs SET ca_provider_id=1, ca_available_after=datetime('now','-1 minute') WHERE id=?`, goodID); err != nil {
 			t.Fatalf("arm readable row: %v", err)
 		}
@@ -1211,15 +1213,11 @@ func TestCertificateService_waitingCALogsScanAndIterationFailures(t *testing.T) 
 		if requeued != 1 {
 			t.Fatalf("requeued=%d, want 1（可读行必须照常处置，不得因他人失败一并放弃）", requeued)
 		}
-		// 不启动队列 worker：断言只钉「该行已离开 waiting_ca」（排队后由 worker
-		// 决定后续终态，与本次扫描语义无关，且会给测试引入真实网络依赖）。
-		var status string
-		if scanErr := database.QueryRow(`SELECT status FROM cert_jobs WHERE id=?`, goodID).Scan(&status); scanErr != nil {
-			t.Fatalf("read job status: %v", scanErr)
-		}
-		if status == "waiting_ca" {
-			t.Fatalf("readable job status=%q, want 已离开 waiting_ca（可读行必须照常处置）", status)
-		}
+		// 可读行处置由 requeued=1 钉住（扫描必须处置可读行，不得因他人失败
+		// 一并放弃）。不追加终态断言：本用例的 stub 管理器 active=true 会真实
+		// 消费入队（执行在预检即失败），行可能已按统一失败语义再次落 failed
+		//（B2 失败语义统一）——「离开 failed 与否」不再是本扫描层可观察的
+		// 稳定事实，执行终态归队列执行链语义。
 	})
 	t.Run("iteration error", func(t *testing.T) {
 		newClusterTestService(t)
@@ -1254,7 +1252,7 @@ func TestCertWaitingCATickOnce_scanRowFailureWritesFailureSummary(t *testing.T) 
 	InitCAQueueManager(func() error { return nil })
 	t.Cleanup(ResetCAQueueManagerForTest)
 	if _, err := db.DB.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,ca_available_after,ca_provider_id)
-		VALUES ('lb_tick_bad_row','bad.example','waiting_ca',datetime('now','-1 minute'),'not-an-integer')`); err != nil {
+		VALUES ('lb_tick_bad_row','bad.example','failed',datetime('now','-1 minute'),'not-an-integer')`); err != nil {
 		t.Fatalf("seed malformed waiting job: %v", err)
 	}
 
@@ -1286,7 +1284,7 @@ func TestCertificateService_requeueWaitingCAJobs_disables_orphaned_waiting_job(t
 	InitCAQueueManager(func() error { return nil })
 	GetCAQueueManager().Start()
 	t.Cleanup(ResetCAQueueManagerForTest)
-	if _, err := database.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,ca_available_after,ca_provider_id) VALUES ('lb_gone','gone.example.com','waiting_ca',datetime('now','-1 minute'),1)`); err != nil {
+	if _, err := database.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,ca_available_after,ca_provider_id) VALUES ('lb_gone','gone.example.com','failed',datetime('now','-1 minute'),1)`); err != nil {
 		t.Fatalf("seed orphan waiting job: %v", err)
 	}
 
@@ -1316,7 +1314,7 @@ func TestCertificateService_requeueWaitingCAJobs_pause_after_scan_start_leaves_j
 	if _, err := database.Exec(`INSERT INTO lb_rules (caddy_id,name,domain,protocol,listen_port,enabled,enable_tls,tls_source) VALUES ('lb_pause_scan','lb_pause_scan','example.com','http',8080,1,1,'acme_dns')`); err != nil {
 		t.Fatalf("seed rule: %v", err)
 	}
-	if _, err := database.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,ca_available_after,ca_provider_id) VALUES ('lb_pause_scan','example.com','waiting_ca',datetime('now','-1 minute'),1)`); err != nil {
+	if _, err := database.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,ca_available_after,ca_provider_id) VALUES ('lb_pause_scan','example.com','failed',datetime('now','-1 minute'),1)`); err != nil {
 		t.Fatalf("seed waiting job: %v", err)
 	}
 	scanReady := make(chan struct{})
@@ -1348,7 +1346,7 @@ func TestCertificateService_requeueWaitingCAJobs_pause_after_scan_start_leaves_j
 	close(resumeScan)
 	outcome := <-scanDone
 	if outcome.err != nil {
-		t.Fatalf("waiting_ca 重排扫描在队列暂停时不得失败: %v", outcome.err)
+		t.Fatalf("冷却到期行重排扫描在队列暂停时不得失败: %v", outcome.err)
 	}
 	if outcome.requeued != 0 || outcome.disabled != 0 {
 		t.Fatalf("requeued=%d disabled=%d, want 0/0（暂停门必须拦住全部重排，也不得误判孤儿）", outcome.requeued, outcome.disabled)
@@ -1358,8 +1356,8 @@ func TestCertificateService_requeueWaitingCAJobs_pause_after_scan_start_leaves_j
 	if err := database.QueryRow("SELECT status FROM cert_jobs WHERE rule_id='lb_pause_scan'").Scan(&status); err != nil {
 		t.Fatalf("read waiting job: %v", err)
 	}
-	if status != "waiting_ca" {
-		t.Fatalf("job status=%q, want waiting_ca", status)
+	if status != "failed" {
+		t.Fatalf("job status=%q, want failed（队列暂停期间零写入）", status)
 	}
 }
 
@@ -1612,15 +1610,19 @@ func TestCertificateService_CheckExpiration_compares_offset_and_fractional_times
 	threshold := time.Now().UTC().Add(24 * time.Hour)
 	positiveOffset := time.FixedZone("plus-fourteen", 14*60*60)
 	negativeOffset := time.FixedZone("minus-twelve", -12*60*60)
+	// want=false 的两行放「窗口+抖动上界(+6h)」之外：预筛放宽后 (窗口, 窗口+6h]
+	// 区间由逐行抖动闸门判定（专测见 certjitter_test.go），本用例只钉时间戳
+	// 格式（偏移/小数秒）按 datetime 语义比较——两行在 WHERE 里仍被解析比较，
+	// 确定性排除不受抖动影响。
 	tests := []struct {
 		ruleID    string
 		expiresAt string
 		want      bool
 	}{
 		{ruleID: "lb_due_positive_offset", expiresAt: threshold.Add(-30 * time.Minute).In(positiveOffset).Format("2006-01-02 15:04:05-07:00"), want: true},
-		{ruleID: "lb_future_negative_offset", expiresAt: threshold.Add(30 * time.Minute).In(negativeOffset).Format("2006-01-02 15:04:05-07:00"), want: false},
+		{ruleID: "lb_future_negative_offset", expiresAt: threshold.Add(6 * time.Hour).Add(30 * time.Minute).In(negativeOffset).Format("2006-01-02 15:04:05-07:00"), want: false},
 		{ruleID: "lb_due_fraction", expiresAt: threshold.Add(-time.Hour).Format("2006-01-02 15:04:05.999"), want: true},
-		{ruleID: "lb_future_fraction", expiresAt: threshold.Add(time.Hour).Format("2006-01-02 15:04:05.001"), want: false},
+		{ruleID: "lb_future_fraction", expiresAt: threshold.Add(6 * time.Hour).Add(time.Minute).Format("2006-01-02 15:04:05.001"), want: false},
 	}
 	for _, test := range tests {
 		domain := test.ruleID + ".example.com"
@@ -1654,9 +1656,10 @@ func TestCertificateService_CheckExpiration_compares_offset_and_fractional_times
 	}
 }
 
-func TestCertificateService_CheckExpiration_respects_ca_cooldown_for_waiting_ca(t *testing.T) {
-	// Given：三个临期 waiting_ca 任务——冷却中（未来 ca_available_after）、
-	// 冷却已过（过去 ca_available_after）、无冷却（NULL）。
+func TestCertificateService_CheckExpiration_respects_ca_cooldown_for_failed(t *testing.T) {
+	// Given：三个临期 failed 任务——退避窗口在途（未来 ca_available_after）、
+	// 窗口已过（过去）、无窗口（NULL）。B2 失败语义统一后失败统一落 failed，
+	// 候选门按窗口判定（waiting_ca 停车状态退役）。
 	_, database := newClusterTestService(t)
 	for _, ruleID := range []string{"lb_cooling", "lb_cooling_done", "lb_no_cooldown"} {
 		domain := ruleID + ".example.com"
@@ -1667,13 +1670,13 @@ func TestCertificateService_CheckExpiration_respects_ca_cooldown_for_waiting_ca(
 		}
 	}
 	for _, job := range []struct{ ruleID, status, caAvailableAfter string }{
-		{ruleID: "lb_cooling", status: "waiting_ca", caAvailableAfter: "datetime('now','+1 hour')"},
-		{ruleID: "lb_cooling_done", status: "waiting_ca", caAvailableAfter: "datetime('now','-1 hour')"},
-		{ruleID: "lb_no_cooldown", status: "waiting_ca", caAvailableAfter: "NULL"},
+		{ruleID: "lb_cooling", status: "failed", caAvailableAfter: "datetime('now','+1 hour')"},
+		{ruleID: "lb_cooling_done", status: "failed", caAvailableAfter: "datetime('now','-1 hour')"},
+		{ruleID: "lb_no_cooldown", status: "failed", caAvailableAfter: "NULL"},
 	} {
 		domain := job.ruleID + ".example.com"
 		if _, err := database.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,expires_at,ca_available_after)
-			VALUES (?,?,'waiting_ca',datetime('now','+1 day'),`+job.caAvailableAfter+`)`, job.ruleID, domain); err != nil {
+			VALUES (?,?,'failed',datetime('now','+1 day'),`+job.caAvailableAfter+`)`, job.ruleID, domain); err != nil {
 			t.Fatalf("seed job %s: %v", job.ruleID, err)
 		}
 	}
@@ -1691,7 +1694,7 @@ func TestCertificateService_CheckExpiration_respects_ca_cooldown_for_waiting_ca(
 		found[job.RuleID] = true
 	}
 	if found["lb_cooling"] {
-		t.Fatalf("cooling waiting_ca job must not be re-enqueued by renewal scan: %v", jobs)
+		t.Fatalf("cooling failed job must not be re-enqueued by renewal scan: %v", jobs)
 	}
 	for _, ruleID := range []string{"lb_cooling_done", "lb_no_cooldown"} {
 		if !found[ruleID] {
@@ -2120,7 +2123,7 @@ func TestRequeueNonTerminalCertJobs_does_not_resurrect_failed_job(t *testing.T) 
 	manager.beforeEnqueue = func() { enqueues.Add(1) }
 	queue := newCAQueue(models.CAProvider{ID: 7, MaxConcurrent: 1}, nil)
 	queue.executeFn = func(context.Context, queueItem, models.CAProvider) error { return nil }
-	go queue.loop()
+	// 自建泵已退役：断言只看同步入队计数与行状态，无需派发执行。
 	manager.mu.Lock()
 	manager.queues[7] = queue
 	manager.mu.Unlock()
@@ -2192,7 +2195,7 @@ func TestRequeueNonTerminalCertJobs_requeues_queued_job_despite_valid_stored_cer
 	manager.beforeEnqueue = func() { enqueues.Add(1) }
 	queue := newCAQueue(models.CAProvider{ID: 7, MaxConcurrent: 1}, nil)
 	queue.executeFn = func(context.Context, queueItem, models.CAProvider) error { return nil }
-	go queue.loop()
+	// 自建泵已退役：断言只看同步入队计数与行状态，无需派发执行。
 	manager.mu.Lock()
 	manager.queues[7] = queue
 	manager.mu.Unlock()
@@ -2309,11 +2312,10 @@ func seedRequeueMaterialFixture(t *testing.T, domain, seedStatus, certPEM, keyPE
 		active:       true,
 		blockedRules: map[string]map[RuleBlockToken]struct{}{ruleID: {1: {}}},
 	}
-	// 预置 stub 执行队列（loop 在跑、executeFn no-op）：避免真实 Issue 执行触网，
-	// 也保证执行不写库——补偿路径自身的状态转换就是被测对象。
+	// 预置 stub 执行队列（executeFn no-op、自建泵已退役无 loop）：避免真实
+	// Issue 执行触网，也保证执行不写库——补偿路径自身的状态转换就是被测对象。
 	queue := newCAQueue(models.CAProvider{ID: 7, MaxConcurrent: 1}, func() error { return nil })
 	queue.executeFn = func(context.Context, queueItem, models.CAProvider) error { return nil }
-	go queue.loop()
 	manager.mu.Lock()
 	manager.queues[7] = queue
 	manager.mu.Unlock()
@@ -2866,22 +2868,23 @@ func TestRenewalScanRechecksRoleBeforeEachEnqueue(t *testing.T) {
 
 // ---- 回归钉 ----
 
-// 续期扫描把达上限 waiting_ca 转 failed 时，必须与
-// markJobWaitingCA 上限分支同字段集清理冷却时间与 429 错误码。
-func TestRenewalScan_capped_waiting_ca_failure_clears_cooldown_fields(t *testing.T) {
+// B2 失败语义统一：达上限的失败行（统一失败写侧在落 failed 时已把窗口清为
+// NULL）由续期扫描按「仅告警、零写入」处置——每 6h 留一条 warn 使「仅手动重试
+// 可达」可见，不再有 waiting_ca→failed 终局转换写点。
+func TestRenewalScan_capped_failed_row_warns_without_writes(t *testing.T) {
 	_, database := newClusterTestService(t)
 	resetCertificateServiceForTest(t)
 	seedRuleWithCAProvider(t, "lb_capped_waiting", "capped.example.test", 0)
 	maxAttempts := getCertRenewalAttempts()
 	if _, err := database.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,expires_at,renewal_attempts,ca_available_after,last_error_code)
-		VALUES ('lb_capped_waiting','capped.example.test','waiting_ca',datetime('now','+10 days'),?,datetime('now','-1 hour'),'429')`, maxAttempts); err != nil {
-		t.Fatalf("seed waiting_ca job: %v", err)
+		VALUES ('lb_capped_waiting','capped.example.test','failed',datetime('now','+10 days'),?,NULL,'429')`, maxAttempts); err != nil {
+		t.Fatalf("seed capped failed job: %v", err)
 	}
 
 	// When
 	NewCertificateService().renewExpiringCertificates(context.Background())
 
-	// Then
+	// Then：零写入——failed 终态与 NULL 窗口原样（错误码保留本轮归因）。
 	var status string
 	var availableAfter, lastErrorCode any
 	if err := database.QueryRow(`SELECT status, ca_available_after, last_error_code FROM cert_jobs WHERE rule_id='lb_capped_waiting'`).Scan(&status, &availableAfter, &lastErrorCode); err != nil {
@@ -2891,10 +2894,10 @@ func TestRenewalScan_capped_waiting_ca_failure_clears_cooldown_fields(t *testing
 		t.Fatalf("status=%q, want failed", status)
 	}
 	if availableAfter != nil {
-		t.Fatalf("ca_available_after=%v, want NULL（终态不得残留冷却时间）", availableAfter)
+		t.Fatalf("ca_available_after=%v, want NULL（已达上限不得残留冷却时间）", availableAfter)
 	}
-	if lastErrorCode != nil {
-		t.Fatalf("last_error_code=%v, want NULL（终态不得残留 429）", lastErrorCode)
+	if lastErrorCode != "429" {
+		t.Fatalf("last_error_code=%v, want '429'（保留最近一次失败归因）", lastErrorCode)
 	}
 }
 
@@ -3210,13 +3213,12 @@ func TestCertificateService_pauseDeploymentRetries_sharesSingleDeadline(t *testi
 	}
 }
 
-// 导入/旧备份/带外改库可产生「waiting_ca + ca_available_after IS NULL」的行
-// （正常运行期 markJobWaitingCA 恒写非空冷却时刻）。补扫轮此前要求非空冷却，这类
-// 行在运行期没有任何周期通道（queued 滞留只收 queued、续期扫描只收有到期时间的
-// 行、首发重试只收 failed），只能靠重启/Resume/手动重试收敛——任务列表长期显示
-// 「等待 CA 频率限制冷却」而永不推进。补扫谓词因此容纳 NULL 冷却，并以 10 分钟
-// 沉降阈值区分「带外静置行」与「刚被写侧写入的行」。
-func TestCertificateService_requeueWaitingCAJobs_requeuesImportedNullCooldown(t *testing.T) {
+// B2 失败语义统一：waiting_ca 停车状态退役后，补扫只收「failed + 窗口到期」。
+// ca_available_after IS NULL 的 failed 行（带外直改/旧备份，或已达重试上限的
+// 终态）不得被 30s 补扫复活——NULL 窗口=停止自动重试（仅手动）；此类行的自动
+// 通道是续期巡检（expires_at 非空的临期行）与首发失败重试（expires_at NULL 且
+// 未达上限，30 分钟冷却），本用例一并钉住该通道存在。
+func TestCertificateService_requeueWaitingCAJobs_leavesNullWindowRowsToTheirChannels(t *testing.T) {
 	_, database := newClusterTestService(t)
 	ResetCAQueueManagerForTest()
 	InitCAQueueManager(func() error { return nil })
@@ -3224,42 +3226,42 @@ func TestCertificateService_requeueWaitingCAJobs_requeuesImportedNullCooldown(t 
 	t.Cleanup(ResetCAQueueManagerForTest)
 
 	seedRuleWithCAProvider(t, "lb_null_cooldown", "null-cooldown.example.test", 1)
-	seedRuleWithCAProvider(t, "lb_fresh_cooldown", "fresh-cooldown.example.test", 1)
-	// 导入遗留：冷却时刻 NULL 且已静置 30 分钟（超过沉降阈值）。
-	staleRes, err := database.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,ca_available_after,ca_provider_id,updated_at,created_at)
-		VALUES ('lb_null_cooldown','null-cooldown.example.test','waiting_ca',NULL,1,datetime('now','-30 minutes'),datetime('now','-30 minutes'))`)
-	if err != nil {
-		t.Fatalf("seed imported waiting_ca row: %v", err)
+	// 导入遗留形态：failed + 冷却时刻 NULL，且已静置 30 分钟。
+	if _, err := database.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,ca_available_after,ca_provider_id,updated_at,created_at)
+		VALUES ('lb_null_cooldown','null-cooldown.example.test','failed',NULL,1,datetime('now','-30 minutes'),datetime('now','-30 minutes'))`); err != nil {
+		t.Fatalf("seed imported null-window row: %v", err)
 	}
-	staleID, _ := staleRes.LastInsertId()
-	// 刚写入的行：沉降窗口内，本轮不得与写侧竞争。
-	freshRes, err := database.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,ca_available_after,ca_provider_id,updated_at,created_at)
-		VALUES ('lb_fresh_cooldown','fresh-cooldown.example.test','waiting_ca',NULL,1,datetime('now'),datetime('now'))`)
-	if err != nil {
-		t.Fatalf("seed fresh waiting_ca row: %v", err)
-	}
-	freshID, _ := freshRes.LastInsertId()
 
 	requeued, disabled, err := NewCertificateService().requeueWaitingCAJobs()
 	if err != nil {
-		t.Fatalf("补扫不得因 NULL 冷却行失败: %v", err)
+		t.Fatalf("补扫不得因 NULL 窗口行失败: %v", err)
 	}
-	if requeued != 1 || disabled != 0 {
-		t.Fatalf("requeued=%d disabled=%d, want 1/0（只有静置的 NULL 冷却行可重排）", requeued, disabled)
+	if requeued != 0 || disabled != 0 {
+		t.Fatalf("requeued=%d disabled=%d, want 0/0（NULL 窗口=停止自动重试，不得被补扫复活）", requeued, disabled)
 	}
 	var staleStatus string
-	if err := database.QueryRow("SELECT status FROM cert_jobs WHERE id=?", staleID).Scan(&staleStatus); err != nil {
+	if err := database.QueryRow("SELECT status FROM cert_jobs WHERE rule_id='lb_null_cooldown'").Scan(&staleStatus); err != nil {
 		t.Fatal(err)
 	}
-	if staleStatus == "waiting_ca" {
-		t.Fatalf("静置的 NULL 冷却行未离开 waiting_ca（status=%q）", staleStatus)
+	if staleStatus != "failed" {
+		t.Fatalf("NULL 窗口行 status=%q, want failed 原样保留", staleStatus)
 	}
-	var freshStatus string
-	if err := database.QueryRow("SELECT status FROM cert_jobs WHERE id=?", freshID).Scan(&freshStatus); err != nil {
-		t.Fatal(err)
+
+	// 该行的自动通道：首发失败重试（expires_at NULL、未达上限）按 30 分钟
+	// 冷却收敛——冷却期满后必须可被续期巡检选出。
+	maxAttempts := getCertRenewalAttempts()
+	jobs, _, err := NewCertificateService().checkFailedFirstIssuance(context.Background(), maxAttempts)
+	if err != nil {
+		t.Fatalf("checkFailedFirstIssuance: %v", err)
 	}
-	if freshStatus != "waiting_ca" {
-		t.Fatalf("沉降窗口内的行被提前重排（status=%q）——刚由写侧写入的行不得与在途写竞争", freshStatus)
+	found := false
+	for _, j := range jobs {
+		if j.RuleID == "lb_null_cooldown" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("NULL 窗口的失败行必须仍有首发重试通道（静置期满后）")
 	}
 }
 
@@ -3278,7 +3280,7 @@ func TestCertificateService_requeueWaitingCAJobs_doesNotHoldServiceLockDuringPro
 
 	seedRuleWithCAProvider(t, "lb_lock_scope", "lock-scope.example.test", 1)
 	if _, err := database.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,ca_available_after,ca_provider_id)
-		VALUES ('lb_lock_scope','lock-scope.example.test','waiting_ca',datetime('now','-1 minute'),1)`); err != nil {
+		VALUES ('lb_lock_scope','lock-scope.example.test','failed',datetime('now','-1 minute'),1)`); err != nil {
 		t.Fatalf("seed waiting_ca job: %v", err)
 	}
 	service := NewCertificateService()

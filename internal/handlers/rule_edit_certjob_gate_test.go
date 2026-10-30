@@ -61,6 +61,7 @@ func TestUpdateRule_saveGuard_certJobStatusMatrix(t *testing.T) {
 			services.ResetCAQueueManagerForTest()
 			services.InitCAQueueManager(func() error { return nil }, t.TempDir())
 			services.GetCAQueueManager().Start()
+			startCertQueueDispatchForTest(t)
 			t.Cleanup(services.ResetCAQueueManagerForTest)
 
 			// 只改名称：不触发 ACME 脱离/禁用路径，直达主 UPDATE 的守卫谓词。

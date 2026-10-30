@@ -11,11 +11,11 @@ import (
 	"lazy-balancer-v2/internal/db"
 )
 
-// 续期扫描把 waiting_ca 任务转回 queued 时，CA 冷却残留必须与 markJobWaitingCA
-// 的上限分支同字段集清理：否则后续以非 429 原因失败时，failed 行仍带旧 429
-// 错误码与过期冷却时刻（UI/导出/备份看到与终态矛盾的字段）。
+// 续期扫描把窗口到期的 failed 任务转回 queued 时，冷却残留必须随迁移清空：
+// 否则后续以非 429 原因再次失败前，行仍带旧 429 错误码与过期冷却时刻
+// （UI/导出/备份看到与当前轮矛盾的字段）。
 func TestRenewalRequeueClearsCAAntiAbuseFields(t *testing.T) {
-	// Given：一条临期 waiting_ca 任务，冷却已到期但仍带 429 期残留字段
+	// Given：一条临期 failed 任务，退避窗口已到期但仍带 429 期残留字段
 	_, database := newClusterTestService(t)
 	ResetCAQueueManagerForTest()
 	InitCAQueueManager(func() error { return nil })
@@ -27,8 +27,8 @@ func TestRenewalRequeueClearsCAAntiAbuseFields(t *testing.T) {
 		t.Fatalf("seed rule: %v", err)
 	}
 	if _, err := database.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,expires_at,ca_available_after,last_error_code,ca_provider_id)
-		VALUES ('lb_wait_renew','wait-renew.example.com','waiting_ca',datetime('now','+1 day'),datetime('now','-5 minutes'),'429',1)`); err != nil {
-		t.Fatalf("seed waiting_ca job: %v", err)
+		VALUES ('lb_wait_renew','wait-renew.example.com','failed',datetime('now','+1 day'),datetime('now','-5 minutes'),'429',1)`); err != nil {
+		t.Fatalf("seed failed job: %v", err)
 	}
 	transitioned := make(chan struct{})
 	release := make(chan struct{})

@@ -415,7 +415,7 @@ task_runs 保留 90 天（audit-retention 每日清理）。`Engine.Stop` 先取
 
 | # | 违规项 | 目标注册任务 | 状态 |
 |---|---|---|---|
-| 1 | per-provider `go q.loop()` | `cert-issuance`（Daemon + `RunTicker` 遍历 `DispatchOnce`） | 待做 |
+| 1 | per-provider `go q.loop()` | `cert-issuance`（Daemon + `RunTicker` 遍历 `DispatchOnce`） | 已完成 |
 | 2 | `MetricsService.Start`（30s + 24h） | 新 daemon `metrics-collector`（RunsOn=RoleAny；24h 清理拆 `Periodic`） | 待做 |
 | 3 | rollup warmer（60s） | 并入 `security-events-ingestion` daemon（同 2s/60s 域） | 待做 |
 | 4 | caddy-restart 触发源（2s） | 新 daemon `caddy-restart-watcher`（Daemon 生命周期只落 1 行，无 task_runs 噪音） | 待做 |

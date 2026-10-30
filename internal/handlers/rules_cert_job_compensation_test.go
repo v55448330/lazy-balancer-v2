@@ -34,6 +34,7 @@ func TestUpdateRule_disableRestoresPausedCertJobsWhenPostCommitResolveFails(t *t
 	services.ResetCAQueueManagerForTest()
 	services.InitCAQueueManager(nil, t.TempDir())
 	services.GetCAQueueManager().Start()
+	startCertQueueDispatchForTest(t)
 	t.Cleanup(services.ResetCAQueueManagerForTest)
 	// 放锁窗口内默认 CA 提供商消失 = 提交后解析失败（并发禁用/删除的等价形态）
 	updateRuleLockWindowHook = func(caddyID string, window int) {

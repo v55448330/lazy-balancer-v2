@@ -17,7 +17,6 @@ import (
 	"time"
 
 	"lazy-balancer-v2/internal/db"
-	"lazy-balancer-v2/internal/handlers"
 	"lazy-balancer-v2/internal/services"
 )
 
@@ -273,17 +272,6 @@ func TestStartupTimezoneShapes(t *testing.T) {
 	}
 }
 
-// 关停链的 warmer 等待缝：空闲时必须立即返回（正常路径不吃关停预算），
-// 预算耗尽（d<=0）直接放弃——不得在无预算时阻塞退出。
-func TestWaitThreatRollupWarmerIdleSeam(t *testing.T) {
-	started := time.Now()
-	if !handlers.WaitThreatRollupWarmer(time.Second) {
-		t.Fatal("无 warmer 运行时等待应成功返回")
-	}
-	if elapsed := time.Since(started); elapsed > 100*time.Millisecond {
-		t.Fatalf("空闲等待耗时 %s，应远小于预算", elapsed)
-	}
-	if handlers.WaitThreatRollupWarmer(0) {
-		t.Fatal("预算耗尽（d<=0）必须直接返回 false，不得等待")
-	}
-}
+// 关停链的 warmer 等待缝（WaitThreatRollupWarmer）已随 warmer 归口退役：
+// threat-rollup-warmer daemon 的停止与在途排空由引擎排空段统一承担
+// （RunTicker 同步执行契约——Run 返回即无在途轮）。

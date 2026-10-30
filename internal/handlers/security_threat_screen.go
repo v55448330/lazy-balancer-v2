@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"bytes"
-	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -937,14 +936,11 @@ func ensureThreatRollupWithYields(hours int) error {
 	return nil
 }
 
-// threatRollupWarmerStarted 后台固化协程启动标志（原子）。启动后大屏请求
+// threatRollupWarmerStarted 后台固化已接管标志（原子）。启动后大屏请求
 // 路径不再懒固化（避免与 warmer 抢写锁/重复回填）；未启动（测试/旧路径）
-// 保持请求路径懒固化。
+// 保持请求路径懒固化。置位点唯一：RunThreatRollupWarmerRound 入口——节拍
+// 归 threat-rollup-warmer daemon（RunTicker 60s），本包不再自建循环。
 var threatRollupWarmerStarted atomic.Bool
-
-// threatRollupWarmerWg warmer 协程退出等待（关停/测试换库前先行等待，
-// 避免固化中途句柄被关闭）。
-var threatRollupWarmerWg sync.WaitGroup
 
 // threatRollupReadyAt 最近一次成功固化的 UnixNano（0=从未成功，历史
 // 请求路径据此区分「warmer 已启动」与「已有可用覆盖」。
@@ -1057,70 +1053,27 @@ func threatRollupCoverageReaches(hours int) bool {
 	return !coveredFrom.After(horizon)
 }
 
-// WaitThreatRollupWarmer 有界等待 warmer 协程退出（关停链在 db.Close 之前
-// 调用，与同层 worker 同口径）：warmer 只在轮次之间检查 ctx，在途
-// ensureThreatRollup 的批推进不会被打断——不等待就会让该批读写落在关闭后的
-// 库上（"database is closed" 告警 + 批事务回滚）。d<=0 或超时返回 false，
-// 调用方如实记录后继续退出（残留协程随进程消亡）。
-func WaitThreatRollupWarmer(d time.Duration) bool {
-	if d <= 0 {
-		return false
+// RunThreatRollupWarmerRound 单轮 rollup 预固化（threat-rollup-warmer daemon
+// 的 RunTicker 工作体；main 经 services.SetThreatRollupWarmerRound 注入）。
+// 启动即预固化 7 天（UI 最大窗口），赶在保留期/行帽裁剪之前；只预热 24h 会让
+// 升级后 24h–7d 区间在裁剪后永久少计。单次调用按 25 批有界推进，后续轮次续做。
+// 入口置位 threatRollupWarmerStarted（幂等）：置位后请求路径不再常规懒固化，
+// 改由本节拍承担——首轮未完成/陈旧/coverage 不足时请求路径仍同步固化兜底
+// （见 GetSecurityThreatScreen 的 needsSync 门）。单轮失败仅告警，下一轮自愈
+// （固化本身幂等）。
+func RunThreatRollupWarmerRound() error {
+	threatRollupWarmerStarted.Store(true)
+	hours := threatRollupRewindWindowHours
+	if req := threatRollupRequestedHoursLimit(); req > hours {
+		hours = req
 	}
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		threatRollupWarmerWg.Wait()
-	}()
-	select {
-	case <-done:
-		return true
-	case <-time.After(d):
-		return false
+	if hours > threatScreenMaxHours {
+		hours = threatScreenMaxHours
 	}
-}
-
-// StartThreatRollupWarmer 启动 rollup 后台固化协程（幂等：CAS 标志，重复
-// 调用为空操作）：启动时立即 ensureThreatRollup(7d)，之后每 60s 一轮；
-// ctx 取消即退出。单轮失败仅告警，下一轮自愈（固化本身幂等）。
-func StartThreatRollupWarmer(ctx context.Context) {
-	if !threatRollupWarmerStarted.CompareAndSwap(false, true) {
-		return
+	if err := ensureThreatRollup(hours); err != nil {
+		return fmt.Errorf("threat rollup warmer: %w", err)
 	}
-	threatRollupWarmerWg.Add(1)
-	go func() {
-		defer threatRollupWarmerWg.Done()
-		run := func() {
-			// 启动即预固化 7 天（UI 最大窗口），赶在保留期/行帽裁剪之前；
-			// 只预热 24h 会让升级后 24h–7d 区间在裁剪后永久少计
-			// 单次调用按 25 批有界推进，后续轮次续做。
-			hours := threatRollupRewindWindowHours
-			if req := threatRollupRequestedHoursLimit(); req > hours {
-				hours = req
-			}
-			if hours > threatScreenMaxHours {
-				hours = threatScreenMaxHours
-			}
-			if err := ensureThreatRollup(hours); err != nil {
-				services.Logf("warn", "threat rollup warmer: %v", err)
-			}
-		}
-		select {
-		case <-ctx.Done():
-			return
-		default:
-		}
-		run() // 启动即固化（首屏不等待首个 tick）
-		ticker := time.NewTicker(time.Minute)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				run()
-			}
-		}
-	}()
+	return nil
 }
 
 // threatRollupBlockedAction 大屏 blocked 计数的 action 取值单一事实源：

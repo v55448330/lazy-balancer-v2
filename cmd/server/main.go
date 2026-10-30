@@ -190,9 +190,9 @@ func run() error {
 			services.Logf("error", "failed to set TZ environment（仅影响 caddy CLI 等子进程）: %v", err)
 		}
 	}
-	// 运行日志大小刷新 worker 在库就绪且时区生效后启动：首次刷新即读真实库值
-	//（此前包 init 自启，首刷必撞 nil 库空转，启动 30s 内按兜底 100MB）。
-	services.StartLogRotate(context.Background())
+	// 运行日志阈值/时区的同步首跑已随任务引擎装配收敛：registerRuntimeLifecycleTasks
+	// （InitTaskEngine 内）以同一 Once 函数在装配期同步执行一次，daemon 只承担
+	// 后续 30s 节拍（task-engine 标准 v2.2：引擎外自建循环一律退役）。
 
 	// Initialize services
 	caddyService := services.NewCaddyServiceWithMetricsURL(cfg.CaddyAdminURL, cfg.CaddyMetricsURL)
@@ -290,9 +290,9 @@ func run() error {
 	// 启动执行移入引擎 BootSync（下方 InitTaskEngine 尾部
 	// 同步触发 startup:config-load——面板监听前完成不变量保持；失败语义同旧：
 	// 仅记录不退出）。
-	// Caddy 重启监听——监督器触发后走与启动相同的 DB 渲染→应用流程
-	// (修正 last_good 快照可能滞后于 DB 的窗口)。
-	h.StartCaddyRestartWatcher()
+	// Caddy 重启监听已归口 caddy-restart-watcher daemon
+	// （registerRuntimeLifecycleTasks；工作体经 SetCaddyRestartWatcherRound 注入
+	// 下方钩子块）——main 不再有独立 watcher goroutine。
 	// 配置一致性看门狗：周期比对 DB 规则与 Caddy 运行配置，不一致时三通道告知
 	// （系统日志/操作日志/前端横幅），恢复由用户手动重启完成。
 	// 统一任务引擎：看门狗/安全事件摄取/运行日志清理三常驻族迁入
@@ -328,16 +328,21 @@ func run() error {
 	// 摄取提交后回退 rollup 覆盖水位——停机/升级积压事件落在 warmer
 	// 已覆盖分钟时重固（否则大屏永久少计；warmer 首轮先于摄取首 pass 运行）。
 	services.SetSecurityEventsRollupRewrite(handlers.ThreatRollupRewindTo)
+	// 运行期生命周期 daemon 的跨包工作体注入（必须先于 InitTaskEngine——
+	// daemon 默认启动即消费；与 auto-backup/threat 同型：任务体依赖的运行期
+	// 钩子一律前置）。
+	services.SetMetricsCollector(metricsService)
+	services.SetThreatRollupWarmerRound(handlers.RunThreatRollupWarmerRound)
+	services.SetCaddyRestartWatcherRound(h.CaddyRestartWatcherOnce)
+	services.SetRateLimitBucketSweep(func() int { return middleware.SweepRateLimitBuckets(time.Now()) })
 	services.InitThreatUpdateManager()
 	services.InitTaskEngine(cfg.CaddyAdminURL, runtimeLogFile) // 前置设施——非任务
 	// 引擎收尾统一交由下方 tail defer（StopTaskEngine 幂等）；此处不再重复
 	// defer（双 defer 依赖幂等，收敛单点收尾）。
 
-	// 威胁大屏 rollup 后台固化（幂等：启动即一次 + 每 60s 一轮；启动后大屏
-	// 请求路径不再懒固化，避免与用户请求抢写锁/重复回填）。
-	warmerCtx, warmerCancel := context.WithCancel(context.Background())
-	cancelThreatRollupWarmer := warmerCancel
-	handlers.StartThreatRollupWarmer(warmerCtx)
+	// 威胁大屏 rollup 后台固化已归口 threat-rollup-warmer daemon
+	// （registerRuntimeLifecycleTasks；工作体经 SetThreatRollupWarmerRound 注入，
+	// 启动即一轮 + 60s 节拍）——main 不再有独立 warmer 生命周期。
 
 	// Setup router
 	router := middleware.SetupRouter(h, cfg)
@@ -345,12 +350,8 @@ func run() error {
 	services.SetRestartRequiredHandler(requestRestart)
 	defer services.SetRestartRequiredHandler(nil)
 
-	// Start services
-	metricsDone := make(chan struct{})
-	go func() {
-		defer close(metricsDone)
-		metricsService.Start()
-	}()
+	// metrics 采集已归口 metrics-collector daemon（registerRuntimeLifecycleTasks；
+	// 工作体经 SetMetricsCollector 注入）——main 不再有独立采集 goroutine。
 	// 角色读取走单源 services.RoleOf（COALESCE(is_master,1) 与
 	// readonly/cluster_version/任务引擎同口径）——此前裸 SELECT 对 NULL 扫描
 	// 失败并按从节点处理，与其余守卫语义分叉。仅用于爬虫名单播种；读取失败
@@ -389,20 +390,13 @@ func run() error {
 		// 场景没有逃生门。signal.Stop 幂等，与 waitForServerStop 内的显式调用
 		// 并存安全。
 		signal.Stop(quit)
-		cancelThreatRollupWarmer()
-		// watcher 与 warmer 共享同一个最长 2s 的等待段：先取消 watcher，
-		// 再按真实剩余预算等待两者，db.Close 前不得再触发 DB 写入或 Caddy /load。
-		caddyRestartWatcherDone := h.StopCaddyRestartWatcher()
-		workerStop := newSharedShutdownSegment(shutdown, threatWarmerStopSegmentMax, trailingStopReserve)
-		awaitChannelWithin("Caddy 重启 watcher", caddyRestartWatcherDone, workerStop())
-		// warmer 只在轮次之间检查 ctx：在途固化批不会被打断，可能继续读写到
-		// db.Close 之后（"database is closed" 告警 + 该批回滚）。与同层 worker
-		// 一致按共享段的实际剩余预算有界等待，且不动收尾段预留。
-		if !handlers.WaitThreatRollupWarmer(workerStop()) {
-			services.Logf("warn", "威胁大屏 rollup warmer 未在关停预算内退出，放弃等待（进程继续退出）")
-		}
-		// 事件摄入与其余 worker 同生命周期——db.Close 前 cancel，
-		// 否则退出窗口内每 2s 对已关闭 MetricsDB 刷 "database is closed" 告警。
+		// Caddy 重启 watcher / rollup warmer / metrics 采集 / 限流桶清扫 /
+		// apikey flusher / 阈值与时区刷新均已归口任务引擎 daemon——它们的
+		// 停止与在途排空统一由 stopTaskEngineWithin 的引擎排空段承担
+		// （RunTicker 同步执行契约：Run 返回即无在途轮），main 不再逐个
+		// 取消/等待。
+		// 事件摄入与其余 worker 同生命周期——db.Close 前排空引擎，
+		// 否则退出窗口内周期任务对已关闭 MetricsDB 刷 "database is closed" 告警。
 		// 引擎排空按剩余预算派生（为 ACME 收尾预留），不再使用
 		// StopTaskEngine 的 30s 默认——30s 本身已超 compose stop_grace_period。
 		// 安全事件 IPC 入库服务先于引擎/数据库收尾：关停后写侧按连接失败回退
@@ -414,22 +408,7 @@ func run() error {
 				services.Logf("warn", "安全事件 IPC 服务关停未在预算内完成（进程继续退出）: %v", err)
 			}
 		})
-		stopTaskEngineWithin(shutdown) // M2:引擎统一收尾(摄取/看门狗/清理)
-		// 以下等待全部从关停预算派生有界——旧形态
-		// <-metricsDone / StopX 的无界 <-done 在 collect/refresh 阻塞
-		// （http.Client 10s、DB busy_timeout 30s）时可把进程拖过 compose
-		// grace 被 SIGKILL。超时放弃等待并 warn：进程继续退出，残留
-		// goroutine 随进程消亡，比拖过 grace 被强杀（WAL 写中段断）安全。
-		// metricsService.Stop 内部的清理等待（固定 3s）同样不可预算：有界执行
-		// 且不侵占收尾段预留（此前它无条件吃掉 3s，ACME 段可被钳成 0）。
-		runWithin("metrics 清理等待", shutdown.segmentReserving(metricsCleanupSegmentMax, trailingStopReserve), metricsService.Stop)
-		awaitChannelWithin("metrics 采集循环", metricsDone, shutdown.segment(metricsStopSegmentMax))
-		// 时区/日志轮转的 Stop*Within 把 within<=0 定义为「无界等待」，与同层
-		// awaitChannelWithin/runWithin 的「0=放弃」相反。segment() 在预算耗尽时
-		// 返回 0，直接传入会把最需要按时退出的分支变成永不放 弃——必须显式跳过
-		// （worker 随进程退出，残留 goroutine 由进程回收）。
-		stopWithinIfBudgeted(shutdown.segment(tzStopSegmentMax), services.StopTimezoneRefreshWithin)
-		stopWithinIfBudgeted(shutdown.segment(logRotateStopSegmentMax), services.StopLogRotateWithin)
+		stopTaskEngineWithin(shutdown) // M2:引擎统一收尾(摄取/看门狗/清理/生命周期 daemon)
 		// 证书 worker 的等待有界（此前 Stop 自身无界阻塞、超时 select 不可达）。
 		lifecycle.ShutdownWithTimeout(shutdown.segment(acmeStopSegmentMax))
 	}()
@@ -564,55 +543,42 @@ func newRestartSignal() (<-chan struct{}, func()) {
 //
 // 实际 defer 顺序（与 cleanup defer 体逐行对应）：
 //
-//	HTTP ≤10s → Caddy 排水 ≤2s → Caddy watcher/威胁大屏 warmer 共享 ≤2s
+//	HTTP ≤10s → Caddy 排水 ≤2s
 //	→ 安全事件 IPC 关停 ≤0.5s
-//	→ 引擎排空 = 剩余 − trailingStopReserve
-//	→ 引擎句柄清理 = min(≤5s, 剩余 − trailingStopReserve)
-//	→ metrics 清理等待 = min(≤3s, 剩余 − trailingStopReserve)
-//	→ metrics 采集 ≤2s → 时区 ≤1s → 日志轮转 ≤1s
+//	→ 引擎排空 = 剩余 − ACME 收尾（watcher/warmer/metrics/限流清扫/
+//	  apikey flusher/阈值与时区刷新等生命周期 daemon 的停止与在途排空
+//	  都在引擎排空段内完成——RunTicker 同步执行契约，Run 返回即无在途轮）
+//	→ 引擎句柄清理 = min(≤5s, 剩余 − ACME 收尾)
 //	→ 证书收尾 ≤5s（段内 = 同步停止 ≤3s + ACME 收尾 = 剩余）
 //
 // 证书收尾段由 runtimeLifecycle.ShutdownWithTimeout 消费：段内先跑集群同步停止
 // （min(传入预算, syncStopSegmentMax=3s)），剩余预算全部留给 ACME 收尾。
-// 时区/日志轮转两段在预算归 0 时直接跳过（Stop*Within 的 within<=0 语义是
-// 无界等待，不能把 segment() 的 0 传进去）。
 //
-// 最坏 10+2+2+0.5+1.5+0+0+2+1+1+5 = 25s ≤ 30s grace（引擎吃满时两处
-// segmentReserving 段按设计归 0）。deadline 之外还有 engineHandleSwapGrace
-// (50ms) 与各 select 定时器的调度余量。唯一事实源是
-// shutdown_budget_test.go 的 fake-clock 最坏路径断言——本注释只是导读；
-// 新增收尾段必须同时加常量、更新 trailingStopReserve 与测试。
+// 最坏 10+2+0.5+1.5+0+5 = 19s ≤ 30s grace（引擎吃满时两处 segmentReserving
+// 段按设计归 0）。deadline 之外还有 engineHandleSwapGrace (50ms) 与各 select
+// 定时器的调度余量。唯一事实源是 shutdown_budget_test.go 的 fake-clock 最坏
+// 路径断言——本注释只是导读；新增收尾段必须同时加常量、更新
+// trailingStopReserve 与测试。
 const (
 	processShutdownBudget  = 25 * time.Second
 	httpShutdownSegmentMax = 10 * time.Second
 	caddyDrainSegmentMax   = 2 * time.Second
 	acmeStopSegmentMax     = 5 * time.Second
-	// 收尾段上限：metrics 采集循环退出等待（collect 最坏阻塞
-	// 在 http.Client 10s + DB busy_timeout 30s）、时区/日志轮转刷新 worker
-	// 退出等待（refresh 阻塞在 DB busy_timeout）——正常路径均为空闲 select
-	// 循环，cancel 后 µs 级退出，段上限只兜卡住形态；超时放弃等待（进程继续
-	// 退出，残留 goroutine 随进程消亡）。
-	metricsStopSegmentMax   = 2 * time.Second
-	tzStopSegmentMax        = 1 * time.Second
-	logRotateStopSegmentMax = 1 * time.Second
 	// ipcStopSegmentMax 是安全事件 IPC 服务（UDS 上的最小 HTTP 服务端）关停段：
 	// 正常路径无在途请求时 µs 级退出，段上限只兜「大 body 入库中」形态。
 	ipcStopSegmentMax = 500 * time.Millisecond
-	// 关停链中三处「不可预算的同步收尾」的等待上限——对应实现内部的固定
-	// 上界（引擎全局句柄清理的角色对账 5s、metrics 停止清理 3s、威胁大屏
-	// warmer 在途批 2s）。这些调用不接受 deadline，必须由本层按预算有界执行；
-	// 它们只允许花「引擎排空后尚未用完的预算」，不得侵占下方
-	// trailingStopReserve（见 segmentReserving）。
+	// engineHandleStopSegmentMax 是「引擎全局句柄清理」这一不可预算同步收尾的
+	// 等待上限（对应实现内部固定上界：角色对账 goroutine 卡在 DB 读时最长 5s）。
+	// 该调用不接受 deadline，必须由本层按预算有界执行；它只允许花「引擎排空后
+	// 尚未用完的预算」，不得侵占下方 trailingStopReserve（见 segmentReserving）。
 	engineHandleStopSegmentMax = 5 * time.Second
-	metricsCleanupSegmentMax   = 3 * time.Second
-	threatWarmerStopSegmentMax = 2 * time.Second
 	// engineHandleSwapGrace 预算耗尽时等待「摘除引擎句柄」的极小窗口：<0.2%
 	// grace，可观测上不改变关停总壁钟，但不允许已停引擎的句柄活过 db.Close。
 	engineHandleSwapGrace = 50 * time.Millisecond
-	// trailingStopReserve 引擎排空必须为后续收尾段预留的预算：metrics/时区/
-	// 日志轮转等待 + ACME 收尾。安全事件 IPC 在引擎前排空，已有独立段预算，
-	// 不得重复计入此处（否则会双重扣减引擎排空段）。
-	trailingStopReserve = metricsStopSegmentMax + tzStopSegmentMax + logRotateStopSegmentMax + acmeStopSegmentMax
+	// trailingStopReserve 引擎排空必须为后续收尾段预留的预算：ACME 收尾。
+	// （metrics 采集/时区/日志轮转等待段已随自建循环归口引擎 daemon 退役；
+	// 安全事件 IPC 在引擎前排空，已有独立段预算，不得重复计入此处。）
+	trailingStopReserve = acmeStopSegmentMax
 )
 
 // shutdownBudget 进程关停的单一时间预算。
@@ -654,9 +620,9 @@ func (b *shutdownBudget) segment(max time.Duration) time.Duration {
 // segmentReserving 段上限 = min(段自身上限, 剩余预算 − reserveAfter)，
 // 预算已不足以留下后续预留时返回 0（调用方据此放弃等待）。
 //
-// 用于插在收尾段之前、自身又不可预算的同步收尾（引擎句柄清理/metrics 清理
-// 等待/威胁大屏 warmer）：它们只能花「还没被用完的预算」，不得把
-// trailingStopReserve 挤成 0——否则其后的 ACME/metrics 段按剩余钳制后归 0，
+// 用于插在收尾段之前、自身又不可预算的同步收尾（引擎句柄清理）：它们只能花
+// 「还没被用完的预算」，不得把
+// trailingStopReserve 挤成 0——否则其后的 ACME 段按剩余钳制后归 0，
 // 收尾直接放弃等待。
 func (b *shutdownBudget) segmentReserving(max, reserveAfter time.Duration) time.Duration {
 	r := b.remaining() - reserveAfter
@@ -669,23 +635,7 @@ func (b *shutdownBudget) segmentReserving(max, reserveAfter time.Duration) time.
 	return max
 }
 
-// newSharedShutdownSegment 把多个顺序等待放进同一个绝对时间段：第一等待
-// 消耗的时间会从后续等待中扣除，禁止各自重新获得一份完整段预算。
-func newSharedShutdownSegment(b *shutdownBudget, max, reserveAfter time.Duration) func() time.Duration {
-	if b.now == nil {
-		b.now = time.Now
-	}
-	deadline := b.now().Add(b.segmentReserving(max, reserveAfter))
-	return func() time.Duration {
-		if remaining := deadline.Sub(b.now()); remaining > 0 {
-			return remaining
-		}
-		return 0
-	}
-}
-
-// engineDrain 引擎排空上限 = 剩余预算 − 收尾段预留（metrics/时区/日志轮转
-// 等待 + ACME 收尾）。
+// engineDrain 引擎排空上限 = 剩余预算 − 收尾段预留（ACME 收尾）。
 //
 // 引擎排空是关停链最长的一段（部分在途任务段不消费取消信号），若吃满
 // 剩余预算，其后的收尾段将无预算可用。归零时返回 1ms：引擎把 <=0 视为
@@ -766,17 +716,6 @@ func awaitChannelWithin(what string, ch <-chan struct{}, d time.Duration) bool {
 		services.Logf("warn", "%s 未在关停预算 %s 内退出，放弃等待（进程继续退出）", what, d)
 		return false
 	}
-}
-
-// stopWithinIfBudgeted 在预算为正时执行有界停止，预算耗尽（d<=0）时跳过并
-// 返回 false。用于把「within<=0=无界等待」形态的 Stop*Within 接到关停预算上：
-// segment() 归零表示总预算已用完，此时调用即等于取消有界等待。
-func stopWithinIfBudgeted(d time.Duration, stop func(time.Duration) bool) bool {
-	if d <= 0 {
-		services.Logf("warn", "关停预算已耗尽，跳过该收尾段的等待（worker 随进程退出）")
-		return false
-	}
-	return stop(d)
 }
 
 // takePendingSignal 非阻塞读取启动窗口内已缓存的退出信号（quit 缓冲=1，

@@ -10,7 +10,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -583,33 +582,9 @@ func TestMetricsService_collect_filtersGeoipPassHandlerSeries(t *testing.T) {
 	}
 }
 
-// Start 进入循环前补一次 collect——曾 cleanup 立即
-// 跑而首次 collect 要等第一个 interval（默认 30s），口径不对称，重启后面板
-// 首屏 30s 全零。
-func TestMetricsService_Start_collectsBeforeFirstTick(t *testing.T) {
-	// Given 有效端点 + 超长采集间隔（首个 tick 1 小时后才到）
-	setupMetricsRetentionTest(t)
-	isolateMetricsState(t)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`caddy_http_requests_total{handler="reverse_proxy",host="example.com",server="http_443"} 20` + "\n"))
-	}))
-	t.Cleanup(server.Close)
-	service := NewMetricsService(server.URL, 3600)
-
-	// When
-	go service.Start()
-	t.Cleanup(service.Stop)
-
-	// Then 首个 tick 前 overview 已填充（2s 轮询可见；空窗=超时失败）
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if service.GetOverview().TotalRequests == 20 {
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	t.Fatal("首个采集周期（3600s）前 overview 仍为零——启动首轮空窗")
-}
+// 「启动首轮立即采集」不变量已随 metrics-collector daemon 归口：
+// RunTicker bootstrap（立即首跑）语义由 taskengine_wire_runtime_test.go 的
+// TestRuntimeLifecycleMetricsCollector 钉住（daemon 启动即采集，不等首个节拍）。
 
 // 采样采集必须单趟解析：旧实现每周期 10 趟全文正则（全局 6 + 规则 4），
 // 16MB body 时 ≈144MB 正则输入。此钉用扫描钩子把「每周期 1 趟」变成机器
@@ -698,51 +673,15 @@ func TestMetricsService_nilMetricsDBGuards(t *testing.T) {
 	if err := service.storePerRuleMetrics(map[string]*ruleLabelAggregate{"lb_x": {}}); err == nil {
 		t.Fatal("storePerRuleMetrics 在 nil 指标库时必须返回错误")
 	}
-	service.cleanupHistory() // 不得 panic
-}
-
-// 历史清理与采集不再串行：清理在独立 goroutine 推进（积压大时整轮可达数十秒），
-// 期间采集节拍不受影响；重复进入按单飞跳过。
-func TestMetricsService_startHistoryCleanup_isAsyncAndSingleFlight(t *testing.T) {
-	setupMetricsRetentionTest(t)
-	service := NewMetricsService("", 30)
-	release := make(chan struct{})
-	var releaseOnce sync.Once
-	unblock := func() { releaseOnce.Do(func() { close(release) }) }
-	entered := make(chan struct{})
-	var runs atomic.Int64
-	metricsCleanupHook = func() {
-		runs.Add(1)
-		close(entered)
-		<-release
-	}
-	t.Cleanup(func() {
-		metricsCleanupHook = nil
-		unblock()
-	})
-
-	// When：清理在途（被钩子挂起）
-	done := make(chan struct{})
-	go func() {
-		service.startHistoryCleanup()
-		close(done)
-	}()
-	select {
-	case <-done:
-	case <-time.After(2 * time.Second):
-		t.Fatal("startHistoryCleanup 必须异步返回（清理不得阻塞调用方/采集循环）")
-	}
-	<-entered
-	// 清理在途时再次触发：单飞跳过
-	service.startHistoryCleanup()
-	unblock()
-	service.cleanupWG.Wait()
-
-	// Then：清理只跑了一轮
-	if got := runs.Load(); got != 1 {
-		t.Fatalf("清理执行轮数=%d, want 1（在途时重复触发须跳过）", got)
+	if err := service.cleanupHistory(); err == nil {
+		t.Fatal("cleanupHistory 在 nil 指标库时必须返回错误（清理没跑成不得伪装 success）")
 	}
 }
+
+// 「历史清理与采集不串行 + 单飞」不变量已随归口重构消失：采集
+// （metrics-collector daemon）与清理（metrics-history-cleanup Periodic）是
+// 两个独立任务，在途重叠由引擎 admission（in-flight 跳过）结构性保证——
+// 原 goroutine 单飞/Stop 等待/竞态负向钉测随自建循环一并退役。
 
 // 概览 DB 派生指标每采集周期只刷新一次：旧形态 collect 与 updateOverview 各
 // 刷一次（6 条 COUNT/周期）。钩子把「每周期 1 次」变成机器可判定断言。
@@ -807,69 +746,6 @@ func TestMetricsService_refreshDBOverviewMetrics_dedupesFailureLogs(t *testing.T
 	}
 	if !strings.Contains(logs.String(), "keeping previous value=2") {
 		t.Fatalf("首报行必须带保留前值=2: %s", logs.String())
-	}
-}
-
-// Stop 必须在在途清理 goroutine 完全退出后才返回：WaitGroup.Add 先于
-// 单飞计数置位，任何 Wait 都不可能观察到 0 计数而提前返回。
-func TestMetricsService_stopWaitsForInFlightCleanup(t *testing.T) {
-	setupMetricsRetentionTest(t)
-	service := NewMetricsService("", 30)
-	entered := make(chan struct{})
-	release := make(chan struct{})
-	var releaseOnce sync.Once
-	unblock := func() { releaseOnce.Do(func() { close(release) }) }
-	metricsCleanupHook = func() {
-		close(entered)
-		<-release
-	}
-	t.Cleanup(func() {
-		metricsCleanupHook = nil
-		unblock()
-	})
-
-	service.startHistoryCleanup()
-	select {
-	case <-entered:
-	case <-time.After(2 * time.Second):
-		t.Fatal("清理 goroutine 未启动")
-	}
-
-	stopped := make(chan struct{})
-	go func() {
-		service.Stop()
-		close(stopped)
-	}()
-	select {
-	case <-stopped:
-		t.Fatal("Stop 在清理 goroutine 仍在途时提前返回（WaitGroup 计数丢失）")
-	case <-time.After(100 * time.Millisecond):
-	}
-	unblock()
-	select {
-	case <-stopped:
-	case <-time.After(3 * time.Second):
-		t.Fatal("清理退出后 Stop 未返回")
-	}
-}
-
-// 单飞计数已被占用（上一轮在途）时，本次触发必须立即归还 Add 的计数——
-// 否则 Wait 会永久阻塞在幽灵计数上。
-func TestMetricsService_startHistoryCleanup_casMissReleasesWaitCount(t *testing.T) {
-	service := NewMetricsService("", 30)
-	service.cleanupRunning.Store(true)
-
-	service.startHistoryCleanup()
-
-	done := make(chan struct{})
-	go func() {
-		service.cleanupWG.Wait()
-		close(done)
-	}()
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatal("CAS 失败后未归还 WaitGroup 计数（Wait 永久阻塞）")
 	}
 }
 
@@ -950,48 +826,6 @@ func TestPrometheusLabelParsing_nameBoundaryAndQuotedBrace(t *testing.T) {
 	}
 }
 
-// Stop 之后不得再启动清理 goroutine（stopCh 与 24h ticker 同时就绪时的
-// select 竞态）：先在同一用例内拿正控（未 Stop 时清理确实会被 hook 观测），
-// Stop 后以显式超时的 select + cleanupRunning 可见状态做负向断言——固定
-// sleep 作唯一证据在负载下会假绿，无正控时则无证伪力。
-func TestMetricsService_startHistoryCleanupAfterStopDoesNotRun(t *testing.T) {
-	isolateMetricsState(t)
-	service := NewMetricsService("http://127.0.0.1:1/metrics", 30)
-	oldHook := metricsCleanupHook
-	t.Cleanup(func() { metricsCleanupHook = oldHook })
-
-	// 正控：未 Stop 时 startHistoryCleanup 确实执行一轮（hook 被观测）。
-	// hook 内阻塞到放行为止：正控轮不触碰库分支，也钉住单飞窗口。
-	entered := make(chan struct{})
-	release := make(chan struct{})
-	metricsCleanupHook = func() {
-		close(entered)
-		<-release
-	}
-	service.startHistoryCleanup()
-	select {
-	case <-entered:
-	case <-time.After(2 * time.Second):
-		t.Fatal("正控失败：未 Stop 时清理未执行（hook 未被观测），负向断言无证伪力")
-	}
-	close(release) // 放行正控轮退出（db.MetricsDB==nil 分支只记状态日志）
-
-	// 负向：Stop 后 startHistoryCleanup 必须在 stopped 复核处短路。
-	ranCh := make(chan struct{})
-	metricsCleanupHook = func() { close(ranCh) }
-	service.Stop()
-	service.startHistoryCleanup()
-	if service.cleanupRunning.Load() {
-		t.Fatal("Stop 后 startHistoryCleanup 仍置位单飞标记（同步可见状态）")
-	}
-	select {
-	case <-ranCh:
-		t.Fatal("Stop 后仍执行了历史清理（关停竞态）")
-	case <-time.After(100 * time.Millisecond):
-		// 显式观测窗内 hook 未进入：负向断言成立。
-	}
-}
-
 // 同一次抓取的两步结论不得相反：仪表盘实时指标解析器跳过 NaN/±Inf（转 int64
 // 对非有限值是实现相关的），规则指标采集此前对同形态报错。统一为跳过，且
 // 「不可解析」仍是错误（跳过只针对非有限值）。
@@ -1043,32 +877,6 @@ func TestAggregatePrometheusText_toleratesSpaceInLabelValue(t *testing.T) {
 	}
 }
 
-// MetricsService 生命周期一次性：Stop 后再 Start 必须显性失败——旧形态第二次
-// Start 因 stopCh 已关闭立即返回，看起来启动了，实际零采集零清理（静默失效）。
-// panic 即 loud failure：采集体在守卫之后，collect 调用次数为 0。
-func TestMetricsService_restartAfterStopIsLoudFailureWithoutCollects(t *testing.T) {
-	isolateMetricsState(t)
-	service := NewMetricsService("http://127.0.0.1:1/metrics", 30)
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		service.Start()
-	}()
-	service.Stop()
-	select {
-	case <-done:
-	case <-time.After(2 * time.Second):
-		t.Fatal("Stop 后首个 Start 循环未退出")
-	}
-
-	defer func() {
-		r := recover()
-		if r == nil {
-			t.Fatal("Stop 后再 Start 必须显性失败（不得静默零采集）")
-		}
-		if !strings.Contains(fmt.Sprint(r), "只允许调用一次") {
-			t.Fatalf("panic=%v, want 一次性生命周期说明", r)
-		}
-	}()
-	service.Start()
-}
+// 「Start/Stop 一次性生命周期」钉测随 Start/Stop 归口退役：metrics-collector
+// daemon 的启停/重启语义由引擎 lifecycle（StartLoop/StopLoop/角色门）唯一
+// 承担，结构体不再持有自建循环生命周期。

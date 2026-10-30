@@ -250,6 +250,7 @@ func TestTaskEngineWire_PeriodicIntervalAndScheduledSlotPresent(t *testing.T) {
 		"security-events-retention": 86400, "metrics-orphan-cleanup": 86400,
 		"cert-renewal-scan": 21600, "cert-reconcile": 21600, "cert-manual-poll": 600,
 		"cert-waiting-ca": 30, "autoban": 60,
+		"metrics-history-cleanup": 86400,
 	}
 	seen := map[string]bool{}
 	for _, m := range metas {

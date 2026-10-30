@@ -289,49 +289,9 @@ func TestLibUpdateLogs_readTaskLogWithRotation(t *testing.T) {
 	}
 }
 
-// Caddy 重启 watcher 幂等门：重复调用不得启动第二个 watcher（双 watcher 会
-// 让同一触发文件被执行两次全量渲染 + /load）。断言启动次数而非标志位——
-// 标志位区分不了「第二次提前返回」与「第二次又起了一个 goroutine」。
-func TestStartCaddyRestartWatcher_secondCallStartsNoSecondLoop(t *testing.T) {
-	withIsolatedGlobal(t)
-	oldLoop := caddyRestartWatcherLoop
-	release := make(chan struct{})
-	starts := make(chan struct{}, 2)
-	// 替身循环：登记一次启动后挂起，既证明「起了一个」也不让真实 2s 轮询
-	// 泄漏到后续用例。
-	caddyRestartWatcherLoop = func(*Handlers, context.Context) {
-		starts <- struct{}{}
-		<-release
-	}
-	caddyRestartWatcherStarted.Store(false)
-	t.Cleanup(func() {
-		close(release) // 先停替身循环，再还原 seam
-		caddyRestartWatcherStarted.Store(false)
-		caddyRestartWatcherLoop = oldLoop
-	})
-
-	h := NewHandlers(Dependencies{})
-	h.StartCaddyRestartWatcher()
-	select {
-	case <-starts:
-	case <-time.After(2 * time.Second):
-		t.Fatal("首次调用未启动 watcher 循环")
-	}
-	if !caddyRestartWatcherStarted.Load() {
-		t.Fatal("首次调用必须置位 started 标记")
-	}
-
-	// 第二次调用必须被 CAS 门挡住：200ms 内不得出现第二个循环实例。
-	h.StartCaddyRestartWatcher()
-	select {
-	case <-starts:
-		t.Fatal("第二次调用又启动了 watcher 循环（幂等门失效）")
-	case <-time.After(200 * time.Millisecond):
-	}
-	if !caddyRestartWatcherStarted.Load() {
-		t.Fatal("幂等门被重置（第二调用不应改状态）")
-	}
-}
+// 「watcher 自建 goroutine 幂等门」钉测随 StartCaddyRestartWatcher 归口退役：
+// 重复启动防护由引擎 daemon 生命周期结构性保证（StartLoop 对已运行 daemon
+// 零动作，engine_startDaemon CAS），handlers 不再持有 watcher 循环。
 
 // 指标总览端点：空采样也必须返回结构化 0 值（前端卡片按字段渲染，缺键会
 // 变成 undefined 显示）。键集契约逐键断言——只断言「对象非空」对

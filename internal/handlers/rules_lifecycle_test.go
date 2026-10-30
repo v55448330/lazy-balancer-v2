@@ -246,6 +246,7 @@ func TestDisableRule_abortsWhenRuleDeletedInLockWindow(t *testing.T) {
 	services.ResetCAQueueManagerForTest()
 	services.InitCAQueueManager(nil, t.TempDir())
 	services.GetCAQueueManager().Start()
+	startCertQueueDispatchForTest(t)
 	t.Cleanup(services.ResetCAQueueManagerForTest)
 	disableRuleLockWindowHook = func(caddyID string) {
 		if _, err := db.DB.Exec("DELETE FROM lb_rules WHERE caddy_id = ?", caddyID); err != nil {
@@ -283,6 +284,7 @@ func TestUpdateRule_abortsWhenRuleConcurrentlyModifiedInLockWindow(t *testing.T)
 	services.ResetCAQueueManagerForTest()
 	services.InitCAQueueManager(nil, t.TempDir())
 	services.GetCAQueueManager().Start()
+	startCertQueueDispatchForTest(t)
 	t.Cleanup(services.ResetCAQueueManagerForTest)
 	updateRuleLockWindowHook = func(caddyID string, window int) {
 		if window != 1 {
@@ -937,6 +939,7 @@ func TestDisableRule_abortsWhenRuleConcurrentlyModifiedInLockWindow(t *testing.T
 	services.ResetCAQueueManagerForTest()
 	services.InitCAQueueManager(nil, t.TempDir())
 	services.GetCAQueueManager().Start()
+	startCertQueueDispatchForTest(t)
 	t.Cleanup(services.ResetCAQueueManagerForTest)
 	disableRuleLockWindowHook = func(caddyID string) {
 		// 模拟并发 EnableRule 提交（窗口内重新启用）

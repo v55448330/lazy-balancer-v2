@@ -31,12 +31,9 @@ func TestCAQueueManager_PauseAndDrain_sharesSingleDrainDeadline(t *testing.T) {
 	constructed := make([]*caQueue, 0, 3)
 	for id := 1; id <= 3; id++ {
 		queue := &caQueue{
-			active:   make(map[int]struct{}),
-			stopCh:   make(chan struct{}),
-			cancel:   func() {},
-			loopDone: make(chan struct{}),
+			active: make(map[int]struct{}),
+			cancel: func() {},
 		}
-		close(queue.loopDone)
 		// 在途执行体不响应取消：三队列的 executions.Wait 都不会返回。
 		queue.executions.Add(1)
 		queues[id] = queue

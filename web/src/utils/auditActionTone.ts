@@ -20,6 +20,8 @@ const ACTION_TONE_EXCEPTIONS: Record<string, AuditActionTone> = {
   '删除': 'danger',
   '禁用': 'danger',
   '停止': 'danger',
+  // 集群切从后 cluster-sync 保持用户停止态：节点不再同步（无关键词可派生）。
+  '同步停止': 'danger',
   '重启': 'danger',
   '备份删除': 'danger',
   '配置漂移': 'danger',

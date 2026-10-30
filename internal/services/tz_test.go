@@ -2,7 +2,6 @@ package services
 
 import (
 	"bytes"
-	"context"
 	"errors"
 	"io"
 	"log"
@@ -62,119 +61,6 @@ func TestRefreshLocation_updates_current_location_without_mutating_timeLocal(t *
 	}
 }
 
-func TestTimezoneRefresh_stops_and_waits_when_context_is_canceled(t *testing.T) {
-	// Given
-	StopTimezoneRefresh()
-	ctx, cancel := context.WithCancel(context.Background())
-	done := StartTimezoneRefresh(ctx)
-
-	// When
-	cancel()
-
-	// Then: 有界等待证明循环已停止且等待闭合（裸 <-done 在坏实现下会挂到
-	// 整包 10 分钟超时，失败的用例名与原因都丢失）。
-	select {
-	case <-done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("cancel 后 StartTimezoneRefresh 未在 5s 内退出（<-done 无界等待）")
-	}
-
-	t.Cleanup(func() { StartTimezoneRefresh(context.Background()) })
-}
-
-// Given 一个永不退出的时区刷新 worker（可控挂起：done 永不关闭——等价于
-// refresh 阻塞在 DB busy_timeout 的生产形态）。
-// When StopTimezoneRefreshWithin 以 50ms 上限调用。
-// Then 按 deadline 放弃等待并返回 false（不再无界 <-done）；字段保留，
-// worker 最终退出后可再次 Stop 完成清零（可重启语义不变）。
-func TestStopTimezoneRefreshWithin_givesUpWhenWorkerStuck(t *testing.T) {
-	StopTimezoneRefresh() // 停掉 init 启动的真实 worker
-	t.Cleanup(func() { StartTimezoneRefresh(context.Background()) })
-
-	stuck := make(chan struct{}) // 永不关闭
-	timezoneRefresh.Lock()
-	timezoneRefresh.cancel = func() {}
-	timezoneRefresh.done = stuck
-	timezoneRefresh.Unlock()
-
-	begin := time.Now()
-	if StopTimezoneRefreshWithin(50 * time.Millisecond) {
-		t.Fatal("卡住的 worker 必须返回 false（放弃等待）")
-	}
-	if elapsed := time.Since(begin); elapsed > 2*time.Second {
-		t.Fatalf("等待未受预算约束：耗时 %s（预算 50ms）", elapsed)
-	}
-
-	close(stuck)
-	if !StopTimezoneRefreshWithin(2 * time.Second) {
-		t.Fatal("worker 退出后 Stop 必须返回 true")
-	}
-	timezoneRefresh.Lock()
-	cleared := timezoneRefresh.cancel == nil && timezoneRefresh.done == nil
-	timezoneRefresh.Unlock()
-	if !cleared {
-		t.Fatal("worker 退出后字段必须清零（可重启语义不变）")
-	}
-}
-
-// Given 正常运行的时区刷新 worker（init 形态，空闲 select 循环）。
-// When StopTimezoneRefreshWithin 以充裕预算调用。
-// Then 快速返回 true——正常路径不等满预算。
-func TestStopTimezoneRefreshWithin_fastPathDoesNotConsumeBudget(t *testing.T) {
-	StopTimezoneRefresh()
-	StartTimezoneRefresh(context.Background())
-	t.Cleanup(func() {
-		StopTimezoneRefresh()
-		StartTimezoneRefresh(context.Background())
-	})
-
-	begin := time.Now()
-	if !StopTimezoneRefreshWithin(5 * time.Second) {
-		t.Fatal("正常 worker 必须在预算内退出")
-	}
-	if elapsed := time.Since(begin); elapsed > 2*time.Second {
-		t.Fatalf("正常路径耗时 %s，不得在预算内空等", elapsed)
-	}
-}
-
-// 重启路径必须有界（与运行日志尺寸刷新同构）：旧 worker 卡在 DB
-// busy_timeout 时不得无界挂起刷新链启动——超时放弃等待并 warn，新实例接续。
-func TestStartTimezoneRefresh_abandonsStuckWorkerWithinBudget(t *testing.T) {
-	StopTimezoneRefresh() // 停掉 init 启动的真实 worker
-	t.Cleanup(func() {
-		StopTimezoneRefresh()
-		StartTimezoneRefresh(context.Background())
-	})
-
-	stuck := make(chan struct{}) // 永不关闭＝旧 worker 卡在 DB busy_timeout
-	timezoneRefresh.Lock()
-	timezoneRefresh.cancel = func() {}
-	timezoneRefresh.done = stuck
-	timezoneRefresh.Unlock()
-	logs := captureServiceLog(t)
-
-	// When
-	begin := time.Now()
-	StartTimezoneRefresh(context.Background())
-	elapsed := time.Since(begin)
-
-	// Then：等待被预算截断，且有恰一条放弃 warn
-	if elapsed > 3*time.Second {
-		t.Fatalf("重启等待耗时 %s，超出有界预算（%s）", elapsed, timezoneRefreshRestartWaitMax)
-	}
-	if elapsed < timezoneRefreshRestartWaitMax/2 {
-		t.Fatalf("重启等待耗时 %s，未等待预算即放弃（%s）", elapsed, timezoneRefreshRestartWaitMax)
-	}
-	if warns := countLogLines(logs, "未在重启预算"); warns != 1 {
-		t.Fatalf("放弃等待 warn lines=%d, want 1; logs=%s", warns, logs.String())
-	}
-
-	// Then：新实例已接管（旧 worker 的永不退出形态不得被沿用）
-	if !StopTimezoneRefreshWithin(2 * time.Second) {
-		t.Fatal("重启后的 worker 必须在预算内退出")
-	}
-}
-
 func TestApplicationLogWriterFiltersRawStandardLogsAtConfiguredThreshold(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -216,8 +102,6 @@ func TestApplicationLogWriterFiltersRawStandardLogsAtConfiguredThreshold(t *test
 // （亦为集群导入 users 节后的调用点），在此追加一次即时 refreshLocation。
 func TestApplyLogLevel_refreshesTimezoneImmediately(t *testing.T) {
 	snapshotLocationState(t) // currentLocation + 任务引擎同源还原（ApplyLogLevel 两处都写）
-	StopTimezoneRefresh()
-	t.Cleanup(func() { StartTimezoneRefresh(context.Background()) })
 	oldDB, oldMetricsDB, oldAuditDB := db.DB, db.MetricsDB, db.AuditDB
 	oldCurrent := db.GetDB()
 	if err := db.Initialize(t.TempDir()); err != nil {
@@ -402,8 +286,6 @@ func TestConfigureLocation_rejectsBlankName(t *testing.T) {
 // 降级到 info。
 func TestApplyLogLevel_logsReadFailureOnceAndRecovers(t *testing.T) {
 	snapshotLocationState(t) // currentLocation + 任务引擎同源还原
-	StopTimezoneRefresh()
-	t.Cleanup(func() { StartTimezoneRefresh(context.Background()) })
 	oldDB, oldMetricsDB, oldAuditDB := db.DB, db.MetricsDB, db.AuditDB
 	oldCurrent := db.GetDB()
 	if err := db.Initialize(t.TempDir()); err != nil {

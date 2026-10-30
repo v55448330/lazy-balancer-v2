@@ -50,6 +50,16 @@ func seedOrphanCertJob(t *testing.T, ruleID, domain, status string) int {
 	return int(id)
 }
 
+// seedOrphanCertJobWithID 以显式高位 ID 播种（跨用例遗留 goroutine 按旧小 ID
+// 改写新库行的串扰隔离形态，见 certificates_test.go 可读行用例注释）。
+func seedOrphanCertJobWithID(t *testing.T, id int, ruleID, domain, status string) int {
+	t.Helper()
+	if _, err := db.DB.Exec(`INSERT INTO cert_jobs (id,rule_id,domain,status) VALUES (?,?,?,?)`, id, ruleID, domain, status); err != nil {
+		t.Fatalf("seed cert job with id (%d,%s,%s,%s): %v", id, ruleID, domain, status, err)
+	}
+	return id
+}
+
 func TestCertJobsActive_nilDBSkipsWithoutMaskingQueryErrors(t *testing.T) {
 	useCertSweepTickTestEnv(t)
 	seedOrphanCertJob(t, "lb_nil_guard", "nil-guard.example.test", "queued")
@@ -386,14 +396,14 @@ func TestCertWaitingCATickOnce_summaryLineOnlyOnActions(t *testing.T) {
 	}
 	t.Cleanup(func() { caQueueManager.Stop(); caQueueManager = oldManager })
 
-	// Given：适用规则 + 一条冷却未到期的 waiting_ca 任务
+	// Given：适用规则 + 一条冷却未到期的 failed 行（退避窗口在途）
 	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,domain,protocol,listen_port,enabled,enable_tls,tls_source) VALUES ('lb_tick_quiet','tick-quiet','quiet.example.test','http',8443,1,1,'acme_dns')`); err != nil {
 		t.Fatalf("seed rule: %v", err)
 	}
 	if _, err := db.DB.Exec(`INSERT INTO ca_providers (id,name,provider,directory_url,enabled) VALUES (7,'tick CA','letsencrypt','https://invalid.example/directory',1)`); err != nil {
 		t.Fatalf("seed provider: %v", err)
 	}
-	jobID := seedOrphanCertJob(t, "lb_tick_quiet", "quiet.example.test", "waiting_ca")
+	jobID := seedOrphanCertJob(t, "lb_tick_quiet", "quiet.example.test", "failed")
 	if _, err := db.DB.Exec(`UPDATE cert_jobs SET ca_provider_id=7, ca_available_after=datetime('now','+1 hour') WHERE id=?`, jobID); err != nil {
 		t.Fatalf("park job: %v", err)
 	}
@@ -508,14 +518,14 @@ func TestCertWaitingCATickOnce_skipsWritesWhenDemotedMidRound(t *testing.T) {
 	}
 	t.Cleanup(func() { caQueueManager.Stop(); caQueueManager = oldManager })
 
-	// Given：适用规则 + 一条冷却已到期的 waiting_ca 任务（扫描会判定为可重排）
+	// Given：适用规则 + 一条冷却已到期的 failed 行（扫描会判定为可重排）
 	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,domain,protocol,listen_port,enabled,enable_tls,tls_source) VALUES ('lb_gate_demote','gate-demote','demote.example.test','http',8443,1,1,'acme_dns')`); err != nil {
 		t.Fatalf("seed rule: %v", err)
 	}
 	if _, err := db.DB.Exec(`INSERT INTO ca_providers (id,name,provider,directory_url,enabled) VALUES (8,'gate CA','letsencrypt','https://invalid.example/directory',1)`); err != nil {
 		t.Fatalf("seed provider: %v", err)
 	}
-	jobID := seedOrphanCertJob(t, "lb_gate_demote", "demote.example.test", "waiting_ca")
+	jobID := seedOrphanCertJob(t, "lb_gate_demote", "demote.example.test", "failed")
 	if _, err := db.DB.Exec(`UPDATE cert_jobs SET ca_provider_id=8, ca_available_after=datetime('now','-1 minute') WHERE id=?`, jobID); err != nil {
 		t.Fatalf("expire cooling: %v", err)
 	}
@@ -542,12 +552,12 @@ func TestCertWaitingCATickOnce_skipsWritesWhenDemotedMidRound(t *testing.T) {
 	if !demoted {
 		t.Fatal("写前门未执行（降级注入未发生，用例前提不成立）")
 	}
-	// Then 2：零写入——任务仍停在 waiting_ca
+	// Then 2：零写入——任务仍停在 failed（退避窗口原样）
 	var status string
 	if err := db.DB.QueryRow(`SELECT status FROM cert_jobs WHERE id=?`, jobID).Scan(&status); err != nil {
 		t.Fatal(err)
 	}
-	if status != "waiting_ca" {
-		t.Fatalf("status=%q, want waiting_ca（从节点不得改写任务态）", status)
+	if status != "failed" {
+		t.Fatalf("status=%q, want failed（从节点不得改写任务态）", status)
 	}
 }

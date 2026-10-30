@@ -451,60 +451,6 @@ func TestLogCleanupRound_emptyLogFileStillPurgesOrphanRuleLogs(t *testing.T) {
 	}
 }
 
-// Given 一个永不退出的日志尺寸刷新 worker（可控挂起：done 永不关闭——等价于
-// refresh 阻塞在 DB busy_timeout 的生产形态）。
-// When StopLogRotateWithin 以 50ms 上限调用。
-// Then 按 deadline 放弃等待并返回 false（不再无界 <-done）；字段保留，
-// worker 最终退出后可再次 Stop 完成清零（可重启语义不变）。
-func TestStopLogRotateWithin_givesUpWhenWorkerStuck(t *testing.T) {
-	// 包 init 不再自启 worker（首次刷新改由 main 在 db.Initialize 后触发）——
-	// 本测试直接安装受控挂起的 worker 形态。
-	stuck := make(chan struct{}) // 永不关闭
-	runtimeLogSizeRefresh.Lock()
-	runtimeLogSizeRefresh.cancel = func() {}
-	runtimeLogSizeRefresh.done = stuck
-	runtimeLogSizeRefresh.Unlock()
-
-	begin := time.Now()
-	if StopLogRotateWithin(50 * time.Millisecond) {
-		t.Fatal("卡住的 worker 必须返回 false（放弃等待）")
-	}
-	if elapsed := time.Since(begin); elapsed > 2*time.Second {
-		t.Fatalf("等待未受预算约束：耗时 %s（预算 50ms）", elapsed)
-	}
-
-	close(stuck)
-	if !StopLogRotateWithin(2 * time.Second) {
-		t.Fatal("worker 退出后 Stop 必须返回 true")
-	}
-	runtimeLogSizeRefresh.Lock()
-	cleared := runtimeLogSizeRefresh.cancel == nil && runtimeLogSizeRefresh.done == nil
-	runtimeLogSizeRefresh.Unlock()
-	if !cleared {
-		t.Fatal("worker 退出后字段必须清零（可重启语义不变）")
-	}
-}
-
-// Given 正常运行的日志尺寸刷新 worker（init 形态，空闲 select 循环）。
-// When StopLogRotateWithin 以充裕预算调用。
-// Then 快速返回 true——正常路径不等满预算。
-func TestStopLogRotateWithin_fastPathDoesNotConsumeBudget(t *testing.T) {
-	StopLogRotateWithin(0)
-	StartLogRotate(context.Background())
-	t.Cleanup(func() {
-		StopLogRotateWithin(0)
-		StartLogRotate(context.Background())
-	})
-
-	begin := time.Now()
-	if !StopLogRotateWithin(5 * time.Second) {
-		t.Fatal("正常 worker 必须在预算内退出")
-	}
-	if elapsed := time.Since(begin); elapsed > 2*time.Second {
-		t.Fatalf("正常路径耗时 %s，不得在预算内空等", elapsed)
-	}
-}
-
 // 清理失败必须聚合进结果并让日志行不称「完成」：保留期口径读取失败（含
 // 主库损坏/关停形态）时不得按默认 3 月做不可逆删除，失败原因必须进
 // RetentionError 让 task_runs 显示失败而非「完成」。audit.log 的轮转不属

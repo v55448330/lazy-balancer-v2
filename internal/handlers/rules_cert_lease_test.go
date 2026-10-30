@@ -30,6 +30,7 @@ func TestUpdateRule_ReleasesBlockLeaseWhenCancelWindowPanics(t *testing.T) {
 	services.ResetCAQueueManagerForTest()
 	services.InitCAQueueManager(nil, t.TempDir())
 	services.GetCAQueueManager().Start()
+	startCertQueueDispatchForTest(t)
 	t.Cleanup(services.ResetCAQueueManagerForTest)
 
 	oldHook := updateRuleLockWindowHook
@@ -104,6 +105,7 @@ func TestDisableRule_ReleasesBlockLeaseWhenCancelWindowPanics(t *testing.T) {
 	services.ResetCAQueueManagerForTest()
 	services.InitCAQueueManager(nil, t.TempDir())
 	services.GetCAQueueManager().Start()
+	startCertQueueDispatchForTest(t)
 	t.Cleanup(services.ResetCAQueueManagerForTest)
 
 	oldHook := disableRuleLockWindowHook

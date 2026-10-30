@@ -28,6 +28,7 @@ func TestDeleteRule_keeps_block_lease_when_compensation_started_after_drain_time
 	services.ResetCAQueueManagerForTest()
 	services.InitCAQueueManager(nil, t.TempDir())
 	services.GetCAQueueManager().Start()
+	startCertQueueDispatchForTest(t)
 	t.Cleanup(services.ResetCAQueueManagerForTest)
 	oldTimeout := cancelRuleJobsTimeout
 	cancelRuleJobsTimeout = 10 * time.Millisecond
@@ -82,6 +83,7 @@ func TestDeleteRule_releases_block_lease_when_drain_panics(t *testing.T) {
 	services.ResetCAQueueManagerForTest()
 	services.InitCAQueueManager(nil, t.TempDir())
 	services.GetCAQueueManager().Start()
+	startCertQueueDispatchForTest(t)
 	t.Cleanup(services.ResetCAQueueManagerForTest)
 	oldCancel := cancelRuleJobs
 	cancelRuleJobs = func(context.Context, *services.CAQueueManager, string) error {

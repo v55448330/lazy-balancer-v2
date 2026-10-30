@@ -243,7 +243,7 @@ const TaskRunsLatestPerTaskQuery = `SELECT id, task_id, family, trigger, COALESC
 // 钉测拦截。排序键必须与索引表达式逐字一致（COALESCE(updated_at,created_at)
 // DESC）：updated_at 为 NULL 的行走 created_at 回落，改口径即改变展示顺序。
 // 末列 ca_available_after 供任务监控行计算 retry_cooldown_seconds（与证书任务
-// 列表同口径：waiting_ca 取 CA 退避剩余秒），消费方不得另写一份查询。
+// 列表同口径：failed/waiting_ca 行取 CA 退避剩余秒），消费方不得另写一份查询。
 const CertJobsMonitorRowsQuery = `SELECT id, rule_id, domain, status, COALESCE(message,''), COALESCE(created_at,''), COALESCE(updated_at,created_at), COALESCE(ca_available_after,'')
 		FROM cert_jobs
 		WHERE ?=1 OR COALESCE(message,'') NOT LIKE '从主节点同步%'
@@ -405,7 +405,8 @@ func Initialize(dataDir string) (err error) {
 		return fmt.Errorf("failed to secure database artifacts: %w", err)
 	}
 	SetDB(database)
-	startAPIKeyLastUsedFlusher()
+	// api_keys.last_used 批量落库循环已归口 apikey-usage-flusher daemon
+	// （taskengine）——Initialize 不再自建后台循环。
 
 	log.Println("Database initialized successfully")
 	return nil
@@ -1504,6 +1505,12 @@ func runMigrations() error {
 	}
 	if err := migrateSecurityEventRetentionDefaults(); err != nil {
 		return err
+	}
+	// ACME 失败语义统一（B2）：waiting_ca 停车状态退役——存量行转 failed，
+	// 保留消息/重试次数/退避窗口（须在 ensureNewColumns 之后：cert_jobs 重建
+	// DDL 已收敛，此处仅状态归一）。
+	if err := migrateCertJobsWaitingCA(); err != nil {
+		return fmt.Errorf("failed to migrate waiting_ca certificate jobs: %w", err)
 	}
 	if err := migrateThreatTrafficSampleUnified(); err != nil {
 		return err
@@ -5218,7 +5225,8 @@ func migrateCertJobsStatusConstraint() error {
 }
 
 func Close() error {
-	stopAPIKeyLastUsedFlusher()
+	// 收尾尾检 flush（api_keys.last_used）：apikey-usage-flusher daemon 已随
+	// 引擎排空停止，Close 前最后一次落库兜底（teardown 清理，非循环）。
 	flushErr := FlushAPIKeyLastUsed()
 	var err error
 	err = errors.Join(err, flushErr)

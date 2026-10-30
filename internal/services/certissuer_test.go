@@ -527,7 +527,10 @@ func TestCertIssuer_deployIssuedCertificate_restores_when_disk_differs_from_own_
 	}
 }
 
-func TestCertIssuer_Issue_preflight_rate_limit_enters_waiting_ca(t *testing.T) {
+// TestCertIssuer_Issue_preflight_rate_limit_lands_failed_with_window：
+// B2 失败语义统一——预检 429 与其它失败同语义落 failed（waiting_ca 退役），
+// 退避窗口取 Retry-After、last_error_code='429'。
+func TestCertIssuer_Issue_preflight_rate_limit_lands_failed_with_window(t *testing.T) {
 	// Given：CA 预检连通性测试被 429 限流
 	jobID, ruleID := seedCertificateJob(t, "queued")
 	var serverURL string
@@ -562,18 +565,23 @@ func TestCertIssuer_Issue_preflight_rate_limit_enters_waiting_ca(t *testing.T) {
 	// When
 	issueErr := issuer.Issue(context.Background(), jobID, ruleID, "example.com", models.CAProvider{ID: int(providerID)})
 
-	// Then：预检 429 走限流冷却，而非直接失败
+	// Then：预检 429 归类为限流错误，经队列统一失败写侧落 failed
 	var rateLimitErr *CAProviderRateLimitError
 	if !errors.As(issueErr, &rateLimitErr) {
 		t.Fatalf("preflight error=%v, want CA rate limit", issueErr)
 	}
 	handleQueueExecutionError(jobID, issueErr)
 	var status string
-	if err := db.DB.QueryRow("SELECT status FROM cert_jobs WHERE id=?", jobID).Scan(&status); err != nil {
+	var windowOK bool
+	var errorCode string
+	if err := db.DB.QueryRow(`SELECT status, ca_available_after IS NOT NULL, COALESCE(last_error_code,'') FROM cert_jobs WHERE id=?`, jobID).Scan(&status, &windowOK, &errorCode); err != nil {
 		t.Fatalf("read job status: %v", err)
 	}
-	if status != "waiting_ca" {
-		t.Fatalf("job status=%q, want waiting_ca", status)
+	if status != "failed" {
+		t.Fatalf("job status=%q, want failed（429 不再停车 waiting_ca）", status)
+	}
+	if !windowOK || errorCode != "429" {
+		t.Fatalf("window=%v errorCode=%q, want 窗口写入（Retry-After=1s）+ '429'", windowOK, errorCode)
 	}
 }
 

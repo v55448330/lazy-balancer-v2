@@ -728,17 +728,29 @@ func rebuildCrawlerSnapshotAfterPromote() {
 	}
 }
 
-// restoreClusterSyncSchedulingAfterDemote 切从后恢复拉取调度（须在
-// SetRole(false) 之后调用：先 SetRole 让 daemon 换代为拉取分支，再确保
-// 调度开启且偏好持久化——偏好表若仍保留主节点期间的 0，下次重启会再次
-// 停同步）。BecomeSlave 与角色对账（DB=从/引擎=主）共用。
+// restoreClusterSyncSchedulingAfterDemote 切从后的拉取调度对齐（须在
+// SetRole(false) 之后调用：先 SetRole 让 daemon 换代为拉取分支）。BecomeSlave
+// 与角色对账（DB=从/引擎=主）共用。
+//
+// 用户显式停止的 cluster-sync（loopOn=false）保持停止——角色翻转不得复活
+// 用户停止态（task-engine 标准 v2.2 §5）：切从只翻转角色语义，不覆盖用户
+// 对调度开关的裁定。此时以 Logf warn + 操作审计显式提示「切从后不会同步，
+// 请手动开启」，不得静默脱管；偏好表也不再回写 enabled=1（旧实现无条件
+// StartLoop + 持久化偏好，既复活了停止态，重启后还会按残留偏好继续停同步）。
+// 开启态：确保调度开启 + 持久化偏好（偏好表若残留主节点期间的 0，下次重启
+// 会再次停同步）。resumeHaltedSyncLifecycle 只在开启态调用——daemon 停止时
+// 复活同步服务会让同步在无调度的情况下运行，违背用户停止裁定。
 func restoreClusterSyncSchedulingAfterDemote() {
 	te := TaskEngine()
 	if te == nil {
 		return
 	}
-	// SetRole 只按角色启停 daemon，不覆盖主节点期间被用户停止的
-	// loopEnabled——切从是本机拓扑变更，不同步即为静默脱管。
+	if meta, ok := te.Lookup("cluster-sync"); ok && !meta.LoopOn {
+		Logf("warn", "cluster-sync 调度处于用户停止态：切从后不会同步，请手动开启")
+		RecordAuditLog("system", "同步停止", "集群模式",
+			FormatAuditDetail("已停止：切从后不会同步，请手动开启", AuditResultPart("warning")), "")
+		return
+	}
 	te.StartLoop("cluster-sync")
 	// StartLoop 只按角色换代 daemon；Halted 的 SyncService 对 Start 是 no-op
 	// （startLocked(resume=false) 直接返回），从节点数据会永久不收敛。复活

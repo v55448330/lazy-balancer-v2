@@ -73,6 +73,26 @@ func IssuanceSegmentBudgetFor(domainCount int) time.Duration {
 		orderReadySegmentBudget + finalizeSegmentBudget + orderValidSegmentBudget
 }
 
+// logStage 通过 Logger 记录签发进度（生命周期推进：stage 同步写 cert_jobs 行）。
+func (i *Issuer) logStage(stage, msg string) {
+	if i.Logger != nil {
+		i.Logger.Log(stage, msg)
+	}
+}
+
+// logStageFileOnly 只写任务日志文件：Logger 实现 acme.FileOnlyLogger
+// 时经 LogFileOnly（不改任务行状态），否则回退 Log（测试桩等仅实现 Logger）。
+func (i *Issuer) logStageFileOnly(stage, msg string) {
+	if i.Logger == nil {
+		return
+	}
+	if fileOnly, ok := i.Logger.(FileOnlyLogger); ok {
+		fileOnly.LogFileOnly(stage, msg)
+		return
+	}
+	i.Logger.Log(stage, msg)
+}
+
 // Issue obtains a certificate for the given domains via DNS-01 challenge.
 // It logs each stage through the Logger and cleans up DNS records afterwards.
 func (i *Issuer) Issue(ctx context.Context, domains []string) (certPEM, keyPEM string, err error) {
@@ -81,9 +101,7 @@ func (i *Issuer) Issue(ctx context.Context, domains []string) (certPEM, keyPEM s
 	}
 
 	log := func(stage, msg string) {
-		if i.Logger != nil {
-			i.Logger.Log(stage, msg)
-		}
+		i.logStage(stage, msg)
 	}
 
 	// Step 1: Register account（预检已注册同 client 时跳过——KID 缓存随
@@ -143,8 +161,17 @@ func (i *Issuer) Issue(ctx context.Context, domains []string) (certPEM, keyPEM s
 		}
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), dnsCleanupBudget(len(presentedChallenges), recordCount))
 		defer cleanupCancel()
-		log("cleanup_dns", "清理 ACME DNS TXT 记录")
-		i.Cleanup(cleanupCtx, presentedChallenges)
+		// 错误路径（签发失败）的清理块只写任务日志文件，不改任务行
+		// 状态——此前 log("cleanup_dns") 在失败路径也把行推进到 cleanup_dns
+		// （Downloaded 生命周期），带旧材料的续签失败行随后被 services 侧
+		// 「材料在身部署生命周期」判据误判为部署失败、被 30s 部署补扫折回
+		// issued。成功路径清理阶段仍走生命周期推进（cleanup_dns → 部署）。
+		cleanupLog := i.logStage
+		if err != nil {
+			cleanupLog = i.logStageFileOnly
+		}
+		cleanupLog("cleanup_dns", "清理 ACME DNS TXT 记录")
+		i.cleanupWithLog(cleanupCtx, presentedChallenges, cleanupLog)
 	}()
 
 	for _, authURL := range order.AuthzURLs {
@@ -363,17 +390,20 @@ func (i *Issuer) finalizeOrder(ctx context.Context, finalizeURL string, csr []by
 // 等待验证的 TXT；最后结束的那次签发在 Release 时拿回判定权，一次回收全部同值
 // 记录。未登记注销的 ChallengeInfo（测试/外部构造）按无并发处理。
 func (i *Issuer) Cleanup(ctx context.Context, challenges []ChallengeInfo) {
+	i.cleanupWithLog(ctx, challenges, i.logStage)
+}
+
+// cleanupWithLog 是 Cleanup 的日志注入变体：logStage 由调用方决定「生命周期
+// 推进日志（Log）」还是「仅任务日志文件（LogFileOnly）」——Issue 错误路径的
+// defer 清理传后者。
+func (i *Issuer) cleanupWithLog(ctx context.Context, challenges []ChallengeInfo, logStage func(stage, msg string)) {
 	for _, ci := range challenges {
 		if ci.claim != nil && !ci.claim.Release() {
-			if i.Logger != nil {
-				i.Logger.Log("cleanup_dns", fmt.Sprintf("同名同值的并发签发仍在进行，跳过清理 %s（由最后结束的签发统一回收）", ci.TokenFQDN))
-			}
+			logStage("cleanup_dns", fmt.Sprintf("同名同值的并发签发仍在进行，跳过清理 %s（由最后结束的签发统一回收）", ci.TokenFQDN))
 			continue
 		}
 		if err := dnsprovider.CleanUpChallenge(ctx, i.Provider, zoneFromDomain(ci.Domain), ci.TokenFQDN, ci.Value); err != nil {
-			if i.Logger != nil {
-				i.Logger.Log("cleanup_warning", fmt.Sprintf("清理 DNS 记录失败 %s: %v", ci.TokenFQDN, err))
-			}
+			logStage("cleanup_warning", fmt.Sprintf("清理 DNS 记录失败 %s: %v", ci.TokenFQDN, err))
 		}
 	}
 }

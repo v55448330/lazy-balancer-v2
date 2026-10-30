@@ -473,6 +473,14 @@ func (l *jobLogger) Log(stage, message string) {
 	}
 }
 
+// LogFileOnly 只写任务日志文件，不改 cert_jobs 行状态（签发错误路径
+// 的 defer DNS 清理块使用——失败行被推进到 cleanup_dns（Downloaded 生命周期）
+// 会被「材料在身部署生命周期」判据误判为部署失败折回 issued）。实现
+// acme.FileOnlyLogger 可选接口。
+func (l *jobLogger) LogFileOnly(stage, message string) {
+	l.file.Log(stage, message)
+}
+
 // Issue obtains a certificate for the given rule and domains using the
 // provided CA provider. The caller (queue manager) must pass a valid jobID.
 func (s *CertIssuer) Issue(ctx context.Context, jobID int, ruleID, domains string, provider models.CAProvider) error {
@@ -620,7 +628,8 @@ func (s *CertIssuer) Issue(ctx context.Context, jobID int, ruleID, domains strin
 		// 非 disabled），原 CAS 实际可命中——报告前提证伪。改用 failJob（from=
 		// 全部非终态）作为防御：若 logger.Log 的状态迁移因瞬时 DB 错误未落库，
 		// 精确归因仍能写入，不被 execute 兜底的泛化文案覆盖。
-		failJob(jobID, fmt.Sprintf("CA 提供商测试失败: %v", err))
+		// 签发未开始，本次执行零新材料产出。
+		failJob(jobID, fmt.Sprintf("CA 提供商测试失败: %v", err), false)
 		return fmt.Errorf("CA provider test failed: %w", err)
 	}
 	logger.Log("creating_account", "CA 提供商测试通过")
@@ -636,7 +645,7 @@ func (s *CertIssuer) Issue(ctx context.Context, jobID int, ruleID, domains strin
 	// 使用 QueryRowContext 以响应 worker 取消信号。
 	err = db.DB.QueryRowContext(ctx, "SELECT COALESCE(acme_config_id,0) FROM lb_rules WHERE caddy_id=?", ruleID).Scan(&acmeConfigID)
 	if err != nil {
-		failJob(jobID, "读取规则 ACME 配置失败")
+		failJob(jobID, "读取规则 ACME 配置失败", false)
 		return fmt.Errorf("read rule acme config: %w", err)
 	}
 
@@ -651,18 +660,18 @@ func (s *CertIssuer) Issue(ctx context.Context, jobID int, ruleID, domains strin
 	if acmeConfigID > 0 {
 		err = db.DB.QueryRowContext(ctx, "SELECT COALESCE(dns_credentials,'') FROM certificate_configs WHERE id=? AND COALESCE(enabled,1)=1", acmeConfigID).Scan(&dnsCredentialsJSON)
 		if err != nil && err != sql.ErrNoRows {
-			failJob(jobID, "读取 DNS 凭证配置失败")
+			failJob(jobID, "读取 DNS 凭证配置失败", false)
 			return fmt.Errorf("read certificate config: %w", err)
 		}
 	}
 	if dnsCredentialsJSON == "" {
-		failJob(jobID, "未选择可用的 DNS 提供商，请先在规则中选择 DNS 凭证")
+		failJob(jobID, "未选择可用的 DNS 提供商，请先在规则中选择 DNS 凭证", false)
 		return fmt.Errorf("no enabled DNS provider selected for rule")
 	}
 
 	dnsProvider, err := dnsprovider.NewPersistentProviderFromCredentials(dnsCredentialsJSON, s.dataDir)
 	if err != nil {
-		failJob(jobID, err.Error())
+		failJob(jobID, err.Error(), false)
 		return err
 	}
 
@@ -686,7 +695,11 @@ func (s *CertIssuer) Issue(ctx context.Context, jobID int, ruleID, domains strin
 		if raErr := detectRateLimit(err); raErr != nil {
 			return raErr
 		}
-		failJob(jobID, err.Error())
+		// 此处不再 failJob——错误原样上抛，由队列出口
+		// handleQueueExecutionError 统一落 failed（双重 failJob 会让
+		// renewal_attempts/窗口/审计各写两遍；首个 CAS 写胜出后第二个
+		// 只会静默冲突）。「本次执行零新材料产出」的失败归因也在那里
+		// （failJob producedNewMaterial=false）。
 		return err
 	}
 	if err := ctx.Err(); err != nil {
@@ -696,7 +709,7 @@ func (s *CertIssuer) Issue(ctx context.Context, jobID int, ruleID, domains strin
 	// Parse certificate expiry
 	notAfter, err := parseCertNotAfter(certPEM)
 	if err != nil {
-		failJob(jobID, err.Error())
+		failJob(jobID, err.Error(), false)
 		return err
 	}
 	// 区分 DB 错误与角色变化，避免误报"节点切换为从节点"。
@@ -945,8 +958,13 @@ func (s *CertIssuer) deployIssuedCertificate(ctx context.Context, jobID int, mat
 			} else {
 				cleanupErr = restoreCertificateDeployment(snapshot, s.caddyReloader)
 			}
-			failJob(jobID, "证书部署确认失败: "+err.Error())
-			return errors.Join(fmt.Errorf("finalize issued certificate: %w", err), rollbackErr, cleanupErr)
+			// 本次执行已产出新材料（deployIssuedCertificate 此前已把 cert_pem/
+			// key_pem 落库、行进入部署生命周期）——failJob(producedNewMaterial=
+			// true) 允许按部署延迟降级（保持可部署态）；错误以
+			// certificateDeploymentError 上抛，队列出口不再二次改写状态
+			//（避免第二个 failJob 把已降级为部署延迟的行打成终态 failed）。
+			failJob(jobID, "证书部署确认失败: "+err.Error(), true)
+			return &certificateDeploymentError{err: errors.Join(fmt.Errorf("finalize issued certificate: %w", err), rollbackErr, cleanupErr)}
 		}
 		// 真实 DB 失败（transition/提交出错，如 SQLITE_BUSY）不得走
 		// 上面的 failJob——会把已签发落库证书搁浅为 failed，rescan 只扫

@@ -6,14 +6,15 @@ import (
 	"fmt"
 	"strings"
 	"sync"
-	"time"
 )
 
+// apiKeyLastUsed 批量合并 api_keys.last_used 写：请求热路径只标脏
+// （MarkAPIKeyUsed），落库由 apikey-usage-flusher daemon 的 RunTicker 节拍
+// （60s）与 db.Close 尾检承担——引擎外的 1min 自建 flusher 循环已按
+// task-engine 标准 v2.2 归口退役。
 var apiKeyLastUsed = struct {
 	sync.Mutex
-	dirty  map[int]struct{}
-	cancel context.CancelFunc
-	done   chan struct{}
+	dirty map[int]struct{}
 }{dirty: make(map[int]struct{})}
 
 func MarkAPIKeyUsed(keyID int) {
@@ -73,43 +74,25 @@ func CleanupExpiredRevokedJTI(database *sql.DB) error {
 	return err
 }
 
-func startAPIKeyLastUsedFlusher() {
-	stopAPIKeyLastUsedFlusher()
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
-	apiKeyLastUsed.Lock()
-	apiKeyLastUsed.cancel = cancel
-	apiKeyLastUsed.done = done
-	apiKeyLastUsed.Unlock()
-	go func() {
-		defer close(done)
-		ticker := time.NewTicker(time.Minute)
-		cleanupTicker := time.NewTicker(time.Hour)
-		defer ticker.Stop()
-		defer cleanupTicker.Stop()
-		for {
-			select {
-			case <-ticker.C:
-				if err := FlushAPIKeyLastUsed(); err != nil {
-					logDBError("flush API key usage", err)
-				}
-			case <-cleanupTicker.C:
-				if database := GetDB(); database != nil {
-					if err := CleanupExpiredRevokedJTI(database); err != nil {
-						logDBError("cleanup revoked JWT IDs", err)
-					}
-					if err := cleanupExpiredRegistrationSecrets(ctx, database); err != nil {
-						logDBError("cleanup expired cluster registration secrets", err)
-					}
-				}
-			case <-ctx.Done():
-				return
-			}
-		}
-	}()
+// CleanupAPIKeyAuxTables 单轮清理附表过期数据（apikey-usage-flusher daemon
+// 每小时节拍的工作体；loop 自建循环已移出 db 包——db 只暴露无状态工作体）：
+// ①已过期吊销 JWT；②已过期集群注册密钥。
+func CleanupAPIKeyAuxTables(ctx context.Context) error {
+	database := GetDB()
+	if database == nil {
+		return nil
+	}
+	if err := CleanupExpiredRevokedJTI(database); err != nil {
+		return fmt.Errorf("cleanup revoked JWT IDs: %w", err)
+	}
+	if err := cleanupExpiredRegistrationSecrets(ctx, database); err != nil {
+		return err
+	}
+	return nil
 }
 
-// cleanupExpiredRegistrationSecrets 每小时清理过期注册密钥。nodes 是集群拓扑
+// cleanupExpiredRegistrationSecrets 每小时清理过期注册密钥（句柄注入单源，
+// 测试直驱真实 SQL）。nodes 是集群拓扑
 // 簿记表，本写必须带 SQL 级主节点角色条件（MasterRoleConditionSQL，与
 // services/middleware 同一单源）：flusher 主/从两角色都在跑，无条件时从端会
 // 经此旁路写拓扑数据，破坏「从端零写」不变量。
@@ -123,16 +106,4 @@ func cleanupExpiredRegistrationSecrets(ctx context.Context, database *sql.DB) er
 		return fmt.Errorf("cleanup expired cluster registration secrets: %w", err)
 	}
 	return nil
-}
-
-func stopAPIKeyLastUsedFlusher() {
-	apiKeyLastUsed.Lock()
-	cancel, done := apiKeyLastUsed.cancel, apiKeyLastUsed.done
-	apiKeyLastUsed.cancel = nil
-	apiKeyLastUsed.done = nil
-	apiKeyLastUsed.Unlock()
-	if cancel != nil {
-		cancel()
-		<-done
-	}
 }

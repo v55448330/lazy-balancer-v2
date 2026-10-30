@@ -6,7 +6,6 @@ package handlers
 // 进程生命周期残留）删除不执行（启动应用已在启动流程完成，重放无意义）。
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,34 +16,10 @@ import (
 	"lazy-balancer-v2/internal/services"
 )
 
-func TestCaddyRestartWatcherStopWaitsForLoopExit(t *testing.T) {
-	withIsolatedGlobal(t)
-	oldLoop := caddyRestartWatcherLoop
-	started := make(chan struct{})
-	caddyRestartWatcherStarted.Store(false)
-	caddyRestartWatcherLoop = func(_ *Handlers, ctx context.Context) {
-		close(started)
-		<-ctx.Done()
-	}
-	t.Cleanup(func() {
-		caddyRestartWatcherStarted.Store(false)
-		caddyRestartWatcherLoop = oldLoop
-	})
-
-	h := NewHandlers(Dependencies{})
-	h.StartCaddyRestartWatcher()
-	select {
-	case <-started:
-	case <-time.After(2 * time.Second):
-		t.Fatal("watcher loop did not start")
-	}
-	done := h.StopCaddyRestartWatcher()
-	select {
-	case <-done:
-	case <-time.After(2 * time.Second):
-		t.Fatal("stop must cancel the loop and wait for its exit")
-	}
-}
+// 「watcher 自建 goroutine 启停/退出等待」钉测随 StartCaddyRestartWatcher
+// 归口退役：caddy-restart-watcher daemon 的节拍与启停由任务引擎承担
+// （RunTicker 2s；注册/首跑/停止语义由 services 的 wire-runtime 测试钉住），
+// 本文件保留单轮工作体（caddyRestartWatcherOnce）的行为钉测。
 
 func countCaddyRestartRuns(t *testing.T) int {
 	t.Helper()

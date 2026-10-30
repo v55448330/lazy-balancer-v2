@@ -2,7 +2,6 @@ package services
 
 import (
 	"bytes"
-	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -31,64 +30,26 @@ const (
 	logLevelError
 )
 
-var timezoneRefresh backgroundWorker
-
-// timezoneRefreshRestartWaitMax 是重启路径等待旧 worker 退出的预算（与关停
-// 路径同量级）。旧 worker 卡在 DB busy_timeout 时不得无界挂起刷新链启动。
-const timezoneRefreshRestartWaitMax = 1 * time.Second
-
-const timezoneRefreshLogLabel = "timezone refresh"
-
 func init() {
 	currentLocation.Store(time.FixedZone("CST", 8*3600))
 	applicationLogLevel.Store(logLevelInfo)
-	StartTimezoneRefresh(context.Background())
 }
 
-func StartTimezoneRefresh(ctx context.Context) <-chan struct{} {
-	workerCtx, done := timezoneRefresh.replace(ctx, timezoneRefreshRestartWaitMax, timezoneRefreshLogLabel)
-	go func() {
-		defer close(done)
-		// 30s tick 下持久失败逐轮同消息（最坏 2880 行/天）——改状态
-		// 转换口径（ok→fail 一次 warn、持续静默、fail→ok 一次 info），与
-		// metrics 采集族共用 logStateTransition。
-		refresh := func() {
-			if err := refreshLocation(); err != nil {
-				if logStateTransition("timezone-refresh", true) != "" {
-					Logf("warn", "refresh timezone: %v", err)
-				}
-				return
-			}
-			if logStateTransition("timezone-refresh", false) != "" {
-				Logf("info", "refresh timezone recovered")
-			}
+// RefreshTimezoneOnce 单轮读取并应用配置时区（runtime-tz-refresh daemon 的
+// RunTicker 工作体；装配期首跑同函数——registerRuntimeLifecycleTasks 同步
+// 调用一次，避免面板监听前出现阈值/时区空窗）。30s tick 下持久失败逐轮同
+// 消息（最坏 2880 行/天）——状态转换口径（ok→fail 一次 warn、持续静默、
+// fail→ok 一次 info），与 metrics 采集族共用 logStateTransition。
+func RefreshTimezoneOnce() {
+	if err := refreshLocation(); err != nil {
+		if logStateTransition("timezone-refresh", true) != "" {
+			Logf("warn", "refresh timezone: %v", err)
 		}
-		refresh()
-		ticker := time.NewTicker(30 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ticker.C:
-				refresh()
-			case <-workerCtx.Done():
-				return
-			}
-		}
-	}()
-	return done
-}
-
-func StopTimezoneRefresh() {
-	timezoneRefresh.stop(timezoneRefreshLogLabel)
-}
-
-// StopTimezoneRefreshWithin 有界停止时区刷新 worker：cancel 后最多等待 within
-// （within<=0=无界，与 StopTimezoneRefresh 同语义）。超时放弃等待并 warn——
-// 进程退出路径用：残留 goroutine 随进程消亡，cancel/done 字段保留，worker
-// 最终退出后可再次调用完成清零（可重启语义不变）。返回 true=worker 已退出
-// 且状态清零。
-func StopTimezoneRefreshWithin(within time.Duration) bool {
-	return timezoneRefresh.stopWithin(within, timezoneRefreshLogLabel)
+		return
+	}
+	if logStateTransition("timezone-refresh", false) != "" {
+		Logf("info", "refresh timezone recovered")
+	}
 }
 
 func refreshLocation() (err error) {

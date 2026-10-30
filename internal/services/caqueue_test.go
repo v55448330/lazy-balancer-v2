@@ -450,7 +450,7 @@ func TestWorkerWriteback_preserves_disabled_job(t *testing.T) {
 		write func(int)
 	}{
 		{name: "rate limit", write: func(jobID int) { handleQueueExecutionError(jobID, &CAProviderRateLimitError{RetryAfter: time.Minute}) }},
-		{name: "failure", write: func(jobID int) { failJob(jobID, "worker failed") }},
+		{name: "failure", write: func(jobID int) { failJob(jobID, "worker failed", false) }},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -625,7 +625,8 @@ func TestCAQueueManager_Stop_waits_for_running_execution(t *testing.T) {
 	if !ok {
 		t.Fatal("pending execution was not prepared")
 	}
-	go queue.loop()
+	// 自建泵已退役：Stop 只等待在途执行退出（executions 有界等待），无 loop
+	// 可启。
 	go queue.execute(execution)
 	<-started
 	manager := &CAQueueManager{queues: map[int]*caQueue{1: queue}, active: true}
@@ -670,10 +671,8 @@ func TestCAQueueManager_PauseAndDrain_cancels_pending_and_waits_for_running(t *t
 	if !ok {
 		t.Fatal("pending execution was not prepared")
 	}
-	// loop 必须在 prepare 之后启动：loop 先行会抢先消费 pending 首项，
-	// 使上面的 prepare 落空（断言随机失败）；此时 running 已占满配额，
-	// loop 只负责后续调度，不再抢走第二项。
-	go queue.loop()
+	// 此时 running 已占满配额，无 pending 可消费；自建泵已退役，直接驱动
+	// 在途执行并进入 PauseAndDrain。
 	go queue.execute(execution)
 	<-started
 	manager := &CAQueueManager{queues: map[int]*caQueue{1: queue}, active: true}
@@ -720,8 +719,7 @@ func TestCAQueueManager_PauseAndDrain_rejects_until_resume(t *testing.T) {
 	if !ok {
 		t.Fatal("pending execution was not prepared")
 	}
-	// 先 prepare 再启动 loop：loop 先行会抢走唯一 pending 项。
-	go queue.loop()
+	// 先 prepare 再驱动在途执行（自建泵已退役，无 loop 抢占 pending 的问题）。
 	go queue.execute(execution)
 	<-started
 	manager := &CAQueueManager{queues: map[int]*caQueue{1: queue}, active: true}
@@ -851,7 +849,6 @@ func TestCAQueueManager_CancelJobsForRule_blocks_retry_created_during_worker_exi
 	if !ok {
 		t.Fatal("worker execution was not prepared")
 	}
-	go queue.loop()
 	go queue.execute(execution)
 	<-workerStarted
 	ResetCAQueueManagerForTest()
@@ -919,20 +916,8 @@ func TestCAQueueManager_CancelJobsForRule_returns_context_error_for_stuck_worker
 	}
 }
 
-func TestCAQueue_enqueue_notifies_worker_loop(t *testing.T) {
-	// Given
-	queue := newCAQueue(models.CAProvider{ID: 1, MaxConcurrent: 1}, nil)
-
-	// When
-	queue.enqueue(queueItem{jobID: 42, ruleID: "lb_wake", domains: "example.com"})
-
-	// Then
-	select {
-	case <-queue.wakeCh:
-	default:
-		t.Fatal("enqueue did not signal the worker loop")
-	}
-}
+// （入队唤醒断言已随泵退役收敛到 caqueue_dispatch_test.go 的
+// TestCAQueue_enqueue_wakesDispatchDaemon：入队经 Manager.Wake() 提示守护。）
 
 func TestCAQueueManager_PauseAndDrain_waits_for_deployment_retry_callback(t *testing.T) {
 	// Given
@@ -1006,8 +991,7 @@ func TestCAQueue_execute_requeues_job_when_lifecycle_is_canceled(t *testing.T) {
 	if !ok {
 		t.Fatal("pending execution was not prepared")
 	}
-	// 先 prepare 再启动 loop：loop 先行会抢走唯一 pending 项。
-	go queue.loop()
+	// 先 prepare 再驱动在途执行（自建泵已退役，无 loop 抢占 pending 的问题）。
 	go queue.execute(execution)
 	<-started
 	manager := &CAQueueManager{queues: map[int]*caQueue{1: queue}, active: true}
@@ -1065,8 +1049,7 @@ func TestCAQueueManager_PauseAndDrain_timeout_straggler_not_double_executed(t *t
 	if !ok {
 		t.Fatal("pending execution was not prepared")
 	}
-	// 先 prepare 再启动 loop：loop 先行会抢走唯一 pending 项。
-	go queue.loop()
+	// 先 prepare 再驱动在途执行（自建泵已退役，无 loop 抢占 pending 的问题）。
 	go queue.execute(execution)
 	<-started
 	manager := &CAQueueManager{queues: map[int]*caQueue{7: queue}, active: true}
@@ -2396,9 +2379,9 @@ func TestCancelJob_waits_for_retired_and_zombie_executions(t *testing.T) {
 // 第二次调用会谎报 drained=true，配置导入据此放行整树替换（同 jobID 写入
 // 与导入快照竞争）。
 func TestCAQueueManager_PauseAndDrain_secondCallSeesPriorRetiredStragglers(t *testing.T) {
-	// Given：一个「旧队列」仍持有在途执行（模拟上一次 PauseAndDrain 超时退役）
+	// Given：一个「旧队列」仍持有在途执行（模拟上一次 PauseAndDrain 超时退役；
+	// 自建泵已退役——队列只承载内存态，无 loop 可启）
 	queue := newCAQueue(models.CAProvider{ID: 1, MaxConcurrent: 1}, nil)
-	go queue.loop()
 	t.Cleanup(queue.stop)
 	queue.mu.Lock()
 	queue.active[42] = struct{}{}
@@ -2510,8 +2493,8 @@ func TestFailJob_materialBearingDeploymentJobStaysDeployable(t *testing.T) {
 		t.Fatalf("seed jobs: %v", err)
 	}
 
-	failJob(81, "部署回调 CAS 冲突")
-	failJob(82, "重签请求失败")
+	failJob(81, "部署回调 CAS 冲突", true) // 本次执行产出的新材料已落库（部署生命周期）
+	failJob(82, "重签请求失败", false)
 
 	var status, message string
 	var window sql.NullString

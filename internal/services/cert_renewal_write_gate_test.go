@@ -12,12 +12,13 @@ import (
 	"lazy-balancer-v2/internal/taskengine"
 )
 
-// 续期扫描的「写前门」必须早于**任何**写点：已达重试上限的 waiting_ca 任务在
-// 旧实现里先走 waiting_ca → failed 终态迁移 + 审计行，逐任务角色复核只覆盖其后的
-// 「入队」分支。降级（换主/导入排空/停机）落在最长 6h 的扫描窗口内时，新从节点
-// 仍会写本地状态与审计行，破坏「从节点零写」不变式。
-func TestCertRenewalScan_cappedJobRespectsDemoteBeforeWrite(t *testing.T) {
-	// Given：一条已达上限的 waiting_ca 临期任务
+// 续期扫描的「写前门」必须早于**任何**写点。B2 失败语义统一后 waiting_ca→
+// failed 上限终态迁移退役（失败统一落 failed），续期扫描对候选行的唯一写点=
+// 入队迁移（failed→queued）+「续签排队」审计行。降级（换主/导入排空/停机）落在
+// 最长 6h 的扫描窗口内时，新从节点仍会写本地状态与审计行，破坏「从节点零写」
+// 不变式——写前门必须在**任何**写点前拦下。
+func TestCertRenewalScan_enqueueRespectsDemoteBeforeWrite(t *testing.T) {
+	// Given：一条退避窗口已到期的临期失败行（候选，写入点=入队迁移）
 	_, database := newClusterTestService(t)
 	ResetCAQueueManagerForTest()
 	InitCAQueueManager(func() error { return nil })
@@ -31,10 +32,9 @@ func TestCertRenewalScan_cappedJobRespectsDemoteBeforeWrite(t *testing.T) {
 		VALUES (?,?,?,'http',8080,1,1,'acme_dns')`, ruleID, ruleID, ruleID+".example.com"); err != nil {
 		t.Fatalf("seed rule: %v", err)
 	}
-	maxAttempts := getCertRenewalAttempts()
-	if _, err := database.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,expires_at,renewal_attempts,ca_provider_id)
-		VALUES (?,?, 'waiting_ca', datetime('now','+1 day'),?,1)`, ruleID, ruleID+".example.com", maxAttempts); err != nil {
-		t.Fatalf("seed capped waiting_ca job: %v", err)
+	if _, err := database.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,expires_at,renewal_attempts,ca_available_after,ca_provider_id)
+		VALUES (?,?,'failed',datetime('now','+1 day'),0,datetime('now','-1 minute'),1)`, ruleID, ruleID+".example.com"); err != nil {
+		t.Fatalf("seed due failed job: %v", err)
 	}
 	// 扫描开始前仍为主节点（入口角色检查通过），逐任务写前门处才降级。
 	oldHook := certRenewalRoleRecheckHook
@@ -57,17 +57,17 @@ func TestCertRenewalScan_cappedJobRespectsDemoteBeforeWrite(t *testing.T) {
 	if err := database.QueryRow("SELECT status FROM cert_jobs WHERE rule_id=?", ruleID).Scan(&status); err != nil {
 		t.Fatalf("read job status: %v", err)
 	}
-	if status != "waiting_ca" {
-		t.Fatalf("status=%q, want waiting_ca（写前门必须早于上限终态迁移）", status)
+	if status != "failed" {
+		t.Fatalf("status=%q, want failed（写前门必须早于入队迁移）", status)
 	}
-	if got := countCertJobMaxAttemptsAuditRows(t); got != 0 {
+	if got := countCertJobRenewalAuditRows(t); got != 0 {
 		t.Fatalf("审计行=%d, want 0（从节点不得写审计）", got)
 	}
 }
 
-// 回归形状：主节点健康轮里同一行仍照常收敛为 failed 并留一条审计行——
-// 写前门只拦降级/取消，不得把正常终态迁移也挡掉。
-func TestCertRenewalScan_cappedJobStillFailsOnHealthyMaster(t *testing.T) {
+// 回归形状：主节点健康轮里同一行仍照常入队并留一条「续签排队」审计行——
+// 写前门只拦降级/取消，不得把正常入队写点也挡掉。
+func TestCertRenewalScan_dueJobStillEnqueuesOnHealthyMaster(t *testing.T) {
 	_, database := newClusterTestService(t)
 	ResetCAQueueManagerForTest()
 	InitCAQueueManager(func() error { return nil })
@@ -81,10 +81,9 @@ func TestCertRenewalScan_cappedJobStillFailsOnHealthyMaster(t *testing.T) {
 		VALUES (?,?,?,'http',8080,1,1,'acme_dns')`, ruleID, ruleID, ruleID+".example.com"); err != nil {
 		t.Fatalf("seed rule: %v", err)
 	}
-	maxAttempts := getCertRenewalAttempts()
-	if _, err := database.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,expires_at,renewal_attempts,ca_provider_id)
-		VALUES (?,?, 'waiting_ca', datetime('now','+1 day'),?,1)`, ruleID, ruleID+".example.com", maxAttempts); err != nil {
-		t.Fatalf("seed capped waiting_ca job: %v", err)
+	if _, err := database.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,expires_at,renewal_attempts,ca_available_after,ca_provider_id)
+		VALUES (?,?,'failed',datetime('now','+1 day'),0,datetime('now','-1 minute'),1)`, ruleID, ruleID+".example.com"); err != nil {
+		t.Fatalf("seed due failed job: %v", err)
 	}
 
 	resetCertificateServiceForTest(t)
@@ -96,17 +95,17 @@ func TestCertRenewalScan_cappedJobStillFailsOnHealthyMaster(t *testing.T) {
 	if err := database.QueryRow("SELECT status FROM cert_jobs WHERE rule_id=?", ruleID).Scan(&status); err != nil {
 		t.Fatalf("read job status: %v", err)
 	}
-	if status != "failed" {
-		t.Fatalf("status=%q, want failed（上限终态迁移在健康主节点必须照常执行）", status)
+	if status != "queued" {
+		t.Fatalf("status=%q, want queued（到期窗口行在健康主节点必须照常入队）", status)
 	}
-	if got := countCertJobMaxAttemptsAuditRows(t); got != 1 {
-		t.Fatalf("审计行=%d, want 1（上限终态迁移必须留审计）", got)
+	if got := countCertJobRenewalAuditRows(t); got != 1 {
+		t.Fatalf("审计行=%d, want 1（入队迁移必须留「续签排队」审计）", got)
 	}
 }
 
 // 取消形状：ctx 已取消时写前门必须中止本轮（导入排空的 WaitInFlightRuns 依赖
 // 续期扫描消费 ctx），且任务状态不被改写。
-func TestCertRenewalScan_canceledContextStopsBeforeWrite(t *testing.T) {
+func TestCertRenewalScan_canceledContextStopsBeforeEnqueue(t *testing.T) {
 	_, database := newClusterTestService(t)
 	ResetCAQueueManagerForTest()
 	InitCAQueueManager(func() error { return nil })
@@ -120,10 +119,9 @@ func TestCertRenewalScan_canceledContextStopsBeforeWrite(t *testing.T) {
 		VALUES (?,?,?,'http',8080,1,1,'acme_dns')`, ruleID, ruleID, ruleID+".example.com"); err != nil {
 		t.Fatalf("seed rule: %v", err)
 	}
-	maxAttempts := getCertRenewalAttempts()
-	if _, err := database.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,expires_at,renewal_attempts,ca_provider_id)
-		VALUES (?,?, 'waiting_ca', datetime('now','+1 day'),?,1)`, ruleID, ruleID+".example.com", maxAttempts); err != nil {
-		t.Fatalf("seed capped waiting_ca job: %v", err)
+	if _, err := database.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,expires_at,renewal_attempts,ca_available_after,ca_provider_id)
+		VALUES (?,?,'failed',datetime('now','+1 day'),0,datetime('now','-1 minute'),1)`, ruleID, ruleID+".example.com"); err != nil {
+		t.Fatalf("seed due failed job: %v", err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -138,22 +136,22 @@ func TestCertRenewalScan_canceledContextStopsBeforeWrite(t *testing.T) {
 	if err := database.QueryRow("SELECT status FROM cert_jobs WHERE rule_id=?", ruleID).Scan(&status); err != nil {
 		t.Fatalf("read job status: %v", err)
 	}
-	if status != "waiting_ca" {
-		t.Fatalf("status=%q, want waiting_ca（取消轮不得写）", status)
+	if status != "failed" {
+		t.Fatalf("status=%q, want failed（取消轮不得写）", status)
 	}
-	if got := countCertJobMaxAttemptsAuditRows(t); got != 0 {
+	if got := countCertJobRenewalAuditRows(t); got != 0 {
 		t.Fatalf("审计行=%d, want 0（取消轮不得写审计）", got)
 	}
 }
 
-// countCertJobMaxAttemptsAuditRows 统计续期上限终态迁移写入的操作审计行。
-func countCertJobMaxAttemptsAuditRows(t *testing.T) int {
+// countCertJobRenewalAuditRows 统计续期扫描入队迁移写入的「续签排队」审计行。
+func countCertJobRenewalAuditRows(t *testing.T) int {
 	t.Helper()
 	if db.AuditDB == nil {
 		return 0
 	}
 	var n int
-	if err := db.AuditDB.QueryRow(`SELECT COUNT(*) FROM audit_log WHERE action='签发失败'`).Scan(&n); err != nil {
+	if err := db.AuditDB.QueryRow(`SELECT COUNT(*) FROM audit_log WHERE action='续签排队'`).Scan(&n); err != nil {
 		t.Fatalf("count audit rows: %v", err)
 	}
 	return n

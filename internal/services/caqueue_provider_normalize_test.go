@@ -58,10 +58,10 @@ func TestEnqueueLocked_reusedQueueSnapshotIsNormalized(t *testing.T) {
 	qm.Start()
 
 	// 预置队列模拟「运行期已有队列」：enqueueLocked 走 else 分支，把本次加载的
-	// provider 直接写入快照。执行体置空——测试只断言快照归一，不发起真实签发。
+	// provider 直接写入快照。执行体置空——测试只断言快照归一，不发起真实签发
+	//（自建泵已退役，无 loop 可启；断言全为同步读）。
 	q := newCAQueue(models.CAProvider{ID: 8, Name: "provider-8", Provider: "letsencrypt", MaxConcurrent: 5, MinIntervalMS: 2000}, func() error { return nil }, t.TempDir())
 	q.executeFn = func(context.Context, queueItem, models.CAProvider) error { return nil }
-	go q.loop()
 	qm.mu.Lock()
 	qm.queues[8] = q
 	qm.mu.Unlock()

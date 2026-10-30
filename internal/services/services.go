@@ -10,7 +10,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"lazy-balancer-v2/internal/db"
@@ -21,37 +20,23 @@ import (
 // aggregatePrometheusText）。原先 9 条 prometheus*Pattern 每周期各扫一遍全文，
 // 16MB body 形态 ≈144MB 正则输入，已随单趟聚合统一移除。
 
-// MetricsService collects and stores metrics from Caddy
+// MetricsService collects and stores metrics from Caddy。
+//
+// 采集/清理循环已按 task-engine 标准 v2.2 归口（30s 采集=metrics-collector
+// daemon 的 RunTicker 节拍；24h 历史清理=metrics-history-cleanup Periodic
+// 任务）——本结构只保留无状态工作体：collect()（单轮采集）与
+// cleanupHistory()（单轮清理，返回错误交任务终态）。生命周期（启停/节拍/
+// 排空）归任务引擎：引擎排空先于 db.Close，原 Start/Stop 的 stopped 守卫与
+// 清理单飞 WaitGroup 随自建循环一并退役。
 type MetricsService struct {
 	metricsURL    string
 	interval      int
 	client        *http.Client
-	stopCh        chan struct{}
-	stopOnce      sync.Once
 	overview      models.MetricsOverview
 	mu            sync.RWMutex
 	lastTotal     int64
 	lastSampleAt  time.Time
 	hasLastSample bool
-	// cleanupRunning 保证历史清理单飞（24h 节拍 + 慢清理形态下的重叠防御）；
-	// cleanupWG 让 Start/Stop 有界等待清理 goroutine 收尾，避免拆除后继续
-	// 访问已关闭的指标库。
-	cleanupRunning atomic.Bool
-	// stopped 在 Stop 置位：ticker 分支与 startHistoryCleanup 必须先看到它，
-	// 否则 stopCh 与 24h ticker 同时就绪时 select 可随机选中 ticker，在
-	// Start 返回/库关闭之后再启动清理 goroutine（Wait 已观察到 0 计数）。
-	//
-	// 句柄口径：采集/清理读 db.MetricsDB（普通变量，非 db.GetDB 的 atomic
-	// 指针）。安全前提是关停顺序——Stop 置位 + 有界等待清理 + main 在
-	// db.Close 前 await 采集循环；ticker 分支的 stopped 守卫把
-	// 「Stop 之后仍发起新一轮采集」排除在代码层。若未来关停预算被收紧到
-	// 可能放弃等待在途采集，须先给指标库补 db.GetMetricsDB()/SetMetricsDB()
-	// 原子访问器并全仓迁移消费点（只改单点会形成两种句柄口径）。
-	stopped atomic.Bool
-	// started 钉住一次性生命周期：Stop 后 stopCh 已关闭，再次 Start 会在
-	// select 立即走 stopCh 分支静默返回——看起来启动了，实际零采集零清理。
-	started   atomic.Bool
-	cleanupWG sync.WaitGroup
 }
 
 // caddyMetricsScrapeTimeout 是 Caddy admin /metrics 的唯一抓取预算单源。
@@ -69,98 +54,14 @@ func NewMetricsService(metricsURL string, interval int) *MetricsService {
 		client: &http.Client{
 			Timeout: caddyMetricsScrapeTimeout,
 		},
-		stopCh:   make(chan struct{}),
 		overview: models.MetricsOverview{},
 	}
 }
 
-// Start 启动采集循环。生命周期一次性：Start/Stop 各仅允许一次——Stop 后再
-// Start 会静默零采集（见 started 字段注释），重启语义未支持，需要时重建实例。
-func (m *MetricsService) Start() {
-	if !m.started.CompareAndSwap(false, true) {
-		panic("MetricsService: Start 只允许调用一次（生命周期一次性，Stop 后不得重启）")
-	}
-	ticker := time.NewTicker(time.Duration(m.interval) * time.Second)
-	cleanupTicker := time.NewTicker(24 * time.Hour)
-	defer ticker.Stop()
-	defer cleanupTicker.Stop()
-	// 历史清理移出采集 goroutine：清理按 5000 行/批 + 10ms 让锁推进，积压大时
-	// （7 天保留 × 300 规则/5s ≈ 36M 行，单日约 5M 行删）整轮可达数十秒——此前
-	// 与采集串行，期间 /metrics 零采样、overview 冻结。现在清理在独立 goroutine
-	// 内推进，采集节拍不受积压影响。
-	m.startHistoryCleanup()
-	// 启动即采集一轮——曾首 collect 等首个 interval
-	// （默认 30s），重启后面板首屏 30s 全零；与 cleanupHistory 同点对称。
-	m.collect()
-
-	for {
-		select {
-		case <-ticker.C:
-			// 与 cleanup ticker 同口径：Stop 置位后不再发起采集。关停预算
-			// 耗尽时 main 会放弃等待采集 goroutine，本守卫把「Stop 之后仍访问
-			// db.MetricsDB」的窗口压到零新增轮次（一个 tick 只有一次采集）。
-			if m.stopped.Load() {
-				return
-			}
-			m.collect()
-		case <-cleanupTicker.C:
-			if m.stopped.Load() {
-				return
-			}
-			m.startHistoryCleanup()
-		case <-m.stopCh:
-			// 等待在途清理收尾（有界），Start 返回即代表清理 goroutine 已退出。
-			m.cleanupWG.Wait()
-			return
-		}
-	}
-}
-
-// startHistoryCleanup 在独立 goroutine 中执行一轮历史清理；上一轮未结束时
-// 直接跳过（慢清理形态下的单飞防御）。清理自身按批让出写锁
-// （CleanupMetricsHistory 的 5000/批 + 10ms），采集不再等待整轮清理完成。
-func (m *MetricsService) startHistoryCleanup() {
-	// WaitGroup.Add 必须先于计数置位：Stop/Start 的 Wait 可与本函数并发，
-	// 若 CAS 成功后才 Add，Wait 可在「已置位、尚未 Add」的窗口观察到 0 计数
-	// 而提前返回，清理 goroutine 随后才启动并访问即将关闭的库。CAS 失败时
-	// 归还计数，维持单飞语义。
-	m.cleanupWG.Add(1)
-	if m.stopped.Load() {
-		m.cleanupWG.Done()
-		return
-	}
-	if !m.cleanupRunning.CompareAndSwap(false, true) {
-		m.cleanupWG.Done()
-		return
-	}
-	go func() {
-		defer m.cleanupWG.Done()
-		defer m.cleanupRunning.Store(false)
-		m.cleanupHistory()
-	}()
-}
-
-// cleanupStopWait 是 Stop 等待在途历史清理退出的预算：清理可能正在删数十万
-// 行，不得无界阻塞关停路径（main 的关停预算与进程退出优先）；超时放弃等待并
-// warn，残留 goroutine 随进程消亡。
-const cleanupStopWait = 3 * time.Second
-
-func (m *MetricsService) Stop() {
-	// 先置 stopped 再关 stopCh：startHistoryCleanup 在任何 Add 之后复核
-	// stopped，Stop 之后新发起的清理不会启动 goroutine（Add/Wait 竞态的口径）。
-	m.stopped.Store(true)
-	m.stopOnce.Do(func() { close(m.stopCh) })
-	// 有界等待清理 goroutine：测试/嵌入形态下拆除后不得继续访问已关闭的库。
-	done := make(chan struct{})
-	go func() {
-		m.cleanupWG.Wait()
-		close(done)
-	}()
-	select {
-	case <-done:
-	case <-time.After(cleanupStopWait):
-		Logf("warn", "metrics 历史清理未在 %s 内退出，放弃等待（残留 goroutine 随进程消亡）", cleanupStopWait)
-	}
+// tickerInterval 采集节拍（cfg.MetricsInterval 秒；0/负值交给 RunTicker 的
+// 1s 兜底并显性 warn——任务引擎标准禁止静默空转）。
+func (m *MetricsService) tickerInterval() time.Duration {
+	return time.Duration(m.interval) * time.Second
 }
 
 // metrics 采集失败族状态转换日志。30s 采集周期下，持久性失败
@@ -911,7 +812,10 @@ func (m *MetricsService) storePerRuleMetrics(byRule map[string]*ruleLabelAggrega
 	return nil
 }
 
-func (m *MetricsService) cleanupHistory() {
+// cleanupHistory 单轮指标历史清理（metrics-history-cleanup Periodic 任务体）。
+// 错误上抛交任务终态（同族 audit-retention / security-events-retention：
+// 清理失败必须进 task_runs failed，不得恒 success）；状态转换日志口径保留。
+func (m *MetricsService) cleanupHistory() error {
 	if metricsCleanupHook != nil {
 		metricsCleanupHook()
 	}
@@ -921,21 +825,23 @@ func (m *MetricsService) cleanupHistory() {
 	const retentionDays = 7
 	if db.MetricsDB == nil {
 		// 守卫与 refreshDBOverviewMetrics 同口径（生产启动链不可达；防
-		// 独立清理 goroutine 在 nil 库形态下 panic）。
+		// 测试/嵌入形态 nil 库 panic）。nil 库按失败上抛——「清理没跑成」
+		// 必须可见，不得伪装 success。
 		if lvl := logStateTransition("metrics-history-cleanup", true); lvl != "" {
 			Logf(lvl, "Failed to clean up metrics history: metrics database is not initialized")
 		}
-		return
+		return errMetricsDBUnavailable
 	}
 	if err := db.CleanupMetricsHistory(retentionDays); err != nil {
 		if lvl := logStateTransition("metrics-history-cleanup", true); lvl != "" {
 			Logf(lvl, "Failed to clean up metrics history: %v", err)
 		}
-		return
+		return err
 	}
 	if lvl := logStateTransition("metrics-history-cleanup", false); lvl != "" {
 		Logf(lvl, "metrics history cleanup recovered")
 	}
+	return nil
 }
 
 // errMetricsDBUnavailable 指标库未初始化或已关闭（关停期 db.Close() 置 nil）。
