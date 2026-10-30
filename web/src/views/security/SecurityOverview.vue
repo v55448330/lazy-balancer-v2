@@ -508,24 +508,54 @@ onMounted(() => { void reloadAll() })
    中屏 2×2、手机单列，避免 3+1 的孤立末行。 */
 .lib-stat-row { gap: 12px; }
 .lib-stat-row .status-strip-card :deep(.el-card__body) { padding: 18px 24px; }
-.status-strip { display: flex; align-items: stretch; gap: 24px; }
-.strip-group { display: flex; align-items: stretch; gap: 32px; flex: 1 1 auto; }
-.strip-group--libs { flex: 0 0 auto; gap: 28px; }
-.strip-divider { width: 1px; background: #f0f0f0; flex-shrink: 0; }
-.strip-item { display: flex; flex-direction: column; justify-content: center; min-width: 72px; }
+/* 等宽栅格：组内各列 flex:1 严格等宽，分隔线=列右边框（不占列）；
+ * 全部顶对齐——今日拦截的协议拆分行只向下延伸，不影响其他列对齐。 */
+.status-strip { display: flex; align-items: stretch; }
+.strip-group { display: flex; flex: 1 1 auto; min-width: 0; }
+.strip-group--libs { flex: 0 0 auto; min-width: 0; }
+.strip-group--libs .strip-item { flex: 1 1 0; }
+.strip-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 2px 24px 0;
+  border-right: 1px solid #f0f0f0;
+}
+.strip-item:first-child { padding-left: 0; }
+.strip-item:last-child { border-right: none; padding-right: 0; }
+.strip-divider.is-v { width: 1px; background: #f0f0f0; flex: 0 0 auto; margin: 0 8px; }
 .strip-label { font-size: 12px; color: var(--text-secondary); display: flex; align-items: center; }
-.strip-value { font-size: 24px; font-weight: 800; line-height: 1.25; margin-top: 4px; font-variant-numeric: tabular-nums; letter-spacing: 0.3px; color: #303133; }
+.strip-value {
+  font-size: 24px;
+  font-weight: 800;
+  line-height: 1.25;
+  margin-top: 6px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.3px;
+  color: #303133;
+  white-space: nowrap;
+}
 .strip-value.is-danger { color: #f56c6c; }
 .strip-value.is-warning { color: #e6a23c; }
-.strip-sub { display: flex; align-items: center; gap: 12px; margin-top: 4px; font-size: 12px; color: var(--text-secondary); white-space: nowrap; font-variant-numeric: tabular-nums; }
-.strip-lib { display: flex; align-items: center; margin-top: 4px; }
-.strip-lib-value { font-size: 14px; font-weight: 600; color: #303133; font-variant-numeric: tabular-nums; }
+.strip-sub { display: flex; align-items: center; gap: 14px; margin-top: 6px; font-size: 12px; color: var(--text-secondary); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.strip-lib { display: flex; align-items: center; margin-top: 6px; }
+.strip-lib-value { font-size: 14px; font-weight: 600; color: #303133; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .status-dot { width: 7px; height: 7px; border-radius: 50%; margin-right: 5px; flex-shrink: 0; }
 .status-dot.is-up { background: #67c23a; }
 .status-dot.is-down { background: #f56c6c; }
-.strip-item.is-lib .el-tag { margin-top: 5px; align-self: flex-start; }
-@media (max-width: 1400px) { .status-strip { flex-direction: column; gap: 16px; } .strip-divider.is-v { width: 100%; height: 1px; } }
+.strip-item.is-lib .el-tag { margin-top: 6px; align-self: flex-start; }
+@media (max-width: 1500px) {
+  .strip-item { padding: 2px 16px 0; }
+  .strip-value { font-size: 20px; }
+}
+@media (max-width: 1400px) {
+  .status-strip { flex-direction: column; gap: 16px; }
+  .strip-divider.is-v { width: 100%; height: 1px; margin: 0; }
+}
 
+.chart-container { height: 260px; }
 .chart-container { height: 260px; }
 .chart-container { height: 260px; }
 .events-row .el-card { height: 100%; }
