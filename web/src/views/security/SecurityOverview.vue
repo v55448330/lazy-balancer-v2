@@ -573,35 +573,47 @@ onMounted(() => { void reloadAll() })
    page-desc 28px 缩进与标题文字错位） */
 .card-title .title-icon { font-size: 16px; color: #3b82f6; }
 
+/* KPI 卡（2026-10-31 重设计）：白底细边直角、图标右上淡底、标签在上、
+ * 大数值在下、协议拆分贴数值下方；等高由 stat-row stretch + min-height 保证。 */
 .stat-box {
-  min-height: 108px;
+  position: relative;
+  min-height: 128px;
   display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 16px;
-  border-radius: 8px;
-  border: 1px solid #f0f0f0;
+  flex-direction: column;
+  justify-content: center;
+  padding: 16px 20px;
+  border: 1px solid #ebeef5;
   height: 100%;
   box-sizing: border-box;
-  transition: border-color 0.2s;
+  background: #fff;
+  transition: border-color 0.2s, box-shadow 0.2s;
 }
-.stat-box:hover { border-color: #d0d0d0; }
+.stat-box:hover { border-color: #c8cdd4; box-shadow: 0 2px 10px rgba(17, 24, 39, 0.05); }
 .stat-box__icon {
+  position: absolute;
+  top: 16px;
+  right: 16px;
   flex-shrink: 0;
   width: 40px;
   height: 40px;
-  border-radius: 8px;
+  border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
   font-size: 20px;
 }
-.stat-box__body { flex: 1; min-width: 0; }
-.stat-box__value { font-size: 20px; font-weight: 700; line-height: 1.3; }
+.stat-box__body { flex: 1; min-width: 0; padding-right: 44px; }
 .stat-box__label { font-size: 12px; color: var(--text-secondary); }
-.stat-box__value { margin-top: 2px; }
-/* 今日拦截协议拆分：彩点+数字单行（无框，窄卡不溢出；颜色对齐协议徽标）。 */
-.stat-box__proto-split { display: flex; align-items: center; gap: 12px; margin-top: 4px; font-size: 12px; color: var(--text-secondary); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.stat-box__value {
+  font-size: 26px;
+  font-weight: 800;
+  line-height: 1.25;
+  margin-top: 6px;
+  letter-spacing: 0.3px;
+  font-variant-numeric: tabular-nums;
+}
+/* 今日拦截协议拆分：彩点+数字单行（千分位，无框；颜色对齐协议徽标）。 */
+.stat-box__proto-split { display: flex; align-items: center; gap: 14px; margin-top: 8px; font-size: 12px; color: var(--text-secondary); white-space: nowrap; font-variant-numeric: tabular-nums; }
 .proto-split-item { display: inline-flex; align-items: center; }
 .proto-dot { width: 6px; height: 6px; border-radius: 50%; margin-right: 4px; }
 .proto-dot--http { background: #409eff; }
