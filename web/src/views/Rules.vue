@@ -1198,7 +1198,7 @@
           <template v-else-if="ruleLogStats">
             <div class="stats-summary">
               <el-tag size="small" type="info" effect="plain">共 {{ ruleLogStats.total }} 次请求</el-tag>
-              <el-text type="info" size="small" style="margin-left: 8px;">自 {{ ruleLogStats.started_at }} 起，每 5 秒实时统计</el-text>
+              <el-text type="info" size="small" style="margin-left: 8px;">含最近 ≤1000 行日志（自 {{ ruleLogStats.started_at }}）· 每 5 秒实时叠加</el-text>
             </div>
             <div class="stats-grid">
               <section class="dialog-panel stats-card">
@@ -3921,6 +3921,16 @@ const topN = (m: Record<string, number>, n: number) =>
     .sort((a, b) => b.count - a.count || a.value.localeCompare(b.value))
     .slice(0, n)
 
+// parseLogLineTimestamp 取访问日志行的 ts（秒，浮点）；非 JSON/缺失返回 null。
+const parseLogLineTimestamp = (line: string): number | null => {
+  try {
+    const ts = JSON.parse(line)?.ts
+    return typeof ts === 'number' && ts > 0 ? ts : null
+  } catch {
+    return null
+  }
+}
+
 const rebuildStatsView = (m: LogStatMaps) => {
   ruleLogStats.value = {
     total: m.total,
@@ -3987,12 +3997,20 @@ const startLogStats = async () => {
   ruleLogStatsError.value = ''
   logStatsOffset.value = 0
   try {
-    // 只借 /logs 取尾部 EOF offset 作为增量起点，不消费其 content：标签
-    // 承诺「自 started_at 起实时统计」，若把弹框打开前的最近 1000 行灌进同一
-    // 组桶，total/Top 会把数小时前的历史流量算成「本次观察」，两次打开读数
-    // 也不可比。窗口口径 = 打开时刻起（log-stream 增量是纯实时的）。
     const res = await request.get<APIResponse<RuleLogData>>(`/rules/${targetId}/logs`, { signal: healthPolling.signal, timeout: 8000, silent: true })
     if (disposed || requestSeq !== ruleLogRequestSeq || !ruleLogDialogVisible.value || ruleLogTab.value !== 'stats' || ruleLogCaddyId.value !== targetId) return
+    // 打开即统计已有最近 ≤1000 行历史（2026-10-30 用户裁定，取代旧的
+    // 「只借 offset 不消费历史」口径）：content 为完整行（EOF 行对齐），
+    // 消费后 offset=EOF，流式增量与之零重叠。
+    const historyLines = (res.data?.content || '').split('\n').filter((line) => line.trim())
+    if (historyLines.length) {
+      const firstTs = parseLogLineTimestamp(historyLines[0])
+      if (firstTs !== null) maps.startedAt = formatDate(new Date(firstTs * 1000).toISOString())
+      const completed = await consumeLogLinesChunked(historyLines, maps, () => (
+        !disposed && requestSeq === ruleLogRequestSeq && ruleLogDialogVisible.value && ruleLogTab.value === 'stats' && ruleLogCaddyId.value === targetId
+      ))
+      if (!completed) return
+    }
     rebuildStatsView(maps)
     logStatsOffset.value = res.data?.offset ?? 0
   } catch (error: unknown) {

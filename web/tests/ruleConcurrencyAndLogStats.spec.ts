@@ -29,11 +29,13 @@ test('版本冲突（409）刷新列表并提示重新打开，不静默覆盖',
   assert.match(conflict, /fetchRules\(/)
 })
 
-test('实时统计只借 /logs 的 offset，不消费打开前的历史内容', () => {
+test('实时统计先灌最近 ≤1000 行历史，再从 EOF 增量叠加（2026-10-30 用户裁定）', () => {
   // 结构边界：花括号配对取函数体（下一条函数声明作终点会让后插的语句落进
   // 切片，断言可能被相邻函数满足）。
   const body = stripComments(member(page, 'const startLogStats = async'))
-  // 增量路径仍是纯实时；起始路径不得把 tail 内容灌进同一组桶。
-  assert.doesNotMatch(body, /consumeLogLinesChunked\(/)
+  // 起始路径必须消费 tail 历史（含 ≤1000 行）并推进到 EOF；增量流从 EOF 接续零重叠。
+  assert.match(body, /consumeLogLinesChunked\(/)
   assert.match(body, /logStatsOffset\.value = res\.data\?\.offset \?\? 0/)
+  // 历史行时间戳解析（started_at 取首行 ts）
+  assert.match(body, /parseLogLineTimestamp\(/)
 })
