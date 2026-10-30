@@ -416,12 +416,31 @@ func TestThreatRollup_persistedRebuildContinuesAcrossCalls(t *testing.T) {
 	if got := threatRollupTargetCountForMinute(t, minuteStr); got != 1 {
 		t.Fatalf("target count=%d, want 1（持久化重建必须覆盖单轮批上限之外）", got)
 	}
-	var remaining int
-	if err := db.MetricsDB.QueryRow(`SELECT COUNT(*) FROM metrics_state WHERE key=?`, threatRollupRebuildFromKey).Scan(&remaining); err != nil {
-		t.Fatal(err)
+	// 覆盖到达意图起点（总览升级回填下界=warmer 默认窗口 7d，浅于此的意图
+	// 会被扩展）后清除重建标记并置位总览就绪标记——批数上限内跨多轮续做。
+	cleared := false
+	for range 12 {
+		if err := ensureThreatRollup(30); err != nil {
+			t.Fatal(err)
+		}
+		var remaining int
+		if err := db.MetricsDB.QueryRow(`SELECT COUNT(*) FROM metrics_state WHERE key=?`, threatRollupRebuildFromKey).Scan(&remaining); err != nil {
+			t.Fatal(err)
+		}
+		if remaining == 0 {
+			cleared = true
+			break
+		}
 	}
-	if remaining != 0 {
-		t.Fatalf("覆盖到达意图起点后必须清除重建标记（remaining=%d）", remaining)
+	if !cleared {
+		t.Fatal("覆盖到达意图起点后必须清除重建标记（12 轮内未收敛）")
+	}
+	var ready string
+	if err := db.MetricsDB.QueryRow(`SELECT value FROM metrics_state WHERE key=?`, threatRollupOverviewReadyKey).Scan(&ready); err != nil {
+		t.Fatalf("总览就绪标记未随回填完成置位: %v", err)
+	}
+	if ready != "1" {
+		t.Fatalf("总览就绪标记=%q, want 1", ready)
 	}
 }
 

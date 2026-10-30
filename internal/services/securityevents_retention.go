@@ -197,16 +197,20 @@ type SecurityEventsRetentionResult struct {
 	Events       int // security_events 行
 	Rollup       int // security_event_rollup 行
 	TargetRollup int // security_event_target_rollup 行
-	Highwater    int // metrics_state 分钟 rollup 状态键（事件高水位 + 迟到基线）
+	// OverviewRollup 是总览预聚合（IP/规则维度）两表删除量之和：
+	// security_event_ip_rollup + security_event_rule_rollup。与主 rollup
+	// 同生命周期（同 cutoff 分批清理）。
+	OverviewRollup int
+	Highwater      int // metrics_state 分钟 rollup 状态键（事件高水位 + 迟到基线）
 	// AgeDeferred / RowCapDeferred 表示原始事件的年龄/行帽裁剪被 rollup
 	// 就绪门跳过；两类删除都会让尚未固化的分钟永久缺计，必须同门。
 	AgeDeferred    bool
 	RowCapDeferred bool
 }
 
-// Aggregates 聚合派生数据的删除量（三类之和）。
+// Aggregates 聚合派生数据的删除量（四类之和）。
 func (r SecurityEventsRetentionResult) Aggregates() int {
-	return r.Rollup + r.TargetRollup + r.Highwater
+	return r.Rollup + r.TargetRollup + r.OverviewRollup + r.Highwater
 }
 
 // SecurityEventsRetentionCleanupDetail 是单轮清理的唯一入口（任务体传
@@ -370,6 +374,49 @@ func securityEventsRetentionCleanup(ctx context.Context) (SecurityEventsRetentio
 	if result.TargetRollup > 0 {
 		Logf("info", "security events retention: target rollup cleanup removed %d rows older than %s", result.TargetRollup, rollupCutoff)
 	}
+	// 总览预聚合（IP/规则维度，方案2）与主 rollup 同生命周期——同 cutoff
+	// 同批清理，否则总览读侧投影无限增长。
+	for {
+		res, err := database.Exec(`DELETE FROM security_event_ip_rollup WHERE minute < ? AND minute IN (
+			SELECT minute FROM security_event_ip_rollup WHERE minute < ? GROUP BY minute ORDER BY minute LIMIT 60)`, rollupCutoff, rollupCutoff)
+		if err != nil {
+			Logf("warn", "security events retention: overview ip rollup cleanup failed: %v", err)
+			return result, err
+		}
+		affected, _ := res.RowsAffected()
+		result.OverviewRollup += int(affected)
+		if affected == 0 {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			Logf("info", "security events retention: overview ip rollup cleanup canceled mid-pass (deleted %d)", result.OverviewRollup)
+			return result, nil
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	for {
+		res, err := database.Exec(`DELETE FROM security_event_rule_rollup WHERE minute < ? AND minute IN (
+			SELECT minute FROM security_event_rule_rollup WHERE minute < ? GROUP BY minute ORDER BY minute LIMIT 60)`, rollupCutoff, rollupCutoff)
+		if err != nil {
+			Logf("warn", "security events retention: overview rule rollup cleanup failed: %v", err)
+			return result, err
+		}
+		affected, _ := res.RowsAffected()
+		result.OverviewRollup += int(affected)
+		if affected == 0 {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			Logf("info", "security events retention: overview rule rollup cleanup canceled mid-pass (deleted %d)", result.OverviewRollup)
+			return result, nil
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	if result.OverviewRollup > 0 {
+		Logf("info", "security events retention: overview rollup cleanup removed %d rows older than %s", result.OverviewRollup, rollupCutoff)
+	}
 	// 分钟 rollup 状态键（事件高水位 + 回退迟到基线）与 rollup 同生命周期
 	// ——此前每分钟一行常驻 metrics_state（约 1440 行/天、52.5 万行/年），
 	// 全仓无删除点。按同一 rollupCutoff 清理（键后缀为 'YYYY-MM-DD HH:MM'
@@ -405,7 +452,7 @@ func securityEventsRetentionCleanup(ctx context.Context) (SecurityEventsRetentio
 	// 下防 WAL 无界）。TRUNCATE 检查点在活跃写者（摄取 tick/rollup warmer）
 	// 下易遇 BUSY 且与 30s busy_timeout 叠加放大 tick 延迟——不再每轮清理
 	// 批尾执行，收敛为低频门控 + BUSY 显式计数观测（语义不变，频次解耦）。
-	if result.Events > 0 || result.Rollup > 0 || result.TargetRollup > 0 || result.Highwater > 0 {
+	if result.Events > 0 || result.Rollup > 0 || result.TargetRollup > 0 || result.OverviewRollup > 0 || result.Highwater > 0 {
 		securityEventsCheckpointWALIfDue(database, time.Now())
 	}
 	return result, nil

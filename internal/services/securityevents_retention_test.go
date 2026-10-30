@@ -506,6 +506,12 @@ func TestSecurityEventsRetentionCleanupDetail_reportsAggregateDeletions(t *testi
 	if _, err := db.MetricsDB.Exec(`INSERT INTO metrics_state (key, value) VALUES (?, '5')`, ThreatRollupEventHighwaterPrefix+oldMinute); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := db.MetricsDB.Exec(`INSERT INTO security_event_ip_rollup (minute, client_ip, action, count) VALUES (?, '198.51.100.7', 'blocked', 4)`, oldMinute); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.MetricsDB.Exec(`INSERT INTO security_event_rule_rollup (minute, rule_triggered, rule_msg, action, count) VALUES (?, '942100', 'SQL Injection', 'blocked', 5)`, oldMinute); err != nil {
+		t.Fatal(err)
+	}
 	countRows := func(query string, args ...any) int {
 		t.Helper()
 		var n int
@@ -517,6 +523,8 @@ func TestSecurityEventsRetentionCleanupDetail_reportsAggregateDeletions(t *testi
 	rollupBefore := countRows(`SELECT COUNT(*) FROM security_event_rollup WHERE minute=?`, oldMinute)
 	targetBefore := countRows(`SELECT COUNT(*) FROM security_event_target_rollup WHERE minute=?`, oldMinute)
 	highwaterBefore := countRows(`SELECT COUNT(*) FROM metrics_state WHERE key=?`, ThreatRollupEventHighwaterPrefix+oldMinute)
+	overviewBefore := countRows(`SELECT COUNT(*) FROM security_event_ip_rollup WHERE minute=?`, oldMinute) +
+		countRows(`SELECT COUNT(*) FROM security_event_rule_rollup WHERE minute=?`, oldMinute)
 	res, err := SecurityEventsRetentionCleanupDetail(context.Background())
 	if err != nil {
 		t.Fatalf("cleanup: %v", err)
@@ -527,11 +535,54 @@ func TestSecurityEventsRetentionCleanupDetail_reportsAggregateDeletions(t *testi
 	if res.Rollup == 0 || res.TargetRollup == 0 || res.Highwater == 0 {
 		t.Fatalf("detail = %+v, want non-zero rollup/target/highwater deletions", res)
 	}
-	actualDeleted := rollupBefore - countRows(`SELECT COUNT(*) FROM security_event_rollup WHERE minute=?`, oldMinute) +
-		targetBefore - countRows(`SELECT COUNT(*) FROM security_event_target_rollup WHERE minute=?`, oldMinute) +
-		highwaterBefore - countRows(`SELECT COUNT(*) FROM metrics_state WHERE key=?`, ThreatRollupEventHighwaterPrefix+oldMinute)
-	if got := res.Aggregates(); got != actualDeleted {
-		t.Fatalf("Aggregates()=%d, actual DB rows deleted=%d", got, actualDeleted)
+	if res.Aggregates() != rollupBefore-countRows(`SELECT COUNT(*) FROM security_event_rollup WHERE minute=?`, oldMinute)+
+		targetBefore-countRows(`SELECT COUNT(*) FROM security_event_target_rollup WHERE minute=?`, oldMinute)+
+		highwaterBefore-countRows(`SELECT COUNT(*) FROM metrics_state WHERE key=?`, ThreatRollupEventHighwaterPrefix+oldMinute)+
+		overviewBefore-(countRows(`SELECT COUNT(*) FROM security_event_ip_rollup WHERE minute=?`, oldMinute)+
+		countRows(`SELECT COUNT(*) FROM security_event_rule_rollup WHERE minute=?`, oldMinute)) {
+		t.Fatalf("Aggregates()=%d 未覆盖总览预聚合删除量（detail=%+v）", res.Aggregates(), res)
+	}
+}
+
+// 总览预聚合（IP/规则维度）与主 rollup 同生命周期：过期分钟行清理、近期
+// 分钟行保留——两新表无限增长会拖垮总览读侧（方案2）。
+func TestSecurityEventsRetentionCleanup_coversOverviewRollups(t *testing.T) {
+	setupSecurityEventsRetentionTestDB(t)
+	if _, err := db.DB.Exec(`UPDATE global_config SET security_events_retention_days=30 WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
+	oldMinute := time.Now().UTC().AddDate(0, 0, -40).Format("2006-01-02 15:04")
+	recentMinute := time.Now().UTC().AddDate(0, 0, -1).Format("2006-01-02 15:04")
+	if _, err := db.MetricsDB.Exec(`INSERT INTO security_event_ip_rollup (minute, client_ip, action, count) VALUES
+		(?, '198.51.100.1', 'blocked', 2), (?, '198.51.100.2', 'blocked', 1)`, oldMinute, recentMinute); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.MetricsDB.Exec(`INSERT INTO security_event_rule_rollup (minute, rule_triggered, rule_msg, action, count) VALUES
+		(?, '942100', 'SQL Injection', 'blocked', 3), (?, '941100', 'XSS', 'blocked', 1)`, oldMinute, recentMinute); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := SecurityEventsRetentionCleanupDetail(context.Background()); err != nil {
+		t.Fatalf("cleanup: %v", err)
+	}
+	countRows := func(query string, args ...any) int {
+		t.Helper()
+		var n int
+		if err := db.MetricsDB.QueryRow(query, args...).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	if got := countRows(`SELECT COUNT(*) FROM security_event_ip_rollup WHERE minute=?`, oldMinute); got != 0 {
+		t.Fatalf("过期总览 IP 行未清理（count=%d）", got)
+	}
+	if got := countRows(`SELECT COUNT(*) FROM security_event_rule_rollup WHERE minute=?`, oldMinute); got != 0 {
+		t.Fatalf("过期总览规则行未清理（count=%d）", got)
+	}
+	if got := countRows(`SELECT COUNT(*) FROM security_event_ip_rollup WHERE minute=?`, recentMinute); got != 1 {
+		t.Fatalf("近期总览 IP 行被误删（count=%d）", got)
+	}
+	if got := countRows(`SELECT COUNT(*) FROM security_event_rule_rollup WHERE minute=?`, recentMinute); got != 1 {
+		t.Fatalf("近期总览规则行被误删（count=%d）", got)
 	}
 }
 

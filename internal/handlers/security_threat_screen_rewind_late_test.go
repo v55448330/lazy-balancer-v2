@@ -340,6 +340,12 @@ func TestDrainThreatRollupRewindPending_reportsFailure(t *testing.T) {
 // nil，新实现在有界次数内放弃并返回错误。
 func TestEnsureThreatRollup_boundedRetriesWhenRewindKeepsFailing(t *testing.T) {
 	setupSecurityPolicyTestDB(t)
+	// 预置总览预聚合就绪标记：本用例验证稳态下的回退重试有界性——总览升级
+	// 回填（就绪标记缺失）会把窄窗固化扩成 7d 分批回填，掩盖被测前提。
+	if _, err := db.MetricsDB.Exec(`INSERT INTO metrics_state (key, value) VALUES (?, '1') ON CONFLICT(key) DO UPDATE SET value='1'`,
+		threatRollupOverviewReadyKey); err != nil {
+		t.Fatal(err)
+	}
 	oldApply := threatRollupRewindApplyInLock
 	oldAttempts := threatRollupRewindApplyAttempts
 	oldBackoff := threatRollupRewindApplyBackoff
@@ -433,6 +439,12 @@ func TestThreatFixMinute_lateEventStillMergesAfterRepeat(t *testing.T) {
 // 无界实现在断言窗口内不返回（由 stop 关闭解除粘住，随后按失败路径返回错误）。
 func TestEnsureThreatRollup_boundedIterationsWhenRewindKeepsQueueing(t *testing.T) {
 	setupSecurityPolicyTestDB(t)
+	// 预置总览预聚合就绪标记：本用例验证稳态下的迭代有界性——总览升级回填
+	// （就绪标记缺失）会把窄窗固化扩成 7d 分批回填，掩盖被测前提。
+	if _, err := db.MetricsDB.Exec(`INSERT INTO metrics_state (key, value) VALUES (?, '1') ON CONFLICT(key) DO UPDATE SET value='1'`,
+		threatRollupOverviewReadyKey); err != nil {
+		t.Fatal(err)
+	}
 	oldApply := threatRollupRewindApplyInLock
 	oldAttempts := threatRollupRewindApplyAttempts
 	oldBackoff := threatRollupRewindApplyBackoff

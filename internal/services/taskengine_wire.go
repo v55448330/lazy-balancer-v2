@@ -485,7 +485,7 @@ func InitTaskEngine(watchdogAdminURL, runtimeLogFile string) *taskengine.Engine 
 			}
 			// 按构成披露：聚合/高水位删除不计入事件数时，仅报「删除 N 条事件」
 			// 会让停摆后首次清理显示 0（运维误判保留策略未生效）。
-			TaskLogfContext(rc.Ctx, "security-events-retention", "cleanup", "安全事件保留清理完成：删除事件 %d 条 · 聚合 %d 行 · 被攻击目标聚合 %d 行 · 分钟状态键 %d 个（保留期与条数上限，无过期为 0）", retention.Events, retention.Rollup, retention.TargetRollup, retention.Highwater)
+			TaskLogfContext(rc.Ctx, "security-events-retention", "cleanup", "安全事件保留清理完成：删除事件 %d 条 · 聚合 %d 行 · 被攻击目标聚合 %d 行 · 总览聚合 %d 行 · 分钟状态键 %d 个（保留期与条数上限，无过期为 0）", retention.Events, retention.Rollup, retention.TargetRollup, retention.OverviewRollup, retention.Highwater)
 			if retention.AgeDeferred {
 				TaskLogfContext(rc.Ctx, "security-events-retention", "cleanup", "年龄裁剪本轮跳过：等待预聚合（大屏窗口）回填完成后执行，过期原始事件暂不删除")
 			}

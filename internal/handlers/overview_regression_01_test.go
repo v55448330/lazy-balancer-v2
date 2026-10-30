@@ -55,8 +55,9 @@ func TestGetSecurityOverview_activePoliciesCountsFeatureBearingStages(t *testing
 
 // 总量口径披露：今日拦截/检测优先走分钟 rollup（与大屏同口径排除私网，
 // includes_reserved=false）；rollup 覆盖水位未回推/固化陈旧时回退原始表
-// 直算（含私网，includes_reserved=true）；7 天趋势/Top IP 恒为原始表口径
-// （含私网）。nil metrics 零面板分支同键常驻。
+// 直算（含私网，includes_reserved=true）；7 天趋势/Top IP 恒为含私网口径
+// （读路径下沉后新维度表写入侧同口径含保留地址，性能优化不改变统计口径）。
+// nil metrics 零面板分支同键常驻。
 // 本用例无 rollup 覆盖状态 → 回退路径（含私网，披露 true）。
 func TestGetSecurityOverview_disclosesReservedInclusiveTotals(t *testing.T) {
 	setupSecurityPolicyTestDB(t)
@@ -95,6 +96,8 @@ func TestGetSecurityOverview_disclosesReservedInclusiveTotals(t *testing.T) {
 // 分钟，直算静默少计。rollup 覆盖到今日起点且固化新鲜时——计数=rollup
 // SUM（排除私网/保留地址，含昨日分钟不计），includes_reserved=false；
 // 原始表里的私网事件与昨日事件均不进入今日计数。
+// （近 7 天聚合读路径下沉为纯性能优化——新维度表写入侧含保留地址，口径
+// 不变；本用例无窗口级覆盖状态，聚合走原始表回退，与切换前行为一致。）
 func TestGetSecurityOverview_todayCountsFromRollupExcludeReserved(t *testing.T) {
 	setupSecurityPolicyTestDB(t)
 	router := newSecurityEventsRouter(t)

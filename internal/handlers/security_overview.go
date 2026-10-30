@@ -362,11 +362,12 @@ func threatRawCoverageStart(database *sql.DB) (string, error) {
 }
 
 // securityOverviewResponse 在不改变公共 SecurityOverview 模型的前提下，为
-// 原始表直读的近 7 天卡片附带覆盖披露；nil metrics 的零面板也保持同键。
-// IncludesReserved 口径披露：trend/top_ips/attack_types 总量不排除私网/保留
-// 地址事件；today_blocked/today_detected 走 rollup 时与大屏同口径排除私网
-// （includes_reserved=false），回退原始表直算时含私网（=true）——前端
-// tooltip 按该字段切换两种口径文案消歧。
+// 近 7 天卡片附带覆盖披露；nil metrics 的零面板也保持同键。
+// IncludesReserved 口径披露：仅描述 today_blocked/today_detected 的路径
+// 分叉（走 rollup=与大屏同口径排除私网 false / 回退原始表直算=含私网 true）。
+// trend/top_ips/attack_types **恒含**私网/保留地址——读路径下沉后新维度表
+// 写入侧（aggregateOverviewEvents）同口径含保留地址，性能优化不改变统计
+// 口径——前端 tooltip 按该字段为今日两项切换两种口径文案消歧。
 type securityOverviewResponse struct {
 	models.SecurityOverview
 	RawCoverageFrom string `json:"raw_coverage_from"`
@@ -383,41 +384,191 @@ type securityOverviewResponse struct {
 	Ingestion services.SecurityEventsIngestionStatus `json:"ingestion"`
 }
 
-// loadSecurityOverviewAggregates 计算（或命中缓存）近 7 天聚合。错误不缓存、
-// 由调用方聚合成 500（与既有「任一查询失败显式报错」口径一致）。
-// tzName 仅用于缓存键区分时区身份（loc.String()）；窗口/日桶一律由 today
-// 携带的时区逐日构造（DST 正确），不把单一偏移套到整周 SQL date() 上。
-func loadSecurityOverviewAggregates(metricsDB *sql.DB, today time.Time, todayStartUTC, tzName string) (securityOverviewAggregates, error) {
-	key := securityOverviewAggCacheKey{metrics: metricsDB, todayStart: todayStartUTC, tzName: tzName}
-	now := time.Now()
-	if entry, ok := securityOverviewAggCache.Get(key, now); ok {
-		// 深拷贝：四个切片若与缓存条目共享底层数组，任一消费者就地变更
-		// （sort/截断/改元素）都会污染其他请求的 30s 缓存（同型事故：健康
-		// 缓存的「共享同一克隆」）。
-		return cloneSecurityOverviewAggregates(entry), nil
-	}
+// securityEventIPRollupTable / securityEventRuleRollupTable 安全总览读路径
+// 消费的 IP/规则维度分钟预聚合表（写入侧与 security_event_rollup 同事务同
+// 生命周期固化：PK 前缀=minute，UTC 分钟文本；固化时已按攻击面谓词与保留
+// 地址排除过滤——读侧 ip 表无规则列、rule 表无 IP 列，不再重复套用谓词）。
+const (
+	securityEventIPRollupTable   = "security_event_ip_rollup"
+	securityEventRuleRollupTable = "security_event_rule_rollup"
+)
 
+// topIPRow Top10 IP 中间行（raw/rollup 双路径共形，装配段单源）。
+type topIPRow struct {
+	ip                  string
+	blocked, detected   int
+	recent10m, recent1h int
+	recent24h           int
+	lastTime            string
+}
+
+// securityOverviewSourceAgg 单次聚合的来源数据（趋势/Top10 行/攻击族计数），
+// 由 rollup 或原始表路径产出，共用同一装配段（topIPs/attackTypes 排序截断）。
+type securityOverviewSourceAgg struct {
+	trend        []models.SecurityTrendPoint
+	topRows      []topIPRow
+	familyCounts map[string]int
+	stageCounts  map[string]int
+}
+
+// securityOverviewAggRollupUsable 近 7 天聚合可否切换预聚合读路径：
+//   - 覆盖水位已回推到窗口起点（分钟）且固化新鲜（≤ threatRollupStaleAfter
+//     ——与 securityOverviewTodayCounts 同款状态键/常量/判定形状）；
+//   - 写入侧总览维度就绪标记（overview_rollup_ready，threatFixMinuteWithMode
+//     升级回填完成后置位）存在——缺失=升级回填未完成/状态恢复异常，覆盖
+//     水位可能宣称完整而维度表为空（静默少计），必须回退原始表。
+//
+// 状态读取失败按不可用处理（宁可多扫描一次，不得把覆盖缺口伪装成完整
+// 聚合）。维度表缺失不属于本门职责：门只看状态键，水位/就绪齐备而表缺失
+// 属异常，由查询错误显式暴露成 500（「任一查询失败显式报错」），不静默换路。
+func securityOverviewAggRollupUsable(database *sql.DB, windowStartUTC time.Time, now time.Time) bool {
+	coveredFrom, okCovered, err := loadThreatRollupState(database, threatRollupCoveredFromKey)
+	if err != nil || !okCovered {
+		return false
+	}
+	watermark, okFixed, err := loadThreatRollupState(database, threatRollupWatermarkKey)
+	if err != nil || !okFixed {
+		return false
+	}
+	ready, okReady, err := loadThreatRollupRawState(database, threatRollupOverviewReadyKey)
+	if err != nil || !okReady || ready != "1" {
+		return false
+	}
+	windowMinute := windowStartUTC.Truncate(time.Minute)
+	lastComplete := now.UTC().Add(-time.Minute).Truncate(time.Minute)
+	return !coveredFrom.After(windowMinute) && lastComplete.Sub(watermark) <= threatRollupStaleAfter
+}
+
+// loadOverviewAggregatesFromRollup 预聚合读路径（趋势/Top10 IP/攻击族）。
+// 口径（与写入侧 aggregateOverviewEvents 契约一致）：新维度表**含保留/私网
+// 地址**（总览历史口径，includes_reserved 披露不变）——读路径切换为纯性能
+// 下沉、零口径变化。趋势源因此用 security_event_rule_rollup（按日界区间对
+// action 求和），**不用** security_event_rollup：那是大屏固化口径（写入侧
+// 排除保留地址），会让趋势与 Top10/攻击族在同一面板内总量分叉。爬虫放行
+// 族 logged 在写入侧已按攻击面谓词排除，读侧不再重复套用。
+// 时间口径：minute 为 UTC 分钟文本，逐日本地边界换 UTC 分钟文本（分钟粒度，
+// 与原始表 event_time 秒级窗口同一日桶构造）；趋势与今日计数一样含「当前
+// 分钟截至最近一次固化」的事件。空 rule_triggered 事件写入侧照常聚进
+// rule 维度键（COALESCE ”），趋势求和不受影响。
+func loadOverviewAggregatesFromRollup(metricsDB *sql.DB, dayStarts []time.Time, today time.Time, now time.Time) (securityOverviewSourceAgg, error) {
+	const minuteLayout = "2006-01-02 15:04"
 	var firstErr error
 	track := func(err error) {
 		if err != nil && firstErr == nil {
 			firstErr = err
 		}
 	}
-	// 趋势日桶必须用**逐日本地边界**，不得用单一当前时区偏移——
-	// DST 周界（如 America/New_York 3 月/11 月切换）单偏移会让切换前一日的
-	// 边界错 1h，事件跨到相邻日桶（默认 Asia/Shanghai 无 DST，故此前未暴露）。
-	// 边界按 today 携带的配置时区逐日构造（today 由调用方 time.Now().In(loc)
-	// 传入），窗口下界同步用 dayStarts[0]，其余 7 天聚合与趋势同窗口。
+	windowStartMinute := dayStarts[0].UTC().Format(minuteLayout)
+	trend := make([]models.SecurityTrendPoint, 0, 7)
+	for i := range 7 {
+		point := models.SecurityTrendPoint{Date: dayStarts[i].In(today.Location()).Format("2006-01-02")}
+		err := metricsDB.QueryRow(`SELECT COALESCE(SUM(CASE WHEN action='blocked' THEN count ELSE 0 END),0),
+			COALESCE(SUM(CASE WHEN action='logged' THEN count ELSE 0 END),0)
+			FROM `+securityEventRuleRollupTable+` WHERE minute >= ? AND minute < ?`,
+			dayStarts[i].UTC().Format(minuteLayout), dayStarts[i+1].UTC().Format(minuteLayout)).
+			Scan(&point.Blocked, &point.Detected)
+		track(err)
+		trend = append(trend, point)
+	}
+
+	// 近窗 recency：minute 文本经 Format 取整到分钟——同一分钟内的秒级边缘
+	// 与原始表秒级窗口可差 <1 分钟（rollup 无秒级分辨率，与今日计数
+	// 「含当前分钟截至最近固化」同类口径）。
+	nowUTC := now.UTC()
+	recent10m := nowUTC.Add(-10 * time.Minute).Format(minuteLayout)
+	recent1h := nowUTC.Add(-time.Hour).Format(minuteLayout)
+	recent24h := nowUTC.Add(-24 * time.Hour).Format(minuteLayout)
+	type ipRecency struct {
+		recent10m, recent1h, recent24h int
+	}
+	recencyByIP := map[string]ipRecency{}
+	recencyRows, err := metricsDB.Query(`SELECT COALESCE(client_ip,''),
+		COALESCE(SUM(CASE WHEN minute >= ? THEN count ELSE 0 END),0) as recent_10m,
+		COALESCE(SUM(CASE WHEN minute >= ? THEN count ELSE 0 END),0) as recent_1h,
+		COALESCE(SUM(count),0) as recent_24h
+		FROM `+securityEventIPRollupTable+` WHERE minute >= ? GROUP BY client_ip`, recent10m, recent1h, recent24h)
+	track(err)
+	for recencyRows != nil && recencyRows.Next() {
+		var ip string
+		var rec ipRecency
+		track(recencyRows.Scan(&ip, &rec.recent10m, &rec.recent1h, &rec.recent24h))
+		recencyByIP[ip] = rec
+	}
+	if recencyRows != nil {
+		track(recencyRows.Err())
+		recencyRows.Close()
+	}
+
+	// 7 天总量 Top10：blocked+logged 降序截前 10；recency 由 24h 全量查询
+	// 按 IP 合并（缺省 0——只出现在 24h 窗口之外的 IP）。
+	topRows := make([]topIPRow, 0, 10)
+	ipRows, err := metricsDB.Query(`SELECT COALESCE(client_ip,''),
+		COALESCE(SUM(CASE WHEN action='blocked' THEN count ELSE 0 END),0) as b,
+		COALESCE(SUM(CASE WHEN action='logged' THEN count ELSE 0 END),0) as l,
+		MAX(minute) as last_minute
+		FROM `+securityEventIPRollupTable+` WHERE minute >= ? AND TRIM(COALESCE(client_ip,'')) <> ''
+		GROUP BY client_ip ORDER BY b + l DESC LIMIT 10`, windowStartMinute)
+	track(err)
+	for ipRows != nil && ipRows.Next() {
+		var ip string
+		var blocked, detected int
+		var lastMinute string
+		track(ipRows.Scan(&ip, &blocked, &detected, &lastMinute))
+		rec := recencyByIP[ip]
+		topRows = append(topRows, topIPRow{
+			ip:        ip,
+			blocked:   blocked,
+			detected:  detected,
+			recent10m: rec.recent10m,
+			recent1h:  rec.recent1h,
+			recent24h: rec.recent24h,
+			// MAX(minute) 为 UTC 分钟文本（无秒位），补 ":00" 与原始表
+			// last_time 同形（UTC 文本透传，前端 formatDate 同一解析路径）。
+			lastTime: lastMinute + ":00",
+		})
+	}
+	if ipRows != nil {
+		track(ipRows.Err())
+		ipRows.Close()
+	}
+
+	// 攻击族总量：规则维度 rollup GROUP BY rule_triggered, rule_msg——排序/
+	// 截断/阶段分类与原始表路径共用同一装配段（分类逻辑单源）。
+	familyCounts := map[string]int{}
+	stageCounts := map[string]int{}
+	typeRows, err := metricsDB.Query(`SELECT COALESCE(rule_triggered,''), COALESCE(rule_msg,''), COALESCE(SUM(count),0) as cnt
+		FROM `+securityEventRuleRollupTable+` WHERE minute >= ? GROUP BY rule_triggered, rule_msg`, windowStartMinute)
+	track(err)
+	for typeRows != nil && typeRows.Next() {
+		var ruleTriggered, ruleMsg string
+		var cnt int
+		track(typeRows.Scan(&ruleTriggered, &ruleMsg, &cnt))
+		familyCounts[categorizeAttack(ruleTriggered, ruleMsg)] += cnt
+		stageCounts[stageCategorizeAttack(ruleTriggered, ruleMsg)] += cnt
+	}
+	if typeRows != nil {
+		track(typeRows.Err())
+		typeRows.Close()
+	}
+	return securityOverviewSourceAgg{trend: trend, topRows: topRows, familyCounts: familyCounts, stageCounts: stageCounts}, firstErr
+}
+
+// loadOverviewAggregatesFromRaw 原始表直读回退路径：rollup 覆盖未达窗口起点
+// （升级回填/fresh install）、固化陈旧、就绪标记缺失或状态读取失败时使用。
+// 查询与切换前实现逐字一致——回退路径必须与切换点之前的既有行为完全同
+// 口径（含保留/私网地址，与新维度表写入侧一致，无跨路径口径分叉）。
+func loadOverviewAggregatesFromRaw(metricsDB *sql.DB, dayStarts []time.Time) (securityOverviewSourceAgg, error) {
 	const eventTimeLayout = "2006-01-02 15:04:05"
-	dayStarts := make([]time.Time, 8)
-	for i := range dayStarts {
-		d := today.AddDate(0, 0, i-6)
-		dayStarts[i] = time.Date(d.Year(), d.Month(), d.Day(), 0, 0, 0, 0, today.Location())
+	var firstErr error
+	track := func(err error) {
+		if err != nil && firstErr == nil {
+			firstErr = err
+		}
 	}
 	windowStartUTC := dayStarts[0].UTC().Format(eventTimeLayout)
 	trend := make([]models.SecurityTrendPoint, 0, 7)
 	for i := range 7 {
-		point := models.SecurityTrendPoint{Date: dayStarts[i].In(today.Location()).Format("2006-01-02")}
+		point := models.SecurityTrendPoint{Date: dayStarts[i].In(dayStarts[0].Location()).Format("2006-01-02")}
 		err := metricsDB.QueryRow(`SELECT COALESCE(SUM(CASE WHEN action='blocked' THEN 1 ELSE 0 END),0),
 			COALESCE(SUM(CASE WHEN action='logged' THEN 1 ELSE 0 END),0)
 			FROM security_events WHERE event_time >= ? AND event_time < ? AND `+services.AttackEventSQLPredicate("rule_triggered", "action"),
@@ -427,13 +578,6 @@ func loadSecurityOverviewAggregates(metricsDB *sql.DB, today time.Time, todaySta
 		trend = append(trend, point)
 	}
 
-	type topIPRow struct {
-		ip                  string
-		blocked, detected   int
-		recent10m, recent1h int
-		recent24h           int
-		lastTime            string
-	}
 	var topRows []topIPRow
 	nowUTC := time.Now().UTC()
 	recent10m := nowUTC.Add(-10 * time.Minute).Format(eventTimeLayout)
@@ -457,42 +601,130 @@ func loadSecurityOverviewAggregates(metricsDB *sql.DB, today time.Time, todaySta
 		track(ipRows.Err())
 		ipRows.Close()
 	}
+
+	familyCounts := map[string]int{}
+	stageCounts := map[string]int{}
+	typeRows, err := metricsDB.Query(`SELECT COALESCE(rule_triggered,''), COALESCE(rule_msg,''), COUNT(*) as cnt FROM security_events WHERE event_time >= ? AND `+services.AttackEventSQLPredicate("rule_triggered", "action")+` GROUP BY rule_triggered, rule_msg`, windowStartUTC)
+	track(err)
+	for typeRows != nil && typeRows.Next() {
+		var ruleTriggered, ruleMsg string
+		var cnt int
+		track(typeRows.Scan(&ruleTriggered, &ruleMsg, &cnt))
+		familyCounts[categorizeAttack(ruleTriggered, ruleMsg)] += cnt
+		stageCounts[stageCategorizeAttack(ruleTriggered, ruleMsg)] += cnt
+	}
+	if typeRows != nil {
+		track(typeRows.Err())
+		typeRows.Close()
+	}
+	return securityOverviewSourceAgg{trend: trend, topRows: topRows, familyCounts: familyCounts, stageCounts: stageCounts}, firstErr
+}
+
+// loadTopIPFamilySubdivision top10 逐 IP 攻击族细分（rollup/raw 双路径共用，
+// 一律走原始表）：有 idx_security_events_ip_time(client_ip, event_time DESC)
+// 覆盖、按 ≤10 个 IP 有界毫秒级；ip 维度 rollup 无规则维度、rule 维度
+// rollup 无 IP 维度，预聚合无法承载该细分（保留 raw 是结构与索引论证后的
+// 选择，非遗漏）。
+func loadTopIPFamilySubdivision(metricsDB *sql.DB, windowStartUTC string, topRows []topIPRow) (map[string]map[string]int, map[string]map[string]int, error) {
 	familyCountsByIP := map[string]map[string]int{}
 	stageFamilyCountsByIP := map[string]map[string]int{}
-	if len(topRows) > 0 {
-		placeholders := make([]string, len(topRows))
-		famArgs := make([]interface{}, 0, len(topRows)+1)
-		famArgs = append(famArgs, windowStartUTC)
-		for i, row := range topRows {
-			placeholders[i] = "?"
-			famArgs = append(famArgs, row.ip)
-		}
-		famRows, ferr := metricsDB.Query(fmt.Sprintf(`SELECT client_ip, COALESCE(rule_triggered,''), COALESCE(rule_msg,''), COUNT(*) as cnt FROM security_events WHERE event_time >= ? AND client_ip IN (%s) AND `+services.AttackEventSQLPredicate("rule_triggered", "action")+` GROUP BY client_ip, rule_triggered, rule_msg`, strings.Join(placeholders, ",")), famArgs...)
-		track(ferr)
-		for famRows != nil && famRows.Next() {
-			var ip, ruleTriggered, ruleMsg string
-			var cnt int
-			track(famRows.Scan(&ip, &ruleTriggered, &ruleMsg, &cnt))
-			counts := familyCountsByIP[ip]
-			if counts == nil {
-				counts = map[string]int{}
-				familyCountsByIP[ip] = counts
-			}
-			counts[categorizeAttack(ruleTriggered, ruleMsg)] += cnt
-			stageCounts := stageFamilyCountsByIP[ip]
-			if stageCounts == nil {
-				stageCounts = map[string]int{}
-				stageFamilyCountsByIP[ip] = stageCounts
-			}
-			stageCounts[stageCategorizeAttack(ruleTriggered, ruleMsg)] += cnt
-		}
-		if famRows != nil {
-			track(famRows.Err())
-			famRows.Close()
-		}
+	if len(topRows) == 0 {
+		return familyCountsByIP, stageFamilyCountsByIP, nil
 	}
-	topIPs := make([]models.SecurityTopIP, 0, len(topRows))
-	for _, row := range topRows {
+	var firstErr error
+	placeholders := make([]string, len(topRows))
+	famArgs := make([]interface{}, 0, len(topRows)+1)
+	famArgs = append(famArgs, windowStartUTC)
+	for i, row := range topRows {
+		placeholders[i] = "?"
+		famArgs = append(famArgs, row.ip)
+	}
+	famRows, ferr := metricsDB.Query(fmt.Sprintf(`SELECT client_ip, COALESCE(rule_triggered,''), COALESCE(rule_msg,''), COUNT(*) as cnt FROM security_events WHERE event_time >= ? AND client_ip IN (%s) AND `+services.AttackEventSQLPredicate("rule_triggered", "action")+` GROUP BY client_ip, rule_triggered, rule_msg`, strings.Join(placeholders, ",")), famArgs...)
+	if ferr != nil {
+		return familyCountsByIP, stageFamilyCountsByIP, ferr
+	}
+	for famRows.Next() {
+		var ip, ruleTriggered, ruleMsg string
+		var cnt int
+		if err := famRows.Scan(&ip, &ruleTriggered, &ruleMsg, &cnt); err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		counts := familyCountsByIP[ip]
+		if counts == nil {
+			counts = map[string]int{}
+			familyCountsByIP[ip] = counts
+		}
+		counts[categorizeAttack(ruleTriggered, ruleMsg)] += cnt
+		stageCounts := stageFamilyCountsByIP[ip]
+		if stageCounts == nil {
+			stageCounts = map[string]int{}
+			stageFamilyCountsByIP[ip] = stageCounts
+		}
+		stageCounts[stageCategorizeAttack(ruleTriggered, ruleMsg)] += cnt
+	}
+	if err := famRows.Err(); err != nil && firstErr == nil {
+		firstErr = err
+	}
+	famRows.Close()
+	return familyCountsByIP, stageFamilyCountsByIP, firstErr
+}
+
+// loadSecurityOverviewAggregates 计算（或命中缓存）近 7 天聚合。错误不缓存、
+// 由调用方聚合成 500（与既有「任一查询失败显式报错」口径一致）。
+// tzName 仅用于缓存键区分时区身份（loc.String()）；窗口/日桶一律由 today
+// 携带的时区逐日构造（DST 正确），不把单一偏移套到整周 SQL date() 上。
+//
+// 双路径语义（rollup 优先 + raw 回退）：覆盖水位已回推到窗口起点、固化
+// 新鲜且写入侧就绪标记齐备时，趋势/Top10 IP/攻击族读分钟预聚合
+// （loadOverviewAggregatesFromRollup，与原始表规模解耦——保留期/行帽裁剪
+// 后不再静默少计）；其余情形（升级回填未完成、fresh install、固化陈旧、
+// 状态读取失败）走原始表直读回退（loadOverviewAggregatesFromRaw，查询与
+// 切换前实现逐字一致）。新维度表写入侧含保留/私网地址（总览历史口径），
+// 读路径切换为纯性能下沉、零口径变化。
+func loadSecurityOverviewAggregates(metricsDB *sql.DB, today time.Time, todayStartUTC, tzName string) (securityOverviewAggregates, error) {
+	key := securityOverviewAggCacheKey{metrics: metricsDB, todayStart: todayStartUTC, tzName: tzName}
+	now := time.Now()
+	if entry, ok := securityOverviewAggCache.Get(key, now); ok {
+		// 深拷贝：四个切片若与缓存条目共享底层数组，任一消费者就地变更
+		// （sort/截断/改元素）都会污染其他请求的 30s 缓存（同型事故：健康
+		// 缓存的「共享同一克隆」）。
+		return cloneSecurityOverviewAggregates(entry), nil
+	}
+
+	// 趋势日桶必须用**逐日本地边界**，不得用单一当前时区偏移——
+	// DST 周界（如 America/New_York 3 月/11 月切换）单偏移会让切换前一日的
+	// 边界错 1h，事件跨到相邻日桶（默认 Asia/Shanghai 无 DST，故此前未暴露）。
+	// 边界按 today 携带的配置时区逐日构造（today 由调用方 time.Now().In(loc)
+	// 传入），窗口下界同步用 dayStarts[0]，其余 7 天聚合与趋势同窗口。
+	const eventTimeLayout = "2006-01-02 15:04:05"
+	dayStarts := make([]time.Time, 8)
+	for i := range dayStarts {
+		d := today.AddDate(0, 0, i-6)
+		dayStarts[i] = time.Date(d.Year(), d.Month(), d.Day(), 0, 0, 0, 0, today.Location())
+	}
+	fromRollup := securityOverviewAggRollupUsable(metricsDB, dayStarts[0], now)
+	var (
+		src    securityOverviewSourceAgg
+		srcErr error
+	)
+	if fromRollup {
+		src, srcErr = loadOverviewAggregatesFromRollup(metricsDB, dayStarts, today, now)
+	} else {
+		src, srcErr = loadOverviewAggregatesFromRaw(metricsDB, dayStarts)
+	}
+
+	// top10 逐 IP 攻击族细分：双路径都走原始表（理由见
+	// loadTopIPFamilySubdivision——有索引、有界、rollup 无对应维度）。
+	familyCountsByIP, stageFamilyCountsByIP, famErr := loadTopIPFamilySubdivision(metricsDB, dayStarts[0].UTC().Format(eventTimeLayout), src.topRows)
+	if famErr != nil && srcErr == nil {
+		srcErr = famErr
+	}
+
+	topIPs := make([]models.SecurityTopIP, 0, len(src.topRows))
+	for _, row := range src.topRows {
 		topIPs = append(topIPs, models.SecurityTopIP{
 			IP:              row.ip,
 			IPLocation:      enrichIPLocation(row.ip),
@@ -507,23 +739,8 @@ func loadSecurityOverviewAggregates(metricsDB *sql.DB, today time.Time, todaySta
 		})
 	}
 
-	typeRows, err := metricsDB.Query(`SELECT COALESCE(rule_triggered,''), COALESCE(rule_msg,''), COUNT(*) as cnt FROM security_events WHERE event_time >= ? AND `+services.AttackEventSQLPredicate("rule_triggered", "action")+` GROUP BY rule_triggered, rule_msg`, windowStartUTC)
-	track(err)
-	familyCounts := map[string]int{}
-	stageCounts := map[string]int{}
-	for typeRows != nil && typeRows.Next() {
-		var ruleTriggered, ruleMsg string
-		var cnt int
-		track(typeRows.Scan(&ruleTriggered, &ruleMsg, &cnt))
-		familyCounts[categorizeAttack(ruleTriggered, ruleMsg)] += cnt
-		stageCounts[stageCategorizeAttack(ruleTriggered, ruleMsg)] += cnt
-	}
-	if typeRows != nil {
-		track(typeRows.Err())
-		typeRows.Close()
-	}
-	attackTypesStage := make([]models.SecurityAttackType, 0, len(stageCounts))
-	for name, value := range stageCounts {
+	attackTypesStage := make([]models.SecurityAttackType, 0, len(src.stageCounts))
+	for name, value := range src.stageCounts {
 		attackTypesStage = append(attackTypesStage, models.SecurityAttackType{Name: name, Value: value})
 	}
 	// 值相等时按名称升序 tiebreak（map 迭代序随机，防轮询抖动）。
@@ -534,8 +751,8 @@ func loadSecurityOverviewAggregates(metricsDB *sql.DB, today time.Time, todaySta
 		return attackTypesStage[i].Name < attackTypesStage[j].Name
 	})
 
-	attackTypes := make([]models.SecurityAttackType, 0, len(familyCounts))
-	for name, value := range familyCounts {
+	attackTypes := make([]models.SecurityAttackType, 0, len(src.familyCounts))
+	for name, value := range src.familyCounts {
 		attackTypes = append(attackTypes, models.SecurityAttackType{Name: name, Value: value})
 	}
 	sort.Slice(attackTypes, func(i, j int) bool {
@@ -548,9 +765,9 @@ func loadSecurityOverviewAggregates(metricsDB *sql.DB, today time.Time, todaySta
 		attackTypes = attackTypes[:10]
 	}
 
-	data := securityOverviewAggregates{trend: trend, topIPs: topIPs, attackTypes: attackTypes, attackTypesStage: attackTypesStage}
-	if firstErr != nil {
-		return data, firstErr
+	data := securityOverviewAggregates{trend: src.trend, topIPs: topIPs, attackTypes: attackTypes, attackTypesStage: attackTypesStage}
+	if srcErr != nil {
+		return data, srcErr
 	}
 	securityOverviewAggCache.Set(key, cloneSecurityOverviewAggregates(data), now, securityOverviewAggCacheTTL)
 	return data, nil

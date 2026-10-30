@@ -1912,12 +1912,14 @@ func TestThreatRollup_ingestBackfillRewindsCoverage(t *testing.T) {
 	seedThreatScreenEvent(t, eventTime.Format("2006-01-02 15:04:05"), "93.184.216.7", "942100", "SQL Injection", "blocked")
 
 	// 且 warmer 已宣称整窗已覆盖（coveredFrom=24h 前、lastFixed=上一完整分钟），
-	// 目标维度就绪与归属地代际已就绪（否则 emptyCoverage 会全窗重固，掩盖前提）。
+	// 目标维度就绪、总览预聚合就绪与归属地代际已就绪（否则 emptyCoverage 会
+	// 全窗重固，掩盖前提）。
 	lastComplete := base.Add(-time.Minute).Truncate(time.Minute)
 	for key, value := range map[string]string{
 		threatRollupCoveredFromKey:       base.Add(-24 * time.Hour).Format("2006-01-02 15:04"),
 		threatRollupWatermarkKey:         lastComplete.Add(-time.Minute).Format("2006-01-02 15:04"),
 		threatRollupTargetReadyKey:       lastComplete.Format("2006-01-02 15:04"),
+		threatRollupOverviewReadyKey:     "1",
 		threatRollupGeoIPGenerationKey:   fmt.Sprintf("%d", services.GeoIPDataGeneration()),
 		threatRollupClassifierVersionKey: threatRollupClassifierVersion,
 		// 谓词/action 枚举代际同样预置：缺失会触发整窗重固，掩盖“repair
@@ -2024,6 +2026,7 @@ func seedThreatRollupCoveredWindow(t *testing.T, base time.Time, hours int) time
 		threatRollupCoveredFromKey:       base.Add(-time.Duration(hours) * time.Hour).Format("2006-01-02 15:04"),
 		threatRollupWatermarkKey:         lastComplete.Add(-time.Minute).Format("2006-01-02 15:04"),
 		threatRollupTargetReadyKey:       lastComplete.Format("2006-01-02 15:04"),
+		threatRollupOverviewReadyKey:     "1",
 		threatRollupGeoIPGenerationKey:   fmt.Sprintf("%d", services.GeoIPDataGeneration()),
 		threatRollupClassifierVersionKey: threatRollupClassifierVersion,
 	} {

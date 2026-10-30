@@ -110,7 +110,7 @@ func quarantineCorruptSQLiteFile(path string) (string, error) {
 // security_events 与 threat 大屏 rollup，隔离会丢弃安全事件历史——必须显式
 // 告知丢弃范围与隔离文件位置，不能只留一行 "metrics history reset"。
 func reportMetricsQuarantine(cause, quarantinePath string) {
-	detail := fmt.Sprintf("问题: metrics 库损坏（%s）；已隔离为 %s 并重建——指标历史与安全事件历史（security_events / security_event_rollup / security_event_target_rollup）一并丢弃，需从隔离文件人工取证",
+	detail := fmt.Sprintf("问题: metrics 库损坏（%s）；已隔离为 %s 并重建——指标历史与安全事件历史（security_events / security_event_rollup / security_event_target_rollup / security_event_ip_rollup / security_event_rule_rollup）一并丢弃，需从隔离文件人工取证",
 		cause, filepath.Base(quarantinePath))
 	log.Print(detail)
 	recordSystemAudit("库自愈", "指标库", detail)
@@ -134,11 +134,12 @@ func InitializeMetricsDB(dataDir string) (err error) {
 	//
 	// 本库**不是**「可丢弃遥测」：同库承载两类数据——①metrics_history（指标
 	// 历史，纯遥测，可再生）；②security_events / security_event_rollup /
-	// security_event_target_rollup（安全事件历史：攻击取证、触发详情、大屏
-	// 预聚合，不可再生，由 security_events_retention_days / _row_cap 独立保留
-	// 策略治理，见 services.securityEventsRetentionPolicy）。隔离重建意味着安全
-	// 事件历史一并丢弃，必须显式披露（进程日志 + 系统审计留痕），不得只写
-	// 「metrics history reset」。隔离文件保留最新 3 份供人工取证。
+	// security_event_target_rollup / security_event_ip_rollup /
+	// security_event_rule_rollup（安全事件历史：攻击取证、触发详情、大屏
+	// 与总览预聚合，不可再生，由 security_events_retention_days / _row_cap
+	// 独立保留策略治理，见 services.securityEventsRetentionPolicy）。隔离重建
+	// 意味着安全事件历史一并丢弃，必须显式披露（进程日志 + 系统审计留痕），
+	// 不得只写「metrics history reset」。隔离文件保留最新 3 份供人工取证。
 	//
 	// 两段防线——①头部魔数检查（零页 1 形态）；②Ping 报损坏类错误（not a
 	// database / malformed，覆盖魔数完好但页 1 内容损坏的形态）时隔离重试
@@ -515,6 +516,32 @@ func initMetricsSchema(db *sql.DB) error {
 	-- 一次分组排序（数十万行量级，大屏 60s 缓存内每窗口一次）。按 rule_caddy_id
 	-- 建覆盖索引会重新引入被删除的写入成本，故维持现状（性能取舍，非正确性；
 	-- 若未来该查询成为瓶颈，改读主 rollup 的 rule 维度需先确认其口径等价）。
+
+	-- 安全总览预聚合（IP/规则维度）：服务于 /security/overview 读侧下沉
+	-- （方案2：防护概览/7 天趋势/Top IP/攻击类型由原始表聚合改为读预聚合）。
+	-- 口径（与主 rollup 相反的约定，读侧不得混用两张表的输出）：
+	--   - 含保留/私网/空地址（总览 trend/top_ips/attack_types 披露
+	--     includes_reserved，总量必须完整），聚合查询不套保留地址排除；
+	--   - 攻击口径谓词同源（services.AttackEventSQLPredicate）；
+	--   - 固化入口与大屏 rollup 同一（threatFixMinuteWithMode 同事务写入）；
+	--   - 生命周期与 security_event_rollup 一致（保留清理取
+	--     max(31, 事件保留天数)，见 services.securityEventsRetentionCleanup）。
+	CREATE TABLE IF NOT EXISTS security_event_ip_rollup (
+		minute TEXT NOT NULL,
+		client_ip TEXT NOT NULL DEFAULT '',
+		action TEXT NOT NULL DEFAULT '',
+		count INTEGER NOT NULL DEFAULT 0,
+		PRIMARY KEY (minute, client_ip, action)
+	) WITHOUT ROWID;
+
+	CREATE TABLE IF NOT EXISTS security_event_rule_rollup (
+		minute TEXT NOT NULL,
+		rule_triggered TEXT NOT NULL DEFAULT '',
+		rule_msg TEXT NOT NULL DEFAULT '',
+		action TEXT NOT NULL DEFAULT '',
+		count INTEGER NOT NULL DEFAULT 0,
+		PRIMARY KEY (minute, rule_triggered, rule_msg, action)
+	) WITHOUT ROWID;
 
 	-- 指标库通用状态表：rollup 固化水位等持久元数据。
 	-- 键值单行形态，水位与分钟数据同事务提交——不再以数据行 MAX(minute)

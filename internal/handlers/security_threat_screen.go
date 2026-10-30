@@ -285,6 +285,10 @@ const (
 	// 升级后缺失 → 强制重置覆盖区间重固——否则既有 coverage 宣称已覆盖，
 	// 历史窗口的目标计数永久缺失（top_targets 与其余卡片窗口分裂）。
 	threatRollupTargetReadyKey = services.ThreatRollupTargetReadyKey
+	// threatRollupOverviewReadyKey 总览预聚合（IP/规则维度）就绪标记（值 '1'）：
+	// 升级后缺失 → 按空覆盖重固请求窗口补齐两新表，覆盖底端到达重建起点后
+	// 置位——置位前总览读侧走原始表回退（读侧消费）。
+	threatRollupOverviewReadyKey = "overview_rollup_ready"
 	// threatRollupGeoIPGenerationKey 固化时使用的归属地库代际
 	// 与当前代际不一致 → 重固窗口（库恢复后历史空归属地维度自愈）。
 	threatRollupGeoIPGenerationKey = "threat_rollup_geoip_generation"
@@ -738,10 +742,6 @@ func ensureThreatRollupWithYields(hours int) error {
 			rebuildNeeded = true
 		}
 	}
-	if emptyCoverage {
-		coveredFrom = dTo.Add(time.Minute)
-		lastFixed = dTo
-	}
 	// 重建意图跨调用持久化。旧实现只在触发
 	// 那一轮把 rebuildAll 置真——单次最多回填 23h（批数上限），宽窗口其余
 	// 分钟的增量路径在「无新事件」时直接 no-op，目标维度/归属地永不补算，
@@ -752,7 +752,41 @@ func ensureThreatRollupWithYields(hours int) error {
 	if err != nil {
 		return err
 	}
+	// 总览预聚合（IP/规则维度，方案2 /security/overview 读侧下沉）升级回填：
+	// 就绪标记（overview_rollup_ready='1'）缺失=旧库首次运行含此能力的版本。
+	//   - 无进行中的重建意图 → 按空覆盖重固（覆盖底端从尾端重扫，重固经
+	//     threatFixMinuteWithMode 同批把两新表按总览口径补齐），意图起点
+	//     持久化后由 rebuild_from 驱动到覆盖底端（7 天≈168 批、按 25 批/轮
+	//     约 7 轮自愈完成），期间总览读侧走原始表回退；
+	//   - 意图已在进行 → **不得**重置覆盖：空覆盖每轮把覆盖底端拉回尾端，
+	//     >24h 窗口的回填永不推进（活锁）——仅在意图起点浅于总览窗口时
+	//     扩展意图下界，保证完成时新表覆盖 ≥ 总览窗口；
+	//   - 覆盖底端到达意图起点（下方重建完成点）→ 置位就绪标记。
+	// 下界钳制：总览窗口 = warmer 默认窗口（7d）。首触可能是 warmer 首轮
+	// 之前的窄窗懒固化——浅下界会让 [24h,7d] 区间在覆盖自然外扩时按增量
+	// 语义续做（增量只叠加迟到行），两新表在该区间永久缺行。
+	overviewRebuildFloor := lastComplete.Add(-time.Duration(threatRollupRewindWindowHours) * time.Hour)
+	_, overviewReady, oerr := loadThreatRollupRawState(database, threatRollupOverviewReadyKey)
+	if oerr != nil {
+		return oerr
+	}
+	overviewBackfillPending := !overviewReady
+	if overviewBackfillPending {
+		if !hasRebuildFrom {
+			emptyCoverage = true
+			rebuildNeeded = true
+		} else if rebuildFrom.After(overviewRebuildFloor) {
+			rebuildNeeded = true
+		}
+	}
+	if emptyCoverage {
+		coveredFrom = dTo.Add(time.Minute)
+		lastFixed = dTo
+	}
 	if rebuildNeeded {
+		if overviewBackfillPending && overviewRebuildFloor.Before(dFrom) {
+			dFrom = overviewRebuildFloor
+		}
 		if !hasRebuildFrom || dFrom.Before(rebuildFrom) {
 			rebuildFrom = dFrom
 		}
@@ -928,6 +962,16 @@ func ensureThreatRollupWithYields(hours int) error {
 	// （以及本轮新侧/最新段）均已按全量重建固化，清除意图标记，恢复正常增量
 	// 语义。批数用尽未到达时保留标记，后续调用继续全量重建。
 	if rebuildAll && !coveredFrom.After(rebuildFrom) {
+		// 总览预聚合回填完成点：覆盖底端到达重建起点=意图窗口内全部分钟
+		// 已按全量重固把两新表补齐 → 置位就绪标记，读侧据此停用 raw 回退。
+		// 先置位后清意图：两步之间崩溃时意图仍在（保留清理的回填门继续视为
+		// 未就绪，原始事件不会被回填期间的保留裁剪掉），下一轮重固幂等续做
+		// 后再次到达完成点。他因重建（代际变更等）到达完成点同样置位——
+		// overviewBackfillPending 期间任何意图下界都被钳制不浅于总览窗口。
+		if _, err := database.Exec(`INSERT INTO metrics_state (key, value) VALUES (?, '1') ON CONFLICT(key) DO UPDATE SET value='1'`,
+			threatRollupOverviewReadyKey); err != nil {
+			return err
+		}
 		if _, err := database.Exec(`DELETE FROM metrics_state WHERE key=?`, threatRollupRebuildFromKey); err != nil {
 			return err
 		}
@@ -1254,6 +1298,123 @@ func aggregateEvents(tx *sql.Tx, from, to time.Time, afterID int64) (map[threatR
 	return agg, targetAgg, total, nil
 }
 
+// overviewIPKey / overviewRuleKey 总览预聚合的维度键（与两张新表主键同集合）。
+type overviewIPKey struct{ clientIP, action string }
+
+type overviewRuleKey struct{ ruleTriggered, ruleMsg, action string }
+
+// aggregateOverviewEvents 聚合 [from, to) 分钟内事件到总览口径的 IP/规则
+// 维度（方案2 安全总览预聚合），afterID>0 时只取 id 更大的迟到事件（增量
+// 差量与裁剪保留形态的迟到合并共用）。与大屏聚合（aggregateEvents）的口径
+// 差异：**不排除**保留/私网/空地址——总览 trend/top_ips/attack_types 披露
+// includes_reserved，总量必须完整，因此不能复用 aggregateEvents 的输出
+// （其固化期逐行排除保留地址）。攻击口径谓词同源
+// （services.AttackEventSQLPredicate：爬虫放行的 logged 不计入）。
+// 单趟 GROUP BY 同时投影两个维度（同一次扫描产出两张表，避免逐维度两遍全扫）。
+func aggregateOverviewEvents(tx *sql.Tx, from, to time.Time, afterID int64) (map[overviewIPKey]int, map[overviewRuleKey]int, int, error) {
+	ipAgg := map[overviewIPKey]int{}
+	ruleAgg := map[overviewRuleKey]int{}
+	rawQuery := `SELECT COALESCE(client_ip,''), COALESCE(rule_triggered,''), COALESCE(rule_msg,''), COALESCE(action,''), COUNT(*)
+		FROM security_events
+		WHERE event_time >= ? AND event_time < ? AND ` + services.AttackEventSQLPredicate("rule_triggered", "action")
+	args := []any{from.Format("2006-01-02 15:04:05"), to.Format("2006-01-02 15:04:05")}
+	if afterID > 0 {
+		rawQuery += ` AND id > ?`
+		args = append(args, afterID)
+	}
+	rawQuery += `
+		GROUP BY COALESCE(client_ip,''), COALESCE(rule_triggered,''), COALESCE(rule_msg,''), action`
+	rows, err := tx.Query(rawQuery, args...)
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	defer rows.Close()
+	total := 0
+	for rows.Next() {
+		var ip, ruleTriggered, ruleMsg, action string
+		var count int
+		if err := rows.Scan(&ip, &ruleTriggered, &ruleMsg, &action, &count); err != nil {
+			return nil, nil, 0, err
+		}
+		ipAgg[overviewIPKey{ip, action}] += count
+		ruleAgg[overviewRuleKey{ruleTriggered, ruleMsg, action}] += count
+		total += count
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, 0, err
+	}
+	return ipAgg, ruleAgg, total, nil
+}
+
+// upsertOverviewIPRollup / upsertOverviewRuleRollup 差量叠加语义（增量迟到行
+// 与裁剪保留形态共用）：只并入 afterID 之后的新行计数，不触碰既有行——
+// 原始行已被保留期/行帽裁剪时，全量重算不可再得的已固化历史必须原样保留。
+func upsertOverviewIPRollup(tx *sql.Tx, minuteStr string, agg map[overviewIPKey]int) error {
+	stmt, err := tx.Prepare(`INSERT INTO security_event_ip_rollup (minute, client_ip, action, count) VALUES (?, ?, ?, ?)
+		ON CONFLICT(minute, client_ip, action) DO UPDATE SET count = count + excluded.count`)
+	if err != nil {
+		return err
+	}
+	for k, count := range agg {
+		if _, err := stmt.Exec(minuteStr, k.clientIP, k.action, count); err != nil {
+			stmt.Close()
+			return err
+		}
+	}
+	return stmt.Close()
+}
+
+func upsertOverviewRuleRollup(tx *sql.Tx, minuteStr string, agg map[overviewRuleKey]int) error {
+	stmt, err := tx.Prepare(`INSERT INTO security_event_rule_rollup (minute, rule_triggered, rule_msg, action, count) VALUES (?, ?, ?, ?, ?)
+		ON CONFLICT(minute, rule_triggered, rule_msg, action) DO UPDATE SET count = count + excluded.count`)
+	if err != nil {
+		return err
+	}
+	for k, count := range agg {
+		if _, err := stmt.Exec(minuteStr, k.ruleTriggered, k.ruleMsg, k.action, count); err != nil {
+			stmt.Close()
+			return err
+		}
+	}
+	return stmt.Close()
+}
+
+// rewriteOverviewRollups 整分钟重写（首固/全量重固）：DELETE+INSERT 全量。
+// 重算必须清除口径升级前的遗留行（如爬虫放行族在新口径下不再计入）与键已
+// 不存在的陈旧行——这也是原地改判回退（整分钟重固）同步重写两新表的路径。
+func rewriteOverviewRollups(tx *sql.Tx, minuteStr string, ipAgg map[overviewIPKey]int, ruleAgg map[overviewRuleKey]int) error {
+	if _, err := tx.Exec(`DELETE FROM security_event_ip_rollup WHERE minute = ?`, minuteStr); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM security_event_rule_rollup WHERE minute = ?`, minuteStr); err != nil {
+		return err
+	}
+	ipStmt, err := tx.Prepare(`INSERT INTO security_event_ip_rollup (minute, client_ip, action, count) VALUES (?, ?, ?, ?)`)
+	if err != nil {
+		return err
+	}
+	for k, count := range ipAgg {
+		if _, err := ipStmt.Exec(minuteStr, k.clientIP, k.action, count); err != nil {
+			ipStmt.Close()
+			return err
+		}
+	}
+	if err := ipStmt.Close(); err != nil {
+		return err
+	}
+	ruleStmt, err := tx.Prepare(`INSERT INTO security_event_rule_rollup (minute, rule_triggered, rule_msg, action, count) VALUES (?, ?, ?, ?, ?)`)
+	if err != nil {
+		return err
+	}
+	for k, count := range ruleAgg {
+		if _, err := ruleStmt.Exec(minuteStr, k.ruleTriggered, k.ruleMsg, k.action, count); err != nil {
+			ruleStmt.Close()
+			return err
+		}
+	}
+	return ruleStmt.Close()
+}
+
 // threatFixMinuteWithMode 单分钟固化：首次/旧状态按全量重建，已有事件高水位后
 // 增量模式只叠加 id 更大的迟到事件；fullRebuild 强制丢弃旧水位并全量重建。
 func threatFixMinuteWithMode(tx *sql.Tx, m time.Time, fullRebuild bool) error {
@@ -1310,6 +1471,19 @@ func threatFixMinuteWithMode(tx *sql.Tx, m time.Time, fullRebuild bool) error {
 	if err != nil {
 		return err
 	}
+	// 总览预聚合（IP/规则维度，方案2）与主 rollup 同窗口、同差量语义：
+	// afterID>0（增量）只取高水位之后的迟到行，全量取整分钟。口径含保留/
+	// 私网/空地址（aggregateOverviewEvents 注释）——主聚合 deltaTotal==0
+	// 不代表总览差量为空（保留地址事件不计主聚合但计总览口径）。
+	// overviewFullRewrite：全量重固（首固/fullRebuild 且未落入裁剪保留形态）
+	// → 整分钟 DELETE+INSERT（重算清除口径升级前遗留行）；否则差量 upsert
+	// （增量迟到行、裁剪保留形态只并迟到差量——整分钟重写会丢掉已固化
+	// 历史）。无新行早退分支两新表同样不写。
+	ovIP, ovRule, ovTotal, oerr := aggregateOverviewEvents(tx, m, next, afterID)
+	if oerr != nil {
+		return oerr
+	}
+	overviewFullRewrite := !incremental
 	for k, count := range deltaAgg {
 		agg[k] += count
 	}
@@ -1324,6 +1498,19 @@ func threatFixMinuteWithMode(tx *sql.Tx, m time.Time, fullRebuild bool) error {
 		highwater = lateBaseline
 	}
 	if incremental {
+		if deltaTotal == 0 && ovTotal == 0 {
+			return saveThreatRollupEventHighwater(tx, minuteStr, highwater)
+		}
+		// 总览差量先入表（同事务）：主 rollup 无新增行（deltaTotal==0，如本
+		// 批只有保留地址事件）时也必须叠加，且不得走下方整分钟重写。
+		if ovTotal > 0 {
+			if err := upsertOverviewIPRollup(tx, minuteStr, ovIP); err != nil {
+				return err
+			}
+			if err := upsertOverviewRuleRollup(tx, minuteStr, ovRule); err != nil {
+				return err
+			}
+		}
 		if deltaTotal == 0 {
 			return saveThreatRollupEventHighwater(tx, minuteStr, highwater)
 		}
@@ -1346,9 +1533,16 @@ func threatFixMinuteWithMode(tx *sql.Tx, m time.Time, fullRebuild bool) error {
 		lateAgg := map[threatRollupKey]int{}
 		lateTarget := map[string]int{}
 		lateTotal := 0
+		var ovIPLate map[overviewIPKey]int
+		var ovRuleLate map[overviewRuleKey]int
+		ovLateTotal := 0
 		if lateBaselineID > 0 {
 			var aerr error
 			lateAgg, lateTarget, lateTotal, aerr = aggregateEvents(tx, m, next, lateBaselineID)
+			if aerr != nil {
+				return aerr
+			}
+			ovIPLate, ovRuleLate, ovLateTotal, aerr = aggregateOverviewEvents(tx, m, next, lateBaselineID)
 			if aerr != nil {
 				return aerr
 			}
@@ -1372,7 +1566,17 @@ func threatFixMinuteWithMode(tx *sql.Tx, m time.Time, fullRebuild bool) error {
 				oldTarget[id] += count
 			}
 			agg, targetAgg = oldAgg, oldTarget
-			if lateTotal == 0 && kept == oldTotal {
+			// 总览两表与主 rollup 同策略：保留旧值只并迟到差量。
+			overviewFullRewrite = false
+			if ovLateTotal > 0 {
+				if err := upsertOverviewIPRollup(tx, minuteStr, ovIPLate); err != nil {
+					return err
+				}
+				if err := upsertOverviewRuleRollup(tx, minuteStr, ovRuleLate); err != nil {
+					return err
+				}
+			}
+			if lateTotal == 0 && ovLateTotal == 0 && kept == oldTotal {
 				return saveThreatRollupEventHighwater(tx, minuteStr, highwater)
 			}
 		} else if newTotal == 0 && oldTotal == 0 {
@@ -1411,6 +1615,13 @@ func threatFixMinuteWithMode(tx *sql.Tx, m time.Time, fullRebuild bool) error {
 	}
 	if err := tstmt.Close(); err != nil {
 		return err
+	}
+	// 总览两表与主 rollup 同事务提交：全量重固整分钟重写（ovIP/ovRule 此处
+	// 即整分钟全量聚合）；增量/裁剪保留形态已在上方按差量 upsert 落表。
+	if overviewFullRewrite {
+		if err := rewriteOverviewRollups(tx, minuteStr, ovIP, ovRule); err != nil {
+			return err
+		}
 	}
 	return saveThreatRollupEventHighwater(tx, minuteStr, highwater)
 }

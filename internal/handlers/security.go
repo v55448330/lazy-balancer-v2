@@ -5002,6 +5002,8 @@ func (h *Handlers) GetSecurityOverview(c *gin.Context) {
 		// 今日计数与威胁大屏同源（分钟 rollup）：行帽触顶时原始表只剩
 		// 最近若干分钟，直算静默少计；rollup 覆盖不足/固化陈旧时回退
 		// 原始表直算（fromRollup=false → includes_reserved 披露含私网）。
+		// 近 7 天聚合的读路径下沉（rollup 优先）为纯性能优化——新维度表
+		// 写入侧含保留/私网地址，统计口径与原始表一致，不影响该披露。
 		blocked, detected, fromRollup, err := securityOverviewTodayCounts(db.MetricsDB, todayStart, now)
 		trackErr(err)
 		overview.TodayBlocked, overview.TodayDetected, todayFromRollup = blocked, detected, fromRollup
@@ -5108,8 +5110,10 @@ func (h *Handlers) GetSecurityOverview(c *gin.Context) {
 		RawCoverageFrom:    rawCoverageFrom,
 		BackfillIncomplete: backfillIncomplete,
 		RawCoverageLimited: backfillIncomplete,
-		// 今日计数走 rollup 时与大屏同口径排除私网/保留地址（false）；
-		// 回退原始表直算时含私网（true，旧口径）。
+		// includes_reserved 仅描述今日两项的路径分叉：今日计数走 rollup 时
+		// 与大屏同口径排除私网/保留地址（false）；回退原始表直算时含私网
+		// （true，旧口径）。trend/top_ips/attack_types 两路径恒含保留地址
+		// （新维度表写入侧同口径），不在该字段披露范围内。
 		IncludesReserved: !todayFromRollup,
 		Ingestion:        services.SecurityEventsIngestionHealthSnapshot(),
 	}})
