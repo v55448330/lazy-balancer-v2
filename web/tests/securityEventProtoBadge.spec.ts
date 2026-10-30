@@ -20,11 +20,12 @@ test('事件列表：规则列不再放 TCP 徽标', () => {
   assert.match(ruleColumn, /AccessibleLink/, '规则名链接保持')
 })
 
-test('事件列表：方法列统一纯文本（TCP 协议名，无徽标无占位符）', () => {
+test('事件列表：方法列两协议统一徽标（TCP 青 / HTTP 蓝含方法名）', () => {
   const methodColumn = section(events, 'label="方法"', 'label="URI"')
   assert.match(methodColumn, /row\.event_type === 'tcp'/)
-  assert.doesNotMatch(methodColumn, /proto-tcp-tag|el-tag/, '方法列不加协议徽标（用户裁定都不加）')
-  assert.doesNotMatch(methodColumn, />—</, '无「—」占位符')
+  assert.match(methodColumn, /class="proto-tcp-tag event-method-tag">TCP<\/el-tag>/)
+  assert.match(methodColumn, /class="proto-http-tag event-method-tag">\{\{ row\.method \|\| '—' \}\}/)
+  assert.doesNotMatch(methodColumn, />TCP<\/el-tag>—/, '无「—」占位符')
 })
 
 test('触发详情弹框：命中概览显示协议徽标（TCP 青 / HTTP 蓝）', () => {

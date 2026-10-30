@@ -687,6 +687,9 @@
                   <span :class="{ 'rule-picker-placeholder': boundRules.length === 0 }">{{ boundRules.length > 0 ? `已选 ${boundRules.length} 条` : '选择要关联的负载均衡规则' }}</span>
                   <el-icon class="rule-picker-arrow"><ArrowDown /></el-icon>
                 </div>
+                <div v-if="boundRuleHints.length > 0" class="bound-rule-hints">
+                  <div v-for="hint in boundRuleHints" :key="hint" class="info-note-bar"><span class="info-note-desc">{{ hint }}</span></div>
+                </div>
                 <div v-if="boundRuleRows.length > 0" class="bound-rule-list">
                   <div v-for="row in boundRuleRows" :key="row.caddyId" class="bound-rule-row">
                     <div class="bound-rule-head">
@@ -707,13 +710,7 @@
                         :class="{ 'is-self': entry.isSelf, 'is-disabled': !entry.enabled, 'is-trust': isStage0ChainEntry(entry) }"
                       >{{ chainChipText(entry, idx) }}</span>
                     </div>
-                    <div v-if="row.showPerfTip" class="info-note-bar"><span class="info-note-desc">该规则将绑定 {{ row.mergedCount }} 条策略：每条策略都会叠加一层处理链（WAF/ACL/限流），超过 3 条可能影响转发性能</span></div>
-                    <div v-for="hint in row.hints" :key="hint" class="info-note-bar"><span class="info-note-desc">{{ hint }}</span></div>
-                    <div
-                      v-for="hint in row.infoHints"
-                      :key="hint"
-                      class="info-note-bar"
-                    ><span class="info-note-desc">{{ hint }}</span></div>
+
                     <!-- 行内编辑该规则的阶段拦截页覆盖（规则级 4 字段收口到策略侧）：历史
                          用户裁定 A 改为向导内延迟生效——改选只暂存，随向导「保存」收尾按
                          4 字段分组调 POST /rules/batch-block-pages（单事务一次渲染；单次
@@ -3055,6 +3052,26 @@ const boundRuleRows = computed<BoundRuleRow[]>(() => boundRules.value.map((caddy
   }
 }))
 
+// 步骤顶统一提示横幅（用户裁定：行内逐条提示太占高度——聚合去重后本步骤
+// 只出现一次；跨规则同文案天然去重，性能提示改聚合口径不再逐规则报数）。
+const boundRuleHints = computed<string[]>(() => {
+  const out: string[] = []
+  const seen = new Set<string>()
+  if (boundRuleRows.value.some((r) => r.showPerfTip)) {
+    out.push('部分已关联规则绑定 3 条以上策略：每条策略都会叠加一层处理链（WAF/ACL/限流），可能影响转发性能')
+  }
+  for (const row of boundRuleRows.value) {
+    for (const hint of [...row.hints, ...row.infoHints]) {
+      if (!seen.has(hint)) {
+        seen.add(hint)
+        out.push(hint)
+      }
+    }
+  }
+  return out
+})
+
+
 // 配置预览 = 三阶段投影（策略视角）：以「本策略为唯一绑定」构造模型——
 // 与规则侧流程抽屉共用 buildStageModel 同一投影；阶段外字段按类型裁剪（与服务端
 // 显式 policy_type 提交时的归一零值同口径，预览即所得）
@@ -4011,9 +4028,21 @@ onMounted(async () => {
 .policy-rules-popper { max-height: 60vh; overflow-y: auto; }
 .policy-rules-popper .el-dropdown-menu { padding: 4px 0; }
 
-/* 策略向导弹框正文限高滚动：关联规则多时内容不得超出视口（用户实测超屏）。 */
+/* 策略向导弹框整体限高（flex 列）：弹框不超视口，唯一滚动容器=正文
+ * （关联规则多时只出一条滚动条；header/步骤条/footer 固定）。 */
+.policy-wizard-dialog.el-dialog {
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100vh - 60px);
+  margin-top: 30px !important;
+  margin-bottom: 30px !important;
+  overflow: hidden;
+}
+.policy-wizard-dialog .el-dialog__header,
+.policy-wizard-dialog .el-dialog__footer { flex-shrink: 0; }
 .policy-wizard-dialog .el-dialog__body {
-  max-height: calc(100vh - 220px);
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-y: auto;
 }
 
