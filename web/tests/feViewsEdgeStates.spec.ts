@@ -249,10 +249,10 @@ test('安全总览六路数据失败后提供「立即重试」，且并发门�
   assert.match(page, /onMounted\(\(\) => \{ void reloadAll\(\) \}\)/)
 })
 
-test('安全总览威胁/爬虫卡失败时切危险底色并显示「—」', () => {
+test('安全总览威胁/爬虫库状态失败时切红点并显示「—」（运行状态条形态）', () => {
   const page = code('src/views/security/SecurityOverview.vue')
-  assert.match(page, /:class="threatError \? 'stat-box--danger' : 'stat-box--success'"/)
-  assert.match(page, /:class="crawlerError \? 'stat-box--danger' : 'stat-box--success'"/)
+  assert.match(page, /:class="threatError \? 'is-down' : 'is-up'"/)
+  assert.match(page, /:class="crawlerError \? 'is-down' : 'is-up'"/)
   assert.match(page, /\{\{ threatError \? '—' : \(threatLatestVersion \|\| '未更新'\) \}\}/)
   assert.match(page, /\{\{ crawlerError \? '—' : \(crawlerLatestVersion \|\| '未更新'\) \}\}/)
 })

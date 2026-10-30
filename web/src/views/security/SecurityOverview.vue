@@ -34,131 +34,85 @@
       <span class="info-note-desc">{{ ingestionWarning }}</span>
     </div>
 
-    <el-row :gutter="20" class="mb-5">
-      <el-col :xs="24" :md="10">
-        <el-card shadow="always" class="overview-card">
-          <template #header>
-            <div class="card-header">
-              <div class="card-title">
-                <el-icon class="title-icon"><TrendCharts /></el-icon>
-                <span>防护概览</span>
-              </div>
+    <!-- 运行状态条：防护三指标 + 规则库四状态合并单面板——横向分列、竖分隔，
+         数值大字与协议彩点贴今日拦截；库状态降为状态点+版本（去卡片套卡片）。 -->
+    <el-card shadow="never" class="overview-card status-strip-card">
+      <div class="status-strip">
+        <div class="strip-group">
+          <div class="strip-item">
+            <div class="strip-label">
+              今日拦截
+              <el-tooltip :content="todayCountTip" placement="top">
+                <el-icon class="stat-box__tip"><InfoFilled /></el-icon>
+              </el-tooltip>
             </div>
-          </template>
-          <!-- 等宽布局:弃用 el-col span(5+5+5+5+4 末卡窄 20%),flex 五卡严格等宽,
-               同时满足前三卡一组/后两卡一组统一宽度的要求。 -->
-          <div class="stat-row">
-            <div class="stat-col">
-              <div class="stat-box stat-box--danger">
-                <div class="stat-box__icon"><el-icon><CircleClose /></el-icon></div>
-                <div class="stat-box__body">
-                  <div class="stat-box__label">
-                    今日拦截
-                    <el-tooltip :content="todayCountTip" placement="top">
-                      <el-icon class="stat-box__tip"><InfoFilled /></el-icon>
-                    </el-tooltip>
-                  </div>
-                  <div class="stat-box__value">{{ fmtStatNum(overview.today_blocked) }}</div>
-                  <!-- 协议拆分行（L4 阶段 0/1 披露）：响应无 today_blocked_tcp 字段（旧后端）
-                       或 TCP=0 时整行隐藏（防御式）；today_blocked 为全协议合计
-                       （rollup 无 event_type 维度，TCP 事件同样聚合），HTTP = 合计 − TCP -->
-                  <div v-if="todayBlockedSplit" class="stat-box__proto-split">
-                    <span class="proto-split-item"><i class="proto-dot proto-dot--http"></i>HTTP {{ fmtStatNum(todayBlockedSplit.http) }}</span>
-                    <span class="proto-split-item"><i class="proto-dot proto-dot--tcp"></i>TCP {{ fmtStatNum(todayBlockedSplit.tcp) }}</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-            <div class="stat-col">
-              <div class="stat-box stat-box--warning">
-                <div class="stat-box__icon"><el-icon><Warning /></el-icon></div>
-                <div class="stat-box__body">
-                  <div class="stat-box__label">
-                    今日检测
-                    <el-tooltip :content="todayCountTip" placement="top">
-                      <el-icon class="stat-box__tip"><InfoFilled /></el-icon>
-                    </el-tooltip>
-                  </div>
-                  <div class="stat-box__value">{{ fmtStatNum(overview.today_detected) }}</div>
-                </div>
-              </div>
-            </div>
-            <div class="stat-col">
-              <div class="stat-box stat-box--primary">
-                <div class="stat-box__icon"><el-icon><Lock /></el-icon></div>
-                <div class="stat-box__body">
-                  <div class="stat-box__label">活跃策略</div>
-                  <div class="stat-box__value">{{ fmtStatNum(overview.active_policies) }}</div>
-                </div>
-              </div>
+            <div class="strip-value is-danger">{{ fmtStatNum(overview.today_blocked) }}</div>
+            <!-- 协议拆分（L4 阶段 0/1 披露）：响应无 today_blocked_tcp 字段（旧后端）
+                 或 TCP=0 时隐藏（防御式）；HTTP = 合计 − TCP -->
+            <div v-if="todayBlockedSplit" class="strip-sub">
+              <span class="proto-split-item"><i class="proto-dot proto-dot--http"></i>HTTP {{ fmtStatNum(todayBlockedSplit.http) }}</span>
+              <span class="proto-split-item"><i class="proto-dot proto-dot--tcp"></i>TCP {{ fmtStatNum(todayBlockedSplit.tcp) }}</span>
             </div>
           </div>
-        </el-card>
-      </el-col>
-      <el-col :xs="24" :md="14">
-        <el-card shadow="always" class="overview-card">
-          <template #header>
-            <div class="card-header">
-              <div class="card-title">
-                <el-icon class="title-icon"><Files /></el-icon>
-                <span>规则库状态</span>
-              </div>
+          <div class="strip-divider"></div>
+          <div class="strip-item">
+            <div class="strip-label">
+              今日检测
+              <el-tooltip :content="todayCountTip" placement="top">
+                <el-icon class="stat-box__tip"><InfoFilled /></el-icon>
+              </el-tooltip>
             </div>
-          </template>
-          <div class="stat-row lib-stat-row">
-            <div class="stat-col">
-              <div class="stat-box" :class="overview.crs_available === false ? 'stat-box--danger' : 'stat-box--success'">
-                <div class="stat-box__icon"><el-icon><Files /></el-icon></div>
-                <div class="stat-box__body">
-                  <div class="stat-box__value">{{ overview.crs_available === false ? '未安装' : overview.crs_version }}</div>
-                  <div class="stat-box__label">CRS 规则集</div>
-                  <!-- 库文件缺失优先于更新状态（缺库降级口径，2026-09-24 裁定） -->
-                  <!-- disable-transitions：异步数据到达时标签实例新建会重播 EP
-                       zoom-in-center（先漂后归位，2026-09-25 用户反馈修复，Dashboard 判例同款） -->
-                  <el-tag v-if="overview.crs_available === false" type="danger" size="small" effect="plain" style="margin-top: 4px" disable-transitions>未安装</el-tag>
-                  <el-tag v-else-if="overview.update_status" :type="libraryStatusTagType(overview.update_status)" size="small" effect="plain" style="margin-top: 4px" disable-transitions>{{ libraryStatusLabel(overview.update_status) }}</el-tag>
-                </div>
-              </div>
-            </div>
-            <div class="stat-col">
-              <div class="stat-box" :class="overview.ip2region_available === false ? 'stat-box--danger' : 'stat-box--success'">
-                <div class="stat-box__icon"><el-icon><Location /></el-icon></div>
-                <div class="stat-box__body">
-                  <div class="stat-box__value">{{ overview.ip2region_available === false || ip2regionVersion === 'unknown' ? '未安装' : ip2regionVersion === 'bundled' ? '内置版本' : ip2regionVersion }}</div>
-                  <div class="stat-box__label">IP 地理库</div>
-                  <el-tag v-if="ip2regionError" type="danger" size="small" effect="plain" style="margin-top: 4px" disable-transitions>加载失败</el-tag>
-                  <el-tag v-else-if="overview.ip2region_available === false" type="danger" size="small" effect="plain" style="margin-top: 4px" disable-transitions>未安装</el-tag>
-                  <el-tag v-else-if="ip2regionVersion === 'unknown'" type="info" size="small" effect="plain" style="margin-top: 4px" disable-transitions>未安装</el-tag>
-                  <el-tag v-else-if="ip2regionStatus" :type="libraryStatusTagType(ip2regionStatus)" size="small" effect="plain" style="margin-top: 4px" disable-transitions>{{ libraryStatusLabel(ip2regionStatus) }}</el-tag>
-                </div>
-              </div>
-            </div>
-            <div class="stat-col">
-              <div class="stat-box" :class="threatError ? 'stat-box--danger' : 'stat-box--success'">
-                <div class="stat-box__icon"><el-icon><Aim /></el-icon></div>
-                <div class="stat-box__body">
-                  <div class="stat-box__value">{{ threatError ? '—' : (threatLatestVersion || '未更新') }}</div>
-                  <div class="stat-box__label">威胁情报库</div>
-                  <el-tag v-if="threatError" type="danger" size="small" effect="plain" style="margin-top: 4px" disable-transitions>加载失败</el-tag>
-                  <el-tag v-else-if="threatStatus" :type="libraryStatusTagType(threatStatus)" size="small" effect="plain" style="margin-top: 4px" disable-transitions>{{ libraryStatusLabel(threatStatus) }}</el-tag>
-                </div>
-              </div>
-            </div>
-            <div class="stat-col">
-              <div class="stat-box" :class="crawlerError ? 'stat-box--danger' : 'stat-box--success'">
-                <div class="stat-box__icon"><el-icon><Link /></el-icon></div>
-                <div class="stat-box__body">
-                  <div class="stat-box__value">{{ crawlerError ? '—' : (crawlerLatestVersion || '未更新') }}</div>
-                  <div class="stat-box__label">爬虫地址库</div>
-                  <el-tag v-if="crawlerError" type="danger" size="small" effect="plain" style="margin-top: 4px" disable-transitions>加载失败</el-tag>
-                  <el-tag v-else-if="crawlerStatus" :type="libraryStatusTagType(crawlerStatus)" size="small" effect="plain" style="margin-top: 4px" disable-transitions>{{ libraryStatusLabel(crawlerStatus) }}</el-tag>
-                </div>
-              </div>
-            </div>
+            <div class="strip-value is-warning">{{ fmtStatNum(overview.today_detected) }}</div>
           </div>
-        </el-card>
-      </el-col>
-    </el-row>
+          <div class="strip-divider"></div>
+          <div class="strip-item">
+            <div class="strip-label">活跃策略</div>
+            <div class="strip-value">{{ fmtStatNum(overview.active_policies) }}</div>
+          </div>
+        </div>
+        <div class="strip-divider is-v"></div>
+        <div class="strip-group strip-group--libs">
+          <div class="strip-item is-lib">
+            <div class="strip-label">CRS 规则集</div>
+            <div class="strip-lib">
+              <i class="status-dot" :class="overview.crs_available === false ? 'is-down' : 'is-up'"></i>
+              <span class="strip-lib-value">{{ overview.crs_available === false ? '未安装' : overview.crs_version }}</span>
+            </div>
+            <el-tag v-if="overview.crs_available === false" type="danger" size="small" effect="plain" disable-transitions>未安装</el-tag>
+            <el-tag v-else-if="overview.update_status" :type="libraryStatusTagType(overview.update_status)" size="small" effect="plain" disable-transitions>{{ libraryStatusLabel(overview.update_status) }}</el-tag>
+          </div>
+          <div class="strip-item is-lib">
+            <div class="strip-label">IP 地理库</div>
+            <div class="strip-lib">
+              <i class="status-dot" :class="overview.ip2region_available === false || ip2regionError ? 'is-down' : 'is-up'"></i>
+              <span class="strip-lib-value">{{ overview.ip2region_available === false || ip2regionVersion === 'unknown' ? '未安装' : ip2regionVersion === 'bundled' ? '内置版本' : ip2regionVersion }}</span>
+            </div>
+            <el-tag v-if="ip2regionError" type="danger" size="small" effect="plain" disable-transitions>加载失败</el-tag>
+            <el-tag v-else-if="overview.ip2region_available === false" type="danger" size="small" effect="plain" disable-transitions>未安装</el-tag>
+            <el-tag v-else-if="ip2regionVersion === 'unknown'" type="info" size="small" effect="plain" disable-transitions>未安装</el-tag>
+            <el-tag v-else-if="ip2regionStatus" :type="libraryStatusTagType(ip2regionStatus)" size="small" effect="plain" disable-transitions>{{ libraryStatusLabel(ip2regionStatus) }}</el-tag>
+          </div>
+          <div class="strip-item is-lib">
+            <div class="strip-label">威胁情报库</div>
+            <div class="strip-lib">
+              <i class="status-dot" :class="threatError ? 'is-down' : 'is-up'"></i>
+              <span class="strip-lib-value">{{ threatError ? '—' : (threatLatestVersion || '未更新') }}</span>
+            </div>
+            <el-tag v-if="threatError" type="danger" size="small" effect="plain" disable-transitions>加载失败</el-tag>
+            <el-tag v-else-if="threatStatus" :type="libraryStatusTagType(threatStatus)" size="small" effect="plain" disable-transitions>{{ libraryStatusLabel(threatStatus) }}</el-tag>
+          </div>
+          <div class="strip-item is-lib">
+            <div class="strip-label">爬虫地址库</div>
+            <div class="strip-lib">
+              <i class="status-dot" :class="crawlerError ? 'is-down' : 'is-up'"></i>
+              <span class="strip-lib-value">{{ crawlerError ? '—' : (crawlerLatestVersion || '未更新') }}</span>
+            </div>
+            <el-tag v-if="crawlerError" type="danger" size="small" effect="plain" disable-transitions>加载失败</el-tag>
+            <el-tag v-else-if="crawlerStatus" :type="libraryStatusTagType(crawlerStatus)" size="small" effect="plain" disable-transitions>{{ libraryStatusLabel(crawlerStatus) }}</el-tag>
+          </div>
+        </div>
+      </div>
+    </el-card>
 
     <div v-if="overview.backfill_incomplete" class="info-note-bar">
       <span class="info-note-desc">原始事件仅保留自 {{ overview.raw_coverage_from }}，更早区间无法重建，7 天趋势 / Top 10 源 IP / 攻击类型统计可能少计</span>
@@ -325,7 +279,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
-import { Aim, DataAnalysis, TrendCharts, PieChart, Location, Warning, Odometer, CircleClose, Lock, Files, Monitor, Link, InfoFilled } from '@element-plus/icons-vue'
+import { DataAnalysis, TrendCharts, PieChart, Location, Warning, Odometer, Monitor, InfoFilled } from '@element-plus/icons-vue'
 import { request } from '@/utils/api'
 import { useAuthStore } from '@/stores/auth'
 import IPLocationAction from '@/views/security/IPLocationAction.vue'
@@ -553,84 +507,26 @@ onMounted(() => { void reloadAll() })
 /* 规则库状态 4 块：桌面单行等宽；紧凑图标/间距/字号保证版本与库名不换行。
    中屏 2×2、手机单列，避免 3+1 的孤立末行。 */
 .lib-stat-row { gap: 12px; }
-.lib-stat-row .stat-box { gap: 8px; padding: 12px; }
-.lib-stat-row .stat-box__icon { width: 32px; height: 32px; font-size: 16px; }
-.lib-stat-row .stat-box__value { font-size: 16px; white-space: nowrap; }
-.lib-stat-row .stat-box__label { white-space: nowrap; }
-@media (max-width: 1200px) {
-  .stat-row { flex-wrap: wrap; }
-  .stat-col { flex: 1 1 30%; }
-  .lib-stat-row .stat-col { flex: 1 1 40%; }
-}
-@media (max-width: 768px) {
-  .stat-col { flex: 1 1 100%; }
-}
-.rate-limit-hint { flex-shrink: 0; }
-.card-header { display: flex; justify-content: space-between; align-items: center; flex-wrap: nowrap; gap: 8px; }
-.card-title { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; color: #111827; }
-/* 卡片标题图标 16px；页头图标走全局 .title-icon（20px，2026-09-25 用户裁定
-   与其他安全页面对齐——原裸 .title-icon 覆盖把页头图标也压成 16px 致
-   page-desc 28px 缩进与标题文字错位） */
-.card-title .title-icon { font-size: 16px; color: #3b82f6; }
+.lib-stat-row .status-strip-card :deep(.el-card__body) { padding: 18px 24px; }
+.status-strip { display: flex; align-items: stretch; gap: 24px; }
+.strip-group { display: flex; align-items: stretch; gap: 32px; flex: 1 1 auto; }
+.strip-group--libs { flex: 0 0 auto; gap: 28px; }
+.strip-divider { width: 1px; background: #f0f0f0; flex-shrink: 0; }
+.strip-item { display: flex; flex-direction: column; justify-content: center; min-width: 72px; }
+.strip-label { font-size: 12px; color: var(--text-secondary); display: flex; align-items: center; }
+.strip-value { font-size: 24px; font-weight: 800; line-height: 1.25; margin-top: 4px; font-variant-numeric: tabular-nums; letter-spacing: 0.3px; color: #303133; }
+.strip-value.is-danger { color: #f56c6c; }
+.strip-value.is-warning { color: #e6a23c; }
+.strip-sub { display: flex; align-items: center; gap: 12px; margin-top: 4px; font-size: 12px; color: var(--text-secondary); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.strip-lib { display: flex; align-items: center; margin-top: 4px; }
+.strip-lib-value { font-size: 14px; font-weight: 600; color: #303133; font-variant-numeric: tabular-nums; }
+.status-dot { width: 7px; height: 7px; border-radius: 50%; margin-right: 5px; flex-shrink: 0; }
+.status-dot.is-up { background: #67c23a; }
+.status-dot.is-down { background: #f56c6c; }
+.strip-item.is-lib .el-tag { margin-top: 5px; align-self: flex-start; }
+@media (max-width: 1400px) { .status-strip { flex-direction: column; gap: 16px; } .strip-divider.is-v { width: 100%; height: 1px; } }
 
-/* KPI 卡（2026-10-31 重设计）：白底细边直角、图标右上淡底、标签在上、
- * 大数值在下、协议拆分贴数值下方；等高由 stat-row stretch + min-height 保证。 */
-.stat-box {
-  position: relative;
-  min-height: 128px;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  padding: 16px 20px;
-  border: 1px solid #ebeef5;
-  height: 100%;
-  box-sizing: border-box;
-  background: #fff;
-  transition: border-color 0.2s, box-shadow 0.2s;
-}
-.stat-box:hover { border-color: #c8cdd4; box-shadow: 0 2px 10px rgba(17, 24, 39, 0.05); }
-.stat-box__icon {
-  position: absolute;
-  top: 16px;
-  right: 16px;
-  flex-shrink: 0;
-  width: 40px;
-  height: 40px;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 20px;
-}
-.stat-box__body { flex: 1; min-width: 0; padding-right: 44px; }
-.stat-box__label { font-size: 12px; color: var(--text-secondary); }
-.stat-box__value {
-  font-size: 26px;
-  font-weight: 800;
-  line-height: 1.25;
-  margin-top: 6px;
-  letter-spacing: 0.3px;
-  font-variant-numeric: tabular-nums;
-}
-/* 今日拦截协议拆分：彩点+数字单行（千分位，无框；颜色对齐协议徽标）。 */
-.stat-box__proto-split { display: flex; align-items: center; gap: 14px; margin-top: 8px; font-size: 12px; color: var(--text-secondary); white-space: nowrap; font-variant-numeric: tabular-nums; }
-.proto-split-item { display: inline-flex; align-items: center; }
-.proto-dot { width: 6px; height: 6px; border-radius: 50%; margin-right: 4px; }
-.proto-dot--http { background: #409eff; }
-.proto-dot--tcp { background: #0e7490; }
-/* TCP 徽标与规则名同 cell 的间距 */
-.event-proto-tag { margin-right: 6px; }
-.stat-box__tip { font-size: 12px; vertical-align: -1px; margin-left: 2px; color: var(--text-secondary); cursor: help; }
-
-.stat-box--danger .stat-box__icon { background: #fef0f0; color: #f56c6c; }
-.stat-box--danger .stat-box__value { color: #f56c6c; }
-.stat-box--warning .stat-box__icon { background: #fdf6ec; color: #e6a23c; }
-.stat-box--warning .stat-box__value { color: #e6a23c; }
-.stat-box--primary .stat-box__icon { background: #ecf5ff; color: #409eff; }
-.stat-box--primary .stat-box__value { color: #409eff; }
-.stat-box--success .stat-box__icon { background: #f0f9eb; color: #67c23a; }
-.stat-box--success .stat-box__value { color: #67c23a; }
-
+.chart-container { height: 260px; }
 .chart-container { height: 260px; }
 .events-row .el-card { height: 100%; }
 .rate-limit-total { display: flex; align-items: baseline; justify-content: space-between; padding: 0 4px 10px; }
