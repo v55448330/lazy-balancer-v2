@@ -687,8 +687,9 @@
                   <span :class="{ 'rule-picker-placeholder': boundRules.length === 0 }">{{ boundRules.length > 0 ? `已选 ${boundRules.length} 条` : '选择要关联的负载均衡规则' }}</span>
                   <el-icon class="rule-picker-arrow"><ArrowDown /></el-icon>
                 </div>
-                <div v-if="boundRuleHints.length > 0" class="bound-rule-hints">
-                  <div v-for="hint in boundRuleHints" :key="hint" class="info-note-bar"><span class="info-note-desc">{{ hint }}</span></div>
+                <div v-if="boundRuleWarnPerf || hasTcpBoundRule" class="bound-rule-warnings">
+                  <div v-if="boundRuleWarnPerf" class="rule-warn-line is-warn">已关联规则存在绑定 3 条以上策略：处理链逐层叠加，可能影响转发性能</div>
+                  <div v-if="hasTcpBoundRule" class="rule-warn-line is-info">TCP 规则拦截=断连（无拦截页）；CDN 回源需开启 PROXY protocol</div>
                 </div>
                 <div v-if="boundRuleRows.length > 0" class="bound-rule-list">
                   <div v-for="row in boundRuleRows" :key="row.caddyId" class="bound-rule-row">
@@ -754,8 +755,7 @@
                     </div>
                   </div>
                 </div>
-                <div class="form-tip-line">策略将应用到所选负载均衡规则的入站流量；同一规则绑定多条策略时按阶段 0→3 顺序、同阶段内按策略 ID 升序依次评估</div>
-                <div v-if="editableOverrideStages.length > 0 && !isReadOnly" class="form-tip-line">「阶段 N 拦截页覆盖」是规则级字段（存于规则，非本策略）：改选后随本向导「保存」一并写入；未保存前不影响规则现状</div>
+                <div class="form-tip-line">多策略按阶段 0→3、同阶段按策略 ID 升序依次评估；「拦截页覆盖」为规则级字段，随「保存」写入</div>
               </div>
             </el-form-item>
           </el-form>
@@ -3052,24 +3052,11 @@ const boundRuleRows = computed<BoundRuleRow[]>(() => boundRules.value.map((caddy
   }
 }))
 
-// 步骤顶统一提示横幅（用户裁定：行内逐条提示太占高度——聚合去重后本步骤
-// 只出现一次；跨规则同文案天然去重，性能提示改聚合口径不再逐规则报数）。
-const boundRuleHints = computed<string[]>(() => {
-  const out: string[] = []
-  const seen = new Set<string>()
-  if (boundRuleRows.value.some((r) => r.showPerfTip)) {
-    out.push('部分已关联规则绑定 3 条以上策略：每条策略都会叠加一层处理链（WAF/ACL/限流），可能影响转发性能')
-  }
-  for (const row of boundRuleRows.value) {
-    for (const hint of [...row.hints, ...row.infoHints]) {
-      if (!seen.has(hint)) {
-        seen.add(hint)
-        out.push(hint)
-      }
-    }
-  }
-  return out
-})
+// 步骤顶紧凑预警（用户裁定：三条灰横幅按预警语义收敛为两条条件行——
+// 低价值的「拦截页/状态码不同」删除，由各规则行「拦截页覆盖」选择器自明；
+// TCP 断连注记仅在绑定 TCP 规则时出现）。
+const boundRuleWarnPerf = computed(() => boundRuleRows.value.some((r) => r.showPerfTip))
+const hasTcpBoundRule = computed(() => boundRuleRows.value.some((r) => r.protocol === 'tcp'))
 
 
 // 配置预览 = 三阶段投影（策略视角）：以「本策略为唯一绑定」构造模型——
@@ -3885,6 +3872,8 @@ onMounted(async () => {
 .rule-picker-arrow { color: #a8abb2; font-size: 12px; }
 
 .bound-rule-list { display: flex; flex-direction: column; gap: 10px; margin-top: 8px; }
+/* 关联规则步骤：列表定高自滚——本步唯一滚动容器，弹框 body 不再出第二条滚动条 */
+.policy-wizard-dialog .bound-rule-list { max-height: calc(100vh - 420px); min-height: 200px; overflow-y: auto; }
 .bound-rule-row { border: 1px solid #ebeef5; padding: 12px; }
 .bound-rule-head { display: flex; align-items: center; gap: 8px; }
 .bound-rule-name { font-weight: 500; color: #1f2937; font-size: 13px; }

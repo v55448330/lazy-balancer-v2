@@ -662,13 +662,17 @@ test('事件日志 TCP：类型筛选 + 青色徽标 + 详情弹框 TCP 形态',
   assert.match(ctx, /ctxIsTcp/)
 })
 
-test('安全总览 TCP：今日拦截协议拆分行 + 最近事件徽标', () => {
+test('安全总览 TCP：今日拦截协议双胶囊 + 最近事件独立协议列', () => {
   const overview = code('src/views/security/SecurityOverview.vue')
-  // 拆分行消费 today_blocked_tcp，响应缺字段（旧后端）整行隐藏
+  // 拆分行消费 today_blocked_tcp，响应缺字段（旧后端）整行隐藏；双胶囊形态
   assert.match(overview, /today_blocked_tcp/)
-  assert.match(overview, /HTTP \{\{ .* \}\} · TCP \{\{ /)
-  // 最近拦截事件列表同款青色徽标
-  assert.match(overview, /proto-tcp-tag/)
+  assert.match(overview, /proto-http-tag proto-count-chip">HTTP \{\{ /)
+  assert.match(overview, /proto-tcp-tag proto-count-chip">TCP \{\{ /)
+  // 最近拦截事件：独立「协议」列（TCP 青 / HTTP 蓝），规则列不再放徽标
+  assert.match(overview, /label="协议"/)
+  assert.match(overview, /proto-tcp-tag event-proto-tag">TCP<\/el-tag>/)
+  const ruleColumn = section(overview, 'label="规则"', 'label="策略"')
+  assert.doesNotMatch(ruleColumn, /proto-tcp-tag/, '规则列只剩规则名')
 })
 
 test('威胁大屏 TCP：l4 差分并入正常弧 + feed 徽标 + 底部图例「TCP 断连」', () => {

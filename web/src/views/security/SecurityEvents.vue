@@ -241,12 +241,13 @@
           </template>
         </el-table-column>
         <!-- OPTIONS 为最长方法名(7 字符),90 定宽 -->
-        <!-- 方法列统一徽标（用户二次裁定：恢复标签样式且两协议都加）——
-             TCP（L4 断连）= 青色 TCP 标签；HTTP = 蓝色标签含方法名（GET/POST…）。 -->
+        <!-- 方法列统一徽标（用户裁定：两协议都加）——原生 span 徽标（非 el-tag）：
+             翻页时 el-tag 挂载引发的列宽重算会让 TCP 行先右飘再回弹（用户实测
+             bug），span+定宽居中从结构上消除该重排。 -->
         <el-table-column prop="method" label="方法" width="90" align="center">
           <template #default="{ row }">
-            <el-tag v-if="row.event_type === 'tcp'" size="small" effect="plain" class="proto-tcp-tag event-method-tag">TCP</el-tag>
-            <el-tag v-else size="small" effect="plain" class="proto-http-tag event-method-tag">{{ row.method || '—' }}</el-tag>
+            <span v-if="row.event_type === 'tcp'" class="proto-tcp-tag event-method-tag method-chip">TCP</span>
+            <span v-else class="proto-http-tag event-method-tag method-chip">{{ row.method || '—' }}</span>
           </template>
         </el-table-column>
         <el-table-column prop="uri" label="URI" min-width="140" show-overflow-tooltip />
@@ -1080,4 +1081,16 @@ const refreshPage = (): void => {
 .events-footer { margin-top: 16px; display: flex; align-items: center; gap: 16px; flex-wrap: nowrap; }
 .events-storage { flex: 1 1 auto; min-width: 0; }
 .events-pagination { flex: 0 0 auto; white-space: nowrap; }
+
+/* 方法列协议 chip（span 非法 el-tag——翻页零重排）：定宽居中，徽标观感。 */
+.method-chip {
+  display: inline-block;
+  min-width: 48px;
+  padding: 1px 8px;
+  font-size: 12px;
+  line-height: 20px;
+  text-align: center;
+  border: 1px solid;
+  border-radius: 0;
+}
 </style>
