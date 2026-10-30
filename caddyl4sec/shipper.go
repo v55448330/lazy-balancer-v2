@@ -63,9 +63,8 @@ var (
 	l4SpoolDir = l4DefaultSpoolDirPath
 	// 攒批/队列/spool 可调量（var：与 auditwriter 同形态，测试按需收窄；
 	// 生产恒走默认值）。
-	l4QueueSize        = 2048
-	l4QueueByteBudget  = int64(64 << 20)
-	l4EnqueueTimeout   = 2 * time.Second
+	l4RingCapacity     = 2048
+	l4RingSlotBytes    = 8 << 10
 	l4BatchMaxLines    = 100
 	l4BatchMaxBytes    = int64(1024 * 1024)
 	l4FlushInterval    = 50 * time.Millisecond
@@ -654,11 +653,10 @@ func (s *l4Shipper) pendingLines() int {
 // 同一裁决：drain 与 shipper 活到进程退出（Caddy 重载不回收——回收语义只在
 // 计数层，见 stats.go beginLoad），杜绝 teardown 竞态丢事件。
 type l4Pipeline struct {
-	queue      chan []byte
-	queueBytes atomic.Int64
-	// pending=「已准入未处理完」条目：enqueue 准入递增、drain 处理完递减。
-	// pending==0 蕴含队列空且无在途处理——收尾刷盘据此排空。
-	pending atomic.Int64
+	// ring=覆写环形缓冲（方案③）：入队永不阻塞（满环覆写最旧），内存精确
+	// 上界=容量×槽字节。depth==0 蕴含队列空——收尾刷盘据此排空。
+	ring   *l4Ring
+	notify chan struct{} // cap 1 非阻塞唤启 drain（满时静默，drain 轮询兜底）
 	// dropped 丢弃事件行累计（队列满/字节预算/单行上限/IPC 关闭/永久拒绝/
 	// spool 失败），/lb/l4-shipper-stats 暴露。
 	dropped atomic.Uint64
@@ -695,7 +693,8 @@ func acquirePipeline() *l4Pipeline {
 // newL4Pipeline 按当前 env/可调量构造管线（不启动 drain）。
 func newL4Pipeline() *l4Pipeline {
 	p := &l4Pipeline{
-		queue:  make(chan []byte, l4QueueSize),
+		ring:   newL4Ring(l4RingCapacity, l4RingSlotBytes),
+		notify: make(chan struct{}, 1),
 		stopCh: make(chan struct{}),
 		done:   make(chan struct{}),
 	}
@@ -722,26 +721,19 @@ func (p *l4Pipeline) start() {
 // enqueueEvent 有界入队：先字节预算后容量等待，超限/超时丢弃计数（风暴自防
 // ——连接路径最多为一批驻留付出 enqueue 超时，事件行恒定小体量）。
 func (p *l4Pipeline) enqueueEvent(line []byte) {
+	// 零阻塞（方案③）：结构上不存在等待——满环覆写最旧，连接路径恒定纳秒级
+	// 返回（风暴不放大 fd/goroutine 驻留）。单行上限把守槽增长上界：环内
+	// 不存在超界行。
 	if int64(len(line)+1) > l4LineMaxBytes {
 		p.reportDropped("line exceeds per-line cap", 1)
 		return
 	}
-	size := int64(len(line) + 1)
-	if p.queueBytes.Add(size) > l4QueueByteBudget {
-		p.queueBytes.Add(-size)
-		p.reportDropped("byte budget exceeded", 1)
-		return
+	if evicted := p.ring.push(line); evicted > 0 {
+		p.reportDropped("ring overwritten (oldest)", int(evicted))
 	}
-	p.pending.Add(1)
-	timer := time.NewTimer(l4EnqueueTimeout)
-	defer timer.Stop()
 	select {
-	case p.queue <- line:
-		return
-	case <-timer.C:
-		p.pending.Add(-1)
-		p.queueBytes.Add(-size)
-		p.reportDropped("queue full", 1)
+	case p.notify <- struct{}{}:
+	default:
 	}
 }
 
@@ -769,44 +761,38 @@ func (p *l4Pipeline) drain() {
 		case <-p.stopCh:
 			p.drainRemainder()
 			return
+		case <-p.notify:
 		case <-ticker.C:
 			p.flushIfDueSafely()
-		default:
 		}
 		if p.paused.Load() {
 			time.Sleep(time.Millisecond)
 			continue
 		}
-		select {
-		case line := <-p.queue:
-			p.queueBytes.Add(-int64(len(line) + 1))
-			p.submit(line)
-			p.pending.Add(-1)
-		case <-ticker.C:
-			p.flushIfDueSafely()
-		case <-p.stopCh:
-			p.drainRemainder()
+		p.popAndSubmit()
+	}
+}
+
+// popAndSubmit 弹出环形缓冲当前全部行并逐行 submit（批内由 shipper 攒批）。
+func (p *l4Pipeline) popAndSubmit() {
+	for {
+		line, ok := p.ring.pop()
+		if !ok {
 			return
 		}
+		p.submit(line)
+		p.flushIfDueSafely()
 	}
 }
 
 // drainRemainder 排空队列余量后收尾（flush 残留批 + 封存 spool + 关连接）。
 func (p *l4Pipeline) drainRemainder() {
-	for p.pending.Load() > 0 {
-		select {
-		case line := <-p.queue:
-			p.queueBytes.Add(-int64(len(line) + 1))
-			p.submit(line)
-			p.pending.Add(-1)
-		default:
-			if p.pending.Load() == 0 {
-				p.flushNowSafely()
-				p.closeShipper()
-				return
-			}
-			time.Sleep(time.Millisecond)
+	for p.ring.depth() > 0 {
+		line, ok := p.ring.pop()
+		if !ok {
+			break
 		}
+		p.submit(line)
 	}
 	p.flushNowSafely()
 	p.closeShipper()
@@ -866,7 +852,7 @@ func (p *l4Pipeline) closeShipper() {
 // flushQuiesced 等待已准入事件全部处理完（pending==0）后冲刷残留批。
 func (p *l4Pipeline) flushQuiesced(timeout time.Duration) {
 	deadline := time.Now().Add(timeout)
-	for p.pending.Load() > 0 && time.Now().Before(deadline) {
+	for p.ring.depth() > 0 && time.Now().Before(deadline) {
 		time.Sleep(time.Millisecond)
 	}
 	p.flushNowSafely()

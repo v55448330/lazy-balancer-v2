@@ -876,7 +876,15 @@
       <template #header>
         <DialogHeader :icon="Connection" title="选择关联规则" />
       </template>
-      <el-input v-model="pickerSearch" placeholder="搜索规则名 / 域名 / 规则 ID" clearable :prefix-icon="Search" class="rule-picker-search" />
+      <div class="rule-picker-toolbar">
+        <el-input v-model="pickerSearch" placeholder="搜索规则名 / 域名 / 规则 ID" clearable :prefix-icon="Search" class="rule-picker-search" />
+        <!-- 协议筛选（默认 HTTP）：TCP（阶段 0/1）放开后候选混排，默认档保持既有 HTTP 选择视野 -->
+        <el-select v-model="pickerProtoFilter" class="rule-picker-proto-filter" aria-label="按协议筛选规则">
+          <el-option label="全部" value="all" />
+          <el-option label="HTTP" value="http" />
+          <el-option label="TCP" value="tcp" />
+        </el-select>
+      </div>
       <DialogSectionHeader title="可选规则" />
       <div class="dialog-panel">
         <div class="rule-picker-header">
@@ -893,8 +901,9 @@
             <div v-for="rule in pickerPagedRules" :key="rule.caddy_id" class="rule-picker-item">
               <el-checkbox :value="rule.caddy_id" :disabled="pickerMeta(rule).blockReason !== ''">
                 <span class="rule-picker-name">{{ rule.name }}</span>
-                <!-- TCP 规则协议徽标（与规则页协议列同 warning 口径）：放开后选择器混排 HTTP/TCP，须可辨识 -->
-                <el-tag v-if="rule.protocol === 'tcp'" size="small" type="warning" effect="plain" class="rule-picker-proto">TCP</el-tag>
+                <!-- 行协议徽标（混排后逐行可辨识）：TCP 青 = 全局 proto-tcp-tag 单源；HTTP 蓝 = el-tag primary -->
+                <el-tag v-if="rule.protocol === 'tcp'" size="small" effect="plain" class="proto-tcp-tag rule-picker-proto">TCP</el-tag>
+                <el-tag v-else size="small" type="primary" effect="plain" class="rule-picker-proto">HTTP</el-tag>
                 <span class="rule-picker-meta">{{ rule.domain || '-' }}:{{ rule.listen_port }}</span>
               </el-checkbox>
               <!-- 每条候选规则展示当前绑定链（policy_id ASC，1-based）与本策略落点；
@@ -1806,6 +1815,9 @@ watch(visibleSteps, (steps) => {
 
 const rulePickerVisible = ref(false)
 const pickerSearch = ref('')
+// 协议筛选（默认 HTTP）：全部/HTTP/TCP 三档。默认档不是「全部」是有意裁定——
+// TCP（L4 阶段 0/1）放开前选择器只见 HTTP，放开后混排，默认 HTTP 保持既有视野。
+const pickerProtoFilter = ref<'all' | 'http' | 'tcp'>('http')
 const pickerPage = ref(1)
 const pickerSelected = ref<string[]>([])
 const PICKER_PAGE_SIZE = 20
@@ -2375,14 +2387,19 @@ const prevStep = (): void => {
 
 const pickerFilteredRules = computed(() => {
   // 阶段 0/1 放开后 TCP 规则可绑定；含限流/WAF 特征的策略对 TCP 不可绑——
-  // 该形态在选择侧由 pickerMeta 置灰并给行内原因（不再只列 HTTP）
+  // 该形态在选择侧由 pickerMeta 置灰并给行内原因（不再只列 HTTP）。
+  // 协议筛选先收窄候选（默认 HTTP），搜索再在档内匹配。
+  const proto = pickerProtoFilter.value
+  const candidates = proto === 'all'
+    ? allRules.value
+    : allRules.value.filter((rule) => rule.protocol === (proto === 'tcp' ? 'tcp' : 'http'))
   const query = pickerSearch.value.trim().toLowerCase()
   const matched = (rule: Rule): boolean =>
     rule.name.toLowerCase().includes(query)
     || (rule.domain || '').toLowerCase().includes(query)
     || rule.caddy_id.toLowerCase().includes(query)
-  if (!query) return [...allRules.value]
-  return allRules.value.filter(matched)
+  if (!query) return [...candidates]
+  return candidates.filter(matched)
 })
 
 const pickerPagedRules = computed(() => {
@@ -2391,6 +2408,11 @@ const pickerPagedRules = computed(() => {
 })
 
 watch(pickerSearch, () => {
+  pickerPage.value = 1
+})
+
+// 切协议档回到第 1 页（同搜索复位先例）：高页码在收窄后的候选集会落空页
+watch(pickerProtoFilter, () => {
   pickerPage.value = 1
 })
 
@@ -3101,6 +3123,7 @@ const previewVisibleStages = computed(() => {
 const openRulePicker = (): void => {
   pickerSelected.value = [...boundRules.value]
   pickerSearch.value = ''
+  pickerProtoFilter.value = 'http'
   pickerPage.value = 1
   rulePickerVisible.value = true
 }
@@ -3875,7 +3898,9 @@ onMounted(async () => {
 .rule-binding-landing--trust { color: var(--el-color-success); }
 .rule-binding-limit { font-size: 12px; color: #e6a23c; }
 
-.rule-picker-search { margin-bottom: 12px; }
+.rule-picker-toolbar { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+.rule-picker-toolbar .rule-picker-search { flex: 1; margin-bottom: 0; }
+.rule-picker-proto-filter { width: 104px; flex-shrink: 0; }
 
 .rule-picker-header {
   display: flex;

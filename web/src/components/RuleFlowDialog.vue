@@ -22,10 +22,6 @@
         <span class="info-note-desc">规则已禁用——安全链未进入运行配置</span>
         <span class="info-note-sub">绑定与阶段页保留，启用后生效；当前该规则不产生任何 listener 路由，下方阶段按「保留配置」展示。</span>
       </div>
-      <div v-if="isTcp" class="info-note-bar info-note-bar--inset">
-        <span class="info-note-desc">TCP 规则支持阶段 0/1 安全能力</span>
-        <span class="info-note-sub">TCP（L4）流量支持信任名单（阶段 0）与 IP 访问控制/地域拦截（阶段 1）；拒绝动作=断连（无拦截页），限流与 WAF 阶段不适用。</span>
-      </div>
 
       <!-- 纵向时间线：接入 → 阶段 0 → 阶段 1 → 阶段 2 → 阶段 3 → 上游 -->
       <template v-for="(node, index) in flowNodes" :key="node.key">
@@ -180,7 +176,8 @@
                 <div class="flow-panel-meta">
                   <el-tag v-if="typedStageByKey(node.key)!.override && !typedStageByKey(node.key)!.override!.broken" type="warning" size="small" effect="plain">阶段页：{{ typedStageByKey(node.key)!.override!.pageName }}（{{ typedStageByKey(node.key)!.override!.status }}）</el-tag>
                   <el-tag v-else-if="typedStageByKey(node.key)!.override?.broken" type="danger" size="small" effect="plain">{{ overrideBrokenLabel(typedStageByKey(node.key)!.stage) }}</el-tag>
-                  <el-tag v-else-if="typedStageByKey(node.key)!.stage !== 2" type="info" size="small" effect="plain">拦截页跟随策略</el-tag>
+                  <!-- TCP（L4）拒绝=断连无拦截页：跟随策略措辞仅 HTTP 渲染面成立 -->
+                  <el-tag v-else-if="typedStageByKey(node.key)!.stage !== 2" type="info" size="small" effect="plain">{{ isTcp ? '拦截页不支持' : '拦截页跟随策略' }}</el-tag>
                   <el-tag v-if="!typedStageByKey(node.key)!.enabled" type="info" size="small" effect="plain">未启用</el-tag>
                 </div>
               </div>

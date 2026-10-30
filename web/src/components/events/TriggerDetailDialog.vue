@@ -16,6 +16,10 @@
       <div class="trg-hero dialog-panel" :class="`trg-source--${kind}`">
         <DialogSectionHeader title="命中概览" />
         <div class="trg-hero-row">
+          <!-- 规则协议徽标（数据源=event_type；字段缺失不显示——防御式）：
+               TCP 青 = 全局 proto-tcp-tag 单源，HTTP 蓝 = el-tag primary -->
+          <el-tag v-if="row?.event_type === 'tcp'" size="small" effect="plain" class="proto-tcp-tag trg-proto-tag">TCP</el-tag>
+          <el-tag v-else-if="row?.event_type" size="small" type="primary" effect="plain" class="trg-proto-tag">HTTP</el-tag>
           <el-tag size="small" :type="sourceTagType" effect="dark">{{ categoryLabel }}</el-tag>
           <span class="trg-hero-stage">{{ heroStage }}</span>
           <span class="trg-hero-ip">{{ row?.client_ip }}</span>

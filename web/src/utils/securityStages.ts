@@ -69,8 +69,11 @@ export interface SecurityStageBinding {
   block_status_code?: number
 }
 
-// 规则级阶段拦截页覆盖（0 = 跟随策略）
+// 规则级阶段拦截页覆盖（0 = 跟随策略）。protocol：lb_rules 行的消费面可携带
+// （Rules.vue 两处 buildStageModel 直接传规则行）——阶段 1 拦截页行按协议分流：
+// TCP（L4）拒绝=断连，拦截页整族（策略页/规则覆盖/绑定链回落）都不参与渲染。
 interface RuleStagePages {
+  protocol?: string
   block_page_stage1_id?: number
   block_page_stage1_status?: number
   block_page_stage3_id?: number
@@ -562,6 +565,7 @@ const buildStage1Rows = (
   ipLists: readonly SecurityStageIPList[],
   blockPages: readonly SecurityStageBlockPage[],
   stagePages?: RuleStagePages | null,
+  isTcp?: boolean,
 ): StageRow[] => {
   const rows: StageRow[] = []
   // 内容门：deny/绕过 + 空名单不产生拦截，故不出空组；allow + 空名单虽 fail-closed
@@ -584,6 +588,13 @@ const buildStage1Rows = (
       ? `已启用 · ${engineCount > 0 ? `豁免 ${engineCount} 个引擎` : '全部引擎'}`
       : '未启用'
     rows.push({ label: '爬虫豁免', detail })
+  }
+  // 拦截页行族（策略页 + 规则级覆盖）：HTTP 渲染面（403 错误路由 / v2.3.1 归因）。
+  // TCP（L4）拒绝=断连，拦截页整族不参与——统一「不支持」，不得用
+  // 「未配置（跟随绑定链首个有效页…）」这类 HTTP 语义误导排障（2026-10-31 用户裁定）。
+  if (isTcp) {
+    if (rows.length > 0) rows.push({ label: '拦截页', detail: '不支持' })
+    return rows
   }
   // 策略级拦截页行（2026-09-25 起 stage1 可配策略页，投影补呈现）
   const s1PageId = policy?.block_page_id ?? 0
@@ -697,6 +708,8 @@ export const buildStageModel = (
   bindings.forEach((binding, index) => {
     const policy = policies.find((p) => p.id === binding.policy_id)
     const base = { key: binding.policy_id, order: index + 1, name: binding.name, enabled: binding.enabled }
+    // 协议随规则行（stagePages）携带：TCP 阶段 1 拦截页行「不支持」口径（L4 断连无页）
+    const isTcp = stagePages?.protocol === 'tcp'
 
     const s0rows = buildStage0Rows(policy, ipLists)
     if (s0rows.length > 0) {
@@ -714,7 +727,7 @@ export const buildStageModel = (
       })
     }
 
-    const s1rows = buildStage1Rows(policy, ipLists, blockPages, stagePages)
+    const s1rows = buildStage1Rows(policy, ipLists, blockPages, stagePages, isTcp)
     if (s1rows.length > 0) stage1Groups.push({ ...base, rows: s1rows })
 
     // 阶段 2：限流（全部策略的限流集中在 WAF 之前，拦截恒 429）

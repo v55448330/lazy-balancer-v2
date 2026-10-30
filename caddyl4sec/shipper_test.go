@@ -207,8 +207,8 @@ func TestQueuePerLineCapAndBudget(t *testing.T) {
 		huge[i] = 'x'
 	}
 	p.enqueueEvent(huge)
-	if p.dropped.Load() != 1 || p.pending.Load() != 0 {
-		t.Fatalf("dropped/pending = %d/%d, want 1/0（超单行上限即丢）", p.dropped.Load(), p.pending.Load())
+	if p.dropped.Load() != 1 || p.ring.depth() != 0 {
+		t.Fatalf("dropped/depth = %d/%d, want 1/0（超单行上限即丢）", p.dropped.Load(), p.ring.depth())
 	}
 }
 

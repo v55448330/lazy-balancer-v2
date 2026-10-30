@@ -207,8 +207,6 @@
         </el-table-column>
         <el-table-column label="规则" min-width="130">
           <template #default="{ row }">
-            <!-- TCP（L4 断连）事件徽标（青色全局单源）：与 HTTP 事件混排须可辨识 -->
-            <el-tag v-if="row.event_type === 'tcp'" size="small" effect="plain" class="proto-tcp-tag event-proto-tag">TCP</el-tag>
             <AccessibleLink v-if="row.rule_name || row.rule_caddy_id" type="primary" @click="goToRule(row as SecurityEvent)">{{ row.rule_name || row.rule_caddy_id || '—' }}</AccessibleLink>
             <span v-else>—</span>
           </template>
@@ -243,7 +241,14 @@
           </template>
         </el-table-column>
         <!-- OPTIONS 为最长方法名(7 字符),90 定宽 -->
-        <el-table-column prop="method" label="方法" width="90" align="center" />
+        <!-- TCP（L4 断连）事件徽标（青色全局单源，2026-10-31 用户裁定移入本列）：
+             TCP 无方法语义——徽标 + 「—」占位（与请求详情弹框口径一致） -->
+        <el-table-column prop="method" label="方法" width="90" align="center">
+          <template #default="{ row }">
+            <template v-if="row.event_type === 'tcp'"><el-tag size="small" effect="plain" class="proto-tcp-tag event-proto-tag">TCP</el-tag>—</template>
+            <span v-else>{{ row.method }}</span>
+          </template>
+        </el-table-column>
         <el-table-column prop="uri" label="URI" min-width="140" show-overflow-tooltip />
         <!-- （用户需求）：异常评分列——CRS 评分制下每事件携带的累计
              anomaly_score（后端已返回，此前未展示）；按分数着色便于快速识别高威胁。
@@ -348,7 +353,9 @@
               <el-descriptions-item label="客户端 IP">{{ ctxEvent.client_ip || '—' }}</el-descriptions-item>
               <el-descriptions-item label="归属地">{{ ctxEvent.ip_location || '—' }}</el-descriptions-item>
               <el-descriptions-item label="URI" :span="2">{{ ctxIsTcp ? '—（TCP 连接）' : (ctxEvent.uri || '—') }}</el-descriptions-item>
-              <el-descriptions-item label="触发规则">{{ [ctxEvent.rule_name, ctxEvent.rule_triggered ? `id:${ctxEvent.rule_triggered}` : ''].filter(Boolean).join(' · ') || '—' }}</el-descriptions-item>
+              <!-- 规则协议徽标（数据源=event_type；字段缺失不显示——防御式）：
+                   TCP 青 = 全局 proto-tcp-tag 单源，HTTP 蓝 = el-tag primary -->
+              <el-descriptions-item label="触发规则"><el-tag v-if="ctxEvent.event_type === 'tcp'" size="small" effect="plain" class="proto-tcp-tag event-proto-tag">TCP</el-tag><el-tag v-else-if="ctxEvent.event_type" size="small" type="primary" effect="plain" class="event-proto-tag">HTTP</el-tag>{{ [ctxEvent.rule_name, ctxEvent.rule_triggered ? `id:${ctxEvent.rule_triggered}` : ''].filter(Boolean).join(' · ') || '—' }}</el-descriptions-item>
               <el-descriptions-item label="所属策略">{{ ctxEvent.policy_name || '—' }}</el-descriptions-item>
               <el-descriptions-item label="动作">
                 <el-tag size="small" :type="eventActionTone(ctxEvent.action)" effect="plain">

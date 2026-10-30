@@ -7,19 +7,27 @@ import "time"
 // 获得隔离，不引入生产分支。
 
 // setTunablesForTest 收窄队列/入队超时（返回快照供 restoreTunables 恢复）。
+// setTunablesForTest 参数兼容历史调用形状（容量,字节,超时）——环形缓冲下
+// 只有容量语义保留，后两项仅作快照位（不再有可调实现面）。
 func setTunablesForTest(queueSize int, byteBudget int64, enqueueTimeout time.Duration) []any {
-	saved := []any{l4QueueSize, l4QueueByteBudget, l4EnqueueTimeout}
-	l4QueueSize = queueSize
-	l4QueueByteBudget = byteBudget
-	l4EnqueueTimeout = enqueueTimeout
+	saved := []any{l4RingCapacity, l4RingSlotBytes}
+	l4RingCapacity = queueSize
+	l4RingSlotBytes = slotBytesForCapacity(queueSize)
 	return saved
 }
 
 // restoreTunables 恢复 setTunablesForTest 快照。
 func restoreTunables(saved []any) {
-	l4QueueSize = saved[0].(int)
-	l4QueueByteBudget = saved[1].(int64)
-	l4EnqueueTimeout = saved[2].(time.Duration)
+	l4RingCapacity = saved[0].(int)
+	l4RingSlotBytes = saved[1].(int)
+}
+
+// slotBytesForCapacity 窄容量测试环的槽字节（容量语义是本 helper 的唯一活参数）。
+func slotBytesForCapacity(capacity int) int {
+	if capacity <= 4 {
+		return 1 << 10
+	}
+	return 8 << 10
 }
 
 // setSampleCountryLookuperForTest 重定向采样查库缝（save/restore）。

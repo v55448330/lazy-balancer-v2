@@ -378,7 +378,7 @@
               <!-- TCP（阶段 0/1）与 HTTP 同入口；含 2/3 特征策略的拒绝由编辑器选择侧置灰 + 后端 400 承接 -->
               <el-tooltip :disabled="!isReadOnly && !securityBindingsLoading && !securityBindingsError" :content="securityBindingsLoading ? '安全策略绑定加载中…' : securityBindingsError ? '安全策略绑定加载失败，请先点击上方重新加载' : readOnlyMessage">
                 <div>
-                <el-button type="primary" link size="small" :disabled="isReadOnly || saving || securityBindingsLoading || securityBindingsError" @click="openBindDialog(row as Rule)">
+                <el-button type="primary" link size="small" :disabled="isReadOnly || saving || securityBindingsLoading || securityBindingsError || bindDialogOpening" @click="openBindDialog(row as Rule)">
                   安全
                 </el-button>
                 </div>
@@ -3656,15 +3656,46 @@ const openFlowDialog = (rule: Rule): void => {
 //（与策略页「绑定规则」同一组件，勿造第二份）；本页仅持有打开态
 const bindDialogVisible = ref(false)
 const bindDialogRule = ref<Rule | null>(null)
+// 打开就绪门：打开前重取快照期间禁止重入（按钮 disabled 同步消费）
+const bindDialogOpening = ref(false)
 
-const openBindDialog = (rule: Rule): void => {
-  if (securityBindingsLoading.value || securityBindingsError.value) {
-    ElMessage.warning(securityBindingsLoading.value ? '安全策略绑定加载中，请稍后再试' : '安全策略绑定加载失败，请先重新加载')
+const openBindDialog = async (rule: Rule): Promise<void> => {
+  if (securityBindingsLoading.value || securityBindingsError.value || bindDialogOpening.value) {
+    ElMessage.warning(securityBindingsLoading.value
+      ? '安全策略绑定加载中，请稍后再试'
+      : securityBindingsError.value ? '安全策略绑定加载失败，请先重新加载' : '安全策略绑定数据刷新中，请稍候')
     return
   }
-  bindDialogRule.value = rule
-  bindDialogVisible.value = true
+  bindDialogOpening.value = true
+  try {
+    // 打开前重取快照（与策略页 openBindRulesDialog 同门）：securityBindings 是
+    // 锁 popover/流程弹框/本弹框的单一数据源，但只靠挂载/保存后刷新——策略页
+    // 向导或他标签页在页面加载后产生的绑定变更，必须在此刻到达，否则编辑器
+    // 以旧快照预选与计算整集替换 delta，锁 popover/流程弹框也停在旧投影。
+    // 含策略目录（true）：编辑器的阶段门与流程投影依赖策略摘要。
+    await fetchSecurityBindings(true)
+    if (securityBindingsError.value) {
+      ElMessage.error('安全策略绑定数据刷新失败，已取消打开；请点击上方「重新加载」后重试')
+      return
+    }
+    bindDialogRule.value = rule
+    bindDialogVisible.value = true
+  } finally {
+    bindDialogOpening.value = false
+  }
 }
+
+// 绑定快照的可见性刷新（单一数据源的到达时机）：本页不轮询绑定（有意）。
+// 策略页向导/绑定规则弹框或其他标签页产生的绑定变更，经标签页切回
+// （visibilitychange）到达本页——锁 popover/流程弹框/绑定弹框预选同源即时
+// 可见，无需刷新页面。任一安全弹框打开期间跳过：编辑器按打开时快照计算
+// 整集替换 delta，中途换快照会干扰行内摘要与预选（流程弹框同口径）。
+const onSecurityVisibilityChange = (): void => {
+  if (document.visibilityState !== 'visible') return
+  if (bindDialogVisible.value || flowDialogVisible.value) return
+  void fetchSecurityBindings()
+}
+document.addEventListener('visibilitychange', onSecurityVisibilityChange)
 
 const toggleRule = async (rule: Rule) => {
   if (isReadOnly.value) return
@@ -4196,6 +4227,7 @@ onUnmounted(() => {
   // 否则 5s 定时器与整份组件闭包永久存活（isActive 已 false，轮次空转）。
   stopRuleLogPolling()
   ruleLogTail.stop()
+  document.removeEventListener('visibilitychange', onSecurityVisibilityChange)
 })
 </script>
 
