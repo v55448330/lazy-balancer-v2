@@ -18,7 +18,11 @@ const (
 	reasonBlacklist = "blacklist"
 	reasonAllow     = "allow"
 	reasonGeoIP     = "geoip"
-	modeAllowSample = "allow_sample"
+	// reasonTrustDetect 是信任检测（trust_detection=1）形态：产 logged 事件
+	// 后透传（渲染侧路由序短路后续拦截路由——HTTP id:12 DetectionOnly 的
+	// L4 等价物）。
+	reasonTrustDetect = "trust_detect"
+	modeAllowSample   = "allow_sample"
 
 	// headerRuleID 是归因头；headerProtocol=event_type='tcp' 的唯一判据
 	// （摄取侧构造处按它改判，缺失按 waf 向后兼容）。
@@ -27,11 +31,14 @@ const (
 	protocolTCP    = "tcp"
 
 	// 段位沿用 HTTP 预检 id：deny=2、独立黑名单=4、allow 交集外拒绝=7、
-	// GeoIP=800000+policyID（geoipPrecheckRuleBase 同值）。
-	segIDDeny      = 2
-	segIDBlacklist = 4
-	segIDAllow     = 7
-	geoipRuleBase  = 800000
+	// GeoIP=800000+policyID（geoipPrecheckRuleBase 同值）、信任检测=12（HTTP
+	// 保留检测段位——摄取侧 IsStage1PrecheckEventID(12) 预检档评分 + logged
+	// 信任白名单归因分支零新增复用）。
+	segIDDeny        = 2
+	segIDBlacklist   = 4
+	segIDAllow       = 7
+	segIDTrustDetect = 12
+	geoipRuleBase    = 800000
 	// geoipPolicyMax 使 800000+policyID 停留在普通 GeoIP 段 [800001,810000)
 	// （与渲染侧 encodeGeoIPPrecheckRuleID 段界一致，policyID≥10000 会溢入
 	// 爬虫段——Provision 显性拒绝而非送进错误归因段）。
@@ -43,14 +50,20 @@ const (
 // 既有预检分支，零新增）。
 func eventSegment(reason string, policyID int64) (int64, string, bool) {
 	switch reason {
-	// deny/blacklist/allow：合并段 policy_id=0 合法（渲染侧多策略并集无单策略
-	// 归因；事件归因走 X-LB-Rule-ID 头）；逐策略形态 [1,9999] 亦合法。
+	// deny/blacklist/allow/trust_detect：合并段 policy_id=0 合法（渲染侧多策略
+	// 并集无单策略归因；事件归因走 X-LB-Rule-ID 头）；逐策略形态 [1,9999] 亦合法。
 	case reasonDeny:
 		return segIDDeny, "IP 黑名单拒绝", policyID >= 0 && policyID <= geoipPolicyMax
 	case reasonBlacklist:
 		return segIDBlacklist, "IP 黑名单", policyID >= 0 && policyID <= geoipPolicyMax
 	case reasonAllow:
 		return segIDAllow, "IP 白名单拒绝", policyID >= 0 && policyID <= geoipPolicyMax
+	case reasonTrustDetect:
+		// 段位对齐 HTTP 保留检测 id:12：摄取侧评分走既有预检档（12 分高危）、
+		// logged 归因走信任白名单分支（securityevents.go 零新增）。文案与
+		// 渲染侧 l4SecTrustDetectReason 同族语义（HTTP id:12 本体 nolog 无文案，
+		// 此处取名单族命名「IP 信任名单检测」）。
+		return segIDTrustDetect, "IP 信任名单检测", policyID >= 0 && policyID <= geoipPolicyMax
 	case reasonGeoIP:
 		if policyID < 1 || policyID > geoipPolicyMax {
 			return 0, "", false
@@ -62,8 +75,10 @@ func eventSegment(reason string, policyID int64) (int64, string, bool) {
 
 // L4SecHandler 是 layer4.handlers.lb_l4_sec：两种形态——
 //
-//  1. reason 形态（deny/blacklist/allow/geoip + policy_id）：上报合成事件行
-//     （契约 C1）后透传后续 handler——断连由路由里的 close handler 负责，
+//  1. reason 形态（deny/blacklist/allow/geoip/trust_detect + policy_id）：上报
+//     合成事件行（契约 C1）后透传后续 handler——deny/blacklist/allow/geoip 行
+//     is_interrupted=true（→ action=blocked，断连由路由里的 close handler 负责）；
+//     trust_detect 行 is_interrupted=false（→ action=logged，仅记录不拦截）。
 //     本 handler 只产事件与计数（安全决策与遥测解耦：队列满/IPC 失败不改变
 //     拦截路径）。
 //  2. mode:"allow_sample"（兜底段）：放行连接全量计数 + 按 1/16 采样做国家
@@ -75,7 +90,7 @@ func eventSegment(reason string, policyID int64) (int64, string, bool) {
 type L4SecHandler struct {
 	// RuleCaddyID 归因键（事件头 X-LB-Rule-ID 与计数端点的 per-rule 键）。
 	RuleCaddyID string `json:"rule_caddy_id,omitempty"`
-	// Reason 为 deny/blacklist/allow/geoip 之一（与 mode 互斥）。
+	// Reason 为 deny/blacklist/allow/geoip/trust_detect 之一（与 mode 互斥）。
 	Reason string `json:"reason,omitempty"`
 	// PolicyID 是绑定策略编号（事件段位 geoip 归因 800000+policyID）。
 	PolicyID int64 `json:"policy_id,omitempty"`
@@ -110,7 +125,7 @@ func (h *L4SecHandler) Provision(ctx caddy.Context) error {
 			return fmt.Errorf("lb_l4_sec: rule_caddy_id 不能为空（事件归因与计数键）")
 		}
 		if _, _, ok := eventSegment(h.Reason, h.PolicyID); !ok {
-			return fmt.Errorf("lb_l4_sec: 非法 reason 形态（reason=%q policy_id=%d）——geoip 需 policy_id ∈ [1,%d]；deny/blacklist/allow 允许 0（合并段无单策略归因）或 [1,%d]", h.Reason, h.PolicyID, geoipPolicyMax, geoipPolicyMax)
+			return fmt.Errorf("lb_l4_sec: 非法 reason 形态（reason=%q policy_id=%d）——geoip 需 policy_id ∈ [1,%d]；deny/blacklist/allow/trust_detect 允许 0（合并段无单策略归因）或 [1,%d]", h.Reason, h.PolicyID, geoipPolicyMax, geoipPolicyMax)
 		}
 	} else {
 		if h.Mode != modeAllowSample {
@@ -154,8 +169,17 @@ func (h *L4SecHandler) Handle(cx *layer4.Connection, next layer4.Handler) error 
 			zap.String("reason", h.Reason), zap.Int64("policy_id", h.PolicyID))
 		return next.Handle(cx)
 	}
+	if h.Reason == reasonTrustDetect {
+		// 信任检测（logged）：事件行 is_interrupted=false（摄取侧 action=logged，
+		// 仅记录不拦截）；连接到达上游=正常流量口径计 allowed（与 HTTP 信任检测
+		// 请求计入流量统计一致），denied 不动；透传后续 handler（渲染侧 proxy）。
+		line := buildL4EventLine(segID, msg, h.ruleID, ip, time.Now(), l4EventNonce(), false)
+		publishL4Event(line)
+		h.allowConnection(ip)
+		return next.Handle(cx)
+	}
 	h.counters.denied.Add(1)
-	line := buildL4EventLine(segID, msg, h.ruleID, ip, time.Now(), l4EventNonce())
+	line := buildL4EventLine(segID, msg, h.ruleID, ip, time.Now(), l4EventNonce(), true)
 	publishL4Event(line)
 	return next.Handle(cx)
 }
@@ -237,8 +261,9 @@ type l4EventMessage struct {
 }
 
 // buildL4EventLine 构造一行合成事件 JSON（每行独立序列化：行进队列时已定形，
-// drain 侧零反射零再分配）。
-func buildL4EventLine(segID int64, msg, ruleID, clientIP string, now time.Time, nonce [4]byte) []byte {
+// drain 侧零反射零再分配）。interrupted=false 用于信任检测（trust_detect）
+// 形态——is_interrupted=false → 摄取侧 action=logged；拦截族恒 true。
+func buildL4EventLine(segID int64, msg, ruleID, clientIP string, now time.Time, nonce [4]byte, interrupted bool) []byte {
 	line := l4EventLine{
 		Transaction: l4EventTransaction{
 			UnixTimestamp: now.UnixNano(),
@@ -250,7 +275,7 @@ func buildL4EventLine(segID int64, msg, ruleID, clientIP string, now time.Time, 
 					headerProtocol: {protocolTCP},
 				},
 			},
-			IsInterrupted: true,
+			IsInterrupted: interrupted,
 		},
 	}
 	line.Messages = append(line.Messages, l4EventMessage{Message: msg})

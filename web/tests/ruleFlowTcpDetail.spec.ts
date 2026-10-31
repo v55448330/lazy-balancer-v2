@@ -85,3 +85,23 @@ test('锁摘要与流程弹框共用模型：TCP 行为钉在单源（buildStage
   const rules = code('src/views/Rules.vue')
   assert.match(rules, /securityBindings\.value\[rule\.caddy_id\] \|\| \[\],\n\s*securityPolicies\.value,\n\s*ipLists\.value,\n\s*blockPages\.value,\n\s*rule,/, '锁摘要模型以规则行为 stagePages（协议随行携带）')
 })
+
+// ── 阶段 0 信任检测的 TCP 口径（与 HTTP 行为一致性裁定）──
+
+test('阶段 0 脚注 TCP 分支：保留检测=记录为检测后直达上游（不再宣称仅直通）', () => {
+  const footnote = dialog.match(/v-if="isTcp" class="flow-panel-footnote">([^<]+)</)
+  assert.ok(footnote, 'TCP 阶段 0 脚注分支存在')
+  assert.match(footnote![1], /「直通上游」模式：/, '直通模式说明保留')
+  assert.match(footnote![1], /「保留检测记录」模式：命中产检测事件[^<]*后直达上游，不拦截/, '保留检测模式在 TCP 下明确呈现（logged 语义）')
+  assert.doesNotMatch(dialog, /信任直通=连接直达上游：命中的连接直接转发（不产生安全事件，故无计数 chip）/, '仅直通旧文案退场')
+})
+
+test('TCP 阶段 1 脚注：保留检测信任命中记录为检测后直达上游', () => {
+  assert.match(dialog, /const TCP_STAGE1_FOOTNOTE = '[^']*保留检测信任命中记录为检测[^']*直达上游/)
+})
+
+test('策略向导阶段 0 提示：保留检测开启话术对 TCP 成立（不再限定 HTTP 检测流程）', () => {
+  const policies = code('src/views/security/SecurityPolicies.vue')
+  assert.match(policies, /开启：信任 IP 不拦截、事件动作记为检测（[^<]*）/, '开启话术协议中立')
+  assert.match(policies, /信任名单阶段生效——直通模式命中后跳过全部后续安全阶段；保留检测模式仅记录检测、不拦截/, '投影条不再断言恒跳过')
+})

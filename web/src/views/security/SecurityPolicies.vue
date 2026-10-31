@@ -260,7 +260,7 @@
         <!-- Step: 阶段 0 · 信任名单（stage0 编辑器表单：信任名单内联+引用 + 保留检测记录开关） -->
         <div v-show="currentStep === WIZARD_STEP.TRUST" class="step-content">
           <div class="stage-projection-bar">
-            <span class="stage-projection-desc">本策略将在关联规则的信任名单阶段生效——信任 IP 命中后跳过全部后续安全阶段</span>
+            <span class="stage-projection-desc">本策略将在关联规则的信任名单阶段生效——直通模式命中后跳过全部后续安全阶段；保留检测模式仅记录检测、不拦截</span>
             <div class="stage-projection-rules">
               <span v-if="boundRules.length === 0" class="stage-projection-empty">尚未关联规则</span>
               <span v-else class="stage-projection-empty">将应用于 {{ boundRules.length }} 条已关联规则</span>
@@ -272,7 +272,7 @@
                 <el-select v-model="ipWhitelist" multiple filterable allow-create default-first-option placeholder="输入 IP/CIDR 后回车" class="acl-inline-select" />
                 <el-button v-if="!isReadOnly" link type="primary" class="acl-extract-btn" :disabled="ipWhitelist.length === 0" @click="openExtractDialog('trust')">提取为列表</el-button>
               </div>
-              <div class="form-tip-line">名单内 IP 跳过全部后续安全阶段（IP 访问控制 / 限流 / WAF）；内联与引用列表合并生效</div>
+              <div class="form-tip-line">直通模式下名单内 IP 跳过全部后续安全阶段（IP 访问控制 / 限流 / WAF）；保留检测模式仅记录检测、不拦截；内联与引用列表合并生效</div>
             </el-form-item>
             <el-form-item label="引用地址列表">
               <el-select v-model="ipWhitelistRefs" multiple filterable placeholder="选择要引用的 IP 地址列表" style="width: 100%">
@@ -285,7 +285,7 @@
             </el-form-item>
             <el-form-item label="保留检测记录">
               <el-switch v-model="form.trust_detection" />
-              <span class="form-tip-inline">{{ form.trust_detection ? '开启：信任 IP 仍过后续检测流程，事件动作记为检测' : '关闭（默认）：信任 IP 直通上游，不产生任何安全事件' }}</span>
+              <span class="form-tip-inline">{{ form.trust_detection ? '开启：信任 IP 不拦截、事件动作记为检测（HTTP 继续后续检测评估；TCP 记录后直通上游）' : '关闭（默认）：信任 IP 直通上游，不产生任何安全事件' }}</span>
             </el-form-item>
             <!-- 信任名单区地址级冲突实时警告（本区条目：信任 IP × 他策略黑名单）：
                  el-form 直接子级（2026-10-03 模板归一），缩进由

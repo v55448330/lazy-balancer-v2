@@ -55,12 +55,14 @@ func TestL4SecProvisionValidation(t *testing.T) {
 		{"valid geoip", L4SecHandler{RuleCaddyID: "r1", Reason: "geoip", PolicyID: 3}, false},
 		{"geoip policy max", L4SecHandler{RuleCaddyID: "r1", Reason: "geoip", PolicyID: 9999}, false},
 		{"valid allow_sample", L4SecHandler{RuleCaddyID: "r1", Mode: "allow_sample"}, false},
+		{"valid trust_detect merged", L4SecHandler{RuleCaddyID: "r1", Reason: "trust_detect"}, false},
+		{"valid trust_detect policy", L4SecHandler{RuleCaddyID: "r1", Reason: "trust_detect", PolicyID: 7}, false},
 		{"missing rule id", L4SecHandler{Reason: "deny", PolicyID: 3}, true},
 		{"bad reason", L4SecHandler{RuleCaddyID: "r1", Reason: "block", PolicyID: 3}, true},
 		// 合并段 policy_id=0 合法（契约偏差裁定：渲染侧多策略并集无单策略归因）。
 		{"deny merged segment policy 0", L4SecHandler{RuleCaddyID: "r1", Reason: "deny"}, false},
 		{"deny policy negative", L4SecHandler{RuleCaddyID: "r1", Reason: "deny", PolicyID: -1}, true},
-		{"deny policy negative", L4SecHandler{RuleCaddyID: "r1", Reason: "deny", PolicyID: -1}, true},
+		{"trust_detect policy negative", L4SecHandler{RuleCaddyID: "r1", Reason: "trust_detect", PolicyID: -1}, true},
 		{"geoip without policy", L4SecHandler{RuleCaddyID: "r1", Reason: "geoip"}, true},
 		{"geoip policy overflows segment", L4SecHandler{RuleCaddyID: "r1", Reason: "geoip", PolicyID: 10000}, true},
 		{"deny mixed with allow_sample", L4SecHandler{RuleCaddyID: "r1", Reason: "deny", PolicyID: 3, Mode: "allow_sample"}, true},
@@ -83,10 +85,11 @@ func TestL4SecProvisionValidation(t *testing.T) {
 }
 
 // TestEventLineShape 契约 C1 合成行逐字段断言 + 负向空间（零新增顶层键、
-// method/uri 恒空、body 缺席）。
+// method/uri 恒空、body 缺席）+ 两种 is_interrupted 形态（拦截=blocked /
+// 信任检测=logged）。
 func TestEventLineShape(t *testing.T) {
 	now := time.Unix(1786447017, 841320426).UTC()
-	line := buildL4EventLine(2, "IP 黑名单拒绝", "rule-abc", "1.2.3.4", now, [4]byte{0xde, 0xad, 0xbe, 0xef})
+	line := buildL4EventLine(2, "IP 黑名单拒绝", "rule-abc", "1.2.3.4", now, [4]byte{0xde, 0xad, 0xbe, 0xef}, true)
 
 	var doc map[string]json.RawMessage
 	if err := json.Unmarshal(line, &doc); err != nil {
@@ -164,6 +167,29 @@ func TestEventLineShape(t *testing.T) {
 	if msgs[0].Message != "IP 黑名单拒绝" {
 		t.Fatalf("messages[0].message = %q, want 与 HTTP 预检同款文案", msgs[0].Message)
 	}
+
+	// 信任检测形态：is_interrupted=false → 摄取侧 action=logged（仅记录不拦截）；
+	// 其余字段与拦截形态逐字段同构（同一构造单源，仅中断位翻转）。
+	loggedLine := buildL4EventLine(12, "IP 信任名单检测", "rule-abc", "1.2.3.4", now, [4]byte{0xde, 0xad, 0xbe, 0xef}, false)
+	var logged struct {
+		Transaction struct {
+			IsInterrupted bool `json:"is_interrupted"`
+		} `json:"transaction"`
+		Messages []struct {
+			Data struct {
+				ID json.Number `json:"id"`
+			} `json:"data"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(loggedLine, &logged); err != nil {
+		t.Fatalf("logged line unmarshal: %v", err)
+	}
+	if logged.Transaction.IsInterrupted {
+		t.Fatal("trust_detect 行 is_interrupted = true, want false（logged 不拦截语义）")
+	}
+	if len(logged.Messages) != 1 || logged.Messages[0].Data.ID.String() != "12" {
+		t.Fatalf("logged messages=%v, want 单条 id=12（HTTP 保留检测段位）", logged.Messages)
+	}
 }
 
 // TestEventSegmentTable 段位/文案表：deny=2、独立黑名单=4、allow 交集外拒绝=7、
@@ -179,6 +205,11 @@ func TestEventSegmentTable(t *testing.T) {
 		{"blacklist", 3, 4, "IP 黑名单"},
 		{"allow", 3, 7, "IP 白名单拒绝"},
 		{"geoip", 3, 800003, "GeoIP 区域拦截"},
+		// 信任检测（trust_detection=1）：段位沿用 HTTP 保留检测 id:12——评分/
+		// 归因走摄取侧既有预检分支（IsStage1PrecheckEventID(12) → 预检档 12 分；
+		// logged 归因走信任白名单分支），零新增。
+		{"trust_detect", 0, 12, "IP 信任名单检测"},
+		{"trust_detect", 7, 12, "IP 信任名单检测"},
 	}
 	for _, tc := range cases {
 		id, msg, ok := eventSegment(tc.reason, tc.policyID)
@@ -191,6 +222,9 @@ func TestEventSegmentTable(t *testing.T) {
 	}
 	if _, _, ok := eventSegment("bogus", 1); ok {
 		t.Fatal("eventSegment(bogus) must not be ok")
+	}
+	if _, _, ok := eventSegment("trust_detect", -1); ok {
+		t.Fatal("eventSegment(trust_detect,-1) must not be ok（policy_id 非 [0,max] 拒绝）")
 	}
 }
 
@@ -223,6 +257,44 @@ func TestHandleDenyReportsEvents(t *testing.T) {
 	p.flushQuiescedForTest()
 	if p.dropped.Load() != 1 {
 		t.Fatalf("dropped = %d, want 1（IPC 关闭时事件行按丢弃计数）", p.dropped.Load())
+	}
+}
+
+// TestHandleTrustDetectLogsNotBlocks trust_detect 形态（SEC-P1-1）：产 logged
+// 事件行（is_interrupted=false，仅记录）+ 透传不断连；计数走 allowed（连接
+// 到达上游=正常流量口径，与 HTTP 信任检测请求计入流量统计一致），denied 不动。
+func TestHandleTrustDetectLogsNotBlocks(t *testing.T) {
+	t.Setenv("LB_SECURITY_EVENTS_IPC_SOCKET", "")
+	resetConnStatsForTest()
+	p := acquirePipelineForTest()
+	defer p.resetForTest()
+
+	lookups := 0
+	restore := setSampleCountryLookuperForTest(func(ip string) (string, bool) {
+		lookups++
+		return "美国", true
+	})
+	defer restore()
+
+	h := newHandlerForTest(t, &L4SecHandler{RuleCaddyID: "r-trust", Reason: "trust_detect"})
+	next := &nextCapture{}
+	if err := h.Handle(newTestConn("203.0.113.77"), next); err != nil {
+		t.Fatalf("Handle() = %v", err)
+	}
+	if !next.called {
+		t.Fatal("trust_detect 必须透传（HTTP DetectionOnly 等价：记录不拦截）")
+	}
+	rule := connStatsSnapshot().Rules["r-trust"]
+	if rule == nil || rule.DeniedTotal != 0 || rule.AllowedTotal != 1 {
+		t.Fatalf("denied/allowed = %v, want 0/1（logged 连接计 allowed）", rule)
+	}
+	if lookups != 1 {
+		t.Fatalf("country lookups = %d, want 1（首连接命中 1/16 采样）", lookups)
+	}
+	// 事件行已产出（IPC 关闭形态：drain 消费后按丢弃计数）。
+	p.flushQuiescedForTest()
+	if p.dropped.Load() != 1 {
+		t.Fatalf("dropped = %d, want 1（trust_detect 产 logged 事件行）", p.dropped.Load())
 	}
 }
 

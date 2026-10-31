@@ -386,8 +386,8 @@ type SecurityOverview struct {
 	// action='blocked'，原始表窗口直算；L4 无检测概念，无 logged 拆分面）。
 	YesterdayBlockedTCP int `json:"yesterday_blocked_tcp"`
 	YesterdayDetected   int `json:"yesterday_detected"`
-	// YesterdayDetectedTCP 恒 0：L4（TCP）不产 logged 事件（拒绝=断连，
-	// 无检测态），字段为协议拆分布局对称保留（口径披露，勿用数据回填）。
+	// YesterdayDetectedTCP 昨日 TCP 检测数：L4 信任检测（trust_detect）产 tcp+logged
+	// 事件后计入（与 HTTP stage0 DetectionOnly 对齐）；无该形态时为 0。
 	YesterdayDetectedTCP int `json:"yesterday_detected_tcp"`
 	// NormalToday 今日正常请求 = HTTP 差分口径：今日 caddy_http_requests_total
 	// 累计差分 − 今日 per-rule requests_blocked 累计差分。口径披露：①与安全

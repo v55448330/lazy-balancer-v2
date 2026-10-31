@@ -35,11 +35,12 @@ func l4SecTestRule(caddyID string) SingleRuleConfig {
 	}
 }
 
-// l4SecAllFeaturePolicies 覆盖全部安全段形态：stage0 直通信任 / deny ACL /
-// 独立黑名单 / allow ACL / GeoIP deny。
+// l4SecAllFeaturePolicies 覆盖全部安全段形态：stage0 直通信任 / stage0 保留
+// 检测信任 / deny ACL / 独立黑名单 / allow ACL / GeoIP deny。
 func l4SecAllFeaturePolicies() []*models.SecurityPolicy {
 	return []*models.SecurityPolicy{
 		{ID: 11, Name: "l4-trust", PolicyType: "stage0", IPWhitelistEnabled: true, TrustDetection: false, IPWhitelist: []byte(`["10.0.0.1/32"]`)},
+		{ID: 16, Name: "l4-trust-detect", PolicyType: "stage0", IPWhitelistEnabled: true, TrustDetection: true, IPWhitelist: []byte(`["10.0.0.2/32"]`)},
 		{ID: 12, Name: "l4-deny", PolicyType: "stage1", IPACLEnabled: true, IPACLMode: "deny", IPACLList: `["10.0.0.5/32","10.0.0.6/32"]`},
 		{ID: 13, Name: "l4-bl", PolicyType: "stage1", IPBlacklist: []byte(`["9.9.9.9/32"]`)},
 		{ID: 14, Name: "l4-allow", PolicyType: "stage1", IPACLEnabled: true, IPACLMode: "allow", IPACLList: `["10.0.0.7/32"]`},
@@ -107,12 +108,14 @@ func TestBuildTCPServer_tcpWithStage01Policies_rendersShortCircuitChain(t *testi
 	if !ok {
 		t.Fatalf("routes missing: %#v", server)
 	}
-	// 信任/deny/bl/allow/geoip/兜底 = 6 条。
-	if len(rawRoutes) != 6 {
-		t.Fatalf("routes=%d, want 6（trust→deny→bl→allow→geoip→sample+proxy）: %s", len(rawRoutes), dumpJSON(t, server))
+	// 信任直通/信任检测/deny/bl/allow/geoip/兜底 = 7 条。
+	if len(rawRoutes) != 7 {
+		t.Fatalf("routes=%d, want 7（trust→trust_detect→deny→bl→allow→geoip→sample+proxy）: %s", len(rawRoutes), dumpJSON(t, server))
 	}
 
-	// ① 信任直通：文件匹配 + 纯 proxy 透传（零事件零开销）。
+	// ① 信任直通：文件匹配 + [（proxy_protocol）→] proxy 透传（零事件零开销；
+	// TCPProxyProtocol=false 形态不发射 proxy_protocol——SEC-P2-1 对称性由
+	// TestBuildTCPServer_tcpProxyProtocol_trustRoutesPrefixed 钉）。
 	trustMatchers := l4SecRouteMatchers(t, rawRoutes[0])
 	if len(trustMatchers) != 1 {
 		t.Fatalf("trust matcher sets=%d, want 1", len(trustMatchers))
@@ -127,17 +130,37 @@ func TestBuildTCPServer_tcpWithStage01Policies_rendersShortCircuitChain(t *testi
 		t.Fatalf("trust handlers=%#v, want 单个 proxy handler（零事件零开销）", trustHandlers)
 	}
 
+	// ①b 信任检测（trust_detection=1）：logged 事件上报后直通 proxy——路由序
+	// 短路其后全部拦截路由（HTTP id:12 DetectionOnly 的 L4 等价物），无 close。
+	detectMatchers := l4SecRouteMatchers(t, rawRoutes[1])
+	if len(detectMatchers) != 1 {
+		t.Fatalf("trust_detect matcher sets=%d, want 1", len(detectMatchers))
+	}
+	detectFiles := l4SecMatcherFiles(t, detectMatchers[0], "lb_ipfile")
+	wantDetect := filepath.Join(IPListDataDir, "l4-trust12-"+cid+".txt")
+	if len(detectFiles) != 1 || detectFiles[0] != wantDetect {
+		t.Fatalf("trust_detect files=%v, want [%s]", detectFiles, wantDetect)
+	}
+	detectHandlers := l4SecRouteHandlers(t, rawRoutes[1])
+	if len(detectHandlers) != 2 {
+		t.Fatalf("trust_detect handlers=%d, want 2（lb_l4_sec + proxy，无 close=不拦截）", len(detectHandlers))
+	}
+	assertL4SecEventHandler(t, detectHandlers[0], "trust_detect", 0)
+	if detectHandlers[1]["handler"] != "proxy" {
+		t.Fatalf("trust_detect 透传 handler=%#v, want proxy", detectHandlers[1])
+	}
+
 	// ② deny 拒绝：lb_l4_sec(reason=deny,policy_id=0 合并段) + close。
-	assertL4SecCloseRoute(t, rawRoutes[1], "lb_ipfile", "l4-deny-"+cid+".txt", "deny", 0, false)
+	assertL4SecCloseRoute(t, rawRoutes[2], "lb_ipfile", "l4-deny-"+cid+".txt", "deny", 0, false)
 
 	// ③ 独立黑名单：reason=blacklist。
-	assertL4SecCloseRoute(t, rawRoutes[2], "lb_ipfile", "l4-bl-"+cid+".txt", "blacklist", 0, false)
+	assertL4SecCloseRoute(t, rawRoutes[3], "lb_ipfile", "l4-bl-"+cid+".txt", "blacklist", 0, false)
 
 	// ④ allow 交集外：not 包裹 + reason=allow。
-	assertL4SecCloseRoute(t, rawRoutes[3], "lb_ipfile", "l4-allow-"+cid+".txt", "allow", 0, true)
+	assertL4SecCloseRoute(t, rawRoutes[4], "lb_ipfile", "l4-allow-"+cid+".txt", "allow", 0, true)
 
 	// ⑤ GeoIP：lb_geoip matcher + policy_id 精确归因。
-	geoipMatchers := l4SecRouteMatchers(t, rawRoutes[4])
+	geoipMatchers := l4SecRouteMatchers(t, rawRoutes[5])
 	if len(geoipMatchers) != 1 {
 		t.Fatalf("geoip matcher sets=%d, want 1", len(geoipMatchers))
 	}
@@ -149,7 +172,7 @@ func TestBuildTCPServer_tcpWithStage01Policies_rendersShortCircuitChain(t *testi
 	if !ok || len(countries) != 2 {
 		t.Fatalf("geoip countries=%#v, want 2 条策略名单原文", geoipRaw["countries"])
 	}
-	geoipHandlers := l4SecRouteHandlers(t, rawRoutes[4])
+	geoipHandlers := l4SecRouteHandlers(t, rawRoutes[5])
 	if len(geoipHandlers) != 2 {
 		t.Fatalf("geoip handlers=%d, want 2（lb_l4_sec + close）", len(geoipHandlers))
 	}
@@ -159,7 +182,7 @@ func TestBuildTCPServer_tcpWithStage01Policies_rendersShortCircuitChain(t *testi
 	}
 
 	// ⑥ 兜底：lb_l4_sec 采样 + proxy；@id 保持在兜底路由（与现状同位）。
-	fbHandlers := l4SecRouteHandlers(t, rawRoutes[5])
+	fbHandlers := l4SecRouteHandlers(t, rawRoutes[6])
 	if len(fbHandlers) != 2 {
 		t.Fatalf("fallback handlers=%d, want 2（allow_sample + proxy）", len(fbHandlers))
 	}
@@ -173,12 +196,12 @@ func TestBuildTCPServer_tcpWithStage01Policies_rendersShortCircuitChain(t *testi
 	if fbHandlers[1]["handler"] != "proxy" {
 		t.Fatalf("fallback proxy handler=%#v", fbHandlers[1])
 	}
-	if got := rawRoutes[5].(map[string]interface{})["@id"]; got != cid {
+	if got := rawRoutes[6].(map[string]interface{})["@id"]; got != cid {
 		t.Fatalf("fallback @id=%v, want %s", got, cid)
 	}
 
 	// 投影文件落盘 + GC 白名单 + 渲染引用集（发射面一致性口径）。
-	for _, scope := range []string{"l4-trust-" + cid, "l4-deny-" + cid, "l4-bl-" + cid, "l4-allow-" + cid} {
+	for _, scope := range []string{"l4-trust-" + cid, "l4-trust12-" + cid, "l4-deny-" + cid, "l4-bl-" + cid, "l4-allow-" + cid} {
 		content, err := os.ReadFile(filepath.Join(IPListDataDir, scope+".txt"))
 		if err != nil {
 			t.Fatalf("read projection %s: %v", scope, err)
@@ -196,6 +219,13 @@ func TestBuildTCPServer_tcpWithStage01Policies_rendersShortCircuitChain(t *testi
 	}
 	if !strings.Contains(string(trustContent), "10.0.0.1") {
 		t.Fatalf("trust projection=%q, want 含 10.0.0.1", trustContent)
+	}
+	detectContent, err := os.ReadFile(filepath.Join(IPListDataDir, "l4-trust12-"+cid+".txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(detectContent), "10.0.0.2") {
+		t.Fatalf("trust_detect projection=%q, want 含 10.0.0.2（detection 集不再丢弃）", detectContent)
 	}
 	denyContent, err := os.ReadFile(filepath.Join(IPListDataDir, "l4-deny-"+cid+".txt"))
 	if err != nil {
@@ -422,6 +452,126 @@ func TestBuildTCPServer_tcpGeoipAllowMode_negatedMatcher(t *testing.T) {
 	if !ok || len(countries) != 1 || countries[0] != "中国" {
 		t.Fatalf("countries=%#v, want [中国]", geoipRaw["countries"])
 	}
+}
+
+// 信任检测路由序 + 形状（SEC-P1-1）：trust_detect 置于直通之后、deny 之前——
+// 保留检测信任命中在一切拦截路由前短路（产 logged 事件后直通上游，HTTP
+// id:12 DetectionOnly 的 L4 等价物）。仅 stage0 保留检测 + deny 两策略：
+// 三路由（trust_detect → deny → 兜底）。
+func TestBuildTCPServer_tcpTrustDetection_routeOrderAndShape(t *testing.T) {
+	stubSecurityLibsAvailable(t)
+	oldDir := IPListDataDir
+	IPListDataDir = t.TempDir()
+	t.Cleanup(func() { IPListDataDir = oldDir })
+	ResetIPListProjectionStateForTest()
+	t.Cleanup(ResetIPListProjectionStateForTest)
+
+	cid := "lb_l4sec_tdetect"
+	policies := []*models.SecurityPolicy{
+		{ID: 41, Name: "td", PolicyType: "stage0", IPWhitelistEnabled: true, TrustDetection: true, IPWhitelist: []byte(`["203.0.113.10/32","203.0.113.99/32"]`)},
+		{ID: 42, Name: "deny", PolicyType: "stage1", IPACLEnabled: true, IPACLMode: "deny", IPACLList: `["203.0.113.10/32"]`},
+	}
+	server, err := buildTCPServer(l4SecTestRule(cid), &tcpSecurityRenderInput{policies: policies})
+	if err != nil {
+		t.Fatalf("buildTCPServer: %v", err)
+	}
+	rawRoutes, ok := server["routes"].([]interface{})
+	if !ok || len(rawRoutes) != 3 {
+		t.Fatalf("routes=%d, want 3（trust_detect→deny→兜底）: %s", len(rawRoutes), dumpJSON(t, server))
+	}
+	// 保留检测信任命中不得落 deny 路由语义：首路由是 trust_detect（lb_l4_sec+
+	// proxy），deny（close）在其后，兜底采样在最后。
+	detectHandlers := l4SecRouteHandlers(t, rawRoutes[0])
+	if len(detectHandlers) != 2 || detectHandlers[0]["handler"] != "lb_l4_sec" || detectHandlers[1]["handler"] != "proxy" {
+		t.Fatalf("trust_detect handlers=%#v, want [lb_l4_sec trust_detect, proxy]（无 close=不拦截）", detectHandlers)
+	}
+	assertL4SecEventHandler(t, detectHandlers[0], "trust_detect", 0)
+	if got := detectHandlers[0]["mode"]; got != nil {
+		t.Fatalf("trust_detect 不得携带 mode: %#v", detectHandlers[0])
+	}
+	assertL4SecCloseRoute(t, rawRoutes[1], "lb_ipfile", "l4-deny-"+cid+".txt", "deny", 0, false)
+	fbHandlers := l4SecRouteHandlers(t, rawRoutes[2])
+	if len(fbHandlers) != 2 || fbHandlers[0]["mode"] != "allow_sample" {
+		t.Fatalf("fallback handlers=%#v, want [allow_sample, proxy]", fbHandlers)
+	}
+	// detection 集投影文件：两策略条目聚合落盘（stage0TrustSets detection 不再丢弃）。
+	content, err := os.ReadFile(filepath.Join(IPListDataDir, "l4-trust12-"+cid+".txt"))
+	if err != nil {
+		t.Fatalf("trust12 projection missing: %v", err)
+	}
+	for _, want := range []string{"203.0.113.10", "203.0.113.99"} {
+		if !strings.Contains(string(content), want) {
+			t.Fatalf("trust12 projection=%q, want 含 %s", content, want)
+		}
+	}
+	if !ipListProjectedFileName.MatchString("l4-trust12-" + cid + ".txt") {
+		t.Fatalf("GC 白名单不认 l4-trust12 投影（孤儿永不回收）")
+	}
+}
+
+// 空集不发射：保留检测策略存在但信任并集为空（空名单/条目全失效）→ 不渲染
+// trust_detect 路由（L4 渲染器内容门控口径，与直通包裹同族）。
+func TestBuildTCPServer_tcpTrustDetect_emptyUnion_notEmitted(t *testing.T) {
+	stubSecurityLibsAvailable(t)
+	oldDir := IPListDataDir
+	IPListDataDir = t.TempDir()
+	t.Cleanup(func() { IPListDataDir = oldDir })
+	ResetIPListProjectionStateForTest()
+	t.Cleanup(ResetIPListProjectionStateForTest)
+
+	server, err := buildTCPServer(l4SecTestRule("lb_l4sec_tdempty"), &tcpSecurityRenderInput{policies: []*models.SecurityPolicy{
+		{ID: 43, Name: "td-empty", PolicyType: "stage0", IPWhitelistEnabled: true, TrustDetection: true, IPWhitelist: []byte(`[]`)},
+	}})
+	if err != nil {
+		t.Fatalf("buildTCPServer: %v", err)
+	}
+	rawRoutes, ok := server["routes"].([]interface{})
+	if !ok || len(rawRoutes) != 1 {
+		t.Fatalf("routes=%d, want 1（仅兜底，trust_detect 空集不发射）: %s", len(rawRoutes), dumpJSON(t, server))
+	}
+}
+
+// SEC-P2-1：规则开 TCPProxyProtocol 时信任族两路由与 deny/兜底路由对称前置
+// proxy_protocol——直通/检测路由的 lb_l4_sec 归因与上游 PROXY 头都按改写后
+// 对端，客户端伪造 PROXY 头不再原样透传上游。
+func TestBuildTCPServer_tcpProxyProtocol_trustRoutesPrefixed(t *testing.T) {
+	stubSecurityLibsAvailable(t)
+	oldDir := IPListDataDir
+	IPListDataDir = t.TempDir()
+	t.Cleanup(func() { IPListDataDir = oldDir })
+	ResetIPListProjectionStateForTest()
+	t.Cleanup(ResetIPListProjectionStateForTest)
+
+	rule := l4SecTestRule("lb_l4sec_pp")
+	rule.TCPProxyProtocol = true
+	server, err := buildTCPServer(rule, &tcpSecurityRenderInput{policies: l4SecAllFeaturePolicies()})
+	if err != nil {
+		t.Fatalf("buildTCPServer: %v", err)
+	}
+	rawRoutes, ok := server["routes"].([]interface{})
+	if !ok || len(rawRoutes) != 7 {
+		t.Fatalf("routes=%d, want 7: %s", len(rawRoutes), dumpJSON(t, server))
+	}
+	assertHandlerSeq := func(route interface{}, want ...string) {
+		t.Helper()
+		var got []string
+		for _, h := range l4SecRouteHandlers(t, route) {
+			name, _ := h["handler"].(string)
+			got = append(got, name)
+		}
+		if strings.Join(got, ",") != strings.Join(want, ",") {
+			t.Fatalf("handler 序=%v, want %v", got, want)
+		}
+	}
+	// ① 直通：proxy_protocol → proxy（SEC-P2-1 修复点：原来裸 proxy 透传）。
+	assertHandlerSeq(rawRoutes[0], "proxy_protocol", "proxy")
+	// ①b 信任检测：proxy_protocol → lb_l4_sec(trust_detect) → proxy。
+	assertHandlerSeq(rawRoutes[1], "proxy_protocol", "lb_l4_sec", "proxy")
+	assertL4SecEventHandler(t, l4SecRouteHandlers(t, rawRoutes[1])[1], "trust_detect", 0)
+	// ② deny：proxy_protocol → lb_l4_sec → close（既有对称基准）。
+	assertHandlerSeq(rawRoutes[2], "proxy_protocol", "lb_l4_sec", "close")
+	// ⑥ 兜底：proxy_protocol → allow_sample → proxy（既有对称基准）。
+	assertHandlerSeq(rawRoutes[6], "proxy_protocol", "lb_l4_sec", "proxy")
 }
 
 // 引擎级实证（R-10 类）：绑定 stage0/1 策略的 TCP 渲染产物必须通过真实

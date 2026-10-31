@@ -69,8 +69,8 @@ func TestShipperIPCSuccess(t *testing.T) {
 	p := acquirePipelineForTest()
 	defer p.resetForTest()
 
-	l1 := buildL4EventLine(2, "IP 黑名单拒绝", "r1", "203.0.113.1", time.Unix(1, 11), [4]byte{1, 2, 3, 4})
-	l2 := buildL4EventLine(4, "IP 黑名单", "r1", "203.0.113.2", time.Unix(1, 12), [4]byte{5, 6, 7, 8})
+	l1 := buildL4EventLine(2, "IP 黑名单拒绝", "r1", "203.0.113.1", time.Unix(1, 11), [4]byte{1, 2, 3, 4}, true)
+	l2 := buildL4EventLine(4, "IP 黑名单", "r1", "203.0.113.2", time.Unix(1, 12), [4]byte{5, 6, 7, 8}, true)
 	p.enqueueEvent(l1)
 	p.enqueueEvent(l2)
 	p.flushQuiescedForTest()
@@ -105,7 +105,7 @@ func TestShipperFailureSpoolsSealed(t *testing.T) {
 	setSpoolDirForTest(t, spoolDir)
 	p := acquirePipelineForTest()
 
-	line := buildL4EventLine(7, "IP 白名单拒绝", "r2", "198.51.100.7", time.Unix(2, 22), [4]byte{9, 9, 9, 9})
+	line := buildL4EventLine(7, "IP 白名单拒绝", "r2", "198.51.100.7", time.Unix(2, 22), [4]byte{9, 9, 9, 9}, true)
 	p.enqueueEvent(line)
 	p.flushQuiescedForTest()
 	if err := p.stopAndCloseForTest(); err != nil {
@@ -147,7 +147,7 @@ func TestShipper400PermanentReject(t *testing.T) {
 	p := acquirePipelineForTest()
 	defer p.resetForTest()
 
-	p.enqueueEvent(buildL4EventLine(2, "IP 黑名单拒绝", "r3", "203.0.113.3", time.Unix(3, 33), [4]byte{0, 0, 0, 1}))
+	p.enqueueEvent(buildL4EventLine(2, "IP 黑名单拒绝", "r3", "203.0.113.3", time.Unix(3, 33), [4]byte{0, 0, 0, 1}, true))
 	p.flushQuiescedForTest()
 
 	_, failed, spooled, _ := p.shipperCounters()
@@ -182,7 +182,7 @@ func TestSpoolBudgetFullDrops(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(spoolDir, "preexisting.jsonl"), make([]byte, 1<<20), 0o640); err != nil {
 		t.Fatal(err)
 	}
-	line := buildL4EventLine(2, "IP 黑名单拒绝", "r4", "203.0.113.4", time.Unix(4, 44), [4]byte{0, 0, 0, 2})
+	line := buildL4EventLine(2, "IP 黑名单拒绝", "r4", "203.0.113.4", time.Unix(4, 44), [4]byte{0, 0, 0, 2}, true)
 	p.enqueueEvent(line)
 	p.flushQuiescedForTest()
 
@@ -261,7 +261,7 @@ func TestDisabledIPCDropsWithoutFiles(t *testing.T) {
 	p := acquirePipelineForTest()
 	defer p.resetForTest()
 
-	p.enqueueEvent(buildL4EventLine(4, "IP 黑名单", "r5", "203.0.113.5", time.Unix(5, 55), [4]byte{7, 7, 7, 7}))
+	p.enqueueEvent(buildL4EventLine(4, "IP 黑名单", "r5", "203.0.113.5", time.Unix(5, 55), [4]byte{7, 7, 7, 7}, true))
 	p.flushQuiescedForTest()
 	if p.dropped.Load() != 1 {
 		t.Fatalf("dropped = %d, want 1", p.dropped.Load())

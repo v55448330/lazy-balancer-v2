@@ -157,7 +157,7 @@
                 </div>
               </el-collapse-transition>
             </div>
-            <div v-if="isTcp" class="flow-panel-footnote">信任直通=连接直达上游：命中的连接直接转发（不产生安全事件，故无计数 chip）；未命中继续进入阶段 1 判定</div>
+            <div v-if="isTcp" class="flow-panel-footnote">「直通上游」模式：连接直达上游（不产生安全事件，故无计数 chip）；「保留检测记录」模式：命中产检测事件（记录为检测）后直达上游，不拦截（与 HTTP 语义一致）；未命中继续进入阶段 1 判定</div>
             <div v-else class="flow-panel-footnote">「直通上游」模式：信任 IP 命中后跳过全部后续安全阶段，不产生任何安全事件（故无计数 chip）；「保留检测记录」模式：继续评估后续全部阶段但不拦截，命中事件动作记为检测</div>
             </template>
             <div v-else class="flow-detail-line">未启用——未绑定信任名单策略，请求直接进入阶段 1</div>
@@ -770,7 +770,7 @@ const stageSub = (stage: 1 | 2 | 3): string => stageSubLabel(stage)
 
 // TCP 规则阶段 1 脚注：L4 无 HTTP 拦截页/状态码面——拒绝动作是断连（close），
 // 不是 403；替换 HTTP 版 stage1Footnote（预检链序文案对 TCP 不适用）。
-const TCP_STAGE1_FOOTNOTE = '拒绝动作=断连（连接直接关闭，无拦截页/状态码）；名单/地域未命中的连接直达上游'
+const TCP_STAGE1_FOOTNOTE = '拒绝动作=断连（连接直接关闭，无拦截页/状态码）；保留检测信任命中记录为检测后直达上游；名单/地域未命中的连接直达上游'
 
 // 计数取数（弹框打开与面板「重试」共用）：失败置 statsFailed，使「请求失败」
 // 与「成功但载荷为空」可区分（此前两者同落 stats=null，统一渲染成 '—'）。

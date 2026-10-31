@@ -83,8 +83,8 @@ func seedOverviewEvent(t *testing.T, eventTime, clientIP, action, eventType stri
 
 // 昨日窗口按本地日界跨 UTC：昨日窗口=[昨日本地 0 点, 今日本地 0 点)（UTC 文本
 // 比较），窗口外（前日/今日起点及以后）事件不得计入；TCP 拆分只认
-// event_type='tcp' AND action='blocked'；yesterday_detected_tcp 恒 0（契约
-// 常量，即便库里出现 tcp+logged 形态也不得回填）。
+// event_type='tcp' AND action='blocked'；yesterday_detected_tcp=tcp+logged
+// （L4 信任检测 trust_detect 产该形态，与 HTTP stage0 DetectionOnly 对齐）。
 func TestGetSecurityOverview_yesterdayWindowLocalBoundaryAndTCPSplit(t *testing.T) {
 	setupSecurityPolicyTestDB(t)
 	loc := services.CurrentLocation()
@@ -101,7 +101,7 @@ func TestGetSecurityOverview_yesterdayWindowLocalBoundaryAndTCPSplit(t *testing.
 	seedOverviewEvent(t, ts(ydayStart.Add(-time.Hour)), "93.184.216.10", "blocked", "crs")
 	// 边界：恰为今日本地 0 点的事件属今日（今日 TCP 拆分=1）。
 	seedOverviewEvent(t, ts(todayStart), "93.184.216.11", "blocked", "tcp")
-	// 契约钉：tcp+logged 形态（L4 实际不产）不得让 yesterday_detected_tcp 非 0。
+	// 昨日窗口内 tcp+logged（L4 信任检测 trust_detect 形态）计入 yesterday_detected_tcp。
 	seedOverviewEvent(t, ts(ydayStart.Add(4*time.Hour)), "93.184.216.12", "logged", "tcp")
 
 	resp := fetchOverviewNewFields(t)
@@ -114,8 +114,8 @@ func TestGetSecurityOverview_yesterdayWindowLocalBoundaryAndTCPSplit(t *testing.
 	if got := *resp.Data.YesterdayDetected; got != 2 {
 		t.Fatalf("yesterday_detected=%d, want 2（合计口径含窗口内全部 logged，含人工 tcp+logged 形态）", got)
 	}
-	if got := *resp.Data.YesterdayDetectedTCP; got != 0 {
-		t.Fatalf("yesterday_detected_tcp=%d, want 恒 0（L4 不产 logged，契约常量）", got)
+	if got := *resp.Data.YesterdayDetectedTCP; got != 1 {
+		t.Fatalf("yesterday_detected_tcp=%d, want 1（窗口内 tcp+logged=信任检测形态）", got)
 	}
 	if got := *resp.Data.TodayBlockedTCP; got != 1 {
 		t.Fatalf("today_blocked_tcp=%d, want 1（今日起点事件属今日）", got)

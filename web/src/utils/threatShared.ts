@@ -12,12 +12,31 @@ type Rgb = [number, number, number]
  *  原首色 #1b2a41 比点阵底色 #2c4260 更暗，导致「命中 1 次」比 0 次更暗。 */
 const LAND_BASE_RGB: Rgb = [44, 66, 96]
 
-/** 热力四段阶梯（与后端口径无关，纯前端视觉）：陆地底色→暗红→红→亮红。 */
-const HEAT_LADDER: Rgb[] = [
-  LAND_BASE_RGB,
+/** 砖红三锚点（Dark Ops 族）：暗红→红→亮红；锚点间的中点插值档由阶梯展开补齐。 */
+const HEAT_ANCHORS: readonly [Rgb, Rgb, Rgb] = [
   [150, 74, 60], // #964a3c
   [194, 85, 61], // #c2553d
   [226, 84, 84], // #e25454
+]
+
+function mixRgb(a: Rgb, b: Rgb): Rgb {
+  return [
+    Math.round((a[0] + b[0]) / 2),
+    Math.round((a[1] + b[1]) / 2),
+    Math.round((a[2] + b[2]) / 2),
+  ]
+}
+
+/** 热力七档阶梯（与后端口径无关，纯前端视觉）：底色→暗红→红→亮红，三个锚点
+ *  两两之间各补 1 个中点档——对数强度上线性插值的色变更平滑（砖红族不跳档）。 */
+const HEAT_LADDER: Rgb[] = [
+  LAND_BASE_RGB,
+  mixRgb(LAND_BASE_RGB, HEAT_ANCHORS[0]),
+  HEAT_ANCHORS[0],
+  mixRgb(HEAT_ANCHORS[0], HEAT_ANCHORS[1]),
+  HEAT_ANCHORS[1],
+  mixRgb(HEAT_ANCHORS[1], HEAT_ANCHORS[2]),
+  HEAT_ANCHORS[2],
 ]
 
 // 地图/地球未命中国家点阵同色、同不透明度（用户裁定：沿用地图原透明度）。
@@ -38,11 +57,22 @@ export function drillCountryAllowed(allowed: readonly string[] | undefined, coun
   return allowed === undefined || allowed.includes(country)
 }
 
-/** 热力色（log10 计数 1→1000 三段线性插值；count≤0=底色）。 */
-function heatColor(count: number): Rgb {
-  const t = Math.min(1, Math.max(0, Math.log10(Math.max(1, count)) / 3))
-  const seg = t < 1 / 3 ? 0 : t < 2 / 3 ? 1 : 2
-  const local = t * 3 - seg
+/** 对数热力标尺（两引擎/图例单源）：强度 = log10(1+count) / log10(1+max) ∈ [0,1]，
+ *  max=当前数据集最大命中数（自适应，不写死 1000）——幂律攻击量下 1/10/100/1k/10k+
+ *  每个数量级占等宽色段，头部国家不再全部饱和、长尾国家不再不可辨。
+ *  count≤0=无命中恒 0（底色）；max≤0 的退化数据集（count>0 已保证）按命中即最热。 */
+export function heatIntensity(count: number, maxCount: number): number {
+  if (count <= 0) return 0
+  const denom = Math.log10(maxCount + 1)
+  if (!(denom > 0)) return 1
+  return Math.min(1, Math.log10(count + 1) / denom)
+}
+
+/** 强度 → 七档阶梯折线插值采样。 */
+function heatRgb(t: number): Rgb {
+  const scaled = Math.min(1, Math.max(0, t)) * (HEAT_LADDER.length - 1)
+  const seg = Math.min(HEAT_LADDER.length - 2, Math.floor(scaled))
+  const local = scaled - seg
   const a = HEAT_LADDER[seg]
   const b = HEAT_LADDER[seg + 1]
   return [
@@ -52,9 +82,35 @@ function heatColor(count: number): Rgb {
   ]
 }
 
-export function heatCss(count: number): string {
-  const [r, g, b] = heatColor(count)
+/** 色阶查找表：强度 0..1 均分 256 档，模块加载时一次预计算——渲染路径只做
+ *  一次 log10 + 一次查表，不逐帧重算插值；表与 max 无关，无需按数据集缓存。 */
+const HEAT_LUT_SIZE = 256
+const HEAT_LUT: readonly string[] = Array.from({ length: HEAT_LUT_SIZE }, (_, i) => {
+  const [r, g, b] = heatRgb(i / (HEAT_LUT_SIZE - 1))
   return `rgb(${r},${g},${b})`
+})
+
+/** 热力色（count=数据集内命中数，maxCount=数据集最大命中数；count≤0=底色）。 */
+export function heatCss(count: number, maxCount: number): string {
+  return HEAT_LUT[Math.round(heatIntensity(count, maxCount) * (HEAT_LUT_SIZE - 1))]
+}
+
+/** 数据集最大命中数（对数标尺的自适应 max；空集=0）。 */
+export function maxHeatCount(counts: ReadonlyMap<string, number>): number {
+  let max = 0
+  for (const value of counts.values()) {
+    if (value > max) max = value
+  }
+  return max
+}
+
+/** 图例渐变单源：七档阶梯按强度位排布成 CSS 渐变——大屏图例与两引擎同源，防漂移。 */
+export function heatRampGradientCss(): string {
+  const stops = HEAT_LADDER.map((rgb, i) => {
+    const percent = Number(((i / (HEAT_LADDER.length - 1)) * 100).toFixed(1))
+    return `rgb(${rgb[0]},${rgb[1]},${rgb[2]}) ${percent}%`
+  })
+  return `linear-gradient(90deg, ${stops.join(', ')})`
 }
 
 /** 经纬度是否落在任一扁平多边形组内（ray-casting；两引擎 hover/点击共用）。 */

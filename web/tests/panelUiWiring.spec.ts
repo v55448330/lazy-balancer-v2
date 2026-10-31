@@ -642,8 +642,10 @@ test('流程弹框 TCP：协议徽标、阶段 0/1 明细、阶段 2/3 整组灰
   // 标题旁协议徽标：TCP 青（全局 proto-tcp-tag），HTTP 蓝（el-tag primary）
   assert.match(dialog, /proto-tcp-tag/)
   assert.match(dialog, /<el-tag v-else[^>]*type="primary"/)
-  // 阶段 0 标注信任直通语义、阶段 1 拒绝动作=断连、阶段 2/3 整组灰态
-  assert.match(dialog, /信任直通=连接直达上游/)
+  // 阶段 0 标注信任双模式语义（直通=零事件；保留检测=记录为检测后直达上游，
+  // 与 HTTP 一致）、阶段 1 拒绝动作=断连、阶段 2/3 整组灰态
+  assert.match(dialog, /「直通上游」模式：连接直达上游/)
+  assert.match(dialog, /「保留检测记录」模式：命中产检测事件[^<]*后直达上游，不拦截/)
   assert.match(dialog, /断连/)
   assert.match(dialog, /TCP 规则不适用/)
 })

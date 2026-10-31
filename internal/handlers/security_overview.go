@@ -278,14 +278,15 @@ type securityOverviewAggregates struct {
 	// 日界窗口计数与正常请求差分（同 30s 缓存体：键含日界/时区/库句柄，
 	// 与趋势聚合同缓存生命周期）。todayBlockedTCP 自 handler 逐请求直算
 	// 下沉进缓存（同款原始表窗口，口径不变）。
-	todayBlockedTCP     int
-	yesterdayBlocked    int
-	yesterdayBlockedTCP int
-	yesterdayDetected   int
-	normalTodayHTTP     int
-	normalTodayTCP      int
-	normalYesterdayHTTP int
-	normalYesterdayTCP  int
+	todayBlockedTCP      int
+	yesterdayBlocked     int
+	yesterdayBlockedTCP  int
+	yesterdayDetectedTCP int
+	yesterdayDetected    int
+	normalTodayHTTP      int
+	normalTodayTCP       int
+	normalYesterdayHTTP  int
+	normalYesterdayTCP   int
 }
 
 type securityOverviewAggCacheKey struct {
@@ -389,9 +390,9 @@ func securityOverviewDayWindowCounts(database *sql.DB, from, to time.Time) (bloc
 // securityOverviewDayWindowTCPBlocked 原始表窗口 TCP 拦截拆分
 // （event_type='tcp' AND action='blocked'，与今日 TCP 直算同款，仅换窗口；
 // to 为零值表示无上界——今日口径与切换前逐字一致）。
-func securityOverviewDayWindowTCPBlocked(database *sql.DB, from, to time.Time) (int, error) {
+func securityOverviewDayWindowTCPAction(database *sql.DB, from, to time.Time, action string) (int, error) {
 	query := `SELECT COUNT(*) FROM security_events
-		WHERE event_type='tcp' AND action='blocked' AND event_time >= ?`
+		WHERE event_type='tcp' AND action=` + "'" + action + `' AND event_time >= ?`
 	args := []any{from.UTC().Format(securityOverviewEventTimeLayout)}
 	if !to.IsZero() {
 		query += ` AND event_time < ?`
@@ -921,14 +922,19 @@ func loadSecurityOverviewAggregates(metricsDB *sql.DB, today time.Time, todaySta
 	todayDayStart := dayStarts[6]
 	var dayErr error
 	dayCounts.yesterdayBlocked, dayCounts.yesterdayDetected, dayErr = securityOverviewDayWindowCounts(metricsDB, ydayStart, todayDayStart)
+	if dayErr == nil {
+		// 昨日 TCP 检测：L4 信任检测（trust_detect）产 tcp+logged 形态（与
+		// HTTP stage0 DetectionOnly 对齐）；无该形态时为 0。
+		dayCounts.yesterdayDetectedTCP, dayErr = securityOverviewDayWindowTCPAction(metricsDB, ydayStart, todayDayStart, "logged")
+	}
 	if dayErr != nil && srcErr == nil {
 		srcErr = dayErr
 	}
-	dayCounts.yesterdayBlockedTCP, dayErr = securityOverviewDayWindowTCPBlocked(metricsDB, ydayStart, todayDayStart)
+	dayCounts.yesterdayBlockedTCP, dayErr = securityOverviewDayWindowTCPAction(metricsDB, ydayStart, todayDayStart, "blocked")
 	if dayErr != nil && srcErr == nil {
 		srcErr = dayErr
 	}
-	dayCounts.todayBlockedTCP, dayErr = securityOverviewDayWindowTCPBlocked(metricsDB, todayDayStart, time.Time{})
+	dayCounts.todayBlockedTCP, dayErr = securityOverviewDayWindowTCPAction(metricsDB, todayDayStart, time.Time{}, "blocked")
 	if dayErr != nil && srcErr == nil {
 		srcErr = dayErr
 	}
@@ -984,18 +990,19 @@ func loadSecurityOverviewAggregates(metricsDB *sql.DB, today time.Time, todaySta
 	}
 
 	data := securityOverviewAggregates{
-		trend:               src.trend,
-		topIPs:              topIPs,
-		attackTypes:         attackTypes,
-		attackTypesStage:    attackTypesStage,
-		todayBlockedTCP:     dayCounts.todayBlockedTCP,
-		yesterdayBlocked:    dayCounts.yesterdayBlocked,
-		yesterdayBlockedTCP: dayCounts.yesterdayBlockedTCP,
-		yesterdayDetected:   dayCounts.yesterdayDetected,
-		normalTodayHTTP:     dayCounts.normalTodayHTTP,
-		normalTodayTCP:      dayCounts.normalTodayTCP,
-		normalYesterdayHTTP: dayCounts.normalYesterdayHTTP,
-		normalYesterdayTCP:  dayCounts.normalYesterdayTCP,
+		trend:                src.trend,
+		topIPs:               topIPs,
+		attackTypes:          attackTypes,
+		attackTypesStage:     attackTypesStage,
+		todayBlockedTCP:      dayCounts.todayBlockedTCP,
+		yesterdayBlocked:     dayCounts.yesterdayBlocked,
+		yesterdayBlockedTCP:  dayCounts.yesterdayBlockedTCP,
+		yesterdayDetected:    dayCounts.yesterdayDetected,
+		yesterdayDetectedTCP: dayCounts.yesterdayDetectedTCP,
+		normalTodayHTTP:      dayCounts.normalTodayHTTP,
+		normalTodayTCP:       dayCounts.normalTodayTCP,
+		normalYesterdayHTTP:  dayCounts.normalYesterdayHTTP,
+		normalYesterdayTCP:   dayCounts.normalYesterdayTCP,
 	}
 	if srcErr != nil {
 		return data, srcErr
@@ -1010,18 +1017,19 @@ func loadSecurityOverviewAggregates(metricsDB *sql.DB, today time.Time, todaySta
 // 缓存命中路径返回零值计数）。
 func cloneSecurityOverviewAggregates(in securityOverviewAggregates) securityOverviewAggregates {
 	out := securityOverviewAggregates{
-		trend:               slices.Clone(in.trend),
-		topIPs:              slices.Clone(in.topIPs),
-		attackTypes:         slices.Clone(in.attackTypes),
-		attackTypesStage:    slices.Clone(in.attackTypesStage),
-		todayBlockedTCP:     in.todayBlockedTCP,
-		yesterdayBlocked:    in.yesterdayBlocked,
-		yesterdayBlockedTCP: in.yesterdayBlockedTCP,
-		yesterdayDetected:   in.yesterdayDetected,
-		normalTodayHTTP:     in.normalTodayHTTP,
-		normalTodayTCP:      in.normalTodayTCP,
-		normalYesterdayHTTP: in.normalYesterdayHTTP,
-		normalYesterdayTCP:  in.normalYesterdayTCP,
+		trend:                slices.Clone(in.trend),
+		topIPs:               slices.Clone(in.topIPs),
+		attackTypes:          slices.Clone(in.attackTypes),
+		attackTypesStage:     slices.Clone(in.attackTypesStage),
+		todayBlockedTCP:      in.todayBlockedTCP,
+		yesterdayBlocked:     in.yesterdayBlocked,
+		yesterdayBlockedTCP:  in.yesterdayBlockedTCP,
+		yesterdayDetected:    in.yesterdayDetected,
+		yesterdayDetectedTCP: in.yesterdayDetectedTCP,
+		normalTodayHTTP:      in.normalTodayHTTP,
+		normalTodayTCP:       in.normalTodayTCP,
+		normalYesterdayHTTP:  in.normalYesterdayHTTP,
+		normalYesterdayTCP:   in.normalYesterdayTCP,
 	}
 	return out
 }

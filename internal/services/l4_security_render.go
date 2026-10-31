@@ -2,8 +2,9 @@ package services
 
 // L4（TCP 规则）阶段 0/1 安全路由渲染（契约 C2，.omp/local/l4-stage01-contract.md）：
 //
-//	① 信任直通（零事件零开销）→ ② deny 拒绝 → ③ 独立黑名单 → ④ allow 交集外 →
-//	⑤ 逐策略 GeoIP → ⑥ 兜底采样+proxy。
+//	① 信任直通（零事件零开销）→ ①b 信任检测（trust_detection=1：logged 事件
+//	后直通，HTTP id:12 DetectionOnly 的路由序等价物）→ ② deny 拒绝 →
+//	③ 独立黑名单 → ④ allow 交集外 → ⑤ 逐策略 GeoIP → ⑥ 兜底采样+proxy。
 //
 // 模块 ID 固定 layer4.handlers.lb_l4_sec / layer4.matchers.lb_geoip（与
 // caddyl4sec 模块注册对账，见 l4sec_module_contract_test.go）。投影复用
@@ -31,6 +32,9 @@ const (
 	l4SecGeoipMatcherID  = "lb_geoip"
 	l4SecIPFileMatcherID = "lb_ipfile"
 	l4SecSampleModeValue = "allow_sample"
+	// l4SecTrustDetectReason 是信任检测（trust_detection=1）路由的事件 reason
+	// （caddyl4sec reasonTrustDetect 同值，契约 C2；段位=HTTP 保留检测 id:12）。
+	l4SecTrustDetectReason = "trust_detect"
 )
 
 // tcpSecurityRenderInput 是 L4 安全渲染输入：绑定启用策略集 + 批量生成上下文
@@ -41,8 +45,9 @@ type tcpSecurityRenderInput struct {
 	ctx      *securityPolicyContext
 }
 
-// l4ProjectionScope 是 L4 投影 scope 命名单源：kind ∈ trust/deny/bl/allow，
-// 规则 caddyID 编入身份（validIPListScope 字符集内的稳定命名）。
+// l4ProjectionScope 是 L4 投影 scope 命名单源：kind ∈ trust/trust12/deny/bl/allow
+// （trust12=保留检测信任并集，与 HTTP u-trust12 同族命名），规则 caddyID 编入
+// 身份（validIPListScope 字符集内的稳定命名）。
 func l4ProjectionScope(kind, ruleCaddyID string) string {
 	return "l4-" + kind + "-" + ruleCaddyID
 }
@@ -55,20 +60,49 @@ func buildTCPSecurityRoutes(rule SingleRuleConfig, proxyHandler map[string]inter
 	policies := input.policies
 	routes := make([]interface{}, 0, len(policies)+4)
 
-	// ① 信任直通：stage0 直通并集（trust_detection=0）命中即整条 proxy 透传，
-	// 零事件零开销。内容门控与 HTTP 直通包裹同口径（并集为空不渲染；名单
-	// 从空到非空的发射面变化经既有全量链自愈收敛）。
-	_, passthroughUnion := stage0TrustSets(policies)
+	// ① 信任直通：stage0 直通并集（trust_detection=0）命中即 [（proxy_protocol
+	// →）proxy] 透传，零事件零开销。内容门控与 HTTP 直通包裹同口径（并集为空
+	// 不渲染；名单从空到非空的发射面变化经既有全量链自愈收敛）。SEC-P2-1：
+	// 规则开 TCPProxyProtocol 时与 deny/兜底路由对称前置 proxy_protocol——客户端
+	// 伪造的 PROXY 头不再原样透传上游，且不开 PROXY 协议时零发射（配置字节不变）。
+	detectionTrust, passthroughUnion := stage0TrustSets(policies)
 	if len(passthroughUnion) > 0 {
 		path, err := writeIPListFile(l4ProjectionScope("trust", cid), passthroughUnion)
 		if err != nil {
 			return nil, err
 		}
+		handle := make([]interface{}, 0, 2)
+		if pp := l4ProxyProtocolHandler(rule); pp != nil {
+			handle = append(handle, pp)
+		}
+		handle = append(handle, proxyHandler)
 		routes = append(routes, map[string]interface{}{
-			"match": l4IPFileMatchers(path),
-			"handle": []interface{}{
-				proxyHandler,
-			},
+			"match":  l4IPFileMatchers(path),
+			"handle": handle,
+		})
+	}
+
+	// ①b 信任检测（trust_detection=1，与 HTTP 行为一致性裁定）：保留检测信任
+	// 命中 → [（proxy_protocol →）lb_l4_sec(reason=trust_detect) → proxy]——
+	// 产 logged 事件（is_interrupted=false，action=logged；段位沿用 HTTP 保留
+	// 检测 id:12，评分/归因走摄取侧既有预检分支零新增）后直通上游。caddy-l4
+	// 路由首 match 即执行，其后 deny/黑名单/allow/GeoIP 全部不再评估——即 HTTP
+	// DetectionOnly「记录不拦」的路由序等价物。内容门控与直通同口径（空并集
+	// 不渲染）。投影 scope=l4-trust12-<caddyID>（与 HTTP u-trust12 同族命名，
+	// GC 白名单收编）。
+	if len(detectionTrust) > 0 {
+		path, err := writeIPListFile(l4ProjectionScope("trust12", cid), detectionTrust)
+		if err != nil {
+			return nil, err
+		}
+		handle := make([]interface{}, 0, 3)
+		if pp := l4ProxyProtocolHandler(rule); pp != nil {
+			handle = append(handle, pp)
+		}
+		handle = append(handle, l4SecEventHandler(cid, l4SecTrustDetectReason, 0), proxyHandler)
+		routes = append(routes, map[string]interface{}{
+			"match":  l4IPFileMatchers(path),
+			"handle": handle,
 		})
 	}
 
@@ -203,16 +237,27 @@ func notMatcherSet(sets []interface{}) map[string]interface{} {
 	}
 }
 
+// l4ProxyProtocolHandler 是 layer4.handlers.proxy_protocol 路由前置单源：
+// rule.TCPProxyProtocol 开启时返回该 handler（lb_l4_sec 的 client_ip 归因与
+// 发往上游的 PROXY 头都按改写后对端），关闭时返回 nil（零发射，配置字节不变）。
+// 信任直通/信任检测（SEC-P2-1）与 deny 族/兜底采样路由共用本单源。
+func l4ProxyProtocolHandler(rule SingleRuleConfig) map[string]interface{} {
+	if rule.TCPProxyProtocol {
+		return map[string]interface{}{"handler": "proxy_protocol"}
+	}
+	return nil
+}
+
 // l4SecCloseRoute 拼装「[proxy_protocol →] lb_l4_sec 事件上报 → close 断连」
 // 路由。上报 handler 上报事件后继续执行（断连由 close 负责）；policyID=0
 // 表示合并段。否定语义由调用方经 notMatcherSet 编入 matcherSet。
 // rule.TCPProxyProtocol 开启时在 lb_l4_sec 之前发射 layer4.handlers.proxy_protocol
 // （A2 契约：lb_l4_sec 的 client_ip 取 cx.RemoteAddr()，proxy_protocol handler
-// 把它改写为 PROXY 源地址；不发射=回退 socket 对端，与既有信任口径一致）。
+// 把它改写为 PROXY 源地址；不发射=回退 socket 对端）。
 func l4SecCloseRoute(rule SingleRuleConfig, matchSets []interface{}, cid, reason string, policyID int) map[string]interface{} {
 	handle := make([]interface{}, 0, 3)
-	if rule.TCPProxyProtocol {
-		handle = append(handle, map[string]interface{}{"handler": "proxy_protocol"})
+	if pp := l4ProxyProtocolHandler(rule); pp != nil {
+		handle = append(handle, pp)
 	}
 	handle = append(handle,
 		l4SecEventHandler(cid, reason, policyID),
@@ -225,7 +270,7 @@ func l4SecCloseRoute(rule SingleRuleConfig, matchSets []interface{}, cid, reason
 }
 
 // l4SecEventHandler 是事件上报 handler 载荷单源：reason ∈
-// deny/blacklist/allow/geoip；mode 键仅采样态（allow_sample）存在。
+// deny/blacklist/allow/geoip/trust_detect；mode 键仅采样态（allow_sample）存在。
 func l4SecEventHandler(cid, reason string, policyID int) map[string]interface{} {
 	return map[string]interface{}{
 		"handler":       l4SecHandlerID,
@@ -304,9 +349,9 @@ func tcpSecurityRouteList(rule SingleRuleConfig, proxyHandler map[string]interfa
 		secured = true
 	}
 	if secured {
-		if rule.TCPProxyProtocol {
+		if pp := l4ProxyProtocolHandler(rule); pp != nil {
 			// 兜底采样同样先改写 client_ip（A2 契约：采样归因按改写后对端）。
-			fallbackHandle = append(fallbackHandle, map[string]interface{}{"handler": "proxy_protocol"})
+			fallbackHandle = append(fallbackHandle, pp)
 		}
 		fallbackHandle = append(fallbackHandle, l4SecSampleHandler(rule.CaddyID))
 	}

@@ -8,7 +8,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { heatEntriesEqual, heatCss, DOT_LAND, arcEndpoints, POINTY_TOP_HEX_VERTICES, drillCountryAllowed, arcOriginForLocation, normalizeCountryName, adminShortName, aggregateCountryCounts, hasProvinceStats, drillCommitAllowed, buildCountryCellGrid, countryGridCell } from '../src/utils/threatShared.ts'
+import { heatEntriesEqual, heatCss, heatIntensity, maxHeatCount, heatRampGradientCss, DOT_LAND, arcEndpoints, POINTY_TOP_HEX_VERTICES, drillCountryAllowed, arcOriginForLocation, normalizeCountryName, adminShortName, aggregateCountryCounts, hasProvinceStats, drillCommitAllowed, buildCountryCellGrid, countryGridCell } from '../src/utils/threatShared.ts'
 import { FALLBACK_CENTROID } from '../src/utils/countryCentroids.ts'
 import { member, repoCode, code } from './_helpers.ts'
 
@@ -44,15 +44,64 @@ test('弧线起点：中国精确到省，其他国家走质心，未知走兜�
   assert.deepEqual(FALLBACK_CENTROID, [160, 15], '回退坐标变更需同步本用例（契约钉）')
 })
 
-test('热力阶梯首色=陆地底色：命中 1 次不得比 0 次更暗', () => {
-  const parse = (css: string): number[] => css.slice(4, -1).split(',').map(Number)
-  assert.equal(heatCss(0), DOT_LAND, 'count=0 与未命中点阵同色')
-  assert.equal(heatCss(1), DOT_LAND, 'count=1（log10=0）落在阶梯首色=底色，不得比 0 次更暗')
-  const base = parse(DOT_LAND)
-  for (const count of [2, 5, 50, 500, 5000]) {
-    const [r, g, b] = parse(heatCss(count))
-    assert.ok(r + g + b > base[0] + base[1] + base[2], `count=${count} 亮度必须高于底色`)
+test('热力底色钉：无命中恒底色，命中 1 次严格亮于底色（长尾可辨）', () => {
+  const sum = (css: string): number => css.slice(4, -1).split(',').map(Number).reduce((a, b) => a + b, 0)
+  assert.equal(heatCss(0, 10000), DOT_LAND, 'count=0 与未命中点阵同色')
+  assert.equal(heatCss(0, 5), DOT_LAND, '任意 max 下 count=0 恒底色')
+  assert.equal(heatCss(-3, 100), DOT_LAND, '负计数同底色')
+  assert.ok(sum(heatCss(1, 10000)) > sum(DOT_LAND), '命中 1 次必须严格亮于底色')
+  assert.ok(sum(heatCss(1, 2)) > sum(DOT_LAND), '小数据集下命中 1 次同样亮于底色')
+})
+
+test('对数标尺公式钉：强度 = log10(1+count)/log10(1+max)，max=当前数据集（自适应）', () => {
+  assert.ok(Math.abs(heatIntensity(1, 9999) - Math.log10(2) / 4) < 1e-12, 'max=9999 → 分母=log10(1e4)=4')
+  assert.equal(heatIntensity(10000, 10000), 1, '数据集最大值饱和=1（不写死 1000）')
+  assert.equal(heatIntensity(5000, 10000), Math.log10(5001) / Math.log10(10001))
+})
+
+test('数量级可辨：1/10/100/1k/10k 逐级严格变亮且步长可感知', () => {
+  const sum = (css: string): number => css.slice(4, -1).split(',').map(Number).reduce((a, b) => a + b, 0)
+  let prev = sum(heatCss(1, 10000))
+  for (const count of [10, 100, 1000, 10000]) {
+    const cur = sum(heatCss(count, 10000))
+    assert.ok(cur > prev, `count=${count} 必须亮于上一数量级`)
+    assert.ok(cur - prev >= 12, `count=${count} 与上一数量级色差必须可感知（ΔRGB和≥12）`)
+    prev = cur
   }
+})
+
+test('自适应 max：头部国家不再饱和于固定 1000 绝对标尺', () => {
+  const brightest = 'rgb(226,84,84)'
+  assert.equal(heatCss(1000, 1000), brightest, 'max=1k 数据集的头部=最亮')
+  assert.equal(heatCss(20000, 20000), brightest, 'max=20k 数据集的头部同样=最亮')
+  assert.notEqual(heatCss(1000, 10000), brightest, 'max=10k 时 1k 命中不得饱和（旧绝对标尺回归即红）')
+})
+
+test('单调性与退化边界：count 增→亮度不减；max 增→同 count 变暗；max≤0 退化=命中即最热', () => {
+  const sum = (css: string): number => css.slice(4, -1).split(',').map(Number).reduce((a, b) => a + b, 0)
+  let prev = 0
+  for (const count of [1, 3, 30, 300, 3000, 10000]) {
+    const cur = sum(heatCss(count, 10000))
+    assert.ok(cur >= prev, `count=${count} 亮度必须单调不减`)
+    prev = cur
+  }
+  assert.ok(sum(heatCss(100, 1000)) >= sum(heatCss(100, 10000)), '同 count，max 越大越暗（归一化口径）')
+  assert.equal(heatIntensity(5, 0), 1, '退化数据集（max=0）命中即最热')
+  assert.equal(heatIntensity(0, 0), 0, '无命中恒 0')
+  assert.equal(heatCss(5, 0), 'rgb(226,84,84)')
+})
+
+test('数据集 max 单源：maxHeatCount 空集=0，取最大值', () => {
+  assert.equal(maxHeatCount(new Map()), 0)
+  assert.equal(maxHeatCount(new Map([['中国', 12], ['美国', 1204]])), 1204)
+})
+
+test('图例渐变单源：七档阶梯排布，首档=底色、末档=亮红（图例不得手写渐变）', () => {
+  const ramp = heatRampGradientCss()
+  assert.match(ramp, /^linear-gradient\(90deg, /)
+  assert.ok(ramp.includes('rgb(44,66,96) 0%'), '首档=陆地底色')
+  assert.ok(ramp.includes('rgb(226,84,84) 100%'), '末档=亮红')
+  assert.equal(ramp.split('rgb(').length - 1, 7, '七档（底色 + 3 锚点 + 3 中点插值）')
 })
 
 test('A 热力指纹：相同输入 true，计数/长度/重复键变化 false', () => {

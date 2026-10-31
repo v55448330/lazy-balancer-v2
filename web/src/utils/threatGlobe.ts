@@ -14,7 +14,7 @@ import { hasOwn } from '@/utils/hasOwn'
 import { THREAT_COUNTRIES } from '@/utils/worldBorders'
 import { CHINA_PROVINCES } from '@/utils/chinaProvinces'
 import { loadAdmin1Tables, loadedAdmin1Tables } from '@/utils/admin1Loader'
-import { heatCss, heatEntriesEqual, pointInPolys as sharedPointInPolys, arcEndpoints, normalizeCountryName, aggregateCountryCounts, threatCountryGrid, countryGridCell, drillCountryAllowed, DOT_LAND, arcOriginForLocation, hasProvinceStats, drillCommitAllowed, drillClickIntent, provinceDotGrid, trafficOriginForCountry } from '@/utils/threatShared'
+import { heatCss, heatEntriesEqual, maxHeatCount, pointInPolys as sharedPointInPolys, arcEndpoints, normalizeCountryName, aggregateCountryCounts, threatCountryGrid, countryGridCell, drillCountryAllowed, DOT_LAND, arcOriginForLocation, hasProvinceStats, drillCommitAllowed, drillClickIntent, provinceDotGrid, trafficOriginForCountry } from '@/utils/threatShared'
 import type { ThreatScene, ThreatSceneOptions, CountryHeat } from '@/utils/threatScene'
 import { FLOW_ATTACK_COLOR, FLOW_NORMAL_COLOR, FLOW_FLIGHT_MS, FLOW_HOVER_TIP_COLOR, FLOW_RIPPLE_SECONDS, FLOW_RIPPLE_START_RADIUS, FLOW_RIPPLE_GROWTH_RADIUS, FLOW_RIPPLE_LINE_WIDTH, FLOW_RIPPLE_ALPHA, easeOutCubic, flowArcLabel, flowArcTierWidth, type FlowArcTier } from '@/utils/threatTheme'
 import { planTrafficArcs } from '@/utils/threatFlowRules'
@@ -611,12 +611,15 @@ export function createThreatGlobe(container: HTMLElement, opts?: ThreatSceneOpti
     if (!colorAttr) return
     // 局部缓存：每次计数刷新最多 239 个颜色，函数结束即可回收；旧实现按
     // count 永久缓存 THREE.Color，长时间 30s 轮询会无界增长（慢泄漏）。
+    // 对数热力标尺：max=当前点集数据集（世界国家/下钻省随 activeCounts 切换），
+    // 颜色由 threatShared.heatCss 查表（强度预计算，不逐帧重算）。
+    const heatMax = maxHeatCount(activeCounts)
     const colorCache = new Map<number, THREE.Color>()
     const colorFor = (count: number): THREE.Color => {
       const cached = colorCache.get(count)
       if (cached) return cached
       const color = new THREE.Color()
-      color.setStyle(count > 0 ? heatCss(count) : DOT_BASE)
+      color.setStyle(count > 0 ? heatCss(count, heatMax) : DOT_BASE)
       colorCache.set(count, color)
       return color
     }

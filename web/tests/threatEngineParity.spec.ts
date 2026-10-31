@@ -124,6 +124,18 @@ test('地球点色更新用单次局部缓存（不得跨 30s 轮询累积）', 
   assert.match(update, /const colorFor = \(count: number\)/, '颜色复用局部 colorFor')
 })
 
+test('热力对数标尺两引擎同源：各引擎按当前数据集 max 归一（自适应，禁写死分母）', () => {
+  const rebuild = member(sceneSrc, 'function rebuildStaticLayer(')
+  assert.match(rebuild, /const heatMax = maxHeatCount\(countryCounts\)/, '世界层 max=国家计数数据集')
+  assert.match(rebuild, /heatCss\(cnt, heatMax\)/, '世界层不得回退单参调用')
+  const drill = member(sceneSrc, 'function rebuildDrillWorldLayer(')
+  assert.match(drill, /const heatMax = maxHeatCount\(provinceCounts\)/, '下钻层 max=省计数数据集')
+  assert.match(drill, /heatCss\(cnt, heatMax\)/, '下钻层不得回退单参调用')
+  const update = member(globeSrc, 'function updateDotColors(')
+  assert.match(update, /const heatMax = maxHeatCount\(activeCounts\)/, '球面 max=当前点集数据集（世界/下钻随切换）')
+  assert.match(update, /heatCss\(count, heatMax\)/, '球面不得回退单参调用')
+})
+
 test('地图静态层复用国家 Path2D 后按色批量填充', () => {
   const rebuild = member(sceneSrc, 'function rebuildStaticLayer(')
   assert.match(rebuild, /const byKey = ensureWorldDotPaths\(\)/, '必须复用国家点阵路径缓存')

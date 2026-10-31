@@ -5214,7 +5214,7 @@ func (h *Handlers) GetSecurityOverview(c *gin.Context) {
 	overview.YesterdayBlocked = agg.yesterdayBlocked
 	overview.YesterdayBlockedTCP = agg.yesterdayBlockedTCP
 	overview.YesterdayDetected = agg.yesterdayDetected
-	overview.YesterdayDetectedTCP = 0 // 恒 0：L4 不产 logged 事件（契约常量）
+	overview.YesterdayDetectedTCP = agg.yesterdayDetectedTCP // L4 信任检测（trust_detect）产 tcp+logged
 	overview.NormalToday = agg.normalTodayHTTP
 	overview.NormalTodayHTTP = agg.normalTodayHTTP
 	overview.NormalTodayTCP = agg.normalTodayTCP

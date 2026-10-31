@@ -19,7 +19,7 @@ import {
 import { THREAT_COUNTRIES } from '@/utils/worldBorders'
 import { hasOwn } from '@/utils/hasOwn'
 import { CHINA_PROVINCES } from '@/utils/chinaProvinces'
-import { heatCss, heatEntriesEqual, pointInPolys as sharedPointInPolys, adminShortName as sharedShortName, DOT_LAND as SHARED_DOT_LAND, normalizeCountryName, aggregateCountryCounts, threatCountryGrid, countryGridCell, POINTY_TOP_HEX_VERTICES, drillCountryAllowed, arcOriginForLocation, hasProvinceStats, drillCommitAllowed, drillClickIntent, provinceDotGrid, trafficOriginForCountry, type ProvinceDotRow } from '@/utils/threatShared'
+import { heatCss, heatEntriesEqual, maxHeatCount, pointInPolys as sharedPointInPolys, adminShortName as sharedShortName, DOT_LAND as SHARED_DOT_LAND, normalizeCountryName, aggregateCountryCounts, threatCountryGrid, countryGridCell, POINTY_TOP_HEX_VERTICES, drillCountryAllowed, arcOriginForLocation, hasProvinceStats, drillCommitAllowed, drillClickIntent, provinceDotGrid, trafficOriginForCountry, type ProvinceDotRow } from '@/utils/threatShared'
 import type { Centroid } from '@/utils/countryCentroids'
 import { loadAdmin1Tables } from '@/utils/admin1Loader'
 import { FLOW_ATTACK_COLOR as ATTACK_COLOR, FLOW_NORMAL_COLOR as NORMAL_COLOR, FLOW_FLIGHT_MS, FLOW_HOVER_TIP_COLOR, FLOW_RIPPLE_SECONDS, FLOW_RIPPLE_START_RADIUS, FLOW_RIPPLE_GROWTH_RADIUS, FLOW_RIPPLE_LINE_WIDTH, FLOW_RIPPLE_ALPHA, easeOutCubic, flowArcLabel, flowArcTierWidth, type FlowArcTier } from '@/utils/threatTheme'
@@ -32,8 +32,9 @@ import { planTrafficArcs } from '@/utils/threatFlowRules'
 // 拖动=blit（360° 环绕三份拼接）；动态层（弧线/涟漪/扫掠/信标/hover/下钻省层）
 // 每帧矢量叠绘。对外接口与 3D 版完全一致（ThreatScreen.vue 零改动）。
 //
-// 热力=绝对标尺（1→1000 命中，log10 归一），砖红三档 #964a3c/#c2553d/#e25454，
-// 低命中向陆地底色 #2c4260 插值（与未命中点阵同源，命中 1 次不得更暗）；
+// 热力=对数标尺（log10(1+命中)/log10(1+数据集最大值)，max 自适应），砖红七档
+// #964a3c/#c2553d/#e25454（锚点+中点插值），低命中向陆地底色 #2c4260 插值
+// （与未命中点阵同源，无命中恒底色）；
 // 无挤出无悬浮无双层——纯平面。
 // 交互：左键拖动平移（横向 360° 无缝环绕、纵向钳制）、**滚轮不参与缩放**（用户
 // 裁定 2026-10-17：缩放仅经点击下钻/返回流程控制）、hover=国家提亮+浮签、
@@ -51,7 +52,8 @@ const RIPPLE_POOL = 12
 // 按上限分配、由 blit 放大（极端屏轻微软化，换取内存有界；
 // 明确要求把 dpr 计入本判定）。
 const MAX_STATIC_WIDTH = 4096
-// 绝对热力标尺（log10(命中)/3 → 0..1），砖红三档，首段向底色插值
+// 对数热力标尺（threatShared.heatIntensity 单源：log10(1+count)/log10(1+max)，
+// max=当前数据集），砖红七档，底档=未命中底色
 
 export interface CountryHeat {
   name: string
@@ -379,7 +381,8 @@ export function createThreatScene(container: HTMLElement, opts?: ThreatSceneOpti
     staticCtx.setTransform(scale, 0, 0, scale, 0, 0)
     staticCtx.lineJoin = 'round'
     // 陆地衬底退役（用户裁定：单层点阵自表意，海洋即背景）
-    // 点阵：普通陆地暗点，命中国家按热力染色（log10 计数标尺与地球版同源）
+    // 点阵：普通陆地暗点，命中国家按热力染色（对数标尺与地球版同源，
+    // max=当前国家计数数据集，热力随攻击量分布自适应）
     buildWorldDots()
     if (worldDots) {
       // 路径缓存按国家复用：只有热力色分组/填充是每次重建的成本，不再逐点
@@ -387,13 +390,14 @@ export function createThreatScene(container: HTMLElement, opts?: ThreatSceneOpti
       const byKey = ensureWorldDotPaths()
       const land = new Path2D()
       const byFill = new Map<string, Path2D>()
+      const heatMax = maxHeatCount(countryCounts)
       for (const [key, path] of byKey) {
         const cnt = countryCounts.get(key) ?? 0
         if (cnt <= 0) {
           land.addPath(path)
           continue
         }
-        const fill = heatCss(cnt)
+        const fill = heatCss(cnt, heatMax)
         let group = byFill.get(fill)
         if (!group) {
           group = new Path2D()
@@ -517,9 +521,10 @@ export function createThreatScene(container: HTMLElement, opts?: ThreatSceneOpti
       drillWorldCtx.globalAlpha = 1
     }
     const byColor = new Map<string, Path2D>()
+    const heatMax = maxHeatCount(provinceCounts)
     for (const d of provinceDots) {
       const cnt = provinceCounts.get(d.key) ?? 0
-      const color = cnt > 0 ? heatCss(cnt) : DOT_LAND
+      const color = cnt > 0 ? heatCss(cnt, heatMax) : DOT_LAND
       let path = byColor.get(color)
       if (!path) {
         path = new Path2D()

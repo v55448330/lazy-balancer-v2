@@ -15,7 +15,13 @@
       <div class="hud-tr" aria-label="图例">
         <div class="row">正常请求 <span class="legend-arc normal"></span></div>
         <div class="row">攻击光流 <span class="legend-arc"></span></div>
-        <div class="row">国家命中 少 <span class="legend-ramp"></span> 多</div>
+        <div class="row">
+          <span>国家命中（对数）</span>
+          <span class="legend-ramp-stack">
+            <i class="legend-ramp" :style="{ background: heatRamp }"></i>
+            <span class="legend-ticks"><i>1</i><i>100</i><i>10k+</i></span>
+          </span>
+        </div>
       </div>
 
       <transition name="fade">
@@ -312,6 +318,7 @@ import { anomalySeverity, overlayDetectionGrade, zeroScoreSeverity, type Anomaly
 import { displayThreatScreenMode } from '@/utils/configValues'
 import { flowTimestamp, normalizeTrafficSampleN, reconstructObservedRate, stepAdaptiveSample, nextFlowCursor, planFlowEvents, freshFlowEvents } from '@/utils/threatFlowRules'
 import { nextRadioValue, rovingTabindex } from '@/utils/rovingRadio'
+import { heatRampGradientCss } from '@/utils/threatShared'
 import type { ThreatScene, ThreatSceneOptions } from '@/utils/threatScene'
 
 // 威胁大屏（v2.3.8 Threat Wall 版式）：三栏 HUD 网格（左事件流/中引擎舞台/
@@ -486,6 +493,10 @@ const showEmptyState = computed(() =>
 const countryCount = computed(() => Object.keys(stats.value?.countries ?? {}).length)
 
 const formatFeedTime = (value: string): string => formatDate(value).slice(11) || value
+
+// 地图/地球热力渐变单源（threatShared.heatRampGradientCss）：图例不手写渐变，
+// 与两引擎染色同源防漂移；等距刻度 1/100/10k 标注对数刻度语义。
+const heatRamp = heatRampGradientCss()
 
 const maxCountryCount = computed(() => topCountries.value.reduce((m, item) => Math.max(m, item.value), 0))
 const countryBarWidth = (count: number): string => `${maxCountryCount.value > 0 ? Math.max(5, (count / maxCountryCount.value) * 100) : 0}%`
@@ -1490,7 +1501,12 @@ onBeforeUnmount(() => {
 .hud-tl .readout b { color: #8ea7d6; font-weight: 400; }
 .hud-tr { position: absolute; top: 14px; right: 16px; z-index: 2; pointer-events: none; display: grid; gap: 7px; justify-items: end; font-size: 11px; color: #8ea7d6; }
 .hud-tr .row { display: flex; align-items: center; gap: 8px; }
-.legend-ramp { width: 72px; height: 4px; background: linear-gradient(90deg, #ff9f1c, #ff4d4d); box-shadow: 0 0 10px rgba(255, 106, 61, 0.6); }
+/* 国家命中热力图例：渐变背景由 threatShared.heatRampGradientCss 单源注入
+   （与两引擎染色同源）；刻度 1/100/10k 等距排布标注对数刻度（每格=×100）。 */
+.legend-ramp-stack { display: inline-flex; flex-direction: column; gap: 2px; }
+.legend-ramp { width: 72px; height: 4px; box-shadow: 0 0 10px rgba(226, 84, 84, 0.4); }
+.legend-ticks { display: flex; justify-content: space-between; font: 9px/1 mono, monospace; color: #8ea7d6; }
+.legend-ticks i { font-style: normal; }
 .legend-arc { width: 26px; height: 2px; background: linear-gradient(90deg, transparent, #ff9f1c, #fff3c4); box-shadow: 0 0 6px #ff9f1c; }
 .legend-arc.normal { background: linear-gradient(90deg, transparent, #38bdf8, #e0f7ff); box-shadow: 0 0 6px #38bdf8; }
 
