@@ -5199,8 +5199,9 @@ func (h *Handlers) GetSecurityOverview(c *gin.Context) {
 		}})
 		return
 	}
-	// 近 7 天聚合（趋势/Top10 IP/攻击族）走 30s 进程内缓存，
-	// 避免每次 30s 轮询对原始表执行 4 趟 7 天全窗口扫描。
+	// 近 7 天聚合（趋势/Top10 IP/攻击族）走 SWR 进程内缓存：未过期条目零
+	// 查询返回；过期条目立即返回旧快照并触发后台刷新（水位增量/rollup 全量，
+	// 数据滞后 ≤ 刷新周期），避免每次轮询对原始表执行多趟 7 天全窗口扫描。
 	agg, aggErr := loadSecurityOverviewAggregates(db.MetricsDB, now, todayStartUTC, loc.String())
 	trackErr(aggErr)
 	overview.Trend = agg.trend

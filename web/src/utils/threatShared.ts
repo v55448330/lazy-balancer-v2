@@ -113,6 +113,31 @@ export function heatRampGradientCss(): string {
   return `linear-gradient(90deg, ${stops.join(', ')})`
 }
 
+/** 图例刻度单源（对数标尺动态化）：三档位置 0/50/100%，值 = 10^(f·log10(1+max))−1
+ *  取整——与 heatIntensity 同一对数标尺，刻度随数据集 max 自适应（原写死
+ *  1/100/10k+ 只在万级数据集近似成立，小火/百万级数据集刻度全部错位）。
+ *  0 位显式为 1（最小有意义命中数，与原图例文案一致）；max≤0 的空数据集
+ *  回退历史静态三档（版面不塌缩）。标签 <1000 直接数字、≥1000 用 k 缩写
+ *  （10200→10.2k，与原图例 10k+ 同族文案）。 */
+export function heatLegendTicks(maxHeatCount: number): { pos: number; label: string }[] {
+  if (!(maxHeatCount > 0)) {
+    return [{ pos: 0, label: '1' }, { pos: 50, label: '100' }, { pos: 100, label: '10k+' }]
+  }
+  const span = Math.log10(1 + maxHeatCount)
+  return [0, 0.5, 1].map((f) => {
+    const value = f === 0 ? 1 : Math.max(1, Math.round(10 ** (f * span) - 1))
+    return { pos: f * 100, label: heatLegendTickLabel(value) }
+  })
+}
+
+/** 刻度值 → 图例文案：<1000 直接数字；≥1000 除以 1000 后缀 k（一位小数按需，
+ *  整数不带小数点）。 */
+function heatLegendTickLabel(value: number): string {
+  if (value < 1000) return String(value)
+  const k = Math.round((value / 1000) * 10) / 10
+  return `${Number.isInteger(k) ? k : k.toFixed(1)}k`
+}
+
 /** 经纬度是否落在任一扁平多边形组内（ray-casting；两引擎 hover/点击共用）。 */
 export function pointInPolys(lon: number, lat: number, polys: number[][][]): boolean {
   for (const poly of polys) {

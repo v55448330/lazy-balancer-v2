@@ -5,6 +5,7 @@ package db
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -58,6 +59,63 @@ func TestEnsureSecurityEventsTransactionIndex_skipsDedupeScanWhenIndexExists(t *
 	if indexCount != 1 {
 		t.Fatalf("索引重建后条数=%d, want 1", indexCount)
 	}
+}
+
+// idx_security_events_type_action_time（event_type,action,event_time DESC）：
+// 总览今日 TCP 拦截窗口查询的索引范围支撑。IF NOT EXISTS 只判名字，形状与
+// 可用性由本测试钉住：fresh 库建索引、存量库重启补建，且该查询形状
+// （event_type+action 等值 + event_time 范围）命中索引不落全表扫描。
+func TestInitMetricsSchema_createsTypeActionTimeIndex(t *testing.T) {
+	metrics, err := openAndPingMetricsDB(filepath.Join(t.TempDir(), "metrics-type-action-index.db"))
+	if err != nil {
+		t.Fatalf("open metrics database: %v", err)
+	}
+	t.Cleanup(func() { _ = metrics.Close() })
+	assertTypeActionTimeIndexReady := func(phase string) {
+		t.Helper()
+		var indexCount int
+		if err := metrics.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='idx_security_events_type_action_time'`).Scan(&indexCount); err != nil {
+			t.Fatal(err)
+		}
+		if indexCount != 1 {
+			t.Fatalf("%s: 索引条数=%d, want 1", phase, indexCount)
+		}
+		var plan string
+		rows, err := metrics.Query(`EXPLAIN QUERY PLAN SELECT COUNT(*) FROM security_events
+			WHERE event_type='tcp' AND action='blocked' AND event_time >= '2026-10-19 00:00:00'`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for rows.Next() {
+			var detail string
+			if err := rows.Scan(new(int), new(int), new(int), &detail); err != nil {
+				rows.Close()
+				t.Fatal(err)
+			}
+			plan += detail + "; "
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(plan, "idx_security_events_type_action_time") {
+			t.Fatalf("%s: 查询计划未命中索引: %s", phase, plan)
+		}
+	}
+
+	if err := initMetricsSchema(metrics); err != nil {
+		t.Fatalf("first init: %v", err)
+	}
+	assertTypeActionTimeIndexReady("fresh 库")
+
+	// 存量库形态（索引被删）重启补建——迁移机制对该索引生效。
+	if _, err := metrics.Exec(`DROP INDEX idx_security_events_type_action_time`); err != nil {
+		t.Fatal(err)
+	}
+	if err := initMetricsSchema(metrics); err != nil {
+		t.Fatalf("reinit after index drop: %v", err)
+	}
+	assertTypeActionTimeIndexReady("存量库重启")
 }
 
 // 冗余索引回收同理：初始化时先探测 sqlite_master，fresh 库/已回收库零 DDL

@@ -4,14 +4,17 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"slices"
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"golang.org/x/sync/singleflight"
 
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
@@ -264,18 +267,27 @@ func queryRuleStageTimings(metricsDB *sql.DB, ruleCaddyID string) (preAvg float6
 	return preAvg, preCnt, wafAvg, wafCnt, nil
 }
 
-// 安全总览的近 7 天聚合（趋势/Top10 IP/攻击族）此前
-// 每请求执行 4 条无缓存的大范围扫描（趋势、Top IP、Top IP 攻击族、攻击类型），
-// 100/s 攻击态 7 天可达数千万行时每 30s 轮询多趟全窗口聚合。改为 30s 进程内
-// 缓存（键含指标库句柄/日界/时区偏移——换库/跨日/改时区即失效；失败不缓存）。
-const securityOverviewAggCacheTTL = 30 * time.Second
+// 安全总览的近 7 天聚合（趋势/Top10 IP/攻击族）的读取形态演进：
+//  1. 30s 全量重算缓存（键含指标库句柄/日界/时区）——消除每轮询 4 趟全窗口
+//     扫描，但冷路径仍是原始表/rollup 的整窗聚合（45 万行生产库 ~1.9s）；
+//  2. SWR + 水位线增量（现状）：请求命中未过期条目零查询返回；条目过期后
+//     **立即返回旧快照**并触发后台 singleflight 刷新（数据滞后 ≤ 刷新周期），
+//     刷新优先走增量（`WHERE id > 水位` 只扫新行、top-IP 候选有界重查 recency），
+//     删除/换库/固化模式切换等情形回退全量重算。精度由对账钉测钉死：
+//     增量结果必须与全量重算逐字段相等（security_overview_incremental_test.go）。
+//
+// 失败口径偏离声明：全量时代「任一查询失败显式 500」；SWR 下刷新失败改为
+// **保留旧快照 + 限频 warn 日志**——同步报错面已消失（请求不等待刷新），
+// 故障经日志与 Ingestion 健康快照披露，面板显示旧数据好于 500。冷启动
+// （无任何快照可保，首请求同步全量建）失败仍按原口径上抛 500。
+const securityOverviewAggCacheTTL = 5 * time.Second
 
 type securityOverviewAggregates struct {
 	trend            []models.SecurityTrendPoint
 	topIPs           []models.SecurityTopIP
 	attackTypes      []models.SecurityAttackType
 	attackTypesStage []models.SecurityAttackType
-	// 日界窗口计数与正常请求差分（同 30s 缓存体：键含日界/时区/库句柄，
+	// 日界窗口计数与正常请求差分（同缓存体：键含日界/时区/库句柄，
 	// 与趋势聚合同缓存生命周期）。todayBlockedTCP 自 handler 逐请求直算
 	// 下沉进缓存（同款原始表窗口，口径不变）。
 	todayBlockedTCP      int
@@ -299,8 +311,9 @@ type securityOverviewAggCacheKey struct {
 }
 
 // securityOverviewAggCache 键含时区/日界/库句柄（键空间随时区与日界变化）：
-// 写入时顺带清扫过期项防 map 无限增长。
-var securityOverviewAggCache = newTTLCache[securityOverviewAggCacheKey, securityOverviewAggregates](0)
+// 写入时顺带清扫过期项防 map 无限增长。值为展示快照 + 增量状态双体
+// （securityOverviewAggEntry）：请求路径只读 data，后台刷新读写 state。
+var securityOverviewAggCache = newTTLCache[securityOverviewAggCacheKey, securityOverviewAggEntry](0)
 
 // securityOverviewTodayCounts 今日拦截/检测计数单源：优先读分钟 rollup
 // （与威胁大屏同源，与原始表规模解耦——行帽触顶时原始表只剩最近若干
@@ -696,7 +709,7 @@ func loadOverviewAggregatesFromRollup(metricsDB *sql.DB, dayStarts []time.Time, 
 		COALESCE(SUM(CASE WHEN action='logged' THEN count ELSE 0 END),0) as l,
 		MAX(minute) as last_minute
 		FROM `+securityEventIPRollupTable+` WHERE minute >= ? AND TRIM(COALESCE(client_ip,'')) <> ''
-		GROUP BY client_ip ORDER BY b + l DESC LIMIT 10`, windowStartMinute)
+		GROUP BY client_ip ORDER BY b + l DESC, COALESCE(client_ip,'') ASC LIMIT 10`, windowStartMinute)
 	track(err)
 	for ipRows != nil && ipRows.Next() {
 		var ip string
@@ -744,8 +757,11 @@ func loadOverviewAggregatesFromRollup(metricsDB *sql.DB, dayStarts []time.Time, 
 
 // loadOverviewAggregatesFromRaw 原始表直读回退路径：rollup 覆盖未达窗口起点
 // （升级回填/fresh install）、固化陈旧、就绪标记缺失或状态读取失败时使用。
-// 查询与切换前实现逐字一致——回退路径必须与切换点之前的既有行为完全同
-// 口径（含保留/私网地址，与新维度表写入侧一致，无跨路径口径分叉）。
+// 行为与切换点之前的既有实现完全同口径（含保留/私网地址，与新维度表写入
+// 侧一致，无跨路径口径分叉）。查询形状随总览 SWR 改造有两处显式化：趋势
+// 7 条逐日 COUNT 合并为单条窗口扫描（语义逐字保持，逐日边界 UTC 文本传参，
+// 等价性由现有趋势钉测钉住）；top-IP 排序补 client_ip 升序 tiebreak（并列
+// IP 展示顺序确定化，与增量重排的 Go 排序逐字对齐——严格对账的前提）。
 func loadOverviewAggregatesFromRaw(metricsDB *sql.DB, dayStarts []time.Time) (securityOverviewSourceAgg, error) {
 	const eventTimeLayout = "2006-01-02 15:04:05"
 	var firstErr error
@@ -755,16 +771,39 @@ func loadOverviewAggregatesFromRaw(metricsDB *sql.DB, dayStarts []time.Time) (se
 		}
 	}
 	windowStartUTC := dayStarts[0].UTC().Format(eventTimeLayout)
+	// 趋势单扫描：原实现逐日 7 条 COUNT（7 趟窗口扫描）；合并为单条 [d0,d7)
+	// 窗口扫描 + 7 组逐桶 SUM(CASE)。语义逐字保持：[d0,d7) 被 7 个逐日本地
+	// 边界日桶精确划分（无缝无叠），逐桶求和与逐日查询逐字段相等；边界仍按
+	// 逐日本地边界换 UTC 文本传参（文本比较走 idx_security_events_time 前缀），
+	// 不改用 substr 日期截断。语义等价钉测沿用现有趋势测试（窗口边界/时区）。
+	trendColumns := make([]string, 0, 14)
+	trendArgs := make([]any, 0, 30)
+	for i := range 7 {
+		dayFrom := dayStarts[i].UTC().Format(eventTimeLayout)
+		dayTo := dayStarts[i+1].UTC().Format(eventTimeLayout)
+		trendColumns = append(trendColumns,
+			"COALESCE(SUM(CASE WHEN event_time >= ? AND event_time < ? THEN CASE WHEN action='blocked' THEN 1 ELSE 0 END ELSE 0 END),0)",
+			"COALESCE(SUM(CASE WHEN event_time >= ? AND event_time < ? THEN CASE WHEN action='logged' THEN 1 ELSE 0 END ELSE 0 END),0)")
+		trendArgs = append(trendArgs, dayFrom, dayTo, dayFrom, dayTo)
+	}
+	trendArgs = append(trendArgs, dayStarts[0].UTC().Format(eventTimeLayout), dayStarts[7].UTC().Format(eventTimeLayout))
+	var trendCells [14]int
+	scanInto := make([]any, 14)
+	for i := range scanInto {
+		scanInto[i] = &trendCells[i]
+	}
+	if err := metricsDB.QueryRow("SELECT "+strings.Join(trendColumns, ",")+"\n"+
+		"FROM security_events WHERE event_time >= ? AND event_time < ? AND "+services.AttackEventSQLPredicate("rule_triggered", "action"),
+		trendArgs...).Scan(scanInto...); err != nil {
+		track(err)
+	}
 	trend := make([]models.SecurityTrendPoint, 0, 7)
 	for i := range 7 {
-		point := models.SecurityTrendPoint{Date: dayStarts[i].In(dayStarts[0].Location()).Format("2006-01-02")}
-		err := metricsDB.QueryRow(`SELECT COALESCE(SUM(CASE WHEN action='blocked' THEN 1 ELSE 0 END),0),
-			COALESCE(SUM(CASE WHEN action='logged' THEN 1 ELSE 0 END),0)
-			FROM security_events WHERE event_time >= ? AND event_time < ? AND `+services.AttackEventSQLPredicate("rule_triggered", "action"),
-			dayStarts[i].UTC().Format(eventTimeLayout), dayStarts[i+1].UTC().Format(eventTimeLayout)).
-			Scan(&point.Blocked, &point.Detected)
-		track(err)
-		trend = append(trend, point)
+		trend = append(trend, models.SecurityTrendPoint{
+			Date:     dayStarts[i].In(dayStarts[0].Location()).Format("2006-01-02"),
+			Blocked:  trendCells[i*2],
+			Detected: trendCells[i*2+1],
+		})
 	}
 
 	var topRows []topIPRow
@@ -779,7 +818,7 @@ func loadOverviewAggregatesFromRaw(metricsDB *sql.DB, dayStarts []time.Time) (se
 		SUM(CASE WHEN event_time >= ? THEN 1 ELSE 0 END) as recent_1h,
 		SUM(CASE WHEN event_time >= ? THEN 1 ELSE 0 END) as recent_24h,
 		MAX(event_time) as last_time
-		FROM security_events WHERE event_time >= ? AND TRIM(COALESCE(client_ip,'')) <> '' AND `+services.AttackEventSQLPredicate("rule_triggered", "action")+` GROUP BY client_ip ORDER BY b + l DESC LIMIT 10`, recent10m, recent1h, recent24h, windowStartUTC)
+		FROM security_events WHERE event_time >= ? AND TRIM(COALESCE(client_ip,'')) <> '' AND `+services.AttackEventSQLPredicate("rule_triggered", "action")+` GROUP BY client_ip ORDER BY b + l DESC, COALESCE(client_ip,'') ASC LIMIT 10`, recent10m, recent1h, recent24h, windowStartUTC)
 	track(err)
 	for ipRows != nil && ipRows.Next() {
 		var row topIPRow
@@ -861,8 +900,15 @@ func loadTopIPFamilySubdivision(metricsDB *sql.DB, windowStartUTC string, topRow
 	return familyCountsByIP, stageFamilyCountsByIP, firstErr
 }
 
-// loadSecurityOverviewAggregates 计算（或命中缓存）近 7 天聚合。错误不缓存、
-// 由调用方聚合成 500（与既有「任一查询失败显式报错」口径一致）。
+// loadSecurityOverviewAggregates 计算（或命中缓存）近 7 天聚合——SWR 读路径：
+//   - 未过期条目：零查询返回（深拷贝出入）；
+//   - 过期条目：立即返回旧快照，同时触发后台 singleflight 刷新（数据滞后
+//     ≤ securityOverviewAggCacheTTL；刷新失败保留旧快照 + 限频 warn，偏离
+//     声明见缓存头注释）；
+//   - 无条目（首请求/换库/跨日界/改时区）：同步全量建一次，错误照旧上抛
+//     （调用方聚合成 500，与既有「任一查询失败显式报错」口径一致——无旧
+//     快照可保，静默零面板与「无攻击」不可区分）。
+//
 // tzName 仅用于缓存键区分时区身份（loc.String()）；窗口/日桶一律由 today
 // 携带的时区逐日构造（DST 正确），不把单一偏移套到整周 SQL date() 上。
 //
@@ -878,23 +924,424 @@ func loadSecurityOverviewAggregates(metricsDB *sql.DB, today time.Time, todaySta
 	now := time.Now()
 	if entry, ok := securityOverviewAggCache.Get(key, now); ok {
 		// 深拷贝：四个切片若与缓存条目共享底层数组，任一消费者就地变更
-		// （sort/截断/改元素）都会污染其他请求的 30s 缓存（同型事故：健康
+		// （sort/截断/改元素）都会污染其他请求的缓存（同型事故：健康
 		// 缓存的「共享同一克隆」）。
-		return cloneSecurityOverviewAggregates(entry), nil
+		return cloneSecurityOverviewAggregates(entry.data), nil
 	}
+	if stale, ok := securityOverviewAggCache.GetStale(key); ok {
+		// SWR：过期条目立即让位——先返回旧快照，后台刷新就绪后由 Set 原子
+		// 覆盖。singleflight 合并过期瞬间的并发触发为一次刷新（与
+		// threatTrafficGroup 同款模式）。
+		go func() {
+			_, _, _ = securityOverviewAggRefreshGroup.Do(fmt.Sprint(key), func() (any, error) {
+				_, err := refreshSecurityOverviewAggregates(metricsDB, key, today)
+				return nil, err
+			})
+		}()
+		return cloneSecurityOverviewAggregates(stale.data), nil
+	}
+	// 冷启动：同步全量建一次（首请求慢一次可接受，与全量缓存时代同）。
+	dayStarts := securityOverviewDayStarts(today)
+	fromRollup := securityOverviewAggRollupUsable(metricsDB, dayStarts[0], now)
+	data, state, err := computeSecurityOverviewAggregatesFull(metricsDB, dayStarts, today, now, fromRollup)
+	if err != nil {
+		return data, err
+	}
+	securityOverviewAggCache.Set(key, securityOverviewAggEntry{data: cloneSecurityOverviewAggregates(data), state: state}, now, securityOverviewAggCacheTTL)
+	return data, nil
+}
 
-	// 趋势日桶必须用**逐日本地边界**，不得用单一当前时区偏移——
-	// DST 周界（如 America/New_York 3 月/11 月切换）单偏移会让切换前一日的
-	// 边界错 1h，事件跨到相邻日桶（默认 Asia/Shanghai 无 DST，故此前未暴露）。
-	// 边界按 today 携带的配置时区逐日构造（today 由调用方 time.Now().In(loc)
-	// 传入），窗口下界同步用 dayStarts[0]，其余 7 天聚合与趋势同窗口。
-	const eventTimeLayout = "2006-01-02 15:04:05"
+// securityOverviewDayStarts 近 7 天日桶边界（[0..6]=今日−6..今日、[7]=明日
+// 0 点趋势排他上界）。趋势日桶必须用**逐日本地边界**，不得用单一当前时区
+// 偏移——DST 周界（如 America/New_York 3 月/11 月切换）单偏移会让切换前
+// 一日的边界错 1h，事件跨到相邻日桶（默认 Asia/Shanghai 无 DST，故此前
+// 未暴露）。边界按 today 携带的配置时区逐日构造（today 由调用方
+// time.Now().In(loc) 传入）。
+func securityOverviewDayStarts(today time.Time) []time.Time {
 	dayStarts := make([]time.Time, 8)
 	for i := range dayStarts {
 		d := today.AddDate(0, 0, i-6)
 		dayStarts[i] = time.Date(d.Year(), d.Month(), d.Day(), 0, 0, 0, 0, today.Location())
 	}
+	return dayStarts
+}
+
+// topIPAccum top-IP 可累加结构（7 天窗口内的拦截/检测累计与末次事件时间；
+// lastTime 为 UTC 文本，取字典序最大与 SQL MAX(event_time) 同语义——
+// event_time 恒为定宽 'YYYY-MM-DD HH:MM:SS' 文本）。
+type topIPAccum struct {
+	blocked, detected int
+	lastTime          string
+}
+
+// securityOverviewAggState 增量聚合的缓存状态体：水位 + 可累加结构 + 键生命
+// 周期内不可变的窗口值。刷新轨道（refreshSecurityOverviewAggIncremental）
+// 对其副本逐行归桶累加；请求路径只读 entry.data，两者经缓存条目各取所需。
+//
+// 精度不变式（对账钉测钉死）：builtFromRollup=false 的 state 恒等于
+// 「对 id ≤ maxEventID 且 event_time ≥ 窗口起点的行做全量重算」的结果——
+// 增量扫描只补 id > 水位的新行；任何破坏该不变式的形态（删除/换库/模式
+// 切换）都触发全量重建。
+type securityOverviewAggState struct {
+	// maxEventID 已聚合的最大事件 id（水位）；seenTotal 「id ≤ 水位且
+	// event_time ≥ 窗口起点」的存活行数账本（删除检测：存活数变少 → 全量
+	// 重建。账本只数窗口内行——窗口外的保留期/行帽裁剪不改变 7 天聚合
+	// 结果，不触发无谓重建；行帽触顶删除窗口内旧行属于聚合必须反映的
+	// 真实删除，正常触发）。
+	maxEventID int64
+	seenTotal  int64
+	// builtFromRollup 上一轮聚合来源路径：rollup 读路径与 raw 增量计数同一
+	// 宇宙（同谓词同窗口），但 rollup 基线存在「固化未覆盖尾部」（≤1 分钟，
+	// 与既有 rollup 读路径滞后同口径）——切回 raw 增量前必须先做一次全量
+	// raw 重建补齐固化停滞期事件，否则该尾部永远缺计（id ≤ 水位不被增量扫描）。
+	builtFromRollup bool
+	// 日桶边界（UTC 文本，与 SQL 文本窗口同语义比较）与展示标签。
+	dayBounds [8]string
+	dayLabels [7]string
+	// 可累加聚合（增量逐行归桶）。topIPs 上界=窗口内去重攻击 IP 数
+	// （产品威胁画像下数千量级，内存可忽略；跨日界换键后整体重建，
+	// 有意不设上限——截断会破坏上述精度不变式）。
+	trendBlocked  [7]int
+	trendDetected [7]int
+	familyCounts  map[string]int
+	stageCounts   map[string]int
+	topIPs        map[string]topIPAccum
+	// 不可变窗口值：键含 todayStart → 键生命周期内窗口恒定，刷新直接携带
+	// （昨日窗口与昨日差分不随时间变化；跨日界换键全量重建一次）。
+	yesterdayBlocked     int
+	yesterdayDetected    int
+	yesterdayBlockedTCP  int
+	yesterdayDetectedTCP int
+	normalYesterdayHTTP  int
+	normalYesterdayTCP   int
+}
+
+// securityOverviewAggEntry 缓存条目：展示快照 + 增量状态。
+type securityOverviewAggEntry struct {
+	data  securityOverviewAggregates
+	state securityOverviewAggState
+}
+
+// securityOverviewAggRefreshGroup 过期刷新合并组：过期瞬间的并发请求只跑
+// 一趟刷新（SWR 读路径不等待，合并的是后台触发本身）。
+var securityOverviewAggRefreshGroup singleflight.Group
+
+// securityOverviewAggRefreshWarnLast 刷新失败限频 warn 的上次发射时刻
+// （unix 纳秒；CAS 抢占，并发刷新下至多每窗口一条——5s 刷新周期 + 停转
+// 的 metrics 库不该刷屏日志）。
+var securityOverviewAggRefreshWarnLast atomic.Int64
+
+func warnSecurityOverviewAggRefresh(err error) {
+	now := time.Now().UnixNano()
+	last := securityOverviewAggRefreshWarnLast.Load()
+	if now-last < int64(time.Minute) || !securityOverviewAggRefreshWarnLast.CompareAndSwap(last, now) {
+		return
+	}
+	services.Logf("warn", "security overview aggregate refresh failed (serving stale snapshot): %v", err)
+}
+
+// refreshSecurityOverviewAggregates 同步刷新缓存条目（SWR 后台航班的执行体，
+// 也是测试缝）：按当前路径可用性分派——rollup 可用走 rollup 全量（与原始表
+// 规模解耦）；raw 轨道走水位增量；模式切换/删除检测命中时回退全量 raw 重建。
+// 成功后原子覆盖缓存条目；失败保留旧快照并返回错误（无旧快照时返回错误由
+// 后台航班吞掉——请求路径从未等待本次刷新）。
+func refreshSecurityOverviewAggregates(metricsDB *sql.DB, key securityOverviewAggCacheKey, today time.Time) (securityOverviewAggregates, error) {
+	now := time.Now()
+	stale, hasStale := securityOverviewAggCache.GetStale(key)
+	dayStarts := securityOverviewDayStarts(today)
 	fromRollup := securityOverviewAggRollupUsable(metricsDB, dayStarts[0], now)
+	var (
+		data  securityOverviewAggregates
+		state securityOverviewAggState
+		err   error
+	)
+	switch {
+	case !hasStale:
+		// 条目已被清（换库/测试 Reset）：退回全量建。
+		data, state, err = computeSecurityOverviewAggregatesFull(metricsDB, dayStarts, today, now, fromRollup)
+	case fromRollup:
+		// rollup 读路径可用：全量走预聚合（毫秒-十毫秒级）。逐轮全量而非增量：
+		// rollup 固化逐分钟推进，全量重读自动补齐固化尾部，与既有 rollup 读
+		// 路径滞后口径完全一致，无需水位簿记。
+		data, state, err = computeSecurityOverviewAggregatesFull(metricsDB, dayStarts, today, now, true)
+	case stale.state.builtFromRollup:
+		// rollup→raw 模式切换（固化停滞/状态缺失）：先全量 raw 重建补齐
+		// rollup 基线未覆盖的固化停滞期事件，再进入 raw 增量轨道。
+		data, state, err = computeSecurityOverviewAggregatesFull(metricsDB, dayStarts, today, now, false)
+	default:
+		data, state, err = refreshSecurityOverviewAggIncremental(metricsDB, stale.state, dayStarts, today, now)
+	}
+	if err != nil {
+		warnSecurityOverviewAggRefresh(err)
+		if hasStale {
+			return cloneSecurityOverviewAggregates(stale.data), err
+		}
+		return data, err
+	}
+	securityOverviewAggCache.Set(key, securityOverviewAggEntry{data: cloneSecurityOverviewAggregates(data), state: state}, now, securityOverviewAggCacheTTL)
+	return data, nil
+}
+
+// refreshSecurityOverviewAggIncremental raw 轨道水位增量刷新：
+//  1. 删除检测双检——MAX(id) 收缩（水位之上行被删，自愈型重建触发）与存活
+//     账本核对（COUNT(id ≤ 水位 AND 窗口内) < seenTotal → 有已聚合行被删，
+//     全量重建；并发新插入不影响账本，新行 id 恒大于水位）；
+//  2. 增量扫描 `WHERE id > 水位 AND event_time ≥ 窗口起点 AND 攻击谓词`，
+//     逐行归桶累加（日桶按既有逐日本地边界判定；top-IP 累计 b/l/lastTime）；
+//  3. recent 窗口（10m/1h/24h）与 top-IP 排序不做增量——对候选集（按 b+l
+//     排序的 topIPAccum 有界前缀，天然包含全部新增 IP）做一次有界 IN 查询
+//     重查 recency 后重排取 10；
+//  4. 今日 TCP 计数走 (event_type,action,event_time) 索引保留现查询；今日
+//     正常请求差分重算（随时间增长）；昨日窗口值直接携带。
+//
+// 任一步失败显式上抛（调用方保留旧快照）。
+func refreshSecurityOverviewAggIncremental(metricsDB *sql.DB, prev securityOverviewAggState, dayStarts []time.Time, today time.Time, now time.Time) (securityOverviewAggregates, securityOverviewAggState, error) {
+	state := cloneSecurityOverviewAggState(prev)
+	var maxID, alive int64
+	err := metricsDB.QueryRow(`SELECT (SELECT COALESCE(MAX(id),0) FROM security_events),
+		(SELECT COUNT(*) FROM security_events WHERE id <= ? AND event_time >= ?)`,
+		state.maxEventID, state.dayBounds[0]).Scan(&maxID, &alive)
+	if err != nil {
+		return securityOverviewAggregates{}, state, err
+	}
+	if maxID < state.maxEventID || alive < state.seenTotal {
+		// 删除/收缩检测命中：全量重建（走既有全路径，水位在重建内重铸）。
+		return computeSecurityOverviewAggregatesFull(metricsDB, dayStarts, today, now, false)
+	}
+	scanned, err := scanSecurityOverviewIncrementalRows(metricsDB, &state)
+	if err != nil {
+		return securityOverviewAggregates{}, state, err
+	}
+	state.seenTotal = alive + scanned
+
+	topRows, err := rerankSecurityOverviewTopIPs(metricsDB, &state, now)
+	if err != nil {
+		return securityOverviewAggregates{}, state, err
+	}
+	familyCountsByIP, stageFamilyCountsByIP, err := loadTopIPFamilySubdivision(metricsDB, state.dayBounds[0], topRows)
+	if err != nil {
+		return securityOverviewAggregates{}, state, err
+	}
+	todayDayStart := dayStarts[6]
+	var dayCounts securityOverviewAggregates
+	dayCounts.todayBlockedTCP, err = securityOverviewDayWindowTCPAction(metricsDB, todayDayStart, time.Time{}, "blocked")
+	if err != nil {
+		return securityOverviewAggregates{}, state, err
+	}
+	dayCounts.normalTodayHTTP, _, err = securityOverviewNormalHTTPDiff(metricsDB, dayStarts[5], todayDayStart)
+	if err != nil {
+		return securityOverviewAggregates{}, state, err
+	}
+	_, dayCounts.normalTodayTCP, err = securityOverviewNormalTCPDiff(metricsDB, dayStarts[5], todayDayStart)
+	if err != nil {
+		return securityOverviewAggregates{}, state, err
+	}
+	dayCounts.yesterdayBlocked = state.yesterdayBlocked
+	dayCounts.yesterdayDetected = state.yesterdayDetected
+	dayCounts.yesterdayBlockedTCP = state.yesterdayBlockedTCP
+	dayCounts.yesterdayDetectedTCP = state.yesterdayDetectedTCP
+	dayCounts.normalYesterdayHTTP = state.normalYesterdayHTTP
+	dayCounts.normalYesterdayTCP = state.normalYesterdayTCP
+
+	src := securityOverviewSourceAgg{
+		trend:        state.trendPoints(),
+		topRows:      topRows,
+		familyCounts: state.familyCounts,
+		stageCounts:  state.stageCounts,
+	}
+	data := assembleSecurityOverviewAggregates(dayStarts, src, familyCountsByIP, stageFamilyCountsByIP, dayCounts)
+	return data, state, nil
+}
+
+// scanSecurityOverviewIncrementalRows 水位增量扫描：只取 id > 水位且落在聚合
+// 窗口（event_time ≥ 窗口起点，无上界——与全量路径的 top-IP/攻击族查询同
+// 窗口形状）且命中攻击面谓词的行，逐行归桶累加进 state。返回消费行数。
+// 日桶判定用 UTC 文本比较（与 SQL 文本窗口同语义）；落在 [明日零点,∞) 的
+// 时钟偏斜行不进趋势桶（全量路径逐日查询均不含该行），但仍计入攻击族与
+// top-IP（这两个聚合只有窗口下界）。水位推进到本趟扫描内最大 id（按 id 升
+// 序扫描——语句级快照保证消费行与水位自洽，元数据查询的 MAX(id) 不用于
+// 推进水位）。
+//
+// event_time 恒为定宽 UTC 文本（SQL 文本窗口/字典序比较的前提）。裸列
+// SELECT 时驱动会把声明为 DATETIME 的列转成 time.Time，再扫进 string 时被
+// database/sql 按 RFC3339Nano 重排（全量路径的 MAX(event_time) 聚合无声明
+// 类型、保持原文本）——增量扫描必须 CAST 成 TEXT 保持与全量路径同形。
+func scanSecurityOverviewIncrementalRows(metricsDB *sql.DB, state *securityOverviewAggState) (int64, error) {
+	rows, err := metricsDB.Query(`SELECT id, CAST(event_time AS TEXT) AS event_time, COALESCE(client_ip,''), COALESCE(rule_triggered,''), COALESCE(rule_msg,''), action
+		FROM security_events WHERE id > ? AND event_time >= ? AND `+services.AttackEventSQLPredicate("rule_triggered", "action")+`
+		ORDER BY id ASC`, state.maxEventID, state.dayBounds[0])
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+	var scanned, maxScanned int64
+	for rows.Next() {
+		var id int64
+		var eventTime, ip, triggered, msg, action string
+		if err := rows.Scan(&id, &eventTime, &ip, &triggered, &msg, &action); err != nil {
+			return 0, err
+		}
+		scanned++
+		if id > maxScanned {
+			maxScanned = id
+		}
+		for i := range 7 {
+			if eventTime >= state.dayBounds[i] && eventTime < state.dayBounds[i+1] {
+				if action == "blocked" {
+					state.trendBlocked[i]++
+				} else if action == "logged" {
+					state.trendDetected[i]++
+				}
+				break
+			}
+		}
+		state.familyCounts[categorizeAttack(triggered, msg)]++
+		state.stageCounts[stageCategorizeAttack(triggered, msg)]++
+		if strings.TrimSpace(ip) != "" {
+			acc := state.topIPs[ip]
+			if action == "blocked" {
+				acc.blocked++
+			} else if action == "logged" {
+				acc.detected++
+			}
+			if eventTime > acc.lastTime {
+				acc.lastTime = eventTime
+			}
+			state.topIPs[ip] = acc
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	if maxScanned > state.maxEventID {
+		state.maxEventID = maxScanned
+	}
+	return scanned, nil
+}
+
+// securityOverviewTopIPCandidateCap top-IP 候选重排的有界上限：候选集=
+// topIPAccum 按 b+l 降序的前缀（天然包含本轮全部新增 IP——新增行在扫描时
+// 已入账）。排名对累计单调：任何冲进 b+l top-10 的 IP 必然产生过新行并被
+// 计入账本，故有界前缀外的 IP 不可能属于 top-10（严格相等不变式不受截断
+// 影响）。上限只为封顶洪峰下单趟 IN 查询的参数量。
+const securityOverviewTopIPCandidateCap = 500
+
+// rerankSecurityOverviewTopIPs top-IP 重排：候选（b+l 降序、ip 升序
+// tiebreak——与全量路径 SQL 的 ORDER BY 逐字对齐，并列 IP 展示顺序跨刷新
+// 路径稳定）经单条有界 IN 查询重查 24h 内 recency（10m/1h/24h 三窗），
+// 取前 10。idx_security_events_ip_time(client_ip, event_time DESC) 支撑
+// 逐 IP 命中，24h 窗口量级可控；24h 内无行的候选 recency 归零（与全量
+// 路径 GROUP BY 求和的零值形状一致）。
+func rerankSecurityOverviewTopIPs(metricsDB *sql.DB, state *securityOverviewAggState, now time.Time) ([]topIPRow, error) {
+	type candidate struct {
+		ip                string
+		blocked, detected int
+		lastTime          string
+	}
+	candidates := make([]candidate, 0, len(state.topIPs))
+	for ip, acc := range state.topIPs {
+		candidates = append(candidates, candidate{ip: ip, blocked: acc.blocked, detected: acc.detected, lastTime: acc.lastTime})
+	}
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].blocked+candidates[i].detected != candidates[j].blocked+candidates[j].detected {
+			return candidates[i].blocked+candidates[i].detected > candidates[j].blocked+candidates[j].detected
+		}
+		return candidates[i].ip < candidates[j].ip
+	})
+	if len(candidates) > securityOverviewTopIPCandidateCap {
+		candidates = candidates[:securityOverviewTopIPCandidateCap]
+	}
+	if len(candidates) == 0 {
+		return nil, nil
+	}
+	recent10m := now.UTC().Add(-10 * time.Minute).Format(securityOverviewEventTimeLayout)
+	recent1h := now.UTC().Add(-time.Hour).Format(securityOverviewEventTimeLayout)
+	recent24h := now.UTC().Add(-24 * time.Hour).Format(securityOverviewEventTimeLayout)
+	placeholders := make([]string, len(candidates))
+	args := make([]any, 0, len(candidates)+4)
+	args = append(args, recent10m, recent1h, recent24h, recent24h)
+	for i, cand := range candidates {
+		placeholders[i] = "?"
+		args = append(args, cand.ip)
+	}
+	rows, err := metricsDB.Query(fmt.Sprintf(`SELECT COALESCE(client_ip,''),
+		SUM(CASE WHEN event_time >= ? THEN 1 ELSE 0 END),
+		SUM(CASE WHEN event_time >= ? THEN 1 ELSE 0 END),
+		SUM(CASE WHEN event_time >= ? THEN 1 ELSE 0 END)
+		FROM security_events WHERE event_time >= ? AND client_ip IN (%s) AND `+services.AttackEventSQLPredicate("rule_triggered", "action")+`
+		GROUP BY client_ip`, strings.Join(placeholders, ",")), args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	type ipRecency struct {
+		r10m, r1h, r24h int
+	}
+	recencyByIP := map[string]ipRecency{}
+	for rows.Next() {
+		var ip string
+		var rec ipRecency
+		if err := rows.Scan(&ip, &rec.r10m, &rec.r1h, &rec.r24h); err != nil {
+			return nil, err
+		}
+		recencyByIP[ip] = rec
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	topRows := make([]topIPRow, 0, 10)
+	for _, cand := range candidates {
+		rec := recencyByIP[cand.ip]
+		topRows = append(topRows, topIPRow{
+			ip:        cand.ip,
+			blocked:   cand.blocked,
+			detected:  cand.detected,
+			recent10m: rec.r10m,
+			recent1h:  rec.r1h,
+			recent24h: rec.r24h,
+			lastTime:  cand.lastTime,
+		})
+		if len(topRows) == 10 {
+			break
+		}
+	}
+	return topRows, nil
+}
+
+// trendPoints 由可累加日桶装配趋势点（增量与全量共用同形状输出）。
+func (s *securityOverviewAggState) trendPoints() []models.SecurityTrendPoint {
+	points := make([]models.SecurityTrendPoint, 7)
+	for i := range 7 {
+		points[i] = models.SecurityTrendPoint{Date: s.dayLabels[i], Blocked: s.trendBlocked[i], Detected: s.trendDetected[i]}
+	}
+	return points
+}
+
+// cloneSecurityOverviewAggState 增量状态的独立副本：刷新轨道在副本上累加，
+// 与缓存条目内状态及并发读路径零共享（map 必须逐个克隆）。
+func cloneSecurityOverviewAggState(in securityOverviewAggState) securityOverviewAggState {
+	out := in
+	out.familyCounts = maps.Clone(in.familyCounts)
+	out.stageCounts = maps.Clone(in.stageCounts)
+	out.topIPs = maps.Clone(in.topIPs)
+	return out
+}
+
+// computeSecurityOverviewAggregatesFull 全量重算：双路径取数（rollup/raw）+
+// top-IP 攻击族细分 + 日界窗口计数与正常请求差分 + 装配，并以本次数据状态
+// 铸造增量状态（水位=当时 MAX(id)、存活账本=当时全表行数）。fromRollup 由
+// 调用方传入（冷启动经可用性门判定；SWR 刷新按当前模式/切换语义强制）。
+// 水位元数据查询失败必须使整个构建失败——缺失水位的增量轨道会重复计数，
+// 不得带病入缓存。
+func computeSecurityOverviewAggregatesFull(metricsDB *sql.DB, dayStarts []time.Time, today time.Time, now time.Time, fromRollup bool) (securityOverviewAggregates, securityOverviewAggState, error) {
+	// 水位元数据**先于**聚合读取：先取 MAX(id)=M，再跑聚合查询——id ≤ M 的
+	// 行必然已提交、必然被聚合查询看到；M 之后插入的行 id > M，交给首次增量
+	// 扫描。逆序（先聚合后取水位）会让「聚合快照后、取水位前」插入的行既
+	// 不在基线又落在水位之下，永远缺计（破坏对账不变式）。
+	var watermarkMaxID, watermarkTotal int64
+	if err := metricsDB.QueryRow(`SELECT (SELECT COALESCE(MAX(id),0) FROM security_events), (SELECT COUNT(*) FROM security_events)`).Scan(&watermarkMaxID, &watermarkTotal); err != nil {
+		return securityOverviewAggregates{}, securityOverviewAggState{}, err
+	}
 	var (
 		src    securityOverviewSourceAgg
 		srcErr error
@@ -907,7 +1354,7 @@ func loadSecurityOverviewAggregates(metricsDB *sql.DB, today time.Time, todaySta
 
 	// top10 逐 IP 攻击族细分：双路径都走原始表（理由见
 	// loadTopIPFamilySubdivision——有索引、有界、rollup 无对应维度）。
-	familyCountsByIP, stageFamilyCountsByIP, famErr := loadTopIPFamilySubdivision(metricsDB, dayStarts[0].UTC().Format(eventTimeLayout), src.topRows)
+	familyCountsByIP, stageFamilyCountsByIP, famErr := loadTopIPFamilySubdivision(metricsDB, dayStarts[0].UTC().Format(securityOverviewEventTimeLayout), src.topRows)
 	if famErr != nil && srcErr == nil {
 		srcErr = famErr
 	}
@@ -915,8 +1362,6 @@ func loadSecurityOverviewAggregates(metricsDB *sql.DB, today time.Time, todaySta
 	// 日界窗口计数与正常请求差分（同缓存体同失效语义）：昨日窗口/正常请求
 	// 查询失败与趋势聚合失败同口径上抛（不缓存失败轮，调用方聚合成 500）。
 	// yesterday_detected_tcp 恒 0（L4 不产 logged，契约常量不回填）。
-	// 注意 dayStarts 形状：[0..6]=今日−6..今日、[7]=明日 0 点（趋势窗口
-	// 排他上界）——今日起点=dayStarts[6]，昨日起点=dayStarts[5]。
 	var dayCounts securityOverviewAggregates
 	ydayStart := dayStarts[5]
 	todayDayStart := dayStarts[6]
@@ -947,6 +1392,51 @@ func loadSecurityOverviewAggregates(metricsDB *sql.DB, today time.Time, todaySta
 		srcErr = dayErr
 	}
 
+	data := assembleSecurityOverviewAggregates(dayStarts, src, familyCountsByIP, stageFamilyCountsByIP, dayCounts)
+	if srcErr != nil {
+		return data, securityOverviewAggState{}, srcErr
+	}
+	state := newSecurityOverviewAggState(dayStarts, fromRollup, src, dayCounts)
+	state.maxEventID, state.seenTotal = watermarkMaxID, watermarkTotal
+	return data, state, nil
+}
+
+// newSecurityOverviewAggState 由全量聚合结果铸造增量状态初值：日桶边界/标签、
+// 可累加结构（趋势桶/攻击族/top-IP 账本）与不可变窗口值。水位与存活账本由
+// 调用方回填（必须取自聚合读取之前的同一元数据查询）。
+func newSecurityOverviewAggState(dayStarts []time.Time, fromRollup bool, src securityOverviewSourceAgg, dayCounts securityOverviewAggregates) securityOverviewAggState {
+	state := securityOverviewAggState{
+		builtFromRollup:      fromRollup,
+		familyCounts:         make(map[string]int, len(src.familyCounts)),
+		stageCounts:          make(map[string]int, len(src.stageCounts)),
+		topIPs:               make(map[string]topIPAccum, len(src.topRows)),
+		yesterdayBlocked:     dayCounts.yesterdayBlocked,
+		yesterdayDetected:    dayCounts.yesterdayDetected,
+		yesterdayBlockedTCP:  dayCounts.yesterdayBlockedTCP,
+		yesterdayDetectedTCP: dayCounts.yesterdayDetectedTCP,
+		normalYesterdayHTTP:  dayCounts.normalYesterdayHTTP,
+		normalYesterdayTCP:   dayCounts.normalYesterdayTCP,
+	}
+	for i := range 8 {
+		state.dayBounds[i] = dayStarts[i].UTC().Format(securityOverviewEventTimeLayout)
+	}
+	for i := range 7 {
+		state.dayLabels[i] = dayStarts[i].In(dayStarts[0].Location()).Format("2006-01-02")
+		state.trendBlocked[i] = src.trend[i].Blocked
+		state.trendDetected[i] = src.trend[i].Detected
+	}
+	maps.Copy(state.familyCounts, src.familyCounts)
+	maps.Copy(state.stageCounts, src.stageCounts)
+	for _, row := range src.topRows {
+		state.topIPs[row.ip] = topIPAccum{blocked: row.blocked, detected: row.detected, lastTime: row.lastTime}
+	}
+	return state
+}
+
+// assembleSecurityOverviewAggregates 单源装配段：趋势/Top-IP/攻击族中间数据
+// + 攻击族细分 + 日界窗口计数 → 展示快照。全量重算与增量刷新共用（排序/
+// 截断/富化逻辑单源，两条轨道逐字段同形——对账钉测的相等性由此保证）。
+func assembleSecurityOverviewAggregates(dayStarts []time.Time, src securityOverviewSourceAgg, familyCountsByIP, stageFamilyCountsByIP map[string]map[string]int, dayCounts securityOverviewAggregates) securityOverviewAggregates {
 	topIPs := make([]models.SecurityTopIP, 0, len(src.topRows))
 	for _, row := range src.topRows {
 		topIPs = append(topIPs, models.SecurityTopIP{
@@ -989,7 +1479,7 @@ func loadSecurityOverviewAggregates(metricsDB *sql.DB, today time.Time, todaySta
 		attackTypes = attackTypes[:10]
 	}
 
-	data := securityOverviewAggregates{
+	return securityOverviewAggregates{
 		trend:                src.trend,
 		topIPs:               topIPs,
 		attackTypes:          attackTypes,
@@ -1004,11 +1494,6 @@ func loadSecurityOverviewAggregates(metricsDB *sql.DB, today time.Time, todaySta
 		normalYesterdayHTTP:  dayCounts.normalYesterdayHTTP,
 		normalYesterdayTCP:   dayCounts.normalYesterdayTCP,
 	}
-	if srcErr != nil {
-		return data, srcErr
-	}
-	securityOverviewAggCache.Set(key, cloneSecurityOverviewAggregates(data), now, securityOverviewAggCacheTTL)
-	return data, nil
 }
 
 // cloneSecurityOverviewAggregates 复制四组切片（元素为值类型，浅复制切片即

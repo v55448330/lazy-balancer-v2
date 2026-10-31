@@ -106,6 +106,20 @@ func (c *ttlCache[K, V]) Set(key K, value V, now time.Time, ttl time.Duration) {
 	c.entries[key] = ttlCacheEntry[V]{value: value, expiresAt: now.Add(ttl)}
 }
 
+// GetStale 返回条目无论是否过期（SWR 读路径专用）：过期未清扫项仍可服务——
+// 读侧立即拿到旧快照、后台刷新就绪后由 Set 原子覆盖。键不存在时 ok=false。
+// 与 Get 的区别仅在到期判定：Get=「未过期才命中」，GetStale=「存在即命中」。
+func (c *ttlCache[K, V]) GetStale(key K) (V, bool) {
+	c.Lock()
+	defer c.Unlock()
+	entry, ok := c.entries[key]
+	if !ok {
+		var zero V
+		return zero, false
+	}
+	return entry.value, true
+}
+
 // Reset 清空缓存（测试缝与失效钩子共用）。
 func (c *ttlCache[K, V]) Reset() {
 	c.Lock()

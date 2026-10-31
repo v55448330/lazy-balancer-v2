@@ -496,6 +496,10 @@ func initMetricsSchema(db *sql.DB) error {
 	CREATE INDEX IF NOT EXISTS idx_security_events_rule ON security_events(rule_caddy_id);
 	CREATE INDEX IF NOT EXISTS idx_security_events_action_time ON security_events(action, event_time DESC);
 	CREATE INDEX IF NOT EXISTS idx_security_events_ip_time ON security_events(client_ip, event_time DESC);
+	-- event_type+action+event_time：总览今日 TCP 拦截窗口（event_type='tcp'
+	-- AND action='blocked' AND event_time >= 今日起点）与昨日 TCP 拆分窗口的
+	-- 索引范围扫描支撑——该查询随 SWR 后台刷新周期执行（毫秒级，不落请求路径）。
+	CREATE INDEX IF NOT EXISTS idx_security_events_type_action_time ON security_events(event_type, action, event_time DESC);
 
 	-- v2.3.8 威胁大屏预聚合（分钟粒度）：国家/省/攻击族/规则名/动作 五维
 	-- 计数，PK 前缀=minute。大屏聚合端点直读此表（毫秒级，与原始表规模

@@ -1,7 +1,7 @@
 package caddyl4sec
 
 import (
-	"bytes"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -332,22 +332,190 @@ func TestL4SpoolResetSealsActiveFile(t *testing.T) {
 	}
 }
 
-// TestL4SpoolFlushRetryOnTransientError：批末 flush 失败有一次重试（瞬时
-// I/O 抖动不得让已缓冲整批走错误路径）。
-func TestL4SpoolFlushRetryOnTransientError(t *testing.T) {
+// closeActiveForTest 真实故障注入：关闭 spool 当前 active 的底层文件——
+// 后续 Write/Flush 返回真实错误（file already closed），不 mock bufio。
+// 同包测试直达内部句柄。
+func closeActiveForTest(t *testing.T, sp *l4Spool) {
+	t.Helper()
+	sp.mu.Lock()
+	defer sp.mu.Unlock()
+	if sp.active == nil {
+		t.Fatal("active file missing before fault injection")
+	}
+	if err := sp.active.Close(); err != nil {
+		t.Fatalf("close active: %v", err)
+	}
+}
+
+// TestL4SpoolStickyErrorHonestLoss：真实故障注入（关闭底层文件）。批末 flush
+// 失败必须：(a) 错误携带丢失行数（上批滞留 + 本批行数，粘性错误下缓冲不可
+// 恢复）；(b) 恢复性——下一次 appendLines 在新 active 上成功且只含新行
+// （旧批确实已丢，但被如实计数，绝不静默）。
+func TestL4SpoolStickyErrorHonestLoss(t *testing.T) {
 	dir := t.TempDir()
 	sp := openL4Spool(dir, 1<<20, 1000)
 	line := []byte(`{"k":"v"}`)
+
+	// 基线批：正常落盘（批末 flush 成功，滞留=0）。
 	if n, err := sp.appendLines([][]byte{line, line}); err != nil || n != 2 {
-		t.Fatalf("appendLines = %d, %v; want 2, nil", n, err)
+		t.Fatalf("baseline appendLines = %d, %v; want 2, nil", n, err)
 	}
-	// 数据必须真实落盘（flush 成功）。
+	closeActiveForTest(t, sp)
+
+	// 本批 3 行全部交给 bufio（缓冲未满，不触碰文件），批末 flush 真实失败。
+	_, err := sp.appendLines([][]byte{line, line, line})
+	if err == nil {
+		t.Fatal("appendLines must fail after real file close")
+	}
+	var lossErr *l4SpoolLossError
+	if !errors.As(err, &lossErr) {
+		t.Fatalf("error %T (%v) must carry loss accounting", err, err)
+	}
+	// 丢失 = 上批滞留（0，已成功 flush）+ 本批 3 行。
+	if lossErr.Lost != 3 {
+		t.Fatalf("carried lost = %d, want 3 (whole batch handed to buffer, flush failed)", lossErr.Lost)
+	}
+
+	// 恢复性：错误后下一次 appendLines 成功（新 active），新文件只含新行。
+	if n, err := sp.appendLines([][]byte{[]byte(`{"k":"new"}`)}); err != nil || n != 1 {
+		t.Fatalf("recovery appendLines = %d, %v; want 1, nil", n, err)
+	}
 	data, err := os.ReadFile(mustActivePath(t, sp))
 	if err != nil {
-		t.Fatalf("read active: %v", err)
+		t.Fatalf("read new active: %v", err)
 	}
-	if got := bytes.Count(data, []byte("\n")); got != 2 {
-		t.Fatalf("落盘行数 = %d, want 2", got)
+	if got := strings.Count(string(data), "\n"); got != 1 || !strings.Contains(string(data), `"k":"new"`) {
+		t.Fatalf("new active content = %q, want only the new line (old batch honestly lost)", data)
+	}
+}
+
+// TestL4SpoolOpenActiveFailureRejectsBatch：首行即错形态——active 无法建立
+// （目录缺失）时整批在入口被拒：written=0、无任何行交给缓冲（pendingLines=0）。
+func TestL4SpoolOpenActiveFailureRejectsBatch(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "spool")
+	sp := openL4Spool(dir, 1<<20, 1000)
+	if err := os.RemoveAll(dir); err != nil {
+		t.Fatalf("remove dir: %v", err)
+	}
+	n, err := sp.appendLines([][]byte{[]byte(`{"k":"v"}`), []byte(`{"k":"v2"}`)})
+	if err == nil {
+		t.Fatal("appendLines must fail when active cannot be created")
+	}
+	if n != 0 {
+		t.Fatalf("written = %d, want 0 (nothing accepted)", n)
+	}
+	sp.mu.Lock()
+	pending := sp.pendingLines
+	sp.mu.Unlock()
+	if pending != 0 {
+		t.Fatalf("pendingLines = %d, want 0 (no line handed over)", pending)
+	}
+}
+
+// TestL4SpoolMidBatchFlushFailureCountsBuffered：批内缓冲滞留后写失败——
+// 16KiB 行填满 32KiB 缓冲，第二行逼出真实落盘失败。滞留行（已交缓冲）与
+// 本批未尝试行都计入错误携带的丢失数，随后缓冲被放弃。
+func TestL4SpoolMidBatchFlushFailureCountsBuffered(t *testing.T) {
+	dir := t.TempDir()
+	sp := openL4Spool(dir, 8<<20, 1000)
+	line := []byte(`{"k":"v"}`)
+	if n, err := sp.appendLines([][]byte{line}); err != nil || n != 1 {
+		t.Fatalf("baseline appendLines = %d, %v; want 1, nil", n, err)
+	}
+	closeActiveForTest(t, sp)
+
+	// 3×16KiB 行：第 1 行进缓冲（滞留），第 2 行触发缓冲落盘真实失败。
+	big := []byte(strings.Repeat("x", 16<<10))
+	n, err := sp.appendLines([][]byte{big, big, big})
+	if err == nil {
+		t.Fatal("appendLines must fail on real flush error")
+	}
+	var lossErr *l4SpoolLossError
+	if !errors.As(err, &lossErr) {
+		t.Fatalf("error %T (%v) must carry loss accounting", err, err)
+	}
+	if n != 1 {
+		t.Fatalf("written = %d, want 1 (only the buffered prefix line)", n)
+	}
+	// 丢失 = 滞留 1 行 + 本批未确认 2 行。
+	if lossErr.Lost != 3 {
+		t.Fatalf("carried lost = %d, want 3 (1 buffered + 2 unconfirmed)", lossErr.Lost)
+	}
+}
+
+// TestL4SpoolRotateFlushFailureHonestLoss：轮转阈值触发时 flush 真实失败
+// （单行阈值迫使批内首行写完即轮转）——滞留 + 本批未尝试行整批计入丢失，
+// active 被封存（无遗留），下一次写入在新 active 上恢复。
+func TestL4SpoolRotateFlushFailureHonestLoss(t *testing.T) {
+	dir := t.TempDir()
+	sp := openL4Spool(dir, 8<<20, 1000)
+	sp.mu.Lock()
+	sp.rotateBytes = 1 // 单行阈值：每行写完即触发轮转
+	sp.mu.Unlock()
+	line := []byte(`{"k":"v"}`)
+
+	// 基线：建立健康 active（首行写完即轮转一次，flush 成功落盘）。
+	if n, err := sp.appendLines([][]byte{line}); err != nil || n != 1 {
+		t.Fatalf("baseline appendLines = %d, %v; want 1, nil", n, err)
+	}
+	closeActiveForTest(t, sp)
+
+	// 本批 2 行：第 1 行交缓冲后触发轮转 → flush 真实失败。
+	_, err := sp.appendLines([][]byte{line, line})
+	if err == nil {
+		t.Fatal("appendLines must fail when rotate flush fails for real")
+	}
+	var lossErr *l4SpoolLossError
+	if !errors.As(err, &lossErr) {
+		t.Fatalf("error %T (%v) must carry loss accounting", err, err)
+	}
+	// 丢失 = 滞留 1 行（第 1 行已交缓冲）+ 本批未尝试 1 行。
+	if lossErr.Lost != 2 {
+		t.Fatalf("carried lost = %d, want 2 (1 buffered at rotate + 1 unattempted)", lossErr.Lost)
+	}
+
+	// 恢复性：下一次写入在新 active 上成功（轮转链重建）。
+	if n, err := sp.appendLines([][]byte{line}); err != nil || n != 1 {
+		t.Fatalf("recovery appendLines = %d, %v; want 1, nil", n, err)
+	}
+}
+
+// TestL4ShipperSpoolWriteFailureHonestCounters：shipper 层诚实核算——post
+// 失败 + spool 写真实失败（关闭 active 注入）→ 失败批一行都不算 spooled，
+// dropped/spool_errors 含整批与滞留。
+func TestL4ShipperSpoolWriteFailureHonestCounters(t *testing.T) {
+	socket, _ := startUnixIngestServer(t, http.StatusServiceUnavailable)
+	spoolDir := filepath.Join(t.TempDir(), "spool")
+	setSpoolDirForTest(t, spoolDir)
+	shipper := newL4Shipper(socket)
+	defer func() { _ = shipper.spool.close() }()
+	dropped := 0
+	shipper.onDrop = func(reason string, n int) { dropped += n }
+
+	line := []byte(`{"k":"v"}`)
+	// 基线批：spool 正常接收（spooled=1）。
+	shipper.spill([][]byte{line}, errors.New("ipc down"))
+	if _, _, spooled, spoolErrs := shipper.counters(); spooled != 1 || spoolErrs != 0 {
+		t.Fatalf("baseline spooled/spoolErrs = %d/%d, want 1/0", spooled, spoolErrs)
+	}
+
+	// 真实故障注入：关闭 spool active 底层文件。
+	closeActiveForTest(t, shipper.spool)
+
+	// 失败批：spool 写真实失败——整批计入丢弃，spooled 不增加。
+	shipper.spill([][]byte{line, line}, errors.New("ipc down"))
+	sent, failed, spooled, spoolErrs := shipper.counters()
+	if sent != 0 || failed != 0 {
+		t.Fatalf("sent/failed = %d/%d, want 0/0 (spill is post-failure path)", sent, failed)
+	}
+	if spooled != 1 {
+		t.Fatalf("spooled = %d, want 1 (failed batch never counts as spooled)", spooled)
+	}
+	if spoolErrs != 2 {
+		t.Fatalf("spoolErrs = %d, want 2 (whole failed batch + retention)", spoolErrs)
+	}
+	if dropped != 2 {
+		t.Fatalf("dropped = %d, want 2 (honest loss, no silent retry promise)", dropped)
 	}
 }
 

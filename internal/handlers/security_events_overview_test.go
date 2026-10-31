@@ -807,21 +807,36 @@ func TestLoadSecurityOverviewAggregates_cacheHitAndExpiry(t *testing.T) {
 		t.Fatalf("first aggregate=(count %d, err %v), want (1,nil)", overviewAggregateEventCount(first), err)
 	}
 
-	// When 同键再次读取，期间新增事件不应穿透 30s 缓存。
+	// When 同键再次读取，期间新增事件不应穿透缓存（TTL 内命中快照）。
 	insertOverviewAggregateEvent(t, db.MetricsDB, "2026-10-19 01:01:00")
 	cached, err := loadSecurityOverviewAggregates(db.MetricsDB, today, todayStart, tzModifier)
 	if err != nil || overviewAggregateEventCount(cached) != 1 {
 		t.Fatalf("cached aggregate=(count %d, err %v), want (1,nil)", overviewAggregateEventCount(cached), err)
 	}
 
-	// Then 缓存过期后同一键必须重算并看到新事件（直接调整测试缓存项的
-	// 过期时刻，避免 30s wall-clock sleep）。
+	// Then 缓存过期后同一键必须立即返回旧快照（SWR 零阻塞），并由后台刷新
+	// 收敛到新事件（直接调整测试缓存项的过期时刻，避免 5s wall-clock sleep）。
 	securityOverviewAggCache.ExpireMatching(func(key securityOverviewAggCacheKey) bool {
 		return key.metrics == db.MetricsDB
 	})
-	expired, err := loadSecurityOverviewAggregates(db.MetricsDB, today, todayStart, tzModifier)
-	if err != nil || overviewAggregateEventCount(expired) != 2 {
-		t.Fatalf("expired aggregate=(count %d, err %v), want (2,nil)", overviewAggregateEventCount(expired), err)
+	stale, err := loadSecurityOverviewAggregates(db.MetricsDB, today, todayStart, tzModifier)
+	if err != nil || overviewAggregateEventCount(stale) != 1 {
+		t.Fatalf("stale serve=(count %d, err %v), want (1,nil)（过期快照零阻塞返回）", overviewAggregateEventCount(stale), err)
+	}
+	swrKey := securityOverviewAggCacheKey{metrics: db.MetricsDB, todayStart: todayStart, tzName: tzModifier}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if entry, ok := securityOverviewAggCache.Get(swrKey, time.Now()); ok && overviewAggregateEventCount(entry.data) == 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("5s 内 SWR 后台刷新未收敛（应看到新增事件）")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	fresh, err := loadSecurityOverviewAggregates(db.MetricsDB, today, todayStart, tzModifier)
+	if err != nil || overviewAggregateEventCount(fresh) != 2 {
+		t.Fatalf("fresh serve=(count %d, err %v), want (2,nil)", overviewAggregateEventCount(fresh), err)
 	}
 }
 
@@ -885,8 +900,10 @@ func TestLoadSecurityOverviewAggregates_doesNotCacheFailures(t *testing.T) {
 		t.Fatal("aggregate with missing events table must fail")
 	}
 
-	// When 故障消除后用完全相同的键重试。
+	// When 故障消除后用完全相同的键重试（表形状按真实 schema 含 id 主键——
+	// 增量水位元数据依赖它）。
 	if _, err := db.MetricsDB.Exec(`CREATE TABLE security_events (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		event_time DATETIME, action TEXT, client_ip TEXT, rule_triggered TEXT, rule_msg TEXT, event_type TEXT DEFAULT ''
 	)`); err != nil {
 		t.Fatalf("recreate events table: %v", err)
@@ -1605,7 +1622,7 @@ func TestListSecurityEvents_oversizedHeadersKeepJSONAndDiscloseDropped(t *testin
 
 // 命中缓存必须返回深拷贝：四个切片不得与缓存条目共享底层数组（同型事故：
 // 健康缓存「共享同一克隆」）。此前 data := entry.data 直接返回缓存切片，
-// 任何消费者就地 sort/截断/改元素都会污染其他请求的 30s 缓存。
+// 任何消费者就地 sort/截断/改元素都会污染其他请求的缓存快照。
 func TestLoadSecurityOverviewAggregates_cacheHitReturnsDeepCopy(t *testing.T) {
 	setupSecurityPolicyTestDB(t)
 	resetSecurityOverviewAggCacheForTest()

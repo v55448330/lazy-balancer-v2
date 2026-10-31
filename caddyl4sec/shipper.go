@@ -26,8 +26,9 @@ import (
 // （条数/字节/周期三阈值先到者触发）POST 到 unix socket 的
 // POST /security-events/ingest，**只有 204 才算成功**（204=本批 DB commit
 // 完成，跨进程契约）；失败整批原样写 spool（active/sealed 两态）供面板补采；
-// 400/413 是永久拒绝（毒批重试无意义）→ 按真丢计数；spool 满/写失败 → 余下
-// 行无文件兜底（L4 事件线没有审计文件层），按 spool_errors + dropped 计数。
+// 400/413 是永久拒绝（毒批重试无意义）→ 按真丢计数；spool 满/写失败 →
+// 未确认持久化的行（含缓冲滞留）无文件兜底（L4 事件线没有审计文件层），
+// 按 spool_errors + dropped 计数——bufio 错误粘滞，失败批不做重试承诺。
 //
 // 与 HTTP 侧的两处有意差异：
 //   - spool 目录独立为 /app/data/security-events-spool-l4（任务契约），
@@ -153,6 +154,11 @@ func l4IOLogf(format string, args ...any) {
 
 // l4Spool 是 IPC 失败行的本地暂存区（面板补采源）。预算按目录现存文件核算：
 // 字节覆盖跨代残留（上一代遗留的补采队列同样受约束），条目记录本代已写行。
+//
+// pendingLines 是上次成功 flush 以来交给 bufio 的行数（成功 flush 清零；reset
+// 放弃缓冲时清零）。bufio 错误粘滞：Flush 失败后缓冲内容已被丢弃且后续写入
+// 只透传同一错误——滞留行不可恢复，失败路径必须把它们计入 l4SpoolLossError
+// 显式交给调用方计数，杜绝「缓冲滞留即静默丢失」。
 type l4Spool struct {
 	mu            sync.Mutex
 	dir           string
@@ -163,6 +169,7 @@ type l4Spool struct {
 	active        *os.File
 	activePath    string
 	bw            *bufio.Writer
+	pendingLines  int
 	activeBytes   int64
 	totalBytes    int64
 	totalEntries  int64
@@ -170,6 +177,22 @@ type l4Spool struct {
 	lastWrite     time.Time
 	closed        bool
 }
+
+// l4SpoolLossError 携带一次失败 appendLines 丢弃的行数：滞留缓冲行 + 本批未
+// 确认持久化的行。粘性错误下这些行不可恢复——调用方据此转真丢计数。
+type l4SpoolLossError struct {
+	Lost int
+	Err  error
+}
+
+func (e *l4SpoolLossError) Error() string {
+	if e.Err != nil {
+		return fmt.Sprintf("l4sec: security-events spool lost %d line(s): %v", e.Lost, e.Err)
+	}
+	return fmt.Sprintf("l4sec: security-events spool lost %d line(s)", e.Lost)
+}
+
+func (e *l4SpoolLossError) Unwrap() error { return e.Err }
 
 // openL4Spool 打开 spool 目录（0700，与面板侧 EnsureSecurityEventsSpoolDir
 // 同权限口径）并核算跨代预算。
@@ -248,8 +271,18 @@ func (s *l4Spool) openActiveLocked() error {
 	return fmt.Errorf("l4sec: security-events spool exhausted active names in %s", s.dir)
 }
 
-// appendLines 追加一批行（每行自带换行），返回成功写入行数与停止原因
-// （非 nil = 余下行由调用方转真丢计数）。单行顺序恒「内容+换行」。
+// lossErrLocked 构造携带丢失行数的错误：滞留缓冲行（上次成功 flush 以来交给
+// bufio 的行）+ 本批未确认持久化的行（total-written）。必须在 reset 前调用
+// （reset 清零 pendingLines）。
+func (s *l4Spool) lossErrLocked(total, written int, cause error) *l4SpoolLossError {
+	return &l4SpoolLossError{Lost: s.pendingLines + (total - written), Err: cause}
+}
+
+// appendLines 追加一批行（每行自带换行）。成功（err==nil）= 整批已持久化落盘
+// 且滞留清零。任何失败路径都放弃缓冲并返回 l4SpoolLossError（粘性错误下缓冲
+// 不可恢复）：Lost = 滞留缓冲行 + 本批未确认持久化的行。错误时 written 仅
+// 表示已交给缓冲的行数，持久化结论以错误携带的 Lost 为准。单行顺序恒
+// 「内容+换行」。
 func (s *l4Spool) appendLines(lines [][]byte) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -269,40 +302,56 @@ func (s *l4Spool) appendLines(lines [][]byte) (int, error) {
 	for _, line := range lines {
 		size := int64(len(line)) + 1
 		if s.totalBytes+size > s.maxBytes || s.totalEntries+1 > s.maxEntries {
-			_ = s.flushLocked()
+			// 预算耗尽：先尽力把已交缓冲行落盘；落盘失败则滞留+本批整批
+			// 计丢并放弃缓冲（粘性错误不留给下一批）。
+			if err := s.flushLocked(); err != nil {
+				lossErr := s.lossErrLocked(len(lines), written, err)
+				s.resetWriterLocked()
+				return written, lossErr
+			}
 			return written, errL4SpoolFull
 		}
 		if _, err := s.bw.Write(line); err != nil {
-			// bufio 写失败后状态不可信（可能残留半行）：重建句柄防半行落盘。
+			// bufio 写失败后状态不可信（可能残留半行）且错误粘滞：放弃缓冲，
+			// 丢失行数随错误显式携带。
+			lossErr := s.lossErrLocked(len(lines), written, err)
 			s.resetWriterLocked()
-			return written, err
+			return written, lossErr
 		}
 		if err := s.bw.WriteByte('\n'); err != nil {
+			lossErr := s.lossErrLocked(len(lines), written, err)
 			s.resetWriterLocked()
-			return written, err
+			return written, lossErr
 		}
 		written++
 		s.totalBytes += size
 		s.totalEntries++
 		s.entriesByFile[s.activePath]++
 		s.activeBytes += size
+		s.pendingLines++
 		s.lastWrite = time.Now()
 		if s.activeBytes >= s.rotateBytes {
+			pendingBeforeRotate := s.pendingLines
 			if err := s.rotateLocked(); err != nil {
-				return written, err
+				// rotate 内部对 flush 失败形态已 reset（pendingLines 归零），
+				// 丢失数按进入 rotate 前的滞留快照核算：flush 失败形态精确，
+				// 成功 flush 后封存/重开失败的形态按滞留+未尝试保守计丢
+				// （只多不少，不漏计）。
+				return written, &l4SpoolLossError{
+					Lost: pendingBeforeRotate + (len(lines) - written),
+					Err:  err,
+				}
 			}
 		}
 	}
-	return written, retryFlushLocked(s)
-}
-
-// retryFlushLocked 批末刷盘瞬时失败一次重试（I/O 抖动不得让已缓冲整批走
-// 错误路径）；持续失败如实上抛（计数与告警由调用方口径处理）。
-func retryFlushLocked(s *l4Spool) error {
 	if err := s.flushLocked(); err != nil {
-		return s.flushLocked()
+		// 批末 flush 失败：整批（含已交缓冲行）随缓冲放弃而丢失——bufio
+		// 粘性错误使重试只会透传同一错误，必须如实计丢并放弃缓冲。
+		lossErr := s.lossErrLocked(len(lines), written, err)
+		s.resetWriterLocked()
+		return written, lossErr
 	}
-	return nil
+	return written, nil
 }
 
 var errL4SpoolFull = errors.New("l4sec: security-events spool full")
@@ -316,12 +365,14 @@ func (s *l4Spool) noteActiveRenameLocked(oldPath, newPath string) {
 
 func (s *l4Spool) resetWriterLocked() {
 	if s.bw != nil {
-		// 错误态下缓冲不可信，仍尽力补一次刷盘：能落多少是多少（半行由
-		// 补采端 jsonl 解析跳过）。落盘后必须封存——遗留的 active 文件在
-		// 写侧存活期间永不被补采且持续占用预算。
-		_ = s.bw.Flush()
+		// 错误态下缓冲不可信且 bufio 错误粘滞：Flush 只透传同一错误、不落
+		// 盘（缓冲内容已在失败 flush 时被 bufio 丢弃），补刷必然无效——
+		// 丢失行数已由 appendLines 的 l4SpoolLossError 显式携带，这里直接
+		// 放弃缓冲。封存让已落盘行进入补采可达面：遗留的 active 文件在写
+		// 侧存活期间永不被补采且持续占用预算。
 		s.bw = nil
 	}
+	s.pendingLines = 0
 	if s.active != nil {
 		_ = s.active.Close()
 		s.active = nil
@@ -338,7 +389,11 @@ func (s *l4Spool) flushLocked() error {
 	if s.bw == nil {
 		return nil
 	}
-	return s.bw.Flush()
+	err := s.bw.Flush()
+	if err == nil {
+		s.pendingLines = 0
+	}
+	return err
 }
 
 func (s *l4Spool) sealedPathLocked() (string, error) {
@@ -486,8 +541,11 @@ type l4Shipper struct {
 	// flushMu 串行化网络投递（mu 只保护批次缓冲，POST 期间不拖住 submit）。
 	flushMu sync.Mutex
 
-	sent      atomic.Uint64
-	failed    atomic.Uint64
+	sent   atomic.Uint64
+	failed atomic.Uint64
+	// spooled 只累计 appendLines 成功（err==nil）的行；失败批一行都不算
+	// （诚实核算：未确认持久化 ≠ 已兜底）。spoolErrs 累计 spool 写失败丢弃
+	// 的行数（滞留缓冲 + 失败批未确认持久化行）。
 	spooled   atomic.Uint64
 	spoolErrs atomic.Uint64
 
@@ -594,45 +652,38 @@ func (s *l4Shipper) noteDrop(reason string, n int) {
 	}
 }
 
-// spill 把整批失败行写 spool；spool 不可用/满/写错的余下行无文件兜底
-// （L4 无审计文件层）→ spool_errors + dropped 计数（真丢必须可观测）。
+// spill 把整批失败行写 spool。诚实核算：appendLines 报错即失败批一行都不算
+// spooled，丢弃 = 错误携带的丢失数（滞留缓冲行 + 本批未确认持久化的行；错误
+// 未携带时按整批保守计）。spool 不可用/满/写错的行无文件兜底（L4 无审计文件
+// 层）→ spool_errors + dropped 计数（真丢必须可观测），无重试承诺——粘性
+// 错误下重试只透传同一错误。
 func (s *l4Shipper) spill(batch [][]byte, cause error) {
-	remaining := batch
-	if s.spool != nil {
-		written, err := s.spool.appendLines(batch)
-		if written > 0 {
-			s.spooled.Add(uint64(written))
-		}
-		remaining = batch[written:]
-		if err != nil {
-			if written > 0 && len(remaining) == 0 {
-				// 整批已写入 spool 缓冲但批末刷盘未确认：数据滞留缓冲（下次
-				// appendLines/close 落盘），不是丢弃——独立口径告警，不冒用
-				// dropped/spool_errors 语义（观测失真）。
-				if _, logNow := s.spoolLog.report(time.Now()); logNow {
-					l4IOLogf("l4sec: security-events spool flush unconfirmed (%d line(s) buffered in spool, will retry on next write): ipc=%v spool=%v", written, cause, err)
-				}
-				return
-			}
-			s.reportSpoolError(cause, err, len(remaining))
-			s.spoolErrs.Add(uint64(len(remaining)))
-			s.noteDrop("spool unavailable", len(remaining))
-			return
-		}
-		if len(remaining) == 0 {
-			return
-		}
-	} else {
-		s.reportSpoolError(cause, errors.New("spool unavailable"), len(remaining))
+	if s.spool == nil {
+		s.reportSpoolError(cause, errors.New("spool unavailable"), len(batch))
+		s.spoolErrs.Add(uint64(len(batch)))
+		s.noteDrop("spool unavailable", len(batch))
+		return
 	}
-	s.spoolErrs.Add(uint64(len(remaining)))
-	s.noteDrop("spool unavailable", len(remaining))
+	written, err := s.spool.appendLines(batch)
+	if err == nil {
+		s.spooled.Add(uint64(written))
+		return
+	}
+	var lossErr *l4SpoolLossError
+	lost := len(batch)
+	if errors.As(err, &lossErr) {
+		lost = lossErr.Lost
+	}
+	s.reportSpoolError(cause, err, lost)
+	s.spoolErrs.Add(uint64(lost))
+	s.noteDrop("spool unavailable", lost)
 }
 
-// reportSpoolError spool 写失败节流告警（首次立即，其后每分钟一条）。
+// reportSpoolError spool 写失败节流告警（首次立即，其后每分钟一条）。文案
+// 如实：written lines lost, no file fallback。
 func (s *l4Shipper) reportSpoolError(cause, spoolErr error, lines int) {
 	if _, logNow := s.spoolLog.report(time.Now()); logNow {
-		l4IOLogf("l4sec: security-events spool write failed (%d line(s) dropped, no file fallback): ipc=%v spool=%v", lines, cause, spoolErr)
+		l4IOLogf("l4sec: security-events spool write failed (%d written lines lost, no file fallback): ipc=%v spool=%v", lines, cause, spoolErr)
 	}
 }
 

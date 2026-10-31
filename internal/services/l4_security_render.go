@@ -19,6 +19,8 @@ package services
 
 import (
 	"encoding/json"
+	"sync"
+	"time"
 
 	"lazy-balancer-v2/internal/models"
 )
@@ -133,7 +135,8 @@ func buildTCPSecurityRoutes(rule SingleRuleConfig, proxyHandler map[string]inter
 	// ④ allow 交集外拒绝：allow 模式 ACL 交集（复用 HTTP 的交集缓存单源，
 	// 按「绑定 allow 策略集合签名」在同轮内复用）。否定算子（not 包裹）：
 	// 名单外连接即拒绝；交集为空（互不相交）投影空文件=恒命中=全拒，与
-	// HTTP id:7 恒拒形态等价。策略名单为空不参与（名单非空才计入 allowLists）。
+	// HTTP id:7 恒拒形态等价。策略名单为空照常入列（与 mergedAllowACLPolicies
+	// 同语义：空名单参与交集 → 空交集恒拒，不因内容门剔除而静默放行）。
 	allowLists := mergedAllowACLPolicies(policies)
 	if len(allowLists) > 0 {
 		signature := allowPolicySetSignature(policies)
@@ -152,7 +155,15 @@ func buildTCPSecurityRoutes(rule SingleRuleConfig, proxyHandler map[string]inter
 	// 无 not 包裹）。查库失败/私网/IPv6 由模块 fail-open 放行（用户裁定；
 	// 私网豁免在模块层承担，与 HTTP 链首私网豁免同语义）。
 	for _, policy := range policies {
+		// 发射门与 HTTP 链 PolicyHasGeoIP 同一口径（mode≠off 且名单非空）。
+		// mode≠off 但名单空 = 带外脏行形态（写侧启用校验与名单校验双 400 在
+		// 前，正常写路径不可达）：限流留痕后跳过——allow 模式该形态跳过=静默
+		// 放行，与 HTTP 空名单恒拒口径的缺口至少可见。off 为正常停用态（名单
+		// 保留不清空）不告警；畸形 JSON 已由 geoipCountries 内部节流 WARN。
 		if policy == nil || !PolicyHasGeoIP(policy) {
+			if policy != nil && policy.GeoIPMode != "off" && len(geoipCountries(policy)) == 0 {
+				warnL4GeoipEmptyListThrottled(policy.ID, cid, time.Now())
+			}
 			continue
 		}
 		// policy_id 段界软跳过（与 HTTP 预检链同界同口径，段界由
@@ -164,13 +175,31 @@ func buildTCPSecurityRoutes(rule SingleRuleConfig, proxyHandler map[string]inter
 			Logf("warn", "策略 %d 的 GeoIP 预检链 id 越出普通 GeoIP 段 [%d,%d)，已跳过发射（TCP 规则 %s 的 L4 安全路由）", policy.ID, geoipPrecheckRuleBase+1, geoipCrawlerRuleBase, cid)
 			continue
 		}
+		// 名单由发射门同一纯函数派生，过门即非空（空名单脏行已在门口留痕跳过）。
 		entries := geoipCountries(policy)
-		if len(entries) == 0 {
-			continue
-		}
 		routes = append(routes, l4SecCloseRoute(rule, []interface{}{geoipMatcherSet(entries, policy.GeoIPMode == "allow")}, cid, "geoip", policy.ID))
 	}
 	return routes, nil
+}
+
+// l4GeoipEmptyListWarn 是 GeoIP 开启（mode≠off）但名单为空的带外脏行告警的
+// 限频状态：脏行存续期逐规则批量渲染会反复命中同一策略——按策略 ID 限流，
+// 同键窗口内只告警一次，插入时顺带回收过期键（与 nodeHealthWarn 同族单源）。
+var (
+	l4GeoipEmptyListWarnMu     sync.Mutex
+	l4GeoipEmptyListWarnSeen   = map[int]time.Time{}
+	l4GeoipEmptyListWarnWindow = 60 * time.Second
+)
+
+// warnL4GeoipEmptyListThrottled 按 policyID 限频输出空名单脏行跳过告警。
+func warnL4GeoipEmptyListThrottled(policyID int, cid string, now time.Time) {
+	l4GeoipEmptyListWarnMu.Lock()
+	allowed := throttleWarnAllowed(l4GeoipEmptyListWarnSeen, policyID, now, l4GeoipEmptyListWarnWindow, l4GeoipEmptyListWarnWindow)
+	l4GeoipEmptyListWarnMu.Unlock()
+	if !allowed {
+		return
+	}
+	Logf("warn", "策略 %d 开启地域拦截但 geoip_countries 为空（带外脏行形态，写侧启用与名单校验双 400 在前，正常写路径不可达），该策略 GeoIP 路由跳过发射（allow 模式跳过=放行，与 HTTP 空名单恒拒口径不一致——留痕不改变行为；TCP 规则 %s 的 L4 安全路由）", policyID, cid)
 }
 
 // buildTCPSecurityRoutesWithDegradation 是 buildTCPSecurityRoutes 的降级门
@@ -240,9 +269,6 @@ func geoipMatcherSet(countries []string, allowMode bool) map[string]interface{} 
 	}
 }
 
-// notMatcherSet 是否定匹配集包装（allow 名单交集外断连——IP 文件族仍用
-// not：lb_ipfile 的 Match 无不可判定形态，not 语义安全）。
-
 // l4PassthroughProxyHandler 是信任路由的 proxy 副本（浅拷贝去 health_checks）：
 // Caddy 按出现次数实例化 proxy——主动/被动健康检查只由兜底 proxy 实例承担，
 // 透传/检测实例各挂一份会把上游探测频次按实例数放大（健康/失联日志同倍
@@ -308,12 +334,19 @@ func l4SecEventHandler(cid, reason string, policyID int) map[string]interface{} 
 }
 
 // l4SecSampleHandler 是兜底路由的采样计数 handler（计数后透传，不阻断）。
+// xdb_path 与 geoipMatcherSet 同口径：仅在派生值≠插件默认时发射（默认形态
+// 渲染字节不变）——allow_sample 的归属采样读模块侧 sampleXdbPath 的同一默认
+// 兜底，自定义 data_dir 部署不发射会让采样读 /app 默认库、与面板 GeoIP 分叉。
 func l4SecSampleHandler(cid string) map[string]interface{} {
-	return map[string]interface{}{
+	h := map[string]interface{}{
 		"handler":       l4SecHandlerID,
 		"rule_caddy_id": cid,
 		"mode":          l4SecSampleModeValue,
 	}
+	if ip2regionLivePath != defaultIP2RegionLivePath {
+		h["xdb_path"] = ip2regionLivePath
+	}
+	return h
 }
 
 // mergedDenyACLPolicies 汇总 deny 模式 ACL 的并集与发射面 flag（与 HTTP

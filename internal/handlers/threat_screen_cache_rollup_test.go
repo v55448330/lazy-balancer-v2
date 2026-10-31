@@ -227,7 +227,7 @@ func TestProcessCaches_useTTLCacheSingleSource(t *testing.T) {
 		{"threat_screen_cache.go", "newTTLCache[topTargetsCacheKey, []threatTopTarget](0)", "0"},
 		{"threat_screen_cache.go", "newTTLCache[threatRollupDimAggregateKey, threatRollupDimAggregate](0)", "0"},
 		{"security_overview.go", "newTTLCache[ruleStageStatsCacheKey, ruleStageStatsSnapshot](256)", "256"},
-		{"security_overview.go", "newTTLCache[securityOverviewAggCacheKey, securityOverviewAggregates](0)", "0"},
+		{"security_overview.go", "newTTLCache[securityOverviewAggCacheKey, securityOverviewAggEntry](0)", "0"},
 	}
 	for _, instance := range instances {
 		source, err := os.ReadFile(instance.file)

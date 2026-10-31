@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"lazy-balancer-v2/internal/models"
 )
@@ -743,5 +744,118 @@ func TestBuildTCPServer_tcpTrustRoutesProxyNoHealthChecks(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("兜底路由缺 proxy handler")
+	}
+}
+
+// resetL4GeoipEmptyListWarnForTest 清空空名单脏行告警的限频状态（同策略 ID
+// 跨用例串号会把第二次渲染的留痕误判为节流命中）。
+func resetL4GeoipEmptyListWarnForTest() {
+	l4GeoipEmptyListWarnMu.Lock()
+	l4GeoipEmptyListWarnSeen = map[int]time.Time{}
+	l4GeoipEmptyListWarnMu.Unlock()
+}
+
+// 兜底采样 handler 的 xdb_path 与 geoipMatcherSet 同口径：派生值≠插件默认时
+// 显式发射——allow_sample 的归属采样读模块侧 sampleXdbPath，渲染侧不发射时
+// 自定义 data_dir 部署会落容器默认 /app/data/ip2region.xdb，采样归属与面板
+// GeoIP 静默分叉。默认路径形态字节不变（对照断言钉住）。
+func TestL4SecSampleHandler_emitsDerivedXdbPath(t *testing.T) {
+	stubSecurityLibsAvailable(t)
+	cid := "lb_l4sec_xdb"
+	if ip2regionLivePath == defaultIP2RegionLivePath {
+		t.Fatalf("setup: 桩路径 %q 不得等于插件默认", ip2regionLivePath)
+	}
+	// 纯函数形态：非默认路径显式携带派生 xdb_path。
+	h := l4SecSampleHandler(cid)
+	if got := h["xdb_path"]; got != ip2regionLivePath {
+		t.Fatalf("xdb_path=%v, want %s（未发射则自定义 data_dir 部署采样读错库）", got, ip2regionLivePath)
+	}
+	// 兜底路由装配处同口径（不只纯函数，渲染面一致）。
+	oldDir := IPListDataDir
+	IPListDataDir = t.TempDir()
+	t.Cleanup(func() { IPListDataDir = oldDir })
+	ResetIPListProjectionStateForTest()
+	t.Cleanup(ResetIPListProjectionStateForTest)
+	server, err := buildTCPServer(l4SecTestRule(cid), &tcpSecurityRenderInput{policies: l4SecAllFeaturePolicies()})
+	if err != nil {
+		t.Fatalf("buildTCPServer: %v", err)
+	}
+	rawRoutes, ok := server["routes"].([]interface{})
+	if !ok {
+		t.Fatalf("routes missing: %#v", server)
+	}
+	fbHandlers := l4SecRouteHandlers(t, rawRoutes[len(rawRoutes)-1])
+	if len(fbHandlers) < 1 || fbHandlers[0]["mode"] != "allow_sample" {
+		t.Fatalf("兜底首 handler=%#v, want allow_sample 采样", fbHandlers)
+	}
+	if got := fbHandlers[0]["xdb_path"]; got != ip2regionLivePath {
+		t.Fatalf("兜底采样 xdb_path=%v, want %s", got, ip2regionLivePath)
+	}
+}
+
+// 对照：默认路径（=插件 Provision 兜底默认）必须省略 xdb_path——渲染字节
+// 稳定裁定（loadConfig 同字节短路不变量依赖之）。
+func TestL4SecSampleHandler_defaultPathOmitted(t *testing.T) {
+	old := ip2regionLivePath
+	ip2regionLivePath = defaultIP2RegionLivePath
+	t.Cleanup(func() { ip2regionLivePath = old })
+	h := l4SecSampleHandler("lb_l4sec_xdb")
+	if _, ok := h["xdb_path"]; ok {
+		t.Fatalf("默认形态必须省略 xdb_path（字节稳定裁定），got %#v", h)
+	}
+	if h["handler"] != "lb_l4_sec" || h["mode"] != "allow_sample" || h["rule_caddy_id"] != "lb_l4sec_xdb" {
+		t.Fatalf("默认三键形态漂移: %#v", h)
+	}
+}
+
+// GeoIP 开启（mode≠off）但名单为空 = 带外脏行（写侧启用与名单校验双 400
+// 在前，正常写路径不可达）：渲染跳过该策略 GeoIP 路由（allow 模式跳过=静默
+// 放行），必须限流留痕而非静默；同策略重复渲染窗口内只告警一次；off 为正常
+// 停用态（名单保留不清空），不告警。
+func TestBuildTCPServer_tcpGeoipEmptyList_warnsThrottled(t *testing.T) {
+	stubSecurityLibsAvailable(t)
+	oldDir := IPListDataDir
+	IPListDataDir = t.TempDir()
+	t.Cleanup(func() { IPListDataDir = oldDir })
+	ResetIPListProjectionStateForTest()
+	t.Cleanup(ResetIPListProjectionStateForTest)
+	resetL4GeoipEmptyListWarnForTest()
+	t.Cleanup(resetL4GeoipEmptyListWarnForTest)
+
+	dirty := &models.SecurityPolicy{ID: 21, Name: "l4-geoip-empty", PolicyType: "stage1", GeoIPMode: "allow", GeoIPCountries: []byte(`[]`)}
+	rule := l4SecTestRule("lb_l4sec_geoip_empty")
+
+	buf := captureLogf(t)
+	server, err := buildTCPServer(rule, &tcpSecurityRenderInput{policies: []*models.SecurityPolicy{dirty}})
+	if err != nil {
+		t.Fatalf("buildTCPServer: %v", err)
+	}
+	// 脏行跳过发射：geoip 路由缺席，只有兜底。
+	rawRoutes := server["routes"].([]interface{})
+	if len(rawRoutes) != 1 {
+		t.Fatalf("routes=%d, want 1（空名单 GeoIP 跳过发射）: %s", len(rawRoutes), dumpJSON(t, server))
+	}
+	if n := strings.Count(buf.String(), "geoip_countries 为空"); n != 1 {
+		t.Fatalf("空名单脏行留痕=%d, want 1: %s", n, buf.String())
+	}
+
+	// 同策略第二次渲染：窗口内限流，不再刷屏。
+	buf.Reset()
+	if _, err := buildTCPServer(rule, &tcpSecurityRenderInput{policies: []*models.SecurityPolicy{dirty}}); err != nil {
+		t.Fatalf("second buildTCPServer: %v", err)
+	}
+	if n := strings.Count(buf.String(), "geoip_countries 为空"); n != 0 {
+		t.Fatalf("同策略窗口内重复留痕=%d, want 0（限流）: %s", n, buf.String())
+	}
+
+	// 对照：mode=off（正常停用态，名单保留不清空）不得告警。
+	resetL4GeoipEmptyListWarnForTest()
+	off := &models.SecurityPolicy{ID: 22, Name: "l4-geoip-off", PolicyType: "stage1", GeoIPMode: "off", GeoIPCountries: []byte(`["北京市"]`)}
+	buf.Reset()
+	if _, err := buildTCPServer(rule, &tcpSecurityRenderInput{policies: []*models.SecurityPolicy{off}}); err != nil {
+		t.Fatalf("off buildTCPServer: %v", err)
+	}
+	if strings.Contains(buf.String(), "geoip_countries 为空") {
+		t.Fatalf("mode=off 正常停用态不得告警: %s", buf.String())
 	}
 }

@@ -19,7 +19,7 @@
           <span>国家命中（对数）</span>
           <span class="legend-ramp-stack">
             <i class="legend-ramp" :style="{ background: heatRamp }"></i>
-            <span class="legend-ticks"><i>1</i><i>100</i><i>10k+</i></span>
+            <span class="legend-ticks"><i v-for="tick in heatLegend" :key="tick.pos">{{ tick.label }}</i></span>
           </span>
         </div>
       </div>
@@ -319,7 +319,7 @@ import { anomalySeverity, overlayDetectionGrade, zeroScoreSeverity, type Anomaly
 import { displayThreatScreenMode } from '@/utils/configValues'
 import { flowTimestamp, normalizeTrafficSampleN, reconstructObservedRate, stepAdaptiveSample, nextFlowCursor, planFlowEvents, freshFlowEvents } from '@/utils/threatFlowRules'
 import { nextRadioValue, rovingTabindex } from '@/utils/rovingRadio'
-import { heatRampGradientCss } from '@/utils/threatShared'
+import { heatLegendTicks, heatRampGradientCss, maxHeatCount } from '@/utils/threatShared'
 import type { ThreatScene, ThreatSceneOptions } from '@/utils/threatScene'
 
 // 威胁大屏（v2.3.8 Threat Wall 版式）：三栏 HUD 网格（左事件流/中引擎舞台/
@@ -496,8 +496,15 @@ const countryCount = computed(() => Object.keys(stats.value?.countries ?? {}).le
 const formatFeedTime = (value: string): string => formatDate(value).slice(11) || value
 
 // 地图/地球热力渐变单源（threatShared.heatRampGradientCss）：图例不手写渐变，
-// 与两引擎染色同源防漂移；等距刻度 1/100/10k 标注对数刻度语义。
+// 与两引擎染色同源防漂移。
 const heatRamp = heatRampGradientCss()
+
+// 图例刻度单源（threatShared.heatLegendTicks）：三档值按同一对数标尺
+// （heatIntensity/maxHeatCount）随国家命中 max 自适应，响应式跟随轮询数据——
+// 空数据集回退历史静态三档。
+const heatLegend = computed(() =>
+  heatLegendTicks(maxHeatCount(new Map(Object.entries(stats.value?.countries ?? {})))),
+)
 
 const maxCountryCount = computed(() => topCountries.value.reduce((m, item) => Math.max(m, item.value), 0))
 const countryBarWidth = (count: number): string => `${maxCountryCount.value > 0 ? Math.max(5, (count / maxCountryCount.value) * 100) : 0}%`
@@ -1503,7 +1510,8 @@ onBeforeUnmount(() => {
 .hud-tr { position: absolute; top: 14px; right: 16px; z-index: 2; pointer-events: none; display: grid; gap: 7px; justify-items: end; font-size: 11px; color: #8ea7d6; }
 .hud-tr .row { display: flex; align-items: center; gap: 8px; }
 /* 国家命中热力图例：渐变背景由 threatShared.heatRampGradientCss 单源注入
-   （与两引擎染色同源）；刻度 1/100/10k 等距排布标注对数刻度（每格=×100）。 */
+   （与两引擎染色同源）；刻度由 heatLegendTicks 随数据集 max 动态生成
+   （同一对数标尺，space-between 三档等距排布）。 */
 .legend-ramp-stack { display: inline-flex; flex-direction: column; gap: 2px; }
 .legend-ramp { width: 72px; height: 4px; box-shadow: 0 0 10px rgba(226, 84, 84, 0.4); }
 .legend-ticks { display: flex; justify-content: space-between; font: 9px/1 mono, monospace; color: #8ea7d6; }
