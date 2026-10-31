@@ -12,8 +12,8 @@
     <el-form :model="form" label-width="120px" class="settings-form" :disabled="readOnly">
       <!-- 原生表单行（2026-10-11 用户裁定：对齐统一走 el-form-item，弃自管标签行；
            Firefox label-for 控制台告警为 EP 上游已知形态，非用户可见） -->
-      <el-form-item label="节点模式">
-        <el-radio-group v-model="selectedMode" :disabled="loading || readOnly || !status" aria-label="节点模式" @change="handleModeChange">
+      <el-form-item label="节点模式" for="radio---6">
+        <el-radio-group v-model="selectedMode" :disabled="loading || readOnly || !status" aria-label="节点模式" @change="handleModeChange" id="radio---6">
           <el-radio value="master">主节点</el-radio>
           <el-radio value="slave">从节点</el-radio>
         </el-radio-group>

@@ -64,8 +64,8 @@
             <span class="form-tip-inline">纬度 {{ (settings.server_map_lat ?? 0).toFixed(4) }} · 经度 {{ (settings.server_map_lon ?? 0).toFixed(4) }}</span>
             <div class="form-tip-line">威胁大屏地图本站信标坐标；选择中国省份或海外国家后自动换算经纬度。未选择表示未设置，按地图视觉中心显示。</div>
           </el-form-item>
-          <el-form-item label="大屏视觉模式">
-            <el-radio-group v-model="threatScreenMode" :disabled="formFrozen">
+          <el-form-item label="大屏视觉模式" for="radio---3">
+            <el-radio-group v-model="threatScreenMode" :disabled="formFrozen" id="radio---3">
               <el-radio value="map">360° 地图 · 雷达扫掠</el-radio>
               <el-radio value="globe">3D 地球 · 垂直扫描</el-radio>
             </el-radio-group>
@@ -194,8 +194,8 @@
           subtitle="管理面板（:8000）强制 HTTPS 使用的证书，保存后服务重启生效" />
       </template>
       <el-form label-width="110px">
-        <el-form-item label="证书来源">
-          <el-radio-group v-model="adminTlsForm.mode" aria-label="证书来源">
+        <el-form-item label="证书来源" for="radio---4">
+          <el-radio-group v-model="adminTlsForm.mode" aria-label="证书来源" id="radio---4">
             <el-radio value="selfsigned">本地自签名证书</el-radio>
             <el-radio value="upload">上传证书</el-radio>
           </el-radio-group>
@@ -375,8 +375,8 @@
           <el-switch v-model="autoBackupForm.enabled" />
           <span class="form-tip-inline">调度器仅主节点运行；主从切换后自动开始，无需重启进程</span>
         </el-form-item>
-        <el-form-item label="频率">
-          <el-radio-group v-model="autoBackupForm.frequency" aria-label="频率">
+        <el-form-item label="频率" for="radio---5">
+          <el-radio-group v-model="autoBackupForm.frequency" aria-label="频率" id="radio---5">
             <el-radio value="daily">日</el-radio>
             <el-radio value="weekly">周</el-radio>
             <el-radio value="monthly">月</el-radio>

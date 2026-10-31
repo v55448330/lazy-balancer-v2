@@ -310,8 +310,8 @@
           <el-form :model="form" label-width="100px" :disabled="formFrozen">
             <!-- 原生表单行（2026-10-11 用户裁定：对齐统一走 el-form-item；Firefox
                  label-for 控制台告警为 EP 上游已知形态，非用户可见） -->
-            <el-form-item label="WAF 模式">
-              <el-radio-group v-model="form.mode" class="mode-radio-group" aria-label="WAF 模式">
+            <el-form-item label="WAF 模式" for="radio-waf--10">
+              <el-radio-group v-model="form.mode" class="mode-radio-group" aria-label="WAF 模式" id="radio-waf--10">
                 <!-- 2026-09-09 四态化:off=CRS 与自定义均不生效;custom_only=仅自定义生效;
                      detection=CRS 只记录;blocking=CRS 阻断。每项标签+描述单行不换行。 -->
                 <el-radio value="off">关闭（全不生效）</el-radio>
@@ -399,7 +399,7 @@
             </el-form-item>
             <el-form-item v-if="form.log_request_body"><div class="info-note-bar"><span class="info-note-desc">开启后命中规则事件的请求体将明文记录到事件库（单条上限 64KB），可能包含密码等敏感信息，请仅在排障期间开启</span></div>
             </el-form-item>
-            <el-form-item label="排除规则">
+            <el-form-item label="排除规则" for="radio---11">
               <!-- 表格行编辑器：目标（与规则组同款混合下拉）× 作用域（全部 IP/指定 IP/地址
                    列表）× 条件控件（ip → 标签输入 + isValidCidr 即时拒绝；list → 引用
                    /security/ip-lists 列表）× 删除。上限 50 行；旧字符串数组存储读取时已
@@ -483,7 +483,7 @@
                         >
                           <el-icon class="exclusion-conflict-icon"><WarningFilled /></el-icon>
                         </el-tooltip>
-                        <el-radio-group v-model="row.scope" size="small" class="exclusion-scope-radios" :disabled="crsFieldsOff || isReadOnly" @change="onScopeChange(row as CrsExcludedRow)">
+                        <el-radio-group v-model="row.scope" size="small" class="exclusion-scope-radios" :disabled="crsFieldsOff || isReadOnly" @change="onScopeChange(row as CrsExcludedRow)" id="radio---11">
                           <el-radio value="all">全部 IP</el-radio>
                           <el-radio value="ip">指定 IP</el-radio>
                           <el-radio value="list">地址列表</el-radio>
@@ -561,8 +561,8 @@
               <el-switch v-model="form.ip_acl_enabled" />
             </el-form-item>
             <template v-if="form.ip_acl_enabled">
-              <el-form-item label="控制模式">
-                <el-radio-group v-model="form.ip_acl_mode" aria-label="IP 访问控制模式">
+              <el-form-item label="控制模式" for="radio---12">
+                <el-radio-group v-model="form.ip_acl_mode" aria-label="IP 访问控制模式" id="radio---12">
                   <el-radio value="deny">黑名单（拒绝列表中的 IP，其他正常检测）</el-radio>
                   <el-radio value="allow">白名单（仅允许列表中的 IP，其他一律拒绝）</el-radio>
                   <!-- 历史 绕过 策略仅作展示，不再提供新选 -->
@@ -607,8 +607,8 @@
                    fail-closed 设计下它们按「海外」处理。 -->
               <el-form-item><div class="info-note-bar"><span class="info-note-desc">地域规则仅对 IPv4 生效：IPv6 与不可解析客户端按「海外」处理（拦截模式勾选海外时将被拦截；仅允许模式只勾选省份时将被拦截）。IP 库未安装时地域规则不可启用。</span></div>
               </el-form-item>
-              <el-form-item label="控制模式">
-                <el-radio-group v-model="form.geoip_mode" aria-label="地域控制模式">
+              <el-form-item label="控制模式" for="radio---13">
+                <el-radio-group v-model="form.geoip_mode" aria-label="地域控制模式" id="radio---13">
                   <el-radio value="deny">拦截所选区域（其他放行）</el-radio>
                   <el-radio value="allow">仅允许所选区域（其他拦截）</el-radio>
                 </el-radio-group>

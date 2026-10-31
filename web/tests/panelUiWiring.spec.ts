@@ -306,8 +306,8 @@ test('BasicSettings 两处 radio 行回归 el-form-item（自管标签行族已�
   const text = code('src/views/settings/BasicSettings.vue')
   assert.doesNotMatch(text, /class="form-radio-row"/, '自管标签行标记必须退役')
   assert.doesNotMatch(text, /^\.form-radio-row/m, '自管标签行样式必须退役')
-  assert.match(text, /<el-form-item label="证书来源">/)
-  assert.match(text, /<el-form-item label="频率">/)
+  assert.match(text, /<el-form-item label="证书来源"( for="[^"]*")?>/)
+  assert.match(text, /<el-form-item label="频率"( for="[^"]*")?>/)
 })
 
 test('BasicSettings 不再局部重复定义全局 .settings-form（main.css 单源）', () => {

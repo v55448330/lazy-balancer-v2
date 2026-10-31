@@ -186,7 +186,7 @@ test('自定义规则名称/描述上限与后端 rune 常量逐值对表（前�
   }
   // 名称/描述输入框仍带字数提示（spell 字数可发现性）
   const rules = code('src/views/security/SecurityRules.vue')
-  const form = section(rules, '<el-form-item label="名称" required>', '<el-form-item label="条件关系">')
+  const form = section(rules, '<el-form-item label="名称" required>', '<el-form-item label="条件关系"')
   assert.match(form, /v-model="ruleForm\.name"[^>]*:maxlength="SECURITY_NAME_MAX_RUNES"[^>]*show-word-limit/)
   assert.match(form, /v-model="ruleForm\.description"[^>]*:maxlength="SECURITY_DESCRIPTION_MAX_RUNES"[^>]*show-word-limit/)
 })

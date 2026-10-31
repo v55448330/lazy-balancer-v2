@@ -304,8 +304,8 @@
           <el-switch v-model="autobanForm.dry_run" />
           <div class="form-tip-line">开启时仅记录达阈值建议、不写入名单（推荐先观察校准阈值）</div>
         </el-form-item>
-        <el-form-item label="统计口径">
-          <el-radio-group v-model="autobanForm.scope">
+        <el-form-item label="统计口径" for="radio---9">
+          <el-radio-group v-model="autobanForm.scope" id="radio---9">
             <el-radio v-for="s in AUTOBAN_SCOPES" :key="s.value" :value="s.value">{{ s.label }}</el-radio>
           </el-radio-group>
         </el-form-item>
