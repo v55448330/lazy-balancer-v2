@@ -363,7 +363,7 @@ func TestIPListProjectedFileName_forms(t *testing.T) {
 		"tp-deadbeef1234.txt",      // 旧形态（受信代理全局单份 scope）
 		// 新形态：u-<kind>-<ruleCaddyID>（CaddyID 含下划线）
 		"u-deny-lb_2r8dosptk1.txt", "u-trust12-lb_2r8dosptk1.txt", "u-allow-exempt-lb_ab12cd34ef56.txt",
-		// L4（TCP）投影族：trust12=保留检测信任（SEC-P1-1），与 trust/deny/bl/allow 同族收编
+		// L4（TCP）投影族：trust12=保留检测信任（，与 trust/deny/bl/allow 同族收编
 		"l4-trust-lb_tcp1.txt", "l4-trust12-lb_tcp1.txt", "l4-deny-lb_tcp1.txt", "l4-bl-lb_tcp1.txt", "l4-allow-lb_tcp1.txt",
 		"p5-crsxc-0.txt",            // 历史 SEC-1 序号形态
 		"p5-crsxc-0123456789ab.txt", // 组合键哈希形态

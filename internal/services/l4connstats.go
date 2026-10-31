@@ -151,11 +151,17 @@ type l4ConnRow struct {
 }
 
 // consumeL4Delta 计算本轮差分增量行（零增量规则不落行）。基线推进与差分
-// 计算分离：仅在落库成功（或无行）后 publishL4Baseline。
+// 计算分离：仅在落库成功（或无行）后 publishL4Baseline。首轮（无基线）
+// 不落行——面板进程单独重启（Caddy 不重启）后 prev 为零值，若按「差分=
+// 当前值」落行会把 caddy 计数器全量落成当日行（与 HTTP 侧持久累计锚点
+// 不对称）；基线样本只记基线，次轮起正常差分。
 func (m *MetricsService) consumeL4Delta(adminURL string, snap L4TrafficRawSnapshot) []l4ConnRow {
 	m.l4Mu.Lock()
 	defer m.l4Mu.Unlock()
-	prev := m.l4Last[adminURL]
+	prev, hasBaseline := m.l4Last[adminURL]
+	if !hasBaseline {
+		return nil
+	}
 	var rows []l4ConnRow
 	var globalAllowed, globalDenied uint64
 	for cid, cur := range snap.Rules {

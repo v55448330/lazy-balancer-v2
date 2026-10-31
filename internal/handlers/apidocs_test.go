@@ -23,6 +23,7 @@ import (
 	"lazy-balancer-v2/internal/mcpserver"
 	"lazy-balancer-v2/internal/models"
 	"lazy-balancer-v2/internal/services"
+	"lazy-balancer-v2/internal/services/dnsproviders"
 )
 
 func TestBuildOpenAPIYAML_contains_cluster_contract_and_valid_yaml(t *testing.T) {
@@ -2636,4 +2637,150 @@ func TestBuildOpenAPIYAML_marksSecurityEventCountIPRequired(t *testing.T) {
 			}
 		}
 	}
+}
+
+// 证书凭据示例键形必须通过对应 provider 的 BuildCredentialsJSON
+// 校验——历史示例 {"id","token"} 是早已废弃的键形，照示例调用必 400
+// 「请选择认证方式」。现行 UI 形态：dnspod=auth_mode+app_id+app_token，
+// aliyun=access_key_id+access_key_secret（文档必须披露，否则用户只能猜第二
+// 提供商的键形）。
+func TestAPIDocs_dnsCredentialExamplesPassProviderValidation(t *testing.T) {
+	for _, key := range []string{"POST /certificate-configs", "POST /certificate-configs/test"} {
+		route := routesEntry(t, key)
+		var payload struct {
+			DNSProvider    string            `json:"dns_provider"`
+			DNSCredentials map[string]string `json:"dns_credentials"`
+		}
+		if err := json.Unmarshal([]byte(route.Request), &payload); err != nil {
+			t.Fatalf("%s 示例请求体不是合法 JSON: %v", key, err)
+		}
+		if payload.DNSProvider == "" || len(payload.DNSCredentials) == 0 {
+			t.Fatalf("%s 示例缺 dns_provider/dns_credentials", key)
+		}
+		provider, ok := dnsproviders.Get(payload.DNSProvider)
+		if !ok {
+			t.Fatalf("%s 示例 dns_provider %q 无对应提供商实现", key, payload.DNSProvider)
+		}
+		if _, err := provider.BuildCredentialsJSON(payload.DNSCredentials); err != nil {
+			t.Errorf("%s 示例凭据未通过 BuildCredentialsJSON 校验（照示例调用必 400）: %v", key, err)
+		}
+		disclosed := route.Request + route.Description
+		for _, want := range []string{"access_key_id", "access_key_secret"} {
+			if !strings.Contains(disclosed, want) {
+				t.Errorf("%s 文档未披露 aliyun 凭据键形 %q", key, want)
+			}
+		}
+	}
+}
+
+// 规则日志两端点此前写「规则不存在…返回空内容」，与实现 404 矛盾。
+// 描述必须区分「规则不存在 404」与「未启用日志空内容」，Errors 登记 404
+// （log-stream 另有非法 offset 400）。
+func TestAPIDocRoutes_ruleLogNotFoundSemanticsDocumented(t *testing.T) {
+	for _, key := range []string{"GET /rules/:caddy_id/logs", "GET /rules/:caddy_id/log-stream"} {
+		route := routesEntry(t, key)
+		if !strings.Contains(route.Description, "规则不存在返回 404") || !strings.Contains(route.Description, "未启用日志") {
+			t.Errorf("%s description 未区分「规则不存在 404」与「未启用日志空内容」: %q", key, route.Description)
+		}
+		if !containsRouteError(route.Errors, "404") {
+			t.Errorf("%s errors 缺 404 not_found: %v", key, route.Errors)
+		}
+	}
+	if !containsRouteError(routesEntry(t, "GET /rules/:caddy_id/log-stream").Errors, "400") {
+		t.Errorf("GET /rules/:caddy_id/log-stream errors 缺 400 invalid_offset: %v", routesEntry(t, "GET /rules/:caddy_id/log-stream").Errors)
+	}
+}
+
+// 监控/日志/任务族可达 4xx/5xx 逐条对照 handler 实现登记——
+// 缺码会让按规格生成的客户端把可诊断故障当未知错误处理。
+func TestAPIDocRoutes_monitoringLogTaskFamiliesDocumentReachableErrors(t *testing.T) {
+	cases := []struct {
+		key    string
+		status string
+	}{
+		{"GET /config/health", "502"},
+		{"GET /metrics/rule/:caddy_id", "500"},
+		{"GET /metrics/rule/:caddy_id", "502"},
+		{"GET /metrics/history", "500"},
+		{"GET /rules/:caddy_id/metrics-history", "500"},
+		{"GET /metrics/realtime", "500"},
+		{"GET /metrics/connections", "500"},
+		{"GET /caddy/metrics", "502"},
+		{"GET /caddy/host-metrics", "502"},
+		{"GET /system/logs", "500"},
+		{"GET /caddy/logs", "400"},
+		{"GET /caddy/logs", "500"},
+		{"GET /system/tasks/:id/logs", "500"},
+		{"GET /certificates/jobs/:id/logs", "400"},
+		{"GET /certificates/jobs/:id/logs", "500"},
+	}
+	for _, tc := range cases {
+		if !containsRouteError(routesEntry(t, tc.key).Errors, tc.status) {
+			t.Errorf("%s errors 缺 %s（实现可达）", tc.key, tc.status)
+		}
+	}
+}
+
+// metrics 族响应示例键集对照真实响应结构补齐。
+// get_metrics_overview 的 MCP 工具文案承诺「累计请求/字节/延迟分位数」——
+// 字节与延迟键缺席会让按示例建模的客户端读不到承诺字段。
+func TestAPIDocs_metricsOverviewExampleKeysMatchImplementation(t *testing.T) {
+	assertStructKeysDocumented(t, "GET /metrics/overview", mapKeysOf(docResponseExample(t, "GET /metrics/overview")), models.MetricsOverview{})
+}
+
+// /metrics/history 行 = handler MetricRow：timestamp + requests_total +
+// status_2xx/3xx/4xx/5xx + bytes_in/out（8 键，RFC3339 UTC 时间戳）。
+func TestAPIDocs_metricsHistoryExampleKeysMatchImplementation(t *testing.T) {
+	var rows []map[string]any
+	if err := json.Unmarshal([]byte(routesEntry(t, "GET /metrics/history").Response), &rows); err != nil {
+		t.Fatalf("GET /metrics/history 示例必须是 data 数组 JSON: %v", err)
+	}
+	if len(rows) == 0 {
+		t.Fatal("GET /metrics/history 示例缺数组元素")
+	}
+	want := map[string]bool{
+		"timestamp":      true,
+		"requests_total": true,
+		"status_2xx":     true,
+		"status_3xx":     true,
+		"status_4xx":     true,
+		"status_5xx":     true,
+		"bytes_in":       true,
+		"bytes_out":      true,
+	}
+	assertKeySetsEqual(t, "GET /metrics/history rows[]", mapKeysOf(rows[0]), want)
+}
+
+// /metrics/rule/:caddy_id = emptyRuleMetrics 8 键 + blocked（HTTP/TCP 两形态
+// 恒补，TCP 恒 0）。
+func TestAPIDocs_ruleMetricsExampleKeysMatchImplementation(t *testing.T) {
+	want := mapKeysOf(emptyRuleMetrics())
+	want["blocked"] = true
+	assertKeySetsEqual(t, "GET /metrics/rule/:caddy_id", mapKeysOf(docResponseExample(t, "GET /metrics/rule/:caddy_id")), want)
+}
+
+// /config/health = map[server]map[upstream]*UpstreamHealthDetail（services）。
+func TestAPIDocs_upstreamHealthExampleKeysMatchImplementation(t *testing.T) {
+	example := docResponseExample(t, "GET /config/health")
+	if len(example) == 0 {
+		t.Fatal("GET /config/health 示例缺 server 层")
+	}
+	for serverKey, upstreamsAny := range example {
+		upstreams, ok := upstreamsAny.(map[string]any)
+		if !ok || len(upstreams) == 0 {
+			t.Fatalf("GET /config/health 示例 server %q 缺上游对象", serverKey)
+		}
+		for upstreamKey, detailAny := range upstreams {
+			detail, ok := detailAny.(map[string]any)
+			if !ok {
+				t.Fatalf("GET /config/health 示例上游 %q 不是对象", upstreamKey)
+			}
+			assertStructKeysDocumented(t, "GET /config/health "+upstreamKey, mapKeysOf(detail), services.UpstreamHealthDetail{})
+		}
+	}
+}
+
+// /metrics/connections 示例缺 syn_sent（ConnectionStats 11 键恒下发）。
+func TestAPIDocs_connectionStatsExampleKeysMatchImplementation(t *testing.T) {
+	assertStructKeysDocumented(t, "GET /metrics/connections", mapKeysOf(docResponseExample(t, "GET /metrics/connections")), models.ConnectionStats{})
 }

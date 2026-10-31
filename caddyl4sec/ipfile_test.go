@@ -193,6 +193,39 @@ func TestIPFileStatFallback(t *testing.T) {
 	waitForMatch(t, m, "198.51.100.7", true, 6*time.Second)
 }
 
+// TestIPFileStatFallbackAfterReadFailure 初载读取失败（权限）后的自愈回归钉：
+// 权限修复（chmod）不改变文件 mtime/size——若失败路径把失败时刻的文件形态记为
+// stat 兜底基线，stat 兜底将永远判定「形态未变」而不再重读，名单恒空不自愈。
+// 契约：错误路径基线必须记零值（mod 零值、size=-1），强制下一轮 stat 兜底重读。
+func TestIPFileStatFallbackAfterReadFailure(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root 对 chmod 000 文件仍可读，权限形态用例仅在非 root 下可复现")
+	}
+	dir := t.TempDir()
+	file := filepath.Join(dir, "deny.txt")
+	if err := os.WriteFile(file, []byte("203.0.113.1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// 读失败形态：移除读权限（mtime/size 不变——chmod 不改 mtime）。
+	if err := os.Chmod(file, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	oldInterval := l4IPFilePollInterval
+	l4IPFilePollInterval = 50 * time.Millisecond
+	t.Cleanup(func() { l4IPFilePollInterval = oldInterval })
+
+	m := newIPFileMatcherForTest(t, file)
+	// 前置确认：初载读失败 → 空集不命中。
+	if ok, err := ipFileMatch(t, m, "203.0.113.1"); err != nil || ok {
+		t.Fatalf("初载读失败后不应命中: ok=%v err=%v", ok, err)
+	}
+	// 修复权限（内容/mtime/size 全不变）→ stat 兜底必须检测形态差异并重读自愈。
+	if err := os.Chmod(file, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	waitForMatch(t, m, "203.0.113.1", true, 6*time.Second)
+}
+
 // waitForMatch 轮询至期望状态或超时（热载异步性）。
 func waitForMatch(t *testing.T, m *L4IPFileMatcher, ip string, want bool, d time.Duration) {
 	t.Helper()

@@ -35,7 +35,7 @@ func TestIssuer_Cleanup_sharedValueReclaimedOnlyByLastIssuance(t *testing.T) {
 	}
 	issuer := &Issuer{Provider: provider}
 
-	issuer.Cleanup(context.Background(), []ChallengeInfo{challenge(claimFirst)})
+	issuer.cleanup(context.Background(), []ChallengeInfo{challenge(claimFirst)})
 	if len(provider.cleanedValues) != 0 {
 		t.Fatalf("先结束的签发不得清理仍在途的同值 TXT，cleaned=%v", provider.cleanedValues)
 	}
@@ -43,7 +43,7 @@ func TestIssuer_Cleanup_sharedValueReclaimedOnlyByLastIssuance(t *testing.T) {
 		t.Fatal("同值 TXT 必须保留给仍在途的签发")
 	}
 
-	issuer.Cleanup(context.Background(), []ChallengeInfo{challenge(claimSecond)})
+	issuer.cleanup(context.Background(), []ChallengeInfo{challenge(claimSecond)})
 	if len(provider.cleanedValues) != 1 {
 		t.Fatalf("最后结束的签发必须回收同值 TXT，cleaned=%v", provider.cleanedValues)
 	}
@@ -61,7 +61,7 @@ func TestIssuer_Cleanup_unclaimedChallengeStillCleans(t *testing.T) {
 	const value = "unclaimed-key-auth"
 	provider := &valueAwareProvider{records: map[string]string{value: "record-" + value}}
 	issuer := &Issuer{Provider: provider}
-	issuer.Cleanup(context.Background(), []ChallengeInfo{{
+	issuer.cleanup(context.Background(), []ChallengeInfo{{
 		Domain: "example.com", TokenFQDN: "_acme-challenge.example.com.", Value: value,
 	}})
 	if len(provider.cleanedValues) != 1 {

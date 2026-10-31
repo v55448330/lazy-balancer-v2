@@ -41,6 +41,13 @@ const (
 	domainListMaxPages = 100
 )
 
+// provider 侧残余排空的 Record.List 翻页参数（与 aliyun 侧同口径）：服务端
+// 对超量记录强制分页，length 取 100；pageLimit 仅防御异常服务端，避免死循环。
+const (
+	challengeListPageSize  = 100
+	challengeListPageLimit = 20
+)
+
 // ownedRecord 记录本实例创建的记录 ID 及其挑战值，CleanUpValue 据此只删
 // 属于本次签发的记录。
 type ownedRecord struct {
@@ -209,10 +216,12 @@ func (p *Provider) CountCleanupRecords(zone, tokenFQDN, value string) int {
 
 // cleanUp 是 CleanUp/CleanUpValue 的共享实现（按值定向删除+陈旧条目清理）。
 //
-// 本函数与 internal/dnsprovider/tencent/tencent.go 的
-// cleanUp 是同构双实现（有意保留——两者底层 SDK/记录 ID 类型不同，抽象共享
-// 收益低于耦合成本）。任一侧修改删除/自愈/兜底排空逻辑时，MUST 同步另一侧
-// 并保持语义一致（domain-id 自愈、ownership 条目留存、兜底排空）。
+// 本函数与 internal/dnsprovider/tencent/tencent.go、internal/dnsprovider/aliyun
+// 的 cleanUp 是同构多实现（有意保留——底层 API 与记录 ID 类型不同，抽象共享
+// 收益低于耦合成本）。任一侧修改删除/自愈/兜底排空/残余排空逻辑时，MUST
+// 同步全部实现并保持语义一致（domain-id 自愈、ownership 条目留存、兜底
+// 排空、provider 侧残余排空；对齐门禁见
+// internal/dnsprovider/cleanup_parity_test.go）。
 func (p *Provider) cleanUp(ctx context.Context, zone, tokenFQDN, value string, byValue bool) error {
 	zone = dnsname.NormalizeName(zone)
 	subDomain := dnsname.RelativeTo(tokenFQDN, zone)
@@ -251,7 +260,9 @@ func (p *Provider) cleanUp(ctx context.Context, zone, tokenFQDN, value string, b
 
 	var cleanupErr error
 	var failed []ownedRecord
+	attempted := 0
 	deleteOne := func(recordID, value string) error {
+		attempted++
 		err := p.deleteRecord(ctx, domainID, recordID)
 		if errors.Is(err, errStaleDomainID) {
 			// cleanUp 侧的同族自愈——缓存的
@@ -351,7 +362,113 @@ func (p *Provider) cleanUp(ctx context.Context, zone, tokenFQDN, value string, b
 		p.owned[key] = append(p.owned[key], failed...)
 		p.mu.Unlock()
 	}
+	// provider 侧残余排空（与 aliyun 侧同构，见函数注释）：账本候选、内存
+	// 兜底、排空条目全部为空才触发——有任一候选即说明追踪链路仍在，残余
+	// 排空只会平添网络往返。ctx 已取消时不再发起枚举。
+	if len(records) == 0 && len(memorySelected) == 0 && attempted == 0 && ctx.Err() == nil {
+		matches, listErr := p.listChallengeRecords(ctx, zone, subDomain)
+		if listErr != nil {
+			cleanupErr = errors.Join(cleanupErr, listErr)
+		}
+		for _, match := range matches {
+			if byValue && match.value != value {
+				continue
+			}
+			if match.recordID == "" {
+				logf("warn", "dnspod: Record.List 返回空记录 ID，跳过删除")
+				cleanupErr = errors.Join(cleanupErr, fmt.Errorf("Record.List returned empty record ID"))
+				continue
+			}
+			if err := p.deleteRecord(ctx, domainID, match.recordID); err != nil {
+				if ctx.Err() != nil {
+					// 与 deleteOne 同口径——ctx 取消/超时并入错误链，
+					// 保留原始 provider 错误（整体覆写会丢失具体 API 失败
+					// 原因，诊断信息归零）。
+					err = errors.Join(err, ctx.Err())
+				}
+				cleanupErr = errors.Join(cleanupErr, err)
+				// 删除失败回填内存兜底表供下次重试（幂等）——枚举条目没有
+				// 账本归宿，兜底表是唯一追踪载体。
+				p.mu.Lock()
+				p.owned[key] = append(p.owned[key], ownedRecord{recordID: match.recordID, value: match.value})
+				p.mu.Unlock()
+			}
+		}
+	}
 	return cleanupErr
+}
+
+// enumeratedRecord 是 Record.List 命中的一条挑战记录。
+type enumeratedRecord struct {
+	recordID string
+	value    string
+}
+
+// listChallengeRecords 枚举 zone 下指定主机记录名的 TXT 记录：Record.List
+// 在服务端按 domain_id+sub_domain+record_type 过滤（keyword 会忽略
+// sub_domain 等条件，不用），客户端按 RR 精确匹配（大小写不敏感）收窄，
+// 翻页直到取尽。status code 10「空结果」不是故障，按空列表处理。
+func (p *Provider) listChallengeRecords(ctx context.Context, zone, subDomain string) ([]enumeratedRecord, error) {
+	// cleanUp 的排空路径在函数头已解析过 domainID——此处命中进程内缓存，
+	// 零额外网络往返；缓存被中途作废时重新解析同样是正确行为。
+	domainID, err := p.getDomainID(ctx, zone)
+	if err != nil {
+		return nil, err
+	}
+	var collected []enumeratedRecord
+	offset := 0
+	for range challengeListPageLimit {
+		params := url.Values{}
+		params.Set("domain_id", domainID)
+		params.Set("sub_domain", subDomain)
+		params.Set("record_type", "TXT")
+		params.Set("offset", strconv.Itoa(offset))
+		params.Set("length", strconv.Itoa(challengeListPageSize))
+		var result struct {
+			Status  apiStatus `json:"status"`
+			Records []struct {
+				ID    flexNumber `json:"id"`
+				Name  string     `json:"name"`
+				Type  string     `json:"type"`
+				Value string     `json:"value"`
+			} `json:"records"`
+			Info struct {
+				RecordTotal flexNumber `json:"record_total"`
+			} `json:"info"`
+		}
+		if err := p.apiCall(ctx, "Record.List", params, &result); err != nil {
+			if ctx.Err() != nil {
+				err = errors.Join(err, ctx.Err())
+			}
+			return nil, err
+		}
+		if result.Status.Code.String() != "1" && result.Status.Code.String() != "10" {
+			return nil, fmt.Errorf("Record.List failed: %s", p.sanitizeMessage(result.Status.Message))
+		}
+		if result.Status.Code.String() == "10" {
+			// 「空结果」（没有符合条件的记录）：按空列表收尾。
+			return collected, nil
+		}
+		for _, record := range result.Records {
+			if record.Type != "TXT" {
+				continue
+			}
+			if dnsname.NormalizeName(record.Name) != subDomain {
+				continue
+			}
+			// flexNumber 兼容历史两种形态（JSON 数字与带引号字符串），
+			// 与 Record.Create 侧的 id 读取同口径。
+			collected = append(collected, enumeratedRecord{recordID: string(record.ID), value: record.Value})
+		}
+		// 服务端可能按更小的页容量返回：按实际返回条数推进 offset，
+		// 用 info.record_total 判定是否已扫完（与 getDomainID 同口径）。
+		offset += len(result.Records)
+		total := result.Info.RecordTotal.Int64()
+		if len(result.Records) == 0 || (total > 0 && int64(offset) >= total) {
+			break
+		}
+	}
+	return collected, nil
 }
 
 type apiStatus struct {

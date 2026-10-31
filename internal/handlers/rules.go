@@ -1052,8 +1052,8 @@ func tcpDeadFieldReset(protocol string, fields tcpDeadFields) {
 // validateRulePayloadBeforeSave 显式 400（既有行为，与 NTLM 同格的「显式
 // 携带即拒」），仅存量/复制/传输路径沉默归一。
 // TCP 自愈族：代理超时族/自定义路由/动态上游/策略(cookie) 同样留空——
-// Create 的代理超时负值先在调用点归一 0，其余显式死配置继续由
-// validateRuleFeatures TCP 分支 400 点名；同协议编辑/复制路径才需全量自愈。
+// 显式携带（含负值）由 validateRuleFeatures TCP 分支统一 400 点名（非 0 即
+// 拒，Create 调用点无归一环）；同协议编辑/复制路径才需全量自愈。
 func createRuleTCPDeadFields(req *models.CreateRuleRequest) tcpDeadFields {
 	return tcpDeadFields{
 		EnableTLS:                &req.EnableTLS,
@@ -1394,15 +1394,10 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 	// TCP 创建携带 ntlm_compatible=1 由保存门（validateRuleFeatures）显式 400
 	// 拒绝，不做静默弃置（2026-10-12 定稿），故 create 适配器不提供该字段。
 	if req.Protocol == "tcp" {
-		for _, value := range []*int{
-			&req.ProxyDialTimeout, &req.ProxyResponseHeaderTimeout,
-			&req.ProxyReadTimeout, &req.ProxyWriteTimeout,
-			&req.ProxyStreamTimeout, &req.ProxyFlushInterval, &req.ProxyStreamCloseDelay,
-		} {
-			if *value < 0 {
-				*value = 0
-			}
-		}
+		// 代理超时七列不在此归一：显式携带（含 -1 等负值）必须原样抵达
+		// validateRuleFeatures TCP 分支统一 400「TCP 规则不支持 HTTP 代理超时
+		// 配置」——此前负值在此静默归零绕过保存门（正值 400、负值 201 落库
+		// 分叉）。nil/零值路径（UI 未提交字段）行为不变。
 		tcpDeadFieldReset(req.Protocol, createRuleTCPDeadFields(&req))
 	} else if req.Protocol == "http" {
 		// HTTP 渲染不消费 TCP-only 字段，创建时显式弃置。
@@ -1423,8 +1418,9 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 		req.Domain = canonicalDomain
 	}
 
-	// TCP 渲染零消费 DnsFamily；协议切换路径会清空该列。仅 HTTP 新规则补
-	// 默认，避免同一 TCP 终态出现 ipv4/'' 两种形态。
+	// TCP 渲染零消费 DnsFamily；TCP 终态由 tcpDeadFieldReset 归一 ipv4（见
+	// rules.go tcpDeadFieldReset——'' / ipv4 两形态由该清单收敛，本分支只服务
+	// HTTP 新规则补默认）。
 	if req.Protocol == "http" && req.DnsFamily == "" {
 		req.DnsFamily = "ipv4"
 	}
@@ -1907,6 +1903,243 @@ func ruleVersionConflicts(current string, expected time.Time) bool {
 	return !currentVersion.Equal(expected.UTC().Truncate(time.Second))
 }
 
+// ─── UpdateRule 列投影单源与全集断言（lb_rules 五份列投影收口）────────────────
+// lb_rules 列清单现存五份投影：services specs（INSERT/快照单源）、lbRuleColumns
+// （完整读投影）、lbRuleListColumns（列表派生）、UpdateRule 合并基线 SELECT
+// （updateRuleBaselineSelectColumns）、UpdateRule 主 UPDATE SET
+// （updateRuleSetColumns）。前两份已有派生/钉测护栏；UpdateRule 侧两份此前是
+// 函数内手写字面量，新增列漏改即「合并基线脏读/更新丢列」。现提取为包级单源，
+// 并在包初始化做全集机械断言（相对 services.LbRuleInsertColumns() 全集，豁免
+// 逐列注明）——任何新增列漏进任一投影，进程启动即 panic（fail-visible）。
+
+// updateRuleSelectColumn 合并基线读的单列：column 为断言键，expr 为 SQL 投影。
+type updateRuleSelectColumn struct {
+	column string
+	expr   string
+}
+
+// updateRuleBaselineSelectColumns 是 UpdateRule 合并基线读的存量行投影单源
+// （expr 顺序 = Scan 顺序，不得重排）。治理默认值列绑定 db.Default*
+// （TestLbRuleColumns_governedDefaultsBindConstants 同契约，禁写死字面量）。
+var updateRuleBaselineSelectColumns = []updateRuleSelectColumn{
+	{"protocol", "COALESCE(protocol,'')"},
+	{"domain", "COALESCE(domain,'')"},
+	{"listen_port", "listen_port"},
+	{"strategy", "COALESCE(strategy,'weighted_round_robin')"},
+	{"tls_cert", "COALESCE(tls_cert,'')"},
+	{"tls_key", "COALESCE(tls_key,'')"},
+	{"tls_source", "COALESCE(tls_source,'manual')"},
+	{"acme_config_id", "COALESCE(acme_config_id,0)"},
+	{"ca_provider_id", "COALESCE(ca_provider_id,0)"},
+	{"enable_tls", "COALESCE(enable_tls,0)"},
+	{"tls_http_redirect", "COALESCE(tls_http_redirect,0)"},
+	{"dynamic_dns", "COALESCE(dynamic_dns,0)"},
+	{"enable_dns_server", "COALESCE(enable_dns_server,0)"},
+	{"dns_server", "COALESCE(dns_server,'')"},
+	{"dns_family", "COALESCE(dns_family,'ipv4')"},
+	{"health_check_path", "COALESCE(health_check_path,'')"},
+	{"health_check_interval", fmt.Sprintf("COALESCE(health_check_interval,%d)", db.DefaultHealthCheckInterval)},
+	{"health_check_timeout", fmt.Sprintf("COALESCE(health_check_timeout,%d)", db.DefaultHealthCheckTimeout)},
+	{"health_check_unhealthy_threshold", fmt.Sprintf("COALESCE(health_check_unhealthy_threshold,%d)", db.DefaultHealthCheckUnhealthyThreshold)},
+	{"health_check_healthy_threshold", fmt.Sprintf("COALESCE(health_check_healthy_threshold,%d)", db.DefaultHealthCheckHealthyThreshold)},
+	{"enable_active_health_check", "COALESCE(enable_active_health_check,0)"},
+	{"tcp_health_check_port", "COALESCE(tcp_health_check_port,0)"},
+	{"tcp_proxy_protocol", "COALESCE(tcp_proxy_protocol,0)"},
+	{"tcp_try_duration", "COALESCE(tcp_try_duration,0)"},
+	{"tcp_try_interval", fmt.Sprintf("COALESCE(tcp_try_interval,%d)", db.DefaultTCPTryInterval)},
+	{"request_body_max_size_mb", "COALESCE(request_body_max_size_mb,0)"},
+	{"upstream_keepalive_timeout", "COALESCE(upstream_keepalive_timeout,0)"},
+	{"server_tokens_hidden", "COALESCE(server_tokens_hidden,0)"},
+	{"ntlm_compatible", "COALESCE(ntlm_compatible,0)"},
+	{"upstream_force_http1", "COALESCE(upstream_force_http1,0)"},
+	{"custom_routes_enabled", "COALESCE(custom_routes_enabled,0)"},
+	{"proxy_dial_timeout", "COALESCE(proxy_dial_timeout,0)"},
+	{"proxy_response_header_timeout", "COALESCE(proxy_response_header_timeout,0)"},
+	{"proxy_read_timeout", "COALESCE(proxy_read_timeout,0)"},
+	{"proxy_write_timeout", "COALESCE(proxy_write_timeout,0)"},
+	{"proxy_stream_timeout", "COALESCE(proxy_stream_timeout,0)"},
+	{"proxy_flush_interval", "COALESCE(proxy_flush_interval,0)"},
+	{"proxy_stream_close_delay", "COALESCE(proxy_stream_close_delay,0)"},
+	{"host_header", "COALESCE(host_header,'')"},
+	{"health_check_host", "COALESCE(health_check_host,'')"},
+	{"enable_compress", "COALESCE(enable_compress,0)"},
+	{"compress_types", "COALESCE(compress_types,'gzip')"},
+	{"enabled", "IIF(enabled IN ('1',1),1,0)"},
+	{"log_enabled", "COALESCE(log_enabled,0)"},
+	{"name", "name"},
+	{"description", "COALESCE(description,'')"},
+}
+
+// updateRuleBaselineSelectExprs 按 table 顺序拼接 SELECT 投影（Scan 顺序同源）。
+func updateRuleBaselineSelectExprs() string {
+	exprs := make([]string, len(updateRuleBaselineSelectColumns))
+	for i, entry := range updateRuleBaselineSelectColumns {
+		exprs[i] = entry.expr
+	}
+	return strings.Join(exprs, ", ")
+}
+
+// updateRuleSetColumn 主 UPDATE SET 的单列：provided 为 nil 表示恒写
+// （block_page 四列/tls_cert/tls_key 沿用既有条件写语义）；value 产出占位符参数。
+type updateRuleSetColumn struct {
+	column   string
+	provided func(req *models.UpdateRuleRequest, protocolChanged, clearingTLSMaterial bool) bool
+	value    func(req *models.UpdateRuleRequest, features ruleFeatureInput) any
+}
+
+// updateRuleSetColumns 是 UpdateRule 主 UPDATE 的 SET 列单源（顺序 = SQL/args
+// 顺序，逐项沿用原内联构建器的值表达式）。updated_at/updated_by 由终局守卫
+// 分支字面量追加（updated_at = datetime('now'), updated_by = ?，cert 在途 409
+// 守卫双分支），不经本表——豁免清单注明。
+var updateRuleSetColumns = []updateRuleSetColumn{
+	{"name", nil, func(req *models.UpdateRuleRequest, _ ruleFeatureInput) any { return req.Name }},
+	{"description", nil, func(req *models.UpdateRuleRequest, _ ruleFeatureInput) any { return derefStr(req.Description) }},
+	{"protocol", nil, func(req *models.UpdateRuleRequest, _ ruleFeatureInput) any { return req.Protocol }},
+	{"domain", nil, func(req *models.UpdateRuleRequest, _ ruleFeatureInput) any { return req.Domain }},
+	{"listen_port", nil, func(req *models.UpdateRuleRequest, _ ruleFeatureInput) any { return req.ListenPort }},
+	{"strategy", nil, func(req *models.UpdateRuleRequest, _ ruleFeatureInput) any { return req.Strategy }},
+	{"dynamic_dns", nil, func(req *models.UpdateRuleRequest, _ ruleFeatureInput) any { return *req.DynamicDNS }},
+	{"enable_dns_server", nil, func(req *models.UpdateRuleRequest, _ ruleFeatureInput) any { return *req.EnableDnsServer }},
+	{"dns_server", nil, func(req *models.UpdateRuleRequest, _ ruleFeatureInput) any { return derefStr(req.DnsServer) }},
+	{"dns_family", nil, func(req *models.UpdateRuleRequest, _ ruleFeatureInput) any { return req.DnsFamily }},
+	{"health_check_path", nil, func(req *models.UpdateRuleRequest, _ ruleFeatureInput) any { return derefStr(req.HealthCheckPath) }},
+	{"health_check_interval", nil, func(req *models.UpdateRuleRequest, _ ruleFeatureInput) any { return req.HealthCheckInterval }},
+	{"health_check_timeout", nil, func(req *models.UpdateRuleRequest, _ ruleFeatureInput) any { return req.HealthCheckTimeout }},
+	{"health_check_unhealthy_threshold", nil, func(req *models.UpdateRuleRequest, _ ruleFeatureInput) any { return *req.HealthCheckUnhealthyThreshold }},
+	{"health_check_healthy_threshold", nil, func(req *models.UpdateRuleRequest, _ ruleFeatureInput) any { return *req.HealthCheckHealthyThreshold }},
+	{"enable_active_health_check", nil, func(req *models.UpdateRuleRequest, _ ruleFeatureInput) any { return *req.EnableActiveHealthCheck }},
+	{"tcp_health_check_port", nil, func(req *models.UpdateRuleRequest, _ ruleFeatureInput) any { return *req.TCPHealthCheckPort }},
+	{"tcp_proxy_protocol", nil, func(req *models.UpdateRuleRequest, _ ruleFeatureInput) any { return *req.TCPProxyProtocol }},
+	{"tcp_try_duration", nil, func(req *models.UpdateRuleRequest, _ ruleFeatureInput) any { return *req.TCPTryDuration }},
+	{"tcp_try_interval", nil, func(req *models.UpdateRuleRequest, _ ruleFeatureInput) any { return *req.TCPTryInterval }},
+	{"request_body_max_size_mb", nil, func(req *models.UpdateRuleRequest, _ ruleFeatureInput) any { return *req.RequestBodyMaxSizeMB }},
+	{"upstream_keepalive_timeout", nil, func(req *models.UpdateRuleRequest, _ ruleFeatureInput) any { return *req.UpstreamKeepaliveTimeout }},
+	{"server_tokens_hidden", nil, func(req *models.UpdateRuleRequest, _ ruleFeatureInput) any { return *req.ServerTokensHidden }},
+	{"ntlm_compatible", nil, func(req *models.UpdateRuleRequest, _ ruleFeatureInput) any { return *req.NTLMCompatible }},
+	{"upstream_force_http1", nil, func(req *models.UpdateRuleRequest, _ ruleFeatureInput) any { return *req.UpstreamForceHTTP1 }},
+	{"custom_routes_enabled", nil, func(_ *models.UpdateRuleRequest, features ruleFeatureInput) any { return features.CustomRoutesEnabled }},
+	{"proxy_dial_timeout", nil, func(_ *models.UpdateRuleRequest, features ruleFeatureInput) any { return features.ProxyDialTimeout }},
+	{"proxy_response_header_timeout", nil, func(_ *models.UpdateRuleRequest, features ruleFeatureInput) any {
+		return features.ProxyResponseHeaderTimeout
+	}},
+	{"proxy_read_timeout", nil, func(_ *models.UpdateRuleRequest, features ruleFeatureInput) any { return features.ProxyReadTimeout }},
+	{"proxy_write_timeout", nil, func(_ *models.UpdateRuleRequest, features ruleFeatureInput) any { return features.ProxyWriteTimeout }},
+	{"proxy_stream_timeout", nil, func(_ *models.UpdateRuleRequest, features ruleFeatureInput) any { return features.ProxyStreamTimeout }},
+	{"proxy_flush_interval", nil, func(_ *models.UpdateRuleRequest, features ruleFeatureInput) any { return features.ProxyFlushInterval }},
+	{"proxy_stream_close_delay", nil, func(_ *models.UpdateRuleRequest, features ruleFeatureInput) any {
+		return features.ProxyStreamCloseDelay
+	}},
+	{"host_header", nil, func(req *models.UpdateRuleRequest, _ ruleFeatureInput) any { return derefStr(req.HostHeader) }},
+	{"health_check_host", nil, func(req *models.UpdateRuleRequest, _ ruleFeatureInput) any { return derefStr(req.HealthCheckHost) }},
+	{"enable_tls", nil, func(req *models.UpdateRuleRequest, _ ruleFeatureInput) any { return *req.EnableTLS }},
+	{"tls_source", nil, func(req *models.UpdateRuleRequest, _ ruleFeatureInput) any { return req.TLSSource }},
+	{"acme_config_id", nil, func(req *models.UpdateRuleRequest, _ ruleFeatureInput) any { return req.ACMEConfigID }},
+	// ca_provider_id 恒随更新写入——UpdateRule 合并区已保证 req.CAProviderID 非 nil。
+	{"ca_provider_id", nil, func(req *models.UpdateRuleRequest, _ ruleFeatureInput) any { return *req.CAProviderID }},
+	// 阶段页四列：仅非 nil 才写库（指针语义，nil=不触碰存量）。
+	{"block_page_stage1_id", func(req *models.UpdateRuleRequest, _ bool, _ bool) bool { return req.BlockPageStage1ID != nil },
+		func(req *models.UpdateRuleRequest, _ ruleFeatureInput) any { return *req.BlockPageStage1ID }},
+	{"block_page_stage1_status", func(req *models.UpdateRuleRequest, _ bool, _ bool) bool { return req.BlockPageStage1Status != nil },
+		func(req *models.UpdateRuleRequest, _ ruleFeatureInput) any { return *req.BlockPageStage1Status }},
+	{"block_page_stage3_id", func(req *models.UpdateRuleRequest, _ bool, _ bool) bool { return req.BlockPageStage3ID != nil },
+		func(req *models.UpdateRuleRequest, _ ruleFeatureInput) any { return *req.BlockPageStage3ID }},
+	{"block_page_stage3_status", func(req *models.UpdateRuleRequest, _ bool, _ bool) bool { return req.BlockPageStage3Status != nil },
+		func(req *models.UpdateRuleRequest, _ ruleFeatureInput) any { return *req.BlockPageStage3Status }},
+	// 证书材料四条件写语义原样保留：空值=保留存量仅适用 HTTP（手动证书留空=沿用）；
+	// TCP 行经 tcpDeadFieldReset 已置空，但同协议编辑此前两条件皆假 → 死材料
+	// 滞留随导出/快照放大；协议切换/清材料恒写。TCP 恒写（值为归一后的空串）。
+	{"tls_cert", func(req *models.UpdateRuleRequest, protocolChanged, clearingTLSMaterial bool) bool {
+		return req.TLSCert != "" || protocolChanged || req.Protocol == "tcp" || clearingTLSMaterial
+	}, func(req *models.UpdateRuleRequest, _ ruleFeatureInput) any { return req.TLSCert }},
+	{"tls_key", func(req *models.UpdateRuleRequest, protocolChanged, clearingTLSMaterial bool) bool {
+		return req.TLSKey != "" || protocolChanged || req.Protocol == "tcp" || clearingTLSMaterial
+	}, func(req *models.UpdateRuleRequest, _ ruleFeatureInput) any { return req.TLSKey }},
+	{"tls_http_redirect", nil, func(req *models.UpdateRuleRequest, _ ruleFeatureInput) any { return *req.TLSHTTPRedirect }},
+	{"enable_compress", nil, func(req *models.UpdateRuleRequest, _ ruleFeatureInput) any { return *req.EnableCompress }},
+	{"compress_types", nil, func(req *models.UpdateRuleRequest, _ ruleFeatureInput) any { return req.CompressTypes }},
+	{"enabled", nil, func(req *models.UpdateRuleRequest, _ ruleFeatureInput) any { return *req.Enabled }},
+	{"log_enabled", nil, func(req *models.UpdateRuleRequest, _ ruleFeatureInput) any { return *req.LogEnabled }},
+}
+
+// updateRule 列投影豁免清单（相对 services.LbRuleInsertColumns() 全集；列名 → 理由）。
+// 豁免本身是契约：新列既不进投影也不进豁免，init 即 panic。
+var updateRuleBaselineSelectExemptColumns = map[string]string{
+	"id":                       "WHERE caddy_id 键定位，基线合并不读主键",
+	"caddy_id":                 "WHERE 键本身",
+	"created_at":               "审计列：创建态一次写入，基线合并不读",
+	"created_by":               "审计列：同上",
+	"updated_at":               "审计列：乐观并发门单独读 COALESCE(updated_at,'')",
+	"updated_by":               "审计列：基线合并不读",
+	"block_page_stage1_id":     "指针语义仅非 nil 写库，nil=不触碰存量，无需读",
+	"block_page_stage1_status": "同上",
+	"block_page_stage3_id":     "同上",
+	"block_page_stage3_status": "同上",
+}
+
+var updateRuleSetExemptColumns = map[string]string{
+	"id":         "主键 AUTOINCREMENT，UPDATE 不写",
+	"caddy_id":   "WHERE 键本身",
+	"created_at": "审计列：创建态一次写入，UPDATE 不写",
+	"created_by": "审计列：同上",
+	"updated_at": "由终局守卫分支字面量追加 datetime('now')（cert 在途 409 守卫双分支）",
+	"updated_by": "由终局守卫分支字面量追加（同上双分支）",
+}
+
+// updateRuleColumnParitySets 取三份列集（specs 全集 / 基线 SELECT / UPDATE SET）。
+func updateRuleColumnParitySets() (specSet, selectSet, setSet map[string]bool) {
+	specSet = make(map[string]bool)
+	for _, column := range services.LbRuleInsertColumns() {
+		specSet[column] = true
+	}
+	selectSet = make(map[string]bool, len(updateRuleBaselineSelectColumns))
+	for _, entry := range updateRuleBaselineSelectColumns {
+		selectSet[entry.column] = true
+	}
+	setSet = make(map[string]bool, len(updateRuleSetColumns))
+	for _, entry := range updateRuleSetColumns {
+		setSet[entry.column] = true
+	}
+	return specSet, selectSet, setSet
+}
+
+// updateRuleColumnParityGaps 返回全集断言缺口（空=通过）。双向核对：specs 有而
+// 投影无（新增列漏改）与投影有而 specs 无（列名拼错/已删列残留）。
+func updateRuleColumnParityGaps(specSet, selectSet, setSet map[string]bool) []string {
+	var gaps []string
+	for column := range specSet {
+		if _, exempt := updateRuleBaselineSelectExemptColumns[column]; !exempt && !selectSet[column] {
+			gaps = append(gaps, "合并基线 SELECT 缺列 "+column)
+		}
+		if _, exempt := updateRuleSetExemptColumns[column]; !exempt && !setSet[column] {
+			gaps = append(gaps, "UPDATE SET 缺列 "+column)
+		}
+	}
+	for column := range selectSet {
+		if !specSet[column] {
+			gaps = append(gaps, "合并基线 SELECT 含未知列 "+column+"（不在 LbRuleInsertColumns 全集）")
+		}
+	}
+	for column := range setSet {
+		if !specSet[column] {
+			gaps = append(gaps, "UPDATE SET 含未知列 "+column+"（不在 LbRuleInsertColumns 全集）")
+		}
+	}
+	sort.Strings(gaps)
+	return gaps
+}
+
+// mustUpdateRuleColumnParity 缺口即 panic（包初始化与钉测共用同一判定）。
+func mustUpdateRuleColumnParity(specSet, selectSet, setSet map[string]bool) {
+	if gaps := updateRuleColumnParityGaps(specSet, selectSet, setSet); len(gaps) > 0 {
+		panic("UpdateRule 列投影全集断言失败：" + strings.Join(gaps, "；"))
+	}
+}
+
+func init() {
+	specSet, selectSet, setSet := updateRuleColumnParitySets()
+	mustUpdateRuleColumnParity(specSet, selectSet, setSet)
+}
+
 func (h *Handlers) UpdateRule(c *gin.Context) {
 
 	if rejectWriteDuringImport(c, "执行规则写操作") {
@@ -1975,21 +2208,9 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	// compress_types 三处文本默认值 db 包无常量，保持字面量（收紧或抽常量需先
 	// 补 db 包常量再改此处，三处同进退）。
 	var existingRule models.LbRule
-	err := db.DB.QueryRow(`
-		SELECT COALESCE(protocol,''), COALESCE(domain,''), listen_port, COALESCE(strategy,'weighted_round_robin'),
-			COALESCE(tls_cert,''), COALESCE(tls_key,''), COALESCE(tls_source,'manual'), COALESCE(acme_config_id,0),
-			COALESCE(ca_provider_id,0),
-			COALESCE(enable_tls,0), COALESCE(tls_http_redirect,0),
-			COALESCE(dynamic_dns,0), COALESCE(enable_dns_server,0), COALESCE(dns_server,''), COALESCE(dns_family,'ipv4'),
-			COALESCE(health_check_path,''), COALESCE(health_check_interval,`+fmt.Sprint(db.DefaultHealthCheckInterval)+`), COALESCE(health_check_timeout,`+fmt.Sprint(db.DefaultHealthCheckTimeout)+`),
-			COALESCE(health_check_unhealthy_threshold,`+fmt.Sprint(db.DefaultHealthCheckUnhealthyThreshold)+`), COALESCE(health_check_healthy_threshold,`+fmt.Sprint(db.DefaultHealthCheckHealthyThreshold)+`),
-			COALESCE(enable_active_health_check,0), COALESCE(tcp_health_check_port,0), COALESCE(tcp_proxy_protocol,0), COALESCE(tcp_try_duration,0), COALESCE(tcp_try_interval,`+fmt.Sprint(db.DefaultTCPTryInterval)+`),
-	COALESCE(request_body_max_size_mb,0), COALESCE(upstream_keepalive_timeout,0), COALESCE(server_tokens_hidden,0), COALESCE(ntlm_compatible,0), COALESCE(upstream_force_http1,0),
-		COALESCE(custom_routes_enabled,0),
-		COALESCE(proxy_dial_timeout,0), COALESCE(proxy_response_header_timeout,0), COALESCE(proxy_read_timeout,0), COALESCE(proxy_write_timeout,0), COALESCE(proxy_stream_timeout,0), COALESCE(proxy_flush_interval,0), COALESCE(proxy_stream_close_delay,0),
-		COALESCE(host_header,''), COALESCE(health_check_host,''), COALESCE(enable_compress,0), COALESCE(compress_types,'gzip'),
-		IIF(enabled IN ('1',1),1,0), COALESCE(log_enabled,0), name, COALESCE(description,'')
-	FROM lb_rules WHERE caddy_id = ?`, caddyID).Scan(
+	// 投影单源 updateRuleBaselineSelectColumns（绑定与文本默认值都收在该表，
+	// expr 顺序 = 下方 Scan 顺序；全集断言见文件头 init）。
+	err := db.DB.QueryRow(`SELECT `+updateRuleBaselineSelectExprs()+` FROM lb_rules WHERE caddy_id = ?`, caddyID).Scan(
 		&existingRule.Protocol, &existingRule.Domain, &existingRule.ListenPort, &existingRule.Strategy,
 		&existingRule.TLSCert, &existingRule.TLSKey, &existingRule.TLSSource, &existingRule.ACMEConfigID,
 		&existingRule.CAProviderID,
@@ -2328,9 +2549,10 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 			req.TCPProxyProtocol = &disabled
 			req.TCPTryDuration = &zero
 			req.TCPTryInterval = &zero
-			// 回切 http 恢复 dns_family 默认(与 CreateRule
-			// :758-760 同口径)——切 TCP 已清零(:1337),存量 '' 直接落库会让
-			// DB 终态与创建态分叉(读路径 COALESCE 兜底,快照/导出携带脏空值)。
+			// 回切 http 恢复 dns_family 默认——切 TCP 时 DnsFamily 已由
+			// tcpDeadFieldReset 归一 ipv4（见 rules.go tcpDeadFieldReset），本填充
+			// 仅覆盖存量 '' 行（v1 导入/带外遗留），避免脏空值落库
+			// （读路径 COALESCE 兜底,快照/导出携带脏空值）。
 			if req.DnsFamily == "" {
 				req.DnsFamily = "ipv4"
 			}
@@ -2743,128 +2965,18 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		req.CAProviderID = &zeroCA
 	}
 
-	// Build dynamic update for lb_rules table
+	// Build dynamic update for lb_rules table——SET 列单源 updateRuleSetColumns
+	// （顺序 = SQL/args 顺序；全集断言见 updateRuleColumnParityGaps/init，
+	// 新增列漏进表即 panic）。updated_at/updated_by 由下方终局守卫分支追加。
 	query := "UPDATE lb_rules SET "
 	var args []interface{}
-
-	query += "name = ?, "
-	args = append(args, req.Name)
-	query += "description = ?, "
-	args = append(args, derefStr(req.Description))
-	query += "protocol = ?, "
-	args = append(args, req.Protocol)
-	query += "domain = ?, "
-	args = append(args, req.Domain)
-	query += "listen_port = ?, "
-	args = append(args, req.ListenPort)
-	query += "strategy = ?, "
-	args = append(args, req.Strategy)
-	query += "dynamic_dns = ?, "
-	args = append(args, *req.DynamicDNS)
-	query += "enable_dns_server = ?, "
-	args = append(args, *req.EnableDnsServer)
-	query += "dns_server = ?, "
-	args = append(args, derefStr(req.DnsServer))
-	query += "dns_family = ?, "
-	args = append(args, req.DnsFamily)
-	query += "health_check_path = ?, "
-	args = append(args, derefStr(req.HealthCheckPath))
-	query += "health_check_interval = ?, "
-	args = append(args, req.HealthCheckInterval)
-	query += "health_check_timeout = ?, "
-	args = append(args, req.HealthCheckTimeout)
-	query += "health_check_unhealthy_threshold = ?, "
-	args = append(args, *req.HealthCheckUnhealthyThreshold)
-	query += "health_check_healthy_threshold = ?, "
-	args = append(args, *req.HealthCheckHealthyThreshold)
-	query += "enable_active_health_check = ?, "
-	args = append(args, *req.EnableActiveHealthCheck)
-	query += "tcp_health_check_port = ?, "
-	args = append(args, *req.TCPHealthCheckPort)
-	query += "tcp_proxy_protocol = ?, "
-	args = append(args, *req.TCPProxyProtocol)
-	query += "tcp_try_duration = ?, "
-	args = append(args, *req.TCPTryDuration)
-	query += "tcp_try_interval = ?, "
-	args = append(args, *req.TCPTryInterval)
-	query += "request_body_max_size_mb = ?, "
-	args = append(args, *req.RequestBodyMaxSizeMB)
-	query += "upstream_keepalive_timeout = ?, "
-	args = append(args, *req.UpstreamKeepaliveTimeout)
-	query += "server_tokens_hidden = ?, "
-	args = append(args, *req.ServerTokensHidden)
-	query += "ntlm_compatible = ?, "
-	args = append(args, *req.NTLMCompatible)
-	query += "upstream_force_http1 = ?, "
-	args = append(args, *req.UpstreamForceHTTP1)
-	query += "custom_routes_enabled = ?, "
-	args = append(args, features.CustomRoutesEnabled)
-	query += "proxy_dial_timeout = ?, "
-	args = append(args, features.ProxyDialTimeout)
-	query += "proxy_response_header_timeout = ?, "
-	args = append(args, features.ProxyResponseHeaderTimeout)
-	query += "proxy_read_timeout = ?, "
-	args = append(args, features.ProxyReadTimeout)
-	query += "proxy_write_timeout = ?, "
-	args = append(args, features.ProxyWriteTimeout)
-	query += "proxy_stream_timeout = ?, "
-	args = append(args, features.ProxyStreamTimeout)
-	query += "proxy_flush_interval = ?, "
-	args = append(args, features.ProxyFlushInterval)
-	query += "proxy_stream_close_delay = ?, "
-	args = append(args, features.ProxyStreamCloseDelay)
-	query += "host_header = ?, "
-	args = append(args, derefStr(req.HostHeader))
-	query += "health_check_host = ?, "
-	args = append(args, derefStr(req.HealthCheckHost))
-	query += "enable_tls = ?, "
-	args = append(args, *req.EnableTLS)
-	query += "tls_source = ?, "
-	args = append(args, req.TLSSource)
-	query += "acme_config_id = ?, "
-	args = append(args, req.ACMEConfigID)
-	// ca_provider_id 恒随更新写入——前方合并区已保证
-	// req.CAProviderID 非 nil（nil=沿用存量），原 if 条件恒真。
-	query += "ca_provider_id = ?, "
-	args = append(args, *req.CAProviderID)
-	if req.BlockPageStage1ID != nil {
-		query += "block_page_stage1_id = ?, "
-		args = append(args, *req.BlockPageStage1ID)
+	for _, entry := range updateRuleSetColumns {
+		if entry.provided != nil && !entry.provided(&req, protocolChanged, clearingTLSMaterial) {
+			continue
+		}
+		query += entry.column + " = ?, "
+		args = append(args, entry.value(&req, features))
 	}
-	if req.BlockPageStage1Status != nil {
-		query += "block_page_stage1_status = ?, "
-		args = append(args, *req.BlockPageStage1Status)
-	}
-	if req.BlockPageStage3ID != nil {
-		query += "block_page_stage3_id = ?, "
-		args = append(args, *req.BlockPageStage3ID)
-	}
-	if req.BlockPageStage3Status != nil {
-		query += "block_page_stage3_status = ?, "
-		args = append(args, *req.BlockPageStage3Status)
-	}
-	// 空值=保留存量的语义只适用于 HTTP（手动证书留空=沿用）；
-	// TCP 行经上方 tcpDeadFieldReset 已把 TLSCert/TLSKey 置空，但同协议编辑
-	// 时两条件此前皆假 → DELETE 列不写，死证书/私钥材料永久滞留并随导出/
-	// 快照放大。TCP 恒写（值为归一后的空串）。
-	if req.TLSCert != "" || protocolChanged || req.Protocol == "tcp" || clearingTLSMaterial {
-		query += "tls_cert = ?, "
-		args = append(args, req.TLSCert)
-	}
-	if req.TLSKey != "" || protocolChanged || req.Protocol == "tcp" || clearingTLSMaterial {
-		query += "tls_key = ?, "
-		args = append(args, req.TLSKey)
-	}
-	query += "tls_http_redirect = ?, "
-	args = append(args, *req.TLSHTTPRedirect)
-	query += "enable_compress = ?, "
-	args = append(args, *req.EnableCompress)
-	query += "compress_types = ?, "
-	args = append(args, req.CompressTypes)
-	query += "enabled = ?, "
-	args = append(args, *req.Enabled)
-	query += "log_enabled = ?, "
-	args = append(args, *req.LogEnabled)
 
 	// 原此处的 SingleRuleConfig 死构造（建成后无任何消费）已删。
 	// domain 保留：下方 ACME 任务域名迁移/查找以其为键。

@@ -226,6 +226,9 @@ func (m *L4IPFileMatcher) tryReload() {
 // readSet 读取并编译名单：CIDR 与裸 IP 经 caddyhttp.CIDRExpressionToPrefix
 // （与上游同一解析函数=同一语义：裸 IP 收敛 /32|/128，注释/空行/非法行忽略）。
 // 文件缺失 = 空集（err=nil，降级语义）；返回文件形态供 stat 兜底记基线。
+// 错误路径（open/读失败）形态返回零值基线（mod 零值、size=-1）：chmod 修复
+// 权限不改变文件 mtime/size，若记失败时刻形态，stat 兜底将恒判「未变」而
+// 不再重读（名单恒空不自愈）；零值基线强制下一轮 stat 兜底重读。
 func (m *L4IPFileMatcher) readSet() (*ipPrefixSet, time.Time, int64, error) {
 	st, err := os.Stat(m.File)
 	if err != nil {
@@ -235,7 +238,7 @@ func (m *L4IPFileMatcher) readSet() (*ipPrefixSet, time.Time, int64, error) {
 	if err != nil {
 		// 错误路径返回 nil 集合：调用方（Provision/tryReload）对 err!=nil
 		// 不 Store——读失败绝不把旧快照/空集误固化（fail-stale）。
-		return nil, st.ModTime(), st.Size(), fmt.Errorf("error opening the IP list file %v: %w", m.File, err)
+		return nil, time.Time{}, -1, fmt.Errorf("error opening the IP list file %v: %w", m.File, err)
 	}
 	defer func() { _ = file.Close() }()
 	var cidrs []netip.Prefix
@@ -247,7 +250,7 @@ func (m *L4IPFileMatcher) readSet() (*ipPrefixSet, time.Time, int64, error) {
 		}
 	}
 	if serr := scanner.Err(); serr != nil {
-		return nil, st.ModTime(), st.Size(), fmt.Errorf("error reading the IPs from %v: %w", m.File, serr)
+		return nil, time.Time{}, -1, fmt.Errorf("error reading the IPs from %v: %w", m.File, serr)
 	}
 	return &ipPrefixSet{cidrs: cidrs}, st.ModTime(), st.Size(), nil
 }

@@ -396,7 +396,7 @@ test('安全事件行内：条数/行帽 + 缓存 N 条 + 库体量；审计日�
 
 test('缓存 0 条必须显示：0 不得被真值判断当成缺席', () => {
   const cacheCount = codeSection('src/components/LogStorageBar.vue', 'const cacheCountText = computed', '\n})\n')
-  assert.match(cacheCount, /`缓存 \$\{i\.cache_entries\.toLocaleString\(\)\} 条`/, '条数文案单源')
+  assert.match(cacheCount, /`缓存 \$\{formatInt\(i\.cache_entries\)\} 条`/, '条数文案单源（千分位走 formatInt 单源）')
   assert.doesNotMatch(cacheCount, /if \(i\.cache_entries\)/, '真值判断会把 0 条静默吞掉')
   assert.doesNotMatch(cacheCount, /cache_entries > 0/, '0 条是正常态，不得设 >0 门槛')
 })

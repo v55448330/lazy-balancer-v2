@@ -2,7 +2,9 @@ package handlers
 
 // 文档与写门的派生一致性（一次成形，杜绝「第 N 次扩张未跟进」）：
 //   - 门集合从 handler 源码（rejectWriteDuringImport / rejectNodeWriteDuringImport
-//     调用点）与 middleware 路由注册双向派生；
+//     调用点，及正向 `if configImportBusy() {` 直门——certjobs/cluster_sync/
+//     taskmonitor 的重试/删除/手动同步/任务 toggle/cancel/control 六处不经
+//     reject* helper）与 middleware 路由注册双向派生；
 //   - 文档集合是 apidocs 的 importWindowGatedDocRoutes；
 //   - 两侧必须相等，且 OpenAPI 输出对每个受门且已登记的端点必须含
 //     409 import_in_progress。
@@ -52,19 +54,29 @@ func derivedImportWindowGatedRoutes(t *testing.T) map[string]string {
 			}
 			hit := false
 			ast.Inspect(fn.Body, func(n ast.Node) bool {
-				call, ok := n.(*ast.CallExpr)
-				if !ok {
-					return true
-				}
-				switch callee := call.Fun.(type) {
-				case *ast.Ident:
-					if callee.Name == "rejectWriteDuringImport" || callee.Name == "rejectNodeWriteDuringImport" {
-						hit = true
-						return false
+				switch node := n.(type) {
+				case *ast.IfStmt:
+					// configImportBusy 直门只认正向守卫 `if configImportBusy() {`
+					// （六处 409 fast-fail 全是此形）。反向形态
+					// （`!configImportBusy()`——branding 门内跳过、coordinator
+					// 探测）不是拒绝门，标记会造成文档 409 与实现不符。
+					if call, ok := node.Cond.(*ast.CallExpr); ok {
+						if id, ok := call.Fun.(*ast.Ident); ok && id.Name == "configImportBusy" {
+							hit = true
+							return false
+						}
 					}
-					out[callee.Name] = true
-				case *ast.SelectorExpr:
-					out[callee.Sel.Name] = true
+				case *ast.CallExpr:
+					switch callee := node.Fun.(type) {
+					case *ast.Ident:
+						if callee.Name == "rejectWriteDuringImport" || callee.Name == "rejectNodeWriteDuringImport" {
+							hit = true
+							return false
+						}
+						out[callee.Name] = true
+					case *ast.SelectorExpr:
+						out[callee.Sel.Name] = true
+					}
 				}
 				return true
 			})
@@ -207,6 +219,15 @@ func TestOpenAPIYAML_gatedRouteFamiliesDocument409(t *testing.T) {
 		"/users/{id}/reset-password:",
 		"/api-keys:",
 		"/security/crs/schedule:",
+		// configImportBusy 直门族（certjobs/cluster_sync/taskmonitor）：
+		// 证书任务重试/删除、手动同步、任务触发/调度开关/取消/常驻启停。
+		"/certificates/jobs/{id}/retry:",
+		"/certificates/jobs/{id}:",
+		"/cluster/sync/pull:",
+		"/system/tasks/{id}/trigger:",
+		"/system/tasks/{id}/toggle:",
+		"/system/tasks/{id}/cancel:",
+		"/system/tasks/{id}/control:",
 	}
 	for _, path := range paths {
 		start := strings.Index(yaml, "  "+path)

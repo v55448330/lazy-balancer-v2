@@ -441,7 +441,7 @@ const ipListGCInterval = time.Hour
 //     纯单段文件名，无路径逃逸面）；升级前旧全局名 u-deny.txt 等同字符类
 //     天然覆盖，由 24h GC 过渡回收）、l4-(trust12|trust|deny|bl|allow)-<ruleCaddyID>
 //     （L4 阶段 0/1 安全路由投影，规则身份编入 scope——与 u-* 同一粒度铁律；
-//     trust12=保留检测信任并集，SEC-P1-1）；
+//     trust12=保留检测信任并集）；
 //     精确白名单，用户手放文件不碰；
 //   - 旧内容寻址 <已知 scope>-sha256[:12].txt——迁移过渡分支：改造前落盘的
 //     旧哈希文件由既有 24h GC 自然回收（不写迁移）。后缀只允许

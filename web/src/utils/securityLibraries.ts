@@ -13,6 +13,7 @@
 // 色调承载（缺失=danger，未安装=info）。
 import { compareVersion } from './securityStages.ts'
 import { hasOwn } from './hasOwn.ts'
+import { formatInt } from './formatInt.ts'
 
 type LibraryTagType = 'success' | 'warning' | 'danger' | 'info'
 
@@ -170,12 +171,13 @@ export const librarySourceHealthTag = (
  * 写「条规则」而不是「个文件」，否则 832 条规则会被读成 832 个文件。
  * 读取失败由调用方先行置 '—'；0/缺省同样 '—'（0 条不等于「库已就绪」）。
  *
- * 千分位手工分组、**不用** `toLocaleString()` 的默认 locale：后者随宿主
- * LC_ALL/LANG 变（de → `1.234`，fr → `1 234`），同一份代码在不同开发机/CI 上
- * 给出不同文案（守卫假红），de/fr 用户还会把千分位读成小数点。
+ * 千分位走单源 formatInt（utils/formatInt.ts，手工分组）：**不用**
+ * `toLocaleString()` 的默认 locale——后者随宿主 LC_ALL/LANG 变（de → `1.234`，
+ * fr → `1 234`），同一份代码在不同开发机/CI 上给出不同文案（守卫假红），
+ * de/fr 用户还会把千分位读成小数点。
  */
 export const crsRuleCountLabel = (ruleCount: number | undefined): string =>
-  ruleCount && ruleCount > 0 ? `${String(ruleCount).replace(/\B(?=(\d{3})+(?!\d))/g, ',')} 条规则` : '—'
+  ruleCount && ruleCount > 0 ? `${formatInt(ruleCount)} 条规则` : '—'
 
 /**
  * 规则库「定时更新」保存前校验：返回错误文案，合法时 null。

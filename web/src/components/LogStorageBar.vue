@@ -30,6 +30,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { formatBytes } from '@/utils/formatBytes'
+import { formatInt } from '@/utils/formatInt'
 import { useLogStorageStats } from '@/composables/useLogStorageStats'
 
 const props = defineProps<{ logKey: string; caddyId?: string; refreshKey?: number }>()
@@ -73,7 +74,7 @@ const cacheCountText = computed(() => {
   if (!i || !cacheKnown.value) return ''
   if (i.cache_unavailable === true || i.cache_entries == null) return '缓存计数暂不可用'
   // 0 条也要显示（正常态）；不设 >0 门槛，否则「0 条」与「没这项统计」无法区分。
-  return `缓存 ${i.cache_entries.toLocaleString()} 条`
+  return `缓存 ${formatInt(i.cache_entries)} 条`
 })
 
 const percentage = computed(() => {
@@ -95,8 +96,8 @@ const sizeText = computed(() => {
   if (!i) return ''
   if (i.limit_rows) {
     const base = rowsUnavailable.value
-      ? `计数暂不可用 / ${i.limit_rows.toLocaleString()} 条`
-      : `${(i.rows ?? 0).toLocaleString()} / ${i.limit_rows.toLocaleString()} 条`
+      ? `计数暂不可用 / ${formatInt(i.limit_rows)} 条`
+      : `${formatInt(i.rows ?? 0)} / ${formatInt(i.limit_rows)} 条`
     // 安全事件主容量 = 事件行数/行帽：真实容量在库里，audit.log 的 size_bytes
     // 只是写入侧同文件的体量（随轮转/缓存补采漂移），不再当该行容量展示。
     const parts = [base]
@@ -105,7 +106,7 @@ const sizeText = computed(() => {
     return parts.join(' · ')
   }
   if (i.limit_bytes) return `${humanSize(i.size_bytes)} / ${humanSize(i.limit_bytes)}`
-  if (i.rows !== null && i.rows !== undefined) return `${i.rows.toLocaleString()} 条 · ${humanSize(i.size_bytes)}`
+  if (i.rows !== null && i.rows !== undefined) return `${formatInt(i.rows)} 条 · ${humanSize(i.size_bytes)}`
   return humanSize(i.size_bytes)
 })
 
@@ -147,9 +148,9 @@ const cacheDetail = computed(() => {
   if (i.cache_unavailable === true || i.cache_entries == null) {
     parts.push('缓存计数暂不可用（计数读取失败）')
   } else {
-    let head = `缓存 ${i.cache_entries.toLocaleString()} 条`
+    let head = `缓存 ${formatInt(i.cache_entries)} 条`
     if (i.cache_bytes != null) head += ` · ${humanSize(i.cache_bytes)}`
-    if (i.cache_limit_entries != null && i.cache_limit_entries > 0) head += ` / 上限 ${i.cache_limit_entries.toLocaleString()} 条`
+    if (i.cache_limit_entries != null && i.cache_limit_entries > 0) head += ` / 上限 ${formatInt(i.cache_limit_entries)} 条`
     if (i.cache_limit_bytes != null && i.cache_limit_bytes > 0) head += `（${humanSize(i.cache_limit_bytes)}）`
     parts.push(head)
   }

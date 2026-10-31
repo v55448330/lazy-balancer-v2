@@ -289,9 +289,11 @@ func buildL4EventLine(segID int64, msg, ruleID, clientIP string, now time.Time, 
 }
 
 // publishL4Event 把事件行交给进程级投递管线（队列满/字节预算超限在管线内
-// 计数丢弃，不阻塞连接路径超过 enqueue 超时）。
+// 计数丢弃，不阻塞连接路径超过 enqueue 超时）。nil 行（buildL4EventLine
+// 序列化防御分支产物）同样按丢弃计数——丢弃必须可观测，不得静默蒸发。
 func publishL4Event(line []byte) {
 	if line == nil {
+		acquirePipeline().reportDropped("event line marshal failed", 1)
 		return
 	}
 	acquirePipeline().enqueueEvent(line)

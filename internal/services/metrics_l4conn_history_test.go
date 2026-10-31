@@ -58,31 +58,30 @@ func TestCollectL4ConnHistory_diffRowsAndGlobalAggregate(t *testing.T) {
 	service := NewMetricsService(admin.URL+"/metrics", 30)
 	service.SetL4AdminURL(admin.URL)
 
-	// 第一轮：建立基线（首样本差分=当前值，与 traffic 差分同语义）。
+	// 首轮基线样本：只记基线不落行（面板进程单独重启、Caddy 不重启形态下
+	// prev 为零值——若按「差分=当前值」落行，会把 caddy 计数器全量落成当日行，
+	// 与 HTTP 侧持久累计锚点不对称）。
 	body.Store(`{"rules":{"lb_tcp_1":{"allowed_total":10,"denied_total":3},"lb_tcp_2":{"allowed_total":1,"denied_total":0}}}`)
 	service.collectL4ConnHistory()
-	if got := countL4HistoryRows(t, "1=1"); got != 3 {
-		t.Fatalf("首轮行数=%d, want 3（两条 per-rule + 一条全局聚合）", got)
-	}
-	if allowed, denied := sumL4HistoryCols(t, ""); allowed != 11 || denied != 3 {
-		t.Fatalf("首轮全局行=(%d,%d), want (11,3)", allowed, denied)
-	}
-	if allowed, denied := sumL4HistoryCols(t, "lb_tcp_1"); allowed != 10 || denied != 3 {
-		t.Fatalf("首轮 lb_tcp_1=(%d,%d), want (10,3)", allowed, denied)
+	if got := countL4HistoryRows(t, "1=1"); got != 0 {
+		t.Fatalf("首轮（基线）行数=%d, want 0（基线样本不落行）", got)
 	}
 
-	// 第二轮：计数器推进 → 差分增量落库。
+	// 第二轮起正常差分：计数器推进 → 差分增量落库。
 	body.Store(`{"rules":{"lb_tcp_1":{"allowed_total":16,"denied_total":5},"lb_tcp_2":{"allowed_total":1,"denied_total":0}}}`)
 	service.collectL4ConnHistory()
-	if allowed, denied := sumL4HistoryCols(t, ""); allowed != 17 || denied != 5 {
-		t.Fatalf("两轮累计全局行=(%d,%d), want (17,5)（增量 6+0/2+0）", allowed, denied)
+	if allowed, denied := sumL4HistoryCols(t, ""); allowed != 6 || denied != 2 {
+		t.Fatalf("差分轮全局行=(%d,%d), want (6,2)（16−10/5−3；lb_tcp_2 零增量不计）", allowed, denied)
 	}
-	if allowed, denied := sumL4HistoryCols(t, "lb_tcp_1"); allowed != 16 || denied != 5 {
-		t.Fatalf("两轮累计 lb_tcp_1=(%d,%d), want (16,5)", allowed, denied)
+	if allowed, denied := sumL4HistoryCols(t, "lb_tcp_1"); allowed != 6 || denied != 2 {
+		t.Fatalf("差分轮 lb_tcp_1=(%d,%d), want (6,2)", allowed, denied)
 	}
-	// 零增量规则本轮不落行（lb_tcp_2 第二轮差分为 0,0——仅首行）。
-	if got := countL4HistoryRows(t, "rule_id=?", "lb_tcp_2"); got != 1 {
-		t.Fatalf("lb_tcp_2 行数=%d, want 1（零增量轮不落行）", got)
+	// 零增量规则不落行；总行数 = lb_tcp_1 per-rule 1 + 全局聚合 1。
+	if got := countL4HistoryRows(t, "rule_id=?", "lb_tcp_2"); got != 0 {
+		t.Fatalf("lb_tcp_2 行数=%d, want 0（零增量轮不落行）", got)
+	}
+	if got := countL4HistoryRows(t, "1=1"); got != 2 {
+		t.Fatalf("差分轮总行数=%d, want 2（lb_tcp_1 per-rule + 全局聚合）", got)
 	}
 }
 
@@ -96,13 +95,20 @@ func TestCollectL4ConnHistory_counterResetTakesCurrent(t *testing.T) {
 	service := NewMetricsService(admin.URL+"/metrics", 30)
 	service.SetL4AdminURL(admin.URL)
 
+	// 首轮基线（100/10）只记基线不落行。
 	body.Store(`{"rules":{"lb_tcp_1":{"allowed_total":100,"denied_total":10}}}`)
+	service.collectL4ConnHistory()
+	if got := countL4HistoryRows(t, "1=1"); got != 0 {
+		t.Fatalf("基线轮行数=%d, want 0（基线样本不落行）", got)
+	}
+	// 正常推进轮：差分 (5,2) 落行。
+	body.Store(`{"rules":{"lb_tcp_1":{"allowed_total":105,"denied_total":12}}}`)
 	service.collectL4ConnHistory()
 	// /load 归零形态：cur < prev → 差分取 cur（不出现负数）。
 	body.Store(`{"rules":{"lb_tcp_1":{"allowed_total":2,"denied_total":0}}}`)
 	service.collectL4ConnHistory()
-	if allowed, denied := sumL4HistoryCols(t, "lb_tcp_1"); allowed != 102 || denied != 10 {
-		t.Fatalf("重置钳制后累计=(%d,%d), want (102,10)（第二轮差分取 cur=(2,0)）", allowed, denied)
+	if allowed, denied := sumL4HistoryCols(t, "lb_tcp_1"); allowed != 7 || denied != 2 {
+		t.Fatalf("重置钳制后累计=(%d,%d), want (7,2)（推进轮 5/2 + 重置轮差分取 cur=2/0）", allowed, denied)
 	}
 }
 
@@ -129,24 +135,31 @@ func TestCollectL4ConnHistory_fetchFailureKeepsPrevBaseline(t *testing.T) {
 	service := NewMetricsService(admin.URL+"/metrics", 30)
 	service.SetL4AdminURL(admin.URL)
 
+	// 基线轮：10/0 只记基线不落行。
 	body.Store(`{"rules":{"lb_tcp_1":{"allowed_total":10,"denied_total":0}}}`)
+	service.collectL4ConnHistory()
+	if got := countL4HistoryRows(t, "1=1"); got != 0 {
+		t.Fatalf("基线轮行数=%d, want 0（基线样本不落行）", got)
+	}
+	// 正常轮：12/0 → 差分 2 落行，基线推进到 12。
+	body.Store(`{"rules":{"lb_tcp_1":{"allowed_total":12,"denied_total":0}}}`)
 	service.collectL4ConnHistory()
 	baselineRows := countL4HistoryRows(t, "1=1")
 	if baselineRows == 0 {
-		t.Fatal("前置失败：基线轮未落行")
+		t.Fatal("前置失败：差分轮未落行")
 	}
 	// 中间轮失败（同 URL 500）：基线不得推进（否则恢复轮会把中断期全量算进差分）。
 	failRound.Store(true)
-	body.Store(`{"rules":{"lb_tcp_1":{"allowed_total":12,"denied_total":0}}}`)
+	body.Store(`{"rules":{"lb_tcp_1":{"allowed_total":20,"denied_total":0}}}`)
 	service.collectL4ConnHistory()
 	if got := countL4HistoryRows(t, "1=1"); got != baselineRows {
 		t.Fatalf("失败轮不得落行: rows=%d, want %d", got, baselineRows)
 	}
-	// 恢复轮：prev=10（失败轮未推进），差分=12−10=2。
+	// 恢复轮：prev=12（失败轮未推进），差分=20−12=8 → 累计 2+8=10。
 	failRound.Store(false)
 	service.collectL4ConnHistory()
-	if allowed, _ := sumL4HistoryCols(t, "lb_tcp_1"); allowed != 12 {
-		t.Fatalf("恢复轮累计=%d, want 12（失败轮不推进基线，差分=12−10）", allowed)
+	if allowed, _ := sumL4HistoryCols(t, "lb_tcp_1"); allowed != 10 {
+		t.Fatalf("恢复轮累计=%d, want 10（失败轮不推进基线，差分=20−12）", allowed)
 	}
 }
 

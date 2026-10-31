@@ -579,7 +579,7 @@
           </template>
         </el-table-column>
         <el-table-column label="条目数" width="100" align="right">
-          <template #default="{ row }">{{ row.entry_count ? row.entry_count.toLocaleString() : '—' }}</template>
+          <template #default="{ row }">{{ row.entry_count ? formatInt(row.entry_count) : '—' }}</template>
         </el-table-column>
         <el-table-column label="版本" width="110">
           <template #default="{ row }"><span class="lib-version">{{ row.version || '未更新' }}</span></template>
@@ -645,7 +645,7 @@
           </template>
         </el-table-column>
         <el-table-column label="条目数" width="100" align="right">
-          <template #default="{ row }">{{ row.entry_count ? row.entry_count.toLocaleString() : '—' }}</template>
+          <template #default="{ row }">{{ row.entry_count ? formatInt(row.entry_count) : '—' }}</template>
         </el-table-column>
         <el-table-column label="版本" width="110">
           <template #default="{ row }"><span class="lib-version">{{ row.version || '未更新' }}</span></template>
@@ -711,6 +711,7 @@ import AccessibleLink from '@/components/common/AccessibleLink.vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { request, mfaAwareSuccess } from '@/utils/api'
 import { formatBytes } from '@/utils/formatBytes'
+import { formatInt } from '@/utils/formatInt'
 import { showSaveResult } from '@/utils/saveResult'
 import { isValidCidr } from '@/utils/ipAddress'
 import { IP_LIST_MAX_ENTRIES, canSaveIpList, mergeConcurrentBanEntries, needsEmptyListConfirm } from '@/utils/ipListSaveGuard'
@@ -894,7 +895,7 @@ const libRows = computed<LibRow[]>(() => {
       name: '威胁情报库',
       sub: 'IP 威胁名单，可被黑名单策略引用',
       version: configured ? (summary.latestVersion || '未更新') : '—',
-      count: configured && summary.totalEntries > 0 ? summary.totalEntries.toLocaleString() + ' 条' : '—',
+      count: configured && summary.totalEntries > 0 ? formatInt(summary.totalEntries) + ' 条' : '—',
       status: threatLibError.value ? 'failed' : configured ? summary.status : 'not-configured',
       autoUpdate: threatAutoUpdate.value,
       autoUpdateKnown: threatLibLoaded.value && !threatLibError.value,
@@ -912,7 +913,7 @@ const libRows = computed<LibRow[]>(() => {
       name: '爬虫地址库',
       sub: 'Google/OpenAI/Bing/360 官方爬虫 IP 段',
       version: configured ? (summary.latestVersion || '未更新') : '—',
-      count: configured && summary.totalEntries > 0 ? summary.totalEntries.toLocaleString() + ' 条' : '—',
+      count: configured && summary.totalEntries > 0 ? formatInt(summary.totalEntries) + ' 条' : '—',
       status: crawlerLibError.value ? 'failed' : configured ? summary.status : 'not-configured',
       autoUpdate: crawlerAutoUpdate.value,
       autoUpdateKnown: crawlerLibLoaded.value && !crawlerLibError.value,

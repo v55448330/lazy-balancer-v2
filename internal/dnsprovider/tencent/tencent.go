@@ -184,9 +184,11 @@ func (p *Provider) CountCleanupRecords(zone, tokenFQDN, value string) int {
 
 // cleanUp 是 CleanUp/CleanUpValue 的共享实现（按值定向删除+陈旧条目清理）。
 //
-// 本函数与 internal/dnsprovider/dnspod/dnspod.go 的
-// cleanUp 是同构双实现（有意保留——两者底层 SDK/记录 ID 类型不同）。任一侧
-// 修改删除/留痕/兜底排空逻辑时，MUST 同步另一侧并保持语义一致。
+// 本函数与 internal/dnsprovider/dnspod/dnspod.go、internal/dnsprovider/aliyun
+// 的 cleanUp 是同构多实现（有意保留——底层 SDK/记录 ID 类型不同）。任一侧
+// 修改删除/留痕/兜底排空/残余排空逻辑时，MUST 同步全部实现并保持语义一致
+// （ownership 条目留存、兜底排空、provider 侧残余排空；对齐门禁见
+// internal/dnsprovider/cleanup_parity_test.go）。
 func (p *Provider) cleanUp(ctx context.Context, zone, tokenFQDN, value string, byValue bool) error {
 	zone = dnsname.NormalizeName(zone)
 	subDomain := dnsname.RelativeTo(tokenFQDN, zone)
@@ -221,7 +223,9 @@ func (p *Provider) cleanUp(ctx context.Context, zone, tokenFQDN, value string, b
 
 	var cleanupErr error
 	var failed []ownedRecord
+	attempted := 0
 	deleteOne := func(recordID uint64, value string) error {
+		attempted++
 		if err := p.deleteRecord(ctx, zone, recordID); err != nil {
 			if ctx.Err() != nil {
 				// 保留原始 provider 错误（整体覆写会丢失具体
@@ -301,7 +305,111 @@ func (p *Provider) cleanUp(ctx context.Context, zone, tokenFQDN, value string, b
 		p.owned[key] = append(p.owned[key], failed...)
 		p.mu.Unlock()
 	}
+	// provider 侧残余排空（与 aliyun 侧同构，见函数注释）：账本候选、内存
+	// 兜底、排空条目全部为空才触发——有任一候选即说明追踪链路仍在，残余
+	// 排空只会平添网络往返。ctx 已取消时不再发起枚举。
+	if len(records) == 0 && len(memorySelected) == 0 && attempted == 0 && ctx.Err() == nil {
+		matches, listErr := p.listChallengeRecords(ctx, zone, subDomain)
+		if listErr != nil {
+			cleanupErr = errors.Join(cleanupErr, listErr)
+		}
+		for _, match := range matches {
+			if byValue && match.value != value {
+				continue
+			}
+			if err := p.deleteRecord(ctx, zone, match.recordID); err != nil {
+				if ctx.Err() != nil {
+					// 与 deleteOne 同口径——ctx 取消/超时并入错误链，
+					// 保留原始 provider 错误（整体覆写会丢失具体 API 失败
+					// 原因，诊断信息归零）。
+					err = errors.Join(err, ctx.Err())
+				}
+				cleanupErr = errors.Join(cleanupErr, fmt.Errorf("DeleteRecord failed: %w", p.sanitizeSDKError(err)))
+				// 删除失败回填内存兜底表供下次重试（幂等）——枚举条目没有
+				// 账本归宿，兜底表是唯一追踪载体。
+				p.mu.Lock()
+				p.owned[key] = append(p.owned[key], ownedRecord{recordID: match.recordID, value: match.value})
+				p.mu.Unlock()
+			}
+		}
+	}
 	return cleanupErr
+}
+
+// challengeListPageSize / challengeListPageLimit 是 provider 侧残余排空的
+// DescribeRecordList 翻页参数（与 aliyun 侧同口径）：Limit 上限 3000，取
+// 100 控制单页体积；pageLimit 仅防御异常服务端，避免死循环。
+const (
+	challengeListPageSize  = 100
+	challengeListPageLimit = 20
+)
+
+// enumeratedRecord 是 DescribeRecordList 命中的一条挑战记录。
+type enumeratedRecord struct {
+	recordID uint64
+	value    string
+}
+
+// listChallengeRecords 枚举 zone 下指定主机记录名的 TXT 记录：服务端按
+// Domain+SubDomain+RecordType 过滤（Keyword 会忽略 SubDomain 等条件，不用），
+// 客户端按 RR 精确匹配（大小写不敏感）收窄，翻页直到取尽。
+// ResourceNotFound.NoDataOfRecord（ErrorOnEmpty=yes 的服务端默认行为）不是
+// 故障，按空列表处理——与 deleteRecord 的幂等删除同方向。
+func (p *Provider) listChallengeRecords(ctx context.Context, zone, subDomain string) ([]enumeratedRecord, error) {
+	var collected []enumeratedRecord
+	for page := range challengeListPageLimit {
+		req := dnspod.NewDescribeRecordListRequest()
+		req.Domain = common.StringPtr(zone)
+		req.SubDomain = common.StringPtr(subDomain)
+		req.RecordType = common.StringPtr("TXT")
+		// ErrorOnEmpty=no：查询不到数据时返回空列表而不是报错；不认该参数
+		// 的服务端仍可能回 ResourceNotFound.NoDataOfRecord，由上方兜底。
+		req.ErrorOnEmpty = common.StringPtr("no")
+		req.Offset = common.Uint64Ptr(uint64(page) * challengeListPageSize)
+		req.Limit = common.Uint64Ptr(challengeListPageSize)
+		resp, err := p.client.DescribeRecordListWithContext(ctx, req)
+		if err != nil {
+			if isRecordNotFound(err) {
+				return collected, nil
+			}
+			if ctx.Err() != nil {
+				err = errors.Join(err, ctx.Err())
+			}
+			return nil, fmt.Errorf("DescribeRecordList failed: %w", p.sanitizeSDKError(err))
+		}
+		if resp.Response == nil {
+			return collected, nil
+		}
+		for _, item := range resp.Response.RecordList {
+			if item == nil || item.RecordId == nil {
+				continue
+			}
+			if item.Type == nil || *item.Type != "TXT" {
+				continue
+			}
+			name := ""
+			if item.Name != nil {
+				name = *item.Name
+			}
+			if dnsname.NormalizeName(name) != subDomain {
+				continue
+			}
+			value := ""
+			if item.Value != nil {
+				value = *item.Value
+			}
+			collected = append(collected, enumeratedRecord{recordID: *item.RecordId, value: value})
+		}
+		var total uint64
+		if info := resp.Response.RecordCountInfo; info != nil && info.TotalCount != nil {
+			total = *info.TotalCount
+		}
+		fetched := uint64(len(resp.Response.RecordList))
+		if fetched == 0 || uint64(page+1)*challengeListPageSize >= total {
+			return collected, nil
+		}
+	}
+	return collected, nil
 }
 
 func (p *Provider) deleteRecord(ctx context.Context, zone string, recordID uint64) error {

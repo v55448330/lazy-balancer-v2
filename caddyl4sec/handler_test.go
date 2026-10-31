@@ -260,7 +260,22 @@ func TestHandleDenyReportsEvents(t *testing.T) {
 	}
 }
 
-// TestHandleTrustDetectLogsNotBlocks trust_detect 形态（SEC-P1-1）：产 logged
+// TestPublishL4EventNilLineCountsDropped nil 事件行（buildL4EventLine 序列化
+// 防御分支产物）的丢弃兜底契约：丢弃必须可观测——publishL4Event 对 nil 行
+// 计入管线 dropped（与注释承诺一致），不得静默蒸发。
+func TestPublishL4EventNilLineCountsDropped(t *testing.T) {
+	t.Setenv("LB_SECURITY_EVENTS_IPC_SOCKET", "")
+	p := acquirePipelineForTest()
+	defer p.resetForTest()
+
+	publishL4Event(nil)
+	p.flushQuiescedForTest()
+	if p.dropped.Load() != 1 {
+		t.Fatalf("dropped = %d, want 1（nil 事件行按丢弃计数兜底，不得静默返回）", p.dropped.Load())
+	}
+}
+
+// TestHandleTrustDetectLogsNotBlocks trust_detect 形态（：产 logged
 // 事件行（is_interrupted=false，仅记录）+ 透传不断连；计数走 allowed（连接
 // 到达上游=正常流量口径，与 HTTP 信任检测请求计入流量统计一致），denied 不动。
 func TestHandleTrustDetectLogsNotBlocks(t *testing.T) {

@@ -103,7 +103,7 @@
                   <el-icon><Document /></el-icon>
                 </div>
                 <div class="stat-content">
-                  <div class="stat-value">{{ caddyMetricsUnavailable ? '采集失败' : caddyMetrics ? caddyMetrics.requests_total.toLocaleString() : '-' }}</div>
+                  <div class="stat-value">{{ caddyMetricsUnavailable ? '采集失败' : caddyMetrics ? formatInt(caddyMetrics.requests_total) : '-' }}</div>
                   <div class="stat-label" :title="METRIC_RELOAD_RESET_NOTE">总请求数</div>
                 </div>
               </div>
@@ -360,7 +360,7 @@
             </el-table-column>
             <el-table-column label="请求数" width="110">
               <template #default="{ row }">
-                <span class="text-primary" :title="ruleMetricCellTitle({ disabled: isRuleDisabled(row as Rule), unavailable: !!ruleMetricsUnavailable[row.caddy_id], tcp: row.protocol === 'tcp', value: ruleMetrics[row.caddy_id]?.requests_total?.toLocaleString() ?? '-' })">{{ isRuleDisabled(row as Rule) ? '已禁用' : ruleMetricsUnavailable[row.caddy_id] ? '采集失败' : ruleMetrics[row.caddy_id]?.requests_total?.toLocaleString() ?? '-' }}</span>
+                <span class="text-primary" :title="ruleMetricCellTitle({ disabled: isRuleDisabled(row as Rule), unavailable: !!ruleMetricsUnavailable[row.caddy_id], tcp: row.protocol === 'tcp', value: ruleRequestsTotalText(row.caddy_id) })">{{ isRuleDisabled(row as Rule) ? '已禁用' : ruleMetricsUnavailable[row.caddy_id] ? '采集失败' : ruleRequestsTotalText(row.caddy_id) }}</span>
               </template>
             </el-table-column>
             <!-- 初版 310 过宽（用户反馈）→ 260：常见量级（万级以内）
@@ -476,6 +476,7 @@ import VChart from 'vue-echarts'
 import { useAuthStore } from '@/stores/auth'
 import { request, mfaAwareSuccess } from '@/utils/api'
 import { formatBytes } from '@/utils/formatBytes'
+import { formatInt } from '@/utils/formatInt'
 import { ElMessageBox } from 'element-plus'
 import { Monitor, Cpu, Document, Loading, CircleCheck, Odometer, TrendCharts, DataLine, List } from '@element-plus/icons-vue'
 import type { APIResponse, SystemInfo, SystemMetrics, CaddyMetrics, Rule, RuleMetrics, HostMetrics, MetricsOverview } from '@/types'
@@ -527,6 +528,12 @@ interface DashboardRuleMetrics extends RuleMetrics {
 }
 const ruleMetrics = ref<Record<string, DashboardRuleMetrics>>({})
 const ruleMetricsUnavailable = ref<Record<string, boolean>>({})
+// 规则请求数列文案（单元格与 hover title 同源）：缺采集 → '-'，千分位走
+// formatInt 单源（原来两处内联 `?.toLocaleString() ?? '-'`）。
+const ruleRequestsTotalText = (caddyId: string): string => {
+  const total = ruleMetrics.value[caddyId]?.requests_total
+  return typeof total === 'number' ? formatInt(total) : '-'
+}
 const rankBy = ref<'requests' | 'bytes'>('requests')
 type RuleHealth = 'unknown' | 'unhealthy' | 'degraded' | 'healthy'
 const ruleHealth = ref<Record<string, RuleHealth>>({})

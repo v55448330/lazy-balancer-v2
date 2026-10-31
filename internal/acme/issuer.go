@@ -383,17 +383,20 @@ func (i *Issuer) finalizeOrder(ctx context.Context, finalizeURL string, csr []by
 	return order, nil
 }
 
-// Cleanup removes DNS TXT records for all previously presented challenges.
+// cleanup removes DNS TXT records for all previously presented challenges.
+// 非导出：生产链路只经由 Issue 的 defer 清理（cleanupWithLog）与
+// cleanupWithLog 消费，本方法过去仅测试调用（死代码降级），
+// 不再向包外暴露清理入口。
 //
 // 每个挑战的注销先于按值清理：Release 返回 false 表示仍有其他在途签发持有同名
 // 同值记录（CA 复用授权 → 同一 keyAuth），本次清理必须跳过——删掉的是对方仍在
 // 等待验证的 TXT；最后结束的那次签发在 Release 时拿回判定权，一次回收全部同值
 // 记录。未登记注销的 ChallengeInfo（测试/外部构造）按无并发处理。
-func (i *Issuer) Cleanup(ctx context.Context, challenges []ChallengeInfo) {
+func (i *Issuer) cleanup(ctx context.Context, challenges []ChallengeInfo) {
 	i.cleanupWithLog(ctx, challenges, i.logStage)
 }
 
-// cleanupWithLog 是 Cleanup 的日志注入变体：logStage 由调用方决定「生命周期
+// cleanupWithLog 是 cleanup 的日志注入变体：logStage 由调用方决定「生命周期
 // 推进日志（Log）」还是「仅任务日志文件（LogFileOnly）」——Issue 错误路径的
 // defer 清理传后者。
 func (i *Issuer) cleanupWithLog(ctx context.Context, challenges []ChallengeInfo, logStage func(stage, msg string)) {
@@ -450,7 +453,7 @@ type ChallengeInfo struct {
 	// was presented with; cleanup removes only records of that value so
 	// concurrent issuances for the same domain cannot delete each other.
 	Value string
-	// claim 是本次挑战值的进程内在途登记（Issuer.Cleanup 注销后才允许按值
+	// claim 是本次挑战值的进程内在途登记（Issuer.cleanup 注销后才允许按值
 	// 清理）。未登记（零值）时按无并发处理，保持对外结构的可构造性。
 	claim *dnsprovider.ChallengeClaim
 }

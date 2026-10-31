@@ -62,7 +62,7 @@ func buildTCPSecurityRoutes(rule SingleRuleConfig, proxyHandler map[string]inter
 
 	// ① 信任直通：stage0 直通并集（trust_detection=0）命中即 [（proxy_protocol
 	// →）proxy] 透传，零事件零开销。内容门控与 HTTP 直通包裹同口径（并集为空
-	// 不渲染；名单从空到非空的发射面变化经既有全量链自愈收敛）。SEC-P2-1：
+	// 不渲染；名单从空到非空的发射面变化经既有全量链自愈收敛）。
 	// 规则开 TCPProxyProtocol 时与 deny/兜底路由对称前置 proxy_protocol——客户端
 	// 伪造的 PROXY 头不再原样透传上游，且不开 PROXY 协议时零发射（配置字节不变）。
 	detectionTrust, passthroughUnion := stage0TrustSets(policies)
@@ -156,6 +156,15 @@ func buildTCPSecurityRoutes(rule SingleRuleConfig, proxyHandler map[string]inter
 		if policy == nil || !PolicyHasGeoIP(policy) {
 			continue
 		}
+		// policy_id 段界软跳过（与 HTTP 预检链同界同口径，段界由
+		// encodeGeoIPPrecheckRuleID 单一裁决）：越出 [1,9999] 时 lb_l4_sec
+		// Provision 显性拒绝会把整份 L4 配置打死——单策略越界只跳过本策略
+		// GeoIP 路由并告警，不波及负载均衡（危害面=该策略 GeoIP 不生效，
+		// 与 HTTP 缺链同向）。
+		if _, ok := encodeGeoIPPrecheckRuleID(policy.ID); !ok {
+			Logf("warn", "策略 %d 的 GeoIP 预检链 id 越出普通 GeoIP 段 [%d,%d)，已跳过发射（TCP 规则 %s 的 L4 安全路由）", policy.ID, geoipPrecheckRuleBase+1, geoipCrawlerRuleBase, cid)
+			continue
+		}
 		entries := geoipCountries(policy)
 		if len(entries) == 0 {
 			continue
@@ -240,7 +249,7 @@ func notMatcherSet(sets []interface{}) map[string]interface{} {
 // l4ProxyProtocolHandler 是 layer4.handlers.proxy_protocol 路由前置单源：
 // rule.TCPProxyProtocol 开启时返回该 handler（lb_l4_sec 的 client_ip 归因与
 // 发往上游的 PROXY 头都按改写后对端），关闭时返回 nil（零发射，配置字节不变）。
-// 信任直通/信任检测（SEC-P2-1）与 deny 族/兜底采样路由共用本单源。
+// 信任直通/信任检测（与 deny 族/兜底采样路由共用本单源。
 func l4ProxyProtocolHandler(rule SingleRuleConfig) map[string]interface{} {
 	if rule.TCPProxyProtocol {
 		return map[string]interface{}{"handler": "proxy_protocol"}

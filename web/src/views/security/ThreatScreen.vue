@@ -313,6 +313,7 @@ import { createVisibilityIntervals } from '@/composables/useVisibilityIntervals'
 import { useCountUp } from '@/composables/useCountUp'
 import { formatDate } from '@/utils/date'
 import { eventActionFull, eventActionShort } from '@/utils/eventAction'
+import { formatInt } from '@/utils/formatInt'
 import { trafficDelta, formatRecentRate, hourlyBucketLabel, bucketTerminology, l4TrafficDelta, type TrafficBaseline } from '@/utils/threatScreenMetrics'
 import { anomalySeverity, overlayDetectionGrade, zeroScoreSeverity, type AnomalySeverity } from '@/utils/severityScale'
 import { displayThreatScreenMode } from '@/utils/configValues'
@@ -663,8 +664,8 @@ const attackQps = computed(() => {
   const recent = w.slice(-10)
   return qpsText(recent.reduce((m, v) => m + v, 0) / recent.length)
 })
-const normalTotalText = computed(() => (normalTotal.value >= 10000 ? `${(normalTotal.value / 1000).toFixed(1)}k` : normalTotal.value.toLocaleString()))
-const attackTotalText = computed(() => (attackTotal.value >= 10000 ? `${(attackTotal.value / 1000).toFixed(1)}k` : attackTotal.value.toLocaleString()))
+const normalTotalText = computed(() => (normalTotal.value >= 10000 ? `${(normalTotal.value / 1000).toFixed(1)}k` : formatInt(normalTotal.value)))
+const attackTotalText = computed(() => (attackTotal.value >= 10000 ? `${(attackTotal.value / 1000).toFixed(1)}k` : formatInt(attackTotal.value)))
 function sparkPoints(window: number[]): string {
   if (window.length < 2) return ''
   const max = trafficMax.value

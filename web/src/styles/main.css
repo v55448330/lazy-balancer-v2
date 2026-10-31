@@ -312,8 +312,6 @@ body .rule-lock-popper :is(.lock-stage, .lock-policy-group) { border-radius: 0; 
   .config-preview,
   .stat-item,
   .stat-icon,
-  .stat-box,
-  .stat-box__icon,
   .lib-icon,
   .v2-badge,
   .prism-code,
@@ -450,11 +448,4 @@ body .rule-lock-popper :is(.lock-stage, .lock-policy-group) { border-radius: 0; 
   color: #0e7490;
   background: #ecfeff;
   border-color: #a5f3fc;
-}
-
-/* HTTP 协议徽标（蓝）：与 TCP 徽标成对的共用单源（关联规则列表/选择器等）。 */
-.proto-http-tag {
-  color: #1d4ed8;
-  background: #eff6ff;
-  border-color: #bfdbfe;
 }

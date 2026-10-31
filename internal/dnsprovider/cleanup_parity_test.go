@@ -2,14 +2,16 @@ package dnsprovider
 
 // 清理骨架多实现对齐守卫：dnspod、tencent 与 aliyun 的 cleanUp 是有意保留的
 // 同构多实现（底层 API 与记录 ID 类型不同，抽象共享的耦合成本高于重复成本），
-// 各自维护「选中 → 逐条删除 → 批量移除账本 → 兜底排空 → 失败回填」骨架。
+// 各自维护「选中 → 逐条删除 → 批量移除账本 → 兜底排空 → 失败回填 → 残余
+// 排空」骨架。
 // 多实现的风险不是重复本身，而是**漂移**：只改一侧（如删除失败仍移除账本
 // 条目、兜底排空被删、ctx 取消不再并入错误链）会让各家 provider 在同一事故
 // 下的行为不同，而单侧测试永远绿。
 //
 // 本守卫把骨架的结构标记做成有序清单，所有实现必须两两同现同序；旁路的能力
-// （dnspod 的 domain-id 自愈、tencent/aliyun 的记录 ID 解析、aliyun 的
-// provider 侧残余排空）作为 provider 专属标记只在各自一侧断言，不进入共同清单。
+// （dnspod 的 domain-id 自愈、tencent/aliyun 的记录 ID 解析）作为 provider
+// 专属标记只在各自一侧断言，不进入共同清单。provider 侧残余排空自
+// 修复起三侧同构（aliyun 先行、dnspod/tencent 对齐），属共同清单。
 
 import (
 	"go/ast"
@@ -46,6 +48,10 @@ var cleanupSharedMarkers = []struct {
 	{"兜底排空：删除失败回填供下次重试", "p.owned[key] = append(p.owned[key], entry)"},
 	{"内存模式：逐条删除选中的内存条目", "for _, entry := range memorySelected {"},
 	{"失败回填：仅 ownership==nil 时回填", "if p.ownership == nil && len(failed) > 0 {"},
+	{"残余排空：账本/兜底全未命中且零删除尝试才网络枚举", "len(records) == 0 && len(memorySelected) == 0 && attempted == 0"},
+	{"残余排空：枚举调用（服务端过滤+客户端 RR 精确匹配）", "p.listChallengeRecords(ctx, zone, subDomain)"},
+	{"残余排空：按值清理时只删同值记录", "byValue && match.value != value"},
+	{"残余排空：删除失败回填内存兜底表供下次重试", "value: match.value})"},
 }
 
 // cleanupProviderOnlyMarkers 是 provider 专属能力（不得扩散/不得要求对侧同现）。
@@ -55,7 +61,6 @@ var cleanupProviderOnlyMarkers = map[string][]struct {
 }{
 	"aliyun": {
 		{"记录 ID 解析失败按不可恢复条目处理", "strconv.ParseUint(record.RecordID, 10, 64)"},
-		{"provider 侧残余排空：账本/兜底全未命中才网络枚举", "p.listChallengeRecords(ctx, zone, subDomain)"},
 	},
 	"dnspod": {
 		{"domain-id 陈旧自愈：作废缓存重解析", "p.invalidateDomainIDCache(zone)"},

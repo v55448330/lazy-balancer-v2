@@ -445,7 +445,11 @@ func validateRuleFeatures(input ruleFeatureInput) error {
 		if input.CustomRoutesEnabled || len(input.PathRules) > 0 {
 			return fmt.Errorf("TCP 规则不支持自定义路径规则")
 		}
-		if input.ProxyDialTimeout > 0 || input.ProxyResponseHeaderTimeout > 0 || input.ProxyReadTimeout > 0 || input.ProxyWriteTimeout > 0 || input.ProxyStreamTimeout > 0 || input.ProxyFlushInterval != 0 || input.ProxyStreamCloseDelay > 0 {
+		// 非 0 即拒（含 -1 等负值）：七列在 TCP 无哨兵语义，显式负值此前被
+		// Create 调用点静默归零绕过本门（正值 400、负值 201 分叉）——现统一
+		// 400 点名；零值/未提交（UI 缺省）不受影响。协议感知负值文案
+		// （「代理超时时间不能为负数」）仍为 HTTP 路径保留。
+		if input.ProxyDialTimeout != 0 || input.ProxyResponseHeaderTimeout != 0 || input.ProxyReadTimeout != 0 || input.ProxyWriteTimeout != 0 || input.ProxyStreamTimeout != 0 || input.ProxyFlushInterval != 0 || input.ProxyStreamCloseDelay != 0 {
 			return fmt.Errorf("TCP 规则不支持 HTTP 代理超时配置")
 		}
 		// TCP 三字段无哨兵语义——负值仅被渲染侧静默钳制，保存前拒绝显式负值。
@@ -955,7 +959,9 @@ func deriveLbRuleListColumns() string {
 	return strings.Replace(lbRuleColumns, certColumns, "'', ''", 1)
 }
 
-// lbRuleColumns 是规则完整投影（ListRules/GetRule/DuplicateRule 共用）。
+// lbRuleColumns 是规则完整投影（GetRule/DuplicateRule/loadRulesForConfigValidation
+// 共用；ListRules 不直接消费本投影——走 lbRuleListColumns，由本投影机械派生、
+// 证书两列置空，scanLbRules 同一扫描）。
 // 治理默认值单源：治理默认值列（健康检查间隔/超时/阈值、tcp_try_interval）的 SQL
 // 兜底字面量是默认值的第三次复制（DDL DEFAULT + 启动回填 + 本读路径）——
 // 改为 db.Default* 常量单源（与 GetConfig 的 COALESCE(col,?) 绑定同模式）。

@@ -114,7 +114,7 @@ func TestBuildTCPServer_tcpWithStage01Policies_rendersShortCircuitChain(t *testi
 	}
 
 	// ① 信任直通：文件匹配 + [（proxy_protocol）→] proxy 透传（零事件零开销；
-	// TCPProxyProtocol=false 形态不发射 proxy_protocol——SEC-P2-1 对称性由
+	// TCPProxyProtocol=false 形态不发射 proxy_protocol——对称性由
 	// TestBuildTCPServer_tcpProxyProtocol_trustRoutesPrefixed 钉）。
 	trustMatchers := l4SecRouteMatchers(t, rawRoutes[0])
 	if len(trustMatchers) != 1 {
@@ -454,7 +454,7 @@ func TestBuildTCPServer_tcpGeoipAllowMode_negatedMatcher(t *testing.T) {
 	}
 }
 
-// 信任检测路由序 + 形状（SEC-P1-1）：trust_detect 置于直通之后、deny 之前——
+// 信任检测路由序 + 形状（：trust_detect 置于直通之后、deny 之前——
 // 保留检测信任命中在一切拦截路由前短路（产 logged 事件后直通上游，HTTP
 // id:12 DetectionOnly 的 L4 等价物）。仅 stage0 保留检测 + deny 两策略：
 // 三路由（trust_detect → deny → 兜底）。
@@ -531,7 +531,7 @@ func TestBuildTCPServer_tcpTrustDetect_emptyUnion_notEmitted(t *testing.T) {
 	}
 }
 
-// SEC-P2-1：规则开 TCPProxyProtocol 时信任族两路由与 deny/兜底路由对称前置
+// 规则开 TCPProxyProtocol 时信任族两路由与 deny/兜底路由对称前置
 // proxy_protocol——直通/检测路由的 lb_l4_sec 归因与上游 PROXY 头都按改写后
 // 对端，客户端伪造 PROXY 头不再原样透传上游。
 func TestBuildTCPServer_tcpProxyProtocol_trustRoutesPrefixed(t *testing.T) {
@@ -563,7 +563,7 @@ func TestBuildTCPServer_tcpProxyProtocol_trustRoutesPrefixed(t *testing.T) {
 			t.Fatalf("handler 序=%v, want %v", got, want)
 		}
 	}
-	// ① 直通：proxy_protocol → proxy（SEC-P2-1 修复点：原来裸 proxy 透传）。
+	// ① 直通：proxy_protocol → proxy（修复点：原来裸 proxy 透传）。
 	assertHandlerSeq(rawRoutes[0], "proxy_protocol", "proxy")
 	// ①b 信任检测：proxy_protocol → lb_l4_sec(trust_detect) → proxy。
 	assertHandlerSeq(rawRoutes[1], "proxy_protocol", "lb_l4_sec", "proxy")
@@ -572,6 +572,47 @@ func TestBuildTCPServer_tcpProxyProtocol_trustRoutesPrefixed(t *testing.T) {
 	assertHandlerSeq(rawRoutes[2], "proxy_protocol", "lb_l4_sec", "close")
 	// ⑥ 兜底：proxy_protocol → allow_sample → proxy（既有对称基准）。
 	assertHandlerSeq(rawRoutes[6], "proxy_protocol", "lb_l4_sec", "proxy")
+}
+
+// TestBuildTCPServer_tcpGeoipPolicyIDOverflowSegment_softSkips 逐策略 GeoIP 的
+// policy_id 段界软跳过契约：policy_id 越出普通 GeoIP 段 [1,9999] 时，模块侧
+// lb_l4_sec Provision 显性拒绝（handler_test「geoip policy overflows segment」
+// 钉住）会打死整份 L4 配置——渲染侧必须与 HTTP 预检链同口径（段界由
+// encodeGeoIPPrecheckRuleID 单一裁决）：软跳过该策略 GeoIP 路由 + 告警，
+// 其余安全段照常渲染，单策略越界不得波及负载均衡。
+func TestBuildTCPServer_tcpGeoipPolicyIDOverflowSegment_softSkips(t *testing.T) {
+	stubSecurityLibsAvailable(t)
+	oldDir := IPListDataDir
+	IPListDataDir = t.TempDir()
+	t.Cleanup(func() { IPListDataDir = oldDir })
+	ResetIPListProjectionStateForTest()
+	t.Cleanup(ResetIPListProjectionStateForTest)
+
+	policies := []*models.SecurityPolicy{
+		{ID: 12, Name: "l4-deny", PolicyType: "stage1", IPACLEnabled: true, IPACLMode: "deny", IPACLList: `["10.0.0.5/32"]`},
+		{ID: 10000, Name: "l4-geoip-overflow", PolicyType: "stage1", GeoIPMode: "deny", GeoIPCountries: []byte(`["海外"]`)},
+		{ID: 15, Name: "l4-geoip", PolicyType: "stage1", GeoIPMode: "deny", GeoIPCountries: []byte(`["北京市"]`)},
+	}
+	server, err := buildTCPServer(l4SecTestRule("lb_l4sec_overflow"), &tcpSecurityRenderInput{policies: policies})
+	if err != nil {
+		t.Fatalf("buildTCPServer: %v", err)
+	}
+	rawRoutes, ok := server["routes"].([]interface{})
+	if !ok {
+		t.Fatalf("routes missing: %#v", server)
+	}
+	// deny + 段内 geoip(15) + 兜底 = 3 条；越界 geoip(10000) 软跳过不渲染。
+	if len(rawRoutes) != 3 {
+		t.Fatalf("routes=%d, want 3（deny→geoip(15)→sample+proxy，越界 geoip 跳过）: %s", len(rawRoutes), dumpJSON(t, server))
+	}
+	geoipHandlers := l4SecRouteHandlers(t, rawRoutes[1])
+	if len(geoipHandlers) != 2 {
+		t.Fatalf("geoip handlers=%d, want 2（lb_l4_sec + close）", len(geoipHandlers))
+	}
+	assertL4SecEventHandler(t, geoipHandlers[0], "geoip", 15)
+	if geoipHandlers[1]["handler"] != "close" {
+		t.Fatalf("geoip 断连 handler=%#v, want close", geoipHandlers[1])
+	}
 }
 
 // 引擎级实证（R-10 类）：绑定 stage0/1 策略的 TCP 渲染产物必须通过真实

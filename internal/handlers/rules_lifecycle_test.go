@@ -197,7 +197,10 @@ func TestCreateRule_tcpExplicitProxyTimeoutStillRejected(t *testing.T) {
 	}
 }
 
-func TestCreateRule_tcpNegativeProxyTimeoutsNormalizeToZero(t *testing.T) {
+// TCP 保存门契约：显式携带代理超时（含 -1 等负值）统一由 validateRuleFeatures
+// TCP 分支 400 点名——此前负值被 Create 调用点静默归零绕过保存门（正值 400、
+// 负值 201 落库的分叉），七列已从负值归零环剔除。
+func TestCreateRule_tcpExplicitNegativeProxyTimeout(t *testing.T) {
 	handler := newRuleFeatureTestHandlers(t)
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
@@ -213,18 +216,18 @@ func TestCreateRule_tcpNegativeProxyTimeoutsNormalizeToZero(t *testing.T) {
 
 	router.ServeHTTP(response, request)
 
-	if response.Code != http.StatusCreated {
-		t.Fatalf("create TCP with negative proxy timeouts status=%d body=%s, want 201", response.Code, response.Body.String())
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("create TCP with explicit negative proxy timeouts status=%d body=%s, want 400", response.Code, response.Body.String())
 	}
-	var proxy [7]int
-	if err := db.DB.QueryRow(`SELECT proxy_dial_timeout,proxy_response_header_timeout,proxy_read_timeout,
-		proxy_write_timeout,proxy_stream_timeout,proxy_flush_interval,proxy_stream_close_delay
-		FROM lb_rules WHERE name='tcp-negative-proxy'`).Scan(
-		&proxy[0], &proxy[1], &proxy[2], &proxy[3], &proxy[4], &proxy[5], &proxy[6]); err != nil {
-		t.Fatalf("read created TCP rule: %v", err)
+	if !strings.Contains(response.Body.String(), "TCP 规则不支持 HTTP 代理超时配置") {
+		t.Fatalf("error body must name the TCP proxy timeout gate, got: %s", response.Body.String())
 	}
-	if proxy != [7]int{} {
-		t.Fatalf("created TCP proxy timeouts=%v, want all zero", proxy)
+	var count int
+	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM lb_rules WHERE name='tcp-negative-proxy'`).Scan(&count); err != nil {
+		t.Fatalf("read rules: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("rejected create must not persist a row, found %d", count)
 	}
 }
 
@@ -235,6 +238,36 @@ func TestValidateStoredRuleConfig_normalizesTCPDeadFields(t *testing.T) {
 	if err := validateStoredRuleConfig(t.Context(), "lb_tcp_enable_heal"); err != nil {
 		t.Fatalf("stored TCP dead fields must be normalized before enable validation: %v", err)
 	}
+}
+
+// lb_rules 五份列投影的全集机械断言钉测：UpdateRule 合并基线 SELECT / 主
+// UPDATE SET 与 services.LbRuleInsertColumns() 全集对齐（豁免逐列注明）。
+// 包初始化用同一判定函数 panic（fail-visible）；本用例负向变异验证「临时删列
+// 必须 panic 且点名缺失列」。
+func TestUpdateRuleColumnLists_parityWithInsertSpec(t *testing.T) {
+	specSet, selectSet, setSet := updateRuleColumnParitySets()
+	if gaps := updateRuleColumnParityGaps(specSet, selectSet, setSet); len(gaps) != 0 {
+		t.Fatalf("UpdateRule 列投影全集断言失败: %v", gaps)
+	}
+
+	// 负向变异：基线 SELECT 临时删列 → 与 init 同一判定必须 panic 且点名。
+	func() {
+		defer func() {
+			recovered := recover()
+			if recovered == nil {
+				t.Fatal("基线 SELECT 临时删列必须触发全集断言 panic")
+			}
+			if message := fmt.Sprint(recovered); !strings.Contains(message, "proxy_dial_timeout") {
+				t.Fatalf("panic 未点名缺失列: %v", recovered)
+			}
+		}()
+		mutated := make(map[string]bool, len(selectSet))
+		for column := range selectSet {
+			mutated[column] = true
+		}
+		delete(mutated, "proxy_dial_timeout")
+		mustUpdateRuleColumnParity(specSet, mutated, setSet)
+	}()
 }
 
 // 删除复核：DisableRule 放锁窗口内规则被并发删除 → 冲突中止且不写「禁用」审计。
@@ -934,8 +967,9 @@ func TestLbRuleColumns_governedDefaultsBindConstants(t *testing.T) {
 		if !strings.Contains(lbRuleColumns, want) {
 			t.Fatalf("lbRuleColumns 缺少常量绑定后的列 %q", want)
 		}
-		// rules.go 的内联查询走 db.go 迁移同款 fmt.Sprint 拼接绑定。
-		if !strings.Contains(string(rulesSrc), "fmt.Sprint("+binding.constRef+")") {
+		// rules.go 的 UpdateRule 存量合并查询投影已收进 updateRuleBaselineSelectColumns
+		// 单源表（fmt.Sprintf 常量绑定）——断言常量引用存在即可（绑定形态由表单源）。
+		if !strings.Contains(string(rulesSrc), binding.constRef) {
 			t.Fatalf("rules.go 缺少常量绑定 %q（UpdateRule 存量合并查询）", binding.constRef)
 		}
 	}

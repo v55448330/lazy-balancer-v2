@@ -16,6 +16,7 @@ import type {
 } from '@/types'
 import { classifyAuthFailure, createMfaGraceTracker, createMfaStepUp, createSessionStepUpGate, isRequestAuthTokenCurrent, runMfaStepUpRequest } from '@/utils/apiFailure'
 import { currentSessionGeneration } from '@/utils/sessionIdentity'
+import { decodeJwtPayload } from '@/utils/jwt'
 
 declare module 'axios' {
   interface AxiosRequestConfig {
@@ -380,18 +381,12 @@ export const request: RequestClient = {
 
 export function isTokenExpired(token: string): boolean {
   if (!token || token === 'null' || token === 'undefined') return true
-  try {
-    const parts = token.split('.')
-    if (parts.length !== 3) return true
-    const encodedPayload = parts[1].replace(/-/g, '+').replace(/_/g, '/')
-    const paddedPayload = encodedPayload.padEnd(encodedPayload.length + (4 - encodedPayload.length % 4) % 4, '=')
-    const payload: unknown = JSON.parse(atob(paddedPayload))
-    if (!payload || typeof payload !== 'object' || !('exp' in payload) || typeof payload.exp !== 'number' || !Number.isFinite(payload.exp)) return true
-    const exp = payload.exp * 1000
-    if (!Number.isFinite(exp)) return true
-    return Date.now() >= exp
-  } catch {
-    return true
-  }
+  // 解码走单源 decodeJwtPayload（TextDecoder，非 ASCII 正确）；本谓词只管 exp。
+  const payload = decodeJwtPayload(token)
+  if (!payload) return true
+  if (!('exp' in payload) || typeof payload.exp !== 'number' || !Number.isFinite(payload.exp)) return true
+  const exp = payload.exp * 1000
+  if (!Number.isFinite(exp)) return true
+  return Date.now() >= exp
 }
 
