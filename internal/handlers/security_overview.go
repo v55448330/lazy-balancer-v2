@@ -316,6 +316,15 @@ type securityOverviewAggCacheKey struct {
 // （securityOverviewAggEntry）：请求路径只读 data，后台刷新读写 state。
 var securityOverviewAggCache = newTTLCache[securityOverviewAggCacheKey, securityOverviewAggEntry](0)
 
+// securityOverviewAggMutated 摄取侧行改判标志（检测→拦截原地 UPDATE）：置位
+// 后下一次后台刷新强制全量重建（增量轨道无法回溯已消费行的旧结论）。由
+// services.SecurityEventsRowMutatedHook 在改判事务提交后触发。
+var securityOverviewAggMutated atomic.Bool
+
+func init() {
+	services.SecurityEventsRowMutatedHook = func() { securityOverviewAggMutated.Store(true) }
+}
+
 // securityOverviewTodayCounts 今日拦截/检测计数单源：优先读分钟 rollup
 // （与威胁大屏同源，与原始表规模解耦——行帽触顶时原始表只剩最近若干
 // 分钟，直算会静默少计且面板照常渲染）。rollup 覆盖水位未回推到今日
@@ -1057,6 +1066,11 @@ func refreshSecurityOverviewAggregates(metricsDB *sql.DB, key securityOverviewAg
 		err   error
 	)
 	switch {
+	case securityOverviewAggMutated.CompareAndSwap(true, false):
+		// 摄取侧行改判（检测→拦截原地 UPDATE）已发生：该行的旧结论已被上一
+		// 轮增量消费，增量轨道无法回溯——强制全量重建一次（重铸水位），此后
+		// 恢复增量轨道。stale 快照在重建期间照常服务（SWR）。
+		data, state, err = computeSecurityOverviewAggregatesFull(metricsDB, dayStarts, today, now, fromRollup)
 	case !hasStale:
 		// 条目已被清（换库/测试 Reset）：退回全量建。
 		data, state, err = computeSecurityOverviewAggregatesFull(metricsDB, dayStarts, today, now, fromRollup)
@@ -1343,8 +1357,12 @@ func computeSecurityOverviewAggregatesFull(metricsDB *sql.DB, dayStarts []time.T
 	// 行必然已提交、必然被聚合查询看到；M 之后插入的行 id > M，交给首次增量
 	// 扫描。逆序（先聚合后取水位）会让「聚合快照后、取水位前」插入的行既
 	// 不在基线又落在水位之下，永远缺计（破坏对账不变式）。
+	// 存活账本必须与核对侧（refreshSecurityOverviewAggIncremental 的窗口内
+	// COUNT）同口径：只数 event_time ≥ 窗口起点的行——全表 COUNT 会把窗口外
+	// 旧行（90 天保留 × 7 天窗口的常态）计入账本，使删除检测每轮误命中、
+	// 增量分支永不生效（回归钉测：窗口外行在场时增量必须真实生效）。
 	var watermarkMaxID, watermarkTotal int64
-	if err := metricsDB.QueryRow(`SELECT (SELECT COALESCE(MAX(id),0) FROM security_events), (SELECT COUNT(*) FROM security_events)`).Scan(&watermarkMaxID, &watermarkTotal); err != nil {
+	if err := metricsDB.QueryRow(`SELECT (SELECT COALESCE(MAX(id),0) FROM security_events), (SELECT COUNT(*) FROM security_events WHERE event_time >= ?)`, dayStarts[0].UTC().Format(securityOverviewEventTimeLayout)).Scan(&watermarkMaxID, &watermarkTotal); err != nil {
 		return securityOverviewAggregates{}, securityOverviewAggState{}, err
 	}
 	var (
@@ -1366,7 +1384,6 @@ func computeSecurityOverviewAggregatesFull(metricsDB *sql.DB, dayStarts []time.T
 
 	// 日界窗口计数与正常请求差分（同缓存体同失效语义）：昨日窗口/正常请求
 	// 查询失败与趋势聚合失败同口径上抛（不缓存失败轮，调用方聚合成 500）。
-	// yesterday_detected_tcp 恒 0（L4 不产 logged，契约常量不回填）。
 	var dayCounts securityOverviewAggregates
 	ydayStart := dayStarts[5]
 	todayDayStart := dayStarts[6]
@@ -1407,7 +1424,45 @@ func computeSecurityOverviewAggregatesFull(metricsDB *sql.DB, dayStarts []time.T
 	}
 	state := newSecurityOverviewAggState(dayStarts, fromRollup, src, dayCounts)
 	state.maxEventID, state.seenTotal = watermarkMaxID, watermarkTotal
+	if !fromRollup {
+		// raw 轨道：top-IP 账本必须播种**窗口内全量 per-IP 聚合**（有界 500），
+		// 不得只灌展示用 top-10——基线 11 名外的 IP 靠新增事件冲榜时，账本里
+		// 没有它的历史累计会使增量 top-10 漏列或计数缩水（回归钉测：冲榜形态）。
+		// rollup 轨道增量不启用（rollup 读路径与原始表规模解耦），top-10 播种
+		// 仅作状态对齐，无增量消费面。
+		seedRows, seedErr := loadOverviewTopIPSeed(metricsDB, dayStarts[0].UTC().Format(securityOverviewEventTimeLayout))
+		if seedErr != nil {
+			return data, securityOverviewAggState{}, seedErr
+		}
+		for _, row := range seedRows {
+			state.topIPs[row.ip] = topIPAccum{blocked: row.blocked, detected: row.detected, lastTime: row.lastTime}
+		}
+	}
 	return data, state, nil
+}
+
+// loadOverviewTopIPSeed 窗口内全量 per-IP 聚合（增量账本播种源，有界 500）：
+// 谓词/形状与 loadOverviewAggregatesFromRaw 的 top-IP 查询同口径，仅去展示
+// 截断（LIMIT 10）——账本必须覆盖「当前排名之外、靠新增事件冲榜」的候选。
+func loadOverviewTopIPSeed(metricsDB *sql.DB, windowStartUTC string) ([]topIPRow, error) {
+	rows, err := metricsDB.Query(`SELECT COALESCE(client_ip,''),
+		SUM(CASE WHEN action='blocked' THEN 1 ELSE 0 END) as b,
+		SUM(CASE WHEN action='logged' THEN 1 ELSE 0 END) as l,
+		MAX(event_time) as last_time
+		FROM security_events WHERE event_time >= ? AND TRIM(COALESCE(client_ip,'')) <> '' AND `+services.AttackEventSQLPredicate("rule_triggered", "action")+` GROUP BY client_ip ORDER BY b + l DESC, client_ip ASC LIMIT 500`, windowStartUTC)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	seed := make([]topIPRow, 0, 64)
+	for rows.Next() {
+		var row topIPRow
+		if err := rows.Scan(&row.ip, &row.blocked, &row.detected, &row.lastTime); err != nil {
+			return nil, err
+		}
+		seed = append(seed, row)
+	}
+	return seed, rows.Err()
 }
 
 // newSecurityOverviewAggState 由全量聚合结果铸造增量状态初值：日桶边界/标签、

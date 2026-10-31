@@ -319,3 +319,130 @@ func TestSecurityOverviewIncremental_dayBoundaryKeyRebuilds(t *testing.T) {
 		t.Fatal("day-boundary rebuild must populate the new key")
 	}
 }
+
+// TestSecurityOverviewIncremental_outOfWindowRowKeepsIncremental：表内存在
+// 窗口外旧行（90 天保留 × 7 天窗口的常态）时，删除检测账本必须按窗口口径
+// 播种与核对——增量分支必须真实生效，不得每轮误判「有删除」退回全量重算。
+func TestSecurityOverviewIncremental_outOfWindowRowKeepsIncremental(t *testing.T) {
+	setupSecurityPolicyTestDB(t)
+	resetSecurityOverviewAggCacheForTest()
+	t.Cleanup(resetSecurityOverviewAggCacheForTest)
+	metrics := db.MetricsDB
+	seedOverviewIncBaseline(t, metrics)
+	// 窗口外旧行（保留期常态形态）：不参与任何聚合，也不得污染删除检测账本。
+	insertOverviewIncEvent(t, metrics, overviewIncEvent{eventTime: "2026-09-01 00:00:00", ip: "10.9.0.1", triggered: "942100", msg: "SQL Injection", action: "blocked"})
+
+	key := overviewIncTestKey(metrics)
+	if _, err := loadSecurityOverviewAggregates(metrics, overviewIncTestToday, overviewIncTestTodayStart, overviewIncTestTZ); err != nil {
+		t.Fatalf("cold build: %v", err)
+	}
+	entry, ok := securityOverviewAggCache.GetStale(key)
+	if !ok {
+		t.Fatal("cold build must populate cache entry")
+	}
+	var windowAlive, fullCount int64
+	// 窗口径=7 天趋势窗口起点（today−6 天的本地日界→UTC），与播种/核对同口径。
+	if err := metrics.QueryRow(`SELECT
+		(SELECT COUNT(*) FROM security_events WHERE event_time >= ?),
+		(SELECT COUNT(*) FROM security_events)`, "2026-10-13 12:00:00").Scan(&windowAlive, &fullCount); err != nil {
+		t.Fatal(err)
+	}
+	if windowAlive == fullCount {
+		t.Skipf("夹具退化：窗口外行未生效（window=%d full=%d）", windowAlive, fullCount)
+	}
+	if entry.state.seenTotal != windowAlive {
+		t.Fatalf("seenTotal=%d, want 窗口内存活 %d（全表 %d 不得入账本——否则删除检测恒误报、增量永不生效）",
+			entry.state.seenTotal, windowAlive, fullCount)
+	}
+
+	// 增量刷新：正常追加窗口内行 → 必须走增量轨道且与全量重算相等。
+	insertOverviewIncEvent(t, metrics, overviewIncEvent{eventTime: "2026-10-19 07:00:00", ip: "10.1.0.1", triggered: "942100", msg: "SQL Injection", action: "blocked"})
+	refreshed, err := refreshSecurityOverviewAggregates(metrics, key, overviewIncTestToday)
+	if err != nil {
+		t.Fatalf("incremental refresh: %v", err)
+	}
+	overviewIncAssertEqual(t, "窗口外行在场增量", refreshed, overviewIncFullReference(t, metrics))
+}
+
+// TestSecurityOverviewIncremental_rankElevenIPRushesIntoTop10：基线排名 11 名
+// 之外的 IP 靠新增事件冲榜时，增量 top-10 必须以「历史累计+新增」如实入榜。
+func TestSecurityOverviewIncremental_rankElevenIPRushesIntoTop10(t *testing.T) {
+	setupSecurityPolicyTestDB(t)
+	resetSecurityOverviewAggCacheForTest()
+	t.Cleanup(resetSecurityOverviewAggCacheForTest)
+	metrics := db.MetricsDB
+	// 10 个 IP 各 2 次拦截（并列前十），第 11 个 IP 1 次（差一名未进种子）。
+	for i := 1; i <= 10; i++ {
+		insertOverviewIncEvent(t, metrics, overviewIncEvent{eventTime: "2026-10-19 01:00:00", ip: "10.1.0." + string(rune('0'+i%10)) + "", triggered: "942100", msg: "SQL Injection", action: "blocked"})
+		insertOverviewIncEvent(t, metrics, overviewIncEvent{eventTime: "2026-10-19 02:00:00", ip: "10.1.0." + string(rune('0'+i%10)) + "", triggered: "942100", msg: "SQL Injection", action: "blocked"})
+	}
+	insertOverviewIncEvent(t, metrics, overviewIncEvent{eventTime: "2026-10-19 03:00:00", ip: "10.1.0.99", triggered: "942100", msg: "SQL Injection", action: "blocked"})
+
+	key := overviewIncTestKey(metrics)
+	if _, err := loadSecurityOverviewAggregates(metrics, overviewIncTestToday, overviewIncTestTodayStart, overviewIncTestTZ); err != nil {
+		t.Fatalf("cold build: %v", err)
+	}
+	// 冲榜：第 11 名 IP 高强度新增 5 次（累计 6，超过前十的 2）。
+	for i := 0; i < 5; i++ {
+		insertOverviewIncEvent(t, metrics, overviewIncEvent{eventTime: "2026-10-19 04:00:00", ip: "10.1.0.99", triggered: "942100", msg: "SQL Injection", action: "blocked"})
+	}
+	refreshed, err := refreshSecurityOverviewAggregates(metrics, key, overviewIncTestToday)
+	if err != nil {
+		t.Fatalf("incremental refresh: %v", err)
+	}
+	var found bool
+	for _, row := range refreshed.topIPs {
+		if row.IP == "10.1.0.99" {
+			found = true
+			if row.Blocked != 6 {
+				t.Fatalf("10.1.0.99 blocked=%d, want 6（历史 1+新增 5 的真实累计）", row.Blocked)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("基线 11 名 IP 冲榜后从 top-10 消失（账本只播种了 top-10）: %+v", refreshed.topIPs)
+	}
+}
+
+// TestSecurityOverviewIncremental_mutatedRowForcesFullRebuild：行改判（检测→
+// 拦截原地 UPDATE）后，增量轨道无法回溯已消费行的旧结论——置脏标志必须使
+// 下一次刷新走全量重建，拦截/检测拆分如实反映改判后结论。
+func TestSecurityOverviewIncremental_mutatedRowForcesFullRebuild(t *testing.T) {
+	setupSecurityPolicyTestDB(t)
+	resetSecurityOverviewAggCacheForTest()
+	t.Cleanup(resetSecurityOverviewAggCacheForTest)
+	metrics := db.MetricsDB
+	insertOverviewIncEvent(t, metrics, overviewIncEvent{eventTime: "2026-10-19 01:00:00", ip: "10.1.0.1", triggered: "942100", msg: "SQL Injection", action: "logged"})
+
+	key := overviewIncTestKey(metrics)
+	cold, err := loadSecurityOverviewAggregates(metrics, overviewIncTestToday, overviewIncTestTodayStart, overviewIncTestTZ)
+	if err != nil {
+		t.Fatalf("cold build: %v", err)
+	}
+	if cold.trend[6].Detected != 1 || cold.trend[6].Blocked != 0 {
+		t.Fatalf("冷基线 detected=%d blocked=%d, want 1/0", cold.trend[6].Detected, cold.trend[6].Blocked)
+	}
+
+	// 行改判（摄取侧 UPDATE 形态）+ 置脏标志（SecurityEventsRowMutatedHook
+	// 的 handlers 侧效果）。
+	if _, err := metrics.Exec(`UPDATE security_events SET action='blocked' WHERE event_time='2026-10-19 01:00:00'`); err != nil {
+		t.Fatal(err)
+	}
+	securityOverviewAggMutated.Store(true)
+
+	refreshed, err := refreshSecurityOverviewAggregates(metrics, key, overviewIncTestToday)
+	if err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+	if refreshed.trend[6].Blocked != 1 || refreshed.trend[6].Detected != 0 {
+		t.Fatalf("改判后 trend blocked=%d detected=%d, want 1/0（全量重建必须反映改判）",
+			refreshed.trend[6].Blocked, refreshed.trend[6].Detected)
+	}
+	// 标志一次性消费：后续刷新恢复增量轨道（不再强制全量——用第二行增量验证）。
+	insertOverviewIncEvent(t, metrics, overviewIncEvent{eventTime: "2026-10-19 02:00:00", ip: "10.1.0.2", triggered: "942100", msg: "SQL Injection", action: "blocked"})
+	refreshed, err = refreshSecurityOverviewAggregates(metrics, key, overviewIncTestToday)
+	if err != nil {
+		t.Fatalf("second refresh: %v", err)
+	}
+	overviewIncAssertEqual(t, "改判后恢复增量", refreshed, overviewIncFullReference(t, metrics))
+}

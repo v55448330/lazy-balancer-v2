@@ -669,6 +669,20 @@ func (s *l4Shipper) spill(batch [][]byte, cause error) {
 		s.spooled.Add(uint64(written))
 		return
 	}
+	if errors.Is(err, errL4SpoolFull) {
+		// 预算耗尽：已写入行经批末 flush 落盘（appendLines 保证），必然被
+		// 补采——按 spooled 如实计入；仅未写入行计丢（真见可观测，不虚增）。
+		if written > 0 {
+			s.spooled.Add(uint64(written))
+		}
+		remaining := len(batch) - written
+		if remaining > 0 {
+			s.reportSpoolError(cause, err, remaining)
+			s.spoolErrs.Add(uint64(remaining))
+			s.noteDrop("spool full", remaining)
+		}
+		return
+	}
 	var lossErr *l4SpoolLossError
 	lost := len(batch)
 	if errors.As(err, &lossErr) {

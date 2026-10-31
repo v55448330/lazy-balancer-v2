@@ -2,7 +2,8 @@ package handlers
 
 // 安全总览新增指标（昨日窗口计数 + 正常请求差分）RED→GREEN 用例：
 //   - 昨日拦截/检测走原始表单日窗口（本地日界跨 UTC），攻击面谓词同今日直算；
-//   - TCP 协议拆分（blocked）/检测 TCP 恒 0（契约披露，与数据无关）；
+//   - TCP 协议拆分（blocked）；检测 TCP 拆分（logged）来自 L4 信任检测
+//     （trust_detect）产 tcp+logged 事件，无该形态时为 0；
 //   - 正常请求 HTTP=累计差分−被拦差分（跨日/重置钳制/样本不足/负值钳零）；
 //   - 正常 TCP=lb_l4_conn_history 全局行 allowed 日差分；
 //   - apidocs 口径披露与示例键。

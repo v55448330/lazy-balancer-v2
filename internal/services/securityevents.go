@@ -2398,6 +2398,9 @@ func (t *securityEventsTailer) securityEventsProcessPass(ctx context.Context, f 
 	// driver 绑定，抬高进程峰值。8MiB 上界让大 body 批次提前提交。
 	const batchByteCap = 8 << 20
 	batchBytes := 0
+	// batchMutatedRows 本批发生行改判（结论原地 UPDATE）：提交成功后通知
+	// 消费方钩子（总览聚合置脏强制全量重建）。
+	batchMutatedRows := false
 	// batchCount 只控「每 500 条尝试提交」的批次节奏；它必须与 pass 级实际
 	// 插入计数分离——旧实现复用一个 count，批次提交清零后 EOF 写出的
 	// lastIngested 只剩余数（1000 条→0、501 条→1），PollOnce 的任务日志条数
@@ -2498,6 +2501,12 @@ func (t *securityEventsTailer) securityEventsProcessPass(ctx context.Context, f 
 		securityEventsIngestCommits.Add(1)
 		passInsertedTotal += batchInserted
 		batchInserted = 0
+		if batchMutatedRows {
+			batchMutatedRows = false
+			if hook := SecurityEventsRowMutatedHook; hook != nil {
+				hook()
+			}
+		}
 		securityEventsMessagesDropped.Add(batchMessagesDropped)
 		if batchSkippedBytes > 0 || batchSkippedRegions > 0 {
 			securityEventsRecordSkips(batchSkippedBytes, batchSkippedRegions)
@@ -2720,6 +2729,7 @@ func (t *securityEventsTailer) securityEventsProcessPass(ctx context.Context, f 
 				// 覆盖先到的检测行（谁拦的、按什么规则、多少分同步改判）；
 				// 其余重复（同结论/更弱结论）直接丢弃。
 				if securityEventsActionRank(rec.Action) > prev.rank {
+					batchMutatedRows = true
 					if uerr := securityEventsUpgradeDedupedEvent(tx, prev.transactionID, rec, rule, policyID, policyName); uerr != nil {
 						_ = stmt.Close()
 						_ = tx.Rollback()
@@ -2920,6 +2930,12 @@ func (t *securityEventsTailer) securityEventsProcessPass(ctx context.Context, f 
 		offset = docEnd
 	}
 }
+
+// SecurityEventsRowMutatedHook 行改判（检测→拦截原地 UPDATE）提交后的通知
+// 钩子：总览增量轨道无法回溯已消费行的旧结论，消费方经此置脏强制全量重建
+// （nil=未装配，测试/嵌入形态零成本）。钩子在批事务成功提交后同步调用，
+// 实现必须非阻塞。
+var SecurityEventsRowMutatedHook func()
 
 // securityEventsUpgradeDedupedEvent 把同一请求已落库的检测行改判为拦截
 // 结论：action/评分/触发规则/策略归因整体替换为拦截引擎的值（展示必须自洽

@@ -528,3 +528,38 @@ func mustActivePath(t *testing.T, sp *l4Spool) string {
 	}
 	return sp.activePath
 }
+
+// TestSpoolBudgetFullPartialBatchHonestSplit：预算中途耗尽——已写入行经批末
+// flush 落盘（必然被补采）按 spooled 如实计入；仅未写入行计丢。不得把已落盘
+// 行整批虚计为 dropped。
+func TestSpoolBudgetFullPartialBatchHonestSplit(t *testing.T) {
+	socket, _ := startUnixIngestServer(t, http.StatusServiceUnavailable)
+	t.Setenv("LB_SECURITY_EVENTS_IPC_SOCKET", socket)
+	// 预算 700B：约容 2 行（行 ~291B），第 3 行触发中途耗尽。
+	t.Setenv("LB_SECURITY_EVENTS_SPOOL_MAX_BYTES", "700")
+	spoolDir := filepath.Join(t.TempDir(), "spool")
+	setSpoolDirForTest(t, spoolDir)
+	p := acquirePipelineForTest()
+	defer p.resetForTest()
+	defer restoreTunables(setTunablesForTest(8, 1<<20, 10*time.Millisecond))
+
+	if err := os.MkdirAll(spoolDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	for i := 1; i <= 3; i++ {
+		line := buildL4EventLine(int64(i), "IP 黑名单拒绝", "r", "203.0.113.4", time.Unix(int64(i), 44), [4]byte{0, 0, 0, byte(i)}, true)
+		p.enqueueEvent(line)
+	}
+	p.flushQuiescedForTest()
+
+	_, _, spooled, spoolErrs := p.shipperCounters()
+	if spooled < 1 {
+		t.Fatalf("spooled=%d, want ≥1（已落盘行必须按 spooled 如实计入，不得虚计为丢）", spooled)
+	}
+	if spoolErrs < 1 {
+		t.Fatalf("spoolErrs=%d, want ≥1（未写入行计丢）", spoolErrs)
+	}
+	if spooled+spoolErrs != 3 {
+		t.Fatalf("spooled+spoolErrs=%d, want 3（整批三行两态守恒）", spooled+spoolErrs)
+	}
+}
