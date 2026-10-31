@@ -60,7 +60,7 @@ test('每列四行同构：标签 / 今日主数值 / 昨日对比 / 协议拆�
   assert.match(normal, /proto-dot--tcp[\s\S]{0,120}TCP \{\{ fmtStatNum\(normalTodaySplit\.tcp\) \}\}/)
   // 主数值排版钉测：26px/800；三列主题色（拦截红/检测橙/正常 #303133）
   const value = cssDeclarations(page, '.strip-value')
-  assert.equal(value.get('font-size'), '26px')
+  assert.equal(value.get('font-size'), '24px')
   assert.equal(value.get('font-weight'), '800')
   assert.equal(value.get('color'), '#303133')
   assert.equal(cssDeclarations(page, '.strip-value.is-danger').get('color'), '#f56c6c')
