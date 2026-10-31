@@ -348,7 +348,8 @@ const fmtStatNum = (n: number | undefined): string => (typeof n === 'number' ? n
 // today_blocked 是全协议合计，HTTP = 合计 − TCP（负值钳 0，防 rollup 滞后瞬间为负）
 const todayBlockedSplit = computed<{ http: number; tcp: number } | null>(() => {
   const tcp = overview.value.today_blocked_tcp
-  if (typeof tcp !== 'number' || !Number.isFinite(tcp) || tcp <= 0) return null
+  // 字段存在即显示（TCP=0 也显示，与检测/正常请求列 lockstep）；缺失=旧后端隐藏
+  if (typeof tcp !== 'number' || !Number.isFinite(tcp)) return null
   return { http: Math.max(0, overview.value.today_blocked - tcp), tcp }
 })
 

@@ -916,8 +916,7 @@
                     :class="{ 'is-self': entry.isSelf, 'is-disabled': !entry.enabled, 'is-trust': isStage0ChainEntry(entry) }"
                   >{{ chainChipText(entry, idx) }}</span>
                   <!-- 阶段 0 排位语义：信任 IP 在任何策略判定前直达上游/进入检测，与绑定顺序无关 -->
-                  <span v-if="editorPolicyType === 'stage0'" class="rule-binding-landing rule-binding-landing--trust">阶段 0·拦截判定前优先生效</span>
-                  <span v-else class="rule-binding-landing">本策略排第 {{ pickerMeta(rule).selfPos }} 位</span>
+                  <span v-if="editorPolicyType !== 'stage0'" class="rule-binding-landing">本策略排第 {{ pickerMeta(rule).selfPos }} 位</span>
                 </template>
               </div>
             </div>
