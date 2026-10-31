@@ -272,8 +272,9 @@ body {
 }
 
 /* 自定义控件与开关：Element 变量覆盖不到的业务 chip/触发器单源收敛。 */
+body .el-switch .el-switch__core,
 body .el-switch__core,
-body .el-switch__core .el-switch__action { border-radius: 0; }
+body .el-switch__core .el-switch__action { border-radius: 0 !important; }
 
 .el-dialog .el-dialog__body :is(
   .rule-picker-trigger,
