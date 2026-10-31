@@ -19,7 +19,7 @@ Caddy 审计写侧通过 Unix socket 把审计事务直接交给面板入库（D
 - 补采完成后 spool 为空；事件日志页显示「缓存 N 条」即待补采条目数；
 - `security_events`（metrics DB）是成功事件的权威数据源，需配套数据库备份；spool 建议一并备份；
 - 旧版 `audit.log` 升级后继续消费存量，消费完成后不再新增；
-- socket/spool 路径可用 `LB_SECURITY_EVENTS_IPC_SOCKET`、`LB_SECURITY_EVENTS_SPOOL_DIR` 覆盖，Caddy 与面板必须指向同一数据卷。
+- socket/spool 路径可用 `LB_SECURITY_EVENTS_IPC_SOCKET`、`LB_SECURITY_EVENTS_SPOOL_DIR`、`LB_SECURITY_EVENTS_L4_SPOOL_DIR`（L4 兜底事件 spool）覆盖，Caddy 与面板必须指向同一数据卷。
 
 ## 组件版本
 

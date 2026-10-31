@@ -239,17 +239,24 @@ func sharedGeoIPSearcher(path string) (*service.Ip2Region, error) {
 
 // —— layer4.matchers.lb_geoip ——
 
-// L4GeoIPMatcher 按客户端归属地匹配连接。查库失败/库未加载/IP 不可解析
-// 一律返回 (false, nil)——fail-open 放行（用户裁定；匹配失败不应扩大为断连）。
+// L4GeoIPMatcher 按客户端归属地匹配连接。Mode 直接表达「连接应否断连」的
+// 阻断谓词：deny（缺省）=归属∈名单断连；allow=归属∉名单断连。所有不可判定
+// 形态（缺库/查库失败/IP 不可解析/私网与保留地址）一律返回 (false, nil)——
+// fail-open 放行（用户裁定；匹配失败不应扩大为断连，allow 模式由 matcher
+// 自身编码方向，渲染侧不用 not 包裹——not 会把不可判定反转为断连）。
 type L4GeoIPMatcher struct {
 	// Countries 是地域条目，值域与 HTTP 侧策略 geoip_countries 同域：
 	// 国名/省/省-市/「海外」哨兵（见 geoipLocMatches）。
 	Countries []string `json:"countries,omitempty"`
 
+	// Mode 是阻断方向：deny（缺省，命中名单断连）或 allow（名单外断连）。
+	Mode string `json:"mode,omitempty"`
+
 	// XdbPath 可选：自定义 data_dir 部署由渲染侧发射；空值用容器默认路径。
 	XdbPath string `json:"xdb_path,omitempty"`
 
 	countries []string
+	allowMode bool
 	xdbPath   string
 	searcher  *service.Ip2Region
 }
@@ -277,6 +284,16 @@ func (m *L4GeoIPMatcher) Provision(ctx caddy.Context) error {
 		entries = append(entries, trimmed)
 	}
 	m.countries = entries
+	switch strings.TrimSpace(m.Mode) {
+	case "", "deny":
+		m.Mode = "deny"
+		m.allowMode = false
+	case "allow":
+		m.Mode = "allow"
+		m.allowMode = true
+	default:
+		return fmt.Errorf("lb_geoip: mode 只接受 deny/allow，得到 %q", m.Mode)
+	}
 	if m.XdbPath == "" {
 		m.XdbPath = l4DefaultXdbPath
 	}
@@ -293,18 +310,25 @@ func (m *L4GeoIPMatcher) Provision(ctx caddy.Context) error {
 	return nil
 }
 
-// Match 实现层4.ConnMatcher：命中=true。所有失败形态（缺库/查库错/IP 不可
-// 解析/残行）fail-open 返回 false（无 error——error 在 MatcherSet 语义下同样
-// 是不匹配，但显式 false 让「放行」成为唯一出口，不放大为路由错误）。
+// Match 实现层4.ConnMatcher：命中=true（=该连接应被断连）。所有不可判定
+// 形态（缺库/查库错/IP 不可解析/残行/私网与保留地址）fail-open 返回 false
+// （无 error——error 在 MatcherSet 语义下同样是不匹配，但显式 false 让
+// 「放行」成为唯一出口，不放大为路由错误）。
 func (m *L4GeoIPMatcher) Match(cx *layer4.Connection) (bool, error) {
 	if m.searcher == nil {
 		return false, nil
 	}
 	ip := clientIPFromConn(cx)
-	if ip == "" {
+	parsed := net.ParseIP(ip)
+	if parsed == nil {
 		return false, nil
 	}
-	region, err := m.searcher.Search(ip)
+	// 私网/回环/链路本地豁免：与 HTTP 链首私网豁免同语义（内网源连接不经
+	// GeoIP 判定；xdb 对这些段返回 Reserved 行，deny「海外」会误拦内网）。
+	if parsed.IsPrivate() || parsed.IsLoopback() || parsed.IsLinkLocalUnicast() || parsed.IsLinkLocalMulticast() || parsed.IsUnspecified() {
+		return false, nil
+	}
+	region, err := m.searcher.Search(parsed.String())
 	if err != nil || region == "" {
 		return false, nil
 	}
@@ -312,7 +336,11 @@ func (m *L4GeoIPMatcher) Match(cx *layer4.Connection) (bool, error) {
 	if !ok {
 		return false, nil
 	}
-	return geoipLocMatches(row.country, row.loc, m.countries), nil
+	inList := geoipLocMatches(row.country, row.loc, m.countries)
+	if m.allowMode {
+		return !inList, nil
+	}
+	return inList, nil
 }
 
 // clientIPFromConn 取连接客户端 IP：cx.RemoteAddr 的 host 部分。规则开

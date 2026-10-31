@@ -378,3 +378,53 @@ func TestIPFileNegativeControl(t *testing.T) {
 // 编译期引用防呆（net 仅用于注释性契约：Match 复用 clientIPFromConn 的
 // SplitHostPort 语义，测试用 addrOnlyConn）。
 var _ = net.ParseIP
+
+// TestIPFileMatchUnsortedOverlappingFile：装载时规范化（排序+掩码+剔嵌套），
+// 乱序/嵌套条目文件的匹配结果与语义等价（大二分不变量，20 万条目 O(log n)）。
+func TestIPFileMatchUnsortedOverlappingFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "l4-test.txt")
+	// 乱序 + 相互嵌套 + 裸 IP：10.0.0.0/24 含 10.0.0.7；10.10.0.0/16 含 10.10.3.0/24。
+	content := "10.0.0.7\n10.10.3.0/24\n192.168.5.0/24\n10.0.0.0/24\n10.10.0.0/16\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m := newIPFileMatcherForTest(t, path)
+	cases := []struct {
+		ip   string
+		want bool
+	}{
+		{"10.0.0.7", true},   // 被嵌套的裸 IP
+		{"10.0.0.9", true},   // 嵌套它的 /24
+		{"10.10.3.9", true},  // 被嵌套的 /24 内
+		{"10.10.9.9", true},  // 只被 /16 覆盖
+		{"10.11.0.1", false}, // 名单外
+		{"192.168.5.255", true},
+		{"192.168.6.1", false},
+	}
+	for _, tc := range cases {
+		got, err := m.Match(newTestConn(tc.ip))
+		if err != nil {
+			t.Fatalf("Match(%s) err = %v", tc.ip, err)
+		}
+		if got != tc.want {
+			t.Fatalf("Match(%s) = %v, want %v", tc.ip, got, tc.want)
+		}
+	}
+}
+
+// TestIPFileMatchIPv6AndUnmapped：v6 裸地址与 4in6 映射形态命中同一 v4 条目。
+func TestIPFileMatchIPv6AndUnmapped(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "l4-test6.txt")
+	if err := os.WriteFile(path, []byte("2001:db8:1::/48\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m := newIPFileMatcherForTest(t, path)
+	if got, _ := m.Match(newTestConn("2001:db8:1::dead")); !got {
+		t.Fatal("v6 命中失败")
+	}
+	if got, _ := m.Match(newTestConn("2001:db8:2::1")); got {
+		t.Fatal("v6 名单外误命中")
+	}
+}

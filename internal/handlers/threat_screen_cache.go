@@ -208,8 +208,7 @@ func threatTrafficSnapshot(adminURL string) (gin.H, bool) {
 	if !ok {
 		return nil, false
 	}
-	attachL4TrafficDelta(adminURL, data)
-	return data, true
+	return attachL4TrafficDelta(adminURL, data), true
 }
 
 func threatTrafficSnapshotCached(adminURL string) (gin.H, bool) {
@@ -322,16 +321,27 @@ func threatL4Snapshot(adminURL string) (l4TrafficRawSnapshot, bool) {
 //   - rules.<cid>.{allowed,denied} 全量差分（未采样）；
 //   - countries.<中文名> 放行连接按国家差分（采样口径，键与主体 countries
 //     同口径翻译/过滤），由前端并入 normal 弧通道；
-//   - sampled:true 披露 countries 未经还原。
+//   - sampled:true 披露 countries 未经还原；
+//   - 抓取失败：l4 键空对象，**基线不动**（恢复轮差分从失败前基线续算，
+//     与 metrics 采集侧同语义）；
+//   - 并发安全：基线读写全程持 l4TrafficDeltaMu；返回**新顶层 map**（浅拷贝
+//     cached + l4 键），不写共享缓存载荷（并发 serve 与
+//     JSON 序列化迭代共享 map 是 fatal 级竞态）。
 //
 // l4 端点缺失/不可达（旧二进制）→ 空对象，traffic 主体不受影响。
-func attachL4TrafficDelta(adminURL string, data gin.H) {
-	snap, ok := threatL4Snapshot(adminURL)
+func attachL4TrafficDelta(adminURL string, cached gin.H) gin.H {
+	out := make(gin.H, len(cached)+1)
+	for k, v := range cached {
+		out[k] = v
+	}
 	rulesOut := make(map[string]map[string]uint64)
 	countriesOut := make(map[string]uint64)
+	snap, ok := threatL4Snapshot(adminURL)
+	l4TrafficDeltaMu.Lock()
 	if ok {
+		last := l4TrafficLastServe[adminURL]
 		for cid, counters := range snap.Rules {
-			prev := l4TrafficLastServe[adminURL].Rules[cid]
+			prev := last.Rules[cid]
 			allowed := deltaUint64(counters.AllowedTotal, prev.AllowedTotal)
 			denied := deltaUint64(counters.DeniedTotal, prev.DeniedTotal)
 			rulesOut[cid] = map[string]uint64{"allowed": allowed, "denied": denied}
@@ -343,15 +353,15 @@ func attachL4TrafficDelta(adminURL string, data gin.H) {
 				countriesOut[key] += deltaUint64(sampled, prev.Countries[country])
 			}
 		}
+		l4TrafficLastServe[adminURL] = snap
 	}
-	l4TrafficDeltaMu.Lock()
-	l4TrafficLastServe[adminURL] = snap
 	l4TrafficDeltaMu.Unlock()
-	data["l4"] = gin.H{
+	out["l4"] = gin.H{
 		"rules":     rulesOut,
 		"countries": countriesOut,
 		"sampled":   true,
 	}
+	return out
 }
 
 // ---- rollup 维度聚合（大屏同屏全部维度）：SQL 侧聚合 + 30s 缓存 ----

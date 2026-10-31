@@ -1135,20 +1135,29 @@ func threatFilesUnusable(source string) bool {
 // （wafiplist.ParseIPEntry），非法行不入列。
 func healThreatFastFromText(source string) ([]string, bool) {
 	iplistPath := filepath.Join(wafDir, fmt.Sprintf("threat-%s.iplist", source))
-	data, err := os.ReadFile(iplistPath)
+	data, err := readIplistTextBounded(iplistPath)
 	if err != nil {
 		return nil, false
 	}
 	entries := make([]string, 0, 1024)
 	total := 0
+	over := false
 	// 行过滤口径单源 iterIPListTextLines（与下载侧/渲染侧同口径）。
 	iterIPListTextLines(data, func(line string) bool {
+		if total >= iplistTextMaxEntries {
+			over = true
+			return false
+		}
 		total++
 		if _, err := wafiplist.ParseIPEntry(line); err == nil {
 			entries = append(entries, line)
 		}
 		return true
 	})
+	if over {
+		Logf("warn", "威胁情报库: 源 %s .iplist 条目数超过上限 %d，拒绝处理（保留上次快照）", source, iplistTextMaxEntries)
+		return nil, false
+	}
 	if total == 0 {
 		Logf("warn", "威胁情报库: 源 %s .iplist 为空/仅注释，拒绝以空集重建 .fast（保留上次快照）", source)
 		return nil, false

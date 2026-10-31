@@ -412,7 +412,8 @@ func TestBuildTCPServer_tcpG23FeaturesIgnoredInRender(t *testing.T) {
 	}
 }
 
-// GeoIP allow 模式：lb_geoip 匹配需 not 包裹（名单外地区断连）。
+// GeoIP allow 模式：lb_geoip 匹配直接编码阻断方向（mode:allow，名单外
+// 地区断连；无 not 包裹——不可判定由 matcher fail-open 放行）。
 func TestBuildTCPServer_tcpGeoipAllowMode_negatedMatcher(t *testing.T) {
 	stubSecurityLibsAvailable(t)
 	oldDir := IPListDataDir
@@ -436,21 +437,19 @@ func TestBuildTCPServer_tcpGeoipAllowMode_negatedMatcher(t *testing.T) {
 	if len(sets) != 1 {
 		t.Fatalf("matcher sets=%d, want 1", len(sets))
 	}
-	notRaw, ok := sets[0]["not"].([]interface{})
-	if !ok || len(notRaw) != 1 {
-		t.Fatalf("geoip allow 路由缺 not 包裹: %#v", sets[0])
+	if _, hasNot := sets[0]["not"]; hasNot {
+		t.Fatalf("geoip allow 路由不得再经 not 包裹: %#v", sets[0])
 	}
-	inner, ok := notRaw[0].(map[string]interface{})
+	geoipRaw, ok := sets[0]["lb_geoip"].(map[string]interface{})
 	if !ok {
-		t.Fatalf("not 内容非 set: %T", notRaw[0])
-	}
-	geoipRaw, ok := inner["lb_geoip"].(map[string]interface{})
-	if !ok {
-		t.Fatalf("not 内缺 lb_geoip: %#v", inner)
+		t.Fatalf("缺 lb_geoip 匹配: %#v", sets[0])
 	}
 	countries, ok := geoipRaw["countries"].([]string)
 	if !ok || len(countries) != 1 || countries[0] != "中国" {
 		t.Fatalf("countries=%#v, want [中国]", geoipRaw["countries"])
+	}
+	if mode, _ := geoipRaw["mode"].(string); mode != "allow" {
+		t.Fatalf("mode=%v, want allow", geoipRaw["mode"])
 	}
 }
 
@@ -662,5 +661,87 @@ func TestL4SecConfig_caddyEngineAcceptance(t *testing.T) {
 	t.Logf("caddy validate --adapter json --config %s\n%s", path, strings.TrimSpace(string(out)))
 	if verr != nil {
 		t.Fatalf("真实 Caddy 引擎拒绝了 L4 安全路由渲染产物: %v", verr)
+	}
+}
+
+// allow 模式 ACL 名单为空：仍参与交集（空集→交集空→空投影=恒命中=全拒），
+// 与 HTTP 预检同语义——不得经内容门剔除而静默 fail-open。
+func TestBuildTCPServer_tcpAclAllowEmptyList_stillContributes(t *testing.T) {
+	stubSecurityLibsAvailable(t)
+	oldDir := IPListDataDir
+	IPListDataDir = t.TempDir()
+	t.Cleanup(func() { IPListDataDir = oldDir })
+	ResetIPListProjectionStateForTest()
+	t.Cleanup(ResetIPListProjectionStateForTest)
+
+	cid := "lb_l4sec_allowempty"
+	policies := []*models.SecurityPolicy{
+		{ID: 51, Name: "l4-allow-empty", PolicyType: "stage1", IPACLEnabled: true, IPACLMode: "allow", IPACLList: `[]`},
+	}
+	server, err := buildTCPServer(l4SecTestRule(cid), &tcpSecurityRenderInput{policies: policies})
+	if err != nil {
+		t.Fatalf("buildTCPServer: %v", err)
+	}
+	rawRoutes, ok := server["routes"].([]interface{})
+	if !ok {
+		t.Fatalf("routes missing: %#v", server)
+	}
+	// allow 路由 + 兜底 = 2 条。
+	if len(rawRoutes) != 2 {
+		t.Fatalf("routes=%d, want 2（allow 空名单仍参与交集→恒拒路由+兜底）: %s", len(rawRoutes), dumpJSON(t, server))
+	}
+	assertL4SecCloseRoute(t, rawRoutes[0], "lb_ipfile", "l4-allow-"+cid+".txt", "allow", 0, true)
+}
+
+// 信任路由的 proxy 实例不挂 health_checks——主动/被动健康检查只由兜底 proxy
+// 实例承担（Caddy 按出现次数实例化 proxy，多实例各挂一份会把上游探测频次按
+// 实例数放大）。
+func TestBuildTCPServer_tcpTrustRoutesProxyNoHealthChecks(t *testing.T) {
+	stubSecurityLibsAvailable(t)
+	oldDir := IPListDataDir
+	IPListDataDir = t.TempDir()
+	t.Cleanup(func() { IPListDataDir = oldDir })
+	ResetIPListProjectionStateForTest()
+	t.Cleanup(ResetIPListProjectionStateForTest)
+
+	cid := "lb_l4sec_hc"
+	policies := []*models.SecurityPolicy{
+		{ID: 61, Name: "l4-trust-p", PolicyType: "stage0", TrustDetection: false, IPWhitelistEnabled: true, IPWhitelist: []byte(`["127.0.0.1"]`)},
+		{ID: 62, Name: "l4-trust-d", PolicyType: "stage0", TrustDetection: true, IPWhitelistEnabled: true, IPWhitelist: []byte(`["127.0.0.2"]`)},
+	}
+	server, err := buildTCPServer(l4SecTestRule(cid), &tcpSecurityRenderInput{policies: policies})
+	if err != nil {
+		t.Fatalf("buildTCPServer: %v", err)
+	}
+	rawRoutes, ok := server["routes"].([]interface{})
+	if !ok {
+		t.Fatalf("routes missing: %#v", server)
+	}
+	// trust 直通 + trust_detect + 兜底 = 3 条。
+	if len(rawRoutes) != 3 {
+		t.Fatalf("routes=%d, want 3: %s", len(rawRoutes), dumpJSON(t, server))
+	}
+	for i, label := range []string{"trust 直通", "trust_detect"} {
+		for _, h := range l4SecRouteHandlers(t, rawRoutes[i]) {
+			if h["handler"] != "proxy" {
+				continue
+			}
+			if _, has := h["health_checks"]; has {
+				t.Fatalf("%s 路由 proxy 不得挂 health_checks: %#v", label, h)
+			}
+		}
+	}
+	// 兜底 proxy 保留 health_checks（健康检查唯一实例）。
+	var found bool
+	for _, h := range l4SecRouteHandlers(t, rawRoutes[2]) {
+		if h["handler"] == "proxy" {
+			found = true
+			if _, has := h["health_checks"]; !has {
+				t.Fatalf("兜底 proxy 缺 health_checks: %#v", h)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("兜底路由缺 proxy handler")
 	}
 }

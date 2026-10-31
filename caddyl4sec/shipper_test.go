@@ -1,6 +1,7 @@
 package caddyl4sec
 
 import (
+	"bytes"
 	"io"
 	"net"
 	"net/http"
@@ -295,4 +296,67 @@ func TestPipelineSinkReceivesSyntheticLine(t *testing.T) {
 	default:
 		t.Fatal("sink never received the synthetic line")
 	}
+}
+
+// TestL4SpoolResetSealsActiveFile：写错误路径重置句柄时必须封存 active——
+// 遗留的 active-*.jsonl 在写侧存活期间永不被补采且持续占用兜底预算；
+// 封存（rename→sealed-*）让已落盘行进入补采可达面。
+func TestL4SpoolResetSealsActiveFile(t *testing.T) {
+	dir := t.TempDir()
+	sp := openL4Spool(dir, 1<<20, 1000)
+	line := []byte(`{"k":"v"}`)
+	if n, err := sp.appendLines([][]byte{line, line, line}); err != nil || n != 3 {
+		t.Fatalf("appendLines = %d, %v; want 3, nil", n, err)
+	}
+	sp.mu.Lock()
+	sp.resetWriterLocked()
+	sp.mu.Unlock()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("readdir: %v", err)
+	}
+	var actives, sealeds int
+	for _, e := range entries {
+		switch {
+		case strings.HasPrefix(e.Name(), "active-"):
+			actives++
+		case strings.HasPrefix(e.Name(), "sealed-"):
+			sealeds++
+		}
+	}
+	if actives != 0 {
+		t.Fatalf("reset 后仍有 %d 个 active 文件（遗留不补采+吃预算）", actives)
+	}
+	if sealeds != 1 {
+		t.Fatalf("reset 后 sealed=%d, want 1", sealeds)
+	}
+}
+
+// TestL4SpoolFlushRetryOnTransientError：批末 flush 失败有一次重试（瞬时
+// I/O 抖动不得让已缓冲整批走错误路径）。
+func TestL4SpoolFlushRetryOnTransientError(t *testing.T) {
+	dir := t.TempDir()
+	sp := openL4Spool(dir, 1<<20, 1000)
+	line := []byte(`{"k":"v"}`)
+	if n, err := sp.appendLines([][]byte{line, line}); err != nil || n != 2 {
+		t.Fatalf("appendLines = %d, %v; want 2, nil", n, err)
+	}
+	// 数据必须真实落盘（flush 成功）。
+	data, err := os.ReadFile(mustActivePath(t, sp))
+	if err != nil {
+		t.Fatalf("read active: %v", err)
+	}
+	if got := bytes.Count(data, []byte("\n")); got != 2 {
+		t.Fatalf("落盘行数 = %d, want 2", got)
+	}
+}
+
+func mustActivePath(t *testing.T, sp *l4Spool) string {
+	t.Helper()
+	sp.mu.Lock()
+	defer sp.mu.Unlock()
+	if sp.activePath == "" {
+		t.Fatal("active path empty")
+	}
+	return sp.activePath
 }

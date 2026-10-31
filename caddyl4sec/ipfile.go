@@ -16,6 +16,7 @@ import (
 	"github.com/fsnotify/fsnotify"
 	"github.com/mholt/caddy-l4/layer4"
 	"go.uber.org/zap"
+	"sort"
 )
 
 // —— layer4.matchers.lb_ipfile ——
@@ -133,12 +134,17 @@ func (m *L4IPFileMatcher) Match(cx *layer4.Connection) (bool, error) {
 	if set == nil {
 		return false, nil
 	}
-	for _, cidr := range set.cidrs {
-		if cidr.Contains(ip) {
-			return true, nil
-		}
+	ip = ip.Unmap()
+	// 二分找「最后一个起始地址 ≤ ip」的条目再确认（排序不相交前提下候选
+	// 唯一）；wafiplist Evaluate 同款不变量。
+	cidrs := set.cidrs
+	lo := sort.Search(len(cidrs), func(i int) bool {
+		return cidrs[i].Addr().Compare(ip) > 0
+	})
+	if lo == 0 {
+		return false, nil
 	}
-	return false, nil
+	return cidrs[lo-1].Contains(ip), nil
 }
 
 // monitor 事件循环：fsnotify（目录监听 + 文件名过滤，Create/Write 置重载）
@@ -252,7 +258,36 @@ func (m *L4IPFileMatcher) readSet() (*ipPrefixSet, time.Time, int64, error) {
 	if serr := scanner.Err(); serr != nil {
 		return nil, time.Time{}, -1, fmt.Errorf("error reading the IPs from %v: %w", m.File, serr)
 	}
-	return &ipPrefixSet{cidrs: cidrs}, st.ModTime(), st.Size(), nil
+	// 装载期规范化（一次成本，换 Match O(log n)）：Unmap（4in6 归 v4）、
+	// 掩码归零、按 (族, 起始地址, 前缀位升序) 排序、剔嵌套（被前序包含的
+	// 条目不改变匹配语义，只增加扫描量）。deny/bl/allow 投影由 aggregate
+	// 产出本身已满足不变量，此处排序为幂等；trust 并集与威胁名单直通路径
+	// 未经聚合，规范化在此单点兜住。
+	prefixes := make([]netip.Prefix, 0, len(cidrs))
+	for _, p := range cidrs {
+		prefixes = append(prefixes, netip.PrefixFrom(p.Addr().Unmap(), p.Bits()).Masked())
+	}
+	sort.Slice(prefixes, func(i, j int) bool {
+		a, b := prefixes[i], prefixes[j]
+		if a.Addr().Is4() != b.Addr().Is4() {
+			return a.Addr().Is4()
+		}
+		if a.Addr().Compare(b.Addr()) != 0 {
+			return a.Addr().Compare(b.Addr()) < 0
+		}
+		return a.Bits() < b.Bits()
+	})
+	kept := prefixes[:0]
+	for _, p := range prefixes {
+		if len(kept) > 0 {
+			last := kept[len(kept)-1]
+			if last.Addr().Is4() == p.Addr().Is4() && last.Bits() <= p.Bits() && last.Contains(p.Addr()) {
+				continue
+			}
+		}
+		kept = append(kept, p)
+	}
+	return &ipPrefixSet{cidrs: kept}, st.ModTime(), st.Size(), nil
 }
 
 // logThrottled 同原因节流告警（keyedWarnThrottle 复用）。

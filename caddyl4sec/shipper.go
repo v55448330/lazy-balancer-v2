@@ -293,7 +293,16 @@ func (s *l4Spool) appendLines(lines [][]byte) (int, error) {
 			}
 		}
 	}
-	return written, s.flushLocked()
+	return written, retryFlushLocked(s)
+}
+
+// retryFlushLocked 批末刷盘瞬时失败一次重试（I/O 抖动不得让已缓冲整批走
+// 错误路径）；持续失败如实上抛（计数与告警由调用方口径处理）。
+func retryFlushLocked(s *l4Spool) error {
+	if err := s.flushLocked(); err != nil {
+		return s.flushLocked()
+	}
+	return nil
 }
 
 var errL4SpoolFull = errors.New("l4sec: security-events spool full")
@@ -306,12 +315,23 @@ func (s *l4Spool) noteActiveRenameLocked(oldPath, newPath string) {
 }
 
 func (s *l4Spool) resetWriterLocked() {
-	s.bw = nil
+	if s.bw != nil {
+		// 错误态下缓冲不可信，仍尽力补一次刷盘：能落多少是多少（半行由
+		// 补采端 jsonl 解析跳过）。落盘后必须封存——遗留的 active 文件在
+		// 写侧存活期间永不被补采且持续占用预算。
+		_ = s.bw.Flush()
+		s.bw = nil
+	}
 	if s.active != nil {
 		_ = s.active.Close()
 		s.active = nil
 	}
-	s.activePath = ""
+	if s.activePath != "" {
+		if newPath, serr := s.sealedPathLocked(); serr == nil && os.Rename(s.activePath, newPath) == nil {
+			s.noteActiveRenameLocked(s.activePath, newPath)
+		}
+		s.activePath = ""
+	}
 }
 
 func (s *l4Spool) flushLocked() error {
@@ -321,17 +341,27 @@ func (s *l4Spool) flushLocked() error {
 	return s.bw.Flush()
 }
 
-func (s *l4Spool) sealedPathLocked() string {
-	for k := 0; ; k++ {
+func (s *l4Spool) sealedPathLocked() (string, error) {
+	for k := 0; k < 64; k++ {
 		name := fmt.Sprintf("%s%d%s", l4SpoolSealedPrefix, time.Now().UnixNano(), l4SpoolFileSuffix)
 		if k > 0 {
 			name = fmt.Sprintf("%s%d-%d%s", l4SpoolSealedPrefix, time.Now().UnixNano(), k, l4SpoolFileSuffix)
 		}
 		path := filepath.Join(s.dir, name)
-		if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
-			return path
+		err := func() error {
+			_, statErr := os.Stat(path)
+			return statErr
+		}()
+		if errors.Is(err, os.ErrNotExist) {
+			return path, nil
+		}
+		if err != nil {
+			// 非 NotExist（目录被带外替换为文件/权限丧失）：不持锁空转，
+			// 交调用方既有的失败容忍路径（rename 跳过/尽力补刷已落盘）。
+			return "", err
 		}
 	}
+	return "", errors.New("l4sec: security-events spool exhausted sealed names")
 }
 
 // rotateLocked 把 active 原子封存为 sealed 并开新 active。封存失败不丢行：
@@ -343,7 +373,11 @@ func (s *l4Spool) rotateLocked() error {
 	}
 	if s.activePath != "" {
 		oldPath := s.activePath
-		newPath := s.sealedPathLocked()
+		newPath, serr := s.sealedPathLocked()
+		if serr != nil {
+			l4IOLogf("l4sec: security-events spool seal failed for %s (continuing on the same active): %v", s.activePath, serr)
+			return nil
+		}
 		if err := os.Rename(oldPath, newPath); err != nil {
 			l4IOLogf("l4sec: security-events spool seal failed for %s (continuing on the same active): %v", s.activePath, err)
 			return nil
@@ -378,7 +412,10 @@ func (s *l4Spool) sealIfIdle(now time.Time, idle time.Duration) error {
 		return err
 	}
 	oldPath := s.activePath
-	newPath := s.sealedPathLocked()
+	newPath, serr := s.sealedPathLocked()
+	if serr != nil {
+		return serr
+	}
 	if err := os.Rename(oldPath, newPath); err != nil {
 		return err
 	}
@@ -416,8 +453,12 @@ func (s *l4Spool) close() error {
 	}
 	if s.activePath != "" {
 		oldPath := s.activePath
-		newPath := s.sealedPathLocked()
-		if rerr := os.Rename(oldPath, newPath); rerr == nil {
+		newPath, sperr := s.sealedPathLocked()
+		if sperr != nil {
+			if err == nil {
+				err = sperr
+			}
+		} else if rerr := os.Rename(oldPath, newPath); rerr == nil {
 			s.noteActiveRenameLocked(oldPath, newPath)
 			s.activePath = ""
 		} else if err == nil {
@@ -564,6 +605,15 @@ func (s *l4Shipper) spill(batch [][]byte, cause error) {
 		}
 		remaining = batch[written:]
 		if err != nil {
+			if written > 0 && len(remaining) == 0 {
+				// 整批已写入 spool 缓冲但批末刷盘未确认：数据滞留缓冲（下次
+				// appendLines/close 落盘），不是丢弃——独立口径告警，不冒用
+				// dropped/spool_errors 语义（观测失真）。
+				if _, logNow := s.spoolLog.report(time.Now()); logNow {
+					l4IOLogf("l4sec: security-events spool flush unconfirmed (%d line(s) buffered in spool, will retry on next write): ipc=%v spool=%v", written, cause, err)
+				}
+				return
+			}
 			s.reportSpoolError(cause, err, len(remaining))
 			s.spoolErrs.Add(uint64(len(remaining)))
 			s.noteDrop("spool unavailable", len(remaining))
@@ -636,15 +686,6 @@ func (s *l4Shipper) counters() (sent, failed, spooled, spoolErrs uint64) {
 		return 0, 0, 0, 0
 	}
 	return s.sent.Load(), s.failed.Load(), s.spooled.Load(), s.spoolErrs.Load()
-}
-
-func (s *l4Shipper) pendingLines() int {
-	if s == nil {
-		return 0
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return len(s.batch)
 }
 
 // —— 管线（auditPipeline 子集：队列 + drain + 出货器；无文件模式、无侧车）——

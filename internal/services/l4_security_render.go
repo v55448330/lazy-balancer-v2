@@ -75,7 +75,7 @@ func buildTCPSecurityRoutes(rule SingleRuleConfig, proxyHandler map[string]inter
 		if pp := l4ProxyProtocolHandler(rule); pp != nil {
 			handle = append(handle, pp)
 		}
-		handle = append(handle, proxyHandler)
+		handle = append(handle, l4PassthroughProxyHandler(proxyHandler))
 		routes = append(routes, map[string]interface{}{
 			"match":  l4IPFileMatchers(path),
 			"handle": handle,
@@ -99,7 +99,7 @@ func buildTCPSecurityRoutes(rule SingleRuleConfig, proxyHandler map[string]inter
 		if pp := l4ProxyProtocolHandler(rule); pp != nil {
 			handle = append(handle, pp)
 		}
-		handle = append(handle, l4SecEventHandler(cid, l4SecTrustDetectReason, 0), proxyHandler)
+		handle = append(handle, l4SecEventHandler(cid, l4SecTrustDetectReason, 0), l4PassthroughProxyHandler(proxyHandler))
 		routes = append(routes, map[string]interface{}{
 			"match":  l4IPFileMatchers(path),
 			"handle": handle,
@@ -147,11 +147,10 @@ func buildTCPSecurityRoutes(rule SingleRuleConfig, proxyHandler map[string]inter
 		routes = append(routes, l4SecCloseRoute(rule, []interface{}{notMatcherSet(l4IPFileMatchers(path))}, cid, "allow", 0))
 	}
 
-	// ⑤ 逐策略 GeoIP（policy_id 精确归因）：deny 模式命中名单地区断连；
-	// allow 模式名单外地区断连（渲染侧 not 包裹，matcher 语义恒为
-	// 「连接归属 ∈ countries」）。matcher 查库失败由模块 fail-open 放行
-	// （用户裁定），渲染侧不展开私网豁免（模块侧承担，与 HTTP 的
-	// caddygeoip pass 路由分层一致）。
+	// ⑤ 逐策略 GeoIP（policy_id 精确归因）：matcher 直接编码阻断方向——
+	// deny 模式命中名单地区断连；allow 模式名单外地区断连（mode:allow，
+	// 无 not 包裹）。查库失败/私网/IPv6 由模块 fail-open 放行（用户裁定；
+	// 私网豁免在模块层承担，与 HTTP 链首私网豁免同语义）。
 	for _, policy := range policies {
 		if policy == nil || !PolicyHasGeoIP(policy) {
 			continue
@@ -218,28 +217,47 @@ func l4IPFileMatchers(paths ...string) []interface{} {
 	return sets
 }
 
-// geoipMatcherSet 是 lb_geoip 匹配集：allow 模式 not 包裹（名单外断连），
-// deny 模式平原（命中断连）。countries=策略 geoip_countries 原值（国名/省/
-// 省-市/「海外」，与 ValidateGeoIPCountries 同源——非 ISO 码，A2 matcher 的
-// 匹配语义与 geoipLocOperator 同构）。xdb_path 仅在派生值≠插件默认时发射
-// （与 buildGeoipHandler 的 XdbPath 约定同口径：默认形态渲染字节不变）。
+// geoipMatcherSet 是 lb_geoip 匹配集：matcher 直接编码阻断方向（mode:allow
+// =名单外断连；deny 缺省=命中断连）——不可判定（查库失败/私网/IPv6）由
+// matcher fail-open 放行，不再经 not 包裹（not 会把不可判定反转为断连，
+// allow 模式下全部 IPv6 客户端被误断）。countries=策略 geoip_countries
+// 原值（国名/省/省-市/「海外」，与 ValidateGeoIPCountries 同源——非 ISO 码，
+// A2 matcher 的匹配语义与 geoipLocOperator 同构）。xdb_path 仅在派生值≠
+// 插件默认时发射（与 buildGeoipHandler 的 XdbPath 约定同口径：默认形态
+// 渲染字节不变；deny 模式不发射 mode，字节不变）。
 func geoipMatcherSet(countries []string, allowMode bool) map[string]interface{} {
 	conf := map[string]interface{}{
 		"countries": countries,
 	}
+	if allowMode {
+		conf["mode"] = "allow"
+	}
 	if ip2regionLivePath != defaultIP2RegionLivePath {
 		conf["xdb_path"] = ip2regionLivePath
 	}
-	set := map[string]interface{}{
+	return map[string]interface{}{
 		l4SecGeoipMatcherID: conf,
 	}
-	if allowMode {
-		return notMatcherSet([]interface{}{set})
-	}
-	return set
 }
 
-// notMatcherSet 是否定匹配集包装（allow 交集外/GeoIP allow 名单外断连）。
+// notMatcherSet 是否定匹配集包装（allow 名单交集外断连——IP 文件族仍用
+// not：lb_ipfile 的 Match 无不可判定形态，not 语义安全）。
+
+// l4PassthroughProxyHandler 是信任路由的 proxy 副本（浅拷贝去 health_checks）：
+// Caddy 按出现次数实例化 proxy——主动/被动健康检查只由兜底 proxy 实例承担，
+// 透传/检测实例各挂一份会把上游探测频次按实例数放大（健康/失联日志同倍
+// 放大）。透传语义不受影响（转发目标 upstreams 不变）。
+func l4PassthroughProxyHandler(proxyHandler map[string]interface{}) map[string]interface{} {
+	cp := make(map[string]interface{}, len(proxyHandler))
+	for k, v := range proxyHandler {
+		cp[k] = v
+	}
+	delete(cp, "health_checks")
+	return cp
+}
+
+// notMatcherSet 是否定匹配集包装（allow 名单交集外断连——IP 文件族仍用
+// not：lb_ipfile 的 Match 无不可判定形态，not 语义安全）。
 func notMatcherSet(sets []interface{}) map[string]interface{} {
 	return map[string]interface{}{
 		"not": sets,
@@ -328,17 +346,17 @@ func mergedBlacklistPolicies(policies []*models.SecurityPolicy) []string {
 	return union
 }
 
-// mergedAllowACLPolicies 收集 allow 模式且名单非空的 ACL 名单（参与交集）。
+// mergedAllowACLPolicies 收集 allow 模式的 ACL 名单（参与交集）。空名单
+// 照常入列：交集为空 → 投影空文件 → not(lb_ipfile) 恒命中 = 全拒，与
+// HTTP 预检「空集不因内容门剔除而静默 fail-open」同语义（allow 名单运行期
+// 被清空时 TCP 与 HTTP 行为必须一致：全拒，不是放行）。
 func mergedAllowACLPolicies(policies []*models.SecurityPolicy) [][]string {
 	var lists [][]string
 	for _, p := range policies {
 		if p == nil || !p.IPACLEnabled || p.IPACLMode != "allow" {
 			continue
 		}
-		entries := mergedACLList(p)
-		if len(entries) > 0 {
-			lists = append(lists, entries)
-		}
+		lists = append(lists, mergedACLList(p))
 	}
 	return lists
 }

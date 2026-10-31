@@ -106,6 +106,10 @@ func ConfigureWafDirs(dataDir string) {
 	for _, item := range []struct{ name, path string }{
 		{SecurityEventsIPCSocketEnv, securityEventsIPCSocketPath},
 		{SecurityEventsSpoolDirEnv, securityEventsSpoolDir},
+		// L4 spool 写侧（caddyl4sec shipper）同样按 env 取目录——缺席注入
+		// 会让自定义 data_dir 下写侧落包级默认路径、读侧扫派生路径，事件
+		// 永久滞留无法补采。
+		{SecurityEventsL4SpoolDirEnv, securityEventsL4SpoolDir},
 	} {
 		if _, present := os.LookupEnv(item.name); present {
 			continue
@@ -124,9 +128,9 @@ func ConfigureWafDirs(dataDir string) {
 // 「IP 访问控制」/「受信代理」被 Caddy 校验拒绝、或安全事件永远进不了库。
 func logWafDirPluginDivergence(dataDir string) {
 	Logf("error",
-		"data_dir=%s 不是容器默认 %s：面板进程已把名单白名单/CRS/IPC 路径派生到 %s，但 Caddy 二进制内的 wafiplist 白名单是常量 %s、安全事件 IPC 路径取自 Caddy 自身环境——容器形态下 Caddy 由 entrypoint 监督器先启动，面板注入的 env 不会被它继承。启用「IP 访问控制」/「受信代理」的规则会在 caddy validate 阶段被拒（路径越出白名单），安全事件会落到默认路径而进不了库。请保持 data_dir=%s，或对 Caddy 进程显式设置 %s/%s 并在 %s 提供同名名单目录。",
+		"data_dir=%s 不是容器默认 %s：面板进程已把名单白名单/CRS/IPC 路径派生到 %s，但 Caddy 二进制内的 wafiplist 白名单是常量 %s、安全事件 IPC/L4 spool 路径取自 Caddy 自身环境——容器形态下 Caddy 由 entrypoint 监督器先启动，面板注入的 env 不会被它继承。启用「IP 访问控制」/「受信代理」的规则会在 caddy validate 阶段被拒（路径越出白名单），安全事件（含 L4 兜底事件）会落到默认路径而进不了库。请保持 data_dir=%s，或对 Caddy 进程显式设置 %s/%s/%s 并在 %s 提供同名名单目录。",
 		dataDir, defaultWafDataDir, wafDir, wafiplist.DefaultAllowedPathPrefix,
-		defaultWafDataDir, SecurityEventsIPCSocketEnv, SecurityEventsSpoolDirEnv, wafiplist.DefaultAllowedPathPrefix)
+		defaultWafDataDir, SecurityEventsIPCSocketEnv, SecurityEventsSpoolDirEnv, SecurityEventsL4SpoolDirEnv, wafiplist.DefaultAllowedPathPrefix)
 }
 
 // CRSLiveDir 返回 CRS 活树目录（ConfigureWafDirs 派生后的当前值）。handlers

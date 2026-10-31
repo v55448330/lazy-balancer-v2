@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"fmt"
 	"net/netip"
-	"os"
 
 	"lazy-balancer-v2/wafiplist"
 )
@@ -33,8 +32,14 @@ func iterIPListTextLines(raw []byte, fn func(line string) bool) {
 // CompileFromIplistFile 从 .iplist 纯文本源文件编译 .fast 二进制。
 // 源文件格式：每行一个 IP/CIDR，# 或 ; 开头为注释，空行跳过。
 // 非法行跳过并计数（WARN 语义——合法行正常编译，不因单行损坏全量失败）。
+//
+// 生产编译触发点（全仓 CompileFromIplistFile 调用面）：
+//  1. 威胁库更新器——下载落盘/heal（threatupdate.go WriteThreatIplistCompiled 与 healThreatFastFromText）；
+//  2. lbbak 导入（config_backup_lbbak.go，持 WafFileLock 调用）。
+//
+// 从节点不同步 .iplist 源文件（只同步 .fast，零编译裁定）；启动路径只渲染 .txt 投影，不触发编译。
 func CompileFromIplistFile(iplistPath string) error {
-	raw, err := os.ReadFile(iplistPath)
+	raw, err := readIplistTextBounded(iplistPath)
 	if err != nil {
 		return fmt.Errorf("读取 .iplist %s: %w", iplistPath, err)
 	}
@@ -45,7 +50,12 @@ func CompileFromIplistFile(iplistPath string) error {
 	// []string 头 + 全量字符串复制，且与 iterIPListTextLines 内部的切分重复。
 	prefixes := make([]netip.Prefix, 0, bytes.Count(raw, []byte("\n"))+1)
 	skipped := 0
+	over := false
 	iterIPListTextLines(raw, func(line string) bool {
+		if len(prefixes)+skipped >= iplistTextMaxEntries {
+			over = true
+			return false
+		}
 		prefix, err := wafiplist.ParseIPEntry(line)
 		if err != nil {
 			skipped++
@@ -54,6 +64,9 @@ func CompileFromIplistFile(iplistPath string) error {
 		prefixes = append(prefixes, prefix)
 		return true
 	})
+	if over {
+		return fmt.Errorf("读取 .iplist %s: 条目数超过上限 %d", iplistPath, iplistTextMaxEntries)
+	}
 	if skipped > 0 {
 		Logf("warn", "编译 %s: 跳过 %d 条非法行", iplistPath, skipped)
 	}

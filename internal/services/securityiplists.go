@@ -377,27 +377,60 @@ func (s threatTextScan) logDiscarded(path string) {
 // 消灭的缺陷形态。
 // 本判据真正覆盖的形态：从节点遗留的旧文本 / 带外 touch 文本 / `.fast` 缺失
 // （此时文本代际更可靠）。
+// readThreatIplistPath 装载威胁名单条目（文本/.fast 双代际， PreferFast 判向）。
 // 两个文件都缺失返回文本侧错误（os.ErrNotExist 语义由调用方判定）。
 // .fast 较新但损坏/不可读时回退文本（在场时）
 // 并告警——旧实现直接失败，引用名单的 ACL/信任策略被渲染层整体跳过
 // （安全面静默缺失），且更新器哈希快路径按 stat 判定永不修复。
+
+// iplistTextMaxBytes 是 services 侧 .iplist 文本读的体积门（var：测试收窄），
+// 与 wafiplist 引擎侧 .fast 体积门同口径（64MB）——同一份跨进程输入文件，
+// 任何读者同一套门；病态大文件的内存峰值在分配前被拒。
+var iplistTextMaxBytes int64 = 64 << 20
+
+// iplistTextMaxEntries 是文本条目行数门，与引擎侧条目门同口径。
+const iplistTextMaxEntries = 1_000_000
+
+// readIplistTextBounded 是 services 侧 .iplist 文本的统一有界读：体积门先于
+// 任何分配；调用方行迭代须以 iplistTextMaxEntries 封顶（readIplistEntriesBounded
+// 已内置）。三条生产读路径（威胁装载/heal/编译）共用，禁止新增裸 os.ReadFile。
+func readIplistTextBounded(path string) ([]byte, error) {
+	raw, _, err := wafiplist.ReadBoundedFile(path, iplistTextMaxBytes)
+	return raw, err
+}
+
+// readIplistEntriesBounded 有界读 + 行展开（口径与 iterIPListTextLines 一致），
+// 行数超 iplistTextMaxEntries 即报错——行 []string 与下游聚合的内存峰值受门约束。
+func readIplistEntriesBounded(path string) ([]string, error) {
+	raw, err := readIplistTextBounded(path)
+	if err != nil {
+		return nil, err
+	}
+	vals := make([]string, 0, 1024)
+	over := false
+	iterIPListTextLines(raw, func(line string) bool {
+		if len(vals) >= iplistTextMaxEntries {
+			over = true
+			return false
+		}
+		vals = append(vals, line)
+		return true
+	})
+	if over {
+		return nil, fmt.Errorf("%s 条目数超过上限 %d", path, iplistTextMaxEntries)
+	}
+	return vals, nil
+}
+
+// 三个生产读路径共用 bounded 单源（禁止新增裸 os.ReadFile 读 .iplist）。
+
+// readThreatIplistPath 装载威胁名单条目（文本/.fast 双代际， PreferFast 判向）。
 func readThreatIplistPath(iplistPath string) ([]string, error) {
 	textInfo, textErr := os.Stat(iplistPath)
 	fastPath := wafiplist.FastPath(iplistPath)
 	fastInfo, fastErr := os.Stat(fastPath)
 	readText := func() ([]string, error) {
-		raw, err := os.ReadFile(iplistPath)
-		if err != nil {
-			return nil, err
-		}
-		// 行过滤口径单源 iterIPListTextLines（渲染/UI/编译/下载四处
-		// 同口径：空行与 #/; 注释跳过）。
-		vals := make([]string, 0, 1024)
-		iterIPListTextLines(raw, func(line string) bool {
-			vals = append(vals, line)
-			return true
-		})
-		return vals, nil
+		return readIplistEntriesBounded(iplistPath)
 	}
 	readFast := func() ([]string, error) { return expandThreatFastEntries(fastPath) }
 	// 文本损坏（低可解析率/空文本）但 .fast 完好的单向自愈缺口——
