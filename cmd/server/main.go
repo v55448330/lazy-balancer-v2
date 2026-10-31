@@ -22,6 +22,7 @@ import (
 	"lazy-balancer-v2/internal/acme"
 	"lazy-balancer-v2/internal/config"
 	"lazy-balancer-v2/internal/db"
+	"lazy-balancer-v2/internal/dnsprovider/aliyun"
 	"lazy-balancer-v2/internal/dnsprovider/dnspod"
 	"lazy-balancer-v2/internal/dnsprovider/ownership"
 	"lazy-balancer-v2/internal/dnsprovider/tencent"
@@ -129,9 +130,10 @@ func run() error {
 	// 日志接缝在此装配——装配后其告警进入统一日志级别链（services.Logf）。
 	acme.SetLogf(services.Logf)
 	ownership.SetLogf(services.Logf)
-	// dnsprovider 两实现的 TXT 残留告警接缝（修复前裸 log.Printf）。
+	// dnsprovider 各实现的 TXT 残留告警接缝（修复前裸 log.Printf）。
 	dnspod.SetLogf(services.Logf)
 	tencent.SetLogf(services.Logf)
+	aliyun.SetLogf(services.Logf)
 	if err := handlers.EnsureBrandingFile(cfg.DataDir); err != nil {
 		services.Logf("warn", "failed to ensure branding file: %v", err)
 	}

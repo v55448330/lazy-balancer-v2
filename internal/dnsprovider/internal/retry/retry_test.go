@@ -107,6 +107,11 @@ func TestTransport_createRecord_5xx_is_not_replayed(t *testing.T) {
 			req.Header.Set("X-TC-Action", "CreateRecord")
 			return req
 		}},
+		{name: "aliyun header", req: func(t *testing.T) *http.Request {
+			req := newRequestPath(t, "https://alidns.example/", "value=abc")
+			req.Header.Set("x-acs-action", "AddDomainRecord")
+			return req
+		}},
 	} {
 		t.Run(shape.name, func(t *testing.T) {
 			// Given：持续 502

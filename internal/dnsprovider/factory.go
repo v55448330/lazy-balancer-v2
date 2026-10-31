@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"lazy-balancer-v2/internal/dnsprovider/aliyun"
 	"lazy-balancer-v2/internal/dnsprovider/dnspod"
 	"lazy-balancer-v2/internal/dnsprovider/tencent"
 )
@@ -13,24 +14,29 @@ import (
 // certificate_configs.dns_credentials（global_config.dns_credentials 为已停用的
 // 遗留字段，2026-09-05 证书域审计核实签发链无消费方）。
 type DNSCredentials struct {
-	Mode      string `json:"mode"` // "dnspod" or "tencent"
+	Mode      string `json:"mode"` // "dnspod", "tencent" or "aliyun"
 	APIToken  string `json:"api_token,omitempty"`
 	SecretID  string `json:"secret_id,omitempty"`
 	SecretKey string `json:"secret_key,omitempty"`
+	// AccessKey 对是 aliyun 族的 canonical 形态（阿里云 RAM AccessKey）。
+	AccessKeyID     string `json:"access_key_id,omitempty"`
+	AccessKeySecret string `json:"access_key_secret,omitempty"`
 }
 
 // CredentialEnvelope 是「原始凭证 JSON → 规范凭据」归一所需的全部输入字段：
-// UI 存储形态（auth_mode + app_id/app_token 或 secret_id/secret_key）与
-// canonical 形态（mode + api_token 或 secret 对）共用同一结构。多出的字段被
-// 忽略，因此同一实现可同时服务两条路径。
+// UI 存储形态（auth_mode + app_id/app_token 或 secret_id/secret_key 或
+// access_key_id/access_key_secret）与 canonical 形态（mode + 各族凭据）共用
+// 同一结构。多出的字段被忽略，因此同一实现可同时服务多条路径。
 type CredentialEnvelope struct {
-	Mode      string `json:"mode"`
-	AuthMode  string `json:"auth_mode"`
-	APIToken  string `json:"api_token"`
-	AppID     string `json:"app_id"`
-	AppToken  string `json:"app_token"`
-	SecretID  string `json:"secret_id"`
-	SecretKey string `json:"secret_key"`
+	Mode            string `json:"mode"`
+	AuthMode        string `json:"auth_mode"`
+	APIToken        string `json:"api_token"`
+	AppID           string `json:"app_id"`
+	AppToken        string `json:"app_token"`
+	SecretID        string `json:"secret_id"`
+	SecretKey       string `json:"secret_key"`
+	AccessKeyID     string `json:"access_key_id"`
+	AccessKeySecret string `json:"access_key_secret"`
 }
 
 // CanonicalCredentials 把任意形态的原始凭证 JSON 归一为规范凭据。
@@ -46,7 +52,7 @@ type CredentialEnvelope struct {
 //   - app_id+app_token 折叠为 api_token，且优先于游离的 api_token
 //     （掩码合并的短暂状态会同时带两形态）；
 //   - 无显式 mode/auth_mode 时按字段形态推断：仅一类凭据→该类；
-//     两类并存→歧义拒绝（不再静默择一）；全缺/不完整→缺失。
+//     多类并存→歧义拒绝（不再静默择一）；全缺/不完整→缺失。
 func CanonicalCredentials(rawJSON string) (DNSCredentials, error) {
 	var env CredentialEnvelope
 	if err := json.Unmarshal([]byte(rawJSON), &env); err != nil {
@@ -68,21 +74,31 @@ func (env CredentialEnvelope) Canonical() (DNSCredentials, error) {
 	}
 	hasToken := apiToken != ""
 	hasSecret := env.SecretID != "" && env.SecretKey != ""
+	hasAccess := env.AccessKeyID != "" && env.AccessKeySecret != ""
 
 	if mode == "" {
 		// 迁移早于 mode 字段落库的存量行只带凭证字段本身：按字段形态推断
-		// provider（APIToken→DNSPod token；SecretID+SecretKey→腾讯云 secret）。
-		// 两类并存=歧义（需显式 mode 消歧）；全缺/不完整=缺失（需补齐凭证）。
-		// 文案同时保留 UI 面（"请选择认证方式"）与协议面（"缺失"）语义。
+		// provider（APIToken→DNSPod token；SecretID+SecretKey→腾讯云 secret；
+		// AccessKeyID+AccessKeySecret→阿里云 access 对）。多类并存=歧义（需
+		// 显式 mode 消歧）；全缺/不完整=缺失（需补齐凭证）。文案同时保留
+		// UI 面（"请选择认证方式"）与协议面（"缺失"）语义。
+		families := 0
+		for _, present := range []bool{hasToken, hasSecret, hasAccess} {
+			if present {
+				families++
+			}
+		}
 		switch {
-		case hasToken && hasSecret:
-			return DNSCredentials{}, fmt.Errorf("DNS 凭证歧义：api_token 与 secret_id/secret_key 同时存在，无法判定提供商（请显式指定 mode=dnspod 或 mode=tencent）")
+		case families > 1:
+			return DNSCredentials{}, fmt.Errorf("DNS 凭证歧义：多类凭证同时存在，无法判定提供商（请显式指定 mode=dnspod、mode=tencent 或 mode=aliyun）")
 		case hasToken:
 			mode = "dnspod"
 		case hasSecret:
 			mode = "tencent"
+		case hasAccess:
+			mode = "aliyun"
 		default:
-			return DNSCredentials{}, fmt.Errorf("请选择认证方式：DNS 凭证缺失或不足以判定提供商（需 api_token，或 secret_id+secret_key；也可显式指定 mode）")
+			return DNSCredentials{}, fmt.Errorf("请选择认证方式：DNS 凭证缺失或不足以判定提供商（需 api_token，或 secret_id+secret_key，或 access_key_id+access_key_secret；也可显式指定 mode）")
 		}
 	}
 
@@ -97,6 +113,11 @@ func (env CredentialEnvelope) Canonical() (DNSCredentials, error) {
 			return DNSCredentials{}, fmt.Errorf("腾讯云认证方式需要提供 SecretId 和 SecretKey")
 		}
 		return DNSCredentials{Mode: "tencent", SecretID: env.SecretID, SecretKey: env.SecretKey}, nil
+	case "aliyun":
+		if !hasAccess {
+			return DNSCredentials{}, fmt.Errorf("阿里云认证方式需要提供 AccessKey ID 和 AccessKey Secret")
+		}
+		return DNSCredentials{Mode: "aliyun", AccessKeyID: env.AccessKeyID, AccessKeySecret: env.AccessKeySecret}, nil
 	}
 	return DNSCredentials{}, fmt.Errorf("unsupported dns provider mode: %s", mode)
 }
@@ -129,6 +150,11 @@ func newProviderFromCredentials(rawJSON, dataDir string) (Provider, error) {
 			return tencent.NewPersistent(creds.SecretID, creds.SecretKey, dataDir)
 		}
 		return tencent.New(creds.SecretID, creds.SecretKey)
+	case "aliyun":
+		if dataDir != "" {
+			return aliyun.NewPersistent(creds.AccessKeyID, creds.AccessKeySecret, dataDir)
+		}
+		return aliyun.New(creds.AccessKeyID, creds.AccessKeySecret)
 	default:
 		return nil, fmt.Errorf("unsupported dns provider mode: %s", creds.Mode)
 	}

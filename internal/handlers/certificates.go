@@ -150,6 +150,8 @@ func dnsCredentialFamilyMode(m map[string]string) string {
 		return "dnspod"
 	case "tencent", "tencent_cloud":
 		return "tencent"
+	case "aliyun":
+		return "aliyun"
 	}
 	return ""
 }
@@ -170,9 +172,11 @@ func pruneSupersededDNSCredentialFamily(creds, stored map[string]string) []strin
 	var stale []string
 	switch submittedMode {
 	case "dnspod":
-		stale = []string{"secret_id", "secret_key"}
+		stale = []string{"secret_id", "secret_key", "access_key_id", "access_key_secret"}
 	case "tencent":
-		stale = []string{"app_id", "app_token", "api_token"}
+		stale = []string{"app_id", "app_token", "api_token", "access_key_id", "access_key_secret"}
+	case "aliyun":
+		stale = []string{"app_id", "app_token", "api_token", "secret_id", "secret_key"}
 	}
 	// 冗余的 legacy mode 与认证族同义：提交带 auth_mode 时由后者表达，删除
 	// 避免「auth_mode=新族、mode=旧族」的并存形态误导后续推断。

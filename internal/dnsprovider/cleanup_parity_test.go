@@ -1,27 +1,29 @@
 package dnsprovider
 
-// 清理骨架双实现对齐守卫：dnspod 与 tencent 的 cleanUp 是有意保留的同构双实现
-// （底层 SDK 与记录 ID 类型不同，抽象共享的耦合成本高于重复成本），两侧各自
-// 维护「选中 → 逐条删除 → 批量移除账本 → 兜底排空 → 失败回填」骨架。双实现的
-// 风险不是重复本身，而是**漂移**：只改一侧（如删除失败仍移除账本条目、兜底
-// 排空被删、ctx 取消不再并入错误链）会让两家 provider 在同一事故下的行为不同，
-// 而单侧测试永远绿。
+// 清理骨架多实现对齐守卫：dnspod、tencent 与 aliyun 的 cleanUp 是有意保留的
+// 同构多实现（底层 API 与记录 ID 类型不同，抽象共享的耦合成本高于重复成本），
+// 各自维护「选中 → 逐条删除 → 批量移除账本 → 兜底排空 → 失败回填」骨架。
+// 多实现的风险不是重复本身，而是**漂移**：只改一侧（如删除失败仍移除账本
+// 条目、兜底排空被删、ctx 取消不再并入错误链）会让各家 provider 在同一事故
+// 下的行为不同，而单侧测试永远绿。
 //
-// 本守卫把骨架的结构标记做成有序清单，两侧必须同现同序；旁路的能力（dnspod 的
-// domain-id 自愈、tencent 的记录 ID 解析）作为 provider 专属标记只在各自一侧
-// 断言，不进入共同清单。
+// 本守卫把骨架的结构标记做成有序清单，所有实现必须两两同现同序；旁路的能力
+// （dnspod 的 domain-id 自愈、tencent/aliyun 的记录 ID 解析、aliyun 的
+// provider 侧残余排空）作为 provider 专属标记只在各自一侧断言，不进入共同清单。
 
 import (
 	"go/ast"
 	"go/parser"
 	"go/token"
 	"os"
+	"sort"
 	"strings"
 	"testing"
 )
 
-// cleanupProviderSource 是 cleanUp 双实现的源文件（相对本包目录）。
+// cleanupProviderSource 是 cleanUp 多实现的源文件（相对本包目录）。
 var cleanupProviderSource = map[string]string{
+	"aliyun":  "aliyun/aliyun.go",
 	"dnspod":  "dnspod/dnspod.go",
 	"tencent": "tencent/tencent.go",
 }
@@ -51,6 +53,10 @@ var cleanupProviderOnlyMarkers = map[string][]struct {
 	name   string
 	marker string
 }{
+	"aliyun": {
+		{"记录 ID 解析失败按不可恢复条目处理", "strconv.ParseUint(record.RecordID, 10, 64)"},
+		{"provider 侧残余排空：账本/兜底全未命中才网络枚举", "p.listChallengeRecords(ctx, zone, subDomain)"},
+	},
 	"dnspod": {
 		{"domain-id 陈旧自愈：作废缓存重解析", "p.invalidateDomainIDCache(zone)"},
 		{"domain-id 自愈：兜底表键随新 domain_id 迁移", "p.owned[freshKey] = append(p.owned[freshKey], p.owned[key]...)"},
@@ -135,7 +141,7 @@ func missingMarkers(body string, markers []string) []string {
 	return missing
 }
 
-// TestProviderCleanupImplementationsStayInSync 是双实现对齐门禁：只改一侧的
+// TestProviderCleanupImplementationsStayInSync 是多实现对齐门禁：只改一侧的
 // 骨架（删一段/挪一段）必须在此红灯，而不是在单家 provider 的线上行为里。
 func TestProviderCleanupImplementationsStayInSync(t *testing.T) {
 	args := make([]string, 0, len(cleanupSharedMarkers))
@@ -143,12 +149,20 @@ func TestProviderCleanupImplementationsStayInSync(t *testing.T) {
 		args = append(args, entry.marker)
 	}
 	bodies := make(map[string]string, len(cleanupProviderSource))
+	names := make([]string, 0, len(cleanupProviderSource))
 	for provider, path := range cleanupProviderSource {
 		bodies[provider] = cleanUpBody(t, path)
+		names = append(names, provider)
 	}
-	if drift := cleanupMarkerDrift(bodies["dnspod"], bodies["tencent"], args); len(drift) > 0 {
-		t.Fatalf("cleanUp 双实现骨架漂移（任一侧修改删除/自愈/兜底排空逻辑时必须同步另一侧）:\n  %s",
-			strings.Join(drift, "\n  "))
+	sort.Strings(names)
+	for i := range names {
+		for j := i + 1; j < len(names); j++ {
+			left, right := names[i], names[j]
+			if drift := cleanupMarkerDrift(bodies[left], bodies[right], args); len(drift) > 0 {
+				t.Fatalf("cleanUp %s/%s 骨架漂移（任一侧修改删除/自愈/兜底排空逻辑时必须同步全部实现）:\n  %s",
+					left, right, strings.Join(drift, "\n  "))
+			}
+		}
 	}
 	for provider, entries := range cleanupProviderOnlyMarkers {
 		body := bodies[provider]

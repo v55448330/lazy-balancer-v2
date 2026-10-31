@@ -5,7 +5,9 @@ import (
 	"strings"
 	"testing"
 
+	"lazy-balancer-v2/internal/dnsprovider/aliyun"
 	"lazy-balancer-v2/internal/dnsprovider/dnspod"
+	"lazy-balancer-v2/internal/dnsprovider/ownership"
 	"lazy-balancer-v2/internal/dnsprovider/tencent"
 )
 
@@ -190,5 +192,62 @@ func TestCountChallengeCleanupRecords_fallsBackToAtLeastOne(t *testing.T) {
 	}
 	if got := CountChallengeCleanupRecords(&valueStubProvider{count: 3}, "example.com", "_acme-challenge.example.com.", "v"); got != 3 {
 		t.Fatalf("count with report=%d, want 3", got)
+	}
+}
+
+// aliyun 族：显式 mode 与裸 access 对的字段形态推断（access_key_id/
+// access_key_secret 与 tencent 的 secret_id/secret_key 形态互斥，同名判族无歧义）。
+func TestNewProviderFromCredentials_aliyunFamily(t *testing.T) {
+	// 显式 mode。
+	provider, err := NewProviderFromCredentials(`{"mode":"aliyun","access_key_id":"ak","access_key_secret":"sk"}`)
+	if err != nil {
+		t.Fatalf("explicit aliyun mode: %v", err)
+	}
+	aliyunProvider, ok := provider.(*aliyun.Provider)
+	if !ok {
+		t.Fatalf("provider=%T, want *aliyun.Provider", provider)
+	}
+	// 裸 access 对（无 mode）按字段形态推断为 aliyun。
+	provider, err = NewProviderFromCredentials(`{"access_key_id":"ak","access_key_secret":"sk"}`)
+	if err != nil {
+		t.Fatalf("infer aliyun from access pair: %v", err)
+	}
+	if _, ok := provider.(*aliyun.Provider); !ok {
+		t.Fatalf("provider=%T, want *aliyun.Provider", provider)
+	}
+	// 账户摘要由凭据对派生（与 tencent 同口径）：String() 只暴露账户摘要。
+	wantAccount := ownership.AccountDigest("ak\x00sk")
+	if aliyunProvider.String() != "aliyun.Provider{account:"+wantAccount+"}" {
+		t.Fatalf("account digest mismatch: %s, want %s", aliyunProvider.String(), wantAccount)
+	}
+	// 凭据不完整（只有 ID）→ 缺失拒绝。
+	if _, err := NewProviderFromCredentials(`{"access_key_id":"ak"}`); err == nil {
+		t.Fatal("incomplete aliyun pair must be rejected")
+	}
+}
+
+// 三族凭据并存（token + tencent secret + aliyun access 对）必须歧义拒绝；
+// aliyun access 对与任一既有族并存同样歧义。
+func TestNewProviderFromCredentials_aliyunAmbiguity(t *testing.T) {
+	for name, raw := range map[string]string{
+		"aliyun+tencent": `{"access_key_id":"ak","access_key_secret":"sk","secret_id":"sid","secret_key":"skey"}`,
+		"aliyun+dnspod":  `{"access_key_id":"ak","access_key_secret":"sk","api_token":"123,abc"}`,
+		"all three":      `{"access_key_id":"ak","access_key_secret":"sk","secret_id":"sid","secret_key":"skey","api_token":"123,abc"}`,
+	} {
+		_, err := NewProviderFromCredentials(raw)
+		if err == nil {
+			t.Fatalf("%s 并存必须歧义拒绝", name)
+		}
+		if !strings.Contains(err.Error(), "歧义") {
+			t.Fatalf("%s error=%q, want 歧义文案", name, err.Error())
+		}
+	}
+	// 显式 mode 可消歧：三族并存 + mode=aliyun → aliyun。
+	provider, err := NewProviderFromCredentials(`{"mode":"aliyun","access_key_id":"ak","access_key_secret":"sk","secret_id":"sid","secret_key":"skey","api_token":"123,abc"}`)
+	if err != nil {
+		t.Fatalf("explicit mode disambiguates: %v", err)
+	}
+	if _, ok := provider.(*aliyun.Provider); !ok {
+		t.Fatalf("provider=%T, want *aliyun.Provider（显式 mode 消歧）", provider)
 	}
 }
