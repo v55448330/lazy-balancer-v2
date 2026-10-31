@@ -138,8 +138,8 @@
               </el-text>
             </div>
           </el-form-item>
-          <el-form-item label="运行日志">
-            <el-button size="small" :icon="View" @click="openAppLogDialog">查看日志</el-button>
+          <el-form-item label="运行日志" for="app-log-view-static">
+            <el-button id="app-log-view-static" size="small" :icon="View" @click="openAppLogDialog">查看日志</el-button>
             <span class="form-tip-inline">查看 Lazy Balancer 自身运行日志</span>
           </el-form-item>
           <el-form-item>
@@ -202,20 +202,20 @@
         </el-form-item>
         <template v-if="adminTlsForm.mode === 'upload'">
           <div v-if="adminTlsReuseSaved" class="info-note-bar"><span class="info-note-desc">库内已有可用的上传证书：不选择新文件即沿用该证书，无需重新上传</span></div>
-          <el-form-item label="证书文件">
-            <div class="tls-file-field">
+          <el-form-item label="证书文件" for="tls-cert-file-static">
+            <div id="tls-cert-file-static" class="tls-file-field">
               <el-button size="small" @click="pickTlsFile('cert')">选择文件</el-button>
               <span class="tls-file-name" :class="{ 'is-empty': !adminTlsForm.certFile }">{{ adminTlsForm.certFile?.name ?? '未选择（支持 .crt / .pem / .cer）' }}</span>
             </div>
           </el-form-item>
-          <el-form-item label="私钥文件">
-            <div class="tls-file-field">
+          <el-form-item label="私钥文件" for="tls-key-file-static">
+            <div id="tls-key-file-static" class="tls-file-field">
               <el-button size="small" @click="pickTlsFile('key')">选择文件</el-button>
               <span class="tls-file-name" :class="{ 'is-empty': !adminTlsForm.keyFile }">{{ adminTlsForm.keyFile?.name ?? '未选择（支持 .key / .pem）' }}</span>
             </div>
           </el-form-item>
-          <el-form-item v-if="adminTlsForm.inspecting" label=" ">
-            <el-text type="info" size="small">解析中…</el-text>
+          <el-form-item v-if="adminTlsForm.inspecting" label=" " for="tls-parsing-static">
+            <el-text id="tls-parsing-static" type="info" size="small">解析中…</el-text>
           </el-form-item>
           <!-- 失败原因必须常驻弹框内（toast 一闪而过；「确定」变灰需可解释） -->
           <div v-if="adminTlsForm.inspectError && !adminTlsForm.inspecting" class="info-note-bar">
@@ -225,8 +225,8 @@
             <span class="info-note-desc">{{ adminTlsMissingPairHint }}</span>
           </div>
           <template v-if="adminTlsForm.certInfo">
-            <el-form-item label=" ">
-              <div class="dialog-panel tls-cert-info">
+            <el-form-item label=" " for="tls-cert-info-static">
+              <div id="tls-cert-info-static" class="dialog-panel tls-cert-info">
                 <DialogSectionHeader title="证书详情" />
                 <div class="tls-cert-info-row"><span class="tls-cert-info-label">域名</span><span>{{ adminTlsForm.certInfo.domain }}</span></div>
                 <div class="tls-cert-info-row"><span class="tls-cert-info-label">签发者</span><span>{{ adminTlsForm.certInfo.issuer }}</span></div>
@@ -396,8 +396,8 @@
           <el-input-number v-model="autoBackupForm.keep" :min="1" :max="30" controls-position="right" style="width: 120px" />
           <span class="form-tip-inline">1-30 份，超出自动清理；失败记录另保留最近 20 条</span>
         </el-form-item>
-        <el-form-item label="备份范围">
-          <div class="section-chips auto-backup-chips">
+        <el-form-item label="备份范围" for="auto-backup-range-static">
+          <div id="auto-backup-range-static" class="section-chips auto-backup-chips">
             <button
               v-for="sec in BACKUP_SECTIONS" :key="sec.key"
               type="button" class="section-chip"

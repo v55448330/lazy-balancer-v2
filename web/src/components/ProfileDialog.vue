@@ -20,8 +20,8 @@
         <el-form-item label="显示名">
           <el-input :model-value="profileForm.display_name" disabled />
         </el-form-item>
-        <el-form-item label="认证方式">
-          <el-tag type="primary" effect="plain" size="small">OIDC 企业认证</el-tag>
+        <el-form-item label="认证方式" for="policy-auth-mode-static">
+          <el-tag id="policy-auth-mode-static" type="primary" effect="plain" size="small">OIDC 企业认证</el-tag>
         </el-form-item>
         <el-form-item label-width="0">
           <div class="oidc-hint-block">显示名与密码由认证服务管理，如需修改请前往 OIDC 服务</div>
@@ -40,8 +40,8 @@
         <el-form-item label="当前密码">
           <el-input v-model="profileForm.currentPassword" :disabled="isReadOnly" type="password" maxlength="72" :placeholder="profileForm.password ? '修改密码时必填' : '填写新密码后需确认'" show-password />
         </el-form-item>
-        <el-form-item label="两步验证">
-          <div class="mfa-row">
+        <el-form-item label="两步验证" for="profile-mfa-static">
+          <div id="profile-mfa-static" class="mfa-row">
             <el-tag :type="mfaEnabled ? 'success' : 'info'" size="small" effect="plain">{{ mfaEnabled ? '已启用' : '未启用' }}</el-tag>
             <el-button v-if="!mfaEnabled" size="small" type="primary" plain :disabled="isReadOnly" @click="startEnable">启用 MFA</el-button>
             <template v-else>

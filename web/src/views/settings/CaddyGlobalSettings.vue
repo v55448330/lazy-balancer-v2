@@ -24,8 +24,8 @@
         <el-input-number v-model="settings.caddy_log_size_mb" :disabled="formFrozen" :min="100" :max="10240" controls-position="right" class="number-input" />
         <span class="form-tip-inline tip-nowrap">MB，超限归档保留 5 份</span>
       </el-form-item>
-      <el-form-item label="运行日志">
-        <el-button size="small" :icon="View" @click="openLogDialog">查看日志</el-button>
+      <el-form-item label="运行日志" for="caddy-log-view-static">
+        <el-button id="caddy-log-view-static" size="small" :icon="View" @click="openLogDialog">查看日志</el-button>
         <span class="form-tip-inline">查看 Caddy 运行时、TLS、HTTP 服务器与反向代理日志</span>
       </el-form-item>
 
@@ -154,8 +154,8 @@
 
       <!-- 关闭态：隐藏字段仍参与后端写侧校验（与开关无关），非法存量值
            必须可见且给出可修复路径——否则用户看不到控件也无法定位。 -->
-      <el-form-item v-else-if="trustedProxyDisabledStaleError" label="受信代理">
-        <div class="form-tip-line trusted-ranges-error">{{ trustedProxyDisabledStaleError }}</div>
+      <el-form-item v-else-if="trustedProxyDisabledStaleError" label="受信代理" for="caddy-trusted-ranges-static">
+        <div id="caddy-trusted-ranges-static" class="form-tip-line trusted-ranges-error">{{ trustedProxyDisabledStaleError }}</div>
         <div class="form-tip-line">受信代理已关闭，但存量配置仍会被写侧校验：请临时开启「受信代理」修正上述条目后再关闭，否则保存会被拒绝。</div>
       </el-form-item>
 
@@ -239,8 +239,8 @@
       <DialogHeader :icon="Tickets" title="存为地址列表" subtitle="内联网段转为可复用的共享 IP 列表" />
     </template>
     <el-form label-width="80px" @submit.prevent :disabled="savingList">
-      <el-form-item label="来源">
-        <span>当前内联网段（{{ trustedRanges.length }} 条）</span>
+      <el-form-item label="来源" for="caddy-trusted-source-static">
+        <span id="caddy-trusted-source-static">当前内联网段（{{ trustedRanges.length }} 条）</span>
       </el-form-item>
       <el-form-item label="列表名称" required>
         <el-input v-model="saveListForm.name" placeholder="列表名称" maxlength="50" show-word-limit />

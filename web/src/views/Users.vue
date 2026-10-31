@@ -74,8 +74,8 @@
                 <el-input v-model="form.password_confirm" type="password" show-password minlength="8" maxlength="24" placeholder="再次输入新密码" />
               </el-form-item>
             </template>
-            <el-form-item v-else label="数据来源">
-              <el-tag type="primary" effect="plain" size="small">OIDC 企业认证</el-tag>
+            <el-form-item v-else label="数据来源" for="users-data-source-static">
+              <el-tag id="users-data-source-static" type="primary" effect="plain" size="small">OIDC 企业认证</el-tag>
             </el-form-item>
           </el-col>
         </el-row>

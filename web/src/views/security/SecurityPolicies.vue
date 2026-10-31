@@ -242,8 +242,8 @@
                 >{{ opt.label }}</el-radio>
               </div>
             </el-form-item>
-            <el-form-item v-else label="策略类型">
-              <el-tag :type="editorPolicyType === 'mixed' ? 'warning' : 'primary'" effect="plain">{{ POLICY_TYPE_LABELS[editorPolicyType] }}</el-tag>
+            <el-form-item v-else label="策略类型" for="policy-type-static">
+              <el-tag id="policy-type-static" :type="editorPolicyType === 'mixed' ? 'warning' : 'primary'" effect="plain">{{ POLICY_TYPE_LABELS[editorPolicyType] }}</el-tag>
             </el-form-item>
             <el-form-item label="名称" required>
               <el-input v-model="form.name" placeholder="策略名称" :maxlength="SECURITY_NAME_MAX_RUNES" show-word-limit />
@@ -792,8 +792,8 @@
               </el-select>
               <span class="form-tip-inline">{{ form.block_page_id === 0 ? '未选择自定义页面时状态码不生效，拦截固定返回 Caddy 默认 403；请先选择页面' : 'WAF、IP ACL 拦截使用此状态码；限流拦截恒为 429（便于指标单独计量）' }}</span>
             </el-form-item>
-            <el-form-item v-else label="返回状态码">
-              <el-tag type="warning" size="small" effect="plain">429 Too Many Requests</el-tag>
+            <el-form-item v-else label="返回状态码" for="stage2-block-status-static">
+              <el-tag id="stage2-block-status-static" type="warning" size="small" effect="plain">429 Too Many Requests</el-tag>
               <span class="form-tip-inline">限流拦截恒为 429（便于指标单独计量），不可修改</span>
             </el-form-item>
           </el-form>
@@ -950,8 +950,8 @@
       </template>
       <div class="info-note-bar"><span class="info-note-desc">将创建列表并清空内联条目，引用后语义不变</span></div>
       <el-form label-width="80px" @submit.prevent>
-        <el-form-item label="来源">
-          <span class="extract-source">{{ extractSide === 'acl' ? aclListLabel : '信任 IP' }}（内联 {{ extractSourceEntries.length }} 条）</span>
+        <el-form-item label="来源" for="extract-source-static">
+          <span id="extract-source-static" class="extract-source">{{ extractSide === 'acl' ? aclListLabel : '信任 IP' }}（内联 {{ extractSourceEntries.length }} 条）</span>
         </el-form-item>
         <el-form-item label="列表名称" required>
           <el-input v-model="extractForm.name" placeholder="列表名称" maxlength="50" show-word-limit />
