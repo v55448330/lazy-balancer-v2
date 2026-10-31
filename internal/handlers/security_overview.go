@@ -291,6 +291,7 @@ type securityOverviewAggregates struct {
 	// 与趋势聚合同缓存生命周期）。todayBlockedTCP 自 handler 逐请求直算
 	// 下沉进缓存（同款原始表窗口，口径不变）。
 	todayBlockedTCP      int
+	todayDetectedTCP     int
 	yesterdayBlocked     int
 	yesterdayBlockedTCP  int
 	yesterdayDetectedTCP int
@@ -1128,6 +1129,10 @@ func refreshSecurityOverviewAggIncremental(metricsDB *sql.DB, prev securityOverv
 	if err != nil {
 		return securityOverviewAggregates{}, state, err
 	}
+	dayCounts.todayDetectedTCP, err = securityOverviewDayWindowTCPAction(metricsDB, todayDayStart, time.Time{}, "logged")
+	if err != nil {
+		return securityOverviewAggregates{}, state, err
+	}
 	dayCounts.normalTodayHTTP, _, err = securityOverviewNormalHTTPDiff(metricsDB, dayStarts[5], todayDayStart)
 	if err != nil {
 		return securityOverviewAggregates{}, state, err
@@ -1383,6 +1388,10 @@ func computeSecurityOverviewAggregatesFull(metricsDB *sql.DB, dayStarts []time.T
 	if dayErr != nil && srcErr == nil {
 		srcErr = dayErr
 	}
+	dayCounts.todayDetectedTCP, dayErr = securityOverviewDayWindowTCPAction(metricsDB, todayDayStart, time.Time{}, "logged")
+	if dayErr != nil && srcErr == nil {
+		srcErr = dayErr
+	}
 	dayCounts.normalTodayHTTP, dayCounts.normalYesterdayHTTP, dayErr = securityOverviewNormalHTTPDiff(metricsDB, ydayStart, todayDayStart)
 	if dayErr != nil && srcErr == nil {
 		srcErr = dayErr
@@ -1485,6 +1494,7 @@ func assembleSecurityOverviewAggregates(dayStarts []time.Time, src securityOverv
 		attackTypes:          attackTypes,
 		attackTypesStage:     attackTypesStage,
 		todayBlockedTCP:      dayCounts.todayBlockedTCP,
+		todayDetectedTCP:     dayCounts.todayDetectedTCP,
 		yesterdayBlocked:     dayCounts.yesterdayBlocked,
 		yesterdayBlockedTCP:  dayCounts.yesterdayBlockedTCP,
 		yesterdayDetected:    dayCounts.yesterdayDetected,
@@ -1507,6 +1517,7 @@ func cloneSecurityOverviewAggregates(in securityOverviewAggregates) securityOver
 		attackTypes:          slices.Clone(in.attackTypes),
 		attackTypesStage:     slices.Clone(in.attackTypesStage),
 		todayBlockedTCP:      in.todayBlockedTCP,
+		todayDetectedTCP:     in.todayDetectedTCP,
 		yesterdayBlocked:     in.yesterdayBlocked,
 		yesterdayBlockedTCP:  in.yesterdayBlockedTCP,
 		yesterdayDetected:    in.yesterdayDetected,

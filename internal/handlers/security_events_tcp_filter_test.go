@@ -104,8 +104,10 @@ func TestGetSecurityOverview_todayBlockedTCP(t *testing.T) {
 	var resp struct {
 		Code int `json:"code"`
 		Data struct {
-			TodayBlocked    *int `json:"today_blocked"`
-			TodayBlockedTCP *int `json:"today_blocked_tcp"`
+			TodayBlocked     *int `json:"today_blocked"`
+			TodayBlockedTCP  *int `json:"today_blocked_tcp"`
+			TodayDetected    *int `json:"today_detected"`
+			TodayDetectedTCP *int `json:"today_detected_tcp"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
@@ -119,5 +121,16 @@ func TestGetSecurityOverview_todayBlockedTCP(t *testing.T) {
 	}
 	if resp.Data.TodayBlocked == nil || *resp.Data.TodayBlocked != 2 {
 		t.Fatalf("today_blocked 回归形状漂移: %s", rec.Body.String())
+	}
+	// 检测列 TCP 拆分：信任检测（trust_detect, id 12）产 tcp+logged——
+	// 可能产生数据就必须如实统计与显示，不得隐藏。
+	if resp.Data.TodayDetectedTCP == nil {
+		t.Fatalf("响应缺 today_detected_tcp 键: %s", rec.Body.String())
+	}
+	if *resp.Data.TodayDetectedTCP != 1 {
+		t.Fatalf("today_detected_tcp=%d, want 1（tcp+logged 信任检测）", *resp.Data.TodayDetectedTCP)
+	}
+	if resp.Data.TodayDetected == nil || *resp.Data.TodayDetected != 1 {
+		t.Fatalf("today_detected=%v, want 1（含 tcp logged）", resp.Data.TodayDetected)
 	}
 }

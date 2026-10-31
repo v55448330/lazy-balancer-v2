@@ -377,6 +377,10 @@ type SecurityOverview struct {
 	// 直算——rollup 表无 event_type 维度；TCP 为新增事件族，行帽裁剪对历史
 	// 无影响）。HTTP 拆分由消费方按 合计−TCP 计算（契约 C5）。
 	TodayBlockedTCP int `json:"today_blocked_tcp"`
+	// TodayDetectedTCP 是今日检测的 TCP 协议拆分（event_type='tcp' AND
+	// action='logged'，原始表直算；来源=L4 信任检测 trust_detect）。TCP 检测
+	// 可能产生数据就必须如实统计与显示——HTTP 拆分由消费方按 合计−TCP 计算。
+	TodayDetectedTCP int `json:"today_detected_tcp"`
 	// YesterdayBlocked/YesterdayDetected 昨日拦截/检测合计（本地日界窗口
 	// [昨日 0 点, 今日 0 点)，原始表直算，攻击面谓词同今日直算分支）。口径
 	// 披露：走原始表单日窗口，保留期/行帽极端裁剪下可能少计（覆盖起点由

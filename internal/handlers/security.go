@@ -5212,6 +5212,7 @@ func (h *Handlers) GetSecurityOverview(c *gin.Context) {
 	// 自逐请求直算下沉进缓存（同款原始表窗口，口径不变）；昨日窗口与正常
 	// 请求字段口径披露见 models.SecurityOverview 对应字段注释。
 	overview.TodayBlockedTCP = agg.todayBlockedTCP
+	overview.TodayDetectedTCP = agg.todayDetectedTCP // L4 信任检测（trust_detect）产 tcp+logged
 	overview.YesterdayBlocked = agg.yesterdayBlocked
 	overview.YesterdayBlockedTCP = agg.yesterdayBlockedTCP
 	overview.YesterdayDetected = agg.yesterdayDetected

@@ -49,14 +49,16 @@ test('每列四行同构：标签 / 今日主数值 / 昨日对比 / 协议拆�
   assert.match(blocked, /v-if="todayBlockedSplit" class="strip-sub">/)
   assert.match(blocked, /proto-split-label">HTTP<\/span><span class="strip-sub-num">\{\{ fmtStatNum\(todayBlockedSplit\.http\) \}\}/)
   assert.match(blocked, /proto-split-label">TCP<\/span><span class="strip-sub-num">\{\{ fmtStatNum\(todayBlockedSplit\.tcp\) \}\}/)
-  // 列 2 检测：橙主题 + 昨日门 + 单 HTTP 点（TCP 恒 0 不显示 TCP）
+  // 列 2 检测：橙主题 + 昨日门 + HTTP/TCP 双胶囊拆分（TCP 检测来自信任检测
+  // logged——可能产生数据就如实显示；HTTP=合计−TCP）
   assert.match(detected, /class="strip-label">检测/)
   assert.doesNotMatch(detected, /el-tooltip/, '重设计后仅拦截列带 tooltip')
   assert.doesNotMatch(detected, /strip-label-dot/, '标签色点已按用户裁定撤回')
   assert.match(detected, /class="strip-value is-warning">\{\{ fmtStatNum\(overview\.today_detected\) \}\}/)
   assert.match(detected, /v-if="yesterdayDetected !== null" class="strip-sub"><span class="strip-sub-label">昨日<\/span>/)
-  assert.match(detected, /<div class="strip-sub">\s*<span class="proto-split-item"><i class="proto-dot proto-dot--http/)
-  assert.doesNotMatch(detected, /proto-dot--tcp/, '检测列不得出现 TCP 点')
+  assert.match(detected, /v-if="todayDetectedSplit" class="strip-sub">/)
+  assert.match(detected, /proto-split-label">HTTP<\/span><span class="strip-sub-num">\{\{ fmtStatNum\(todayDetectedSplit\.http\) \}\}/)
+  assert.match(detected, /proto-split-label">TCP<\/span><span class="strip-sub-num">\{\{ fmtStatNum\(todayDetectedSplit\.tcp\) \}\}/)
   // 列 3 正常请求：默认深色 + 昨日门 + HTTP/TCP 双点（字段缺失整行隐藏）
   assert.match(normal, /class="strip-label">正常请求/)
   assert.match(normal, /class="strip-value">\{\{ fmtStatNum\(overview\.normal_today\) \}\}/)
@@ -85,6 +87,7 @@ test('防御式消费：契约字段缺失（旧后端）对应行隐藏', () =>
   const iface = section(page, 'interface Overview', '}')
   for (const field of [
     'yesterday_blocked', 'yesterday_blocked_tcp', 'yesterday_detected', 'yesterday_detected_tcp',
+    'today_blocked_tcp', 'today_detected_tcp',
     'normal_today', 'normal_today_http', 'normal_today_tcp',
     'normal_yesterday', 'normal_yesterday_http', 'normal_yesterday_tcp',
   ]) {
@@ -105,9 +108,13 @@ test('防御式消费：契约字段缺失（旧后端）对应行隐藏', () =>
   assert.match(ntSplit, /normal_today_http/)
   assert.match(ntSplit, /normal_today_tcp/)
   assert.match(ntSplit, /return null/)
-  // 检测列拆分行恒显（today_detected 非可选）：只有昨日行带 v-if，拆分行无门
+  // 检测列拆分行：today_detected_tcp 缺失（旧后端）→ null 整行隐藏
+  const tdSplit = member(page, 'const todayDetectedSplit =')
+  assert.match(tdSplit, /today_detected_tcp/)
+  assert.match(tdSplit, /return null/)
+  // 检测列两行均带 v-if（昨日门 + 拆分门）
   const [, detected] = guardCols()
-  assert.equal([...detected.matchAll(/<div v-if[^>]*class="strip-sub">/g)].length, 1, '检测列只有昨日行带 v-if')
+  assert.equal([...detected.matchAll(/<div v-if[^>]*class="strip-sub">/g)].length, 2, '检测列昨日行+拆分行各带 v-if')
 })
 
 test('同行等高：趋势与攻击类型分布拉伸同高，「按阶段展示」不撑高卡头', () => {
