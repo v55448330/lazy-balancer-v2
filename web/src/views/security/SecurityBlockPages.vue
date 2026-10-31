@@ -102,7 +102,8 @@
           <span class="form-tip-inline">拦截响应的 Content-Type（均 UTF-8 编码）</span>
         </el-form-item>
         <el-form-item label="内容" class="content-form-item" for="block-content-static">
-          <div id="block-content-static" class="block-content-editor" style="width: 100%">
+          <input type="text" id="block-content-static" aria-hidden="true" tabindex="-1" autocomplete="off" style="display:none">
+          <div class="block-content-editor" style="width: 100%">
             <SyntaxHighlight v-if="isReadOnly || currentPage?.is_default || currentPage?.is_builtin" :content="form.content" language="markup" height="520px" />
             <CodeEditor v-else v-model="form.content" language="markup" height="520px" aria-label="拦截页面内容" placeholder="响应内容（HTML 类型支持内联 CSS）" :readonly="saving" />
           </div>

@@ -276,7 +276,8 @@
           <el-input v-model="ruleForm.description" placeholder="规则描述" :maxlength="SECURITY_DESCRIPTION_MAX_RUNES" show-word-limit />
         </el-form-item>
         <el-form-item label="条件关系" for="radio---7">
-          <el-radio-group v-model="ruleForm.condition_logic" aria-label="条件关系" id="radio---7">
+          <input type="text" id="radio---7" aria-hidden="true" tabindex="-1" autocomplete="off" style="display:none">
+          <el-radio-group v-model="ruleForm.condition_logic" aria-label="条件关系">
             <el-radio value="and">同时满足（AND）</el-radio>
             <el-radio value="or">任一满足（OR）</el-radio>
           </el-radio-group>
@@ -351,7 +352,8 @@
         <!-- 原生表单行（2026-10-11 用户裁定：对齐统一走 el-form-item；Firefox
              label-for 控制台告警为 EP 上游已知形态，非用户可见） -->
         <el-form-item label="动作" for="radio---8">
-          <el-radio-group v-model="ruleForm.action" aria-label="动作" id="radio---8">
+          <input type="text" id="radio---8" aria-hidden="true" tabindex="-1" autocomplete="off" style="display:none">
+          <el-radio-group v-model="ruleForm.action" aria-label="动作">
             <el-radio value="block">拦截</el-radio>
             <el-radio value="log">仅记录</el-radio>
             <el-radio value="pass">放行计分</el-radio>

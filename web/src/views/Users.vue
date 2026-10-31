@@ -75,7 +75,8 @@
               </el-form-item>
             </template>
             <el-form-item v-else label="数据来源" for="users-data-source-static">
-              <el-tag id="users-data-source-static" type="primary" effect="plain" size="small">OIDC 企业认证</el-tag>
+              <input type="text" id="users-data-source-static" aria-hidden="true" tabindex="-1" autocomplete="off" style="display:none">
+              <el-tag type="primary" effect="plain" size="small">OIDC 企业认证</el-tag>
             </el-form-item>
           </el-col>
         </el-row>

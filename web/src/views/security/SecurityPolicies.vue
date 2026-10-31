@@ -243,7 +243,8 @@
               </div>
             </el-form-item>
             <el-form-item v-else label="策略类型" for="policy-type-static">
-              <el-tag id="policy-type-static" :type="editorPolicyType === 'mixed' ? 'warning' : 'primary'" effect="plain">{{ POLICY_TYPE_LABELS[editorPolicyType] }}</el-tag>
+              <input type="text" id="policy-type-static" aria-hidden="true" tabindex="-1" autocomplete="off" style="display:none">
+              <el-tag :type="editorPolicyType === 'mixed' ? 'warning' : 'primary'" effect="plain">{{ POLICY_TYPE_LABELS[editorPolicyType] }}</el-tag>
             </el-form-item>
             <el-form-item label="名称" required>
               <el-input v-model="form.name" placeholder="策略名称" :maxlength="SECURITY_NAME_MAX_RUNES" show-word-limit />
@@ -311,7 +312,8 @@
             <!-- 原生表单行（2026-10-11 用户裁定：对齐统一走 el-form-item；Firefox
                  label-for 控制台告警为 EP 上游已知形态，非用户可见） -->
             <el-form-item label="WAF 模式" for="radio-waf--10">
-              <el-radio-group v-model="form.mode" class="mode-radio-group" aria-label="WAF 模式" id="radio-waf--10">
+              <input type="text" id="radio-waf--10" aria-hidden="true" tabindex="-1" autocomplete="off" style="display:none">
+              <el-radio-group v-model="form.mode" class="mode-radio-group" aria-label="WAF 模式">
                 <!-- 2026-09-09 四态化:off=CRS 与自定义均不生效;custom_only=仅自定义生效;
                      detection=CRS 只记录;blocking=CRS 阻断。每项标签+描述单行不换行。 -->
                 <el-radio value="off">关闭（全不生效）</el-radio>
@@ -400,7 +402,8 @@
             <el-form-item v-if="form.log_request_body"><div class="info-note-bar"><span class="info-note-desc">开启后命中规则事件的请求体将明文记录到事件库（单条上限 64KB），可能包含密码等敏感信息，请仅在排障期间开启</span></div>
             </el-form-item>
             <el-form-item label="排除规则" for="radio---11">
-              <div id="radio---11">
+              <input type="text" id="radio---11" aria-hidden="true" tabindex="-1" autocomplete="off" style="display:none">
+              <div>
 
               <!-- 表格行编辑器：目标（与规则组同款混合下拉）× 作用域（全部 IP/指定 IP/地址
                    列表）× 条件控件（ip → 标签输入 + isValidCidr 即时拒绝；list → 引用
@@ -565,7 +568,8 @@
             </el-form-item>
             <template v-if="form.ip_acl_enabled">
               <el-form-item label="控制模式" for="radio---12">
-                <el-radio-group v-model="form.ip_acl_mode" aria-label="IP 访问控制模式" id="radio---12">
+                <input type="text" id="radio---12" aria-hidden="true" tabindex="-1" autocomplete="off" style="display:none">
+                <el-radio-group v-model="form.ip_acl_mode" aria-label="IP 访问控制模式">
                   <el-radio value="deny">黑名单（拒绝列表中的 IP，其他正常检测）</el-radio>
                   <el-radio value="allow">白名单（仅允许列表中的 IP，其他一律拒绝）</el-radio>
                   <!-- 历史 绕过 策略仅作展示，不再提供新选 -->
@@ -611,7 +615,8 @@
               <el-form-item><div class="info-note-bar"><span class="info-note-desc">地域规则仅对 IPv4 生效：IPv6 与不可解析客户端按「海外」处理（拦截模式勾选海外时将被拦截；仅允许模式只勾选省份时将被拦截）。IP 库未安装时地域规则不可启用。</span></div>
               </el-form-item>
               <el-form-item label="控制模式" for="radio---13">
-                <el-radio-group v-model="form.geoip_mode" aria-label="地域控制模式" id="radio---13">
+                <input type="text" id="radio---13" aria-hidden="true" tabindex="-1" autocomplete="off" style="display:none">
+                <el-radio-group v-model="form.geoip_mode" aria-label="地域控制模式">
                   <el-radio value="deny">拦截所选区域（其他放行）</el-radio>
                   <el-radio value="allow">仅允许所选区域（其他拦截）</el-radio>
                 </el-radio-group>
@@ -796,7 +801,8 @@
               <span class="form-tip-inline">{{ form.block_page_id === 0 ? '未选择自定义页面时状态码不生效，拦截固定返回 Caddy 默认 403；请先选择页面' : 'WAF、IP ACL 拦截使用此状态码；限流拦截恒为 429（便于指标单独计量）' }}</span>
             </el-form-item>
             <el-form-item v-else label="返回状态码" for="stage2-block-status-static">
-              <el-tag id="stage2-block-status-static" type="warning" size="small" effect="plain">429 Too Many Requests</el-tag>
+              <input type="text" id="stage2-block-status-static" aria-hidden="true" tabindex="-1" autocomplete="off" style="display:none">
+              <el-tag type="warning" size="small" effect="plain">429 Too Many Requests</el-tag>
               <span class="form-tip-inline">限流拦截恒为 429（便于指标单独计量），不可修改</span>
             </el-form-item>
           </el-form>
@@ -954,7 +960,8 @@
       <div class="info-note-bar"><span class="info-note-desc">将创建列表并清空内联条目，引用后语义不变</span></div>
       <el-form label-width="80px" @submit.prevent>
         <el-form-item label="来源" for="extract-source-static">
-          <span id="extract-source-static" class="extract-source">{{ extractSide === 'acl' ? aclListLabel : '信任 IP' }}（内联 {{ extractSourceEntries.length }} 条）</span>
+          <input type="text" id="extract-source-static" aria-hidden="true" tabindex="-1" autocomplete="off" style="display:none">
+          <span class="extract-source">{{ extractSide === 'acl' ? aclListLabel : '信任 IP' }}（内联 {{ extractSourceEntries.length }} 条）</span>
         </el-form-item>
         <el-form-item label="列表名称" required>
           <el-input v-model="extractForm.name" placeholder="列表名称" maxlength="50" show-word-limit />

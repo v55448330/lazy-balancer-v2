@@ -437,7 +437,8 @@
                  ——后者曾因侧距与 el-form-item 不一致致 20px 漂移；radio-group 的 Firefox
                  label-for 控制台告警为 EP 上游已知形态，非用户可见） -->
             <el-form-item label="协议" required for="radio---0">
-              <el-radio-group v-model="wizardForm.protocol" aria-label="协议" id="radio---0">
+              <input type="text" id="radio---0" aria-hidden="true" tabindex="-1" autocomplete="off" style="display:none">
+              <el-radio-group v-model="wizardForm.protocol" aria-label="协议">
                 <el-radio value="http">HTTP</el-radio>
                 <el-radio value="tcp">TCP</el-radio>
               </el-radio-group>
@@ -485,7 +486,8 @@
           </div>
           <el-form :model="wizardForm" label-width="100px" v-if="wizardForm.enable_tls && wizardForm.protocol === 'http'" :disabled="saving">
             <el-form-item label="证书来源" for="radio---1">
-              <el-radio-group v-model="wizardForm.tls_source" :disabled="isCurrentRuleLocked" aria-label="证书来源" id="radio---1">
+              <input type="text" id="radio---1" aria-hidden="true" tabindex="-1" autocomplete="off" style="display:none">
+              <el-radio-group v-model="wizardForm.tls_source" :disabled="isCurrentRuleLocked" aria-label="证书来源">
                 <el-radio value="manual">手动上传</el-radio>
                 <el-radio value="acme_dns">ACME + DNS 自动</el-radio>
               </el-radio-group>
@@ -843,7 +845,8 @@
                 </div>
               </el-form-item>
               <el-form-item v-if="wizardForm.enable_compress" label="压缩方式" for="radio---2">
-                <el-radio-group v-model="compressType" aria-label="压缩方式" id="radio---2">
+                <input type="text" id="radio---2" aria-hidden="true" tabindex="-1" autocomplete="off" style="display:none">
+                <el-radio-group v-model="compressType" aria-label="压缩方式">
                   <el-radio value="gzip">gzip</el-radio>
                   <el-radio value="zstd">zstd（更快、压缩比更高，需客户端支持）</el-radio>
                 </el-radio-group>
