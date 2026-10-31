@@ -178,7 +178,7 @@
               />
             </el-form-item>
           </template>
-          <div class="form-tip-line">切换认证方式会清除另一认证方式的已保存凭证，需重新填写</div>
+          <div class="info-note-bar"><span class="info-note-desc">切换认证方式会清除另一认证方式的已保存凭证，需重新填写。</span></div>
         </template>
         <el-divider content-position="left" class="section-divider">状态</el-divider>
         <el-form-item label="启用">

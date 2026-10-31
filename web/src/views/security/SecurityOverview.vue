@@ -49,14 +49,13 @@
         <div class="status-guard">
           <div class="guard-item">
             <div class="strip-label">
-              <i class="strip-label-dot is-danger"></i>
               拦截
               <el-tooltip :content="todayCountTip" placement="top">
                 <el-icon class="stat-box__tip"><InfoFilled /></el-icon>
               </el-tooltip>
             </div>
             <div class="strip-value is-danger">{{ fmtStatNum(overview.today_blocked) }}</div>
-            <div v-if="yesterdayBlocked !== null" class="strip-sub">昨日 {{ fmtStatNum(yesterdayBlocked) }}</div>
+            <div v-if="yesterdayBlocked !== null" class="strip-sub"><span class="strip-sub-label">昨日</span> {{ fmtStatNum(yesterdayBlocked) }}</div>
             <!-- 协议拆分（L4 阶段 0/1 披露，今日口径）：HTTP = 合计 − TCP；响应缺字段或 TCP=0 时隐藏 -->
             <div v-if="todayBlockedSplit" class="strip-sub">
               <span class="proto-split-item"><i class="proto-dot proto-dot--http"></i>HTTP {{ fmtStatNum(todayBlockedSplit.http) }}</span>
@@ -65,12 +64,9 @@
           </div>
           <div class="strip-divider"></div>
           <div class="guard-item">
-            <div class="strip-label">
-              <i class="strip-label-dot is-warning"></i>
-              检测
-            </div>
+            <div class="strip-label">检测</div>
             <div class="strip-value is-warning">{{ fmtStatNum(overview.today_detected) }}</div>
-            <div v-if="yesterdayDetected !== null" class="strip-sub">昨日 {{ fmtStatNum(yesterdayDetected) }}</div>
+            <div v-if="yesterdayDetected !== null" class="strip-sub"><span class="strip-sub-label">昨日</span> {{ fmtStatNum(yesterdayDetected) }}</div>
             <!-- TCP 恒 0：单 HTTP 点，保持三列四行同构 -->
             <div class="strip-sub">
               <span class="proto-split-item"><i class="proto-dot proto-dot--http"></i>HTTP {{ fmtStatNum(overview.today_detected) }}</span>
@@ -78,12 +74,9 @@
           </div>
           <div class="strip-divider"></div>
           <div class="guard-item">
-            <div class="strip-label">
-              <i class="strip-label-dot is-success"></i>
-              正常请求
-            </div>
+            <div class="strip-label">正常请求</div>
             <div class="strip-value">{{ fmtStatNum(overview.normal_today) }}</div>
-            <div v-if="normalYesterday !== null" class="strip-sub">昨日 {{ fmtStatNum(normalYesterday) }}</div>
+            <div v-if="normalYesterday !== null" class="strip-sub"><span class="strip-sub-label">昨日</span> {{ fmtStatNum(normalYesterday) }}</div>
             <!-- 字段缺失（旧后端）整行隐藏 -->
             <div v-if="normalTodaySplit" class="strip-sub">
               <span class="proto-split-item"><i class="proto-dot proto-dot--http"></i>HTTP {{ fmtStatNum(normalTodaySplit.http) }}</span>
@@ -563,13 +556,7 @@ onMounted(() => { void reloadAll() })
 }
 .guard-item:first-child { padding-left: 0; }
 .strip-divider { width: 1px; background: #f0f0f0; margin: 0 32px; flex-shrink: 0; }
-.strip-label { font-size: 12px; color: var(--text-secondary); display: flex; align-items: center; }
-/* KPI 标签语义色点（拦截红/检测琥珀/正常请求绿）：与下方协议圆点同一视觉语言，
-   三列语义一眼可辨；数值本色仍由 strip-value 着色。 */
-.strip-label-dot { width: 6px; height: 6px; border-radius: 50%; margin-right: 6px; flex-shrink: 0; }
-.strip-label-dot.is-danger { background: #f56c6c; }
-.strip-label-dot.is-warning { background: #e6a23c; }
-.strip-label-dot.is-success { background: #67c23a; }
+.strip-label { font-size: 13px; font-weight: 600; color: var(--text-secondary); display: flex; align-items: center; }
 .strip-value {
   font-size: 24px;
   font-weight: 800;
@@ -583,6 +570,8 @@ onMounted(() => { void reloadAll() })
 .strip-value.is-danger { color: #f56c6c; }
 .strip-value.is-warning { color: #e6a23c; }
 .strip-sub { display: flex; align-items: center; gap: 14px; margin-top: 6px; font-size: 12px; color: var(--text-secondary); white-space: nowrap; font-variant-numeric: tabular-nums; }
+/* 「昨日」文案加粗（用户裁定）：数值保持常规粗细，仅标签词加重提升对比 */
+.strip-sub-label { font-weight: 700; }
 .proto-split-item { display: inline-flex; align-items: center; }
 .proto-dot { width: 6px; height: 6px; border-radius: 50%; margin-right: 5px; }
 .proto-dot--http { background: #409eff; }
