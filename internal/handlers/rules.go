@@ -1970,10 +1970,15 @@ var updateRuleBaselineSelectColumns = []updateRuleSelectColumn{
 	{"description", "COALESCE(description,'')"},
 }
 
+// updateRuleBaselineSelectColumnsSnapshot 是上表的 init 冻结快照（防御性拷贝，
+// 独立底层数组）：运行期读路径只读快照——任何包内测试对源表的原地变异
+// （sort/append/delete）不得影响 SQL 生成与全集断言（全量乱序稳定性）。
+var updateRuleBaselineSelectColumnsSnapshot = append([]updateRuleSelectColumn(nil), updateRuleBaselineSelectColumns...)
+
 // updateRuleBaselineSelectExprs 按 table 顺序拼接 SELECT 投影（Scan 顺序同源）。
 func updateRuleBaselineSelectExprs() string {
-	exprs := make([]string, len(updateRuleBaselineSelectColumns))
-	for i, entry := range updateRuleBaselineSelectColumns {
+	exprs := make([]string, len(updateRuleBaselineSelectColumnsSnapshot))
+	for i, entry := range updateRuleBaselineSelectColumnsSnapshot {
 		exprs[i] = entry.expr
 	}
 	return strings.Join(exprs, ", ")
@@ -2061,6 +2066,26 @@ var updateRuleSetColumns = []updateRuleSetColumn{
 	{"log_enabled", nil, func(req *models.UpdateRuleRequest, _ ruleFeatureInput) any { return *req.LogEnabled }},
 }
 
+// updateRuleSetColumnsSnapshot 是上表的 init 冻结快照（防御性拷贝）：SET 子句
+// 生成只读快照，源表的原地变异不影响 SQL（与基线 SELECT 快照同契约）。
+var updateRuleSetColumnsSnapshot = append([]updateRuleSetColumn(nil), updateRuleSetColumns...)
+
+// buildUpdateRuleSetClause 由冻结快照机械生成主 UPDATE 的 SET 子句与参数
+// （顺序 = SQL/args 顺序；全集断言见 updateRuleColumnParityGaps/init，新增列
+// 漏进表即 panic）。updated_at/updated_by 由调用方终局守卫分支追加。
+func buildUpdateRuleSetClause(req *models.UpdateRuleRequest, features ruleFeatureInput, protocolChanged, clearingTLSMaterial bool) (string, []any) {
+	setClause := "UPDATE lb_rules SET "
+	var args []any
+	for _, entry := range updateRuleSetColumnsSnapshot {
+		if entry.provided != nil && !entry.provided(req, protocolChanged, clearingTLSMaterial) {
+			continue
+		}
+		setClause += entry.column + " = ?, "
+		args = append(args, entry.value(req, features))
+	}
+	return setClause, args
+}
+
 // updateRule 列投影豁免清单（相对 services.LbRuleInsertColumns() 全集；列名 → 理由）。
 // 豁免本身是契约：新列既不进投影也不进豁免，init 即 panic。
 var updateRuleBaselineSelectExemptColumns = map[string]string{
@@ -2085,18 +2110,19 @@ var updateRuleSetExemptColumns = map[string]string{
 	"updated_by": "由终局守卫分支字面量追加（同上双分支）",
 }
 
-// updateRuleColumnParitySets 取三份列集（specs 全集 / 基线 SELECT / UPDATE SET）。
+// updateRuleColumnParitySets 取三份列集（specs 全集 / 基线 SELECT / UPDATE SET；
+// 后两者读 init 冻结快照，运行期源表变异不影响判定）。
 func updateRuleColumnParitySets() (specSet, selectSet, setSet map[string]bool) {
 	specSet = make(map[string]bool)
 	for _, column := range services.LbRuleInsertColumns() {
 		specSet[column] = true
 	}
-	selectSet = make(map[string]bool, len(updateRuleBaselineSelectColumns))
-	for _, entry := range updateRuleBaselineSelectColumns {
+	selectSet = make(map[string]bool, len(updateRuleBaselineSelectColumnsSnapshot))
+	for _, entry := range updateRuleBaselineSelectColumnsSnapshot {
 		selectSet[entry.column] = true
 	}
-	setSet = make(map[string]bool, len(updateRuleSetColumns))
-	for _, entry := range updateRuleSetColumns {
+	setSet = make(map[string]bool, len(updateRuleSetColumnsSnapshot))
+	for _, entry := range updateRuleSetColumnsSnapshot {
 		setSet[entry.column] = true
 	}
 	return specSet, selectSet, setSet
@@ -2966,17 +2992,9 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	}
 
 	// Build dynamic update for lb_rules table——SET 列单源 updateRuleSetColumns
-	// （顺序 = SQL/args 顺序；全集断言见 updateRuleColumnParityGaps/init，
-	// 新增列漏进表即 panic）。updated_at/updated_by 由下方终局守卫分支追加。
-	query := "UPDATE lb_rules SET "
-	var args []interface{}
-	for _, entry := range updateRuleSetColumns {
-		if entry.provided != nil && !entry.provided(&req, protocolChanged, clearingTLSMaterial) {
-			continue
-		}
-		query += entry.column + " = ?, "
-		args = append(args, entry.value(&req, features))
-	}
+	// （读 init 冻结快照，TestUpdateRuleTables_frozenAgainstInPlaceMutation 契约）。
+	// updated_at/updated_by 由下方终局守卫分支追加。
+	query, args := buildUpdateRuleSetClause(&req, features, protocolChanged, clearingTLSMaterial)
 
 	// 原此处的 SingleRuleConfig 死构造（建成后无任何消费）已删。
 	// domain 保留：下方 ACME 任务域名迁移/查找以其为键。

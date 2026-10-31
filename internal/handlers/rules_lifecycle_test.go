@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -268,6 +269,32 @@ func TestUpdateRuleColumnLists_parityWithInsertSpec(t *testing.T) {
 		delete(mutated, "proxy_dial_timeout")
 		mustUpdateRuleColumnParity(specSet, mutated, setSet)
 	}()
+}
+
+// 单源表冻结契约：updateRuleBaselineSelectColumns/updateRuleSetColumns 的运行期
+// 读路径必须走 init 冻结快照——任何包内测试对源表的原地变异（sort/append/delete，
+// 全量乱序下的真实风险面）不得影响 SQL 生成与全集断言。
+func TestUpdateRuleTables_frozenAgainstInPlaceMutation(t *testing.T) {
+	// Given：快照已捕获基线投影与列集
+	baselineExprs := updateRuleBaselineSelectExprs()
+	baselineGaps := updateRuleColumnParityGaps(updateRuleColumnParitySets())
+
+	// When：原地破坏源表（乱序 + 追加未知列；恢复由 defer 保证）
+	original := updateRuleBaselineSelectColumns
+	defer func() { updateRuleBaselineSelectColumns = original }()
+	sort.Slice(updateRuleBaselineSelectColumns, func(i, j int) bool {
+		return updateRuleBaselineSelectColumns[i].column > updateRuleBaselineSelectColumns[j].column
+	})
+	updateRuleBaselineSelectColumns = append(updateRuleBaselineSelectColumns,
+		updateRuleSelectColumn{column: "bogus_column", expr: "bogus_column"})
+
+	// Then：投影与全集断言均不受污染
+	if after := updateRuleBaselineSelectExprs(); after != baselineExprs {
+		t.Fatalf("基线 SELECT 投影被源表原地变异污染（应读 init 冻结快照）:\n baseline=%q\n after=%q", baselineExprs, after)
+	}
+	if gaps := updateRuleColumnParityGaps(updateRuleColumnParitySets()); len(gaps) != len(baselineGaps) {
+		t.Fatalf("全集断言被源表原地变异污染（应读 init 冻结快照）: baseline=%v after=%v", baselineGaps, gaps)
+	}
 }
 
 // 删除复核：DisableRule 放锁窗口内规则被并发删除 → 冲突中止且不写「禁用」审计。
