@@ -73,15 +73,15 @@
           </div>
           <div v-if="inlineAclHit" class="trg-kv"><span class="k">命中位置</span><span>策略内联{{ policy?.ip_acl_mode === 'allow' ? '白' : '黑' }}名单</span></div>
           <div v-if="trustHitNote" class="trg-kv"><span class="k">信任豁免</span><span>{{ trustHitNote }}</span></div>
-          <div v-if="memberSystemTip" class="trg-tip">{{ memberSystemTip }}</div>
-          <div v-if="allHitLists.length === 0 && !inlineAclHit && kind === 'acl' && !isAllowOutside && !loadError && !entriesError" class="trg-tip">未定位到命中的地址列表（策略名单可能已变更；事件为历史记录）</div>
+          <div v-if="memberSystemTip" class="info-note-bar"><span class="info-note-desc">{{ memberSystemTip }}</span></div>
+          <div v-if="allHitLists.length === 0 && !inlineAclHit && kind === 'acl' && !isAllowOutside && !loadError && !entriesError" class="info-note-bar"><span class="info-note-desc">未定位到命中的地址列表（策略名单可能已变更；事件为历史记录）</span></div>
         </template>
 
         <!-- 爬虫校验：验证结果与豁免引擎（v2.3.8 独立族，不再误标地域） -->
         <template v-else-if="kind === 'crawler'">
           <div class="trg-kv"><span class="k">判定</span><span>{{ Number(row?.rule_triggered) >= 850000 ? '伪装爬虫 UA：请求被拒绝并记录攻击事件' : '已验证搜索引擎/AI 爬虫：豁免地域拦截（IP 名单/WAF/限流仍全量生效）' }}</span></div>
           <div class="trg-kv"><span class="k">豁免引擎</span><span>{{ crawlerEngineIds.length > 0 ? crawlerEngineIds.join('、') : '未配置' }}</span></div>
-          <div class="trg-tip">验证口径：UA + 反向 DNS 双跳（360 按官方 IP 段）；引擎勾选与观察级说明见「安全防护 → 安全策略 → 地域拦截」。</div>
+          <div class="info-note-bar"><span class="info-note-desc">验证口径：UA + 反向 DNS 双跳（360 按官方 IP 段）；引擎勾选与观察级说明见「安全防护 → 安全策略 → 地域拦截」。</span></div>
         </template>
 
         <!-- 信任名单：直通/保留检测语义说明 -->
@@ -142,12 +142,12 @@
             <div class="trg-kv"><span class="k">动作</span><span>{{ customActionLabel }}</span></div>
             <div class="trg-kv"><span class="k">状态</span><span>{{ customRule.enabled ? '启用' : '禁用' }}</span></div>
           </template>
-          <div v-else-if="!loading && customRuleLoadError" class="trg-tip">自定义规则加载失败，可关闭弹框后重新打开重试（事件为历史记录，展示不完整）</div>
-          <div v-else-if="!loading && customHasDbParent" class="trg-tip">未找到该自定义规则（可能已被删除；事件为历史记录）</div>
-          <div class="trg-tip">
+          <div v-else-if="!loading && customRuleLoadError" class="info-note-bar"><span class="info-note-desc">自定义规则加载失败，可关闭弹框后重新打开重试（事件为历史记录，展示不完整）</span></div>
+          <div v-else-if="!loading && customHasDbParent" class="info-note-bar"><span class="info-note-desc">未找到该自定义规则（可能已被删除；事件为历史记录）</span></div>
+          <div class="info-note-bar"><span class="info-note-desc">
             <template v-if="customHasDbParent">自定义规则 id {{ customDisplayID }}（普通与 OR 分支的事件触发 id 均回解到同一规则）。编辑请前往 安全防护 → 规则集 → 自定义规则。</template>
             <template v-else>旧版合成规则事件 id {{ customDisplayID }}（旧版合成规则无独立父规则记录）。</template>
-          </div>
+          </span></div>
         </template>
 
         <!-- 请求体异常 -->
@@ -157,8 +157,8 @@
       </div>
 
       <!-- 处置指引：IP 处置统一在快捷弹框（用户裁定） -->
-      <div class="trg-tip" style="margin-top: 10px">
-        IP 处置（移除/加入黑白名单、信任）请点击事件列表中的「IP 地址」打开快捷弹框操作。
+      <div class="info-note-bar">
+        <span class="info-note-desc">IP 处置（移除/加入黑白名单、信任）请点击事件列表中的「IP 地址」打开快捷弹框操作。</span>
       </div>
     </div>
     <template #footer>
@@ -783,7 +783,6 @@ watch(() => props.modelValue, (v) => {
 .trg-kv { display: flex; gap: 8px; font-size: 13px; padding: 3px 0; }
 .trg-kv .k { color: var(--el-text-color-secondary); flex-shrink: 0; width: 96px; }
 .trg-cond { font-size: 13px; }
-.trg-tip { font-size: 12px; color: var(--el-text-color-secondary); margin-top: 6px; }
 /* CRS 源码折叠 + 排除组（自 SecurityEvents 迁入，风格对齐卡片） */
 .crs-snippet-toggle { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--el-color-primary); cursor: pointer; margin-top: 8px; }
 /* 折叠头是键盘入口（Enter/Space）：焦点必须可见 */

@@ -221,7 +221,7 @@
           :tone="lbDialog.spec?.tone || 'primary'"
         />
       </template>
-      <div v-if="lbDialog.spec?.message" class="lb-message">{{ lbDialog.spec.message }}</div>
+      <div v-if="lbDialog.spec?.message" class="info-note-bar"><span class="info-note-desc">{{ lbDialog.spec.message }}</span></div>
       <div v-if="lbDialog.spec?.mode === 'reset-pwd'" class="lb-fields">
         <div class="lb-field">
           <div class="lb-field__label">新密码</div>
@@ -688,7 +688,6 @@ onMounted(() => {
 </script>
 
 <style scoped>
-.lb-message { font-size: 13.5px; color: var(--text-regular, #374151); line-height: 1.7; margin-bottom: 4px; }
 .lb-fields { display: flex; flex-direction: column; gap: 14px; margin-top: 12px; }
 .lb-field__label { font-size: 13px; color: var(--text-regular, #374151); margin-bottom: 6px; }
 .oidc-entry-inline { display: flex; align-items: center; gap: 8px; margin-left: auto; }

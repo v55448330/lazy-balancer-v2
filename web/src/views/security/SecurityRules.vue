@@ -322,7 +322,7 @@
                         <el-tag v-for="t in g.values" :key="t.value" size="small" effect="plain" class="preset-tag" role="button" tabindex="0" @click="cond.pattern = t.value" @keydown.enter.prevent="activateOnce($event, () => { cond.pattern = t.value })" @keydown.space.prevent="activateOnce($event, () => { cond.pattern = t.value })">{{ t.label }}</el-tag>
                       </div>
                     </div>
-                    <div class="preset-hint">标签写入真实 UA 片段（contains 精确匹配，区分大小写）</div>
+                    <div class="info-note-bar"><span class="info-note-desc">标签写入真实 UA 片段（contains 精确匹配，区分大小写）</span></div>
                   </div>
                 </div>
                 <div v-if="cond.operator === 'regex'" class="preset-section">
@@ -2022,7 +2022,6 @@ onUnmounted(() => {
 .preset-tags-block { display: flex; flex-direction: column; gap: 4px; padding: 6px 8px; background: #fff; border: 1px dashed #e5e7eb; margin-left: 0; }
 .preset-group { display: flex; align-items: baseline; gap: 8px; margin-bottom: 4px; }
 .preset-group-label { font-size: 12px; color: #6b7280; flex: 0 0 56px; text-align: right; line-height: 1; }
-.preset-hint { font-size: 12px; color: #9ca3af; margin-top: 6px; line-height: 1.4; }
 .preset-group-tags { display: inline-flex; flex-wrap: wrap; gap: 4px; flex: 1; align-items: center; }
 .preset-group-tags .el-tag { margin: 0; }
 .preset-group-tags .preset-tag { cursor: pointer; }

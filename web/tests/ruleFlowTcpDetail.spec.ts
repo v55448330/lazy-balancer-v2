@@ -89,7 +89,7 @@ test('锁摘要与流程弹框共用模型：TCP 行为钉在单源（buildStage
 // ── 阶段 0 信任检测的 TCP 口径（与 HTTP 行为一致性裁定）──
 
 test('阶段 0 脚注 TCP 分支：保留检测=记录为检测后直达上游（不再宣称仅直通）', () => {
-  const footnote = dialog.match(/v-if="isTcp" class="flow-panel-footnote">([^<]+)</)
+  const footnote = dialog.match(/v-if="isTcp" class="info-note-bar"><span class="info-note-desc">([^<]+)</)
   assert.ok(footnote, 'TCP 阶段 0 脚注分支存在')
   assert.match(footnote![1], /「直通上游」模式：/, '直通模式说明保留')
   assert.match(footnote![1], /「保留检测记录」模式：命中产检测事件[^<]*后直达上游，不拦截/, '保留检测模式在 TCP 下明确呈现（logged 语义）')

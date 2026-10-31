@@ -25,7 +25,7 @@
           <el-tag type="primary" effect="plain" size="small">OIDC 企业认证</el-tag>
         </el-form-item>
         <el-form-item label-width="0">
-          <div class="oidc-hint-block">显示名与密码由认证服务管理，如需修改请前往 OIDC 服务</div>
+          <div class="info-note-bar"><span class="info-note-desc">显示名与密码由认证服务管理，如需修改请前往 OIDC 服务</span></div>
         </el-form-item>
       </template>
       <template v-else>
@@ -267,12 +267,4 @@ const onMfaActivated = async (): Promise<void> => {
 .profile-readonly-note { margin: 0 28px 12px; }
 .mfa-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-height: 32px; }
 .mfa-code-field { margin-top: 4px; }
-.oidc-hint-block {
-  width: 100%;
-  padding: 8px 12px;
-  background: var(--el-fill-color-light);
-  color: var(--el-text-color-secondary);
-  font-size: 12px;
-  line-height: 1.7;
-}
 </style>

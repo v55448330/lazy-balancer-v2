@@ -157,8 +157,8 @@
                 </div>
               </el-collapse-transition>
             </div>
-            <div v-if="isTcp" class="flow-panel-footnote">「直通上游」模式：连接直达上游（不产生安全事件，故无计数 chip）；「保留检测记录」模式：命中产检测事件（记录为检测）后直达上游，不拦截（与 HTTP 语义一致）；未命中继续进入阶段 1 判定</div>
-            <div v-else class="flow-panel-footnote">「直通上游」模式：信任 IP 命中后跳过全部后续安全阶段，不产生任何安全事件（故无计数 chip）；「保留检测记录」模式：继续评估后续全部阶段但不拦截，命中事件动作记为检测</div>
+            <div v-if="isTcp" class="info-note-bar"><span class="info-note-desc">「直通上游」模式：连接直达上游（不产生安全事件，故无计数 chip）；「保留检测记录」模式：命中产检测事件（记录为检测）后直达上游，不拦截（与 HTTP 语义一致）；未命中继续进入阶段 1 判定</span></div>
+            <div v-else class="info-note-bar"><span class="info-note-desc">「直通上游」模式：信任 IP 命中后跳过全部后续安全阶段，不产生任何安全事件（故无计数 chip）；「保留检测记录」模式：继续评估后续全部阶段但不拦截，命中事件动作记为检测</span></div>
             </template>
             <div v-else class="flow-detail-line">未启用——未绑定信任名单策略，请求直接进入阶段 1</div>
           </div>
@@ -279,8 +279,8 @@
                 </div>
               </template>
               <div v-else class="flow-stage-empty">该阶段未启用（无策略配置对应能力）</div>
-              <div class="flow-panel-footnote">
-                {{ typedStageByKey(node.key)!.stage === 1 ? (isTcp ? TCP_STAGE1_FOOTNOTE : stage1Footnote) : `未通过即终止${typedStageByKey(node.key)!.footnote ? `；${typedStageByKey(node.key)!.footnote}` : ''}` }}
+              <div class="info-note-bar">
+                <span class="info-note-desc">{{ typedStageByKey(node.key)!.stage === 1 ? (isTcp ? TCP_STAGE1_FOOTNOTE : stage1Footnote) : `未通过即终止${typedStageByKey(node.key)!.footnote ? `；${typedStageByKey(node.key)!.footnote}` : ''}` }}</span>
               </div>
               </template>
           </div>
@@ -374,7 +374,7 @@
                 </span>
               </div>
             </div>
-            <div class="flow-panel-footnote">健康口径：规则级计数（健康 {{ target.health?.healthy ?? 0 }}/共 {{ target.health?.total ?? 0 }}）；无逐上游实时探针数据时按「上游启用/禁用 + 规则健康计数」呈现——逐上游状态为最近一次轮询快照；转发型自定义路由上游与主路由同享规则级健康检查（静态返回 / 301 跳转不转发上游）</div>
+            <div class="info-note-bar"><span class="info-note-desc">健康口径：规则级计数（健康 {{ target.health?.healthy ?? 0 }}/共 {{ target.health?.total ?? 0 }}）；无逐上游实时探针数据时按「上游启用/禁用 + 规则健康计数」呈现——逐上游状态为最近一次轮询快照；转发型自定义路由上游与主路由同享规则级健康检查（静态返回 / 301 跳转不转发上游）</span></div>
           </div>
         </el-collapse-transition>
           </div>
@@ -975,7 +975,6 @@ const retryCertInfo = (): void => {
 .flow-row-label { color: #6b7280; flex-shrink: 0; }
 .flow-row-detail { color: #1f2937; text-align: right; overflow: hidden; text-overflow: ellipsis; }
 .flow-stage-empty { font-size: 13px; color: #9ca3af; padding: 8px 0; }
-.flow-panel-footnote { margin-top: 10px; padding-top: 8px; border-top: 1px dashed #e5e7eb; font-size: 12px; color: #9ca3af; }
 .flow-upstream-table { width: 100%; }
 .flow-upstream-addr { font-family: monospace; font-size: 12px; color: #1f2937; }
 

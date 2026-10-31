@@ -363,7 +363,6 @@ body .rule-lock-popper :is(.lock-stage, .lock-policy-group) { border-radius: 0; 
   .mfa-qr-frame,
   .mfa-secret,
   .mfa-recovery-code,
-  .oidc-hint-block,
   .history-card,
   .strategy-card,
   .stats-card,

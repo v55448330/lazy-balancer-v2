@@ -160,8 +160,8 @@
                 复制配置
               </el-button>
             </div>
-            <div class="mcp-config-hints" style="margin-top: 6px">
-              如客户端报证书错误，处置方式见下方「AI Agent 接入指南」自签证书段。密钥需保持 MCP 开启，只读 Key 仅暴露只读工具。
+            <div class="info-note-bar">
+              <span class="info-note-desc">如客户端报证书错误，处置方式见下方「AI Agent 接入指南」自签证书段。密钥需保持 MCP 开启，只读 Key 仅暴露只读工具。</span>
             </div>
           </div>
         </el-form-item>
@@ -214,7 +214,7 @@
           </div>
         </el-collapse-item>
         <el-collapse-item title="工具清单" name="tools-list">
-          <div class="mcp-table-scroll-hint">左右滑动表格可查看方法、REST 路径和类型</div>
+          <div class="info-note-bar mcp-table-scroll-hint"><span class="info-note-desc">左右滑动表格可查看方法、REST 路径和类型</span></div>
           <div v-loading="mcpToolsLoading" class="mcp-tools-table">
             <div v-if="mcpToolsError" class="info-note-bar">
               <span class="info-note-desc">{{ mcpToolsError }}</span>
@@ -764,7 +764,6 @@ onMounted(() => {
 .mcp-config-json { margin-top: 12px; }
 .mcp-config-json :deep(textarea) { font-family: 'SF Mono', Menlo, monospace; font-size: 12px; }
 .mcp-config-toolbar { display: flex; justify-content: flex-end; margin-top: 8px; }
-.mcp-config-hints { margin-top: 10px; color: var(--el-text-color-secondary); font-size: 12px; line-height: 1.8; }
 .mcp-tool-expand { padding: 4px 12px 10px; }
 .mcp-tool-usage { font-size: 13px; line-height: 1.6; margin-bottom: 8px; }
 .mcp-expand-label { font-weight: 600; }
@@ -788,6 +787,6 @@ onMounted(() => {
 }
 
 @media (max-width: 1023px) {
-  .mcp-table-scroll-hint { display: block; margin: -4px 0 8px; color: var(--el-text-color-secondary); font-size: 12px; }
+  .mcp-table-scroll-hint { display: block; margin: -4px 0 8px; }
 }
 </style>
