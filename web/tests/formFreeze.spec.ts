@@ -41,7 +41,8 @@ test('Caddy 全局配置卡：整卡 formFrozen（Caddy 应用可达数秒）', 
 test('免费证书：ACME 卡与 DNS 配置弹框在保存中冻结', () => {
   const page = code('src/views/settings/FreeCertificates.vue')
   assert.match(page, /<el-form :model="global" label-width="140px" :disabled="isReadOnly \|\| savingGlobal">/)
-  assert.match(page, /<el-form :model="form" label-width="120px" class="lb-form" :disabled="savingConfig">/)
+  // 140px：最长官方标签「AccessKey Secret」单行不折行（弹框宽 640px 配套）
+  assert.match(page, /<el-form :model="form" label-width="140px" class="lb-form" :disabled="savingConfig">/)
 })
 
 test('OIDC 弹框：整表单 formFrozen + 保存中不可 ESC/X 关闭', () => {

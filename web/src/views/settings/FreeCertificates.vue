@@ -131,7 +131,7 @@
 
     <el-dialog
       v-model="dialogVisible"
-      width="min(560px, 92vw)"
+      width="min(640px, 92vw)"
       :close-on-click-modal="false"
       :before-close="beforeConfigDialogClose"
       class="dns-config-dialog"
@@ -141,7 +141,8 @@
         <DialogHeader :icon="Connection" :title="editingId ? '编辑 DNS 提供商配置' : '添加 DNS 提供商配置'" tone="success"
           subtitle="ACME DNS-01 验证使用的解析商凭证，保存后可测试连通性" />
       </template>
-      <el-form :model="form" label-width="120px" class="lb-form" :disabled="savingConfig">
+      <!-- label-width 140px：最长官方标签「AccessKey Secret」单行不折行（弹框随宽度增至 640px，输入列不受挤压） -->
+      <el-form :model="form" label-width="140px" class="lb-form" :disabled="savingConfig">
         <el-form-item label="配置名称" required>
           <el-input v-model="form.name" placeholder="例如：我的证书配置" maxlength="100" />
         </el-form-item>
@@ -637,11 +638,15 @@ const openConfigDialog = (config?: CertConfig) => {
     editingId.value = null
     legacyEmptyCredentials.value = false
     configBaseline.value = null
+    // 新建默认选腾讯云（dnspod 族）：providers 按 Code 排序后 aliyun 会排
+    // 首位，不能再用首位兜底；找不到首选时才回落注册表第一项。
+    const defaultCode = providers.value.find(p => p.code === 'dnspod')?.code || providers.value[0]?.code || 'dnspod'
+    const defaultFields = providers.value.find(p => p.code === defaultCode)?.credential_fields ?? []
     form.value = {
       name: '',
-      dns_provider: providers.value[0]?.code || 'dnspod',
+      dns_provider: defaultCode,
       // 默认凭证由 provider 的 select 字段首个选项派生（不再写死 auth_mode）
-      dns_credentials: defaultCredentialsFor(providers.value[0]?.credential_fields ?? []),
+      dns_credentials: defaultCredentialsFor(defaultFields),
       enabled: true,
     }
   }

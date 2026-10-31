@@ -36,8 +36,13 @@ test('三 KPI 等分栅格：拦截/检测/正常请求 同构三列，活跃策
 test('每列四行同构：标签 / 今日主数值 / 昨日对比 / 协议拆分', () => {
   const page = code('src/views/security/SecurityOverview.vue')
   const [blocked, detected, normal] = guardCols()
+  // 卡头（与其他卡片同构）：card-title + 语义图标 + 「防护运行状态」
+  const card = section(page, '<el-card shadow="always" class="overview-card status-strip-card">', '<div class="status-strip">')
+  assert.match(card, /<template #header>/, '状态条卡必须有卡头（与其他卡片一致）')
+  assert.match(card, /class="title-icon"><Stopwatch \/><\/el-icon>/, '卡头图标 Stopwatch')
+  assert.match(card, /<span>防护运行状态<\/span>/, '卡头标题「防护运行状态」')
   // 列 1 拦截：红主题 + 今日合计 + 昨日门 + 双胶囊拆分（HTTP=合计−TCP）
-  assert.match(blocked, /class="strip-label">\s*拦截/)
+  assert.match(blocked, /class="strip-label-dot is-danger"><\/i>\s*拦截/, '标签语义色点（红）')
   assert.match(blocked, /<el-tooltip :content="todayCountTip"/, '拦截列保留既有口径 tooltip')
   assert.match(blocked, /class="strip-value is-danger">\{\{ fmtStatNum\(overview\.today_blocked\) \}\}/)
   assert.match(blocked, /v-if="yesterdayBlocked !== null" class="strip-sub">昨日 \{\{ fmtStatNum\(yesterdayBlocked\) \}\}/)
@@ -45,26 +50,31 @@ test('每列四行同构：标签 / 今日主数值 / 昨日对比 / 协议拆�
   assert.match(blocked, /proto-dot--http[\s\S]{0,120}HTTP \{\{ fmtStatNum\(todayBlockedSplit\.http\) \}\}/)
   assert.match(blocked, /proto-dot--tcp[\s\S]{0,120}TCP \{\{ fmtStatNum\(todayBlockedSplit\.tcp\) \}\}/)
   // 列 2 检测：橙主题 + 昨日门 + 单 HTTP 点（TCP 恒 0 不显示 TCP）
-  assert.match(detected, /class="strip-label">检测/)
+  assert.match(detected, /class="strip-label-dot is-warning"><\/i>\s*检测/, '标签语义色点（琥珀）')
   assert.doesNotMatch(detected, /el-tooltip/, '重设计后仅拦截列带 tooltip')
   assert.match(detected, /class="strip-value is-warning">\{\{ fmtStatNum\(overview\.today_detected\) \}\}/)
   assert.match(detected, /v-if="yesterdayDetected !== null" class="strip-sub">昨日 \{\{ fmtStatNum\(yesterdayDetected\) \}\}/)
   assert.match(detected, /<div class="strip-sub">\s*<span class="proto-split-item"><i class="proto-dot proto-dot--http/)
   assert.doesNotMatch(detected, /proto-dot--tcp/, '检测列不得出现 TCP 点')
   // 列 3 正常请求：默认深色 + 昨日门 + HTTP/TCP 双点（字段缺失整行隐藏）
-  assert.match(normal, /class="strip-label">正常请求/)
+  assert.match(normal, /class="strip-label-dot is-success"><\/i>\s*正常请求/, '标签语义色点（绿）')
   assert.match(normal, /class="strip-value">\{\{ fmtStatNum\(overview\.normal_today\) \}\}/)
   assert.match(normal, /v-if="normalYesterday !== null" class="strip-sub">昨日 \{\{ fmtStatNum\(normalYesterday\) \}\}/)
   assert.match(normal, /v-if="normalTodaySplit" class="strip-sub">/)
   assert.match(normal, /proto-dot--http[\s\S]{0,120}HTTP \{\{ fmtStatNum\(normalTodaySplit\.http\) \}\}/)
   assert.match(normal, /proto-dot--tcp[\s\S]{0,120}TCP \{\{ fmtStatNum\(normalTodaySplit\.tcp\) \}\}/)
-  // 主数值排版钉测：26px/800；三列主题色（拦截红/检测橙/正常 #303133）
+  // 主数值排版钉测：24px/800；三列主题色（拦截红/检测橙/正常 #303133）；
+  // 标签色点三档语义色（拦截红/检测橙/正常请求绿）
   const value = cssDeclarations(page, '.strip-value')
   assert.equal(value.get('font-size'), '24px')
   assert.equal(value.get('font-weight'), '800')
   assert.equal(value.get('color'), '#303133')
   assert.equal(cssDeclarations(page, '.strip-value.is-danger').get('color'), '#f56c6c')
   assert.equal(cssDeclarations(page, '.strip-value.is-warning').get('color'), '#e6a23c')
+  assert.equal(cssDeclarations(page, '.strip-label-dot').get('width'), '6px')
+  assert.equal(cssDeclarations(page, '.strip-label-dot.is-danger').get('background'), '#f56c6c')
+  assert.equal(cssDeclarations(page, '.strip-label-dot.is-warning').get('background'), '#e6a23c')
+  assert.equal(cssDeclarations(page, '.strip-label-dot.is-success').get('background'), '#67c23a')
 })
 
 test('防御式消费：契约字段缺失（旧后端）对应行隐藏', () => {

@@ -28,11 +28,11 @@ func TestAliyunProviderMetadata(t *testing.T) {
 	if len(fields) != 2 {
 		t.Fatalf("fields=%+v, want 2（access_key_id + access_key_secret）", fields)
 	}
-	if fields[0].Name != "access_key_id" || fields[0].Type != "text" || !fields[0].Required {
+	if fields[0].Name != "access_key_id" || fields[0].Type != "text" || !fields[0].Required || fields[0].Label != "AccessKey ID" {
 		t.Fatalf("field0=%+v, want access_key_id text required", fields[0])
 	}
-	if fields[1].Name != "access_key_secret" || fields[1].Type != "password" || !fields[1].Required {
-		t.Fatalf("field1=%+v, want access_key_secret password required", fields[1])
+	if fields[1].Name != "access_key_secret" || fields[1].Type != "password" || !fields[1].Required || fields[1].Label != "AccessKey Secret" {
+		t.Fatalf("field1=%+v, want access_key_secret password required（Label=官方名 AccessKey Secret）", fields[1])
 	}
 	for _, field := range fields {
 		if field.VisibleWhen != nil {

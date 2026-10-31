@@ -37,10 +37,19 @@
     <!-- 运行状态条：防护三 KPI（拦截/检测/正常请求）等分栅格 + 规则库四状态合并单面板。
          每列四行同构：标签 / 今日主数值 / 昨日对比 / 协议拆分（防御式：缺字段行隐藏）。 -->
     <div class="mb-5"><el-card shadow="always" class="overview-card status-strip-card">
+      <template #header>
+        <div class="card-header">
+          <div class="card-title">
+            <el-icon class="title-icon"><Stopwatch /></el-icon>
+            <span>防护运行状态</span>
+          </div>
+        </div>
+      </template>
       <div class="status-strip">
         <div class="status-guard">
           <div class="guard-item">
             <div class="strip-label">
+              <i class="strip-label-dot is-danger"></i>
               拦截
               <el-tooltip :content="todayCountTip" placement="top">
                 <el-icon class="stat-box__tip"><InfoFilled /></el-icon>
@@ -56,7 +65,10 @@
           </div>
           <div class="strip-divider"></div>
           <div class="guard-item">
-            <div class="strip-label">检测</div>
+            <div class="strip-label">
+              <i class="strip-label-dot is-warning"></i>
+              检测
+            </div>
             <div class="strip-value is-warning">{{ fmtStatNum(overview.today_detected) }}</div>
             <div v-if="yesterdayDetected !== null" class="strip-sub">昨日 {{ fmtStatNum(yesterdayDetected) }}</div>
             <!-- TCP 恒 0：单 HTTP 点，保持三列四行同构 -->
@@ -66,7 +78,10 @@
           </div>
           <div class="strip-divider"></div>
           <div class="guard-item">
-            <div class="strip-label">正常请求</div>
+            <div class="strip-label">
+              <i class="strip-label-dot is-success"></i>
+              正常请求
+            </div>
             <div class="strip-value">{{ fmtStatNum(overview.normal_today) }}</div>
             <div v-if="normalYesterday !== null" class="strip-sub">昨日 {{ fmtStatNum(normalYesterday) }}</div>
             <!-- 字段缺失（旧后端）整行隐藏 -->
@@ -277,7 +292,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
-import { DataAnalysis, TrendCharts, PieChart, Location, Warning, Odometer, Monitor, InfoFilled } from '@element-plus/icons-vue'
+import { DataAnalysis, TrendCharts, PieChart, Location, Warning, Odometer, Monitor, InfoFilled, Stopwatch } from '@element-plus/icons-vue'
 import { request } from '@/utils/api'
 import { useAuthStore } from '@/stores/auth'
 import IPLocationAction from '@/views/security/IPLocationAction.vue'
@@ -549,6 +564,12 @@ onMounted(() => { void reloadAll() })
 .guard-item:first-child { padding-left: 0; }
 .strip-divider { width: 1px; background: #f0f0f0; margin: 0 32px; flex-shrink: 0; }
 .strip-label { font-size: 12px; color: var(--text-secondary); display: flex; align-items: center; }
+/* KPI 标签语义色点（拦截红/检测琥珀/正常请求绿）：与下方协议圆点同一视觉语言，
+   三列语义一眼可辨；数值本色仍由 strip-value 着色。 */
+.strip-label-dot { width: 6px; height: 6px; border-radius: 50%; margin-right: 6px; flex-shrink: 0; }
+.strip-label-dot.is-danger { background: #f56c6c; }
+.strip-label-dot.is-warning { background: #e6a23c; }
+.strip-label-dot.is-success { background: #67c23a; }
 .strip-value {
   font-size: 24px;
   font-weight: 800;
