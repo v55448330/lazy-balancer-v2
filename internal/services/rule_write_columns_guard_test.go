@@ -207,7 +207,7 @@ var testOnly = "INSERT INTO lb_rules VALUES (9)"
 }
 
 // UpdateRule 编辑保存的 SET 列清单必须与单源（lbRuleColumnSpecs）等价：
-// specs 派生 INSERT/快照投影，编辑路径的手写 UPDATE 是第四份列清单——新增列
+// specs 派生 INSERT/快照投影，编辑路径的 SET 列清单是第四份列清单——新增列
 // 时只改 specs，编辑保存会静默不写该列（新建/复制/快照/集群应用均正常），
 // 正是单源机制要防的形态。这里对 SET 列集合做双向集合等价断言。
 func TestUpdateRuleSetColumns_matchSingleSource(t *testing.T) {
@@ -216,22 +216,30 @@ func TestUpdateRuleSetColumns_matchSingleSource(t *testing.T) {
 		t.Fatalf("read rules.go: %v", err)
 	}
 	body := string(src)
-	const anchor = `query := "UPDATE lb_rules SET "`
+	// SET 列清单已提取为 handlers 包级单源表（updateRuleSetColumns，init 冻结
+	// 快照驱动 buildUpdateRuleSetClause 生成 SQL）——锚点对齐表声明，逐项提取
+	// 复合字面量首列名；表内注释/多行 func 值表达式不含 `{"` 形态，无噪声命中。
+	const anchor = "var updateRuleSetColumns = []updateRuleSetColumn{"
 	start := strings.Index(body, anchor)
 	if start < 0 {
-		t.Fatalf("UpdateRule 的 UPDATE lb_rules SET 构造未命中（锚点被改名？）: %q", anchor)
+		t.Fatalf("UpdateRule SET 单源表未命中（锚点被改名？）: %q", anchor)
 	}
-	const tail = "updated_at = datetime('now'), updated_by = ?"
-	window := body[start:]
-	end := strings.Index(window, tail)
+	window := body[start+len(anchor):]
+	end := strings.Index(window, "\n}")
 	if end < 0 {
-		t.Fatalf("UpdateRule SET 尾部锚点未命中: %q", tail)
+		t.Fatalf("updateRuleSetColumns 表结束锚点未命中")
 	}
-	window = window[:end+len(tail)]
+	window = window[:end]
 
 	written := map[string]bool{}
-	for _, match := range regexp.MustCompile(`query \+= "([a-z_0-9]+) = \?`).FindAllStringSubmatch(window, -1) {
+	for _, match := range regexp.MustCompile(`\{"([a-z_0-9]+)",`).FindAllStringSubmatch(window, -1) {
 		written[match[1]] = true
+	}
+	// updated_at/updated_by 由 UpdateRule 终局守卫分支字面量追加（cert 在途
+	// 409 守卫双分支）——锚点钉住该追加形态；两列若迁入单源表，此处同步改表提取。
+	const tail = "updated_at = datetime('now'), updated_by = ?"
+	if !strings.Contains(body, tail) {
+		t.Fatalf("UpdateRule SET 尾部锚点未命中: %q", tail)
 	}
 	written["updated_at"] = true
 	written["updated_by"] = true
