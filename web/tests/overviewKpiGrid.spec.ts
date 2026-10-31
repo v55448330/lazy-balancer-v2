@@ -47,8 +47,8 @@ test('每列四行同构：标签 / 今日主数值 / 昨日对比 / 协议拆�
   assert.match(blocked, /class="strip-value is-danger">\{\{ fmtStatNum\(overview\.today_blocked\) \}\}/)
   assert.match(blocked, /v-if="yesterdayBlocked !== null" class="strip-sub"><span class="strip-sub-label">昨日<\/span>/)
   assert.match(blocked, /v-if="todayBlockedSplit" class="strip-sub">/)
-  assert.match(blocked, /proto-dot--http[\s\S]{0,120}HTTP \{\{ fmtStatNum\(todayBlockedSplit\.http\) \}\}/)
-  assert.match(blocked, /proto-dot--tcp[\s\S]{0,120}TCP \{\{ fmtStatNum\(todayBlockedSplit\.tcp\) \}\}/)
+  assert.match(blocked, /proto-split-label">HTTP<\/span> \{\{ fmtStatNum\(todayBlockedSplit\.http\) \}\}/)
+  assert.match(blocked, /proto-split-label">TCP<\/span> \{\{ fmtStatNum\(todayBlockedSplit\.tcp\) \}\}/)
   // 列 2 检测：橙主题 + 昨日门 + 单 HTTP 点（TCP 恒 0 不显示 TCP）
   assert.match(detected, /class="strip-label">检测/)
   assert.doesNotMatch(detected, /el-tooltip/, '重设计后仅拦截列带 tooltip')
@@ -62,8 +62,8 @@ test('每列四行同构：标签 / 今日主数值 / 昨日对比 / 协议拆�
   assert.match(normal, /class="strip-value">\{\{ fmtStatNum\(overview\.normal_today\) \}\}/)
   assert.match(normal, /v-if="normalYesterday !== null" class="strip-sub"><span class="strip-sub-label">昨日<\/span>/)
   assert.match(normal, /v-if="normalTodaySplit" class="strip-sub">/)
-  assert.match(normal, /proto-dot--http[\s\S]{0,120}HTTP \{\{ fmtStatNum\(normalTodaySplit\.http\) \}\}/)
-  assert.match(normal, /proto-dot--tcp[\s\S]{0,120}TCP \{\{ fmtStatNum\(normalTodaySplit\.tcp\) \}\}/)
+  assert.match(normal, /proto-dot--http[\s\S]{0,200}proto-split-label">HTTP<\/span> \{\{ fmtStatNum\(normalTodaySplit\.http\) \}\}/)
+  assert.match(normal, /proto-dot--tcp[\s\S]{0,200}proto-split-label">TCP<\/span> \{\{ fmtStatNum\(normalTodaySplit\.tcp\) \}\}/)
   // 主数值排版钉测：24px/800；三列主题色（拦截红/检测橙/正常 #303133）；
   // 标签 13px/600（用户裁定：稍大并加粗）；「昨日」标签词 700 加粗
   const value = cssDeclarations(page, '.strip-value')

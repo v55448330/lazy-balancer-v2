@@ -154,8 +154,12 @@
       <el-empty v-else description="暂无日志" :image-size="60" />
     </div>
     <template #footer>
-      <div style="display: flex; align-items: center;">
+      <div style="display: flex; align-items: center; gap: 10px;">
         <LogStorageBar v-if="currentJob" :key="currentJob.rule_id" log-key="certjob" :caddy-id="String(currentJob.rule_id)" style="margin-right: auto" />
+        <div class="log-auto-refresh" title="关闭后停止自动拉取，可使用「刷新」按钮手动更新">
+          <span>自动刷新</span>
+          <el-switch v-model="logAutoRefresh" size="small" />
+        </div>
         <el-button @click="logDialogVisible = false">关闭</el-button>
         <el-button type="primary" :loading="logLoading" @click="refreshLogs">刷新</el-button>
       </div>
@@ -441,8 +445,16 @@ const viewLogs = async (row: CertJob) => {
 // 先同步装定时器再触发首拉（logTail.start 内部即此序）——原 await 后才
 // startLogPolling，首拉慢于关闭时 @closed 已清 timer，随后续体又装上 3s 轮询
 // （关闭后持续请求日志端点）。
+const logAutoRefresh = ref(true)
+
+watch(logAutoRefresh, (on) => {
+  if (on) logTail.start()
+  else logTail.stop()
+})
+
 const onLogDialogOpened = (): void => {
-  logTail.start()
+  if (logAutoRefresh.value) logTail.start()
+  else logTail.refresh()
 }
 
 const onLogDialogClosed = () => {
@@ -590,5 +602,14 @@ onUnmounted(() => {
 }
 .cert-jobs-table :deep(.el-button + .el-button) {
   margin-left: 6px;
+}
+
+.log-auto-refresh {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-secondary, #909399);
+  white-space: nowrap;
 }
 </style>

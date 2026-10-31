@@ -58,8 +58,8 @@
             <div v-if="yesterdayBlocked !== null" class="strip-sub"><span class="strip-sub-label">昨日</span> {{ fmtStatNum(yesterdayBlocked) }}</div>
             <!-- 协议拆分（L4 阶段 0/1 披露，今日口径）：HTTP = 合计 − TCP；响应缺字段或 TCP=0 时隐藏 -->
             <div v-if="todayBlockedSplit" class="strip-sub">
-              <span class="proto-split-item"><i class="proto-dot proto-dot--http"></i>HTTP {{ fmtStatNum(todayBlockedSplit.http) }}</span>
-              <span class="proto-split-item"><i class="proto-dot proto-dot--tcp"></i>TCP {{ fmtStatNum(todayBlockedSplit.tcp) }}</span>
+              <span class="proto-split-item"><i class="proto-dot proto-dot--http"></i><span class="proto-split-label">HTTP</span> {{ fmtStatNum(todayBlockedSplit.http) }}</span>
+              <span class="proto-split-item"><i class="proto-dot proto-dot--tcp"></i><span class="proto-split-label">TCP</span> {{ fmtStatNum(todayBlockedSplit.tcp) }}</span>
             </div>
           </div>
           <div class="strip-divider"></div>
@@ -69,7 +69,7 @@
             <div v-if="yesterdayDetected !== null" class="strip-sub"><span class="strip-sub-label">昨日</span> {{ fmtStatNum(yesterdayDetected) }}</div>
             <!-- TCP 恒 0：单 HTTP 点，保持三列四行同构 -->
             <div class="strip-sub">
-              <span class="proto-split-item"><i class="proto-dot proto-dot--http"></i>HTTP {{ fmtStatNum(overview.today_detected) }}</span>
+              <span class="proto-split-item"><i class="proto-dot proto-dot--http"></i><span class="proto-split-label">HTTP</span> {{ fmtStatNum(overview.today_detected) }}</span>
             </div>
           </div>
           <div class="strip-divider"></div>
@@ -79,8 +79,8 @@
             <div v-if="normalYesterday !== null" class="strip-sub"><span class="strip-sub-label">昨日</span> {{ fmtStatNum(normalYesterday) }}</div>
             <!-- 字段缺失（旧后端）整行隐藏 -->
             <div v-if="normalTodaySplit" class="strip-sub">
-              <span class="proto-split-item"><i class="proto-dot proto-dot--http"></i>HTTP {{ fmtStatNum(normalTodaySplit.http) }}</span>
-              <span class="proto-split-item"><i class="proto-dot proto-dot--tcp"></i>TCP {{ fmtStatNum(normalTodaySplit.tcp) }}</span>
+              <span class="proto-split-item"><i class="proto-dot proto-dot--http"></i><span class="proto-split-label">HTTP</span> {{ fmtStatNum(normalTodaySplit.http) }}</span>
+              <span class="proto-split-item"><i class="proto-dot proto-dot--tcp"></i><span class="proto-split-label">TCP</span> {{ fmtStatNum(normalTodaySplit.tcp) }}</span>
             </div>
           </div>
         </div>
@@ -569,7 +569,10 @@ onMounted(() => { void reloadAll() })
 }
 .strip-value.is-danger { color: #f56c6c; }
 .strip-value.is-warning { color: #e6a23c; }
-.strip-sub { display: flex; align-items: center; gap: 14px; margin-top: 6px; font-size: 12px; color: var(--text-secondary); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.strip-sub { display: flex; align-items: center; gap: 14px; font-size: 12px; color: var(--text-secondary); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.strip-sub:first-of-type { margin-top: 2px; }
+.strip-sub + .strip-sub { margin-top: 4px; }
+.proto-split-label { font-weight: 700; }
 /* 「昨日」文案加粗（用户裁定）：数值保持常规粗细，仅标签词加重提升对比 */
 .strip-sub-label { font-weight: 700; }
 .proto-split-item { display: inline-flex; align-items: center; }

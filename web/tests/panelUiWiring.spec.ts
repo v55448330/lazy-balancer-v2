@@ -666,8 +666,8 @@ test('安全总览 TCP：今日拦截协议双胶囊 + 最近事件独立协议�
   const overview = code('src/views/security/SecurityOverview.vue')
   // 拆分行消费 today_blocked_tcp，响应缺字段（旧后端）整行隐藏；双胶囊形态
   assert.match(overview, /today_blocked_tcp/)
-  assert.match(overview, /proto-dot--http[\s\S]*?HTTP \{\{ /)
-  assert.match(overview, /proto-dot--tcp[\s\S]*?TCP \{\{ /)
+  assert.match(overview, /proto-split-label">HTTP<\/span> \{\{ /)
+  assert.match(overview, /proto-split-label">TCP<\/span> \{\{ /)
   // 最近拦截事件：独立「协议」列（TCP 青 / HTTP 蓝），规则列不再放徽标
   assert.match(overview, /label="协议"/)
   assert.match(overview, /proto-tcp-tag event-proto-tag">TCP<\/el-tag>/)
