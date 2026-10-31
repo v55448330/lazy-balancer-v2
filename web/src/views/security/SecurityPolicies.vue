@@ -400,6 +400,8 @@
             <el-form-item v-if="form.log_request_body"><div class="info-note-bar"><span class="info-note-desc">开启后命中规则事件的请求体将明文记录到事件库（单条上限 64KB），可能包含密码等敏感信息，请仅在排障期间开启</span></div>
             </el-form-item>
             <el-form-item label="排除规则" for="radio---11">
+              <div id="radio---11">
+
               <!-- 表格行编辑器：目标（与规则组同款混合下拉）× 作用域（全部 IP/指定 IP/地址
                    列表）× 条件控件（ip → 标签输入 + isValidCidr 即时拒绝；list → 引用
                    /security/ip-lists 列表）× 删除。上限 50 行；旧字符串数组存储读取时已
@@ -483,7 +485,7 @@
                         >
                           <el-icon class="exclusion-conflict-icon"><WarningFilled /></el-icon>
                         </el-tooltip>
-                        <el-radio-group v-model="row.scope" size="small" class="exclusion-scope-radios" :disabled="crsFieldsOff || isReadOnly" @change="onScopeChange(row as CrsExcludedRow)" id="radio---11">
+                        <el-radio-group v-model="row.scope" size="small" class="exclusion-scope-radios" :disabled="crsFieldsOff || isReadOnly" @change="onScopeChange(row as CrsExcludedRow)">
                           <el-radio value="all">全部 IP</el-radio>
                           <el-radio value="ip">指定 IP</el-radio>
                           <el-radio value="list">地址列表</el-radio>
@@ -535,7 +537,8 @@
                 </div>
                 <div class="form-tip-line">排除的目标规则/规则组不会被检测或拦截；作用域限定排除仅对所选来源 IP 或地址列表生效</div>
               </template>
-            </el-form-item>
+            
+              </div></el-form-item>
             <el-form-item v-if="blockingEvalExclusionAlert"><div class="info-note-bar"><span class="info-note-desc">排除评估规则（949/959）将使拦截模式的评分阈值拦截失效</span></div>
             </el-form-item>
             <el-form-item label="自定义规则">
