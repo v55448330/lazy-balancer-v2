@@ -540,31 +540,38 @@
         :tz="scheduleTz"
         @save="saveIP2RegionSchedule"
       />
-      <DialogSectionHeader title="数据源状态" />
-      <div class="dialog-panel ip2region-sources">
-        <div class="ip2region-source-row">
-          <span class="ip2region-source-name">IPv4 数据源</span>
-          <span class="ip2region-source-ver">{{ ip2regionSourceVersion(ip2regionInfo.version) }}</span>
-          <el-tag size="small" effect="plain" disable-transitions :type="ip2regionSourceTagType(ip2regionInfo.update_status)">{{ ip2regionSourceLabel(ip2regionInfo.update_status) }}</el-tag>
-        </div>
-        <div class="ip2region-source-row">
-          <span class="ip2region-source-name">IPv6 数据源</span>
-          <template v-if="ip2regionInfo.v6_enabled">
-            <span class="ip2region-source-ver">{{ ip2regionSourceVersion(ip2regionInfo.v6_version) }}<template v-if="ip2regionV6EntriesLabel">（{{ ip2regionV6EntriesLabel }}）</template></span>
-            <el-tag size="small" effect="plain" disable-transitions :type="ip2regionSourceTagType(ip2regionInfo.v6_update_status)">{{ ip2regionSourceLabel(ip2regionInfo.v6_update_status) }}</el-tag>
-          </template>
-          <template v-else>
-            <span class="ip2region-source-ver ip2region-source-ver--off">未启用（开启后 IPv6 客户端与 IPv4 同语义解析，关闭时按「海外」处理）</span>
-          </template>
-          <el-switch
-            :model-value="ip2regionInfo.v6_enabled"
-            :disabled="isReadOnly || isSlaveNode || savingIP2RegionV6"
-            :loading="savingIP2RegionV6"
-            @change="toggleIP2RegionV6"
-          />
-        </div>
-        <div v-if="ip2regionInfo.v6_enabled && ip2regionInfo.v6_message" class="ip2region-source-msg">{{ ip2regionInfo.v6_message }}</div>
+      <DialogSectionHeader title="数据源" />
+      <div class="dialog-panel dialog-panel--flush library-sources-panel">
+        <el-table :data="ip2regionSourceRows" size="small" class="threat-source-table">
+          <el-table-column label="来源" min-width="260">
+            <template #default="{ row }">
+              <div class="lib-name-text">
+                <div class="lib-name-main">{{ row.name }}</div>
+                <div v-if="row.sub" class="lib-name-sub">{{ row.sub }}</div>
+              </div>
+            </template>
+          </el-table-column>
+          <el-table-column label="条目数" width="100" align="right">
+            <template #default="{ row }">{{ row.entries ? formatInt(row.entries) : '—' }}</template>
+          </el-table-column>
+          <el-table-column label="版本" width="110">
+            <template #default="{ row }"><span class="lib-version">{{ row.version || '未更新' }}</span></template>
+          </el-table-column>
+          <el-table-column label="状态" width="110">
+            <template #default="{ row }">
+              <el-tag v-if="!row.enabled" type="info" size="small" effect="light">已关闭</el-tag>
+              <el-tag v-else :type="ip2regionSourceTagType(row.status)" size="small" effect="light">{{ ip2regionSourceLabel(row.status) }}</el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="自动更新" width="90" align="center">
+            <template #default="{ row }">
+              <el-switch v-if="row.kind === 'v4'" :model-value="row.enabled" :disabled="isReadOnly || isSlaveNode" @change="(v: string | number | boolean) => toggleLibAutoUpdate({ key: 'ip2region', name: 'IP 地理库' } as LibRow, v === true)" />
+              <el-switch v-else :model-value="row.enabled" :disabled="isReadOnly || isSlaveNode || savingIP2RegionV6" :loading="savingIP2RegionV6" @change="(v: string | number | boolean) => toggleIP2RegionV6(v === true)" />
+            </template>
+          </el-table-column>
+        </el-table>
       </div>
+      <div v-if="ip2regionInfo.v6_enabled && ip2regionInfo.v6_message" class="dialog-panel ip2region-sources"><span class="info-note-bar"><span class="info-note-desc">{{ ip2regionInfo.v6_message }}</span></span></div>
       <DialogSectionHeader title="更新日志" />
       <div class="dialog-panel dialog-panel--flush">
         <div ref="ip2regionUpdateLogRef" class="update-log-container">
@@ -1094,10 +1101,24 @@ const ip2regionInfo = ref({ version: '', db_size: 0, auto_update: true, updated_
 
 // —— IPv6 数据源（单任务双源：v6 源状态/版本/开关，关闭显示「未启用」）——
 const savingIP2RegionV6 = ref(false)
-const ip2regionV6EntriesLabel = computed(() => {
-  const n = ip2regionInfo.value.v6_db_size
-  return n > 0 ? `${formatInt(n)} 段` : ''
-})
+const ip2regionSourceRows = computed(() => [
+  {
+    kind: 'v4', name: 'IPv4 数据源', sub: '',
+    entries: ip2regionInfo.value.db_size,
+    version: ip2regionSourceVersion(ip2regionInfo.value.version),
+    status: ip2regionInfo.value.update_status,
+    enabled: ip2regionInfo.value.auto_update,
+  },
+  {
+    kind: 'v6', name: 'IPv6 数据源',
+    sub: ip2regionInfo.value.v6_enabled ? '' : '未启用（开启后 IPv6 客户端与 IPv4 同语义解析，关闭时按「海外」处理）',
+    entries: ip2regionInfo.value.v6_enabled ? ip2regionInfo.value.v6_db_size : 0,
+    version: ip2regionInfo.value.v6_enabled ? ip2regionSourceVersion(ip2regionInfo.value.v6_version) : '',
+    status: ip2regionInfo.value.v6_update_status,
+    enabled: ip2regionInfo.value.v6_enabled,
+  },
+])
+
 const ip2regionSourceVersion = (v: string) => {
   if (!v || v === 'unknown') return '未安装'
   if (v === 'bundled') return '内置版本'
