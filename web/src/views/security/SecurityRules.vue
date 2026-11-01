@@ -531,15 +531,7 @@
       <template #header>
         <DialogHeader :icon="Location" title="更新 IP 库" subtitle="IP2Region 地理归属数据库的更新任务与更新日志" tone-class="lib-icon--ip" />
       </template>
-      <RuleLibScheduleEditor
-        :days="ip2regionInfo.schedule_days"
-        :time="ip2regionInfo.schedule_time"
-        :disabled="isReadOnly || isSlaveNode"
-        :unavailable-hint="ip2regionScheduleHint"
-        :saving="savingIP2RegionSchedule"
-        :tz="scheduleTz"
-        @save="saveIP2RegionSchedule"
-      />
+
       <DialogSectionHeader title="数据源" />
       <div class="dialog-panel dialog-panel--flush library-sources-panel">
         <el-table :data="ip2regionSourceRows" size="small" class="threat-source-table">
@@ -572,6 +564,17 @@
         </el-table>
       </div>
       <div v-if="ip2regionInfo.v6_enabled && ip2regionInfo.v6_message" class="dialog-panel ip2region-sources"><span class="info-note-bar"><span class="info-note-desc">{{ ip2regionInfo.v6_message }}</span></span></div>
+
+      <RuleLibScheduleEditor
+        :days="ip2regionInfo.schedule_days"
+        :time="ip2regionInfo.schedule_time"
+        :disabled="isReadOnly || isSlaveNode"
+        :unavailable-hint="ip2regionScheduleHint"
+        :saving="savingIP2RegionSchedule"
+        :tz="scheduleTz"
+        @save="saveIP2RegionSchedule"
+      />
+
       <DialogSectionHeader title="更新日志" />
       <div class="dialog-panel dialog-panel--flush">
         <div ref="ip2regionUpdateLogRef" class="update-log-container">
