@@ -626,16 +626,10 @@ const resetMfa = async (row: UserListItem): Promise<void> => {
     let code = ''
     if (operatorMfa) {
       if (mfaWriteGuard.value) {
-        // 守卫开启时后端第一层已豁免（守卫完成验码），对话框退化为纯确认——
+        // 守卫开启时后端第一层已豁免（守卫完成验码），确认退化为纯确认——
         // 保留后果说明与确认/取消，不再索取当前时间片验证码（索取也无码可用：
-        // 同片刚被守卫/登录消费，重放保护必拒）。
-        const r = await lbOpen({
-          title: '重置 MFA',
-          subtitle: `重置「${row.username}」的两步验证`,
-          message: '重置后该用户登录不再需要验证码，需重新绑定。',
-          icon: 'warning', tone: 'warning', mode: 'confirm', confirmText: '确认重置',
-        })
-        if (!r.ok) return
+        // 同片刚被守卫/登录消费，重放保护必拒）。普通确认框样式（与删除用户一致）。
+        await ElMessageBox.confirm('重置后该用户登录不再需要验证码，需重新绑定。', `重置「${row.username}」的两步验证`, { type: 'warning', confirmButtonText: '确认重置', cancelButtonText: '取消' })
       } else {
         // 用户裁决（N+10）：重置 MFA 与登录是仅有的两个允许恢复码的入口
         //（后端 MFAVerifyCode 消费口径）；step-up 写守卫链已收口为仅 TOTP。
@@ -649,13 +643,7 @@ const resetMfa = async (row: UserListItem): Promise<void> => {
         code = r.code ?? ''
       }
     } else {
-      const r = await lbOpen({
-        title: '重置 MFA',
-        subtitle: `重置用户「${row.username}」的两步验证`,
-        message: '重置后该用户登录不再需要验证码，需自行重新绑定。',
-        icon: 'warning', tone: 'warning', mode: 'confirm', confirmText: '确认重置',
-      })
-      if (!r.ok) return
+      await ElMessageBox.confirm('重置后该用户登录不再需要验证码，需自行重新绑定。', `重置用户「${row.username}」的两步验证`, { type: 'warning', confirmButtonText: '确认重置', cancelButtonText: '取消' })
     }
     await request.post(`/users/${row.id}/mfa/reset`, { code }, { silent: true })
     mfaAwareSuccess('已重置 MFA')

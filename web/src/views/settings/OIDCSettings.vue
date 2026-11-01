@@ -103,7 +103,7 @@
           </div>
         </div>
       </div>
-      <div class="form-tip-line">两项都填写时须同时满足；IdP 未返回 email/groups 声明时直接拒登（fail-visible），不会静默放行</div>
+      <div class="info-note-bar"><span class="info-note-desc">两项都填写时须同时满足；IdP 未返回 email/groups 声明时直接拒登（fail-visible），不会静默放行</span></div>
       </div>
     </div>
     </el-form>

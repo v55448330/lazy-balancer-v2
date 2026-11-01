@@ -24,9 +24,6 @@
           <input type="text" id="policy-auth-mode-static" aria-hidden="true" tabindex="-1" autocomplete="off" style="display:none">
           <el-tag type="primary" effect="plain" size="small">OIDC 企业认证</el-tag>
         </el-form-item>
-        <el-form-item label-width="0">
-          <div class="info-note-bar"><span class="info-note-desc">显示名与密码由认证服务管理，如需修改请前往 OIDC 服务</span></div>
-        </el-form-item>
       </template>
       <template v-else>
         <el-form-item label="显示名">
@@ -55,6 +52,7 @@
         </el-form-item>
       </template>
     </el-form>
+    <div v-if="isOIDCUser" class="info-note-bar"><span class="info-note-desc">显示名与密码由认证服务管理，如需修改请前往 OIDC 服务</span></div>
     <template #footer>
       <el-button :disabled="saving" @click="closeProfile">取消</el-button>
       <el-button v-if="!isOIDCUser" type="primary" :loading="saving" :disabled="isReadOnly || saving" @click="saveProfile">保存</el-button>
