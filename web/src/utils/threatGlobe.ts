@@ -14,7 +14,7 @@ import { hasOwn } from '@/utils/hasOwn'
 import { THREAT_COUNTRIES } from '@/utils/worldBorders'
 import { CHINA_PROVINCES } from '@/utils/chinaProvinces'
 import { loadAdmin1Tables, loadedAdmin1Tables } from '@/utils/admin1Loader'
-import { heatCss, heatEntriesEqual, maxHeatCount, pointInPolys as sharedPointInPolys, arcEndpoints, normalizeCountryName, aggregateCountryCounts, threatCountryGrid, countryGridCell, drillCountryAllowed, DOT_LAND, arcOriginForLocation, hasProvinceStats, drillCommitAllowed, drillClickIntent, provinceDotGrid, trafficOriginForCountry } from '@/utils/threatShared'
+import { heatCss, heatEntriesEqual, maxHeatCount, createHeatColorTransition, pointInPolys as sharedPointInPolys, arcEndpoints, normalizeCountryName, aggregateCountryCounts, threatCountryGrid, countryGridCell, drillCountryAllowed, DOT_LAND, arcOriginForLocation, hasProvinceStats, drillCommitAllowed, drillClickIntent, provinceDotGrid, trafficOriginForCountry } from '@/utils/threatShared'
 import type { ThreatScene, ThreatSceneOptions, CountryHeat } from '@/utils/threatScene'
 import { FLOW_ATTACK_COLOR, FLOW_NORMAL_COLOR, FLOW_FLIGHT_MS, FLOW_HOVER_TIP_COLOR, FLOW_RIPPLE_SECONDS, FLOW_RIPPLE_START_RADIUS, FLOW_RIPPLE_GROWTH_RADIUS, FLOW_RIPPLE_LINE_WIDTH, FLOW_RIPPLE_ALPHA, easeOutCubic, flowArcLabel, flowArcTierWidth, type FlowArcTier } from '@/utils/threatTheme'
 import { planTrafficArcs } from '@/utils/threatFlowRules'
@@ -170,6 +170,9 @@ export function createThreatGlobe(container: HTMLElement, opts?: ThreatSceneOpti
   let siteConfigured = opts?.siteConfigured ?? !!opts?.serverCentroid
 
   let countryCounts = new Map<string, number>()
+  // 国家热力颜色过渡动画器（threatShared 单源）：数据刷新颜色平滑收敛，
+  // 消除 max 变化引发的全屏跳色；收敛后 advance 恒 false 零重绘开销。
+  const heatTransition = createHeatColorTransition()
   let provinceCounts = new Map<string, number>()
   let drilledName: string | null = null
   // 首帧先出球体/尺寸正确，再在第二帧后构建世界点阵；否则构造期
@@ -614,19 +617,22 @@ export function createThreatGlobe(container: HTMLElement, opts?: ThreatSceneOpti
     // 对数热力标尺：max=当前点集数据集（世界国家/下钻省随 activeCounts 切换），
     // 颜色由 threatShared.heatCss 查表（强度预计算，不逐帧重算）。
     const heatMax = maxHeatCount(activeCounts)
-    const colorCache = new Map<number, THREE.Color>()
-    const colorFor = (count: number): THREE.Color => {
-      const cached = colorCache.get(count)
+    const colorCache = new Map<string, THREE.Color>()
+    const colorFor = (count: number, key: string): THREE.Color => {
+      const target = count > 0 ? heatCss(count, heatMax) : DOT_BASE
+      // 过渡动画器按国家键取当前色（未定向/已收敛=目标色本身）
+      const css = heatTransition.cssFor(key, target)
+      const cached = colorCache.get(css)
       if (cached) return cached
       const color = new THREE.Color()
-      color.setStyle(count > 0 ? heatCss(count, heatMax) : DOT_BASE)
-      colorCache.set(count, color)
+      color.setStyle(css)
+      colorCache.set(css, color)
       return color
     }
     const arr = colorAttr.array as Float32Array
     for (let i = 0; i < activeDots.length; i++) {
       const d = activeDots[i]
-      const c = hoveredDotCountry && d.key === hoveredDotCountry ? HOVER_DOT_COLOR : colorFor(activeCounts.get(d.key) ?? 0)
+      const c = hoveredDotCountry && d.key === hoveredDotCountry ? HOVER_DOT_COLOR : colorFor(activeCounts.get(d.key) ?? 0, d.key)
       arr[i * 3] = c.r
       arr[i * 3 + 1] = c.g
       arr[i * 3 + 2] = c.b
@@ -1134,6 +1140,8 @@ export function createThreatGlobe(container: HTMLElement, opts?: ThreatSceneOpti
     processHover()
     drawFlowOverlay(now, dt / 1000)
     if (!paused) {
+      // 热力颜色过渡：活跃期间每帧重着色（约 0.4s 收敛窗口），收敛即停。
+      if (heatTransition.advance(dt) && activeDots) updateDotColors()
       clock.t += dt / 1000
       if (scanMat) scanMat.uniforms.uTime.value = clock.t
       // 弧线老化淘汰（队首=最旧；保持其余对象次序稳定，动画相位不重排）
@@ -1199,6 +1207,13 @@ export function createThreatGlobe(container: HTMLElement, opts?: ThreatSceneOpti
       const nextCounts = aggregateCountryCounts(entries)
       if (heatEntriesEqual(countryCounts, [...nextCounts].map(([name, count]) => ({ name, count })))) return
       countryCounts = nextCounts
+      // 颜色过渡目标：仅命中国家（cnt=0 恒底色，不参与动画）
+      const heatMaxT = maxHeatCount(countryCounts)
+      const targets = new Map<string, string>()
+      for (const [key, cnt] of countryCounts) {
+        if (cnt > 0) targets.set(key, heatCss(cnt, heatMaxT))
+      }
+      heatTransition.setTargets(targets)
       applyHotspots()
       if (!drilledName) {
         // 计数变化不改点集/位置：已建层只重算颜色，避免 30s 轮询重建

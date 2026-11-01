@@ -120,8 +120,10 @@ test('返回世界视口在两引擎内各自单源（zoomOut/resetView 不得�
 test('地球点色更新用单次局部缓存（不得跨 30s 轮询累积）', () => {
   const update = member(globeSrc, 'function updateDotColors(')
   assert.doesNotMatch(globeSrc, /const heatColorCache = new Map/, '全局按计数缓存必须退役（慢泄漏）')
-  assert.match(update, /const colorCache = new Map<number, THREE\.Color>\(\)/, '每次更新使用局部缓存')
-  assert.match(update, /const colorFor = \(count: number\)/, '颜色复用局部 colorFor')
+  // 过渡动画后缓存键=目标 css 串（过渡期同 count 颜色随帧变化，count 键会冻结中间色）；
+  // 缓存本体仍是函数内局部 Map，函数结束即可回收（防慢泄漏语义不变）。
+  assert.match(update, /const colorCache = new Map<string, THREE\.Color>\(\)/, '每次更新使用局部缓存')
+  assert.match(update, /const colorFor = \(count: number, key: string\)/, '颜色复用局部 colorFor（按国家键取过渡色）')
 })
 
 test('热力对数标尺两引擎同源：各引擎按当前数据集 max 归一（自适应，禁写死分母）', () => {

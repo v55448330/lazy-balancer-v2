@@ -12,21 +12,90 @@ type Rgb = [number, number, number]
  *  原首色 #1b2a41 比点阵底色 #2c4260 更暗，导致「命中 1 次」比 0 次更暗。 */
 const LAND_BASE_RGB: Rgb = [44, 66, 96]
 
-/** 热力阶梯（与后端口径无关，纯前端视觉）：蓝→紫→红平滑十档，少量攻击
- *  接近原色（深蓝底），越严重越接近红色，不使用绿色；对数标尺下每个数量
- *  级跨 1–2 档，色相渐进无跳变。 */
-const HEAT_LADDER: Rgb[] = [
-  LAND_BASE_RGB,               // 深蓝底（0 命中）
-  [56, 80, 130],               // 钢蓝（极少量）
-  [75, 95, 155],               // 中蓝（~10 级）
-  [110, 95, 165],              // 蓝紫（~50 级）
-  [145, 85, 160],              // 紫（~100 级）
-  [175, 80, 135],              // 紫红（~200 级）
-  [200, 78, 105],              // 品红（~500 级）
-  [218, 80, 82],               // 红粉（~1000 级）
-  [226, 84, 84],               // 红（~5000 级）
-  [238, 70, 70],               // 亮红（最大命中）
+/** 强度整形 gamma（>1）：对数标尺的原始强度对低段过于慷慨（max=100k 时
+ *  count=100 已到 40% 强度），视觉上「100 上下一过就红透」。t^1.5 把低段
+ *  压回蓝域、给高段让出分辨空间；heatIntensity 保持纯对数（图例刻度/外部
+ *  语义不变），整形只发生在查色路径。 */
+const HEAT_GAMMA = 1.5
+
+/** Oklab 控制点（感知均匀设计，v2.4.x 用户裁定）：低段蓝→蓝紫压缩（少量
+ *  攻击≈底色语义），高段 紫→品红→红→橙红→亮红 逐级拉开（旧 RGB 阶梯高段
+ *  四档同红的矫正——500~50000 全挤在看不出差别的红区）。插值在 Oklab 空间
+ *  折线进行（不穿 RGB 暗浊带），出界色度按比例收缩回 sRGB 色域。 */
+type OklabStop = { t: number; L: number; a: number; b: number }
+
+function srgbToLinear(c: number): number {
+  const v = c / 255
+  return v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4
+}
+
+function linearToSrgb(v: number): number {
+  const s = v <= 0.0031308 ? v * 12.92 : 1.055 * v ** (1 / 2.4) - 0.055
+  return Math.min(1, Math.max(0, s))
+}
+
+function srgbToOklab(rgb: Rgb): { L: number; a: number; b: number } {
+  const [r, g, b] = rgb.map(srgbToLinear)
+  const l = Math.cbrt(0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b)
+  const m = Math.cbrt(0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b)
+  const s = Math.cbrt(0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b)
+  return {
+    L: 0.2104542553 * l + 0.793617785 * m - 0.0040720468 * s,
+    a: 1.9779984951 * l - 2.428592205 * m + 0.4505937099 * s,
+    b: 0.0259040371 * l + 0.7827717662 * m - 0.808675766 * s,
+  }
+}
+
+function oklabToSrgb(L: number, a: number, b: number): Rgb {
+  // 出界色度收缩：高色度红/紫超 sRGB 色域时按比例降 a/b 重投（≤8 轮收敛）。
+  let ca = a
+  let cb = b
+  for (let i = 0; i < 8; i++) {
+    const l_ = L + 0.3963377774 * ca + 0.2158037573 * cb
+    const m_ = L - 0.1055613458 * ca - 0.0638541728 * cb
+    const s_ = L - 0.0894841775 * ca - 1.291485548 * cb
+    const lr = l_ ** 3
+    const mg = m_ ** 3
+    const sb = s_ ** 3
+    const r = +4.0767416621 * lr - 3.3077115913 * mg + 0.2309699292 * sb
+    const g = -1.2684380046 * lr + 2.6097574011 * mg - 0.3413193965 * sb
+    const bl = -0.0041960863 * lr - 0.7034186147 * mg + 1.707614701 * sb
+    const overflow = Math.max(0, r - 1, g - 1, bl - 1, -r, -g, -bl)
+    if (overflow <= 0) {
+      return [Math.round(linearToSrgb(r) * 255), Math.round(linearToSrgb(g) * 255), Math.round(linearToSrgb(bl) * 255)]
+    }
+    ca *= 0.92
+    cb *= 0.92
+  }
+  return [Math.round(linearToSrgb(0) * 255), Math.round(linearToSrgb(0) * 255), Math.round(linearToSrgb(0) * 255)]
+}
+
+const BASE_OKLAB = srgbToOklab(LAND_BASE_RGB)
+const HEAT_STOPS: readonly OklabStop[] = [
+  { t: 0.0, ...BASE_OKLAB },        // 深蓝底（0 命中）
+  { t: 0.14, L: 0.47, a: -0.045, b: -0.095 },  // 钢蓝
+  { t: 0.28, L: 0.53, a: 0.01, b: -0.125 },    // 蓝紫
+  { t: 0.42, L: 0.57, a: 0.09, b: -0.105 },    // 紫
+  { t: 0.56, L: 0.6, a: 0.165, b: -0.045 },    // 品红
+  { t: 0.68, L: 0.63, a: 0.195, b: 0.045 },    // 红
+  { t: 0.8, L: 0.665, a: 0.175, b: 0.115 },    // 橙红
+  { t: 1.0, L: 0.625, a: 0.225, b: 0.125 },    // 亮红（数据集头部）
 ]
+
+/** 强度 → Oklab 折线插值 → sRGB。 */
+function heatRgb(t: number): Rgb {
+  const shaped = Math.min(1, Math.max(0, t))
+  let seg = 0
+  while (seg < HEAT_STOPS.length - 2 && shaped > HEAT_STOPS[seg + 1].t) seg++
+  const a = HEAT_STOPS[seg]
+  const b = HEAT_STOPS[seg + 1]
+  const local = (shaped - a.t) / (b.t - a.t)
+  return oklabToSrgb(
+    a.L + (b.L - a.L) * local,
+    a.a + (b.a - a.a) * local,
+    a.b + (b.b - a.b) * local,
+  )
+}
 
 // 地图/地球未命中国家点阵同色、同不透明度（用户裁定：沿用地图原透明度）。
 export const DOT_LAND = `rgb(${LAND_BASE_RGB[0]},${LAND_BASE_RGB[1]},${LAND_BASE_RGB[2]})`
@@ -57,29 +126,17 @@ export function heatIntensity(count: number, maxCount: number): number {
   return Math.min(1, Math.log10(count + 1) / denom)
 }
 
-/** 强度 → 七档阶梯折线插值采样。 */
-function heatRgb(t: number): Rgb {
-  const scaled = Math.min(1, Math.max(0, t)) * (HEAT_LADDER.length - 1)
-  const seg = Math.min(HEAT_LADDER.length - 2, Math.floor(scaled))
-  const local = scaled - seg
-  const a = HEAT_LADDER[seg]
-  const b = HEAT_LADDER[seg + 1]
-  return [
-    Math.round(a[0] + (b[0] - a[0]) * local),
-    Math.round(a[1] + (b[1] - a[1]) * local),
-    Math.round(a[2] + (b[2] - a[2]) * local),
-  ]
-}
-
-/** 色阶查找表：强度 0..1 均分 256 档，模块加载时一次预计算——渲染路径只做
- *  一次 log10 + 一次查表，不逐帧重算插值；表与 max 无关，无需按数据集缓存。 */
+/** 色阶查找表：强度 0..1 均分 256 档，模块加载时一次预计算（Oklab 插值 +
+ *  gamma 整形在预计算期一次完成）——渲染路径只做一次 log10 + 一次查表，
+ *  不逐帧重算插值；表与 max 无关，无需按数据集缓存。 */
 const HEAT_LUT_SIZE = 256
 const HEAT_LUT: readonly string[] = Array.from({ length: HEAT_LUT_SIZE }, (_, i) => {
-  const [r, g, b] = heatRgb(i / (HEAT_LUT_SIZE - 1))
+  const [r, g, b] = heatRgb((i / (HEAT_LUT_SIZE - 1)) ** HEAT_GAMMA)
   return `rgb(${r},${g},${b})`
 })
 
-/** 热力色（count=数据集内命中数，maxCount=数据集最大命中数；count≤0=底色）。 */
+/** 热力色（count=数据集内命中数，maxCount=数据集最大命中数；count≤0=底色）。
+ *  gamma 整形已烘焙进 LUT 构建期，查表按纯对数强度索引（勿在此二次整形）。 */
 export function heatCss(count: number, maxCount: number): string {
   return HEAT_LUT[Math.round(heatIntensity(count, maxCount) * (HEAT_LUT_SIZE - 1))]
 }
@@ -93,11 +150,13 @@ export function maxHeatCount(counts: ReadonlyMap<string, number>): number {
   return max
 }
 
-/** 图例渐变单源：七档阶梯按强度位排布成 CSS 渐变——大屏图例与两引擎同源，防漂移。 */
+/** 图例渐变单源：Oklab 控制点按强度位排布成 CSS 渐变——大屏图例与两引擎
+ *  同源（同一 HEAT_STOPS/LUT 口径），防漂移。 */
 export function heatRampGradientCss(): string {
-  const stops = HEAT_LADDER.map((rgb, i) => {
-    const percent = Number(((i / (HEAT_LADDER.length - 1)) * 100).toFixed(1))
-    return `rgb(${rgb[0]},${rgb[1]},${rgb[2]}) ${percent}%`
+  const stops = HEAT_STOPS.map((stop) => {
+    const [r, g, b] = heatRgb(stop.t ** HEAT_GAMMA)
+    const percent = Number((stop.t * 100).toFixed(1))
+    return `rgb(${r},${g},${b}) ${percent}%`
   })
   return `linear-gradient(90deg, ${stops.join(', ')})`
 }
@@ -125,6 +184,77 @@ function heatLegendTickLabel(value: number): string {
   if (value < 1000) return String(value)
   const k = Math.round((value / 1000) * 10) / 10
   return `${Number.isInteger(k) ? k : k.toFixed(1)}k`
+}
+
+/** 热力颜色过渡动画器（v2.4.x 用户裁定「按建议处理」可选加项）：数据轮询
+ *  刷新时国家颜色向目标色指数平滑收敛（τ=100ms，约 0.4~0.5s 视觉收敛），消除
+ *  max 变化引发的全屏跳色。首帧吸附目标色（无渐入残影）；收敛后 advance
+ *  恒 false（引擎停止重绘，热路径零开销）。两引擎各持一个实例，键=国家名。 */
+export function createHeatColorTransition(tauMs = 100): {
+  setTargets: (targets: ReadonlyMap<string, string>) => void
+  advance: (dtMs: number) => boolean
+  cssFor: (key: string, fallback: string) => string
+} {
+  type RgbState = [number, number, number]
+  const current = new Map<string, RgbState>()
+  const targets = new Map<string, RgbState>()
+  let active = false
+
+  const parse = (css: string): RgbState => {
+    const m = css.match(/^rgb\((\d+),(\d+),(\d+)\)$/)
+    return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : [44, 66, 96]
+  }
+  const css = (s: RgbState): string => `rgb(${s[0]},${s[1]},${s[2]})`
+
+  return {
+    setTargets(next: ReadonlyMap<string, string>): void {
+      let changed = next.size !== targets.size
+      targets.clear()
+      for (const [key, cssColor] of next) {
+        const t = parse(cssColor)
+        targets.set(key, t)
+        const cur = current.get(key)
+        if (!cur || cur[0] !== t[0] || cur[1] !== t[1] || cur[2] !== t[2]) changed = true
+      }
+      if (!changed) return
+      if (current.size === 0) {
+        // 首帧吸附（无旧色可动画），避免初始渐入残影；此后任何变更走过渡。
+        for (const [key, t] of targets) current.set(key, [...t] as RgbState)
+        active = true
+        return
+      }
+      active = true
+    },
+    advance(dtMs: number): boolean {
+      if (!active) return false
+      const k = 1 - Math.exp(-Math.max(0, dtMs) / tauMs)
+      let settled = true
+      for (const [key, t] of targets) {
+        const cur = current.get(key)
+        if (!cur) {
+          current.set(key, [...t] as RgbState)
+          continue
+        }
+        let done = true
+        for (let i = 0; i < 3; i++) {
+          const delta = t[i] - cur[i]
+          if (Math.abs(delta) > 1) {
+            cur[i] += delta * k
+            done = false
+          } else if (delta !== 0) {
+            cur[i] = t[i]
+          }
+        }
+        if (!done) settled = false
+      }
+      if (settled) active = false
+      return true
+    },
+    cssFor(key: string, fallback: string): string {
+      const cur = current.get(key)
+      return cur ? css(cur) : fallback
+    },
+  }
 }
 
 /** 经纬度是否落在任一扁平多边形组内（ray-casting；两引擎 hover/点击共用）。 */

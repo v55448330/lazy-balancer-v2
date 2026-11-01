@@ -19,7 +19,7 @@ import {
 import { THREAT_COUNTRIES } from '@/utils/worldBorders'
 import { hasOwn } from '@/utils/hasOwn'
 import { CHINA_PROVINCES } from '@/utils/chinaProvinces'
-import { heatCss, heatEntriesEqual, maxHeatCount, pointInPolys as sharedPointInPolys, adminShortName as sharedShortName, DOT_LAND as SHARED_DOT_LAND, normalizeCountryName, aggregateCountryCounts, threatCountryGrid, countryGridCell, POINTY_TOP_HEX_VERTICES, drillCountryAllowed, arcOriginForLocation, hasProvinceStats, drillCommitAllowed, drillClickIntent, provinceDotGrid, trafficOriginForCountry, type ProvinceDotRow } from '@/utils/threatShared'
+import { heatCss, heatEntriesEqual, maxHeatCount, createHeatColorTransition, pointInPolys as sharedPointInPolys, adminShortName as sharedShortName, DOT_LAND as SHARED_DOT_LAND, normalizeCountryName, aggregateCountryCounts, threatCountryGrid, countryGridCell, POINTY_TOP_HEX_VERTICES, drillCountryAllowed, arcOriginForLocation, hasProvinceStats, drillCommitAllowed, drillClickIntent, provinceDotGrid, trafficOriginForCountry, type ProvinceDotRow } from '@/utils/threatShared'
 import type { Centroid } from '@/utils/countryCentroids'
 import { loadAdmin1Tables } from '@/utils/admin1Loader'
 import { FLOW_ATTACK_COLOR as ATTACK_COLOR, FLOW_NORMAL_COLOR as NORMAL_COLOR, FLOW_FLIGHT_MS, FLOW_HOVER_TIP_COLOR, FLOW_RIPPLE_SECONDS, FLOW_RIPPLE_START_RADIUS, FLOW_RIPPLE_GROWTH_RADIUS, FLOW_RIPPLE_LINE_WIDTH, FLOW_RIPPLE_ALPHA, easeOutCubic, flowArcLabel, flowArcTierWidth, type FlowArcTier } from '@/utils/threatTheme'
@@ -359,6 +359,9 @@ export function createThreatScene(container: HTMLElement, opts?: ThreatSceneOpti
 
   // ---- 静态层 ----
   let staticDirty = true
+  // 国家热力颜色过渡动画器（threatShared 单源）：数据刷新颜色平滑收敛，
+  // 消除 max 变化引发的全屏跳色；收敛后 advance 恒 false 零重绘开销。
+  const heatTransition = createHeatColorTransition()
 
   function rebuildStaticLayer(): void {
     // DPR 计入离屏分配：原按 CSS 像素分配、blit 时放回 CSS
@@ -397,7 +400,7 @@ export function createThreatScene(container: HTMLElement, opts?: ThreatSceneOpti
           land.addPath(path)
           continue
         }
-        const fill = heatCss(cnt, heatMax)
+        const fill = heatTransition.cssFor(key, heatCss(cnt, heatMax))
         let group = byFill.get(fill)
         if (!group) {
           group = new Path2D()
@@ -1084,6 +1087,9 @@ export function createThreatScene(container: HTMLElement, opts?: ThreatSceneOpti
       }
     }
 
+    // 热力颜色过渡：活跃期间每帧重建静态层（约 0.4s 收敛窗口），收敛即停。
+    if (heatTransition.advance(delta * 1000)) staticDirty = true
+
     // hover 拾取（帧内一次）
     if (pendingHover) {
       hoverScreen = pendingHover
@@ -1211,6 +1217,13 @@ export function createThreatScene(container: HTMLElement, opts?: ThreatSceneOpti
       const nextCounts = aggregateCountryCounts(entries)
       if (heatEntriesEqual(countryCounts, [...nextCounts].map(([name, count]) => ({ name, count })))) return
       countryCounts = nextCounts
+      // 颜色过渡目标：仅命中国家（cnt=0 恒底色，不参与动画）
+      const heatMax = maxHeatCount(countryCounts)
+      const targets = new Map<string, string>()
+      for (const [key, cnt] of countryCounts) {
+        if (cnt > 0) targets.set(key, heatCss(cnt, heatMax))
+      }
+      heatTransition.setTargets(targets)
       staticDirty = true
       // 暂停态无 tick 驱动：数据到达即补绘（否则热力染色停在上一次暂停帧）
       if (paused) renderOnce()
