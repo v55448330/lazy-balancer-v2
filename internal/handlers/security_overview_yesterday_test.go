@@ -182,18 +182,18 @@ func TestGetSecurityOverview_normalRequestDiffCrossDay(t *testing.T) {
 	seedL4Allowed(t, "lb_tcp_1", todayStart.Add(time.Hour), 999)
 
 	resp := fetchOverviewNewFields(t)
-	// 昨日 = (250−100) − (25−10) = 135；今日 = lb_a (400−250)−(40−25)=135、lb_b (5−0)−(5−0)=0 → 合计 135。
-	if got := *resp.Data.NormalYesterday; got != 135 {
-		t.Fatalf("normal_yesterday=%d, want 135", got)
+	// 昨日 = HTTP 135 + TCP 34 = 169；今日 = HTTP 135 + TCP 12 = 147（主数值=HTTP+TCP 合计）。
+	if got := *resp.Data.NormalYesterday; got != 169 {
+		t.Fatalf("normal_yesterday=%d, want 169（HTTP 135 + TCP 34）", got)
 	}
 	if got := *resp.Data.NormalYesterdayHTTP; got != 135 {
-		t.Fatalf("normal_yesterday_http=%d, want 135（与 normal_yesterday 同值）", got)
+		t.Fatalf("normal_yesterday_http=%d, want 135", got)
 	}
-	if got := *resp.Data.NormalToday; got != 135 {
-		t.Fatalf("normal_today=%d, want 135（lb_a 150−15=135，lb_b 5−5=0）", got)
+	if got := *resp.Data.NormalToday; got != 147 {
+		t.Fatalf("normal_today=%d, want 147（HTTP 135 + TCP 12）", got)
 	}
 	if got := *resp.Data.NormalTodayHTTP; got != 135 {
-		t.Fatalf("normal_today_http=%d, want 135（与 normal_today 同值）", got)
+		t.Fatalf("normal_today_http=%d, want 135", got)
 	}
 	if got := *resp.Data.NormalTodayTCP; got != 12 {
 		t.Fatalf("normal_today_tcp=%d, want 12（仅全局行，per-rule 999 不得计入）", got)

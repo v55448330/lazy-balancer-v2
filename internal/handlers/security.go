@@ -5217,10 +5217,12 @@ func (h *Handlers) GetSecurityOverview(c *gin.Context) {
 	overview.YesterdayBlockedTCP = agg.yesterdayBlockedTCP
 	overview.YesterdayDetected = agg.yesterdayDetected
 	overview.YesterdayDetectedTCP = agg.yesterdayDetectedTCP // L4 信任检测（trust_detect）产 tcp+logged
-	overview.NormalToday = agg.normalTodayHTTP
+	// 正常请求主数值 = HTTP + TCP 合计（未拦截且未检测的全部放行流量，含规则
+	// 未匹配的直连语义边界见 models/apidocs 披露）；HTTP/TCP 拆分行各自单列。
+	overview.NormalToday = agg.normalTodayHTTP + agg.normalTodayTCP
 	overview.NormalTodayHTTP = agg.normalTodayHTTP
 	overview.NormalTodayTCP = agg.normalTodayTCP
-	overview.NormalYesterday = agg.normalYesterdayHTTP
+	overview.NormalYesterday = agg.normalYesterdayHTTP + agg.normalYesterdayTCP
 	overview.NormalYesterdayHTTP = agg.normalYesterdayHTTP
 	overview.NormalYesterdayTCP = agg.normalYesterdayTCP
 
