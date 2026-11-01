@@ -157,6 +157,10 @@ func seedL4Allowed(t *testing.T, ruleID string, ts time.Time, allowed int) {
 // 正常 TCP=lb_l4_conn_history 全局行 allowed 日窗口求和。
 func TestGetSecurityOverview_normalRequestDiffCrossDay(t *testing.T) {
 	setupSecurityPolicyTestDB(t)
+	resetSecurityOverviewAggCacheForTest()
+	t.Cleanup(resetSecurityOverviewAggCacheForTest)
+	resetSecurityOverviewAggCacheForTest()
+	t.Cleanup(resetSecurityOverviewAggCacheForTest)
 	loc := services.CurrentLocation()
 	now := time.Now().In(loc)
 	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
@@ -165,33 +169,31 @@ func TestGetSecurityOverview_normalRequestDiffCrossDay(t *testing.T) {
 	anchorToday := todayStart.Add(-time.Hour) // 今日起点前末样本（昨日末尾）
 	latest := now.UTC().Truncate(time.Second)
 
-	seedGlobalSample(t, anchorYday, 100)
-	seedGlobalSample(t, anchorToday, 250)
-	seedGlobalSample(t, latest, 400)
-	// per-rule 被拦累计：lb_a 昨日 +15、今日 +15；lb_b 今日 +5。
-	seedRuleBlocked(t, "lb_a", anchorYday, 10)
-	seedRuleBlocked(t, "lb_a", anchorToday, 25)
-	seedRuleBlocked(t, "lb_a", latest, 40)
-	seedRuleBlocked(t, "lb_b", anchorToday, 0)
-	seedRuleBlocked(t, "lb_b", latest, 5)
+	// per-rule 单行全列种子（生产行形状——同时间戳拆行会让 MAX(id) 锚点
+	// 取到 total=0 的行）：lb_a 100/250/400 总量、10/25/40 被拦；lb_b 0/5。
+	seedRuleCounters(t, "lb_a", anchorYday, 100, 10, 0)
+	seedRuleCounters(t, "lb_a", anchorToday, 250, 25, 0)
+	seedRuleCounters(t, "lb_a", latest, 400, 40, 0)
+	seedRuleCounters(t, "lb_b", anchorToday, 0, 0, 0)
+	seedRuleCounters(t, "lb_b", latest, 5, 5, 0)
 	// TCP 正常连接：昨日窗 34、今日窗 12（全局行；per-rule 行不参与读侧求和）。
 	seedL4Allowed(t, "", ydayStart.Add(time.Hour), 34)
 	seedL4Allowed(t, "", todayStart.Add(time.Hour), 12)
 	seedL4Allowed(t, "lb_tcp_1", todayStart.Add(time.Hour), 999)
 
 	resp := fetchOverviewNewFields(t)
-	// 昨日 = (250−100) − ((25−10)+(0−0)) = 135；今日 = (400−250) − ((40−25)+(5−0)) = 130。
+	// 昨日 = (250−100) − (25−10) = 135；今日 = lb_a (400−250)−(40−25)=135、lb_b (5−0)−(5−0)=0 → 合计 135。
 	if got := *resp.Data.NormalYesterday; got != 135 {
 		t.Fatalf("normal_yesterday=%d, want 135", got)
 	}
 	if got := *resp.Data.NormalYesterdayHTTP; got != 135 {
 		t.Fatalf("normal_yesterday_http=%d, want 135（与 normal_yesterday 同值）", got)
 	}
-	if got := *resp.Data.NormalToday; got != 130 {
-		t.Fatalf("normal_today=%d, want 130", got)
+	if got := *resp.Data.NormalToday; got != 135 {
+		t.Fatalf("normal_today=%d, want 135（lb_a 150−15=135，lb_b 5−5=0）", got)
 	}
-	if got := *resp.Data.NormalTodayHTTP; got != 130 {
-		t.Fatalf("normal_today_http=%d, want 130（与 normal_today 同值）", got)
+	if got := *resp.Data.NormalTodayHTTP; got != 135 {
+		t.Fatalf("normal_today_http=%d, want 135（与 normal_today 同值）", got)
 	}
 	if got := *resp.Data.NormalTodayTCP; got != 12 {
 		t.Fatalf("normal_today_tcp=%d, want 12（仅全局行，per-rule 999 不得计入）", got)
@@ -205,6 +207,10 @@ func TestGetSecurityOverview_normalRequestDiffCrossDay(t *testing.T) {
 // 样本当前值（总请求与 per-rule 被拦同法），不出现负数。
 func TestGetSecurityOverview_normalRequestDiffResetClamp(t *testing.T) {
 	setupSecurityPolicyTestDB(t)
+	resetSecurityOverviewAggCacheForTest()
+	t.Cleanup(resetSecurityOverviewAggCacheForTest)
+	resetSecurityOverviewAggCacheForTest()
+	t.Cleanup(resetSecurityOverviewAggCacheForTest)
 	loc := services.CurrentLocation()
 	now := time.Now().In(loc)
 	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
@@ -213,18 +219,16 @@ func TestGetSecurityOverview_normalRequestDiffResetClamp(t *testing.T) {
 	anchorToday := todayStart.Add(-time.Hour)
 	latest := now.UTC().Truncate(time.Second)
 
-	seedGlobalSample(t, anchorYday, 100)
-	seedGlobalSample(t, anchorToday, 250)
-	seedGlobalSample(t, latest, 200) // 今日内重置：< anchorToday
-	seedRuleBlocked(t, "lb_a", anchorYday, 10)
-	seedRuleBlocked(t, "lb_a", anchorToday, 25)
-	seedRuleBlocked(t, "lb_a", latest, 5) // 重置：< 25
+	// per-rule 转发总量：lb_a 100/250/200（今日内重置：< anchorToday）。
+	seedRuleCounters(t, "lb_a", anchorYday, 100, 10, 0)
+	seedRuleCounters(t, "lb_a", anchorToday, 250, 25, 0)
+	seedRuleCounters(t, "lb_a", latest, 200, 5, 0)
 
 	resp := fetchOverviewNewFields(t)
 	// 今日总请求差分=200（取 cur）、被拦差分=5（取 cur）→ 200−5=195；
 	// 昨日不受影响 = (250−100) − 15 = 135。
 	if got := *resp.Data.NormalToday; got != 195 {
-		t.Fatalf("normal_today=%d, want 195（重置钳制：增量取 cur）", got)
+		t.Fatalf("normal_today=%d, want 195（重置钳制：totalΔ=200−blocked5）", got)
 	}
 	if got := *resp.Data.NormalYesterday; got != 135 {
 		t.Fatalf("normal_yesterday=%d, want 135（昨日窗口不受今日重置影响）", got)

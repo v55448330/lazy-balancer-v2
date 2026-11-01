@@ -166,10 +166,11 @@
         <div class="info-item">
           <span class="info-label">版本</span>
           <div class="version-actions">
-            <el-tag type="info" size="small">{{ appVersion }}</el-tag>
             <!-- 检查更新入口：进页拉取一次官网版本目录，仅在有更新时渲染；
-                 AccessibleLink 保证键盘/读屏可达（与页内「支持的操作」同族）。 -->
-            <AccessibleLink v-if="updateAvailable" type="warning" size="small" @click="openUpdateDialog">发现新版本 {{ updateBadgeVersion }}，点击查看</AccessibleLink>
+                 AccessibleLink 保证键盘/读屏可达（与页内「支持的操作」同族）。
+                 提示置于版本号标签左侧，small 号不加粗。 -->
+            <AccessibleLink v-if="updateAvailable" type="warning" size="small" class="update-hint-link" @click="openUpdateDialog">发现新版本 {{ updateBadgeVersion }}，点击查看</AccessibleLink>
+            <el-tag type="info" size="small">{{ appVersion }}</el-tag>
           </div>
         </div>
         <div class="info-item">
@@ -2081,6 +2082,7 @@ const handleSave = async () => {
 
 /* 检查更新：版本行入口组与弹框发布说明（插值渲染，与 info-note-bar 的虚线 hairline 同族）。 */
 .version-actions { display: flex; align-items: center; gap: 8px; }
+.update-hint-link { font-weight: normal; font-size: 12px; }
 .release-version-row { display: flex; align-items: center; gap: 8px; }
 .release-version { font-size: 20px; font-weight: 600; color: var(--el-text-color-primary); }
 .release-theme { margin: 6px 0 0; font-size: 12.5px; color: var(--el-text-color-secondary); line-height: 1.6; }

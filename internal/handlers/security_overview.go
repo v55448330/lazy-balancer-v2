@@ -494,6 +494,7 @@ func securityOverviewRuleMetricAnchorAt(database *sql.DB, at time.Time, column s
 
 // 总览差分消费的 metrics_history 计数列白名单（包内常量，非外部输入）。
 const (
+	securityOverviewColTotal   = "requests_total"
 	securityOverviewColBlocked = "requests_blocked"
 	securityOverviewColLogged  = "requests_logged"
 )
@@ -517,52 +518,63 @@ func securityOverviewRuleMetricDelta(database *sql.DB, from, to time.Time, colum
 	return sum, nil
 }
 
-// securityOverviewNormalHTTPDiff 正常请求（HTTP）差分：今日=最新累计−今日
-// 起点前末样本−今日被拦差分−今日检测差分；昨日=今日起点前末样本−昨日起点
-// 前末样本−昨日被拦差分−昨日检测差分。三列严格互斥（检测放行拆分，2026-11）：
-// 检测（logged）=审计行存在且放行的请求，与被拦/正常不重不漏。样本不足
-// （锚不到昨日起点前末样本，即指标历史短于 2 天）→ 双返回 0（样本积累中）。
-// 总请求/被拦/检测差分均带重置钳制（clampedDelta）；减法结果极端为负（口径
-// 差异形态）时钳零（正常请求数不出负数）。logged 列缺席（历史行/旧镜像
-// 快照）=0，公式退化原口径——历史不回溯，切换点前后口径断裂见 apidocs 披露。
+// securityOverviewNormalHTTPDiff 正常请求（HTTP）差分：规则级真实转发计数口径——
+// 逐规则 requests_total − requests_blocked − requests_logged（三列同源自
+// lazybalancer_* 计数族，每规则独立钳制 /load 重置，逐规则钳零后求和）。
+// 不再使用 server 全局 caddy_http_requests_total：v2.11 起该指标按 handler
+// 逐位计数（同一请求在链上多个 handler 各计一次），求和口径成倍虚高且与
+// per-rule 被拦/检测减项不可对齐；规则未匹配的直连流量（面板/探活等）不
+// 计入本 KPI（口径披露见 models/apidocs）。
 func securityOverviewNormalHTTPDiff(database *sql.DB, ydayStart, todayStart time.Time) (today, yesterday int, err error) {
-	anchorYday, okYday, err := securityOverviewGlobalSampleAt(database, ydayStart)
+	today, err = securityOverviewNormalRuleSumRange(database, todayStart, time.Time{})
 	if err != nil {
 		return 0, 0, err
 	}
-	if !okYday {
-		return 0, 0, nil
-	}
-	anchorToday, okToday, err := securityOverviewGlobalSampleAt(database, todayStart)
+	yesterday, err = securityOverviewNormalRuleSumRange(database, ydayStart, todayStart)
 	if err != nil {
 		return 0, 0, err
 	}
-	latest, okLatest, err := securityOverviewGlobalSampleAt(database, time.Time{})
-	if err != nil {
-		return 0, 0, err
-	}
-	if !okToday || !okLatest {
-		return 0, 0, nil
-	}
-	blockedYday, err := securityOverviewRuleMetricDelta(database, ydayStart, todayStart, securityOverviewColBlocked)
-	if err != nil {
-		return 0, 0, err
-	}
-	blockedToday, err := securityOverviewRuleMetricDelta(database, todayStart, time.Time{}, securityOverviewColBlocked)
-	if err != nil {
-		return 0, 0, err
-	}
-	loggedYday, err := securityOverviewRuleMetricDelta(database, ydayStart, todayStart, securityOverviewColLogged)
-	if err != nil {
-		return 0, 0, err
-	}
-	loggedToday, err := securityOverviewRuleMetricDelta(database, todayStart, time.Time{}, securityOverviewColLogged)
-	if err != nil {
-		return 0, 0, err
-	}
-	today = clampedNonNegative(int(clampedDelta(latest, anchorToday)) - int(blockedToday) - int(loggedToday))
-	yesterday = clampedNonNegative(int(clampedDelta(anchorToday, anchorYday)) - int(blockedYday) - int(loggedYday))
 	return today, yesterday, nil
+}
+
+// securityOverviewNormalRuleSum 窗口 [from,to]（to 零值=最新样本）内逐规则
+// 正常请求求和：每规则 max(0, totalΔ − blockedΔ − loggedΔ)——三列同源自
+// lazybalancer_* 计数族，每规则独立钳制 /load 重置，逐规则钳零后求和。
+func securityOverviewNormalRuleSumRange(database *sql.DB, from, to time.Time) (int, error) {
+	totalAnchor, err := securityOverviewRuleMetricAnchorAt(database, to, securityOverviewColTotal)
+	if err != nil {
+		return 0, err
+	}
+	blockedAnchor, err := securityOverviewRuleMetricAnchorAt(database, to, securityOverviewColBlocked)
+	if err != nil {
+		return 0, err
+	}
+	loggedAnchor, err := securityOverviewRuleMetricAnchorAt(database, to, securityOverviewColLogged)
+	if err != nil {
+		return 0, err
+	}
+	totalFrom, err := securityOverviewRuleMetricAnchorAt(database, from, securityOverviewColTotal)
+	if err != nil {
+		return 0, err
+	}
+	blockedFrom, err := securityOverviewRuleMetricAnchorAt(database, from, securityOverviewColBlocked)
+	if err != nil {
+		return 0, err
+	}
+	loggedFrom, err := securityOverviewRuleMetricAnchorAt(database, from, securityOverviewColLogged)
+	if err != nil {
+		return 0, err
+	}
+	sum := 0
+	for ruleID, curTotal := range totalAnchor {
+		d := clampedDelta(curTotal, totalFrom[ruleID]) -
+			clampedDelta(blockedAnchor[ruleID], blockedFrom[ruleID]) -
+			clampedDelta(loggedAnchor[ruleID], loggedFrom[ruleID])
+		if d > 0 {
+			sum += int(d)
+		}
+	}
+	return sum, nil
 }
 
 // clampedNonNegative 差分口径的负值钳零：被拦差分极端大于总请求差分

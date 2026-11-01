@@ -679,6 +679,8 @@
                       <div class="ntlm-help-line">已知限制：</div>
                       <div class="ntlm-help-line">· 若后端协商到 Kerberos，建议不改写 Host</div>
                       <div class="ntlm-help-line">· 入口 HTTP/2 由客户端自动降级，不受本开关控制</div>
+                      <div class="ntlm-help-line">· 接管形态：负载策略锁定 Cookie 会话保持；请求重试禁用；响应立即透传；Keepalive 300s + 强制 HTTP/1.1；主动健康检查关闭（被动仍在役）</div>
+                      <div class="ntlm-help-line">· 与认证网关同时启用时形成双重认证：未认证请求先被网关拦截（厚客户端如 Outlook 无法完成网页登录），NTLM 协商仅对已通过网关认证的流量生效</div>
                     </template>
                   </FieldHelpIcon></span>
                 </template>
@@ -687,10 +689,6 @@
                   <span class="form-tip-inline">为 NTLM / 协商认证后端锁定长连接亲和的代理形态</span>
                 </div>
               </el-form-item>
-
-              <div v-if="ntlmOn" class="info-note-bar">
-                <span class="info-note-desc">NTLM 接管已生效：负载策略锁定 Cookie 会话保持 · 请求重试禁用 · 响应立即透传 · Keepalive 300s + 强制 HTTP/1.1 · 主动健康检查关闭（被动健康检查仍在役）</span>
-              </div>
 
               <!-- 认证网关（forward_auth，NTLM 同款开关形态）：开启后全部请求
                    先经网关校验；配置项开启后展示（路径/身份头折叠在高级项） -->
@@ -1332,6 +1330,7 @@
           <li>认证通过自动注入身份头（Remote-User/Groups/Email/Name）转发后端</li>
           <li>认证子请求不进入本规则的 WAF/审计/限流</li>
           <li>与直返/301 跳转路径规则互斥（保存时校验）</li>
+          <li>与 NTLM 兼容同时启用时形成双重认证：未认证流量先被网关拦截，NTLM 协商仅对已通过网关认证的流量生效</li>
         </ul>
         <div class="info-note-bar"><span class="info-note-desc">注意与 Host 改写同用：网关收到的 Host 为改写前原值；网关地址须 http(s)://host:port 形态</span></div>
       </div>
