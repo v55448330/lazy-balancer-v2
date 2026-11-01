@@ -243,6 +243,39 @@ func TestAccumulateDailyAgg_concurrentRoundsNoDoubleCount(t *testing.T) {
 	}
 }
 
+// 规则删除：checkpoint 行残留无害——规则不再出现在样本中即不参与结算，
+// 既有聚合行（历史真实流量）保留参与读路径求和。
+func TestAccumulateDailyAgg_deletedRuleResidueHarmless(t *testing.T) {
+	setupIsolatedDBWithMetrics(t)
+	service := NewMetricsService("", 30)
+	today := cstDate(t, 0, time.Now())
+
+	if err := service.accumulateDailyAgg(map[string]*ruleLabelAggregate{
+		"lb_gone": {requests: 100},
+		"lb_kept": {requests: 200},
+	}); err != nil {
+		t.Fatalf("baseline: %v", err)
+	}
+	if err := service.accumulateDailyAgg(map[string]*ruleLabelAggregate{
+		"lb_gone": {requests: 140},
+		"lb_kept": {requests: 210},
+	}); err != nil {
+		t.Fatalf("delta round: %v", err)
+	}
+	// 规则删除：后续样本不再含 lb_gone。
+	if err := service.accumulateDailyAgg(map[string]*ruleLabelAggregate{
+		"lb_kept": {requests: 260},
+	}); err != nil {
+		t.Fatalf("post-delete round: %v", err)
+	}
+	if total, _, _, _ := aggDailyRow(t, "lb_gone", today); total != 40 {
+		t.Fatalf("已删规则历史聚合被改写: total=%d, want 40", total)
+	}
+	if total, _, _, _ := aggDailyRow(t, "lb_kept", today); total != 60 {
+		t.Fatalf("存活规则聚合 broken: total=%d, want 60（50+10）", total)
+	}
+}
+
 // 端到端：collect() 真实解析链——首轮基线、增量轮入账、模拟 /load 归零轮
 // 继续正确累加（历史行照常落库，互不影响）。
 func TestCollect_dailyAggEndToEndThroughExposition(t *testing.T) {
