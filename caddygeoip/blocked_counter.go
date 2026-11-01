@@ -14,6 +14,11 @@ import (
 // securityBlockedMetricName 是安全拦截计数器指标名。
 const securityBlockedMetricName = "security_blocked_total"
 
+// securityLoggedMetricName 是检测放行（logged）计数器指标名——审计行存在
+// 且事务未中断（检测命中/信任检测放行）的请求按规则计数；与 blocked 互斥
+// （先录后拦的多策略请求只计 blocked），正常请求（无审计行）不计。
+const securityLoggedMetricName = "security_logged_total"
+
 // newSecurityBlockedCounterVec 每次 Provision 新建 CounterVec 并注册——
 // caddy-l4 newProxyMetrics 同模式(l4proxy/metrics.go:54):同 registry 时
 // registerOrExisting 复用已注册实例(不丢数据),跨 reload 新 registry 时
@@ -25,6 +30,19 @@ func newSecurityBlockedCounterVec(reg *prometheus.Registry) *prometheus.CounterV
 			Namespace: "lazybalancer",
 			Name:      securityBlockedMetricName,
 			Help:      "Requests interrupted by the security engine (WAF/GeoIP/IP ACL) with a 4xx status.",
+		},
+		[]string{"rule"},
+	))
+}
+
+// newSecurityLoggedCounterVec 构造检测放行计数器（与 blocked 同 epoch 语义：
+// 同 registry 复用、跨 reload 新 registry 归零，与 caddy_http_* 同纪元）。
+func newSecurityLoggedCounterVec(reg *prometheus.Registry) *prometheus.CounterVec {
+	return registerOrExisting(reg, prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "lazybalancer",
+			Name:      securityLoggedMetricName,
+			Help:      "Requests logged by the security engine (detection hits / trust detection) but allowed through.",
 		},
 		[]string{"rule"},
 	))
@@ -71,6 +89,9 @@ type SecurityBlockedCounter struct {
 	Rule string `json:"rule,omitempty"`
 
 	metrics *prometheus.CounterVec
+	// loggedMetrics 是检测放行计数器（检测放行拆分；Provision 与 blocked 同
+	// registry 同 epoch 注册）。
+	loggedMetrics *prometheus.CounterVec
 }
 
 // CaddyModule returns the Caddy module information.
@@ -89,6 +110,7 @@ func (SecurityBlockedCounter) CaddyModule() caddy.ModuleInfo {
 func (h *SecurityBlockedCounter) Provision(ctx caddy.Context) error {
 	if reg := ctx.GetMetricsRegistry(); reg != nil {
 		h.metrics = newSecurityBlockedCounterVec(reg)
+		h.loggedMetrics = newSecurityLoggedCounterVec(reg)
 	}
 	return nil
 }
@@ -192,6 +214,18 @@ func (h *SecurityBlockedCounter) ServeHTTP(w http.ResponseWriter, r *http.Reques
 		// (16 字符 tx.ID)被误计为安全拦截且吃掉一个合法 4xx。恢复 4xx 约束。
 		if h.metrics != nil {
 			h.metrics.WithLabelValues(h.Rule).Inc()
+		}
+	} else if timingID != "" && auditTimingLogged(timingID) {
+		// 检测放行（logged）计数：审计写插件对未中断审计行打标（见
+		// lbAuditWriter.Write——coraza defer ProcessLogging 先于本收点，打标
+		// 严格先于本读取，无竞态窗）；多策略引擎多行同键幂等 → 每请求至多
+		// +1。与 blocked 严格互斥：先录后拦的请求走上面分支，不进此处。
+		// 正常请求（无审计行）零打标，此处只付一次注册表查表（与
+		// auditTimingClose 同量级）。registry 缺席（嵌入形态）静默降级为
+		// 不计数，与 blocked 同语义；Prometheus 恒计数，不受大屏采集租约
+		// 门控（trafficCollectorActive 只门控流量统计）。
+		if h.loggedMetrics != nil {
+			h.loggedMetrics.WithLabelValues(h.Rule).Inc()
 		}
 	}
 	return err

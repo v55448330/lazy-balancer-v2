@@ -239,6 +239,9 @@ type auditTimingEntry struct {
 	endUs  int64
 	preSet bool
 	endSet bool
+	// logged 干预标记：审计写插件对未中断审计行打标（检测放行拆分），
+	// 读点=blocked_counter post-next（auditTimingLogged）。
+	logged bool
 	// closed 终态标记：链最外层收点（blocked_counter post-next）在全部分段
 	// 写点完成后的空值写法（guard）下置位——drain 见 closed 即注入并停止等待。
 	closed  bool
@@ -328,6 +331,8 @@ func auditTimingRecord(id, segment string, us int64) {
 		e.preUs, e.preSet = us, true
 	case timingSegmentEnd:
 		e.endUs, e.endSet = us, true
+	case timingSegmentLogged:
+		e.logged = true
 	}
 	e.mu.Unlock()
 }
@@ -377,6 +382,28 @@ func auditTimingClose(id string) {
 	e.mu.Lock()
 	e.closed = true
 	e.mu.Unlock()
+}
+
+// auditTimingLogged 读该请求的 logged 干预标记（检测放行拆分）。读点=
+// blocked_counter post-next——审计写插件（lbAuditWriter.Write）在 coraza
+// defer ProcessLogging 中打标，严格先于本读取（coraza handler 返回后才轮到
+// 链外层收点），无竞态窗。id 为空（计时 ID 生成失败降级形态）或条目已被
+// TTL 清扫（长请求 >30s，与 auditTimingClose 同族降级）返回 false——该请求
+// 落入正常列，静默降级不产生请求路径错误。
+func auditTimingLogged(id string) bool {
+	if id == "" {
+		return false
+	}
+	auditTimingMu.Lock()
+	e := auditTimingEntries[id]
+	auditTimingMu.Unlock()
+	if e == nil {
+		return false
+	}
+	e.mu.Lock()
+	logged := e.logged
+	e.mu.Unlock()
+	return logged
 }
 
 // auditTimingSweepIfDueLocked 建条计数 + 摊销清扫（调用方持 auditTimingMu）。
@@ -2383,8 +2410,19 @@ func (w *lbAuditWriter) Write(al plugintypes.AuditLog) error {
 		return nil
 	}
 	tid := ""
-	if al.Transaction() != nil && al.Transaction().HasRequest() {
-		tid = securityTimingIDFromHeaders(al.Transaction().Request().Headers())
+	if tx := al.Transaction(); tx != nil && tx.HasRequest() {
+		headers := tx.Request().Headers()
+		tid = securityTimingIDFromHeaders(headers)
+		// logged 干预标记（检测放行拆分）：审计写侧天然知道事务终态——
+		// 审计行存在 ⟺ 命中规则带 log/auditlog（coraza log 蕴含 auditlog、
+		// nolog 蕴含 noauditlog），行未中断（含 DetectionOnly 伪中断）=「安全
+		// 层记录了干预但放行」。O(1) 打标进计时注册表（键=timing ID，条目已由
+		// 链上 timing_pre 建立，零新增驻留；多策略引擎多行同键幂等），链最外层
+		// 收点（blocked_counter post-next）终态裁决：放行且打标 → logged 计数，
+		// 拦截 → 只计 blocked——两列严格互斥。中断行不打卡（属 blocked）。
+		if tid != "" && !tx.IsInterrupted() {
+			auditTimingRecord(tid, timingSegmentLogged, 0)
+		}
 	}
 	// 入队全路径 best-effort（入队或计数丢弃），error 恒 nil——返回值仅
 	// 满足 plugintypes.AuditLogWriter 接口签名。

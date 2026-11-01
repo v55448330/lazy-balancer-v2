@@ -24,9 +24,14 @@ const securityTimingHeader = "X-Lb-Security-Timing-Id"
 const securityTimingStartHeader = "X-Lb-Security-Timing-Start-Ns"
 
 // 计时分段键（注册表 segment 参数；审计行内 pre_us/end_us 字段）。
+// logged 不是耗时分段：auditwriter 写侧对未中断审计行的 O(1) 打标（检测
+// 放行拆分），经 auditTimingRecord 复用注册表存储（条目已由 timing_pre
+// 建立零新增驻留），由 blocked_counter 终态裁决读取（auditTimingLogged）。
 const (
 	timingSegmentPre = "pre"
 	timingSegmentEnd = "end"
+	// timingSegmentLogged 是 logged 干预标记键（布尔语义，µs 值恒 0 无意义）。
+	timingSegmentLogged = "logged"
 )
 
 // recordSecurityTiming 读耗时关联头对（timing ID + 起始纳秒）并把一段耗时写入
