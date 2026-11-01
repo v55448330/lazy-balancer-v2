@@ -393,7 +393,7 @@ type SecurityOverview struct {
 	// YesterdayDetectedTCP 昨日 TCP 检测数：L4 信任检测（trust_detect）产 tcp+logged
 	// 事件后计入（与 HTTP stage0 DetectionOnly 对齐）；无该形态时为 0。
 	YesterdayDetectedTCP int `json:"yesterday_detected_tcp"`
-	// NormalToday 今日正常请求 = HTTP 差分口径：今日 caddy_http_requests_total
+	// NormalToday 今日正常请求 = HTTP 差分口径：规则级 requests_total
 	// 累计差分 − 今日 per-rule requests_blocked 累计差分 − 今日 per-rule
 	// requests_logged 检测放行差分（检测放行拆分，2026-11：拦截/检测放行/正常
 	// 三列严格互斥、可加和=总差分）。口径披露：①与安全事件表不逐一对账（含限
@@ -406,7 +406,12 @@ type SecurityOverview struct {
 	// 放行——该类流量不入拦截/检测任一列（总览 KPI 双数据源混排的可见口径
 	// 差异，apidocs 已披露）；⑥开启认证网关（forward_auth）的规则，网关拒绝
 	// 的未认证请求不进 per-rule 指标与安全链，但仍计入全局总量差分 → residual
-	// 公式把它们计入正常请求列（apidocs 已披露）。TCP 连接不计入本字段
+	// 公式把它们计入正常请求列（apidocs 已披露）；⑦读路径自日聚合持久化承载
+	// （2026-11）：采集侧每轮把钳制差分增量按本地日历日入账（metrics_daily_agg，
+	// checkpoint 语义），apply 链在真实 /load 前做重载前快照——重载零丢失，
+	// 容器崩溃丢 ≤30s 增量为物理下限；窗口内无聚合行（历史日/功能上线前/新装）
+	// 回落累计锚点差分（本字段 ①-⑥ 对锚点通道成立；切换点前后统计口径断裂，
+	// apidocs 已披露）。TCP 连接不计入本字段
 	// （见 NormalTodayTCP）。
 	NormalToday int `json:"normal_today"`
 	// NormalTodayHTTP = NormalToday（同值；字段为前端「HTTP/TCP」布局对称

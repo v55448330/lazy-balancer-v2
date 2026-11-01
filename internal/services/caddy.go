@@ -451,6 +451,13 @@ func (s *CaddyService) applyConfigWithOptions(config map[string]interface{}, opt
 		}
 	}
 
+	// 重载前快照（2026-11）：/load 重建 metrics registry 使计数器归零，30s
+	// 采样差分若不先结算，重载前未入账的增量整段丢失（频繁重载形态下当日
+	// 统计严重偏低）。此处已越过同字节短路（到达即真实 /load），同步执行一
+	// 轮完整采集完成「快照→差分→日聚合入账→checkpoint 推进」；失败按采集
+	// 链状态转换口径留痕，不阻断重载。未接线（启动早期）no-op。
+	TriggerImmediateMetricsCollection()
+
 	req, err := http.NewRequest(http.MethodPost, s.adminURL+"/load", bytes.NewReader(data))
 	if err != nil {
 		return nil, fmt.Errorf("failed to build config apply request: %w", err)

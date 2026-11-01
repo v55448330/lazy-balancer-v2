@@ -457,6 +457,39 @@ func initMetricsSchema(db *sql.DB) error {
 	CREATE INDEX IF NOT EXISTS idx_metrics_timestamp ON metrics_history(timestamp);
 	CREATE INDEX IF NOT EXISTS idx_metrics_rule_timestamp ON metrics_history(rule_id, timestamp);
 
+	-- 正常请求日聚合（2026-11）：Caddy /load 重建 metrics registry 使计数器
+	-- 归零，30s 采样差分把「重载前未结算增量」整段丢掉；行帽/保留期裁剪
+	-- metrics_history 后历史日无法补算。采集侧每轮把「checkpoint→当前累计」
+	-- 的钳制差分增量（重置钳制语义见 services DeltaUint64）UPSERT 进本表
+	-- （规则级 × 本地日历日粒度，写入时区与总览读窗口同源 CurrentLocation），
+	-- 总览正常请求读路径优先读本表：
+	--   - 增量按采样点落账 + 重载前快照轮（apply 链 /load 前即时采集），
+	--     重载零丢失；容器崩溃丢 ≤30s 增量为物理下限；
+	--   - 独立保留（不随 metrics_history 7 天清理/行帽裁剪），行数上界 =
+	--     规则数 × 天数，无需清理任务；
+	--   - 空表（新装/升级未激活窗口/历史日）读侧回落锚点差分（兼容回退，
+	--     判定=窗口内无本表行）。
+	CREATE TABLE IF NOT EXISTS metrics_daily_agg (
+		rule_id TEXT NOT NULL,
+		local_date TEXT NOT NULL,
+		requests_delta INTEGER NOT NULL DEFAULT 0,
+		blocked_delta INTEGER NOT NULL DEFAULT 0,
+		logged_delta INTEGER NOT NULL DEFAULT 0,
+		PRIMARY KEY (rule_id, local_date)
+	);
+	CREATE INDEX IF NOT EXISTS idx_daily_agg_date ON metrics_daily_agg(local_date);
+
+	-- 采集侧计数器 checkpoint（与 metrics_daily_agg 同批引入）：每规则三列
+	-- 累计的「已入账水位」。差分 = 当前累计 − checkpoint；cur < checkpoint
+	-- （/load/重启归零）取 cur（归零后全部为新增量）；规则删除后行残留无害
+	-- （无新样本比对，不参与任何读路径求和），不做定期清理。
+	CREATE TABLE IF NOT EXISTS metrics_counter_checkpoint (
+		rule_id TEXT PRIMARY KEY,
+		requests_total INTEGER NOT NULL DEFAULT 0,
+		requests_blocked INTEGER NOT NULL DEFAULT 0,
+		requests_logged INTEGER NOT NULL DEFAULT 0
+	);
+
 	-- L4（TCP）连接计数历史：metrics 采集任务 30s 轮伴生抓 admin
 	-- /lb/l4-conn-stats，差分增量落库（per-rule 行 + 全局聚合行 rule_id=''）。
 	-- 存储的是**差分增量**而非累计快照（重置钳制在写侧完成：计数器随 /load

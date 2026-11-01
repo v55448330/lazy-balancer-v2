@@ -42,6 +42,10 @@ type MetricsService struct {
 	l4Mu       sync.Mutex
 	l4Last     map[string]L4TrafficRawSnapshot
 	l4Missing  map[string]bool
+	// 日聚合累加互斥（accumulateDailyAgg 读 checkpoint→算增量→落账全程）：
+	// 30s daemon 轮与重载前快照（apply 链 TriggerImmediateMetricsCollection）
+	// 并发触发时串行结算，同区间不双计。
+	dailyAggMu sync.Mutex
 }
 
 // caddyMetricsScrapeTimeout 是 Caddy admin /metrics 的唯一抓取预算单源。
@@ -291,8 +295,19 @@ func (m *MetricsService) collect() {
 			if logStateTransition(metricsFailureStorePerRule, true) != "" {
 				Logf("warn", "Failed to store per-rule metrics: %v", err)
 			}
-		} else if lvl := logStateTransition(metricsFailureStorePerRule, false); lvl != "" {
-			Logf("info", "metrics per-rule store recovered")
+		} else {
+			if lvl := logStateTransition(metricsFailureStorePerRule, false); lvl != "" {
+				Logf("info", "metrics per-rule store recovered")
+			}
+			// 日聚合累加在历史行成功落库后执行：checkpoint 推进以「当轮增量
+			// 已完整入账」为前提——失败不推进，下一成功轮把两段增量一次补齐。
+			if err := m.accumulateDailyAgg(scan.rules); err != nil {
+				if logStateTransition(metricsFailureDailyAgg, true) != "" {
+					Logf("warn", "Failed to accumulate daily agg: %v", err)
+				}
+			} else if lvl := logStateTransition(metricsFailureDailyAgg, false); lvl != "" {
+				Logf("info", "metrics daily agg recovered")
+			}
 		}
 	}
 	m.applyTrafficSample(metrics)

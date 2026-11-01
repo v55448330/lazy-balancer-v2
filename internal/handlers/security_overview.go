@@ -525,16 +525,105 @@ func securityOverviewRuleMetricDelta(database *sql.DB, from, to time.Time, colum
 // 逐位计数（同一请求在链上多个 handler 各计一次），求和口径成倍虚高且与
 // per-rule 被拦/检测减项不可对齐；规则未匹配的直连流量（面板/探活等）不
 // 计入本 KPI（口径披露见 models/apidocs）。
+//
+// 读路径双通道（日聚合持久化，2026-11）：
+//   - 聚合通道：窗口内 metrics_daily_agg 有行（功能已激活）→ 直读日聚合
+//     SUM。采集侧每轮把钳制差分增量按本地日历日入账 + apply 链重载前快照
+//     轮，重载零丢失；聚合表独立保留，不受 metrics_history 行帽/7 天清理
+//     裁剪影响；
+//   - 锚点通道（回退）：窗口内无聚合行（历史日/功能上线前/新装）→ 回落
+//     securityOverviewNormalRuleSumRange 累计锚点差分（切换点前后口径断裂
+//     由既有披露承载）。回退判定按窗口独立（升级当日激活：今日读聚合、
+//     昨日回落锚点）。
+//
+// 两通道同公式语义：每规则 max(0, totalΔ − blockedΔ − loggedΔ) 后求和；
+// 无重置数据集上逐字段相等（对账钉测）。
 func securityOverviewNormalHTTPDiff(database *sql.DB, ydayStart, todayStart time.Time) (today, yesterday int, err error) {
-	today, err = securityOverviewNormalRuleSumRange(database, todayStart, time.Time{})
+	todayDate := securityOverviewLocalDate(todayStart)
+	ydayDate := securityOverviewLocalDate(ydayStart)
+	// 今日窗口：[今日 0 点, 最新样本)——聚合行 local_date >= 今日日期。
+	todayActive, err := securityOverviewDailyAggWindowHasRows(database, todayDate, "")
 	if err != nil {
 		return 0, 0, err
 	}
-	yesterday, err = securityOverviewNormalRuleSumRange(database, ydayStart, todayStart)
+	if todayActive {
+		if today, err = securityOverviewDailyAggNormalSum(database, todayDate, ""); err != nil {
+			return 0, 0, err
+		}
+	} else if today, err = securityOverviewNormalRuleSumRange(database, todayStart, time.Time{}); err != nil {
+		return 0, 0, err
+	}
+	// 昨日窗口：[昨日 0 点, 今日 0 点)——聚合行 local_date ∈ [昨日, 今日)。
+	yesterdayActive, err := securityOverviewDailyAggWindowHasRows(database, ydayDate, todayDate)
 	if err != nil {
+		return 0, 0, err
+	}
+	if yesterdayActive {
+		if yesterday, err = securityOverviewDailyAggNormalSum(database, ydayDate, todayDate); err != nil {
+			return 0, 0, err
+		}
+	} else if yesterday, err = securityOverviewNormalRuleSumRange(database, ydayStart, todayStart); err != nil {
 		return 0, 0, err
 	}
 	return today, yesterday, nil
+}
+
+// securityOverviewLocalDate 窗口起点的本地日历日文本（与采集侧写入
+// local_date 同源：日界按配置时区，两侧一致）。
+func securityOverviewLocalDate(t time.Time) string {
+	return t.Format("2006-01-02")
+}
+
+// securityOverviewDailyAggWindowHasRows 回退判定：metrics_daily_agg 在窗口
+// [fromDate, toDate) 内是否有行（toDate 空=开右端，今日窗口到最新）。有行=
+// 该窗口聚合通道已激活；聚合表按日粒度独立保留，历史日行在位即代表该窗口
+// 走聚合（无行=功能上线前/新装，回落锚点差分）。
+func securityOverviewDailyAggWindowHasRows(database *sql.DB, fromDate, toDate string) (bool, error) {
+	query := `SELECT EXISTS(SELECT 1 FROM metrics_daily_agg WHERE local_date >= ?`
+	args := []any{fromDate}
+	if toDate != "" {
+		query += ` AND local_date < ?`
+		args = append(args, toDate)
+	}
+	query += `)`
+	var exists bool
+	err := database.QueryRow(query, args...).Scan(&exists)
+	return exists, err
+}
+
+// securityOverviewDailyAggNormalSum 聚合通道窗口 [fromDate, toDate)（toDate
+// 空=开右端）内逐规则正常请求求和：每规则窗口级 SUM(totalΔ−blockedΔ−loggedΔ)
+// 钳零后求和——与锚点差分的「每规则窗口内钳零」同构（无重置数据集对账恒
+// 等）。聚合行的差分增量在写侧已按采样点结算并含 /load 归零钳制。
+func securityOverviewDailyAggNormalSum(database *sql.DB, fromDate, toDate string) (int, error) {
+	query := `SELECT rule_id, SUM(requests_delta), SUM(blocked_delta), SUM(logged_delta)
+		FROM metrics_daily_agg WHERE local_date >= ?`
+	args := []any{fromDate}
+	if toDate != "" {
+		query += ` AND local_date < ?`
+		args = append(args, toDate)
+	}
+	query += ` GROUP BY rule_id`
+	rows, err := database.Query(query, args...)
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+	sum := 0
+	for rows.Next() {
+		var ruleID string
+		var total, blocked, logged int64
+		if err := rows.Scan(&ruleID, &total, &blocked, &logged); err != nil {
+			return 0, err
+		}
+		if d := total - blocked - logged; d > 0 {
+			sum += int(d)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	return sum, nil
 }
 
 // securityOverviewNormalRuleSum 窗口 [from,to]（to 零值=最新样本）内逐规则
