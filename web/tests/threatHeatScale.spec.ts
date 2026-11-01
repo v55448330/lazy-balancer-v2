@@ -76,6 +76,13 @@ test('C 高段分离：1k 命中与数据集头部（max=10k）ΔE≥0.05（旧�
   assert.ok(d >= 0.05, `1k vs 头部 ΔE=${d.toFixed(4)} < 0.05`)
 })
 
+test('C2 近 max 对可辨：0.4 倍 max 与头部 ΔE≥0.05（用户实锤 7000 vs 17000 形态）', () => {
+  for (const max of [1000, 17000, 100000]) {
+    const d = deltaE(heatCss(Math.floor(max * 0.4), max), heatCss(max, max))
+    assert.ok(d >= 0.05, `max=${max}：0.4 倍头部与头部 ΔE=${d.toFixed(4)} < 0.05`)
+  }
+})
+
 test('D 过渡动画器：首帧吸附、变更后渐进收敛≤600ms、无变化幂等', () => {
   const tr = createHeatColorTransition()
   const a = new Map([['中国', 'rgb(44,66,96)'], ['美国', 'rgb(60,80,130)']])
