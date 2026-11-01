@@ -1152,9 +1152,9 @@ func TestNormalizeInactiveHealthCheckFields(t *testing.T) {
 // 认证网关身份头规范名归一（写侧单源 normalizeForwardAuthValues）：非规范名
 // （remote-user/REMOTE-USER）落库前收敛为 http.CanonicalHeaderKey 规范形——
 // Caddy 响应头占位符注册键恒为规范形（Go http.Header），非规范名经引擎后
-// 静默失注入（认证照常放行、后端收不到身份头、无任何报错）。归一只动大小写：
-// 非法字符（空白/冒号/CRLF）原样保留仍由既有门拒绝；重复检测随规范化后进行
-// （remote-user 与 Remote-User 判重复）。
+// 静默失注入（认证照常放行、后端收不到身份头、无任何报错）。归一只动大小写
+// 与项首尾空白（分隔空格形态同收敛）；项内空白/冒号/CRLF 原样保留仍由既有门
+// 拒绝；重复检测随规范化后进行（remote-user 与 Remote-User 判重复）。
 func TestCreateRule_canonicalizesForwardAuthCopyHeaders(t *testing.T) {
 	handler := newRuleFeatureTestHandlers(t)
 	gin.SetMode(gin.TestMode)
@@ -1201,6 +1201,31 @@ func TestCreateRule_canonicalizesForwardAuthCopyHeaders(t *testing.T) {
 		response := create("fa-bad", "fa-bad.example.test", 13013, "remote-user,Remote User")
 		if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "非法字符") {
 			t.Fatalf("malformed header status=%d body=%s, want 400 非法字符（CanonicalHeaderKey 对非法 token 原样返回，门不得放过）", response.Code, response.Body.String())
+		}
+	})
+
+	// 空格分隔形态（「remote-user, remote-email」用户常见输入）：归一必须先
+	// 逐项 TrimSpace 再 canonical 化——前导空格是非法 token 字节，不剥离则
+	// CanonicalHeaderKey 原样返回，落库值带空白/非规范名，渲染拼出的占位符
+	// 键恒 miss（认证照常放行、身份头静默失注入、无报错）。
+	t.Run("带空格形态保存后读回规范形", func(t *testing.T) {
+		response := create("fa-space", "fa-space.example.test", 13014, " remote-user , remote-email ")
+		if response.Code != http.StatusCreated && response.Code != http.StatusOK {
+			t.Fatalf("create status=%d body=%s, want 2xx（分隔空格形态本就该放行保存）", response.Code, response.Body.String())
+		}
+		var stored string
+		if err := db.DB.QueryRow(`SELECT forward_auth_copy_headers FROM lb_rules WHERE listen_port=13014`).Scan(&stored); err != nil {
+			t.Fatalf("read created rule: %v", err)
+		}
+		if stored != "Remote-User,Remote-Email" {
+			t.Fatalf("落库身份头=%q, want 规范形（分隔空格与首尾空白须剥离后 canonical 化）", stored)
+		}
+	})
+
+	t.Run("空格分隔混合大小写重复判 400", func(t *testing.T) {
+		response := create("fa-space-dup", "fa-space-dup.example.test", 13015, "remote-user, Remote-User")
+		if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "重复") {
+			t.Fatalf("space-separated duplicate status=%d body=%s, want 400 重复（同一头的两种写法经规范化后判重）", response.Code, response.Body.String())
 		}
 	})
 }

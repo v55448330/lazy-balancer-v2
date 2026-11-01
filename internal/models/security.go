@@ -405,17 +405,17 @@ type SecurityOverview struct {
 	// （logged）差分、从正常列剔除，而同屏「今日检测」按攻击面谓词不含爬虫
 	// 放行——该类流量不入拦截/检测任一列（总览 KPI 双数据源混排的可见口径
 	// 差异，apidocs 已披露）；⑥开启认证网关（forward_auth）的规则，网关拒绝
-	// 的未认证请求不进 per-rule 指标与安全链，但仍计入全局总量差分 → residual
-	// 公式把它们计入正常请求列（apidocs 已披露）；⑦读路径自日聚合持久化承载
+	// 的未认证请求不计入总览任一 KPI 列——网关子请求先于规则指标与安全链，
+	// per-rule 差分不含该流量，仅网关侧可见（apidocs 已披露）；⑦读路径自日聚合持久化承载
 	// （2026-11）：采集侧每轮把钳制差分增量按本地日历日入账（metrics_daily_agg，
 	// checkpoint 语义），apply 链在真实 /load 前做重载前快照——重载零丢失，
 	// 容器崩溃丢 ≤30s 增量为物理下限；窗口内无聚合行（历史日/功能上线前/新装）
-	// 回落累计锚点差分（本字段 ①-⑥ 对锚点通道成立；切换点前后统计口径断裂，
-	// apidocs 已披露）。TCP 连接不计入本字段
-	// （见 NormalTodayTCP）。
+	// 回落累计锚点差分（本字段 ①-⑥ 对锚点通道成立；日聚合激活当日仅覆盖
+	// 激活后时段，激活前时段走锚点通道；切换点前后统计口径断裂，
+	// apidocs 已披露）。
 	NormalToday int `json:"normal_today"`
-	// NormalTodayHTTP = NormalToday（同值；字段为前端「HTTP/TCP」布局对称
-	// 保留，语义即今日正常 HTTP 请求）。
+	// NormalTodayHTTP 今日正常 HTTP 请求（HTTP 差分口径，不等于 NormalToday
+	// 合计——NormalToday 为 HTTP+TCP 合计；字段为前端「HTTP/TCP」布局对称保留）。
 	NormalTodayHTTP int `json:"normal_today_http"`
 	// NormalTodayTCP 今日正常 TCP 连接 = lb_l4_conn_history 全局行（rule_id=''
 	// ）allowed 的今日本地日界差分减去同源 logged 差分（检测放行拆分：信任检

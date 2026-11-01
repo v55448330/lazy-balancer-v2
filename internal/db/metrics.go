@@ -465,8 +465,9 @@ func initMetricsSchema(db *sql.DB) error {
 	-- 总览正常请求读路径优先读本表：
 	--   - 增量按采样点落账 + 重载前快照轮（apply 链 /load 前即时采集），
 	--     重载零丢失；容器崩溃丢 ≤30s 增量为物理下限；
-	--   - 独立保留（不随 metrics_history 7 天清理/行帽裁剪），行数上界 =
-	--     规则数 × 天数，无需清理任务；
+	--   - 独立保留（不随 metrics_history 7 天清理/行帽裁剪），默认 90 天保留
+	--     （与 security_events 同口径），过期日行由 CleanupDailyAgg 挂
+	--     metrics-history-cleanup 任务体清理，行数上界 = 规则数 × 保留天数；
 	--   - 空表（新装/升级未激活窗口/历史日）读侧回落锚点差分（兼容回退，
 	--     判定=窗口内无本表行）。
 	CREATE TABLE IF NOT EXISTS metrics_daily_agg (
@@ -918,4 +919,21 @@ func CleanupL4ConnHistory(retentionDays int) error {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
+}
+
+// CleanupDailyAgg 按保留天数清理 metrics_daily_agg 过期日聚合行。日聚合独立
+// 保留（不随 metrics_history 7 天清理/行帽裁剪）：默认 90 天与 security_events
+// 同口径——正常请求读路径窗口 ≤7 天+昨日，90 天为回溯余量。local_date 为
+// 本地日历日，边界按同粒度日期串比较（服务端本地时区，与写入侧时区至多半日
+// 偏差，保留期清理可容忍）。行数上界=规则数×保留天数，单语句删除无长持锁
+// 风险，无需分批。nil 库早退 nil（同族导出清理函数守卫口径）。
+func CleanupDailyAgg(retentionDays int) error {
+	if MetricsDB == nil {
+		return nil
+	}
+	cutoff := time.Now().AddDate(0, 0, -retentionDays).Format("2006-01-02")
+	if _, err := MetricsDB.Exec(`DELETE FROM metrics_daily_agg WHERE local_date < ?`, cutoff); err != nil {
+		return fmt.Errorf("delete expired daily agg: %w", err)
+	}
+	return nil
 }

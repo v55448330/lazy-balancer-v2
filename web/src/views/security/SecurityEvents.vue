@@ -351,7 +351,7 @@
             <el-descriptions :column="2" border size="small">
               <el-descriptions-item label="时间">{{ ctxEvent.event_time ? formatDate(ctxEvent.event_time) : '—' }}</el-descriptions-item>
               <el-descriptions-item label="方法">{{ ctxIsTcp ? '—（TCP 连接）' : (ctxEvent.method || '—') }}</el-descriptions-item>
-              <el-descriptions-item label="客户端 IP">{{ ctxEvent.client_ip || '—' }}</el-descriptions-item>
+              <el-descriptions-item label="客户端 IP"><span style="overflow-wrap: anywhere">{{ ctxEvent.client_ip || '—' }}</span></el-descriptions-item>
               <el-descriptions-item label="归属地">{{ ctxEvent.ip_location || '—' }}</el-descriptions-item>
               <el-descriptions-item label="URI" :span="2">{{ ctxIsTcp ? '—（TCP 连接）' : (ctxEvent.uri || '—') }}</el-descriptions-item>
               <!-- 规则协议徽标（数据源=event_type；字段缺失不显示——防御式）：

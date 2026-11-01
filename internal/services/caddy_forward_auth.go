@@ -46,24 +46,33 @@ func ValidateForwardAuthGatewayAddress(upstream string) (string, bool, error) {
 	return net.JoinHostPort(host, port), parsed.Scheme == "https", nil
 }
 
-// CanonicalForwardAuthCopyHeaders 身份头清单的规范名单源：逐条
-// http.CanonicalHeaderKey（Go 标准库——各连字符段首字母大写；非法 token 字节
-// 原样返回，畸形仍由保存门/渲染门拒绝，归一不洗白）。与 Caddy 官方
-// forward_auth adapt 对 to/占位符名的处理一致（v2.11.7
-// forwardauth/caddyfile.go 逐字规范化）——Caddy 运行期响应头占位符注册键恒为
-// 规范形（Go http.Header），非规范名拼出的占位符 vars 查表恒 miss → 条件 set
-// 永不执行（认证照常放行、身份头静默失注入、无报错）。写侧落库前归一
-// （handlers.normalizeForwardAuthValues），渲染侧消费前再归一（防御带外/
-// 旧数据）；重复检测随规范化后进行（同一头的两种大小写写法判重复）。
+// CanonicalForwardAuthCopyHeaders 身份头清单的规范名单源：逐项 TrimSpace 后
+// http.CanonicalHeaderKey（Go 标准库——各连字符段首字母大写），剔除空项后
+// join。分隔空格形态（「remote-user, remote-email」）是用户常见输入：前导
+// 空格是非法 token 字节，不先剥离 CanonicalHeaderKey 会原样返回，非规范名/
+// 带空白键拼出的占位符 vars 查表恒 miss → 条件 set 永不执行（认证照常放行、
+// 身份头静默失注入、无报错）。项内空白等非法 token 字节仍原样保留，畸形仍由
+// 保存门/渲染门拒绝，归一不洗白。规范化后仍同头并存（不去重）：写侧重复由
+// 保存门 400（同一头的两种写法判重复，fail-loud 契约），渲染侧重复由
+// buildForwardAuthHandler 消费前收敛。与 Caddy 官方 forward_auth adapt 对
+// to/占位符名的处理一致（v2.11.7 forwardauth/caddyfile.go 逐字规范化）——
+// Caddy 运行期响应头占位符注册键恒为规范形（Go http.Header）。写侧落库前
+// 归一（handlers.normalizeForwardAuthValues），渲染侧消费前再归一（防御
+// 带外/旧数据）。
 func CanonicalForwardAuthCopyHeaders(list string) string {
 	if list == "" {
 		return ""
 	}
 	parts := strings.Split(list, ",")
-	for i, part := range parts {
-		parts[i] = http.CanonicalHeaderKey(part)
+	normalized := make([]string, 0, len(parts))
+	for _, part := range parts {
+		header := http.CanonicalHeaderKey(strings.TrimSpace(part))
+		if header == "" {
+			continue
+		}
+		normalized = append(normalized, header)
 	}
-	return strings.Join(parts, ",")
+	return strings.Join(normalized, ",")
 }
 
 // buildForwardAuthHandler 构造链首认证网关子请求处理器。字段齐备性由保存门
@@ -79,6 +88,19 @@ func buildForwardAuthHandler(rule SingleRuleConfig) (map[string]interface{}, err
 		return nil, fmt.Errorf("规则 %s 认证路径无效（须以 / 开头且不含换行）: %q", rule.CaddyID, uri)
 	}
 	copyHeaders := splitAndTrim(CanonicalForwardAuthCopyHeaders(rule.ForwardAuthCopyHeaders))
+	// 规范化后去重（首现序保留）：带外/旧数据行的重复写法（同一头大小写/
+	// 空白变体）在消费前收敛，重复 delete/set 路由不再发射。写侧同形态输入
+	// 由保存门 400 判重——渲染去重是旧数据自愈，不豁免保存校验。
+	deduped := make([]string, 0, len(copyHeaders))
+	seenCopyHeaders := make(map[string]struct{}, len(copyHeaders))
+	for _, header := range copyHeaders {
+		if _, duplicated := seenCopyHeaders[header]; duplicated {
+			continue
+		}
+		seenCopyHeaders[header] = struct{}{}
+		deduped = append(deduped, header)
+	}
+	copyHeaders = deduped
 	if len(copyHeaders) == 0 {
 		return nil, fmt.Errorf("规则 %s 认证网关身份头清单为空", rule.CaddyID)
 	}

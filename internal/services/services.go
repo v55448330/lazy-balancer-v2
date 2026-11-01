@@ -867,6 +867,9 @@ func (m *MetricsService) cleanupHistory() error {
 	// 保留」的裁定——用户明确指标类数据独立于日志保留配置);实时接口
 	// (/metrics/*)不受影响,仅历史图窗口收敛到 7 天。
 	const retentionDays = 7
+	// dailyAggRetentionDays 正常请求日聚合保留天数：与 security_events 同口径
+	// 90 天（读路径窗口 ≤7 天+昨日，90 天为回溯余量；行数上界=规则数×90）。
+	const dailyAggRetentionDays = 90
 	if db.MetricsDB == nil {
 		// 守卫与 refreshDBOverviewMetrics 同口径（生产启动链不可达；防
 		// 测试/嵌入形态 nil 库 panic）。nil 库按失败上抛——「清理没跑成」
@@ -887,6 +890,14 @@ func (m *MetricsService) cleanupHistory() error {
 	if err := db.CleanupL4ConnHistory(retentionDays); err != nil {
 		if lvl := logStateTransition("metrics-history-cleanup", true); lvl != "" {
 			Logf(lvl, "Failed to clean up l4 conn history: %v", err)
+		}
+		return err
+	}
+	// 正常请求日聚合独立保留（90 天，与 security_events 同口径）：过期日行
+	// 同任务体清理，失败同口径上抛进任务失败终态。
+	if err := db.CleanupDailyAgg(dailyAggRetentionDays); err != nil {
+		if lvl := logStateTransition("metrics-history-cleanup", true); lvl != "" {
+			Logf(lvl, "Failed to clean up metrics daily agg: %v", err)
 		}
 		return err
 	}

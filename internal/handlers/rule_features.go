@@ -359,8 +359,9 @@ const maxForwardAuthCopyHeaders = 16
 // normalizeForwardAuthValues 认证网关写侧归一（单一事实源）：upstream 收敛
 // 首尾空白；uri/copy_headers 空值回填 db.DefaultForwardAuth*（与启动回填
 // 迁移同默认、同单源）——落库行恒 concrete 值，集群快照/备份导入/启动回填
-// 三面同构（canonical 稳定）。身份头清单逐条 http.CanonicalHeaderKey 收敛
-// 规范形（services.CanonicalForwardAuthCopyHeaders 单源；Caddy 占位符注册键
+// 三面同构（canonical 稳定）。身份头清单逐项 TrimSpace 后
+// http.CanonicalHeaderKey 收敛规范形（services.CanonicalForwardAuthCopyHeaders
+// 单源；Caddy 占位符注册键
 // 恒规范形，非规范名经引擎静默失注入）。upstream 无确定默认（网关地址必由
 // 用户提供），enabled=1 缺失由 validateRuleFeatures 400。
 func normalizeForwardAuthValues(enabled int, upstream, uri, copyHeaders string) (int, string, string, string) {

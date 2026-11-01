@@ -526,6 +526,38 @@ func TestMetricsServiceCleanupHistory_stillCleansWhenGlobalConfigDropped(t *test
 	}
 }
 
+// metrics-history-cleanup 任务体必须同轮清理 metrics_daily_agg 过期日行
+// （日聚合独立保留、行数上界=规则数×保留天数；任务体漏挂会让历史日行随
+// 规则更名/删除无限累积）。失败同口径上抛进任务失败终态。
+func TestMetricsServiceCleanupHistory_cleansStaleDailyAgg(t *testing.T) {
+	// Given：今日与过期（>90 天，security_events 同口径）各 1 条日聚合行。
+	// 复用单源隔离夹具（主库 + 指标库，四句柄成对还原）。
+	setupIsolatedDBWithMetrics(t)
+	today := time.Now().Format("2006-01-02")
+	expired := time.Now().AddDate(0, 0, -91).Format("2006-01-02")
+	if _, err := db.MetricsDB.Exec(`INSERT INTO metrics_daily_agg (rule_id, local_date, requests_delta, blocked_delta, logged_delta) VALUES
+		('lb_today', ?, 5, 1, 1),
+		('lb_expired', ?, 7, 2, 2)`, today, expired); err != nil {
+		t.Fatalf("seed daily agg: %v", err)
+	}
+
+	// When
+	NewMetricsService("", 30).cleanupHistory()
+
+	// Then：过期日行删除、今日行保留。
+	var rows int
+	if err := db.MetricsDB.QueryRow(`SELECT COUNT(*) FROM metrics_daily_agg`).Scan(&rows); err != nil {
+		t.Fatalf("count daily agg: %v", err)
+	}
+	if rows != 1 {
+		t.Fatalf("daily agg rows after cleanup = %d, want 1（过期日行随任务体清理）", rows)
+	}
+	var remainDate string
+	if err := db.MetricsDB.QueryRow(`SELECT local_date FROM metrics_daily_agg`).Scan(&remainDate); err != nil || remainDate != today {
+		t.Fatalf("surviving daily agg row=%q err=%v, want today %q", remainDate, err, today)
+	}
+}
+
 // 正则标签顺序与真实 exposition 一致——
 // client_golang 字典序(class/direction 在前,rule 在后)。fixture 必须
 // 真实形态。

@@ -342,3 +342,75 @@ func TestInitializeMetricsDB_preserves_global_when_schema_creation_fails(t *test
 		t.Fatal("failed initialization replaced global metrics database")
 	}
 }
+
+// CleanupDailyAgg 按保留天数清理 metrics_daily_agg 过期日聚合行（默认 90 天，
+// 与 security_events 保留同口径；正常请求读路径窗口 ≤7 天+昨日，90 天为回溯
+// 余量）。nil 库早退 nil——与同族导出清理函数守卫口径一致
+// （CleanupMetricsHistory/CleanupL4ConnHistory 先例）。
+func TestCleanupDailyAgg_nilMetricsDBReturnsNil(t *testing.T) {
+	old := MetricsDB
+	MetricsDB = nil
+	t.Cleanup(func() { MetricsDB = old })
+	if err := CleanupDailyAgg(90); err != nil {
+		t.Fatalf("CleanupDailyAgg with nil MetricsDB = %v, want nil", err)
+	}
+}
+
+// 过期日行（>保留天数）删除、窗口内日行保留、二次执行幂等零删除。
+// local_date 为本地日历日（写入侧与总览读窗口同源），清理边界按同粒度日期串比较。
+func TestCleanupDailyAgg_deletesExpiredKeepsFreshAndIdempotent(t *testing.T) {
+	preserveDatabaseHandles(t)
+	if err := Initialize(t.TempDir()); err != nil {
+		t.Fatalf("initialize databases: %v", err)
+	}
+	today := time.Now().Format("2006-01-02")
+	inside := time.Now().AddDate(0, 0, -89).Format("2006-01-02")
+	expired := time.Now().AddDate(0, 0, -91).Format("2006-01-02")
+	seed := func(rule, date string) {
+		t.Helper()
+		if _, err := MetricsDB.Exec(`INSERT INTO metrics_daily_agg (rule_id, local_date, requests_delta, blocked_delta, logged_delta) VALUES (?, ?, 3, 1, 1)`, rule, date); err != nil {
+			t.Fatalf("seed daily agg %s/%s: %v", rule, date, err)
+		}
+	}
+	seed("lb_today", today)
+	seed("lb_inside", inside)
+	seed("lb_expired", expired)
+
+	// When
+	if err := CleanupDailyAgg(90); err != nil {
+		t.Fatalf("cleanup daily agg: %v", err)
+	}
+
+	// Then
+	assertDailyAggDates(t, map[string]bool{today: true, inside: true, expired: false})
+	// 幂等：二次执行零删除零错误。
+	if err := CleanupDailyAgg(90); err != nil {
+		t.Fatalf("second cleanup daily agg: %v", err)
+	}
+	assertDailyAggDates(t, map[string]bool{today: true, inside: true, expired: false})
+}
+
+func assertDailyAggDates(t *testing.T, want map[string]bool) {
+	t.Helper()
+	got := map[string]bool{}
+	rows, err := MetricsDB.Query(`SELECT local_date FROM metrics_daily_agg`)
+	if err != nil {
+		t.Fatalf("query daily agg: %v", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var date string
+		if err := rows.Scan(&date); err != nil {
+			t.Fatalf("scan daily agg: %v", err)
+		}
+		got[date] = true
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate daily agg rows: %v", err)
+	}
+	for date, wantPresent := range want {
+		if got[date] != wantPresent {
+			t.Fatalf("daily agg row %s present=%v, want %v（现存=%v）", date, got[date], wantPresent, got)
+		}
+	}
+}

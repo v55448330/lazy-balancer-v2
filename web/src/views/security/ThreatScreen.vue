@@ -1489,8 +1489,8 @@ onBeforeUnmount(() => {
 .sev-mid { color: #ffb020; border-color: rgba(255, 176, 32, 0.5); background: rgba(255, 176, 32, 0.12); }
 .sev-low { color: #3ddc84; border-color: rgba(61, 220, 132, 0.5); background: rgba(61, 220, 132, 0.12); }
 .ev-main { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
-.ev-ip { font-family: 'Share Tech Mono', ui-monospace, monospace; font-size: 15px; color: #fff; flex: none; text-shadow: 0 0 8px rgba(58, 209, 255, 0.4); }
-.ev-geo { color: #8ea7d6; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ev-ip { font-family: 'Share Tech Mono', ui-monospace, monospace; font-size: 15px; color: #fff; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 0 1 auto; text-shadow: 0 0 8px rgba(58, 209, 255, 0.4); }
+.ev-geo { color: #8ea7d6; font-size: 11px; white-space: nowrap; flex: none; }
 .ev-type { font-size: 11px; color: #8ea7d6; display: flex; gap: 6px; align-items: center; min-width: 0; }
 .ev-type b { font-weight: 500; }
 .ev-type .st { margin-left: auto; color: #56709f; font-size: 10px; letter-spacing: 0.08em; }

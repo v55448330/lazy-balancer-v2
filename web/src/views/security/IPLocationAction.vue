@@ -473,14 +473,14 @@ const retryAll = (): void => { void loadAll() }
 </script>
 
 <style scoped>
-.ip-cell { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; vertical-align: middle; }
+.ip-cell { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; min-width: 0; vertical-align: middle; }
 .ip-clickable { cursor: pointer; border-radius: 3px; padding: 1px 3px; margin: -1px -3px; transition: background 0.15s, color 0.15s; }
 .ip-clickable:hover { background: var(--el-color-primary-light-9, #ecf5ff); }
 .ip-clickable:hover .ip-text { color: var(--el-color-primary, #409eff); }
 .ip-clickable:active { background: var(--el-color-primary-light-8, #d9ecff); }
 .ip-clickable:focus-visible { outline: 2px solid var(--el-color-primary, #409eff); outline-offset: 2px; }
-.ip-text { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ip-loc { font-size: 11px; color: var(--text-secondary, #909399); white-space: nowrap; max-width: 72px; overflow: hidden; text-overflow: ellipsis; flex-shrink: 1; }
+.ip-text { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 0 1 auto; }
+.ip-loc { font-size: 11px; color: var(--text-secondary, #909399); white-space: nowrap; max-width: 72px; overflow: hidden; text-overflow: ellipsis; flex: none; }
 </style>
 
 <style>

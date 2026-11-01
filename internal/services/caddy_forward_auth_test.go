@@ -39,6 +39,104 @@ func TestBuildHTTPHandleChain_forwardAuthCanonicalizesCopyHeaders(t *testing.T) 
 	if err != nil {
 		t.Fatalf("buildHTTPHandleChain: %v", err)
 	}
+	assertForwardAuthCopyHeadersCanonical(t, chain)
+}
+
+// 空格分隔形态（「remote-user, remote-email」用户常见输入）渲染同结论：归一
+// 先逐项 TrimSpace 再 canonical 化——前导空格是非法 token 字节，不先剥离会让
+// CanonicalHeaderKey 原样返回、拼出的占位符键携带空白恒 miss（认证照常放行、
+// 身份头静默失注入）。带外/旧数据行由渲染侧归一自愈，本钉测与写侧归一同结论。
+func TestBuildHTTPHandleChain_forwardAuthCanonicalizesSpaceSeparatedCopyHeaders(t *testing.T) {
+	rule := forwardAuthRule()
+	rule.ForwardAuthCopyHeaders = " remote-user , REMOTE-GROUPS "
+	chain, err := buildHTTPHandleChain(rule, rule.Upstreams)
+	if err != nil {
+		t.Fatalf("buildHTTPHandleChain: %v", err)
+	}
+	assertForwardAuthCopyHeadersCanonical(t, chain)
+}
+
+// CanonicalForwardAuthCopyHeaders 单源单元钉测：逐项 TrimSpace → canonical 化
+// → 剔除空项 → join。分隔空格与大小写混写都收敛到同一存储形态（写侧五面经
+// normalizeForwardAuthValues、渲染侧 buildForwardAuthHandler 共用本函数）；
+// 规范化后仍同头并存（判重交由写侧门 400 / 渲染侧消费前去重）；项内空白等
+// 非法 token 字节不洗白，仍由保存门/渲染门拒绝。
+func TestCanonicalForwardAuthCopyHeaders_normalizesSpaceForm(t *testing.T) {
+	cases := []struct{ name, in, want string }{
+		{"基线紧凑非规范名", "remote-user,REMOTE-GROUPS", "Remote-User,Remote-Groups"},
+		{"分隔空格与首尾空白剥离", " remote-user , Remote-Email ", "Remote-User,Remote-Email"},
+		{"规范化后同头并存", "Remote-User, remote-user", "Remote-User,Remote-User"},
+		{"空项剔除", "Remote-User,,Remote-Email", "Remote-User,Remote-Email"},
+		{"项内空白不洗白", "Remote User", "Remote User"},
+		{"全空清单归空", " , ", ""},
+		{"空串原样", "", ""},
+	}
+	for _, tc := range cases {
+		if got := CanonicalForwardAuthCopyHeaders(tc.in); got != tc.want {
+			t.Fatalf("%s: CanonicalForwardAuthCopyHeaders(%q) = %q, want %q", tc.name, tc.in, got, tc.want)
+		}
+	}
+}
+
+// 带外/旧数据行的重复写法（同一头两种形态并存）渲染侧消费前收敛：去重后
+// 重复 delete/set 路由不再发射（占位符重复注册无行为增益、徒增配置体积）；
+// 写侧同形态输入由保存门 400 判重——渲染去重不豁免保存校验。
+func TestBuildForwardAuthHandler_dedupesCanonicalDuplicates(t *testing.T) {
+	rule := forwardAuthRule()
+	rule.ForwardAuthCopyHeaders = "Remote-User, remote-user"
+	handler, err := buildForwardAuthHandler(rule)
+	if err != nil {
+		t.Fatalf("buildForwardAuthHandler: %v", err)
+	}
+	entries, ok := handler["handle_response"].([]interface{})
+	if !ok || len(entries) != 1 {
+		t.Fatalf("handle_response = %#v", handler["handle_response"])
+	}
+	routes, ok := entries[0].(map[string]interface{})["routes"].([]interface{})
+	if !ok {
+		t.Fatalf("routes missing")
+	}
+	setCount, deleteCount := 0, 0
+	for _, raw := range routes {
+		route, ok := raw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		handle, ok := route["handle"].([]interface{})
+		if !ok || len(handle) != 1 {
+			continue
+		}
+		h, ok := handle[0].(map[string]interface{})
+		if !ok || h["handler"] != "headers" {
+			continue
+		}
+		req, ok := h["request"].(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if set, ok := req["set"].(map[string]interface{}); ok {
+			if _, has := set["Remote-User"]; has {
+				setCount++
+			}
+		}
+		if del, ok := req["delete"].([]string); ok {
+			for _, name := range del {
+				if name == "Remote-User" {
+					deleteCount++
+				}
+			}
+		}
+	}
+	if setCount != 1 || deleteCount != 1 {
+		t.Fatalf("Remote-User 条件 set=%d/delete=%d, want 各 1（规范化重复消费前去重）", setCount, deleteCount)
+	}
+}
+
+// assertForwardAuthCopyHeadersCanonical 钉测链首网关处理器的逐头段形状：
+// vars 哑路由 + [delete 路由, 条件 set 路由]——全部头名键（delete 键、set 键、
+// 占位符名）必须是规范形。
+func assertForwardAuthCopyHeadersCanonical(t *testing.T, chain []interface{}) {
+	t.Helper()
 	head, ok := chain[0].(map[string]interface{})
 	if !ok || head["handler"] != "reverse_proxy" {
 		t.Fatalf("chain head = %#v, want forward_auth reverse_proxy", chain[0])
