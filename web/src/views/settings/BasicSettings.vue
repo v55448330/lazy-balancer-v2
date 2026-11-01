@@ -165,7 +165,12 @@
       <div class="info-list">
         <div class="info-item">
           <span class="info-label">版本</span>
-          <el-tag type="info" size="small">{{ appVersion }}</el-tag>
+          <div class="version-actions">
+            <el-tag type="info" size="small">{{ appVersion }}</el-tag>
+            <!-- 检查更新入口：进页拉取一次官网版本目录，仅在有更新时渲染；
+                 AccessibleLink 保证键盘/读屏可达（与页内「支持的操作」同族）。 -->
+            <AccessibleLink v-if="updateAvailable" type="warning" size="small" @click="openUpdateDialog">发现新版本 {{ updateBadgeVersion }}，点击查看</AccessibleLink>
+          </div>
         </div>
         <div class="info-item">
           <span class="info-label">运行模式</span>
@@ -247,6 +252,45 @@
       <template #footer>
         <el-button @click="adminTlsDialogVisible = false">取消</el-button>
         <el-button type="primary" :disabled="adminTlsConfirmBlocked" @click="confirmAdminTls">确定</el-button>
+      </template>
+    </el-dialog>
+    <!-- 检查更新弹框：稳定版/测试版分 tab 展示（无更新内容的 tab 随条目隐藏），
+         版本号 + 发布说明列表；说明文字一律插值渲染（textContent，禁 v-html）。 -->
+    <el-dialog v-model="updateDialogVisible" class="dialog-body-inset" width="min(560px, 92vw)">
+      <template #header>
+        <DialogHeader :icon="RefreshRight" title="发现新版本" subtitle="官网发布了新版本，以下为版本号与更新内容" />
+      </template>
+      <el-tabs v-model="updateActiveTab">
+        <el-tab-pane v-if="stableUpdate" label="稳定版" name="stable">
+          <div class="dialog-panel release-panel">
+            <div class="release-version-row">
+              <span class="release-version">{{ stableUpdate.version }}</span>
+              <el-tag type="success" size="small">稳定版</el-tag>
+            </div>
+            <p v-if="stableUpdate.theme" class="release-theme">{{ stableUpdate.theme }}</p>
+            <ul v-if="stableUpdate.notes?.length" class="release-notes">
+              <li v-for="note in stableUpdate.notes" :key="note">{{ note }}</li>
+            </ul>
+          </div>
+        </el-tab-pane>
+        <el-tab-pane v-if="betaUpdate" label="测试版" name="beta">
+          <div class="dialog-panel release-panel">
+            <div class="release-version-row">
+              <span class="release-version">{{ betaUpdate.version }}</span>
+              <el-tag type="warning" size="small">测试版</el-tag>
+            </div>
+            <p v-if="betaUpdate.theme" class="release-theme">{{ betaUpdate.theme }}</p>
+            <ul v-if="betaUpdate.notes?.length" class="release-notes">
+              <li v-for="note in betaUpdate.notes" :key="note">{{ note }}</li>
+            </ul>
+          </div>
+        </el-tab-pane>
+      </el-tabs>
+      <template #footer>
+        <div class="release-footer">
+          <el-link type="primary" href="https://www.lazybalancer.org/docs.html#changelog" target="_blank" rel="noopener">前往官网查看更新日志</el-link>
+          <el-button @click="updateDialogVisible = false">关闭</el-button>
+        </div>
       </template>
     </el-dialog>
     <!-- 隐藏文件选择器（弹框 destroy-on-close 会销毁内部 input——置于弹框外，
@@ -522,10 +566,11 @@ import { importFailureLines, importFailureReport } from '@/utils/importFailure'
 import { importSummaryLabel } from '@/utils/importSummaryLabels'
 import { MFA_SCOPE_GROUPS } from '@/utils/mfaScopeGroups'
 import { saveBlob } from '@/utils/download'
-import { Setting, InfoFilled, Check, View, Upload, Download, Timer, Lock, Document } from '@element-plus/icons-vue'
+import { Setting, InfoFilled, Check, View, Upload, Download, Timer, Lock, Document, RefreshRight } from '@element-plus/icons-vue'
 import DialogHeader from '@/components/DialogHeader.vue'
 import DialogSectionHeader from '@/components/DialogSectionHeader.vue'
 import AccessibleLink from '@/components/common/AccessibleLink.vue'
+import { useUpdateCheck } from '@/composables/useUpdateCheck'
 import type { SystemInfo } from '@/types'
 
 const authStore = useAuthStore()
@@ -535,7 +580,20 @@ const exporting = ref(false)
 const importing = ref(false)
 const appVersion = ref('-')
 
+// 检查更新：进页拉取一次官网版本目录（失败静默零打扰），有更新才显示入口与弹框。
+const {
+  hasUpdate: updateAvailable,
+  badgeVersion: updateBadgeVersion,
+  stableUpdate,
+  betaUpdate,
+  dialogVisible: updateDialogVisible,
+  activeTab: updateActiveTab,
+  check: checkForUpdates,
+  openDialog: openUpdateDialog,
+} = useUpdateCheck()
+
 onMounted(async () => {
+  void checkForUpdates()
   try {
     const res = await request.get<{ data: SystemInfo }>('/system/info')
     appVersion.value = res.data.version || '-'
@@ -2020,4 +2078,14 @@ const handleSave = async () => {
 .tls-cert-info-label { flex: 0 0 60px; color: #6b7280; }
 .tls-cert-info-row .is-expired { color: var(--el-color-danger); font-weight: 600; }
 .import-waf-hint { display: block; }
+
+/* 检查更新：版本行入口组与弹框发布说明（插值渲染，与 info-note-bar 的虚线 hairline 同族）。 */
+.version-actions { display: flex; align-items: center; gap: 8px; }
+.release-version-row { display: flex; align-items: center; gap: 8px; }
+.release-version { font-size: 20px; font-weight: 600; color: var(--el-text-color-primary); }
+.release-theme { margin: 6px 0 0; font-size: 12.5px; color: var(--el-text-color-secondary); line-height: 1.6; }
+.release-notes { margin: 10px 0 0; padding: 0; list-style: none; max-height: 300px; overflow-y: auto; }
+.release-notes li { padding: 7px 0; font-size: 12.5px; color: var(--el-text-color-regular); line-height: 1.65; border-bottom: 1px dashed var(--el-border-color-lighter, #e5e7eb); }
+.release-notes li:last-child { border-bottom: none; }
+.release-footer { display: flex; align-items: center; justify-content: space-between; }
 </style>
