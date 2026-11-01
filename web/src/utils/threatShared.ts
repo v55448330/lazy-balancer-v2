@@ -47,7 +47,7 @@ function srgbToOklab(rgb: Rgb): { L: number; a: number; b: number } {
 }
 
 function oklabToSrgb(L: number, a: number, b: number): Rgb {
-  // 出界色度收缩：高色度红/紫超 sRGB 色域时按比例降 a/b 重投（≤8 轮收敛）。
+  // 出界色度收缩：高色度红/紫超 sRGB 色域时按比例降 a/b 重投（至多 8 次迭代）。
   let ca = a
   let cb = b
   for (let i = 0; i < 8; i++) {

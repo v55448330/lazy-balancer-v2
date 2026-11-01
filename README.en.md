@@ -94,7 +94,7 @@ docker compose up -d
 docker buildx build --platform linux/amd64,linux/arm64 \
   --build-arg VERSION=v2.4.0 \
   --provenance=false --sbom=false \
-  -t v55448330/lazy-balancer-v2:v2.4.0-beta --push .   # beta channel; stable remains v2.3.9
+  -t v55448330/lazy-balancer-v2:v2.4.0-beta --push .   # beta channel; stable remains v2.4.0
 ```
 </details>
 
