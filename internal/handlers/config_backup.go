@@ -352,7 +352,8 @@ var invalidateImportTaskLogCache = services.InvalidateTaskLogSizeCache
 var backupBooleanTableColumns = map[string][]string{
 	// ntlm_compatible / upstream_force_http1 为 NOT NULL
 	// DEFAULT 0 的 INTEGER 0/1 语义列——此前漏列，字符串形态可绕过布尔类型门。
-	"lb_rules":              {"dynamic_dns", "enable_dns_server", "enable_active_health_check", "tcp_proxy_protocol", "custom_routes_enabled", "enable_tls", "tls_http_redirect", "enable_compress", "enabled", "log_enabled", "ntlm_compatible", "upstream_force_http1"},
+	// forward_auth_enabled（认证网关开关）同族。
+	"lb_rules":              {"dynamic_dns", "enable_dns_server", "enable_active_health_check", "tcp_proxy_protocol", "custom_routes_enabled", "enable_tls", "tls_http_redirect", "enable_compress", "enabled", "log_enabled", "ntlm_compatible", "upstream_force_http1", "forward_auth_enabled"},
 	"upstreams":             {"dynamic_dns", "enabled"},
 	"users":                 {"is_enabled", "mfa_enabled", "is_setup_admin"},
 	"api_keys":              {"is_enabled", "mcp_enabled", "read_only"},
@@ -363,7 +364,7 @@ var backupBooleanTableColumns = map[string][]string{
 	// is_builtin（INTEGER DEFAULT 0）为内置页语义布尔列。
 	"security_block_pages":       {"is_default", "is_builtin"},
 	"security_crs_version":       {"auto_update"},
-	"security_ip2region_version": {"auto_update"},
+	"security_ip2region_version": {"auto_update", "v6_enabled"},
 	"security_threat_sources":    {"update_enabled", "apply_enabled"},
 	// v2.3.8 爬虫源表新增时漏登记——字符串 "true" 可
 	// 落库为 TEXT，调度 SQL WHERE update_enabled=1 不再命中（静默停更）。
@@ -451,7 +452,13 @@ var backupTableNullDefaults = map[string]map[string]any{
 		"request_body_max_size_mb": int64(0), "upstream_keepalive_timeout": int64(0),
 		"server_tokens_hidden": int64(0), "custom_routes_enabled": int64(0),
 		"ntlm_compatible": int64(0), "upstream_force_http1": int64(0),
-		"proxy_dial_timeout": int64(0), "proxy_response_header_timeout": int64(0), "proxy_read_timeout": int64(0),
+		// 认证网关四件套：开关/地址 NULL 归零；uri/身份头清单 NULL 归确定默认
+		// （与启动回填迁移同构，concrete canonical——空串形态由
+		// validateV2BackupRules 的写侧归一同值收敛）。
+		"forward_auth_enabled": int64(0), "forward_auth_upstream": "",
+		"forward_auth_uri":          db.DefaultForwardAuthURI,
+		"forward_auth_copy_headers": db.DefaultForwardAuthCopyHeaders,
+		"proxy_dial_timeout":        int64(0), "proxy_response_header_timeout": int64(0), "proxy_read_timeout": int64(0),
 		"proxy_write_timeout": int64(0), "proxy_stream_timeout": int64(0), "proxy_flush_interval": int64(0),
 		"proxy_stream_close_delay": int64(0), "host_header": "", "health_check_host": "",
 		"enable_tls": int64(0), "tls_source": "manual", "acme_config_id": int64(0), "ca_provider_id": int64(0),
@@ -2723,6 +2730,16 @@ func validateV2BackupRules(tables map[string][]map[string]any, portGates ...func
 				rule[key] = def
 			}
 		}
+		// 认证网关写侧归一（与保存链 normalizeForwardAuthValues 同一终态）：
+		// 旧备份/手造备份的空 uri/身份头清单回填确定默认（与启动回填迁移、
+		// NULL→默认通道同值），upstream 收敛首尾空白。
+		forwardAuthEnabled, _ := backupInteger(rule["forward_auth_enabled"])
+		faUpstream, faURI, faHeaders := backupString(rule["forward_auth_upstream"]), backupString(rule["forward_auth_uri"]), backupString(rule["forward_auth_copy_headers"])
+		forwardAuthEnabled, faUpstream, faURI, faHeaders = normalizeForwardAuthValues(int(forwardAuthEnabled), faUpstream, faURI, faHeaders)
+		rule["forward_auth_enabled"] = int64(forwardAuthEnabled)
+		rule["forward_auth_upstream"] = faUpstream
+		rule["forward_auth_uri"] = faURI
+		rule["forward_auth_copy_headers"] = faHeaders
 		// 输入必须在上述归一之后补全：健康/重试字段若沿用构造时的零值，
 		// validateRuleFeatures 的保存侧边界会在导入链恒不可达。
 		input.HealthCheckInterval = backupInt(rule["health_check_interval"])
@@ -2732,6 +2749,12 @@ func validateV2BackupRules(tables map[string][]map[string]any, portGates ...func
 		input.TCPTryInterval = backupInt(rule["tcp_try_interval"])
 		input.UpstreamForceHTTP1 = backupInt(rule["upstream_force_http1"])
 		input.UpstreamKeepaliveTimeout = backupInt(rule["upstream_keepalive_timeout"])
+		// 认证网关四件套在上方写侧归一之后回读（空值已回填默认，校验看到
+		// 落库终值）。
+		input.ForwardAuthEnabled = backupInt(rule["forward_auth_enabled"])
+		input.ForwardAuthUpstream = backupString(rule["forward_auth_upstream"])
+		input.ForwardAuthURI = backupString(rule["forward_auth_uri"])
+		input.ForwardAuthCopyHeaders = backupString(rule["forward_auth_copy_headers"])
 		if err := validateRuleHostHeader(backupString(rule["host_header"])); err != nil {
 			return fmt.Errorf("规则 #%d：%w", index+1, err)
 		}

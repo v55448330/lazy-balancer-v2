@@ -691,6 +691,51 @@
               <div v-if="ntlmOn" class="info-note-bar">
                 <span class="info-note-desc">NTLM 接管已生效：负载策略锁定 Cookie 会话保持 · 请求重试禁用 · 响应立即透传 · Keepalive 300s + 强制 HTTP/1.1 · 主动健康检查关闭（被动健康检查仍在役）</span>
               </div>
+
+              <!-- 认证网关（forward_auth，NTLM 同款开关形态）：开启后全部请求
+                   先经网关校验；配置项开启后展示（路径/身份头折叠在高级项） -->
+              <el-form-item>
+                <template #label><span>认证网关<FieldHelpIcon popper-class="fa-help-popper">
+                    <template #content>
+                      <div class="ntlm-help-line">适用场景：Authelia / Authentik / Tailscale 等外部认证网关（forward auth）</div>
+                      <div class="ntlm-help-line">已知注意事项：</div>
+                      <div class="ntlm-help-line">· 认证子请求不经过本规则的 WAF/审计/限流</div>
+                      <div class="ntlm-help-line">· 与 Host 改写同用时，网关收到的 Host 为改写前原值</div>
+                      <div class="ntlm-help-line">· 受信代理场景网关看到的是真实客户端 IP（X-Forwarded-For）</div>
+                    </template>
+                  </FieldHelpIcon></span>
+                </template>
+                <div class="ntlm-switch-control">
+                  <el-switch :model-value="forwardAuthOn" @change="onForwardAuthToggle" />
+                  <span class="form-tip-inline">全部请求先经外部认证网关校验，未认证返回网关响应（通常跳登录页）</span>
+                </div>
+              </el-form-item>
+
+              <template v-if="forwardAuthOn">
+                <el-form-item label="网关地址" required>
+                  <el-input
+                    v-model="wizardForm.forward_auth_upstream"
+                    placeholder="http://authelia:9091 或 https://auth.example.test"
+                    clearable
+                    style="max-width: 480px;"
+                  />
+                  <span class="form-tip-inline">http(s)://host:port；认证通过后自动注入身份头转发后端</span>
+                </el-form-item>
+                <el-form-item label="认证路径">
+                  <el-input v-model="wizardForm.forward_auth_uri" style="max-width: 480px;" />
+                  <span class="form-tip-inline">网关校验端点路径，默认 /api/authz/forward-auth</span>
+                </el-form-item>
+                <el-collapse class="fa-advanced-collapse">
+                  <el-collapse-item title="高级：身份头清单" name="headers">
+                    <el-input
+                      v-model="wizardForm.forward_auth_copy_headers"
+                      placeholder="Remote-User,Remote-Groups,Remote-Email,Remote-Name"
+                      style="max-width: 480px;"
+                    />
+                    <span class="form-tip-inline">逗号分隔，最多 16 个；认证通过后从网关响应拷入原请求转发后端</span>
+                  </el-collapse-item>
+                </el-collapse>
+              </template>
             </template>
 
             <el-divider content-position="left" class="compact-divider">负载策略</el-divider>
@@ -1252,6 +1297,7 @@
           <li>响应立即透传</li>
           <li>上游连接保持 300s + 强制 HTTP/1.1</li>
           <li>主动健康检查关闭（探测返回 401 会被误判摘除；被动健康检查仍在役）</li>
+          <li>已启用 NTLM 专用 transport（连接级协商亲和）</li>
         </ul>
         <div class="info-note-bar"><span class="info-note-desc">原配置不保留记忆，关闭时恢复默认</span></div>
       </div>
@@ -1267,6 +1313,36 @@
         <el-button v-if="ntlmConfirmMode === 'on'" @click="ntlmConfirmVisible = false">取消</el-button>
         <el-button v-if="ntlmConfirmMode === 'on'" type="warning" @click="confirmNtlmToggle">开启</el-button>
         <el-button v-else type="primary" @click="confirmNtlmToggle">确认关闭</el-button>
+      </template>
+    </el-dialog>
+    <!-- 认证网关开关确认（NTLM 同款范式）：开启=行为披露；关闭=确认 -->
+    <el-dialog v-model="faConfirmVisible" class="dialog-body-inset" width="min(560px, 94vw)" top="10vh" :close-on-click-modal="false">
+      <template #header>
+        <DialogHeader :icon="faConfirmMode === 'on' ? WarningFilled : CircleCheckFilled"
+          :title="faConfirmMode === 'on' ? '开启认证网关' : '认证网关已关闭'"
+          :subtitle="faConfirmMode === 'on' ? '全部请求先经外部认证网关校验' : '已恢复直连后端'" />
+      </template>
+      <div v-if="faConfirmMode === 'on'" class="ntlm-confirm-body">
+        <div class="ntlm-confirm-title">开启后本规则的行为变化：</div>
+        <ul class="ntlm-confirm-list">
+          <li>全部请求先经认证网关校验（GET 子请求）</li>
+          <li>未认证返回网关响应（通常跳转登录页），不再到达后端</li>
+          <li>认证通过自动注入身份头（Remote-User/Groups/Email/Name）转发后端</li>
+          <li>认证子请求不进入本规则的 WAF/审计/限流</li>
+          <li>与直返/301 跳转路径规则互斥（保存时校验）</li>
+        </ul>
+        <div class="info-note-bar"><span class="info-note-desc">注意与 Host 改写同用：网关收到的 Host 为改写前原值；网关地址须 http(s)://host:port 形态</span></div>
+      </div>
+      <div v-else class="ntlm-confirm-body">
+        <ul class="ntlm-confirm-list">
+          <li>请求直接转发后端，不再经网关校验</li>
+          <li>网关地址保留，重新开启即可恢复</li>
+        </ul>
+      </div>
+      <template #footer>
+        <el-button v-if="faConfirmMode === 'on'" @click="faConfirmVisible = false">取消</el-button>
+        <el-button v-if="faConfirmMode === 'on'" type="warning" @click="confirmForwardAuthToggle">开启</el-button>
+        <el-button v-else type="primary" @click="confirmForwardAuthToggle">确认关闭</el-button>
       </template>
     </el-dialog>
     <SecurityBindingEditor
@@ -2267,6 +2343,10 @@ const wizardForm = reactive<RuleForm>({
   server_tokens_hidden: 0,
   ntlm_compatible: 0,
   upstream_force_http1: 0,
+  forward_auth_enabled: 0,
+  forward_auth_upstream: '',
+  forward_auth_uri: '/api/authz/forward-auth',
+  forward_auth_copy_headers: 'Remote-User,Remote-Groups,Remote-Email,Remote-Name',
   enabled: true,
   log_enabled: false,
   custom_routes_enabled: false,
@@ -2352,6 +2432,12 @@ watch(() => wizardForm.protocol, (newVal, oldVal) => {
     if (wizardForm.ntlm_compatible === 1) {
       wizardForm.ntlm_compatible = 0
       restoreNtlmDefaults()
+    }
+    // 认证网关同为 HTTP 语义：切 TCP 自动关 + 清空网关地址（路径/身份头保留
+    // 默认值，回转 HTTP 无需重填）
+    if (wizardForm.forward_auth_enabled === 1) {
+      wizardForm.forward_auth_enabled = 0
+      wizardForm.forward_auth_upstream = ''
     }
     // 上游强制 HTTP/1.1 同为 HTTP 传输语义——切 TCP 一并弃置
     wizardForm.upstream_force_http1 = 0
@@ -2662,6 +2748,12 @@ const wizardFormFromRule = (fullRule: Rule): Partial<RuleForm> => ({
   // NTLM 接管态原样回填；编辑/复制均保留实际接管字段。
   ntlm_compatible: fullRule.ntlm_compatible === 1 ? 1 : 0,
   upstream_force_http1: fullRule.upstream_force_http1 === 1 ? 1 : 0,
+  // 认证网关态原样回填（后端对空 uri/身份头已回填确定默认，这里兜底空串→默认
+  // 仅为防御旧快照）。
+  forward_auth_enabled: fullRule.forward_auth_enabled === 1 ? 1 : 0,
+  forward_auth_upstream: fullRule.forward_auth_upstream || '',
+  forward_auth_uri: fullRule.forward_auth_uri || '/api/authz/forward-auth',
+  forward_auth_copy_headers: fullRule.forward_auth_copy_headers || 'Remote-User,Remote-Groups,Remote-Email,Remote-Name',
   enabled: fullRule.enabled,
   log_enabled: fullRule.log_enabled || false,
   custom_routes_enabled: fullRule.custom_routes_enabled === true,
@@ -2880,6 +2972,10 @@ const openWizard = async (rule?: Rule) => {
       server_tokens_hidden: 0,
       ntlm_compatible: 0,
       upstream_force_http1: 0,
+      forward_auth_enabled: 0,
+      forward_auth_upstream: '',
+      forward_auth_uri: '/api/authz/forward-auth',
+      forward_auth_copy_headers: 'Remote-User,Remote-Groups,Remote-Email,Remote-Name',
       enable_dns_server: false,
       log_enabled: false,
       enabled: true,
@@ -3090,6 +3186,23 @@ const confirmNtlmToggle = (): void => {
     restoreNtlmDefaults()
   }
   ntlmConfirmVisible.value = false
+}
+
+// ── 认证网关开关（forward_auth，NTLM 同款开关形态）：开启=弹框披露行为后
+// 落 1；关闭=落 0（网关地址保留）。路径/身份头为常驻默认值，开启后展示配置区 ──
+const forwardAuthOn = computed(() => wizardForm.protocol === 'http' && wizardForm.forward_auth_enabled === 1)
+
+const faConfirmVisible = ref(false)
+const faConfirmMode = ref<'on' | 'off'>('on')
+
+const onForwardAuthToggle = (enabled: string | number | boolean): void => {
+  faConfirmMode.value = Boolean(enabled) ? 'on' : 'off'
+  faConfirmVisible.value = true // 开关由 model-value 驱动：取消则自动回弹零改动
+}
+
+const confirmForwardAuthToggle = (): void => {
+  wizardForm.forward_auth_enabled = faConfirmMode.value === 'on' ? 1 : 0
+  faConfirmVisible.value = false
 }
 
 // 代理超时区被接管字段（仅刷新间隔）：灰态 + 徽标 + 「立即透传」显示值
@@ -3404,6 +3517,26 @@ const submitWizard = async () => {
     saving.value = false
     return
   }
+  // 认证网关预校验（与后端 validateRuleFeatures 同口径；正常交互不可达，
+  // 兜直改 DOM/导入产生的失配态）
+  if (wizardForm.protocol === 'http' && wizardForm.forward_auth_enabled === 1) {
+    if (!/^https?:\/\/.+/.test(wizardForm.forward_auth_upstream.trim())) {
+      ElMessage.warning('认证网关地址须为 http(s)://host:port 形态')
+      saving.value = false
+      return
+    }
+    if (!(wizardForm.forward_auth_uri || '').startsWith('/') || /[\r\n]/.test(wizardForm.forward_auth_uri)) {
+      ElMessage.warning('认证路径须以 / 开头且不含换行')
+      saving.value = false
+      return
+    }
+    const faHeaders = wizardForm.forward_auth_copy_headers.split(',').map((item) => item.trim()).filter(Boolean)
+    if (faHeaders.length === 0 || faHeaders.length > 16 || faHeaders.some((item) => /[\s:]/.test(item))) {
+      ElMessage.warning('认证网关身份头清单须为 1-16 个头且不含空白/冒号')
+      saving.value = false
+      return
+    }
+  }
 
   // 复制向导确认框双保存按钮（用户裁定）：「含安全策略」=副本携带源规则全部策略绑定；
   // 「仅负载规则」=副本不含任何安全策略绑定（需后绑定）。普通新建/编辑不受影响
@@ -3509,6 +3642,12 @@ const submitWizard = async () => {
       // 关闭 NTLM 必须落 0）；TCP 规则不上送 ntlm（设计定稿，后端恒归零兜底）
       ntlm_compatible: wizardForm.protocol === 'http' ? (wizardForm.ntlm_compatible === 1 ? 1 : 0) : undefined,
       upstream_force_http1: wizardForm.upstream_force_http1 === 1 ? 1 : 0,
+      // 认证网关四件套：HTTP 规则显式 0/1（关闭必须落 0）；TCP 规则不上送
+      // （后端自愈归零）。显式 0 走 Update 语义落库关闭。
+      forward_auth_enabled: wizardForm.protocol === 'http' ? (wizardForm.forward_auth_enabled === 1 ? 1 : 0) : undefined,
+      forward_auth_upstream: wizardForm.forward_auth_upstream.trim(),
+      forward_auth_uri: wizardForm.forward_auth_uri,
+      forward_auth_copy_headers: wizardForm.forward_auth_copy_headers.split(',').map((item) => item.trim()).filter(Boolean).join(','),
       enabled: wizardForm.enabled,
       log_enabled: wizardForm.log_enabled || false,
       custom_routes_enabled: wizardForm.protocol === 'http' && wizardForm.custom_routes_enabled,

@@ -29,7 +29,7 @@ func TestIP2RegionUpdateManager_install_writes_version_state_inside_waf_file_loc
 	WafFileLock().Lock()
 	done := make(chan error, 1)
 	go func() {
-		done <- m.downloadAndInstall(context.Background(), "v3.1.0")
+		done <- m.downloadAndInstall(context.Background(), "v3.1.0", true, false)
 	}()
 	select {
 	case err := <-done:

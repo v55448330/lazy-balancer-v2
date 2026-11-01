@@ -264,6 +264,11 @@ func geoipMatcherSet(countries []string, allowMode bool) map[string]interface{} 
 	if ip2regionLivePath != defaultIP2RegionLivePath {
 		conf["xdb_path"] = ip2regionLivePath
 	}
+	// IPv6 库：与 buildGeoipHandler 同口径——开启即显式发射（插件无 v6 路径
+	// 兜底），关闭不发射（字节稳定）。
+	if IsIP2RegionV6Enabled() {
+		conf["xdb_v6_path"] = ip2regionV6LivePath
+	}
 	return map[string]interface{}{
 		l4SecGeoipMatcherID: conf,
 	}
@@ -345,6 +350,10 @@ func l4SecSampleHandler(cid string) map[string]interface{} {
 	}
 	if ip2regionLivePath != defaultIP2RegionLivePath {
 		h["xdb_path"] = ip2regionLivePath
+	}
+	// IPv6 库：归属采样与面板 GeoIP 同语义（开启即发射，关闭字节稳定）。
+	if IsIP2RegionV6Enabled() {
+		h["xdb_v6_path"] = ip2regionV6LivePath
 	}
 	return h
 }

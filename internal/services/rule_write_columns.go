@@ -55,6 +55,10 @@ var lbRuleColumnSpecs = []lbRuleColumnSpec{
 	{"server_tokens_hidden", "COALESCE(server_tokens_hidden,0)"},
 	{"ntlm_compatible", "COALESCE(ntlm_compatible,0)"},
 	{"upstream_force_http1", "COALESCE(upstream_force_http1,0)"},
+	{"forward_auth_enabled", "COALESCE(forward_auth_enabled,0)"},
+	{"forward_auth_upstream", "COALESCE(forward_auth_upstream,'')"},
+	{"forward_auth_uri", "COALESCE(forward_auth_uri,'')"},
+	{"forward_auth_copy_headers", "COALESCE(forward_auth_copy_headers,'')"},
 	{"custom_routes_enabled", "COALESCE(custom_routes_enabled,0)"},
 	{"proxy_dial_timeout", "COALESCE(proxy_dial_timeout,0)"},
 	{"proxy_response_header_timeout", "COALESCE(proxy_response_header_timeout,0)"},
@@ -191,6 +195,14 @@ func lbRuleWriteValue(rule *models.LbRule, column string) any {
 		return rule.NTLMCompatible
 	case "upstream_force_http1":
 		return rule.UpstreamForceHTTP1
+	case "forward_auth_enabled":
+		return rule.ForwardAuthEnabled
+	case "forward_auth_upstream":
+		return rule.ForwardAuthUpstream
+	case "forward_auth_uri":
+		return rule.ForwardAuthURI
+	case "forward_auth_copy_headers":
+		return rule.ForwardAuthCopyHeaders
 	case "custom_routes_enabled":
 		return rule.CustomRoutesEnabled
 	case "proxy_dial_timeout":

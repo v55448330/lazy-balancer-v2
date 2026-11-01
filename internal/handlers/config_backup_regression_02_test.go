@@ -70,7 +70,7 @@ var backupSemanticBoolColumns = map[string][]string{
 	"security_policies":          {"ip_whitelist_enabled", "trust_detection", "geoip_crawler_exempt"},
 	"api_keys":                   {"mcp_enabled", "read_only"},
 	"security_crs_version":       {"auto_update"},
-	"security_ip2region_version": {"auto_update"},
+	"security_ip2region_version": {"auto_update", "v6_enabled"},
 }
 
 // 复核豁免（携裁定）：声明为 INTEGER 0/1（或 BOOLEAN）但非布尔语义/无需类型门

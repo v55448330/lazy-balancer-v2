@@ -5576,7 +5576,49 @@ func (h *Handlers) GetIP2RegionInfo(c *gin.Context) {
 		}
 	}
 	info.ScheduleDays, info.ScheduleTime = services.IP2RegionSchedule()
+	// IPv6 数据源五字段（关闭=未启用配置态，非错误；从节点投影同 v4 口径——
+	// 活动态任务态不落在只读节点展示里，v6_update_status 只承载源终态）。
+	info.V6Enabled = services.IsIP2RegionV6Enabled()
+	info.V6Version, _ = services.GetIP2RegionV6Version()
+	info.V6DbSize = services.GetIP2RegionV6EntryCount()
+	info.V6UpdateStatus = "idle"
+	_ = db.DB.QueryRow(`SELECT COALESCE(v6_updated_at,''), COALESCE(v6_update_status,'idle'), COALESCE(v6_message,'')
+		FROM security_ip2region_version WHERE id=1`).
+		Scan(&info.V6UpdatedAt, &info.V6UpdateStatus, &info.V6Message)
+	if info.V6Version == "" {
+		info.V6Version = "unknown"
+	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: info})
+}
+
+// SetIP2RegionV6Enabled IPv6 数据源用户开关（单任务双源形态的 v6 侧唯一写面）：
+// 保存后立即重载 Caddy——xdb_v6_path 是渲染面键（buildGeoipHandler/
+// geoipMatcherSet/l4SecSampleHandler），不重载则开关与运行配置分叉到下次
+// 任意重载。开关落库成功而重载失败时返回 200+警告（配置已持久化，重载可
+// 手动收敛；与更新任务「Caddy 侧待下次重载生效」同语义），500 会误导用户
+// 以为开关未保存。
+func (h *Handlers) SetIP2RegionV6Enabled(c *gin.Context) {
+	var req struct {
+		Enabled *bool `json:"enabled"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil || req.Enabled == nil {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求参数无效"})
+		return
+	}
+	enabled := *req.Enabled
+	if err := services.SetIP2RegionV6Enabled(enabled); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "保存 IPv6 开关失败: " + err.Error()})
+		return
+	}
+	// 开关变化改变 v4+v6 并集树（v6 段并入/移出选项树与校验 known 集）。
+	services.WriteIP2RegionTreeCacheForToggle()
+	recordAudit(c, "更新", "IP数据库", "IPv6 地理库已"+enabledStateLabel(enabled))
+	applyErr := h.applyCaddyConfigE()
+	msg := "已更新"
+	if applyErr != nil {
+		msg = "已保存，但重载 Caddy 配置失败（待下次成功重载生效）: " + applyErr.Error()
+	}
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: msg})
 }
 
 // ip2RegionRegionsResponse regions 响应体：地域树 + country_names_cn 并行

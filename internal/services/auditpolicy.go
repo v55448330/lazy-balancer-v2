@@ -160,6 +160,7 @@ var auditRoutePolicies = map[string]AuditPolicy{
 	"POST /api/v1/security/crs/update":             AuditPolicySkip,
 	"PUT /api/v1/security/ip2region/auto-update":   AuditPolicyExplicit,
 	"PUT /api/v1/security/ip2region/schedule":      AuditPolicyExplicit,
+	"PUT /api/v1/security/ip2region/v6-enabled":    AuditPolicyExplicit,
 	"POST /api/v1/security/ip2region/update":       AuditPolicySkip,
 	"POST /api/v1/security/custom-rules":           AuditPolicyExplicit,
 	"PUT /api/v1/security/custom-rules/:id":        AuditPolicyExplicit,

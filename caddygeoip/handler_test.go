@@ -728,7 +728,7 @@ func TestSharedGeoIPSearcher_statFailureServesStaleAndForcesRebuild(t *testing.T
 	})
 
 	// Given 缓存已持有该路径条目
-	first, err := sharedGeoIPSearcher(path)
+	first, err := sharedGeoIPSearcher(path, "")
 	if err != nil {
 		t.Fatalf("seed cache: %v", err)
 	}
@@ -741,7 +741,7 @@ func TestSharedGeoIPSearcher_statFailureServesStaleAndForcesRebuild(t *testing.T
 	if err := os.Remove(path); err != nil {
 		t.Fatal(err)
 	}
-	served, err := sharedGeoIPSearcher(path)
+	served, err := sharedGeoIPSearcher(path, "")
 	if err != nil {
 		t.Fatalf("stat failure with a cached entry must serve it (fail-stale): %v", err)
 	}
@@ -754,7 +754,7 @@ func TestSharedGeoIPSearcher_statFailureServesStaleAndForcesRebuild(t *testing.T
 
 	// Then 条目保留且标记必须重建
 	geoipSharedMu.Lock()
-	cached := geoipSharedSearchers[path]
+	cached := geoipSharedSearchers[path+"\x00"]
 	geoipSharedMu.Unlock()
 	if cached == nil || !cached.needsRebuild {
 		t.Fatalf("stat 失败必须把条目标为「必须重建」: %#v", cached)
@@ -762,7 +762,7 @@ func TestSharedGeoIPSearcher_statFailureServesStaleAndForcesRebuild(t *testing.T
 
 	// And 同一次 reload 里后续 geoip 规则实例（各调一次 Provision）仍拿到
 	// 同一 fail-stale 实例——不得只有首个规则免于全量拦截。
-	again, err := sharedGeoIPSearcher(path)
+	again, err := sharedGeoIPSearcher(path, "")
 	if err != nil {
 		t.Fatalf("后续 Provision 也必须拿到 fail-stale 实例: %v", err)
 	}
@@ -784,7 +784,7 @@ func TestSharedGeoIPSearcher_statFailureServesStaleAndForcesRebuild(t *testing.T
 	if !restored.ModTime().Equal(origStat.ModTime()) || restored.Size() != origStat.Size() {
 		t.Fatalf("夹具形态不一致: %v/%d vs %v/%d", restored.ModTime(), restored.Size(), origStat.ModTime(), origStat.Size())
 	}
-	second, err := sharedGeoIPSearcher(path)
+	second, err := sharedGeoIPSearcher(path, "")
 	if err != nil {
 		t.Fatalf("rebuild after restore: %v", err)
 	}
@@ -795,7 +795,7 @@ func TestSharedGeoIPSearcher_statFailureServesStaleAndForcesRebuild(t *testing.T
 		t.Fatalf("rebuilt instance must serve lookups: region=%q err=%v", region, err)
 	}
 	geoipSharedMu.Lock()
-	cached = geoipSharedSearchers[path]
+	cached = geoipSharedSearchers[path+"\x00"]
 	geoipSharedMu.Unlock()
 	if cached == nil || cached.needsRebuild {
 		t.Fatalf("重建成功后必须清除「必须重建」标记: %#v", cached)
@@ -840,7 +840,7 @@ func TestSharedGeoIPSearcher_rebuildFailureServesStale(t *testing.T) {
 		geoipSharedMu.Unlock()
 	})
 
-	first, err := sharedGeoIPSearcher(path)
+	first, err := sharedGeoIPSearcher(path, "")
 	if err != nil {
 		t.Fatalf("seed cache: %v", err)
 	}
@@ -855,7 +855,7 @@ func TestSharedGeoIPSearcher_rebuildFailureServesStale(t *testing.T) {
 	if err := os.Rename(badPath, path); err != nil {
 		t.Fatal(err)
 	}
-	second, err := sharedGeoIPSearcher(path)
+	second, err := sharedGeoIPSearcher(path, "")
 	if err != nil {
 		t.Fatalf("rebuild failure must fail stale (nil error), got %v", err)
 	}
@@ -867,7 +867,7 @@ func TestSharedGeoIPSearcher_rebuildFailureServesStale(t *testing.T) {
 	}
 	// 缓存条目保留（文件修复后下一次 stat 变化仍会触发重建）。
 	geoipSharedMu.Lock()
-	cached := geoipSharedSearchers[path]
+	cached := geoipSharedSearchers[path+"\x00"]
 	geoipSharedMu.Unlock()
 	if cached == nil || cached.searcher != first {
 		t.Fatal("rebuild failure must not evict the cached entry")

@@ -2154,6 +2154,10 @@ func generateCaddyConfigWithCertSource(store, certSource caddyConfigStore, rules
 		ServerTokensHidden            int
 		NTLMCompatible                int
 		UpstreamForceHTTP1            int
+		ForwardAuthEnabled            int
+		ForwardAuthUpstream           string
+		ForwardAuthURI                string
+		ForwardAuthCopyHeaders        string
 		CustomRoutesEnabled           bool
 		ProxyDialTimeout              int
 		ProxyResponseHeaderTimeout    int
@@ -2200,6 +2204,7 @@ func generateCaddyConfigWithCertSource(store, certSource caddyConfigStore, rules
 		       IIF(enable_compress IN ('1',1),1,0), COALESCE(compress_types,'gzip'),
 		       IIF(enable_active_health_check IN ('1',1),1,0), COALESCE(tcp_health_check_port,0), COALESCE(tcp_proxy_protocol,0), COALESCE(tcp_try_duration,0), tcp_try_interval,
 	       COALESCE(request_body_max_size_mb,0), COALESCE(upstream_keepalive_timeout,0), COALESCE(server_tokens_hidden,0), COALESCE(ntlm_compatible,0), COALESCE(upstream_force_http1,0), COALESCE(host_header,''), COALESCE(health_check_host,''),
+	       COALESCE(forward_auth_enabled,0), COALESCE(forward_auth_upstream,''), COALESCE(forward_auth_uri,''), COALESCE(forward_auth_copy_headers,''),
 		       IIF(log_enabled IN ('1',1),1,0), IIF(custom_routes_enabled IN ('1',1),1,0),
 		       COALESCE(proxy_dial_timeout,0), COALESCE(proxy_response_header_timeout,0), COALESCE(proxy_read_timeout,0), COALESCE(proxy_write_timeout,0), COALESCE(proxy_stream_timeout,0), COALESCE(proxy_flush_interval,0), COALESCE(proxy_stream_close_delay,0),
 		       COALESCE(block_page_stage1_id,0), COALESCE(block_page_stage1_status,0), COALESCE(block_page_stage3_id,0), COALESCE(block_page_stage3_status,0)
@@ -2219,7 +2224,8 @@ func generateCaddyConfigWithCertSource(store, certSource caddyConfigStore, rules
 			&r.EnableTLS, &r.TLSSource, &r.TLSCert, &r.TLSKey,
 			&r.TLSHTTPRedirect, &r.EnableCompress, &r.CompressTypes,
 			&r.EnableActiveHealthCheck, &r.TCPHealthCheckPort, &r.TCPProxyProtocol, &r.TCPTryDuration, &r.TCPTryInterval,
-			&r.RequestBodyMaxSizeMB, &r.UpstreamKeepaliveTimeout, &r.ServerTokensHidden, &r.NTLMCompatible, &r.UpstreamForceHTTP1, &r.HostHeader, &r.HealthCheckHost, &r.LogEnabled,
+			&r.RequestBodyMaxSizeMB, &r.UpstreamKeepaliveTimeout, &r.ServerTokensHidden, &r.NTLMCompatible, &r.UpstreamForceHTTP1, &r.HostHeader, &r.HealthCheckHost,
+			&r.ForwardAuthEnabled, &r.ForwardAuthUpstream, &r.ForwardAuthURI, &r.ForwardAuthCopyHeaders, &r.LogEnabled,
 			&r.CustomRoutesEnabled, &r.ProxyDialTimeout, &r.ProxyResponseHeaderTimeout,
 			&r.ProxyReadTimeout, &r.ProxyWriteTimeout, &r.ProxyStreamTimeout, &r.ProxyFlushInterval, &r.ProxyStreamCloseDelay,
 			&r.BlockPageStage1ID, &r.BlockPageStage1Status, &r.BlockPageStage3ID, &r.BlockPageStage3Status)
@@ -2629,6 +2635,10 @@ func generateCaddyConfigWithCertSource(store, certSource caddyConfigStore, rules
 				ServerTokensHidden:             r.ServerTokensHidden,
 				NTLMCompatible:                 r.NTLMCompatible,
 				UpstreamForceHTTP1:             r.UpstreamForceHTTP1,
+				ForwardAuthEnabled:             r.ForwardAuthEnabled,
+				ForwardAuthUpstream:            r.ForwardAuthUpstream,
+				ForwardAuthURI:                 r.ForwardAuthURI,
+				ForwardAuthCopyHeaders:         r.ForwardAuthCopyHeaders,
 				TCPTryDuration:                 r.TCPTryDuration,
 				TCPTryInterval:                 r.TCPTryInterval,
 				GlobalUpstreamKeepaliveTimeout: global.upstreamKeepaliveTimeout,
@@ -3435,19 +3445,26 @@ type SingleRuleConfig struct {
 	// 单规则渲染不承载 TLS 材料：EnableTLS/TLSSource/TLSCert/TLSKey 曾在此
 	// 结构上但无任何读者（预检不填、全量渲染的消费者只读路由字段），
 	// 保留即暗示单规则路径支持 TLS 并可能把私钥 PEM 带进渲染载荷。
-	TLSHTTPRedirect                bool
-	EnableCompress                 bool
-	CompressTypes                  string
-	EnableActiveHealthCheck        bool
-	TCPHealthCheckPort             int
-	TCPProxyProtocol               bool
-	TCPTryDuration                 int
-	TCPTryInterval                 int
-	RequestBodyMaxSizeMB           int
-	UpstreamKeepaliveTimeout       int
-	ServerTokensHidden             int
-	NTLMCompatible                 int
-	UpstreamForceHTTP1             int
+	TLSHTTPRedirect          bool
+	EnableCompress           bool
+	CompressTypes            string
+	EnableActiveHealthCheck  bool
+	TCPHealthCheckPort       int
+	TCPProxyProtocol         bool
+	TCPTryDuration           int
+	TCPTryInterval           int
+	RequestBodyMaxSizeMB     int
+	UpstreamKeepaliveTimeout int
+	ServerTokensHidden       int
+	NTLMCompatible           int
+	UpstreamForceHTTP1       int
+	// 认证网关四件套（forward_auth）：渲染消费全部列（buildHTTPHandleChain
+	// 链首网关子请求处理器）；enabled=1 的字段齐备性由保存门+启动迁移保证，
+	// 渲染层对 upstream 缺失/格式非法显性失败（零兜底）。
+	ForwardAuthEnabled             int
+	ForwardAuthUpstream            string
+	ForwardAuthURI                 string
+	ForwardAuthCopyHeaders         string
 	GlobalRequestBodyMaxSizeMB     int
 	GlobalUpstreamKeepaliveTimeout int
 	GlobalServerTokensHidden       bool
@@ -4311,6 +4328,12 @@ func buildGeoipHandler(crawlerExempt bool) map[string]interface{} {
 	if crawlerIPListFile != defaultCrawlerIPListFile {
 		h["crawler_ip_list_file"] = crawlerIPListFile
 	}
+	// IPv6 库：插件侧无路径兜底默认（空=v6 关闭，查询回落「海外」哨兵），
+	// 因此开启即必须显式发射（含容器默认路径形态）；关闭不发射，渲染字节
+	// 与升级前逐字节一致（默认关闭 → 存量部署零渲染变化、零重载）。
+	if IsIP2RegionV6Enabled() {
+		h["xdb_v6_path"] = ip2regionV6LivePath
+	}
 	return h
 }
 
@@ -4372,6 +4395,17 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig, sec
 		scopedCache = ctx.scopedListCache
 	}
 	var handleChain []interface{}
+	// 认证网关（forward_auth）链首：全部请求先经网关校验，未认证请求在
+	// 指标/安全链之前被网关响应终止（认证子请求不进本规则 WAF/审计/限流）。
+	// 仅 HTTP 语义；enabled=1 而 upstream 缺失的带外行由启动迁移归零，渲染
+	// 层对残余畸形显性失败（buildForwardAuthHandler 零兜底）。
+	if rule.Protocol == "http" && rule.ForwardAuthEnabled == 1 {
+		forwardAuthHandler, err := buildForwardAuthHandler(rule)
+		if err != nil {
+			return nil, err
+		}
+		handleChain = append(handleChain, forwardAuthHandler)
+	}
 	// （v2.2.3）：链首注入 X-LB-Rule-ID——安全事件归因的一等信号（摄入侧优先
 	// 读头、回退 host 反查，同域名多规则/通配符场景归因从概率正确到确定正确）。
 	// 置于 IP 预检之前，预检与各策略 coraza 事务均可见；set 覆盖客户端伪造值；
@@ -4758,9 +4792,18 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig, sec
 	if timeouts.streamCloseDelay > 0 {
 		proxyConfig["stream_close_delay"] = fmt.Sprintf("%ds", timeouts.streamCloseDelay)
 	}
-	needsTransport := hasHTTPSUpstream || rule.EnableDnsServer || effectiveUpstreamKeepaliveTimeout > 0 || timeouts.dial > 0 || timeouts.responseHeader > 0 || timeouts.read > 0 || timeouts.write > 0
+	needsTransport := hasHTTPSUpstream || rule.EnableDnsServer || effectiveUpstreamKeepaliveTimeout > 0 || timeouts.dial > 0 || timeouts.responseHeader > 0 || timeouts.read > 0 || timeouts.write > 0 || rule.NTLMCompatible == 1
 	if needsTransport {
-		transportConfig := map[string]interface{}{"protocol": "http"}
+		// NTLM 兼容（ntlm=1）：transport 换用 caddyserver/ntlm-transport 的
+		// http_ntlm（连接级协商亲和——NTLM/Negotiate 握手的客户端连接钉定
+		// 专用上游连接；模块 Provision 强制 Versions=["1.1"] + keep-alive）。
+		// 模块缺席时 caddy validate/加载对未知 transport 报错，保存门拦截
+		// （与安全库缺失同族的引擎级守卫，无静默降级）。
+		protocol := "http"
+		if rule.NTLMCompatible == 1 {
+			protocol = "http_ntlm"
+		}
+		transportConfig := map[string]interface{}{"protocol": protocol}
 		if hasHTTPSUpstream {
 			// 逐上游回源域名在场时 SNI 改走占位符（server_name 占位符逐连接展开
 			// 实证，httptransport.go:427-446）。已知限制：主动健康检查 probe 用
@@ -4776,12 +4819,14 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig, sec
 				"insecure_skip_verify": true,
 				"server_name":          serverName,
 			}
-			if rule.UpstreamForceHTTP1 == 1 {
+			if rule.UpstreamForceHTTP1 == 1 && rule.NTLMCompatible != 1 {
 				// 上游强制 HTTP/1.1（通用列，2026-10-12）：Caddy HTTPTransport.Versions
 				// （modules/caddyhttp/reverseproxy/httptransport.go）——限定协议版本集即
 				// 禁用 h2（TLS 上游同时从 ALPN 剔除 h2）。语义比 tls.alpn_protocols 准确
 				// （后者只影响 ALPN 握手、不管 h2c 协商）。仅 https 上游输出：
 				// http 明文无 ALPN/协商面（用户裁定）。
+				// http_ntlm transport 不发射 versions——模块 Provision 无条件强制
+				// Versions=["1.1"]（ntlm-transport ntlm.go），显式输出是死配置。
 				transportConfig["versions"] = []string{"1.1"}
 			}
 		}

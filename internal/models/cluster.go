@@ -618,6 +618,10 @@ type ClusterWafFilesRef struct {
 	CRSSha256    string `json:"crs_sha256"`
 	IP2RegionTag string `json:"ip2region_version"`
 	IP2RegionSha string `json:"ip2region_sha256"`
+	// IPv6 库引用（v6 可选组件：主端未装/未启用时为空——空=从端保留本地，
+	// 与「主端组件缺席不表达删除」的既有边界一致）。参与 ref 键/漂移判定。
+	IP2RegionV6Tag string `json:"ip2region_v6_version,omitempty"`
+	IP2RegionV6Sha string `json:"ip2region_v6_sha256,omitempty"`
 	// RDB 文件化：威胁库 .fast 二进制文件哈希（源名 → sha256）
 	ThreatSha256s map[string]string `json:"threat_sha256s,omitempty"`
 }
@@ -648,6 +652,15 @@ type ClusterSecurityCRSVersion struct {
 	// 定时更新排程两列随版本行同步（升主即生效）。
 	ScheduleDays string `json:"schedule_days"`
 	ScheduleTime string `json:"schedule_time"`
+	// IPv6 库（security_ip2region_version 独有列；security_crs_version 无此
+	// 五列——同步通道按表名分派列集，CRS 侧字段恒零值不入快照）。v6_enabled
+	// 随行同步是渲染一致性的硬要求：从节点开关与主节点分叉会让主从 Caddy
+	// 对同一 IPv6 客户端给出不同的地域判定（主端解析、从端哨兵）。
+	V6Enabled      bool   `json:"v6_enabled"`
+	V6Version      string `json:"v6_version"`
+	V6UpdatedAt    string `json:"v6_updated_at"`
+	V6UpdateStatus string `json:"v6_update_status"`
+	V6Message      string `json:"v6_message"`
 }
 
 // ClusterSecurityIP2RegionVersion 与 ClusterSecurityCRSVersion 同为

@@ -964,11 +964,17 @@ type tcpDeadFields struct {
 	UpstreamKeepaliveTimeout *int
 	ServerTokensHidden       *int
 	NTLMCompatible           *int
-	UpstreamForceHTTP1       *int
-	BlockPageStage1ID        *int
-	BlockPageStage1Status    *int
-	BlockPageStage3ID        *int
-	BlockPageStage3Status    *int
+	// 认证网关四件套（仅 HTTP 语义）：TCP 行归零（enabled/upstream；
+	// uri/copy_headers 由各入口随后的写侧归一回填确定默认）。
+	ForwardAuthEnabled     *int
+	ForwardAuthUpstream    *string
+	ForwardAuthURI         *string
+	ForwardAuthCopyHeaders *string
+	UpstreamForceHTTP1     *int
+	BlockPageStage1ID      *int
+	BlockPageStage1Status  *int
+	BlockPageStage3ID      *int
+	BlockPageStage3Status  *int
 	// 访问日志渲染仅对 HTTP 生成 logger_names（caddy.go 按
 	// r.Protocol=="http" 门控），TCP 行的 log_enabled 是死配置——UI 已对
 	// TCP 隐藏开关，API/导入仍可写入，随导出/快照放大。
@@ -1033,6 +1039,7 @@ func tcpDeadFieldReset(protocol string, fields tcpDeadFields) {
 		fields.ACMEConfigID, fields.CAProviderID, fields.RequestBodyMaxSizeMB,
 		fields.UpstreamKeepaliveTimeout, fields.ServerTokensHidden,
 		fields.NTLMCompatible, fields.UpstreamForceHTTP1,
+		fields.ForwardAuthEnabled,
 		fields.BlockPageStage1ID, fields.BlockPageStage1Status,
 		fields.BlockPageStage3ID, fields.BlockPageStage3Status,
 		fields.ProxyDialTimeout, fields.ProxyResponseHeaderTimeout,
@@ -1042,6 +1049,13 @@ func tcpDeadFieldReset(protocol string, fields tcpDeadFields) {
 	} {
 		if target != nil {
 			*target = deadZero
+		}
+	}
+	// 认证网关文本列与 host_header 族同格清空（uri/copy_headers 的确定默认
+	// 由调用侧写侧归一回填，TCP 终态不携带网关地址）。
+	for _, target := range []*string{fields.ForwardAuthUpstream, fields.ForwardAuthURI, fields.ForwardAuthCopyHeaders} {
+		if target != nil {
+			*target = deadEmpty
 		}
 	}
 }
@@ -1145,6 +1159,10 @@ func storedRuleTCPDeadFields(rule *models.LbRule) tcpDeadFields {
 		UpstreamKeepaliveTimeout: &rule.UpstreamKeepaliveTimeout,
 		ServerTokensHidden:       &rule.ServerTokensHidden,
 		NTLMCompatible:           &rule.NTLMCompatible,
+		ForwardAuthEnabled:       &rule.ForwardAuthEnabled,
+		ForwardAuthUpstream:      &rule.ForwardAuthUpstream,
+		ForwardAuthURI:           &rule.ForwardAuthURI,
+		ForwardAuthCopyHeaders:   &rule.ForwardAuthCopyHeaders,
 		UpstreamForceHTTP1:       &rule.UpstreamForceHTTP1,
 		BlockPageStage1ID:        &rule.BlockPageStage1ID,
 		BlockPageStage1Status:    &rule.BlockPageStage1Status,
@@ -1272,6 +1290,10 @@ func duplicateRulePayloadRequest(rule models.LbRule) models.CreateRuleRequest {
 		// 而副本本就默认禁用、页面修复后可再启用）。
 	}
 	req.Upstreams = append(req.Upstreams, rule.Upstreams...)
+	// 认证网关四件套走写侧归一（空 uri/身份头回填确定默认、upstream 收敛
+	// 空白）——复制路径与 Create/Update 同一单源，存量 legacy 空值不 400。
+	req.ForwardAuthEnabled, req.ForwardAuthUpstream, req.ForwardAuthURI, req.ForwardAuthCopyHeaders =
+		normalizeForwardAuthValues(rule.ForwardAuthEnabled, rule.ForwardAuthUpstream, rule.ForwardAuthURI, rule.ForwardAuthCopyHeaders)
 	hasEnabled := false
 	for _, upstream := range req.Upstreams {
 		if upstream.Enabled {
@@ -1523,6 +1545,10 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "server_tokens_hidden 必须为 0、1 或 2"})
 		return
 	}
+	// 认证网关写侧归一（空 uri/身份头回填确定默认、upstream 收敛空白）先于
+	// 特性校验——校验与落库看到同一终值（canonical concrete 形态）。
+	req.ForwardAuthEnabled, req.ForwardAuthUpstream, req.ForwardAuthURI, req.ForwardAuthCopyHeaders =
+		normalizeForwardAuthValues(req.ForwardAuthEnabled, req.ForwardAuthUpstream, req.ForwardAuthURI, req.ForwardAuthCopyHeaders)
 	features := createRuleFeatures(req)
 	if err := validateRuleFeatures(features); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
@@ -1617,6 +1643,8 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 		TCPProxyProtocol: req.TCPProxyProtocol, TCPTryDuration: req.TCPTryDuration, TCPTryInterval: req.TCPTryInterval,
 		RequestBodyMaxSizeMB: req.RequestBodyMaxSizeMB, UpstreamKeepaliveTimeout: req.UpstreamKeepaliveTimeout,
 		ServerTokensHidden: req.ServerTokensHidden, NTLMCompatible: req.NTLMCompatible, UpstreamForceHTTP1: req.UpstreamForceHTTP1,
+		ForwardAuthEnabled: req.ForwardAuthEnabled, ForwardAuthUpstream: req.ForwardAuthUpstream,
+		ForwardAuthURI: req.ForwardAuthURI, ForwardAuthCopyHeaders: req.ForwardAuthCopyHeaders,
 		CustomRoutesEnabled: features.CustomRoutesEnabled,
 		ProxyDialTimeout:    features.ProxyDialTimeout, ProxyResponseHeaderTimeout: features.ProxyResponseHeaderTimeout,
 		ProxyReadTimeout: features.ProxyReadTimeout, ProxyWriteTimeout: features.ProxyWriteTimeout,
@@ -1952,6 +1980,10 @@ var updateRuleBaselineSelectColumns = []updateRuleSelectColumn{
 	{"server_tokens_hidden", "COALESCE(server_tokens_hidden,0)"},
 	{"ntlm_compatible", "COALESCE(ntlm_compatible,0)"},
 	{"upstream_force_http1", "COALESCE(upstream_force_http1,0)"},
+	{"forward_auth_enabled", "COALESCE(forward_auth_enabled,0)"},
+	{"forward_auth_upstream", "COALESCE(forward_auth_upstream,'')"},
+	{"forward_auth_uri", "COALESCE(forward_auth_uri,'')"},
+	{"forward_auth_copy_headers", "COALESCE(forward_auth_copy_headers,'')"},
 	{"custom_routes_enabled", "COALESCE(custom_routes_enabled,0)"},
 	{"proxy_dial_timeout", "COALESCE(proxy_dial_timeout,0)"},
 	{"proxy_response_header_timeout", "COALESCE(proxy_response_header_timeout,0)"},
@@ -2022,6 +2054,12 @@ var updateRuleSetColumns = []updateRuleSetColumn{
 	{"server_tokens_hidden", nil, func(req *models.UpdateRuleRequest, _ ruleFeatureInput) any { return *req.ServerTokensHidden }},
 	{"ntlm_compatible", nil, func(req *models.UpdateRuleRequest, _ ruleFeatureInput) any { return *req.NTLMCompatible }},
 	{"upstream_force_http1", nil, func(req *models.UpdateRuleRequest, _ ruleFeatureInput) any { return *req.UpstreamForceHTTP1 }},
+	// 认证网关四件套：合并区已保证指针非 nil（显式空串=清空，enabled=1 时
+	// 由保存门拒绝清空 upstream；uri/copy_headers 清空随写侧默认回填归一）。
+	{"forward_auth_enabled", nil, func(req *models.UpdateRuleRequest, _ ruleFeatureInput) any { return *req.ForwardAuthEnabled }},
+	{"forward_auth_upstream", nil, func(req *models.UpdateRuleRequest, _ ruleFeatureInput) any { return *req.ForwardAuthUpstream }},
+	{"forward_auth_uri", nil, func(req *models.UpdateRuleRequest, _ ruleFeatureInput) any { return *req.ForwardAuthURI }},
+	{"forward_auth_copy_headers", nil, func(req *models.UpdateRuleRequest, _ ruleFeatureInput) any { return *req.ForwardAuthCopyHeaders }},
 	{"custom_routes_enabled", nil, func(_ *models.UpdateRuleRequest, features ruleFeatureInput) any { return features.CustomRoutesEnabled }},
 	{"proxy_dial_timeout", nil, func(_ *models.UpdateRuleRequest, features ruleFeatureInput) any { return features.ProxyDialTimeout }},
 	{"proxy_response_header_timeout", nil, func(_ *models.UpdateRuleRequest, features ruleFeatureInput) any {
@@ -2246,6 +2284,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		&existingRule.HealthCheckUnhealthyThreshold, &existingRule.HealthCheckHealthyThreshold,
 		&existingRule.EnableActiveHealthCheck, &existingRule.TCPHealthCheckPort, &existingRule.TCPProxyProtocol, &existingRule.TCPTryDuration, &existingRule.TCPTryInterval,
 		&existingRule.RequestBodyMaxSizeMB, &existingRule.UpstreamKeepaliveTimeout, &existingRule.ServerTokensHidden, &existingRule.NTLMCompatible, &existingRule.UpstreamForceHTTP1,
+		&existingRule.ForwardAuthEnabled, &existingRule.ForwardAuthUpstream, &existingRule.ForwardAuthURI, &existingRule.ForwardAuthCopyHeaders,
 		&existingRule.CustomRoutesEnabled,
 		&existingRule.ProxyDialTimeout, &existingRule.ProxyResponseHeaderTimeout, &existingRule.ProxyReadTimeout, &existingRule.ProxyWriteTimeout, &existingRule.ProxyStreamTimeout, &existingRule.ProxyFlushInterval, &existingRule.ProxyStreamCloseDelay,
 		&existingRule.HostHeader, &existingRule.HealthCheckHost, &existingRule.EnableCompress, &existingRule.CompressTypes,
@@ -2435,6 +2474,22 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	}
 	if req.UpstreamForceHTTP1 == nil {
 		req.UpstreamForceHTTP1 = &existingRule.UpstreamForceHTTP1
+	}
+	// 认证网关四件套：nil=保留原值（省略语义，与 NTLM 同格）；显式空串=清空
+	// （enabled 终态=1 时由保存门拒绝 upstream 清空）。TCP 行的死值随保存门
+	// 后的 storedRule 族归零路径处置（存量 TCP 行恒 0 由启动迁移+传输归一保证）。
+	forwardAuthEnabledSubmitted := req.ForwardAuthEnabled != nil
+	if req.ForwardAuthEnabled == nil {
+		req.ForwardAuthEnabled = &existingRule.ForwardAuthEnabled
+	}
+	if req.ForwardAuthUpstream == nil {
+		req.ForwardAuthUpstream = &existingRule.ForwardAuthUpstream
+	}
+	if req.ForwardAuthURI == nil {
+		req.ForwardAuthURI = &existingRule.ForwardAuthURI
+	}
+	if req.ForwardAuthCopyHeaders == nil {
+		req.ForwardAuthCopyHeaders = &existingRule.ForwardAuthCopyHeaders
 	}
 	if req.DynamicDNS == nil {
 		req.DynamicDNS = &existingRule.DynamicDNS
@@ -2645,6 +2700,15 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		if !ntlmCompatibleProvided {
 			req.NTLMCompatible = &tcpZero
 		}
+		// 认证网关四件套（仅 HTTP 语义）同格：显式携带交保存门 400，
+		// 未携带的存量死值自愈归零。
+		if !forwardAuthEnabledSubmitted {
+			tcpEmpty := ""
+			req.ForwardAuthEnabled = &tcpZero
+			req.ForwardAuthUpstream = &tcpEmpty
+			req.ForwardAuthURI = &tcpEmpty
+			req.ForwardAuthCopyHeaders = &tcpEmpty
+		}
 		deadFields := updateRuleTCPDeadFields(&req)
 		// 显式提交的 HTTP-only 值不静默弃置：Strategy、health_check_host、
 		// 动态上游、自定义路径与代理超时族均交保存门 400（与 CreateRule
@@ -2848,6 +2912,12 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "server_tokens_hidden 必须为 0、1 或 2"})
 		return
 	}
+	// 认证网关写侧归一（指针合并后、特性构建前）：空 uri/身份头回填确定默认、
+	// upstream 收敛空白——与 CreateRule 同一单源，校验与 SET 子句看到同一终值。
+	mergedEnabled, mergedUpstream, mergedURI, mergedHeaders := normalizeForwardAuthValues(
+		*req.ForwardAuthEnabled, *req.ForwardAuthUpstream, *req.ForwardAuthURI, *req.ForwardAuthCopyHeaders)
+	req.ForwardAuthEnabled, req.ForwardAuthUpstream, req.ForwardAuthURI, req.ForwardAuthCopyHeaders =
+		&mergedEnabled, &mergedUpstream, &mergedURI, &mergedHeaders
 	features := updateRuleFeatures(req, existingRule)
 	features.Protocol = req.Protocol
 	if err := validateRuleFeatures(features); err != nil {
@@ -4162,6 +4232,10 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 			upstreamHosts = append(upstreamHosts, u.Host)
 		}
 	}
+	// 认证网关四件套与 duplicateRulePayloadRequest 同一归一（legacy 空值
+	// 回填默认后校验，不因存量形态恒 400）。
+	dupForwardAuthEnabled, dupForwardAuthUpstream, dupForwardAuthURI, dupForwardAuthHeaders :=
+		normalizeForwardAuthValues(rule.ForwardAuthEnabled, rule.ForwardAuthUpstream, rule.ForwardAuthURI, rule.ForwardAuthCopyHeaders)
 	if err := validateRuleFeatures(ruleFeatureInput{
 		Protocol: rule.Protocol, Strategy: rule.Strategy, DynamicDNS: rule.DynamicDNS,
 		EnableDnsServer: rule.EnableDnsServer, DnsServer: rule.DnsServer,
@@ -4180,6 +4254,10 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 		NTLMCompatible:           rule.NTLMCompatible,
 		UpstreamForceHTTP1:       rule.UpstreamForceHTTP1,
 		UpstreamKeepaliveTimeout: rule.UpstreamKeepaliveTimeout,
+		ForwardAuthEnabled:       dupForwardAuthEnabled,
+		ForwardAuthUpstream:      dupForwardAuthUpstream,
+		ForwardAuthURI:           dupForwardAuthURI,
+		ForwardAuthCopyHeaders:   dupForwardAuthHeaders,
 		// TCP 三字段随负值门接入——复制路径与 CreateRule/UpdateRule 同校验
 		// 不留绕行口。
 		TCPHealthCheckPort: rule.TCPHealthCheckPort,
@@ -4208,6 +4286,10 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 	duplicate := rule
 	duplicate.ID = 0
 	duplicate.CaddyID = newCaddyID
+	// 认证网关四件套写侧归一（TCP 源行经 tcpDeadFieldReset 清零后 uri/身份头
+	// 回填确定默认，与 Create/Update 终态同构）。
+	duplicate.ForwardAuthEnabled, duplicate.ForwardAuthUpstream, duplicate.ForwardAuthURI, duplicate.ForwardAuthCopyHeaders =
+		normalizeForwardAuthValues(rule.ForwardAuthEnabled, rule.ForwardAuthUpstream, rule.ForwardAuthURI, rule.ForwardAuthCopyHeaders)
 	// 规则文本长度上限：副本名累积后缀截断到上限内（源名可能已含后缀或接近上限）。
 	duplicate.Name = ruleDuplicateName(rule.Name)
 	if err := validateRuleTextLengths(duplicate.Name, rule.Description); err != nil {

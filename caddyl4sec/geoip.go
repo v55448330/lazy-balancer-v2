@@ -24,6 +24,7 @@ import (
 
 	"github.com/caddyserver/caddy/v2"
 	"github.com/lionsoul2014/ip2region/binding/golang/service"
+	"github.com/lionsoul2014/ip2region/binding/golang/xdb"
 	"github.com/mholt/caddy-l4/layer4"
 	"go.uber.org/zap"
 	"lazy-balancer-v2/geoipnames"
@@ -134,10 +135,15 @@ func geoipLocMatches(country, loc string, countries []string) bool {
 // 旧实例延迟关闭（重载窗口内在途查询继续服务，窗口过后 Close 收敛）。
 // stat 失败/重建失败按 fail-stale 返回旧实例（返回 error 会让 matcher 全量
 // 降级 fail-open——比短暂旧数据更伤），并标记下次 Provision 强制重建。
+// 双协议：缓存键为（v4 路径, v6 有效路径）二元组，v6 形态（modTime/size）
+// 变化同样触发重建；v6 健康门（xdb 头校验）失败降级为 v6 禁用（v6 查询
+// fail-open 放行，用户裁定语义），v4 链不受影响。
 type sharedSearcherEntry struct {
 	searcher     *service.Ip2Region
 	modTime      time.Time
 	size         int64
+	v6ModTime    time.Time
+	v6Size       int64
 	needsRebuild bool
 }
 
@@ -190,12 +196,17 @@ func searcherWarn(reason, path, msg string, fields ...zap.Field) {
 	caddy.Log().Named("l4sec").Warn(msg, fields...)
 }
 
-// sharedGeoIPSearcher 返回按路径共享的单例（fail-stale 语义见类型注释）。
-func sharedGeoIPSearcher(path string) (*service.Ip2Region, error) {
+// sharedGeoIPSearcher 返回按（v4 路径, v6 有效路径）共享的单例（fail-stale
+// 语义见类型注释）。v6Path 为空或健康门不过时按「v6 禁用」构造——绑定库
+// 双协议 API 对禁用族的 Search 返回空串，matcher 侧 fail-open 放行（用户
+// 裁定语义不变，仅作用于不可解析形态）。
+func sharedGeoIPSearcher(path, v6Path string) (*service.Ip2Region, error) {
+	v6Effective := healthyV6Path(v6Path, path)
+	key := path + "\x00" + v6Effective
 	st, err := os.Stat(path)
 	if err != nil {
 		sharedSearcherMu.Lock()
-		cached, ok := sharedSearchers[path]
+		cached, ok := sharedSearchers[key]
 		if ok {
 			cached.needsRebuild = true
 		}
@@ -211,15 +222,16 @@ func sharedGeoIPSearcher(path string) (*service.Ip2Region, error) {
 	}
 	sharedSearcherMu.Lock()
 	defer sharedSearcherMu.Unlock()
-	if cached, ok := sharedSearchers[path]; ok && !cached.needsRebuild &&
-		cached.modTime.Equal(st.ModTime()) && cached.size == st.Size() {
+	if cached, ok := sharedSearchers[key]; ok && !cached.needsRebuild &&
+		cached.modTime.Equal(st.ModTime()) && cached.size == st.Size() &&
+		v6FormUnchanged(cached, v6Effective) {
 		searcherWarnThrottle.clearPrefix(path + "|")
 		return cached.searcher, nil
 	}
-	searcher, err := service.NewIp2RegionWithPath(path, "")
+	searcher, err := service.NewIp2RegionWithPath(path, v6Effective)
 	if err != nil {
 		// 重建失败不驱逐旧实例（fail-stale，与 stat 失败同理由）。
-		if cached, ok := sharedSearchers[path]; ok {
+		if cached, ok := sharedSearchers[key]; ok {
 			searcherWarn("rebuild", path, "l4sec: ip2region rebuild failed, serving the previous instance",
 				zap.String("xdb_path", path), zap.Error(err))
 			return cached.searcher, nil
@@ -228,13 +240,56 @@ func sharedGeoIPSearcher(path string) (*service.Ip2Region, error) {
 			zap.String("xdb_path", path), zap.Error(err))
 		return nil, err
 	}
-	if replaced, ok := sharedSearchers[path]; ok {
+	entry := &sharedSearcherEntry{searcher: searcher, modTime: st.ModTime(), size: st.Size()}
+	if v6Effective != "" {
+		if v6st, v6err := os.Stat(v6Effective); v6err == nil {
+			entry.v6ModTime, entry.v6Size = v6st.ModTime(), v6st.Size()
+		}
+	}
+	if replaced, ok := sharedSearchers[key]; ok {
 		old := replaced.searcher
 		time.AfterFunc(sharedOldInstanceDelay, func() { old.Close() })
 	}
-	sharedSearchers[path] = &sharedSearcherEntry{searcher: searcher, modTime: st.ModTime(), size: st.Size()}
+	sharedSearchers[key] = entry
 	searcherWarnThrottle.clearPrefix(path + "|")
 	return searcher, nil
+}
+
+// healthyV6Path 是 v6 文件健康门：空值=禁用直接放行空串；非空时读 256B 头
+// 校验（xdb.LoadHeaderFromFile + VersionFromHeader 必须判定为 IPv6 库），
+// 失败按「v6 禁用」降级（节流 WARN，v4Path 仅作告警键归属）。
+func healthyV6Path(v6Path, v4Path string) string {
+	if v6Path == "" {
+		return ""
+	}
+	header, err := xdb.LoadHeaderFromFile(v6Path)
+	if err != nil {
+		searcherWarn("v6-unavailable", v4Path, "l4sec: ip2region v6 database unavailable, v6 lookups degrade to disabled",
+			zap.String("xdb_v6_path", v6Path), zap.Error(err))
+		return ""
+	}
+	version, verr := xdb.VersionFromHeader(header)
+	if verr != nil || version != xdb.IPv6 {
+		searcherWarn("v6-invalid", v4Path, "l4sec: ip2region v6 database is not an IPv6 xdb, v6 lookups degrade to disabled",
+			zap.String("xdb_v6_path", v6Path))
+		return ""
+	}
+	return v6Path
+}
+
+// v6FormUnchanged 报告缓存条目的 v6 形态是否仍与磁盘一致：v6 禁用（空路径）
+// 恒一致；启用时 v6 文件被换库（rename 换 mtime/size）即失效重建——与 v4
+// 的 modTime/size 判定同构（ip2regionupdate 依赖「Caddy 侧 geoip 随
+// reloader 收敛」，v6 换库同样依赖本判定）。
+func v6FormUnchanged(cached *sharedSearcherEntry, v6Effective string) bool {
+	if v6Effective == "" {
+		return cached.v6ModTime.IsZero() && cached.v6Size == 0
+	}
+	v6st, err := os.Stat(v6Effective)
+	if err != nil {
+		return false
+	}
+	return cached.v6ModTime.Equal(v6st.ModTime()) && cached.v6Size == v6st.Size()
 }
 
 // —— layer4.matchers.lb_geoip ——
@@ -254,6 +309,11 @@ type L4GeoIPMatcher struct {
 
 	// XdbPath 可选：自定义 data_dir 部署由渲染侧发射；空值用容器默认路径。
 	XdbPath string `json:"xdb_path,omitempty"`
+
+	// XdbV6Path 可选：IPv6 库路径（渲染侧仅在面板 v6 开关开启时发射；空=
+	// v6 禁用——IPv6 连接查不到归属，fail-open 放行语义不变）。文件缺失/
+	// 损坏在共享 searcher 健康门降级为禁用，不影响 v4 链。
+	XdbV6Path string `json:"xdb_v6_path,omitempty"`
 
 	countries []string
 	allowMode bool
@@ -298,7 +358,7 @@ func (m *L4GeoIPMatcher) Provision(ctx caddy.Context) error {
 		m.XdbPath = l4DefaultXdbPath
 	}
 	m.xdbPath = m.XdbPath
-	searcher, err := sharedGeoIPSearcher(m.xdbPath)
+	searcher, err := sharedGeoIPSearcher(m.xdbPath, m.XdbV6Path)
 	if err != nil {
 		// 告警已在 sharedGeoIPSearcher 内按（原因|路径）节流。
 		ctx.Logger().Debug("lb_geoip: ip2region unavailable, matcher fails open",

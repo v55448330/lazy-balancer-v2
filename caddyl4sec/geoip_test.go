@@ -230,11 +230,11 @@ func TestSharedSearcherSingleton(t *testing.T) {
 	if xdb == "" {
 		t.Skip("no ip2region xdb available")
 	}
-	s1, err := sharedGeoIPSearcher(xdb)
+	s1, err := sharedGeoIPSearcher(xdb, "")
 	if err != nil {
 		t.Fatalf("first acquire: %v", err)
 	}
-	s2, err := sharedGeoIPSearcher(xdb)
+	s2, err := sharedGeoIPSearcher(xdb, "")
 	if err != nil {
 		t.Fatalf("second acquire: %v", err)
 	}

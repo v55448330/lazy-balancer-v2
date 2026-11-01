@@ -26,6 +26,8 @@ func testLbRuleFullyPopulated(t *testing.T) models.LbRule {
 		TCPTryDuration: 7, TCPTryInterval: 251,
 		RequestBodyMaxSizeMB: 13, UpstreamKeepaliveTimeout: 17, ServerTokensHidden: 2,
 		NTLMCompatible: 1, UpstreamForceHTTP1: 1, CustomRoutesEnabled: true,
+		ForwardAuthEnabled: 1, ForwardAuthUpstream: "http://gw.internal:7000",
+		ForwardAuthURI: "/api/authz/forward-auth", ForwardAuthCopyHeaders: "Remote-User,Remote-Groups",
 		ProxyDialTimeout: 21, ProxyResponseHeaderTimeout: 22, ProxyReadTimeout: 23,
 		ProxyWriteTimeout: 24, ProxyStreamTimeout: 25, ProxyFlushInterval: 26, ProxyStreamCloseDelay: 27,
 		HostHeader: "host.example.test", HealthCheckHost: "probe.example.test",
@@ -98,6 +100,14 @@ func testLbRuleExpectedColumnValue(rule *models.LbRule, column string) any {
 		return rule.NTLMCompatible
 	case "upstream_force_http1":
 		return rule.UpstreamForceHTTP1
+	case "forward_auth_enabled":
+		return rule.ForwardAuthEnabled
+	case "forward_auth_upstream":
+		return rule.ForwardAuthUpstream
+	case "forward_auth_uri":
+		return rule.ForwardAuthURI
+	case "forward_auth_copy_headers":
+		return rule.ForwardAuthCopyHeaders
 	case "custom_routes_enabled":
 		return rule.CustomRoutesEnabled
 	case "proxy_dial_timeout":
@@ -311,6 +321,10 @@ func assertLbRuleScalarFieldsEqual(t *testing.T, want, got *models.LbRule) {
 	check("ServerTokensHidden", want.ServerTokensHidden, got.ServerTokensHidden)
 	check("NTLMCompatible", want.NTLMCompatible, got.NTLMCompatible)
 	check("UpstreamForceHTTP1", want.UpstreamForceHTTP1, got.UpstreamForceHTTP1)
+	check("ForwardAuthEnabled", want.ForwardAuthEnabled, got.ForwardAuthEnabled)
+	check("ForwardAuthUpstream", want.ForwardAuthUpstream, got.ForwardAuthUpstream)
+	check("ForwardAuthURI", want.ForwardAuthURI, got.ForwardAuthURI)
+	check("ForwardAuthCopyHeaders", want.ForwardAuthCopyHeaders, got.ForwardAuthCopyHeaders)
 	check("CustomRoutesEnabled", want.CustomRoutesEnabled, got.CustomRoutesEnabled)
 	check("ProxyDialTimeout", want.ProxyDialTimeout, got.ProxyDialTimeout)
 	check("ProxyResponseHeaderTimeout", want.ProxyResponseHeaderTimeout, got.ProxyResponseHeaderTimeout)

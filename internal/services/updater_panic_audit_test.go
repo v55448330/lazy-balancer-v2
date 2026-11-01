@@ -182,7 +182,7 @@ func TestIP2RegionDownloadAndInstall_abortsOnVersionRowReadFault(t *testing.T) {
 		_, _ = db.DB.Exec(`ALTER TABLE security_ip2region_version_orig RENAME TO security_ip2region_version`)
 	})
 
-	installErr := m.downloadAndInstall(context.Background(), "v9.9.9")
+	installErr := m.downloadAndInstall(context.Background(), "v9.9.9", true, false)
 	if installErr == nil || !strings.Contains(installErr.Error(), "读取安装前 IP2Region 版本行") {
 		t.Fatalf("install err=%v, want 版本行读故障中止", installErr)
 	}

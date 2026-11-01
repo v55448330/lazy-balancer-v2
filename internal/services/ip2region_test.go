@@ -499,11 +499,13 @@ func resetProvincesMemoForTest(t *testing.T) {
 // ReadAt），不再扫 65536 格 vector 推导（每次调用 65536 次 8B ReadAt，
 // BufferCache 已全内存纯浪费；且 vector 端点语义含末条结尾，推导 off-by-one）。
 func TestEntryCountFromXDBHeader_readsHeaderBounds(t *testing.T) {
-	// Given: 构造最小 xdb——header(start=1000,end=1000+14*)+vector 全零
+	// Given: 构造最小 xdb——header(结构2.0 + start=1000,end=1000+14*)+vector 全零
 	const n = 100
 	dir := t.TempDir()
 	path := filepath.Join(dir, "ip2region.xdb")
 	header := make([]byte, 256)
+	binary.LittleEndian.PutUint16(header[0:], 2)
+	binary.LittleEndian.PutUint16(header[2:], 1)
 	binary.LittleEndian.PutUint32(header[8:], 1000)
 	binary.LittleEndian.PutUint32(header[12:], 1000+14*(n-1))
 	vector := make([]byte, 256*256*8)
@@ -522,7 +524,8 @@ func TestEntryCountFromXDBHeader_readsHeaderBounds(t *testing.T) {
 	}
 	// 坏库/空库边界：end < start → 0（不得算出负值）
 	broken := filepath.Join(dir, "broken.xdb")
-	brokenHeader := make([]byte, 16)
+	brokenHeader := make([]byte, 20)
+	binary.LittleEndian.PutUint16(brokenHeader[0:], 2)
 	binary.LittleEndian.PutUint32(brokenHeader[8:], 1000)
 	binary.LittleEndian.PutUint32(brokenHeader[12:], 900)
 	if err := os.WriteFile(broken, brokenHeader, 0o644); err != nil {

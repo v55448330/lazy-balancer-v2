@@ -44,6 +44,14 @@ import (
 // antiFallbackScanTargets 渲染层函数清单（写死兜底禁区），按源文件分组。
 // 批 3 起扫描面扩展到 security.go 渲染函数与 caddy.go 安全渲染消费函数。
 var antiFallbackScanTargets = map[string][]string{
+	// 认证网关（forward_auth）渲染族：buildHTTPHandleChain 可达（链首网关
+	// 子请求处理器与保存门）。buildForwardAuthHandler 对缺失/畸形显性报错
+	// （fail-loud，无省略型兜底字面量）；ValidateForwardAuthGatewayAddress
+	// 含 scheme 缺省端口补全（省略型，allowlist 带可达性 Ruling）。
+	"caddy_forward_auth.go": {
+		"buildForwardAuthHandler",
+		"ValidateForwardAuthGatewayAddress",
+	},
 	"caddy.go": {
 		"generateCaddyConfigWithCertSource",
 		"buildCaddyLogging",
@@ -170,6 +178,10 @@ var antiFallbackAllowlist = map[string]map[string]string{
 	// 可达性扫描登记（调用图内辅助函数的赋值形态兜底）：
 	"decodePathUpstreams": {
 		`protocol = "http"`: "路径规则上游存储投影缺省协议→http：类型②省略型（写侧允许空并在渲染层替换为具体值，否则引擎收到空协议）——可达性 Ruling 披露",
+	},
+	"ValidateForwardAuthGatewayAddress": {
+		`port = "80"`:  "认证网关地址省略端口→按 RFC 3986 scheme 缺省端口补全（http→80）：URL 规范语义的省略型（写侧白名单允许无端口形态，dial 必须显式端口），非无效库值兜底——可达性 Ruling 披露",
+		`port = "443"`: "认证网关地址省略端口→按 RFC 3986 scheme 缺省端口补全（https→443）：URL 规范语义的省略型（写侧白名单允许无端口形态，dial 必须显式端口），非无效库值兜底——可达性 Ruling 披露",
 	},
 	"ParseCRSExcludedRules": {
 		`entry.Scope = "all"`: "CRS 排除项 scope 缺省→all：旧格式/缺字段（集群同步、带外改库、降级版本写入）的防御归一到全局限定，属类型②省略型归一而非无效库值兜底——可达性 Ruling 披露",

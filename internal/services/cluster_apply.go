@@ -1664,6 +1664,11 @@ func applySecurityBlockPages(ctx context.Context, tx *sql.Tx, pages []models.Sec
 // 表名由调用方白名单传入（仅两张固定表）。
 const clusterRuleLibVersionInsertSQL = `INSERT INTO %s (id,version,updated_at,auto_update,update_status,message,last_checked,next_update,trigger,started_at,finished_at,schedule_days,schedule_time) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`
 
+// clusterIP2RegionVersionInsertSQL 是 IPv6 五列的写入变体（列序与
+// clusterIP2RegionVersionV6Columns 读序一致；仅 security_ip2region_version
+// 经 clusterRuleLibVersionInsertSQLFor 分派到本模板）。
+const clusterIP2RegionVersionInsertSQL = `INSERT INTO %s (id,version,updated_at,auto_update,update_status,message,last_checked,next_update,trigger,started_at,finished_at,schedule_days,schedule_time,v6_enabled,v6_version,v6_updated_at,v6_update_status,v6_message) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+
 // snapshotActiveUpdateStatusMessage 是快照搬运来的活动态在从端的归一文案：
 // 从节点不可能执行该类任务（RunsOn=RoleMasterOnly），保留「更新中」是假
 // 运行态，按 failed + 本句解释归一（与启动期「进程重启回收」同族但归属不同）。
@@ -1776,8 +1781,11 @@ func snapshotDatetimeText(value any) string {
 }
 
 // applyRuleLibVersionRows 全量替换写入一张版本表（先清后插由调用方负责）。
+// v6 五列仅 security_ip2region_version 经专用模板写入（v6_enabled 随行同步
+// 是主从渲染一致性的硬要求——从节点开关与主节点分叉会让同一 IPv6 客户端
+// 在两端得到不同地域判定）。
 func applyRuleLibVersionRows(ctx context.Context, tx *sql.Tx, table string, rows []clusterRuleLibVersionRow) error {
-	statement := fmt.Sprintf(clusterRuleLibVersionInsertSQL, table)
+	statement := fmt.Sprintf(clusterRuleLibVersionInsertSQLFor(table), table)
 	for _, row := range rows {
 		// 活动态（checking/downloading/installing/reloading）只属于执行该
 		// 任务的进程；从节点不运行该任务，落到本地的活动态是主端镜像且
@@ -1786,6 +1794,19 @@ func applyRuleLibVersionRows(ctx context.Context, tx *sql.Tx, table string, rows
 		// schedule_days/schedule_time 随版本行全量替换
 		// 落库（升主即生效）；空串来源=旧主端快照缺列，读取端 normalizeScheduleRow
 		// 回落默认，与 NOT NULL 约束兼容。
+		if table == "security_ip2region_version" {
+			// v6 活动态同样归一（v6 源状态只属于主端更新进程）。
+			v6Status, v6Message, _ := normalizeSnapshotTaskState(row.V6UpdateStatus, row.V6Message, row.LastChecked, row.FinishedAt)
+			v6StatusText, _ := v6Status.(string)
+			v6MessageText, _ := v6Message.(string)
+			if _, err := tx.ExecContext(ctx, statement, row.ID, row.Version, nullableString(row.UpdatedAt), row.AutoUpdate, updateStatus, message,
+				nullableString(row.LastChecked), nullableString(row.NextUpdate), nullableString(row.Trigger), nullableString(row.StartedAt), nullableString(snapshotDatetimeText(finishedAt)),
+				row.ScheduleDays, row.ScheduleTime,
+				boolToSnapshotInteger(row.V6Enabled), row.V6Version, nullableString(row.V6UpdatedAt), v6StatusText, v6MessageText); err != nil {
+				return fmt.Errorf("写入快照 %s 版本 %d: %w", table, row.ID, err)
+			}
+			continue
+		}
 		if _, err := tx.ExecContext(ctx, statement, row.ID, row.Version, nullableString(row.UpdatedAt), row.AutoUpdate, updateStatus, message,
 			nullableString(row.LastChecked), nullableString(row.NextUpdate), nullableString(row.Trigger), nullableString(row.StartedAt), nullableString(snapshotDatetimeText(finishedAt)),
 			row.ScheduleDays, row.ScheduleTime); err != nil {

@@ -77,6 +77,10 @@ func ConfigureWafDirs(dataDir string) {
 	crsDistDir = filepath.Join(wafDistDir, "crs")
 	ip2regionLivePath = filepath.Join(dataDir, "ip2region.xdb")
 	ip2regionDistPath = filepath.Join(wafDistDir, "ip2region.xdb")
+	// IPv6 库双路径同批派生（与 v4 同目录、_v6 后缀）——自定义 data_dir 部署
+	// 的 v6 live/dist 落数据卷/发行卷，不派生会读 /app 默认路径与 v4 分叉。
+	ip2regionV6LivePath = filepath.Join(dataDir, "ip2region_v6.xdb")
+	ip2regionV6DistPath = filepath.Join(wafDistDir, "ip2region_v6.xdb")
 	crawlerDistSeedFile = filepath.Join(wafDistDir, "crawler-ip-lists.seed.json")
 	// 爬虫运行快照（root 写、插件读的交换文件）同属数据卷
 	// 派生面——默认 /app/data/crawler-ip-lists.json 与容器形态逐字节一致。

@@ -87,7 +87,12 @@ const (
 	DefaultHealthCheckHealthyThreshold   = 2
 	DefaultHealthCheckUnhealthyThreshold = 3
 	DefaultTCPTryInterval                = 250
-	DefaultCertExpiryDays                = 30
+	// 认证网关（forward_auth）uri/copy_headers 的确定默认——空值回填单源：
+	// 启动回填迁移、写侧归一（handlers）、UI 预填三处共用；upstream 无默认
+	// （网关地址必由用户提供）。与 DefaultTCPTryInterval 同格。
+	DefaultForwardAuthURI         = "/api/authz/forward-auth"
+	DefaultForwardAuthCopyHeaders = "Remote-User,Remote-Groups,Remote-Email,Remote-Name"
+	DefaultCertExpiryDays         = 30
 	// cert_renewal_days/cert_renewal_attempts 与
 	// cert_expiry_days 同族——DDL DEFAULT + 启动回填 + 读侧直读零兜底三件套。
 	DefaultCertRenewalDays     = 30
@@ -491,6 +496,14 @@ func createTables() error {
 		ntlm_compatible INTEGER NOT NULL DEFAULT 0,
 		-- 上游强制 HTTP/1.1（通用列）：1=对 https 上游禁 ALPN h2（transport.versions）。
 		upstream_force_http1 INTEGER NOT NULL DEFAULT 0,
+		-- 认证网关四件套（仅 HTTP）：enabled=1 时全部请求先经网关校验；
+		-- upstream=http(s)://host:port，uri=校验路径，copy_headers=身份头清单
+		-- （逗号分隔）。uri/copy_headers 由启动回填确定默认，upstream 为空的
+		-- enabled 行由启动迁移归零。
+		forward_auth_enabled INTEGER NOT NULL DEFAULT 0,
+		forward_auth_upstream TEXT NOT NULL DEFAULT '',
+		forward_auth_uri TEXT NOT NULL DEFAULT '',
+		forward_auth_copy_headers TEXT NOT NULL DEFAULT '',
 		custom_routes_enabled BOOLEAN NOT NULL DEFAULT 0,
 		proxy_dial_timeout INTEGER NOT NULL DEFAULT 0,
 		proxy_response_header_timeout INTEGER NOT NULL DEFAULT 0,
@@ -890,7 +903,12 @@ func createTables() error {
 		started_at DATETIME,
 		finished_at DATETIME,
 		schedule_days TEXT NOT NULL DEFAULT '1,2,3,4,5,6,7',
-		schedule_time TEXT NOT NULL DEFAULT '04:00'
+		schedule_time TEXT NOT NULL DEFAULT '04:00',
+		v6_enabled BOOLEAN NOT NULL DEFAULT 0,
+		v6_version TEXT NOT NULL DEFAULT '',
+		v6_updated_at DATETIME,
+		v6_update_status TEXT DEFAULT 'idle',
+		v6_message TEXT DEFAULT ''
 	);
 	CREATE TABLE IF NOT EXISTS auto_backups (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1117,11 +1135,17 @@ var newColumnsRegistry = map[string]string{
 	"lb_rules.server_tokens_hidden":       "INTEGER DEFAULT 0",
 	"lb_rules.ntlm_compatible":            "INTEGER NOT NULL DEFAULT 0",
 	"lb_rules.upstream_force_http1":       "INTEGER NOT NULL DEFAULT 0",
-	"lb_rules.block_page_stage1_id":       "INTEGER NOT NULL DEFAULT 0",
-	"lb_rules.block_page_stage1_status":   "INTEGER NOT NULL DEFAULT 0",
-	"lb_rules.block_page_stage3_id":       "INTEGER NOT NULL DEFAULT 0",
-	"lb_rules.block_page_stage3_status":   "INTEGER NOT NULL DEFAULT 0",
-	"auto_backups.app_version":            "TEXT NOT NULL DEFAULT ''",
+	// 认证网关四件套（存量库幂等补列 ensureNewColumns；uri/copy_headers 由
+	// 启动回填确定默认）。
+	"lb_rules.forward_auth_enabled":      "INTEGER NOT NULL DEFAULT 0",
+	"lb_rules.forward_auth_upstream":     "TEXT NOT NULL DEFAULT ''",
+	"lb_rules.forward_auth_uri":          "TEXT NOT NULL DEFAULT ''",
+	"lb_rules.forward_auth_copy_headers": "TEXT NOT NULL DEFAULT ''",
+	"lb_rules.block_page_stage1_id":      "INTEGER NOT NULL DEFAULT 0",
+	"lb_rules.block_page_stage1_status":  "INTEGER NOT NULL DEFAULT 0",
+	"lb_rules.block_page_stage3_id":      "INTEGER NOT NULL DEFAULT 0",
+	"lb_rules.block_page_stage3_status":  "INTEGER NOT NULL DEFAULT 0",
+	"auto_backups.app_version":           "TEXT NOT NULL DEFAULT ''",
 	// 统一任务引擎：手动触发操作者归因列——runNow/Trigger 落
 	// 操作者，auto/startup/legacy 落空串。存量库幂等补列（ensureNewColumns）。
 	"task_runs.operator":                              "TEXT NOT NULL DEFAULT ''",
@@ -1188,6 +1212,15 @@ var newColumnsRegistry = map[string]string{
 	// ——升级安装更新定时排程必报 no such column: schedule_days。
 	"security_ip2region_version.schedule_days": "TEXT NOT NULL DEFAULT '1,2,3,4,5,6,7'",
 	"security_ip2region_version.schedule_time": "TEXT NOT NULL DEFAULT '04:00'",
+	// IPv6 地理库（单任务双源更新）五列：用户开关（默认关，最小惊讶——
+	// 开启会收窄 HTTP「海外」fail-closed 兜底面，属阻断语义变化）、已安装
+	// 版本行、更新时刻、v6 源独立终态与消息（v4 失败语义不变，v6 失败不
+	// 拖垮 v4 安装，两源状态分列展示）。
+	"security_ip2region_version.v6_enabled":       "BOOLEAN NOT NULL DEFAULT 0",
+	"security_ip2region_version.v6_version":       "TEXT NOT NULL DEFAULT ''",
+	"security_ip2region_version.v6_updated_at":    "DATETIME",
+	"security_ip2region_version.v6_update_status": "TEXT DEFAULT 'idle'",
+	"security_ip2region_version.v6_message":       "TEXT DEFAULT ''",
 	// global_config 单行表恒经 newColumns 补列（threat_auto_update 起的既定
 	// 口径——fresh DDL 不追平，对齐仅适用多行版本/策略表）。
 	"global_config.threat_schedule_days": "TEXT NOT NULL DEFAULT '1,2,3,4,5,6,7'",
@@ -1502,6 +1535,9 @@ func runMigrations() error {
 	}
 	if err := normalizeNtlmTakeoverConsistencyMigration(); err != nil {
 		return fmt.Errorf("failed to normalize ntlm takeover consistency: %w", err)
+	}
+	if err := normalizeForwardAuthConsistencyMigration(); err != nil {
+		return fmt.Errorf("failed to normalize forward auth consistency: %w", err)
 	}
 	if err := migrateSecurityEventRetentionDefaults(); err != nil {
 		return err
@@ -3085,6 +3121,49 @@ func normalizeNtlmTakeoverConsistencyMigration() error {
 		if n, _ := res.RowsAffected(); n > 0 {
 			// 与孤儿 path_rules/上游权重归一同口径：归一用户数据须留痕。
 			detail := fmt.Sprintf("启动迁移：已将 %d 条「ntlm_compatible=1 但接管四列不齐」的规则归一为 ntlm_compatible=0（渲染对该列零感知，运行行为不变）", n)
+			log.Print(detail)
+			recordSystemAudit("启动迁移", "负载规则", detail)
+		}
+	}
+	return nil
+}
+
+// normalizeForwardAuthConsistencyMigration：认证网关（forward_auth）存量归一，
+// 与 ntlm 接管归一同族——渲染消费全部四列，enabled=1 而 upstream 缺失的带外
+// 行（API 直构/旧版本备份/直改 DB）会在配置生成期渲染失败并拖垮整份配置；
+// TCP 行残留 enabled=1 同属带外死态（仅 HTTP 语义）。启动期：
+// ① uri/copy_headers 空值全表回填确定默认（db.DefaultForwardAuth* 单源）——
+//
+//	canonical 形态稳定（集群 rules 节哈希主从对齐的基础），开关关闭行同样
+//	回填（渲染零消费，仅消除「同一终态两种存储形态」）；
+//
+// ② enabled=1 且 upstream 为空、或协议非 http → enabled=0（渲染安全底线，
+//
+//	网关地址无确定默认可回填）。幂等：非空 uri/合法行零命中。
+//
+// 集群同步侧不需单独处理——主端归一后经快照收敛从端。
+func normalizeForwardAuthConsistencyMigration() error {
+	res, err := execMigrationWriteIfNeeded(updateWhere("lb_rules",
+		"forward_auth_uri = '"+DefaultForwardAuthURI+"', forward_auth_copy_headers = '"+DefaultForwardAuthCopyHeaders+"'",
+		`forward_auth_uri='' OR forward_auth_copy_headers=''`))
+	if err != nil {
+		return err
+	}
+	if res != nil {
+		if n, _ := res.RowsAffected(); n > 0 {
+			detail := fmt.Sprintf("启动迁移：已为 %d 条规则的认证网关空 uri/身份头清单回填默认值", n)
+			log.Print(detail)
+			recordSystemAudit("启动迁移", "负载规则", detail)
+		}
+	}
+	res, err = execMigrationWriteIfNeeded(updateWhere("lb_rules", "forward_auth_enabled=0", `forward_auth_enabled=1 AND (
+		COALESCE(forward_auth_upstream,'')='' OR protocol<>'http')`))
+	if err != nil {
+		return err
+	}
+	if res != nil {
+		if n, _ := res.RowsAffected(); n > 0 {
+			detail := fmt.Sprintf("启动迁移：已将 %d 条「认证网关开启但网关地址缺失/非 HTTP 规则」的规则归一为关闭（该形态渲染必败，无法构造网关子请求）", n)
 			log.Print(detail)
 			recordSystemAudit("启动迁移", "负载规则", detail)
 		}
@@ -4906,6 +4985,11 @@ func migrateLbRulesPrimaryKey() error {
 			-- 连同值一并丢弃——先例）。
 			ntlm_compatible INTEGER NOT NULL DEFAULT 0,
 			upstream_force_http1 INTEGER NOT NULL DEFAULT 0,
+			-- 与 fresh CREATE 同步携带认证网关四件套（同上先例）。
+			forward_auth_enabled INTEGER NOT NULL DEFAULT 0,
+			forward_auth_upstream TEXT NOT NULL DEFAULT '',
+			forward_auth_uri TEXT NOT NULL DEFAULT '',
+			forward_auth_copy_headers TEXT NOT NULL DEFAULT '',
 			custom_routes_enabled BOOLEAN NOT NULL DEFAULT 0,
 			proxy_dial_timeout INTEGER NOT NULL DEFAULT 0,
 			proxy_response_header_timeout INTEGER NOT NULL DEFAULT 0,
@@ -4958,6 +5042,7 @@ func migrateLbRulesPrimaryKey() error {
 			health_check_unhealthy_threshold, health_check_healthy_threshold,
 			enable_active_health_check, tcp_health_check_port, tcp_proxy_protocol, tcp_try_duration, tcp_try_interval,
 			request_body_max_size_mb, upstream_keepalive_timeout, server_tokens_hidden, ntlm_compatible, upstream_force_http1,
+			forward_auth_enabled, forward_auth_upstream, forward_auth_uri, forward_auth_copy_headers,
 			custom_routes_enabled,
 			proxy_dial_timeout, proxy_response_header_timeout, proxy_read_timeout, proxy_write_timeout, proxy_stream_timeout, proxy_flush_interval, proxy_stream_close_delay,
 			host_header, health_check_host, enable_tls, tls_cert,
@@ -4978,6 +5063,7 @@ func migrateLbRulesPrimaryKey() error {
 			COALESCE(health_check_healthy_threshold,` + fmt.Sprint(DefaultHealthCheckHealthyThreshold) + `),
 			enable_active_health_check, tcp_health_check_port, tcp_proxy_protocol, tcp_try_duration, COALESCE(tcp_try_interval,` + fmt.Sprint(DefaultTCPTryInterval) + `),
 			request_body_max_size_mb, upstream_keepalive_timeout, server_tokens_hidden, COALESCE(ntlm_compatible,0), COALESCE(upstream_force_http1,0),
+			COALESCE(forward_auth_enabled,0), COALESCE(forward_auth_upstream,''), COALESCE(forward_auth_uri,''), COALESCE(forward_auth_copy_headers,''),
 			COALESCE(custom_routes_enabled,0),
 			COALESCE(proxy_dial_timeout,0), COALESCE(proxy_response_header_timeout,0), COALESCE(proxy_read_timeout,0), COALESCE(proxy_write_timeout,0), COALESCE(proxy_stream_timeout,0), COALESCE(proxy_flush_interval,0), COALESCE(proxy_stream_close_delay,0),
 			host_header, COALESCE(health_check_host,''), enable_tls, tls_cert,

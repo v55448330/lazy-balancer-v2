@@ -33,7 +33,7 @@ func slotBytesForCapacity(capacity int) int {
 // setSampleCountryLookuperForTest 重定向采样查库缝（save/restore）。
 func setSampleCountryLookuperForTest(fn func(ip string) (string, bool)) (restore func()) {
 	saved := l4SampleLookup
-	l4SampleLookup = func(xdbPath, ip string) (string, bool) { return fn(ip) }
+	l4SampleLookup = func(xdbPath, v6Path, ip string) (string, bool) { return fn(ip) }
 	return func() { l4SampleLookup = saved }
 }
 

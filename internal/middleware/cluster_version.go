@@ -200,7 +200,8 @@ var (
 	lbRuleRequestAndUpstreamColumns = []string{
 		"request_body_max_size_mb", "upstream_keepalive_timeout", "server_tokens_hidden",
 		"ntlm_compatible", "upstream_force_http1", "host_header", "health_check_host",
-		"custom_routes_enabled",
+		"custom_routes_enabled", "forward_auth_enabled", "forward_auth_upstream",
+		"forward_auth_uri", "forward_auth_copy_headers",
 	}
 	lbRuleProxyTimeoutColumns = []string{
 		"proxy_dial_timeout", "proxy_response_header_timeout", "proxy_read_timeout",
@@ -286,7 +287,7 @@ var clusterSyncedTables = []clusterSyncedTable{
 	// 保存（setVersionTableSchedule 同语句写两列+next_update）即 bump 版本，
 	// 排程随快照到达从端（升主即生效，自动备份先例）。
 	{name: "security_crs_version", snapshotColumns: "id,version,updated_at,auto_update,update_status,message,last_checked,next_update,trigger,started_at,finished_at,schedule_days,schedule_time"},
-	{name: "security_ip2region_version", snapshotColumns: "id,version,updated_at,auto_update,update_status,message,last_checked,next_update,trigger,started_at,finished_at,schedule_days,schedule_time"},
+	{name: "security_ip2region_version", snapshotColumns: "id,version,updated_at,auto_update,update_status,message,last_checked,next_update,trigger,started_at,finished_at,schedule_days,schedule_time,v6_enabled,v6_version,v6_updated_at,v6_update_status,v6_message"},
 	// 威胁情报库（v2.3.x）：多行表（每源一行状态机），随集群快照同步；
 	// last_checked 为运行态读路径指标，UPDATE 触发列排除（同 CRS/IP2Region）。
 	{name: "security_threat_sources", snapshotColumns: "id,name,display_name,url,format,update_enabled,apply_enabled,entry_count,version,update_status,message,last_checked,next_update,trigger,started_at,finished_at,consecutive_failures"},
@@ -320,6 +321,7 @@ var clusterVersionRuntimeColumns = map[string]map[string]bool{
 	"security_ip2region_version": columnSet(
 		"update_status", "message", "last_checked", "next_update",
 		"trigger", "started_at", "finished_at",
+		"v6_enabled", "v6_version", "v6_updated_at", "v6_update_status", "v6_message",
 	),
 	"security_threat_sources": columnSet(
 		"last_checked", "update_status", "message", "next_update",

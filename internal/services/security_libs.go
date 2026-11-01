@@ -88,9 +88,15 @@ func withTreeSwapWindow(fn func() error) error {
 // 存在性」行为在测试中不可复现。
 func SetSecurityLibsDirsForTest(crsDir, xdbPath string) (restore func()) {
 	oldLive, oldCRS, oldXdb, oldIndexDir := crsLiveDir, crsDirectivesDir, ip2regionLivePath, CRSRuleIndexDir
+	oldV6Live, oldV6Dist := ip2regionV6LivePath, ip2regionV6DistPath
 	crsLiveDir, crsDirectivesDir, ip2regionLivePath = crsDir, crsDir, xdbPath
 	CRSRuleIndexDir = filepath.Join(crsDir, "rules")
+	// v6 路径同步注入到 xdbPath 同目录的 hermetic 形态——跨包测试注入后，
+	// 任何启用 v6 的用例不得再指向生产 /app/data/ip2region_v6.xdb。
+	ip2regionV6LivePath = filepath.Join(filepath.Dir(xdbPath), "ip2region_v6.xdb")
+	ip2regionV6DistPath = filepath.Join(filepath.Dir(crsDir), "waf.dist", "ip2region_v6.xdb")
 	return func() {
 		crsLiveDir, crsDirectivesDir, ip2regionLivePath, CRSRuleIndexDir = oldLive, oldCRS, oldXdb, oldIndexDir
+		ip2regionV6LivePath, ip2regionV6DistPath = oldV6Live, oldV6Dist
 	}
 }

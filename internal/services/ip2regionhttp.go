@@ -35,13 +35,26 @@ func defaultFetchIP2RegionLatestTag(ctx context.Context) (string, error) {
 // ip2RegionXDBSourceURL 是 ip2region xdb 的真实来源 URL（含版本 tag，作为完整
 // 性基线的键）：下载函数与安装校验后的记录调用共用，避免 URL 构造分叉。
 func ip2RegionXDBSourceURL(tag string) string {
-	return ghProxied("https://raw.githubusercontent.com/lionsoul2014/ip2region/" + tag + "/data/ip2region_v4.xdb")
+	return ip2RegionXDBSourceURLFor("v4", tag)
+}
+
+// ip2RegionXDBSourceURLFor 按数据族（v4/v6）构造来源 URL：两族文件同仓库
+// 同 tag 发布（data/ip2region_v4.xdb 与 data/ip2region_v6.xdb），单次版本
+// 检查同时覆盖两源。
+func ip2RegionXDBSourceURLFor(family, tag string) string {
+	return ghProxied(ip2RegionXDBOriginURLFor(family, tag))
+}
+
+// ip2RegionXDBOriginURLFor 裸 GitHub 源站 URL（不含代理前缀）——完整性基线
+// 的键口径：代理是传输层(白名单可切换),内容校验应钉源站。
+func ip2RegionXDBOriginURLFor(family, tag string) string {
+	return "https://raw.githubusercontent.com/lionsoul2014/ip2region/" + tag + "/data/ip2region_" + family + ".xdb"
 }
 
 // ip2RegionXDBBaselineKey 是完整性基线的键:裸 GitHub URL 不含
 // 代理前缀——代理是传输层(白名单可切换),内容校验应钉源站。
 func ip2RegionXDBBaselineKey(tag string) string {
-	return "https://raw.githubusercontent.com/lionsoul2014/ip2region/" + tag + "/data/ip2region_v4.xdb"
+	return ip2RegionXDBOriginURLFor("v4", tag)
 }
 
 // ip2RegionXDBDownloadSizeCap 是 xdb 下载的单设上限（100MB，>9× 合法 v4.xdb
@@ -58,18 +71,30 @@ var ip2RegionDownloadSync = func(f *os.File) error { return f.Sync() }
 
 // defaultDownloadIP2RegionXDB downloads the ip2region v4 xdb to destPath.
 func defaultDownloadIP2RegionXDB(ctx context.Context, tag, destPath string, progress downloadProgressFunc) error {
+	return defaultDownloadIP2RegionXDBFamily(ctx, "v4", tag, destPath, progress)
+}
+
+// defaultDownloadIP2RegionXDBV6 是 v6 数据源的下载缝（与 v4 同一实现，仅
+// 来源 URL 与族名不同；测试各自重定向）。
+func defaultDownloadIP2RegionXDBV6(ctx context.Context, tag, destPath string, progress downloadProgressFunc) error {
+	return defaultDownloadIP2RegionXDBFamily(ctx, "v6", tag, destPath, progress)
+}
+
+// defaultDownloadIP2RegionXDBFamily 按数据族下载 xdb 到 destPath：错误文案
+// 带族名，安装前结构自检门按族布局判定（见 checkIP2RegionXDBStructure）。
+func defaultDownloadIP2RegionXDBFamily(ctx context.Context, family, tag, destPath string, progress downloadProgressFunc) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
-		ip2RegionXDBSourceURL(tag), nil)
+		ip2RegionXDBSourceURLFor(family, tag), nil)
 	if err != nil {
 		return err
 	}
 	resp, err := ip2RegionDownloadClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("下载 ip2region xdb: %w", err)
+		return fmt.Errorf("下载 ip2region %s xdb: %w", family, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("下载 ip2region xdb: GitHub 返回 %d", resp.StatusCode)
+		return fmt.Errorf("下载 ip2region %s xdb: GitHub 返回 %d", family, resp.StatusCode)
 	}
 	out, err := os.OpenFile(destPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
 	if err != nil {
@@ -88,21 +113,21 @@ func defaultDownloadIP2RegionXDB(ctx context.Context, tag, destPath string, prog
 		return copyErr
 	}
 	if syncErr != nil {
-		return fmt.Errorf("ip2region xdb 落盘同步失败: %w", syncErr)
+		return fmt.Errorf("ip2region %s xdb 落盘同步失败: %w", family, syncErr)
 	}
 	if closeErr != nil {
 		return closeErr
 	}
 	// Content-Length 回读比对：声明长度的响应被中间层截断时落盘字节数
 	// 与声明值不一致，直接拒收；chunked 无声明长度，由安装前的结构自检
-	// 门兜底（见 validateIP2RegionXDB）。
+	// 门兜底（见 validateIP2RegionXDB / validateIP2RegionV6XDB）。
 	if resp.ContentLength >= 0 {
 		fi, serr := os.Stat(destPath)
 		if serr != nil {
-			return fmt.Errorf("ip2region xdb 落盘回读失败: %w", serr)
+			return fmt.Errorf("ip2region %s xdb 落盘回读失败: %w", family, serr)
 		}
 		if fi.Size() != resp.ContentLength {
-			return fmt.Errorf("ip2region xdb 落盘字节 %d 与响应声明长度 %d 不一致（疑似截断）", fi.Size(), resp.ContentLength)
+			return fmt.Errorf("ip2region %s xdb 落盘字节 %d 与响应声明长度 %d 不一致（疑似截断）", family, fi.Size(), resp.ContentLength)
 		}
 	}
 	return nil

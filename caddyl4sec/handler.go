@@ -101,6 +101,11 @@ type L4SecHandler struct {
 	// 由渲染侧发射，与 lb_geoip 同语义）。
 	XdbPath string `json:"xdb_path,omitempty"`
 
+	// XdbV6Path 可选：采样查库的 IPv6 库路径（渲染侧仅在面板 v6 开关开启时
+	// 发射；空=禁用，v6 连接采样查不到归属即跳过桶计数，与 geoip matcher
+	// 的哨兵语义同源）。
+	XdbV6Path string `json:"xdb_v6_path,omitempty"`
+
 	ruleID   string
 	logger   *zap.Logger
 	counters *ruleConnCounters
@@ -191,7 +196,7 @@ func (h *L4SecHandler) allowConnection(ip string) {
 	if n%l4SampleEvery != 1 {
 		return
 	}
-	country, ok := l4SampleLookup(h.sampleXdbPath(), ip)
+	country, ok := l4SampleLookup(h.sampleXdbPath(), h.XdbV6Path, ip)
 	if !ok {
 		return
 	}

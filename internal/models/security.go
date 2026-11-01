@@ -495,6 +495,14 @@ type IP2RegionInfo struct {
 	// 定时更新排程（v2.3.x）：同 CRSInfo。
 	ScheduleDays []int  `json:"schedule_days"`
 	ScheduleTime string `json:"schedule_time"`
+	// IPv6 数据源（单任务双源）：开关/版本/条目数/源独立终态。v6 关闭时
+	// 前端显示「未启用」而非错误（Enabled=false 是配置态非故障态）。
+	V6Enabled      bool   `json:"v6_enabled"`
+	V6Version      string `json:"v6_version"`
+	V6DbSize       int    `json:"v6_db_size"`
+	V6UpdatedAt    string `json:"v6_updated_at"`
+	V6UpdateStatus string `json:"v6_update_status"`
+	V6Message      string `json:"v6_message"`
 }
 
 type CustomRuleCondition struct {

@@ -63,10 +63,15 @@ type WafFileBundle struct {
 	CRSSha256    string `json:"crs_sha256"`
 	IP2RegionTag string `json:"ip2region_version"`
 	IP2RegionSha string `json:"ip2region_sha256"`
+	// IPv6 库组件（可选：主端未装/未启用时 ref 与 bundle 均为空——空=从端
+	// 保留本地，与「主端组件缺席不表达删除」的既有边界一致）。
+	IP2RegionV6Tag string `json:"ip2region_v6_version,omitempty"`
+	IP2RegionV6Sha string `json:"ip2region_v6_sha256,omitempty"`
 	// 原始字节载荷（JSON 序列化时由 encoding/json 转 base64；lbbak 通道直接
 	// 以原始字节入 tar 条目）——字段名已去 B64 后缀。
 	CRSTarGz []byte `json:"crs_tar_gz,omitempty"`
 	Xdb      []byte `json:"xdb,omitempty"`
+	XdbV6    []byte `json:"xdb_v6,omitempty"`
 	// RDB 文件化：威胁库 .fast 文件（主节点编译产物，从节点直接使用零编译）
 	ThreatFiles []models.ThreatFileEntry `json:"threat_files,omitempty"`
 }
@@ -133,6 +138,11 @@ func wafFileRefKey(ref *models.ClusterWafFilesRef) string {
 	builder.WriteString(ref.IP2RegionTag)
 	builder.WriteByte(0)
 	builder.WriteString(ref.IP2RegionSha)
+	// v6 分量进键（空=主端未装/未启用，与缺席等价）。
+	builder.WriteByte(0)
+	builder.WriteString(ref.IP2RegionV6Tag)
+	builder.WriteByte(0)
+	builder.WriteString(ref.IP2RegionV6Sha)
 	for _, name := range names {
 		builder.WriteByte(0)
 		builder.WriteString(name)
@@ -150,10 +160,12 @@ func wafFileRefKey(ref *models.ClusterWafFilesRef) string {
 // 不完整 bundle，由调用方回退全量构建自愈。
 func materializeWafFileBundle(ref *models.ClusterWafFilesRef) *WafFileBundle {
 	bundle := &WafFileBundle{
-		CRSVersion:   ref.CRSVersion,
-		CRSSha256:    ref.CRSSha256,
-		IP2RegionTag: ref.IP2RegionTag,
-		IP2RegionSha: ref.IP2RegionSha,
+		CRSVersion:     ref.CRSVersion,
+		CRSSha256:      ref.CRSSha256,
+		IP2RegionTag:   ref.IP2RegionTag,
+		IP2RegionSha:   ref.IP2RegionSha,
+		IP2RegionV6Tag: ref.IP2RegionV6Tag,
+		IP2RegionV6Sha: ref.IP2RegionV6Sha,
 	}
 	if ref.CRSSha256 != "" {
 		if data, _, err := tarGzDir(crsLiveDir); err == nil && len(data) > 0 {
@@ -168,6 +180,14 @@ func materializeWafFileBundle(ref *models.ClusterWafFilesRef) *WafFileBundle {
 			sum := sha256.Sum256(data)
 			if hex.EncodeToString(sum[:]) == ref.IP2RegionSha {
 				bundle.Xdb = data
+			}
+		}
+	}
+	if ref.IP2RegionV6Sha != "" {
+		if data, err := os.ReadFile(ip2regionV6LivePath); err == nil {
+			sum := sha256.Sum256(data)
+			if hex.EncodeToString(sum[:]) == ref.IP2RegionV6Sha {
+				bundle.XdbV6 = data
 			}
 		}
 	}
@@ -204,6 +224,9 @@ func wafFileBundleComplete(ref *models.ClusterWafFilesRef, bundle *WafFileBundle
 		return false
 	}
 	if ref.IP2RegionSha != "" && len(bundle.Xdb) == 0 {
+		return false
+	}
+	if ref.IP2RegionV6Sha != "" && len(bundle.XdbV6) == 0 {
 		return false
 	}
 	return len(bundle.ThreatFiles) == len(ref.ThreatSha256s)
@@ -450,6 +473,15 @@ func wafRefStatSignature() (string, error) {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return "", err
 	}
+	// IPv6 库（可选组件）：存在即入签名，缺失按固定占位——「未装」与「已装」
+	// 必须不同签名，否则主端新装 v6 后从端命中旧引用不拉取。
+	if info, err := os.Stat(ip2regionV6LivePath); err == nil {
+		record(ip2regionV6LivePath, info)
+	} else if errors.Is(err, os.ErrNotExist) {
+		fmt.Fprint(h, "ip2region-v6-missing\n")
+	} else {
+		return "", err
+	}
 	// .version（ip2region tag）与 CRS VERSION 同口径：内容入签名——tag 参与
 	// waf_files 节哈希与从端漂移判定/大屏版本展示，「等长改写且保留
 	// mtime/mode」（带外 touch/镜像恢复）时不得命中旧引用。
@@ -458,6 +490,15 @@ func wafRefStatSignature() (string, error) {
 		fmt.Fprintf(h, "ip2region-version\x00%d\x00%s\n", len(data), data)
 	} else if errors.Is(err, os.ErrNotExist) {
 		fmt.Fprint(h, "ip2region-version-missing\n")
+	} else {
+		return "", err
+	}
+	// v6 sidecar 与 v4 同口径（可选：缺失=固定占位）。
+	tagPathV6 := ip2regionV6LivePath + ".version"
+	if data, err := os.ReadFile(tagPathV6); err == nil {
+		fmt.Fprintf(h, "ip2region-v6-version\x00%d\x00%s\n", len(data), data)
+	} else if errors.Is(err, os.ErrNotExist) {
+		fmt.Fprint(h, "ip2region-v6-version-missing\n")
 	} else {
 		return "", err
 	}
@@ -496,6 +537,20 @@ func readWafVersionLabels() (crsVersion, ip2regionTag string, err error) {
 	return crsVersion, ip2regionTag, nil
 }
 
+// readIP2RegionV6VersionLabel 读取 IPv6 库伴生 .version（readWafVersionLabels
+// 的 v6 可选变体）：缺失=空串 nil；非缺失读失败显式上抛（引用构建据此整体
+// 失败，不发布偏斜引用）。
+func readIP2RegionV6VersionLabel() (v6Tag string, present bool, err error) {
+	v, readErr := os.ReadFile(ip2regionV6LivePath + ".version")
+	if readErr != nil {
+		if errors.Is(readErr, os.ErrNotExist) {
+			return "", false, nil
+		}
+		return "", false, fmt.Errorf("read IP2Region v6 version: %w", readErr)
+	}
+	return sanitizeBundleVersion(strings.TrimSpace(string(v))), true, nil
+}
+
 // buildWafFileRefFullLockedChecked 是引用的全量构建（读内容 + 哈希），仅在
 // 廉价签名缺失或变化时执行。
 func buildWafFileRefFullLockedChecked() (*models.ClusterWafFilesRef, error) {
@@ -527,6 +582,23 @@ func buildWafFileRefFullLockedChecked() (*models.ClusterWafFilesRef, error) {
 		return nil, fmt.Errorf("hash IP2Region database: %w", err)
 	}
 	ref.IP2RegionTag = ip2regionTag
+	// IPv6 库（可选组件）：存在才入 ref——缺失=主端未装/未启用，从端保留
+	// 本地（与「缺席不表达删除」边界一致）；读失败显式上抛（不发布偏斜引用）。
+	if _, statErr := os.Stat(ip2regionV6LivePath); statErr == nil {
+		if sum, err := sha256File(ip2regionV6LivePath); err == nil && sum != "" {
+			ref.IP2RegionV6Sha = sum
+			seen = true
+		} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return nil, fmt.Errorf("hash IP2Region v6 database: %w", err)
+		}
+		if v6Tag, _, labelErr := readIP2RegionV6VersionLabel(); labelErr != nil {
+			return nil, labelErr
+		} else if v6Tag != "" {
+			ref.IP2RegionV6Tag = v6Tag
+		}
+	} else if !errors.Is(statErr, os.ErrNotExist) {
+		return nil, fmt.Errorf("stat IP2Region v6 database: %w", statErr)
+	}
 	threatFast, err := scanThreatFastFilesChecked()
 	if err != nil {
 		return nil, err
@@ -674,6 +746,12 @@ func wafFilesRefVersionLabelsDiffer(r *models.ClusterWafFilesRef) bool {
 			return true
 		}
 	}
+	if r.IP2RegionV6Tag != "" {
+		tag, _, err := readIP2RegionV6VersionLabel()
+		if err != nil || tag != r.IP2RegionV6Tag {
+			return true
+		}
+	}
 	return threatFastFilesDiffer(r.ThreatSha256s)
 }
 
@@ -721,6 +799,12 @@ func wafFilesRefDiffers(r *models.ClusterWafFilesRef) bool {
 			return true
 		}
 	}
+	if r.IP2RegionV6Sha != "" {
+		sum, err := sha256File(ip2regionV6LivePath)
+		if err != nil || sum != r.IP2RegionV6Sha {
+			return true
+		}
+	}
 	// 威胁库 .fast 也属于引用面：同步开关关闭时仅威胁库更新也必须产生
 	// “同步警告”审计（判据单源于 threatFastFilesDiffer，与轻量告警共用）。
 	return threatFastFilesDiffer(r.ThreatSha256s)
@@ -736,6 +820,9 @@ func wafFilesRefMatchesBundle(r *models.ClusterWafFilesRef, b *WafFileBundle) bo
 		return false
 	}
 	if r.IP2RegionSha != "" && b.IP2RegionSha != r.IP2RegionSha {
+		return false
+	}
+	if r.IP2RegionV6Sha != "" && b.IP2RegionV6Sha != r.IP2RegionV6Sha {
 		return false
 	}
 	// 威胁面交叉核验——ref 逐源声明的.fast 哈希必须与 bundle 携带
@@ -795,6 +882,9 @@ func ApplyWafFileBundle(bundle *WafFileBundle) (crsChanged, xdbChanged, threatCh
 	}
 	if bundle.IP2RegionSha != "" && len(bundle.Xdb) == 0 {
 		return crsChanged, xdbChanged, threatChanged, newWafFileApplyError("xdb", errors.New("同步包声明 IP2Region 哈希非空但未携带内容，拒绝应用该同步包"))
+	}
+	if bundle.IP2RegionV6Sha != "" && len(bundle.XdbV6) == 0 {
+		return crsChanged, xdbChanged, threatChanged, newWafFileApplyError("xdb", errors.New("同步包声明 IP2Region IPv6 哈希非空但未携带内容，拒绝应用该同步包"))
 	}
 	// 威胁库条目先全量预检（结构/哈希/路径）：任何一条被拒都在落盘前中止，
 	// 兑现错误文案的「拒绝整包」语义（CRS/xdb 尚未写入，等待主端下轮自愈）。
@@ -859,6 +949,28 @@ func ApplyWafFileBundle(bundle *WafFileBundle) (crsChanged, xdbChanged, threatCh
 		// 拒绝路径留下「新标签 + 旧库」跨代偏斜。
 		if tagErr := rewriteVersionIfMissingOrStale(ip2regionLivePath+".version", bundle.IP2RegionTag); tagErr != nil {
 			return crsChanged, xdbChanged, threatChanged, newWafFileApplyError("xdb", fmt.Errorf("写入同步 IP2Region数据库版本标记: %w", tagErr))
+		}
+	}
+	if len(bundle.XdbV6) > 0 {
+		// IPv6 库与 v4 同纵深：空声明哈希拒写、内容哈希核验后单源原子落盘、
+		// sidecar 补写。xdbChanged 覆盖两族（消费方语义=「IP 库有更新，需重载/
+		// 树重建」，不区分族）。
+		if bundle.IP2RegionV6Sha == "" {
+			return crsChanged, xdbChanged, threatChanged, newWafFileApplyError("xdb", errors.New("同步 IP2Region IPv6数据库缺少声明哈希，已拒绝落盘"))
+		}
+		liveV6Sum, _ := sha256File(ip2regionV6LivePath)
+		if liveV6Sum != bundle.IP2RegionV6Sha {
+			sum := sha256.Sum256(bundle.XdbV6)
+			if got := hex.EncodeToString(sum[:]); got != bundle.IP2RegionV6Sha {
+				return crsChanged, xdbChanged, threatChanged, newWafFileApplyError("xdb", fmt.Errorf("同步 IP2Region IPv6数据库哈希不匹配（声明 %s，实际 %s），已拒绝落盘", bundle.IP2RegionV6Sha, got))
+			}
+			if err := writeFileAtomicSynced(ip2regionV6LivePath, bundle.XdbV6, 0644); err != nil {
+				return crsChanged, xdbChanged, threatChanged, newWafFileApplyError("xdb", fmt.Errorf("落盘同步 IP2Region IPv6数据库: %w", err))
+			}
+			xdbChanged = true
+		}
+		if tagErr := rewriteVersionIfMissingOrStale(ip2regionV6LivePath+".version", bundle.IP2RegionV6Tag); tagErr != nil {
+			return crsChanged, xdbChanged, threatChanged, newWafFileApplyError("xdb", fmt.Errorf("写入同步 IP2Region IPv6数据库版本标记: %w", tagErr))
 		}
 	}
 	// RDB 文件化：从节点写威胁库 .fast 文件（直接使用，零编译）

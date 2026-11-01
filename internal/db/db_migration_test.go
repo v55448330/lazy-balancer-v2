@@ -492,8 +492,10 @@ func TestRunMigrations_migratesLegacyHTTPSRulesToHTTPWithTLS(t *testing.T) {
 	// 死字段清零聚合审计（本夹具的 tcp 行 compress_types 默认 'gzip' 命中死值
 	// 谓词，首轮被归一）。
 	entries := drainSystemAuditBuffer()
-	if len(entries) != 2 {
-		t.Fatalf("system audit entries=%d, want 2（1 条 https 聚合 + 1 条 TCP 死字段聚合；重跑幂等）", len(entries))
+	// 第三条：认证网关 uri/身份头清单空值回填（本夹具行为特性前默认空串，
+	// 回填谓词全表命中一次）。
+	if len(entries) != 3 {
+		t.Fatalf("system audit entries=%d, want 3（1 条 https 聚合 + 1 条 TCP 死字段聚合 + 1 条认证网关默认回填；重跑幂等）", len(entries))
 	}
 	details := make([]string, 0, len(entries))
 	for _, entry := range entries {
@@ -502,7 +504,7 @@ func TestRunMigrations_migratesLegacyHTTPSRulesToHTTPWithTLS(t *testing.T) {
 		}
 		details = append(details, entry.detail)
 	}
-	for _, want := range []string{"lb_https_tls", "lb_https_notls", "TCP 规则 HTTP 专属死字段已清零"} {
+	for _, want := range []string{"lb_https_tls", "lb_https_notls", "TCP 规则 HTTP 专属死字段已清零", "认证网关"} {
 		found := false
 		for _, detail := range details {
 			if strings.Contains(detail, want) {
@@ -585,13 +587,14 @@ func TestRunMigrations_migratesLegacyHTTPSRulesWithACMECertJobToHTTPWithTLS(t *t
 		t.Fatalf("certless rule protocol=%q enable_tls=%d, want http/0", protocol, enableTLS)
 	}
 
-	// And 三条受影响规则聚合成一条迁移审计（重跑零命中）
+	// And 三条受影响规则聚合成一条迁移审计（重跑零命中）；另有认证网关
+	// 空 uri/身份头清单回填一条（特性前默认空串，全表命中一次）。
 	entries := drainSystemAuditBuffer()
-	if len(entries) != 1 {
-		t.Fatalf("system audit entries=%d, want 1（按批聚合，避免逐规则写满缓冲）: %+v", len(entries), entries)
+	if len(entries) != 2 {
+		t.Fatalf("system audit entries=%d, want 2（1 条 https 聚合 + 1 条认证网关默认回填）: %+v", len(entries), entries)
 	}
-	if !strings.Contains(entries[0].detail, "3 条") || !strings.Contains(entries[0].detail, "lb_https_acme") {
-		t.Fatalf("audit detail=%q, want 命中条数与 caddy_id 清单", entries[0].detail)
+	if !strings.Contains(entries[1].detail, "3 条") || !strings.Contains(entries[1].detail, "lb_https_acme") {
+		t.Fatalf("audit detail=%q, want 命中条数与 caddy_id 清单", entries[1].detail)
 	}
 }
 
@@ -2846,7 +2849,11 @@ func createLegacyLbRulesTables(t *testing.T, database *sql.DB, variant legacyLbR
 		-- 真实启动序：ensureNewColumns 先于 PK 重建运行，重建只见补列后形态
 		health_check_host TEXT NOT NULL DEFAULT '',
 		ntlm_compatible INTEGER NOT NULL DEFAULT 0,
-		upstream_force_http1 INTEGER NOT NULL DEFAULT 0`)
+		upstream_force_http1 INTEGER NOT NULL DEFAULT 0,
+		forward_auth_enabled INTEGER NOT NULL DEFAULT 0,
+		forward_auth_upstream TEXT NOT NULL DEFAULT '',
+		forward_auth_uri TEXT NOT NULL DEFAULT '',
+		forward_auth_copy_headers TEXT NOT NULL DEFAULT ''`)
 	}
 	schema.WriteString("\n);")
 	switch variant.upstreams {
@@ -3377,11 +3384,11 @@ func TestRunMigrations_clearsTCPRuleStaleDNSServerFields(t *testing.T) {
 	}
 
 	// And 受影响规则进入操作日志缓冲，重跑零命中（1 条 stale DNS 聚合 + 1 条
-	// TCP 死字段聚合=2 条；聚合行携带命中条数与 caddy_id 清单，逐规则写 N 条
-	// 会随存量规模撑爆系统审计缓冲）。
+	// TCP 死字段聚合 + 1 条认证网关空 uri/身份头回填=3 条；聚合行携带命中
+	// 条数与 caddy_id 清单，逐规则写 N 条会随存量规模撑爆系统审计缓冲）。
 	entries := drainSystemAuditBuffer()
-	if len(entries) != 2 {
-		t.Fatalf("system audit entries=%d, want 2（1 条 stale DNS 聚合 + 1 条 TCP 死字段聚合；重跑幂等）: %+v", len(entries), entries)
+	if len(entries) != 3 {
+		t.Fatalf("system audit entries=%d, want 3（1 条 stale DNS 聚合 + 1 条 TCP 死字段聚合 + 1 条认证网关默认回填；重跑幂等）: %+v", len(entries), entries)
 	}
 	details := make([]string, 0, len(entries))
 	var dnsDetail string
@@ -3784,10 +3791,11 @@ func TestRunMigrations_recordsStrategyAndWeightNormalization(t *testing.T) {
 		t.Fatalf("run migrations: %v", err)
 	}
 	entries := drainSystemAuditBuffer()
-	if len(entries) != 2 {
-		t.Fatalf("audit entries=%d, want 2: %+v", len(entries), entries)
+	// 第三条：认证网关空 uri/身份头清单回填（特性前默认空串，命中一次）。
+	if len(entries) != 3 {
+		t.Fatalf("audit entries=%d, want 3: %+v", len(entries), entries)
 	}
-	wants := []string{"round_robin 归一为 weighted_round_robin：1 条", "上游权重无效值（NULL/<1）归 1：2 条"}
+	wants := []string{"round_robin 归一为 weighted_round_robin：1 条", "上游权重无效值（NULL/<1）归 1：2 条", "认证网关空 uri"}
 	for _, want := range wants {
 		found := false
 		for _, entry := range entries {

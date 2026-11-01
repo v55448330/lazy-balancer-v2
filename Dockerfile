@@ -52,6 +52,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
       --with github.com/mholt/caddy-l4@v0.1.2 \
       --with github.com/caddyserver/transform-encoder@ba4124974830222da7f12a091cf11ddf4d49363f \
       --with github.com/mholt/caddy-ratelimit@v0.1.0 \
+      --with github.com/caddyserver/ntlm-transport@v0.1.2 \
       --replace github.com/go-chi/chi/v5=github.com/go-chi/chi/v5@v5.4.0 \
       --with github.com/corazawaf/coraza-caddy/v2@v2.6.2 \
       --with lazy-balancer-v2/caddygeoip=./caddygeoip \
@@ -210,6 +211,7 @@ RUN mkdir -p /app/data /app/logs /app/certs /app/waf/crs /app/waf/audit
 RUN crs_version=v4.28.0; \
     crs_sha256=d8acc96f25ad07c8e3a595a23c797324f6d77e59ddf9e26e90dd95ebd2e676ce; \
     xdb_sha256=6307a9696f5711f84bcb8b25f07894de68a64a0ed4a1cc7e990562dd3084f210; \
+    xdb_v6_sha256=5b93da35ac28bc316dccc54a758381f7a874ae0461dd51ff5df5e34815586f11; \
     n=0; until apk add --no-cache curl; do \
       n=$((n+1)); \
       if [ "$n" -ge 3 ]; then echo ">>> apk add curl 3 次失败" >&2; exit 1; fi; \
@@ -233,8 +235,15 @@ RUN crs_version=v4.28.0; \
                 curl -sfL -o /app/waf.dist/ip2region.xdb "https://raw.githubusercontent.com/lionsoul2014/ip2region/v3.17.0/data/ip2region_v4.xdb") && \
                echo "${xdb_sha256}  /app/waf.dist/ip2region.xdb" | sha256sum -c -; do \
       n=$((n+1)); \
-      if [ "$n" -ge 3 ]; then echo ">>> ip2region xdb 下载/校验 3 次失败" >&2; exit 1; fi; \
-      echo ">>> ip2region xdb 下载/校验第 ${n}/3 次失败，10s 后重试" >&2; sleep 10; \
+      if [ "$n" -ge 3 ]; then echo ">>> ip2region v4 xdb 下载/校验 3 次失败" >&2; exit 1; fi; \
+      echo ">>> ip2region v4 xdb 第 ${n}/3 次失败，10s 后重试" >&2; sleep 10; \
+    done && \
+    n=0; until (curl -sfL -o /app/waf.dist/ip2region_v6.xdb "https://ghfast.top/https://raw.githubusercontent.com/lionsoul2014/ip2region/v3.17.0/data/ip2region_v6.xdb" || \
+                curl -sfL -o /app/waf.dist/ip2region_v6.xdb "https://raw.githubusercontent.com/lionsoul2014/ip2region/v3.17.0/data/ip2region_v6.xdb") && \
+               echo "${xdb_v6_sha256}  /app/waf.dist/ip2region_v6.xdb" | sha256sum -c -; do \
+      n=$((n+1)); \
+      if [ "$n" -ge 3 ]; then echo ">>> ip2region v6 xdb 下载/校验 3 次失败" >&2; exit 1; fi; \
+      echo ">>> ip2region v6 xdb 第 ${n}/3 次失败，10s 后重试" >&2; sleep 10; \
     done && \
     apk del curl
 

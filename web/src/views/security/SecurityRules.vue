@@ -540,6 +540,31 @@
         :tz="scheduleTz"
         @save="saveIP2RegionSchedule"
       />
+      <DialogSectionHeader title="数据源状态" />
+      <div class="dialog-panel ip2region-sources">
+        <div class="ip2region-source-row">
+          <span class="ip2region-source-name">IPv4 数据源</span>
+          <span class="ip2region-source-ver">{{ ip2regionSourceVersion(ip2regionInfo.version) }}</span>
+          <el-tag size="small" effect="plain" disable-transitions :type="ip2regionSourceTagType(ip2regionInfo.update_status)">{{ ip2regionSourceLabel(ip2regionInfo.update_status) }}</el-tag>
+        </div>
+        <div class="ip2region-source-row">
+          <span class="ip2region-source-name">IPv6 数据源</span>
+          <template v-if="ip2regionInfo.v6_enabled">
+            <span class="ip2region-source-ver">{{ ip2regionSourceVersion(ip2regionInfo.v6_version) }}<template v-if="ip2regionV6EntriesLabel">（{{ ip2regionV6EntriesLabel }}）</template></span>
+            <el-tag size="small" effect="plain" disable-transitions :type="ip2regionSourceTagType(ip2regionInfo.v6_update_status)">{{ ip2regionSourceLabel(ip2regionInfo.v6_update_status) }}</el-tag>
+          </template>
+          <template v-else>
+            <span class="ip2region-source-ver ip2region-source-ver--off">未启用（开启后 IPv6 客户端与 IPv4 同语义解析，关闭时按「海外」处理）</span>
+          </template>
+          <el-switch
+            :model-value="ip2regionInfo.v6_enabled"
+            :disabled="isReadOnly || isSlaveNode || savingIP2RegionV6"
+            :loading="savingIP2RegionV6"
+            @change="toggleIP2RegionV6"
+          />
+        </div>
+        <div v-if="ip2regionInfo.v6_enabled && ip2regionInfo.v6_message" class="ip2region-source-msg">{{ ip2regionInfo.v6_message }}</div>
+      </div>
       <DialogSectionHeader title="更新日志" />
       <div class="dialog-panel dialog-panel--flush">
         <div ref="ip2regionUpdateLogRef" class="update-log-container">
@@ -1065,7 +1090,49 @@ const getUpdaterName = (userId?: number) => updaterName(users.value, userId)
 
 const crsInfo = ref({ version: '', auto_update: true, updated_at: '', last_checked: '', next_update: '', update_status: '', message: '', available: true, rule_count: 0, schedule_days: [1, 2, 3, 4, 5, 6, 7] as number[], schedule_time: '04:00' })
 
-const ip2regionInfo = ref({ version: '', db_size: 0, auto_update: true, updated_at: '', last_checked: '', next_update: '', update_status: '', message: '', available: true, schedule_days: [1, 2, 3, 4, 5, 6, 7] as number[], schedule_time: '04:00' })
+const ip2regionInfo = ref({ version: '', db_size: 0, auto_update: true, updated_at: '', last_checked: '', next_update: '', update_status: '', message: '', available: true, schedule_days: [1, 2, 3, 4, 5, 6, 7] as number[], schedule_time: '04:00', v6_enabled: false, v6_version: '', v6_db_size: 0, v6_updated_at: '', v6_update_status: 'idle', v6_message: '' })
+
+// —— IPv6 数据源（单任务双源：v6 源状态/版本/开关，关闭显示「未启用」）——
+const savingIP2RegionV6 = ref(false)
+const ip2regionV6EntriesLabel = computed(() => {
+  const n = ip2regionInfo.value.v6_db_size
+  return n > 0 ? `${formatInt(n)} 段` : ''
+})
+const ip2regionSourceVersion = (v: string) => {
+  if (!v || v === 'unknown') return '未安装'
+  if (v === 'bundled') return '内置版本'
+  return v
+}
+const ip2regionSourceLabel = (status: string) => {
+  switch (status) {
+    case 'success': return '正常'
+    case 'failed': return '失败'
+    case 'cancelled': return '已取消'
+    case 'skipped': return '已跳过'
+    default: return '待更新'
+  }
+}
+const ip2regionSourceTagType = (status: string) => {
+  if (status === 'success') return 'success' as const
+  if (status === 'failed') return 'danger' as const
+  if (status === 'cancelled' || status === 'skipped') return 'warning' as const
+  return 'info' as const
+}
+const toggleIP2RegionV6 = async (val: boolean | string | number) => {
+  if (ip2regionInfo.value.v6_enabled === val) return
+  savingIP2RegionV6.value = true
+  try {
+    const res = await request.put<APIResponse<{ message?: string }>>('/security/ip2region/v6-enabled', { enabled: !!val })
+    if (res.data?.message && res.data.message !== '已更新') {
+      ElMessage.warning(res.data.message)
+    } else {
+      mfaAwareSuccess(`IPv6 地理库已${val ? '开启' : '关闭'}`)
+    }
+  } catch { /* request 层已提示；下方刷新回读权威值 */ } finally {
+    savingIP2RegionV6.value = false
+    fetchIP2RegionInfo()
+  }
+}
 // 读取失败标记：读取失败≠库缺失，更≠正常——标签与表格行都要显性
 // 表达「加载失败」，不能用默认值（available:true/空源列表）冒充正常态。
 const crsInfoError = ref(false)
@@ -2061,6 +2128,13 @@ onUnmounted(() => {
 .threat-source-table { margin-bottom: 0; }
 .library-sources-panel { margin-bottom: 12px; }
 .update-log-container { min-height: 320px; max-height: 480px; overflow: auto; background: #1e293b; padding: 12px; }
+
+.ip2region-sources { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; }
+.ip2region-source-row { display: flex; align-items: center; gap: 12px; }
+.ip2region-source-name { flex: 0 0 88px; font-weight: 600; }
+.ip2region-source-ver { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--el-text-color-regular); }
+.ip2region-source-ver--off { color: var(--el-text-color-secondary); }
+.ip2region-source-msg { font-size: 12px; color: var(--el-text-color-secondary); }
 .lib-summary-tags { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .lib-health-tag { margin: 0; }
 .lib-summary-warn-text { color: #dc2626; font-weight: 600; font-size: 12px; margin-left: 4px; }

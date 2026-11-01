@@ -92,7 +92,8 @@ func TestTCPDeadFieldsSaveFamily_coversSQLColumns(t *testing.T) {
 		// Update 侧例外：NTLMCompatible 在 TCP 行走「显式携带 400 / 未携带自愈」
 		// 双分支（UpdateRule 调用点），通用归一无法区分用户是否显式提交。
 		updateAdapterExemptions := map[string]string{
-			"NTLMCompatible": "UpdateRule 显式携带由保存门 400，未携带由调用点归零自愈",
+			"NTLMCompatible":     "UpdateRule 显式携带由保存门 400，未携带由调用点归零自愈",
+			"ForwardAuthEnabled": "UpdateRule 显式携带由保存门 400（仅 HTTP+网关地址齐备门），未携带由调用点归零自愈",
 		}
 		for name, fields := range adapterFields {
 			if !fields[field] {
@@ -143,8 +144,12 @@ func TestTCPDeadFieldsSaveFamily_fieldsCoveredOrExempted(t *testing.T) {
 	// 代价大于收益。残留值由下次规则编辑经保存族（tcpDeadFieldReset）清零
 	// 自愈。未来新增不依赖 enable_tls 门控的 ACME 消费方时，本豁免必须重审。
 	exempted := map[string]string{
-		"ACMEConfigID": "ACME 消费方全部 enable_tls=1 联合门控，TCP 恒归 0 后残留引用不可达",
-		"CAProviderID": "同上（ResolveCAProviderID 仅在 acme_dns 签发路径消费）",
+		"ACMEConfigID":           "ACME 消费方全部 enable_tls=1 联合门控，TCP 恒归 0 后残留引用不可达",
+		"CAProviderID":           "同上（ResolveCAProviderID 仅在 acme_dns 签发路径消费）",
+		"ForwardAuthEnabled":     "认证网关仅 HTTP 语义（models.go NTLM 同族裁定：TCP 行恒 0），TCP 复制/编辑路径不归一",
+		"ForwardAuthUpstream":    "同上（认证网关仅 HTTP 语义，TCP 行恒 0）",
+		"ForwardAuthURI":         "同上（认证网关仅 HTTP 语义，TCP 行恒 0）",
+		"ForwardAuthCopyHeaders": "同上（认证网关仅 HTTP 语义，TCP 行恒 0）",
 	}
 	covered := make(map[string]bool, len(tcpSQLColumnFallback))
 	for _, field := range tcpSQLColumnFallback {

@@ -26,9 +26,19 @@ import (
 // 裁定，见 buildGeoipHandler）。
 const defaultIP2RegionLivePath = "/app/data/ip2region.xdb"
 
+// defaultIP2RegionV6LivePath 是 IPv6 库的 live 路径出厂值（与 v4 同目录命名
+// 后缀 _v6；镜像内置副本在 waf.dist 同名）。caddygeoip/caddyl4sec 插件对 v6
+// 无路径兜底默认——空 = v6 关闭（渲染侧不发射 xdb_v6_path），因此 live 路径
+// 恒由本包派生并显式发射，不存在「渲染省略键 + 插件读另一路径」的分叉形态。
+const defaultIP2RegionV6LivePath = "/app/data/ip2region_v6.xdb"
+
 var (
 	ip2regionLivePath = defaultIP2RegionLivePath
 	ip2regionDistPath = "/app/waf.dist/ip2region.xdb"
+	// IPv6 库双路径（live 数据卷 / dist 镜像内置），与 v4 同生命周期：
+	// 更新任务单任务双源安装、启动期 dist 播种、集群同步随 bundle 传播。
+	ip2regionV6LivePath = defaultIP2RegionV6LivePath
+	ip2regionV6DistPath = "/app/waf.dist/ip2region_v6.xdb"
 )
 
 var (
@@ -51,6 +61,98 @@ var (
 // GeoIPDataGeneration 返回当前归属地库代际（0=库从未加载；每次启动加载/
 // 更新热换递增）。纯读，供上层判断派生聚合是否需要按新库重算。
 func GeoIPDataGeneration() int64 { return ip2regionGeneration.Load() }
+
+// —— IPv6 库用户开关（security_ip2region_version.v6_enabled）——
+//
+// 语义：v6 关闭（默认）= HTTP 链对 IPv6 客户端维持既有「海外」fail-closed
+// 哨兵、L4 链维持 fail-open 放行（两裁定不变，仅作用于不可解析形态）；v6
+// 开启且库可用 = IPv6 客户端与 v4 同语义解析（海外精确到国家、国内精确到
+// 省）。默认关闭是最小惊讶选择：开启会收窄既有策略的「海外」兜底面（HTTP
+// deny 海外策略对真实中国 v6 客户端从拦截转为放行），属阻断语义变化，须由
+// 用户显式决定。
+func IsIP2RegionV6Enabled() bool {
+	// 测试缝：非 nil 时直读（无 DB 的纯函数级用例；生产恒 nil）。
+	if ip2RegionV6EnabledOverride != nil {
+		return *ip2RegionV6EnabledOverride
+	}
+	if db.DB == nil {
+		return false
+	}
+	var enabled bool
+	if err := db.DB.QueryRow("SELECT COALESCE(v6_enabled,0) FROM security_ip2region_version WHERE id=1").Scan(&enabled); err != nil {
+		// 行缺失/读故障按关闭处理（默认语义），故障留痕。
+		if !errors.Is(err, sql.ErrNoRows) {
+			Logf("warn", "ip2region: 读取 v6 开关失败，按关闭处理: %v", err)
+		}
+		return false
+	}
+	return enabled
+}
+
+// ip2RegionV6EnabledOverride 是 IsIP2RegionV6Enabled 的测试缝（nil=真实读）。
+var ip2RegionV6EnabledOverride *bool
+
+// SetIP2RegionV6Enabled 写入 v6 开关。行缺失时先播种（与 ensureIP2RegionVersionRow
+// 同口径），写失败原样上抛由调用方定夺。
+func SetIP2RegionV6Enabled(enabled bool) error {
+	if db.DB == nil {
+		return errors.New("数据库未初始化")
+	}
+	ensureIP2RegionVersionRow()
+	if _, err := db.DB.Exec("UPDATE security_ip2region_version SET v6_enabled=?, v6_updated_at=datetime('now') WHERE id=1", enabled); err != nil {
+		Logf("error", "ip2region: failed to store v6_enabled %v: %v", enabled, err)
+		return err
+	}
+	return nil
+}
+
+// GetIP2RegionV6Version 返回已安装的 IPv6 库版本行（空=从未安装）。
+func GetIP2RegionV6Version() (string, error) {
+	if db.DB == nil {
+		return "", errors.New("数据库未初始化")
+	}
+	var version string
+	if err := db.DB.QueryRow("SELECT COALESCE(v6_version,'') FROM security_ip2region_version WHERE id=1").Scan(&version); err != nil {
+		return "", err
+	}
+	return version, nil
+}
+
+// SetIP2RegionV6Version 记录 IPv6 库版本并重建地域树缓存（v6 段并入同一棵
+// 树——选项树/校验端是 v4+v6 的并集口径）。
+func SetIP2RegionV6Version(version string) error {
+	if _, err := db.DB.Exec(`UPDATE security_ip2region_version SET v6_version=?, v6_updated_at=datetime('now') WHERE id=1`, version); err != nil {
+		Logf("error", "ip2region: failed to store v6 version %q: %v", version, err)
+		return err
+	}
+	writeRegionTreeCache(regionTreeForSettings())
+	return nil
+}
+
+// SetIP2RegionV6SourceStatus 记录更新任务里 v6 数据源的独立终态（success/
+// failed + message）：单任务双源形态下 v6 失败不拖垮 v4 安装，两源状态分列
+// 展示。写失败仅留痕（展示面损失，不反噬安装）。
+func SetIP2RegionV6SourceStatus(status, message string) {
+	if _, err := db.DB.Exec("UPDATE security_ip2region_version SET v6_update_status=?, v6_message=? WHERE id=1", status, message); err != nil {
+		Logf("error", "ip2region: failed to store v6 source status %q: %v", status, err)
+	}
+}
+
+// ip2RegionV6PathForAttach 返回面板 searcher 装载 v6 库的路径：关闭=空串；
+// 开启时 live 优先、live 缺失回落 dist（只读降级节点以 dist 服务本地查询，
+// 与 v4 同形）。dist 也缺失=空串（v6 关闭语义：查询回落哨兵）。
+func ip2RegionV6PathForAttach() string {
+	if !IsIP2RegionV6Enabled() {
+		return ""
+	}
+	if _, err := os.Stat(ip2regionV6LivePath); err == nil {
+		return ip2regionV6LivePath
+	}
+	if _, err := os.Stat(ip2regionV6DistPath); err == nil {
+		return ip2regionV6DistPath
+	}
+	return ""
+}
 
 // ip2RegionStartupRepairWritesAllowed 启动期本地修复（版本行/.version sidecar
 // 写入）是否允许执行：从节点的 IP 库文件与版本行都由集群同步治理，本地改写
@@ -166,7 +268,7 @@ func InitIP2Region() {
 					// 判据只看修订号/ASCII 残留，不参与内容代际比较——不显式重建会
 					// 留下「新库的省市树」给在役旧库用（扫描失败时展示错误选项树）。
 					// 与更新路径 SetIP2RegionVersion 的无条件重建口径对齐。
-					writeRegionTreeCache(regionTreeFromXDB(ip2regionLivePath))
+					writeRegionTreeCache(regionTreeForSettings())
 				}
 			}
 			if searcher == nil {
@@ -241,7 +343,37 @@ func InitIP2Region() {
 		// 缓存含 ASCII 城市/省名（拼音规范化前的旧产物）也视为过期
 		// 重建——升级部署后旧缓存不会自动消失。
 		if staleRegionTreeCache(ip2RegionLivePathForTreeCache()) {
-			writeRegionTreeCache(regionTreeFromXDB(ip2regionLivePath))
+			writeRegionTreeCache(regionTreeForSettings())
+		}
+	}
+	// —— IPv6 库启动期播种（与 v4 同生命周期，写入门同口径）——
+	// 开启时 live 缺失而镜像内置副本在位：主节点拷贝 dist→live（只读降级
+	// 节点不落盘，attach 已按 dist 只读服务本地查询）。播种失败不致命——
+	// openIP2RegionSearcherDual 的 v6 健康门会把缺失/损坏降级为「v6 禁用」
+	// 哨兵语义，等待更新任务或集群同步自愈。
+	if IsIP2RegionV6Enabled() && writesAllowed {
+		if _, err := os.Stat(ip2regionV6LivePath); err != nil {
+			if _, distErr := os.Stat(ip2regionV6DistPath); distErr == nil {
+				if err := copyFile(ip2regionV6DistPath, ip2regionV6LivePath); err != nil {
+					Logf("error", "ip2region: IPv6 库 dist 播种失败（待下次成功更新恢复）: %v", err)
+				} else {
+					Logf("info", "ip2region: IPv6 库已从镜像内置副本播种到 %s", ip2regionV6LivePath)
+					RecordAuditLog("system", "更新", "IP数据库", "启动时 live IPv6 库缺失，已按镜像内置副本播种", "")
+				}
+			}
+		}
+		// v6 版本种子同步（与 v4 同形，仅行缺失/哨兵值时）：sidecar 缺失写
+		// bundled——版本溯源保留「镜像内置」事实，下次数值 tag 可建立基线。
+		if current, verr := GetIP2RegionV6Version(); verr == nil && (current == "" || current == "unknown") {
+			tag := "bundled"
+			if raw, err := os.ReadFile(ip2regionV6LivePath + ".version"); err == nil {
+				if v := sanitizeBundleVersion(strings.TrimSpace(string(raw))); v != "" {
+					tag = v
+				}
+			}
+			if _, err := db.DB.Exec("UPDATE security_ip2region_version SET v6_version=? WHERE id=1", tag); err != nil {
+				Logf("warn", "ip2region: v6 版本种子值同步失败: %v", err)
+			}
 		}
 	}
 	Logf("info", "ip2region: loaded %s", ip2regionLivePath)
@@ -368,8 +500,8 @@ func SetIP2RegionVersion(version string) error {
 			Logf("warn", "ip2region: 省份列表缓存落盘失败（下次重建）: %v", err)
 		}
 	}
-	// 版本更新即新库——树缓存同步重建。
-	writeRegionTreeCache(regionTreeFromXDB(ip2regionLivePath))
+	// 版本更新即新库——树缓存同步重建（v6 启用时为 v4+v6 并集）。
+	writeRegionTreeCache(regionTreeForSettings())
 	return nil
 }
 
@@ -395,28 +527,63 @@ func GetCachedProvinces() []string {
 	return provinces
 }
 
-// xdb v4 文件布局（绑定库 xdb/header.go 锚定 structure 2.0/3.0 的 v4 形态）：
-// 256B 头 + 256*256*8B 向量索引 + 数据区 + 段索引区（每段 14B），头内
-// [8:12]/[12:16] 为段索引区首/末段起点指针。BufferCache 打开路径对内容
-// 缓冲区做无边界切片（向量索引/段索引/region 读取），头部完好的截断文件
-// 能通过装载却在首次搜索时进程级 panic——打开前必须先过结构自检门。
+// xdb v4/v6 文件布局（绑定库 xdb/header.go、version.go 锚定 structure
+// 2.0/3.0 形态）：256B 头 + 256*256*8B 向量索引 + 数据区 + 段索引区；头内
+// [8:12]/[12:16] 为段索引区首/末段起点指针。段索引条目 v4=14B（startIP 4 +
+// endIP 4 + dataLen 2 + dataPtr 4，IP 为小端反转比较），v6=38B（16+16+2+4，
+// IP 为大端字节序比较）；向量索引两族同形（按 IP 前两字节键入）。BufferCache
+// 打开路径对内容缓冲区做无边界切片（向量索引/段索引/region 读取），头部完好
+// 的截断文件能通过装载却在首次搜索时进程级 panic——打开前必须先过结构自检门。
 const (
 	ip2RegionXDBHeaderSize      = 256
 	ip2RegionXDBVectorIndexSize = 256 * 256 * 8
 	ip2RegionXDBSegmentSize     = 14
+	ip2RegionXDBSegmentSizeV6   = 38
+	// xdbStructure20/30 是头 [0:2] 的结构版本号（xdb.Structure20/30 同值）：
+	// 2.0 = 旧 v4 专属形态（[16:20] 无定义，实测为 0）；3.0 起双栈，[16:18]
+	// 为 IP 版本（4/6）、[18:20] 为指针字节数。
+	xdbStructure20 = 2
+	xdbStructure30 = 3
 )
+
+// ip2RegionXDBLayout 从 20B 头判定文件布局：返回（段索引条目字节数, IP 版本）。
+// 结构 2.0 → v4（旧库 [16:20] 为 0，不参与判定）；结构 3.0 → 按 [16:18] 分派
+// 4/6。其余组合显式报错（含「v4 文件被换名到 v6 路径」的交叉形态——v6 侧
+// 必须按 38B 解段索引，误用 14B 会把 v4 头指针当段起点扫出乱码树）。
+func ip2RegionXDBLayout(header []byte) (segmentSize, ipVersion int, err error) {
+	if len(header) < 20 {
+		return 0, 0, fmt.Errorf("xdb 头不足 20 字节")
+	}
+	structure := binary.LittleEndian.Uint16(header[0:2])
+	ipVer := int(binary.LittleEndian.Uint16(header[16:18]))
+	switch structure {
+	case xdbStructure20:
+		if ipVer == 6 {
+			return 0, 0, fmt.Errorf("xdb 结构 2.0 不支持 IPv6（头 ip_version=%d）", ipVer)
+		}
+		return ip2RegionXDBSegmentSize, 4, nil
+	case xdbStructure30:
+		switch ipVer {
+		case 4:
+			return ip2RegionXDBSegmentSize, 4, nil
+		case 6:
+			return ip2RegionXDBSegmentSizeV6, 6, nil
+		default:
+			return 0, 0, fmt.Errorf("xdb 头 ip_version 非法: %d", ipVer)
+		}
+	default:
+		return 0, 0, fmt.Errorf("xdb 结构版本非法: %d", structure)
+	}
+}
 
 // checkIP2RegionXDBStructure 结构自检门：最小尺寸（头+完整向量索引+至少
 // 一段）+ 头内段索引指针边界（段索引区恒在向量索引之后、末段终点不越出
-// 文件）。不满足即按「不可装载」显式报错，绝不交给绑定库的无边界切片。
+// 文件）+ 布局判定（结构版本/IP 版本交叉校验）。不满足即按「不可装载」
+// 显式报错，绝不交给绑定库的无边界切片。
 func checkIP2RegionXDBStructure(path string) error {
 	fi, err := os.Stat(path)
 	if err != nil {
 		return fmt.Errorf("stat xdb: %w", err)
-	}
-	const minSize = int64(ip2RegionXDBHeaderSize + ip2RegionXDBVectorIndexSize + ip2RegionXDBSegmentSize)
-	if fi.Size() < minSize {
-		return fmt.Errorf("xdb 文件大小 %d 小于最小结构尺寸 %d（截断/残缺）", fi.Size(), minSize)
 	}
 	f, err := os.Open(path)
 	if err != nil {
@@ -427,27 +594,100 @@ func checkIP2RegionXDBStructure(path string) error {
 	if _, err := f.ReadAt(header, 0); err != nil {
 		return fmt.Errorf("read xdb header: %w", err)
 	}
+	segmentSize, _, err := ip2RegionXDBLayout(header)
+	if err != nil {
+		return fmt.Errorf("xdb 布局判定失败: %w", err)
+	}
+	minSize := int64(ip2RegionXDBHeaderSize + ip2RegionXDBVectorIndexSize + segmentSize)
+	if fi.Size() < minSize {
+		return fmt.Errorf("xdb 文件大小 %d 小于最小结构尺寸 %d（截断/残缺）", fi.Size(), minSize)
+	}
 	startPtr := binary.LittleEndian.Uint32(header[8:12])
 	endPtr := binary.LittleEndian.Uint32(header[12:16])
 	const segmentRegionMin = uint64(ip2RegionXDBHeaderSize + ip2RegionXDBVectorIndexSize)
 	if uint64(startPtr) < segmentRegionMin || endPtr < startPtr ||
-		uint64(endPtr)+ip2RegionXDBSegmentSize > uint64(fi.Size()) {
+		uint64(endPtr)+uint64(segmentSize) > uint64(fi.Size()) {
 		return fmt.Errorf("xdb 头段索引指针越界（start=%d end=%d size=%d，截断/损坏）", startPtr, endPtr, fi.Size())
 	}
 	return nil
 }
 
-// openIP2RegionSearcher opens the xdb at path with the whole file buffered
-// in memory for concurrent read safety.
+// openIP2RegionSearcher opens the v4 xdb at path with the whole file buffered
+// in memory for concurrent read safety, attaching the IPv6 database when the
+// user toggle is on and a healthy v6 file is resolvable. v6 缺失/损坏只降级
+// 本族（查询回落哨兵），绝不拖垮 v4 装载——两族健康门独立（见 dual 注释）。
 func openIP2RegionSearcher(path string) (*ip2regionService.Ip2Region, error) {
-	if err := checkIP2RegionXDBStructure(path); err != nil {
+	return openIP2RegionSearcherDual(path, ip2RegionV6PathForAttach())
+}
+
+// openIP2RegionSearcherDual 按显式路径构造双协议 searcher：v4 必选（结构
+// 自检 + NewV4Config），v6 可选（v6Path 非空时经独立健康门附加）。更新任务
+// 用 staged 路径构造热换 searcher，启动/回滚用 live 路径——同一实现保证
+// 「面板在役 searcher 的 v6 形态」只有一种构造口径。v6 健康门失败只降级
+// 本族（查询回落哨兵），绝不拖垮 v4 装载。
+func openIP2RegionSearcherDual(v4Path, v6Path string) (*ip2regionService.Ip2Region, error) {
+	if err := checkIP2RegionXDBStructure(v4Path); err != nil {
 		return nil, err
 	}
-	config, err := ip2regionService.NewV4Config(ip2regionService.BufferCache, path, 1)
+	config, err := ip2regionService.NewV4Config(ip2regionService.BufferCache, v4Path, 1)
 	if err != nil {
 		return nil, err
 	}
-	return ip2regionService.NewIp2Region(config, nil)
+	return ip2regionService.NewIp2Region(config, openIP2RegionV6Config(v6Path))
+}
+
+// openIP2RegionV6Config 构造 v6 BufferCache 配置：v6Path 为空（开关关闭/两族
+// 文件皆缺失）返回 nil（绑定库双协议 API 的「该族禁用」形态——Search 对
+// 16 字节 IP 返回空串，查询面回落既有哨兵语义）。文件健康门（结构自检 +
+// 探针搜索）独立于 v4：损坏的 v6 库降级为禁用并 WARN 留痕，不影响 v4 装载。
+func openIP2RegionV6Config(v6Path string) *ip2regionService.Config {
+	if v6Path == "" {
+		return nil
+	}
+	if err := validateIP2RegionV6XDB(v6Path); err != nil {
+		Logf("warn", "ip2region: IPv6 库不可装载，v6 查询按禁用处理（哨兵语义）: %v", err)
+		return nil
+	}
+	config, err := ip2regionService.NewV6Config(ip2regionService.BufferCache, v6Path, 1)
+	if err != nil {
+		Logf("warn", "ip2region: IPv6 库配置构造失败，v6 查询按禁用处理: %v", err)
+		return nil
+	}
+	return config
+}
+
+// ip2RegionV6ProbeIP 是 v6 装载校验的探针地址：中国电信 240e::/20 段内地址，
+// 真实 v6 库（v3.17.0）中必然命中「中国|北京|北京市|电信|CN」段——探针搜索
+// 同时覆盖向量索引与段索引/region 数据区的读取路径。
+const ip2RegionV6ProbeIP = "240e:56:4000:8000::1"
+
+// validateIP2RegionV6XDB 是 v6 xdb 的「可装载」校验：结构自检（v6 布局门）
+// + 探针搜索 + panic 收敛，与 v4 的 openValidatedIP2RegionSearcher 同强度——
+// 「结构合法、段指针越界」的文件必须在校验期显性失败，不得进入 live 后在
+// 请求期 panic。
+func validateIP2RegionV6XDB(path string) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			Logf("error", "ip2region: v6 probe search panicked on %s: %v\n%s", path, r, debug.Stack())
+			err = fmt.Errorf("v6 探针搜索触发内部异常（文件损坏）: %v", r)
+		}
+	}()
+	if err := checkIP2RegionXDBStructure(path); err != nil {
+		return err
+	}
+	config, err := ip2regionService.NewV6Config(ip2regionService.BufferCache, path, 1)
+	if err != nil {
+		return err
+	}
+	searcher, err := ip2regionService.NewIp2Region(nil, config)
+	if err != nil {
+		return err
+	}
+	defer searcher.Close()
+	if _, serr := searcher.Search(ip2RegionV6ProbeIP); serr != nil {
+		return fmt.Errorf("v6 探针搜索失败: %w", serr)
+	}
+	return nil
 }
 
 // ip2regionProbeIP 是装载校验的探针地址：114 段在真实库中必然存在，且损坏
@@ -502,15 +742,19 @@ func GetIP2RegionEntryCount() int {
 // entryCountFromXDBHeader 从一个 xdb 文件的 header 边界推导条目数。
 // xdb v2 官方边界（[8:16]，2 次 ReadAt）——原实现扫 65536 格 vector 推导
 // （BufferCache 已全内存，每调用 65536 次 8B ReadAt 纯浪费；且 vector 端点
-// 语义含末条结尾，推导 off-by-one）。
+// 语义含末条结尾，推导 off-by-one）。段条目字节数按头布局判定（v4=14/v6=38）。
 func entryCountFromXDBHeader(path string) int {
 	f, err := os.Open(path)
 	if err != nil {
 		return 0
 	}
 	defer f.Close()
-	header := make([]byte, 16)
+	header := make([]byte, 20)
 	if _, err := f.ReadAt(header, 0); err != nil {
+		return 0
+	}
+	segmentSize, _, err := ip2RegionXDBLayout(header)
+	if err != nil {
 		return 0
 	}
 	startPtr := binary.LittleEndian.Uint32(header[8:12])
@@ -520,8 +764,19 @@ func entryCountFromXDBHeader(path string) int {
 	if endPtr < startPtr {
 		return 0
 	}
-	const segmentIndexSize = 14 // xdb v2 段索引每条 14 字节
-	return int((endPtr-startPtr)/segmentIndexSize) + 1
+	return int((endPtr-startPtr)/uint32(segmentSize)) + 1
+}
+
+// GetIP2RegionV6EntryCount 返回 IPv6 库 live 文件的条目数（未启用/文件缺失
+// /不可解析时返回 0）。与 v4 的 GetIP2RegionEntryCount 不同——v6 卡片展示
+// 只关心 live 文件本身（v6 无「热换失败保留旧库」的内存分叉形态：面板
+// searcher 构造时 v6 不可用即按禁用处理，展示 0 与查询语义一致）。
+func GetIP2RegionV6EntryCount() int {
+	path := ip2RegionV6PathForAttach()
+	if path == "" {
+		return 0
+	}
+	return entryCountFromXDBHeader(path)
 }
 
 // GetIP2RegionProvinces returns the province list from the live searcher, or
@@ -689,15 +944,22 @@ func regionTreeFromXDB(path string) *IP2RegionRegionTree {
 		return nil
 	}
 	defer f.Close()
-	// 1) 段区范围从 header 读取（offset 8 StartIndexPtr / offset 12 EndIndexPtr，
-	// v3 双栈布局：向量索引推导的范围起点会早于真实段区——把 header/向量区
-	// 当段解析出乱码 region，实测 262148 < 真实 3365968）。
+	// 0) 布局判定：段条目字节数（v4=14/v6=38）与 dataLen/dataPtr 的段内偏移
+	// 随布局变化——用固定 14B 解 v6 段会把 16B 起始 IP 的尾部当长度/指针，
+	// 扫出乱码树。
 	var minPtr, maxPtr uint32
-	header := make([]byte, 16)
+	header := make([]byte, 20)
 	if _, err := f.ReadAt(header, 0); err == nil {
 		minPtr = binary.LittleEndian.Uint32(header[8:12])
 		maxPtr = binary.LittleEndian.Uint32(header[12:16])
 	}
+	segmentSize, _, err := ip2RegionXDBLayout(header)
+	if err != nil {
+		return nil
+	}
+	// 1) 段区范围从 header 读取（offset 8 StartIndexPtr / offset 12 EndIndexPtr，
+	// v3 双栈布局：向量索引推导的范围起点会早于真实段区——把 header/向量区
+	// 当段解析出乱码 region，实测 262148 < 真实 3365968）。
 	// 单段 xdb 的 header 两端指针相等——max < min 才判空。
 	if maxPtr < minPtr {
 		return nil
@@ -710,21 +972,22 @@ func regionTreeFromXDB(path string) *IP2RegionRegionTree {
 		return nil
 	}
 	end := int64(maxPtr)
-	if sizeBound := fi.Size() - 14; sizeBound < end {
+	if sizeBound := fi.Size() - int64(segmentSize); sizeBound < end {
 		end = sizeBound
 	}
-	seg := make([]byte, 14)
+	seg := make([]byte, segmentSize)
 	provinces := map[string]bool{}
 	countries := map[string]bool{}
 	cities := map[string]map[string]bool{}
 	var droppedASCIIProvinces, droppedASCIICities int
 	seen := map[uint32]bool{}
-	for ptr := int64(minPtr); ptr <= end; ptr += 14 {
+	lenOff, ptrOff := segmentSize-6, segmentSize-4
+	for ptr := int64(minPtr); ptr <= end; ptr += int64(segmentSize) {
 		if _, err := f.ReadAt(seg, ptr); err != nil {
 			break
 		}
-		dataLen := int(binary.LittleEndian.Uint16(seg[8:10]))
-		dataPtr := binary.LittleEndian.Uint32(seg[10:14])
+		dataLen := int(binary.LittleEndian.Uint16(seg[lenOff : lenOff+2]))
+		dataPtr := binary.LittleEndian.Uint32(seg[ptrOff:])
 		if dataLen == 0 || seen[dataPtr] {
 			continue
 		}
@@ -819,6 +1082,90 @@ func regionTreeFromXDB(path string) *IP2RegionRegionTree {
 	return tree
 }
 
+// regionTreeForSettings 是树构建的设置感知单源：v4 live 扫描 + v6（启用且
+// 文件可用时）并集。v6 与 v4 的 region 行语义相同（国家|省|市|ISP|码），选项
+// 树/校验端消费的是两族并集——v6 专属段（如中国电信 240e::/20 的省级段）与
+// v6 海外国家必须可被策略配置，否则「v6 解析出的值不在选项树/known 集合里」
+// 会让发射端策略静默不匹配。
+func regionTreeForSettings() *IP2RegionRegionTree {
+	tree := regionTreeFromXDB(ip2regionLivePath)
+	if tree == nil {
+		return nil
+	}
+	if v6Path := ip2RegionV6PathForAttach(); v6Path != "" {
+		mergeRegionTree(tree, regionTreeFromXDB(v6Path))
+	}
+	return tree
+}
+
+// mergeRegionTree 把 v6 扫描结果并入 v4 树（省/市/国家集并集；「海外」哨兵
+// 恒保持 Provinces 末位不重复）。树是不可变共享视图（调用方只读），合并只
+// 发生在构建期——整体按集合并集重建，不增量改写共享切片。
+func mergeRegionTree(tree *IP2RegionRegionTree, v6 *IP2RegionRegionTree) {
+	if v6 == nil {
+		return
+	}
+	provSet := map[string]bool{}
+	for _, prov := range tree.Provinces {
+		provSet[prov] = true
+	}
+	citySet := map[string]map[string]bool{}
+	for prov, cities := range tree.Cities {
+		set := make(map[string]bool, len(cities))
+		for _, city := range cities {
+			set[city] = true
+		}
+		citySet[prov] = set
+	}
+	countrySet := map[string]bool{}
+	for _, country := range tree.Countries {
+		countrySet[country] = true
+	}
+	for _, prov := range v6.Provinces {
+		if prov != "海外" {
+			provSet[prov] = true
+		}
+	}
+	// v4 树自带的「海外」哨兵不进排序集（恒由末位追加承载，防双份）。
+	delete(provSet, "海外")
+	for prov, cities := range v6.Cities {
+		set := citySet[prov]
+		if set == nil {
+			set = map[string]bool{}
+			citySet[prov] = set
+		}
+		for _, city := range cities {
+			set[city] = true
+		}
+	}
+	for _, country := range v6.Countries {
+		countrySet[country] = true
+	}
+	provinces := make([]string, 0, len(provSet))
+	for prov := range provSet {
+		provinces = append(provinces, prov)
+	}
+	sort.Strings(provinces)
+	tree.Provinces = append(provinces, "海外")
+	tree.Cities = make(map[string][]string, len(citySet))
+	for prov, set := range citySet {
+		list := make([]string, 0, len(set))
+		for city := range set {
+			list = append(list, city)
+		}
+		sort.Strings(list)
+		tree.Cities[prov] = list
+	}
+	countries := make([]string, 0, len(countrySet))
+	for country := range countrySet {
+		countries = append(countries, country)
+	}
+	sort.Strings(countries)
+	tree.Countries = countries
+	tree.DroppedASCIIProvinces += v6.DroppedASCIIProvinces
+	tree.DroppedASCIICities += v6.DroppedASCIICities
+}
+
 // GetIP2RegionRegionTree 返回地域树：live 扫描优先，在役来源（回退的
 // waf.dist）次之，文件缓存兜底（与省份列表同口径——searcher 加载失败时
 // UI 仍能展示上次成功的树）。
@@ -850,6 +1197,18 @@ func GetIP2RegionRegionTree() *IP2RegionRegionTree {
 	}
 	scan := func(path string, info os.FileInfo) *IP2RegionRegionTree {
 		key := path + "|" + fmt.Sprintf("%d:%d", info.Size(), info.ModTime().UnixNano())
+		// v6 并集分量进键：开关/文件形态变化即触发重扫（树是 v4+v6 并集口径，
+		// 见 regionTreeForSettings）。attach 路径为空串时用固定占位——「关闭」
+		// 与「开启但无文件」都对应空并集，二者树内容一致无需区分。
+		if v6Path := ip2RegionV6PathForAttach(); v6Path != "" {
+			if v6Info, v6Err := os.Stat(v6Path); v6Err == nil {
+				key += "|v6:" + v6Path + "|" + fmt.Sprintf("%d:%d", v6Info.Size(), v6Info.ModTime().UnixNano())
+			} else {
+				key += "|v6:missing"
+			}
+		} else {
+			key += "|v6:off"
+		}
 		regionTreeMemoMu.Lock()
 		if regionTreeMemo != nil && regionTreeMemoKey == key {
 			tree := regionTreeMemo
@@ -859,6 +1218,9 @@ func GetIP2RegionRegionTree() *IP2RegionRegionTree {
 		regionTreeMemoMu.Unlock()
 		tree := regionTreeFromXDB(path)
 		if tree != nil {
+			if v6Path := ip2RegionV6PathForAttach(); v6Path != "" {
+				mergeRegionTree(tree, regionTreeFromXDB(v6Path))
+			}
 			regionTreeMemoMu.Lock()
 			regionTreeMemo, regionTreeMemoKey = tree, key
 			regionTreeMemoMu.Unlock()
@@ -976,5 +1338,16 @@ func RebuildRegionTreeCacheForSync() {
 		Logf("info", "ip2region: 非主节点（或角色不可证实），跳过地域树派生缓存落盘（读侧按 xdb 内存重建）")
 		return
 	}
-	writeRegionTreeCache(regionTreeFromXDB(ip2regionLivePath))
+	writeRegionTreeCache(regionTreeForSettings())
+}
+
+// WriteIP2RegionTreeCacheForToggle 供 v6 开关切换后调用：树缓存是 v4+v6
+// 并集口径，开关翻转改变并集内容但缓存过期判据（修订号/ASCII 残留）不感知
+// ——不显式重建会让选项树/校验 known 集滞后到下次版本更新。写入门与启动
+// 路径同口径（只读降级节点不落盘，读侧按 xdb 内存重建）。
+func WriteIP2RegionTreeCacheForToggle() {
+	if !ip2RegionStartupRepairWritesAllowed() {
+		return
+	}
+	writeRegionTreeCache(regionTreeForSettings())
 }

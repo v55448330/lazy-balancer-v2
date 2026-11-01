@@ -992,27 +992,67 @@ func (s *ClusterService) snapshotSecurityBlockPages(ctx context.Context, store s
 // 教训）。两张表列清单/扫描顺序完全一致，共享本常量与下方中性行扫描。
 const clusterRuleLibVersionColumns = `id,version,COALESCE(updated_at,''),COALESCE(auto_update,1),COALESCE(update_status,'idle'),COALESCE(message,''),COALESCE(last_checked,''),COALESCE(next_update,''),COALESCE(trigger,''),COALESCE(started_at,''),COALESCE(finished_at,''),COALESCE(schedule_days,'1,2,3,4,5,6,7'),COALESCE(schedule_time,'04:00')`
 
-// clusterRuleLibVersionRow 是 CRS/IP2Region 版本行的中性投影：两模型字段与
-// JSON 标签逐字段相同，故可无损转换为任一模型（差分比对按模型序列化，
-// 保证与快照侧 JSON 字节口径一致）。
-type clusterRuleLibVersionRow struct {
-	ID           int
-	Version      string
-	UpdatedAt    string
-	AutoUpdate   bool
-	UpdateStatus string
-	Message      string
-	LastChecked  string
-	NextUpdate   string
-	Trigger      string
-	StartedAt    string
-	FinishedAt   string
-	ScheduleDays string
-	ScheduleTime string
+// clusterIP2RegionVersionV6Columns 是 IPv6 库五列的追加段（仅
+// security_ip2region_version 拥有——CRS 表无 v6 列，共用 SELECT/INSERT 必须
+// 按表名分派，否则 CRS 侧 no such column）。
+const clusterIP2RegionVersionV6Columns = `,COALESCE(v6_enabled,0),COALESCE(v6_version,''),COALESCE(v6_updated_at,''),COALESCE(v6_update_status,'idle'),COALESCE(v6_message,'')`
+
+// clusterRuleLibVersionColumnsFor 按表名返回列清单（v6 五列仅 ip2region 表）。
+func clusterRuleLibVersionColumnsFor(table string) string {
+	if table == "security_ip2region_version" {
+		return clusterRuleLibVersionColumns + clusterIP2RegionVersionV6Columns
+	}
+	return clusterRuleLibVersionColumns
 }
 
-func scanClusterRuleLibVersionRow(rows *sql.Rows) (clusterRuleLibVersionRow, error) {
+// clusterRuleLibVersionInsertSQLFor 按表名返回写入模板（实现与基线模板同在
+// cluster_apply.go；此处只做按表分派的单一入口，读侧/写侧共用同一分派口径）。
+func clusterRuleLibVersionInsertSQLFor(table string) string {
+	if table == "security_ip2region_version" {
+		return clusterIP2RegionVersionInsertSQL
+	}
+	return clusterRuleLibVersionInsertSQL
+}
+
+// clusterRuleLibVersionRow 是 CRS/IP2Region 版本行的中性投影：两模型字段与
+// JSON 标签逐字段相同，故可无损转换为任一模型（差分比对按模型序列化，
+// 保证与快照侧 JSON 字节口径一致）。V6* 五字段仅 ip2region 表扫描时填充
+// （CRS 表无列，恒零值）。
+type clusterRuleLibVersionRow struct {
+	ID             int
+	Version        string
+	UpdatedAt      string
+	AutoUpdate     bool
+	UpdateStatus   string
+	Message        string
+	LastChecked    string
+	NextUpdate     string
+	Trigger        string
+	StartedAt      string
+	FinishedAt     string
+	ScheduleDays   string
+	ScheduleTime   string
+	V6Enabled      bool
+	V6Version      string
+	V6UpdatedAt    string
+	V6UpdateStatus string
+	V6Message      string
+}
+
+func scanClusterRuleLibVersionRow(rows *sql.Rows, table string) (clusterRuleLibVersionRow, error) {
 	var row clusterRuleLibVersionRow
+	var v6Enabled int
+	var v6UpdatedAt string
+	if table == "security_ip2region_version" {
+		err := rows.Scan(&row.ID, &row.Version, &row.UpdatedAt, &row.AutoUpdate, &row.UpdateStatus, &row.Message,
+			&row.LastChecked, &row.NextUpdate, &row.Trigger, &row.StartedAt, &row.FinishedAt, &row.ScheduleDays, &row.ScheduleTime,
+			&v6Enabled, &row.V6Version, &v6UpdatedAt, &row.V6UpdateStatus, &row.V6Message)
+		if err == nil {
+			row.V6Enabled = v6Enabled != 0
+			row.V6UpdatedAt = v6UpdatedAt
+		}
+		return row, err
+	}
 	err := rows.Scan(&row.ID, &row.Version, &row.UpdatedAt, &row.AutoUpdate, &row.UpdateStatus, &row.Message,
 		&row.LastChecked, &row.NextUpdate, &row.Trigger, &row.StartedAt, &row.FinishedAt, &row.ScheduleDays, &row.ScheduleTime)
 	return row, err
@@ -1033,20 +1073,23 @@ func (row clusterRuleLibVersionRow) ip2RegionVersion() models.ClusterSecurityIP2
 		UpdateStatus: row.UpdateStatus, Message: row.Message, LastChecked: row.LastChecked,
 		NextUpdate: row.NextUpdate, Trigger: row.Trigger, StartedAt: row.StartedAt,
 		FinishedAt: row.FinishedAt, ScheduleDays: row.ScheduleDays, ScheduleTime: row.ScheduleTime,
+		V6Enabled: row.V6Enabled, V6Version: row.V6Version, V6UpdatedAt: row.V6UpdatedAt,
+		V6UpdateStatus: row.V6UpdateStatus, V6Message: row.V6Message,
 	}
 }
 
 // readClusterRuleLibVersionRows 按共享列清单读取一张版本表（快照导出与
-// 差分本地读取共用；ORDER BY id 保证两侧顺序一致）。
+// 差分本地读取共用；ORDER BY id 保证两侧顺序一致）。v6 五列仅 ip2region 表
+// 追加（列集经 clusterRuleLibVersionColumnsFor 单源分派）。
 func readClusterRuleLibVersionRows(ctx context.Context, store snapshotStore, table string) ([]clusterRuleLibVersionRow, error) {
-	rows, err := store.QueryContext(ctx, "SELECT "+clusterRuleLibVersionColumns+" FROM "+table+" ORDER BY id")
+	rows, err := store.QueryContext(ctx, "SELECT "+clusterRuleLibVersionColumnsFor(table)+" FROM "+table+" ORDER BY id")
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	result := make([]clusterRuleLibVersionRow, 0)
 	for rows.Next() {
-		row, err := scanClusterRuleLibVersionRow(rows)
+		row, err := scanClusterRuleLibVersionRow(rows, table)
 		if err != nil {
 			return nil, err
 		}
@@ -1237,6 +1280,7 @@ func (s *ClusterService) snapshotRules(ctx context.Context, store snapshotStore)
 			&rule.HealthCheckPath, &rule.HealthCheckInterval, &rule.HealthCheckTimeout, &rule.HealthCheckUnhealthyThreshold, &rule.HealthCheckHealthyThreshold,
 			&rule.EnableActiveHealthCheck, &rule.TCPHealthCheckPort, &rule.TCPProxyProtocol, &rule.TCPTryDuration, &rule.TCPTryInterval,
 			&rule.RequestBodyMaxSizeMB, &rule.UpstreamKeepaliveTimeout, &rule.ServerTokensHidden, &rule.NTLMCompatible, &rule.UpstreamForceHTTP1,
+			&rule.ForwardAuthEnabled, &rule.ForwardAuthUpstream, &rule.ForwardAuthURI, &rule.ForwardAuthCopyHeaders,
 			&rule.CustomRoutesEnabled,
 			&rule.ProxyDialTimeout, &rule.ProxyResponseHeaderTimeout, &rule.ProxyReadTimeout, &rule.ProxyWriteTimeout, &rule.ProxyStreamTimeout, &rule.ProxyFlushInterval, &rule.ProxyStreamCloseDelay,
 			&rule.HostHeader, &rule.HealthCheckHost,

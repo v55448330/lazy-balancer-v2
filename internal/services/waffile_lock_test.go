@@ -78,7 +78,7 @@ func TestWafFileWriters_ip2region_install_blocks_while_waf_file_lock_held(t *tes
 	m.downloadXDB = fakeIP2RegionDownload(t, true)
 
 	probeBlocksUnderWafFileLock(t, "ip2region xdb 安装段", func() error {
-		return m.downloadAndInstall(context.Background(), "v3.1.0")
+		return m.downloadAndInstall(context.Background(), "v3.1.0", true, false)
 	})
 }
 

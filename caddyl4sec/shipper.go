@@ -79,8 +79,10 @@ var (
 )
 
 // l4SampleLookup 采样国家归属查库缝（Provision 期共享 searcher；测试重定向）。
-var l4SampleLookup = func(xdbPath, ip string) (string, bool) {
-	searcher, err := sharedGeoIPSearcher(xdbPath)
+// v6Path 为渲染侧 v6 开关的发射值（空=禁用，IPv6 连接查不到归属→ok=false
+// 跳过桶计数——与 lb_geoip matcher 的哨兵/fail-open 语义同源）。
+var l4SampleLookup = func(xdbPath, v6Path, ip string) (string, bool) {
+	searcher, err := sharedGeoIPSearcher(xdbPath, v6Path)
 	if err != nil {
 		return "", false
 	}

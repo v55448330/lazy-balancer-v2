@@ -129,13 +129,13 @@ func TestIP2RegionUpdate_installReusesValidatedSearcher(t *testing.T) {
 
 	originalOpen := openValidatedIP2RegionSearcherForUpdate
 	validationCalls := 0
-	openValidatedIP2RegionSearcherForUpdate = func(path string) (*ip2regionService.Ip2Region, error) {
+	openValidatedIP2RegionSearcherForUpdate = func(v4Path, v6Path string) (*ip2regionService.Ip2Region, error) {
 		validationCalls++
-		return originalOpen(path)
+		return originalOpen(v4Path, v6Path)
 	}
 	t.Cleanup(func() { openValidatedIP2RegionSearcherForUpdate = originalOpen })
 
-	if err := m.downloadAndInstall(context.Background(), "v3.1.0"); err != nil {
+	if err := m.downloadAndInstall(context.Background(), "v3.1.0", true, false); err != nil {
 		t.Fatalf("download and install: %v", err)
 	}
 	if validationCalls != 1 {

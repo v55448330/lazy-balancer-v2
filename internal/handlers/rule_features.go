@@ -50,6 +50,10 @@ type ruleFeatureInput struct {
 	NTLMCompatible             int
 	UpstreamForceHTTP1         int
 	UpstreamKeepaliveTimeout   int
+	ForwardAuthEnabled         int
+	ForwardAuthUpstream        string
+	ForwardAuthURI             string
+	ForwardAuthCopyHeaders     string
 }
 
 func createRuleFeatures(req models.CreateRuleRequest) ruleFeatureInput {
@@ -67,6 +71,10 @@ func createRuleFeatures(req models.CreateRuleRequest) ruleFeatureInput {
 		NTLMCompatible:             req.NTLMCompatible,
 		UpstreamForceHTTP1:         req.UpstreamForceHTTP1,
 		UpstreamKeepaliveTimeout:   req.UpstreamKeepaliveTimeout,
+		ForwardAuthEnabled:         req.ForwardAuthEnabled,
+		ForwardAuthUpstream:        req.ForwardAuthUpstream,
+		ForwardAuthURI:             req.ForwardAuthURI,
+		ForwardAuthCopyHeaders:     req.ForwardAuthCopyHeaders,
 		ListenPort:                 req.ListenPort,
 		EnableTLS:                  req.EnableTLS,
 		TLSHTTPRedirect:            req.TLSHTTPRedirect,
@@ -117,6 +125,10 @@ func updateRuleFeatures(req models.UpdateRuleRequest, existing models.LbRule) ru
 		NTLMCompatible:           existing.NTLMCompatible,
 		UpstreamForceHTTP1:       existing.UpstreamForceHTTP1,
 		UpstreamKeepaliveTimeout: existing.UpstreamKeepaliveTimeout,
+		ForwardAuthEnabled:       existing.ForwardAuthEnabled,
+		ForwardAuthUpstream:      existing.ForwardAuthUpstream,
+		ForwardAuthURI:           existing.ForwardAuthURI,
+		ForwardAuthCopyHeaders:   existing.ForwardAuthCopyHeaders,
 		ListenPort:               req.ListenPort,
 		EnableTLS:                existing.EnableTLS,
 		TLSHTTPRedirect:          existing.TLSHTTPRedirect,
@@ -217,6 +229,19 @@ func updateRuleFeatures(req models.UpdateRuleRequest, existing models.LbRule) ru
 	}
 	if req.UpstreamKeepaliveTimeout != nil {
 		input.UpstreamKeepaliveTimeout = *req.UpstreamKeepaliveTimeout
+	}
+	// 认证网关四件套：nil=沿用存量（handler 已预合并），显式值落库。
+	if req.ForwardAuthEnabled != nil {
+		input.ForwardAuthEnabled = *req.ForwardAuthEnabled
+	}
+	if req.ForwardAuthUpstream != nil {
+		input.ForwardAuthUpstream = *req.ForwardAuthUpstream
+	}
+	if req.ForwardAuthURI != nil {
+		input.ForwardAuthURI = *req.ForwardAuthURI
+	}
+	if req.ForwardAuthCopyHeaders != nil {
+		input.ForwardAuthCopyHeaders = *req.ForwardAuthCopyHeaders
 	}
 	return input
 }
@@ -328,6 +353,28 @@ func ntlmTakeoverShapeError(tryDuration, forceHTTP1, flushInterval, keepaliveTim
 		tryDuration, forceHTTP1, flushInterval, keepaliveTimeout)
 }
 
+// maxForwardAuthCopyHeaders 认证网关身份头清单上限（UI 高级折叠项同上限）。
+const maxForwardAuthCopyHeaders = 16
+
+// normalizeForwardAuthValues 认证网关写侧归一（单一事实源）：upstream 收敛
+// 首尾空白；uri/copy_headers 空值回填 db.DefaultForwardAuth*（与启动回填
+// 迁移同默认、同单源）——落库行恒 concrete 值，集群快照/备份导入/启动回填
+// 三面同构（canonical 稳定）。upstream 无确定默认（网关地址必由用户提供），
+// enabled=1 缺失由 validateRuleFeatures 400。
+func normalizeForwardAuthValues(enabled int, upstream, uri, copyHeaders string) (int, string, string, string) {
+	normalized := enabled
+	if normalized != 0 && normalized != 1 {
+		normalized = 0
+	}
+	if uri == "" {
+		uri = db.DefaultForwardAuthURI
+	}
+	if copyHeaders == "" {
+		copyHeaders = db.DefaultForwardAuthCopyHeaders
+	}
+	return normalized, strings.TrimSpace(upstream), uri, copyHeaders
+}
+
 func validateRuleFeatures(input ruleFeatureInput) error {
 	// 协议白名单。此前 Create/Update 仅拒绝空协议（rules.go:564），
 	// "https" 等未知值可经 API/MCP 落库，全量渲染按「非 http 即 TCP」处理
@@ -372,6 +419,54 @@ func validateRuleFeatures(input ruleFeatureInput) error {
 		// ntlm=0 不约束（UI restoreNtlmDefaults 已复位）。
 		if err := ntlmTakeoverShapeError(input.TCPTryDuration, input.UpstreamForceHTTP1, input.ProxyFlushInterval, input.UpstreamKeepaliveTimeout); err != nil {
 			return err
+		}
+	}
+	// 认证网关开关（forward_auth，NTLM 同款开关形态）：①值域 0/1；②仅 HTTP
+	// 语义（TCP 显式携带 400 点名，与 NTLM 同格）；③与直返/301 跳转路径规则
+	// 互斥（网关认证只对转发上游的请求有意义，直返/跳转不经过网关）；④开启
+	// 时 upstream 必填且 http/https 白名单（保存门与渲染层共用
+	// services.ValidateForwardAuthGatewayAddress 同一结论）；⑤uri 须 / 开头
+	// 拒 CRLF；⑥身份头清单 1-16 项、拒 CRLF/空白/冒号。保存（Create/Update/
+	// 复制）/启用（validateStoredRuleConfig）/导入（validateV2BackupRules）
+	// 全链同门（与 NTLM 兼容同族）。uri/copy_headers 空值由写侧回填确定默认
+	// （normalizeForwardAuthValues）后才进入本门。
+	if input.ForwardAuthEnabled != 0 && input.ForwardAuthEnabled != 1 {
+		return fmt.Errorf("forward_auth_enabled 必须为 0 或 1")
+	}
+	if input.ForwardAuthEnabled == 1 {
+		if input.Protocol == "tcp" {
+			return fmt.Errorf("TCP 规则不支持认证网关（仅 HTTP 规则可用）")
+		}
+		for _, pathRule := range input.PathRules {
+			if pathRule.ResponseMode != "" {
+				return fmt.Errorf("认证网关与直返/301 跳转路径规则互斥（路径 %q 配置了 %s 模式）：网关校验仅对转发上游的请求有意义，请改用普通转发路径或关闭认证网关", pathRule.Path, pathRule.ResponseMode)
+			}
+		}
+		if _, _, err := services.ValidateForwardAuthGatewayAddress(input.ForwardAuthUpstream); err != nil {
+			return fmt.Errorf("认证网关地址无效: %w", err)
+		}
+		if input.ForwardAuthURI == "" || !strings.HasPrefix(input.ForwardAuthURI, "/") || strings.ContainsAny(input.ForwardAuthURI, "\r\n") {
+			return fmt.Errorf("认证网关的认证路径无效：须以 / 开头且不含换行（当前 %q）", input.ForwardAuthURI)
+		}
+		copyHeaders := strings.Split(input.ForwardAuthCopyHeaders, ",")
+		seenHeaders := make(map[string]bool, len(copyHeaders))
+		headerCount := 0
+		for _, header := range copyHeaders {
+			header = strings.TrimSpace(header)
+			if header == "" {
+				continue
+			}
+			headerCount++
+			if header != strings.TrimSpace(header) || strings.ContainsAny(header, " \t\r\n:") {
+				return fmt.Errorf("认证网关身份头 %q 含非法字符（空白/冒号/换行）", header)
+			}
+			if seenHeaders[header] {
+				return fmt.Errorf("认证网关身份头 %q 重复", header)
+			}
+			seenHeaders[header] = true
+		}
+		if headerCount == 0 || headerCount > maxForwardAuthCopyHeaders {
+			return fmt.Errorf("认证网关身份头清单须为 1-%d 个头（当前 %d 个）", maxForwardAuthCopyHeaders, headerCount)
 		}
 	}
 	// 健康检查超时必须小于检查间隔（两者都 > 0 时）。
@@ -1658,6 +1753,10 @@ func precheckRuleConfig(rule models.LbRule, globalBody int) services.SingleRuleC
 		TCPProxyProtocol:              rule.TCPProxyProtocol,
 		NTLMCompatible:                rule.NTLMCompatible,
 		UpstreamForceHTTP1:            rule.UpstreamForceHTTP1,
+		ForwardAuthEnabled:            rule.ForwardAuthEnabled,
+		ForwardAuthUpstream:           rule.ForwardAuthUpstream,
+		ForwardAuthURI:                rule.ForwardAuthURI,
+		ForwardAuthCopyHeaders:        rule.ForwardAuthCopyHeaders,
 		TCPTryDuration:                rule.TCPTryDuration, TCPTryInterval: rule.TCPTryInterval,
 		EnableCompress: rule.EnableCompress, CompressTypes: rule.CompressTypes,
 		GlobalRequestBodyMaxSizeMB: globalBody,

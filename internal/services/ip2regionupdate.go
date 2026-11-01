@@ -13,6 +13,8 @@ import (
 	"sync"
 	"time"
 
+	ip2regionService "github.com/lionsoul2014/ip2region/binding/golang/service"
+
 	"lazy-balancer-v2/internal/db"
 )
 
@@ -79,6 +81,22 @@ type IP2RegionUpdateManager struct {
 	runCancel   context.CancelCauseFunc
 	downloadXDB func(ctx context.Context, tag, destPath string, progress downloadProgressFunc) error
 
+	// downloadXDBV6 是 IPv6 数据源的下载缝（单任务双源形态：同一 tag 同一
+	// 任务内先后下载 v4+v6，v6 失败不拖垮 v4 安装）。测试重定向与 v4 缝同形。
+	downloadXDBV6 func(ctx context.Context, tag, destPath string, progress downloadProgressFunc) error
+
+	// v6BakCreated 标记本次运行已创建 ip2region_v6.xdb.bak（与 bakCreated
+	// 同口径：回滚永不消费 v6 bak——v6 安装成功即同 tag 有效内容，重载失败
+	// 回滚只还原 v4；v6 bak 仅供崩溃窗口恢复，成功路径清理）。
+	v6BakCreated bool
+
+	// v6InstallAttempted/v6InstallSucceeded/v6InstallError 记录本次运行 v6
+	// 源的安装段结果（运行 goroutine 私有，仅成功路径持 mu 读）：
+	// attempted=false=本轮未尝试（关闭/已最新）；失败不反噬 v4 的 success。
+	v6InstallAttempted bool
+	v6InstallSucceeded bool
+	v6InstallError     string
+
 	// slots 本运行「排程槽未推进」的原因：排程不可读（写路径严格读排程失败）
 	// 或状态行写入失败（槽随之未落地）。与 CRS 族共用同一记录器实现
 	// （versionTableSlotRecorder）；Run 体把本轮按失败返回给任务引擎——成功轮
@@ -97,6 +115,7 @@ func newIP2RegionUpdateManager(reloader func() error) *IP2RegionUpdateManager {
 		reloader:       reloader,
 		fetchLatestTag: defaultFetchIP2RegionLatestTag,
 		downloadXDB:    defaultDownloadIP2RegionXDB,
+		downloadXDBV6:  defaultDownloadIP2RegionXDBV6,
 		state:          ip2RegionTaskState{status: IP2RegionStatusIdle},
 	}
 }
@@ -303,9 +322,14 @@ func (m *IP2RegionUpdateManager) runWithContext(runCtx context.Context, trigger 
 		return
 	}
 
-	// 每次运行重置：rollbackXDB 仅消费本运行创建的.bak。
+	// 每次运行重置：rollbackXDB 仅消费本运行创建的.bak；v6 源安装结果按轮
+	// 重置（attempted=false=本轮未尝试）。
 	m.bakCreated = false
 	m.installCommitted = false
+	m.v6BakCreated = false
+	m.v6InstallAttempted = false
+	m.v6InstallSucceeded = false
+	m.v6InstallError = ""
 
 	ensureIP2RegionVersionRow()
 	runStartedAt := taskRunStartedAt(rc)
@@ -348,8 +372,8 @@ func (m *IP2RegionUpdateManager) runWithContext(runCtx context.Context, trigger 
 	WriteIP2RegionUpdateLog("INFO", string(IP2RegionStatusChecking), fmt.Sprintf("最新版本 %s，当前版本 %s", tag, currentIP2RegionVersion()))
 
 	// 与 CRS 同口径（crsupdate.go）——tag 不新于
-	// current（cmp<=0）即按「已是最新」跳过，防上游 release 回退/删除时静默降级
-	// 安装更旧 xdb；格式不可比（cmpErr!=nil）保持现行「不等即更新」行为。
+	// current（cmp<=0）即按「已是最新」跳过，防上游 release 回退/删除时静默
+	// 降级安装更旧 xdb；格式不可比（cmpErr!=nil）保持现行「不等即更新」行为。
 	// 精确相等短路（与格式无关）并入既有跳过分支；不同且不可比较
 	// 显式失败（不再隐含「必然更新」）。
 	currentVersion := ip2RegionCurrentVersionForRun()
@@ -361,12 +385,32 @@ func (m *IP2RegionUpdateManager) runWithContext(runCtx context.Context, trigger 
 		m.advanceSlotIfAuto(trigger)
 		return
 	}
-	if tag == currentVersion || (cmpErr == nil && cmp <= 0) {
+	v4Current := tag == currentVersion || (cmpErr == nil && cmp <= 0)
+	// v6 数据源货币性（单任务双源）：关闭=无需更新；开启时按 v6 版本行独立
+	// 判定——v4 已最新但 v6 未装/落后（典型：用户刚开启 v6 开关）时仍要进
+	// 安装段补齐 v6，否则「已是最新」短路会让 v6 永远装不上。
+	v6Enabled := IsIP2RegionV6Enabled()
+	v6VersionRow, v6verr := GetIP2RegionV6Version()
+	if v6verr != nil && !errors.Is(v6verr, sql.ErrNoRows) {
+		// 读故障按「非最新」处理会引发重复下载；按「最新」跳过会漏装。
+		// 读故障先行落定（任务内重试已吸收瞬断，这里是持续故障），下轮自愈。
+		m.fail(fmt.Errorf("读取 IPv6 版本行失败，已中止本轮更新: %w", v6verr))
+		m.advanceSlotIfAuto(trigger)
+		return
+	}
+	v6Current := !v6Enabled || v6VersionRow == tag
+	if v4Current && v6Current {
 		// （补正重写——首版实施脚本缺失落盘调用丢失）：已是最新也
 		// 补写 .version sidecar——此前该分支提前 return 不写，崩溃遗留的 stale tag
 		// 将无限期不愈（愈于下次「安装」而非下次「检查」）；幂等，写失败仅记日志。
+		// v6 sidecar 同口径自愈（开启时）。
 		if err := rewriteVersionIfMissingOrStale(ip2regionLivePath+".version", tag); err != nil {
 			Logf("error", "ip2region update: failed to refresh .version sidecar at latest: %v", err)
+		}
+		if v6Enabled {
+			if err := rewriteVersionIfMissingOrStale(ip2regionV6LivePath+".version", tag); err != nil {
+				Logf("error", "ip2region update: failed to refresh v6 .version sidecar at latest: %v", err)
+			}
 		}
 		WriteIP2RegionUpdateLog("INFO", string(IP2RegionStatusSuccess), "已是最新版本，无需更新")
 		slotSQL, slotArgs, slotErr := versionTableSlotSuccessAssign("security_ip2region_version", trigger)
@@ -401,8 +445,9 @@ func (m *IP2RegionUpdateManager) runWithContext(runCtx context.Context, trigger 
 	m.mu.Unlock()
 
 	var installErr error
+	needV4, needV6 := !v4Current, v6Enabled && !v6Current
 	installRetErr := runWithInTaskRetry(runCtx, func() error {
-		installErr = m.downloadAndInstall(runCtx, tag)
+		installErr = m.downloadAndInstall(runCtx, tag, needV4, needV6)
 		// errIP2RegionReload=内存热换失败（fail-open 回滚路径），非瞬断——不重试。
 		if errors.Is(installErr, errIP2RegionReload) {
 			return nil
@@ -462,6 +507,15 @@ func (m *IP2RegionUpdateManager) runWithContext(runCtx context.Context, trigger 
 		recordSystemReloadAudit("ip2region_update", reloadErr)
 	}
 	if reloadErr != nil {
+		// needV4=false 的轮次（仅 v6 变更）：v4 从未离位，磁盘/内存本就一致，
+		// 无回滚语义——dist 回退会把在役 v4 错误降级为镜像旧库。v6 新库已落盘
+		// （有效内容），面板内存 searcher 已随安装热换；仅 Caddy 停留旧配置，
+		// 待下次成功重载收敛。
+		if !needV4 {
+			m.fail(fmt.Errorf("重载 Caddy 配置失败: %w（IPv6 库已落盘，待下次成功重载生效）", reloadErr))
+			m.advanceSlotIfAuto(trigger)
+			return
+		}
 		// 回滚旧 xdb 并再次重载（镜像 CRS fail() 路径）：reloader 失败
 		// 时磁盘还原到更新前状态，避免「磁盘已是新库、DB 记录旧版本+failed」的
 		// 长期不一致；还原后内存热换失败时旧 searcher 保持服役、磁盘已是基线
@@ -538,9 +592,13 @@ func (m *IP2RegionUpdateManager) runWithContext(runCtx context.Context, trigger 
 	// 只清理本运行创建的备份（与 rollbackXDB 的 bakCreated 口径、
 	// 「本运行创建才可消费/清理」统一）——fresh-install（live
 	// 不存在→本轮未建备份）时磁盘上的陈旧 .bak 是崩溃现场唯一恢复副本，
-	// 成功路径删除会无谓销毁它。
+	// 成功路径删除会无谓销毁它。v6 bak 同口径（v6 bak 不参与回滚，仅供
+	// 崩溃窗口恢复；成功即同 tag 有效内容，清理）。
 	if m.bakCreated {
 		os.Remove(ip2regionLivePath + ".bak")
+	}
+	if m.v6BakCreated {
+		os.Remove(ip2regionV6LivePath + ".bak")
 	}
 
 	slotSQL, slotArgs, slotErr := versionTableSlotSuccessAssign("security_ip2region_version", trigger)
@@ -556,6 +614,25 @@ func (m *IP2RegionUpdateManager) runWithContext(runCtx context.Context, trigger 
 	if err := SetIP2RegionVersion(tag); err != nil {
 		Logf("error", "ip2region update: failed to store version: %v", err)
 	}
+	// v6 源终态落库：本次安装段尝试过 v6（needV6）时按结果写——成功=版本行
+	// +sidecar+源状态 success；失败已在安装段记 failed（不反噬 v4 的 success）。
+	// 未尝试（关闭或已最新）不动 v6 状态。v6 版本行写失败仅留痕（下次成功
+	// 更新/启动种子同步自愈）。
+	if m.v6InstallAttempted {
+		if m.v6InstallSucceeded {
+			if err := SetIP2RegionV6Version(tag); err != nil {
+				Logf("error", "ip2region update: failed to store v6 version: %v", err)
+			}
+			SetIP2RegionV6SourceStatus("success", "")
+			if err := rewriteVersionIfMissingOrStale(ip2regionV6LivePath+".version", tag); err != nil {
+				Logf("error", "ip2region update: failed to write v6 .version sidecar: %v", err)
+			}
+			WriteIP2RegionUpdateLog("INFO", string(IP2RegionStatusSuccess), fmt.Sprintf("IPv6 库已更新到 %s", tag))
+		} else {
+			SetIP2RegionV6SourceStatus("failed", m.v6InstallError)
+			WriteIP2RegionUpdateLog("WARN", string(IP2RegionStatusSuccess), fmt.Sprintf("IPv6 库更新失败（不影响 IPv4 库）: %s", m.v6InstallError))
+		}
+	}
 	// 主节点补写.version sidecar——waffiles_sync 的
 	// BuildWafFileRef（ref.IP2RegionTag）与从节点 rewriteVersionIfMissingOrStale
 	// 都假设它存在。 后首写已随安装段（wafFileMu 互斥区）完成，此处
@@ -564,12 +641,27 @@ func (m *IP2RegionUpdateManager) runWithContext(runCtx context.Context, trigger 
 		Logf("error", "ip2region update: failed to write .version sidecar: %v", err)
 	}
 	m.mu.Lock()
+	v6Summary := m.v6InstallMessageLocked()
 	m.state.status = IP2RegionStatusSuccess
-	m.state.message = ""
+	m.state.message = v6Summary
 	m.state.version = tag
 	m.state.finishedAt = time.Now().UTC()
 	m.mu.Unlock()
 	WriteIP2RegionUpdateLog("INFO", string(IP2RegionStatusSuccess), fmt.Sprintf("ip2region 已更新到 %s", tag))
+}
+
+// v6InstallMessageLocked 汇总 v6 源的本次结果进任务 message（v4 成功为主语义）：
+// 未尝试=空；成功=空（详情进更新日志）；失败=保留旧库并注明。调用方必须
+// 已持 m.mu（字段只由运行 goroutine 写、状态读侧持 mu 读 state.message，
+// 本函数只在运行 goroutine 的持锁段内取值）。
+func (m *IP2RegionUpdateManager) v6InstallMessageLocked() string {
+	if !m.v6InstallAttempted {
+		return ""
+	}
+	if m.v6InstallSucceeded {
+		return ""
+	}
+	return "IPv6 库更新失败（保留原库，不影响 IPv4）: " + m.v6InstallError
 }
 
 // advanceSlotIfAuto 落定推进排程槽（失败/取消路径）：仅 auto 触发且现存槽
@@ -676,7 +768,12 @@ func (m *IP2RegionUpdateManager) fail(cause error) {
 }
 
 // downloadAndInstall downloads, validates and atomically swaps in the new xdb.
-func (m *IP2RegionUpdateManager) downloadAndInstall(parent context.Context, tag string) error {
+// 单任务双源形态（类似爬虫地址库多源）：needV4/needV6 按两源各自的货币性
+// 传入——v4 段语义逐字保持（下载/校验/备份/rename/版本行/热换/回滚链），
+// v6 段独立健康门且**失败不反噬 v4**（源状态分列落库，WARN 留痕，任务按 v4
+// 结果定性）。重载失败回滚只还原 v4 基线；v6 安装成功即同 tag 有效内容，
+// 保留在盘（Caddy 侧待下次成功重载生效）。
+func (m *IP2RegionUpdateManager) downloadAndInstall(parent context.Context, tag string, needV4, needV6 bool) error {
 	m.setStage(IP2RegionStatusDownloading, fmt.Sprintf("下载 %s", tag))
 	stagingDir := filepath.Join(filepath.Dir(ip2regionLivePath), ".staging")
 	if err := os.RemoveAll(stagingDir); err != nil {
@@ -691,17 +788,55 @@ func (m *IP2RegionUpdateManager) downloadAndInstall(parent context.Context, tag 
 		}
 	}()
 
-	ctx, cancel := context.WithTimeout(parent, 15*time.Minute)
-	defer cancel()
-	staged := filepath.Join(stagingDir, "ip2region_v4.xdb")
-	if err := m.downloadXDBLogged(ctx, tag, staged); err != nil {
-		return fmt.Errorf("下载 ip2region xdb: %w", err)
+	// 每族独立 15min 下载预算（v4 既有口径不变；v6 约 35MB 同窗口），互不挤占。
+	var staged, stagedV6 string
+	if needV4 {
+		ctx, cancel := context.WithTimeout(parent, 15*time.Minute)
+		staged = filepath.Join(stagingDir, "ip2region_v4.xdb")
+		err := m.downloadXDBLogged(ctx, tag, staged)
+		cancel()
+		if err != nil {
+			return fmt.Errorf("下载 ip2region xdb: %w", err)
+		}
+	}
+	if needV6 {
+		ctx, cancel := context.WithTimeout(parent, 15*time.Minute)
+		stagedV6 = filepath.Join(stagingDir, "ip2region_v6.xdb")
+		err := m.downloadXDBV6Logged(ctx, tag, stagedV6)
+		cancel()
+		if err != nil {
+			// v6 下载失败：记源状态后继续 v4 安装（v6 辅助源不拖垮主源）。
+			m.v6InstallAttempted = true
+			m.v6InstallSucceeded = false
+			m.v6InstallError = fmt.Sprintf("下载失败: %v", err)
+			SetIP2RegionV6SourceStatus("failed", m.v6InstallError)
+			Logf("warn", "ip2region update: IPv6 库下载失败（继续 IPv4 安装）: %v", err)
+			stagedV6 = ""
+		}
 	}
 
 	m.setStage(IP2RegionStatusInstalling, "校验并安装数据库")
-	validatedSearcher, err := openValidatedIP2RegionSearcherForUpdate(staged)
+	// v4 校验：needV4 时校验 staged 新工件（既有口径）；否则校验 live 现库
+	// （v4 未离位，热换 searcher 以在役内容重建——仅 v6 变更的轮次仍要热换
+	// 面板 searcher 以挂载新 v6 库）。v6 侧：staged 成功用 staged（新库随
+	// 热换即刻在役）；下载/校验失败回落当前 attach 路径（保留在役 v6 服务，
+	// 缺失/损坏由 attach 侧健康门降级为禁用）。
+	v4Source := staged
+	if !needV4 {
+		v4Source = ip2regionLivePath
+	}
+	v6ForSearcher := stagedV6
+	if v6ForSearcher == "" {
+		v6ForSearcher = ip2RegionV6PathForAttach()
+	}
+	validatedSearcher, err := openValidatedIP2RegionSearcherForUpdate(v4Source, v6ForSearcher)
 	if err != nil {
-		return fmt.Errorf("校验 ip2region xdb: %w", err)
+		if needV4 {
+			return fmt.Errorf("校验 ip2region xdb: %w", err)
+		}
+		// v6 附加失败（stagedV6 已在 openIP2RegionV6Config 内降级为 nil——
+		// 此分支实为 live v4 校验失败，与 v4 缺失/损坏同形，按失败落定。
+		return fmt.Errorf("校验在役 ip2region xdb: %w", err)
 	}
 	searcherInstalled := false
 	defer func() {
@@ -709,89 +844,175 @@ func (m *IP2RegionUpdateManager) downloadAndInstall(parent context.Context, tag 
 			validatedSearcher.Close()
 		}
 	}()
-	// 记录新工件摘要，供回滚全败时 fail-open 前置校验。
-	if sum, sumErr := sha256File(staged); sumErr == nil {
-		m.newXdbSha = sum
-	} else {
-		m.newXdbSha = ""
-	}
-	// TOFU 完整性基线在格式验证成功之后记录：验证前的坏工件留下基线
-	// 会让下次同 tag 好下载误报。I/O 类记录失败不阻断安装；mismatch 必须中止
-	// 安装并保留旧基线。
-	if ierr := recordDownloadIntegrity(ip2RegionXDBBaselineKey(tag), staged, "IP数据库"); ierr != nil {
-		if errors.Is(ierr, errDownloadIntegrityMismatch) {
-			return ierr
+	if needV4 {
+		// 记录新工件摘要，供回滚全败时 fail-open 前置校验。
+		if sum, sumErr := sha256File(staged); sumErr == nil {
+			m.newXdbSha = sum
+		} else {
+			m.newXdbSha = ""
 		}
-		Logf("error", "ip2region update: failed to record download integrity: %v", ierr)
+		// TOFU 完整性基线在格式验证成功之后记录：验证前的坏工件留下基线
+		// 会让下次同 tag 好下载误报。I/O 类记录失败不阻断安装；mismatch 必须中止
+		// 安装并保留旧基线。
+		if ierr := recordDownloadIntegrity(ip2RegionXDBBaselineKey(tag), staged, "IP数据库"); ierr != nil {
+			if errors.Is(ierr, errDownloadIntegrityMismatch) {
+				return ierr
+			}
+			Logf("error", "ip2region update: failed to record download integrity: %v", ierr)
+		}
 	}
+	if stagedV6 != "" {
+		// v6 显式校验门（与 v4 的 openValidatedIP2RegionSearcherForUpdate 同
+		// 强度）：双协议 searcher 构造对损坏 v6 是「降级禁用」语义（不报错），
+		// 安装段必须独立显性校验——不合格工件到此拒装并记源失败，绝不 rename
+		// 进 live（否则损坏 v6 会在役且源状态误报 success）。
+		if verr := validateIP2RegionV6XDB(stagedV6); verr != nil {
+			m.v6InstallAttempted = true
+			m.v6InstallSucceeded = false
+			m.v6InstallError = fmt.Sprintf("校验失败: %v", verr)
+			SetIP2RegionV6SourceStatus("failed", m.v6InstallError)
+			Logf("warn", "ip2region update: IPv6 库校验失败（拒绝安装，继续 IPv4 安装）: %v", verr)
+			stagedV6 = ""
+		}
+	}
+	if stagedV6 != "" {
+		// v6 TOFU 基线（独立键，与 v4 基线互不覆盖）。mismatch 拒装 v6
+		//（记源状态，v4 不受影响）；I/O 类记录失败降级为留痕。
+		if ierr := recordDownloadIntegrity(ip2RegionXDBOriginURLFor("v6", tag), stagedV6, "IP数据库"); ierr != nil {
+			if errors.Is(ierr, errDownloadIntegrityMismatch) {
+				m.v6InstallAttempted = true
+				m.v6InstallSucceeded = false
+				m.v6InstallError = fmt.Sprintf("完整性校验失败: %v", ierr)
+				SetIP2RegionV6SourceStatus("failed", m.v6InstallError)
+				Logf("warn", "ip2region update: IPv6 库完整性基线不匹配（拒绝安装，继续 IPv4 安装）: %v", ierr)
+				stagedV6 = ""
+			} else {
+				Logf("error", "ip2region update: failed to record v6 download integrity: %v", ierr)
+			}
+		}
+	}
+
 	// 1.2：rename 前备份旧 xdb，reloader 失败时可回滚（镜像 CRS 的
 	// restoreBackup 路径），与 CRS 更新侧保持对称。
 	// 备份+rename 是 wafFileMu 互斥的安装文件段（网络下载在锁外
 	// staging 先行；内存热换在锁外）——与 lbbak 导入直写/集群同步落盘串行，
-	// 杜绝撕裂 xdb 与元数据瞬时错位。
+	// 杜绝撕裂 xdb 与元数据瞬时错位。v4 与 v6 的备份/rename/版本写入同处
+	// 一个临界区：导出读相位只看到「全旧代」或「全新代」，不发布混合代。
 	// 安装前读取版本行：读故障不得折叠成 "unknown" 哨兵继续安装——
 	// 重载失败回滚时会把真实 tag 覆写成哨兵（非空故通过 prevVersion 门），
 	// 版本溯源丢失且下轮按哨兵重装。读故障按安装失败落定（任务内重试可吸收
 	// 瞬时 DB 故障）；行缺失（ErrNoRows）等价「无既有版本」，留空串让回滚
 	// 不写版本行。与 GetIP2RegionVersion 的错误语义同源（读故障 vs 行缺失）。
-	prevVersion, verr := GetIP2RegionVersion()
-	if verr != nil && !errors.Is(verr, sql.ErrNoRows) {
-		return fmt.Errorf("读取安装前 IP2Region 版本行: %w", verr)
+	// 仅 needV4 时读取（v4 未离位的轮次无回滚语义，见下方 reloadErr 分支）。
+	if needV4 {
+		prevVersion, verr := GetIP2RegionVersion()
+		if verr != nil && !errors.Is(verr, sql.ErrNoRows) {
+			return fmt.Errorf("读取安装前 IP2Region 版本行: %w", verr)
+		}
+		m.prevVersion = prevVersion
 	}
-	m.prevVersion = prevVersion
 	liveBak := ip2regionLivePath + ".bak"
 	wafFileMu.Lock()
-	if _, err := os.Stat(ip2regionLivePath); err == nil {
-		if err := backupIP2RegionXDB(ip2regionLivePath, liveBak); err != nil {
+	if needV4 {
+		if _, err := os.Stat(ip2regionLivePath); err == nil {
+			if err := backupIP2RegionXDB(ip2regionLivePath, liveBak); err != nil {
+				wafFileMu.Unlock()
+				return fmt.Errorf("备份旧 ip2region xdb: %w", err)
+			}
+			m.bakCreated = true
+		}
+		if err := osRename(staged, ip2regionLivePath); err != nil {
+			// 安装未发生：仅清理本运行创建的备份（——无 bakCreated 守
+			// 卫时 fresh-install 会删除跨运行的陈旧 .bak，而该备份是崩溃现场唯一
+			// 恢复副本；陈旧 bak 本就不会被 rollback 消费）。
+			if m.bakCreated {
+				os.Remove(liveBak)
+			}
 			wafFileMu.Unlock()
-			return fmt.Errorf("备份旧 ip2region xdb: %w", err)
+			return fmt.Errorf("安装 ip2region xdb: %w", err)
 		}
-		m.bakCreated = true
-	}
-	if err := osRename(staged, ip2regionLivePath); err != nil {
-		// 安装未发生：仅清理本运行创建的备份（——无 bakCreated 守
-		// 卫时 fresh-install 会删除跨运行的陈旧 .bak，而该备份是崩溃现场唯一
-		// 恢复副本；陈旧 bak 本就不会被 rollback 消费）。
-		if m.bakCreated {
-			os.Remove(liveBak)
+		// rename 后同步父目录项（与 writeFileAtomicSynced 同口径）——掉电
+		// 窗口内未持久化的目录项会让重启看到旧/缺失的 live 文件。同步失败
+		// 无法回退已完成的 rename，仅记错误（持久性降级，非功能性失败）。
+		if err := syncParentDir(ip2regionLivePath); err != nil {
+			Logf("error", "ip2region update: 安装段父目录同步失败（掉电持久性降级）: %v", err)
 		}
-		wafFileMu.Unlock()
-		return fmt.Errorf("安装 ip2region xdb: %w", err)
+		// 版本行与.version sidecar 收进安装段同一互斥
+		// 区——此前在锁外 run() 成功路径，写相位中段（xdb 已换、行/sidecar 未写）
+		// 导出侧（BuildWafFileBundle/BuildWafFileRef 读相位持同一锁）可打出「文件
+		// 新/行旧」偏斜并沿 waf_files 通道扩散。单行 UPDATE+小文件原子写毫秒级，
+		// 与段内 rename 同量级，不新增锁内长阻塞。写失败仅记日志：run() 成功路径
+		// 稍后重写全量行与 sidecar，重载失败 restored 分支用 prevVersion 回滚
+		// （prevVersion 已在进入互斥段前按「读故障 vs 行缺失」语义取好）。
+		if _, err := db.DB.Exec(
+			"UPDATE security_ip2region_version SET version=?, updated_at=datetime('now') WHERE id=1",
+			tag,
+		); err != nil {
+			Logf("error", "ip2region update: 安装段写入版本行失败（稍后重写）: %v", err)
+		}
+		if err := rewriteVersionIfMissingOrStale(ip2regionLivePath+".version", tag); err != nil {
+			Logf("error", "ip2region update: 安装段写入 .version sidecar 失败（稍后重写）: %v", err)
+		}
+		// 安装段已落盘（xdb 已 rename、版本行/sidecar 已写）：此后到重载之间的
+		// 取消必须回滚到同代基线，见 installCommitted 契约。
+		m.installCommitted = true
 	}
-	// rename 后同步父目录项（与 writeFileAtomicSynced 同口径）——掉电
-	// 窗口内未持久化的目录项会让重启看到旧/缺失的 live 文件。同步失败
-	// 无法回退已完成的 rename，仅记错误（持久性降级，非功能性失败）。
-	if err := syncParentDir(ip2regionLivePath); err != nil {
-		Logf("error", "ip2region update: 安装段父目录同步失败（掉电持久性降级）: %v", err)
-	}
-	// 版本行与.version sidecar 收进安装段同一互斥
-	// 区——此前在锁外 run() 成功路径，写相位中段（xdb 已换、行/sidecar 未写）
-	// 导出侧（BuildWafFileBundle/BuildWafFileRef 读相位持同一锁）可打出「文件
-	// 新/行旧」偏斜并沿 waf_files 通道扩散。单行 UPDATE+小文件原子写毫秒级，
-	// 与段内 rename 同量级，不新增锁内长阻塞。写失败仅记日志：run() 成功路径
-	// 稍后重写全量行与 sidecar，重载失败 restored 分支用 prevVersion 回滚
-	// （prevVersion 已在进入互斥段前按「读故障 vs 行缺失」语义取好）。
-	if _, err := db.DB.Exec(
-		"UPDATE security_ip2region_version SET version=?, updated_at=datetime('now') WHERE id=1",
-		tag,
-	); err != nil {
-		Logf("error", "ip2region update: 安装段写入版本行失败（稍后重写）: %v", err)
-	}
-	if err := rewriteVersionIfMissingOrStale(ip2regionLivePath+".version", tag); err != nil {
-		Logf("error", "ip2region update: 安装段写入 .version sidecar 失败（稍后重写）: %v", err)
+	if stagedV6 != "" {
+		// v6 安装段（同一临界区）：备份旧 v6 → rename → sidecar。失败记源
+		// 状态后继续（不回滚 v4 已完成的 rename——v4 段自身已一致）。
+		v6Bak := ip2regionV6LivePath + ".bak"
+		if _, err := os.Stat(ip2regionV6LivePath); err == nil {
+			if err := backupIP2RegionXDB(ip2regionV6LivePath, v6Bak); err != nil {
+				m.recordV6InstallFailureLocked(fmt.Errorf("备份旧 IPv6 库: %w", err))
+			} else {
+				m.v6BakCreated = true
+			}
+		}
+		if !m.v6InstallAttempted {
+			if err := osRename(stagedV6, ip2regionV6LivePath); err != nil {
+				if m.v6BakCreated {
+					os.Remove(v6Bak)
+				}
+				m.recordV6InstallFailureLocked(fmt.Errorf("安装 IPv6 库: %w", err))
+			} else {
+				if err := syncParentDir(ip2regionV6LivePath); err != nil {
+					Logf("error", "ip2region update: v6 安装段父目录同步失败（掉电持久性降级）: %v", err)
+				}
+				if err := rewriteVersionIfMissingOrStale(ip2regionV6LivePath+".version", tag); err != nil {
+					// sidecar 写失败不回退已完成的 rename（下次成功更新/启动
+					// 种子同步自愈）；集群 ref 的 v6 tag 读自 sidecar，缺失按
+					// 「主端未声明 v6」处理，不阻塞 v4 通道。
+					Logf("error", "ip2region update: 安装段写入 v6 .version sidecar 失败（稍后重写）: %v", err)
+				}
+				m.v6InstallAttempted = true
+				m.v6InstallSucceeded = true
+			}
+		}
 	}
 	wafFileMu.Unlock()
-	// 安装段已落盘（xdb 已 rename、版本行/sidecar 已写）：此后到重载之间的
-	// 取消必须回滚到同代基线，见 installCommitted 契约。
-	m.installCommitted = true
 	// rename 后内存热换失败不得静默吞掉——磁盘已是新库而内存仍是旧
 	// 库，必须按安装失败处理（sentinel 标记），由 run() 走与 reloader 失败相同
 	// 的回滚路径。Reload 失败时旧 searcher 保持服役（ip2region.go Reload 语义）。
+	// needV4=false 的轮次无 v4 回滚语义（v4 未离位，dist 回退会错误降级 v4），
+	// 由 run() 的 reloadErr 分支按「无需回滚」处理。
 	if err := reloadIP2RegionSearcher(validatedSearcher); err != nil {
+		if !needV4 {
+			return fmt.Errorf("%w: %v（IPv6 库已落盘，待下次成功重载生效）", errIP2RegionReload, err)
+		}
 		return fmt.Errorf("%w: %v", errIP2RegionReload, err)
 	}
 	searcherInstalled = true
 	return nil
+}
+
+// recordV6InstallFailureLocked 记录 v6 安装段失败（调用方须持 wafFileMu——
+// 仅字段写入，锁口径与安装段一致便于内联调用）。
+func (m *IP2RegionUpdateManager) recordV6InstallFailureLocked(cause error) {
+	m.v6InstallAttempted = true
+	m.v6InstallSucceeded = false
+	m.v6InstallError = cause.Error()
+	SetIP2RegionV6SourceStatus("failed", m.v6InstallError)
+	Logf("warn", "ip2region update: IPv6 库安装段失败（继续 IPv4 安装）: %v", cause)
 }
 
 // downloadXDBLogged 包装下载 seam 写更新日志（口径同 CRS 的
@@ -800,10 +1021,26 @@ func (m *IP2RegionUpdateManager) downloadAndInstall(parent context.Context, tag 
 // 已知时附预计大小；进度行按 10%/5MB 节流步进；完成行记录落盘
 // 字节与耗时。stage 沿用下载阶段的 downloading。
 func (m *IP2RegionUpdateManager) downloadXDBLogged(ctx context.Context, tag, destPath string) error {
+	return m.downloadXDBLoggedFamily(ctx, "v4", tag, destPath)
+}
+
+// downloadXDBV6Logged 是 IPv6 数据源的下载日志包装（与 v4 同形，URL/族名
+// 不同——进度行可区分两源）。
+func (m *IP2RegionUpdateManager) downloadXDBV6Logged(ctx context.Context, tag, destPath string) error {
+	return m.downloadXDBLoggedFamily(ctx, "v6", tag, destPath)
+}
+
+func (m *IP2RegionUpdateManager) downloadXDBLoggedFamily(ctx context.Context, family, tag, destPath string) error {
 	logLine := func(message string) { WriteIP2RegionUpdateLog("INFO", string(IP2RegionStatusDownloading), message) }
 	startedAt := time.Now()
-	progress := newDownloadProgressLogger(ip2RegionXDBSourceURL(tag), logLine)
-	if err := m.downloadXDB(ctx, tag, destPath, progress); err != nil {
+	progress := newDownloadProgressLogger(ip2RegionXDBSourceURLFor(family, tag), logLine)
+	var err error
+	if family == "v4" {
+		err = m.downloadXDB(ctx, tag, destPath, progress)
+	} else {
+		err = m.downloadXDBV6(ctx, tag, destPath, progress)
+	}
+	if err != nil {
 		return err
 	}
 	logDownloadCompletion(logLine, destPath, startedAt)
@@ -1037,8 +1274,25 @@ func (m *IP2RegionUpdateManager) successAfterReloadFailOpen(tag string, reloadEr
 }
 
 // openValidatedIP2RegionSearcherForUpdate 让更新用例测量完整装载次数；
-// 生产默认与统一校验入口一致。
-var openValidatedIP2RegionSearcherForUpdate = openValidatedIP2RegionSearcher
+// 生产默认与统一校验入口一致（显式双路径：v4 必选、v6 可选附加）。
+var openValidatedIP2RegionSearcherForUpdate = openValidatedIP2RegionSearcherDual
+
+// openValidatedIP2RegionSearcherDual 是「可装载」统一校验入口的显式双路径
+// 变体：v4 结构自检 + 探针搜索 + panic 收敛（openValidatedIP2RegionSearcher
+// 同强度），v6 路径非空时经独立健康门附加（损坏 v6 降级禁用，不影响 v4）。
+func openValidatedIP2RegionSearcherDual(v4Path, v6Path string) (searcher *ip2regionService.Ip2Region, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			if searcher != nil {
+				searcher.Close()
+				searcher = nil
+			}
+			Logf("error", "ip2region: probe search panicked on %s: %v\n%s", v4Path, r, debug.Stack())
+			err = fmt.Errorf("探针搜索触发内部异常（文件损坏）: %v", r)
+		}
+	}()
+	return openIP2RegionSearcherDual(v4Path, v6Path)
+}
 
 // validateIP2RegionXDB opens the staged xdb and performs a probe search.
 // recover 兜底：结构自检门只覆盖已知布局（头/向量索引/段索引指针），绑定库

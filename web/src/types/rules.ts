@@ -97,6 +97,14 @@ export interface Rule extends ProxyTimeoutConfig {
   ntlm_compatible: number
   // 通用列：1=上游强制 HTTP/1.1（https 上游禁 ALPN h2）；NTLM 接管时恒 1
   upstream_force_http1: number
+  // 认证网关（forward_auth）：1=全部请求先经网关校验（仅 HTTP 规则）
+  forward_auth_enabled: number
+  // 网关地址 http(s)://host:port
+  forward_auth_upstream: string
+  // 网关校验路径（默认 /api/authz/forward-auth）
+  forward_auth_uri: string
+  // 认证通过后拷入原请求的身份头清单（逗号分隔）
+  forward_auth_copy_headers: string
   host_header: string
   // 健康检查域名：主动健康检查 probe 的 Host 头；空=跟随 host_header
   health_check_host?: string
@@ -152,6 +160,11 @@ export interface CreateRuleRequest extends ProxyTimeoutConfig {
   server_tokens_hidden: number
   ntlm_compatible: number
   upstream_force_http1: number
+  // 认证网关四件套（仅 HTTP；enabled=1 时 upstream 必填）
+  forward_auth_enabled: number
+  forward_auth_upstream: string
+  forward_auth_uri: string
+  forward_auth_copy_headers: string
   custom_routes_enabled: boolean
   path_rules: PathRule[]
   host_header: string
@@ -179,6 +192,10 @@ export interface UpdateRuleRequest extends Omit<CreateRuleRequest,
   | 'server_tokens_hidden'
   | 'ntlm_compatible'
   | 'upstream_force_http1'
+  | 'forward_auth_enabled'
+  | 'forward_auth_upstream'
+  | 'forward_auth_uri'
+  | 'forward_auth_copy_headers'
   | 'custom_routes_enabled'
   | 'tcp_proxy_protocol'
   | keyof ProxyTimeoutConfig
@@ -192,6 +209,11 @@ export interface UpdateRuleRequest extends Omit<CreateRuleRequest,
   server_tokens_hidden?: number
   ntlm_compatible?: number
   upstream_force_http1?: number
+  // 认证网关四件套：省略=保留原值（后端指针合并语义）；显式空串=清空
+  forward_auth_enabled?: number
+  forward_auth_upstream?: string
+  forward_auth_uri?: string
+  forward_auth_copy_headers?: string
   custom_routes_enabled?: boolean
   tcp_proxy_protocol: boolean
   proxy_dial_timeout?: number

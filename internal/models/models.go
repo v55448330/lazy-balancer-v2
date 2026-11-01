@@ -162,8 +162,18 @@ type LbRule struct {
 	ServerTokensHidden            int    `json:"server_tokens_hidden"` // 0=default, 1=hide, 2=show
 	// NTLM 兼容开关（2026-10-12）：1=按 NTLM 兼容形态渲染（保存门强制
 	// strategy=cookie）；仅 HTTP 语义，TCP 行恒 0。
-	NTLMCompatible             int        `json:"ntlm_compatible"`
-	UpstreamForceHTTP1         int        `json:"upstream_force_http1"`
+	NTLMCompatible     int `json:"ntlm_compatible"`
+	UpstreamForceHTTP1 int `json:"upstream_force_http1"` // 通用列：1=上游强制 HTTP/1.1（https 上游禁 ALPN h2）
+	// 认证网关（forward_auth）：1=该规则全部请求先经认证网关校验（GET 子请求，
+	// 未认证返回网关响应、认证通过注入身份头后转发后端）。仅 HTTP 语义，TCP 行
+	// 恒 0；upstream=http(s)://host:port，uri=网关校验路径，copy_headers=认证
+	// 通过后拷入原请求的身份头清单（逗号分隔）。渲染消费全部四列：enabled=1
+	// 而 upstream 为空的带外行由启动迁移归零（uri/copy_headers 有确定默认，
+	// 启动回填）。
+	ForwardAuthEnabled         int        `json:"forward_auth_enabled"`
+	ForwardAuthUpstream        string     `json:"forward_auth_upstream"`
+	ForwardAuthURI             string     `json:"forward_auth_uri"`
+	ForwardAuthCopyHeaders     string     `json:"forward_auth_copy_headers"`
 	CustomRoutesEnabled        bool       `json:"custom_routes_enabled"`
 	ProxyDialTimeout           int        `json:"proxy_dial_timeout"`
 	ProxyResponseHeaderTimeout int        `json:"proxy_response_header_timeout"`
@@ -497,41 +507,47 @@ type UpdateAPIKeyRequest struct {
 }
 
 type CreateRuleRequest struct {
-	Name                          string     `json:"name" binding:"required"`
-	Description                   string     `json:"description"`
-	Protocol                      string     `json:"protocol" binding:"required"`
-	Domain                        string     `json:"domain"`
-	ListenPort                    int        `json:"listen_port"`
-	Strategy                      string     `json:"strategy"`
-	DynamicDNS                    bool       `json:"dynamic_dns"`
-	EnableDnsServer               bool       `json:"enable_dns_server"`
-	DnsServer                     string     `json:"dns_server"`
-	DnsFamily                     string     `json:"dns_family"`
-	HealthCheckPath               string     `json:"health_check_path"`
-	HealthCheckInterval           int        `json:"health_check_interval"`
-	HealthCheckTimeout            int        `json:"health_check_timeout"`
-	HealthCheckUnhealthyThreshold int        `json:"health_check_unhealthy_threshold"`
-	HealthCheckHealthyThreshold   int        `json:"health_check_healthy_threshold"`
-	EnableActiveHealthCheck       bool       `json:"enable_active_health_check"`
-	TCPHealthCheckPort            int        `json:"tcp_health_check_port"`
-	TCPProxyProtocol              bool       `json:"tcp_proxy_protocol"`
-	TCPTryDuration                int        `json:"tcp_try_duration"`
-	TCPTryInterval                int        `json:"tcp_try_interval"`
-	RequestBodyMaxSizeMB          int        `json:"request_body_max_size_mb"`
-	UpstreamKeepaliveTimeout      int        `json:"upstream_keepalive_timeout"`
-	ServerTokensHidden            int        `json:"server_tokens_hidden"` // 0=default, 1=hide, 2=show
-	NTLMCompatible                int        `json:"ntlm_compatible"`      // 0=off, 1=NTLM 兼容形态（要求 strategy=cookie）
-	UpstreamForceHTTP1            int        `json:"upstream_force_http1"` // 通用列：1=上游强制 HTTP/1.1（https 上游禁 ALPN h2）
-	CustomRoutesEnabled           bool       `json:"custom_routes_enabled"`
-	ProxyDialTimeout              int        `json:"proxy_dial_timeout"`
-	ProxyResponseHeaderTimeout    int        `json:"proxy_response_header_timeout"`
-	ProxyReadTimeout              int        `json:"proxy_read_timeout"`
-	ProxyWriteTimeout             int        `json:"proxy_write_timeout"`
-	ProxyStreamTimeout            int        `json:"proxy_stream_timeout"`
-	ProxyFlushInterval            int        `json:"proxy_flush_interval"`
-	ProxyStreamCloseDelay         int        `json:"proxy_stream_close_delay"`
-	PathRules                     []PathRule `json:"path_rules"`
-	HostHeader                    string     `json:"host_header"`
+	Name                          string `json:"name" binding:"required"`
+	Description                   string `json:"description"`
+	Protocol                      string `json:"protocol" binding:"required"`
+	Domain                        string `json:"domain"`
+	ListenPort                    int    `json:"listen_port"`
+	Strategy                      string `json:"strategy"`
+	DynamicDNS                    bool   `json:"dynamic_dns"`
+	EnableDnsServer               bool   `json:"enable_dns_server"`
+	DnsServer                     string `json:"dns_server"`
+	DnsFamily                     string `json:"dns_family"`
+	HealthCheckPath               string `json:"health_check_path"`
+	HealthCheckInterval           int    `json:"health_check_interval"`
+	HealthCheckTimeout            int    `json:"health_check_timeout"`
+	HealthCheckUnhealthyThreshold int    `json:"health_check_unhealthy_threshold"`
+	HealthCheckHealthyThreshold   int    `json:"health_check_healthy_threshold"`
+	EnableActiveHealthCheck       bool   `json:"enable_active_health_check"`
+	TCPHealthCheckPort            int    `json:"tcp_health_check_port"`
+	TCPProxyProtocol              bool   `json:"tcp_proxy_protocol"`
+	TCPTryDuration                int    `json:"tcp_try_duration"`
+	TCPTryInterval                int    `json:"tcp_try_interval"`
+	RequestBodyMaxSizeMB          int    `json:"request_body_max_size_mb"`
+	UpstreamKeepaliveTimeout      int    `json:"upstream_keepalive_timeout"`
+	ServerTokensHidden            int    `json:"server_tokens_hidden"` // 0=default, 1=hide, 2=show
+	NTLMCompatible                int    `json:"ntlm_compatible"`      // 0=off, 1=NTLM 兼容形态（要求 strategy=cookie）
+	UpstreamForceHTTP1            int    `json:"upstream_force_http1"` // 通用列：1=上游强制 HTTP/1.1（https 上游禁 ALPN h2）
+	// 认证网关四件套（仅 HTTP；enabled=1 时保存门强制 upstream 齐备，
+	// uri/copy_headers 空值由写侧回填确定默认）。
+	ForwardAuthEnabled         int        `json:"forward_auth_enabled"`
+	ForwardAuthUpstream        string     `json:"forward_auth_upstream"`
+	ForwardAuthURI             string     `json:"forward_auth_uri"`
+	ForwardAuthCopyHeaders     string     `json:"forward_auth_copy_headers"`
+	CustomRoutesEnabled        bool       `json:"custom_routes_enabled"`
+	ProxyDialTimeout           int        `json:"proxy_dial_timeout"`
+	ProxyResponseHeaderTimeout int        `json:"proxy_response_header_timeout"`
+	ProxyReadTimeout           int        `json:"proxy_read_timeout"`
+	ProxyWriteTimeout          int        `json:"proxy_write_timeout"`
+	ProxyStreamTimeout         int        `json:"proxy_stream_timeout"`
+	ProxyFlushInterval         int        `json:"proxy_flush_interval"`
+	ProxyStreamCloseDelay      int        `json:"proxy_stream_close_delay"`
+	PathRules                  []PathRule `json:"path_rules"`
+	HostHeader                 string     `json:"host_header"`
 	// 健康检查域名：空=跟随 HostHeader（省略与空串同义，创建语义）。
 	HealthCheckHost string     `json:"health_check_host"`
 	Upstreams       []Upstream `json:"upstreams" binding:"required"`
@@ -607,8 +623,14 @@ type UpdateRuleRequest struct {
 	UpstreamKeepaliveTimeout *int  `json:"upstream_keepalive_timeout"`
 	ServerTokensHidden       *int  `json:"server_tokens_hidden"` // 0=default, 1=hide, 2=show
 	// NTLM 兼容开关：指针化——省略（nil）=保留原值，显式 0=关闭。
-	NTLMCompatible             *int        `json:"ntlm_compatible"`
-	UpstreamForceHTTP1         *int        `json:"upstream_force_http1"`
+	NTLMCompatible     *int `json:"ntlm_compatible"`
+	UpstreamForceHTTP1 *int `json:"upstream_force_http1"`
+	// 认证网关四件套：指针化同 NTLM——省略（nil）=保留原值；upstream/
+	// uri/copy_headers 显式空串=清空（enabled=1 时保存门拒绝清空 upstream）。
+	ForwardAuthEnabled         *int        `json:"forward_auth_enabled"`
+	ForwardAuthUpstream        *string     `json:"forward_auth_upstream"`
+	ForwardAuthURI             *string     `json:"forward_auth_uri"`
+	ForwardAuthCopyHeaders     *string     `json:"forward_auth_copy_headers"`
 	CustomRoutesEnabled        *bool       `json:"custom_routes_enabled"`
 	ProxyDialTimeout           *int        `json:"proxy_dial_timeout"`
 	ProxyResponseHeaderTimeout *int        `json:"proxy_response_header_timeout"`

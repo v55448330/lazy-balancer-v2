@@ -56,7 +56,7 @@ func TestSharedGeoIPSearcher_noCacheFailuresWarnOnce(t *testing.T) {
 	dir := t.TempDir()
 	missing := filepath.Join(dir, "absent.xdb")
 	for i := 0; i < 5; i++ {
-		if _, err := sharedGeoIPSearcher(missing); err == nil {
+		if _, err := sharedGeoIPSearcher(missing, ""); err == nil {
 			t.Fatal("缺失的 xdb 必须返回 error（无缓存可 fail-stale）")
 		}
 	}
@@ -70,7 +70,7 @@ func TestSharedGeoIPSearcher_noCacheFailuresWarnOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i := 0; i < 5; i++ {
-		if _, err := sharedGeoIPSearcher(corrupt); err == nil {
+		if _, err := sharedGeoIPSearcher(corrupt, ""); err == nil {
 			t.Fatal("损坏的 xdb 在无缓存时必须返回 error")
 		}
 	}

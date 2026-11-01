@@ -148,7 +148,8 @@ var mcpUncoveredRoutes = map[string]string{
 	"POST /api/v1/mcp":             "MCP Streamable HTTP JSON-RPC 端点本身：工具调用的入口即 MCP 协议，不是可经 MCP 转发的 REST 操作",
 	"GET /api/v1/mcp/tools":        "MCP 自身镜像端点：OpenAPI 形态的工具清单，供外部集成方发现工具",
 	"GET /api/v1/mcp/ops-playbook": "MCP 自身镜像端点：注入 MCP system prompt 的运维手册文本",
-}
+
+	"PUT /api/v1/security/ip2region/v6-enabled": "IP 地理库 IPv6 开关为面板 UI 专用运维操作（数据源配置态，非告警/巡检场景；Agent 无消费场景）"}
 
 func TestMCPUncoveredRoutes_areExplicitlyExempted(t *testing.T) {
 	router := newAPIDocTestRouter(t)

@@ -16,6 +16,8 @@ package services
 // 与从端写入侧（平面格式直写）承担，与本函数正交。
 
 import (
+	"strings"
+
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
 )
@@ -67,6 +69,19 @@ func normalizeRuleForTransport(rule *models.LbRule) {
 	if rule.TCPTryInterval <= 0 {
 		rule.TCPTryInterval = db.DefaultTCPTryInterval
 	}
+	// 认证网关（forward_auth）与启动回填迁移同构的传输面归一：
+	// ① uri/身份头清单空值回填确定默认（全表 concrete 形态，canonical 稳定）；
+	// ② enabled=1 而 upstream 缺失 → 关闭（渲染必败形态，网关地址无默认可回填，
+	//    与启动迁移同判据）——主端带外写入不随快照放大到从端。
+	if rule.ForwardAuthURI == "" {
+		rule.ForwardAuthURI = db.DefaultForwardAuthURI
+	}
+	if rule.ForwardAuthCopyHeaders == "" {
+		rule.ForwardAuthCopyHeaders = db.DefaultForwardAuthCopyHeaders
+	}
+	if rule.ForwardAuthEnabled == 1 && strings.TrimSpace(rule.ForwardAuthUpstream) == "" {
+		rule.ForwardAuthEnabled = 0
+	}
 	if rule.Protocol == "tcp" {
 		// TLS 材料的存在性同样入选（不只 enable_tls=1）：TCP+enable_tls=0 的
 		// 存量行可携带私钥 PEM（保存族无条件清零、迁移 SQL 以证书列触发），
@@ -91,6 +106,10 @@ func normalizeRuleForTransport(rule *models.LbRule) {
 		// NTLM 兼容仅 HTTP 语义（2026-10-12）——与保存族/迁移族同一归一口径。
 		rule.NTLMCompatible = 0
 		rule.UpstreamForceHTTP1 = 0
+		// 认证网关仅 HTTP 语义：开关/网关地址归零（uri/身份头清单已在上文
+		// 与启动迁移同构回填确定默认）。
+		rule.ForwardAuthEnabled = 0
+		rule.ForwardAuthUpstream = ""
 		rule.ProxyDialTimeout = 0
 		rule.ProxyResponseHeaderTimeout = 0
 		rule.ProxyReadTimeout = 0
