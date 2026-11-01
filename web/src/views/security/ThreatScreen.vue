@@ -1687,5 +1687,3 @@ onBeforeUnmount(() => {
 }
 </style>
 
-<style scoped>
-</style>

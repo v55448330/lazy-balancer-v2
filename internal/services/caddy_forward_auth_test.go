@@ -27,6 +27,81 @@ func forwardAuthRule() SingleRuleConfig {
 	return rule
 }
 
+// 消费侧防御归一：带外/旧数据里的非规范名（直改 DB、旧版本备份还原）在渲染
+// 前收敛为规范形——Caddy 响应头占位符注册键恒为规范形（Go http.Header），
+// 非规范名拼出的占位符 vars 查表恒 miss → 条件 set 永不执行（静默失注入）。
+// 写侧归一（handlers）已保证新数据规范，本层与其共用同一结论（零兜底契约
+// 不变：畸形仍显性报错）。
+func TestBuildHTTPHandleChain_forwardAuthCanonicalizesCopyHeaders(t *testing.T) {
+	rule := forwardAuthRule()
+	rule.ForwardAuthCopyHeaders = "remote-user,REMOTE-GROUPS"
+	chain, err := buildHTTPHandleChain(rule, rule.Upstreams)
+	if err != nil {
+		t.Fatalf("buildHTTPHandleChain: %v", err)
+	}
+	head, ok := chain[0].(map[string]interface{})
+	if !ok || head["handler"] != "reverse_proxy" {
+		t.Fatalf("chain head = %#v, want forward_auth reverse_proxy", chain[0])
+	}
+	entries, ok := head["handle_response"].([]interface{})
+	if !ok || len(entries) != 1 {
+		t.Fatalf("handle_response = %#v", head["handle_response"])
+	}
+	entry, ok := entries[0].(map[string]interface{})
+	if !ok {
+		t.Fatalf("handle_response[0] = %#v", entries[0])
+	}
+	routes, ok := entry["routes"].([]interface{})
+	if !ok {
+		t.Fatalf("routes = %#v", entry["routes"])
+	}
+	// 逐头段形状：vars 哑路由 + [delete 路由, 条件 set 路由] —— 全部头名键
+	// （delete 键、set 键、占位符名）必须是规范形。
+	found := map[string]bool{}
+	for _, raw := range routes {
+		route, ok := raw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		handle, ok := route["handle"].([]interface{})
+		if !ok || len(handle) != 1 {
+			continue
+		}
+		handler, ok := handle[0].(map[string]interface{})
+		if !ok || handler["handler"] != "headers" {
+			continue
+		}
+		req, ok := handler["request"].(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if del, ok := req["delete"].([]string); ok {
+			for _, name := range del {
+				found["delete:"+name] = true
+			}
+		}
+		if set, ok := req["set"].(map[string]interface{}); ok {
+			for name, placeholder := range set {
+				found["set:"+name] = true
+				vals, _ := placeholder.([]string)
+				if len(vals) == 1 {
+					found["placeholder:"+vals[0]] = true
+				}
+			}
+		}
+	}
+	for _, want := range []string{
+		"delete:Remote-User", "delete:Remote-Groups",
+		"set:Remote-User", "set:Remote-Groups",
+		"placeholder:{http.reverse_proxy.header.Remote-User}",
+		"placeholder:{http.reverse_proxy.header.Remote-Groups}",
+	} {
+		if !found[want] {
+			t.Fatalf("copy 路由缺规范形态 %q（got %v）——非规范名经引擎静默失注入", want, found)
+		}
+	}
+}
+
 // findHandler 在 handle 链中按 handler 名查找，返回（索引，处理器）。
 func findHandlerInHandleChain(t *testing.T, chain []interface{}, name string) (int, map[string]interface{}) {
 	t.Helper()

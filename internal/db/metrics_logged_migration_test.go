@@ -12,7 +12,8 @@ import (
 //   - metrics_history.requests_logged 与 lb_l4_conn_history.logged 属新列，
 //     存量指标库缺列时按 2026-09-15 用户裁定同族口径 DROP 重建（7 天缓存
 //     数据、重建零成本、与旧计数器不连续的累计保留反而误导）；
-//   - 全新库建表语句直接带出两列；迁移幂等（重复初始化不再重建）。
+//   - 全新库建表语句直接带出两列；迁移幂等（重复初始化不再重建）；
+//   - 行数契约已断言：重建即弃旧行（行数归零不复活），幂等重放行数仍为零。
 
 // openLoggedMigrationTestDB 打开独立 metrics 库文件（不经全局 MetricsDB）。
 func openLoggedMigrationTestDB(t *testing.T) *sql.DB {
@@ -47,6 +48,18 @@ func TestInitMetricsSchema_loggedColumnsRecreatedForLegacyDB(t *testing.T) {
 	if err := initMetricsSchema(metrics); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
+	// 行数不复活（缓存语义）：缺列 DROP 重建，旧行随表丢弃、不迁移不保留
+	// （旧行无 logged 累计且与计数器新纪元不连续）。
+	var mhRows, l4Rows int
+	if err := metrics.QueryRow("SELECT COUNT(*) FROM metrics_history").Scan(&mhRows); err != nil {
+		t.Fatal(err)
+	}
+	if err := metrics.QueryRow("SELECT COUNT(*) FROM lb_l4_conn_history").Scan(&l4Rows); err != nil {
+		t.Fatal(err)
+	}
+	if mhRows != 0 || l4Rows != 0 {
+		t.Fatalf("rows after rebuild: metrics_history=%d lb_l4_conn_history=%d, want 0/0（重建即弃旧缓存行，行数不复活）", mhRows, l4Rows)
+	}
 	var mhLogged, l4Logged int
 	if err := metrics.QueryRow("SELECT COUNT(*) FROM pragma_table_info('metrics_history') WHERE name='requests_logged'").Scan(&mhLogged); err != nil {
 		t.Fatal(err)
@@ -66,6 +79,13 @@ func TestInitMetricsSchema_loggedColumnsRecreatedForLegacyDB(t *testing.T) {
 	}
 	if mhLogged != 1 {
 		t.Fatalf("requests_logged count=%d after rerun, want 1", mhLogged)
+	}
+	// 幂等重放后行数仍为零（无复活、无重复灌入）。
+	if err := metrics.QueryRow("SELECT COUNT(*) FROM metrics_history").Scan(&mhRows); err != nil {
+		t.Fatal(err)
+	}
+	if mhRows != 0 {
+		t.Fatalf("metrics_history rows=%d after rerun, want 0（重放不得灌回旧行）", mhRows)
 	}
 	// 新列可写默认 0（读侧对旧行=0 的兼容口径由公式层保证）。
 	if _, err := metrics.Exec(`INSERT INTO metrics_history (rule_id, timestamp, requests_logged) VALUES ('lb_new', '2026-01-02 00:00:00', 5)`); err != nil {

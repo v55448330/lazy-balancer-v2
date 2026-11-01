@@ -390,9 +390,10 @@ const normalTodaySplit = computed<{ http: number; tcp: number } | null>(() => {
   if (typeof tcp !== 'number' || !Number.isFinite(tcp)) return null
   return { http, tcp }
 })
+const crawlerCountingNote = '；已验证爬虫放行流量计入检测放行（logged）、不计入正常请求列'
 const todayCountTip = computed(() => overview.value.includes_reserved
-  ? '总量含私网/保留地址事件（内网扫描、文档测试段等也会计入，与大屏排除口径不同）'
-  : '与大屏同口径（分钟汇总）：不含私网/保留地址事件，含当前分钟截至最近一次汇总的事件（滞后约 1 分钟）')
+  ? '总量含私网/保留地址事件（内网扫描、文档测试段等也会计入，与大屏排除口径不同）' + crawlerCountingNote
+  : '与大屏同口径（分钟汇总）：不含私网/保留地址事件，含当前分钟截至最近一次汇总的事件（滞后约 1 分钟）' + crawlerCountingNote)
 const trendChartOption = computed(() => {
   const dates = overview.value.trend.map(t => t.date)
   const blocked = overview.value.trend.map(t => t.blocked)

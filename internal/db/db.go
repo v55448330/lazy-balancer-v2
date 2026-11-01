@@ -3135,17 +3135,20 @@ func normalizeNtlmTakeoverConsistencyMigration() error {
 // ① uri/copy_headers 空值全表回填确定默认（db.DefaultForwardAuth* 单源）——
 //
 //	canonical 形态稳定（集群 rules 节哈希主从对齐的基础），开关关闭行同样
-//	回填（渲染零消费，仅消除「同一终态两种存储形态」）；
+//	回填（渲染零消费，仅消除「同一终态两种存储形态」）；判定按 TRIM——
+//	纯空白形态与空串同判（渲染对 uri/身份头清单都有非空语义校验，空白
+//	穿透会在配置生成期显性失败，与治理目标相悖）；
 //
-// ② enabled=1 且 upstream 为空、或协议非 http → enabled=0（渲染安全底线，
+// ② enabled=1 且 upstream 为空/纯空白、或协议非 http → enabled=0（渲染安全
 //
-//	网关地址无确定默认可回填）。幂等：非空 uri/合法行零命中。
+//	底线，网关地址无确定默认可回填；ValidateForwardAuthGatewayAddress 先
+//	TrimSpace 后判空，空白串必须与空串同归零）。幂等：非空 uri/合法行零命中。
 //
 // 集群同步侧不需单独处理——主端归一后经快照收敛从端。
 func normalizeForwardAuthConsistencyMigration() error {
 	res, err := execMigrationWriteIfNeeded(updateWhere("lb_rules",
 		"forward_auth_uri = '"+DefaultForwardAuthURI+"', forward_auth_copy_headers = '"+DefaultForwardAuthCopyHeaders+"'",
-		`forward_auth_uri='' OR forward_auth_copy_headers=''`))
+		`TRIM(COALESCE(forward_auth_uri,''))='' OR TRIM(COALESCE(forward_auth_copy_headers,''))=''`))
 	if err != nil {
 		return err
 	}
@@ -3157,7 +3160,7 @@ func normalizeForwardAuthConsistencyMigration() error {
 		}
 	}
 	res, err = execMigrationWriteIfNeeded(updateWhere("lb_rules", "forward_auth_enabled=0", `forward_auth_enabled=1 AND (
-		COALESCE(forward_auth_upstream,'')='' OR protocol<>'http')`))
+		TRIM(COALESCE(forward_auth_upstream,''))='' OR protocol<>'http')`))
 	if err != nil {
 		return err
 	}

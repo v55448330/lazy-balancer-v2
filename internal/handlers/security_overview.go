@@ -410,9 +410,9 @@ func securityOverviewDayWindowCounts(database *sql.DB, from, to time.Time) (bloc
 	return blocked, detected, err
 }
 
-// securityOverviewDayWindowTCPBlocked 原始表窗口 TCP 拦截拆分
-// （event_type='tcp' AND action='blocked'，与今日 TCP 直算同款，仅换窗口；
-// to 为零值表示无上界——今日口径与切换前逐字一致）。
+// securityOverviewDayWindowTCPAction 原始表窗口 TCP 动作拆分
+// （event_type='tcp' AND action=?——blocked/logged 由参数给定，与今日 TCP
+// 直算同款，仅换窗口；to 为零值表示无上界——今日口径与切换前逐字一致）。
 func securityOverviewDayWindowTCPAction(database *sql.DB, from, to time.Time, action string) (int, error) {
 	query := `SELECT COUNT(*) FROM security_events
 		WHERE event_type='tcp' AND action=` + "'" + action + `' AND event_time >= ?`
@@ -1032,9 +1032,14 @@ type securityOverviewAggState struct {
 	// 日桶边界（UTC 文本，与 SQL 文本窗口同语义比较）与展示标签。
 	dayBounds [8]string
 	dayLabels [7]string
-	// 可累加聚合（增量逐行归桶）。topIPs 上界=窗口内去重攻击 IP 数
-	// （产品威胁画像下数千量级，内存可忽略；跨日界换键后整体重建，
-	// 有意不设上限——截断会破坏上述精度不变式）。
+	// 可累加聚合（增量逐行归桶）。topIPs 账本有界：播种=窗口内 b+l 前 500 名
+	// （loadOverviewTopIPSeed LIMIT 500，封顶播种查询规模），增量轨道此后对
+	// 「账本外新出现 IP」补账（仅其新增事件，无历史累计）；跨日界换键后整体
+	// 重建。窗口内去重攻击 IP >500 的分布攻击形态下，基线 501 名外的 IP 靠
+	// 新增事件冲榜时历史累计缺账本，Top10 漏列/计数缩水，以日界重建自愈
+	// （≤1 天）；rank-11 冲榜回归钉测
+	// TestSecurityOverviewIncremental_rankElevenIPRushesIntoTop10 钉 500 内
+	// 形状，>500 尾部无覆盖（披露于本注释，勿再宣称「有意不设上限」）。
 	trendBlocked  [7]int
 	trendDetected [7]int
 	familyCounts  map[string]int

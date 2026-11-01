@@ -57,7 +57,10 @@ func TestForwardAuthEngineEndToEnd(t *testing.T) {
 	rule.ForwardAuthEnabled = 1
 	rule.ForwardAuthUpstream = gatewayURL
 	rule.ForwardAuthURI = "/api/authz/forward-auth"
-	rule.ForwardAuthCopyHeaders = "Remote-User"
+	// 非规范名形状（引擎级）：网关按 Go http.Header 恒以规范形 Remote-User
+	// 回包，而清单写的是 remote-user——Caddy 占位符注册键恒规范形，渲染若
+	// 不归一，条件 set 永不执行（认证放行但后端收不到身份头，静默）。
+	rule.ForwardAuthCopyHeaders = "remote-user"
 	handler, err := buildForwardAuthHandler(rule)
 	if err != nil {
 		t.Fatalf("buildForwardAuthHandler: %v", err)

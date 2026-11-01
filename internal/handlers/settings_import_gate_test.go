@@ -26,6 +26,7 @@ func TestSettingsWrites409DuringImport(t *testing.T) {
 	router.PUT("/security/crs/auto-update", h.UpdateCRSAutoUpdate)
 	router.PUT("/security/crs/schedule", h.UpdateCRSSchedule)
 	router.PUT("/security/ip2region/schedule", h.UpdateIP2RegionSchedule)
+	router.PUT("/security/ip2region/v6-enabled", h.SetIP2RegionV6Enabled)
 	router.PUT("/security/threat/schedule", h.UpdateThreatSchedule)
 	router.PUT("/security/crawler/schedule", h.UpdateCrawlerSchedule)
 	router.PUT("/security/crawler-lib/auto-update", h.UpdateCrawlerAutoUpdate)
@@ -59,6 +60,7 @@ func TestSettingsWrites409DuringImport(t *testing.T) {
 		{"PUT", "/security/crs/auto-update", `{"auto_update":true}`},
 		{"PUT", "/security/crs/schedule", `{"days":[1,2],"time":"04:00"}`},
 		{"PUT", "/security/ip2region/schedule", `{"days":[1,2],"time":"04:00"}`},
+		{"PUT", "/security/ip2region/v6-enabled", `{"enabled":true}`},
 		{"PUT", "/security/threat/schedule", `{"days":[1,2],"time":"04:00"}`},
 		{"PUT", "/security/crawler/schedule", `{"days":[1,2],"time":"04:00"}`},
 		{"PUT", "/security/crawler-lib/auto-update", `{"auto_update":true}`},

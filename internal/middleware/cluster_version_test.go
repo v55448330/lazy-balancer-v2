@@ -1063,6 +1063,57 @@ func TestClusterVersionTrigger_runtimeBookkeepingExcluded(t *testing.T) {
 	}
 }
 
+// v6 开关与 v6 库版本是语义列：主端切换/安装必须 bump cluster_version 让从端
+// 304 门失效（从端渲染门只读 v6_enabled，快照列/apply 通道已建全；触发面若被
+// 运行态清单排除，主从 xdb_v6_path 渲染分叉无限期不收敛——主端 IPv6 精确
+// 解析、从端按「海外」哨兵拦截/放行）。v6_updated_at/v6_update_status/
+// v6_message 仍是每轮任务簿记，保持运行态豁免（「已是最新」轮不 bump）；
+// 同值重复写（重试/重放）不 bump（值变化守卫）。
+func TestClusterVersionTrigger_v6EnabledToggleBumps(t *testing.T) {
+	database := newClusterVersionTestDB(t)
+	if err := InstallClusterVersionTriggers(database); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`INSERT OR IGNORE INTO security_ip2region_version (id, version, v6_enabled, v6_version) VALUES (1, 'v3.17.0', 0, 'v3.17.0')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec("UPDATE global_config SET is_master=1,cluster_version=0 WHERE id=1"); err != nil {
+		t.Fatal(err)
+	}
+
+	// 语义形状：切换 v6 开关（真实值变化）必须 bump。
+	if _, err := database.Exec(`UPDATE security_ip2region_version SET v6_enabled=1, v6_updated_at=datetime('now') WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
+	if got := clusterVersion(t, database); got != 1 {
+		t.Fatalf("v6 开关切换后 cluster_version=%d, want 1（语义列变化必须 bump，从端 304 门依赖）", got)
+	}
+
+	// 回归形状（防过宽）：v6 更新任务「已是最新」轮只写运行态三列 → 不 bump。
+	if _, err := database.Exec(`UPDATE security_ip2region_version SET v6_updated_at=datetime('now'), v6_update_status='success', v6_message='已是最新版本' WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
+	if got := clusterVersion(t, database); got != 1 {
+		t.Fatalf("v6 运行态簿记写入后 cluster_version=%d, want 1（每轮例行检查不得 bump）", got)
+	}
+
+	// v6 库版本安装（真实语义变化）随行 bump。
+	if _, err := database.Exec(`UPDATE security_ip2region_version SET v6_version='v3.18.0', v6_updated_at=datetime('now') WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
+	if got := clusterVersion(t, database); got != 2 {
+		t.Fatalf("v6 版本安装后 cluster_version=%d, want 2（库版本是语义列）", got)
+	}
+
+	// 同值重复写不 bump：开关值未变、仅 updated_at（运行态）变。
+	if _, err := database.Exec(`UPDATE security_ip2region_version SET v6_enabled=1, v6_updated_at=datetime('now') WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
+	if got := clusterVersion(t, database); got != 2 {
+		t.Fatalf("v6 开关同值写后 cluster_version=%d, want 2（值变化守卫防同值抖动）", got)
+	}
+}
+
 // 三规则库排程列入集群同步——版本表 schedule_days/
 // schedule_time 与 global_config 威胁库三列（threat_auto_update/threat_schedule_days/
 // threat_schedule_time）自身入触发器 OF 列表：排程写入即 bump cluster_version，

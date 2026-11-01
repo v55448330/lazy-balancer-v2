@@ -401,7 +401,13 @@ type SecurityOverview struct {
 	// 降视为重置，增量取后端样本当前值，不出现负数）；③指标历史样本不足（短
 	// 于 2 天，锚不到昨日起点前样本）时返回 0（样本积累中）；④requests_logged
 	// 列随 2026-11 版本引入，历史数据不回溯——切换点前检测放行计入正常列，
-	// 前后口径断裂（apidocs 已披露）。TCP 连接不计入本字段（见 NormalTodayTCP）。
+	// 前后口径断裂（apidocs 已披露）；⑤已验证爬虫放行流量计入检测放行
+	// （logged）差分、从正常列剔除，而同屏「今日检测」按攻击面谓词不含爬虫
+	// 放行——该类流量不入拦截/检测任一列（总览 KPI 双数据源混排的可见口径
+	// 差异，apidocs 已披露）；⑥开启认证网关（forward_auth）的规则，网关拒绝
+	// 的未认证请求不进 per-rule 指标与安全链，但仍计入全局总量差分 → residual
+	// 公式把它们计入正常请求列（apidocs 已披露）。TCP 连接不计入本字段
+	// （见 NormalTodayTCP）。
 	NormalToday int `json:"normal_today"`
 	// NormalTodayHTTP = NormalToday（同值；字段为前端「HTTP/TCP」布局对称
 	// 保留，语义即今日正常 HTTP 请求）。

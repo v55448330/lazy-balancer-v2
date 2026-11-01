@@ -5598,6 +5598,12 @@ func (h *Handlers) GetIP2RegionInfo(c *gin.Context) {
 // 手动收敛；与更新任务「Caddy 侧待下次重载生效」同语义），500 会误导用户
 // 以为开关未保存。
 func (h *Handlers) SetIP2RegionV6Enabled(c *gin.Context) {
+	// security_ip2region_version 在导入全量替换范围内：窗口内切换会被导入的
+	// 整表替换静默回滚（开关「自己弹回」），或撞写锁 30s 后 500——与同表
+	// auto-update/schedule 端点同族 409 fast-fail。门先于 body 解析。
+	if rejectWriteDuringImport(c, "切换 IPv6 地理库开关") {
+		return
+	}
 	var req struct {
 		Enabled *bool `json:"enabled"`
 	}

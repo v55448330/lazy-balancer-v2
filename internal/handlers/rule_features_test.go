@@ -1148,3 +1148,59 @@ func TestNormalizeInactiveHealthCheckFields(t *testing.T) {
 		t.Fatal("无清零时披露必须为空")
 	}
 }
+
+// 认证网关身份头规范名归一（写侧单源 normalizeForwardAuthValues）：非规范名
+// （remote-user/REMOTE-USER）落库前收敛为 http.CanonicalHeaderKey 规范形——
+// Caddy 响应头占位符注册键恒为规范形（Go http.Header），非规范名经引擎后
+// 静默失注入（认证照常放行、后端收不到身份头、无任何报错）。归一只动大小写：
+// 非法字符（空白/冒号/CRLF）原样保留仍由既有门拒绝；重复检测随规范化后进行
+// （remote-user 与 Remote-User 判重复）。
+func TestCreateRule_canonicalizesForwardAuthCopyHeaders(t *testing.T) {
+	handler := newRuleFeatureTestHandlers(t)
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.POST("/rules", handler.CreateRule)
+	create := func(name, domain string, port int, headers string) *httptest.ResponseRecorder {
+		t.Helper()
+		body := fmt.Sprintf(`{
+			"name":%q,"protocol":"http","domain":%q,"listen_port":%d,
+			"forward_auth_enabled":1,"forward_auth_upstream":"http://gw.internal:7000",
+			"forward_auth_uri":"/api/authz","forward_auth_copy_headers":%q,
+			"health_check_interval":10,"health_check_timeout":2,"health_check_unhealthy_threshold":3,"health_check_healthy_threshold":2,
+			"upstreams":[{"host":"127.0.0.1","port":9000,"enabled":true}]
+		}`, name, domain, port, headers)
+		request := httptest.NewRequest(http.MethodPost, "/rules", strings.NewReader(body))
+		request.Header.Set("Content-Type", "application/json")
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, request)
+		return response
+	}
+
+	t.Run("非规范名保存后读回规范形", func(t *testing.T) {
+		response := create("fa-canonical", "fa-canonical.example.test", 13011, "remote-user,REMOTE-GROUPS,remote-email")
+		if response.Code != http.StatusCreated && response.Code != http.StatusOK {
+			t.Fatalf("create status=%d body=%s, want 2xx（小写形态本就该放行保存）", response.Code, response.Body.String())
+		}
+		var stored string
+		if err := db.DB.QueryRow(`SELECT forward_auth_copy_headers FROM lb_rules WHERE listen_port=13011`).Scan(&stored); err != nil {
+			t.Fatalf("read created rule: %v", err)
+		}
+		if stored != "Remote-User,Remote-Groups,Remote-Email" {
+			t.Fatalf("落库身份头=%q, want 规范形（非规范名经引擎会静默失注入）", stored)
+		}
+	})
+
+	t.Run("规范化后重复判 400", func(t *testing.T) {
+		response := create("fa-dup", "fa-dup.example.test", 13012, "remote-user,Remote-User")
+		if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "重复") {
+			t.Fatalf("mixed-case duplicate status=%d body=%s, want 400 重复（同一头的两种写法）", response.Code, response.Body.String())
+		}
+	})
+
+	t.Run("非法字符仍拒绝（归一不洗白）", func(t *testing.T) {
+		response := create("fa-bad", "fa-bad.example.test", 13013, "remote-user,Remote User")
+		if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "非法字符") {
+			t.Fatalf("malformed header status=%d body=%s, want 400 非法字符（CanonicalHeaderKey 对非法 token 原样返回，门不得放过）", response.Code, response.Body.String())
+		}
+	})
+}

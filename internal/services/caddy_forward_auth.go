@@ -10,6 +10,7 @@ package services
 import (
 	"fmt"
 	"net"
+	"net/http"
 	"net/url"
 	"strings"
 )
@@ -45,6 +46,26 @@ func ValidateForwardAuthGatewayAddress(upstream string) (string, bool, error) {
 	return net.JoinHostPort(host, port), parsed.Scheme == "https", nil
 }
 
+// CanonicalForwardAuthCopyHeaders 身份头清单的规范名单源：逐条
+// http.CanonicalHeaderKey（Go 标准库——各连字符段首字母大写；非法 token 字节
+// 原样返回，畸形仍由保存门/渲染门拒绝，归一不洗白）。与 Caddy 官方
+// forward_auth adapt 对 to/占位符名的处理一致（v2.11.7
+// forwardauth/caddyfile.go 逐字规范化）——Caddy 运行期响应头占位符注册键恒为
+// 规范形（Go http.Header），非规范名拼出的占位符 vars 查表恒 miss → 条件 set
+// 永不执行（认证照常放行、身份头静默失注入、无报错）。写侧落库前归一
+// （handlers.normalizeForwardAuthValues），渲染侧消费前再归一（防御带外/
+// 旧数据）；重复检测随规范化后进行（同一头的两种大小写写法判重复）。
+func CanonicalForwardAuthCopyHeaders(list string) string {
+	if list == "" {
+		return ""
+	}
+	parts := strings.Split(list, ",")
+	for i, part := range parts {
+		parts[i] = http.CanonicalHeaderKey(part)
+	}
+	return strings.Join(parts, ",")
+}
+
 // buildForwardAuthHandler 构造链首认证网关子请求处理器。字段齐备性由保存门
 // 与启动迁移强制，本函数对缺失/畸形显性报错（错误经 generationFailure 使
 // 配置生成失败、旧配置保留）。
@@ -57,7 +78,7 @@ func buildForwardAuthHandler(rule SingleRuleConfig) (map[string]interface{}, err
 	if uri == "" || !strings.HasPrefix(uri, "/") || strings.ContainsAny(uri, "\r\n") {
 		return nil, fmt.Errorf("规则 %s 认证路径无效（须以 / 开头且不含换行）: %q", rule.CaddyID, uri)
 	}
-	copyHeaders := splitAndTrim(rule.ForwardAuthCopyHeaders)
+	copyHeaders := splitAndTrim(CanonicalForwardAuthCopyHeaders(rule.ForwardAuthCopyHeaders))
 	if len(copyHeaders) == 0 {
 		return nil, fmt.Errorf("规则 %s 认证网关身份头清单为空", rule.CaddyID)
 	}

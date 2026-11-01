@@ -321,7 +321,13 @@ var clusterVersionRuntimeColumns = map[string]map[string]bool{
 	"security_ip2region_version": columnSet(
 		"update_status", "message", "last_checked", "next_update",
 		"trigger", "started_at", "finished_at",
-		"v6_enabled", "v6_version", "v6_updated_at", "v6_update_status", "v6_message",
+		// v6_enabled/v6_version 不入本清单（语义列）：开关列是从端渲染门
+		// xdb_v6_path 的发射判据（models/cluster.go 契约「随行同步是渲染
+		// 一致性的硬要求」），库版本列随安装变化——两者只写真实值，入运行态
+		// 豁免会让主端切换不 bump cluster_version、从端 304 门恒命中 → 主从
+		// IPv6 渲染分叉无限期不收敛。v6_updated_at/v6_update_status/v6_message
+		// 是每轮更新任务簿记，保留豁免；开关/版本同值写也不 bump（值变化守卫）。
+		"v6_updated_at", "v6_update_status", "v6_message",
 	),
 	"security_threat_sources": columnSet(
 		"last_checked", "update_status", "message", "next_update",
