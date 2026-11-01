@@ -22,6 +22,9 @@ import (
 type ruleConnCounters struct {
 	allowed atomic.Uint64
 	denied  atomic.Uint64
+	// logged 是检测放行连接计数（trust_detect 形态）——allowed 的子集：
+	// 消费侧 normal = allowed − logged（检测放行拆分，与 HTTP 同构）。
+	logged atomic.Uint64
 
 	mu        sync.Mutex
 	countries map[string]uint64
@@ -83,6 +86,7 @@ func deregisterRuleCounters(ruleID string, c *ruleConnCounters) {
 type ruleStatsView struct {
 	AllowedTotal uint64
 	DeniedTotal  uint64
+	LoggedTotal  uint64
 	Countries    map[string]uint64
 }
 
@@ -102,12 +106,13 @@ func connStatsSnapshot() connStatsView {
 			countries[k] = v
 		}
 		c.mu.Unlock()
-		out.Rules[id] = &ruleStatsView{AllowedTotal: c.allowed.Load(), DeniedTotal: c.denied.Load(), Countries: countries}
+		out.Rules[id] = &ruleStatsView{AllowedTotal: c.allowed.Load(), DeniedTotal: c.denied.Load(), LoggedTotal: c.logged.Load(), Countries: countries}
 	}
 	return out
 }
 
-// l4ConnStatsPayload 是契约 C3 的响应形状（逐字锁定，不得增删键）。
+// l4ConnStatsPayload 是契约 C3 的响应形状（2026-11 检测放行拆分扩展：附加
+// logged_total 键——向后兼容的纯增量，旧消费端零感知；既有三键语义不变）。
 type l4ConnStatsPayload struct {
 	Rules map[string]l4RuleStatsPayload `json:"rules"`
 }
@@ -115,6 +120,7 @@ type l4ConnStatsPayload struct {
 type l4RuleStatsPayload struct {
 	AllowedTotal uint64            `json:"allowed_total"`
 	DeniedTotal  uint64            `json:"denied_total"`
+	LoggedTotal  uint64            `json:"logged_total"`
 	Countries    map[string]uint64 `json:"countries"`
 }
 
@@ -123,7 +129,7 @@ func connStatsJSON() []byte {
 	snap := connStatsSnapshot()
 	payload := l4ConnStatsPayload{Rules: make(map[string]l4RuleStatsPayload, len(snap.Rules))}
 	for id, r := range snap.Rules {
-		payload.Rules[id] = l4RuleStatsPayload{AllowedTotal: r.AllowedTotal, DeniedTotal: r.DeniedTotal, Countries: r.Countries}
+		payload.Rules[id] = l4RuleStatsPayload{AllowedTotal: r.AllowedTotal, DeniedTotal: r.DeniedTotal, LoggedTotal: r.LoggedTotal, Countries: r.Countries}
 	}
 	raw, err := json.Marshal(payload)
 	if err != nil {

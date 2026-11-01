@@ -439,6 +439,9 @@ func initMetricsSchema(db *sql.DB) error {
 		requests_4xx INTEGER DEFAULT 0,
 		requests_5xx INTEGER DEFAULT 0,
 		requests_blocked INTEGER DEFAULT 0,
+		-- 检测放行（logged）计数：lazybalancer_security_logged_total 按规则落列
+		-- （总览 normal = 总量 − 被拦 − 检测 的检测差分源；全局行恒 0）。
+		requests_logged INTEGER DEFAULT 0,
 		bytes_in BIGINT DEFAULT 0,
 		bytes_out BIGINT DEFAULT 0,
 		-- 以下三列为**废弃列**：metrics_history 的历史查询（handlers/metrics.go
@@ -464,7 +467,10 @@ func initMetricsSchema(db *sql.DB) error {
 		timestamp DATETIME NOT NULL,
 		rule_id TEXT DEFAULT '',
 		allowed INTEGER DEFAULT 0,
-		denied INTEGER DEFAULT 0
+		denied INTEGER DEFAULT 0,
+		-- 检测放行（logged）连接差分增量：L4 trust_detect 形态单独计数
+		-- （allowed 的子集，读侧 normal_tcp = allowed − logged）。
+		logged INTEGER DEFAULT 0
 	);
 
 	CREATE INDEX IF NOT EXISTS idx_l4_conn_history_timestamp ON lb_l4_conn_history(timestamp);
@@ -598,8 +604,40 @@ func initMetricsSchema(db *sql.DB) error {
 	if err := migrateMetricsHistoryBlocked(db); err != nil {
 		return err
 	}
+	// 检测放行拆分（2026-11）：metrics_history.requests_logged 与
+	// lb_l4_conn_history.logged 同族口径（7 天缓存表缺列 DROP 重建，见各函数）。
+	if err := migrateMetricsHistoryLogged(db); err != nil {
+		return err
+	}
+	if err := migrateL4ConnHistoryLogged(db); err != nil {
+		return err
+	}
 	return nil
 }
+
+// metricsHistoryCurrentSchemaDDL 是 metrics_history 的当前形状单源（新库建表
+// 与缺列迁移重建共用，杜绝三份 DDL 漂移）。废弃列（latency_p50/95/99）保留
+// 语义见「废弃列」注释（读路径禁依赖）。
+const metricsHistoryCurrentSchemaDDL = `CREATE TABLE metrics_history (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		rule_id VARCHAR(20),
+		timestamp DATETIME NOT NULL,
+		requests_total INTEGER DEFAULT 0,
+		requests_2xx INTEGER DEFAULT 0,
+		requests_3xx INTEGER DEFAULT 0,
+		requests_4xx INTEGER DEFAULT 0,
+		requests_5xx INTEGER DEFAULT 0,
+		requests_blocked INTEGER DEFAULT 0,
+		-- 检测放行（logged）计数（检测放行拆分；全局行恒 0）。
+		requests_logged INTEGER DEFAULT 0,
+		bytes_in BIGINT DEFAULT 0,
+		bytes_out BIGINT DEFAULT 0,
+		-- 以下三列为**废弃列**（历史查询与前端零消费、写侧仍写、新读路径禁依赖
+		-- ——完整口径见建表 schema 块同注释）。保留避免破坏性重建。
+		latency_p50 INTEGER DEFAULT 0,
+		latency_p95 INTEGER DEFAULT 0,
+		latency_p99 INTEGER DEFAULT 0
+	)`
 
 // securityEventsTransactionIndexSQL 是事务唯一索引的 DDL 单源（探测形状与
 // 建立共用；口径见 uniqueIndexState 的「同名非唯一索引」说明）。
@@ -712,9 +750,25 @@ func migrateSecurityEventsColumns(db *sql.DB) error {
 // 老库行无 blocked 累计值且与 lazybalancer 新计数器(从 0 起)不连续,
 // 保留反而产生误导性历史。
 func migrateMetricsHistoryBlocked(db *sql.DB) error {
+	return recreateMetricsHistoryIfColumnMissing(db, "requests_blocked")
+}
+
+// migrateMetricsHistoryLogged 处理 metrics_history 的 requests_logged 列——
+// 检测放行拆分（2026-11）新列，同 migrateMetricsHistoryBlocked 的用户裁定
+// 口径：缺列 DROP 重建（7 天缓存数据；旧行无 logged 累计且与 logged 计数器
+// 新纪元不连续，保留反而误导）。DDL 单源 metricsHistoryCurrentSchemaDDL。
+func migrateMetricsHistoryLogged(db *sql.DB) error {
+	return recreateMetricsHistoryIfColumnMissing(db, "requests_logged")
+}
+
+// recreateMetricsHistoryIfColumnMissing 是缺列 DROP 重建的唯一实现：探测
+// column 缺席 → DROP + 按当前形状单源 DDL 重建 + 同步重建两条索引
+// （idx_metrics_rule_timestamp 原属旧表，DROP 即失——缺失窗口内历史查询
+// 全表扫描，必须同步补建）。
+func recreateMetricsHistoryIfColumnMissing(db *sql.DB, column string) error {
 	var colCount int
-	if err := db.QueryRow("SELECT COUNT(*) FROM pragma_table_info('metrics_history') WHERE name='requests_blocked'").Scan(&colCount); err != nil {
-		return fmt.Errorf("failed to check metrics_history.requests_blocked: %w", err)
+	if err := db.QueryRow("SELECT COUNT(*) FROM pragma_table_info('metrics_history') WHERE name=?", column).Scan(&colCount); err != nil {
+		return fmt.Errorf("failed to check metrics_history.%s: %w", column, err)
 	}
 	if colCount > 0 {
 		return nil
@@ -722,37 +776,48 @@ func migrateMetricsHistoryBlocked(db *sql.DB) error {
 	if _, err := db.Exec("DROP TABLE IF EXISTS metrics_history"); err != nil {
 		return fmt.Errorf("failed to drop legacy metrics_history: %w", err)
 	}
-	if _, err := db.Exec(`CREATE TABLE metrics_history (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		rule_id VARCHAR(20),
-		timestamp DATETIME NOT NULL,
-		requests_total INTEGER DEFAULT 0,
-		requests_2xx INTEGER DEFAULT 0,
-		requests_3xx INTEGER DEFAULT 0,
-		requests_4xx INTEGER DEFAULT 0,
-		requests_5xx INTEGER DEFAULT 0,
-		requests_blocked INTEGER DEFAULT 0,
-		bytes_in BIGINT DEFAULT 0,
-		bytes_out BIGINT DEFAULT 0,
-		-- 以下三列为**废弃列**：metrics_history 的历史查询（handlers/metrics.go
-		-- 两条列清单）与前端零消费，延迟只经 live overview 暴露（内存对象，
-		-- services.estimateLatencyPercentiles）。保留列避免对既有 metrics 库做
-		-- 破坏性表重建；写侧仍写入（列成本可忽略），但新读路径禁止依赖这三列
-		-- ——「历史延迟可用」是伪契约。
-		latency_p50 INTEGER DEFAULT 0,
-		latency_p95 INTEGER DEFAULT 0,
-		latency_p99 INTEGER DEFAULT 0
-	)`); err != nil {
+	if _, err := db.Exec(metricsHistoryCurrentSchemaDDL); err != nil {
 		return fmt.Errorf("failed to recreate metrics_history: %w", err)
 	}
 	if _, err := db.Exec("CREATE INDEX IF NOT EXISTS idx_metrics_timestamp ON metrics_history(timestamp)"); err != nil {
 		return fmt.Errorf("failed to recreate metrics_history index: %w", err)
 	}
-	// DROP 重建丢失
-	// idx_metrics_rule_timestamp(原 schema 块在旧表建,重建后消失)——
-	// 重建后至重启前历史查询全表扫描。同步重建。
 	if _, err := db.Exec("CREATE INDEX IF NOT EXISTS idx_metrics_rule_timestamp ON metrics_history(rule_id, timestamp)"); err != nil {
 		return fmt.Errorf("failed to recreate metrics_history rule index: %w", err)
+	}
+	return nil
+}
+
+// migrateL4ConnHistoryLogged 处理 lb_l4_conn_history 的 logged 列——检测放行
+// 拆分（2026-11）新列，同族用户裁定口径：缺列 DROP 重建（30s 差分增量缓存，
+// 重建零成本；旧行 logged 空窗与 L4 logged 计数器新纪元不连续）。
+func migrateL4ConnHistoryLogged(db *sql.DB) error {
+	var colCount int
+	if err := db.QueryRow("SELECT COUNT(*) FROM pragma_table_info('lb_l4_conn_history') WHERE name='logged'").Scan(&colCount); err != nil {
+		return fmt.Errorf("failed to check lb_l4_conn_history.logged: %w", err)
+	}
+	if colCount > 0 {
+		return nil
+	}
+	if _, err := db.Exec("DROP TABLE IF EXISTS lb_l4_conn_history"); err != nil {
+		return fmt.Errorf("failed to drop legacy lb_l4_conn_history: %w", err)
+	}
+	// 与新库建表同形状单源：logged 列跟随允许/拒绝差分增量。
+	if _, err := db.Exec(`CREATE TABLE lb_l4_conn_history (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		timestamp DATETIME NOT NULL,
+		rule_id TEXT DEFAULT '',
+		allowed INTEGER DEFAULT 0,
+		denied INTEGER DEFAULT 0,
+		logged INTEGER DEFAULT 0
+	)`); err != nil {
+		return fmt.Errorf("failed to recreate lb_l4_conn_history: %w", err)
+	}
+	if _, err := db.Exec("CREATE INDEX IF NOT EXISTS idx_l4_conn_history_timestamp ON lb_l4_conn_history(timestamp)"); err != nil {
+		return fmt.Errorf("failed to recreate lb_l4_conn_history index: %w", err)
+	}
+	if _, err := db.Exec("CREATE INDEX IF NOT EXISTS idx_l4_conn_history_rule_timestamp ON lb_l4_conn_history(rule_id, timestamp)"); err != nil {
+		return fmt.Errorf("failed to recreate lb_l4_conn_history rule index: %w", err)
 	}
 	return nil
 }

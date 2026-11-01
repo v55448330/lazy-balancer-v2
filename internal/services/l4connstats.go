@@ -29,10 +29,12 @@ func IsL4ConnEndpointMissing(err error) bool {
 }
 
 // L4TrafficRuleCounters 是单条 TCP 规则的连接计数快照（caddy l4sec 模块
-// l4ConnStatsPayload 形状，JSON 键逐字锁定）。
+// l4ConnStatsPayload 形状；logged_total 为 2026-11 检测放行拆分附加键，
+// 旧镜像快照缺键解码为 0——logged 差分恒 0，normal 公式退化原口径）。
 type L4TrafficRuleCounters struct {
 	AllowedTotal uint64            `json:"allowed_total"`
 	DeniedTotal  uint64            `json:"denied_total"`
+	LoggedTotal  uint64            `json:"logged_total"`
 	Countries    map[string]uint64 `json:"countries"`
 }
 
@@ -146,8 +148,8 @@ func (m *MetricsService) collectL4ConnHistory() {
 
 // l4ConnRow 是单行差分增量（落库形状）。
 type l4ConnRow struct {
-	ruleID          string
-	allowed, denied uint64
+	ruleID                  string
+	allowed, denied, logged uint64
 }
 
 // consumeL4Delta 计算本轮差分增量行（零增量规则不落行）。基线推进与差分
@@ -163,22 +165,25 @@ func (m *MetricsService) consumeL4Delta(adminURL string, snap L4TrafficRawSnapsh
 		return nil
 	}
 	var rows []l4ConnRow
-	var globalAllowed, globalDenied uint64
+	var globalAllowed, globalDenied, globalLogged uint64
 	for cid, cur := range snap.Rules {
 		was := prev.Rules[cid]
 		allowed := DeltaUint64(cur.AllowedTotal, was.AllowedTotal)
 		denied := DeltaUint64(cur.DeniedTotal, was.DeniedTotal)
-		if allowed == 0 && denied == 0 {
+		// logged 缺键（旧镜像快照）解码 0 → 差分恒 0，与旧行为等值。
+		logged := DeltaUint64(cur.LoggedTotal, was.LoggedTotal)
+		if allowed == 0 && denied == 0 && logged == 0 {
 			continue
 		}
-		rows = append(rows, l4ConnRow{ruleID: cid, allowed: allowed, denied: denied})
+		rows = append(rows, l4ConnRow{ruleID: cid, allowed: allowed, denied: denied, logged: logged})
 		globalAllowed += allowed
 		globalDenied += denied
+		globalLogged += logged
 	}
 	// 全局聚合行 rule_id=''：读侧（总览正常 TCP）只消费全局行，避免
 	// per-rule 行双重求和。
-	if globalAllowed > 0 || globalDenied > 0 {
-		rows = append(rows, l4ConnRow{ruleID: "", allowed: globalAllowed, denied: globalDenied})
+	if globalAllowed > 0 || globalDenied > 0 || globalLogged > 0 {
+		rows = append(rows, l4ConnRow{ruleID: "", allowed: globalAllowed, denied: globalDenied, logged: globalLogged})
 	}
 	return rows
 }
@@ -199,14 +204,14 @@ func storeL4ConnHistory(rows []l4ConnRow) error {
 		return fmt.Errorf("begin l4 conn history batch: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	stmt, err := tx.Prepare(`INSERT INTO lb_l4_conn_history (timestamp, rule_id, allowed, denied)
-		VALUES (?, ?, ?, ?)`)
+	stmt, err := tx.Prepare(`INSERT INTO lb_l4_conn_history (timestamp, rule_id, allowed, denied, logged)
+		VALUES (?, ?, ?, ?, ?)`)
 	if err != nil {
 		return fmt.Errorf("prepare l4 conn history batch: %w", err)
 	}
 	defer func() { _ = stmt.Close() }()
 	for _, row := range rows {
-		if _, err := stmt.Exec(timestamp, row.ruleID, int64(row.allowed), int64(row.denied)); err != nil {
+		if _, err := stmt.Exec(timestamp, row.ruleID, int64(row.allowed), int64(row.denied), int64(row.logged)); err != nil {
 			return fmt.Errorf("store l4 conn history for %q: %w", row.ruleID, err)
 		}
 	}

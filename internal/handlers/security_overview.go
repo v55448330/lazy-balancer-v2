@@ -461,11 +461,12 @@ func securityOverviewGlobalSampleAt(database *sql.DB, at time.Time) (total int64
 	return total, true, nil
 }
 
-// securityOverviewBlockedAnchorAt 取各规则在 at 时刻前（含 at；零值=不限时）
-// 末样本的 requests_blocked 累计 map（无样本的规则不在 map 中=0 基线）。
-// 「每规则末样本」经 MAX(id) 子查询连接取行（同时间戳双行时按写入序取末行，
-// 不依赖 SQLite bare-column 行为）。
-func securityOverviewBlockedAnchorAt(database *sql.DB, at time.Time) (map[string]int64, error) {
+// securityOverviewRuleMetricAnchorAt 取各规则在 at 时刻前（含 at；零值=不限时）
+// 末样本的 column（requests_blocked / requests_logged）累计 map（无样本的规则
+// 不在 map 中=0 基线）。「每规则末样本」经 MAX(id) 子查询连接取行（同时间戳
+// 双行时按写入序取末行，不依赖 SQLite bare-column 行为）。column 是包内常量
+// 白名单，非外部输入。
+func securityOverviewRuleMetricAnchorAt(database *sql.DB, at time.Time, column string) (map[string]int64, error) {
 	inner := `SELECT rule_id, MAX(id) AS id FROM metrics_history WHERE rule_id IS NOT NULL`
 	args := []any{}
 	if !at.IsZero() {
@@ -473,7 +474,7 @@ func securityOverviewBlockedAnchorAt(database *sql.DB, at time.Time) (map[string
 		args = append(args, at.UTC().Format(securityOverviewEventTimeLayout))
 	}
 	inner += ` GROUP BY rule_id`
-	rows, err := database.Query(`SELECT m.rule_id, m.requests_blocked FROM metrics_history m
+	rows, err := database.Query(`SELECT m.rule_id, m.`+column+` FROM metrics_history m
 		JOIN (`+inner+`) t ON m.id = t.id`, args...)
 	if err != nil {
 		return nil, err
@@ -482,24 +483,30 @@ func securityOverviewBlockedAnchorAt(database *sql.DB, at time.Time) (map[string
 	anchor := map[string]int64{}
 	for rows.Next() {
 		var ruleID string
-		var blocked int64
-		if err := rows.Scan(&ruleID, &blocked); err != nil {
+		var value int64
+		if err := rows.Scan(&ruleID, &value); err != nil {
 			return nil, err
 		}
-		anchor[ruleID] = blocked
+		anchor[ruleID] = value
 	}
 	return anchor, rows.Err()
 }
 
-// securityOverviewBlockedDelta 窗口 [from,to]（to 零值=最新样本）内 per-rule
-// requests_blocked 累计差分之和（每规则钳制后求和；起点无样本的规则按 0
-// 基线——窗口内新出现的规则的累计全部落在窗口内）。
-func securityOverviewBlockedDelta(database *sql.DB, from, to time.Time) (int64, error) {
-	startAnchor, err := securityOverviewBlockedAnchorAt(database, from)
+// 总览差分消费的 metrics_history 计数列白名单（包内常量，非外部输入）。
+const (
+	securityOverviewColBlocked = "requests_blocked"
+	securityOverviewColLogged  = "requests_logged"
+)
+
+// securityOverviewRuleMetricDelta 窗口 [from,to]（to 零值=最新样本）内 per-rule
+// column 累计差分之和（每规则钳制后求和；起点无样本的规则按 0 基线——窗口内
+// 新出现的规则的累计全部落在窗口内）。
+func securityOverviewRuleMetricDelta(database *sql.DB, from, to time.Time, column string) (int64, error) {
+	startAnchor, err := securityOverviewRuleMetricAnchorAt(database, from, column)
 	if err != nil {
 		return 0, err
 	}
-	endAnchor, err := securityOverviewBlockedAnchorAt(database, to)
+	endAnchor, err := securityOverviewRuleMetricAnchorAt(database, to, column)
 	if err != nil {
 		return 0, err
 	}
@@ -511,10 +518,13 @@ func securityOverviewBlockedDelta(database *sql.DB, from, to time.Time) (int64, 
 }
 
 // securityOverviewNormalHTTPDiff 正常请求（HTTP）差分：今日=最新累计−今日
-// 起点前末样本−今日被拦差分；昨日=今日起点前末样本−昨日起点前末样本−昨日
-// 被拦差分。样本不足（锚不到昨日起点前末样本，即指标历史短于 2 天）→ 双
-// 返回 0（样本积累中）。总请求/被拦差分均带重置钳制（clampedDelta）；被拦
-// 差分极端大于总请求差分（口径差异形态）时结果钳零（正常请求数不出负数）。
+// 起点前末样本−今日被拦差分−今日检测差分；昨日=今日起点前末样本−昨日起点
+// 前末样本−昨日被拦差分−昨日检测差分。三列严格互斥（检测放行拆分，2026-11）：
+// 检测（logged）=审计行存在且放行的请求，与被拦/正常不重不漏。样本不足
+// （锚不到昨日起点前末样本，即指标历史短于 2 天）→ 双返回 0（样本积累中）。
+// 总请求/被拦/检测差分均带重置钳制（clampedDelta）；减法结果极端为负（口径
+// 差异形态）时钳零（正常请求数不出负数）。logged 列缺席（历史行/旧镜像
+// 快照）=0，公式退化原口径——历史不回溯，切换点前后口径断裂见 apidocs 披露。
 func securityOverviewNormalHTTPDiff(database *sql.DB, ydayStart, todayStart time.Time) (today, yesterday int, err error) {
 	anchorYday, okYday, err := securityOverviewGlobalSampleAt(database, ydayStart)
 	if err != nil {
@@ -534,16 +544,24 @@ func securityOverviewNormalHTTPDiff(database *sql.DB, ydayStart, todayStart time
 	if !okToday || !okLatest {
 		return 0, 0, nil
 	}
-	blockedYday, err := securityOverviewBlockedDelta(database, ydayStart, todayStart)
+	blockedYday, err := securityOverviewRuleMetricDelta(database, ydayStart, todayStart, securityOverviewColBlocked)
 	if err != nil {
 		return 0, 0, err
 	}
-	blockedToday, err := securityOverviewBlockedDelta(database, todayStart, time.Time{})
+	blockedToday, err := securityOverviewRuleMetricDelta(database, todayStart, time.Time{}, securityOverviewColBlocked)
 	if err != nil {
 		return 0, 0, err
 	}
-	today = clampedNonNegative(int(clampedDelta(latest, anchorToday)) - int(blockedToday))
-	yesterday = clampedNonNegative(int(clampedDelta(anchorToday, anchorYday)) - int(blockedYday))
+	loggedYday, err := securityOverviewRuleMetricDelta(database, ydayStart, todayStart, securityOverviewColLogged)
+	if err != nil {
+		return 0, 0, err
+	}
+	loggedToday, err := securityOverviewRuleMetricDelta(database, todayStart, time.Time{}, securityOverviewColLogged)
+	if err != nil {
+		return 0, 0, err
+	}
+	today = clampedNonNegative(int(clampedDelta(latest, anchorToday)) - int(blockedToday) - int(loggedToday))
+	yesterday = clampedNonNegative(int(clampedDelta(anchorToday, anchorYday)) - int(blockedYday) - int(loggedYday))
 	return today, yesterday, nil
 }
 
@@ -557,19 +575,25 @@ func clampedNonNegative(v int) int {
 }
 
 // securityOverviewNormalTCPDiff 正常 TCP 连接差分：lb_l4_conn_history 全局
-// 行（rule_id=”）allowed 的日窗口求和（写侧差分落库时已含重置钳制，读侧
-// 直接求和；per-rule 行只做归因明细，不参与全局求和）。
+// 行（rule_id=”）allowed 的日窗口求和减去 logged（检测放行拆分，2026-11——
+// trust_detect 连接计入 allowed 的既有语义不变，单独计数后从正常列剔除，
+// 三列互斥与 HTTP 同构；旧镜像快照缺 logged_total 键=差分 0，公式退化原
+// 口径）。写侧差分落库时已含重置钳制，读侧直接求和；per-rule 行只做归因
+// 明细，不参与全局求和。
 func securityOverviewNormalTCPDiff(database *sql.DB, ydayStart, todayStart time.Time) (today, yesterday int, err error) {
 	layout := securityOverviewEventTimeLayout
-	if err := database.QueryRow(`SELECT COALESCE(SUM(allowed),0) FROM lb_l4_conn_history
-		WHERE rule_id='' AND timestamp >= ?`, todayStart.UTC().Format(layout)).Scan(&today); err != nil {
+	var loggedToday, loggedYesterday int
+	if err := database.QueryRow(`SELECT COALESCE(SUM(allowed),0), COALESCE(SUM(logged),0) FROM lb_l4_conn_history
+		WHERE rule_id='' AND timestamp >= ?`, todayStart.UTC().Format(layout)).Scan(&today, &loggedToday); err != nil {
 		return 0, 0, err
 	}
-	if err := database.QueryRow(`SELECT COALESCE(SUM(allowed),0) FROM lb_l4_conn_history
+	if err := database.QueryRow(`SELECT COALESCE(SUM(allowed),0), COALESCE(SUM(logged),0) FROM lb_l4_conn_history
 		WHERE rule_id='' AND timestamp >= ? AND timestamp < ?`,
-		ydayStart.UTC().Format(layout), todayStart.UTC().Format(layout)).Scan(&yesterday); err != nil {
+		ydayStart.UTC().Format(layout), todayStart.UTC().Format(layout)).Scan(&yesterday, &loggedYesterday); err != nil {
 		return 0, 0, err
 	}
+	today = clampedNonNegative(today - loggedToday)
+	yesterday = clampedNonNegative(yesterday - loggedYesterday)
 	return today, yesterday, nil
 }
 

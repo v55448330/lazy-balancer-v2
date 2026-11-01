@@ -2,6 +2,7 @@ package caddygeoip
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -31,12 +32,16 @@ func newTestLoggedCounterPair(t *testing.T) (blocked, logged *prometheus.Counter
 		newSecurityLoggedCounterVec(prometheus.NewRegistry())
 }
 
+var corazaTxSeqForTest int
+
 // runCorazaWAFStep 在 composed 链内运行一次真实 coraza 事务（复刻 coraza-caddy
-// handler 语义：处理请求头 → 中断判定 → defer ProcessLogging 先于返回）。
+// handler 语义：16 字符 tx ID（coraza.go randomString(16)→NewTransactionWithID，
+// 生产 ID 形态）→ 处理请求头 → 中断判定 → defer ProcessLogging 先于返回）。
 // 返回 (被中断, tx ID, 中断状态码)。
 func runCorazaWAFStep(t *testing.T, waf coraza.WAF, req *http.Request) (bool, string, int) {
 	t.Helper()
-	tx := waf.NewTransaction()
+	corazaTxSeqForTest++
+	tx := waf.NewTransactionWithID(fmt.Sprintf("tx%014d", corazaTxSeqForTest))
 	defer tx.Close()
 	tx.ProcessConnection(req.RemoteAddr, 0, "127.0.0.1", 8080)
 	tx.ProcessURI(req.URL.String(), req.Method, "HTTP/1.1")

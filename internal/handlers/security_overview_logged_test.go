@@ -15,11 +15,14 @@ import (
 	"lazy-balancer-v2/internal/services"
 )
 
-func seedRuleLogged(t *testing.T, ruleID string, ts time.Time, logged int) {
+// seedRuleCounters 按 生产行形状播种（storePerRuleMetrics 每规则每周期一条
+// 行，blocked/logged 同行落列）——分列独立播种会让锚点 MAX(id) 查到错误行
+// （blocked 与 logged 互为 0），与生产语义不符。
+func seedRuleCounters(t *testing.T, ruleID string, ts time.Time, blocked, logged int) {
 	t.Helper()
-	if _, err := db.MetricsDB.Exec(`INSERT INTO metrics_history (rule_id, timestamp, requests_logged)
-		VALUES (?, ?, ?)`, ruleID, ts.UTC().Format("2006-01-02 15:04:05"), logged); err != nil {
-		t.Fatalf("seed rule logged: %v", err)
+	if _, err := db.MetricsDB.Exec(`INSERT INTO metrics_history (rule_id, timestamp, requests_blocked, requests_logged)
+		VALUES (?, ?, ?, ?)`, ruleID, ts.UTC().Format("2006-01-02 15:04:05"), blocked, logged); err != nil {
+		t.Fatalf("seed rule counters: %v", err)
 	}
 }
 
@@ -45,15 +48,12 @@ func TestGetSecurityOverview_normalSubtractsLoggedHTTP(t *testing.T) {
 	seedGlobalSample(t, anchorYday, 100)
 	seedGlobalSample(t, anchorToday, 250)
 	seedGlobalSample(t, latest, 400)
-	// blocked：昨日 +15、今日 +15。
-	seedRuleBlocked(t, "lb_a", anchorYday, 10)
-	seedRuleBlocked(t, "lb_a", anchorToday, 25)
-	seedRuleBlocked(t, "lb_a", latest, 40)
-	// logged：lb_a 昨日 +5、今日 +10；lb_b 今日 +3。
-	seedRuleLogged(t, "lb_a", anchorYday, 5)
-	seedRuleLogged(t, "lb_a", anchorToday, 10)
-	seedRuleLogged(t, "lb_a", latest, 20)
-	seedRuleLogged(t, "lb_b", latest, 3)
+	// 同行落列（生产行形状）：blocked 昨日 +15、今日 +15；logged lb_a 昨日 +5、
+	// 今日 +10，lb_b 今日 +3。
+	seedRuleCounters(t, "lb_a", anchorYday, 10, 5)
+	seedRuleCounters(t, "lb_a", anchorToday, 25, 10)
+	seedRuleCounters(t, "lb_a", latest, 40, 20)
+	seedRuleCounters(t, "lb_b", latest, 0, 3)
 
 	resp := fetchOverviewNewFields(t)
 	// 昨日 = (250−100) − (25−10) − (10−5) = 130；今日 = (400−250) − (40−25) − ((20−10)+3) = 122。

@@ -11,7 +11,8 @@ import (
 )
 
 // TestConnStatsSnapshotShape 契约 C3 JSON 形状：
-// {"rules":{"<caddy_id>":{"allowed_total":N,"denied_total":M,"countries":{...}}}}
+// {"rules":{"<caddy_id>":{"allowed_total":N,"denied_total":M,"logged_total":L,"countries":{...}}}}
+// （logged_total 为 2026-11 检测放行拆分附加键，向后兼容纯增量。）
 func TestConnStatsSnapshotShape(t *testing.T) {
 	resetConnStatsForTest()
 	beginLoad(caddy.Context{Context: context.Background()})

@@ -663,6 +663,21 @@ func aggregatePrometheusText(text string, mode prometheusScanMode) prometheusSca
 				continue
 			}
 			ruleAgg(rule).blocked += v
+		case strings.HasPrefix(line, "lazybalancer_security_logged_total{"):
+			if !wantRules || res.rulesErr != nil {
+				continue
+			}
+			rule, hasRule := prometheusLabelValue(line, "rule")
+			_, raw, hasValue := PrometheusSampleLine(line)
+			if !hasRule || !hasValue {
+				continue
+			}
+			v, err := parsePrometheusInteger(raw)
+			if err != nil {
+				res.rulesErr = fmt.Errorf("parse logged count %q: %w", raw, err)
+				continue
+			}
+			ruleAgg(rule).logged += v
 		}
 	}
 
@@ -781,7 +796,10 @@ type ruleLabelAggregate struct {
 	requests                                   int64
 	status2xx, status3xx, status4xx, status5xx int64
 	blocked                                    int64
-	bytesIn, bytesOut                          int64
+	// logged 是检测放行计数（lazybalancer_security_logged_total，检测放行
+	// 拆分：总览 normal = 总量 − 被拦 − 检测 的检测差分源）。
+	logged            int64
+	bytesIn, bytesOut int64
 }
 
 // storePerRuleMetrics 在单个事务内批量写入规则级历史行（每规则一条）。
@@ -804,16 +822,16 @@ func (m *MetricsService) storePerRuleMetrics(byRule map[string]*ruleLabelAggrega
 	stmt, err := tx.Prepare(`
 		INSERT INTO metrics_history
 		(rule_id, timestamp, requests_total, requests_2xx, requests_3xx,
-		 requests_4xx, requests_5xx, requests_blocked, bytes_in, bytes_out,
+		 requests_4xx, requests_5xx, requests_blocked, requests_logged, bytes_in, bytes_out,
 		 latency_p50, latency_p95, latency_p99)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0)
 	`)
 	if err != nil {
 		return fmt.Errorf("prepare per-rule metrics batch: %w", err)
 	}
 	defer func() { _ = stmt.Close() }()
 	for ruleID, agg := range byRule {
-		if _, err := stmt.Exec(ruleID, timestamp, agg.requests, agg.status2xx, agg.status3xx, agg.status4xx, agg.status5xx, agg.blocked, agg.bytesIn, agg.bytesOut); err != nil {
+		if _, err := stmt.Exec(ruleID, timestamp, agg.requests, agg.status2xx, agg.status3xx, agg.status4xx, agg.status5xx, agg.blocked, agg.logged, agg.bytesIn, agg.bytesOut); err != nil {
 			return fmt.Errorf("store per-rule metrics for %s: %w", ruleID, err)
 		}
 	}

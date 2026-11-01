@@ -394,21 +394,27 @@ type SecurityOverview struct {
 	// 事件后计入（与 HTTP stage0 DetectionOnly 对齐）；无该形态时为 0。
 	YesterdayDetectedTCP int `json:"yesterday_detected_tcp"`
 	// NormalToday 今日正常请求 = HTTP 差分口径：今日 caddy_http_requests_total
-	// 累计差分 − 今日 per-rule requests_blocked 累计差分。口径披露：①与安全
-	// 事件表不逐一对账（含限流 429 等差异）；②计数器随 /load/重启归零，差分
-	// 已钳制（区间内样本值下降视为重置，增量取后端样本当前值，不出现负数）；
-	// ③指标历史样本不足（短于 2 天，锚不到昨日起点前样本）时返回 0（样本
-	// 积累中）。TCP 连接不计入本字段（见 NormalTodayTCP）。
+	// 累计差分 − 今日 per-rule requests_blocked 累计差分 − 今日 per-rule
+	// requests_logged 检测放行差分（检测放行拆分，2026-11：拦截/检测放行/正常
+	// 三列严格互斥、可加和=总差分）。口径披露：①与安全事件表不逐一对账（含限
+	// 流 429 等差异）；②计数器随 /load/重启归零，差分已钳制（区间内样本值下
+	// 降视为重置，增量取后端样本当前值，不出现负数）；③指标历史样本不足（短
+	// 于 2 天，锚不到昨日起点前样本）时返回 0（样本积累中）；④requests_logged
+	// 列随 2026-11 版本引入，历史数据不回溯——切换点前检测放行计入正常列，
+	// 前后口径断裂（apidocs 已披露）。TCP 连接不计入本字段（见 NormalTodayTCP）。
 	NormalToday int `json:"normal_today"`
 	// NormalTodayHTTP = NormalToday（同值；字段为前端「HTTP/TCP」布局对称
 	// 保留，语义即今日正常 HTTP 请求）。
 	NormalTodayHTTP int `json:"normal_today_http"`
 	// NormalTodayTCP 今日正常 TCP 连接 = lb_l4_conn_history 全局行（rule_id=''
-	// ）allowed 的今日本地日界差分（写侧 30s 差分落库时已含 /load 归零钳制：
-	// 重置后首个差分取当前值，不出现负数）。
+	// ）allowed 的今日本地日界差分减去同源 logged 差分（检测放行拆分：信任检
+	// 测 trust_detect 连接计入 allowed 的既有语义不变，单独计数后从正常列剔
+	// 除；写侧 30s 差分落库时已含 /load 归零钳制：重置后首个差分取当前值，
+	// 不出现负数；旧镜像快照缺 logged_total 键=logged 差分 0，公式退化原口径）。
 	NormalTodayTCP int `json:"normal_today_tcp"`
 	// NormalYesterday/NormalYesterdayHTTP/NormalYesterdayTCP 昨日同口径
-	// （HTTP=总请求差分−被拦差分；样本不足同返回 0；TCP=allowed 日差分）。
+	// （HTTP=总请求差分−被拦差分−检测放行差分；样本不足同返回 0；
+	// TCP=allowed 日差分−logged 日差分）。
 	NormalYesterday     int    `json:"normal_yesterday"`
 	NormalYesterdayHTTP int    `json:"normal_yesterday_http"`
 	NormalYesterdayTCP  int    `json:"normal_yesterday_tcp"`

@@ -245,7 +245,6 @@
         <div v-if="adminTlsForm.mode === 'selfsigned'" class="info-note-bar"><span class="info-note-desc">自动生成自签名证书，浏览器会提示不受信任；集群同步会自动跳过自签验证</span></div>
       </el-form>
       <template #footer>
-        <div class="form-tip-line">确定后仅暂存，仍需在基础设置页点击「保存」生效；保存后服务将重启</div>
         <el-button @click="adminTlsDialogVisible = false">取消</el-button>
         <el-button type="primary" :disabled="adminTlsConfirmBlocked" @click="confirmAdminTls">确定</el-button>
       </template>

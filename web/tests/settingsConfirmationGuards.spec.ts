@@ -34,7 +34,9 @@ test('HTTPS 证书配置仅暂存，弹框静态提示保存与重启而不追�
   const body = section(source, 'const confirmAdminTls =', 'const handleRestart')
   assert.doesNotMatch(body, /ElMessageBox\.confirm\(/, '本地暂存不得追加危险操作确认')
   const footer = section(source, '<el-dialog v-model="adminTlsDialogVisible"', '</el-dialog>')
-  assert.match(footer, /确定后仅暂存，仍需在基础设置页点击「保存」生效；保存后服务将重启/)
+  assert.doesNotMatch(footer, /ElMessageBox\.confirm\(/, '页脚同样不得追加确认框')
+  // 顶部 info-note-bar 已承载保存与重启的静态提示（页脚重复文案已按用户裁定移除）。
+  assert.match(section(source, '<el-dialog v-model="adminTlsDialogVisible"', '</el-dialog>'), /info-note-bar/)
 })
 
 test('基础设置只在预览有变更或暂存证书时弹保存确认', () => {
