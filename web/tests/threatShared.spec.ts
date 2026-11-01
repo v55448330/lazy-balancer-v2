@@ -75,7 +75,7 @@ test('数量级可辨：1/10/100/1k/10k 色相逐级可辨（冷→暖，欧氏�
 })
 
 test('自适应 max：头部国家不再饱和于固定 1000 绝对标尺', () => {
-  const brightest = 'rgb(226,84,84)'
+  const brightest = 'rgb(238,70,70)'
   assert.equal(heatCss(1000, 1000), brightest, 'max=1k 数据集的头部=最亮')
   assert.equal(heatCss(20000, 20000), brightest, 'max=20k 数据集的头部同样=最亮')
   assert.notEqual(heatCss(1000, 10000), brightest, 'max=10k 时 1k 命中不得饱和（旧绝对标尺回归即红）')
@@ -96,7 +96,7 @@ test('单调性与退化边界：count 增→色相逐级可辨；max 增→同 
   assert.ok(heatCss(100, 1000) !== heatCss(100, 10000), '同 count，max 越大越暗（归一化口径）')
   assert.equal(heatIntensity(5, 0), 1, '退化数据集（max=0）命中即最热')
   assert.equal(heatIntensity(0, 0), 0, '无命中恒 0')
-  assert.equal(heatCss(5, 0), 'rgb(226,84,84)')
+  assert.equal(heatCss(5, 0), 'rgb(238,70,70)')
 })
 
 test('数据集 max 单源：maxHeatCount 空集=0，取最大值', () => {
@@ -108,7 +108,7 @@ test('图例渐变单源：七档阶梯排布，首档=底色、末档=亮红（
   const ramp = heatRampGradientCss()
   assert.match(ramp, /^linear-gradient\(90deg, /)
   assert.ok(ramp.includes('rgb(44,66,96) 0%'), '首档=陆地底色')
-  assert.ok(ramp.includes('rgb(226,84,84) 100%'), '末档=亮红')
+  assert.ok(ramp.includes('rgb(238,70,70) 100%'), '末档=亮红')
   assert.equal(ramp.split('rgb(').length - 1, 10, '冷→暖十档阶梯')
 })
 
