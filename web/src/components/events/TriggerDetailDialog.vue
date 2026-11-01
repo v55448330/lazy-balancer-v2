@@ -22,21 +22,21 @@
           <el-tag v-else-if="row?.event_type" size="small" type="primary" effect="plain" class="trg-proto-tag">HTTP</el-tag>
           <el-tag size="small" :type="sourceTagType" effect="dark">{{ categoryLabel }}</el-tag>
           <span class="trg-hero-stage">{{ heroStage }}</span>
-          <span class="trg-hero-ip">{{ row?.client_ip }}</span>
-          <span v-if="row?.ip_location" class="trg-source-geo">{{ row.ip_location }}</span>
-          <!-- geoLabel（策略 geoip_countries 区域清单）回退加
-               kind 门控——归属地位置只对地域事件（kind==='geo'，xdb 未装时
-               ip_location 为空的唯一回退位）展示区域清单有意义；非地域事件
-               （ACL/信任/WAF…）显示策略区域清单会被误读为该事件归属地。
-               Ruling（主审裁定）：选门控而非改标签语义——地域事件中区域清单
-               是有效信息，保留。 -->
-          <span v-else-if="kind === 'geo' && geoLabel" class="trg-source-geo">{{ geoLabel }}</span>
+
+          <!-- geoLabel 回退已移至 trg-hero-ip-row（归属地优先、区域清单兜底） -->
         </div>
         <div class="trg-hero-policy">
           <span class="trg-hero-policy-name">{{ policy?.name ?? (loading ? '加载中…' : noPolicyAttribution ? '（本次事件无策略归属）' : policyMissing ? '（策略已删除）' : '（策略信息不可用）') }}</span>
           <el-tag size="small" :type="policyStatusTag.type" effect="plain">
             {{ policyStatusTag.label }}
           </el-tag>
+        </div>
+        <div class="trg-hero-ip-row">
+          <span class="trg-hero-ip">{{ row?.client_ip }}</span>
+          <!-- 归属地优先展示；地域事件且归属地为空（xdb 未装）回退区域清单
+               geoLabel（kind 门控，语义见 trg-hero-row 注释） -->
+          <span v-if="row?.ip_location" class="trg-source-geo">{{ row.ip_location }}</span>
+          <span v-else-if="kind === 'geo' && geoLabel" class="trg-source-geo">{{ geoLabel }}</span>
         </div>
         <div class="trg-hero-hit">{{ heroHitSource }}</div>
         <div v-if="row?.event_time" class="trg-hero-time">事件时间 · {{ formatTriggerTime(row.event_time) }}</div>
@@ -764,7 +764,8 @@ watch(() => props.modelValue, (v) => {
 /* ① 命中概览：共享面板承载布局，类型着色仅覆盖边框与底色 */
 .trg-hero-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .trg-hero-stage { font-weight: 700; font-size: 14px; }
-.trg-hero-ip { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-weight: 700; }
+.trg-hero-ip-row { display: flex; align-items: baseline; gap: 8px; margin-top: 6px; min-width: 0; flex-wrap: wrap; }
+.trg-hero-ip { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-weight: 700; overflow-wrap: anywhere; }
 .trg-hero-policy { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
 .trg-hero-policy-name { font-weight: 600; font-size: 13px; }
 .trg-hero-hit { font-size: 13px; margin-top: 4px; color: var(--el-text-color-primary); }
