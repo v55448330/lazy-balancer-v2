@@ -8,7 +8,7 @@
         <h1 class="login-title">
           {{ appName }} <span class="v2-badge">V2</span>
         </h1>
-        <p class="login-subtitle">Caddy 负载均衡管理平台</p>
+        <p class="login-subtitle">负载均衡与安全防护管理平台</p>
       </div>
 
       <template v-if="!checkingSetup">
