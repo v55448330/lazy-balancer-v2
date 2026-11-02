@@ -11,7 +11,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { heatCss, createHeatColorTransition } from '../src/utils/threatShared.ts'
+import { heatCss, createHeatColorTransition, maxHeatCount, aggregateCountryCounts, DOT_LAND, type HeatColorTransition } from '../src/utils/threatShared.ts'
 
 // 独立 Oklab 实现（Björn Ottosson 标准公式）——不 import 产品代码，防同源假绿。
 type Lab = { L: number; a: number; b: number }
@@ -88,8 +88,8 @@ test('D 过渡动画器：首帧吸附、变更后渐进收敛≤600ms、无变�
   const a = new Map([['中国', 'rgb(44,66,96)'], ['美国', 'rgb(60,80,130)']])
   tr.setTargets(a)
   tr.advance(0)
-  assert.equal(tr.cssFor('中国', 'rgb(1,2,3)'), 'rgb(44,66,96)'), '首帧必须吸附目标色（无渐入残影）'
-  assert.equal(tr.cssFor('未知', 'rgb(9,9,9)'), 'rgb(9,9,9)'), '未定向的键回退 fallback'
+  assert.equal(tr.cssFor('中国', 'rgb(1,2,3)'), 'rgb(44,66,96)', '首帧必须吸附目标色（无渐入残影）')
+  assert.equal(tr.cssFor('未知', 'rgb(9,9,9)'), 'rgb(9,9,9)', '未定向的键回退 fallback')
   // 变更 → 不立即跳变，渐进收敛
   const b = new Map([['中国', 'rgb(230,70,70)'], ['美国', 'rgb(120,80,180)']])
   tr.setTargets(b)
@@ -107,3 +107,61 @@ test('D 过渡动画器：首帧吸附、变更后渐进收敛≤600ms、无变�
   // 同数据幂等：advance 不再报变化
   assert.equal(tr.advance(16), false, '收敛后 advance 恒 false（引擎不再重绘）')
 })
+
+// ---- 掉键清理：动画器状态必须随数据集收窄 ----
+// 引擎侧（threatGlobe.updateDotColors / threatScene 染色）对 count=0 的点以
+// 底色 fallback 咨询 cssFor(key, fallback)；若动画器的 current 只增不删，掉出
+// 数据集的国家（攻击停止/窗口切换/翻页）会一直被旧热力色盖住——地球引擎上
+// 表现为幽灵热点。这里按引擎调用链同构取证，不做字符串断言。
+
+function heatTargets(counts: ReadonlyMap<string, number>): Map<string, string> {
+  const heatMax = maxHeatCount(counts)
+  const targets = new Map<string, string>()
+  for (const [key, cnt] of counts) {
+    if (cnt > 0) targets.set(key, heatCss(cnt, heatMax))
+  }
+  return targets
+}
+
+function engineColorFor(
+  tr: HeatColorTransition,
+  counts: ReadonlyMap<string, number>,
+  key: string,
+): string {
+  const heatMax = maxHeatCount(counts)
+  const cnt = counts.get(key) ?? 0
+  const target = cnt > 0 ? heatCss(cnt, heatMax) : DOT_LAND
+  return tr.cssFor(key, target)
+}
+
+function advanceAll(tr: HeatColorTransition): void {
+  let total = 0
+  while (tr.advance(16) && total < 1000) total += 16
+}
+
+test('E 掉键清理：掉出数据集的国家经引擎同构链回退底色', () => {
+  const tr = createHeatColorTransition()
+  // 第一轮：两国上榜（台湾并入中国后同键计数）。
+  const round1 = aggregateCountryCounts([{ name: '中国', count: 120 }, { name: '俄罗斯', count: 500 }])
+  tr.setTargets(heatTargets(round1))
+  tr.advance(16)
+  assert.notEqual(engineColorFor(tr, round1, '俄罗斯'), DOT_LAND, '前置：上榜国家是热力色而非底色')
+  // 第二轮：俄罗斯掉出数据集，中国仍在。
+  const round2 = aggregateCountryCounts([{ name: '中国', count: 120 }])
+  tr.setTargets(heatTargets(round2))
+  assert.equal(engineColorFor(tr, round2, '俄罗斯'), DOT_LAND, '掉出数据集的国家必须立即回退底色')
+  advanceAll(tr)
+  assert.equal(engineColorFor(tr, round2, '俄罗斯'), DOT_LAND, '收敛后掉键国家仍为底色')
+  assert.equal(engineColorFor(tr, round2, '中国'), heatCss(120, maxHeatCount(round2)), '在册国家不受掉键清理影响')
+})
+
+test('E2 掉键清理：空数据集（无数据窗口）后全部键回退底色', () => {
+  const tr = createHeatColorTransition()
+  tr.setTargets(heatTargets(aggregateCountryCounts([{ name: '美国', count: 30 }])))
+  tr.advance(16)
+  tr.setTargets(heatTargets(aggregateCountryCounts([])))
+  assert.equal(engineColorFor(tr, new Map(), '美国'), DOT_LAND, '清空数据集后所有国家回退底色')
+  advanceAll(tr)
+  assert.equal(engineColorFor(tr, new Map(), '美国'), DOT_LAND, '收敛后仍为底色（advance 不再报变化可停帧）')
+})
+

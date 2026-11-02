@@ -191,11 +191,13 @@ function heatLegendTickLabel(value: number): string {
  *  刷新时国家颜色向目标色指数平滑收敛（τ=100ms，约 0.4~0.5s 视觉收敛），消除
  *  max 变化引发的全屏跳色。首帧吸附目标色（无渐入残影）；收敛后 advance
  *  恒 false（引擎停止重绘，热路径零开销）。两引擎各持一个实例，键=国家名。 */
-export function createHeatColorTransition(tauMs = 100): {
+export interface HeatColorTransition {
   setTargets: (targets: ReadonlyMap<string, string>) => void
   advance: (dtMs: number) => boolean
   cssFor: (key: string, fallback: string) => string
-} {
+}
+
+export function createHeatColorTransition(tauMs = 100): HeatColorTransition {
   type RgbState = [number, number, number]
   const current = new Map<string, RgbState>()
   const targets = new Map<string, RgbState>()
@@ -210,6 +212,13 @@ export function createHeatColorTransition(tauMs = 100): {
   return {
     setTargets(next: ReadonlyMap<string, string>): void {
       let changed = next.size !== targets.size
+      // 掉键清理：数据集不再包含的键必须从动画状态删除——cssFor 对残留键恒
+      // 返回旧热力色，盖掉引擎传入的底色 fallback（数据集收窄/清空后的幽灵
+      // 热点）。掉键必然伴随键集差：键集变大时 size 比较已置 changed；等量
+      // 换键时下方遍历对不在 current 里的新键置 changed。
+      for (const key of current.keys()) {
+        if (!next.has(key)) current.delete(key)
+      }
       targets.clear()
       for (const [key, cssColor] of next) {
         const t = parse(cssColor)

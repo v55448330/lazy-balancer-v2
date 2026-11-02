@@ -393,10 +393,11 @@ type SecurityOverview struct {
 	// YesterdayDetectedTCP 昨日 TCP 检测数：L4 信任检测（trust_detect）产 tcp+logged
 	// 事件后计入（与 HTTP stage0 DetectionOnly 对齐）；无该形态时为 0。
 	YesterdayDetectedTCP int `json:"yesterday_detected_tcp"`
-	// NormalToday 今日正常请求 = HTTP 差分口径：规则级 requests_total
-	// 累计差分 − 今日 per-rule requests_blocked 累计差分 − 今日 per-rule
-	// requests_logged 检测放行差分（检测放行拆分，2026-11：拦截/检测放行/正常
-	// 三列严格互斥、可加和=总差分）。口径披露：①与安全事件表不逐一对账（含限
+	// NormalToday 今日正常请求 = HTTP+TCP 合计口径（HTTP 侧：规则级
+	// requests_total 累计差分 − 今日 per-rule requests_blocked 累计差分 −
+	// 今日 per-rule requests_logged 检测放行差分；TCP 侧同 NormalTodayTCP。
+	// 检测放行拆分，2026-11：拦截/检测放行/正常三列严格互斥、可加和=总差分）。
+	// 口径披露：①与安全事件表不逐一对账（含限
 	// 流 429 等差异）；②计数器随 /load/重启归零，差分已钳制（区间内样本值下
 	// 降视为重置，增量取后端样本当前值，不出现负数）；③指标历史样本不足（短
 	// 于 2 天，锚不到昨日起点前样本）时返回 0（样本积累中）；④requests_logged

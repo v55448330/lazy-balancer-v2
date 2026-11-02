@@ -321,7 +321,7 @@ import { anomalySeverity, overlayDetectionGrade, zeroScoreSeverity, type Anomaly
 import { displayThreatScreenMode } from '@/utils/configValues'
 import { flowTimestamp, normalizeTrafficSampleN, reconstructObservedRate, stepAdaptiveSample, nextFlowCursor, planFlowEvents, freshFlowEvents } from '@/utils/threatFlowRules'
 import { nextRadioValue, rovingTabindex } from '@/utils/rovingRadio'
-import { heatLegendTicks, heatRampGradientCss, maxHeatCount } from '@/utils/threatShared'
+import { heatLegendTicks, heatRampGradientCss, maxHeatCount, aggregateCountryCounts } from '@/utils/threatShared'
 import type { ThreatScene, ThreatSceneOptions } from '@/utils/threatScene'
 
 // 威胁大屏（v2.3.8 Threat Wall 版式）：三栏 HUD 网格（左事件流/中引擎舞台/
@@ -511,9 +511,15 @@ const heatRamp = heatRampGradientCss()
 
 // 图例刻度单源（threatShared.heatLegendTicks）：三档值按同一对数标尺
 // （heatIntensity/maxHeatCount）随国家命中 max 自适应，响应式跟随轮询数据——
-// 空数据集回退历史静态三档。
+// 空数据集回退历史静态三档。max 先过 aggregateCountryCounts（台湾并入中国等
+// 聚合）再取最大，与两引擎染色同一口径——raw max 在台湾计数更高时会低于引擎
+// 实际的染热顶值，同一块屏出现两个 max。
 const heatLegend = computed(() =>
-  heatLegendTicks(maxHeatCount(new Map(Object.entries(stats.value?.countries ?? {})))),
+  heatLegendTicks(
+    maxHeatCount(
+      aggregateCountryCounts(Object.entries(stats.value?.countries ?? {}).map(([name, count]) => ({ name, count }))),
+    ),
+  ),
 )
 
 const maxCountryCount = computed(() => topCountries.value.reduce((m, item) => Math.max(m, item.value), 0))

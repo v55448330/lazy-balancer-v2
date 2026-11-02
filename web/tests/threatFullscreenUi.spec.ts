@@ -8,6 +8,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
 import { PAGE_IDS } from '../src/utils/pageIds.ts'
+import { heatLegendTicks, maxHeatCount, aggregateCountryCounts } from '../src/utils/threatShared.ts'
 import { code, codeSection, member, repoCode, section } from './_helpers.ts'
 
 test('大屏全屏分支不进 AppLayout（侧栏顶栏不得渲染）', () => {
@@ -116,4 +117,18 @@ test('采集租约申请/续租失败独立横幅（不与光流失败混报）'
   assert.ok(page.includes('v-if="flowError || attackFlowError"'))
   const collectorBanner = section(page, '<div v-if="collectorError"', '</div>')
   assert.match(collectorBanner, /采集续租失败/, '采集租约失败的横幅文案')
+})
+
+test('图例刻度顶值与引擎染色同口径：max 消费 aggregateCountryCounts 的聚合值', () => {
+  // 形态钉：中国+台湾同时上榜、台湾计数更高。两引擎把台湾并入中国再取
+  // max（aggregateCountryCounts，threatGlobe/threatScene setCountries 同源），
+  // 图例若用 raw max，顶档刻度会低于引擎实际的染热顶值——同一块屏两个 max。
+  const ticks = heatLegendTicks(maxHeatCount(aggregateCountryCounts([
+    { name: '中国', count: 3 },
+    { name: 'Taiwan', count: 9 },
+  ])))
+  assert.equal(ticks[2].label, '12', '刻度顶值必须是聚合后的合计 max，不是 raw 台湾值')
+  // 接线钉：heatLegend 的 max 必须过同一聚合单源（不得绕回 raw countries）。
+  const legendBlock = section(code('src/views/security/ThreatScreen.vue'), 'const heatLegend = computed', 'const maxCountryCount')
+  assert.match(legendBlock, /aggregateCountryCounts/, '图例刻度 max 必须与引擎同走 aggregateCountryCounts')
 })

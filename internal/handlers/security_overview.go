@@ -440,27 +440,6 @@ func clampedDelta(cur, prev int64) int64 {
 	return cur - prev
 }
 
-// securityOverviewGlobalSampleAt 取全局行（rule_id IS NULL）在 at 时刻前
-// （含 at）的末样本 requests_total；at 为零值=不限时取最新样本。无样本
-// ok=false（样本积累中口径，不算错误）。
-func securityOverviewGlobalSampleAt(database *sql.DB, at time.Time) (total int64, ok bool, err error) {
-	query := `SELECT requests_total FROM metrics_history WHERE rule_id IS NULL`
-	args := []any{}
-	if !at.IsZero() {
-		query += ` AND timestamp <= ?`
-		args = append(args, at.UTC().Format(securityOverviewEventTimeLayout))
-	}
-	query += ` ORDER BY timestamp DESC, id DESC LIMIT 1`
-	err = database.QueryRow(query, args...).Scan(&total)
-	if errors.Is(err, sql.ErrNoRows) {
-		return 0, false, nil
-	}
-	if err != nil {
-		return 0, false, err
-	}
-	return total, true, nil
-}
-
 // securityOverviewRuleMetricAnchorAt 取各规则在 at 时刻前（含 at；零值=不限时）
 // 末样本的 column（requests_blocked / requests_logged）累计 map（无样本的规则
 // 不在 map 中=0 基线）。「每规则末样本」经 MAX(id) 子查询连接取行（同时间戳
@@ -498,25 +477,6 @@ const (
 	securityOverviewColBlocked = "requests_blocked"
 	securityOverviewColLogged  = "requests_logged"
 )
-
-// securityOverviewRuleMetricDelta 窗口 [from,to]（to 零值=最新样本）内 per-rule
-// column 累计差分之和（每规则钳制后求和；起点无样本的规则按 0 基线——窗口内
-// 新出现的规则的累计全部落在窗口内）。
-func securityOverviewRuleMetricDelta(database *sql.DB, from, to time.Time, column string) (int64, error) {
-	startAnchor, err := securityOverviewRuleMetricAnchorAt(database, from, column)
-	if err != nil {
-		return 0, err
-	}
-	endAnchor, err := securityOverviewRuleMetricAnchorAt(database, to, column)
-	if err != nil {
-		return 0, err
-	}
-	var sum int64
-	for ruleID, endVal := range endAnchor {
-		sum += clampedDelta(endVal, startAnchor[ruleID])
-	}
-	return sum, nil
-}
 
 // securityOverviewNormalHTTPDiff 正常请求（HTTP）差分：规则级真实转发计数口径——
 // 逐规则 requests_total − requests_blocked − requests_logged（三列同源自
