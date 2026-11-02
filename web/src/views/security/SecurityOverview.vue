@@ -119,10 +119,6 @@
     </el-card>
     </div>
 
-    <div v-if="overview.backfill_incomplete && overview.raw_coverage_from !== rawCoverageAck" class="info-note-bar">
-      <span class="info-note-desc">原始事件仅保留自 {{ overview.raw_coverage_from }}，更早区间无法重建，7 天趋势 / Top 10 源 IP / 攻击类型统计可能少计</span>
-      <button type="button" class="info-note-dismiss" @click="ackRawCoverage">知道了</button>
-    </div>
 
     <el-row :gutter="20" class="mb-5 charts-row">
       <el-col :xs="24" :md="16">
@@ -341,14 +337,6 @@ const topIpAttackLabel = (row: TopIP): string => {
 }
 const overview = ref<Overview>({ today_blocked: 0, today_detected: 0, active_policies: 0, crs_version: '', trend: [], top_ips: [], attack_types: [], attack_types_stage: [], raw_coverage_from: '', backfill_incomplete: false })
 
-const RAW_COVERAGE_ACK_KEY = "raw-coverage-ack"
-const rawCoverageAck = ref(localStorage.getItem(RAW_COVERAGE_ACK_KEY) ?? "")
-const ackRawCoverage = () => {
-  if (overview.value.raw_coverage_from) {
-    localStorage.setItem(RAW_COVERAGE_ACK_KEY, overview.value.raw_coverage_from)
-    rawCoverageAck.value = overview.value.raw_coverage_from
-  }
-}
 // 分布图展示模式：勾选=按阶段五桶（默认，与触发阶段口径一致）；取消=具体分类
 // 总览加载失败（如 metrics 库故障导致后端 500）时置位：避免把全零面板
 // 误当「无攻击」，用户目标与 后端显式报错对齐。

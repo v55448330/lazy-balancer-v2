@@ -56,16 +56,16 @@
         <div v-if="ingestionWarning" class="info-note-bar">
           <span class="info-note-desc">{{ ingestionWarning }}</span>
         </div>
-        <div v-if="stats?.backfill_incomplete" class="error-banner site-unset">
-          历史统计回填尚未完成，当前窗口总量可能少计，稍后将继续补齐
+        <div v-if="stats?.backfill_incomplete && !backfillDismissed" class="info-note-bar">
+          <span class="info-note-desc">历史统计回填尚未完成，当前窗口总量可能少计；回填会自动继续补齐，无需处理</span>
+          <button type="button" class="info-note-dismiss" @click="dismissBackfill">知道了</button>
         </div>
         <!-- 原始表覆盖受限只作信息提示：窗口聚合来自分钟 rollup，完整性不受影响 -->
         <!-- 知悉记忆：同一覆盖起点只提示一次（覆盖起点前移=新裁剪事件，重新提示） -->
-        <div v-if="stats?.raw_coverage_limited && !stats?.backfill_incomplete && stats?.raw_coverage_from !== coverageAck" class="info-note-bar">
-          <span class="info-note-desc">原始事件仅保留自 {{ stats?.raw_coverage_from }}，更早明细无法逐条查询；窗口统计来自预聚合，不受影响</span>
-          <button type="button" class="info-note-dismiss" @click="ackCoverage">知道了</button>
+        <div v-if="stats?.rollup_stale && !rollupStaleDismissed" class="info-note-bar">
+          <span class="info-note-desc">统计汇总更新延迟，当前窗口数据可能不是最新；汇总恢复后自动显示最新数据，无需处理</span>
+          <button type="button" class="info-note-dismiss" @click="dismissRollupStale">知道了</button>
         </div>
-        <div v-if="stats?.rollup_stale" class="error-banner site-unset">统计汇总更新延迟，当前窗口数据可能不是最新</div>
         <div v-if="engineError" class="error-banner">
           大屏引擎加载失败
           <button type="button" class="btn error-retry" @click="mountEngine">重试</button>
@@ -411,13 +411,11 @@ const windowHours = ref<number>(24)
 const authStore = useAuthStore()
 const stats = ref<ThreatScreenStats | null>(null)
 
-const coverageAck = ref(localStorage.getItem("raw-coverage-ack") ?? "")
-const ackCoverage = () => {
-  if (stats.value?.raw_coverage_from) {
-    localStorage.setItem("raw-coverage-ack", stats.value.raw_coverage_from)
-    coverageAck.value = stats.value.raw_coverage_from
-  }
-}
+// 回填/汇总延迟为系统自愈态：会话内关闭即可（sessionStorage，刷新后允许再次提示）
+const backfillDismissed = ref(sessionStorage.getItem("backfill-banner-dismissed") === "1")
+const dismissBackfill = () => { sessionStorage.setItem("backfill-banner-dismissed", "1"); backfillDismissed.value = true }
+const rollupStaleDismissed = ref(sessionStorage.getItem("rollup-stale-dismissed") === "1")
+const dismissRollupStale = () => { sessionStorage.setItem("rollup-stale-dismissed", "1"); rollupStaleDismissed.value = true }
 const statsError = ref(false)
 const ingestionWarning = computed(() => ingestionWarningMessage(stats.value?.ingestion))
 const feedItems = ref<FeedEvent[]>([])

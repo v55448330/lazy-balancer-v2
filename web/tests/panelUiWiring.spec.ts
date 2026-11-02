@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { code, cssDeclarations, elementAt, enclosingDecl, member, openTags, section, stripComments, source } from './_helpers.ts'
+import { code, cssDeclarations, enclosingDecl, member, openTags, section, stripComments, source } from './_helpers.ts'
 
 test('当前密码错误在页面本地 toast，拦截器复用精确分类', () => {
   const profile = code('src/components/ProfileDialog.vue')
@@ -140,17 +140,28 @@ test('大屏显性披露回填未完成与汇总陈旧', () => {
   // 原断言只钉 `?: boolean` 类型声明（类型契约由 vue-tsc 承担）。
   // 改为钉渲染接线：两个标志各自绑定独立横幅且文案区分（回填未完成 vs 汇总延迟）。
   const text = code('src/views/security/ThreatScreen.vue')
-  // 按「条件所在元素」取段（elementAt）：距离窗口不表达包裹关系——文案迁到相邻
-  // 元素仍可能落在窗口内（假绿），元素加个属性又可能落到窗口外（假红）。
-  const banner = (condition: string): string => elementAt(text, 'div', text.indexOf(condition))
-  assert.match(banner('v-if="stats?.backfill_incomplete"'), /历史统计回填尚未完成/, '回填未完成必须渲染显性横幅（文案在该条件元素内）')
-  assert.match(banner('v-if="stats?.rollup_stale"'), /统计汇总更新延迟/, '汇总陈旧必须渲染独立横幅（不得与回填提示合并或静默）')
-  // 原始表覆盖受限是独立信号（不参与回填/缓存判定）：走自己的信息提示并披露
-  // 覆盖起点，不得泛化成同一条「回填未完成」告警。
-  const coverage = banner('v-if="stats?.raw_coverage_limited')
-  assert.match(coverage, /stats\?\.raw_coverage_from/, '覆盖受限提示必须披露覆盖起点')
-  assert.doesNotMatch(coverage, /历史统计回填尚未完成/, '覆盖受限不得复用回填横幅文案（两者是独立信号）')
-  assert.doesNotMatch(text, /rawCoverageGap/, '原始覆盖受限必须与回填未完成彻底解耦')
+  assert.match(text, /历史统计回填尚未完成/, '回填未完成必须渲染横幅文案（不得静默）')
+  assert.match(text, /统计汇总更新延迟/, '汇总陈旧必须渲染独立横幅（不得与回填提示合并或静默）')
+  // 覆盖受限已撤销横幅（2026-11-02 用户裁定）：窗口统计来自预聚合、无数据丢失，
+  // 系统静默处理不打扰用户；明细缺失属保留策略既有行为。横幅与知悉记忆一并移除。
+  assert.doesNotMatch(text, /原始事件仅保留自/, '威胁大屏不得再渲染覆盖受限横幅')
+  assert.doesNotMatch(text, /rawCoverageAck|raw-coverage-ack/, '知悉记忆代码须随横幅一并移除')
+  // 保留的两条横幅（回填/汇总延迟）必须可关闭：关闭入口=info-note-dismiss 按钮
+  // 两条横幅元素多行，elementAt 的标签截取不覆盖子内容——按条件到区块尾的窗口断言
+  const backfillBlock = text.slice(text.indexOf('v-if="stats?.backfill_incomplete'), text.indexOf('rollup_stale-dismissed'))
+  const rollupBlock = text.slice(text.indexOf('v-if="stats?.rollup_stale'), text.indexOf('rollup-stale-dismissed') + 40)
+  assert.match(backfillBlock, /info-note-dismiss/, '回填横幅必须带可关闭入口')
+  assert.match(backfillBlock, /sessionStorage/, '回填横幅关闭记忆用 sessionStorage（会话内不重复弹出）')
+  assert.match(rollupBlock, /info-note-dismiss/, '汇总延迟横幅必须带可关闭入口')
+  assert.match(rollupBlock, /rollup-stale-dismissed/, '汇总延迟横幅关闭记忆用 sessionStorage')
+  // 关闭入口样式契约：全局样式必须可见（描边+主题色）且横幅对齐（:has flex）
+  const css = code('src/styles/main.css')
+  assert.match(css, /\.info-note-bar:has\(\.info-note-dismiss\)[^}]*align-items:\s*center/, '带关闭按钮的横幅必须垂直居中对齐')
+  const dismissRule = css.match(/\.info-note-bar \.info-note-dismiss \{[^}]*\}/)?.[0] ?? ''
+  assert.ok(dismissRule, '关闭按钮样式必须存在于全局 main.css')
+  assert.match(dismissRule, /color:/, '关闭按钮必须有可辨识文字色')
+  assert.match(dismissRule, /border:\s*1px solid/, '关闭按钮必须有描边（透明下划线样式不可辨识）')
+  assert.doesNotMatch(dismissRule, /text-decoration:\s*underline/, '下划线弱样式必须退役')
 })
 
 test('Vite 开发代理默认 HTTP，仅显式环境开关使用 HTTPS', () => {

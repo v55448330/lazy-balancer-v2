@@ -432,22 +432,6 @@ export const elementSlice = (text: string, openTagAt: number, tag: string): stri
 }
 
 /**
- * `offset` 所在元素的完整切片（开标签取 offset 之前最近的 `<tag`，其余按
- * `elementSlice` 配对）。
- *
- * 「这个条件元素渲染了这段文案」这类断言不能写成距离型窗口
- * （`/v-if="x"[\s\S]{0,400}文案/`）：文案落在相邻元素上仍可能命中（假绿），
- * 元素加个属性又可能落到窗口外（假红）。按元素取段与字符数无关。
- */
-export const elementAt = (text: string, tag: string, offset: number): string => {
-  const opener = new RegExp(`<${tag}\\b`, 'g')
-  let at = -1
-  for (const match of text.slice(0, offset).matchAll(opener)) at = match.index!
-  if (at < 0) throw new Error(`offset ${offset} 之前没有 <${tag}>（元素边界找错对象）`)
-  return elementSlice(text, at, tag)
-}
-
-/**
  * `offset` 处的片段落在哪个 `<tag> … </tag>` 之内：返回该元素的开标签，不在任何
  * 元素内返回 null。
  *
