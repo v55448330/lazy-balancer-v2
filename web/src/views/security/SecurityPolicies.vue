@@ -398,74 +398,72 @@
             <el-form-item label="记录请求体">
               <el-switch v-model="form.log_request_body" :disabled="isReadOnly || form.mode === 'off'" />
               <div class="form-tip-line">仅 CRS/自定义规则命中事件记录请求体；当前模式关闭时不记录</div>
-            </el-form-item>
-            <el-form-item v-if="form.log_request_body"><div class="info-note-bar"><span class="info-note-desc">开启后命中规则事件的请求体将明文记录到事件库（单条上限 64KB），可能包含密码等敏感信息，请仅在排障期间开启</span></div>
+              <!-- 警示条挂在带标签表单项内（EP 无标签项内容从行首渲染，会贴弹框左缘
+                   且比控件列宽 ~100px——2026-11-03 用户验收反馈）；撑满走 form-item-note-bar，
+                   盒模型样式主体走全局 info-note-bar 规范（padding 8px 12px），零局部覆写 -->
+              <div v-if="form.log_request_body" class="info-note-bar form-item-note-bar"><span class="info-note-desc">开启后命中规则事件的请求体将明文记录到事件库（单条上限 64KB），可能包含密码等敏感信息，请仅在排障期间开启</span></div>
             </el-form-item>
             <el-form-item label="排除规则" for="radio---11">
               <input type="text" id="radio---11" aria-hidden="true" tabindex="-1" autocomplete="off" style="display:none">
-              <div>
+              <div class="exclusion-body">
 
-              <!-- 表格行编辑器：目标（与规则组同款混合下拉）× 作用域（全部 IP/指定 IP/地址
-                   列表）× 条件控件（ip → 标签输入 + isValidCidr 即时拒绝；list → 引用
-                   /security/ip-lists 列表）× 删除。上限 50 行；旧字符串数组存储读取时已
-                   归一为 scope:all 行，保存统一写对象数组。
+              <!-- 表格行编辑器：目标（目录自动补全，可自由输入）× 作用域（全部 IP/指定 IP/
+                   地址列表/路径 URI）× 条件控件（ip → 标签输入 + isValidCidr 即时拒绝；
+                   list → 引用 /security/ip-lists 列表；path → URI 前缀输入）× 删除。
+                   上限 50 行；旧字符串数组存储读取时已归一为 scope:all 行，保存统一写
+                   对象数组。
                     布局：空态不渲染表格——单行紧凑引导（说明 + 添加按钮）避免挤占弹框
                     高度；有条目才渲染表格，条目多时容器 max-height 260px 内部滚动（表头
                     sticky 固定），不再撑高弹框。每条排除单行呈现（目标 × 作用域 × 条件
-                    合并列）：行内控件统一 small（24px）同高 + 单元格顶部对齐；cascader
-                    弹性占满剩余宽（min 280px）、radios 自然紧凑、条件控件内联于 radios
-                    之后（all 灰字短提示 / ip 标签输入 min 220 max 360 / list 紧凑选择），
+                    合并列）：行内控件统一 small（24px）同高 + 单元格顶部对齐；目标输入
+                    弹性占满剩余宽（min 200px）、radios 自然紧凑、条件控件内联于 radios
+                    之后（all 灰字短提示 / ip 标签输入 / list 紧凑选择 / path 前缀输入），
                     行高 ~32-40px（原双行 60px+）；合并列 min-width 560 + 删除列 60 低于
                     弹框内容宽 → 1080px 全宽不换行、无横向滚动；条目数徽标随工具行。 -->
               <!-- 2026-09-19 用户裁定:空态按钮在首行(与「排除规则」标题同一
                    水平线、内容列左对齐),描述文字居其下 -->
               <div v-if="crsExcludedRows.length === 0" class="exclusion-empty">
                 <el-button size="small" type="primary" plain :disabled="crsFieldsOff || isReadOnly" @click="addExcludedRule">添加排除规则</el-button>
-                <span class="exclusion-empty-tip">未添加排除规则——排除的目标规则/规则组不会被检测或拦截；作用域限定排除仅对所选来源 IP 或地址列表生效</span>
+                <span class="exclusion-empty-tip">未添加排除规则——排除的目标规则/规则组不会被检测或拦截；作用域限定排除仅对所选来源 IP/地址列表/路径生效</span>
               </div>
               <template v-else>
                 <el-table :data="crsExcludedRows" size="small" class="exclusion-table" :max-height="260">
                   <!-- 单行合并列：目标规则 × 作用域 × 条件，一条排除规则一行呈现——
-                       左起：目标 cascader（弹性占满剩余，min 280px）+ ghost 内联标签 +
+                       左起：目标自动补全输入（弹性占满剩余，min 200px）+ ghost 内联标签 +
                        冲突警告图标（tooltip 悬浮）→ 作用域 radios（自然宽）→ 条件控件
-                       内联随 radios 之后，条件区为恒定槽位（见下方 CSS——三态同
-                       flex 规格，切换作用域不改变剩余空间分配，cascader 宽度与
+                       内联随 radios 之后，条件区为恒定槽位（见下方 CSS——四态同
+                       flex 规格，切换作用域不改变剩余空间分配，输入框宽与
                        radios 位置恒定不抖动），行高 ~32-40px；1080px 弹框全宽下
                        不换行，窄于该宽度时 flex-wrap 优雅折行且首行对齐不乱；ghost /
-                       冲突图标出现只挤压 cascader 宽度，不改行结构 -->
+                       冲突图标出现只挤压目标输入宽度，不改行结构 -->
                   <el-table-column label="目标规则 × 作用域 × 条件" min-width="560">
                     <template #default="{ row }">
                       <div class="exclusion-row-cell">
-                        <!-- 懒加载级联单选（与规则组同一懒加载实现，排除口径：剔 01 组
-                             /901 ID，保留 49/59/80）：每行一个 cascader（上限 50 行），
-                             面板展开才挂载菜单、展开组才生成该组规则叶；checkStrictly
-                             组或单条规则皆可作为 target。已存值能映射路径（组→[组号]、
-                             规则→[组号, 规则ID]）则级联回填显示解析标签；不能映射
-                             （遗留文件名/陈旧 ID/被剔口径值）由右侧 ghost 标签兜底，
-                             可清除（×）或直接改选覆盖。key 在索引就绪后重挂载，避免
-                             在途期间展开组缓存空叶。 -->
-                        <el-cascader
-                          :key="crsIndexLoaded ? 'ready' : 'pending'"
-                          :model-value="exclusionTargetPath(row.target)"
-                          :props="crsExclusionCascaderProps"
+                        <!-- 目标自动补全（数据源 = 既有 rule-index 索引单例，WAF 步骤
+                             首次进入惰性取一次）：按 id 数字前缀或 msg 关键字过滤，
+                             ≤50 条建议（901 初始化规则不出建议，后端硬拒）；选中回填
+                             规则 id。索引缺失/加载失败时 search 恒空建议——输入框
+                             退化为纯自由输入不阻塞（组号两位/6 位 ID/遗留文件名等
+                             目录外形态本就允许手输，后端 SecRuleRemoveById 兼容）。
+                             不能映射为已知值的存量 target 仍由右侧 ghost 标签兜底，
+                             可清除（×）。 -->
+                        <el-autocomplete
+                          v-model="row.target"
+                          :fetch-suggestions="fetchExclusionSuggestions"
                           size="small"
-                          filterable
                           clearable
-                          :show-all-levels="false"
                           :disabled="crsFieldsOff || isReadOnly"
                           popper-class="crs-rule-popper"
-                          placeholder="选择规则组 / 单条规则"
+                          placeholder="搜索规则 ID/描述，或输入组号、文件名"
                           class="exclusion-target-select"
-                          @update:model-value="(value: CascaderValue | null | undefined) => onExclusionTargetChange(row as CrsExcludedRow, value)"
                         >
-                          <template #default="{ data }">
-                            <div v-if="data.isRule" class="crs-rule-option" :title="`${data.value} — ${data.fullLabel}`">
-                              <div class="crs-rule-option-label">{{ data.label }}</div>
-                              <div class="crs-rule-option-meta">{{ data.file }} · {{ data.category }}</div>
+                          <template #default="{ item }">
+                            <div class="crs-rule-suggestion" :title="`${item.value} — ${item.fullMsg}`">
+                              <span class="crs-rule-suggestion-id">{{ item.value }}</span>
+                              <span class="crs-rule-suggestion-desc">{{ item.label }}（{{ item.file }}）</span>
                             </div>
-                            <span v-else>{{ data.label }}</span>
                           </template>
-                        </el-cascader>
+                        </el-autocomplete>
                         <el-tag
                           v-if="exclusionRowGhostLabel(row.target) !== ''"
                           size="small"
@@ -492,11 +490,12 @@
                           <el-radio value="all">全部 IP</el-radio>
                           <el-radio value="ip">指定 IP</el-radio>
                           <el-radio value="list">地址列表</el-radio>
+                          <el-radio value="path">路径 URI</el-radio>
                         </el-radio-group>
                         <!-- 条件控件内联于 radios 之后：all → 灰字短提示（自然宽、不预留
-                             布局空间）/ ip → 标签输入（min 220 max 360）/ list → 列表
-                             多选（紧凑宽）；切换只影响 radios 之后的空位，radios 与
-                             cascader 位置不抖动 -->
+                             布局空间）/ ip → 标签输入 / list → 列表多选（紧凑宽）/
+                             path → URI 前缀输入（@beginsWith 前缀匹配，≤256 字符）；
+                             切换只影响 radios 之后的空位，radios 与目标输入位置不抖动 -->
                         <el-select
                           v-if="row.scope === 'ip'"
                           v-model="row.ips"
@@ -524,6 +523,15 @@
                   <el-option v-for="l in customIpLists" :key="l.id" :label="`${l.name}（${l.entry_count} 条）`" :value="l.id" />
                 </el-option-group>
                         </el-select>
+                        <el-input
+                          v-else-if="row.scope === 'path'"
+                          v-model="row.path"
+                          size="small"
+                          :disabled="crsFieldsOff || isReadOnly"
+                          maxlength="256"
+                          placeholder="如 /api/upload（前缀匹配）"
+                          class="exclusion-scope-control-path"
+                        />
                         <span v-else class="exclusion-scope-all">对所有 IP 生效</span>
                       </div>
                     </template>
@@ -538,7 +546,7 @@
                   <el-button size="small" type="primary" plain :disabled="crsFieldsOff || isReadOnly || crsExcludedRows.length >= CRS_EXCLUDED_MAX_ROWS" @click="addExcludedRule">添加排除规则</el-button>
                   <el-tag size="small" type="info" effect="plain" class="exclusion-count">{{ crsExcludedRows.length }}/{{ CRS_EXCLUDED_MAX_ROWS }}</el-tag>
                 </div>
-                <div class="form-tip-line">排除的目标规则/规则组不会被检测或拦截；作用域限定排除仅对所选来源 IP 或地址列表生效</div>
+                <div class="form-tip-line">排除的目标规则/规则组不会被检测或拦截；作用域限定排除仅对所选来源 IP/地址列表/路径生效</div>
               </template>
             
               </div></el-form-item>
@@ -963,7 +971,7 @@
 import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
 import { Plus, Lock, InfoFilled, CircleCheckFilled, Connection, Odometer, Link, Check, ArrowLeft, ArrowRight, ArrowDown, Search, WarningFilled, Document } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import type { CascaderOption, CascaderProps, CascaderValue, LazyLoad } from 'element-plus'
+import type { CascaderOption, CascaderProps, LazyLoad } from 'element-plus'
 import { request, ApiRequestError, mfaAwareSuccess } from '@/utils/api'
 import { showSaveResult } from '@/utils/saveResult'
 import { CADDY_APPLY_FAILED_MARKER, mergeBulkResults } from '@/utils/bulkApplyResult'
@@ -971,9 +979,9 @@ import { isValidCidr } from '@/utils/ipAddress'
 import { popperViewportSafe } from '@/utils/popper'
 import { formatDate } from '@/utils/date'
 import { useAuthStore } from '@/stores/auth'
-import { useCrsRuleIndex, issueCrsIndexSession, crsRuleLabelView, parseCrsExcludedRules, CRS_EXCLUDED_MAX_ROWS } from '@/composables/useCrsRuleIndex'
+import { useCrsRuleIndex, useCrsRuleDirectory, issueCrsIndexSession, crsRuleLabelView, parseCrsExcludedRules, CRS_EXCLUDED_MAX_ROWS } from '@/composables/useCrsRuleIndex'
 import { useClampedPagination } from '@/composables/useClampedPagination'
-import type { CrsExcludedRow, CrsRuleOptionView } from '@/composables/useCrsRuleIndex'
+import type { CrsExcludedRow, CrsRuleOptionView, CrsDirectorySuggestion } from '@/composables/useCrsRuleIndex'
 import type { APIResponse, UserListItem } from '@/types'
 import SecurityBindingEditor from '@/components/SecurityBindingEditor.vue'
 import DialogHeader from '@/components/DialogHeader.vue'
@@ -985,7 +993,7 @@ import { fetchAllCrsRuleFiles } from '@/utils/crsRuleFiles'
 import { updaterName } from '@/utils/updaterName'
 import { hasOwn } from '@/utils/hasOwn'
 import { SECURITY_DESCRIPTION_MAX_RUNES, SECURITY_NAME_MAX_RUNES } from '@/utils/securityLimits'
-import { CRS_HIDDEN_GROUP_CODES, CRS_INFRA_GROUP_CODES, isInfraRuleId, isInitRuleId, normalizeCrsGroups } from '@/utils/crsGroups'
+import { CRS_HIDDEN_GROUP_CODES, CRS_INFRA_GROUP_CODES, isInfraRuleId, normalizeCrsGroups } from '@/utils/crsGroups'
 import { DEEP_LINK_PARAMS, pageUrl } from '@/utils/deepLink'
 import { buildPolicyPayload, crawlerExemptionNeedsEngines, trustEnabledForPolicyType } from '@/utils/policyPayload'
 import { activateOnce } from '@/utils/keyboardActivate'
@@ -1072,8 +1080,12 @@ const crsRuleOptions = ref<CrsRuleFileOption[]>([])
 // CRS 规则索引（约 832 条，id/msg/file/category）：规则组/排除目标级联的规则叶与
 // 预览 hover 明细共用；对话框打开时取一次（同会话缓存，openSeq 过期守卫见 useCrsRuleIndex）
 const { loaded: crsIndexLoaded, byId: crsIndexById, options: crsIndexOptions, ensureForDialog: ensureCrsRuleIndex } = useCrsRuleIndex()
-// —— 排除规则行编辑器（存储形态：对象数组 [{target,scope,ips,listRefs}]，旧字符串数组
-//     读取时由 parseCrsExcludedRules 归一为 scope:all 行）——
+// —— 排除目标目录（数据源 = 既有端点 GET /security/crs/rule-index 索引单例）：
+//    WAF 步骤首次进入时惰性取一次（已加载/在途直接复用，失败静默降级）——
+//    search 恒空建议时输入框退化为自由输入，不阻塞排除编辑 ——
+const { ensure: ensureCrsDirectory, search: searchCrsDirectory } = useCrsRuleDirectory()
+// —— 排除规则行编辑器（存储形态：对象数组 [{target,scope,ips,listRefs,path}]，旧字符串
+//     数组读取时由 parseCrsExcludedRules 归一为 scope:all 行；path 仅 scope==='path' 消费）——
 const crsExcludedRows = ref<CrsExcludedRow[]>([])
 
 const loading = ref(false)
@@ -1409,13 +1421,17 @@ const viewPolicySections = computed<ViewPolicySection[]>(() => {
   // 与编辑器/列表摘要同一计数口径（归一后长度）：库值为字符串 JSON，原样计数
   // 会把历史文件名前缀、重复值、系统基础组算成用户选择，详情与编辑器互相矛盾。
   const crsGroupCount = normalizeCrsGroups(parseIPList(d.crs_rule_groups)).length
-  const excludedCount = parseCrsExcludedRules(d.crs_excluded_rules).length
+  const excludedEntries = parseCrsExcludedRules(d.crs_excluded_rules)
+  const excludedCount = excludedEntries.length
+  // 路径作用域排除在只读详情披露具体前缀（去重后前 3 条 + 「等 N 条」），
+  // 否则与旧行为一致仅出计数
+  const excludedPaths = [...new Set(excludedEntries.filter((e) => e.scope === 'path' && e.path !== '').map((e) => e.path))]
   const customCount = parseCustomRuleIds(d.custom_rules).length
   const stage3Rows: Array<{ label: string; value: string }> = [{ label: 'WAF 模式', value: wafModeLabel(d.mode) }]
   if (d.mode === 'blocking' || d.mode === 'detection') {
     stage3Rows.push({ label: '异常阈值', value: String(d.anomaly_threshold) })
     stage3Rows.push({ label: 'CRS 规则组', value: crsGroupCount === 0 ? '全部（默认）' : `${crsGroupCount} 组` })
-    stage3Rows.push({ label: '排除规则', value: `${excludedCount} 条` })
+    stage3Rows.push({ label: '排除规则', value: excludedPaths.length > 0 ? `${excludedCount} 条（路径 ${excludedPaths.slice(0, 3).join('、')}${excludedPaths.length > 3 ? ` 等 ${excludedPaths.length} 条` : ''}）` : `${excludedCount} 条` })
   }
   if (d.mode !== 'off') {
     stage3Rows.push({ label: '自定义规则', value: `${customCount} 条` })
@@ -1952,17 +1968,14 @@ const crsExclusionGroupOptions = computed(() => {
   return [...seen.entries()].map(([value, label]) => ({ value, label }))
 })
 
-// 两个 CRS 选择器（规则组多选 / 排除目标每行单选）共用同一懒加载级联实现：一级
-// 返回组节点（label 沿用「请求 · 942 · SQL 注入」），展开组时才从已缓存索引按
-// 文件名两位组号切出该组规则叶（相位与组号一一对应：REQUEST/RESPONSE 前缀决定）。
-// 懒的是组件挂载不是数据获取——索引仍由 useCrsRuleIndex 一次性拉回（约 832 条），
-// 叶节点数组仅在组展开时生成，832 条全集不随任何 cascader 挂载渲染（排除行上限
-// 50 行）。两侧差异仅剔除口径：'group' 剔基础设施 ID（901/949/959，写入面同语义
-// 剥离，提供选项=选了保存后消失）；'exclusion' 仅剔 901（后端硬拒，提供即必现
-// 400）——949/959 保留可选（检测模式排除评估是合法调优，拦截模式另有
-// blockingEvalExclusionAlert）。组节点剔除口径由 crsGroupOptions（剔 01/49/59）/
-// crsExclusionGroupOptions（剔 01）各自保证。
-type CrsCascaderSide = 'group' | 'exclusion'
+// CRS 规则组多选 cascader 的懒加载实现：一级返回组节点（label 沿用「请求 · 942 ·
+// SQL 注入」），展开组时才从已缓存索引按文件名两位组号切出该组规则叶（相位与组号
+// 一一对应：REQUEST/RESPONSE 前缀决定）。懒的是组件挂载不是数据获取——索引仍由
+// useCrsRuleIndex 一次性拉回（约 832 条），叶节点数组仅在组展开时生成，832 条全集
+// 不随 cascader 挂载渲染。剔除口径：组节点由 crsGroupOptions（剔 01/49/59）保证；
+// 规则叶剔基础设施 ID（901/949/959，写入面同语义剥离，提供选项=选了保存后消失）。
+// （排除行的目标选择已改走目录自动补全，不再消费级联；其 ghost 判定仍走下方
+// crsValueToPath 的 exclusion 侧映射。）
 
 // 级联节点数据：组节点（leaf:false）+ 规则叶（leaf:true，isRule/file/category/
 // fullLabel 供默认插槽按旧版 crs-rule-option 两行样式渲染）
@@ -1978,17 +1991,16 @@ interface CrsCascaderOption extends CascaderOption {
 // 从 CRS 文件名提取两位组号（REQUEST-942-*.conf → "42"）——解析单源 parseCrsFilename
 const crsGroupCodeOfFile = (file: string): string => parseCrsFilename(file)?.code ?? ''
 
-const crsCascaderLazyLoad = (side: CrsCascaderSide): LazyLoad => (node, resolve) => {
-  // 一级：组节点（常渲染可浏览，剔除口径按侧）
+const crsGroupCascaderLazyLoad: LazyLoad = (node, resolve) => {
+  // 一级：组节点（常渲染可浏览）
   if (node.level === 0) {
-    const groups = side === 'group' ? crsGroupOptions.value : crsExclusionGroupOptions.value
-    resolve(groups.map((g): CrsCascaderOption => ({ value: g.value, label: g.label, leaf: false })))
+    resolve(crsGroupOptions.value.map((g): CrsCascaderOption => ({ value: g.value, label: g.label, leaf: false })))
     return
   }
-  // 二级：展开组时才生成该组规则叶（索引已按 id 升序；剔除口径按侧）
+  // 二级：展开组时才生成该组规则叶（索引已按 id 升序）
   const code = typeof node.value === 'string' ? node.value : ''
   const rules: CrsRuleOptionView[] = crsIndexOptions.value.filter((r) =>
-    crsGroupCodeOfFile(r.file) === code && (side === 'group' ? !isInfraRuleId(r.id) : !isInitRuleId(r.id)))
+    crsGroupCodeOfFile(r.file) === code && !isInfraRuleId(r.id))
   resolve(rules.map((r): CrsCascaderOption => ({
     value: r.id,
     label: `${r.id} — ${r.label}`,
@@ -2004,19 +2016,15 @@ const crsGroupCascaderProps: CascaderProps = {
   lazy: true,
   multiple: true,
   checkStrictly: true,
-  lazyLoad: crsCascaderLazyLoad('group'),
-}
-
-const crsExclusionCascaderProps: CascaderProps = {
-  lazy: true,
-  checkStrictly: true,
-  lazyLoad: crsCascaderLazyLoad('exclusion'),
+  lazyLoad: crsGroupCascaderLazyLoad,
 }
 
 // 存储值 → 级联路径：两位组号 → [组号]（组须在对应侧可选组列表内）；6 位规则 ID
 // → [组号, 规则ID]（组号由索引条目文件名解析，且该组节点存在）。无法映射（陈旧
-// ID/遗留文件名/索引未就绪/被剔除口径的值）返回 null——多选侧交 ghost 标签、单选
-// 侧交 ghost 文本兜底，均不进入级联值，写回时原样保留（存储契约不变）。
+// ID/遗留文件名/索引未就绪/被剔除口径的值）返回 null——group 侧（crs_rule_groups
+// 桥接）不可映射值交 ghost 标签兜底；exclusion 侧（排除行 ghost 判定）返回空
+// ghost，可映射值视为已知目标不再提示。
+type CrsCascaderSide = 'group' | 'exclusion'
 const crsValueToPath = (value: string, side: CrsCascaderSide): string[] | null => {
   const v = value.trim()
   if (v === '') return null
@@ -2050,21 +2058,17 @@ const crsGroupCascaderValue = computed<string[][]>({
   },
 })
 
-// 排除行单选级联回填：已存 target 能映射路径则显示路径解析标签，否则留空交 ghost 文本
-const exclusionTargetPath = (target: string): string[] => crsValueToPath(target, 'exclusion') ?? []
-
-// 单选 + checkStrictly（emitPath 默认 true）：值为路径数组，取末段（组号或规则 ID）写入 target
-// el-cascader 的 update:model-value 载荷含 null（清空），与 undefined 同义
-const onExclusionTargetChange = (row: CrsExcludedRow, value: CascaderValue | null | undefined): void => {
-  if (!Array.isArray(value) || value.length === 0) { row.target = ''; return }
-  const leaf = value[value.length - 1]
-  row.target = typeof leaf === 'string' ? leaf : ''
+// 排除目标建议源：el-autocomplete 每次输入回调（自带 300ms 防抖）——目录已加载
+// 则过滤（id 数字前缀 ∪ msg 关键字，≤50 条）；未加载/加载失败时目录为空，回调
+// 空建议 = 输入框退化为纯自由输入，不阻塞。
+const fetchExclusionSuggestions = (queryString: string, cb: (items: CrsDirectorySuggestion[]) => void): void => {
+  cb(searchCrsDirectory(queryString))
 }
 
 // ================= 排除规则行编辑器 =================
 const addExcludedRule = (): void => {
   if (crsExcludedRows.value.length >= CRS_EXCLUDED_MAX_ROWS) return
-  crsExcludedRows.value.push({ target: '', scope: 'all', ips: [], listRefs: [] })
+  crsExcludedRows.value.push({ target: '', scope: 'all', ips: [], listRefs: [], path: '' })
 }
 
 const removeExcludedRule = (idx: number): void => {
@@ -2094,27 +2098,32 @@ const exclusionRowConflict = (row: CrsExcludedRow): string => {
   return /^\d{2}$/.test(target) ? '冗余：排除优先生效' : '与规则组选择矛盾（排除优先）'
 }
 
-// 提交口径：全空行（无目标且无条件）静默丢弃，其余按 target+scope+ips+listRefs 去重
+// 提交口径：全空行（无目标且无条件）静默丢弃，其余按 target+scope+ips+listRefs+path 去重
 // 作用域切换清残留——否则 scope=all 残留 ips 保存 400，
 // scope=list 残留 ips 被静默并入匹配集（语义漂移且 UI 不可见）。
 const onScopeChange = (row: CrsExcludedRow): void => {
-  if (row.scope === 'all') { row.ips = []; row.listRefs = [] }
-  else if (row.scope === 'ip') { row.listRefs = [] }
-  else if (row.scope === 'list') { row.ips = [] }
+  if (row.scope === 'all') { row.ips = []; row.listRefs = []; row.path = '' }
+  else if (row.scope === 'ip') { row.listRefs = []; row.path = '' }
+  else if (row.scope === 'list') { row.ips = []; row.path = '' }
+  else { row.ips = []; row.listRefs = [] }
 }
 
-const serializedExcludedRules = computed<CrsExcludedRow[]>(() => {
+type SerializedExcludedRow = Omit<CrsExcludedRow, 'path'> & { path?: string }
+const serializedExcludedRules = computed<SerializedExcludedRow[]>(() => {
   const seen = new Set<string>()
-  const out: CrsExcludedRow[] = []
+  const out: SerializedExcludedRow[] = []
   for (const row of crsExcludedRows.value) {
     const target = row.target.trim()
-    if (target === '' && row.ips.length === 0 && row.listRefs.length === 0) continue
-    const key = `${target}\u0000${row.scope}\u0000${row.ips.join(',')}\u0000${row.listRefs.join(',')}`
+    const path = row.path.trim()
+    if (target === '' && row.ips.length === 0 && row.listRefs.length === 0 && path === '') continue
+    const key = `${target}\u0000${row.scope}\u0000${row.ips.join(',')}\u0000${row.listRefs.join(',')}\u0000${path}`
     if (seen.has(key)) continue
     seen.add(key)
     // 序列化按 scope 剥离非当前作用域的残留——
       // 带外数据（scope=all 但 ips 非空）会 400 卡保存。
-      out.push({ target, scope: row.scope,
+      // path 键仅 scope==='path' 携带（其余作用域保持历史形状，payload 字节兼容）
+      if (row.scope === 'path') out.push({ target, scope: row.scope, ips: [], listRefs: [], path })
+      else out.push({ target, scope: row.scope,
         ips: row.scope === 'ip' ? [...row.ips] : [],
         listRefs: row.scope === 'list' ? [...row.listRefs] : [] })
   }
@@ -2123,9 +2132,10 @@ const serializedExcludedRules = computed<CrsExcludedRow[]>(() => {
 
 // 行是否为待校验的有效配置行（非全空行即需通过校验）
 const isFilledExclusionRow = (row: CrsExcludedRow): boolean =>
-  row.target.trim() !== '' || row.ips.length > 0 || row.listRefs.length > 0
+  row.target.trim() !== '' || row.ips.length > 0 || row.listRefs.length > 0 || row.path.trim() !== ''
 
-// 保存/跨步闸门：非空行必须目标齐备，scope=ip 需至少一个 IP，scope=list 需至少一个列表
+// 保存/跨步闸门：非空行必须目标齐备，scope=ip 需至少一个 IP，scope=list 需至少一个列表，
+// scope=path 需非空路径
 const validateExcludedRules = (): boolean => {
   for (let i = 0; i < crsExcludedRows.value.length; i++) {
     const row = crsExcludedRows.value[i]
@@ -2141,6 +2151,24 @@ const validateExcludedRules = (): boolean => {
     if (row.scope === 'list' && row.listRefs.length === 0) {
       ElMessage.error(`第 ${i + 1} 条排除规则（地址列表）未选择列表`)
       return false
+    }
+    if (row.scope === 'path') {
+      const p = row.path.trim()
+      if (p === '') {
+        ElMessage.error(`第 ${i + 1} 条排除规则（路径 URI）未填写路径`)
+        return false
+      }
+      // 与后端 400 规则同口径前置拦截（后端 400 为最终裁决，此处避免保存卡死）：
+      // 必须以 / 开头；≤256 字符（输入框 maxlength 已限，此处兜底）；
+      // 无空白/控制字符/双引号/反斜杠（渲染为 @beginsWith 字面量，含引号会破配置）
+      if (!p.startsWith('/')) {
+        ElMessage.error(`第 ${i + 1} 条排除规则（路径 URI）必须以 / 开头（如 /api/upload）`)
+        return false
+      }
+      if (p.length > 256 || /[\s"'\\]/.test(p) || /[\u0000-\u0008\u000e-\u001f\u007f]/.test(p)) {
+        ElMessage.error(`第 ${i + 1} 条排除规则（路径 URI）含非法字符（空白/控制字符/引号/反斜杠）或超过 256 字符`)
+        return false
+      }
     }
   }
   return true
@@ -2384,6 +2412,7 @@ const ensureBindingDetails = async (caddyIds: string[]): Promise<void> => {
 }
 
 watch(currentStep, (step) => {
+  if (step === WIZARD_STEP.WAF_RULES && dialogVisible.value) void ensureCrsDirectory()
   if (step === WIZARD_STEP.BINDINGS && dialogVisible.value) void ensureBindingDetails(boundRules.value)
 })
 
@@ -3690,6 +3719,13 @@ onMounted(async () => {
    空态不渲染表格：单行紧凑引导（12px 灰调说明 + 添加按钮贴右），
    高度约一行，避免 el-empty 撑高挤占弹框；有条目才渲染表格。 */
 .exclusion-empty { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; width: 100%; }
+/* 排除编辑器外层容器：el-form-item__content 是 flex 列，裸 div 子项收缩到内容
+   自然宽（旧行比同步骤全宽控件窄 ~100px+，2026-11-03 用户验收反馈）——
+   width:100% 填满内容列（与同步骤 cascader/select 全宽控件同机制，不写死 px） */
+.exclusion-body { width: 100%; min-width: 0; }
+/* 表单项内警示条撑满控件列（flex 子项缺省收缩贴内容）；盒模型走全局
+   info-note-bar 规范（padding 8px 12px），此处仅布局不碰样式 */
+.form-item-note-bar { width: 100%; }
 /* 标签行高 32px、small 按钮 24px——按钮下移 4px 使两者中线重合(垂直居中) */
 .exclusion-empty > .el-button { margin-top: 4px; }
 .exclusion-empty-tip { flex: 1; min-width: 0; font-size: 12px; color: #9ca3af; line-height: 1.5; }
@@ -3712,18 +3748,20 @@ onMounted(async () => {
 /* 行级矛盾提示（与规则组选择冲突/冗余）：不占布局流的行内警告图标，tooltip 悬浮
    展示全文；固定 16px 宽度占位稳定，出现/消失不推移其他控件 */
 .exclusion-row-cell :deep(.exclusion-conflict-icon) { flex: 0 0 auto; font-size: 16px; color: #e6a23c; cursor: help; vertical-align: middle; }
-/* 作用域 radios 自然紧凑宽；条件控件内联其后，条件区为恒定槽位——三态（ip 标签
-   输入 / list 选择器 / all 灰字短提示）同 flex 规格（1 1 240、min 200；ip max
-   320、list/all max 280），切换作用域不改变剩余空间分配，cascader 宽度与
-   radios 位置恒定不抖动；控件统一 small（24px）与 cascader 同高。ip/list 给确定
-   flex-basis（240px）而非 auto：el-select 根元素默认 width:100%
+/* 作用域 radios 自然紧凑宽；条件控件内联其后，条件区为恒定槽位——四态（ip 标签
+   输入 / list 选择器 / path 前缀输入 / all 灰字短提示）同 flex 规格（1 1 200、
+   min 160；ip/path max 300、list/all max 240），切换作用域不改变剩余空间分配，
+   目标输入宽与 radios 位置恒定不抖动；控件统一 small（24px）与目标输入同高。
+   ip/list 给确定 flex-basis（200px）而非 auto：el-select 根元素默认 width:100%
    （--el-select-width），basis:auto 会以整行宽参与 flex 折行判定（clamp 到
-   max-width 280），行宽不足时被提前折到第二行 */
+   max-width 240），行宽不足时被提前折到第二行 */
 .exclusion-row-cell :deep(.exclusion-scope-radios) { flex: 0 0 auto; }
 .exclusion-row-cell :deep(.exclusion-scope-radios .el-radio) { margin-right: 8px; }
 .exclusion-row-cell :deep(.exclusion-scope-radios .el-radio:last-child) { margin-right: 0; }
 .exclusion-row-cell :deep(.exclusion-scope-control-ip) { flex: 1 1 200px; min-width: 160px; max-width: 300px; }
 .exclusion-row-cell :deep(.exclusion-scope-control-list) { flex: 1 1 200px; min-width: 160px; max-width: 240px; }
+/* path 前缀输入与 ip 标签输入同一 flex 规格（四态条件区同槽位，切换作用域不抖动） */
+.exclusion-row-cell :deep(.exclusion-scope-control-path) { flex: 1 1 200px; min-width: 160px; max-width: 300px; }
 .exclusion-row-cell :deep(.exclusion-scope-all) { flex: 1 1 200px; min-width: 160px; max-width: 240px; font-size: 12px; color: #9ca3af; white-space: nowrap; }
 /* ghost 兜底标签容器（crs_rule_groups 下方，普通 div） */
 .crs-ghost-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
@@ -3938,6 +3976,11 @@ onMounted(async () => {
 
 /* el-cascader 懒加载面板（teleported 到 body）：菜单放宽，给两行规则叶与组 label 留足宽度 */
 .crs-rule-popper .el-cascader-menu { min-width: 260px; }
+/* 排除目标自动补全（el-autocomplete，面板 teleported 到 body）：两列建议——左列
+   规则 ID 定宽等宽字体，右列「描述（文件名）」单行省略；item 内建 title 悬浮全文 */
+.crs-rule-popper .crs-rule-suggestion { display: flex; align-items: baseline; gap: 10px; padding: 2px 0; }
+.crs-rule-popper .crs-rule-suggestion-id { flex: 0 0 auto; min-width: 52px; font-family: monospace; font-size: 13px; color: #1f2937; }
+.crs-rule-popper .crs-rule-suggestion-desc { flex: 1 1 auto; min-width: 0; font-size: 12px; color: #6b7280; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* 两行规则叶节点：el-cascader-node 默认 34px 定高 / label 单行省略会裁切副行——
    含 .crs-rule-option 的节点覆写为高度自适应 + label 允许换行；单行组节点不受影响 */
 .crs-rule-popper .el-cascader-node:has(.crs-rule-option) { height: auto; line-height: 1.4; padding-top: 5px; padding-bottom: 5px; }

@@ -53,3 +53,27 @@ test('安全总览 Top10 源 IP 展示近 10 分钟/近 1 小时/近 24 小时�
   assert.match(page, /label="IP 地址" min-width="160"/, 'IP 地址列让宽到 160（原 200）')
   assert.match(page, /label="攻击类型" min-width="140"/, '攻击类型列让宽到 140（原 180）')
 })
+
+test('策略向导 WAF 步骤：排除行撑满内容列，记录请求体警示条对齐控件列（2026-11-03 用户验收反馈）', () => {
+  const page = code('src/views/security/SecurityPolicies.vue')
+
+  // 1) 排除规则行编辑器外层容器必须撑满表单内容列：el-form-item__content 是 flex
+  //    容器，裸 div 子项收缩到内容自然宽（旧行 ~1030px，比同步骤全宽控件窄）。
+  //    宽度机制与同步骤全宽控件同源（width:100% 填内容列，不写死 px）。
+  assert.match(page, /<div class="exclusion-body">/, '排除编辑器必须有撑满容器类')
+  assert.equal(cssDeclarations(page, '.exclusion-body').get('width'), '100%', '排除容器必须撑满内容列')
+  assert.equal(cssDeclarations(page, '.exclusion-body').get('min-width'), '0', 'flex 子项收缩防溢出')
+
+  // 2) 记录请求体警示条必须挂在「记录请求体」带标签表单项内（EP 表单 flex 行中
+  //    无标签项内容从行首起渲染，比控件列宽 ~100px、左缘贴弹框内容边）——
+  //    移入带标签项后宽度自然对齐控件列；样式主体走全局 info-note-bar（padding
+  //    8px 12px 由全局类提供，禁止本地重定义）。
+  const item = section(page, 'label="记录请求体"', '</el-form-item>')
+  assert.match(item, /<el-switch v-model="form\.log_request_body"/, '开关必须仍在原表单项')
+  assert.match(item, /class="form-tip-line"/, '控件说明行必须保留')
+  assert.match(item, /v-if="form\.log_request_body"[^>]*class="info-note-bar form-item-note-bar"/, '警示条必须移入带标签表单项内')
+  assert.match(item, /请仅在排障期间开启/, '警示文案必须保留')
+  // 全局规范不被局部覆写：本文件不得重定义 info-note-bar 的盒模型
+  assert.doesNotMatch(page, /\.info-note-bar[^{]*\{[^}]*padding/, 'info-note-bar 内边距必须走全局规范，禁局部覆写')
+  assert.equal(cssDeclarations(page, '.form-item-note-bar').get('width'), '100%', '警示条必须撑满控件列')
+})

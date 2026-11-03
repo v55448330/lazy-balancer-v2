@@ -12,9 +12,10 @@
 interface SessionSingleFlight {
   readonly ensure: (session: number) => Promise<void>
   readonly loadedSession: () => number | null
-  /** 诊断/测试用：生产代码零消费（用于验证「新会话已登记」的单飞语义）。 */
+  /** 最近一次 start 登记的会话号（未发起时 null）：join 在途/失败重试同会话用
+   *  （useCrsRuleDirectory 惰性取索引复用会话，避免另发新会话作废在途请求）。 */
   readonly requestedSession: () => number | null
-  /** 诊断/测试用：生产代码零消费（加载态由 onLoadingChange 提供给 UI）。 */
+  /** 诊断/测试用：加载态由 onLoadingChange 提供给 UI。 */
   readonly isInflight: () => boolean
 }
 

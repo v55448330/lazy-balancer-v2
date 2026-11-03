@@ -100,8 +100,16 @@ test('文档钉：轮询诊断 API 与生产守卫分离（无消费面必须标
   assert.match(isDisposedDoc, /诊断\/测试用/, 'isDisposed 必须标注为诊断/测试用')
   assert.match(code('src/composables/usePollingTask.ts'), /isDisposed/, 'isDisposed 必须存在')
   const flightDoc = source('src/utils/sessionSingleFlight.ts')
+  // requestedSession 已有生产消费方（useCrsRuleDirectory join 在途/失败重试同会话，
+  // 2026-11-03 排除目标目录改接 rule-index 索引单例）——文档必须点名消费方，
+  // 读者不得误判为无生产调用面；isInflight 仍生产零消费，保留「诊断/测试用」标注
+  //（无消费面必须标注用途的不变量逐成员适用，同 isDisposed 模式取本符号紧邻注释）。
+  const requestedAt = flightDoc.indexOf('readonly requestedSession')
+  assert.ok(requestedAt > 0, 'requestedSession 必须存在')
+  const requestedDoc = flightDoc.slice(flightDoc.lastIndexOf('/**', requestedAt), requestedAt)
+  assert.match(requestedDoc, /\/\*\*(?:(?!\*\/)[\s\S])*\*\/\s*$/, 'requestedSession 的文档注释必须紧邻声明')
+  assert.match(requestedDoc, /useCrsRuleDirectory/, 'requestedSession 文档必须点名生产消费方')
   const requestBlock = section(flightDoc, 'interface SessionSingleFlight', '\n}')
-  assert.match(requestBlock, /诊断\/测试用[\s\S]*requestedSession/)
   assert.match(requestBlock, /诊断\/测试用[\s\S]*isInflight/)
 })
 

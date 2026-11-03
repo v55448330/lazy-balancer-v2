@@ -26,6 +26,7 @@ const CRS_INFRA_ID_PREFIXES = ['901', '949', '959']
 
 export const isInfraRuleId = (id: string): boolean => CRS_INFRA_ID_PREFIXES.some((prefix) => id.startsWith(prefix))
 
+/** 初始化规则 ID（901xxx）：排除目标不得提供（后端硬拒，提供即必现 400） */
 export const isInitRuleId = (id: string): boolean => id.startsWith('901')
 
 /**

@@ -1542,9 +1542,9 @@ func validateCRSExcludedRulesPayload(val *string, checkIndices bool) error {
 			scope = "all"
 		}
 		switch scope {
-		case "all", "ip", "list":
+		case "all", "ip", "list", "path":
 		default:
-			return fmt.Errorf("crs_excluded_rules 条目 #%d 的 scope 无效：%q（可选：all、ip、list）", i+1, entry.Scope)
+			return fmt.Errorf("crs_excluded_rules 条目 #%d 的 scope 无效：%q（可选：all、ip、list、path）", i+1, entry.Scope)
 		}
 		if services.IsCRSGroupCode(target) {
 			if checkIndices {
@@ -1590,6 +1590,27 @@ func validateCRSExcludedRulesPayload(val *string, checkIndices bool) error {
 		case "all":
 			if ips != "" || len(entry.ListRefs) > 0 {
 				return fmt.Errorf("crs_excluded_rules 条目 #%d：scope=all 不允许携带 ips/listRefs", i+1)
+			}
+		case "path":
+			// path 作用域：path 必填、以 / 开头、≤256 字符、无空白/控制字符/
+			// 双引号/反斜杠（双引号/反斜杠是 seclang 注入门——path 逐字拼进
+			// "@beginsWith <path>" 操作数）；ips/listRefs 与 scope=all 同口径
+			// 拒绝（渲染端不消费，落库即静默死数据）。形态真值与渲染守卫共用
+			// services.ValidCRSExclusionPath。
+			if entry.Path == "" {
+				return fmt.Errorf("crs_excluded_rules 条目 #%d：scope=path 必须填写 path（URL 路径前缀）", i+1)
+			}
+			if !strings.HasPrefix(entry.Path, "/") {
+				return fmt.Errorf("crs_excluded_rules 条目 #%d：path 必须以 / 开头：%q", i+1, entry.Path)
+			}
+			if utf8.RuneCountInString(entry.Path) > services.CRSExclusionPathMaxRunes {
+				return fmt.Errorf("crs_excluded_rules 条目 #%d：path 不能超过 %d 字符（当前 %d）", i+1, services.CRSExclusionPathMaxRunes, utf8.RuneCountInString(entry.Path))
+			}
+			if !services.ValidCRSExclusionPath(entry.Path) {
+				return fmt.Errorf("crs_excluded_rules 条目 #%d：path 不能包含空白/控制字符、双引号或反斜杠：%q", i+1, entry.Path)
+			}
+			if ips != "" || len(entry.ListRefs) > 0 {
+				return fmt.Errorf("crs_excluded_rules 条目 #%d：scope=path 不允许携带 ips/listRefs", i+1)
 			}
 		}
 		for _, item := range strings.Split(entry.IPs, ",") {

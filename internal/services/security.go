@@ -16,6 +16,8 @@ import (
 	"strconv"
 	"strings"
 	"sync/atomic"
+	"unicode"
+	"unicode/utf8"
 
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
@@ -614,6 +616,7 @@ func buildCorazaDirectivesWithIndex(p *models.SecurityPolicy, store caddyConfigS
 		// 第四轮把整个块搬到 Include 前修好了 ctl 却弄坏了配置期。
 		// 作用域限定（ip/list）条目收集后统一发射：列表引用需单批解析，合并去重。
 		var scoped []CRSExcludedEntry
+		var pathScoped []CRSExcludedEntry
 		var scopeAllTargets []string
 		excludedEntries := ParseCRSExcludedRules(string(p.CRSExcludedRules))
 		if len(excludedEntries) == 0 {
@@ -654,6 +657,10 @@ func buildCorazaDirectivesWithIndex(p *models.SecurityPolicy, store caddyConfigS
 				scoped = append(scoped, entry)
 				continue
 			}
+			if entry.Scope == "path" {
+				pathScoped = append(pathScoped, entry)
+				continue
+			}
 			// 渲染守卫：未知 scope（带外直写/旧版快照可绕过写侧白名单）不得
 			// 静默降级为 scope=all——那是「对所有客户端删除该规则」，WAF 保护面
 			// 静默扩大。跳过方向安全（排除减少=拦截更多）。
@@ -679,9 +686,16 @@ func buildCorazaDirectivesWithIndex(p *models.SecurityPolicy, store caddyConfigS
 			}
 			scopeAllTargets = append(scopeAllTargets, mapped)
 		}
-		// 运行时 ctl 规则：Include 之前（先于被禁规则插入 phase:1 序列）
+		// 运行时 ctl 规则：Include 之前（先于被禁规则插入 phase:1 序列）。
+		// ip/list 与 path 两族共享同一发射行预算（超预算截断方向安全：少排除=拦截更多）。
+		budget := 0
 		if len(scoped) > 0 {
-			if err := emitScopedCRSExclusions(&sb, p, scoped, store, chainIndex, scopedCache); err != nil {
+			if err := emitScopedCRSExclusions(&sb, p, scoped, store, chainIndex, scopedCache, &budget); err != nil {
+				return "", err
+			}
+		}
+		if len(pathScoped) > 0 {
+			if err := emitPathScopedCRSExclusions(&sb, p, pathScoped, chainIndex, &budget); err != nil {
 				return "", err
 			}
 		}
@@ -2631,7 +2645,7 @@ func crsFilenameToRuleIDRange(s string) string {
 // 格式无上限，保持现状兼容；50 条上限口径）。
 const CRSExcludedRulesMaxEntries = 50
 
-// crsScopedExclusionMaxDirectives 是单策略作用域排除（scope=ip/list）的
+// crsScopedExclusionMaxDirectives 是单策略作用域排除（scope=ip/list/path）的
 // ctl:ruleRemoveById 发射行预算。条目数上限挡不住组号展开：每条两位组号
 // target 会展开为该组全部规则 ID（CRS 一组数百条），50 条组号条目即可产出
 // 数万行。行预算按展开后的真实行数截断——带外/旧快照写入不得把生成期行数
@@ -2692,14 +2706,17 @@ func CRSStaleGroupSelections(raw json.RawMessage, index *CRSRuleIndex) bool {
 
 // CRSExcludedEntry 是 crs_excluded_rules 列的归一化单条：Target 为两位组号
 // （"42"）、6 位 CRS 规则 ID（"942100"）或遗留文件名/区间形态（仅 scope=all）；
-// Scope 为 "all"（全量排除，走 SecRuleRemoveById 现状路径）或 "ip"/"list"
-// （作用域限定，仅命中 IPs ∪ ListRefs 条目的客户端跳过排除）；IPs 为逗号
-// 分隔的 IP/CIDR；ListRefs 引用 security_ip_lists id。
+// Scope 为 "all"（全量排除，走 SecRuleRemoveById 现状路径）、"ip"/"list"
+// （作用域限定，仅命中 IPs ∪ ListRefs 条目的客户端跳过排除）或 "path"
+// （路径前缀排除，仅 REQUEST_URI 以 Path 为前缀的请求跳过排除，@beginsWith）；
+// IPs 为逗号分隔的 IP/CIDR；ListRefs 引用 security_ip_lists id；Path 仅在
+// scope=="path" 时有意义。
 type CRSExcludedEntry struct {
 	Target   string  `json:"target"`
 	Scope    string  `json:"scope"`
 	IPs      string  `json:"ips"`
 	ListRefs []int64 `json:"listRefs"`
+	Path     string  `json:"path"`
 }
 
 // UnmarshalJSON/MarshalJSON 双向兼容 ips 形态（v2.2.2 契约漂移修复）：
@@ -2717,12 +2734,13 @@ func (e *CRSExcludedEntry) UnmarshalJSON(data []byte) error {
 		Scope    string   `json:"scope"`
 		IPs      []string `json:"ips"`
 		ListRefs []int64  `json:"listRefs"`
+		Path     string   `json:"path"`
 	}
 	var b arrayForm
 	if err := json.Unmarshal(data, &b); err != nil {
 		return err
 	}
-	*e = CRSExcludedEntry{Target: b.Target, Scope: b.Scope, IPs: strings.Join(b.IPs, ","), ListRefs: b.ListRefs}
+	*e = CRSExcludedEntry{Target: b.Target, Scope: b.Scope, IPs: strings.Join(b.IPs, ","), ListRefs: b.ListRefs, Path: b.Path}
 	return nil
 }
 
@@ -2741,6 +2759,7 @@ func (e CRSExcludedEntry) MarshalJSON() ([]byte, error) {
 		"scope":    e.Scope,
 		"ips":      ips,
 		"listRefs": e.ListRefs,
+		"path":     e.Path,
 	})
 }
 
@@ -2765,7 +2784,7 @@ func allDigits(s string) bool {
 
 // ParseCRSExcludedRules 读侧双格式归一：旧 []string（文件名/6 位 ID/区间）每条
 // 归一为 {target, scope:"all"}（保留原始条目顺序与重复，发射等价于旧实现）；
-// 新 []对象 缺省 scope 补 "all"、完全相同 {target,scope,ips,listRefs} 条目去重。
+// 新 []对象 缺省 scope 补 "all"、完全相同 {target,scope,ips,listRefs,path} 条目去重。
 // 空串/纯空白与任何解析失败均按空处理（nil）——防御旧/坏数据（集群同步/带外
 // 改库/降级版本写入的载荷），绝不让策略发射失败。
 func ParseCRSExcludedRules(raw string) []CRSExcludedEntry {
@@ -2809,7 +2828,7 @@ func dedupeCRSExcludedEntries(entries []CRSExcludedEntry) []CRSExcludedEntry {
 	for _, entry := range entries {
 		refs := append([]int64{}, entry.ListRefs...)
 		sort.Slice(refs, func(i, j int) bool { return refs[i] < refs[j] })
-		key := entry.Target + "\x00" + entry.Scope + "\x00" + entry.IPs + "\x00" + fmt.Sprint(refs)
+		key := entry.Target + "\x00" + entry.Scope + "\x00" + entry.IPs + "\x00" + entry.Path + "\x00" + fmt.Sprint(refs)
 		if _, dup := seen[key]; dup {
 			continue
 		}
@@ -2845,7 +2864,7 @@ const crsScopedExclusionIDBase = 2000000
 // 排序后 listRefs，同名必同键、异键必异名，键不变则文件名稳定（名单条目
 // 内容变化热路径原位重写，@ipListFast ≤1s stat 热感知），键变化才换名（旧
 // 文件由 24h GC 回收）。同组合多条目共享一份投影（配置字节恒定）。
-func emitScopedCRSExclusions(sb *strings.Builder, p *models.SecurityPolicy, entries []CRSExcludedEntry, store caddyConfigStore, chainIndex func() *CRSRuleIndex, cache scopedCRSListCache) error {
+func emitScopedCRSExclusions(sb *strings.Builder, p *models.SecurityPolicy, entries []CRSExcludedEntry, store caddyConfigStore, chainIndex func() *CRSRuleIndex, cache scopedCRSListCache, budget *int) error {
 	var refIDs []int64
 	seenRef := make(map[int64]struct{})
 	for _, entry := range entries {
@@ -2881,7 +2900,6 @@ func emitScopedCRSExclusions(sb *strings.Builder, p *models.SecurityPolicy, entr
 		listsByID = map[int64][]string{}
 	}
 	index := chainIndex() // 复审：M4 惰性化漏改，改用链级一次取值
-	seq := 0
 	operandByMatchKey := make(map[string]string)
 	for _, entry := range entries {
 		match := make([]string, 0, 4)
@@ -2929,15 +2947,65 @@ func emitScopedCRSExclusions(sb *strings.Builder, p *models.SecurityPolicy, entr
 			operandByMatchKey[matchKey] = operand
 		}
 		for _, id := range expandCRSScopedExclusionTargets(entry.Target, index, p) {
-			if seq >= crsScopedExclusionMaxDirectives {
+			if *budget >= crsScopedExclusionMaxDirectives {
 				if msg := fmt.Sprintf("策略 %q 的作用域排除展开行数达到上限 %d，其余排除不再发射（少排除=拦截更多，方向安全）", p.Name, crsScopedExclusionMaxDirectives); auditFailureShouldLog(msg) {
 					Logf("warn", "%s", msg)
 				}
 				return nil
 			}
-			seq++
+			*budget++
 			sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"%s\" \"id:%d,phase:1,pass,nolog,ctl:ruleRemoveById=%s\"\n",
-				operand, crsScopedExclusionIDBase+seq, id))
+				operand, crsScopedExclusionIDBase+*budget, id))
+		}
+	}
+	return nil
+}
+
+// CRSExclusionPathMaxRunes 单条 path 的字符上限（写入面 400 与渲染守卫同源）。
+const CRSExclusionPathMaxRunes = 256
+
+// ValidCRSExclusionPath 是 scope=path 条目 path 字段的单一形态真值（写侧 400
+// 与渲染守卫共用）：必填、以 / 开头、≤256 字符、无空白/控制字符、无双引号或
+// 反斜杠。双引号/反斜杠拒绝是 seclang 注入门——path 逐字拼进带引号的
+// "@beginsWith <path>" 操作数，任一引入即可越出引号注入任意动作串。
+func ValidCRSExclusionPath(path string) bool {
+	if path == "" || !strings.HasPrefix(path, "/") || utf8.RuneCountInString(path) > CRSExclusionPathMaxRunes {
+		return false
+	}
+	for _, r := range path {
+		if r < 0x20 || r == 0x7f || unicode.IsSpace(r) || r == '"' || r == '\\' {
+			return false
+		}
+	}
+	return true
+}
+
+// emitPathScopedCRSExclusions 发射路径前缀作用域（scope=path）的排除条目：
+// SecRule REQUEST_URI "@beginsWith <path>" "id:<同族引擎id>,phase:1,pass,nolog,
+// ctl:ruleRemoveById=<mapped>"。与 ip/list 同段（crsScopedExclusionIDBase）共享
+// *budget 发射行预算，target 复用 expandCRSScopedExclusionTargets 同一展开
+// （逐 ID、陈旧过滤）。phase:1 + nolog：仅打运行时标记，不产事件噪音；REQUEST_URI
+// 含查询串（path+query），前缀匹配天然覆盖同路径任意查询。非法 path（带外直写
+// 可绕过写侧）跳过+warn——少排除=拦截更多，方向安全。
+func emitPathScopedCRSExclusions(sb *strings.Builder, p *models.SecurityPolicy, entries []CRSExcludedEntry, chainIndex func() *CRSRuleIndex, budget *int) error {
+	index := chainIndex()
+	for _, entry := range entries {
+		if !ValidCRSExclusionPath(entry.Path) {
+			if msg := fmt.Sprintf("跳过非法 path 的 CRS 排除条目 %q（path=%q，策略 %q）：path 必填、以 / 开头、≤256 字符且不含空白/控制字符/双引号/反斜杠", entry.Target, entry.Path, p.Name); auditFailureShouldLog(msg) {
+				Logf("warn", "%s", msg)
+			}
+			continue
+		}
+		for _, id := range expandCRSScopedExclusionTargets(entry.Target, index, p) {
+			if *budget >= crsScopedExclusionMaxDirectives {
+				if msg := fmt.Sprintf("策略 %q 的作用域排除展开行数达到上限 %d，其余排除不再发射（少排除=拦截更多，方向安全）", p.Name, crsScopedExclusionMaxDirectives); auditFailureShouldLog(msg) {
+					Logf("warn", "%s", msg)
+				}
+				return nil
+			}
+			*budget++
+			sb.WriteString(fmt.Sprintf("SecRule REQUEST_URI \"@beginsWith %s\" \"id:%d,phase:1,pass,nolog,ctl:ruleRemoveById=%s\"\n",
+				entry.Path, crsScopedExclusionIDBase+*budget, id))
 		}
 	}
 	return nil

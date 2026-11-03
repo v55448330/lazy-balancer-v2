@@ -1,5 +1,6 @@
 import { computed, ref } from 'vue'
 import { request } from '@/utils/api'
+import { isInitRuleId } from '@/utils/crsGroups'
 import { normalizeStringEntries } from '@/utils/securityStages'
 import { createSessionSingleFlight } from '@/utils/sessionSingleFlight'
 import type { APIResponse } from '@/types'
@@ -47,12 +48,14 @@ export const crsRuleLabelView = (entry: Pick<CrsRuleIndexEntry, 'msg' | 'categor
 }
 
 /** 策略字段 crs_excluded_rules 的行形状（存储：对象数组 JSON 文本） */
-type CrsExclusionScope = 'all' | 'ip' | 'list'
+type CrsExclusionScope = 'all' | 'ip' | 'list' | 'path'
 export interface CrsExcludedRow {
   target: string
   scope: CrsExclusionScope
   ips: string[]
   listRefs: number[]
+  /** 仅 scope==='path' 有意义：URI 前缀（@beginsWith 渲染），上限 256 字符 */
+  path: string
 }
 
 /** 排除规则行数上限（与向导编辑器/事件快捷排除同一条上限） */
@@ -60,9 +63,10 @@ export const CRS_EXCLUDED_MAX_ROWS = 50
 
 /**
  * crs_excluded_rules 载荷容错解析（读侧统一归一为数组形态，写侧另行转线上形态）：
- * - 对象数组 [{target,scope,ips,listRefs}]：字段缺失/形状异常按空值兜底，target 空的行丢弃；
+ * - 对象数组 [{target,scope,ips,listRefs,path}]：字段缺失/形状异常按空值兜底，target 空的行丢弃；
  *   ips 兼容两种形态——逗号分隔字符串（后端 CRSExcludedEntry 契约/落库形态）与数组
- *   （前端内存形态），读侧一律归一为数组；
+ *   （前端内存形态），读侧一律归一为数组；path 仅 scope==='path' 消费（读侧截到
+ *   256 字符，与编辑器 maxlength 同口径），其余作用域一律归一为空串；
  * - 旧字符串数组（存储：CRS 文件名/纯数字 ID/区间）：归一为 scope:'all' 行，
  *   target 原样保留（后端 SecRuleRemoveById 兼容文件名/纯数字/区间三种形态）。
  */
@@ -79,14 +83,14 @@ export const parseCrsExcludedRules = (raw: string | undefined | null): CrsExclud
   for (const item of parsed) {
     if (typeof item === 'string') {
       const target = item.trim()
-      if (target !== '') rows.push({ target, scope: 'all', ips: [], listRefs: [] })
+      if (target !== '') rows.push({ target, scope: 'all', ips: [], listRefs: [], path: '' })
       continue
     }
     if (typeof item !== 'object' || item === null) continue
     const rec = item as Record<string, unknown>
     const target = typeof rec.target === 'string' ? rec.target.trim() : ''
     if (target === '') continue
-    const scope: CrsExclusionScope = rec.scope === 'ip' || rec.scope === 'list' ? rec.scope : 'all'
+    const scope: CrsExclusionScope = rec.scope === 'ip' || rec.scope === 'list' || rec.scope === 'path' ? rec.scope : 'all'
     // 后端契约 ips 为逗号分隔字符串（"1.1.1.1,10.0.0.0/8"）；数组形态一并兼容
     const ips = Array.isArray(rec.ips)
       ? normalizeStringEntries(rec.ips)
@@ -96,7 +100,9 @@ export const parseCrsExcludedRules = (raw: string | undefined | null): CrsExclud
     const listRefs = Array.isArray(rec.listRefs)
       ? rec.listRefs.map(Number).filter((n) => Number.isInteger(n) && n > 0)
       : []
-    rows.push({ target, scope, ips, listRefs })
+    // 仅 scope=path 消费 path（截 256 与编辑器 maxlength 同口径）；非 path 作用域一律空串
+    const path = scope === 'path' && typeof rec.path === 'string' ? rec.path.trim().slice(0, 256) : ''
+    rows.push({ target, scope, ips, listRefs, path })
   }
   return rows
 }
@@ -193,3 +199,78 @@ export const useCrsRuleIndex = () => {
 
   return { loading, loaded, byId, options, ensureForDialog }
 }
+
+// —— CRS 排除目标目录（数据源 = 既有端点 GET /security/crs/rule-index）——
+// 与规则组级联同一份索引单例（约 832 条，id 为字符串数字、按 id 升序，含
+// msg/file/category）：零独立请求、零重复内存——目录搜索只是共享索引上的过滤视图。
+// 2026-11-03 裁定：独立目录端点 /security/crs-rules 为冗余重复，已退役。
+
+/** 目录条目（rule-index 规则叶子集形状；category 供描述兜底） */
+export interface CrsDirectoryEntry {
+  readonly id: string
+  readonly msg: string
+  readonly file: string
+  readonly category?: string
+}
+
+/** el-autocomplete 建议项：value 回填输入框（索引 id 字符串，默认 value-key='value'） */
+export interface CrsDirectorySuggestion {
+  value: string
+  /** 截断版描述（≤48 字符，复用 crsRuleLabelView 口径） */
+  label: string
+  file: string
+  /** 不截断全文（title 悬浮用） */
+  fullMsg: string
+}
+
+/** 建议条数上限（契约口径：过滤后最多 50 条） */
+const CRS_DIRECTORY_SUGGESTION_LIMIT = 50
+
+/**
+ * 目录建议过滤：id 字符串数字前缀（"942" → 942100/942110…）∪ msg 关键字（不分
+ * 大小写）命中其一即纳入，保持索引 id 升序，上限 limit（默认 50）；空查询返回
+ * 空建议（不弹全量列表）。901 初始化规则不出建议——后端硬拒提供（老级联剔除
+ * 口径延续）；949/959 评估规则保留可选（拦截模式另有 blockingEvalExclusionAlert）。
+ */
+export const filterCrsDirectorySuggestions = (
+  entries: readonly CrsDirectoryEntry[],
+  query: string,
+  limit = CRS_DIRECTORY_SUGGESTION_LIMIT,
+): CrsDirectorySuggestion[] => {
+  const q = query.trim().toLowerCase()
+  if (q === '') return []
+  const out: CrsDirectorySuggestion[] = []
+  for (const entry of entries) {
+    if (isInitRuleId(entry.id)) continue
+    const msg = cleanCrsMsg(entry.msg)
+    if (!entry.id.startsWith(q) && !msg.toLowerCase().includes(q)) continue
+    const view = crsRuleLabelView({ msg, category: entry.category ?? '' })
+    out.push({ value: entry.id, label: view.label, file: entry.file, fullMsg: view.fullLabel })
+    if (out.length >= limit) break
+  }
+  return out
+}
+
+/**
+ * 惰性一次取索引（WAF 步骤首次进入触发；失败静默降级）：
+ * - 已加载直接返回（索引由 useCrsRuleIndex 模块级单例承载，对话框打开时的取数
+ *   若已落地则目录零请求）；
+ * - 未加载且有在途/待补会话 → 复用同一 session join（另发新会话会把在途请求
+ *   作废旧会话并链式二次拉取——sessionSingleFlight 语义）；
+ * - 无任何在途 → 发放新会话发起请求；失败不落 loadedSession，下次进入自动重试。
+ * 失败静默降级（silent 请求 + console.warn，不 toast）：目录缺失仅意味着自动
+ * 补全无建议（退化为自由输入，不阻塞排除编辑）。CRS 目录缺失时后端 rules=[]
+ * 不报错，同样落空建议。
+ */
+const ensureCrsDirectory = async (): Promise<void> => {
+  if (loaded.value) return
+  const session = indexLoader.requestedSession() ?? issueCrsIndexSession()
+  await indexLoader.ensure(session)
+}
+
+export const useCrsRuleDirectory = () => ({
+  loaded,
+  ensure: ensureCrsDirectory,
+  search: (query: string, limit = CRS_DIRECTORY_SUGGESTION_LIMIT): CrsDirectorySuggestion[] =>
+    filterCrsDirectorySuggestions(rules.value, query, limit),
+})
