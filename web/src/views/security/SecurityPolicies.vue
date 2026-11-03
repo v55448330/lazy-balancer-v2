@@ -726,18 +726,17 @@
                       >{{ chainChipText(entry, idx) }}</span>
                     </div>
 
-                    <!-- 行内归属提示（触发归因单源 resolveBlockPageAttribution）：
-                         直白表述触发时显示哪张拦截页 / 未配置时兜底到哪条策略的页；
-                         样式走项目 info-note 规范（tone 驱动图标与配色）。 -->
-                    <div v-if="row.attributionNotes.length > 0" class="bound-rule-attribution">
-                      <div v-for="note in row.attributionNotes" :key="note.text" class="info-note-bar bound-rule-attribution-item" :class="`is-${note.tone}`">
-                        <el-icon class="bound-rule-attribution-icon" :size="14"><CircleCheckFilled v-if="note.tone === 'active'" /><InfoFilled v-else /></el-icon>
-                        <span class="info-note-desc">{{ note.text }}</span>
-                      </div>
+                    <!-- 行内归属紧凑标识（两态小标签，用户验收裁定：不再重复整句；
+                         判定走 rowAttributionBadge 单源） -->
+                    <div v-if="row.attributionBadge" class="bound-rule-attribution">
+                      <el-tag size="small" effect="plain" :type="row.attributionBadge.tone === 'active' ? 'success' : 'info'" class="bound-rule-attribution-badge" disable-transitions>{{ row.attributionBadge.text }}</el-tag>
                     </div>
                   </div>
                 </div>
-                <div class="form-tip-line">多策略按绑定顺序依次评估；上移/下移调整执行序，随「保存」生效；拦截页按触发策略归因显示（未配置时兜底到链上首个有页策略）</div>
+                <!-- 标准提示框（用户验收裁定：禁裸文本长说明）+ 归属汇总行（单源派生：
+                     逐条整句收敛为一条汇总） -->
+                <div class="info-note-bar"><span class="info-note-desc">策略按绑定顺序依次触发，先触发的先拦截；顺序调整仅改变触发先后，不影响拦截页归属</span></div>
+                <div class="info-note-bar"><span class="info-note-desc">{{ bindingsSummaryLine }}</span></div>
               </div>
             </el-form-item>
           </el-form>
@@ -746,10 +745,9 @@
         <!-- Step: 拦截页（阶段 1/2/3 策略可配；阶段 2 状态码恒 429——步内隐藏状态码项） -->
         <div v-show="currentStep === WIZARD_STEP.BLOCK_PAGE" class="step-content">
           <div class="stage-projection-bar">
-            <span class="stage-projection-desc">触发哪条策略 → 显示该策略自己配置的拦截页；未配置时兜底显示绑定链首个有页策略的页面（阶段 2 限流 429 恒走兜底路由）</span>
+            <span class="stage-projection-desc">触发本策略拦截时，向客户端返回下方选择的拦截页</span>
             <div class="stage-projection-rules">
-              <span v-if="boundRules.length === 0" class="stage-projection-empty">尚未关联规则</span>
-              <span v-else class="stage-projection-empty">将应用于 {{ boundRules.length }} 条已关联规则</span>
+              <span v-if="boundRules.length > 0" class="stage-projection-empty">已关联 {{ boundRules.length }} 条规则</span>
             </div>
           </div>
           <el-form :model="form" label-width="100px" :disabled="formFrozen">
@@ -760,13 +758,17 @@
               </el-select>
               <div v-if="form.block_page_id === 0" class="form-tip-line">{{ editorPolicyType === 'stage2' ? '不配置拦截页：429 返回空响应体（可选内置「限流拦截页面」）' : '不配置拦截页：本策略触发拦截时兜底显示绑定链首个有页策略的页面；全链无页时返回 Caddy 默认 403' }}</div>
               <div v-else class="form-tip-line">拦截时返回给客户端的自定义页面，在"拦截页面"页面管理，<AccessibleLink type="primary" @click="goToBlockPagesPage">去创建/编辑</AccessibleLink></div>
-              <!-- 拦截页触发归因口径：触发哪条策略显示该策略的页；未配置时兜底绑定链
-                   首个有页策略。逐阶段按后端渲染事实判定（阶段 1 deny 链/阶段 3 逐策略
-                   归因，阶段 2 限流 429 恒走兜底），不再恒渲染绿色「生效中」。 -->
-              <div v-if="boundRuleRows.length > 0" class="block-page-rule-annotations">
-                <div v-for="row in boundRuleRows" :key="row.caddyId" class="block-page-rule-annotation">
-                  <span class="block-page-rule-annotation-name">{{ row.name }}</span>
-                  <span v-for="note in row.blockPageNotes" :key="`${note.kind}:${note.text}`" class="block-page-rule-annotation-status" :class="`is-${note.kind}`">{{ note.text }}</span>
+              <!-- 归属汇总卡（用户验收裁定）：逐条重复提示收敛为单源汇总——主行 +
+                   例外分面（限流/TCP/兜底差异，仅存在才渲染）+ 能力门行；
+                   数据源复用绑定列表与 capableAttributions 单源，不平行实现。 -->
+              <div v-if="blockPageSummary" class="block-page-summary">
+                <div v-for="line in blockPageSummary.lines" :key="line.text" class="info-note-bar block-page-summary-line" :class="`is-${line.tone}`">
+                  <el-icon class="block-page-summary-icon" :size="14">
+                    <CircleCheckFilled v-if="line.tone === 'active'" />
+                    <WarningFilled v-else-if="line.tone === 'warning'" />
+                    <InfoFilled v-else />
+                  </el-icon>
+                  <span class="info-note-desc">{{ line.text }}</span>
                 </div>
               </div>
             </el-form-item>
@@ -1004,8 +1006,7 @@ interface BindingInfo { policy_id: number; name: string; mode: string; enabled: 
 interface RuleBoundPolicy { id: number; name: string; mode: string; enabled: boolean; ip_acl_enabled: boolean; ip_acl_mode: string; crs_rule_groups: unknown; custom_rules: unknown; block_page_id: number }
 interface CustomRuleRef { id: number; action: string }
 interface ChainEntry { policyId: number | null; name: string; enabled: boolean; isSelf: boolean; blockPageId?: number; blockStatusCode?: number }
-interface BlockPageNote { kind: 'active' | 'disabled' | 'warning' | 'info'; text: string }
-interface BoundRuleRow { caddyId: string; name: string; protocol: string; domain: string; listenPort: number; chain: ChainEntry[]; attributionNotes: Array<{ text: string; tone: 'active' | 'info' }>; blockPageNotes: BlockPageNote[]; mergedCount: number; showPerfTip: boolean; hints: string[]; infoHints: string[] }
+interface BoundRuleRow { caddyId: string; name: string; protocol: string; domain: string; listenPort: number; chain: ChainEntry[]; attributionBadge: { text: string; tone: 'active' | 'info' } | null; mergedCount: number; showPerfTip: boolean; hints: string[]; infoHints: string[] }
 interface BlockPage { id: number; name: string; content?: string }
 
 const blockPages = ref<BlockPage[]>([])
@@ -2844,12 +2845,6 @@ const editorBlockPageStages = (): BlockPageStage[] => {
   if (type === 'mixed') return [1, 2, 3]
   return [] // stage0 无拦截页概念
 }
-const inactiveReason = (a: BlockPageAttribution): string => {
-  if (a.effective === 'peer') return `未配置拦截页 → 显示兜底页（首个启用拦截页的策略「${a.winnerName ?? '其他策略'}」）`
-  if (a.stage === 2) return '没有启用限流的策略，不会产生 429'
-  return '绑定链无有效拦截页，拦截回落 Caddy 默认响应'
-}
-
 // 归因输入（单源 resolveBlockPageAttribution 的视图适配）：链序=绑定执行序
 // （buildDisplayChain，兜底扫描按此序取首个有页策略）。stage1DenyContributor
 // 仅 isSelf 消费——本策略是否发射可触发拦截的阶段 1 deny 链（deny 模式 ACL
@@ -2898,70 +2893,79 @@ const capableAttributions = (chain: ChainEntry[]): BlockPageAttribution[] => {
     .map((stage) => resolveBlockPageAttribution(stage, attributionInput(chain)))
 }
 
-const blockPageNotes = (_caddyId: string, chain: ChainEntry[]): BlockPageNote[] => {
-  // 类型门先行：阶段 0 策略没有拦截页概念（向导无该步骤、后端归一
-  // block_page_id=0）——不得为其渲染「未选择自定义页面」等任何页面提示。
-  // 旧顺序先判 block_page_id<=0，stage0 永远命中该分支，类型门不可达。
-  const stages = editorBlockPageStages()
-  if (stages.length === 0) return []
-  if (!form.value.enabled) return [{ kind: 'disabled', text: '策略禁用中，拦截页面不生效' }]
-  const type = editorPolicyType.value
-  if (form.value.block_page_id <= 0) {
-    return [{ kind: 'info', text: type === 'stage2'
-      ? '未选择自定义页面：限流拦截返回空响应体 429'
-      : '未选择自定义页面：本策略触发拦截时兜底显示绑定链首个有页策略的页面；全链无页时返回 Caddy 默认 403' }]
-  }
-  // 页面列表未落地：不做任何生效判定（不得假设页面存在或已删除）
-  if (!blockPagesLoaded.value) {
-    return [{ kind: 'info', text: '拦截页列表未加载成功，无法判定本策略页面是否实际生效' }]
-  }
-  const notes: BlockPageNote[] = []
-  if (!pageHasContent(form.value.block_page_id)) {
-    notes.push({ kind: 'warning', text: '本策略拦截页已失效（页面已删除或内容为空）——保存前请重新选择' })
-  }
+// 关联规则行内归属紧凑标识（两态小标签，用户验收裁定：不再每行重复整句）。
+// 全部适用阶段均 self → 「显示本策略页」；存在兜底/无页 → 「显示兜底页」
+// （兜底目标名进步骤汇总行，行内标签保持短）；未启用/未落地不出标签。
+const rowAttributionBadge = (chain: ChainEntry[]): { text: string; tone: 'active' | 'info' } | null => {
+  if (!form.value.enabled || !blockPagesLoaded.value) return null
   const results = capableAttributions(chain)
-  const active = results.filter((r) => r.effective === 'self').map((r) => r.stage)
-  if (active.length > 0) {
-    // 阶段 2 无归属语义（429 恒走兜底路由）：self 判定=本策略恰为兜底目标。
-    const parts = active.map((s) => s === 2
-      ? '限流触发（429）时：显示本策略配置的拦截页'
-      : `${BLOCK_PAGE_STAGE_LABEL[s]} 触发该策略拦截时：显示本策略配置的拦截页`)
-    notes.push({ kind: 'active', text: `✓ 拦截页面生效中（${parts.join('；')}）` })
-  }
-  for (const r of results.filter((x) => x.effective !== 'self')) {
-    notes.push({ kind: 'warning', text: `${BLOCK_PAGE_STAGE_LABEL[r.stage]}：${inactiveReason(r)}` })
-  }
-  const capableStages = new Set(results.map((r) => r.stage))
-  for (const stage of stages.filter((s) => !capableStages.has(s))) {
-    notes.push({ kind: 'warning', text: `${BLOCK_PAGE_STAGE_LABEL[stage]}：当前配置不会产生该阶段拦截，页面不会被使用` })
-  }
-  return notes
+  if (results.length === 0) return null
+  if (results.every((r) => r.effective === 'self')) return { text: '显示本策略页', tone: 'active' }
+  return { text: '显示兜底页', tone: 'info' }
 }
 
-// 关联规则行内归属提示（触发归因单源；与拦截页步骤注记同一 capableAttributions）。
-// 文案按用户验收裁定直白化；tone 驱动图标/配色（active=生效绿、fallback/none=中性）。
-const attributionNotes = (chain: ChainEntry[]): Array<{ text: string; tone: 'active' | 'info' }> => {
-  const stages = editorBlockPageStages()
-  if (stages.length === 0 || !form.value.enabled || !blockPagesLoaded.value) return []
-  const multi = stages.length > 1
-  const lines: Array<{ text: string; tone: 'active' | 'info' }> = []
-  for (const r of capableAttributions(chain)) {
-    const prefix = multi ? `阶段 ${r.stage}：` : ''
-    if (r.effective === 'self') {
-      lines.push({
-        text: r.stage === 2 ? `${prefix}限流触发（429）时：显示本策略配置的拦截页` : `${prefix}触发该策略拦截时：显示本策略配置的拦截页`,
-        tone: 'active',
-      })
-    } else if (r.effective === 'peer') {
-      lines.push({ text: `${prefix}未配置拦截页 → 显示兜底页（首个启用拦截页的策略「${r.winnerName ?? '其他策略'}」）`, tone: 'info' })
-    } else if (r.stage === 2) {
-      lines.push({ text: `${prefix}不产生 429（无启用限流策略）`, tone: 'info' })
-    } else {
-      lines.push({ text: `${prefix}绑定链无有效拦截页（回落 Caddy 默认 403）`, tone: 'info' })
+// 关联规则步骤归属汇总行（单源派生）：兜底目标名在全部规则一致时点名，否则泛指。
+const bindingsSummaryLine = computed<string>(() => {
+  const total = boundRuleRows.value.length
+  const winners = new Set<string>()
+  for (const row of boundRuleRows.value) {
+    for (const r of capableAttributions(row.chain)) {
+      if (r.effective === 'peer' && r.winnerName) winners.add(r.winnerName)
     }
   }
-  return lines
-}
+  const winnerPart = winners.size === 1 ? `「${[...winners][0] ?? ''}」` : ''
+  return `已关联 ${total} 条规则：触发各策略拦截时，分别显示该策略自己配置的拦截页；未配置拦截页的策略触发时，显示兜底页（首个启用拦截页的策略${winnerPart}）`
+})
+
+// 拦截页步骤归属汇总卡（用户验收裁定：逐条重复提示收敛为主行 + 例外分面 +
+// 能力门行）。数据源复用绑定列表（boundRuleRows 的链）与 capableAttributions
+// 单源，不平行实现。类型门先行：阶段 0 策略无拦截页概念（向导无该步骤、
+// 后端归一 block_page_id=0）——不出任何页面提示。
+const blockPageSummary = computed<{ lines: Array<{ text: string; tone: 'active' | 'info' | 'warning' }> } | null>(() => {
+  const editorStages = editorBlockPageStages()
+  if (editorStages.length === 0) return null
+  const total = boundRuleRows.value.length
+  const lines: Array<{ text: string; tone: 'active' | 'info' | 'warning' }> = []
+  if (total === 0) return { lines: [{ text: '尚未关联规则', tone: 'info' }] }
+  const pageId = form.value.block_page_id
+  const page = pageId > 0 ? blockPages.value.find((p) => p.id === pageId) : undefined
+  const pageName = page?.name ?? `页面 #${pageId}`
+  const pageInvalid = pageId > 0 && blockPagesLoaded.value && blockPageMissing(pageId, blockPages.value, blockPagesLoaded.value)
+  // 主行（触发归因总述；未落地不做生效判定）
+  if (!blockPagesLoaded.value) {
+    lines.push({ text: '拦截页列表未加载成功，无法判定本策略页面是否实际生效', tone: 'info' })
+  } else if (pageId <= 0) {
+    lines.push({ text: editorPolicyType.value === 'stage2'
+      ? `已关联 ${total} 条规则：本策略未配置拦截页——限流拦截返回空响应体 429`
+      : `已关联 ${total} 条规则：本策略未配置拦截页——触发拦截时显示兜底页（绑定链首个启用且有页的策略）`, tone: 'info' })
+  } else if (pageInvalid) {
+    lines.push({ text: `已关联 ${total} 条规则：本拦截页已失效（页面已删除或内容为空），保存前请重新选择`, tone: 'warning' })
+    lines.push({ text: '触发拦截时将显示兜底页（绑定链首个启用且有页的策略）', tone: 'info' })
+  } else {
+    lines.push({ text: `已关联 ${total} 条规则：触发本策略拦截时，均显示本拦截页「${pageName}」`, tone: 'active' })
+  }
+  // 能力门行：页面配置了但当前配置不会产生该阶段拦截 → 页面不会被使用
+  const capableStages = new Set(editorStages.filter((stage) => stageCapableOf(stage)))
+  for (const stage of editorStages.filter((s) => !capableStages.has(s))) {
+    lines.push({ text: `${BLOCK_PAGE_STAGE_LABEL[stage]}：当前配置不会产生该阶段拦截，页面不会被使用`, tone: 'info' })
+  }
+  // 例外分面（按规则归类，仅存在才渲染）：TCP > 限流 > 兜底差异
+  let tcpCount = 0
+  let rateLimitCount = 0
+  let fallbackCount = 0
+  for (const row of boundRuleRows.value) {
+    if (row.protocol === 'tcp') { tcpCount++; continue }
+    // 限流例外仅多阶段编辑器出（纯阶段 2 编辑器的 429 恒定已由状态码区呈现）
+    const rateLimitInPlay = editorStages.length > 1
+      && attributionInput(row.chain).some((p) => p.rateLimitEnabled === true)
+    if (rateLimitInPlay) { rateLimitCount++; continue }
+    if (!pageInvalid && pageId > 0 && capableAttributions(row.chain).some((r) => r.effective === 'peer')) fallbackCount++
+  }
+  if (rateLimitCount > 0) lines.push({ text: `${rateLimitCount} 条限流规则：限流拦截状态码恒为 429（限流页按绑定链首个有页策略显示，不随触发策略变化）`, tone: 'info' })
+  if (tcpCount > 0) lines.push({ text: `${tcpCount} 条 TCP 规则：拦截为断连，不经过拦截页`, tone: 'info' })
+  if (fallbackCount > 0) lines.push({ text: `${fallbackCount} 条规则：其他未配页策略触发时，显示兜底页（首个启用拦截页的策略）`, tone: 'info' })
+  return { lines }
+})
 
 // Step 4 已关联规则的逐条视图：绑定链 + 执行序 + 行内归属提示 + 冲突提示
 const boundRuleRows = computed<BoundRuleRow[]>(() => boundRules.value.map((caddyId) => {
@@ -2992,8 +2996,7 @@ const boundRuleRows = computed<BoundRuleRow[]>(() => boundRules.value.map((caddy
     domain: rule?.domain || '',
     listenPort: rule?.listen_port ?? 0,
     chain,
-    attributionNotes: attributionNotes(chain),
-    blockPageNotes: blockPageNotes(caddyId, chain),
+    attributionBadge: rowAttributionBadge(chain),
     // 性能提示应按实际生效的处理链计——禁用策略不产生处理链，
     // 计入会虚高（提示"超过 3 条可能影响性能"在不达 3 条时误报）。
     mergedCount: enabledEntries.length,
@@ -3789,15 +3792,19 @@ onMounted(async () => {
 .binding-order-chip.is-disabled { opacity: 0.55; text-decoration: line-through; }
 .binding-order-chip.is-trust { background: #ecfdf5; color: #047857; border-color: #a7f3d0; font-weight: 500; }
 
-/* v2.2.0 拦截页面按规则生效状态注释块：跟随 .form-tip-line 的 12px/灰调，
-   仅状态词使用克制的成功/警告/灰着色，避免使用 el-tag 造成视觉噪声。 */
-.block-page-rule-annotations { display: flex; flex-direction: column; gap: 2px; margin-top: 6px; font-size: 12px; line-height: 1.5; color: #9ca3af; width: 100%; }
-.block-page-rule-annotation { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
-.block-page-rule-annotation-name { color: #6b7280; }
-.block-page-rule-annotation-status.is-active { color: #10b981; }
-.block-page-rule-annotation-status.is-warning { color: #d97706; }
-.block-page-rule-annotation-status.is-disabled { color: #9ca3af; }
-.block-page-rule-annotation-status.is-info { color: #6b7280; }
+/* 拦截页归属汇总卡（用户验收裁定：逐条重复提示收敛为主行+例外分面；
+   info-note 全局规范 + tone 修饰，禁局部 hack） */
+.block-page-summary { margin-top: 8px; width: 100%; }
+.block-page-summary-line { display: flex; align-items: flex-start; gap: 6px; margin: 4px 0 0; padding: 6px 10px; }
+.block-page-summary-line:first-child { margin-top: 0; }
+.block-page-summary-line .info-note-desc { font-weight: 500; }
+.block-page-summary-icon { flex: none; margin-top: 2px; color: var(--el-color-info); }
+.block-page-summary-line.is-active { border-style: solid; border-color: var(--el-color-success-light-5); background: var(--el-color-success-light-9); }
+.block-page-summary-line.is-active .block-page-summary-icon { color: var(--el-color-success); }
+.block-page-summary-line.is-active .info-note-desc { color: var(--el-color-success-dark-2); }
+.block-page-summary-line.is-warning { border-style: solid; border-color: var(--el-color-warning-light-5); background: var(--el-color-warning-light-9); }
+.block-page-summary-line.is-warning .block-page-summary-icon { color: var(--el-color-warning); }
+.block-page-summary-line.is-warning .info-note-desc { color: var(--el-color-warning-dark-2); }
 
 .rule-binding-preview { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 2px 0 4px 24px; }
 .rule-binding-landing { font-size: 12px; color: #6b7280; }
@@ -3864,16 +3871,11 @@ onMounted(async () => {
 .stage-projection-rules { flex: 0 0 auto; display: flex; flex-wrap: wrap; gap: 2px 12px; justify-content: flex-end; text-align: right; }
 .stage-projection-empty { color: #9ca3af; line-height: 1.8; }
 
-/* 关联规则行内：执行序上移/下移（暂存随保存提交）+ 归属提示 */
+/* 关联规则行内：执行序上移/下移（暂存随保存提交）+ 归属紧凑标识 */
 .bound-rule-order { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; }
 .bound-rule-order-tag { margin-right: 2px; }
 .bound-rule-attribution { margin-top: 6px; }
-.bound-rule-attribution-item { display: flex; align-items: flex-start; gap: 6px; margin: 4px 0 0; padding: 6px 10px; }
-.bound-rule-attribution-item .info-note-desc { font-weight: 500; }
-.bound-rule-attribution-icon { flex: none; margin-top: 2px; color: var(--el-color-info); }
-.bound-rule-attribution-item.is-active { border-style: solid; border-color: var(--el-color-success-light-5); background: var(--el-color-success-light-9); }
-.bound-rule-attribution-item.is-active .bound-rule-attribution-icon { color: var(--el-color-success); }
-.bound-rule-attribution-item.is-active .info-note-desc { color: var(--el-color-success-dark-2); }
+.bound-rule-attribution-badge { font-weight: 500; }
 
 /* 配置预览：三阶段投影（策略视角） */
 .preview-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 0 20px 12px; }

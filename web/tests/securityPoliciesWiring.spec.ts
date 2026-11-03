@@ -185,6 +185,14 @@ test('限流唯一门：选择器与提交门共用同一谓词，业务 400 不
   assert.match(page, /重新点击保存可重试绑定（幂等）/)
 })
 
+test('关联规则步骤：说明走标准提示框 + 归属汇总（裸文本长说明退役）', () => {
+  const text = code('src/views/security/SecurityPolicies.vue')
+  // 长说明收敛为 info-note 标准提示框一句话直白版（用户验收裁定：禁裸文本）
+  assert.match(text, /info-note-desc">策略按绑定顺序依次触发，先触发的先拦截；顺序调整仅改变触发先后，不影响拦截页归属</)
+  assert.doesNotMatch(text, /多策略按绑定顺序依次评估/, '旧裸文本长说明退役')
+  assert.doesNotMatch(text, /form-tip-line">多策略按绑定顺序/)
+})
+
 test('IP ACL 名单校验只作用于启用态字段（关闭后隐藏的条目不得点名）', () => {
   const validate = section(page, 'const validateIpAclList = (): boolean =>', 'const nextStep')
   assert.match(validate, /if \(form\.value\.ip_acl_enabled\) \{\n\s*const invalidEntry = ipACLList\.value\.find/)

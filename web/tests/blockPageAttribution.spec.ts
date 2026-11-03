@@ -203,23 +203,41 @@ test('接线：SecurityPolicies 逐阶段归因消费 resolveBlockPageAttributio
   // 规则级覆盖层入参与暂存读路径必须退役（触发归因无第三参）
   assert.doesNotMatch(text, /overrideFor/)
   assert.doesNotMatch(text, /rule-override/)
-  assert.match(text, /blockPageNotes: blockPageNotes\(caddyId, chain\)/)
-  // 行内归属提示与拦截页步骤注记同一 capableAttributions（不得另写第二份归因）
-  assert.match(text, /attributionNotes: attributionNotes\(chain\)/)
-  // 模板按 note.kind 渲染（active/disabled/warning/info）；:key 用内容
-  // （kind:text）而非数组下标——归因行顺序稳定，下标键会在增删时错位复用
-  assert.match(text, /v-for="note in row\.blockPageNotes" :key="`\$\{note\.kind\}:\$\{note\.text\}`"/)
+  assert.match(text, /attributionBadge: rowAttributionBadge\(chain\)/)
 })
 
-test('接线：关联规则行内归属提示消费同一单源（直白文案 + info-note 样式规范）', () => {
+test('拦截页步骤：汇总卡替代逐条重复提示（主行 + 例外分面 + 能力门行）', () => {
   const text = code('src/views/security/SecurityPolicies.vue')
-  // 行内归属提示走 boundRuleRows 的 attributionNotes（与拦截页步骤注记同一
-  // resolveBlockPageAttribution 结果派生，不得另写第二份归因）
-  assert.match(text, /attributionNotes/)
-  assert.match(text, /触发该策略拦截时：显示本策略配置的拦截页/)
+  // 顶部说明一句话直白化（去括号嵌套/内部术语/阶段编号），右侧计数小标签
+  assert.match(text, /触发本策略拦截时，向客户端返回下方选择的拦截页/)
+  assert.doesNotMatch(text, /恒走兜底路由/, '内部术语不得回流')
+  assert.match(text, /已关联 \{\{ boundRules\.length \}\} 条规则/)
+  // 汇总卡：主行 + 例外分面（仅存在才渲染）+ 数据源复用绑定链/归因单源
+  assert.match(text, /const blockPageSummary = computed/)
+  assert.match(text, /均显示本拦截页「/)
+  assert.match(text, /if \(rateLimitCount > 0\)/, '限流例外行条件渲染')
+  assert.match(text, /if \(tcpCount > 0\)/, 'TCP 例外行条件渲染')
+  assert.match(text, /if \(fallbackCount > 0\)/, '兜底差异例外行条件渲染')
+  assert.match(text, /boundRuleRows\.value\)/, '汇总数据源=绑定列表单源（禁平行实现）')
+  assert.match(text, /当前配置不会产生该阶段拦截，页面不会被使用/, '能力门警告行保留')
+  assert.match(text, /v-for="line in blockPageSummary\.lines"/)
+  // 逐条重复渲染退役
+  assert.doesNotMatch(text, /block-page-rule-annotations/)
+  assert.doesNotMatch(text, /row\.blockPageNotes/)
+  assert.doesNotMatch(text, /const blockPageNotes = /)
+})
+
+test('接线：关联规则行内紧凑标识 + 汇总行（逐条整句退役）', () => {
+  const text = code('src/views/security/SecurityPolicies.vue')
+  // 行内归属描述收敛为两态小标签（不再每行重复整句）
+  assert.match(text, /rowAttributionBadge\(chain\)/)
+  assert.match(text, /显示本策略页/)
+  assert.match(text, /显示兜底页/)
+  assert.doesNotMatch(text, /触发该策略拦截时：显示本策略配置的拦截页/, '逐条整句已退役')
+  assert.doesNotMatch(text, /bound-rule-attribution-item/, '整句行样式随行退役')
+  // 汇总行（info-note 规范）：N 条规则 + 兜底归属一句话
+  assert.match(text, /触发各策略拦截时，分别显示该策略自己配置的拦截页/)
   assert.match(text, /显示兜底页（首个启用拦截页的策略/)
-  // 样式走项目 info-note 规范（用户验收裁定：禁止局部 hack）
-  assert.match(text, /info-note-bar bound-rule-attribution-item/)
 })
 
 test('接线：拦截页缺失判定消费单源谓词且受加载门约束', () => {

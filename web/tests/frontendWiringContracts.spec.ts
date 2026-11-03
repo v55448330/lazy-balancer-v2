@@ -133,13 +133,13 @@ test('fs96-01 流程弹框阶段 1 脚注降级判定与阶段 0 模式行同源
   assert.doesNotMatch(footnote, /policy_type === 'stage0'/, 'mixed 存量信任同样恒 DetectionOnly，等值判断会漏报降级路径')
 })
 
-test('fs96-03 拦截页注记类型门先于 block_page_id 判定（阶段 0 无页面概念）', () => {
-  const notes = codeSection('src/views/security/SecurityPolicies.vue', 'const blockPageNotes = ', '\n// Step 4 已关联规则的逐条视图')
-  const typeGate = notes.indexOf('if (stages.length === 0) return []')
-  const unsetGate = notes.indexOf('form.value.block_page_id <= 0')
+test('fs96-03 拦截页汇总类型门先于 block_page_id 判定（阶段 0 无页面概念）', () => {
+  const summary = codeSection('src/views/security/SecurityPolicies.vue', 'const blockPageSummary = computed', '\n// Step 4 已关联规则的逐条视图')
+  const typeGate = summary.indexOf('if (editorStages.length === 0)')
+  const unsetGate = summary.indexOf('pageId <= 0')
   assert.ok(typeGate > 0 && unsetGate > 0, '两处门都必须存在')
   assert.ok(typeGate < unsetGate, '阶段 0（stages 为空）必须先返回，否则永远命中「未选择自定义页面」')
-  assert.match(notes, /限流拦截返回空响应体 429/, '阶段 2 专属文案不得丢')
+  assert.match(summary, /限流拦截返回空响应体 429/, '阶段 2 专属文案不得丢')
 })
 
 test('fs96-05 策略列表默认/保存/迁移后 tab 跟随实际类型', () => {

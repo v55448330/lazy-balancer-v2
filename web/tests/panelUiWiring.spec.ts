@@ -359,19 +359,20 @@ test('大屏光流可用性位/恢复基线/重装复位（L8 前端三项）', 
 
 // ============ 安全策略拦截页注记 / 阶段页覆盖写路径 / 预取面 ============
 
-test('拦截页注记必须过阶段能力门（stage3 off / stage1 无能力不得恒绿）', () => {
+test('拦截页汇总必须过阶段能力门（stage3 off / stage1 无能力不得恒绿）', () => {
   const text = code('src/views/security/SecurityPolicies.vue')
   assert.match(text, /blockPageStageCanIntercept/)
   assert.match(text, /当前配置不会产生该阶段拦截，页面不会被使用/)
-  // 能力门必须参与「生效中」收集：capableAttributions 只出过门阶段，
-  // 未过门阶段单独给「不会产生拦截」警告。
+  // 能力门经 capableAttributions 单点调用（归因 + 过门同处）：
   const notes = member(text, 'const capableAttributions = (')
   assert.match(notes, /\.filter\(\(stage\) => stageCapableOf\(stage\)\)/)
-  const activeNotes = member(text, 'const blockPageNotes = (')
-  assert.match(activeNotes, /results\.filter\(\(r\) => r\.effective === 'self'\)/)
-  // 阶段 2 无归属语义（429 恒走兜底路由）：生效文案不得宣称「触发本策略拦截时显示」
-  assert.match(activeNotes, /429/)
-  assert.doesNotMatch(activeNotes, /规则已配置阶段页覆盖/)
+  // 汇总卡消费同一能力门：未过门阶段单独出「不会产生拦截」行
+  const summary = member(text, 'const blockPageSummary = computed')
+  assert.match(summary, /stageCapableOf\(/)
+  assert.match(summary, /当前配置不会产生该阶段拦截，页面不会被使用/)
+  // 限流例外行：429 状态码恒定的口径必须保留
+  assert.match(summary, /429/)
+  assert.doesNotMatch(summary, /规则已配置阶段页覆盖/)
 })
 
 test('规则级阶段页覆盖写路径退役：无批量端点调用与暂存状态', () => {
