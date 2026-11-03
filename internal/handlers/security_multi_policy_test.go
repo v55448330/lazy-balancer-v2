@@ -80,7 +80,7 @@ func putMultiJSON(t *testing.T, router *gin.Engine, path string, body any) *http
 
 func queryBoundPolicyIDs(t *testing.T, caddyID string) []int {
 	t.Helper()
-	rows, err := db.DB.Query("SELECT policy_id FROM security_policy_bindings WHERE rule_caddy_id=? ORDER BY policy_id ASC", caddyID)
+	rows, err := db.DB.Query("SELECT policy_id FROM security_policy_bindings WHERE rule_caddy_id=? ORDER BY rank ASC, policy_id ASC", caddyID)
 	if err != nil {
 		t.Fatalf("query bound policies: %v", err)
 	}
@@ -123,16 +123,14 @@ func TestBindRuleToPolicy_additivePreservesSiblingBindings(t *testing.T) {
 		t.Fatalf("bind B status=%d body=%s", r.Code, r.Body.String())
 	}
 
-	got := queryBoundPolicyIDs(t, "lb_mp_add")
-	want := []int{policyA, policyB}
-	if policyB < policyA {
-		want = []int{policyB, policyA}
-	}
-	assertIDSlice(t, got, want)
+	// 绑定顺序（2026-11 用户裁定）：additive 追加到链末——与策略 id 大小无关，
+	// 先绑 A 后绑 B → 执行序 [A, B]。
+	assertIDSlice(t, queryBoundPolicyIDs(t, "lb_mp_add"), []int{policyA, policyB})
 }
 
-// PUT 原子替换 + 按序返回（写入 [3,1,2]，DB 按 policy_id ASC 读出 [1,2,3]）。
-func TestSetRuleSecurityPolicies_replacesAtomicallyOrderedASC(t *testing.T) {
+// PUT 原子替换 + 请求序即执行序（写入 [3,1,2] → 读出 [3,1,2]；2026-11 用户
+// 裁定：绑定顺序由请求序承载 rank，不再是 policy_id ASC）。
+func TestSetRuleSecurityPolicies_replacesAtomicallyPreservingRequestOrder(t *testing.T) {
 	setupSecurityPolicyTestDB(t)
 	router := newMultiPolicyRouter(t)
 	seedHTTPRule(t, "lb_mp_put")
@@ -140,14 +138,13 @@ func TestSetRuleSecurityPolicies_replacesAtomicallyOrderedASC(t *testing.T) {
 	p2 := createMultiPolicy(t, router, "策略2")
 	p3 := createMultiPolicy(t, router, "策略3")
 
-	// 以乱序 [p3,p1,p2] 提交，服务端按 INSERT 顺序写入；读回按 policy_id ASC。
+	// 以 [p3,p1,p2] 提交：请求序写入 rank 1..N，读回保持同序。
 	recorder := putMultiJSON(t, router, "/security/rules/lb_mp_put/policies", map[string]any{"policy_ids": []int{p3, p1, p2}})
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("PUT status=%d body=%s, want 200", recorder.Code, recorder.Body.String())
 	}
 
-	sorted := []int{p1, p2, p3}
-	assertIDSlice(t, queryBoundPolicyIDs(t, "lb_mp_put"), sorted)
+	assertIDSlice(t, queryBoundPolicyIDs(t, "lb_mp_put"), []int{p3, p1, p2})
 
 	// 再次 PUT [p2] 原子替换：删除旧三行，仅留 p2。
 	recorder = putMultiJSON(t, router, "/security/rules/lb_mp_put/policies", map[string]any{"policy_ids": []int{p2}})
@@ -347,8 +344,9 @@ func TestGetSecurityPolicyBindings_returnsOrderedArray(t *testing.T) {
 	if len(resp.Data) != 3 {
 		t.Fatalf("GET data len=%d, want 3 (array)", len(resp.Data))
 	}
+	// 绑定顺序（2026-11 用户裁定）：GET 按请求序（rank）返回。
 	got := []int{resp.Data[0].ID, resp.Data[1].ID, resp.Data[2].ID}
-	assertIDSlice(t, got, []int{p1, p2, p3})
+	assertIDSlice(t, got, []int{p3, p1, p2})
 }
 
 // 边界：规则无绑定时返回空数组（不是 null 单对象）。
@@ -553,11 +551,13 @@ func TestBindRuleToPolicy_outOfOrderBindStillReadsASC(t *testing.T) {
 	if err := json.Unmarshal(recorder.Body.Bytes(), &ruleResp); err != nil {
 		t.Fatalf("parse GET response %s: %v", recorder.Body.String(), err)
 	}
-	if len(ruleResp.Data) != 2 || ruleResp.Data[0].ID != pLow || ruleResp.Data[1].ID != pHigh {
-		t.Fatalf("GET policy ids=%+v, want [%d,%d] ASC", ruleResp.Data, pLow, pHigh)
+	// 绑定顺序（2026-11 用户裁定）：GET 按 rank 返回——先绑的在前，与 id 大小
+	// 无关（本用例先绑 pHigh 后绑 pLow）。
+	if len(ruleResp.Data) != 2 || ruleResp.Data[0].ID != pHigh || ruleResp.Data[1].ID != pLow {
+		t.Fatalf("GET policy ids=%+v, want [%d,%d]（绑定请求序）", ruleResp.Data, pHigh, pLow)
 	}
 
-	// And GET /security/bindings 同样 ASC
+	// And GET /security/bindings 同样按 rank（绑定请求序）
 	recorder = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodGet, "/security/bindings", nil)
 	router.ServeHTTP(recorder, req)

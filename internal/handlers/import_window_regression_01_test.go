@@ -71,20 +71,19 @@ func TestRevalidateImportTrustedProxyRefsAgainstCarriedLists(t *testing.T) {
 	}
 }
 
-// 导入拦截页引用复核：备份携带 lb_rules（引用阶段拦截页）且未携带 security_block_pages 时，
-// 初检按锁外 live 页集合放行后、加锁前窗口内被引用页可被删除（live 删除守卫
-// 只看 live 规则，看不到备份行的引用）。锁内必须按事务视图重验并 400。
-func TestRevalidateImportStageBlockPagesCatchesWindowDeletion(t *testing.T) {
+// 规则级阶段拦截页停用（2026-11 用户裁定）：锁内「规则→阶段页」引用复核
+// 已删除——备份行的悬空页引用/有码无页形态不再构成导入拒绝理由（渲染链零
+// 消费，四列仅随备份/快照搬运）。本用例钉停用后的放行口径。
+func TestRevalidateImportStageBlockPagesRemoved(t *testing.T) {
 	newBackupTestHandlers(t)
 	res, err := db.DB.Exec(`INSERT INTO security_block_pages (name, content, is_default) VALUES ('窗口删除页', '<html></html>', 0)`)
 	if err != nil {
-		t.Fatalf("seed block page: %v", err)
+		t.Fatal(err)
 	}
 	pageID, err := res.LastInsertId()
 	if err != nil {
 		t.Fatal(err)
 	}
-
 	tables := map[string][]map[string]any{
 		"lb_rules": {{
 			"caddy_id": "lb_win", "name": "win", "protocol": "http", "enabled": 1,
@@ -92,49 +91,21 @@ func TestRevalidateImportStageBlockPagesCatchesWindowDeletion(t *testing.T) {
 			"block_page_stage3_id": pageID, "block_page_stage3_status": 503,
 		}},
 	}
-
-	// 形状 1（回归）：页在事务视图内存在 → 放行。
 	tx, err := db.DB.BeginTx(context.Background(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := revalidateImportStageBlockPages(context.Background(), tx, tables); err != nil {
-		tx.Rollback()
-		t.Fatalf("页存在时不应被拒: %v", err)
+	defer tx.Rollback()
+	if err := revalidateImportLiveDependencies(context.Background(), tx, &configBackup{Tables: tables}, map[string]bool{"security_block_pages": true}); err != nil {
+		t.Fatalf("阶段页引用不得再触发锁内复核: %v", err)
 	}
-	// 形状 2：模拟初检→加锁窗口内删除被引用页 → 必须报错。
-	if _, err := tx.ExecContext(context.Background(), `DELETE FROM security_block_pages WHERE id=?`, pageID); err != nil {
-		tx.Rollback()
-		t.Fatal(err)
-	}
-	if err := revalidateImportStageBlockPages(context.Background(), tx, tables); err == nil ||
-		!strings.Contains(err.Error(), "拦截页不存在") {
-		tx.Rollback()
-		t.Fatalf("窗口内删除被引用拦截页必须拒绝，err=%v", err)
-	}
-	tx.Rollback()
-
-	// 形状 3：page=0 但 status≠0 的配对门与初检同口径（无需删除页）。
-	badPair := map[string][]map[string]any{
-		"lb_rules": {{
-			"caddy_id": "lb_pair", "name": "pair", "protocol": "http", "enabled": 1,
-			"block_page_stage1_id": 0, "block_page_stage1_status": 403,
-		}},
-	}
-	tx2, err := db.DB.BeginTx(context.Background(), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer tx2.Rollback()
-	if err := revalidateImportStageBlockPages(context.Background(), tx2, badPair); err == nil ||
-		!strings.Contains(err.Error(), "需要先选择拦截页") {
-		t.Fatalf("有码无页必须按初检同口径拒绝，err=%v", err)
-	}
-
-	// 形状 4：页表随备份携带时由初检按备份行解析，锁内复核不适用 → 放行。
-	carriedTables := map[string][]map[string]any{"lb_rules": tables["lb_rules"], "security_block_pages": {}}
-	if err := revalidateImportStageBlockPages(context.Background(), tx2, carriedTables); err != nil {
-		t.Fatalf("页表随备份携带时锁内复核不适用: %v", err)
+	// 有码无页的畸形配对同样不再拒绝（列已死）。
+	badPair := &configBackup{Tables: map[string][]map[string]any{
+		"lb_rules": {{"caddy_id": "lb_pair", "name": "pair", "protocol": "http", "enabled": 1,
+			"block_page_stage1_id": 0, "block_page_stage1_status": 403}},
+	}}
+	if err := revalidateImportLiveDependencies(context.Background(), tx, badPair, map[string]bool{"security_block_pages": true}); err != nil {
+		t.Fatalf("阶段页畸形配对不得再拒绝导入: %v", err)
 	}
 }
 

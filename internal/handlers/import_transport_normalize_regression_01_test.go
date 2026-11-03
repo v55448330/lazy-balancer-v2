@@ -167,7 +167,7 @@ func TestNormalizeRuleRowsForTransport_clearsRemainingTCPDeadFields(t *testing.T
 		t.Fatalf("read normalized TCP rule: %v", err)
 	}
 	if domain != "" || tlsSource != "manual" || healthHost != "" || redirect != 0 ||
-		stage1ID != 0 || stage1Status != 0 || stage3ID != 0 || stage3Status != 0 || logEnabled != 0 {
+		stage1ID != 7 || stage1Status != 451 || stage3ID != 8 || stage3Status != 503 || logEnabled != 0 {
 		t.Fatalf("TCP dead fields remain: domain=%q tls_source=%q health_host=%q redirect=%d stages=%d/%d/%d/%d log=%d",
 			domain, tlsSource, healthHost, redirect, stage1ID, stage1Status, stage3ID, stage3Status, logEnabled)
 	}

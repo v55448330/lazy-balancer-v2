@@ -67,9 +67,9 @@ func TestIntersectIPLists_cidrAware(t *testing.T) {
 
 func TestBuildIPPrecheck_trustListInclusion(t *testing.T) {
 	// Given： allow=[1.2.3.4] trust=[5.6.7.8]； deny=[9.9.9.9]
-	p1 := &models.SecurityPolicy{IPACLEnabled: true, IPACLMode: "allow", IPACLList: `["1.2.3.4"]`, IPWhitelistEnabled: true, IPWhitelist: json.RawMessage(`["5.6.7.8"]`)}
-	p2 := &models.SecurityPolicy{IPACLEnabled: true, IPACLMode: "deny", IPACLList: `["9.9.9.9"]`}
-	directives := mustDirectives(buildIPPrecheckDirectives([]*models.SecurityPolicy{p1, p2}, 0, "lb_test"))
+	p1 := &models.SecurityPolicy{ID: 21, IPACLEnabled: true, IPACLMode: "allow", IPACLList: `["1.2.3.4"]`, IPWhitelistEnabled: true, IPWhitelist: json.RawMessage(`["5.6.7.8"]`)}
+	p2 := &models.SecurityPolicy{ID: 22, IPACLEnabled: true, IPACLMode: "deny", IPACLList: `["9.9.9.9"]`}
+	directives := mustDirectives(buildIPPrecheckDirectives([]*models.SecurityPolicy{p1, p2}, "lb_test"))
 
 	// Then(2026-09-15 用户裁定,信任 DetectionOnly 取代并入放行集):
 	trustRule := `"id:3,phase:1,pass,nolog,ctl:ruleEngine=DetectionOnly"`
@@ -84,7 +84,8 @@ func TestBuildIPPrecheck_trustListInclusion(t *testing.T) {
 		t.Fatalf("trust must NOT be merged into allow set: %q", got)
 	}
 	trustIdx := strings.Index(directives, trustRule)
-	denyIdx := strings.Index(directives, `"id:2,phase:1,deny`)
+	// 拆链后 deny 逐策略 id=1500000+policyID（p2 → 1500022）。
+	denyIdx := strings.Index(directives, `"id:1500022,phase:1,deny`)
 	if trustIdx > denyIdx {
 		t.Fatalf("trust DetectionOnly must precede deny rules:\n%s", directives)
 	}
@@ -96,7 +97,7 @@ func TestBuildIPPrecheck_trustDisabledNotIncluded(t *testing.T) {
 	// Given： allow=[1.2.3.4] trust=[5.6.7.8] 但信任开关关闭； deny=[9.9.9.9]
 	p1 := &models.SecurityPolicy{IPACLEnabled: true, IPACLMode: "allow", IPACLList: `["1.2.3.4"]`, IPWhitelistEnabled: false, IPWhitelist: json.RawMessage(`["5.6.7.8"]`)}
 	p2 := &models.SecurityPolicy{IPACLEnabled: true, IPACLMode: "deny", IPACLList: `["9.9.9.9"]`}
-	directives := mustDirectives(buildIPPrecheckDirectives([]*models.SecurityPolicy{p1, p2}, 0, "lb_test"))
+	directives := mustDirectives(buildIPPrecheckDirectives([]*models.SecurityPolicy{p1, p2}, "lb_test"))
 
 	// Then：allow 放行集应仅含 1.2.3.4（信任关闭→不并入）；
 	// 信任并集规则整体不发射（含信任 IP 的文件不应存在引用）。

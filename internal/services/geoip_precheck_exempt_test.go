@@ -28,7 +28,7 @@ func TestBuildIPPrecheckDirectives_allowExemptSkipsGeoChains(t *testing.T) {
 		GeoIPMode:      "deny",
 		GeoIPCountries: json.RawMessage(`["海外"]`),
 	}
-	directives := mustDirectives(buildIPPrecheckDirectives([]*models.SecurityPolicy{allowPolicy, geoPolicy}, 0, "lb_test"))
+	directives := mustDirectives(buildIPPrecheckDirectives([]*models.SecurityPolicy{allowPolicy, geoPolicy}, "lb_test"))
 
 	if !strings.Contains(directives, `@ipListFast `) || !strings.Contains(directives, `u-allow-exempt`) || !strings.Contains(directives, `"id:13,phase:1,pass,nolog,skipAfter:SECURITY_RULES_END"`) {
 		t.Fatalf("directives must contain allow-membership geo exemption rule:\n%s", directives)
@@ -54,7 +54,7 @@ func TestBuildIPPrecheckDirectives_noAllowListNoExempt(t *testing.T) {
 		GeoIPMode:      "deny",
 		GeoIPCountries: json.RawMessage(`["海外"]`),
 	}
-	directives := mustDirectives(buildIPPrecheckDirectives([]*models.SecurityPolicy{geoPolicy}, 0, "lb_test"))
+	directives := mustDirectives(buildIPPrecheckDirectives([]*models.SecurityPolicy{geoPolicy}, "lb_test"))
 	if strings.Contains(directives, "id:13,phase:1,pass") {
 		t.Fatalf("exemption rule must not be emitted without allow lists:\n%s", directives)
 	}
@@ -90,8 +90,8 @@ func TestBuildIPPrecheckDirectives_denyPrecedesExempt(t *testing.T) {
 		GeoIPMode:      "deny",
 		GeoIPCountries: json.RawMessage(`["海外"]`),
 	}
-	directives := mustDirectives(buildIPPrecheckDirectives([]*models.SecurityPolicy{denyPolicy, allowPolicy, geoPolicy}, 0, "lb_test"))
-	idxDeny := strings.Index(directives, `id:2,phase:1,deny`)
+	directives := mustDirectives(buildIPPrecheckDirectives([]*models.SecurityPolicy{denyPolicy, allowPolicy, geoPolicy}, "lb_test"))
+	idxDeny := strings.Index(directives, `id:1500`)
 	idxExempt := strings.Index(directives, `id:13,phase:1,pass`)
 	if idxDeny < 0 || idxExempt < 0 || idxDeny > idxExempt {
 		t.Fatalf("deny rule must precede exemption (deny=%d exempt=%d):\n%s", idxDeny, idxExempt, directives)
@@ -115,7 +115,7 @@ func TestEngineGate_allowExemptWithGeoChain(t *testing.T) {
 		GeoIPMode:      "deny",
 		GeoIPCountries: json.RawMessage(`["海外"]`),
 	}
-	compileForEngineGate(t, mustDirectives(buildIPPrecheckDirectives([]*models.SecurityPolicy{allowPolicy, geoPolicy}, 0, "lb_test")))
+	compileForEngineGate(t, mustDirectives(buildIPPrecheckDirectives([]*models.SecurityPolicy{allowPolicy, geoPolicy}, "lb_test")))
 }
 
 // deny 并集（id:2/4）须先于 allow 交集外拒绝（id:7）
@@ -143,32 +143,38 @@ func TestBuildIPPrecheckDirectives_denyPrecedesAllowDeny(t *testing.T) {
 		//（黑名单为空时 id:4 受内容门控不发射）。
 		IPBlacklist: json.RawMessage(`["198.51.100.66"]`),
 	}
-	directives := mustDirectives(buildIPPrecheckDirectives([]*models.SecurityPolicy{denyPolicy, allowPolicy}, 0, "lb_test"))
-	idxDeny := strings.Index(directives, `id:2,phase:1,deny`)
-	idxBlacklist := strings.Index(directives, `id:4,phase:1,deny`)
+	directives := mustDirectives(buildIPPrecheckDirectives([]*models.SecurityPolicy{denyPolicy, allowPolicy}, "lb_test"))
+	idxDeny := strings.Index(directives, `id:1500`)
+	// 拆链后黑名单逐策略 id=1510000+policyID（allowPolicy ID 21 → 1510021）。
+	idxBlacklist := strings.Index(directives, `id:1510021,phase:1,deny`)
 	idxAllow := strings.Index(directives, `id:7,phase:1,deny`)
 	if idxDeny < 0 || idxBlacklist < 0 || idxAllow < 0 {
 		t.Fatalf("missing anchor rules (deny=%d blacklist=%d allow=%d):\n%s", idxDeny, idxBlacklist, idxAllow, directives)
 	}
 	if idxDeny > idxBlacklist || idxBlacklist > idxAllow {
-		t.Fatalf("顺序须为 deny 并集(id:2) → 黑名单并集(id:4) → allow 交集外拒绝(id:7)，got %d/%d/%d:\n%s",
+		t.Fatalf("顺序须为 ACL deny 链(1500000+pid) → 黑名单链(1510000+pid) → allow 交集外拒绝(id:7)，got %d/%d/%d:\n%s",
 			idxDeny, idxBlacklist, idxAllow, directives)
 	}
 }
 
 // 阶段 1 抬码形态（denyStatus=481——id:2/4 带 status:481）
 // 过引擎编译门禁——曾全部门禁调用恒传 0，仅编译期可见的形状错误单测拦不住。
-func TestEngineGate_precheckDirectivesWithLiftedStatus481(t *testing.T) {
-	deny := &models.SecurityPolicy{Enabled: true, IPACLMode: "deny", IPACLEnabled: true, IPACLList: `["192.0.2.0/24"]`}
+func TestEngineGate_precheckDirectivesWithLiftedSyntheticStatus(t *testing.T) {
+	// 拦截页逐策略归因（2026-11 用户裁定）：规则级 481/482 已删除，预检 deny
+	// 链抬码唯一来源是属主策略合成码（483+i）。策略 7 获码 484 → 链首显式抬码。
+	deny := &models.SecurityPolicy{ID: 7, Enabled: true, IPACLMode: "deny", IPACLEnabled: true, IPACLList: `["192.0.2.0/24"]`}
 	policies := []*models.SecurityPolicy{deny}
-	directives, err := buildIPPrecheckDirectives(policies, 481, "lb_test")
+	directives, err := buildIPPrecheckDirectives(policies, "lb_test", attribCtx(map[int]string{10: "<p>"}, map[int]int{7: 484}))
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
-	if !strings.Contains(directives, "status:481") {
-		t.Fatalf("抬码形态应含 status:481\n%s", directives)
+	if !strings.Contains(directives, "id:1500007,phase:1,deny,status:484") {
+		t.Fatalf("逐策略 ACL 链应抬合成码 484\n%s", directives)
 	}
-	compileForEngineGate(t, directives) // 复用门禁 helper（过滤 SecAuditLog 等环境行）
+	if strings.Contains(directives, "status:481") || strings.Contains(directives, "status:482") {
+		t.Fatalf("阶段码 481/482 已删除，不得出现\n%s", directives)
+	}
+	compileForEngineGate(t, directives)
 }
 
 // 语义声明钉（白名单=全豁免）：allow 豁免规则（id:13 skipAfter）位于爬虫伪装
@@ -195,7 +201,7 @@ func TestBuildIPPrecheckDirectives_allowExemptPrecedesCrawlerSpoof(t *testing.T)
 		GeoIPCrawlerEngines: json.RawMessage(`["googlebot"]`),
 		IPWhitelistEnabled:  true,
 	}
-	directives := mustDirectives(buildIPPrecheckDirectives([]*models.SecurityPolicy{allowPolicy, crawlerPolicy}, 403, "lb_exempt_spoof"))
+	directives := mustDirectives(buildIPPrecheckDirectives([]*models.SecurityPolicy{allowPolicy, crawlerPolicy}, "lb_exempt_spoof"))
 
 	idxExempt := strings.Index(directives, `id:13,phase:1,pass`)
 	idxSpoof := strings.Index(directives, `id:850024,phase:1,deny`)

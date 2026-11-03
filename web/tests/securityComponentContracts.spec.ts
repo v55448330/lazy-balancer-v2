@@ -26,7 +26,7 @@ test('IP 弹框首开先完成名单快照，再读取自动封禁，避免重�
 test('策略向导关闭前核对完整编辑快照，脏状态需确认放弃', () => {
   const page = code('src/views/security/SecurityPolicies.vue')
   const snapshot = member(page, 'const wizardStateSnapshot =')
-  for (const field of ['form', 'boundRules', 'pendingOverrideRules', 'ipACLList', 'ipWhitelist', 'crsExcludedRows']) {
+  for (const field of ['form', 'boundRules', 'bindingOrderEdits', 'ipACLList', 'ipWhitelist', 'crsExcludedRows']) {
     assert.match(snapshot, new RegExp(`\\b${field}\\b`), `未保存判定遗漏 ${field}`)
   }
   const close = member(page, 'const beforeWizardClose =')

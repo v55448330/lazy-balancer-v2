@@ -1,294 +1,112 @@
 package services
 
+// 规则级阶段拦截页（lb_rules block_page_stage*）停用后的兼容钉测
+// （2026-11 用户裁定）：写侧停写、渲染链零消费、DB 4 列保留。
+// 本文件替代原「481/482 阶段路由」行为钉——阶段码 481/482 已从引擎与
+// 路由中全部移除，存量行携带的列值必须对渲染零影响。
+
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
 
-// 阶段拦截页渲染（阶段化安全流水线批 2）：阶段码 481=阶段 1（IP 访问控制+
-// 地域拦截预检）、482=阶段 3（WAF）固定；逐策略合成码平移 483+。规则配了
-// 阶段页（id>0 且页内容非空）→ 对应阶段全部 deny 抬阶段码 + 按 (code,host-set)
-// 发射 host 限定的阶段错误路由（terminal、status 0 归一 403）；未配=跟随策略
-// （v2.3.1 逐策略归因默认层完整保留，合成码 483+ 不带 host）。
-
-// 阶段 1 覆盖：预检全部 deny（IP ACL 并集 id:2 与 GeoIP 链首 800000+）抬码
-// 481，错误路由装配发射 481 阶段路由（阶段页内容+状态码）。
-func TestStageBlockPages_stage1LiftsPrecheckAndRoute(t *testing.T) {
-	stubSecurityLibsAvailable(t) // 缺库降级：安全链渲染断言前先桩库可用
-	// Given：规则配阶段 1 页（页 7，状态码 451）；策略带 deny ACL + GeoIP（无策略页）
-	useTemporaryCertDir(t)
-	_, database := newClusterTestService(t)
-	seedHTTPRuleForGeneration(t, database, "lb_st1", "st1.example.test", 8080)
-	seedSecurityBlockPage(t, database, 7, "<html>stage-one</html>")
-	mpGenBindPolicy(t, database, "lb_st1", "st1-p", mpGenPolicySpec{
-		mode: "blocking", enabled: true,
-		ipACLEnabled: true, ipACLMode: "deny", ipACLList: `["203.0.113.0/24"]`,
-		geoCountries: `["海外"]`,
-	})
-	if _, err := database.Exec(`UPDATE lb_rules SET block_page_stage1_id=7, block_page_stage1_status=451 WHERE caddy_id='lb_st1'`); err != nil {
-		t.Fatal(err)
-	}
-
-	// When：全量渲染 + 链渲染
-	generated := generateCaddyConfigFromStore(database)
-	if message, failed := generated[caddyConfigGenerationErrorKey].(string); failed {
-		t.Fatalf("generation failed: %s", message)
-	}
-	rule := mpGenHTTPRule("lb_st1", "st1.example.test")
-	rule.BlockPageStage1ID = 7
-	rule.BlockPageStage1Status = 451
-	_, mainRoute := mpGenRoutes(t, database, rule)
-
-	// Then：预检 id:2 deny 与 GeoIP 链首均抬 481
-	joined := strings.Join(wafDirectives(t, mainRoute), "\n")
-	if !strings.Contains(joined, `id:2,phase:1,deny,status:481,log,msg:'IP 黑名单拒绝'`) {
-		t.Fatalf("precheck ACL deny must lift to 481:\n%s", joined)
-	}
-	geoipFound := false
-	for _, line := range strings.Split(joined, "\n") {
-		if strings.Contains(line, "msg:'GeoIP 区域拦截'") {
-			geoipFound = true
-			if !strings.Contains(line, "status:481") {
-				t.Fatalf("precheck geoip chain head must lift to 481:\n%s", line)
-			}
-		}
-	}
-	if !geoipFound {
-		t.Fatalf("precheck must carry geoip chain:\n%s", joined)
-	}
-	// 策略引擎段不抬 481（阶段码域隔离：阶段 3 未配=跟随策略，无页策略保持 403）。
-	// 必须正向找到同一条 ACL deny 的 403 形态，避免不存在的自定义规则段让断言空转。
-	if !strings.Contains(joined, `id:2,phase:1,deny,status:403,log,msg:'IP 黑名单拒绝'`) {
-		t.Fatalf("policy engine ACL deny must stay 403 when stage 3 is unconfigured:\n%s", joined)
-	}
-
-	// Then：481 阶段路由（host 限定本规则域名、阶段页内容+状态码、terminal）
-	errorRoutes, _ := serverErrorRoutes(t, generated, "http_8080")
-	var stageRoute map[string]interface{}
-	for _, routeValue := range errorRoutes {
-		route := mustMap(t, routeValue, "error route")
-		expr, _ := routeMatcher(t, route)["expression"].(string)
-		if strings.Contains(expr, "== 481") {
-			stageRoute = route
-		}
-	}
-	if stageRoute == nil {
-		t.Fatalf("missing 481 stage route: %#v", errorRoutes)
-	}
-	hosts, ok := routeMatcher(t, stageRoute)["host"].([]string)
-	if !ok || len(hosts) != 1 || hosts[0] != "st1.example.test" {
-		t.Fatalf("stage route must be scoped to rule host: %#v", routeMatcher(t, stageRoute))
-	}
-	assertEqual(t, routeMatcher(t, stageRoute)["expression"],
-		"({http.error.status_code} == 481 && {http.error.message} == 'interruption triggered')")
-	handler := firstHandler(t, stageRoute)
-	assertEqual(t, handler["body"], "<html>stage-one</html>")
-	assertEqual(t, handler["status_code"], 451)
-	if stageRoute["terminal"] != true {
-		t.Fatalf("stage route must be terminal: %#v", stageRoute)
-	}
-}
-
-// 阶段 3 覆盖：全部策略段 deny 抬 482（逐策略合成码 483+ 被覆盖层压过），
-// 发射 482 阶段路由；阶段 1 未配 → 预检保持 403。
-func TestStageBlockPages_stage3LiftsAllPolicySegmentsAndRoute(t *testing.T) {
-	stubSecurityLibsAvailable(t) // 缺库降级：安全链渲染断言前先桩库可用
-	// Given：两条有页策略（本可分 483/484）+ 规则配阶段 3 页（页 9，503）
-	useTemporaryCertDir(t)
-	_, database := newClusterTestService(t)
-	seedHTTPRuleForGeneration(t, database, "lb_st3", "st3.example.test", 8080)
-	seedSecurityBlockPage(t, database, 7, "<html>p-one</html>")
-	seedSecurityBlockPage(t, database, 8, "<html>p-two</html>")
-	seedSecurityBlockPage(t, database, 9, "<html>stage-three</html>")
-	mpGenBindPolicy(t, database, "lb_st3", "st3-p1", mpGenPolicySpec{
-		mode: "blocking", enabled: true, blockPageID: 7, blockStatusCode: 451,
-		ipACLEnabled: true, ipACLMode: "deny", ipACLList: `["203.0.113.0/24"]`,
-	})
-	mpGenBindPolicy(t, database, "lb_st3", "st3-p2", mpGenPolicySpec{
-		mode: "blocking", enabled: true, blockPageID: 8, blockStatusCode: 404,
-		ipACLEnabled: true, ipACLMode: "deny", ipACLList: `["198.51.100.0/24"]`,
-	})
-	if _, err := database.Exec(`UPDATE lb_rules SET block_page_stage3_id=9, block_page_stage3_status=503 WHERE caddy_id='lb_st3'`); err != nil {
-		t.Fatal(err)
-	}
-
-	// When
-	generated := generateCaddyConfigFromStore(database)
-	if message, failed := generated[caddyConfigGenerationErrorKey].(string); failed {
-		t.Fatalf("generation failed: %s", message)
-	}
-	rule := mpGenHTTPRule("lb_st3", "st3.example.test")
-	rule.BlockPageStage3ID = 9
-	rule.BlockPageStage3Status = 503
-	_, mainRoute := mpGenRoutes(t, database, rule)
-
-	// Then：两策略段 deny 均抬 482，段内无 483/484
-	joined := strings.Join(wafDirectives(t, mainRoute), "\n")
-	if !strings.Contains(joined, `id:2,phase:1,deny,status:482,log,msg:'IP 黑名单拒绝'`) {
-		t.Fatalf("stage3 configured must lift policy segments to 482:\n%s", joined)
-	}
-	if strings.Contains(joined, "status:483") || strings.Contains(joined, "status:484") {
-		t.Fatalf("stage3 override must suppress per-policy synthetic codes in segments:\n%s", joined)
-	}
-	// 预检（阶段 1 未配）保持 403
-	if !strings.Contains(joined, `id:2,phase:1,deny,status:403,log,msg:'IP 黑名单拒绝'`) {
-		t.Fatalf("precheck must stay 403 when stage 1 unconfigured:\n%s", joined)
-	}
-
-	// Then：482 阶段路由（阶段 3 页内容+503）
-	errorRoutes, _ := serverErrorRoutes(t, generated, "http_8080")
-	var stageRoute map[string]interface{}
-	for _, routeValue := range errorRoutes {
-		route := mustMap(t, routeValue, "error route")
-		expr, _ := routeMatcher(t, route)["expression"].(string)
-		if strings.Contains(expr, "== 483") || strings.Contains(expr, "== 484") {
-			t.Fatalf("stage3 override emitted unreachable per-policy route %s", expr)
-		}
-		if strings.Contains(expr, "== 482") {
-			stageRoute = route
-		}
-	}
-	if stageRoute == nil {
-		t.Fatalf("missing 482 stage route: %#v", errorRoutes)
-	}
-	handler := firstHandler(t, stageRoute)
-	assertEqual(t, handler["body"], "<html>stage-three</html>")
-	assertEqual(t, handler["status_code"], 503)
-}
-
-func TestStageBlockPages_stage3OverrideKeepsSharedPolicyRouteForUncoveredRule(t *testing.T) {
+// TestStageBlockPages_legacyColumnsHaveNoRenderEffect：存量行带阶段页列值
+// （旧版本遗留）时，全量渲染必须零 481/482（指令与路由均不得出现），且
+// 逐策略归因路由（483+）不被任何「规则配了阶段页」条件压制。
+func TestStageBlockPages_legacyColumnsHaveNoRenderEffect(t *testing.T) {
 	stubSecurityLibsAvailable(t)
 	useTemporaryCertDir(t)
 	_, database := newClusterTestService(t)
-	seedHTTPRuleForGeneration(t, database, "lb_st_cover", "cover.example.test", 8080)
-	seedHTTPRuleForGeneration(t, database, "lb_st_plain", "plain.example.test", 8080)
-	seedSecurityBlockPage(t, database, 7, "<html>shared</html>")
-	seedSecurityBlockPage(t, database, 9, "<html>stage-three</html>")
-	policyID := mpGenBindPolicy(t, database, "lb_st_cover", "shared-policy", mpGenPolicySpec{
-		mode: "blocking", enabled: true, blockPageID: 7, blockStatusCode: 451,
-		ipACLEnabled: true, ipACLMode: "deny", ipACLList: `["203.0.113.0/24"]`,
-	})
-	if _, err := database.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id,policy_id) VALUES ('lb_st_plain',?)`, policyID); err != nil {
+	seedHTTPRuleForGeneration(t, database, "lb_legacy", "legacy.example.test", 8080)
+	seedSecurityBlockPage(t, database, 7, "<html>legacy-stage-page</html>")
+	seedSecurityBlockPage(t, database, 9, "<html>policy-page</html>")
+	// 策略配页 + deny ACL（获合成码 483 且预检逐策略链在场），规则同时带
+	// 阶段页列值（旧遗留）。
+	mpGenBindPolicy(t, database, "lb_legacy", "legacy-p", mpGenPolicySpec{enabled: true, blockPageID: 9, blockStatusCode: 451, ipACLEnabled: true, ipACLMode: "deny", ipACLList: `["203.0.113.0/24"]`})
+	if _, err := database.Exec(`UPDATE lb_rules SET block_page_stage1_id=7, block_page_stage1_status=403, block_page_stage3_id=7, block_page_stage3_status=503 WHERE caddy_id='lb_legacy'`); err != nil {
 		t.Fatal(err)
-	}
-	if _, err := database.Exec(`UPDATE lb_rules SET block_page_stage3_id=9,block_page_stage3_status=503 WHERE caddy_id='lb_st_cover'`); err != nil {
-		t.Fatal(err)
-	}
-
-	generated := generateCaddyConfigFromStore(database)
-	errorRoutes, _ := serverErrorRoutes(t, generated, "http_8080")
-	var has482, has483 bool
-	var expressions []string
-	for _, routeValue := range errorRoutes {
-		expr, _ := routeMatcher(t, mustMap(t, routeValue, "error route"))["expression"].(string)
-		expressions = append(expressions, expr)
-		has482 = has482 || strings.Contains(expr, "== 482")
-		has483 = has483 || strings.Contains(expr, "== 483")
-	}
-	if !has482 || !has483 {
-		t.Fatalf("stage override must keep 482 and shared policy 483 route: 482=%v 483=%v expressions=%v", has482, has483, expressions)
-	}
-}
-
-func TestStageBlockPages_sameServerMultipleHostsKeepOwnStagePage(t *testing.T) {
-	stubSecurityLibsAvailable(t)
-	useTemporaryCertDir(t)
-	_, database := newClusterTestService(t)
-	seedHTTPRuleForGeneration(t, database, "lb_sta", "a.example.test", 8080)
-	seedHTTPRuleForGeneration(t, database, "lb_stb", "b.example.test", 8080)
-	seedSecurityBlockPage(t, database, 11, "<html>page-a</html>")
-	seedSecurityBlockPage(t, database, 12, "<html>page-b</html>")
-	mpGenBindPolicy(t, database, "lb_sta", "shared-policy", mpGenPolicySpec{
-		mode: "blocking", enabled: true,
-		ipACLEnabled: true, ipACLMode: "deny", ipACLList: `["203.0.113.0/24"]`,
-	})
-	mpGenBindPolicy(t, database, "lb_stb", "shared-policy", mpGenPolicySpec{
-		mode: "blocking", enabled: true,
-		ipACLEnabled: true, ipACLMode: "deny", ipACLList: `["203.0.113.0/24"]`,
-	})
-	for _, tc := range []struct {
-		caddyID string
-		pageID  int
-		status  int
-	}{
-		{"lb_sta", 11, 451},
-		{"lb_stb", 12, 503},
-	} {
-		if _, err := database.Exec(`UPDATE lb_rules SET block_page_stage3_id=?, block_page_stage3_status=? WHERE caddy_id=?`, tc.pageID, tc.status, tc.caddyID); err != nil {
-			t.Fatal(err)
-		}
 	}
 
 	generated := generateCaddyConfigFromStore(database)
 	if message, failed := generated[caddyConfigGenerationErrorKey].(string); failed {
 		t.Fatalf("generation failed: %s", message)
 	}
+	rule := mpGenHTTPRule("lb_legacy", "legacy.example.test")
+	_, mainRoute := mpGenRoutes(t, database, rule)
+	joined := strings.Join(wafDirectives(t, mainRoute), "\n")
+	if strings.Contains(joined, "status:481") || strings.Contains(joined, "status:482") {
+		t.Fatalf("stage codes 481/482 must never be emitted (feature removed):\n%s", joined)
+	}
+	// 逐策略归因码由预检链 / 策略引擎段各自携带（有页策略 = 483）：规则级
+	// 单规则渲染路径（mpGenRoutes）无批量上下文不获码，故断言全量生成配置。
+	generatedJSON, marshalErr := json.Marshal(generated)
+	if marshalErr != nil {
+		t.Fatalf("marshal generated config: %v", marshalErr)
+	}
+	if !strings.Contains(string(generatedJSON), "status:483") {
+		t.Fatalf("per-policy synthetic code must be emitted regardless of legacy stage columns")
+	}
+
 	errorRoutes, _ := serverErrorRoutes(t, generated, "http_8080")
-	byHost := map[string]string{}
+	var attribution, stageRoute map[string]interface{}
 	for _, routeValue := range errorRoutes {
-		route := mustMap(t, routeValue, "error route")
-		matcher := routeMatcher(t, route)
-		expr, _ := matcher["expression"].(string)
-		if !strings.Contains(expr, "== 482") {
+		route, ok := routeValue.(map[string]interface{})
+		if !ok {
 			continue
 		}
-		hosts, _ := matcher["host"].([]string)
-		if len(hosts) != 1 {
-			t.Fatalf("stage route must carry exactly one rule host, got %#v (route=%#v)", matcher["host"], route)
+		matcher := routeMatcher(t, route)
+		expr, _ := matcher["expression"].(string)
+		switch {
+		case strings.Contains(expr, "== 481 "), strings.Contains(expr, "== 482 "):
+			stageRoute = route
+		case strings.Contains(expr, "== 483 "):
+			attribution = route
 		}
-		handler := firstHandler(t, route)
-		byHost[hosts[0]], _ = handler["body"].(string)
 	}
-	if len(byHost) != 2 {
-		t.Fatalf("stage routes by host = %#v, want a/b.example.test each one", byHost)
+	if stageRoute != nil {
+		t.Fatalf("no stage (481/482) error route may be emitted, got: %#v", stageRoute)
 	}
-	assertEqual(t, byHost["a.example.test"], "<html>page-a</html>")
-	assertEqual(t, byHost["b.example.test"], "<html>page-b</html>")
-}
+	if attribution == nil {
+		t.Fatalf("per-policy attribution route (483) must be emitted: %#v", errorRoutes)
+	}
+	handler := firstHandler(t, attribution)
+	if handler["body"] != "<html>policy-page</html>" {
+		t.Fatalf("attribution route must render the policy's own page, got: %#v", handler["body"])
+	}
 
-// 阶段页内容为空 = 视为未配（跟随策略）：策略段回落逐策略合成码 483+，
-// 不发射 482 阶段路由。
-func TestStageBlockPages_emptyPageContentFallsBackToPolicy(t *testing.T) {
-	stubSecurityLibsAvailable(t) // 缺库降级：安全链渲染断言前先桩库可用
-	// Given：阶段 3 页 id 指向空内容页；两条有页策略
-	useTemporaryCertDir(t)
-	_, database := newClusterTestService(t)
-	seedHTTPRuleForGeneration(t, database, "lb_ste", "ste.example.test", 8080)
-	seedSecurityBlockPage(t, database, 7, "<html>p-one</html>")
-	seedSecurityBlockPage(t, database, 9, "")
-	p1 := mpGenBindPolicy(t, database, "lb_ste", "ste-p1", mpGenPolicySpec{
-		mode: "blocking", enabled: true, blockPageID: 7, blockStatusCode: 451,
-		ipACLEnabled: true, ipACLMode: "deny", ipACLList: `["203.0.113.0/24"]`,
-	})
-	if _, err := database.Exec(`UPDATE lb_rules SET block_page_stage3_id=9, block_page_stage3_status=503 WHERE caddy_id='lb_ste'`); err != nil {
+	// 阶段页列值本身不参与渲染：清空列值后生成的规则路由/错误路由逐字节不变。
+	if _, err := database.Exec(`UPDATE lb_rules SET block_page_stage1_id=0, block_page_stage1_status=0, block_page_stage3_id=0, block_page_stage3_status=0 WHERE caddy_id='lb_legacy'`); err != nil {
 		t.Fatal(err)
 	}
+	generated2 := generateCaddyConfigFromStore(database)
+	if message, failed := generated2[caddyConfigGenerationErrorKey].(string); failed {
+		t.Fatalf("generation failed after clearing stage columns: %s", message)
+	}
+	routes2, _ := serverErrorRoutes(t, generated2, "http_8080")
+	if len(errorRoutes) != len(routes2) {
+		t.Fatalf("stage columns must not influence error route count: %d vs %d", len(errorRoutes), len(routes2))
+	}
+}
 
-	// When
-	generated := generateCaddyConfigFromStore(database)
-	if message, failed := generated[caddyConfigGenerationErrorKey].(string); failed {
-		t.Fatalf("generation failed: %s", message)
+// TestStage1PrecheckIDSQL_aclSegmentReconciled：阶段 1 事件段 SQL 与 Go 谓词
+// 对逐策略 ACL/黑名单链段（1500000+/1510000+）同口径——段界调整时三处
+// （IsStage1PrecheckID / Stage1PrecheckSegmentSQL / SQL 清单）同步义务由
+// security_stage1_segment_test.go 真执行钉承担，此处只钉段形状存在。
+func TestStage1PrecheckIDSQL_aclSegmentReconciled(t *testing.T) {
+	if !strings.Contains(Stage1PrecheckSegmentSQL, "LIKE '150%'") || !strings.Contains(Stage1PrecheckSegmentSQL, "LIKE '151%'") {
+		t.Fatalf("stage1 SQL segment must cover per-policy ACL/blacklist chains: %s", Stage1PrecheckSegmentSQL)
 	}
-	rule := mpGenHTTPRule("lb_ste", "ste.example.test")
-	rule.BlockPageStage3ID = 9
-	rule.BlockPageStage3Status = 503
-	_, mainRoute := mpGenRoutes(t, database, rule)
-
-	// Then：策略段回落 483（p1 唯一有页策略分得首码），无 482
-	joined := strings.Join(wafDirectives(t, mainRoute), "\n")
-	if !strings.Contains(joined, "deny,status:483") {
-		t.Fatalf("empty stage page must fall back to policy synthetic 483:\n%s", joined)
-	}
-	if strings.Contains(joined, "status:482") {
-		t.Fatalf("empty stage page must not emit stage-3 lift:\n%s", joined)
-	}
-	errorRoutes, _ := serverErrorRoutes(t, generated, "http_8080")
-	for _, routeValue := range errorRoutes {
-		route := mustMap(t, routeValue, "error route")
-		expr, _ := routeMatcher(t, route)["expression"].(string)
-		if strings.Contains(expr, "== 482") {
-			t.Fatalf("empty stage page must not emit 482 stage route: %#v", route)
+	for _, id := range []int{aclPrecheckRuleBase + 1, blacklistPrecheckRuleBase + 1, aclPrecheckRuleLimit - 1} {
+		if !IsStage1PrecheckID(id) {
+			t.Fatalf("IsStage1PrecheckID(%d)=false，逐策略 ACL 段失守", id)
 		}
 	}
-	_ = p1
+	// 右开界不属于本段；段基址属段形状（p=0 边界由 decode 拒绝，与 GeoIP 段同口径）。
+	if IsStage1PrecheckID(aclPrecheckRuleLimit) {
+		t.Fatalf("IsStage1PrecheckID(%d)=true，越出 ACL 段右开界", aclPrecheckRuleLimit)
+	}
+	if !IsStage1PrecheckID(aclPrecheckRuleBase) {
+		t.Fatalf("IsStage1PrecheckID(%d)=false，段基址应属段形状（decode 层拒绝 p=0）", aclPrecheckRuleBase)
+	}
 }

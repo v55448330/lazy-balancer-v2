@@ -287,19 +287,29 @@ func TestBuildIPPrecheckDirectives_mergedDenyUnion(t *testing.T) {
 	newClusterTestService(t)
 	listA := seedIPList(t, "deny-a", `[{"value":"10.0.0.0/8","remark":""}]`)
 	listB := seedIPList(t, "deny-b", `[{"value":"192.0.2.0/24","remark":""}]`)
-	p1 := &models.SecurityPolicy{IPACLEnabled: true, IPACLMode: "deny", IPACLList: `["1.2.3.4"]`, IPACLListRefs: fmtListIDs(listA)}
-	p2 := &models.SecurityPolicy{IPACLEnabled: true, IPACLMode: "deny", IPACLList: `[]`, IPACLListRefs: fmtListIDs(listB)}
+	p1 := &models.SecurityPolicy{ID: 1, IPACLEnabled: true, IPACLMode: "deny", IPACLList: `["1.2.3.4"]`, IPACLListRefs: fmtListIDs(listA)}
+	p2 := &models.SecurityPolicy{ID: 2, IPACLEnabled: true, IPACLMode: "deny", IPACLList: `[]`, IPACLListRefs: fmtListIDs(listB)}
 	resolvePolicyIPListRefs([]*models.SecurityPolicy{p1, p2}, nil)
 
-	directives := mustDirectives(buildIPPrecheckDirectives([]*models.SecurityPolicy{p1, p2}, 0, "lb_test"))
-	if !strings.Contains(directives, "id:2,phase:1,deny,status:403,log,msg:'IP 黑名单拒绝',skipAfter:SECURITY_RULES_END") {
-		t.Fatalf("deny union rule missing:\n%s", directives)
-	}
-	union := readRenderedIPList(t, directives, "u-deny")
-	for _, want := range []string{"1.2.3.4/32", "10.0.0.0/8", "192.0.2.0/24"} {
-		if !strings.Contains(union, want) {
-			t.Fatalf("deny union file must contain %s: %q", want, union)
+	directives := mustDirectives(buildIPPrecheckDirectives([]*models.SecurityPolicy{p1, p2}, "lb_test"))
+	// 拆链（2026-11 用户裁定）：每条 deny ACL 策略一条独立链，id=1500000+policyID。
+	for _, wantID := range []string{"id:1500001,phase:1,deny,status:403,log,msg:'IP 黑名单拒绝'", "id:1500002,phase:1,deny,status:403,log,msg:'IP 黑名单拒绝'"} {
+		if !strings.Contains(directives, wantID) {
+			t.Fatalf("per-policy deny chain missing %q:\n%s", wantID, directives)
 		}
+	}
+	first := readRenderedIPList(t, directives, "p1-acl")
+	for _, want := range []string{"1.2.3.4/32", "10.0.0.0/8"} {
+		if !strings.Contains(first, want) {
+			t.Fatalf("policy 1 deny 名单必须含 %s: %q", want, first)
+		}
+	}
+	if strings.Contains(first, "192.0.2.0/24") {
+		t.Fatalf("policy 1 名单不得包含 policy 2 的条目（拆链串染）: %q", first)
+	}
+	second := readRenderedIPList(t, directives, "p2-acl")
+	if !strings.Contains(second, "192.0.2.0/24") {
+		t.Fatalf("policy 2 deny 名单必须含自己的引用条目: %q", second)
 	}
 }
 
@@ -310,7 +320,7 @@ func TestBuildIPPrecheckDirectives_mergedAllowIntersection(t *testing.T) {
 	p2 := &models.SecurityPolicy{IPACLEnabled: true, IPACLMode: "allow", IPACLList: `[]`, IPACLListRefs: fmtListIDs(listID)}
 	resolvePolicyIPListRefs([]*models.SecurityPolicy{p1, p2}, nil)
 
-	directives := mustDirectives(buildIPPrecheckDirectives([]*models.SecurityPolicy{p1, p2}, 0, "lb_test"))
+	directives := mustDirectives(buildIPPrecheckDirectives([]*models.SecurityPolicy{p1, p2}, "lb_test"))
 	if !strings.Contains(directives, "id:7,phase:1,deny,status:403,log,msg:'IP 白名单拒绝',skipAfter:SECURITY_RULES_END") {
 		t.Fatalf("allow intersection rule missing:\n%s", directives)
 	}

@@ -1324,48 +1324,6 @@ func validateRuleACMEReferences(input acmeReferenceInput) error {
 	return nil
 }
 
-// validateStageBlockPageRef 阶段拦截页（规则级覆盖层）引用校验：status ∈
-// {0,400,401,403,404,503}（0=渲染侧归一 403）；pageID>0 须存在于
-// security_block_pages（悬空引用会使阶段路由回落 403 兜底且 UI 显示「已失效」）。
-// 规则保存（validateRulePayloadBeforeSave）与批量设置（batch-block-pages）共用。
-func validateStageBlockPageRef(pageID, status int, label string) error {
-	return validateStageBlockPageRefWith(pageID, status, label, func(id int) (bool, error) {
-		var pageOK bool
-		err := db.DB.QueryRow("SELECT EXISTS(SELECT 1 FROM security_block_pages WHERE id = ?)", id).Scan(&pageOK)
-		return pageOK, err
-	})
-}
-
-// validateStageBlockPageRefWith 同 validateStageBlockPageRef，页存在性由调用方
-// 提供：v2 导入的页集合必须按「备份携带 security_block_pages
-// 则备份行、缺席则 live」解析（与口径一致），不能直连 db.DB。
-func validateStageBlockPageRefWith(pageID, status int, label string, pageExists func(id int) (bool, error)) error {
-	switch status {
-	case 0, 400, 401, 403, 404, 503:
-	default:
-		return &configValidationError{message: fmt.Sprintf("%s拦截页状态码 %d 无效（可选 400/401/403/404/503）", label, status)}
-	}
-	if pageID < 0 {
-		return &configValidationError{message: fmt.Sprintf("%s拦截页 id 不能为负数", label)}
-	}
-	// 跨字段门——渲染只在 pageID>0 时发射阶段路由，单独携带
-	// status（page=0）会保存成永不消费的死配置（UI 显示未配置、导出/复制
-	// 放大）。与策略侧零化门同口径：无页即无码。
-	if pageID == 0 && status != 0 {
-		return &configValidationError{message: fmt.Sprintf("%s拦截页状态码 %d 需要先选择拦截页（未选择拦截页时状态码必须为 0）", label, status)}
-	}
-	if pageID > 0 {
-		pageOK, err := pageExists(pageID)
-		if err != nil {
-			return fmt.Errorf("校验%s拦截页引用失败: %v", label, err)
-		}
-		if !pageOK {
-			return &configValidationError{message: fmt.Sprintf("%s拦截页不存在（id=%d）", label, pageID)}
-		}
-	}
-	return nil
-}
-
 // mixedUpstreamPoolError：HTTP 规则启用上游池混布
 // （保存门 handlers.go:615 同款文案/口径）——主池按启用上游统计（IIF 归一，
 // 空协议视同 http），路径池全量统计（PathRuleUpstream 无 enabled 位，与
@@ -1763,9 +1721,7 @@ func precheckRuleConfig(rule models.LbRule, globalBody int) services.SingleRuleC
 		TCPTryDuration:                rule.TCPTryDuration, TCPTryInterval: rule.TCPTryInterval,
 		EnableCompress: rule.EnableCompress, CompressTypes: rule.CompressTypes,
 		GlobalRequestBodyMaxSizeMB: globalBody,
-		BlockPageStage1ID:          rule.BlockPageStage1ID, BlockPageStage1Status: rule.BlockPageStage1Status,
-		BlockPageStage3ID: rule.BlockPageStage3ID, BlockPageStage3Status: rule.BlockPageStage3Status,
-		PathRules: toPathRuleConfigs(rule.PathRules), Upstreams: upstreams,
+		PathRules:                  toPathRuleConfigs(rule.PathRules), Upstreams: upstreams,
 	}
 }
 

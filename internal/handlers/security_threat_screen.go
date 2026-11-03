@@ -98,6 +98,12 @@ func describeThreatRuleNameWithNames(key string, customNames map[int]string) str
 			return "爬虫校验（#" + key + "）"
 		case services.PrecheckRuleFamilyCrawlerSpoof:
 			return "爬虫伪装拦截（#" + key + "）"
+		case services.PrecheckRuleFamilyACLDeny, services.PrecheckRuleFamilyBlacklist:
+			// 阶段 1 预检逐策略 ACL deny / 黑名单链：属主精确可解码。
+			if policyID > 0 {
+				return fmt.Sprintf("IP 访问控制（策略 #%d）", policyID)
+			}
+			return "IP 访问控制（#" + key + "）"
 		}
 	}
 	// 属主不可解码的段内边界形态（p=0，发射侧已拒绝、生产不可达）：
@@ -2621,6 +2627,10 @@ func triggerTypeForRule(ruleTriggered string) string {
 		return "地域拦截"
 	case services.PrecheckRuleFamilyCrawlerExempt, services.PrecheckRuleFamilyCrawlerSpoof:
 		return "爬虫Bot"
+	case services.PrecheckRuleFamilyACLDeny, services.PrecheckRuleFamilyBlacklist:
+		// 阶段 1 预检逐策略 ACL deny / 黑名单链（1500000+policyID /
+		// 1510000+policyID）：与历史固定 id 2/4 同族词。
+		return "IP 访问控制"
 	}
 	switch {
 	case n >= services.GeoIPPrecheckSegmentLimit && n < services.SyntheticCustomRuleIDBase:

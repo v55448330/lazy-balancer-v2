@@ -234,7 +234,7 @@ func TestSyncService_applySnapshot_geoIPCrawlerExemptionRoundTrip(t *testing.T) 
 	if masterPolicy == nil {
 		t.Fatal("master policy missing")
 	}
-	masterDirectives := mustDirectives(buildIPPrecheckDirectives([]*models.SecurityPolicy{masterPolicy}, 403, "lb_crawler_sync"))
+	masterDirectives := mustDirectives(buildIPPrecheckDirectives([]*models.SecurityPolicy{masterPolicy}, "lb_crawler_sync"))
 
 	// When：主端真实快照导出。
 	snapshot, _, err := cluster.Snapshot(context.Background(), 0, "", "")
@@ -298,7 +298,7 @@ func TestSyncService_applySnapshot_geoIPCrawlerExemptionRoundTrip(t *testing.T) 
 	if !slavePolicy.GeoIPCrawlerExempt || string(slavePolicy.GeoIPCrawlerEngines) != engines {
 		t.Errorf("slave render input crawler=(%v,%s), want (true,%s)", slavePolicy.GeoIPCrawlerExempt, slavePolicy.GeoIPCrawlerEngines, engines)
 	}
-	slaveDirectives := mustDirectives(buildIPPrecheckDirectives(policies, 403, "lb_crawler_sync"))
+	slaveDirectives := mustDirectives(buildIPPrecheckDirectives(policies, "lb_crawler_sync"))
 	if slaveDirectives != masterDirectives {
 		t.Errorf("slave directives diverge from master:\n%s\nwant:\n%s", slaveDirectives, masterDirectives)
 	}
@@ -709,7 +709,8 @@ func TestClusterSnapshot_securityBindingsFullyOrdered(t *testing.T) {
 		t.Fatalf("同一绑定集合的两种物理插入顺序产出不同快照字节:\n %s\n %s\n（ORDER BY 未覆盖 (rule_caddy_id, policy_id) 全序）", forward, reverse)
 	}
 	// 内容自证：按 (rule_caddy_id, policy_id) 升序
-	want := `[{"policy_id":5,"rule_caddy_id":"rule-a"},{"policy_id":7,"rule_caddy_id":"rule-a"},{"policy_id":10,"rule_caddy_id":"rule-a"},{"policy_id":1,"rule_caddy_id":"rule-b"},{"policy_id":3,"rule_caddy_id":"rule-b"}]`
+	// 载荷含 rank（旧式插入=0 → 次序键退化为 policy_id 兜底，与旧语义一致）。
+	want := `[{"policy_id":5,"rank":0,"rule_caddy_id":"rule-a"},{"policy_id":7,"rank":0,"rule_caddy_id":"rule-a"},{"policy_id":10,"rank":0,"rule_caddy_id":"rule-a"},{"policy_id":1,"rank":0,"rule_caddy_id":"rule-b"},{"policy_id":3,"rank":0,"rule_caddy_id":"rule-b"}]`
 	if string(forward) != want {
 		t.Fatalf("bindings snapshot=%s\nwant %s", forward, want)
 	}

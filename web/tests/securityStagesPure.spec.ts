@@ -1,6 +1,6 @@
 // securityStages（阶段化流水线投影）中**未被既有 spec 求值**的纯函数行为验收：
-// 阶段出组判据（hasGeoIPControl / hasTrustEntries）、条目合并与计数、阶段页覆盖
-// 解析、明细附着、版本比较、耗时格式化、宽松 id 解析与缓存订阅退订。
+// 阶段出组判据（hasGeoIPControl / hasTrustEntries）、条目合并与计数、
+// 明细附着、版本比较、耗时格式化、宽松 id 解析与缓存订阅退订。
 //
 // 这些判据直接决定用户可见的阶段抽屉、阈值统计与「已配置」徽标；此前只有
 // 源码文本钉或零覆盖。
@@ -29,7 +29,6 @@ import {
   parseUnknownIds,
   POLICY_TYPE_LABELS,
   POLICY_TYPE_SHORT_LABELS,
-  resolveStageOverride,
   STAGE_TITLES,
   subscribeSharedEntriesCache,
   type RuleStageModel,
@@ -109,25 +108,10 @@ test('hasGeoIPControl：显式字段按「模式非 off 且区域非空」，缺
   assert.equal(hasGeoIPControl({ has_geoip: false }), false)
 })
 
-test('resolveStageOverride：0=跟随策略；页缺失/内容空=broken；状态码兜底 403', () => {
-  const pages = [
-    { id: 5, name: '自定义拦截页', content: '<html>' },
-    { id: 6, name: '空页面', content: '' },
-  ]
-  assert.equal(resolveStageOverride(0, 403, pages), null)
-  assert.equal(resolveStageOverride(undefined, undefined, pages), null)
-  assert.deepEqual(resolveStageOverride(5, 0, pages), { pageId: 5, pageName: '自定义拦截页', status: 403, broken: false })
-  assert.deepEqual(resolveStageOverride(5, 429, pages), { pageId: 5, pageName: '自定义拦截页', status: 429, broken: false })
-  assert.deepEqual(resolveStageOverride(6, 403, pages), { pageId: 6, pageName: '空页面', status: 403, broken: true })
-  // 页已删除：名称回退为「页面 #id」且 broken（渲染侧等同未配）
-  assert.deepEqual(resolveStageOverride(42, 403, pages), { pageId: 42, pageName: '页面 #42', status: 403, broken: true })
-})
-
 const stageGroup = (stage: 0 | 1 | 2 | 3, groups: StagePolicyGroup[]): StageGroup => ({
   stage,
   title: `阶段 ${stage}`,
   enabled: groups.length > 0,
-  override: null,
   groups,
 })
 

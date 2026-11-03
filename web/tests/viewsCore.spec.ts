@@ -13,7 +13,7 @@ import assert from 'node:assert/strict'
 import { readdirSync, readFileSync } from 'node:fs'
 import { nextTick, ref } from 'vue'
 
-import { copyRuleHostHeader, newRuleWizardStageOverrides, stageBlockPageOverrides, stageBlockPagePatch } from '../src/utils/ruleWizard.ts'
+import { copyRuleHostHeader } from '../src/utils/ruleWizard.ts'
 import { buildAuditLogParams } from '../src/utils/auditLogFilters.ts'
 import { normalizeCidr, serializeWhitelist } from '../src/utils/apiKeyWhitelist.ts'
 import { useClampedPagination } from '../src/composables/useClampedPagination.ts'
@@ -26,78 +26,19 @@ const caddyConfig = code('src/views/CaddyConfig.vue')
 const users = code('src/views/Users.vue')
 const keys = code('src/views/Keys.vue')
 
-// ============ 阶段拦截页覆盖的共享键集 ============
+// ============ 规则级阶段拦截页覆盖退役 ============
 
-test('新建规则的阶段拦截页覆盖恒为 0（4 键全零）', () => {
-  assert.deepEqual(newRuleWizardStageOverrides(), {
-    block_page_stage1_id: 0,
-    block_page_stage1_status: 0,
-    block_page_stage3_id: 0,
-    block_page_stage3_status: 0,
-  })
-})
+test('规则级阶段页覆盖键集退役：向导不携带/不回填/不提交 4 字段', () => {
+  // 触发归因口径下规则级阶段页覆盖已整体退役：ruleWizard 的覆盖键集工具、
+  // 向导水合/新建/重置快照、载荷提交面全部移除（API 类型对响应保留字段容忍）。
+  const wizard = code('src/utils/ruleWizard.ts')
+  assert.doesNotMatch(wizard, /StageBlockPageOverrideState|newRuleWizardStageOverrides|stageBlockPageOverrides|stageBlockPagePatch/, '覆盖键集工具必须退役')
 
-test('编辑/复制水合保留源规则的阶段覆盖，缺键按 0', () => {
-  assert.deepEqual(stageBlockPageOverrides({
-    block_page_stage1_id: 7,
-    block_page_stage1_status: 403,
-    block_page_stage3_id: 9,
-    block_page_stage3_status: 451,
-  }), {
-    block_page_stage1_id: 7,
-    block_page_stage1_status: 403,
-    block_page_stage3_id: 9,
-    block_page_stage3_status: 451,
-  })
-  assert.deepEqual(stageBlockPageOverrides({}), newRuleWizardStageOverrides())
-  assert.deepEqual(stageBlockPageOverrides({ block_page_stage1_id: null }), newRuleWizardStageOverrides())
-})
-
-test('水合/新建/重置三处共用同一键集（双向清单，防再次分叉）', () => {
-  const hydrate = section(rules, 'const wizardFormFromRule', 'const buildRuleConfigView')
-  assert.match(hydrate, /\.\.\.stageBlockPageOverrides\(fullRule\)/)
-  // 水合里不得再逐键手写（逐键手写正是与重置清单分叉的根因）
-  assert.doesNotMatch(hydrate, /block_page_stage1_id: fullRule\./)
-
-  const openWizard = section(rules, 'const openWizard = async', 'const resetWizard')
-  const newBranch = openWizard.slice(openWizard.indexOf('} else {', openWizard.indexOf('if (rule) {')))
-  assert.ok(newBranch.length > 0, 'missing new-rule branch')
-  assert.match(newBranch, /\.\.\.newRuleWizardStageOverrides\(\)/)
-
-  const reset = section(rules, 'const resetWizard = () => {', 'const beforeWizardClose')
-  assert.match(reset, /Object\.assign\(wizardForm, newRuleWizardStageOverrides\(\)\)/)
-
-  // 编辑载荷只提交相对快照变化的键（后端 nil=保留）；新建/复制显式全量
+  assert.doesNotMatch(rules, /wizardStagePageSnapshot/, '打开快照不再记录阶段页覆盖')
+  assert.doesNotMatch(rules, /\.\.\.stageBlockPageOverrides\(fullRule\)/, '水合不再回填阶段页覆盖')
+  assert.doesNotMatch(rules, /newRuleWizardStageOverrides\(\)/, '新建/重置不再携带覆盖清态')
   const payload = section(rules, 'const data: UpdateRuleRequest = {', 'request.')
-  assert.match(payload, /isCopyMode\.value \|\| !editingRule\.value/)
-  assert.match(payload, /\.\.\.\(\(isCopyMode\.value \|\| !editingRule\.value\)/)
-  assert.match(payload, /stageBlockPageOverrides\(wizardForm\)/)
-  assert.match(payload, /stageBlockPagePatch\(wizardForm, wizardStagePageSnapshot\.value\)/)
-  assert.doesNotMatch(payload, /block_page_stage1_id: wizardForm\.block_page_stage1_id \|\| 0/, '编辑态不得无条件回写四字段（旧快照回退）')
-})
-
-test('阶段页覆盖差异门：只提交相对打开快照变化的键', () => {
-  const snapshot = {
-    block_page_stage1_id: 7,
-    block_page_stage1_status: 403,
-    block_page_stage3_id: 9,
-    block_page_stage3_status: 451,
-  }
-  // 未修改 → 空 patch（后端 nil=保留）
-  assert.deepEqual(stageBlockPagePatch({ ...snapshot }, snapshot), {})
-  // 仅阶段 1 改页 → 只提交 stage1 两个键
-  assert.deepEqual(stageBlockPagePatch({ ...snapshot, block_page_stage1_id: 8 }, snapshot), { block_page_stage1_id: 8 })
-  // 清空覆盖（id/status 归 0）
-  assert.deepEqual(
-    stageBlockPagePatch({ ...snapshot, block_page_stage3_id: 0, block_page_stage3_status: 0 }, snapshot),
-    { block_page_stage3_id: 0, block_page_stage3_status: 0 },
-  )
-  // 缺键的当前值按 0 归一（与保存载荷同口径）
-  assert.deepEqual(stageBlockPagePatch({}, newRuleWizardStageOverrides()), {})
-  assert.deepEqual(
-    stageBlockPagePatch({ block_page_stage1_id: 3 }, newRuleWizardStageOverrides()),
-    { block_page_stage1_id: 3 },
-  )
+  assert.doesNotMatch(payload, /block_page_stage1_id|block_page_stage3_id/, '编辑/新建载荷不得再提交阶段页覆盖键')
 })
 
 // ============ 复制路径携带规则级回源 Host ============

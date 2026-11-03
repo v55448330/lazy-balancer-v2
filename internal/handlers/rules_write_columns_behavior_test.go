@@ -113,8 +113,9 @@ func TestUpdateRuleWriteColumns_valuesAlignWithColumns(t *testing.T) {
 	if row.TLSCert != "" || row.TLSKey != "" {
 		t.Fatalf("tcp row cert/key 未清空（条件列未按 TCP 写入）")
 	}
-	if row.Stage1ID != 0 || row.Stage1Status != 0 {
-		t.Fatalf("tcp stage1=(%d,%d), want 0/0", row.Stage1ID, row.Stage1Status)
+	// 阶段页列已停用（写侧停写）：任意协议更新都不触碰，存量值原样保留。
+	if row.Stage1ID != 7 || row.Stage1Status != 403 {
+		t.Fatalf("tcp stage1=(%d,%d), want preserved 7/403（写侧停写）", row.Stage1ID, row.Stage1Status)
 	}
 	if row.Strategy != "weighted_round_robin" || row.Name != "wc-renamed" {
 		t.Fatalf("tcp row=%+v, want strategy 默认与名称沿用", row)

@@ -172,9 +172,8 @@ var antiFallbackAllowlist = map[string]map[string]string{
 		`info.Error = "证书不存在"`:           "展示层占位文案：manual 源无证书时证书卡说明（非配置投影）——G3 Ruling 披露",
 		`info.Issuer = "-"`:              "展示层占位：签发者不可解析时以「-」占位（非配置投影）——G3 Ruling 披露",
 	},
-	"buildIPPrecheckDirectives": {
-		"denyStatus = 403": "阶段 1 预检 denyStatus=0→403：类型②省略型（0=规则未配阶段 1 拦截页，stage1BlockStatus 契约的未设置态；coraza deny 必须显式状态码，省略以默认 403 替换实现，保持 403 兜底归因边界）——批 3 Ruling 披露",
-	},
+	// buildIPPrecheckDirectives 的 `denyStatus = 403` 条目已随规则级阶段页停用
+	// 退役（481 抬码与 denyStatus 参数删除；逐策略链固定显式 status）。
 	// 可达性扫描登记（调用图内辅助函数的赋值形态兜底）：
 	"decodePathUpstreams": {
 		`protocol = "http"`: "路径规则上游存储投影缺省协议→http：类型②省略型（写侧允许空并在渲染层替换为具体值，否则引擎收到空协议）——可达性 Ruling 披露",

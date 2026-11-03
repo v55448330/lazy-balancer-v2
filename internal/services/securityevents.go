@@ -800,7 +800,7 @@ func securityEventsLoadMappings() (map[string]securityEventsRuleRef, map[string]
 	// v2.2.0 多策略归因：一个 lb_rule 可绑多个策略，按 policy_id ASC 排序，
 	// 重叠时归因到「绑定顺序第一条」= 最小 policy_id。
 	bindings := make(map[string][]int)
-	bindRows, err := db.DB.Query(`SELECT rule_caddy_id, policy_id FROM security_policy_bindings ORDER BY policy_id ASC`)
+	bindRows, err := db.DB.Query(`SELECT rule_caddy_id, policy_id FROM security_policy_bindings ORDER BY rank ASC, policy_id ASC`)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("security events: load policy bindings: %w", err)
 	}
@@ -1114,6 +1114,17 @@ func securityEventsPolicyContainsRuleWithExclusions(policy *models.SecurityPolic
 		return false
 	}
 	switch {
+	case IsACLPrecheckRuleID(n):
+		// 阶段 1 预检逐策略 ACL deny / 黑名单链（1500000+policyID /
+		// 1510000+policyID）：id 由属主策略身份唯一定码，直接解码归属——
+		// 无需成员判定（链投影文件内容即该策略的合并名单，命中即该策略的
+		// 名单命中；历史 id:2/4 的「名单成员判定」只服务合并并集形态）。
+		// 无法唯一解码（p=0 边界值）返回 false，由 fallback 归属。
+		family, pid, _, ok := decodePrecheckRuleID(ruleTriggered)
+		if !ok || family == precheckRuleFamilyUnknown {
+			return false
+		}
+		return policy.ID == pid
 	case n > geoipPrecheckRuleBase && n < geoipPrecheckRuleLimit:
 		// 阶段 1 预检 8xxxxx 段：普通 GeoIP
 		// [800001,810000)、爬虫豁免 [810000,850000)、爬虫伪装 [850000,900000)
@@ -1330,9 +1341,16 @@ func securityEventsRuleIsIPFamily(ruleTriggered string) bool {
 
 // securityEventsRuleIsCustomFamily 报告规则 id 是否属于自定义规则族（普通
 // id+10000、旧版合成段及 OR 分支高段）。单一事实源：fallback 门与能力首选层共用。
+// 阶段 1 预检逐策略 ACL/黑名单链段（1500000+policyID / 1510000+policyID）落在
+// ≥1000000 兜底区间内，必须显式排除——否则 IP ACL 拒绝事件会被当作自定义族
+// （autobanStage3Eligible 只消费自定义/CRS 族：误判即让 IP 名单拦截开始计入
+// 自动封禁，行为回归；归因侧也会把事件从属主策略上摘走）。
 func securityEventsRuleIsCustomFamily(ruleTriggered string) bool {
 	n, err := strconv.Atoi(ruleTriggered)
 	if err != nil {
+		return false
+	}
+	if IsACLPrecheckRuleID(n) {
 		return false
 	}
 	return (n >= 10000 && n < geoipPrecheckRuleBase) || n >= 1000000

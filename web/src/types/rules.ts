@@ -124,6 +124,8 @@ export interface Rule extends ProxyTimeoutConfig {
   log_enabled: boolean
   custom_routes_enabled: boolean
   path_rules: PathRule[]
+  // 规则级阶段拦截页覆盖 4 字段已退役（触发归因裁定）：后端保留列停用，
+  // 响应仍可能携带——类型保留仅为读取容忍，前端不再消费/提交。
   block_page_stage1_id: number
   block_page_stage1_status: number
   block_page_stage3_id: number
@@ -180,10 +182,6 @@ export interface CreateRuleRequest extends ProxyTimeoutConfig {
   enable_compress: boolean
   compress_types: string
   log_enabled: boolean
-  block_page_stage1_id?: number
-  block_page_stage1_status?: number
-  block_page_stage3_id?: number
-  block_page_stage3_status?: number
 }
 
 export interface UpdateRuleRequest extends Omit<CreateRuleRequest,
@@ -225,12 +223,6 @@ export interface UpdateRuleRequest extends Omit<CreateRuleRequest,
   proxy_stream_close_delay?: number
   path_rules?: PathRule[]
   ca_provider_id?: number
-  // 阶段拦截页（规则级覆盖层）：可选——省略=保留原值（后端 *int 合并语义），
-  // 显式 0=清除覆盖（跟随策略）；status ∈ {0,400,401,403,404,503}
-  block_page_stage1_id?: number
-  block_page_stage1_status?: number
-  block_page_stage3_id?: number
-  block_page_stage3_status?: number
   enabled: boolean
   // 乐观并发前置条件：编辑向导回传打开时的 updated_at；省略=不校验。
   expected_updated_at?: string

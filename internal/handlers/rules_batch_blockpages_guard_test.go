@@ -40,58 +40,33 @@ func stagePageWriteCount(t *testing.T) int {
 	return count
 }
 
-func TestBatchRuleBlockPages_sameValueZeroWrite(t *testing.T) {
-	// Given：3 条 http 规则 + 拦截页 7；首次批量设置阶段页落库
+func TestBatchRuleBlockPages_alwaysZeroWrite(t *testing.T) {
 	handler, _ := newStageBatchTestHandlers(t)
 	seedStageBatchRules(t)
 	router := stageBatchRouter(handler)
-	first := postStageJSON(t, router, "/rules/batch-block-pages",
-		`{"rule_ids":["lb_b1","lb_b2","lb_b3"],"block_page_stage1_id":7,"block_page_stage1_status":403,"block_page_stage3_id":7,"block_page_stage3_status":503}`)
-	if first.Code != http.StatusOK {
-		t.Fatalf("first batch status=%d body=%s", first.Code, first.Body.String())
-	}
-	if bound, unchanged, skipped := batchResultWithUnchanged(t, first); bound != 3 || unchanged != 0 || len(skipped) != 0 {
-		t.Fatalf("first batch bound=%d unchanged=%d skipped=%v, want bound=3 unchanged=0", bound, unchanged, skipped)
-	}
 	installStagePageWriteTally(t)
 
-	// When 1：同值批量（拦截页/状态码完全未变）
-	second := postStageJSON(t, router, "/rules/batch-block-pages",
-		`{"rule_ids":["lb_b1","lb_b2","lb_b3"],"block_page_stage1_id":7,"block_page_stage1_status":403,"block_page_stage3_id":7,"block_page_stage3_status":503}`)
-
-	// Then 1：同值规则进 unchanged、bound=0（不再把零写入算作成功）且阶段页四列零写入
-	if second.Code != http.StatusOK {
-		t.Fatalf("same-value batch status=%d body=%s", second.Code, second.Body.String())
-	}
-	if bound, unchanged, skipped := batchResultWithUnchanged(t, second); bound != 0 || unchanged != 3 || len(skipped) != 0 {
-		t.Fatalf("same-value batch bound=%d unchanged=%d skipped=%v, want bound=0 unchanged=3 skipped=0（同值不是跳过理由）", bound, unchanged, skipped)
+	for _, body := range []string{
+		`{"rule_ids":["lb_b1","lb_b2","lb_b3"],"block_page_stage1_id":7,"block_page_stage1_status":403,"block_page_stage3_id":7,"block_page_stage3_status":503}`,
+		`{"rule_ids":["lb_b1","lb_b2","lb_b3"],"block_page_stage1_id":7,"block_page_stage1_status":404,"block_page_stage3_id":7,"block_page_stage3_status":503}`,
+	} {
+		response := postStageJSON(t, router, "/rules/batch-block-pages", body)
+		if response.Code != http.StatusOK {
+			t.Fatalf("status=%d body=%s, want 200", response.Code, response.Body.String())
+		}
+		if bound, unchanged, skipped := batchResultAll(t, response); bound != 0 || unchanged != 3 || len(skipped) != 0 {
+			t.Fatalf("bound=%d unchanged=%d skipped=%v, want 0/3/0", bound, unchanged, skipped)
+		}
 	}
 	if n := stagePageWriteCount(t); n != 0 {
-		t.Fatalf("同值批量触发 %d 次阶段页列写（应 0 次——零写入零同步 bump）", n)
+		t.Fatalf("停用端点触发 %d 次阶段页列写（应 0 次）", n)
 	}
-
-	// When 2：真实变更（阶段 1 状态码 403→404）
-	third := postStageJSON(t, router, "/rules/batch-block-pages",
-		`{"rule_ids":["lb_b1","lb_b2","lb_b3"],"block_page_stage1_id":7,"block_page_stage1_status":404,"block_page_stage3_id":7,"block_page_stage3_status":503}`)
-
-	// Then 2：照常落库（三行各一次写）
-	if third.Code != http.StatusOK {
-		t.Fatalf("changed batch status=%d body=%s", third.Code, third.Body.String())
-	}
-	if bound, _ := batchResult(t, third); bound != 3 {
-		t.Fatalf("changed batch bound=%d, want 3", bound)
-	}
-	if n := stagePageWriteCount(t); n != 3 {
-		t.Fatalf("真实变更触发 %d 次写（应 3=三条规则各 UPDATE 一次）", n)
-	}
-	var status int
-	if err := db.DB.QueryRow(`SELECT block_page_stage1_status FROM lb_rules WHERE caddy_id='lb_b1'`).Scan(&status); err != nil || status != 404 {
-		t.Fatalf("变更未落库：status=%d err=%v, want 404", status, err)
+	for _, id := range []string{"lb_b1", "lb_b2", "lb_b3"} {
+		if s1, s1s, s3, s3s := stageColumnsByID(t, id); s1 != 0 || s1s != 0 || s3 != 0 || s3s != 0 {
+			t.Fatalf("%s stage columns=(%d,%d,%d,%d), want all zero", id, s1, s1s, s3, s3s)
+		}
 	}
 }
-
-// 本端点有独立 1MB 请求体上限：条数门（≤500）在解析之后才生效，沿用全局
-// 128MB/4096MB 上限会让认证用户放大解析期内存与 CPU。
 func TestBatchRuleBlockPages_rejectsOversizedBody(t *testing.T) {
 	handler, _ := newStageBatchTestHandlers(t)
 	seedStageBatchRules(t)

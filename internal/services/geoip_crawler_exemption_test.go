@@ -29,7 +29,7 @@ func TestBuildIPPrecheckDirectives_renderDoesNotRecompileCrawlerEngines(t *testi
 	policies := []*models.SecurityPolicy{exempt(7), exempt(8), exempt(9)}
 
 	before := geoipnames.CrawlerEnginesDeepCopyCallsForTest()
-	if _, err := buildIPPrecheckDirectives(policies, 403, "lb_render_guard"); err != nil {
+	if _, err := buildIPPrecheckDirectives(policies, "lb_render_guard"); err != nil {
 		t.Fatalf("buildIPPrecheckDirectives: %v", err)
 	}
 	if after := geoipnames.CrawlerEnginesDeepCopyCallsForTest(); after != before {
@@ -55,7 +55,7 @@ func TestBuildIPPrecheckDirectives_crawlerExemption(t *testing.T) {
 		GeoIPCrawlerEngines: json.RawMessage(`["googlebot","baiduspider"]`),
 		IPWhitelistEnabled:  true,
 	}
-	directives := mustDirectives(buildIPPrecheckDirectives([]*models.SecurityPolicy{on}, 403, "lb_crawler"))
+	directives := mustDirectives(buildIPPrecheckDirectives([]*models.SecurityPolicy{on}, "lb_crawler"))
 	// 勾选引擎逐条 ctl 放行
 	for _, engine := range []string{"googlebot", "baiduspider"} {
 		want := `X-LB-Crawler-Verified "@streq ` + engine + `"`
@@ -83,7 +83,7 @@ func TestBuildIPPrecheckDirectives_crawlerExemption(t *testing.T) {
 		GeoIPCountries:     json.RawMessage(`["海外"]`),
 		IPWhitelistEnabled: true,
 	}
-	directivesOff := mustDirectives(buildIPPrecheckDirectives([]*models.SecurityPolicy{off}, 403, "lb_off"))
+	directivesOff := mustDirectives(buildIPPrecheckDirectives([]*models.SecurityPolicy{off}, "lb_off"))
 	if strings.Contains(directivesOff, "X-LB-Crawler") {
 		t.Errorf("豁免关闭时不得有任何爬虫规则:\n%s", directivesOff)
 	}
@@ -103,7 +103,7 @@ func TestBuildIPPrecheckDirectives_crawlerExemptionEmptyEnginesAllEngines(t *tes
 		GeoIPCrawlerExempt: true,
 		IPWhitelistEnabled: true,
 	}
-	directives := mustDirectives(buildIPPrecheckDirectives([]*models.SecurityPolicy{p}, 403, "lb_x"))
+	directives := mustDirectives(buildIPPrecheckDirectives([]*models.SecurityPolicy{p}, "lb_x"))
 	for _, engine := range []string{"googlebot", "bingbot", "gptbot", "so360spider"} {
 		if !strings.Contains(directives, `@streq `+engine) {
 			t.Errorf("空 engines 应发射全部引擎（含 %s）:\n%s", engine, directives)
@@ -122,7 +122,7 @@ func TestEngineGate_crawlerExemptionDirectives(t *testing.T) {
 		GeoIPCrawlerEngines: json.RawMessage(`["googlebot","so360spider"]`),
 		IPWhitelistEnabled:  true,
 	}
-	directives := mustDirectives(buildIPPrecheckDirectives([]*models.SecurityPolicy{p}, 403, "lb_gate"))
+	directives := mustDirectives(buildIPPrecheckDirectives([]*models.SecurityPolicy{p}, "lb_gate"))
 	compileForEngineGate(t, directives)
 }
 
@@ -137,7 +137,7 @@ func TestEngineGate_crawlerPassLogDetectedAction(t *testing.T) {
 		GeoIPCrawlerEngines: json.RawMessage(`["googlebot"]`),
 		IPWhitelistEnabled:  true,
 	}
-	directives := mustDirectives(buildIPPrecheckDirectives([]*models.SecurityPolicy{p}, 403, "lb_gate"))
+	directives := mustDirectives(buildIPPrecheckDirectives([]*models.SecurityPolicy{p}, "lb_gate"))
 	if strings.Contains(directives, "pass,nolog") {
 		t.Errorf("豁免规则不得为 pass,nolog（须落检测事件）:\n%s", directives)
 	}
@@ -160,7 +160,7 @@ func TestGeoIPCrawlerSpoof_scopedToSelectedEngines(t *testing.T) {
 		GeoIPCrawlerExempt:  true,
 		GeoIPCrawlerEngines: json.RawMessage(`["googlebot"]`),
 	}
-	directives := mustDirectives(buildIPPrecheckDirectives([]*models.SecurityPolicy{policy}, 403, "lb_scoped"))
+	directives := mustDirectives(buildIPPrecheckDirectives([]*models.SecurityPolicy{policy}, "lb_scoped"))
 	if !strings.Contains(directives, `@rx ^(?:googlebot)$`) {
 		t.Fatalf("spoof rule must match only the selected engine:\n%s", directives)
 	}

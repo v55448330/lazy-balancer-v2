@@ -108,12 +108,15 @@ test('ACL 内容门：启用但名单空不记账为阶段 1 能力（摘要展�
   assert.equal(hasIPACLControl({ has_ip_control: false }), false)
 })
 
-test('文档钉：allow 空名单按 fail-closed 说明，不再声称零渲染安全等价', () => {
+test('文档钉：allow 空名单按 fail-closed 说明 + 保存走确认式放行（不再硬阻断）', () => {
   const src = source('src/utils/securityStages.ts')
   const comment = section(src, '// 阶段 1 · IP 访问控制谓词', 'export const hasIPACLControl')
   assert.match(comment, /allow[^\n]*空名单|空名单[^\n]*allow/, '必须点名 allow 空名单分支')
   assert.match(comment, /恒拒|fail-closed|拒绝所有请求/, '必须说明后端 fail-closed 后果')
-  assert.match(comment, /带外|旧版本遗留/, '必须限定正常写门之外的可达性')
+  // 保存门已放开为 warning-not-block（用户裁定）：注释必须同步确认式放行口径，
+  // 不得再声称「正常写门拒绝空名单/仅带外可达」。
+  assert.match(comment, /确认|放行|warning-not-block/, '必须说明保存路径为确认式放行')
+  assert.doesNotMatch(comment, /仅带外|写门.*拒绝|Create\/Update.*拒绝空名单/, '硬阻断时代的可达性限定必须删除')
   assert.doesNotMatch(comment, /不产生任何 ACL 渲染产物（安全等价）/, '过期的安全等价论证必须删除')
 })
 
@@ -271,12 +274,11 @@ test('事件详情预取：无属主策略时仅取信任 refs；去重保序并
 
 test('拦截页回落文案：失效策略页不得断言「回落默认 403」（真实回落取绑定链首个有效页）', () => {
   const stage1 = stageRows(bindingOf(), policyOf({ block_page_id: 9 }), [], 1)
-  assert.deepEqual(stage1.find((row) => row.label === '拦截页（策略页）'), {
-    label: '拦截页（策略页）',
+  assert.deepEqual(stage1.find((row) => row.label === '拦截页'), {
+    label: '拦截页',
     detail: '已失效（回落绑定链首个有效页）',
   })
   // 阶段 3 同口径：逐策略合成码，页失效时回落同为绑定链首个有效页
-  // （无规则级覆盖时行标签为「拦截页」）
   const stage3 = stageRows(bindingOf({ block_page_id: 9 }), policyOf({ mode: 'blocking' }), [], 3)
   assert.equal(stage3.find((row) => row.label === '拦截页')?.detail, '已失效（回落绑定链首个有效页）')
   // 未配置：跟随绑定链首个有效页，无则默认 403
@@ -377,7 +379,7 @@ test('检测模式拦截页能力：body 规则只记录，URI 规则仍可拦�
   assert.equal(customRuleCanBlockInMode('detection', { ...uri, enabled: false }), false)
   assert.equal(customRuleCanBlockInMode('detection', { ...uri, action: 'pass' }), false)
 
-  const notes = section(code('src/views/security/SecurityPolicies.vue'), 'const blockPageNotes = ', 'const boundRuleRows = computed')
+  const notes = section(code('src/views/security/SecurityPolicies.vue'), 'const stageCapableOf = (stage: BlockPageStage)', 'const capableAttributions = ')
   assert.match(notes, /customRuleCanBlockInMode\(form\.value\.mode, rule\)/, '视图能力门必须消费相位感知谓词')
 })
 
@@ -596,75 +598,62 @@ test('阶段 0：绑定链存在阶段 0 策略即启用，名单空出灰态行
   assert.equal(buildStageModel([bindingOf()], [policyOf()], [], []).stages[0].groups.length, 0)
 })
 
-// 规则级阶段拦截页覆盖与多策略绑定链的多组排布：生产主路径
-// （Rules.vue 传 stagePages + ruleEnabled）此前只有纯函数级钉，集成层零覆盖，
-// 且既有助手固定取 groups[0]——第二组起的标签/顺序缺陷永远隐身。
-test('规则级阶段 1 拦截页覆盖：命中/失效/未配三种措辞', () => {
+// 规则级阶段拦截页覆盖已退役（触发归因口径）：阶段明细只呈现策略级页——
+// 已配 → 页名（状态码 X）；页已删/内容空 → 失效回落文案；未配 → 未配置文案。
+// 阶段摘要不再携带 override 字段。
+test('阶段 1 拦截页行单行口径：已配/失效/未配（规则级覆盖退役）', () => {
   const pages = [{ id: 5, name: '自定义 403 页', content: '<p>x</p>' }]
-  const policy = policyOf({ has_ip_control: true, ip_acl_enabled: true, ip_acl_list: '["10.0.0.0/8"]' })
+  const aclPolicy = (pageId: number, status = 404): SecurityStagePolicy =>
+    policyOf({ has_ip_control: true, ip_acl_enabled: true, ip_acl_list: '["10.0.0.0/8"]', block_page_id: pageId, block_status_code: status })
 
-  const configured = buildStageModel([bindingOf()], [policy], [], pages, {
-    block_page_stage1_id: 5,
-    block_page_stage1_status: 404,
-  })
-  assert.deepEqual(configured.stages[1].override, { pageId: 5, pageName: '自定义 403 页', status: 404, broken: false })
+  // 阶段 1 拦截页是策略级字段（policy.block_page_id）——绑定行不携带
+  const configured = buildStageModel([bindingOf()], [aclPolicy(5)], [], pages, { protocol: 'http' })
+  const stagesSrc = code('src/utils/securityStages.ts')
+  const stageGroupIface = section(stagesSrc, 'export interface StageGroup {', '\n}')
+  assert.doesNotMatch(stageGroupIface, /override/, '阶段摘要不得再携带规则级覆盖字段')
   assert.deepEqual(configured.stages[1].groups[0].rows.find((row) => row.label === '拦截页'), {
     label: '拦截页',
-    detail: '规则覆盖：自定义 403 页（状态码 404）',
+    detail: '自定义 403 页（状态码 404）',
   })
 
-  // 页已删/内容空：override.broken + 失效文案。阶段 1 的规则级覆盖失效后，引擎
-  // 由 buildBlockPageErrorRoute 取「绑定链首个启用且内容非空」策略的页面（可能
-  // 不是本策略）——措辞不得写成「跟随策略」（会被读成本策略自己的页面）。
-  const broken = buildStageModel([bindingOf()], [policy], [], pages, { block_page_stage1_id: 99 })
-  assert.equal(broken.stages[1].override?.broken, true)
-  assert.equal(broken.stages[1].override?.pageName, '页面 #99')
+  // 页已删/内容空：失效回落文案（真实回落=兜底路由取绑定链首个有页策略）
+  const broken = buildStageModel([bindingOf()], [aclPolicy(99, 403)], [], pages, { protocol: 'http' })
   assert.deepEqual(broken.stages[1].groups[0].rows.find((row) => row.label === '拦截页'), {
     label: '拦截页',
     detail: '已失效（回落绑定链首个有效页）',
   })
 
-  // 未配：默认状态码 403 的「未配置」口径
-  const unset = buildStageModel([bindingOf()], [policy], [], pages, null)
-  assert.equal(unset.stages[1].override, null)
+  // 未配：「未配置」口径
+  const unset = buildStageModel([bindingOf()], [aclPolicy(0)], [], pages, { protocol: 'http' })
   assert.deepEqual(unset.stages[1].groups[0].rows.find((row) => row.label === '拦截页'), {
     label: '拦截页',
     detail: '未配置（跟随绑定链首个有效页，无则默认 403）',
   })
 })
 
-// 阶段页失效后的真实回落目标按阶段不同：阶段 1 由引擎兜底错误路由取「绑定链
-// 首个启用且内容非空」策略的页面（可能不是本策略），阶段 3 才逐策略回落各自页面。
-// 徽标/弹框标签用同一句话覆盖两种语义，会把阶段 1 的排障引到错误策略。
-test('阶段页失效文案按阶段区分回落目标', () => {
+test('规则级覆盖退役：绑定编辑器徽标与流程弹框失效标签整族退场', () => {
   const editor = code('src/components/SecurityBindingEditor.vue')
-  const badge = section(editor, 'const overrideBadge = ', '\n}\n')
-  assert.match(badge, /stage === 1[\s\S]{0,200}回落绑定链首个有效页/, '阶段 1 徽标提示必须说明回落绑定链首个有效页')
-  assert.match(badge, /回落跟随策略/, '阶段 3 逐策略回落保留原口径')
+  assert.doesNotMatch(editor, /overrideBadge/, '规则级覆盖徽标已随功能退役')
+  assert.doesNotMatch(editor, /resolveStageOverride/)
+  assert.doesNotMatch(editor, /block_page_stage[13]_id/, '规则级阶段页字段不再被组件消费')
 
   const dialog = code('src/components/RuleFlowDialog.vue')
-  assert.match(dialog, /const overrideBrokenLabel = /, '弹框标签文案必须按阶段派生')
-  const label = section(dialog, 'const overrideBrokenLabel = ', '\n}\n')
-  assert.match(label, /stage === 3 \?/, '阶段 3 与阶段 1 的回落目标不同')
-  assert.match(label, /回落绑定链首个有效页/)
-  assert.match(dialog, /\{\{ overrideBrokenLabel\(typedStageByKey\(node\.key\)!\.stage\) \}\}/, '模板必须消费阶段感知的标签')
+  assert.doesNotMatch(dialog, /overrideBrokenLabel/, '弹框阶段页失效标签已退役')
+  assert.doesNotMatch(dialog, /\.override/, '流程弹框不得再读阶段摘要 override 字段')
 })
 
-test('规则级阶段 3 覆盖与策略级页并存：规则覆盖行在前、策略页行在后', () => {
+test('阶段 3 拦截页行单行口径：仅策略级页（规则覆盖行退场）', () => {
   const pages = [
     { id: 7, name: '规则覆盖页', content: '<p>rule</p>' },
     { id: 8, name: '策略页', content: '<p>policy</p>' },
   ]
   const policy = policyOf({ mode: 'blocking' })
-  const model = buildStageModel([bindingOf({ block_page_id: 8 })], [policy], [], pages, {
-    block_page_stage3_id: 7,
-  })
+  const model = buildStageModel([bindingOf({ block_page_id: 8 })], [policy], [], pages, { protocol: 'http' })
   const rows = model.stages[3].groups[0].rows
-  const overrideRow = rows.find((row) => row.label === '拦截页（规则覆盖）')
-  const policyRow = rows.find((row) => row.label === '拦截页（策略页）')
-  assert.deepEqual(overrideRow, { label: '拦截页（规则覆盖）', detail: '规则覆盖页（状态码 403）' })
-  assert.deepEqual(policyRow, { label: '拦截页（策略页）', detail: '策略页（状态码 403）' })
-  assert.ok(rows.indexOf(overrideRow!) < rows.indexOf(policyRow!), '规则覆盖行必须在策略页行之前（覆盖优先语义）')
+  const pageRow = rows.find((row) => row.label === '拦截页')
+  assert.deepEqual(pageRow, { label: '拦截页', detail: '策略页（状态码 403）' })
+  assert.equal(rows.some((row) => row.label.includes('规则覆盖')), false, '「规则覆盖」行族必须退场')
+  assert.equal(rows.some((row) => row.label === '拦截页（策略页）'), false, '单行口径不再使用（策略页）限定标签')
 })
 
 test('多策略绑定链：同阶段两条策略出两组且按绑定顺序编号', () => {
@@ -695,8 +684,7 @@ test('多策略绑定链：同阶段两条策略出两组且按绑定顺序编�
     fullRows,
     '第二条策略的明细行必须与同形首条策略一样完整，不得只出组元数据',
   )
-  // 阶段 0 不在评估链内：无 override 概念，且无阶段 0 策略时为空组集合
-  assert.equal(model.stages[0].override, null)
+  // 阶段 0 不在评估链内：无拦截页概念，且无阶段 0 策略时为空组集合
   assert.equal(model.stages[0].enabled, false)
 })
 

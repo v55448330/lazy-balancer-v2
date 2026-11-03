@@ -138,18 +138,18 @@ func TestRDBStrictRender_threatFilePresentRendersNormally(t *testing.T) {
 	var precheck string
 	for _, waf := range wafs {
 		directives, _ := waf["directives"].(string)
-		if strings.Contains(directives, `"id:2,phase:1,deny`) {
+		if strings.Contains(directives, `"id:1500`) {
 			precheck = directives
 			break
 		}
 	}
 	if precheck == "" {
-		t.Fatalf("引用策略必须发射 deny ACL 预检指令（id:2）: %#v", wafs)
+		t.Fatalf("引用策略必须发射逐策略 deny ACL 预检链（id:1500000+policyID）: %#v", wafs)
 	}
 	if !strings.Contains(precheck, "@ipListFast ") {
 		t.Fatalf("deny ACL 必须经 @ipListFast 文件投影:\n%s", precheck)
 	}
-	projection := readRenderedIPList(t, precheck, "u-deny")
+	projection := readRenderedIPList(t, precheck, "-acl")
 	for _, want := range []string{"192.0.2.0/24", "198.51.100.7/32"} {
 		if !strings.Contains(projection, want) {
 			t.Fatalf("u-deny 投影缺 %s（.iplist 条目必须完整进入 ACL 匹配集）: %q", want, projection)
@@ -194,18 +194,18 @@ func TestRDBStrictRender_slaveShape_fastOnlyRenders(t *testing.T) {
 	var precheck string
 	for _, waf := range wafs {
 		directives, _ := waf["directives"].(string)
-		if strings.Contains(directives, `"id:2,phase:1,deny`) {
+		if strings.Contains(directives, `"id:1500`) {
 			precheck = directives
 			break
 		}
 	}
 	if precheck == "" {
-		t.Fatalf(".fast 回退必须发射 deny ACL 预检指令（id:2）: %#v", wafs)
+		t.Fatalf(".fast 回退必须发射逐策略 deny ACL 预检链（id:1500000+policyID）: %#v", wafs)
 	}
 	if !strings.Contains(precheck, "@ipListFast ") {
 		t.Fatalf(".fast 回退的 deny ACL 必须经 @ipListFast 文件投影:\n%s", precheck)
 	}
-	projection := readRenderedIPList(t, precheck, "u-deny")
+	projection := readRenderedIPList(t, precheck, "-acl")
 	if !strings.Contains(projection, "192.0.2.0/24") {
 		t.Fatalf("u-deny 投影缺 .fast 前缀 192.0.2.0/24（回退展开丢失=fail-open 方向静默失效）: %q", projection)
 	}

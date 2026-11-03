@@ -1412,7 +1412,7 @@ const openIpListDialog = async (row?: IPListRow) => {
     loadingIpListDetail.value = false
     ipListDetailFailed.value = false
     ipListDetailRowId.value = null
-    ipListForm.value = { name: '', description: '', category: '', entries: [{ value: '', remark: '' }] }
+    ipListForm.value = { name: '', description: '', category: '', entries: [] }
     ipListOpenSnapshot.value = []
     ipListDialogVisible.value = true
     return

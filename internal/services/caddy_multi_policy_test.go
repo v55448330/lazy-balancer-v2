@@ -544,11 +544,12 @@ func TestMultiPolicy_IPPrecheckHandlerPrecedesAllSecurityHandlers(t *testing.T) 
 	wafs := wafHandlers(t, mainRoute)
 	precheck := wafs[0]["directives"].(string)
 	// 预检含 p2 的拒绝 IP（deny 并集、id:2、audit 留痕；名单经 @ipListFast 文件投影）
-	if !strings.Contains(precheck, `@ipListFast `) || !strings.Contains(precheck, `"id:2,phase:1,deny,status:403,log,msg:'IP 黑名单拒绝',skipAfter:SECURITY_RULES_END`) {
-		t.Fatalf("precheck must deny p2's ACL union with id:2:\n%s", precheck)
+	// 拆链后：p2 的 ACL deny 链 id=1500000+policyID（前缀 1500），投影=策略身份。
+	if !strings.Contains(precheck, `@ipListFast `) || !strings.Contains(precheck, `"id:1500`) || !strings.Contains(precheck, `msg:'IP 黑名单拒绝'`) {
+		t.Fatalf("precheck must deny p2's ACL via per-policy chain (id:1500xxx):\n%s", precheck)
 	}
-	if got := readRenderedIPList(t, precheck, "u-deny"); !strings.Contains(got, "203.0.113.5/32") {
-		t.Fatalf("deny 并集文件须含 203.0.113.5/32: %q", got)
+	if got := readRenderedIPList(t, precheck, "-acl"); !strings.Contains(got, "203.0.113.5/32") {
+		t.Fatalf("逐策略 deny 名单须含 203.0.113.5/32: %q", got)
 	}
 	// 预检不得包含任何 CRS Include / DetectionOnly / 自定义规则——仅 IP 控制
 	for _, unwanted := range []string{"Include ", "DetectionOnly", "SecRuleRemoveById"} {
@@ -593,11 +594,11 @@ func TestMultiPolicy_IPPrecheckEmissionGate(t *testing.T) {
 	// 预检在前、策略引擎在后；预检携带 deny 并集（id:2）
 	wafsA := wafHandlers(t, mainA)
 	precheckA := wafsA[0]["directives"].(string)
-	if !strings.Contains(precheckA, `"id:2,phase:1,deny,status:403,log,msg:'IP 黑名单拒绝'`) {
-		t.Fatalf("single-policy precheck must carry the deny union:\n%s", precheckA)
+	if !strings.Contains(precheckA, `"id:1500`) || !strings.Contains(precheckA, `,phase:1,deny,status:403,log,msg:'IP 黑名单拒绝'`) {
+		t.Fatalf("single-policy precheck must carry its per-policy deny chain:\n%s", precheckA)
 	}
-	if got := readRenderedIPList(t, precheckA, "u-deny"); !strings.Contains(got, "203.0.113.5/32") {
-		t.Fatalf("deny 并集文件须含 203.0.113.5/32: %q", got)
+	if got := readRenderedIPList(t, precheckA, "-acl"); !strings.Contains(got, "203.0.113.5/32") {
+		t.Fatalf("逐策略 deny 名单须含 203.0.113.5/32: %q", got)
 	}
 
 	// Given B：多策略但无任何 deny 侧 IP 控制（信任名单不算 deny 侧）→ 无预检
@@ -767,12 +768,12 @@ func TestMultiPolicy_PrecheckTrustDetectionOnly(t *testing.T) {
 	trustIdx := strings.Index(precheck, trustRule)
 	// deny 规则(id:2)在信任之后,且信任 IP 也在 deny 名单——DetectionOnly 使其
 	// 评估不拦但记录(信任最高优先,不再被 403)
-	denyIdx := strings.Index(precheck, `"id:2,phase:1,deny`)
+	denyIdx := strings.Index(precheck, `"id:1500`)
 	if denyIdx < 0 {
 		t.Fatalf("precheck missing deny rule for trusted IP (must log as detection):\n%s", precheck)
 	}
-	if got := readRenderedIPList(t, precheck, "u-deny"); !strings.Contains(got, "198.51.100.9/32") {
-		t.Fatalf("deny 并集文件须含信任 IP 198.51.100.9/32: %q", got)
+	if got := readRenderedIPList(t, precheck, "-acl"); !strings.Contains(got, "198.51.100.9/32") {
+		t.Fatalf("逐策略 deny 名单须含信任 IP 198.51.100.9/32: %q", got)
 	}
 	if trustIdx > denyIdx {
 		t.Fatalf("trust DetectionOnly (offset %d) must precede deny rules (offset %d):\n%s", trustIdx, denyIdx, precheck)

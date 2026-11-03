@@ -5,57 +5,6 @@ export const dnsServerAfterToggle = (current: string, enabled: boolean, hydratin
 }
 
 /**
- * 规则级阶段拦截页覆盖：由规则列表「批量设置阶段拦截页」写入，向导
- * 不提供编辑入口但必须随规则往返。这也是向导两份手工键集的共享来源——
- * `newRuleWizardStageOverrides()` 供「新建」路径清态，`stageBlockPageOverrides()`
- * 供编辑/复制路径回填，两侧口径同源，避免新建静默继承上一条规则的覆盖。
- */
-interface StageBlockPageOverrideState {
-  block_page_stage1_id: number
-  block_page_stage1_status: number
-  block_page_stage3_id: number
-  block_page_stage3_status: number
-}
-
-/** 新建规则的阶段拦截页覆盖恒为 0（0=不覆盖）。 */
-export const newRuleWizardStageOverrides = (): StageBlockPageOverrideState => ({
-  block_page_stage1_id: 0,
-  block_page_stage1_status: 0,
-  block_page_stage3_id: 0,
-  block_page_stage3_status: 0,
-})
-
-/** 编辑/复制路径回填：源规则缺键按 0 处理（0=不覆盖）。 */
-export const stageBlockPageOverrides = (source: {
-  block_page_stage1_id?: number | null
-  block_page_stage1_status?: number | null
-  block_page_stage3_id?: number | null
-  block_page_stage3_status?: number | null
-}): StageBlockPageOverrideState => ({
-  block_page_stage1_id: source.block_page_stage1_id || 0,
-  block_page_stage1_status: source.block_page_stage1_status || 0,
-  block_page_stage3_id: source.block_page_stage3_id || 0,
-  block_page_stage3_status: source.block_page_stage3_status || 0,
-})
-
-/**
- * 编辑向导只提交「相对打开快照真正变化」的阶段页键（后端 `PUT /rules/:id`
- * 的 4 个字段是 `*int` 非 nil 即覆盖、nil=保留）。向导不展示这些字段，
- * 无条件回写会把另一标签页/另一管理员在策略页刚写入的覆盖静默回退。
- */
-export const stageBlockPagePatch = (
-  current: Partial<StageBlockPageOverrideState>,
-  snapshot: StageBlockPageOverrideState,
-): Partial<StageBlockPageOverrideState> => {
-  const patch: Partial<StageBlockPageOverrideState> = {}
-  for (const key of Object.keys(snapshot) as Array<keyof StageBlockPageOverrideState>) {
-    const value = current[key] || 0
-    if (value !== snapshot[key]) patch[key] = value
-  }
-  return patch
-}
-
-/**
  * 被动健康检查下隐藏的超时字段（只把 timeout 输入放进主动探测模板）
  * 后端 validateRuleFeatures（rule_features.go）**不区分主动/被动**地
  * 要求 `0 < timeout < interval`，提交载荷也恒带该值。存量/带外数据（历史

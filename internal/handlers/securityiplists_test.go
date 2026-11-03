@@ -756,58 +756,51 @@ func policyPayloadAllow(name string, inline string, refIDs ...int64) map[string]
 	}
 }
 
-func TestSecurityPolicyAllowMode_effectiveListNonEmpty(t *testing.T) {
+func TestSecurityPolicyAllowMode_emptyEffectiveListSaves(t *testing.T) {
+	// 空白名单保存已放开（2026-11 用户裁定）：生效集合为空时允许保存（前端
+	// 确认弹窗警示「关联规则将拒绝所有请求」）；运行时渲染层恒拒的 fail-closed
+	// 语义不变（security_allow_empty_test.go 独立钉住）。
 	setupSecurityPolicyTestDB(t)
 	router := newIPListRouter(t)
 	emptyID := seedIPListRow(t, "空名单", "[]")
 	filledID := seedIPListRow(t, "有名单", `[{"value":"10.0.0.0/8","remark":""}]`)
 
-	// 形状 1：引用存在但条目为空 → 生效 allow 集合为空，拒绝（旧实现只看引用个数）。
+	// 形状 1：引用空名单（生效集合空）→ 201。
 	rec := postJSON(t, router, "/security/policies", policyPayloadAllow("空引用", "[]", emptyID))
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("create with empty referenced list status=%d body=%s, want 400", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusOK {
+		t.Fatalf("create with empty referenced list status=%d body=%s, want 200", rec.Code, rec.Body.String())
 	}
-	// 文案方向必须与发射语义一致：allow 空集 = 否定算子恒命中 = 拒绝全部
-	// （全站锁死），不是「放行所有请求」。
-	if !strings.Contains(rec.Body.String(), "拒绝所有请求") {
-		t.Fatalf("empty allow message must explain fail-closed semantics, got %s", rec.Body.String())
-	}
-
-	// 形状 2：引用条目非空 → 通过。
+	// 形状 2：引用非空名单 → 201。
 	rec = postJSON(t, router, "/security/policies", policyPayloadAllow("非空引用", "[]", filledID))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("create with non-empty referenced list status=%d body=%s, want 200", rec.Code, rec.Body.String())
 	}
-
-	// 形状 3：纯 inline 非空 → 通过。
+	// 形状 3：纯内联 → 201。
 	rec = postJSON(t, router, "/security/policies", policyPayloadAllow("纯内联", `["198.51.100.0/24"]`))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("create with inline entries status=%d body=%s, want 200", rec.Code, rec.Body.String())
 	}
-
-	// 形状 4：更新为「空 inline + 引用空名单」→ 拒绝（合并后生效集合为空）。
+	// 形状 4：更新为空生效集（空 inline + 空名单引用）→ 200 且落库为空。
 	polyID := createTestPolicy(t, router, policyPayloadAllow("更新策略", "[]", filledID))
 	rec = putJSON(t, router, fmt.Sprintf("/security/policies/%d", polyID), map[string]any{
 		"ip_acl_list": "[]", "ip_acl_list_refs": fmt.Sprintf("[%d]", emptyID),
 	})
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("update to empty effective allow set status=%d body=%s, want 400", rec.Code, rec.Body.String())
-	}
-
-	// 形状 5：多引用其一非空 → 通过（不要求每个 ref 非空）。
-	rec = putJSON(t, router, fmt.Sprintf("/security/policies/%d", polyID), map[string]any{
-		"ip_acl_list": "[]", "ip_acl_list_refs": fmt.Sprintf("[%d,%d]", emptyID, filledID),
-	})
 	if rec.Code != http.StatusOK {
-		t.Fatalf("update with one non-empty ref status=%d body=%s, want 200", rec.Code, rec.Body.String())
+		t.Fatalf("update to empty effective allow set status=%d body=%s, want 200", rec.Code, rec.Body.String())
 	}
-
-	// 形状 6：更新为「空 inline 且无引用」→ 拒绝（既有语义回归）。
+	var inline, refs string
+	if err := db.DB.QueryRow(`SELECT COALESCE(ip_acl_list,'[]'), COALESCE(ip_acl_list_refs,'[]') FROM security_policies WHERE id=?`, polyID).Scan(&inline, &refs); err != nil {
+		t.Fatal(err)
+	}
+	if inline != "[]" || refs != fmt.Sprintf("[%d]", emptyID) {
+		t.Fatalf("empty allow must persist as submitted, got inline=%q refs=%q", inline, refs)
+	}
+	// 形状 5：更新为「空 inline 且无引用」→ 200（合法空白名单）。
 	rec = putJSON(t, router, fmt.Sprintf("/security/policies/%d", polyID), map[string]any{
 		"ip_acl_list": "[]", "ip_acl_list_refs": "[]",
 	})
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("update to no refs status=%d body=%s, want 400", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusOK {
+		t.Fatalf("update to no refs status=%d body=%s, want 200", rec.Code, rec.Body.String())
 	}
 }
 
@@ -935,30 +928,6 @@ func TestIPListRefView_includesTrustedProxy(t *testing.T) {
 	t.Fatalf("list %d missing from response", listID)
 }
 
-func TestAllowEffectiveListNonEmpty_ignoresExpiredEntries(t *testing.T) {
-	setupSecurityPolicyTestDB(t)
-	id := seedIPListRow(t, "expired-allow", `[{"value":"203.0.113.7","expires_at":"2000-01-01 00:00:00"}]`)
-	nonEmpty, err := allowEffectiveListNonEmpty(db.DB, "[]", fmt.Sprintf("[%d]", id))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if nonEmpty {
-		t.Fatal("expired-only referenced list must not count as non-empty allow set")
-	}
-	id2 := seedIPListRow(t, "future-allow", `[{"value":"203.0.113.8","expires_at":"2999-01-01 00:00:00"}]`)
-	nonEmpty, err = allowEffectiveListNonEmpty(db.DB, "[]", fmt.Sprintf("[%d]", id2))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !nonEmpty {
-		t.Fatal("future entry must count as non-empty allow set")
-	}
-}
-
-// 保存一组「全部已到期」的条目等价于生效集合为空——
-// allow 引用名单的清空门不得被原始 len>0 绕过（与 remove-ip 的同源
-// 判据用 AutobanActiveEntries 过滤后的有效集合，渲染侧同口径）。此前仅
-// remove-ip 修了口径，UpdateIPList 仍按原始条目数判定 ⇒ allow 策略 fail-open。
 func TestUpdateIPList_expiredOnlyEntriesBlockedByAllowPolicy(t *testing.T) {
 	setupSecurityPolicyTestDB(t)
 	router := newIPListRouter(t)

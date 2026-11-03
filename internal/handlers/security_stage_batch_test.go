@@ -163,8 +163,20 @@ func TestBatchBindSecurityPolicies_singleRenderAndShapes(t *testing.T) {
 	if err := db.DB.QueryRow(`SELECT COALESCE(GROUP_CONCAT(policy_id),'') FROM security_policy_bindings WHERE rule_caddy_id='lb_b2' ORDER BY policy_id`).Scan(&pids); err != nil {
 		t.Fatal(err)
 	}
-	if pids != "1,2" {
-		t.Fatalf("merge must union dedupe to [1,2], got [%s]", pids)
+	// merge 后的行集合（顺序由 rank 承载，GROUP_CONCAT 内部序不作契约）：
+	// 只断言集合为 {1,2} 且无重复。
+	{
+		parts := strings.Split(pids, ",")
+		if len(parts) != 2 {
+			t.Fatalf("merge must union dedupe to {1,2}, got [%s]", pids)
+		}
+		seen := map[string]bool{}
+		for _, part := range parts {
+			seen[part] = true
+		}
+		if !seen["1"] || !seen["2"] {
+			t.Fatalf("merge must union dedupe to {1,2}, got [%s]", pids)
+		}
 	}
 
 	// When：超 8 条策略 → 400（2026-09-21 上限 5→8）；恰好 8 条 → 200；策略不存在 → 400
@@ -271,49 +283,37 @@ func TestBatchBindSecurityPolicies_mergeCapBoundary(t *testing.T) {
 	}
 }
 
-func TestBatchRuleBlockPages_updatesAndSkips(t *testing.T) {
-	// Given：2 条规则 + 拦截页 7；lb_ghost 不存在
+func TestBatchRuleBlockPages_deprecatedUpdatesAndSkips(t *testing.T) {
 	handler, loadCount := newStageBatchTestHandlers(t)
 	seedStageBatchRules(t)
 	router := stageBatchRouter(handler)
 
-	// When：批量设置阶段页（含一条不存在规则）
 	response := postStageJSON(t, router, "/rules/batch-block-pages",
 		`{"rule_ids":["lb_b1","lb_b2","lb_ghost"],"block_page_stage1_id":7,"block_page_stage1_status":403,"block_page_stage3_id":7,"block_page_stage3_status":503}`)
-
-	// Then：bound=2、ghost 进 skipped、两规则 4 列落库、/load 恰好 1 次
 	if response.Code != http.StatusOK {
 		t.Fatalf("batch-block-pages status=%d body=%s, want 200", response.Code, response.Body.String())
 	}
-	bound, skipped := batchResult(t, response)
-	if bound != 2 || len(skipped) != 1 || skipped[0]["rule_id"] != "lb_ghost" {
-		t.Fatalf("bound=%d skipped=%v, want bound=2 skipped=[lb_ghost]", bound, skipped)
+	bound, unchanged, skipped := batchResultAll(t, response)
+	if bound != 0 || unchanged != 2 || len(skipped) != 1 || skipped[0]["rule_id"] != "lb_ghost" {
+		t.Fatalf("bound=%d unchanged=%d skipped=%v, want 0/2/[lb_ghost]", bound, unchanged, skipped)
 	}
-	if *loadCount != 1 {
-		t.Fatalf("batch-block-pages must render once, got %d loads", *loadCount)
+	if *loadCount != 0 {
+		t.Fatalf("停用端点不得触发渲染，got %d loads", *loadCount)
 	}
 	for _, ruleID := range []string{"lb_b1", "lb_b2"} {
-		var s1id, s1status, s3id, s3status int
-		if err := db.DB.QueryRow(`SELECT block_page_stage1_id,block_page_stage1_status,block_page_stage3_id,block_page_stage3_status FROM lb_rules WHERE caddy_id=?`, ruleID).
-			Scan(&s1id, &s1status, &s3id, &s3status); err != nil {
-			t.Fatal(err)
-		}
-		if s1id != 7 || s1status != 403 || s3id != 7 || s3status != 503 {
-			t.Fatalf("%s stage columns=(%d,%d,%d,%d), want (7,403,7,503)", ruleID, s1id, s1status, s3id, s3status)
+		if s1, s1s, s3, s3s := stageColumnsByID(t, ruleID); s1 != 0 || s1s != 0 || s3 != 0 || s3s != 0 {
+			t.Fatalf("%s stage columns=(%d,%d,%d,%d), want all zero", ruleID, s1, s1s, s3, s3s)
 		}
 	}
-
-	// When：悬空页 / 越界状态码 → 400
 	if response := postStageJSON(t, router, "/rules/batch-block-pages",
-		`{"rule_ids":["lb_b1"],"block_page_stage1_id":999}`); response.Code != http.StatusBadRequest {
-		t.Fatalf("dangling page status=%d, want 400", response.Code)
+		`{"rule_ids":["lb_b1"],"block_page_stage1_id":999}`); response.Code != http.StatusOK {
+		t.Fatalf("dangling page status=%d body=%s, want 200", response.Code, response.Body.String())
 	}
 	if response := postStageJSON(t, router, "/rules/batch-block-pages",
-		`{"rule_ids":["lb_b1"],"block_page_stage3_id":7,"block_page_stage3_status":418}`); response.Code != http.StatusBadRequest {
-		t.Fatalf("invalid status code status=%d, want 400", response.Code)
+		`{"rule_ids":["lb_b1"],"block_page_stage3_id":7,"block_page_stage3_status":418}`); response.Code != http.StatusOK {
+		t.Fatalf("invalid status code status=%d body=%s, want 200", response.Code, response.Body.String())
 	}
 }
-
 func TestGetRuleStageStats_bucketsAndRateLimitMapping(t *testing.T) {
 	// Given：规则 lb_ss（双域名）+ 24h 内 blocked 事件（id 2 / 14 / 800123 / 942100 /
 	// 10005）+ 界外事件（logged / 25h 前）+ 指标桩 429 计数

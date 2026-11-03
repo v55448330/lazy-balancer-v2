@@ -34,7 +34,7 @@ func TestBuildIPPrecheckDirectives_allowEmptyEmitsDenyAll(t *testing.T) {
 		Name: "allow-empty", Mode: "blocking", AnomalyThreshold: 5,
 		IPACLEnabled: true, IPACLMode: "allow", IPACLList: "[]",
 	}
-	directives, err := buildIPPrecheckDirectives([]*models.SecurityPolicy{p}, 0, "lb_allow_empty")
+	directives, err := buildIPPrecheckDirectives([]*models.SecurityPolicy{p}, "lb_allow_empty")
 	if err != nil {
 		t.Fatalf("precheck allow empty must render fail-closed deny-all, got %v", err)
 	}

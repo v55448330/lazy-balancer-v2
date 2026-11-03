@@ -20,7 +20,9 @@ import (
 
 // 被测的 SQL 形态（与 handlers 源文件逐字节一致，见 TestSecurityEventFamilyGlob_sourcePinned）。
 const (
-	customFamilyGlobTestCopy  = `(rule_triggered GLOB '[0-9][0-9][0-9][0-9][0-9]' OR rule_triggered GLOB '[1-7][0-9][0-9][0-9][0-9][0-9]' OR rule_triggered GLOB '1[0-9][0-9][0-9][0-9][0-9][0-9]*' OR rule_triggered GLOB '[3-6][0-9][0-9][0-9][0-9][0-9][0-9]*')`
+	// 2026-11：阶段 1 预检逐策略 ACL/黑名单链段（1500000+/1510000+）落在
+	// ≥1000000 自定义兜底区间内，源表达式追加显式排除项。
+	customFamilyGlobTestCopy  = `(((rule_triggered GLOB '[0-9][0-9][0-9][0-9][0-9]' OR rule_triggered GLOB '[1-7][0-9][0-9][0-9][0-9][0-9]' OR rule_triggered GLOB '1[0-9][0-9][0-9][0-9][0-9][0-9]*' OR rule_triggered GLOB '[3-6][0-9][0-9][0-9][0-9][0-9][0-9]*')) AND NOT (rule_triggered GLOB '150[0-9][0-9][0-9][0-9]' OR rule_triggered GLOB '151[0-9][0-9][0-9][0-9]'))`
 	geoipFamilyGlobTestCopy   = `rule_triggered GLOB '80[0-9][0-9][0-9][0-9]'`
 	crawlerFamilyGlobTestCopy = `rule_triggered GLOB '8[1-9][0-9][0-9][0-9][0-9]'`
 )

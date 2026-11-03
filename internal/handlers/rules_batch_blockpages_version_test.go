@@ -1,14 +1,13 @@
 package handlers
 
-// 批量设置阶段拦截页必须推进规则版本列（updated_at/updated_by）：阶段页是
-// 渲染输入，其它四个规则写端点（更新/启用/禁用/复制）都显式 bump——批量端点
-// 漏 bump 时，并发打开的编辑向导版本门恒通过，PUT 静默覆盖他人的批量结果，
-// 且列表「更新时间/更新者」仍显示本次批量前的值与操作者。
+// 批量设置阶段拦截页停用后的写侧钉测（2026-11 用户裁定：写侧停写、渲染链
+// 零消费、DB 4 列保留）。原钉「批量端点推进规则版本列」的语义已不可达——
+// 停用端点零写入：不触碰四列、不推进 updated_at/updated_by、不触发行级
+// 同步触发器；响应形状保持兼容（bound=0，unchanged=存在的 http 规则数）。
 
 import (
 	"net/http"
 	"testing"
-	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -43,7 +42,7 @@ func readRuleVersionRow(t *testing.T, caddyID string) (string, int64) {
 	return updatedAt, updatedBy
 }
 
-func TestBatchRuleBlockPages_bumpsRuleVersionColumns(t *testing.T) {
+func TestBatchRuleBlockPages_deprecatedNoWrite(t *testing.T) {
 	handler, _ := newStageBatchTestHandlers(t)
 	seedStageBatchRules(t)
 	router := operatorRouter(42, func(router *gin.Engine) {
@@ -55,57 +54,32 @@ func TestBatchRuleBlockPages_bumpsRuleVersionColumns(t *testing.T) {
 		t.Fatalf("seed baseline version: %v", err)
 	}
 
-	// When：异值批量（阶段页从未设置变为 7/403 + 7/503）
-	first := postStageJSON(t, router, "/rules/batch-block-pages",
+	// When：即使携带异值四字段，停用端点也必须零写入。
+	response := postStageJSON(t, router, "/rules/batch-block-pages",
 		`{"rule_ids":["lb_b1","lb_b2","lb_b3"],"block_page_stage1_id":7,"block_page_stage1_status":403,"block_page_stage3_id":7,"block_page_stage3_status":503}`)
-	if first.Code != http.StatusOK {
-		t.Fatalf("batch status=%d body=%s", first.Code, first.Body.String())
+	if response.Code != http.StatusOK {
+		t.Fatalf("batch status=%d body=%s, want 200（兼容回执）", response.Code, response.Body.String())
+	}
+	bound, _ := batchResult(t, response)
+	if bound != 0 {
+		t.Fatalf("deprecated batch bound=%d, want 0（零写入）", bound)
 	}
 
-	// Then 1：真实变更的行版本列前移且归属本次操作者。
+	// Then：版本列保持基线、操作者不覆盖；四列保持 0。
 	for _, id := range []string{"lb_b1", "lb_b2", "lb_b3"} {
 		updatedAt, updatedBy := readRuleVersionRow(t, id)
-		if updatedBy != 42 {
-			t.Fatalf("%s updated_by=%d, want 42（批量端点必须写操作者）", id, updatedBy)
+		if updatedAt != baseline {
+			t.Fatalf("%s updated_at=%q, want unchanged %q（停用端点零写入）", id, updatedAt, baseline)
 		}
-		if updatedAt == baseline || updatedAt == "" {
-			t.Fatalf("%s updated_at=%q 未推进，want 晚于基线 %q", id, updatedAt, baseline)
+		if updatedBy != 7 {
+			t.Fatalf("%s updated_by=%d, want 7（不得改写操作者）", id, updatedBy)
 		}
-	}
-
-	// 同值批量：零写入 ⇒ 版本列保持不动（不得凭端点触发无条件 bump）。
-	beforeVersions := make(map[string]string, 3)
-	for _, id := range []string{"lb_b1", "lb_b2", "lb_b3"} {
-		updatedAt, _ := readRuleVersionRow(t, id)
-		beforeVersions[id] = updatedAt
-	}
-	second := postStageJSON(t, router, "/rules/batch-block-pages",
-		`{"rule_ids":["lb_b1","lb_b2","lb_b3"],"block_page_stage1_id":7,"block_page_stage1_status":403,"block_page_stage3_id":7,"block_page_stage3_status":503}`)
-	if second.Code != http.StatusOK {
-		t.Fatalf("same-value batch status=%d body=%s", second.Code, second.Body.String())
-	}
-	for id, want := range beforeVersions {
-		if got, _ := readRuleVersionRow(t, id); got != want {
-			t.Fatalf("%s updated_at %q → %q：同值批量必须零写入", id, want, got)
+		var s1, s1s, s3, s3s int
+		if err := db.DB.QueryRow(`SELECT COALESCE(block_page_stage1_id,0),COALESCE(block_page_stage1_status,0),COALESCE(block_page_stage3_id,0),COALESCE(block_page_stage3_status,0) FROM lb_rules WHERE caddy_id=?`, id).Scan(&s1, &s1s, &s3, &s3s); err != nil {
+			t.Fatal(err)
 		}
-	}
-
-	// 并发向导语义：批量写后，打开时拿到的旧基线必须被版本门判为冲突
-	// （UpdateRule 的 409 分支即 ruleVersionConflicts(库内值, 提交基线)）。
-	staleBaseline, err := time.Parse("2006-01-02 15:04:05", baseline)
-	if err != nil {
-		t.Fatalf("parse baseline: %v", err)
-	}
-	bumped, _ := readRuleVersionRow(t, "lb_b1")
-	if !ruleVersionConflicts(bumped, staleBaseline) {
-		t.Fatalf("批量后 updated_at=%q 与旧基线 %q 判为不冲突：并发向导仍会静默覆盖", bumped, baseline)
-	}
-	// 回归形状：与当前值一致的基线不得误判冲突（版本门不得恒真）。
-	currentVersion, ok := parseRuleVersionValue(bumped)
-	if !ok {
-		t.Fatalf("parse current version %q failed", bumped)
-	}
-	if ruleVersionConflicts(bumped, currentVersion) {
-		t.Fatalf("同值基线 %q 被误判为冲突（版本门不得恒真）", bumped)
+		if s1 != 0 || s1s != 0 || s3 != 0 || s3s != 0 {
+			t.Fatalf("%s stage columns=(%d,%d,%d,%d), want all zero", id, s1, s1s, s3, s3s)
+		}
 	}
 }

@@ -943,7 +943,10 @@ func (s *ClusterService) snapshotSecurityCrawlerSources(ctx context.Context, sto
 }
 
 func (s *ClusterService) snapshotSecurityBindings(ctx context.Context, store snapshotStore) (json.RawMessage, error) {
-	return s.dumpTableAsJSON(ctx, store, "security_policy_bindings", "rule_caddy_id,policy_id", "rule_caddy_id, policy_id")
+	// ORDER BY rank, policy_id：顺序是绑定语义（执行序），同时是节哈希的
+	// 确定性键（同集合同 rank 必得同字节）。rank=0 遗留行由 policy_id 次序键
+	// 兜底为旧语义。
+	return s.dumpTableAsJSON(ctx, store, "security_policy_bindings", "rule_caddy_id,policy_id,rank", "rule_caddy_id, rank, policy_id")
 }
 
 func (s *ClusterService) snapshotSecurityCustomRules(ctx context.Context, store snapshotStore) ([]models.SecurityCustomRule, error) {

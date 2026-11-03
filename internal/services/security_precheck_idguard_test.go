@@ -20,14 +20,14 @@ import (
 func TestEngineGate_precheckGeoipPolicyIDGuard(t *testing.T) {
 	// 越界形状：ID=100000 → 预检 id=900000 撞 CRS 保留段，必须整链跳过。
 	pBig := &models.SecurityPolicy{ID: 100000, Mode: "off", GeoIPMode: "deny", GeoIPCountries: json.RawMessage(`["CN"]`)}
-	directives := mustDirectives(buildIPPrecheckDirectives([]*models.SecurityPolicy{pBig}, 0, "lb_test"))
+	directives := mustDirectives(buildIPPrecheckDirectives([]*models.SecurityPolicy{pBig}, "lb_test"))
 	if strings.Contains(directives, "id:900000") {
 		t.Fatalf("policy id 100000 must skip its precheck geoip chain (900000 collides CRS reserved space), got:\n%s", directives)
 	}
 	compileForEngineGate(t, directives)
 	// 回归形状：常规 ID=42 照常发射 id:800042（与 precheckGeoipChainShapes 同口径）。
 	pOK := &models.SecurityPolicy{ID: 42, Mode: "off", GeoIPMode: "deny", GeoIPCountries: json.RawMessage(`["CN"]`)}
-	dOK := mustDirectives(buildIPPrecheckDirectives([]*models.SecurityPolicy{pOK}, 0, "lb_test"))
+	dOK := mustDirectives(buildIPPrecheckDirectives([]*models.SecurityPolicy{pOK}, "lb_test"))
 	if !strings.Contains(dOK, "id:800042,") {
 		t.Fatalf("policy id 42 must still emit id:800042 chain, got:\n%s", dOK)
 	}
@@ -63,7 +63,7 @@ func TestPrecheckRuleID_crossFamilyUniqueness(t *testing.T) {
 	// 2500 起豁免 id 全部落进伪装段）。编码边界显式化后越界规则跳过+告警，
 	// 绝不发射重复/跨族 id。
 	for _, pid := range []int{2666, 2500} {
-		directives := mustDirectives(buildIPPrecheckDirectives([]*models.SecurityPolicy{crawlerRenderPolicy(pid)}, 0, "lb_test"))
+		directives := mustDirectives(buildIPPrecheckDirectives([]*models.SecurityPolicy{crawlerRenderPolicy(pid)}, "lb_test"))
 		ids := precheckRuleIDList(directives)
 		seen := make(map[int]bool, len(ids))
 		for _, id := range ids {
@@ -83,7 +83,7 @@ func TestPrecheckRuleID_crossFamilyUniqueness(t *testing.T) {
 	}
 
 	// 边界形状：2499 是豁免族最后一个可编码策略（每策略 16 槽），不得误报。
-	directives := mustDirectives(buildIPPrecheckDirectives([]*models.SecurityPolicy{crawlerRenderPolicy(2499)}, 0, "lb_test"))
+	directives := mustDirectives(buildIPPrecheckDirectives([]*models.SecurityPolicy{crawlerRenderPolicy(2499)}, "lb_test"))
 	ids := precheckRuleIDList(directives)
 	seen := make(map[int]bool, len(ids))
 	for _, id := range ids {

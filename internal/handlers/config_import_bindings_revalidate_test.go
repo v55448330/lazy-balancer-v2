@@ -112,7 +112,10 @@ func TestRevalidateImportLiveDependencies_usesCarriedTablesNotSelectedSections(t
 		}
 	})
 
-	t.Run("block page section declared but table absent", func(t *testing.T) {
+	t.Run("block page stage columns are no longer revalidated", func(t *testing.T) {
+		// 规则级阶段拦截页已停用（2026-11 用户裁定）：锁内不再复核
+		// 「规则→阶段页」引用——旧备份包的悬空页引用不构成导入拒绝理由
+		// （四列仅随备份/快照搬运，渲染链零消费）。
 		newBackupTestHandlers(t)
 		backup := &configBackup{Tables: map[string][]map[string]any{
 			"lb_rules": {{"protocol": "http", "enabled": 1, "block_page_stage1_id": 77, "block_page_stage1_status": 403}},
@@ -122,9 +125,8 @@ func TestRevalidateImportLiveDependencies_usesCarriedTablesNotSelectedSections(t
 			t.Fatal(err)
 		}
 		defer tx.Rollback()
-		err = revalidateImportStageBlockPages(context.Background(), tx, backup.Tables)
-		if err == nil || !strings.Contains(err.Error(), "77") {
-			t.Fatalf("页表缺席表示保留 live，不得因分类声明跳过复核，err=%v", err)
+		if err := revalidateImportLiveDependencies(context.Background(), tx, backup, map[string]bool{"security_block_pages": true}); err != nil {
+			t.Fatalf("阶段页引用不得再触发锁内复核拒绝: %v", err)
 		}
 	})
 }

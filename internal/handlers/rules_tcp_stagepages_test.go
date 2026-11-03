@@ -29,54 +29,25 @@ func stageColumnsByID(t *testing.T, caddyID string) (int, int, int, int) {
 	return s1id, s1status, s3id, s3status
 }
 
-func TestUpdateRule_tcpSwitchClearsStagePageColumns(t *testing.T) {
-	// Given：http 规则（含上游）+ 两个拦截页行
+func TestUpdateRule_stagePageColumnsNeverWritten(t *testing.T) {
 	handler := newRuleFeatureTestHandlers(t)
 	seedStagePageRule(t)
 	router := stagePageRouter(handler)
 
-	// When：http 编辑携带 4 列阶段页
-	response := putStageRule(t, router, `{
-		"name":"stage","protocol":"http","domain":"stage.example.test","listen_port":8080,
-		"block_page_stage1_id":7,"block_page_stage1_status":401,
-		"block_page_stage3_id":8,"block_page_stage3_status":503
-	}`)
-
-	// Then：200 且落库（回归形状：http 保留）
-	if response.Code != http.StatusOK {
-		t.Fatalf("http update with stage pages status=%d body=%s, want 200", response.Code, response.Body.String())
-	}
-	if s1id, s1status, s3id, s3status := stagePageColumns(t); s1id != 7 || s1status != 401 || s3id != 8 || s3status != 503 {
-		t.Fatalf("http stage columns=(%d,%d,%d,%d), want (7,401,8,503)", s1id, s1status, s3id, s3status)
-	}
-
-	// When：协议切换 http→tcp
-	response = putStageRule(t, router, `{"protocol":"tcp"}`)
-
-	// Then：200 且 4 列归零（TCP 不消费阶段页，死数据随切换清除）
-	if response.Code != http.StatusOK {
-		t.Fatalf("switch to tcp status=%d body=%s, want 200", response.Code, response.Body.String())
-	}
-	if s1id, s1status, s3id, s3status := stagePageColumns(t); s1id != 0 || s1status != 0 || s3id != 0 || s3status != 0 {
-		t.Fatalf("tcp switch stage columns=(%d,%d,%d,%d), want all 0", s1id, s1status, s3id, s3status)
-	}
-
-	// When：tcp 规则编辑显式携带阶段页引用（最终协议归一形状）
-	response = putStageRule(t, router, `{
-		"protocol":"tcp","listen_port":8080,
-		"block_page_stage1_id":7,"block_page_stage1_status":401,
-		"block_page_stage3_id":8,"block_page_stage3_status":503
-	}`)
-
-	// Then：200 且仍全零（归一吞掉显式携带，TCP 无渲染消费面）
-	if response.Code != http.StatusOK {
-		t.Fatalf("tcp edit with stage pages status=%d body=%s, want 200", response.Code, response.Body.String())
-	}
-	if s1id, s1status, s3id, s3status := stagePageColumns(t); s1id != 0 || s1status != 0 || s3id != 0 || s3status != 0 {
-		t.Fatalf("tcp explicit stage columns=(%d,%d,%d,%d), want all 0", s1id, s1status, s3id, s3status)
+	for _, body := range []string{
+		`{"name":"stage","protocol":"http","domain":"stage.example.test","listen_port":8080,"block_page_stage1_id":7,"block_page_stage1_status":401,"block_page_stage3_id":8,"block_page_stage3_status":503}`,
+		`{"protocol":"tcp"}`,
+		`{"protocol":"tcp","listen_port":8080,"block_page_stage1_id":7,"block_page_stage1_status":401,"block_page_stage3_id":8,"block_page_stage3_status":503}`,
+	} {
+		response := putStageRule(t, router, body)
+		if response.Code != http.StatusOK {
+			t.Fatalf("update status=%d body=%s, want 200", response.Code, response.Body.String())
+		}
+		if s1, s1s, s3, s3s := stagePageColumns(t); s1 != 0 || s1s != 0 || s3 != 0 || s3s != 0 {
+			t.Fatalf("stage columns=(%d,%d,%d,%d), want all zero（写侧停写，任何协议都不写）", s1, s1s, s3, s3s)
+		}
 	}
 }
-
 func TestCreateRule_tcpNormalizesStagePages(t *testing.T) {
 	// Given：两个拦截页行
 	handler := newRuleFeatureTestHandlers(t)
@@ -103,7 +74,7 @@ func TestCreateRule_tcpNormalizesStagePages(t *testing.T) {
 		t.Fatalf("created tcp stage columns=(%d,%d,%d,%d), want all 0", s1id, s1status, s3id, s3status)
 	}
 
-	// 回归：http 创建携带 → 保留
+	// 回归：http 创建携带 → 同样落 0（写侧停写，2026-11 用户裁定）
 	request = httptest.NewRequest(http.MethodPost, "/rules", strings.NewReader(`{
 		"name":"http-pages","protocol":"http","domain":"httppages.example.test","listen_port":8084,
 		"health_check_interval":10,"health_check_timeout":2,"health_check_unhealthy_threshold":3,"health_check_healthy_threshold":2,
@@ -117,8 +88,8 @@ func TestCreateRule_tcpNormalizesStagePages(t *testing.T) {
 	if response.Code != http.StatusCreated {
 		t.Fatalf("create http with stage pages status=%d body=%s, want 201", response.Code, response.Body.String())
 	}
-	if s1id, s1status, s3id, s3status := stageColumnsByName(t, "http-pages"); s1id != 7 || s1status != 403 || s3id != 8 || s3status != 503 {
-		t.Fatalf("created http stage columns=(%d,%d,%d,%d), want (7,403,8,503)", s1id, s1status, s3id, s3status)
+	if s1id, s1status, s3id, s3status := stageColumnsByName(t, "http-pages"); s1id != 0 || s1status != 0 || s3id != 0 || s3status != 0 {
+		t.Fatalf("created http stage columns=(%d,%d,%d,%d), want all 0（写侧停写）", s1id, s1status, s3id, s3status)
 	}
 }
 
@@ -154,8 +125,8 @@ func TestDuplicateRule_tcpClearsStagePages(t *testing.T) {
 	if s1id, s1status, s3id, s3status := stageColumnsByName(t, "tcp-page（副本）"); s1id != 0 || s1status != 0 || s3id != 0 || s3status != 0 {
 		t.Fatalf("tcp duplicate stage columns=(%d,%d,%d,%d), want all 0", s1id, s1status, s3id, s3status)
 	}
-	if s1id, s1status, s3id, s3status := stageColumnsByName(t, "http-page（副本）"); s1id != 7 || s1status != 401 || s3id != 8 || s3status != 503 {
-		t.Fatalf("http duplicate stage columns=(%d,%d,%d,%d), want (7,401,8,503)", s1id, s1status, s3id, s3status)
+	if s1id, s1status, s3id, s3status := stageColumnsByName(t, "http-page（副本）"); s1id != 0 || s1status != 0 || s3id != 0 || s3status != 0 {
+		t.Fatalf("http duplicate stage columns=(%d,%d,%d,%d), want all 0（不继承停用功能死配置）", s1id, s1status, s3id, s3status)
 	}
 }
 
@@ -169,50 +140,32 @@ func stageColumnsByName(t *testing.T, name string) (int, int, int, int) {
 	return s1id, s1status, s3id, s3status
 }
 
-func TestBatchRuleBlockPages_skipsTcpRules(t *testing.T) {
-	// Given：http 规则 lb_b1/b2/b3 + tcp 规则 lb_bt + 拦截页 7；lb_ghost 不存在
+func TestBatchRuleBlockPages_deprecatedSkipsTcpRules(t *testing.T) {
 	handler, loadCount := newStageBatchTestHandlers(t)
 	seedStageBatchRules(t)
 	router := stageBatchRouter(handler)
 
-	// When：混合提交（http + tcp + ghost）
 	response := postStageJSON(t, router, "/rules/batch-block-pages",
 		`{"rule_ids":["lb_b1","lb_bt","lb_ghost"],"block_page_stage1_id":7,"block_page_stage1_status":403,"block_page_stage3_id":7,"block_page_stage3_status":503}`)
-
-	// Then：bound=1；tcp 与 ghost 各自 reason 进 skipped；tcp 行 4 列不动
 	if response.Code != http.StatusOK {
 		t.Fatalf("batch-block-pages status=%d body=%s, want 200", response.Code, response.Body.String())
 	}
-	bound, skipped := batchResult(t, response)
-	if bound != 1 || len(skipped) != 2 {
-		t.Fatalf("bound=%d skipped=%v, want bound=1 skipped=2 entries", bound, skipped)
+	bound, unchanged, skipped := batchResultAll(t, response)
+	if bound != 0 || unchanged != 1 || len(skipped) != 2 {
+		t.Fatalf("bound=%d unchanged=%d skipped=%v, want 0/1/2", bound, unchanged, skipped)
 	}
 	if skipped[0]["rule_id"] != "lb_bt" || skipped[0]["reason"] != "TCP 规则不经过安全链" {
-		t.Fatalf("skipped[0]=%v, want lb_bt/TCP 规则不经过安全链", skipped[0])
+		t.Fatalf("skipped[0]=%v", skipped[0])
 	}
 	if skipped[1]["rule_id"] != "lb_ghost" || skipped[1]["reason"] != "规则不存在" {
-		t.Fatalf("skipped[1]=%v, want lb_ghost/规则不存在", skipped[1])
+		t.Fatalf("skipped[1]=%v", skipped[1])
 	}
-	if s1id, s1status, s3id, s3status := stageColumnsByID(t, "lb_bt"); s1id != 0 || s1status != 0 || s3id != 0 || s3status != 0 {
-		t.Fatalf("tcp rule stage columns=(%d,%d,%d,%d), want untouched all 0", s1id, s1status, s3id, s3status)
+	if *loadCount != 0 {
+		t.Fatalf("停用端点不得触发渲染，got %d loads", *loadCount)
 	}
-	if *loadCount != 1 {
-		t.Fatalf("batch-block-pages must render once, got %d loads", *loadCount)
-	}
-
-	// 回归：全 http 提交照旧
-	response = postStageJSON(t, router, "/rules/batch-block-pages",
-		`{"rule_ids":["lb_b2","lb_b3"],"block_page_stage1_id":7,"block_page_stage1_status":403,"block_page_stage3_id":7,"block_page_stage3_status":503}`)
-	if response.Code != http.StatusOK {
-		t.Fatalf("all-http batch status=%d body=%s, want 200", response.Code, response.Body.String())
-	}
-	bound, skipped = batchResult(t, response)
-	if bound != 2 || len(skipped) != 0 {
-		t.Fatalf("all-http bound=%d skipped=%v, want bound=2 skipped=0", bound, skipped)
-	}
-	for _, ruleID := range []string{"lb_b2", "lb_b3"} {
-		if s1id, s1status, s3id, s3status := stageColumnsByID(t, ruleID); s1id != 7 || s1status != 403 || s3id != 7 || s3status != 503 {
-			t.Fatalf("%s stage columns=(%d,%d,%d,%d), want (7,403,7,503)", ruleID, s1id, s1status, s3id, s3status)
+	for _, id := range []string{"lb_b1", "lb_bt"} {
+		if s1, s1s, s3, s3s := stageColumnsByID(t, id); s1 != 0 || s1s != 0 || s3 != 0 || s3s != 0 {
+			t.Fatalf("%s stage columns=(%d,%d,%d,%d), want all zero", id, s1, s1s, s3, s3s)
 		}
 	}
 }

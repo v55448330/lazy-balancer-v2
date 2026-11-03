@@ -415,14 +415,14 @@ func TestMultiPolicy_AttributionRoutes_PerPolicySyntheticCode(t *testing.T) {
 	if !strings.Contains(joined, "deny,status:484") {
 		t.Fatalf("p2 segment must lift deny to 484:\n%s", joined)
 	}
-	// GeoIP 已迁预检（id=800000+policyID 段）——预检 deny 不抬码（阶段 1 保持
-	// 403 兜底归因边界，合成码抬码仅限策略引擎段）。
+	// GeoIP 已迁预检（id=800000+policyID 段）——拦截页逐策略归因后，有页策略的
+	// GeoIP 链首同样抬合成码（与引擎段同一码：p2 → 484）。
 	geoipFound := false
 	for _, line := range strings.Split(joined, "\n") {
 		if strings.Contains(line, "msg:'GeoIP 区域拦截'") {
 			geoipFound = true
-			if strings.Contains(line, "status:") || !strings.Contains(line, fmt.Sprintf("id:%d,", 800000+p2)) {
-				t.Fatalf("precheck geoip chain must stay un-lifted at id %d:\n%s", 800000+p2, line)
+			if !strings.Contains(line, "status:484") || !strings.Contains(line, fmt.Sprintf("id:%d,", 800000+p2)) {
+				t.Fatalf("precheck geoip chain for paged policy p2 must lift 484 at id %d:\n%s", 800000+p2, line)
 			}
 		}
 	}

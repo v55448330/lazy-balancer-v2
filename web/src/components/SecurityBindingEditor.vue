@@ -65,7 +65,7 @@
       </div>
     </div>
 
-    <!-- 策略侧：规则选择器（复用 rule picker 交互；每行显示当前绑定集合与阶段页覆盖徽标） -->
+    <!-- 策略侧：规则选择器（复用 rule picker 交互；每行显示当前绑定集合） -->
     <template v-else>
       <div class="picker-toolbar">
         <el-input v-model="pickerSearch" placeholder="搜索规则名 / 域名 / 规则 ID" clearable :prefix-icon="Search" class="picker-search" :disabled="saving" />
@@ -120,12 +120,6 @@
               </span>
             </template>
             <span v-if="(bindings[rule.caddy_id] || []).length === 0" class="picker-bind-none">未绑定策略</span>
-            <el-tooltip v-if="overrideBadge(rule, 1)" :content="overrideBadge(rule, 1)!.title" placement="top">
-              <el-tag size="small" :type="overrideBadge(rule, 1)!.broken ? 'danger' : 'warning'" effect="plain" class="picker-override-tag">阶段 1 页：{{ overrideBadge(rule, 1)!.text }}</el-tag>
-            </el-tooltip>
-            <el-tooltip v-if="overrideBadge(rule, 3)" :content="overrideBadge(rule, 3)!.title" placement="top">
-              <el-tag size="small" :type="overrideBadge(rule, 3)!.broken ? 'danger' : 'warning'" effect="plain" class="picker-override-tag">阶段 3 页：{{ overrideBadge(rule, 3)!.text }}</el-tag>
-            </el-tooltip>
             </template>
           </div>
         </div>
@@ -185,7 +179,6 @@ import {
   hasOtherStage2Binding,
   policySupportsTcp,
   TCP_BIND_UNSUPPORTED_REASON,
-  resolveStageOverride,
   chunkForBulk,
   SECURITY_BULK_LIMITS,
   MAX_POLICIES_PER_RULE,
@@ -194,7 +187,6 @@ import type {
   SecurityPolicyType,
   SecurityPolicyTypeInput,
   SecurityStageBinding,
-  SecurityStageBlockPage,
 } from '@/utils/securityStages'
 import { mergeBulkResults } from '@/utils/bulkApplyResult'
 
@@ -214,10 +206,6 @@ interface BindingEditorRule {
   domain: string
   listen_port: number
   protocol: string
-  block_page_stage1_id?: number
-  block_page_stage1_status?: number
-  block_page_stage3_id?: number
-  block_page_stage3_status?: number
 }
 
 const props = defineProps<{
@@ -229,7 +217,6 @@ const props = defineProps<{
   policies: readonly BindingEditorPolicy[]
   bindings: Record<string, SecurityStageBinding[]>
   rules: readonly BindingEditorRule[]
-  blockPages: readonly SecurityStageBlockPage[]
 }>()
 const emit = defineEmits<{
   'update:modelValue': [value: boolean]
@@ -397,28 +384,6 @@ const policyTypeById = computed<ReadonlyMap<number, SecurityPolicyType>>(() => {
 const boundPoliciesByType = (rule: BindingEditorRule, type: SecurityPolicyType): SecurityStageBinding[] =>
   (props.bindings[rule.caddy_id] || []).filter((binding) => policyTypeById.value.get(binding.policy_id) === type)
 
-// 阶段页覆盖徽标（页已删/内容空 = broken）。失效后的真实回落目标按阶段不同：
-// 阶段 1 由引擎兜底错误路由取「绑定链首个启用且内容非空」策略的页面（可能不是
-// 本策略），阶段 3 才逐策略回落各自页面——同一句话覆盖两种语义会误导排障。
-const overrideBadge = (rule: BindingEditorRule, stage: 1 | 3): { text: string; title: string; broken: boolean } | null => {
-  const override = resolveStageOverride(
-    stage === 1 ? rule.block_page_stage1_id : rule.block_page_stage3_id,
-    stage === 1 ? rule.block_page_stage1_status : rule.block_page_stage3_status,
-    props.blockPages,
-  )
-  if (!override) return null
-  if (override.broken) {
-    return {
-      text: '已失效',
-      title: stage === 1
-        ? `配置的拦截页（#${override.pageId}）已删除或内容为空，回落绑定链首个有效页（无则默认 403）`
-        : `配置的拦截页（#${override.pageId}）已删除或内容为空，回落跟随策略`,
-      broken: true,
-    }
-  }
-  return { text: `${override.pageName}（${override.status}）`, title: `阶段 ${stage} 拦截页覆盖：${override.pageName}（状态码 ${override.status}）`, broken: false }
-}
-
 const onOpen = (): void => {
   saving.value = false
   if (props.mode === 'rule') {
@@ -562,7 +527,6 @@ const submit = async (): Promise<void> => {
 .picker-bind-group { display: inline-flex; align-items: center; gap: 4px; }
 .picker-bind-stage { font-style: normal; font-size: 12px; color: #6b7280; }
 .picker-bind-none { font-size: 12px; color: #c0c4cc; }
-.picker-override-tag { margin-left: 2px; }
 .picker-pagination { display: flex; justify-content: flex-end; margin-top: 8px; }
 
 .bind-editor-footer { display: flex; align-items: center; justify-content: space-between; }

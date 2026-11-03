@@ -69,15 +69,12 @@ export interface SecurityStageBinding {
   block_status_code?: number
 }
 
-// 规则级阶段拦截页覆盖（0 = 跟随策略）。protocol：lb_rules 行的消费面可携带
-// （Rules.vue 两处 buildStageModel 直接传规则行）——阶段 1 拦截页行按协议分流：
-// TCP（L4）拒绝=断连，拦截页整族（策略页/规则覆盖/绑定链回落）都不参与渲染。
+// 规则行的消费面（Rules.vue 两处 buildStageModel 直接传规则行）：protocol 携带
+// 协议——阶段 1 拦截页行按协议分流：TCP（L4）拒绝=断连，拦截页整族
+// （策略页/绑定链兜底）都不参与渲染。规则级阶段页覆盖 4 字段已随触发归因
+// 裁定退役（后端保留列停用，前端不再消费）。
 interface RuleStagePages {
   protocol?: string
-  block_page_stage1_id?: number
-  block_page_stage1_status?: number
-  block_page_stage3_id?: number
-  block_page_stage3_status?: number
 }
 
 interface StageRow { label: string; detail: string }
@@ -191,19 +188,10 @@ export interface StageDetailSources {
   crsFiles?: readonly CrsRuleFileOption[]
 }
 
-// 规则阶段页覆盖徽标（页已删/内容空 = broken，渲染侧等同未配）
-interface StageOverride {
-  pageId: number
-  pageName: string
-  status: number
-  broken: boolean
-}
-
 export interface StageGroup {
   stage: 0 | 1 | 2 | 3
   title: string
   enabled: boolean
-  override: StageOverride | null
   groups: StagePolicyGroup[]
   footnote?: string
 }
@@ -374,23 +362,6 @@ export const mergeIpEntries = (
     refs.map((id) => (ipLists.find((l) => l.id === id)?.entries ?? []).map((e) => e.value)),
   )
 
-// 阶段页覆盖解析：pageId<=0 → null（跟随策略）；页已删/内容空 → broken
-export const resolveStageOverride = (
-  pageId: number | undefined,
-  status: number | undefined,
-  blockPages: readonly SecurityStageBlockPage[],
-): StageOverride | null => {
-  const id = pageId ?? 0
-  if (id <= 0) return null
-  const page = blockPages.find((p) => p.id === id)
-  const broken = !page || (page.content ?? '') === ''
-  return {
-    pageId: id,
-    pageName: page?.name ?? `页面 #${id}`,
-    status: status && status > 0 ? status : 403,
-    broken,
-  }
-}
 // 信任名单非空谓词（阶段 0 能力：内联 ∪ 引用，内联/引用任一非空即算）
 export const hasTrustEntries = (p: { ip_whitelist?: string; ip_whitelist_refs?: string }): boolean =>
   parseIPList(p.ip_whitelist).length > 0 || parseRefIds(p.ip_whitelist_refs).length > 0
@@ -404,8 +375,9 @@ export const hasTrustEntries = (p: { ip_whitelist?: string; ip_whitelist_refs?: 
 // （分层命名，有意分歧，勿「统一」）：本函数是**内容门**（类型推断 +
 // 阶段能力投影），不是摘要展示口径。deny/绕过 + 空名单不产生拦截，内容门排除
 // 空组与后端效果等价；allow + 空名单则是引擎否定空集、**fail-closed 恒拒**。
-// Create/Update/备份导入三门均拒绝 allow 空名单，仅带外改库/旧版本遗留可达；
-// 本函数仍不为该形态虚增空组，但不得再把所有空名单统称为「零渲染安全等价」。
+// 保存路径已放开为 warning-not-block（用户裁定）：空白名单不再被写门硬阻断，
+// 前端保存流以 ElMessageBox.confirm 显性告知「关联规则将拒绝所有请求」后照常
+// 保存；本函数仍不为该形态虚增空组，但不得再把所有空名单统称为「零渲染安全等价」。
 export const hasIPACLControl = (p: {
   has_ip_control?: boolean
   ip_acl_enabled?: boolean
@@ -526,11 +498,12 @@ export const formatAclModeDetail = (
       ? '（全部来自引用列表）'
       : ''
   const total = breakdown !== '' ? `共 ${effective} 条${breakdown}` : `${effective} 条`
-  // allow 空生效集 = 引擎否定算子空集（恒拒）：带外直写/旧快照可达该形态，
-  // 摘要必须显性警示，否则用户看到「0 条」不会察觉全站被拒。但该告警以
-  // 「ACL 在渲染」为前提——ip_acl_enabled=false 时渲染侧整块不发射
-  // （security.go 的 IPACLEnabled 门），名单只是保留态，告警在此形态是误报；
-  // 两条结论（恒拒 / 独立黑名单仍生效）互不替代，零生效集分支同样要追告。
+  // allow 空生效集 = 引擎否定算子空集（恒拒）：空白名单可经确认式保存落库
+  // （warning-not-block，用户裁定），摘要必须显性警示，否则用户看到「0 条」
+  // 不会察觉全站被拒。但该告警以「ACL 在渲染」为前提——ip_acl_enabled=false
+  // 时渲染侧整块不发射（security.go 的 IPACLEnabled 门），名单只是保留态，
+  // 告警在此形态是误报；两条结论（恒拒 / 独立黑名单仍生效）互不替代，
+  // 零生效集分支同样要追告。
   if (policy.ip_acl_mode === 'allow') {
     if (policy.ip_acl_enabled === false) return `白名单模式 · 未启用 ACL${blAlive}`
     return effective === 0 ? `白名单模式 · ${total}（将拒绝所有请求）${blAlive}` : `白名单模式 · ${total}${blAlive}`
@@ -559,12 +532,10 @@ export const formatAclModeDetail = (
 const BLOCK_PAGE_UNSET_403 = '未配置（跟随绑定链首个有效页，无则默认 403）'
 const BLOCK_PAGE_BROKEN_403 = '已失效（回落绑定链首个有效页）'
 const BLOCK_PAGE_BROKEN_429 = '已失效（回落绑定链首个有效页，无则默认 429）'
-
 const buildStage1Rows = (
   policy: SecurityStagePolicy | undefined,
   ipLists: readonly SecurityStageIPList[],
   blockPages: readonly SecurityStageBlockPage[],
-  stagePages?: RuleStagePages | null,
   isTcp?: boolean,
 ): StageRow[] => {
   const rows: StageRow[] = []
@@ -589,32 +560,27 @@ const buildStage1Rows = (
       : '未启用'
     rows.push({ label: '爬虫豁免', detail })
   }
-  // 拦截页行族（策略页 + 规则级覆盖）：HTTP 渲染面（403 错误路由 / v2.3.1 归因）。
+  // 拦截页行（策略级页，触发归因口径）：HTTP 渲染面（403/429 错误路由与逐策略归因）。
   // TCP（L4）拒绝=断连，拦截页整族不参与——统一「不支持」，不得用
   // 「未配置（跟随绑定链首个有效页…）」这类 HTTP 语义误导排障（2026-10-31 用户裁定）。
   if (isTcp) {
     if (rows.length > 0) rows.push({ label: '拦截页', detail: '不支持' })
     return rows
   }
-  // 策略级拦截页行（2026-09-25 起 stage1 可配策略页，投影补呈现）
+  // 拦截页行（策略级页，触发归因口径）：已配 → 页名（状态码）；页已删/内容空 →
+  // 失效回落文案；未配 → 未配置文案。真实回落目标=兜底路由取绑定链首个有页
+  // 策略（见 BLOCK_PAGE_* 注释）。已配页恒出行（配置可见性不因能力行缺失而静默）；
+  // 未配时仅携带于有能力行的策略组——空能力不虚增阶段 1 组。
   const s1PageId = policy?.block_page_id ?? 0
-  if (s1PageId > 0) {
-    const page = blockPages.find((p) => p.id === s1PageId)
-    const broken = !page || (page.content ?? '') === ''
-    rows.push({ label: '拦截页（策略页）', detail: broken ? BLOCK_PAGE_BROKEN_403 : `${page?.name}（状态码 ${policy?.block_status_code || 403}）` })
-  }
-  // 规则级阶段页覆盖行（v2.3.1 逐策略归因默认层 = 403）：
-  // 已配 → 规则覆盖；页已删/内容空 → 失效；未配 → 回落绑定链首个有效页
-  // （无则默认 403，见 BLOCK_PAGE_UNSET_403）。
-  // 失效措辞必须与 BLOCK_PAGE_BROKEN_403 一致：阶段 1 的覆盖页失效后，引擎由
-  // buildBlockPageErrorRoute 取「绑定链首个启用且内容非空」策略的页面——可能
-  // 不是本策略，写「回落跟随策略」会让排障定位到错误策略。
-  // 仅携带于有能力行的策略组——空能力不虚增阶段 1 组（未启用判定不受影响）
-  if (rows.length > 0) {
-    const override = resolveStageOverride(stagePages?.block_page_stage1_id, stagePages?.block_page_stage1_status, blockPages)
-    if (override === null) rows.push({ label: '拦截页', detail: BLOCK_PAGE_UNSET_403 })
-    else if (override.broken) rows.push({ label: '拦截页', detail: BLOCK_PAGE_BROKEN_403 })
-    else rows.push({ label: '拦截页', detail: `规则覆盖：${override.pageName}（状态码 ${override.status}）` })
+  if (s1PageId > 0 || rows.length > 0) {
+    const page = s1PageId > 0 ? blockPages.find((p) => p.id === s1PageId) : undefined
+    const broken = s1PageId > 0 && (!page || (page.content ?? '') === '')
+    rows.push({
+      label: '拦截页',
+      detail: s1PageId <= 0 ? BLOCK_PAGE_UNSET_403
+        : broken ? BLOCK_PAGE_BROKEN_403
+        : `${page?.name}（状态码 ${policy?.block_status_code || 403}）`,
+    })
   }
   return rows
 }
@@ -644,7 +610,6 @@ const buildStage3Rows = (
   binding: SecurityStageBinding,
   policy: SecurityStagePolicy | undefined,
   blockPages: readonly SecurityStageBlockPage[],
-  stagePages?: RuleStagePages | null,
 ): StageRow[] => {
   const rows: StageRow[] = []
   const mode = policy ? policy.mode : binding.mode
@@ -664,28 +629,20 @@ const buildStage3Rows = (
     rows.push({ label: 'CRS 规则组', detail: crsCount > 0 ? `${crsCount} 组` : '全部（默认）' })
   }
   if (policy?.has_custom_rules) rows.push({ label: '自定义规则', detail: `${policy.custom_rules_count} 条` })
-  // 「拦截页」行（v2.3.1 归因口径）：规则级覆盖与策略级页并存展示，措辞区分——
-  // 规则覆盖已配 → 「拦截页（规则覆盖）：页名（状态码 X）」（渲染语义=覆盖优先）；
-  // 覆盖页已删/内容空 → 已失效（回落跟随策略 = 下方策略级行生效）；
-  // 未配 → 仅现有策略级行（binding.block_page_id → 页名 / BLOCK_PAGE_UNSET_403 /
-  // BLOCK_PAGE_BROKEN_403——真实回落目标由绑定链决定，见 BLOCK_PAGE_* 注释）；
-  // 未配置措辞与阶段 1 统一（2026-09-21 用户裁定），失效措辞保留差异：回落目标不同（首策略 vs 跟随策略）
+  // 「拦截页」行（触发归因口径）：仅策略级页——已配 → 页名（状态码 X）；
+  // 页已删/内容空 → 已失效（回落绑定链首个有效页 = BLOCK_PAGE_BROKEN_403）；
+  // 未配 → BLOCK_PAGE_UNSET_403。真实回落目标由绑定链兜底路由决定
+  // （见 BLOCK_PAGE_* 注释）；「哪个页面会显示」的逐策略判定单源在
+  // resolveBlockPageAttribution。
   const pageId = binding.block_page_id ?? 0
   const page = pageId > 0 ? blockPages.find((p) => p.id === pageId) : undefined
   const pageBroken = pageId > 0 && (!page || (page.content ?? '') === '')
-  const policyPageDetail = pageId <= 0 ? BLOCK_PAGE_UNSET_403
-    : pageBroken ? BLOCK_PAGE_BROKEN_403
-    : `${page?.name}（状态码 ${binding.block_status_code || 403}）`
-  const ruleOverride = resolveStageOverride(stagePages?.block_page_stage3_id, stagePages?.block_page_stage3_status, blockPages)
-  if (ruleOverride === null) {
-    rows.push({ label: '拦截页', detail: policyPageDetail })
-  } else {
-    rows.push({
-      label: '拦截页（规则覆盖）',
-      detail: ruleOverride.broken ? '已失效（回落跟随策略）' : `${ruleOverride.pageName}（状态码 ${ruleOverride.status}）`,
-    })
-    rows.push({ label: '拦截页（策略页）', detail: policyPageDetail })
-  }
+  rows.push({
+    label: '拦截页',
+    detail: pageId <= 0 ? BLOCK_PAGE_UNSET_403
+      : pageBroken ? BLOCK_PAGE_BROKEN_403
+      : `${page?.name}（状态码 ${binding.block_status_code || 403}）`,
+  })
   return rows
 }
 
@@ -727,7 +684,7 @@ export const buildStageModel = (
       })
     }
 
-    const s1rows = buildStage1Rows(policy, ipLists, blockPages, stagePages, isTcp)
+    const s1rows = buildStage1Rows(policy, ipLists, blockPages, isTcp)
     if (s1rows.length > 0) stage1Groups.push({ ...base, rows: s1rows })
 
     // 阶段 2：限流（全部策略的限流集中在 WAF 之前，拦截恒 429）
@@ -749,7 +706,7 @@ export const buildStageModel = (
       stage2Groups.push({ ...base, rows: s2rows })
     }
 
-    const s3rows = buildStage3Rows(binding, policy, blockPages, stagePages)
+    const s3rows = buildStage3Rows(binding, policy, blockPages)
     if (s3rows.length > 0) stage3Groups.push({ ...base, rows: s3rows })
   })
 
@@ -761,21 +718,18 @@ export const buildStageModel = (
         stage: 0,
         title: STAGE_TITLES[0],
         enabled: stage0Groups.length > 0,
-        override: null,
         groups: stage0Groups,
       },
       {
         stage: 1,
         title: STAGE_TITLES[1],
         enabled: stage1Groups.length > 0,
-        override: resolveStageOverride(stagePages?.block_page_stage1_id, stagePages?.block_page_stage1_status, blockPages),
         groups: stage1Groups,
       },
       {
         stage: 2,
         title: STAGE_TITLES[2],
         enabled: stage2Groups.length > 0,
-        override: null,
         groups: stage2Groups,
         footnote: '限流拦截恒为 429（不产生安全事件，计数见规则指标）',
       },
@@ -783,7 +737,6 @@ export const buildStageModel = (
         stage: 3,
         title: STAGE_TITLES[3],
         enabled: stage3Groups.length > 0,
-        override: resolveStageOverride(stagePages?.block_page_stage3_id, stagePages?.block_page_stage3_status, blockPages),
         groups: stage3Groups,
       },
     ],
@@ -1354,9 +1307,10 @@ export const eventDetailRefIds = (
 }
 
 // —— 后端批量端点上限（与 internal/handlers 同口径）：前端按上限分片提交 ——
-// /security/policies/:id/bindings/bulk 的 bind+unbind 合计 ≤100；
-// /rules/batch-block-pages 的 rule_ids ≤500。超限整批 400，原样重试仍失败。
-export const SECURITY_BULK_LIMITS = { policyBindings: 100, ruleBlockPages: 500 } as const
+// /security/policies/:id/bindings/bulk 的 bind+unbind 合计 ≤100。
+// 超限整批 400，原样重试仍失败。（/rules/batch-block-pages 的 ruleBlockPages=500
+// 已随规则级阶段页覆盖退役移除——前端不再调用该端点。）
+export const SECURITY_BULK_LIMITS = { policyBindings: 100 } as const
 
 // 单规则可绑定的策略条数上限（后端 maxBindingsPerRule=8 的前端单源镜像）：
 // SecurityBindingEditor（规则侧计数/选择器上限）与 SecurityPolicies（向导
@@ -1541,15 +1495,20 @@ export const isTrustExemptionCandidate = (p: {
 }): boolean => p.enabled !== false && !!p.ip_whitelist_enabled && trustHitMode(p.policy_type, p.trust_detection) === 'detection'
 
 // ── 拦截页归因 ─────────────────────────────────────────────
-// 后端渲染事实（internal/services/caddy.go）：
-//  - 阶段 3：每策略恒得合成码 483+（policySynthetic），页面归属=触发策略自身；
-//    若规则级 stage3 覆盖（id>0 ∧ 内容非空）在场 → 全规则恒 482，逐策略归因不可达。
-//  - 阶段 1：预检合并决策 403（'interruption triggered'），错误路由取绑定链
-//    （policy_id ASC、仅启用）中首个「有非空页」策略；规则级 stage1 覆盖在场 → 481。
-//  - 阶段 2：429 错误路由取绑定链首个「有非空页」策略（且至少一条启用策略开启限流）。
+// 后端渲染事实（internal/services/caddy.go，触发归因口径——用户裁定：触发哪条
+// 策略 → 显示该策略自己配置的拦截页；未配 → 兜底 = 绑定链首个「启用且有非空页」
+// 策略，与页面归属和策略顺序解耦）：
+//  - 阶段 1 按触发子源分流：ACL deny 链 / 独立黑名单链 / GeoIP 链逐策略归因
+//    （触发策略有页 → 逐策略合成码显示该策略页）；allow 白名单交集外恒拒走
+//    兜底路由（无归属语义）。
+//  - 阶段 3：WAF 段逐策略合成码 483+（policySynthetic），页面归属=触发策略自身。
+//  - 阶段 2：429 错误路由恒走兜底（且至少一条启用策略开启限流才产生 429）。
+//  - 阶段 1/2/3 兜底统一：buildBlockPageErrorRoute / buildRateLimitErrorRoute
+//    取绑定链（执行序）首个「有非空页」策略；全链无页 → Caddy 默认响应。
+//  - 规则级阶段页覆盖（481/482）已退役：无规则级覆盖层。
 // 本函数把上述口径收敛为单源判定（前端只消费结果，不得另写第三份归因）。
 export type BlockPageStage = 1 | 2 | 3
-type BlockPageEffective = 'self' | 'peer' | 'rule-override' | 'none'
+type BlockPageEffective = 'self' | 'peer' | 'none'
 
 export interface BlockPageChainPolicy {
   policyId: number | null
@@ -1563,6 +1522,12 @@ export interface BlockPageChainPolicy {
   pageHasContent?: boolean
   /** 仅阶段 2 使用：该策略是否启用限流（429 才能产生） */
   rateLimitEnabled?: boolean
+  /**
+   * 仅 isSelf 消费：本策略在阶段 1 是否发射可触发拦截的 deny 链
+   * （deny 模式 ACL 有条目 ∪ 独立黑名单非空 ∪ GeoIP 启用且有区域）。
+   * allow 模式 ACL 只参与交集外恒拒（兜底路由），无归属语义——不贡献触发归属。
+   */
+  stage1DenyContributor?: boolean
 }
 
 export interface BlockPageAttribution {
@@ -1658,34 +1623,26 @@ export const blockPageMissing = (
 /**
  * 计算「本策略配置的拦截页在某个阶段是否真的会显示」，与 caddy.go 逐条对齐。
  *
- * chain 顺序不重要：函数内部按后端绑定序（policy_id ASC，未保存策略 id=null 视作
- * 最大）排序——视图侧传入的是「按阶段 rank 排序的展示链」，与渲染序不同，故不能
- * 依赖入参顺序。
+ * chain 顺序即绑定执行序（视图侧按 GET /security/bindings 的 rank 序传入，
+ * 兜底扫描按入参顺序取首个命中——视图不得传乱序链）。
  */
 export const resolveBlockPageAttribution = (
   stage: BlockPageStage,
   chain: readonly BlockPageChainPolicy[],
-  ruleOverride: { pageId: number; pageHasContent: boolean } | null = null,
 ): BlockPageAttribution => {
-  const bindOrder = (p: BlockPageChainPolicy): number => p.policyId ?? Number.MAX_SAFE_INTEGER
-  const enabled = chain.filter((p) => p.enabled).slice().sort((a, b) => bindOrder(a) - bindOrder(b))
-  // 规则级覆盖：仅阶段 1/3 存在（阶段 2 状态码恒 429，无规则级覆盖层）
-  if (stage !== 2 && ruleOverride && ruleOverride.pageId > 0 && ruleOverride.pageHasContent) {
-    return { stage, effective: 'rule-override' }
-  }
-  // 阶段 3：逐策略合成码 → 本策略有有效页即本策略页
-  if (stage === 3) {
-    const self = chain.find((p) => p.isSelf)
-    if (self && self.enabled && chainHasValidPage(self)) return { stage, effective: 'self' }
-    const fallback = enabled.find((p) => !p.isSelf && chainHasValidPage(p))
-    return fallback
-      ? { stage, effective: 'peer', winnerName: fallback.name }
-      : { stage, effective: 'none' }
-  }
+  const enabled = chain.filter((p) => p.enabled)
   // 阶段 2：无启用限流策略 → 不产生 429，页面永不显示
   if (stage === 2 && !enabled.some((p) => p.rateLimitEnabled === true)) return { stage, effective: 'none' }
-  // 阶段 1/2：渲染侧取绑定链首个有有效页的启用策略
-  const winner = enabled.find(chainHasValidPage)
-  if (!winner) return { stage, effective: 'none' }
-  return winner.isSelf ? { stage, effective: 'self' } : { stage, effective: 'peer', winnerName: winner.name }
+  // 触发归因（阶段 1 deny 链 / 阶段 3 WAF 段逐策略合成码）：命中策略有有效页
+  // → 显示该策略页。阶段 1 的 allow 交集外恒拒与阶段 2 的 429 无归属语义，
+  // 直接落兜底。
+  const self = chain.find((p) => p.isSelf)
+  const selfOwnsTrigger = !!self && self.enabled && (stage === 3 || self.stage1DenyContributor === true)
+  if (selfOwnsTrigger && chainHasValidPage(self)) return { stage, effective: 'self' }
+  // 兜底：绑定链（执行序）首个「启用且有有效页」策略的页（触发策略未配页 /
+  // 无归属语义的触发源 → 兜底路由目标）。兜底目标恰为本策略（如本策略为链首
+  // 有页策略）同样判 self——用户视角「我的页会显示」。
+  const fallback = enabled.find(chainHasValidPage)
+  if (!fallback) return { stage, effective: 'none' }
+  return fallback.isSelf ? { stage, effective: 'self' } : { stage, effective: 'peer', winnerName: fallback.name }
 }

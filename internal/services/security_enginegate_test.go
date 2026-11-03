@@ -88,7 +88,7 @@ func TestEngineGate_plainAndPrecheckShapes(t *testing.T) {
 	t.Run("precheck-trust-union", func(t *testing.T) {
 		p1 := &models.SecurityPolicy{AnomalyThreshold: 5, Mode: "blocking", IPACLEnabled: true, IPACLMode: "deny", IPACLList: `["198.51.100.9"]`, IPWhitelistEnabled: true, IPWhitelist: trust}
 		p2 := &models.SecurityPolicy{AnomalyThreshold: 5, Mode: "blocking", IPACLEnabled: true, IPACLMode: "allow", IPACLList: `["1.2.3.4"]`}
-		compileForEngineGate(t, mustDirectives(buildIPPrecheckDirectives([]*models.SecurityPolicy{p1, p2}, 0, "lb_test")))
+		compileForEngineGate(t, mustDirectives(buildIPPrecheckDirectives([]*models.SecurityPolicy{p1, p2}, "lb_test")))
 	})
 }
 
@@ -128,7 +128,7 @@ func TestEngineGate_precheckGeoipChainShapes(t *testing.T) {
 	p2 := &models.SecurityPolicy{
 		ID: 43, Mode: "detection", GeoIPMode: "allow", GeoIPCountries: json.RawMessage(`["江苏"]`),
 	}
-	directives := mustDirectives(buildIPPrecheckDirectives([]*models.SecurityPolicy{p1, p2}, 0, "lb_test"))
+	directives := mustDirectives(buildIPPrecheckDirectives([]*models.SecurityPolicy{p1, p2}, "lb_test"))
 	if !strings.Contains(directives, "id:800042,") || !strings.Contains(directives, "id:800043,") {
 		t.Fatalf("precheck must carry per-policy geoip chains, got:\n%s", directives)
 	}
@@ -185,7 +185,7 @@ func TestEngineGate_modeAndControlShapes(t *testing.T) {
 	t.Run("precheck-disjoint-allow-constant-deny", func(t *testing.T) {
 		p1 := &models.SecurityPolicy{AnomalyThreshold: 5, Mode: "blocking", IPACLEnabled: true, IPACLMode: "allow", IPACLList: `["1.2.3.4"]`}
 		p2 := &models.SecurityPolicy{AnomalyThreshold: 5, Mode: "blocking", IPACLEnabled: true, IPACLMode: "allow", IPACLList: `["5.6.7.8"]`}
-		directives := mustDirectives(buildIPPrecheckDirectives([]*models.SecurityPolicy{p1, p2}, 0, "lb_test"))
+		directives := mustDirectives(buildIPPrecheckDirectives([]*models.SecurityPolicy{p1, p2}, "lb_test"))
 		if !strings.Contains(directives, `SecRule REMOTE_ADDR "@rx .*" "id:7,phase:1,deny`) {
 			t.Fatalf("disjoint allow lists must emit constant-deny @rx .* rule:\n%s", directives)
 		}
@@ -281,7 +281,7 @@ func TestEngineGate_precheckGeoIPTrustContinuationExemptsTrustedIP(t *testing.T)
 		ID: 77, Mode: "off", GeoIPMode: "deny", GeoIPCountries: json.RawMessage(`["海外"]`),
 		IPWhitelistEnabled: true, IPWhitelist: json.RawMessage(`["203.0.113.9"]`),
 	}
-	directives := mustDirectives(buildIPPrecheckDirectives([]*models.SecurityPolicy{policy}, 403, "lb_geoip_trust"))
+	directives := mustDirectives(buildIPPrecheckDirectives([]*models.SecurityPolicy{policy}, "lb_geoip_trust"))
 	if !strings.Contains(directives, `X-LB-GeoIP-Loc "@rx ^(?:海外)$" "t:none,chain"`) {
 		t.Fatalf("location segment must chain to the trust continuation:\n%s", directives)
 	}
@@ -307,7 +307,7 @@ func TestEngineGate_precheckGeoIPTrustContinuationExemptsTrustedIP(t *testing.T)
 
 	// Without the optional third segment, the location segment must terminate the chain.
 	policy.IPWhitelist = json.RawMessage(`[]`)
-	withoutTrust := mustDirectives(buildIPPrecheckDirectives([]*models.SecurityPolicy{policy}, 403, "lb_geoip_no_trust"))
+	withoutTrust := mustDirectives(buildIPPrecheckDirectives([]*models.SecurityPolicy{policy}, "lb_geoip_no_trust"))
 	if strings.Contains(withoutTrust, `X-LB-GeoIP-Loc "@rx ^(?:海外)$" "t:none,chain"`) {
 		t.Fatalf("location segment must not chain to a missing trust segment:\n%s", withoutTrust)
 	}

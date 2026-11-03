@@ -78,10 +78,10 @@ func TestPrecheckProjectionFilesScopedPerRule(t *testing.T) {
 	_, database := newClusterTestService(t)
 	seedHTTPRuleForGeneration(t, database, "lb-scope-a", "scope-a.example.test", 8080)
 	seedHTTPRuleForGeneration(t, database, "lb-scope-b", "scope-b.example.test", 8080)
-	mpGenBindPolicy(t, database, "lb-scope-a", "scope-a-deny", mpGenPolicySpec{
+	pidA := mpGenBindPolicy(t, database, "lb-scope-a", "scope-a-deny", mpGenPolicySpec{
 		mode: "detection", enabled: true, ipACLEnabled: true, ipACLMode: "deny", ipACLList: `["203.0.113.5"]`,
 	})
-	mpGenBindPolicy(t, database, "lb-scope-b", "scope-b-deny", mpGenPolicySpec{
+	pidB := mpGenBindPolicy(t, database, "lb-scope-b", "scope-b-deny", mpGenPolicySpec{
 		mode: "detection", enabled: true, ipACLEnabled: true, ipACLMode: "deny", ipACLList: `["198.51.100.9"]`,
 	})
 
@@ -94,8 +94,10 @@ func TestPrecheckProjectionFilesScopedPerRule(t *testing.T) {
 
 	// Then：两条规则的 deny 并集投影互不覆盖（按各自渲染产物中的算子路径
 	// 读回文件内容）。
-	gotA := readRenderedIPList(t, preA, "u-deny")
-	gotB := readRenderedIPList(t, preB, "u-deny")
+	// 逐策略链投影 scope = 策略身份（p<id>-acl），与引擎共用同一文件：
+	// 生产粒度=消费粒度，异规则同策略同文件同字节；异策略必不同文件。
+	gotA := readRenderedIPList(t, preA, fmt.Sprintf("p%d-acl", pidA))
+	gotB := readRenderedIPList(t, preB, fmt.Sprintf("p%d-acl", pidB))
 	if !strings.Contains(gotA, "203.0.113.5/32") {
 		t.Fatalf("规则 A 的 deny 并集投影被覆盖（缺 203.0.113.5/32）：A 文件=%q B 文件=%q\nA 预检段：\n%s", gotA, gotB, preA)
 	}
@@ -103,7 +105,7 @@ func TestPrecheckProjectionFilesScopedPerRule(t *testing.T) {
 		t.Fatalf("规则 B 的 deny 并集投影缺自己的条目 198.51.100.9/32：B 文件=%q", gotB)
 	}
 	if strings.Contains(gotA, "198.51.100.9") || strings.Contains(gotB, "203.0.113.5") {
-		t.Fatalf("deny 并集投影串染（B 条目 %q / A 条目 %q）——异策略集规则不得共享投影文件", gotA, gotB)
+		t.Fatalf("逐策略 deny 投影串染（B 条目 %q / A 条目 %q）——异策略集规则不得共享投影文件", gotA, gotB)
 	}
 }
 
@@ -236,7 +238,7 @@ func TestEmptyRuleIdentityFailsLoud(t *testing.T) {
 	if _, err := BuildCorazaDirectives(policy, nil, "", false, 0, ""); err == nil {
 		t.Fatal("BuildCorazaDirectives 空 ruleCaddyID 必须报错")
 	}
-	if _, err := buildIPPrecheckDirectives([]*models.SecurityPolicy{policy}, 0, ""); err == nil {
+	if _, err := buildIPPrecheckDirectives([]*models.SecurityPolicy{policy}, ""); err == nil {
 		t.Fatal("buildIPPrecheckDirectives 空 ruleCaddyID 必须报错")
 	}
 }

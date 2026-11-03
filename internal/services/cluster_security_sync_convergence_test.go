@@ -54,7 +54,7 @@ func TestSyncService_SecuritySectionConvergesAcrossBindingShapes(t *testing.T) {
 				t.Fatalf("seed local rule and policy: %v", err)
 			}
 			for _, binding := range tc.localBindings {
-				if _, err := database.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id,policy_id) VALUES (?,?)`, binding.ruleCaddyID, binding.policyID); err != nil {
+				if _, err := database.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id,policy_id,rank) VALUES (?,?,1)`, binding.ruleCaddyID, binding.policyID); err != nil {
 					t.Fatalf("seed local binding: %v", err)
 				}
 			}
@@ -67,7 +67,7 @@ func TestSyncService_SecuritySectionConvergesAcrossBindingShapes(t *testing.T) {
 			master.MasterSyncSwitches = &models.ClusterSyncSwitchesPayload{Users: true, Rules: tc.rulesSync, Security: true}
 			bindings := make([]map[string]interface{}, 0, len(tc.masterBindings))
 			for _, binding := range tc.masterBindings {
-				bindings = append(bindings, map[string]interface{}{"rule_caddy_id": binding.ruleCaddyID, "policy_id": binding.policyID})
+				bindings = append(bindings, map[string]interface{}{"rule_caddy_id": binding.ruleCaddyID, "policy_id": binding.policyID, "rank": 1})
 			}
 			master.SecurityBindings, err = json.Marshal(bindings)
 			if err != nil {

@@ -335,9 +335,11 @@ func TestSkipEmptyBlockPages_clearsDanglingReferences(t *testing.T) {
 	if len(warnings) != 1 {
 		t.Fatalf("warnings=%v, want one skip", warnings)
 	}
+	// 规则级阶段页已停用（2026-11 用户裁定）：死列不再清理；活引用（策略
+	// block_page_id）仍必须清零。
 	rule := tables["lb_rules"][0]
-	if rule["block_page_stage1_id"] != 0 || rule["block_page_stage1_status"] != 0 || rule["block_page_stage3_id"] != 0 || rule["block_page_stage3_status"] != 0 {
-		t.Fatalf("rule refs=%v, want cleared", rule)
+	if rule["block_page_stage1_id"] != 2 || rule["block_page_stage1_status"] != 403 || rule["block_page_stage3_id"] != 2 || rule["block_page_stage3_status"] != 418 {
+		t.Fatalf("rule stage refs=%v, want untouched（列已停用）", rule)
 	}
 	if tables["security_policies"][0]["block_page_id"] != 0 {
 		t.Fatalf("policy ref=%v, want cleared", tables["security_policies"][0])
@@ -2961,7 +2963,7 @@ func truncateForDiff(data []byte) string {
 
 func queryBackupBindingRows(t *testing.T, ruleCaddyID string) []int {
 	t.Helper()
-	rows, err := db.DB.Query("SELECT policy_id FROM security_policy_bindings WHERE rule_caddy_id=? ORDER BY policy_id ASC", ruleCaddyID)
+	rows, err := db.DB.Query("SELECT policy_id FROM security_policy_bindings WHERE rule_caddy_id=? ORDER BY rank ASC, policy_id ASC", ruleCaddyID)
 	if err != nil {
 		t.Fatalf("query bindings for %s: %v", ruleCaddyID, err)
 	}

@@ -174,10 +174,9 @@
               <div class="flow-panel-head">
                 <DialogSectionHeader :title="typedStageByKey(node.key)!.title" />
                 <div class="flow-panel-meta">
-                  <el-tag v-if="typedStageByKey(node.key)!.override && !typedStageByKey(node.key)!.override!.broken" type="warning" size="small" effect="plain">阶段页：{{ typedStageByKey(node.key)!.override!.pageName }}（{{ typedStageByKey(node.key)!.override!.status }}）</el-tag>
-                  <el-tag v-else-if="typedStageByKey(node.key)!.override?.broken" type="danger" size="small" effect="plain">{{ overrideBrokenLabel(typedStageByKey(node.key)!.stage) }}</el-tag>
-                  <!-- TCP（L4）拒绝=断连无拦截页：跟随策略措辞仅 HTTP 渲染面成立 -->
-                  <el-tag v-else-if="typedStageByKey(node.key)!.stage !== 2" type="info" size="small" effect="plain">{{ isTcp ? '拦截页不支持' : '拦截页跟随策略' }}</el-tag>
+                  <!-- TCP（L4）拒绝=断连无拦截页：跟随策略措辞仅 HTTP 渲染面成立。
+                       规则级阶段页覆盖徽标已随触发归因裁定退役。 -->
+                  <el-tag v-if="typedStageByKey(node.key)!.stage !== 2" type="info" size="small" effect="plain">{{ isTcp ? '拦截页不支持' : '拦截页跟随策略' }}</el-tag>
                   <el-tag v-if="!typedStageByKey(node.key)!.enabled" type="info" size="small" effect="plain">未启用</el-tag>
                 </div>
               </div>
@@ -678,11 +677,6 @@ const stageStatsText = (stage: 0 | 1 | 2 | 3): string => {
   if (!props.target?.caddyId || isTcp.value) return ''
   return stageCountSummary(stage, stats.value, countsView())
 }
-
-// 阶段页覆盖失效后的真实回落目标按阶段不同：阶段 1 = 引擎兜底错误路由取绑定链
-// 首个有效页（可能不是本策略）；阶段 3 = 逐策略回落各自页面（跟随策略）。
-const overrideBrokenLabel = (stage: number): string =>
-  stage === 3 ? '阶段页已失效（回落跟随策略）' : '阶段页已失效（回落绑定链首个有效页）'
 
 // 时间线耗时角标：取数失败时同样不出（不把失败说成「无采样」）。
 const stageTimingLabel = (stage: 1 | 3): string => {

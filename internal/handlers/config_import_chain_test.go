@@ -166,9 +166,10 @@ func TestImportValidationChain_emptyDomainRulesAndBlockPagesSoftSkipped(t *testi
 	if len(backup.Tables["security_block_pages"]) != 0 {
 		t.Fatalf("空内容拦截页应被跳过，剩余=%v", backup.Tables["security_block_pages"])
 	}
+	// 规则级阶段页已停用：被跳过页面的规则引用不再清零（列仅随备份搬运）。
 	keptRule := backup.Tables["lb_rules"][0]
-	if backupInt(keptRule["block_page_stage1_id"]) != 0 || backupInt(keptRule["block_page_stage1_status"]) != 0 {
-		t.Fatalf("被跳过页面的规则引用应清零: %v", keptRule)
+	if backupInt(keptRule["block_page_stage1_id"]) != 3 || backupInt(keptRule["block_page_stage1_status"]) != 403 {
+		t.Fatalf("规则阶段页引用应原样保留: %v", keptRule)
 	}
 	warnings := strings.Join(result.SkipWarnings, "\n")
 	for _, want := range []string{"域名为空", "内容为空"} {

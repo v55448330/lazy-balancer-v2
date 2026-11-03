@@ -67,7 +67,7 @@ func TestRenderCRSExclusions_unknownScopeNotDemotedToGlobal(t *testing.T) {
 // 全放行是最危险方向——fail-visible 拒绝生成。
 func TestPrecheckGeoIP_allowWithEmptyListFailsVisible(t *testing.T) {
 	p := &models.SecurityPolicy{ID: 77, Name: "g-allow-empty", GeoIPMode: "allow", GeoIPCountries: json.RawMessage(`[]`)}
-	if _, err := buildIPPrecheckDirectives([]*models.SecurityPolicy{p}, 0, "lb_test"); err == nil {
+	if _, err := buildIPPrecheckDirectives([]*models.SecurityPolicy{p}, "lb_test"); err == nil {
 		t.Fatal("geoip_mode=allow + 空名单必须拒绝生成（渲染 fail-open 不得静默生效）")
 	}
 }
@@ -76,7 +76,7 @@ func TestPrecheckGeoIP_allowWithEmptyListFailsVisible(t *testing.T) {
 // 方向静默执行（allowMode=false 默认分支会把 UI 未宣称的方向强加给流量）。
 func TestPrecheckGeoIP_unknownModeSkipped(t *testing.T) {
 	p := &models.SecurityPolicy{ID: 78, Name: "g-bad-mode", GeoIPMode: "DENY", GeoIPCountries: json.RawMessage(`["CN"]`)}
-	d, err := buildIPPrecheckDirectives([]*models.SecurityPolicy{p}, 0, "lb_test")
+	d, err := buildIPPrecheckDirectives([]*models.SecurityPolicy{p}, "lb_test")
 	if err != nil {
 		t.Fatalf("unknown geoip_mode must degrade with WARN, not fail: %v", err)
 	}
@@ -85,7 +85,7 @@ func TestPrecheckGeoIP_unknownModeSkipped(t *testing.T) {
 	}
 	// 回归：合法 deny 照常发射
 	pOK := &models.SecurityPolicy{ID: 79, Name: "g-ok", GeoIPMode: "deny", GeoIPCountries: json.RawMessage(`["海外"]`)}
-	dOK, err := buildIPPrecheckDirectives([]*models.SecurityPolicy{pOK}, 0, "lb_test")
+	dOK, err := buildIPPrecheckDirectives([]*models.SecurityPolicy{pOK}, "lb_test")
 	if err != nil || !strings.Contains(dOK, "GeoIP 区域拦截") {
 		t.Fatalf("valid deny chain must emit: err=%v\n%s", err, dOK)
 	}

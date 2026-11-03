@@ -62,7 +62,7 @@ func TestEngineGate_alwaysEmitRenderedShapes(t *testing.T) {
 			{IPACLEnabled: true, IPACLMode: "deny", IPACLList: `[]`},
 			{PolicyType: models.PolicyTypeStage0, IPWhitelistEnabled: true, TrustDetection: true, IPWhitelist: json.RawMessage(`[]`)},
 		}
-		directives, err := buildIPPrecheckDirectives(policies, 0, "lb_test")
+		directives, err := buildIPPrecheckDirectives(policies, "lb_test")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -130,16 +130,16 @@ func TestBuildCorazaDirectives_emptyBlacklistKeepsContentGate(t *testing.T) {
 
 // 预检合并段：deny ACL 开启且并集为空 → id:2 恒发射指向空 u-deny 文件。
 func TestBuildIPPrecheckDirectives_emptyDenyACLAlwaysEmits(t *testing.T) {
-	policies := []*models.SecurityPolicy{{IPACLEnabled: true, IPACLMode: "deny", IPACLList: `[]`}}
-	directives, err := buildIPPrecheckDirectives(policies, 0, "lb_test")
+	policies := []*models.SecurityPolicy{{ID: 7, IPACLEnabled: true, IPACLMode: "deny", IPACLList: `[]`}}
+	directives, err := buildIPPrecheckDirectives(policies, "lb_test")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(directives, `"id:2,phase:1,deny`) {
-		t.Fatalf("deny ACL 开启（空并集）预检必须恒发射 id:2:\n%s", directives)
+	if !strings.Contains(directives, `"id:1500007,phase:1,deny,status:403`) {
+		t.Fatalf("deny ACL 开启（空名单）预检必须恒发射逐策略链 id:1500007:\n%s", directives)
 	}
-	if got := readRenderedIPList(t, directives, "u-deny"); got != "" {
-		t.Fatalf("空 deny 并集文件=%q, want 空文件", got)
+	if got := readRenderedIPList(t, directives, "p7-acl"); got != "" {
+		t.Fatalf("空 deny 名单文件=%q, want 空文件", got)
 	}
 }
 
@@ -148,7 +148,7 @@ func TestBuildIPPrecheckDirectives_emptyStage0DetectionAlwaysEmits(t *testing.T)
 	policies := []*models.SecurityPolicy{
 		{PolicyType: models.PolicyTypeStage0, IPWhitelistEnabled: true, TrustDetection: true, IPWhitelist: json.RawMessage(`[]`)},
 	}
-	directives, err := buildIPPrecheckDirectives(policies, 0, "lb_test")
+	directives, err := buildIPPrecheckDirectives(policies, "lb_test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -166,7 +166,7 @@ func TestBuildIPPrecheckDirectives_emptyTrustKeepsContentGate(t *testing.T) {
 	policies := []*models.SecurityPolicy{
 		{IPWhitelistEnabled: true, IPWhitelist: json.RawMessage(`[]`)},
 	}
-	directives, err := buildIPPrecheckDirectives(policies, 0, "lb_test")
+	directives, err := buildIPPrecheckDirectives(policies, "lb_test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -179,7 +179,7 @@ func TestBuildIPPrecheckDirectives_emptyTrustKeepsContentGate(t *testing.T) {
 // 全部来源）。
 func TestBuildIPPrecheckDirectives_emptyAllowACLKeepsContentGate(t *testing.T) {
 	policies := []*models.SecurityPolicy{{IPACLEnabled: true, IPACLMode: "allow", IPACLList: `[]`}}
-	directives, err := buildIPPrecheckDirectives(policies, 0, "lb_test")
+	directives, err := buildIPPrecheckDirectives(policies, "lb_test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -192,7 +192,7 @@ func TestBuildIPPrecheckDirectives_emptyAllowACLKeepsContentGate(t *testing.T) {
 // 热路径可变名单的内容门控，不为恒空策略凭空造预检）。
 func TestBuildIPPrecheckDirectives_noFeaturesStillSkipsPrecheck(t *testing.T) {
 	policies := []*models.SecurityPolicy{{Mode: "off"}}
-	directives, err := buildIPPrecheckDirectives(policies, 0, "lb_test")
+	directives, err := buildIPPrecheckDirectives(policies, "lb_test")
 	if err != nil {
 		t.Fatal(err)
 	}

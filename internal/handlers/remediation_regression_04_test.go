@@ -273,7 +273,9 @@ func TestTLSCertWarningsIncludeExpiry(t *testing.T) {
 	}
 }
 
-func TestV2ImportStageBlockPageGate(t *testing.T) {
+// 规则级阶段拦截页停用（2026-11 用户裁定）：导入不得再按四列整包 400——
+// 非法状态码/悬空页/有码无页均放行（列保留为死数据，仅随备份/快照搬运）。
+func TestV2ImportStageBlockPageColumnsIgnored(t *testing.T) {
 	rule := map[string]any{
 		"caddy_id": "lb_stage", "name": "stage", "protocol": "http",
 		"listen_port": 8080, "domain": "stage.example.com", "enabled": 1,
@@ -283,20 +285,13 @@ func TestV2ImportStageBlockPageGate(t *testing.T) {
 		"lb_rules":             {rule},
 		"security_block_pages": {{"id": 7}},
 	}
-	if err := validateV2BackupRules(tables); err == nil || !strings.Contains(err.Error(), "状态码") {
-		t.Fatalf("非法阶段状态码必须 400，err=%v", err)
+	if err := validateV2BackupRules(tables); err != nil {
+		t.Fatalf("非法阶段状态码已不再拒绝导入: %v", err)
 	}
-
 	rule["block_page_stage1_status"] = 403
 	rule["block_page_stage1_id"] = 99
-	if err := validateV2BackupRules(tables); err == nil || !strings.Contains(err.Error(), "不存在") {
-		t.Fatalf("悬空阶段拦截页必须 400，err=%v", err)
-	}
-
-	rule["block_page_stage1_id"] = 0
-	rule["block_page_stage1_status"] = 0
-	if err := validateStageBlockPageRefWith(0, 403, "阶段 1", func(int) (bool, error) { return true, nil }); err == nil {
-		t.Fatalf("有码无页必须 400")
+	if err := validateV2BackupRules(tables); err != nil {
+		t.Fatalf("悬空阶段拦截页已不再拒绝导入: %v", err)
 	}
 }
 

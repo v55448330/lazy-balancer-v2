@@ -1153,7 +1153,9 @@ func TestCreateSecurityPolicy_rejectsUnknownMode(t *testing.T) {
 // (2026-09-10 审计):IP ACL allow 模式+空生效名单——发射端 len>0 门静默跳过
 // (「其余一律拒绝」实际全放行 fail-open)。UI 有守卫,API/MCP 直写可绕;按
 // 同型先例在写入侧 400(与 UI 文案同口径)。
-func TestCreateSecurityPolicy_rejectsAllowModeWithEmptyACLList(t *testing.T) {
+// 空白名单保存已放开（2026-11 用户裁定）：空 allow 集可保存，运行时渲染层
+// 恒拒（fail-closed）语义不变。
+func TestCreateSecurityPolicy_acceptsAllowModeWithEmptyACLList(t *testing.T) {
 	// Given
 	setupSecurityPolicyTestDB(t)
 	router := newSecurityRouter(t)
@@ -1164,8 +1166,8 @@ func TestCreateSecurityPolicy_rejectsAllowModeWithEmptyACLList(t *testing.T) {
 	})
 
 	// Then
-	if recorder.Code != http.StatusBadRequest {
-		t.Fatalf("allow+空名单 status=%d body=%s, want 400", recorder.Code, recorder.Body.String())
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("allow+空名单 status=%d body=%s, want 200", recorder.Code, recorder.Body.String())
 	}
 }
 

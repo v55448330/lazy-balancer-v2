@@ -245,18 +245,6 @@ test('拦截页删除重入守卫（确认前占位、finally 释放）', () => 
   assert.match(text, /:loading="deletingId === row\.id"/)
 })
 
-test('阶段页覆盖写入按 skipped 归集后再回写（不谎报已覆盖）', () => {
-  const text = code('src/views/security/SecurityPolicies.vue')
-  const skippedSet = text.indexOf('const skippedIds = new Set(skippedItems.map((item) => item.rule_id))')
-  const apply = text.indexOf('applyStageOverrideSuccess(caddyId, edit)', skippedSet)
-  assert.ok(skippedSet > 0 && apply > skippedSet, '必须先归集 skipped 再回写成功态')
-  assert.match(text, /if \(!skippedIds\.has\(caddyId\)\) applyStageOverrideSuccess/)
-  // 行内状态：未写入 + 原因；成功计数不把 skipped 计入
-  assert.match(text, /\? '未写入' :/)
-  // 消息合并 helper 接收 pending/skipped，行为测试证明 skipped 不计入同步数。
-  assert.match(text, /policySaveResultMessage\(saveRes, pendingOverrides\.length, skippedOverrideCount\)/)
-})
-
 test('名单详情 GET 静默，避免与全局拦截器双 toast', () => {
   const text = code('src/views/security/SecurityRules.vue')
   const silentGets = text.match(/security\/ip-lists\/\$\{[^}]+\}`, \{ silent: true \}\)/g) ?? []
@@ -375,23 +363,23 @@ test('拦截页注记必须过阶段能力门（stage3 off / stage1 无能力不
   const text = code('src/views/security/SecurityPolicies.vue')
   assert.match(text, /blockPageStageCanIntercept/)
   assert.match(text, /当前配置不会产生该阶段拦截，页面不会被使用/)
-  // 能力门必须参与「生效中」收集：capableResults 而非全部 results
-  const notes = member(text, 'const blockPageNotes = (')
-  assert.match(notes, /const capableResults = results\.filter\(\(r\) => stageCapable\(r\.stage\)\)/)
-  assert.match(notes, /capableResults\.filter\(\(r\) => r\.effective === 'self'\)/)
-  // 阶段 2 的 429 归因不得沿用「触发本策略拦截」
-  assert.match(notes, /阶段 2：429 由绑定链任一启用限流策略产生时显示/)
+  // 能力门必须参与「生效中」收集：capableAttributions 只出过门阶段，
+  // 未过门阶段单独给「不会产生拦截」警告。
+  const notes = member(text, 'const capableAttributions = (')
+  assert.match(notes, /\.filter\(\(stage\) => stageCapableOf\(stage\)\)/)
+  const activeNotes = member(text, 'const blockPageNotes = (')
+  assert.match(activeNotes, /results\.filter\(\(r\) => r\.effective === 'self'\)/)
+  // 阶段 2 无归属语义（429 恒走兜底路由）：生效文案不得宣称「触发本策略拦截时显示」
+  assert.match(activeNotes, /429/)
+  assert.doesNotMatch(activeNotes, /规则已配置阶段页覆盖/)
 })
 
-test('阶段页覆盖写前重读库值（未编辑阶段取最新，不旧快照回写）', () => {
+test('规则级阶段页覆盖写路径退役：无批量端点调用与暂存状态', () => {
   const text = code('src/views/security/SecurityPolicies.vue')
-  const reread = text.indexOf("request.get<APIResponse<Rule[]>>('/rules'")
-  const batch = text.indexOf("'/rules/batch-block-pages'")
-  assert.ok(reread > 0 && batch > reread, '批量写入前必须重读 /rules')
-  const block = text.slice(reread, batch)
-  assert.match(block, /editedStages\.includes\(1\) \? edit\.stage1_id :/)
-  assert.match(block, /editedStages\.includes\(3\) \? edit\.stage3_id :/)
-  assert.match(block, /avoid|避免覆盖他人修改|无法读取最新规则/)
+  // 触发归因下规则级覆盖已退役：向导不再调 batch-block-pages，暂存/待重试
+  // 状态机（stageOverride* / overrideEditOf / pendingOverrideRules）整体移除。
+  assert.doesNotMatch(text, /batch-block-pages/)
+  assert.doesNotMatch(text, /stageOverride|overrideEditOf|pendingOverrideRules|editableOverrideStages/)
 })
 
 test('阶段 0 预览信任名单恒启用（载荷消费侧）', () => {
@@ -406,13 +394,6 @@ test('阶段 0 预览信任名单恒启用（载荷消费侧）', () => {
     /ip_whitelist_enabled: trustEnabledForPolicyType\(/,
     '载荷必须读 computed 单源，不得在提交处重算谓词',
   )
-})
-
-test('改回原值后「待重试」标记消失', () => {
-  const text = code('src/views/security/SecurityPolicies.vue')
-  const change = member(text, 'const onStageOverrideChange = (')
-  assert.match(change, /!pendingStageOverride\(caddyId, 1\) && !pendingStageOverride\(caddyId, 3\)/)
-  assert.match(change, /delete nextFailed\[caddyId\]/)
 })
 
 test('掩码私钥不得误报「请提供私钥」', () => {

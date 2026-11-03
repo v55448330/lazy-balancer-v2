@@ -246,7 +246,15 @@ func TestUpdateRuleSetColumns_matchSingleSource(t *testing.T) {
 
 	// 编辑不写主键/外键与创建审计列（id 自增、caddy_id 为 WHERE 键、
 	// created_* 由创建路径落库）。
-	excluded := map[string]bool{"id": true, "caddy_id": true, "created_by": true, "created_at": true}
+	// 阶段拦截页 4 列是**有意分叉**（2026-11 用户裁定：功能停用、写侧停写、
+	// DB 列保留）：specs 恒携带（备份/集群快照字节往返需要），UpdateRule SET
+	// 不再写（请求字段被忽略）。分叉由 handlers.updateRuleSetExemptColumns 的
+	// 停用条目显式登记，非漏列。
+	excluded := map[string]bool{
+		"id": true, "caddy_id": true, "created_by": true, "created_at": true,
+		"block_page_stage1_id": true, "block_page_stage1_status": true,
+		"block_page_stage3_id": true, "block_page_stage3_status": true,
+	}
 	expected := map[string]bool{}
 	for _, spec := range lbRuleColumnSpecs {
 		if !excluded[spec.name] {

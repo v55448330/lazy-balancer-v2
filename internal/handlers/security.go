@@ -1291,19 +1291,9 @@ func (h *Handlers) CreateSecurityPolicy(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: msg})
 		return
 	}
-	// 门（事务内）：BEGIN IMMEDIATE 后读即持写锁，并发
-	// ImportConfigBackup/名单清空无法在校验与 INSERT 之间提交。
-	if req.IPACLEnabled && req.IPACLMode == "allow" {
-		nonEmpty, gerr := allowEffectiveListNonEmpty(tx, req.IPACLList, req.IPACLListRefs)
-		if gerr != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("校验 IP 列表引用失败", gerr)})
-			return
-		}
-		if !nonEmpty {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "白名单模式下生效 IP 列表不能为空（内联条目与所引用名单均无条目；空名单会拒绝所有请求、全站锁死）"})
-			return
-		}
-	}
+	// 空白名单保存已放开（2026-11 用户裁定）：allow 模式允许空生效集合保存，
+	// 用户确认「关联规则将拒绝所有请求」后即可落库——运行时语义不变（渲染层
+	// 空 allow 集恒拒，fail-closed；名单侧清空 409 门仍防运行期静默锁站）。
 	enabled := true
 	if req.Enabled != nil {
 		enabled = *req.Enabled
@@ -1834,40 +1824,9 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 			return
 		}
 	}
-	// 同 Create：生效配置（请求值缺失时回落存量）为 allow+启用+空合并名单时
-	// 400——渲染端空 allow 集是恒拒（fail-closed），本门的作用是防止把「锁死
-	// 全站」的策略存进库，属 UX 门而非渲染语义的前提。门控读与 Create 一样
-	// 必须在 BEGIN IMMEDIATE 事务内（校验与写入之间被并发清空所引用名单同属
-	// 该窗口）。
-	{
-		effEnabled := stored.IPACLEnabled
-		if req.IPACLEnabled != nil {
-			effEnabled = *req.IPACLEnabled
-		}
-		effMode := stored.IPACLMode
-		if ipACLMode != "" {
-			effMode = ipACLMode
-		}
-		if effEnabled && effMode == "allow" {
-			effList, effRefs := stored.IPACLList, stored.IPACLListRefs
-			if req.IPACLList != nil {
-				effList = *req.IPACLList
-			}
-			if req.IPACLListRefs != nil {
-				effRefs = *req.IPACLListRefs
-			}
-			// 生效集合 = 内联 ∪ 引用名单实际条目（引用空名单同样为空）。
-			nonEmpty, gerr := allowEffectiveListNonEmpty(tx, effList, effRefs)
-			if gerr != nil {
-				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("校验 IP 列表引用失败", gerr)})
-				return
-			}
-			if !nonEmpty {
-				c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "白名单模式下生效 IP 列表不能为空（内联条目与所引用名单均无条目；空名单会拒绝所有请求、全站锁死）"})
-				return
-			}
-		}
-	}
+	// 空白名单保存已放开（2026-11 用户裁定，同 Create）：allow 模式空生效
+	// 集合允许保存——运行时渲染层仍恒拒（fail-closed），本门取消后不再做
+	// 事务内非空校验。
 	// 存量读取复用事务开头的单次投影——翻转门需要存量 mode,
 	// 且「只改 mode 不带条目」的更新同样要过 GeoIP 可用性门。
 	storedGeoIP := rawJSONString(stored.GeoIPCountries)
@@ -2608,7 +2567,10 @@ func (h *Handlers) BindRuleToPolicy(c *gin.Context) {
 	// v2.2.0 多策略绑定：POST bind 改为 additive——仅 INSERT OR IGNORE，不再
 	// 清空 rule 的兄弟绑定；全量替换走 PUT /security/rules/:caddy_id/policies。
 	// INSERT OR IGNORE 保留幂等（重复绑定同一 (rule,policy) 不报错、不重复行）。
-	if _, err := tx.ExecContext(caddyWriteCtx(c), "INSERT OR IGNORE INTO security_policy_bindings (rule_caddy_id, policy_id) VALUES (?, ?)", req.RuleCaddyID, policyID); err != nil {
+	// 绑定顺序（2026-11 用户裁定）：additive 绑定追加到链末
+	// （rank = 该规则现有 max(rank)+1；rank=0 遗留行按 0 参与——旧语义下它
+	// 本就排在全部显式 rank 之前）。
+	if _, err := tx.ExecContext(caddyWriteCtx(c), "INSERT OR IGNORE INTO security_policy_bindings (rule_caddy_id, policy_id, rank) SELECT ?, ?, COALESCE(MAX(rank),0)+1 FROM security_policy_bindings WHERE rule_caddy_id=?", req.RuleCaddyID, policyID, req.RuleCaddyID); err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
 		return
 	}
@@ -2887,8 +2849,10 @@ func setRulePoliciesInTx(ctx context.Context, tx *sql.Tx, ruleCaddyID string, po
 	if _, err := tx.ExecContext(ctx, "DELETE FROM security_policy_bindings WHERE rule_caddy_id=?", ruleCaddyID); err != nil {
 		return "", err
 	}
-	for _, id := range uniqueIDs {
-		if _, err := tx.ExecContext(ctx, "INSERT OR IGNORE INTO security_policy_bindings (rule_caddy_id, policy_id) VALUES (?, ?)", ruleCaddyID, id); err != nil {
+	// 绑定顺序（2026-11 用户裁定）：PUT 提交序即执行序——rank = 请求序 1..N。
+	// 读路径一致按 (rank ASC, policy_id ASC) 排序；请求序成为唯一执行序载体。
+	for ordinal, id := range uniqueIDs {
+		if _, err := tx.ExecContext(ctx, "INSERT OR IGNORE INTO security_policy_bindings (rule_caddy_id, policy_id, rank) VALUES (?, ?, ?)", ruleCaddyID, id, ordinal+1); err != nil {
 			return "", err
 		}
 	}
@@ -3103,7 +3067,8 @@ func (h *Handlers) BulkUpdatePolicyBindings(c *gin.Context) {
 					return ruleCaddyID + ": 每条规则最多绑定一条限流策略，请先解绑现有限流策略", nil
 				}
 			}
-			res, err := tx.ExecContext(caddyWriteCtx(c), "INSERT OR IGNORE INTO security_policy_bindings (rule_caddy_id, policy_id) VALUES (?, ?)", ruleCaddyID, policyID)
+			// bulk 绑定追加到链末（与单条 bind 同口径）。
+			res, err := tx.ExecContext(caddyWriteCtx(c), "INSERT OR IGNORE INTO security_policy_bindings (rule_caddy_id, policy_id, rank) SELECT ?, ?, COALESCE(MAX(rank),0)+1 FROM security_policy_bindings WHERE rule_caddy_id=?", ruleCaddyID, policyID, ruleCaddyID)
 			if err != nil {
 				return "", err
 			}
@@ -3283,7 +3248,7 @@ func (h *Handlers) BatchBindSecurityPolicies(c *gin.Context) {
 			}
 		}
 
-		existingRows, err := tx.QueryContext(caddyWriteCtx(c), "SELECT policy_id FROM security_policy_bindings WHERE rule_caddy_id=? ORDER BY policy_id", ruleCaddyID)
+		existingRows, err := tx.QueryContext(caddyWriteCtx(c), "SELECT policy_id FROM security_policy_bindings WHERE rule_caddy_id=? ORDER BY rank, policy_id", ruleCaddyID)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
 			return
@@ -3351,8 +3316,10 @@ func (h *Handlers) BatchBindSecurityPolicies(c *gin.Context) {
 				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
 				return
 			}
-			for _, id := range final {
-				if _, err := tx.ExecContext(caddyWriteCtx(c), "INSERT OR IGNORE INTO security_policy_bindings (rule_caddy_id, policy_id) VALUES (?, ?)", ruleCaddyID, id); err != nil {
+			// replace=请求序、merge=现有秩优先+新项追加（final 顺序即合并序）；
+			// rank 按 final 位置重编 1..N，保持同规则内稠密有序。
+			for ordinal, id := range final {
+				if _, err := tx.ExecContext(caddyWriteCtx(c), "INSERT OR IGNORE INTO security_policy_bindings (rule_caddy_id, policy_id, rank) VALUES (?, ?, ?)", ruleCaddyID, id, ordinal+1); err != nil {
 					c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
 					return
 				}
@@ -3867,7 +3834,8 @@ func (h *Handlers) SplitSecurityPolicy(c *gin.Context) {
 			return
 		}
 		for _, childID := range newIDs {
-			if _, err := tx.ExecContext(caddyWriteCtx(c), "INSERT OR IGNORE INTO security_policy_bindings (rule_caddy_id, policy_id) VALUES (?, ?)", ruleID, childID); err != nil {
+			// 拆分迁移重建子绑定：追加到链末（同 additive 口径）。
+			if _, err := tx.ExecContext(caddyWriteCtx(c), "INSERT OR IGNORE INTO security_policy_bindings (rule_caddy_id, policy_id, rank) SELECT ?, ?, COALESCE(MAX(rank),0)+1 FROM security_policy_bindings WHERE rule_caddy_id=?", ruleID, childID, ruleID); err != nil {
 				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
 				return
 			}
@@ -3939,7 +3907,7 @@ func (h *Handlers) GetSecurityPolicyBindings(c *gin.Context) {
 	ruleCaddyID := c.Param("caddy_id")
 	// v2.2.0：返回 []policy ASC（一规则可绑多策略）；无绑定时返回空数组而非 null，
 	// 前端 `.length`/`.map` 不需要空值分支。
-	rows, err := db.DB.Query("SELECT policy_id FROM security_policy_bindings WHERE rule_caddy_id=? ORDER BY policy_id ASC", ruleCaddyID)
+	rows, err := db.DB.Query("SELECT policy_id FROM security_policy_bindings WHERE rule_caddy_id=? ORDER BY rank ASC, policy_id ASC", ruleCaddyID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
 		return
@@ -4112,7 +4080,16 @@ func appendFamilyPrefixCondition(ors *[]string, args *[]any, prefix string) {
 	*args = append(*args, prefix+"___")
 }
 
-const customRuleFamilyCondition = "(rule_triggered GLOB '[0-9][0-9][0-9][0-9][0-9]' OR rule_triggered GLOB '[1-7][0-9][0-9][0-9][0-9][0-9]' OR rule_triggered GLOB '1[0-9][0-9][0-9][0-9][0-9][0-9]*' OR rule_triggered GLOB '[3-6][0-9][0-9][0-9][0-9][0-9][0-9]*')"
+const customRuleFamilyCondition = "(((rule_triggered GLOB '[0-9][0-9][0-9][0-9][0-9]' OR rule_triggered GLOB '[1-7][0-9][0-9][0-9][0-9][0-9]' OR rule_triggered GLOB '1[0-9][0-9][0-9][0-9][0-9][0-9]*' OR rule_triggered GLOB '[3-6][0-9][0-9][0-9][0-9][0-9][0-9]*')) AND NOT (rule_triggered GLOB '150[0-9][0-9][0-9][0-9]' OR rule_triggered GLOB '151[0-9][0-9][0-9][0-9]'))"
+
+// aclPrecheckFamilyConditionShape 阶段 1 预检逐策略 ACL deny/黑名单链段
+// （services: aclPrecheckRuleBase+policyID / blacklistPrecheckRuleBase+
+// policyID）的 SQL 形态：7 位 150xxxx/151xxxx。段界单一事实源=
+// services.IsACLPrecheckRuleID，本 GLOB 为 SQL 文本形态，段基址调整时须与
+// 谓词同步修订。与 customRuleFamilyCondition 的 ≥7 位 1 开头合成分支同形态，
+// 自定义族条件必须显式排除本段（否则 IP 名单拦截事件会被「WAF·自定义」
+// 筛选吞掉）。
+const aclPrecheckFamilyConditionShape = "(rule_triggered GLOB '150[0-9][0-9][0-9][0-9]' OR rule_triggered GLOB '151[0-9][0-9][0-9][0-9]')"
 
 // geoipFamilyCondition 地域拦截族的预检精确段形态条件（阶段化模型：
 // buildIPPrecheckDirectives 逐策略链 id=800000+policyID）——6 位 8xxxxx。
@@ -4223,6 +4200,11 @@ func ruleTriggeredFilterSQL(input string, args *[]any) string {
 		if input == "爬虫Bot" {
 			ors = append(ors, crawlerFamilyCondition)
 		}
+		if input == "IP 访问控制" {
+			// 阶段 1 预检逐策略 ACL deny/黑名单链（1500000+/1510000+ 段）与
+			// 历史固定 id 2/4/7 同族。
+			ors = append(ors, aclPrecheckFamilyConditionShape)
+		}
 		return "(" + strings.Join(ors, " OR ") + ")"
 	}
 	// family 标签的部分输入：宽匹配（前缀命中任一 family 即并入其前缀集合）。
@@ -4252,6 +4234,9 @@ func ruleTriggeredFilterSQL(input string, args *[]any) string {
 		}
 		if strings.HasPrefix("爬虫Bot", input) {
 			ors = append(ors, crawlerFamilyCondition)
+		}
+		if strings.HasPrefix("IP 访问控制", input) {
+			ors = append(ors, aclPrecheckFamilyConditionShape)
 		}
 		if len(ors) > 0 {
 			return "(" + strings.Join(ors, " OR ") + ")"
@@ -4850,6 +4835,12 @@ func attackFamilyClassOf(ruleTriggered, ruleMsg string) attackFamilyClass {
 		customORBranch = n >= services.CustomRuleORConditionIDBase
 	}
 	switch {
+	case precheckFamily == services.PrecheckRuleFamilyACLDeny || precheckFamily == services.PrecheckRuleFamilyBlacklist:
+		// 阶段 1 预检逐策略 ACL deny / 黑名单链（1500000+policyID /
+		// 1510000+policyID）归 IP 访问控制——必须先于「≥7 位 1 开头合成」
+		// 自定义分支（同 7 位形态，漏判会把 IP 名单拦截记成自定义规则，
+		// 总览攻击族与阶段桶双错）。
+		return attackFamilyIPACL
 	case len(ruleTriggered) == 5:
 		// 5 位 ID 恒为自定义规则(发射 id=crID+10000 落 10000-99999;
 		// CRS 恒 6 位)——先于 9 前缀判定,crID≥82000 发射 92000-99999 时不再被

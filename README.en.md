@@ -92,7 +92,7 @@ docker compose up -d
 #    the panel displays); the image tag may carry a -beta channel suffix - they
 #    differ on purpose: tag minus suffix == APP_VERSION
 docker buildx build --platform linux/amd64,linux/arm64 \
-  --build-arg VERSION=v2.4.0 \
+  --build-arg VERSION=v2.4.1 \
   --provenance=false --sbom=false \
   -t v55448330/lazy-balancer-v2:v2.4.1-beta --push .   # beta channel; stable remains v2.4.0
 ```

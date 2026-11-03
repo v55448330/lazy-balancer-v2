@@ -710,7 +710,7 @@ func TestBuildCorazaDirectives_malformedJSONWarnRateLimited(t *testing.T) {
 	geoPolicy := &models.SecurityPolicy{ID: 900009, Name: "broken-geo-rl", Mode: "off", GeoIPMode: "deny", GeoIPCountries: json.RawMessage(`{"not":"an array"`)}
 	for range 3 {
 		// GeoIP 在预检渲染链求值（策略引擎对纯 GeoIP 策略产空串，不经策略渲染）
-		_ = mustDirectives(buildIPPrecheckDirectives([]*models.SecurityPolicy{geoPolicy}, 0, "lb_broken_geo_rl"))
+		_ = mustDirectives(buildIPPrecheckDirectives([]*models.SecurityPolicy{geoPolicy}, "lb_broken_geo_rl"))
 	}
 	if got := strings.Count(logBuf.String(), "geoip_countries 畸形"); got != 1 {
 		t.Fatalf("3 次渲染同脏策略 geoip_countries WARN=%d 条, want 1（60s 限流）:\n%s", got, logBuf.String())

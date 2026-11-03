@@ -92,11 +92,14 @@ test('迁移预演补「已有其他限流策略 → 将跳过」风险组', () 
   assert.match(page, /限流唯一风险/)
 })
 
-test('规则级阶段页状态码选项由共享清单派生', () => {
-  const overrideSelect = section(page, 'stage-override-status-select', '</el-select>')
-  assert.match(overrideSelect, /v-for="opt in STAGE_BLOCK_STATUS_OPTIONS"/)
-  assert.doesNotMatch(overrideSelect, /<el-option :value="40[134]"/, '硬编码状态码不得回流')
+test('策略级拦截页状态码选项由共享清单派生（规则级覆盖选择器已退役）', () => {
+  // 规则级阶段页覆盖编辑器已随触发归因退役；唯一状态码选择面=拦截页步骤的
+  // 策略级「返回状态码」，必须继续消费共享清单。
+  const statusSelect = section(page, 'v-model="form.block_status_code"', '</el-select>')
+  assert.match(statusSelect, /v-for="opt in STAGE_BLOCK_STATUS_OPTIONS"/)
+  assert.doesNotMatch(statusSelect, /<el-option :value="40[134]"/, '硬编码状态码不得回流')
   assert.deepEqual(STAGE_BLOCK_STATUS_OPTIONS.map((o) => o.value), [400, 401, 403, 404, 503])
+  assert.doesNotMatch(page, /stage-override-status-select/, '退役的选择器不得回流')
 })
 
 test('爬虫引擎：字段缺失→默认三项，显式 "[]" 原样保留（全部引擎语义）', () => {
@@ -129,14 +132,21 @@ test('带外空模式读入不得被静默改写成拦截模式', () => {
   assert.match(page, /geoipMode \|\| '未配置模式'/, '未知模式必须显性说明')
 })
 
-test('保存收尾走批量端点，不回流逐规则 PUT（钉调用点而非注释措辞）', () => {
-  // 断言对象是**调用点**：收尾段（绑定批量汇总 → 合并结果）内必须是单次
-  // batch-block-pages 请求，且不得出现逐规则 request.put。此前钉的是历史
-  // 注释措辞——删注释后断言恒真，口径回归实际守护为零。
+test('绑定执行序：暂存上移/下移，保存收尾按新序 PUT 整链 policy_ids', () => {
+  // 策略顺序=执行序（用户裁定）：关联规则行内上移/下移只暂存（bindingOrderEdits），
+  // 保存收尾对有暂存序的规则调 PUT /security/rules/:caddy_id/policies——后端按
+  // 提交序持久化 rank，读路径（渲染链/GET /security/bindings）返回 rank 序。
+  assert.match(page, /bindingOrderEdits/, '上移/下移必须暂存（随保存统一提交）')
   const tail = section(page, 'const bindResponses', 'const mergedBind')
-  assert.ok(tail.includes("('/rules/batch-block-pages', {"), '收尾必须调用批量端点')
-  assert.match(tail, /request\.post</, '批量端点必须经 POST 提交')
-  assert.doesNotMatch(tail, /request\.put\(/, '收尾不得逐规则 PUT')
+  assert.match(tail, /security\/rules\/\$\{encodeURIComponent\(/, '执行序必须经规则侧整链 PUT 提交')
+  assert.match(tail, /policy_ids: /, 'PUT 必须携带完整有序 policy_ids（后端按提交序重建 rank）')
+  assert.match(tail, /request\.put</, '执行序经 PUT 提交')
+  assert.doesNotMatch(page, /batch-block-pages/, '规则级阶段页覆盖写路径已退役')
+  // 行内按钮：上移/下移以暂存方式调整本策略在绑定链中的执行序
+  assert.match(page, /moveSelfInChain\(\s*row\.caddyId, -1\s*\)/, '上移按钮必须接线暂存移动')
+  assert.match(page, /moveSelfInChain\(\s*row\.caddyId, 1\s*\)/, '下移按钮必须接线暂存移动')
+  assert.match(page, /上移/)
+  assert.match(page, /下移/)
 })
 
 test('限流唯一门：选择器与提交门共用同一谓词，业务 400 不再承诺可重试', () => {
@@ -170,6 +180,12 @@ test('限流唯一门：选择器与提交门共用同一谓词，业务 400 不
 test('IP ACL 名单校验只作用于启用态字段（关闭后隐藏的条目不得点名）', () => {
   const validate = section(page, 'const validateIpAclList = (): boolean =>', 'const nextStep')
   assert.match(validate, /if \(form\.value\.ip_acl_enabled\) \{\n\s*const invalidEntry = ipACLList\.value\.find/)
-  // 白名单空列表门仍按启用态（保留语义下关闭 ACL 不阻断保存）
-  assert.match(validate, /if \(form\.value\.ip_acl_enabled && form\.value\.ip_acl_mode === 'allow'/)
+  // 白名单空生效集不再硬阻断（用户裁定 warning-not-block）：校验函数退出门，
+  // 保存流改走显性确认（确认后照常保存，与 ipListSaveGuard 先例同形态）
+  assert.doesNotMatch(validate, /白名单模式下 IP 列表不能为空/, '空名单不得再在校验函数里硬阻断')
+  const confirm = section(page, 'const handleSave = async () => {', 'const payload = buildPolicyPayload(')
+  assert.match(confirm, /该策略关联的规则将拒绝所有请求，确定继续？/, '保存流必须先显性确认空名单后果')
+  assert.match(confirm, /aclSaveCount\.value === 0/, '确认门只对空生效集触发')
+  // 后端 400 门移除由 Go 侧同步落地；此处钉前端不再自设硬阻断即可。
+  assert.doesNotMatch(page, /阶段页覆盖|规则级覆盖/, '退役功能文案不得回流')
 })

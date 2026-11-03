@@ -144,40 +144,6 @@ func loadIPListEntriesForAllow(q ipListQueryer, ids []int64) (map[int64][]string
 	return out, nil
 }
 
-// allowEffectiveListNonEmpty 判定 allow 模式的生效集合是否非空：内联条目 ∪
-// 全部引用名单的**实际条目**并集（不要求每个引用名单非空）。旧写侧
-// 门只看引用个数，引用一个空名单即落库「启用 allow + 空生效集」——发射端
-// 现对空交集恒发 deny（fail-closed，锁死全部请求），不再静默跳过 ACL；写侧
-// 本门是防「保存即全站 403」的 UX 门，不是防绕过门。查询失败返回错误，
-// 调用方按 500 处理（不得按空集合或非空猜测）。
-func allowEffectiveListNonEmpty(q ipListQueryer, inlineRaw, refsRaw string) (bool, error) {
-	var inline []string
-	if strings.TrimSpace(inlineRaw) != "" {
-		if err := json.Unmarshal([]byte(inlineRaw), &inline); err != nil {
-			return false, fmt.Errorf("内联 IP 列表解析失败: %w", err)
-		}
-	}
-	for _, v := range inline {
-		if strings.TrimSpace(v) != "" {
-			return true, nil
-		}
-	}
-	refs := parseIPListRefsIDs(refsRaw)
-	if len(refs) == 0 {
-		return false, nil
-	}
-	entries, err := loadIPListEntriesForAllow(q, refs)
-	if err != nil {
-		return false, err
-	}
-	for _, values := range entries {
-		if len(values) > 0 {
-			return true, nil
-		}
-	}
-	return false, nil
-}
-
 // allowEmptyingBlockedByPolicies 判定「把 listID 清空为 replacement」是否会让
 // 任一 allow 策略的生效集合变为空。偏严语义：检查全部 ip_acl 已启用的
 // allow 策略（含策略本身被禁用的行——与 Create/Update 对禁用策略同样设门的

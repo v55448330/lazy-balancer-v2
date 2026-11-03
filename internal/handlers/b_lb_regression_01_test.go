@@ -217,47 +217,28 @@ func batchResultAll(t *testing.T, recorder *httptest.ResponseRecorder) (int, int
 // TestBatchRuleBlockPages_dedupesAndCountsUnchanged：入口 trim+去重保序；
 // bound 按 RowsAffected>0 计，同值命中进 unchanged（bound 不再把零写入
 // 的规则算作「成功」）。不存在/TCP 跳过文案与顺序回归。
-func TestBatchRuleBlockPages_dedupesAndCountsUnchanged(t *testing.T) {
+func TestBatchRuleBlockPages_deprecatedCountsExisting(t *testing.T) {
 	handler, _ := newStageBatchTestHandlers(t)
 	seedStageBatchRules(t)
 	router := stageBatchRouter(handler)
 
-	// 重复 id（含空白形态）→ 只处理一次：bound=1
 	response := postStageJSON(t, router, "/rules/batch-block-pages",
 		`{"rule_ids":["lb_b1"," lb_b1 ","lb_b1"],"block_page_stage1_id":7,"block_page_stage1_status":403,"block_page_stage3_id":7,"block_page_stage3_status":503}`)
 	if response.Code != http.StatusOK {
 		t.Fatalf("dedupe batch status=%d body=%s", response.Code, response.Body.String())
 	}
 	bound, unchanged, skipped := batchResultAll(t, response)
-	if bound != 1 || unchanged != 0 || len(skipped) != 0 {
-		t.Fatalf("dedupe batch bound=%d unchanged=%d skipped=%v, want bound=1 unchanged=0 skipped=0", bound, unchanged, skipped)
-	}
-
-	// 同值命中 → unchanged=1、bound=0
-	response = postStageJSON(t, router, "/rules/batch-block-pages",
-		`{"rule_ids":["lb_b1"],"block_page_stage1_id":7,"block_page_stage1_status":403,"block_page_stage3_id":7,"block_page_stage3_status":503}`)
-	if response.Code != http.StatusOK {
-		t.Fatalf("same-value batch status=%d body=%s", response.Code, response.Body.String())
-	}
-	bound, unchanged, skipped = batchResultAll(t, response)
 	if bound != 0 || unchanged != 1 || len(skipped) != 0 {
-		t.Fatalf("same-value batch bound=%d unchanged=%d skipped=%v, want bound=0 unchanged=1", bound, unchanged, skipped)
+		t.Fatalf("dedupe batch bound=%d unchanged=%d skipped=%v, want 0/1/0", bound, unchanged, skipped)
 	}
 
-	// 混合：ghost（不存在）→ tcp → 真实变更；skipped 顺序=提交顺序
 	response = postStageJSON(t, router, "/rules/batch-block-pages",
 		`{"rule_ids":["lb_ghost","lb_bt","lb_b2"],"block_page_stage1_id":7,"block_page_stage1_status":401,"block_page_stage3_id":7,"block_page_stage3_status":503}`)
 	if response.Code != http.StatusOK {
 		t.Fatalf("mixed batch status=%d body=%s", response.Code, response.Body.String())
 	}
 	bound, unchanged, skipped = batchResultAll(t, response)
-	if bound != 1 || unchanged != 0 || len(skipped) != 2 {
-		t.Fatalf("mixed batch bound=%d unchanged=%d skipped=%v, want bound=1 unchanged=0 skipped=2", bound, unchanged, skipped)
-	}
-	if skipped[0]["rule_id"] != "lb_ghost" || skipped[0]["reason"] != "规则不存在" {
-		t.Fatalf("skipped[0]=%v, want lb_ghost/规则不存在", skipped[0])
-	}
-	if skipped[1]["rule_id"] != "lb_bt" || skipped[1]["reason"] != "TCP 规则不经过安全链" {
-		t.Fatalf("skipped[1]=%v, want lb_bt/TCP 规则不经过安全链", skipped[1])
+	if bound != 0 || unchanged != 1 || len(skipped) != 2 {
+		t.Fatalf("mixed batch bound=%d unchanged=%d skipped=%v, want 0/1/2", bound, unchanged, skipped)
 	}
 }

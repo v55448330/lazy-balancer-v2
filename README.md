@@ -87,7 +87,7 @@ docker compose up -d
 # 3) 或直接构建并推送镜像：VERSION=正式版本号（面板展示口径）；镜像 tag 可带
 #    -beta 通道后缀——两者刻意不同，判定口径「tag 去掉通道后缀 == APP_VERSION」
 docker buildx build --platform linux/amd64,linux/arm64 \
-  --build-arg VERSION=v2.4.0 \
+  --build-arg VERSION=v2.4.1 \
   --provenance=false --sbom=false \
   -t v55448330/lazy-balancer-v2:v2.4.1-beta --push .   # 测试通道；稳定版当前为 v2.4.0
 ```

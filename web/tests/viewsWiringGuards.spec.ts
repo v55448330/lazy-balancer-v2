@@ -651,18 +651,6 @@ test('集群同步三分类标签单源（父级确认文案与子级开关行�
   assert.match(master, /:disabled="readOnly \|\| item\.locked === true"/, '只读态必须显式禁用同步开关')
 })
 
-test('策略向导：阶段覆盖编辑态稀疏持有（不得物化库值 seed）', () => {
-  const page = code('src/views/security/SecurityPolicies.vue')
-  const watcher = section(page, 'watch([boundRules, allRules], () => {', '}, { immediate: true })')
-  assert.match(watcher, /const existing = stageOverrideEdits\.value\[cid\]/)
-  assert.match(watcher, /if \(existing\) next\[cid\] = existing/)
-  assert.doesNotMatch(
-    watcher,
-    /\?\? stageOverrideSeed\(cid\)/,
-    '物化 seed 会在 /rules 新快照到达后把旧库值钉成待保存覆盖，保存时静默回退他处变更',
-  )
-})
-
 test('安全事件：tooltip 死条件删除，crawler 族展示词单源，旧 id 8 中和文案', () => {
   const page = code('src/views/security/SecurityEvents.vue')
   // 切片终点用下一声明 marker（缺失即抛错），不用空行 `'\n\n'`：函数体内补一

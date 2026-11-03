@@ -1353,7 +1353,6 @@
       :policies="securityPolicies"
       :bindings="securityBindings"
       :rules="rules"
-      :block-pages="blockPages"
       @saved="fetchSecurityBindings"
     />
 
@@ -1419,7 +1418,7 @@ import { popperViewportSafe } from '@/utils/popper'
 import { hostPortKey, upstreamDedupeKey } from '@/utils/upstreamKeys'
 import { MAX_UPSTREAM_ROWS, normalizeWeights, payloadWeight, redistributeWeight, weightPercent } from '@/utils/upstreamWeights'
 import { projectRuleFlowPath } from '@/utils/ruleFlow'
-import { clampPassiveHealthCheckTimeout, copyRuleHostHeader, dnsServerAfterToggle, newRuleWizardStageOverrides, stageBlockPageOverrides, stageBlockPagePatch } from '@/utils/ruleWizard'
+import { clampPassiveHealthCheckTimeout, copyRuleHostHeader, dnsServerAfterToggle } from '@/utils/ruleWizard'
 import { createLogStatBuckets, recordLogStatEntry, type LogStatBuckets } from '@/utils/logStatCap'
 import { certJobStatusLabel } from '@/utils/certJobStatus'
 import type { CertJobStatus } from '@/utils/certJobStatus'
@@ -1966,9 +1965,6 @@ const copySourceRuleId = ref<string | null>(null)
 // 复制走 POST /rules 重建，Create 无 nil=保留语义——规则级回源 Host
 // 必须显式随载荷携带，否则副本静默丢失 Host 覆盖（编辑路径不受影响）。
 const copySourceHostHeader = ref('')
-// 向导打开时的阶段页覆盖快照：编辑保存只提交相对快照变化的键（后端 nil=保留），
-// 避免把另一会话写入的覆盖静默回退。
-const wizardStagePageSnapshot = ref(newRuleWizardStageOverrides())
 const WIZARD_STEP = {
   BASIC: 0,
   TLS: 1,
@@ -2743,9 +2739,6 @@ const wizardFormFromRule = (fullRule: Rule): Partial<RuleForm> => ({
   request_body_max_size_mb: fullRule.request_body_max_size_mb || 0,
   upstream_keepalive_timeout: fullRule.upstream_keepalive_timeout || 0,
   server_tokens_hidden: fullRule.server_tokens_hidden || 0,
-  // 阶段拦截页覆盖：复制/编辑均保留（后端 DuplicateRule 同口径）；键集与
-  // 新建/重置路径共用 stageBlockPageOverrides。
-  ...stageBlockPageOverrides(fullRule),
   // NTLM 接管态原样回填；编辑/复制均保留实际接管字段。
   ntlm_compatible: fullRule.ntlm_compatible === 1 ? 1 : 0,
   upstream_force_http1: fullRule.upstream_force_http1 === 1 ? 1 : 0,
@@ -2929,13 +2922,11 @@ const openWizard = async (rule?: Rule) => {
     // 版本基线取水合用的那份行（手动 TLS 编辑时是 GET 的新鲜行）。
     editingRuleVersion.value = fullRule.updated_at || ''
     Object.assign(wizardForm, wizardFormFromRule(fullRule))
-    wizardStagePageSnapshot.value = stageBlockPageOverrides(fullRule)
     weightsToPercent(wizardForm.upstreams)
     if (wizardForm.dynamic_dns) onDynamicDnsToggle(true)
   } else {
     editingRule.value = null
     editingRuleVersion.value = ''
-    wizardStagePageSnapshot.value = newRuleWizardStageOverrides()
     Object.assign(wizardForm, {
       name: '',
       description: '',
@@ -2989,9 +2980,6 @@ const openWizard = async (rule?: Rule) => {
       proxy_stream_timeout: 0,
       proxy_flush_interval: 0, // 此前重置族缺失：NTLM 开启后 flush=-1 为可达态，防 stale 泄漏进新建表单
       proxy_stream_close_delay: 0,
-      // 「新建规则」必须清掉上一条规则（编辑/复制水合而来）的阶段
-      // 拦截页覆盖——否则新规则静默继承旧规则的 stage1/stage3 页面与状态码。
-      ...newRuleWizardStageOverrides(),
     })
   }
   hydratingWizard = false
@@ -3020,9 +3008,6 @@ const resetWizard = () => {
   isCopyMode.value = false
   copySourceRuleId.value = null
   copySourceHostHeader.value = ''
-  // 关闭向导同样清态——resetWizard 是下次「新建」之前的最后一道
-  // 兜底（openWizard 新建分支已同源清零，两处共用 newRuleWizardStageOverrides）。
-  Object.assign(wizardForm, newRuleWizardStageOverrides())
   wizardForm.enable_dns_server = false
   wizardForm.dns_server = ''
   currentStep.value = WIZARD_STEP.BASIC
@@ -3631,11 +3616,6 @@ const submitWizard = async () => {
       tls_http_redirect: wizardForm.tls_http_redirect,
       enable_compress: wizardForm.enable_compress,
       compress_types: wizardForm.compress_types.join(',') || 'gzip',
-      // 编辑态只提交相对打开快照变化的阶段页键（后端 *int nil=保留）；
-      // 新建/复制显式全量（Create 无 nil 语义，副本需继承源覆盖）。
-      ...((isCopyMode.value || !editingRule.value)
-        ? stageBlockPageOverrides(wizardForm)
-        : stageBlockPagePatch(wizardForm, wizardStagePageSnapshot.value)),
       request_body_max_size_mb: wizardForm.request_body_max_size_mb || 0,
       upstream_keepalive_timeout: wizardForm.upstream_keepalive_timeout || 0,
       server_tokens_hidden: wizardForm.server_tokens_hidden || 0,
@@ -3941,7 +3921,6 @@ const openCopyWizard = async (rule: Rule) => {
     name: `${fullRule.name}（副本）`,
     enabled: false,
   })
-  wizardStagePageSnapshot.value = stageBlockPageOverrides(fullRule)
   weightsToPercent(wizardForm.upstreams)
   if (wizardForm.dynamic_dns) onDynamicDnsToggle(true)
   hydratingWizard = false

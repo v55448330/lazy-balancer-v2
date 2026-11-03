@@ -103,7 +103,7 @@ func GetSecurityPoliciesForRule(ruleCaddyID string) []*models.SecurityPolicy {
 	if db.DB == nil {
 		return nil
 	}
-	rows, err := db.DB.Query("SELECT policy_id FROM security_policy_bindings WHERE rule_caddy_id=? ORDER BY policy_id ASC", ruleCaddyID)
+	rows, err := db.DB.Query("SELECT policy_id FROM security_policy_bindings WHERE rule_caddy_id=? ORDER BY rank ASC, policy_id ASC", ruleCaddyID)
 	if err != nil {
 		Logf("error", "GetSecurityPoliciesForRule: 查询规则 %s 的安全策略绑定失败: %v", ruleCaddyID, err)
 		return nil
@@ -1589,9 +1589,28 @@ const (
 	// geoipCrawlerEngineSlots 每策略爬虫豁免槽位（编码位移 16；当前引擎 15 个，
 	// 留 1 槽余量——引擎表扩容到 16 个以内不需要改段界）。
 	geoipCrawlerEngineSlots = 16
+
+	// ACL deny / 遗留黑名单逐策略链段（拦截页逐策略归因 2026-11 用户裁定）：
+	// 旧合并并集（id:2 ACL deny / id:4 黑名单，u-deny/u-bl 规则级投影）无法
+	// 归因到单策略，拆为逐策略链后各链 deny 抬码属主策略合成码（483+i）。
+	// 段基址选位（idguard 清单逐族核对）：[10001,800000) 自定义 emit 段、
+	// [800000,900000) 预检 GeoIP 三族（历史事件已钉死，不可重划）、
+	// [900000,1000000) CRS、≥1000000 自定义合成段——唯一形式化空隙是
+	// [1050000≈合成段实际上界, 2000000=crsScopedExclusionIDBase)。合成自定义
+	// id（1000000+序号）受单份配置 48KiB 行护栏约束（每行 ≥60B ⇒ 单配置
+	// ≤~820 行 ⇒ id ≤ ~1000820）与 custom_rules 列 1MB 体门（⇒ ≤~5 万行 ⇒
+	// id ≤ ~1050000），上界 1500000 前留 45 万序号余量；作用域排除段自
+	// 2000001 起单调向上，永不落入本段。OR 分支段（3000000+emit*64）解码
+	// 守卫 parent<800000 与本段不相交；OR 评分段 60000000+ 同理。
+	// 事件侧配套：securityEventsRuleIsCustomFamily 对本段显式排除（否则
+	// n≥1000000 兜底会把预检 IP 拒绝误判为自定义族——自动封禁只消费自定义
+	// 族，误判会让 IP ACL 拦截开始计数封禁，行为回归）。
+	aclPrecheckRuleBase       = 1500000 // ACL deny 逐策略链 [1500000,1510000)（+policyID）
+	blacklistPrecheckRuleBase = 1510000 // 遗留黑名单逐策略链 [1510000,1520000)（+policyID）
+	aclPrecheckRuleLimit      = 1520000 // 本段右开界
 )
 
-// precheckRuleFamily 预检规则 ID 家族（三族互斥）。
+// precheckRuleFamily 预检规则 ID 家族（五族互斥）。
 type precheckRuleFamily uint8
 
 const (
@@ -1599,6 +1618,8 @@ const (
 	precheckRuleFamilyGeoIP
 	precheckRuleFamilyCrawlerExempt
 	precheckRuleFamilyCrawlerSpoof
+	precheckRuleFamilyACLDeny
+	precheckRuleFamilyBlacklist
 )
 
 // encodeGeoIPPrecheckRuleID 普通 GeoIP 预检 id（policyID ∈ [1,9999]）。
@@ -1638,6 +1659,29 @@ func encodeCrawlerSpoofRuleID(policyID int) (int, bool) {
 	return id, true
 }
 
+// encodeACLPrecheckRuleID / encodeBlacklistPrecheckRuleID：ACL deny 与遗留
+// 黑名单逐策略链 id（+policyID，policyID ∈ [1,9999]，与普通 GeoIP 链同界）。
+// 越界返回 false，调用方跳过该策略链并告警（归因/分桶错位防线，与 GeoIP
+// 链越界同口径）。
+func encodeACLPrecheckRuleID(policyID int) (int, bool) {
+	return encodePolicyOffsetRuleID(aclPrecheckRuleBase, aclPrecheckRuleLimit, policyID)
+}
+
+func encodeBlacklistPrecheckRuleID(policyID int) (int, bool) {
+	return encodePolicyOffsetRuleID(blacklistPrecheckRuleBase, aclPrecheckRuleLimit, policyID)
+}
+
+func encodePolicyOffsetRuleID(base, limit, policyID int) (int, bool) {
+	if policyID <= 0 {
+		return 0, false
+	}
+	id := base + policyID
+	if id <= base || id >= limit {
+		return 0, false
+	}
+	return id, true
+}
+
 // decodePrecheckRuleID 把 rule_triggered 文本解码为家族+属主策略（+引擎序号）。
 // 唯一解码是归因与评分的共同前提：越界/无法唯一解码（行、p=0 边界值）
 // 返回 ok=false，消费方走能力 fallback，禁止用 n-800000 猜属主。
@@ -1662,6 +1706,18 @@ func decodePrecheckRuleID(ruleID string) (precheckRuleFamily, int, int, bool) {
 			return precheckRuleFamilyUnknown, 0, 0, false
 		}
 		return precheckRuleFamilyCrawlerSpoof, pid, 0, true
+	case n > aclPrecheckRuleBase && n < blacklistPrecheckRuleBase:
+		pid := n - aclPrecheckRuleBase
+		if pid <= 0 {
+			return precheckRuleFamilyUnknown, 0, 0, false
+		}
+		return precheckRuleFamilyACLDeny, pid, 0, true
+	case n >= blacklistPrecheckRuleBase && n < aclPrecheckRuleLimit:
+		pid := n - blacklistPrecheckRuleBase
+		if pid <= 0 {
+			return precheckRuleFamilyUnknown, 0, 0, false
+		}
+		return precheckRuleFamilyBlacklist, pid, 0, true
 	}
 	return precheckRuleFamilyUnknown, 0, 0, false
 }
@@ -1689,6 +1745,8 @@ const (
 	PrecheckRuleFamilyGeoIP         = precheckRuleFamilyGeoIP
 	PrecheckRuleFamilyCrawlerExempt = precheckRuleFamilyCrawlerExempt
 	PrecheckRuleFamilyCrawlerSpoof  = precheckRuleFamilyCrawlerSpoof
+	PrecheckRuleFamilyACLDeny       = precheckRuleFamilyACLDeny
+	PrecheckRuleFamilyBlacklist     = precheckRuleFamilyBlacklist
 )
 
 // 展示层段界导出：预检段 [800000,900000) 的起止与合成自定义 ID 基址
@@ -1719,20 +1777,33 @@ func PrecheckRuleFamilyOf(n int) PrecheckRuleFamily {
 		return precheckRuleFamilyCrawlerExempt
 	case n >= geoipCrawlerSpoofRuleBase && n < geoipPrecheckRuleLimit:
 		return precheckRuleFamilyCrawlerSpoof
+	case n >= aclPrecheckRuleBase && n < aclPrecheckRuleLimit:
+		if n < blacklistPrecheckRuleBase {
+			return precheckRuleFamilyACLDeny
+		}
+		return precheckRuleFamilyBlacklist
 	}
 	return precheckRuleFamilyUnknown
+}
+
+// IsACLPrecheckRuleID 报告 n 是否落在预检逐策略 ACL deny / 黑名单链段
+// [aclPrecheckRuleBase, aclPrecheckRuleLimit)——IsStage1PrecheckID 的段组成
+// 成员（固定族 {2,4,7,8,14} ∪ GeoIP 8 段 ∪ 本段）。段界单一事实源。
+func IsACLPrecheckRuleID(n int) bool {
+	return n >= aclPrecheckRuleBase && n < aclPrecheckRuleLimit
 }
 
 // IsStage1PrecheckID 判定事件触发 id 是否属阶段 1 预检族
 // 收敛：{2,4,7,8,14} 五元组此前在 services 谓词与 handlers/security_overview
 // 两处独立字面量维护——阶段 1 新增预检 id 时两处漏改即分叉。单一事实源在此，
-// 消费方改调本函数）。
+// 消费方改调本函数）。逐策略 ACL deny/黑名单链段（1500000+policyID /
+// 1510000+policyID，历史 id:2/4 合并段退役后的事件族）入列。
 func IsStage1PrecheckID(n int) bool {
 	switch n {
 	case 2, 4, 7, 8, 14:
 		return true
 	}
-	return IsGeoIPPrecheckID(n)
+	return IsGeoIPPrecheckID(n) || IsACLPrecheckRuleID(n)
 }
 
 // Stage1PrecheckIDSQLList 是预检段固定规则 ID 的 SQL 字面量清单（8 项）——
@@ -1761,12 +1832,15 @@ func IsStage1PrecheckEventID(n int) bool {
 // Stage1PrecheckSegmentSQL 是阶段 1 预检段（IP 访问控制/威胁情报库/地域拦截）
 // 事件归因的完整 SQL 谓词单一事实源——rule_triggered（文本 id）落在本段即
 // 阶段 1：固定 ID 清单 Stage1PrecheckIDSQLList ∪ GeoIP 预检归因段
-// [geoipPrecheckRuleBase, +100000) 的 6 位文本形态（8 开头 6 位）。
-// 消费方：handlers.GetRuleStageStats 分段耗时归因（收敛：原
-// 内联 "IN %s OR (LENGTH=6 AND LIKE '8%%')" 与 ID 清单分居两文件两处字面量）。
-// 与 IsStage1PrecheckID 同文件维护，一致性由 security_stage1_segment_test.go 钉死。
+// [geoipPrecheckRuleBase, +100000) 的 6 位文本形态（8 开头 6 位）∪ 逐策略
+// ACL deny/黑名单链段 [aclPrecheckRuleBase, aclPrecheckRuleLimit) 的 7 位
+// 文本形态（150/151 开头 7 位）。消费方：handlers.GetRuleStageStats 分段耗时
+// 归因（收敛：原内联 "IN %s OR (LENGTH=6 AND LIKE '8%%')" 与 ID 清单分居两文件
+// 两处字面量）。与 IsStage1PrecheckID 同文件维护，一致性由
+// security_stage1_segment_test.go 钉死。
 const Stage1PrecheckSegmentSQL = "rule_triggered IN " + Stage1PrecheckIDSQLList +
-	" OR (LENGTH(rule_triggered)=6 AND rule_triggered LIKE '8%')"
+	" OR (LENGTH(rule_triggered)=6 AND rule_triggered LIKE '8%')" +
+	" OR (LENGTH(rule_triggered)=7 AND (rule_triggered LIKE '150%' OR rule_triggered LIKE '151%'))"
 
 // allowPolicySetSignature 返回规则绑定的 allow 模式策略身份签名（升序 id，
 // 逗号分隔）。签名只用于生成轮内的交集缓存键：同一轮内策略的合并名单不可变，
@@ -1912,31 +1986,39 @@ func validateAllowGeoIPEmpty(policies []*models.SecurityPolicy) error {
 	return nil
 }
 
-// buildIPPrecheckDirectives 合并全部绑定启用策略的 deny 侧 IP 控制（deny 模式
-// ACL 并集 id:2、allow 模式 ACL 交集外拒绝 id:7、遗留黑名单并集 id:4）与逐策略
-// GeoIP 链（800000+policyID）为一个极简 coraza 配置（阶段 1）。预检查器置于
-// 处理器链最前（先于全部 rate_limit/waf）：被拒 IP/区域在任何策略的 CRS/自定义
-// 规则评估前即中断——修复 `[coraza_, coraza_]` 链中 CRS 先评估产生
+// buildIPPrecheckDirectives 合并全部绑定启用策略的 IP 控制（阶段 1 预检）：
+// 信任并集 DetectionOnly（id:3）、阶段 0 保留检测（id:12）、逐策略 ACL deny
+// 链（1500000+policyID）、逐策略黑名单链（1510000+policyID）、allow 交集外
+// 拒绝（id:7）、allow 命中全豁免（id:13）、逐策略 GeoIP 链（800000+policyID）
+// 与逐策略爬虫豁免/伪装（810000+/850000+）为一个极简 coraza 配置。预检查器
+// 置于处理器链最前（先于全部 rate_limit/waf）：被拒 IP/区域在任何策略的
+// CRS/自定义规则评估前即中断——修复 `[coraza_, coraza_]` 链中 CRS 先评估产生
 // 检测事件、IP ACL 才拦截的双重检测问题（IP ACL 最高优先级）。预检仍是
-// coraza 拒绝：audit log 留痕供安全事件管线归因（id:2/id:4 归因口径不变）。
+// coraza 拒绝：audit log 留痕供安全事件管线归因。
+//
+// 拦截页逐策略归因（2026-11 用户裁定：触发哪条策略 → 显示该策略自己配置的
+// 拦截页；未配页 → 兜底=首个启用且有页策略；全部无页 → Caddy 默认 403）：
+// ACL deny / 黑名单 / GeoIP / 爬虫伪装四族 deny 链逐策略发射，属主策略在
+// 生成上下文中获配合成码（483+i，拦截页有效）时该链 deny 抬码落逐策略归因
+// 路由（buildBlockPageAttributionRoute）；未获码（无页/页空/超码域上限）
+// 保持 403 落 403 兜底错误路由。白名单交集外拒绝（id:7）维持 403 兜底——
+// 交集跨策略无归属语义（任一 allow 策略单独都不拥有该拒绝）。
 // 2026-09-15 用户裁定:信任最高优先——预检信任 ctl:ruleEngine=
 // DetectionOnly 先行(id:3,取代「deny 优先于信任」与「并入 allow 放行集」),
 // 信任 IP 经 DetectionOnly 后 deny/黑名单/GeoIP 全评估不拦但全记录;跨策略
 // 边界=信任仅豁免所属策略(其他策略引用同一信任地址列表即可);限流仍生效。
-// 归因边界（拦截页按触发策略归因）：预检是多策略**合并**段，deny 无法归因
-// 到单策略，故 denyStatus=0 时保持 status:403 不抬码——其中断落首绑定有页
-// 策略的 403 兜底错误路由（buildBlockPageErrorRoute）；规则配了阶段 1 拦截页
-// 时调用方传 denyStatus=481，全部 deny 抬码落 481 阶段路由（阶段化模型）。
 // 无 deny 侧控制且无 GeoIP 策略时返回空串（不发射）。
 //
 // ruleCaddyID：本函数逐规则渲染（policiesForRule——每条规则
-// 的绑定策略集不同，u-* 并集内容是调用方规则的函数），u-* 投影 scope 必须编入
-// 规则身份（u-deny-<ruleCaddyID> 等）；全局单文件名下异策略集多规则的后渲染
-// 会覆盖前者=漏拦+误拦（热路径稳定命名粒度教训的预检形态）。空值显性报错
+// 的绑定策略集不同），跨策略合并面（allow 交集/信任并集/stage0 检测并集）
+// 的 u-* 投影 scope 必须编入规则身份（u-allow-<ruleCaddyID> 等）；逐策略链
+// 投影与策略引擎同 scope（p<id>-acl / p<id>-bl / p<id>-trust，内容=该策略
+// 合并名单，与规则无关）——生产粒度=消费粒度，同策略同文件零重复投影
+// （热路径稳定命名粒度教训的预检形态）。空值显性报错
 // （fail-loud，禁止静默退回全局名重建冲突）。爆炸半径=整份配置被拒——
 // 已裁定维持 fail-loud 不收窄（跳过+告警=IP 控制面静默缺失，
 // fail-closed 整拒更安全），载体见 BuildCorazaDirectives 同名注释。
-func buildIPPrecheckDirectives(policies []*models.SecurityPolicy, denyStatus int, ruleCaddyID string, securityCtxs ...*securityPolicyContext) (string, error) {
+func buildIPPrecheckDirectives(policies []*models.SecurityPolicy, ruleCaddyID string, securityCtxs ...*securityPolicyContext) (string, error) {
 	var securityCtx *securityPolicyContext
 	if len(securityCtxs) > 0 {
 		securityCtx = securityCtxs[0]
@@ -1944,13 +2026,14 @@ func buildIPPrecheckDirectives(policies []*models.SecurityPolicy, denyStatus int
 	if ruleCaddyID == "" {
 		return "", fmt.Errorf("u-* 预检投影缺少规则身份（ruleCaddyID 为空）——预检逐规则渲染，scope 必须编入规则身份（历史 HP-1）")
 	}
-	var denyUnion, blacklistUnion []string
 	var allowLists [][]string
-	// 始终发射收敛（2026-10-15 用户裁定）：deny ACL 开启即计入发射面（并集可
-	// 空=空文件算子永不命中，空↔非空纯内容变化走热路径）；allow 为否定算子
-	//（空集=恒命中=全拒，语义不等价）维持内容门控；黑名单为内联字段维持
-	// 内容门控。
+	// 始终发射收敛（2026-10-15 用户裁定）：deny ACL 开启即计入发射面（逐策略
+	// 链可空名单=空文件算子永不命中，空↔非空纯内容变化走热路径）；allow 为
+	// 否定算子（空集=恒命中=全拒，语义不等价）维持内容门控；黑名单为内联
+	// 字段维持内容门控（逐策略链按名单非空发射）。
 	hasDenyACL := false
+	hasBlacklist := false
+	blacklistByPolicy := make(map[int][]string, len(policies))
 	for _, p := range policies {
 		if p == nil {
 			continue
@@ -1960,9 +2043,6 @@ func buildIPPrecheckDirectives(policies []*models.SecurityPolicy, denyStatus int
 			switch p.IPACLMode {
 			case "deny":
 				hasDenyACL = true
-				if len(aclList) > 0 {
-					denyUnion = append(denyUnion, aclList...)
-				}
 			case "allow":
 				// 空集也加入 allowLists：交集为空 → 下方发射恒拒规则，
 				// 不得因内容门静默 fail-open。
@@ -1973,7 +2053,10 @@ func buildIPPrecheckDirectives(policies []*models.SecurityPolicy, denyStatus int
 		if err := json.Unmarshal(p.IPBlacklist, &blacklist); err != nil {
 			logMalformedInlineIPList(p.ID, "ip_blacklist", err)
 		}
-		blacklistUnion = append(blacklistUnion, blacklist...)
+		if len(blacklist) > 0 {
+			hasBlacklist = true
+			blacklistByPolicy[p.ID] = blacklist
+		}
 	}
 	hasGeoIP := false
 	for _, p := range policies {
@@ -1988,10 +2071,11 @@ func buildIPPrecheckDirectives(policies []*models.SecurityPolicy, denyStatus int
 	detectionTrust, _ := stage0TrustSets(policies)
 	hasStage0Detection := hasStage0TrustDetection(policies)
 	// 早退条件以发射面 flag/内容表达：deny ACL 收敛到 flag（始终发射，
-	// 2026-10-15）；stage0 保留检测收敛到 flag（空并集恒发射 id:12）；信任
-	// 并集维持内容门控（ip_whitelist_enabled 表默认值=1 非刻意 opt-in，flag
-	// 门控会使全部默认站点凭空获得预检，门禁钉测实证）。
-	if !hasDenyACL && len(blacklistUnion) == 0 && len(allowLists) == 0 && !hasGeoIP && !hasStage0Detection && len(detectionTrust) == 0 {
+	// 2026-10-15）；黑名单收敛到 flag（逐策略链按名单非空发射）；stage0 保留
+	// 检测收敛到 flag（空并集恒发射 id:12）；信任并集维持内容门控
+	// （ip_whitelist_enabled 表默认值=1 非刻意 opt-in，flag 门控会使全部默认
+	// 站点凭空获得预检，门禁钉测实证）。
+	if !hasDenyACL && !hasBlacklist && len(allowLists) == 0 && !hasGeoIP && !hasStage0Detection && len(detectionTrust) == 0 {
 		return "", nil
 	}
 	var sb strings.Builder
@@ -2043,30 +2127,86 @@ func buildIPPrecheckDirectives(policies []*models.SecurityPolicy, denyStatus int
 		sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"%s\" \"id:12,phase:1,pass,nolog,ctl:ruleEngine=DetectionOnly\"\n", operand))
 	}
 
-	// denyStatus<=0 归一 403（兜底归因边界）；>0（阶段 1 页已配=481）全部 deny
-	// 显式抬码落 481 阶段路由。
-	if denyStatus <= 0 {
-		denyStatus = 403
+	// precheckRuleIDs 本函数已发射的 SecRule id：跨家族唯一性硬错误（历史
+	// 编码函数已保证族内唯一且互斥，本表是防御层：任何未来改动
+	// 让两族产生同 id 时渲染直接失败，而不是把碰撞送进引擎/事件归因。
+	precheckRuleIDs := map[int]bool{}
+	claimRuleID := func(id int, desc string) error {
+		if precheckRuleIDs[id] {
+			return fmt.Errorf("预检规则 id 冲突：%s 与已发射规则同为 id:%d（请检查策略编号与爬虫族段界）", desc, id)
+		}
+		precheckRuleIDs[id] = true
+		return nil
+	}
+	// 逐策略 ACL deny 链与黑名单链（拦截页逐策略归因，2026-11 用户裁定）：
+	// 旧合并并集（id:2/u-deny、id:4/u-bl）deny 无法归因到单策略，拆为逐策略
+	// 链后各链抬属主策略合成码（483+i，拦截页有效）；未获码策略（无页/页空/
+	// 超码域上限）保持 403 落 403 兜底错误路由（跟随链上首个有效页策略）。
+	// 投影 scope 与策略引擎同源（p<id>-acl / p<id>-bl，内容=该策略合并名单
+	// mergedACLList(p)/内联黑名单——与引擎 BuildCorazaDirectives 同函数同读法
+	// 同字节）：预检与引擎共享同一份投影文件，零重复写盘（同字节跳写）。
+	// 白名单交集外拒绝（id:7）在其后维持 403 兜底——交集跨策略无归属语义
+	// （裁定边界，任何 allow 策略获码也不抬）。
+	//
+	// 引擎约束（R-10，coraza 拒绝链续段 disruptive 动作）：本段全部单段规则
+	// （deny+status+log+msg+skipAfter 同段），无 chain 续段——status 动作仅
+	// 允许 disruptive 段，形状经 compileForEngineGate 钉测。
+	precheckStatusFragment := func(p *models.SecurityPolicy) string {
+		if code := precheckPolicyBlockStatus(securityCtx, p); code > 0 {
+			return fmt.Sprintf(",status:%d", code)
+		}
+		return ",status:403"
 	}
 	if hasDenyACL {
-		operand, err := ipListRuleOperand(precheckProjectionScope("deny", ruleCaddyID), denyUnion, false)
-		if err != nil {
-			return "", err
+		for _, p := range policies {
+			if p == nil || !p.IPACLEnabled || p.IPACLMode != "deny" {
+				continue
+			}
+			chainID, ok := encodeACLPrecheckRuleID(p.ID)
+			if !ok {
+				Logf("warn", "策略 %d 的 ACL deny 预检链 id 越出逐策略段 [%d,%d)，已跳过发射", p.ID, aclPrecheckRuleBase+1, blacklistPrecheckRuleBase)
+				continue
+			}
+			if err := claimRuleID(chainID, fmt.Sprintf("策略 %d ACL deny 链", p.ID)); err != nil {
+				return "", err
+			}
+			operand, err := ipListRuleOperand(fmt.Sprintf("p%d-acl", p.ID), mergedACLList(p), false)
+			if err != nil {
+				return "", err
+			}
+			sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"%s\" \"id:%d,phase:1,deny%s,log,msg:'IP 黑名单拒绝',skipAfter:SECURITY_RULES_END\"\n", operand, chainID, precheckStatusFragment(p)))
 		}
-		sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"%s\" \"id:2,phase:1,deny,status:%d,log,msg:'IP 黑名单拒绝',skipAfter:SECURITY_RULES_END\"\n", operand, denyStatus))
 	}
-	if len(blacklistUnion) > 0 {
-		operand, err := ipListRuleOperand(precheckProjectionScope("bl", ruleCaddyID), blacklistUnion, false)
-		if err != nil {
-			return "", err
+	if hasBlacklist {
+		for _, p := range policies {
+			if p == nil {
+				continue
+			}
+			blacklist := blacklistByPolicy[p.ID]
+			if len(blacklist) == 0 {
+				continue
+			}
+			chainID, ok := encodeBlacklistPrecheckRuleID(p.ID)
+			if !ok {
+				Logf("warn", "策略 %d 的黑名单预检链 id 越出逐策略段 [%d,%d)，已跳过发射", p.ID, blacklistPrecheckRuleBase+1, aclPrecheckRuleLimit)
+				continue
+			}
+			if err := claimRuleID(chainID, fmt.Sprintf("策略 %d 黑名单链", p.ID)); err != nil {
+				return "", err
+			}
+			operand, err := ipListRuleOperand(fmt.Sprintf("p%d-bl", p.ID), blacklist, false)
+			if err != nil {
+				return "", err
+			}
+			sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"%s\" \"id:%d,phase:1,deny%s,log,msg:'IP 黑名单',skipAfter:SECURITY_RULES_END\"\n", operand, chainID, precheckStatusFragment(p)))
 		}
-		sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"%s\" \"id:4,phase:1,deny,status:%d,log,msg:'IP 黑名单',skipAfter:SECURITY_RULES_END\"\n", operand, denyStatus))
 	}
 	var allowIntersection []string
-	// allow 交集外拒绝（id:7，后移）：置于 deny 并集/黑名单之后
-	// ——同在 deny 名单与 allow 交集外的 IP 先被 id:2/4 拒绝，事件归因「IP 黑名单
-	// 拒绝」（deny 侧精确语义）；id:7 只对「未被显式 deny 且不在 allow 交集」的
-	// IP 生效。拦截结果与既有语义等价（同 deny+status+skipAfter）。
+	// allow 交集外拒绝（id:7，后移）：置于逐策略 deny/黑名单链之后
+	// ——同在 deny 名单与 allow 交集外的 IP 先被逐策略 deny 链拒绝，事件归因
+	// 「IP 黑名单拒绝」（deny 侧精确语义）；id:7 只对「未被显式 deny 且不在
+	// allow 交集」的 IP 生效，恒 403 落兜底路由（交集跨策略无归属语义，
+	// allow 策略获码也不抬）。拦截结果与既有语义等价（同 deny+status+skipAfter）。
 	if len(allowLists) > 0 {
 		// allow 交集只依赖「绑定的 allow 策略集合」（同一生成轮内名单内容固定）：
 		// 按策略身份签名在同轮内复用，避免同策略集的多条规则重复计算。
@@ -2076,14 +2216,16 @@ func buildIPPrecheckDirectives(policies []*models.SecurityPolicy, denyStatus int
 		}))
 		// 多条 allow 名单互不相交（交集为空）= 逐策略顺序评估下任意 IP 都会被
 		// 某个名单拒绝：恒拒规则等价表达（REMOTE_ADDR 恒非空）。
+		// 恒 403：交集跨策略无归属语义，维持兜底（allow 策略获码也不抬，
+		// 2026-11 用户裁定）。
 		if len(allowIntersection) == 0 {
-			sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"@rx .*\" \"id:%d,phase:1,deny,status:%d,log,msg:'IP 白名单拒绝',skipAfter:SECURITY_RULES_END\"\n", ipPrecheckAllowRuleID, denyStatus))
+			sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"@rx .*\" \"id:%d,phase:1,deny,status:403,log,msg:'IP 白名单拒绝',skipAfter:SECURITY_RULES_END\"\n", ipPrecheckAllowRuleID))
 		} else {
 			operand, err := ipListRuleOperand(precheckProjectionScope("allow", ruleCaddyID), allowIntersection, true)
 			if err != nil {
 				return "", err
 			}
-			sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"%s\" \"id:%d,phase:1,deny,status:%d,log,msg:'IP 白名单拒绝',skipAfter:SECURITY_RULES_END\"\n", operand, ipPrecheckAllowRuleID, denyStatus))
+			sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"%s\" \"id:%d,phase:1,deny,status:403,log,msg:'IP 白名单拒绝',skipAfter:SECURITY_RULES_END\"\n", operand, ipPrecheckAllowRuleID))
 		}
 	}
 	// allow 白名单豁免（用户裁定）：交集命中 = pass + 跳过预检段内其后的一切
@@ -2110,13 +2252,10 @@ func buildIPPrecheckDirectives(policies []*models.SecurityPolicy, denyStatus int
 	// 切为 DetectionOnly 的前提下，该续段对判定结果不产生差异（信任 IP 本就不
 	// 拦）——属防御性冗余，保留为纵深层；删除它同样安全，但若未来收窄
 	// DetectionOnly 的适用范围，此续段是唯一的链内自抑制，勿视作死代码清理。
-	// denyStatus=403（阶段 1 页未配）时不带
-	// status：默认 403 → 403 兜底错误路由（跟随策略的默认层，回归形状）；
-	// =481 时链首显式抬码（disruptive 动作仅允许链首段）。
-	geoipStatusFragment := ""
-	if denyStatus != 403 {
-		geoipStatusFragment = fmt.Sprintf(",status:%d", denyStatus)
-	}
+	// denyStatus 时代已退役（规则级阶段页 481 停用）：GeoIP 链首 status 改为
+	// 逐策略——属主策略获配合成码（483+i）时链首显式抬码（disruptive 动作仅
+	// 允许链首段），未获码不带 status（默认 403 → 403 兜底错误路由，跟随
+	// 策略的默认层，回归形状）。
 	// 域 G：国名条目精确匹配集——树 Countries（live 优先、缓存
 	// 兜底，与 ValidateGeoIPCountries 同源）；树缺失（无库且无缓存）时空集，
 	// 国名条目退回后缀形态（geoipLocOperator 注释）。单次取树供全部策略链
@@ -2126,17 +2265,6 @@ func buildIPPrecheckDirectives(policies []*models.SecurityPolicy, denyStatus int
 		for _, c := range tree.Countries {
 			geoipCountryExact[c] = true
 		}
-	}
-	// precheckRuleIDs 本函数已发射的 SecRule id：跨家族唯一性硬错误（历史
-	// 编码函数已保证族内唯一且互斥，本表是防御层：任何未来改动
-	// 让两族产生同 id 时渲染直接失败，而不是把碰撞送进引擎/事件归因。
-	precheckRuleIDs := map[int]bool{}
-	claimRuleID := func(id int, desc string) error {
-		if precheckRuleIDs[id] {
-			return fmt.Errorf("预检规则 id 冲突：%s 与已发射规则同为 id:%d（请检查策略编号与爬虫族段界）", desc, id)
-		}
-		precheckRuleIDs[id] = true
-		return nil
 	}
 	for _, p := range policies {
 		if p == nil {
@@ -2227,7 +2355,7 @@ func buildIPPrecheckDirectives(policies []*models.SecurityPolicy, denyStatus int
 						return "", err
 					}
 					spoofPattern := escapeCorazaPattern("^(?:" + strings.Join(selectedEngines, "|") + ")$")
-					sb.WriteString(fmt.Sprintf("SecRule REQUEST_HEADERS:X-LB-Crawler-Spoof \"@rx %s\" \"id:%d,phase:1,deny%s,log,msg:'搜索引擎爬虫伪装（PTR 验证失败）',skipAfter:SECURITY_RULES_END\"\n", spoofPattern, spoofRuleID, geoipStatusFragment))
+					sb.WriteString(fmt.Sprintf("SecRule REQUEST_HEADERS:X-LB-Crawler-Spoof \"@rx %s\" \"id:%d,phase:1,deny%s,log,msg:'搜索引擎爬虫伪装（PTR 验证失败）',skipAfter:SECURITY_RULES_END\"\n", spoofPattern, spoofRuleID, precheckPolicyStatusFragment(securityCtx, p)))
 				}
 			}
 		}
@@ -2239,7 +2367,7 @@ func buildIPPrecheckDirectives(policies []*models.SecurityPolicy, denyStatus int
 			// 避免悬空 chain 使引擎拒绝整份预检配置。
 			locationActions = "t:none,chain"
 		}
-		sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"!@ipMatch %s\" \"id:%d,phase:1,deny%s,log,msg:'GeoIP 区域拦截',skipAfter:SECURITY_RULES_END,chain\"\n", strings.Join(geoipPrivateRanges, ","), geoipRuleID, geoipStatusFragment))
+		sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"!@ipMatch %s\" \"id:%d,phase:1,deny%s,log,msg:'GeoIP 区域拦截',skipAfter:SECURITY_RULES_END,chain\"\n", strings.Join(geoipPrivateRanges, ","), geoipRuleID, precheckPolicyStatusFragment(securityCtx, p)))
 		sb.WriteString(fmt.Sprintf(" SecRule REQUEST_HEADERS:X-LB-GeoIP-Loc \"%s\" \"%s\"\n", escapeCorazaPattern(geoipLocOperator(geoipCountries(p), p.GeoIPMode == "allow", geoipCountryExact)), locationActions))
 		if trustContinuation {
 			// 信任维持内容门控（不收敛，2026-10-15：ip_whitelist_enabled 表
@@ -2259,12 +2387,35 @@ func buildIPPrecheckDirectives(policies []*models.SecurityPolicy, denyStatus int
 	return sb.String(), nil
 }
 
+// precheckPolicyBlockStatus 返回阶段 1 预检中属主策略 p 的 deny 链抬码：
+// p 在生成上下文中分配了逐策略合成码（483+i，拦截页有效）→ 返回该码；
+// 否则 0（无页/页空/超码域上限/无批量上下文）→ 发射端保持缺省 403，
+// 中断落 403 兜底错误路由（跟随链上首个有效页策略）。规则级阶段页（481/482）
+// 已停用，预检抬码唯一来源是逐策略合成码。
+func precheckPolicyBlockStatus(securityCtx *securityPolicyContext, p *models.SecurityPolicy) int {
+	if securityCtx == nil || p == nil {
+		return 0
+	}
+	return securityCtx.policySynthetic[p.ID]
+}
+
+// precheckPolicyStatusFragment 是预检链首的 status 动作片段（GeoIP 链首与
+// 爬虫伪装规则消费）：属主策略获码 → ",status:<code>"；未获码 → 空串
+// （coraza deny 缺省 403，落 403 兜底错误路由）。
+func precheckPolicyStatusFragment(securityCtx *securityPolicyContext, p *models.SecurityPolicy) string {
+	if code := precheckPolicyBlockStatus(securityCtx, p); code > 0 {
+		return fmt.Sprintf(",status:%d", code)
+	}
+	return ""
+}
+
 // buildIPPrecheckHandler returns the consolidated stage-1 precheck coraza handler。
 // securityCtx 供生成级缓存（allow 交集按策略集签名复用）：同一策略集绑定的
 // 多条规则此前各自重算多名单交集（64 份满额名单 × 5000 条最坏 2500 万次比较/
-// 对，且全程持 CaddyOpLock）。nil=非批量路径（单规则生成），照常自算。
-func buildIPPrecheckHandler(policies []*models.SecurityPolicy, denyStatus int, ruleCaddyID string, securityCtxs ...*securityPolicyContext) (map[string]interface{}, error) {
-	directives, err := buildIPPrecheckDirectives(policies, denyStatus, ruleCaddyID, securityCtxs...)
+// 对，且全程持 CaddyOpLock）。nil=非批量路径（单规则生成），照常自算——
+// 逐策略 deny 链无上下文时不获码（403 兜底回归形状）。
+func buildIPPrecheckHandler(policies []*models.SecurityPolicy, ruleCaddyID string, securityCtxs ...*securityPolicyContext) (map[string]interface{}, error) {
+	directives, err := buildIPPrecheckDirectives(policies, ruleCaddyID, securityCtxs...)
 	if err != nil {
 		return nil, err
 	}

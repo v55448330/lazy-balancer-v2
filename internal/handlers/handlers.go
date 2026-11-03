@@ -1111,15 +1111,8 @@ func (h *Handlers) validateRulePayloadBeforeSave(req interface{}) error {
 		return fmt.Errorf("健康检查恢复阈值必须 ≥ 1")
 	}
 
-	// 阶段拦截页覆盖层：页引用存在性 + 状态码集合（Update nil 已合并为 0=
-	// 未配，存在性校验仅作用于显式提供值；存量保留值不经此门——页删除侧
-	// 引用检查与渲染侧「已失效」回落承担）。
-	if err := validateStageBlockPageRef(data.BlockPageStage1ID, data.BlockPageStage1Status, "阶段 1（IP 访问控制/地域拦截）"); err != nil {
-		return err
-	}
-	if err := validateStageBlockPageRef(data.BlockPageStage3ID, data.BlockPageStage3Status, "阶段 3（WAF）"); err != nil {
-		return err
-	}
+	// 规则级阶段拦截页停用（2026-11 用户裁定：写侧停写）：四字段不再校验
+	// 也不落库（悬空页引用无害——渲染链零消费，DB 列仅随备份/快照搬运）。
 	return nil
 }
 

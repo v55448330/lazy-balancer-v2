@@ -53,31 +53,27 @@ const pages = [{ id: 7, name: '页七', content: '<p>x</p>' }]
 
 const stage1Rows = (protocol: string): Array<{ label: string; detail: string }> =>
   buildStageModel([binding()], [aclPolicy()], [], pages, {
-    // 规则形状 = lb_rules 行的消费面（buildStageModel 第 5 参）：协议 + 阶段页覆盖 4 字段
+    // 规则形状 = lb_rules 行的消费面（buildStageModel 第 5 参）：仅协议（规则级
+    // 阶段页覆盖已退役，stagePages 不再携带覆盖 4 字段）
     protocol,
-    block_page_stage1_id: 0,
-    block_page_stage1_status: 0,
-    block_page_stage3_id: 0,
-    block_page_stage3_status: 0,
   }).stages[1].groups[0]?.rows ?? []
 
 test('TCP 规则：阶段 1「拦截页」行显示「不支持」，HTTP 语义文案整族退场', () => {
   const rows = stage1Rows('tcp')
   assert.deepEqual(rows.find((row) => row.label === '拦截页'), { label: '拦截页', detail: '不支持' })
   assert.equal(rows.some((row) => row.detail.includes('跟随绑定链')), false, '「跟随绑定链首个有效页」是 HTTP 错误路由语义，TCP 下不得出现')
-  assert.equal(rows.some((row) => row.label === '拦截页（策略页）'), false, '策略页行同为 HTTP 渲染面，TCP 下并入「不支持」口径')
+  assert.equal(rows.some((row) => row.label.includes('策略页')), false, '策略页行限定标签退场（单行口径）')
 })
 
-test('HTTP 规则：拦截页行保持既有文案（回归钉）', () => {
+test('HTTP 规则：拦截页行保持策略页文案（回归钉）', () => {
   const rows = stage1Rows('http')
-  assert.deepEqual(rows.find((row) => row.label === '拦截页'), { label: '拦截页', detail: '未配置（跟随绑定链首个有效页，无则默认 403）' })
-  assert.deepEqual(rows.find((row) => row.label === '拦截页（策略页）'), { label: '拦截页（策略页）', detail: '页七（状态码 403）' })
+  assert.deepEqual(rows.find((row) => row.label === '拦截页'), { label: '拦截页', detail: '页七（状态码 403）' })
 })
 
 test('协议缺省（旧调用形状）：按 HTTP 口径不回退', () => {
   // SecurityPolicies 向导预览传 null——无协议字段的调用面必须保持既有行为
   const rows = buildStageModel([binding()], [aclPolicy()], [], pages, null).stages[1].groups[0]?.rows ?? []
-  assert.equal(rows.find((row) => row.label === '拦截页')?.detail, '未配置（跟随绑定链首个有效页，无则默认 403）')
+  assert.equal(rows.find((row) => row.label === '拦截页')?.detail, '页七（状态码 403）')
 })
 
 test('锁摘要与流程弹框共用模型：TCP 行为钉在单源（buildStageModel）上', () => {

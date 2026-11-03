@@ -971,10 +971,6 @@ type tcpDeadFields struct {
 	ForwardAuthURI         *string
 	ForwardAuthCopyHeaders *string
 	UpstreamForceHTTP1     *int
-	BlockPageStage1ID      *int
-	BlockPageStage1Status  *int
-	BlockPageStage3ID      *int
-	BlockPageStage3Status  *int
 	// 访问日志渲染仅对 HTTP 生成 logger_names（caddy.go 按
 	// r.Protocol=="http" 门控），TCP 行的 log_enabled 是死配置——UI 已对
 	// TCP 隐藏开关，API/导入仍可写入，随导出/快照放大。
@@ -1040,8 +1036,6 @@ func tcpDeadFieldReset(protocol string, fields tcpDeadFields) {
 		fields.UpstreamKeepaliveTimeout, fields.ServerTokensHidden,
 		fields.NTLMCompatible, fields.UpstreamForceHTTP1,
 		fields.ForwardAuthEnabled,
-		fields.BlockPageStage1ID, fields.BlockPageStage1Status,
-		fields.BlockPageStage3ID, fields.BlockPageStage3Status,
 		fields.ProxyDialTimeout, fields.ProxyResponseHeaderTimeout,
 		fields.ProxyReadTimeout, fields.ProxyWriteTimeout,
 		fields.ProxyStreamTimeout, fields.ProxyFlushInterval,
@@ -1086,10 +1080,6 @@ func createRuleTCPDeadFields(req *models.CreateRuleRequest) tcpDeadFields {
 		UpstreamKeepaliveTimeout: &req.UpstreamKeepaliveTimeout,
 		ServerTokensHidden:       &req.ServerTokensHidden,
 		UpstreamForceHTTP1:       &req.UpstreamForceHTTP1,
-		BlockPageStage1ID:        &req.BlockPageStage1ID,
-		BlockPageStage1Status:    &req.BlockPageStage1Status,
-		BlockPageStage3ID:        &req.BlockPageStage3ID,
-		BlockPageStage3Status:    &req.BlockPageStage3Status,
 		LogEnabled:               &req.LogEnabled,
 		DnsFamily:                &req.DnsFamily,
 	}
@@ -1117,12 +1107,8 @@ func updateRuleTCPDeadFields(req *models.UpdateRuleRequest) tcpDeadFields {
 		// NTLMCompatible 有意留空：TCP 显式携带由保存门 400 点名，未携带的
 		// 存量死值由 UpdateRule 调用点按「是否显式提供」自愈归零——通用归一
 		// 无法区分二者，会把显式 1 静默改写成 0。
-		UpstreamForceHTTP1:    req.UpstreamForceHTTP1,
-		BlockPageStage1ID:     req.BlockPageStage1ID,
-		BlockPageStage1Status: req.BlockPageStage1Status,
-		BlockPageStage3ID:     req.BlockPageStage3ID,
-		BlockPageStage3Status: req.BlockPageStage3Status,
-		LogEnabled:            req.LogEnabled,
+		UpstreamForceHTTP1: req.UpstreamForceHTTP1,
+		LogEnabled:         req.LogEnabled,
 		// TCP 自愈族：同协议编辑自愈族（调用点已保证非 nil）——
 		// 存量死值不再让无关编辑恒 400 死端。
 		ProxyDialTimeout:           req.ProxyDialTimeout,
@@ -1164,10 +1150,6 @@ func storedRuleTCPDeadFields(rule *models.LbRule) tcpDeadFields {
 		ForwardAuthURI:           &rule.ForwardAuthURI,
 		ForwardAuthCopyHeaders:   &rule.ForwardAuthCopyHeaders,
 		UpstreamForceHTTP1:       &rule.UpstreamForceHTTP1,
-		BlockPageStage1ID:        &rule.BlockPageStage1ID,
-		BlockPageStage1Status:    &rule.BlockPageStage1Status,
-		BlockPageStage3ID:        &rule.BlockPageStage3ID,
-		BlockPageStage3Status:    &rule.BlockPageStage3Status,
 		LogEnabled:               &rule.LogEnabled,
 		// TCP 自愈族：TCP 源行携带的 HTTP 专属代理/路由/策略死值不得
 		// 原样放大到副本（复制路径此前让 tcp+cookie、tcp+proxy 超时、
@@ -1655,9 +1637,10 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 		TLSCert: req.TLSCert, TLSKey: req.TLSKey, TLSHTTPRedirect: req.TLSHTTPRedirect,
 		EnableCompress: req.EnableCompress, CompressTypes: req.CompressTypes,
 		Enabled: enabledVal == 1, LogEnabled: req.LogEnabled, CreatedBy: int(userIDInt),
-		UpdatedAt:         models.JSONNullTime{NullTime: sql.NullTime{Time: time.Now().UTC(), Valid: true}},
-		BlockPageStage1ID: req.BlockPageStage1ID, BlockPageStage1Status: req.BlockPageStage1Status,
-		BlockPageStage3ID: req.BlockPageStage3ID, BlockPageStage3Status: req.BlockPageStage3Status,
+		UpdatedAt: models.JSONNullTime{NullTime: sql.NullTime{Time: time.Now().UTC(), Valid: true}},
+		// 规则级阶段拦截页停用（2026-11 用户裁定：写侧停写）：请求模型保留四
+		// 字段（旧客户端兼容，不 breaking），新建一律落库默认 0——specs 全列
+		// INSERT 仍携带四列（DB 列保留，备份/快照字节同一），值为零。
 	}
 	insertColumns := services.LbRuleInsertColumns("id", "created_at", "updated_by")
 	_, err = tx.Exec(services.LbRuleInsertSQL(insertColumns), services.LbRuleInsertArgs(&rule, insertColumns)...)
@@ -2079,15 +2062,6 @@ var updateRuleSetColumns = []updateRuleSetColumn{
 	{"acme_config_id", nil, func(req *models.UpdateRuleRequest, _ ruleFeatureInput) any { return req.ACMEConfigID }},
 	// ca_provider_id 恒随更新写入——UpdateRule 合并区已保证 req.CAProviderID 非 nil。
 	{"ca_provider_id", nil, func(req *models.UpdateRuleRequest, _ ruleFeatureInput) any { return *req.CAProviderID }},
-	// 阶段页四列：仅非 nil 才写库（指针语义，nil=不触碰存量）。
-	{"block_page_stage1_id", func(req *models.UpdateRuleRequest, _ bool, _ bool) bool { return req.BlockPageStage1ID != nil },
-		func(req *models.UpdateRuleRequest, _ ruleFeatureInput) any { return *req.BlockPageStage1ID }},
-	{"block_page_stage1_status", func(req *models.UpdateRuleRequest, _ bool, _ bool) bool { return req.BlockPageStage1Status != nil },
-		func(req *models.UpdateRuleRequest, _ ruleFeatureInput) any { return *req.BlockPageStage1Status }},
-	{"block_page_stage3_id", func(req *models.UpdateRuleRequest, _ bool, _ bool) bool { return req.BlockPageStage3ID != nil },
-		func(req *models.UpdateRuleRequest, _ ruleFeatureInput) any { return *req.BlockPageStage3ID }},
-	{"block_page_stage3_status", func(req *models.UpdateRuleRequest, _ bool, _ bool) bool { return req.BlockPageStage3Status != nil },
-		func(req *models.UpdateRuleRequest, _ ruleFeatureInput) any { return *req.BlockPageStage3Status }},
 	// 证书材料四条件写语义原样保留：空值=保留存量仅适用 HTTP（手动证书留空=沿用）；
 	// TCP 行经 tcpDeadFieldReset 已置空，但同协议编辑此前两条件皆假 → 死材料
 	// 滞留随导出/快照放大；协议切换/清材料恒写。TCP 恒写（值为归一后的空串）。
@@ -2133,7 +2107,7 @@ var updateRuleBaselineSelectExemptColumns = map[string]string{
 	"created_by":               "审计列：同上",
 	"updated_at":               "审计列：乐观并发门单独读 COALESCE(updated_at,'')",
 	"updated_by":               "审计列：基线合并不读",
-	"block_page_stage1_id":     "指针语义仅非 nil 写库，nil=不触碰存量，无需读",
+	"block_page_stage1_id":     "阶段拦截页停用：写侧零写，基线合并不读",
 	"block_page_stage1_status": "同上",
 	"block_page_stage3_id":     "同上",
 	"block_page_stage3_status": "同上",
@@ -2146,6 +2120,13 @@ var updateRuleSetExemptColumns = map[string]string{
 	"created_by": "审计列：同上",
 	"updated_at": "由终局守卫分支字面量追加 datetime('now')（cert 在途 409 守卫双分支）",
 	"updated_by": "由终局守卫分支字面量追加（同上双分支）",
+	// 规则级阶段拦截页停用（2026-11 用户裁定：写侧停写、渲染链零消费、
+	// DB 4 列保留）：请求模型保留四字段（旧客户端/MCP 兼容，不 breaking），
+	// 写侧一律忽略；存量值仅随备份导出/集群快照字节搬运（specs 保留）。
+	"block_page_stage1_id":     "阶段拦截页停用：写侧停写（渲染链零消费，列保留供备份/快照搬运）",
+	"block_page_stage1_status": "同上",
+	"block_page_stage3_id":     "同上",
+	"block_page_stage3_status": "同上",
 }
 
 // updateRuleColumnParitySets 取三份列集（specs 全集 / 基线 SELECT / UPDATE SET；
@@ -2650,21 +2631,6 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	// tcpDeadFieldReset 清单弃置——与 CreateRule/DuplicateRule 共用同一清单。
 	if req.Protocol == "tcp" {
 		tcpZero := 0
-		// 阶段页四列在 UpdateRule 是「仅非 nil 才写库」的指针语义——TCP 归一
-		// 必须显式提供零值指针，否则协议切换/同协议编辑不会把存量非零值落库
-		// 归零（tcpDeadFieldReset 对 nil 目标跳过）。
-		if req.BlockPageStage1ID == nil {
-			req.BlockPageStage1ID = &tcpZero
-		}
-		if req.BlockPageStage1Status == nil {
-			req.BlockPageStage1Status = &tcpZero
-		}
-		if req.BlockPageStage3ID == nil {
-			req.BlockPageStage3ID = &tcpZero
-		}
-		if req.BlockPageStage3Status == nil {
-			req.BlockPageStage3Status = &tcpZero
-		}
 		// log_enabled 仅 HTTP 渲染消费（logger_names 按协议门控）——
 		// 指针合并会把存量 1 带进 TCP 终态，显式补 false 指针使同协议编辑也自愈。
 		if req.LogEnabled == nil {
@@ -4184,6 +4150,13 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 	if rule.TLSSource != "acme_dns" {
 		rule.CAProviderID = 0
 	}
+	// 规则级阶段拦截页停用（2026-11 用户裁定：写侧停写）——一切协议一律不
+	// 复制四列：副本是新建行，不得继承已停用功能的死配置（HTTP 与 TCP 同判，
+	// 此前 only-TCP 归一）。
+	rule.BlockPageStage1ID = 0
+	rule.BlockPageStage1Status = 0
+	rule.BlockPageStage3ID = 0
+	rule.BlockPageStage3Status = 0
 
 	// 主动健康检查未启用时其专属字段渲染零消费——副本与 Create/Update 同口径
 	// 归一清零（复制即新建，没有「未提交沿用存量」语义；源行残留死配置不得
@@ -4563,14 +4536,14 @@ func updateUpstreamTx(ctx context.Context, tx *sql.Tx, row, incoming storedUpstr
 	return nil
 }
 
-// BatchRuleBlockPages 批量设置阶段拦截页（规则列表多选浮动操作条）：
+// BatchRuleBlockPages 已停用（2026-11 用户裁定：规则级阶段拦截页停用，
+// 写侧停写）：路由保留（R4「已发布稳定版公开 API 面不删」），请求体
 // {rule_ids:[], block_page_stage1_id, block_page_stage1_status,
-// block_page_stage3_id, block_page_stage3_status}——同校验（页存在/状态码集，
-// validateStageBlockPageRef 共享），单事务逐规则 UPDATE lb_rules 4 列 +
-// 一次 finishTxApply（单渲染）。非 http（tcp）规则跳过不 UPDATE——阶段页
-// 仅 http 渲染消费（与 batch-bind 同口径）。响应
-// {bound:n, unchanged:n, skipped:[{rule_id,reason}]}——bound=RowsAffected>0
-// 的真实变更数，unchanged=已在目标态的同值命中数。
+// block_page_stage3_id, block_page_stage3_status} 接受但四字段一律忽略——
+// 零写入（不触碰 lb_rules 四列/版本列/同步触发器）、零渲染。响应形状保持
+// {bound:0, unchanged:<存在的 http 规则数>, skipped:[{rule_id,reason}]}。
+// 兼容面：旧前端/外部自动化批量提交不再 400，但也不再生效（拦截页走
+// 逐策略归因，见 services/caddy.go blockPageSyntheticBase）。
 func (h *Handlers) BatchRuleBlockPages(c *gin.Context) {
 	// 导入窗口 fast-fail：批量改页与导入争同一把写锁，排队后按导入后的
 	// 库状态生效会让客户端看到提交漂移（与余下规则写端点同门）。
@@ -4639,33 +4612,11 @@ func (h *Handlers) BatchRuleBlockPages(c *gin.Context) {
 	//（与 handlers/caddy.go 的锁序契约一致）。
 	h.caddyOpMu.Lock()
 	defer h.caddyOpMu.Unlock()
-	if err := validateStageBlockPageRef(req.BlockPageStage1ID, req.BlockPageStage1Status, "阶段 1（IP 访问控制/地域拦截）"); err != nil {
-		var validationErr *configValidationError
-		if errors.As(err, &validationErr) {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: validationErr.Error()})
-			return
-		}
-		recordRuleWriteFailure(c, "更新", "校验阶段拦截页引用失败", err)
-		writeInternalError(c, http.StatusInternalServerError, "校验阶段拦截页引用失败", err)
-		return
-	}
-	if err := validateStageBlockPageRef(req.BlockPageStage3ID, req.BlockPageStage3Status, "阶段 3（WAF）"); err != nil {
-		var validationErr *configValidationError
-		if errors.As(err, &validationErr) {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: validationErr.Error()})
-			return
-		}
-		recordRuleWriteFailure(c, "更新", "校验阶段拦截页引用失败", err)
-		writeInternalError(c, http.StatusInternalServerError, "校验阶段拦截页引用失败", err)
-		return
-	}
-	tx, err := beginCaddyWriteTx(c)
-	if err != nil {
-		recordRuleWriteFailure(c, "更新", "开启数据库事务失败", err)
-		writeInternalError(c, http.StatusInternalServerError, "开启数据库事务失败", err)
-		return
-	}
-	defer func() { rollbackRuleWriteTx(tx, "BatchRuleBlockPages", "") }()
+	// 规则级阶段拦截页停用（2026-11 用户裁定：写侧停写）：本端点保留路由
+	// （R4 已发布公开 API 面不删），请求体四字段接受并忽略——零写入、零渲染、
+	// 零版本推进（不触发 lb_rules 行级同步触发器）。响应形状保持不变
+	// （bound=0；unchanged=存在的 http 规则数；skipped=不存在/TCP 规则），
+	// 供旧自动化探测规则存在性。头注释见函数文档。
 	type skippedRule struct {
 		RuleID string `json:"rule_id"`
 		Reason string `json:"reason"`
@@ -4681,7 +4632,7 @@ func (h *Handlers) BatchRuleBlockPages(c *gin.Context) {
 		prefetchArgs[i] = ruleID
 	}
 	protocolByRule := make(map[string]string, len(req.RuleIDs))
-	prefetchRows, err := tx.QueryContext(caddyWriteCtx(c),
+	prefetchRows, err := db.DB.QueryContext(c.Request.Context(),
 		"SELECT caddy_id, COALESCE(protocol,'') FROM lb_rules WHERE caddy_id IN ("+strings.Join(placeholders, ",")+")", prefetchArgs...)
 	if err != nil {
 		recordRuleWriteFailure(c, "更新", "读取规则失败", err)
@@ -4709,8 +4660,8 @@ func (h *Handlers) BatchRuleBlockPages(c *gin.Context) {
 		return
 	}
 	for _, ruleCaddyID := range req.RuleIDs {
-		// 阶段页 4 列仅 http 渲染消费——非 http(tcp)先查后跳过不 UPDATE
-		// (与 batch-bind 的 TCP 跳过同文案同口径),仅不存在记「规则不存在」。
+		// 阶段页 4 列仅 http 渲染消费——非 http(tcp) 记跳过（与 batch-bind 的
+		// TCP 跳过同文案同口径），不存在记「规则不存在」。停用后一律不写库。
 		ruleProtocol, exists := protocolByRule[ruleCaddyID]
 		if !exists {
 			skipped = append(skipped, skippedRule{ruleCaddyID, "规则不存在"})
@@ -4720,41 +4671,14 @@ func (h *Handlers) BatchRuleBlockPages(c *gin.Context) {
 			skipped = append(skipped, skippedRule{ruleCaddyID, "TCP 规则不经过安全链"})
 			continue
 		}
-		// 同值守卫——四列已在目标态的行不匹配（IS NOT 空安全比较），
-		// 同值批量零写入 ⇒ 不触发 lb_rules 行级同步触发器（阶段页四列在 OF 清单
-		// 内）；bound 按 RowsAffected>0 计（真实变更），affected=0 即
-		// 「已在目标态」计入 unchanged（不再把零写入算作成功/误判「规则不存在」）。
-		// 版本列（updated_at/updated_by）与规则×4 写端点同口径一起 bump：阶段页
-		// 是渲染输入，不推进版本列时并发打开的编辑向导版本门恒通过，PUT 会
-		// 静默覆盖本次批量结果，且列表「更新时间/更新者」停留在批量前的值。
-		// 守卫不变 ⇒ 同值批量仍零写入（bump 只随真实变更发生）。
-		result, err := tx.ExecContext(caddyWriteCtx(c), `UPDATE lb_rules SET block_page_stage1_id=?, block_page_stage1_status=?, block_page_stage3_id=?, block_page_stage3_status=?, updated_at=datetime('now'), updated_by=?
-			WHERE caddy_id=? AND (block_page_stage1_id IS NOT ? OR block_page_stage1_status IS NOT ? OR block_page_stage3_id IS NOT ? OR block_page_stage3_status IS NOT ?)`,
-			req.BlockPageStage1ID, req.BlockPageStage1Status, req.BlockPageStage3ID, req.BlockPageStage3Status, contextUserID(c), ruleCaddyID,
-			req.BlockPageStage1ID, req.BlockPageStage1Status, req.BlockPageStage3ID, req.BlockPageStage3Status)
-		if err != nil {
-			recordRuleWriteFailure(c, "更新", "批量设置阶段拦截页失败（规则 "+ruleCaddyID+"）", err)
-			writeInternalError(c, http.StatusInternalServerError, "批量设置阶段拦截页失败", err)
-			return
-		}
-		affected, err := result.RowsAffected()
-		if err != nil {
-			recordRuleWriteFailure(c, "更新", "批量设置阶段拦截页失败（确认影响行数，规则 "+ruleCaddyID+"）", err)
-			writeInternalError(c, http.StatusInternalServerError, "批量设置阶段拦截页失败", err)
-			return
-		}
-		if affected > 0 {
-			bound++
-		} else {
-			unchanged++
-		}
+		unchanged++
 	}
-	h.finishTxApply(c, tx, txApplyFinish{
-		Resource: "负载规则", AuditAction: "更新", RulesWrittenInTx: true,
-		AuditDetail: fmt.Sprintf("批量设置阶段拦截页（阶段 1 页 %d/码 %d，阶段 3 页 %d/码 %d）：成功 %d 条，不变 %d 条，跳过 %d 条",
-			req.BlockPageStage1ID, req.BlockPageStage1Status, req.BlockPageStage3ID, req.BlockPageStage3Status, bound, unchanged, len(skipped)),
-		SuccessMsg: "批量设置阶段拦截页完成",
-		Data:       gin.H{"bound": bound, "unchanged": unchanged, "skipped": skipped},
+	// 无写入 = 不调用 finishTxApply（不触发渲染/审计/版本推进）：停用端点
+	// 的「成功」只是语法兼容回执。
+	c.JSON(http.StatusOK, models.APIResponse{
+		Code:    0,
+		Message: "批量设置阶段拦截页已停用（规则级阶段拦截页功能下线，请求已忽略）",
+		Data:    gin.H{"bound": bound, "unchanged": unchanged, "skipped": skipped},
 	})
 }
 
@@ -5419,7 +5343,7 @@ func ruleMutationFingerprint(ctx context.Context, caddyID string) (string, error
 	}
 	bindingRows, err := queryRowsAsMaps(ctx, db.DB, rowQuery{
 		label: "策略绑定指纹",
-		query: "SELECT * FROM security_policy_bindings WHERE rule_caddy_id = ? ORDER BY policy_id",
+		query: "SELECT * FROM security_policy_bindings WHERE rule_caddy_id = ? ORDER BY rank, policy_id",
 		args:  []any{caddyID},
 	})
 	if err != nil {

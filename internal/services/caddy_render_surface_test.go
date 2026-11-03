@@ -356,7 +356,7 @@ func TestIPPrecheckDirectivesDoNotReadRequestBody(t *testing.T) {
 		GeoIPMode:      "deny",
 		GeoIPCountries: json.RawMessage(`["海外"]`),
 	}
-	directives := mustDirectives(buildIPPrecheckDirectives([]*models.SecurityPolicy{policy}, 403, "lb_precheck_body"))
+	directives := mustDirectives(buildIPPrecheckDirectives([]*models.SecurityPolicy{policy}, "lb_precheck_body"))
 	if directives == "" {
 		t.Fatal("预检 directives 为空（无法断言不变量）")
 	}

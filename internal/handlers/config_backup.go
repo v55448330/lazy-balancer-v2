@@ -475,6 +475,9 @@ var backupTableNullDefaults = map[string]map[string]any{
 		// 逐上游回源域名（db.go upstreams DDL）：NOT NULL DEFAULT ''。
 		"origin_domain": "",
 	},
+	// 绑定顺序列（2026-11 用户裁定）：手造/旧版本备份缺键被 restoreRowStatement
+	// 按现存列过滤（rank 落 DDL 默认 0=旧语义）；显式 NULL 归一 0。
+	"security_policy_bindings": {"rank": int64(0)},
 	"users": {
 		"role": "user", "display_name": "", "is_enabled": int64(1), "is_setup_admin": int64(0),
 		"password_version": int64(0),
@@ -2564,46 +2567,8 @@ func validateV2BackupRules(tables map[string][]map[string]any, portGates ...func
 	for _, row := range rows {
 		backupRuleIDs = append(backupRuleIDs, backupString(row["caddy_id"]))
 	}
-	// 阶段拦截页引用/状态码必须与保存侧同门。页存在性按
-	// 「备份携带 security_block_pages 则备份行、缺席则 live」解析
-	// 同口径）——备份行才是导入后的真实数据。
-	blockPageRows, carriedBlockPages := tables["security_block_pages"]
-	backupPageIDs := make(map[int]bool, len(blockPageRows))
-	if carriedBlockPages {
-		for _, row := range blockPageRows {
-			if id, ok := backupInteger(row["id"]); ok {
-				backupPageIDs[int(id)] = true
-			}
-		}
-	}
-	livePageIDs := map[int]bool{}
-	if !carriedBlockPages && db.DB != nil {
-		// 页表是小表（管理员配置的拦截页），一次读入即可——此前每条规则×2
-		// 次 live EXISTS 查询。
-		pageRows, err := db.DB.Query("SELECT id FROM security_block_pages")
-		if err != nil {
-			return fmt.Errorf("读取拦截页视图失败: %w", err)
-		}
-		for pageRows.Next() {
-			var id int
-			if err := pageRows.Scan(&id); err != nil {
-				_ = pageRows.Close()
-				return fmt.Errorf("读取拦截页视图失败: %w", err)
-			}
-			livePageIDs[id] = true
-		}
-		if err := pageRows.Err(); err != nil {
-			_ = pageRows.Close()
-			return fmt.Errorf("读取拦截页视图失败: %w", err)
-		}
-		_ = pageRows.Close()
-	}
-	stagePageExists := func(id int) (bool, error) {
-		if carriedBlockPages {
-			return backupPageIDs[id], nil
-		}
-		return livePageIDs[id], nil
-	}
+	// 阶段拦截页引用校验已随功能停用删除（2026-11 用户裁定：写侧停写、
+	// 渲染链零消费）：旧备份包的悬空页引用/畸形状态码不再构成导入拒绝理由。
 	for index, rule := range rows {
 		if err := validateRuleTextLengths(backupString(rule["name"]), backupString(rule["description"])); err != nil {
 			return fmt.Errorf("规则 #%d：%w", index+1, err)
@@ -2658,19 +2623,9 @@ func validateV2BackupRules(tables map[string][]map[string]any, portGates ...func
 		if conflict := services.RuleIDNamespaceConflict(ruleID, backupRuleIDs); conflict != "" {
 			return fmt.Errorf("规则 #%d：caddy_id %q 与规则 %q 的子路由 @id 命名空间冲突（子路由 @id 形如 <规则ID>_path_<序号>/_geoip/_redirect），请修改其中一个 ID", index+1, ruleID, conflict)
 		}
-		// 阶段拦截页四列（仅生效 HTTP 规则；TCP 行残留属已裁定豁免）。
-		if enabled && (protocol == "http" || protocol == "") {
-			for _, stage := range []struct{ label, idKey, statusKey string }{
-				{"阶段 1（IP 访问控制/地域拦截）", "block_page_stage1_id", "block_page_stage1_status"},
-				{"阶段 3（WAF）", "block_page_stage3_id", "block_page_stage3_status"},
-			} {
-				pageID, _ := backupInteger(rule[stage.idKey])
-				status, _ := backupInteger(rule[stage.statusKey])
-				if err := validateStageBlockPageRefWith(int(pageID), int(status), stage.label, stagePageExists); err != nil {
-					return fmt.Errorf("规则 #%d：%w", index+1, err)
-				}
-			}
-		}
+		// 阶段拦截页四列（block_page_stage*）已停用（2026-11 用户裁定）：
+		// 渲染链零消费、写侧停写——旧备份包指向已删页/畸形状态码一律放行
+		// （落库为死值，仅随下次导出/快照搬运），不构成导入拒绝理由。
 		enabledHosts := enabledHostsByRule[ruleID]
 		// 补 EnableDnsServer/DnsServer——此前恒零值，
 		// validateRuleFeatures 的 门（TCP 携带 DNS 服务发现配置即拒）
@@ -3621,38 +3576,9 @@ func validateV2BackupSecurityPoliciesWithQuerier(ctx context.Context, tables map
 		if message := validateBuiltinIPListRefs(builtinIPLists, aclRefIDs, wlRefIDs, excludedRefIDs, ipACLMode); message != "" {
 			return fmt.Errorf("安全策略 #%d（%s）：%s", index+1, name, message)
 		}
-		// 启用 allow 的导入后生效集必须非空——旧校验只看 refs 个数，
-		// 空内联/引用空名单会落库成「allow 但实际放行全部」。这里按备份行实际
-		// 条目计算 inline ∪ refs；时间为空/全部到期仍由渲染层恒拒兜底。
-		if backupBooleanEnabled(policy["ip_acl_enabled"]) && ipACLMode == "allow" {
-			nonEmpty := false
-			var inline []string
-			if raw := backupString(policy["ip_acl_list"]); strings.TrimSpace(raw) != "" {
-				if err := json.Unmarshal([]byte(raw), &inline); err == nil {
-					for _, v := range inline {
-						if strings.TrimSpace(v) != "" {
-							nonEmpty = true
-							break
-						}
-					}
-				}
-			}
-			if !nonEmpty {
-				var refs []int
-				if raw := backupString(policy["ip_acl_list_refs"]); strings.TrimSpace(raw) != "" {
-					_ = json.Unmarshal([]byte(raw), &refs)
-				}
-				for _, id := range refs {
-					if len(ipListValues[id]) > 0 {
-						nonEmpty = true
-						break
-					}
-				}
-			}
-			if !nonEmpty {
-				return fmt.Errorf("安全策略 #%d（%s）：启用白名单（allow）但生效 IP 列表为空（内联与引用均无可用于导入的条目）", index+1, name)
-			}
-		}
+		// 空白名单导入已放开（2026-11 用户裁定）：allow 模式空生效集允许导入
+		// ——渲染层空 allow 集恒拒（fail-closed，语义不变）；写入门（策略保存/
+		// 导入）取消后由前端确认弹窗承担「关联规则将拒绝所有请求」的警示。
 	}
 	for index, page := range tables["security_block_pages"] {
 		name := backupString(page["name"])
@@ -4605,46 +4531,6 @@ func parseTrustedProxyRefIDs(refsText string) ([]int64, error) {
 	return unique, nil
 }
 
-// revalidateImportStageBlockPages 锁内复核「规则→阶段拦截页」引用
-// 备份携带 lb_rules 且未携带 security_block_pages 时，初检（validateV2BackupRules）
-// 按锁外 live 页集合放行；初检→加锁窗口内 DeleteSecurityBlockPage 可删掉被
-// 备份规则引用的页（live 删除守卫只看 live 规则，看不到备份行引用），导入后
-// 规则阶段页悬空、拦截响应静默回落「跟随策略」。此处按事务内 live 页集合重验，
-// 语义与初检 validateStageBlockPageRefWith 同口径（含 page=0 但 status≠0 的
-// 配对门——该形状初检已整包拒绝，锁内重验保持同门不分裂）。
-func revalidateImportStageBlockPages(ctx context.Context, tx *sql.Tx, tables map[string][]map[string]any) error {
-	_, rulesCarried := tables["lb_rules"]
-	_, pagesCarried := tables["security_block_pages"]
-	if !rulesCarried || pagesCarried {
-		return nil
-	}
-	pageExists := func(id int) (bool, error) {
-		var count int
-		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM security_block_pages WHERE id=?`, id).Scan(&count); err != nil {
-			return false, err
-		}
-		return count > 0, nil
-	}
-	for index, rule := range tables["lb_rules"] {
-		protocol, _ := rule["protocol"].(string)
-		// 与初检同范围：仅启用态 HTTP 规则参与阶段页校验（禁用行/TCP 残留同初检口径）。
-		if !backupRuleEnabled(rule) || (protocol != "http" && protocol != "") {
-			continue
-		}
-		for _, stage := range []struct{ label, idKey, statusKey string }{
-			{"阶段 1（IP 访问控制/地域拦截）", "block_page_stage1_id", "block_page_stage1_status"},
-			{"阶段 3（WAF）", "block_page_stage3_id", "block_page_stage3_status"},
-		} {
-			pageID, _ := backupInteger(rule[stage.idKey])
-			status, _ := backupInteger(rule[stage.statusKey])
-			if err := validateStageBlockPageRefWith(int(pageID), int(status), stage.label, pageExists); err != nil {
-				return fmt.Errorf("规则 #%d：%w", index+1, err)
-			}
-		}
-	}
-	return nil
-}
-
 // backupCAProviderExistsPostImport 按「导入后视图」校验 CA 提供商存在性：
 // 备份携带 ca_providers 表时，导入后该表=备份行集合，只能
 // 在备份行内解析；表缺席（分类导出未选系统数据）=本地行保留，按库内解析。
@@ -5122,14 +5008,9 @@ func skipEmptyBlockPages(tables map[string][]map[string]any) []string {
 	// validateV2BackupRules 以「页不存在」整包 400，软跳过契约失效
 	// 清空 id/status 与运行时 JOIN 无页等效（默认页兜底）。
 	if len(skipped) > 0 {
-		for _, rule := range tables["lb_rules"] {
-			for _, pair := range [][2]string{{"block_page_stage1_id", "block_page_stage1_status"}, {"block_page_stage3_id", "block_page_stage3_status"}} {
-				if _, hit := skipped[backupInt(rule[pair[0]])]; hit {
-					rule[pair[0]] = 0
-					rule[pair[1]] = 0
-				}
-			}
-		}
+		// 策略 block_page_id 是活引用（拦截页逐策略归因消费），被跳过页面的
+		// 引用必须清空（悬挂 JOIN 无页 = 跟随兜底）。规则级阶段页四列已停用
+		// （2026-11 用户裁定），不再清理（死值无害）。
 		for _, policy := range tables["security_policies"] {
 			if _, hit := skipped[backupInt(policy["block_page_id"])]; hit {
 				policy["block_page_id"] = 0
@@ -6232,12 +6113,7 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 		err = failImportTx(c, session, action, "导入锁内实时依赖复核失败", err, http.StatusBadRequest, "导入期间依赖的实时数据已变化，已拒绝导入")
 		return
 	}
-	// 「规则→阶段拦截页」引用同样在锁内重验——初检按锁外 live 页集合
-	// 放行后，窗口内删除被备份规则引用的页会让导入后阶段页悬空。
-	if err := revalidateImportStageBlockPages(ctx, tx, backup.Tables); err != nil {
-		err = failImportTx(c, session, action, "导入锁内阶段拦截页复核失败", err, http.StatusBadRequest, "导入期间依赖的实时数据已变化，已拒绝导入")
-		return
-	}
+	// 「规则→阶段拦截页」锁内复核已随功能停用删除（2026-11 用户裁定）。
 	_, ipListsCarried := backup.Tables["security_ip_lists"]
 	_, customRulesCarried := backup.Tables["security_custom_rules"]
 	if len(backup.Tables["security_policies"]) > 0 && (!ipListsCarried || !customRulesCarried) {

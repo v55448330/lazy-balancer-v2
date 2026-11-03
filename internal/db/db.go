@@ -879,6 +879,7 @@ func createTables() error {
 	CREATE TABLE IF NOT EXISTS security_policy_bindings (
 		rule_caddy_id TEXT NOT NULL,
 		policy_id INTEGER NOT NULL,
+		rank INTEGER NOT NULL DEFAULT 0,
 		PRIMARY KEY (rule_caddy_id, policy_id)
 	);
 	CREATE INDEX IF NOT EXISTS idx_lb_rules_enabled ON lb_rules(enabled);
@@ -1148,10 +1149,13 @@ var newColumnsRegistry = map[string]string{
 	"auto_backups.app_version":           "TEXT NOT NULL DEFAULT ''",
 	// 统一任务引擎：手动触发操作者归因列——runNow/Trigger 落
 	// 操作者，auto/startup/legacy 落空串。存量库幂等补列（ensureNewColumns）。
-	"task_runs.operator":                              "TEXT NOT NULL DEFAULT ''",
-	"security_custom_rules.updated_by":                "INTEGER DEFAULT 0",
-	"security_custom_rules.condition_logic":           "TEXT NOT NULL DEFAULT 'and'",
-	"security_policies.policy_type":                   "TEXT NOT NULL DEFAULT ''",
+	"task_runs.operator":                    "TEXT NOT NULL DEFAULT ''",
+	"security_custom_rules.updated_by":      "INTEGER DEFAULT 0",
+	"security_custom_rules.condition_logic": "TEXT NOT NULL DEFAULT 'and'",
+	"security_policies.policy_type":         "TEXT NOT NULL DEFAULT ''",
+	// 绑定顺序列（2026-11 用户裁定）：每规则内执行序，1..N；0=未排序遗留行
+	// （读路径 (rank ASC, policy_id ASC) 兜底为旧 policy_id 序）。
+	"security_policy_bindings.rank":                   "INTEGER NOT NULL DEFAULT 0",
 	"security_policies.trust_detection":               "BOOLEAN NOT NULL DEFAULT 0",
 	"security_crs_version.update_status":              "TEXT DEFAULT 'idle'",
 	"security_crs_version.message":                    "TEXT DEFAULT ''",
@@ -1484,6 +1488,12 @@ func runMigrations() error {
 		// S3 补标逐字同源——setupAdminPredicateParity 启动期自检看守；
 		// 已有标记则不覆盖）。
 		"users.is_setup_admin": setupAdminColumnBackfill,
+		// 绑定顺序（2026-11 用户裁定：绑定链支持上移/下移，执行序由用户可控）：
+		// 新增 rank 列当刻把存量绑定按「每条规则内 policy_id ASC」回填为
+		// 1..N——与旧版唯一执行序（policy_id ASC）逐点等价，升级零行为漂移。
+		// 回填是相关性计数（非窗口函数，SQLite 全版本可用）；rank=0 的遗留行
+		// 仍由全部读路径的 (rank ASC, policy_id ASC) 次序键兜底为旧语义。
+		"security_policy_bindings.rank": "UPDATE security_policy_bindings SET rank = (SELECT COUNT(*) FROM security_policy_bindings b2 WHERE b2.rule_caddy_id = security_policy_bindings.rule_caddy_id AND b2.policy_id <= security_policy_bindings.policy_id)",
 	}
 	if err := ensureNewColumns(newColumns, newColumnBackfills); err != nil {
 		return err
@@ -5568,8 +5578,6 @@ const tcpDeadFieldsStalePredicate = `protocol='tcp' AND (
 		OR COALESCE(dns_family,'')<>'ipv4'
 		OR COALESCE(enable_tls,-1)<>0 OR COALESCE(tls_source,'')<>'manual' OR COALESCE(tls_http_redirect,-1)<>0
 		OR COALESCE(tls_cert,'')<>'' OR COALESCE(tls_key,'')<>''
-		OR COALESCE(block_page_stage1_id,0)<>0 OR COALESCE(block_page_stage1_status,0)<>0
-		OR COALESCE(block_page_stage3_id,0)<>0 OR COALESCE(block_page_stage3_status,0)<>0
 		OR COALESCE(log_enabled,-1)<>0
 	)`
 
@@ -5586,12 +5594,12 @@ const tcpDeadFieldsResetSetProjection = `UPDATE lb_rules SET
 	strategy=CASE WHEN strategy='cookie' OR strategy='' OR strategy IS NULL THEN 'weighted_round_robin' ELSE strategy END,
 	dns_family='ipv4',
 	enable_tls=0, tls_source='manual', tls_http_redirect=0, tls_cert='', tls_key='',
-	block_page_stage1_id=0, block_page_stage1_status=0, block_page_stage3_id=0, block_page_stage3_status=0, log_enabled=0`
+	log_enabled=0`
 
 // TCPRuleDeadFieldsResetSQL：TCP 行 HTTP 专属死值清零（HTTP 头/健康检查/
 // 压缩/请求体/NTLM/force_http1 + TLS 来源、跳转与材料 + 代理超时族七列 +
-// 自定义路由 + dynamic_dns + strategy(cookie/空串) + dns_family(ipv4) + 阶段页四列
-// + log_enabled，共 32 列 SET）的 SQL 字面量单源——启动迁移（migrateTCPRuleDeadFields）
+// 自定义路由 + dynamic_dns + strategy(cookie/空串) + dns_family(ipv4)
+// + log_enabled，共 28 列 SET；规则级阶段页四列已停用（2026-11 裁定）故不入列）的 SQL 字面量单源——启动迁移（migrateTCPRuleDeadFields）
 // 与导入归一（handlers normalizeRuleRowsForTransport）共用本常量；此前跨包
 // 双份逐字镜像靠测试字符串 parity 维系，任一侧扩列漏同步即终态漂移。
 // WHERE 谓词与探测共用 tcpDeadFieldsStalePredicate（单一出处，禁止再抄第二份）。

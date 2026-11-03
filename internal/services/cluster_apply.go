@@ -1389,7 +1389,9 @@ func applySecurityTables(ctx context.Context, tx *sql.Tx, snapshot models.Cluste
 		}
 	}
 	for _, b := range bindings {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO security_policy_bindings (rule_caddy_id, policy_id) VALUES (?, ?)`, b["rule_caddy_id"], b["policy_id"]); err != nil {
+		// rank 缺省（旧主端快照无该键）=0：读路径次序键兜底为 policy_id ASC，
+		// 即旧版唯一执行序——窗口内语义零漂移。
+		if _, err := tx.ExecContext(ctx, `INSERT INTO security_policy_bindings (rule_caddy_id, policy_id, rank) VALUES (?, ?, ?)`, b["rule_caddy_id"], b["policy_id"], snapshotBindingRank(b["rank"])); err != nil {
 			return fmt.Errorf("写入 security_policy_binding: %w", err)
 		}
 	}
@@ -1571,6 +1573,27 @@ var snapshotPolicyJSONColumns = []string{
 	"geoip_crawler_engines",
 	"ip_acl_list_refs",
 	"ip_whitelist_refs",
+}
+
+// snapshotBindingRank 读取快照绑定行的 rank（JSON 数值解码为 float64 /
+// 内部构造可为 int）——缺省/非法/负值一律 0（旧主端载荷无该键，0=未排序
+// 语义，读路径次序键兜底 policy_id ASC）。
+func snapshotBindingRank(value interface{}) int {
+	switch v := value.(type) {
+	case float64:
+		if v > 0 {
+			return int(v)
+		}
+	case int:
+		if v > 0 {
+			return v
+		}
+	case int64:
+		if v > 0 {
+			return int(v)
+		}
+	}
+	return 0
 }
 
 // snapshotJSONText 写入快照中的 JSON 文本列。dumpTableAsJSON 已把该列作为

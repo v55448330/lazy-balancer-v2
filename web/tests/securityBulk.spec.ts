@@ -16,13 +16,11 @@ import {
 import { CADDY_APPLY_FAILED_MARKER, mergeBulkResults } from '../src/utils/bulkApplyResult.ts'
 import { code, goConstInt, section } from './_helpers.ts'
 
-test('A1 分片：按上限切分且保持原顺序（策略绑定 100 / 批量拦截页 500）', () => {
+test('A1 分片：按上限切分且保持原顺序（策略绑定 100）', () => {
   const bindings = Array.from({ length: 250 }, (_, i) => `lb_${i}`)
   const chunks = chunkForBulk(bindings, SECURITY_BULK_LIMITS.policyBindings)
   assert.deepEqual(chunks.map((c) => c.length), [100, 100, 50])
   assert.deepEqual(chunks.flat(), bindings, '分片拼接必须等于原序列')
-  const pages = Array.from({ length: 1001 }, (_, i) => `lb_${i}`)
-  assert.deepEqual(chunkForBulk(pages, SECURITY_BULK_LIMITS.ruleBlockPages).map((c) => c.length), [500, 500, 1])
 })
 
 test('A2 分片：单次合计不超过后端上限（每片 ≤100 才满足 bind+unbind 合计门）', () => {
@@ -134,9 +132,9 @@ test('D1 绑定上限单源：与后端 maxBindingsPerRule 同值', () => {
 })
 
 // D2：分片上限同样跨栈对表——前端按 SECURITY_BULK_LIMITS 切片，切片大于后端
-// 上限时整批 400 且重试同败；小于后端上限则浪费往返。三常量（批量绑定 /
-// 单策略批量绑定 / 批量拦截页）逐一对表。
-test('D2 分片上限单源：与后端批量端点三常量同值', () => {
+// 上限时整批 400 且重试同败；小于后端上限则浪费往返。前端消费的批量绑定常量
+// 与后端两常量逐一对表（ruleBlockPages 已随规则级阶段页覆盖退役移除）。
+test('D2 分片上限单源：与后端批量端点常量同值', () => {
   assert.equal(
     SECURITY_BULK_LIMITS.policyBindings,
     goConstInt('internal/handlers/security.go', 'maxBulkBindings'),
@@ -146,11 +144,6 @@ test('D2 分片上限单源：与后端批量端点三常量同值', () => {
     SECURITY_BULK_LIMITS.policyBindings,
     goConstInt('internal/handlers/security.go', 'maxBatchBindRules'),
     'policyBindings 与 maxBatchBindRules 漂移',
-  )
-  assert.equal(
-    SECURITY_BULK_LIMITS.ruleBlockPages,
-    goConstInt('internal/handlers/rules.go', 'maxBatchRuleBlockPages'),
-    'ruleBlockPages 与 maxBatchRuleBlockPages 漂移',
   )
 })
 
