@@ -387,20 +387,27 @@ test('导入提示：重复行号点名与口径说明接线（SecurityRules 导
   assert.match(page, /entries-head-bar/, '名单条目标题与查询区必须同行（右对齐、垂直居中）')
 })
 
-test('CIDR 匹配查询接线：cidrContains 单源 + 命中行高亮 + 结果文案', () => {
+test('CIDR 匹配与模糊搜索统一过滤：点击搜索才过滤条目表 + toast 反馈（无高亮/结果行/独立清除）', () => {
   const page = code('src/views/security/SecurityRules.vue')
   assert.match(page, /cidrContains, isValidCidr/, '必须复用 ipAddress 单源（不得平行实现包含判定）')
-  assert.match(page, /ipListQueryInput/, '必须提供匹配查询输入')
-  assert.match(page, /未命中本列表任何 CIDR\/IP 条目/, '无命中必须给明确文案')
-  assert.match(page, /ip-entry-hit/, '命中条目必须行高亮')
+  assert.match(page, /ipListQueryInput/, '必须提供查询输入框（输入框自带 clear，不得另加独立清除按钮）')
+  assert.doesNotMatch(page, /ip-match-result-text/, '行内结果文案必须退役（反馈走 toast）')
+  assert.doesNotMatch(page, /ip-entry-hit/, 'CIDR 命中改为过滤展示（不得只高亮）')
+  assert.doesNotMatch(page, /v-if="ipListQueryApplied" size="small" @click="clearIpListQuery"/, '独立清除按钮必须退役')
+  // 两种模式都走「已应用查询」过滤管线：fuzzy=子串、cidr=包含判定
+  assert.match(page, /ipListQueryAppliedMode\.value === 'cidr'\) return cidrContains\(row\.value\.trim\(\), q\)/, 'CIDR 模式按包含判定过滤')
+  assert.match(page, /row\.value\.toLowerCase\(\)\.includes\(ql\) \|\| row\.remark\.toLowerCase\(\)\.includes\(ql\)/, '模糊模式按子串过滤')
+  // 搜索后 toast 反馈（与导入完成同款提示形态）
+  assert.match(page, /`\$\{label\}：命中 \$\{hits\} 条`/, '命中必须 toast 反馈')
+  assert.match(page, /`\$\{label\}：未找到匹配条目`/, '未命中必须 warning 反馈')
 })
 
-test('条目模糊搜索：过滤展示不破坏编辑写回与删除的原始索引映射', () => {
+test('条目过滤：过滤展示不破坏编辑写回与删除的原始索引映射', () => {
   const page = code('src/views/security/SecurityRules.vue')
-  assert.match(page, /const ipEntrySearch = ref\(''\)/, '必须提供模糊搜索框')
-  assert.match(page, /row\.value\.toLowerCase\(\)\.includes\(q\) \|\| row\.remark\.toLowerCase\(\)\.includes\(q\)/, '搜索=IP/备注子串（大小写不敏感）')
+  assert.match(page, /const ipEntrySearchHit = \(row: IPListEntry\): boolean =>/, '过滤判定单源')
   // 过滤后删除/序号必须映射回 entries 本体位置（不得用过滤后下标误删）
   assert.match(page, /ipListPagedIndexes\[\$index\] \?\? -1/, '删除必须按原始索引')
-  assert.match(page, /ipListPagedIndexes\[\$index\] \?\? 0\)\ +\+\ 1/, '序号列必须按原始索引')
+  assert.match(page, /ipListPagedIndexes\[\$index\] \?\? 0\) \+ 1/, '序号列必须按原始索引')
   assert.doesNotMatch(page, /removeIpListEntry\(ipListEntryPageStart \+ \$index\)/, '过滤后不得再用分页下标删除')
 })
+

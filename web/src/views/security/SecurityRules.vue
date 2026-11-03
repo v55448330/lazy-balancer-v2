@@ -415,12 +415,10 @@
                 <el-radio-button value="fuzzy">模糊搜索</el-radio-button>
               </el-radio-group>
               <el-button type="primary" size="small" :disabled="!ipListQueryInput.trim()" @click="applyIpListQuery">搜索</el-button>
-              <el-button v-if="ipListQueryApplied" size="small" @click="clearIpListQuery">清除</el-button>
             </div>
-            <div v-if="ipMatchResultText" class="ip-match-result ip-match-result-text">{{ ipMatchResultText }}</div>
             </div>
             <div class="dialog-panel dialog-panel--flush">
-              <el-table :data="ipListEntriesPaged" size="small" max-height="360" empty-text="" :row-class-name="ipEntryRowClass">
+              <el-table :data="ipListEntriesPaged" size="small" max-height="360" empty-text="">
               <template #empty><el-empty description="暂无条目，点击下方按钮添加" :image-size="50" /></template>
               <el-table-column label="#" width="50" align="right">
                 <template #default="{ $index }"><span class="ip-entry-index">{{ (ipListPagedIndexes[$index] ?? 0) + 1 }}</span></template>
@@ -1325,15 +1323,13 @@ const ipListQueryInput = ref('')
 const ipListQueryMode = ref<'cidr' | 'fuzzy'>('cidr')
 const ipListQueryApplied = ref('')
 const ipListQueryAppliedMode = ref<'cidr' | 'fuzzy'>('cidr')
-const ipMatchResultText = ref('')
-const ipMatchHitIndexes = ref<ReadonlySet<number>>(new Set())
-const ipEntrySearch = ref('')
 
 const ipEntrySearchHit = (row: IPListEntry): boolean => {
-  if (ipListQueryAppliedMode.value !== 'fuzzy') return true
-  const q = ipListQueryApplied.value.trim().toLowerCase()
-  if (q === '') return true
-  return row.value.toLowerCase().includes(q) || row.remark.toLowerCase().includes(q)
+  if (ipListQueryApplied.value.trim() === '') return true
+  const q = ipListQueryApplied.value.trim()
+  if (ipListQueryAppliedMode.value === 'cidr') return cidrContains(row.value.trim(), q)
+  const ql = q.toLowerCase()
+  return row.value.toLowerCase().includes(ql) || row.remark.toLowerCase().includes(ql)
 }
 
 const ipListEntriesFiltered = computed(() => {
@@ -1351,58 +1347,25 @@ const ipListPagedIndexes = computed(() =>
 const ipListEntriesPaged = computed(() =>
   ipListPagedIndexes.value.map((index) => ipListForm.value.entries[index]))
 
-const ipEntryRowClass = ({ rowIndex }: { row: IPListEntry; rowIndex: number }): string =>
-  ipMatchHitIndexes.value.has(ipListPagedIndexes.value[rowIndex] ?? -1) ? 'ip-entry-hit' : ''
 
 const applyIpListQuery = (): void => {
   const applied = ipListQueryInput.value.trim()
   ipListQueryApplied.value = applied
   ipListQueryAppliedMode.value = ipListQueryMode.value
   ipListEntryPage.value = 1
-  if (ipListQueryAppliedMode.value === 'fuzzy') {
-    ipEntrySearch.value = applied
-    ipMatchHitIndexes.value = new Set()
-    ipMatchResultText.value = applied === '' ? '' : `匹配 ${ipListEntriesFiltered.value.length} 条`
-    return
+  const label = ipListQueryMode.value === 'cidr' ? 'CIDR 匹配' : '模糊搜索'
+  const hits = ipListEntriesFiltered.value.length
+  if (hits === 0) {
+    ElMessage.warning(`${label}：未找到匹配条目`)
+  } else {
+    mfaAwareSuccess(`${label}：命中 ${hits} 条`)
   }
-  ipEntrySearch.value = ''
-  const hitIndexes = new Set<number>()
-  ipListForm.value.entries.forEach((e, index) => {
-    if (e.value.trim() !== '' && cidrContains(e.value.trim(), applied)) hitIndexes.add(index)
-  })
-  ipMatchHitIndexes.value = hitIndexes
-  if (applied === '') {
-    ipMatchResultText.value = ''
-    return
-  }
-  if (hitIndexes.size === 0) {
-    ipMatchResultText.value = `IP ${applied} 未命中本列表任何 CIDR/IP 条目`
-    return
-  }
-  // 细前缀优先排序（/32、/24 在前——更具体的命中先展示）
-  const sortedIndexes = [...hitIndexes].sort((x, y) => {
-    const bits = (v: string): number => {
-      const p = v.split('/')
-      return p[1] === undefined ? (p[0].includes(':') ? 128 : 32) : Number(p[1])
-    }
-    return bits(ipListForm.value.entries[y].value) - bits(ipListForm.value.entries[x].value)
-  })
-  const expireText = (e: IPListEntry): string => {
-    const expire = e.expires_at ? (autobanEntryExpired(e.expires_at) ? '已到期' : `到期 ${e.expires_at}`) : '永久'
-    const created = e.created_at ? ` · 加入于 ${e.created_at}` : ''
-    return `${e.value}${e.remark ? ` · ${e.remark}` : ''} · ${expire}${created}`
-  }
-  const hits = sortedIndexes.map((index) => expireText(ipListForm.value.entries[index]))
-  ipMatchResultText.value = `命中 ${hits.length} 条：${hits.join('；')}`
 }
 
 const clearIpListQuery = (): void => {
   ipListQueryInput.value = ''
   ipListQueryApplied.value = ''
   ipListQueryAppliedMode.value = 'cidr'
-  ipEntrySearch.value = ''
-  ipMatchHitIndexes.value = new Set()
-  ipMatchResultText.value = ''
   ipListEntryPage.value = 1
 }
 
@@ -2231,16 +2194,16 @@ onUnmounted(() => {
 .entries-toolbar-right { margin-left: auto; }
 .entries-import-input { display: none; }
 .ip-entry-text { font-family: 'SF Mono', 'Monaco', 'Menlo', monospace; font-size: 13px; }
-.entries-head-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0 0 8px; }
-.entries-head-bar :deep(.dsh-head) { margin: 0; align-items: center; }
-.entries-head-bar .ip-query-bar { display: flex; align-items: center; justify-content: flex-end; gap: 10px; margin: 0; }
-.ip-query-bar .ip-query-input { width: 240px; flex: none; }
+.entries-head-bar { display: flex; align-items: center; gap: 12px; margin: 0 0 8px; }
+.entries-head-bar :deep(.dsh-head) { margin: 0; flex: none; }
+.entries-head-bar :deep(.dsh-head h3) { white-space: nowrap; }
+.ip-query-bar { display: flex; align-items: center; justify-content: flex-end; gap: 10px; margin: 0; margin-left: auto; min-width: 0; }
+.ip-query-bar .ip-query-input { width: 220px; flex: none; }
 .ip-query-bar .el-radio-group, .ip-query-bar .el-button { flex: none; }
 .ip-query-bar .ip-query-input { width: 260px; flex: none; }
 .ip-query-bar .el-radio-group, .ip-query-bar .el-button { flex: none; }
 .ip-match-result { font-size: 12px; color: var(--el-color-primary); word-break: break-all; margin: 0 0 8px; text-align: right; }
 .ip-match-result.ip-match-none { color: var(--el-text-color-secondary); }
-.entries-block :deep(.ip-entry-hit > td) { background: var(--el-color-primary-light-9) !important; }
 .ip-entry-index { color: #9ca3af; font-variant-numeric: tabular-nums; }
 .entries-pagination { display: flex; justify-content: flex-end; margin-top: 8px; }
 .ip-entry-invalid :deep(.el-input__wrapper) { box-shadow: 0 0 0 1px var(--el-color-danger, #ef4444) inset; }
