@@ -211,13 +211,15 @@ test('接线：SecurityPolicies 逐阶段归因消费 resolveBlockPageAttributio
   assert.match(text, /v-for="note in row\.blockPageNotes" :key="`\$\{note\.kind\}:\$\{note\.text\}`"/)
 })
 
-test('接线：关联规则行内归属提示消费同一单源（触发时显示 / 未配置兜底）', () => {
+test('接线：关联规则行内归属提示消费同一单源（直白文案 + info-note 样式规范）', () => {
   const text = code('src/views/security/SecurityPolicies.vue')
   // 行内归属提示走 boundRuleRows 的 attributionNotes（与拦截页步骤注记同一
   // resolveBlockPageAttribution 结果派生，不得另写第二份归因）
   assert.match(text, /attributionNotes/)
-  assert.match(text, /触发时显示：本策略拦截页/)
-  assert.match(text, /兜底：策略/)
+  assert.match(text, /触发该策略拦截时：显示本策略配置的拦截页/)
+  assert.match(text, /显示兜底页（首个启用拦截页的策略/)
+  // 样式走项目 info-note 规范（用户验收裁定：禁止局部 hack）
+  assert.match(text, /info-note-bar bound-rule-attribution-item/)
 })
 
 test('接线：拦截页缺失判定消费单源谓词且受加载门约束', () => {

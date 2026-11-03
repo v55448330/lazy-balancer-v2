@@ -46,23 +46,31 @@ test('A4 分片请求按方向独立提交：每片对向数组为空且两向�
       file: 'src/components/SecurityBindingEditor.vue',
       start: 'const responses: Array<APIResponse<unknown> | undefined> = []',
       end: 'showSaveResult(mergeBulkResults(responses)',
+      ordersRequest: false,
     },
     {
       file: 'src/views/security/SecurityPolicies.vue',
       start: 'const bindResponses: Array<{ message?: string } | undefined> = []',
       end: 'const mergedBind = mergeBulkResults(bindResponses)',
+      // 执行序随批量端点 orders 字段单事务应用：bind/unbind 双向皆空、方向由
+      // orders 表达（同规则混入 bind/unbind 与 orders 是 400 冲突面）
+      ordersRequest: true,
     },
   ] as const
-  for (const { file, start, end } of consumers) {
+  for (const { file, start, end, ordersRequest } of consumers) {
     const body = section(code(file), start, end)
     const requests = [...body.matchAll(/bind: ([^,}\n]+),\s*unbind: ([^,}\n]+)/g)]
-    assert.equal(requests.length, 2, `${file}: 必须恰好两处批量请求（bind 一片源、unbind 一片源）`)
+    assert.equal(requests.length, ordersRequest ? 3 : 2, `${file}: 批量请求面必须收敛（${ordersRequest ? '两向各一片 + orders 一片' : 'bind 一片源、unbind 一片源'}）`)
     for (const match of requests) {
       const bind = match[1].trim()
       const unbind = match[2].trim()
       assert.ok(bind === '[]' || unbind === '[]', `${file}: 单次请求不得同时携带 bind 与 unbind（合计会超后端上限）`)
     }
-    const [first, second] = requests.map((match) => [match[1].trim(), match[2].trim()])
+    if (ordersRequest) {
+      assert.match(body, /bind: \[\],\s*unbind: \[\],\s*orders/, 'orders 请求不得混入 bind/unbind（同规则混入两者是 400 冲突面）')
+    }
+    const directional = requests.filter((match) => !(match[1].trim() === '[]' && match[2].trim() === '[]'))
+    const [first, second] = directional.map((match) => [match[1].trim(), match[2].trim()])
     assert.ok(first && second, `${file}: 两片必须存在`)
     assert.ok(first[1] === '[]' && second[0] === '[]', `${file}: 两片必须一正一反`)
     assert.equal(first[0], second[1], `${file}: bind/unbind 必须引用同一标识符（允许重命名）`)

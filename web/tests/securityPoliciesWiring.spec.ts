@@ -132,21 +132,29 @@ test('带外空模式读入不得被静默改写成拦截模式', () => {
   assert.match(page, /geoipMode \|\| '未配置模式'/, '未知模式必须显性说明')
 })
 
-test('绑定执行序：暂存上移/下移，保存收尾按新序 PUT 整链 policy_ids', () => {
+test('绑定执行序：暂存上移/下移，保存收尾随批量端点 orders 单事务应用', () => {
   // 策略顺序=执行序（用户裁定）：关联规则行内上移/下移只暂存（bindingOrderEdits），
-  // 保存收尾对有暂存序的规则调 PUT /security/rules/:caddy_id/policies——后端按
-  // 提交序持久化 rank，读路径（渲染链/GET /security/bindings）返回 rank 序。
+  // 保存收尾把各规则完整有序 policy_id 列表随批量端点 orders 字段提交——
+  // N 条规则一次渲染（逐规则整链 PUT 是 N×渲染+reload 的保存耗时回归，
+  // v2.2.0 批量绑定同因已修过一次）；读路径返回 rank 序。
   assert.match(page, /bindingOrderEdits/, '上移/下移必须暂存（随保存统一提交）')
   const tail = section(page, 'const bindResponses', 'const mergedBind')
-  assert.match(tail, /security\/rules\/\$\{encodeURIComponent\(/, '执行序必须经规则侧整链 PUT 提交')
-  assert.match(tail, /policy_ids: /, 'PUT 必须携带完整有序 policy_ids（后端按提交序重建 rank）')
-  assert.match(tail, /request\.put</, '执行序经 PUT 提交')
+  assert.match(tail, /bindings\/bulk`[\s\S]{0,400}orders/, '执行序必须随批量端点 orders 单事务提交')
+  assert.match(tail, /chunkForBulk\(orderEditedRules\.value/, 'orders 超上限必须分片提交')
+  assert.match(tail, /policy_ids|orderedChainPolicyIds\(caddyId\)/, 'orders 必须携带完整有序 policy_id 列表')
+  // 单规则校验失败进 skipped 不整体拒绝：坏规则保持暂存待重试，好规则即时清标记
+  assert.match(tail, /skipped/, 'skipped 必须被消费（坏规则保暂存）')
+  assert.match(tail, /保持「顺序待保存」|保持待重试|重新点击保存可重试/, 'skipped 规则必须有可重试口径')
+  assert.doesNotMatch(tail, /request\.put</, '不得回流逐规则整链 PUT（单事务批量应用）')
   assert.doesNotMatch(page, /batch-block-pages/, '规则级阶段页覆盖写路径已退役')
   // 行内按钮：上移/下移以暂存方式调整本策略在绑定链中的执行序
   assert.match(page, /moveSelfInChain\(\s*row\.caddyId, -1\s*\)/, '上移按钮必须接线暂存移动')
   assert.match(page, /moveSelfInChain\(\s*row\.caddyId, 1\s*\)/, '下移按钮必须接线暂存移动')
-  assert.match(page, /上移/)
-  assert.match(page, /下移/)
+  const orderBar = section(page, 'class="bound-rule-order"', '</span>')
+  const tagAt = orderBar.indexOf('顺序待保存')
+  const upAt = orderBar.indexOf('上移')
+  assert.ok(tagAt > -1 && upAt > tagAt, '「顺序待保存」提示必须在按钮左侧（用户验收裁定）')
+  assert.match(orderBar, /bindingOrderPending\(row\.caddyId\)/)
 })
 
 test('限流唯一门：选择器与提交门共用同一谓词，业务 400 不再承诺可重试', () => {

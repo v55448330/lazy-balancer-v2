@@ -708,9 +708,9 @@
                            位置，只暂存（bindingOrderEdits），随「保存」按新序整链提交；
                            与页面显示无关（拦截页按触发策略归因，见拦截页步骤注记）。 -->
                       <span class="bound-rule-order">
+                        <el-tag v-if="bindingOrderPending(row.caddyId)" type="primary" size="small" effect="plain" disable-transitions class="bound-rule-order-tag">顺序待保存</el-tag>
                         <el-button v-if="!isReadOnly" size="small" link :disabled="saving || !canMoveSelf(row.caddyId, -1)" @click="moveSelfInChain(row.caddyId, -1)">上移</el-button>
                         <el-button v-if="!isReadOnly" size="small" link :disabled="saving || !canMoveSelf(row.caddyId, 1)" @click="moveSelfInChain(row.caddyId, 1)">下移</el-button>
-                        <el-tag v-if="bindingOrderPending(row.caddyId)" type="primary" size="small" effect="plain" disable-transitions>顺序待保存</el-tag>
                       </span>
                       <el-button v-if="!isReadOnly" size="small" link type="danger" class="bound-rule-remove" @click="removeBoundRule(row.caddyId)">移除</el-button>
                     </div>
@@ -727,9 +727,13 @@
                     </div>
 
                     <!-- 行内归属提示（触发归因单源 resolveBlockPageAttribution）：
-                         触发时显示哪张拦截页 / 未配置时兜底到哪条策略的页。 -->
+                         直白表述触发时显示哪张拦截页 / 未配置时兜底到哪条策略的页；
+                         样式走项目 info-note 规范（tone 驱动图标与配色）。 -->
                     <div v-if="row.attributionNotes.length > 0" class="bound-rule-attribution">
-                      <span v-for="note in row.attributionNotes" :key="note" class="bound-rule-attribution-item">{{ note }}</span>
+                      <div v-for="note in row.attributionNotes" :key="note.text" class="info-note-bar bound-rule-attribution-item" :class="`is-${note.tone}`">
+                        <el-icon class="bound-rule-attribution-icon" :size="14"><CircleCheckFilled v-if="note.tone === 'active'" /><InfoFilled v-else /></el-icon>
+                        <span class="info-note-desc">{{ note.text }}</span>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -961,7 +965,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
-import { Plus, Lock, InfoFilled, Connection, Odometer, Link, Check, ArrowLeft, ArrowRight, ArrowDown, Search, WarningFilled, Document } from '@element-plus/icons-vue'
+import { Plus, Lock, InfoFilled, CircleCheckFilled, Connection, Odometer, Link, Check, ArrowLeft, ArrowRight, ArrowDown, Search, WarningFilled, Document } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { CascaderOption, CascaderProps, CascaderValue, LazyLoad } from 'element-plus'
 import { request, ApiRequestError, mfaAwareSuccess } from '@/utils/api'
@@ -1001,7 +1005,7 @@ interface RuleBoundPolicy { id: number; name: string; mode: string; enabled: boo
 interface CustomRuleRef { id: number; action: string }
 interface ChainEntry { policyId: number | null; name: string; enabled: boolean; isSelf: boolean; blockPageId?: number; blockStatusCode?: number }
 interface BlockPageNote { kind: 'active' | 'disabled' | 'warning' | 'info'; text: string }
-interface BoundRuleRow { caddyId: string; name: string; protocol: string; domain: string; listenPort: number; chain: ChainEntry[]; attributionNotes: string[]; blockPageNotes: BlockPageNote[]; mergedCount: number; showPerfTip: boolean; hints: string[]; infoHints: string[] }
+interface BoundRuleRow { caddyId: string; name: string; protocol: string; domain: string; listenPort: number; chain: ChainEntry[]; attributionNotes: Array<{ text: string; tone: 'active' | 'info' }>; blockPageNotes: BlockPageNote[]; mergedCount: number; showPerfTip: boolean; hints: string[]; infoHints: string[] }
 interface BlockPage { id: number; name: string; content?: string }
 
 const blockPages = ref<BlockPage[]>([])
@@ -2841,7 +2845,7 @@ const editorBlockPageStages = (): BlockPageStage[] => {
   return [] // stage0 无拦截页概念
 }
 const inactiveReason = (a: BlockPageAttribution): string => {
-  if (a.effective === 'peer') return `本策略页未生效（未配置或已失效）：兜底显示「${a.winnerName ?? '其他策略'}」的拦截页`
+  if (a.effective === 'peer') return `未配置拦截页 → 显示兜底页（首个启用拦截页的策略「${a.winnerName ?? '其他策略'}」）`
   if (a.stage === 2) return '没有启用限流的策略，不会产生 429'
   return '绑定链无有效拦截页，拦截回落 Caddy 默认响应'
 }
@@ -2920,8 +2924,8 @@ const blockPageNotes = (_caddyId: string, chain: ChainEntry[]): BlockPageNote[] 
   if (active.length > 0) {
     // 阶段 2 无归属语义（429 恒走兜底路由）：self 判定=本策略恰为兜底目标。
     const parts = active.map((s) => s === 2
-      ? '阶段 2：429 时显示本策略拦截页'
-      : `${BLOCK_PAGE_STAGE_LABEL[s]}：触发本策略拦截时显示`)
+      ? '限流触发（429）时：显示本策略配置的拦截页'
+      : `${BLOCK_PAGE_STAGE_LABEL[s]} 触发该策略拦截时：显示本策略配置的拦截页`)
     notes.push({ kind: 'active', text: `✓ 拦截页面生效中（${parts.join('；')}）` })
   }
   for (const r of results.filter((x) => x.effective !== 'self')) {
@@ -2934,19 +2938,27 @@ const blockPageNotes = (_caddyId: string, chain: ChainEntry[]): BlockPageNote[] 
   return notes
 }
 
-// 关联规则行内归属提示（触发归因单源；与拦截页步骤注记同一 capableAttributions）：
-// 「触发时显示：本策略拦截页」/「未配置 → 兜底：策略 X 的页」。
-const attributionNotes = (chain: ChainEntry[]): string[] => {
+// 关联规则行内归属提示（触发归因单源；与拦截页步骤注记同一 capableAttributions）。
+// 文案按用户验收裁定直白化；tone 驱动图标/配色（active=生效绿、fallback/none=中性）。
+const attributionNotes = (chain: ChainEntry[]): Array<{ text: string; tone: 'active' | 'info' }> => {
   const stages = editorBlockPageStages()
   if (stages.length === 0 || !form.value.enabled || !blockPagesLoaded.value) return []
   const multi = stages.length > 1
-  const lines: string[] = []
+  const lines: Array<{ text: string; tone: 'active' | 'info' }> = []
   for (const r of capableAttributions(chain)) {
     const prefix = multi ? `阶段 ${r.stage}：` : ''
-    if (r.effective === 'self') lines.push(`${prefix}触发时显示：本策略拦截页`)
-    else if (r.effective === 'peer') lines.push(`${prefix}本策略页未生效 → 兜底：策略「${r.winnerName ?? '其他策略'}」的页`)
-    else if (r.stage === 2) lines.push(`${prefix}不产生 429（无启用限流策略）`)
-    else lines.push(`${prefix}绑定链无有效拦截页（默认响应）`)
+    if (r.effective === 'self') {
+      lines.push({
+        text: r.stage === 2 ? `${prefix}限流触发（429）时：显示本策略配置的拦截页` : `${prefix}触发该策略拦截时：显示本策略配置的拦截页`,
+        tone: 'active',
+      })
+    } else if (r.effective === 'peer') {
+      lines.push({ text: `${prefix}未配置拦截页 → 显示兜底页（首个启用拦截页的策略「${r.winnerName ?? '其他策略'}」）`, tone: 'info' })
+    } else if (r.stage === 2) {
+      lines.push({ text: `${prefix}不产生 429（无启用限流策略）`, tone: 'info' })
+    } else {
+      lines.push({ text: `${prefix}绑定链无有效拦截页（回落 Caddy 默认 403）`, tone: 'info' })
+    }
   }
   return lines
 }
@@ -3499,28 +3511,52 @@ const handleSave = async () => {
         : '策略已保存，但部分规则绑定同步失败；对话框保持打开，重新点击保存可重试绑定（幂等）')
       return
     }
-    // 绑定执行序应用（用户裁定：策略顺序=执行序）：对有暂存新序的规则整链 PUT
-    // /security/rules/:caddy_id/policies——后端按提交序持久化 rank，读路径
-    // （渲染链/GET /security/bindings）返回 rank 序。绑定集合与本策略落库集一致
-    // （只有顺序变化），整链重建幂等，重试安全；任一失败即保持对话框打开
-    // （与绑定同步失败同款处理：结构性 400 不承诺可重试）。
-    for (const caddyId of orderEditedRules.value) {
+    // 绑定执行序应用（用户裁定：策略顺序=执行序）：随批量端点 orders 字段单事务
+    // 应用——N 条规则一次渲染+一次 reload（逐规则整链 PUT 是 N×渲染+reload 的
+    // 保存耗时回归，v2.2.0 批量绑定同因修过一次）。单规则校验失败进 skipped
+    // 不整体拒绝：坏规则保持「顺序待保存」待下次保存重试，好规则即时清标记；
+    // 与现状一致的顺序服务端零写入幂等（unchanged，不推 cluster_version）。
+    // bind/unbind 与 orders 分请求提交（同一规则混入两者是后端 400 冲突面）。
+    const skippedOrderNotes: string[] = []
+    for (const ids of chunkForBulk(orderEditedRules.value, SECURITY_BULK_LIMITS.policyBindings)) {
+      const orders: Record<string, number[]> = {}
+      for (const caddyId of ids) orders[caddyId] = orderedChainPolicyIds(caddyId)
       try {
-        const res = await request.put<{ message?: string }>(`/security/rules/${encodeURIComponent(caddyId)}/policies`, {
-          policy_ids: orderedChainPolicyIds(caddyId),
-        }) as { message?: string }
-        bindResponses.push(res)
-        // 成功即清除暂存：行内「顺序待保存」标记同步消失，下次保存不再重复 PUT。
+        const res = await request.post<APIResponse<{ ordered?: number; unchanged?: number; skipped?: Array<{ rule_id: string; reason: string }> }>>(`/security/policies/${editingId.value}/bindings/bulk`, {
+          bind: [],
+          unbind: [],
+          orders,
+        })
+        bindResponses.push(res as { message?: string })
+        const skippedItems = res.data?.skipped ?? []
+        // 先归集 skipped 再回写——被跳过的规则未应用新序，保持「顺序待保存」
+        // 待重试；成功规则即时清标记，下次保存重试只补坏规则。
+        const skippedIds = new Set(skippedItems.map((item) => item.rule_id))
         const next = { ...bindingOrderEdits.value }
-        delete next[caddyId]
+        for (const caddyId of ids) {
+          if (skippedIds.has(caddyId)) {
+            for (const item of skippedItems) {
+              if (item.rule_id === caddyId) {
+                skippedOrderNotes.push(`${allRules.value.find((rule) => rule.caddy_id === caddyId)?.name || caddyId}（${item.reason}）`)
+              }
+            }
+          } else {
+            delete next[caddyId]
+          }
+        }
         bindingOrderEdits.value = next
       } catch (error: unknown) {
+        // 失败不静默：整片保持暂存，对话框保持打开以便重试（与绑定同步失败同款
+        // 处理：结构性 400 不承诺可重试，其余幂等重试安全）。
         console.error('apply binding order failed', error)
         ElMessage.warning(error instanceof ApiRequestError && error.status === 400
-          ? '策略已保存，但绑定顺序被服务端拒绝：请检查该规则的绑定状态后调整重试（原样重试不会成功）'
+          ? '策略已保存，但绑定顺序被服务端拒绝：请检查该批规则的绑定状态后重试（原样重试不会成功）'
           : '策略已保存，但部分规则的绑定顺序同步失败；对话框保持打开，重新点击保存可重试（幂等）')
         return
       }
+    }
+    if (skippedOrderNotes.length > 0) {
+      ElMessage.warning(`部分规则未应用绑定顺序：${skippedOrderNotes.join('；')}；这些规则保持「顺序待保存」，重新点击保存可重试`)
     }
     // 保存结果单条呈现：服务端 message 与 Caddy 退化后缀原样保留。
     showSaveResult(
@@ -3829,9 +3865,15 @@ onMounted(async () => {
 .stage-projection-empty { color: #9ca3af; line-height: 1.8; }
 
 /* 关联规则行内：执行序上移/下移（暂存随保存提交）+ 归属提示 */
-.bound-rule-order { display: inline-flex; align-items: center; gap: 2px; margin-left: auto; }
-.bound-rule-attribution { display: flex; flex-direction: column; gap: 2px; margin-top: 6px; padding-top: 6px; border-top: 1px dashed #e5e7eb; }
-.bound-rule-attribution-item { font-size: 12px; color: #6b7280; }
+.bound-rule-order { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; }
+.bound-rule-order-tag { margin-right: 2px; }
+.bound-rule-attribution { margin-top: 6px; }
+.bound-rule-attribution-item { display: flex; align-items: flex-start; gap: 6px; margin: 4px 0 0; padding: 6px 10px; }
+.bound-rule-attribution-item .info-note-desc { font-weight: 500; }
+.bound-rule-attribution-icon { flex: none; margin-top: 2px; color: var(--el-color-info); }
+.bound-rule-attribution-item.is-active { border-style: solid; border-color: var(--el-color-success-light-5); background: var(--el-color-success-light-9); }
+.bound-rule-attribution-item.is-active .bound-rule-attribution-icon { color: var(--el-color-success); }
+.bound-rule-attribution-item.is-active .info-note-desc { color: var(--el-color-success-dark-2); }
 
 /* 配置预览：三阶段投影（策略视角） */
 .preview-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 0 20px 12px; }

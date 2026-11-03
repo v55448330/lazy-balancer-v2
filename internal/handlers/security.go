@@ -2902,8 +2902,9 @@ func (h *Handlers) BulkUpdatePolicyBindings(c *gin.Context) {
 	}
 	const maxBulkBindings = 100
 	var req struct {
-		Bind   []string `json:"bind"`
-		Unbind []string `json:"unbind"`
+		Bind   []string         `json:"bind"`
+		Unbind []string         `json:"unbind"`
+		Orders map[string][]int `json:"orders"`
 	}
 	if !guardConfiguredJSONBody(c) {
 		return
@@ -2935,6 +2936,43 @@ func (h *Handlers) BulkUpdatePolicyBindings(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "同一规则不能同时出现在 bind 与 unbind: " + id})
 			return
 		}
+	}
+	// orders（绑定顺序批量应用，2026-11 用户裁定）：键与 bind/unbind 冲突同样
+	// 400；规则数计入同一 maxBulkBindings 预算。
+	orderRules := make([]string, 0, len(req.Orders))
+	for rule := range req.Orders {
+		orderRules = append(orderRules, strings.TrimSpace(rule))
+	}
+	sort.Strings(orderRules)
+	normalizedOrders := map[string][]int{}
+	for _, rule := range orderRules {
+		if rule == "" {
+			continue
+		}
+		if _, clash := unbindSet[rule]; clash {
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "同一规则不能同时出现在 unbind 与 orders: " + rule})
+			return
+		}
+		for _, id := range bindIDs {
+			if id == rule {
+				c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "同一规则不能同时出现在 bind 与 orders: " + rule})
+				return
+			}
+		}
+		ids := normalizePolicyIDs(req.Orders[rule])
+		if len(ids) == 0 {
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "orders[" + rule + "] 为空（需携带该规则的全量有序 policy_id 列表）"})
+			return
+		}
+		if len(ids) > maxBindingsPerRule {
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: fmt.Sprintf("orders[%s] 超过每规则 %d 条上限", rule, maxBindingsPerRule)})
+			return
+		}
+		normalizedOrders[rule] = ids
+	}
+	if len(bindIDs)+len(unbindIDs)+len(normalizedOrders) > maxBulkBindings {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: fmt.Sprintf("单次最多提交 %d 条规则", maxBulkBindings)})
+		return
 	}
 	tx, err := beginCaddyWriteTx(c)
 	if err != nil {
@@ -3108,10 +3146,75 @@ func (h *Handlers) BulkUpdatePolicyBindings(c *gin.Context) {
 			return
 		}
 	}
+	// orders：按提交序整体重建各规则绑定（与 PUT /security/rules/:id/policies
+	// 同语义同门：存在性/HTTP 能力门/上限/限流唯一，setRulePoliciesInTx 单源）。
+	// 顺序与现状一致 → unchanged（零写入，不推 cluster_version）；单规则校验
+	// 失败进 skipped 不整体拒绝（FE 策略保存批量移动场景，坏规则不拖垮好规则）。
+	orderedChanged, orderedUnchanged := 0, 0
+	type skippedRule struct {
+		RuleID string `json:"rule_id"`
+		Reason string `json:"reason"`
+	}
+	skipped := make([]skippedRule, 0)
+	for _, ruleCaddyID := range orderRules {
+		ids, ok := normalizedOrders[ruleCaddyID]
+		if !ok {
+			continue
+		}
+		current := make([]int, 0, len(ids))
+		curRows, err := tx.QueryContext(caddyWriteCtx(c), "SELECT policy_id FROM security_policy_bindings WHERE rule_caddy_id=? ORDER BY rank ASC, policy_id ASC", ruleCaddyID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+			return
+		}
+		for curRows.Next() {
+			var pid int
+			if err := curRows.Scan(&pid); err != nil {
+				curRows.Close()
+				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+				return
+			}
+			current = append(current, pid)
+		}
+		curRows.Close()
+		if err := curRows.Err(); err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+			return
+		}
+		sameOrder := len(current) == len(ids)
+		if sameOrder {
+			for i := range ids {
+				if current[i] != ids[i] {
+					sameOrder = false
+					break
+				}
+			}
+		}
+		if sameOrder {
+			orderedUnchanged++
+			continue
+		}
+		msg, err := setRulePoliciesInTx(caddyWriteCtx(c), tx, ruleCaddyID, ids)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+			return
+		}
+		if msg != "" {
+			skipped = append(skipped, skippedRule{ruleCaddyID, msg})
+			continue
+		}
+		orderedChanged++
+	}
 	h.finishTxApply(c, tx, txApplyFinish{
 		Resource: "安全策略", AuditAction: "更新",
-		AuditDetail: fmt.Sprintf("策略 %d 批量更新绑定：绑定 %d 条、解绑 %d 条", policyID, boundChanged, unboundChanged),
-		SuccessMsg:  "策略绑定批量更新完成",
+		AuditDetail: fmt.Sprintf("策略 %d 批量更新绑定：绑定 %d 条、解绑 %d 条、顺序应用 %d 条（不变 %d 条，跳过 %d 条）",
+			policyID, boundChanged, unboundChanged, orderedChanged, orderedUnchanged, len(skipped)),
+		SuccessMsg: "策略绑定批量更新完成",
+		Data: gin.H{
+			"bound": boundChanged, "unbound": unboundChanged,
+			"ordered": orderedChanged, "unchanged": orderedUnchanged,
+			"skipped": skipped,
+		},
 	})
 }
 
@@ -5704,7 +5807,8 @@ func (h *Handlers) GetIP2RegionUpdateLogs(c *gin.Context) {
 // (services can't import handlers).
 
 // GetAllSecurityBindings（v2.2.0）：一规则可绑多策略——返回 map[string][]BindingInfo，
-// 每规则的绑定按 policy_id ASC 排序；取代旧的 map[string]BindingInfo 单值覆盖形态。
+// 每规则的绑定按执行序（rank ASC，请求序承载；rank=0 遗留行由 policy_id 次序键
+// 兜底）排序；取代旧的 map[string]BindingInfo 单值覆盖形态。
 func (h *Handlers) GetAllSecurityBindings(c *gin.Context) {
 	// mode/enabled/rate_limit_enabled 与生成投影同默认值 COALESCE：NULL 列
 	// 修复前触发 Scan 报错静默丢绑定，而生成路径照常应用该策略。enabled 归一为 0
@@ -5712,7 +5816,7 @@ func (h *Handlers) GetAllSecurityBindings(c *gin.Context) {
 	// 与后端行为一致（区别于 List 详情的 COALESCE(enabled,1)：那里无 WHERE 过滤）。
 	rows, err := db.DB.Query(`SELECT b.rule_caddy_id, p.id, p.name, COALESCE(p.mode,'off'), COALESCE(p.enabled,0), COALESCE(p.rate_limit_enabled,0), COALESCE(p.block_page_id, 0), CASE WHEN p.block_status_code > 0 THEN p.block_status_code ELSE 403 END
 		FROM security_policy_bindings b JOIN security_policies p ON b.policy_id = p.id
-		ORDER BY b.rule_caddy_id ASC, b.policy_id ASC`)
+		ORDER BY b.rule_caddy_id ASC, b.rank ASC, b.policy_id ASC`)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
 		return

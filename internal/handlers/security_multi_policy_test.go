@@ -37,6 +37,7 @@ func newMultiPolicyRouter(t *testing.T) *gin.Engine {
 	router.PUT("/security/rules/:caddy_id/policies", h.SetRuleSecurityPolicies)
 	router.GET("/security/rules/:caddy_id/policy", h.GetSecurityPolicyBindings)
 	router.GET("/security/bindings", h.GetAllSecurityBindings)
+	router.POST("/security/policies/:id/bindings/bulk", h.BulkUpdatePolicyBindings)
 	return router
 }
 
@@ -411,9 +412,10 @@ func TestGetAllSecurityBindings_returnsArrayPerRule(t *testing.T) {
 	if len(resp.Data["lb_mp_all_a"]) != 2 {
 		t.Fatalf("lb_mp_all_a bindings len=%d, want 2", len(resp.Data["lb_mp_all_a"]))
 	}
-	if resp.Data["lb_mp_all_a"][0].PolicyID != p1 || resp.Data["lb_mp_all_a"][1].PolicyID != p3 {
-		t.Fatalf("lb_mp_all_a order=[%d,%d], want [%d,%d] ASC",
-			resp.Data["lb_mp_all_a"][0].PolicyID, resp.Data["lb_mp_all_a"][1].PolicyID, p1, p3)
+	// 绑定顺序（2026-11）：map 数组按执行序（rank=PUT 请求序）返回。
+	if resp.Data["lb_mp_all_a"][0].PolicyID != p3 || resp.Data["lb_mp_all_a"][1].PolicyID != p1 {
+		t.Fatalf("lb_mp_all_a order=[%d,%d], want [%d,%d]（请求序）",
+			resp.Data["lb_mp_all_a"][0].PolicyID, resp.Data["lb_mp_all_a"][1].PolicyID, p3, p1)
 	}
 	if len(resp.Data["lb_mp_all_b"]) != 1 || resp.Data["lb_mp_all_b"][0].PolicyID != p2 {
 		t.Fatalf("lb_mp_all_b bindings=%+v, want single %d", resp.Data["lb_mp_all_b"], p2)
@@ -573,9 +575,10 @@ func TestBindRuleToPolicy_outOfOrderBindStillReadsASC(t *testing.T) {
 	if err := json.Unmarshal(recorder.Body.Bytes(), &allResp); err != nil {
 		t.Fatalf("parse GET /security/bindings response %s: %v", recorder.Body.String(), err)
 	}
+	// 绑定顺序（2026-11）：additive 追加到链末，map 按 rank 返回 [pHigh, pLow]。
 	got := allResp.Data["lb_mp_ooo"]
-	if len(got) != 2 || got[0].PolicyID != pLow || got[1].PolicyID != pHigh {
-		t.Fatalf("GET /security/bindings ids=%+v, want [%d,%d] ASC", got, pLow, pHigh)
+	if len(got) != 2 || got[0].PolicyID != pHigh || got[1].PolicyID != pLow {
+		t.Fatalf("GET /security/bindings ids=%+v, want [%d,%d]（绑定请求序）", got, pHigh, pLow)
 	}
 }
 
@@ -1125,5 +1128,114 @@ func TestUnbindRuleFromPolicy_noChangeSkipsAudit(t *testing.T) {
 	}
 	if got := unbindAudits(); got != afterFirst {
 		t.Fatalf("无变更不得写「已解除」审计，before=%d after=%d", afterFirst, got)
+	}
+}
+
+// PUT rank → GET /security/bindings 顺序往返（2026-11 绑定顺序）：map 值数组
+// 必须按执行序（rank）返回，否则 FE 唯一 map 源会丢弃顺序、向导重开即回退
+// policy_id 序（用户读作「顺序无法保存」）。
+func TestGetAllSecurityBindings_rankOrderRoundtrip(t *testing.T) {
+	setupSecurityPolicyTestDB(t)
+	router := newMultiPolicyRouter(t)
+	seedHTTPRule(t, "lb_mp_map")
+	p1 := createMultiPolicy(t, router, "策略1")
+	p2 := createMultiPolicy(t, router, "策略2")
+	p3 := createMultiPolicy(t, router, "策略3")
+	if r := putMultiJSON(t, router, "/security/rules/lb_mp_map/policies", map[string]any{"policy_ids": []int{p3, p1, p2}}); r.Code != http.StatusOK {
+		t.Fatalf("PUT status=%d body=%s", r.Code, r.Body.String())
+	}
+
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/security/bindings", nil)
+	router.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("GET /security/bindings status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var resp struct {
+		Code int `json:"code"`
+		Data map[string][]struct {
+			PolicyID int `json:"policy_id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("parse bindings map: %v", err)
+	}
+	bindings := resp.Data["lb_mp_map"]
+	if len(bindings) != 3 {
+		t.Fatalf("bindings=%v, want 3", bindings)
+	}
+	got := []int{bindings[0].PolicyID, bindings[1].PolicyID, bindings[2].PolicyID}
+	assertIDSlice(t, got, []int{p3, p1, p2})
+}
+
+// bulk orders：单事务批量应用绑定顺序（一次渲染）；幂等 unchanged；单规则
+// 校验失败进 skipped 不整体拒绝；与 bind 冲突 400。
+func TestBulkUpdatePolicyBindings_ordersApplyAndIdempotent(t *testing.T) {
+	setupSecurityPolicyTestDB(t)
+	router := newMultiPolicyRouter(t)
+	seedHTTPRule(t, "lb_mp_orders")
+	p1 := createMultiPolicy(t, router, "策略1")
+	p2 := createMultiPolicy(t, router, "策略2")
+	p3 := createMultiPolicy(t, router, "策略3")
+	if r := putMultiJSON(t, router, "/security/rules/lb_mp_orders/policies", map[string]any{"policy_ids": []int{p1, p2, p3}}); r.Code != http.StatusOK {
+		t.Fatalf("PUT status=%d body=%s", r.Code, r.Body.String())
+	}
+
+	// When：orders 把 p3 提到最前
+	rec := postJSON(t, router, "/security/policies/"+strconv.Itoa(p3)+"/bindings/bulk",
+		map[string]any{"orders": map[string]any{"lb_mp_orders": []int{p3, p1, p2}}})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("bulk orders status=%d body=%s, want 200", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Code int `json:"code"`
+		Data struct {
+			Ordered   int `json:"ordered"`
+			Unchanged int `json:"unchanged"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("parse bulk response %s: %v", rec.Body.String(), err)
+	}
+	if resp.Data.Ordered != 1 {
+		t.Fatalf("ordered=%d, want 1", resp.Data.Ordered)
+	}
+	assertIDSlice(t, queryBoundPolicyIDs(t, "lb_mp_orders"), []int{p3, p1, p2})
+
+	// 幂等：同序重复提交 → unchanged=1、ordered=0（零写入）。
+	rec = postJSON(t, router, "/security/policies/"+strconv.Itoa(p3)+"/bindings/bulk",
+		map[string]any{"orders": map[string]any{"lb_mp_orders": []int{p3, p1, p2}}})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("idempotent bulk status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	resp = struct {
+		Code int `json:"code"`
+		Data struct {
+			Ordered   int `json:"ordered"`
+			Unchanged int `json:"unchanged"`
+		} `json:"data"`
+	}{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("parse idempotent response: %v", err)
+	}
+	if resp.Data.Ordered != 0 || resp.Data.Unchanged != 1 {
+		t.Fatalf("ordered=%d unchanged=%d, want 0/1", resp.Data.Ordered, resp.Data.Unchanged)
+	}
+
+	// 单规则校验失败（引用不存在策略）→ skipped、HTTP 200，不影响其余。
+	rec = postJSON(t, router, "/security/policies/"+strconv.Itoa(p3)+"/bindings/bulk",
+		map[string]any{"orders": map[string]any{"lb_ghost": []int{999999, 1}}})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("skipped-path bulk status=%d body=%s, want 200", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "skipped") {
+		t.Fatalf("skipped entry missing: %s", rec.Body.String())
+	}
+
+	// 同规则同时出现在 bind 与 orders → 400。
+	rec = postJSON(t, router, "/security/policies/"+strconv.Itoa(p3)+"/bindings/bulk",
+		map[string]any{"bind": []string{"lb_mp_orders"}, "orders": map[string]any{"lb_mp_orders": []int{p3, p1, p2}}})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("conflict status=%d body=%s, want 400", rec.Code, rec.Body.String())
 	}
 }
