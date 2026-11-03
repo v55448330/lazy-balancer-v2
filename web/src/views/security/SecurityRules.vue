@@ -499,23 +499,18 @@
 
 <!-- 导入重复条目弹窗（点导入即判定，不写表不执行导入）：简易样式 -->
 <el-dialog v-model="importDuplicateVisible" title="导入条目重复" width="min(640px, 94vw)" append-to-body :close-on-click-modal="false">
-  <el-table :data="importDialogRows" size="small" max-height="300">
+  <el-table :data="importDuplicates" size="small" max-height="300">
     <el-table-column label="行号" width="70" align="center">
       <template #default="{ row }">{{ row.lineNo }}</template>
     </el-table-column>
     <el-table-column label="地址 / CIDR" min-width="180">
       <template #default="{ row }"><span class="ip-entry-mono">{{ row.value }}</span></template>
     </el-table-column>
-    <el-table-column label="备注" min-width="140">
+    <el-table-column label="该行备注" min-width="160">
       <template #default="{ row }">{{ row.remark || '—' }}</template>
     </el-table-column>
-    <el-table-column label="处理" width="100" align="center">
-      <template #default="{ row }">
-        <el-tag :type="row.state === '新增' ? 'success' : 'info'" size="small" effect="plain">{{ row.state }}</el-tag>
-      </template>
-    </el-table-column>
   </el-table>
-  <div class="info-note-bar"><span class="info-note-desc">以 IP 为准（同 IP 不同备注按首条为准）：重复 {{ importDuplicates.length }} 条导入时跳过；新增 {{ pendingNewEntries.length }} 条保存后生效{{ pendingInvalidCount ? `；另有 ${pendingInvalidCount} 条非法行跳过（第 ${pendingInvalidLineNos} 行）` : '' }}。</span></div>
+  <div class="info-note-bar"><span class="info-note-desc">重复 {{ importDuplicates.length }} 条导入时跳过（以 IP 为准，同 IP 不同备注按首条为准）；其余新条目已渲染到下方条目列表，保存后生效{{ pendingInvalidCount ? `；另有 ${pendingInvalidCount} 条非法行跳过（第 ${pendingInvalidLineNos} 行）` : '' }}。</span></div>
   <template #footer>
     <el-button type="primary" @click="importDuplicateVisible = false">知道了</el-button>
   </template>
@@ -1322,20 +1317,10 @@ const ipListEntryPageSize = 200
 // ── 条目查询与导入流（2026-11-02 交互重设计）──
 // 查询：CIDR 匹配与模糊搜索共用输入框+模式单选+搜索按钮（点按钮才出结果，
 // 不实时），搜索区靠右对齐；弹框打开时重置，切换列表不残留。
-// 导入：选择文件只暂存原文（不解析不写表），点「保存」时解析判定——重复条目
-// 弹窗点名具体条目（以 IP 为准，同 IP 不同备注按首条为准），确认后跳过重复
-// 随保存导入；自动通道（续期巡检/批量重签）的冷却语义不受影响。
-const pendingImport = ref<{ fileName: string; newCount: number } | null>(null)
 const importDuplicateVisible = ref(false)
 const importDuplicates = ref<Array<{ lineNo: number; value: string; remark: string }>>([])
-const pendingNewEntries = ref<Array<{ lineNo: number; value: string; remark: string }>>([])
 const pendingInvalidCount = ref(0)
 const pendingInvalidLineNos = ref('')
-// 重复弹窗预览行：新增（跳过重复后导入）+ 重复（跳过），全量渲染供用户核对
-const importDialogRows = computed(() => [
-  ...pendingNewEntries.value.map((e) => ({ lineNo: e.lineNo, value: e.value, remark: e.remark, state: '新增' })),
-  ...importDuplicates.value.map((d) => ({ lineNo: d.lineNo, value: d.value, remark: d.remark, state: '重复，跳过' })),
-])
 const ipListQueryInput = ref('')
 const ipListQueryMode = ref<'cidr' | 'fuzzy'>('cidr')
 const ipListQueryApplied = ref('')
@@ -1362,8 +1347,7 @@ const ipListEntriesFiltered = computed(() => {
 const ipListPagedIndexes = computed(() =>
   ipListEntriesFiltered.value.slice((ipListEntryPage.value - 1) * ipListEntryPageSize, ipListEntryPage.value * ipListEntryPageSize).map(({ index }) => index))
 
-// 分页只切窗口（映射回 entries 本体引用——编辑直接写回 ipListForm.entries，
-// 跨页修改随保存整体提交）；只读形态纯文本渲染，万级条目不再实例化 input。
+// 分页只切窗口（映射回 entries 本体引用——编辑直接写回 ipListForm.entries）
 const ipListEntriesPaged = computed(() =>
   ipListPagedIndexes.value.map((index) => ipListForm.value.entries[index]))
 
@@ -1424,11 +1408,8 @@ const clearIpListQuery = (): void => {
 
 const resetIpListQueryState = (): void => {
   clearIpListQuery()
-  pendingImport.value = null
   importDuplicateVisible.value = false
   importDuplicates.value = []
-  pendingNewEntries.value = []
-  pendingInvalidCount.value = 0
 }
 
 const addIpListEntry = (): void => {
@@ -1568,15 +1549,7 @@ const saveIpList = async () => {
   if (name.length > 50) { ElMessage.warning('列表名称不能超过 50 字符'); return }
   if (ipListForm.value.category.length > 32) { ElMessage.warning('分类不能超过 32 字符'); return }
   if (ipListForm.value.description.length > 200) { ElMessage.warning('描述不能超过 200 字符'); return }
-  // 导入暂存条目合并（2026-11-02 交互重设计）：点「导入」时已判定重复并弹框
-  // 点名，跳过重复的新条目在此并入，随本次保存一起校验（格式/额度）与提交。
-  let importedCount = 0
-  if (pendingNewEntries.value.length > 0) {
-    importedCount = pendingNewEntries.value.length
-    ipListForm.value.entries.push(...pendingNewEntries.value)
-    pendingNewEntries.value = []
-    pendingImport.value = null
-  }
+
   // 值与备注均为空的行视为未填写的占位行，保存时静默丢弃
   const entries = ipListForm.value.entries
     .map((e) => ({ value: e.value.trim(), remark: e.remark.trim(), created_at: e.created_at || undefined, expires_at: e.expires_at || undefined }))
@@ -1625,8 +1598,7 @@ const saveIpList = async () => {
     // 名单直编是共享条目缓存的另一写入口（此前仅 IPLocationAction
     // 失效缓存）——不失效时策略向导/处置弹层会继续读旧条目。
     invalidateSharedEntriesCache()
-    const importNote = importedCount > 0 ? `（含导入 ${importedCount} 条新条目）` : ''
-    showSaveResult(res, `保存成功${importNote}`); ipListDialogVisible.value = false; fetchIpLists()
+    showSaveResult(res, '保存成功'); ipListDialogVisible.value = false; fetchIpLists()
   } catch (error: unknown) {
     // 409 重名 / 400 条目非法等已由全局拦截器 toast，这里仅记录避免 unhandled rejection
     console.error('Failed to save IP list:', error)
@@ -1675,16 +1647,17 @@ const onImportEntriesFileChange = (event: Event): void => {
       .filter((l) => l.text !== '')
     const existingValues = new Set(ipListForm.value.entries.map((e) => e.value.trim()).filter((v) => v !== ''))
     const outcome = computeImportOutcome(existingValues, importLines, (t) => parseEntryLine(t))
-    pendingNewEntries.value = outcome.newEntries
+    // 新条目直接渲染进条目表（跳到首个新增条目所在页）；重复条目弹窗点名
+    ipListForm.value.entries.push(...outcome.newEntries)
     pendingInvalidCount.value = outcome.invalidLines.length
     pendingInvalidLineNos.value = outcome.invalidLines.slice(0, 10).join('、') + (outcome.invalidLines.length > 10 ? ' 等' : '')
-    pendingImport.value = { fileName: file.name, newCount: outcome.newEntries.length }
     if (outcome.duplicates.length > 0) {
       importDuplicates.value = outcome.duplicates
       importDuplicateVisible.value = true
+    } else {
+      mfaAwareSuccess(`导入完成：成功 ${outcome.newEntries.length} 条，保存后生效`)
       return
     }
-    mfaAwareSuccess(`解析成功 ${outcome.newEntries.length} 条，点击「保存」后导入`)
   }
   reader.onerror = () => { ElMessage.error('读取文件失败，请重试') }
   reader.readAsText(file)
