@@ -406,7 +406,8 @@
         </el-form-item>
         <el-form-item label="条目" required>
           <div class="entries-block">
-            <DialogSectionHeader title="名单条目" />
+            <div class="entries-head-bar">
+              <DialogSectionHeader title="名单条目" />
             <div v-if="ipListForm.entries.length > 0" class="ip-query-bar">
               <el-input v-model="ipListQueryInput" placeholder="输入 IP 或关键词" clearable size="small" class="ip-query-input" @keyup.enter="applyIpListQuery" @clear="clearIpListQuery" />
               <el-radio-group v-model="ipListQueryMode" size="small">
@@ -417,6 +418,7 @@
               <el-button v-if="ipListQueryApplied" size="small" @click="clearIpListQuery">清除</el-button>
             </div>
             <div v-if="ipMatchResultText" class="ip-match-result ip-match-result-text">{{ ipMatchResultText }}</div>
+            </div>
             <div class="dialog-panel dialog-panel--flush">
               <el-table :data="ipListEntriesPaged" size="small" max-height="360" empty-text="" :row-class-name="ipEntryRowClass">
               <template #empty><el-empty description="暂无条目，点击下方按钮添加" :image-size="50" /></template>
@@ -497,18 +499,23 @@
 
 <!-- 导入重复条目弹窗（点导入即判定，不写表不执行导入）：简易样式 -->
 <el-dialog v-model="importDuplicateVisible" title="导入条目重复" width="min(640px, 94vw)" append-to-body :close-on-click-modal="false">
-  <el-table :data="importDuplicates" size="small" max-height="300">
+  <el-table :data="importDialogRows" size="small" max-height="300">
     <el-table-column label="行号" width="70" align="center">
       <template #default="{ row }">{{ row.lineNo }}</template>
     </el-table-column>
     <el-table-column label="地址 / CIDR" min-width="180">
       <template #default="{ row }"><span class="ip-entry-mono">{{ row.value }}</span></template>
     </el-table-column>
-    <el-table-column label="该行备注" min-width="160">
+    <el-table-column label="备注" min-width="140">
       <template #default="{ row }">{{ row.remark || '—' }}</template>
     </el-table-column>
+    <el-table-column label="处理" width="100" align="center">
+      <template #default="{ row }">
+        <el-tag :type="row.state === '新增' ? 'success' : 'info'" size="small" effect="plain">{{ row.state }}</el-tag>
+      </template>
+    </el-table-column>
   </el-table>
-  <div class="info-note-bar"><span class="info-note-desc">以上 {{ importDuplicates.length }} 条与列表已有条目或文件内其他行重复（以 IP 为准，同 IP 不同备注按首条为准），导入时将跳过；其余 {{ pendingNewEntries.length }} 条新条目将在保存后生效{{ pendingInvalidCount ? `；另有 ${pendingInvalidCount} 条非法行跳过（第 ${pendingInvalidLineNos} 行）` : '' }}。</span></div>
+  <div class="info-note-bar"><span class="info-note-desc">以 IP 为准（同 IP 不同备注按首条为准）：重复 {{ importDuplicates.length }} 条导入时跳过；新增 {{ pendingNewEntries.length }} 条保存后生效{{ pendingInvalidCount ? `；另有 ${pendingInvalidCount} 条非法行跳过（第 ${pendingInvalidLineNos} 行）` : '' }}。</span></div>
   <template #footer>
     <el-button type="primary" @click="importDuplicateVisible = false">知道了</el-button>
   </template>
@@ -1321,9 +1328,14 @@ const ipListEntryPageSize = 200
 const pendingImport = ref<{ fileName: string; newCount: number } | null>(null)
 const importDuplicateVisible = ref(false)
 const importDuplicates = ref<Array<{ lineNo: number; value: string; remark: string }>>([])
-const pendingNewEntries = ref<Array<{ value: string; remark: string }>>([])
+const pendingNewEntries = ref<Array<{ lineNo: number; value: string; remark: string }>>([])
 const pendingInvalidCount = ref(0)
 const pendingInvalidLineNos = ref('')
+// 重复弹窗预览行：新增（跳过重复后导入）+ 重复（跳过），全量渲染供用户核对
+const importDialogRows = computed(() => [
+  ...pendingNewEntries.value.map((e) => ({ lineNo: e.lineNo, value: e.value, remark: e.remark, state: '新增' })),
+  ...importDuplicates.value.map((d) => ({ lineNo: d.lineNo, value: d.value, remark: d.remark, state: '重复，跳过' })),
+])
 const ipListQueryInput = ref('')
 const ipListQueryMode = ref<'cidr' | 'fuzzy'>('cidr')
 const ipListQueryApplied = ref('')
@@ -2246,7 +2258,11 @@ onUnmounted(() => {
 .entries-toolbar-right { margin-left: auto; }
 .entries-import-input { display: none; }
 .ip-entry-text { font-family: 'SF Mono', 'Monaco', 'Menlo', monospace; font-size: 13px; }
-.ip-query-bar { display: flex; align-items: center; justify-content: flex-end; gap: 10px; margin: 0 0 8px; }
+.entries-head-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0 0 8px; }
+.entries-head-bar :deep(.dsh-head) { margin: 0; align-items: center; }
+.entries-head-bar .ip-query-bar { display: flex; align-items: center; justify-content: flex-end; gap: 10px; margin: 0; }
+.ip-query-bar .ip-query-input { width: 240px; flex: none; }
+.ip-query-bar .el-radio-group, .ip-query-bar .el-button { flex: none; }
 .ip-query-bar .ip-query-input { width: 260px; flex: none; }
 .ip-query-bar .el-radio-group, .ip-query-bar .el-button { flex: none; }
 .ip-match-result { font-size: 12px; color: var(--el-color-primary); word-break: break-all; margin: 0 0 8px; text-align: right; }

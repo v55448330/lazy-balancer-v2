@@ -16,8 +16,8 @@ interface ImportDuplicate {
 }
 
 interface ImportOutcome {
-  /** 可直接并入列表的新条目（已按文件序去重） */
-  newEntries: Array<{ value: string; remark: string }>
+  /** 可直接并入列表的新条目（已按文件序去重，lineNo 供弹窗预览展示） */
+  newEntries: Array<{ lineNo: number; value: string; remark: string }>
   /** 与现有列表或文件内其他行重复的行（含重复行号与该行原文） */
   duplicates: ImportDuplicate[]
   /** 非法行号（解析失败或备注超长——由注入的 parse 结果判定） */
@@ -57,7 +57,7 @@ export function computeImportOutcome(
       continue
     }
     seen.add(parsed.value)
-    newEntries.push({ value: parsed.value, remark: parsed.remark })
+    newEntries.push({ lineNo: line.no, value: parsed.value, remark: parsed.remark })
   }
   return { newEntries, duplicates, invalidLines }
 }

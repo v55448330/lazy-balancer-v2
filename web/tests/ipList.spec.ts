@@ -381,10 +381,11 @@ test('导入提示：重复行号点名与口径说明接线（SecurityRules 导
   const page = code('src/views/security/SecurityRules.vue')
   assert.match(page, /computeImportOutcome\(existingValues, importLines/, '导入时必须走判定单源（弹重复框，不写表）')
   assert.match(page, /importDuplicateVisible\.value = true/, '存在重复必须弹窗点名具体条目')
-  assert.match(page, /以 IP 为准，同 IP 不同备注按首条为准/, '弹窗必须说明以 IP 为准的口径')
+  assert.match(page, /以 IP 为准（同 IP 不同备注按首条为准）/, '弹窗必须说明以 IP 为准的口径')
   assert.doesNotMatch(page, /待导入文件：/, '「待导入文件」提示条必须移除（点导入即判定）')
   assert.doesNotMatch(page, /跳过重复并导入/, '弹窗只提示不执行导入（不得有执行按钮）')
-  assert.match(page, /import-dup-note|info-note-bar/, '说明文字用标准描述框样式')
+  assert.match(page, /importDialogRows/, '弹窗必须渲染 新增+重复 全量条目（状态列）')
+  assert.match(page, /entries-head-bar/, '名单条目标题与查询区必须同行（右对齐、垂直居中）')
 })
 
 test('CIDR 匹配查询接线：cidrContains 单源 + 命中行高亮 + 结果文案', () => {

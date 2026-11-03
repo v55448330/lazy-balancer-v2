@@ -53,3 +53,8 @@ test('空文件：全部为空结果', () => {
   assert.equal(outcome.duplicates.length, 0)
   assert.equal(outcome.invalidLines.length, 0)
 })
+
+test('newEntries 携带行号（弹窗预览新增条目用）', () => {
+  const outcome = computeImportOutcome(new Set(), lines(['1.1.1.1,a', '2.2.2.2,b']), parse)
+  assert.deepEqual(outcome.newEntries.map((e) => e.lineNo), [1, 2])
+})
