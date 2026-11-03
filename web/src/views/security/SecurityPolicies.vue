@@ -725,12 +725,6 @@
                         :class="{ 'is-self': entry.isSelf, 'is-disabled': !entry.enabled, 'is-trust': isStage0ChainEntry(entry) }"
                       >{{ chainChipText(entry, idx) }}</span>
                     </div>
-
-                    <!-- 行内归属紧凑标识（两态小标签，用户验收裁定：不再重复整句；
-                         判定走 rowAttributionBadge 单源） -->
-                    <div v-if="row.attributionBadge" class="bound-rule-attribution">
-                      <el-tag size="small" effect="plain" :type="row.attributionBadge.tone === 'active' ? 'success' : 'info'" class="bound-rule-attribution-badge" disable-transitions>{{ row.attributionBadge.text }}</el-tag>
-                    </div>
                   </div>
                 </div>
                 <!-- 标准提示框（用户验收裁定：禁裸文本长说明）+ 归属汇总行（单源派生：
@@ -1006,7 +1000,7 @@ interface BindingInfo { policy_id: number; name: string; mode: string; enabled: 
 interface RuleBoundPolicy { id: number; name: string; mode: string; enabled: boolean; ip_acl_enabled: boolean; ip_acl_mode: string; crs_rule_groups: unknown; custom_rules: unknown; block_page_id: number }
 interface CustomRuleRef { id: number; action: string }
 interface ChainEntry { policyId: number | null; name: string; enabled: boolean; isSelf: boolean; blockPageId?: number; blockStatusCode?: number }
-interface BoundRuleRow { caddyId: string; name: string; protocol: string; domain: string; listenPort: number; chain: ChainEntry[]; attributionBadge: { text: string; tone: 'active' | 'info' } | null; mergedCount: number; showPerfTip: boolean; hints: string[]; infoHints: string[] }
+interface BoundRuleRow { caddyId: string; name: string; protocol: string; domain: string; listenPort: number; chain: ChainEntry[]; mergedCount: number; showPerfTip: boolean; hints: string[]; infoHints: string[] }
 interface BlockPage { id: number; name: string; content?: string }
 
 const blockPages = ref<BlockPage[]>([])
@@ -2894,15 +2888,6 @@ const capableAttributions = (chain: ChainEntry[]): BlockPageAttribution[] => {
 }
 
 // 关联规则行内归属紧凑标识（两态小标签，用户验收裁定：不再每行重复整句）。
-// 全部适用阶段均 self → 「显示本策略页」；存在兜底/无页 → 「显示兜底页」
-// （兜底目标名进步骤汇总行，行内标签保持短）；未启用/未落地不出标签。
-const rowAttributionBadge = (chain: ChainEntry[]): { text: string; tone: 'active' | 'info' } | null => {
-  if (!form.value.enabled || !blockPagesLoaded.value) return null
-  const results = capableAttributions(chain)
-  if (results.length === 0) return null
-  if (results.every((r) => r.effective === 'self')) return { text: '显示本策略页', tone: 'active' }
-  return { text: '显示兜底页', tone: 'info' }
-}
 
 // 关联规则步骤归属汇总行（单源派生）：兜底目标名在全部规则一致时点名，否则泛指。
 const bindingsSummaryLine = computed<string>(() => {
@@ -2996,7 +2981,6 @@ const boundRuleRows = computed<BoundRuleRow[]>(() => boundRules.value.map((caddy
     domain: rule?.domain || '',
     listenPort: rule?.listen_port ?? 0,
     chain,
-    attributionBadge: rowAttributionBadge(chain),
     // 性能提示应按实际生效的处理链计——禁用策略不产生处理链，
     // 计入会虚高（提示"超过 3 条可能影响性能"在不达 3 条时误报）。
     mergedCount: enabledEntries.length,
@@ -3874,8 +3858,6 @@ onMounted(async () => {
 /* 关联规则行内：执行序上移/下移（暂存随保存提交）+ 归属紧凑标识 */
 .bound-rule-order { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; }
 .bound-rule-order-tag { margin-right: 2px; }
-.bound-rule-attribution { margin-top: 6px; }
-.bound-rule-attribution-badge { font-weight: 500; }
 
 /* 配置预览：三阶段投影（策略视角） */
 .preview-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 0 20px 12px; }

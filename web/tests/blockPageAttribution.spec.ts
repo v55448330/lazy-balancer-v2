@@ -203,7 +203,7 @@ test('接线：SecurityPolicies 逐阶段归因消费 resolveBlockPageAttributio
   // 规则级覆盖层入参与暂存读路径必须退役（触发归因无第三参）
   assert.doesNotMatch(text, /overrideFor/)
   assert.doesNotMatch(text, /rule-override/)
-  assert.match(text, /attributionBadge: rowAttributionBadge\(chain\)/)
+  assert.doesNotMatch(text, /rowAttributionBadge/, '逐行徽标判定已随拦截页必选退役（用户裁定：常态无信息量）')
 })
 
 test('拦截页步骤：汇总卡替代逐条重复提示（主行 + 例外分面 + 能力门行）', () => {
@@ -227,15 +227,12 @@ test('拦截页步骤：汇总卡替代逐条重复提示（主行 + 例外分�
   assert.doesNotMatch(text, /const blockPageNotes = /)
 })
 
-test('接线：关联规则行内紧凑标识 + 汇总行（逐条整句退役）', () => {
+test('接线：关联规则归属提示退役（常态信息由汇总行承载，逐条徽标/整句退役）', () => {
   const text = code('src/views/security/SecurityPolicies.vue')
-  // 行内归属描述收敛为两态小标签（不再每行重复整句）
-  assert.match(text, /rowAttributionBadge\(chain\)/)
-  assert.match(text, /显示本策略页/)
-  assert.match(text, /显示兜底页/)
-  assert.doesNotMatch(text, /触发该策略拦截时：显示本策略配置的拦截页/, '逐条整句已退役')
-  assert.doesNotMatch(text, /bound-rule-attribution-item/, '整句行样式随行退役')
-  // 汇总行（info-note 规范）：N 条规则 + 兜底归属一句话
+  assert.doesNotMatch(text, /rowAttributionBadge/, '徽标判定单源已退役')
+  assert.doesNotMatch(text, /显示本策略页/, '两态徽标文案退役（拦截页必选，常态恒 self 无信息量）')
+  assert.doesNotMatch(text, /bound-rule-attribution/, '徽标样式随行退役')
+  // 汇总行保留（info-note 规范）：N 条规则 + 兜底归属一句话
   assert.match(text, /触发各策略拦截时，分别显示该策略自己配置的拦截页/)
   assert.match(text, /显示兜底页（首个启用拦截页的策略/)
 })
