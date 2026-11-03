@@ -453,14 +453,22 @@ func (h *Handlers) retryCertJobByID(c *gin.Context, id int) {
 	// 「门禁说冷却中、文案说 0s」的自相矛盾。
 	now := time.Now()
 
-	if blocked, statusCode, message := certJobRetryBlocked(status, updatedAt, createdAt, now); blocked {
-		result := "cooldown"
-		if statusCode == http.StatusConflict {
-			result = "permanent"
+	// 失败冷却不再阻断手动重签（2026-11-02 用户裁定）：冷却只约束自动通道
+	// （续期巡检、waiting_ca 补扫、批量全量重签）——任务卡片/任务监控的
+	// 「重签/运行」是知情显式操作，冷却中放行并如实留审计痕迹。其余形状
+	// （退役 409、在途执行中、部署退避窗口）不受裁定影响，按原语义拒绝。
+	cooling, statusCode, message := certJobRetryBlocked(status, updatedAt, createdAt, now)
+	if cooling {
+		if statusCode == http.StatusConflict || status != "failed" {
+			result := "cooldown"
+			if statusCode == http.StatusConflict {
+				result = "permanent"
+			}
+			auditFailureWithRule(result)
+			c.JSON(statusCode, models.APIResponse{Code: statusCode, Message: message})
+			return
 		}
-		auditFailureWithRule(result)
-		c.JSON(statusCode, models.APIResponse{Code: statusCode, Message: message})
-		return
+		auditFailureWithRule("cooldown_override", "手动重签越过失败冷却", message)
 	}
 
 	// CA 退避窗口（failed/waiting_ca 行的 ca_available_after，429=Retry-After

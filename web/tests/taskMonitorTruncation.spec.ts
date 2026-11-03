@@ -55,22 +55,21 @@ test('截断时渲染提示条（复用全局 info-note-bar 样式，不写局�
   assert.doesNotMatch(page, /:deep\([^)]*\)\s*\{[^}]*info-note/)
 })
 
-test('证书行运行按钮按剩余冷却禁用并给出等待提示', () => {
-  // /system/tasks 对证书行下发剩余冷却秒数（0=可运行）；前端不得只靠后端 429。
+test('证书行运行按钮：冷却中可运行（信息提示），仅永久不可重试态禁用', () => {
+  // /system/tasks 对证书行下发剩余冷却秒数（0=可运行，null=永久不可重试）。
+  // 2026-11-02 用户裁定：冷却不再禁用手动运行——文案降级为信息提示。
   assert.match(page, /retry_cooldown_seconds\?: number/, 'TaskInfo 必须声明冷却字段')
   assert.match(page, /const runCooldownReason = \(row: TaskInfo\): string =>/, '必须单源计算冷却提示')
   const helper = section(page, 'const runCooldownReason = (row: TaskInfo): string =>', '\nconst onTrigger')
   assert.match(helper, /Math\.ceil\(seconds \/ 60\)/, '提示需换算为分钟')
   assert.match(
     helper,
-    /冷却中，约 \$\{Math\.ceil\(seconds \/ 60\)\} 分钟后可运行/,
-    '冷却提示文案必须说明还要等待多久',
+    /冷却中（约 \$\{Math\.ceil\(seconds \/ 60\)\} 分钟）· 手动运行将立即尝试/,
+    '冷却提示文案必须明示手动可立即运行',
   )
+  assert.match(helper, /该任务永久不可重试/, '永久不可重试态仍需禁用提示')
 
-  // 运行按钮块：禁用态必须真正接线到冷却原因。只要求符号在页面任意位置出现时，
-  // 把 helper 从 :disabled 挪到 tooltip / v-if 仍为绿——冷却期按钮可点。
-  // 按开标签属性集定位（不看缩进/属性书写顺序）：原 marker 内嵌 18 空格缩进 +
-  // `link type` 顺序，纯格式化调整即抛 missing start marker（界面完全没变）。
+  // 运行按钮块：禁用只保留永久不可重试态；冷却原因仍进 tooltip 供解释。
   const actions = section(page, 'label="操作"', '</el-table-column>')
   const runTextAt = actions.indexOf('>运行</el-button>')
   assert.ok(runTextAt > 0, '操作列缺「运行」按钮')
@@ -78,10 +77,10 @@ test('证书行运行按钮按剩余冷却禁用并给出等待提示', () => {
   assert.ok(runButton, `运行按钮开标签解析失败: ${actions.slice(runTextAt - 200, runTextAt)}`)
   const disabled = /:disabled="([^"]*)"/.exec(runButton)?.[1]
   assert.ok(disabled, `运行按钮缺 :disabled 绑定: ${runButton}`)
-  assert.match(disabled, /Boolean\(runCooldownReason\(row(?: as [A-Za-z]+)?\)\)/, `运行按钮禁用未接线冷却原因（现为 "${disabled}"）`)
-  assert.match(disabled, /row\.status === 'running'/, '运行中仍应禁用')
+  assert.match(disabled, /'该任务永久不可重试'/, '运行按钮禁用只保留永久不可重试态')
+  assert.doesNotMatch(disabled, /Boolean\(runCooldownReason/, '冷却不得再作为禁用条件')
 
-  // tooltip 必须把冷却原因呈现给用户（禁用按钮 hover 是唯一解释面）。
+  // tooltip 必须把冷却原因呈现给用户（手动运行的解释面）。
   const tooltip = section(actions, 'v-if="row.triggerable"', '</el-tooltip>')
   assert.match(tooltip, /:content="runCooldownReason\(row(?: as [A-Za-z]+)?\)/, '冷却原因必须进 tooltip content')
 })

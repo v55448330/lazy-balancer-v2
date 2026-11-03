@@ -1672,3 +1672,47 @@ func TestListCertJobs_sameSecondCreatedAtPaginationIsStable(t *testing.T) {
 		}
 	}
 }
+
+// 2026-11-02 用户裁定：任务卡片「重签」不受失败冷却限制（冷却只约束自动通道：
+// 续期巡检、waiting_ca 补扫、批量全量重签）——人工显式重试是知情操作，冷却中
+// 放行并如实留审计痕迹；在途（queued）与退役（disabled/409）仍受状态限制拒绝。
+func TestRetryCertJob_failedCooldownManualOverride(t *testing.T) {
+	h := newBackupTestHandlers(t)
+	services.ResetCAQueueManagerForTest()
+	services.InitCAQueueManager(func() error { return nil }, t.TempDir())
+	services.GetCAQueueManager().Start()
+	startCertQueueDispatchForTest(t)
+	t.Cleanup(services.ResetCAQueueManagerForTest)
+	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enabled,enable_tls,tls_source)
+		VALUES ('lb_cdov','cdov','http','cdov.example.test',8080,1,1,'acme_dns');
+		INSERT INTO cert_jobs (rule_id,domain,status,message,updated_at) VALUES
+			('lb_cdov','cdov.example.test','failed','签发失败',datetime('now','-1 minutes'));
+		INSERT INTO cert_jobs (rule_id,domain,status,message,updated_at) VALUES
+			('lb_cdov2','cdov2.example.test','queued','执行中',datetime('now','-1 minutes'))`); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.POST("/jobs/:id/retry", h.RetryCertJob)
+
+	// When/Then：failed 冷却中手动重签 → 200 放行 + 审计留痕。
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/jobs/1/retry", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200（failed 冷却中手动重签放行）", response.Code, response.Body.String())
+	}
+	var auditCount int
+	if err := db.AuditDB.QueryRow(`SELECT COUNT(*) FROM audit_log WHERE action='重试失败' AND detail LIKE '%越过失败冷却%'`).Scan(&auditCount); err != nil {
+		t.Fatalf("read audit: %v", err)
+	}
+	if auditCount != 1 {
+		t.Fatalf("audit=%d, want 1（越过失败冷却必须留痕）", auditCount)
+	}
+
+	// 回归：在途（queued 执行中）仍按状态拒绝——重签放开不波及在途/退役。
+	response2 := httptest.NewRecorder()
+	router.ServeHTTP(response2, httptest.NewRequest(http.MethodPost, "/jobs/2/retry", nil))
+	if response2.Code != http.StatusTooManyRequests {
+		t.Fatalf("status=%d, want 429（在途任务不放开）", response2.Code)
+	}
+}

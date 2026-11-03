@@ -2,7 +2,6 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
 import {
-  certJobRetryReady,
   certJobStatusLabel,
   certJobStatusTone,
   certJobManualNeeded,
@@ -19,25 +18,12 @@ import {
 } from '../src/utils/certJobStatus.ts'
 import { code, installBrowserHost, member, repoCode, section } from './_helpers.ts'
 
-test('重试冷却由后端「此刻剩余秒」驱动，前端不做二次扣减', () => {
-  assert.equal(certJobRetryReady(null), false, 'null=永久不可重试')
-  assert.equal(certJobRetryReady(undefined), false, '缺字段=不可判定，不放行')
-  assert.equal(certJobRetryReady(0), true, '零冷却立即可重试')
-  assert.equal(certJobRetryReady(1), false, '剩余 1 秒仍在冷却')
-  assert.equal(certJobRetryReady(300), false, 'failed 冷却窗口内')
-  assert.equal(certJobRetryReady(900), false, 'queued 冷却窗口内')
-})
-
-test('证书任务页与任务监控页共用同一冷却判据（不再各自按 updated_at 起算）', () => {
-  const util = code('src/utils/certJobStatus.ts')
-  assert.match(util, /return seconds <= 0/, '判据只能是剩余秒数 ≤0')
-  assert.doesNotMatch(util, /updatedAt/, '前端不得再按 updated_at 起算流逝')
-
+test('证书任务页与任务监控页冷却展示同源（冷却不再禁用，仅信息提示）', () => {
   const certJobs = code('src/views/settings/CertJobs.vue')
-  assert.match(certJobs, /certJobRetryReady\(row\.retry_cooldown_seconds\)/)
-
   const monitor = code('src/views/settings/TaskMonitor.vue')
-  assert.match(monitor, /if \(certJobRetryReady\(seconds\)\) return ''/)
+  // 冷却分钟数两页都以分钟粒度展示（同源语义）；退役的就绪判定工具不得回潮
+  assert.match(monitor, /Math\.ceil\(seconds \/ 60\)/, '监控冷却分钟数展示同源')
+  assert.doesNotMatch(certJobs + monitor, /certJobRetryReady/, '退役工具不得回潮')
 })
 
 test('证书任务状态表查表防原型键：constructor 等不得把函数当标签/色调', () => {
@@ -90,12 +76,19 @@ test('证书任务状态 label/tone 覆盖后端 db.certJobStatuses 全 26 态',
   }
 })
 
-test('重签禁用文案：不可重试且无冷却秒数时不得提示「等待 0 分钟」', () => {
+test('重签禁用面收敛：只读与退役仍禁用，冷却不再禁用', () => {
   const page = code('src/views/settings/CertJobs.vue')
   const fn = section(page, 'const retryDisabledReason', '\n}')
-  assert.match(fn, /if \(row\.retry_cooldown_seconds === null \|\| row\.retry_cooldown_seconds === undefined\) return '当前状态暂不可重签'/)
-  assert.match(fn, /Math\.ceil\(row\.retry_cooldown_seconds \/ 60\)/, '有冷却值时不得再用 ?? 0 兜底物化 0 分钟')
-  assert.doesNotMatch(fn, /retry_cooldown_seconds \?\? 0/)
+  assert.match(fn, /readOnlyMessage/, '只读仍禁用')
+  assert.match(fn, /已禁用的任务无法重签/, '退役（disabled）仍禁用')
+  assert.doesNotMatch(fn, /需等待/, '冷却禁用文案必须退役')
+  assert.doesNotMatch(fn, /当前状态暂不可重签/, 'null 契约形态随禁用逻辑一并退役')
+})
+
+test('重签松绑：冷却中可点且确认弹框含配额警示；就绪判定工具退役', () => {
+  const page = code('src/views/settings/CertJobs.vue')
+  assert.match(page, /当前处于重试冷却期，重签将立即尝试并消耗 CA 配额/, '冷却中重签确认弹框必须明示 CA 配额消耗')
+  assert.doesNotMatch(page + code('src/views/settings/TaskMonitor.vue'), /certJobRetryReady/, '退役工具不得回潮')
 })
 
 // ── 续签语境状态口径（2026-10-30 裁定）：failed 按续签语境细分（失败/续签失败/

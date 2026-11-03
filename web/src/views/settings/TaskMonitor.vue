@@ -232,7 +232,7 @@
               <span class="tm-op-trigger">
                 <el-button
                   link type="primary" size="small"
-                  :disabled="!canOperate || taskActionPendingId !== null || row.status === 'running' || Boolean(runCooldownReason(row as TaskInfo))"
+                  :disabled="!canOperate || taskActionPendingId !== null || row.status === 'running' || runCooldownReason(row as TaskInfo) === '该任务永久不可重试'"
                   @click="onTrigger(row as TaskInfo)"
                 >运行</el-button>
               </span>
@@ -382,7 +382,6 @@ import { useClampedPagination } from '@/composables/useClampedPagination'
 import { createLatestReadSession } from '@/utils/viewAsyncState'
 import { hasOwn } from '@/utils/hasOwn'
 import { statusColor } from '@/utils/chartTheme'
-import { certJobRetryReady } from '@/utils/certJobStatus'
 import { CERT_QUEUE_VISIBLE_JOBS, certQueueHasLive, certQueueIsBusy, certQueueMoreCount } from '@/utils/certQueue'
 import DialogHeader from '@/components/DialogHeader.vue'
 import DialogSectionHeader from '@/components/DialogSectionHeader.vue'
@@ -738,14 +737,13 @@ async function runTaskAction(row: TaskInfo, options: TaskActionOptions): Promise
   }
 }
 
+// 证书行冷却不再禁用手动运行（2026-11-02 用户裁定，与证书任务页重签同口径）：
+// 文案降级为信息提示；null 仍是「永久不可重试」禁用态。非证书行恒 0 不进此路径。
 const runCooldownReason = (row: TaskInfo): string => {
-  // null 是契约里的第三种状态（永久不可重试），不得先 `?? 0` 归成「可运行」。
   if (row.retry_cooldown_seconds === null) return '该任务永久不可重试'
   const seconds = Number(row.retry_cooldown_seconds ?? 0)
-  if (!Number.isFinite(seconds)) return ''
-  // 判据与证书任务页同源（utils/certJobStatus）：后端下发「此刻剩余秒」，0 即可运行。
-  if (certJobRetryReady(seconds)) return ''
-  return `冷却中，约 ${Math.ceil(seconds / 60)} 分钟后可运行`
+  if (!Number.isFinite(seconds) || seconds <= 0) return ''
+  return `冷却中（约 ${Math.ceil(seconds / 60)} 分钟）· 手动运行将立即尝试`
 }
 
 const onTrigger = (row: TaskInfo): Promise<void> => runTaskAction(row, {

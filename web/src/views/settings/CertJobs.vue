@@ -180,7 +180,7 @@ import { escapeHtml } from '@/utils/escape'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAuthStore } from '@/stores/auth'
 import type { APIResponse, CertJobsPage, CertJobListItem } from '@/types'
-import { certJobStatusTone, certJobRetryReady, certJobManualNeeded, certJobRowStatusLabel, certJobStatusHover, certJobCooldownCell, certManualBannerFingerprint, loadCertManualBannerDismissed, saveCertManualBannerDismissed, CERT_JOB_RENEWAL_ATTEMPTS_FALLBACK } from '@/utils/certJobStatus'
+import { certJobStatusTone, certJobManualNeeded, certJobRowStatusLabel, certJobStatusHover, certJobCooldownCell, certManualBannerFingerprint, loadCertManualBannerDismissed, saveCertManualBannerDismissed, CERT_JOB_RENEWAL_ATTEMPTS_FALLBACK } from '@/utils/certJobStatus'
 import type { CertJobStatus } from '@/utils/certJobStatus'
 import { certJobEffectiveNotAfter, certJobRenewalAt, certRenewalWindowConverged, certRenewalWindowDays } from '@/utils/certJobExpiry'
 import { usePollingTask } from '@/composables/usePollingTask'
@@ -328,17 +328,15 @@ const logLoading = logTail.loading
 
 const statusType = (status: CertJobStatus) => certJobStatusTone(status)
 
-const canRetry = (row: CertJob): boolean =>
-  certJobRetryReady(row.retry_cooldown_seconds)
+// 2026-11-02 用户裁定：手动「重签」不受失败冷却限制（冷却只约束自动通道与
+// 批量全量重签）——冷却中可点，确认弹框明示 CA 配额消耗。禁用面只剩只读与
+// 退役（disabled）状态。
+const canRetry = (row: CertJob): boolean => row.status !== 'disabled'
 
 const retryDisabledReason = (row: CertJob): string => {
   if (isReadOnly.value) return authStore.readOnlyMessage
   if (row.status === 'disabled') return '已禁用的任务无法重签'
-  if (canRetry(row)) return ''
-  // 冷却秒数为 null 时「等待 0 分钟」是自相矛盾的文案——不可重试且无冷却
-  // 信息（契约漂移形态）给无行动指引的中性文案。
-  if (row.retry_cooldown_seconds === null || row.retry_cooldown_seconds === undefined) return '当前状态暂不可重签'
-  return `当前状态需等待 ${Math.ceil(row.retry_cooldown_seconds / 60)} 分钟后重签`
+  return ''
 }
 
 // 证书真实到期时刻：后端派生 not_after 优先（库值 expires_at 缺失时按 PEM
@@ -400,9 +398,12 @@ const onPageSizeChange = (): void => {
 const retryJob = async (row: CertJob) => {
   if (isReadOnly.value || !canRetry(row) || retryingJobIds.value.has(row.id)) return
   const isWaitingCA = row.status === 'waiting_ca'
+  const cooling = (row.retry_cooldown_seconds ?? 0) > 0
   const message = isWaitingCA
     ? '任务当前处于"等待 CA"状态（可能仍在频率冷却中）。确定要立即重新签发吗？如果使用同一 CA 且冷却未到，可能再次被拒绝。'
-    : `确定要对域名 ${row.domain} 重新签发证书吗？`
+    : cooling
+      ? `确定要对域名 ${row.domain} 重新签发证书吗？当前处于重试冷却期，重签将立即尝试并消耗 CA 配额（连续失败可能触发 CA 侧限流）。`
+      : `确定要对域名 ${row.domain} 重新签发证书吗？`
   retryingJobIds.value = new Set(retryingJobIds.value).add(row.id)
   try {
     try {

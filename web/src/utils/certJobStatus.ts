@@ -91,22 +91,6 @@ export const certJobStatusTone = (status: CertJobStatus): CertJobStatusTone => {
   console.warn('Unknown cert job status:', status)
   return 'info'
 }
-
-/**
- * 证书任务是否已过后端下发的重试冷却。冷却值唯一由 API 决定，且语义是
- * 「此刻剩余秒数」——后端已按 updated_at 扣减流逝部分（证书任务列表与任务监控
- * 证书行同源同口径），所以判据只有「≤0 即就绪」，不得再按 updated_at 二次
- * 扣减（那会让冷却过半即显示可点，点击后被服务端 429 拒绝）。
- * null 表示该状态永久不可重试（disabled），不是「无冷却」。
- * 轮询（证书任务页 5s / 任务监控 10s）刷新剩余值，无需本地 ticker。
- */
-export const certJobRetryReady = (cooldownSeconds: number | null | undefined): boolean => {
-  if (cooldownSeconds === null || cooldownSeconds === undefined) return false
-  const seconds = Number(cooldownSeconds)
-  if (!Number.isFinite(seconds)) return false
-  return seconds <= 0
-}
-
 // ── 续签语境状态口径（2026-10-30 裁定）───────────────────────────────
 // failed 细分为 失败（首次签发失败）/ 续签失败（旧证书在场，续签失败）/
 // 需人工（自动重试达上限），全部标签 ≤4 字；状态 hover 走派生口径，CA 原文
