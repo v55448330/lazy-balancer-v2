@@ -720,8 +720,9 @@ func resetSecurityEventsMappingsCacheForTest() {
 }
 
 // securityEventsLoadMappings batch-loads per-tick indexes: host→rule, plus the
-// v2.2.0 multi-policy attribution inputs — rule→bound policy ids (policy_id ASC
-// so "first bound" is well-defined) and policy id→policy for custom_rules /
+// v2.2.0 multi-policy attribution inputs — rule→bound policy ids (绑定执行序：
+// rank ASC=提交序/顺序编辑序，policy_id ASC 兜底，so "first bound" is
+// well-defined) and policy id→policy for custom_rules /
 // crs_rule_groups membership checks. Domain canonicalization matches handlers'
 // normalizedRuleDomains (db.CanonicalDomains). 同一 (DB,cluster_version) 复用
 // 只读快照；配置写推进版本后重建，失败不缓存。
@@ -797,8 +798,9 @@ func securityEventsLoadMappings() (map[string]securityEventsRuleRef, map[string]
 		return nil, nil, nil, fmt.Errorf("security events: iterate tcp rules: %w", err)
 	}
 
-	// v2.2.0 多策略归因：一个 lb_rule 可绑多个策略，按 policy_id ASC 排序，
-	// 重叠时归因到「绑定顺序第一条」= 最小 policy_id。
+	// v2.2.0 多策略归因：一个 lb_rule 可绑多个策略，按绑定执行序排序
+	// （rank ASC=提交序/顺序编辑序，policy_id ASC 兜底遗留行），
+	// 重叠时归因到「绑定顺序第一条」。
 	bindings := make(map[string][]int)
 	bindRows, err := db.DB.Query(`SELECT rule_caddy_id, policy_id FROM security_policy_bindings ORDER BY rank ASC, policy_id ASC`)
 	if err != nil {
@@ -1559,7 +1561,8 @@ func securityEventsPolicyBlacklistIndex(p *models.SecurityPolicy) models.Securit
 
 // securityEventsAttributePolicy v2.2.0 多策略事件归因：rule_triggered → 查该规则
 // ID 属于哪个策略（custom_rules / CRS 组 / IP ACL 拒绝带匹配，IP 族带事件源 IP
-// 成员精确判定），重叠时取绑定顺序第一条（policy_id ASC 的第一个）——
+// 成员精确判定），重叠时取绑定顺序第一条（绑定执行序：rank ASC=提交序/顺序
+// 编辑序，policy_id ASC 兜底遗留行）——
 // 语义声明：多策略 CRS 重叠时实际执行拦截的引擎实例在 coraza 审计
 // 日志中不可恢复（各策略引擎对同一 CRS 规则 ID 均可产出中断），首绑定归因是摄
 // 取期约定的最接近发射现实的稳定口径，是记账语义而非 forensic 判定；事件页与

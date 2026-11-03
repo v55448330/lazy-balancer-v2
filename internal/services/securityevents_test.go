@@ -3031,7 +3031,8 @@ func TestSecurityEventsAttribution_FallbackModeFeasibilityGate(t *testing.T) {
 		(4,'p-off',1,'off','[]','[]')`); err != nil {
 		t.Fatal(err)
 	}
-	// 绑定加载按 policy_id ASC(securityEventsLoadMappings ORDER BY)——
+	// 绑定加载按绑定执行序（securityEventsLoadMappings ORDER BY rank ASC，
+	// policy_id ASC 兜底；本夹具 rank 缺省行退化为 id ASC）——
 	// 「首候选」= 最小 id;off 策略要作首候选须单独成绑。
 	if _, err := db.DB.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id,policy_id) VALUES
 		('lb_r1',1),('lb_r1',2),

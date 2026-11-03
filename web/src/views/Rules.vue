@@ -1605,7 +1605,7 @@ class CertInfoRefreshError extends Error {
 }
 
 const rules = ref<Rule[]>([])
-// v2.2.0：一规则可绑多策略——/security/bindings 返回 rule_caddy_id → 绑定数组（policy_id ASC）。
+// v2.2.0：一规则可绑多策略——/security/bindings 返回 rule_caddy_id → 绑定数组（rank 序=提交序=执行序；policy_id 仅作遗留 rank=0 行的并列兜底）。
 
 const securityBindings = ref<Record<string, SecurityStageBinding[]>>({})
 // 策略摘要 / IP 名单 / 拦截页类型与投影模型统一定义在 utils/securityStages.ts——

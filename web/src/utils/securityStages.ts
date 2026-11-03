@@ -646,7 +646,8 @@ const buildStage3Rows = (
   return rows
 }
 
-// 三阶段分组投影：bindings 顺序（policy_id ASC）即执行顺序；禁用策略保留显示（灰态由消费方渲染）。
+// 三阶段分组投影：bindings 顺序即执行顺序（读路径按 rank ASC 返回，rank=提交序；
+// policy_id 仅作遗留 rank=0 行的并列兜底）；禁用策略保留显示（灰态由消费方渲染）。
 // ruleEnabled：规则自身的启用态（false=控制面不渲染任何路由，安全链未进入
 // 运行配置）。缺省视为启用——未知态不得宣称「已禁用」。
 export const buildStageModel = (
@@ -1356,6 +1357,105 @@ export function chunkForBulk<T>(items: readonly T[], limit: number): T[][] {
   const chunks: T[][] = []
   for (let i = 0; i < items.length; i += limit) chunks.push(items.slice(i, i + limit))
   return chunks
+}
+
+// ── 绑定链执行序（规则侧展平与向导 orders 合并单源） ──
+// PUT /security/rules/:caddy_id/policies 与 bulk orders 的语义都是「提交序即执行序」
+// （后端按提交序持久化 rank，读路径 GET /security/bindings 返回 rank 序，
+// security.go:5840 ORDER BY rank ASC）。此前规则侧编辑器提交把阶段桶按固定
+// 阶段序聚集展平，会把用户在策略向导自定义的交错执行序静默重置；向导侧
+// orders 载荷取暂存序原样提交，会把暂存未涉及的并发新增成员从整链重建中
+// 静默剔除。两个展平/合并内核收敛到本文件，供组件与 spec 直测共用。
+
+/** 阶段桶：阶段归属 + 该阶段当前选中成员（桶内序 = 用户勾选序，仅对新增成员有意义）。 */
+export interface StageOrderBucket { stage: SecurityPolicyType; ids: readonly number[] }
+
+/**
+ * 规则侧绑定编辑器提交序展平：
+ *  - 基线（props.bindings[rule.caddy_id]，rank 序）中仍被选中的成员按**基线相对
+ *    位次**保留——跨阶段交错序不因阶段桶展平而重置（阶段桶只承载阶段归属展示）；
+ *  - 新增成员（不在基线）插入其阶段在基线序中**首个**同阶段成员之后，同阶段
+ *    多个新增按桶序整体插锚点后（不逆序）；
+ *  - 无同阶段锚点的新增按阶段桶序（stage0→stage3）尾插；
+ *  - 已取消勾选/mixed（不进可写桶）/死引用自动落出；结果防重复（保首见）。
+ * 纯展示性重开 + 零改动保存 → 输出与基线逐位一致（幂等）。
+ */
+export const flattenBindingOrder = (
+  baseline: readonly number[],
+  buckets: readonly StageOrderBucket[],
+): number[] => {
+  const baselineSet = new Set(baseline)
+  const selected = new Set<number>()
+  const selectedStage = new Map<number, SecurityPolicyType>()
+  for (const bucket of buckets) {
+    for (const id of bucket.ids) {
+      selected.add(id)
+      selectedStage.set(id, bucket.stage)
+    }
+  }
+  // 基线保留序：result 成员全部来自选择桶（selectedStage 可查其阶段）——
+  // 锚点查找命中「首个仍被选中的同阶段基线成员」，被取消勾选的成员不充当锚点。
+  const result: number[] = baseline.filter((id) => selected.has(id))
+  const tail: number[] = []
+  for (const bucket of buckets) {
+    const newIds = bucket.ids.filter((id) => !baselineSet.has(id))
+    if (newIds.length === 0) continue
+    // mixed 不进可写桶（调用方构造保证）；防御性无锚点尾插
+    const anchorIdx = bucket.stage === 'mixed'
+      ? -1
+      : result.findIndex((id) => selectedStage.get(id) === bucket.stage)
+    if (anchorIdx >= 0) result.splice(anchorIdx + 1, 0, ...newIds)
+    else tail.push(...newIds)
+  }
+  result.push(...tail)
+  return [...new Set(result)]
+}
+
+/**
+ * 阶段 0 置顶归一单源（与既有组件内 normalizeOrder 同形状）：信任名单（阶段 0）
+ * 恒先于拦截判定，展示与提交序统一置顶；其余成员相对序保持不动。
+ */
+export const normalizePolicyChainOrder = (
+  ids: readonly number[],
+  stageOf: (id: number) => SecurityPolicyType | undefined,
+): number[] => [
+  ...ids.filter((id) => stageOf(id) === 'stage0'),
+  ...ids.filter((id) => stageOf(id) !== 'stage0'),
+]
+
+/**
+ * 向导顺序保存 orders 载荷合并：把 staged 对「打开时基线」的相对重排
+ * 应用到**当前最新基线链**（保存前刷新的 GET /security/bindings + 本次 bulk bind
+ * 结果）。staged 中仍存在于最新链的成员按 staged 相对序保留；最新链中 staged
+ * 未涉及的成员（并发新增/本次新绑定）按策略身份插入——跟在合并结果中**最近
+ * 同阶段成员**之后，无同阶段锚点尾插；staged 中已不在最新链的成员落出。
+ * 最终经阶段 0 置顶归一（与旧 orderedChainPolicyIds 同一不变式）；空 staged
+ * 退化为最新基线归一（与旧 fallback 行为等价）。
+ */
+export const mergeChainOrder = (
+  staged: readonly number[],
+  latestBaseline: readonly number[],
+  stageOf: (id: number) => SecurityPolicyType | undefined,
+): number[] => {
+  const stagedSet = new Set(staged)
+  const latestSet = new Set(latestBaseline)
+  const merged: number[] = staged.filter((id) => latestSet.has(id))
+  for (const id of latestBaseline) {
+    if (stagedSet.has(id)) continue
+    const stage = stageOf(id)
+    let anchor = -1
+    if (stage !== undefined) {
+      for (let i = merged.length - 1; i >= 0; i--) {
+        if (stageOf(merged[i]!) === stage) {
+          anchor = i
+          break
+        }
+      }
+    }
+    if (anchor >= 0) merged.splice(anchor + 1, 0, id)
+    else merged.push(id)
+  }
+  return normalizePolicyChainOrder(merged, stageOf)
 }
 
 /** 数组求交（按 a 顺序、去重）：Set 查表替代 includes——万级名单下避免 O(A×D)。 */

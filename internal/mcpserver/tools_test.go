@@ -256,6 +256,37 @@ func TestMCPToolDescriptionsCurrentContracts(t *testing.T) {
 	}
 }
 
+// 绑定执行序已从 policy_id ASC 迁移为 rank（提交序/
+// 顺序编辑确定，读路径 (rank ASC, policy_id ASC) 兜底遗留行）——工具描述与
+// schema 若仍宣称「按 policy_id ASC 顺序评估」，Agent 会把 policy_id 当调序
+// 手段（改 id 顺序不改变执行序）。钉测：组合描述（一句话+用法）不得再出现
+// policy_id ASC；三个绑定序工具必须携带执行序语义关键词；
+// set_rule_security_policies 的 policy_ids schema 描述同口径。
+func TestSecurityBindingToolDescriptionsUseExecutionOrderSemantics(t *testing.T) {
+	byName := make(map[string]toolSpec, len(tools))
+	for _, spec := range tools {
+		byName[spec.name] = spec
+		if combined := toolDescription(spec); strings.Contains(combined, "policy_id ASC") {
+			t.Errorf("tool %q 描述仍含过时的「policy_id ASC」评估序语义：%q", spec.name, combined)
+		}
+	}
+	for _, name := range []string{"get_rule_security_policy", "bind_security_policy", "set_rule_security_policies"} {
+		spec, ok := byName[name]
+		if !ok {
+			t.Fatalf("tool %q 不在工具注册表", name)
+		}
+		if combined := toolDescription(spec); !strings.Contains(combined, "执行序") {
+			t.Errorf("tool %q 描述缺少执行序语义关键词：%q", name, combined)
+		}
+	}
+	if strings.Contains(setRuleSecurityPoliciesSchema, "policy_id ASC") {
+		t.Errorf("set_rule_security_policies schema 仍含过时的「policy_id ASC」语义：%s", setRuleSecurityPoliciesSchema)
+	}
+	if !strings.Contains(setRuleSecurityPoliciesSchema, "执行序") {
+		t.Errorf("set_rule_security_policies schema 的 policy_ids 描述缺少执行序语义：%s", setRuleSecurityPoliciesSchema)
+	}
+}
+
 func containsString(values []string, target string) bool {
 	for _, value := range values {
 		if value == target {

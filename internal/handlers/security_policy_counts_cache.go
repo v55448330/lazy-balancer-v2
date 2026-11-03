@@ -92,7 +92,7 @@ var querySecurityPolicy24hCounts = func(metricsDB *sql.DB, since string) (securi
 
 // loadSecurityPolicy24hCounts 返回近 24h 每策略的 blocked / 触发（blocked+logged）
 // 计数（命中缓存时零查询）。归因口径同 securityEventsAttributePolicy（多策略 CRS
-// 重叠按 policy_id ASC 首绑定归因）——展示层记账口径，非引擎级判定。
+// 重叠按绑定执行序（rank ASC，policy_id ASC 兜底）首绑定归因）——展示层记账口径，非引擎级判定。
 func loadSecurityPolicy24hCounts(metricsDB *sql.DB, now time.Time) (securityPolicy24hCounts, error) {
 	key := securityPolicy24hCountsKey{metrics: metricsDB, anchor: now.UTC().Format("2006-01-02 15:04")}
 	// 窗口下界与锚点同一时钟来源（now 派生），格式对齐 event_time 落库形态。

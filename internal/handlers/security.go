@@ -838,7 +838,7 @@ func (h *Handlers) ListSecurityPolicies(c *gin.Context) {
 	// policy_id>0 归因行；走 idx_security_events_action_time 索引范围（action 等值 + event_time 范围），单趟扫描）。
 	// blocked_24h 仅计 blocked；trigger_24h 计 blocked+logged（「24h 触发」列口径）。
 	// 归因口径同 securityEventsAttributePolicy：多策略
-	// CRS 重叠时按 policy_id ASC 首绑定归因——实际拦截引擎在审计数据中不可恢复，
+	// CRS 重叠时按绑定执行序（rank ASC，policy_id ASC 兜底）首绑定归因——实际拦截引擎在审计数据中不可恢复，
 	// 计数是归因记账口径而非引擎级判定。
 	blockedCounts := map[int]int{}
 	triggerCounts := map[int]int{}
@@ -3177,6 +3177,15 @@ func (h *Handlers) BulkUpdatePolicyBindings(c *gin.Context) {
 		Reason string `json:"reason"`
 	}
 	skipped := make([]skippedRule, 0)
+	// 顺序留痕：实际应用的规则×全量有序 policy 序列进入审计
+	// 详情与响应 Data——单规则 PUT 端点一直全序留痕（「设置规则 X 的安全策略
+	// 为 [..]」），bulk 此前只有计数，取证时无法还原各规则终态顺序。详情超长
+	// 由 services 侧 auditDetailMaxBytes(4KiB) 单源净化截断护栏兜底。
+	type appliedOrder struct {
+		RuleID    string `json:"rule_id"`
+		PolicyIDs []int  `json:"policy_ids"`
+	}
+	appliedOrders := make([]appliedOrder, 0, len(normalizedOrders))
 	for _, ruleCaddyID := range orderRules {
 		ids, ok := normalizedOrders[ruleCaddyID]
 		if !ok {
@@ -3225,16 +3234,29 @@ func (h *Handlers) BulkUpdatePolicyBindings(c *gin.Context) {
 			continue
 		}
 		orderedChanged++
+		appliedOrders = append(appliedOrders, appliedOrder{RuleID: ruleCaddyID, PolicyIDs: ids})
+	}
+	auditDetail := fmt.Sprintf("策略 %d 批量更新绑定：绑定 %d 条、解绑 %d 条、顺序应用 %d 条（不变 %d 条，跳过 %d 条）",
+		policyID, boundChanged, unboundChanged, orderedChanged, orderedUnchanged, len(skipped))
+	if len(appliedOrders) > 0 {
+		segments := make([]string, 0, len(appliedOrders))
+		for _, applied := range appliedOrders {
+			idStrs := make([]string, len(applied.PolicyIDs))
+			for i, id := range applied.PolicyIDs {
+				idStrs[i] = strconv.Itoa(id)
+			}
+			segments = append(segments, applied.RuleID+"→["+strings.Join(idStrs, ",")+"]")
+		}
+		auditDetail += "；顺序应用：" + strings.Join(segments, "; ")
 	}
 	h.finishTxApply(c, tx, txApplyFinish{
 		Resource: "安全策略", AuditAction: "更新",
-		AuditDetail: fmt.Sprintf("策略 %d 批量更新绑定：绑定 %d 条、解绑 %d 条、顺序应用 %d 条（不变 %d 条，跳过 %d 条）",
-			policyID, boundChanged, unboundChanged, orderedChanged, orderedUnchanged, len(skipped)),
-		SuccessMsg: "策略绑定批量更新完成",
+		AuditDetail: auditDetail,
+		SuccessMsg:  "策略绑定批量更新完成",
 		Data: gin.H{
 			"bound": boundChanged, "unbound": unboundChanged,
 			"ordered": orderedChanged, "unchanged": orderedUnchanged,
-			"skipped": skipped,
+			"skipped": skipped, "orders": appliedOrders,
 		},
 	})
 }

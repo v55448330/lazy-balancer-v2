@@ -470,7 +470,7 @@
                           type="info"
                           effect="plain"
                           class="exclusion-target-ghost"
-                          :title="row.target"
+                          :title="exclusionRowGhostTitle(row.target)"
                           :closable="!crsFieldsOff && !isReadOnly"
                           :disable-transitions="true"
                           @close="row.target = ''"
@@ -887,7 +887,7 @@
                 <span class="rule-picker-name">{{ rule.name }}</span>
                 <span class="rule-picker-meta">{{ rule.domain || '-' }}:{{ rule.listen_port }}</span>
               </el-checkbox>
-              <!-- 每条候选规则展示当前绑定链（policy_id ASC，1-based）与本策略落点；
+              <!-- 每条候选规则展示当前绑定链（rank 序=执行序，1-based）与本策略落点；
                    后端必然拒绝的形态（绑定条数上限 / 阶段 2 限流唯一门）在选择阶段
                    禁用并逐条说明原因——冲突在整批提交时会让本片全部失败。 -->
               <div class="rule-binding-preview">
@@ -987,7 +987,7 @@ import SecurityBindingEditor from '@/components/SecurityBindingEditor.vue'
 import DialogHeader from '@/components/DialogHeader.vue'
 import DialogSectionHeader from '@/components/DialogSectionHeader.vue'
 import AccessibleLink from '@/components/common/AccessibleLink.vue'
-import { POLICY_TYPE_LABELS, POLICY_TYPE_SHORT_LABELS, STAGE_BLOCK_STATUS_OPTIONS, addressAllowDenyConflictText, blockPageMissing, blockPageStageCanIntercept, buildStageModel, chunkForBulk, customRuleCanBlockInMode, entriesIntersect, ensureSharedEntries, formatAclModeDetail, hasGeoIPControl, hasIPACLControl, hasOtherStage2Binding, hasStage3Features, hasTrustEntries, inferPolicyType, mergeIpEntryCount, mergeIpEntryValues, parseCrsFilename, parseIPList, parseRefIds, parseUnknownIds, parseUnknownStrings, pickDefaultPolicyTab, sharedEntriesCache, subscribeSharedEntriesCache, trustHitMode, wafModeLabel, IP_LIST_CATEGORIES, MAX_POLICIES_PER_RULE, policySupportsTcp, TCP_BIND_UNSUPPORTED_REASON, SECURITY_BULK_LIMITS, resolveBlockPageAttribution, type BlockPageAttribution, type BlockPageChainPolicy, type BlockPageStage } from '@/utils/securityStages'
+import { POLICY_TYPE_LABELS, POLICY_TYPE_SHORT_LABELS, STAGE_BLOCK_STATUS_OPTIONS, addressAllowDenyConflictText, blockPageMissing, blockPageStageCanIntercept, buildStageModel, chunkForBulk, customRuleCanBlockInMode, entriesIntersect, ensureSharedEntries, formatAclModeDetail, hasGeoIPControl, hasIPACLControl, hasOtherStage2Binding, hasStage3Features, hasTrustEntries, inferPolicyType, mergeChainOrder, mergeIpEntryCount, mergeIpEntryValues, normalizePolicyChainOrder, parseCrsFilename, parseIPList, parseRefIds, parseUnknownIds, parseUnknownStrings, pickDefaultPolicyTab, sharedEntriesCache, subscribeSharedEntriesCache, trustHitMode, wafModeLabel, IP_LIST_CATEGORIES, MAX_POLICIES_PER_RULE, policySupportsTcp, TCP_BIND_UNSUPPORTED_REASON, SECURITY_BULK_LIMITS, resolveBlockPageAttribution, type BlockPageAttribution, type BlockPageChainPolicy, type BlockPageStage } from '@/utils/securityStages'
 import type { RuleStageModel, SecurityPolicyType, SecurityStagePolicy, SecurityStageCustomRule, CrsRuleFileOption } from '@/utils/securityStages'
 import { fetchAllCrsRuleFiles } from '@/utils/crsRuleFiles'
 import { updaterName } from '@/utils/updaterName'
@@ -1001,7 +1001,8 @@ import { activateOnce } from '@/utils/keyboardActivate'
 interface PolicyDetail { id: number; name: string; description: string; mode: string; anomaly_threshold: number; ip_acl_mode: string; ip_acl_list: string; ip_acl_enabled: boolean; ip_whitelist: string; ip_whitelist_enabled?: boolean; ip_blacklist?: string; ip_acl_list_refs?: string; ip_whitelist_refs?: string; rate_limit_enabled: boolean; rate_limit_rps: number; rate_limit_burst: number; crs_rule_groups: string; crs_excluded_rules: string; custom_rules: string; block_page_id: number; block_status_code: number; enabled: boolean; updated_at: string; geoip_mode?: string; geoip_countries?: string; geoip_crawler_exempt?: boolean; geoip_crawler_engines?: string; waf_check_response?: boolean; log_request_body?: boolean; trust_detection?: boolean }
 // 规则行消费面（关联规则行内执行序/投影数据源；协议与域名等展示字段）
 interface Rule { caddy_id: string; name: string; domain: string; listen_port: number; protocol: string }
-// v2.2.0 多策略绑定：/security/bindings 的值从单 BindingInfo 改为数组（policy_id ASC）
+// v2.2.0 多策略绑定：/security/bindings 的值从单 BindingInfo 改为数组（rank 序=执行序；
+// policy_id 仅作遗留 rank=0 行的并列兜底）
 interface BindingInfo { policy_id: number; name: string; mode: string; enabled: boolean; rate_limit_enabled: boolean; block_page_id?: number; block_status_code?: number }
 // GET /security/rules/:caddy_id/policy 直接序列化 models.SecurityPolicy——json.RawMessage
 // 字段以原生 JSON（数组）出现，与策略详情接口的字符串形态不同，按 unknown 接收再解析。
@@ -1177,7 +1178,7 @@ const stage3ChipOn = (row: PolicySummary): boolean => {
 
 // 阶段 0 排位语义（浏览器实证修正）：阶段 0 不在评估链内，绑定链上的 stage0 条目
 // 不显示序数——本策略/其他 stage0 策略统一标注「阶段 0·拦截判定前优先生效」；
-// stage1/2/3/mixed 保持「N.名称」序数（评估序 policy_id ASC）
+// stage1/2/3/mixed 保持「N.名称」序数（评估序=绑定链 rank 序）
 const isStage0ChainEntry = (entry: ChainEntry): boolean => {
   if (entry.isSelf) return editorPolicyType.value === 'stage0'
   const policy = policies.value.find((p) => p.id === entry.policyId)
@@ -1245,11 +1246,9 @@ const serverChainOrder = (caddyId: string): number[] => {
 }
 
 // 阶段 0（信任）恒先于拦截判定：展示与提交序统一把阶段 0 置顶，其余按 rank 序。
-const normalizeOrder = (ids: number[]): number[] => {
-  const stage0 = ids.filter((id) => policyTypeById.value.get(id) === 'stage0')
-  const rest = ids.filter((id) => policyTypeById.value.get(id) !== 'stage0')
-  return [...stage0, ...rest]
-}
+// 归一内核单源 normalizePolicyChainOrder（utils，与 mergeChainOrder 共用同一形状）。
+const normalizeOrder = (ids: number[]): number[] =>
+  normalizePolicyChainOrder(ids, (id) => policyTypeById.value.get(id))
 
 // 展示/提交用的有序链：暂存序优先，否则按服务端基线（阶段 0 置顶）。
 const orderedChainPolicyIds = (caddyId: string): number[] =>
@@ -1279,6 +1278,12 @@ const moveSelfInChain = (caddyId: string, direction: -1 | 1): void => {
   const tmp = next[pos]!
   next[pos] = next[target]!
   next[target] = tmp
+  // 归一还原检测：相邻为信任名单（阶段 0）×非阶段 0 时，交换会被
+  // 阶段 0 置顶归一还原（触发顺序不变）——保留现状行为（不硬禁用、暂存照常
+  // 写入），给 info 反馈代替零反馈的无效点击。
+  if (JSON.stringify(normalizeOrder(next)) === JSON.stringify(normalizeOrder(order))) {
+    ElMessage.info('相邻为信任名单策略（阶段 0 恒置顶），交换不改变触发顺序')
+  }
   bindingOrderEdits.value = { ...bindingOrderEdits.value, [caddyId]: next }
 }
 
@@ -1917,6 +1922,9 @@ const hasResponsePhaseGroupWithoutCheck = computed(
   () => (form.value.mode === 'blocking' || form.value.mode === 'detection') && !form.value.waf_check_response && crsRuleGroups.value.some((g) => crsResponsePhaseGroupCodes.includes(g)),
 )
 
+// 区间遗留形态（6 位数字 a-b / a:b）单源判定：评估组排除交集判定与排除行
+// ghost 释义共用同一正则（两个消费面必须对「什么算区间形态」口径一致）。
+const CRS_RANGE_TARGET_RE = /^(\d{6})\s*[-:]\s*(\d{6})$/
 // 拦截评估规则（949 请求阻断评估 / 959 响应评估）排除判定：拦截模式下这两组负责
 // 按异常阈值执行阻断，排除后阈值拦截失效。目标形态覆盖两位组号 49/59、949xxx/959xxx
 // 六位规则 ID、REQUEST-949-*/-* 文件名，以及与 949000-949999 /
@@ -1928,7 +1936,7 @@ const isEvalGroupExclusionTarget = (target: string): boolean => {
   if (/^\d{6}$/.test(t)) return t.startsWith('949') || t.startsWith('959')
   const fileInfo = parseCrsFilename(t)
   if (fileInfo && (fileInfo.code === '49' || fileInfo.code === '59')) return true
-  const rangeMatch = /^(\d{6})\s*[-:]\s*(\d{6})$/.exec(t)
+  const rangeMatch = CRS_RANGE_TARGET_RE.exec(t)
   if (rangeMatch) {
     const lo = Number(rangeMatch[1])
     const hi = Number(rangeMatch[2])
@@ -2116,7 +2124,10 @@ const serializedExcludedRules = computed<SerializedExcludedRow[]>(() => {
     const target = row.target.trim()
     const path = row.path.trim()
     if (target === '' && row.ips.length === 0 && row.listRefs.length === 0 && path === '') continue
-    const key = `${target}\u0000${row.scope}\u0000${row.ips.join(',')}\u0000${row.listRefs.join(',')}\u0000${path}`
+    // 去重键归一：ips/listRefs 排序后参与键——元素相同仅顺序不同的行视为
+    // 同条（与后端 dedupeCRSExcludedEntries 的 refs 排序键同族口径；ips 侧后端按
+    // 字面键兜底无害，本键在 FE 侧收敛）。仅键归一：下方载荷保持用户输入序。
+    const key = `${target}\u0000${row.scope}\u0000${[...row.ips].sort().join(',')}\u0000${[...row.listRefs].sort((a, b) => a - b).join(',')}\u0000${path}`
     if (seen.has(key)) continue
     seen.add(key)
     // 序列化按 scope 剥离非当前作用域的残留——
@@ -2194,6 +2205,21 @@ const exclusionRowGhostLabel = (target: string): string => {
   return crsGhostOptionFor(v)?.label ?? exclusionTargetLabel(v)
 }
 
+// 排除行 ghost 标签的 title 释义：区间遗留形态（如「942100-942199」手输，
+// 旧字符串数组存储的常见形态）按字面保存并按字面下发——scope=all 走
+// SecRuleRemoveById 原生区间（security.go scopeAllTargets 逐条直出，不展开为
+// 规则组内全部规则 ID），作用域限定（指定 IP/地址列表/路径）不支持区间目标
+// （保存侧已拒，后端口径「仅 scope=all」）；其余不可映射值维持裸值 title
+// （现状行为不变）。返回空串仅当 ghost 标签本身不渲染。
+const exclusionRowGhostTitle = (target: string): string => {
+  const v = target.trim()
+  if (v === '' || crsValueToPath(v, 'exclusion') !== null) return ''
+  if (CRS_RANGE_TARGET_RE.test(v)) {
+    return '区间遗留形态：按字面保存并按字面下发（SecRuleRemoveById 区间），不展开为规则组内全部规则 ID；作用域仅支持全部 IP'
+  }
+  return v
+}
+
 
 
 // CRS 配置面禁用门(2026-09-09 四态化):off=全关、custom_only=仅自定义,两者 CRS 均不生效
@@ -2242,7 +2268,7 @@ const aclListTip = computed(() => (hasOwn(ACL_MODE_TIPS, form.value.ip_acl_mode)
 const geoipRegionCount = (row: PolicySummary): number => parseIPList(row.geoip_countries).length
 
 
-// /security/bindings 以 rule_caddy_id 为键（v2.2.0 起值为绑定数组，policy_id ASC），
+// /security/bindings 以 rule_caddy_id 为键（v2.2.0 起值为绑定数组，rank 序=执行序），
 // 反转为 policy_id → 规则列表供列表 tooltip 使用
 const policyRulesMap = computed(() => {
   const map = new Map<number, Rule[]>()
@@ -2380,7 +2406,7 @@ const handlePickerSelectAll = (checked: string | number | boolean): void => {
   pickerSelected.value = pickerSelected.value.filter((id) => !selectableIdSet.has(id))
 }
 
-// 拦截页面 = 首绑策略的页面（启用策略中 policy_id 最小者）；单规则最多
+// 拦截页面 = 首绑策略的页面（执行序首个有页策略）；单规则最多
 // MAX_POLICIES_PER_RULE 条（securityStages 单源，与后端 maxBindingsPerRule 同口径）；
 // security_policies.id 为 AUTOINCREMENT——新建策略的 ID 必然大于全部现存策略，
 // 因此新建策略在任何规则的绑定链上都落在末位。
@@ -3534,7 +3560,18 @@ const handleSave = async () => {
     const skippedOrderNotes: string[] = []
     for (const ids of chunkForBulk(orderEditedRules.value, SECURITY_BULK_LIMITS.policyBindings)) {
       const orders: Record<string, number[]> = {}
-      for (const caddyId of ids) orders[caddyId] = orderedChainPolicyIds(caddyId)
+      // orders 合并：staged 对「打开时基线」的重排应用到**最新基线链**
+      // （serverChainOrder 读保存前刷新的 securityBindings 快照）——整链重建语义
+      // 下，staged 未涉及的并发新增/本次 bulk bind 新绑定成员不再被静默剔除，
+      // 按其阶段锚定最近同阶段成员后（无锚点尾插）；staged 相对序与阶段 0 置顶
+      // 归一不变式由 mergeChainOrder 单源保证。
+      for (const caddyId of ids) {
+        orders[caddyId] = mergeChainOrder(
+          bindingOrderEdits.value[caddyId] ?? [],
+          serverChainOrder(caddyId),
+          (id) => policyTypeById.value.get(id),
+        )
+      }
       try {
         const res = await request.post<APIResponse<{ ordered?: number; unchanged?: number; skipped?: Array<{ rule_id: string; reason: string }> }>>(`/security/policies/${editingId.value}/bindings/bulk`, {
           bind: [],

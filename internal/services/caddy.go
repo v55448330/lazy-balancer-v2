@@ -1546,7 +1546,7 @@ type caddyConfigStore interface {
 }
 
 // securityPolicyContext 是生成期批量预载的安全策略状态：每个规则绑定的全部
-// 启用策略（policy_id ASC，v2.2.0 多策略绑定，与 GetSecurityPoliciesForRule
+// 启用策略（rank ASC=绑定执行序，policy_id ASC 兜底，与 GetSecurityPoliciesForRule
 // 同口径）以及策略引用的品牌拦截页内容。经与规则/上游同一 store（事务时即 tx）
 // 预载，事务内生成可读到未提交的策略变更，替代此前逐规则走全局 db.DB 的 N+1 查询。
 type securityPolicyContext struct {
@@ -1649,11 +1649,11 @@ func (ctx *securityPolicyContext) crsPoolFingerprintCached() string {
 
 // loadSecurityPolicyContext 一次性查询 security_policy_bindings +
 // security_policies（仅启用策略）+ security_block_pages，构建
-// ruleCaddyID → 启用策略切片（policy_id ASC）映射与 block_page_id → content
+// ruleCaddyID → 启用策略切片（rank ASC=绑定执行序）映射与 block_page_id → content
 // 映射。查询次数与规则数无关（常数级：最多 3 次 Query）。
-// v2.2.0 多策略绑定：与 GetSecurityPoliciesForRule 严格同构——绑定按
-// policy_id ASC 全量取出，策略按 id 批量查询并过滤 enabled，逐规则按 ASC
-// 顺序收集启用策略（禁用绑定仅占位，不产生元素）。
+// 多策略绑定：与 GetSecurityPoliciesForRule 严格同构——绑定按 rank ASC
+// 全量取出，策略按 id 批量查询并过滤 enabled，逐规则按执行序收集启用策略
+// （禁用绑定仅占位，不产生元素）。
 func loadSecurityPolicyContext(store caddyConfigStore) (*securityPolicyContext, error) {
 	// CRS 树交换窗口互斥：窗口内 rules 树可能整体缺失（RemoveAll 后、rename
 	// 前）或只拷入一部分（copyDir 回退中断）。前者会让「缺库降级」路径成功
@@ -1828,7 +1828,7 @@ const (
 	blockPageSyntheticMax  = 599
 )
 
-// policiesForRule 返回规则绑定的全部启用安全策略（policy_id ASC）：批量预载
+// policiesForRule 返回规则绑定的全部启用安全策略（rank ASC=绑定执行序）：批量预载
 // 上下文存在时查映射，否则回退单规则查询（GenerateSingleRuleCaddyConfig/
 // generateHTTPRouteObjects 等非批量路径）。无绑定或全部禁用时返回 nil。
 func policiesForRule(ctx *securityPolicyContext, ruleCaddyID string) []*models.SecurityPolicy {
@@ -4116,7 +4116,7 @@ func firstPolicyWithBlockPage(policies []*models.SecurityPolicy, pages map[int]s
 }
 
 // buildBlockPageErrorRoute 是拦截页归因后的**兜底**错误路由（403 通用，
-// host 限定本规则域名）：渲染首绑定（最低 policy_id）配置了拦截页的启用
+// host 限定本规则域名）：渲染执行序首个配置了拦截页的启用
 // 策略的页面。承接两类无法归因到单策略的中断——多策略 IP 预检的合并拦截
 // （buildIPPrecheckDirectives 保持 status:403，见该函数注释）与未分配合成
 // 码策略（无有效页/超区间上限）的 deny 中断；已分配合成码策略的中断由
@@ -4502,7 +4502,7 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig, sec
 		"handler":  "request_body",
 		"max_size": int64(effectiveRequestBodyMaxSizeMB) * 1024 * 1024,
 	})
-	// 阶段 2（限流）→ 阶段 3（WAF）：全部绑定启用策略（policy_id ASC）的
+	// 阶段 2（限流）→ 阶段 3（WAF）：全部绑定启用策略（rank ASC=绑定执行序）的
 	// rate_limit 集中在所有 WAF 引擎之前（限流恒 429；被前位 WAF 拦的请求也
 	// 消耗后位策略配额为已裁定口径），随后每策略独立 coraza 引擎（自定义规则
 	// 审计 +：CRS 池指纹按渲染批次缓存——批量预载上下文在场时一次求值

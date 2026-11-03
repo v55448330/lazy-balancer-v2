@@ -314,7 +314,7 @@ func TestUnbindRuleFromPolicy_removesOnlyTargetRow(t *testing.T) {
 	assertIDSlice(t, queryBoundPolicyIDs(t, "lb_mp_unbind"), []int{policyB})
 }
 
-// GET /security/rules/:caddy_id/policy 返回 []policy 按 id ASC。
+// GET /security/rules/:caddy_id/policy 返回 []policy 按绑定执行序（rank ASC=PUT 请求序）。
 func TestGetSecurityPolicyBindings_returnsOrderedArray(t *testing.T) {
 	setupSecurityPolicyTestDB(t)
 	router := newMultiPolicyRouter(t)
@@ -377,7 +377,7 @@ func TestGetSecurityPolicyBindings_emptyArrayWhenNoBindings(t *testing.T) {
 	}
 }
 
-// GET /security/bindings 返回 map[string][]BindingInfo 按 policy_id ASC。
+// GET /security/bindings 返回 map[string][]BindingInfo，数组按绑定执行序（rank ASC=PUT 请求序）。
 func TestGetAllSecurityBindings_returnsArrayPerRule(t *testing.T) {
 	setupSecurityPolicyTestDB(t)
 	router := newMultiPolicyRouter(t)
@@ -517,7 +517,7 @@ func TestSetRuleSecurityPolicies_emptyArrayUnbindsAll(t *testing.T) {
 	}
 }
 
-// 排序边界：POST additive 乱序绑定（先绑高 id 再绑低 id），两个 GET 端点仍按 policy_id ASC 返回。
+// 排序边界：POST additive 乱序绑定（先绑高 id 再绑低 id），两个 GET 端点按绑定执行序（rank ASC=请求序）返回。
 func TestBindRuleToPolicy_outOfOrderBindStillReadsASC(t *testing.T) {
 	// Given 两条策略（pLow < pHigh，按创建序天然成立）
 	setupSecurityPolicyTestDB(t)
@@ -537,7 +537,7 @@ func TestBindRuleToPolicy_outOfOrderBindStillReadsASC(t *testing.T) {
 		t.Fatalf("bind low status=%d body=%s", r.Code, r.Body.String())
 	}
 
-	// Then GET /security/rules/:caddy_id/policy 按 policy_id ASC
+	// Then GET /security/rules/:caddy_id/policy 按绑定执行序（rank ASC=请求序）
 	recorder := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/security/rules/lb_mp_ooo/policy", nil)
 	router.ServeHTTP(recorder, req)
@@ -1237,5 +1237,69 @@ func TestBulkUpdatePolicyBindings_ordersApplyAndIdempotent(t *testing.T) {
 		map[string]any{"bind": []string{"lb_mp_orders"}, "orders": map[string]any{"lb_mp_orders": []int{p3, p1, p2}}})
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("conflict status=%d body=%s, want 400", rec.Code, rec.Body.String())
+	}
+}
+
+// bulk orders 此前审计只记「顺序应用 N 条」计数，
+// 各规则终态顺序不可取证——单规则 PUT 端点一直全序留痕（「设置规则 X 的安全
+// 策略为 [..]」），bulk 必须对齐形态。钉测：orders 应用后审计 detail 必须含
+// 规则 id 与完整有序 policy 序列（规则×顺序），响应 Data 同步携带 orders 明细。
+func TestBulkUpdatePolicyBindings_ordersAuditCarriesRuleSequences(t *testing.T) {
+	setupSecurityPolicyTestDB(t)
+	router := newMultiPolicyRouter(t)
+	seedHTTPRule(t, "lb_ord_a")
+	seedHTTPRule(t, "lb_ord_b")
+	p1 := createMultiPolicy(t, router, "策略1")
+	p2 := createMultiPolicy(t, router, "策略2")
+	p3 := createMultiPolicy(t, router, "策略3")
+	if r := putMultiJSON(t, router, "/security/rules/lb_ord_a/policies", map[string]any{"policy_ids": []int{p1, p2, p3}}); r.Code != http.StatusOK {
+		t.Fatalf("PUT lb_ord_a status=%d body=%s", r.Code, r.Body.String())
+	}
+	if r := putMultiJSON(t, router, "/security/rules/lb_ord_b/policies", map[string]any{"policy_ids": []int{p2, p1}}); r.Code != http.StatusOK {
+		t.Fatalf("PUT lb_ord_b status=%d body=%s", r.Code, r.Body.String())
+	}
+
+	rec := postJSON(t, router, "/security/policies/"+strconv.Itoa(p2)+"/bindings/bulk",
+		map[string]any{"orders": map[string]any{
+			"lb_ord_a": []int{p3, p1, p2},
+			"lb_ord_b": []int{p1, p2},
+		}})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("bulk orders status=%d body=%s, want 200", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Code int `json:"code"`
+		Data struct {
+			Ordered int `json:"ordered"`
+			Orders  []struct {
+				RuleID    string `json:"rule_id"`
+				PolicyIDs []int  `json:"policy_ids"`
+			} `json:"orders"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("parse bulk response %s: %v", rec.Body.String(), err)
+	}
+	if resp.Data.Ordered != 2 {
+		t.Fatalf("ordered=%d, want 2", resp.Data.Ordered)
+	}
+	if len(resp.Data.Orders) != 2 {
+		t.Fatalf("Data.orders=%v, want 2 条规则×顺序明细", resp.Data.Orders)
+	}
+	ordersByRule := map[string][]int{}
+	for _, applied := range resp.Data.Orders {
+		ordersByRule[applied.RuleID] = applied.PolicyIDs
+	}
+	assertIDSlice(t, ordersByRule["lb_ord_a"], []int{p3, p1, p2})
+	assertIDSlice(t, ordersByRule["lb_ord_b"], []int{p1, p2})
+
+	detail := latestAuditDetail(t, "更新", "安全策略")
+	for _, want := range []string{
+		fmt.Sprintf("lb_ord_a→[%d,%d,%d]", p3, p1, p2),
+		fmt.Sprintf("lb_ord_b→[%d,%d]", p1, p2),
+	} {
+		if !strings.Contains(detail, want) {
+			t.Fatalf("审计 detail=%q, want 含 %q（规则×全量有序序列留痕）", detail, want)
+		}
 	}
 }

@@ -141,7 +141,7 @@ test('绑定执行序：暂存上移/下移，保存收尾随批量端点 orders
   const tail = section(page, 'const bindResponses', 'const mergedBind')
   assert.match(tail, /bindings\/bulk`[\s\S]{0,400}orders/, '执行序必须随批量端点 orders 单事务提交')
   assert.match(tail, /chunkForBulk\(orderEditedRules\.value/, 'orders 超上限必须分片提交')
-  assert.match(tail, /policy_ids|orderedChainPolicyIds\(caddyId\)/, 'orders 必须携带完整有序 policy_id 列表')
+  assert.match(tail, /policy_ids|orderedChainPolicyIds\(caddyId\)|mergeChainOrder\(/, 'orders 必须携带完整有序 policy_id 列表')
   // 单规则校验失败进 skipped 不整体拒绝：坏规则保持暂存待重试，好规则即时清标记
   assert.match(tail, /skipped/, 'skipped 必须被消费（坏规则保暂存）')
   assert.match(tail, /保持「顺序待保存」|保持待重试|重新点击保存可重试/, 'skipped 规则必须有可重试口径')

@@ -97,7 +97,7 @@ func scanSecurityPolicyByID(policyID int) *models.SecurityPolicy {
 }
 
 // GetSecurityPoliciesForRule returns all enabled policies bound to a rule,
-// ordered by policy_id ASC ( v2.2.0 multi-policy binding).
+// ordered by rank ASC (binding execution order; policy_id ASC as legacy tiebreak).
 // 先收集 policy_id 并关闭 rows，再做逐条策略
 // 加载与引用解析——旧实现在 rows 打开期间嵌套 QueryRow/批量查询，db.DB
 // 连接池（上限 10）打满即互相等待永久阻塞（无 context 超时）。

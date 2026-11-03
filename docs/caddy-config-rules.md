@@ -184,7 +184,7 @@ GeoIP 打标不在主路由的 `handle` 链内。任一绑定策略启用地域�
    - **lb_security_timing_pre**：预检之后、请求体处理与策略评估之前的分段计时收点
    - **encode**（压缩）：启用压缩且包含 gzip/zstd 时发射，位于全部 waf 处理器外侧
    - **request_body**：先于全部 waf 处理器限制请求体
-   - **rate_limit / waf**：全部启用策略的限流先集中发射，再按 policy_id ASC 发射各策略 WAF
+   - **rate_limit / waf**：全部启用策略的限流先集中发射，再按绑定执行序（rank ASC=提交序/顺序编辑序，policy_id ASC 兜底遗留行）发射各策略 WAF
    - **lb_security_timing_end**：安全段末尾的计时收点
 5. **headers**（Server 头隐藏）：server_tokens_hidden 时 deferred 删除 Server 响应头（须推迟到上游响应写入之后）。规则级 `server_tokens_hidden`（0=随全局 / 1=隐藏 / 2=显示）为 **API/MCP 预留字段，无 UI 入口、不作为产品功能维护**；管理面板仅提供全局开关（基础设置），UI 规则编辑仅透传保留 API 已设值
 6. **map**（逐上游回源域名）：静态上游配置 origin_domain 时，在 reverse_proxy 前发射 dial→origin_domain 映射，晚绑定生成 Host/SNI 占位符

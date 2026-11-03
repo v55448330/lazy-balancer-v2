@@ -182,6 +182,7 @@ import {
   chunkForBulk,
   SECURITY_BULK_LIMITS,
   MAX_POLICIES_PER_RULE,
+  flattenBindingOrder,
 } from '@/utils/securityStages'
 import type {
   SecurityPolicyType,
@@ -225,7 +226,7 @@ const emit = defineEmits<{
 
 const bindSubtitle = computed(() =>
   props.mode === 'rule'
-    ? `${props.rule?.name ?? ''} · 按阶段分区选择，多条策略按阶段 0→3 顺序、同阶段内按策略 ID 升序执行`
+    ? `${props.rule?.name ?? ''} · 按阶段分区选择；已绑定策略保持当前执行序（含向导自定义交错序），新增策略插入其阶段首个已绑成员之后`
     : `${props.policyName ?? ''} · 选择要绑定该策略的规则（全量重置该策略的绑定集；TCP 规则仅可绑阶段 0/1 策略）`
 )
 
@@ -437,10 +438,23 @@ const submit = async (): Promise<void> => {
     try {
       // mixed 不携带提交：后端按提交集全量替换绑定（携带 mixed 会被拒绝，不含
       // mixed 的提交会静默剥离）；存在已绑 mixed 时保存按钮已禁用，不会走到这里。
+      // 提交序 = 基线执行序保留：PUT 语义是「提交序即执行序」，基线
+      // （props.bindings rank 序）中仍被选中的成员按基线相对位次展平——用户在
+      // 策略向导自定义的交错执行序不再被阶段聚集展平静默重置；新增成员锚定其
+      // 阶段首个已绑基线成员之后（无锚点按阶段桶序尾插）；阶段 2 唯一门仍按
+      // 界面可见首条切片。零改动保存 → 提交序与基线逐位一致（幂等）。
       // 响应经 showSaveResult 统一呈现：退化 200（DB 已提交
       // 但 Caddy 应用失败）带 message 后缀时必须常驻警告，原实现丢弃返回值。
       const res = await request.put<APIResponse>(`/security/rules/${encodeURIComponent(rule.caddy_id)}/policies`, {
-        policy_ids: [...bindStage0.value, ...bindStage1.value, ...bindStage2.value.slice(0, 1), ...bindStage3.value],
+        policy_ids: flattenBindingOrder(
+          (props.bindings[rule.caddy_id] || []).map((b) => b.policy_id),
+          [
+            { stage: 'stage0', ids: bindStage0.value },
+            { stage: 'stage1', ids: bindStage1.value },
+            { stage: 'stage2', ids: bindStage2.value.slice(0, 1) },
+            { stage: 'stage3', ids: bindStage3.value },
+          ],
+        ),
       })
       showSaveResult(res, '安全策略绑定已保存')
       emit('update:modelValue', false)
