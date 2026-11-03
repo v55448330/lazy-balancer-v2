@@ -2916,8 +2916,6 @@ const capableAttributions = (chain: ChainEntry[]): BlockPageAttribution[] => {
     .map((stage) => resolveBlockPageAttribution(stage, attributionInput(chain)))
 }
 
-// 关联规则行内归属紧凑标识（两态小标签，用户验收裁定：不再每行重复整句）。
-
 // 关联规则步骤归属汇总行（单源派生）：兜底目标名在全部规则一致时点名，否则泛指。
 const bindingsSummaryLine = computed<string>(() => {
   const total = boundRuleRows.value.length

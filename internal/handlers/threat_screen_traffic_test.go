@@ -112,8 +112,10 @@ func TestGetThreatScreenTraffic_adminUnavailableDegrades(t *testing.T) {
 
 func TestGetThreatScreenTraffic_timeoutGuard(t *testing.T) {
 	// Given: admin 挂起（超时保护 2s 生效，不阻塞大屏轮询协程）
+	// 挂起时长取 2.5s：须大于 2s 超时守卫（守卫先生效），又尽量缩短
+	// t.Cleanup 等待 handler 睡满的尾延迟。
 	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		time.Sleep(3 * time.Second)
+		time.Sleep(2500 * time.Millisecond)
 	}))
 	t.Cleanup(slow.Close)
 	router := newTrafficProxyRouter(t, slow.URL)

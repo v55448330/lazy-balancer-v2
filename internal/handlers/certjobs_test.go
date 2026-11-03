@@ -1701,12 +1701,23 @@ func TestRetryCertJob_failedCooldownManualOverride(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s, want 200（failed 冷却中手动重签放行）", response.Code, response.Body.String())
 	}
-	var auditCount int
-	if err := db.AuditDB.QueryRow(`SELECT COUNT(*) FROM audit_log WHERE action='重试失败' AND detail LIKE '%越过失败冷却%'`).Scan(&auditCount); err != nil {
+	// 越冷提示走「重试」动作的成功通道，详情携带
+	// cooldown_override 语义（结果：越过失败冷却）——同一操作不再先记
+	// 「重试失败」再记「重试」自相矛盾，提示行与真实失败行可区分。
+	var hintCount int
+	if err := db.AuditDB.QueryRow(`SELECT COUNT(*) FROM audit_log
+		WHERE action='重试' AND resource='证书任务' AND detail LIKE '%越过失败冷却%' AND detail LIKE '%结果：越过失败冷却%'`).Scan(&hintCount); err != nil {
 		t.Fatalf("read audit: %v", err)
 	}
-	if auditCount != 1 {
-		t.Fatalf("audit=%d, want 1（越过失败冷却必须留痕）", auditCount)
+	if hintCount != 1 {
+		t.Fatalf("audit=%d, want 1（越冷提示=「重试」动作+结果：越过失败冷却，非失败行）", hintCount)
+	}
+	var failureCount int
+	if err := db.AuditDB.QueryRow(`SELECT COUNT(*) FROM audit_log WHERE action='重试失败' AND detail LIKE '%越过失败冷却%'`).Scan(&failureCount); err != nil {
+		t.Fatalf("read audit: %v", err)
+	}
+	if failureCount != 0 {
+		t.Fatalf("audit=%d, want 0（越冷提示不得记成「重试失败」失败行）", failureCount)
 	}
 
 	// 回归：在途（queued 执行中）仍按状态拒绝——重签放开不波及在途/退役。
@@ -1714,5 +1725,15 @@ func TestRetryCertJob_failedCooldownManualOverride(t *testing.T) {
 	router.ServeHTTP(response2, httptest.NewRequest(http.MethodPost, "/jobs/2/retry", nil))
 	if response2.Code != http.StatusTooManyRequests {
 		t.Fatalf("status=%d, want 429（在途任务不放开）", response2.Code)
+	}
+	// 真实失败路径回归钉：非越冷原因被拒（在途 429）仍是「重试失败」+
+	// 结果：冷却中，形态不变——与越冷提示行（重试+结果：越过失败冷却）可区分。
+	var rejectionCount int
+	if err := db.AuditDB.QueryRow(`SELECT COUNT(*) FROM audit_log
+		WHERE action='重试失败' AND resource='证书任务' AND detail LIKE '%任务 2%' AND detail LIKE '%结果：冷却中%'`).Scan(&rejectionCount); err != nil {
+		t.Fatalf("read rejection audit: %v", err)
+	}
+	if rejectionCount != 1 {
+		t.Fatalf("rejection audit=%d, want 1（真实失败路径形态不变：重试失败+结果：冷却中）", rejectionCount)
 	}
 }

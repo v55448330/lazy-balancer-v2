@@ -63,11 +63,15 @@ var auditResultTextMap = map[string]string{
 	"deleted_unverified": "已删除（结果未确认）",
 	// 证书任务重试/删除失败出口（AuditPolicyExplicit 路由无中间件自动审计，
 	// 失败/被拒尝试按固定归因补记）。
-	"import_in_progress":      "配置导入进行中",
-	"invalid_id":              "任务标识无效",
-	"job_not_found":           "任务不存在",
-	"cooldown":                "冷却中",
-	"permanent":               "永久不可重试",
+	"import_in_progress": "配置导入进行中",
+	"invalid_id":         "任务标识无效",
+	"job_not_found":      "任务不存在",
+	"cooldown":           "冷却中",
+	"permanent":          "永久不可重试",
+	// 手动重签越过失败冷却的提示码（certjobs.go 成功通道提示行）
+	// 起以字面量进入 AuditResultPart，TestAuditResultText_literalArgsCovered
+	// 钉住映射——此前经 auditFailureWithRule 动态实参逃过扫描，落英文码）。
+	"cooldown_override":       "越过失败冷却",
 	"ca_cooldown":             "CA 冷却中",
 	"deployment_retry_failed": "部署重试失败",
 	"queue_unavailable":       "队列不可用",

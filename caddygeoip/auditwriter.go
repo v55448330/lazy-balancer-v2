@@ -2668,8 +2668,10 @@ func (s *auditSpool) openActiveLocked() error {
 	return fmt.Errorf("security-events spool: exhausted active names in %s", s.dir)
 }
 
-// appendLines 追加一批行（每行自带换行），返回成功写入的行数与停止原因
-// （非 nil = 余下行需由调用方兜底）。单行写入顺序恒为「内容+换行」。
+// appendLines 追加一批行（每行自带换行）。返回值=已确定持久化落盘的行数
+// （诚实核算：仅在 bufio 缓冲、随写失败丢弃的行与未尝试行不计入），停止原因
+// 非 nil = 余下行（含滞留行）需由调用方兜底到审计文件。单行写入顺序恒为
+// 「内容+换行」。
 func (s *auditSpool) appendLines(lines [][]byte) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -2682,24 +2684,32 @@ func (s *auditSpool) appendLines(lines [][]byte) (int, error) {
 			return 0, err
 		}
 	}
-	written := 0
+	handed := 0    // 已交给 bufio 缓冲的行数（可能滞留）
+	persisted := 0 // 已确定落盘的行数（返回值）
 	for _, line := range lines {
 		size := int64(len(line)) + 1
 		if s.totalBytes+size > s.maxBytes || s.totalEntries+1 > s.maxEntries {
-			_ = s.flushLocked()
-			return written, errAuditSpoolFull
+			// 预算耗尽：先尽力落盘已交缓冲行（对齐 L4 同族契约——本次
+			// flush 成功 = 这些行确定持久化，按返回值如实计入；失败则随
+			// reset 丢弃，交调用方兜底）。
+			if err := s.flushLocked(); err != nil {
+				s.resetWriterLocked()
+				return persisted, err
+			}
+			return handed, errAuditSpoolFull
 		}
 		if _, err := s.bw.Write(line); err != nil {
 			// 底层写失败后 bufio 状态不确定（可能残留半行）：丢弃当前
 			// 文件句柄并重建，避免半行随下次 flush 落盘污染补采数据。
+			// 滞留行随 reset 丢弃且不计入返回值（已落盘前缀按 persisted 计）。
 			s.resetWriterLocked()
-			return written, err
+			return persisted, err
 		}
 		if err := s.bw.WriteByte('\n'); err != nil {
 			s.resetWriterLocked()
-			return written, err
+			return persisted, err
 		}
-		written++
+		handed++
 		s.totalBytes += size
 		s.totalEntries++
 		s.entriesByFile[s.activePath]++
@@ -2707,11 +2717,19 @@ func (s *auditSpool) appendLines(lines [][]byte) (int, error) {
 		s.lastWrite = time.Now()
 		if s.activeBytes >= s.rotateBytes {
 			if err := s.rotateLocked(); err != nil {
-				return written, err
+				return persisted, err
 			}
+			// rotate 成功蕴含其内部 flush 成功：已交缓冲行全部落盘。
+			persisted = handed
 		}
 	}
-	return written, s.flushLocked()
+	if err := s.flushLocked(); err != nil {
+		// 批末 flush 失败：滞留行随缓冲丢弃（bufio 错误粘滞，补刷必然
+		// 无效），不计入返回值——余下行由调用方兜底到审计文件，零真丢。
+		s.resetWriterLocked()
+		return persisted, err
+	}
+	return handed, nil
 }
 
 // noteActiveRenameLocked 让逐文件条目计数跟随 active→sealed 原子改名。
@@ -2722,12 +2740,28 @@ func (s *auditSpool) noteActiveRenameLocked(oldPath, newPath string) {
 	}
 }
 
-// resetWriterLocked 丢弃当前 active 写句柄（异常路径：状态不可信）。
+// resetWriterLocked 丢弃当前 active 写句柄（异常路径：状态不可信）。已落盘
+// 内容滞留在 active 里，写侧存活期间永不被补采（根服务只消费 sealed）：关闭
+// 后按磁盘实况处置——size>0 封存为 sealed（镜像 rotateLocked 的 rename +
+// noteActiveRenameLocked 记账）；空 active（内容全在滞留缓冲、随句柄丢弃）
+// 直接移除回收预算，不给补采端留空文件。滞留行本身由 appendLines 的返回值
+// 交调用方兜底，零真丢。落盘证据取磁盘 size 而非 activeBytes/entriesByFile：
+// 两者按「已交缓冲」计数，含从未落盘的滞留行。
 func (s *auditSpool) resetWriterLocked() {
 	s.bw = nil
 	if s.active != nil {
 		_ = s.active.Close()
 		s.active = nil
+	}
+	if s.activePath == "" {
+		return
+	}
+	if info, err := os.Stat(s.activePath); err == nil && info.Size() > 0 {
+		if newPath, serr := s.sealedPathLocked(); serr == nil && os.Rename(s.activePath, newPath) == nil {
+			s.noteActiveRenameLocked(s.activePath, newPath)
+		}
+	} else if err == nil {
+		_ = os.Remove(s.activePath)
 	}
 	s.activePath = ""
 }
@@ -2741,17 +2775,22 @@ func (s *auditSpool) flushLocked() error {
 }
 
 // sealedPathLocked 生成本次封存文件名（unixnano + 冲突后缀），同目录唯一。
-func (s *auditSpool) sealedPathLocked() string {
-	for k := 0; ; k++ {
+// 有界重试（64 次，同 L4）+ 非 NotExist 立即上抛：目录被带外替换为文件/
+// 权限丧失时 os.Stat 返 ENOTDIR/EACCES，无界循环会持锁无限空转挂死 drain。
+func (s *auditSpool) sealedPathLocked() (string, error) {
+	for k := range 64 {
 		name := fmt.Sprintf("%s%d%s", auditSpoolSealedPrefix, time.Now().UnixNano(), auditSpoolFileSuffix)
 		if k > 0 {
 			name = fmt.Sprintf("%s%d-%d%s", auditSpoolSealedPrefix, time.Now().UnixNano(), k, auditSpoolFileSuffix)
 		}
 		path := filepath.Join(s.dir, name)
 		if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
-			return path
+			return path, nil
+		} else if err != nil {
+			return "", err
 		}
 	}
+	return "", errors.New("security-events spool exhausted sealed names")
 }
 
 // rotateLocked 把当前 active 封存为 sealed 并开新 active。rename 是原子的（同
@@ -2765,7 +2804,12 @@ func (s *auditSpool) rotateLocked() error {
 	}
 	if s.activePath != "" {
 		oldPath := s.activePath
-		newPath := s.sealedPathLocked()
+		newPath, serr := s.sealedPathLocked()
+		if serr != nil {
+			// 非 NotExist（目录被带外替换为文件/权限丧失）：上抛交调用方
+			// 既有错误处理（appendLines 转兜底/退避），不持锁空转。
+			return serr
+		}
 		if err := os.Rename(oldPath, newPath); err != nil {
 			auditIOLogf("audit writer: security-events spool seal failed for %s (continuing on the same active file): %v", s.activePath, err)
 			return nil
@@ -2801,7 +2845,10 @@ func (s *auditSpool) sealIfIdle(now time.Time, idle time.Duration) error {
 		return err
 	}
 	oldPath := s.activePath
-	newPath := s.sealedPathLocked()
+	newPath, serr := s.sealedPathLocked()
+	if serr != nil {
+		return serr
+	}
 	if err := os.Rename(oldPath, newPath); err != nil {
 		return err
 	}
@@ -2839,12 +2886,16 @@ func (s *auditSpool) close() error {
 	}
 	if s.activePath != "" {
 		oldPath := s.activePath
-		newPath := s.sealedPathLocked()
-		if rerr := os.Rename(oldPath, newPath); rerr == nil {
-			s.noteActiveRenameLocked(oldPath, newPath)
-			s.activePath = ""
+		newPath, serr := s.sealedPathLocked()
+		if serr == nil {
+			if rerr := os.Rename(oldPath, newPath); rerr == nil {
+				s.noteActiveRenameLocked(oldPath, newPath)
+				s.activePath = ""
+			} else if err == nil {
+				err = rerr
+			}
 		} else if err == nil {
-			err = rerr
+			err = serr
 		}
 	}
 	return err

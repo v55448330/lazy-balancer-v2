@@ -468,7 +468,14 @@ func (h *Handlers) retryCertJobByID(c *gin.Context, id int) {
 			c.JSON(statusCode, models.APIResponse{Code: statusCode, Message: message})
 			return
 		}
-		auditFailureWithRule("cooldown_override", "手动重签越过失败冷却", message)
+		// 越冷提示不是失败——走「重试」动作的成功通道留痕，
+		// 详情携带 cooldown_override 语义（结果：越过失败冷却）。此前借用
+		// auditFailureWithRule 会先记一行「重试失败」、成功后又记一行「重试」，
+		// 同一操作先败后成；且与真实失败行（重试失败+固定归因）无法区分。
+		// 真实失败路径（下方各拒绝/入队失败出口）审计语义不变。
+		recordAudit(c, "重试", "证书任务", services.FormatAuditDetail(
+			services.AuditJobPart(id), services.AuditRulePart(ruleID),
+			"手动重签越过失败冷却", message, services.AuditResultPart("cooldown_override")))
 	}
 
 	// CA 退避窗口（failed/waiting_ca 行的 ca_available_after，429=Retry-After
