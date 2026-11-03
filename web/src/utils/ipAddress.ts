@@ -202,3 +202,53 @@ export const isValidCidr = (rawValue: string): boolean => {
   const prefix = Number(prefixText)
   return prefix >= 0 && prefix <= (isV4 ? 32 : 128)
 }
+
+/**
+ * CIDR/裸 IP 条目是否包含某 IP（地址列表「CIDR 匹配查询」判定单源）。
+ * 同族匹配：v4 条目只匹配 v4 地址，v6 条目只匹配 v6 地址；v4-mapped v6
+ * 形态（::ffff:a.b.c.d[/len]）折算为等价 v4 参与匹配；非法输入安全返回
+ * false。前缀 0 = 匹配全族地址。
+ */
+export const cidrContains = (cidr: string, ip: string): boolean => {
+  const toNum = (address: string): { num: bigint; bits: number; is4: boolean; mappedPrefix?: number } | null => {
+    const octets = parseIPv4Octets(address, { allowLeadingZeros: false })
+    if (octets) {
+      let num = 0n
+      for (const o of octets) num = (num << 8n) | BigInt(o)
+      return { num, bits: 32, is4: true }
+    }
+    const groups = parseIPv6Groups(address, { allowZone: false })
+    if (!groups) return null
+    // v4-mapped（::ffff:a.b.c.d）：折算为等价 v4
+    if (groups.slice(0, 5).every((g) => g === 0) && groups[5] === 0xffff) {
+      let num = 0n
+      for (const g of groups.slice(6)) num = (num << 16n) | BigInt(g)
+      return { num, bits: 32, is4: true, mappedPrefix: 96 }
+    }
+    let num = 0n
+    for (const g of groups) num = (num << 16n) | BigInt(g)
+    return { num, bits: 128, is4: false }
+  }
+  const [cidrAddr, cidrPrefixText] = cidr.trim().split('/')
+  const entry = toNum(cidrAddr ?? '')
+  const probe = toNum(ip.trim())
+  if (!entry || !probe) return false
+  // v4-mapped CIDR 折算后与裸 v4 条目等价
+  if (entry.is4 !== probe.is4) return false
+  let prefix: number
+  if (cidrPrefixText === undefined) {
+    // 裸 IP（含 mapped 裸 IP，已折算为 32 位）= 精确主机匹配
+    prefix = entry.bits
+  } else {
+    prefix = Number(cidrPrefixText)
+    if (!Number.isInteger(prefix) || prefix < 0) return false
+    // mapped v6 前缀折算：/120 ≡ v4 /24；前缀不足 96 的 mapped 形态无法折算
+    if (entry.mappedPrefix === 96) {
+      prefix -= entry.mappedPrefix
+      if (prefix < 0) return false
+    }
+  }
+  if (prefix > entry.bits) return false
+  const shift = BigInt(entry.bits - prefix)
+  return entry.num >> shift === probe.num >> shift
+}

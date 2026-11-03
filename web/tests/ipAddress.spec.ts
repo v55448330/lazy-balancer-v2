@@ -18,6 +18,7 @@ import {
   parseIPv6Groups,
   toV4Long,
   toV6BigInt,
+  cidrContains,
 } from '../src/utils/ipAddress.ts'
 import { code } from './_helpers.ts'
 
@@ -168,4 +169,28 @@ test('四个消费点都接单源，不得保留平行解析实现', () => {
   ]) {
     assert.match(util, new RegExp(`export const ${symbol}`), `ipAddress 必须导出 ${symbol}`)
   }
+})
+
+// 2026-11-02 需求：地址列表「CIDR 匹配查询」——用户输入 IP 命中列表中的
+// CIDR/裸 IP 条目。containment 判定同族匹配、v4-mapped v6 折算为等价 v4。
+test('cidrContains：v4 前缀包含/边界/不包含', () => {
+  assert.equal(cidrContains('10.0.0.0/8', '10.1.2.3'), true)
+  assert.equal(cidrContains('10.0.0.0/8', '11.1.2.3'), false)
+  assert.equal(cidrContains('10.1.2.3', '10.1.2.3'), true, '裸 IP 条目=精确匹配')
+  assert.equal(cidrContains('10.1.2.3/32', '10.1.2.4'), false)
+  assert.equal(cidrContains('10.1.2.3/31', '10.1.2.2'), true, '边界偶数地址命中 /31')
+  assert.equal(cidrContains('10.1.2.3', '10.1.2.4'), false, '裸 IP 不包含其他地址')
+})
+
+test('cidrContains：v6 前缀与 v4-mapped 折算', () => {
+  assert.equal(cidrContains('2a06:98c0::/29', '2a06:98c0::1234'), true)
+  assert.equal(cidrContains('2a06:98c0::/29', '2a06:98c1::1'), true, '/29 覆盖 2a06:98c0–98c7，98c1 在内')
+  assert.equal(cidrContains('2001:db8::/32', '2001:db8::1'), true)
+  assert.equal(cidrContains('2001:db8::/32', '2001:db9::1'), false)
+  assert.equal(cidrContains('::ffff:203.0.113.7', '203.0.113.7'), true, 'v4-mapped 裸 IP 折算等价 v4')
+  assert.equal(cidrContains('::ffff:203.0.113.0/120', '203.0.113.9'), true, 'mapped /120 ≡ v4 /24')
+  assert.equal(cidrContains('10.0.0.0/8', '2001:db8::1'), false, '跨族不匹配')
+  assert.equal(cidrContains('2001:db8::/32', '10.0.0.1'), false, '跨族不匹配（反向）')
+  assert.equal(cidrContains('not-an-ip', '10.0.0.1'), false, '非法条目安全返回 false')
+  assert.equal(cidrContains('10.0.0.0/8', 'not-an-ip'), false, '非法查询安全返回 false')
 })

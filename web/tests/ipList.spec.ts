@@ -20,7 +20,7 @@ import {
   parseIPList,
   sharedEntriesCache,
 } from '../src/utils/securityStages.ts'
-import { code, member, repoCode } from './_helpers.ts'
+import { code, repoCode, section } from './_helpers.ts'
 
 
 test('规则流程只拉本规则阶段 0 策略的信任引用', () => {
@@ -154,11 +154,13 @@ test('C7 备注超过 100 字拒绝导入（带行号报错，不静默截断）
   // 101 个 code point：拒绝而非截断（旧实现静默截尾，用户无感知）
   assert.deepEqual(parseIpListEntryLine(`10.0.0.1,${'😀'.repeat(100)}尾`, isValidCidr), { error: 'remark_too_long' })
   assert.deepEqual(parseIpListEntryLine(`10.0.0.1,${'a'.repeat(101)}`, isValidCidr), { error: 'remark_too_long' })
-  // 导入流必须带文件行号点名拒绝（脚本存在性：注释里的旧实现不得满足）
+  // 导入流必须带文件行号点名拒绝（保存时判定；脚本存在性：注释里的旧实现不得满足）
+  // 导入即判定（保存只合并暂存条目）：非法行（含备注超长）必须在判定时行号点名
   const src = code('src/views/security/SecurityRules.vue')
-  const importFlow = member(src, 'const importEntriesFromText')
-  assert.match(importFlow, /remarkTooLongLines\.push\(line\.no\)/, '导入流必须按文件行号记录备注超长拒绝')
-  assert.match(importFlow, /第 \$\{[^}]+\} 行/, '拒绝信息必须携带文件行号')
+  const onLoad = section(src, 'reader.onload = () => {', '\n  }')
+  assert.match(onLoad, /computeImportOutcome\(existingValues, importLines/, '导入即走判定单源')
+  assert.match(onLoad, /invalidLines\.slice\(0, 10\)\.join/, '非法行必须行号点名')
+  assert.match(src, /第 \$\{pendingInvalidLineNos\} 行/, '重复弹窗必须携带非法行行号')
 })
 
 test('C8 JSON 字符串数组统一 trim 并丢弃空项', () => {
@@ -372,4 +374,33 @@ test('中和与 CSV 引号包裹共存（含逗号的公式形态）', () => {
   const line = formatIpListEntryLine('10.0.0.1', '=1,2')
   assert.equal(line, `10.0.0.1,"'=1,2"`, '先中和再按 RFC4180 包裹')
   assert.deepEqual(parseIpListEntryLine(line, isValidCidr), { value: '10.0.0.1', remark: '=1,2' })
+})
+
+// 2026-11-02 需求：①导入重复点名（行号+以 IP 为准口径）②地址列表 CIDR 匹配查询
+test('导入提示：重复行号点名与口径说明接线（SecurityRules 导入流）', () => {
+  const page = code('src/views/security/SecurityRules.vue')
+  assert.match(page, /computeImportOutcome\(existingValues, importLines/, '导入时必须走判定单源（弹重复框，不写表）')
+  assert.match(page, /importDuplicateVisible\.value = true/, '存在重复必须弹窗点名具体条目')
+  assert.match(page, /以 IP 为准，同 IP 不同备注按首条为准/, '弹窗必须说明以 IP 为准的口径')
+  assert.doesNotMatch(page, /待导入文件：/, '「待导入文件」提示条必须移除（点导入即判定）')
+  assert.doesNotMatch(page, /跳过重复并导入/, '弹窗只提示不执行导入（不得有执行按钮）')
+  assert.match(page, /import-dup-note|info-note-bar/, '说明文字用标准描述框样式')
+})
+
+test('CIDR 匹配查询接线：cidrContains 单源 + 命中行高亮 + 结果文案', () => {
+  const page = code('src/views/security/SecurityRules.vue')
+  assert.match(page, /cidrContains, isValidCidr/, '必须复用 ipAddress 单源（不得平行实现包含判定）')
+  assert.match(page, /ipListQueryInput/, '必须提供匹配查询输入')
+  assert.match(page, /未命中本列表任何 CIDR\/IP 条目/, '无命中必须给明确文案')
+  assert.match(page, /ip-entry-hit/, '命中条目必须行高亮')
+})
+
+test('条目模糊搜索：过滤展示不破坏编辑写回与删除的原始索引映射', () => {
+  const page = code('src/views/security/SecurityRules.vue')
+  assert.match(page, /const ipEntrySearch = ref\(''\)/, '必须提供模糊搜索框')
+  assert.match(page, /row\.value\.toLowerCase\(\)\.includes\(q\) \|\| row\.remark\.toLowerCase\(\)\.includes\(q\)/, '搜索=IP/备注子串（大小写不敏感）')
+  // 过滤后删除/序号必须映射回 entries 本体位置（不得用过滤后下标误删）
+  assert.match(page, /ipListPagedIndexes\[\$index\] \?\? -1/, '删除必须按原始索引')
+  assert.match(page, /ipListPagedIndexes\[\$index\] \?\? 0\)\ +\+\ 1/, '序号列必须按原始索引')
+  assert.doesNotMatch(page, /removeIpListEntry\(ipListEntryPageStart \+ \$index\)/, '过滤后不得再用分页下标删除')
 })

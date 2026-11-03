@@ -407,11 +407,21 @@
         <el-form-item label="条目" required>
           <div class="entries-block">
             <DialogSectionHeader title="名单条目" />
+            <div v-if="ipListForm.entries.length > 0" class="ip-query-bar">
+              <el-input v-model="ipListQueryInput" placeholder="输入 IP 或关键词" clearable size="small" class="ip-query-input" @keyup.enter="applyIpListQuery" @clear="clearIpListQuery" />
+              <el-radio-group v-model="ipListQueryMode" size="small">
+                <el-radio-button value="cidr">CIDR 匹配</el-radio-button>
+                <el-radio-button value="fuzzy">模糊搜索</el-radio-button>
+              </el-radio-group>
+              <el-button type="primary" size="small" :disabled="!ipListQueryInput.trim()" @click="applyIpListQuery">搜索</el-button>
+              <el-button v-if="ipListQueryApplied" size="small" @click="clearIpListQuery">清除</el-button>
+            </div>
+            <div v-if="ipMatchResultText" class="ip-match-result ip-match-result-text">{{ ipMatchResultText }}</div>
             <div class="dialog-panel dialog-panel--flush">
-              <el-table :data="ipListEntriesPaged" size="small" max-height="360" empty-text="">
+              <el-table :data="ipListEntriesPaged" size="small" max-height="360" empty-text="" :row-class-name="ipEntryRowClass">
               <template #empty><el-empty description="暂无条目，点击下方按钮添加" :image-size="50" /></template>
               <el-table-column label="#" width="50" align="right">
-                <template #default="{ $index }"><span class="ip-entry-index">{{ ipListEntryPageStart + $index + 1 }}</span></template>
+                <template #default="{ $index }"><span class="ip-entry-index">{{ (ipListPagedIndexes[$index] ?? 0) + 1 }}</span></template>
               </el-table-column>
               <el-table-column label="IP / CIDR" min-width="230">
                 <template #default="{ row }">
@@ -440,7 +450,7 @@
               </template>
               <el-table-column v-if="!ipListDialogReadOnly" label="" width="60" align="center">
                 <template #default="{ $index }">
-                  <el-button link type="danger" size="small" :disabled="savingIpList" @click="removeIpListEntry(ipListEntryPageStart + $index)">删除</el-button>
+                  <el-button link type="danger" size="small" :disabled="savingIpList" @click="removeIpListEntry(ipListPagedIndexes[$index] ?? -1)">删除</el-button>
                 </template>
               </el-table-column>
               </el-table>
@@ -479,10 +489,30 @@
               <el-button type="primary" disabled>保存</el-button>
             </span>
           </el-tooltip>
+
           <el-button v-else type="primary" :loading="savingIpList" :disabled="!canSaveIpList(loadingIpListDetail, ipListDetailFailed)" @click="saveIpList">保存</el-button>
         </template>
       </template>
     </el-dialog>
+
+<!-- 导入重复条目弹窗（点导入即判定，不写表不执行导入）：简易样式 -->
+<el-dialog v-model="importDuplicateVisible" title="导入条目重复" width="min(640px, 94vw)" append-to-body :close-on-click-modal="false">
+  <el-table :data="importDuplicates" size="small" max-height="300">
+    <el-table-column label="行号" width="70" align="center">
+      <template #default="{ row }">{{ row.lineNo }}</template>
+    </el-table-column>
+    <el-table-column label="地址 / CIDR" min-width="180">
+      <template #default="{ row }"><span class="ip-entry-mono">{{ row.value }}</span></template>
+    </el-table-column>
+    <el-table-column label="该行备注" min-width="160">
+      <template #default="{ row }">{{ row.remark || '—' }}</template>
+    </el-table-column>
+  </el-table>
+  <div class="info-note-bar"><span class="info-note-desc">以上 {{ importDuplicates.length }} 条与列表已有条目或文件内其他行重复（以 IP 为准，同 IP 不同备注按首条为准），导入时将跳过；其余 {{ pendingNewEntries.length }} 条新条目将在保存后生效{{ pendingInvalidCount ? `；另有 ${pendingInvalidCount} 条非法行跳过（第 ${pendingInvalidLineNos} 行）` : '' }}。</span></div>
+  <template #footer>
+    <el-button type="primary" @click="importDuplicateVisible = false">知道了</el-button>
+  </template>
+</el-dialog>
 
     <el-dialog
       v-model="updateDialogVisible"
@@ -750,10 +780,11 @@ import { request, mfaAwareSuccess } from '@/utils/api'
 import { formatBytes } from '@/utils/formatBytes'
 import { formatInt } from '@/utils/formatInt'
 import { showSaveResult } from '@/utils/saveResult'
-import { isValidCidr } from '@/utils/ipAddress'
+import { cidrContains, isValidCidr } from '@/utils/ipAddress'
 import { IP_LIST_MAX_ENTRIES, canSaveIpList, mergeConcurrentBanEntries, needsEmptyListConfirm } from '@/utils/ipListSaveGuard'
 import { CUSTOM_RULE_MAX_CONDITIONS, CUSTOM_RULE_MAX_PATTERN_BYTES, canAddCondition, patternByteLength, patternOverLimit } from '@/utils/customRuleLimits'
-import { formatIpListEntryLine, ipListRemarkMaxLength, parseIpListEntryLine } from '@/utils/ipListCsv'
+import {formatIpListEntryLine, parseIpListEntryLine} from '@/utils/ipListCsv'
+import { computeImportOutcome } from '@/utils/ipListImport'
 import { popperViewportSafe } from '@/utils/popper'
 import { activateOnce } from '@/utils/keyboardActivate'
 import { saveBlob } from '@/utils/download'
@@ -1281,11 +1312,112 @@ const ipListDetailFailed = ref(false)
 const ipListDetailRowId = ref<number | null>(null)
 const ipListEntryPage = ref(1)
 const ipListEntryPageSize = 200
-const ipListEntryPageStart = computed(() => (ipListEntryPage.value - 1) * ipListEntryPageSize)
-// 分页只切窗口（slice 共享底层数组引用——编辑直接写回 ipListForm.entries，
+// ── 条目查询与导入流（2026-11-02 交互重设计）──
+// 查询：CIDR 匹配与模糊搜索共用输入框+模式单选+搜索按钮（点按钮才出结果，
+// 不实时），搜索区靠右对齐；弹框打开时重置，切换列表不残留。
+// 导入：选择文件只暂存原文（不解析不写表），点「保存」时解析判定——重复条目
+// 弹窗点名具体条目（以 IP 为准，同 IP 不同备注按首条为准），确认后跳过重复
+// 随保存导入；自动通道（续期巡检/批量重签）的冷却语义不受影响。
+const pendingImport = ref<{ fileName: string; newCount: number } | null>(null)
+const importDuplicateVisible = ref(false)
+const importDuplicates = ref<Array<{ lineNo: number; value: string; remark: string }>>([])
+const pendingNewEntries = ref<Array<{ value: string; remark: string }>>([])
+const pendingInvalidCount = ref(0)
+const pendingInvalidLineNos = ref('')
+const ipListQueryInput = ref('')
+const ipListQueryMode = ref<'cidr' | 'fuzzy'>('cidr')
+const ipListQueryApplied = ref('')
+const ipListQueryAppliedMode = ref<'cidr' | 'fuzzy'>('cidr')
+const ipMatchResultText = ref('')
+const ipMatchHitIndexes = ref<ReadonlySet<number>>(new Set())
+const ipEntrySearch = ref('')
+
+const ipEntrySearchHit = (row: IPListEntry): boolean => {
+  if (ipListQueryAppliedMode.value !== 'fuzzy') return true
+  const q = ipListQueryApplied.value.trim().toLowerCase()
+  if (q === '') return true
+  return row.value.toLowerCase().includes(q) || row.remark.toLowerCase().includes(q)
+}
+
+const ipListEntriesFiltered = computed(() => {
+  const rows = ipListForm.value.entries
+    .map((entry, index) => ({ entry, index }))
+    .filter(({ entry }) => ipEntrySearchHit(entry))
+  return rows
+})
+
+// 过滤后行对应的 entries 本体索引：删除与序号列必须映射回原位置
+const ipListPagedIndexes = computed(() =>
+  ipListEntriesFiltered.value.slice((ipListEntryPage.value - 1) * ipListEntryPageSize, ipListEntryPage.value * ipListEntryPageSize).map(({ index }) => index))
+
+// 分页只切窗口（映射回 entries 本体引用——编辑直接写回 ipListForm.entries，
 // 跨页修改随保存整体提交）；只读形态纯文本渲染，万级条目不再实例化 input。
 const ipListEntriesPaged = computed(() =>
-  ipListForm.value.entries.slice(ipListEntryPageStart.value, ipListEntryPageStart.value + ipListEntryPageSize))
+  ipListPagedIndexes.value.map((index) => ipListForm.value.entries[index]))
+
+const ipEntryRowClass = ({ rowIndex }: { row: IPListEntry; rowIndex: number }): string =>
+  ipMatchHitIndexes.value.has(ipListPagedIndexes.value[rowIndex] ?? -1) ? 'ip-entry-hit' : ''
+
+const applyIpListQuery = (): void => {
+  const applied = ipListQueryInput.value.trim()
+  ipListQueryApplied.value = applied
+  ipListQueryAppliedMode.value = ipListQueryMode.value
+  ipListEntryPage.value = 1
+  if (ipListQueryAppliedMode.value === 'fuzzy') {
+    ipEntrySearch.value = applied
+    ipMatchHitIndexes.value = new Set()
+    ipMatchResultText.value = applied === '' ? '' : `匹配 ${ipListEntriesFiltered.value.length} 条`
+    return
+  }
+  ipEntrySearch.value = ''
+  const hitIndexes = new Set<number>()
+  ipListForm.value.entries.forEach((e, index) => {
+    if (e.value.trim() !== '' && cidrContains(e.value.trim(), applied)) hitIndexes.add(index)
+  })
+  ipMatchHitIndexes.value = hitIndexes
+  if (applied === '') {
+    ipMatchResultText.value = ''
+    return
+  }
+  if (hitIndexes.size === 0) {
+    ipMatchResultText.value = `IP ${applied} 未命中本列表任何 CIDR/IP 条目`
+    return
+  }
+  // 细前缀优先排序（/32、/24 在前——更具体的命中先展示）
+  const sortedIndexes = [...hitIndexes].sort((x, y) => {
+    const bits = (v: string): number => {
+      const p = v.split('/')
+      return p[1] === undefined ? (p[0].includes(':') ? 128 : 32) : Number(p[1])
+    }
+    return bits(ipListForm.value.entries[y].value) - bits(ipListForm.value.entries[x].value)
+  })
+  const expireText = (e: IPListEntry): string => {
+    const expire = e.expires_at ? (autobanEntryExpired(e.expires_at) ? '已到期' : `到期 ${e.expires_at}`) : '永久'
+    const created = e.created_at ? ` · 加入于 ${e.created_at}` : ''
+    return `${e.value}${e.remark ? ` · ${e.remark}` : ''} · ${expire}${created}`
+  }
+  const hits = sortedIndexes.map((index) => expireText(ipListForm.value.entries[index]))
+  ipMatchResultText.value = `命中 ${hits.length} 条：${hits.join('；')}`
+}
+
+const clearIpListQuery = (): void => {
+  ipListQueryInput.value = ''
+  ipListQueryApplied.value = ''
+  ipListQueryAppliedMode.value = 'cidr'
+  ipEntrySearch.value = ''
+  ipMatchHitIndexes.value = new Set()
+  ipMatchResultText.value = ''
+  ipListEntryPage.value = 1
+}
+
+const resetIpListQueryState = (): void => {
+  clearIpListQuery()
+  pendingImport.value = null
+  importDuplicateVisible.value = false
+  importDuplicates.value = []
+  pendingNewEntries.value = []
+  pendingInvalidCount.value = 0
+}
 
 const addIpListEntry = (): void => {
   ipListForm.value.entries.push({ value: '', remark: '' })
@@ -1315,6 +1447,8 @@ const openIpListDialog = async (row?: IPListRow) => {
   editingIpListSystem.value = row?.system === true
   editingIpListPreset.value = row?.preset_autoban === true
   ipListEntryPage.value = 1
+  // 弹框切换/重开必须重置查询与导入暂存（2026-11-02 用户反馈：残留上一弹框输入）
+  resetIpListQueryState()
   editingIpListId.value = row?.id ?? null
   if (!row) {
     // seq 已自增：在途详情响应作废且其 finally 不再清 loading——新建表单自身
@@ -1422,6 +1556,15 @@ const saveIpList = async () => {
   if (name.length > 50) { ElMessage.warning('列表名称不能超过 50 字符'); return }
   if (ipListForm.value.category.length > 32) { ElMessage.warning('分类不能超过 32 字符'); return }
   if (ipListForm.value.description.length > 200) { ElMessage.warning('描述不能超过 200 字符'); return }
+  // 导入暂存条目合并（2026-11-02 交互重设计）：点「导入」时已判定重复并弹框
+  // 点名，跳过重复的新条目在此并入，随本次保存一起校验（格式/额度）与提交。
+  let importedCount = 0
+  if (pendingNewEntries.value.length > 0) {
+    importedCount = pendingNewEntries.value.length
+    ipListForm.value.entries.push(...pendingNewEntries.value)
+    pendingNewEntries.value = []
+    pendingImport.value = null
+  }
   // 值与备注均为空的行视为未填写的占位行，保存时静默丢弃
   const entries = ipListForm.value.entries
     .map((e) => ({ value: e.value.trim(), remark: e.remark.trim(), created_at: e.created_at || undefined, expires_at: e.expires_at || undefined }))
@@ -1470,7 +1613,8 @@ const saveIpList = async () => {
     // 名单直编是共享条目缓存的另一写入口（此前仅 IPLocationAction
     // 失效缓存）——不失效时策略向导/处置弹层会继续读旧条目。
     invalidateSharedEntriesCache()
-    showSaveResult(res, '保存成功'); ipListDialogVisible.value = false; fetchIpLists()
+    const importNote = importedCount > 0 ? `（含导入 ${importedCount} 条新条目）` : ''
+    showSaveResult(res, `保存成功${importNote}`); ipListDialogVisible.value = false; fetchIpLists()
   } catch (error: unknown) {
     // 409 重名 / 400 条目非法等已由全局拦截器 toast，这里仅记录避免 unhandled rejection
     console.error('Failed to save IP list:', error)
@@ -1512,59 +1656,28 @@ const onImportEntriesFileChange = (event: Event): void => {
   input.value = '' // 复位以支持再次选择同一文件
   if (!file) return
   const reader = new FileReader()
-  reader.onload = () => { importEntriesFromText(typeof reader.result === 'string' ? reader.result : '') }
+  reader.onload = () => {
+    const text = typeof reader.result === 'string' ? reader.result : ''
+    const importLines = text.split(/\r?\n/)
+      .map((l, i) => ({ no: i + 1, text: l.trim() }))
+      .filter((l) => l.text !== '')
+    const existingValues = new Set(ipListForm.value.entries.map((e) => e.value.trim()).filter((v) => v !== ''))
+    const outcome = computeImportOutcome(existingValues, importLines, (t) => parseEntryLine(t))
+    pendingNewEntries.value = outcome.newEntries
+    pendingInvalidCount.value = outcome.invalidLines.length
+    pendingInvalidLineNos.value = outcome.invalidLines.slice(0, 10).join('、') + (outcome.invalidLines.length > 10 ? ' 等' : '')
+    pendingImport.value = { fileName: file.name, newCount: outcome.newEntries.length }
+    if (outcome.duplicates.length > 0) {
+      importDuplicates.value = outcome.duplicates
+      importDuplicateVisible.value = true
+      return
+    }
+    mfaAwareSuccess(`解析成功 ${outcome.newEntries.length} 条，点击「保存」后导入`)
+  }
   reader.onerror = () => { ElMessage.error('读取文件失败，请重试') }
   reader.readAsText(file)
 }
 
-const importEntriesFromText = (text: string): void => {
-  // 保留原始文件行号（空行占位也计数）：备注超长拒绝须按行号点名
-  const lines = text.split(/\r?\n/)
-    .map((l, idx) => ({ no: idx + 1, text: l.trim() }))
-    .filter((l) => l.text !== '')
-  if (lines.length === 0) {
-    ElMessage.error('文件为空或没有可解析的内容，已取消导入')
-    return
-  }
-  // 与保存口径一致：值与备注均为空的占位行先行移除；先解析候选，
-  // 上限门通过前不改写表单，避免超限文件只留下无法保存的部分导入。
-  const cleanedEntries = ipListForm.value.entries.filter((e) => e.value.trim() !== '' || e.remark.trim() !== '')
-  const existing = new Set(cleanedEntries.map((e) => e.value.trim()).filter((v) => v !== ''))
-  const candidates: Array<{ value: string; remark: string }> = []
-  let invalid = 0
-  let duplicate = 0
-  const remarkTooLongLines: number[] = []
-  for (const line of lines) {
-    const parsed = parseEntryLine(line.text)
-    if (!parsed) { invalid++; continue }
-    // 备注超长：与非法 CIDR 同策略整条拒绝（不静默截断），行号记入点名清单
-    if ('error' in parsed) { invalid++; remarkTooLongLines.push(line.no); continue }
-    if (existing.has(parsed.value)) { duplicate++; continue }
-    existing.add(parsed.value)
-    candidates.push({ value: parsed.value, remark: parsed.remark })
-  }
-  const activeExistingCount = cleanedEntries.filter((e) => !e.expires_at || !autobanEntryExpired(e.expires_at)).length
-  const remaining = Math.max(0, IP_LIST_MAX_ENTRIES - activeExistingCount)
-  if (candidates.length > remaining) {
-    ElMessage.warning(`本次可导入 ${candidates.length} 条，超过当前剩余额度 ${remaining} 条（每个列表最多 ${IP_LIST_MAX_ENTRIES} 条生效条目），已取消导入`)
-    return
-  }
-  ipListForm.value.entries = cleanedEntries
-  ipListForm.value.entries.push(...candidates)
-  const success = candidates.length
-  ipListEntryPage.value = Math.ceil(ipListForm.value.entries.length / ipListEntryPageSize)
-  const tooLongLineNos = remarkTooLongLines.slice(0, 10).join('、') + (remarkTooLongLines.length > 10 ? ' 等' : '')
-  const tooLongNote = remarkTooLongLines.length > 0
-    ? `；备注超过 ${ipListRemarkMaxLength} 字拒绝导入：第 ${tooLongLineNos} 行`
-    : ''
-  if (success === 0) {
-    ElMessage.error(duplicate > 0 || remarkTooLongLines.length > 0
-      ? `没有可导入的新条目（非法 ${invalid} 条 / 重复 ${duplicate} 条）${tooLongNote}`
-      : '文件中未解析到合法的 IP/CIDR 条目，已取消导入')
-    return
-  }
-  mfaAwareSuccess(`导入完成：成功 ${success} 条，跳过 ${invalid + duplicate} 条（非法 ${invalid} / 重复 ${duplicate}）${tooLongNote}`)
-}
 
 const exportIpListEntries = (): void => {
   const entries = ipListForm.value.entries
@@ -2133,6 +2246,12 @@ onUnmounted(() => {
 .entries-toolbar-right { margin-left: auto; }
 .entries-import-input { display: none; }
 .ip-entry-text { font-family: 'SF Mono', 'Monaco', 'Menlo', monospace; font-size: 13px; }
+.ip-query-bar { display: flex; align-items: center; justify-content: flex-end; gap: 10px; margin: 0 0 8px; }
+.ip-query-bar .ip-query-input { width: 260px; flex: none; }
+.ip-query-bar .el-radio-group, .ip-query-bar .el-button { flex: none; }
+.ip-match-result { font-size: 12px; color: var(--el-color-primary); word-break: break-all; margin: 0 0 8px; text-align: right; }
+.ip-match-result.ip-match-none { color: var(--el-text-color-secondary); }
+.entries-block :deep(.ip-entry-hit > td) { background: var(--el-color-primary-light-9) !important; }
 .ip-entry-index { color: #9ca3af; font-variant-numeric: tabular-nums; }
 .entries-pagination { display: flex; justify-content: flex-end; margin-top: 8px; }
 .ip-entry-invalid :deep(.el-input__wrapper) { box-shadow: 0 0 0 1px var(--el-color-danger, #ef4444) inset; }

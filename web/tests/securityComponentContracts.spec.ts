@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { code, member } from './_helpers.ts'
+import { code, member, section } from './_helpers.ts'
 
 test('IP 快捷添加统一走共享写入链，只有完成时才收起目标面板', () => {
   const page = code('src/views/security/IPLocationAction.vue')
@@ -36,16 +36,19 @@ test('策略向导关闭前核对完整编辑快照，脏状态需确认放弃',
   assert.match(close, /放弃修改/, '确认动作必须明示后果')
 })
 
-test('IP 导入在写入表单前按剩余生效额度拒绝超限文件', () => {
+test('导入条目随保存合并：上限门按合并后生效条数拦截（早于任何 entries.push）', () => {
+  // 2026-11-02 交互重设计：点导入即判定重复（弹框点名、不写表），新条目暂存；
+  // 保存时合并暂存条目并走同一额度校验（重复条目在导入时已被排除）。
   const page = code('src/views/security/SecurityRules.vue')
-  const flow = member(page, 'const importEntriesFromText =')
-  assert.match(flow, /candidates/, '先解析候选，不得边解析边写入表单')
-  assert.match(flow, /IP_LIST_MAX_ENTRIES - activeExistingCount/, '额度必须扣除现有生效条目')
-  assert.match(flow, /candidates\.length > remaining/, '超限必须在导入前拦截')
-  const gate = flow.indexOf('candidates.length > remaining')
-  const push = flow.indexOf('ipListForm.value.entries.push')
-  assert.ok(gate >= 0 && push > gate, '上限门必须早于任何 entries.push')
-  assert.match(flow, /autobanEntryExpired/, '现有到期条目不得占用导入额度')
+  const importFlow = section(page, 'reader.onload = () => {', '\n  }')
+  assert.match(importFlow, /computeImportOutcome\(existingValues, importLines/, '导入时必须走判定单源（弹重复框、暂存新条目）')
+  assert.match(importFlow, /pendingNewEntries\.value = outcome\.newEntries/, '新条目暂存待保存合并')
+  const save = member(page, 'const saveIpList =')
+  assert.match(save, /ipListForm\.value\.entries\.push\(\.\.\.pendingNewEntries\.value\)/, '保存时合并暂存新条目')
+  const merge = save.indexOf('ipListForm.value.entries.push(...pendingNewEntries.value)')
+  const cap = save.indexOf('activeEntryCount > IP_LIST_MAX_ENTRIES')
+  assert.ok(merge >= 0 && cap > merge, '上限门必须作用于合并后的条目集合')
+  assert.match(save, /autobanEntryExpired/, '现有到期条目不得占用导入额度')
 })
 
 test('威胁大屏配置到达前和读取失败时均不默认全量采样', () => {
