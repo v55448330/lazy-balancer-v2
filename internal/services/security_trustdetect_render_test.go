@@ -14,12 +14,16 @@ package services
 import (
 	"database/sql"
 	"encoding/json"
+	"net/netip"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/corazawaf/coraza/v3"
+
+	"lazy-balancer-v2/wafiplist"
 )
 
 // trustDetectRenderShape 汇集一次渲染中与本语义相关的链位。
@@ -528,4 +532,294 @@ func tdPolicyIDForTest(t *testing.T, database *sql.DB) int {
 		t.Fatalf("read stage0 policy: %v", err)
 	}
 	return id
+}
+
+// clientIPRangesOfMatcher 读取一个 matcher 的 client_ip.ranges（渲染产物保持
+// []string 形态，未经 JSON 往返）。
+func clientIPRangesOfMatcher(t *testing.T, matcherValue interface{}, name string) []string {
+	t.Helper()
+	matcher := mustMap(t, matcherValue, name)
+	clientIP, ok := matcher["client_ip"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("%s 缺 client_ip matcher: %#v", name, matcher)
+	}
+	ranges, ok := clientIP["ranges"].([]string)
+	if !ok {
+		t.Fatalf("%s client_ip.ranges 类型=%T，want []string", name, clientIP["ranges"])
+	}
+	return ranges
+}
+
+// trustRouteRanges 取信任检测路由的正向 client_ip ranges。
+func trustRouteRanges(t *testing.T, shape trustDetectRenderShape) []string {
+	t.Helper()
+	matchers, ok := shape.trustRoute["match"].([]interface{})
+	if !ok || len(matchers) == 0 {
+		t.Fatalf("信任检测路由缺 matcher: %#v", shape.trustRoute)
+	}
+	return clientIPRangesOfMatcher(t, matchers[0], "信任检测路由 matcher")
+}
+
+// wrapSkipUnionRanges 取安全链包裹 not-client_ip 的跳过并集 ranges。
+func wrapSkipUnionRanges(t *testing.T, shape trustDetectRenderShape) []string {
+	t.Helper()
+	routes, ok := shape.securityWrap["routes"].([]interface{})
+	if !ok || len(routes) == 0 {
+		t.Fatalf("安全包裹缺内层路由: %#v", shape.securityWrap)
+	}
+	inner := mustMap(t, routes[0], "wrap route")
+	matchers, _ := inner["match"].([]interface{})
+	if len(matchers) == 0 {
+		t.Fatalf("安全包裹内层路由缺 matcher: %#v", inner)
+	}
+	outer := mustMap(t, matchers[0], "wrap matcher")
+	nots, ok := outer["not"].([]interface{})
+	if !ok || len(nots) == 0 {
+		t.Fatalf("安全包裹缺 not matcher: %#v", outer)
+	}
+	return clientIPRangesOfMatcher(t, nots[0], "安全包裹 not matcher")
+}
+
+// clientIPInRanges 按 Caddy client_ip 字面 ranges 语义（前缀包含）判定——渲染
+// 产物只含字面 ranges（无反向/特殊语义），本 helper 即路由 gate 的行为等价物。
+func clientIPInRanges(t *testing.T, ranges []string, ip string) bool {
+	t.Helper()
+	addr, err := netip.ParseAddr(ip)
+	if err != nil {
+		t.Fatalf("parse probe ip %q: %v", ip, err)
+	}
+	for _, entry := range ranges {
+		prefix, perr := wafiplist.ParseIPEntry(entry)
+		if perr != nil {
+			continue
+		}
+		if prefix.Contains(addr) {
+			return true
+		}
+	}
+	return false
+}
+
+// countSubroutes 统计主链 handles 中的 subroute 数量。
+func countSubroutes(t *testing.T, mainRoute map[string]interface{}) int {
+	t.Helper()
+	handlers, ok := mainRoute["handle"].([]interface{})
+	if !ok {
+		t.Fatalf("main route missing handle chain: %#v", mainRoute)
+	}
+	count := 0
+	for _, hv := range handlers {
+		if mustMap(t, hv, "handler")["handler"] == "subroute" {
+			count++
+		}
+	}
+	return count
+}
+
+// TestTrustedDetection_overlappingIPExcludedFromTrustRoute 直通∩保留检测重叠 IP：
+// 直通优先（与 TCP 路由序「直通 → 保留检测」同语义）——重叠 IP 不进信任检测
+// 路由（零 id:12 事件），仅保留检测集 IP 照常进；跳过并集仍是两者之并（热路径
+// 字节语义不变），最小检测事务的并集文件保持全量（引擎/预检字节不变）。
+func TestTrustedDetection_overlappingIPExcludedFromTrustRoute(t *testing.T) {
+	stubSecurityLibsAvailable(t)
+	_, database := newClusterTestService(t)
+	seedHTTPRuleForGeneration(t, database, "lb_tdover", "tdover.example.test", 8080)
+	seedStage0Policy(t, database, "lb_tdover", `["10.0.0.9","203.0.113.9"]`, true)
+	seedStage0Policy(t, database, "lb_tdover", `["10.0.0.9","192.168.1.5"]`, false)
+	mpGenBindPolicy(t, database, "lb_tdover", "tdover-waf", mpGenPolicySpec{mode: "blocking", enabled: true})
+
+	_, mainRoute := mpGenRoutes(t, database, mpGenHTTPRule("lb_tdover", "tdover.example.test"))
+	shape := findTrustDetectShape(t, mainRoute)
+	if shape.securityWrapIdx < 0 || shape.trustIdx < 0 {
+		t.Fatalf("混合绑定必须渲染安全链包裹与信任检测路由: %v", handlerNames(t, mainRoute))
+	}
+
+	// 跳过并集=直通∪保留检测（热路径判定面不变：重叠 IP 同样绕开全部安全阶段）。
+	wantSkip := []string{"10.0.0.9/32", "192.168.1.5/32", "203.0.113.9/32"}
+	if got := wrapSkipUnionRanges(t, shape); !reflect.DeepEqual(got, wantSkip) {
+		t.Fatalf("跳过并集=%v, want %v（直通∪保留检测，字节语义不变）", got, wantSkip)
+	}
+
+	// 信任路由=差集（保留检测 − 直通）：重叠 10.0.0.9 归直通，仅 203.0.113.9 进。
+	ranges := trustRouteRanges(t, shape)
+	if !reflect.DeepEqual(ranges, []string{"203.0.113.9/32"}) {
+		t.Fatalf("信任路由 ranges=%v, want 仅 [203.0.113.9/32]（重叠 IP 直通优先=零 id:12）", ranges)
+	}
+	if clientIPInRanges(t, ranges, "10.0.0.9") {
+		t.Fatal("重叠 IP 不得命中信任检测路由 gate")
+	}
+	if !clientIPInRanges(t, ranges, "203.0.113.9") {
+		t.Fatal("仅检测集 IP 必须命中信任检测路由 gate")
+	}
+
+	// 最小检测事务并集文件与防御性 id:12 保持全量并集（引擎面零变化）。
+	directives, _ := shape.trustHandler["directives"].(string)
+	assertTrustDetectDirectivesShape(t, directives, "10.0.0.9/32\n203.0.113.9/32\n")
+}
+
+// TestTrustedDetection_nestedOverlapSplitsTrustRouteRanges 嵌套重叠（保留检测
+// 宽段 ∩ 直通子段）按真实 CIDR 差集拆分信任路由 ranges——字符串相等剔除会
+// 把整个宽段留在信任路由里，与 TCP 侧直通优先行为分叉。
+func TestTrustedDetection_nestedOverlapSplitsTrustRouteRanges(t *testing.T) {
+	stubSecurityLibsAvailable(t)
+	_, database := newClusterTestService(t)
+	seedHTTPRuleForGeneration(t, database, "lb_tdnest", "tdnest.example.test", 8080)
+	seedStage0Policy(t, database, "lb_tdnest", `["10.0.0.0/24"]`, true)
+	seedStage0Policy(t, database, "lb_tdnest", `["10.0.0.128/25"]`, false)
+	mpGenBindPolicy(t, database, "lb_tdnest", "tdnest-waf", mpGenPolicySpec{mode: "blocking", enabled: true})
+
+	_, mainRoute := mpGenRoutes(t, database, mpGenHTTPRule("lb_tdnest", "tdnest.example.test"))
+	shape := findTrustDetectShape(t, mainRoute)
+	if shape.trustIdx < 0 {
+		t.Fatalf("保留检测宽段减去直通子段后仍非空，必须渲染信任检测路由: %v", handlerNames(t, mainRoute))
+	}
+	ranges := trustRouteRanges(t, shape)
+	if !reflect.DeepEqual(ranges, []string{"10.0.0.0/25"}) {
+		t.Fatalf("信任路由 ranges=%v, want [10.0.0.0/25]（仅直通子段被扣除）", ranges)
+	}
+	if !clientIPInRanges(t, ranges, "10.0.0.9") {
+		t.Fatal("宽段内直通子段外的 IP 必须照常命中信任检测路由")
+	}
+	if clientIPInRanges(t, ranges, "10.0.0.200") {
+		t.Fatal("直通子段内 IP（重叠）不得命中信任检测路由")
+	}
+}
+
+// TestTrustedDetection_fullOverlapSkipsTrustRoute 差异集空（保留检测集全被
+// 直通吸收）：不产事件即不发射——不渲染信任检测路由（此前的空 ranges
+// 恒发射形态退役）。
+func TestTrustedDetection_fullOverlapSkipsTrustRoute(t *testing.T) {
+	stubSecurityLibsAvailable(t)
+	_, database := newClusterTestService(t)
+	seedHTTPRuleForGeneration(t, database, "lb_tdfull", "tdfull.example.test", 8080)
+	seedStage0Policy(t, database, "lb_tdfull", `["10.0.0.9"]`, true)
+	seedStage0Policy(t, database, "lb_tdfull", `["10.0.0.0/24"]`, false)
+	mpGenBindPolicy(t, database, "lb_tdfull", "tdfull-waf", mpGenPolicySpec{mode: "blocking", enabled: true})
+
+	_, mainRoute := mpGenRoutes(t, database, mpGenHTTPRule("lb_tdfull", "tdfull.example.test"))
+	shape := findTrustDetectShape(t, mainRoute)
+	if shape.securityWrapIdx < 0 {
+		t.Fatalf("重叠信任 IP 仍在跳过并集内，安全链包裹必须保留: %v", handlerNames(t, mainRoute))
+	}
+	if shape.trustIdx >= 0 {
+		t.Fatalf("差异集空不得渲染信任检测路由（直通优先，零 id:12）: %v", handlerNames(t, mainRoute))
+	}
+	// 包裹内防御性 id:12 与并集文件仍在（引擎/预检发射面不受路由门控影响）。
+	wrapHandle := shape.securityWrap["routes"].([]interface{})[0].(map[string]interface{})["handle"].([]interface{})
+	wrapRoute := map[string]interface{}{"handle": wrapHandle}
+	joined := strings.Join(wafDirectives(t, wrapRoute), "\n")
+	if !strings.Contains(joined, `"id:12,phase:1,pass,nolog,ctl:ruleEngine=DetectionOnly"`) {
+		t.Fatalf("包裹内预检必须保留防御性 id:12: \n%s", joined)
+	}
+	if got := readRenderedIPList(t, joined, "u-trust12"); got != "10.0.0.9/32\n" {
+		t.Fatalf("id:12 信任并集文件=%q, want 全量保留检测集 [10.0.0.9/32]", got)
+	}
+}
+
+// TestTrustedDetection_emptyUnionSkipsTrustRoute 保留检测策略在但并集空：
+// 不产事件即不发射——不渲染信任检测路由（不再以空 client_ip 集恒发射）；
+// 防御性 id:12 与空投影文件照常（预检/引擎发射面与路由门控解耦）。
+func TestTrustedDetection_emptyUnionSkipsTrustRoute(t *testing.T) {
+	stubSecurityLibsAvailable(t)
+	_, database := newClusterTestService(t)
+	seedHTTPRuleForGeneration(t, database, "lb_tdempty", "tdempty.example.test", 8080)
+	seedStage0Policy(t, database, "lb_tdempty", `[]`, true)
+	mpGenBindPolicy(t, database, "lb_tdempty", "tdempty-waf", mpGenPolicySpec{mode: "blocking", enabled: true})
+
+	_, mainRoute := mpGenRoutes(t, database, mpGenHTTPRule("lb_tdempty", "tdempty.example.test"))
+	shape := findTrustDetectShape(t, mainRoute)
+	if shape.trustIdx >= 0 {
+		t.Fatalf("空并集不得渲染信任检测路由（空差集=不产事件即不发射）: %v", handlerNames(t, mainRoute))
+	}
+	// 跳过并集空 → 安全链平坦（无包裹）。
+	if count := countSubroutes(t, mainRoute); count != 0 {
+		t.Fatalf("空并集安全链必须平坦（got %d 个 subroute）: %v", count, handlerNames(t, mainRoute))
+	}
+	joined := strings.Join(wafDirectives(t, mainRoute), "\n")
+	if !strings.Contains(joined, `"id:12,phase:1,pass,nolog,ctl:ruleEngine=DetectionOnly"`) {
+		t.Fatalf("预检必须保留防御性 id:12（发射面与路由门控解耦）: \n%s", joined)
+	}
+	if got := readRenderedIPList(t, joined, "u-trust12"); got != "" {
+		t.Fatalf("空并集投影文件=%q, want 空", got)
+	}
+}
+
+// TestEngineBehavior_overlapIPRouteGateYieldsZeroID12Audit R-10 引擎级实证：
+// 生产渲染产物组合下（信任路由 gate + 真实 coraza 最小检测事务）——
+// ①重叠 IP（直通优先）不满足 gate → 零 id:12 审计行；②仅检测集 IP 恰 1 条
+// id:12 logged（未中断、归因头透传）；③直通独有与名单外 IP 仍零新增。
+// gate 判定用渲染出的 client_ip 字面 ranges（Caddy matcher 语义等价物），
+// 事务经 coraza v3.8.1 真实引擎与审计文件计数（沿用本文件既有行为实证手法）。
+func TestEngineBehavior_overlapIPRouteGateYieldsZeroID12Audit(t *testing.T) {
+	stubSecurityLibsAvailable(t)
+	_, database := newClusterTestService(t)
+	seedHTTPRuleForGeneration(t, database, "lb_tdgate", "tdgate.example.test", 8080)
+	seedStage0Policy(t, database, "lb_tdgate", `["10.0.0.9","203.0.113.9"]`, true)
+	seedStage0Policy(t, database, "lb_tdgate", `["10.0.0.9","192.168.1.5"]`, false)
+	mpGenBindPolicy(t, database, "lb_tdgate", "tdgate-waf", mpGenPolicySpec{mode: "blocking", enabled: true})
+
+	_, mainRoute := mpGenRoutes(t, database, mpGenHTTPRule("lb_tdgate", "tdgate.example.test"))
+	shape := findTrustDetectShape(t, mainRoute)
+	if shape.securityWrapIdx < 0 || shape.trustIdx < 0 {
+		t.Fatalf("混合绑定必须渲染安全链包裹与信任检测路由: %v", handlerNames(t, mainRoute))
+	}
+	ranges := trustRouteRanges(t, shape)
+	skipUnion := wrapSkipUnionRanges(t, shape)
+	directives, _ := shape.trustHandler["directives"].(string)
+	auditPath := filepath.Join(t.TempDir(), "audit.json")
+	waf := newTrustDetectBehaviorWAF(t, directives, auditPath)
+
+	// 生产等价管线：跳过并集命中的请求不进安全链；信任检测路由 gate 命中的
+	// 请求才进入最小检测事务；其余直达上游（零 coraza 事务）。
+	run := func(ip string) any {
+		if clientIPInRanges(t, skipUnion, ip) {
+			if clientIPInRanges(t, ranges, ip) {
+				return runTrustDetectTransaction(waf, ip, "lb_tdgate", 200)
+			}
+			return nil
+		}
+		// 非信任 IP 走完整安全链（不在本用例断言面）——不进入最小检测事务。
+		return nil
+	}
+
+	// ① 重叠 IP：直通优先——不进事务，零 id:12 审计行。
+	if it := run("10.0.0.9"); it != nil {
+		t.Fatalf("重叠 IP 必须零中断直通, got %#v", it)
+	}
+	if docs := countAuditDocs(t, auditPath); docs != 0 {
+		t.Fatalf("重叠 IP 必须零 id:12 审计行, got %d", docs)
+	}
+
+	// ② 仅检测集 IP：恰 1 条审计行，id:12 logged，客户端 IP/归因头正确。
+	if it := run("203.0.113.9"); it != nil {
+		t.Fatalf("仅检测集 IP 必须放行（检测不拦）, got %#v", it)
+	}
+	if docs := countAuditDocs(t, auditPath); docs != 1 {
+		t.Fatalf("仅检测集 IP 必须恰 1 条 id:12 审计行, got %d", docs)
+	}
+	data, err := os.ReadFile(auditPath)
+	if err != nil {
+		t.Fatalf("read audit file: %v", err)
+	}
+	rec, perr := securityEventsParseTransaction(data)
+	if perr != nil {
+		t.Fatalf("摄取解析失败: %v\n%s", perr, data)
+	}
+	if rec.RuleTriggered != "12" || rec.Action != "logged" {
+		t.Fatalf("事件=(rule=%s action=%s), want (12,logged)", rec.RuleTriggered, rec.Action)
+	}
+	if rec.ClientIP != "203.0.113.9" || rec.AttributionRuleID != "lb_tdgate" {
+		t.Fatalf("事件归因=(ip %q rule %q), want (203.0.113.9, lb_tdgate)", rec.ClientIP, rec.AttributionRuleID)
+	}
+
+	// ③ 直通独有 IP 与名单外 IP：零新增审计行（不进入任何 coraza 事务）。
+	if it := run("192.168.1.5"); it != nil {
+		t.Fatalf("直通独有 IP 必须零中断直通, got %#v", it)
+	}
+	if it := run("198.51.100.7"); it != nil {
+		t.Fatalf("名单外 IP 不得被最小检测事务中断, got %#v", it)
+	}
+	if docs := countAuditDocs(t, auditPath); docs != 1 {
+		t.Fatalf("直通独有/名单外 IP 不得新增审计行, got %d", docs)
+	}
 }

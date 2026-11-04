@@ -652,10 +652,14 @@ const trustHitNote = computed(() => {
   if (!policy.value || kind.value === 'trust') return ''
   return ipHitScan.value.ownerTrust ? '该 IP 在策略信任名单中（DetectionOnly：全评估不拦但全记录）' : ''
 })
-// 信任命中语义按策略类型单源（非阶段 0 存量信任引擎恒 DetectionOnly）
+// 信任命中语义按策略类型单源（非阶段 0 存量信任引擎恒 DetectionOnly）；
+// 文案随类型分流：stage0 跳过全部安全阶段（独立轻量检测事务记录），mixed
+// 等其他类型为引擎内检测降级、不跳段（与 stage1FootnoteText 同口径）。
 const trustModeText = computed(() => trustHitMode(policy.value?.policy_type, policy.value?.trust_detection) === 'detection'
-  ? '保留检测：继续后续阶段评估，事件动作=检测'
-  : '直通上游：跳过后续安全阶段，不产生拦截')
+  ? (policy.value?.policy_type !== undefined && policy.value.policy_type !== 'stage0'
+    ? '保留检测：引擎内检测降级，仍逐段评估、仅记录不拦截（动作=检测）'
+    : '保留检测：跳过全部安全阶段，仅由独立轻量检测事务记录（动作=检测）')
+  : '直通上游：跳过全部安全阶段，不产生拦截')
 const memberSystemTip = computed(() =>
   policy.value && ipHitScan.value.sysAclHit ? '内置威胁名单为只读来源；误报可将该 IP 加入信任名单豁免。' : ''
 )

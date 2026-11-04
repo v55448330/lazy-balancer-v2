@@ -401,7 +401,7 @@ func buildCorazaDirectivesWithIndex(p *models.SecurityPolicy, store caddyConfigS
 	// （v2.2.3）：策略级「记录请求体」开关——开启时审计 parts 加 C，coraza
 	// 在事件事务（RelevantOnly 门控）输出 transaction.request.body，摄入落库
 	// request_body（64KB 截断）。请求体 access 由上方 crsActive/customActive
-	// 门控决定（后:214-218 条件发射，不再恒 On）；本开关
+	// 门控决定（条件发射 SecRequestBodyAccess，不再恒 On）；本开关
 	// （LogRequestBody）仅扩展审计输出面（加 C 段）。
 	auditParts := "ABIJDEFHKZ"
 	if p.LogRequestBody {
@@ -2463,9 +2463,10 @@ func buildIPPrecheckHandler(policies []*models.SecurityPolicy, ruleCaddyID strin
 // 同一份并集文件两个引擎共享，writeIPListFile 同字节跳写零重复落盘。主链
 // 引擎/预检的 id:12（nolog，永不匹配）保留为防御性发射——与 autoban
 // TrustExempt stage0 分支同款退化保留。
-// 恒发射边界（对齐 caddy.go 4426 始终发射收敛）：detectionTrust 为 nil 时
-// 显性报错（无保留检测策略不得渲染本引擎）；空并集投影空文件恒发射
-// （路由层 client_ip 空集永不命中=无事务，空↔非空纯内容变化走热路径）。
+// 恒发射边界（对齐 hasStage0TrustDetection 发射面 flag 收敛）：detectionTrust
+// 为 nil 时显性报错（无保留检测策略不得渲染本引擎）；空并集投影空文件恒发射
+// （空文件算子永不命中=无事务）。调用方按「保留检测 − 直通」差异集非空门控
+// 路由发射——空差集不渲染本引擎，空并集形态保留为引擎门禁覆盖的防御性形状。
 func buildTrustDetectDirectives(ruleCaddyID string, detectionTrust []string) (string, error) {
 	if ruleCaddyID == "" {
 		return "", fmt.Errorf("信任检测引擎投影缺少规则身份（ruleCaddyID 为空）——id:12 逐规则渲染，scope 必须编入规则身份（历史 HP-1）")

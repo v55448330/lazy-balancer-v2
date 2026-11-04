@@ -748,9 +748,10 @@ const flowNodes = computed<FlowNode[]>(() => {
 
 // 阶段 1 脚注：合并预检真实链序由
 // securityStages.stage1FootnoteText 单源给出（信任（阶段 0）→ 黑名单 →
-// 遗留黑名单 → 白名单外拒绝 → 爬虫校验 → 地域拦截；命中「保留检测」信任
-// 名单的 IP 跳过本段，由独立轻量检测事务记录）；原实现漏列遗留黑名单
-// （id:4 仍由 security.go 发射）与 v2.3.8 爬虫校验。
+// 遗留黑名单 → 白名单外拒绝 → 爬虫校验 → 地域拦截；stage0 信任命中跳过本段
+// 与全部安全阶段，由独立轻量检测事务记录；mixed 等其他类型为引擎内检测
+// 降级、不跳段）；原实现漏列遗留黑名单（id:4 仍由 security.go 发射）与
+// v2.3.8 爬虫校验。
 const stage1Footnote = computed(() => {
   // 按本规则实际绑定链判定（model.stages[0] 的 group 键 = 绑定策略 id）：
   // 按全部策略判定会在「本规则未绑 stage0、但别处存在保留检测策略」时误称

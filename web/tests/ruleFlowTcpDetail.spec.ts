@@ -96,8 +96,12 @@ test('TCP 阶段 1 脚注：保留检测信任命中记录为检测后直达上�
   assert.match(dialog, /const TCP_STAGE1_FOOTNOTE = '[^']*保留检测信任命中记录为检测[^']*直达上游/)
 })
 
-test('策略向导阶段 0 提示：保留检测开启话术对 TCP 成立（不再限定 HTTP 检测流程）', () => {
+test('策略向导阶段 0 提示：跳段话术限 stage0，mixed 信任命中为引擎内检测降级', () => {
   const policies = code('src/views/security/SecurityPolicies.vue')
-  assert.match(policies, /开启：信任 IP 不拦截、事件动作记为检测（[^<]*）/, '开启话术协议中立')
-  assert.match(policies, /信任名单阶段生效——直通模式命中后跳过全部后续安全阶段；保留检测模式仅记录检测、不拦截/, '投影条不再断言恒跳过')
+  assert.match(policies, /开启：信任 IP 跳过全部安全阶段，仅由独立轻量检测事务记录（事件动作=检测）、不拦截/, '开启话术协议中立且为跳段语义')
+  assert.doesNotMatch(policies, /继续后续/, '旧「继续后续评估」语义退场')
+  assert.match(policies, /信任名单阶段生效——「类型=信任名单（stage0）」策略命中后跳过全部后续安全阶段（直通=零安全事件；保留检测=仅由独立轻量检测事务记录，动作=检测）/, '投影条按类型限定跳段')
+  assert.match(policies, /「类型=信任名单（stage0）」策略：名单内 IP 命中后跳过全部后续安全阶段（IP 访问控制 \/ 限流 \/ WAF/, '提示线按类型限定跳段')
+  assert.match(policies, /mixed 等其他类型策略信任命中为引擎内检测降级/, 'mixed 场景如实呈现引擎内降级')
+  assert.doesNotMatch(policies, /保留检测模式仅记录检测、不拦截/, '旧「仅记录检测」话术退场')
 })

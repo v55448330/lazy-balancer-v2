@@ -859,3 +859,59 @@ func TestBuildTCPServer_tcpGeoipEmptyList_warnsThrottled(t *testing.T) {
 		t.Fatalf("mode=off 正常停用态不得告警: %s", buf.String())
 	}
 }
+
+// 直通∩保留检测重叠 IP 的跨协议对齐钉测：TCP 路由序 ① 直通在 ①b 保留检测
+// 之前——重叠 IP 命中直通路由即短路（零事件、不进 lb_l4_sec 上报），与 HTTP
+// 侧信任路由取「保留检测 − 直通」差集的语义一致（同一 IP 在两种协议下都不产
+// 检测事件）。保留检测投影文件保持全量并集（引擎面不因差集门控缩水）。
+func TestBuildTCPServer_tcpTrustOverlapPrefersPassthrough(t *testing.T) {
+	stubSecurityLibsAvailable(t)
+	oldDir := IPListDataDir
+	IPListDataDir = t.TempDir()
+	t.Cleanup(func() { IPListDataDir = oldDir })
+	ResetIPListProjectionStateForTest()
+	t.Cleanup(ResetIPListProjectionStateForTest)
+
+	cid := "lb_l4overlap"
+	policies := []*models.SecurityPolicy{
+		{ID: 71, Name: "l4-td-overlap", PolicyType: "stage0", TrustDetection: true, IPWhitelistEnabled: true, IPWhitelist: []byte(`["10.0.0.9","203.0.113.9"]`)},
+		{ID: 72, Name: "l4-pt-overlap", PolicyType: "stage0", TrustDetection: false, IPWhitelistEnabled: true, IPWhitelist: []byte(`["10.0.0.9"]`)},
+	}
+	server, err := buildTCPServer(l4SecTestRule(cid), &tcpSecurityRenderInput{policies: policies})
+	if err != nil {
+		t.Fatalf("buildTCPServer: %v", err)
+	}
+	rawRoutes, ok := server["routes"].([]interface{})
+	if !ok {
+		t.Fatalf("routes missing: %#v", server)
+	}
+	// 直通路由在前、保留检测路由在后，再兜底 = 3 条（直通优先=重叠 IP 零事件）。
+	if len(rawRoutes) != 3 {
+		t.Fatalf("routes=%d, want 3（trust 直通 → trust_detect → 兜底）: %s", len(rawRoutes), dumpJSON(t, server))
+	}
+	passFiles := l4SecMatcherFiles(t, l4SecRouteMatchers(t, rawRoutes[0])[0], "lb_ipfile")
+	if passFiles[0] != filepath.Join(IPListDataDir, "l4-trust-"+cid+".txt") {
+		t.Fatalf("首条必须是信任直通路由（重叠 IP 短路于此后一切上报）: %v", passFiles)
+	}
+	passContent, err := os.ReadFile(passFiles[0])
+	if err != nil {
+		t.Fatalf("read trust passthrough projection: %v", err)
+	}
+	if !strings.Contains(string(passContent), "10.0.0.9") {
+		t.Fatalf("直通投影=%q, want 含重叠 IP 10.0.0.9（直通优先判定面）", passContent)
+	}
+	detectFiles := l4SecMatcherFiles(t, l4SecRouteMatchers(t, rawRoutes[1])[0], "lb_ipfile")
+	if detectFiles[0] != filepath.Join(IPListDataDir, "l4-trust12-"+cid+".txt") {
+		t.Fatalf("第二条必须是保留检测路由: %v", detectFiles)
+	}
+	detectContent, err := os.ReadFile(detectFiles[0])
+	if err != nil {
+		t.Fatalf("read trust detection projection: %v", err)
+	}
+	for _, want := range []string{"10.0.0.9", "203.0.113.9"} {
+		if !strings.Contains(string(detectContent), want) {
+			t.Fatalf("保留检测投影=%q, want 含 %s（引擎文件保持全量并集）", detectContent, want)
+		}
+	}
+	assertL4SecEventHandler(t, l4SecRouteHandlers(t, rawRoutes[1])[0], "trust_detect", 0)
+}

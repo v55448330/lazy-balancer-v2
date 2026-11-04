@@ -260,8 +260,10 @@ export const stageSubLabel = (stage: 1 | 2 | 3): string => {
 }
 
 /**
- * 阶段 1 脚注；`trustDetectionBound` = 绑定了「保留检测」信任策略（信任 IP
- * 跳过本段，命中信任名单由独立轻量检测事务记录）。
+ * 阶段 1 脚注；`trustDetectionBound` = 绑定了信任检测策略（脚注是否追加跳段/
+ * 降级说明）。信任 IP 命中按策略类型分流：类型=信任名单（stage0）跳过本段与
+ * 全部安全阶段，由独立轻量检测事务记录；mixed 等其他类型在生产引擎走 id:3
+ * 引擎内检测降级（不跳段），文案必须据此限定。
  *
  * 白名单豁免面必须写成「其后全部预检」：引擎发射的豁免规则是
  * `pass,nolog,skipAfter:SECURITY_RULES_END`，命中后跳过预检段内其后的一切规则
@@ -270,7 +272,9 @@ export const stageSubLabel = (stage: 1 | 2 | 3): string => {
  */
 export const stage1FootnoteText = (trustDetectionBound: boolean): string => {
   const base = '多策略合并预检：信任（阶段 0）→ 黑名单 → 遗留黑名单（旧字段）→ 白名单外拒绝（白名单命中豁免其后全部预检，含爬虫校验与地域拦截）→ 爬虫校验 → 地域拦截；未通过即终止'
-  return trustDetectionBound ? `${base}；命中「保留检测」信任名单的 IP 跳过本段与全部安全阶段，由独立轻量检测事务记录（动作=检测），不经过任何 WAF 引擎` : base
+  return trustDetectionBound
+    ? `${base}；命中信任名单的 IP：「类型=信任名单（stage0）」策略跳过本段与全部安全阶段，由独立轻量检测事务记录（动作=检测），不经过任何 WAF 引擎；mixed 等其他类型策略的信任命中为引擎内检测降级（仍逐段评估、仅记录不拦截）`
+    : base
 }
 
 // 阶段页状态码选项（与策略表单返回状态码同集；0 = 跟随策略不在此列出，由调用方单独提供）
@@ -431,12 +435,16 @@ export const trustHitMode = (policyType: string | undefined, trustDetection: boo
 }
 
 /**
- * 阶段 1 脚注的「信任命中降级为检测」判定（绑定链口径）。
+ * 阶段 1 脚注的「绑定链存在信任检测」判定（绑定链口径）——只决定脚注是否显示，
+ * 脚注正文按策略类型分流（见 stage1FootnoteText）。
  * 命中条件 = 该策略被本规则绑定 ∧ 策略启用 ∧ 信任名单启用且条目非空（否则
  * 引擎不发射信任规则）∧ trustHitMode 为检测（阶段 0 看 trust_detection；mixed
  * 存量信任恒 DetectionOnly，见 security.go 的 id:3 并集）。判定必须与阶段 0
  * 模式行同源，不得退回 policy_type === 'stage0' 等值判断——mixed 策略的信任
- * 同样降级但不满足该等值。
+ * 同样降级但不满足该等值。注意「跳过全部安全阶段」只对 stage0 成立：生产
+ * stage0TrustSets 只收 stage0 策略（services/security.go 同名采集函数），
+ * mixed 与其他类型的信任命中走 id:3 引擎内检测降级、不跳段——脚注正文必须
+ * 据此限定，不得对 mixed 场景复用未限定的跳段话术。
  */
 export const hasTrustDetectionBinding = (
   boundIds: ReadonlySet<number>,
@@ -1562,11 +1570,14 @@ export const triggerStageFamily = (ruleTriggered: string): TriggerStageFamily =>
 
 /**
  * 「所属策略为检测模式（命中只记录）」能否解释本类事件的 logged 动作。
- * 后端 detection 的 ctl:ruleEngine=DetectionOnly（security.go:453-454 id:6）在
- * IP ACL/遗留黑名单/自定义规则之后、CRS 与请求体规则之前发射——所以只有 WAF 族
- * （CRS/自定义含 body 目标）的 logged 可由检测模式解释；阶段 1 族（IP ACL/地域/
- * 威胁/爬虫）的 denial 与模式无关，logged 的真实成因是信任保留检测
- * （security.go:374-386），必须走跨策略信任豁免文案，不能归因「检测模式」。
+ * 后端 detection 的 ctl:ruleEngine=DetectionOnly（buildCorazaDirectivesWithIndex
+ * 的 id:6 SecAction）在 IP ACL/遗留黑名单/自定义规则之后、CRS 与请求体规则之前
+ * 发射——所以只有 WAF 族（CRS/自定义含 body 目标）的 logged 可由检测模式解释；
+ * 阶段 1 族（IP ACL/地域/威胁/爬虫）的 denial 与模式无关，logged 的真实成因是
+ * 信任保留检测（唯一事件发射 = 信任保留检测路由 → buildTrustDetectDirectives
+ * 最小检测引擎 id:12 nolog,auditlog；buildCorazaDirectivesWithIndex 与
+ * buildIPPrecheckDirectives 的同号 id:12 为防御性发射、因路由层 subroute 短路
+ * 永不匹配），必须走跨策略信任豁免文案，不能归因「检测模式」。
  * 信任族事件本身不展示该说明（kind='trust' 由调用方先短路）。
  */
 export const detectionModeExplains = (kind: string): boolean => kind === 'waf-crs' || kind === 'waf-custom'
@@ -1695,7 +1706,7 @@ export const addressAllowDenyConflictText = (input: {
 }): string => {
   if (input.kind === 'trust' && input.policyType === 'stage0') {
     return input.trustDetection === true
-      ? '阶段 0 信任跨策略优先生效：保留检测模式仅记录、不拦截'
+      ? '阶段 0 信任跨策略优先生效：保留检测模式跳过全部安全检测，仅由独立轻量检测事务记录（动作=检测）'
       : '阶段 0 信任跨策略优先生效：直通模式跳过全部安全检测'
   }
   const allowance = input.kind === 'trust' ? '信任' : '允许'

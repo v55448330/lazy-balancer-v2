@@ -389,7 +389,7 @@ test('地址冲突语义：阶段 0 信任跨策略优先，ACL 与存量信任�
   const passthrough = addressAllowDenyConflictText({ kind: 'trust', policyType: 'stage0', trustDetection: false, denyPolicyName: '拒绝策略' })
   assert.equal(passthrough, '阶段 0 信任跨策略优先生效：直通模式跳过全部安全检测')
   const detection = addressAllowDenyConflictText({ kind: 'trust', policyType: 'stage0', trustDetection: true, denyPolicyName: '拒绝策略' })
-  assert.equal(detection, '阶段 0 信任跨策略优先生效：保留检测模式仅记录、不拦截')
+  assert.equal(detection, '阶段 0 信任跨策略优先生效：保留检测模式跳过全部安全检测，仅由独立轻量检测事务记录（动作=检测）')
   assert.doesNotMatch(passthrough + detection, /仍会被|信任不跨策略/)
 
   const page = code('src/views/security/SecurityPolicies.vue')

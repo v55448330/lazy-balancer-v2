@@ -82,9 +82,12 @@ test('阶段 1 文案：副标题与脚注含爬虫校验，脚注含遗留黑�
   assert.deepEqual(emission, [...emission].sort((a, b) => a - b), '脚注环节顺序与渲染器发射顺序不一致')
 })
 
-test('阶段 1 脚注：绑定保留检测信任策略时追加跳段说明（2026-11-04 语义）', () => {
-  assert.match(stage1FootnoteText(true), /命中「保留检测」信任名单的 IP 跳过本段与全部安全阶段，由独立轻量检测事务记录（动作=检测），不经过任何 WAF 引擎/)
-  assert.ok(stage1FootnoteText(true).length > stage1FootnoteText(false).length)
+test('阶段 1 脚注：跳段话术限 stage0，mixed 等其他类型为引擎内检测降级（2026-11-04 语义对齐）', () => {
+  const text = stage1FootnoteText(true)
+  assert.match(text, /「类型=信任名单（stage0）」策略跳过本段与全部安全阶段，由独立轻量检测事务记录（动作=检测），不经过任何 WAF 引擎/)
+  assert.match(text, /mixed 等其他类型策略的信任命中为引擎内检测降级（仍逐段评估、仅记录不拦截）/, 'mixed 场景不得复用未限定的跳段话术')
+  assert.doesNotMatch(text, /命中「保留检测」信任名单的 IP 跳过本段与全部安全阶段/, '跳段断言必须带类型限定')
+  assert.ok(text.length > stage1FootnoteText(false).length)
 })
 
 // 白名单命中后的豁免面：引擎发射的豁免规则是 pass + skipAfter:SECURITY_RULES_END

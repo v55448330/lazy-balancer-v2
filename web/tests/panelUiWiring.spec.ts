@@ -413,6 +413,9 @@ test('掩码私钥不得误报「请提供私钥」', () => {
 test('信任语义单源：事件详情与流程副标题共用 trustHitMode', () => {
   const trigger = code('src/components/events/TriggerDetailDialog.vue')
   assert.match(trigger, /const trustModeText = computed\(\(\) => trustHitMode\(policy\.value\?\.policy_type, policy\.value\?\.trust_detection\)/)
+  assert.match(trigger, /'保留检测：跳过全部安全阶段，仅由独立轻量检测事务记录（动作=检测）'/, 'stage0 保留检测=跳段+独立轻量检测事务记录')
+  assert.match(trigger, /'保留检测：引擎内检测降级，仍逐段评估、仅记录不拦截（动作=检测）'/, 'mixed 等其他类型=引擎内降级不跳段')
+  assert.doesNotMatch(trigger, /继续后续/, '旧「继续后续阶段评估」语义退场')
   assert.doesNotMatch(trigger, /policy\?\.trust_detection === true \? '保留检测/)
 
   const flow = code('src/components/RuleFlowDialog.vue')

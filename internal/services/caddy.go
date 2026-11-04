@@ -4419,6 +4419,8 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig, sec
 	//     同样绕开全部安全阶段直达上游），另挂独立最小 coraza 引擎（仅 id:12
 	//     的检测事务，nolog,auditlog——审计行进同一事件管线，唯一事件=
 	//     id:12 logged 归因信任策略；构建见 buildTrustDetectDirectives）。
+	//     直通优先：同时在直通并集的重叠 IP 不产 id:12（信任路由 ranges 取
+	//     「保留检测 − 直通」差集，与 TCP 路序号「直通 → 保留检测」同语义）。
 	//     主链引擎/预检内的 id:12（nolog）自此永不匹配，保留为防御性发射
 	//     （autoban TrustExempt stage0 分支同款退化保留，字节零变化）。
 	// 缺库降级（2026-09-24 用户裁定）：CRS/IP2Region 库缺失时全部安全规则不
@@ -4570,13 +4572,22 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig, sec
 	// 信任包裹（阶段 0）：subroute 内层顺序与展平形态逐字节一致——非信任
 	// 流量行为零漂移。跳过并集=直通∪保留检测（2026-11-04 语义：保留检测的
 	// 信任 IP 同样绕开全部安全阶段）；仅直通形态时切片即原并集（字节零变化）。
-	// 保留检测信任路由挂在包裹之后：仅保留检测并集命中（client_ip 正向匹配）
-	// 时进入最小检测事务（仅 id:12，见 buildTrustDetectDirectives），产唯一
-	// logged 事件后直达 reverse_proxy；非信任/直通 IP 不进入任何 coraza 事务。
+	// 保留检测信任路由挂在包裹之后：其 client_ip ranges 取「保留检测集 −
+	// 直通并集」的差集（直通优先，与 TCP 路由序「直通 → 保留检测」同语义：
+	// 重叠 IP 在两种协议下都零事件，不再出现 HTTP 产 id:12、TCP 零事件的分叉）。
+	// 命中差异集者进入最小检测事务（仅 id:12，见 buildTrustDetectDirectives），
+	// 产唯一 logged 事件后直达 reverse_proxy；非信任/直通 IP 不进入任何 coraza
+	// 事务。空差集（并集空或全被直通吸收）= 不产事件即不发射（见下方发射门）。
 	skipUnion := passthroughUnion
 	if len(detectionTrust) > 0 {
 		merged := append(append([]string{}, passthroughUnion...), detectionTrust...)
 		skipUnion = aggregateIPEntries(merged)
+	}
+	// 差集在渲染侧一次算出（热路径判定面仍是 skipUnion，逐字节不变）；仅
+	// 两侧都非空时才需要扣除，纯保留检测形态直接沿用原并集（零拷贝语义）。
+	trustDetectRanges := detectionTrust
+	if len(detectionTrust) > 0 && len(passthroughUnion) > 0 {
+		trustDetectRanges = differenceIPEntries(detectionTrust, passthroughUnion)
 	}
 	if rule.Protocol == "http" && len(skipUnion) > 0 && len(securityChain) > 0 {
 		handleChain = append(handleChain, map[string]interface{}{
@@ -4597,11 +4608,12 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig, sec
 		handleChain = append(handleChain, securityChain...)
 	}
 	// 信任保留检测路径（trust_detection=1，2026-11-04 用户裁定）：独立最小
-	// coraza 引擎（仅 id:12 检测事务）。detectionTrust 非 nil 即渲染（含空
-	// 并集恒发射——空 client_ip 集永不命中，空↔非空纯内容变化走热路径，
-	// 配置字节稳定）；链位在安全包裹之后、reverse_proxy 之前，事务经 counter
-	// 注入的 X-LB-Rule-ID/请求级标识头完成归因与请求归并。
-	if rule.Protocol == "http" && detectionTrust != nil && len(securityChain) > 0 {
+	// coraza 引擎（仅 id:12 检测事务）。发射门=差异集非空（保留检测 − 直通）：
+	// 直通优先语义下空差集不产事件即不发射（并集空、或保留检测集全被直通吸收
+	// 时不再挂空 client_ip 集的恒发射路由）；保留检测策略在而差异集非空时照常
+	// 渲染，名单内容变化走热路径。链位在安全包裹之后、reverse_proxy 之前，事务
+	// 经 counter 注入的 X-LB-Rule-ID/请求级标识头完成归因与请求归并。
+	if rule.Protocol == "http" && len(trustDetectRanges) > 0 && len(securityChain) > 0 {
 		trustHandler, err := buildTrustDetectHandler(rule.CaddyID, detectionTrust)
 		if err != nil {
 			return nil, err
@@ -4610,7 +4622,7 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig, sec
 			"handler": "subroute",
 			"routes": []interface{}{map[string]interface{}{
 				"match": []interface{}{map[string]interface{}{
-					"client_ip": map[string]interface{}{"ranges": detectionTrust},
+					"client_ip": map[string]interface{}{"ranges": trustDetectRanges},
 				}},
 				"handle": []interface{}{trustHandler},
 			}},
