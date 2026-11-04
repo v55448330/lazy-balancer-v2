@@ -123,14 +123,18 @@ func TestGetSecurityOverview_todayBlockedTCP(t *testing.T) {
 		t.Fatalf("today_blocked 回归形状漂移: %s", rec.Body.String())
 	}
 	// 检测列 TCP 拆分：信任检测（trust_detect, id 12）产 tcp+logged——
-	// 可能产生数据就必须如实统计与显示，不得隐藏。
+	// 可能产生数据就必须如实统计与显示，不得隐藏（拆分列不经过攻击口径
+	// 谓词）。全局 today_detected 属攻击口径（AttackEventSQLPredicate）：
+	// 2026-11-04 裁定后 id:12 logged（信任名单命中可见性记录）不计入攻击/
+	// 检测 KPI——本种子仅一条 logged 且为信任检测，全局检测为 0；可见性由
+	// 拆分列与事件列表承载。
 	if resp.Data.TodayDetectedTCP == nil {
 		t.Fatalf("响应缺 today_detected_tcp 键: %s", rec.Body.String())
 	}
 	if *resp.Data.TodayDetectedTCP != 1 {
-		t.Fatalf("today_detected_tcp=%d, want 1（tcp+logged 信任检测）", *resp.Data.TodayDetectedTCP)
+		t.Fatalf("today_detected_tcp=%d, want 1（tcp+logged 信任检测拆分列如实统计）", *resp.Data.TodayDetectedTCP)
 	}
-	if resp.Data.TodayDetected == nil || *resp.Data.TodayDetected != 1 {
-		t.Fatalf("today_detected=%v, want 1（含 tcp logged）", resp.Data.TodayDetected)
+	if resp.Data.TodayDetected == nil || *resp.Data.TodayDetected != 0 {
+		t.Fatalf("today_detected=%v, want 0（id:12 logged 不计入攻击口径检测 KPI）", resp.Data.TodayDetected)
 	}
 }

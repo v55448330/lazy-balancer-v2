@@ -260,7 +260,8 @@ export const stageSubLabel = (stage: 1 | 2 | 3): string => {
 }
 
 /**
- * 阶段 1 脚注；`trustDetectionBound` = 绑定了「保留检测」信任策略（命中降级为检测）。
+ * 阶段 1 脚注；`trustDetectionBound` = 绑定了「保留检测」信任策略（信任 IP
+ * 跳过本段，命中信任名单由独立轻量检测事务记录）。
  *
  * 白名单豁免面必须写成「其后全部预检」：引擎发射的豁免规则是
  * `pass,nolog,skipAfter:SECURITY_RULES_END`，命中后跳过预检段内其后的一切规则
@@ -269,7 +270,7 @@ export const stageSubLabel = (stage: 1 | 2 | 3): string => {
  */
 export const stage1FootnoteText = (trustDetectionBound: boolean): string => {
   const base = '多策略合并预检：信任（阶段 0）→ 黑名单 → 遗留黑名单（旧字段）→ 白名单外拒绝（白名单命中豁免其后全部预检，含爬虫校验与地域拦截）→ 爬虫校验 → 地域拦截；未通过即终止'
-  return trustDetectionBound ? `${base}；绑定「保留检测」信任策略时命中降级为检测事件，不终止` : base
+  return trustDetectionBound ? `${base}；命中「保留检测」信任名单的 IP 跳过本段与全部安全阶段，由独立轻量检测事务记录（动作=检测），不经过任何 WAF 引擎` : base
 }
 
 // 阶段页状态码选项（与策略表单返回状态码同集；0 = 跟随策略不在此列出，由调用方单独提供）

@@ -494,7 +494,9 @@ func TestSyncService_applySnapshot_securityVisibleToCommittedCaddyConfig(t *test
 }
 
 // queryBindingRows reads security_policy_bindings for a rule ordered by
-// policy_id ASC — the same SELECT the runtime uses (GetSecurityPoliciesForRule).
+// policy_id ASC only — a test-side verification query, deliberately NOT the
+// runtime SELECT (GetSecurityPoliciesForRule orders rank ASC, policy_id ASC).
+// Callers bind with the default rank 0, so both orders coincide here.
 func queryBindingRows(t *testing.T, database *sql.DB, ruleCaddyID string) []int {
 	t.Helper()
 	rows, err := database.Query("SELECT policy_id FROM security_policy_bindings WHERE rule_caddy_id=? ORDER BY policy_id ASC", ruleCaddyID)

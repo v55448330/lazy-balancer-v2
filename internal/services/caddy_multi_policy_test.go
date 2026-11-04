@@ -8,11 +8,12 @@ import (
 )
 
 // ..05（v2.2.0 多策略绑定 · Caddy 生成路径）：一条 LB 规则可绑定至多
-// maxBindingsPerRule=8 条安全策略，评估顺序 = policy_id ASC；每策略的 [rate_limit?, waf?] 处理器组
+// maxBindingsPerRule=8 条安全策略，评估顺序 = 绑定 rank ASC（policy_id ASC 兜序；
+// mpGenBindPolicy 未写 rank，本组夹具走兜序）；每策略的 [rate_limit?, waf?] 处理器组
 // 按序编入规则主路由。geoip pass 路由至多一条（任一启用策略带 geoip 即存在，
 // 为下游 coraza 的 GeoIP SecRule 设置 X-LB-GeoIP-* headers；地域拦截在各自策略的
-// waf directives 内评估，无 Caddy 原生 block 路由）；错误路由取首绑定（最低
-// policy_id）启用策略的拦截页，匹配表达式只含统一 403 interruption 子句；
+// waf directives 内评估，无 Caddy 原生 block 路由）；错误路由取首绑定（rank
+// 最小，policy_id 兜序）启用策略的拦截页，匹配表达式只含统一 403 interruption 子句；
 // disabled 策略在生成中零贡献。
 
 // mpGenPolicySpec 描述一条待播种策略的生成相关字段（未列字段走表默认值）。
@@ -135,11 +136,12 @@ func mpCountGeoipPassRoutes(t *testing.T, routes []map[string]interface{}) int {
 
 // 路由顺序 = geoipPass(≤1) → pathRoutes → main；主路由处理器链按
 // 阶段化执行模型编排——阶段 1 合并预检（IP ACL+GeoIP，单/多策略同构）→ 阶段 2
-// 限流（全部策略 rate_limit 集中）→ 阶段 3 每策略独立 WAF 引擎（policy_id ASC）。
+// 限流（全部策略 rate_limit 集中）→ 阶段 3 每策略独立 WAF 引擎（评估序
+// rank ASC，policy_id 兜序）。
 // 纯 GeoIP 策略（p1 off+geoip）不再贡献策略 waf，GeoIP 链由预检 800000+ 段承接。
 func TestMultiPolicy_RouteComposition_OrderAndHandlerGroups(t *testing.T) {
 	stubSecurityLibsAvailable(t) // 缺库降级：安全链渲染断言前先桩库可用
-	// Given 一条规则绑定三条启用策略（绑定顺序故意打乱，验证按 policy_id ASC）：
+	// Given 一条规则绑定三条启用策略（mpGenBindPolicy 未写 rank，验证按 policy_id 兜序）：
 	// p1(off+geoip) < p2(blocking+限流) < p3(detection+geoip)
 	_, database := newClusterTestService(t)
 	seedHTTPRuleForGeneration(t, database, "lb_gen1", "gen1.example.test", 8080)

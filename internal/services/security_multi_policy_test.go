@@ -8,8 +8,9 @@ import (
 )
 
 // （v2.2.0 多策略绑定）：GetSecurityPoliciesForRule 返回规则绑定的
-// 全部 enabled 策略，按 policy_id ASC 有序；disabled 排除；空结果返回 nil
-// （非空切片）；单绑定时与 GetSecurityPolicyForRule 返回同一策略。
+// 全部 enabled 策略，按绑定 rank ASC（policy_id ASC 兜序）有序；disabled
+// 排除；空结果返回 nil（非空切片）；单绑定时与 GetSecurityPolicyForRule
+// 返回同一策略。
 
 // mpInitDB 初始化一个独立的临时 SQLite 库并接管全局 db.DB（与
 // security_wafcheck_test.go 同款模式，测试间互不串扰）。保存/恢复三库句柄
@@ -37,7 +38,7 @@ func mpSeedPolicy(t *testing.T, name string, enabled int) int {
 	return int(id)
 }
 
-// mpBindRule 记录规则与策略的绑定。
+// mpBindRule 记录规则与策略的绑定（rank 缺省 0，排序走 policy_id 兜序）。
 func mpBindRule(t *testing.T, ruleCaddyID string, policyID int) {
 	t.Helper()
 	if _, err := db.DB.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id, policy_id) VALUES (?, ?)`, ruleCaddyID, policyID); err != nil {
@@ -45,7 +46,17 @@ func mpBindRule(t *testing.T, ruleCaddyID string, policyID int) {
 	}
 }
 
-// 绑定顺序 3,1,2 → 返回必须为 [1,2,3]（policy_id ASC，而非绑定顺序/DESC）。
+// mpBindRuleRank 记录规则与策略的绑定并写入显式 rank（绑定执行序）。
+func mpBindRuleRank(t *testing.T, ruleCaddyID string, policyID, rank int) {
+	t.Helper()
+	if _, err := db.DB.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id, policy_id, rank) VALUES (?, ?, ?)`, ruleCaddyID, policyID, rank); err != nil {
+		t.Fatalf("bind policy %d to %s with rank %d: %v", policyID, ruleCaddyID, rank, err)
+	}
+}
+
+// rank 显式种子 B=1,C=2,A=3（插入序 C,A,B）→ 返回必须为 [B,C,A]：
+// 与 policy_id ASC（[A,B,C]）和插入序（[C,A,B]）都不重合，断言只能被
+// 生产 ORDER BY rank ASC, policy_id ASC 的 rank 主序满足。
 func TestGetSecurityPoliciesForRule_ASCOrder(t *testing.T) {
 	mpInitDB(t)
 	// 新库 AUTOINCREMENT 从 1 起：三条策略 id 恒为 1,2,3。
@@ -55,18 +66,18 @@ func TestGetSecurityPoliciesForRule_ASCOrder(t *testing.T) {
 	if !(idA == 1 && idB == 2 && idC == 3) {
 		t.Fatalf("unexpected seed ids: %d %d %d, want 1 2 3", idA, idB, idC)
 	}
-	mpBindRule(t, "lb_mp_asc", idC)
-	mpBindRule(t, "lb_mp_asc", idA)
-	mpBindRule(t, "lb_mp_asc", idB)
+	mpBindRuleRank(t, "lb_mp_asc", idC, 2)
+	mpBindRuleRank(t, "lb_mp_asc", idA, 3)
+	mpBindRuleRank(t, "lb_mp_asc", idB, 1)
 
 	policies := GetSecurityPoliciesForRule("lb_mp_asc")
 	if len(policies) != 3 {
 		t.Fatalf("want 3 policies, got %d", len(policies))
 	}
-	want := []int{idA, idB, idC}
+	want := []int{idB, idC, idA}
 	for i, p := range policies {
 		if p.ID != want[i] {
-			t.Fatalf("position %d = policy id %d, want %d（必须按 policy_id ASC 排序）", i, p.ID, want[i])
+			t.Fatalf("position %d = policy id %d, want %d（必须按绑定 rank ASC 排序）", i, p.ID, want[i])
 		}
 	}
 }

@@ -371,7 +371,10 @@ type SecurityEvent struct {
 }
 
 type SecurityOverview struct {
-	TodayBlocked  int `json:"today_blocked"`
+	TodayBlocked int `json:"today_blocked"`
+	// TodayDetected 是今日检测数（攻击口径：logged 且非爬虫放行族、非保留
+	// 检测 id:12——信任名单命中是可见性记录而非攻击，2026-11-04 裁定；可见
+	// 性由 TCP 检测拆分列与事件列表承载）。
 	TodayDetected int `json:"today_detected"`
 	// TodayBlockedTCP 是今日拦截的 TCP 协议拆分（event_type='tcp'，原始表
 	// 直算——rollup 表无 event_type 维度；TCP 为新增事件族，行帽裁剪对历史

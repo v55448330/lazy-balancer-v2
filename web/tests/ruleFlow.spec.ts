@@ -82,8 +82,8 @@ test('阶段 1 文案：副标题与脚注含爬虫校验，脚注含遗留黑�
   assert.deepEqual(emission, [...emission].sort((a, b) => a - b), '脚注环节顺序与渲染器发射顺序不一致')
 })
 
-test('阶段 1 脚注：绑定保留检测信任策略时追加降级说明', () => {
-  assert.match(stage1FootnoteText(true), /绑定「保留检测」信任策略时命中降级为检测事件，不终止/)
+test('阶段 1 脚注：绑定保留检测信任策略时追加跳段说明（2026-11-04 语义）', () => {
+  assert.match(stage1FootnoteText(true), /命中「保留检测」信任名单的 IP 跳过本段与全部安全阶段，由独立轻量检测事务记录（动作=检测），不经过任何 WAF 引擎/)
   assert.ok(stage1FootnoteText(true).length > stage1FootnoteText(false).length)
 })
 

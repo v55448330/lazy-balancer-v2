@@ -4410,12 +4410,17 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig, sec
 	// 现状记录）。预检仍是 coraza 拒绝：audit log 留痕供安全事件管线归因；
 	// 规则配了阶段 1 拦截页时全部 deny 抬码 481（stage1BlockStatus），否则
 	// 403 → errors 路由 → 拦截页。
-	// 阶段 0 信任名单（2026-09-20 用户裁定）：直通（trust_detection=0）时安全
-	// 段（预检/压缩/请求体限额/限流/全部 WAF 引擎）整体包进
-	// 「not remote_ip ∈ 信任并集」的 subroute——信任 IP 流程
-	// headers→metrics→counter→(subroute 跳过)→reverse_proxy 直达上游，
-	// 零安全事件（不产生任何 coraza 事务）；保留检测（trust_detection=1）
-	// 无此包裹，信任 IP 经预检/引擎 id:12 DetectionOnly 全评估全记录。
+	// 阶段 0 信任名单（2026-11-04 用户裁定，推翻 2026-09-20 原语义）：信任 IP
+	// 不再进入任何安全阶段。两种形态统一为「安全段（预检/压缩/请求体限额/
+	// 限流/全部 WAF 引擎）整体包进 not-client_ip subroute」：
+	//   直通（trust_detection=0）：跳过并集=直通并集，零安全事件（不产生任何
+	//     coraza 事务）——行为与原语义零变化；
+	//   保留检测（trust_detection=1）：跳过并集=保留检测∪直通并集（信任 IP
+	//     同样绕开全部安全阶段直达上游），另挂独立最小 coraza 引擎（仅 id:12
+	//     的检测事务，nolog,auditlog——审计行进同一事件管线，唯一事件=
+	//     id:12 logged 归因信任策略；构建见 buildTrustDetectDirectives）。
+	//     主链引擎/预检内的 id:12（nolog）自此永不匹配，保留为防御性发射
+	//     （autoban TrustExempt stage0 分支同款退化保留，字节零变化）。
 	// 缺库降级（2026-09-24 用户裁定）：CRS/IP2Region 库缺失时全部安全规则不
 	// 渲染（预检/ACL/限流/WAF/GeoIP 一并缺席），告警日志提示补库——coraza
 	// Include 缺失文件会使整份配置被 caddy validate 拒绝，负载均衡也被拖死。
@@ -4562,9 +4567,18 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig, sec
 			"handler": "lb_security_timing_end",
 		})
 	}
-	// 直通包裹（阶段 0）：subroute 内层顺序与展平形态逐字节一致——非信任
-	// 流量行为零漂移，信任流量短路到 reverse_proxy。
-	if rule.Protocol == "http" && len(passthroughUnion) > 0 && len(securityChain) > 0 {
+	// 信任包裹（阶段 0）：subroute 内层顺序与展平形态逐字节一致——非信任
+	// 流量行为零漂移。跳过并集=直通∪保留检测（2026-11-04 语义：保留检测的
+	// 信任 IP 同样绕开全部安全阶段）；仅直通形态时切片即原并集（字节零变化）。
+	// 保留检测信任路由挂在包裹之后：仅保留检测并集命中（client_ip 正向匹配）
+	// 时进入最小检测事务（仅 id:12，见 buildTrustDetectDirectives），产唯一
+	// logged 事件后直达 reverse_proxy；非信任/直通 IP 不进入任何 coraza 事务。
+	skipUnion := passthroughUnion
+	if len(detectionTrust) > 0 {
+		merged := append(append([]string{}, passthroughUnion...), detectionTrust...)
+		skipUnion = aggregateIPEntries(merged)
+	}
+	if rule.Protocol == "http" && len(skipUnion) > 0 && len(securityChain) > 0 {
 		handleChain = append(handleChain, map[string]interface{}{
 			"handler": "subroute",
 			"routes": []interface{}{map[string]interface{}{
@@ -4573,7 +4587,7 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig, sec
 						// v2.3.x：client_ip（受信代理启用时=真实 IP）替代
 						// remote_ip（socket）——CDN 回源下信任名单按真实 IP 判定；
 						// 未启用受信代理时二者同值，行为零变化。
-						"client_ip": map[string]interface{}{"ranges": passthroughUnion},
+						"client_ip": map[string]interface{}{"ranges": skipUnion},
 					}},
 				}},
 				"handle": securityChain,
@@ -4581,6 +4595,26 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig, sec
 		})
 	} else {
 		handleChain = append(handleChain, securityChain...)
+	}
+	// 信任保留检测路径（trust_detection=1，2026-11-04 用户裁定）：独立最小
+	// coraza 引擎（仅 id:12 检测事务）。detectionTrust 非 nil 即渲染（含空
+	// 并集恒发射——空 client_ip 集永不命中，空↔非空纯内容变化走热路径，
+	// 配置字节稳定）；链位在安全包裹之后、reverse_proxy 之前，事务经 counter
+	// 注入的 X-LB-Rule-ID/请求级标识头完成归因与请求归并。
+	if rule.Protocol == "http" && detectionTrust != nil && len(securityChain) > 0 {
+		trustHandler, err := buildTrustDetectHandler(rule.CaddyID, detectionTrust)
+		if err != nil {
+			return nil, err
+		}
+		handleChain = append(handleChain, map[string]interface{}{
+			"handler": "subroute",
+			"routes": []interface{}{map[string]interface{}{
+				"match": []interface{}{map[string]interface{}{
+					"client_ip": map[string]interface{}{"ranges": detectionTrust},
+				}},
+				"handle": []interface{}{trustHandler},
+			}},
+		})
 	}
 
 	upstreamList := make([]interface{}, 0, len(enabledUpstreams))

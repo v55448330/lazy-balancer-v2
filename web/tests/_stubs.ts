@@ -1,11 +1,9 @@
-// showSaveResult 的行为测试：退化 200（DB 已提交、Caddy 应用失败）必须以常驻警告
-// 呈现并保留后端文案；普通成功统一走 mfaAwareSuccess。element-plus 与 api.ts
-// 都是字节级依赖（CSS 导入/DOM），测试用本文件的替身记录调用。
-//
-// 另含 data: 模块替身的共享定义：composable 行为用例（useIpListAdd /
-// useTrustAssociation / useCountryNamesCn）此前各持一份逐字相同的 stub，
-// 替身契约（如 ElMessage.info）改动需要多处同步。宿主只需提供
-// globalThis.__calls / __gets / __get / __post / __put / __confirm。
+// web 测试共享替身模块：调用记录面（calls / resetCalls / installStubHost）、
+// data: 模块源码包装（dataModule）与依赖替身（STUB_API / STUB_ELEMENT /
+// STUB_SAVE_RESULT_DEPS / STUB_SAVE_RESULT）。element-plus 与 api.ts 都是
+// 字节级依赖（CSS 导入/DOM），被测模块图经本文件的替身加载，调用写入宿主
+// 提供的记录面：globalThis.__calls / __gets / __get / __post / __put /
+// __confirm。替身契约（如 ElMessage.info）改动只需改这里，不会多处分叉。
 
 export interface StubCall {
   fn: string

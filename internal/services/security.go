@@ -235,7 +235,8 @@ func crsPoolFingerprint() string {
 // id:12；并集可空=空文件算子永不命中，与无规则等价，空↔非空纯内容变化走
 // 热路径，2026-10-15 始终发射收敛）；缺省=无此类策略（不发射）。并集元素为
 // 按规则绑定的信任地址（直通形态 trust_detection=0 由路由层 subroute 短路，
-// 不进本参数）。
+// 不进本参数）。2026-11-04 语义：本 id:12 为防御性发射（信任 IP 唯一事件
+// 改由独立最小检测引擎承载，永不匹配，字节零变化）。
 // ruleCaddyID（第 6 参）：id:12 的 u-trust12 投影 scope 编入
 // 规则身份（u-trust12-<ruleCaddyID>）——stage0DetectionTrust 是逐规则并集
 // （policiesForRule），全局单文件名下异策略集多规则后渲染覆盖前者=信任集
@@ -311,8 +312,9 @@ func buildCorazaDirectivesWithIndex(p *models.SecurityPolicy, store caddyConfigS
 	// 信任名单三态门（对齐 ip_acl_enabled/geoip_mode）：关闭保留名单零发射。
 	// GeoIP 地域拦截已迁出策略引擎（阶段化模型：阶段 1 预检 800000+ 段承接），
 	// 不再构成开引擎理由——纯 GeoIP 策略产空串不出 handler。stage0 信任名单
-	// 策略的信任不属于本引擎（直通=路由层 subroute 短路零事件；保留检测=
-	// id:12 由预检与其他策略引擎承载）——stage0 策略产空串不出 handler。
+	// 策略的信任不属于本引擎（直通=路由层 subroute 短路零事件；保留检测的
+	// 唯一事件由独立最小检测引擎承载，引擎/预检 id:12 均为防御性发射）——
+	// stage0 策略产空串不出 handler。
 	// 始终发射收敛（2026-10-15 用户裁定）：deny·绕过 ACL 开启即算 IP 控制
 	//（空名单恒发射空文件算子，永不命中=与无规则等价，空↔非空纯内容变化走
 	// 热路径）。信任名单不收敛：ip_whitelist_enabled 表默认值即 1（非刻意
@@ -486,10 +488,12 @@ func buildCorazaDirectivesWithIndex(p *models.SecurityPolicy, store caddyConfigS
 	if 绕过WillEmit {
 		sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"%s\" \"id:3,phase:1,pass,nolog,ctl:ruleEngine=Off,ctl:auditEngine=Off\"\n", aclOperand))
 	}
-	// 阶段 0 保留检测（2026-09-20 用户裁定）：信任名单策略 trust_detection=1
-	// 时,绑定规则的每个策略引擎发射 id:12 DetectionOnly——信任 IP 全评估全
-	// 记录不拦（事件动作=检测）。直通形态（trust_detection=0）由路由层
-	// subroute 短路,不经任何引擎。
+	// 阶段 0 保留检测（2026-11-04 语义）：信任名单策略 trust_detection=1
+	// 时,绑定规则的每个策略引擎发射 id:12 DetectionOnly。信任 IP 的唯一事件
+	// 已改由独立最小检测引擎承载（caddy.go 信任保留检测路由 →
+	// buildTrustDetectDirectives,nolog,auditlog）——本 id:12（nolog）因信任
+	// IP 被路由层 subroute 短路而永不匹配,保留为防御性发射（autoban
+	// TrustExempt stage0 分支同款退化保留,字节零变化）。
 	if stage0DetectionTrust != nil {
 		operand, err := ipListRuleOperand(precheckProjectionScope("trust12", ruleCaddyID), stage0DetectionTrust, false)
 		if err != nil {
@@ -841,9 +845,10 @@ func assertDirectiveLines(directives string) error {
 }
 
 // stage0TrustSets 汇总绑定策略中 stage0 信任名单策略的信任并集（inline ∪
-// 引用去重）：detection=保留检测（trust_detection=1——经 id:12 DetectionOnly
-// 全评估全记录不拦）；passthrough=直通（trust_detection=0——路由层 subroute
-// 短路，零安全事件）。
+// 引用去重）：detection=保留检测（trust_detection=1——2026-11-04 语义：信任
+// IP 跳过全部安全阶段，唯一事件=独立最小检测引擎 id:12 logged；路由层
+// subroute 跳过并集与本并集同源）；passthrough=直通（trust_detection=0——
+// 路由层 subroute 短路，零安全事件）。
 func stage0TrustSets(policies []*models.SecurityPolicy) (detection, passthrough []string) {
 	seenDetection, seenPassthrough := map[string]struct{}{}, map[string]struct{}{}
 	for _, p := range policies {
@@ -2133,6 +2138,9 @@ func buildIPPrecheckDirectives(policies []*models.SecurityPolicy, ruleCaddyID st
 	// 阶段 0 保留检测（trust_detection=1）：预检同形 id:12 DetectionOnly——
 	// 与策略引擎的 id:12 同集（各自 coraza 事务独立生效）。发射面 flag 与内容
 	// 解耦（始终发射收敛，2026-10-15）：空并集投影空文件恒发射。
+	// 2026-11-04 语义：信任 IP 由路由层 subroute 短路、唯一事件改由独立最小
+	// 检测引擎承载——本规则与策略引擎 id:12 同为防御性发射（永不匹配，字节
+	// 零变化）。
 	if hasStage0Detection {
 		operand, err := ipListRuleOperand(precheckProjectionScope("trust12", ruleCaddyID), detectionTrust, false)
 		if err != nil {
@@ -2435,6 +2443,62 @@ func buildIPPrecheckHandler(policies []*models.SecurityPolicy, ruleCaddyID strin
 	}
 	if directives == "" {
 		return nil, nil
+	}
+	return map[string]interface{}{
+		"handler":    "waf",
+		"directives": directives,
+	}, nil
+}
+
+// buildTrustDetectDirectives 渲染信任保留检测路径（trust_detection=1，
+// 2026-11-04 用户裁定）的独立最小 coraza 引擎指令。语义：信任 IP 不再进入
+// 预检/IP ACL/限流/WAF 的任何阶段（安全链整体包进 not-client_ip subroute），
+// 本引擎是该流量的唯一安全事务——仅含 id:12 检测规则，命中即 pass 直通
+// 上游（无 CRS/自定义/ACL/GeoIP/限流，SecRequestBodyAccess Off 不读体）。
+// id:12 用 nolog,auditlog：coraza v3 中 auditlog 置事务 audit 标记，RelevantOnly
+// 下命中即落审计行（与上游响应状态无关——信任请求多为 200，不能依赖
+// 状态门），且不写 coraza 错误日志；审计经同一 auditLogPath（lbfile 写插件
+// + JSON 格式）进入既有事件管线，归因/展示（信任名单/大屏文案）零新增。
+// u-trust12 投影 scope 与主链预检 id:12 同源（precheckProjectionScope）：
+// 同一份并集文件两个引擎共享，writeIPListFile 同字节跳写零重复落盘。主链
+// 引擎/预检的 id:12（nolog，永不匹配）保留为防御性发射——与 autoban
+// TrustExempt stage0 分支同款退化保留。
+// 恒发射边界（对齐 caddy.go 4426 始终发射收敛）：detectionTrust 为 nil 时
+// 显性报错（无保留检测策略不得渲染本引擎）；空并集投影空文件恒发射
+// （路由层 client_ip 空集永不命中=无事务，空↔非空纯内容变化走热路径）。
+func buildTrustDetectDirectives(ruleCaddyID string, detectionTrust []string) (string, error) {
+	if ruleCaddyID == "" {
+		return "", fmt.Errorf("信任检测引擎投影缺少规则身份（ruleCaddyID 为空）——id:12 逐规则渲染，scope 必须编入规则身份（历史 HP-1）")
+	}
+	if detectionTrust == nil {
+		return "", fmt.Errorf("信任检测引擎缺保留检测并集（detectionTrust 为 nil）——发射面 flag 语义要求非 nil（含空并集恒发射），无保留检测策略时调用方不得触发本渲染")
+	}
+	operand, err := ipListRuleOperand(precheckProjectionScope("trust12", ruleCaddyID), detectionTrust, false)
+	if err != nil {
+		return "", err
+	}
+	var sb strings.Builder
+	sb.WriteString("SecRuleEngine On\n")
+	// 仅 phase:1 的 REMOTE_ADDR 规则，无需请求体/响应体访问（与预检同口径）。
+	sb.WriteString("SecRequestBodyAccess Off\n")
+	sb.WriteString("SecResponseBodyAccess Off\n")
+	// 与预检/策略引擎同款审计配置：审计行进同一事件管线（RelevantOnly +
+	// id:12 auditlog 命中即 relevant）。
+	sb.WriteString(fmt.Sprintf("SecAuditEngine RelevantOnly\nSecAuditLog %s\nSecAuditLogType lbfile\nSecAuditLogFormat JSON\nSecAuditLogParts ABIJDEFHKZ\n", auditLogPath))
+	sb.WriteString(fmt.Sprintf("SecRule REMOTE_ADDR \"%s\" \"id:12,phase:1,pass,nolog,auditlog,ctl:ruleEngine=DetectionOnly\"\n", operand))
+	sb.WriteString("SecMarker SECURITY_RULES_END\n")
+	directives := sb.String()
+	if err := assertDirectiveLines(directives); err != nil {
+		return "", err
+	}
+	return directives, nil
+}
+
+// buildTrustDetectHandler 返回信任保留检测路径的 waf handler（最小检测事务）。
+func buildTrustDetectHandler(ruleCaddyID string, detectionTrust []string) (map[string]interface{}, error) {
+	directives, err := buildTrustDetectDirectives(ruleCaddyID, detectionTrust)
+	if err != nil {
+		return nil, err
 	}
 	return map[string]interface{}{
 		"handler":    "waf",
@@ -2820,7 +2884,7 @@ func ParseCRSExcludedRules(raw string) []CRSExcludedEntry {
 	return dedupeCRSExcludedEntries(out)
 }
 
-// dedupeCRSExcludedEntries 按 {target,scope,ips,listRefs} 完全一致去重（保序，
+// dedupeCRSExcludedEntries 按 {target,scope,ips,path,listRefs} 完全一致去重（保序，
 // 首见保留）；listRefs 以排序后的序列参与键（[1,2] 与 [2,1] 视为同条）。
 func dedupeCRSExcludedEntries(entries []CRSExcludedEntry) []CRSExcludedEntry {
 	seen := make(map[string]struct{}, len(entries))

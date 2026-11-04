@@ -1185,6 +1185,23 @@ func securityEventsPolicyContainsRuleWithExclusions(policy *models.SecurityPolic
 	case n == 14:
 		// 历史威胁情报库共享 id:14：由带 ACL 引用/内联名单的 IP 控制策略认领。
 		return policy.IPACLEnabled && (len(policy.MergedACLList) > 0 || ipListRefsNonEmpty(policy.IPACLListRefs))
+	case n == 12:
+		// 阶段 0 保留检测专属 id（2026-11-04 语义：独立最小信任检测引擎的唯一
+		// 事件，logged、永不中断）。发射门=trust_detection=1（buildTrustDetect
+		// Directives 的 nil 门与 hasStage0TrustDetection flag），直通策略（
+		// trust_detection=0）物理上不产 id:12 不得认领。成员精确归因（id:2/4
+		// 同款「名单命中者优先」）：并集发射（u-trust12 文件=绑定保留检测策略
+		// 的并集），名单真实命中该 IP 的策略认领；clientIP 为空保持「名单非空
+		// 即认领」既有口径。名单读取与 securityEventsIPFamilyEventSurface 的
+		// 信任分支同源（mergedWhitelist=渲染侧 trusted 集唯一取法）。
+		if policy.PolicyType != models.PolicyTypeStage0 || !policy.TrustDetection || !policy.IPWhitelistEnabled {
+			return false
+		}
+		entries := mergedWhitelist(policy)
+		if len(entries) == 0 {
+			return false
+		}
+		return clientIP == "" || securityEventsIPInPrefixSet(clientIP, securityEventsIPPrefixSet(entries))
 	case securityEventsRuleIsCRSFamily(ruleTriggered):
 		// v2.2.2 混合选择——crs_rule_groups 可含六位 CRS ID 正选；六位 ID 触发的
 		// CRS 事件应先按六位正选归因，未命中时回落既有组号归因（空组=全部 CRS）。
@@ -1304,6 +1321,17 @@ func securityEventsFallbackCanProduce(policy *models.SecurityPolicy, action, rul
 	if err != nil {
 		return false
 	}
+	if n == 12 {
+		// 阶段 0 保留检测专属 id（2026-11-04 语义）：唯一发射面=独立最小信任
+		// 检测引擎，只有 trust_detection=1 的 stage0 策略物理拥有；pass 恒不
+		// 中断 → blocked 不可产。发射后名单漂移（contains 成员判定落空）时由
+		// 本门认领（摄取必有归属，绝不归零）——名单成员维度属 contains 首选
+		// 层，此处只核形状与动作可行性。
+		if policy.PolicyType != models.PolicyTypeStage0 || !policy.TrustDetection {
+			return false
+		}
+		return action != "blocked"
+	}
 	ipControl := securityEventsRuleIsIPFamily(ruleTriggered)
 	crs := securityEventsRuleIsCRSFamily(ruleTriggered)
 	customFam := securityEventsRuleIsCustomFamily(ruleTriggered)
@@ -1400,8 +1428,10 @@ func securityEventsCustomRulesEventSurface(p *models.SecurityPolicy) bool {
 //	· id 7（预检 allow 交集）：allow 模式且合并名单非空（buildIPPrecheckDirectives
 //	  仅 allow 参与交集）；
 //	· 信任名单（ip_whitelist）：仅 logged（检测）语义计入 id 2/4/7 能力——信任
-//	  只以 DetectionOnly 降级事务、令 deny 规则以检测动作留痕，自身发射的
-//	  id:3/5/12 为 nolog pass 永不产事件，更不可能产 blocked。**镜像引擎/预检
+//	  只以 DetectionOnly 降级事务、令 deny 规则以检测动作留痕；id:3/5 为
+//	  nolog pass 永不产事件；id:12 自 2026-11-04 起由独立最小信任检测引擎产
+//	  logged 事件（nolog,auditlog），其归因走 contains 的 n==12 专属 case 与
+//	  fallbackCanProduce 的 n==12 行，不经本层。**镜像引擎/预检
 //	  信任门（2026-09-21）**：stage0 + trust_detection=0（直通）
 //	  的信任 IP 走路由层 subroute 短路（零 coraza 事务）、非信任 IP 全链评估且
 //	  无 DetectionOnly 降级 ⇒ 该策略物理上不产任何 logged IP 族事件，故要求
@@ -4014,14 +4044,28 @@ func IsCrawlerExemptRuleID(id string) bool {
 }
 
 // SecurityEventCountsAsAttack 攻击口径唯一判据：仅「已记录 + 爬虫放行族」
-// 不计入攻击（放行不是攻击）；其余一律计入。
+// 不计入攻击（放行不是攻击）；「已记录 + 保留检测（id:12）」同样不计入
+// （2026-11-04 语义：信任名单命中的唯一事件，独立轻量检测事务 pass 恒不
+// 拦截，是可见性记录而非攻击证据）；其余一律计入。
 //
 // 边界：归因取审计首条消息，多策略下「A 放行 + B 拦截」的事件仍可能被记在
-// 放行规则名下——因此这里按 action 判定而非按规则族：action=blocked 的放行族
-// 事件仍然计入，不隐藏真实拦截。
+// 放行规则名下——因此这里按 action 判定而非按规则族：action=blocked 的放行
+// 族/保留检测事件仍然计入，不隐藏真实拦截。id 匹配取精确形态（不 trim），
+// 与 SQL 谓词的等值比较同口径（"12 "/前导零变体照常计入）。
 func SecurityEventCountsAsAttack(action, ruleTriggered string) bool {
-	return !(action == SecurityEventActionLogged && IsCrawlerExemptRuleID(ruleTriggered))
+	if action != SecurityEventActionLogged {
+		return true
+	}
+	if IsCrawlerExemptRuleID(ruleTriggered) {
+		return false
+	}
+	return ruleTriggered != trustDetectRuleIDString
 }
+
+// trustDetectRuleIDString 保留检测专属规则 id 的字符串单源（独立最小信任
+// 检测引擎发射面，security.go buildTrustDetectDirectives id:12；事件统计
+// 排除口径的 Go/SQL 两侧共用，禁止复写字面量）。
+const trustDetectRuleIDString = "12"
 
 // CrawlerExemptRuleIDSQLPredicate 返回「rule_triggered 属爬虫放行族」的 SQL
 // 谓词（与 IsCrawlerExemptRuleID 同集合）：GLOB 六位数字同时约束长度与字符集，
@@ -4032,7 +4076,9 @@ func CrawlerExemptRuleIDSQLPredicate(col string) string {
 }
 
 // AttackEventSQLPredicate 返回「该行计入攻击」的 SQL 谓词（与
-// SecurityEventCountsAsAttack 同集合）：非「logged 且爬虫放行族」。
+// SecurityEventCountsAsAttack 同集合）：非「logged 且（爬虫放行族 ∪ 保留
+// 检测 id:12）」。等值比较不 trim——宽松形态照常计入，与 Go 判据同口径。
 func AttackEventSQLPredicate(ruleCol, actionCol string) string {
-	return fmt.Sprintf(`NOT (COALESCE(%s,'') = '%s' AND %s)`, actionCol, SecurityEventActionLogged, CrawlerExemptRuleIDSQLPredicate(ruleCol))
+	return fmt.Sprintf(`NOT (COALESCE(%s,'') = '%s' AND (%s OR COALESCE(%s,'') = '%s'))`,
+		actionCol, SecurityEventActionLogged, CrawlerExemptRuleIDSQLPredicate(ruleCol), ruleCol, trustDetectRuleIDString)
 }

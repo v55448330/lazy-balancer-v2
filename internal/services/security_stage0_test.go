@@ -9,13 +9,15 @@ import (
 	"lazy-balancer-v2/internal/models"
 )
 
-// 阶段 0 信任名单执行语义（2026-09-20 用户裁定）：
-//   trust_detection=0（默认，直通）：信任 IP 在路由层被「not remote_ip」
+// 阶段 0 信任名单执行语义（2026-11-04 用户裁定，推翻 2026-09-20 原语义）：
+//   trust_detection=0（默认，直通）：信任 IP 在路由层被「not client_ip」
 //     subroute 跳过全部安全阶段（预检/限流/WAF），直达上游——保留路径分流
 //     形态，零安全事件（无任何 coraza 事务产生）。
-//   trust_detection=1（保留检测记录）：信任 IP 经 id:12 的
-//     ctl:ruleEngine=DetectionOnly 在预检与每个策略引擎全评估全记录不拦
-//     （事件动作=检测）——与 mixed 策略存量信任（id:3/5）同族但 id 独立。
+//   trust_detection=1（保留检测记录）：信任 IP 同样跳过全部安全阶段（跳过
+//     并集=直通∪保留检测），唯一事件=独立最小 coraza 引擎（仅 id:12，
+//     nolog,auditlog）写入的 logged 检测记录（归因信任策略）；主链预检/
+//     引擎内的 id:12（nolog）保留为防御性发射（信任 IP 已被路由层短路，
+//     永不匹配，字节零变化）。
 
 // seedStage0Policy 播种 stage0 信任策略并绑定到规则。
 func seedStage0Policy(t *testing.T, database *sql.DB, ruleCaddyID, whitelist string, trustDetection bool) int {
@@ -112,7 +114,7 @@ func TestTrustedPassthrough_subrouteSkipsAllSecurityStages(t *testing.T) {
 	}
 }
 
-func TestTrustedDetection_id12InPrecheckAndEngines(t *testing.T) {
+func TestTrustedDetection_wrapsChainWithDefensiveID12AndMinimalEngine(t *testing.T) {
 	stubSecurityLibsAvailable(t) // 缺库降级：安全链渲染断言前先桩库可用
 	// Given：规则绑定 stage0 保留检测策略（信任 10.0.0.9）+ stage3 WAF 策略
 	_, database := newClusterTestService(t)
@@ -123,17 +125,37 @@ func TestTrustedDetection_id12InPrecheckAndEngines(t *testing.T) {
 	// When
 	_, mainRoute := mpGenRoutes(t, database, mpGenHTTPRule("lb_td", "td.example.test"))
 
-	// Then：无直通 subroute（保留检测=全评估）；预检与策略引擎均含 id:12
-	// DetectionOnly（信任 10.0.0.9）。
-	for _, hv := range mainRoute["handle"].([]interface{}) {
-		if mustMap(t, hv, "handler")["handler"] == "subroute" {
-			t.Fatalf("detection mode must not wrap security stages in a passthrough subroute: %v", handlerNames(t, mainRoute))
+	// Then：安全链被「not client_ip ∈ 信任并集」subroute 包裹（信任 IP 跳过
+	// 全部阶段）；包裹内预检与策略引擎的 id:12（nolog）防御性发射字节不变；
+	// 信任检测路由挂仅含 id:12（nolog,auditlog）的最小检测事务。
+	handlers, _ := mainRoute["handle"].([]interface{})
+	var wrap, trust map[string]interface{}
+	for _, hv := range handlers {
+		h := mustMap(t, hv, "handler")
+		if h["handler"] != "subroute" {
+			continue
+		}
+		inner := mustMap(t, h["routes"].([]interface{})[0], "inner route")
+		matcher := mustJSON(t, inner["match"].([]interface{})[0])
+		if strings.Contains(matcher, `"not"`) && wrap == nil {
+			wrap = h
+		}
+		if !strings.Contains(matcher, `"not"`) && trust == nil {
+			trust = h
 		}
 	}
-	joined := strings.Join(wafDirectives(t, mainRoute), "\n")
+	if wrap == nil || trust == nil {
+		t.Fatalf("保留检测必须同时渲染安全链包裹与信任检测路由: %v", handlerNames(t, mainRoute))
+	}
+	wrapInner := mustMap(t, wrap["routes"].([]interface{})[0], "wrap inner")
+	wrapMatcher := mustJSON(t, wrapInner["match"].([]interface{})[0])
+	if !strings.Contains(wrapMatcher, `"client_ip"`) || !strings.Contains(wrapMatcher, "10.0.0.9") {
+		t.Fatalf("跳过并集必须含保留检测信任集（10.0.0.9）: %s", wrapMatcher)
+	}
+	joined := strings.Join(wafDirectives(t, wrapInner), "\n")
 	wantRule := `"id:12,phase:1,pass,nolog,ctl:ruleEngine=DetectionOnly"`
 	if !strings.Contains(joined, wantRule) {
-		t.Fatalf("precheck must carry id:12 DetectionOnly for detection trust set:\n%s", joined)
+		t.Fatalf("precheck must carry defensive id:12 DetectionOnly for detection trust set:\n%s", joined)
 	}
 	if got := readRenderedIPList(t, joined, "u-trust12"); got != "10.0.0.9/32\n" {
 		t.Fatalf("id:12 信任名单文件=%q, want 仅 10.0.0.9/32", got)
@@ -142,6 +164,20 @@ func TestTrustedDetection_id12InPrecheckAndEngines(t *testing.T) {
 	engineCount := strings.Count(joined, "id:12,")
 	if engineCount < 2 {
 		t.Fatalf("id:12 must appear in precheck AND every policy engine (got %d):\n%s", engineCount, joined)
+	}
+	// 信任检测路由：最小检测事务（仅 id:12，nolog,auditlog）。
+	trustInner := mustMap(t, trust["routes"].([]interface{})[0], "trust inner")
+	trustMatcher := mustJSON(t, trustInner["match"].([]interface{})[0])
+	if strings.Contains(trustMatcher, `"not"`) || !strings.Contains(trustMatcher, "10.0.0.9") {
+		t.Fatalf("信任检测路由必须正向匹配保留检测并集: %s", trustMatcher)
+	}
+	trustHandle := trustInner["handle"].([]interface{})
+	if len(trustHandle) != 1 || mustMap(t, trustHandle[0], "trust handler")["handler"] != "waf" {
+		t.Fatalf("信任检测路由必须挂且仅挂一个 waf handler: %#v", trustHandle)
+	}
+	trustDirectives, _ := mustMap(t, trustHandle[0], "trust handler")["directives"].(string)
+	if !strings.Contains(trustDirectives, `"id:12,phase:1,pass,nolog,auditlog,ctl:ruleEngine=DetectionOnly"`) {
+		t.Fatalf("信任检测引擎必须发射 nolog,auditlog 形态的 id:12:\n%s", trustDirectives)
 	}
 }
 

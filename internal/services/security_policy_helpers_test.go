@@ -13,8 +13,8 @@ import (
 
 // GetSecurityPolicyForRule 返回 v2.2.0 单策略语义下的规则生效策略：最高
 // policy_id 绑定生效，最高绑定指向禁用策略时返回 nil（不回退次高）。
-// 仅限测试使用；生产读路径一律用 GetSecurityPoliciesForRule（policy_id ASC
-// 全量列表）。
+// 仅限测试使用；生产读路径一律用 GetSecurityPoliciesForRule（绑定 rank ASC，
+// policy_id 兜序全量列表）。
 func GetSecurityPolicyForRule(ruleCaddyID string) *models.SecurityPolicy {
 	if db.DB == nil {
 		return nil

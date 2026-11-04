@@ -2205,7 +2205,7 @@ func TestSecurityEventsAttribution_UnboundReturnsZeroValue(t *testing.T) {
 
 // 遗留 ip_blacklist 拒绝（rule_triggered="4"）必须归因到拥有黑名单的策略。
 // Given：lb_rule1 绑定 [policy-A(id1, 无任何 IP 控制), policy-B(id3, ip_blacklist
-// '["10.0.0.1"]')]，绑定顺序 policy_id ASC。
+// '["10.0.0.1"]')]，绑定未写 rank，评估序走 policy_id 兜序。
 // When：归因 audit rule_triggered="4"（BuildCorazaDirectives 对非空 ip_blacklist
 // 发射 id:4 的遗留黑名单拒绝）。
 // Then：归因到 policy-B(id3) —— 而非首绑定回退值 policy-A。
@@ -3387,8 +3387,8 @@ func TestSecurityEventsAttribution_CustomFamilyCapabilityPreference(t *testing.T
 		(30,'停用规则','', '[]','block',5,0)`); err != nil {
 		t.Fatal(err)
 	}
-	// 每对绑定中无能力策略 id 更小（policy_id ASC = 候选顺序在前），能力首选层
-	// 胜出才可观测。p16（solo 无规则）/p17（引用停用规则）作必归属锚。
+	// 每对绑定中无能力策略 id 更小（绑定未写 rank，候选顺序按 policy_id 兜序
+	// 在前），能力首选层胜出才可观测。p16（solo 无规则）/p17（引用停用规则）作必归属锚。
 	if _, err := db.DB.Exec(`INSERT INTO security_policies (id,name,enabled,mode,custom_rules,crs_rule_groups) VALUES
 		(10,'p-blk-norules',1,'blocking','[]','[]'),
 		(11,'p-blk-hasrules',1,'blocking','[20]','[]'),
@@ -3600,12 +3600,12 @@ func TestSecurityEventsCustomRulesEventSurface_requiresEmittableRule(t *testing.
 	}
 }
 
-// 阶段 0 信任策略（stage0/直通）引擎零发射面（2026-09-20 裁定：直通=路由层
-// subroute 短路零 coraza 事务；保留检测=id:12 DetectionOnly 全评估不拦，且
-// BuildCorazaDirectives 对 stage0 产空串不出自有 handler）——对非 IP 族的任何
-// 动作事件均不可产（mode=off 门恒拒，含信任 wl：wl 在能力面也仅 logged 语义）。
-// 真值表锁格 + 与有能力兄弟绑定的合成形状；IP 族 blocked 的无属主漂移形状按
-// 既有语义走必归属层归首绑（禁归零），一并锚定。
+// 阶段 0 信任策略（stage0）对非 IP 族零发射面（2026-11-04 裁定：信任 IP 一律
+// 跳过全部安全阶段直达上游——直通=纯跳过零 coraza 事务，保留检测的唯一事件
+// id:12 logged 由链尾独立最小信任引擎发射，主链引擎/预检的 id:12 恒不匹配）；
+// mode=off 门恒拒，含信任 wl：wl 在能力面也仅 logged 语义——对非 IP 族的任何
+// 动作事件均不可产。真值表锁格 + 与有能力兄弟绑定的合成形状；IP 族 blocked
+// 的无属主漂移形状按既有语义走必归属层归首绑（禁归零），一并锚定。
 func TestSecurityEventsAttribution_Stage0ZeroEmissionSurfaceLock(t *testing.T) {
 	dataDir := t.TempDir()
 	if err := initSecurityEventsTestDB(t, dataDir); err != nil {
@@ -3659,15 +3659,15 @@ func TestSecurityEventsAttribution_Stage0ZeroEmissionSurfaceLock(t *testing.T) {
 }
 
 // IP 族能力首选层的信任分支必须镜像引擎/预检的信任发射门——
-// stage0 + trust_detection=0（直通）策略的信任 IP 走路由层 subroute 短路（零 coraza
-// 事务）、非信任 IP 全链评估且无 DetectionOnly 降级 ⇒ 该策略物理上不产任何 logged
+// stage0 + trust_detection=0（直通）策略的信任 IP 一律跳过全部安全阶段（零
+// coraza 事务）、非信任 IP 全链评估 ⇒ 该策略物理上不产任何 logged
 // IP 族事件；但能力层此前只核「whitelist 启用且非空」，会在漂移窗口（属主名单事后
 // 被编辑 → contains 成员判定落空）把它排在真实 deny 属主之前抢认。
 //
-// 形状对照（security.go:166 引擎门 `IPWhitelistEnabled && PolicyType != stage0`、
-// security.go buildIPPrecheckDirectives 预检段：id:3 并集排除 stage0 / id:12 承载保留检测（行号随拆分漂移——按 id 锚定））：
+// 形状对照（引擎/预检信任门 `IPWhitelistEnabled && PolicyType != stage0`、
+// 预检段：id:3 并集排除 stage0 / id:12 由独立最小信任引擎承载（行号随拆分漂移——按 id 锚定））：
 //   - stage0 + 直通（trust_detection=0）→ 不可产 logged IP 族事件（本测试目标形状）；
-//   - stage0 + 保留检测（=1）→ id:12 DetectionOnly 降级真实存在 → 仍可产（回归形状）；
+//   - stage0 + 保留检测（=1）→ 链尾独立最小信任引擎真实产 id:12 logged → 仍可产（回归形状）；
 //   - 无 policy_type 的存量信任策略（mixed 语义，id:3 并集承载）→ 仍可产（既有钉
 //     TestSecurityEventsAttribution_IPFamilyFallbackPrefersIPCapablePolicy 保持）。
 func TestSecurityEventsAttribution_Stage0PassthroughTrustDoesNotOwnLoggedIPEvent(t *testing.T) {
@@ -3696,13 +3696,13 @@ func TestSecurityEventsAttribution_Stage0PassthroughTrustDoesNotOwnLoggedIPEvent
 	}
 	pid, pname := securityEventsAttributePolicy("lb_stage0passthrough", "2", "logged", "::1", policyByID, bindings)
 	if pid != 2 || pname != "p-deny-owner-drift" {
-		t.Fatalf("attribution=(%d,%q), want (2,p-deny-owner-drift) — stage0 直通策略的信任名单"+
-			"物理上不可能把事务降级为 DetectionOnly（信任 IP 零事务、非信任 IP 无降级），"+
-			"能力首选层不得让它抢认 logged IP 族事件（镜像 security.go:166 引擎门）", pid, pname)
+		t.Fatalf("attribution=(%d,%q), want (2,p-deny-owner-drift) — stage0 直通策略信任 IP"+
+			"跳过全部安全阶段（零 coraza 事务）、无任何 logged IP 族发射面，"+
+			"能力首选层不得让它抢认 logged IP 族事件（镜像引擎/预检信任门）", pid, pname)
 	}
 
-	// 回归形状：stage0 + 保留检测（trust_detection=1）经 id:12 DetectionOnly 真实降级
-	// → 仍具能力，且候选序在前时优先于无能力候选。
+	// 回归形状：stage0 + 保留检测（trust_detection=1）经链尾独立最小信任引擎
+	// 真实产 id:12 logged → 仍具能力，且候选序在前时优先于无能力候选。
 	if _, err := db.DB.Exec(`UPDATE security_policies SET trust_detection=1 WHERE id=1`); err != nil {
 		t.Fatal(err)
 	}

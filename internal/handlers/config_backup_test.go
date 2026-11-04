@@ -2326,8 +2326,9 @@ func TestConfigBackup_emptyDomainRuleSkipsCertJobBeforeStatusGate(t *testing.T) 
 
 // Config backup export → import round-trip preserves multi-row
 // security_policy_bindings (one rule → multiple policies).
-// validation passes and policy_id ordering is queryable via the same SELECT
-// the runtime uses (ORDER BY policy_id ASC).
+// validation passes and binding order is queryable via the same SELECT the
+// runtime uses (ORDER BY rank ASC, policy_id ASC; fixtures bind default rank 0,
+// so the policy_id tiebreak yields id order).
 func TestConfigBackup_multiRowBindingsRoundTrip(t *testing.T) {
 	// Given: a primary with policies 1-5, three rules, and multi-row bindings:
 	//   lb_multi → policies {1, 3, 5}
@@ -2391,7 +2392,7 @@ func TestConfigBackup_multiRowBindingsRoundTrip(t *testing.T) {
 	if importResponse.Code != http.StatusOK {
 		t.Fatalf("import status=%d body=%.300s", importResponse.Code, importResponse.Body.String())
 	}
-	// Exact row set per rule, ordered by policy_id ASC (same SELECT as runtime)
+	// Exact row set per rule, ordered by rank ASC then policy_id ASC (same SELECT as runtime)
 	multiBindings := queryBackupBindingRows(t, "lb_multi")
 	if !reflect.DeepEqual(multiBindings, []int{1, 3, 5}) {
 		t.Fatalf("lb_multi bindings=%v, want [1 3 5]", multiBindings)

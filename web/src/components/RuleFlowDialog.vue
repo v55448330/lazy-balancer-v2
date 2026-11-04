@@ -158,7 +158,7 @@
               </el-collapse-transition>
             </div>
             <div v-if="isTcp" class="info-note-bar"><span class="info-note-desc">「直通上游」模式：连接直达上游（不产生安全事件，故无计数 chip）；「保留检测记录」模式：命中产检测事件（记录为检测）后直达上游，不拦截（与 HTTP 语义一致）；未命中继续进入阶段 1 判定</span></div>
-            <div v-else class="info-note-bar"><span class="info-note-desc">「直通上游」模式：信任 IP 命中后跳过全部后续安全阶段，不产生任何安全事件（故无计数 chip）；「保留检测记录」模式：继续评估后续全部阶段但不拦截，命中事件动作记为检测</span></div>
+            <div v-else class="info-note-bar"><span class="info-note-desc">「直通上游」模式：信任 IP 命中后跳过全部后续安全阶段，不产生任何安全事件（故无计数 chip）；「保留检测记录」模式：信任 IP 命中后同样跳过全部后续安全阶段，由独立轻量检测事务记录（动作=检测）后直达上游，不拦截</span></div>
             </template>
             <div v-else class="flow-detail-line">未启用——未绑定信任名单策略，请求直接进入阶段 1</div>
           </div>
@@ -747,8 +747,9 @@ const flowNodes = computed<FlowNode[]>(() => {
 })
 
 // 阶段 1 脚注：合并预检真实链序由
-// securityStages.stage1FootnoteText 单源给出（信任 DetectionOnly → 黑名单 →
-// 遗留黑名单 → 白名单外拒绝 → 爬虫校验 → 地域拦截）；原实现漏列遗留黑名单
+// securityStages.stage1FootnoteText 单源给出（信任（阶段 0）→ 黑名单 →
+// 遗留黑名单 → 白名单外拒绝 → 爬虫校验 → 地域拦截；命中「保留检测」信任
+// 名单的 IP 跳过本段，由独立轻量检测事务记录）；原实现漏列遗留黑名单
 // （id:4 仍由 security.go 发射）与 v2.3.8 爬虫校验。
 const stage1Footnote = computed(() => {
   // 按本规则实际绑定链判定（model.stages[0] 的 group 键 = 绑定策略 id）：

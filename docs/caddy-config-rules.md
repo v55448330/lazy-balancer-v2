@@ -179,7 +179,7 @@ GeoIP 打标不在主路由的 `handle` 链内。任一绑定策略启用地域�
 1. **headers**（X-LB-Rule-ID 注入）：HTTP 规则绑定安全策略时链首注入归因头（供预检与 coraza 事务消费，reverse_proxy 前无条件剥离，不直达上游）
 2. **lb_rule_metrics**：全 HTTP 规则的流量指标收点，位于安全处理器之前
 3. **lb_security_blocked_counter**：安全库可用且绑定策略时发射，包装后续安全段并统计拦截
-4. **安全段**：存在阶段 0 直通策略（`trust_detection=0`）时，整段包入 `not client_ip` 的 subroute；命中信任并集的请求跳过本段，不产生安全事件。保留检测（`trust_detection=1`）不包裹，信任 IP 走 DetectionOnly 全评估不拦但全记录。段内依次为：
+4. **安全段**：存在阶段 0 信任策略（直通 `trust_detection=0` 或保留检测 `trust_detection=1`）时，整段包入 `not client_ip` 的 subroute（跳过并集=直通∪保留检测信任并集）；命中任一并集的请求跳过本段，不进入任何 coraza 事务。保留检测（`trust_detection=1`）在本段之后另挂一条 `client_ip`（保留检测并集）subroute——仅含 id:12（`nolog,auditlog`）的独立最小检测事务：信任 IP 唯一安全事件（动作=检测，归因信任策略，与上游响应状态无关）产记录后直达上游。段内依次为：
    - **IP 预检**：多策略绑定时合并全部绑定策略 deny 侧 IP 控制的极简 coraza 预检查器——信任（id:3/12 DetectionOnly）→ deny 并集（id:2）→ 遗留黑名单（id:4）→ allow 交集外拒绝（id:7）→ allow 命中豁免 GeoIP（id:13）→ 逐策略 GeoIP 链（800000+policyID）
    - **lb_security_timing_pre**：预检之后、请求体处理与策略评估之前的分段计时收点
    - **encode**（压缩）：启用压缩且包含 gzip/zstd 时发射，位于全部 waf 处理器外侧

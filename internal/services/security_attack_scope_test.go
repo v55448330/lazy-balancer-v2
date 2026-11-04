@@ -105,3 +105,57 @@ func TestAttackScopeCountsAnyNonCrawlerPass(t *testing.T) {
 		}
 	}
 }
+
+// TestTrustDetectLoggedEventExcludedFromAttackScope 保留检测事件（2026-11-04
+// 语义）不计入攻击口径：id:12 logged 是「命中信任名单」的可见性记录（独立
+// 轻量检测事务、pass 恒不拦截），与「已验证爬虫放行 logged 不计入」同例。
+// blocked 形态（生产不可达——pass 恒不中断）保持计入；近似 id（1/2/112/
+// 带空白变体）不得被误排除。Go 判据与 SQL 谓词逐点对账（同 TestCrawlerExempt
+// AttackScopeSQLMatchesGo 的口径分叉防线）。
+func TestTrustDetectLoggedEventExcludedFromAttackScope(t *testing.T) {
+	if SecurityEventCountsAsAttack(SecurityEventActionLogged, "12") {
+		t.Fatal("id:12 logged（保留检测）必须排除出攻击口径——信任名单命中是可见性记录，不是攻击")
+	}
+	if !SecurityEventCountsAsAttack(SecurityEventActionBlocked, "12") {
+		t.Fatal("id:12 blocked 形态必须保持计入攻击（防御性口径：pass 恒不中断，出现即畸形）")
+	}
+
+	oldDB, oldMetricsDB, oldAuditDB := db.DB, db.MetricsDB, db.AuditDB
+	if err := db.Initialize(t.TempDir()); err != nil {
+		t.Fatalf("initialize test database: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = db.Close()
+		db.SetDB(oldDB)
+		db.DB, db.MetricsDB, db.AuditDB = oldDB, oldMetricsDB, oldAuditDB
+	})
+	stmt, err := db.MetricsDB.Prepare(`SELECT ` + AttackEventSQLPredicate("rule_triggered", "action") + ` FROM (SELECT ? AS rule_triggered, ? AS action)`)
+	if err != nil {
+		t.Fatalf("prepare predicate query: %v", err)
+	}
+	defer stmt.Close()
+	for _, tc := range []struct {
+		rule, action string
+		wantAttack   bool
+	}{
+		{"12", SecurityEventActionLogged, false},
+		{"12", SecurityEventActionBlocked, true},
+		{"1", SecurityEventActionLogged, true},   // 近似 id 不误排
+		{"2", SecurityEventActionLogged, true},   // 近似 id 不误排
+		{"112", SecurityEventActionLogged, true}, // 近似 id 不误排
+		{"12 ", SecurityEventActionLogged, true}, // 空白变体不误排
+		{" 12", SecurityEventActionLogged, true}, // 空白变体不误排
+		{"13", SecurityEventActionLogged, true},  // 混合信任 id:3 照旧计入
+	} {
+		var sqlCounts int
+		if err := stmt.QueryRow(tc.rule, tc.action).Scan(&sqlCounts); err != nil {
+			t.Fatalf("query predicate for rule=%q action=%q: %v", tc.rule, tc.action, err)
+		}
+		if got := SecurityEventCountsAsAttack(tc.action, tc.rule); got != tc.wantAttack {
+			t.Fatalf("CountsAsAttack(%q,%q)=%v, want %v（Go 判据漂移）", tc.action, tc.rule, got, tc.wantAttack)
+		}
+		if (sqlCounts == 1) != tc.wantAttack {
+			t.Fatalf("rule=%q action=%q: SQL=%d, want attack=%v（SQL 谓词漂移）", tc.rule, tc.action, sqlCounts, tc.wantAttack)
+		}
+	}
+}
