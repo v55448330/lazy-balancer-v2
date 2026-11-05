@@ -29,10 +29,11 @@ type cfServer struct {
 	nextID   int
 	requests []cfRequestLog
 
-	verifyResult string // /user/tokens/verify 的 result.status（默认 active）
-	verifyStatus int    // /user/tokens/verify 的 HTTP 状态（默认 200）
-	post429First int    // 前 N 次 POST dns_records 返回 429
-	overrides    map[string]cfResponse
+	verifyResult    string // /user/tokens/verify 的 result.status（默认 active）
+	verifyStatus    int    // /user/tokens/verify 的 HTTP 状态（默认 200）
+	verifyErrorCode int    // verify 失败体的错误码（默认 9109）
+	post429First    int    // 前 N 次 POST dns_records 返回 429
+	overrides       map[string]cfResponse
 	// scriptedRecordPages 非 nil 时按页下发预制包络体（页 i = 第 i-1 个元素，
 	// 越界回退最后一个）——构造「中途短页 + total 显示仍有后续」的厂商观测
 	// 形态（页间漂移/服务端单页容量波动）。
@@ -199,7 +200,11 @@ func (s *cfServer) handle(w http.ResponseWriter, r *http.Request) {
 			status = http.StatusOK
 		}
 		if status != http.StatusOK {
-			s.writeError(w, status, 9109, "Invalid API Token")
+			code := s.verifyErrorCode
+			if code == 0 {
+				code = 9109
+			}
+			s.writeError(w, status, code, "Invalid API Token")
 			return
 		}
 		s.writeEnvelope(w, http.StatusOK, mustJSON(map[string]string{"id": "tok123", "status": s.verifyResult}))
@@ -687,4 +692,23 @@ func TestProvider_VerifyToken(t *testing.T) {
 			t.Fatalf("error=%v, want Token 无效文案", err)
 		}
 	})
+}
+func TestCloudflare_invalidTokenCode1000ShowsChecklist(t *testing.T) {
+	// code=1000（值形态无效，如粘贴 Token ID/Global Key）必须给出可操作的
+	// 排查清单，而非笼统「无效或已被撤销」。
+	s := newCloudflareTestServer(t)
+	s.verifyResult = "active"
+	s.verifyStatus = http.StatusBadRequest
+	s.verifyErrorCode = 1000
+	p := newCloudflareTestProvider(t, "not-a-real-token", s)
+	err := p.VerifyToken(t.Context())
+	if err == nil {
+		t.Fatal("want error")
+	}
+	msg := err.Error()
+	for _, want := range []string{"code=1000", "Token ID", "Global API Key"} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("消息缺 %q: %s", want, msg)
+		}
+	}
 }

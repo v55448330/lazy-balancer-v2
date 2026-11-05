@@ -658,6 +658,13 @@ func (p *Provider) readableAPIError(apiErr *apiError, body []byte) error {
 		}
 	}
 	if isInvalidToken(apiErr) {
+		// code=1000「Invalid API Token」= 头部里的值不是有效 Token 形态
+		// （常见：复制了列表中的 Token ID 而非创建时一次性展示的 Token 值、
+		// 误用 Global API Key/Origin CA Key、复制不完整）——9109 则为
+		// Token 已撤销/回滚。两类都给可操作的排查指引。
+		if strings.Contains(strings.ToLower(joined), "code=1000") {
+			return &sanitizedAPIError{msg: "Cloudflare API Token 无效（code=1000）：请确认粘贴的是创建 Token 时一次性展示的 Token 值（而非列表中的 Token ID）、使用的是「API Token」而非 Global API Key，且 Token 未被删除或回滚后重新复制", err: apiErr}
+		}
 		return &sanitizedAPIError{msg: fmt.Sprintf("Cloudflare API Token 无效或已被撤销: %s", joined), err: apiErr}
 	}
 	switch apiErr.Status {
