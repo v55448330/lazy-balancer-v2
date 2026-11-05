@@ -1,7 +1,7 @@
 package services
 
 // 认证网关（forward_auth）渲染：Caddy 官方 forward_auth 指令的 JSON 展开形态
-// （caddy v2.11.7 adapt 逐块实证）。规则链首插入网关子请求处理器：全部请求
+// （与 Caddy 官方 forward_auth 指令的 adapt 输出逐块对齐）。规则链首插入网关子请求处理器：全部请求
 // 先经网关校验——2xx 把网关响应头逐个拷进原请求后继续本规则处理链（未认证
 // 请求到此为止，不进指标/安全链）；非 2xx 无匹配 handle_response 条目，
 // 网关响应（通常跳登录页的 302/401）原样回拷客户端。认证子请求是独立
@@ -55,7 +55,7 @@ func ValidateForwardAuthGatewayAddress(upstream string) (string, bool, error) {
 // 保存门/渲染门拒绝，归一不洗白。规范化后仍同头并存（不去重）：写侧重复由
 // 保存门 400（同一头的两种写法判重复，fail-loud 契约），渲染侧重复由
 // buildForwardAuthHandler 消费前收敛。与 Caddy 官方 forward_auth adapt 对
-// to/占位符名的处理一致（v2.11.7 forwardauth/caddyfile.go 逐字规范化）——
+// to/占位符名的处理一致（Caddy forwardauth/caddyfile 适配器逐字规范化，跨版本语义稳定）——
 // Caddy 运行期响应头占位符注册键恒为规范形（Go http.Header）。写侧落库前
 // 归一（handlers.normalizeForwardAuthValues），渲染侧消费前再归一（防御
 // 带外/旧数据）。

@@ -34,6 +34,17 @@ func SetLogf(f func(level, format string, args ...any)) {
 	}
 }
 
+// userAgent 默认值与 SetUserAgent 装配接缝（镜像 cloudflare.SetUserAgent
+// 先例）：main 启动早期注入 config.Version，UA 与 APP_VERSION 同源。
+var userAgent = "lazy-balancer/2.0"
+
+// SetUserAgent 装配出网 UA 的版本段（main 启动早期调用；空串忽略）。
+func SetUserAgent(v string) {
+	if v != "" {
+		userAgent = "lazy-balancer/" + v
+	}
+}
+
 // Domain.List 分页参数：length 上限 3000（超出强制分页），maxPages 仅防御
 // 忽略 offset 的异常服务端，避免死循环。翻页终止由 info.domain_total/空页
 // 真判定承载；100 页（30 万域名）会把超量账户排在 30 万位之后的真实域名
@@ -507,7 +518,7 @@ func (p *Provider) apiCall(ctx context.Context, method string, params url.Values
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
-	req.Header.Set("User-Agent", "lazy-balancer/2.0")
+	req.Header.Set("User-Agent", userAgent)
 
 	resp, err := p.client.Do(req)
 	if err != nil {

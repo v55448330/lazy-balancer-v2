@@ -3,7 +3,7 @@ package services
 // 认证网关（forward_auth）渲染钉测 + NTLM 专用 transport 渲染钉测。
 //
 // forward_auth：Caddy 官方 forward_auth 指令的 JSON 展开形态
-// （caddy adapt 实证 v2.11.7：reverse_proxy + rewrite method=GET/uri +
+// （与 Caddy 官方 forward_auth adapt 输出对齐：reverse_proxy + rewrite method=GET/uri +
 // headers 回传 X-Forwarded-Method/Uri + handle_response match status_code [2]
 // 逐头 delete+条件 set 拷贝；非 2xx 无匹配 handle_response 条目 → 网关响应
 // 原样回拷客户端）。链首插入（安全链之前）：未认证请求不进指标/安全链。

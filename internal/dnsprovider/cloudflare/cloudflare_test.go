@@ -974,3 +974,17 @@ func TestProvider_createRecordReuseSkipsEmptyID(t *testing.T) {
 		t.Fatalf("新建记录数=%d, want 1（跳过空 ID 条目后恰好新建一条）", created)
 	}
 }
+
+func TestSetUserAgent_versionized(t *testing.T) {
+	// UA 版本化接缝：装配 cfg.Version 后出网 UA 与 APP_VERSION 同源（B1-123-3）
+	prev := userAgent
+	t.Cleanup(func() { userAgent = prev })
+	SetUserAgent("v2.4.2")
+	if userAgent != "lazy-balancer/v2.4.2" {
+		t.Fatalf("userAgent=%q, want lazy-balancer/v2.4.2", userAgent)
+	}
+	SetUserAgent("")
+	if userAgent != "lazy-balancer/v2.4.2" {
+		t.Fatalf("空串不得清空已有 UA: %q", userAgent)
+	}
+}

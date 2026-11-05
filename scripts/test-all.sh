@@ -363,7 +363,7 @@ fi
 # 模块由 xcaddy 在镜像内以同一组参数编译插件，其 linux-only 编译错误（构建
 # 标签/syscall/cgo 分支）此前只在发版构建暴露。
 # 注意工具链版本面未被本门覆盖：镜像两个阶段都是 golang:1.27.3-alpine3.24 +
-# GOTOOLCHAIN=local（Dockerfile 带 go1.27.3 构建期断言），本门用宿主 go（可能
+# GOTOOLCHAIN：Dockerfile builder 阶段 auto（按模块 go 指令拉工具链）、backend 阶段 local；本门用宿主 go（可能
 # 更新）。误用新版 stdlib API 只会在发版构建暴露——发版前置步骤须以镜像工具链
 # 跑一次 go build（见发布流程）。
 # 根模块是 main 包，产物丢 /dev/null；嵌套模块用 go install 配临时 GOBIN，

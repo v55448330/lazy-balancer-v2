@@ -176,7 +176,7 @@ var toolUsage = map[string]string{
 	"update_certificate_config":    "更新 DNS 证书配置的凭证或域名",
 	"delete_certificate_config":    "删除 DNS 证书配置",
 	"test_certificate_config":      "测试 DNS 证书配置的凭证是否有效",
-	"list_dns_providers":           "列出支持的 DNS 提供商类型",
+	"list_dns_providers":           "列出支持的 DNS 提供商类型（DNSPod/腾讯云、阿里云、Cloudflare，含各提供商的凭证字段定义与 description 字段说明；列表 DNSPod(腾讯云) 恒首位，其余按 code 升序）",
 	"list_ca_providers":            "列出全部 CA 提供商（Let's Encrypt/ZeroSSL/自定义）",
 	"get_ca_provider":              "获取指定 CA 提供商详情（含 EAB 凭证）",
 	"update_ca_provider":           "更新 CA 提供商配置（名称/Provider/EAB 凭证/并发与限流/启用开关）；目录 URL 不在本工具契约内（请求字段无 directory_url，传入会被忽略）",

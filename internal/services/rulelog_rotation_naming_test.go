@@ -1,6 +1,6 @@
 package services
 
-// 轮转副本命名以生产链为准：Caddy v2.11.7 的 logging FileWriter 把
+// 轮转副本命名以生产链为准：Caddy logging 的 FileWriter 把
 // BackupTimeFormat/Compression 原样交给 timberjack，渲染侧不写这两个配置
 // （只写 output/filename/roll_size_mb/roll_keep），故取 timberjack 默认值——
 // 时间格式为虚线日期 + 毫秒（日期与时刻段均以 '-' 分隔）、压缩默认 gzip

@@ -3415,8 +3415,6 @@ const handleSave = async () => {
   // 白名单空生效集：warning-not-block（用户裁定）。不再阻断保存，改为显性确认
   // 后照常保存（与 ipListSaveGuard 先例同形态）；运行时 fail-closed 恒拒语义
   // 不变，确认文案与渲染事实一致。
-  // TODO(后端合入依赖): 后端 Create/Update 的空白名单 400 门由 Go 侧同轮移除；
-  // 若后端门尚未合入，此处确认后提交会收到 400（属时序偏差，非前端缺陷）。
   if (typeAllowsStage(1) && form.value.ip_acl_enabled && form.value.ip_acl_mode === 'allow' && aclSaveCount.value === 0) {
     try {
       await ElMessageBox.confirm('该策略关联的规则将拒绝所有请求，确定继续？', '空白名单确认', { type: 'warning', confirmButtonText: '继续保存', cancelButtonText: '取消' })

@@ -1203,3 +1203,16 @@ func TestProvider_CountCleanupRecords_countsOnlyOwnValue(t *testing.T) {
 		t.Fatalf("count(other name)=%d, want 0", got)
 	}
 }
+
+func TestSetUserAgent_versionized(t *testing.T) {
+	prev := userAgent
+	t.Cleanup(func() { userAgent = prev })
+	SetUserAgent("v2.4.2")
+	if userAgent != "lazy-balancer/v2.4.2" {
+		t.Fatalf("userAgent=%q, want lazy-balancer/v2.4.2", userAgent)
+	}
+	SetUserAgent("")
+	if userAgent != "lazy-balancer/v2.4.2" {
+		t.Fatalf("空串不得清空已有 UA: %q", userAgent)
+	}
+}
