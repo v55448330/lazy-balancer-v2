@@ -1,7 +1,7 @@
 # 编译阶段固定在构建机架构执行（--platform=$BUILDPLATFORM）：buildx 多架构构建
 # 不会为目标架构起 QEMU 跑 Go 工具链（跨架构编译慢数倍）。产物架构由下方
 # GOOS/GOARCH 显式指定；CGO_ENABLED=0 使交叉编译无需目标架构的 C 工具链。
-FROM --platform=$BUILDPLATFORM golang:1.26.10-alpine@sha256:27f2d3b83cfc5803c8078f8e730af0f7c431bf067afaec8f60a36fb763187cba AS xcaddy-builder
+FROM --platform=$BUILDPLATFORM golang:1.27.3-alpine3.24@sha256:d200d2dd76b03a99b52651fd1325aff7dcd35422c35c01bac56571b0507f3deb AS xcaddy-builder
 RUN apk add --no-cache git
 # GOPROXY 逗号多级回退：阿里云 404/410 时依次回落 goproxy.cn、直连；
 # 校验不符类瞬态错误由下方 xcaddy build 的重试循环兜底
@@ -14,7 +14,7 @@ WORKDIR /app
 
 # GOTOOLCHAIN=auto（本阶段仅作显式诊断兜底）：xcaddy 在临时主模块里按 Caddy
 # 声明的 go 指令构建；若 Caddy 提高到更高 Go 要求，auto 会拉取新工具链，而下方
-# go1.26.10 精确断言会立即拒绝产物。此时必须同步 bump 基础镜像与断言，不得把
+# go1.27.3 精确断言会立即拒绝产物。此时必须同步 bump 基础镜像与断言，不得把
 # 自动升级静默带入镜像；backend 阶段用 local 执行同一精确版本契约。
 ENV GOTOOLCHAIN=auto
 # 代理不在此声明：Docker 预定义 HTTP_PROXY/HTTPS_PROXY 等构建参数，经
@@ -48,7 +48,15 @@ RUN --mount=type=cache,target=/go/pkg/mod \
   set -e; \
   built=0; \
   for attempt in 1 2 3; do \
-    if xcaddy build v2.11.7 \
+    # 逐次切换代理链：镜像源比特与 sum.golang.org 不符时（如 pebble v2.10.1
+    # 被镜像缓存旧比特），同链重试无效——第 2 次走官方 proxy.golang.org，
+    # 第 3 次直连 GitHub（源仓库现行为准，sumdb 校验兜底不变）。
+    case $attempt in \
+      1) export GOPROXY="https://mirrors.aliyun.com/goproxy/,https://goproxy.cn,direct";; \
+      2) export GOPROXY="https://proxy.golang.org,direct";; \
+      3) export GOPROXY="direct";; \
+    esac; \
+    if xcaddy build v2.11.9 \
       --with github.com/mholt/caddy-l4@v0.1.2 \
       --with github.com/caddyserver/transform-encoder@ba4124974830222da7f12a091cf11ddf4d49363f \
       --with github.com/mholt/caddy-ratelimit@v0.1.0 \
@@ -70,7 +78,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 # 构建期断言：镜像扫描要求的最低依赖版本未被 MVS 抬升到位则直接失败
 # （版本下限：grpc>=v1.83.2、otel>=v1.45、x/net>=v0.62、x/crypto>=v0.58、
 #  go-jose/v4>=v4.1.6、cel.dev/cel-go>=v0.32.0、go-chi/chi/v5>=v5.4.0——
-#  Caddy v2.11.7 上游对 grpc/cel-go 同值、otel 更高；x/net/x/crypto/go-jose
+#  Caddy v2.11.7+ 上游对 grpc/cel-go 同值、otel 更高；x/net/x/crypto/go-jose
 #  三条是漏洞修复下限（上游传递图更低），由 caddydeps floor 主动抬升；
 #  注意模块路径是 cel.dev/cel-go，github.com/google/cel-go 是另一个
 #  模块路径，钉旧路径不参与 MVS）；go version -m 各列以 TAB 分隔，用 awk 的 ge()
@@ -86,12 +94,12 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 #  退出——构建日志直接指出失败项，无需人工解析阈值表；模块整体从依赖图消失
 #  时实际值报「未出现在依赖图中」（同样判失败）。
 RUN go version -m /app/caddy | tee /tmp/caddy-mods.txt && \
-    grep -q 'go1.26.10' /tmp/caddy-mods.txt || { echo ">>> Caddy 未使用 go1.26.10 构建" >&2; exit 1; }; \
+    grep -q 'go1.27.3' /tmp/caddy-mods.txt || { echo ">>> Caddy 未使用 go1.27.3 构建" >&2; exit 1; }; \
     awk -F'\t' 'function ge(v, f,  a, b, av, bv, i) { split(substr(v, 2), a, "."); split(substr(f, 2), b, "."); for (i = 1; i <= 3; i++) { av = a[i] + 0; bv = b[i] + 0; if (av > bv) return 1; if (av < bv) return 0 } return 1 } BEGIN { n = split("google.golang.org/grpc v1.83.2;go.opentelemetry.io/otel v1.45.0;go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc v1.45.0;go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp v1.45.0;go.opentelemetry.io/otel/metric v1.45.0;go.opentelemetry.io/otel/trace v1.45.0;golang.org/x/net v0.62.0;golang.org/x/crypto v0.58.0;github.com/go-jose/go-jose/v4 v4.1.6;cel.dev/cel-go v0.32.0;github.com/corazawaf/coraza/v3 v3.8.1;github.com/go-chi/chi/v5 v5.4.0", spec, ";"); for (k = 1; k <= n; k++) { split(spec[k], pair, " "); mods[k] = pair[1]; floor[mods[k]] = pair[2] } } { for (i = 1; i < NF; i++) { if (floor[$i] != "") { ver[$i] = $(i+1); ok[$i] = ge($(i+1), floor[$i]); if ($i == "github.com/corazawaf/coraza/v3" && ge($(i+1), "v3.9.0")) ok[$i] = 0 } } } END { rc = 0; for (k = 1; k <= n; k++) { m = mods[k]; if (ok[m] != 1) { rc = 1; want = ">= " floor[m]; if (m == "github.com/corazawaf/coraza/v3") want = want " 且 < v3.9.0"; actual = (ver[m] == "") ? "未出现在依赖图中" : ver[m]; print ">>> 依赖下限不满足: " m " 需要 " want "（实际 " actual "）" > "/dev/stderr" } } exit rc }' /tmp/caddy-mods.txt
 
 # Build Go backend
 # 与 xcaddy-builder 阶段同理：编译在构建机架构执行，产物平台由 GOOS/GOARCH 指定。
-FROM --platform=$BUILDPLATFORM golang:1.26.10-alpine@sha256:27f2d3b83cfc5803c8078f8e730af0f7c431bf067afaec8f60a36fb763187cba AS backend
+FROM --platform=$BUILDPLATFORM golang:1.27.3-alpine3.24@sha256:d200d2dd76b03a99b52651fd1325aff7dcd35422c35c01bac56571b0507f3deb AS backend
 WORKDIR /app
 # 交叉编译目标（buildx 预定义参数；无 buildx 时 TARGETARCH 为空则回落构建机架构）
 ARG TARGETOS=linux
@@ -119,6 +127,12 @@ RUN --mount=type=cache,target=/go/pkg/mod \
   set -e; \
   dl=0; \
   for attempt in 1 2 3; do \
+    # 逐次切换代理链（镜像源比特与 sum.golang.org 不符时同链重试无效）\
+    case $attempt in \
+      1) export GOPROXY="https://mirrors.aliyun.com/goproxy/,https://goproxy.cn,direct";; \
+      2) export GOPROXY="https://proxy.golang.org,direct";; \
+      3) export GOPROXY="direct";; \
+    esac; \
     if go mod download; then \
       dl=1; break; \
     fi; \
@@ -151,7 +165,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 GOOS="${TARGETOS:-linux}" GOARCH="${TARGETARCH:-$(go env GOARCH)}" \
     go build -trimpath -ldflags="-s -w" -o lazy-balancer && \
-    go version -m lazy-balancer | grep -q 'go1.26.10' || { echo ">>> 后端二进制未使用 go1.26.10 构建" >&2; exit 1; }
+    go version -m lazy-balancer | grep -q 'go1.27.3' || { echo ">>> 后端二进制未使用 go1.27.3 构建" >&2; exit 1; }
 
 # Final image
 FROM alpine:3.24.3@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a
