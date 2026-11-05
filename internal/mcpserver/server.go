@@ -240,7 +240,7 @@ var tools = []toolSpec{
 	// ID 路径只测试已存配置：handler 从数据库读取 provider/credentials，
 	// 不消费请求体里的同名字段；schema 仅暴露 id 与测试域名。
 	{"test_certificate_config", "测试指定 DNS 证书配置", http.MethodPost, "/certificate-configs/{id}/test", []string{"id"}, nil, `{"type":"object","required":["id","domain"],"properties":{"id":{"type":"integer","description":"配置 ID"},"domain":{"type":"string","description":"用于测试的域名，如 example.com"}},"additionalProperties":false}`},
-	{"list_dns_providers", "列出支持的 DNS 提供商", http.MethodGet, "/dns-providers", nil, nil, emptySchema},
+	{"list_dns_providers", "列出支持的 DNS 提供商（DNSPod/腾讯云、阿里云、Cloudflare，含凭证字段定义与 description 字段说明；DNSPod 恒首位）", http.MethodGet, "/dns-providers", nil, nil, emptySchema},
 	{"list_ca_providers", "列出全部 CA 提供商", http.MethodGet, "/ca-providers", nil, nil, emptySchema},
 	{"get_ca_provider", "获取指定 CA 提供商详情", http.MethodGet, "/ca-providers/{id}", []string{"id"}, nil, idSchema("id", "CA ID", "integer")},
 	{"update_ca_provider", "更新指定 CA 提供商", http.MethodPut, "/ca-providers/{id}", []string{"id"}, nil, updateCAProviderSchema},

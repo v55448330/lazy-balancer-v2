@@ -79,6 +79,16 @@ type ownedRecord struct {
 }
 
 // Provider implements dnsprovider.Provider for Alibaba Cloud DNS.
+var userAgent = "lazy-balancer/2.0"
+
+// SetUserAgent 装配出网 UA 的版本段（main 启动早期调用；空串忽略）——镜像
+// cloudflare/dnspod 侧同款接缝，UA 与 APP_VERSION 同源。
+func SetUserAgent(v string) {
+	if v != "" {
+		userAgent = "lazy-balancer/" + v
+	}
+}
+
 type Provider struct {
 	// accessKeyID/accessKeySecret 凭据保持私有（与 dnspod/tencent 同口径）——
 	// 导出字段任何一次 %+v/JSON 序列化即泄密。生产读取全部是包内直读（构造
@@ -640,6 +650,7 @@ func (p *Provider) apiCall(ctx context.Context, action string, params map[string
 	request.Header.Set("x-acs-date", input.date)
 	request.Header.Set("x-acs-signature-nonce", input.nonce)
 	request.Header.Set("x-acs-content-sha256", input.hashedPayload())
+	request.Header.Set("User-Agent", userAgent)
 	request.Header.Set("Authorization", input.authorization(p.accessKeyID, p.accessKeySecret))
 
 	response, err := p.httpClient.Do(request)

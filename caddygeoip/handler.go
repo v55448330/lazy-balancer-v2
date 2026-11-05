@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/caddyserver/caddy/v2"
@@ -217,13 +218,16 @@ func newGeoipSearcherPool(version *xdb.Version, path string) (*geoipSearcherPool
 // 归还（并发容量 = 池深，同绑定库形态）。归还遇已关闭池（CloseTimeout 排空
 // 后迟到归还）：丢引用让内容字节可回收，与绑定库 ReturnSearcher 关闭分支同形。
 func (p *geoipSearcherPool) search(ipBytes []byte) (string, error) {
+	p.loanCount.Add(1)
+	defer func() {
+		p.loanCount.Add(-1)
+	}()
 	var s *xdb.Searcher
 	select {
 	case <-p.closing:
 		return "", fmt.Errorf("searcher pool already closed")
 	case s = <-p.searchers:
 	}
-	p.loanCount.Add(1)
 	defer func() {
 		select {
 		case <-p.closing:
@@ -231,7 +235,6 @@ func (p *geoipSearcherPool) search(ipBytes []byte) (string, error) {
 		default:
 			p.searchers <- s
 		}
-		p.loanCount.Add(-1)
 	}()
 	return s.Search(ipBytes)
 }
@@ -261,6 +264,7 @@ type geoipContentEntry struct {
 	buf     []byte
 	modTime time.Time
 	size    int64
+	ino     int64
 }
 
 var (
@@ -278,8 +282,15 @@ func geoipContentBuffer(path string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	// 缓存键 = 路径 + modTime + size + inode：带外 rsync -a 替换（新 inode、
+	// 保留 mtime/size）可被 inode 差异检出；cp -p 原地覆写仍同形态（残余边角，
+	// 生产更新走 rename 流不可达——SEC124-B2-1 记录）。
+	ino := int64(0)
+	if stt, ok := st.Sys().(*syscall.Stat_t); ok {
+		ino = int64(stt.Ino)
+	}
 	geoipContentMu.Lock()
-	if e, ok := geoipContentCache[path]; ok && e.modTime.Equal(st.ModTime()) && e.size == st.Size() {
+	if e, ok := geoipContentCache[path]; ok && e.modTime.Equal(st.ModTime()) && e.size == st.Size() && e.ino == ino {
 		geoipContentMu.Unlock()
 		return e.buf, nil
 	}
@@ -289,7 +300,7 @@ func geoipContentBuffer(path string) ([]byte, error) {
 		return nil, err
 	}
 	geoipContentMu.Lock()
-	geoipContentCache[path] = geoipContentEntry{buf: buf, modTime: st.ModTime(), size: st.Size()}
+	geoipContentCache[path] = geoipContentEntry{buf: buf, modTime: st.ModTime(), size: st.Size(), ino: ino}
 	geoipContentMu.Unlock()
 	return buf, nil
 }

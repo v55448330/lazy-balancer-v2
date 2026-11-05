@@ -839,3 +839,18 @@ func TestProvider_CleanUp_delete5xxRetriedThenFailsKeepsOwnership(t *testing.T) 
 		t.Fatalf("ownership left=%+v, want 删除失败条目留存（记录可能仍存在）", left)
 	}
 }
+
+func TestSetUserAgent_versionized(t *testing.T) {
+	// UA 版本化接缝：装配 cfg.Version 后出网 UA 与 APP_VERSION 同源
+	// （audit122 B1-124-1：aliyun 手写客户端补齐同款接缝）。
+	prev := userAgent
+	t.Cleanup(func() { userAgent = prev })
+	SetUserAgent("v2.4.2")
+	if userAgent != "lazy-balancer/v2.4.2" {
+		t.Fatalf("userAgent=%q, want lazy-balancer/v2.4.2", userAgent)
+	}
+	SetUserAgent("")
+	if userAgent != "lazy-balancer/v2.4.2" {
+		t.Fatalf("空串不得清空已有 UA: %q", userAgent)
+	}
+}

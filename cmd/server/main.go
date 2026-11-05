@@ -134,6 +134,7 @@ func run() error {
 	// dnsprovider 各实现的 TXT 残留告警接缝（修复前裸 log.Printf）。
 	dnspod.SetLogf(services.Logf)
 	dnspod.SetUserAgent(cfg.Version)
+	aliyun.SetUserAgent(cfg.Version)
 	tencent.SetLogf(services.Logf)
 	aliyun.SetLogf(services.Logf)
 	cloudflare.SetLogf(services.Logf)
