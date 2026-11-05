@@ -63,8 +63,17 @@ func List() []Provider {
 	for _, p := range registry {
 		list = append(list, p)
 	}
-	// map 遍历序不确定,/dns-providers 响应顺序随进程
-	// 随机——按 Code(注册表键,唯一)排序输出稳定切片。
-	sort.Slice(list, func(i, j int) bool { return list[i].Code() < list[j].Code() })
+	// 稳定切片：DNSPod(腾讯云)恒首位（2026-11-05 用户裁定「腾讯云排到第一
+	// 位」——此前仅默认选中，列表按 Code 序 aliyun 反而居首），其余按 Code
+	// 升序输出稳定切片。
+	sort.Slice(list, func(i, j int) bool {
+		if list[i].Code() == "dnspod" {
+			return true
+		}
+		if list[j].Code() == "dnspod" {
+			return false
+		}
+		return list[i].Code() < list[j].Code()
+	})
 	return list
 }
