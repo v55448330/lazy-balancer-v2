@@ -29,11 +29,21 @@ type cfServer struct {
 	nextID   int
 	requests []cfRequestLog
 
-	verifyResult    string // /user/tokens/verify 的 result.status（默认 active）
-	verifyStatus    int    // /user/tokens/verify 的 HTTP 状态（默认 200）
-	verifyErrorCode int    // verify 失败体的错误码（默认 9109）
-	post429First    int    // 前 N 次 POST dns_records 返回 429
-	overrides       map[string]cfResponse
+	verifyResult       string // /user/tokens/verify 的 result.status（默认 active）
+	verifyStatus       int    // /user/tokens/verify 的 HTTP 状态（默认 200）
+	verifyErrorCode    int    // verify 失败体的错误码（默认 9109）
+	verifyErrorMessage string // verify 失败体的错误消息（默认 Invalid API Token；权限类错误形态需配 10000+Authentication error）
+	post429First       int    // 前 N 次 POST dns_records 返回 429
+	// accounts 是 GET /accounts 可见账户 id 列表（nil=空列表，列表恒 200；
+	// accountsStatus 非 0/200 时按该状态返回错误体——5xx 上抛形态注入）。
+	accounts       []string
+	accountsStatus int
+	// accountVerify/accountVerifyStatus 是 /accounts/{id}/tokens/verify 的
+	// 逐账户形态：status 缺省 active；statusHTTP 非 0/200 时按该状态返回
+	// 错误体（token 对该账户无验证权限的真实形态）。
+	accountVerify       map[string]string
+	accountVerifyStatus map[string]int
+	overrides           map[string]cfResponse
 	// scriptedRecordPages 非 nil 时按页下发预制包络体（页 i = 第 i-1 个元素，
 	// 越界回退最后一个）——构造「中途短页 + total 显示仍有后续」的厂商观测
 	// 形态（页间漂移/服务端单页容量波动）。
@@ -194,6 +204,45 @@ func (s *cfServer) handle(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.writeEnvelope(w, http.StatusOK, mustJSON(map[string]string{"id": recordID}))
+	case r.Method == http.MethodGet && sub == "/accounts":
+		if s.accountsStatus != 0 && s.accountsStatus != http.StatusOK {
+			s.writeError(w, s.accountsStatus, 1000, "internal server error")
+			return
+		}
+		// 真实分页形态：per_page 切片 + result_info.total_count（与
+		// dns_records 列表同构）。
+		perPage := 50
+		if v, err := strconv.Atoi(r.URL.Query().Get("per_page")); err == nil && v > 0 {
+			perPage = v
+		}
+		page := 1
+		if v, err := strconv.Atoi(r.URL.Query().Get("page")); err == nil && v > 0 {
+			page = v
+		}
+		start := (page - 1) * perPage
+		pageOut := []map[string]string{}
+		if start < len(s.accounts) {
+			end := start + perPage
+			if end > len(s.accounts) {
+				end = len(s.accounts)
+			}
+			for _, id := range s.accounts[start:end] {
+				pageOut = append(pageOut, map[string]string{"id": id, "name": "acct-" + id})
+			}
+		}
+		resultInfo := map[string]int{"page": page, "per_page": perPage, "count": len(pageOut), "total_count": len(s.accounts)}
+		s.writeEnvelopeWithInfo(w, http.StatusOK, mustJSON(pageOut), resultInfo)
+	case r.Method == http.MethodGet && strings.HasPrefix(sub, "/accounts/") && strings.HasSuffix(sub, "/tokens/verify"):
+		accountID := strings.Split(strings.TrimPrefix(sub, "/accounts/"), "/")[0]
+		if status, ok := s.accountVerifyStatus[accountID]; ok && status != http.StatusOK {
+			s.writeError(w, status, 1000, "Invalid API Token")
+			return
+		}
+		resultStatus := s.accountVerify[accountID]
+		if resultStatus == "" {
+			resultStatus = "active"
+		}
+		s.writeEnvelope(w, http.StatusOK, mustJSON(map[string]string{"id": "tok_" + accountID, "status": resultStatus}))
 	case r.Method == http.MethodGet && sub == "/user/tokens/verify":
 		status := s.verifyStatus
 		if status == 0 {
@@ -204,7 +253,11 @@ func (s *cfServer) handle(w http.ResponseWriter, r *http.Request) {
 			if code == 0 {
 				code = 9109
 			}
-			s.writeError(w, status, code, "Invalid API Token")
+			message := s.verifyErrorMessage
+			if message == "" {
+				message = "Invalid API Token"
+			}
+			s.writeError(w, status, code, message)
 			return
 		}
 		s.writeEnvelope(w, http.StatusOK, mustJSON(map[string]string{"id": "tok123", "status": s.verifyResult}))
@@ -265,6 +318,18 @@ func (s *cfServer) countRequests(method, pathPrefix string) int {
 	count := 0
 	for _, entry := range s.log() {
 		if entry.method == method && strings.HasPrefix(entry.path, pathPrefix) {
+			count++
+		}
+	}
+	return count
+}
+
+// countRequestsExact 按「方法+完整路径（含 query）」精确计数：/accounts 与
+// /accounts/{id}/tokens/verify 共享前缀，前缀计数无法区分两者。
+func (s *cfServer) countRequestsExact(method, path string) int {
+	count := 0
+	for _, entry := range s.log() {
+		if entry.method == method && entry.path == path {
 			count++
 		}
 	}
@@ -688,14 +753,180 @@ func TestProvider_VerifyToken(t *testing.T) {
 		s.verifyStatus = http.StatusForbidden
 		p := newCloudflareTestProvider(t, "cf-token", s)
 		err := p.VerifyToken(t.Context())
+		// 9109 属「值无效」信号：除用户级文案外，还必须触发账户级验证尝试
+		// （账户自有 Token 的用户级形态即 invalid——harness 默认 /accounts
+		// 为空列表，终态是含指引与原始错误的账户级文案）。
 		if err == nil || !strings.Contains(err.Error(), "Token 无效") {
 			t.Fatalf("error=%v, want Token 无效文案", err)
 		}
+		// 枚举请求带分页 query，前缀 "/accounts?" 不会命中
+		// /accounts/{id}/tokens/verify。
+		if got := s.countRequests(http.MethodGet, "/accounts?"); got != 1 {
+			t.Fatalf("invalid token 须触发一次 GET /accounts, got %d", got)
+		}
 	})
 }
+
+// 账户自有 Token（Account API Token，cfat_ 前缀）打用户级 verify 端点返回
+// 400 code=1000 Invalid API Token（官方 Token formats：cfat_ 的 verify 端点
+// 是 /accounts/{account_id}/tokens/verify）。VerifyToken 须两级尝试：用户级
+// invalid 失败后枚举 /accounts 逐账户验证，任一 active 即通过。
+func TestProvider_VerifyToken_AccountOwnedToken(t *testing.T) {
+	const guidance = "账户自有 Token 需在账户级验证，且账户可见性取决于 token 权限"
+
+	t.Run("account token verifies via account level", func(t *testing.T) {
+		s := newCloudflareTestServer(t)
+		s.verifyStatus = http.StatusBadRequest
+		s.verifyErrorCode = 1000
+		s.accounts = []string{"acc1"}
+		p := newCloudflareTestProvider(t, "cfat_"+strings.Repeat("a", 40), s)
+		if err := p.VerifyToken(t.Context()); err != nil {
+			t.Fatalf("VerifyToken（账户级 active 须通过）: %v", err)
+		}
+		for _, entry := range s.log() {
+			switch {
+			case entry.method == http.MethodGet && entry.path == "/user/tokens/verify":
+				if entry.auth != "Bearer "+p.apiToken {
+					t.Fatalf("用户级 Authorization=%q", entry.auth)
+				}
+			case entry.method == http.MethodGet && strings.HasPrefix(entry.path, "/accounts"):
+				if entry.auth != "Bearer "+p.apiToken {
+					t.Fatalf("账户级 Authorization=%q, want 同 token Bearer", entry.auth)
+				}
+			}
+		}
+		if got := s.countRequests(http.MethodGet, "/accounts?"); got != 1 {
+			t.Fatalf("GET /accounts 次数=%d, want 1", got)
+		}
+		if got := s.countRequestsExact(http.MethodGet, "/accounts/acc1/tokens/verify"); got != 1 {
+			t.Fatalf("GET /accounts/acc1/tokens/verify 次数=%d, want 1", got)
+		}
+	})
+
+	t.Run("user token path unchanged", func(t *testing.T) {
+		s := newCloudflareTestServer(t)
+		p := newCloudflareTestProvider(t, "cfut_"+strings.Repeat("a", 40), s)
+		if err := p.VerifyToken(t.Context()); err != nil {
+			t.Fatalf("VerifyToken: %v", err)
+		}
+		if s.countRequests(http.MethodGet, "/accounts") != 0 {
+			t.Fatal("用户级 active 不得触发 /accounts 枚举")
+		}
+	})
+
+	t.Run("any active account passes", func(t *testing.T) {
+		s := newCloudflareTestServer(t)
+		s.verifyStatus = http.StatusBadRequest
+		s.verifyErrorCode = 1000
+		s.accounts = []string{"acc1", "acc2"}
+		s.accountVerify = map[string]string{"acc1": "disabled"}
+		s.accountVerifyStatus = map[string]int{"acc2": http.StatusOK}
+		p := newCloudflareTestProvider(t, "cfat_"+strings.Repeat("a", 40), s)
+		if err := p.VerifyToken(t.Context()); err != nil {
+			t.Fatalf("VerifyToken（acc2 active 须通过）: %v", err)
+		}
+	})
+
+	t.Run("verify forbidden on one account continues", func(t *testing.T) {
+		s := newCloudflareTestServer(t)
+		s.verifyStatus = http.StatusBadRequest
+		s.verifyErrorCode = 1000
+		s.accounts = []string{"acc1", "acc2"}
+		s.accountVerifyStatus = map[string]int{"acc1": http.StatusForbidden}
+		p := newCloudflareTestProvider(t, "cfat_"+strings.Repeat("a", 40), s)
+		if err := p.VerifyToken(t.Context()); err != nil {
+			t.Fatalf("VerifyToken（acc1 403 后 acc2 active 须通过）: %v", err)
+		}
+	})
+
+	t.Run("all accounts fail reports guidance", func(t *testing.T) {
+		s := newCloudflareTestServer(t)
+		s.verifyStatus = http.StatusBadRequest
+		s.verifyErrorCode = 1000
+		s.accounts = []string{"acc1"}
+		s.accountVerify = map[string]string{"acc1": "disabled"}
+		p := newCloudflareTestProvider(t, "cfat_"+strings.Repeat("a", 40), s)
+		err := p.VerifyToken(t.Context())
+		if err == nil || !strings.Contains(err.Error(), guidance) {
+			t.Fatalf("error=%v, want 账户自有指引", err)
+		}
+	})
+
+	t.Run("zero visible accounts reports guidance", func(t *testing.T) {
+		s := newCloudflareTestServer(t)
+		s.verifyStatus = http.StatusBadRequest
+		s.verifyErrorCode = 1000
+		p := newCloudflareTestProvider(t, "cfat_"+strings.Repeat("a", 40), s)
+		err := p.VerifyToken(t.Context())
+		if err == nil || !strings.Contains(err.Error(), guidance) {
+			t.Fatalf("error=%v, want 账户自有指引", err)
+		}
+	})
+
+	t.Run("accounts 5xx propagates", func(t *testing.T) {
+		s := newCloudflareTestServer(t)
+		s.verifyStatus = http.StatusBadRequest
+		s.verifyErrorCode = 1000
+		s.accountsStatus = http.StatusInternalServerError
+		p := newCloudflareTestProvider(t, "cfat_"+strings.Repeat("a", 40), s)
+		err := p.VerifyToken(t.Context())
+		if err == nil {
+			t.Fatal("/accounts 5xx 不得吞错")
+		}
+		if strings.Contains(err.Error(), guidance) {
+			t.Fatalf("/accounts 枚举失败须照旧上抛而非报账户级终态: %v", err)
+		}
+		if !strings.Contains(err.Error(), "500") {
+			t.Fatalf("error=%v, want 保留 HTTP 500 形态", err)
+		}
+	})
+
+	t.Run("permission error does not trigger account attempt", func(t *testing.T) {
+		s := newCloudflareTestServer(t)
+		// 真实权限不足形态：code=10000 + "Authentication error"（非
+		// invalid-token 信号，不得触发账户级尝试）。
+		s.verifyStatus = http.StatusForbidden
+		s.verifyErrorCode = 10000
+		s.verifyErrorMessage = "Authentication error"
+		p := newCloudflareTestProvider(t, "cf-token", s)
+		err := p.VerifyToken(t.Context())
+		if err == nil || !strings.Contains(err.Error(), "权限不足") {
+			t.Fatalf("error=%v, want 权限不足文案", err)
+		}
+		if s.countRequests(http.MethodGet, "/accounts") != 0 {
+			t.Fatal("非 invalid 错误不得触发账户级尝试")
+		}
+	})
+}
+
+// tokenDiagnostic 前缀识别：cfut_/cfat_/cfk_ 三类官方前缀给出 Token 形态
+// 判定（脱敏：只含前缀与形态，不含凭据内容）。
+func TestTokenDiagnostic_prefixRecognition(t *testing.T) {
+	cases := []struct {
+		token string
+		want  string
+	}{
+		{"cfut_" + strings.Repeat("a", 40), "用户 API Token"},
+		{"cfat_" + strings.Repeat("a", 40), "账户自有 API Token（账户级验证）"},
+		{"cfk_" + strings.Repeat("a", 34), "Global API Key（不可用于 Bearer）"},
+	}
+	for _, tc := range cases {
+		diag := tokenDiagnostic(tc.token)
+		if !strings.Contains(diag, tc.want) {
+			t.Fatalf("tokenDiagnostic(%q…)=%q, want 含 %q", tc.token[:5], diag, tc.want)
+		}
+		if strings.Contains(diag, strings.Repeat("a", 10)) {
+			t.Fatalf("诊断不得泄露凭据内容: %q", diag)
+		}
+	}
+}
+
 func TestCloudflare_invalidTokenCode1000ShowsChecklist(t *testing.T) {
 	// code=1000（值形态无效，如粘贴 Token ID/Global Key）必须给出可操作的
-	// 排查清单，而非笼统「无效或已被撤销」。
+	// 排查清单，而非笼统「无效或已被撤销」。code=1000 属「值无效」信号，
+	// 同时触发账户级验证尝试（账户自有 Token 的用户级形态即 code=1000）：
+	// harness 默认 /accounts 为空列表，终态文案=账户自有指引+用户级原始
+	// 错误（排查清单随原始错误保留）。
 	s := newCloudflareTestServer(t)
 	s.verifyResult = "active"
 	s.verifyStatus = http.StatusBadRequest
@@ -706,7 +937,7 @@ func TestCloudflare_invalidTokenCode1000ShowsChecklist(t *testing.T) {
 		t.Fatal("want error")
 	}
 	msg := err.Error()
-	for _, want := range []string{"code=1000", "Token ID", "Global API Key", "粘贴值长度 16 字符"} {
+	for _, want := range []string{"code=1000", "Token ID", "Global API Key", "粘贴值长度 16 字符", "账户自有 Token 需在账户级验证"} {
 		if !strings.Contains(msg, want) {
 			t.Fatalf("消息缺 %q: %s", want, msg)
 		}

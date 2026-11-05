@@ -565,21 +565,106 @@ func (p *Provider) deleteRecord(ctx context.Context, zoneID, recordID string) er
 	return nil
 }
 
+// accountTokenGuidance 是账户自有 Token 验证未通过时终态文案的统一指引句
+// （错误文案与测试断言同源，措辞漂移由测试拦截）。
+const accountTokenGuidance = "账户自有 Token 需在账户级验证，且账户可见性取决于 token 权限"
+
+// accountOwnedPageSize 是 GET /accounts 的单页大小（Cloudflare accounts 列表
+// 单页上限 50）；accountOwnedPageLimit 仅防御异常巨量下的失控翻页——单 token
+// 可见过千账户远超真实部署面，上限与 challengeListPageLimit 同口径。
+const (
+	accountOwnedPageSize  = 50
+	accountOwnedPageLimit = 20
+)
+
 // VerifyToken 以 GET /user/tokens/verify 真实验证 API Token 有效性（保存前
 // 验证入口，registry 侧经 newDNSProviderFromCredentials 构造后调用）：请求
 // 成功且 Token 状态为 active 才算通过——不触 DNS 写入、无需 zone。
+//
+// 账户自有 Token（Account API Token，前缀 cfat_）打用户级端点返回 400
+// code=1000 Invalid API Token（官方 Token formats：cfat_ 归账户所有，verify
+// 端点是 /accounts/{account_id}/tokens/verify）。因此用户级失败且错误属于
+// 「Token 值无效」类（isInvalidToken）时两级尝试：GET /accounts 枚举 token
+// 可见账户（分页），逐账户打 /accounts/{id}/tokens/verify，任一 active 即
+// 通过。非 invalid 类失败（403 权限不足/429 限流）照旧上抛——账户级尝试只
+// 服务于「值无效」信号；/accounts 枚举本身的失败同样照旧上抛（枚举失败说明
+// 账户可见性无法确认，不得伪装成账户级终态）。归因用的 token id 语义不变：
+// 结果只取 status，两级的 id 均不落任何账本。
 func (p *Provider) VerifyToken(ctx context.Context) error {
 	var result struct {
 		ID     string `json:"id"`
 		Status string `json:"status"`
 	}
-	if err := p.apiCall(ctx, http.MethodGet, "/user/tokens/verify", nil, &result); err != nil {
-		return err
+	userErr := p.apiCall(ctx, http.MethodGet, "/user/tokens/verify", nil, &result)
+	if userErr == nil {
+		if result.Status != "active" {
+			return fmt.Errorf("Cloudflare API Token 状态为 %q（需要 active 状态的 Token）", result.Status)
+		}
+		return nil
 	}
-	if result.Status != "active" {
-		return fmt.Errorf("Cloudflare API Token 状态为 %q（需要 active 状态的 Token）", result.Status)
+	var apiErr *apiError
+	if !errors.As(userErr, &apiErr) || !isInvalidToken(apiErr) {
+		return userErr
 	}
-	return nil
+	accounts, listErr := p.listVisibleAccounts(ctx)
+	if listErr != nil {
+		return listErr
+	}
+	for _, accountID := range accounts {
+		var accountResult struct {
+			Status string `json:"status"`
+		}
+		// 单账户验证失败（无权限/非 active）只淘汰该账户，继续下一个；
+		// 任一 active 即整体通过。
+		if err := p.apiCall(ctx, http.MethodGet, "/accounts/"+accountID+"/tokens/verify", nil, &accountResult); err == nil && accountResult.Status == "active" {
+			return nil
+		}
+	}
+	return fmt.Errorf("Cloudflare API Token 在用户级验证失败，账户级逐账户验证亦未通过（token 可见 %d 个账户）。%s。用户级原始错误：%v", len(accounts), accountTokenGuidance, userErr)
+}
+
+// listVisibleAccounts 枚举当前 token 可见的账户 id（GET /accounts，Bearer 同
+// token）。翻页终止判定与 listRecordsByName 同口径：fetched==0 即终止；
+// total_count>0 时按累计取到数 ≥ total 终止。枚举失败（权限不足/限流/5xx
+// 重试耗尽）原样上抛。
+func (p *Provider) listVisibleAccounts(ctx context.Context) ([]string, error) {
+	var accounts []string
+	fetchedTotal := 0
+	for page := 1; page <= accountOwnedPageLimit; page++ {
+		query := url.Values{}
+		query.Set("per_page", strconv.Itoa(accountOwnedPageSize))
+		query.Set("page", strconv.Itoa(page))
+		var envelope apiEnvelope
+		status, err := p.apiCallEnvelope(ctx, http.MethodGet, "/accounts?"+query.Encode(), nil, &envelope)
+		if err != nil {
+			if ctx.Err() != nil {
+				err = errors.Join(err, ctx.Err())
+			}
+			return nil, err
+		}
+		var pageAccounts []struct {
+			ID string `json:"id"`
+		}
+		if len(envelope.Result) > 0 {
+			if err := json.Unmarshal(envelope.Result, &pageAccounts); err != nil {
+				return nil, fmt.Errorf("decode GET /accounts result (HTTP %d): %w", status, err)
+			}
+		}
+		fetched := len(pageAccounts)
+		if fetched == 0 {
+			break
+		}
+		for _, account := range pageAccounts {
+			if account.ID != "" {
+				accounts = append(accounts, account.ID)
+			}
+		}
+		fetchedTotal += fetched
+		if total := envelope.ResultInfo.TotalCount; total > 0 && fetchedTotal >= total {
+			break
+		}
+	}
+	return accounts, nil
 }
 
 // apiEnvelope 是 Cloudflare REST v4 的统一响应包络。
@@ -668,7 +753,7 @@ func (p *Provider) readableAPIError(apiErr *apiError, body []byte) error {
 		// 误用 Global API Key/Origin CA Key、复制不完整）——9109 则为
 		// Token 已撤销/回滚。两类都给可操作的排查指引。
 		if strings.Contains(strings.ToLower(joined), "code=1000") {
-			return &sanitizedAPIError{msg: "Cloudflare API Token 无效（code=1000）：" + tokenDiagnostic(p.apiToken) + "。请重新创建 Token 并复制创建时一次性展示的 Token 值（而非列表中的 Token ID），使用「API Token」而非 Global API Key", err: apiErr}
+			return &sanitizedAPIError{msg: "Cloudflare API Token 无效（code=1000）：" + tokenDiagnostic(p.apiToken) + "。请重新创建 Token 并复制创建时一次性展示的 Token 值（而非列表中的 Token ID），使用「API Token」而非 Global API Key；保存验证已支持账户自有 Token（cfat_ 前缀）自动走账户级验证", err: apiErr}
 		}
 		return &sanitizedAPIError{msg: fmt.Sprintf("Cloudflare API Token 无效或已被撤销: %s", joined), err: apiErr}
 	}
@@ -681,13 +766,23 @@ func (p *Provider) readableAPIError(apiErr *apiError, body []byte) error {
 	return &sanitizedAPIError{msg: fmt.Sprintf("Cloudflare API 调用失败（HTTP %d）: %s", apiErr.Status, joined), err: apiErr}
 }
 
-// tokenDiagnostic 生成凭据值的脱敏特征诊断（仅长度/字符类，不泄露内容）：
-// 识别三类常见粘贴错误——Token ID（32 位纯十六进制）、Global API Key（37 位
-// 纯十六进制）、含空白/引号的复制污染。有效 API Token 为约 40 位字母数字与
-// _-。无法识别时只报长度。
+// tokenDiagnostic 生成凭据值的脱敏特征诊断（仅长度/字符类与前缀，不泄露
+// 内容）：官方 Token 前缀三类——cfut_=用户 API Token、cfat_=账户自有 API
+// Token（verify 走账户级端点）、cfk_=Global API Key（不可用于 Bearer）；
+// 另识别三类常见粘贴错误——Token ID（32 位纯十六进制）、Global API Key
+// （37 位纯十六进制）、含空白/引号的复制污染。有效 API Token 为约 40 位字母
+// 数字与 _-。无法识别时只报长度。
 func tokenDiagnostic(token string) string {
 	features := []string{fmt.Sprintf("粘贴值长度 %d 字符", len(token))}
 	trimmed := strings.TrimSpace(token)
+	switch {
+	case strings.HasPrefix(trimmed, "cfut_"):
+		features = append(features, "cfut_ 前缀——用户 API Token")
+	case strings.HasPrefix(trimmed, "cfat_"):
+		features = append(features, "cfat_ 前缀——账户自有 API Token（账户级验证）")
+	case strings.HasPrefix(trimmed, "cfk_"):
+		features = append(features, "cfk_ 前缀——Global API Key（不可用于 Bearer）")
+	}
 	quoted := trimmed != token || strings.ContainsAny(token, " \t\n")
 	if quoted {
 		features = append(features, "含空白或引号（复制时带入）")
