@@ -706,9 +706,12 @@ func TestCloudflare_invalidTokenCode1000ShowsChecklist(t *testing.T) {
 		t.Fatal("want error")
 	}
 	msg := err.Error()
-	for _, want := range []string{"code=1000", "Token ID", "Global API Key"} {
+	for _, want := range []string{"code=1000", "Token ID", "Global API Key", "粘贴值长度 16 字符"} {
 		if !strings.Contains(msg, want) {
 			t.Fatalf("消息缺 %q: %s", want, msg)
 		}
+	}
+	if strings.Contains(msg, "not-a-real-token") {
+		t.Fatalf("诊断不得泄露凭据内容: %s", msg)
 	}
 }

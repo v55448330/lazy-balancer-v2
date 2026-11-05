@@ -114,6 +114,11 @@ func NewPersistent(apiToken, dataDir string) (*Provider, error) {
 
 // New creates a Cloudflare provider.
 func New(apiToken string) *Provider {
+	// 清洗：首尾空白与包裹引号（从聊天记录/文档复制时常见）——不清洗则
+	// 头部形态合法但值非 Token，Cloudflare 返回 1000 Invalid API Token。
+	apiToken = strings.TrimSpace(apiToken)
+	apiToken = strings.Trim(apiToken, "\"")
+	apiToken = strings.Trim(apiToken, "'")
 	apiToken = strings.TrimSpace(apiToken)
 	return &Provider{
 		apiToken: apiToken,
@@ -663,7 +668,7 @@ func (p *Provider) readableAPIError(apiErr *apiError, body []byte) error {
 		// 误用 Global API Key/Origin CA Key、复制不完整）——9109 则为
 		// Token 已撤销/回滚。两类都给可操作的排查指引。
 		if strings.Contains(strings.ToLower(joined), "code=1000") {
-			return &sanitizedAPIError{msg: "Cloudflare API Token 无效（code=1000）：请确认粘贴的是创建 Token 时一次性展示的 Token 值（而非列表中的 Token ID）、使用的是「API Token」而非 Global API Key，且 Token 未被删除或回滚后重新复制", err: apiErr}
+			return &sanitizedAPIError{msg: "Cloudflare API Token 无效（code=1000）：" + tokenDiagnostic(p.apiToken) + "。请重新创建 Token 并复制创建时一次性展示的 Token 值（而非列表中的 Token ID），使用「API Token」而非 Global API Key", err: apiErr}
 		}
 		return &sanitizedAPIError{msg: fmt.Sprintf("Cloudflare API Token 无效或已被撤销: %s", joined), err: apiErr}
 	}
@@ -674,6 +679,35 @@ func (p *Provider) readableAPIError(apiErr *apiError, body []byte) error {
 		return &sanitizedAPIError{msg: fmt.Sprintf("Cloudflare API 请求被限流（重试耗尽后仍 429，请稍后重试）: %s", joined), err: apiErr}
 	}
 	return &sanitizedAPIError{msg: fmt.Sprintf("Cloudflare API 调用失败（HTTP %d）: %s", apiErr.Status, joined), err: apiErr}
+}
+
+// tokenDiagnostic 生成凭据值的脱敏特征诊断（仅长度/字符类，不泄露内容）：
+// 识别三类常见粘贴错误——Token ID（32 位纯十六进制）、Global API Key（37 位
+// 纯十六进制）、含空白/引号的复制污染。有效 API Token 为约 40 位字母数字与
+// _-。无法识别时只报长度。
+func tokenDiagnostic(token string) string {
+	features := []string{fmt.Sprintf("粘贴值长度 %d 字符", len(token))}
+	trimmed := strings.TrimSpace(token)
+	quoted := trimmed != token || strings.ContainsAny(token, " \t\n")
+	if quoted {
+		features = append(features, "含空白或引号（复制时带入）")
+	}
+	isHex := len(trimmed) > 0
+	for _, r := range trimmed {
+		if !strings.ContainsRune("0123456789abcdefABCDEF", r) {
+			isHex = false
+			break
+		}
+	}
+	if isHex {
+		switch len(trimmed) {
+		case 32:
+			features = append(features, "32 位纯十六进制——疑似复制了 Token ID 而非 Token 值")
+		case 37:
+			features = append(features, "37 位纯十六进制——疑似 Global API Key（不可用于 Bearer 认证）")
+		}
+	}
+	return strings.Join(features, "；")
 }
 
 // isInvalidToken 识别 Token 失效信号：官方错误码 9109（Invalid API Token）或
