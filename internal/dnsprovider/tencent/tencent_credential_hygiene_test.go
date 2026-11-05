@@ -36,19 +36,19 @@ type sdkEchoTransport struct {
 func (transport *sdkEchoTransport) RoundTrip(request *http.Request) (*http.Response, error) {
 	_, _ = io.ReadAll(request.Body)
 	_ = request.Body.Close()
+	// 非目标动作（同值复用扫描的 DescribeRecordList）回空成功响应——本
+	// transport 只为单个错误出口的脱敏钉服务，目标动作已由各子用例的错误
+	// 前缀断言钉住。
+	body := transport.body
+	if request.Header.Get("X-TC-Action") != transport.action {
+		body = `{"Response":{"RequestId":"pass"}}`
+	}
 	return &http.Response{
 		StatusCode: http.StatusOK,
 		Header:     make(http.Header),
-		Body:       io.NopCloser(strings.NewReader(transport.body)),
+		Body:       io.NopCloser(strings.NewReader(body)),
 		Request:    request,
-	}, transport.actionAssert(request.Header.Get("X-TC-Action"))
-}
-
-func (transport *sdkEchoTransport) actionAssert(actual string) error {
-	if actual != transport.action {
-		return fmt.Errorf("unexpected action %q (want %q)", actual, transport.action)
-	}
-	return nil
+	}, nil
 }
 
 // tencent 侧错误文案脱敏钉：SDK 错误 Message 回声凭据明文时，三个错误出口

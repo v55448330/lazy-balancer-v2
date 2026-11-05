@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -32,6 +33,10 @@ type cfServer struct {
 	verifyStatus int    // /user/tokens/verify 的 HTTP 状态（默认 200）
 	post429First int    // 前 N 次 POST dns_records 返回 429
 	overrides    map[string]cfResponse
+	// scriptedRecordPages 非 nil 时按页下发预制包络体（页 i = 第 i-1 个元素，
+	// 越界回退最后一个）——构造「中途短页 + total 显示仍有后续」的厂商观测
+	// 形态（页间漂移/服务端单页容量波动）。
+	scriptedRecordPages []string
 }
 
 type cfRecord struct {
@@ -98,20 +103,53 @@ func (s *cfServer) handle(w http.ResponseWriter, r *http.Request) {
 		}
 		s.writeEnvelope(w, http.StatusOK, mustJSON(results))
 	case r.Method == http.MethodGet && strings.HasSuffix(sub, "/dns_records"):
+		if s.scriptedRecordPages != nil {
+			page := 1
+			if v, err := strconv.Atoi(r.URL.Query().Get("page")); err == nil && v > 0 {
+				page = v
+			}
+			index := page - 1
+			if index >= len(s.scriptedRecordPages) {
+				index = len(s.scriptedRecordPages) - 1
+			}
+			s.writeRaw(w, http.StatusOK, s.scriptedRecordPages[index])
+			return
+		}
 		zoneID := zoneIDFromRecordsPath(sub)
 		if !s.zoneExists(zoneID) {
 			s.writeError(w, http.StatusNotFound, 7003, "No route for that URI")
 			return
 		}
 		name := dnsname.NormalizeName(r.URL.Query().Get("name"))
-		out := []map[string]string{}
+		filtered := []map[string]string{}
 		for _, record := range s.records[zoneID] {
 			if record.Type != "TXT" || dnsname.NormalizeName(record.Name) != name {
 				continue
 			}
-			out = append(out, map[string]string{"id": record.ID, "name": record.Name, "type": record.Type, "content": record.Content})
+			filtered = append(filtered, map[string]string{"id": record.ID, "name": record.Name, "type": record.Type, "content": record.Content})
 		}
-		s.writeEnvelope(w, http.StatusOK, mustJSON(out))
+		// 真实分页形态：per_page 切片 + result_info.total_count。
+		perPage := 100
+		if v, err := strconv.Atoi(r.URL.Query().Get("per_page")); err == nil && v > 0 {
+			perPage = v
+		}
+		page := 1
+		if v, err := strconv.Atoi(r.URL.Query().Get("page")); err == nil && v > 0 {
+			page = v
+		}
+		start := (page - 1) * perPage
+		pageOut := []map[string]string{}
+		if start < len(filtered) {
+			end := start + perPage
+			if end > len(filtered) {
+				end = len(filtered)
+			}
+			pageOut = filtered[start:end]
+		}
+		resultInfo := map[string]int{
+			"page": page, "per_page": perPage, "count": len(pageOut), "total_count": len(filtered),
+		}
+		s.writeEnvelopeWithInfo(w, http.StatusOK, mustJSON(pageOut), resultInfo)
 	case r.Method == http.MethodPost && strings.HasSuffix(sub, "/dns_records"):
 		if s.post429First > 0 {
 			s.post429First--
@@ -187,6 +225,11 @@ func (s *cfServer) zoneExists(zoneID string) bool {
 
 func (s *cfServer) writeEnvelope(w http.ResponseWriter, status int, resultJSON string) {
 	s.writeRaw(w, status, fmt.Sprintf(`{"success":true,"errors":[],"messages":[],"result":%s}`, resultJSON))
+}
+
+// writeEnvelopeWithInfo 在包络中附带 result_info（列表端点的真实分页元数据）。
+func (s *cfServer) writeEnvelopeWithInfo(w http.ResponseWriter, status int, resultJSON string, resultInfo map[string]int) {
+	s.writeRaw(w, status, fmt.Sprintf(`{"success":true,"errors":[],"messages":[],"result":%s,"result_info":%s}`, resultJSON, mustJSON(resultInfo)))
 }
 
 func (s *cfServer) writeError(w http.ResponseWriter, status, code int, message string) {
@@ -530,8 +573,8 @@ func TestProvider_errorMapping(t *testing.T) {
 		s := newCloudflareTestServer(t) // 无 zone
 		p := newCloudflareTestProvider(t, "cf-token", s)
 		err := p.Present(t.Context(), "missing.example", "_acme-challenge.missing.example", "v", 600)
-		if err == nil || !strings.Contains(err.Error(), "不存在") {
-			t.Fatalf("error=%v, want zone 不存在文案", err)
+		if err == nil || !strings.Contains(err.Error(), "不存在") || !strings.Contains(err.Error(), "Cloudflare: zone") || !strings.Contains(err.Error(), "请确认") {
+			t.Fatalf("error=%v, want 统一文案（provider 名+资源+建议动作）", err)
 		}
 		// 负缓存：第二次不再发起 HTTP（请求数不增长）。
 		before := len(s.log())

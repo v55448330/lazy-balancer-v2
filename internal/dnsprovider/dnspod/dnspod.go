@@ -35,10 +35,13 @@ func SetLogf(f func(level, format string, args ...any)) {
 }
 
 // Domain.List 分页参数：length 上限 3000（超出强制分页），maxPages 仅防御
-// 忽略 offset 的异常服务端，避免死循环。
+// 忽略 offset 的异常服务端，避免死循环。翻页终止由 info.domain_total/空页
+// 真判定承载；100 页（30 万域名）会把超量账户排在 30 万位之后的真实域名
+// 截断成假阴性 not found（并落负缓存 60s）——提高到 1000 页（300 万域名，
+// 远超真实部署面），防御语义不变（钉测见 dnspod_domainlist_bound_test.go）。
 const (
 	domainListPageSize = 3000
-	domainListMaxPages = 100
+	domainListMaxPages = 1000
 )
 
 // provider 侧残余排空的 Record.List 翻页参数（与 aliyun 侧同口径）：服务端
@@ -102,9 +105,9 @@ func New(loginToken string) *Provider {
 	}
 }
 
-// Present creates a distinct _acme-challenge TXT record (no upsert): a repeated
-// Present for the same name adds another record, and cleanup removes records by
-// ownership record ID / value.
+// Present 创建挑战 TXT：同名同值的既有记录直接复用（并发/重试双签发不再
+// 产生重复 TXT，见 createRecord），同名不同值各建一条，清理按 ownership
+// 记录 ID / 挑战值收回。
 func (p *Provider) Present(ctx context.Context, zone, tokenFQDN, value string, ttl int) error {
 	// zone 与 tokenFQDN 都按 dnsname 单源归一后再派生相对子域：DNS 名大小写
 	// 不敏感，保存前探针的 FQDN 可能保留输入原样（`Example.COM`），大小写敏感
@@ -116,7 +119,7 @@ func (p *Provider) Present(ctx context.Context, zone, tokenFQDN, value string, t
 	if err != nil {
 		return err
 	}
-	recordID, err := p.createRecord(ctx, domainID, subDomain, value, ttl)
+	recordID, err := p.createRecord(ctx, zone, domainID, subDomain, value, ttl)
 	if errors.Is(err, errStaleDomainID) {
 		// 缓存的 zone→domain_id 可能陈旧（域名被移出
 		// 账户/删除后重建，新 ID 与缓存不符），Record.Create 报「域名不存在」类
@@ -128,7 +131,7 @@ func (p *Provider) Present(ctx context.Context, zone, tokenFQDN, value string, t
 		if resolveErr != nil {
 			return resolveErr
 		}
-		recordID, err = p.createRecord(ctx, freshID, subDomain, value, ttl)
+		recordID, err = p.createRecord(ctx, zone, freshID, subDomain, value, ttl)
 		if err == nil {
 			// 自愈重试成功后回写 domainID=freshID（与
 			// cleanUp deleteOne 的回写对称）——否则 ownership 回滚删除
@@ -443,7 +446,15 @@ func (p *Provider) listChallengeRecords(ctx context.Context, zone, subDomain str
 			return nil, err
 		}
 		if result.Status.Code.String() != "1" && result.Status.Code.String() != "10" {
-			return nil, fmt.Errorf("Record.List failed: %s", p.sanitizeMessage(result.Status.Message))
+			err := fmt.Errorf("Record.List failed: %s", p.sanitizeMessage(result.Status.Message))
+			if isDomainGoneStatus(result.Status.Code.String(), result.Status.Message) {
+				// 与 createRecord/deleteRecord 同判据：缓存的 domain_id
+				// 陈旧时复用扫描先命中「域名不存在」类错误，标记后由
+				// Present 的 errStaleDomainID 自愈路径处理（cleanUp 侧
+				// 无消费者，原样上抛——与既有 drain 错误口径一致）。
+				err = errors.Join(err, errStaleDomainID)
+			}
+			return nil, err
 		}
 		if result.Status.Code.String() == "10" {
 			// 「空结果」（没有符合条件的记录）：按空列表收尾。
@@ -460,8 +471,12 @@ func (p *Provider) listChallengeRecords(ctx context.Context, zone, subDomain str
 			// 与 Record.Create 侧的 id 读取同口径。
 			collected = append(collected, enumeratedRecord{recordID: string(record.ID), value: record.Value})
 		}
-		// 服务端可能按更小的页容量返回：按实际返回条数推进 offset，
-		// 用 info.record_total 判定是否已扫完（与 getDomainID 同口径）。
+		// 服务端可能按更小的页容量返回：按实际返回条数推进 offset，用
+		// info.record_total 判定是否已扫完。offset 为绝对偏移（官方文档
+		// docs.dnspod.cn/api/record-list：「记录开始的偏移，第一条记录为 0」
+		// ——与 getDomainID 的 Domain.List 循环同口径），短页按实际取到数
+		// 推进不重不漏，无需按 length 整数倍对齐（钉测见
+		// dnspod_pagination_test.go）。
 		offset += len(result.Records)
 		total := result.Info.RecordTotal.Int64()
 		if len(result.Records) == 0 || (total > 0 && int64(offset) >= total) {
@@ -722,6 +737,15 @@ func (p *Provider) putDomainIDCache(key, id string) {
 	domainIDCacheEvictLRU()
 }
 
+// domainNotFoundErr 是 zone 解析失败的统一中文文案（provider 名+资源+建议
+// 动作；与 cloudflare 侧 zoneNotFoundErr 同模板家族，负缓存命中与全量扫描
+// 终态共用）。tencent/aliyun 无本地 zone 解析——域名直传厂商 API，not-found
+// 形态由厂商错误透传，改写会破坏错误分类判定（isRecordNotFound 等按原文
+// 判定），不适用本模板。
+func domainNotFoundErr(zone string) error {
+	return fmt.Errorf("DNSPod: 域名 %s 不在当前账户（请确认域名已添加到该 DNSPod 账户后重试）", zone)
+}
+
 func (p *Provider) getDomainID(ctx context.Context, zone string) (string, error) {
 	// DNS 名大小写不敏感（与 ResolveZone/dnsname 单源同口径）：Domain.List 返回
 	// 服务端规范形态（小写），输入侧归一后才能真正命中；缓存键随之归一，同一
@@ -741,7 +765,7 @@ func (p *Provider) getDomainID(ctx context.Context, zone string) (string, error)
 	if negHit {
 		domainIDCacheTouchLRU(cacheKey)
 		domainIDCacheMu.Unlock()
-		return "", fmt.Errorf("domain %s not found", zone)
+		return "", domainNotFoundErr(zone)
 	}
 	domainIDCacheMu.Unlock()
 	offset := 0
@@ -774,8 +798,13 @@ func (p *Provider) getDomainID(ctx context.Context, zone string) (string, error)
 				return id, nil
 			}
 		}
-		// 服务端可能按更小的页容量返回：按实际返回条数推进 offset，
-		// 用 info.domain_total 判定是否已扫完。
+		// 服务端可能按更小的页容量返回：按实际返回条数推进 offset，用
+		// info.domain_total 判定是否已扫完。offset 语义是绝对偏移（官方文档
+		// docs.dnspod.cn/api/domain-list：「记录开始的偏移，第一条记录为 0」，
+		// Record.List 同口径），短页按实际取到数推进不重不漏——无需按
+		// length 整数倍对齐（按 length 对齐的假设与官方码表相悖：码表 7
+		// 「记录开始的偏移无效」只拦越界偏移；本注释锁死该判定，钉测见
+		// dnspod_pagination_test.go）。
 		offset += len(result.Domains)
 		total := result.Info.DomainTotal.Int64()
 		if len(result.Domains) == 0 || (total > 0 && int64(offset) >= total) {
@@ -789,10 +818,29 @@ func (p *Provider) getDomainID(ctx context.Context, zone string) (string, error)
 	domainIDCacheTouchLRU(cacheKey)
 	domainIDCacheEvictLRU()
 	domainIDCacheMu.Unlock()
-	return "", fmt.Errorf("domain %s not found", zone)
+	return "", domainNotFoundErr(zone)
 }
 
-func (p *Provider) createRecord(ctx context.Context, domainID, subDomain, value string, ttl int) (string, error) {
+// createRecord 创建一条挑战 TXT 记录（幂等：同名同值已存在则复用既有记录
+// ID——并发/重试双签发不再产生重复 TXT，重复创建会让同名多值记录越积越多，
+// 且重试路径的重复创建会在 ownership 之外留下无追踪 TXT。复用与创建共用
+// Present 的登记路径，与 cloudflare 侧 createRecord 同构）。
+func (p *Provider) createRecord(ctx context.Context, zone, domainID, subDomain, value string, ttl int) (string, error) {
+	// 复用扫描走进程内缓存的 zone→domain_id（Present 刚解析过，零额外
+	// Domain.List 往返）；缓存陈旧时 Record.List 报「域名不存在」并标记
+	// errStaleDomainID，由 Present 的自愈路径作废缓存重试（与 cloudflare
+	// 侧 listRecordsByName 的 errStaleZoneID 同构）。
+	existing, err := p.listChallengeRecords(ctx, zone, subDomain)
+	if err != nil {
+		return "", err
+	}
+	for _, record := range existing {
+		// 内容精确匹配；空记录 ID 的畸形条目不参与复用（登记空 ID 会让
+		// 后续清理永久失败）。
+		if record.value == value && record.recordID != "" {
+			return record.recordID, nil
+		}
+	}
 	params := url.Values{}
 	params.Set("domain_id", domainID)
 	params.Set("sub_domain", subDomain)

@@ -98,9 +98,9 @@ func New(secretID, secretKey string) (*Provider, error) {
 	}, nil
 }
 
-// Present creates a distinct _acme-challenge TXT record (no upsert): a repeated
-// Present for the same name adds another record, and cleanup removes records by
-// ownership record ID / value.
+// Present 创建挑战 TXT：同名同值的既有记录直接复用（并发/重试双签发不再
+// 产生重复 TXT，见 createRecord），同名不同值各建一条，清理按 ownership
+// 记录 ID / 挑战值收回。
 func (p *Provider) Present(ctx context.Context, zone, tokenFQDN, value string, ttl int) error {
 	// zone 与 tokenFQDN 都按 dnsname 单源归一后再派生相对子域（与 dnspod 侧
 	// 同一实现）：大小写敏感的后缀比较会把混合大小写 FQDN 整体当成 sub_domain。
@@ -508,7 +508,24 @@ func isRecordNotFound(err error) bool {
 	return false
 }
 
+// createRecord 创建一条挑战 TXT 记录（幂等：同名同值已存在则复用既有记录
+// ID——并发/重试双签发不再产生重复 TXT。复用与创建共用 Present 的登记路径，
+// 与 dnspod/cloudflare 侧 createRecord 同构）。
 func (p *Provider) createRecord(ctx context.Context, zone, subDomain, value string, ttl int) (uint64, error) {
+	// 复用扫描：DescribeRecordList 按 Domain+SubDomain+RecordType 服务端
+	// 过滤，客户端按 RR 精确匹配收窄；域名不存在等错误原样上抛（Present
+	// 不做 domain-id 自愈，与既有创建路径口径一致）。
+	existing, err := p.listChallengeRecords(ctx, zone, subDomain)
+	if err != nil {
+		return 0, err
+	}
+	for _, record := range existing {
+		// 内容精确匹配；零值记录 ID 不参与复用（登记 0 会让后续清理
+		// 永久失败）。
+		if record.value == value && record.recordID != 0 {
+			return record.recordID, nil
+		}
+	}
 	req := dnspod.NewCreateRecordRequest()
 	req.Domain = common.StringPtr(zone)
 	req.RecordType = common.StringPtr("TXT")

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -41,19 +40,9 @@ func (t *countingTransport) RoundTrip(request *http.Request) (*http.Response, er
 	}, nil
 }
 
-// retryAfterTransport decorates responses from next with a header.
-type retryAfterTransport struct {
-	next http.RoundTripper
-}
-
-func (t *retryAfterTransport) RoundTrip(request *http.Request) (*http.Response, error) {
-	resp, err := t.next.RoundTrip(request)
-	if err != nil {
-		return nil, err
-	}
-	resp.Header.Set("Retry-After", strconv.Itoa(3600))
-	return resp, nil
-}
+// retryAfterTransport（硬编码 Retry-After: 3600）已随
+// TestTransport_caps_wait_at_max_backoff 退役：可配置形态见
+// retryafter_cap_test.go 的 configurableRetryAfterTransport。
 
 func newRequest(t *testing.T, body string) *http.Request {
 	t.Helper()
@@ -246,29 +235,10 @@ func TestTransport_does_not_retry_client_errors(t *testing.T) {
 	}
 }
 
-func TestTransport_caps_wait_at_max_backoff(t *testing.T) {
-	// Given: 429 with a huge Retry-After; MaxBackoff clamps the wait
-	base := &countingTransport{statuses: []int{http.StatusTooManyRequests}}
-	transport := &Transport{Base: &retryAfterTransport{next: base}, InitialBackoff: time.Millisecond, MaxBackoff: 5 * time.Millisecond}
-
-	start := time.Now()
-
-	// When
-	resp, err := transport.RoundTrip(newRequest(t, "value=abc"))
-	elapsed := time.Since(start)
-
-	// Then
-	if err != nil {
-		t.Fatalf("round trip: %v", err)
-	}
-	defer resp.Body.Close()
-	if elapsed > time.Second {
-		t.Fatalf("elapsed=%v, want capped well below 1s", elapsed)
-	}
-	if base.attempts != 2 {
-		t.Fatalf("attempts=%d, want 2", base.attempts)
-	}
-}
+// TestTransport_caps_wait_at_max_backoff（Retry-After 与 MaxBackoff 共用封顶）
+// 已被 retryafter_cap_test.go 的两个钉测取代：本地退避封顶见
+// TestTransport_caps_local_backoff_at_max，Retry-After 独立封顶见
+// TestTransport_respects_retry_after_up_to_cap。
 
 func TestTransport_stops_on_context_cancellation(t *testing.T) {
 	// Given: a 429 response followed by a long backoff, and an already

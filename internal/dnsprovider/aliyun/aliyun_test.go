@@ -329,6 +329,9 @@ func TestProvider_CleanUpValue_deletesOnlyMatchingValue(t *testing.T) {
 	if alphaID == 0 || betaID == 0 {
 		t.Fatalf("fake records=%v", values)
 	}
+	// 账本命中路径不得做网络枚举——按 cleanUp 前后增量断言（Present 的
+	// 同值复用扫描枚举不计入本不变量）。
+	beforeCleanEnumerations := fake.attempts("DescribeDomainRecords")
 
 	if err := provider.CleanUpValue(t.Context(), testZone, testFQDN, "value-alpha"); err != nil {
 		t.Fatalf("clean up value: %v", err)
@@ -339,8 +342,8 @@ func TestProvider_CleanUpValue_deletesOnlyMatchingValue(t *testing.T) {
 	if !fake.alive(betaID) {
 		t.Fatal("beta 记录（并发签发）必须幸存")
 	}
-	if fake.attempts("DescribeDomainRecords") != 0 {
-		t.Fatal("账本命中路径不得做网络枚举")
+	if got := fake.attempts("DescribeDomainRecords"); got != beforeCleanEnumerations {
+		t.Fatalf("cleanUp 期间 DescribeDomainRecords 增量=%d, want 0（账本命中路径不得做网络枚举）", got-beforeCleanEnumerations)
 	}
 	store, err := ownership.New(dataDir)
 	if err != nil {
@@ -580,11 +583,14 @@ func TestProvider_CountCleanupRecords_pureLocalCount(t *testing.T) {
 		ownedRecord{recordID: 424242, value: testValue})
 	provider.mu.Unlock()
 
+	// 计数必须纯本地，不得网络往返——按 CountCleanupRecords 前后增量断言
+	// （Present 的同值复用扫描枚举不计入本不变量）。
+	beforeCount := fake.attempts("DescribeDomainRecords")
 	if got := provider.CountCleanupRecords(testZone, testFQDN, testValue); got != 2 {
 		t.Fatalf("count=%d, want 2（账本 1 + 兜底 1）", got)
 	}
-	if fake.attempts("DescribeDomainRecords") != 0 {
-		t.Fatal("计数必须纯本地，不得网络往返")
+	if got := fake.attempts("DescribeDomainRecords"); got != beforeCount {
+		t.Fatalf("计数期间 DescribeDomainRecords 增量=%d, want 0（不得网络往返）", got-beforeCount)
 	}
 }
 

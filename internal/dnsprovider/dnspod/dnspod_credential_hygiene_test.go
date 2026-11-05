@@ -243,7 +243,20 @@ func TestSanitizeHTTPErrorBody_knownPlaintextCoversAnyShape(t *testing.T) {
 func TestProvider_businessMessageRedacted(t *testing.T) {
 	const secret = "12345,s3cr3tkeyvalue"
 	provider := New(secret)
+	// 复用扫描（createRecord 内的 Record.List）走进程内缓存解析 domain_id，
+	// 预置缓存让扫描直接命中 Record.List 分支（code 10 空结果放行）。
+	seedDomainIDCache(t, secret, map[string]string{"example.com": "9"})
 	provider.client.Transport = roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		// code 6 只注入 Record.Create：复用扫描（Record.List）按空结果放行，
+		// 让本用例继续覆盖 Record.Create 的 status.message 拼接点。
+		if !strings.HasSuffix(request.URL.Path, "Record.Create") {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     make(http.Header),
+				Body:       io.NopCloser(strings.NewReader(`{"status":{"code":"10","message":"无记录"}}`)),
+				Request:    request,
+			}, nil
+		}
 		return &http.Response{
 			StatusCode: http.StatusOK,
 			Header:     make(http.Header),
@@ -252,7 +265,7 @@ func TestProvider_businessMessageRedacted(t *testing.T) {
 			Request: request,
 		}, nil
 	})
-	_, err := provider.createRecord(t.Context(), "9", "_acme-challenge", "value", 600)
+	_, err := provider.createRecord(t.Context(), "example.com", "9", "_acme-challenge", "value", 600)
 	if err == nil {
 		t.Fatal("业务码非 1 必须返回错误")
 	}

@@ -235,8 +235,8 @@ func TestProvider_Present_does_not_replay_create_on_5xx(t *testing.T) {
 	}
 	transport.mu.Lock()
 	defer transport.mu.Unlock()
-	if transport.attempts != 1 {
-		t.Fatalf("attempts=%d, want 1（创建类 5xx 单次调用不重放）", transport.attempts)
+	if got := transport.actionAttempts["CreateRecord"]; got != 1 {
+		t.Fatalf("CreateRecord attempts=%d, want 1（创建类 5xx 单次调用不重放；复用扫描 DescribeRecordList 不计入）", got)
 	}
 }
 
@@ -501,8 +501,8 @@ func TestProvider_CleanUp_survives_slow_5xx_sequence(t *testing.T) {
 	}
 	transport.mu.Lock()
 	defer transport.mu.Unlock()
-	if transport.attempts != 4 {
-		t.Fatalf("total attempts=%d, want 4（Create 1 + Delete 3）", transport.attempts)
+	if transport.attempts != 5 {
+		t.Fatalf("total attempts=%d, want 5（复用扫描 1 + Create 1 + Delete 3）", transport.attempts)
 	}
 	if got := transport.actionAttempts["DeleteRecord"]; got != 3 {
 		t.Fatalf("DeleteRecord attempts=%d, want 3（502,502,200 全部命中注入）", got)
@@ -918,7 +918,7 @@ func TestNew_wires_retrying_transport(t *testing.T) {
 	base.mu.Lock()
 	calls := base.calls
 	base.mu.Unlock()
-	if calls != 2 {
-		t.Fatalf("http calls=%d, want 2（New 必须装配 429 重试层）", calls)
+	if calls != 3 {
+		t.Fatalf("http calls=%d, want 3（New 必须装配 429 重试层；复用扫描 1 + Create 429 重试 2）", calls)
 	}
 }

@@ -357,8 +357,8 @@ func TestProvider_getDomainID_not_found_after_all_pages(t *testing.T) {
 	_, err := provider.getDomainID(t.Context(), "missing.com")
 
 	// Then
-	if err == nil || !strings.Contains(err.Error(), "not found") {
-		t.Fatalf("err=%v, want domain not found", err)
+	if err == nil || !strings.Contains(err.Error(), "DNSPod: 域名") || !strings.Contains(err.Error(), "不在当前账户") {
+		t.Fatalf("err=%v, want 统一文案（provider 名+资源+建议动作）", err)
 	}
 }
 
@@ -588,8 +588,8 @@ func TestProvider_Present_does_not_replay_create_on_5xx(t *testing.T) {
 	}
 	transport.mu.Lock()
 	defer transport.mu.Unlock()
-	if transport.attempts != 2 {
-		t.Fatalf("attempts=%d, want 2（Domain.List 一次 + Record.Create 单次不重放）", transport.attempts)
+	if transport.attempts != 3 {
+		t.Fatalf("attempts=%d, want 3（Domain.List 一次 + Record.List 复用扫描一次 + Record.Create 单次不重放）", transport.attempts)
 	}
 }
 

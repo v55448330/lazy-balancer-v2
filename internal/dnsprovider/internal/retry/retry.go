@@ -28,6 +28,14 @@ const (
 	defaultMaxBackoff     = 30 * time.Second
 )
 
+// retryAfterCap 是服务器 Retry-After 被采纳的等待封顶：限流窗口是服务端
+// 状态，服务器显式要求的等待被本地退避封顶（defaultMaxBackoff 30s）截短，
+// 会变成「到点即重试→再吃 429」的撞墙循环。Retry-After 采纳后按本值独立
+// 封顶——既尊重服务端窗口，又防 DoS 式超长封存（Retry-After: 86400）把
+// 签发链停摆在单次 Present 上。var 供测试收窄（与 dnspod
+// domainIDNegativeTTL 同型约定）。
+var retryAfterCap = 120 * time.Second
+
 // Retryable reports whether an HTTP status code is a transient failure that
 // is worth another attempt (429 and 5xx).
 func Retryable(status int) bool {
@@ -110,12 +118,15 @@ func (t *Transport) RoundTrip(request *http.Request) (*http.Response, error) {
 			// 创建类动作的 5xx 不重放（幽灵 TXT，见包注释）；429 恒定重试。
 			return response, nil
 		}
+		// 本地退避先按 MaxBackoff 封顶；服务器显式 Retry-After 只抬高
+		// 等待（不压低本地退避），采纳后按 retryAfterCap 独立封顶——
+		// 不再被 MaxBackoff 截短成撞墙重试（见 retryAfterCap 注释）。
 		wait := backoff
-		if after := After(response.Header.Get("Retry-After")); after > wait {
-			wait = after
-		}
 		if wait > max {
 			wait = max
+		}
+		if after := After(response.Header.Get("Retry-After")); after > wait {
+			wait = min(after, retryAfterCap)
 		}
 		if closeErr := response.Body.Close(); closeErr != nil {
 			// Body already consumed or broken connection: stop retrying and

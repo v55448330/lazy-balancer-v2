@@ -139,7 +139,12 @@ func hasMaskedDNSCredentialValue(m map[string]string) bool {
 }
 
 // dnsCredentialFamilyMode 归一凭证 map 的认证族：auth_mode（UI 形态）优先，
-// 兼容 canonical 形态的 mode；tencent_cloud 与 tencent 同族。无法判定返回空串。
+// 兼容 canonical 形态的 mode；tencent_cloud 与 tencent 同族。无显式 mode 的
+// 存量行（早于 mode/auth_mode 落库的迁移行/导入行）按字段形态推断，与
+// CanonicalCredentials 的无 mode 推断同向（app 对或裸 api_token→dnspod、
+// secret 对→tencent、access 对→aliyun）。多族并存（Canonical 会判歧义）与
+// 全缺/不完整返回空串——剪枝侧以空串为「跳过」信号：推断不了族就绝不动
+// 手，宁可少剪（残留维持现状）不可误删新族字段。
 func dnsCredentialFamilyMode(m map[string]string) string {
 	mode := strings.ToLower(strings.TrimSpace(m["auth_mode"]))
 	if mode == "" {
@@ -152,8 +157,31 @@ func dnsCredentialFamilyMode(m map[string]string) string {
 		return "tencent"
 	case "aliyun":
 		return "aliyun"
+	case "cloudflare":
+		return "cloudflare"
 	}
-	return ""
+	// 字段形态推断（镜像 Canonical 的判定面）：app 对折叠优先于游离
+	// api_token，两类并存仍是 dnspod 单族；secret 对、access 对各自单族。
+	hasToken := (m["app_id"] != "" && m["app_token"] != "") || m["api_token"] != ""
+	hasSecret := m["secret_id"] != "" && m["secret_key"] != ""
+	hasAccess := m["access_key_id"] != "" && m["access_key_secret"] != ""
+	families := 0
+	for _, present := range []bool{hasToken, hasSecret, hasAccess} {
+		if present {
+			families++
+		}
+	}
+	if families != 1 {
+		return ""
+	}
+	switch {
+	case hasToken:
+		return "dnspod"
+	case hasSecret:
+		return "tencent"
+	default:
+		return "aliyun"
+	}
 }
 
 // pruneSupersededDNSCredentialFamily 在维护请求把认证族从 stored 切到 creds 时
@@ -173,10 +201,23 @@ func pruneSupersededDNSCredentialFamily(creds, stored map[string]string) []strin
 	switch submittedMode {
 	case "dnspod":
 		stale = []string{"secret_id", "secret_key", "access_key_id", "access_key_secret"}
+		// api_token 归 dnspod/cloudflare 两族共有：仅当存量侧是 cloudflare
+		// 时，继承值才是旧族 token，须随切换清除；存量是 dnspod 自身的
+		// token 形态属同族遗留（Canonical 折叠下 app 对压过游离 token），
+		// 由同族语义保持，不在此剪。
+		if storedMode == "cloudflare" {
+			stale = append(stale, "api_token")
+		}
 	case "tencent":
 		stale = []string{"app_id", "app_token", "api_token", "access_key_id", "access_key_secret"}
 	case "aliyun":
 		stale = []string{"app_id", "app_token", "api_token", "secret_id", "secret_key"}
+	case "cloudflare":
+		// cloudflare 只消费 api_token（提交侧的新值），其余各族字段均为旧族
+		// 残留。api_token 绝不入列：可能是刚提交的新 token，误删会让保存
+		// 400；掩码继承的旧 token 复用属掩码合并语义（保存 400 暴露），剪枝
+		// 不代管。
+		stale = []string{"app_id", "app_token", "secret_id", "secret_key", "access_key_id", "access_key_secret"}
 	}
 	// 冗余的 legacy mode 与认证族同义：提交带 auth_mode 时由后者表达，删除
 	// 避免「auth_mode=新族、mode=旧族」的并存形态误导后续推断。

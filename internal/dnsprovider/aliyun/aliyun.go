@@ -136,9 +136,9 @@ func New(accessKeyID, accessKeySecret string) (*Provider, error) {
 	}, nil
 }
 
-// Present creates a distinct _acme-challenge TXT record (no upsert): a repeated
-// Present for the same name adds another record, and cleanup removes records by
-// ownership record ID / value.
+// Present 创建挑战 TXT：同名同值的既有记录直接复用（并发/重试双签发不再
+// 产生重复 TXT，见 createRecord），同名不同值各建一条，清理按 ownership
+// 记录 ID / 挑战值收回。
 func (p *Provider) Present(ctx context.Context, zone, tokenFQDN, value string, ttl int) error {
 	// zone 与 tokenFQDN 都按 dnsname 单源归一后再派生相对子域（与
 	// dnspod/tencent 侧同一实现）：大小写敏感的后缀比较会把混合大小写 FQDN
@@ -446,7 +446,28 @@ func (p *Provider) deleteRecord(ctx context.Context, zone string, recordID uint6
 	return nil
 }
 
+// createRecord 创建一条挑战 TXT 记录（幂等：同名同值已存在则复用既有记录
+// ID——并发/重试双签发不再产生重复 TXT。复用与创建共用 Present 的登记路径，
+// 与 dnspod/tencent/cloudflare 侧 createRecord 同构）。
 func (p *Provider) createRecord(ctx context.Context, zone, subDomain, value string, ttl int) (uint64, error) {
+	// 复用扫描：DescribeDomainRecords 按 DomainName+KeyWord+Type 服务端
+	// 过滤，客户端按 RR 精确匹配收窄；域名不存在等错误原样上抛（Present
+	// 不做 zone 解析自愈，与既有创建路径口径一致）。
+	existing, err := p.listChallengeRecords(ctx, zone, subDomain)
+	if err != nil {
+		return 0, err
+	}
+	for _, record := range existing {
+		// 内容精确匹配；空/无法解析的畸形记录 ID 不参与复用（登记无效 ID
+		// 会让后续清理永久失败），照常走创建。
+		if record.value == value && record.recordID != "" {
+			id, parseErr := strconv.ParseUint(record.recordID, 10, 64)
+			if parseErr != nil {
+				continue
+			}
+			return id, nil
+		}
+	}
 	body, err := p.apiCall(ctx, "AddDomainRecord", map[string]string{
 		"DomainName": zone,
 		"RR":         subDomain,
@@ -736,11 +757,29 @@ func acsURIEncode(s string) string {
 	return b.String()
 }
 
+// isThrottledBody 判定 400 错误体是否为 Alidns 限流：紧凑字节匹配
+// （`"Code":"Throttling` 前缀，同时覆盖 Throttling.* 子码）是快路径——依赖
+// 厂商紧凑 JSON 序列化（冒号后无空白）；该序列化承诺不可离线实证，未命中时
+// 按 JSON 解析 Code 字段再判定（与 parseAPIError 同形态）作为保守兜底，
+// 两类路径都不命中才按普通 400 透传。
+func isThrottledBody(body []byte) bool {
+	if bytes.Contains(body, []byte(`"Code":"Throttling`)) {
+		return true
+	}
+	var envelope struct {
+		Code string `json:"Code"`
+	}
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		return false
+	}
+	return strings.HasPrefix(envelope.Code, "Throttling")
+}
+
 // throttlingTransport 把 Alidns 的「HTTP 400 + Code=Throttling」限流响应改写
 // 为 429 语义（body 原样保留），让共享 retry.Transport 的既有机制按限流处理
 // ——retry.Transport 只按状态码判定可重试性（429/5xx），而 Alidns 的限流走
-// 400。body 保留意味着错误解析仍读到真实 Code/Message；前缀匹配同时覆盖
-// Throttling 与 Throttling.* 子码。
+// 400。body 保留意味着错误解析仍读到真实 Code/Message；判定口径见
+// isThrottledBody。
 type throttlingTransport struct {
 	base http.RoundTripper
 }
@@ -762,7 +801,7 @@ func (t *throttlingTransport) RoundTrip(request *http.Request) (*http.Response, 
 	response.Body.Close()
 	response.Body = io.NopCloser(bytes.NewReader(body))
 	response.ContentLength = int64(len(body))
-	if bytes.Contains(body, []byte(`"Code":"Throttling`)) {
+	if isThrottledBody(body) {
 		response.StatusCode = http.StatusTooManyRequests
 		response.Status = "429 Too Many Requests"
 	}

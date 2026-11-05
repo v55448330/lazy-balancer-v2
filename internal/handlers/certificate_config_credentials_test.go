@@ -147,3 +147,150 @@ func TestValidateRuleACMEReferences_treatsNullEnabledAsEnabled(t *testing.T) {
 		t.Fatalf("disabled config err=%v, want 不存在或已禁用", err)
 	}
 }
+
+// ---- 认证族切换旧族凭据剪枝：cloudflare 与无 mode 存量形态 ----
+//
+// dnsCredentialFamilyMode 此前不识别 cloudflare 与无 mode 的存量形态，
+// pruneSupersededDNSCredentialFamily 因 storedMode=="" 跳过剪枝，旧族字段
+// 随合并语义继承回 merged 落库，并随集群快照/备份扩散。以下用例覆盖四类
+// 存量形态（cloudflare UI 形态、cloudflare canonical 形态、裸 api_token、
+// 裸 app 对/secret 对）与两个边界（歧义行不剪、同族不剪）。
+
+func assertStoredCredentialFields(t *testing.T, id int64, wantAbsent []string, want map[string]string) {
+	t.Helper()
+	_, _, stored := storedCertificateCredentials(t, id)
+	for _, stale := range wantAbsent {
+		if _, ok := stored[stale]; ok {
+			t.Fatalf("stale field %q retained after auth-mode switch: %v", stale, stored)
+		}
+	}
+	for k, v := range want {
+		if stored[k] != v {
+			t.Fatalf("stored credentials=%v, want %s=%q", stored, k, v)
+		}
+	}
+}
+
+// Given 库内为早于 mode/auth_mode 落库的裸 api_token 存量行（Canonical 按
+// 字段形态推断为 dnspod）。
+// When 管理员切到腾讯云并提交新族凭据（同 provider，继承开启）。
+// Then 裸 token 被剪除（推断族 dnspod ≠ 提交族 tencent），审计点名删除字段。
+func TestUpdateCertificateConfig_prunesLegacyBareTokenRowOnFamilySwitch(t *testing.T) {
+	h := newBackupTestHandlers(t)
+	id := seedCertificateConfigRow(t, "bare-token", `{"api_token":"legacy-id,legacy-tok"}`)
+
+	response := putCertificateConfig(t, h, id,
+		`{"dns_credentials":{"auth_mode":"tencent_cloud","secret_id":"sid","secret_key":"skey"}}`)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200", response.Code, response.Body.String())
+	}
+
+	assertStoredCredentialFields(t, id, []string{"api_token", "app_id", "app_token"},
+		map[string]string{"auth_mode": "tencent_cloud", "secret_id": "sid", "secret_key": "skey"})
+	detail := latestAuditDetail(t, "更新", "DNS配置")
+	if !strings.Contains(detail, "清除旧认证方式凭据") || !strings.Contains(detail, "api_token") {
+		t.Fatalf("audit detail=%q, want 点名清除 api_token", detail)
+	}
+}
+
+// Given 库内 dnspod 认证族（app_id/app_token）。
+// When 管理员切到 cloudflare 并提交新 token（同 provider，继承开启）。
+// Then 旧族 app 对被剪除，且新提交的 cloudflare token 绝不被误剪
+// （api_token 归 cloudflare 消费，剪除会让保存 400）。
+func TestUpdateCertificateConfig_prunesOtherFamilyOnCloudflareSwitch(t *testing.T) {
+	h := newBackupTestHandlers(t)
+	id := seedCertificateConfigRow(t, "to-cloudflare", `{"auth_mode":"dnspod","app_id":"old-id","app_token":"old-tok"}`)
+
+	response := putCertificateConfig(t, h, id,
+		`{"dns_credentials":{"auth_mode":"cloudflare","api_token":"cf-new"}}`)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200", response.Code, response.Body.String())
+	}
+
+	assertStoredCredentialFields(t, id, []string{"app_id", "app_token", "secret_id", "secret_key", "access_key_id", "access_key_secret"},
+		map[string]string{"auth_mode": "cloudflare", "api_token": "cf-new"})
+}
+
+// Given 库内 cloudflare 认证族（auth_mode=cloudflare + api_token）。
+// When 管理员切回 dnspod 并提交 app 对（同 provider，继承开启）。
+// Then cloudflare token 被剪除——切回旧族时它不得复活为 dnspod 消费的值。
+func TestUpdateCertificateConfig_prunesCloudflareTokenOnSwitchBackToDnspod(t *testing.T) {
+	h := newBackupTestHandlers(t)
+	id := seedCertificateConfigRow(t, "from-cloudflare", `{"auth_mode":"cloudflare","api_token":"cf-old"}`)
+
+	response := putCertificateConfig(t, h, id,
+		`{"dns_credentials":{"auth_mode":"dnspod","app_id":"new-id","app_token":"new-tok"}}`)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200", response.Code, response.Body.String())
+	}
+
+	assertStoredCredentialFields(t, id, []string{"api_token"},
+		map[string]string{"auth_mode": "dnspod", "app_id": "new-id", "app_token": "new-tok"})
+}
+
+// Given 库内 cloudflare canonical 形态（mode=cloudflare，早于 auth_mode 的行）。
+// When 管理员切回 dnspod 并提交 app 对。
+// Then api_token 与游离 mode 键一并剪除（auth_mode 提交后 mode 是误导性冗余）。
+func TestUpdateCertificateConfig_prunesCanonicalCloudflareRowOnSwitchBackToDnspod(t *testing.T) {
+	h := newBackupTestHandlers(t)
+	id := seedCertificateConfigRow(t, "from-cloudflare-canonical", `{"mode":"cloudflare","api_token":"cf-old"}`)
+
+	response := putCertificateConfig(t, h, id,
+		`{"dns_credentials":{"auth_mode":"dnspod","app_id":"new-id","app_token":"new-tok"}}`)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200", response.Code, response.Body.String())
+	}
+
+	assertStoredCredentialFields(t, id, []string{"api_token", "mode"},
+		map[string]string{"auth_mode": "dnspod", "app_id": "new-id", "app_token": "new-tok"})
+}
+
+// Given 库内为裸 secret 对存量行（无 mode，Canonical 推断为 tencent）。
+// When 管理员切到 dnspod app 对。
+// Then 旧 secret 对被剪除。
+func TestUpdateCertificateConfig_prunesLegacyBareSecretPairOnSwitchToDnspod(t *testing.T) {
+	h := newBackupTestHandlers(t)
+	id := seedCertificateConfigRow(t, "bare-secret", `{"secret_id":"old-sid","secret_key":"old-skey"}`)
+
+	response := putCertificateConfig(t, h, id,
+		`{"dns_credentials":{"auth_mode":"dnspod","app_id":"new-id","app_token":"new-tok"}}`)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200", response.Code, response.Body.String())
+	}
+
+	assertStoredCredentialFields(t, id, []string{"secret_id", "secret_key"},
+		map[string]string{"auth_mode": "dnspod", "app_id": "new-id", "app_token": "new-tok"})
+}
+
+// 边界钉测（安全方向=少剪）：Given 库内多族并存的歧义存量行（裸 token +
+// secret 对，Canonical 会判歧义）。When 切换认证族。Then 不剪——推断不了族
+// 就绝不误删，残留字段保持现状（宁可少剪不可误剪）。
+func TestUpdateCertificateConfig_ambiguousLegacyRowSkipsFamilyPrune(t *testing.T) {
+	h := newBackupTestHandlers(t)
+	id := seedCertificateConfigRow(t, "ambiguous", `{"api_token":"t1","secret_id":"s","secret_key":"k"}`)
+
+	response := putCertificateConfig(t, h, id,
+		`{"dns_credentials":{"auth_mode":"tencent_cloud","secret_id":"sid","secret_key":"skey"}}`)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200", response.Code, response.Body.String())
+	}
+
+	assertStoredCredentialFields(t, id, nil, map[string]string{"api_token": "t1"})
+}
+
+// 边界钉测（同族不剪）：Given 裸 api_token 存量行（推断 dnspod）。
+// When 提交 dnspod app 对（推断族相同）。Then 不触发族切换剪枝——裸 token
+// 属同族遗留值（Canonical 折叠语义下 app 对压过游离 token，惰性），由用户
+// 显式改凭据处理，剪枝只管跨族切换。
+func TestUpdateCertificateConfig_sameFamilyBareTokenKeptOnDnspodSubmit(t *testing.T) {
+	h := newBackupTestHandlers(t)
+	id := seedCertificateConfigRow(t, "bare-token-same-family", `{"api_token":"legacy-id,legacy-tok"}`)
+
+	response := putCertificateConfig(t, h, id,
+		`{"dns_credentials":{"auth_mode":"dnspod","app_id":"new-id","app_token":"new-tok"}}`)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200", response.Code, response.Body.String())
+	}
+
+	assertStoredCredentialFields(t, id, nil, map[string]string{"api_token": "legacy-id,legacy-tok", "app_id": "new-id"})
+}

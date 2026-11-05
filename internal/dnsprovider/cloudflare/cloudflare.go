@@ -464,23 +464,23 @@ func (p *Provider) createRecord(ctx context.Context, zoneID, recordName, value s
 }
 
 // listRecordsByName 枚举 zone 下指定记录名的 TXT 记录：name/type 由服务端
-// 过滤，客户端按记录名精确匹配（大小写不敏感）收窄，翻页直到取尽（短页即
-// 终止——per_page 已是 API 单页上限）。
+// 过滤，客户端按记录名精确匹配（大小写不敏感）收窄。翻页终止判定与
+// dnspod/tencent/aliyun 侧统一（total 优先、短页兜底、按实际取到条数推进
+// 游标）：fetched==0 即终止；result_info.total_count>0 时按累计取到数 ≥
+// total 终止——中途短页（页间漂移/服务端单页容量波动）继续翻页不漏扫；
+// total 缺失时退回「短页即终止」（per_page=100 已是 API 单页上限）。
 func (p *Provider) listRecordsByName(ctx context.Context, zoneID, recordName string) ([]enumeratedRecord, error) {
 	var collected []enumeratedRecord
+	fetchedTotal := 0
 	for page := 1; page <= challengeListPageLimit; page++ {
 		query := url.Values{}
 		query.Set("type", "TXT")
 		query.Set("name", recordName)
 		query.Set("per_page", strconv.Itoa(challengeListPageSize))
 		query.Set("page", strconv.Itoa(page))
-		var pageRecords []struct {
-			ID      string `json:"id"`
-			Name    string `json:"name"`
-			Type    string `json:"type"`
-			Content string `json:"content"`
-		}
-		if err := p.apiCall(ctx, http.MethodGet, "/zones/"+zoneID+"/dns_records?"+query.Encode(), nil, &pageRecords); err != nil {
+		var envelope apiEnvelope
+		status, err := p.apiCallEnvelope(ctx, http.MethodGet, "/zones/"+zoneID+"/dns_records?"+query.Encode(), nil, &envelope)
+		if err != nil {
 			if ctx.Err() != nil {
 				err = errors.Join(err, ctx.Err())
 			}
@@ -489,6 +489,21 @@ func (p *Provider) listRecordsByName(ctx context.Context, zoneID, recordName str
 				err = errors.Join(errStaleZoneID, err)
 			}
 			return nil, err
+		}
+		var pageRecords []struct {
+			ID      string `json:"id"`
+			Name    string `json:"name"`
+			Type    string `json:"type"`
+			Content string `json:"content"`
+		}
+		if len(envelope.Result) > 0 {
+			if err := json.Unmarshal(envelope.Result, &pageRecords); err != nil {
+				return nil, fmt.Errorf("decode GET /zones/%s/dns_records result (HTTP %d): %w", zoneID, status, err)
+			}
+		}
+		fetched := len(pageRecords)
+		if fetched == 0 {
+			break
 		}
 		for _, record := range pageRecords {
 			if record.Type != "TXT" {
@@ -499,7 +514,14 @@ func (p *Provider) listRecordsByName(ctx context.Context, zoneID, recordName str
 			}
 			collected = append(collected, enumeratedRecord{recordID: record.ID, value: record.Content})
 		}
-		if len(pageRecords) < challengeListPageSize {
+		fetchedTotal += fetched
+		if total := envelope.ResultInfo.TotalCount; total > 0 {
+			if fetchedTotal >= total {
+				break
+			}
+			continue
+		}
+		if fetched < challengeListPageSize {
 			break
 		}
 	}
@@ -560,6 +582,13 @@ type apiEnvelope struct {
 	Success bool            `json:"success"`
 	Errors  []apiErrorItem  `json:"errors"`
 	Result  json.RawMessage `json:"result"`
+	// ResultInfo 是列表端点的分页元数据（翻页终止判定用；其余端点为空）。
+	ResultInfo struct {
+		Page       int `json:"page"`
+		PerPage    int `json:"per_page"`
+		Count      int `json:"count"`
+		TotalCount int `json:"total_count"`
+	} `json:"result_info"`
 }
 
 // apiErrorItem 是 errors[] 的一条官方错误（code + message）。
@@ -689,10 +718,12 @@ func (p *Provider) sanitizeMessage(message string) string {
 	return sanitizeHTTPErrorBody(message, p.apiToken)
 }
 
-// apiCall 构造并发送一次 Cloudflare REST v4 调用，返回 2xx 包络中的 result。
-// 429/5xx 由 retry.Transport 吸收（创建类 POST 对 5xx 不重放——幽灵 TXT，
-// 见 retry 包注释）；网络失败与最终失败形态均输出中文可读文案。
-func (p *Provider) apiCall(ctx context.Context, method, path string, body interface{}, result interface{}) error {
+// apiCallEnvelope 构造并发送一次 Cloudflare REST v4 调用，返回 HTTP 状态码
+// 与完整包络（result + result_info；分页判定需要 result_info，见
+// listRecordsByName）。429/5xx 由 retry.Transport 吸收（创建类 POST 对 5xx
+// 不重放——幽灵 TXT，见 retry 包注释）；网络失败与最终失败形态均输出中文
+// 可读文案。
+func (p *Provider) apiCallEnvelope(ctx context.Context, method, path string, body interface{}, envelope *apiEnvelope) (int, error) {
 	endpoint := p.endpoint
 	if endpoint == "" {
 		endpoint = apiBase
@@ -701,13 +732,13 @@ func (p *Provider) apiCall(ctx context.Context, method, path string, body interf
 	if body != nil {
 		encoded, err := json.Marshal(body)
 		if err != nil {
-			return fmt.Errorf("encode cloudflare request: %w", err)
+			return 0, fmt.Errorf("encode cloudflare request: %w", err)
 		}
 		payload = bytes.NewReader(encoded)
 	}
 	req, err := http.NewRequestWithContext(ctx, method, endpoint+path, payload)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	req.Header.Set("Authorization", "Bearer "+p.apiToken)
 	req.Header.Set("Accept", "application/json")
@@ -720,29 +751,38 @@ func (p *Provider) apiCall(ctx context.Context, method, path string, body interf
 	if err != nil {
 		// 网络错误文案点名超时/连接失败——429/5xx 已由 retry.Transport 吸收，
 		// 这里是最终失败形态（传输层错误不携带凭据：Token 只在请求头）。
-		return fmt.Errorf("Cloudflare API 网络请求失败（超时或连接错误）: %w", err)
+		return 0, fmt.Errorf("Cloudflare API 网络请求失败（超时或连接错误）: %w", err)
 	}
 	defer resp.Body.Close()
 	respBody, err := io.ReadAll(io.LimitReader(resp.Body, responseReadLimit))
 	if err != nil {
-		return fmt.Errorf("read cloudflare response: %w", err)
+		return resp.StatusCode, fmt.Errorf("read cloudflare response: %w", err)
 	}
 	if resp.StatusCode >= http.StatusBadRequest {
-		return p.readableAPIError(parseAPIError(resp.StatusCode, respBody), respBody)
+		return resp.StatusCode, p.readableAPIError(parseAPIError(resp.StatusCode, respBody), respBody)
 	}
-	var envelope apiEnvelope
-	if err := json.Unmarshal(respBody, &envelope); err != nil {
+	if err := json.Unmarshal(respBody, envelope); err != nil {
 		// 网关返回 HTML/空体时裸 decode 错误丢失状态码与动作，排障只能翻
 		// network 日志——状态码与路径必须自明。
-		return fmt.Errorf("decode %s %s response (HTTP %d): %w", method, path, resp.StatusCode, err)
+		return resp.StatusCode, fmt.Errorf("decode %s %s response (HTTP %d): %w", method, path, resp.StatusCode, err)
 	}
 	if !envelope.Success {
 		// 2xx 但 success=false：官方包络的失败形态，errors[] 拼入消息。
-		return errors.New("Cloudflare API 调用失败: " + p.sanitizeMessage(joinErrorItems(envelope.Errors)))
+		return resp.StatusCode, errors.New("Cloudflare API 调用失败: " + p.sanitizeMessage(joinErrorItems(envelope.Errors)))
+	}
+	return resp.StatusCode, nil
+}
+
+// apiCall 构造并发送一次 Cloudflare REST v4 调用，返回 2xx 包络中的 result。
+func (p *Provider) apiCall(ctx context.Context, method, path string, body interface{}, result interface{}) error {
+	var envelope apiEnvelope
+	status, err := p.apiCallEnvelope(ctx, method, path, body, &envelope)
+	if err != nil {
+		return err
 	}
 	if result != nil && len(envelope.Result) > 0 {
 		if err := json.Unmarshal(envelope.Result, result); err != nil {
-			return fmt.Errorf("decode %s %s result (HTTP %d): %w", method, path, resp.StatusCode, err)
+			return fmt.Errorf("decode %s %s result (HTTP %d): %w", method, path, status, err)
 		}
 	}
 	return nil
@@ -842,6 +882,13 @@ func (p *Provider) invalidateZoneIDCache(zone string) {
 	zoneIDCacheMu.Unlock()
 }
 
+// zoneNotFoundErr 是 zone 解析失败的统一中文文案（provider 名+资源+建议
+// 动作；与 dnspod 侧 domainNotFoundErr 同模板家族，负缓存命中与全量扫描
+// 终态共用）。
+func zoneNotFoundErr(zone string) error {
+	return fmt.Errorf("Cloudflare: zone %s 不存在或 API Token 无权访问（请确认 zone 已添加到账户且 Token 具有 Zone 读取权限后重试）", zone)
+}
+
 // getZoneID 解析 zone 名 → zone id（服务端 name= 过滤为精确匹配，仍按归一
 // 形态客户端复核——依赖「服务端返回形态已小写」这类实现细节会让返回形态变化
 // 静默变成「zone 不在 token 可见范围」的错误结论）。
@@ -861,7 +908,7 @@ func (p *Provider) getZoneID(ctx context.Context, zone string) (string, error) {
 	if negHit {
 		zoneIDCacheTouchLRU(cacheKey)
 		zoneIDCacheMu.Unlock()
-		return "", fmt.Errorf("zone %s 不存在或 API Token 无权访问该 zone", zone)
+		return "", zoneNotFoundErr(zone)
 	}
 	zoneIDCacheMu.Unlock()
 	query := url.Values{}
@@ -888,5 +935,5 @@ func (p *Provider) getZoneID(ctx context.Context, zone string) (string, error) {
 	zoneIDCacheTouchLRU(cacheKey)
 	zoneIDCacheEvictLRU()
 	zoneIDCacheMu.Unlock()
-	return "", fmt.Errorf("zone %s 不存在或 API Token 无权访问该 zone", zone)
+	return "", zoneNotFoundErr(zone)
 }
