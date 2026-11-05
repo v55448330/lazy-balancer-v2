@@ -36,9 +36,13 @@ func TestStage1PrecheckSegmentSQL_matchesGoPredicate(t *testing.T) {
 		}
 	}
 
-	// 3) GeoIP 段：段谓词含 6 位 8 开头形态；谓词对段内为 true、段外（上界）为 false。
-	if !strings.Contains(Stage1PrecheckSegmentSQL, "LIKE '8%'") {
-		t.Fatalf("Stage1PrecheckSegmentSQL 未含 GeoIP 段形态：%s", Stage1PrecheckSegmentSQL)
+	// 3) GeoIP 段：段谓词含 6 位 8 开头形态（GLOB 字符集锚定，非 LIKE——
+	//    非数字脏行不得因前缀碰巧匹配而误入段）；谓词对段内为 true、段外（上界）为 false。
+	if !strings.Contains(Stage1PrecheckSegmentSQL, "GLOB '8[0-9][0-9][0-9][0-9][0-9]'") {
+		t.Fatalf("Stage1PrecheckSegmentSQL 未含 GeoIP 段形态（GLOB 定长锚定）：%s", Stage1PrecheckSegmentSQL)
+	}
+	if strings.Contains(Stage1PrecheckSegmentSQL, "LIKE '8%'") || strings.Contains(Stage1PrecheckSegmentSQL, "LIKE '150%'") || strings.Contains(Stage1PrecheckSegmentSQL, "LIKE '151%'") {
+		t.Fatalf("Stage1PrecheckSegmentSQL 仍含未锚定 LIKE 形态：%s", Stage1PrecheckSegmentSQL)
 	}
 	for _, id := range []int{geoipPrecheckRuleBase, geoipPrecheckRuleBase + 1, geoipPrecheckRuleBase + 99999} {
 		if !IsStage1PrecheckID(id) {
@@ -68,6 +72,10 @@ func TestStage1PrecheckSegmentSQL_executesAgainstSQLite(t *testing.T) {
 		"2", "3", "4", "5", "7", "8", "12", "14", "1", "6", "9", "10", "11", "13", "15",
 		// GeoIP 段界内/外 + 短文本/超长文本（长度防护）
 		"800000", "800001", "899999", "900000", "80", "80000", "8000000", "",
+		// ACL/黑名单链段界内（GLOB 锚定后必须命中）
+		"1500000", "1500002", "1509999", "1510000", "1510002", "1519999",
+		// 非数字脏行（带外写入形态）：前缀碰巧同段但含字母——LIKE 会放行，GLOB 必须拒绝
+		"150abc", "151x", "8xx", "80000a",
 	}
 	for _, v := range values {
 		if _, err := database.Exec(`INSERT INTO stage1_probe (rule_triggered) VALUES (?)`, v); err != nil {
@@ -117,7 +125,7 @@ func TestStage1PrecheckSegmentSQL_eventDurationPredicateReconciled(t *testing.T)
 			t.Fatalf("securityEventsIsPrecheckRule(%d)=true，越出预检族", id)
 		}
 	}
-	// GeoIP 段：段内 true、段界外 false（与段谓词 LIKE '8%' 同口径）。
+	// GeoIP 段：段内 true、段界外 false（与段谓词 GLOB 定长锚定同口径）。
 	for _, id := range []int{geoipPrecheckRuleBase, geoipPrecheckRuleBase + 12345, geoipPrecheckRuleLimit - 1} {
 		if !securityEventsIsPrecheckRule(strconv.Itoa(id)) {
 			t.Fatalf("securityEventsIsPrecheckRule(%d)=false，GeoIP 段失守", id)
@@ -126,6 +134,49 @@ func TestStage1PrecheckSegmentSQL_eventDurationPredicateReconciled(t *testing.T)
 	for _, id := range []int{geoipPrecheckRuleBase - 1, geoipPrecheckRuleLimit} {
 		if securityEventsIsPrecheckRule(strconv.Itoa(id)) {
 			t.Fatalf("securityEventsIsPrecheckRule(%d)=true，超出 GeoIP 段界", id)
+		}
+	}
+}
+
+// 真执行钉：非数字脏行（带外写入形态）不得因前缀碰巧同段而误入阶段 1 段
+// （SEC122-B2-1：LIKE '150%' 会放行 '150abc'，GLOB 字符集锚定必须拒绝）。
+func TestStage1PrecheckSegmentSQL_rejectsNonNumericRows(t *testing.T) {
+	_, database := newClusterTestService(t)
+	if _, err := database.Exec("CREATE TABLE stage1_probe (rule_triggered TEXT)"); err != nil {
+		t.Fatal(err)
+	}
+	values := []string{
+		"1500000", "1500002", "1509999", "1510000", "1510002", "1519999", // ACL/黑名单链段界内
+		"150abc", "151x", "8xx", "80000a", // 非数字脏行：LIKE 会放行，GLOB 必须拒绝
+	}
+	for _, v := range values {
+		if _, err := database.Exec("INSERT INTO stage1_probe (rule_triggered) VALUES (?)", v); err != nil {
+			t.Fatalf("insert %q: %v", v, err)
+		}
+	}
+	rows, err := database.Query("SELECT rule_triggered FROM stage1_probe WHERE " + Stage1PrecheckSegmentSQL)
+	if err != nil {
+		t.Fatalf("阶段 1 段谓词在 SQLite 执行失败: %v", err)
+	}
+	defer rows.Close()
+	got := map[string]bool{}
+	for rows.Next() {
+		var v string
+		if err := rows.Scan(&v); err != nil {
+			t.Fatal(err)
+		}
+		got[v] = true
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	for _, v := range values {
+		want := false
+		if n, convErr := strconv.Atoi(v); convErr == nil {
+			want = IsStage1PrecheckEventID(n)
+		}
+		if got[v] != want {
+			t.Fatalf("值 %q 在段谓词中命中=%v, want %v（SQL 与 Go 谓词分叉）", v, got[v], want)
 		}
 	}
 }

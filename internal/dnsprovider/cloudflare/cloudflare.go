@@ -66,6 +66,18 @@ func SetLogf(f func(level, format string, args ...any)) {
 	}
 }
 
+// userAgent 默认值与 SetUserAgent 装配接缝（镜像 SetLogf 先例）：main 启动
+// 早期注入 config.Version，UA 与 APP_VERSION 同源——硬编码版本会随发版漂移
+// 成误导信息。
+var userAgent = "lazy-balancer/2.0"
+
+// SetUserAgent 装配出网 UA 的版本段（main 启动早期调用；空串忽略）。
+func SetUserAgent(v string) {
+	if v != "" {
+		userAgent = "lazy-balancer/" + v
+	}
+}
+
 // ownedRecord 记录本实例创建的记录 ID 及其挑战值，CleanUpValue 据此只删
 // 属于本次签发的记录。
 type ownedRecord struct {
@@ -447,7 +459,9 @@ func (p *Provider) createRecord(ctx context.Context, zoneID, recordName, value s
 		return "", err
 	}
 	for _, record := range existing {
-		if record.value == value {
+		// 空记录 ID 的畸形条目不参与复用（登记空 ID 会让后续清理永久
+		// 失败）——与 dnspod/tencent/aliyun 侧复用循环同构。
+		if record.value == value && record.recordID != "" {
 			return record.recordID, nil
 		}
 	}
@@ -881,7 +895,7 @@ func (p *Provider) apiCallEnvelope(ctx context.Context, method, path string, bod
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	req.Header.Set("User-Agent", "lazy-balancer/2.0")
+	req.Header.Set("User-Agent", userAgent)
 
 	resp, err := p.client.Do(req)
 	if err != nil {

@@ -69,13 +69,15 @@ func (d *DNSPod) CredentialFieldOptions(field string) []string {
 // （mode + api_token / mode + secret 对，本函数产物）——产出可回喂。
 func (d *DNSPod) buildCredentials(creds map[string]string) (map[string]string, error) {
 	canonical, err := (dnsprovider.CredentialEnvelope{
-		Mode:      creds["mode"],
-		AuthMode:  creds["auth_mode"],
-		APIToken:  creds["api_token"],
-		AppID:     creds["app_id"],
-		AppToken:  creds["app_token"],
-		SecretID:  creds["secret_id"],
-		SecretKey: creds["secret_key"],
+		Mode:            creds["mode"],
+		AuthMode:        creds["auth_mode"],
+		APIToken:        creds["api_token"],
+		AppID:           creds["app_id"],
+		AppToken:        creds["app_token"],
+		SecretID:        creds["secret_id"],
+		SecretKey:       creds["secret_key"],
+		AccessKeyID:     creds["access_key_id"],
+		AccessKeySecret: creds["access_key_secret"],
 	}).Canonical()
 	if err != nil {
 		return nil, err

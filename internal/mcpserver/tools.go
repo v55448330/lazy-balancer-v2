@@ -110,7 +110,7 @@ var toolUsage = map[string]string{
 	"get_security_overview":        "安全总览：拦截/检测/正常请求三组 KPI（今日/昨日，各含 HTTP/TCP 拆分；正常请求为指标域累计差分，非事件表逐一对账）、攻击类型 TOP10 与五阶段分布、源 IP TOP10（含近 10 分钟/1 小时/24 小时计数）、7 天趋势，附规则库可用性与事件采集健康位",
 	"list_security_policies":       "列出全部安全策略及其 WAF/CRS/IP ACL/GeoIP/限流配置",
 	"get_security_policy":          "获取指定策略完整配置（含自定义规则和绑定关系）",
-	"list_security_events":         "分页查询安全事件（HTTP/WAF 与 TCP(L4) 同表）：触发阶段覆盖 WAF·CRS、WAF·自定义、IP 访问控制、地域拦截、信任名单（含 id:12 保留检测记录）、威胁情报库、请求体异常、爬虫Bot、限流；action=blocked 拦截 / logged 检测放行；支持 page/page_size/action/ip/rule_caddy_id/rule_name/policy_name/rule_triggered/rule_triggered_exclude/uri/start_time/end_time",
+	"list_security_events":         "分页查询安全事件（HTTP/WAF 与 TCP(L4) 同表）：触发阶段覆盖 WAF·CRS、WAF·自定义、IP 访问控制、地域拦截、信任名单（含 id:12 保留检测记录）、威胁情报库、请求体异常、爬虫Bot；action=blocked 拦截 / logged 检测放行；支持 page/page_size/action/ip/rule_caddy_id/rule_name/policy_name/rule_triggered/rule_triggered_exclude/uri/start_time/end_time",
 	"list_security_bindings":       "查看策略-规则绑定映射（规则可绑定多条安全策略），了解哪些规则启用了安全防护",
 	"get_rule_security_policy":     "查看指定规则绑定的安全策略列表（数组按绑定顺序即执行序排列，顺序由提交序或绑定链顺序编辑确定；仅含 enabled=1 的策略）",
 	"list_custom_rules":            "列出全部自定义安全规则（多条件链式匹配）",

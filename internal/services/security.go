@@ -1857,9 +1857,11 @@ func IsStage1PrecheckEventID(n int) bool {
 // 归因（收敛：原内联 "IN %s OR (LENGTH=6 AND LIKE '8%%')" 与 ID 清单分居两文件
 // 两处字面量）。与 IsStage1PrecheckID 同文件维护，一致性由
 // security_stage1_segment_test.go 钉死。
+// 字符集锚定用 GLOB（'8'[0-9]*' 等）而非 LIKE——非数字脏行（带外写入）
+// 不会因前缀碰巧匹配而误入阶段 1 段（与 security_stage1_segment_test 同口径）。
 const Stage1PrecheckSegmentSQL = "rule_triggered IN " + Stage1PrecheckIDSQLList +
-	" OR (LENGTH(rule_triggered)=6 AND rule_triggered LIKE '8%')" +
-	" OR (LENGTH(rule_triggered)=7 AND (rule_triggered LIKE '150%' OR rule_triggered LIKE '151%'))"
+	" OR (LENGTH(rule_triggered)=6 AND rule_triggered GLOB '8[0-9][0-9][0-9][0-9][0-9]')" +
+	" OR (LENGTH(rule_triggered)=7 AND (rule_triggered GLOB '150[0-9][0-9][0-9][0-9]' OR rule_triggered GLOB '151[0-9][0-9][0-9][0-9]'))"
 
 // allowPolicySetSignature 返回规则绑定的 allow 模式策略身份签名（升序 id，
 // 逗号分隔）。签名只用于生成轮内的交集缓存键：同一轮内策略的合并名单不可变，

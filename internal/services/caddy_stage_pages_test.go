@@ -94,7 +94,7 @@ func TestStageBlockPages_legacyColumnsHaveNoRenderEffect(t *testing.T) {
 // （IsStage1PrecheckID / Stage1PrecheckSegmentSQL / SQL 清单）同步义务由
 // security_stage1_segment_test.go 真执行钉承担，此处只钉段形状存在。
 func TestStage1PrecheckIDSQL_aclSegmentReconciled(t *testing.T) {
-	if !strings.Contains(Stage1PrecheckSegmentSQL, "LIKE '150%'") || !strings.Contains(Stage1PrecheckSegmentSQL, "LIKE '151%'") {
+	if !strings.Contains(Stage1PrecheckSegmentSQL, "GLOB '150[0-9][0-9][0-9][0-9]'") || !strings.Contains(Stage1PrecheckSegmentSQL, "GLOB '151[0-9][0-9][0-9][0-9]'") {
 		t.Fatalf("stage1 SQL segment must cover per-policy ACL/blacklist chains: %s", Stage1PrecheckSegmentSQL)
 	}
 	for _, id := range []int{aclPrecheckRuleBase + 1, blacklistPrecheckRuleBase + 1, aclPrecheckRuleLimit - 1} {

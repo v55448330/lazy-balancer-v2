@@ -946,3 +946,31 @@ func TestCloudflare_invalidTokenCode1000ShowsChecklist(t *testing.T) {
 		t.Fatalf("诊断不得泄露凭据内容: %s", msg)
 	}
 }
+
+func TestProvider_createRecordReuseSkipsEmptyID(t *testing.T) {
+	// 空记录 ID 的畸形条目不参与复用（登记空 ID 会让后续清理永久失败）——
+	// 与 dnspod/tencent/aliyun 侧复用循环同构（parity 补漏）。
+	s := newCloudflareTestServer(t)
+	s.zones["example.com"] = "z123"
+	s.records["z123"] = []cfRecord{
+		{ID: "", Name: "_acme-challenge.example.com", Content: "val-1", Type: "TXT"},
+	}
+	p := newCloudflareTestProvider(t, "cf-token", s)
+
+	id, err := p.createRecord(t.Context(), "z123", "_acme-challenge.example.com", "val-1")
+	if err != nil {
+		t.Fatalf("createRecord: %v", err)
+	}
+	if id == "" {
+		t.Fatal("畸形空 ID 条目被复用：want 新建记录并返回非空 ID")
+	}
+	created := 0
+	for _, rec := range s.records["z123"] {
+		if rec.Content == "val-1" && rec.ID != "" {
+			created++
+		}
+	}
+	if created != 1 {
+		t.Fatalf("新建记录数=%d, want 1（跳过空 ID 条目后恰好新建一条）", created)
+	}
+}

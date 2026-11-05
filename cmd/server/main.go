@@ -136,6 +136,7 @@ func run() error {
 	tencent.SetLogf(services.Logf)
 	aliyun.SetLogf(services.Logf)
 	cloudflare.SetLogf(services.Logf)
+	cloudflare.SetUserAgent(cfg.Version)
 	if err := handlers.EnsureBrandingFile(cfg.DataDir); err != nil {
 		services.Logf("warn", "failed to ensure branding file: %v", err)
 	}
