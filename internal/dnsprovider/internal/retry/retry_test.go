@@ -112,6 +112,11 @@ func TestTransport_createRecord_5xx_is_not_replayed(t *testing.T) {
 			req.Header.Set("x-acs-action", "AddDomainRecord")
 			return req
 		}},
+		{name: "cloudflare create path", req: func(t *testing.T) *http.Request {
+			// Cloudflare 创建走 POST /zones/{zone_id}/dns_records（无动作头）——
+			// 按方法+路径后缀判定；同名 GET 列表（幂等预查/兜底枚举）不受约束。
+			return newRequestPath(t, "https://api.cloudflare.example/client/v4/zones/abc123/dns_records", `{"type":"TXT"}`)
+		}},
 	} {
 		t.Run(shape.name, func(t *testing.T) {
 			// Given：持续 502

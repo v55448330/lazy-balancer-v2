@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"lazy-balancer-v2/internal/dnsprovider/aliyun"
+	"lazy-balancer-v2/internal/dnsprovider/cloudflare"
 	"lazy-balancer-v2/internal/dnsprovider/dnspod"
 	"lazy-balancer-v2/internal/dnsprovider/ownership"
 	"lazy-balancer-v2/internal/dnsprovider/tencent"
@@ -249,5 +250,66 @@ func TestNewProviderFromCredentials_aliyunAmbiguity(t *testing.T) {
 	}
 	if _, ok := provider.(*aliyun.Provider); !ok {
 		t.Fatalf("provider=%T, want *aliyun.Provider（显式 mode 消歧）", provider)
+	}
+}
+
+// cloudflare 族：显式 mode 与 UI auth_mode 均须构造 Cloudflare provider；
+// 裸 api_token（无 mode）仍默认 dnspod——api_token 字段族现在归属
+// dnspod/cloudflare 两族，历史存量行（bare token=dnspod）不能被新提供商
+// 劫持默认归属，显式 mode=cloudflare 是唯一选择通道（已知边界，见交付报告）。
+func TestNewProviderFromCredentials_cloudflareFamily(t *testing.T) {
+	wantAccount := ownership.AccountDigest("cf-token")
+	wantString := "cloudflare.Provider{account:" + wantAccount + "}"
+
+	// 显式 canonical mode。
+	provider, err := NewProviderFromCredentials(`{"mode":"cloudflare","api_token":"cf-token"}`)
+	if err != nil {
+		t.Fatalf("explicit cloudflare mode: %v", err)
+	}
+	cfProvider, ok := provider.(*cloudflare.Provider)
+	if !ok {
+		t.Fatalf("provider=%T, want *cloudflare.Provider", provider)
+	}
+	if cfProvider.String() != wantString {
+		t.Fatalf("account digest mismatch: %s, want %s", cfProvider.String(), wantString)
+	}
+
+	// UI 形态（auth_mode）同构。
+	provider, err = NewProviderFromCredentials(`{"auth_mode":"cloudflare","api_token":"cf-token"}`)
+	if err != nil {
+		t.Fatalf("auth_mode cloudflare: %v", err)
+	}
+	if _, ok := provider.(*cloudflare.Provider); !ok {
+		t.Fatalf("provider=%T, want *cloudflare.Provider（auth_mode=cloudflare）", provider)
+	}
+
+	// auth_mode 是凭据真相：压过游离的 mode 与他族字段。
+	// 干扰字段用 tencent secret 对（cloudflare 无 app_id/app_token UI 字段，
+	// 该组合不存在；app 对折叠优先于游离 api_token 是既有契约，不在本用例
+	// 断言面）。
+	provider, err = NewProviderFromCredentials(`{"auth_mode":"cloudflare","api_token":"t1","mode":"dnspod","secret_id":"sid","secret_key":"skey"}`)
+	if err != nil {
+		t.Fatalf("auth_mode overrides stray mode: %v", err)
+	}
+	cfProvider, ok = provider.(*cloudflare.Provider)
+	if !ok {
+		t.Fatalf("provider=%T, want *cloudflare.Provider（auth_mode 优先）", provider)
+	}
+	if cfProvider.String() != "cloudflare.Provider{account:"+ownership.AccountDigest("t1")+"}" {
+		t.Fatalf("provider=%s, want 凭据 t1（auth_mode 字段为凭据真相）", cfProvider.String())
+	}
+
+	// 裸 token（无 mode）→ 仍默认 dnspod（存量兼容边界）。
+	provider, err = NewProviderFromCredentials(`{"api_token":"123,abc"}`)
+	if err != nil {
+		t.Fatalf("bare token infer: %v", err)
+	}
+	if _, ok := provider.(*dnspod.Provider); !ok {
+		t.Fatalf("provider=%T, want *dnspod.Provider（bare token 默认 dnspod 不变）", provider)
+	}
+
+	// mode=cloudflare 缺 token → 缺失拒绝（中文可读）。
+	if _, err := NewProviderFromCredentials(`{"mode":"cloudflare"}`); err == nil || !strings.Contains(err.Error(), "API Token") {
+		t.Fatalf("cloudflare 缺 token error=%v, want 含 API Token 的缺失文案", err)
 	}
 }

@@ -23,6 +23,7 @@ import (
 	"lazy-balancer-v2/internal/config"
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/dnsprovider/aliyun"
+	"lazy-balancer-v2/internal/dnsprovider/cloudflare"
 	"lazy-balancer-v2/internal/dnsprovider/dnspod"
 	"lazy-balancer-v2/internal/dnsprovider/ownership"
 	"lazy-balancer-v2/internal/dnsprovider/tencent"
@@ -134,6 +135,7 @@ func run() error {
 	dnspod.SetLogf(services.Logf)
 	tencent.SetLogf(services.Logf)
 	aliyun.SetLogf(services.Logf)
+	cloudflare.SetLogf(services.Logf)
 	if err := handlers.EnsureBrandingFile(cfg.DataDir); err != nil {
 		services.Logf("warn", "failed to ensure branding file: %v", err)
 	}

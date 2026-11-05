@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"lazy-balancer-v2/internal/dnsprovider/aliyun"
+	"lazy-balancer-v2/internal/dnsprovider/cloudflare"
 	"lazy-balancer-v2/internal/dnsprovider/dnspod"
 	"lazy-balancer-v2/internal/dnsprovider/tencent"
 )
@@ -14,7 +15,7 @@ import (
 // certificate_configs.dns_credentials（global_config.dns_credentials 为已停用的
 // 遗留字段，2026-09-05 证书域审计核实签发链无消费方）。
 type DNSCredentials struct {
-	Mode      string `json:"mode"` // "dnspod", "tencent" or "aliyun"
+	Mode      string `json:"mode"` // "dnspod", "tencent", "aliyun" or "cloudflare"
 	APIToken  string `json:"api_token,omitempty"`
 	SecretID  string `json:"secret_id,omitempty"`
 	SecretKey string `json:"secret_key,omitempty"`
@@ -82,6 +83,11 @@ func (env CredentialEnvelope) Canonical() (DNSCredentials, error) {
 		// AccessKeyID+AccessKeySecret→阿里云 access 对）。多类并存=歧义（需
 		// 显式 mode 消歧）；全缺/不完整=缺失（需补齐凭证）。文案同时保留
 		// UI 面（"请选择认证方式"）与协议面（"缺失"）语义。
+		//
+		// 已知边界：api_token 字段族自 Cloudflare 接入起归属 dnspod/cloudflare
+		// 两族——裸 token（无 mode）无法从字段形态判族，仍默认 dnspod（存量
+		// 行兼容优先：改默认会把全部既有 bare-token 行劫持到新提供商）；
+		// Cloudflare 凭据必须显式 mode=cloudflare（或 UI auth_mode）选择。
 		families := 0
 		for _, present := range []bool{hasToken, hasSecret, hasAccess} {
 			if present {
@@ -90,7 +96,7 @@ func (env CredentialEnvelope) Canonical() (DNSCredentials, error) {
 		}
 		switch {
 		case families > 1:
-			return DNSCredentials{}, fmt.Errorf("DNS 凭证歧义：多类凭证同时存在，无法判定提供商（请显式指定 mode=dnspod、mode=tencent 或 mode=aliyun）")
+			return DNSCredentials{}, fmt.Errorf("DNS 凭证歧义：多类凭证同时存在，无法判定提供商（请显式指定 mode=dnspod、mode=tencent、mode=aliyun 或 mode=cloudflare）")
 		case hasToken:
 			mode = "dnspod"
 		case hasSecret:
@@ -118,6 +124,11 @@ func (env CredentialEnvelope) Canonical() (DNSCredentials, error) {
 			return DNSCredentials{}, fmt.Errorf("阿里云认证方式需要提供 AccessKey ID 和 AccessKey Secret")
 		}
 		return DNSCredentials{Mode: "aliyun", AccessKeyID: env.AccessKeyID, AccessKeySecret: env.AccessKeySecret}, nil
+	case "cloudflare":
+		if !hasToken {
+			return DNSCredentials{}, fmt.Errorf("Cloudflare 认证方式需要提供 API Token")
+		}
+		return DNSCredentials{Mode: "cloudflare", APIToken: apiToken}, nil
 	}
 	return DNSCredentials{}, fmt.Errorf("unsupported dns provider mode: %s", mode)
 }
@@ -155,6 +166,11 @@ func newProviderFromCredentials(rawJSON, dataDir string) (Provider, error) {
 			return aliyun.NewPersistent(creds.AccessKeyID, creds.AccessKeySecret, dataDir)
 		}
 		return aliyun.New(creds.AccessKeyID, creds.AccessKeySecret)
+	case "cloudflare":
+		if dataDir != "" {
+			return cloudflare.NewPersistent(creds.APIToken, dataDir)
+		}
+		return cloudflare.New(creds.APIToken), nil
 	default:
 		return nil, fmt.Errorf("unsupported dns provider mode: %s", creds.Mode)
 	}

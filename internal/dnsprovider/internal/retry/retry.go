@@ -4,7 +4,8 @@
 // not immediately fail an ACME DNS-01 challenge and burn CA order quota.
 //
 // 创建类请求（DNSPod Record.Create / 腾讯云
-// CreateRecord / 阿里云 AddDomainRecord）对 5xx 不重放——创建响应丢失时重试
+// CreateRecord / 阿里云 AddDomainRecord / Cloudflare POST
+// /zones/{id}/dns_records）对 5xx 不重放——创建响应丢失时重试
 // 会在 DNS 侧产生一条无 ID 幽灵 TXT（清理只按 ownership 记录 ID 删除，幽灵
 // 条目永不收敛）；429 恒定重试（限流响应意味着记录未被创建；阿里云的
 // Throttling 400 由 aliyun 包的 throttlingTransport 先改写为 429）。
@@ -46,12 +47,18 @@ func After(header string) time.Duration {
 // createRecordAction 判定创建类 DNS 请求：DNSPod 走 URL 路径
 // （apiBase+"Record.Create"），腾讯云走 X-TC-Action 头，阿里云走
 // x-acs-action 头（AddDomainRecord；429/Throttling 改写后的限流响应在
-// 本判定之前已按 429 恒重试，不受创建类约束）。
+// 本判定之前已按 429 恒重试，不受创建类约束），Cloudflare 走 POST
+// /zones/{id}/dns_records（无动作头，按方法+路径后缀判定；同路径的 GET
+// 列表不受创建类约束）。创建响应丢失时重试会产生无 ID 幽灵 TXT，故创建类
+// 5xx 一律不重放。
 func createRecordAction(request *http.Request) bool {
 	if strings.EqualFold(request.Header.Get("X-TC-Action"), "CreateRecord") {
 		return true
 	}
 	if strings.EqualFold(request.Header.Get("x-acs-action"), "AddDomainRecord") {
+		return true
+	}
+	if request.Method == http.MethodPost && strings.HasSuffix(request.URL.Path, "/dns_records") {
 		return true
 	}
 	return strings.HasSuffix(request.URL.Path, "/Record.Create")

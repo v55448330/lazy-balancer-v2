@@ -196,14 +196,24 @@ func TestListDNSProviders_returnsRegistryMetadata(t *testing.T) {
 	if body.Code != 0 || len(body.Data) == 0 {
 		t.Fatalf("DNS 提供商列表为空: %s", recorder.Body.String())
 	}
-	last := ""
-	for _, provider := range body.Data {
-		if provider.Code <= last {
-			t.Fatalf("提供商顺序不稳定（%q 之后是 %q）", last, provider.Code)
+	rest := make([]string, 0, len(body.Data))
+	for i, provider := range body.Data {
+		// DNSPod(腾讯云) 恒首位（2026-11-05 用户裁定「腾讯云排到第一位」），
+		// 其余按 Code 升序——与 services/dnsproviders.List() 契约一致。
+		if i == 0 {
+			if provider.Code != "dnspod" {
+				t.Fatalf("首位=%q, want dnspod（腾讯云恒首位）", provider.Code)
+			}
+			continue
 		}
-		last = provider.Code
+		rest = append(rest, provider.Code)
 		if len(provider.Fields) == 0 {
 			t.Fatalf("提供商 %s 缺 credential_fields（前端表单无法渲染）", provider.Code)
+		}
+	}
+	for j := 1; j < len(rest); j++ {
+		if rest[j] <= rest[j-1] {
+			t.Fatalf("提供商顺序不稳定（%q 之后是 %q）", rest[j-1], rest[j])
 		}
 	}
 }

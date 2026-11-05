@@ -1,9 +1,9 @@
 package dnsprovider
 
-// 清理骨架多实现对齐守卫：dnspod、tencent 与 aliyun 的 cleanUp 是有意保留的
-// 同构多实现（底层 API 与记录 ID 类型不同，抽象共享的耦合成本高于重复成本），
-// 各自维护「选中 → 逐条删除 → 批量移除账本 → 兜底排空 → 失败回填 → 残余
-// 排空」骨架。
+// 清理骨架多实现对齐守卫：dnspod、tencent、aliyun 与 cloudflare 的 cleanUp 是
+// 有意保留的同构多实现（底层 API 与记录 ID 类型不同，抽象共享的耦合成本高于
+// 重复成本），各自维护「选中 → 逐条删除 → 批量移除账本 → 兜底排空 → 失败
+// 回填 → 残余排空」骨架。
 // 多实现的风险不是重复本身，而是**漂移**：只改一侧（如删除失败仍移除账本
 // 条目、兜底排空被删、ctx 取消不再并入错误链）会让各家 provider 在同一事故
 // 下的行为不同，而单侧测试永远绿。
@@ -25,9 +25,10 @@ import (
 
 // cleanupProviderSource 是 cleanUp 多实现的源文件（相对本包目录）。
 var cleanupProviderSource = map[string]string{
-	"aliyun":  "aliyun/aliyun.go",
-	"dnspod":  "dnspod/dnspod.go",
-	"tencent": "tencent/tencent.go",
+	"aliyun":     "aliyun/aliyun.go",
+	"cloudflare": "cloudflare/cloudflare.go",
+	"dnspod":     "dnspod/dnspod.go",
+	"tencent":    "tencent/tencent.go",
 }
 
 // cleanupSharedMarkers 是 cleanUp 骨架的有序结构标记：两侧必须同现且顺序一致。
@@ -61,6 +62,9 @@ var cleanupProviderOnlyMarkers = map[string][]struct {
 }{
 	"aliyun": {
 		{"记录 ID 解析失败按不可恢复条目处理", "strconv.ParseUint(record.RecordID, 10, 64)"},
+	},
+	"cloudflare": {
+		{"zone-id 陈旧自愈：作废缓存重解析", "p.invalidateZoneIDCache(zone)"},
 	},
 	"dnspod": {
 		{"domain-id 陈旧自愈：作废缓存重解析", "p.invalidateDomainIDCache(zone)"},
