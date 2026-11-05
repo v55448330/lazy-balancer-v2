@@ -19,6 +19,9 @@ type CredentialField struct {
 	// OptionLabels 为 select 字段的选项显示文案（值 → 文案）；缺失时前端回退
 	// 原始值，不再硬编码到具体 provider。
 	OptionLabels map[string]string `json:"option_labels,omitempty"`
+	// Description 为字段下方的标准描述文案（前端 form-tip-line 渲染）；长指引
+	// 不进 placeholder——输入框内长文本既难读也遮蔽已填内容。
+	Description string `json:"description,omitempty"`
 }
 
 type Provider interface {

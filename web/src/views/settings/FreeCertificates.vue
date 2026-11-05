@@ -176,6 +176,7 @@
                 :placeholder="field.placeholder || ''"
                 show-password
               />
+              <div v-if="field.description" class="form-tip-line">{{ field.description }}</div>
             </el-form-item>
           </template>
         </template>

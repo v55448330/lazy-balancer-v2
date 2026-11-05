@@ -124,3 +124,18 @@ test('编辑回填不按 provider 名推断认证方式（缺失键交后端 can
   // 遗留空凭据形态的「不注入、保存省略」契约不变
   assert.match(backfill, /legacyEmptyCredentials\.value = Object\.keys\(parsedCreds\)\.length === 0/)
 })
+
+test('凭据字段元数据 description 在输入框下方以标准描述样式渲染', () => {
+  // 后端 CredentialField.description（长指引）由 FE 以 form-tip-line 渲染在
+  // 输入框下方——placeholder 只承担短占位，长指引进输入框既难读也遮蔽已填值
+  // （2026-11-05 用户验收反馈：Cloudflare API Token 创建指引）。
+  const meta = code('src/utils/dnsProviderFields.ts')
+  assert.match(meta, /readonly description\?: string/, 'CredentialFieldMeta 缺 description 字段')
+  const page = code('src/views/settings/FreeCertificates.vue')
+  const blockStart = page.indexOf('v-for="field in selectedProvider.credential_fields"')
+  const blockEnd = page.indexOf('</template>', blockStart)
+  assert.ok(blockStart > 0 && blockEnd > blockStart, '凭据字段渲染块边界缺失')
+  const block = page.slice(blockStart, blockEnd)
+  assert.match(block, /field\.description/, '凭据字段渲染块未消费 description')
+  assert.match(block, /form-tip-line/, '描述必须用标准 form-tip-line 样式（禁 placeholder 长文本/禁局部样式）')
+})

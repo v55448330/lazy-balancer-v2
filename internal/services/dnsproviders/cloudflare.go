@@ -30,12 +30,13 @@ func (c *Cloudflare) CredentialFields() []CredentialField {
 	return []CredentialField{
 		{
 			Name: "auth_mode", Label: "认证方式", Type: "select", Required: true, Placeholder: "cloudflare",
-			OptionLabels: map[string]string{"cloudflare": "API Token（推荐）"},
+			OptionLabels: map[string]string{"cloudflare": "API Token"},
 		},
 		{
 			Name: "api_token", Label: "API Token", Type: "password", Required: true,
-			Placeholder: "Cloudflare API Token（My Profile → API Tokens 创建；权限 Zone → DNS → Edit + Zone → Zone → Read，可限定 zone）",
+			Placeholder: "粘贴 API Token",
 			VisibleWhen: visibleOnly("cloudflare"),
+			Description: "Cloudflare 面板 → My Profile → API Tokens 创建；权限需 Zone → DNS → Edit 与 Zone → Zone → Read，可限定到目标 zone",
 		},
 	}
 }

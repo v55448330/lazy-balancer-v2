@@ -17,6 +17,7 @@ export interface CredentialFieldMeta {
   readonly type: string
   readonly required: boolean
   readonly placeholder?: string
+  readonly description?: string
   readonly options?: readonly string[]
   readonly visible_when?: Readonly<Record<string, readonly string[]>>
   readonly option_labels?: Readonly<Record<string, string>>

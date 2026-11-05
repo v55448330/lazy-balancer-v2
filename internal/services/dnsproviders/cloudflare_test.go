@@ -47,7 +47,7 @@ func TestCloudflare_metadata(t *testing.T) {
 	if authMode.Name != "auth_mode" || authMode.Type != "select" || !authMode.Required {
 		t.Fatalf("auth_mode 字段=%+v, want select 且必填", authMode)
 	}
-	if got, want := authMode.OptionLabels["cloudflare"], "API Token（推荐）"; got != want {
+	if got, want := authMode.OptionLabels["cloudflare"], "API Token"; got != want {
 		t.Fatalf("auth_mode option_labels[cloudflare]=%q, want %q", got, want)
 	}
 	tokenField := fields[1]
