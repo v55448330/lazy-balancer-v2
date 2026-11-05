@@ -229,10 +229,8 @@ func TestSecurityBlockedCounter_timingSegmentSelection(t *testing.T) {
 		if id == "" {
 			t.Fatal("timing id header must be injected")
 		}
-		auditTimingMu.Lock()
-		_, exists := auditTimingEntries[id]
-		count := len(auditTimingEntries)
-		auditTimingMu.Unlock()
+		exists := auditTimingEntryForTest(id) != nil
+		count := auditTimingEntryCountForTest()
 		if exists || count != 0 {
 			t.Fatalf("close must not create entries (历史问题), got %d entries", count)
 		}

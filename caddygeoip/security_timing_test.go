@@ -20,29 +20,64 @@ func useTestTimingRegistry(t *testing.T) {
 	origWait, origPoll := auditTimingWaitLimit, auditTimingPollStep
 	auditTimingWaitLimit = 200 * time.Millisecond
 	auditTimingPollStep = time.Millisecond
-	auditTimingMu.Lock()
-	resetAuditTimingRegistryLockedForTest()
-	auditTimingMu.Unlock()
+	resetAuditTimingRegistryForTest()
 	t.Cleanup(func() {
 		auditTimingWaitLimit, auditTimingPollStep = origWait, origPoll
-		auditTimingMu.Lock()
-		resetAuditTimingRegistryLockedForTest()
-		auditTimingMu.Unlock()
+		resetAuditTimingRegistryForTest()
 	})
 }
 
-// auditTimingLookup 测试取值 helper。
+// auditTimingLookup 测试取值 helper（按分片路由读条目）。
 func auditTimingLookupForTest(t *testing.T, id string) auditTimingSnapshot {
 	t.Helper()
-	auditTimingMu.Lock()
-	e := auditTimingEntries[id]
-	auditTimingMu.Unlock()
+	e := auditTimingEntryForTest(id)
 	if e == nil {
 		return auditTimingSnapshot{}
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return auditTimingSnapshot{preUs: e.preUs, preSet: e.preSet, endUs: e.endUs, endSet: e.endSet, closed: e.closed}
+}
+
+// auditTimingEntryForTest 按 ID 路由读所属分片的条目指针（含分片锁）。
+func auditTimingEntryForTest(id string) *auditTimingEntry {
+	sh := auditTimingShardFor(id)
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	return sh.entries[id]
+}
+
+// auditTimingEntryCountForTest 跨片汇总在册条目数（含分片锁）。
+func auditTimingEntryCountForTest() int {
+	n := 0
+	for i := range auditTimingShards {
+		sh := auditTimingShards[i]
+		sh.mu.Lock()
+		n += len(sh.entries)
+		sh.mu.Unlock()
+	}
+	return n
+}
+
+// auditTimingRetainedPreLookupForTest 按 ID 路由读所属分片的预检保留区。
+func auditTimingRetainedPreLookupForTest(id string) (int64, bool) {
+	sh := auditTimingShardFor(id)
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	return sh.retainedPreLookupLocked(id)
+}
+
+// auditRetainedPreLiveForTest 跨片汇总保留区在册条目数（逐片计数，与原子
+// 准入计数互为对账）。
+func auditRetainedPreLiveForTest() int {
+	n := 0
+	for i := range auditTimingShards {
+		sh := auditTimingShards[i]
+		sh.mu.Lock()
+		n += len(sh.retainedPre)
+		sh.mu.Unlock()
+	}
+	return n
 }
 
 // Given: 正常调用
@@ -201,11 +236,14 @@ func TestRecordSecurityTiming_negativeClampedToZero(t *testing.T) {
 
 func auditTimingEntriesSnapshotForTest(t *testing.T) map[string]*auditTimingEntry {
 	t.Helper()
-	auditTimingMu.Lock()
-	defer auditTimingMu.Unlock()
-	out := make(map[string]*auditTimingEntry, len(auditTimingEntries))
-	for id, e := range auditTimingEntries {
-		out[id] = e
+	out := map[string]*auditTimingEntry{}
+	for i := range auditTimingShards {
+		sh := auditTimingShards[i]
+		sh.mu.Lock()
+		for id, e := range sh.entries {
+			out[id] = e
+		}
+		sh.mu.Unlock()
 	}
 	return out
 }

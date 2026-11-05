@@ -219,14 +219,6 @@ type auditRetainedPreEntry struct {
 	created time.Time
 }
 
-var (
-	// auditRetainedPreEntries/Order/Head 镜像主注册表的 FIFO 清扫模型
-	// （调用方持 auditTimingMu）。
-	auditRetainedPreEntries = map[string]auditRetainedPreEntry{}
-	auditRetainedPreOrder   []auditRetainedPreEntry
-	auditRetainedPreHead    int
-)
-
 // —— per-request 计时注册表 ——
 // 写点：SecurityTimingPre(:pre)/SecurityTimingEnd(:end)/blocked_counter(:pre 或
 // :end + 终态 close)。读点：audit drain goroutine（限时等待终态后注入）。
@@ -268,22 +260,6 @@ type auditTimingQueueEntry struct {
 }
 
 var (
-	auditTimingMu      sync.Mutex
-	auditTimingEntries = map[string]*auditTimingEntry{}
-	// auditTimingOrder 是建条顺序的 FIFO：清扫只从队首弹出 TTL 已过期条目，
-	// 摊销 O(过期数)。旧实现每 64 次建条全表扫描（O(n)，n≈TTL×RPS），
-	// 每次请求摊销 O(n/64) 次 map 迭代且持全局锁 ⇒ CPU 随 RPS² 增长。
-	// 不变量：队列内 created 单调不减（time.Now 的单调读数）。**同一条目可
-	// 重建并再次入队**：条目已被 TTL 清扫后终态迟到时，retained-pre 回填
-	// 路径会为同一 id 新建条目并再 append 一个 FIFO 项——所以「每条目只入队
-	// 一次」不成立；清扫以 created 相等判定弹出项是否属于当前那次建条，
-	// 重建条目的旧队列项不会误删新条目。
-	auditTimingOrder []auditTimingQueueEntry
-	// auditTimingHead 是队首游标：已弹出的前缀留在切片里，达到一定规模后
-	// 整体压缩（摊销 O(1)）。
-	auditTimingHead int
-	// auditTimingCreateCount 记录创建次数——每 64 次创建触发一次过期清扫。
-	auditTimingCreateCount int
 	// auditTimingPollCountForTest 轮询总次数（测试观测钉：未知 tid/已终态
 	// 条目/无计时头行必须零轮询立即返回——替代挂钟阈值断言，消除 CI 负载
 	// 抖动假红）。仅 auditTimingWait 轮询步 incr，成本可忽略。
@@ -292,6 +268,92 @@ var (
 	// 成本必须随「过期条目数」而非注册表规模增长）。
 	auditTimingSweepVisitsForTest atomic.Int64
 )
+
+// —— 计时注册表锁分片 ——
+//
+// 单把全局 mutex（旧 auditTimingMu）是每请求 ~3 次锁（pre/end 写段、终态
+// close，加上 logged 读与 drain 查表）的唯一热路径串行点：一次记录全程持锁
+// 虽短（map 查改），但高并发下全部请求在同一点排队。现按 timing ID 哈希
+// 分 auditTimingShardCount 片——同 ID 的条目表/建条 FIFO/预检保留区自洽于
+// 单片锁内（写点、读点、清扫、保留区回填对同一 ID 永远路由到同一片），
+// 不同 ID 的注册表操作完全并行。分段写（e.mu）与轮询等待本就在全局锁外，
+// 语义不变。
+//
+// 上限口径：分片只切锁不切上限——auditTimingMaxEntries（100k）与
+// auditRetainedPreMaxEntries（8192）保持**精确全局总量**，由两个原子计数
+// （auditTimingLiveEntries/auditRetainedPreLive）在创建/保留路径做先加后验
+// 准入（超限回滚拒绝）。瞬时过冲有界于并发创建者数（回滚立即），准入总数
+// 严格 ≤ 上限；对抗性 ID 分布（全部哈希到同片）下总量界与单锁形态一致。
+const auditTimingShardCount = 16
+
+// auditTimingShard 是计时注册表的一个锁分片：条目表 + 建条顺序 FIFO +
+// 预检保留区（镜像原全局表的 FIFO 清扫模型；调用方持 sh.mu）。
+type auditTimingShard struct {
+	mu sync.Mutex
+	// entries 条目表（键=计时 ID）。
+	entries map[string]*auditTimingEntry
+	// order 是本片建条顺序的 FIFO：清扫只从队首弹出 TTL 已过期条目，
+	// 摊销 O(过期数)。不变量：队列内 created 单调不减（time.Now 的单调
+	// 读数）。**同一条目可重建并再次入队**：条目已被 TTL 清扫后终态迟到时，
+	// retained-pre 回填路径会为同一 id 新建条目并再 append 一个 FIFO 项——
+	// 所以「每条目只入队一次」不成立；清扫以 created 相等判定弹出项是否
+	// 属于当前那次建条，重建条目的旧队列项不会误删新条目。
+	order []auditTimingQueueEntry
+	// head 是队首游标：已弹出的前缀留在切片里，达到一定规模后整体压缩
+	// （摊销 O(1)）。
+	head int
+	// retainedPre/Order/Head 镜像本片条目表的预检保留区 FIFO 清扫模型。
+	retainedPre      map[string]auditRetainedPreEntry
+	retainedPreOrder []auditRetainedPreEntry
+	retainedPreHead  int
+}
+
+var auditTimingShards = newAuditTimingShards()
+
+func newAuditTimingShards() [auditTimingShardCount]*auditTimingShard {
+	var out [auditTimingShardCount]*auditTimingShard
+	for i := range out {
+		out[i] = &auditTimingShard{
+			entries:     map[string]*auditTimingEntry{},
+			retainedPre: map[string]auditRetainedPreEntry{},
+		}
+	}
+	return out
+}
+
+// auditTimingLiveEntries 是跨片汇总的在册条目数（原子准入计数，见上方
+// 上限口径说明）。
+var auditTimingLiveEntries atomic.Int64
+
+// auditRetainedPreLive 是跨片汇总的保留区条目数（原子准入计数）。
+var auditRetainedPreLive atomic.Int64
+
+// auditTimingCreateCountTotal 是跨片汇总的建条计数：每 64 次创建触发一次
+// 全片摊销清扫（在创建者释放本片锁之后执行——清扫要逐片加锁，持本片锁
+// 嵌套扫其余片会构成 ABBA 死锁）。原子计数保持与单锁形态相同的全局清扫
+// 节奏（每 64 次建条一次，不随片数放大或缩小）。
+var auditTimingCreateCountTotal atomic.Int64
+
+// auditTimingShardFor 把计时 ID 路由到所属分片（fnv32a 哈希 × 位掩码；
+// 16-hex ID 的随机分布下各片均匀）。同 ID 恒同片是注册/关闭/等待/清扫/
+// 保留区回填一致性的前提。
+func auditTimingShardFor(id string) *auditTimingShard {
+	return auditTimingShards[auditTimingHash(id)&(auditTimingShardCount-1)]
+}
+
+// auditTimingHash 是 FNV-1a 32 位哈希（纯读短键，无分配）。
+func auditTimingHash(s string) uint32 {
+	const (
+		offset32 = 2166136261
+		prime32  = 16777619
+	)
+	h := uint32(offset32)
+	for i := 0; i < len(s); i++ {
+		h ^= uint32(s[i])
+		h *= prime32
+	}
+	return h
+}
 
 // auditTimingRecord 写入一个分段计时（µs）。id 为空（计时 ID 生成失败的降级
 // 形态）或形态非法（纵深：非 16-hex 不得建条——头值客户端可控）
@@ -302,26 +364,38 @@ func auditTimingRecord(id, segment string, us int64) {
 		return
 	}
 	now := time.Now()
-	auditTimingMu.Lock()
-	e := auditTimingEntries[id]
+	sh := auditTimingShardFor(id)
+	created := false
+	sh.mu.Lock()
+	e := sh.entries[id]
 	if e == nil {
-		if len(auditTimingEntries) >= auditTimingMaxEntries {
-			auditTimingMu.Unlock()
+		// 全局准入（先加后验，超限回滚）：跨片计数保持 auditTimingMaxEntries
+		// 的精确总上限（见分片设计注释）。
+		if auditTimingLiveEntries.Add(1) > int64(auditTimingMaxEntries) {
+			auditTimingLiveEntries.Add(-1)
+			sh.mu.Unlock()
 			return
 		}
 		e = &auditTimingEntry{created: now}
 		// 终态迟到（条目已被 TTL 清扫）时回填预检保留区里的 pre 段。
-		if preUs, ok := auditRetainedPreLookupLocked(id); ok {
+		if preUs, ok := sh.retainedPreLookupLocked(id); ok {
 			e.preUs, e.preSet = preUs, true
 		}
-		auditTimingEntries[id] = e
-		auditTimingOrder = append(auditTimingOrder, auditTimingQueueEntry{id: id, created: now})
-		auditTimingSweepIfDueLocked(now)
+		sh.entries[id] = e
+		sh.order = append(sh.order, auditTimingQueueEntry{id: id, created: now})
+		created = true
 	}
-	auditTimingMu.Unlock()
-	// 首个条目创建时启动周期 sweeper（进程级单例，注册表本身即
-	// 包级生命周期）——停流后过期条目也由周期清扫回收，不再仅依赖建条驱动。
-	startAuditTimingSweeper()
+	sh.mu.Unlock()
+	if created {
+		// 摊销清扫触发：全局每 64 次建条一次全片清扫，在本片锁释放后执行
+		// （清扫逐片加锁；持本片锁嵌套扫其余片 = ABBA 死锁）。
+		if auditTimingCreateCountTotal.Add(1)%64 == 0 {
+			auditTimingSweepExpired(now)
+		}
+		// 首个条目创建时启动周期 sweeper（进程级单例，注册表本身即
+		// 包级生命周期）——停流后过期条目也由周期清扫回收，不再仅依赖建条驱动。
+		startAuditTimingSweeper()
+	}
 	e.mu.Lock()
 	// 分段键用同包常量（timingSegmentPre/End）而非字面量：生产调用点传常量，
 	// 此处若写死字面量，改常量值或新增第三段时会静默不命中（分段丢失且无
@@ -357,9 +431,7 @@ func startAuditTimingSweeper() {
 					continue
 				}
 				elapsed = 0
-				auditTimingMu.Lock()
-				auditTimingSweepLocked(time.Now())
-				auditTimingMu.Unlock()
+				auditTimingSweepExpired(time.Now())
 			}
 		}()
 	})
@@ -373,9 +445,10 @@ func auditTimingClose(id string) {
 	if id == "" {
 		return
 	}
-	auditTimingMu.Lock()
-	e := auditTimingEntries[id]
-	auditTimingMu.Unlock()
+	sh := auditTimingShardFor(id)
+	sh.mu.Lock()
+	e := sh.entries[id]
+	sh.mu.Unlock()
 	if e == nil {
 		return
 	}
@@ -394,9 +467,10 @@ func auditTimingLogged(id string) bool {
 	if id == "" {
 		return false
 	}
-	auditTimingMu.Lock()
-	e := auditTimingEntries[id]
-	auditTimingMu.Unlock()
+	sh := auditTimingShardFor(id)
+	sh.mu.Lock()
+	e := sh.entries[id]
+	sh.mu.Unlock()
 	if e == nil {
 		return false
 	}
@@ -406,27 +480,30 @@ func auditTimingLogged(id string) bool {
 	return logged
 }
 
-// auditTimingSweepIfDueLocked 建条计数 + 摊销清扫（调用方持 auditTimingMu）。
-// 清扫成本与过期条目数成正比（队首弹出），不再随注册表规模增长。
-func auditTimingSweepIfDueLocked(now time.Time) {
-	auditTimingCreateCount++
-	if auditTimingCreateCount%64 == 0 {
-		auditTimingSweepLocked(now)
+// auditTimingSweepExpired 逐片清扫全部分片（周期 sweeper 与建条摊销触发的
+// 清扫入口）。逐片加锁、扫完即放——任何时刻至多持有一片锁，不与请求路径
+// 的单片操作形成交叉锁序（无 ABBA）。
+func auditTimingSweepExpired(now time.Time) {
+	for i := range auditTimingShards {
+		sh := auditTimingShards[i]
+		sh.mu.Lock()
+		sh.sweepLocked(now)
+		sh.mu.Unlock()
 	}
 }
 
-// auditTimingSweepLocked 从队首弹出 TTL 过期条目（调用方持 auditTimingMu）。
-// 队列 created 单调不减 ⇒ 队首未过期即整队未过期。
-func auditTimingSweepLocked(now time.Time) {
+// sweepLocked 从本片队首弹出 TTL 过期条目（调用方持 sh.mu）。队列 created
+// 单调不减 ⇒ 队首未过期即整队未过期。
+func (sh *auditTimingShard) sweepLocked(now time.Time) {
 	// TTL 只读一次：清扫循环内无需重复 Load（sweeper 与测试并发时口径一致）。
 	ttl := time.Duration(auditTimingEntryTTLNs.Load())
-	for auditTimingHead < len(auditTimingOrder) {
-		item := auditTimingOrder[auditTimingHead]
+	for sh.head < len(sh.order) {
+		item := sh.order[sh.head]
 		auditTimingSweepVisitsForTest.Add(1)
 		if now.Sub(item.created) <= ttl {
 			break
 		}
-		if e, ok := auditTimingEntries[item.id]; ok && e.created.Equal(item.created) {
+		if e, ok := sh.entries[item.id]; ok && e.created.Equal(item.created) {
 			// drain 可能已经取出条目指针并正在等待 closed。删除前先置终态，
 			// 否则后续 close 查表必 miss，等待方只能逐行轮询到超时。
 			e.mu.Lock()
@@ -441,63 +518,67 @@ func auditTimingSweepLocked(now time.Time) {
 			// 长请求跨 TTL：pre 是链入口分段，转入独立保留区等待终态迟到时
 			// 回填（整条丢弃会让审计行 pre_us 永久「—」）。
 			if preSet && !wasClosed {
-				auditRetainPreLocked(item.id, preUs, now)
+				sh.retainPreLocked(item.id, preUs, now)
 			}
-			delete(auditTimingEntries, item.id)
+			delete(sh.entries, item.id)
+			auditTimingLiveEntries.Add(-1)
 		}
-		auditTimingHead++
+		sh.head++
 	}
-	// 保留区自身按保留期回收（与主表同一次清扫，无独立 goroutine）。
-	auditRetainedPreExpireLocked(now)
+	// 保留区自身按保留期回收（与本片同一次清扫，无独立 goroutine）。
+	sh.retainedPreExpireLocked(now)
 	// 已弹出前缀达到半量时压缩，避免 backing array 无界增长（摊销 O(1)）。
-	if auditTimingHead >= 1024 && auditTimingHead*2 >= len(auditTimingOrder) {
-		auditTimingOrder = append(auditTimingOrder[:0], auditTimingOrder[auditTimingHead:]...)
-		auditTimingHead = 0
+	if sh.head >= 1024 && sh.head*2 >= len(sh.order) {
+		sh.order = append(sh.order[:0], sh.order[sh.head:]...)
+		sh.head = 0
 	}
 }
 
-// auditRetainPreLocked 把条目过期前的预检分段转入保留区（调用方持
-// auditTimingMu）。满员时放弃本次保留：预检段是增强信息，不值得为它引入
-// 淘汰抖动或阻塞热路径。
-func auditRetainPreLocked(id string, preUs int64, now time.Time) {
+// retainPreLocked 把条目过期前的预检分段转入本片保留区（调用方持 sh.mu）。
+// 满员时放弃本次保留（全局原子准入计数，超限回滚——预检段是增强信息，
+// 不值得为它引入淘汰抖动或阻塞热路径）。
+func (sh *auditTimingShard) retainPreLocked(id string, preUs int64, now time.Time) {
 	if id == "" {
 		return
 	}
-	if _, exists := auditRetainedPreEntries[id]; !exists && len(auditRetainedPreEntries) >= auditRetainedPreMaxEntries {
-		return
+	if _, exists := sh.retainedPre[id]; !exists {
+		if auditRetainedPreLive.Add(1) > int64(auditRetainedPreMaxEntries) {
+			auditRetainedPreLive.Add(-1)
+			return
+		}
 	}
 	entry := auditRetainedPreEntry{id: id, preUs: preUs, created: now}
-	auditRetainedPreEntries[id] = entry
-	auditRetainedPreOrder = append(auditRetainedPreOrder, entry)
+	sh.retainedPre[id] = entry
+	sh.retainedPreOrder = append(sh.retainedPreOrder, entry)
 }
 
-// auditRetainedPreLookupLocked 读保留区里的预检分段（调用方持 auditTimingMu）。
-func auditRetainedPreLookupLocked(id string) (int64, bool) {
-	entry, ok := auditRetainedPreEntries[id]
+// retainedPreLookupLocked 读本片保留区里的预检分段（调用方持 sh.mu）。
+func (sh *auditTimingShard) retainedPreLookupLocked(id string) (int64, bool) {
+	entry, ok := sh.retainedPre[id]
 	if !ok {
 		return 0, false
 	}
 	return entry.preUs, true
 }
 
-// auditRetainedPreExpireLocked 按保留期从队首弹出保留区条目（调用方持
-// auditTimingMu）。FIFO 的 created 单调不减（转入时刻递增），队首未过期即
-// 整队未过期。
-func auditRetainedPreExpireLocked(now time.Time) {
+// retainedPreExpireLocked 按保留期从队首弹出本片保留区条目（调用方持
+// sh.mu）。FIFO 的 created 单调不减（转入时刻递增），队首未过期即整队未过期。
+func (sh *auditTimingShard) retainedPreExpireLocked(now time.Time) {
 	ttl := time.Duration(auditPreRetentionTTLNs.Load())
-	for auditRetainedPreHead < len(auditRetainedPreOrder) {
-		item := auditRetainedPreOrder[auditRetainedPreHead]
+	for sh.retainedPreHead < len(sh.retainedPreOrder) {
+		item := sh.retainedPreOrder[sh.retainedPreHead]
 		if now.Sub(item.created) <= ttl {
 			break
 		}
-		if current, ok := auditRetainedPreEntries[item.id]; ok && current.created.Equal(item.created) {
-			delete(auditRetainedPreEntries, item.id)
+		if current, ok := sh.retainedPre[item.id]; ok && current.created.Equal(item.created) {
+			delete(sh.retainedPre, item.id)
+			auditRetainedPreLive.Add(-1)
 		}
-		auditRetainedPreHead++
+		sh.retainedPreHead++
 	}
-	if auditRetainedPreHead >= 1024 && auditRetainedPreHead*2 >= len(auditRetainedPreOrder) {
-		auditRetainedPreOrder = append(auditRetainedPreOrder[:0], auditRetainedPreOrder[auditRetainedPreHead:]...)
-		auditRetainedPreHead = 0
+	if sh.retainedPreHead >= 1024 && sh.retainedPreHead*2 >= len(sh.retainedPreOrder) {
+		sh.retainedPreOrder = append(sh.retainedPreOrder[:0], sh.retainedPreOrder[sh.retainedPreHead:]...)
+		sh.retainedPreHead = 0
 	}
 }
 
@@ -521,17 +602,18 @@ func auditTimingWait(id string, timeout time.Duration) auditTimingSnapshot {
 	if id == "" {
 		return auditTimingSnapshot{}
 	}
-	auditTimingMu.Lock()
-	e := auditTimingEntries[id]
+	sh := auditTimingShardFor(id)
+	sh.mu.Lock()
+	e := sh.entries[id]
 	var retained *auditTimingSnapshot
 	if e == nil {
 		// 长请求的条目已被 TTL 清扫、终态尚未写入：保留区里的 pre 仍有效，
 		// 按「已到场分段」返回（否则整条 lb_timing 缺失）。
-		if preUs, ok := auditRetainedPreLookupLocked(id); ok {
+		if preUs, ok := sh.retainedPreLookupLocked(id); ok {
 			retained = &auditTimingSnapshot{preUs: preUs, preSet: true, closed: true}
 		}
 	}
-	auditTimingMu.Unlock()
+	sh.mu.Unlock()
 	if e == nil {
 		if retained != nil {
 			return *retained

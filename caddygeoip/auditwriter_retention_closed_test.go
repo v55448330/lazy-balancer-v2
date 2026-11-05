@@ -21,10 +21,8 @@ func TestAuditTimingRegistry_closedEntryDoesNotOccupyPreRetention(t *testing.T) 
 
 	// 越过条目 TTL（useTestAuditPipeline 置 50ms）后清扫。
 	time.Sleep(80 * time.Millisecond)
-	auditTimingMu.Lock()
-	auditTimingSweepLocked(time.Now())
-	_, retained := auditRetainedPreLookupLocked(id)
-	auditTimingMu.Unlock()
+	auditTimingSweepExpired(time.Now())
+	_, retained := auditTimingRetainedPreLookupForTest(id)
 
 	if retained {
 		t.Fatal("已终态条目不得转入预检保留区（高 rps 下会把保留区占满，慢请求 pre 反而永久缺失）")

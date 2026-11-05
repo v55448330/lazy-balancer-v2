@@ -196,41 +196,46 @@ func useTestAuditPipeline(t *testing.T) {
 	// 冲刷合并状态是进程级：上一个用例的冲刷时刻会让本用例的
 	// FlushAuditPipelines 落进窗口被快进，必须复位。
 	auditLastFlushNano.Store(0)
-	auditTimingMu.Lock()
-	resetAuditTimingRegistryLockedForTest()
-	auditTimingMu.Unlock()
+	resetAuditTimingRegistryForTest()
 	t.Cleanup(func() {
 		auditQueueSize, auditFlushThreshold, auditFlushInterval = origQueue, origThreshold, origInterval
 		auditTimingWaitLimit, auditTimingPollStep = origWait, origPoll
 		auditTimingEntryTTLNs.Store(origTTL)
-		auditTimingMu.Lock()
-		resetAuditTimingRegistryLockedForTest()
-		auditTimingMu.Unlock()
+		resetAuditTimingRegistryForTest()
 	})
 	closeTestAuditPipelines(t)
 }
 
-// resetAuditTimingRegistryLockedForTest 清空计时注册表全部状态（调用方持
-// auditTimingMu）——条目/建条 FIFO/游标/清扫计数一并复位，避免测试间串扰。
-func resetAuditTimingRegistryLockedForTest() {
-	auditTimingEntries = make(map[string]*auditTimingEntry)
-	auditTimingOrder = nil
-	auditTimingHead = 0
-	auditTimingCreateCount = 0
+// resetAuditTimingRegistryForTest 清空计时注册表全部状态（分片形态：逐片
+// 复位条目/FIFO/游标/保留区并清零原子准入计数）——避免测试间串扰。
+func resetAuditTimingRegistryForTest() {
+	for i := range auditTimingShards {
+		sh := auditTimingShards[i]
+		sh.mu.Lock()
+		sh.entries = make(map[string]*auditTimingEntry)
+		sh.order = nil
+		sh.head = 0
+		sh.retainedPre = map[string]auditRetainedPreEntry{}
+		sh.retainedPreOrder = nil
+		sh.retainedPreHead = 0
+		sh.mu.Unlock()
+	}
 	auditTimingPollCountForTest.Store(0)
 	auditTimingSweepVisitsForTest.Store(0)
-	auditRetainedPreEntries = map[string]auditRetainedPreEntry{}
-	auditRetainedPreOrder = nil
-	auditRetainedPreHead = 0
+	auditTimingLiveEntries.Store(0)
+	auditRetainedPreLive.Store(0)
+	auditTimingCreateCountTotal.Store(0)
 }
 
 // seedAuditTimingEntryForTest 以指定建条时刻直接种入条目（含 FIFO 项——
-// 与生产建条路径同形，保证清扫不变量成立）。
+// 与生产建条路径同形，保证清扫不变量成立；路由到 id 所属分片）。
 func seedAuditTimingEntryForTest(id string, created time.Time) {
-	auditTimingMu.Lock()
-	auditTimingEntries[id] = &auditTimingEntry{created: created}
-	auditTimingOrder = append(auditTimingOrder, auditTimingQueueEntry{id: id, created: created})
-	auditTimingMu.Unlock()
+	sh := auditTimingShardFor(id)
+	sh.mu.Lock()
+	sh.entries[id] = &auditTimingEntry{created: created}
+	sh.order = append(sh.order, auditTimingQueueEntry{id: id, created: created})
+	sh.mu.Unlock()
+	auditTimingLiveEntries.Add(1)
 }
 
 // waitAuditLine 轮询等待临时审计文件出现一行可解析 JSON（上限 2s）。
@@ -1291,10 +1296,8 @@ func TestAuditTimingRegistry_sweep(t *testing.T) {
 		auditTimingRecord(fmt.Sprintf("bbbbbbbbbbbb%04x", i), timingSegmentPre, int64(i))
 	}
 
-	auditTimingMu.Lock()
-	_, staleExists := auditTimingEntries[stale]
-	count := len(auditTimingEntries)
-	auditTimingMu.Unlock()
+	staleExists := auditTimingEntryForTest(stale) != nil
+	count := auditTimingEntryCountForTest()
 	if staleExists {
 		t.Fatal("expired entry must be swept")
 	}
@@ -1321,10 +1324,8 @@ func TestAuditTimingRegistry_sweepClosesWaitedEntry(t *testing.T) {
 	if auditTimingPollCountForTest.Load() == 0 {
 		t.Fatal("wait did not observe the seeded unclosed entry")
 	}
-	auditTimingMu.Lock()
-	auditTimingSweepLocked(time.Now())
-	_, exists := auditTimingEntries[id]
-	auditTimingMu.Unlock()
+	auditTimingSweepExpired(time.Now())
+	exists := auditTimingEntryForTest(id) != nil
 	if exists {
 		t.Fatal("expired entry must still be removed from the registry")
 	}
@@ -1355,15 +1356,15 @@ func TestAuditTimingRegistry_sweepCostIsIncremental(t *testing.T) {
 		auditTimingRecord(fmt.Sprintf("%016x", 0x10000+i), timingSegmentPre, 0)
 	}
 
-	auditTimingMu.Lock()
-	entries := len(auditTimingEntries)
-	auditTimingMu.Unlock()
+	entries := auditTimingEntryCountForTest()
 	if entries < fresh {
 		t.Fatalf("fresh entries must survive, got %d", entries)
 	}
-	// 期间触发约 fresh/64≈78 次清扫：检查量 ≈ 过期条目数 + 每次一条未过期队首。
-	// 旧实现每次全表扫描 ⇒ 约 Σn/64 ≈ 19 万次检查。
-	if visits := auditTimingSweepVisitsForTest.Load(); visits > expired+2*(fresh/64) {
+	// 期间触发约 fresh/64≈78 次摊销清扫：每次清扫逐片检查队首（16 片 = 每次至
+	// 多 16 次 O(1) 队首检查，分片形态的常数因子），过期条目按队首弹出一次。
+	// 检查量 ≈ 过期条目数 + 清扫次数×片数——仍随「过期条目数」而非注册表规模
+	// 增长（旧单锁全表扫描形态 = Σn/64 ≈ 19 万次检查，远超本阈值）。
+	if visits := auditTimingSweepVisitsForTest.Load(); visits > expired+2*(fresh/64)*auditTimingShardCount {
 		t.Fatalf("sweep visited %d queue entries; want O(expired) not O(registry)", visits)
 	}
 }
@@ -1374,10 +1375,8 @@ func TestAuditTimingClose_requiresExistingEntry(t *testing.T) {
 	useTestAuditPipeline(t)
 	auditTimingClose("dddddddddddddddd")
 
-	auditTimingMu.Lock()
-	_, created := auditTimingEntries["dddddddddddddddd"]
-	count := len(auditTimingEntries)
-	auditTimingMu.Unlock()
+	created := auditTimingEntryForTest("dddddddddddddddd") != nil
+	count := auditTimingEntryCountForTest()
 	if created || count != 0 {
 		t.Fatalf("close must not create entries, got %d entries", count)
 	}
@@ -1627,11 +1626,8 @@ func TestAuditTimingRegistry_retainsPreAcrossEntryTTL(t *testing.T) {
 	auditTimingRecord(id, timingSegmentPre, 1234)
 	// 越过条目 TTL（useTestAuditPipeline 置 50ms）后清扫：模拟长请求仍在途中。
 	time.Sleep(80 * time.Millisecond)
-	auditTimingMu.Lock()
-	auditTimingSweepLocked(time.Now())
-	_, stillThere := auditTimingEntries[id]
-	auditTimingMu.Unlock()
-	if stillThere {
+	auditTimingSweepExpired(time.Now())
+	if auditTimingEntryForTest(id) != nil {
 		t.Fatal("expired timing entry must be swept")
 	}
 
@@ -1656,11 +1652,9 @@ func TestAuditTimingRegistry_preRetentionExpires(t *testing.T) {
 	const id = "ffffffffffffffff"
 	auditTimingRecord(id, timingSegmentPre, 7)
 	time.Sleep(80 * time.Millisecond)
-	auditTimingMu.Lock()
-	auditTimingSweepLocked(time.Now())                  // 条目过期 → pre 转保留区
-	auditTimingSweepLocked(time.Now().Add(time.Minute)) // 保留期同样过期 → 回收
-	retained := len(auditRetainedPreEntries)
-	auditTimingMu.Unlock()
+	auditTimingSweepExpired(time.Now())                  // 条目过期 → pre 转保留区
+	auditTimingSweepExpired(time.Now().Add(time.Minute)) // 保留期同样过期 → 回收
+	retained := auditRetainedPreLiveForTest()
 	if retained != 0 {
 		t.Fatalf("retained pre entries=%d, want 0（保留期到期必须回收）", retained)
 	}
