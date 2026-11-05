@@ -34,7 +34,6 @@ func (c *Cloudflare) CredentialFields() []CredentialField {
 		},
 		{
 			Name: "api_token", Label: "API Token", Type: "password", Required: true,
-			Placeholder: "粘贴 API Token",
 			VisibleWhen: visibleOnly("cloudflare"),
 			Description: "Cloudflare 面板 → My Profile → API Tokens 创建；权限需 Zone → DNS → Edit 与 Zone → Zone → Read，可限定到目标 zone",
 		},
