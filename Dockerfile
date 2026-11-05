@@ -313,6 +313,12 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=90s --retries=3 \
 
 EXPOSE 80 443 443/udp 8000
 
+# Go 运行时 GC 调优（2026-11-05 实测）：2 核打满的反代场景下 GC 占用显著 CPU——
+# GOGC=300 放宽回收目标（内存换 CPU，2C2G 反代 QPS +9%）；GOMEMLIMIT 兜住
+# 软上限防内存失控（实测峰值 ~180MB，离 1500MiB 上限极远）。
+ENV GOGC=300 \
+    GOMEMLIMIT=1500MiB
+
 # tini 作为 PID 1：回收任何被遗弃的子进程（健康检查/运维 exec/入口脚本），
 # 不再依赖部署方记得加 --init。信号由 tini 转发给入口脚本与面板进程。
 ENTRYPOINT ["/sbin/tini", "--", "/usr/local/bin/docker-entrypoint.sh"]
