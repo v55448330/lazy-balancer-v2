@@ -1549,14 +1549,21 @@ export const triggerStageFamily = (ruleTriggered: string): TriggerStageFamily =>
   const t = (ruleTriggered ?? '').trim()
   if (!t) return 'other'
   if (t === '11') return 'body'
+  const n = Number(t)
+  if (!Number.isFinite(n)) return 'other'
+  // ⓪ 阶段 1 预检逐策略链段（1500000+policyID ACL / 1510000+policyID 黑名单）
+  //    落在「≥1000000 合成」形态区间内，必须先于自定义形态正则排除——镜像
+  //    后端 securityEventsRuleIsCustomFamily 的 IsACLPrecheckRuleID 显式排除
+  //    （securityevents.go:1376）与 attackFamilyClassOf 的链段先行分支
+  //    （security.go:4984）。缺此排除时 IP ACL/威胁库黑名单拒绝事件被误标
+  //    WAF·自定义（2026-11-05 生产实测：1500002 落「旧版合成规则」兜底文案）。
+  if (n >= 1500000 && n < 1520000) return 'ipAcl'
   // ① 自定义规则 ID 形态（与后端 attackFamilyClassOf 分支同序）
   if (/^\d{5}$/.test(t)) return 'wafCustom'
   if (/^[1-7]\d{5}$/.test(t)) return 'wafCustom'
   if (/^1\d{6,}$/.test(t)) return 'wafCustom'
   // CRS 恒 6 位 9 开头（5 位 9xxxx 已由上方自定义分支覆盖）
   if (/^9\d{5}$/.test(t)) return 'wafCrs'
-  const n = Number(t)
-  if (!Number.isFinite(n)) return 'other'
   if (n >= CUSTOM_RULE_OR_CONDITION_ID_BASE) return 'wafCustom'
   // ② 固定 id 族（后端 legacyRuleFamilies 表派生口径）
   if (n === 3 || n === 5 || n === 12) return 'trust'

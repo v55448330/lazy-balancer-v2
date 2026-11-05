@@ -32,6 +32,16 @@ const cases: ReadonlyArray<readonly [string, TriggerStageFamily]> = [
   // 自定义规则：≥7 位 1 开头（无 id 规则合成 1000000+n）
   ['1000000', 'wafCustom'],
   ['1999999', 'wafCustom'],
+  // 阶段 1 预检逐策略链段（1500000+policyID ACL / 1510000+policyID 黑名单）：
+  // 7 位 1 开头形态与「≥1000000 合成」正则同形，必须先排除——镜像后端
+  // securityEventsRuleIsCustomFamily 的 IsACLPrecheckRuleID 显式排除与
+  // attackFamilyClassOf 的链段先行分支（2026-11-05 生产实测：1500002 误标
+  // WAF·自定义并落「旧版合成规则」兜底文案）
+  ['1500000', 'ipAcl'],
+  ['1500002', 'ipAcl'],
+  ['1509999', 'ipAcl'],
+  ['1510002', 'ipAcl'],
+  ['1519999', 'ipAcl'],
   // CRS：6 位 9 开头
   ['900000', 'wafCrs'],
   ['942100', 'wafCrs'],

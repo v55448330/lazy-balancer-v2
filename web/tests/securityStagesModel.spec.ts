@@ -522,10 +522,11 @@ test('阶段 1 明细：独立黑名单逐条可对账，且不受 ACL 开关门
 // WAF 耗时族：加和式（duration_us + precheck_us）只对 WAF 段独立计时的族成立；
 // 预检族 duration_us 恒等于 precheck_us，加和会翻倍。全仓单源谓词。
 test('WAF 耗时族谓词：wafCrs/wafCustom/body 加和，预检族与未知不入族', () => {
-  for (const id of ['942100', '959999', '100123', '1500000', '11']) {
+  for (const id of ['942100', '959999', '100123', '11']) {
     assert.equal(isWafDurationFamily(triggerStageFamily(id)), true, `id ${id} 应属 WAF 耗时族`)
   }
-  for (const id of ['2', '3', '4', '7', '12', '14', '800123', '850123', '810123', '', 'not-a-rule']) {
+  // 1500000（阶段 1 预检 ACL 链段）是预检族——曾因 1\d{6,} 正则误归 wafCustom 被钉在此处，随链段排除修正移出
+  for (const id of ['2', '3', '4', '7', '12', '14', '800123', '850123', '810123', '1500000', '1510002', '', 'not-a-rule']) {
     assert.equal(isWafDurationFamily(triggerStageFamily(id)), false, `id ${id} 不应属 WAF 耗时族`)
   }
   // 与检测模式归因族的集合差异：body 加和但不由检测模式解释
