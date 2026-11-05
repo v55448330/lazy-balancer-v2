@@ -717,12 +717,15 @@ func (h *Handlers) ListDNSProviders(c *gin.Context) {
 				"placeholder": f.Placeholder,
 				"options":     p.CredentialFieldOptions(f.Name),
 			}
-			// 可见性/选项文案元数据（前端表单渲染单源，替代 provider 硬编码）
+			// 可见性/选项文案/字段描述元数据（前端表单渲染单源，替代 provider 硬编码）
 			if len(f.VisibleWhen) > 0 {
 				field["visible_when"] = f.VisibleWhen
 			}
 			if len(f.OptionLabels) > 0 {
 				field["option_labels"] = f.OptionLabels
+			}
+			if f.Description != "" {
+				field["description"] = f.Description
 			}
 			fieldList = append(fieldList, field)
 		}

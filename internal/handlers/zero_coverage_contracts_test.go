@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"lazy-balancer-v2/internal/services/dnsproviders"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -209,6 +210,22 @@ func TestListDNSProviders_returnsRegistryMetadata(t *testing.T) {
 		rest = append(rest, provider.Code)
 		if len(provider.Fields) == 0 {
 			t.Fatalf("提供商 %s 缺 credential_fields（前端表单无法渲染）", provider.Code)
+		}
+		// description 元数据必须与注册表声明对齐下发（CredentialField.Description
+		// → 前端 form-tip-line 渲染单源）：handler 响应白名单漏带时 FE 描述
+		// 静默消失。对账基准=注册表声明（声明了就必须在响应里）。
+		for _, f := range provider.Fields {
+			reg, ok := dnsproviders.Get(provider.Code)
+			if !ok {
+				t.Fatalf("提供商 %s 不在注册表", provider.Code)
+			}
+			for _, rf := range reg.CredentialFields() {
+				if rf.Name == f["name"] && rf.Description != "" {
+					if got, _ := f["description"].(string); got != rf.Description {
+						t.Fatalf("提供商 %s 字段 %s 的 description 未下发或与注册表不一致", provider.Code, rf.Name)
+					}
+				}
+			}
 		}
 	}
 	for j := 1; j < len(rest); j++ {
