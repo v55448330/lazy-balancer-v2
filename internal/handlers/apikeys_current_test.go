@@ -1,10 +1,12 @@
 package handlers
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -719,5 +721,71 @@ func TestUpdateAPIKeyStatus_whitelistChangeOnMCPKeyRequiresStepUp(t *testing.T) 
 	}
 	if whitelist != `["10.0.0.1/32"]` {
 		t.Fatalf("whitelist=%q，未通过 step-up 不得落库", whitelist)
+	}
+}
+
+// 状态更新必须是单事务形态：before 快照（审计 delta 的基准）与 UPDATE 在
+// 同一事务内取行/落库。两者分离时并发写者可在快照读取与更新之间插入提交，
+// 审计 delta 就会基于与实际更新脱节的旧状态。生产 DSN 开启 _txlock=immediate，
+// 事务开启即持写锁，快照到提交全程无插入窗口。函数体扫描钉源码契约
+// （技法同 autobackup_read_ctx_guard_test.go）：不得出现 db.DB 直连的
+// 单语句读/写/开事务（无事务边界且不消费 ctx），事务开启必须消费请求 ctx。
+func TestUpdateAPIKeyStatus_snapshotAndUpdateShareTransaction(t *testing.T) {
+	source, err := os.ReadFile("apikeys.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, ok := handlerFunctionBody(string(source), "func updateAPIKeyStatus(c *gin.Context, currentUserOnly bool) {")
+	if !ok {
+		t.Fatal("apikeys.go 中未找到 updateAPIKeyStatus（函数改名/内联会让本守卫失效）")
+	}
+	for _, banned := range []string{"db.DB.QueryRow(", "db.DB.Exec(", "db.DB.Query(", "db.DB.Begin("} {
+		if strings.Contains(body, banned) {
+			t.Fatalf("before 快照与 UPDATE 必须在同一事务内，函数体不得出现 %s", banned)
+		}
+	}
+	if !strings.Contains(body, "db.DB.BeginTx(c.Request.Context()") {
+		t.Fatal("更新事务必须以请求 ctx 开启（取消即中止）")
+	}
+}
+
+// 已取消的请求不得更新成功：事务开启消费请求 ctx，取消在事务开启处中止、
+// 零副作用——行保持原值、审计零留痕。事务化前快照与 UPDATE 各自 autocommit
+// 且不消费 ctx，已取消的请求仍会完整生效（200 + 落库 + 审计留痕）。
+func TestUpdateAPIKeyStatus_cancelledContextAborts(t *testing.T) {
+	database := setupAPIKeyTestDB(t)
+	if err := db.InitializeAuditDB(t.TempDir()); err != nil {
+		t.Fatalf("initialize audit db: %v", err)
+	}
+	gin.SetMode(gin.TestMode)
+	requestCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPatch, "/api/v1/api-keys/10/status", strings.NewReader(`{"is_enabled":false}`))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+	ctx.Request = ctx.Request.WithContext(requestCtx)
+	ctx.Params = gin.Params{{Key: "id", Value: "10"}}
+	ctx.Set("user_id", 1)
+	ctx.Set("role", "admin")
+
+	(&Handlers{}).UpdateAPIKeyStatus(ctx)
+
+	if recorder.Code == http.StatusOK {
+		t.Fatalf("status=%d body=%s，已取消的请求不得更新成功", recorder.Code, recorder.Body.String())
+	}
+	var enabled int
+	if err := database.QueryRow(`SELECT is_enabled FROM api_keys WHERE id=10`).Scan(&enabled); err != nil {
+		t.Fatal(err)
+	}
+	if enabled != 1 {
+		t.Fatalf("取消后 is_enabled=%d，请求中止不得落库", enabled)
+	}
+	var auditRows int
+	if err := db.AuditDB.QueryRow(`SELECT COUNT(*) FROM audit_log WHERE action='更新' AND resource='API密钥'`).Scan(&auditRows); err != nil {
+		t.Fatalf("read audit log: %v", err)
+	}
+	if auditRows != 0 {
+		t.Fatalf("取消后写入审计 %d 行，中止的请求不得留痕", auditRows)
 	}
 }

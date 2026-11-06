@@ -44,6 +44,14 @@ func TestAuditLogAndAutoBackupReadsConsumeRequestContext(t *testing.T) {
 			file: "autobackup.go", fn: "func (h *Handlers) DeleteAutoBackup(c *gin.Context) {",
 			markers: []string{"BeginTx(c.Request.Context()"},
 		},
+		{
+			// 同族契约：设置保存是 global_config 写者事务，开启点必须消费请求
+			// ctx——客户端在参数校验阶段断开时，已通过角色门的请求不得再开启
+			// 写事务落库（校验期取消即中止、零副作用）。事务内语句与提交同样
+			// 不单独取消（回滚由 defer 兜住，保存形态全有或全无）。
+			file: "autobackup.go", fn: "func (h *Handlers) UpdateAutoBackupSettings(c *gin.Context) {",
+			markers: []string{"BeginTx(c.Request.Context()"},
+		},
 		{file: "caddy.go", fn: "func (h *Handlers) GetConfig(c *gin.Context) {", markers: []string{"QueryRowContext(c.Request.Context()"}},
 		{file: "caddy.go", fn: "func (h *Handlers) GetCaddyStatus(c *gin.Context) {", markers: []string{"QueryRowContext(c.Request.Context()"}},
 		{file: "config_changes.go", fn: "func loadConfigSnapshot(ctx context.Context) (configSnapshot, error) {", markers: []string{"QueryRowContext(ctx"}},

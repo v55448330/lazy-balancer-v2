@@ -377,6 +377,10 @@ func (h *Handlers) RunAutoBackupOnce(ctx context.Context, trigger, operator stri
 		return autoBackupRowView{}, errors.New("已有备份任务正在执行，请稍后重试")
 	}
 	defer autoBackupRunMu.Unlock()
+	// 本临界区内各处审计写入属登记形态：autoBackupRunMu 是备份域写者单飞锁，
+	// 审计库写路径由 SQLite 单写方语义串行化，两锁无读者共享面（读者不经其中
+	// 任一把）。新增读者共享锁（读写同锁）时不得照抄——读者临界区内做审计
+	// INSERT 会把写库开销放大进读路径。
 
 	// 取消检查点——取消不是「备份失败」，不落 failed 行/审计。
 	if cerr := ctx.Err(); cerr != nil {
@@ -808,7 +812,10 @@ func (h *Handlers) UpdateAutoBackupSettings(c *gin.Context) {
 	}
 	// 四列设置与业务开关同事务——修复前设置先落库、开关后写，
 	// 开关失败返回 500 但频率/范围/保留份数已生效（半保存）。
-	tx, err := db.DB.Begin()
+	// 事务开启消费请求 ctx（参数校验阶段取消即中止、零副作用），与同文件
+	// DeleteAutoBackup 的 BeginTx 契约同口径；事务内语句与提交不单独取消
+	//（保存形态全有或全无，未提交事务由下方 defer 回滚兜住）。
+	tx, err := db.DB.BeginTx(c.Request.Context(), nil)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "保存自动备份设置失败: " + err.Error()})
 		return

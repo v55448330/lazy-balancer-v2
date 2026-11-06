@@ -546,6 +546,10 @@ func (session *configImportSession) close() {
 		// （WAF/证书/运行配置回退）已并入返回值，一并在此留痕。
 		abortErr := session.abort(errors.New("导入流程未完成"))
 		services.Logf("error", "配置%s收尾：导入流程未完成，已回滚: %v", session.actionLabel(), abortErr)
+		// 此审计写入在 caddyOpMu 写者单飞临界区内属登记形态：该锁只串行化配置
+		// 导入/还原写者，审计库写路径由 SQLite 单写方语义串行化，两锁无读者
+		// 共享面（读者不经其中任一把）。新增读者共享锁（读写同锁）不得照抄
+		// ——读者临界区内做审计 INSERT 会把写库开销放大进读路径。
 		services.RecordAuditLog("system", session.actionLabel()+"失败", "配置备份", "导入流程未完成，已回滚", "")
 	}
 	session.h.caddyOpMu.Unlock()

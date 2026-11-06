@@ -440,6 +440,21 @@ func updateAPIKeyStatus(c *gin.Context, currentUserOnly bool) {
 		}
 		whitelistJSON = &encoded
 	}
+	// 快照读取与 UPDATE 同事务（生产 DSN _txlock=immediate，事务开启即持
+	// 写锁）：审计 delta 的 before 值与实际更新之间不存在并发写者插入提交的
+	// 窗口，delta 永不基于脱节快照。事务开启消费请求 ctx（取消即中止、零副
+	// 作用）；早退路径（404/step-up/更新失败/提交失败）由 defer 回滚兜住。
+	tx, err := db.DB.BeginTx(c.Request.Context(), nil)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "更新 API 密钥失败"})
+		return
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
 	// 审计 delta 需要变更前的键状态（启用态/MCP/只读/
 	// 白名单），与更新同条件取行（currentUserOnly 时限定创建者）。
 	// 启用态取裸列（非 COALESCE）：鉴权侧 db.ResolveAPIKeyIdentity 对
@@ -457,7 +472,7 @@ func updateAPIKeyStatus(c *gin.Context, currentUserOnly bool) {
 	var beforeEnabledRaw sql.NullInt64
 	var beforeMCPEnabled, beforeReadOnly int
 	var beforeWhitelist string
-	if err := db.DB.QueryRow(query, args...).Scan(&name, &beforeEnabledRaw, &beforeMCPEnabled, &beforeReadOnly, &beforeWhitelist); dbQueryNotFound(c, err, "API 密钥不存在", "updateAPIKeyStatus query key") {
+	if err := tx.QueryRow(query, args...).Scan(&name, &beforeEnabledRaw, &beforeMCPEnabled, &beforeReadOnly, &beforeWhitelist); dbQueryNotFound(c, err, "API 密钥不存在", "updateAPIKeyStatus query key") {
 		return
 	}
 	beforeEnabled := 0
@@ -512,7 +527,7 @@ func updateAPIKeyStatus(c *gin.Context, currentUserOnly bool) {
 		update += " AND created_by = ?"
 		updateArgs = append(updateArgs, userID)
 	}
-	result, err := db.DB.Exec(update, updateArgs...)
+	result, err := tx.Exec(update, updateArgs...)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "更新 API 密钥失败"})
 		return
@@ -526,6 +541,12 @@ func updateAPIKeyStatus(c *gin.Context, currentUserOnly bool) {
 		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "API 密钥不存在"})
 		return
 	}
+	// 提交先于审计：审计（独立 AuditDB 连接）不得记录可能随后回滚的变更。
+	if err := commitTx(tx); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "更新 API 密钥失败"})
+		return
+	}
+	committed = true
 	// 更新审计记真 delta——启用态/MCP/只读/白名单是安全
 	// 相关变更，此前四个字段零留痕（同族先例：安全策略）。
 	auditDetail := services.FormatAuditDetail(fmt.Sprintf("密钥 %d", id), name)
