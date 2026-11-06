@@ -261,7 +261,7 @@
       <div v-loading="loadingContent" class="dialog-panel dialog-panel--flush"><SyntaxHighlight :content="currentContent" language="apacheconf" /></div>
     </el-dialog>
 
-    <el-dialog v-model="ruleDialogVisible" width="min(760px, 94vw)" class="custom-rule-dialog" top="6vh" :close-on-click-modal="false" :close-on-press-escape="!savingRule" :show-close="!savingRule">
+    <el-dialog v-model="ruleDialogVisible" width="min(880px, 94vw)" class="custom-rule-dialog" top="6vh" :close-on-click-modal="false" :close-on-press-escape="!savingRule" :show-close="!savingRule">
       <template #header>
         <DialogHeader :icon="Filter" :title="editingRuleId ? (isReadOnly ? '查看自定义规则' : '编辑自定义规则') : '新建自定义规则'"
           subtitle="按请求特征匹配并执行拦截 / 记录 / 计分动作，多条件可同时满足或任一满足" tone="danger" />
@@ -303,7 +303,7 @@
                 v-model="cond.header_name"
                 class="header-name-input"
                 placeholder="头名，如 Content-Encoding"
-                style="width: 150px"
+                style="width: 180px"
                 size="small"
                 maxlength="64"
                 :class="{ 'is-error': cond.target === 'headers' && cond.header_name !== undefined && cond.header_name !== '' && !isValidHeaderName(cond.header_name) }"
@@ -2169,12 +2169,12 @@ onUnmounted(() => {
 .crs-card :deep(.el-card__header) .crs-header { display: flex; justify-content: space-between; align-items: center; width: 100%; }
 .crs-card :deep(.el-card__header) .crs-header-title { display: flex; align-items: center; gap: 12px; }
 .rule-condition-row {
-  display: flex; gap: 10px; margin-bottom: 10px; align-items: center; flex-wrap: wrap;
+  display: flex; gap: 10px; margin-bottom: 10px; align-items: flex-start; flex-wrap: wrap;
   padding: 12px; background: #f9fafb; border: 1px solid #e5e7eb;
   position: relative; transition: border-color 0.2s;
 }
 .rule-condition-row:hover { border-color: #d1d5db; }
-.rule-condition-row .el-button--danger { margin-left: auto; align-self: center; }
+.rule-condition-row .el-button--danger { margin-left: auto; align-self: flex-start; }
 
 /* 弹框头库专属色（DialogHeader tone-class 透传；:deep 穿透子组件——本页弹框未 append-to-body） */
 :deep(.dh-icon.lib-icon--crs) { background: #eff6ff; color: #3b82f6; }
