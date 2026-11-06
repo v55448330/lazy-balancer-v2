@@ -136,6 +136,7 @@ func run() error {
 	dnspod.SetUserAgent(cfg.Version)
 	aliyun.SetUserAgent(cfg.Version)
 	tencent.SetLogf(services.Logf)
+	tencent.SetUserAgent(cfg.Version)
 	aliyun.SetLogf(services.Logf)
 	cloudflare.SetLogf(services.Logf)
 	cloudflare.SetUserAgent(cfg.Version)

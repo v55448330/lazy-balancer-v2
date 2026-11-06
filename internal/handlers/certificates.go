@@ -1112,9 +1112,22 @@ func (h *Handlers) IssueCertificate(c *gin.Context) {
 			// 冷却门禁与文案共用同一 now（边界 <1s 时不得出现「门禁拦截、文案 0s」）。
 			now := time.Now()
 			if blocked, statusCode, message := certJobRetryBlocked(jobStatus, jobUpdatedAt, jobCreatedAt, now); blocked {
-				auditFailure("blocked", message)
-				c.JSON(statusCode, models.APIResponse{Code: statusCode, Message: message})
-				return
+				// failed 行的通用失败冷却只约束自动通道——任务卡片重试已按同一
+				// 裁定豁免（RetryCertJob 的 cooldown_override 越冷留痕）；定向
+				// 「触发签发」是同等知情显式操作，冷却中放行。其余形状（退役 409、
+				// 在途执行中、部署退避窗口文案）不受裁定影响，按原语义拒绝。
+				if statusCode != http.StatusTooManyRequests || jobStatus != "failed" {
+					auditFailure("blocked", message)
+					c.JSON(statusCode, models.APIResponse{Code: statusCode, Message: message})
+					return
+				}
+				// 越冷提示不是失败——走「触发签发」动作的成功通道留痕（结果：
+				// cooldown_override），与任务卡片重试同型；防稀释要求与越冷审计
+				// 模式共用（借用 auditFailure 会先记「失败」、成功后又记一行，
+				// 同一操作先败后成）。真实失败路径（下方各拒绝/入队失败出口）
+				// 审计语义不变。
+				recordAudit(c, "触发签发", "证书", services.FormatAuditDetail(scope,
+					"定向重签越过失败冷却", message, services.AuditResultPart("cooldown_override")))
 			}
 			// waiting_ca 的 CA 退避窗口与任务重试共用同一契约：未到期且未
 			// force 时 429 并给出剩余时长，否则手动「重新签发」会把退避窗口

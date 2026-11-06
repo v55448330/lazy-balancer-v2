@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/http"
 	"strconv"
 	"strings"
 	"sync"
@@ -29,6 +30,36 @@ func SetLogf(f func(level, format string, args ...any)) {
 	if f != nil {
 		logf = f
 	}
+}
+
+// userAgent 默认值与 SetUserAgent 装配接缝（镜像 dnspod/aliyun/cloudflare 同款
+// 接缝）：main 启动早期注入 config.Version，UA 与 APP_VERSION 同源。SDK
+// common v1.3.159 构造请求不写 User-Agent（默认落 Go-http-client/1.1），client
+// /profile 亦无该设置面——版本化 UA 经 userAgentTransport 追加。
+var userAgent = "lazy-balancer/2.0"
+
+// SetUserAgent 装配出网 UA 的版本段（main 启动早期调用；空串忽略）。
+func SetUserAgent(v string) {
+	if v != "" {
+		userAgent = "lazy-balancer/" + v
+	}
+}
+
+// userAgentTransport 在出网请求上追加版本化 User-Agent。RoundTrip 契约不得
+// 修改调用方请求——先 Clone 再设头；Base 为 nil 时回落 http.DefaultTransport
+// （调用时解析，测试可临时替换底座捕获实际出网头）。
+type userAgentTransport struct {
+	Base http.RoundTripper
+}
+
+func (t *userAgentTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	request = request.Clone(request.Context())
+	request.Header.Set("User-Agent", userAgent)
+	base := t.Base
+	if base == nil {
+		base = http.DefaultTransport
+	}
+	return base.RoundTrip(request)
 }
 
 // ownedRecord 记录本实例创建的记录 ID 及其挑战值，CleanUpValue 据此只删
@@ -84,8 +115,9 @@ func New(secretID, secretKey string) (*Provider, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create tencent dnspod client: %w", err)
 	}
-	// 429/5xx 重试在传输层统一处理，瞬时 API 故障不再直接打挂挑战
-	client.WithHttpTransport(&retry.Transport{})
+	// 429/5xx 重试在传输层统一处理，瞬时 API 故障不再直接打挂挑战；
+	// UA wrapper 在重试外层——版本化 UA 对每次尝试都可见。
+	client.WithHttpTransport(&userAgentTransport{Base: &retry.Transport{}})
 	return &Provider{
 		secretID:  secretID,
 		secretKey: secretKey,
