@@ -28,15 +28,20 @@ func TestRecordTaskTriggerResult_admissionAndCancellationAreSilent(t *testing.T)
 		taskengine.ErrRunCancelled,
 		context.Canceled,
 		taskengine.ErrEngineStopped,
-		taskengine.ErrSchedulingPaused,
 	} {
 		RecordTaskTriggerResult("log-cleanup", TriggerAuditContext{Operator: "admin", Family: "任务监控", Name: "日志清理"}, err)
 	}
 	if after := count(); after != before {
 		t.Fatalf("admission 语义拒绝类错误不得记「触发失败」（before=%d after=%d）", before, after)
 	}
-	RecordTaskTriggerResult("log-cleanup", TriggerAuditContext{Operator: "admin", Family: "任务监控", Name: "日志清理"}, errors.New("boom"))
+	// 调度暂停不进静默清单：同步拒绝面（自动备份等）既定契约是拒绝必留审计，
+	// 此处保持同口径留痕（曾试改静默与该契约冲突，维持留痕为统一方向）。
+	RecordTaskTriggerResult("log-cleanup", TriggerAuditContext{Operator: "admin", Family: "任务监控", Name: "日志清理"}, taskengine.ErrSchedulingPaused)
 	if after := count(); after != before+1 {
+		t.Fatalf("调度暂停拒绝必须记「触发失败」审计（before=%d after=%d）", before, after)
+	}
+	RecordTaskTriggerResult("log-cleanup", TriggerAuditContext{Operator: "admin", Family: "任务监控", Name: "日志清理"}, errors.New("boom"))
+	if after := count(); after != before+2 {
 		t.Fatalf("真实失败必须记「触发失败」审计（before=%d after=%d）", before, after)
 	}
 }

@@ -31,10 +31,10 @@ type TriggerAuditContext struct {
 //     （记「触发失败」是语义失真）。
 //   - ErrTaskSkipped：Run 体「非故障放弃」（demote 中止等）——task_runs 已落
 //     skipped 行，静默。
-//   - ErrSchedulingPaused：导入窗口调度暂停（PauseScheduling 排空）——
-//     admission 拒绝已在响应可见，与 ErrAlreadyRunning/ErrEngineStopped
-//     同族静默（RecordTaskTriggerResult 清单注释披露 rationale）。
 //   - 其它错误：日志 + 「触发失败」补偿审计（任务未执行/失败不得无痕）。
+//     调度暂停（ErrSchedulingPaused）不进静默清单：同步拒绝面（自动备份等）
+//     的既定契约是拒绝必留审计，此处保持同口径（曾试改静默与该契约冲突，
+//     维持留痕为统一方向）。
 //
 // TriggerTaskAsync 同步完成 admission（暂停/停止/角色/单飞 CAS），成功后
 // 才异步执行并统一错误分类。调用方必须在写 HTTP 响应前消费返回错误，
@@ -69,12 +69,12 @@ func RecordTaskTriggerResult(taskID string, actx TriggerAuditContext, runErr err
 	}
 	if errors.Is(runErr, taskengine.ErrAlreadyRunning) || errors.Is(runErr, taskengine.ErrTaskSkipped) ||
 		errors.Is(runErr, taskengine.ErrRunCancelled) || errors.Is(runErr, context.Canceled) ||
-		errors.Is(runErr, taskengine.ErrEngineStopped) || errors.Is(runErr, taskengine.ErrSchedulingPaused) {
+		errors.Is(runErr, taskengine.ErrEngineStopped) {
 		// 用户取消（ErrRunCancelled/context.Canceled）与并发/跳过语义同级——
 		// task_runs 已落 cancelled 行，补记「触发失败」是语义失真。引擎已停止
-		// （关停窗口）与调度暂停（导入窗口 PauseScheduling 排空）同理：
-		// admission 拒绝不是任务失败，拒绝已在 HTTP 响应与 admission 失败面
-		// 可见，记「触发失败」误导排障。
+		// （关停窗口）同理：admission 拒绝不是任务失败，拒绝已在 HTTP 响应与
+		// admission 失败面可见。调度暂停不在此列：同步拒绝面（自动备份等）
+		// 既定契约是拒绝必留审计，此处保持同口径留痕。
 		return
 	}
 	Logf("error", "手动触发任务 %s 失败: %v", taskID, runErr)
