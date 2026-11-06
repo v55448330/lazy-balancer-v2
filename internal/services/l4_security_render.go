@@ -317,8 +317,13 @@ func l4SecCloseRoute(rule SingleRuleConfig, matchSets []interface{}, cid, reason
 	if pp := l4ProxyProtocolHandler(rule); pp != nil {
 		handle = append(handle, pp)
 	}
+	secHandler := l4SecEventHandler(cid, reason, policyID)
+	// TCP 拦截提示（2026-11-06 用户裁定）：断连前写入一行提示文本——全局
+	// 固定文案（branding app_name 注入），无配置项；透传路由（trust_detect/
+	// allow_sample）不发射。
+	applyTCPBlockNotice(secHandler)
 	handle = append(handle,
-		l4SecEventHandler(cid, reason, policyID),
+		secHandler,
 		map[string]interface{}{"handler": "close"},
 	)
 	return map[string]interface{}{

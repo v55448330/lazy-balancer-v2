@@ -106,6 +106,12 @@ type L4SecHandler struct {
 	// 的哨兵语义同源）。
 	XdbV6Path string `json:"xdb_v6_path,omitempty"`
 
+	// BlockNotice 可选：断连路由（reason 形态）在 close 前向客户端写入的
+	// 一行提示文本（TCP 拦截提示，2026-11-06 用户裁定——渲染侧单源生成，
+	// 无配置项）。Provision 校验形状（无控制字符、≤256 字节、UTF-8 允许）；
+	// 写入期统一追加 \r\n。透传形态（allow_sample/trust_detect）不写。
+	BlockNotice string `json:"block_notice,omitempty"`
+
 	ruleID   string
 	logger   *zap.Logger
 	counters *ruleConnCounters
@@ -144,6 +150,9 @@ func (h *L4SecHandler) Provision(ctx caddy.Context) error {
 		}
 	}
 	h.ruleID = h.RuleCaddyID
+	if err := validateBlockNotice(h.BlockNotice); err != nil {
+		return err
+	}
 	beginLoad(ctx)
 	h.counters = getOrCreateRuleCounters(h.ruleID)
 	acquirePipeline() // 惰性启动投递管线（进程级单例，见 shipper.go）
@@ -155,6 +164,24 @@ func (h *L4SecHandler) Provision(ctx caddy.Context) error {
 func (h *L4SecHandler) Cleanup() error {
 	if h.ruleID != "" && h.counters != nil {
 		deregisterRuleCounters(h.ruleID, h.counters)
+	}
+	return nil
+}
+
+// validateBlockNotice 校验 TCP 拦截提示形状：无控制字符（含 CRLF——写入期
+// 由本模块统一追加）、≤256 字节；UTF-8 品牌段允许。畸形=渲染单源 bug 信号，
+// fail-loud 拒绝配置加载。
+func validateBlockNotice(notice string) error {
+	if notice == "" {
+		return nil
+	}
+	if len(notice) > 256 {
+		return fmt.Errorf("lb_l4_sec: block_notice 超长（%d > 256 字节）", len(notice))
+	}
+	for _, r := range notice {
+		if r < 0x20 || r == 0x7F {
+			return fmt.Errorf("lb_l4_sec: block_notice 含控制字符（U+%04X）——换行由写入期统一追加", r)
+		}
 	}
 	return nil
 }
@@ -189,6 +216,11 @@ func (h *L4SecHandler) Handle(cx *layer4.Connection, next layer4.Handler) error 
 	h.counters.denied.Add(1)
 	line := buildL4EventLine(segID, msg, h.ruleID, ip, time.Now(), l4EventNonce(), true)
 	publishL4Event(line)
+	// TCP 拦截提示：close 前写入一行提示文本（渲染侧单源生成并校验形状）。
+	// 写失败=连接已死，静默继续断连（不刷日志——连接中断是常态路径）。
+	if h.BlockNotice != "" {
+		_, _ = cx.Write([]byte(h.BlockNotice + "\r\n"))
+	}
 	return next.Handle(cx)
 }
 

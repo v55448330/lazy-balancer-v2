@@ -44,6 +44,13 @@ import (
 // antiFallbackScanTargets 渲染层函数清单（写死兜底禁区），按源文件分组。
 // 批 3 起扫描面扩展到 security.go 渲染函数与 caddy.go 安全渲染消费函数。
 var antiFallbackScanTargets = map[string][]string{
+	// TCP 拦截提示（2026-11-06 用户裁定）：无 DB 字段，全局固定文案——
+	// 品牌段取 branding 内存快照，空值回退默认品牌（非「库值被静默替值」
+	// 形态：本函数治理范围外，Ruling 见 antiFallbackAllowlist）。
+	"l4_tcp_notice.go": {
+		"buildTCPBlockNotice",
+		"applyTCPBlockNotice",
+	},
 	// 认证网关（forward_auth）渲染族：buildHTTPHandleChain 可达（链首网关
 	// 子请求处理器与保存门）。buildForwardAuthHandler 对缺失/畸形显性报错
 	// （fail-loud，无省略型兜底字面量）；ValidateForwardAuthGatewayAddress
@@ -99,6 +106,13 @@ var antiFallbackScanTargets = map[string][]string{
 // antiFallbackAllowlist 允许列表：函数名 → 赋值形态 → Ruling。
 // 类型②省略型/范围外字段的现行兜底，逐条披露于批 1+2/批 3 Ruling 报告。
 var antiFallbackAllowlist = map[string]map[string]string{
+	// TCP 拦截提示品牌回退（2026-11-06 用户裁定）：该功能无 DB 字段——
+	// 文案 = "Connection blocked by " + branding app_name；app_name 空/未
+	// 注入回退默认品牌是产品语义（默认文案形态），不是「库值静默替值」：
+	// 渲染层唯一真相是 branding 内存快照 + 裁定默认，非省略型兜底（Ruling 2026-11-06）。
+	"buildTCPBlockNotice": {
+		"brand = tcpBlockNoticeFallbackBrand": "branding app_name 空/未注入 → 默认品牌 'Lazy Balancer v2'：功能无配置项，默认文案即裁定行为——Ruling 2026-11-06",
+	},
 	// 只有旧版单条件行（target/operator/pattern 列）没有 conditions 数组；
 	// OR 渲染需要把旧行还原成一条条件，属类型②省略型的兼容重建——写侧
 	// 保存/导入会归一成 conditions，存量行由本兜底保持可渲染（Ruling 2026-10-27）。

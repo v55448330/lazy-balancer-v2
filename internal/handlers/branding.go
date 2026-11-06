@@ -59,6 +59,9 @@ func StartupBrandingLog(dataDir string) {
 // 同生命周期:boot 时 main 调用 + GetBranding 每次请求幂等同步。
 func SyncDefaultLandingText(dataDir string) (bool, error) {
 	cfg := loadBrandingConfig(dataDir)
+	// TCP 拦截提示品牌段同源注入（boot + GetBranding 幂等同步同一入口）：
+	// services 渲染期读内存单源，零磁盘 IO。
+	services.SetTCPBlockNoticeBrand(cfg.AppName)
 	text := cfg.LandingText
 	if text == "" {
 		text = services.DefaultLandingText
