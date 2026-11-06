@@ -85,8 +85,8 @@ func eventSegment(reason string, policyID int64) (int64, string, bool) {
 //     归属累计，随后透传 proxy。
 //
 // client_ip 取 cx.RemoteAddr：规则开 PROXY protocol 时由渲染侧在其之前放置
-// layer4.handlers.proxy_protocol（caddy-l4 将连接改写为 PROXY 源地址），自然
-// 取得真实客户端；未渲染时降级 socket 对端。
+// layer4.handlers.lb_l4_pp（仓内模块，对受信网段来源把连接改写为 PROXY 声明
+// 源），自然取得真实客户端；未渲染或来源不受信时降级 socket 对端。
 type L4SecHandler struct {
 	// RuleCaddyID 归因键（事件头 X-LB-Rule-ID 与计数端点的 per-rule 键）。
 	RuleCaddyID string `json:"rule_caddy_id,omitempty"`

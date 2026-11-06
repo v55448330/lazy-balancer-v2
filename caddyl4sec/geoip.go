@@ -405,10 +405,10 @@ func (m *L4GeoIPMatcher) Match(cx *layer4.Connection) (bool, error) {
 
 // clientIPFromConn 取连接客户端 IP：cx.RemoteAddr 的 host 部分。规则开
 // PROXY protocol 时，渲染侧在 lb_l4_sec/lb_geoip 之前放置
-// layer4.handlers.proxy_protocol，该 handler 会把连接包装为 PROXY 头里的
-// 源地址（caddy-l4 v0.1.2 行为），本模块经 RemoteAddr 自然取得真实客户端，
-// 无需额外配置；PROXY handler 未渲染（规则未开/头缺失）时即 socket 对端——
-// 降级形态与契约披露一致。
+// layer4.handlers.lb_l4_pp，该 handler 对受信网段来源把连接包装为 PROXY
+// 头里的声明源（仓内模块，见 pp.go），本模块经 RemoteAddr 自然取得真实
+// 客户端，无需额外配置；PROXY handler 未渲染或来源不受信/头缺失时即
+// socket 对端——降级形态与契约披露一致。
 func clientIPFromConn(cx *layer4.Connection) string {
 	if cx == nil {
 		return ""
