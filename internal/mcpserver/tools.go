@@ -182,7 +182,7 @@ var toolUsage = map[string]string{
 	"update_ca_provider":           "更新 CA 提供商配置（名称/Provider/EAB 凭证/并发与限流/启用开关）；目录 URL 不在本工具契约内（请求字段无 directory_url，传入会被忽略）",
 	"test_ca_provider":             "测试 CA 提供商连接是否正常",
 	"get_cert_job":                 "获取指定证书签发任务的详细状态",
-	"get_cert_job_logs":            "查看指定证书任务的签发/续签日志",
+	"get_cert_job_logs":            "查看指定证书任务的签发/续签日志（尾部 256KB）；超预算截断时首行前置提示行[日志过长，仅显示最近 256KB]，响应携带 truncated 标记",
 	"parse_certificate":            "解析上传的证书内容（域名/有效期/颁发者）",
 	"create_user":                  "创建用户（管理员/只读）",
 	"update_user":                  "更新用户信息（显示名/角色）；初始化管理员（is_setup_admin=true）不可降级为普通用户（400）",

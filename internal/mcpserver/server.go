@@ -246,7 +246,7 @@ var tools = []toolSpec{
 	{"update_ca_provider", "更新指定 CA 提供商", http.MethodPut, "/ca-providers/{id}", []string{"id"}, nil, updateCAProviderSchema},
 	{"test_ca_provider", "测试指定 CA 提供商连接", http.MethodPost, "/ca-providers/{id}/test", []string{"id"}, nil, idSchema("id", "CA ID", "integer")},
 	{"get_cert_job", "获取指定证书签发任务详情", http.MethodGet, "/certificates/jobs/{id}", []string{"id"}, nil, idSchema("id", "任务 ID", "integer")},
-	{"get_cert_job_logs", "获取指定证书签发任务日志", http.MethodGet, "/certificates/jobs/{id}/logs", []string{"id"}, nil, idSchema("id", "任务 ID", "integer")},
+	{"get_cert_job_logs", "证书任务日志（尾部 256KB；超预算截断时首行前置提示行[日志过长，仅显示最近 256KB]，truncated=true 标记截断）", http.MethodGet, "/certificates/jobs/{id}/logs", []string{"id"}, nil, idSchema("id", "任务 ID", "integer")},
 	{"parse_certificate", "解析上传的证书内容", http.MethodPost, "/certificates/parse", nil, nil, parseCertificateSchema},
 	{"create_user", "创建用户", http.MethodPost, "/users", nil, nil, createUserSchema},
 	{"update_user", "更新指定用户（初始化管理员不可降级为普通用户——is_setup_admin=true 的行返回 400）", http.MethodPut, "/users/{id}", []string{"id"}, nil, updateUserSchema},

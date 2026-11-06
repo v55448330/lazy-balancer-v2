@@ -3002,13 +3002,17 @@ func TestAPIDocs_brandingEntryDisclosesTCPNoticeBrandRole(t *testing.T) {
 }
 
 // header_name 契约双载体对账（字段级独立钉面——conditions[] 嵌套字段不便
-// 并入既有 parity 门）：REST 披露句与 MCP schema description 必须同口径覆盖
-// target=headers 限定、token 长度与字符集、空值回退匹配全部头、越 target 400。
+// 并入既有 parity 门）：REST 创建/更新披露句与 MCP schema description 必须
+// 同口径覆盖 target=headers 限定、token 长度与字符集、空值回退匹配全部头、
+// 越 target 400。更新端点携带 conditions 时与创建走同一 validateConditions
+// 单源，披露句漂移或缺半句的回归形态在此红。
 func TestAPIDocs_customRuleHeaderNameDisclosureParity(t *testing.T) {
-	rest := routesEntry(t, "POST /security/custom-rules").Description
-	for _, marker := range []string{"header_name", "target=headers", "1-64 字符", "匹配全部头", "400"} {
-		if !strings.Contains(rest, marker) {
-			t.Errorf("REST 创建自定义规则披露句缺 %q: %s", marker, rest)
+	for _, key := range []string{"POST /security/custom-rules", "PUT /security/custom-rules/:id"} {
+		rest := routesEntry(t, key).Description
+		for _, marker := range []string{"header_name", "target=headers", "1-64 字符", "匹配全部头", "400"} {
+			if !strings.Contains(rest, marker) {
+				t.Errorf("%s 披露句缺 %q: %s", key, marker, rest)
+			}
 		}
 	}
 	mcpSource, err := os.ReadFile(filepath.Join("..", "mcpserver", "server.go"))

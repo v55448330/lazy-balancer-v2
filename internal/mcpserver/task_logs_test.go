@@ -82,3 +82,29 @@ func TestGetSystemTaskLogs_certJobMissingReturnsEmpty(t *testing.T) {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 	}
 }
+
+// get_cert_job_logs 双载体（tools.go usage / server.go spec）必须披露 256KB
+// 截断行为：REST 端点超预算时首行前置提示行并携带 truncated 标记
+// （readRotatedLogTail 单源），与 get_system_task_logs 同形态——漏披露会让
+// Agent 把截断尾部当完整日志消费。源码文本对账，措辞改写丢半句在此红。
+func TestGetCertJobLogs_descriptionsDiscloseTruncation(t *testing.T) {
+	for _, face := range []string{"tools.go", "server.go"} {
+		source, err := os.ReadFile(face)
+		if err != nil {
+			t.Fatalf("读取 %s 失败: %v", face, err)
+		}
+		start := strings.Index(string(source), `"get_cert_job_logs"`)
+		if start < 0 {
+			t.Fatalf("%s 缺 get_cert_job_logs 载体", face)
+		}
+		carrier := string(source)[start:]
+		if end := strings.Index(carrier, "\n"); end >= 0 {
+			carrier = carrier[:end]
+		}
+		for _, marker := range []string{"256KB", "日志过长，仅显示最近 256KB", "truncated"} {
+			if !strings.Contains(carrier, marker) {
+				t.Errorf("%s get_cert_job_logs 载体缺截断披露 %q: %s", face, marker, carrier)
+			}
+		}
+	}
+}
