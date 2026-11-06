@@ -22,8 +22,10 @@ import (
 
 // waitRunCeiling：等待「执行发生」的上限。这些 select 是就绪等待而非行为
 // 断言（下限由槽地板决定，上限只防挂死），全量套件并行跑包时 SQLite 争用会
-// 把 20ms 地板拖到秒级——2s 上限曾在 `scripts/test-all.sh` 全量下假红。
-const waitRunCeiling = 15 * time.Second
+// 把 20ms 地板拖到秒级——2s 上限曾在 `scripts/test-all.sh` 全量下假红；15s
+// 上限在全量负载峰值下仍会饿死（该次全包拖到 198s，执行 goroutine 16s 未被
+// 调度），天花板只防挂死故放宽到 45s。
+const waitRunCeiling = 45 * time.Second
 
 // 缩短槽重评地板（默认 1min 在测试时间尺度外）——包级单测串行执行；地板是
 // 原子值（tick 读 vs 本 cleanup 写回并发，见 engine.go 的声明注释）。
