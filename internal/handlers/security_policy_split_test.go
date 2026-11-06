@@ -143,9 +143,10 @@ func TestSplitSecurityPolicy_threeChildrenAndRemap(t *testing.T) {
 }
 
 // 协议门（与四个绑定写路径同一单源判定 loadRuleBindingTarget）：拆分重映射
-// 不得把 legacy TCP 绑定复制到子策略——TCP 链（buildTCPServer）不消费安全
-// 策略，复制即「UI 宣称受保护、运行态零强制」+ 挤占 maxBindingsPerRule 额度。
-// 带外形态：正常写路径已有协议门，TCP 绑定行只能来自旧版本遗留/带外直写。
+// 不得把 legacy TCP 绑定复制到含限流/WAF（G2/G3）特征的子策略——TCP 渲染链
+// 只消费阶段 0/1 特征（buildTCPSecurityRoutes），复制即「UI 宣称受保护、
+// 运行态零强制」+ 挤占 maxBindingsPerRule 额度。带外形态：正常写路径已有
+// 协议门，TCP 绑定行只能来自旧版本遗留/带外直写。
 func TestSplitSecurityPolicy_tcpBindingSkippedAndOriginalKept(t *testing.T) {
 	setupSecurityPolicyTestDB(t)
 	router := splitRouter(t)

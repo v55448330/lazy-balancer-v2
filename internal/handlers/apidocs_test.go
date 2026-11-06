@@ -2795,3 +2795,105 @@ func TestAPIDocs_upstreamHealthExampleKeysMatchImplementation(t *testing.T) {
 func TestAPIDocs_connectionStatsExampleKeysMatchImplementation(t *testing.T) {
 	assertStructKeysDocumented(t, "GET /metrics/connections", mapKeysOf(docResponseExample(t, "GET /metrics/connections")), models.ConnectionStats{})
 }
+
+// 触发阶段筛选（rule_triggered）文档对表：固定预置八类是用户裁定口径，单源=
+// 前端 web/src/utils/triggeredFilter.ts 的 TRIGGERED_CATEGORIES（与后端
+// ruleTriggeredFamilyPrefixes 家族表同语义）。REST queryParameters 与 MCP
+// securityEventsSchema 两份文案必须逐类覆盖该单源，任一侧漏类/私增类即红。
+func TestAPIDocsAndMCPSchemaTriggeredCategoriesMatchFrontendSingleSource(t *testing.T) {
+	feSource, err := os.ReadFile(filepath.Join("..", "..", "web", "src", "utils", "triggeredFilter.ts"))
+	if err != nil {
+		t.Fatalf("读取前端触发阶段筛选单源失败: %v", err)
+	}
+	crawlerLabel := regexp.MustCompile(`export const CRAWLER_FAMILY_LABEL = '([^']+)'`).FindStringSubmatch(string(feSource))
+	if len(crawlerLabel) != 2 {
+		t.Fatal("前端单源缺 CRAWLER_FAMILY_LABEL 定义")
+	}
+	blocks := regexp.MustCompile(`export const TRIGGERED_CATEGORIES = \[([^\]]*)\]`).FindStringSubmatch(string(feSource))
+	if len(blocks) != 2 {
+		t.Fatal("前端单源缺 TRIGGERED_CATEGORIES 定义")
+	}
+	categories := make([]string, 0, 8)
+	for _, item := range regexp.MustCompile(`'([^']+)'|([A-Za-z_][A-Za-z0-9_]*)`).FindAllStringSubmatch(blocks[1], -1) {
+		switch {
+		case item[1] != "":
+			categories = append(categories, item[1])
+		case item[2] == "CRAWLER_FAMILY_LABEL":
+			categories = append(categories, crawlerLabel[1])
+		default:
+			t.Fatalf("前端 TRIGGERED_CATEGORIES 出现未解析项 %q（需同步扩充本钉的标识符解析）", item[2])
+		}
+	}
+	if len(categories) != 8 {
+		t.Fatalf("前端触发阶段预置类数=%d，固定预置八类契约被改动", len(categories))
+	}
+
+	var restDescription string
+	for _, parameter := range apiDocContracts["GET /security/events"].queryParameters {
+		if parameter.name == "rule_triggered" {
+			restDescription = parameter.description
+		}
+	}
+	if restDescription == "" {
+		t.Fatal("GET /security/events 的 queryParameters 缺 rule_triggered 登记")
+	}
+	serverSource, err := os.ReadFile(filepath.Join("..", "mcpserver", "server.go"))
+	if err != nil {
+		t.Fatalf("读取 MCP server 源失败: %v", err)
+	}
+	mcpDescription := regexp.MustCompile(`"rule_triggered":\{"type":"string","description":"([^"]+)"\}`).FindStringSubmatch(string(serverSource))
+	if len(mcpDescription) != 2 {
+		t.Fatal("MCP securityEventsSchema 缺 rule_triggered 描述")
+	}
+	for _, label := range categories {
+		if !strings.Contains(restDescription, label) {
+			t.Errorf("REST rule_triggered 文案缺触发阶段类别 %q：%s", label, restDescription)
+		}
+		if !strings.Contains(mcpDescription[1], label) {
+			t.Errorf("MCP rule_triggered schema 缺触发阶段类别 %q：%s", label, mcpDescription[1])
+		}
+	}
+}
+
+// 绑定族文档与 TCP 能力门同形：四个绑定写路径（单条 bind/原子替换/batch-bind/
+// bulk）的 TCP 分支都走 tcpSecurityBindingGate——batch-bind 的 skipped 示例/
+// 描述与单条 bind 的 400 家族必须呈现门形态（G2/G3 拒绝、混合迁移、限流唯一），
+// 不得再断言「TCP 规则不经过安全链」的旧行为（该文案仅存续于已停用的
+// batch-block-pages 端点）。
+func TestAPIDocsBindingEndpointsMatchTCPGateShape(t *testing.T) {
+	batchBind := routesEntry(t, "POST /security/policies/batch-bind")
+	if strings.Contains(batchBind.Response, "不经过安全链") {
+		t.Errorf("batch-bind skipped 示例仍断言 TCP 旧行为: %s", batchBind.Response)
+	}
+	if !strings.Contains(batchBind.Response, "含 TCP 不支持的能力（限流/WAF）") {
+		t.Errorf("batch-bind skipped 示例未呈现能力门文案: %s", batchBind.Response)
+	}
+	if !strings.Contains(batchBind.Description, "能力门") {
+		t.Errorf("batch-bind 描述未披露 TCP 绑定能力门: %s", batchBind.Description)
+	}
+
+	bind := routesEntry(t, "POST /security/policies/:id/bind")
+	for _, marker := range []string{"混合策略", "限流", "TCP"} {
+		found := false
+		for _, entry := range bind.Errors {
+			if strings.HasPrefix(entry, "400") && strings.Contains(entry, marker) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("单条 bind 400 家族缺 %q 拒绝形态（混合迁移/限流唯一/TCP 能力门）", marker)
+		}
+	}
+}
+
+// 威胁情报库/爬虫地址库两族写操作仅开放面板与 REST（MCP 无 toggle/trigger
+// 工具；CRS/IP2Region 同族端点有）——读取端点文档必须披露该能力面差异，
+// Agent 消费者才不会在 MCP 通道寻找不存在的工具。
+func TestAPIDocsRestOnlySecurityLibrariesDiscloseMCPToolAbsence(t *testing.T) {
+	for _, key := range []string{"GET /security/threat-lib", "GET /security/crawler-lib"} {
+		if !strings.Contains(routesEntry(t, key).Description, "MCP 未提供工具") {
+			t.Errorf("%s 文档缺「MCP 未提供工具」披露句: %s", key, routesEntry(t, key).Description)
+		}
+	}
+}

@@ -2541,9 +2541,9 @@ func (h *Handlers) BindRuleToPolicy(c *gin.Context) {
 	// 绑定前校验规则真实存在：悬挂绑定虽在 JOIN 中不可见，但会经集群同步传播
 	// 并污染 GetAllSecurityBindings 消费方。与策略校验同口径先判
 	// err 再判存在性：DB 瞬时故障（锁/IO）时不得把故障误报为「规则不存在」400，
-	// 客户端无法区分重试与真 400。protocol 同行判定——TCP 规则走 caddy-l4
-	// 构建链（buildTCPServer），该链从不消费安全策略，绑定成立即「UI 宣称受
-	// 保护、实际零强制」的稳态漂移。
+	// 客户端无法区分重试与真 400。protocol 同行判定——TCP 规则可绑阶段 0/1
+	// 特征策略，含 G2（限流）/G3（WAF）特征的策略由 tcpSecurityBindingGate
+	// 能力门拒绝（契约 C4，见下方调用）。
 	target, err := loadRuleBindingTarget(caddyWriteCtx(c), tx, req.RuleCaddyID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
@@ -3263,7 +3263,8 @@ func (h *Handlers) BulkUpdatePolicyBindings(c *gin.Context) {
 
 // BatchBindSecurityPolicies 批量绑定安全策略（规则列表多选浮动操作条）：
 // {rule_ids:[], policy_ids:[], mode:"merge"|"replace"}。单事务：策略存在性
-// 一次校验；逐规则存在且 protocol=http（否则进 skipped+reason）；merge=现有
+// 一次校验；逐规则存在（否则进 skipped+reason；TCP 规则走绑定能力门，
+// 含限流/WAF 特征的策略进 skipped）；merge=现有
 // ∪请求去重后不超 maxBindingsPerRule（超限进 skipped）、replace=直接采用请求集
 // （同上限）；逐规则
 // DELETE（replace 或绑定变化时）+INSERT OR IGNORE；全程一次 finishTxApply
@@ -3925,8 +3926,9 @@ func (h *Handlers) SplitSecurityPolicy(c *gin.Context) {
 	skipped := make([]skippedRule, 0)
 	for _, ruleID := range boundRules {
 		// 协议门（与四个绑定写路径同一单源判定 loadRuleBindingTarget）：TCP
-		// 规则不走 WAF/IP 访问控制/限流链（buildTCPServer 不消费安全策略），
-		// 子策略复制绑定即「UI 宣称受保护、运行态零强制」+ 挤占
+		// 渲染链只消费阶段 0/1 特征（buildTCPSecurityRoutes：信任/IP ACL/
+		// 黑名单/GeoIP）——拆分产出含 G2（限流）/G3（WAF）特征的子策略复制
+		// 绑定到 TCP 规则即「UI 宣称受保护、运行态零强制」+ 挤占
 		// maxBindingsPerRule 额度——进 skipped 保留原绑定（与上限/stage2 门
 		// 同口径）。带外形态：正常写路径已有协议门，非 HTTP 绑定行只能来自
 		// 旧版本遗留/带外直写；规则行已删的悬挂绑定同门跳过，避免把悬挂行
