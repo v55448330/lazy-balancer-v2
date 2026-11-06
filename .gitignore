@@ -108,3 +108,6 @@ docs/audit/
 **/*audit[0-9]*/
 **/*round[0-9]*/
 # <<< audit-artifact patterns
+
+# 本地开发容器覆盖层（开发线 beta 通道，不入库）
+docker-compose.override.yml
