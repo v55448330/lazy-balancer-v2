@@ -27,3 +27,10 @@ export const isValidHeaderName = (name: string): boolean => HEADER_NAME_RE.test(
 
 /** 保存门谓词：空串放行（=匹配全部头的值）；非空必须是合法 token。 */
 export const headerNameSaveAllowed = (name: string | undefined): boolean => !name || isValidHeaderName(name)
+
+// 条件目标的展示 token 单源：headers 条件带头名=限单头（headers[头名]），
+// 空头名=匹配全部头的值（无后缀）。两种拦截语义在只读展示面必须可区分，
+// 各消费面自持 target 拼接曾使头名限定不可见（规则列表条件 chips 与流程
+// 弹框 targets 投影共用本 token）。
+export const conditionTargetLabel = (target: string, headerName?: string): string =>
+  target === 'headers' && headerName ? `headers[${headerName}]` : target

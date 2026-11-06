@@ -150,6 +150,14 @@ body {
    特异性 0,1,0 靠源序覆盖其灰字色）。 */
 .port-warning { color: #eab308; }
 
+/* 输入框校验红框全局单源：手动挂 is-error 的 el-input/el-input-number 由此渲染
+   红框（Element Plus 内置 is-error 仅作用于 el-form-item 校验链，动态条件行不在
+   其中）。特异性 (0,2,1) 胜 wrapper 的 hover/focus 态，红框不闪失；历史上
+   Rules 上游列/PathRulesEditor 行诊断/SecurityRules 条件行三处异构实现已收敛到
+   本规则（scoped 副本已删）。 */
+.el-input.is-error .el-input__wrapper,
+.el-input-number.is-error .el-input__wrapper { box-shadow: 0 0 0 1px var(--el-color-danger, #f56c6c) inset; }
+
 
 /* 同行卡片等高：el-col 拉伸使内部 el-card 填满列高（内容不足留白） */
 .equal-height-row { display: flex; flex-wrap: wrap; align-items: stretch; }
@@ -399,7 +407,6 @@ body .rule-lock-popper :is(.lock-stage, .lock-policy-group) { border-radius: 0; 
   .oidc-step,
   .reg-info,
   .log-container,
-  .tm-detail-desc,
   .tm-log-container
 ) {
   border-radius: 0;

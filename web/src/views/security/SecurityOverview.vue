@@ -546,12 +546,6 @@ onMounted(() => { void reloadAll() })
 .card-title { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; color: #111827; }
 /* 等宽统计卡行:flex 五列严格等宽(原 el-col 5/5/5/5/4 末卡窄 20%) */
 .overview-card { height: 100%; }
-.stat-row { display: flex; gap: 16px; }
-.stat-col { flex: 1 1 0; min-width: 0; }
-/* 规则库状态 4 块：桌面单行等宽；紧凑图标/间距/字号保证版本与库名不换行。
-   中屏 2×2、手机单列，避免 3+1 的孤立末行。 */
-.lib-stat-row { gap: 12px; }
-.lib-stat-row .status-strip-card :deep(.el-card__body) { padding: 20px 24px; }
 /* 左右分区：左=防护三 KPI（横排大数值，竖分隔线），右=规则库竖清单。
  * 两种信息各自形态，不再互相挤压。 */
 .status-strip { display: flex; align-items: stretch; }

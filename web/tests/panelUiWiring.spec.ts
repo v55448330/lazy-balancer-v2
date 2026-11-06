@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { code, cssDeclarations, enclosingDecl, member, openTags, section, stripComments, source } from './_helpers.ts'
+import { code, cssDeclarations, enclosingDecl, member, openTags, repoCode, section, stripComments, source } from './_helpers.ts'
 
 test('当前密码错误在页面本地 toast，拦截器复用精确分类', () => {
   const profile = code('src/components/ProfileDialog.vue')
@@ -223,6 +223,19 @@ test('自动封禁口径文案与后端喂入门同口径（WAF·CRS+自定义�
   assert.doesNotMatch(events, /WAF 事件固定窗口计数/)
   assert.match(events, /WAF 拦截（CRS 规则与自定义规则命中，已验证爬虫豁免除外）固定窗口计数/)
   assert.match(events, /IP 访问控制、地域拦截与威胁情报事件不参与计数/)
+  // 跨栈对表（repoCode 剥注释后钉函数体谓词）：后端族门任一谓词改动即红——
+  // 文案↔裁定漂移（喂入口径扩/缩而文案不动）不再无声复发。
+  const autoban = repoCode('internal/services/autoban.go')
+  assert.match(
+    autoban,
+    /func autobanStage3Eligible\(ruleTriggered string\) bool \{\n\treturn securityEventsRuleIsCustomFamily\(ruleTriggered\) \|\| securityEventsRuleIsCRSFamily\(ruleTriggered\)\n\}/,
+    '阶段门必须=自定义族∪CRS 族两谓词（文案计数集的权威来源）',
+  )
+  assert.match(
+    autoban,
+    /func autobanSourceEligible\(ruleTriggered string\) bool \{\n\treturn !securityEventsIsCrawlerExemptRule\(ruleTriggered\)\n\}/,
+    '爬虫豁免必须保持独立排除条款（文案「已验证爬虫豁免除外」的权威来源）',
+  )
 })
 
 test('IP 快捷弹框全流程使用 trim 后的地址（无裸 props.ip 消费）', () => {
@@ -293,7 +306,7 @@ test('自定义规则列表：条件关系独立成列、条件列加宽且长�
   assert.match(table, /<el-table-column label="条件" min-width="320" class-name="rule-cond-cell">/)
   // 每条条件一个单行 chip + tooltip 全文
   assert.match(table, /<div class="cond-chip-list">/)
-  assert.match(table, /<el-tooltip v-for="cond in row\.conditions" :key="`\$\{cond\.target\} \$\{cond\.operator\} \$\{cond\.pattern\}`" :content="`\$\{cond\.target\} \$\{cond\.operator\} \$\{cond\.pattern\}`"/)
+  assert.match(table, /<el-tooltip v-for="cond in row\.conditions" :key="`\$\{cond\.target\} \$\{cond\.header_name \?\? ''\} \$\{cond\.operator\} \$\{cond\.pattern\}`" :content="`\$\{conditionTargetLabel\(cond\.target, cond\.header_name\)\} \$\{cond\.operator\} \$\{cond\.pattern\}`"/)
   assert.match(table, /<el-tag size="small" effect="plain" class="cond-chip">/)
   // 组件侧不得再写局部覆盖（复用全局样式）
   assert.doesNotMatch(text, /:deep\(\.el-table \.cell:has\(\.el-tag\)\)/, '页级全局覆盖必须退役')

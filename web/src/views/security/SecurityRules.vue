@@ -147,8 +147,8 @@
                 <!-- 逐条单行 chip：长正则省略 + tooltip 全文，多条按行排布不挤压
                      （样式在 styles/main.css 的 .cond-chip-list/.cond-chip） -->
                 <div class="cond-chip-list">
-                  <el-tooltip v-for="cond in row.conditions" :key="`${cond.target} ${cond.operator} ${cond.pattern}`" :content="`${cond.target} ${cond.operator} ${cond.pattern}`" placement="top" :show-after="200">
-                    <el-tag size="small" effect="plain" class="cond-chip">{{ cond.target }} {{ cond.operator }} {{ cond.pattern }}</el-tag>
+                  <el-tooltip v-for="cond in row.conditions" :key="`${cond.target} ${cond.header_name ?? ''} ${cond.operator} ${cond.pattern}`" :content="`${conditionTargetLabel(cond.target, cond.header_name)} ${cond.operator} ${cond.pattern}`" placement="top" :show-after="200">
+                    <el-tag size="small" effect="plain" class="cond-chip">{{ conditionTargetLabel(cond.target, cond.header_name) }} {{ cond.operator }} {{ cond.pattern }}</el-tag>
                   </el-tooltip>
                 </div>
               </template>
@@ -797,7 +797,7 @@ import { formatInt } from '@/utils/formatInt'
 import { showSaveResult } from '@/utils/saveResult'
 import { cidrContains, isValidCidr } from '@/utils/ipAddress'
 import { IP_LIST_MAX_ENTRIES, canSaveIpList, mergeConcurrentBanEntries, needsEmptyListConfirm } from '@/utils/ipListSaveGuard'
-import { CUSTOM_RULE_MAX_CONDITIONS, CUSTOM_RULE_MAX_PATTERN_BYTES, canAddCondition, headerNameSaveAllowed, patternByteLength, patternOverLimit } from '@/utils/customRuleLimits'
+import { CUSTOM_RULE_MAX_CONDITIONS, CUSTOM_RULE_MAX_PATTERN_BYTES, canAddCondition, conditionTargetLabel, headerNameSaveAllowed, patternByteLength, patternOverLimit } from '@/utils/customRuleLimits'
 import {formatIpListEntryLine, parseIpListEntryLine} from '@/utils/ipListCsv'
 import { computeImportOutcome } from '@/utils/ipListImport'
 import { popperViewportSafe } from '@/utils/popper'
@@ -2230,8 +2230,6 @@ onUnmounted(() => {
 .ip-query-bar { display: flex; align-items: center; justify-content: flex-end; gap: 10px; margin: 0; margin-left: auto; min-width: 0; }
 .ip-query-bar .ip-query-input { width: 260px; flex: none; }
 .ip-query-bar .el-radio-group, .ip-query-bar .el-button { flex: none; }
-.ip-match-result { font-size: 12px; color: var(--el-color-primary); word-break: break-all; margin: 0 0 8px; text-align: right; }
-.ip-match-result.ip-match-none { color: var(--el-text-color-secondary); }
 .ip-entry-index { color: #9ca3af; font-variant-numeric: tabular-nums; }
 .entries-pagination { display: flex; justify-content: flex-end; margin-top: 8px; }
 .ip-entry-invalid :deep(.el-input__wrapper) { box-shadow: 0 0 0 1px var(--el-color-danger, #ef4444) inset; }
@@ -2253,11 +2251,6 @@ onUnmounted(() => {
 .update-log-container { min-height: 320px; max-height: 480px; overflow: auto; background: #1e293b; padding: 12px; }
 
 .ip2region-sources { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; }
-.ip2region-source-row { display: flex; align-items: center; gap: 12px; }
-.ip2region-source-name { flex: 0 0 88px; font-weight: 600; }
-.ip2region-source-ver { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--el-text-color-regular); }
-.ip2region-source-ver--off { color: var(--el-text-color-secondary); }
-.ip2region-source-msg { font-size: 12px; color: var(--el-text-color-secondary); }
 .lib-summary-tags { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .lib-health-tag { margin: 0; }
 .lib-summary-warn-text { color: #dc2626; font-weight: 600; font-size: 12px; margin-left: 4px; }

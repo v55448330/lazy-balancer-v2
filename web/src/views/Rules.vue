@@ -4589,13 +4589,7 @@ onUnmounted(() => {
 .upstream-table :deep(.el-table__body td .cell) { padding: 0 6px; }
 
 .upstream-input { width: 100%; }
-.upstream-input.is-error :deep(.el-input__wrapper) {
-  box-shadow: 0 0 0 1px #f56c6c inset;
-}
-/* 端口列（数字输入框窄列）同红框：host 与 port 缺一都算该行无效 */
-.upstream-input-small.is-error :deep(.el-input__wrapper) {
-  box-shadow: 0 0 0 1px #f56c6c inset;
-}
+/* 上游列红框由 main.css 全局 .el-input.is-error/.el-input-number.is-error 规则承担 */
 .upstream-input-small { width: 100%; }
 /* 数字输入框左侧空白收敛（2026-10-10 两轮用户反馈，根因实证）：EP
    el-input-number 的 .el-input__wrapper 恒 padding 42px 双侧（为侧排 +/- 预留），

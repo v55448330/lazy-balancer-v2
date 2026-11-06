@@ -5,6 +5,7 @@
 // 即 v2.3.1 逐策略归因默认层）。
 import type { RuleFlowPathRule } from '@/types/rules'
 import { hasOwn } from './hasOwn.ts'
+import { conditionTargetLabel } from './customRuleLimits.ts'
 import { toV4Long, toV6BigInt } from './ipAddress.ts'
 
 interface SecurityStageIPListEntry { value: string; remark?: string }
@@ -179,7 +180,7 @@ export interface SecurityStageCustomRule {
   score?: number
   enabled?: boolean
   condition_logic?: 'and' | 'or'
-  conditions?: Array<{ target: string; operator?: string; pattern?: string }>
+  conditions?: Array<{ target: string; operator?: string; pattern?: string; header_name?: string }>
 }
 
 export interface StageDetailSources {
@@ -871,7 +872,7 @@ const buildGroupDetails = (
       details.customRules = customIds.map((id) => {
         const rule = sources?.customRules?.find((r) => r.id === id)
         return rule
-          ? { id, name: rule.name, action: rule.action || 'block', targets: (rule.conditions ?? []).map((c) => c.target).join(' / '), score: rule.score ?? 0, enabled: rule.enabled !== false }
+          ? { id, name: rule.name, action: rule.action || 'block', targets: (rule.conditions ?? []).map((c) => conditionTargetLabel(c.target, c.header_name)).join(' / '), score: rule.score ?? 0, enabled: rule.enabled !== false }
           : { id, name: `规则 #${id}`, action: '-', targets: '', score: 0, enabled: true }
       })
     }

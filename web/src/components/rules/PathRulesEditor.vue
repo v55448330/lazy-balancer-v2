@@ -46,7 +46,7 @@
                 size="small"
                 :aria-label="`路径规则 ${index + 1} 的路径`"
                 placeholder="例如：/api"
-                :class="{ 'is-error-input': rowDiagnostics[index]?.pathError }"
+                :class="{ 'is-error': rowDiagnostics[index]?.pathError }"
               />
               <span v-if="rowDiagnostics[index]?.pathError" class="path-field-error">{{ rowDiagnostics[index]?.pathError }}</span>
               <span v-else-if="rowDiagnostics[index]?.shadow" class="path-field-warning">{{ rowDiagnostics[index]?.shadow }}</span>
@@ -65,7 +65,7 @@
                 size="small"
                 :aria-label="`路径规则 ${index + 1} 的上游路径`"
                 placeholder="留空=原样转发"
-                :class="{ 'is-error-input': rowDiagnostics[index]?.upstreamError }"
+                :class="{ 'is-error': rowDiagnostics[index]?.upstreamError }"
               />
               <span v-if="rowDiagnostics[index]?.upstreamError" class="path-field-error">{{ rowDiagnostics[index]?.upstreamError }}</span>
             </div>
@@ -116,7 +116,7 @@
           <label class="rule-field" style="flex: 1;">
             <span class="rule-field-label">跳转地址</span>
             <div class="rule-field-control">
-              <el-input v-model="rule.redirect_to" size="small" placeholder="https://example.com/new 或 /new/" :aria-label="`路径规则 ${index + 1} 的跳转地址`" :class="{ 'is-error-input': rowDiagnostics[index]?.responseError }" />
+              <el-input v-model="rule.redirect_to" size="small" placeholder="https://example.com/new 或 /new/" :aria-label="`路径规则 ${index + 1} 的跳转地址`" :class="{ 'is-error': rowDiagnostics[index]?.responseError }" />
               <span v-if="rowDiagnostics[index]?.responseError" class="path-field-error">{{ rowDiagnostics[index]?.responseError }}</span>
             </div>
           </label>
@@ -322,8 +322,5 @@ const onWeightChange = (rule: PathRule, index: number): void => {
   font-size: 12px;
   line-height: 1;
   color: var(--el-color-warning);
-}
-.is-error-input :deep(.el-input__wrapper) {
-  box-shadow: 0 0 0 1px var(--el-color-danger) inset;
 }
 </style>

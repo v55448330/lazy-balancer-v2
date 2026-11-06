@@ -14,7 +14,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { HEADER_NAME_RE, headerNameSaveAllowed, isValidHeaderName } from '../src/utils/customRuleLimits.ts'
+import { HEADER_NAME_RE, conditionTargetLabel, headerNameSaveAllowed, isValidHeaderName } from '../src/utils/customRuleLimits.ts'
 import { code, cssDeclarations, openTags, repoCode, section } from './_helpers.ts'
 
 const SECURITY_RULES = 'src/views/security/SecurityRules.vue'
@@ -93,4 +93,27 @@ test('警示样式单源：port-warning 全局类、regex-error-icon 警示色�
   assert.equal(occurrences, 1, 'ip-query-input 声明组逐字重复必须去重')
   const ipDecls = cssDeclarations(page, '.ip-query-bar .ip-query-input')
   assert.equal(ipDecls.get('width'), '260px', '去重保留级联实际生效值 260px')
+})
+
+test('条件目标的展示 token 单源：带头名限单头、空头名匹配全部头的值（可区分）', () => {
+  assert.equal(conditionTargetLabel('headers', 'Content-Encoding'), 'headers[Content-Encoding]', '带头名=限单头')
+  assert.equal(conditionTargetLabel('headers', ''), 'headers', '空头名=匹配全部头的值，不得出现空方括号')
+  assert.equal(conditionTargetLabel('headers', undefined), 'headers')
+  assert.equal(conditionTargetLabel('uri', 'Content-Encoding'), 'uri', '非 headers 目标不消费头名（脏值不外显）')
+})
+
+test('头名限定在只读展示面可见：规则列表条件 chips 与流程弹框 targets 投影均走单源 token', () => {
+  // 列表条件 chips（此前只拼 target+operator+pattern，带头名与空头名显示完全相同——
+  // 二者拦截语义截然不同：限单头 vs 扫全部头的值）。
+  const chipList = section(page, 'class="cond-chip-list"', '</div>')
+  assert.match(chipList, /conditionTargetLabel\(cond\.target, cond\.header_name\)/, 'chip 文本必须经单源 token')
+  assert.match(chipList, /:content="[^"]*conditionTargetLabel/, 'tooltip 全文同样经单源 token')
+  // key 必须含 header_name：仅头名不同的两条件不得撞 key。
+  assert.match(chipList, /:key="[^"]*cond\.header_name/, 'v-for key 必须区分仅头名不同的条件')
+
+  // 流程弹框 targets 投影（RuleFlowDialog 明细行）同样经单源 token。
+  const stages = code('src/utils/securityStages.ts')
+  assert.match(stages, /conditionTargetLabel\(c\.target, c\.header_name\)/, 'targets 投影必须经单源 token')
+  const ruleIface = section(stages, 'export interface SecurityStageCustomRule', '}')
+  assert.match(ruleIface, /header_name\?: string/, '投影源类型必须携带 header_name（后端列表 JSON 含该字段）')
 })

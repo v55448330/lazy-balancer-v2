@@ -279,3 +279,25 @@ test('createIpMatcher 与 entryMatchesIp 差分等价（v4/v6、CIDR 边界、�
   assert.equal(v6('0.0.0.0/0'), false)
   assert.equal(v4('::/0'), false)
 })
+
+test('attachStageDetails 阶段 3：targets 投影经 conditionTargetLabel（头名限定可区分）', () => {
+  // 带头名=限单头、空头名=扫全部头的值、非 headers 目标不消费头名——
+  // 三种条件在流程弹框明细行必须显示不同（此前 targets 只拼 target 串）。
+  const model: RuleStageModel = {
+    ruleDisabled: false,
+    hasAnyPolicy: true,
+    stages: [stageGroup(0, []), stageGroup(1, []), stageGroup(2, []), stageGroup(3, [{ key: 9, order: 0, name: '策略', enabled: true, rows: [] }])],
+  }
+  const customRules = [
+    { id: 11, name: '限单头', action: 'block', conditions: [{ target: 'headers', operator: 'equals', pattern: 'br', header_name: 'Content-Encoding' }] },
+    { id: 12, name: '全部头', action: 'block', conditions: [{ target: 'headers', operator: 'equals', pattern: 'br' }] },
+    { id: 13, name: '路径', action: 'log', conditions: [{ target: 'uri', operator: 'prefix', pattern: '/api', header_name: 'X-Stale' }] },
+  ]
+  const attached = attachStageDetails(model, {
+    policies: [policy({ id: 9, has_custom_rules: true })],
+    ipLists: [],
+    sources: { fullPolicies: new Map([[9, { id: 9, custom_rules: [11, 12, 13] }]]), customRules },
+  })
+  const rules = attached.stages[3]?.groups[0]?.details?.customRules ?? []
+  assert.deepEqual(rules.map((r) => r.targets), ['headers[Content-Encoding]', 'headers', 'uri'])
+})
