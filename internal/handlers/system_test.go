@@ -49,11 +49,49 @@ func TestGetAppLogs_reads_configured_log_file(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if !strings.Contains(envelope.Data.Content, "log-line-102") || !strings.Contains(envelope.Data.Content, "log-line-600") {
+	if !strings.Contains(envelope.Data.Content, "log-line-101") || !strings.Contains(envelope.Data.Content, "log-line-600") {
 		t.Fatalf("log content missing expected tail lines: %q", envelope.Data.Content)
 	}
-	if strings.Contains(envelope.Data.Content, "log-line-101\n") {
+	if strings.Contains(envelope.Data.Content, "log-line-100\n") {
 		t.Fatalf("log content kept more than 500 lines: %q", envelope.Data.Content)
+	}
+}
+
+// 以 \n 结尾的窗口按真实行数切片：行终止符产生的尾部空元素
+// 不计行数，超限窗口必须显示满 500 条真实行。
+func TestGetAppLogs_maxLinesCountsRealLines(t *testing.T) {
+	// Given：505 行且以 \n 结尾的日志文件
+	logPath := filepath.Join(t.TempDir(), "tail-lines.log")
+	var builder strings.Builder
+	for index := 1; index <= 505; index++ {
+		builder.WriteString(fmt.Sprintf("line-%d\n", index))
+	}
+	if err := os.WriteFile(logPath, []byte(builder.String()), 0o644); err != nil {
+		t.Fatalf("write log file: %v", err)
+	}
+	handler := &Handlers{cfg: &config.Config{LogFile: logPath}}
+	router := gin.New()
+	router.GET("/system/logs", handler.GetAppLogs)
+	response := httptest.NewRecorder()
+
+	// When
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/system/logs", nil))
+
+	// Then：恰好保留最后 500 条真实行（line-6…line-505）
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200", response.Code, response.Body.String())
+	}
+	var envelope struct {
+		Data struct {
+			Content string `json:"content"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	lines := strings.Split(envelope.Data.Content, "\n")
+	if len(lines) != 500 || lines[0] != "line-6" || lines[499] != "line-505" {
+		t.Fatalf("以 \\n 结尾的 505 行应保留最后 500 条真实行（line-6…line-505），实得 %d 个元素，首 %q 尾 %q", len(lines), lines[0], lines[len(lines)-1])
 	}
 }
 

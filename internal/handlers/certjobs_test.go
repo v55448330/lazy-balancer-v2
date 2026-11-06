@@ -1071,6 +1071,28 @@ func TestReadCertJobLogFile_tailWindowDropsPartialFirstLine(t *testing.T) {
 	}
 }
 
+// 以 \n 结尾的窗口按真实行数切片：Split 产生的尾部空元素是
+// 行终止符产物，不是一行，不得计入 maxLines——否则显示的真实行数
+// 恒比上限少一行。
+func TestReadLogTailWindow_maxLinesCountsRealLines(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "tail.log")
+	var builder strings.Builder
+	for i := 1; i <= 600; i++ {
+		fmt.Fprintf(&builder, "line-%d\n", i)
+	}
+	if err := os.WriteFile(path, []byte(builder.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := readLogTailWindow(path, 128<<10, 500)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	lines := strings.Split(got, "\n")
+	if len(lines) != 500 || lines[0] != "line-101" || lines[499] != "line-600" {
+		t.Fatalf("以 \\n 结尾的 600 行窗口应保留最后 500 条真实行（line-101…line-600），实得 %d 个元素，首 %q 尾 %q", len(lines), lines[0], lines[len(lines)-1])
+	}
+}
+
 // （2026-09-05 证书域审计裁定）：cert_expiry_days 读取失败不得放大为整个
 // 任务列表 500——降级默认 30 并告警，对齐 checkManualCertExpiration
 // 口径。种子任务 20 天后过期：默认阈值 30 下应判 expiring，证明降级取值真实生效。

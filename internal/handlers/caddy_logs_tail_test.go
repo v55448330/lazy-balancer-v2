@@ -10,6 +10,7 @@ package handlers
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -48,6 +49,48 @@ func TestTailLogWindow_shapes(t *testing.T) {
 	// 读不到前一个字节（窗口起点超出 src 长度）时保守丢弃首行残段。
 	if got := tailLogWindow(bytes.NewReader([]byte("短")), fragmentWindow, 100); string(got) != "完整行\n" {
 		t.Fatalf("无法判定边界时应保守丢弃首行, got %q", got)
+	}
+}
+
+// 以 \n 结尾的窗口按真实行数切片：行终止符产生的尾部空元素
+// 不计行数，超限窗口必须显示满 500 条真实行（与 GetAppLogs 同形状）。
+func TestGetCaddyLogs_maxLinesCountsRealLines(t *testing.T) {
+	// Given：505 行且以 \n 结尾的运行日志
+	h := newBackupTestHandlers(t)
+	logPath := filepath.Join(t.TempDir(), "caddy.log")
+	var builder strings.Builder
+	for i := 1; i <= 505; i++ {
+		fmt.Fprintf(&builder, "line-%d\n", i)
+	}
+	if err := os.WriteFile(logPath, []byte(builder.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	oldPaths := caddyLogPaths
+	caddyLogPaths = map[string]string{"runtime": logPath}
+	t.Cleanup(func() { caddyLogPaths = oldPaths })
+
+	router := gin.New()
+	router.GET("/caddy/logs", h.GetCaddyLogs)
+
+	// When
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/caddy/logs?type=runtime", nil))
+
+	// Then：恰好保留最后 500 条真实行（line-6…line-505）
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	var envelope struct {
+		Data struct {
+			Content string `json:"content"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(envelope.Data.Content, "\n")
+	if len(lines) != 500 || lines[0] != "line-6" || lines[499] != "line-505" {
+		t.Fatalf("以 \\n 结尾的 505 行应保留最后 500 条真实行（line-6…line-505），实得 %d 个元素，首 %q 尾 %q", len(lines), lines[0], lines[len(lines)-1])
 	}
 }
 

@@ -448,11 +448,16 @@ func (h *Handlers) GetSystemTaskLogs(c *gin.Context) {
 	if strings.HasPrefix(id, "cert-job:") {
 		keep = certJobLogMaxRotatedBackups
 	}
-	content, _, readErr := readRotatedLogTail(path, keep, tail, 0, tail)
+	content, truncated, readErr := readRotatedLogTail(path, keep, tail, 0, tail)
 	if readErr != nil {
 		services.Logf("error", "任务日志读取失败（%s, %s）: %v", id, "read", readErr)
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "任务日志读取失败"})
 		return
+	}
+	if truncated {
+		// 截断提示行与证书任务日志端点同形态：窗口外确有未纳入的
+		// 更早日志时必须前置提示，排障者不会把尾窗误读为全部日志。
+		content = "[日志过长，仅显示最近 256KB]\n" + content
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"content": content}})
 }

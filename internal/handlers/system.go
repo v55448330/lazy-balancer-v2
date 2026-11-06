@@ -208,7 +208,14 @@ func (h *Handlers) GetAppLogs(c *gin.Context) {
 	data = tailLogWindow(f, data, startOffset)
 	lines := strings.Split(string(data), "\n")
 	if len(lines) > maxLines {
-		lines = lines[len(lines)-maxLines:]
+		// 以 \n 结尾的窗口经 Split 会多出一个尾部空元素（行终止符不是
+		// 一行），按元素数切片会把空元素计作一行，少显示一行真实日志。
+		if lines[len(lines)-1] == "" {
+			lines = lines[:len(lines)-1]
+		}
+		if len(lines) > maxLines {
+			lines = lines[len(lines)-maxLines:]
+		}
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: map[string]string{"content": strings.Join(lines, "\n")}})
 }
