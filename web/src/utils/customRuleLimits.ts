@@ -16,3 +16,14 @@ export const patternByteLength = (value: string): number => utf8Encoder.encode(v
 export const canAddCondition = (count: number): boolean => count < CUSTOM_RULE_MAX_CONDITIONS
 
 export const patternOverLimit = (value: string): boolean => patternByteLength(value) > CUSTOM_RULE_MAX_PATTERN_BYTES
+
+// 头名 token 规则与后端 validateHeaderNameToken 同源（internal/services/security.go）：
+// 仅允许字母、数字与 '-'，1-64 字符——嵌入 SecRule REQUEST_HEADERS:<name> 形状必需。
+// 空串不是合法 token，但保存门放行：留空头名=匹配全部头的值（后端对空 header_name
+// 跳过 token 校验，语义一致）。两端字面量一致性由 tests/securityRuleHeaderName.spec.ts 钉住。
+export const HEADER_NAME_RE = /^[A-Za-z0-9-]{1,64}$/
+
+export const isValidHeaderName = (name: string): boolean => HEADER_NAME_RE.test(name)
+
+/** 保存门谓词：空串放行（=匹配全部头的值）；非空必须是合法 token。 */
+export const headerNameSaveAllowed = (name: string | undefined): boolean => !name || isValidHeaderName(name)

@@ -215,10 +215,14 @@ test('主列表失败可辨识（错误态 + 横幅重试 + 空态文案切换�
   assert.match(text, /policies\.value = polRes\.value\.data \|\| \[\]\s*\n\s*policiesLoadError\.value = false/)
 })
 
-test('自动封禁口径文案不再自缩为「WAF 事件」', () => {
+test('自动封禁口径文案与后端喂入门同口径（WAF·CRS+自定义两族，其余事件显式声明不计数）', () => {
   const events = code('src/views/security/SecurityEvents.vue')
+  // 后端 autobanStage3Eligible 只收 CRS+自定义两族（爬虫豁免独立排除）——
+  // 文案必须与真实喂入一致：既不得自缩为「WAF 事件」，也不得宣称 ACL/地域/
+  // 威胁情报计数（用户按文案校准阈值必须可达）。
   assert.doesNotMatch(events, /WAF 事件固定窗口计数/)
-  assert.match(events, /安全事件（IP 访问控制\/地域\/WAF\/威胁情报，已验证爬虫豁免除外）固定窗口计数/)
+  assert.match(events, /WAF 拦截（CRS 规则与自定义规则命中，已验证爬虫豁免除外）固定窗口计数/)
+  assert.match(events, /IP 访问控制、地域拦截与威胁情报事件不参与计数/)
 })
 
 test('IP 快捷弹框全流程使用 trim 后的地址（无裸 props.ip 消费）', () => {

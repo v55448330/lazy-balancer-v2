@@ -950,7 +950,7 @@
 
               <el-form-item v-if="wizardForm.protocol === 'tcp'" label="PROXY V2">
                 <el-switch v-model="wizardForm.tcp_proxy_protocol" />
-                <span class="form-tip-inline">开启后向上游发送 PROXY v2 协议头传递真实客户端 IP，需后端支持</span>
+                <span class="form-tip-inline">开启后向上游发送 PROXY v2 协议头传递真实客户端 IP，需后端支持；入站 PROXY 头仅在绑定了安全策略的 TCP 规则上解析，未绑定安全策略的规则上客户端伪造的 PROXY 头会原样透传给上游</span>
               </el-form-item>
             </template>
 
@@ -4388,7 +4388,8 @@ onUnmounted(() => {
 .tls-tag {
   min-width: 44px;
 }
-.port-warning { color: #eab308; }
+/* .port-warning 已收敛 styles/main.css（Rules/SecurityRules 两视图共用警示色；
+   scoped 定义对跨组件引用不生效） */
 
 /* 页内其余表格（日志统计等）单元格 padding——主规则表由更特异的
    .rules-table :deep(.el-table .cell)（0 6px）覆盖，两套密度为有意分层

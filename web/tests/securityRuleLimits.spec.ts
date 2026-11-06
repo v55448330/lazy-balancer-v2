@@ -48,7 +48,7 @@ test('pattern 上限按 UTF-8 字节求值（字符计数看不出中文超限�
 })
 
 test('自定义规则弹框消费同一上限（加条件按钮/字段级字节提示/保存前拦截）', () => {
-  assert.match(page, /import \{ CUSTOM_RULE_MAX_CONDITIONS, CUSTOM_RULE_MAX_PATTERN_BYTES, canAddCondition, patternByteLength, patternOverLimit \} from '@\/utils\/customRuleLimits'/)
+  assert.match(page, /import \{ CUSTOM_RULE_MAX_CONDITIONS, CUSTOM_RULE_MAX_PATTERN_BYTES, canAddCondition, headerNameSaveAllowed, patternByteLength, patternOverLimit \} from '@\/utils\/customRuleLimits'/)
   assert.match(page, /:disabled="!canAddCondition\(ruleForm\.conditions\.length\) \|\| savingRule"/, '满额/保存中必须禁用「+ 添加条件」')
   assert.match(page, /\{\{ ruleForm\.conditions\.length \}\}\/\{\{ CUSTOM_RULE_MAX_CONDITIONS \}\}/, '条件行数须可见')
   const patternRow = section(page, 'class="pattern-col"', 'cond.target === \'user_agent\'')

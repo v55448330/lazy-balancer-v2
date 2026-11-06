@@ -285,7 +285,7 @@
         <el-form-item label="条件">
           <div style="width: 100%">
             <div v-for="(cond, idx) in ruleForm.conditions" :key="idx" class="rule-condition-row">
-              <el-select v-model="cond.target" style="width: 120px" size="small">
+              <el-select v-model="cond.target" style="width: 120px" size="small" @change="onConditionTargetChange(cond)">
                 <el-option label="请求路径" value="uri" />
                 <el-option label="请求参数" value="args" />
                 <el-option label="请求头" value="headers" />
@@ -303,10 +303,9 @@
                 v-model="cond.header_name"
                 class="header-name-input"
                 placeholder="头名，如 Content-Encoding"
-                style="width: 180px"
                 size="small"
                 maxlength="64"
-                :class="{ 'is-error': cond.target === 'headers' && cond.header_name !== undefined && cond.header_name !== '' && !isValidHeaderName(cond.header_name) }"
+                :class="{ 'is-error': !headerNameSaveAllowed(cond.header_name) }"
               />
               <div class="pattern-col">
                 <div class="pattern-input-row">
@@ -798,7 +797,7 @@ import { formatInt } from '@/utils/formatInt'
 import { showSaveResult } from '@/utils/saveResult'
 import { cidrContains, isValidCidr } from '@/utils/ipAddress'
 import { IP_LIST_MAX_ENTRIES, canSaveIpList, mergeConcurrentBanEntries, needsEmptyListConfirm } from '@/utils/ipListSaveGuard'
-import { CUSTOM_RULE_MAX_CONDITIONS, CUSTOM_RULE_MAX_PATTERN_BYTES, canAddCondition, patternByteLength, patternOverLimit } from '@/utils/customRuleLimits'
+import { CUSTOM_RULE_MAX_CONDITIONS, CUSTOM_RULE_MAX_PATTERN_BYTES, canAddCondition, headerNameSaveAllowed, patternByteLength, patternOverLimit } from '@/utils/customRuleLimits'
 import {formatIpListEntryLine, parseIpListEntryLine} from '@/utils/ipListCsv'
 import { computeImportOutcome } from '@/utils/ipListImport'
 import { popperViewportSafe } from '@/utils/popper'
@@ -1747,10 +1746,6 @@ const regexResultText = (cond: CustomRuleCondition, idx: number): string => {
   return re!.test(ts) ? '匹配 ✓' : '不匹配 ✗'
 }
 
-// HTTP 头名 token：字母数字与 '-'（与后端 validateHeaderNameToken 同口径）
-const HEADER_NAME_RE = /^[A-Za-z0-9-]{1,64}$/
-const isValidHeaderName = (name: string): boolean => HEADER_NAME_RE.test(name)
-
 const isValidRegex = (pattern: string): boolean => {
   if (!pattern) return true
   return buildJSRegex(pattern).valid
@@ -1832,6 +1827,12 @@ const fetchCRS = async () => {
     crsInfoError.value = true
     crsInfoLoaded.value = true
   }
+}
+
+// 切走「请求头」后残留 header_name 会被后端拒收（header_name 仅 target=headers
+// 时支持），且 400 文案指向用户已不可见的字段——切换即清。
+const onConditionTargetChange = (cond: CustomRuleCondition) => {
+  if (cond.target !== 'headers') cond.header_name = undefined
 }
 
 const removeCondition = (idx: number) => {
@@ -2090,8 +2091,9 @@ const saveCustomRule = async () => {
       return
     }
     if (cond.operator === 'regex' && !isValidRegex(cond.pattern)) { ElMessage.error(`正则表达式语法错误：${cond.pattern}`); return }
-    if (cond.target === 'headers' && !isValidHeaderName(cond.header_name ?? '')) {
-      ElMessage.error('请求头条件需填写头名（仅字母、数字与 "-"，1-64 字符）');
+    // 空串放行=匹配全部头的值（与模板提示文案/后端契约一致）；非空必须合法 token。
+    if (cond.target === 'headers' && !headerNameSaveAllowed(cond.header_name)) {
+      ElMessage.error('请求头名仅允许字母、数字与 "-"（1-64 字符），留空则匹配全部头的值');
       return
     }
   }
@@ -2185,6 +2187,10 @@ onUnmounted(() => {
 .add-condition-btn { margin-top: 4px; }
 .pattern-col { flex: 1; min-width: 220px; display: flex; flex-direction: column; gap: 6px; }
 .pattern-input-row { display: flex; align-items: center; gap: 6px; }
+/* 头名输入宽度（原内联样式收敛）；类名兼作 securityRuleHeaderName 钉测的语义锚 */
+.header-name-input { width: 180px; flex: none; }
+/* 正则语法错误/超限警示图标：警示黄（与 regex-test-result.regex-invalid 同色） */
+.regex-error-icon { color: #f59e0b; flex: none; }
 .preset-section { flex: 1 1 100%; min-width: 0; width: 100%; margin-top: 4px; }
 .preset-header {
   cursor: pointer; padding: 2px 0; user-select: none;
@@ -2222,8 +2228,6 @@ onUnmounted(() => {
 .entries-head-bar :deep(.dsh-head) { margin: 0; flex: none; }
 .entries-head-bar :deep(.dsh-head h3) { white-space: nowrap; }
 .ip-query-bar { display: flex; align-items: center; justify-content: flex-end; gap: 10px; margin: 0; margin-left: auto; min-width: 0; }
-.ip-query-bar .ip-query-input { width: 220px; flex: none; }
-.ip-query-bar .el-radio-group, .ip-query-bar .el-button { flex: none; }
 .ip-query-bar .ip-query-input { width: 260px; flex: none; }
 .ip-query-bar .el-radio-group, .ip-query-bar .el-button { flex: none; }
 .ip-match-result { font-size: 12px; color: var(--el-color-primary); word-break: break-all; margin: 0 0 8px; text-align: right; }

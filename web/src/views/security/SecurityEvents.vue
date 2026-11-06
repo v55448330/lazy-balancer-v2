@@ -294,10 +294,11 @@
     <!-- 自动封禁配置弹框：六项配置+口径/窗口变更重置提示-->
     <el-dialog v-model="autobanDialogVisible" width="min(600px, 94vw)" top="8vh" append-to-body class="dialog-body-inset" :close-on-click-modal="false" :close-on-press-escape="!autobanSaving" :show-close="!autobanSaving">
       <template #header>
-        <!-- 喂入门只排除「已验证爬虫豁免」事件，ACL/GeoIP/威胁情报事件
-             同样计数——文案不得自缩为「WAF 事件」，否则用户按「只有 WAF 命中才
-             计数」校准阈值会过早封禁 -->
-        <DialogHeader :icon="Lock" title="自动封禁配置" subtitle="安全事件（IP 访问控制/地域/WAF/威胁情报，已验证爬虫豁免除外）固定窗口计数达到阈值即写入「自动封禁名单」（调度开启时到期自动解封）" />
+        <!-- 喂入门=阶段门（WAF·CRS 与 WAF·自定义两族命中计数）+爬虫豁免排除。
+             IP 访问控制/地域/威胁情报/请求体异常等事件不进入计数（10-30 裁定
+             自动封禁只吃阶段 3 命中），文案与后端 autobanStage3Eligible 同口径——
+             用户按文案校准阈值必须与真实喂入一致，否则阈值永不达标且无告警 -->
+        <DialogHeader :icon="Lock" title="自动封禁配置" subtitle="WAF 拦截（CRS 规则与自定义规则命中，已验证爬虫豁免除外）固定窗口计数达到阈值即写入「自动封禁名单」（调度开启时到期自动解封；IP 访问控制、地域拦截与威胁情报事件不参与计数）" />
       </template>
       <el-form :model="autobanForm" label-width="96px" label-position="right" :disabled="autobanSaving">
         <el-form-item label="观察模式">

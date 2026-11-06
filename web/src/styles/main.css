@@ -144,6 +144,12 @@ body {
   vertical-align: baseline;
 }
 
+/* 警示文案色（表单行内警示：端口冲突/证书申请锁定/正则超限等）。原为 Rules.vue
+   scoped 定义，SecurityRules 跨组件引用不生效（scoped 属性选择器不匹配）——收敛
+   全局单源，Rules/SecurityRules 两视图共用。声明必须在 .form-tip-line 之后（同
+   特异性 0,1,0 靠源序覆盖其灰字色）。 */
+.port-warning { color: #eab308; }
+
 
 /* 同行卡片等高：el-col 拉伸使内部 el-card 填满列高（内容不足留白） */
 .equal-height-row { display: flex; flex-wrap: wrap; align-items: stretch; }
