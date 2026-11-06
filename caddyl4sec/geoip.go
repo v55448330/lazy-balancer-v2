@@ -138,6 +138,9 @@ func geoipLocMatches(country, loc string, countries []string) bool {
 // 双协议：缓存键为（v4 路径, v6 有效路径）二元组，v6 形态（modTime/size）
 // 变化同样触发重建；v6 健康门（xdb 头校验）失败降级为 v6 禁用（v6 查询
 // fail-open 放行，用户裁定语义），v4 链不受影响。
+// 采样是纯读路径：探测（v6 头读 + v4/v6 stat）按 TTL 窗口节流，窗口内复用
+// 上次探测投影（首批与过界实测），换库收敛最多延迟一个窗口（reloader 周期
+// 远大于 TTL）；v4 stat 失败不落缓存，失败形态逐采样实测。
 type sharedSearcherEntry struct {
 	searcher     *service.Ip2Region
 	modTime      time.Time
@@ -196,15 +199,104 @@ func searcherWarn(reason, path, msg string, fields ...zap.Field) {
 	caddy.Log().Named("l4sec").Warn(msg, fields...)
 }
 
+// 探测 I/O 缝（生产直连真实实现；测试换计数桩——探测节流钉测按计数断言
+// 头读/stat 不随采样次数线性增长）。
+var (
+	v6HeaderLoadFromFile = xdb.LoadHeaderFromFile
+	probeFileStat        = os.Stat
+)
+
+// sharedSearcherProbeTTL 探测节流窗口：窗口内采样复用上次（v6 头读 + 双 stat）
+// 探测投影，首批与窗口过界实测。换库形态判定的窗口内延迟不影响收敛时序
+// （ip2regionupdate reloader 周期远大于本 TTL）。
+var sharedSearcherProbeTTL = 5 * time.Second
+
+// searcherProbe 是一次探测的投影：v6 健康门判定 + v4/v6 文件形态。调用方据此
+// 完成缓存命中判定与重建元数据，窗口内不再触碰磁盘。
+type searcherProbe struct {
+	v6Effective string
+	v4ModTime   time.Time
+	v4Size      int64
+	v6ModTime   time.Time
+	v6Size      int64
+	v6Missing   bool
+	v4Err       error
+	probedAt    time.Time
+}
+
+// searcherProbeCache 探测结果 TTL 缓存（键=（v4 路径, v6 原始路径））：窗口内
+// 采样复用上次探测，过界条目由调用方重新实测。v4 stat 失败不落缓存（失败
+// 形态逐采样实测，fail-stale/unavailable 语义不变）。
+type searcherProbeCache struct {
+	mu      sync.Mutex
+	entries map[string]searcherProbe
+	nowFunc func() time.Time
+}
+
+func newSearcherProbeCache() *searcherProbeCache {
+	return &searcherProbeCache{entries: map[string]searcherProbe{}, nowFunc: time.Now}
+}
+
+func (c *searcherProbeCache) get(path, v6Path string) (searcherProbe, bool) {
+	key := path + "\x00" + v6Path
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	probe, ok := c.entries[key]
+	if !ok {
+		return searcherProbe{}, false
+	}
+	if c.nowFunc().Sub(probe.probedAt) >= sharedSearcherProbeTTL {
+		delete(c.entries, key)
+		return searcherProbe{}, false
+	}
+	return probe, true
+}
+
+func (c *searcherProbeCache) put(path, v6Path string, probe searcherProbe) {
+	probe.probedAt = c.nowFunc()
+	c.mu.Lock()
+	c.entries[path+"\x00"+v6Path] = probe
+	c.mu.Unlock()
+}
+
+var sharedSearcherProbes = newSearcherProbeCache()
+
+// probeSearcherFiles 做一次真实探测：v6 健康门（头读）+ v4/v6 文件 stat。
+// v4 stat 失败只投影给本次调用（不落缓存）。
+func probeSearcherFiles(path, v6Path string) searcherProbe {
+	probe := searcherProbe{v6Effective: healthyV6Path(v6Path, path)}
+	st, err := probeFileStat(path)
+	if err != nil {
+		probe.v4Err = err
+		return probe
+	}
+	probe.v4ModTime, probe.v4Size = st.ModTime(), st.Size()
+	if probe.v6Effective == "" {
+		return probe
+	}
+	if v6st, v6err := probeFileStat(probe.v6Effective); v6err == nil {
+		probe.v6ModTime, probe.v6Size = v6st.ModTime(), v6st.Size()
+	} else {
+		probe.v6Missing = true
+	}
+	return probe
+}
+
 // sharedGeoIPSearcher 返回按（v4 路径, v6 有效路径）共享的单例（fail-stale
 // 语义见类型注释）。v6Path 为空或健康门不过时按「v6 禁用」构造——绑定库
 // 双协议 API 对禁用族的 Search 返回空串，matcher 侧 fail-open 放行（用户
 // 裁定语义不变，仅作用于不可解析形态）。
 func sharedGeoIPSearcher(path, v6Path string) (*service.Ip2Region, error) {
-	v6Effective := healthyV6Path(v6Path, path)
+	probe, probed := sharedSearcherProbes.get(path, v6Path)
+	if !probed {
+		probe = probeSearcherFiles(path, v6Path)
+		if probe.v4Err == nil {
+			sharedSearcherProbes.put(path, v6Path, probe)
+		}
+	}
+	v6Effective := probe.v6Effective
 	key := path + "\x00" + v6Effective
-	st, err := os.Stat(path)
-	if err != nil {
+	if probe.v4Err != nil {
 		sharedSearcherMu.Lock()
 		cached, ok := sharedSearchers[key]
 		if ok {
@@ -213,18 +305,18 @@ func sharedGeoIPSearcher(path, v6Path string) (*service.Ip2Region, error) {
 		sharedSearcherMu.Unlock()
 		if !ok {
 			searcherWarn("unavailable", path, "l4sec: ip2region database unavailable, geoip matcher fails open",
-				zap.String("xdb_path", path), zap.Error(err))
-			return nil, err
+				zap.String("xdb_path", path), zap.Error(probe.v4Err))
+			return nil, probe.v4Err
 		}
 		searcherWarn("stat", path, "l4sec: ip2region database is not stat-able, serving the previous instance",
-			zap.String("xdb_path", path), zap.Error(err))
+			zap.String("xdb_path", path), zap.Error(probe.v4Err))
 		return cached.searcher, nil
 	}
 	sharedSearcherMu.Lock()
 	defer sharedSearcherMu.Unlock()
 	if cached, ok := sharedSearchers[key]; ok && !cached.needsRebuild &&
-		cached.modTime.Equal(st.ModTime()) && cached.size == st.Size() &&
-		v6FormUnchanged(cached, v6Effective) {
+		cached.modTime.Equal(probe.v4ModTime) && cached.size == probe.v4Size &&
+		probeV6FormUnchanged(cached, probe) {
 		searcherWarnThrottle.clearPrefix(path + "|")
 		return cached.searcher, nil
 	}
@@ -240,11 +332,9 @@ func sharedGeoIPSearcher(path, v6Path string) (*service.Ip2Region, error) {
 			zap.String("xdb_path", path), zap.Error(err))
 		return nil, err
 	}
-	entry := &sharedSearcherEntry{searcher: searcher, modTime: st.ModTime(), size: st.Size()}
-	if v6Effective != "" {
-		if v6st, v6err := os.Stat(v6Effective); v6err == nil {
-			entry.v6ModTime, entry.v6Size = v6st.ModTime(), v6st.Size()
-		}
+	entry := &sharedSearcherEntry{searcher: searcher, modTime: probe.v4ModTime, size: probe.v4Size}
+	if probe.v6Effective != "" && !probe.v6Missing {
+		entry.v6ModTime, entry.v6Size = probe.v6ModTime, probe.v6Size
 	}
 	if replaced, ok := sharedSearchers[key]; ok {
 		old := replaced.searcher
@@ -262,7 +352,7 @@ func healthyV6Path(v6Path, v4Path string) string {
 	if v6Path == "" {
 		return ""
 	}
-	header, err := xdb.LoadHeaderFromFile(v6Path)
+	header, err := v6HeaderLoadFromFile(v6Path)
 	if err != nil {
 		searcherWarn("v6-unavailable", v4Path, "l4sec: ip2region v6 database unavailable, v6 lookups degrade to disabled",
 			zap.String("xdb_v6_path", v6Path), zap.Error(err))
@@ -277,19 +367,20 @@ func healthyV6Path(v6Path, v4Path string) string {
 	return v6Path
 }
 
-// v6FormUnchanged 报告缓存条目的 v6 形态是否仍与磁盘一致：v6 禁用（空路径）
-// 恒一致；启用时 v6 文件被换库（rename 换 mtime/size）即失效重建——与 v4
-// 的 modTime/size 判定同构（ip2regionupdate 依赖「Caddy 侧 geoip 随
-// reloader 收敛」，v6 换库同样依赖本判定）。
-func v6FormUnchanged(cached *sharedSearcherEntry, v6Effective string) bool {
-	if v6Effective == "" {
+// probeV6FormUnchanged 报告缓存条目的 v6 形态是否与本次探测投影一致（判定
+// 语义与磁盘 stat 版相同）：v6 禁用（空路径）恒一致（条目必为零值形态）；
+// 启用时探测发现 v6 文件不可读或形态（modTime/size）漂移即条目失效重建——
+// 与 v4 的 modTime/size 判定同构（ip2regionupdate 依赖「Caddy 侧 geoip 随
+// reloader 收敛」，v6 换库同样依赖本判定；TTL 窗口内的收敛延迟是探测节流
+// 的已接受边界）。
+func probeV6FormUnchanged(cached *sharedSearcherEntry, probe searcherProbe) bool {
+	if probe.v6Effective == "" {
 		return cached.v6ModTime.IsZero() && cached.v6Size == 0
 	}
-	v6st, err := os.Stat(v6Effective)
-	if err != nil {
+	if probe.v6Missing {
 		return false
 	}
-	return cached.v6ModTime.Equal(v6st.ModTime()) && cached.v6Size == v6st.Size()
+	return cached.v6ModTime.Equal(probe.v6ModTime) && cached.v6Size == probe.v6Size
 }
 
 // —— layer4.matchers.lb_geoip ——

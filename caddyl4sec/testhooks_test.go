@@ -112,5 +112,13 @@ func resetConnStatsForTest() {
 	connStats.rules = map[string]*ruleConnCounters{}
 }
 
+// resetSharedSearcherProbesForTest 清空 searcher 探测 TTL 缓存（隔离：前序
+// 用例的同键探测投影不得泄漏进后续用例）。
+func resetSharedSearcherProbesForTest() {
+	sharedSearcherProbes.mu.Lock()
+	defer sharedSearcherProbes.mu.Unlock()
+	sharedSearcherProbes.entries = map[string]searcherProbe{}
+}
+
 // ctxKeyLoad 是测试造不同载次身份的 context 键。
 type ctxKeyLoad struct{}

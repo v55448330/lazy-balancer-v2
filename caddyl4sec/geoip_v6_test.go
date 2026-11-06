@@ -7,8 +7,10 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/caddyserver/caddy/v2"
+	"github.com/lionsoul2014/ip2region/binding/golang/xdb"
 )
 
 // —— IPv6 双协议引擎级实证（L4 侧）——
@@ -195,5 +197,74 @@ func TestSharedGeoIPSearcher_v6CacheKeySeparates(t *testing.T) {
 	}
 	if off == on {
 		t.Fatal("v6 enabled instance must be rebuilt separately (v6 family attached)")
+	}
+}
+
+// TestSharedGeoIPSearcher_probeTTLThrottlesFileIO：探测节流——TTL 窗口内连续
+// 采样复用上次探测投影（头读/stat 计数不随采样次数增长），窗口过界后下一次
+// 调用重新实测；节流不改变取值形态（窗口内外恒返回同实例，重建只由形态
+// 漂移驱动）。
+func TestSharedGeoIPSearcher_probeTTLThrottlesFileIO(t *testing.T) {
+	v4 := v4FixtureForL4(t)
+	if v4 == "" {
+		t.Skip("no ip2region xdb available")
+	}
+	v6 := filepath.Join(t.TempDir(), "ip2region_v6.xdb")
+	writeV6FixtureXDB(t, v6, defaultV6Fixtures(t))
+	keyOn := v4 + "\x00" + v6
+
+	// 进程级缓存隔离：本用例同键的实例/探测投影先清，用后恢复。
+	resetSharedSearcherProbesForTest()
+	sharedSearcherMu.Lock()
+	delete(sharedSearchers, keyOn)
+	sharedSearcherMu.Unlock()
+	t.Cleanup(func() {
+		sharedSearcherMu.Lock()
+		delete(sharedSearchers, keyOn)
+		sharedSearcherMu.Unlock()
+		resetSharedSearcherProbesForTest()
+	})
+
+	headerLoads, stats := 0, 0
+	savedHeaderLoad, savedStat := v6HeaderLoadFromFile, probeFileStat
+	v6HeaderLoadFromFile = func(path string) (*xdb.Header, error) {
+		headerLoads++
+		return savedHeaderLoad(path)
+	}
+	probeFileStat = func(path string) (os.FileInfo, error) {
+		stats++
+		return savedStat(path)
+	}
+	t.Cleanup(func() { v6HeaderLoadFromFile, probeFileStat = savedHeaderLoad, savedStat })
+
+	now := time.Unix(1_700_000_000, 0)
+	sharedSearcherProbes.nowFunc = func() time.Time { return now }
+	t.Cleanup(func() { sharedSearcherProbes.nowFunc = time.Now })
+
+	s1, err := sharedGeoIPSearcher(v4, v6)
+	if err != nil {
+		t.Fatalf("first acquire: %v", err)
+	}
+	if headerLoads != 1 || stats != 2 {
+		t.Fatalf("first acquire must probe for real (one header read, v4+v6 stat): headerLoads=%d stats=%d", headerLoads, stats)
+	}
+
+	for i := range 8 {
+		s, err := sharedGeoIPSearcher(v4, v6)
+		if err != nil || s != s1 {
+			t.Fatalf("sample %d within TTL must serve the same instance: err=%v", i, err)
+		}
+	}
+	if headerLoads != 1 || stats != 2 {
+		t.Fatalf("probes within TTL must reuse the previous result (counts must not grow with samples): headerLoads=%d stats=%d", headerLoads, stats)
+	}
+
+	now = now.Add(sharedSearcherProbeTTL)
+	s2, err := sharedGeoIPSearcher(v4, v6)
+	if err != nil || s2 != s1 {
+		t.Fatalf("post-TTL acquire must not rebuild an unchanged form: err=%v", err)
+	}
+	if headerLoads != 2 || stats != 4 {
+		t.Fatalf("expired probe must hit disk again: headerLoads=%d stats=%d", headerLoads, stats)
 	}
 }
