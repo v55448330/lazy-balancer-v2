@@ -87,7 +87,7 @@ LOCAL_GOGC="$(docker exec lazy-balancer sh -c 'echo $GOGC' 2>/dev/null || echo '
 [[ "$LOCAL_GOGC" == "300" ]] && pass "GOGC=300 生效" || fail "GOGC='$LOCAL_GOGC' ≠ 300"
 LOCAL_LIMIT="$(docker exec lazy-balancer sh -c 'echo $GOMEMLIMIT' 2>/dev/null || echo '')"
 [[ "$LOCAL_LIMIT" == "1500MiB" ]] && pass "GOMEMLIMIT=1500MiB 生效" || fail "GOMEMLIMIT='$LOCAL_LIMIT' ≠ 1500MiB"
-LOCAL_BI="$(docker exec lazy-balancer sh -c 'grep -o "\"commit\": \"[^\"]*\"" /app/ui/build-info.json' 2>/dev/null | head -1 | grep -o '[0-9a-f]\{12\}' || echo MISSING)"
+LOCAL_BI="$(docker exec lazy-balancer sh -c 'grep -o "\"commit\": \"[^\"]*\"" /app/ui/build-info.json' 2>/dev/null | head -1 | grep -o '[0-9a-f]\{12\}' | head -1 || echo MISSING)"
 [[ "$LOCAL_BI" == "${HEAD:0:12}" ]] && pass "本地构建戳 == HEAD" || fail "本地构建戳=$LOCAL_BI ≠ HEAD（dist 未随重建）"
 
 # ── ⑤ buildx 双架构推送（--skip-cloud 跳过）──
@@ -113,7 +113,7 @@ V_HEALTH="$(docker inspect lb-finalize --format '{{.State.Health.Status}}' 2>/de
 V_GOGC="$(docker exec lb-finalize sh -c 'echo $GOGC' 2>/dev/null || echo '')"
 V_LIMIT="$(docker exec lb-finalize sh -c 'echo $GOMEMLIMIT' 2>/dev/null || echo '')"
 [[ "$V_GOGC" == "300" && "$V_LIMIT" == "1500MiB" ]] && pass "GOGC/GOMEMLIMIT env 生效" || fail "GC env=$V_GOGC/$V_LIMIT"
-V_BI="$(docker exec lb-finalize sh -c 'grep -o "\"commit\": \"[^\"]*\"" /app/ui/build-info.json | head -1' 2>/dev/null | grep -o '[0-9a-f]\{12\}' || echo MISSING)"
+V_BI="$(docker exec lb-finalize sh -c 'grep -o "\"commit\": \"[^\"]*\"" /app/ui/build-info.json | head -1' 2>/dev/null | grep -o '[0-9a-f]\{12\}' | head -1 || echo MISSING)"
 [[ "$V_BI" == "${HEAD:0:12}" ]] && pass "终验构建戳 == HEAD" || fail "终验构建戳=$V_BI ≠ HEAD"
 ( docker rm -f lb-finalize > /dev/null 2>&1 )
 
