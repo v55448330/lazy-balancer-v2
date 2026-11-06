@@ -19,15 +19,26 @@
 # 每步产出机器可判定输出；任一步失败立即退出非零（set -e + 显式检查）。
 set -euo pipefail
 
-TAG="" CHANNEL="" SKIP_CLOUD=0
+TAG="" CHANNEL="" SKIP_CLOUD=0 DRY_RUN=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --tag) TAG="$2"; shift 2;;
     --push-channel) CHANNEL="$2"; shift 2;;
     --skip-cloud) SKIP_CLOUD=1; shift;;
+    --dry-run) DRY_RUN=1; shift;;
     *) echo "未知参数: $1"; exit 2;;
   esac
 done
+# --dry-run 只读预览：仅打印将执行的步骤清单与当前基线读数，不构建/不部署/
+# 不推送/不写盘（批量改写门禁要求遍历型脚本必须带只读模式）。
+if [[ "$DRY_RUN" == "1" ]]; then
+  echo "DRY-RUN 预览（未执行任何写操作）："
+  echo "  tag=$TAG channel=$CHANNEL skip-cloud=$SKIP_CLOUD"
+  echo "  步骤清单：①HEAD/dist 基线对账 → ②npm run build → ③Dockerfile 解析自检 → ④compose 本地构建+部署+env 抽查 → ⑤buildx 双架构推送(--skip-cloud 跳过) → ⑥一次性容器终验"
+  echo "  当前 dist 戳：$(python3 -c "import json;print(json.load(open('web/dist/build-info.json'))['commit'][:12])" 2>/dev/null || echo MISSING)"
+  echo "  当前 HEAD　：$(git rev-parse --short=12 HEAD 2>/dev/null || echo MISSING)"
+  exit 0
+fi
 [[ -n "$TAG" && -n "$CHANNEL" ]] || { echo "用法: --tag vX.Y.Z[-beta] --push-channel beta|stable [--skip-cloud]"; exit 2; }
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
