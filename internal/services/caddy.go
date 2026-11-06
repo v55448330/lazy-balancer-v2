@@ -1977,7 +1977,10 @@ func TrustedProxyPrefixBelowMinBits(prefix netip.Prefix) bool {
 }
 
 // TrustedProxyPrefixTooWide 是上述两条判据的合取（过宽=全空间或低于最小
-// 前缀长度），渲染侧防御带外改库/旧配置时使用。
+// 前缀长度），渲染侧防御带外改库/旧配置时使用。caddyl4sec/pp.go 的
+// lb_l4_pp Provision 以 ppAllow* 同判据兜裸配置/带外直写 Caddy 配置文件
+// 形态（独立插件模块不能 import services，两侧逐字同步，改动必须成对，
+// 机械守卫见 l4_pp_gate_sync_test.go）。
 func TrustedProxyPrefixTooWide(prefix netip.Prefix) bool {
 	return TrustedProxyPrefixAllSpace(prefix) || TrustedProxyPrefixBelowMinBits(prefix)
 }

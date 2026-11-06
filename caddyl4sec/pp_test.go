@@ -111,8 +111,9 @@ func TestL4PPModuleID(t *testing.T) {
 }
 
 // TestL4PPProvisionValidation 非法 CIDR 显性报错（配置加载期拒绝，不得运行期
-// 静默漂移）；空 Allow 合法（全部来源按 IGNORE）；v4-mapped 全空间写法拒绝
-// （渲染侧过宽门是生产单源，模块侧兜住裸配置形态）。
+// 静默漂移）；空 Allow 合法（全部来源按 IGNORE）；v4-mapped 全空间写法与裸
+// 全空间/过宽网段拒绝（渲染侧过宽门是生产单源，模块侧兜住裸配置形态），
+// 合法网段（/24、/64）必须通过。
 func TestL4PPProvisionValidation(t *testing.T) {
 	ctx, cancel := caddy.NewContext(caddy.Context{Context: context.Background()})
 	t.Cleanup(cancel)
@@ -122,6 +123,16 @@ func TestL4PPProvisionValidation(t *testing.T) {
 	}
 	if err := (&L4PPHandler{Allow: []string{"::ffff:0.0.0.1/96"}}).Provision(ctx); err == nil {
 		t.Fatalf("v4-mapped 全空间写法必须显性报错（等价信任全部 IPv4 来源）")
+	}
+	// 裸全空间/过宽写法与渲染侧过宽门同判据拒绝：::/0 与 0.0.0.0/8 覆盖全部
+	// 地址空间，2000::/1 低于 IPv6 最小前缀长度 /29。
+	for _, wide := range []string{"::/0", "0.0.0.0/8", "2000::/1"} {
+		if err := (&L4PPHandler{Allow: []string{wide}}).Provision(ctx); err == nil {
+			t.Fatalf("过宽网段 %q 必须显性拒绝（等同信任任意来源/低于最小前缀长度）", wide)
+		}
+	}
+	if err := (&L4PPHandler{Allow: []string{"203.0.113.0/24", "2001:db8::/64"}}).Provision(ctx); err != nil {
+		t.Fatalf("合法网段（/24、/64）必须通过: %v", err)
 	}
 	if err := (&L4PPHandler{Allow: nil}).Provision(ctx); err != nil {
 		t.Fatalf("空 Allow 必须合法（全部来源按 IGNORE）: %v", err)

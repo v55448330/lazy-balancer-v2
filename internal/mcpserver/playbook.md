@@ -38,7 +38,7 @@
 ### 4.2 新建 TCP 四层代理
 
 1. `create_rule`：`protocol=tcp` + `listen_port` + `upstreams[{host,port}]`，**不要填 domain**
-2. 后端需要真实客户端 IP 时加 `tcp_proxy_protocol=true`（注意：后端必须支持 PROXY v2，否则连接会解析失败；入站 PROXY 头仅在规则绑定了安全策略后才会解析，且仅来自系统设置受信代理网段内的来源时采信，其余来源按直连地址处理，直连客户端无需发送 PROXY 头）
+2. 后端需要真实客户端 IP 时加 `tcp_proxy_protocol=true`（注意：后端必须支持 PROXY v2，否则连接会解析失败；入站 PROXY 头仅在规则绑定了安全策略后才会解析，且仅来自系统设置受信代理网段内的来源时采信（用于事件归因与发往上游的源地址），其余来源按直连地址处理，直连客户端无需发送 PROXY 头；未绑定安全策略的 TCP 规则不解析 PROXY 头，伪造头原样透传上游）
 3. `get_upstream_health` 验证
 
 ### 4.3 修改规则（安全姿势：先读后写）
