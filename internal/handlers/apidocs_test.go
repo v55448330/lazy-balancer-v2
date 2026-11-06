@@ -2853,6 +2853,36 @@ func TestAPIDocsAndMCPSchemaTriggeredCategoriesMatchFrontendSingleSource(t *test
 			t.Errorf("MCP rule_triggered schema 缺触发阶段类别 %q：%s", label, mcpDescription[1])
 		}
 	}
+	// 反向钉面：两份文案的类别枚举段必须恰好等于前端单源（互为超集）——
+	// 私增类同样即红（「类别：…；」段逐类提取做集合相等，顺序不敏感）。
+	enumeration := regexp.MustCompile(`类别：([^；]+)；`)
+	for _, carrier := range []struct{ label, desc string }{
+		{"REST rule_triggered", restDescription},
+		{"MCP rule_triggered", mcpDescription[1]},
+	} {
+		segment := enumeration.FindStringSubmatch(carrier.desc)
+		if len(segment) != 2 {
+			t.Fatalf("%s 文案缺「类别：…；」枚举段（双向钉面要求逐类枚举）: %s", carrier.label, carrier.desc)
+		}
+		docSet := map[string]bool{}
+		for _, item := range strings.Split(segment[1], "/") {
+			docSet[strings.TrimSpace(item)] = true
+		}
+		feSet := map[string]bool{}
+		for _, category := range categories {
+			feSet[category] = true
+		}
+		for item := range docSet {
+			if !feSet[item] {
+				t.Errorf("%s 文案私增触发阶段类别 %q（前端单源无此类）", carrier.label, item)
+			}
+		}
+		for category := range feSet {
+			if !docSet[category] {
+				t.Errorf("%s 文案枚举段缺前端类别 %q", carrier.label, category)
+			}
+		}
+	}
 }
 
 // 绑定族文档与 TCP 能力门同形：四个绑定写路径（单条 bind/原子替换/batch-bind/
@@ -2894,6 +2924,198 @@ func TestAPIDocsRestOnlySecurityLibrariesDiscloseMCPToolAbsence(t *testing.T) {
 	for _, key := range []string{"GET /security/threat-lib", "GET /security/crawler-lib"} {
 		if !strings.Contains(routesEntry(t, key).Description, "MCP 未提供工具") {
 			t.Errorf("%s 文档缺「MCP 未提供工具」披露句: %s", key, routesEntry(t, key).Description)
+		}
+	}
+}
+
+// sourceFuncBody 读取仓库内源文件并返回指定函数标记起的函数体切片（到下一个
+// 顶层 func 声明或文件尾）——响应形状/契约句钉测的实现侧单源，避免手抄实现
+// 键集后实现漂移而钉测仍绿。
+func sourceFuncBody(t *testing.T, relPath, funcMarker string) string {
+	t.Helper()
+	source, err := os.ReadFile(relPath)
+	if err != nil {
+		t.Fatalf("读取实现源 %s 失败: %v", relPath, err)
+	}
+	start := strings.Index(string(source), funcMarker)
+	if start < 0 {
+		t.Fatalf("源文件 %s 未找到函数标记 %q", relPath, funcMarker)
+	}
+	body := string(source)[start:]
+	if next := strings.Index(body, "\nfunc "); next >= 0 {
+		body = body[:next]
+	}
+	return body
+}
+
+// quotedMapKeys 抽取源码片段中所有 "键": 形状的复合字面量键（gin.H/map
+// 字面量共用；调用方负责片段内不混入其他带引号键的形状）。
+func quotedMapKeys(fragment string) map[string]bool {
+	keys := map[string]bool{}
+	for _, m := range regexp.MustCompile(`"([A-Za-z_][A-Za-z0-9_]*)":`).FindAllStringSubmatch(fragment, -1) {
+		keys[m[1]] = true
+	}
+	return keys
+}
+
+// stage-stats 文档示例键集必须与实现恒下发的 8 键一致（流程抽屉按键消费；
+// 分段耗时与未归因桶曾漏示例——示例只写部分键会把恒下发字段隐成「可能不
+// 存在」）。实现侧键集从 handler 源码抽取（零值分支与成功分支同键），双向
+// 比对：漏键/私增键均红。
+func TestAPIDocs_stageStatsExampleKeysMatchImplementation(t *testing.T) {
+	body := sourceFuncBody(t, filepath.Join("security_overview.go"), "func (h *Handlers) GetRuleStageStats")
+	implKeys := quotedMapKeys(body)
+	if len(implKeys) == 0 {
+		t.Fatal("GetRuleStageStats 源码未抽取到任何响应键——抽取器需同步")
+	}
+	docKeys := mapKeysOf(docResponseExample(t, "GET /security/rules/:caddy_id/stage-stats"))
+	assertKeySetsEqual(t, "stage-stats 文档示例", docKeys, implKeys)
+}
+
+// batch-bind 文档示例键集必须与实现恒下发的三键一致——幂等 merge 的零写入
+// 规则按 unchanged 计数下发（与同族批量端点双计数口径一致），示例漏键会把
+// 恒下发字段隐成「可能不存在」。实现侧键集从 Data 复合字面量抽取，双向比对。
+func TestAPIDocs_batchBindExampleKeysMatchImplementation(t *testing.T) {
+	body := sourceFuncBody(t, filepath.Join("security.go"), "func (h *Handlers) BatchBindSecurityPolicies")
+	dataLiteral := regexp.MustCompile(`Data:\s*gin\.H\{([^}]*)\}`).FindStringSubmatch(body)
+	if dataLiteral == nil {
+		t.Fatal("BatchBindSecurityPolicies 源码未抽取到 Data 复合字面量——实现形状变化需同步本钉")
+	}
+	implKeys := quotedMapKeys(dataLiteral[1])
+	if len(implKeys) == 0 {
+		t.Fatal("batch-bind Data 键抽取为空——抽取器需同步")
+	}
+	docKeys := mapKeysOf(docResponseExample(t, "POST /security/policies/batch-bind"))
+	assertKeySetsEqual(t, "batch-bind 文档示例", docKeys, implKeys)
+}
+
+// GET /branding 必须披露 app_name 兼任 TCP(L4) 拦截提示品牌的行为：显式
+// 自定义值透传到拦截提示，空/默认值视为未配置回退内置文案——用户改品牌名
+// 却发现 TCP 提示跟着变时，文档是唯一解释来源。
+func TestAPIDocs_brandingEntryDisclosesTCPNoticeBrandRole(t *testing.T) {
+	description := routesEntry(t, "GET /branding").Description
+	for _, marker := range []string{"app_name", "TCP", "拦截提示", "Lazy Balancer v2"} {
+		if !strings.Contains(description, marker) {
+			t.Errorf("GET /branding 披露句缺 %q（app_name 兼任 TCP 拦截提示品牌行为未披露）: %s", marker, description)
+		}
+	}
+}
+
+// header_name 契约双载体对账（字段级独立钉面——conditions[] 嵌套字段不便
+// 并入既有 parity 门）：REST 披露句与 MCP schema description 必须同口径覆盖
+// target=headers 限定、token 长度与字符集、空值回退匹配全部头、越 target 400。
+func TestAPIDocs_customRuleHeaderNameDisclosureParity(t *testing.T) {
+	rest := routesEntry(t, "POST /security/custom-rules").Description
+	for _, marker := range []string{"header_name", "target=headers", "1-64 字符", "匹配全部头", "400"} {
+		if !strings.Contains(rest, marker) {
+			t.Errorf("REST 创建自定义规则披露句缺 %q: %s", marker, rest)
+		}
+	}
+	mcpSource, err := os.ReadFile(filepath.Join("..", "mcpserver", "server.go"))
+	if err != nil {
+		t.Fatalf("读取 MCP server 源失败: %v", err)
+	}
+	mcpDescription := regexp.MustCompile(`"header_name":\{"type":"string","description":"([^"]+)"\}`).FindStringSubmatch(string(mcpSource))
+	if len(mcpDescription) != 2 {
+		t.Fatal("MCP customRuleFieldsSchema 缺 header_name 描述")
+	}
+	for _, marker := range []string{"target=headers", "匹配全部头"} {
+		if !strings.Contains(mcpDescription[1], marker) {
+			t.Errorf("MCP header_name schema 描述缺 %q: %s", marker, mcpDescription[1])
+		}
+	}
+}
+
+// 任务文本日志的截断提示行契约三载体同步（REST 文档 + MCP server/tools 工具
+// 描述），且提示行字面量必须与 handler 实际注入的前置行逐字一致（证书任务
+// 日志端点同形态）——排障者据首行判断是否读到全部日志，字面量漂移即误导。
+func TestAPIDocs_taskLogTruncationHintContractSynced(t *testing.T) {
+	body := sourceFuncBody(t, filepath.Join("taskmonitor.go"), "func (h *Handlers) GetSystemTaskLogs")
+	hintMatch := regexp.MustCompile(`content = "(\[[^"\\]+)`).FindStringSubmatch(body)
+	if len(hintMatch) != 2 {
+		t.Fatal("GetSystemTaskLogs 源码未抽取到截断提示行字面量——注入形状变化需同步本钉")
+	}
+	hint := hintMatch[1]
+	if !strings.Contains(routesEntry(t, "GET /system/tasks/:id/logs").Description, hint) {
+		t.Errorf("REST 任务日志文档缺截断提示行 %q 披露", hint)
+	}
+	for _, rel := range []string{filepath.Join("..", "mcpserver", "server.go"), filepath.Join("..", "mcpserver", "tools.go")} {
+		source, err := os.ReadFile(rel)
+		if err != nil {
+			t.Fatalf("读取 MCP 源 %s 失败: %v", rel, err)
+		}
+		mcpDescription := regexp.MustCompile(`"get_system_task_logs"[,:]\s*"([^"]+)"`).FindStringSubmatch(string(source))
+		if len(mcpDescription) != 2 {
+			t.Fatalf("%s 缺 get_system_task_logs 工具描述", rel)
+		}
+		if !strings.Contains(mcpDescription[1], hint) {
+			t.Errorf("%s 的 get_system_task_logs 描述缺截断提示行 %q: %s", rel, hint, mcpDescription[1])
+		}
+	}
+}
+
+// 证书任务 force/冷却契约与重试冷却单源同口径：CA 退避窗口按双态判定
+// （services.CertJobCAcooldownActive 的状态字面量直接从单源函数体抽取），
+// 通用冷却只约束非 failed 行手动触发（failed 行冷却中放行并留越冷审计）。
+// REST 三处（trigger notes/429 标签、retry、issue）与 MCP 两处
+// （trigger_system_task、retry_cert_job）逐处核对，单态 waiting_ca 或漏
+// failed 豁免即红。
+func TestAPIDocs_certJobCooldownContractMatchesRetryGate(t *testing.T) {
+	gateBody := sourceFuncBody(t, filepath.Join("..", "services", "certjob_retry.go"), "func CertJobCAcooldownActive")
+	var windowStatuses []string
+	for _, m := range regexp.MustCompile(`status == "([a-z_]+)"`).FindAllStringSubmatch(gateBody, -1) {
+		windowStatuses = append(windowStatuses, m[1])
+	}
+	if len(windowStatuses) != 2 {
+		t.Fatalf("CertJobCAcooldownActive 状态字面量抽取异常: %v", windowStatuses)
+	}
+	dualPhrase := windowStatuses[0] + "/" + windowStatuses[1]
+
+	retry := routesEntry(t, "POST /certificates/jobs/:id/retry").Description
+	if !strings.Contains(retry, dualPhrase) {
+		t.Errorf("retry 文档 force 契约缺窗口双态 %q: %s", dualPhrase, retry)
+	}
+	issue := routesEntry(t, "POST /certificates/issue").Description
+	if !strings.Contains(issue, dualPhrase) {
+		t.Errorf("issue 文档 force 契约缺窗口双态 %q: %s", dualPhrase, issue)
+	}
+
+	trigger := routesEntry(t, "POST /system/tasks/:id/trigger")
+	triggerText := trigger.Description + "\x00" + strings.Join(trigger.Errors, "\x00")
+	if !strings.Contains(triggerText, dualPhrase) {
+		t.Errorf("trigger 文档缺窗口双态 %q: %s", dualPhrase, triggerText)
+	}
+	for _, marker := range []string{"failed", "429", "force"} {
+		if !strings.Contains(triggerText, marker) {
+			t.Errorf("trigger 文档 cert-job 行口径缺 %q（通用冷却豁免/越窗通道未披露）", marker)
+		}
+	}
+
+	mcpTools, err := os.ReadFile(filepath.Join("..", "mcpserver", "tools.go"))
+	if err != nil {
+		t.Fatalf("读取 MCP tools 源失败: %v", err)
+	}
+	for _, tool := range []string{"trigger_system_task", "retry_cert_job"} {
+		desc := regexp.MustCompile(`"` + tool + `":\s*"([^"]+)"`).FindStringSubmatch(string(mcpTools))
+		if len(desc) != 2 {
+			t.Fatalf("MCP tools 缺 %s 描述", tool)
+		}
+		if !strings.Contains(desc[1], dualPhrase) {
+			t.Errorf("MCP %s 描述缺窗口双态 %q: %s", tool, dualPhrase, desc[1])
+		}
+	}
+	if triggerDesc := regexp.MustCompile(`"trigger_system_task":\s*"([^"]+)"`).FindStringSubmatch(string(mcpTools)); len(triggerDesc) == 2 && !strings.Contains(triggerDesc[1], "failed") {
+		t.Errorf("MCP trigger_system_task 描述缺 failed 行豁免口径: %s", triggerDesc[1])
+	}
+
+	// 退役单态文案不得回流：三处历史措辞曾把窗口窄化为 waiting_ca 单态。
+	for _, stale := range []struct{ label, carrier, phrase string }{
+		{"retry", retry, "waiting_ca（CA 限流冷却）"},
+		{"issue", issue, "处于 waiting_ca 且冷却未到期"},
+		{"trigger notes", trigger.Description, "cert-job 行：冷却未到期 429"},
+	} {
+		if strings.Contains(stale.carrier, stale.phrase) {
+			t.Errorf("%s 文档残留单态窗口措辞 %q", stale.label, stale.phrase)
 		}
 	}
 }

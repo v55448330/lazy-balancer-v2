@@ -226,7 +226,7 @@ var tools = []toolSpec{
 	{"pull_sync", "手动触发从节点同步", http.MethodPost, "/cluster/sync/pull", nil, nil, emptySchema},
 	// 任务监控（v2.3.4）：聚合视图 + 三操作
 	{"list_system_tasks", "任务监控聚合视图（全部定时/后台任务族状态）", http.MethodGet, "/system/tasks", nil, nil, emptySchema},
-	{"get_system_task_logs", "任务文本日志（尾部 256KB）", http.MethodGet, "/system/tasks/{id}/logs", []string{"id"}, nil, idSchema("id", "任务 ID", "string")},
+	{"get_system_task_logs", "任务文本日志（尾部 256KB；超预算截断时首行前置提示行[日志过长，仅显示最近 256KB]）", http.MethodGet, "/system/tasks/{id}/logs", []string{"id"}, nil, idSchema("id", "任务 ID", "string")},
 	{"get_system_task_history", "任务运行历史（task_runs 时间倒序）", http.MethodGet, "/system/tasks/{id}/history", []string{"id"}, nil, idSchema("id", "任务 ID", "string")},
 	{"trigger_system_task", "手动触发任务（全部非常驻任务族——以 GET /system/tasks 的 triggerable 字段为准；证书队列行用 cert-job:<job_id>）", http.MethodPost, "/system/tasks/{id}/trigger", []string{"id"}, nil, idSchema("id", "任务 ID（见 GET /system/tasks 的 triggerable 族）", "string")},
 	{"toggle_system_task", "统一调度开关（定时/循环=停止/恢复调度、常驻=启停；触发类不可调度）", http.MethodPost, "/system/tasks/{id}/toggle", []string{"id"}, nil, toggleTaskSchema},
