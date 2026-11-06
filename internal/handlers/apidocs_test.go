@@ -3026,6 +3026,69 @@ func TestAPIDocs_customRuleHeaderNameDisclosureParity(t *testing.T) {
 	}
 }
 
+// TCP PROXY 协议语义五面口径机械守卫：面板向导 tooltip（Rules.vue）、MCP
+// 手册（playbook.md）、安全文档（security.zh-CN.md）、REST API 文档
+// （GET /rules 行）与 MCP 接入指引（mcpserver/server.go）五个用户可见面
+// 必须同口径——①采信面仅受信代理网段内来源；②其余来源按直连地址处理；
+// ③采信用途=事件归因与发往上游的源地址；④未绑定安全策略的规则不解析、
+// 伪造头原样透传；⑤解析前提=仅绑定安全策略的规则解析；安全文档另需 L4
+// 判定口径（名单/地域按连接来源地址，不用 PROXY 声明地址）。措辞改写丢
+// 半句的回归形态在此红；残留旧措辞（「原始头原样透传」「时同口径」过承
+// 诺语境）同样红。源码文本对账手法与 services 侧 l4_tcp_notice_sync_test.go
+// 同款。
+func TestAPIDocs_proxyProtocolSemanticsFaceConsistency(t *testing.T) {
+	readFace := func(path string) string {
+		t.Helper()
+		src, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("读取 %s 失败: %v", path, err)
+		}
+		return string(src)
+	}
+	common := []string{
+		"仅来自系统设置受信代理网段内的来源时采信",
+		"其余来源按直连地址处理",
+		"用于事件归因与发往上游的源地址",
+		"未绑定安全策略的 TCP 规则不解析 PROXY 头，伪造头原样透传上游",
+	}
+	parseClauses := map[string]string{
+		"Rules.vue":   "仅在绑定了安全策略的 TCP 规则上解析",
+		"playbook.md": "仅在规则绑定了安全策略后才会解析",
+		"安全文档":        "仅在规则绑定了安全策略后解析",
+		"apidocs":     "仅在绑定了安全策略的 TCP 规则上解析",
+		"server.go":   "绑定了安全策略的 TCP 规则解析入站 PROXY 头",
+	}
+	sources := map[string]string{
+		"Rules.vue":   readFace(filepath.Join("..", "..", "web", "src", "views", "Rules.vue")),
+		"playbook.md": readFace(filepath.Join("..", "mcpserver", "playbook.md")),
+		"安全文档":        readFace(filepath.Join("..", "..", "docs", "security.zh-CN.md")),
+		"apidocs":     routesEntry(t, "GET /rules").Description,
+		"server.go":   readFace(filepath.Join("..", "mcpserver", "server.go")),
+	}
+	for name, src := range sources {
+		for _, marker := range common {
+			if !strings.Contains(src, marker) {
+				t.Errorf("%s 缺 PROXY 采信/直连/透传口径 %q", name, marker)
+			}
+		}
+		if !strings.Contains(src, parseClauses[name]) {
+			t.Errorf("%s 缺解析前提 %q", name, parseClauses[name])
+		}
+		if strings.Contains(src, "原始头原样透传") {
+			t.Errorf("%s 残留旧透传措辞「原始头原样透传」（权威口径=伪造头原样透传上游）", name)
+		}
+	}
+	docs := sources["安全文档"]
+	for _, marker := range []string{"按连接来源地址", "不使用 PROXY 声明地址"} {
+		if !strings.Contains(docs, marker) {
+			t.Errorf("安全文档缺 L4 判定口径 %q", marker)
+		}
+	}
+	if strings.Contains(docs, "时同口径") {
+		t.Error("安全文档残留「时同口径」过承诺语境——采信后的 PROXY 声明地址不参与 L4 名单/地域判定")
+	}
+}
+
 // 任务文本日志的截断提示行契约三载体同步（REST 文档 + MCP server/tools 工具
 // 描述），且提示行字面量必须与 handler 实际注入的前置行逐字一致（证书任务
 // 日志端点同形态）——排障者据首行判断是否读到全部日志，字面量漂移即误导。
