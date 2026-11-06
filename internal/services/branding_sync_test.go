@@ -598,3 +598,91 @@ func TestApplySnapshotBranding_auditsOnlyWhenContentChanges(t *testing.T) {
 		t.Fatalf("内容未变时审计条数=%d, want 1（不得重复写品牌同步审计）", got)
 	}
 }
+
+// MaterializeBranding 必须与 landing 成对注入 TCP 拦截提示品牌：备份导入/
+// 从端 applySnapshot/自愈三入口都经本函数落盘，「文件内容一致」短路分支
+// 此前零品牌注入——文件已写入但内存品牌滞留旧值时永不收敛。品牌注入值
+// 变化必须并入 changed 返回：提示文案渲染期烘焙进 Caddy 配置，集群链路
+// 的重载触发（brandingWritten→mustReload）依赖 changed=true。
+func TestMaterializeBranding_tcpNoticeBrandInjection(t *testing.T) {
+	t.Cleanup(func() { SetTCPBlockNoticeBrand("") })
+	defer SetDefaultLandingBody(DefaultLandingText)
+
+	const content = `{"app_name":"甲板面板","footer_text":"","landing_text":"","version":""}`
+
+	// 形状一（真实落盘）：新目录写入后内存品牌立即生效。
+	dir := t.TempDir()
+	SetTCPBlockNoticeBrand("")
+	changed, err := MaterializeBranding(dir, content)
+	if err != nil {
+		t.Fatalf("materialize fresh: %v", err)
+	}
+	if !changed {
+		t.Fatal("首次落盘必须 changed=true")
+	}
+	if got := TCPBlockNoticeBrand(); got != "甲板面板" {
+		t.Fatalf("落盘分支品牌注入 = %q, want 甲板面板", got)
+	}
+
+	// 形状二（文件已写入但内存品牌滞留旧值）：一致短路分支必须补注入，
+	// 且品牌变化并入 changed（驱动 /load 重渲染链路）。
+	staleDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(staleDir, "branding.json"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	SetTCPBlockNoticeBrand("") // 模拟内存品牌为旧值
+	changed, err = MaterializeBranding(staleDir, content)
+	if err != nil {
+		t.Fatalf("materialize identical file: %v", err)
+	}
+	if !changed {
+		t.Fatal("内存品牌滞留旧值时必须并入 changed=true")
+	}
+	if got := TCPBlockNoticeBrand(); got != "甲板面板" {
+		t.Fatalf("一致分支品牌注入 = %q, want 甲板面板", got)
+	}
+
+	// 形状三（幂等）：品牌与内容双一致时保持 changed=false，零 mtime 扰动
+	// 语义不得回退。
+	changed, err = MaterializeBranding(staleDir, content)
+	if err != nil {
+		t.Fatalf("idempotent materialize: %v", err)
+	}
+	if changed {
+		t.Fatal("品牌已一致时 changed 必须保持 false")
+	}
+	if got := TCPBlockNoticeBrand(); got != "甲板面板" {
+		t.Fatalf("幂等后品牌 = %q, want 甲板面板", got)
+	}
+}
+
+// 注入归一口径与 handlers.SyncDefaultLandingText 同款：空串或 handlers
+// 默认品牌（loadBrandingConfig 对空 app_name 的填充值）视为未配置→注空串
+// 由渲染期回退裁定文案；用户显式配置原样透传。
+func TestMaterializeBranding_tcpNoticeBrandNormalization(t *testing.T) {
+	t.Cleanup(func() { SetTCPBlockNoticeBrand("") })
+	defer SetDefaultLandingBody(DefaultLandingText)
+
+	cases := []struct {
+		name    string
+		content string
+		want    string
+	}{
+		{"空 app_name 注空串", `{"app_name":""}`, ""},
+		{"handlers 默认品牌视为未配置", `{"app_name":"Lazy Balancer"}`, ""},
+		{"缺字段注空串", `{"landing_text":"x"}`, ""},
+		{"显式配置原样透传", `{"app_name":"我的网关"}`, "我的网关"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			SetTCPBlockNoticeBrand("sentinel-prev") // 未注入则保持哨兵值，保证断言判别力
+			if _, err := MaterializeBranding(dir, tc.content); err != nil {
+				t.Fatalf("materialize: %v", err)
+			}
+			if got := TCPBlockNoticeBrand(); got != tc.want {
+				t.Fatalf("品牌注入 = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}

@@ -101,10 +101,16 @@ var emptyBrandingTemplate = func() string {
 	return string(out)
 }()
 
-// MaterializeBranding 把 branding_json 镜像值写回其事实源文件，并立即
-// 注入 landing 文案。空内容按集群同步既有语义收敛为全空模板。
-// 返回值 changed 报告是否实际写入（内容一致时为 false 且零 mtime 扰动）——
-// 调用方据此区分「写了」与「没写」，避免内容未变仍落一条品牌同步审计。
+// MaterializeBranding 把 branding_json 镜像值写回其事实源文件，并立即成对
+// 注入内存单源（landing 文案 + TCP 拦截提示品牌）。空内容按集群同步既有
+// 语义收敛为全空模板。
+// 返回值 changed 报告是否需要触发下游重渲染：实际写入文件为 true；文件
+// 内容一致但内存 TCP 提示品牌与文件口径分叉（导入/从端 applySnapshot/
+// 自愈三入口都经本函数落盘，「内容一致」短路分支此前只注入 landing，
+// 内存品牌滞留旧值永不收敛）时同样并入 true——提示文案渲染期烘焙进
+// Caddy 配置，/load 触发链路依赖 changed=true 才会重渲染。内容与品牌
+// 双双一致时为 false 且零 mtime 扰动——调用方据此区分「写了」与
+// 「没写」，避免内容未变仍落一条品牌同步审计。
 func MaterializeBranding(dataDir, content string) (changed bool, err error) {
 	if dataDir == "" {
 		return false, fmt.Errorf("品牌配置目录为空")
@@ -120,8 +126,9 @@ func MaterializeBranding(dataDir, content string) (changed bool, err error) {
 	}
 	path := filepath.Join(dataDir, "branding.json")
 	if existing, err := os.ReadFile(path); err == nil && string(existing) == content {
-		injectLandingFromBranding(content)
-		return false, nil
+		// 内容一致仍成对注入：三入口在真实落盘分支之外只有本短路通道，
+		// 缺注入则内存品牌滞留旧值。品牌变化并入 changed（见函数注释）。
+		return injectBrandingsFromBranding(content), nil
 	}
 	mode := os.FileMode(0o644)
 	if info, statErr := os.Stat(path); statErr == nil {
@@ -133,7 +140,7 @@ func MaterializeBranding(dataDir, content string) (changed bool, err error) {
 	if err := writeFileAtomicSynced(path, []byte(content), mode); err != nil {
 		return false, fmt.Errorf("原子写入品牌配置文件: %w", err)
 	}
-	injectLandingFromBranding(content)
+	injectBrandingsFromBranding(content)
 	return true, nil
 }
 
@@ -215,6 +222,18 @@ func injectLandingFromBranding(content string) {
 		text = DefaultLandingText
 	}
 	SetDefaultLandingBody(text)
+}
+
+// injectBrandingsFromBranding 从 branding JSON 原文成对注入内存单源：
+// TCP 拦截提示品牌（normalizeTCPNoticeBrand 归一，与 handlers
+// SyncDefaultLandingText 同款口径，两处注入幂等）+ landing 文案。
+// 返回品牌注入值是否发生变化——MaterializeBranding 据此把内存品牌变化
+// 并入 changed（提示文案渲染期烘焙进 Caddy 配置，重载触发链依赖 changed）。
+func injectBrandingsFromBranding(content string) (brandChanged bool) {
+	before := TCPBlockNoticeBrand()
+	SetTCPBlockNoticeBrand(normalizeTCPNoticeBrand(extractBrandingStringField(content, "app_name")))
+	injectLandingFromBranding(content)
+	return TCPBlockNoticeBrand() != before
 }
 
 // extractBrandingStringField 从 JSON 原文按字段名提取字符串值;任何解析
