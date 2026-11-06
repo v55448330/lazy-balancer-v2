@@ -97,8 +97,8 @@ else
   step "⑤ buildx 双架构推送"
   PROXY_ARGS=""
   [[ -n "${HTTP_PROXY:-}" ]] && PROXY_ARGS="HTTP_PROXY=$HTTP_PROXY HTTPS_PROXY=$HTTPS_PROXY"
-  ( eval "$PROXY_ARGS docker buildx build --builder lazy-builder --platform linux/amd64,linux/arm64 --provenance=false --sbom=false --build-arg VERSION=\"${TAG%%-*}\" -t \"v55448330/lazy-balancer-v2:$TAG\" --push . > /tmp/finalize-push.log 2>&1" ) \
-    && pass "buildx 推送成功" || fail "buildx 推送失败（见 /tmp/finalize-push.log）"
+  ( eval "$PROXY_ARGS docker buildx build --builder lazy-builder --platform linux/amd64,linux/arm64 --provenance=false --sbom=false --build-arg VERSION=\"${TAG%%-*}\" -t \"v55448330/lazy-balancer-v2:$TAG\" -t \"v55448330/lazy-balancer-v2:latest\" --push . > /tmp/finalize-push.log 2>&1" ) \
+    && pass "buildx 推送成功（$TAG + latest）" || fail "buildx 推送失败（见 /tmp/finalize-push.log）"
   # 推送后强拉对账（daemon 缓存可能 stale）；拉取失败不终止——⑥ 一次性容器
   # 终验才是权威判据（无代理环境 pull 走直连可能失败）。
   ( $PROXY_ARGS docker pull -q "v55448330/lazy-balancer-v2:$TAG" > /dev/null 2>&1 ) || fail "强拉对账失败（不影响已推送镜像；⑥ 终验以本地 tag 为准）"
