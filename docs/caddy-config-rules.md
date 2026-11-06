@@ -139,7 +139,7 @@ TCP规则A(port=8080) + TCP规则B(port=8080) → 冲突（TCP 端口独占；�
 
 3. 为每个服务器生成路由
    └── HTTP 规则经 generateHTTPRouteObjects()（与保存前校验同源）；TCP 规则
-      经 buildTCPServer()/buildTCPProxyRoute()
+      经 buildTCPServer()/tcpSecurityRouteList()
    └── generateHTTPRouteObjects 处理域名分割、路径规则排序、健康检查、负载策略等
 
 4. 组装完整配置
