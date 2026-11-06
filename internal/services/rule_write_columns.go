@@ -12,8 +12,10 @@ package services
 // schema 加列而 specs 未更新即测试失败。
 
 import (
+	"fmt"
 	"strings"
 
+	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
 )
 
@@ -41,10 +43,10 @@ var lbRuleColumnSpecs = []lbRuleColumnSpec{
 	{"dns_server", "COALESCE(dns_server,'')"},
 	{"dns_family", "COALESCE(dns_family,'ipv4')"},
 	{"health_check_path", "COALESCE(health_check_path,'')"},
-	{"health_check_interval", "COALESCE(health_check_interval,10)"},
-	{"health_check_timeout", "COALESCE(health_check_timeout,2)"},
-	{"health_check_unhealthy_threshold", "COALESCE(health_check_unhealthy_threshold,3)"},
-	{"health_check_healthy_threshold", "COALESCE(health_check_healthy_threshold,2)"},
+	{"health_check_interval", fmt.Sprintf("COALESCE(health_check_interval,%d)", db.DefaultHealthCheckInterval)},
+	{"health_check_timeout", fmt.Sprintf("COALESCE(health_check_timeout,%d)", db.DefaultHealthCheckTimeout)},
+	{"health_check_unhealthy_threshold", fmt.Sprintf("COALESCE(health_check_unhealthy_threshold,%d)", db.DefaultHealthCheckUnhealthyThreshold)},
+	{"health_check_healthy_threshold", fmt.Sprintf("COALESCE(health_check_healthy_threshold,%d)", db.DefaultHealthCheckHealthyThreshold)},
 	{"enable_active_health_check", "COALESCE(enable_active_health_check,0)"},
 	{"tcp_health_check_port", "COALESCE(tcp_health_check_port,0)"},
 	{"tcp_proxy_protocol", "COALESCE(tcp_proxy_protocol,0)"},

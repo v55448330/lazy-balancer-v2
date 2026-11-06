@@ -409,7 +409,7 @@ func (h *Handlers) GetConfig(c *gin.Context) {
 	       COALESCE(audit_retention_months,?) as audit_retention_months,
 	       COALESCE(jwt_expire_minutes,?) as jwt_expire_minutes,
 	       COALESCE(timezone,?) as timezone,
-	       COALESCE(github_proxy_url,'https://v4.gh-proxy.org/') as github_proxy_url,
+	       COALESCE(github_proxy_url,'`+db.DefaultGitHubProxyURL+`') as github_proxy_url,
 	       COALESCE(github_token,'') as github_token,
 	       COALESCE(mfa_write_guard,0) as mfa_write_guard,
 	       COALESCE(mfa_lockout_enabled,0) as mfa_lockout_enabled,

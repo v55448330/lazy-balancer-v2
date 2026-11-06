@@ -111,14 +111,14 @@ func loadConfigSnapshot(ctx context.Context) (configSnapshot, error) {
 		COALESCE(access_log_json,TRUE), COALESCE(access_log_format,''),
 		COALESCE(task_log_size_mb,?), COALESCE(audit_log_size_mb,?), COALESCE(runtime_log_size_mb,?), COALESCE(audit_retention_months,?),
 		COALESCE(jwt_expire_minutes,?),
-		COALESCE(github_proxy_url,'https://v4.gh-proxy.org/'),
+		COALESCE(github_proxy_url,?),
 		COALESCE(github_token,''),
 		COALESCE(mfa_write_guard,0),
 		COALESCE(mfa_lockout_enabled,0),
 		COALESCE(trusted_proxy_enabled,0), COALESCE(trusted_proxy_ranges,'[]'), COALESCE(trusted_proxy_range_refs,'[]'), COALESCE(trusted_proxy_headers,'[]'), COALESCE(trusted_proxy_strict,1),
 		COALESCE(server_map_lat,0), COALESCE(server_map_lon,0), COALESCE(threat_screen_mode,?), COALESCE(threat_traffic_sample_n,?), COALESCE(security_events_retention_days,?), COALESCE(security_events_row_cap,?)
 		FROM global_config WHERE id=1`, db.DefaultCertExpiryDays, db.DefaultCertRenewalDays, db.DefaultCertRenewalAttempts, db.DefaultLogLevel, db.DefaultTimezone, db.DefaultCaddyLogLevel,
-		db.DefaultTaskLogSizeMB, db.DefaultAuditLogSizeMB, db.DefaultRuntimeLogSizeMB, db.DefaultAuditRetentionMonths, db.DefaultJWTExpireMinutes,
+		db.DefaultTaskLogSizeMB, db.DefaultAuditLogSizeMB, db.DefaultRuntimeLogSizeMB, db.DefaultAuditRetentionMonths, db.DefaultJWTExpireMinutes, db.DefaultGitHubProxyURL,
 		db.DefaultThreatScreenMode, db.DefaultThreatTrafficSampleN, db.DefaultSecurityEventsRetentionDays, db.DefaultSecurityEventsRowCap).Scan(
 		&old.ACMEEmail,
 		&old.CertExpiryDays, &old.CertRenewalDays, &old.CertRenewalAttempts,

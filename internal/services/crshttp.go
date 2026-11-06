@@ -143,12 +143,13 @@ func formatDownloadBytes(n int64) string {
 // 故 CRS tarball 用等价 archive URL、最新 tag 检查回退经代理的 releases/latest
 // 跳转。代理地址经 global_config.github_proxy_url 配置（基础设置），
 // 仅允许 gitHubProxyOptions 内置选项；历史硬编码 ghfast.top 已废弃。
-const defaultGitHubProxyURL = "https://v4.gh-proxy.org/"
+// 默认项单源=db.DefaultGitHubProxyURL（fresh DDL DEFAULT/面板与快照读侧
+// COALESCE/MCP schema enum 首项同源）；另两项是非默认枚举选项，保留字面量。
 
 // gitHubProxyOptions 是允许配置的全部代理前缀：写侧 ValidateGitHubProxyURL
 // 拒绝白名单外取值（防 SSRF），读侧遇白名单外脏数据回退默认（fail-closed）。
 var gitHubProxyOptions = []string{
-	"https://v4.gh-proxy.org/",      // Cloudflare v4（默认）
+	db.DefaultGitHubProxyURL,        // Cloudflare v4（默认）
 	"https://axisnow.gh-proxy.org/", // AxisNow v4
 	"https://cdn.gh-proxy.org/",     // Fastly v4
 }
@@ -189,10 +190,10 @@ func getGitHubProxyURL() string {
 		case err == nil && isAllowedGitHubProxyURL(proxyURL):
 			return proxyURL
 		case err != nil && !errors.Is(err, sql.ErrNoRows):
-			Logf("error", "读取 GitHub 加速代理配置失败，回退默认 %s: %v", defaultGitHubProxyURL, err)
+			Logf("error", "读取 GitHub 加速代理配置失败，回退默认 %s: %v", db.DefaultGitHubProxyURL, err)
 		}
 	}
-	return defaultGitHubProxyURL
+	return db.DefaultGitHubProxyURL
 }
 
 func ghProxied(rawURL string) string {

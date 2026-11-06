@@ -141,6 +141,13 @@ const (
 	// 不得在展示侧与运行期各持一份。
 	MinSyncIntervalSeconds = 10
 	MaxSyncIntervalSeconds = 86400
+	// DefaultGitHubProxyURL 是 global_config.github_proxy_url 的治理默认：
+	// fresh DDL DEFAULT、db 真值表、面板读侧（handlers caddy.go/
+	// config_changes.go）、集群快照装载（cluster_snapshot.go）、GitHub 下载
+	// 代理读侧兜底与白名单首项（services crshttp.go）、MCP update_config
+	// schema enum 首项（mcpserver/server.go）同源；白名单另两项是非默认
+	// 枚举选项，保留字面量。调整默认值前必须先 grep 全部读点一并收敛。
+	DefaultGitHubProxyURL = "https://v4.gh-proxy.org/"
 	// DefaultTimezone 是 global_config.timezone 的治理默认（fresh DDL DEFAULT
 	// 与启动归一单源）。空串不是合法库值：time.LoadLocation("") 是 Go 的
 	// 特殊值（返回 UTC），读侧 COALESCE 只兜 NULL——空串落库会让全站展示/
@@ -677,7 +684,7 @@ func createTables() error {
 		audit_retention_months INTEGER DEFAULT 3,
 		jwt_expire_minutes INTEGER DEFAULT ` + fmt.Sprint(DefaultJWTExpireMinutes) + `,
 		timezone VARCHAR(50) DEFAULT 'Asia/Shanghai',
-		github_proxy_url TEXT NOT NULL DEFAULT 'https://v4.gh-proxy.org/',
+		github_proxy_url TEXT NOT NULL DEFAULT '` + DefaultGitHubProxyURL + `',
 		-- 可选 GITHUB_TOKEN（2026-09-25 用户裁定）：未认证 GitHub API 限流
 		-- 60/h/IP（共享出口易打满），令牌提升 5000/h；仅发 api.github.com 直连。
 		github_token TEXT NOT NULL DEFAULT '',
@@ -1313,7 +1320,7 @@ var newColumnsRegistry = map[string]string{
 	"global_config.audit_retention_months":                 "INTEGER DEFAULT 3",
 	"global_config.jwt_expire_minutes":                     fmt.Sprintf("INTEGER DEFAULT %d", DefaultJWTExpireMinutes),
 	"global_config.timezone":                               "VARCHAR(50) DEFAULT 'Asia/Shanghai'",
-	"global_config.github_proxy_url":                       "TEXT NOT NULL DEFAULT 'https://v4.gh-proxy.org/'",
+	"global_config.github_proxy_url":                       fmt.Sprintf("TEXT NOT NULL DEFAULT '%s'", DefaultGitHubProxyURL),
 	"global_config.github_token":                           "TEXT NOT NULL DEFAULT ''",
 	"global_config.server_map_lat":                         "REAL NOT NULL DEFAULT 0",
 	"global_config.threat_screen_mode":                     fmt.Sprintf("TEXT NOT NULL DEFAULT '%s'", DefaultThreatScreenMode),

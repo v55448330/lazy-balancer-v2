@@ -667,7 +667,7 @@ func (s *ClusterService) loadSnapshotGlobalSettings(ctx context.Context, store s
 		COALESCE(acme_email,''), COALESCE(cert_expiry_days,?), COALESCE(cert_renewal_days,?), COALESCE(cert_renewal_attempts,?),
 		COALESCE(default_ca_provider_id,0), COALESCE(sync_interval,?),
 		COALESCE(admin_tls_enabled,0), COALESCE(admin_tls_mode,'selfsigned'), COALESCE(admin_tls_cert,''), COALESCE(admin_tls_key,''),
-		COALESCE(mfa_write_guard,0), COALESCE(mfa_lockout_enabled,0), COALESCE(github_proxy_url,'https://v4.gh-proxy.org/'),
+		COALESCE(mfa_write_guard,0), COALESCE(mfa_lockout_enabled,0), COALESCE(github_proxy_url,'`+db.DefaultGitHubProxyURL+`'),
 		COALESCE(oidc_config,'')
 		FROM global_config WHERE id=1`, db.DefaultLogLevel,
 		db.DefaultTaskLogSizeMB, db.DefaultAuditLogSizeMB, db.DefaultRuntimeLogSizeMB,
@@ -993,7 +993,7 @@ func (s *ClusterService) snapshotSecurityBlockPages(ctx context.Context, store s
 // 快照导出、差分本地读取、从端写侧三处此前
 // 各抄一份（列增减需同时改 6 处， 已出现「快照列与差分行不同步」
 // 教训）。两张表列清单/扫描顺序完全一致，共享本常量与下方中性行扫描。
-const clusterRuleLibVersionColumns = `id,version,COALESCE(updated_at,''),COALESCE(auto_update,1),COALESCE(update_status,'idle'),COALESCE(message,''),COALESCE(last_checked,''),COALESCE(next_update,''),COALESCE(trigger,''),COALESCE(started_at,''),COALESCE(finished_at,''),COALESCE(schedule_days,'1,2,3,4,5,6,7'),COALESCE(schedule_time,'04:00')`
+const clusterRuleLibVersionColumns = `id,version,COALESCE(updated_at,''),COALESCE(auto_update,1),COALESCE(update_status,'idle'),COALESCE(message,''),COALESCE(last_checked,''),COALESCE(next_update,''),COALESCE(trigger,''),COALESCE(started_at,''),COALESCE(finished_at,''),COALESCE(schedule_days,'` + db.DefaultScheduleDays + `'),COALESCE(schedule_time,'` + db.DefaultScheduleTime + `')`
 
 // clusterIP2RegionVersionV6Columns 是 IPv6 库五列的追加段（仅
 // security_ip2region_version 拥有——CRS 表无 v6 列，共用 SELECT/INSERT 必须

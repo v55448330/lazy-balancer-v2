@@ -809,8 +809,8 @@ func TestGovernedDefaultLiteralsBoundInConsumers(t *testing.T) {
 	}{
 		{
 			file:      "../handlers/caddy.go",
-			forbidden: []string{`COALESCE(timezone,'Asia/Shanghai')`, `COALESCE(caddy_log_level,'info')`},
-			required:  []string{"db.DefaultTimezone", "db.DefaultCaddyLogLevel"},
+			forbidden: []string{`COALESCE(timezone,'Asia/Shanghai')`, `COALESCE(caddy_log_level,'info')`, `COALESCE(github_proxy_url,'https://v4.gh-proxy.org/')`},
+			required:  []string{"db.DefaultTimezone", "db.DefaultCaddyLogLevel", "db.DefaultGitHubProxyURL"},
 		},
 		{
 			file:      "../handlers/auditlog.go",
@@ -819,8 +819,8 @@ func TestGovernedDefaultLiteralsBoundInConsumers(t *testing.T) {
 		},
 		{
 			file:      "../handlers/config_changes.go",
-			forbidden: []string{`COALESCE(timezone,'Asia/Shanghai')`, `COALESCE(log_level,'info')`, `COALESCE(caddy_log_level,'info')`},
-			required:  []string{"db.DefaultTimezone", "db.DefaultLogLevel", "db.DefaultCaddyLogLevel"},
+			forbidden: []string{`COALESCE(timezone,'Asia/Shanghai')`, `COALESCE(log_level,'info')`, `COALESCE(caddy_log_level,'info')`, `COALESCE(github_proxy_url,'https://v4.gh-proxy.org/')`},
+			required:  []string{"db.DefaultTimezone", "db.DefaultLogLevel", "db.DefaultCaddyLogLevel", "db.DefaultGitHubProxyURL"},
 		},
 		{
 			file:      "../services/cluster_snapshot.go",
@@ -1097,13 +1097,60 @@ func TestGovernedDefaultLiteralsBoundInConsumers(t *testing.T) {
 		{
 			// 威胁/爬虫任务级排程列为 NOT NULL DEFAULT，COALESCE 第二参数
 			// 本不可达，纯字面量副本只会漂移：与 DDL/迁移补列/services 读
-			// 失败兜底同一对常量。
+			// 失败兜底同一对常量。CRS/IP2Region 版本表列清单单源
+			// （clusterRuleLibVersionColumns）的 schedule_days/schedule_time
+			// 同族逃逸形态一并登记（按实际列名，无表前缀）。
 			file: "../services/cluster_snapshot.go",
 			forbidden: []string{
 				"COALESCE(threat_schedule_days,'1,2,3,4,5,6,7')", "COALESCE(threat_schedule_time,'04:00')",
 				"COALESCE(crawler_schedule_days,'1,2,3,4,5,6,7')", "COALESCE(crawler_schedule_time,'04:00')",
+				"COALESCE(schedule_days,'1,2,3,4,5,6,7')", "COALESCE(schedule_time,'04:00')",
 			},
 			required: []string{"db.DefaultScheduleDays", "db.DefaultScheduleTime"},
+		},
+		{
+			// 集群快照装载的 github_proxy_url COALESCE 兜底与 fresh DDL
+			// DEFAULT、面板读侧（caddy.go/config_changes.go）同源。
+			file:      "../services/cluster_snapshot.go",
+			forbidden: []string{`COALESCE(github_proxy_url,'https://v4.gh-proxy.org/')`},
+			required:  []string{"db.DefaultGitHubProxyURL"},
+		},
+		{
+			// GitHub 下载代理读侧（读库失败回退日志与返回值、白名单首项
+			// =默认项）绑定同一常量；白名单另两项是非默认枚举选项，保留
+			// 字面量不属治理默认值逃逸。
+			file:      "../services/crshttp.go",
+			forbidden: []string{"https://v4.gh-proxy.org/"},
+			required:  []string{"db.DefaultGitHubProxyURL"},
+		},
+		{
+			// MCP update_config schema 的 github_proxy_url enum 首项=默认项
+			// （与 services 白名单同序）绑定同一常量，其余 enum 项为非默认
+			// 枚举选项保留字面量。
+			file:      "../mcpserver/server.go",
+			forbidden: []string{"https://v4.gh-proxy.org/"},
+			required:  []string{"db.DefaultGitHubProxyURL"},
+		},
+		{
+			// db 包内 DDL DEFAULT 与真值表两处（同包引用是裸标识符而非
+			// 选择器，required 选择器断言不适用；值级钉测由 fresh DDL/
+			// migration 测试承担，此处只钉字面量不得回流）。常量定义本身
+			// 是裸 URL 字面量，不含「DEFAULT '」前缀故不被本条命中。
+			file:      "db.go",
+			forbidden: []string{"DEFAULT 'https://v4.gh-proxy.org/'"},
+		},
+		{
+			// 规则写路径列清单单源的健康检查四列 COALESCE 兜底：字面量副本
+			// 会让 DDL/启动回填/导入默认调整后快照导出投影静默漂移。
+			file: "../services/rule_write_columns.go",
+			forbidden: []string{
+				"COALESCE(health_check_interval,10)", "COALESCE(health_check_timeout,2)",
+				"COALESCE(health_check_unhealthy_threshold,3)", "COALESCE(health_check_healthy_threshold,2)",
+			},
+			required: []string{
+				"db.DefaultHealthCheckInterval", "db.DefaultHealthCheckTimeout",
+				"db.DefaultHealthCheckUnhealthyThreshold", "db.DefaultHealthCheckHealthyThreshold",
+			},
 		},
 	}
 	for _, tc := range cases {
