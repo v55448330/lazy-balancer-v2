@@ -330,14 +330,25 @@ func fetchGitHubLatestTagViaProxy(ctx context.Context, repoSlug string) (string,
 	if err != nil {
 		return "", fmt.Errorf("读取代理响应 %s: %w", proxiedURL, err)
 	}
-	if m := ghLatestTagInBodyRegexp.FindSubmatch(body); m != nil {
+	// 扫描全部 /releases/tag/ 匹配，取首个通过形状校验的 tag：GitHub 页面
+	// HTML 会在真实 tag 之前混入路由模板通配符产物（如 /releases/tag/*name），
+	// 首个原始匹配优先会让整次查询被模板产物毒化。校验仍 fail-closed——
+	// 全部匹配都非法时报形状错误，不放水。
+	var invalidErr error
+	for _, m := range ghLatestTagInBodyRegexp.FindAllSubmatch(body, -1) {
 		// 与 Location/API 两条漏斗同口径校验形状；正则可捕获换行等控制字符，
 		// 不校验会污染任务日志/版本 message/审计详情。
 		tag := string(m[1])
 		if err := validateReleaseTag(tag); err != nil {
-			return "", err
+			if invalidErr == nil {
+				invalidErr = err
+			}
+			continue
 		}
 		return tag, nil
+	}
+	if invalidErr != nil {
+		return "", invalidErr
 	}
 	return "", fmt.Errorf("代理响应 %s 未包含 /releases/tag/ 跳转", proxiedURL)
 }
