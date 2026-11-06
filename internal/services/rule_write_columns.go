@@ -51,7 +51,7 @@ var lbRuleColumnSpecs = []lbRuleColumnSpec{
 	{"tcp_health_check_port", "COALESCE(tcp_health_check_port,0)"},
 	{"tcp_proxy_protocol", "COALESCE(tcp_proxy_protocol,0)"},
 	{"tcp_try_duration", "COALESCE(tcp_try_duration,0)"},
-	{"tcp_try_interval", "COALESCE(tcp_try_interval,250)"},
+	{"tcp_try_interval", fmt.Sprintf("COALESCE(tcp_try_interval,%d)", db.DefaultTCPTryInterval)},
 	{"request_body_max_size_mb", "COALESCE(request_body_max_size_mb,0)"},
 	{"upstream_keepalive_timeout", "COALESCE(upstream_keepalive_timeout,0)"},
 	{"server_tokens_hidden", "COALESCE(server_tokens_hidden,0)"},

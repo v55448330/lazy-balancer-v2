@@ -445,10 +445,10 @@ var backupTableNullDefaults = map[string]map[string]any{
 	"lb_rules": {
 		"description": "", "domain": "", "strategy": "weighted_round_robin",
 		"dynamic_dns": int64(0), "enable_dns_server": int64(0), "dns_server": "", "dns_family": "ipv4",
-		"health_check_path": "", "health_check_interval": int64(10), "health_check_timeout": int64(2),
-		"health_check_unhealthy_threshold": int64(3), "health_check_healthy_threshold": int64(2),
+		"health_check_path": "", "health_check_interval": int64(db.DefaultHealthCheckInterval), "health_check_timeout": int64(db.DefaultHealthCheckTimeout),
+		"health_check_unhealthy_threshold": int64(db.DefaultHealthCheckUnhealthyThreshold), "health_check_healthy_threshold": int64(db.DefaultHealthCheckHealthyThreshold),
 		"enable_active_health_check": int64(0), "tcp_health_check_port": int64(0), "tcp_proxy_protocol": int64(0),
-		"tcp_try_duration": int64(0), "tcp_try_interval": int64(250),
+		"tcp_try_duration": int64(0), "tcp_try_interval": int64(db.DefaultTCPTryInterval),
 		"request_body_max_size_mb": int64(0), "upstream_keepalive_timeout": int64(0),
 		"server_tokens_hidden": int64(0), "custom_routes_enabled": int64(0),
 		"ntlm_compatible": int64(0), "upstream_force_http1": int64(0),
@@ -6824,6 +6824,9 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 		if err := db.DB.QueryRow(`SELECT COALESCE(auto_backup_enabled,?), COALESCE(auto_backup_last_run,'') FROM global_config WHERE id=1`,
 			db.DefaultAutoBackupEnabled).Scan(&newEnabled, &lastRun); err == nil && newEnabled == 1 {
 			if autoBackupWatermarkEmptyOrStale(lastRun) {
+				// 刻意无 ctx 豁免：auto_backup_last_run 水位收敛属导入恢复通道
+				//（空/陈旧才写，自有一致性机制）——主导入事务已提交，此处中止
+				// 只推迟水位、不破坏一致性；登记表=auth_oidc_write_ctx_guard_test.go。
 				if _, err := db.DB.Exec(`UPDATE global_config SET auto_backup_last_run=? WHERE id=1`, time.Now().Format(time.RFC3339)); err != nil {
 					services.Logf("warn", "配置导入：重置 auto_backup_last_run 失败: %v", err)
 				}

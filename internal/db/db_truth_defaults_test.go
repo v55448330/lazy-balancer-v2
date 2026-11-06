@@ -874,10 +874,18 @@ func TestGovernedDefaultLiteralsBoundInConsumers(t *testing.T) {
 		},
 		{
 			// 导入的 NULL 回填 + 行级归一必须与 DDL 默认/写侧同源；数值写入
-			// map 用 int64(...) 形态，字符串扫描覆盖不到。
-			file:                    "../handlers/config_backup.go",
-			forbiddenIntConversions: []string{"int64(2000)"},
-			required:                []string{"db.DefaultCAProviderMinIntervalMS", "db.DefaultCAProviderMaxConcurrent"},
+			// map 用 int64(...) 形态，字符串扫描覆盖不到。lb_rules 行的健康
+			// 检查四列与 tcp_try_interval 同批绑定治理常量。
+			file: "../handlers/config_backup.go",
+			forbiddenIntConversions: []string{
+				"int64(2000)", "int64(10)", "int64(2)", "int64(3)", "int64(250)",
+			},
+			required: []string{
+				"db.DefaultCAProviderMinIntervalMS", "db.DefaultCAProviderMaxConcurrent",
+				"db.DefaultHealthCheckInterval", "db.DefaultHealthCheckTimeout",
+				"db.DefaultHealthCheckUnhealthyThreshold", "db.DefaultHealthCheckHealthyThreshold",
+				"db.DefaultTCPTryInterval",
+			},
 		},
 		{
 			file: "../handlers/config_import_v1.go",
@@ -1140,16 +1148,19 @@ func TestGovernedDefaultLiteralsBoundInConsumers(t *testing.T) {
 			forbidden: []string{"DEFAULT 'https://v4.gh-proxy.org/'"},
 		},
 		{
-			// 规则写路径列清单单源的健康检查四列 COALESCE 兜底：字面量副本
-			// 会让 DDL/启动回填/导入默认调整后快照导出投影静默漂移。
+			// 规则写路径列清单单源的健康检查四列与 tcp_try_interval COALESCE
+			// 兜底：字面量副本会让 DDL/启动回填/导入默认调整后快照导出投影
+			// 静默漂移。
 			file: "../services/rule_write_columns.go",
 			forbidden: []string{
 				"COALESCE(health_check_interval,10)", "COALESCE(health_check_timeout,2)",
 				"COALESCE(health_check_unhealthy_threshold,3)", "COALESCE(health_check_healthy_threshold,2)",
+				"COALESCE(tcp_try_interval,250)",
 			},
 			required: []string{
 				"db.DefaultHealthCheckInterval", "db.DefaultHealthCheckTimeout",
 				"db.DefaultHealthCheckUnhealthyThreshold", "db.DefaultHealthCheckHealthyThreshold",
+				"db.DefaultTCPTryInterval",
 			},
 		},
 	}
