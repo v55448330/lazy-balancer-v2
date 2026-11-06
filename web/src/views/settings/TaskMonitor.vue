@@ -737,13 +737,22 @@ async function runTaskAction(row: TaskInfo, options: TaskActionOptions): Promise
   }
 }
 
-// 证书行冷却不再禁用手动运行（2026-11-02 用户裁定，与证书任务页重签同口径）：
-// 文案降级为信息提示；null 仍是「永久不可重试」禁用态。非证书行恒 0 不进此路径。
+// 证书行冷却不再禁用手动运行（2026-11-02 用户裁定），文案按实门口径披露
+// （2026-11-07 用户裁定）：触发请求不带 force——冷却期/CA 退避窗口内触发会被
+// 429 拒绝，failed 行越窗出口在证书任务页「重签」；不得承诺「立即尝试」
+// （那是重签的 force 语义）。failed 行剩余冷却基本来自 CA 退避窗（1–3h，
+// 远长于 5 分钟通用冷却），故按行状态分支；非 failed 行的冷却都在 running
+// 在途态（按钮已禁用），tooltip 只补拒绝语义。null 仍是「永久不可重试」
+// 禁用态。非证书行恒 0 不进此路径。
 const runCooldownReason = (row: TaskInfo): string => {
   if (row.retry_cooldown_seconds === null) return '该任务永久不可重试'
   const seconds = Number(row.retry_cooldown_seconds ?? 0)
   if (!Number.isFinite(seconds) || seconds <= 0) return ''
-  return `冷却中（约 ${Math.ceil(seconds / 60)} 分钟）· 手动运行将立即尝试`
+  const minutes = Math.ceil(seconds / 60)
+  if (row.status === 'failed') {
+    return `冷却中（约 ${minutes} 分钟）· CA 退避窗口内手动触发将被拒绝；如需越过退避窗请到证书任务页使用「重签」`
+  }
+  return `冷却中（约 ${minutes} 分钟）· 冷却期内手动触发将被拒绝`
 }
 
 const onTrigger = (row: TaskInfo): Promise<void> => runTaskAction(row, {
