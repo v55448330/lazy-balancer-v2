@@ -441,7 +441,7 @@
               <el-table-column label="IP / CIDR" min-width="230">
                 <template #default="{ row }">
                   <span v-if="ipListDialogReadOnly" class="ip-entry-text">{{ row.value }}</span>
-                  <el-input v-else v-model="row.value" placeholder="如 192.168.1.0/24" size="small" :class="{ 'ip-entry-invalid': !isValidCidr(row.value) }" />
+                  <el-input v-else v-model="row.value" placeholder="如 192.168.1.0/24" size="small" :class="{ 'is-error': !isValidCidr(row.value) }" />
                 </template>
               </el-table-column>
               <el-table-column label="备注" min-width="140">
@@ -2232,7 +2232,7 @@ onUnmounted(() => {
 .ip-query-bar .el-radio-group, .ip-query-bar .el-button { flex: none; }
 .ip-entry-index { color: #9ca3af; font-variant-numeric: tabular-nums; }
 .entries-pagination { display: flex; justify-content: flex-end; margin-top: 8px; }
-.ip-entry-invalid :deep(.el-input__wrapper) { box-shadow: 0 0 0 1px var(--el-color-danger, #ef4444) inset; }
+/* 名单条目非法红框由 main.css 全局 .el-input.is-error 规则承担 */
 /* .rules-pagination 已收敛 styles/main.css（四处逐字重复单源化） */
 .threat-source-url {
   display: inline-block;

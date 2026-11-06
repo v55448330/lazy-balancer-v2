@@ -134,7 +134,7 @@
               <span class="k">匹配条件</span>
               <span>
                 <div v-for="(c, i) in customConditions" :key="i" class="trg-cond">
-                  {{ c.target }} {{ c.operator }} <code>{{ c.pattern }}</code>
+                  {{ conditionTargetLabel(c.target, c.header_name) }} {{ c.operator }} <code>{{ c.pattern }}</code>
                 </div>
                 <span v-if="customConditions.length === 0">—</span>
               </span>
@@ -176,6 +176,7 @@ import SyntaxHighlight from '@/components/SyntaxHighlight.vue'
 import { request } from '@/utils/api'
 import { formatDate } from '@/utils/date'
 import { hasOwn } from '@/utils/hasOwn'
+import { conditionTargetLabel } from '@/utils/customRuleLimits'
 import { eventActionFull, eventActionTone } from '@/utils/eventAction'
 import { parseIPList, parseRefIds, createIpMatcher, triggerStageFamily, customRuleEventDbID, sharedEntriesCache, subscribeSharedEntriesCache, ensureSharedEntries, missingSharedEntryIds, formatDurationUs, eventDetailRefIds, detectionModeExplains, isTrustExemptionCandidate, trustHitMode, isWafDurationFamily, extractCrsRuleSnippet, wafModeLabel } from '@/utils/securityStages'
 import { issueCrsIndexSession, useCrsRuleIndex } from '@/composables/useCrsRuleIndex'
@@ -673,7 +674,7 @@ interface CustomRule {
   score?: number
   enabled: boolean
   condition_logic?: 'and' | 'or'
-  conditions?: Array<{ target: string; operator: string; pattern: string }>
+  conditions?: Array<{ target: string; operator: string; pattern: string; header_name?: string }>
 }
 const customRule = ref<CustomRule | null>(null)
 const customDbId = computed(() => customRuleEventDbID(props.row?.rule_triggered ?? ''))
@@ -686,7 +687,7 @@ const customActionLabel = computed(() => {
   // 「未知值回显原文」的兜底形同失效。
   return hasOwn(ACTION_LABELS, a) ? ACTION_LABELS[a] : a
 })
-const customConditions = computed<Array<{ target: string; operator: string; pattern: string }>>(() => {
+const customConditions = computed<Array<{ target: string; operator: string; pattern: string; header_name?: string }>>(() => {
   // 后端列表接口 conditions 已是结构化数组（非 JSON 字符串）
   return (customRule.value?.conditions ?? []).filter((c) => !!c && typeof c.target === 'string')
 })

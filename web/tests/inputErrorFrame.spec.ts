@@ -40,4 +40,8 @@ test('三处历史异构红框实现已收敛全局类（无 scoped/别名残留
   const security = code('src/views/security/SecurityRules.vue')
   assert.match(security, /'is-error': !headerNameSaveAllowed\(cond\.header_name\)/, '头名输入红框绑定在位')
   assert.match(security, /'is-error': \(cond\.operator === 'regex' && !isValidRegex\(cond\.pattern\)\) \|\| patternOverLimit\(cond\.pattern\)/, '匹配值输入红框绑定在位')
+  // IP 名单弹框条目行（黑白/信任名单动态行，不在 el-form-item 校验链内）：
+  // 第四处异构实现收敛全局类，scoped 副本 ip-entry-invalid 一并退役。
+  assert.match(security, /'is-error': !isValidCidr\(row\.value\)/, 'IP 名单条目红框绑定改挂全局类')
+  assert.doesNotMatch(security, /ip-entry-invalid/, 'ip-entry-invalid 异构红框必须退役（绑定与样式一并无残留）')
 })

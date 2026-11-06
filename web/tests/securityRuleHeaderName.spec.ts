@@ -117,3 +117,15 @@ test('头名限定在只读展示面可见：规则列表条件 chips 与流程�
   const ruleIface = section(stages, 'export interface SecurityStageCustomRule', '}')
   assert.match(ruleIface, /header_name\?: string/, '投影源类型必须携带 header_name（后端列表 JSON 含该字段）')
 })
+
+test('事件详情 waf-custom 明细行经单源 token：头名限定与空头名可区分', () => {
+  const trigger = code('src/components/events/TriggerDetailDialog.vue')
+  assert.match(trigger, /from '@\/utils\/customRuleLimits'/, 'token 必须自单源 util 导入')
+  assert.match(trigger, /conditionTargetLabel\(c\.target, c\.header_name\)/, '匹配条件明细必须经单源 token（只拼 target 时带头名与空头名显示相同）')
+  // 事件详情消费 GET /security/custom-rules 列表 JSON（CustomRuleCondition 含
+  // header_name）——接口类型与条件投影的类型都必须携带该字段。
+  const ruleIface = section(trigger, 'interface CustomRule', '}')
+  assert.match(ruleIface, /header_name\?: string/, '规则接口类型必须携带 header_name')
+  const condComputed = section(trigger, 'const customConditions = computed', '=>')
+  assert.match(condComputed, /header_name\?: string/, '条件投影类型必须携带 header_name')
+})

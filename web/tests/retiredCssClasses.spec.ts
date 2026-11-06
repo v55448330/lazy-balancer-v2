@@ -26,6 +26,16 @@ test('SecurityOverview 旧网格布局类零残留（stat-row/stat-col/lib-stat-
   assert.match(page, /\.status-strip \{/)
 })
 
+test('SecurityPolicies 成功色排位变体零残留（rule-binding-landing--trust）', () => {
+  const page = code('src/views/security/SecurityPolicies.vue')
+  // 排位提示统一灰字基类（阶段 0 不渲染排位行）——成功色变体无模板消费方，
+  // 类名再入（模板或样式块）即红。
+  assert.doesNotMatch(page, /rule-binding-landing--trust/, '成功色变体退役后样式必须一并退役')
+  // 活类正向钉：基类排位提示仍在模板与样式两侧使用，清理时不得连带删除。
+  assert.match(page, /class="rule-binding-landing"/)
+  assert.match(page, /\.rule-binding-landing \{/)
+})
+
 test('main.css 圆角重置组无 tm-detail-desc 退役片段（tm-log-container 仍在组内）', () => {
   const css = code('src/styles/main.css')
   // 单数片段已退役（TaskMonitor 实际类名为复数 tm-detail-descs，自有 scoped 样式）。

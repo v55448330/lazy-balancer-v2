@@ -3863,8 +3863,6 @@ onMounted(async () => {
 
 .rule-binding-preview { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 2px 0 4px 24px; }
 .rule-binding-landing { font-size: 12px; color: #6b7280; }
-/* 阶段 0 绑定提示用成功色（信任先于拦截判定，与「排第 N 位」灰字区分） */
-.rule-binding-landing--trust { color: var(--el-color-success); }
 .rule-binding-limit { font-size: 12px; color: #e6a23c; }
 
 .rule-picker-toolbar { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
