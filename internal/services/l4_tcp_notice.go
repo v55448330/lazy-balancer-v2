@@ -36,6 +36,14 @@ func SetTCPBlockNoticeBrand(name string) {
 	tcpBlockNoticeMu.Unlock()
 }
 
+// TCPBlockNoticeBrand 返回当前注入的品牌原始值（空=回退默认品牌）；
+// 测试与诊断读数用。
+func TCPBlockNoticeBrand() string {
+	tcpBlockNoticeMu.RLock()
+	defer tcpBlockNoticeMu.RUnlock()
+	return tcpBlockNoticeBrandVal
+}
+
 // tcpBlockNoticeText 返回当前生效文案（剥离控制字符 + 256 字节钳制后恒非空）。
 func tcpBlockNoticeText() string {
 	tcpBlockNoticeMu.RLock()

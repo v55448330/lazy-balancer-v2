@@ -60,8 +60,15 @@ func StartupBrandingLog(dataDir string) {
 func SyncDefaultLandingText(dataDir string) (bool, error) {
 	cfg := loadBrandingConfig(dataDir)
 	// TCP 拦截提示品牌段同源注入（boot + GetBranding 幂等同步同一入口）：
-	// services 渲染期读内存单源，零磁盘 IO。
-	services.SetTCPBlockNoticeBrand(cfg.AppName)
+	// services 渲染期读内存单源，零磁盘 IO。loadBrandingConfig 会把空
+	// app_name 填充为 handlers 默认（defaultBranding.AppName）——该默认
+	// 形态在 TCP 提示侧视为「未配置」，交给 services 回退裁定文案
+	// （Lazy Balancer v2，2026-11-06 用户裁定）；用户显式配置的值原样透传。
+	brand := cfg.AppName
+	if brand == "" || brand == defaultBranding.AppName {
+		brand = ""
+	}
+	services.SetTCPBlockNoticeBrand(brand)
 	text := cfg.LandingText
 	if text == "" {
 		text = services.DefaultLandingText
