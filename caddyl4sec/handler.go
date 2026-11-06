@@ -344,12 +344,14 @@ func publishL4Event(line []byte) {
 // compile-time interface guards。
 var (
 	_ layer4.NextHandler = (*L4SecHandler)(nil)
+	_ layer4.NextHandler = (*L4PPHandler)(nil)
 	_ layer4.ConnMatcher = (*L4GeoIPMatcher)(nil)
 	_ caddy.Module       = (*L4SecHandler)(nil)
 )
 
 func init() {
 	caddy.RegisterModule(&L4SecHandler{})
+	caddy.RegisterModule(&L4PPHandler{})
 	caddy.RegisterModule(&L4GeoIPMatcher{})
 	caddy.RegisterModule(L4StatsAdmin{})
 }

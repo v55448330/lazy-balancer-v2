@@ -40,6 +40,7 @@ func TestL4SecContract_moduleRegistrationsMatchRender(t *testing.T) {
 	// A2 交付中）：其注册落地前为软钉（PENDING 日志），落地即硬化。
 	for _, literal := range []string{
 		"layer4.handlers.lb_l4_sec",
+		"layer4.handlers.lb_l4_pp",
 		"layer4.matchers.lb_geoip",
 	} {
 		if !strings.Contains(src, literal) {

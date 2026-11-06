@@ -950,7 +950,7 @@
 
               <el-form-item v-if="wizardForm.protocol === 'tcp'" label="PROXY V2">
                 <el-switch v-model="wizardForm.tcp_proxy_protocol" />
-                <span class="form-tip-inline">开启后向上游发送 PROXY v2 协议头传递真实客户端 IP，需后端支持；入站 PROXY 头仅在绑定了安全策略的 TCP 规则上解析，未绑定安全策略的规则上客户端伪造的 PROXY 头会原样透传给上游</span>
+                <span class="form-tip-inline">开启后向上游发送 PROXY v2 协议头传递真实客户端 IP，需后端支持；入站 PROXY 头仅在绑定了安全策略的 TCP 规则上解析，且仅来自系统设置受信代理网段内的来源时采信，其余来源按直连地址处理（直连客户端无需发送 PROXY 头）</span>
               </el-form-item>
             </template>
 

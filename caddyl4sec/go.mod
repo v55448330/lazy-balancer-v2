@@ -9,6 +9,7 @@ require (
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/lionsoul2014/ip2region/binding/golang v0.0.0-20260814054437-800d19424237
 	github.com/mholt/caddy-l4 v0.1.2
+	github.com/pires/go-proxyproto v0.15.0
 	go.uber.org/zap v1.28.0
 	lazy-balancer-v2/geoipnames v0.0.0
 )
@@ -82,7 +83,6 @@ require (
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/nlnwa/whatwg-url v0.6.2 // indirect
 	github.com/pbnjay/memory v0.0.0-20210728143218-7b4eea64cf58 // indirect
-	github.com/pires/go-proxyproto v0.15.0 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/prometheus/client_golang v1.24.1 // indirect
 	github.com/prometheus/client_model v0.6.3 // indirect

@@ -373,7 +373,7 @@ const serverInstructions = `Lazy Balancer V2 负载均衡管理接口。认证�
 
 常用流程：
 - 新建 HTTP 代理：create_rule（protocol=http + domain + listen_port + upstreams）→ 需要免费证书时 issue_certificate 传 caddy_id
-- 新建 TCP 代理：create_rule（protocol=tcp + listen_port + upstreams，不要填 domain）；后端需真实客户端 IP 时加 tcp_proxy_protocol=true
+- 新建 TCP 代理：create_rule（protocol=tcp + listen_port + upstreams，不要填 domain）；后端需真实客户端 IP 时加 tcp_proxy_protocol=true（入站 PROXY 头仅来自系统设置受信代理网段内的来源时采信，其余来源按直连地址处理；直连客户端无需发送 PROXY 头）
 - 排查流量异常：get_upstream_health → get_metrics_dashboard → list_audit_logs（page/page_size 分页，page_size≤100）
 - 快速看全局指标：get_metrics_overview（轻量）；get_metrics_dashboard 为全量聚合，数据量大，非必要不用
 - 修改规则前先 get_rule 取完整现状；delete_rule 不可恢复，调用前必须确认

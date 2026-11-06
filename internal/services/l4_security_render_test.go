@@ -564,14 +564,93 @@ func TestBuildTCPServer_tcpProxyProtocol_trustRoutesPrefixed(t *testing.T) {
 		}
 	}
 	// ① 直通：proxy_protocol → proxy（修复点：原来裸 proxy 透传）。
-	assertHandlerSeq(rawRoutes[0], "proxy_protocol", "proxy")
+	assertHandlerSeq(rawRoutes[0], "lb_l4_pp", "proxy")
 	// ①b 信任检测：proxy_protocol → lb_l4_sec(trust_detect) → proxy。
-	assertHandlerSeq(rawRoutes[1], "proxy_protocol", "lb_l4_sec", "proxy")
+	assertHandlerSeq(rawRoutes[1], "lb_l4_pp", "lb_l4_sec", "proxy")
 	assertL4SecEventHandler(t, l4SecRouteHandlers(t, rawRoutes[1])[1], "trust_detect", 0)
 	// ② deny：proxy_protocol → lb_l4_sec → close（既有对称基准）。
-	assertHandlerSeq(rawRoutes[2], "proxy_protocol", "lb_l4_sec", "close")
+	assertHandlerSeq(rawRoutes[2], "lb_l4_pp", "lb_l4_sec", "close")
 	// ⑥ 兜底：proxy_protocol → allow_sample → proxy（既有对称基准）。
-	assertHandlerSeq(rawRoutes[6], "proxy_protocol", "lb_l4_sec", "proxy")
+	assertHandlerSeq(rawRoutes[6], "lb_l4_pp", "lb_l4_sec", "proxy")
+}
+
+// TCP PROXY 入站解析信任门控：每个 lb_l4_pp handler（信任直通/信任检测/deny 族/
+// 兜底采样共用单源）都必须携带 allow（受信代理网段白名单）——PROXY 头仅来自
+// 受信网段内的来源时采信（引擎侧按声明源改写对端），其余来源的头被消费但不
+// 采信、按直连地址处理，与 HTTP 侧「仅受信网段采信」纪律对齐；受信网段为空时
+// allow 空数组仍发射（全部来源按直连地址处理）；关闭 TCPProxyProtocol 零发射
+// 回归不变（配置字节不含 lb_l4_pp）。策略语义由仓内模块 lb_l4_pp 显式设置
+// （上游 proxy_protocol 在 go-proxyproto v0.15 下 NewConn 恒施加 REQUIRE 且
+// allow/fallback 字段不进 NewConn，属死配置）。
+func TestBuildTCPServer_tcpProxyProtocol_inboundAllowGating(t *testing.T) {
+	stubSecurityLibsAvailable(t)
+	oldDir := IPListDataDir
+	IPListDataDir = t.TempDir()
+	t.Cleanup(func() { IPListDataDir = oldDir })
+	ResetIPListProjectionStateForTest()
+	t.Cleanup(ResetIPListProjectionStateForTest)
+
+	buildRoutes := func(proxyProtocol bool, trustedAllow []string) []interface{} {
+		t.Helper()
+		rule := l4SecTestRule("lb_l4sec_pp_allow")
+		rule.TCPProxyProtocol = proxyProtocol
+		server, err := buildTCPServer(rule, &tcpSecurityRenderInput{
+			policies:          l4SecAllFeaturePolicies(),
+			trustedProxyAllow: trustedAllow,
+		})
+		if err != nil {
+			t.Fatalf("buildTCPServer: %v", err)
+		}
+		rawRoutes, ok := server["routes"].([]interface{})
+		if !ok {
+			t.Fatalf("routes missing: %s", dumpJSON(t, server))
+		}
+		return rawRoutes
+	}
+
+	assertAllowGating := func(routes []interface{}, wantAllow []string) {
+		t.Helper()
+		seen := 0
+		for _, route := range routes {
+			for _, h := range l4SecRouteHandlers(t, route) {
+				if name, _ := h["handler"].(string); name != "lb_l4_pp" {
+					continue
+				}
+				seen++
+				rawAllow, ok := h["allow"].([]interface{})
+				if !ok {
+					t.Fatalf("lb_l4_pp handler 缺 allow（受信网段来源采信白名单）: %s", dumpJSON(t, h))
+				}
+				var gotAllow []string
+				for _, v := range rawAllow {
+					s, _ := v.(string)
+					gotAllow = append(gotAllow, s)
+				}
+				if strings.Join(gotAllow, ",") != strings.Join(wantAllow, ",") {
+					t.Fatalf("allow=%v, want %v", gotAllow, wantAllow)
+				}
+			}
+		}
+		if seen == 0 {
+			t.Fatalf("lb_l4_pp handler 零发射: %s", dumpJSON(t, routes))
+		}
+	}
+
+	// 开启：allow=受信网段展开（桩值顺序保留），必须在每个 lb_l4_pp handler
+	// （信任直通/信任检测/deny 族/兜底采样）上。
+	assertAllowGating(buildRoutes(true, []string{"203.0.113.0/24", "198.51.100.7/32"}),
+		[]string{"203.0.113.0/24", "198.51.100.7/32"})
+	// 受信网段为空（未启用/零有效网段/读取失败）：allow 空数组仍发射——全部
+	// 来源按直连地址处理（严格但与 HTTP 口径一致）。
+	assertAllowGating(buildRoutes(true, nil), nil)
+	// 关闭：零发射（受信网段在场也不得发射——配置字节不变回归）。
+	for _, route := range buildRoutes(false, []string{"203.0.113.0/24"}) {
+		for _, h := range l4SecRouteHandlers(t, route) {
+			if name, _ := h["handler"].(string); name == "lb_l4_pp" {
+				t.Fatalf("TCPProxyProtocol 关闭时不得发射 lb_l4_pp: %s", dumpJSON(t, h))
+			}
+		}
+	}
 }
 
 // TestBuildTCPServer_tcpGeoipPolicyIDOverflowSegment_softSkips 逐策略 GeoIP 的
@@ -633,12 +712,19 @@ func TestL4SecConfig_caddyEngineAcceptance(t *testing.T) {
 	}
 	if out, merr := exec.Command(binary, "list-modules").CombinedOutput(); merr != nil ||
 		!strings.Contains(string(out), "lb_l4_sec") || !strings.Contains(string(out), "lb_geoip") ||
-		!strings.Contains(string(out), "lb_ipfile") {
+		!strings.Contains(string(out), "lb_ipfile") || !strings.Contains(string(out), "lb_l4_pp") {
 		t.Skipf("caddy 二进制未编入 caddyl4sec 模块（list-modules=%s）: %v", strings.TrimSpace(string(out)), merr)
 	}
 
 	cid := "lb_l4sec_accept"
-	server, err := buildTCPServer(l4SecTestRule(cid), &tcpSecurityRenderInput{policies: l4SecAllFeaturePolicies()})
+	acceptRule := l4SecTestRule(cid)
+	// PROXY 入站信任门控形态一并过真实引擎（allow CIDR 形状由仓内 lb_l4_pp
+	// 模块 Unmarshal/Provision 裁决）。
+	acceptRule.TCPProxyProtocol = true
+	server, err := buildTCPServer(acceptRule, &tcpSecurityRenderInput{
+		policies:          l4SecAllFeaturePolicies(),
+		trustedProxyAllow: []string{"203.0.113.0/24", "198.51.100.7/32"},
+	})
 	if err != nil {
 		t.Fatalf("buildTCPServer: %v", err)
 	}
