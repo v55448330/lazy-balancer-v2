@@ -10,6 +10,8 @@ import (
 	"bytes"
 	"context"
 	"net"
+	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -53,13 +55,23 @@ func newPPHandlerForTest(t *testing.T, allow []string) *L4PPHandler {
 	t.Helper()
 	ctx, cancel := caddy.NewContext(caddy.Context{Context: context.Background()})
 	t.Cleanup(cancel)
-	ctx.Logger()
 	h := &L4PPHandler{Allow: allow}
-	h.logger = ctx.Logger()
 	if err := h.Provision(ctx); err != nil {
 		t.Fatalf("provision: %v", err)
 	}
 	return h
+}
+
+// L4PPHandler 无死 logger 字段守卫：logger 字段与 Provision 赋值全仓零消费
+// （模块无任何日志消费面，caddy 侧统一接管）——回加即失败，防死重量回归。
+func TestL4PPHandlerHasNoDeadLoggerField(t *testing.T) {
+	source, err := os.ReadFile("pp.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(source), "logger") {
+		t.Fatal("pp.go 仍含 logger 字段或赋值（全仓零消费的死重量），不得回加")
+	}
 }
 
 // ppProxyV2Wire 构造真实 PROXY v2 头（声明源 declaredSource）+ 载荷 PING。

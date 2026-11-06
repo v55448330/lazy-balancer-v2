@@ -370,6 +370,33 @@ func TestCancelSystemTask_blockedDuringImportWindow(t *testing.T) {
 	}
 }
 
+// 导入窗口内触发必须 409 fast-fail，与 toggle/cancel/control 同门：导入/还原
+// 期间协调器做 PauseScheduling 的系统性排空，窗口内放行到引擎要么被 admission
+// 拒绝、要么产出误导性的「触发失败」审计（admission 拒绝不是任务失败）。
+// 显式 409 让客户端拿到与文档一致的 import_in_progress 码。
+func TestTriggerSystemTask_blockedDuringImportWindow(t *testing.T) {
+	initTaskEngineForTest(t)
+	newBackupTestHandlers(t)
+	r, _ := taskMonitorRouter()
+
+	closeWindow := beginImportWindowForTest(t)
+	resp := httptest.NewRecorder()
+	r.ServeHTTP(resp, httptest.NewRequest(http.MethodPost, "/system/tasks/log-cleanup/trigger", nil))
+	if resp.Code != http.StatusConflict {
+		t.Fatalf("导入窗口内触发 status=%d body=%s, want 409", resp.Code, resp.Body.String())
+	}
+	if !strings.Contains(resp.Body.String(), "配置导入进行中") {
+		t.Fatalf("body=%s, want 含导入窗口文案", resp.Body.String())
+	}
+	// 窗口关闭后门必须放行（同一请求按正常触发链受理 200）
+	closeWindow()
+	resp2 := httptest.NewRecorder()
+	r.ServeHTTP(resp2, httptest.NewRequest(http.MethodPost, "/system/tasks/log-cleanup/trigger", nil))
+	if resp2.Code != http.StatusOK || strings.Contains(resp2.Body.String(), "配置导入进行中") {
+		t.Fatalf("窗口关闭后 status=%d body=%s, want 正常触发 200", resp2.Code, resp2.Body.String())
+	}
+}
+
 func TestToggleSystemTask_businessDrivenTasksReadOnly(t *testing.T) {
 	cases := []struct {
 		id    string

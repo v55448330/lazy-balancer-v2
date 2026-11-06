@@ -1,7 +1,7 @@
 package services
 
-// 触发结果审计的静默清单：admission 语义的拒绝（并发/跳过/取消/引擎已停止）
-// 不补记「触发失败」，真实执行失败仍必须记。
+// 触发结果审计的静默清单：admission 语义的拒绝（并发/跳过/取消/引擎已停止/
+// 调度暂停）不补记「触发失败」，真实执行失败仍必须记。
 
 import (
 	"context"
@@ -28,11 +28,12 @@ func TestRecordTaskTriggerResult_admissionAndCancellationAreSilent(t *testing.T)
 		taskengine.ErrRunCancelled,
 		context.Canceled,
 		taskengine.ErrEngineStopped,
+		taskengine.ErrSchedulingPaused,
 	} {
 		RecordTaskTriggerResult("log-cleanup", TriggerAuditContext{Operator: "admin", Family: "任务监控", Name: "日志清理"}, err)
 	}
 	if after := count(); after != before {
-		t.Fatalf("静默清单五类错误不得记「触发失败」（before=%d after=%d）", before, after)
+		t.Fatalf("admission 语义拒绝类错误不得记「触发失败」（before=%d after=%d）", before, after)
 	}
 	RecordTaskTriggerResult("log-cleanup", TriggerAuditContext{Operator: "admin", Family: "任务监控", Name: "日志清理"}, errors.New("boom"))
 	if after := count(); after != before+1 {

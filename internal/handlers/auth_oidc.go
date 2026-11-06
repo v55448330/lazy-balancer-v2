@@ -1091,8 +1091,9 @@ var oidcJITInsertAttemptHook func(attempt int) error
 // 唯一约束——旧实现只按 (issuer,subject) 回查，身份行不存在即令本次登录
 // 失败。新语义：唯一冲突且身份行不存在时重算候选名并有限重试；同一 subject
 // 的并发回调仍按命中分支收口，不补「创建」审计。
+// INSERT 消费调用方传入的请求 ctx（登录链请求面写点契约，客户端断开即中止）。
 // 返回 (身份行, 是否本次创建, 错误)。
-func createOIDCUserWithRetry(issuer, subject, base, displayName string) (oidcIdentity, bool, error) {
+func createOIDCUserWithRetry(ctx context.Context, issuer, subject, base, displayName string) (oidcIdentity, bool, error) {
 	for attempt := 1; attempt <= oidcJITInsertAttempts; attempt++ {
 		candidate, err := oidcCandidateUsername(base)
 		if err != nil {
@@ -1104,7 +1105,7 @@ func createOIDCUserWithRetry(issuer, subject, base, displayName string) (oidcIde
 		}
 		if err == nil {
 			// password_hash 置空:bcrypt 对空哈希恒败,OIDC 用户密码登录天然不可用。
-			res, err = db.DB.Exec("INSERT INTO users (username, password_hash, role, display_name, is_enabled, auth_provider, oidc_subject, oidc_issuer) VALUES (?, '', 'user', ?, 1, 'oidc', ?, ?)",
+			res, err = db.DB.ExecContext(ctx, "INSERT INTO users (username, password_hash, role, display_name, is_enabled, auth_provider, oidc_subject, oidc_issuer) VALUES (?, '', 'user', ?, 1, 'oidc', ?, ?)",
 				candidate, displayName, subject, issuer)
 		}
 		if err == nil {
@@ -1138,8 +1139,9 @@ var oidcDisplayNameRefreshFailing services.LogEscalation
 // refreshOIDCDisplayName 按 IdP 最新 claims 刷新展示名（best-effort）。
 // 显示名是 IdP 派生的展示属性而非授权前提：写失败不得中断登录（旧实现 302
 // 到「更新用户资料失败」，把排障方向引向认证而非存储），下次登录自愈。
-func refreshOIDCDisplayName(userID int, username, name string) {
-	_, err := db.DB.Exec("UPDATE users SET display_name=? WHERE id=? AND COALESCE(display_name,'')<>?", name, userID, name)
+// UPDATE 消费调用方传入的请求 ctx（登录链请求面写点契约，客户端断开即中止）。
+func refreshOIDCDisplayName(ctx context.Context, userID int, username, name string) {
+	_, err := db.DB.ExecContext(ctx, "UPDATE users SET display_name=? WHERE id=? AND COALESCE(display_name,'')<>?", name, userID, name)
 	if err == nil {
 		oidcDisplayNameRefreshFailing.Reset()
 		return
@@ -1303,7 +1305,7 @@ func (h *Handlers) OIDCCallback(c *gin.Context) {
 		// 属性、非授权前提，瞬时写失败（WAL 长占/锁）不应把用户挡在认证之外，
 		// 下次登录自愈。写侧 SQL 自带「值有变才写」判据，claims 空白回退
 		// 用户名同样只在值确实变化时落库。
-		refreshOIDCDisplayName(ident.id, ident.username, oidcDisplayName(claims.Name, ident.username))
+		refreshOIDCDisplayName(c.Request.Context(), ident.id, ident.username, oidcDisplayName(claims.Name, ident.username))
 	case errors.Is(err, sql.ErrNoRows):
 		// JIT 开户:默认普通角色;用户名取 preferred_username→email 本地部分→sub,
 		// 冲突时后缀去重(不绑定本地账号,同名共存)。TrimSpace 先于空值兜底
@@ -1327,7 +1329,7 @@ func (h *Handlers) OIDCCallback(c *gin.Context) {
 		// 唯一冲突后重算候选名有限重试（含 同 subject 并发回退）。
 		var created bool
 		var cerr error
-		ident, created, cerr = createOIDCUserWithRetry(cfg.Issuer, claims.Sub, base, displayName)
+		ident, created, cerr = createOIDCUserWithRetry(c.Request.Context(), cfg.Issuer, claims.Sub, base, displayName)
 		if cerr != nil {
 			// 登录族（含 OIDC 回调）刻意不挂 rejectWriteDuringImport：登录必须在
 			// 任何窗口内可用，写库操作由 DSN busy_timeout 串行等待而非 409 拒绝

@@ -106,6 +106,37 @@ func TestRefreshBrandingMirror_bumpsVersionOnFileChange(t *testing.T) {
 	}
 }
 
+// 空文件（存在但 0 字节）是半截写/截断形态而非「主节点无品牌文件」——
+// 只有缺失文件才镜像空串（从端按全空模板收敛重置）。空文件必须保住
+// 上一份有效镜像，待文件恢复完整后下次轮询自然收敛。
+func TestRefreshBrandingMirror_emptyFileKeepsPreviousMirror(t *testing.T) {
+	_, database := newClusterTestService(t)
+	dir := t.TempDir()
+
+	valid := `{"app_name":"X","landing_text":"欢迎"}`
+	os.WriteFile(filepath.Join(dir, "branding.json"), []byte(valid), 0644)
+	if changed, err := RefreshBrandingMirrorDB(database, dir); err != nil || !changed {
+		t.Fatalf("seed valid mirror: changed=%v err=%v", changed, err)
+	}
+
+	// 半截写窗口：文件存在、可读，但内容被截为 0 字节。
+	os.WriteFile(filepath.Join(dir, "branding.json"), nil, 0644)
+	changed, err := RefreshBrandingMirrorDB(database, dir)
+	if err != nil {
+		t.Fatalf("mirror on empty file: err=%v", err)
+	}
+	if changed {
+		t.Fatalf("空文件不得镜像（changed=true 会把空串经集群通道下发并触发从端按全空模板重置）")
+	}
+	var mirrored string
+	if err := database.QueryRow(`SELECT COALESCE(branding_json,'') FROM global_config WHERE id=1`).Scan(&mirrored); err != nil {
+		t.Fatalf("read mirror: %v", err)
+	}
+	if mirrored != valid {
+		t.Fatalf("空文件被镜像为 %q，须保留上一份有效配置", mirrored)
+	}
+}
+
 // 三分类合并:全局配置并入系统数据(恒同步)——BrandingJSON 恒随快照携带,
 // 不再受开关裁剪。
 func TestBuildSnapshot_alwaysCarriesBranding(t *testing.T) {

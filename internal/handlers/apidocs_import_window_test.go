@@ -171,3 +171,35 @@ func TestAPIDocRoutes_securityWritesAndExportDocumentImportWindow(t *testing.T) 
 		}
 	}
 }
+
+// 任务监控四写端点（触发/调度开关/取消/常驻启停）同样受导入窗口 409 门
+// （configImportBusy 直门），文档 Errors 必须登记同一码——按规格生成的
+// 客户端遇 409 不得当未知错误重试。
+func TestAPIDocRoutes_taskMonitorWritesDocumentImportWindow(t *testing.T) {
+	want := []string{
+		"POST /system/tasks/:id/trigger",
+		"POST /system/tasks/:id/toggle",
+		"POST /system/tasks/:id/control",
+		"POST /system/tasks/:id/cancel",
+	}
+	index := map[string]apiDocRoute{}
+	for _, route := range apiDocRoutes {
+		index[route.Method+" "+route.Path] = route
+	}
+	for _, key := range want {
+		route, ok := index[key]
+		if !ok {
+			t.Fatalf("文档缺少路由 %s", key)
+		}
+		documented := false
+		for _, entry := range route.Errors {
+			if strings.Contains(entry, "import_in_progress") {
+				documented = true
+				break
+			}
+		}
+		if !documented {
+			t.Errorf("%s 文档未登记 409 import_in_progress（实际受导入窗口拒绝）errors=%v", key, route.Errors)
+		}
+	}
+}

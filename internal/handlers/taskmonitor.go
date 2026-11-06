@@ -104,6 +104,14 @@ func respondTaskEngineStopped(c *gin.Context) {
 
 // TriggerSystemTask 手动触发（admin；仅排程/队列类任务族）。
 func (h *Handlers) TriggerSystemTask(c *gin.Context) {
+	// 导入窗口 409（与 toggle/cancel/control 同门）：导入/还原期间协调器做
+	// PauseScheduling 的系统性排空，窗口内放行到引擎只会被 admission 拒绝并
+	// 产出误导性的「触发失败」审计——显式拒绝让客户端拿到文档登记的
+	// import_in_progress 码（cert-job 分支经重试核心内部同门，此处先行拦截）。
+	if configImportBusy() {
+		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "配置导入进行中，暂不能触发任务"})
+		return
+	}
 	id := c.Param("id")
 	if !requireMasterNode(c) {
 		return

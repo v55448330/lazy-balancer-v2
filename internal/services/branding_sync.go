@@ -14,7 +14,9 @@ import (
 // RefreshBrandingMirror 把主节点 branding.json 原文镜像到
 // global_config.branding_json(2026-09-11 裁定)。内容变化才写——触发器
 // (branding_json 已入 OF 列表)bump cluster_version,快照缓存随之失效,
-// 变更自然流向从节点;内容不变零写入零版本扰动。文件缺失镜像为空串。
+// 变更自然流向从节点;内容不变零写入零版本扰动。文件缺失镜像为空串
+// (重置语义);文件存在但 0 字节属半截写形态,视同不可解析、不镜像(保
+// 上一份有效配置)。
 // 仅主节点生效(WHERE is_master=1,与触发器 WHEN 同守卫)。
 // 调用点:GetBranding(文件变化检测路径)等经全局 db.DB 的既有调用方。
 func RefreshBrandingMirror(dataDir string) (changed bool, err error) {
@@ -40,6 +42,16 @@ func RefreshBrandingMirrorDB(database *sql.DB, dataDir string) (changed bool, er
 	content := ""
 	if raw, rerr := os.ReadFile(filepath.Join(dataDir, "branding.json")); rerr == nil {
 		content = string(raw)
+		// 空文件守卫:文件存在(读取成功)但 0 字节是半截写/截断形态,不是
+		// 「主节点无品牌文件」的重置语义——只有缺失文件才镜像空串(从端按
+		// 全空模板收敛默认品牌)。空文件视同不可解析:保上一份有效镜像并按
+		// 损坏态限频留痕,文件恢复完整后下次轮询自然收敛。
+		if len(raw) == 0 {
+			if level := logStateTransition("cluster-branding-mirror-invalid", true); level != "" {
+				Logf(level, "品牌配置文件为空(半截写?),跳过镜像: %s", dataDir)
+			}
+			return false, nil
+		}
 		// 半截写守卫(2026-09-11 裁定):非法 JSON 不镜像——坏内容永不
 		// 经集群通道流向从节点;文件恢复完整后下次轮询自然收敛。
 		// 必须是 JSON 对象：null/数组/数字语法合法但从端物化会拒绝，

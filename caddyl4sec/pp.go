@@ -15,7 +15,6 @@ import (
 	"github.com/caddyserver/caddy/v2"
 	"github.com/mholt/caddy-l4/layer4"
 	"github.com/pires/go-proxyproto"
-	"go.uber.org/zap"
 )
 
 // L4PPHandler 采信面 = Allow 网段内的对端。空 Allow（渲染侧未启用受信代理/
@@ -27,8 +26,7 @@ import (
 type L4PPHandler struct {
 	Allow []string `json:"allow,omitempty"`
 
-	allow  []netip.Prefix
-	logger *zap.Logger
+	allow []netip.Prefix
 }
 
 // CaddyModule returns the Caddy module information.
@@ -44,9 +42,6 @@ func (*L4PPHandler) CaddyModule() caddy.ModuleInfo {
 // 来源，低于最小前缀长度 v4 /8、v6 /29），归一按规范形态（Masked 剥主机位 +
 // v4-mapped 折等价 v4）执行——判据逐字同步见下方 ppAllow* 函数。
 func (h *L4PPHandler) Provision(ctx caddy.Context) error {
-	if h.logger == nil {
-		h.logger = ctx.Logger()
-	}
 	allow := make([]netip.Prefix, 0, len(h.Allow))
 	for _, cidr := range h.Allow {
 		prefix, err := netip.ParsePrefix(cidr)

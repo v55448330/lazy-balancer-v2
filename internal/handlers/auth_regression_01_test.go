@@ -503,7 +503,7 @@ func TestCreateOIDCUserWithRetry_survivesUsernameRace(t *testing.T) {
 		}
 		return errors.New("UNIQUE constraint failed: users.username")
 	}
-	ident, created, err := createOIDCUserWithRetry(idp.issuer, "sub-race-1", "alice", "Alice")
+	ident, created, err := createOIDCUserWithRetry(context.Background(), idp.issuer, "sub-race-1", "alice", "Alice")
 	if err != nil {
 		t.Fatalf("username collision must be retried instead of failing login: %v", err)
 	}
@@ -512,7 +512,7 @@ func TestCreateOIDCUserWithRetry_survivesUsernameRace(t *testing.T) {
 	}
 
 	// 目标形状：同名 base 已占用 → 后缀去重。
-	ident2, created2, err := createOIDCUserWithRetry(idp.issuer, "sub-race-2", "alice", "Alice 2")
+	ident2, created2, err := createOIDCUserWithRetry(context.Background(), idp.issuer, "sub-race-2", "alice", "Alice 2")
 	if err != nil {
 		t.Fatalf("second subject with same base must get suffix: %v", err)
 	}
@@ -524,7 +524,7 @@ func TestCreateOIDCUserWithRetry_survivesUsernameRace(t *testing.T) {
 	oidcJITInsertAttemptHook = func(int) error {
 		return errors.New("UNIQUE constraint failed: users.username")
 	}
-	if _, _, err := createOIDCUserWithRetry(idp.issuer, "sub-race-3", "carol", "Carol"); err == nil {
+	if _, _, err := createOIDCUserWithRetry(context.Background(), idp.issuer, "sub-race-3", "carol", "Carol"); err == nil {
 		t.Fatal("persistent username collision must fail after bounded retries")
 	}
 }
