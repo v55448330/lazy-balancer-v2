@@ -1024,6 +1024,19 @@ var (
 	customRuleValidActions = map[string]bool{"block": true, "log": true, "pass": true}
 )
 
+// customRuleSecTarget 把条件映射为 SecRule target：headers 目标携带头名时
+// 收敛为 REQUEST_HEADERS:<name>（限定匹配该头的值；无头名=全部头的值，存量
+// 规则兼容）。2026-11-05：拦截 Content-Encoding: br 等按头名判定的规则此前
+// 无法安全表达——裸 REQUEST_HEADERS 会自匹配 Accept-Encoding: br（每个浏览
+// 器请求都带）导致全站误拦。
+func customRuleSecTarget(cond models.CustomRuleCondition) string {
+	target := customRuleTargets[cond.Target]
+	if cond.Target == "headers" && cond.HeaderName != "" {
+		return target + ":" + cond.HeaderName
+	}
+	return target
+}
+
 // validateConditions 是自定义规则条件校验的单一循环：写侧（保存/导入的
 // ValidateCustomRuleConditions）与发射侧（conditionsEmissionIssue 的兜底门）
 // 共用，杜绝两份循环漂移。校验非空、target/operator 在允许集合内、pattern
@@ -1044,6 +1057,18 @@ func validateConditions(conditions []models.CustomRuleCondition, maxPatternBytes
 		if _, ok := customRuleOperators[cond.Operator]; !ok {
 			return fmt.Errorf("条件 %d 的 operator 无效：%q（可选：contains、regex、equals、starts_with）", i+1, cond.Operator)
 		}
+		// header_name 仅 target=headers 时允许携带（其他 target 携带=400，
+		// 防止静默忽略导致用户误以为已限定头名）；字符限 HTTP 头名 token
+		// （字母数字与 '-'），非法字符会破坏 SecRule target 形状（coraza
+		// 整体拒绝配置）。
+		if cond.Target == "headers" && cond.HeaderName != "" {
+			if err := validateHeaderNameToken(cond.HeaderName); err != nil {
+				return fmt.Errorf("条件 %d：%w", i+1, err)
+			}
+		}
+		if cond.Target != "headers" && cond.HeaderName != "" {
+			return fmt.Errorf("条件 %d：header_name 仅 target=headers 时支持", i+1)
+		}
 		// 模式内容（空/纯空白、控制字符、尾部反斜杠）与保存/导入侧共用
 		// validateCustomRulePattern 单一实现——集群 apply 等绕过保存校验的路径
 		// 在这里兜底。
@@ -1054,6 +1079,20 @@ func validateConditions(conditions []models.CustomRuleCondition, maxPatternBytes
 			if err := validateCustomRulePatternLength(cond.Pattern); err != nil {
 				return fmt.Errorf("条件 %d：%w", i+1, err)
 			}
+		}
+	}
+	return nil
+}
+
+// validateHeaderNameToken 校验请求头名 token：字母数字与 '-'（HTTP 头名的
+// 常用子集），1-64 字符——嵌入 SecRule REQUEST_HEADERS:<name> 形状必需。
+func validateHeaderNameToken(name string) error {
+	if len(name) < 1 || len(name) > 64 {
+		return fmt.Errorf("请求头名长度需 1-64 字符")
+	}
+	for _, r := range name {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-') {
+			return fmt.Errorf("请求头名含非法字符 %q（仅允许字母、数字与 '-'）", string(r))
 		}
 	}
 	return nil
@@ -1299,7 +1338,7 @@ func emitCustomRules(sb *strings.Builder, customRules []models.CustomRule, block
 			for idx, cond := range cr.Conditions {
 				// 非法 target/operator 已在上方 customRuleEmissionIssue 整条跳过，
 				// 此处不再静默丢弃单条条件，避免链式规则产生缺 ID 起始条或悬空 chain。
-				target := customRuleTargets[cond.Target]
+				target := customRuleSecTarget(cond)
 				op := customRuleOperators[cond.Operator]
 				// 链式规则仅起始条携带 id/phase/disruptive/msg；coraza v3 拒绝非起始条上的 disruptive 动作
 				// 链上所有条目共用同一相位（coraza 以起始条相位执行整条链）
@@ -1318,7 +1357,7 @@ func emitCustomRules(sb *strings.Builder, customRules []models.CustomRule, block
 				sb.WriteString(fmt.Sprintf("SecRule %s \"%s %s\" \"%s\"\n", target, op, escapeCorazaPattern(cond.Pattern), actions))
 			}
 		} else {
-			target := customRuleTargets[cr.Target]
+			target := customRuleSecTarget(models.CustomRuleCondition{Target: cr.Target, Pattern: cr.Pattern})
 			op := customRuleOperators[cr.Operator]
 			sb.WriteString(fmt.Sprintf("SecRule %s \"%s %s\" \"id:%d,phase:%d,%s\"\n", target, op, escapeCorazaPattern(cr.Pattern), emitID, phase, action))
 		}

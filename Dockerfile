@@ -77,7 +77,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
   [ -f /app/caddy ] || { echo ">>> 构建成功但 /app/caddy 未生成" >&2; exit 1; }
 # 构建期断言：镜像扫描要求的最低依赖版本未被 MVS 抬升到位则直接失败
 # （版本下限：grpc>=v1.83.2、otel>=v1.45、x/net>=v0.62、x/crypto>=v0.58、
-#  go-jose/v4>=v4.1.6、cel.dev/cel-go>=v0.32.0、go-chi/chi/v5>=v5.4.0——
+#  go-jose/v4>=v4.1.6、cel.dev/cel-go>=v0.32.0、go-chi/chi/v5>=v5.4.0、klauspost/compress>=v1.20.2（CVE 修复版本）——
 #  Caddy v2.11.7+ 上游对 grpc/cel-go 同值、otel 更高；x/net/x/crypto/go-jose
 #  三条是漏洞修复下限（上游传递图更低），由 caddydeps floor 主动抬升；
 #  注意模块路径是 cel.dev/cel-go，github.com/google/cel-go 是另一个
@@ -95,7 +95,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 #  时实际值报「未出现在依赖图中」（同样判失败）。
 RUN go version -m /app/caddy | tee /tmp/caddy-mods.txt && \
     grep -q 'go1.27.3' /tmp/caddy-mods.txt || { echo ">>> Caddy 未使用 go1.27.3 构建" >&2; exit 1; }; \
-    awk -F'\t' 'function ge(v, f,  a, b, av, bv, i) { split(substr(v, 2), a, "."); split(substr(f, 2), b, "."); for (i = 1; i <= 3; i++) { av = a[i] + 0; bv = b[i] + 0; if (av > bv) return 1; if (av < bv) return 0 } return 1 } BEGIN { n = split("google.golang.org/grpc v1.83.2;go.opentelemetry.io/otel v1.45.0;go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc v1.45.0;go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp v1.45.0;go.opentelemetry.io/otel/metric v1.45.0;go.opentelemetry.io/otel/trace v1.45.0;golang.org/x/net v0.62.0;golang.org/x/crypto v0.58.0;github.com/go-jose/go-jose/v4 v4.1.6;cel.dev/cel-go v0.32.0;github.com/corazawaf/coraza/v3 v3.8.1;github.com/go-chi/chi/v5 v5.4.0", spec, ";"); for (k = 1; k <= n; k++) { split(spec[k], pair, " "); mods[k] = pair[1]; floor[mods[k]] = pair[2] } } { for (i = 1; i < NF; i++) { if (floor[$i] != "") { ver[$i] = $(i+1); ok[$i] = ge($(i+1), floor[$i]); if ($i == "github.com/corazawaf/coraza/v3" && ge($(i+1), "v3.9.0")) ok[$i] = 0 } } } END { rc = 0; for (k = 1; k <= n; k++) { m = mods[k]; if (ok[m] != 1) { rc = 1; want = ">= " floor[m]; if (m == "github.com/corazawaf/coraza/v3") want = want " 且 < v3.9.0"; actual = (ver[m] == "") ? "未出现在依赖图中" : ver[m]; print ">>> 依赖下限不满足: " m " 需要 " want "（实际 " actual "）" > "/dev/stderr" } } exit rc }' /tmp/caddy-mods.txt
+    awk -F'\t' 'function ge(v, f,  a, b, av, bv, i) { split(substr(v, 2), a, "."); split(substr(f, 2), b, "."); for (i = 1; i <= 3; i++) { av = a[i] + 0; bv = b[i] + 0; if (av > bv) return 1; if (av < bv) return 0 } return 1 } BEGIN { n = split("github.com/klauspost/compress v1.20.2;google.golang.org/grpc v1.83.2;go.opentelemetry.io/otel v1.45.0;go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc v1.45.0;go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp v1.45.0;go.opentelemetry.io/otel/metric v1.45.0;go.opentelemetry.io/otel/trace v1.45.0;golang.org/x/net v0.62.0;golang.org/x/crypto v0.58.0;github.com/go-jose/go-jose/v4 v4.1.6;cel.dev/cel-go v0.32.0;github.com/corazawaf/coraza/v3 v3.8.1;github.com/go-chi/chi/v5 v5.4.0", spec, ";"); for (k = 1; k <= n; k++) { split(spec[k], pair, " "); mods[k] = pair[1]; floor[mods[k]] = pair[2] } } { for (i = 1; i < NF; i++) { if (floor[$i] != "") { ver[$i] = $(i+1); ok[$i] = ge($(i+1), floor[$i]); if ($i == "github.com/corazawaf/coraza/v3" && ge($(i+1), "v3.9.0")) ok[$i] = 0 } } } END { rc = 0; for (k = 1; k <= n; k++) { m = mods[k]; if (ok[m] != 1) { rc = 1; want = ">= " floor[m]; if (m == "github.com/corazawaf/coraza/v3") want = want " 且 < v3.9.0"; actual = (ver[m] == "") ? "未出现在依赖图中" : ver[m]; print ">>> 依赖下限不满足: " m " 需要 " want "（实际 " actual "）" > "/dev/stderr" } } exit rc }' /tmp/caddy-mods.txt
 
 # Build Go backend
 # 与 xcaddy-builder 阶段同理：编译在构建机架构执行，产物平台由 GOOS/GOARCH 指定。
@@ -226,7 +226,7 @@ RUN crs_version=v4.28.0; \
     crs_sha256=d8acc96f25ad07c8e3a595a23c797324f6d77e59ddf9e26e90dd95ebd2e676ce; \
     xdb_sha256=6307a9696f5711f84bcb8b25f07894de68a64a0ed4a1cc7e990562dd3084f210; \
     xdb_v6_sha256=5b93da35ac28bc316dccc54a758381f7a874ae0461dd51ff5df5e34815586f11; \
-    n=0; until apk add --no-cache curl; do \
+    n=0; until apk add --no-cache --repository http://dl-cdn.alpinelinux.org/alpine/edge/main zlib=1.4-r0 curl; do \
       n=$((n+1)); \
       if [ "$n" -ge 3 ]; then echo ">>> apk add curl 3 次失败" >&2; exit 1; fi; \
       echo ">>> apk add curl 第 ${n}/3 次失败，10s 后重试" >&2; sleep 10; \
@@ -304,7 +304,9 @@ RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 # 旧形态在 PID 1 不回收孤儿的容器里每 30s 泄漏子进程（生产实证：十余小时
 # 堆到 2252 个僵尸 ssl_client，打满 cgroup pids 配额，容器内连 cat 都无法 fork）。
 # 语义不变：HTTPS 先行（管理 TLS 是常态）→ 失败回落明文；只认第一跳 200、
-# 不跟随跳转（避免把登录页 200 误判为健康）。探针端口固定 8000，与容器启动参数
+# 不跟随跳转（避免把登录页 200 误判为健康）。探针zlib 锁 edge 仓库 1.4-r0（CVE 修复版本；3.24-stable 尚为 1.3.2——
+# zlib 仅链接 musl，edge 包在 stable 基座可用；版本钉死保证可重现）。
+端口固定 8000，与容器启动参数
 # 无关：entrypoint 会透传 `docker run` 的显式参数，但用 -config 改 port 会让本探针
 # 打错端口（Docker DNS/健康状态误判），容器形态请不要改面板端口。
 # 两段尝试各 2s，合计小于 --timeout=5s。

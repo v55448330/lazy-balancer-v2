@@ -530,6 +530,10 @@ type CustomRuleCondition struct {
 	Target   string `json:"target"`
 	Operator string `json:"operator"`
 	Pattern  string `json:"pattern"`
+	// HeaderName 仅 target=headers 时消费：限定匹配的请求头名（空=全部头的
+	// 值，存量规则兼容）。发射为 SecRule REQUEST_HEADERS:<name>（与内置
+	// Content-Type 判定同形）。
+	HeaderName string `json:"header_name,omitempty"`
 }
 
 type CustomRule struct {

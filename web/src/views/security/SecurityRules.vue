@@ -298,6 +298,16 @@
                 <el-option label="完全匹配" value="equals" />
                 <el-option label="前缀匹配" value="starts_with" />
               </el-select>
+              <el-input
+                v-if="cond.target === 'headers'"
+                v-model="cond.header_name"
+                class="header-name-input"
+                placeholder="头名，如 Content-Encoding"
+                style="width: 150px"
+                size="small"
+                maxlength="64"
+                :class="{ 'is-error': cond.target === 'headers' && cond.header_name !== undefined && cond.header_name !== '' && !isValidHeaderName(cond.header_name) }"
+              />
               <div class="pattern-col">
                 <div class="pattern-input-row">
                   <el-input v-model="cond.pattern" :placeholder="patternPlaceholder(cond)" size="small" :class="{ 'is-error': (cond.operator === 'regex' && !isValidRegex(cond.pattern)) || patternOverLimit(cond.pattern) }" />
@@ -308,6 +318,12 @@
                      按字符数看不出超限，故给出实时字节数 -->
                 <div v-if="patternOverLimit(cond.pattern)" class="form-tip-line port-warning">
                   匹配内容不能超过 {{ CUSTOM_RULE_MAX_PATTERN_BYTES }} 字节（当前 {{ patternByteLength(cond.pattern) }} 字节）
+                </div>
+                <div v-if="cond.target === 'body'" class="form-tip-line">
+                  匹配请求体解析后的参数值（JSON 请求体按扁平化键值匹配，如嵌套字段取其值；不支持跨键的原始 JSON 语法匹配）
+                </div>
+                <div v-else-if="cond.target === 'headers' && cond.header_name" class="form-tip-line">
+                  仅匹配头「{{ cond.header_name }}」的值；留空头名则匹配全部头的值
                 </div>
               </div>
               <el-button link type="danger" size="small" :disabled="isReadOnly || savingRule" @click="removeCondition(idx)">删除</el-button>
@@ -1110,7 +1126,7 @@ const {
   confirmUpdate: confirmCrawlerUpdate,
 } = crawlerDialog
 interface CRSRuleFile { filename: string; category: string; size: number; updated_at: string }
-interface CustomRuleCondition { target: string; operator: string; pattern: string }
+interface CustomRuleCondition { target: string; operator: string; pattern: string; header_name?: string }
 interface CustomRule { id: number; name: string; description: string; conditions: CustomRuleCondition[]; condition_logic: 'and' | 'or'; action: string; score: number; enabled: boolean; updated_at: string; updated_by: number }
 // 自动封禁名单条目携带加入时间/到期时间（UTC 墙钟串，formatDate 消费）
 interface IPListEntry { value: string; remark: string; created_at?: string; expires_at?: string }
@@ -1731,6 +1747,10 @@ const regexResultText = (cond: CustomRuleCondition, idx: number): string => {
   return re!.test(ts) ? '匹配 ✓' : '不匹配 ✗'
 }
 
+// HTTP 头名 token：字母数字与 '-'（与后端 validateHeaderNameToken 同口径）
+const HEADER_NAME_RE = /^[A-Za-z0-9-]{1,64}$/
+const isValidHeaderName = (name: string): boolean => HEADER_NAME_RE.test(name)
+
 const isValidRegex = (pattern: string): boolean => {
   if (!pattern) return true
   return buildJSRegex(pattern).valid
@@ -2070,6 +2090,10 @@ const saveCustomRule = async () => {
       return
     }
     if (cond.operator === 'regex' && !isValidRegex(cond.pattern)) { ElMessage.error(`正则表达式语法错误：${cond.pattern}`); return }
+    if (cond.target === 'headers' && !isValidHeaderName(cond.header_name ?? '')) {
+      ElMessage.error('请求头条件需填写头名（仅字母、数字与 "-"，1-64 字符）');
+      return
+    }
   }
   savingRule.value = true
   try {

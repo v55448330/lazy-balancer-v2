@@ -189,3 +189,65 @@ func TestEngineGate_customRuleConditionLogicCompiles(t *testing.T) {
 		})
 	}
 }
+
+// 2026-11-05：headers 目标支持头名限定（REQUEST_HEADERS:<name>）——拦截
+// Content-Encoding: br 等按头名判定的规则此前无法安全表达（裸集合会自匹配
+// Accept-Encoding: br 全站误拦）。无头名的存量规则发射字节不变。
+func TestEmitCustomRules_headersWithHeaderNameTargetsNamedHeader(t *testing.T) {
+	rule := models.CustomRule{
+		ID: 43, Name: "拦 br 请求体", Enabled: true, Action: "block", Score: 5,
+		Conditions: []models.CustomRuleCondition{
+			{Target: "headers", Operator: "regex", Pattern: `(?i)(^|,)\s*br\s*($|,)`, HeaderName: "Content-Encoding"},
+		},
+	}
+	var sb strings.Builder
+	emitCustomRules(&sb, []models.CustomRule{rule}, 0)
+	out := sb.String()
+	if !strings.Contains(out, "SecRule REQUEST_HEADERS:Content-Encoding") {
+		t.Fatalf("未收敛为 REQUEST_HEADERS:Content-Encoding:\n%s", out)
+	}
+	if strings.Contains(out, `SecRule REQUEST_HEADERS "`) {
+		t.Fatalf("不得保留裸集合形态（自匹配 Accept-Encoding）:\n%s", out)
+	}
+	if !strings.Contains(out, "id:10043") {
+		t.Fatalf("父规则 id 缺失:\n%s", out)
+	}
+}
+
+func TestEmitCustomRules_headersWithoutHeaderNameKeepsLegacyCollection(t *testing.T) {
+	rule := models.CustomRule{
+		ID: 44, Name: "存量无头名", Enabled: true, Action: "block", Score: 5,
+		Conditions: []models.CustomRuleCondition{
+			{Target: "headers", Operator: "contains", Pattern: "attack"},
+		},
+	}
+	var sb strings.Builder
+	emitCustomRules(&sb, []models.CustomRule{rule}, 0)
+	if !strings.Contains(sb.String(), `SecRule REQUEST_HEADERS "@contains attack"`) {
+		t.Fatalf("存量无头名规则发射必须保持不变:\n%s", sb.String())
+	}
+}
+
+func TestValidateCustomRuleConditions_headerNameValidation(t *testing.T) {
+	valid := []models.CustomRuleCondition{
+		{Target: "headers", Operator: "regex", Pattern: "br", HeaderName: "Content-Encoding"},
+	}
+	if err := ValidateCustomRuleConditions(valid); err != nil {
+		t.Fatalf("合法头名不得报错: %v", err)
+	}
+	cases := []struct {
+		name string
+		cond models.CustomRuleCondition
+		want string
+	}{
+		{"非法字符", models.CustomRuleCondition{Target: "headers", Operator: "regex", Pattern: "x", HeaderName: "Content Encoding;"}, "请求头名含非法字符"},
+		{"超长", models.CustomRuleCondition{Target: "headers", Operator: "regex", Pattern: "x", HeaderName: strings.Repeat("A", 65)}, "请求头名长度"},
+		{"非 headers 携带头名", models.CustomRuleCondition{Target: "uri", Operator: "regex", Pattern: "x", HeaderName: "Content-Encoding"}, "header_name 仅 target=headers 时支持"},
+	}
+	for _, tc := range cases {
+		err := ValidateCustomRuleConditions([]models.CustomRuleCondition{tc.cond})
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Fatalf("%s: err=%v, want 含 %q", tc.name, err, tc.want)
+		}
+	}
+}
