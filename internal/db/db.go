@@ -131,9 +131,16 @@ const (
 	// DEFAULT/迁移回填/从端 apply 归一（cluster_apply.go）共用此常量。
 	DefaultJWTExpireMinutes = 20
 	// DefaultSyncInterval 是 global_config.sync_interval 的治理默认：fresh
-	// DDL DEFAULT 与集群快照装载读侧 COALESCE 绑定参数同源。运行期脏值
-	// （<10/>86400）由 normalizeSyncInterval 归一，不属本常量语义。
+	// DDL DEFAULT 与集群快照装载读侧 COALESCE 绑定参数同源。运行期脏值由
+	// MinSyncIntervalSeconds/MaxSyncIntervalSeconds 定界的 normalizeSyncInterval
+	// 归一，不属本常量语义。
 	DefaultSyncInterval = 60
+	// MinSyncIntervalSeconds/MaxSyncIntervalSeconds 是 sync_interval 的运行
+	// 区间边界（低于下限归 DefaultSyncInterval、高于上限钳顶）：services
+	// normalizeSyncInterval 与 handlers GetConfig 展示钳位共用，边界数字
+	// 不得在展示侧与运行期各持一份。
+	MinSyncIntervalSeconds = 10
+	MaxSyncIntervalSeconds = 86400
 	// DefaultTimezone 是 global_config.timezone 的治理默认（fresh DDL DEFAULT
 	// 与启动归一单源）。空串不是合法库值：time.LoadLocation("") 是 Go 的
 	// 特殊值（返回 UTC），读侧 COALESCE 只兜 NULL——空串落库会让全站展示/

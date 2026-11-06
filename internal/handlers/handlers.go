@@ -1123,7 +1123,7 @@ func (h *Handlers) validateRulePayloadBeforeSave(req interface{}) error {
 // caddy.go 内首个 "UPDATE global_config SET" 提取 UpdateConfig 的列集合。
 func clampAuditRetentionMonthsOnStartup() {
 	var months int
-	if err := db.DB.QueryRow(`SELECT COALESCE(audit_retention_months,3) FROM global_config WHERE id=1`).Scan(&months); err != nil {
+	if err := db.DB.QueryRow(`SELECT COALESCE(audit_retention_months,?) FROM global_config WHERE id=1`, db.DefaultAuditRetentionMonths).Scan(&months); err != nil {
 		services.Logf("error", "读取日志保留月数失败，跳过启动钳位: %v", err)
 		return
 	}

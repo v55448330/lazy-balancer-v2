@@ -1039,9 +1039,9 @@ func (s *ClusterService) retryPendingPinCleanup() {
 }
 
 const (
-	minSyncIntervalSeconds     = 10
-	defaultSyncIntervalSeconds = 60
-	maxSyncIntervalSeconds     = 86400
+	minSyncIntervalSeconds     = db.MinSyncIntervalSeconds
+	defaultSyncIntervalSeconds = db.DefaultSyncInterval
+	maxSyncIntervalSeconds     = db.MaxSyncIntervalSeconds
 )
 
 // normalizeSyncInterval 将存量/快照脏值归一到运行时和展示共同接受的区间。

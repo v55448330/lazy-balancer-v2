@@ -963,16 +963,25 @@ func TestGovernedDefaultLiteralsBoundInConsumers(t *testing.T) {
 			},
 		},
 		{
-			// 备份导入的回退排程/开关必须与 DDL 默认和自动备份读侧同源。
+			// 备份导入的回退排程/开关必须与 DDL 默认和自动备份读侧同源；
+			// 任务级排程回填与导入整型钳制表的默认值（Def 列）同理——字面量
+			// 副本会让 DDL/设置页常量调整后导入产物静默漂移。
 			file: "../handlers/config_backup.go",
 			forbidden: []string{
 				"COALESCE(auto_backup_frequency,'daily')",
 				"COALESCE(auto_backup_day,1)",
 				"COALESCE(auto_backup_enabled,0)",
+				"1,2,3,4,5,6,7", "04:00",
 			},
 			required: []string{
 				"db.DefaultAutoBackupEnabled", "db.DefaultAutoBackupFrequency",
 				"db.DefaultAutoBackupDay",
+				"db.DefaultScheduleDays", "db.DefaultScheduleTime",
+				"db.DefaultJWTExpireMinutes", "db.DefaultAuditRetentionMonths",
+				"db.DefaultCaddyLogSizeMB", "db.DefaultAuditLogSizeMB",
+				"db.DefaultTaskLogSizeMB", "db.DefaultRuntimeLogSizeMB",
+				"db.DefaultCertRenewalDays", "db.DefaultCertRenewalAttempts",
+				"db.DefaultCertExpiryDays",
 			},
 		},
 		{
@@ -1053,6 +1062,31 @@ func TestGovernedDefaultLiteralsBoundInConsumers(t *testing.T) {
 			file:      "../services/cluster_masterserving.go",
 			forbidden: []string{"COALESCE(sync_interval,60)"},
 			required:  []string{"db.DefaultSyncInterval"},
+		},
+		{
+			// 运行期 sync_interval 归一（normalizeSyncInterval）与面板展示钳位
+			// 同界：边界数字以 db 常量为唯一事实源，services 私有常量只允许
+			// 引用治理常量，不得另持一份 10/60/86400。
+			file: "../services/cluster.go",
+			required: []string{
+				"db.MinSyncIntervalSeconds", "db.MaxSyncIntervalSeconds", "db.DefaultSyncInterval",
+			},
+		},
+		{
+			// GetConfig 展示侧的 sync_interval 钳位（低于下限归默认、高于上限
+			// 钳顶）与运行期归一同一组边界：展示与运行期各持一份边界数字时，
+			// 常量调整后节点状态判定与面板展示静默分叉。
+			file: "../handlers/caddy.go",
+			required: []string{
+				"db.MinSyncIntervalSeconds", "db.MaxSyncIntervalSeconds", "db.DefaultSyncInterval",
+			},
+		},
+		{
+			// 启动钳位读侧的审计保留月数兜底与 DDL/设置页读侧同源：兜底字面量
+			// 会在常量调整后让钳位读错基准值。
+			file:      "../handlers/handlers.go",
+			forbidden: []string{"COALESCE(audit_retention_months,3)"},
+			required:  []string{"db.DefaultAuditRetentionMonths"},
 		},
 		{
 			// Caddy 渲染侧的运行日志级别兜底与面板读侧/快照装载同源。

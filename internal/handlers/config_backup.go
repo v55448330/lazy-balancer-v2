@@ -543,12 +543,12 @@ var backupTableNullDefaults = map[string]map[string]any{
 		"system": int64(0), // v2.3.2 名单化：NULL 归一 0（非内置）
 	},
 	"security_crs_version": {
-		"updated_at": "", "auto_update": int64(1), "schedule_days": "1,2,3,4,5,6,7", "schedule_time": "04:00", "update_status": "idle", "message": "",
+		"updated_at": "", "auto_update": int64(1), "schedule_days": db.DefaultScheduleDays, "schedule_time": db.DefaultScheduleTime, "update_status": "idle", "message": "",
 		"last_checked": "", "next_update": "", "trigger": "", "started_at": "", "finished_at": "",
 		"consecutive_failures": int64(0),
 	},
 	"security_ip2region_version": {
-		"updated_at": "", "auto_update": int64(1), "schedule_days": "1,2,3,4,5,6,7", "schedule_time": "04:00", "update_status": "idle", "message": "",
+		"updated_at": "", "auto_update": int64(1), "schedule_days": db.DefaultScheduleDays, "schedule_time": db.DefaultScheduleTime, "update_status": "idle", "message": "",
 		"last_checked": "", "next_update": "", "trigger": "", "started_at": "", "finished_at": "",
 		"consecutive_failures": int64(0),
 	},
@@ -5096,18 +5096,18 @@ type backupConfigClampRule struct {
 }
 
 var backupConfigClampRules = []backupConfigClampRule{
-	{Key: "jwt_expire_minutes", Lo: 1, Hi: 1440, Def: 20, ResetOnHigh: true, ResetOnLow: true},
-	{Key: "audit_retention_months", Lo: 1, Hi: 12, Def: 3, ResetOnLow: true},
-	{Key: "caddy_log_size_mb", Lo: 100, Hi: 10240, Def: 100},
-	{Key: "audit_log_size_mb", Lo: 1, Hi: 512, Def: 10},
-	{Key: "task_log_size_mb", Lo: 1, Hi: 1024, Def: 10},
-	{Key: "runtime_log_size_mb", Lo: 1, Hi: 1024, Def: 100},
+	{Key: "jwt_expire_minutes", Lo: 1, Hi: 1440, Def: db.DefaultJWTExpireMinutes, ResetOnHigh: true, ResetOnLow: true},
+	{Key: "audit_retention_months", Lo: 1, Hi: 12, Def: db.DefaultAuditRetentionMonths, ResetOnLow: true},
+	{Key: "caddy_log_size_mb", Lo: 100, Hi: 10240, Def: db.DefaultCaddyLogSizeMB},
+	{Key: "audit_log_size_mb", Lo: 1, Hi: 512, Def: db.DefaultAuditLogSizeMB},
+	{Key: "task_log_size_mb", Lo: 1, Hi: 1024, Def: db.DefaultTaskLogSizeMB},
+	{Key: "runtime_log_size_mb", Lo: 1, Hi: 1024, Def: db.DefaultRuntimeLogSizeMB},
 	// 续签/有效期数值（与写侧 caddy.go 校验同边界）：cert_renewal_days 超大值
 	// 会让续签扫描窗口覆盖一切证书（续签成功后仍在窗口内 → 永久续签风暴耗尽
 	// CA 配额）；负值漂移 Keep/Resume 决策。0=默认 30（不参与下界钳制）。
-	{Key: "cert_renewal_days", Lo: 0, Hi: services.CertRenewalDaysMax, Def: 30},
-	{Key: "cert_renewal_attempts", Lo: 1, Hi: 10, Def: 5},
-	{Key: "cert_expiry_days", Lo: 1, Hi: 365, Def: 30},
+	{Key: "cert_renewal_days", Lo: 0, Hi: services.CertRenewalDaysMax, Def: db.DefaultCertRenewalDays},
+	{Key: "cert_renewal_attempts", Lo: 1, Hi: 10, Def: db.DefaultCertRenewalAttempts},
+	{Key: "cert_expiry_days", Lo: 1, Hi: 365, Def: db.DefaultCertExpiryDays},
 	// 库值唯一真相（批 1+2）：http 三超时为类型①值型列（NOT NULL DEFAULT
 	// 60/60/120+启动回填）——旧备份的 0/NULL（省略语义时代残留）在导入门归
 	// 治理默认；写侧无上界，故 Hi=0。本表是这三键的唯一导入门：负值/0/非法

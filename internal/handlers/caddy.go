@@ -455,14 +455,14 @@ func (h *Handlers) GetConfig(c *gin.Context) {
 		writeInternalError(c, http.StatusInternalServerError, "获取全局配置失败", err)
 		return
 	}
-	// 展示口径与运行时 clamp 对齐(<10 → 60)。
+	// 展示口径与运行时 clamp 对齐(低于下限归默认)。
 	// 钳位移到 err 判定之后——err 非 nil 时 cfg 为零值
 	// 废弃对象，先行钳位是对废弃对象的无意义写（顺序误导读者）。
-	if cfg.SyncInterval < 10 {
-		cfg.SyncInterval = 60
-	} else if cfg.SyncInterval > 86400 {
+	if cfg.SyncInterval < db.MinSyncIntervalSeconds {
+		cfg.SyncInterval = db.DefaultSyncInterval
+	} else if cfg.SyncInterval > db.MaxSyncIntervalSeconds {
 		// 与运行时/节点状态阈值同界，存量脏数据不得原样展示。
-		cfg.SyncInterval = 86400
+		cfg.SyncInterval = db.MaxSyncIntervalSeconds
 	}
 	// （2026-09-05 证书域审计裁定，2026-10-26 列退役）：global_config.dns_credentials
 	// 为退役列（签发链唯一凭证来源是 certificate_configs.dns_credentials，前端
