@@ -188,12 +188,14 @@ func loadOIDCConfig() (OIDCConfig, error) {
 	return cfg, nil
 }
 
-func saveOIDCConfig(cfg OIDCConfig) error {
+// saveOIDCConfig 保存 OIDC 配置。ctx 契约：写语句消费调用方传入的请求
+// ctx——客户端断开/超时后本写点立即中止、零副作用（取消即中止）。
+func saveOIDCConfig(ctx context.Context, cfg OIDCConfig) error {
 	raw, err := json.Marshal(cfg)
 	if err != nil {
 		return err
 	}
-	res, err := db.DB.Exec("UPDATE global_config SET oidc_config=? WHERE id=1", string(raw))
+	res, err := db.DB.ExecContext(ctx, "UPDATE global_config SET oidc_config=? WHERE id=1", string(raw))
 	if err != nil {
 		return err
 	}
@@ -277,17 +279,26 @@ func migrateOIDCIdentityIssuer(tx *sql.Tx, from, to string) (oidcIssuerMigration
 // 写回库，原值即消失、兼容通道失效——若不同步迁移身份行，该自然人再登录会
 // 被当成首次登录并新建启用账号（封禁/角色旁路）。conflicts 非空时函数不提交，
 // 由调用方回 409。
-func saveOIDCConfigWithIssuerMigration(cfg OIDCConfig, migrateFrom string) (oidcIssuerMigration, error) {
+// ctx 契约：事务开启消费请求 ctx（排锁/迁移读取阶段取消即中止、零副作用），
+// 配置写回与身份行迁移全有或全无——客户端断开/超时后不得半途遗留迁移后的
+// 身份行；事务内语句与提交经驱动感知取消，未提交事务由 committed 标记的
+// defer 回滚兜住。
+func saveOIDCConfigWithIssuerMigration(ctx context.Context, cfg OIDCConfig, migrateFrom string) (oidcIssuerMigration, error) {
 	mig := oidcIssuerMigration{from: migrateFrom, to: cfg.Issuer}
 	raw, err := json.Marshal(cfg)
 	if err != nil {
 		return mig, err
 	}
-	tx, err := db.DB.Begin()
+	tx, err := db.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return mig, err
 	}
-	defer func() { _ = tx.Rollback() }()
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
 	res, err := tx.Exec("UPDATE global_config SET oidc_config=? WHERE id=1", string(raw))
 	if err != nil {
 		return mig, err
@@ -309,6 +320,7 @@ func saveOIDCConfigWithIssuerMigration(cfg OIDCConfig, migrateFrom string) (oidc
 	if err := tx.Commit(); err != nil {
 		return mig, err
 	}
+	committed = true
 	return mig, nil
 }
 
@@ -1527,7 +1539,7 @@ func (h *Handlers) OIDCSettingsUpdate(c *gin.Context) {
 			return
 		}
 	}
-	migration, err := saveOIDCConfigWithIssuerMigration(cfg, migrateFrom)
+	migration, err := saveOIDCConfigWithIssuerMigration(c.Request.Context(), cfg, migrateFrom)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "保存 OIDC 配置失败"})
 		return
@@ -1864,7 +1876,7 @@ func (h *Handlers) OIDCSettingsDelete(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取 OIDC 身份记录失败"})
 		return
 	}
-	if err := saveOIDCConfig(OIDCConfig{}); err != nil {
+	if err := saveOIDCConfig(c.Request.Context(), OIDCConfig{}); err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "删除 OIDC 配置失败"})
 		return
 	}

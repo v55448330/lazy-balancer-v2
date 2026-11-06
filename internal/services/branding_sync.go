@@ -105,12 +105,12 @@ var emptyBrandingTemplate = func() string {
 // 注入内存单源（landing 文案 + TCP 拦截提示品牌）。空内容按集群同步既有
 // 语义收敛为全空模板。
 // 返回值 changed 报告是否需要触发下游重渲染：实际写入文件为 true；文件
-// 内容一致但内存 TCP 提示品牌与文件口径分叉（导入/从端 applySnapshot/
-// 自愈三入口都经本函数落盘，「内容一致」短路分支此前只注入 landing，
-// 内存品牌滞留旧值永不收敛）时同样并入 true——提示文案渲染期烘焙进
-// Caddy 配置，/load 触发链路依赖 changed=true 才会重渲染。内容与品牌
-// 双双一致时为 false 且零 mtime 扰动——调用方据此区分「写了」与
-// 「没写」，避免内容未变仍落一条品牌同步审计。
+// 内容一致但内存 TCP 提示品牌或 landing 文案与文件口径分叉（导入/从端
+// applySnapshot/自愈三入口都经本函数落盘，「内容一致」短路分支此前只注入
+// 不并 changed，内存值滞留旧值永不收敛）时同样并入 true——提示文案与
+// landing 渲染期烘焙进 Caddy 配置，/load 触发链路依赖 changed=true 才会
+// 重渲染。内容与内存注入值（品牌/landing）双一致时为 false 且零 mtime
+// 扰动——调用方据此区分「写了」与「没写」，避免内容未变仍落一条品牌同步审计。
 func MaterializeBranding(dataDir, content string) (changed bool, err error) {
 	if dataDir == "" {
 		return false, fmt.Errorf("品牌配置目录为空")
@@ -127,7 +127,8 @@ func MaterializeBranding(dataDir, content string) (changed bool, err error) {
 	path := filepath.Join(dataDir, "branding.json")
 	if existing, err := os.ReadFile(path); err == nil && string(existing) == content {
 		// 内容一致仍成对注入：三入口在真实落盘分支之外只有本短路通道，
-		// 缺注入则内存品牌滞留旧值。品牌变化并入 changed（见函数注释）。
+		// 缺注入则内存品牌/landing 滞留旧值。注入值变化（品牌或 landing）
+		// 并入 changed（见函数注释）。
 		return injectBrandingsFromBranding(content), nil
 	}
 	mode := os.FileMode(0o644)
@@ -227,13 +228,15 @@ func injectLandingFromBranding(content string) {
 // injectBrandingsFromBranding 从 branding JSON 原文成对注入内存单源：
 // TCP 拦截提示品牌（normalizeTCPNoticeBrand 归一，与 handlers
 // SyncDefaultLandingText 同款口径，两处注入幂等）+ landing 文案。
-// 返回品牌注入值是否发生变化——MaterializeBranding 据此把内存品牌变化
-// 并入 changed（提示文案渲染期烘焙进 Caddy 配置，重载触发链依赖 changed）。
-func injectBrandingsFromBranding(content string) (brandChanged bool) {
-	before := TCPBlockNoticeBrand()
+// 返回内存注入值是否发生变化（品牌或 landing 任一变化即 true）——
+// MaterializeBranding 据此把内存注入变化并入 changed（提示文案与 landing
+// 渲染期烘焙进 Caddy 配置，重载触发链依赖 changed）。
+func injectBrandingsFromBranding(content string) (injectedChanged bool) {
+	beforeBrand := TCPBlockNoticeBrand()
+	beforeLanding := DefaultLandingBody()
 	SetTCPBlockNoticeBrand(normalizeTCPNoticeBrand(extractBrandingStringField(content, "app_name")))
 	injectLandingFromBranding(content)
-	return TCPBlockNoticeBrand() != before
+	return TCPBlockNoticeBrand() != beforeBrand || DefaultLandingBody() != beforeLanding
 }
 
 // extractBrandingStringField 从 JSON 原文按字段名提取字符串值;任何解析

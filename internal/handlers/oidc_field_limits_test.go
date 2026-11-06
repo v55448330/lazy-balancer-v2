@@ -4,6 +4,7 @@ package handlers
 // 截断（带外写入的历史值可能是任意长度）。
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -117,7 +118,7 @@ func TestOIDCStatus_toleratesOversizedStoredAllowLists(t *testing.T) {
 	for i := range oidcAllowListMaxEntries * 3 {
 		legacyGroups = append(legacyGroups, fmt.Sprintf("legacy-group-%03d", i))
 	}
-	if err := saveOIDCConfig(OIDCConfig{
+	if err := saveOIDCConfig(context.Background(), OIDCConfig{
 		Enabled: true, Issuer: "https://idp.example.com", ClientID: "cid", ClientSecret: "sec",
 		AllowedGroups:       legacyGroups,
 		AllowedEmailDomains: []string{strings.Repeat("a", oidcAllowListEntryMaxRunes) + ".com"},
@@ -143,7 +144,7 @@ func TestOIDCStatus_toleratesOversizedStoredAllowLists(t *testing.T) {
 func TestOIDCStatus_truncatesOversizedStoredDisplayName(t *testing.T) {
 	router, _ := setupOIDCTest(t, newMockIdP(t))
 	oversized := strings.Repeat("x", 100000)
-	if err := saveOIDCConfig(OIDCConfig{
+	if err := saveOIDCConfig(context.Background(), OIDCConfig{
 		Enabled: true, Issuer: "https://idp.example.com", ClientID: "cid", ClientSecret: "sec",
 		DisplayName: oversized,
 	}); err != nil {

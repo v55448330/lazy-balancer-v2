@@ -601,8 +601,9 @@ func TestApplySnapshotBranding_auditsOnlyWhenContentChanges(t *testing.T) {
 
 // MaterializeBranding 必须与 landing 成对注入 TCP 拦截提示品牌：备份导入/
 // 从端 applySnapshot/自愈三入口都经本函数落盘，「文件内容一致」短路分支
-// 此前零品牌注入——文件已写入但内存品牌滞留旧值时永不收敛。品牌注入值
-// 变化必须并入 changed 返回：提示文案渲染期烘焙进 Caddy 配置，集群链路
+// 此前零品牌注入——文件已写入但内存品牌滞留旧值时永不收敛。品牌与 landing
+// 注入值变化都必须并入 changed 返回：提示文案与 landing 渲染期烘焙进
+// Caddy 配置，集群链路
 // 的重载触发（brandingWritten→mustReload）依赖 changed=true。
 func TestMaterializeBranding_tcpNoticeBrandInjection(t *testing.T) {
 	t.Cleanup(func() { SetTCPBlockNoticeBrand("") })
@@ -653,6 +654,38 @@ func TestMaterializeBranding_tcpNoticeBrandInjection(t *testing.T) {
 	}
 	if got := TCPBlockNoticeBrand(); got != "甲板面板" {
 		t.Fatalf("幂等后品牌 = %q, want 甲板面板", got)
+	}
+
+	// 形状四（landing 短路对称）：文件内容一致但内存 landing 滞留旧值——
+	// 与品牌同款，landing 注入值变化必须并入 changed（落盘分支 changed 恒
+	// true 已天然覆盖 landing，短路分支此前只并品牌，landing 变化丢失）。
+	landingDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(landingDir, "branding.json"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	SetTCPBlockNoticeBrand("甲板面板") // 品牌已一致，隔离 landing 为唯一变化源
+	SetDefaultLandingBody("旧文案")
+	changed, err = MaterializeBranding(landingDir, content)
+	if err != nil {
+		t.Fatalf("materialize identical file (stale landing): %v", err)
+	}
+	if !changed {
+		t.Fatal("内存 landing 滞留旧值时必须并入 changed=true")
+	}
+	if got := DefaultLandingBody(); got != DefaultLandingText {
+		t.Fatalf("一致分支 landing 注入 = %q, want 默认文案", got)
+	}
+
+	// 形状五（landing 幂等对称）：landing 与品牌双一致时 changed=false 不回退。
+	changed, err = MaterializeBranding(landingDir, content)
+	if err != nil {
+		t.Fatalf("idempotent materialize (landing): %v", err)
+	}
+	if changed {
+		t.Fatal("landing 与品牌均已一致时 changed 必须保持 false")
+	}
+	if got := DefaultLandingBody(); got != DefaultLandingText {
+		t.Fatalf("幂等后 landing = %q, want 默认文案", got)
 	}
 }
 

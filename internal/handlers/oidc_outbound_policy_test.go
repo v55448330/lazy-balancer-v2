@@ -46,7 +46,7 @@ func TestOIDCOutboundClient_rejectsNonCompliantInitialURL(t *testing.T) {
 
 func TestOIDCStatus_hidesNonCompliantStoredIssuer(t *testing.T) {
 	router, _ := setupOIDCTest(t, newMockIdP(t))
-	if err := saveOIDCConfig(OIDCConfig{
+	if err := saveOIDCConfig(context.Background(), OIDCConfig{
 		Enabled: true, Issuer: "http://idp.example.test", ClientID: "cid", ClientSecret: "sec",
 	}); err != nil {
 		t.Fatalf("seed stored config: %v", err)

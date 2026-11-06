@@ -5,6 +5,7 @@ package handlers
 // OIDC 用户 username 不可改、初始管理员不可降级、回调失败 302 回前端。
 
 import (
+	"context"
 	"encoding/json"
 	"maps"
 	"net/http"
@@ -676,7 +677,7 @@ func TestOIDCPublicEntries_useSameEnableGateAsStatus(t *testing.T) {
 				issuer = idp.issuer
 			}
 			// 直接写库（模拟导入/快照/带外写入绕过保存门）。
-			if err := saveOIDCConfig(tc.cfg(issuer)); err != nil {
+			if err := saveOIDCConfig(context.Background(), tc.cfg(issuer)); err != nil {
 				t.Fatalf("seed stored config: %v", err)
 			}
 			idp.requests.Store(0)
