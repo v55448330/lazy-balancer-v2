@@ -57,7 +57,7 @@ DIST_STAMP="$(python3 -c "import json;print(json.load(open('web/dist/build-info.
 if [[ "$DIST_STAMP" == "$HEAD" ]]; then
   pass "dist 构建戳 == HEAD ($HEAD)"
 else
-  fail "dist 构建戳=$DIST_STAMP ≠ HEAD=$HEAD（cd web && npm run build 后再跑本脚本）"
+  fail "dist 构建戳=$DIST_STAMP ≠ HEAD=${HEAD}（cd web && npm run build 后再跑本脚本）"
 fi
 
 # ── ② 前端构建（保证 dist 与 HEAD 一致）──
