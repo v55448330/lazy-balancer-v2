@@ -4,7 +4,9 @@ package services
 //
 //	① 信任直通（零事件零开销）→ ①b 信任检测（trust_detection=1：logged 事件
 //	后直通，HTTP id:12 DetectionOnly 的路由序等价物）→ ② deny 拒绝 →
-//	③ 独立黑名单 → ④ allow 交集外 → ⑤ 逐策略 GeoIP → ⑥ 兜底采样+proxy。
+//	③ 独立黑名单 → ④ allow 交集外 → ④b allow 交集豁免直通（HTTP id:13
+//	pass+nolog+skipAfter 的路由序等价物，交集成员免于 ⑤ 地域断连；仅当交集
+//	非空且其后有 GeoIP 路由时发射）→ ⑤ 逐策略 GeoIP → ⑥ 兜底采样+proxy。
 //
 // 模块 ID 固定 layer4.handlers.lb_l4_sec / layer4.matchers.lb_geoip（与
 // caddyl4sec 模块注册对账，见 l4sec_module_contract_test.go）。投影复用
@@ -175,16 +177,40 @@ func buildTCPSecurityRoutes(rule SingleRuleConfig, proxyHandler map[string]inter
 	// HTTP id:7 恒拒形态等价。策略名单为空照常入列（与 mergedAllowACLPolicies
 	// 同语义：空名单参与交集 → 空交集恒拒，不因内容门剔除而静默放行）。
 	allowLists := mergedAllowACLPolicies(policies)
+	var allowIntersection []string
+	var allowIntersectionPath string
 	if len(allowLists) > 0 {
 		signature := allowPolicySetSignature(policies)
-		intersection := aggregateIPEntries(input.ctx.allowIntersectionCached(signature, func() []string {
+		allowIntersection = aggregateIPEntries(input.ctx.allowIntersectionCached(signature, func() []string {
 			return intersectIPLists(allowLists)
 		}))
-		path, err := writeIPListFile(l4ProjectionScope("allow", cid), intersection)
+		path, err := writeIPListFile(l4ProjectionScope("allow", cid), allowIntersection)
 		if err != nil {
 			return nil, err
 		}
+		allowIntersectionPath = path
 		routes = append(routes, l4SecCloseRoute(rule, []interface{}{notMatcherSet(l4IPFileMatchers(path))}, cid, "allow", 0, trustedAllow))
+	}
+
+	// ④b allow 交集成员豁免 GeoIP（HTTP id:13 pass+nolog+skipAfter 的路由序
+	// 等价物，「白名单=该客户端被人工信任」全豁免口径的 L4 在场部分）：交集
+	// 命中 → [（lb_l4_pp →）proxy] 直通，不产事件（nolog 语义；allowed_total
+	// 不计此路由——无 lb_l4_sec handler）、不 close。置于 ④ 之后——显式
+	// deny/黑名单命中照常断连（其 close 路由先行短路，白名单不豁免显式黑
+	// 名单）；置于 ⑤ 之前——交集成员不再被逐策略 GeoIP 断连。发射条件镜像
+	// HTTP：交集非空（恒拒形态无成员可豁免）且其后确有 GeoIP 路由
+	// （l4HasGeoIPRoute）——无 GeoIP 时交集成员本就经 ⑥ 兜底透传，发射属纯
+	// 字节变化。匹配复用 ④ 的同一交集投影文件（正向，零额外落盘）。
+	if len(allowIntersection) > 0 && l4HasGeoIPRoute(policies) {
+		handle := make([]interface{}, 0, 2)
+		if pp := l4ProxyProtocolHandler(rule, trustedAllow); pp != nil {
+			handle = append(handle, pp)
+		}
+		handle = append(handle, l4PassthroughProxyHandler(proxyHandler))
+		routes = append(routes, map[string]interface{}{
+			"match":  l4IPFileMatchers(allowIntersectionPath),
+			"handle": handle,
+		})
 	}
 
 	// ⑤ 逐策略 GeoIP（policy_id 精确归因）：matcher 直接编码阻断方向——
@@ -458,6 +484,23 @@ func mergedAllowACLPolicies(policies []*models.SecurityPolicy) [][]string {
 		lists = append(lists, mergedACLList(p))
 	}
 	return lists
+}
+
+// l4HasGeoIPRoute 报告 ⑤ 是否会为任一绑定策略发射 GeoIP 路由（与 ⑤ 逐策略
+// 发射门同口径：非 nil 且 PolicyHasGeoIP 且 policy_id 段界可编码）。④b 豁免
+// 直通路由仅在其后确有 GeoIP close 路由时才有行为意义——全部 GeoIP 策略被
+// 跳过（off/空名单脏行/段界越界）时发射属纯字节变化。
+func l4HasGeoIPRoute(policies []*models.SecurityPolicy) bool {
+	for _, policy := range policies {
+		if policy == nil || !PolicyHasGeoIP(policy) {
+			continue
+		}
+		if _, ok := encodeGeoIPPrecheckRuleID(policy.ID); !ok {
+			continue
+		}
+		return true
+	}
+	return false
 }
 
 // tcpSecurityRouteList 组装 L4 server 的完整 routes：安全段（可缺）+ 兜底

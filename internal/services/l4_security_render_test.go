@@ -2,7 +2,7 @@ package services
 
 // L4（TCP 规则）阶段 0/1 安全渲染 RED 测试（契约 C2，见 .omp/local/l4-stage01-contract.md）：
 //   - 绑定启用策略集的 TCP 规则渲染 routes 短路链：信任直通 → deny → 独立黑名单 →
-//     allow 交集外 → 逐策略 GeoIP → 兜底采样+proxy；
+//     allow 交集外 → allow 交集豁免直通 → 逐策略 GeoIP → 兜底采样+proxy；
 //   - 模块 ID 固定 layer4.handlers.lb_l4_sec / layer4.matchers.lb_geoip / layer4.matchers.lb_ipfile（与 caddyl4sec
 //     模块对账，另见 l4sec_module_contract_test.go）；
 //   - securityLibsOK 同款降级门（缺库安全段整体不渲染）；
@@ -109,9 +109,9 @@ func TestBuildTCPServer_tcpWithStage01Policies_rendersShortCircuitChain(t *testi
 	if !ok {
 		t.Fatalf("routes missing: %#v", server)
 	}
-	// 信任直通/信任检测/deny/bl/allow/geoip/兜底 = 7 条。
-	if len(rawRoutes) != 7 {
-		t.Fatalf("routes=%d, want 7（trust→trust_detect→deny→bl→allow→geoip→sample+proxy）: %s", len(rawRoutes), dumpJSON(t, server))
+	// 信任直通/信任检测/deny/bl/allow/豁免直通/geoip/兜底 = 8 条。
+	if len(rawRoutes) != 8 {
+		t.Fatalf("routes=%d, want 8（trust→trust_detect→deny→bl→allow→豁免直通→geoip→sample+proxy）: %s", len(rawRoutes), dumpJSON(t, server))
 	}
 
 	// ① 信任直通：文件匹配 + [（proxy_protocol）→] proxy 透传（零事件零开销；
@@ -160,8 +160,31 @@ func TestBuildTCPServer_tcpWithStage01Policies_rendersShortCircuitChain(t *testi
 	// ④ allow 交集外：not 包裹 + reason=allow。
 	assertL4SecCloseRoute(t, rawRoutes[4], "lb_ipfile", "l4-allow-"+cid+".txt", "allow", 0, true)
 
+	// ④b 豁免直通（allow 交集成员豁免 GeoIP，HTTP id:13 路由序等价物）：
+	// 同一交集投影文件正向匹配 → 单 proxy（零事件零 close，nolog 语义），
+	// GeoIP close 路由在其后。
+	allowNotRaw, ok := l4SecRouteMatchers(t, rawRoutes[4])[0]["not"].([]interface{})
+	if !ok || len(allowNotRaw) != 1 {
+		t.Fatalf("④ allow 路由缺 not 包裹: %#v", l4SecRouteMatchers(t, rawRoutes[4])[0])
+	}
+	wantAllowFile := allowNotRaw[0].(map[string]interface{})["lb_ipfile"].(map[string]interface{})["file"].(string)
+	exemptSets := l4SecRouteMatchers(t, rawRoutes[5])
+	if len(exemptSets) != 1 {
+		t.Fatalf("豁免直通 matcher sets=%d, want 1", len(exemptSets))
+	}
+	if _, hasNot := exemptSets[0]["not"]; hasNot {
+		t.Fatalf("豁免直通必须正向匹配（交集成员命中）: %#v", exemptSets[0])
+	}
+	if got := l4SecMatcherFiles(t, exemptSets[0], "lb_ipfile"); len(got) != 1 || got[0] != wantAllowFile {
+		t.Fatalf("豁免直通 files=%v, want 与 ④ 同一交集投影 %s", got, wantAllowFile)
+	}
+	exemptHandlers := l4SecRouteHandlers(t, rawRoutes[5])
+	if len(exemptHandlers) != 1 || exemptHandlers[0]["handler"] != "proxy" {
+		t.Fatalf("豁免直通 handlers=%#v, want 单 proxy（零事件零 close）", exemptHandlers)
+	}
+
 	// ⑤ GeoIP：lb_geoip matcher + policy_id 精确归因。
-	geoipMatchers := l4SecRouteMatchers(t, rawRoutes[5])
+	geoipMatchers := l4SecRouteMatchers(t, rawRoutes[6])
 	if len(geoipMatchers) != 1 {
 		t.Fatalf("geoip matcher sets=%d, want 1", len(geoipMatchers))
 	}
@@ -173,7 +196,7 @@ func TestBuildTCPServer_tcpWithStage01Policies_rendersShortCircuitChain(t *testi
 	if !ok || len(countries) != 2 {
 		t.Fatalf("geoip countries=%#v, want 2 条策略名单原文", geoipRaw["countries"])
 	}
-	geoipHandlers := l4SecRouteHandlers(t, rawRoutes[5])
+	geoipHandlers := l4SecRouteHandlers(t, rawRoutes[6])
 	if len(geoipHandlers) != 2 {
 		t.Fatalf("geoip handlers=%d, want 2（lb_l4_sec + close）", len(geoipHandlers))
 	}
@@ -183,7 +206,7 @@ func TestBuildTCPServer_tcpWithStage01Policies_rendersShortCircuitChain(t *testi
 	}
 
 	// ⑥ 兜底：lb_l4_sec 采样 + proxy；@id 保持在兜底路由（与现状同位）。
-	fbHandlers := l4SecRouteHandlers(t, rawRoutes[6])
+	fbHandlers := l4SecRouteHandlers(t, rawRoutes[7])
 	if len(fbHandlers) != 2 {
 		t.Fatalf("fallback handlers=%d, want 2（allow_sample + proxy）", len(fbHandlers))
 	}
@@ -197,7 +220,7 @@ func TestBuildTCPServer_tcpWithStage01Policies_rendersShortCircuitChain(t *testi
 	if fbHandlers[1]["handler"] != "proxy" {
 		t.Fatalf("fallback proxy handler=%#v", fbHandlers[1])
 	}
-	if got := rawRoutes[6].(map[string]interface{})["@id"]; got != cid {
+	if got := rawRoutes[7].(map[string]interface{})["@id"]; got != cid {
 		t.Fatalf("fallback @id=%v, want %s", got, cid)
 	}
 
@@ -531,8 +554,8 @@ func TestBuildTCPServer_tcpTrustDetect_emptyUnion_notEmitted(t *testing.T) {
 	}
 }
 
-// 规则开 TCPProxyProtocol 时信任族两路由与 deny/兜底路由对称前置
-// proxy_protocol——直通/检测路由的 lb_l4_sec 归因与上游 PROXY 头都按改写后
+// 规则开 TCPProxyProtocol 时信任族两路由、deny 族与豁免直通/兜底路由对称前置
+// proxy_protocol——直通/检测/豁免路由的 lb_l4_sec 归因与上游 PROXY 头都按改写后
 // 对端，客户端伪造 PROXY 头不再原样透传上游。
 func TestBuildTCPServer_tcpProxyProtocol_trustRoutesPrefixed(t *testing.T) {
 	stubSecurityLibsAvailable(t)
@@ -549,8 +572,8 @@ func TestBuildTCPServer_tcpProxyProtocol_trustRoutesPrefixed(t *testing.T) {
 		t.Fatalf("buildTCPServer: %v", err)
 	}
 	rawRoutes, ok := server["routes"].([]interface{})
-	if !ok || len(rawRoutes) != 7 {
-		t.Fatalf("routes=%d, want 7: %s", len(rawRoutes), dumpJSON(t, server))
+	if !ok || len(rawRoutes) != 8 {
+		t.Fatalf("routes=%d, want 8: %s", len(rawRoutes), dumpJSON(t, server))
 	}
 	assertHandlerSeq := func(route interface{}, want ...string) {
 		t.Helper()
@@ -570,8 +593,10 @@ func TestBuildTCPServer_tcpProxyProtocol_trustRoutesPrefixed(t *testing.T) {
 	assertL4SecEventHandler(t, l4SecRouteHandlers(t, rawRoutes[1])[1], "trust_detect", 0)
 	// ② deny：proxy_protocol → lb_l4_sec → close（既有对称基准）。
 	assertHandlerSeq(rawRoutes[2], "lb_l4_pp", "lb_l4_sec", "close")
+	// ④b 豁免直通：proxy_protocol → proxy（与信任直通对称，零事件零 close）。
+	assertHandlerSeq(rawRoutes[5], "lb_l4_pp", "proxy")
 	// ⑥ 兜底：proxy_protocol → allow_sample → proxy（既有对称基准）。
-	assertHandlerSeq(rawRoutes[6], "lb_l4_pp", "lb_l4_sec", "proxy")
+	assertHandlerSeq(rawRoutes[7], "lb_l4_pp", "lb_l4_sec", "proxy")
 }
 
 // TCP PROXY 入站解析信任门控：每个 lb_l4_pp handler（信任直通/信任检测/deny 族/
@@ -1000,4 +1025,184 @@ func TestBuildTCPServer_tcpTrustOverlapPrefersPassthrough(t *testing.T) {
 		}
 	}
 	assertL4SecEventHandler(t, l4SecRouteHandlers(t, rawRoutes[1])[0], "trust_detect", 0)
+}
+
+// allow 交集成员豁免逐策略 GeoIP：④ allow 交集外拒绝与 ⑤ 逐策略 GeoIP 之间
+// 发射豁免直通路由（HTTP id:13 pass+nolog+skipAfter 的路由序等价物）——交集
+// 投影文件正向匹配 → [proxy] 直通（无 lb_l4_sec 事件=nolog 语义，无 close，
+// 透传 proxy 不挂 health_checks），GeoIP close 路由在其后（交集成员不再被
+// 地域断连）；显式 deny 路由仍在豁免之前（白名单不豁免显式黑名单）。
+func TestBuildTCPServer_tcpAllowIntersectionExemptPassthrough(t *testing.T) {
+	stubSecurityLibsAvailable(t)
+	oldDir := IPListDataDir
+	IPListDataDir = t.TempDir()
+	t.Cleanup(func() { IPListDataDir = oldDir })
+	ResetIPListProjectionStateForTest()
+	t.Cleanup(ResetIPListProjectionStateForTest)
+
+	cid := "lb_l4sec_exempt"
+	policies := []*models.SecurityPolicy{
+		{ID: 81, Name: "l4-deny", PolicyType: "stage1", IPACLEnabled: true, IPACLMode: "deny", IPACLList: `["10.0.0.5/32"]`},
+		{ID: 82, Name: "l4-allow", PolicyType: "stage1", IPACLEnabled: true, IPACLMode: "allow", IPACLList: `["10.0.0.7/32"]`},
+		{ID: 83, Name: "l4-geoip", PolicyType: "stage1", GeoIPMode: "deny", GeoIPCountries: []byte(`["北京市","海外"]`)},
+	}
+	server, err := buildTCPServer(l4SecTestRule(cid), &tcpSecurityRenderInput{policies: policies})
+	if err != nil {
+		t.Fatalf("buildTCPServer: %v", err)
+	}
+	rawRoutes, ok := server["routes"].([]interface{})
+	if !ok {
+		t.Fatalf("routes missing: %#v", server)
+	}
+	// ② deny → ④ allow 交集外 → ④b 豁免直通 → ⑤ geoip → ⑥ 兜底 = 5 条。
+	if len(rawRoutes) != 5 {
+		t.Fatalf("routes=%d, want 5（deny→allow→豁免直通→geoip→兜底）: %s", len(rawRoutes), dumpJSON(t, server))
+	}
+	assertL4SecCloseRoute(t, rawRoutes[0], "lb_ipfile", "l4-deny-"+cid+".txt", "deny", 0, false)
+	assertL4SecCloseRoute(t, rawRoutes[1], "lb_ipfile", "l4-allow-"+cid+".txt", "allow", 0, true)
+
+	// ④b 豁免直通：与 ④ 同一交集投影文件的正向匹配（无 not 包裹），handle
+	// =[proxy] 单 handler——无 lb_l4_sec 事件（nolog 语义）、无 close、无
+	// lb_l4_pp（TCPProxyProtocol 关闭形态）、proxy 不挂 health_checks（健康
+	// 检查唯一实例仍归兜底 proxy）。
+	allowNotRaw, ok := l4SecRouteMatchers(t, rawRoutes[1])[0]["not"].([]interface{})
+	if !ok || len(allowNotRaw) != 1 {
+		t.Fatalf("④ allow 路由缺 not 包裹: %#v", l4SecRouteMatchers(t, rawRoutes[1])[0])
+	}
+	allowInner := allowNotRaw[0].(map[string]interface{})
+	wantFile := allowInner["lb_ipfile"].(map[string]interface{})["file"].(string)
+	exemptSets := l4SecRouteMatchers(t, rawRoutes[2])
+	if len(exemptSets) != 1 {
+		t.Fatalf("豁免路由 matcher sets=%d, want 1", len(exemptSets))
+	}
+	if _, hasNot := exemptSets[0]["not"]; hasNot {
+		t.Fatalf("豁免路由必须正向匹配（交集成员命中）: %#v", exemptSets[0])
+	}
+	if got := l4SecMatcherFiles(t, exemptSets[0], "lb_ipfile"); len(got) != 1 || got[0] != wantFile {
+		t.Fatalf("豁免路由 files=%v, want 与 ④ 同一交集投影 %s", got, wantFile)
+	}
+	exemptHandlers := l4SecRouteHandlers(t, rawRoutes[2])
+	if len(exemptHandlers) != 1 || exemptHandlers[0]["handler"] != "proxy" {
+		t.Fatalf("豁免路由 handlers=%#v, want 单 proxy（nolog 语义，零事件零 close）", exemptHandlers)
+	}
+	if _, has := exemptHandlers[0]["health_checks"]; has {
+		t.Fatalf("豁免路由 proxy 不得挂 health_checks: %#v", exemptHandlers[0])
+	}
+
+	// ⑤ geoip 在豁免之后：交集成员不再被地域断连。
+	geoipHandlers := l4SecRouteHandlers(t, rawRoutes[3])
+	if len(geoipHandlers) != 2 || geoipHandlers[1]["handler"] != "close" {
+		t.Fatalf("geoip handlers=%#v, want [lb_l4_sec, close]", geoipHandlers)
+	}
+	assertL4SecEventHandler(t, geoipHandlers[0], "geoip", 83)
+
+	// 交集投影内容含成员（正向匹配的匹配面）。
+	content, err := os.ReadFile(wantFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(content), "10.0.0.7") {
+		t.Fatalf("allow 交集投影=%q, want 含 10.0.0.7", content)
+	}
+}
+
+// 豁免直通发射门镜像 HTTP id:13：无 GeoIP 策略时不发射——交集成员本就经
+// 兜底 proxy 透传，此时发射属纯字节变化（回归形状钉住）。
+func TestBuildTCPServer_tcpAllowIntersectionExempt_requiresGeoipRoute(t *testing.T) {
+	stubSecurityLibsAvailable(t)
+	oldDir := IPListDataDir
+	IPListDataDir = t.TempDir()
+	t.Cleanup(func() { IPListDataDir = oldDir })
+	ResetIPListProjectionStateForTest()
+	t.Cleanup(ResetIPListProjectionStateForTest)
+
+	cid := "lb_l4sec_exempt_nogeo"
+	policies := []*models.SecurityPolicy{
+		{ID: 84, Name: "l4-allow", PolicyType: "stage1", IPACLEnabled: true, IPACLMode: "allow", IPACLList: `["10.0.0.7/32"]`},
+	}
+	server, err := buildTCPServer(l4SecTestRule(cid), &tcpSecurityRenderInput{policies: policies})
+	if err != nil {
+		t.Fatalf("buildTCPServer: %v", err)
+	}
+	rawRoutes, ok := server["routes"].([]interface{})
+	if !ok {
+		t.Fatalf("routes missing: %#v", server)
+	}
+	// 无 GeoIP：allow 交集外拒绝 + 兜底 = 2 条，无豁免直通路由。
+	if len(rawRoutes) != 2 {
+		t.Fatalf("routes=%d, want 2（allow→兜底，无 GeoIP 不发射豁免路由）: %s", len(rawRoutes), dumpJSON(t, server))
+	}
+	assertL4SecCloseRoute(t, rawRoutes[0], "lb_ipfile", "l4-allow-"+cid+".txt", "allow", 0, true)
+	if got := l4SecRouteHandlers(t, rawRoutes[1]); len(got) != 2 || got[0]["mode"] != "allow_sample" {
+		t.Fatalf("兜底 handlers=%#v, want [allow_sample, proxy]", got)
+	}
+}
+
+// 无 allow 名单时不发射豁免直通（避免恒真直通路由绕过其后一切拦截路由，
+// 与 HTTP id:13「无 allow 名单不发射」同口径）；GeoIP 照常发射。
+func TestBuildTCPServer_tcpAllowIntersectionExempt_noAllowListNotEmitted(t *testing.T) {
+	stubSecurityLibsAvailable(t)
+	oldDir := IPListDataDir
+	IPListDataDir = t.TempDir()
+	t.Cleanup(func() { IPListDataDir = oldDir })
+	ResetIPListProjectionStateForTest()
+	t.Cleanup(ResetIPListProjectionStateForTest)
+
+	cid := "lb_l4sec_exempt_noallow"
+	policies := []*models.SecurityPolicy{
+		{ID: 85, Name: "l4-geoip", PolicyType: "stage1", GeoIPMode: "deny", GeoIPCountries: []byte(`["海外"]`)},
+	}
+	server, err := buildTCPServer(l4SecTestRule(cid), &tcpSecurityRenderInput{policies: policies})
+	if err != nil {
+		t.Fatalf("buildTCPServer: %v", err)
+	}
+	rawRoutes, ok := server["routes"].([]interface{})
+	if !ok {
+		t.Fatalf("routes missing: %#v", server)
+	}
+	// 无 allow：geoip + 兜底 = 2 条。
+	if len(rawRoutes) != 2 {
+		t.Fatalf("routes=%d, want 2（geoip→兜底，无 allow 不发射豁免路由）: %s", len(rawRoutes), dumpJSON(t, server))
+	}
+	geoipHandlers := l4SecRouteHandlers(t, rawRoutes[0])
+	if len(geoipHandlers) != 2 || geoipHandlers[1]["handler"] != "close" {
+		t.Fatalf("geoip handlers=%#v, want [lb_l4_sec, close]", geoipHandlers)
+	}
+	assertL4SecEventHandler(t, geoipHandlers[0], "geoip", 85)
+}
+
+// 交集为空（多条 allow 名单互不相交=恒拒形态）无成员可豁免，不发射豁免
+// 直通（与 HTTP id:13「交集为空恒拒形态不发射」同口径）。
+func TestBuildTCPServer_tcpAllowIntersectionExempt_emptyIntersectionNotEmitted(t *testing.T) {
+	stubSecurityLibsAvailable(t)
+	oldDir := IPListDataDir
+	IPListDataDir = t.TempDir()
+	t.Cleanup(func() { IPListDataDir = oldDir })
+	ResetIPListProjectionStateForTest()
+	t.Cleanup(ResetIPListProjectionStateForTest)
+
+	cid := "lb_l4sec_exempt_emptyix"
+	policies := []*models.SecurityPolicy{
+		{ID: 86, Name: "l4-allow-a", PolicyType: "stage1", IPACLEnabled: true, IPACLMode: "allow", IPACLList: `["10.0.0.7/32"]`},
+		{ID: 87, Name: "l4-allow-b", PolicyType: "stage1", IPACLEnabled: true, IPACLMode: "allow", IPACLList: `["10.0.0.8/32"]`},
+		{ID: 88, Name: "l4-geoip", PolicyType: "stage1", GeoIPMode: "deny", GeoIPCountries: []byte(`["海外"]`)},
+	}
+	server, err := buildTCPServer(l4SecTestRule(cid), &tcpSecurityRenderInput{policies: policies})
+	if err != nil {
+		t.Fatalf("buildTCPServer: %v", err)
+	}
+	rawRoutes, ok := server["routes"].([]interface{})
+	if !ok {
+		t.Fatalf("routes missing: %#v", server)
+	}
+	// 恒拒形态：allow 交集外拒绝 + geoip + 兜底 = 3 条，无豁免直通。
+	if len(rawRoutes) != 3 {
+		t.Fatalf("routes=%d, want 3（allow 恒拒→geoip→兜底，空交集不发射豁免路由）: %s", len(rawRoutes), dumpJSON(t, server))
+	}
+	assertL4SecCloseRoute(t, rawRoutes[0], "lb_ipfile", "l4-allow-"+cid+".txt", "allow", 0, true)
+	geoipHandlers := l4SecRouteHandlers(t, rawRoutes[1])
+	if len(geoipHandlers) != 2 || geoipHandlers[1]["handler"] != "close" {
+		t.Fatalf("geoip handlers=%#v, want [lb_l4_sec, close]", geoipHandlers)
+	}
+	assertL4SecEventHandler(t, geoipHandlers[0], "geoip", 88)
 }
