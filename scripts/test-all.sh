@@ -340,8 +340,11 @@ if [[ "${FAST:-0}" != "0" ]]; then
 fi
 
 for module in "${modules[@]}"; do
-  echo "== go test ./... -count=1 -shuffle=${canonical_shuffle_seed} ($module) =="
-  (cd "$module" && go test ./... -count=1 -shuffle="$canonical_shuffle_seed")
+  # -p 4：限制包并行度——全量并行下 SQLite/资源争用曾把 taskengine 时钟敏感
+  # 测饿到连 120s 天花板都不够（执行 goroutine 真实阻塞而非慢）；包并行降档
+  # 换套件稳定性，总时长增幅有限（包数少、单包内并行不变）。
+  echo "== go test ./... -count=1 -p 4 -shuffle=${canonical_shuffle_seed} ($module) =="
+  (cd "$module" && go test ./... -count=1 -p 4 -shuffle="$canonical_shuffle_seed")
 done
 
 # 额外排列面：默认 0 轮（上面的固定 seed 已覆盖乱序）；FULL=1（发版/夜间）

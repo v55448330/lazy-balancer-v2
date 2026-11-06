@@ -399,6 +399,7 @@ interface TaskInfo {
   schedule_stopped_reason?: string // 引擎自行停调来源（fail-streak=自动轮连续失败未推进排程槽）
   role_applicable?: boolean // 本节点角色是否允许该任务运行（false=仅主节点，从节点视图标注）
   retry_cooldown_seconds?: number | null // 证书行剩余重试冷却（秒，0=可运行；null=永久不可重试；其它行为 0）
+  cert_job_ca_cooldown_active?: boolean // 后端判定：行处于 CA 退避窗口（区别于仅通用冷却——后者触发放行）
 }
 interface RunRecord {
   id: number; task_id: string; family: string; trigger: string; operator?: string; status: string
@@ -738,21 +739,20 @@ async function runTaskAction(row: TaskInfo, options: TaskActionOptions): Promise
 }
 
 // 证书行冷却不再禁用手动运行（2026-11-02 用户裁定），文案按实门口径披露
-// （2026-11-07 用户裁定）：触发请求不带 force——冷却期/CA 退避窗口内触发会被
-// 429 拒绝，failed 行越窗出口在证书任务页「重签」；不得承诺「立即尝试」
-// （那是重签的 force 语义）。failed 行剩余冷却基本来自 CA 退避窗（1–3h，
-// 远长于 5 分钟通用冷却），故按行状态分支；非 failed 行的冷却都在 running
-// 在途态（按钮已禁用），tooltip 只补拒绝语义。null 仍是「永久不可重试」
-// 禁用态。非证书行恒 0 不进此路径。
+// （2026-11-07 用户裁定）：触发请求不带 force。后端为每行下发
+// cert_job_ca_cooldown_active（CA 退避窗口判定布尔）——窗口内触发默认被拒
+// （可 ?force 越过，出口在证书任务页「重签」）；仅通用冷却的行（如达重签
+// 上限后 ca_available_after 为空的 failed 行）触发放行并留越冷审计，tooltip
+// 不得声称被拒。null 仍是「永久不可重试」禁用态。非证书行恒 0 不进此路径。
 const runCooldownReason = (row: TaskInfo): string => {
   if (row.retry_cooldown_seconds === null) return '该任务永久不可重试'
   const seconds = Number(row.retry_cooldown_seconds ?? 0)
   if (!Number.isFinite(seconds) || seconds <= 0) return ''
   const minutes = Math.ceil(seconds / 60)
-  if (row.status === 'failed') {
+  if (row.cert_job_ca_cooldown_active) {
     return `冷却中（约 ${minutes} 分钟）· CA 退避窗口内手动触发将被拒绝；如需越过退避窗请到证书任务页使用「重签」`
   }
-  return `冷却中（约 ${minutes} 分钟）· 冷却期内手动触发将被拒绝`
+  return `冷却中（约 ${minutes} 分钟）· 冷却期后可直接重试`
 }
 
 const onTrigger = (row: TaskInfo): Promise<void> => runTaskAction(row, {

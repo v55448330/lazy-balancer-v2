@@ -177,7 +177,7 @@ func deleteAPIKey(c *gin.Context, scopedUserID int) {
 	}
 	var name string
 	// 刻意无 ctx 豁免：上方 name 查询与下方 DELETE 分离两语句、无事务包裹
-	//（audit125 已披露的同族分离形态，注释互引）——单行幂等删除，请求取消无
+	//（与既有已披露的同族分离形态互引）——单行幂等删除，请求取消无
 	// 一致性收益；登记表=auth_oidc_write_ctx_guard_test.go 豁免表。
 	if err := db.DB.QueryRow("SELECT name FROM api_keys WHERE "+where, args...).Scan(&name); dbQueryNotFound(c, err, "API 密钥不存在", "deleteAPIKey query key") {
 		return

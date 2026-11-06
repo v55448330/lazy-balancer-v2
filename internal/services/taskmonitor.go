@@ -63,9 +63,15 @@ type TaskInfo struct {
 	// 按 updated_at 起算扣减，waiting_ca 取 CA 退避到期时刻），非证书行恒 0
 	// （引擎族无证书重试冷却概念）。
 	RetryCooldownSeconds *int64 `json:"retry_cooldown_seconds"`
-	Runs24h              int    `json:"runs_24h"`
-	Success24h           int    `json:"success_24h"`
-	Fail24h              int    `json:"fail_24h"`
+	// CertJobCACooldownActive 行是否处于 CA 退避窗口（services.
+	// CertJobCAcooldownActive 单源判定，无 omitempty：恒下发）。剩余秒数区分
+	// 不了「通用冷却（触发请求放行，审计留痕）」与「CA 退避窗（未 force 默认
+	// 拒绝）」——达重签上限的 failed 行 ca_available_after 为空，只剩通用冷却。
+	// 前端据此为「运行」tooltip 选措辞，不得按行状态猜测。
+	CertJobCACooldownActive bool `json:"cert_job_ca_cooldown_active"`
+	Runs24h                 int  `json:"runs_24h"`
+	Success24h              int  `json:"success_24h"`
+	Fail24h                 int  `json:"fail_24h"`
 }
 
 // zeroRetryCooldown 是非证书任务行的统一下发值：引擎族没有证书重试冷却，
@@ -215,9 +221,13 @@ func collectCertJobRows() ([]TaskInfo, bool) {
 		if t := parseUTCSlot(createdAt); !t.IsZero() {
 			createdSlot = sql.NullTime{Time: t, Valid: true}
 		}
-		if seconds, retryable := CertJobRetryRemainingSeconds(status, updatedSlot, createdSlot, caWindow, time.Now()); retryable {
+		// 判定与文案共用同一 now：分别取墙钟会在窗口边界（<1s 剩余）出现
+		// 「剩余秒=0、布尔=窗口中」的自相矛盾。
+		now := time.Now()
+		if seconds, retryable := CertJobRetryRemainingSeconds(status, updatedSlot, createdSlot, caWindow, now); retryable {
 			ti.RetryCooldownSeconds = &seconds
 		}
+		ti.CertJobCACooldownActive = CertJobCAcooldownActive(status, caWindow, now)
 		ti.Status = TaskStatusIdle
 		switch status {
 		case "failed":

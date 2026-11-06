@@ -56,16 +56,19 @@ test('截断时渲染提示条（复用全局 info-note-bar 样式，不写局�
 })
 
 test('证书行运行按钮：冷却中可运行（信息提示），仅永久不可重试态禁用', () => {
-  // /system/tasks 对证书行下发剩余冷却秒数（0=可运行，null=永久不可重试）。
+  // /system/tasks 对证书行下发剩余冷却秒数（0=可运行，null=永久不可重试）与
+  // cert_job_ca_cooldown_active（CA 退避窗口判定布尔）。
   // 2026-11-02 用户裁定：冷却不再禁用手动运行——文案降级为信息提示；
-  // 2026-11-07 用户裁定：提示按实门口径披露（触发无 force，冷却/CA 退避窗
-  // 内触发会被 429 拒绝，越窗出口在证书任务页「重签」），不得承诺「立即尝试」。
+  // 2026-11-07 用户裁定：提示按实门口径披露——CA 退避窗口内触发默认 429
+  // （越窗出口在证书任务页「重签」）；仅通用冷却的行触发放行，不得声称被拒。
   assert.match(page, /retry_cooldown_seconds\?: number/, 'TaskInfo 必须声明冷却字段')
+  assert.match(page, /cert_job_ca_cooldown_active\?: boolean/, 'TaskInfo 必须声明 CA 退避窗口布尔字段')
   assert.match(page, /const runCooldownReason = \(row: TaskInfo\): string =>/, '必须单源计算冷却提示')
   const helper = section(page, 'const runCooldownReason = (row: TaskInfo): string =>', '\nconst onTrigger')
   assert.match(helper, /Math\.ceil\(seconds \/ 60\)/, '提示需换算为分钟')
-  assert.match(helper, /CA 退避窗口内手动触发将被拒绝/, 'failed 行提示必须披露 CA 退避窗拒绝语义')
-  assert.match(helper, /冷却期内手动触发将被拒绝/, '非 failed 行提示必须披露冷却期拒绝语义')
+  assert.match(helper, /cert_job_ca_cooldown_active/, '必须按后端布尔分支（不得按行状态猜测窗口）')
+  assert.match(helper, /CA 退避窗口内手动触发将被拒绝/, 'CA 退避窗口内提示必须披露拒绝语义')
+  assert.match(helper, /冷却期后可直接重试/, '仅通用冷却的行必须披露「冷却期后可直接重试」')
   assert.match(helper, /证书任务页/, '提示必须披露越窗出口位置')
   assert.match(helper, /「重签」/, '提示必须披露越窗出口动作')
   assert.match(helper, /该任务永久不可重试/, '永久不可重试态仍需禁用提示')

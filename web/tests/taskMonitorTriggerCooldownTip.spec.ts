@@ -4,9 +4,10 @@ import assert from 'node:assert/strict'
 import { code, member } from './_helpers.ts'
 
 // 任务监控证书行「运行」tooltip 实门口径钉测：
-// trigger 请求不带 force——证书行处于通用冷却期或 CA 退避窗口时，手动触发
-// 会被后端 429 拒绝（failed 行 CA 退避窗未到期必然 429）；越窗出口在证书
-// 任务页「重签」（确认消耗 CA 配额后携带 force）。冷却文案不得再承诺
+// trigger 请求不带 force——后端为每行下发 cert_job_ca_cooldown_active（CA 退避
+// 窗口判定布尔）：窗口内触发默认 429（可 ?force 越过，出口在证书任务页
+// 「重签」）；仅通用冷却的行（如达重签上限后 ca_available_after 为空的 failed
+// 行）触发放行并留越冷审计——tooltip 不得声称被拒。冷却文案不得再承诺
 // 「手动运行将立即尝试」——那是重签（force）语义，不是本页触发语义。
 
 const vue = code('src/views/settings/TaskMonitor.vue')
@@ -16,14 +17,16 @@ test('冷却 tooltip 不再承诺「手动运行将立即尝试」', () => {
   assert.doesNotMatch(fn, /手动运行将立即尝试/, '失真承诺不得回潮：触发无 force，冷却中会被 429 拒绝')
 })
 
-test('冷却 tooltip 按行状态披露实门口径：拒绝条件与越窗出口', () => {
-  assert.match(fn, /row\.status === 'failed'/, '必须按行状态分支披露（failed 行与非 failed 行拒绝语义不同）')
-  // failed 行：CA 退避窗口内触发将被拒绝，越窗出口=证书任务页「重签」
-  assert.match(fn, /CA 退避窗口内手动触发将被拒绝/, 'failed 行必须披露 CA 退避窗口内的拒绝语义')
+test('冷却 tooltip 按后端布尔披露实门口径：拒绝条件与越窗出口', () => {
+  assert.match(vue, /cert_job_ca_cooldown_active\?: boolean/, 'TaskInfo 必须声明后端下发的 CA 退避窗口布尔')
+  assert.match(fn, /cert_job_ca_cooldown_active/, '必须按后端布尔分支披露（不得按行状态猜测窗口）')
+  // 窗口内：触发默认拒绝，越窗出口=证书任务页「重签」
+  assert.match(fn, /CA 退避窗口内手动触发将被拒绝/, 'CA 退避窗口内必须披露拒绝语义')
   assert.match(fn, /证书任务页/, '必须披露越窗出口位置：证书任务页')
   assert.match(fn, /「重签」/, '必须披露越窗出口动作：「重签」')
-  // 非 failed 行：冷却期内触发将被拒绝
-  assert.match(fn, /冷却期内手动触发将被拒绝/, '非 failed 行必须披露冷却期内的拒绝语义')
+  // 仅通用冷却（布尔=false）：触发放行——不得声称被拒
+  assert.match(fn, /冷却期后可直接重试/, '仅通用冷却的行必须如实披露「冷却期后可直接重试」')
+  assert.doesNotMatch(fn, /冷却期内手动触发将被拒绝/, '通用冷却分支「将被拒绝」过声称不得回潮')
 })
 
 test('永久不可重试禁用判据与冷却分钟数同源不受文案改动影响', () => {

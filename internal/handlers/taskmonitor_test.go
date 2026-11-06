@@ -1042,7 +1042,9 @@ func TestTriggerSystemTask_triggerAuditMatchesManualRuns(t *testing.T) {
 // Then 每行恒带 retry_cooldown_seconds：下发「此刻剩余秒」（0=现在即可运行，
 // null=永久不可重试）。waiting_ca 取 CA 退避剩余、通用冷却按 updated_at 扣减
 // （已到期行=0），disabled=null，非证书行=0——前端任务行「运行」按钮的冷却
-// 判定与证书任务列表（/certificates/jobs）同源同判据。
+// 判定与证书任务列表（/certificates/jobs）同源同判据。每行同时恒带
+// cert_job_ca_cooldown_active（CA 退避窗口判定布尔）：剩余秒数区分不了
+// 「通用冷却（触发放行）」与「CA 退避窗（未 force 默认拒绝）」。
 func TestListSystemTasks_exposesRetryCooldownSeconds(t *testing.T) {
 	newBackupTestHandlers(t)
 	initTaskEngineForTest(t)
@@ -1054,7 +1056,8 @@ func TestListSystemTasks_exposesRetryCooldownSeconds(t *testing.T) {
 		       (4,'lb_failed_old','failed-old.example','failed','',NULL,datetime('now','-6 minutes'),datetime('now','-6 minutes')),
 		       (5,'lb_queued','queued.example','queued','',NULL,datetime('now'),datetime('now')),
 		       (6,'lb_queued_old','queued-old.example','queued','',NULL,datetime('now','-16 minutes'),datetime('now','-16 minutes')),
-		       (7,'lb_disabled','disabled.example','disabled','',NULL,datetime('now'),datetime('now'))`, caWindow); err != nil {
+		       (7,'lb_disabled','disabled.example','disabled','',NULL,datetime('now'),datetime('now')),
+	       (8,'lb_failed_ca','failed-ca.example','failed','',?,datetime('now'),datetime('now'))`, caWindow, caWindow); err != nil {
 		t.Fatalf("seed cert jobs: %v", err)
 	}
 	r, _ := taskMonitorRouter()
@@ -1087,6 +1090,9 @@ func TestListSystemTasks_exposesRetryCooldownSeconds(t *testing.T) {
 		}
 		if _, ok := row["retry_cooldown_seconds"]; !ok {
 			t.Fatalf("任务行 %s 缺少 retry_cooldown_seconds（该字段不得 omitempty）", id)
+		}
+		if _, ok := row["cert_job_ca_cooldown_active"]; !ok {
+			t.Fatalf("任务行 %s 缺少 cert_job_ca_cooldown_active（该字段不得 omitempty）", id)
 		}
 	}
 	cooldownOf := func(id string) *int64 {
@@ -1141,4 +1147,40 @@ func TestListSystemTasks_exposesRetryCooldownSeconds(t *testing.T) {
 		t.Fatalf("disabled 行冷却=%d, want null（永久不可重试不得表达为 0=现在可重试）", *got)
 	}
 	wantCooldown("threat", 0) // 非证书任务行：无证书重试冷却概念。
+
+	// CA 退避窗口判定布尔：仅通用冷却的行（如达重签上限后 ca_available_after
+	// 为空的 failed 行）触发放行、CA 退避窗内的行默认拒绝——前端 tooltip 按
+	// 本布尔选措辞，不得再按行状态猜测。
+	caActiveOf := func(id string) bool {
+		t.Helper()
+		for _, row := range payload.Data.Tasks {
+			var rowID string
+			if err := json.Unmarshal(row["id"], &rowID); err != nil {
+				t.Fatal(err)
+			}
+			if rowID != id {
+				continue
+			}
+			var active bool
+			if err := json.Unmarshal(row["cert_job_ca_cooldown_active"], &active); err != nil {
+				t.Fatalf("任务行 %s cert_job_ca_cooldown_active 解析失败: %v", id, err)
+			}
+			return active
+		}
+		t.Fatalf("任务行 %s 不存在", id)
+		return false
+	}
+	wantCAActive := func(id string, want bool) {
+		t.Helper()
+		if got := caActiveOf(id); got != want {
+			t.Fatalf("任务行 %s cert_job_ca_cooldown_active=%v, want %v", id, got, want)
+		}
+	}
+	wantCAActive("cert-job:1", true)  // waiting_ca：CA 退避窗口未到期。
+	wantCAActive("cert-job:8", true)  // failed：CA 退避窗口未到期（失败统一落窗后的主形态）。
+	wantCAActive("cert-job:3", false) // failed：达重签上限无退避窗——仅剩通用冷却，触发放行。
+	wantCAActive("cert-job:2", false) // issued：无 CA 退避窗口。
+	wantCAActive("cert-job:5", false) // queued：无 CA 退避窗口。
+	wantCAActive("cert-job:7", false) // disabled：恒终态，无 CA 退避窗口。
+	wantCAActive("threat", false)     // 非证书任务行：无证书重试冷却概念。
 }

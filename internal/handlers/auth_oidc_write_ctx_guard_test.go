@@ -124,8 +124,8 @@ func TestDeliberateCtxlessWritesAreRegistered(t *testing.T) {
 		{file: "auth.go", fn: "func touchLastLogin(userID int, username, clientIP string) (time.Time, bool) {", count: 1},
 		// SetupAdmin：引导期一次性播种，幂等 NOT EXISTS，写入必须无条件完成。
 		{file: "auth.go", fn: "func (h *Handlers) SetupAdmin(c *gin.Context) {", count: 1},
-		// deleteAPIKey：name 查询与 DELETE 分离两语句、无事务包裹（audit125
-		// 已披露的同族分离形态，注释互引）。
+		// deleteAPIKey：name 查询与 DELETE 分离两语句、无事务包裹（既有已
+		// 披露的同族分离形态，注释互引）。
 		{file: "apikeys.go", fn: "func deleteAPIKey(c *gin.Context, scopedUserID int) {", count: 1},
 		// SeedDefaultBlockPage：默认页/内置页播种族，boot/同步语境漂移自愈。
 		{file: "branding.go", fn: "func SeedDefaultBlockPage(dataDir string) (bool, error) {", count: 3},
