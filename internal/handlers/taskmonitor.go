@@ -110,7 +110,7 @@ func (h *Handlers) TriggerSystemTask(c *gin.Context) {
 	}
 	// cert-job 行触发分支（2026-10-11 用户裁定）：证书队列行视为触发任务——
 	// 可自动调度（签发守护消费）即可手动调度（证书可重签发）。复用重试核心
-	//（在途 409/退役 429/冷却 429/规则禁用 409 同一门），审计「重试」归人。
+	//（在途 409/退役 409/冷却 429/规则禁用 409 同一门），审计「重试」归人。
 	if strings.HasPrefix(id, "cert-job:") {
 		jobID, ok := parseCertJobTaskID(id)
 		if !ok || jobID > int64(^uint(0)>>1) {

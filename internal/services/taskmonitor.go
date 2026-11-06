@@ -190,9 +190,9 @@ func collectCertJobRows() ([]TaskInfo, bool) {
 			Kind:        taskengine.KindOneshot, // 动态签发行=按需触发的工作项
 			// 触发语义（2026-10-11 用户裁定）：cert-job 行视为触发任务——可自动
 			// 调度（签发守护消费）即可手动调度（证书可重签发）；重试门（在途 409/
-			// 退役 429/冷却 429）由 TriggerSystemTask 的 cert-job 分支复用承担。
-			// disabled 为恒终态退役行——重试门对其恒 429，
-			// Triggerable=false 让按钮呈现禁用态（点击必 429 是交互噪音）。
+			// 退役 409/冷却 429）由 TriggerSystemTask 的 cert-job 分支复用承担。
+			// disabled 为恒终态退役行——重试门对其恒 409，
+			// Triggerable=false 让按钮呈现禁用态（点击必 409 是交互噪音）。
 			Triggerable: status != "disabled",
 			// 证书签发工作项只由主节点消费（从节点禁签发）——角色读取失败
 			// 时按主节点处理（与上方行可见性判据同向）。

@@ -563,3 +563,98 @@ func TestSpoolBudgetFullPartialBatchHonestSplit(t *testing.T) {
 		t.Fatalf("spooled+spoolErrs=%d, want 3（整批三行两态守恒）", spooled+spoolErrs)
 	}
 }
+
+// TestL4SpoolBudgetRefreshThrottledWithinWindow 预算核算节流：节流窗口内
+// 连续 append 批次复用上次目录扫描结果（每批全量 ReadDir+lstat 在高频批次
+// 下是纯开销）；窗口过期后下一批恢复实测。时钟经 l4Spool.now 注入缝推进
+// 窗口，不 sleep；扫描次数经 l4SpoolRefreshScanHook 计数（生产恒 nil）。
+func TestL4SpoolBudgetRefreshThrottledWithinWindow(t *testing.T) {
+	dir := t.TempDir()
+	sp := openL4Spool(dir, 1<<20, 1000)
+	base := time.Unix(1_700_000_000, 0)
+	now := base
+	sp.mu.Lock()
+	sp.now = func() time.Time { return now }
+	sp.mu.Unlock()
+
+	scans := 0
+	l4SpoolRefreshScanHook = func() { scans++ }
+	defer func() { l4SpoolRefreshScanHook = nil }()
+
+	line := []byte(`{"k":"v"}`)
+	if n, err := sp.appendLines([][]byte{line}); err != nil || n != 1 {
+		t.Fatalf("首批 appendLines = %d, %v; want 1, nil", n, err)
+	}
+	if scans != 1 {
+		t.Fatalf("首批扫描次数 = %d, want 1（首次预算必须实测）", scans)
+	}
+	for i := 2; i <= 6; i++ {
+		if n, err := sp.appendLines([][]byte{line}); err != nil || n != 1 {
+			t.Fatalf("窗口内第 %d 批 appendLines = %d, %v; want 1, nil", i, n, err)
+		}
+	}
+	if scans != 1 {
+		t.Fatalf("窗口内连续 5 批后扫描次数 = %d, want 1（应复用上次核算，不逐批 ReadDir+lstat）", scans)
+	}
+	now = base.Add(l4SpoolBudgetRefreshInterval + time.Second)
+	if n, err := sp.appendLines([][]byte{line}); err != nil || n != 1 {
+		t.Fatalf("窗口过期批 appendLines = %d, %v; want 1, nil", n, err)
+	}
+	if scans != 2 {
+		t.Fatalf("窗口过期后扫描次数 = %d, want 2（节流不得吞掉到期刷新）", scans)
+	}
+}
+
+// TestL4SpoolBudgetExhaustedRefreshesDespiteWindow 预算临界不受节流约束：
+// 节流窗口内的陈旧核算超限也必须强制实测一次——面板补采删除 sealed 文件
+// 释放的空间必须立即可见，不得因节流窗口把有空间的 spool 误判满。
+func TestL4SpoolBudgetExhaustedRefreshesDespiteWindow(t *testing.T) {
+	dir := t.TempDir()
+	sp := openL4Spool(dir, 230, 1000)
+	base := time.Unix(1_700_000_000, 0)
+	now := base
+	sp.mu.Lock()
+	sp.now = func() time.Time { return now }
+	sp.rotateBytes = 200 // 收窄轮转：批内即封存第一个文件，制造面板可回收面
+	sp.mu.Unlock()
+
+	scans := 0
+	l4SpoolRefreshScanHook = func() { scans++ }
+	defer func() { l4SpoolRefreshScanHook = nil }()
+
+	// 基线批：20 行×11B=220B，批内 209B 触发轮转封存 209B + 新 active 11B，
+	// 批末 flush 全部落盘；节流窗口内的陈旧核算 totalBytes=220。
+	line := []byte("0123456789")
+	lines := make([][]byte, 20)
+	for i := range lines {
+		lines[i] = line
+	}
+	if n, err := sp.appendLines(lines); err != nil || n != 20 {
+		t.Fatalf("基线批 appendLines = %d, %v; want 20, nil", n, err)
+	}
+	sealed := ""
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), "sealed-") {
+			sealed = filepath.Join(dir, e.Name())
+		}
+	}
+	if sealed == "" {
+		t.Fatalf("基线批未产生 sealed 文件（轮转注入失效）: %v", entries)
+	}
+	// 外部回收：面板补采后删除 sealed（真实回收面，非 mock）。
+	if err := os.Remove(sealed); err != nil {
+		t.Fatal(err)
+	}
+	// 陈旧核算 220+11=231 > 230 必 trip 预算检查；强制实测后目录仅剩
+	// active 11B → 11+11=22 ≤ 230，必须放行而非误判满。
+	if n, err := sp.appendLines([][]byte{line}); err != nil || n != 1 {
+		t.Fatalf("预算临界批 appendLines = %d, %v; want 1, nil（外部回收释放的空间必须立即可见）", n, err)
+	}
+	if scans != 2 {
+		t.Fatalf("扫描次数 = %d, want 2（基线刷新+临界强制刷新——耗尽路径不受节流约束）", scans)
+	}
+}

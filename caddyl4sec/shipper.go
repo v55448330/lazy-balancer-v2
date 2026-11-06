@@ -74,6 +74,10 @@ var (
 	l4SpoolMaxBytes    = int64(64 << 20)
 	l4SpoolMaxEntries  = int64(100_000)
 	l4SpoolIdleSeal    = 2 * time.Second
+	// l4SpoolBudgetRefreshInterval 预算核算节流窗口：窗口内连续 append 批次
+	// 复用上次目录扫描结果（每批全量 ReadDir+lstat 在高频批次下是纯开销）。
+	// 首批与预算临界（含窗口内陈旧核算超限）强制实测——正确性优先于节流。
+	l4SpoolBudgetRefreshInterval = 5 * time.Second
 	// l4SampleEvery 放行连接的国家归属采样间隔（契约 C3：每 16 连接取 1）。
 	l4SampleEvery uint64 = 16
 )
@@ -178,6 +182,10 @@ type l4Spool struct {
 	entriesByFile map[string]int64
 	lastWrite     time.Time
 	closed        bool
+	// now 时钟注入缝（生产 time.Now，测试推进节流窗口）；budgetRefreshedAt
+	// 上次预算核算时刻——节流窗口内复用上次结果，不逐批扫目录。
+	now               func() time.Time
+	budgetRefreshedAt time.Time
 }
 
 // l4SpoolLossError 携带一次失败 appendLines 丢弃的行数：滞留缓冲行 + 本批未
@@ -201,7 +209,7 @@ func (e *l4SpoolLossError) Unwrap() error { return e.Err }
 func openL4Spool(dir string, maxBytes, maxEntries int64) *l4Spool {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		l4IOLogf("l4sec: security-events spool dir unavailable at %s: %v", dir, err)
-		return &l4Spool{dir: dir, maxBytes: -1, rotateBytes: l4SpoolRotateBytes, entriesByFile: map[string]int64{}}
+		return &l4Spool{dir: dir, maxBytes: -1, rotateBytes: l4SpoolRotateBytes, entriesByFile: map[string]int64{}, now: time.Now}
 	}
 	s := &l4Spool{
 		dir:           dir,
@@ -209,6 +217,7 @@ func openL4Spool(dir string, maxBytes, maxEntries int64) *l4Spool {
 		maxEntries:    maxEntries,
 		rotateBytes:   l4SpoolRotateBytes,
 		entriesByFile: make(map[string]int64),
+		now:           time.Now,
 	}
 	if entries, err := os.ReadDir(dir); err == nil {
 		for _, e := range entries {
@@ -224,11 +233,18 @@ func openL4Spool(dir string, maxBytes, maxEntries int64) *l4Spool {
 }
 
 // refreshBudgetLocked 让预算跟随面板的外部回收（sealed 被补采删除后释放）。
-// 目录扫描失败保留上一份保守计数——观测失败不得放大预算。
+// 目录扫描失败保留上一份保守计数——观测失败不得放大预算（也不推进节流
+// 时间戳，下一批重试实测）。成功扫描更新 budgetRefreshedAt 供节流判定；
+// l4SpoolRefreshScanHook 为测试计数缝（生产恒 nil，零调用面）。
+var l4SpoolRefreshScanHook func()
+
 func (s *l4Spool) refreshBudgetLocked() {
 	entries, err := os.ReadDir(s.dir)
 	if err != nil {
 		return
+	}
+	if l4SpoolRefreshScanHook != nil {
+		l4SpoolRefreshScanHook()
 	}
 	var totalBytes int64
 	for _, entry := range entries {
@@ -249,6 +265,7 @@ func (s *l4Spool) refreshBudgetLocked() {
 	}
 	s.totalBytes = totalBytes
 	s.totalEntries = totalEntries
+	s.budgetRefreshedAt = s.now()
 }
 
 // openActiveLocked 以 O_EXCL 建本次 active 文件（seq 单调，同名即跳过）。
@@ -294,7 +311,9 @@ func (s *l4Spool) appendLines(lines [][]byte) (int, error) {
 	if s.maxBytes < 0 {
 		return 0, errors.New("l4sec: security-events spool dir unavailable")
 	}
-	s.refreshBudgetLocked()
+	if s.budgetRefreshedAt.IsZero() || s.now().Sub(s.budgetRefreshedAt) >= l4SpoolBudgetRefreshInterval {
+		s.refreshBudgetLocked()
+	}
 	if s.active == nil {
 		if err := s.openActiveLocked(); err != nil {
 			return 0, err
@@ -304,14 +323,24 @@ func (s *l4Spool) appendLines(lines [][]byte) (int, error) {
 	for _, line := range lines {
 		size := int64(len(line)) + 1
 		if s.totalBytes+size > s.maxBytes || s.totalEntries+1 > s.maxEntries {
-			// 预算耗尽：先尽力把已交缓冲行落盘；落盘失败则滞留+本批整批
-			// 计丢并放弃缓冲（粘性错误不留给下一批）。
-			if err := s.flushLocked(); err != nil {
-				lossErr := s.lossErrLocked(len(lines), written, err)
-				s.resetWriterLocked()
-				return written, lossErr
+			// 预算临界（含节流窗口内的陈旧核算超限）：缓冲清零（pendingLines==0
+			// ⟺ 已写字节全部落盘）时强制实测一次——面板补采删除 sealed 文件
+			// 释放的空间必须立即可见，不得因节流窗口把有空间的 spool 误判满；
+			// 实测后仍超限才判满。缓冲非空时禁用强制实测：磁盘重扫只见已落
+			// 盘字节，会把缓冲中未落盘的量丢出核算，使同批后续行越过字节预算。
+			if s.pendingLines == 0 {
+				s.refreshBudgetLocked()
 			}
-			return written, errL4SpoolFull
+			if s.totalBytes+size > s.maxBytes || s.totalEntries+1 > s.maxEntries {
+				// 预算耗尽：先尽力把已交缓冲行落盘；落盘失败则滞留+本批整批
+				// 计丢并放弃缓冲（粘性错误不留给下一批）。
+				if err := s.flushLocked(); err != nil {
+					lossErr := s.lossErrLocked(len(lines), written, err)
+					s.resetWriterLocked()
+					return written, lossErr
+				}
+				return written, errL4SpoolFull
+			}
 		}
 		if _, err := s.bw.Write(line); err != nil {
 			// bufio 写失败后状态不可信（可能残留半行）且错误粘滞：放弃缓冲，

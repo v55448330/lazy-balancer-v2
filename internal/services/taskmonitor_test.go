@@ -45,7 +45,7 @@ func TestCollectSystemTasks_nilDBGuards(t *testing.T) {
 }
 
 // disabled 证书行 Triggerable 必须 false——行级重试门
-// 对 disabled 恒 429（certJobRetryBlocked 首条），按钮亮着是交互噪音（点了必 429）。
+// 对 disabled 恒 409（certJobRetryBlocked 首条），按钮亮着是交互噪音（点了必 409）。
 func TestCollectCertJobRows_disabledRowNotTriggerable(t *testing.T) {
 	setupIsolatedDB(t)
 	seedCertJobRowForTaskMonitor(t, "lb_tm_disabled", "disabled.example.com", "disabled")
@@ -61,7 +61,7 @@ func TestCollectCertJobRows_disabledRowNotTriggerable(t *testing.T) {
 		t.Fatalf("disabled 行缺失: %+v", rows)
 	}
 	if disabled.Triggerable {
-		t.Fatal("disabled 证书行 Triggerable=true——重试门恒 429，按钮应为禁用态")
+		t.Fatal("disabled 证书行 Triggerable=true——重试门恒 409，按钮应为禁用态")
 	}
 	queued, ok := byDomain["queued.example.com"]
 	if !ok {
