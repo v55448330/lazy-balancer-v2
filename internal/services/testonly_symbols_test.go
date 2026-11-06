@@ -47,6 +47,12 @@ var testOnlyEntryList = map[string]bool{
 	// crawler 快照交换文件测试缝（导出入口被 handlers 测试跨包消费，返回
 	// 还原闭包；同带 //testseam: 标记）。
 	"SetCrawlerIPListFileForTest": true,
+	// 集群快照行隔离限频复位缝（同包测试消费）：宿主已迁 *_test.go，
+	// 搬回产品文件即报错。
+	"resetSnapshotRowIsolationThrottle": true,
+	// 同步循环 Resume 观测计数缝（生产路径自增、handlers 测试跨包消费，
+	// 宿主留驻产品文件；同带 //testseam: 标记）。
+	"SyncResumeCallsForTest": true,
 }
 
 // productTestOnlyViolations 扫描单个产品文件源码，返回违规描述（空切片=通过）。

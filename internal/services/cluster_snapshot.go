@@ -65,13 +65,6 @@ var (
 	snapshotRowIsolationHook func(table string, rowID any, err error)
 )
 
-// resetSnapshotRowIsolationThrottle 清空限频表（仅测试使用）。
-func resetSnapshotRowIsolationThrottle() {
-	snapshotRowIsolationMu.Lock()
-	snapshotRowIsolationSeen = map[string]time.Time{}
-	snapshotRowIsolationMu.Unlock()
-}
-
 // warnCorruptedSnapshotRow 显式隔离（跳过）单行损坏数据并留下结构化告警：
 // 快照是主→从的整包下发通道，一行 JSON 畸形不得让全部规则/策略/节点数据
 // 500。告警必须点名表与行 ID。
@@ -661,21 +654,26 @@ func normalizeSnapshotSecurityRetentionSettings(settings *models.ClusterBasicSet
 // 三分类合并(2026-09-19):全局配置并入系统数据节(恒同步)——装载不再受
 // sync_global_config 开关裁剪(列已删除,快照恒携带)。
 func (s *ClusterService) loadSnapshotGlobalSettings(ctx context.Context, store snapshotStore, snapshot *models.ClusterSnapshot) error {
-	// 证书到期/续签天数/重试次数三列兜底统一绑定 db.Default*（消费点族单源，
-	// 读侧禁字面量回流；其余既有批 1+2 口径见各 COALESCE 注释）。
+	// 治理默认列兜底统一绑定 db.Default*（消费点族单源，读侧禁字面量回流）：
+	// 证书三列、日志体量/保留期/JWT/同步间隔，与下方 Caddy 日志轴、三类
+	// HTTP 超时（与 handlers/caddy.go GetConfig 读点同口径）。
 	// global_config.dns_credentials 已退役（列由启动迁移删除，凭证唯一来源是
 	// certificate_configs.dns_credentials 并随 ACME 节同步）——不在本清单内。
 	var caddyConfig string
 	var brandingJSON string
 	err := store.QueryRowContext(ctx, `SELECT COALESCE(cluster_version,0), COALESCE(caddy_config,'{}'), COALESCE(branding_json,''),
 		COALESCE(log_level,?),
-		COALESCE(task_log_size_mb,10), COALESCE(audit_log_size_mb,10), COALESCE(runtime_log_size_mb,100), COALESCE(audit_retention_months,3), COALESCE(jwt_expire_minutes,20), COALESCE(timezone,?),
+		COALESCE(task_log_size_mb,?), COALESCE(audit_log_size_mb,?), COALESCE(runtime_log_size_mb,?), COALESCE(audit_retention_months,?), COALESCE(jwt_expire_minutes,?), COALESCE(timezone,?),
 		COALESCE(acme_email,''), COALESCE(cert_expiry_days,?), COALESCE(cert_renewal_days,?), COALESCE(cert_renewal_attempts,?),
-		COALESCE(default_ca_provider_id,0), COALESCE(sync_interval,60),
+		COALESCE(default_ca_provider_id,0), COALESCE(sync_interval,?),
 		COALESCE(admin_tls_enabled,0), COALESCE(admin_tls_mode,'selfsigned'), COALESCE(admin_tls_cert,''), COALESCE(admin_tls_key,''),
 		COALESCE(mfa_write_guard,0), COALESCE(mfa_lockout_enabled,0), COALESCE(github_proxy_url,'https://v4.gh-proxy.org/'),
 		COALESCE(oidc_config,'')
-		FROM global_config WHERE id=1`, db.DefaultLogLevel, db.DefaultTimezone, db.DefaultCertExpiryDays, db.DefaultCertRenewalDays, db.DefaultCertRenewalAttempts).Scan(&snapshot.Version, &caddyConfig, &brandingJSON,
+		FROM global_config WHERE id=1`, db.DefaultLogLevel,
+		db.DefaultTaskLogSizeMB, db.DefaultAuditLogSizeMB, db.DefaultRuntimeLogSizeMB,
+		db.DefaultAuditRetentionMonths, db.DefaultJWTExpireMinutes, db.DefaultTimezone,
+		db.DefaultCertExpiryDays, db.DefaultCertRenewalDays, db.DefaultCertRenewalAttempts,
+		db.DefaultSyncInterval).Scan(&snapshot.Version, &caddyConfig, &brandingJSON,
 		&snapshot.BasicSettings.LogLevel,
 		&snapshot.BasicSettings.TaskLogSizeMB, &snapshot.BasicSettings.AuditLogSizeMB, &snapshot.BasicSettings.RuntimeLogSizeMB, &snapshot.BasicSettings.AuditRetentionMonths, &snapshot.BasicSettings.JWTExpireMinutes, &snapshot.BasicSettings.Timezone,
 		&snapshot.BasicSettings.ACMEEmail, &snapshot.BasicSettings.CertExpiryDays, &snapshot.BasicSettings.CertRenewalDays, &snapshot.BasicSettings.CertRenewalAttempts,
@@ -704,14 +702,16 @@ func (s *ClusterService) loadSnapshotGlobalSettings(ctx context.Context, store s
 	}
 	snapshot.BasicSettings.BrandingJSON = new(brandingJSON)
 	snapshot.CaddyConfig = &caddyConfig
-	if err := store.QueryRowContext(ctx, `SELECT COALESCE(caddy_log_level,'info'), COALESCE(caddy_log_size_mb,100),
+	if err := store.QueryRowContext(ctx, `SELECT COALESCE(caddy_log_level,?), COALESCE(caddy_log_size_mb,?),
 		COALESCE(access_log_json,1), COALESCE(access_log_format,''),
-		COALESCE(request_body_max_size_mb,0), COALESCE(http_read_timeout,60), COALESCE(http_write_timeout,60), COALESCE(http_idle_timeout,120),
+		COALESCE(request_body_max_size_mb,0), COALESCE(http_read_timeout,?), COALESCE(http_write_timeout,?), COALESCE(http_idle_timeout,?),
 		COALESCE(upstream_keepalive_timeout,0),
 		COALESCE(proxy_dial_timeout,0), COALESCE(proxy_response_header_timeout,0), COALESCE(proxy_read_timeout,0), COALESCE(proxy_write_timeout,0), COALESCE(proxy_stream_timeout,0), COALESCE(proxy_flush_interval,0), COALESCE(proxy_stream_close_delay,0),
 		COALESCE(server_tokens_hidden,0),
 		COALESCE(trusted_proxy_enabled,0), COALESCE(trusted_proxy_ranges,'[]'), COALESCE(trusted_proxy_range_refs,'[]'), COALESCE(trusted_proxy_headers,'[]'), COALESCE(trusted_proxy_strict,1)
-		FROM global_config WHERE id=1`).Scan(
+		FROM global_config WHERE id=1`,
+		db.DefaultCaddyLogLevel, db.DefaultCaddyLogSizeMB,
+		db.DefaultHTTPReadTimeout, db.DefaultHTTPWriteTimeout, db.DefaultHTTPIdleTimeout).Scan(
 		&snapshot.BasicSettings.CaddyLogLevel, &snapshot.BasicSettings.CaddyLogSizeMB,
 		&snapshot.BasicSettings.AccessLogJSON, &snapshot.BasicSettings.AccessLogFormat,
 		&snapshot.BasicSettings.RequestBodyMaxSizeMB, &snapshot.BasicSettings.HTTPReadTimeout, &snapshot.BasicSettings.HTTPWriteTimeout, &snapshot.BasicSettings.HTTPIdleTimeout,

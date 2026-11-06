@@ -77,11 +77,15 @@ func openSQLiteDB(path string, pool sqlitePoolConfig) (*sql.DB, error) {
 // 反向钉测：db_truth_defaults_test.go 断言 DDL DEFAULT 与本组常量逐项一致；
 // 渲染侧 fail-visible 见 render_db_truth_test.go。
 const (
-	DefaultRequestBodyMaxSizeMB          = 128
-	DefaultHTTPReadTimeout               = 60
-	DefaultHTTPWriteTimeout              = 60
-	DefaultHTTPIdleTimeout               = 120
-	DefaultCaddyLogSizeMB                = 100
+	DefaultRequestBodyMaxSizeMB = 128
+	DefaultHTTPReadTimeout      = 60
+	DefaultHTTPWriteTimeout     = 60
+	DefaultHTTPIdleTimeout      = 120
+	DefaultCaddyLogSizeMB       = 100
+	// DefaultCaddyLogLevel 是 global_config.caddy_log_level（Caddy 运行日志
+	// 级别，区别于面板应用日志级别 DefaultLogLevel）的治理默认：fresh DDL
+	// DEFAULT 与集群快照装载读侧 COALESCE 绑定参数同源。
+	DefaultCaddyLogLevel                 = "info"
 	DefaultHealthCheckInterval           = 10
 	DefaultHealthCheckTimeout            = 2
 	DefaultHealthCheckHealthyThreshold   = 2
@@ -126,6 +130,10 @@ const (
 	// DefaultJWTExpireMinutes 是 jwt_expire_minutes 的治理默认：schema
 	// DEFAULT/迁移回填/从端 apply 归一（cluster_apply.go）共用此常量。
 	DefaultJWTExpireMinutes = 20
+	// DefaultSyncInterval 是 global_config.sync_interval 的治理默认：fresh
+	// DDL DEFAULT 与集群快照装载读侧 COALESCE 绑定参数同源。运行期脏值
+	// （<10/>86400）由 normalizeSyncInterval 归一，不属本常量语义。
+	DefaultSyncInterval = 60
 	// DefaultTimezone 是 global_config.timezone 的治理默认（fresh DDL DEFAULT
 	// 与启动归一单源）。空串不是合法库值：time.LoadLocation("") 是 Go 的
 	// 特殊值（返回 UTC），读侧 COALESCE 只兜 NULL——空串落库会让全站展示/

@@ -25,6 +25,14 @@ import (
 // 回归钉
 // ---------------------------------------------------------------------------
 
+// resetSnapshotRowIsolationThrottle 清空快照行隔离限频表（测试缝：宿主已迁
+// *_test.go，产品文件回迁即触发 services testonly 绊线名单）。
+func resetSnapshotRowIsolationThrottle() {
+	snapshotRowIsolationMu.Lock()
+	snapshotRowIsolationSeen = map[string]time.Time{}
+	snapshotRowIsolationMu.Unlock()
+}
+
 func TestSnapshot_buildIsolatesCorruptedJSONRows(t *testing.T) {
 	// 主节点单行 JSON 损坏（条件/上游/白名单列）不得让整包快照 500：
 	// 坏行显式隔离（跳过）+ 限频结构化告警（表/行 ID），健康行照常下发。

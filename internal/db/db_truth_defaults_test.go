@@ -34,6 +34,8 @@ func TestFreshSchemaDefaults_MatchGovernedConstants(t *testing.T) {
 		{"global_config", "http_write_timeout", fmt.Sprint(DefaultHTTPWriteTimeout), 1},
 		{"global_config", "http_idle_timeout", fmt.Sprint(DefaultHTTPIdleTimeout), 1},
 		{"global_config", "caddy_log_size_mb", fmt.Sprint(DefaultCaddyLogSizeMB), 1},
+		{"global_config", "caddy_log_level", "'" + DefaultCaddyLogLevel + "'", 0},
+		{"global_config", "sync_interval", fmt.Sprint(DefaultSyncInterval), 0},
 		{"lb_rules", "health_check_interval", fmt.Sprint(DefaultHealthCheckInterval), 1},
 		{"lb_rules", "health_check_timeout", fmt.Sprint(DefaultHealthCheckTimeout), 1},
 		{"lb_rules", "health_check_unhealthy_threshold", fmt.Sprint(DefaultHealthCheckUnhealthyThreshold), 1},
@@ -998,6 +1000,27 @@ func TestGovernedDefaultLiteralsBoundInConsumers(t *testing.T) {
 			required: []string{
 				"db.DefaultAutoBackupEnabled", "db.DefaultAutoBackupFrequency",
 				"db.DefaultAutoBackupTime", "db.DefaultAutoBackupDay", "db.DefaultAutoBackupKeep",
+			},
+		},
+		{
+			// 集群快照装载的日志体量/保留期/JWT/同步间隔与 Caddy 日志轴/
+			// 三类 HTTP 超时兜底必须绑定治理常量：与 handlers/caddy.go
+			// GetConfig 读点同口径，DDL/常量调整默认值后快照下发（主端
+			// canonical 与从端 apply）不得与面板读侧静默分叉。
+			file: "../services/cluster_snapshot.go",
+			forbidden: []string{
+				"COALESCE(task_log_size_mb,10)", "COALESCE(audit_log_size_mb,10)",
+				"COALESCE(runtime_log_size_mb,100)", "COALESCE(audit_retention_months,3)",
+				"COALESCE(jwt_expire_minutes,20)", "COALESCE(sync_interval,60)",
+				"COALESCE(caddy_log_level,'info')", "COALESCE(caddy_log_size_mb,100)",
+				"COALESCE(http_read_timeout,60)", "COALESCE(http_write_timeout,60)",
+				"COALESCE(http_idle_timeout,120)",
+			},
+			required: []string{
+				"db.DefaultTaskLogSizeMB", "db.DefaultAuditLogSizeMB", "db.DefaultRuntimeLogSizeMB",
+				"db.DefaultAuditRetentionMonths", "db.DefaultJWTExpireMinutes", "db.DefaultSyncInterval",
+				"db.DefaultCaddyLogLevel", "db.DefaultCaddyLogSizeMB",
+				"db.DefaultHTTPReadTimeout", "db.DefaultHTTPWriteTimeout", "db.DefaultHTTPIdleTimeout",
 			},
 		},
 	}

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
 	"lazy-balancer-v2/internal/taskengine"
 )
@@ -43,6 +44,56 @@ func TestLoadSnapshotGlobalSettings_normalizesSyncInterval(t *testing.T) {
 			}
 		})
 	}
+}
+
+// 治理默认列兜底随常量单源：可空治理列置 NULL（COALESCE 兜底真实可达）时，
+// 装载值必须等于 db.Default* 绑定参数——断言引用常量本体，调整常量后装载值
+// 随动；字面量兜底回流由 db_truth_defaults_test 的 forbidden 契约同步拦截。
+// NOT NULL 四列（caddy_log_size_mb/三类 HTTP 超时）兜底不可达（列恒有值），
+// 与常量的一致性由 DDL DEFAULT 钉测保证，此处断言全新装载路径的终值口径。
+func TestLoadSnapshotGlobalSettings_nullGovernedColumnsFallBackToConstants(t *testing.T) {
+	service, database := newClusterTestService(t)
+	if _, err := database.Exec(`UPDATE global_config SET
+		task_log_size_mb=NULL, audit_log_size_mb=NULL, runtime_log_size_mb=NULL,
+		audit_retention_months=NULL, jwt_expire_minutes=NULL, sync_interval=NULL,
+		caddy_log_level=NULL
+		WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
+	var snapshot models.ClusterSnapshot
+	if err := service.loadSnapshotGlobalSettings(context.Background(), database, &snapshot); err != nil {
+		t.Fatalf("load snapshot settings: %v", err)
+	}
+	s := snapshot.BasicSettings
+	assertInt := func(name string, got *int, want int) {
+		t.Helper()
+		if got == nil {
+			t.Fatalf("%s 未装载", name)
+		}
+		if *got != want {
+			t.Fatalf("%s=%d, want %d（NULL 兜底必须绑定 db 治理常量）", name, *got, want)
+		}
+	}
+	assertString := func(name string, got *string, want string) {
+		t.Helper()
+		if got == nil {
+			t.Fatalf("%s 未装载", name)
+		}
+		if *got != want {
+			t.Fatalf("%s=%q, want %q（NULL 兜底必须绑定 db 治理常量）", name, *got, want)
+		}
+	}
+	assertInt("task_log_size_mb", s.TaskLogSizeMB, db.DefaultTaskLogSizeMB)
+	assertInt("audit_log_size_mb", s.AuditLogSizeMB, db.DefaultAuditLogSizeMB)
+	assertInt("runtime_log_size_mb", s.RuntimeLogSizeMB, db.DefaultRuntimeLogSizeMB)
+	assertInt("audit_retention_months", s.AuditRetentionMonths, db.DefaultAuditRetentionMonths)
+	assertInt("jwt_expire_minutes", s.JWTExpireMinutes, db.DefaultJWTExpireMinutes)
+	assertInt("sync_interval", s.SyncInterval, db.DefaultSyncInterval)
+	assertString("caddy_log_level", s.CaddyLogLevel, db.DefaultCaddyLogLevel)
+	assertInt("caddy_log_size_mb", s.CaddyLogSizeMB, db.DefaultCaddyLogSizeMB)
+	assertInt("http_read_timeout", s.HTTPReadTimeout, db.DefaultHTTPReadTimeout)
+	assertInt("http_write_timeout", s.HTTPWriteTimeout, db.DefaultHTTPWriteTimeout)
+	assertInt("http_idle_timeout", s.HTTPIdleTimeout, db.DefaultHTTPIdleTimeout)
 }
 
 // 空 dataDir 不得把 CWD 下同名文件镜像进

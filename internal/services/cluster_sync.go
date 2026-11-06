@@ -532,6 +532,10 @@ func (s *SyncService) Start() {
 var syncResumeCalls atomic.Int64
 
 // SyncResumeCallsForTest 返回 Resume 调用次数（仅测试使用）。
+//
+// testseam: 留驻产品文件的测试观测缝——计数器由生产路径（同步循环 Resume）
+// 自增、handlers 测试跨包消费，宿主不可能在同包 *_test.go；已登记 services
+// testonly 绊线名单。
 func SyncResumeCallsForTest() int64 { return syncResumeCalls.Load() }
 
 // IsHalted 报告同步循环是否已因终止类错误停摆，供任务监控投射真实状态。
