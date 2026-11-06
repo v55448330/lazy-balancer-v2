@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"lazy-balancer-v2/internal/config"
+	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
 )
 
@@ -1948,7 +1949,7 @@ func (s *SyncService) run(ctx context.Context) {
 			var isMaster bool
 			var token string
 			var interval int
-			err := s.db.QueryRowContext(ctx, "SELECT COALESCE(is_master,1), COALESCE(cluster_token,''), COALESCE(sync_interval,60) FROM global_config WHERE id=1").Scan(&isMaster, &token, &interval)
+			err := s.db.QueryRowContext(ctx, "SELECT COALESCE(is_master,1), COALESCE(cluster_token,''), COALESCE(sync_interval,?) FROM global_config WHERE id=1", db.DefaultSyncInterval).Scan(&isMaster, &token, &interval)
 			return isMaster, token, interval, err
 		}
 	}

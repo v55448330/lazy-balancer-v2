@@ -2434,13 +2434,13 @@ func generateCaddyConfigWithCertSource(store, certSource caddyConfigStore, rules
 	// 独立消费），渲染侧不再读列也不再接受 overrides 覆写——原读取+覆写后零消费
 	// 是死链，会让读者误判「改这两项会触发渲染」。
 	if err := store.QueryRow(`
-		SELECT COALESCE(caddy_log_level,'info'), caddy_log_size_mb,
+		SELECT COALESCE(caddy_log_level,?), caddy_log_size_mb,
 		       request_body_max_size_mb, http_read_timeout, http_write_timeout,
 		       http_idle_timeout, COALESCE(upstream_keepalive_timeout,0), COALESCE(server_tokens_hidden,FALSE),
 		       COALESCE(access_log_json,TRUE), COALESCE(access_log_format,''), COALESCE(proxy_dial_timeout,0),
 		       COALESCE(proxy_response_header_timeout,0), COALESCE(proxy_read_timeout,0), COALESCE(proxy_write_timeout,0), COALESCE(proxy_stream_timeout,0), COALESCE(proxy_flush_interval,0), COALESCE(proxy_stream_close_delay,0)
 		FROM global_config WHERE id = 1
-	`).Scan(&caddyLogLevel, &caddyLogSizeMB,
+	`, db.DefaultCaddyLogLevel).Scan(&caddyLogLevel, &caddyLogSizeMB,
 		&global.requestBodyMaxSizeMB, &global.httpReadTimeout, &global.httpWriteTimeout, &global.httpIdleTimeout,
 		&global.upstreamKeepaliveTimeout, &global.serverTokensHidden, &accessLogJSON, &accessLogFormat,
 		&global.proxyDialTimeout, &global.proxyResponseHeaderTimeout, &global.proxyReadTimeout, &global.proxyWriteTimeout,
@@ -2900,6 +2900,10 @@ func generateCaddyConfigWithCertSource(store, certSource caddyConfigStore, rules
 
 	layer4Servers := make(map[string]interface{})
 
+	// L4 PROXY 受信网段：整代渲染一次读取（与 HTTP 链同一 global_config 解析
+	// 单源 expandTrustedProxyRanges），透传给 L4 安全渲染做 PROXY 入站信任门控。
+	tcpTrustedAllow := tcpTrustedProxyAllow(store)
+
 	for port, rules := range tcpServersByPort {
 		// DynamicDNS 检测改为逐规则跳过。
 		filtered := rules[:0]
@@ -2963,8 +2967,9 @@ func generateCaddyConfigWithCertSource(store, certSource caddyConfigStore, rules
 		// 事务视图渲染（含热路径重渲染）与 HTTP 链同一 store 读取；缺库
 		// 降级门在 buildTCPSecurityRoutesWithDegradation 内按批次一次告警。
 		tcpServer, tcpErr := buildTCPServer(ruleConfig, &tcpSecurityRenderInput{
-			policies: policiesForRule(securityCtx, ruleConfig.CaddyID),
-			ctx:      securityCtx,
+			policies:          policiesForRule(securityCtx, ruleConfig.CaddyID),
+			ctx:               securityCtx,
+			trustedProxyAllow: tcpTrustedAllow,
 		})
 		if tcpErr != nil {
 			return generationFailure("build TCP server for rule %s: %v", ruleConfig.CaddyID, tcpErr)
@@ -3655,11 +3660,14 @@ func GenerateSingleRuleCaddyConfig(rule SingleRuleConfig) map[string]interface{}
 	} else {
 		// L4 安全段（契约 C2）：单规则形态读已提交视图绑定策略（与
 		// mergeTrustedProxyServerFields 的 db.DB 只读语义同口径；db.DB 缺失
-		// 时 GetSecurityPoliciesForRule 返回 nil → 纯 proxy 形状）。预检渲染
+		// 时 GetSecurityPoliciesForRule 返回 nil → 纯 proxy 形状；受信网段同
+		// 一守卫——缺失时按未启用渲染，全部来源按直连地址处理）。预检渲染
 		// 与生产渲染同构——G2/G3 带外残留在 L4 链零贡献，不阻塞预检。
-		tcpServer, tcpErr := buildTCPServer(rule, &tcpSecurityRenderInput{
-			policies: GetSecurityPoliciesForRule(rule.CaddyID),
-		})
+		tcpInput := &tcpSecurityRenderInput{policies: GetSecurityPoliciesForRule(rule.CaddyID)}
+		if db.DB != nil {
+			tcpInput.trustedProxyAllow = tcpTrustedProxyAllow(db.DB)
+		}
+		tcpServer, tcpErr := buildTCPServer(rule, tcpInput)
 		if tcpErr != nil {
 			return map[string]interface{}{"error": tcpErr}
 		}

@@ -119,7 +119,7 @@ func masterSyncServingRound(ctx context.Context, now time.Time, w *masterServing
 	// 是写侧（RegisterNode/ReportNode）从不写的死列（schema 默认 60），读它会把
 	// 阈值钉死在 120s 下限，真实 interval>120s 时逐轮误报离线。
 	if err := database.QueryRowContext(ctx,
-		`SELECT COALESCE(cluster_version,0), COALESCE(sync_interval,60) FROM global_config WHERE id=1`).Scan(&clusterVersion, &syncInterval); err != nil {
+		`SELECT COALESCE(cluster_version,0), COALESCE(sync_interval,?) FROM global_config WHERE id=1`, db.DefaultSyncInterval).Scan(&clusterVersion, &syncInterval); err != nil {
 		TaskLogfWarn("cluster-sync", "serving", "巡检失败：读取集群版本与同步间隔失败（下一轮重试）：%v", err)
 		return
 	}

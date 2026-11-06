@@ -121,7 +121,7 @@ func (s *ClusterService) GenerateLoginTicket(ctx context.Context, claims models.
 	// 上报的从节点仍当作在线放行签发登录票据。sync_interval 同款读取（含脏值
 	// clamp，由 ComputeNodeStatus 内部归一）。
 	var syncInterval int
-	if err := s.db.QueryRowContext(ctx, "SELECT COALESCE(sync_interval,60) FROM global_config WHERE id=1").Scan(&syncInterval); err != nil {
+	if err := s.db.QueryRowContext(ctx, "SELECT COALESCE(sync_interval,?) FROM global_config WHERE id=1", db.DefaultSyncInterval).Scan(&syncInterval); err != nil {
 		return models.ClusterLoginTicketResponse{}, fmt.Errorf("读取同步间隔: %w", err)
 	}
 	if !approved {

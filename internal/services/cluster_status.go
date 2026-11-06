@@ -247,7 +247,7 @@ func (s *ClusterService) Status(ctx context.Context) (models.ClusterStatus, erro
 	var clusterToken string
 	var lastSync sql.NullTime
 	var storedSyncError string
-	err := s.db.QueryRowContext(ctx, `SELECT COALESCE(is_master,1), COALESCE(cluster_version,0), COALESCE(master_url,''), COALESCE(sync_interval,60), COALESCE(cluster_token,''), COALESCE(applied_version,0), last_sync, COALESCE(last_sync_error,'') FROM global_config WHERE id=1`).Scan(
+	err := s.db.QueryRowContext(ctx, `SELECT COALESCE(is_master,1), COALESCE(cluster_version,0), COALESCE(master_url,''), COALESCE(sync_interval,?), COALESCE(cluster_token,''), COALESCE(applied_version,0), last_sync, COALESCE(last_sync_error,'') FROM global_config WHERE id=1`, db.DefaultSyncInterval).Scan(
 		&isMaster, &status.ClusterVersion, &status.MasterURL, &status.SyncInterval, &clusterToken, &status.AppliedVersion, &lastSync, &storedSyncError)
 	if err != nil {
 		return models.ClusterStatus{}, fmt.Errorf("读取集群状态: %w", err)
@@ -291,7 +291,7 @@ func (s *ClusterService) Status(ctx context.Context) (models.ClusterStatus, erro
 
 func (s *ClusterService) Nodes(ctx context.Context, now time.Time) ([]models.ClusterNodeView, error) {
 	var currentVersion, syncInterval int
-	if err := s.db.QueryRowContext(ctx, "SELECT COALESCE(cluster_version,0), COALESCE(sync_interval,60) FROM global_config WHERE id=1").Scan(&currentVersion, &syncInterval); err != nil {
+	if err := s.db.QueryRowContext(ctx, "SELECT COALESCE(cluster_version,0), COALESCE(sync_interval,?) FROM global_config WHERE id=1", db.DefaultSyncInterval).Scan(&currentVersion, &syncInterval); err != nil {
 		return nil, fmt.Errorf("读取集群版本: %w", err)
 	}
 	var masterSiteLat, masterSiteLon float64

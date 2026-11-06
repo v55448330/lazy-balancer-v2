@@ -749,8 +749,8 @@ func (s *ClusterService) loadSnapshotGlobalSettings(ctx context.Context, store s
 	var threatAuto bool
 	var threatDays, threatTime string
 	if err := store.QueryRowContext(ctx, `SELECT COALESCE(threat_auto_update,1),
-		COALESCE(threat_schedule_days,'1,2,3,4,5,6,7'), COALESCE(threat_schedule_time,'04:00')
-		FROM global_config WHERE id=1`).Scan(&threatAuto, &threatDays, &threatTime); err != nil {
+		COALESCE(threat_schedule_days,?), COALESCE(threat_schedule_time,?)
+		FROM global_config WHERE id=1`, db.DefaultScheduleDays, db.DefaultScheduleTime).Scan(&threatAuto, &threatDays, &threatTime); err != nil {
 		return fmt.Errorf("读取威胁库排程设置: %w", err)
 	}
 	snapshot.BasicSettings.ThreatAutoUpdate = &threatAuto
@@ -760,8 +760,8 @@ func (s *ClusterService) loadSnapshotGlobalSettings(ctx context.Context, store s
 	var crawlerAuto bool
 	var crawlerDays, crawlerTime string
 	if err := store.QueryRowContext(ctx, `SELECT COALESCE(crawler_auto_update,1),
-		COALESCE(crawler_schedule_days,'1,2,3,4,5,6,7'), COALESCE(crawler_schedule_time,'04:00')
-		FROM global_config WHERE id=1`).Scan(&crawlerAuto, &crawlerDays, &crawlerTime); err != nil {
+		COALESCE(crawler_schedule_days,?), COALESCE(crawler_schedule_time,?)
+		FROM global_config WHERE id=1`, db.DefaultScheduleDays, db.DefaultScheduleTime).Scan(&crawlerAuto, &crawlerDays, &crawlerTime); err != nil {
 		return fmt.Errorf("读取爬虫地址库排程设置: %w", err)
 	}
 	snapshot.BasicSettings.CrawlerAutoUpdate = &crawlerAuto

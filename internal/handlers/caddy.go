@@ -376,7 +376,8 @@ func (h *Handlers) GetConfig(c *gin.Context) {
 	// 治理默认值列的读路径 SQL 字面量是默认值的第三次复制
 	//（DDL DEFAULT+启动回填+此处）——改参数绑定 db.Default* 常量单源化，
 	// 常量变更不再需要三处同步。日志体量/保留期/JWT、威胁大屏与安全事件
-	// 默认值同样走参数绑定；非治理列（log 级别/布尔等）字面量原状。
+	// 默认值同样走参数绑定；log 级别两列（面板/运行日志）同属治理默认，
+	// 面板列直读、运行日志列兜底绑定；非治理列（布尔/空串占位等）字面量原状。
 	err := db.DB.QueryRowContext(c.Request.Context(), `
 		SELECT id, caddy_config,
 		       COALESCE(acme_email,'') as acme_email, COALESCE(cert_expiry_days,?) as cert_expiry_days,
@@ -385,7 +386,7 @@ func (h *Handlers) GetConfig(c *gin.Context) {
 		       COALESCE(default_ca_provider_id,0) as default_ca_provider_id,
 		       log_level,
 
-		       COALESCE(caddy_log_level,'info') as caddy_log_level,
+		       COALESCE(caddy_log_level,?) as caddy_log_level,
 		       COALESCE(caddy_log_size_mb,?) as caddy_log_size_mb,
 		       COALESCE(request_body_max_size_mb,?) as request_body_max_size_mb,
 		       COALESCE(http_read_timeout,?) as http_read_timeout,
@@ -428,10 +429,10 @@ func (h *Handlers) GetConfig(c *gin.Context) {
 		FROM global_config WHERE id = 1
 	`,
 		// 占位符序=cert_expiry_days/cert_renewal_days/cert_renewal_attempts/
-		// caddy_log_size_mb/request_body_max_size_mb/http_read_timeout/http_write_timeout/
-		// http_idle_timeout、日志体量/保留期/JWT 五列；追加大屏/安全事件四列。
+		// caddy_log_level/caddy_log_size_mb/request_body_max_size_mb/http_read_timeout/
+		// http_write_timeout/http_idle_timeout、日志体量/保留期/JWT 五列；追加大屏/安全事件四列。
 		db.DefaultCertExpiryDays, db.DefaultCertRenewalDays, db.DefaultCertRenewalAttempts,
-		db.DefaultCaddyLogSizeMB, db.DefaultRequestBodyMaxSizeMB,
+		db.DefaultCaddyLogLevel, db.DefaultCaddyLogSizeMB, db.DefaultRequestBodyMaxSizeMB,
 		db.DefaultHTTPReadTimeout, db.DefaultHTTPWriteTimeout, db.DefaultHTTPIdleTimeout,
 		db.DefaultTaskLogSizeMB, db.DefaultAuditLogSizeMB, db.DefaultRuntimeLogSizeMB,
 		db.DefaultAuditRetentionMonths, db.DefaultJWTExpireMinutes, db.DefaultTimezone,

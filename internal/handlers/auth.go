@@ -277,12 +277,12 @@ func (h *Handlers) Login(c *gin.Context) {
 }
 
 // loginExpireMinutes 读取 global_config.jwt_expire_minutes 并钳制到合法区间
-// （≤0 或 >1440 或查询失败一律回退 20）。仅由 signSessionJWT 消费，
-// 密码/MFA 与 OIDC 会话的令牌有效期因此保持同一口径。
+// （≤0 或 >1440 或查询失败一律回退治理默认 db.DefaultJWTExpireMinutes）。
+// 仅由 signSessionJWT 消费，密码/MFA 与 OIDC 会话的令牌有效期因此保持同一口径。
 func loginExpireMinutes() int {
-	expireMinutes := 20
-	if err := db.DB.QueryRow("SELECT COALESCE(jwt_expire_minutes,20) FROM global_config WHERE id=1").Scan(&expireMinutes); err != nil || expireMinutes <= 0 || expireMinutes > 1440 {
-		return 20
+	expireMinutes := db.DefaultJWTExpireMinutes
+	if err := db.DB.QueryRow("SELECT COALESCE(jwt_expire_minutes,?) FROM global_config WHERE id=1", db.DefaultJWTExpireMinutes).Scan(&expireMinutes); err != nil || expireMinutes <= 0 || expireMinutes > 1440 {
+		return db.DefaultJWTExpireMinutes
 	}
 	return expireMinutes
 }

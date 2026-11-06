@@ -36,6 +36,7 @@ func TestFreshSchemaDefaults_MatchGovernedConstants(t *testing.T) {
 		{"global_config", "caddy_log_size_mb", fmt.Sprint(DefaultCaddyLogSizeMB), 1},
 		{"global_config", "caddy_log_level", "'" + DefaultCaddyLogLevel + "'", 0},
 		{"global_config", "sync_interval", fmt.Sprint(DefaultSyncInterval), 0},
+		{"global_config", "jwt_expire_minutes", fmt.Sprint(DefaultJWTExpireMinutes), 0},
 		{"lb_rules", "health_check_interval", fmt.Sprint(DefaultHealthCheckInterval), 1},
 		{"lb_rules", "health_check_timeout", fmt.Sprint(DefaultHealthCheckTimeout), 1},
 		{"lb_rules", "health_check_unhealthy_threshold", fmt.Sprint(DefaultHealthCheckUnhealthyThreshold), 1},
@@ -808,8 +809,8 @@ func TestGovernedDefaultLiteralsBoundInConsumers(t *testing.T) {
 	}{
 		{
 			file:      "../handlers/caddy.go",
-			forbidden: []string{`COALESCE(timezone,'Asia/Shanghai')`},
-			required:  []string{"db.DefaultTimezone"},
+			forbidden: []string{`COALESCE(timezone,'Asia/Shanghai')`, `COALESCE(caddy_log_level,'info')`},
+			required:  []string{"db.DefaultTimezone", "db.DefaultCaddyLogLevel"},
 		},
 		{
 			file:      "../handlers/auditlog.go",
@@ -818,8 +819,8 @@ func TestGovernedDefaultLiteralsBoundInConsumers(t *testing.T) {
 		},
 		{
 			file:      "../handlers/config_changes.go",
-			forbidden: []string{`COALESCE(timezone,'Asia/Shanghai')`, `COALESCE(log_level,'info')`},
-			required:  []string{"db.DefaultTimezone", "db.DefaultLogLevel"},
+			forbidden: []string{`COALESCE(timezone,'Asia/Shanghai')`, `COALESCE(log_level,'info')`, `COALESCE(caddy_log_level,'info')`},
+			required:  []string{"db.DefaultTimezone", "db.DefaultLogLevel", "db.DefaultCaddyLogLevel"},
 		},
 		{
 			file:      "../services/cluster_snapshot.go",
@@ -1022,6 +1023,53 @@ func TestGovernedDefaultLiteralsBoundInConsumers(t *testing.T) {
 				"db.DefaultCaddyLogLevel", "db.DefaultCaddyLogSizeMB",
 				"db.DefaultHTTPReadTimeout", "db.DefaultHTTPWriteTimeout", "db.DefaultHTTPIdleTimeout",
 			},
+		},
+		{
+			// 登录会话有效期读侧与 DDL DEFAULT/启动回填同一常量：兜底字面量
+			// 会让常量调整后签发口径与面板读侧静默分叉。
+			file:      "../handlers/auth.go",
+			forbidden: []string{"COALESCE(jwt_expire_minutes,20)"},
+			required:  []string{"db.DefaultJWTExpireMinutes"},
+		},
+		{
+			// 集群读侧 sync_interval COALESCE 兜底（状态展示/节点列表/同步
+			// 循环/票据在线判定/主端巡检）与 DDL、启动回填、快照装载同源：
+			// 默认间隔调整后各读点不得与设置页分叉。
+			file:      "../services/cluster_status.go",
+			forbidden: []string{"COALESCE(sync_interval,60)"},
+			required:  []string{"db.DefaultSyncInterval"},
+		},
+		{
+			file:      "../services/cluster_sync.go",
+			forbidden: []string{"COALESCE(sync_interval,60)"},
+			required:  []string{"db.DefaultSyncInterval"},
+		},
+		{
+			file:      "../services/cluster_ticket.go",
+			forbidden: []string{"COALESCE(sync_interval,60)"},
+			required:  []string{"db.DefaultSyncInterval"},
+		},
+		{
+			file:      "../services/cluster_masterserving.go",
+			forbidden: []string{"COALESCE(sync_interval,60)"},
+			required:  []string{"db.DefaultSyncInterval"},
+		},
+		{
+			// Caddy 渲染侧的运行日志级别兜底与面板读侧/快照装载同源。
+			file:      "../services/caddy.go",
+			forbidden: []string{"COALESCE(caddy_log_level,'info')"},
+			required:  []string{"db.DefaultCaddyLogLevel"},
+		},
+		{
+			// 威胁/爬虫任务级排程列为 NOT NULL DEFAULT，COALESCE 第二参数
+			// 本不可达，纯字面量副本只会漂移：与 DDL/迁移补列/services 读
+			// 失败兜底同一对常量。
+			file: "../services/cluster_snapshot.go",
+			forbidden: []string{
+				"COALESCE(threat_schedule_days,'1,2,3,4,5,6,7')", "COALESCE(threat_schedule_time,'04:00')",
+				"COALESCE(crawler_schedule_days,'1,2,3,4,5,6,7')", "COALESCE(crawler_schedule_time,'04:00')",
+			},
+			required: []string{"db.DefaultScheduleDays", "db.DefaultScheduleTime"},
 		},
 	}
 	for _, tc := range cases {
