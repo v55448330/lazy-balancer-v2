@@ -43,6 +43,26 @@ func TestTCPBlockNoticeText_controlCharsStrippedAndClamped(t *testing.T) {
 	}
 }
 
+// 控制字符口径覆盖 C0+DEL 之外的 C1 区（U+0080-009F）与 Unicode 行/段
+// 分隔符（U+2028/U+2029）；合法 CJK 与 C1 上界之外（U+00A0）不得误删。
+// 与 caddyl4sec validateBlockNotice 同口径（该模块独立不能 import services，
+// 两侧逐字同步，改动必须成对）。
+func TestTCPBlockNoticeText_c1AndLineSeparatorsStripped(t *testing.T) {
+	t.Cleanup(func() { SetTCPBlockNoticeBrand("") })
+	SetTCPBlockNoticeBrand("A\u0085B\u009fC\u2028D\u2029E甲板F\u00a0G")
+	got := tcpBlockNoticeText()
+	for _, r := range []rune{0x85, 0x9F, 0x2028, 0x2029} {
+		if strings.ContainsRune(got, r) {
+			t.Fatalf("控制字符 U+%04X 未剥离: %q", r, got)
+		}
+	}
+	// U+00A0 处于串中（尾部会被 TrimSpace 按空白语义裁掉，不属剥离口径）：
+	// C1 上界外字符与合法 CJK 一并保留。
+	if !strings.Contains(got, "ABCDE甲板F\u00a0G") {
+		t.Fatalf("可见字符/CJK/C1 上界外字符被误删: %q", got)
+	}
+}
+
 // 断连路由恒带 block_notice；透传形态（trust_detect）不带——回归形状。
 func TestBuildTCPServer_closeRoutesCarryBlockNotice(t *testing.T) {
 	stubSecurityLibsAvailable(t)

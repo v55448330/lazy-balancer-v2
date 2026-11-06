@@ -5344,7 +5344,8 @@ func buildTCPProxyRoute(rule SingleRuleConfig) (map[string]interface{}, error) {
 // buildTCPServer generates a layer4 server entry (listen + routes) for a TCP rule.
 // securityCtxs 携带绑定启用策略集与批量生成上下文（契约 C2）：绑定非空时
 // routes=信任直通→deny→黑名单→allow 交集外→逐策略 GeoIP→兜底采样+proxy
-// 短路链；无绑定/缺库降级时与既有单 proxy 形状逐字节一致（现状回归形状）。
+// 短路链；无绑定时与既有单 proxy 形状逐字节一致（现状回归形状），缺库降级
+// 时安全段缺席但兜底路由仍挂采样 handler（行为无害，非逐字节一致）。
 func buildTCPServer(rule SingleRuleConfig, securityCtxs ...*tcpSecurityRenderInput) (map[string]interface{}, error) {
 	proxyHandler, err := buildTCPProxyHandler(rule)
 	if err != nil {

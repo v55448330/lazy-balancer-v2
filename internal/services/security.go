@@ -1301,7 +1301,7 @@ func emitCustomRules(sb *strings.Builder, customRules []models.CustomRule, block
 				}
 				branchID := customRuleORConditionEmitID(emitID, idx)
 				sb.WriteString(fmt.Sprintf("SecRule %s \"%s %s\" \"id:%d,phase:%d,%s\"\n",
-					customRuleTargets[cond.Target], customRuleOperators[cond.Operator], escapeCorazaPattern(cond.Pattern), branchID, phase, branchAction))
+					customRuleSecTarget(cond), customRuleOperators[cond.Operator], escapeCorazaPattern(cond.Pattern), branchID, phase, branchAction))
 			}
 			if orScoring {
 				hitVar := customRuleORHitVar(emitID)

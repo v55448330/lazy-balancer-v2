@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -426,5 +427,30 @@ func TestIPFileMatchIPv6AndUnmapped(t *testing.T) {
 	}
 	if got, _ := m.Match(newTestConn("2001:db8:2::1")); got {
 		t.Fatal("v6 名单外误命中")
+	}
+}
+
+// 单个超长行（> bufio.Scanner 默认 64KiB token 上限）不得毒化整份名单：
+// 解析失败行本就逐行忽略，读不进来才是事故——默认 buffer 下 readSet 直接
+// ErrTooLong（初始加载落空集、热载 fail-stale），文件内合法条目全部丢失。
+func TestIPFileReadSetOverlongLineDoesNotPoisonList(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "l4-overlong.txt")
+	content := "10.0.0.1\n" + strings.Repeat(" 超长垃圾行 ", 7500) + "\n192.168.5.0/24\n"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("write list: %v", err)
+	}
+	m := newIPFileMatcherForTest(t, path)
+	for _, tc := range []struct{ ip, why string }{
+		{"10.0.0.1", "超长行之前的合法条目"},
+		{"192.168.5.77", "超长行之后的合法条目"},
+	} {
+		got, err := ipFileMatch(t, m, tc.ip)
+		if err != nil || !got {
+			t.Fatalf("%s丢失: match=%v err=%v", tc.why, got, err)
+		}
+	}
+	if got, _ := ipFileMatch(t, m, "203.0.113.9"); got {
+		t.Fatal("名单外地址误命中（负对照）")
 	}
 }

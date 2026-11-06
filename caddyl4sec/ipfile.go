@@ -249,6 +249,11 @@ func (m *L4IPFileMatcher) readSet() (*ipPrefixSet, time.Time, int64, error) {
 	defer func() { _ = file.Close() }()
 	var cidrs []netip.Prefix
 	scanner := bufio.NewScanner(file)
+	// 单行 token 上限从默认 64KiB 扩到 1MiB：单个超长畸形行（粘贴垃圾/
+	// 截断行）不得以 ErrTooLong 毒化整份名单加载（初始加载落空集、热载
+	// fail-stale——文件内合法条目全部丢失）。读得进来才轮得到「解析失败行
+	// 逐行忽略」的既有语义；1MiB 之上的超长行仍报错走既有 fail-stale 路径。
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	for scanner.Scan() {
 		cidr, perr := caddyhttp.CIDRExpressionToPrefix(scanner.Text())
 		if perr == nil {

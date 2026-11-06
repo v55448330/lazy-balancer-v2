@@ -409,7 +409,9 @@ func mergedAllowACLPolicies(policies []*models.SecurityPolicy) [][]string {
 }
 
 // tcpSecurityRouteList 组装 L4 server 的完整 routes：安全段（可缺）+ 兜底
-// 采样路由。无绑定/缺库时 routes 与既有单 proxy 形状逐字节一致（@id 同位）。
+// 采样路由。无绑定时 routes 与既有单 proxy 形状逐字节一致（@id 同位）；
+// 缺库降级（安全库缺失但绑定存在）时仅安全段缺席——兜底路由仍挂 lb_l4_sec
+// 采样 handler（命中计数与透传不变，行为无害），非逐字节一致。
 func tcpSecurityRouteList(rule SingleRuleConfig, proxyHandler map[string]interface{}, securityCtxs ...*tcpSecurityRenderInput) ([]interface{}, error) {
 	// 兜底：lb_l4_sec 采样计数后透传给 proxy；@id 保持在兜底路由（与现状同位，
 	// Caddy @id 全配置唯一，安全路由不得重复挂载）。

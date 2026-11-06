@@ -85,7 +85,14 @@ func TestProvisionBlockNoticeValidation(t *testing.T) {
 	for name, notice := range map[string]string{
 		"控制字符": "bad\x00notice",
 		"换行":   "bad\nnotice",
-		"超长":   strings.Repeat("x", 257),
+		// C1 区（U+0080-009F）与 Unicode 行/段分隔符（U+2028/U+2029）与
+		// services 侧 clampTCPNotice 同口径（独立模块不能 import services，
+		// 两侧逐字同步，改动必须成对），畸形形态必须拒绝。
+		"C1 控制字符": "bad\u0085notice",
+		"C1 上界":   "bad\u009fnotice",
+		"行分隔符":    "bad\u2028notice",
+		"段分隔符":    "bad\u2029notice",
+		"超长":      strings.Repeat("x", 257),
 	} {
 		h := base
 		h.BlockNotice = notice
@@ -97,5 +104,11 @@ func TestProvisionBlockNoticeValidation(t *testing.T) {
 	h.BlockNotice = "Connection blocked by 甲板面板"
 	if err := h.Provision(ctx); err != nil {
 		t.Fatalf("合法 UTF-8 文案被拒: %v", err)
+	}
+	// C1 上界外（U+00A0）与合法 CJK 一并放行：剥离/拒绝口径不含 U+00A0。
+	h = base
+	h.BlockNotice = "甲板面板\u00a0中段"
+	if err := h.Provision(ctx); err != nil {
+		t.Fatalf("合法 CJK 与 C1 上界外字符被拒: %v", err)
 	}
 }

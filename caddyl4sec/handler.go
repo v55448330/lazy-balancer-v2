@@ -168,9 +168,11 @@ func (h *L4SecHandler) Cleanup() error {
 	return nil
 }
 
-// validateBlockNotice 校验 TCP 拦截提示形状：无控制字符（含 CRLF——写入期
-// 由本模块统一追加）、≤256 字节；UTF-8 品牌段允许。畸形=渲染单源 bug 信号，
-// fail-loud 拒绝配置加载。
+// validateBlockNotice 校验 TCP 拦截提示形状：无控制字符（C0 区+DEL+C1 区
+// U+0080-009F+Unicode 行/段分隔符 U+2028/U+2029；含 CRLF——写入期由本模块
+// 统一追加）、≤256 字节；UTF-8 品牌段允许。畸形=渲染单源 bug 信号，
+// fail-loud 拒绝配置加载。剥离/拒绝口径与 services 侧 clampTCPNotice 同源
+// （独立模块不能 import services，两侧逐字同步，改动必须成对）。
 func validateBlockNotice(notice string) error {
 	if notice == "" {
 		return nil
@@ -179,7 +181,7 @@ func validateBlockNotice(notice string) error {
 		return fmt.Errorf("lb_l4_sec: block_notice 超长（%d > 256 字节）", len(notice))
 	}
 	for _, r := range notice {
-		if r < 0x20 || r == 0x7F {
+		if r < 0x20 || r == 0x7F || (r >= 0x80 && r <= 0x9F) || r == 0x2028 || r == 0x2029 {
 			return fmt.Errorf("lb_l4_sec: block_notice 含控制字符（U+%04X）——换行由写入期统一追加", r)
 		}
 	}
