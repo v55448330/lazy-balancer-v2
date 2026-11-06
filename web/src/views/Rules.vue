@@ -681,6 +681,7 @@
                       <div class="ntlm-help-line">· 入口 HTTP/2 由客户端自动降级，不受本开关控制</div>
                       <div class="ntlm-help-line">· 接管形态：负载策略锁定 Cookie 会话保持；请求重试禁用；响应立即透传；Keepalive 300s + 强制 HTTP/1.1；主动健康检查关闭（被动仍在役）</div>
                       <div class="ntlm-help-line">· 与认证网关同时启用时形成双重认证：未认证请求先被网关拦截（厚客户端如 Outlook 无法完成网页登录），NTLM 协商仅对已通过网关认证的流量生效</div>
+                      <div class="ntlm-help-line">· 避免与「HTTPS 上游 + 上游独立域名（origin_domain）」组合：该组合下连接走 TLS 直连通道，NTLM 长连接亲和失效且连接不回收</div>
                     </template>
                   </FieldHelpIcon></span>
                 </template>
