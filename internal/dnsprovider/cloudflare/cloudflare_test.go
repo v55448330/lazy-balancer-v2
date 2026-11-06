@@ -976,7 +976,7 @@ func TestProvider_createRecordReuseSkipsEmptyID(t *testing.T) {
 }
 
 func TestSetUserAgent_versionized(t *testing.T) {
-	// UA 版本化接缝：装配 cfg.Version 后出网 UA 与 APP_VERSION 同源（B1-123-3）
+	// UA 版本化接缝：装配 cfg.Version 后出网 UA 与 APP_VERSION 同源
 	prev := userAgent
 	t.Cleanup(func() { userAgent = prev })
 	SetUserAgent("v2.4.2")

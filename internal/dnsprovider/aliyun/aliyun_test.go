@@ -842,7 +842,7 @@ func TestProvider_CleanUp_delete5xxRetriedThenFailsKeepsOwnership(t *testing.T) 
 
 func TestSetUserAgent_versionized(t *testing.T) {
 	// UA 版本化接缝：装配 cfg.Version 后出网 UA 与 APP_VERSION 同源
-	// （audit122 B1-124-1：aliyun 手写客户端补齐同款接缝）。
+	// （aliyun 手写客户端与 cloudflare/dnspod 同款接缝）。
 	prev := userAgent
 	t.Cleanup(func() { userAgent = prev })
 	SetUserAgent("v2.4.2")

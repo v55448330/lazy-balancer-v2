@@ -284,7 +284,7 @@ func geoipContentBuffer(path string) ([]byte, error) {
 	}
 	// 缓存键 = 路径 + modTime + size + inode：带外 rsync -a 替换（新 inode、
 	// 保留 mtime/size）可被 inode 差异检出；cp -p 原地覆写仍同形态（残余边角，
-	// 生产更新走 rename 流不可达——SEC124-B2-1 记录）。
+	// 生产更新走 rename 流不可达）。
 	ino := int64(0)
 	if stt, ok := st.Sys().(*syscall.Stat_t); ok {
 		ino = int64(stt.Ino)

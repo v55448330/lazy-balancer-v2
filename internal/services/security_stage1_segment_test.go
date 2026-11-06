@@ -139,7 +139,7 @@ func TestStage1PrecheckSegmentSQL_eventDurationPredicateReconciled(t *testing.T)
 }
 
 // 真执行钉：非数字脏行（带外写入形态）不得因前缀碰巧同段而误入阶段 1 段
-// （SEC122-B2-1：LIKE '150%' 会放行 '150abc'，GLOB 字符集锚定必须拒绝）。
+// （LIKE '150%' 会放行 '150abc'，GLOB 字符集锚定必须拒绝）。
 func TestStage1PrecheckSegmentSQL_rejectsNonNumericRows(t *testing.T) {
 	_, database := newClusterTestService(t)
 	if _, err := database.Exec("CREATE TABLE stage1_probe (rule_triggered TEXT)"); err != nil {
