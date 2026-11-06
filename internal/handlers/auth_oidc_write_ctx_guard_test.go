@@ -97,3 +97,72 @@ func TestOIDCConfigSaveHandlersPassRequestContext(t *testing.T) {
 		}
 	}
 }
+
+// 刻意无 ctx 写点的登记豁免表（「登记豁免表」模式）：请求面五个文件中全部
+// db.DB.Exec/Begin ctx-less 写点必须落在表内函数，且函数体必须带「刻意无 ctx
+// 豁免」标记注释（rationale 与本表互引）。三重失败面：①表外新增 ctx-less
+// 写点（文件总写点数 > 表内登记数之和）；②表内函数写点数与登记 count 不符
+// （函数内新增/删减写点）；③豁免标记注释被删。表内函数改名的失效由
+// handlerFunctionBody 找不到签名钉住——登记必须与代码同步更新。
+func TestDeliberateCtxlessWritesAreRegistered(t *testing.T) {
+	const marker = "刻意无 ctx 豁免"
+	// 扫描集：认证/API Key/品牌播种/配置导入四个请求面 handler 文件 + OIDC
+	// 文件（后者表内零登记——其写点全部走上方消费契约，任何 ctx-less 新增即红）。
+	scanFiles := []string{"auth.go", "auth_oidc.go", "apikeys.go", "branding.go", "config_backup.go"}
+	exemptions := []struct {
+		file  string
+		fn    string // 顶层 func 签名（改名即失效——登记与代码同步更新）
+		count int    // 函数体内允许的 ctx-less 写点数
+	}{
+		// 登录链失败计数与锁定：攻击者断连时盲改 ctx 会丢暴力破解证据——
+		// 失败计数是事实，随请求中止等于给断连重放免费擦除窗口（rationale
+		// 详见函数体内豁免注释）。
+		{file: "auth.go", fn: "func recordLoginFailure(userID int) {", count: 2},
+		// 登录成功收尾清零：best-effort 有意设计——清零失败不撤销已签发 JWT。
+		{file: "auth.go", fn: "func (h *Handlers) Login(c *gin.Context) {", count: 1},
+		// touchLastLogin：last_login 活动证据记账 best-effort，非授权前提。
+		{file: "auth.go", fn: "func touchLastLogin(userID int, username, clientIP string) (time.Time, bool) {", count: 1},
+		// SetupAdmin：引导期一次性播种，幂等 NOT EXISTS，写入必须无条件完成。
+		{file: "auth.go", fn: "func (h *Handlers) SetupAdmin(c *gin.Context) {", count: 1},
+		// deleteAPIKey：name 查询与 DELETE 分离两语句、无事务包裹（audit125
+		// 已披露的同族分离形态，注释互引）。
+		{file: "apikeys.go", fn: "func deleteAPIKey(c *gin.Context, scopedUserID int) {", count: 1},
+		// SeedDefaultBlockPage：默认页/内置页播种族，boot/同步语境漂移自愈。
+		{file: "branding.go", fn: "func SeedDefaultBlockPage(dataDir string) (bool, error) {", count: 3},
+		// importConfigBackupCore 水位收敛：auto_backup_last_run 单行 UPDATE，
+		// 恢复通道自有一致性机制。
+		{file: "config_backup.go", fn: "func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename, action string) {", count: 1},
+	}
+	ctxless := regexp.MustCompile(`db\.DB\.(Exec|Begin)\(`)
+	fileTotals := map[string]int{}
+	for _, f := range scanFiles {
+		source, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		fileTotals[f] = len(ctxless.FindAllString(string(source), -1))
+	}
+	registeredTotals := map[string]int{}
+	for _, ex := range exemptions {
+		source, err := os.ReadFile(ex.file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, ok := handlerFunctionBody(string(source), ex.fn)
+		if !ok {
+			t.Fatalf("%s 中未找到 %q（函数改名会让本守卫失效，登记必须同步更新）", ex.file, ex.fn)
+		}
+		registeredTotals[ex.file] += ex.count
+		if got := len(ctxless.FindAllString(body, -1)); got != ex.count {
+			t.Fatalf("%s 的 %s 实际 ctx-less 写点 %d 处，登记 %d 处——函数内新增/删减写点必须同步更新登记表", ex.file, ex.fn, got, ex.count)
+		}
+		if !strings.Contains(body, marker) {
+			t.Fatalf("%s 的 %s 缺少「%s」标记注释——表内函数必须留豁免 rationale 与登记表互引", ex.file, ex.fn, marker)
+		}
+	}
+	for _, f := range scanFiles {
+		if fileTotals[f] != registeredTotals[f] {
+			t.Fatalf("%s 共 %d 处 ctx-less 写点，登记表仅覆盖 %d 处——表外新增写点必须改 *Context 系列消费请求 ctx 或带 rationale 登记", f, fileTotals[f], registeredTotals[f])
+		}
+	}
+}

@@ -1,6 +1,8 @@
 package services
 
-// L4（TCP 规则）阶段 0/1 安全路由渲染（契约 C2，.omp/local/l4-stage01-contract.md）：
+// L4（TCP 规则）阶段 0/1 安全路由渲染（本文件与 caddyl4sec/ 模块为该能力的
+// 单一事实源；历史协作文档 .omp/local/l4-stage01-contract.md 已重写为实现
+// 快照描述，不再是权威契约——与其分叉时以代码为准）：
 //
 //	① 信任直通（零事件零开销）→ ①b 信任检测（trust_detection=1：logged 事件
 //	后直通，HTTP id:12 DetectionOnly 的路由序等价物）→ ② deny 拒绝 →

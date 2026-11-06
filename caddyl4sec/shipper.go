@@ -36,8 +36,9 @@ import (
 //   - IPC 显式关闭（env 置空串）= 纯丢弃模式（计数+节流告警），L4 无审计
 //     文件兜底可用。
 //
-// 风暴自防（契约 C1）：2048 容量有界队列 + 64MiB 驻留字节预算 + 2s 有界入队
-// 等待 + 64KiB 单行上限——超限丢弃并计数（dropped），不无界驻留。
+// 风暴自防（契约 C1）：2048 容量环形缓冲（满环覆写最旧，newest-wins）+
+// 64MiB 驻留字节预算 + 64KiB 单行上限——入队零阻塞恒定纳秒级，超限丢弃并
+// 计数（dropped），不无界驻留、不阻塞连接路径。
 
 const (
 	l4IPCSocketEnv        = "LB_SECURITY_EVENTS_IPC_SOCKET"
@@ -856,8 +857,8 @@ func (p *l4Pipeline) start() {
 	})
 }
 
-// enqueueEvent 有界入队：先字节预算后容量等待，超限/超时丢弃计数（风暴自防
-// ——连接路径最多为一批驻留付出 enqueue 超时，事件行恒定小体量）。
+// enqueueEvent 零阻塞入队：满环覆写最旧（newest-wins），仅字节预算超限时
+// 丢弃计数（风暴自防——连接路径恒定纳秒级，事件行恒定小体量）。
 func (p *l4Pipeline) enqueueEvent(line []byte) {
 	// 零阻塞（方案③）：结构上不存在等待——满环覆写最旧，连接路径恒定纳秒级
 	// 返回（风暴不放大 fd/goroutine 驻留）。单行上限把守槽增长上界：环内

@@ -714,6 +714,9 @@ func SeedDefaultBlockPage(dataDir string) (bool, error) {
 	content := renderDefaultBlockPage(cfg)
 	// 默认页恒 html（带外改库漂移自愈；白名单类型不影响——
 	// 渲染处空值回退与写侧白名单把守，此处仅归位默认页）。
+	// 刻意无 ctx 豁免（覆盖本函数三处播种写点；登记表=auth_oidc_write_ctx_guard_test.go）：
+	// 默认页/内置页播种族属 boot/同步语境的漂移自愈，非请求处理语义——漂移修复
+	// 必须无条件完成，随请求中止会让带外漂移存续到下次重启。
 	result, err := db.DB.Exec(`UPDATE security_block_pages SET content=?, content_type=?, updated_at=datetime('now') WHERE is_default=1 AND (COALESCE(content,'') != ? OR COALESCE(content_type,'') != ?) /* content=NULL 行 != ? 为 NULL 不命中——COALESCE 同 content_type 侧 */`, content, models.DefaultBlockPageContentType, content, models.DefaultBlockPageContentType)
 	if err != nil {
 		return false, fmt.Errorf("更新默认拦截页面内容: %w", err)

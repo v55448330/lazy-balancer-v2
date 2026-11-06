@@ -100,6 +100,10 @@ func recordLoginFailure(userID int) {
 		enabled = true
 	}
 	if !enabled {
+		// 刻意无 ctx 豁免（覆盖本函数两处写点；登记表=auth_oidc_write_ctx_guard_test.go
+		// TestDeliberateCtxlessWritesAreRegistered）：失败计数与锁定判定是暴力破解
+		// 证据——改 ctx 语义后攻击者断连即中止写库，等于给断连重放免费擦除计数窗口；
+		// 单行计数必须无条件落库（写失败已有 error 留痕，见下方日志）。
 		if _, err := db.DB.Exec(`UPDATE users SET login_failed_attempts=COALESCE(login_failed_attempts,0)+1 WHERE id=?`, userID); err != nil {
 			// 记账失败不改变认证响应（失败仍是失败），但必须留痕——
 			// 否则「登录失败计数/账户锁定」静默失效，暴力破解计数形同虚设。
@@ -107,6 +111,7 @@ func recordLoginFailure(userID int) {
 		}
 		return
 	}
+	// 刻意无 ctx 豁免：同上——锁定判定写点同族（证据不随请求中止）。
 	if _, err := db.DB.Exec(`UPDATE users SET
 		login_failed_attempts=CASE WHEN COALESCE(login_failed_attempts,0)+1>=? THEN 0 ELSE COALESCE(login_failed_attempts,0)+1 END,
 		login_locked_until=CASE WHEN COALESCE(login_failed_attempts,0)+1>=? THEN ? ELSE login_locked_until END
@@ -269,6 +274,9 @@ func (h *Handlers) Login(c *gin.Context) {
 	}
 	// 完整登录成功（无 MFA）：清零登录失败计数与锁定。已验证登录不因收尾
 	// 清零失败撤销 JWT，但旧计数残留必须留痕（与 MFA 成功路径同口径）。
+	// 刻意无 ctx 豁免：登录成功收尾清零 best-effort 有意设计——已验证身份不因
+	// 收尾被请求中止而半途（清零失败仅 warn 留痕，旧计数残留可见）；中止清零
+	// 反而保留「已锁定/有失败计数」的陈旧态压制刚成功的用户。
 	if _, err := db.DB.Exec("UPDATE users SET login_failed_attempts=0, login_locked_until=NULL WHERE id=?", user.ID); err != nil {
 		services.Logf("warn", "登录成功清零登录失败计数与锁定失败: user_id=%d: %v", user.ID, err)
 	}
@@ -305,6 +313,8 @@ var lastLoginTouchFailing services.LogEscalation
 // 活动证据因此可能互相矛盾）。失败必须留痕：连续失败的首条升级为 error 级。
 func touchLastLogin(userID int, username, clientIP string) (time.Time, bool) {
 	lastLogin := time.Now().UTC()
+	// 刻意无 ctx 豁免：last_login 是账号活动证据而非授权前提，best-effort 记账
+	// 有意设计（失败留痕不撤销已签发会话）；随请求中止只会让活动证据系统性缺失。
 	_, err := db.DB.Exec("UPDATE users SET last_login = ? WHERE id = ?", lastLogin, userID)
 	if err == nil {
 		lastLoginTouchFailing.Reset()
@@ -779,6 +789,8 @@ func (h *Handlers) SetupAdmin(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "密码加密失败"})
 		return
 	}
+	// 刻意无 ctx 豁免：引导阶段一次性播种语境——单行幂等 INSERT（NOT EXISTS
+	// 自守，中止后重试可再入），请求取消无一致性收益。
 	result, err := db.DB.Exec("INSERT INTO users (username, password_hash, role, display_name, is_enabled, is_setup_admin) SELECT ?, ?, 'admin', ?, 1, 1 WHERE NOT EXISTS (SELECT 1 FROM users)",
 		req.Username, string(hash), req.DisplayName)
 	if err != nil {
