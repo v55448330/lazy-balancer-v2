@@ -20,92 +20,102 @@ import (
 )
 
 type ruleFeatureInput struct {
-	Protocol                   string
-	Strategy                   string
-	ListenPort                 int
-	EnableTLS                  bool
-	TLSHTTPRedirect            bool
-	DynamicDNS                 bool
-	EnableDnsServer            bool
-	DnsServer                  string
-	EnabledUpstreamCount       int
-	EnabledUpstreamHosts       []string
-	DnsFamily                  string
-	HealthCheckInterval        int
-	HealthCheckTimeout         int
-	EnableCompress             bool
-	CompressTypes              string
-	CustomRoutesEnabled        bool
-	PathRules                  []models.PathRule
-	ProxyDialTimeout           int
-	ProxyResponseHeaderTimeout int
-	ProxyReadTimeout           int
-	ProxyWriteTimeout          int
-	ProxyStreamTimeout         int
-	ProxyFlushInterval         int
-	ProxyStreamCloseDelay      int
-	TCPHealthCheckPort         int
-	TCPTryDuration             int
-	TCPTryInterval             int
-	NTLMCompatible             int
-	UpstreamForceHTTP1         int
-	UpstreamKeepaliveTimeout   int
-	ForwardAuthEnabled         int
-	ForwardAuthUpstream        string
-	ForwardAuthURI             string
-	ForwardAuthCopyHeaders     string
+	Protocol                     string
+	Strategy                     string
+	ListenPort                   int
+	EnableTLS                    bool
+	TLSHTTPRedirect              bool
+	DynamicDNS                   bool
+	EnableDnsServer              bool
+	DnsServer                    string
+	EnabledUpstreamCount         int
+	EnabledUpstreamHosts         []string
+	EnabledUpstreamProtocols     []string
+	EnabledUpstreamOriginDomains []string
+	DnsFamily                    string
+	HealthCheckInterval          int
+	HealthCheckTimeout           int
+	EnableCompress               bool
+	CompressTypes                string
+	CustomRoutesEnabled          bool
+	PathRules                    []models.PathRule
+	ProxyDialTimeout             int
+	ProxyResponseHeaderTimeout   int
+	ProxyReadTimeout             int
+	ProxyWriteTimeout            int
+	ProxyStreamTimeout           int
+	ProxyFlushInterval           int
+	ProxyStreamCloseDelay        int
+	TCPHealthCheckPort           int
+	TCPTryDuration               int
+	TCPTryInterval               int
+	NTLMCompatible               int
+	UpstreamForceHTTP1           int
+	UpstreamKeepaliveTimeout     int
+	ForwardAuthEnabled           int
+	ForwardAuthUpstream          string
+	ForwardAuthURI               string
+	ForwardAuthCopyHeaders       string
 }
 
 func createRuleFeatures(req models.CreateRuleRequest) ruleFeatureInput {
 	enabledUpstreams := 0
 	enabledHosts := make([]string, 0, len(req.Upstreams))
+	enabledProtocols := make([]string, 0, len(req.Upstreams))
+	enabledOriginDomains := make([]string, 0, len(req.Upstreams))
 	for _, u := range req.Upstreams {
 		if u.Enabled {
 			enabledUpstreams++
 			enabledHosts = append(enabledHosts, u.Host)
+			enabledProtocols = append(enabledProtocols, u.Protocol)
+			enabledOriginDomains = append(enabledOriginDomains, u.OriginDomain)
 		}
 	}
 	return ruleFeatureInput{
-		Protocol:                   req.Protocol,
-		Strategy:                   req.Strategy,
-		NTLMCompatible:             req.NTLMCompatible,
-		UpstreamForceHTTP1:         req.UpstreamForceHTTP1,
-		UpstreamKeepaliveTimeout:   req.UpstreamKeepaliveTimeout,
-		ForwardAuthEnabled:         req.ForwardAuthEnabled,
-		ForwardAuthUpstream:        req.ForwardAuthUpstream,
-		ForwardAuthURI:             req.ForwardAuthURI,
-		ForwardAuthCopyHeaders:     req.ForwardAuthCopyHeaders,
-		ListenPort:                 req.ListenPort,
-		EnableTLS:                  req.EnableTLS,
-		TLSHTTPRedirect:            req.TLSHTTPRedirect,
-		DynamicDNS:                 req.DynamicDNS,
-		EnableDnsServer:            req.EnableDnsServer,
-		DnsServer:                  req.DnsServer,
-		EnabledUpstreamCount:       enabledUpstreams,
-		EnabledUpstreamHosts:       enabledHosts,
-		DnsFamily:                  req.DnsFamily,
-		HealthCheckInterval:        req.HealthCheckInterval,
-		HealthCheckTimeout:         req.HealthCheckTimeout,
-		EnableCompress:             req.EnableCompress,
-		CompressTypes:              req.CompressTypes,
-		CustomRoutesEnabled:        req.CustomRoutesEnabled,
-		PathRules:                  normalizePathRules(req.PathRules),
-		ProxyDialTimeout:           req.ProxyDialTimeout,
-		ProxyResponseHeaderTimeout: req.ProxyResponseHeaderTimeout,
-		ProxyReadTimeout:           req.ProxyReadTimeout,
-		ProxyWriteTimeout:          req.ProxyWriteTimeout,
-		ProxyStreamTimeout:         req.ProxyStreamTimeout,
-		ProxyFlushInterval:         req.ProxyFlushInterval,
-		ProxyStreamCloseDelay:      req.ProxyStreamCloseDelay,
-		TCPHealthCheckPort:         req.TCPHealthCheckPort,
-		TCPTryDuration:             req.TCPTryDuration,
-		TCPTryInterval:             req.TCPTryInterval,
+		Protocol:                     req.Protocol,
+		Strategy:                     req.Strategy,
+		NTLMCompatible:               req.NTLMCompatible,
+		UpstreamForceHTTP1:           req.UpstreamForceHTTP1,
+		UpstreamKeepaliveTimeout:     req.UpstreamKeepaliveTimeout,
+		ForwardAuthEnabled:           req.ForwardAuthEnabled,
+		ForwardAuthUpstream:          req.ForwardAuthUpstream,
+		ForwardAuthURI:               req.ForwardAuthURI,
+		ForwardAuthCopyHeaders:       req.ForwardAuthCopyHeaders,
+		ListenPort:                   req.ListenPort,
+		EnableTLS:                    req.EnableTLS,
+		TLSHTTPRedirect:              req.TLSHTTPRedirect,
+		DynamicDNS:                   req.DynamicDNS,
+		EnableDnsServer:              req.EnableDnsServer,
+		DnsServer:                    req.DnsServer,
+		EnabledUpstreamCount:         enabledUpstreams,
+		EnabledUpstreamHosts:         enabledHosts,
+		EnabledUpstreamProtocols:     enabledProtocols,
+		EnabledUpstreamOriginDomains: enabledOriginDomains,
+		DnsFamily:                    req.DnsFamily,
+		HealthCheckInterval:          req.HealthCheckInterval,
+		HealthCheckTimeout:           req.HealthCheckTimeout,
+		EnableCompress:               req.EnableCompress,
+		CompressTypes:                req.CompressTypes,
+		CustomRoutesEnabled:          req.CustomRoutesEnabled,
+		PathRules:                    normalizePathRules(req.PathRules),
+		ProxyDialTimeout:             req.ProxyDialTimeout,
+		ProxyResponseHeaderTimeout:   req.ProxyResponseHeaderTimeout,
+		ProxyReadTimeout:             req.ProxyReadTimeout,
+		ProxyWriteTimeout:            req.ProxyWriteTimeout,
+		ProxyStreamTimeout:           req.ProxyStreamTimeout,
+		ProxyFlushInterval:           req.ProxyFlushInterval,
+		ProxyStreamCloseDelay:        req.ProxyStreamCloseDelay,
+		TCPHealthCheckPort:           req.TCPHealthCheckPort,
+		TCPTryDuration:               req.TCPTryDuration,
+		TCPTryInterval:               req.TCPTryInterval,
 	}
 }
 
 func updateRuleFeatures(req models.UpdateRuleRequest, existing models.LbRule) ruleFeatureInput {
 	enabledUpstreams := 0
 	var enabledHosts []string
+	var enabledProtocols []string
+	var enabledOriginDomains []string
 	// 调用契约——唯一调用点 UpdateRule 在调用前已把
 	// req.Upstreams 合并为非 nil（nil=保留存量，赋值为 oldUpstreams），此处
 	// 不再有 existing.Upstreams 回退（LbRule.Upstreams 本就不随 scanLbRules
@@ -115,34 +125,38 @@ func updateRuleFeatures(req models.UpdateRuleRequest, existing models.LbRule) ru
 		if u.Enabled {
 			enabledUpstreams++
 			enabledHosts = append(enabledHosts, u.Host)
+			enabledProtocols = append(enabledProtocols, u.Protocol)
+			enabledOriginDomains = append(enabledOriginDomains, u.OriginDomain)
 		}
 	}
 	// 对非指针字段（handler 已在调用前完成 merge），直接使用 req 值。
 	// 对指针字段，nil 时用 existing 值，非 nil 时解引用。
 	input := ruleFeatureInput{
-		Protocol:                 existing.Protocol,
-		Strategy:                 req.Strategy,
-		NTLMCompatible:           existing.NTLMCompatible,
-		UpstreamForceHTTP1:       existing.UpstreamForceHTTP1,
-		UpstreamKeepaliveTimeout: existing.UpstreamKeepaliveTimeout,
-		ForwardAuthEnabled:       existing.ForwardAuthEnabled,
-		ForwardAuthUpstream:      existing.ForwardAuthUpstream,
-		ForwardAuthURI:           existing.ForwardAuthURI,
-		ForwardAuthCopyHeaders:   existing.ForwardAuthCopyHeaders,
-		ListenPort:               req.ListenPort,
-		EnableTLS:                existing.EnableTLS,
-		TLSHTTPRedirect:          existing.TLSHTTPRedirect,
-		DynamicDNS:               existing.DynamicDNS,
-		EnableDnsServer:          existing.EnableDnsServer,
-		DnsServer:                existing.DnsServer,
-		EnabledUpstreamCount:     enabledUpstreams,
-		EnabledUpstreamHosts:     enabledHosts,
-		DnsFamily:                existing.DnsFamily,
-		HealthCheckInterval:      req.HealthCheckInterval,
-		HealthCheckTimeout:       req.HealthCheckTimeout,
-		EnableCompress:           existing.EnableCompress,
-		CompressTypes:            req.CompressTypes,
-		CustomRoutesEnabled:      existing.CustomRoutesEnabled,
+		Protocol:                     existing.Protocol,
+		Strategy:                     req.Strategy,
+		NTLMCompatible:               existing.NTLMCompatible,
+		UpstreamForceHTTP1:           existing.UpstreamForceHTTP1,
+		UpstreamKeepaliveTimeout:     existing.UpstreamKeepaliveTimeout,
+		ForwardAuthEnabled:           existing.ForwardAuthEnabled,
+		ForwardAuthUpstream:          existing.ForwardAuthUpstream,
+		ForwardAuthURI:               existing.ForwardAuthURI,
+		ForwardAuthCopyHeaders:       existing.ForwardAuthCopyHeaders,
+		ListenPort:                   req.ListenPort,
+		EnableTLS:                    existing.EnableTLS,
+		TLSHTTPRedirect:              existing.TLSHTTPRedirect,
+		DynamicDNS:                   existing.DynamicDNS,
+		EnableDnsServer:              existing.EnableDnsServer,
+		DnsServer:                    existing.DnsServer,
+		EnabledUpstreamCount:         enabledUpstreams,
+		EnabledUpstreamHosts:         enabledHosts,
+		EnabledUpstreamProtocols:     enabledProtocols,
+		EnabledUpstreamOriginDomains: enabledOriginDomains,
+		DnsFamily:                    existing.DnsFamily,
+		HealthCheckInterval:          req.HealthCheckInterval,
+		HealthCheckTimeout:           req.HealthCheckTimeout,
+		EnableCompress:               existing.EnableCompress,
+		CompressTypes:                req.CompressTypes,
+		CustomRoutesEnabled:          existing.CustomRoutesEnabled,
 		// 库原始行必须先归一（match_type 空→prefix、路径/上游地址 TrimSpace）：
 		// 导入/带外写入的 match_type='' 形态若原样进 validateRuleFeatures，任何
 		// 不带 path_rules 的部分更新都会恒 400，整条规则改不动。与创建侧
@@ -422,6 +436,20 @@ func validateRuleFeatures(input ruleFeatureInput) error {
 		// ntlm=0 不约束（UI restoreNtlmDefaults 已复位）。
 		if err := ntlmTakeoverShapeError(input.TCPTryDuration, input.UpstreamForceHTTP1, input.ProxyFlushInterval, input.UpstreamKeepaliveTimeout); err != nil {
 			return err
+		}
+		// 「NTLM 兼容 + HTTPS 上游 + origin_domain」组合互斥：该组合下
+		// SNI 占位符使连接走 TLS 直连通道，旁路 NTLM 接管的 unbinder 包裹
+		// （长连接亲和失效）且 ntlm-transport 连接逐连接累积不回收。
+		// 逐启用上游判定——任一 https 上游携带 origin_domain 即整条拒绝。
+		for i, proto := range input.EnabledUpstreamProtocols {
+			if proto == "https" && i < len(input.EnabledUpstreamOriginDomains) &&
+				input.EnabledUpstreamOriginDomains[i] != "" {
+				host := ""
+				if i < len(input.EnabledUpstreamHosts) {
+					host = input.EnabledUpstreamHosts[i]
+				}
+				return fmt.Errorf("NTLM 兼容不支持与「HTTPS 上游 + origin_domain」组合（上游 %s）：该组合下连接走 TLS 直连通道，将旁路 NTLM 接管并泄漏连接", host)
+			}
 		}
 	}
 	// 认证网关开关（forward_auth，NTLM 同款开关形态）：①值域 0/1；②仅 HTTP
