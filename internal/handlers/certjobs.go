@@ -515,6 +515,12 @@ func (h *Handlers) retryCertJobByID(c *gin.Context, id int) {
 			if errors.Is(err, services.ErrCertificateDeploymentRetryBlocked) {
 				message = "手动重试未触发：规则证书操作被屏障阻塞，等待自动部署"
 			}
+			// 刻意无 ctx 豁免（覆盖本函数两处写点；登记表=
+			// auth_oidc_write_ctx_guard_test.go）：①失败文案留痕 best-effort——
+			// 写失败仅 error 留痕（响应已定），随请求中止只会让任务行文案与
+			// 响应不一致；②下方重入队写点——CA 队列任务函数由队列 worker
+			// 出队时执行，天然脱离请求生命周期，状态推进（queued+账本重置）
+			// 是队列语义，不得随原始请求取消。
 			if _, updateErr := db.DB.Exec(`UPDATE cert_jobs SET message=?, updated_at=datetime('now') WHERE id=? AND status IN (`+services.DeploymentLifecycleJobStatusSQL+`)`, message, id); updateErr != nil {
 				services.Logf("error", "Manual deployment retry message update failed for job %d: %v", id, updateErr)
 			}
@@ -546,6 +552,7 @@ func (h *Handlers) retryCertJobByID(c *gin.Context, id int) {
 		retryCertJobPreEnqueueHook(id)
 	}
 	_, changed, err := qm.EnqueueIfActive(caProviderID, id, ruleID, domain, func() (int, bool, error) {
+		// 刻意无 ctx 豁免：②队列 worker 语境（见上方标记注释）。
 		result, err := db.DB.Exec(`UPDATE cert_jobs
 			SET status='queued', message='重新排队签发', renewal_attempts=0, ca_available_after=NULL, last_error_code=NULL, updated_at=datetime('now')
 			WHERE id=? AND status=? AND EXISTS (
@@ -693,6 +700,8 @@ func registerDownloadedCertJobDeploymentRetry(id int, ruleID string) error {
 		// 与 409/500 响应矛盾（报文说失败、DB 说已重排）。窗口推进保留
 		// （启动恢复/周期补扫会接手，可用性收益不变），文案改为如实描述
 		// 自动接管；响应侧同步点明「已登记自动部署」。
+		// 刻意无 ctx 豁免（登记表=auth_oidc_write_ctx_guard_test.go）：
+		// 文案纠偏 best-effort——写失败已 errors.Join 并入响应错误面。
 		if _, updateErr := db.DB.Exec(`UPDATE cert_jobs SET message=?, updated_at=datetime('now') WHERE id=? AND status IN (`+services.DeploymentLifecycleJobStatusSQL+`)`, "部署重试未触发，等待自动部署", id); updateErr != nil {
 			return errors.Join(err, updateErr)
 		}
@@ -909,6 +918,14 @@ func (h *Handlers) DeleteCertJob(c *gin.Context) {
 	if deleteCertJobPreDisableHook != nil {
 		deleteCertJobPreDisableHook(id)
 	}
+	// 刻意无 ctx 豁免（覆盖本函数五处写点；登记表=auth_oidc_write_ctx_guard_test.go）：
+	// 删除链在 caddyOpMu 临界区内按既定方向推进——①disable CAS 翻转是删除
+	// 语义的事实起点（0 行=并发竞争已分判 409/404/500，见下方归因注释）；
+	// ②DELETE 同临界区，删除成功后联动孤儿材料回收（中止已提交的删除会让
+	// 材料回收判定与行状态失配）；③④⑤失败恢复/重入队/failed 回退是错误
+	// 补偿通道——补偿必须无条件完成否则留下「disabled 终态替代原状态」的
+	// 幽灵退役（与 EnableRule 补偿同族 rationale）；重入队写点由 CA 队列
+	// worker 出队执行，天然脱离请求生命周期。
 	result, err := db.DB.Exec("UPDATE cert_jobs SET status='disabled', updated_at=datetime('now') WHERE id=? AND status=?", id, status)
 	if err != nil {
 		releaseCaddyOp()
@@ -958,6 +975,7 @@ func (h *Handlers) DeleteCertJob(c *gin.Context) {
 	// 恢复重入队的条目清掉，恢复语义要求先取消）。per-job operationLock 在
 	// 取消等待期间仍持有：等待期间同任务 Retry/重复 Delete 保持互斥；失败
 	// 恢复点按锁序（先 caddyOpMu 后 operationLock）释放并按规范顺序重取。
+	// 刻意无 ctx 豁免：②（见上方标记注释）。
 	result, err = db.DB.Exec("DELETE FROM cert_jobs WHERE id = ?", id)
 	if err == nil {
 		// 删除成功后物化文件可能成为孤儿（含私钥）：规则已无任何仍持有可用材料
@@ -1013,6 +1031,7 @@ func (h *Handlers) DeleteCertJob(c *gin.Context) {
 			}
 		} else if status == "issued" || status == "failed" {
 			// 同上方守卫口径。
+			// 刻意无 ctx 豁免：③补偿通道（见上方标记注释）。
 			if res, restoreErr := db.DB.Exec("UPDATE cert_jobs SET status=?, updated_at=datetime('now') WHERE id=? AND status='disabled'", status, id); restoreErr != nil {
 				deleteErr = errors.Join(deleteErr, restoreErr)
 			} else if n, _ := res.RowsAffected(); n == 0 {
@@ -1030,6 +1049,7 @@ func (h *Handlers) DeleteCertJob(c *gin.Context) {
 				restoreErr = errors.New("CA queue manager not initialized")
 			} else {
 				_, changed, restoreErr = qm.EnqueueIfActive(caProviderID, id, ruleID, domain, func() (int, bool, error) {
+					// 刻意无 ctx 豁免：④队列 worker 语境（见上方标记注释）。
 					updateResult, updateErr := db.DB.Exec(`UPDATE cert_jobs SET status='queued', message='删除失败，重新排队签发', updated_at=datetime('now')
 						WHERE id=? AND status='disabled' AND EXISTS (
 							SELECT 1 FROM lb_rules WHERE caddy_id=? AND enabled=1 AND enable_tls=1 AND tls_source='acme_dns' AND lower(replace(domain,' ','')) IN (?,?)
@@ -1048,6 +1068,7 @@ func (h *Handlers) DeleteCertJob(c *gin.Context) {
 				// 与上方三分支同构：回退写同样带 status='disabled' 守卫——行在
 				// 删除窗口内被并发移离 disabled（worker/恢复路径接管）时不得覆写
 				// 其新状态；命中 0 行并入 deleteErr 留痕（500 如实呈现恢复已跳过）。
+				// 刻意无 ctx 豁免：⑤failed 回退补偿（见上方标记注释）。
 				if res, failErr := db.DB.Exec("UPDATE cert_jobs SET status='failed', message='删除失败且恢复队列失败', updated_at=datetime('now') WHERE id=? AND status='disabled'", id); failErr != nil {
 					restoreErr = errors.Join(restoreErr, failErr)
 				} else if n, rowsErr := res.RowsAffected(); rowsErr != nil {

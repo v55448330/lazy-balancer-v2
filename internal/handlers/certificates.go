@@ -330,6 +330,8 @@ func (h *Handlers) CreateCertificateConfig(c *gin.Context) {
 	credsJSON, _ := json.Marshal(req.DNSCredentials)
 	// enabled 缺省 true（「配置默认可用」）：*bool 区分「未提交」与显式 false。
 	enabled := req.Enabled == nil || *req.Enabled
+	// 刻意无 ctx 豁免（登记表=auth_oidc_write_ctx_guard_test.go）：单行 INSERT
+	// 自洽无半途态；写失败已 writeInternalError 500 点名，取消无一致性收益。
 	result, err := db.DB.Exec(`
 		INSERT INTO certificate_configs (name, dns_provider, dns_credentials, enabled)
 		VALUES (?, ?, ?, ?)
@@ -694,6 +696,9 @@ func (h *Handlers) DeleteCertificateConfig(c *gin.Context) {
 	if deleteCertificateConfigPreDeleteHook != nil {
 		deleteCertificateConfigPreDeleteHook()
 	}
+	// 刻意无 ctx 豁免（登记表=auth_oidc_write_ctx_guard_test.go）：上方引用
+	// 查询与 DELETE 分离两语句、无事务包裹（deleteAPIKey 既有已披露的同族
+	// 分离形态）；单行 DELETE 自洽，写失败已 500 点名，取消无一致性收益。
 	if _, err := db.DB.Exec("DELETE FROM certificate_configs WHERE id = ?", id); err != nil {
 		writeInternalError(c, http.StatusInternalServerError, "删除证书配置失败", err)
 		return

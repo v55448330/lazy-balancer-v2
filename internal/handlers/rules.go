@@ -3490,6 +3490,11 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 					return
 				}
 			}
+			// 刻意无 ctx 豁免（覆盖本函数两处写点；登记表=
+			// auth_oidc_write_ctx_guard_test.go）：①域迁移事务开启——规则主更新
+			// 已提交且请求本身有效，续链不得随客户端断开而静默跳过：txErr
+			// 分支显式退役旧域任务并按既有 needJob 路径收敛，改 ctx 等于把
+			// 断开升级为「一规则一任务」不变量破坏。
 			certTx, txErr := db.DB.Begin()
 			if txErr != nil {
 				// 迁移事务开启失败不能静默吞掉——任务仍持旧域，后续会为
@@ -3631,6 +3636,9 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 				// 行被并发删除时 UPDATE 命中 0 行
 				// 不报错——必须校验 RowsAffected，否则幻影 resume 抑制 needJob，
 				// 续签链静默断裂且被 200 掩盖（与 EnableRule 出口同口径）。
+				// 刻意无 ctx 豁免：②resume 记账（见上方标记注释）——任务推进为
+				// issued 是「规则已重新启用」的事实记账，中止已验证有效的恢复
+				// 会让续签链断裂且被 200 掩盖。
 				resumeResult, err := db.DB.Exec("UPDATE cert_jobs SET status='issued',message='证书有效，已恢复使用',renewal_attempts=0,ca_available_after=NULL,last_error_code=NULL,updated_at=datetime('now') WHERE id=?", jobID)
 				if err == nil {
 					resumed, raErr := resumeResult.RowsAffected()
@@ -4943,6 +4951,11 @@ func (h *Handlers) EnableRule(c *gin.Context) {
 		// 补偿必须恢复启用 UPDATE 改写过的全部列——此前只恢复
 		// enabled，updated_at/updated_by 指向未生效的启用尝试，规范化域名也
 		// 被留在行上。
+		// 刻意无 ctx 豁免（覆盖本函数两处写点；登记表=
+		// auth_oidc_write_ctx_guard_test.go）：①补偿通道——启用已失败但部分列
+		// 已被改写，恢复必须无条件完成否则留下「enabled=1 而运行时已回滚」的
+		// 半途态（比写入完成更糟）；请求可能已断开而补偿必须跑完
+		// （RowsAffected 核对在位，0 行/失败并入 dbErr）。
 		restoreResult, execErr := db.DB.Exec("UPDATE lb_rules SET enabled = ?, domain = ?, updated_by = ?, updated_at = COALESCE(NULLIF(?, ''), datetime('now')) WHERE caddy_id = ?",
 			originalEnabled, originalDomain, originalUpdatedBy, originalUpdatedAt.String, caddyID)
 		if execErr != nil {
@@ -5071,6 +5084,9 @@ func (h *Handlers) EnableRule(c *gin.Context) {
 			// UPDATE 无状态 CAS，任何未来在上方 SELECT 与此处之间
 			// 删除行的路径都会 0 行命中，「启用成功但任务行不存在、续签链断」
 			// 被审计文案掩盖——核对 RowsAffected==1，否则按失败补偿。
+			// 刻意无 ctx 豁免：②resume 记账（见 restoreEnabledState 上方标记
+			// 注释）——与 UpdateRule resume 同型，任务推进为 issued 是启用成功
+			// 的事实记账，中止已验证有效的恢复会让续签链断裂且无补偿。
 			resumeResult, err := db.DB.Exec("UPDATE cert_jobs SET status='issued', message='证书有效，已恢复使用', renewal_attempts=0, ca_available_after=NULL, last_error_code=NULL, updated_at=datetime('now') WHERE id=?", jobID)
 			if err != nil {
 				failEnable("恢复证书任务失败", err)

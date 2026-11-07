@@ -176,6 +176,9 @@ func (h *Handlers) recordCaddyApplyResult(err error) {
 			return
 		}
 		if db.DB != nil {
+			// 刻意无 ctx 豁免（登记表=auth_oidc_write_ctx_guard_test.go）：
+			// apply 结果横幅清除 best-effort——调用方含 commit 后收尾与异步
+			// 路径，写失败仅 warn 留痕（陈旧失败横幅滞留可见），中止清除无害。
 			if _, err := db.DB.Exec(`UPDATE global_config SET caddy_apply_error='' WHERE id=1 AND caddy_apply_error<>''`); err != nil {
 				services.Logf("warn", "caddy_apply_error_clear_failed: 清除 caddy_apply_error 失败(陈旧失败横幅可能滞留): %v", err)
 			}
@@ -233,6 +236,9 @@ func persistCaddyApplyBanner(text string) {
 		return
 	}
 	visible := services.RedactCaddyAdminEndpoint(text)
+	// 刻意无 ctx 豁免（登记表=auth_oidc_write_ctx_guard_test.go）：横幅持久化
+	// best-effort 运维可见性记账（脱敏后落库，失败仅 warn——「重启后真实失败
+	// 不可见」已点名），中止持久化无害。
 	if _, derr := db.DB.Exec(`UPDATE global_config SET caddy_apply_error=? WHERE id=1`, visible); derr != nil {
 		services.Logf("warn", "caddy_apply_error_persist_failed: 持久化 caddy_apply_error 失败(重启后真实失败不可见): %v", derr)
 	}
@@ -670,6 +676,10 @@ func (h *Handlers) recoverCommittedViewAfterCommitFailure(tx *sql.Tx) postCommit
 // var 而非 func：测试缝（部署/回滚路径的可观测性断言——提交失败分支必须
 // 恰好走一次统一补发，不得自造 tx.Rollback 吞掉 ErrTxDone）。生产恒为本实现。
 var rollbackLeakedTx = func() {
+	// 刻意无 ctx 豁免（登记表=auth_oidc_write_ctx_guard_test.go）：提交失败后
+	// 的连接池补发 ROLLBACK——事务对象已被 database/sql 标记 done
+	// （ErrTxDone 不再调 driver 回滚），泄漏事务仍持写锁必须无条件回收；
+	// 错误恢复语境无请求 ctx 可言，重试至命中（池 LIFO 见上方注释）。
 	if db.DB == nil {
 		return
 	}
@@ -1137,6 +1147,9 @@ func clampAuditRetentionMonthsOnStartup() {
 	if clamped == months {
 		return
 	}
+	// 刻意无 ctx 豁免（登记表=auth_oidc_write_ctx_guard_test.go）：启动阶段
+	// 一次性钳位语境——无请求 ctx 存在；存量越界值收敛必须无条件完成
+	// （写侧范围校验只护新写），失败已 error 留痕且下轮启动重试。
 	if _, err := db.DB.Exec(`UPDATE global_config SET audit_retention_months=? WHERE id=1`, clamped); err != nil {
 		services.Logf("error", "钳位日志保留月数失败: %v", err)
 		return

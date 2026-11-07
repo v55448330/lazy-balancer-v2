@@ -78,6 +78,8 @@ func (h *Handlers) CreateUser(c *gin.Context) {
 		return
 	}
 
+	// 刻意无 ctx 豁免（登记表=auth_oidc_write_ctx_guard_test.go）：单行 INSERT
+	// 自洽无半途态（唯一约束 409/写失败 500 已分判留痕），取消无一致性收益。
 	result, err := db.DB.Exec("INSERT INTO users (username, password_hash, role, display_name, is_enabled) VALUES (?, ?, ?, ?, 1)",
 		req.Username, string(hash), req.Role, req.DisplayName)
 	if err != nil {

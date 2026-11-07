@@ -98,7 +98,8 @@ func TestOIDCConfigSaveHandlersPassRequestContext(t *testing.T) {
 	}
 }
 
-// 刻意无 ctx 写点的登记豁免表（「登记豁免表」模式）：请求面五个文件中全部
+// 刻意无 ctx 写点的登记豁免表（「登记豁免表」模式）：请求面 handler 文件
+// 全集（12 文件，见 scanFiles）中全部
 // db.DB.Exec/Begin ctx-less 写点必须落在表内函数，且函数体必须带「刻意无 ctx
 // 豁免」标记注释（rationale 与本表互引）。三重失败面：①表外新增 ctx-less
 // 写点（文件总写点数 > 表内登记数之和）；②表内函数写点数与登记 count 不符
@@ -106,9 +107,14 @@ func TestOIDCConfigSaveHandlersPassRequestContext(t *testing.T) {
 // handlerFunctionBody 找不到签名钉住——登记必须与代码同步更新。
 func TestDeliberateCtxlessWritesAreRegistered(t *testing.T) {
 	const marker = "刻意无 ctx 豁免"
-	// 扫描集：认证/API Key/品牌播种/配置导入四个请求面 handler 文件 + OIDC
-	// 文件（后者表内零登记——其写点全部走上方消费契约，任何 ctx-less 新增即红）。
-	scanFiles := []string{"auth.go", "auth_oidc.go", "apikeys.go", "branding.go", "config_backup.go"}
+	// 扫描集：请求面 handler 文件全集（全仓 db.DB.Exec/Begin 静态文本清点
+	// 仅此 12 个非测试文件命中；count 字段=静态文本出现数，循环内写点按
+	// 出现次数计，非运行次数）+ OIDC 文件（表内零登记——其写点全部走上方
+	// 消费契约，任何 ctx-less 新增即红）。
+	scanFiles := []string{
+		"auth.go", "auth_oidc.go", "apikeys.go", "branding.go", "config_backup.go",
+		"mfa.go", "users.go", "rules.go", "certjobs.go", "certificates.go", "admintls.go", "handlers.go",
+	}
 	exemptions := []struct {
 		file  string
 		fn    string // 顶层 func 签名（改名即失效——登记与代码同步更新）
@@ -132,6 +138,44 @@ func TestDeliberateCtxlessWritesAreRegistered(t *testing.T) {
 		// importConfigBackupCore 水位收敛：auto_backup_last_run 单行 UPDATE，
 		// 恢复通道自有一致性机制。
 		{file: "config_backup.go", fn: "func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename, action string) {", count: 1},
+		// —— 以下为 mfa.go/users.go/rules.go/certjobs.go/certificates.go/
+		// admintls.go/handlers.go 的逐函数登记（与既有七函数同族口径；
+		// rationale 详见各函数体内「刻意无 ctx 豁免」注释）——
+		// MFAVerifyLogin：登录验证链两点（挑战消费删除+登录成功清零），
+		// 清零与 auth.go Login 已登记点逐字同语义。
+		{file: "mfa.go", fn: "func (h *Handlers) MFAVerifyLogin(c *gin.Context) {", count: 2},
+		// MFASetup：pending 密钥单行原子写（新密钥+失败计数清零同生共死）。
+		{file: "mfa.go", fn: "func (h *Handlers) MFASetup(c *gin.Context) {", count: 1},
+		// CreateUser：单行 INSERT，唯一约束 409 分判在位。
+		{file: "users.go", fn: "func (h *Handlers) CreateUser(c *gin.Context) {", count: 1},
+		// UpdateRule：域迁移事务开启（规则主更新已提交后的续链）+
+		// 重启用 resume 记账。
+		{file: "rules.go", fn: "func (h *Handlers) UpdateRule(c *gin.Context) {", count: 2},
+		// EnableRule：启用失败补偿恢复写 + resume 记账。
+		{file: "rules.go", fn: "func (h *Handlers) EnableRule(c *gin.Context) {", count: 2},
+		// retryCertJobByID：部署重试失败文案留痕 + CA 队列重入队任务函数。
+		{file: "certjobs.go", fn: "func (h *Handlers) retryCertJobByID(c *gin.Context, id int) {", count: 2},
+		// registerDownloadedCertJobDeploymentRetry：timer 登记失败后的文案纠偏。
+		{file: "certjobs.go", fn: "func registerDownloadedCertJobDeploymentRetry(id int, ruleID string) error {", count: 1},
+		// DeleteCertJob：删除链五写点（disable CAS/DELETE/恢复/重入队/failed 回退）。
+		{file: "certjobs.go", fn: "func (h *Handlers) DeleteCertJob(c *gin.Context) {", count: 5},
+		// CreateCertificateConfig：DNS 配置单行 INSERT。
+		{file: "certificates.go", fn: "func (h *Handlers) CreateCertificateConfig(c *gin.Context) {", count: 1},
+		// DeleteCertificateConfig：引用查询与 DELETE 分离两语句（deleteAPIKey
+		// 同族分离形态）。
+		{file: "certificates.go", fn: "func (h *Handlers) DeleteCertificateConfig(c *gin.Context) {", count: 1},
+		// UpdateAdminTLS：HTTPS 配置单行写（材料校验前置、RowsAffected 核对在位）。
+		{file: "admintls.go", fn: "func (h *Handlers) UpdateAdminTLS(c *gin.Context) {", count: 1},
+		// recordCaddyApplyResult：apply 结果横幅清除（best-effort 运维可见性记账）。
+		{file: "handlers.go", fn: "func (h *Handlers) recordCaddyApplyResult(err error) {", count: 1},
+		// persistCaddyApplyBanner：横幅持久化（best-effort，失败仅 warn）。
+		{file: "handlers.go", fn: "func persistCaddyApplyBanner(text string) {", count: 1},
+		// rollbackLeakedTx：提交失败后连接池补发 ROLLBACK——var 闭包无顶层
+		// func 签名，按 var 声明行钉名（改名即失效，登记与代码同步更新）。
+		{file: "handlers.go", fn: "var rollbackLeakedTx = func() {", count: 1},
+		// clampAuditRetentionMonthsOnStartup：启动阶段一次性钳位（无请求 ctx
+		// 存在的语境）。
+		{file: "handlers.go", fn: "func clampAuditRetentionMonthsOnStartup() {", count: 1},
 	}
 	ctxless := regexp.MustCompile(`db\.DB\.(Exec|Begin)\(`)
 	fileTotals := map[string]int{}

@@ -101,6 +101,11 @@ func (h *Handlers) MFAVerifyLogin(c *gin.Context) {
 	// 挑战绑定签发时的密码版本——签发后密码被改（自助/管理员重置），
 	// 旧挑战即使持有有效第二因子也不得换取携带新 pwd_ver 的 JWT；顺带删除。
 	if challengeVersion != passwordVersion {
+		// 刻意无 ctx 豁免（覆盖本函数两处写点；登记表=auth_oidc_write_ctx_guard_test.go
+		// TestDeliberateCtxlessWritesAreRegistered）：方向敏感的登录链写点——
+		// ①挑战消费删除（失效方向）：卫生清理 best-effort，挑战行短时效
+		// expires_at 自愈且密码版本比对已拒绝（残留不可复用），随请求中止
+		// 只会留一行过期行。
 		_, _ = db.DB.Exec("DELETE FROM mfa_challenges WHERE token=?", req.MFAToken)
 		rejectMFAChallengeLogin(c)
 		return
@@ -190,6 +195,12 @@ func (h *Handlers) MFAVerifyLogin(c *gin.Context) {
 	}
 	// 完整登录成功：清零登录失败计数与锁定（密码步未清零，见 Login 注释）。
 	// 已验证的登录不因此撤销 JWT，但清零失败必须留痕，避免旧计数无声残留。
+	// 刻意无 ctx 豁免：②登录成功清零（清零方向）——与 auth.go Login 已登记点
+	// 逐字同语义（best-effort 收尾清零）：已验证身份不因收尾被请求中止而半途；
+	// 中止清零反而保留「已锁定/有失败计数」的陈旧态压制刚验证成功的用户。
+	// 失败计数方向（断连丢证据 rationale 的载体写点）单源在 auth.go
+	// recordLoginFailure 且已在彼处登记——MFA 验证失败计数走同一函数，
+	// 断开的攻击者无法借 ctx 中止擦除计数。
 	if _, err := db.DB.Exec("UPDATE users SET login_failed_attempts=0, login_locked_until=NULL WHERE id=?", userID); err != nil {
 		services.Logf("warn", "MFA 登录成功清零登录失败计数与锁定失败: user_id=%d: %v", userID, err)
 	}
@@ -361,6 +372,9 @@ func (h *Handlers) MFASetup(c *gin.Context) {
 	// 单条 UPDATE 原子落库（新密钥 + 失败计数清零同生共死）——此前
 	// 两段写（先清后设）在首成次败时已返回 200+secret 而 pending 为空，用户
 	// 扫码后 activate 必报「没有待激活的 MFA 密钥」，且两语句间存在瞬时空窗。
+	// 刻意无 ctx 豁免（登记表=auth_oidc_write_ctx_guard_test.go）：单行原子
+	// UPDATE 自洽无半途态；写失败已三态留痕（审计+日志+500 固定文案），取消
+	// 无一致性收益——中止已校验通过的落库只会让用户重走一遍 setup 流程。
 	if _, err := db.DB.Exec("UPDATE users SET mfa_pending_secret=?, mfa_pending_fails=0 WHERE id=?", secret, userID); err != nil {
 		// DB 只读/磁盘满/WAL 长占期间用户点「启用 MFA」持续 500：只回固定文案
 		// 而无日志无审计，管理员无法区分「扫码失败」与「写库故障」。

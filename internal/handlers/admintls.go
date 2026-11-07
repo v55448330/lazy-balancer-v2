@@ -514,6 +514,10 @@ func (h *Handlers) UpdateAdminTLS(c *gin.Context) {
 		}
 	}
 
+	// 刻意无 ctx 豁免（登记表=auth_oidc_write_ctx_guard_test.go）：证书材料
+	// 校验（配对/有效期）已在写前完成，落库是校验通过的事实记录；单行
+	// UPDATE 自洽，写失败已审计+500 点名（RowsAffected 核对在位，行缺失
+	// 不报成功），取消无一致性收益。
 	res, err := db.DB.Exec(`UPDATE global_config SET admin_tls_enabled=?, admin_tls_mode=?, admin_tls_cert=?, admin_tls_key=?, updated_at=datetime('now') WHERE id=1`,
 		enabled, mode, cert, key)
 	if err != nil {
