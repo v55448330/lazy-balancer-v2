@@ -3,7 +3,7 @@ package handlers
 // 文档与写门的派生一致性（一次成形，杜绝「第 N 次扩张未跟进」）：
 //   - 门集合从 handler 源码（rejectWriteDuringImport / rejectNodeWriteDuringImport
 //     调用点，及正向 `if configImportBusy() {` 直门——certjobs/cluster_sync/
-//     taskmonitor 的重试/删除/手动同步/任务 toggle/cancel/control 六处不经
+//     taskmonitor 的重试/删除/手动同步/任务触发/toggle/cancel/control 七处不经
 //     reject* helper）与 middleware 路由注册双向派生；
 //   - 文档集合是 apidocs 的 importWindowGatedDocRoutes；
 //   - 两侧必须相等，且 OpenAPI 输出对每个受门且已登记的端点必须含
@@ -57,7 +57,7 @@ func derivedImportWindowGatedRoutes(t *testing.T) map[string]string {
 				switch node := n.(type) {
 				case *ast.IfStmt:
 					// configImportBusy 直门只认正向守卫 `if configImportBusy() {`
-					// （六处 409 fast-fail 全是此形）。反向形态
+					// （七处 409 fast-fail 全是此形）。反向形态
 					// （`!configImportBusy()`——branding 门内跳过、coordinator
 					// 探测）不是拒绝门，标记会造成文档 409 与实现不符。
 					if call, ok := node.Cond.(*ast.CallExpr); ok {

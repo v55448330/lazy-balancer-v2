@@ -3186,3 +3186,21 @@ func TestAPIDocs_certJobCooldownContractMatchesRetryGate(t *testing.T) {
 		}
 	}
 }
+
+// NTLM 兼容开关的危险组合披露必须三面同口径：创建/更新规则两个文档面
+// 与 MCP schema 都要点名「HTTPS 上游 + origin_domain」组合下连接走
+// TLS 直连通道、NTLM 长连接亲和失效且连接不回收——Agent 只看单面
+// 文档会把失效的会话保持配置上线。创建面同时禁止句号后半角空格的
+// 措辞残留回流。
+func TestAPIDocs_ntlmUpstreamCombinationDisclosureParity(t *testing.T) {
+	for _, fragment := range []string{"ntlm_compatible", "origin_domain", "TLS 直连通道", "NTLM 长连接亲和失效", "连接不回收"} {
+		for _, key := range []string{"POST /rules", "PUT /rules/:caddy_id"} {
+			if text := routesEntry(t, key).Description; !strings.Contains(text, fragment) {
+				t.Errorf("%s 描述缺 NTLM 危险组合披露 %q", key, fragment)
+			}
+		}
+	}
+	if strings.Contains(routesEntry(t, "POST /rules").Description, "。 NTLM") {
+		t.Errorf("POST /rules 描述残留句号后半角空格（。 NTLM）")
+	}
+}
