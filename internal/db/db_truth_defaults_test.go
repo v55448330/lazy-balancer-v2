@@ -144,6 +144,80 @@ func TestRunMigrationsColumnDefaults_MatchGovernedConstants(t *testing.T) {
 	}
 }
 
+// newColumnsRegistryDefaultDrift 对账登记通道治理值列：返回登记 dtype 与
+// 常量期望不符（含登记键缺失）的键清单，完全一致时返回空切片。
+func newColumnsRegistryDefaultDrift(registry, expected map[string]string) []string {
+	keys := make([]string, 0, len(expected))
+	for key := range expected {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	var drifted []string
+	for _, key := range keys {
+		got, ok := registry[key]
+		if !ok {
+			drifted = append(drifted, fmt.Sprintf("%s: 登记缺失", key))
+			continue
+		}
+		if got != expected[key] {
+			drifted = append(drifted, fmt.Sprintf("%s: 登记 %q 与常量期望 %q 不符", key, got, expected[key]))
+		}
+	}
+	return drifted
+}
+
+// 登记通道（newColumns）的治理值列字面量必须与治理常量逐键一致。
+// fresh DDL 侧由 TestFreshSchemaDefaults 钉死，双通道形状门
+// （TestNewColumnsDualRegistered_matchFreshColumnShape）把登记文本对齐
+// fresh DDL；但该门的「有意分叉」白名单（allowedNewColumnDivergence）
+// 登记即豁免——豁免键的登记字面量随即脱离常量对账，升级库补列默认值
+// 会与 fresh 库/读侧/启动回填静默分叉。本对账直读登记文本、不经白名单，
+// 堵住豁免路径；判别力以漂移/缺失/一致三探针自证（与 forbidden 通道
+// 判别力钉测同构：通道可红可绿双向实证）。
+func TestNewColumnsRegistryDefaults_matchGovernedConstants(t *testing.T) {
+	expected := map[string]string{
+		"global_config.cert_renewal_days":        "INTEGER DEFAULT " + fmt.Sprint(DefaultCertRenewalDays),
+		"global_config.cert_renewal_attempts":    "INTEGER DEFAULT " + fmt.Sprint(DefaultCertRenewalAttempts),
+		"global_config.cert_expiry_days":         "INTEGER DEFAULT " + fmt.Sprint(DefaultCertExpiryDays),
+		"global_config.task_log_size_mb":         "INTEGER DEFAULT " + fmt.Sprint(DefaultTaskLogSizeMB),
+		"global_config.audit_log_size_mb":        "INTEGER DEFAULT " + fmt.Sprint(DefaultAuditLogSizeMB),
+		"global_config.runtime_log_size_mb":      "INTEGER DEFAULT " + fmt.Sprint(DefaultRuntimeLogSizeMB),
+		"global_config.audit_retention_months":   "INTEGER DEFAULT " + fmt.Sprint(DefaultAuditRetentionMonths),
+		"global_config.caddy_log_level":          "VARCHAR(10) DEFAULT '" + DefaultCaddyLogLevel + "'",
+		"global_config.caddy_log_size_mb":        "INTEGER NOT NULL DEFAULT " + fmt.Sprint(DefaultCaddyLogSizeMB),
+		"global_config.request_body_max_size_mb": "INTEGER NOT NULL DEFAULT " + fmt.Sprint(DefaultRequestBodyMaxSizeMB),
+		"global_config.http_read_timeout":        "INTEGER NOT NULL DEFAULT " + fmt.Sprint(DefaultHTTPReadTimeout),
+		"global_config.http_write_timeout":       "INTEGER NOT NULL DEFAULT " + fmt.Sprint(DefaultHTTPWriteTimeout),
+		"global_config.http_idle_timeout":        "INTEGER NOT NULL DEFAULT " + fmt.Sprint(DefaultHTTPIdleTimeout),
+		"global_config.timezone":                 "VARCHAR(50) DEFAULT '" + DefaultTimezone + "'",
+	}
+	if drifted := newColumnsRegistryDefaultDrift(newColumnsRegistry, expected); len(drifted) > 0 {
+		t.Fatalf("newColumns 登记字面量与治理常量漂移：%s", strings.Join(drifted, "; "))
+	}
+
+	// 漂移探针：常量调整未同步登记文本的形态必须被通道命中。
+	drifted := newColumnsRegistryDefaultDrift(newColumnsRegistry, map[string]string{
+		"global_config.cert_renewal_days": "INTEGER DEFAULT 999",
+	})
+	if len(drifted) != 1 || !strings.Contains(drifted[0], "global_config.cert_renewal_days") {
+		t.Fatalf("漂移登记探针未被通道命中：%v", drifted)
+	}
+	// 缺失探针：登记键被删除的形态必须被通道命中。
+	drifted = newColumnsRegistryDefaultDrift(newColumnsRegistry, map[string]string{
+		"global_config.probe_absent_column": "INTEGER DEFAULT 1",
+	})
+	if len(drifted) != 1 || !strings.Contains(drifted[0], "global_config.probe_absent_column") {
+		t.Fatalf("登记缺失探针未被通道命中：%v", drifted)
+	}
+	// 一致探针：完全一致的登记不得误报（匹配谓词不失真）。
+	drifted = newColumnsRegistryDefaultDrift(newColumnsRegistry, map[string]string{
+		"global_config.cert_renewal_days": newColumnsRegistry["global_config.cert_renewal_days"],
+	})
+	if len(drifted) != 0 {
+		t.Fatalf("一致登记误报漂移：%v", drifted)
+	}
+}
+
 // 升级路径的 lb_rules 重建 DDL 必须与 fresh CREATE 同形
 // ——健康检查族五列曾退化为可空（health_check_timeout 默认还是陈旧的 5），
 // 重建后的库形状与新建库分叉且无后续收敛路径。断言重建后 pragma_table_info
@@ -990,6 +1064,8 @@ func TestGovernedDefaultLiteralsBoundInConsumers(t *testing.T) {
 				"db.DefaultTaskLogSizeMB", "db.DefaultRuntimeLogSizeMB",
 				"db.DefaultCertRenewalDays", "db.DefaultCertRenewalAttempts",
 				"db.DefaultCertExpiryDays",
+				"db.DefaultHTTPReadTimeout", "db.DefaultHTTPWriteTimeout",
+				"db.DefaultHTTPIdleTimeout",
 			},
 		},
 		{
