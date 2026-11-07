@@ -1279,45 +1279,15 @@ func TestGovernedDefaultLiteralsBoundInConsumers(t *testing.T) {
 		if err != nil {
 			t.Fatalf("parse %s: %v", tc.file, err)
 		}
-		var literals []string
-		var intConversions []string
-		selectors := map[string]bool{}
-		ast.Inspect(file, func(node ast.Node) bool {
-			switch n := node.(type) {
-			case *ast.BasicLit:
-				if n.Kind == token.STRING {
-					if value, err := strconv.Unquote(n.Value); err == nil {
-						literals = append(literals, value)
-					}
-				}
-			case *ast.CallExpr:
-				// int64(<字面量>)：快照/导入侧写 map 的数值默认值形态。
-				if ident, ok := n.Fun.(*ast.Ident); ok && ident.Name == "int64" && len(n.Args) == 1 {
-					if lit, ok := n.Args[0].(*ast.BasicLit); ok && lit.Kind == token.INT {
-						intConversions = append(intConversions, "int64("+lit.Value+")")
-					}
-				}
-			case *ast.SelectorExpr:
-				if x, ok := n.X.(*ast.Ident); ok {
-					selectors[x.Name+"."+n.Sel.Name] = true
-				}
-			}
-			return true
-		})
-		for _, literal := range tc.forbidden {
-			for _, lit := range literals {
-				if strings.Contains(lit, literal) {
-					t.Errorf("%s 字符串字面量仍含写死治理默认值 %q（应绑定 db.Default* 常量）", tc.file, literal)
-					break
-				}
+		literals, intConversions, selectors := governedDefaultSurface(fset, file)
+		for _, pattern := range tc.forbidden {
+			if forbiddenLiteralHit(literals, pattern) {
+				t.Errorf("%s 字符串字面量仍含写死治理默认值 %q（应绑定 db.Default* 常量）", tc.file, pattern)
 			}
 		}
 		for _, conversion := range tc.forbiddenIntConversions {
-			for _, got := range intConversions {
-				if got == conversion {
-					t.Errorf("%s 仍有写死数值默认值 %q（应绑定 db.Default* 常量）", tc.file, conversion)
-					break
-				}
+			if forbiddenIntConversionHit(intConversions, conversion) {
+				t.Errorf("%s 仍有写死数值默认值 %q（应绑定 db.Default* 常量）", tc.file, conversion)
 			}
 		}
 		for _, binding := range tc.required {
@@ -1325,5 +1295,252 @@ func TestGovernedDefaultLiteralsBoundInConsumers(t *testing.T) {
 				t.Errorf("%s 缺少治理常量选择器引用 %s", tc.file, binding)
 			}
 		}
+	}
+}
+
+// governedDefaultSurface 一次 AST 遍历收集契约表三通道判据：字符串字面量
+// （strconv.Unquote 后值）、int64(<整数字面量>) 换算形态（快照/导入侧写
+// map 的数值默认值形态）与 db.X 选择器引用。TestGovernedDefaultLiterals-
+// BoundInConsumers 与 forbidden 通道判别力钉测共用同一扫描口径。
+func governedDefaultSurface(fset *token.FileSet, file *ast.File) (literals []string, intConversions []string, selectors map[string]bool) {
+	selectors = map[string]bool{}
+	ast.Inspect(file, func(node ast.Node) bool {
+		switch n := node.(type) {
+		case *ast.BasicLit:
+			if n.Kind == token.STRING {
+				if value, err := strconv.Unquote(n.Value); err == nil {
+					literals = append(literals, value)
+				}
+			}
+		case *ast.CallExpr:
+			if ident, ok := n.Fun.(*ast.Ident); ok && ident.Name == "int64" && len(n.Args) == 1 {
+				if lit, ok := n.Args[0].(*ast.BasicLit); ok && lit.Kind == token.INT {
+					intConversions = append(intConversions, "int64("+lit.Value+")")
+				}
+			}
+		case *ast.SelectorExpr:
+			if x, ok := n.X.(*ast.Ident); ok {
+				selectors[x.Name+"."+n.Sel.Name] = true
+			}
+		}
+		return true
+	})
+	return literals, intConversions, selectors
+}
+
+// forbiddenLiteralHit 报告任一字面量是否包含 forbidden 片段（契约表
+// forbidden 字符串通道的匹配谓词，与逐条目报错一一对应）。
+func forbiddenLiteralHit(literals []string, pattern string) bool {
+	for _, lit := range literals {
+		if strings.Contains(lit, pattern) {
+			return true
+		}
+	}
+	return false
+}
+
+// forbiddenIntConversionHit 报告是否出现与 forbidden 形态完全相同的
+// int64(<整数字面量>) 换算（数值通道无子串语义，按形态精确相等判定）。
+func forbiddenIntConversionHit(intConversions []string, conversion string) bool {
+	for _, got := range intConversions {
+		if got == conversion {
+			return true
+		}
+	}
+	return false
+}
+
+// contractTableStringValues 从契约登记表（TestGovernedDefaultLiterals-
+// BoundInConsumers 的 cases 表）按字段键提取全部字符串字面量值：集合
+// 相等断言读 required，forbidden 通道判别力钉测读 forbidden 与
+// forbiddenIntConversions。登记表结构变化（字段名/载体类型）导致提取
+// 为空时显性报错，不得静默按空集合放行。
+func contractTableStringValues(t *testing.T, key string) []string {
+	t.Helper()
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "db_truth_defaults_test.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parse db_truth_defaults_test.go: %v", err)
+	}
+	var values []string
+	for _, decl := range file.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Name.Name != "TestGovernedDefaultLiteralsBoundInConsumers" {
+			continue
+		}
+		ast.Inspect(fn.Body, func(node ast.Node) bool {
+			entry, ok := node.(*ast.KeyValueExpr)
+			if !ok {
+				return true
+			}
+			ident, ok := entry.Key.(*ast.Ident)
+			if !ok || ident.Name != key {
+				return true
+			}
+			list, ok := entry.Value.(*ast.CompositeLit)
+			if !ok {
+				return true
+			}
+			for _, elt := range list.Elts {
+				literal, ok := elt.(*ast.BasicLit)
+				if !ok || literal.Kind != token.STRING {
+					continue
+				}
+				value, err := strconv.Unquote(literal.Value)
+				if err != nil {
+					t.Fatalf("契约表 %s 条目 %s 解析失败: %v", key, literal.Value, err)
+				}
+				values = append(values, value)
+			}
+			return true
+		})
+	}
+	if len(values) == 0 {
+		t.Fatalf("契约表 %s 字段提取为空——登记表结构变化后须同步本提取", key)
+	}
+	return values
+}
+
+// 治理常量契约登记的集合相等机械断言：db.go 治理常量块（块注释
+// 「库值唯一真相」锚定）与契约登记表 required 选择器集合双向相等——
+// 新增治理常量不登记即红（字面量回流防护成同族敞口），登记表出现
+// 悬空选择器（常量已删/已改名）同样红。新增治理常量必须加入锚定块
+// 并按既有条目形态补登记，两步缺一即被本用例拦下；散落到 db.go 其他
+// const 块的常量不在治理口径内，本对账不覆盖。
+func TestGovernedDefaultContractRegistrations_parityWithConstantSet(t *testing.T) {
+	governedConstants := func(tb *testing.T) map[string]struct{} {
+		tb.Helper()
+		fset := token.NewFileSet()
+		// ParseComments 必带：治理块以块注释「库值唯一真相」锚定，无注释
+		// 模式下 Doc 不挂载，锚点判据恒失守。
+		file, err := parser.ParseFile(fset, "db.go", nil, parser.ParseComments)
+		if err != nil {
+			tb.Fatalf("parse db.go: %v", err)
+		}
+		names := map[string]struct{}{}
+		found := false
+		ast.Inspect(file, func(node ast.Node) bool {
+			decl, ok := node.(*ast.GenDecl)
+			if !ok || decl.Tok != token.CONST || decl.Doc == nil ||
+				!strings.Contains(decl.Doc.Text(), "库值唯一真相") {
+				return true
+			}
+			found = true
+			for _, spec := range decl.Specs {
+				valueSpec, ok := spec.(*ast.ValueSpec)
+				if !ok {
+					continue
+				}
+				for _, name := range valueSpec.Names {
+					names[name.Name] = struct{}{}
+				}
+			}
+			return false
+		})
+		if !found {
+			tb.Fatal("db.go 治理常量块（块注释锚「库值唯一真相」）未找到——块注释改写后须同步本锚点")
+		}
+		return names
+	}
+	registeredNames := func(tb *testing.T) map[string]struct{} {
+		tb.Helper()
+		names := map[string]struct{}{}
+		for _, value := range contractTableStringValues(tb, "required") {
+			names[strings.TrimPrefix(value, "db.")] = struct{}{}
+		}
+		return names
+	}
+	parityErr := func(governed, registered map[string]struct{}) error {
+		var missing, stale []string
+		for name := range governed {
+			if _, ok := registered[name]; !ok {
+				missing = append(missing, name)
+			}
+		}
+		for name := range registered {
+			if _, ok := governed[name]; !ok {
+				stale = append(stale, name)
+			}
+		}
+		if len(missing)+len(stale) == 0 {
+			return nil
+		}
+		sort.Strings(missing)
+		sort.Strings(stale)
+		return fmt.Errorf("契约登记与治理常量全集集合不等：未登记常量 %v；悬空登记 %v", missing, stale)
+	}
+	withExtra := func(set map[string]struct{}, name string) map[string]struct{} {
+		cloned := make(map[string]struct{}, len(set)+1)
+		for key := range set {
+			cloned[key] = struct{}{}
+		}
+		cloned[name] = struct{}{}
+		return cloned
+	}
+
+	governedSet, registeredSet := governedConstants(t), registeredNames(t)
+	if err := parityErr(governedSet, registeredSet); err != nil {
+		t.Fatalf("生产契约必须对账相等: %v", err)
+	}
+
+	// 单侧注入假常量（新增治理常量未登记形态）必须红——对账不得自证。
+	if err := parityErr(withExtra(governedSet, "DefaultProbeFutureColumn"), registeredSet); err == nil {
+		t.Fatal("注入未登记假常量必须红——集合对账不得自证")
+	}
+	// 单侧注入假登记（登记表悬空条目形态）必须红。
+	if err := parityErr(governedSet, withExtra(registeredSet, "DefaultProbeRetiredColumn")); err == nil {
+		t.Fatal("注入悬空假登记必须红——集合对账不得自证")
+	}
+}
+
+// forbidden 通道判别力钉测：forbidden 模式拼错=恒假绿（模式对不中任何
+// 字面量即永不报错），通道自身必须可红可绿实证——把契约表全部 forbidden
+// 字符串片段与 int64 换算形态逐枚注入合成源文件，经与主测试同一条扫描/
+// 匹配通道（governedDefaultSurface + 两匹配谓词）实跑，逐一断言命中；
+// 再以无关片段断言不误命中（判别力=双向，通道不得恒真恒假）。本用例
+// 钉住通道机械失守（扫描节点类型/Unquote/匹配谓词被改坏）即红；片段与
+// 真实文件的对应关系无法在测试内证明（片段描述的是禁止回流形态而非现
+// 文件内容），改动既有片段仍须以临时探针（注入形态→跑主测试→还原）
+// 复核可红。
+func TestGovernedDefaultForbiddenScan_detectsInjectedShapes(t *testing.T) {
+	patterns := contractTableStringValues(t, "forbidden")
+	conversions := contractTableStringValues(t, "forbiddenIntConversions")
+
+	// 合成回归源文件：每个片段各嵌一枚字符串字面量、每个 int64 形态各一枚
+	// 换算，与真实消费文件同构地过扫描通道。
+	var literalElements, conversionElements []string
+	for _, pattern := range patterns {
+		literalElements = append(literalElements, strconv.Quote(pattern))
+	}
+	for _, conversion := range conversions {
+		inner := strings.TrimSuffix(strings.TrimPrefix(conversion, "int64("), ")")
+		if inner == conversion {
+			t.Fatalf("契约表 int64 形态 %q 不是 int64(<字面量>) 形状", conversion)
+		}
+		conversionElements = append(conversionElements, "int64("+inner+")")
+	}
+	source := "package probe\n\nvar probeLiterals = []string{" + strings.Join(literalElements, ",") + "}\n" +
+		"var probeInts = []int64{" + strings.Join(conversionElements, ",") + "}\n"
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "governed_default_probe.go", source, 0)
+	if err != nil {
+		t.Fatalf("parse 合成探针源文件: %v", err)
+	}
+	literals, intConversions, _ := governedDefaultSurface(fset, file)
+
+	for _, pattern := range patterns {
+		if !forbiddenLiteralHit(literals, pattern) {
+			t.Errorf("forbidden 片段 %q 注入合成字面量后未被扫描通道命中——通道机械失守", pattern)
+		}
+	}
+	for _, conversion := range conversions {
+		if !forbiddenIntConversionHit(intConversions, conversion) {
+			t.Errorf("int64 形态 %q 注入合成换算后未被扫描通道命中——通道机械失守", conversion)
+		}
+	}
+
+	// 反向：无关片段不得误命中。
+	if forbiddenLiteralHit(literals, "COALESCE(未登记列,0)") {
+		t.Error("无关片段命中扫描通道——匹配谓词失真")
 	}
 }
