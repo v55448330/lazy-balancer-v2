@@ -13,7 +13,7 @@ source_file="$repo_root/scripts/test-all.sh"
 
 check_race_gate_wiring() {
   local source="$1"
-  grep -F 'go test -race -count=1 ./internal/taskengine ./internal/middleware ./cmd/...' "$source" >/dev/null &&
+  grep -F 'go test -race -count=1 -p 4 ./internal/taskengine ./internal/middleware ./cmd/...' "$source" >/dev/null &&
     grep -F 'for module in wafiplist caddygeoip; do' "$source" >/dev/null &&
     grep -F '(cd "$module" && go test -race -count=1 -timeout=10m ./...)' "$source" >/dev/null &&
     grep -F 'race_listed="$(go test -list "^${prefix}" ./internal/services)"' "$source" >/dev/null &&

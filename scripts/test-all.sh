@@ -416,8 +416,10 @@ done
 # 里跑；两个模块的测试注释与设计（`wafiplist/iplistfast_hardening_test.go`、
 # `caddygeoip/auditwriter.go` 的「-race 下才是数据竞争」说明）都按存在竞态门
 # 写。两个叶子模块全包 -race 可接受，故不裁剪。
+# -p 4：与上方全量同口径的包并行度降档——默认并行下 SQLite/资源争用会把
+# taskengine 时钟敏感测试饿到超时，-race 放大争用，不降档该段会更不稳。
 echo "== go test -race (concurrency cores) =="
-go test -race -count=1 ./internal/taskengine ./internal/middleware ./cmd/...
+go test -race -count=1 -p 4 ./internal/taskengine ./internal/middleware ./cmd/...
 # -run 是手写前缀清单：用例改名后「匹配 0 个」仍以 0 退出，该门会静默空转。
 # 逐前缀断言至少匹配到一个用例（go test -list 只列出名字，不执行）。
 race_run_prefixes=(
