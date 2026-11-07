@@ -21,6 +21,10 @@ type ValueCleaner interface {
 
 // CleanUpChallenge removes the DNS-01 records owned by one challenge value.
 // Providers without value awareness fall back to name-based cleanup.
+// ⚠️ 未实现 ValueCleaner 的 provider 将退化为按名枚举清理——会删除同名并发
+// 异值挑战记录（并发同域签发保护随之失效）。当前四内置实现
+// （dnspod/tencent/aliyun/cloudflare）均已实现 ValueCleaner；新增 provider
+// 必须实现之，否则并发同域保护缺失。
 func CleanUpChallenge(ctx context.Context, provider Provider, zone, tokenFQDN, value string) error {
 	if valueCleaner, ok := provider.(ValueCleaner); ok {
 		return valueCleaner.CleanUpValue(ctx, zone, tokenFQDN, value)

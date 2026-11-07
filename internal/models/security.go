@@ -399,7 +399,8 @@ type SecurityOverview struct {
 	// NormalToday 今日正常请求 = HTTP+TCP 合计口径（HTTP 侧：规则级
 	// requests_total 累计差分 − 今日 per-rule requests_blocked 累计差分 −
 	// 今日 per-rule requests_logged 检测放行差分；TCP 侧同 NormalTodayTCP。
-	// 检测放行拆分，2026-11：拦截/检测放行/正常三列严格互斥、可加和=总差分）。
+	// HTTP 三列互斥可加和=总差分；TCP 侧 2026-11-08 用户裁定：信任检测
+	// 连接是成功代理流量计入正常列，不再与拦截/检测互斥）。
 	// 口径披露：①与安全事件表不逐一对账（含限
 	// 流 429 等差异）；②计数器随 /load/重启归零，差分已钳制（区间内样本值下
 	// 降视为重置，增量取后端样本当前值，不出现负数）；③指标历史样本不足（短
@@ -422,14 +423,14 @@ type SecurityOverview struct {
 	// 合计——NormalToday 为 HTTP+TCP 合计；字段为前端「HTTP/TCP」布局对称保留）。
 	NormalTodayHTTP int `json:"normal_today_http"`
 	// NormalTodayTCP 今日正常 TCP 连接 = lb_l4_conn_history 全局行（rule_id=''
-	// ）allowed 的今日本地日界差分减去同源 logged 差分（检测放行拆分：信任检
-	// 测 trust_detect 连接计入 allowed 的既有语义不变，单独计数后从正常列剔
-	// 除；写侧 30s 差分落库时已含 /load 归零钳制：重置后首个差分取当前值，
-	// 不出现负数；旧镜像快照缺 logged_total 键=logged 差分 0，公式退化原口径）。
+	// ）allowed 的今日本地日界差分（2026-11-08 用户裁定：信任检测 trust_detect
+	// 连接是成功代理流量，计入正常列——不再从 allowed 扣减同源 logged 差分，
+	// logged 列保留为归因明细；写侧 30s 差分落库时已含 /load 归零钳制：
+	// 重置后首个差分取当前值，不出现负数）。
 	NormalTodayTCP int `json:"normal_today_tcp"`
 	// NormalYesterday/NormalYesterdayHTTP/NormalYesterdayTCP 昨日同口径
 	// （HTTP=总请求差分−被拦差分−检测放行差分；样本不足同返回 0；
-	// TCP=allowed 日差分−logged 日差分）。
+	// TCP=allowed 日差分）。
 	NormalYesterday     int    `json:"normal_yesterday"`
 	NormalYesterdayHTTP int    `json:"normal_yesterday_http"`
 	NormalYesterdayTCP  int    `json:"normal_yesterday_tcp"`

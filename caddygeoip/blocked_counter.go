@@ -15,8 +15,9 @@ import (
 const securityBlockedMetricName = "security_blocked_total"
 
 // securityLoggedMetricName 是检测放行（logged）计数器指标名——审计行存在
-// 且事务未中断（检测命中/信任检测放行）的请求按规则计数；与 blocked 互斥
-// （先录后拦的多策略请求只计 blocked），正常请求（无审计行）不计。
+// 且事务未中断（检测命中放行）的请求按规则计数；信任检测审计行（首消息
+// id:12）不打标不计数（2026-11-08 用户裁定：信任流量=正常流量）；与 blocked
+// 互斥（先录后拦的多策略请求只计 blocked），正常请求（无审计行）不计。
 const securityLoggedMetricName = "security_logged_total"
 
 // newSecurityBlockedCounterVec 每次 Provision 新建 CounterVec 并注册——
@@ -42,7 +43,7 @@ func newSecurityLoggedCounterVec(reg *prometheus.Registry) *prometheus.CounterVe
 		prometheus.CounterOpts{
 			Namespace: "lazybalancer",
 			Name:      securityLoggedMetricName,
-			Help:      "Requests logged by the security engine (detection hits / trust detection) but allowed through.",
+			Help:      "Requests logged by the security engine (detection hits; trust detection excluded) but allowed through.",
 		},
 		[]string{"rule"},
 	))

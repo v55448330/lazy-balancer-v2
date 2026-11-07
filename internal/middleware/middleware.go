@@ -826,7 +826,7 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 	// API routes
 	v1 := r.Group("/api/v1")
 	{
-		mcpHandler := mcpserver.NewWithInternalAuth(fmt.Sprintf("http://127.0.0.1:%d/api/v1", cfg.Port), LoopbackAPIClient(), internalMCPAuthSecret)
+		mcpHandler := mcpserver.NewWithInternalAuth(fmt.Sprintf("http://127.0.0.1:%d/api/v1", cfg.Port), LoopbackAPIClient(), internalMCPAuthSecret, cfg.Version)
 		// /mcp：限流先于认证与请求体读取——未认证流量不得先花掉 1 MiB 体读
 		// 与一次密钥点查（此前该端点唯一无限流，单个 IP 可线速灌内部 API 与
 		// 审计库）。apiKeyAuth → mcpAccessGuard 的次序不变。

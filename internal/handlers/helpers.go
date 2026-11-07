@@ -1159,6 +1159,10 @@ type prometheusMetricsIndex struct {
 	// ruleMetricsByRule 是各规则全量流量指标(lb_rule_metrics 插件,
 	// 2026-09-15 用户裁定:caddy_id 直接匹配替代域名/host 匹配)。
 	ruleMetricsByRule map[string]*ruleMetricsAggregate
+	// ruleMetricsEpochSeconds 是统计起点无标签 gauge
+	// (lazybalancer_rule_metrics_epoch_seconds,Provision Unix 秒)——
+	// 0=引擎端无序列(旧镜像/嵌入降级),消费方据此隐藏统计起点显示。
+	ruleMetricsEpochSeconds int64
 }
 
 func buildPrometheusMetricsIndex(samples []prometheusSample) prometheusMetricsIndex {
@@ -1359,6 +1363,13 @@ func ruleMetricHosts(target ruleMetricTarget) map[string]struct{} {
 
 func (index *prometheusMetricsIndex) addSample(sample prometheusSample) {
 	name, value := sample.name, sample.value
+	// 统计起点 gauge（无标签）：早分支捕获，不进流量聚合桶（无标签序列
+	// 与 host/rule 聚合无交集，observeHTTP 对未知前缀本就零命中，此处
+	// 显式短路免掉一次空聚合走账）。
+	if name == "lazybalancer_rule_metrics_epoch_seconds" {
+		index.ruleMetricsEpochSeconds = int64(value)
+		return
+	}
 	var metric ruleMetricsAggregate
 	metric.observeHTTP(name, value)
 	index.global.add(&metric)

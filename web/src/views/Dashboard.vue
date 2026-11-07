@@ -310,6 +310,7 @@
                 <!-- 刷新失败但有缓存时必须明示陈旧：表格仍渲染上一次结果，与
                      新鲜的指标列混排，不提示会被误读为当前真实规则集 -->
                 <el-tag v-if="rulesUnavailable && rules.length > 0" type="warning" size="small" effect="plain" title="规则列表刷新失败，当前展示上次拉取的结果">规则列表刷新失败：展示上次结果</el-tag>
+                <el-tag v-if="ruleMetricsEpochLabel" class="epoch-tag" type="info" size="small" effect="plain" :title="METRIC_RELOAD_RESET_NOTE">{{ ruleMetricsEpochLabel }}</el-tag>
                 <el-radio-group v-model="rankBy" size="small" aria-label="规则排序方式">
                   <el-radio-button value="requests">按请求数</el-radio-button>
                   <el-radio-button value="bytes">按流量</el-radio-button>
@@ -467,7 +468,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue'
-import { formatDate, formatChartTimeInConfigTz } from '@/utils/date'
+import { formatDate, formatChartTimeInConfigTz, formatEpochStatLabel } from '@/utils/date'
 import { getStrategyLabel } from '@/utils/strategyLabels'
 import { hostPortKey } from '@/utils/upstreamKeys'
 import '@/utils/echarts' // 统一注册（副作用，全站单点）
@@ -511,6 +512,15 @@ const systemInfo = ref<SystemInfo | null>(null)
 const systemInfoUnavailable = ref(false)
 const systemMetrics = ref<SystemMetrics | null>(null)
 const caddyMetrics = ref<CaddyMetrics | null>(null)
+// ruleMetricsEpochSeconds 规则指标统计起点（/metrics/dashboard 透传，Unix 秒；
+// 0/缺失=引擎端无序列，隐藏「统计自」显示——防御旧后端）。
+const ruleMetricsEpochSeconds = ref(0)
+const ruleMetricsEpochLabel = computed(() => {
+  if (!ruleMetricsEpochSeconds.value) return ''
+  // 经 utils/date 配置时区单源入口（同卡图表轴同一钟面；同日 HH:MM、
+  // 跨日 MM-DD HH:MM）。
+  return `统计自 ${formatEpochStatLabel(ruleMetricsEpochSeconds.value, Date.now())}（上次配置重载）`
+})
 const caddyStatus = ref('unknown')
 // /caddy/status 失败显性标记（与 systemInfoUnavailable 等 8 项同构）——
 // 缺它时状态标签/配置一致性/应用失败横幅全部静默陈旧（「运行中/配置正常」
@@ -634,6 +644,8 @@ interface DashboardMetricsResponse {
   hosts: HostMetrics[]
   overview: MetricsOverview
   rules: Record<string, DashboardRuleMetrics>
+  /** 统计起点（lb_rule_metrics Provision Unix 秒）；0/缺失=引擎端无序列，隐藏统计起点显示 */
+  rule_metrics_epoch_seconds?: number
 }
 
 interface UpstreamHealth {
@@ -1004,6 +1016,7 @@ const fetchAllData = (roundSignal?: AbortSignal): Promise<void> => {
       hostMetrics.value = data.hosts
       overview.value = data.overview
       ruleMetrics.value = data.rules
+      ruleMetricsEpochSeconds.value = data.rule_metrics_epoch_seconds ?? 0
       ruleMetricsUnavailable.value = buildRuleMetricsUnavailable(rules.value, data.rules, true)
       caddyMetricsUnavailable.value = false
       hostMetricsUnavailable.value = false
@@ -1212,6 +1225,21 @@ onUnmounted(() => {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  /* 窄屏下 actions 行（警告标签+统计起点+排序+计数）放不下时整体换行，
+     而不是压缩组件造成错位；row-gap 保持换行后的行距。 */
+  flex-wrap: wrap;
+  row-gap: 8px;
+}
+
+/* 统计起点标签文字较长：禁换行禁收缩——保证与同行排序按钮/计数垂直居中
+   且不出现内部两行的错位形态；放不下时由 .card-header 的 wrap 兜底整行下移。
+   高度锁定 22px：本版 el-tag--small 渲染 20px，而同行 el-radio-button--small
+   为 22px——等高后三组件（标签/排序/计数）视觉齐平（盒中心本已对齐，
+   实测 2026-11）。 */
+.epoch-tag {
+  white-space: nowrap;
+  flex-shrink: 0;
+  height: 22px;
 }
 
 .card-header-actions {

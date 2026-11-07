@@ -1,9 +1,10 @@
 package handlers
 
 // 检测放行拆分（logged）总览公式 RED→GREEN 用例：
-// 三列严格互斥——HTTP normal = 总量差分 − 被拦差分 − 检测差分；
-// TCP normal = allowed 日窗口和 − logged 日窗口和。
-// 对账恒等式：blocked + logged + normal == 总量差分。
+// HTTP 三列严格互斥——normal = 总量差分 − 被拦差分 − 检测差分；
+// TCP normal = allowed 日窗口和（2026-11-08 用户裁定：信任检测连接计入
+// 正常列，不再扣减 logged；logged 列仅为归因明细）。
+// 对账恒等式（HTTP）：blocked + logged + normal == 总量差分。
 // logged 缺失/旧行=0 → 公式退化为既有口径（兼容，不回溯历史）。
 
 import (
@@ -85,15 +86,17 @@ func TestGetSecurityOverview_normalSubtractsLoggedHTTP(t *testing.T) {
 	}
 }
 
-// TCP：normal = allowed 日窗口和 − logged 日窗口和；旧形态（logged=0）退化原口径。
-func TestGetSecurityOverview_normalTCPSubtractsLogged(t *testing.T) {
+// TCP：normal = allowed 日窗口和（信任检测连接=成功代理流量，计入正常，
+// 2026-11-08 用户裁定：三列互斥让位于统计准确）；logged 列仅为归因明细。
+func TestGetSecurityOverview_normalTCPCountsTrustDetectAsNormal(t *testing.T) {
 	setupSecurityPolicyTestDB(t)
 	loc := services.CurrentLocation()
 	now := time.Now().In(loc)
 	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
 	ydayStart := todayStart.AddDate(0, 0, -1)
 
-	// 今日：全局行 allowed 12 + logged 5 → normal_tcp=7；昨日：allowed 34 + logged 9 → 25。
+	// 今日：全局行 allowed 12 + logged 5（信任检测形态）→ normal_tcp=12；
+	// 昨日：allowed 34 + logged 9 → 34。logged 不再从正常扣减。
 	seedL4Allowed(t, "", todayStart.Add(time.Hour), 12)
 	seedL4Logged(t, "", todayStart.Add(2*time.Hour), 5)
 	seedL4Allowed(t, "", ydayStart.Add(time.Hour), 34)
@@ -103,11 +106,11 @@ func TestGetSecurityOverview_normalTCPSubtractsLogged(t *testing.T) {
 	seedL4Logged(t, "lb_tcp_1", todayStart.Add(time.Hour), 42)
 
 	resp := fetchOverviewNewFields(t)
-	if got := *resp.Data.NormalTodayTCP; got != 7 {
-		t.Fatalf("normal_today_tcp=%d, want 7（allowed12−logged5）", got)
+	if got := *resp.Data.NormalTodayTCP; got != 12 {
+		t.Fatalf("normal_today_tcp=%d, want 12（allowed12，logged5 为信任检测明细不扣减）", got)
 	}
-	if got := *resp.Data.NormalYesterdayTCP; got != 25 {
-		t.Fatalf("normal_yesterday_tcp=%d, want 25（allowed34−logged9）", got)
+	if got := *resp.Data.NormalYesterdayTCP; got != 34 {
+		t.Fatalf("normal_yesterday_tcp=%d, want 34（allowed34，logged9 为信任检测明细不扣减）", got)
 	}
 }
 
@@ -143,6 +146,8 @@ func TestAPIDocs_overviewDisclosesLoggedSplit(t *testing.T) {
 		"检测放行",
 		"互斥",
 		"不回溯",
+		"信任名单 IP 的保留检测流量计入正常列",
+		"信任检测放行连接计入正常列",
 	} {
 		if !strings.Contains(description, phrase) {
 			t.Fatalf("apidocs 描述缺口径披露 %q", phrase)

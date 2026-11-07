@@ -88,7 +88,7 @@ func TestMCPForwardFollowsRealMux302PreservingMethodBodyAndHeaders(t *testing.T)
 	// 必须锚定生产回环客户端（middleware.LoopbackAPIClient，由 SetupRouter
 	// 注入 MCP 转发链）——用测试自注入的「跳过校验」客户端只能证明重放逻辑，
 	// 不能证明生产 TLS 行为（曾因此让自签 HTTPS 下的回环重放缺陷假绿）。
-	handler := mcpserver.NewWithInternalAuth(fmt.Sprintf("http://%s/api/v1", listener.Addr().String()), middleware.LoopbackAPIClient(), "tls-upgrade-internal-secret")
+	handler := mcpserver.NewWithInternalAuth(fmt.Sprintf("http://%s/api/v1", listener.Addr().String()), middleware.LoopbackAPIClient(), "tls-upgrade-internal-secret", "")
 
 	// When：经 MCP 信封调用 POST 工具——转发层先以 http 明文命中嗅探层 302。
 	envelope := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"issue_certificate","arguments":` + wantBody + `}}`

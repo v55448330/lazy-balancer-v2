@@ -454,3 +454,36 @@ func TestIPFileReadSetOverlongLineDoesNotPoisonList(t *testing.T) {
 		t.Fatal("名单外地址误命中（负对照）")
 	}
 }
+
+// TestIPFileHotReloadFailureRecordsZeroBaseline 热载失败基线契约钉：
+// readSet 错误路径承诺返回零值基线（mod 零值、size=-1），tryReload
+// 失败分支必须把它记入基线——否则实现与注释承诺分叉（该失败形态下 stat 兜底
+// 的判定语义失去「强制重读」锚点）。滞留场景经反证收窄：write 触发的失败必然
+// 伴随 mtime 变化，stat 兜底仍会重触发（内容变化后自愈链完整）——本钉为契约
+// 一致性而非用户可见行为修复。
+func TestIPFileHotReloadFailureRecordsZeroBaseline(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root 对 chmod 000 文件仍可读，权限形态用例仅在非 root 下可复现")
+	}
+	dir := t.TempDir()
+	file := filepath.Join(dir, "deny.txt")
+	if err := os.WriteFile(file, []byte("203.0.113.1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m := newIPFileMatcherForTest(t, file)
+	// 初载成功：基线=成功形态。
+	if got, _ := ipFileMatch(t, m, "203.0.113.1"); !got {
+		t.Fatal("setup: initial load must match")
+	}
+	if m.lastSize <= 0 {
+		t.Fatalf("setup: baseline size=%d, want >0（成功形态）", m.lastSize)
+	}
+	// 热载失败形态：移除读权限（mtime/size 不变——chmod 不改 mtime）。
+	if err := os.Chmod(file, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	m.tryReload()
+	if !m.lastMod.IsZero() || m.lastSize != -1 {
+		t.Fatalf("热载失败后基线 mod=%v size=%d, want 零值/−1（readSet 错误路径承诺形态）", m.lastMod, m.lastSize)
+	}
+}

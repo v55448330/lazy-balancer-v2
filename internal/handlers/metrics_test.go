@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"database/sql/driver"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -370,5 +371,52 @@ func TestGetMetricsOverview_unassembledServiceReturnsZeroValue(t *testing.T) {
 	}
 	if body := response.Body.String(); !strings.Contains(body, `"code":0`) || !strings.Contains(body, `"total_rules":0`) {
 		t.Fatalf("body=%s, want code=0 且零值 overview", body)
+	}
+}
+
+// Given: Caddy /metrics 暴露无标签 gauge lazybalancer_rule_metrics_epoch_seconds
+// （lb_rule_metrics 插件统计起点，Provision Unix 秒）
+// When: GET /metrics/dashboard
+// Then: payload 顶层透传 rule_metrics_epoch_seconds；引擎端缺席（旧镜像/降级）
+// 时键值=0（消费方据此隐藏统计起点显示）。
+func TestGetMetricsDashboard_passesThroughRuleMetricsEpoch(t *testing.T) {
+	newMetricsTestDatabase(t)
+	resetMetricsDashboardCacheForTest()
+	t.Cleanup(resetMetricsDashboardCacheForTest)
+	for _, tc := range []struct {
+		name   string
+		metric string
+		want   float64
+	}{
+		{"epoch present", "lazybalancer_rule_metrics_epoch_seconds 1760000000\n", 1760000000},
+		{"epoch absent", "", 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "text/plain")
+				_, _ = w.Write([]byte("caddy_http_requests_total 100\n" + tc.metric))
+			}))
+			defer server.Close()
+			h := &Handlers{cfg: &config.Config{CaddyAdminURL: server.URL, CaddyMetricsURL: server.URL + "/metrics"}, metricsService: services.NewMetricsService(server.URL, 30)}
+			gin.SetMode(gin.TestMode)
+			router := gin.New()
+			router.GET("/metrics/dashboard", h.GetMetricsDashboard)
+			resp := httptest.NewRecorder()
+			router.ServeHTTP(resp, httptest.NewRequest(http.MethodGet, "/metrics/dashboard", nil))
+			if resp.Code != http.StatusOK {
+				t.Fatalf("status=%d, want 200", resp.Code)
+			}
+			var body struct {
+				Code int            `json:"code"`
+				Data map[string]any `json:"data"`
+			}
+			if err := json.Unmarshal(resp.Body.Bytes(), &body); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			got, _ := body.Data["rule_metrics_epoch_seconds"].(float64)
+			if got != tc.want {
+				t.Fatalf("rule_metrics_epoch_seconds=%v, want %v", got, tc.want)
+			}
+		})
 	}
 }

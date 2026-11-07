@@ -457,6 +457,35 @@ func auditTimingClose(id string) {
 	e.mu.Unlock()
 }
 
+// trustDetectRuleID 信任保留检测专属规则 id（buildTrustDetectDirectives
+// id:12 的本模块镜像；事件统计排除口径的安全事件侧单源在 services
+// trustDetectRuleIDString——两侧数值必须一致，禁止复写字面量）。
+const trustDetectRuleID = 12
+
+// auditLogIsTrustDetectLine 判定审计行是否来自信任保留检测事务（唯一命中
+// 规则=id:12）。取首消息与事件摄取侧 RuleTriggered 同源（securityevents
+// doc.Messages[0].Data.ID）；空消息/typed-nil Data 返回 false（不打标排除，
+// 维持既有计数）。主链引擎 id:12 为 nolog 且信任 IP 不进主链——生产审计行
+// 以 id:12 开头 ⟺ 信任保留检测事务，判定与发射面严格互补。
+func auditLogIsTrustDetectLine(al plugintypes.AuditLog) bool {
+	if al == nil {
+		return false
+	}
+	msgs := al.Messages()
+	if len(msgs) == 0 {
+		return false
+	}
+	m := msgs[0]
+	if isNilInterface(m) {
+		return false
+	}
+	data := m.Data()
+	if isNilInterface(data) {
+		return false
+	}
+	return data.ID() == trustDetectRuleID
+}
+
 // auditTimingLogged 读该请求的 logged 干预标记（检测放行拆分）。读点=
 // blocked_counter post-next——审计写插件（lbAuditWriter.Write）在 coraza
 // defer ProcessLogging 中打标，严格先于本读取（coraza handler 返回后才轮到
@@ -2497,12 +2526,20 @@ func (w *lbAuditWriter) Write(al plugintypes.AuditLog) error {
 		tid = securityTimingIDFromHeaders(headers)
 		// logged 干预标记（检测放行拆分）：审计写侧天然知道事务终态——
 		// 审计行存在 ⟺ 命中规则带 log/auditlog（coraza log 蕴含 auditlog、
-		// nolog 蕴含 noauditlog），行未中断（含 DetectionOnly 伪中断）=「安全
-		// 层记录了干预但放行」。O(1) 打标进计时注册表（键=timing ID，条目已由
-		// 链上 timing_pre 建立，零新增驻留；多策略引擎多行同键幂等），链最外层
-		// 收点（blocked_counter post-next）终态裁决：放行且打标 → logged 计数，
-		// 拦截 → 只计 blocked——两列严格互斥。中断行不打卡（属 blocked）。
-		if tid != "" && !tx.IsInterrupted() {
+		// nolog 与 auditlog 按书写序先后生效），行未中断（含 DetectionOnly
+		// 伪中断）=「安全层记录了干预但放行」。O(1) 打标进计时注册表（键=
+		// timing ID，条目已由链上 timing_pre 建立，零新增驻留；多策略引擎
+		// 多行同键幂等），链最外层收点（blocked_counter post-next）终态裁决：
+		// 放行且打标 → logged 计数，拦截 → 只计 blocked——两列严格互斥。
+		// 中断行不打卡（属 blocked）。
+		// 信任检测审计行（首消息 id:12，与事件摄取 RuleTriggered 取
+		// Messages[0] 同源）不打标：信任 IP 流量是正常代理流量，不是安全层
+		// 干预（2026-11-08 用户裁定）——不计入 logged 计数器，正常请求差分
+		// （total−blocked−logged）将其计入正常列；安全事件管线不受影响
+		// （审计行照常入队，id:12 logged 事件由攻击面谓词排除出检测 KPI）。
+		// 主链 id:12 为 nolog 且永不匹配（信任 IP 不进主链），普通审计行
+		// 不可能以 id:12 开头——该判定与生产发射面严格互补。
+		if tid != "" && !tx.IsInterrupted() && !auditLogIsTrustDetectLine(al) {
 			auditTimingRecord(tid, timingSegmentLogged, 0)
 		}
 	}

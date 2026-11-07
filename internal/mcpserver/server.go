@@ -461,18 +461,22 @@ var previewConfigSchema = updateConfigSchema
 // Test 后缀：旧名 New 看起来像生产入口，无编译期约束阻止误用；缺内部头时
 // 接收端不采信客户端 IP 头（真实兜底仍在），但误接入生产会丢掉审计源 IP。
 func NewForTest(baseURL string, client *http.Client) http.Handler {
-	return NewWithInternalAuth(baseURL, client, "")
+	return NewWithInternalAuth(baseURL, client, "", "")
 }
 
-func NewWithInternalAuth(baseURL string, client *http.Client, internalAuthSecret string) http.Handler {
-	return newWithVisibilityResolver(baseURL, client, internalAuthSecret, resolveAPIKeyVisibility)
+func NewWithInternalAuth(baseURL string, client *http.Client, internalAuthSecret string, version string) http.Handler {
+	return newWithVisibilityResolver(baseURL, client, internalAuthSecret, resolveAPIKeyVisibility, version)
 }
 
-func newWithVisibilityResolver(baseURL string, client *http.Client, internalAuthSecret string, resolver visibilityResolver) http.Handler {
+func newWithVisibilityResolver(baseURL string, client *http.Client, internalAuthSecret string, resolver visibilityResolver, version string) http.Handler {
 	if client == nil {
 		client = &http.Client{Timeout: 60 * time.Second}
 	}
-	mcpServer := server.NewMCPServer("Lazy Balancer V2", "1.0.0", server.WithToolCapabilities(false), server.WithInstructions(serverInstructions))
+	if version == "" {
+		// 版本缺省回退：未传参时不谎报具体版本。
+		version = "unknown"
+	}
+	mcpServer := server.NewMCPServer("Lazy Balancer V2", version, server.WithToolCapabilities(false), server.WithInstructions(serverInstructions))
 	mcpServer.AddResource(
 		mcp.NewResource(opsPlaybookURI, "ops-playbook", mcp.WithResourceDescription("Lazy Balancer V2 MCP 完整操作手册（接入/权限范围/工作流/排障/纪律/性能建议）"), mcp.WithMIMEType("text/markdown")),
 		func(context.Context, mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {

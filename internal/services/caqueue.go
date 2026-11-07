@@ -1566,6 +1566,12 @@ func (q *caQueue) refreshProviderLocked() bool {
 // 「在途判定→状态迁移→入队」串行：若另一 provider（含退役队列/zombie）已经
 // 接管则跳过；若接管在复核后到达，则旧失败先落定，新尝试随后从 failed 重新入队。
 func (m *CAQueueManager) failPendingProviderUnavailable(items []queueItem, message string) {
+	// 锁纪律例外（有意违背 no-IO-under-m.mu，勿按 EnqueueIfActive 先例顺手拆锁）：
+	// 判定（isJobActiveLocked/queuedJobStillExists 复核）与 failJob 落定必须在
+	// 同一临界区——拆锁后 decision→unlock 窗口内并发 EnqueueIfActive 可把同
+	// job 从 failed→queued（改派另一仍启用 provider），随后旧 failJob 的
+	// transitionJob CAS 仍命中并杀掉合法新尝试。代价=排空窗口内规则删除/禁用
+	// 快路径在本锁上排队（触发面窄：provider 禁用/删除且积压排空）。
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, item := range items {

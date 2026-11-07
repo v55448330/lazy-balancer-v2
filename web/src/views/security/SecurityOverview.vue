@@ -51,7 +51,7 @@
             <div class="strip-label">
               拦截
               <el-tooltip :content="todayCountTip" placement="top">
-                <el-icon class="stat-box__tip"><InfoFilled /></el-icon>
+                <el-icon><InfoFilled /></el-icon>
               </el-tooltip>
             </div>
             <div class="strip-value is-danger">{{ fmtStatNum(overview.today_blocked) }}</div>
@@ -74,7 +74,11 @@
           </div>
           <div class="strip-divider"></div>
           <div class="guard-item">
-            <div class="strip-label">正常请求</div>
+            <div class="strip-label">正常请求
+              <el-tooltip content="成功代理的流量：HTTP=总请求−拦截−检测放行；TCP=全部放行连接（含信任名单 IP 的保留检测流量，计入正常列）" placement="top">
+                <el-icon><InfoFilled /></el-icon>
+              </el-tooltip>
+            </div>
             <div class="strip-value">{{ fmtStatNum(overview.normal_today) }}</div>
             <div v-if="normalYesterday !== null" class="strip-sub"><span class="strip-sub-label">昨日</span> {{ fmtStatNum(normalYesterday) }}</div>
             <!-- 字段缺失（旧后端）整行隐藏 -->

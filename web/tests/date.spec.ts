@@ -177,3 +177,16 @@ test('非法配置时区：回退 DEFAULT_TZ 且只 warn 一次（不刷屏、�
     g.__tz = 'Asia/Shanghai'
   }
 })
+
+// 统计起点标签（仪表盘规则卡「统计自 …」，epoch Unix 秒入参）：经 tzFormatter
+// 配置时区单源渲染；同日 HH:MM、跨日 MM-DD HH:MM（长期不重载时判定是哪一天）。
+// 同卡图表轴 formatChartTimeInConfigTz 同一钟面——跨时区管理员不得出现两个钟面。
+test('formatEpochStatLabel：同日 HH:MM、跨日 MM-DD HH:MM（Asia/Shanghai 固定钟）', () => {
+  // 2026-11-08 10:30 UTC = 18:30 Asia/Shanghai
+  const epoch = Math.floor(Date.UTC(2026, 10, 8, 10, 30, 0) / 1000)
+  const sameDayNow = Date.UTC(2026, 10, 8, 12, 0, 0)
+  assert.equal(date.formatEpochStatLabel(epoch, sameDayNow), '18:30')
+  // 跨日（昨日重载、今天查看）：MM-DD HH:MM
+  const nextDayNow = Date.UTC(2026, 10, 9, 2, 0, 0)
+  assert.equal(date.formatEpochStatLabel(epoch, nextDayNow), '11-08 18:30')
+})

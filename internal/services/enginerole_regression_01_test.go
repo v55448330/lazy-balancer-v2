@@ -103,9 +103,9 @@ func TestPromote_lifecycleStartsOnlyThroughEngine(t *testing.T) {
 	}
 
 	// Then：StartACME 只能由 cert-issuance daemon 调一次，不得再有直调旁路。
-	// 固定 Sleep(100ms) 换成条件等待 + 短窗稳定性断言（高负载下
-	// 固定窗口既可能提前（flaky 假绿）也可能空等）。
-	waitForCond(t, 2*time.Second, func() bool { return probe.acmeStarts.Load() == 1 })
+	// 条件窗 5s（全量套件并发下 goroutine 调度延迟可超 2s，实测 audit133
+	// 发布门禁全量跑间歇红而包级/单跑恒绿）+ 短窗稳定性断言。
+	waitForCond(t, 5*time.Second, func() bool { return probe.acmeStarts.Load() == 1 })
 	assertCounterStable(t, &probe.acmeStarts, 1, 100*time.Millisecond)
 }
 
@@ -128,7 +128,7 @@ func TestBecomeSlave_lifecycleStartsOnlyThroughEngine(t *testing.T) {
 
 	// Then：StartSync 只能由 cluster-sync daemon 的新代调用一次
 	// 条件等待替代固定 Sleep，再短窗确认无迟到的第二次直调）。
-	waitForCond(t, 2*time.Second, func() bool { return probe.syncStarts.Load() == 1 })
+	waitForCond(t, 5*time.Second, func() bool { return probe.syncStarts.Load() == 1 })
 	assertCounterStable(t, &probe.syncStarts, 1, 100*time.Millisecond)
 }
 
@@ -150,9 +150,9 @@ func TestPromote_preservesClusterSyncStopped(t *testing.T) {
 	_, database := newClusterTestService(t)
 	probe := &roleLifecycleProbe{}
 	te := wireClusterLifecycleEngineForTest(t, probe, false)
-	waitForCond(t, 2*time.Second, func() bool { return probe.syncStarts.Load() == 1 })
+	waitForCond(t, 5*time.Second, func() bool { return probe.syncStarts.Load() == 1 })
 	te.StopLoop("cluster-sync")
-	waitForCond(t, 2*time.Second, func() bool {
+	waitForCond(t, 5*time.Second, func() bool {
 		for _, meta := range te.DescribeAll() {
 			if meta.ID == "cluster-sync" && !meta.Running {
 				return true
@@ -185,9 +185,9 @@ func TestPromote_failurePreservesClusterSyncStopped(t *testing.T) {
 	_, database := newClusterTestService(t)
 	probe := &roleLifecycleProbe{}
 	te := wireClusterLifecycleEngineForTest(t, probe, false)
-	waitForCond(t, 2*time.Second, func() bool { return probe.syncStarts.Load() == 1 })
+	waitForCond(t, 5*time.Second, func() bool { return probe.syncStarts.Load() == 1 })
 	te.StopLoop("cluster-sync")
-	waitForCond(t, 2*time.Second, func() bool {
+	waitForCond(t, 5*time.Second, func() bool {
 		for _, meta := range te.DescribeAll() {
 			if meta.ID == "cluster-sync" && !meta.Running {
 				return true

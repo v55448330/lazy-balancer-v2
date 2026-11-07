@@ -114,3 +114,21 @@ export const formatChartTimeInConfigTz = (ms: number): string => {
   const get = (type: string) => parts.find((p) => p.type === type)?.value ?? ''
   return `${get('hour')}:${get('minute')}:${get('second')}`
 }
+
+// 统计起点标签（仪表盘规则卡「统计自 …」）：epoch Unix 秒按配置时区渲染。
+// 同一时刻与配置时区「今天」同日 → HH:MM；跨日 → MM-DD HH:MM（长期不重载
+// 时避免「统计自 14:32」无法判定是哪一天）。经 tzFormatter 受保护入口，
+// 与同卡图表轴同一时区口径（跨时区管理员不得出现两个钟面）。
+export const formatEpochStatLabel = (unixSeconds: number, nowMs: number): string => {
+  const d = new Date(unixSeconds * 1000)
+  const fmt = tzFormatter(true)
+  const parts = (date: Date) => {
+    const p = fmt.formatToParts(date)
+    const get = (type: string) => p.find((x) => x.type === type)?.value ?? ''
+    return { year: get('year'), month: get('month'), day: get('day'), hour: get('hour'), minute: get('minute') }
+  }
+  const t = parts(d)
+  const now = parts(new Date(nowMs))
+  const hm = `${t.hour}:${t.minute}`
+  return t.year === now.year && t.month === now.month && t.day === now.day ? hm : `${t.month}-${t.day} ${hm}`
+}

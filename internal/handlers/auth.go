@@ -299,6 +299,12 @@ func loginExpireMinutes() int {
 // 用于构造「签发失败」分支（验证失败路径不推进 last_login）。
 var jwtJTIReader = rand.Read
 
+// updateUserPasswordRaceHook 自助改密并发注入缝（生产恒 nil，仅测试替换）：
+// 在「当前密码确认读之后、写事务 BEGIN 之前」调用。DSN _txlock=immediate
+// 使事务内写窗口归零，该间隙是残余竞态的唯一入口——测试用它把 password_version
+// 并发抬升，驱动 UPDATE 乐观守卫的 409 分支（auth_password_race_test.go）。
+var updateUserPasswordRaceHook func()
+
 // lastLoginTouchFailing 登录成功记账的连续失败状态：首条失败升级为 error 级
 // 留痕（持久故障可见），后续失败降回 warn，成功后复位——登录热路径不得刷屏
 // （单源 services.LogEscalation）。
@@ -583,6 +589,9 @@ func (h *Handlers) UpdateCurrentUser(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 		return
 	}
+	// currentPasswordVersion 函数级：确认读载入，事务 UPDATE 的乐观并发守卫
+	// WHERE 消费（检测确认读与事务之间的并发密码写，见 rowsAffected 409 分支）。
+	var currentPasswordVersion int64
 	if req.Password != "" {
 		// 2026-09 用户裁定：改密是登录后唯一需要密码确认的例外操作；失败仅
 		// 401 不计数不锁定（全系统唯一锁定在登录阶段，5 次/10 分钟受开关控制）。
@@ -591,7 +600,7 @@ func (h *Handlers) UpdateCurrentUser(c *gin.Context) {
 			return
 		}
 		var currentHash string
-		if err := db.DB.QueryRow("SELECT password_hash FROM users WHERE id=?", userIDInt).Scan(&currentHash); err != nil {
+		if err := db.DB.QueryRow("SELECT password_hash, password_version FROM users WHERE id=?", userIDInt).Scan(&currentHash, &currentPasswordVersion); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				c.JSON(http.StatusUnauthorized, models.APIResponse{Code: 401, Message: "用户不存在或已禁用"})
 				return
@@ -602,6 +611,14 @@ func (h *Handlers) UpdateCurrentUser(c *gin.Context) {
 		if bcrypt.CompareHashAndPassword([]byte(currentHash), []byte(req.CurrentPassword)) != nil {
 			c.JSON(http.StatusUnauthorized, models.APIResponse{Code: 401, Message: "当前密码错误"})
 			return
+		}
+		// 乐观并发守卫注入点（测试缝，生产恒 nil）：确认读之后、写事务
+		// BEGIN 之前——DSN _txlock=immediate 使事务内写窗口归零，确认读与
+		// 事务之间的间隙是残余竞态的唯一入口（并发管理员重置在此落库时，
+		// 旧实现仍以旧 hash 验证通过并覆盖写）。UPDATE 侧以 password_version
+		// 乐观守卫拒绝（见下方 rowsAffected 分支）。
+		if updateUserPasswordRaceHook != nil {
+			updateUserPasswordRaceHook()
 		}
 	}
 	var passwordHash string
@@ -662,9 +679,26 @@ func (h *Handlers) UpdateCurrentUser(c *gin.Context) {
 	}
 	if len(sets) > 0 {
 		args = append(args, userIDInt)
-		if _, err := tx.ExecContext(c.Request.Context(), "UPDATE users SET "+strings.Join(sets, ", ")+" WHERE id = ?", args...); err != nil {
+		guard := " AND password_version = ?"
+		// 密码分支乐观并发守卫：确认读与事务之间若发生并发密码写
+		// （管理员重置/他人改密），password_version 已被抬升——WHERE 不命中
+		// → 0 行 → 409 拒绝，不得以旧确认语义覆盖新密码。非密码写（仅昵称）
+		// 无此竞态面，不加守卫保持既有语义。
+		if passwordHash != "" {
+			args = append(args, currentPasswordVersion)
+		} else {
+			guard = ""
+		}
+		res, err := tx.ExecContext(c.Request.Context(), "UPDATE users SET "+strings.Join(sets, ", ")+" WHERE id = ?"+guard, args...)
+		if err != nil {
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "更新用户失败"})
 			return
+		}
+		if passwordHash != "" {
+			if affected, err := res.RowsAffected(); err == nil && affected == 0 {
+				c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "密码已被其他操作修改，请重新确认当前密码后再试"})
+				return
+			}
 		}
 	}
 	if passwordHash != "" {

@@ -30,7 +30,8 @@ func IsL4ConnEndpointMissing(err error) bool {
 
 // L4TrafficRuleCounters 是单条 TCP 规则的连接计数快照（caddy l4sec 模块
 // l4ConnStatsPayload 形状；logged_total 为 2026-11 检测放行拆分附加键，
-// 旧镜像快照缺键解码为 0——logged 差分恒 0，normal 公式退化原口径）。
+// 旧镜像快照缺键解码为 0——2026-11-08 起读侧 normal=allowed 全额（信任检测
+// 连接计入正常列），logged 列仅为归因明细，不再参与扣减）。
 type L4TrafficRuleCounters struct {
 	AllowedTotal uint64            `json:"allowed_total"`
 	DeniedTotal  uint64            `json:"denied_total"`

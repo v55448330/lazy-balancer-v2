@@ -22,8 +22,9 @@ import (
 type ruleConnCounters struct {
 	allowed atomic.Uint64
 	denied  atomic.Uint64
-	// logged 是检测放行连接计数（trust_detect 形态）——allowed 的子集：
-	// 消费侧 normal = allowed − logged（检测放行拆分，与 HTTP 同构）。
+	// logged 是检测放行连接计数（trust_detect 形态）——allowed 的子集，
+	// 归因明细列：2026-11-08 用户裁定读侧 normal = allowed 全额（信任检测
+	// 连接计入正常列），不再扣减本列。
 	logged atomic.Uint64
 
 	mu        sync.Mutex

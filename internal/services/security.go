@@ -227,7 +227,8 @@ func crsPoolFingerprint() string {
 // crsFingerprint：批量生成方按链计算一次并透传，避免逐 (规则×策略) 对重复
 // 执行 DB 查询+stat（审计）；空串回退自算。multiPolicy
 // 预检存在时策略层 IP ACL 链式自排除本策略信任集。blockStatus：拦截页按触发
-// 策略归因的合成中断码（481+，securityPolicyContext.policySynthetic 按策略
+// 策略归因的合成中断码（483+，blockPageSyntheticBase 起，
+// securityPolicyContext.policySynthetic 按策略
 // 身份分配）；>0 时段内全部 deny 显式抬码（IP ACL/GeoIP/自定义规则/CRS
 // 949110），0 时逐字节保持现状（403 或缺省，单策略/无页路径回归形状）。
 // stage0DetectionTrust（第 7 参，可选变参）：发射面 flag 与内容二合一——变参

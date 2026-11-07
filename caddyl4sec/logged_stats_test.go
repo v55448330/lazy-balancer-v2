@@ -10,7 +10,8 @@ import (
 
 // 检测放行拆分（logged）TCP 对称 RED→GREEN 用例：
 // trust_detect（logged）连接除计入 allowed 外，必须单独计入 logged 计数；
-// normal = allowed − logged 的减法在消费侧完成（与 HTTP 同构），本模块只
+// logged 列为归因明细（2026-11-08 用户裁定：读侧 normal = allowed 全额，
+// 信任检测连接计入正常列，消费侧不再扣减 logged），本模块只
 // 保证三件事：①logged 全量计数 ②不改变 allowed/denied 既有语义 ③
 // 契约 C3 端点快照携带 logged_total 键（附加键，向后兼容：旧消费端零感知）。
 

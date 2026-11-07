@@ -3,6 +3,7 @@ package caddygeoip
 import (
 	"errors"
 	"net/http"
+	"time"
 
 	"github.com/caddyserver/caddy/v2"
 	"github.com/caddyserver/caddy/v2/modules/caddyhttp"
@@ -19,6 +20,7 @@ import (
 //	lazybalancer_request_status_total{rule,class} — 2xx/3xx/4xx/5xx 分类
 //	lazybalancer_bytes_total{rule,direction}  — 入站(in)/出站(out)字节
 //	lazybalancer_requests_in_flight{rule}     — 在途连接(gauge)
+//	lazybalancer_rule_metrics_epoch_seconds   — 统计起点(上次 /load Unix 秒,无标签)
 //
 // 稳定设计:仅 Caddy 稳定公开 API(ResponseRecorder/HandlerError——v2 长期
 // 稳定);Provision 幂等注册(caddy-l4 registerOrExisting 同模式);零失败模式。
@@ -30,6 +32,10 @@ type RuleMetricsHandler struct {
 	statusTotal      *prometheus.CounterVec
 	bytesTotal       *prometheus.CounterVec
 	requestsInFlight *prometheus.GaugeVec
+	// epochSeconds 统计起点锚点：每次 Provision（=每次 /load 渲染本实例）
+	// 置当前 Unix 秒。计数器随 /load 归零，本 gauge 告知消费方「这些数字从
+	// 何时起算」——仪表盘规则页显示「统计自 HH:MM（上次配置重载）」。
+	epochSeconds prometheus.Gauge
 
 	// 预解析标签句柄（Provision 期一次性 WithLabelValues）：Rule 是渲染期
 	// 静态值，每请求 6 次 vec map 查找（读锁+哈希）是纯浪费——热路径只对
@@ -80,6 +86,13 @@ func (h *RuleMetricsHandler) Provision(ctx caddy.Context) error {
 		Namespace: "lazybalancer", Name: "requests_in_flight",
 		Help: "In-flight requests per load balancer rule.",
 	}, []string{"rule"}))
+	// 统计起点 gauge（无标签，全实例共享单序列；reload 经 registerOrExisting
+	// 复用同一 collector，Set 覆盖不累加）。
+	h.epochSeconds = registerOrExisting(reg, prometheus.NewGauge(prometheus.GaugeOpts{
+		Namespace: "lazybalancer", Name: "rule_metrics_epoch_seconds",
+		Help: "Rule metrics collection epoch (Unix seconds when the current config was loaded).",
+	}))
+	h.epochSeconds.Set(float64(time.Now().Unix()))
 	// 预解析本实例的全部标签句柄——同一 vec 重复 Provision（注册复用路径）
 	// 重建句柄指向同一下层序列，安全。
 	h.reqCounter = h.requestsTotal.WithLabelValues(h.Rule)

@@ -219,10 +219,14 @@ func (m *L4IPFileMatcher) statCompare() {
 }
 
 // tryReload 重读文件并交换快照：失败保留旧快照（fail-stale）+ 节流告警。
+// 失败分支把基线复位为 readSet 的零值形态（mod 零值、size=-1）——与注释
+// 承诺的自愈语义一致：chmod 修复权限不改 mtime/size，若保留失败前基线，
+// 后续 stat 兜底恒判「未变」而不再重读（名单滞留旧快照直至内容变化）。
 func (m *L4IPFileMatcher) tryReload() {
 	set, mod, size, err := m.readSet()
 	if err != nil {
 		m.logThrottled("reload", err)
+		m.lastMod, m.lastSize = mod, size
 		return
 	}
 	m.lastMod, m.lastSize = mod, size

@@ -207,7 +207,8 @@ func (h *L4SecHandler) Handle(cx *layer4.Connection, next layer4.Handler) error 
 		// 信任检测（logged）：事件行 is_interrupted=false（摄取侧 action=logged，
 		// 仅记录不拦截）；连接到达上游=正常流量口径计 allowed（与 HTTP 信任检测
 		// 请求计入流量统计一致），denied 不动；另按检测放行拆分单独计入 logged
-		// （allowed 的子集，消费侧 normal = allowed − logged）；透传后续 handler
+		// （归因明细；2026-11-08 用户裁定：读侧 normal = allowed 全额，信任检测
+		// 连接计入正常列，不再扣减 logged）；透传后续 handler
 		// （渲染侧 proxy）。
 		h.counters.logged.Add(1)
 		line := buildL4EventLine(segID, msg, h.ruleID, ip, time.Now(), l4EventNonce(), false)

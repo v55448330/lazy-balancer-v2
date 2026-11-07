@@ -503,7 +503,7 @@ func initMetricsSchema(db *sql.DB) error {
 		allowed INTEGER DEFAULT 0,
 		denied INTEGER DEFAULT 0,
 		-- 检测放行（logged）连接差分增量：L4 trust_detect 形态单独计数
-		-- （allowed 的子集，读侧 normal_tcp = allowed − logged）。
+		-- （归因明细；2026-11-08 起读侧 normal_tcp = allowed 全额，不再扣减）。
 		logged INTEGER DEFAULT 0
 	);
 

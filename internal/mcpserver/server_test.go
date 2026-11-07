@@ -190,7 +190,7 @@ func TestToolsListHidesWriteTools_forReadOnlyAPIKey(t *testing.T) {
 	resolver := func(apiKey string) (apiKeyVisibility, error) {
 		return apiKeyVisibility{readOnly: apiKey == "lb_sk_read-only"}, nil
 	}
-	handler := newWithVisibilityResolver("http://127.0.0.1/api/v1", http.DefaultClient, "", resolver)
+	handler := newWithVisibilityResolver("http://127.0.0.1/api/v1", http.DefaultClient, "", resolver, "")
 	body := `{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}`
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/mcp", strings.NewReader(body))
 	request.Header.Set("Content-Type", "application/json")
@@ -261,7 +261,7 @@ func TestToolsListBatchRequestRejectedByProtocol(t *testing.T) {
 	resolver := func(apiKey string) (apiKeyVisibility, error) {
 		return apiKeyVisibility{readOnly: true}, nil
 	}
-	handler := newWithVisibilityResolver("http://127.0.0.1/api/v1", http.DefaultClient, "", resolver)
+	handler := newWithVisibilityResolver("http://127.0.0.1/api/v1", http.DefaultClient, "", resolver, "")
 
 	// Given：JSON-RPC 批处理数组（两条 tools/list）。
 	body := `[{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}},{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}]`
@@ -1262,7 +1262,7 @@ func TestToolsListHidesForbiddenToolsForNonAdminKey(t *testing.T) {
 
 	// When：非管理员全权 Key
 	nonAdmin := newWithVisibilityResolver("http://127.0.0.1/api/v1", http.DefaultClient, "",
-		func(string) (apiKeyVisibility, error) { return apiKeyVisibility{}, nil })
+		func(string) (apiKeyVisibility, error) { return apiKeyVisibility{}, nil }, "")
 	names := requestToolNames(t, nonAdmin, "lb_sk_non-admin")
 
 	// Then：恒 403 工具不可见
@@ -1285,7 +1285,7 @@ func TestToolsListHidesForbiddenToolsForNonAdminKey(t *testing.T) {
 
 	// When：管理员全权 Key
 	admin := newWithVisibilityResolver("http://127.0.0.1/api/v1", http.DefaultClient, "",
-		func(string) (apiKeyVisibility, error) { return apiKeyVisibility{admin: true}, nil })
+		func(string) (apiKeyVisibility, error) { return apiKeyVisibility{admin: true}, nil }, "")
 	adminNames := requestToolNames(t, admin, "lb_sk_admin")
 
 	// Then：管理员全量可见
@@ -1307,7 +1307,7 @@ func TestToolsListHidesReadOnlyForbiddenGets(t *testing.T) {
 
 	// admin 属主的只读 Key（read_only）——export_config/get_caddy_config 都必须消失
 	adminReadOnly := newWithVisibilityResolver("http://127.0.0.1/api/v1", http.DefaultClient, "",
-		func(string) (apiKeyVisibility, error) { return apiKeyVisibility{admin: true, readOnly: true}, nil })
+		func(string) (apiKeyVisibility, error) { return apiKeyVisibility{admin: true, readOnly: true}, nil }, "")
 	names := requestToolNames(t, adminReadOnly, "lb_sk_admin-read-only")
 	for _, hidden := range ReadOnlyHiddenToolNamesForTest() {
 		if names[hidden] {
@@ -1340,7 +1340,7 @@ func TestToolsListFailsClosedWhenVisibilityResolutionFails(t *testing.T) {
 	handler := newWithVisibilityResolver("http://127.0.0.1/api/v1", http.DefaultClient, "",
 		func(string) (apiKeyVisibility, error) {
 			return apiKeyVisibility{}, fmt.Errorf("解析 Key 属主失败")
-		})
+		}, "")
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/mcp",
 		strings.NewReader(`{"jsonrpc":"2.0","id":42,"method":"tools/list","params":{}}`))
 	request.Header.Set("Content-Type", "application/json")

@@ -626,35 +626,23 @@ func securityOverviewNormalRuleSumRange(database *sql.DB, from, to time.Time) (i
 	return sum, nil
 }
 
-// clampedNonNegative 差分口径的负值钳零：被拦差分极端大于总请求差分
-// （限流 429 等口径差异形态）时正常请求数不出负数（口径见 apidocs 披露）。
-func clampedNonNegative(v int) int {
-	if v < 0 {
-		return 0
-	}
-	return v
-}
-
 // securityOverviewNormalTCPDiff 正常 TCP 连接差分：lb_l4_conn_history 全局
-// 行（rule_id=”）allowed 的日窗口求和减去 logged（检测放行拆分，2026-11——
-// trust_detect 连接计入 allowed 的既有语义不变，单独计数后从正常列剔除，
-// 三列互斥与 HTTP 同构；旧镜像快照缺 logged_total 键=差分 0，公式退化原
-// 口径）。写侧差分落库时已含重置钳制，读侧直接求和；per-rule 行只做归因
-// 明细，不参与全局求和。
+// 行（rule_id=”）allowed 的日窗口求和。2026-11-08 用户裁定：信任检测连接
+// （logged 键形态，trust_detect 专属）是成功代理流量，计入正常列——不再
+// 从 allowed 扣减；logged 列保留为归因明细（检测放行拆分可见性），写侧
+// 语义不变。写侧差分落库时已含重置钳制，读侧直接求和；per-rule 行只做
+// 归因明细，不参与全局求和。
 func securityOverviewNormalTCPDiff(database *sql.DB, ydayStart, todayStart time.Time) (today, yesterday int, err error) {
 	layout := securityOverviewEventTimeLayout
-	var loggedToday, loggedYesterday int
-	if err := database.QueryRow(`SELECT COALESCE(SUM(allowed),0), COALESCE(SUM(logged),0) FROM lb_l4_conn_history
-		WHERE rule_id='' AND timestamp >= ?`, todayStart.UTC().Format(layout)).Scan(&today, &loggedToday); err != nil {
+	if err := database.QueryRow(`SELECT COALESCE(SUM(allowed),0) FROM lb_l4_conn_history
+		WHERE rule_id='' AND timestamp >= ?`, todayStart.UTC().Format(layout)).Scan(&today); err != nil {
 		return 0, 0, err
 	}
-	if err := database.QueryRow(`SELECT COALESCE(SUM(allowed),0), COALESCE(SUM(logged),0) FROM lb_l4_conn_history
+	if err := database.QueryRow(`SELECT COALESCE(SUM(allowed),0) FROM lb_l4_conn_history
 		WHERE rule_id='' AND timestamp >= ? AND timestamp < ?`,
-		ydayStart.UTC().Format(layout), todayStart.UTC().Format(layout)).Scan(&yesterday, &loggedYesterday); err != nil {
+		ydayStart.UTC().Format(layout), todayStart.UTC().Format(layout)).Scan(&yesterday); err != nil {
 		return 0, 0, err
 	}
-	today = clampedNonNegative(today - loggedToday)
-	yesterday = clampedNonNegative(yesterday - loggedYesterday)
 	return today, yesterday, nil
 }
 

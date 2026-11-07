@@ -4457,8 +4457,8 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig, sec
 	// （GeoIP 已迁入预检 800000+ 段；ACL 并集与策略引擎 id:2/4 幂等重复无害——
 	// 预检先拦，引擎内不再命中；信任 IP 在预检 DetectionOnly 后到策略引擎按
 	// 现状记录）。预检仍是 coraza 拒绝：audit log 留痕供安全事件管线归因；
-	// 规则配了阶段 1 拦截页时全部 deny 抬码 481（stage1BlockStatus），否则
-	// 403 → errors 路由 → 拦截页。
+	// 规则配了阶段 1 拦截页时全部 deny 抬码逐策略合成码（483+，
+	// blockPageSyntheticBase；481/482 已退役），否则 403 → errors 路由 → 拦截页。
 	// 阶段 0 信任名单（2026-11-04 用户裁定，推翻 2026-09-20 原语义）：信任 IP
 	// 不再进入任何安全阶段。两种形态统一为「安全段（预检/压缩/请求体限额/
 	// 限流/全部 WAF 引擎）整体包进 not-client_ip subroute」：

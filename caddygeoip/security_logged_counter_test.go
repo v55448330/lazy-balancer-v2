@@ -302,6 +302,56 @@ func TestSecurityBlockedCounter_timingIDFailureSkipsLogged(t *testing.T) {
 	}
 }
 
+// trustDetectWAFForTest 构造信任保留检测最小引擎（与 buildTrustDetectDirectives
+// 同构：仅 id:12，pass,nolog,auditlog + DetectionOnly ctl——命中即放行并产审计行）。
+func trustDetectWAFForTest(t *testing.T, logPath string) coraza.WAF {
+	t.Helper()
+	waf, err := coraza.NewWAF(coraza.NewWAFConfig().WithDirectives(strings.Join([]string{
+		"SecRuleEngine On",
+		"SecRequestBodyAccess Off",
+		"SecAuditEngine RelevantOnly",
+		"SecAuditLog " + logPath,
+		"SecAuditLogFormat JSON",
+		"SecAuditLogType lbfile",
+		"SecAuditLogParts ABIJDEFHKZ",
+		"SecRule REMOTE_ADDR \"@ipMatch 203.0.113.7\" \"id:12,phase:1,pass,nolog,auditlog,ctl:ruleEngine=DetectionOnly\"",
+	}, "\n")))
+	if err != nil {
+		t.Fatalf("NewWAF(trust detect): %v", err)
+	}
+	return waf
+}
+
+// Given: 信任保留检测事务（仅 id:12 审计行，放行）——信任 IP 流量是正常代理
+// 流量（2026-11-08 用户裁定），不是「安全层干预」
+// When: 请求穿过 blocked_counter 组合链（真实写插件打标路径）
+// Then: logged 计数 +0（id:12 审计行打标排除）、blocked +0；普通检测引擎的
+// 审计行仍照常计 logged（回归形状由 detectionHitCountedAsLogged 钉住）
+func TestSecurityLoggedChain_trustDetectAuditLineNotCountedAsLogged(t *testing.T) {
+	useTestTimingRegistry(t)
+	useTestAuditPipeline(t)
+	closeTestAuditPipelines(t)
+	dir := t.TempDir()
+	waf := trustDetectWAFForTest(t, dir+"/audit.log")
+	blockedVec, loggedVec := newTestLoggedCounterPair(t)
+	h := &SecurityBlockedCounter{Rule: "lb_trust_e2e", metrics: blockedVec, loggedMetrics: loggedVec}
+	next := caddyhttp.HandlerFunc(func(_ http.ResponseWriter, req *http.Request) error {
+		req.RemoteAddr = "203.0.113.7"
+		runCorazaWAFStep(t, waf, req) // id:12 命中：审计行为 logged 形态、放行无中断
+		return nil
+	})
+	if err := h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/probe", nil),
+		withProbeHeader(next)); err != nil {
+		t.Fatalf("ServeHTTP: %v", err)
+	}
+	if got := testutil.ToFloat64(loggedVec.WithLabelValues("lb_trust_e2e")); got != 0 {
+		t.Fatalf("logged counter=%v, want 0（信任检测审计行不计检测列——信任流量=正常流量）", got)
+	}
+	if got := testutil.ToFloat64(blockedVec.WithLabelValues("lb_trust_e2e")); got != 0 {
+		t.Fatalf("blocked counter=%v, want 0", got)
+	}
+}
+
 // —— 测试小夹具 ——
 
 func withProbeHeader(next caddyhttp.HandlerFunc) caddyhttp.HandlerFunc {

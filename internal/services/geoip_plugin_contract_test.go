@@ -15,7 +15,9 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"testing"
 )
@@ -225,5 +227,26 @@ func TestGeoIPPluginControlHeaders_areStrippedFromUpstream(t *testing.T) {
 		if len(header) > 5 && header[:5] == "X-LB-" && !declared[header] && !renderOwnedHeaders[header] {
 			t.Errorf("反向代理 delete 清单里的 %s 在 caddygeoip 中找不到同源声明（拼写漂移或已退役未清理）", header)
 		}
+	}
+}
+
+// TestGeoIPPluginTrustDetectRuleID_matchesServices：信任检测专属规则 id 的
+// 跨模块契约钉——caddygeoip 的打标排除判据（auditLogIsTrustDetectLine 取
+// Messages[0].Data().ID()==trustDetectRuleID）与安全事件侧排除口径单源
+// （services trustDetectRuleIDString）必须同值。两侧独立 module 无法 import，
+// 历史上仅靠注释声明「禁止复写字面量」——漂移会让打标排除与事件统计排除
+// 各自指向不同 id（信任流量重新计入 logged 计数器，正常列口径回退）。
+func TestGeoIPPluginTrustDetectRuleID_matchesServices(t *testing.T) {
+	src, err := os.ReadFile(filepath.Join("..", "..", "caddygeoip", "auditwriter.go"))
+	if err != nil {
+		t.Fatalf("read auditwriter.go: %v", err)
+	}
+	re := regexp.MustCompile(`const\s+trustDetectRuleID\s*=\s*(\d+)`)
+	m := re.FindSubmatch(src)
+	if m == nil {
+		t.Fatal("未找到 caddygeoip trustDetectRuleID 常量声明（可能已改名——请同步本钉与本排除判据）")
+	}
+	if string(m[1]) != trustDetectRuleIDString {
+		t.Fatalf("caddygeoip trustDetectRuleID=%s 与 services 信任检测排除口径单源=%s 不一致：打标排除与事件统计排除将各自指向不同 id", string(m[1]), trustDetectRuleIDString)
 	}
 }

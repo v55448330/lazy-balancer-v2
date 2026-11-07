@@ -388,6 +388,9 @@ func (h *Handlers) buildMetricsDashboard(ctx context.Context) metricsDashboardOu
 		"hosts":    metricsIndex.hostMetrics(),
 		"overview": h.metricsOverviewOrZero(),
 		"rules":    ruleMetrics,
+		// 统计起点（lb_rule_metrics Provision Unix 秒）：0=引擎端无序列
+		// （旧镜像/嵌入降级），前端据此隐藏「统计自 HH:MM」显示。
+		"rule_metrics_epoch_seconds": metricsIndex.ruleMetricsEpochSeconds,
 	}
 	return metricsDashboardOutcome{payload: payload}
 }

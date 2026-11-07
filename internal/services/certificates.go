@@ -1273,13 +1273,13 @@ func certJobsActive() bool {
 		// 不同，nil DB 必须静默跳过而不是触发 nil dereference。
 		return false
 	}
-	var n int
-	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM cert_jobs
+	var active int
+	if err := db.DB.QueryRow(`SELECT EXISTS(SELECT 1 FROM cert_jobs
 		WHERE status NOT IN ('issued','failed','disabled')
-		   OR (status = 'failed' AND ca_available_after IS NOT NULL)`).Scan(&n); err != nil {
+		   OR (status = 'failed' AND ca_available_after IS NOT NULL))`).Scan(&active); err != nil {
 		return true // 判定失败按有活处理——宁扫勿漏（安全网语义）
 	}
-	return n > 0
+	return active == 1
 }
 
 // CertWaitingCATickOnce CA 等待/滞留补扫（30s 节拍）。

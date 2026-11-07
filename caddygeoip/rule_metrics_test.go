@@ -94,3 +94,46 @@ func TestRuleMetricsHandler_provisionResolvesHandles(t *testing.T) {
 		t.Fatalf("reqCounter=%v, want 0 (fresh series)", got)
 	}
 }
+
+// Given: RuleMetricsHandler Provision（/load 渲染）
+// Then: 无标签 gauge lazybalancer_rule_metrics_epoch_seconds 注册且值=Provision
+// Unix 秒（>0）——仪表盘规则页「统计自 HH:MM（上次配置重载）」的锚点；同一
+// registry 重复 Provision（reload 注册复用路径）后仍为单序列（Set 覆盖不累加）。
+func TestRuleMetricsHandler_epochGaugeSetAtProvision(t *testing.T) {
+	h := &RuleMetricsHandler{Rule: "lb_epoch_pin"}
+	ctx, cancel := caddy.NewContextWithCause(caddy.Context{Context: context.Background()})
+	t.Cleanup(func() { cancel(nil) })
+	if err := h.Provision(ctx); err != nil {
+		t.Fatalf("Provision: %v", err)
+	}
+	reg := ctx.GetMetricsRegistry()
+	if reg == nil {
+		t.Fatal("test context lacks metrics registry")
+	}
+	if h.epochSeconds == nil {
+		t.Fatal("epochSeconds gauge unresolved at Provision")
+	}
+	if got := testutil.ToFloat64(h.epochSeconds); got <= 0 {
+		t.Fatalf("epoch_seconds=%v, want >0（Provision Unix 秒）", got)
+	}
+	// reload 幂等：同一 registry 重复 Provision → 仍单序列且值刷新（Set 覆盖）。
+	if err := h.Provision(ctx); err != nil {
+		t.Fatalf("re-Provision: %v", err)
+	}
+	if got := testutil.ToFloat64(h.epochSeconds); got <= 0 {
+		t.Fatalf("epoch_seconds after re-Provision=%v, want >0", got)
+	}
+	families, err := reg.Gather()
+	if err != nil {
+		t.Fatalf("Gather: %v", err)
+	}
+	series := 0
+	for _, mf := range families {
+		if mf.GetName() == "lazybalancer_rule_metrics_epoch_seconds" {
+			series += len(mf.GetMetric())
+		}
+	}
+	if series != 1 {
+		t.Fatalf("epoch gauge series=%d, want 1（reload 注册复用不重复注册）", series)
+	}
+}
