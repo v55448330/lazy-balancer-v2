@@ -327,6 +327,68 @@ func TestBuildHTTPHandleChain_forwardAuthChainHead(t *testing.T) {
 	}
 }
 
+// TestBuildHTTPHandleChain_forwardAuthStripsInternalControlHeaders：网关子请求
+// 位于 handleChain 链首、先于链首 X-LB-* set 执行，reverse_proxy 会把客户端
+// 原始请求头复制进子请求——伪造的引擎内部控制头会原样直达认证网关。子请求
+// headers.request.delete 必须剥离全部引擎内部控制头，并与上游反向代理的
+// delete 清单同值（同一单源清单的两个消费面，防第二副本漂移）。
+func TestBuildHTTPHandleChain_forwardAuthStripsInternalControlHeaders(t *testing.T) {
+	rule := forwardAuthRule()
+	chain, err := buildHTTPHandleChain(rule, rule.Upstreams)
+	if err != nil {
+		t.Fatalf("buildHTTPHandleChain: %v", err)
+	}
+	if len(chain) == 0 {
+		t.Fatal("empty handle chain")
+	}
+	extractDelete := func(face string, handler map[string]interface{}) map[string]bool {
+		t.Helper()
+		headers, ok := handler["headers"].(map[string]interface{})
+		if !ok {
+			t.Fatalf("%s headers = %#v", face, handler["headers"])
+		}
+		request, ok := headers["request"].(map[string]interface{})
+		if !ok {
+			t.Fatalf("%s headers.request = %#v", face, headers["request"])
+		}
+		del, ok := request["delete"].([]string)
+		if !ok {
+			t.Fatalf("%s headers.request.delete 必须是 []string, got %#v", face, request["delete"])
+		}
+		seen := make(map[string]bool, len(del))
+		for _, name := range del {
+			seen[name] = true
+		}
+		return seen
+	}
+	head, ok := chain[0].(map[string]interface{})
+	if !ok || head["handler"] != "reverse_proxy" {
+		t.Fatalf("chain head = %#v, want forward_auth reverse_proxy", chain[0])
+	}
+	tail, ok := chain[len(chain)-1].(map[string]interface{})
+	if !ok || tail["handler"] != "reverse_proxy" {
+		t.Fatalf("chain tail = %#v, want upstream reverse_proxy", chain[len(chain)-1])
+	}
+	subDelete := extractDelete("网关子请求", head)
+	upstreamDelete := extractDelete("上游反向代理", tail)
+	if len(subDelete) != len(upstreamDelete) {
+		t.Fatalf("网关子请求剥离清单 %v 与上游剥离清单 %v 不同值——单源契约破坏", subDelete, upstreamDelete)
+	}
+	for _, header := range lbInternalControlHeaders {
+		if !subDelete[header] {
+			t.Fatalf("网关子请求未剥离内部控制头 %s——客户端伪造值直达认证网关", header)
+		}
+		if !upstreamDelete[header] {
+			t.Fatalf("上游反向代理未剥离内部控制头 %s", header)
+		}
+		delete(subDelete, header)
+		delete(upstreamDelete, header)
+	}
+	if len(subDelete) != 0 || len(upstreamDelete) != 0 {
+		t.Fatalf("剥离清单存在单源之外条目：子请求残留 %v / 上游残留 %v", subDelete, upstreamDelete)
+	}
+}
+
 func TestBuildHTTPHandleChain_forwardAuthDisabled(t *testing.T) {
 	// 回归形状：enabled=0 链零变化（链首仍是 X-LB-Rule-ID headers）。
 	rule := baseHTTPRule()

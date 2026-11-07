@@ -118,9 +118,13 @@ func buildForwardAuthHandler(rule SingleRuleConfig) (map[string]interface{}, err
 			"uri":    uri,
 		},
 		// 原始方法与 URI 在改写前捕获回传网关（网关按原始资源判定）；
-		// 其余 X-Forwarded-* 由 reverse_proxy 自带。
+		// 其余 X-Forwarded-* 由 reverse_proxy 自带。delete 剥离引擎内部控制头
+		// （单源清单 lbInternalControlHeaders）：子请求先于链首 X-LB-* set
+		// 执行，原始请求头会被复制进子请求，客户端伪造的内部控制头必须在此
+		// 剥离，不得直达认证网关（与上游反向代理 delete 面同源）。
 		"headers": map[string]interface{}{
 			"request": map[string]interface{}{
+				"delete": lbInternalControlHeaders,
 				"set": map[string]interface{}{
 					"X-Forwarded-Method": []string{"{http.request.method}"},
 					"X-Forwarded-Uri":    []string{"{http.request.uri}"},

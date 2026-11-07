@@ -4324,6 +4324,38 @@ var geoipPrivateRanges = []string{
 	"fe80::/10",              // IPv6 链路本地
 }
 
+// lbInternalControlHeaders 引擎内部控制头剥离清单（渲染单源）。这些头由引擎
+// 内部机制注入、只在本规则处理链内消费，出链即剥离——客户端伪造的同名值既
+// 不能直达认证网关，也不能透传上游后端。两个消费面共用本清单：
+// ①反向代理请求头 delete（上游面，proxyRequestHeaders）；②认证网关子请求的
+// headers.request.delete（buildForwardAuthHandler——子请求位于 handleChain
+// 链首、先于链首 X-LB-* set 执行，reverse_proxy 会把原始请求头复制进子请求，
+// 无 delete 清单时伪造控制头直达网关）。新增内部控制头时只改本清单，两消费
+// 面自动同步。头名清单与 caddygeoip/handler.go 的 geoipCorazaHeaders 同源，
+// 字面量同步由 geoip_plugin_contract_test.go 机械对账（跨模块，插件是独立
+// module）。
+var lbInternalControlHeaders = []string{
+	// X-LB-GeoIP-*：caddygeoip→coraza 的进程内控制头（coraza 在消费点之前
+	// 执行，已消费完毕）。无条件剥离：geoip 关闭的规则（handler 不在场）下
+	// 客户端伪造的同名头同样不得外泄。
+	"X-LB-GeoIP-Country", "X-LB-GeoIP-Country-Code", "X-LB-GeoIP-Region",
+	"X-LB-GeoIP-Province", "X-LB-GeoIP-City", "X-LB-GeoIP-Loc",
+	// X-LB-Rule-ID / X-LB-Protocol：链首注入的归因/协议改判头，仅供 coraza
+	// 事务内消费（链首 set 覆盖客户端伪造值）。
+	"X-LB-Rule-ID",
+	"X-LB-Protocol",
+	// 爬虫验证控制头：caddygeoip 在 coraza phase:1 之前注入、coraza 预检规则
+	// 已消费；无 GeoIP 策略的规则下同样无条件剥离。常量名与
+	// caddygeoip/handler.go 的 crawlerVerifiedHeader/crawlerSpoofHeader 同源。
+	"X-LB-Crawler-Verified", "X-LB-Crawler-Spoof",
+	// 安全处理耗时关联头（v2.3.3）：blocked_counter 注入，coraza 审计
+	// 日志收录后由审计写插件作进程内计时注册表关联键（耗时随
+	// 审计行内嵌 lb_timing 流转）——coraza 之后链路不再需要,与
+	// X-LB-Rule-ID 同机制剥离,不上泄上游。
+	"X-Lb-Security-Timing-Id",
+	"X-Lb-Security-Timing-Start-Ns",
+}
+
 func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig, securityCtx ...*securityPolicyContext) ([]interface{}, error) {
 	var ctx *securityPolicyContext
 	if len(securityCtx) > 0 {
@@ -4861,31 +4893,11 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig, sec
 		}
 		proxyConfig["transport"] = transportConfig
 	}
-	// X-LB-GeoIP-* 是 caddygeoip→coraza 的进程内控制头（coraza 在本 handler 之前
-	// 执行，已消费完毕），绝不允许透传上游后端。无条件剥离：geoip 关闭的规则
-	// 同时防客户端伪造同名头直达后端。头名清单与 caddygeoip/handler.go 的
-	// geoipCorazaHeaders(caddygeoip/handler.go) 同源，变更需双侧同步。X-LB-Rule-ID / X-LB-Protocol 同型：
-	// 链首注入的归因/协议改判头仅供 coraza 事务内消费，同口径无条件剥离。
-	// 爬虫验证控制头（X-LB-Crawler-Verified / X-LB-Crawler-Spoof）
-	// 同样由 caddygeoip 在 coraza phase:1 之前注入、coraza 预检规则已消费；
-	// 与 geoip 头同口径**无条件**剥离——无 GeoIP 策略的规则（handler 不在场）
-	// 下客户端伪造的同名头也绝不能直达上游。常量名与 caddygeoip/handler.go
-	// 的 crawlerVerifiedHeader/crawlerSpoofHeader 同源，字面量同步由
-	// geoip_plugin_contract_test.go 机械对账（跨模块，插件是独立 module）。
+	// 上游面消费点：无条件剥离引擎内部控制头（单源清单 lbInternalControlHeaders）
+	// ——客户端伪造值/引擎残留值均不得透传上游后端。认证网关子请求的 delete 面
+	// 与本清单同源（buildForwardAuthHandler）。
 	proxyRequestHeaders := map[string]interface{}{
-		"delete": []string{
-			"X-LB-GeoIP-Country", "X-LB-GeoIP-Country-Code", "X-LB-GeoIP-Region",
-			"X-LB-GeoIP-Province", "X-LB-GeoIP-City", "X-LB-GeoIP-Loc",
-			"X-LB-Rule-ID",
-			"X-LB-Protocol",
-			"X-LB-Crawler-Verified", "X-LB-Crawler-Spoof",
-			// 安全处理耗时关联头（v2.3.3）：blocked_counter 注入，coraza 审计
-			// 日志收录后由审计写插件作进程内计时注册表关联键（耗时随
-			// 审计行内嵌 lb_timing 流转）——coraza 之后链路不再需要,与
-			// X-LB-Rule-ID 同机制剥离,不上泄上游。
-			"X-Lb-Security-Timing-Id",
-			"X-Lb-Security-Timing-Start-Ns",
-		},
+		"delete": lbInternalControlHeaders,
 	}
 	// 回源域名在场时 Host 头改走 map 占位符（defaults 已烘焙 host_header/透传
 	// 回退链）；否则维持静态 host_header 或透传现状。

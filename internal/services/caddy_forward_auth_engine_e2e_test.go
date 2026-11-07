@@ -28,6 +28,10 @@ func TestForwardAuthEngineEndToEnd(t *testing.T) {
 	backendHits := 0
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		backendHits++
+		// 引擎级剥离实证（上游面）：内部控制头不得透传上游后端。
+		if leaked := leakedInternalControlHeaders(r); len(leaked) > 0 {
+			t.Errorf("backend received internal control headers: %v", leaked)
+		}
 		w.Header().Set("X-Backend-Seen-User", r.Header.Get("Remote-User"))
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("backend-ok"))
@@ -41,6 +45,11 @@ func TestForwardAuthEngineEndToEnd(t *testing.T) {
 		}
 		if r.Header.Get("X-Forwarded-Method") == "" || r.Header.Get("X-Forwarded-Uri") == "" {
 			t.Errorf("gateway missing X-Forwarded-Method/Uri headers")
+		}
+		// 引擎级剥离实证（网关子请求面）：子请求先于链首 X-LB-* set 执行，
+		// 客户端伪造的内部控制头必须被子请求 headers.request.delete 剥离。
+		if leaked := leakedInternalControlHeaders(r); len(leaked) > 0 {
+			t.Errorf("gateway received forged internal control headers: %v", leaked)
 		}
 		if gatewayMode == "deny" {
 			w.WriteHeader(http.StatusUnauthorized)
@@ -61,12 +70,22 @@ func TestForwardAuthEngineEndToEnd(t *testing.T) {
 	// 字节，渲染归一若不先 TrimSpace 再 canonical 化，占位符键携带空白恒 miss
 	//（认证放行但后端收不到身份头，静默）。
 	rule.ForwardAuthCopyHeaders = " remote-user "
-	handler, err := buildForwardAuthHandler(rule)
+	// 被测路由用真实渲染链（与生产同一产物）：链首网关子请求 + 链尾上游反向
+	// 代理（headers.request.delete 上游面）——网关子请求面与上游面的剥离行为
+	// 在真实引擎上同链实证，手工拼链无法覆盖链尾 delete。
+	backendHost, backendPortStr, err := net.SplitHostPort(trimSchemeHostPort(backend.URL))
 	if err != nil {
-		t.Fatalf("buildForwardAuthHandler: %v", err)
+		t.Fatalf("split backend addr: %v", err)
 	}
-	backendUpstreams := []interface{}{map[string]interface{}{"dial": trimSchemeHostPort(backend.URL)}}
-	proxyHandler := map[string]interface{}{"handler": "reverse_proxy", "upstreams": backendUpstreams}
+	backendPort, err := strconv.Atoi(backendPortStr)
+	if err != nil {
+		t.Fatalf("backend port: %v", err)
+	}
+	rule.Upstreams = []UpstreamConfig{{Host: backendHost, Port: backendPort, Weight: 1, Protocol: "http", Enabled: true}}
+	chain, err := buildHTTPHandleChain(rule, rule.Upstreams)
+	if err != nil {
+		t.Fatalf("buildHTTPHandleChain: %v", err)
+	}
 
 	// 独立监听端口承载被测路由（host matcher 省略——listener 全量匹配）。
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -84,7 +103,7 @@ func TestForwardAuthEngineEndToEnd(t *testing.T) {
 					"srv0": map[string]interface{}{
 						"listen": []string{"127.0.0.1:" + strconv.Itoa(port)},
 						"routes": []interface{}{map[string]interface{}{
-							"handle": []interface{}{handler, proxyHandler},
+							"handle": chain,
 						}},
 					},
 				},
@@ -121,10 +140,23 @@ func TestForwardAuthEngineEndToEnd(t *testing.T) {
 	}()
 
 	base := "http://127.0.0.1:" + strconv.Itoa(port)
+	// 客户端请求携带全套伪造内部控制头（值可辨识）：真实引擎上断言网关子请求
+	// 面与上游后端面都不收到——渲染钉测钉清单在位，本用例钉真实剥离行为。
+	doForged := func(path string) (*http.Response, error) {
+		req, err := http.NewRequest(http.MethodGet, base+path, nil)
+		if err != nil {
+			return nil, err
+		}
+		for _, header := range lbInternalControlHeaders {
+			req.Header.Set(header, "forged-by-client")
+		}
+		return client.Do(req)
+	}
+
 	waitForListener(t, base)
 
 	t.Run("2xx 注入身份头", func(t *testing.T) {
-		resp, err := client.Get(base + "/app/path?q=1")
+		resp, err := doForged("/app/path?q=1")
 		if err != nil {
 			t.Fatalf("request: %v", err)
 		}
@@ -137,7 +169,7 @@ func TestForwardAuthEngineEndToEnd(t *testing.T) {
 	t.Run("401 原样透传", func(t *testing.T) {
 		gatewayMode = "deny"
 		hitsBefore := backendHits
-		resp, err := client.Get(base + "/denied")
+		resp, err := doForged("/denied")
 		if err != nil {
 			t.Fatalf("request: %v", err)
 		}
@@ -161,6 +193,19 @@ func trimSchemeHostPort(rawURL string) string {
 		}
 	}
 	return rawURL
+}
+
+// leakedInternalControlHeaders 返回请求中出现的引擎内部控制头（引擎级 E2E
+// 剥离断言共用）：客户端伪造值在网关子请求面与上游后端面都必须被 delete
+// 清单剥离，任一面出现即泄漏。
+func leakedInternalControlHeaders(r *http.Request) []string {
+	var leaked []string
+	for _, header := range lbInternalControlHeaders {
+		if r.Header.Get(header) != "" {
+			leaked = append(leaked, header)
+		}
+	}
+	return leaked
 }
 
 func waitForListener(t *testing.T, base string) {
