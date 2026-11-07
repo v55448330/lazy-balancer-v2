@@ -4199,10 +4199,14 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 	// DuplicateRule 必须经过与 CreateRule 一致的校验。
 	enabledUpstreamCount := 0
 	upstreamHosts := make([]string, 0, len(rule.Upstreams))
+	upstreamProtocols := make([]string, 0, len(rule.Upstreams))
+	upstreamOriginDomains := make([]string, 0, len(rule.Upstreams))
 	for _, u := range rule.Upstreams {
 		if u.Enabled {
 			enabledUpstreamCount++
 			upstreamHosts = append(upstreamHosts, u.Host)
+			upstreamProtocols = append(upstreamProtocols, u.Protocol)
+			upstreamOriginDomains = append(upstreamOriginDomains, u.OriginDomain)
 		}
 	}
 	// 认证网关四件套与 duplicateRulePayloadRequest 同一归一（legacy 空值
@@ -4216,8 +4220,13 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 		// 补 5 字段——80 自环门与地址族门在复制
 		// 路径此前因零值恒不触发(注释自述「与 CreateRule 一致」未兑现)。
 		ListenPort: rule.ListenPort, EnableTLS: rule.EnableTLS, TLSHTTPRedirect: rule.TLSHTTPRedirect,
-		EnabledUpstreamHosts: upstreamHosts, DnsFamily: rule.DnsFamily,
-		HealthCheckInterval: rule.HealthCheckInterval, HealthCheckTimeout: rule.HealthCheckTimeout,
+		EnabledUpstreamHosts: upstreamHosts,
+		// 逐上游协议/回源域名随启用池采集——NTLM 与「HTTPS 上游 +
+		// origin_domain」组合互斥门按这两数组逐启用上游判定，缺数组即零迭代空转。
+		EnabledUpstreamProtocols:     upstreamProtocols,
+		EnabledUpstreamOriginDomains: upstreamOriginDomains,
+		DnsFamily:                    rule.DnsFamily,
+		HealthCheckInterval:          rule.HealthCheckInterval, HealthCheckTimeout: rule.HealthCheckTimeout,
 		EnableCompress: rule.EnableCompress, CompressTypes: rule.CompressTypes,
 		CustomRoutesEnabled: rule.CustomRoutesEnabled, PathRules: rule.PathRules,
 		ProxyDialTimeout: rule.ProxyDialTimeout, ProxyResponseHeaderTimeout: rule.ProxyResponseHeaderTimeout,

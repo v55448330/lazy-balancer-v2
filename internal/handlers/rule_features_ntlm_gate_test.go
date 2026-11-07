@@ -1,8 +1,14 @@
 package handlers
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/gin-gonic/gin"
+
+	"lazy-balancer-v2/internal/db"
 )
 
 // NTLM 兼容与「HTTPS 上游 + origin_domain」组合互斥（保存门）：
@@ -70,5 +76,49 @@ func TestValidateV2BackupRules_ntlmComboRejectedOnImport(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "NTLM 兼容不支持") {
 		t.Fatalf("导入错误文案应点名 NTLM 兼容互斥: %v", err)
+	}
+}
+
+// 复制链同门：源行 ntlm_compatible=1（接管四列齐）且启用上游为
+// https+origin_domain 时，复制必须 400 点名源规则。复制链把源行投影为
+// ruleFeatureInput 时若缺逐上游协议/回源域名两数组，组合门零迭代空转，
+// 组合源行被原样放大为副本（旁路 Create/Update/导入三链同门）。
+func TestDuplicateRule_ntlmComboSourceRejected(t *testing.T) {
+	handler := newRuleFeatureTestHandlers(t)
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.POST("/rules/:caddy_id/duplicate", handler.DuplicateRule)
+
+	// 直改 DB 造存量源行（复制只读存量）：NTLM 接管四列齐的合法形态 +
+	// 单个启用 https 上游携带 origin_domain。
+	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,description,protocol,domain,listen_port,strategy,enabled,enable_compress,
+		ntlm_compatible,upstream_force_http1,tcp_try_duration,proxy_flush_interval,upstream_keepalive_timeout)
+		VALUES ('lb_dupntlmcombo','dup-ntlm-combo','','http','dup-ntlm.test',18810,'cookie',0,1,
+		1,1,-1,-1,300)`); err != nil {
+		t.Fatalf("seed rule: %v", err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO upstreams (rule_id,host,port,weight,enabled,protocol,origin_domain)
+		VALUES ('lb_dupntlmcombo','mail.example.com',443,1,1,'https','origin.example.com')`); err != nil {
+		t.Fatalf("seed upstream: %v", err)
+	}
+
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/rules/lb_dupntlmcombo/duplicate", nil))
+
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("NTLM+HTTPS 上游+origin_domain 源行复制必须 400, got %d body=%s", response.Code, response.Body.String())
+	}
+	body := response.Body.String()
+	if !strings.Contains(body, "源规则配置不合法") || !strings.Contains(body, "NTLM 兼容不支持") {
+		t.Fatalf("响应应点名互斥原因: %s", body)
+	}
+
+	// 被拒源行不得产生副本。
+	var copies int
+	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM lb_rules WHERE caddy_id LIKE 'lb_dupntlmcombo%' AND caddy_id != 'lb_dupntlmcombo'`).Scan(&copies); err != nil {
+		t.Fatalf("count copies: %v", err)
+	}
+	if copies != 0 {
+		t.Fatalf("拒绝的源行不得产生副本, got %d", copies)
 	}
 }

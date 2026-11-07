@@ -11,15 +11,21 @@ import (
 )
 
 // createRuleFeatures 与 updateRuleFeatures 是同一 ruleFeatureInput 的两条投影
-// （创建用请求值，编辑用存量基线 + 指针覆盖）。新增规则字段时若只改一侧，
-// Create 落 schema 默认、Update 沿用存量，形成「新建与编辑终态不同」的静默
-// 分叉且单侧测试不会变红。本门禁分别识别基线复合字面量键与指针覆盖赋值，
-// 既对账两侧完整投影，也对账 UpdateRuleRequest 中所有 ruleFeatureInput 指针字段。
+// （创建用请求值，编辑用存量基线 + 指针覆盖），DuplicateRule 是第三条投影
+// （复制用存量源行，rules.go 内联字面量）。新增规则字段时若只改一侧，
+// Create 落 schema 默认、Update 沿用存量、复制链对应门零值恒不触发，形成
+// 「新建与编辑与复制终态不同」的静默分叉且单侧测试不会变红。本门禁分别识别
+// 基线复合字面量键与指针覆盖赋值，既对账三侧完整投影，也对账
+// UpdateRuleRequest 中所有 ruleFeatureInput 指针字段。
 func TestRuleFeatureProjections_assignEveryField(t *testing.T) {
 	fset := token.NewFileSet()
 	file, err := parser.ParseFile(fset, "rule_features.go", nil, 0)
 	if err != nil {
 		t.Fatalf("parse rule_features.go: %v", err)
+	}
+	rulesFile, err := parser.ParseFile(fset, "rules.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parse rules.go: %v", err)
 	}
 	want := map[string]bool{}
 	structType := reflect.TypeOf(ruleFeatureInput{})
@@ -51,8 +57,18 @@ func TestRuleFeatureProjections_assignEveryField(t *testing.T) {
 		t.Fatal("UpdateRuleRequest 未识别到 ruleFeatureInput 指针字段（门禁失效）")
 	}
 
-	for _, fnName := range []string{"createRuleFeatures", "updateRuleFeatures"} {
-		literalFields, overrideFields := featureProjectionFields(t, file, fnName)
+	// 投影面枚举：create/update 特征投影 + 复制链 DuplicateRule 源行投影。
+	type featureProjectionSource struct {
+		fnName string
+		file   *ast.File
+	}
+	projections := []featureProjectionSource{
+		{fnName: "createRuleFeatures", file: file},
+		{fnName: "updateRuleFeatures", file: file},
+		{fnName: "DuplicateRule", file: rulesFile},
+	}
+	for _, projection := range projections {
+		literalFields, overrideFields := featureProjectionFields(t, projection.file, projection.fnName)
 		assigned := map[string]bool{}
 		for field := range literalFields {
 			assigned[field] = true
@@ -62,15 +78,15 @@ func TestRuleFeatureProjections_assignEveryField(t *testing.T) {
 		}
 		for field := range want {
 			if !assigned[field] {
-				t.Errorf("%s 未投影字段 %s（新增字段必须两侧同步）", fnName, field)
+				t.Errorf("%s 未投影字段 %s（新增字段必须三侧同步）", projection.fnName, field)
 			}
 		}
 		for field := range assigned {
 			if !want[field] {
-				t.Errorf("%s 投影了 ruleFeatureInput 不存在的字段 %s", fnName, field)
+				t.Errorf("%s 投影了 ruleFeatureInput 不存在的字段 %s", projection.fnName, field)
 			}
 		}
-		if fnName != "updateRuleFeatures" {
+		if projection.fnName != "updateRuleFeatures" {
 			continue
 		}
 		for field := range wantOverrides {
@@ -86,9 +102,9 @@ func TestRuleFeatureProjections_assignEveryField(t *testing.T) {
 	}
 	// 赋值来源对账：键名对账只证明「字段被写到」，不证明「写对了来源」——
 	// 同类型字段交叉接线（ProxyReadTimeout 取 req.ProxyWriteTimeout）此前全绿。
-	for _, fnName := range []string{"createRuleFeatures", "updateRuleFeatures"} {
-		for _, problem := range literalRHSFieldCrossWires(t, file, fnName, "ruleFeatureInput", want) {
-			t.Errorf("%s 字段来源交叉接线: %s（键与 RHS 引用的同族字段不一致）", fnName, problem)
+	for _, projection := range projections {
+		for _, problem := range literalRHSFieldCrossWires(t, projection.file, projection.fnName, "ruleFeatureInput", want) {
+			t.Errorf("%s 字段来源交叉接线: %s（键与 RHS 引用的同族字段不一致）", projection.fnName, problem)
 		}
 	}
 	for _, problem := range overrideRHSFieldCrossWires(t, file, "updateRuleFeatures", "input", want) {
