@@ -1163,6 +1163,114 @@ func TestGovernedDefaultLiteralsBoundInConsumers(t *testing.T) {
 				"db.DefaultTCPTryInterval",
 			},
 		},
+		{
+			// GetConfig 读侧的 request_body_max_size_mb/威胁大屏两列/安全事件
+			// 保留两列 COALESCE 绑定参数与保存写侧的保留/行数上限校验边界
+			// 同源：面板展示与保存校验各持字面量副本时，常量调整后静默分叉。
+			file: "../handlers/caddy.go",
+			forbidden: []string{
+				"COALESCE(request_body_max_size_mb,128)", "COALESCE(threat_screen_mode,'map')",
+				"COALESCE(threat_traffic_sample_n,-1)",
+				"COALESCE(security_events_retention_days,90)", "COALESCE(security_events_row_cap,1000000)",
+			},
+			required: []string{
+				"db.DefaultRequestBodyMaxSizeMB",
+				"db.DefaultThreatScreenMode", "db.DefaultThreatTrafficSampleN",
+				"db.DefaultSecurityEventsRetentionDays", "db.DefaultSecurityEventsRowCap",
+				"db.MaxSecurityEventsRetentionDays", "db.MaxSecurityEventsRowCap",
+			},
+		},
+		{
+			// 配置变更对比读侧（threat_screen_mode/threat_traffic_sample_n/
+			// security_events_retention_days/security_events_row_cap）与
+			// GetConfig 读侧同一组绑定参数：对比基线与面板展示持两份字面量
+			// 时，改默认值后变更检测基线静默漂移。
+			file: "../handlers/config_changes.go",
+			forbidden: []string{
+				"COALESCE(threat_screen_mode,'map')", "COALESCE(threat_traffic_sample_n,-1)",
+				"COALESCE(security_events_retention_days,90)", "COALESCE(security_events_row_cap,1000000)",
+			},
+			required: []string{
+				"db.DefaultThreatScreenMode", "db.DefaultThreatTrafficSampleN",
+				"db.DefaultSecurityEventsRetentionDays", "db.DefaultSecurityEventsRowCap",
+			},
+		},
+		{
+			// 备份导入的威胁大屏采样归一、安全事件保留/行数上限钳制与
+			// forward_auth uri/身份头清单默认回填：钳制 def/max 与回填默认
+			// 必须绑定治理常量，导入产物才与 DDL/读侧同口径。
+			file:      "../handlers/config_backup.go",
+			forbidden: []string{"/api/authz/forward-auth", "Remote-User,Remote-Groups,Remote-Email,Remote-Name"},
+			required: []string{
+				"db.DefaultThreatTrafficSampleN",
+				"db.DefaultSecurityEventsRetentionDays", "db.DefaultSecurityEventsRowCap",
+				"db.MaxSecurityEventsRetentionDays", "db.MaxSecurityEventsRowCap",
+				"db.DefaultForwardAuthURI", "db.DefaultForwardAuthCopyHeaders",
+			},
+		},
+		{
+			// 集群快照装载（users 节 COALESCE 四列）与 request_body/保留边界/
+			// 大屏采样归一函数：主端装载与从端 apply 归一的默认值持有第二份
+			// 字面量时，节哈希主从恒不等（每同步周期强制全量重放）。
+			file: "../services/cluster_snapshot.go",
+			forbidden: []string{
+				"COALESCE(request_body_max_size_mb,128)",
+				"COALESCE(threat_screen_mode,'map')", "COALESCE(threat_traffic_sample_n,-1)",
+				"COALESCE(security_events_retention_days,90)", "COALESCE(security_events_row_cap,1000000)",
+			},
+			required: []string{
+				"db.DefaultRequestBodyMaxSizeMB",
+				"db.DefaultSecurityEventsRetentionDays", "db.DefaultSecurityEventsRowCap",
+				"db.MaxSecurityEventsRetentionDays", "db.MaxSecurityEventsRowCap",
+				"db.DefaultThreatTrafficSampleN", "db.DefaultThreatScreenMode",
+			},
+		},
+		{
+			// 从端 apply 的大屏视觉模式归一（非法枚举归默认）与写侧白名单
+			// 同源；落库用占位符参数，'map' 字面量只允许以枚举白名单形态
+			// 存在于 models 校验器，不得回流为归一/写库默认。
+			file:      "../services/cluster_apply.go",
+			forbidden: []string{"COALESCE(threat_screen_mode,'map')", "threat_screen_mode='map'"},
+			required:  []string{"db.DefaultThreatScreenMode"},
+		},
+		{
+			// 安全事件保留任务的读失败/0 值兜底：包内别名必须引用治理常量，
+			// 别名另持一份数字会让保留裁剪口径与 DDL/读侧静默分叉。
+			file: "../services/securityevents_retention.go",
+			required: []string{
+				"db.DefaultSecurityEventsRetentionDays", "db.DefaultSecurityEventsRowCap",
+			},
+		},
+		{
+			// 认证网关 uri/身份头清单的传输面归一空值回填与启动回填迁移
+			// 同构：默认值持有字面量副本时，改常量后新旧规则渲染分叉。
+			file:      "../services/rule_transport_normalize.go",
+			forbidden: []string{"/api/authz/forward-auth", "Remote-User,Remote-Groups,Remote-Email,Remote-Name"},
+			required:  []string{"db.DefaultForwardAuthURI", "db.DefaultForwardAuthCopyHeaders"},
+		},
+		{
+			// 规则特征归一的 forward_auth 空值回填：与传输面归一/导入回填
+			// 同一对待常量。
+			file:      "../handlers/rule_features.go",
+			forbidden: []string{"/api/authz/forward-auth", "Remote-User,Remote-Groups,Remote-Email,Remote-Name"},
+			required:  []string{"db.DefaultForwardAuthURI", "db.DefaultForwardAuthCopyHeaders"},
+		},
+		{
+			// 导入链的 request_body_max_size_mb 归一带值回显：归一默认与
+			// 读侧 COALESCE/DDL 同源。
+			file:      "../handlers/config_import_chain.go",
+			forbidden: []string{"COALESCE(request_body_max_size_mb,128)"},
+			required:  []string{"db.DefaultRequestBodyMaxSizeMB"},
+		},
+		{
+			// MCP update_config schema 的安全事件保留/行数上限边界由 db.Max*
+			// 常量注入（与保存写侧校验同源）：schema 边界另持数字时，MCP
+			// 更新入口与面板保存入口的合法域静默分叉。
+			file: "../mcpserver/server.go",
+			required: []string{
+				"db.MaxSecurityEventsRetentionDays", "db.MaxSecurityEventsRowCap",
+			},
+		},
 	}
 	for _, tc := range cases {
 		path := filepath.FromSlash(tc.file)
