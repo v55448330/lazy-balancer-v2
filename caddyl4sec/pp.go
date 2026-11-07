@@ -144,8 +144,9 @@ func (h *L4PPHandler) Handle(cx *layer4.Connection, next layer4.Handler) error {
 	var opts []func(*proxyproto.Conn)
 	opts = append(opts, proxyproto.WithPolicy(policy))
 	// Buffer 尺寸与上游 l4proxyprotocol 同取 layer4.MaxBufLen：go-proxyproto 内部
-	// bufio 需一次吞下 cx 预取块，默认 256B 会触发流错位（后续 matcher 读到
-	// 中段数据或等不到数据超时）。
+	// bufio 需一次吞下 cx 预取块，默认 256B 会触发流错位（Wrap 后读流的下游
+	// 读到中段数据或等不到数据超时——本渲染形态下即同链后续 handler，路由
+	// matcher 均已先于此评估完毕，不会成为 Wrap 后的读方）。
 	opts = append(opts, proxyproto.WithBufferSize(layer4.MaxBufLen))
 	pconn := proxyproto.NewConn(cx, opts...)
 	// 安装手法同上游 Handle：包装连接替换 cx 的底层连接（vars/repl 等上下文
