@@ -3311,3 +3311,63 @@ func TestAPIDocs_certJobRetryCauseEnumerationParity(t *testing.T) {
 		}
 	}
 }
+
+// cert-job 行触发面与重试面同核，同一拒绝出口在两个文档面的标签必须一致
+// （以实门审计标签为准）：入队失败实门标签是 enqueue_failed、在途/queued
+// 拒绝实门标签是 in_flight——触发面的 queue_failed/running 是历史漂移标签。
+// 部署重排登记失败族的三个出口（屏障 409/队列停止 409/通用 500）重试面已
+// 登记，触发面缺口会让只看任务监控文档的客户端拿不到完整拒绝因集；引擎行
+// 单飞 409 保留独立登记（真实消息），不得因 cert-job 标签统一而丢面。
+func TestAPIDocs_certJobTriggerFace_matchesRetryCoreLabels(t *testing.T) {
+	trigger := routesEntry(t, "POST /system/tasks/:id/trigger")
+	triggerText := trigger.Description + "\x00" + strings.Join(trigger.Errors, "\x00")
+	for _, fragment := range []string{
+		"500 enqueue_failed（cert-job 入队失败）",
+		"409 in_flight（cert-job 行：任务正在签发队列中，请勿重复操作）",
+		"409 running（引擎行：任务运行中，请稍后重试）",
+		"409/500 deployment_retry_failed",
+		"409 规则证书操作被屏障阻塞（规则正在删除或更新），已登记自动部署，请稍后重试",
+		"409 部署重试未触发（证书签发队列已停止/规则状态冲突/规则屏障）；已登记自动部署，恢复后自动执行",
+		"500 触发重新部署失败；已登记自动部署，稍后自动执行",
+	} {
+		if !strings.Contains(triggerText, fragment) {
+			t.Errorf("trigger 文档缺同核标签/部署族出口 %q", fragment)
+		}
+	}
+	if strings.Contains(triggerText, "500 queue_failed（") {
+		t.Error("trigger 文档残留漂移标签 queue_failed（实门审计标签为 enqueue_failed）")
+	}
+}
+
+// PUT /rules 的证书任务在途守卫按操作分两套阻塞集：保存拦 queued/pending
+// （未起动行，放行会重复入队）；切换 manual 或关闭 TLS（脱离 ACME 自动签发）
+// 时 waiting_ca 亦拦（CA 限流冷却在途；queued/pending 维持删除+提交后取消的
+// 切换逃生口）。裸标签无括号注、notes 零触及会让调用方把 409 当成任意冲突
+// 盲目重试，两套阻塞集必须在 API 面披露。
+func TestAPIDocs_ruleUpdate_certJobActiveDisclosure(t *testing.T) {
+	entry := routesEntry(t, "PUT /rules/:caddy_id")
+	wantLabel := "409 cert_job_active（证书申请中，规则写操作被暂缓）"
+	found := false
+	for _, label := range entry.Errors {
+		if label == "409 cert_job_active" {
+			t.Error("PUT /rules 残留裸标签 409 cert_job_active（缺括号注）")
+		}
+		if label == wantLabel {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("PUT /rules 缺带括号注的 %q", wantLabel)
+	}
+	for _, fragment := range []string{
+		"409 cert_job_active",
+		"证书申请中，请等待完成或失败后再修改规则",
+		"保存拦 queued/pending",
+		"切换 manual 或关闭 TLS",
+		"waiting_ca 亦拦",
+	} {
+		if !strings.Contains(entry.Description, fragment) {
+			t.Errorf("PUT /rules notes 零触及 %q", fragment)
+		}
+	}
+}
