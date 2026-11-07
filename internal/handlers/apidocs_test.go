@@ -3249,14 +3249,37 @@ func TestAPIDocs_ruleWriteAdminReadonlyLabelParity(t *testing.T) {
 // 码枚举必须覆盖核心全部 409/500 拒绝出口——消息字面量直接从核心函数体
 // 抽取（新增出口未登记进任一面即红；英文消息按登记的中文口径片段对账），
 // 并集之外各面还要钉住自己名下的因集，单面缺口同样红。
+// 抽取归一化两族常逃逸形态：①常量写法（http.StatusConflict 等与字面量
+// 409/500 同判定）；②变量元组出口（Code: statusCode, Message: message，
+// 消息单源在 certJobRetryBlocked 与 deploymentRetryFailureResponse 两个
+// helper 函数体，须分别抽取，否则退役 409 与部署重排登记失败族整体逃逸）。
+// 并集 Contains 即「抽取集合 ⊆ 登记集合」的全出口覆盖断言。
 func TestAPIDocs_certJobRetryCauseEnumerationParity(t *testing.T) {
 	body := sourceFuncBody(t, "certjobs.go", "func (h *Handlers) retryCertJobByID")
+	cooldownBody := sourceFuncBody(t, "certjobs.go", "func certJobRetryBlocked")
+	deployBody := sourceFuncBody(t, "certjobs.go", "func deploymentRetryFailureResponse")
 	type rejection struct{ code, message string }
-	var exits []rejection
-	for _, m := range regexp.MustCompile(`Code: (409|500), Message: "([^"]+)"`).FindAllStringSubmatch(body, -1) {
-		exits = append(exits, rejection{code: m[1], message: m[2]})
+	codeAlias := map[string]string{
+		"http.StatusConflict":            "409",
+		"http.StatusInternalServerError": "500",
 	}
-	if len(exits) < 6 {
+	var exits []rejection
+	extract := func(src, pattern string) {
+		for _, m := range regexp.MustCompile(pattern).FindAllStringSubmatch(src, -1) {
+			code := m[1]
+			if alias, ok := codeAlias[code]; ok {
+				code = alias
+			}
+			exits = append(exits, rejection{code: code, message: m[2]})
+		}
+	}
+	extract(body, `Code: (409|500|http\.StatusConflict|http\.StatusInternalServerError), Message: "([^"]+)"`)
+	extract(cooldownBody, `return true, (http\.StatusConflict), "([^"]+)"`)
+	extract(deployBody, `return (http\.StatusConflict|http\.StatusInternalServerError), "([^"]+)"`)
+	for _, m := range regexp.MustCompile(`message \+ "([^"]+)"`).FindAllStringSubmatch(deployBody, -1) {
+		exits = append(exits, rejection{code: "409/500", message: m[1]})
+	}
+	if len(exits) < 12 {
 		t.Fatalf("重试核心 409/500 拒绝出口抽取异常: %v", exits)
 	}
 	trigger := routesEntry(t, "POST /system/tasks/:id/trigger")
@@ -3282,7 +3305,7 @@ func TestAPIDocs_certJobRetryCauseEnumerationParity(t *testing.T) {
 			t.Errorf("trigger 文档 cert-job 行缺拒绝因 %q", fragment)
 		}
 	}
-	for _, fragment := range []string{"409 state_changed", "409 in_flight", "500 enqueue_failed", "500 status_read_failed"} {
+	for _, fragment := range []string{"409 state_changed", "409 in_flight", "500 enqueue_failed", "500 status_read_failed", "409 import_in_progress（配置导入进行中，暂不能重试证书任务）", "409 retired_job", "409/500 deployment_retry_failed"} {
 		if !strings.Contains(retryText, fragment) {
 			t.Errorf("retry 文档缺拒绝因 %q", fragment)
 		}
