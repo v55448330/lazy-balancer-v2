@@ -222,7 +222,7 @@ func TestBumpClusterVersion_MissingGlobalConfigFails(t *testing.T) {
 	}
 }
 
-func TestReconcileBrandingFile_RestoresMissingAndCorruptFile(t *testing.T) {
+func TestReconcileBrandingFileDB_RestoresMissingAndCorruptFile(t *testing.T) {
 	_, database := newClusterTestService(t)
 	content := `{"app_name":"A","footer_text":"F","landing_text":"L","version":"1"}`
 	if _, err := database.Exec(`UPDATE global_config SET branding_json=? WHERE id=1`, content); err != nil {
@@ -231,7 +231,7 @@ func TestReconcileBrandingFile_RestoresMissingAndCorruptFile(t *testing.T) {
 	dataDir := t.TempDir()
 	path := filepath.Join(dataDir, "branding.json")
 
-	healed, err := ReconcileBrandingFile(dataDir)
+	healed, err := ReconcileBrandingFileDB(database, dataDir)
 	if err != nil {
 		t.Fatalf("reconcile missing file: %v", err)
 	}
@@ -241,13 +241,13 @@ func TestReconcileBrandingFile_RestoresMissingAndCorruptFile(t *testing.T) {
 	if raw, err := os.ReadFile(path); err != nil || string(raw) != content {
 		t.Fatalf("healed content=%q err=%v, want %q", raw, err, content)
 	}
-	if healed, err := ReconcileBrandingFile(dataDir); err != nil || healed {
+	if healed, err := ReconcileBrandingFileDB(database, dataDir); err != nil || healed {
 		t.Fatalf("consistent file must not rewrite (healed=%v err=%v)", healed, err)
 	}
 	if err := os.WriteFile(path, []byte("{corrupted"), 0o644); err != nil {
 		t.Fatalf("corrupt branding.json: %v", err)
 	}
-	if healed, err := ReconcileBrandingFile(dataDir); err != nil || !healed {
+	if healed, err := ReconcileBrandingFileDB(database, dataDir); err != nil || !healed {
 		t.Fatalf("corrupt file must be healed (healed=%v err=%v)", healed, err)
 	}
 	if raw, err := os.ReadFile(path); err != nil || string(raw) != content {

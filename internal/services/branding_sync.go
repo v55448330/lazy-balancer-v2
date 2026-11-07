@@ -193,17 +193,13 @@ func applySnapshotBranding(dataDir, content string) (bool, error) {
 	return true, nil
 }
 
-// ReconcileBrandingFile 核对本地 branding.json 与 global_config.branding_json
-// 镜像，不一致（缺失/损坏/陈旧）时按镜像重写并注入 landing——零 Caddy 重载
-// 从节点稳态 304 下 applySnapshot 不运行，品牌文件没有物化
-// 通道：文件被删除或损坏后会永久停留默认品牌，直到 users 节发生任意变更。
+// ReconcileBrandingFileDB 核对本地 branding.json 与 global_config.branding_json
+// 镜像，不一致（缺失/损坏/陈旧）时按镜像重写并注入 landing——零 Caddy 重载。
+// 从节点稳态 304 下 applySnapshot 不运行，品牌文件没有物化通道：文件被删除
+// 或损坏后会永久停留默认品牌，直到 users 节发生任意变更——集群同步周期以
+// 本函数自愈（唯一调用点 cluster_sync 同步循环）。显式库句柄形态：集群同步
+// 路径读本服务 s.db 的镜像列，与写入侧同源。
 // 返回是否发生重写；内容一致时为 false（零 mtime 扰动）。
-func ReconcileBrandingFile(dataDir string) (bool, error) {
-	return ReconcileBrandingFileDB(db.DB, dataDir)
-}
-
-// ReconcileBrandingFileDB 是 ReconcileBrandingFile 的显式库句柄形态
-// 集群同步路径读本服务 s.db 的镜像列，与写入侧同源。
 func ReconcileBrandingFileDB(database *sql.DB, dataDir string) (bool, error) {
 	if database == nil || dataDir == "" {
 		return false, nil
