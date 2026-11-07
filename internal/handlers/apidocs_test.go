@@ -3187,20 +3187,104 @@ func TestAPIDocs_certJobCooldownContractMatchesRetryGate(t *testing.T) {
 	}
 }
 
-// NTLM 兼容开关的危险组合披露必须三面同口径：创建/更新规则两个文档面
-// 与 MCP schema 都要点名「HTTPS 上游 + origin_domain」组合下连接走
-// TLS 直连通道、NTLM 长连接亲和失效且连接不回收——Agent 只看单面
-// 文档会把失效的会话保持配置上线。创建面同时禁止句号后半角空格的
-// 措辞残留回流。
+// NTLM 兼容开关的危险组合披露必须三载体同口径：创建/更新规则两个文档面、
+// MCP create/update schema 与面板向导已知限制（Rules.vue）都要点名
+// 「HTTPS 上游 + origin_domain」组合的实门语义——该组合后端将拒绝（400），
+// 连接代价（TLS 直连通道、NTLM 长连接亲和失效且连接不回收）随之披露。
+// 组合门已由保存门实装（任一 https 上游携带 origin_domain 即整条 400），
+// 「避免」类软措辞不得回流；创建面同时禁止句号后半角空格的措辞残留回流。
 func TestAPIDocs_ntlmUpstreamCombinationDisclosureParity(t *testing.T) {
-	for _, fragment := range []string{"ntlm_compatible", "origin_domain", "TLS 直连通道", "NTLM 长连接亲和失效", "连接不回收"} {
-		for _, key := range []string{"POST /rules", "PUT /rules/:caddy_id"} {
-			if text := routesEntry(t, key).Description; !strings.Contains(text, fragment) {
-				t.Errorf("%s 描述缺 NTLM 危险组合披露 %q", key, fragment)
+	readFace := func(path string) string {
+		t.Helper()
+		src, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("读取 %s 失败: %v", path, err)
+		}
+		return string(src)
+	}
+	faces := map[string]string{
+		"POST /rules":          routesEntry(t, "POST /rules").Description,
+		"PUT /rules/:caddy_id": routesEntry(t, "PUT /rules/:caddy_id").Description,
+		"MCP schema":           readFace(filepath.Join("..", "mcpserver", "server.go")),
+		"面板向导":                 readFace(filepath.Join("..", "..", "web", "src", "views", "Rules.vue")),
+	}
+	for name, text := range faces {
+		for _, fragment := range []string{"ntlm_compatible", "origin_domain", "后端将拒绝（400）", "TLS 直连通道", "NTLM 长连接亲和失效", "连接不回收"} {
+			if !strings.Contains(text, fragment) {
+				t.Errorf("%s 缺 NTLM 危险组合硬拒披露 %q", name, fragment)
 			}
+		}
+		if strings.Contains(text, "避免与「HTTPS") {
+			t.Errorf("%s 残留组合软措辞「避免与 HTTPS…」（实门语义=后端 400 拒绝）", name)
 		}
 	}
 	if strings.Contains(routesEntry(t, "POST /rules").Description, "。 NTLM") {
 		t.Errorf("POST /rules 描述残留句号后半角空格（。 NTLM）")
+	}
+}
+
+// 规则创建/更新同走一个保存门，403 管理员只读标签两文档面必须同形；
+// 创建面曾残留的从节点模式幽灵前缀（生产拒绝码中不存在该形态）不得回流。
+func TestAPIDocs_ruleWriteAdminReadonlyLabelParity(t *testing.T) {
+	want := "403 非管理员用户只读(主节点)/从节点只读"
+	for _, key := range []string{"POST /rules", "PUT /rules/:caddy_id"} {
+		entry := routesEntry(t, key)
+		found := false
+		for _, label := range entry.Errors {
+			if strings.Contains(label, "slave_mode") {
+				t.Errorf("%s 错误码残留 slave_mode 幽灵前缀: %q", key, label)
+			}
+			if label == want {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("%s 错误码缺管理员只读同形标签 %q", key, want)
+		}
+	}
+}
+
+// cert-job 行手动触发的拒绝因集与重试核心逐出口对账：trigger 的 cert-job
+// 分支与 /certificates/jobs/:id/retry 共用同一入队核心，两个文档面的错误
+// 码枚举必须覆盖核心全部 409/500 拒绝出口——消息字面量直接从核心函数体
+// 抽取（新增出口未登记进任一面即红；英文消息按登记的中文口径片段对账），
+// 并集之外各面还要钉住自己名下的因集，单面缺口同样红。
+func TestAPIDocs_certJobRetryCauseEnumerationParity(t *testing.T) {
+	body := sourceFuncBody(t, "certjobs.go", "func (h *Handlers) retryCertJobByID")
+	type rejection struct{ code, message string }
+	var exits []rejection
+	for _, m := range regexp.MustCompile(`Code: (409|500), Message: "([^"]+)"`).FindAllStringSubmatch(body, -1) {
+		exits = append(exits, rejection{code: m[1], message: m[2]})
+	}
+	if len(exits) < 6 {
+		t.Fatalf("重试核心 409/500 拒绝出口抽取异常: %v", exits)
+	}
+	trigger := routesEntry(t, "POST /system/tasks/:id/trigger")
+	triggerText := trigger.Description + "\x00" + strings.Join(trigger.Errors, "\x00")
+	retry := routesEntry(t, "POST /certificates/jobs/:id/retry")
+	retryText := retry.Description + "\x00" + strings.Join(retry.Errors, "\x00")
+	union := triggerText + "\x00" + retryText
+	registered := map[string]string{
+		"CA queue manager not initialized": "队列管理器未初始化",
+		"Failed to enqueue retry":          "入队失败",
+	}
+	for _, exit := range exits {
+		fragment := exit.message
+		if mapped, ok := registered[exit.message]; ok {
+			fragment = mapped
+		}
+		if !strings.Contains(union, fragment) {
+			t.Errorf("重试核心出口 %s %q 未登记进 trigger/retry 任一文档面（缺片段 %q）", exit.code, exit.message, fragment)
+		}
+	}
+	for _, fragment := range []string{"409 state_changed", "409 not_retryable", "500 queue_unavailable", "500 status_read_failed"} {
+		if !strings.Contains(triggerText, fragment) {
+			t.Errorf("trigger 文档 cert-job 行缺拒绝因 %q", fragment)
+		}
+	}
+	for _, fragment := range []string{"409 state_changed", "409 in_flight", "500 enqueue_failed", "500 status_read_failed"} {
+		if !strings.Contains(retryText, fragment) {
+			t.Errorf("retry 文档缺拒绝因 %q", fragment)
+		}
 	}
 }

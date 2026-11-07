@@ -134,11 +134,15 @@ func TestRuleToolSchemasDocumentWriteSideConstraints(t *testing.T) {
 			}
 		}
 		// 与 REST 文档面同口径：开启 NTLM 时必须预告「HTTPS 上游 +
-		// origin_domain」组合的连接代价（TLS 直连、亲和失效、不回收）。
-		for _, required := range []string{"origin_domain", "TLS 直连通道", "NTLM 长连接亲和失效", "连接不回收"} {
+		// origin_domain」组合的实门语义——后端将拒绝（400），连接代价
+		// （TLS 直连、亲和失效、不回收）随之披露；软措辞「避免」不得回流。
+		for _, required := range []string{"origin_domain", "后端将拒绝（400）", "TLS 直连通道", "NTLM 长连接亲和失效", "连接不回收"} {
 			if !strings.Contains(ntlm, required) {
-				t.Errorf("%s: ntlm_compatible 描述缺少 HTTPS 上游+origin_domain 组合披露 %q", name, required)
+				t.Errorf("%s: ntlm_compatible 描述缺少 HTTPS 上游+origin_domain 组合硬拒披露 %q", name, required)
 			}
+		}
+		if strings.Contains(ntlm, "避免与「HTTPS") {
+			t.Errorf("%s: ntlm_compatible 描述残留组合软措辞「避免与 HTTPS…」（实门语义=后端 400 拒绝）", name)
 		}
 		if got := number(properties, "tcp_try_duration", "minimum"); got != -1 {
 			t.Errorf("%s: tcp_try_duration minimum=%v, want -1（-1=禁用重试）", name, got)
