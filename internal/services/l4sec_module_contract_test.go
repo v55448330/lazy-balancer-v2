@@ -33,6 +33,21 @@ func l4secModuleSource(t *testing.T) string {
 	return sb.String()
 }
 
+// l4secRendererSource 是载荷键对账的渲染侧取材（路由拼装 + TCP 拦截提示行）。
+func l4secRendererSource(t *testing.T) string {
+	t.Helper()
+	var sb strings.Builder
+	for _, name := range []string{"l4_security_render.go", "l4_tcp_notice.go"} {
+		raw, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatalf("read %s: %v", name, err)
+		}
+		sb.Write(raw)
+		sb.WriteByte('\n')
+	}
+	return sb.String()
+}
+
 func TestL4SecContract_moduleRegistrationsMatchRender(t *testing.T) {
 	src := l4secModuleSource(t)
 	// 模块注册 ID（契约 C2 固定，两侧不得改名）。lb_ipfile 是仓内模块
@@ -64,5 +79,34 @@ func TestL4SecContract_moduleRegistrationsMatchRender(t *testing.T) {
 	}
 	if ipfileLanded && !strings.Contains(src, "\"file\"") {
 		t.Errorf("caddyl4sec 模块源码缺 lb_ipfile file 字段（matcher 载荷契约断裂）")
+	}
+	// 载荷字段键契约两侧成对钉死（任一侧删键/改名即红）：模块侧钉解码
+	// json tag 整串——裸词（allow/mode）在模块源码标识符与注释中处处出现，
+	// 无判别力；渲染侧钉发射语句（空白归一，gofmt 列对齐不敏感）。
+	for _, tag := range []string{
+		`json:"block_notice,omitempty"`, // lb_l4_sec 断连路由的拦截提示行
+		`json:"allow,omitempty"`,        // lb_l4_pp 受信代理网段
+		`json:"mode,omitempty"`,         // lb_geoip 阻断方向 / lb_l4_sec 采样形态
+		`json:"xdb_path,omitempty"`,     // ip2region v4 库路径（自定义 data_dir）
+		`json:"xdb_v6_path,omitempty"`,  // ip2region v6 库路径
+	} {
+		if !strings.Contains(src, tag) {
+			t.Errorf("caddyl4sec 模块源码缺载荷键 tag %s（渲染侧↔模块侧字段契约断裂）", tag)
+		}
+	}
+	normalized := strings.Join(strings.Fields(l4secRendererSource(t)), " ")
+	for _, emission := range []string{
+		`handler["block_notice"] = notice`,     // l4_tcp_notice.go 断连路由
+		`"allow": allow,`,                      // lb_l4_pp 受信代理网段
+		`conf["mode"] = "allow"`,               // lb_geoip allow 方向
+		`"mode": l4SecSampleModeValue,`,        // lb_l4_sec 采样形态
+		`conf["xdb_path"] = ip2regionLivePath`, // lb_geoip v4
+		`h["xdb_path"] = ip2regionLivePath`,    // lb_l4_sec 采样 v4
+		`conf["xdb_v6_path"] = ip2regionV6LivePath`,
+		`h["xdb_v6_path"] = ip2regionV6LivePath`,
+	} {
+		if !strings.Contains(normalized, emission) {
+			t.Errorf("渲染侧源码缺载荷键发射 %s（渲染侧↔模块侧字段契约断裂）", emission)
+		}
 	}
 }

@@ -129,10 +129,13 @@ func (h *L4PPHandler) trustedRemote(addr net.Addr) bool {
 }
 
 // Handle 按对端归属显式定策（受信 USE / 其余 IGNORE）并安装改写连接：
-// 受信来源的声明源经 RemoteAddr 呈现给链上后续 matcher/handler（lb_l4_sec
-// 的事件归因与发往上游的 PROXY 头都按采信后的对端）；其余来源的头被消费、
-// 地址保持真实对端。无 PROXY 头的连接在 IGNORE/USE 下照常透传（go-proxyproto
-// 仅 REQUIRE 拒无头）。
+// caddy-l4 的路由 matcher 集先于 handle 链评估，链内 Wrap 只惠及其后同链
+// handler——改写面=lb_l4_sec 的事件归因（client_ip）与发往上游的 PROXY
+// 头，均按采信后的对端；名单/地域判定（lb_ipfile/lb_geoip 是路由 matcher）
+// 恒读 socket 对端，改写到不了任何 matcher（渲染侧携带本 handler 的路由都
+// 以 close/proxy 在自身内终止，Wrap 不进入后续路由匹配）。其余来源的头被
+// 消费、地址保持真实对端。无 PROXY 头的连接在 IGNORE/USE 下照常透传
+// （go-proxyproto 仅 REQUIRE 拒无头）。
 func (h *L4PPHandler) Handle(cx *layer4.Connection, next layer4.Handler) error {
 	policy := proxyproto.IGNORE
 	if h.trustedRemote(cx.RemoteAddr()) {
@@ -146,6 +149,7 @@ func (h *L4PPHandler) Handle(cx *layer4.Connection, next layer4.Handler) error {
 	opts = append(opts, proxyproto.WithBufferSize(layer4.MaxBufLen))
 	pconn := proxyproto.NewConn(cx, opts...)
 	// 安装手法同上游 Handle：包装连接替换 cx 的底层连接（vars/repl 等上下文
-	// 随 Wrap 透传），链上后续 matcher/handler 经 RemoteAddr() 读采信后对端。
+	// 随 Wrap 透传），同链后续 handler（lb_l4_sec、proxy）经 RemoteAddr() 读
+	// 采信后对端；路由 matcher 先于本 handler 评估，不受改写影响。
 	return next.Handle(cx.Wrap(pconn))
 }

@@ -494,12 +494,12 @@ func (m *L4GeoIPMatcher) Match(cx *layer4.Connection) (bool, error) {
 	return inList, nil
 }
 
-// clientIPFromConn 取连接客户端 IP：cx.RemoteAddr 的 host 部分。规则开
-// PROXY protocol 时，渲染侧在 lb_l4_sec/lb_geoip 之前放置
-// layer4.handlers.lb_l4_pp，该 handler 对受信网段来源把连接包装为 PROXY
-// 头里的声明源（仓内模块，见 pp.go），本模块经 RemoteAddr 自然取得真实
-// 客户端，无需额外配置；PROXY handler 未渲染或来源不受信/头缺失时即
-// socket 对端——降级形态与契约披露一致。
+// clientIPFromConn 取连接客户端 IP：cx.RemoteAddr 的 host 部分。lb_geoip
+// 是路由 matcher，先于 handle 链评估——即使规则开 PROXY protocol 且同路由
+// handle 内有 layer4.handlers.lb_l4_pp（仓内模块，对受信网段来源把连接
+// 改写为 PROXY 头里的声明源，见 pp.go），改写也到不了 matcher：地域判定
+// 恒读 socket 对端（与 docs 安全指南披露一致）；lb_l4_pp 的改写只惠及
+// handle 链内其后的 handler（lb_l4_sec 事件归因、发往上游的转发头）。
 func clientIPFromConn(cx *layer4.Connection) string {
 	if cx == nil {
 		return ""
