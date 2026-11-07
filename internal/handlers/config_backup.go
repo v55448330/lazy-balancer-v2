@@ -2546,6 +2546,7 @@ func validateV2BackupRules(tables map[string][]map[string]any, portGates ...func
 	// 每规则两次 live 查页在 2000 规则×10000 上游规模下是 2×10⁷ 级比较——改为
 	// 一次预计算（与冲突矩阵分桶预计算同型）。谓词与语义逐项保持不变。
 	enabledHostsByRule := make(map[string][]string, len(rows))
+	ntlmComboUpstreamsByRule := make(map[string][]string)
 	for _, row := range tables["upstreams"] {
 		if !backupBooleanEnabled(row["enabled"]) {
 			continue
@@ -2555,6 +2556,9 @@ func validateV2BackupRules(tables map[string][]map[string]any, portGates ...func
 			continue
 		}
 		enabledHostsByRule[ruleID] = append(enabledHostsByRule[ruleID], backupString(row["host"]))
+		if backupString(row["protocol"]) == "https" && backupString(row["origin_domain"]) != "" {
+			ntlmComboUpstreamsByRule[ruleID] = append(ntlmComboUpstreamsByRule[ruleID], backupString(row["host"]))
+		}
 	}
 	pathRulesByRule, err := backupPathRulesByRule(tables["path_rules"])
 	if err != nil {
@@ -2622,6 +2626,12 @@ func validateV2BackupRules(tables map[string][]map[string]any, portGates ...func
 		}
 		if conflict := services.RuleIDNamespaceConflict(ruleID, backupRuleIDs); conflict != "" {
 			return fmt.Errorf("规则 #%d：caddy_id %q 与规则 %q 的子路由 @id 命名空间冲突（子路由 @id 形如 <规则ID>_path_<序号>/_geoip/_redirect），请修改其中一个 ID", index+1, ruleID, conflict)
+		}
+		// 「NTLM 兼容 + HTTPS 上游 + origin_domain」组合互斥（与保存门
+		// validateRuleFeatures 同口径）：该组合连接走 TLS 直连通道旁路 NTLM
+		// 接管并泄漏连接，导入链整包拒绝并点名上游。
+		if backupBooleanEnabled(rule["ntlm_compatible"]) && len(ntlmComboUpstreamsByRule[ruleID]) > 0 {
+			return fmt.Errorf("规则 #%d：NTLM 兼容不支持与「HTTPS 上游 + origin_domain」组合（上游 %s）：该组合下连接走 TLS 直连通道，将旁路 NTLM 接管并泄漏连接", index+1, strings.Join(ntlmComboUpstreamsByRule[ruleID], ", "))
 		}
 		// 阶段拦截页四列（block_page_stage*）已停用（2026-11 用户裁定）：
 		// 渲染链零消费、写侧停写——旧备份包指向已删页/畸形状态码一律放行
