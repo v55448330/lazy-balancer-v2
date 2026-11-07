@@ -21,8 +21,8 @@ const (
 	groupStable = "stable"
 )
 
-// stableExpected 最近稳定版本号（转正时更新：v2.4.1 正式版，2026-11-05）。
-const stableExpected = "v2.4.1"
+// stableExpected 最近稳定版本号（转正时更新：v2.4.2 正式版，2026-11-07）。
+const stableExpected = "v2.4.2"
 
 // versionAnchor 一个硬编码版本位置。双轨口径下锚点分两组各自一致：beta
 // 构建组跟随 Dockerfile ARG（测试通道构建示例），stable 部署组跟随最近
