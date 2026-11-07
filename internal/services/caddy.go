@@ -4367,10 +4367,16 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig, sec
 	// 读头、回退 host 反查，同域名多规则/通配符场景归因从概率正确到确定正确）。
 	// 置于 IP 预检之前，预检与各策略 coraza 事务均可见；set 覆盖客户端伪造值；
 	// reverse_proxy 前无条件剥离（见 proxyRequestHeaders 删除清单），不直达上游。
+	// X-LB-Protocol 同点注入（值=引擎实际协议，本分支恒 http）：摄取侧以该头
+	// 字面 tcp 把事务改判为 L4 事件，链首 set 保证改判信号只能来自引擎——
+	// 客户端伪造的 X-LB-Protocol: tcp 无法把 HTTP 事务事件改判成 tcp。
 	if rule.Protocol == "http" && len(policies) > 0 {
 		handleChain = append(handleChain, map[string]interface{}{
 			"handler": "headers",
-			"request": map[string]interface{}{"set": map[string]interface{}{"X-LB-Rule-ID": []string{rule.CaddyID}}},
+			"request": map[string]interface{}{"set": map[string]interface{}{
+				"X-LB-Rule-ID":  []string{rule.CaddyID},
+				"X-LB-Protocol": []string{rule.Protocol},
+			}},
 		})
 	}
 	// 规则级全量流量指标(2026-09-15 用户裁定):lb_rule_metrics 置于链首
@@ -4858,8 +4864,8 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig, sec
 	// X-LB-GeoIP-* 是 caddygeoip→coraza 的进程内控制头（coraza 在本 handler 之前
 	// 执行，已消费完毕），绝不允许透传上游后端。无条件剥离：geoip 关闭的规则
 	// 同时防客户端伪造同名头直达后端。头名清单与 caddygeoip/handler.go 的
-	// geoipCorazaHeaders(caddygeoip/handler.go) 同源，变更需双侧同步。X-LB-Rule-ID 同型：链首注入的归因头
-	//仅供 coraza 事务内消费，同口径无条件剥离。
+	// geoipCorazaHeaders(caddygeoip/handler.go) 同源，变更需双侧同步。X-LB-Rule-ID / X-LB-Protocol 同型：
+	// 链首注入的归因/协议改判头仅供 coraza 事务内消费，同口径无条件剥离。
 	// 爬虫验证控制头（X-LB-Crawler-Verified / X-LB-Crawler-Spoof）
 	// 同样由 caddygeoip 在 coraza phase:1 之前注入、coraza 预检规则已消费；
 	// 与 geoip 头同口径**无条件**剥离——无 GeoIP 策略的规则（handler 不在场）
@@ -4871,6 +4877,7 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig, sec
 			"X-LB-GeoIP-Country", "X-LB-GeoIP-Country-Code", "X-LB-GeoIP-Region",
 			"X-LB-GeoIP-Province", "X-LB-GeoIP-City", "X-LB-GeoIP-Loc",
 			"X-LB-Rule-ID",
+			"X-LB-Protocol",
 			"X-LB-Crawler-Verified", "X-LB-Crawler-Spoof",
 			// 安全处理耗时关联头（v2.3.3）：blocked_counter 注入，coraza 审计
 			// 日志收录后由审计写插件作进程内计时注册表关联键（耗时随

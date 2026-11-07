@@ -214,9 +214,9 @@ func TestGeoIPPluginControlHeaders_areStrippedFromUpstream(t *testing.T) {
 	}
 	// 反向控制：删除清单里的 X-LB-* 头必须都能在插件侧找到来源，否则说明
 	// 清单行与插件脱钩（拼写漂移会让真实头既不剥离也不报错）。
-	// 例外：X-LB-Rule-ID 由渲染层自己的链首 headers handler 注入（主模块），
-	// 来源不在插件，故不参与「插件亦有同源声明」的反向断言。
-	renderOwnedHeaders := map[string]bool{"X-LB-Rule-ID": true}
+	// 例外：X-LB-Rule-ID / X-LB-Protocol 由渲染层自己的链首 headers handler
+	// 注入（主模块），来源不在插件，故不参与「插件亦有同源声明」的反向断言。
+	renderOwnedHeaders := map[string]bool{"X-LB-Rule-ID": true, "X-LB-Protocol": true}
 	declared := make(map[string]bool, len(expected))
 	for _, header := range expected {
 		declared[header] = true
