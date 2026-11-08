@@ -25,6 +25,7 @@ interface AuthFailureInput {
   readonly method?: string
   readonly url?: string
   readonly message: string
+  readonly messageKey?: string
   readonly isLoginRequest: boolean
   /** 是否携带请求配置（428 重试与 _mfaRetried 标记都依赖它） */
   readonly hasConfig: boolean
@@ -39,8 +40,8 @@ interface AuthFailureInput {
  */
 export const classifyAuthFailure = (input: AuthFailureInput): AuthFailureKind => {
   if (input.status === 401) {
-    if (isMfaCredentialRejection(input.url, input.status, input.message)) return 'credential-rejection'
-    if (isCurrentPasswordRejection(input.method, input.url, input.status, input.message)) return 'credential-rejection'
+    if (isMfaCredentialRejection(input.url, input.status, input.message, input.messageKey)) return 'credential-rejection'
+    if (isCurrentPasswordRejection(input.method, input.url, input.status, input.message, input.messageKey)) return 'credential-rejection'
     if (!input.isLoginRequest) return 'session-expired'
     return 'generic'
   }

@@ -292,6 +292,7 @@ service.interceptors.response.use(
       method: error.config?.method,
       url: error.config?.url,
       message,
+      messageKey: messageKeyOf(error.response?.data),
       isLoginRequest,
       hasConfig: !!error.config,
       mfaRetried: !!error.config?._mfaRetried,

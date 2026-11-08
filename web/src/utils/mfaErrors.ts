@@ -24,6 +24,15 @@ export const MFA_CREDENTIAL_REJECTION_MESSAGES: readonly string[] = [
   'MFA 挑战已被使用，请重新登录',
 ]
 
+// i18n 后判定首选 message_key(稳定,与文案语言解耦);字面量仅作无键旧响应兜底。
+// 键与文案母本钉测见 tests/mfaErrors.spec.ts ↔ internal/i18n/catalog_gen.go。
+const MFA_CREDENTIAL_REJECTION_KEYS: readonly string[] = [
+  'k_345a8c4a',
+  'k_df527f47',
+  'k_5c5030a7',
+  'k_201b3428',
+]
+
 /**
  * 401 是否为 MFA 端点的「凭证/挑战错误」（自助 /auth/mfa/* 与管理员
  * /users/:id/mfa/reset）：是 → 调用方只传播文案；否（含会话过期文案、
@@ -33,6 +42,9 @@ export const isMfaCredentialRejection = (
   url: string | undefined,
   status: number | undefined,
   message: string,
+  messageKey?: string,
 ): boolean => status === 401
   && ((url ?? '').includes('/auth/mfa/') || (url ?? '').includes('/mfa/reset'))
-  && MFA_CREDENTIAL_REJECTION_MESSAGES.includes(message)
+  && (messageKey !== undefined
+    ? MFA_CREDENTIAL_REJECTION_KEYS.includes(messageKey)
+    : MFA_CREDENTIAL_REJECTION_MESSAGES.includes(message))
