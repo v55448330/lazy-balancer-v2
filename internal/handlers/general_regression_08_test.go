@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -421,5 +422,22 @@ func TestWriteConfigValidationFailure_auditOnlyOnExplicitServerErrors(t *testing
 		if audited != 1 {
 			t.Fatalf("底层错误 %q 的失败审计条数=%d, want 1（相位+底层错误可追溯）", underlying, audited)
 		}
+	}
+}
+
+// 存量聚合门镜像（用户裁定）：443 端口 + 明文 HTTP 的启用存量规则在启动/
+// UpdateConfig 聚合校验必须点名（与 80 端口 + HTTPS 同族镜像）。
+func TestValidateEnabledStoredRuleConfigs_rejectsPlainHTTPOn443(t *testing.T) {
+	initializeRuleFeatureTestDB(t)
+	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enabled) VALUES ('lb_plain443','plain443','http','plain443.example.test',443,1)`); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	err := validateEnabledStoredRuleConfigs(context.Background())
+	if err == nil {
+		t.Fatal("aggregate validation must reject enabled plain-HTTP rule on port 443")
+	}
+	if !strings.Contains(err.Error(), "443 端口是 HTTPS 默认端口") || !strings.Contains(err.Error(), "lb_plain443") {
+		t.Fatalf("aggregate error must name the rule and the default-port rationale, got: %v", err)
 	}
 }

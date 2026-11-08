@@ -296,3 +296,30 @@ func TestCreateRule_rejects_port_80_tls_without_redirect(t *testing.T) {
 		t.Fatalf("create port-80 TLS without redirect status=%d body=%s, want 400 指名端口事实", response.Code, response.Body.String())
 	}
 }
+
+// 明文 HTTP 规则禁用 443 端口（HTTPS 默认端口）：明文规则监听 443 时
+// https://域名:443 的 TLS 握手直接失败（面板徽标/证书语义与实际协议相反），
+// 保存前拒绝（与 80 端口 + HTTPS 禁令同族镜像）。
+func TestCreateRule_rejects_plain_http_on_443(t *testing.T) {
+	handler := newRuleFeatureTestHandlers(t)
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.POST("/rules", handler.CreateRule)
+	body := `{
+		"name":"plain-443","protocol":"http","domain":"plain443.example.test","listen_port":443,
+		"strategy":"weighted_round_robin",
+		"health_check_interval":10,"health_check_timeout":2,"health_check_unhealthy_threshold":3,"health_check_healthy_threshold":2,
+		"upstreams":[{"host":"127.0.0.1","port":9000,"enabled":true}]
+	}`
+	request := httptest.NewRequest(http.MethodPost, "/rules", strings.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "443 端口是 HTTPS 默认端口") {
+		t.Fatalf("create plain-443 status=%d body=%s, want 400", response.Code, response.Body.String())
+	}
+}
+
+// 回归形状：443 + TLS 仍合法（既有用例 accepts_port_443_tls_redirect 钉住）。

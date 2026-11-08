@@ -1479,7 +1479,13 @@ func validateStoredRuleConfig(ctx context.Context, caddyID string) error {
 	// 与保存侧同口径：80 端口 + HTTPS（未开跳转）在 Caddy 侧永不终止 TLS，
 	// 存量/导入/直改库形态启用前必须点名拒绝。
 	if rule.Protocol == "http" && rule.ListenPort == 80 && rule.EnableTLS {
-		return &configValidationError{message: "80 端口是 HTTP 端口，Caddy 不会在此端口终止 TLS（规则将按明文转发），请改用 443 等 TLS 端口或关闭 HTTPS"}
+		return &configValidationError{message: "80 端口是 HTTP 端口，Caddy 不会在此端口终止 TLS（规则将按明文转发），请改用 443 端口或关闭 HTTPS"}
+	}
+	// 同族镜像（用户裁定）：443 端口 + 明文 HTTP——HTTPS 默认端口
+	// 上明文监听使 https://域名:443 握手必然失败，存量/导入/直改库形态启用
+	// 前必须点名拒绝（与 checkPortTLSMix 的协议/端口默认语义规则同口径）。
+	if rule.Protocol == "http" && rule.ListenPort == 443 && !rule.EnableTLS {
+		return &configValidationError{message: "443 端口是 HTTPS 默认端口，明文 HTTP 规则会使 https://域名:443 无法建立连接，请开启 HTTPS 或改用其他端口"}
 	}
 	if rule.Protocol == "http" && rule.EnableTLS && rule.TLSSource != "manual" && rule.TLSSource != "acme_dns" {
 		return &configValidationError{message: "启用 TLS 时必须选择证书来源（manual 或 acme_dns）"}
@@ -1531,6 +1537,13 @@ func validateEnabledStoredRuleConfigs(ctx context.Context) error {
 		// 启动/UpdateConfig 聚合校验必须点名（不得静默带病上线）。
 		if rule.Protocol == "http" && rule.ListenPort == 80 && rule.EnableTLS {
 			problems = append(problems, &configValidationError{message: fmt.Sprintf("规则 %s（%s）80 端口是 HTTP 端口，Caddy 不会在此端口终止 TLS（规则将按明文转发），请改用 443 等 TLS 端口或关闭 HTTPS", rule.Name, rule.CaddyID)})
+			continue
+		}
+		// 同族镜像（用户裁定）：443 端口 + 明文 HTTP——HTTPS 默认端口上明文
+		// 监听使 https://域名:443 握手必然失败，启动/UpdateConfig 聚合校验
+		// 必须点名（与 checkPortTLSMix 协议/端口默认语义规则同口径）。
+		if rule.Protocol == "http" && rule.ListenPort == 443 && !rule.EnableTLS {
+			problems = append(problems, &configValidationError{message: fmt.Sprintf("规则 %s（%s）443 端口是 HTTPS 默认端口，明文 HTTP 规则会使 https://域名:443 无法建立连接，请开启 HTTPS 或改用其他端口", rule.Name, rule.CaddyID)})
 			continue
 		}
 		// 与 validateStoredRuleConfig 同口径的 tls_source 白名单——
