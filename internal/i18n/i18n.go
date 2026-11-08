@@ -152,12 +152,16 @@ func TrErr(msg, lang string) string {
 	}
 	mu.RLock()
 	defer mu.RUnlock()
-	if en, ok := errTpls[msg]; ok {
+	if en, ok := errTpls[msg]; ok && en != "" {
 		return en
 	}
 	for _, zhTpl := range errZh {
-		if en, ok := matchTpl(msg, zhTpl, errTpls[zhTpl]); ok {
-			return en
+		en := errTpls[zhTpl]
+		if en == "" {
+			continue
+		}
+		if out, ok := matchTpl(msg, zhTpl, en); ok {
+			return out
 		}
 	}
 	return msg
