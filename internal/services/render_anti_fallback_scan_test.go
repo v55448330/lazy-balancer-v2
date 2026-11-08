@@ -125,6 +125,19 @@ var antiFallbackAllowlist = map[string]map[string]string{
 		// 归一保证；渲染层必须替换以实现「省略」语义（否则引擎收到空值）。
 		`r.Strategy = "weighted_round_robin"`: "负载策略空串=未配置→默认加权轮询：类型②省略型（写侧归一+DB DEFAULT 单源，渲染层承担省略替换）——G3 Ruling 披露",
 		`protocol = "http"`:                   "上游协议空串=未配置→http：类型②省略型（写侧允许空并声明默认）——G3 Ruling 披露",
+		// 同端口 http→https 跳转包装器挂载（v2.4.3-beta 用户裁定）：判据=
+		// tls_http_redirect 开启规则的域名归一并集（库值驱动发射面，非库值替值/
+		// 非省略型兜底）；domains 空集不挂载（len>0 守卫）；443 豁免（80→443
+		// 既有通道承担）——Ruling 2026-11-08。
+		`server["listener_wrappers"] = []interface{}{
+	map[string]interface{}{
+
+		"wrapper":	"lb_https_redirect",
+		"https_port":	port,
+		"domains":	domains,
+	},
+	map[string]interface{}{"wrapper": "tls"},
+}`:                   "TLS 端口同端口跳转包装器：开启跳转规则的域名并集驱动挂载（库值发射面）——Ruling 2026-11-08",
 	},
 	"trustedProxyServerFields": {
 		`degraded = "受信代理已启用但没有任何有效网段（内联条目全部非法/过宽，或引用名单为空/全部悬空）：真实 IP 还原未生效，依赖真实 IP 的 IP 访问控制/限流/GeoIP 均按回源地址判定"`: "受信代理 enabled=1 但零有效网段：这是用户可见降级信号文案（字段形态不变，仅附加提示），不是用默认值替换无效库值；写侧允许该形态且需显性告知——Ruling 2026-10-28",

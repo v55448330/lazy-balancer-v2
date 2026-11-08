@@ -180,11 +180,12 @@ func TestGenerateCaddyConfig_emptyDomainDirtyRuleFallsBack(t *testing.T) {
 		t.Fatalf("generate: %s", message)
 	}
 	servers := config["apps"].(map[string]interface{})["http"].(map[string]interface{})["servers"].(map[string]interface{})
-	sv, exists := servers["http_668"]
-	if !exists {
-		t.Fatal("server http_668 missing（TLS 规则仍应发布）")
+	// fail-soft 实证：空域名行在渲染前置阶段被跳过（无生成错误、无 server、
+	// 无包装器）——「空 domains 包装器冻结」形态不可达。
+	if _, exists := servers["http_668"]; exists {
+		t.Fatal("server http_668 should be absent（空域名行必须被 fail-soft 跳过）")
 	}
-	if _, has := sv.(map[string]interface{})["listener_wrappers"]; has {
-		t.Fatal("空域名脏行不得挂包装器（空 domains 会 Provision 失败冻结整份配置）——回退未开跳转姿态")
+	if _, exists := servers["http_80"]; !exists {
+		t.Fatal("server http_80 missing（默认站/跳转通道不受脏行影响）")
 	}
 }
