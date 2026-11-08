@@ -131,3 +131,34 @@ func TestGenerateCaddyConfig_tlsWithoutRedirectNoWrapper(t *testing.T) {
 		t.Fatal("未开跳转的 TLS 端口不得挂包装器（明文姿态必须与既有行为一致）")
 	}
 }
+
+// 形状④（默认端口豁免，用户裁定）：443 默认端口维持既有 80→443 跳转通道
+// （redirectRoutes on :80），同端口包装器只服务非标端口——明文 443 保持既有
+// 姿态（Go 栈 400），80 跳转照常发射（Location 无端口后缀）。
+func TestGenerateCaddyConfig_defaultPort443ExcludedFromSamePortWrapper(t *testing.T) {
+	useTemporaryCertDir(t)
+	_, database := newClusterTestService(t)
+	certPEM, keyPEM := matchingCertificatePair(t, "stdport.example.test")
+	if _, err := database.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,strategy,enable_tls,tls_source,tls_cert,tls_key,tls_http_redirect,enabled) VALUES ('lb-std443','std443','http','stdport.example.test',443,'weighted_round_robin',1,'manual',?,?,1,1)`, certPEM, keyPEM); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`INSERT INTO upstreams (rule_id,host,port,weight,enabled,protocol) VALUES ('lb-std443','127.0.0.1',8080,1,1,'http')`); err != nil {
+		t.Fatal(err)
+	}
+	config := GenerateCaddyConfig()
+	if message, failed := config[caddyConfigGenerationErrorKey].(string); failed {
+		t.Fatalf("generate: %s", message)
+	}
+	servers := config["apps"].(map[string]interface{})["http"].(map[string]interface{})["servers"].(map[string]interface{})
+	sv, exists := servers["http_443"]
+	if !exists {
+		t.Fatal("server http_443 missing")
+	}
+	if _, has := sv.(map[string]interface{})["listener_wrappers"]; has {
+		t.Fatal("443 默认端口不得挂同端口包装器（80→443 通道已覆盖，明文保持 Go 栈 400 姿态）")
+	}
+	// 80 跳转通道仍在场：redirectRoutes 挂于 http_80（80→443，Location 无端口后缀）。
+	if _, has80 := servers["http_80"]; !has80 {
+		t.Fatal("server http_80 missing（80→443 跳转通道必须保留）")
+	}
+}

@@ -2687,15 +2687,22 @@ func generateCaddyConfigWithCertSource(store, certSource caddyConfigStore, rules
 		}
 		server["routes"] = routes
 
-		// 同端口明文跳转（TLS server 挂嗅探包装器）：端口上任意 TLS 规则开启
-		// 「HTTP→HTTPS 跳转」即挂 lb_https_redirect（首字节嗅探——明文连接由
-		// 包装器 301 应答到 https 同端口，TLS 连接透传；明文永不进入代理路由，
-		// fail-closed 保持），domains=开启跳转规则域名的归一并集（Host 白名单
-		// =防反射开放重定向）；占位符 caddy.listeners.tls 居后保证包装器位于
-		// TLS 握手之前。未开启跳转的 TLS 端口不挂载——明文姿态与既有行为
-		// 一致（Go 栈 400）。引擎原生 auto-HTTPS 已整体关闭（下方 disable），
-		// 非标端口的引擎侧跳转不存在，跳转完全由本包装器 + :80 redirectRoutes
-		// 两条通道承担。
+		// defaultHTTPSPort 是引擎默认 https 端口（Caddy app.httpsPort 语义）：
+		// 同端口跳转包装器的豁免界——443 维持既有 80→443 通道（用户裁定）。
+		const defaultHTTPSPort = 443
+
+		// 同端口明文跳转（TLS server 挂嗅探包装器）：非标端口（≠443）上任意
+		// TLS 规则开启「HTTP→HTTPS 跳转」即挂 lb_https_redirect（首字节嗅探——
+		// 明文连接由包装器 301 应答到 https 同端口，TLS 连接透传；明文永不进入
+		// 代理路由，fail-closed 保持），domains=开启跳转规则域名的归一并集
+		// （Host 白名单=防反射开放重定向）；占位符 caddy.listeners.tls 居后保证
+		// 包装器位于 TLS 握手之前。未开启跳转的端口不挂载——明文姿态与既有
+		// 行为一致（Go 栈 400）。默认端口 443 豁免（2026-11-08 用户裁定）：443
+		// 维持既有 80→443 通道（redirectRoutes 挂 :80，Location 无端口后缀），
+		// 明文 443 保持 Go 栈 400 姿态；端口 80 的 TLS 规则被校验门拒绝，不存在
+		// 80 端口包装器形态。引擎原生 auto-HTTPS 已整体关闭（下方 disable），
+		// 非标端口的引擎侧跳转不存在，跳转由本包装器（非标端口）+ :80
+		// redirectRoutes（默认端口）两条通道承担。
 		tlsRedirectDomains := make(map[string]struct{})
 		hasTLSRedirectRule := false
 		for _, ru := range rules {
@@ -2707,7 +2714,7 @@ func generateCaddyConfigWithCertSource(store, certSource caddyConfigStore, rules
 				}
 			}
 		}
-		if hasTLSRedirectRule {
+		if hasTLSRedirectRule && port != defaultHTTPSPort {
 			domains := make([]string, 0, len(tlsRedirectDomains))
 			for d := range tlsRedirectDomains {
 				domains = append(domains, d)
