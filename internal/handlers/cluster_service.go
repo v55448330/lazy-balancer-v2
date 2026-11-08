@@ -98,8 +98,8 @@ func (h *Handlers) ControlClusterNodeService(c *gin.Context) {
 			// 已批准但令牌尚未交付：节点存在、只是暂不可签发——409 + 单源文案。
 			status = http.StatusConflict
 			message = err.Error()
-		case errors.Is(err, services.ErrInvalidServiceAction):
-			status = http.StatusBadRequest
+			// ErrInvalidServiceAction 不可达：handler 已在入口对非法动作先行 400
+			// （服务层校验是同一谓词首语句），此处无需 400 分支。
 		}
 		auditFailure(nodeID, "签发票据失败（动作："+registerAuditField(req.Action)+"）")
 		clusterError(c, status, message, err)

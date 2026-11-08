@@ -3074,6 +3074,9 @@ func TeeTaskLogTimeContext(ctx context.Context, taskID, level, stage, message st
 	TeeTaskLogContext(ctx, taskID, engineLogTimeStr(), level, stage, message)
 }
 
+// TeeTaskLog 无 ctx 变体为测试专供入口（生产日志 tee 单一入口是
+// TeeTaskLogTime/Context，services/tasklog.go 消费）；已登记
+// testonly_symbols_test.go AST 守卫清单，产品文件静默接线即红。
 func TeeTaskLog(taskID, timestamp, level, stage, message string) {
 	TeeTaskLogContext(context.Background(), taskID, timestamp, level, stage, message)
 }

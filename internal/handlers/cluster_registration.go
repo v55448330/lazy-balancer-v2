@@ -134,7 +134,8 @@ func (h *Handlers) RegisterClusterNode(c *gin.Context) {
 	// 重复 ip:port 命中已批准节点时，upsert 会重置审批与令牌——响应与
 	// 审计点名被覆盖节点，避免运营方把覆盖误认为新节点加入。
 	message := "注册成功，等待主节点审批"
-	auditParts := []string{fmt.Sprintf("节点 %d", registration.RegistrationID), registerAuditField(req.Name), registerAuditField(req.IPAddress), "等待审批"}
+	// 审计名与落库值同源（同款归一函数）；失败路径保留原始值供取证。
+	auditParts := []string{fmt.Sprintf("节点 %d", registration.RegistrationID), registerAuditField(models.NormalizeClusterNodeName(req.Name)), registerAuditField(req.IPAddress), "等待审批"}
 	if registration.OverwrittenNodeID > 0 {
 		overwritten := fmt.Sprintf("已覆盖节点 #%d（%s）", registration.OverwrittenNodeID, registerAuditField(registration.OverwrittenNodeName))
 		auditParts = append(auditParts, overwritten)

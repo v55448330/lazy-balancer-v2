@@ -1204,7 +1204,10 @@ func readRotatedLogTail(path string, maxBackups, perFileBytes, perFileLines, bud
 		remaining := budget - total
 		if remaining <= 0 {
 			// 预算已用尽：后续代数只在存在时标记截断，不再读内容。
-			if _, err := os.Stat(filePath); err == nil {
+			// Stat 非 ENOENT 失败（权限/IO 病态）保守按「存在未读」处理——
+			// 少报截断会违背「truncated=true 表示存在未读的更旧副本」契约
+			// （读不出 ≠ 无日志）。
+			if _, err := os.Stat(filePath); err == nil || !errors.Is(err, os.ErrNotExist) {
 				skippedOlder = true
 			}
 			continue

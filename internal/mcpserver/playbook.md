@@ -30,7 +30,7 @@
 
 ### 4.1 新建 HTTP 站点（含免费证书）
 
-1. `create_rule`：`protocol=http` + `domain` + `listen_port`(80/443) + `upstreams[{host,port}]`；需 ACME 时加 `enable_tls=true`、`tls_source="acme_dns"`
+1. `create_rule`：`protocol=http` + `domain` + `listen_port` + `upstreams[{host,port}]`——端口与协议语义：明文 HTTP（不开 `enable_tls`）不可监听 443（HTTPS 默认端口）、TLS 规则（`enable_tls=true`）不可监听 80，违者 400 点名；需 ACME 时加 `enable_tls=true`、`tls_source="acme_dns"`；TLS 规则开 `tls_http_redirect=true` 后明文访问该端口同域名 301 到 https 同端口（非标端口）
 2. `issue_certificate` 传 `caddy_id` 触发签发（前提：系统已配 DNS 提供商与 CA）
 3. `list_cert_jobs`（可按 `rule_id` 过滤）轮询直到 `issued`；`failed` 看失败原因后 `retry_cert_job`
 4. `get_upstream_health` 确认上游三态为正常，收尾

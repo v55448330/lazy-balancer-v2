@@ -18,9 +18,10 @@ import (
 // 会让守卫响亮失效，防止清单空转。
 func TestEnginePackageHasNoProductionReferencesToTestOnlyEntryPoints(t *testing.T) {
 	testOnly := map[string]bool{
-		"Trigger":  true,
-		"RunAsync": true,
-		"Stats24h": true,
+		"Trigger":    true,
+		"RunAsync":   true,
+		"Stats24h":   true,
+		"TeeTaskLog": true,
 	}
 	entries, err := os.ReadDir(".")
 	if err != nil {

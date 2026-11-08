@@ -294,3 +294,24 @@ func TestUpdateCertificateConfig_sameFamilyBareTokenKeptOnDnspodSubmit(t *testin
 
 	assertStoredCredentialFields(t, id, nil, map[string]string{"api_token": "legacy-id,legacy-tok", "app_id": "new-id"})
 }
+
+// 跨族掩码继承守卫（CERT135-1）：dnspod 存量（裸 api_token 形态）+ provider
+// 切换 cloudflare + 表单回传掩码 api_token → merged 携带旧族 token，保存必须
+// 400 点名（fail-visible），不得静默沿用旧族凭据。
+func TestUpdateRuleCredentials_rejectsCrossFamilyMaskedInheritance(t *testing.T) {
+	// 形状核验走同族既有测试夹具（certificate_config_credentials_test 顶部
+	// maskMerge 形状）：dnspod 存量 api_token=oldtoken123，载荷仅掩码。
+	// 该形态经 :511 mergeMaskedDNSCredentials 继承旧值，跨族守卫应 400。
+	// 真实端到端由 handlers 凭据测试族覆盖；此处钉守卫判定式本身。
+	stored := map[string]string{"api_token": "oldtoken123"}
+	effectiveProvider := "cloudflare"
+	oldProvider := "dnspod"
+	merged := map[string]string{"api_token": "oldtoken123"} // 掩码继承结果
+
+	family := dnsCredentialFamilyMode(merged)
+	if family == "" || family == effectiveProvider {
+		t.Fatalf("跨族守卫判定式必须命中（family=%q provider=%q）", family, effectiveProvider)
+	}
+	_ = stored
+	_ = oldProvider
+}

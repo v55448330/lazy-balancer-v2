@@ -1603,6 +1603,14 @@ func TestValidateV2Backup_rejects_self_loop_80_tls_redirect_rule(t *testing.T) {
 			wantErrText: "80 端口开启 TLS 跳转无意义",
 		},
 		{
+			// 同族镜像（用户裁定）：443 端口 + 明文 HTTP——HTTPS 默认端口，
+			// 导入即逐行 400（与保存/启用/聚合四门同口径；否则「导入成功→
+			// 应用冻结」）。
+			name:        "443 端口明文 HTTP 规则被拒",
+			rule:        map[string]any{"caddy_id": "lb_backup_plain443", "name": "备份明文443", "protocol": "http", "domain": "plain443.test", "listen_port": 443, "enabled": 1},
+			wantErrText: "443 端口是 HTTPS 默认端口",
+		},
+		{
 			// 禁用规则不参与渲染（caddy.go WHERE enabled=1），
 			// 自环组合无运行时影响；导出→导入往返不应因存量禁用行失败。
 			name: "禁用状态的 80 端口 + TLS 跳转自环规则可导入",

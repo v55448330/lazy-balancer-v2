@@ -3371,3 +3371,65 @@ func TestAPIDocs_ruleUpdate_certJobActiveDisclosure(t *testing.T) {
 		}
 	}
 }
+
+// 端口/协议语义门三面 parity（audit135）：REST 描述句、MCP schema description、
+// 后端实现（checkPortTLSMix 400 文案）三面必须同步——任一面漂移即红。
+// 覆盖：明文 HTTP 禁 443、TLS 禁 80、同端口跳转 301/白名单外 400、443 豁免。
+func TestAPIDocs_portSemanticGateThreeFaceParity(t *testing.T) {
+	readFace := func(path string) string {
+		src, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("读取 %s 失败: %v", path, err)
+		}
+		return string(src)
+	}
+	faces := map[string]string{
+		"REST POST /rules":          routesEntry(t, "POST /rules").Description,
+		"REST PUT /rules/:caddy_id": routesEntry(t, "PUT /rules/:caddy_id").Description,
+		"MCP schema":                readFace(filepath.Join("..", "mcpserver", "server.go")),
+		"后端实现":                      readFace(filepath.Join("..", "handlers", "handlers.go")),
+	}
+	for name, text := range faces {
+		// 披露片段：REST/MCP/实现三面共用（实现面 400 文案与披露句同一事实源措辞）。
+		for _, fragment := range []string{
+			"明文 HTTP 规则不可监听 443",
+			"TLS 规则不可监听 80",
+			"443 端口是 HTTPS 默认端口",
+			"443 不适用同端口跳转",
+		} {
+			if !strings.Contains(text, fragment) {
+				t.Errorf("%s 缺端口/协议语义披露 %q", name, fragment)
+			}
+		}
+	}
+	// 后端实现面单独锚定语义门的判定式（防注释漂移掩盖实现缺失）。
+	impl := faces["后端实现"]
+	for _, fragment := range []string{"443 端口是 HTTPS 默认端口", "80 端口是 HTTP 端口"} {
+		if !strings.Contains(impl, fragment) {
+			t.Errorf("后端实现缺端口语义门判定式 %q", fragment)
+		}
+	}
+}
+
+// /rules 列表示例键集 ⊆ models.Rule 实投影（audit135 APIMCP135-4）：示例为
+// 节选投影，不得出现实现不存在的幻影键；节选语义由行内「示例为节选投影」
+// 标注承载（有键集门防幻影，完整性由详情端点承担）。
+func TestAPIDocs_rulesListExampleKeysAreSubsetOfImplementation(t *testing.T) {
+	// /rules 示例是裸数组（非信封），从 apiDocRoutes 的 Response 字段直接解析。
+	var exampleRows []map[string]any
+	if err := json.Unmarshal([]byte(routesEntry(t, "GET /rules").Response), &exampleRows); err != nil || len(exampleRows) == 0 {
+		t.Fatalf("解析 GET /rules 示例失败: %v", err)
+	}
+	fullAll, _ := jsonTagKeySet(t, models.LbRule{})
+	for _, row := range exampleRows {
+		for key := range row {
+			if !fullAll[key] {
+				t.Errorf("示例键 %q 不在 models.LbRule 实投影中（幻影键）", key)
+			}
+		}
+	}
+	// 节选标注在场（防示例被误读为完整字段集）。
+	if desc := routesEntry(t, "GET /rules").Description; !strings.Contains(desc, "示例为节选投影") {
+		t.Fatal("GET /rules 描述缺「示例为节选投影」标注")
+	}
+}

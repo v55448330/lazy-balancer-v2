@@ -25,7 +25,7 @@ func TestCreateRule_rejectsNegativeUpstreamWeight(t *testing.T) {
 
 	body := map[string]any{
 		"name": "neg-weight", "protocol": "http", "domain": "neg.example.test",
-		"listen_port": 443, "strategy": "weighted_round_robin",
+		"listen_port": 8081, "strategy": "weighted_round_robin",
 		"enable_tls": false, "tls_source": "manual", "enabled": false,
 		"upstreams": []map[string]any{{"host": "10.0.0.1", "port": 8080, "weight": -5, "enabled": true}},
 	}

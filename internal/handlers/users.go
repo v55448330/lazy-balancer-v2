@@ -778,7 +778,8 @@ func (h *Handlers) ResetUserPassword(c *gin.Context) {
 		return
 	}
 
-	// 单条 UPDATE 事务（保持事务化改造的回滚完整性，吊销已按用户裁定移除）。
+	// 单条 UPDATE 事务（保持事务化改造的回滚完整性）。Key 吊销已按用户裁定
+	// 移除（改密不吊销 Key，见认证底线）；MFA 挑战吊销保留（下方 revoke）。
 	tx, err := db.DB.BeginTx(c.Request.Context(), nil)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "重置密码失败"})

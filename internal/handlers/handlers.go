@@ -1597,10 +1597,10 @@ func checkPortTLSMix(excludeCaddyID string, port int, enableTLS bool) error {
 	//     https://域名:443 的 TLS 握手必然失败。
 	// 放置于本方法=创建/更新/启用三个调用点统一覆盖。
 	if enableTLS && port == 80 {
-		return fmt.Errorf("80 端口是 HTTP 端口，Caddy 不会在此端口终止 TLS（规则将按明文转发），请改用 443 等 TLS 端口或关闭 HTTPS")
+		return fmt.Errorf("80 端口是 HTTP 端口，TLS 规则不可监听 80（Caddy 不会在此端口终止 TLS，规则将按明文转发），请改用 443 等 TLS 端口或关闭 HTTPS")
 	}
 	if !enableTLS && port == 443 {
-		return fmt.Errorf("443 端口是 HTTPS 默认端口，明文 HTTP 规则会使 https://域名:443 无法建立连接，请开启 HTTPS 或改用其他端口")
+		return fmt.Errorf("443 端口是 HTTPS 默认端口，明文 HTTP 规则不可监听 443（https://域名:443 握手必败），请开启 HTTPS 或改用其他端口；443 不适用同端口跳转（走 80→443 既有通道）")
 	}
 	opposite := 1
 	if enableTLS {

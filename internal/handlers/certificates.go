@@ -204,7 +204,9 @@ func pruneSupersededDNSCredentialFamily(creds, stored map[string]string) []strin
 		// api_token 归 dnspod/cloudflare 两族共有：仅当存量侧是 cloudflare
 		// 时，继承值才是旧族 token，须随切换清除；存量是 dnspod 自身的
 		// token 形态属同族遗留（Canonical 折叠下 app 对压过游离 token），
-		// 由同族语义保持，不在此剪。
+		// 由同族语义保持，不在此剪。裸 api_token / canonical api_token 形态
+		// 的存量跨族切换：掩码继承保存不拦（跨族守卫只在 UI app 对形态命中），
+		// 凭据测试/签发期暴露后由用户显式重新提交收口。
 		if storedMode == "cloudflare" {
 			stale = append(stale, "api_token")
 		}
@@ -522,6 +524,17 @@ func (h *Handlers) UpdateCertificateConfig(c *gin.Context) {
 	// 只含认证方式而无凭证值的载荷长度非零，仍必须过下方 provider 校验。
 	if req.DNSCredentials != nil && len(effectiveCredentials) == 0 {
 		req.DNSCredentials = nil
+	}
+	// 跨族掩码继承守卫（fail-visible）：provider 切换后若合并后凭证经掩码
+	// 继承携带了与新族不一致的旧族 token（裸 api_token / canonical api_token
+	// 形态的存量经掩码合并而来），保存时点名拒绝——旧族 token 静默沿用会让
+	// 失败推迟到签发/测试端点，且旧族密钥在窗口期随快照/备份扩散。省略凭据
+	// + provider 变更路径不受影响（旧值携带旧 mode → buildCredentials 族门 400）。
+	if effectiveProvider != oldProvider {
+		if family := dnsCredentialFamilyMode(effectiveCredentials); family != "" && family != effectiveProvider {
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "凭证族与目标 DNS 提供商不一致（掩码继承携带了旧提供商的 token），请显式提交新提供商的凭证"})
+			return
+		}
 	}
 	provider, ok := dnsproviders.Get(effectiveProvider)
 	if !ok {

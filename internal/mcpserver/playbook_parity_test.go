@@ -14,18 +14,22 @@ var playbookIdentifierPattern = regexp.MustCompile("`([a-z][a-z0-9_]*)`")
 // 登记项=参数名/响应字段/任务状态字面量；新增项必须在此说明用途，防止把
 // 已改名/删除的工具悄悄塞进白名单掩盖腐化。
 var playbookNonToolIdentifiers = map[string]string{
-	"caddy_id":     "工具参数：规则 Caddy ID",
-	"rule_id":      "工具参数：证书任务的规则过滤",
-	"domain":       "工具参数：域名",
-	"listen_port":  "工具参数：监听端口",
-	"page":         "工具参数：分页页码",
-	"page_size":    "工具参数：分页大小",
-	"input_schema": "tools/list 响应字段",
-	"issued":       "证书任务状态字面量",
-	"failed":       "证书任务状态字面量",
-	"upstreams":    "工具参数：规则上游数组（update_rule 全量替换语义）",
-	"path_rules":   "工具参数：路径路由数组（update_rule 全量替换语义）",
-	"enabled":      "工具参数/上游字段：启用开关",
+	"caddy_id":          "工具参数：规则 Caddy ID",
+	"rule_id":           "工具参数：证书任务的规则过滤",
+	"domain":            "工具参数：域名",
+	"listen_port":       "工具参数：监听端口",
+	"enable_tls":        "规则字段：启用 TLS（create_rule/update_rule 参数）",
+	"tls_source":        "规则字段：证书来源（acme_dns/manual）",
+	"tls_http_redirect": "规则字段：HTTP→HTTPS 跳转开关",
+	"protocol=http":     "规则字段示例：协议=http",
+	"page":              "工具参数：分页页码",
+	"page_size":         "工具参数：分页大小",
+	"input_schema":      "tools/list 响应字段",
+	"issued":            "证书任务状态字面量",
+	"failed":            "证书任务状态字面量",
+	"upstreams":         "工具参数：规则上游数组（update_rule 全量替换语义）",
+	"path_rules":        "工具参数：路径路由数组（update_rule 全量替换语义）",
+	"enabled":           "工具参数/上游字段：启用开关",
 }
 
 // TestPlaybookToolMentionsExist 把手册里提到的工具名与真实工具清单对账：

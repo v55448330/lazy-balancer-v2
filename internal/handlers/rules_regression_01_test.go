@@ -204,7 +204,7 @@ func postCreateRule(t *testing.T, handler *Handlers, body map[string]any) *httpt
 func createRulePayload(name string, upstreams []map[string]any) map[string]any {
 	return map[string]any{
 		"name": name, "protocol": "http", "domain": name + ".example.test",
-		"listen_port": 443, "strategy": "weighted_round_robin",
+		"listen_port": 8081, "strategy": "weighted_round_robin",
 		"enable_tls": false, "tls_source": "manual", "enabled": false,
 		"health_check_interval": 10, "health_check_timeout": 2,
 		"health_check_unhealthy_threshold": 3, "health_check_healthy_threshold": 2,

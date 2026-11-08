@@ -310,7 +310,7 @@
                 <!-- 刷新失败但有缓存时必须明示陈旧：表格仍渲染上一次结果，与
                      新鲜的指标列混排，不提示会被误读为当前真实规则集 -->
                 <el-tag v-if="rulesUnavailable && rules.length > 0" type="warning" size="small" effect="plain" title="规则列表刷新失败，当前展示上次拉取的结果">规则列表刷新失败：展示上次结果</el-tag>
-                <el-tag v-if="ruleMetricsEpochLabel" class="epoch-tag" type="info" size="small" effect="plain" :title="METRIC_RELOAD_RESET_NOTE">{{ ruleMetricsEpochLabel() }}</el-tag>
+                <el-tag v-if="ruleMetricsEpochSeconds" class="epoch-tag" type="info" size="small" effect="plain" :title="METRIC_RELOAD_RESET_NOTE">{{ ruleMetricsEpochLabel() }}</el-tag>
                 <el-radio-group v-model="rankBy" size="small" aria-label="规则排序方式">
                   <el-radio-button value="requests">按请求数</el-radio-button>
                   <el-radio-button value="bytes">按流量</el-radio-button>
