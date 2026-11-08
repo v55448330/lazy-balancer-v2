@@ -42,7 +42,6 @@ import zhCn from 'element-plus/es/locale/lang/zh-cn'
 import enLocale from 'element-plus/es/locale/lang/en'
 import { useI18n } from 'vue-i18n'
 import { i18n } from '@/i18n'
-import LanguageSwitcher from '@/components/LanguageSwitcher.vue'
 
 const { t } = useI18n()
 const elLocale = computed(() => (i18n.global.locale.value === 'en' ? enLocale : zhCn))

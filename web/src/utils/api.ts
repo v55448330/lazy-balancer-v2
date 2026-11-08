@@ -140,6 +140,19 @@ let sessionExpiredDialogOpen = false
 // 拦截器直接拒绝、不再出站任何请求；标志随确认后的 location.reload() 一并消亡。
 let sessionExpiredDetected = false
 
+// 当前界面语言(i18n 惰性引入避免模块装载哨兵拉起 vue-i18n 全家桶;main.ts
+// 已 app.use(i18n),运行期恒有实例)。
+function currentLocale(): string {
+  return localStorage.getItem('lb_locale') === 'en' ? 'en' : 'zh-CN'
+}
+
+// 从错误响应体解出 message_key(i18n 稳定键);无键返回 undefined。
+function messageKeyOf(responseData: unknown): string | undefined {
+  if (typeof responseData !== 'object' || responseData === null) return undefined
+  const key = (responseData as { message_key?: unknown }).message_key
+  return typeof key === 'string' && key ? key : undefined
+}
+
 // Blob 下载（配置导出、MCP 手册）失败时，错误响应体是 Blob 而非 JSON，
 // 需读出文本后解析后端 message，否则只能展示 axios 的英文兜底文案。
 async function blobErrorMessage(responseData: unknown): Promise<string | undefined> {
@@ -161,11 +174,14 @@ export class ApiRequestError extends Error {
   // ——不回传的话调用方拿到的是被拦截器替换后的错误，除 message 外全部丢失。
   readonly status?: number
   readonly data?: unknown
+  // 后端 message_key(i18n 稳定语义键):前端分类/本地词表回落用,与文案解耦。
+  readonly messageKey?: string
   constructor(message: string, status?: number, data?: unknown) {
     super(message)
     this.name = 'ApiRequestError'
     this.status = status
     this.data = data
+    this.messageKey = messageKeyOf(data)
   }
 }
 
@@ -194,6 +210,9 @@ service.interceptors.request.use(
     if (authToken) {
       config.headers.Authorization = `Bearer ${authToken}`
     }
+    // i18n:后端按 Accept-Language 返回已翻译的 message(message_key 恒定,
+    // 供前端分类钉测与本地词表回落);curl/脚本不带该头时后端回落中文。
+    config.headers['Accept-Language'] = currentLocale() === 'en' ? 'en' : 'zh-CN'
     return config
   },
   (error) => {
