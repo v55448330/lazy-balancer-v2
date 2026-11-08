@@ -3,6 +3,17 @@
 import { createI18n } from 'vue-i18n'
 import zhCommon from '@/locales/zh/common'
 import enCommon from '@/locales/en/common'
+import zhRules from '@/locales/zh/rules'
+import enRules from '@/locales/en/rules'
+import zhSecurity from '@/locales/zh/security'
+import enSecurity from '@/locales/en/security'
+import zhMisc from '@/locales/zh/misc'
+import enMisc from '@/locales/en/misc'
+
+// 域词条合并:每份文件 export { app: { <子域> } },app 下子域互斥,浅合并即可。
+const appOf = (m: { app?: Record<string, unknown> }) => m.app ?? {}
+const zhApp = { ...appOf(zhRules), ...appOf(zhSecurity), ...appOf(zhMisc) }
+const enApp = { ...appOf(enRules), ...appOf(enSecurity), ...appOf(enMisc) }
 
 export type Locale = 'zh-CN' | 'en'
 
@@ -30,8 +41,8 @@ export const i18n = createI18n({
   locale: detectLocale(),
   fallbackLocale: 'zh-CN',
   messages: {
-    'zh-CN': { common: zhCommon },
-    en: { common: enCommon },
+    'zh-CN': { common: zhCommon, app: zhApp },
+    en: { common: enCommon, app: enApp },
   },
   missingWarn: false,
   fallbackWarn: false,

@@ -1,0 +1,152 @@
+// i18n 抽词批次 E(utils/composables)en 译文:键集与 zh/misc.ts 母本逐一对应,
+// 产品级口语,零 CJK 残留;main 接线方式同 zh(并入 common.app)。
+export default {
+  "app": {
+    "certJob": {
+      "issued": "Issued",
+      "failed": "Failed",
+      "disabled": "Disabled",
+      "queued": "Queued",
+      "waitingCa": "Rate-limited",
+      "pending": "Pending",
+      "processing": "Processing",
+      "creatingAccount": "Creating account",
+      "creatingOrder": "Creating order",
+      "orderCreated": "Order created",
+      "waitingOrderReady": "Waiting for readiness",
+      "orderReady": "Order ready",
+      "cleanupDns": "Cleaning up DNS",
+      "cleanupWarning": "Cleanup warning",
+      "presentingDns": "Publishing DNS record",
+      "waitingPropagation": "Waiting for propagation",
+      "dnsPropagated": "DNS propagated",
+      "acceptingChallenge": "Requesting validation",
+      "waitingOrderValid": "Waiting for validation",
+      "orderValid": "Validation complete",
+      "validating": "Validating",
+      "validated": "Validation passed",
+      "finalizing": "Finalizing",
+      "finalized": "Order complete",
+      "downloading": "Downloading certificate",
+      "downloaded": "Download complete",
+      "unknown": "Unknown",
+      "manualNeeded": "Manual action",
+      "renewFailed": "Renewal failed",
+      "nextRetryWithRemain": "Next auto-retry {time} ({remain} min left)",
+      "nextRetry": "Next auto-retry {time}",
+      "oldCertRemaining": "Old cert expires in {days} days",
+      "oldCertExpired": "Old cert expired {days} days ago",
+      "failedAttempts": "Failed {attempts} time(s) (limit {cap})",
+      "retryStopped": "Auto-retry stopped · Check logs / DNS & credentials / Reissue manually"
+    },
+    "oidc": {
+      "genericError": "Sign-in failed, please sign in again",
+      "rejectMalformed": "The sign-in link is invalid, please sign in again",
+      "rejectNotOidc": "The sign-in link was not issued by this SSO sign-in and has been rejected",
+      "rejectExpiryMismatch": "The sign-in link is corrupted, please sign in again",
+      "rejectExpired": "The sign-in link has expired, please sign in again",
+      "rejectNonceMissing": "The sign-in link is no longer valid, please sign in again",
+      "rejectNonceMismatch": "The sign-in link does not match this sign-in attempt and has been rejected",
+      "errInvalidRequest": "Invalid request",
+      "errUnauthorizedClient": "This client may not sign in with this method",
+      "errAccessDenied": "Authorization was denied",
+      "errUnsupportedResponseType": "The auth service does not support this sign-in method",
+      "errInvalidScope": "Invalid authorization scope",
+      "errServerError": "Auth service internal error",
+      "errTemporarilyUnavailable": "The auth service is temporarily unavailable",
+      "errInteractionRequired": "Interactive sign-in is required",
+      "errLoginRequired": "Please sign in again",
+      "errAccountSelectionRequired": "Please select an account",
+      "errConsentRequired": "Consent confirmation is required",
+      "errInvalidGrant": "The authorization has expired, please sign in again",
+      "errInvalidRequestUri": "Invalid request URI",
+      "errInvalidRequestObject": "Invalid request object",
+      "errInvalidClient": "Client credentials are invalid — ask an administrator to check the OIDC configuration",
+      "errUnsupportedGrantType": "The auth service does not support this grant type",
+      "errUnsupportedTokenType": "The auth service does not support this token type",
+      "errExpiredToken": "The sign-in token has expired, please sign in again"
+    },
+    "credPolicy": {
+      "usernameLength": "Username must be {min}-{max} characters",
+      "usernamePolicy": "Usernames must start with a lowercase letter and use only lowercase letters and digits",
+      "passwordLength": "Password must be {min}-{max} characters",
+      "passwordCharset": "Passwords support digits, letters and special characters — CJK and other non-ASCII characters are not allowed",
+      "newPasswordRequired": "Enter the new password (leave it blank to keep the current password)"
+    },
+    "ruleValidation": {
+      "pathLeadingSlash": "Must start with /",
+      "upstreamPathSpaceChars": "Cannot contain spaces, ? or # characters",
+      "pathWildcardChars": "Cannot contain wildcard characters * ? {'{'} {'}'}",
+      "upstreamPathWrapped": "Upstream path {error}",
+      "rowPathError": "Path rule {row}: {error}",
+      "rowDuplicate": "Path rule {row} duplicates rule {other} ({path})",
+      "rowShadow": "Path rule {row} shadows rule {other}: a prefix and an exact match for the same path conflict — adjust one of them",
+      "staticStatusNotCommon": "Path rule {row}: static status code {status} is not in the common set",
+      "responseBodyTooLong": "Path rule {row}: response body must be 64 characters or fewer",
+      "responseFormatLimited": "Path rule {row}: response format supports plain text/JSON/HTML only",
+      "staticRedirectConflict": "Path rule {row}: static response and redirect URL are mutually exclusive",
+      "staticUpstreamConflict": "Path rule {row}: static response mode conflicts with upstream settings",
+      "redirectAddressRequired": "Path rule {row}: a 301 redirect requires a redirect URL",
+      "redirectInvalidChars": "Path rule {row}: redirect URL contains invalid characters",
+      "redirectAbsoluteRequired": "Path rule {row}: redirect URL must be an http(s):// absolute URL or a /-prefixed path",
+      "redirectResponseConflict": "Path rule {row}: 301 redirect conflicts with response content (clear body/format first)",
+      "redirectUpstreamConflict": "Path rule {row}: 301 redirect mode conflicts with upstream settings",
+      "responseModeInvalid": "Path rule {row}: invalid response_mode",
+      "upstreamRequired": "Path rule {row} needs at least one custom upstream",
+      "upstreamMixedProtocol": "Path rule {row}: custom upstreams mix http/https (protocols must be uniform within one upstream pool)",
+      "upstreamAddressRequired": "Path rule {row}: custom upstream address cannot be empty",
+      "upstreamHostInvalid": "Path rule {row}: custom upstream host \"{address}\" is invalid",
+      "upstreamPortInvalid": "Path rule {row}: custom upstream port is invalid",
+      "upstreamProtocolLimited": "Path rule {row}: custom upstream protocol must be http or https",
+      "upstreamWeightPositive": "Path rule {row}: custom upstream weight must be greater than 0",
+      "upstreamDuplicate": "Path rule {row}: custom upstream {hostPort} is duplicated"
+    },
+    "pathRules": {
+      "duplicateRule": "Duplicates rule {n}",
+      "shadowRule": "Same path as rule {n} — prefix/exact rules shadow each other",
+      "redirectAddressRequired": "A 301 redirect requires a redirect URL",
+      "redirectInvalidChars": "Redirect URL contains invalid characters",
+      "redirectAbsoluteRequired": "Redirect URL must be an http(s):// absolute URL or a /-prefixed path"
+    },
+    "trustedProxy": {
+      "minPrefixMessage": "Minimum allowed: /{v4} (IPv4) and /{v6} (IPv6)",
+      "notEmpty": "Cannot be empty",
+      "invalidCidr": "Not a valid IP or CIDR",
+      "coversAll": "Covers the entire address space — equivalent to trusting every source",
+      "inlineEntryLimit": "At most {max} inline entries ({current} now) — store the overflow in an address list and reference it",
+      "rangesUnavailable": "Trusted ranges unusable: {details}",
+      "headerInvalid": "Invalid header name (letters, digits and hyphens only, 1-64 characters)",
+      "headerMergedNote": ", duplicates merged",
+      "headerLimit": "At most {max} entries ({unique} after dedup{merged})",
+      "headersUnavailable": "Trusted proxy headers unusable: {details}",
+      "refEntryProblem": "Referenced list \"{name}\": {value} ({error})",
+      "estimateNote": "; {unresolved} entries estimated by count (referenced lists not loaded, overlapping ranges not deduped)",
+      "totalExceeded": "Total trusted ranges exceed the {max} limit ({union} after dedup: {inline} inline + {ref} referenced expansion; overlapping ranges counted once{estimate}). Shrink inline ranges or reference fewer lists",
+      "softTotalWarn": "Trusted ranges total about {union}, possibly over the {max} limit ({inline} inline + {ref} referenced; {unresolved} entries come from lists not yet loaded, estimated by count and not deduped). You can still save — the server makes the final call on the deduped set"
+    },
+    "clusterUrl": {
+      "formatInvalid": "{label} is not formatted correctly",
+      "mustBeHttp": "{label} must use HTTP or HTTPS",
+      "noCredentials": "{label} cannot contain a username or password",
+      "noQuery": "{label} cannot contain query parameters",
+      "noFragment": "{label} cannot contain a fragment"
+    },
+    "oidcAllowList": {
+      "maxEntries": "{label} allows at most {max} entries ({current} now)",
+      "entryTooLong": "{label} allows at most {max} characters per entry"
+    },
+    "apiKeyWhitelist": {
+      "rowInvalid": "Row {row}: invalid IP or CIDR format"
+    },
+    "crsRuleFiles": {
+      "serverTotalSuffix": ", server total={total}",
+      "listIncomplete": "CRS rule file list incomplete (fetched {count}{suffix})"
+    },
+    "importFailure": {
+      "conflictDisableNote": "If the import succeeds, {count} conflicting rules will be disabled (this attempt failed; actual state is shown on the rules page)"
+    },
+    "ipQuickLists": {
+      "newListTarget": "{name} · New list"
+    }
+  }
+} as const

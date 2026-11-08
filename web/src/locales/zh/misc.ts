@@ -1,0 +1,154 @@
+// i18n 抽词批次 E(utils/composables)母本:键前缀保持 common.app.*。
+// main 接线(全部批次完成后):把本文件 default 的 app 子树并入 common.app 注册
+// (zh: messages.common.app = { ...zhCommon.app, ...zhMisc.app },en 同构)。
+// 接线前由 i18n/tSafe 以本文件为回落,运行期行为与行为测试不受影响。
+export default {
+  "app": {
+    "certJob": {
+      "issued": "已签发",
+      "failed": "失败",
+      "disabled": "已禁用",
+      "queued": "排队中",
+      "waitingCa": "限流中",
+      "pending": "待处理",
+      "processing": "处理中",
+      "creatingAccount": "创建账户",
+      "creatingOrder": "创建订单",
+      "orderCreated": "建单完成",
+      "waitingOrderReady": "等待就绪",
+      "orderReady": "订单就绪",
+      "cleanupDns": "清理中",
+      "cleanupWarning": "清理警告",
+      "presentingDns": "配置解析",
+      "waitingPropagation": "等待传播",
+      "dnsPropagated": "已传播",
+      "acceptingChallenge": "提交验证",
+      "waitingOrderValid": "等待验证",
+      "orderValid": "验证完成",
+      "validating": "验证中",
+      "validated": "验证通过",
+      "finalizing": "最终化",
+      "finalized": "订单完成",
+      "downloading": "下载证书",
+      "downloaded": "下载完成",
+      "unknown": "未知",
+      "manualNeeded": "需人工",
+      "renewFailed": "续签失败",
+      "nextRetryWithRemain": "下次自动重试 {time}（剩 {remain} 分钟）",
+      "nextRetry": "下次自动重试 {time}",
+      "oldCertRemaining": "旧证书剩 {days} 天",
+      "oldCertExpired": "旧证书已过期 {days} 天",
+      "failedAttempts": "已失败 {attempts} 次（上限 {cap}）",
+      "retryStopped": "自动重试已停止 · 查看日志 / 检查 DNS 或凭据 / 手动重签"
+    },
+    "oidc": {
+      "genericError": "登录失败，请重新登录",
+      "rejectMalformed": "登录链接无效，请重新登录",
+      "rejectNotOidc": "登录链接不是本次单点登录签发的令牌，已拒绝",
+      "rejectExpiryMismatch": "登录链接已损坏，请重新登录",
+      "rejectExpired": "登录链接已过期，请重新登录",
+      "rejectNonceMissing": "登录链接已失效，请重新登录",
+      "rejectNonceMismatch": "登录链接与本次登录不匹配，已拒绝",
+      "errInvalidRequest": "请求无效",
+      "errUnauthorizedClient": "客户端无权使用该方式登录",
+      "errAccessDenied": "授权被拒绝",
+      "errUnsupportedResponseType": "认证服务不支持该登录方式",
+      "errInvalidScope": "授权范围无效",
+      "errServerError": "认证服务内部错误",
+      "errTemporarilyUnavailable": "认证服务暂时不可用",
+      "errInteractionRequired": "需要交互式登录",
+      "errLoginRequired": "需要重新登录",
+      "errAccountSelectionRequired": "需要选择账号",
+      "errConsentRequired": "需要授权确认",
+      "errInvalidGrant": "授权已失效，请重新登录",
+      "errInvalidRequestUri": "请求地址无效",
+      "errInvalidRequestObject": "请求对象无效",
+      "errInvalidClient": "客户端凭证无效，请联系管理员检查 OIDC 配置",
+      "errUnsupportedGrantType": "认证服务不支持该授权类型",
+      "errUnsupportedTokenType": "认证服务不支持该令牌类型",
+      "errExpiredToken": "登录令牌已过期，请重新登录"
+    },
+    "credPolicy": {
+      "usernameLength": "用户名长度需为 {min}-{max} 位",
+      "usernamePolicy": "用户名仅允许小写英文开头，字符只允许小写字母和数字",
+      "passwordLength": "密码长度需为 {min}-{max} 位",
+      "passwordCharset": "密码仅支持数字、大小写字母和特殊字符，不允许汉字或其他非 ASCII 字符",
+      "newPasswordRequired": "请填写新密码（新密码留空表示不修改密码）"
+    },
+    "ruleValidation": {
+      "pathLeadingSlash": "必须以 / 开头",
+      "upstreamPathSpaceChars": "不能包含空格 ? # 字符",
+      "pathWildcardChars": "不能包含 * ? {'{'} {'}'} 通配字符",
+      "upstreamPathWrapped": "上游路径{error}",
+      "rowPathError": "第 {row} 条路径：{error}",
+      "rowDuplicate": "第 {row} 条路径与第 {other} 条重复（{path}）",
+      "rowShadow": "第 {row} 条路径与第 {other} 条：同一路径同时存在前缀与精确匹配规则会造成遮蔽，请调整",
+      "staticStatusNotCommon": "第 {row} 条路径：直接返回的状态码 {status} 不在常用集合",
+      "responseBodyTooLong": "第 {row} 条路径：响应内容不能超过 64 个字符",
+      "responseFormatLimited": "第 {row} 条路径：响应格式仅支持纯文本/JSON/HTML",
+      "staticRedirectConflict": "第 {row} 条路径：直接返回与跳转地址互斥",
+      "staticUpstreamConflict": "第 {row} 条路径：直接返回模式与上游配置互斥",
+      "redirectAddressRequired": "第 {row} 条路径：301 跳转需要填写跳转地址",
+      "redirectInvalidChars": "第 {row} 条路径：跳转地址含非法字符",
+      "redirectAbsoluteRequired": "第 {row} 条路径：跳转地址须为 http(s):// 绝对地址或 / 开头路径",
+      "redirectResponseConflict": "第 {row} 条路径：301 跳转与响应内容互斥（请清空内容/格式）",
+      "redirectUpstreamConflict": "第 {row} 条路径：301 跳转模式与上游配置互斥",
+      "responseModeInvalid": "第 {row} 条路径：response_mode 无效",
+      "upstreamRequired": "第 {row} 条路径至少需要一个自定义上游",
+      "upstreamMixedProtocol": "第 {row} 条路径的自定义上游 http/https 混布（同一上游池协议须一致）",
+      "upstreamAddressRequired": "第 {row} 条路径的自定义上游地址不能为空",
+      "upstreamHostInvalid": "第 {row} 条路径的自定义上游主机「{address}」无效",
+      "upstreamPortInvalid": "第 {row} 条路径的自定义上游端口无效",
+      "upstreamProtocolLimited": "第 {row} 条路径的自定义上游协议只能是 http 或 https",
+      "upstreamWeightPositive": "第 {row} 条路径的自定义上游权重必须大于 0",
+      "upstreamDuplicate": "第 {row} 条路径的自定义上游 {hostPort} 重复"
+    },
+    "pathRules": {
+      "duplicateRule": "与规则 {n} 重复",
+      "shadowRule": "与规则 {n} 同路径前缀+精确互相遮蔽",
+      "redirectAddressRequired": "301 跳转需要填写跳转地址",
+      "redirectInvalidChars": "跳转地址含非法字符",
+      "redirectAbsoluteRequired": "跳转地址须为 http(s):// 绝对地址或 / 开头路径"
+    },
+    "trustedProxy": {
+      "minPrefixMessage": "最小允许 /{v4}（IPv4）与 /{v6}（IPv6）",
+      "notEmpty": "不能为空",
+      "invalidCidr": "不是合法的 IP 或 CIDR",
+      "coversAll": "覆盖全部地址空间，等同信任任意来源",
+      "inlineEntryLimit": "内联网段最多 {max} 条（当前 {current} 条），超出部分请存为地址列表后引用",
+      "rangesUnavailable": "受信网段不可用：{details}",
+      "headerInvalid": "非法请求头名（仅允许字母/数字/连字符，1-64 字符）",
+      "headerMergedNote": "，重复项已合并",
+      "headerLimit": "最多 {max} 条（去重后 {unique} 条{merged}）",
+      "headersUnavailable": "受信代理请求头不可用：{details}",
+      "refEntryProblem": "引用名单「{name}」：{value}（{error}）",
+      "estimateNote": "；其中 {unresolved} 条按条数估算（引用名单条目未加载，重叠网段未参与去重）",
+      "totalExceeded": "受信网段总数超过 {max} 上限（去重后合计 {union}：内联 {inline} + 引用展开 {ref}；重叠网段只计一次{estimate}），请收窄内联网段或减少引用列表",
+      "softTotalWarn": "受信网段合计约 {union} 条，可能超过 {max} 上限（内联 {inline} + 引用展开 {ref}；其中 {unresolved} 条来自条目未加载的引用列表，按条数估算且未参与去重）。仍可保存，最终以服务端按去重后的网段集合判定为准"
+    },
+    "clusterUrl": {
+      "formatInvalid": "{label}格式不正确",
+      "mustBeHttp": "{label}必须使用 HTTP 或 HTTPS",
+      "noCredentials": "{label}不能包含用户名或密码",
+      "noQuery": "{label}不能包含查询参数",
+      "noFragment": "{label}不能包含片段"
+    },
+    "oidcAllowList": {
+      "maxEntries": "{label}最多 {max} 条（当前 {current} 条）",
+      "entryTooLong": "{label}单条最多 {max} 个字符"
+    },
+    "apiKeyWhitelist": {
+      "rowInvalid": "第 {row} 行 IP 或 CIDR 格式不正确"
+    },
+    "crsRuleFiles": {
+      "serverTotalSuffix": "，服务端 total={total}",
+      "listIncomplete": "CRS 规则文件清单未取全（已取 {count} 条{suffix}）"
+    },
+    "importFailure": {
+      "conflictDisableNote": "若导入成功将禁用冲突规则：{count} 条（本次失败，实际状态以规则页为准）"
+    },
+    "ipQuickLists": {
+      "newListTarget": "{name} · 新建名单"
+    }
+  }
+} as const
