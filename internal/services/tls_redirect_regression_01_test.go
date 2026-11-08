@@ -162,3 +162,29 @@ func TestGenerateCaddyConfig_defaultPort443ExcludedFromSamePortWrapper(t *testin
 		t.Fatal("server http_80 missing（80→443 跳转通道必须保留）")
 	}
 }
+
+// 形状⑤（带外脏行 fail-soft 实证）：空域名 + TLS + 跳转的带外行（直改库/
+// 旧备份，API 面已拒空域名）在渲染前置阶段即被跳过——本端口 server 整体
+// 不发布，审计假设的「空 domains 包装器 Provision 冻结」经实证不可达
+// （该形态下 len>0 守卫为纵深防御，正常路径不可达）。
+func TestGenerateCaddyConfig_emptyDomainDirtyRuleFallsBack(t *testing.T) {
+	useTemporaryCertDir(t)
+	_, database := newClusterTestService(t)
+	certPEM, keyPEM := matchingCertificatePair(t, "dirty.example.test")
+	// 带外形态：直改库写入空域名行（API 面已拒空域名，仅此通道可达）。
+	if _, err := database.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,strategy,enable_tls,tls_source,tls_cert,tls_key,tls_http_redirect,enabled) VALUES ('lb-dirty','dirty','http','',668,'weighted_round_robin',1,'manual',?,?,1,1)`, certPEM, keyPEM); err != nil {
+		t.Fatal(err)
+	}
+	config := GenerateCaddyConfig()
+	if message, failed := config[caddyConfigGenerationErrorKey].(string); failed {
+		t.Fatalf("generate: %s", message)
+	}
+	servers := config["apps"].(map[string]interface{})["http"].(map[string]interface{})["servers"].(map[string]interface{})
+	sv, exists := servers["http_668"]
+	if !exists {
+		t.Fatal("server http_668 missing（TLS 规则仍应发布）")
+	}
+	if _, has := sv.(map[string]interface{})["listener_wrappers"]; has {
+		t.Fatal("空域名脏行不得挂包装器（空 domains 会 Provision 失败冻结整份配置）——回退未开跳转姿态")
+	}
+}

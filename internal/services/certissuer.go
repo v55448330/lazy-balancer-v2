@@ -330,7 +330,7 @@ func (s *CertIssuer) deploymentFailed(jobID int, material issuedCertificate, mes
 
 func (s *CertIssuer) deploymentFailedFrom(jobID int, material issuedCertificate, message string, err error, from []string) error {
 	var previousAttempt int
-	// 使用 QueryRowContext 以响应 worker 取消信号（此处函数无 ctx，用 Background 兜底）。
+	// Background 兜底：失败回写是补偿通道，不随 worker 取消中止。
 	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(from)), ",")
 	args := []any{jobID}
 	for _, status := range from {

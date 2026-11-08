@@ -310,7 +310,7 @@
                 <!-- 刷新失败但有缓存时必须明示陈旧：表格仍渲染上一次结果，与
                      新鲜的指标列混排，不提示会被误读为当前真实规则集 -->
                 <el-tag v-if="rulesUnavailable && rules.length > 0" type="warning" size="small" effect="plain" title="规则列表刷新失败，当前展示上次拉取的结果">规则列表刷新失败：展示上次结果</el-tag>
-                <el-tag v-if="ruleMetricsEpochLabel" class="epoch-tag" type="info" size="small" effect="plain" :title="METRIC_RELOAD_RESET_NOTE">{{ ruleMetricsEpochLabel }}</el-tag>
+                <el-tag v-if="ruleMetricsEpochLabel" class="epoch-tag" type="info" size="small" effect="plain" :title="METRIC_RELOAD_RESET_NOTE">{{ ruleMetricsEpochLabel() }}</el-tag>
                 <el-radio-group v-model="rankBy" size="small" aria-label="规则排序方式">
                   <el-radio-button value="requests">按请求数</el-radio-button>
                   <el-radio-button value="bytes">按流量</el-radio-button>
@@ -515,12 +515,15 @@ const caddyMetrics = ref<CaddyMetrics | null>(null)
 // ruleMetricsEpochSeconds 规则指标统计起点（/metrics/dashboard 透传，Unix 秒；
 // 0/缺失=引擎端无序列，隐藏「统计自」显示——防御旧后端）。
 const ruleMetricsEpochSeconds = ref(0)
-const ruleMetricsEpochLabel = computed(() => {
+// 渲染期求值（非 computed）：标签含「今天/跨日」分支，依赖随时间流逝变化
+// 的 Date.now()——computed 的响应式依赖只有 epoch ref，页面驻留跨午夜不会
+// 触发重算；模板在轮询驱动下周期性重渲染，方法调用使标签随每次渲染刷新。
+const ruleMetricsEpochLabel = () => {
   if (!ruleMetricsEpochSeconds.value) return ''
   // 经 utils/date 配置时区单源入口（同卡图表轴同一钟面；同日 HH:MM、
   // 跨日 MM-DD HH:MM）。
   return `统计自 ${formatEpochStatLabel(ruleMetricsEpochSeconds.value, Date.now())}（上次配置重载）`
-})
+}
 const caddyStatus = ref('unknown')
 // /caddy/status 失败显性标记（与 systemInfoUnavailable 等 8 项同构）——
 // 缺它时状态标签/配置一致性/应用失败横幅全部静默陈旧（「运行中/配置正常」

@@ -1182,7 +1182,7 @@ func (h *Handlers) GetCertJobLogs(c *gin.Context) {
 //   - 结果总长恒 ≤ budget（硬保证，调用方无需再裁）；
 //   - truncated=true 表示「确有更新/更旧内容未纳入」（预算切断或存在未读的
 //     更旧副本），且此时首个残行（可能是半个 UTF-8 字符）已在内部丢弃；
-//   - 活动文件与各代副本各保留尾部 128KB/500 行（见 readCertJobLogFile）；
+//   - 活动文件与各代副本各保留尾部 128KB/500 行（见 readLogTailFile）；
 //   - 文件不存在=空（「尚无日志」是正常态，不是错误）；非 ENOENT 的 I/O 错误
 //     与「路径是目录」一律上抛——吞掉会让「读不出」与「无日志」不可区分。
 func readRotatedLogTail(path string, maxBackups, perFileBytes, perFileLines, budget int) (string, bool, error) {
@@ -1241,10 +1241,10 @@ func readRotatedLogTail(path string, maxBackups, perFileBytes, perFileLines, bud
 	return content, cutAtBudget || skippedOlder, nil
 }
 
-// readCertJobLogFile 读取单个日志文件的尾部窗口（128KB/500 行）。
+// readLogTailFile 读取单个日志文件的尾部窗口（128KB/500 行）。
 // 文件不存在返回 ("", nil)；其余 I/O 错误（权限、目录被替换、磁盘只读）
 // 必须上抛——吞掉会让「读不出」与「无日志」不可区分。
-func readCertJobLogFile(path string) (string, error) {
+func readLogTailFile(path string) (string, error) {
 	return readLogTailWindow(path, 128*1024, 500)
 }
 

@@ -16,6 +16,7 @@ import (
 	"github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/common/profile"
 	dnspod "github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/dnspod/v20210323"
 	"lazy-balancer-v2/internal/dnsname"
+	"lazy-balancer-v2/internal/dnsprovider/internal/echo"
 	"lazy-balancer-v2/internal/dnsprovider/internal/retry"
 	"lazy-balancer-v2/internal/dnsprovider/ownership"
 )
@@ -456,29 +457,6 @@ func (p *Provider) deleteRecord(ctx context.Context, zone string, recordID uint6
 	return p.sanitizeSDKError(err)
 }
 
-// credentialEchoSecretMinLen 是凭据分段参与定向替换的最小长度（与 dnspod 侧
-// 同口径）：过短分段在任意文案里全局替换会伤及排障上下文，只纳充分长分段。
-const credentialEchoSecretMinLen = 8
-
-// credentialEchoSecrets 展开一段凭据的全部已知明文形态：完整值 + 各分段
-// （逗号/空白分隔，secretId/secretKey 通常无分段），排除过短分段。
-func credentialEchoSecrets(secret string) []string {
-	secret = strings.TrimSpace(secret)
-	if secret == "" {
-		return nil
-	}
-	secrets := []string{secret}
-	for _, part := range strings.FieldsFunc(secret, func(r rune) bool {
-		return r == ',' || r == '\t' || r == '\n' || r == ' ' || r == ';'
-	}) {
-		part = strings.TrimSpace(part)
-		if len(part) >= credentialEchoSecretMinLen && part != secret {
-			secrets = append(secrets, part)
-		}
-	}
-	return secrets
-}
-
 // sanitizedSDKError 包装脱敏后的 SDK 错误：Error() 输出脱敏文案，Unwrap 保留
 // 原错误链（errors.Is/As 的分类语义不受影响——isRecordNotFound 等判定在脱敏
 // 前完成，链上原始错误仅经显式 Unwrap 可见，日志/错误文案不会带出）。
@@ -502,8 +480,8 @@ func (p *Provider) sanitizeSDKError(err error) error {
 	if err == nil {
 		return nil
 	}
-	secrets := credentialEchoSecrets(p.secretID)
-	secrets = append(secrets, credentialEchoSecrets(p.secretKey)...)
+	secrets := echo.Secrets(p.secretID)
+	secrets = append(secrets, echo.Secrets(p.secretKey)...)
 	if len(secrets) == 0 {
 		return err
 	}

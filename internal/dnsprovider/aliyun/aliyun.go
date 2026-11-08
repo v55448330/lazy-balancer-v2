@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"lazy-balancer-v2/internal/dnsname"
+	"lazy-balancer-v2/internal/dnsprovider/internal/echo"
 	"lazy-balancer-v2/internal/dnsprovider/internal/retry"
 	"lazy-balancer-v2/internal/dnsprovider/ownership"
 )
@@ -549,30 +550,6 @@ func isRecordNotFound(err error) bool {
 	return strings.HasPrefix(apiErr.Code, "RecordNotFound")
 }
 
-// credentialEchoSecretMinLen 是凭据分段参与定向替换的最小长度（与
-// dnspod/tencent 侧同口径）：过短分段在任意文案里全局替换会伤及排障上下文，
-// 只纳充分长分段。
-const credentialEchoSecretMinLen = 8
-
-// credentialEchoSecrets 展开一段凭据的全部已知明文形态：完整值 + 各分段
-// （逗号/空白分隔，AccessKey 对通常无分段），排除过短分段。
-func credentialEchoSecrets(secret string) []string {
-	secret = strings.TrimSpace(secret)
-	if secret == "" {
-		return nil
-	}
-	secrets := []string{secret}
-	for _, part := range strings.FieldsFunc(secret, func(r rune) bool {
-		return r == ',' || r == '\t' || r == '\n' || r == ' ' || r == ';'
-	}) {
-		part = strings.TrimSpace(part)
-		if len(part) >= credentialEchoSecretMinLen && part != secret {
-			secrets = append(secrets, part)
-		}
-	}
-	return secrets
-}
-
 // sanitizedAPIError 包装脱敏后的 API 错误：Error() 输出脱敏文案，Unwrap 保留
 // 原错误链（errors.Is/As 的分类语义不受影响——isRecordNotFound 等判定在脱敏
 // 前完成，链上原始错误仅经显式 Unwrap 可见，日志/错误文案不会带出）。
@@ -595,8 +572,8 @@ func (p *Provider) sanitizeAPIError(err error) error {
 	if err == nil {
 		return nil
 	}
-	secrets := credentialEchoSecrets(p.accessKeyID)
-	secrets = append(secrets, credentialEchoSecrets(p.accessKeySecret)...)
+	secrets := echo.Secrets(p.accessKeyID)
+	secrets = append(secrets, echo.Secrets(p.accessKeySecret)...)
 	if len(secrets) == 0 {
 		return err
 	}

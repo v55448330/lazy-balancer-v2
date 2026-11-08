@@ -1060,7 +1060,7 @@ func TestReadCertJobLogFile_tailWindowDropsPartialFirstLine(t *testing.T) {
 			if err := os.WriteFile(path, []byte(tc.content), 0644); err != nil {
 				t.Fatal(err)
 			}
-			got, err := readCertJobLogFile(path)
+			got, err := readLogTailFile(path)
 			if err != nil {
 				t.Fatalf("read %s: %v", path, err)
 			}

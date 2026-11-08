@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"lazy-balancer-v2/internal/dnsname"
+	"lazy-balancer-v2/internal/dnsprovider/internal/echo"
 	"lazy-balancer-v2/internal/dnsprovider/internal/retry"
 	"lazy-balancer-v2/internal/dnsprovider/ownership"
 )
@@ -554,31 +555,6 @@ func (p *Provider) apiCall(ctx context.Context, method string, params url.Values
 // sanitizeHTTPErrorBody），形态不匹配时宁可整段丢弃。
 var credentialEchoPattern = regexp.MustCompile(`(?i)(login_token\s*[=:]\s*)("[^"]*"|'[^']*'|[^\s&;"'}\]]+)`)
 
-// credentialEchoSecretMinLen 是凭据分段参与定向替换的最小长度：login_token
-// 为 "id,key" 形态，任一分段被单独回声都等价于泄露，但过短的分段（如短 ID）
-// 在任意文案里全局替换会伤及排障上下文，故只纳充分长的分段。
-const credentialEchoSecretMinLen = 8
-
-// credentialEchoSecrets 展开一段凭据的全部已知明文形态：完整值 + 各分段
-// （逗号/空白分隔），排除过短分段。返回顺序保持「长值在前」，定向替换先命中
-// 完整值再兜分段，避免同一片段被重复替换成多重掩码。
-func credentialEchoSecrets(secret string) []string {
-	secret = strings.TrimSpace(secret)
-	if secret == "" {
-		return nil
-	}
-	secrets := []string{secret}
-	for _, part := range strings.FieldsFunc(secret, func(r rune) bool {
-		return r == ',' || r == '\t' || r == '\n' || r == ' ' || r == ';'
-	}) {
-		part = strings.TrimSpace(part)
-		if len(part) >= credentialEchoSecretMinLen && part != secret {
-			secrets = append(secrets, part)
-		}
-	}
-	return secrets
-}
-
 // sanitizeHTTPErrorBody 脱敏错误文案：先按已知凭据明文（variadic secrets）做
 // 定向替换，再用形态正则兜底，与回声的编码形态无关。两者都没覆盖到的残余
 // 凭据痕迹（login_token 字样存在但无掩码）或已知明文残留一律整段丢弃
@@ -586,13 +562,13 @@ func credentialEchoSecrets(secret string) []string {
 func sanitizeHTTPErrorBody(body string, secrets ...string) string {
 	redacted := body
 	for _, secret := range secrets {
-		for _, known := range credentialEchoSecrets(secret) {
+		for _, known := range echo.Secrets(secret) {
 			redacted = strings.ReplaceAll(redacted, known, "***")
 		}
 	}
 	redacted = credentialEchoPattern.ReplaceAllString(redacted, "${1}***")
 	for _, secret := range secrets {
-		for _, known := range credentialEchoSecrets(secret) {
+		for _, known := range echo.Secrets(secret) {
 			if strings.Contains(redacted, known) {
 				return fmt.Sprintf("[response body withheld: %d bytes]", len(body))
 			}

@@ -1400,7 +1400,7 @@ func (h *Handlers) GetCaddyLogs(c *gin.Context) {
 		return
 	}
 
-	// 与 certjobs.readCertJobLogFile 同源形态——
+	// 与 certjobs.readLogTailFile 同源形态——
 	// Stat 与 Read 之间日志增长（高流量 + 轮转滞后）时，裸 ReadAll 会突破
 	// 128KB 尾窗上限；LimitReader 把读取严格钉在窗口大小。
 	data, err := io.ReadAll(io.LimitReader(f, int64(maxBytes)))

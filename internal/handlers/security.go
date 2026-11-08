@@ -5661,11 +5661,11 @@ func truncateLogTail(text string, maxBytes int) string {
 // CRS/IP2Region/威胁三库更新日志端点共用。单份读取失败留 warn（文件不存在
 // 不算错误），不因历史副本不可读丢掉当前文件内容。
 func readUpdateLogWithRotation(path string) string {
-	content, err := readCertJobLogFile(path)
+	content, err := readLogTailFile(path)
 	if err != nil {
 		services.Logf("warn", "读取更新日志失败（%s）: %v", path, err)
 	}
-	oldData, oldErr := readCertJobLogFile(path + ".1")
+	oldData, oldErr := readLogTailFile(path + ".1")
 	if oldErr != nil {
 		services.Logf("warn", "读取更新日志轮转副本失败（%s.1）: %v", path, oldErr)
 	}

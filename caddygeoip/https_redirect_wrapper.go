@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -75,6 +74,13 @@ func (p *HTTPSRedirectSplitWrapper) WrapListener(ln net.Listener) net.Listener {
 	return &httpsRedirectListener{Listener: ln, cfg: p, allowed: allowed}
 }
 
+// acceptSniffDeadline 首字节嗅探读死线（生产 5s；测试经包级变量缩窗到毫秒
+// 级防 CI 挂钟抖动）：静默客户端（connect 后不发字节）若无死线会让 Accept
+// 单循环永久阻塞——该端口全部后续连接（含合法 TLS 握手）排队饿死（整端口
+// DoS）。读到首字节后清死线再分发：TLS 握手节奏交还 caddy，明文路径由
+// servePlain 自设 10s 双死线。超时/EOF 连接直接关闭（与既有 rerr 分支同构）。
+var acceptSniffDeadline = 5 * time.Second
+
 // httpsRedirectListener 分类 Accept：TLS 连接透传，明文连接就地应答。
 type httpsRedirectListener struct {
 	net.Listener
@@ -93,13 +99,16 @@ func (l *httpsRedirectListener) Accept() (net.Conn, error) {
 		}
 		// 首字节显式消费+重放：bufio.ReadByte 会把字节从底层连接吞掉
 		// （缓冲空时直读），TLS 握手首字节丢失——直接读 1 字节并由
-		// peekedConn/oneBytePrefixReader 重放。
+		// peekedConn/oneBytePrefixReader 重放。读前设死线（静默客户端防饿死
+		// 整端口），读到后清死线再分发。
+		_ = conn.SetReadDeadline(time.Now().Add(acceptSniffDeadline))
 		var firstBuf [1]byte
 		nread, rerr := conn.Read(firstBuf[:])
 		if rerr != nil || nread == 0 {
 			_ = conn.Close()
 			continue
 		}
+		_ = conn.SetReadDeadline(time.Now().Add(acceptSniffDeadline))
 		first := firstBuf[0]
 		pc := &peekedConn{Conn: conn, first: first}
 		if first == 0x16 {
@@ -169,16 +178,6 @@ func (c *peekedConn) Read(p []byte) (int, error) {
 		return 1, nil
 	}
 	return c.Conn.Read(p)
-}
-
-// sortedDomains 供渲染侧构造稳定顺序的域名集（同字节渲染幂等）。
-func sortedDomains(domains map[string]struct{}) []string {
-	out := make([]string, 0, len(domains))
-	for d := range domains {
-		out = append(out, d)
-	}
-	sort.Strings(out)
-	return out
 }
 
 // Interface guards.

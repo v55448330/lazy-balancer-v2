@@ -127,6 +127,21 @@ func TestRuleToolSchemasDocumentWriteSideConstraints(t *testing.T) {
 	}
 
 	for name, properties := range map[string]map[string]any{"create_rule": creates, "update_rule": updates} {
+		// 协议/端口默认语义门（TLS 禁 80、明文 HTTP 禁 443）+ 同端口跳转
+		// 行为（301 同端口/白名单外 400/80 组合 400/443 不适用）必须先行
+		// 告知——后端会拒绝/行为整体改变，Agent 不得靠 400 试错。
+		redirect := description(properties, "tls_http_redirect")
+		for _, required := range []string{"白名单外 Host 400 拒绝", "443 端口不适用同端口跳转", "80 端口组合保存时 400"} {
+			if !strings.Contains(redirect, required) {
+				t.Errorf("%s: tls_http_redirect 描述缺少约束 %q", name, required)
+			}
+		}
+		listenPort := description(properties, "listen_port")
+		for _, required := range []string{"明文 HTTP 规则不可监听 443", "TLS 规则不可监听 80"} {
+			if !strings.Contains(listenPort, required) {
+				t.Errorf("%s: listen_port 描述缺少协议/端口语义约束 %q", name, required)
+			}
+		}
 		ntlm := description(properties, "ntlm_compatible")
 		for _, required := range []string{"tcp_try_duration=-1", "upstream_force_http1=1", "proxy_flush_interval=-1", "upstream_keepalive_timeout=300"} {
 			if !strings.Contains(ntlm, required) {

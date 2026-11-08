@@ -35,9 +35,11 @@ func taskLogSizeBytes(ctx context.Context) int64 {
 
 // 按路径粒度的写入锁：stat→rotate→append 必须整体互斥——两个写入
 // 方在 stat 与 rotate 之间交错会各写一份「轮转后」内容到同名活动文件，或
-// 互相覆盖归档代（并发跨阈值丢行）。锁表按路径惰性创建；路径集合=任务日志
-// 固定集（注册任务 + 证书任务日志），不随写入行增长；轮转副本（.N/.gz/.zst）归一到
-// 活动路径键（见 taskLogActivePath），键集不因归档代增加而增长。
+// 互相覆盖归档代（并发跨阈值丢行）。锁表按路径惰性创建；键集上界=注册任务
+// 固定集 + 历史证书规则数（certjob-<component>.log 随规则增删动态增长，
+// 进程生命周期内不回收，量级 KB 级——与 certstore refCountedLockTable 的
+// 治理先例对照，本表选择不治理：重启归零且量级有界）；轮转副本（.N/.gz/.zst）
+// 归一到活动路径键（见 taskLogActivePath），键集不因归档代增加而增长。
 var (
 	taskLogPathLocksMu sync.Mutex
 	taskLogPathLocks   = map[string]*sync.Mutex{}

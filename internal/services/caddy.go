@@ -2714,7 +2714,10 @@ func generateCaddyConfigWithCertSource(store, certSource caddyConfigStore, rules
 				}
 			}
 		}
-		if hasTLSRedirectRule && port != defaultHTTPSPort {
+		// 空集守卫（带外脏行 fail-soft）：空域名规则（直改库/旧备份，API 面已拒）
+		// 会使 domains 并集为空——空 domains 包装器 Provision 必拒 → 整份配置
+		// 冻结。并集为空时该端口回退「未开跳转」姿态（不挂载），其余规则不受影响。
+		if hasTLSRedirectRule && len(tlsRedirectDomains) > 0 && port != defaultHTTPSPort {
 			domains := make([]string, 0, len(tlsRedirectDomains))
 			for d := range tlsRedirectDomains {
 				domains = append(domains, d)

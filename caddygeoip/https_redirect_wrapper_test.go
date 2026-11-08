@@ -192,3 +192,54 @@ func TestSamePortWrapperModuleNameResolvable(t *testing.T) {
 		t.Fatalf("caddy 校验必须能解析 lb_https_redirect 包装器（模块名=命名空间后缀）: %v", err)
 	}
 }
+
+// 静默客户端防饿死钉（整端口 DoS 回归）：Accept 首字节嗅探读必须有死线——
+// connect 后不发字节的连接在死线内被关闭，后续真实 TLS 连接仍正常透传。
+// 死线经包级变量缩窗到 150ms（防 CI 挂钟抖动；生产 5s）。
+func TestHTTPSRedirectSplit_silentClientDoesNotStallPort(t *testing.T) {
+	orig := acceptSniffDeadline
+	acceptSniffDeadline = 150 * time.Millisecond
+	t.Cleanup(func() { acceptSniffDeadline = orig })
+
+	ln := newRedirectSplitListener(t, 666, []string{"shop.example.test"})
+	tlsCh := startAccept(t, ln)
+
+	// 静默客户端：连上不发任何字节。
+	silent := dialRaw(t, ln)
+
+	// 死线窗口内静默连接必须被服务端关闭（而非无限期阻塞 Accept）。
+	deadline := time.Now().Add(2 * time.Second)
+	closed := false
+	for time.Now().Before(deadline) {
+		if _, err := silent.Read(make([]byte, 1)); err != nil {
+			closed = true // 读到错误（对端关闭/超时）= 连接已被服务端终止
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !closed {
+		t.Fatal("静默连接未在死线窗口内被关闭（Accept 循环被饿死）")
+	}
+
+	// 后续 TLS 连接必须照常透传（端口未被拖死）。
+	good := dialRaw(t, ln)
+	hello := []byte{0x16, 0x03, 0x01, 0x00, 0x2f}
+	if _, err := good.Write(hello); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case conn := <-tlsCh:
+		got := make([]byte, len(hello))
+		_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+		if _, err := io.ReadFull(conn, got); err != nil {
+			t.Fatalf("replay read: %v", err)
+		}
+		for i := range hello {
+			if got[i] != hello[i] {
+				t.Fatalf("透传重放失真: got=%v want=%v", got, hello)
+			}
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("后续 TLS 连接未在超时内透传（端口仍被静默连接拖死）")
+	}
+}
