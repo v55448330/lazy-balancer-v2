@@ -160,7 +160,8 @@ test('C7 备注超过 100 字拒绝导入（带行号报错，不静默截断）
   const onLoad = section(src, 'reader.onload = () => {', '\n  }')
   assert.match(onLoad, /computeImportOutcome\(existingValues, importLines/, '导入即走判定单源')
   assert.match(onLoad, /invalidLines\.slice\(0, 10\)\.join/, '非法行必须行号点名')
-  assert.match(src, /第 \$\{pendingInvalidLineNos\} 行/, '重复弹窗必须携带非法行行号')
+  assert.match(src, /invalidSuffix/, '重复弹窗必须携带非法行行号（词条键调用）')
+  assert.ok(code('src/locales/zh/views.ts').includes('（第 {lines} 行）'), '行号点名原文必须在 zh 母本词条中')
 })
 
 test('C8 JSON 字符串数组统一 trim 并丢弃空项', () => {
@@ -381,7 +382,8 @@ test('导入提示：重复行号点名与口径说明接线（SecurityRules 导
   const page = code('src/views/security/SecurityRules.vue')
   assert.match(page, /computeImportOutcome\(existingValues, importLines/, '导入时必须走判定单源（弹重复框，不写表）')
   assert.match(page, /importDuplicateVisible\.value = true/, '存在重复必须弹窗点名具体条目')
-  assert.match(page, /以 IP 为准，同 IP 不同备注按首条为准/, '弹窗必须说明以 IP 为准的口径')
+  assert.match(page, /t\('common\.app\.views\.secRules\.importDup\.summary'/, '弹窗必须走口径词条键')
+  assert.ok(code('src/locales/zh/views.ts').includes('以 IP 为准，同 IP 不同备注按首条为准'), '以 IP 为准口径必须在 zh 母本词条中')
   assert.doesNotMatch(page, /待导入文件：/, '「待导入文件」提示条必须移除（点导入即判定）')
   assert.doesNotMatch(page, /跳过重复并导入/, '弹窗只提示不执行导入（不得有执行按钮）')
   assert.match(page, /entries-head-bar/, '名单条目标题与查询区必须同行（右对齐、垂直居中）')
@@ -398,8 +400,9 @@ test('CIDR 匹配与模糊搜索统一过滤：点击搜索才过滤条目表 + 
   assert.match(page, /ipListQueryAppliedMode\.value === 'cidr'\) return cidrContains\(row\.value\.trim\(\), q\)/, 'CIDR 模式按包含判定过滤')
   assert.match(page, /row\.value\.toLowerCase\(\)\.includes\(ql\) \|\| row\.remark\.toLowerCase\(\)\.includes\(ql\)/, '模糊模式按子串过滤')
   // 搜索后 toast 反馈（与导入完成同款提示形态）
-  assert.match(page, /`\$\{label\}：命中 \$\{hits\} 条`/, '命中必须 toast 反馈')
-  assert.match(page, /`\$\{label\}：未找到匹配条目`/, '未命中必须 warning 反馈')
+  assert.match(page, /t\('common\.app\.views\.secRules\.msgs\.searchHits'/, '命中必须 toast 反馈（词条键）')
+  assert.match(page, /t\('common\.app\.views\.secRules\.msgs\.searchNotFound'/, '未命中必须 warning 反馈（词条键）')
+  assert.ok(code('src/locales/zh/views.ts').includes('：命中 {hits} 条'), '命中 toast 原文必须在 zh 母本词条中')
 })
 
 test('条目过滤：过滤展示不破坏编辑写回与删除的原始索引映射', () => {

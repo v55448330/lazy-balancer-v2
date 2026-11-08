@@ -30,7 +30,7 @@ test('分档阈值：≥12 高 / ≥6 中 / 其余低（2026-10-17 大屏裁定�
 
 test('事件列表评分着色引用同一阈值（不得回流 15/5 双口径）', () => {
   const events = code('src/views/security/SecurityEvents.vue')
-  const column = section(events, '<el-table-column label="评分"', '</el-table-column>')
+  const column = section(events, `<el-table-column :label="t('app.security.events.colScore')"`, '</el-table-column>')
   assert.match(column, /row\.anomaly_score >= ANOMALY_SCORE_HIGH/)
   assert.match(column, /row\.anomaly_score >= ANOMALY_SCORE_MID/)
   assert.doesNotMatch(column, /anomaly_score >= 15/, '列表旧阈值不得回流')

@@ -51,7 +51,7 @@ test('自动备份 quiet 轮询失败不逐轮弹 toast', () => {
   const quietToastAt = catchBody.indexOf('ElMessage.error')
   assert.ok(guardAt > 0, 'quiet 分支必须经节流判定')
   assert.ok(quietToastAt > guardAt, 'quiet 分支的 toast 必须在节流判定之后')
-  assert.match(body, /onError: \(\) => \{[\s\S]*?ElMessage\.error\('自动备份设置读取失败，请关闭弹框后重试；读取完成前无法保存'\)/, '非 quiet 失败必须提示')
+  assert.match(body, /onError: \(\) => \{[\s\S]*?ElMessage\.error\(t\('app\.settings\.basic\.autoBackup\.readFail'\)\)/, '非 quiet 失败必须提示')
 })
 
 test('健康轮询接入退避门，不可达 onError 已删除', () => {
@@ -74,8 +74,11 @@ test('任务详情历史与日志加载失败显性化', () => {
   const historyAlerts = openTags(text, 'el-alert').filter((tag) => tag.includes('v-if="detailHistoryError"'))
   assert.equal(historyAlerts.length, 1, '运行历史失败分支必须渲染且仅渲染一处 el-alert')
   assert.match(historyAlerts[0]!, /type="error"/, '运行历史失败必须是 error 级告警')
-  assert.match(historyAlerts[0]!, /title="运行历史加载失败/, '运行历史失败必须带标题（只留图标不成告警）')
-  assert.match(text, /<span v-if="logsLoadError"[^>]*>日志加载失败，自动重试中<\/span>/)
+  // i18n 后双钉:调用点钉键,zh 母本钉原文(任一漂移必红)
+  assert.match(historyAlerts[0]!, /:title="t\('app\.settings\.taskMonitor\.detail\.historyLoadFail'\)"/, '运行历史失败必须带标题（只留图标不成告警）')
+  assert.ok(code('src/locales/zh/settings.ts').includes('运行历史加载失败，请关闭后重新打开'), '历史失败标题原文必须在 zh 母本词条中')
+  assert.match(text, /<span v-if="logsLoadError"[^>]*>\{\{ t\('app\.settings\.taskMonitor\.log\.loadFailRetry'\) \}\}<\/span>/)
+  assert.ok(code('src/locales/zh/settings.ts').includes('日志加载失败，自动重试中'), '日志失败提示原文必须在 zh 母本词条中')
   // 置位路径：详情历史只在最新详情序号下置位，日志失败由轮询 onError 置位
   const detail = section(text, 'const openDetail', 'const logsVisible = ref')
   assert.match(detail, /if \(seq === detailSeq\) detailHistoryError\.value = true/)
@@ -184,7 +187,9 @@ test('保存后配置回读失败复用可见横幅且不被旧请求污染', ()
 
 test('policy_id=0 展示「无策略归属」而非「策略已删除」', () => {
   const text = code('src/components/events/TriggerDetailDialog.vue')
-  assert.match(text, /本次事件无策略归属/)
+  // i18n 后双钉:调用点钉键,zh 母本钉原文(任一漂移必红)
+  assert.match(text, /t\('common\.app\.views\.trigDetail\.noAttribution'\)/)
+  assert.ok(code('src/locales/zh/views.ts').includes('本次事件无策略归属'), '无归属文案原文必须在 zh 母本词条中')
   // 无策略归属态由 policy_id<=0 判定（后端 securityevents.go 返回 (0, "")）
   assert.match(text, /const noPolicyAttribution = computed\(\(\) => \(props\.row\?\.policy_id \?\? 0\) <= 0\)/)
   // 原实现用「首个 } else { + 下一处 policyMissing」推段——
@@ -350,10 +355,10 @@ test('证书队列横幅接线与 page_size=6', () => {
 test('任务监控三份轮询请求缺 data 一律抛 TypeError（进入契约退避）', () => {
   const page = code('src/views/settings/TaskMonitor.vue')
   const tasks = section(page, 'const fetchTasks = async', 'const refreshNow =')
-  assert.match(tasks, /if \(!res\.data\) throw new TypeError\('任务列表响应缺少 data'\)/)
-  assert.match(tasks, /throw new TypeError\('任务统计响应缺少 data'\)/)
+  assert.match(tasks, /if \(!res\.data\) throw new TypeError\(t\('app\.settings\.taskMonitor\.messages\.listRespMissingData'\)\)/)
+  assert.match(tasks, /if \(!res\.data\) throw new TypeError\(t\('app\.settings\.taskMonitor\.messages\.statsRespMissingData'\)\)/)
   const queue = section(page, 'const fetchCertQueue = async', 'const taskFamilyCount = computed')
-  assert.match(queue, /if \(!res\.data\) throw new TypeError\('证书队列响应缺少 data'\)/)
+  assert.match(queue, /if \(!res\.data\) throw new TypeError\(t\('app\.settings\.taskMonitor\.messages\.queueRespMissingData'\)\)/)
   // 必须在自身 catch 中继续向上抛，否则轮询入口永远看不到契约违约
   assert.match(queue, /if \(error instanceof TypeError\) throw error/)
 })
@@ -430,14 +435,18 @@ test('/admin-tls 读取失败显性化并提供重试', () => {
   assert.match(load, /catch \{[\s\S]*adminTlsLoadFailed\.value = true/, '读取失败必须置显性失败态')
   assert.match(page, /const retryLoadAdminTls = \(\): void => \{ void loadAdminTls\(\) \}/)
   const failedBlock = section(page, '<template v-else-if="adminTlsLoadFailed">', '</template>')
-  assert.match(failedBlock, /TLS 配置读取失败/, '开关旁必须有错误文案')
+  // i18n 后双钉:调用点钉键,zh 母本钉原文(任一漂移必红)
+  assert.match(failedBlock, /t\('app\.settings\.basic\.tls\.readFailUnavailable'\)/, '开关旁必须有错误文案')
+  assert.ok(code('src/locales/zh/settings.ts').includes('TLS 配置读取失败，开关暂不可用'), '读取失败文案原文必须在 zh 母本词条中')
   assert.match(failedBlock, /@click="retryLoadAdminTls"/, '开关旁必须有重试入口')
 })
 
 test('兜底提醒不承诺不会发生的自动跳转', () => {
   const page = code('src/views/settings/BasicSettings.vue')
   assert.doesNotMatch(page, /若未自动跳转/)
-  assert.match(page, /ElMessage\.warning\(`请手动访问新地址：\$\{target\}`\)/)
+  // i18n 后双钉:调用点钉键,zh 母本钉原文(任一漂移必红)
+  assert.match(page, /ElMessage\.warning\(t\('app\.settings\.basic\.restart\.manualUrl', \{ target \}\)\)/)
+  assert.ok(code('src/locales/zh/settings.ts').includes('请手动访问新地址：{target}'), '手动访问提示原文必须在 zh 母本词条中')
 })
 
 test('各写函数入口自带只读/在途守卫（纵深防御）', () => {
@@ -453,7 +462,8 @@ test('各写函数入口自带只读/在途守卫（纵深防御）', () => {
   }
   // 导入是全卡破坏性最强的动作：确认与「勾分类重校验」都要节点模式门（从节点上
   // 两条端点必然 403 master_required），入口按钮同口径，不得只判只读。
-  assert.match(basic, /<el-button type="primary" :disabled="!importValidation\?\.valid \|\| !importPreviewSelected \|\| backupDisabled" :loading="importing" @click="confirmImport">确认导入<\/el-button>/, '确认导入按钮必须含节点模式门')
+  assert.match(basic, /<el-button type="primary" :disabled="!importValidation\?\.valid \|\| !importPreviewSelected \|\| backupDisabled" :loading="importing" @click="confirmImport">\{\{ t\('app\.settings\.basic\.import\.confirmBtn'\) \}\}<\/el-button>/, '确认导入按钮必须含节点模式门')
+  assert.ok(code('src/locales/zh/settings.ts').includes('"confirmBtn": "确认导入"'), '确认导入文案原文必须在 zh 母本词条中')
   assert.match(section(basic, 'const revalidateImport = async', '\nconst '), /if \(backupDisabled\.value\) \{/, '勾分类重校验必须早退（从节点必 403）')
   const caddy = code('src/views/settings/CaddyGlobalSettings.vue')
   assert.match(section(caddy, 'const confirmSaveAsList = async', '\nconst '), /if \(isReadOnly\.value \|\| savingList\.value\) return/)
@@ -683,8 +693,8 @@ test('OIDC 设置卡：访问白名单字段（email 域 / 用户组）读回显
   assert.match(save, /allowed_email_domains: allowedEmailDomains/)
   assert.match(save, /allowed_groups: allowedGroups/)
   // 预算校验必须在提交前拦住（后端同样 400，但保存门会先跑一次 discovery 探测）
-  assert.match(save, /validateAllowList\('允许的 email 域', allowedEmailDomains\)/)
-  assert.match(save, /validateAllowList\('允许的组', allowedGroups\)/)
+  assert.match(save, /validateAllowList\(t\('app\.settings\.oidc\.allowEmailDomainsLabel'\), allowedEmailDomains\)/)
+  assert.match(save, /validateAllowList\(t\('app\.settings\.oidc\.allowGroupsLabel'\), allowedGroups\)/)
   // 局部 PUT（启用/暂停/删除）不得携带键——契约：缺省=不动、[]=清除
   const toggle = section(page, 'const toggleEnabled', '\nconst ')
   assert.match(toggle, /request\.put\('\/settings\/oidc', \{ enabled: on \}\)/)

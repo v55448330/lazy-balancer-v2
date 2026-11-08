@@ -47,11 +47,11 @@ test('C 管理面板证书解析失败在弹框内常驻可见，重选文件即
   assert.match(page, /class="info-note-desc">\{\{ adminTlsForm\.inspectError \}\}<\/el-text>/, '原因必须渲染在弹框内')
   const inspect = section(page, 'const onTlsFile = async', 'const notifyTlsRestarting')
   assert.match(inspect, /adminTlsForm\.value\.inspectError = ''/, '重选文件须清除旧原因')
-  assert.match(inspect, /adminTlsForm\.value\.inspectError = '证书解析失败：/, 'catch 必须写原因（不再只把 certInfo 置空）')
+  assert.match(inspect, /adminTlsForm\.value\.inspectError = t\('app\.settings\.basic\.tls\.parseFail'\)/, 'catch 必须写原因（不再只把 certInfo 置空）')
   // 只选一半材料时也有可见原因（解析中/解析失败/配对缺失不可同形）
   assert.match(page, /const adminTlsMissingPairHint = computed\(/)
-  assert.match(page, /还需选择私钥文件才能解析证书/)
-  assert.match(page, /还需选择证书文件才能解析证书/)
+  assert.match(page, /app\.settings\.basic\.tls\.needKeyFirst/)
+  assert.match(page, /app\.settings\.basic\.tls\.needCertFirst/)
 })
 
 test('D 访问日志格式：maxlength 是字符上限，后端按 UTF-8 字节拒绝', () => {
@@ -65,7 +65,8 @@ test('D 访问日志格式：maxlength 是字符上限，后端按 UTF-8 字节�
   const input = section(settings, 'v-model="settings.access_log_format"', '/>')
   assert.match(input, new RegExp(`maxlength="${byteLimit}"`), 'maxlength 仅作为同数值的宽松字符上限')
   assert.match(input, /show-word-limit/)
-  assert.match(settings, new RegExp(`最多 ${lines[1]} 行、${byteLimit / 1024} KiB（后端按 UTF-8 字节计）`), '提示必须明确真正拒绝口径是 UTF-8 字节')
+  assert.ok(code('src/locales/zh/settings.ts').includes('最多 200 行、16 KiB（后端按 UTF-8 字节计）'), '提示必须明确真正拒绝口径是 UTF-8 字节')
+  assert.match(settings, /app\.settings\.caddy\.accessLog\.mappingLimitHint/)
 
   const byteLength = (value: string): number => new TextEncoder().encode(value).length
   assert.equal(byteLength('a'.repeat(byteLimit)), byteLimit, 'ASCII 恰 16 KiB')

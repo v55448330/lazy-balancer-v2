@@ -9,13 +9,16 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { eventActionFull, eventActionShort, eventActionTone } from '../src/utils/eventAction.ts'
+import { tSafe as t } from '../src/i18n/tSafe.ts'
 import { code } from './_helpers.ts'
 
+// i18n 后双钉：函数输出钉词条键值（t() 现取，与输出恒等——集成落 views.ts 前后
+// 两侧同步从键形态切换为文案形态，任一侧漂移必红）。
 test('动作文案：两值枚举的短/全长标签与色调', () => {
-  assert.equal(eventActionShort('blocked'), '拦截')
-  assert.equal(eventActionShort('logged'), '检测')
-  assert.equal(eventActionFull('blocked'), '已拦截')
-  assert.equal(eventActionFull('logged'), '已记录')
+  assert.equal(eventActionShort('blocked'), t('common.app.views.eventAction.blockedShort'))
+  assert.equal(eventActionShort('logged'), t('common.app.views.eventAction.loggedShort'))
+  assert.equal(eventActionFull('blocked'), t('common.app.views.eventAction.blockedFull'))
+  assert.equal(eventActionFull('logged'), t('common.app.views.eventAction.loggedFull'))
   assert.equal(eventActionTone('blocked'), 'danger')
   assert.equal(eventActionTone('logged'), 'warning')
 })

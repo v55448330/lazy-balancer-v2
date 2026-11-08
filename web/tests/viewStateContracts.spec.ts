@@ -36,7 +36,9 @@ test('证书详情重试按会话序号丢弃过期响应（编辑与复制态�
 
 test('规则库排程在库信息未落地/读取失败时禁用并提示', () => {
   const page = code('src/views/security/SecurityRules.vue')
-  assert.match(page, /const SCHEDULE_UNKNOWN_HINT = '排程未知/)
+  assert.match(page, /const SCHEDULE_UNKNOWN_HINT = t\('common\.app\.views\.secRules\.lib\.scheduleUnknownHint'\)/)
+  // i18n 后双钉:调用点钉键,zh 母本钉原文(任一漂移必红)
+  assert.ok(code('src/locales/zh/views.ts').includes('排程未知：库信息读取失败，请关闭后重新加载'), '排程未知提示原文必须在 zh 母本词条中')
   for (const hint of ['crsScheduleHint', 'ip2regionScheduleHint', 'threatScheduleHint', 'crawlerScheduleHint']) {
     assert.match(page, new RegExp(`:unavailable-hint="${hint}"`), `${hint} 必须绑定到排程卡`)
     assert.match(page, new RegExp(`if \\(${hint}\\.value\\)`), `${hint} 未落地时保存入口必须拦截`)
@@ -75,7 +77,9 @@ test('时区下拉：常用目录 ∪ 当前值，支持自定义 IANA 名', () 
   const page = code('src/views/settings/BasicSettings.vue')
   assert.match(page, /allow-create default-first-option/)
   assert.match(page, /const timezoneOptions = computed/)
-  assert.match(page, /（自定义）/, '非枚举存量值必须以自定义项回显')
+  // i18n 后双钉:调用点钉键,zh 母本钉原文(任一漂移必红)
+  assert.match(page, /label: t\('app\.settings\.basic\.tz\.custom', \{ name: current \}\)/, '非枚举存量值必须以自定义项回显')
+  assert.ok(code('src/locales/zh/settings.ts').includes('{name}（自定义）'), '时区自定义项原文必须在 zh 母本词条中')
 })
 
 test('自动备份频率切换把日期夹回该频率上界', () => {
@@ -88,8 +92,11 @@ test('自动备份频率切换把日期夹回该频率上界', () => {
 test('受信代理关闭态：存量非法值显性可见且保存提示修复路径', () => {
   const page = code('src/views/settings/CaddyGlobalSettings.vue')
   assert.match(page, /const trustedProxyDisabledStaleError = computed/)
-  assert.match(page, /请临时开启「受信代理」修正/, '关闭态错误必须给出可修复路径')
-  assert.match(page, /若名单已被删除，保存会被拒绝/, '引用条目未加载的提示不得承诺「不影响保存」')
+  // i18n 后双钉:调用点钉键,zh 母本钉原文(任一漂移必红)
+  assert.match(page, /t\('app\.settings\.caddy\.trust\.trustOffSaveWarn'\)/, '关闭态错误必须给出可修复路径')
+  assert.ok(code('src/locales/zh/settings.ts').includes('请临时开启「受信代理」修正'), '关闭态修复路径原文必须在 zh 母本词条中')
+  assert.match(page, /t\('app\.settings\.caddy\.trust\.refListLoadFailHint'/, '引用条目未加载的提示不得承诺「不影响保存」')
+  assert.ok(code('src/locales/zh/settings.ts').includes('若名单已被删除，保存会被拒绝'), '引用条目口径原文必须在 zh 母本词条中')
   // 引用条目拉取限并发，且名单目录刷新时失效缓存
   assert.match(page, /const REF_ENTRY_FETCH_CONCURRENCY = 2/)
   assert.match(page, /invalidateRefListEntries\(\)/)
@@ -161,8 +168,16 @@ test('登录：创建管理员与自动登录分阶段，OIDC 保持深链', () 
 
 test('集群节点 tooltip：四项库版本名称与规则库列表同源，缺失显示 —', () => {
   const panel = code('src/views/settings/cluster/ClusterMasterPanel.vue')
-  for (const label of ['CRS 规则库', 'IP 地理库', '威胁情报库', '爬虫地址库']) {
-    assert.match(panel, new RegExp(`label: '${label}'`), `缺少 ${label}`)
+  // i18n 后双钉:调用点钉键,zh 母本钉原文(任一漂移必红)
+  const libLabels: readonly [string, string][] = [
+    ['libCrs', 'CRS 规则库'],
+    ['libIpGeo', 'IP 地理库'],
+    ['libThreat', '威胁情报库'],
+    ['libCrawler', '爬虫地址库'],
+  ]
+  for (const [labelKey, label] of libLabels) {
+    assert.match(panel, new RegExp(`label: t\\('common\\.app\\.views\\.cluster\\.${labelKey}'\\)`), `缺少 ${label}`)
+    assert.ok(code('src/locales/zh/views.ts').includes(`'${label}'`), `${label} 原文必须在 zh 母本词条中`)
   }
   for (const key of ['crs_version', 'ip2region_version', 'threat_version', 'crawler_version']) {
     assert.match(panel, new RegExp(`key: '${key}'`), `缺少 ${key}`)
@@ -206,7 +221,9 @@ test('视图口径与样式契约：端口门、CA 门、摘要披露、分页�
   assert.ok(code('src/locales/zh/rules.ts').includes('80 端口开启 TLS 跳转无意义'), '80+TLS 门文案必须在 zh 母本词条中')
   assert.match(rules, /t\('common\.app\.rules\.msgs\.port80TlsRedirect'\)/, '80+TLS 跳转必须前端镜像后端门')
   const certs = code('src/views/settings/FreeCertificates.vue')
-  assert.match(certs, /默认 CA 提供商已被禁用/, '默认 CA 被禁用必须前置中文提示')
+  // i18n 后双钉:调用点钉键,zh 母本钉原文(任一漂移必红)
+  assert.match(certs, /ElMessage\.warning\(t\('app\.settings\.freeCerts\.messages\.defaultCaDisabled'\)\)/, '默认 CA 被禁用必须前置提示')
+  assert.ok(code('src/locales/zh/settings.ts').includes('默认 CA 提供商已被禁用'), '默认 CA 禁用提示原文必须在 zh 母本词条中')
   assert.match(certs, /caForm\.min_interval_ms" :min="1"/, '最小间隔下限与写侧门（1..60000）同源')
   const dash = code('src/views/Dashboard.vue')
   // i18n 后双钉:调用点钉键,zh 母本钉披露口径原文(任一漂移必红)
@@ -225,7 +242,8 @@ test('视图口径与样式契约：端口门、CA 门、摘要披露、分页�
   const task = code('src/views/settings/TaskMonitor.vue')
   assert.doesNotMatch(task, /（不含证书工作项）|（含证书工作项）/)
   assert.match(task, /<div class="tm-filter-group">/)
-  assert.match(task, /近 24 小时成功 \/ 失败次数；历史明细最多 50 条/)
+  assert.match(task, /t\('app\.settings\.taskMonitor\.col\.successFailTip'\)/)
+  assert.ok(code('src/locales/zh/settings.ts').includes('近 24 小时成功 / 失败次数；历史明细最多 50 条'), '统计口径原文必须在 zh 母本词条中')
   const retry = section(task, 'const retryPolling = async', 'interface CertJobRow')
   assert.match(retry, /refreshing\.value = true/)
 })
@@ -302,8 +320,10 @@ test('顶栏消费 /caddy/status 的 status：非仪表盘页可见 Caddy 停摆
   const layout = code('src/components/layout/AppLayout.vue')
   assert.match(layout, /caddyStopped\.value = res\.data\?\.status === 'stopped'/)
   assert.match(layout, /v-if="caddyStopped"/)
-  assert.match(layout, /Caddy 服务未运行/)
-  assert.match(layout, /重启服务<\/el-button>|>重启服务</, '横幅必须带恢复入口')
+  // i18n 后双钉:调用点钉键,zh 母本钉原文(任一漂移必红)
+  assert.match(layout, /t\('common\.app\.views\.layout\.caddyStoppedBanner'\)/)
+  assert.ok(code('src/locales/zh/views.ts').includes('Caddy 服务未运行'), '停摆横幅原文必须在 zh 母本词条中')
+  assert.match(layout, /@click="handleRestartForDrift"[^>]*>\{\{ t\('common\.app\.views\.layout\.restartServiceBtn'\) \}\}/, '横幅必须带恢复入口')
 })
 
 test('日志占用条注释指向 utils/formatBytes 单源（不再称 api.ts）', () => {
@@ -322,8 +342,9 @@ test('基础设置时区：自由输入在保存前做 IANA 校验（不连坐�
 
 test('MFA 自助缺口：激活响应缺 data 显性报错、动态码弹框提交中不可关', () => {
   const wizard = code('src/components/MfaBindingWizard.vue')
-  assert.match(wizard, /requireData\(res\.data, '响应异常，请重试'\)/, '契约违约不得静默 return（requireData 单源抛错）')
-  assert.match(wizard, /响应异常，请重试/)
+  // i18n 后双钉:调用点钉键,zh 母本钉原文(任一漂移必红)
+  assert.match(wizard, /requireData\(res\.data, t\('common\.app\.views\.mfa\.responseAbnormal'\)\)/, '契约违约不得静默 return（requireData 单源抛错）')
+  assert.ok(code('src/locales/zh/views.ts').includes("'响应异常，请重试'"), 'requireData 拒绝文案原文必须在 zh 母本词条中')
   const profile = code('src/components/ProfileDialog.vue')
   assert.match(profile, /:close-on-press-escape="!mfaSubmitting"/)
   assert.match(profile, /:show-close="!mfaSubmitting"/)
@@ -339,7 +360,9 @@ test('可访问名：CodeEditor 暴露 ariaLabel、帮助角标键盘可达', ()
   const help = code('src/components/common/FieldHelpIcon.vue')
   assert.match(help, /tabindex="0"/)
   assert.match(help, /role="button"/)
-  assert.match(help, /:aria-label="content \|\| '字段说明'"/)
+  // i18n 后双钉:调用点钉键,zh 母本钉原文(任一漂移必红)
+  assert.match(help, /:aria-label="content \|\| t\('common\.app\.views\.common\.fieldHelpAria'\)"/)
+  assert.ok(code('src/locales/zh/views.ts').includes("'字段说明'"), '帮助角标可访问名原文必须在 zh 母本词条中')
 })
 
 test('IP 快捷弹层打开即清旧事件计数（行复用不串上一 IP）', () => {
@@ -433,9 +456,11 @@ test('用户编辑弹框锁定态不得把所选角色发给后端', () => {
 
 test('Keys 页 MCP 权限说明与后端能力矩阵同口径', () => {
   const keys = code('src/views/Keys.vue')
-  assert.match(keys, /export_config 与 get_caddy_config 除外/, '只读 Key 的 GET 排除项必须披露')
-  assert.match(keys, /validate_import 与 preview_config 要求 Key 属主为管理员/, '探测 POST 的属主角色轴必须披露')
-  assert.match(keys, /需非只读 Key 且 Key 属主为管理员/, '写工具的属主角色轴必须披露')
+  // i18n 后双钉:三段披露口径收敛进 keys.scopeBodyA——调用点钉键,zh 母本钉原文
+  assert.match(keys, /t\('common\.app\.views\.keys\.scopeBodyA'\)/)
+  assert.ok(code('src/locales/zh/views.ts').includes('export_config 与 get_caddy_config 除外'), '只读 Key 的 GET 排除项原文必须在 zh 母本词条中')
+  assert.ok(code('src/locales/zh/views.ts').includes('validate_import 与 preview_config 要求 Key 属主为管理员'), '探测 POST 属主角色轴原文必须在 zh 母本词条中')
+  assert.ok(code('src/locales/zh/views.ts').includes('需非只读 Key 且 Key 属主为管理员'), '写工具属主角色轴原文必须在 zh 母本词条中')
   assert.match(keys, /lazy-balancer:\/\/docs\/ops-playbook/, '指向后端单源手册')
   // 与后端可见性单源对表：两个隐藏 GET 工具名不得漂移
   assert.match(repoCode('internal/mcpserver/tool_visibility.go'), /"export_config":\s*\{\},\s*"get_caddy_config":\s*\{\},/)

@@ -115,7 +115,7 @@ test('组件接线：挑战门由快照判定，弹框只在需要时出现', ()
 test('DNS 凭证验证弹框复用全站 DialogHeader 与 el-dialog 版式', () => {
   const page = code('src/views/settings/FreeCertificates.vue')
   const dialog = section(page, 'v-model="dnsVerifyVisible"', '</el-dialog>')
-  assert.match(dialog, /DialogHeader :icon="Connection" title="验证 DNS 凭证"/)
+  assert.match(dialog, /DialogHeader :icon="Connection" :title="t\('app\.settings\.freeCerts\.dns\.verifyCredentialsBtn'\)"/)
   assert.match(dialog, /class="dialog-body-inset"/)
   assert.match(dialog, /v-model="dnsVerifyDomain"/)
   assert.match(dialog, /@click="confirmDnsVerify"/)

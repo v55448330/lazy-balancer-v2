@@ -114,7 +114,7 @@ test('任务序列失败标记陈旧，空序列显示空态', () => {
 
 test('任务日志缺 data 抛错，旧任务响应不得清新任务错误', () => {
   const fetch = section(code(TASK_MONITOR), 'fetch: async () =>', 'onError:')
-  assert.match(fetch, /if \(!res\.data\) throw new TypeError\('任务日志响应缺少 data'\)/)
+  assert.match(fetch, /if \(!res\.data\) throw new TypeError\(t\('app\.settings\.taskMonitor\.messages\.logsRespMissingData'\)\)/)
   const guardAt = fetch.indexOf('if (logsTask.value?.id !== task.id) return null')
   const clearAt = fetch.indexOf('logsLoadError.value = false')
   assert.ok(guardAt >= 0 && clearAt > guardAt, '必须先确认仍是同一任务，再清错误态')
@@ -147,15 +147,16 @@ test('证书队列请求窗口与进程内截断共用页面常量', () => {
 test('永久重试冷却 null 显示原因并禁用运行', () => {
   const cooldown = section(code(TASK_MONITOR), 'const runCooldownReason =', 'const onTrigger =')
   assert.match(cooldown, /retry_cooldown_seconds === null/)
-  assert.match(cooldown, /永久不可重试/)
+  assert.match(cooldown, /t\('app\.settings\.taskMonitor\.cooldown\.permanent'\)/)
+  assert.ok(code('src/locales/zh/settings.ts').includes('"permanent": "该任务永久不可重试"'), 'zh 母本须保留「该任务永久不可重试」原文')
 })
 
 test('任务词表与图表色板按自有键读取，原型键回显原值', () => {
   const text = code(TASK_MONITOR)
   assert.match(text, /import \{ hasOwn \} from '@\/utils\/hasOwn'/)
-  assert.match(text, /hasOwn\(statusLabels, s\)/)
-  assert.match(text, /hasOwn\(kindLabels, k\)/)
-  assert.match(text, /hasOwn\(triggerLabels, t\)/)
-  assert.match(text, /hasOwn\(resultLabels, r\)/)
+  assert.match(text, /hasOwn\(statusLabels\.value, s\)/)
+  assert.match(text, /hasOwn\(kindLabels\.value, k\)/)
+  assert.match(text, /hasOwn\(triggerLabels\.value, key\)/)
+  assert.match(text, /hasOwn\(resultLabels\.value, r\)/)
   assert.match(text, /hasOwn\(statusColor, k\)/)
 })

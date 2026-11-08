@@ -13,27 +13,38 @@ const auditLog = code('src/views/AuditLog.vue')
 test('实时统计轮询失败进入可见错误态，后续成功可自愈', () => {
   const fetchStream = section(rules, 'const fetchLogStream = async', 'const startLogStats')
   assert.match(fetchStream, /logStatsOffset\.value = res\.data\?\.offset \?\? targetOffset\s*ruleLogStatsError\.value = ''/)
-  assert.match(fetchStream, /catch \(error: unknown\)[\s\S]*?requestSeq !== ruleLogRequestSeq[\s\S]*?ruleLogStatsError\.value = error instanceof Error \? error\.message : '请稍后重试'/)
+  // i18n 后双钉:调用点钉键,zh 母本钉文案原文(任一漂移必红)
+  assert.ok(code('src/locales/zh/rules.ts').includes("retryLater: '请稍后重试'"), '请稍后重试原文必须在 zh 母本词条中')
+  assert.match(fetchStream, /catch \(error: unknown\)[\s\S]*?requestSeq !== ruleLogRequestSeq[\s\S]*?ruleLogStatsError\.value = error instanceof Error \? error\.message : t\('common\.app\.rules\.common\.retryLater'\)/)
 })
 
 test('downloaded 锁提示与启停/删除禁用口径一致', () => {
   const tooltip = section(rules, 'const certJobLockTooltip', 'const canEditRule')
   const downloaded = section(tooltip, "if (status === 'downloaded')", 'return activeText')
-  assert.match(downloaded, /不阻塞编辑/)
-  assert.match(downloaded, /启停\/删除待部署收敛/)
-  assert.doesNotMatch(downloaded, /不阻塞规则启停、删除/)
+  // i18n 后双钉:调用点钉键,zh 母本钉文案原文(任一漂移必红)
+  assert.ok(code('src/locales/zh/rules.ts').includes('不阻塞编辑；启停/删除待部署收敛'), 'downloaded 锁提示原文必须在 zh 母本词条中')
+  assert.match(downloaded, /t\('common\.app\.rules\.list\.certDeployBackoffTooltip'\)/)
+  const backoffLine = code('src/locales/zh/rules.ts').split('\n').find((l) => l.includes('certDeployBackoffTooltip:'))
+  assert.ok(backoffLine, 'certDeployBackoffTooltip 必须在 zh 母本词条中')
+  assert.match(backoffLine!, /不阻塞编辑/)
+  assert.match(backoffLine!, /启停\/删除待部署收敛/)
+  assert.doesNotMatch(backoffLine!, /不阻塞规则启停、删除/)
   const active = section(rules, 'const isCertJobActive', 'const isCertJobEditLocked')
   assert.doesNotMatch(active, /'downloaded'/, 'downloaded 必须继续阻塞启停/删除')
 })
 
 test('规则状态开关的禁用原因复用证书任务锁提示', () => {
-  const statusColumn = section(rules, '<el-table-column label="状态"', '</el-table-column>')
+  const statusColumn = section(rules, "<el-table-column :label=\"t('common.app.rules.common.status')\"", '</el-table-column>')
   // 长属性钉改为「定位开标签 + 逐属性判定」：属性书写顺序调换、新增属性都
   // 仍绿，删属性/改判据即红；整串切片钉会把属性序也钉死。
+  // i18n 后双钉:调用点钉键,zh 母本钉文案原文(任一漂移必红)
+  const zhLexicon = code('src/locales/zh/rules.ts')
+  assert.ok(zhLexicon.includes("togglePendingTooltip: '规则状态更新中，请稍候'"), '更新中提示原文必须在 zh 母本词条中')
+  assert.ok(zhLexicon.includes("certJobToggleLockTooltip: '证书申请中，请等待完成或失败后再启停规则'"), '锁提示原文必须在 zh 母本词条中')
   const tooltipTag = openTags(statusColumn, 'el-tooltip')[0]
   assert.ok(tooltipTag !== undefined, '状态列必须用 el-tooltip 承载禁用原因')
   assert.match(tooltipTag, /:disabled="!isReadOnly && !isCertJobActive\(certJobMap\[row\.caddy_id\]\?\.status\) && !ruleTogglePending\[row\.caddy_id\]"/, 'tooltip 禁用判据缺失')
-  assert.match(tooltipTag, /:content="isReadOnly \? readOnlyMessage : ruleTogglePending\[row\.caddy_id\] \? '规则状态更新中，请稍候' : certJobLockTooltip\(row as Rule, '证书申请中，请等待完成或失败后再启停规则'\)"/, 'tooltip 文案必须复用证书任务锁提示')
+  assert.match(tooltipTag, /:content="isReadOnly \? readOnlyMessage : ruleTogglePending\[row\.caddy_id\] \? t\('common\.app\.rules\.list\.togglePendingTooltip'\) : certJobLockTooltip\(row as Rule, t\('common\.app\.rules\.list\.certJobToggleLockTooltip'\)\)"/, 'tooltip 文案必须复用证书任务锁提示')
   const switchTag = openTags(statusColumn, 'el-switch')[0]
   assert.ok(switchTag !== undefined, '状态开关缺失')
   assert.match(switchTag, /:disabled="isReadOnly \|\| isCertJobActive\(certJobMap\[row\.caddy_id\]\?\.status\) \|\| ruleTogglePending\[row\.caddy_id\]"/, '开关禁用必须三门槛同判')
@@ -59,11 +70,16 @@ test('Caddy 配置失败使用独立错误态与重试，不伪造 JSON', () => 
   assert.match(dialog, /<el-result[\s\S]*?@click="retryViewConfig"/)
   const viewConfig = section(rules, 'const viewConfig = async', 'const onConfigDialogClosed')
   assert.match(viewConfig, /configLoadError\.value = ''/)
-  assert.match(viewConfig, /configLoadError\.value = error instanceof Error \? error\.message : '获取配置失败'/)
+  // i18n 后双钉:调用点钉键,zh 母本钉文案原文(任一漂移必红)
+  assert.ok(code('src/locales/zh/rules.ts').includes("configLoadFail: '获取配置失败'"), '获取配置失败原文必须在 zh 母本词条中')
+  assert.match(viewConfig, /configLoadError\.value = error instanceof Error \? error\.message : t\('common\.app\.rules\.cfg\.configLoadFail'\)/)
   assert.doesNotMatch(viewConfig, /\{ error: '获取配置失败', details:/)
 })
 
 test('五个错误横幅重试按钮绑定各自真实在途状态', () => {
+  // i18n 后按钮文案为 t() 键(立即重试原文钉在 zh 母本)
+  assert.ok(code('src/locales/zh/rules.ts').includes("retryNow: '立即重试'"), '立即重试原文必须在 zh 母本词条中')
+  const retryLabel = `\\{\\{ t\\('common\\.app\\.rules\\.list\\.retryNow'\\) \\}\\}</el-button>`
   for (const [handler, flag] of [
     ['retryCertPolling', 'certRetryLoading'],
     ['retryCertInfo', 'certInfoRetryLoading'],
@@ -71,7 +87,7 @@ test('五个错误横幅重试按钮绑定各自真实在途状态', () => {
     ['fetchRules', 'loading'],
     ['retryAuxData', 'auxDataRetryLoading'],
   ] as const) {
-    assert.match(rules, new RegExp(`<el-button link type="danger" :loading="${flag}" @click="${handler}(?:\\(\\))?">立即重试</el-button>`), `${handler} 必须绑定 ${flag}`)
+    assert.match(rules, new RegExp(`<el-button link type="danger" :loading="${flag}" @click="${handler}(?:\\(\\))?">${retryLabel}`), `${handler} 必须绑定 ${flag}`)
   }
   for (const handler of ['retryCertPolling', 'retryCertInfo', 'retryHealthPolling', 'retryAuxData']) {
     const body = member(rules, `const ${handler} =`)
@@ -83,9 +99,11 @@ test('五个错误横幅重试按钮绑定各自真实在途状态', () => {
 // 安全策略绑定横幅的重试按钮此前借用规则列表的 loading：点「重新加载」在途零
 // 反馈；反过来规则列表轮询时它显示与本次重试无关的 loading。
 test('安全策略绑定横幅重试按钮绑定绑定数据自身的在途状态', () => {
+  // i18n 后双钉:调用点钉键,zh 母本钉文案原文(任一漂移必红)
+  assert.ok(code('src/locales/zh/rules.ts').includes("reload: '重新加载'"), '重新加载原文必须在 zh 母本词条中')
   assert.match(
     rules,
-    /<el-button link type="warning" :loading="securityBindingsLoading" @click="retrySecurityBindings">重新加载<\/el-button>/,
+    /<el-button link type="warning" :loading="securityBindingsLoading" @click="retrySecurityBindings">\{\{ t\('common\.app\.rules\.cfg\.reload'\) \}\}<\/el-button>/,
     '重试按钮必须绑定 securityBindingsLoading',
   )
   const fetch = section(rules, 'const fetchSecurityBindings =', 'const retrySecurityBindings')

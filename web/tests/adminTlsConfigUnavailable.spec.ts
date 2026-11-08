@@ -50,6 +50,6 @@ test('设置页消费 config_unavailable：提示不可信、开关不得视为�
 test('降级态渲染：明确文案「显示的开关不可信」+ 重试入口', () => {
   const page = code('src/views/settings/BasicSettings.vue')
   const warn = section(page, 'v-if="adminTlsUnavailable"', '</template>')
-  assert.match(warn, /配置读取失败，显示的开关不可信/, '不得以「已关闭」静默展示降级值')
+  assert.match(warn, /app\.settings\.basic\.tls\.readFailUntrusted/, '不得以「已关闭」静默展示降级值')
   assert.match(warn, /retryLoadAdminTls/, '须给出重试入口')
 })

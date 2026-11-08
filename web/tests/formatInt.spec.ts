@@ -13,6 +13,7 @@ import assert from 'node:assert/strict'
 
 import { formatInt } from '../src/utils/formatInt.ts'
 import { crsRuleCountLabel } from '../src/utils/securityLibraries.ts'
+import { tSafe as t } from '../src/i18n/tSafe.ts'
 import { code, webFiles } from './_helpers.ts'
 
 test('formatInt：千分位逐级分组，负号不参与分组', () => {
@@ -28,9 +29,13 @@ test('formatInt：千分位逐级分组，负号不参与分组', () => {
 })
 
 test('crsRuleCountLabel 与 formatInt 共用内核（分组正则不得第二份内联）', () => {
-  assert.equal(crsRuleCountLabel(832), '832 条规则')
-  assert.equal(crsRuleCountLabel(1234), '1,234 条规则')
-  assert.equal(crsRuleCountLabel(1234567), '1,234,567 条规则')
+  // i18n 后结构钉：期望值 = 词条模板（{count} 占位）按同参现取——集成落 views.ts
+  // 前后两侧同步从键形态切换为文案形态，千分位内核或单位漂移任一必红。
+  const unit = (n: string): string => t('common.app.views.ruleLib.ruleCountUnit', { count: n })
+  assert.equal(crsRuleCountLabel(832), unit('832'))
+  assert.equal(crsRuleCountLabel(1234), unit('1,234'))
+  assert.equal(crsRuleCountLabel(1234567), unit('1,234,567'))
+  assert.equal(crsRuleCountLabel(undefined), '—')
   const lib = code('src/utils/securityLibraries.ts')
   assert.match(lib, /formatInt\(/, 'crsRuleCountLabel 必须消费 formatInt 内核')
   assert.doesNotMatch(lib, /\\B\(\?=\(\\d\{3\}\)/, '手工分组正则不得在 securityLibraries 第二份内联')

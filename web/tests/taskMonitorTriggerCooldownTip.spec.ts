@@ -21,19 +21,19 @@ test('冷却 tooltip 按后端布尔披露实门口径：拒绝条件与越窗�
   assert.match(vue, /cert_job_ca_cooldown_active\?: boolean/, 'TaskInfo 必须声明后端下发的 CA 退避窗口布尔')
   assert.match(fn, /cert_job_ca_cooldown_active/, '必须按后端布尔分支披露（不得按行状态猜测窗口）')
   // 窗口内：触发默认拒绝，越窗出口=证书任务页「重签」
-  assert.match(fn, /CA 退避窗口内手动触发将被拒绝/, 'CA 退避窗口内必须披露拒绝语义')
-  assert.match(fn, /证书任务页/, '必须披露越窗出口位置：证书任务页')
-  assert.match(fn, /「重签」/, '必须披露越窗出口动作：「重签」')
+  assert.match(fn, /app\.settings\.taskMonitor\.cooldown\.caWindow/, 'CA 退避窗口内必须披露拒绝语义')
+  assert.match(fn, /app\.settings\.taskMonitor\.cooldown\.caWindow/, '必须披露越窗出口位置：证书任务页')
+  assert.match(fn, /app\.settings\.taskMonitor\.cooldown\.caWindow/, '必须披露越窗出口动作：「重签」')
   // 仅通用冷却（布尔=false）：触发放行——不得声称被拒
-  assert.match(fn, /冷却期后可直接重试/, '仅通用冷却的行必须如实披露「冷却期后可直接重试」')
+  assert.match(fn, /app\.settings\.taskMonitor\.cooldown\.normal/, '仅通用冷却的行必须如实披露「冷却期后可直接重试」')
   assert.doesNotMatch(fn, /冷却期内手动触发将被拒绝/, '通用冷却分支「将被拒绝」过声称不得回潮')
 })
 
 test('永久不可重试禁用判据与冷却分钟数同源不受文案改动影响', () => {
-  assert.match(fn, /return '该任务永久不可重试'/, '永久不可重试返回串是按钮禁用判据，不得漂移')
+  assert.match(fn, /return t\('app\.settings\.taskMonitor\.cooldown\.permanent'\)/, '永久不可重试返回串是按钮禁用判据，不得漂移')
   assert.match(
     vue,
-    /runCooldownReason\(row as TaskInfo\) === '该任务永久不可重试'/,
+    /runCooldownReason\(row as TaskInfo\) === t\('app\.settings\.taskMonitor\.cooldown\.permanent'\)/,
     '按钮禁用比较串必须与返回串精确同源',
   )
   assert.match(fn, /Math\.ceil\(seconds \/ 60\)/, '冷却分钟数换算与证书任务页同源，不得漂移')

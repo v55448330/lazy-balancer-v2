@@ -34,10 +34,11 @@ test('证书任务截断标记进入响应类型并被读取', () => {
 
 test('提示条行数文案与后端 certJobRowsLimit 同值（改上限必须同批改文案）', () => {
   const limit = certJobRowsLimit()
-  const recent = `最近 ${limit} 条`
-  const capNote = `上限 ${limit}`
+  const recent = "t('app.settings.taskMonitor.certQueue.truncatedNote')"
+  const capNote = "t('app.settings.taskMonitor.chart.distHint')"
   assert.equal(page.split(recent).length - 1, 1, `提示条必须恰好一处「${recent}」`)
   assert.equal(page.split(capNote).length - 1, 1, `图表口径必须恰好一处「${capNote}」`)
+  assert.ok(code('src/locales/zh/settings.ts').includes(`上限 ${limit}`), '口径上限值必须与后端常量同批')
   // 防第三份副本：任何「最近 N 条 / 上限 N」形态的数字都必须等于 Go 常量值。
   for (const match of page.matchAll(/最近 (\d+) 条|上限 (\d+)/g)) {
     assert.equal(match[1] ?? match[2], String(limit), `文案行数「${match[0]}」与后端上限 ${limit} 漂移`)
@@ -45,13 +46,12 @@ test('提示条行数文案与后端 certJobRowsLimit 同值（改上限必须�
 })
 
 test('截断时渲染提示条（复用全局 info-note-bar 样式，不写局部 hack）', () => {
-  const limit = certJobRowsLimit()
   const match = page.match(/\n\s*<div v-if="certJobsTruncated" class="([^"]+)">([\s\S]*?)<\/div>/)
   assert.ok(match, '缺少 v-if="certJobsTruncated" 提示条')
   const classes = match[1].split(/\s+/)
   assert.ok(classes.includes('info-note-bar'), `提示条必须复用全局 info-note-bar 类，got "${match[1]}"`)
   assert.match(match[2], /info-note-desc/)
-  assert.match(match[2], new RegExp(`最近 ${limit} 条`))
+  assert.match(match[2], /app\.settings\.taskMonitor\.certQueue\.truncatedNote/)
   assert.doesNotMatch(page, /:deep\([^)]*\)\s*\{[^}]*info-note/)
 })
 
@@ -67,21 +67,21 @@ test('证书行运行按钮：冷却中可运行（信息提示），仅永久�
   const helper = section(page, 'const runCooldownReason = (row: TaskInfo): string =>', '\nconst onTrigger')
   assert.match(helper, /Math\.ceil\(seconds \/ 60\)/, '提示需换算为分钟')
   assert.match(helper, /cert_job_ca_cooldown_active/, '必须按后端布尔分支（不得按行状态猜测窗口）')
-  assert.match(helper, /CA 退避窗口内手动触发将被拒绝/, 'CA 退避窗口内提示必须披露拒绝语义')
-  assert.match(helper, /冷却期后可直接重试/, '仅通用冷却的行必须披露「冷却期后可直接重试」')
-  assert.match(helper, /证书任务页/, '提示必须披露越窗出口位置')
-  assert.match(helper, /「重签」/, '提示必须披露越窗出口动作')
-  assert.match(helper, /该任务永久不可重试/, '永久不可重试态仍需禁用提示')
+  assert.match(helper, /app\.settings\.taskMonitor\.cooldown\.caWindow/, 'CA 退避窗口内提示必须披露拒绝语义')
+  assert.match(helper, /app\.settings\.taskMonitor\.cooldown\.normal/, '仅通用冷却的行必须披露「冷却期后可直接重试」')
+  assert.match(helper, /app\.settings\.taskMonitor\.cooldown\.caWindow/, '提示必须披露越窗出口位置')
+  assert.match(helper, /app\.settings\.taskMonitor\.cooldown\.caWindow/, '提示必须披露越窗出口动作')
+  assert.match(helper, /app\.settings\.taskMonitor\.cooldown\.permanent/, '永久不可重试态仍需禁用提示')
 
   // 运行按钮块：禁用只保留永久不可重试态；冷却原因仍进 tooltip 供解释。
-  const actions = section(page, 'label="操作"', '</el-table-column>')
-  const runTextAt = actions.indexOf('>运行</el-button>')
+  const actions = section(page, "t('app.settings.taskMonitor.col.actions')", '</el-table-column>')
+  const runTextAt = actions.indexOf("t('app.settings.taskMonitor.actions.run')")
   assert.ok(runTextAt > 0, '操作列缺「运行」按钮')
   const runButton = openTags(actions.slice(actions.lastIndexOf('<el-button', runTextAt)), 'el-button')[0]
   assert.ok(runButton, `运行按钮开标签解析失败: ${actions.slice(runTextAt - 200, runTextAt)}`)
   const disabled = /:disabled="([^"]*)"/.exec(runButton)?.[1]
   assert.ok(disabled, `运行按钮缺 :disabled 绑定: ${runButton}`)
-  assert.match(disabled, /'该任务永久不可重试'/, '运行按钮禁用只保留永久不可重试态')
+  assert.match(disabled, /'app\.settings\.taskMonitor\.cooldown\.permanent'/, '运行按钮禁用只保留永久不可重试态')
   assert.doesNotMatch(disabled, /Boolean\(runCooldownReason/, '冷却不得再作为禁用条件')
 
   // tooltip 必须把冷却原因呈现给用户（手动运行的解释面）。

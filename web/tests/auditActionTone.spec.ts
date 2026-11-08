@@ -78,3 +78,43 @@ test('视图消费单源（不再自带百行字面量表）', () => {
   assert.match(page, /import \{ actionTagType \} from '@\/utils\/auditActionTone'/)
   assert.doesNotMatch(page, /ACTION_TAG_TABLE/)
 })
+
+// ── 批次 D(audit 域)双钉:AuditLog 用户可见文案 i18n 接线 ──
+// 调用点钉键(common.app.views.audit.*),zh 母本(locales/zh/views.ts)钉原文。
+// 母本钉在 integrator 落库 views.ts 前为红(带明确指引),落库后转绿;
+// 行为解析钉以 tSafe 相位兜底:接线前=键名自环(拦硬编码/换键),落库后=zh 逐字。
+
+import { tSafe } from '../src/i18n/tSafe.ts'
+import { existsSync } from 'node:fs'
+
+const view = (key: string, params?: Record<string, unknown>): string =>
+  tSafe(`common.app.views.audit.${key}`, params)
+
+test('审计页文案走 i18n 键(调用点钉键),动作词匹配键不词条化', () => {
+  const page = code('src/views/AuditLog.vue')
+  for (const key of ['title', 'subtitle', 'loadFailedBanner', 'retryNow', 'rangeSeparator', 'rangeStartPlaceholder', 'rangeEndPlaceholder', 'operator', 'action', 'resource', 'keywordPlaceholder', 'filter', 'reset', 'optionsIncomplete', 'retry', 'listLoadFailed', 'emptyLogs', 'colTime', 'colDetail', 'totalStaleHint']) {
+    assert.ok(page.includes(`common.app.views.audit.${key}`), `AuditLog 调用点必须含 audit.${key} 词条键`)
+  }
+  // 三个下拉的 placeholder 都要显性化(wiring 语义保持,键形替换字面量)
+  const selects = page.slice(page.indexOf('<div class="filter-bar">'), page.indexOf('<el-table'))
+  assert.equal((selects.match(/optionsIncomplete \?/g) ?? []).length, 3, '三个下拉的 placeholder 都要显性化')
+  // 动作词是后端审计词表的匹配键/数据原文,不是 UI 文案:actionTagType(row.action)
+  // 与 el-tag 内插值保持原文,不得词条化。
+  assert.match(page, /:type="actionTagType\(row\.action\)"/)
+  assert.match(page, /\{\{ row\.action \}\}/)
+})
+
+test('审计页 zh 母本钉(integrator 词条接线后逐字)', () => {
+  const lexicon = new URL('../src/locales/zh/views.ts', import.meta.url)
+  assert.ok(existsSync(lexicon), '词条母本 src/locales/zh/views.ts 未落库(integrator 接线);落库后本钉与行为解析钉转绿')
+  const zhLexicon = code('src/locales/zh/views.ts')
+  for (const text of ['操作日志', '记录系统中所有写操作和配置变更', '操作日志加载失败：列表为空不代表没有日志', '立即重试', '暂无操作日志', '筛选选项未完整加载，下拉列表可能缺项', '统计总数来自缓存，可能滞后数秒']) {
+    assert.ok(zhLexicon.includes(text), `audit 词条 zh 原文「${text}」必须在母本中`)
+  }
+  for (const [key, text] of [
+    ['title', '操作日志'], ['loadFailedBanner', '操作日志加载失败：列表为空不代表没有日志'],
+    ['emptyLogs', '暂无操作日志'], ['totalStaleHint', '统计总数来自缓存，可能滞后数秒'],
+  ] as const) {
+    assert.equal(view(key), text, `audit.${key} 必须解析为 zh 原文(接线前=键名自环)`)
+  }
+})

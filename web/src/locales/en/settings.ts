@@ -575,6 +575,7 @@ export default {
           "failed": "Failed",
           "cancelled": "Cancelled",
           "interrupted": "Interrupted",
+    "running": "Running",
           "skipped": "Skipped"
         },
         "actions": {
@@ -680,6 +681,8 @@ export default {
           "label": "Download proxy",
           "hint": "GitHub download proxy; speeds up CRS rule sets and IP2Region",
           "notLoaded": "Proxy settings not loaded: editing is disabled and saving will not write this item",
+    "selectPlaceholder": "Choose proxy",
+    "notLoadedShort": "Not loaded",
           "accessToken": "Access token",
           "tokenConfiguredPlaceholder": "Configured (leave empty to keep)",
           "tokenMissingPlaceholder": "Not configured (unauthenticated limit: 60/hour)",
@@ -693,7 +696,8 @@ export default {
           "mfaLabel": "Write verification",
           "mfaHint": "Writes require MFA verified within 1 minute",
           "lockout": "Login lockout",
-          "lockoutHint": "5 password or code failures lock for 10 minutes (off = never lock)"
+          "lockoutHint": "5 password or code failures lock for 10 minutes (off = never lock)",
+    "mfaScopeLink": "Supported operations"
         },
         "tls": {
           "forceLabel": "Force HTTPS",
@@ -719,6 +723,7 @@ export default {
           "domain": "Domain",
           "issuer": "Issuer",
           "expiry": "Expires",
+      "daysLeft": " ({days} days left)",
           "selfsignedNote": "A self-signed certificate is generated; browsers will warn it is untrusted. Cluster sync skips self-signed verification automatically",
           "needKeyFirst": "Certificate file chosen — the private key file is also required to parse the certificate",
           "needCertFirst": "Private key chosen — the certificate file is also required to parse the certificate",

@@ -138,8 +138,9 @@ test('仪表盘 Caddy 控制：占位先于确认（连点不叠第二次重启/
 test('API 密钥启用/禁用：占位先于确认，finally 释放', () => {
   const page = code('src/views/Keys.vue')
   const pendingAt = at(page, 'togglePendingId.value = key.id', '密钥占位')
-  const confirmAt = at(page, '确定要禁用 API 密钥', '密钥禁用确认')
+  const confirmAt = at(page, 'common.app.views.keys.disableConfirmMsg', '密钥禁用确认')
   assert.ok(pendingAt < confirmAt, '占位必须早于确认框')
+  assert.ok(code('src/locales/zh/views.ts').includes('确定要禁用 API 密钥'), '禁用确认原文必须在 zh 母本词条中')
   assert.match(page, /finally \{\s*togglePendingId\.value = null\s*\}/)
 })
 

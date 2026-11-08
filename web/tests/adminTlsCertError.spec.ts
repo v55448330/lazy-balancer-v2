@@ -34,7 +34,7 @@ test('设置页消费 cert_info_error 并渲染错误条', () => {
   const bar = section(page, 'v-if="adminTlsCertBroken"', '</div>')
   assert.match(bar, /class="info-note-bar"/)
   assert.match(bar, /adminTlsCertError/)
-  assert.match(bar, /重新上传/, '须给出修复指引')
+  assert.match(bar, /app\.settings\.basic\.tls\.certUnreadable/, '须给出修复指引')
 })
 
 test('/admin-tls 保存成功后回读服务端状态：损坏横幅与复用门随新证书复位', () => {

@@ -50,7 +50,8 @@ test('lbbak 以 Blob 直传，不复制成第二个 ArrayBuffer', () => {
 test('还原文案按备份分类，失败行不显示下载', () => {
   const restore = section(page, 'const restoreAutoBackup', 'const deleteAutoBackup')
   assert.match(restore, /autoBackupScopeText\(row\)/)
-  assert.match(restore, /覆盖该备份包含的分类/)
+  assert.match(restore, /t\('app\.settings\.basic\.autoBackup\.restoreConfirm'/)
+  assert.ok(code('src/locales/zh/settings.ts').includes('"restoreConfirm": "将使用备份「{name}」覆盖该备份包含的分类'), 'zh 母本须保留「覆盖该备份包含的分类」原文')
   assert.doesNotMatch(restore, /覆盖当前全部配置/)
   // 属性序与字面空隙不是契约（格式工具栏/换行重排即批量假红）：按「标签 + 属性集」
   // 判定，按钮身份由 @click 处理器认领。
@@ -62,14 +63,16 @@ test('还原文案按备份分类，失败行不显示下载', () => {
   assert.match(download, /\btype="primary"/)
   assert.match(download, /\bsize="small"/)
   assert.match(download, /:disabled="autoBackupActionBusy"/, '执行中必须禁用')
-  assert.match(elementSlice(page, page.indexOf(download), 'el-button'), />下载<\/el-button>/, '按钮文案')
+  assert.match(elementSlice(page, page.indexOf(download), 'el-button'), />\{\{ t\('app\.settings\.basic\.autoBackup\.download'\) \}\}<\/el-button>/, '按钮文案(调用点钉键)')
+  assert.ok(code('src/locales/zh/settings.ts').includes('"download": "下载"'), 'zh 母本须保留「下载」原文')
 })
 
 test('下次备份只消费调度器返回值并标明补跑', () => {
   const label = section(page, 'const autoBackupNextRunLabel', 'const autoBackupCanRunNow')
   assert.match(label, /autoBackupNextRunAt\.value/)
   assert.match(label, /autoBackupCatchUpDue\.value/)
-  assert.match(label, /待补跑/)
+  assert.match(label, /t\('app\.settings\.basic\.autoBackup\.catchUp'/)
+  assert.ok(code('src/locales/zh/settings.ts').includes('"catchUp": "待补跑（{time}）"'), 'zh 母本须保留「待补跑」原文')
   assert.doesNotMatch(label, /autoBackupForm|Intl\.DateTimeFormat/)
   assert.match(page, /next_run_at: string \| null/)
   assert.match(page, /catch_up_due: boolean/)
@@ -78,12 +81,14 @@ test('下次备份只消费调度器返回值并标明补跑', () => {
 test('立即备份按已保存范围门控，60 秒无结果有提示', () => {
   // 属性序不是契约：两次独立匹配（格式化工具有引入即批量红）。
   assert.match(page, /:disabled="!autoBackupCanRunNow"/)
-  assert.match(page, /title="按已保存的自动备份设置执行一次备份/)
+  assert.match(page, /:title="t\('app\.settings\.basic\.autoBackup\.runNowTip'\)"/)
+  assert.ok(code('src/locales/zh/settings.ts').includes('"runNowTip": "按已保存的自动备份设置执行一次备份'), 'zh 母本须保留 runNowTip 原文')
   const run = section(page, 'const runAutoBackupNow', 'const downloadAutoBackup')
   assert.match(run, /if \(!autoBackupCanRunNow\.value\)/)
   assert.doesNotMatch(run, /if \(!autoBackupSectionsValid\.value\)/)
   assert.match(run, /else if \(!completed && autoBackupVisible\.value\)/)
-  assert.match(run, /60 秒内未检测到本次备份结果/)
+  assert.match(run, /t\('app\.settings\.basic\.autoBackup\.resultTimeout'\)/)
+  assert.ok(code('src/locales/zh/settings.ts').includes('"resultTimeout": "60 秒内未检测到本次备份结果'), 'zh 母本须保留 60 秒无结果提示原文')
   const saved = section(page, 'const saveAutoBackupSettings', 'const runAutoBackupNow')
   assert.match(saved, /autoBackupSavedSections\.value = \[\.\.\.autoBackupSections\.value\]/)
 })
@@ -110,7 +115,8 @@ test('0 分类选择保留 chip、隐藏陈旧预览并禁用确认', () => {
   assert.match(page, /v-if="!importValidation\.valid && importPreviewSelected"/)
   assert.match(page, /v-else-if="!importValidation\.valid && importPreviewSelected"/)
   assert.match(page, /<template v-if="importValidation\.valid && importPreviewSelected">/)
-  assert.match(page, /v-else-if="!importPreviewSelected" class="info-note-bar import-alert"><span class="info-note-desc">未选择导入分类/)
+  assert.match(page, /v-else-if="!importPreviewSelected" class="info-note-bar import-alert"><span class="info-note-desc">\{\{ t\('app\.settings\.basic\.import\.noneSelected'\) \}\}/)
+  assert.ok(code('src/locales/zh/settings.ts').includes('"noneSelected": "未选择导入分类'), 'zh 母本须保留「未选择导入分类」原文')
   const toggle = section(page, 'const toggleImportSection', 'const toggleExportSection')
   assert.match(toggle, /if \(validation\.type === 'v1' && key !== 'rules'\) return/, 'V1 取消唯一分类后仍必须允许重新勾选规则')
   const button = section(page, ':disabled="!importValidation?.valid', ':loading="importing"')
@@ -176,7 +182,8 @@ test('自动备份还原结果展示冲突自动禁用明细', () => {
   const body = section(page, 'const restoreAutoBackup', 'const deleteAutoBackup')
   assert.ok(body.includes('disabled_conflicts'), '还原必须读取 data.disabled_conflicts')
   assert.ok(body.includes('formatImportConflict'), '冲突明细必须复用 formatImportConflict')
-  assert.match(body, /冲突置为禁用/)
+  assert.match(body, /t\('app\.settings\.basic\.conflictsDisabled', \{ count: disabledConflicts\.length \}\)/)
+  assert.ok(code('src/locales/zh/settings.ts').includes('"conflictsDisabled": "冲突置为禁用：{count} 条"'), 'zh 母本须保留「冲突置为禁用」原文')
   assert.match(body, /formatImportConflict\(conflict, true\)/, '还原路径的冲突文案须用已禁用时态')
 })
 
@@ -205,10 +212,12 @@ test('导入最终确认文案按备份类型单源：V1 不宣称全量，V2 �
 // 的时刻给出「没有日志」的错误结论。
 test('应用运行日志失败显性化：错误提示 + 空态文案切换 + 成功/关闭复位', () => {
   const dialog = section(page, 'v-model="appLogVisible"', '</el-dialog>')
-  assert.match(dialog, /<el-text v-if="appLogError"[^>]*>日志加载失败，自动重试中/)
+  assert.match(dialog, /<el-text v-if="appLogError"[^>]*>\{\{ t\('app\.settings\.basic\.appLog\.loadFail'\) \}\}/)
+  assert.ok(code('src/locales/zh/settings.ts').includes('"loadFail": "日志加载失败，自动重试中'), 'zh 母本须保留 appLog.loadFail 原文')
   assert.match(dialog, /\{\{ appLogContent \|\| appLogEmptyText \}\}/)
   assert.doesNotMatch(dialog, /\{\{ appLogContent \|\| '暂无日志' \}\}/, '失败态不得继续显示「暂无日志」')
-  assert.match(page, /const appLogEmptyText = computed\(\(\) => appLogError\.value \? '日志加载失败（自动重试中）' : '暂无日志'\)/)
+  assert.match(page, /const appLogEmptyText = computed\(\(\) => appLogError\.value \? t\('app\.settings\.basic\.appLog\.emptyFail'\) : t\('app\.settings\.basic\.appLog\.empty'\)\)/)
+  assert.ok(code('src/locales/zh/settings.ts').includes('"emptyFail": "日志加载失败（自动重试中）"'), 'zh 母本须保留 appLog.emptyFail 原文')
 
   const tail = section(page, 'const appLogTail = useLogTailPolling', 'const appLogLoading')
   assert.match(tail, /appLogError\.value = false/, '任一成功响应必须清除错误态')
@@ -228,6 +237,7 @@ test('自动备份范围损坏显性化：sections_error 非空时不得显示�
   assert.match(page, /sections_error\?: string/, 'AutoBackupRow 必须声明后端字段')
   const scope = section(page, 'const autoBackupScopeText', 'const autoBackupDetailTip')
   assert.match(scope, /row\.sections_error/, '范围渲染必须消费 sections_error')
-  assert.match(scope, /范围损坏/, '损坏必须显式提示，不得渲染成空范围')
+  assert.match(scope, /t\('app\.settings\.basic\.autoBackup\.scopeBroken'\)/, '损坏必须显式提示，不得渲染成空范围')
+  assert.ok(code('src/locales/zh/settings.ts').includes('"scopeBroken": "范围损坏（见日志）"'), 'zh 母本须保留「范围损坏」原文')
   assert.match(page, /is-warning/, '损坏态必须按 warning 着色')
 })

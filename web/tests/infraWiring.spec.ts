@@ -133,7 +133,9 @@ test('弹窗会话序号用普通变量（无响应式消费）', () => {
 test('阶段 0 副标题：空 groups 不得误报「保留检测记录」', () => {
   const dialog = code('src/components/RuleFlowDialog.vue')
   const subtitle = section(dialog, 'const stageZeroSubtitle', 'const policyTypeOf')
-  assert.match(subtitle, /if \(states\.length === 0\) return '未启用'/)
+  // i18n 后双钉:调用点钉键,zh 母本钉原文(任一漂移必红)
+  assert.match(subtitle, /if \(states\.length === 0\) return t\('common\.app\.rules\.common\.notEnabled'\)/)
+  assert.ok(code('src/locales/zh/rules.ts').includes("notEnabled: '未启用'"), '「未启用」原文必须在 zh 母本词条中')
   // 该分支必须先于 every(Boolean)（空数组 every 恒真）
   assert.ok(
     subtitle.indexOf('states.length === 0') < subtitle.indexOf('states.every(Boolean)'),

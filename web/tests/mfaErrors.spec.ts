@@ -8,6 +8,7 @@ import assert from 'node:assert/strict'
 
 import { isMfaCredentialRejection, MFA_CREDENTIAL_REJECTION_MESSAGES } from '../src/utils/mfaErrors.ts'
 import { MFA_SCOPE_GROUPS } from '../src/utils/mfaScopeGroups.ts'
+import { tSafe } from '../src/i18n/tSafe.ts'
 import { repoCode, section, code } from './_helpers.ts'
 
 // jwtAuth 的真实过期文案（MFA 端点先经它鉴权）；「未登录或登录已过期」只来自
@@ -103,7 +104,10 @@ test('MFA「支持的操作」清单覆盖 middleware 各写端点族', () => {
   for (const anchor of ['任务监控 运行', '服务控制', '节点站点坐标', '指纹钉', '自动封禁', '爬虫库', 'IP 名单', 'DNS 凭证连通性测试']) {
     assert.ok(itemsFlat.includes(anchor), `MFA 清单缺「${anchor}」——用户对这些写操作会被要求验码`)
   }
-  assert.match(page, /subtitle="覆盖全部管理写操作（只读语义写操作与 MFA 验码、登出端点除外）"/)
+  // i18n 后双钉：BasicSettings 弹框副标题已键化（app.settings.basic.mfaScope，settings 域）——
+  // 调用点钉键，zh 母本（locales/zh/settings.ts）钉原文，任一漂移必红。
+  assert.match(page, /:subtitle="t\('app\.settings\.basic\.mfaScope\.subtitle'\)"/)
+  assert.ok(code('src/locales/zh/settings.ts').includes('覆盖全部管理写操作（只读语义写操作与 MFA 验码、登出端点除外）'), 'MFA 弹框副标题原文必须在 zh settings 域词条中')
   // 副标题的豁免集必须与 DecideMFAStepUp 同源：step-up 只豁免 verify-step
   // 与 logout，setup/activate/disable/recovery-codes 全部在覆盖面内（同弹框
   // 清单也列了「启用/禁用/重新生成恢复码（自己的）」）。写成「MFA 自助端点
@@ -213,3 +217,95 @@ test('MFA 清单反查：middleware 全部写路由族均有清单锚点', () =>
   assert.deepEqual(unmapped, [], '新增写端点族未登记族锚点（清单会低估受保护范围）')
   assert.deepEqual(missingAnchor, [], '清单缺族锚点')
 })
+
+// ── 清单词条化（i18n 双钉）────────────────────────────────────────────
+// mfaScopeGroups 的 title/items 已键化（views.mfa.*）：zh 母本侧由集成器落盘
+// locales/{zh,en}/views.ts。三向钉——任一漂移必红：
+//   ① 调用点钉键：mfaScopeGroups.ts 源码逐键出现 t('common.app.views.mfa.<key>')；
+//   ② zh 母本钉原文：views.ts 逐键含原 zh 字面量（键↔文案绑定）；
+//   ③ 运行时等值：tSafe(key) === 原 zh 字面量（tSafe zh 直出逐字等价，
+//      上方族锚点/清单覆盖用例因此不受键化影响）。
+test('MFA 清单词条键化：50 键三向对表（调用点/zh 母本/运行时）', () => {
+  const src = code('src/utils/mfaScopeGroups.ts')
+  const zhViews = code('src/locales/zh/views.ts')
+  for (const [key, zh] of Object.entries(MFA_SCOPE_I18N_TABLE) as Array<[string, string]>) {
+    assert.ok(src.includes(`t('common.app.views.mfa.${key}')`), `清单源码缺键 ${key} 的 t() 调用`)
+    assert.ok(zhViews.includes(zh), `zh 母本词条缺「${zh}」（键 ${key}）`)
+    assert.equal(tSafe(`common.app.views.mfa.${key}`), zh, `键 ${key} 的 zh 直出与母本漂移`)
+  }
+})
+
+// 分组形状钉：6 组标题键序 + 每组 items 键序（防止键位挪动静默改组/漏项）。
+test('MFA 清单词条键化：分组标题与 items 键位逐一对表', () => {
+  assert.equal(MFA_SCOPE_GROUPS.length, MFA_SCOPE_KEY_LAYOUT.length)
+  MFA_SCOPE_GROUPS.forEach((group, gi) => {
+    const [titleKey, itemKeys] = MFA_SCOPE_KEY_LAYOUT[gi]!
+    assert.equal(group.title, tSafe(`common.app.views.mfa.${titleKey}`), `第 ${gi + 1} 组标题键漂移`)
+    assert.equal(group.items.length, itemKeys.length, `第 ${gi + 1} 组 items 数漂移`)
+    group.items.forEach((item, ii) => {
+      assert.equal(item, tSafe(`common.app.views.mfa.${itemKeys[ii]}`), `第 ${gi + 1} 组第 ${ii + 1} 项键漂移`)
+    })
+  })
+})
+
+const MFA_SCOPE_I18N_TABLE: Record<string, string> = {
+  "scopeAccessUrl": "访问地址修改",
+  "scopeAdminTls": "管理 TLS 设置修改",
+  "scopeApiKeyMgmt": "API 密钥创建/启停/删除（含自己的）",
+  "scopeAutobanConfig": "自动封禁配置",
+  "scopeBlockPageCrud": "拦截页面增删改",
+  "scopeCaProviderChangeTest": "CA 提供商修改/测试",
+  "scopeCaddyService": "Caddy 服务启动/停止/重启",
+  "scopeCertConfigCrud": "证书配置增删改",
+  "scopeCertJobRetryDelete": "证书任务重试/删除",
+  "scopeClusterSync": "集群同步设置",
+  "scopeConfigExportBackup": "配置导出与自动备份（设置保存/立即备份/删除/还原/下载）",
+  "scopeConfigImport": "配置导入（v1/v2）",
+  "scopeConfigReloadValidate": "配置重载/校验",
+  "scopeCreate": "创建",
+  "scopeCustomRuleCrud": "自定义规则增删改",
+  "scopeDelete": "删除",
+  "scopeDisable": "禁用",
+  "scopeDnsConfigCrud": "DNS 配置增删改",
+  "scopeDnsCredentialTest": "DNS 凭证连通性测试",
+  "scopeDuplicate": "复制",
+  "scopeEdit": "编辑",
+  "scopeEnable": "启用",
+  "scopeForgetPin": "清除节点证书指纹/清空指纹钉",
+  "scopeGroupCertDns": "证书与 DNS",
+  "scopeGroupCluster": "集群管理",
+  "scopeGroupRules": "负载规则",
+  "scopeGroupSecurity": "安全防护",
+  "scopeGroupSystem": "系统与服务",
+  "scopeGroupUsersKeys": "用户与密钥",
+  "scopeIpListCrud": "IP 名单增删改与条目增删",
+  "scopeLibUpdate": "CRS/IP 库更新与自动更新开关",
+  "scopeManualSync": "手动同步",
+  "scopeMfaReset": "重置 MFA（含管理员代重置）",
+  "scopeModeSwitch": "主从模式切换/提升",
+  "scopeNodeApproval": "节点审批/拒绝/删除",
+  "scopeNodeService": "服务控制（启动/停止/重启 Caddy、重启应用）",
+  "scopeNodeSite": "节点站点坐标配置",
+  "scopeOidcConfig": "OIDC 配置修改/删除",
+  "scopeProfileUpdate": "个人资料修改",
+  "scopeRawCaddyOverwrite": "原始 Caddy 配置覆写（JSON 逃生口）",
+  "scopeRecoveryCodes": "启用/禁用/重新生成恢复码（自己的）",
+  "scopeRegisterToken": "注册令牌生成",
+  "scopeReplicaLogin": "登录从节点（票据签发，每次验证）",
+  "scopeSecurityPolicyCrud": "安全策略增删改/绑定/拆分",
+  "scopeSettingsSave": "基础设置/Caddy 全局配置保存",
+  "scopeSystemRestart": "系统重启",
+  "scopeTaskMonitor": "任务监控 运行/停止调度/取消/重启",
+  "scopeThreatCrawlerUpdate": "威胁情报库/爬虫库更新与开关",
+  "scopeTriggerIssue": "触发证书签发",
+  "scopeUserCrud": "用户增删改/启停/重置密码（管理员）",
+}
+
+const MFA_SCOPE_KEY_LAYOUT: ReadonlyArray<readonly [string, readonly string[]]> = [
+  ['scopeGroupRules', ['scopeCreate', 'scopeEdit', 'scopeDelete', 'scopeEnable', 'scopeDisable', 'scopeDuplicate']],
+  ['scopeGroupCertDns', ['scopeDnsConfigCrud', 'scopeCertConfigCrud', 'scopeDnsCredentialTest', 'scopeCaProviderChangeTest', 'scopeTriggerIssue', 'scopeCertJobRetryDelete']],
+  ['scopeGroupSecurity', ['scopeSecurityPolicyCrud', 'scopeCustomRuleCrud', 'scopeBlockPageCrud', 'scopeIpListCrud', 'scopeLibUpdate', 'scopeThreatCrawlerUpdate', 'scopeAutobanConfig']],
+  ['scopeGroupUsersKeys', ['scopeUserCrud', 'scopeProfileUpdate', 'scopeApiKeyMgmt', 'scopeMfaReset', 'scopeRecoveryCodes']],
+  ['scopeGroupSystem', ['scopeSettingsSave', 'scopeConfigReloadValidate', 'scopeConfigImport', 'scopeConfigExportBackup', 'scopeAdminTls', 'scopeOidcConfig', 'scopeCaddyService', 'scopeRawCaddyOverwrite', 'scopeTaskMonitor', 'scopeSystemRestart']],
+  ['scopeGroupCluster', ['scopeNodeApproval', 'scopeAccessUrl', 'scopeNodeSite', 'scopeNodeService', 'scopeForgetPin', 'scopeRegisterToken', 'scopeModeSwitch', 'scopeManualSync', 'scopeClusterSync', 'scopeReplicaLogin']],
+]

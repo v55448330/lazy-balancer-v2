@@ -62,7 +62,7 @@ test('威胁大屏死选择器清理与「被攻击目标」空态文案', () =>
   assert.doesNotMatch(page, /\.ev-icon svg/)
   assert.doesNotMatch(page, /\.scanline/)
   assert.doesNotMatch(page, /\.viewport-grid/)
-  assert.match(page, /<div v-else class="empty">暂无目标数据<\/div>/)
+  assert.match(page, /<div v-else class="empty">\{\{ t\('app\.security\.threat\.noTargetData'\) \}\}<\/div>/)
 })
 
 test('统计响应窗口与当前窗口不一致时丢弃', () => {
@@ -116,7 +116,9 @@ test('采集租约申请/续租失败独立横幅（不与光流失败混报）'
   // 光流失败与采集租约失败是两个排障方向：横幅文案必须分离
   assert.ok(page.includes('v-if="flowError || attackFlowError"'))
   const collectorBanner = section(page, '<div v-if="collectorError"', '</div>')
-  assert.match(collectorBanner, /采集续租失败/, '采集租约失败的横幅文案')
+  // i18n 后双钉:调用点钉键,zh 母本钉原文(横幅文案漂移仍必红)
+  assert.match(collectorBanner, /t\('app\.security\.threat\.collectorRenewFailed'\)/, '采集租约失败的横幅文案')
+  assert.ok(code('src/locales/zh/security.ts').includes('采集续租失败'), '采集租约失败横幅原文必须在 zh 母本词条中')
 })
 
 test('图例刻度顶值与引擎染色同口径：max 消费 aggregateCountryCounts 的聚合值', () => {

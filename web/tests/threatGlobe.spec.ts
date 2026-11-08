@@ -134,7 +134,7 @@ test('首帧双 RAF 无条件应用图层（两帧内下钻不得残留世界点
 
 test('海外下钻浮签显示「无省级统计」而不是 0', () => {
   assert.match(globeSrc, /hasProvinceStats\(drilledName\)/)
-  assert.match(globeSrc, /无省级统计/)
+  assert.match(globeSrc, /noProvinceStats/)
 })
 test('光流池满时拒绝新弧线，不淘汰已开始动画', () => {
   const spawn = member(globeSrc, 'function spawnArc(')

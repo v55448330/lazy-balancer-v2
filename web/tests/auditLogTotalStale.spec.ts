@@ -1,6 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
+import { existsSync } from 'node:fs'
 import { code, repoCode, section } from './_helpers.ts'
 
 // 审计列表 total 走后端 5 秒进程缓存并以 total_stale 披露来源；面板必须消费
@@ -13,8 +14,11 @@ test('审计列表消费 total_stale 并驱动提示位', () => {
   const fetchBody = section(page, 'const fetchLogs = async', 'onMounted(')
   assert.match(fetchBody, /total_stale\?: boolean/)
   assert.match(fetchBody, /totalStale\.value = res\.data\?\.total_stale === true/)
-  // 提示只在陈旧时出现，且不与分页条重叠布局。
-  assert.match(page, /<el-text v-if="totalStale"[^>]*>[\s\S]*?统计总数来自缓存，可能滞后数秒[\s\S]*?<\/el-text>/)
+  // 提示只在陈旧时出现，且不与分页条重叠布局；批次 D(audit 域)双钉:
+  // 调用点钉键,zh 母本(locales/zh/views.ts)钉提示原文(任一漂移必红)。
+  assert.match(page, /<el-text v-if="totalStale"[^>]*>[\s\S]*?\{\{ t\('common\.app\.views\.audit\.totalStaleHint'\) \}\}[\s\S]*?<\/el-text>/)
+  assert.ok(existsSync(new URL('../src/locales/zh/views.ts', import.meta.url)), '词条母本 src/locales/zh/views.ts 未落库(integrator 接线)')
+  assert.ok(code('src/locales/zh/views.ts').includes('统计总数来自缓存，可能滞后数秒'), 'totalStaleHint zh 原文必须在 zh 母本词条中')
 })
 
 test('后端响应与文档示例都登记 total_stale', () => {

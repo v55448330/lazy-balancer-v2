@@ -68,15 +68,18 @@ test('名单详情失败态与保存同门：条目录入/导入一并禁用', (
       `${action} 在失败态/保存中必须禁用（属性顺序无关）`,
     )
   }
-  assert.match(page, /保存与条目增删\/导入已禁用/, '横幅必须说明禁用范围')
+  assert.match(page, /t\('common\.app\.views\.secRules\.ipDialog\.entriesLoadFailBanner'\)/, '横幅必须走禁用范围词条键')
+  assert.ok(code('src/locales/zh/views.ts').includes('保存与条目增删/导入已禁用'), '禁用范围原文必须在 zh 母本词条中')
 })
 
 test('名单重试覆盖前确认未保存条目，成功后提示已加载', () => {
   const reload = section(page, 'const reloadIpListDetail = async', 'const saveIpList = async')
-  const confirm = reload.indexOf('重新加载将用服务端条目覆盖当前')
+  const confirm = reload.indexOf("'common.app.views.secRules.msgs.reloadConfirmBody'")
   const assign = reload.indexOf('ipListForm.value.entries = (res.data?.entries')
   assert.ok(confirm > 0 && assign > confirm, '覆盖前必须确认（含未保存条目）')
-  assert.match(reload, /ElMessage\.success\('已加载最新条目'\)/)
+  assert.match(reload, /ElMessage\.success\(t\('common\.app\.views\.secRules\.msgs\.loadedLatest'\)\)/)
+  assert.ok(code('src/locales/zh/views.ts').includes('重新加载将用服务端条目覆盖当前'), '覆盖确认原文必须在 zh 母本词条中')
+  assert.ok(code('src/locales/zh/views.ts').includes('已加载最新条目'), '加载成功原文必须在 zh 母本词条中')
 })
 
 test('自动封禁名单新鲜度差集经公开合并入口生效（归一/去重）', () => {
@@ -107,7 +110,7 @@ test('自动封禁名单最终复核：并发新增并回载荷，主动删除�
 
   // 接线：复核落在最后一次确认之后、PUT 紧前（确认框停留期新增同样会被解封）
   const save = section(page, 'const saveIpList = async', 'const deletingIpListId')
-  const confirmAt = save.indexOf('确定${action} IP 地址列表')
+  const confirmAt = save.indexOf("'common.app.views.secRules.msgs.ipListSaveConfirm'")
   const verifyAt = save.indexOf('mergeFreshAutobanEntries(editingIpListId.value, entries)')
   const putAt = save.indexOf('await request.put(`/security/ip-lists/')
   assert.ok(confirmAt > 0, '通用确认必须存在')
@@ -118,6 +121,7 @@ test('自动封禁名单最终复核：并发新增并回载荷，主动删除�
   assert.doesNotMatch(save, /confirmAutobanFreshness/, '旧的前置差集不得残留')
   const helper = section(page, 'const mergeFreshAutobanEntries', 'const saveIpList = async')
   assert.match(helper, /mergeConcurrentBanEntries\(serverEntries, entries, ipListOpenSnapshot\.value\)/)
-  assert.match(helper, /无法核对最新封禁条目，已中止保存/, '核对失败要显性点名后果')
+  assert.match(helper, /t\('common\.app\.views\.secRules\.msgs\.concurrentBanAbort'/, '核对失败要显性点名后果（词条键）')
+  assert.ok(code('src/locales/zh/views.ts').includes('无法核对最新封禁条目，已中止保存'), '中止后果原文必须在 zh 母本词条中')
   assert.match(page, /ipListOpenSnapshot\.value = ipListForm\.value\.entries\.map\(\(e\) => e\.value\)/, '详情落地必须记录打开快照')
 })

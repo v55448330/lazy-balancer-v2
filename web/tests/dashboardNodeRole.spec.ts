@@ -22,6 +22,9 @@ test('角色未知分支位于配置正常/异常之前，且文案与 tag 形�
   assert.match(unknownBranch, /t\('common\.app\.dashboard\.roleUnknown'\)/)
   assert.ok(code('src/locales/zh/common.ts').includes('"roleUnknown": "角色未知"'), '角色未知文案必须在 zh 母本词条中')
   assert.match(unknownBranch, /<el-tag type="info" size="small" effect="plain">/)
+  // 批次 D:resolveNodeRole 的 label 已词条化(cluster.roleUnknown 等,经 utils/nodeRole
+  // 单源流转);本视图 nodeModeLabel 不得自带第二份文案。cluster zh 母本钉于 nodeRole.spec。
+  assert.ok(code('src/locales/zh/views.ts').includes('节点角色未知'), 'cluster.roleUnknown zh 原文必须在 views 母本词条中')
 })
 
 test('三态节点角色派生单源：判据在 utils/nodeRole，视图只消费', () => {

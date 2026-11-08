@@ -155,9 +155,14 @@ const FRONTEND_FAMILY_EXCEPTIONS: Readonly<Record<string, TriggerStageFamily>> =
 test('存量 id 8 在事件列表与触发详情都标为地域拦截（旧 id）', () => {
   const list = code('src/views/security/SecurityEvents.vue')
   const detail = code('src/components/events/TriggerDetailDialog.vue')
-  assert.match(list, /地域拦截（旧 id）/)
+  // i18n 后双钉:调用点钉键,zh 母本钉原文(任一漂移必红)
+  assert.match(list, /t\('app\.security\.events\.stageLegacyGeo'\)/)
+  assert.ok(code('src/locales/zh/security.ts').includes('地域拦截（旧 id）'), '旧 id 中和文案必须在 zh 母本词条中')
   assert.match(detail, /rule_triggered \?\? ''\) === '8'|rule_triggered === '8'/, '详情必须识别存量 id 8')
-  assert.match(detail, /地域拦截（旧 id）/, '详情不得再把同一事件写成 IP 黑白名单')
+  // 详情侧词条化后钉调用键（原文母本在 locales views.ts，由批次 D 集成落库）：
+  // categoryLegacyGeo（类别/维度共用）与 stageLegacyGeo（阶段徽标）两处调用点。
+  assert.ok((detail.match(/common\.app\.views\.trigDetail\.categoryLegacyGeo/g) ?? []).length >= 2, '类别与维度两处都必须走同一「旧 id」词条')
+  assert.match(detail, /common\.app\.views\.trigDetail\.stageLegacyGeo/, '阶段徽标必须走「旧 id」阶段词条')
 })
 
 test('固定 id 族归属从后端 legacyRuleFamilies 单表派生（改族即红）', () => {

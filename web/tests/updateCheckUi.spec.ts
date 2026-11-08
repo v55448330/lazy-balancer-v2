@@ -174,12 +174,12 @@ test('拉取失败/超时静默跳过：条目保持空、无异常外泄、cons
 
 test('接线钉：版本行徽标经 AccessibleLink 键盘可达，文案与弹框打开动作齐备', () => {
   const src = code('src/views/settings/BasicSettings.vue')
-  const badge = src.slice(src.indexOf('info-label">版本'), src.indexOf('info-label">运行模式'))
+  const badge = src.slice(src.indexOf("t('app.settings.basic.system.version')"), src.indexOf("t('app.settings.basic.system.runMode')"))
   assert.ok(badge.includes('<el-tag type="info" size="small">{{ appVersion }}</el-tag>'), '版本行原样保留')
   assert.ok(badge.includes('v-if="updateAvailable"'), '徽标仅在有更新时渲染')
   assert.ok(badge.includes('<AccessibleLink'), '徽标必须是键盘可达组件（AccessibleLink）')
   assert.ok(badge.includes('@click="openUpdateDialog"'), '点击打开弹框')
-  assert.ok(badge.includes('发现新版本 {{ updateBadgeVersion }}，点击查看'), '徽标文案')
+  assert.ok(badge.includes("t('app.settings.basic.update.title')") && badge.includes('{{ updateBadgeVersion }}') && badge.includes('，点击查看'), '徽标文案')
 })
 
 test('接线钉：弹框 = DialogHeader + el-tabs，无更新内容的 tab 隐藏，说明插值渲染', () => {
@@ -188,10 +188,10 @@ test('接线钉：弹框 = DialogHeader + el-tabs，无更新内容的 tab 隐�
   assert.ok(dialogStart > 0, '更新弹框存在')
   const dialog = src.slice(dialogStart, src.indexOf('</el-dialog>', dialogStart))
   assert.ok(dialog.includes('<DialogHeader'), '弹框头使用统一 DialogHeader')
-  assert.ok(dialog.includes('title="发现新版本"'))
+  assert.ok(dialog.includes("title=\"t('app.settings.basic.update.title')\""))
   assert.ok(dialog.includes('<el-tabs v-model="updateActiveTab">'))
-  assert.ok(dialog.includes('<el-tab-pane v-if="stableUpdate" label="稳定版" name="stable">'), '稳定版 tab 随条目隐藏')
-  assert.ok(dialog.includes('<el-tab-pane v-if="betaUpdate" label="测试版" name="beta">'), '测试版 tab 随条目隐藏')
+  assert.ok(dialog.includes("<el-tab-pane v-if=\"stableUpdate\" :label=\"t('app.settings.basic.update.stable')\" name=\"stable\">"), '稳定版 tab 随条目隐藏')
+  assert.ok(dialog.includes("<el-tab-pane v-if=\"betaUpdate\" :label=\"t('app.settings.basic.update.beta')\" name=\"beta\">"), '测试版 tab 随条目隐藏')
   assert.ok(dialog.includes('{{ stableUpdate.version }}'))
   assert.ok(dialog.includes('{{ betaUpdate.version }}'))
   assert.ok(dialog.includes('<li v-for="note in stableUpdate.notes" :key="note">{{ note }}</li>'), '发布说明逐条插值渲染（textContent）')

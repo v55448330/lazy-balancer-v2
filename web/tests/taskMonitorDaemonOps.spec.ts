@@ -10,9 +10,9 @@ import { code, member, section } from './_helpers.ts'
 // 出现「已签发」等证书业务态属域错位。
 
 const vue = code('src/views/settings/TaskMonitor.vue')
-const opsColumn = section(vue, '<el-table-column label="操作"', '</el-table-column>')
-const scheduleColumn = section(vue, '<el-table-column label="调度"', '</el-table-column>')
-const nextColumn = section(vue, '<el-table-column label="下次执行"', '</el-table-column>')
+const opsColumn = section(vue, '<el-table-column :label="t(\'app.settings.taskMonitor.col.actions\')"', '</el-table-column>')
+const scheduleColumn = section(vue, '<el-table-column :label="t(\'app.settings.taskMonitor.col.schedule\')"', '</el-table-column>')
+const nextColumn = section(vue, '<el-table-column :label="t(\'app.settings.taskMonitor.detail.nextRun\')"', '</el-table-column>')
 
 test('常驻行：controllable 派生「重启」按钮，走 control restart', () => {
   assert.match(opsColumn, /row\.controllable/, '重启按钮必须以 controllable 字段为门（引擎元数据派生）')
@@ -24,7 +24,7 @@ test('常驻行：controllable 派生「重启」按钮，走 control restart', 
 test('business_driven 行：调度开关只读；引擎停调以「已停调」标签替代开关', () => {
   assert.match(scheduleColumn, /:disabled="!canOperate \|\| isBusinessDrivenTask\(row as TaskInfo\)"/, '业务驱动任务调度开关只读（业务页单源）')
   assert.match(scheduleColumn, /row\.schedule_stopped_reason && isBusinessDrivenTask\(row as TaskInfo\)/, '引擎停调的 business_driven 行不再渲染开关')
-  assert.match(scheduleColumn, /已停调/)
+  assert.match(scheduleColumn, /app\.settings\.taskMonitor\.schedule\.stoppedTag/)
 })
 
 test('常驻行无下次执行：下次执行列显「—」', () => {
@@ -35,12 +35,14 @@ test('常驻行无下次执行：下次执行列显「—」', () => {
 
 test('结果标签=引擎结果域自有映射；未知值显「未知」，不借证书词表', () => {
   assert.doesNotMatch(vue, /certJobStatusLabel/, '结果列不得借用 cert_jobs 状态词表（域错位）')
-  const resultLabels = member(code('src/views/settings/TaskMonitor.vue'), 'const resultLabels')
-  for (const label of ['成功', '失败', '已取消', '中断', '运行中', '已跳过']) {
-    assert.match(resultLabels, new RegExp(label), `引擎结果词表缺 ${label}`)
+  const vueCode = code('src/views/settings/TaskMonitor.vue')
+  // i18n 后词表值为 t() 键——双钉:调用点钉六个 result.* 键,zh 母本钉 settings.ts
+  for (const key of ['success', 'failed', 'cancelled', 'interrupted', 'skipped']) {
+    assert.match(vueCode, new RegExp("t\\('app\\.settings\\.taskMonitor\\.result\\." + key + "'\\)"), `引擎结果词表缺 result.${key}`)
   }
-  const statusResultLabel = member(code('src/views/settings/TaskMonitor.vue'), 'const statusResultLabel')
-  assert.match(statusResultLabel, /hasOwn\(resultLabels, r\) \? resultLabels\[r\]! : '未知'/, '未知值回显「未知」，不做证书词表兜底')
+    assert.match(vueCode, /t\('app\.settings\.taskMonitor\.status\.running'\)/, '引擎结果词表缺 status.running(运行中)')
+  const statusResultLabel = code('src/views/settings/TaskMonitor.vue')
+  assert.match(statusResultLabel, /hasOwn\(resultLabels\.value, r\) \? resultLabels\.value\[r\]! : t\('app\.settings\.taskMonitor\.status\.unknown'\)/, '未知值回显「未知」键，不做证书词表兜底')
   const resultTagType = member(code('src/views/settings/TaskMonitor.vue'), 'const resultTagType')
   assert.doesNotMatch(resultTagType, /issued/, '结果色调不得保留证书业务态分支')
 })

@@ -32,7 +32,9 @@ test('行级按钮与打开函数双门（按钮只是呈现层）', () => {
   const open = section(page, 'const openBindRulesDialog = async', 'const onBindRulesSaved')
   assert.match(open, /if \(securityBindingsLoading\.value \|\| securityBindingsFailed\.value \|\| bindRulesOpening\.value\) \{/)
   assert.match(open, /ElMessage\.warning\(/)
-  assert.match(open, /规则绑定数据加载失败，请先点击上方「重新加载」/)
+  // i18n 后双钉:双态文案(加载中/加载失败)键位钉,zh 母本钉原文
+  assert.match(open, /securityBindingsLoading\.value \? t\('app\.security\.policies\.msg\.bindingsLoading'\) : t\('app\.security\.policies\.msg\.bindingsFailedReload'\)/)
+  assert.ok(code('src/locales/zh/security.ts').includes('规则绑定数据加载失败，请先点击上方「重新加载」'), '绑定加载失败原文必须在 zh 母本词条中')
 })
 
 test('打开前重取快照，失败则不打开（旧快照的 delta 不等于当前绑定集）', () => {
@@ -41,7 +43,9 @@ test('打开前重取快照，失败则不打开（旧快照的 delta 不等于�
   const visibleAt = open.indexOf('bindRulesVisible.value = true')
   assert.ok(refreshAt > 0, '必须打开前刷新一次快照')
   assert.ok(visibleAt > refreshAt, '刷新成功后才可打开')
-  assert.match(open, /ElMessage\.error\('规则绑定数据刷新失败，已取消打开；请稍后重试'\)/)
+  // i18n 后双钉:调用点钉键,zh 母本钉原文(任一漂移必红)
+  assert.match(open, /ElMessage\.error\(t\('app\.security\.policies\.msg\.bindingsRefreshFailed'\)\)/)
+  assert.ok(code('src/locales/zh/security.ts').includes('规则绑定数据刷新失败，已取消打开；请稍后重试'), '刷新失败原文必须在 zh 母本词条中')
   // 就绪门的释放必须落在 finally 段内：仅做存在性匹配时，把
   // `bindRulesOpening.value = false` 挪到 try 成功路径（失败/提前 return 时门
   // 永久关闭）或干脆删掉 finally 都照样命中同名片段。按「try 段 → finally 段」

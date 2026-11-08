@@ -52,7 +52,8 @@ test('头名校验逻辑：非空 token 合法性 + 空串语义（空=匹配全
 test('保存门与红框消费同一谓词，拒绝文案说明空串语义', () => {
   const save = section(page, 'const saveCustomRule = async', 'const deletingCustomRuleId')
   assert.match(save, /cond\.target === 'headers' && !headerNameSaveAllowed\(cond\.header_name\)/, '保存门必须经共享谓词（空串放行、非空校验 token）')
-  assert.match(save, /留空则匹配全部头的值/, '拒绝文案必须说明空串语义')
+  assert.match(save, /t\('common\.app\.views\.secRules\.msgs\.headerNameInvalid'/, '拒绝文案键调用')
+  assert.ok(code('src/locales/zh/views.ts').includes('留空则匹配全部头的值'), '拒绝文案必须说明空串语义（zh 母本）')
   // 红框与保存门同一谓词：非空非法才标错，空串不标错。
   const inputTag = headerNameInput()
   assert.ok(inputTag, '头名输入框必须存在')

@@ -25,7 +25,7 @@ test('任务监控：KPI 不再显示证书工作项括注，筛选组右对齐�
   // 「运行」按钮的 tooltip 必须只在有冷却原因时才出现（`:disabled` 门）：
   // 恒定出现的空 tooltip 会吞掉悬停/焦点提示。按标签配对判定包裹关系，
   // 不用 `[\s\S]{0,300}` 这类距离型正则——标记一变长它就可能恒真（永远放行）。
-  const runs = [...page.matchAll(/<el-button\b(?:[^>"']|"[^"]*"|'[^']*')*>运行<\/el-button>/g)]
+  const runs = [...page.matchAll(/<el-button\b[^>]*>{{ t\('app\.settings\.taskMonitor\.actions\.run'\) }}<\/el-button>/g)]
   assert.ok(runs.length > 0, '前置：「运行」按钮必须存在（否则本断言空转）')
   for (const run of runs) {
     const tooltip = enclosingOpenTag(page, 'el-tooltip', run.index)
@@ -50,13 +50,13 @@ test('安全总览 Top10 源 IP 展示近 10 分钟/近 1 小时/近 24 小时�
   assert.match(page, /prop="recent_10m" :label="t\('app\.security\.overview\.topIps\.colRecent10m'\)" width="120"/)
   assert.match(page, /prop="recent_1h" :label="t\('app\.security\.overview\.topIps\.colRecent1h'\)" width="128"/)
   assert.match(page, /prop="recent_24h" :label="t\('app\.security\.overview\.topIps\.colRecent24h'\)" width="110"/, '近 24 小时列（用户要求 110 宽）')
-  assert.ok(code('src/locales/zh/security.ts').includes('"zh": "近10分钟"'), '近10分钟列头原文必须在 zh 母本词条中')
-  assert.ok(code('src/locales/zh/security.ts').includes('"zh": "近1小时"'), '近1小时列头原文必须在 zh 母本词条中')
-  assert.ok(code('src/locales/zh/security.ts').includes('"zh": "近24小时"'), '近24小时列头原文必须在 zh 母本词条中')
+  assert.ok(code('src/locales/zh/security.ts').includes('近10分钟'), '近10分钟列头原文必须在 zh 母本词条中')
+  assert.ok(code('src/locales/zh/security.ts').includes('近1小时'), '近1小时列头原文必须在 zh 母本词条中')
+  assert.ok(code('src/locales/zh/security.ts').includes('"近24小时"'), '近24小时列头原文必须在 zh 母本词条中')
   // 新增列后不得整体撑破表格：IP 地址与攻击类型让宽（列头已抽词,调用点钉键）
   assert.match(page, /:label="t\('app\.security\.overview\.topIps\.colIp'\)" min-width="160"/, 'IP 地址列让宽到 160（原 200）')
   assert.match(page, /:label="t\('app\.security\.overview\.topIps\.colAttackType'\)" min-width="140"/, '攻击类型列让宽到 140（原 180）')
-  assert.ok(code('src/locales/zh/security.ts').includes('"zh": "IP 地址"'), 'IP 地址列头原文必须在 zh 母本词条中')
+  assert.ok(code('src/locales/zh/security.ts').includes('"IP 地址"'), 'IP 地址列头原文必须在 zh 母本词条中')
 })
 
 test('策略向导 WAF 步骤：排除行撑满内容列，记录请求体警示条对齐控件列（2026-11-03 用户验收反馈）', () => {
@@ -79,7 +79,7 @@ test('策略向导 WAF 步骤：排除行撑满内容列，记录请求体警示
   assert.match(item, /class="form-tip-line"/, '控件说明行必须保留')
   assert.match(item, /v-if="form\.log_request_body"[^>]*class="info-note-bar form-item-note-bar"/, '警示条必须移入带标签表单项内')
   assert.match(item, /t\('app\.security\.policies\.waf\.logRequestBodyWarn'\)/, '警示文案必须保留')
-  assert.ok(code('src/locales/zh/security.ts').includes('"zh": "记录请求体"'), '表单项标签原文必须在 zh 母本词条中')
+  assert.ok(code('src/locales/zh/security.ts').includes('记录请求体'), '表单项标签原文必须在 zh 母本词条中')
   assert.ok(code('src/locales/zh/security.ts').includes('请仅在排障期间开启'), '警示文案原文必须在 zh 母本词条中')
   // 全局规范不被局部覆写：本文件不得重定义 info-note-bar 的盒模型
   assert.doesNotMatch(page, /\.info-note-bar[^{]*\{[^}]*padding/, 'info-note-bar 内边距必须走全局规范，禁局部覆写')

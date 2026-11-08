@@ -208,18 +208,23 @@ test('接线：SecurityPolicies 逐阶段归因消费 resolveBlockPageAttributio
 
 test('拦截页步骤：汇总卡替代逐条重复提示（主行 + 例外分面 + 能力门行）', () => {
   const text = code('src/views/security/SecurityPolicies.vue')
-  // 顶部说明一句话直白化（去括号嵌套/内部术语/阶段编号），右侧计数小标签
-  assert.match(text, /触发本策略拦截时，向客户端返回下方选择的拦截页/)
+  // 顶部说明一句话直白化（去括号嵌套/内部术语/阶段编号），右侧计数小标签。
+  // i18n 后双钉:调用点钉键,zh 母本钉原文(任一漂移必红)
+  assert.match(text, /t\('app\.security\.policies\.bp\.projection'\)/)
+  assert.ok(code('src/locales/zh/security.ts').includes('触发本策略拦截时，向客户端返回下方选择的拦截页'), '顶部说明原文必须在 zh 母本词条中')
   assert.doesNotMatch(text, /恒走兜底路由/, '内部术语不得回流')
-  assert.match(text, /已关联 \{\{ boundRules\.length \}\} 条规则/)
+  assert.match(text, /t\('app\.security\.policies\.bind\.relatedCount', \{ n: boundRules\.length \}\)/)
+  assert.ok(code('src/locales/zh/security.ts').includes('已关联 {n} 条规则'), '计数小标签原文必须在 zh 母本词条中')
   // 汇总卡：主行 + 例外分面（仅存在才渲染）+ 数据源复用绑定链/归因单源
   assert.match(text, /const blockPageSummary = computed/)
-  assert.match(text, /均显示本拦截页「/)
+  assert.match(text, /t\('app\.security\.policies\.bp\.pageActive', \{ n: total, page: pageName \}\)/)
+  assert.ok(code('src/locales/zh/security.ts').includes('均显示本拦截页「{page}」'), '汇总主行原文必须在 zh 母本词条中')
   assert.match(text, /if \(rateLimitCount > 0\)/, '限流例外行条件渲染')
   assert.match(text, /if \(tcpCount > 0\)/, 'TCP 例外行条件渲染')
   assert.match(text, /if \(fallbackCount > 0\)/, '兜底差异例外行条件渲染')
   assert.match(text, /boundRuleRows\.value\)/, '汇总数据源=绑定列表单源（禁平行实现）')
-  assert.match(text, /当前配置不会产生该阶段拦截，页面不会被使用/, '能力门警告行保留')
+  assert.match(text, /t\('app\.security\.policies\.bp\.stageIneffective', \{ stage: BLOCK_PAGE_STAGE_LABEL\[stage\] \}\)/, '能力门警告行保留')
+  assert.ok(code('src/locales/zh/security.ts').includes('当前配置不会产生该阶段拦截，页面不会被使用'), '能力门警告原文必须在 zh 母本词条中')
   assert.match(text, /v-for="line in blockPageSummary\.lines"/)
   // 逐条重复渲染退役
   assert.doesNotMatch(text, /block-page-rule-annotations/)
@@ -232,9 +237,11 @@ test('接线：关联规则归属提示退役（常态信息由汇总行承载�
   assert.doesNotMatch(text, /rowAttributionBadge/, '徽标判定单源已退役')
   assert.doesNotMatch(text, /显示本策略页/, '两态徽标文案退役（拦截页必选，常态恒 self 无信息量）')
   assert.doesNotMatch(text, /bound-rule-attribution/, '徽标样式随行退役')
-  // 汇总行保留（info-note 规范）：N 条规则 + 兜底归属一句话
-  assert.match(text, /触发各策略拦截时，分别显示该策略自己配置的拦截页/)
-  assert.match(text, /显示兜底页（首个启用拦截页的策略/)
+  // 汇总行保留（info-note 规范）：N 条规则 + 兜底归属一句话。
+  // i18n 后双钉:调用点钉键,zh 母本钉两句原文(任一漂移必红)
+  assert.match(text, /t\('app\.security\.policies\.bp\.bindingsAttribution', \{ n: total, winner: winnerPart \}\)/)
+  assert.ok(code('src/locales/zh/security.ts').includes('触发各策略拦截时，分别显示该策略自己配置的拦截页'), '归属汇总原文必须在 zh 母本词条中')
+  assert.ok(code('src/locales/zh/security.ts').includes('显示兜底页（首个启用拦截页的策略'), '兜底归属原文必须在 zh 母本词条中')
 })
 
 test('接线：拦截页缺失判定消费单源谓词且受加载门约束', () => {

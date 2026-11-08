@@ -102,8 +102,10 @@ test('个人资料 MFA：响应缺 data 显性报错（静默 return = 与「没
   const profile = code('src/components/ProfileDialog.vue')
   // 报错出口收敛到 utils/requireData 单源：缺 data 抛错落到调用方 catch，
   // 文案仍为「响应异常，请重试」；两处（启用 MFA 与「验证并重置」）都必须走守卫。
-  const emptyPayload = [...profile.matchAll(/requireData\(res\.data, '响应异常，请重试'\)/g)]
+  const emptyPayload = [...profile.matchAll(/requireData\(res\.data, t\('common\.app\.views\.profile\.responseAbnormal'\)\)/g)]
   assert.equal(emptyPayload.length, 2, '启用 MFA 与「验证并重置」两处都必须报错')
+  // i18n 后双钉:调用点钉键,zh 母本钉原文(任一漂移必红)
+  assert.ok(code('src/locales/zh/views.ts').includes('响应异常，请重试'), 'requireData 拒绝文案原文必须在 zh 母本词条中')
   assert.match(profile, /import \{ requireData \} from '@\/utils\/requireData'/)
   assert.doesNotMatch(profile, /if \(!res\.data\) return/, '静默 return 不得残留')
 })
@@ -115,8 +117,11 @@ test('新建 API 密钥：明文弹框 ESC/X 关闭前二次确认（only-once �
   // 确认文案/按钮/「确认后才关闭」收敛进一次性凭据守卫单源；
   // 三处（密钥明文、注册令牌、恢复码）行为由该单源统一保证。
   assert.match(keys, /const closeCreatedKey = createOneTimeSecretCloseGuard\(\{/)
-  assert.match(keys, /密钥仅此一次显示，关闭后将无法再次查看/)
-  assert.match(keys, /title: '保存密钥'/)
+  // i18n 后双钉:调用点钉键,zh 母本钉原文(任一漂移必红)
+  assert.match(keys, /message: t\('common\.app\.views\.keys\.closeGuardMessage'\)/)
+  assert.match(keys, /title: t\('common\.app\.views\.keys\.closeGuardTitle'\)/)
+  assert.ok(code('src/locales/zh/views.ts').includes('密钥仅此一次显示，关闭后将无法再次查看'), '明文守卫文案原文必须在 zh 母本词条中')
+  assert.ok(code('src/locales/zh/views.ts').includes("'保存密钥'"), '守卫标题原文必须在 zh 母本词条中')
 })
 
 // ── ③ 锁摘要 → 流程弹框的键盘入口 ──────────────────────────────
@@ -182,13 +187,17 @@ test('WAF 模式词单源：单词表 + 消费方不各自内联、不裸下标�
 test('ACME 全局设置保存：CA 列表未就绪先报加载态，不误报「默认 CA 不存在」', () => {
   const page = code('src/views/settings/FreeCertificates.vue')
   const gate = section(page, 'if (loadingCAProviders.value) {', 'const defaultCA =')
-  assert.match(gate, /ElMessage\.warning\('CA 提供商列表加载中，请稍后再保存'\)/)
+  assert.match(gate, /ElMessage\.warning\(t\('app\.settings\.freeCerts\.messages\.caListLoading'\)\)/)
   assert.match(gate, /if \(caProvidersError\.value\) \{/)
-  assert.match(gate, /CA 提供商列表加载失败，请点顶部「立即重试」后再保存/)
+  assert.match(gate, /ElMessage\.warning\(t\('app\.settings\.freeCerts\.messages\.caListLoadFail'\)\)/)
+  // i18n 后双钉:调用点钉键,zh 母本钉原文(任一漂移必红)
+  for (const text of ['CA 提供商列表加载中，请稍后再保存', 'CA 提供商列表加载失败，请点顶部「立即重试」后再保存', '默认 CA 提供商不存在，请重新选择']) {
+    assert.ok(code('src/locales/zh/settings.ts').includes(text), `CA 前置门文案原文必须在 zh 母本词条中：${text}`)
+  }
   // 顺序：加载态 → 失败态 → 真不存在（误报会推向无从操作的「重新选择」）
-  const loadingAt = page.indexOf("CA 提供商列表加载中")
-  const errorAt = page.indexOf('CA 提供商列表加载失败')
-  const missingAt = page.indexOf('默认 CA 提供商不存在')
+  const loadingAt = page.indexOf("t('app.settings.freeCerts.messages.caListLoading')")
+  const errorAt = page.indexOf("t('app.settings.freeCerts.messages.caListLoadFail')")
+  const missingAt = page.indexOf("t('app.settings.freeCerts.messages.defaultCaMissing')")
   assert.ok(loadingAt > 0 && loadingAt < errorAt && errorAt < missingAt, '前置门顺序漂移')
   // 前置门必须在写请求之前（失败态照发 PUT 等于把误报变成写侧 400）
   assert.ok(errorAt < page.indexOf("request.put('/config', payload)"), '前置门必须早于 PUT /config')

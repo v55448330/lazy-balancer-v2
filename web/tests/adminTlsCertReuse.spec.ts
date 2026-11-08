@@ -115,7 +115,7 @@ test('两段写：/config 已落库时 TLS 段失败须披露部分成功', () =
   const tls = lastSection(page, 'if (tlsPending) {', '} else {')
   assert.match(tls, /request\.put\('\/admin-tls'/, '切片必须是 /admin-tls 提交段（身份自检）')
   assert.match(tls, /silent: true/, 'TLS 段失败由本段自报部分成功，不得再弹全局「保存失败」')
-  assert.match(tls, /基础设置已保存；HTTPS 配置保存失败/)
+  assert.match(tls, /app\.settings\.basic\.messages\.tlsSaveFail/)
   const failure = section(tls, 'catch (tlsError)', '\n      }\n')
   assert.doesNotMatch(failure, /stagedAdminTlsCert\.value = null/, '失败时不得清除已暂存证书')
   assert.match(failure, /tlsError instanceof Error/, '失败原因必须取自后端错误文案')

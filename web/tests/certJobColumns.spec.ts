@@ -91,10 +91,10 @@ test('组件接线：ResizeObserver 驱动列让位且卸载时断开', () => {
 })
 
 test('隐藏列信息不丢失：规则 ID 并入域名副行、冷却并入重试 tooltip', () => {
-  const domainCol = section(tableBody, 'label="域名"', '</el-table-column>')
+  const domainCol = section(tableBody, "t('app.settings.certJobs.colDomain')", '</el-table-column>')
   assert.match(domainCol, /v-if="!visibleColumns\.has\('rule_id'\)"/)
   assert.match(domainCol, /#\{\{ row\.rule_id \}\}/)
-  const attemptsCol = section(tableBody, 'label="重试次数"', '</el-table-column>')
+  const attemptsCol = section(tableBody, "t('app.settings.certJobs.colRetries')", '</el-table-column>')
   assert.match(attemptsCol, /coolingHint\(row(?: as [A-Za-z]+)?\)/)
 })
 
@@ -105,7 +105,7 @@ test('容器 overflow 裁断，杜绝卡片/页面级横向滚动', () => {
 
 test('冷却提示文案形态：waiting_ca 且带冷却时间时返回「冷却：…」', () => {
   const wrap = member(code('src/views/settings/CertJobs.vue'), 'const coolingHint')
-  assert.match(wrap, /冷却：/, '冷却提示并入重试 tooltip 的文案形态')
+  assert.match(wrap, /app\.settings\.certJobs\.coolingPrefix/, '冷却提示并入重试 tooltip 的文案形态')
   assert.match(wrap, /row\.status !== 'waiting_ca'/, '非 waiting_ca 不得显示冷却提示')
   assert.match(wrap, /!row\.ca_available_after/, '冷却时间缺失必须先返回（否则显示「冷却：」空值）')
 })

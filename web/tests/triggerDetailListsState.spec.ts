@@ -40,15 +40,16 @@ test('名单条目失败不得静默：按 refIds 缺失显性置 entriesError',
 test('失败态有横幅与重试入口（策略/条目同轮重取）', () => {
   assert.match(text, /const retryLists = \(\): void => \{ void loadAll\(\) \}/)
   assert.match(text, /<div v-if="entriesError && !loadError" class="info-note-bar">/)
-  assert.match(text, /地址列表条目加载失败/)
-  assert.match(text, /@click="retryLists">重新加载<\/el-button>/)
+  // i18n 后调用点钉键（原文母本在 locales views.ts，由批次 D 集成落库）
+  assert.match(text, /t\('common\.app\.views\.trigDetail\.entriesLoadFailed'\)/)
+  assert.match(text, /@click="retryLists">\{\{ t\('common\.app\.views\.trigDetail\.reload'\) \}\}<\/el-button>/)
   // 策略信息失败同样不得只提示「关闭后重试」——弹框内可原地重试
   assert.match(text, /<div v-if="loadError" class="info-note-bar">/)
 })
 
 test('失败态不得退化成「未定位到命中的地址列表」的业务结论', () => {
-  const tipLine = text.split('\n').find((line) => line.includes('未定位到命中的地址列表'))
-  assert.ok(tipLine, '未定位提示仍在模板中')
+  const tipLine = text.split('\n').find((line) => line.includes('trigDetail.noHitListFound'))
+  assert.ok(tipLine, '未定位提示调用点仍在模板中')
   assert.match(tipLine!, /!entriesError/, '条目加载失败时「未定位」不成立')
   assert.match(tipLine!, /!loadError/, '策略/名单加载失败时「未定位」不成立')
 })

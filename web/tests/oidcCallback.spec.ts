@@ -157,7 +157,7 @@ test('跨栈：后端标准错误码表与前端码表逐键对表（漏一码�
   const backendCodes = [...goBlock.matchAll(/"([a-z_]+)":\s*\{\}/g)].map((m) => m[1]!)
   assert.ok(backendCodes.length >= 10, `后端标准码解析失败（${backendCodes.length} 条）`)
   const frontBlock = section(code('src/utils/oidcCallback.ts'), 'const OIDC_STANDARD_ERRORS: Record<string, string> = {', '\n}')
-  const frontCodes = [...frontBlock.matchAll(/^\s*([a-z_]+):\s*'/gm)].map((m) => m[1]!)
+  const frontCodes = [...frontBlock.matchAll(/^\s*([a-z_]+):\s*t\('common\.app\.oidc\./gm)].map((m) => m[1]!)
   assert.ok(frontCodes.length >= 10, `前端码表解析失败（${frontCodes.length} 条）`)
   const missing = backendCodes.filter((item) => !frontCodes.includes(item))
   assert.deepEqual(missing, [], `前端码表缺后端放行的标准码：${missing.join(', ')}（会一律落到「授权被拒绝」）`)
@@ -207,7 +207,7 @@ test('App：已登录会话被 URL 令牌替换须显式确认（取消则保持
   const branch = section(app, 'if (oidcToken) {', '} else if (hasLoginTicket) {')
   assert.match(branch, /authStore\.token && !isTokenExpired\(authStore\.token\)/, '仅当已有有效会话时要求确认')
   assert.match(branch, /ElMessageBox\.confirm\(/, '换号必须二次确认')
-  assert.match(branch, /已保持当前登录/, '取消分支必须明确不切换')
+  assert.match(branch, /t\('common\.app\.views\.appShell\.keptCurrentLogin'\)/, '取消分支必须明确不切换（i18n 后钉键，原文钉 views 母本）')
 })
 
 test('App：return_to 导航只在令牌真正落地后执行（拒绝/取消都不跳页）', () => {

@@ -7,8 +7,8 @@ import { code, section } from './_helpers.ts'
 // 即将运行（排障噪音）。
 
 const vue = code('src/views/settings/TaskMonitor.vue')
-const scheduleColumn = section(vue, '<el-table-column label="调度"', '</el-table-column>')
-const nextColumn = section(vue, '<el-table-column label="下次执行"', '</el-table-column>')
+const scheduleColumn = section(vue, '<el-table-column :label="t(\'app.settings.taskMonitor.col.schedule\')"', '</el-table-column>')
+const nextColumn = section(vue, '<el-table-column :label="t(\'app.settings.taskMonitor.detail.nextRun\')"', '</el-table-column>')
 
 test('任务接口声明 role_applicable（服务端派生的角色适用性）', () => {
   assert.match(vue, /role_applicable\?: boolean/)
@@ -16,8 +16,8 @@ test('任务接口声明 role_applicable（服务端派生的角色适用性）'
 
 test('从节点不适用的任务在调度列标注「仅主节点」并解释开关不可用', () => {
   assert.match(scheduleColumn, /row\.role_applicable === false/)
-  assert.match(scheduleColumn, /仅主节点/)
-  assert.match(scheduleColumn, /仅主节点生效：从节点不调度此任务/)
+  assert.match(scheduleColumn, /app\.settings\.taskMonitor\.schedule\.masterOnlyTag/)
+  assert.match(scheduleColumn, /app\.settings\.taskMonitor\.schedule\.masterOnlyTip/)
 })
 
 test('不适用的任务不展示下次执行时刻（避免「马上要跑」的误解）', () => {
@@ -25,6 +25,6 @@ test('不适用的任务不展示下次执行时刻（避免「马上要跑」�
 })
 
 test('详情弹框展示角色适用性结论', () => {
-  assert.match(vue, /label="角色适用性"/)
-  assert.match(vue, /仅主节点运行（本节点不调度）/)
+  assert.match(vue, /:label="t\('app\.settings\.taskMonitor\.detail\.roleApplicability'\)"/)
+  assert.match(vue, /app\.settings\.taskMonitor\.detail\.masterOnlyRun/)
 })

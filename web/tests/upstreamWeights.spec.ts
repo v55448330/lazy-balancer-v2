@@ -90,8 +90,12 @@ test('超限行改权重时预算随行数抬升（每行仍 ≥1，可正常保
 test('编辑器超限提示显性化（可调权重 / 需删至上限或走 API）', () => {
   const editor = code('src/components/rules/PathRulesEditor.vue')
   const overLimitHint = section(editor, '<el-text v-if="rule.upstreams.length > MAX_UPSTREAM_ROWS"', '</el-text>')
-  assert.match(overLimitHint, /保存前请删至 \{\{ MAX_UPSTREAM_ROWS \}\} 个以内/, '超限必须给出可操作提示')
-  assert.match(overLimitHint, /或通过 API 维护/, '超限提示必须给出替代通道')
+  // i18n 后双钉:调用点钉键,zh 母本钉文案原文(「删至上限」「API 通道」两处要点都钉在词条行)
+  const entryLine = code('src/locales/zh/rules.ts').split('\n').find((l) => l.includes('overUpstreamLimit:'))
+  assert.ok(entryLine, 'overUpstreamLimit 必须在 zh 母本词条中')
+  assert.match(entryLine!, /保存前请删至 \{max\} 个以内/, '超限必须给出可操作提示')
+  assert.match(entryLine!, /或通过 API 维护/, '超限提示必须给出替代通道')
+  assert.match(overLimitHint, /t\('common\.app\.rules\.paths\.overUpstreamLimit', \{ n: rule\.upstreams\.length, max: MAX_UPSTREAM_ROWS \}\)/)
   assert.doesNotMatch(editor, /item\.weight = 0|weight = 0/, '组件不得自行清零权重')
 })
 

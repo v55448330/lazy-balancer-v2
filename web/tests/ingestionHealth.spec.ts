@@ -205,3 +205,47 @@ test('前后端字段契约：Go JSON tag 覆盖前端 IngestionHealth 读取面
   assert.match(plugin, /auditWriterStatsSuffix\s*=\s*"\.writer-stats\.json"/)
   assert.match(go, /securityEventsAuditWriterStatsSuffix\s*=\s*"\.writer-stats\.json"/)
 })
+
+// ── 批次 D(ingest 域)双钉:提示文案 i18n 接线 ──
+// 判据不动,文案改词条参数化:调用点钉键(common.app.views.ingest.*),
+// zh 母本(locales/zh/views.ts)钉原文(任一漂移必红)。非 settings 族钉。
+
+import { tSafe } from '../src/i18n/tSafe.ts'
+import { existsSync } from 'node:fs'
+
+const ingest = (key: string, params?: Record<string, unknown>): string =>
+  tSafe(`common.app.views.ingest.${key}`, params)
+
+test('提示文案走 i18n 单键(调用点钉键):判据分支各自一个 ingest.* 键', () => {
+  const util = code('src/utils/ingestionHealth.ts')
+  const keys = [
+    'taskStopped', 'writerStatsUnavailable', 'writerDegraded', 'writerDegradedFormatPart',
+    'writerDegradedFormatHint', 'writerDegradedHint', 'consecutiveFailures', 'lastErrorSuffix',
+    'skippedRegions', 'skipLastSuffix', 'healthAnomaly', 'detailTruncatedOnly', 'detailLossSuffix',
+    'dataLoss', 'lossPartsUnavailable', 'lossDropped', 'lossIoErrors', 'lossFormatErrors',
+    'lossSkippedRegions', 'lossDetailTruncated',
+  ]
+  for (const key of keys) {
+    assert.ok(util.includes(`common.app.views.ingest.${key}`), `提示文案必须消费 ingest.${key} 词条键`)
+  }
+  // 行为相位:三支代表键必须解析为 zh 原文(解析失败=键漂移)
+  assert.ok(ingest('taskStopped').includes('安全事件采集任务已停止'), 'taskStopped 键解析漂移')
+  assert.ok(ingest('writerStatsUnavailable').includes('计数不可用'), 'writerStatsUnavailable 键解析漂移')
+  assert.equal(ingest('lastErrorSuffix', { error: 'x' }), '：x', 'lastErrorSuffix 键解析漂移')
+})
+
+test('ingest 词条 zh 母本钉(逐字,长文案抽关键短语)', () => {
+  assert.ok(existsSync(new URL('../src/locales/zh/views.ts', import.meta.url)), '词条母本 src/locales/zh/views.ts 未落库(integrator 接线)')
+  const zhLexicon = code('src/locales/zh/views.ts')
+  for (const text of [
+    '安全事件采集任务已停止（未在运行）', '请到「任务监控」检查并启用「安全事件采集」任务',
+    '审计写侧计数不可用', '不代表无丢弃', '审计日志写侧失败：累计丢弃', '安全事件可能缺失',
+    '格式化失败属 formatter 契约/代码缺陷', '安全事件采集连续失败', 'spool 待补采事件可能滞后入库',
+    '处畸形区（累计', '该段审计数据对应的事件已永久丢失', '安全事件采集健康位异常',
+    '此前曾发生安全事件丢失', '此前曾发生安全事件明细截断', '部分规则命中明细永久缺失',
+    '当前已恢复', '丢弃 {count} 条', '写盘错误 {count} 次', '格式化失败 {count} 次',
+    '跳过畸形区 {count} 处（{size}）', '命中明细截断 {count} 条',
+  ]) {
+    assert.ok(zhLexicon.includes(text), `ingest 词条 zh 原文「${text.slice(0, 16)}…」必须在母本中`)
+  }
+})

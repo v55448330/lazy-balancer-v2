@@ -45,7 +45,7 @@ test('表单上限与后端写侧门对齐（证书重签天数 / HTTP 超时）
   // 提示文案必须写清 84–88 天的真实后果：控制面已把上限提到写侧门，而扫描侧
   // 对「窗口 > 寿命 − 7 天」的配置会收敛为到期前 7 天并限频告警（旧文案描述的
   // 「反复重签」来自已删除的迟滞实现，会让用户以为窗口越大会越早开始续签）。
-  assert.match(cert, /到期前 7 天/, '提示必须写明 84–88 天被收敛为到期前 7 天')
+  assert.match(cert, /app\.settings\.freeCerts\.acme\.renewalTimeHint/, '提示必须写明 84–88 天被收敛为到期前 7 天')
   assert.doesNotMatch(cert, /反复重签/, '不得再用已删除的旧实现形态描述收敛行为')
   // 跨栈钉：后端上界 = 规划寿命 90 − 2
   const certinfo = repoCode('internal/services/certinfo.go')
@@ -61,7 +61,7 @@ test('表单上限与后端写侧门对齐（证书重签天数 / HTTP 超时）
   }
   // 提示文案同步：不再是「必须为 1-86400」
   assert.doesNotMatch(caddy, /必须为 1-86400/, '提示文案不得再声称后端不存在的时间上限')
-  assert.match(caddy, /必须 ≥1/)
+  assert.match(caddy, /app\.settings\.caddy\.timeout\.readHint/)
 })
 
 test('Dashboard 慢车道健康查询不得阻塞整轮刷新', () => {

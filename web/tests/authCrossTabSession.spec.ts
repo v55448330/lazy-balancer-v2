@@ -29,6 +29,11 @@ const installHost = (): void => {
     location: { search: '', hash: '#/dashboard', href: 'http://panel.test/', pathname: '/' },
     visibility: true,
   })
+  // auth.ts 抽词后经 tSafe 引入 vue-i18n（intlify dev 计时读 window.performance）：
+  // 最小宿主的 window 替身补上 node 全局 performance（真实 window 恒有该成员），
+  // 还原随 installBrowserHost 的描述符还原一起，不留跨用例污染。
+  const hostWindow = globalThis as unknown as { window: { performance: Performance } }
+  hostWindow.window.performance = performance
 }
 installHost()
 after(() => browser.restore())

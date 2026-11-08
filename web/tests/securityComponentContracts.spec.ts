@@ -33,7 +33,9 @@ test('策略向导关闭前核对完整编辑快照，脏状态需确认放弃',
   assert.match(close, /if \(saving\.value\) return/, '保存中仍禁止关闭')
   assert.match(close, /if \(!wizardDirty\.value\)/, '无修改时直接关闭')
   assert.match(close, /ElMessageBox\.confirm\(/, '有未保存修改时必须确认')
-  assert.match(close, /放弃修改/, '确认动作必须明示后果')
+  // i18n 后双钉:调用点钉键,zh 母本钉原文(任一漂移必红)
+  assert.match(close, /t\('app\.security\.policies\.msg\.discard'\)/, '确认动作必须明示后果')
+  assert.ok(code('src/locales/zh/security.ts').includes('放弃修改'), '放弃修改原文必须在 zh 母本词条中')
 })
 
 test('导入条目随保存合并：上限门按合并后生效条数拦截（早于任何 entries.push）', () => {
@@ -60,12 +62,17 @@ test('威胁大屏配置到达前和读取失败时均不默认全量采样', ()
 
 test('拦截页刷新失败横幅区分旧快照与空列表', () => {
   const page = code('src/views/security/SecurityBlockPages.vue')
-  assert.match(page, /pages\.length > 0 \? '拦截页面加载失败：当前显示的是上次成功结果' : '拦截页面加载失败：列表为空不代表没有页面'/)
+  // i18n 后双钉:调用点钉键,zh 母本钉两句横幅原文(任一漂移必红)
+  assert.match(page, /pages\.length > 0 \? t\('app\.security\.blockPages\.alert\.loadFailedStale'\) : t\('app\.security\.blockPages\.alert\.loadFailedEmpty'\)/)
+  assert.ok(code('src/locales/zh/security.ts').includes('拦截页面加载失败：当前显示的是上次成功结果'), '旧快照横幅原文必须在 zh 母本词条中')
+  assert.ok(code('src/locales/zh/security.ts').includes('拦截页面加载失败：列表为空不代表没有页面'), '空列表横幅原文必须在 zh 母本词条中')
 })
 
 test('安全总览今日计数 tooltip 仅拦截列保留（同一计算文案单源）', () => {
   const page = code('src/views/security/SecurityOverview.vue')
   assert.match(page, /const todayCountTip = computed\(/)
   assert.equal((page.match(/<el-tooltip :content="todayCountTip"/g) ?? []).length, 1, '重设计后仅拦截列保留口径 tooltip')
-  assert.equal((page.match(/总量含私网\/保留地址事件/g) ?? []).length, 1, '完整口径文案只能保留一份')
+  // i18n 后双钉:调用点钉键(全页仅一处),zh 母本钉原文(任一漂移必红)
+  assert.equal((page.match(/t\('app\.security\.overview\.status\.tipReserved'\)/g) ?? []).length, 1, '完整口径文案只能保留一份')
+  assert.ok(code('src/locales/zh/security.ts').includes('总量含私网/保留地址事件'), '完整口径原文必须在 zh 母本词条中')
 })

@@ -80,7 +80,7 @@
             <div class="form-tip-line">{{ t('app.settings.basic.map.trafficSampleHint') }}</div>
           </el-form-item>
           <el-form-item :label="t('app.settings.basic.proxy.label')">
-            <el-select v-model="githubProxyUrl" :disabled="formFrozen || !githubProxyLoaded" style="width: 160px" :placeholder="githubProxyLoaded ? '选择代理' : '未加载'">
+            <el-select v-model="githubProxyUrl" :disabled="formFrozen || !githubProxyLoaded" style="width: 160px" :placeholder="githubProxyLoaded ? t('app.settings.basic.proxy.selectPlaceholder') : t('app.settings.basic.proxy.notLoadedShort')">
               <el-option
                 v-for="option in githubProxyOptions"
                 :key="option.value"
@@ -109,7 +109,7 @@
           <el-form-item :label="t('app.settings.basic.security.mfaLabel')">
             <el-switch v-model="settings.mfa_write_guard" :disabled="formFrozen" />
             <span class="form-tip-inline">{{ t('app.settings.basic.security.mfaHint') }}</span>
-            <AccessibleLink type="info" underline="never" size="small" class="tip-link" style="margin-left: 6px" @click="mfaScopeVisible = true">支持的操作</AccessibleLink>
+            <AccessibleLink type="info" underline="never" size="small" class="tip-link" style="margin-left: 6px" @click="mfaScopeVisible = true">{{ t('app.settings.basic.security.mfaScopeLink') }}</AccessibleLink>
           </el-form-item>
           <el-form-item :label="t('app.settings.basic.security.lockout')">
             <el-switch v-model="settings.mfa_lockout_enabled" :disabled="formFrozen" />
@@ -169,7 +169,7 @@
             <!-- 检查更新入口：进页拉取一次官网版本目录，仅在有更新时渲染；
                  AccessibleLink 保证键盘/读屏可达（与页内「支持的操作」同族）。
                  提示置于版本号标签左侧，small 号不加粗。 -->
-            <AccessibleLink v-if="updateAvailable" type="warning" size="small" class="update-hint-link" @click="openUpdateDialog">发现新版本 {{ updateBadgeVersion }}，点击查看</AccessibleLink>
+            <AccessibleLink v-if="updateAvailable" type="warning" size="small" class="update-hint-link" @click="openUpdateDialog">{{ t('app.settings.basic.update.title') }} {{ updateBadgeVersion }}，点击查看</AccessibleLink>
             <el-tag type="info" size="small">{{ appVersion }}</el-tag>
           </div>
         </div>
@@ -243,7 +243,7 @@
                 <DialogSectionHeader :title="t('app.settings.basic.tls.details')" />
                 <div class="tls-cert-info-row"><span class="tls-cert-info-label">{{ t('app.settings.basic.tls.domain') }}</span><span>{{ adminTlsForm.certInfo.domain }}</span></div>
                 <div class="tls-cert-info-row"><span class="tls-cert-info-label">{{ t('app.settings.basic.tls.issuer') }}</span><span>{{ adminTlsForm.certInfo.issuer }}</span></div>
-                <div class="tls-cert-info-row"><span class="tls-cert-info-label">{{ t('app.settings.basic.tls.expiry') }}</span><span :class="{ 'is-expired': adminTlsForm.certInfo.days_left <= 0 }">{{ adminTlsForm.certInfo.not_after }}（剩余 {{ adminTlsForm.certInfo.days_left }} 天）</span></div>
+                <div class="tls-cert-info-row"><span class="tls-cert-info-label">{{ t('app.settings.basic.tls.expiry') }}</span><span :class="{ 'is-expired': adminTlsForm.certInfo.days_left <= 0 }">{{ adminTlsForm.certInfo.not_after }}{{ t('app.settings.basic.tls.daysLeft', { days: adminTlsForm.certInfo.days_left }) }}</span></div>
               </div>
             </el-form-item>
           </template>

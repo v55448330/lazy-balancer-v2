@@ -21,11 +21,12 @@ interface CrsDirectorySuggestion { value: string; label: string; file: string; f
 interface CrsExcludedRow { target: string; scope: string; ips: string[]; listRefs: number[]; path: string }
 
 // 动态 import：静态 import 会在钩子注册前装载真实 api.ts（axios + DOM 依赖）
-const { parseCrsExcludedRules, filterCrsDirectorySuggestions, useCrsRuleDirectory } =
+const { parseCrsExcludedRules, filterCrsDirectorySuggestions, useCrsRuleDirectory, issueCrsIndexSession } =
   await import('../src/composables/useCrsRuleIndex.ts') as {
     parseCrsExcludedRules: (raw: string | undefined | null) => CrsExcludedRow[]
     filterCrsDirectorySuggestions: (entries: CrsDirectoryEntry[], query: string, limit?: number) => CrsDirectorySuggestion[]
     useCrsRuleDirectory: () => { loaded: { value: boolean }; ensure: () => Promise<void>; search: (query: string) => CrsDirectorySuggestion[] }
+    issueCrsIndexSession: () => void
   }
 
 // ── A. parse 四态行为 ──
@@ -132,11 +133,13 @@ test('目录加载（rule-index 端点）：失败静默降级 → 重试成功�
   const host = installStubHost()
   host.reset()
   g.__gets = []
+  issueCrsIndexSession()
   const { loaded, ensure, search } = useCrsRuleDirectory()
 
   // 1) 首次失败：静默（不抛出），loaded=false，建议恒空（自由输入降级）
   g.__get = async () => { throw new Error('network down') }
   await ensure()
+  await drainMicrotasks()
   assert.equal(loaded.value, false, '失败不得置 loaded')
   assert.deepEqual(search('942'), [])
   assert.equal(g.__gets.length, 1)

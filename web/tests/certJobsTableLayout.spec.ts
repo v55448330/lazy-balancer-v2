@@ -22,7 +22,9 @@ const tableBody = section(page, 'class="cert-jobs-table"', '</el-table>')
 const columnTags = (): string[] => [...tableBody.matchAll(/<el-table-column\b[^>]*>/g)].map((m) => m[0])
 
 const startOf = (label: string): number => {
-  const at = tableBody.indexOf(`label="${label}"`)
+  let at = tableBody.indexOf(`label="${label}"`)
+  if (at < 0) at = tableBody.indexOf(`:label="t('${label}')"`)
+  if (at < 0) at = tableBody.indexOf(`t('${label}')`)
   assert.ok(at >= 0, `缺少列「${label}」`)
   return tableBody.lastIndexOf('<el-table-column', at)
 }
@@ -38,16 +40,16 @@ const columnBody = (label: string): string => {
 // 列标签 → 单源列 id：宽度期望一律取自 CERT_JOB_COLUMN_WIDTHS（此前手抄两份，
 // 合法调宽时实现与常量表都改了仍被测试字面量拦住——假红）。
 const COLUMN_IDS: Record<string, CertJobColumnId> = {
-  '规则 ID': 'rule_id',
-  域名: 'domain',
-  状态: 'status',
-  颁发者: 'issuer',
-  证书有效期: 'validity',
-  自动重签时间: 'renewal',
-  更新时间: 'updated',
-  重试次数: 'attempts',
-  冷却时间: 'cooling',
-  操作: 'actions',
+  'app.settings.certJobs.colRuleId': 'rule_id',
+  'app.settings.certJobs.colDomain': 'domain',
+  'app.settings.certJobs.colStatus': 'status',
+  'app.settings.certJobs.colIssuer': 'issuer',
+  'app.settings.certJobs.colValidity': 'validity',
+  'app.settings.certJobs.colRenewal': 'renewal',
+  'app.settings.certJobs.colUpdated': 'updated',
+  'app.settings.certJobs.colRetries': 'attempts',
+  'app.settings.certJobs.colCooling': 'cooling',
+  'app.settings.certJobs.colActions': 'actions',
 }
 
 /** 固定宽列（不参与「宽容器占满」的均分）；其余为弹性 min-width 列。 */
@@ -55,7 +57,7 @@ const FIXED_COLUMNS: Partial<Record<CertJobColumnId, true>> = { status: true, at
 
 test('状态列 hover=派生口径（2026-10-30 裁定）：CA 原文只在「日志」对话框', () => {
   assert.doesNotMatch(tableBody, /label="消息"/)
-  const status = columnBody('状态')
+  const status = columnBody('app.settings.certJobs.colStatus')
   // 旧契约（:content="row.message"）会把 CA 原文挂上状态标签——终态失败的
   // message 即 CA 错误原文，只在「日志」对话框呈现。
   assert.doesNotMatch(status, /row\.message/, '状态列模板不得直接消费 message（CA 原文）')
@@ -74,7 +76,7 @@ test('列宽基线取自 CERT_JOB_COLUMN_WIDTHS 单源（弹性 min-width / 固�
   assert.equal(tags.length, mappedLabels.length, `列数应为 ${mappedLabels.length}，实际 ${tags.length}`)
   const seen = new Set<CertJobColumnId>()
   for (const tag of tags) {
-    const label = /label="([^"]+)"/.exec(tag)?.[1]
+    const label = (/label="([^"]+)"/.exec(tag)?.[1] ?? '').replace(/^t\('/, '').replace(/'\)$/, '')
     assert.ok(label, `列开标签缺 label：${tag}`)
     const id = COLUMN_IDS[label]
     assert.ok(id, `列「${label}」未登记到 label→columnId 映射（新增列须同步单源常量表）`)
@@ -97,18 +99,18 @@ test('列宽基线取自 CERT_JOB_COLUMN_WIDTHS 单源（弹性 min-width / 固�
 test('证书有效期合并单列：日期 + 剩余/已过期天数，精确时间走 tooltip', () => {
   assert.doesNotMatch(tableBody, /label="过期时间"/)
   assert.doesNotMatch(tableBody, /label="剩余天数"/)
-  const body = columnBody('证书有效期')
+  const body = columnBody('app\.settings\.certJobs\.colValidity')
   assert.match(body, new RegExp(`\\bmin-width="${CERT_JOB_COLUMN_WIDTHS.validity}"`))
   assert.match(body, /formatDateShort\(effectiveNotAfter\(row(?: as [A-Za-z]+)?\)\)/)
-  assert.ok(body.includes('剩 ${row.days_remaining} 天'), '缺少「剩 N 天」分支')
-  assert.ok(body.includes('已过期 ${Math.abs(row.days_remaining)} 天'), '缺少「已过期 N 天」分支')
+  assert.ok(body.includes("t('app.settings.certJobs.remainDays', { days: row.days_remaining })"), '缺少「剩 N 天」分支')
+  assert.ok(body.includes("t('app.settings.certJobs.expiredDays'"), '缺少「已过期 N 天」分支')
   assert.match(body, /row\.certificate_status === 'expired'/, '过期判据必须读后端 certificate_status 字段（无第二份派生）')
   assert.match(body, /<el-tooltip[^>]*:content="formatDate\(effectiveNotAfter\(row(?: as [A-Za-z]+)?\)\)"/, '精确过期时间必须进 tooltip')
   assert.match(body, /class="cell-empty"/, '非 issued/缺失必须沿用 cell-empty 占位')
 })
 
 test('自动重签时间列经 renewalAt（not_after 派生），不回退 expires_at', () => {
-  const body = columnBody('自动重签时间')
+  const body = columnBody('app\.settings\.certJobs\.colRenewal')
   // 与有效期列共用同一到期口径：expires_at 在导入/旧备份/集群回插行上可能为
   // null——若本列回退 row.expires_at，同一行会出现「有效期有值、重签显示 -」的
   // 跨列分叉，运维据空列误判未排期重签。
@@ -120,8 +122,8 @@ test('自动重签时间列经 renewalAt（not_after 派生），不回退 expir
 test('时间列显示完整时间戳 YYYY-MM-DD HH:mm:ss（配置时区）', () => {
   assert.doesNotMatch(page, /formatDateCompact/)
   for (const [label, id] of [
-    ['自动重签时间', 'renewal'],
-    ['更新时间', 'updated'],
+    ['app.settings.certJobs.colRenewal', 'renewal'],
+    ['app.settings.certJobs.colUpdated', 'updated'],
   ] as const) {
     const body = columnBody(label)
     assert.match(body, new RegExp(`\\bmin-width="${CERT_JOB_COLUMN_WIDTHS[id]}"`), `列「${label}」最小宽度须取单源常量`)

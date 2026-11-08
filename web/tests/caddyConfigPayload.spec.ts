@@ -61,8 +61,8 @@ test('视图消费单源：载荷经统一组装，清空语义进确认框且�
   assert.match(save, /buildCaddyConfigPayload\(settings\.value, CADDY_CONFIG_KEYS\)/)
   assert.doesNotMatch(save, /Object\.fromEntries\(CADDY_CONFIG_KEYS/, '不得保留第二处白名单展开')
   assert.match(save, /accessLogFormatCleared/, '确认框必须消费清空标记')
-  assert.match(save, /库中自定义字段映射将被清空/)
-  assert.match(card, /关闭后保存会清空已配置的自定义字段映射/, '开关提示与确认框同口径')
+  assert.match(save, /app\.settings\.caddy\.messages\.customJsonCleared/)
+  assert.match(card, /app\.settings\.caddy\.accessLog\.customJsonHint/, '开关提示与确认框同口径')
 })
 
 // 跨栈对表：前端载荷语义（剔除格式键 / 保留空串 / 开启时原样）预测的是后端

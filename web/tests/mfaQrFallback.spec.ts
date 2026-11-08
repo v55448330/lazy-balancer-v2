@@ -45,8 +45,12 @@ test('失败态呈现：画布隐藏，改为说明下一步（手动输入密�
   const secretAt = text.indexOf('class="mfa-secret"')
   assert.ok(bannerAt > frameAt, '说明横幅排在二维码容器之后')
   assert.ok(secretAt > bannerAt, '手动密钥必须排在说明之后（说明引用「下方密钥」）')
-  assert.match(text, /二维码生成失败/, '必须说清失败本身')
-  assert.match(text, /请使用下方密钥在 Google\/Microsoft Authenticator 等验证器中手动添加/, '必须给出可执行的下一步')
+  // i18n 后双钉：调用点钉键，zh 母本钉原文（任一漂移必红）
+  const zhViews = code('src/locales/zh/views.ts')
+  assert.match(text, /t\('common\.app\.views\.mfa\.qrFailedTitle'\)/, '必须说清失败本身（键化）')
+  assert.ok(zhViews.includes('二维码生成失败，无法扫码'), '失败文案必须在 zh 母本词条中')
+  assert.match(text, /t\('common\.app\.views\.mfa\.qrFailedHint'\)/, '必须给出可执行的下一步（键化）')
+  assert.ok(zhViews.includes('请使用下方密钥在 Google/Microsoft Authenticator 等验证器中手动添加'), '下一步文案必须在 zh 母本词条中')
 })
 
 test('关闭向导复位失败态（下次打开是全新一轮）', () => {

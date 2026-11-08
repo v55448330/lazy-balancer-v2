@@ -68,9 +68,9 @@ test('接线：拦截器透传响应体，导入/还原失败路径复用同一�
   assert.match(helper, /ElMessageBox\.alert/)
 
   const restore = section(page, 'const restoreAutoBackup', 'const deleteAutoBackup')
-  assert.match(restore, /showImportFailure\(error, '配置还原失败', '还原失败'\)/, '还原失败必须展示 warnings')
+  assert.match(restore, /showImportFailure\(error, t\('app\.settings\.basic\.restore\.failTitle'\), t\('app\.settings\.basic\.restore\.failShort'\)\)/, '还原失败必须展示 warnings')
   assert.doesNotMatch(restore, /配置未受影响/, '不得把「配置未受影响」当成确定事实（文件面可能已分裂）')
 
   const importFn = section(page, 'const confirmImport', 'interface BasicSettingsConfig')
-  assert.match(importFn, /showImportFailure\(error, '配置导入失败', '导入失败'\)/, '导入失败必须展示 warnings')
+  assert.match(importFn, /showImportFailure\(error, t\('app\.settings\.basic\.import\.failTitle'\), t\('app\.settings\.basic\.import\.failShort'\)\)/, '导入失败必须展示 warnings')
 })

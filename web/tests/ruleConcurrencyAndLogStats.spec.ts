@@ -17,7 +17,9 @@ test('编辑向导记录打开时的 updated_at 并随保存回传 expected_upda
 
 test('版本冲突（409）刷新列表并提示重新打开，不静默覆盖', () => {
   assert.match(page, /error instanceof ApiRequestError && error\.status === 409/)
-  assert.match(page, /规则已被他人修改/)
+  // i18n 后双钉:调用点钉键,zh 母本钉文案原文(任一漂移必红)
+  assert.ok(code('src/locales/zh/rules.ts').includes("ruleModifiedByOther: '规则已被他人修改'"), '409 文案必须在 zh 母本词条中')
+  assert.match(page, /error\.message\.includes\(t\('common\.app\.rules\.msgs\.ruleModifiedByOther'\)\)/)
   // 边界硬失败：marker 缺失时 indexOf 返回 -1，slice(-1) 会退化成文件末字符、
   // 断言自动变宽仍绿（本用例要守的「409 刷新列表」失守也不会红）。
   const catchMarker = "console.error('submit wizard failed'"

@@ -302,3 +302,38 @@ test('摘要键查表防原型键：constructor/toString 不得把原型函数�
     assert.equal(label, key, `${key} 必须按原文回退`)
   }
 })
+
+// ── 摘要标签词条化（i18n 双钉）────────────────────────────────────────
+// 标签表已键化（views.impexp.tbl*）：上方运行时断言（覆盖全集/未知键回退/原型键
+// 透传）靠 tSafe zh 直出逐字等价保持绿；此处补「键调用点 ↔ zh 母本原文」双向钉。
+test('摘要标签词条键化：调用点钉键,zh 母本钉原文,运行时直出等值', () => {
+  const src = code('src/utils/importSummaryLabels.ts')
+  const zhViews = code('src/locales/zh/views.ts')
+  const table: ReadonlyArray<readonly [string, string, string]> = [
+    ['lb_rules', 'tblLbRules', '规则'],
+    ['upstreams', 'tblUpstreams', '上游'],
+    ['path_rules', 'tblPathRules', '自定义路由'],
+    ['users', 'tblUsers', '用户'],
+    ['api_keys', 'tblApiKeys', 'API 密钥'],
+    ['ca_providers', 'tblCaProviders', 'CA 提供商'],
+    ['certificate_configs', 'tblDnsProviders', 'DNS 提供商'],
+    ['cert_jobs', 'tblCertJobs', '证书任务'],
+    ['security_policies', 'tblSecurityPolicies', '安全策略'],
+    ['security_policy_bindings', 'tblPolicyBindings', '策略绑定'],
+    ['security_custom_rules', 'tblCustomRules', '自定义规则'],
+    ['security_block_pages', 'tblBlockPages', '拦截页'],
+    ['security_ip_lists', 'tblIpLists', 'IP 地址列表'],
+    ['security_crs_version', 'tblCrsVersion', 'CRS 版本'],
+    ['security_ip2region_version', 'tblIp2regionVersion', 'IP2Region 版本'],
+    ['security_threat_sources', 'tblThreatSources', '威胁情报源'],
+    ['security_crawler_sources', 'tblCrawlerSources', '爬虫地址源'],
+    ['nodes', 'tblNodes', '节点拓扑'],
+    ['rules', 'tblRules', '规则'],
+    ['tls_rules', 'tblTlsRules', '其中 TLS 规则'],
+  ]
+  for (const [tb, key, zh] of table) {
+    assert.ok(src.includes(`t('common.app.views.impexp.${key}')`), `摘要标签 ${tb} 缺键 ${key} 的 t() 调用`)
+    assert.ok(zhViews.includes(zh), `zh 母本词条缺「${zh}」（键 ${key}）`)
+    assert.equal(importSummaryLabel(tb), zh, `${tb} 的 zh 直出与母本漂移`)
+  }
+})

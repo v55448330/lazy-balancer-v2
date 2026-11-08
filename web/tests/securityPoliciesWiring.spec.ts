@@ -87,9 +87,11 @@ test('迁移预演补「已有其他限流策略 → 将跳过」风险组', () 
   assert.match(risk, /migrateChildTypes\.value\.includes\('stage2'\)/, '未产出 stage2 子策略时无该风险')
   assert.match(risk, /type === 'stage2'/)
   assert.match(risk, /b\.rate_limit_enabled/, '摘要缺类型时按 binding 能力回退')
-  // 模板：两处呈现（逐行标注 + 汇总横幅）
-  assert.match(page, /将跳过（已有 stage2）/)
-  assert.match(page, /限流唯一风险/)
+  // 模板：两处呈现（逐行标注 + 汇总横幅）。i18n 后双钉:调用点钉键,zh 母本钉原文(任一漂移必红)
+  assert.match(page, /t\('app\.security\.policies\.migrate\.willSkip'\)/)
+  assert.match(page, /t\('app\.security\.policies\.migrate\.rateLimitRisk'/)
+  assert.ok(code('src/locales/zh/security.ts').includes('将跳过（已有 stage2）'), '逐行标注原文必须在 zh 母本词条中')
+  assert.ok(code('src/locales/zh/security.ts').includes('限流唯一风险'), '汇总横幅原文必须在 zh 母本词条中')
 })
 
 test('策略级拦截页状态码选项由共享清单派生（规则级覆盖选择器已退役）', () => {
@@ -129,7 +131,9 @@ test('带外空模式读入不得被静默改写成拦截模式', () => {
   assert.match(detail, /geoip_mode: d\.geoip_mode \?\? 'off'/, 'GeoIP 缺省只能归一为关闭，不得代填 deny')
   assert.doesNotMatch(detail, /ip_acl_mode: d\.ip_acl_mode \|\| 'allow'|geoip_mode: d\.geoip_mode \|\| 'deny'/)
   assert.doesNotMatch(page, /geoip_mode \?\? 'deny'/, '只读预览同样不得把未知模式展示成拦截')
-  assert.match(page, /geoipMode \|\| '未配置模式'/, '未知模式必须显性说明')
+  // i18n 后双钉:调用点钉键,zh 母本钉原文(任一漂移必红)
+  assert.match(page, /geoipMode \|\| t\('app\.security\.policies\.view\.geoModeUnset'\)/, '未知模式必须显性说明')
+  assert.ok(code('src/locales/zh/security.ts').includes('未配置模式'), '未知模式原文必须在 zh 母本词条中')
 })
 
 test('绑定执行序：暂存上移/下移，保存收尾随批量端点 orders 单事务应用', () => {
@@ -144,15 +148,18 @@ test('绑定执行序：暂存上移/下移，保存收尾随批量端点 orders
   assert.match(tail, /policy_ids|orderedChainPolicyIds\(caddyId\)|mergeChainOrder\(/, 'orders 必须携带完整有序 policy_id 列表')
   // 单规则校验失败进 skipped 不整体拒绝：坏规则保持暂存待重试，好规则即时清标记
   assert.match(tail, /skipped/, 'skipped 必须被消费（坏规则保暂存）')
-  assert.match(tail, /保持「顺序待保存」|保持待重试|重新点击保存可重试/, 'skipped 规则必须有可重试口径')
+  // i18n 后双钉:调用点钉键,zh 母本钉原文(可重试口径漂移仍必红)
+  assert.match(tail, /t\('app\.security\.policies\.msg\.orderSkipped'/, 'skipped 规则必须有可重试口径')
+  assert.ok(code('src/locales/zh/security.ts').includes('这些规则保持「顺序待保存」，重新点击保存可重试'), '可重试口径原文必须在 zh 母本词条中')
   assert.doesNotMatch(tail, /request\.put</, '不得回流逐规则整链 PUT（单事务批量应用）')
   assert.doesNotMatch(page, /batch-block-pages/, '规则级阶段页覆盖写路径已退役')
   // 行内按钮：上移/下移以暂存方式调整本策略在绑定链中的执行序
   assert.match(page, /moveSelfInChain\(\s*row\.caddyId, -1\s*\)/, '上移按钮必须接线暂存移动')
   assert.match(page, /moveSelfInChain\(\s*row\.caddyId, 1\s*\)/, '下移按钮必须接线暂存移动')
   const orderBar = section(page, 'class="bound-rule-order"', '</span>')
-  const tagAt = orderBar.indexOf('顺序待保存')
-  const upAt = orderBar.indexOf('上移')
+  // i18n 后按调用点定位:「顺序待保存」tag 键必须在「上移」按钮键之前（用户验收裁定）
+  const tagAt = orderBar.indexOf("t('app.security.policies.bind.orderPending')")
+  const upAt = orderBar.indexOf("t('app.security.policies.common.moveUp')")
   assert.ok(tagAt > -1 && upAt > tagAt, '「顺序待保存」提示必须在按钮左侧（用户验收裁定）')
   assert.match(orderBar, /bindingOrderPending\(row\.caddyId\)/)
 })
@@ -166,7 +173,9 @@ test('限流唯一门：选择器与提交门共用同一谓词，业务 400 不
   const meta = section(page, 'const pickerMeta = (rule: Rule)', 'return { chain, selfPos:')
   assert.match(meta, /editorPolicyType\.value === 'stage2'/, '仅阶段 2 策略触发限流唯一门')
   assert.match(meta, /hasOtherStage2Binding\(existing, editingId\.value/)
-  assert.match(meta, /该规则已绑定其它限流策略（每规则仅一条），需先解绑/)
+  // i18n 后双钉:调用点钉键,zh 母本钉原文(任一漂移必红)
+  assert.match(meta, /t\('app\.security\.policies\.picker\.blockStage2'\)/)
+  assert.ok(code('src/locales/zh/security.ts').includes('该规则已绑定其它限流策略（每规则仅一条），需先解绑'), '限流唯一门文案原文必须在 zh 母本词条中')
 
   // 选择器渲染/全选集合必须按 blockReason 判据（原 wouldExceed 只剩条数上限）
   assert.match(page, /:disabled="pickerMeta\(rule\)\.blockReason !== ''"/)
@@ -177,18 +186,24 @@ test('限流唯一门：选择器与提交门共用同一谓词，业务 400 不
   // 提交门镜像：阶段 2 新增绑定先本地拒绝，不让「策略已落库＋绑定 400」发生
   const gate = section(page, "const stage2Conflict = editorPolicyType.value === 'stage2'", 'if (stage2Conflict.length > 0)')
   assert.match(gate, /hasOtherStage2Binding\(/)
-  assert.match(page, /请先解绑后再关联/)
+  // i18n 后双钉:调用点钉键,zh 母本钉原文(任一漂移必红)
+  assert.match(page, /t\('app\.security\.policies\.msg\.stage2Conflict'/)
+  assert.ok(code('src/locales/zh/security.ts').includes('请先解绑后再关联'), '解绑提示原文必须在 zh 母本词条中')
 
-  // 绑定同步失败分档：结构性 400 不承诺「重试」，其余（网络/5xx）保留幂等重试提示
+  // 绑定同步失败分档：结构性 400 不承诺「重试」，其余（网络/5xx）保留幂等重试提示。
+  // i18n 后双钉:调用点钉键,zh 母本钉两句原文(分档口径漂移仍必红)
   assert.match(page, /error instanceof ApiRequestError && error\.status === 400/)
-  assert.match(page, /原样重试不会成功/)
-  assert.match(page, /重新点击保存可重试绑定（幂等）/)
+  assert.match(page, /\? t\('app\.security\.policies\.msg\.bindRejected'\)\n\s*: t\('app\.security\.policies\.msg\.bindPartialFail'\)/)
+  assert.ok(code('src/locales/zh/security.ts').includes('原样重试不会成功'), '400 不承诺重试原文必须在 zh 母本词条中')
+  assert.ok(code('src/locales/zh/security.ts').includes('重新点击保存可重试绑定（幂等）'), '幂等重试提示原文必须在 zh 母本词条中')
 })
 
 test('关联规则步骤：说明走标准提示框 + 归属汇总（裸文本长说明退役）', () => {
   const text = code('src/views/security/SecurityPolicies.vue')
-  // 长说明收敛为 info-note 标准提示框一句话直白版（用户验收裁定：禁裸文本）
-  assert.match(text, /info-note-desc">策略按绑定顺序依次触发，先触发的先拦截；顺序调整仅改变触发先后，不影响拦截页归属</)
+  // 长说明收敛为 info-note 标准提示框一句话直白版（用户验收裁定：禁裸文本）。
+  // i18n 后双钉:调用点钉键,zh 母本钉原文(任一漂移必红)
+  assert.match(text, /info-note-desc">\{\{ t\('app\.security\.policies\.bind\.orderNote'\) \}\}<\/span>/)
+  assert.ok(code('src/locales/zh/security.ts').includes('策略按绑定顺序依次触发，先触发的先拦截；顺序调整仅改变触发先后，不影响拦截页归属'), '归属汇总原文必须在 zh 母本词条中')
   assert.doesNotMatch(text, /多策略按绑定顺序依次评估/, '旧裸文本长说明退役')
   assert.doesNotMatch(text, /form-tip-line">多策略按绑定顺序/)
 })
@@ -200,7 +215,9 @@ test('IP ACL 名单校验只作用于启用态字段（关闭后隐藏的条目�
   // 保存流改走显性确认（确认后照常保存，与 ipListSaveGuard 先例同形态）
   assert.doesNotMatch(validate, /白名单模式下 IP 列表不能为空/, '空名单不得再在校验函数里硬阻断')
   const confirm = section(page, 'const handleSave = async () => {', 'const payload = buildPolicyPayload(')
-  assert.match(confirm, /该策略关联的规则将拒绝所有请求，确定继续？/, '保存流必须先显性确认空名单后果')
+  // i18n 后双钉:调用点钉键,zh 母本钉原文(确认文案漂移仍必红)
+  assert.match(confirm, /t\('app\.security\.policies\.msg\.emptyAllowConfirm'\)/, '保存流必须先显性确认空名单后果')
+  assert.ok(code('src/locales/zh/security.ts').includes('该策略关联的规则将拒绝所有请求，确定继续？'), '空名单确认原文必须在 zh 母本词条中')
   assert.match(confirm, /aclSaveCount\.value === 0/, '确认门只对空生效集触发')
   // 后端 400 门移除由 Go 侧同步落地；此处钉前端不再自设硬阻断即可。
   assert.doesNotMatch(page, /阶段页覆盖|规则级覆盖/, '退役功能文案不得回流')

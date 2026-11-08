@@ -24,7 +24,11 @@ test('信息块已删除：TCP 能力说明不再整块重复（灰态与脚注�
 })
 
 test('阶段 1 面板头 tag：TCP 下显示「拦截页不支持」，HTTP 保持「拦截页跟随策略」', () => {
-  assert.match(dialog, /isTcp \? '拦截页不支持' : '拦截页跟随策略'/)
+  // i18n 后双钉:调用点钉键,zh 母本钉文案原文(任一漂移必红)
+  const zhLexicon = code('src/locales/zh/rules.ts')
+  assert.ok(zhLexicon.includes("interceptUnsupported: '拦截页不支持'"), '拦截页不支持原文必须在 zh 母本词条中')
+  assert.ok(zhLexicon.includes("interceptFollowsPolicy: '拦截页跟随策略'"), '拦截页跟随策略原文必须在 zh 母本词条中')
+  assert.match(dialog, /isTcp \? t\('common\.app\.rules\.flow\.interceptUnsupported'\) : t\('common\.app\.rules\.flow\.interceptFollowsPolicy'\)/)
 })
 
 // ── 模型行为：拦截页行的 TCP 口径 ──
@@ -85,23 +89,36 @@ test('锁摘要与流程弹框共用模型：TCP 行为钉在单源（buildStage
 // ── 阶段 0 信任检测的 TCP 口径（与 HTTP 行为一致性裁定）──
 
 test('阶段 0 脚注 TCP 分支：保留检测=记录为检测后直达上游（不再宣称仅直通）', () => {
-  const footnote = dialog.match(/v-if="isTcp" class="info-note-bar"><span class="info-note-desc">([^<]+)</)
+  const footnote = dialog.match(/v-if="isTcp" class="info-note-bar"><span class="info-note-desc">\{\{ t\('([^']+)'\) \}\}/)
   assert.ok(footnote, 'TCP 阶段 0 脚注分支存在')
-  assert.match(footnote![1], /「直通上游」模式：/, '直通模式说明保留')
-  assert.match(footnote![1], /「保留检测记录」模式：命中产检测事件[^<]*后直达上游，不拦截/, '保留检测模式在 TCP 下明确呈现（logged 语义）')
+  // i18n 后双钉:调用点钉键,zh 母本钉原文(原文语义仍按序钉在词条行上)
+  assert.equal(footnote![1], 'common.app.rules.flow.trustModeTcpNote', 'TCP 脚注分支必须指向 trustModeTcpNote 词条')
+  const entryLine = code('src/locales/zh/rules.ts').split('\n').find((l) => l.includes('trustModeTcpNote:'))
+  assert.ok(entryLine, 'trustModeTcpNote 必须在 zh 母本词条中')
+  assert.match(entryLine!, /「直通上游」模式：/, '直通模式说明保留')
+  assert.match(entryLine!, /「保留检测记录」模式：命中产检测事件[^]*后直达上游，不拦截/, '保留检测模式在 TCP 下明确呈现（logged 语义）')
   assert.doesNotMatch(dialog, /信任直通=连接直达上游：命中的连接直接转发（不产生安全事件，故无计数 chip）/, '仅直通旧文案退场')
 })
 
 test('TCP 阶段 1 脚注：保留检测信任命中记录为检测后直达上游', () => {
-  assert.match(dialog, /const TCP_STAGE1_FOOTNOTE = '[^']*保留检测信任命中记录为检测[^']*直达上游/)
+  // i18n 后双钉:调用点钉键,zh 母本钉原文(顺序语义保留在词条行上)
+  assert.match(dialog, /const TCP_STAGE1_FOOTNOTE = t\('common\.app\.rules\.flow\.tcpStage1Footnote'\)/)
+  const entryLine = code('src/locales/zh/rules.ts').split('\n').find((l) => l.includes('tcpStage1Footnote:'))
+  assert.ok(entryLine, 'tcpStage1Footnote 必须在 zh 母本词条中')
+  assert.match(entryLine!, /保留检测信任命中记录为检测[^]*直达上游/)
 })
 
 test('策略向导阶段 0 提示：跳段话术限 stage0，mixed 信任命中为引擎内检测降级', () => {
   const policies = code('src/views/security/SecurityPolicies.vue')
-  assert.match(policies, /开启：信任 IP 跳过全部安全阶段，仅由独立轻量检测事务记录（事件动作=检测）、不拦截/, '开启话术协议中立且为跳段语义')
+  // i18n 后双钉:调用点钉键,zh 母本钉原文(security.ts 为 zh/en 合并词条,原文在 "zh" 行)
+  const zhLexicon = code('src/locales/zh/security.ts')
+  assert.match(policies, /t\('app\.security\.policies\.stage0\.detectOn'\)/, '开启话术协议中立且为跳段语义')
+  assert.ok(zhLexicon.includes('开启：信任 IP 跳过全部安全阶段，仅由独立轻量检测事务记录（事件动作=检测）、不拦截'), '开启话术原文必须在 zh 母本词条中')
   assert.doesNotMatch(policies, /继续后续/, '旧「继续后续评估」语义退场')
-  assert.match(policies, /信任名单阶段生效——「类型=信任名单（stage0）」策略命中后跳过全部后续安全阶段（直通=零安全事件；保留检测=仅由独立轻量检测事务记录，动作=检测）/, '投影条按类型限定跳段')
-  assert.match(policies, /「类型=信任名单（stage0）」策略：名单内 IP 命中后跳过全部后续安全阶段（IP 访问控制 \/ 限流 \/ WAF/, '提示线按类型限定跳段')
-  assert.match(policies, /mixed 等其他类型策略信任命中为引擎内检测降级/, 'mixed 场景如实呈现引擎内降级')
+  assert.match(policies, /t\('app\.security\.policies\.stage0\.projection'\)/, '投影条按类型限定跳段')
+  assert.ok(zhLexicon.includes('「类型=信任名单（stage0）」策略命中后跳过全部后续安全阶段（直通=零安全事件；保留检测=仅由独立轻量检测事务记录，动作=检测）'), '投影条原文必须在 zh 母本词条中')
+  assert.match(policies, /t\('app\.security\.policies\.stage0\.trustTip'\)/, '提示线按类型限定跳段')
+  assert.ok(zhLexicon.includes('「类型=信任名单（stage0）」策略：名单内 IP 命中后跳过全部后续安全阶段（IP 访问控制 / 限流 / WAF'), '提示线原文必须在 zh 母本词条中')
+  assert.ok(zhLexicon.includes('mixed 等其他类型策略信任命中为引擎内检测降级'), 'mixed 场景如实呈现引擎内降级')
   assert.doesNotMatch(policies, /保留检测模式仅记录检测、不拦截/, '旧「仅记录检测」话术退场')
 })

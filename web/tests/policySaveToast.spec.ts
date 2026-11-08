@@ -42,7 +42,9 @@ test('策略保存：单条结果消息，服务端 message 优先，退化后�
   // 视图接线：保存结果直接取响应 message（阶段页覆盖同步后缀已随功能退役）。
   // 该段内 showSaveResult 恰两次：保存结果一次 + 绑定/执行序退化警告一次。
   const save = section(page, 'const bindResponses', 'const savedType = editorPolicyType.value')
-  assert.match(save, /message: saveRes\?\.message \|\| '保存成功'/, '保存结果必须直取响应 message（缺省回落「保存成功」）')
+  // i18n 后双钉:调用点钉键,zh 母本钉原文(任一漂移必红)
+  assert.match(save, /message: saveRes\?\.message \|\| t\('app\.security\.policies\.common\.saveSuccess'\)/, '保存结果必须直取响应 message（缺省回落「保存成功」）')
+  assert.ok(code('src/locales/zh/security.ts').includes('保存成功'), '保存成功回落原文必须在 zh 母本词条中')
   assert.equal(save.match(/showSaveResult\(/g)?.length, 2, '只允许保存结果 + 退化警告两次呈现')
   assert.doesNotMatch(save, /policySaveResultMessage|stageOverrideDraftPending/, '阶段页覆盖同步消息工具已退役')
 })

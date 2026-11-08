@@ -87,7 +87,7 @@ test('三处一次性凭据弹框都经同一守卫（注册令牌/密钥明文/
   assert.match(cluster, /:before-close="closeTokenDialog"/, '注册令牌 ESC/X 必须走关闭守卫')
   assert.match(cluster, /@closed="registerToken = null"/, '关闭后清空内存中的令牌')
   assert.match(cluster, /const closeTokenDialog = createOneTimeSecretCloseGuard\(\{/)
-  assert.match(cluster, /注册令牌仅此一次显示/)
+  assert.match(cluster, /app\.settings\.cluster\.token\.closeGuardMessage/)
 
   const keys = code('src/views/Keys.vue')
   assert.match(keys, /const closeCreatedKey = createOneTimeSecretCloseGuard\(\{/)
@@ -151,12 +151,14 @@ test('证书/私钥从文件读取：onerror 反馈 + 大小上限 + 不放开�
 // ── API 密钥缺 key ───────────────────────────────────────────
 test('创建密钥响应缺 key：先报错而非先报成功，且不关创建框', () => {
   const keys = code('src/views/Keys.vue')
-  const errorAt = keys.indexOf("ElMessage.error('响应异常：密钥未返回")
-  const successAt = keys.indexOf("mfaAwareSuccess('密钥创建成功')")
+  const errorAt = keys.indexOf("t('common.app.views.keys.createNoKeyError')")
+  const successAt = keys.indexOf("mfaAwareSuccess(t('common.app.views.keys.createSuccess'))")
   const closeAt = keys.indexOf('createDialogVisible.value = false', successAt)
   assert.ok(errorAt > 0, '缺 key 必须显性报错')
   assert.ok(successAt > errorAt, '成功提示必须在 key 校验之后')
   assert.ok(closeAt > successAt, '只有拿到明文才关创建框')
+  // i18n 双钉:两条提示词条原文必须在 zh 母本中(顺序语义随调用点钉保持)
+  assert.ok(code('src/locales/zh/views.ts').includes('响应异常：密钥未返回'), '缺 key 报错原文必须在 zh 母本词条中')
 })
 
 // ── 大屏空态与切窗三态 ───────────────────────────────────────
@@ -190,7 +192,7 @@ test('自定义规则名称/描述上限与后端 rune 常量逐值对表（前�
   }
   // 名称/描述输入框仍带字数提示（spell 字数可发现性）
   const rules = code('src/views/security/SecurityRules.vue')
-  const form = section(rules, '<el-form-item label="名称" required>', '<el-form-item label="条件关系"')
+  const form = section(rules, `<el-form-item :label="t('common.app.views.secRules.common.name')" required>`, '<el-form-item :label="t(\'common.app.views.secRules.customTab.colConditionLogic\')"')
   assert.match(form, /v-model="ruleForm\.name"[^>]*:maxlength="SECURITY_NAME_MAX_RUNES"[^>]*show-word-limit/)
   assert.match(form, /v-model="ruleForm\.description"[^>]*:maxlength="SECURITY_DESCRIPTION_MAX_RUNES"[^>]*show-word-limit/)
 })
@@ -199,7 +201,7 @@ test('自定义规则名称/描述上限与后端 rune 常量逐值对表（前�
 // ── 服务控制卡的选中态 ───────────────────────────────────────
 test('服务控制四选一卡片暴露 radio 语义与选中态', () => {
   const cluster = code('src/views/settings/ClusterSettings.vue')
-  assert.match(cluster, /class="service-control-grid" role="radiogroup" aria-label="服务控制操作"/)
+  assert.match(cluster, /class="service-control-grid" role="radiogroup" :aria-label="t\('app\.settings\.cluster\.actions\.ariaLabel'\)"/)
   // 选中态必须落在同一个开标签上：距离窗口（`[\s\S]{0,120}`）在两属性之间插入
   // `v-if`/`v-else` 或调换书写顺序时假红，也可能跨到相邻分支的元素上。
   const radioCard = openTags(cluster, 'div').find((tag) => /\srole="radio"/.test(tag))

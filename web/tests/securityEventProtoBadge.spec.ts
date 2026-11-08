@@ -15,13 +15,13 @@ const events = code('src/views/security/SecurityEvents.vue')
 const trigger = code('src/components/events/TriggerDetailDialog.vue')
 
 test('事件列表：规则列不再放 TCP 徽标', () => {
-  const ruleColumn = section(events, 'label="规则"', 'label="触发阶段"')
+  const ruleColumn = section(events, `:label="t('app.security.events.colRule')"`, `:label="t('app.security.events.colStage')"`)
   assert.doesNotMatch(ruleColumn, /proto-tcp-tag/, '规则列只剩规则名/链接')
   assert.match(ruleColumn, /AccessibleLink/, '规则名链接保持')
 })
 
 test('事件列表：方法列两协议统一 el-tag 徽标（上一版样式，翻页飘移由 disable-transitions 根治）', () => {
-  const methodColumn = section(events, 'label="方法"', 'label="URI"')
+  const methodColumn = section(events, `:label="t('app.security.events.colMethod')"`, 'label="URI"')
   assert.match(methodColumn, /row\.event_type === 'tcp'/)
   assert.match(methodColumn, /class="proto-tcp-tag event-method-tag">TCP<\/el-tag>/)
   assert.match(methodColumn, /disable-transitions/, '翻页飘移（挂载动画）由 disable-transitions 根治')
@@ -36,7 +36,7 @@ test('触发详情弹框：命中概览显示协议徽标（TCP 青 / HTTP 蓝�
 })
 
 test('请求详情弹框：触发规则行显示协议徽标（防御式）', () => {
-  const item = section(events, 'label="触发规则"', '</el-descriptions-item>')
+  const item = section(events, `:label="t('app.security.events.ctxTriggeredRule')"`, '</el-descriptions-item>')
   assert.match(item, /ctxEvent\.event_type === 'tcp'/)
   assert.match(item, /proto-tcp-tag event-proto-tag">TCP<\/el-tag>/)
   assert.match(item, /v-else-if="ctxEvent\.event_type"/, 'event_type 缺失时不显示徽标')

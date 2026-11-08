@@ -64,10 +64,10 @@ test('AppLayout 接线：窄屏入口可切换、状态由单源派生', () => {
   assert.match(layout, /@click="closeNarrowSidebar"/, '遮罩点击必须收起浮层')
   assert.match(layout, /:class="\{ 'is-overlay': sidebarOverlayVisible \}"/, '窄屏展开必须走浮层样式')
   assert.match(layout, /const sidebarOverlayVisible = computed\(\(\) => sidebarOverlay\(\{ narrow: isNarrowViewport\.value, collapsed: effectiveCollapsed\.value \}\)\)/, '浮层判定必须走单源')
-  // 折叠态账户入口：可见标识 + aria-label，且下拉仍含退出登录
+  // 折叠态账户入口：可见标识 + aria-label，且下拉仍含退出登录（i18n 后钉键）
   assert.match(layout, /v-if="effectiveCollapsed" class="user-avatar" aria-hidden="true"/, '折叠态必须有可见标识（首字头像）')
   assert.match(layout, /:aria-label="accountTriggerLabel\(menuDisplayName\)"/, '折叠态入口必须有无障碍名称')
-  assert.match(layout, /退出登录/)
+  assert.match(layout, /t\('common\.app\.views\.layout\.logoutMenuItem'\)/, '下拉仍含退出登录（词条键钉住，原文钉在 views 母本）')
 })
 
 // 子菜单间距的多轮叠加：`.el-sub-menu.is-opened{margin-bottom:0!important}` 曾被

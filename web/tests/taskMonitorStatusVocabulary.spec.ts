@@ -8,8 +8,8 @@ import { code, codeSection, repoCode, section } from './_helpers.ts'
 // 任务列表的任何列（名称列、状态列、状态词表、兜底）均不得引入业务词表。
 
 const vue = code('src/views/settings/TaskMonitor.vue')
-const statusColumn = section(vue, '<el-table-column label="状态"', '</el-table-column>')
-const taskColumn = section(vue, '<el-table-column label="任务"', '</el-table-column>')
+const statusColumn = section(vue, '<el-table-column :label="t(\'app.settings.taskMonitor.col.status\')"', '</el-table-column>')
+const taskColumn = section(vue, '<el-table-column :label="t(\'app.settings.taskMonitor.col.task\')"', '</el-table-column>')
 const svc = repoCode('internal/services/taskmonitor.go')
 
 test('任务名称列只渲染任务名（无业务态子文本/徽标）', () => {
@@ -26,7 +26,7 @@ test('状态列只由引擎 status 渲染（三态，无业务态覆盖）', () 
 test('statusLabel 兜底不引入证书生命周期词表', () => {
   const fn = codeSection('src/views/settings/TaskMonitor.vue', 'const statusLabels', '// v2.0 四类型')
   assert.doesNotMatch(fn, /certJobStatusLabel/, 'statusLabel 兜底不得把 cert_jobs 状态词表渲染进状态列')
-  assert.match(fn, /hasOwn\(statusLabels, s\) \? statusLabels\[s\] : s/, '兜底只回显原值，并经自有属性守卫')
+  assert.match(fn, /hasOwn\(statusLabels\.value, s\) \? statusLabels\.value\[s\] : s/, '兜底只回显原值，并经自有属性守卫')
 })
 
 test('文件内不存在按行渲染证书状态标签的 helper（certJobLabel/certJobRawStatus）', () => {

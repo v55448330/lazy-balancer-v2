@@ -197,7 +197,9 @@ test('库计数列文案与「数量 / 大小」列义', () => {
   const text = code('src/views/security/SecurityRules.vue')
   assert.match(text, /crsRuleCountLabel\(crsInfo\.value\.rule_count\)/)
   assert.doesNotMatch(text, /个文件/)
-  assert.match(text, /label="数量 \/ 大小"/)
+  // i18n 后双钉:调用点钉键,zh 母本钉原文(任一漂移必红)
+  assert.match(text, /:label="t\('common\.app\.views\.secRules\.lib\.colCountSize'\)"/)
+  assert.ok(code('src/locales/zh/views.ts').includes("'数量 / 大小'"), '列头原文必须在 zh 母本词条中')
   // IP 地理库字节数带单位（formatSize）
   assert.match(text, /formatSize\(ip2regionInfo\.value\.db_size\)/)
 })
@@ -283,8 +285,9 @@ test('名单详情 GET 静默，避免与全局拦截器双 toast', () => {
   const silentGets = text.match(/security\/ip-lists\/\$\{[^}]+\}`, \{ silent: true \}\)/g) ?? []
   // 详情、失败重试、内置名单保存前的新鲜度核对——三处都走 silent + 本地文案
   assert.equal(silentGets.length, 3, `详情/重试/新鲜度核对三处请求都应 silent，实际 ${silentGets.length}`)
-  // 本地提示保留（带「已禁用保存」动作信息）
-  assert.match(text, /加载列表条目失败，已禁用保存；请重新加载/)
+  // 本地提示保留（带「已禁用保存」动作信息）——i18n 后双钉:调用点钉键,zh 母本钉原文
+  assert.match(text, /t\('common\.app\.views\.secRules\.msgs\.loadEntriesFailReload'\)/)
+  assert.ok(code('src/locales/zh/views.ts').includes('加载列表条目失败，已禁用保存；请重新加载'), '失败提示原文必须在 zh 母本词条中')
 })
 
 test('库状态未知时自动更新开关显示「—」而非默认开', () => {
@@ -313,13 +316,13 @@ test('自定义规则列表：条件关系独立成列、条件列加宽且长�
   // 起始锚点按属性集定位「描述」列开标签（不写死属性书写顺序）：整串 marker
   // 会在属性重排/新增属性时假红，而列结构完全没变。
   const descriptionTag = openTags(text, 'el-table-column').find((tag) =>
-    /prop="description"/.test(tag) && /label="描述"/.test(tag))
+    /prop="description"/.test(tag) && /:label="t\('common\.app\.views\.secRules\.common\.description'\)"/.test(tag))
   assert.ok(descriptionTag !== undefined, '「描述」列开标签缺失')
-  const table = section(text.slice(text.indexOf(descriptionTag)), descriptionTag, '<el-table-column label="动作"')
+  const table = section(text.slice(text.indexOf(descriptionTag)), descriptionTag, `<el-table-column :label="t('common.app.views.secRules.customTab.colAction')"`)
   // 条件关系（AND/OR）独立窄列：与条件内容同列时标签挤占文本宽度
-  assert.match(table, /<el-table-column label="条件关系" width="140" align="center">/)
+  assert.match(table, /<el-table-column :label="t\('common\.app\.views\.secRules\.customTab\.colConditionLogic'\)" width="140" align="center">/)
   // 条件列显著加宽（原 250）并保留专用 class-name 供全局样式命中
-  assert.match(table, /<el-table-column label="条件" min-width="320" class-name="rule-cond-cell">/)
+  assert.match(table, /<el-table-column :label="t\('common\.app\.views\.secRules\.customTab\.colConditions'\)" min-width="320" class-name="rule-cond-cell">/)
   // 每条条件一个单行 chip + tooltip 全文
   assert.match(table, /<div class="cond-chip-list">/)
   assert.match(table, /<el-tooltip v-for="cond in row\.conditions" :key="`\$\{cond\.target\} \$\{cond\.header_name \?\? ''\} \$\{cond\.operator\} \$\{cond\.pattern\}`" :content="`\$\{conditionTargetLabel\(cond\.target, cond\.header_name\)\} \$\{cond\.operator\} \$\{cond\.pattern\}`"/)
@@ -338,8 +341,11 @@ test('BasicSettings 两处 radio 行回归 el-form-item（自管标签行族已�
   const text = code('src/views/settings/BasicSettings.vue')
   assert.doesNotMatch(text, /class="form-radio-row"/, '自管标签行标记必须退役')
   assert.doesNotMatch(text, /^\.form-radio-row/m, '自管标签行样式必须退役')
-  assert.match(text, /<el-form-item label="证书来源"( for="[^"]*")?>/)
-  assert.match(text, /<el-form-item label="频率"( for="[^"]*")?>/)
+  // i18n 后双钉:调用点钉键,zh 母本钉原文(任一漂移必红)
+  assert.match(text, /<el-form-item :label="t\('app\.settings\.basic\.tls\.source'\)"( for="[^"]*")?>/)
+  assert.ok(code('src/locales/zh/settings.ts').includes('"source": "证书来源"'), '证书来源标签原文必须在 zh 母本词条中')
+  assert.match(text, /<el-form-item :label="t\('app\.settings\.basic\.autoBackup\.frequency'\)"( for="[^"]*")?>/)
+  assert.ok(code('src/locales/zh/settings.ts').includes('"frequency": "频率"'), '频率标签原文必须在 zh 母本词条中')
 })
 
 test('BasicSettings 不再局部重复定义全局 .settings-form（main.css 单源）', () => {
@@ -369,7 +375,9 @@ test('总览总量卡片按 includes_reserved 切换口径 tooltip（重设计�
 
 test('自动封禁预置名单条目数标注含已到期条目', () => {
   const text = code('src/views/security/SecurityRules.vue')
-  assert.match(text, /v-if="row\.preset_autoban"[^>]*content="含已到期条目/, '预置名单条数须 tooltip 消歧')
+  // i18n 后双钉:调用点钉键,zh 母本钉原文(任一漂移必红)
+  assert.match(text, /v-if="row\.preset_autoban"[^>]*:content="t\('common\.app\.views\.secRules\.ipTab\.presetExpiryTip'\)"/, '预置名单条数须 tooltip 消歧')
+  assert.ok(code('src/locales/zh/views.ts').includes('含已到期条目'), '到期条目口径原文必须在 zh 母本词条中')
 })
 
 test('useLibUpdateDialog 409 路径不得重复立即轮询', () => {
@@ -455,8 +463,11 @@ test('掩码私钥不得误报「请提供私钥」', () => {
 test('信任语义单源：事件详情与流程副标题共用 trustHitMode', () => {
   const trigger = code('src/components/events/TriggerDetailDialog.vue')
   assert.match(trigger, /const trustModeText = computed\(\(\) => trustHitMode\(policy\.value\?\.policy_type, policy\.value\?\.trust_detection\)/)
-  assert.match(trigger, /'保留检测：跳过全部安全阶段，仅由独立轻量检测事务记录（动作=检测）'/, 'stage0 保留检测=跳段+独立轻量检测事务记录')
-  assert.match(trigger, /'保留检测：引擎内检测降级，仍逐段评估、仅记录不拦截（动作=检测）'/, 'mixed 等其他类型=引擎内降级不跳段')
+  // i18n 后双钉:调用点钉键,zh 母本钉原文(任一漂移必红)
+  assert.match(trigger, /t\('common\.app\.views\.trigDetail\.trustDetectionStage0'\)/, 'stage0 保留检测=跳段+独立轻量检测事务记录')
+  assert.match(trigger, /t\('common\.app\.views\.trigDetail\.trustDetectionInline'\)/, 'mixed 等其他类型=引擎内降级不跳段')
+  assert.ok(code('src/locales/zh/views.ts').includes('保留检测：跳过全部安全阶段，仅由独立轻量检测事务记录（动作=检测）'), 'stage0 口径原文必须在 zh 母本词条中')
+  assert.ok(code('src/locales/zh/views.ts').includes('保留检测：引擎内检测降级，仍逐段评估、仅记录不拦截（动作=检测）'), '降级口径原文必须在 zh 母本词条中')
   assert.doesNotMatch(trigger, /继续后续/, '旧「继续后续阶段评估」语义退场')
   assert.doesNotMatch(trigger, /policy\?\.trust_detection === true \? '保留检测/)
 
@@ -606,7 +617,10 @@ test('CRS 规则文件加载失败任何形态都给可见错误态（旧数据�
   assert.match(handler, /if \(requestSeq !== rulesRequestSeq\) return/, '过期请求的失败不得污染当前态')
   assert.match(handler, /rulesLoadError\.value = true/)
   assert.doesNotMatch(handler, /rules\.value\.length === 0/, '失败不得按「已有数据」静默跳过错误态')
-  assert.match(text, /rules\.length === 0 \? 'CRS 规则文件加载失败，「暂无规则文件」不代表真实状态' : 'CRS 规则文件加载失败：当前显示的是上次成功结果（与分页\/搜索条件不符）'/)
+  // i18n 后双钉:调用点钉键,zh 母本钉原文(任一漂移必红)
+  assert.match(text, /rules\.length === 0 \? t\('common\.app\.views\.secRules\.rulesTab\.crsLoadFailEmpty'\) : t\('common\.app\.views\.secRules\.rulesTab\.crsLoadFailStale'\)/)
+  assert.ok(code('src/locales/zh/views.ts').includes('CRS 规则文件加载失败，「暂无规则文件」不代表真实状态'), '空态口径原文必须在 zh 母本词条中')
+  assert.ok(code('src/locales/zh/views.ts').includes('CRS 规则文件加载失败：当前显示的是上次成功结果（与分页/搜索条件不符）'), '旧数据口径原文必须在 zh 母本词条中')
 })
 
 test('大屏分级回退不含限流 429（限流不进安全事件表）', () => {
@@ -756,7 +770,9 @@ test('威胁大屏 TCP：l4 差分并入正常弧 + feed 徽标 + 底部图例�
 test('TCP 绑定门谓词与文案单源（securityStages）', () => {
   const stages = code('src/utils/securityStages.ts')
   assert.match(stages, /export const policySupportsTcp = /)
-  assert.match(stages, /该策略含 TCP 不支持的能力（限流\/WAF）/)
+  // i18n 后双钉:调用点钉键,zh 母本钉原文(任一漂移必红)
+  assert.match(stages, /export const TCP_BIND_UNSUPPORTED_REASON = t\('common\.app\.views\.stages\.tcpUnsupportedReason'\)/)
+  assert.ok(code('src/locales/zh/views.ts').includes('该策略含 TCP 不支持的能力（限流/WAF）'), 'TCP 绑定门文案原文必须在 zh 母本词条中')
   // 两个绑定入口共用谓词，不得各写第二份
   assert.match(code('src/components/SecurityBindingEditor.vue'), /policySupportsTcp/)
   assert.match(code('src/views/security/SecurityPolicies.vue'), /policySupportsTcp/)

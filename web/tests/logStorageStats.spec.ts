@@ -16,6 +16,9 @@ import { STUB_API } from './_stubs.ts'
 
 const flush = flushMicrotasks
 
+// i18n 双钉的 zh 母本侧：调用点钉键 + 本词条钉原文（任一漂移必红）
+const zhViews = (): string => code('src/locales/zh/views.ts')
+
 interface GetRecord {
   url: string
   config?: unknown
@@ -264,7 +267,9 @@ test('成功但无该 key：置 unavailable（统计条显式说明，而非整�
 
 test('无统计数据时渲染显式提示（不是把统计条藏起来）', () => {
   const bar = code('src/components/LogStorageBar.vue')
-  assert.match(bar, /v-else-if="unavailable" class="form-tip-line">该日志暂无统计数据</, '缺行必须有可见归宿')
+  // i18n 后双钉：调用点钉键，zh 母本钉原文
+  assert.match(bar, /v-else-if="unavailable" class="form-tip-line">\{\{ t\('common\.app\.views\.logStorage\.noStatsForLine'\) \}\}</, '缺行必须有可见归宿')
+  assert.ok(zhViews().includes('该日志暂无统计数据'), '缺行提示文案必须在 zh 母本词条中')
 })
 
 test('日志统计条消费 rows_unavailable：保持条数口径并标注不可用', () => {
@@ -281,7 +286,8 @@ test('日志统计条消费 rows_unavailable：保持条数口径并标注不可
   assert.match(rowsUnavailable, /rows == null/, '行数缺席同样按不可用呈现')
   assert.doesNotMatch(rowsUnavailable, /rows != null/, '不得反转为「有行数即可用」')
   const sizeText = section(bar, 'const sizeText = computed(', '\n})\n')
-  assert.match(sizeText, /计数暂不可用 \/ /, '行数缺席时保持条数口径文案')
+  assert.match(sizeText, /t\('common\.app\.views\.logStorage\.rowsUnavailableSize'/, '行数缺席时保持条数口径文案（键化）')
+  assert.ok(zhViews().includes('计数暂不可用 / {limit} 条'), '计数暂不可用文案必须在 zh 母本词条中')
   assert.match(sizeText, /rowsUnavailable\.value/, '文案必须取统一不可用判定（flag 与 null 同口径）')
   assert.doesNotMatch(
     section(bar, 'const sizeText = computed(', '\n})\n'),
@@ -289,7 +295,8 @@ test('日志统计条消费 rows_unavailable：保持条数口径并标注不可
     '不得在行数缺席时滑回字节口径',
   )
   const noteText = section(bar, 'const noteText = computed(', '\n})\n')
-  assert.match(noteText, /行数暂不可用/, '附注必须披露计数不可用')
+  assert.match(noteText, /t\('common\.app\.views\.logStorage\.rowsUnavailableNote'/, '附注必须披露计数不可用（键化）')
+  assert.ok(zhViews().includes('行数暂不可用；超限按最旧优先清理'), '行数不可用附注必须在 zh 母本词条中')
 })
 
 // rows_unavailable 的跨栈对表：前端响应类型与后端 json tag 必须同名字段
@@ -380,7 +387,8 @@ test('安全事件行内：条数/行帽 + 缓存 N 条 + 库体量；审计日�
   const sizeText = codeSection('src/components/LogStorageBar.vue', 'const sizeText = computed(', '\n})\n')
   assert.match(sizeText, /if \(i\.limit_rows\) \{/, '安全事件保持条数口径')
   assert.match(sizeText, /cacheCountText\.value/, '缓存条数必须出现在条数口径行内')
-  assert.match(sizeText, /库 \$\{humanSize\(i\.db_bytes\)\}/, '库体量保留')
+  assert.match(sizeText, /t\('common\.app\.views\.logStorage\.dbSize', \{ size: humanSize\(i\.db_bytes\) \}\)/, '库体量保留（键化）')
+  assert.ok(zhViews().includes('库 {size}'), '库体量文案必须在 zh 母本词条中')
   assert.doesNotMatch(
     sizeText,
     /日志 \$\{humanSize\(i\.size_bytes\)\}/,
@@ -396,14 +404,16 @@ test('安全事件行内：条数/行帽 + 缓存 N 条 + 库体量；审计日�
 
 test('缓存 0 条必须显示：0 不得被真值判断当成缺席', () => {
   const cacheCount = codeSection('src/components/LogStorageBar.vue', 'const cacheCountText = computed', '\n})\n')
-  assert.match(cacheCount, /`缓存 \$\{formatInt\(i\.cache_entries\)\} 条`/, '条数文案单源（千分位走 formatInt 单源）')
+  assert.match(cacheCount, /t\('common\.app\.views\.logStorage\.cacheCount', \{ count: formatInt\(i\.cache_entries\) \}\)/, '条数文案单源（千分位走 formatInt 单源；键化）')
+  assert.ok(zhViews().includes('缓存 {count} 条'), '缓存计数文案必须在 zh 母本词条中')
   assert.doesNotMatch(cacheCount, /if \(i\.cache_entries\)/, '真值判断会把 0 条静默吞掉')
   assert.doesNotMatch(cacheCount, /cache_entries > 0/, '0 条是正常态，不得设 >0 门槛')
 })
 
 test('缓存计数不可用：显式「计数暂不可用」，不退化成 0 条', () => {
   const cacheCount = codeSection('src/components/LogStorageBar.vue', 'const cacheCountText = computed', '\n})\n')
-  assert.match(cacheCount, /缓存计数暂不可用/, '失败态必须有自己的文案')
+  assert.match(cacheCount, /t\('common\.app\.views\.logStorage\.cacheCountUnavailable'\)/, '失败态必须有自己的文案（键化）')
+  assert.ok(zhViews().includes('缓存计数暂不可用'), '缓存计数不可用文案必须在 zh 母本词条中')
   assert.match(
     cacheCount,
     /cache_unavailable === true \|\| i\.cache_entries == null/,
@@ -420,7 +430,8 @@ test('缓存字段缺席（旧后端 / 非安全事件行）：整段不渲染�
 
 test('缓存口径说明：tooltip 讲清「IPC 失败后的待补采条目，正常应为 0」', () => {
   const cacheDetail = codeSection('src/components/LogStorageBar.vue', 'const cacheDetail = computed', '\n})\n')
-  assert.match(cacheDetail, /缓存为 IPC 失败后的待补采条目，正常应为 0/, '缓存含义必须显式说明')
+  assert.match(cacheDetail, /t\('common\.app\.views\.logStorage\.cacheExplainer'\)/, '缓存含义必须显式说明（键化）')
+  assert.ok(zhViews().includes('缓存为 IPC 失败后的待补采条目，正常应为 0'), '缓存口径说明必须在 zh 母本词条中')
   assert.match(cacheDetail, /cache_limit_entries/, '条目上限进入 tooltip')
   assert.match(cacheDetail, /cache_limit_bytes/, '字节上限进入 tooltip')
   assert.match(cacheDetail, /cache_unavailable === true \|\| i\.cache_entries == null/, '失败态在 tooltip 同样披露')
@@ -432,14 +443,18 @@ test('其他日志行口径不回归：字节/轮转文案保持原样', () => {
   const sizeText = codeSection('src/components/LogStorageBar.vue', 'const sizeText = computed(', '\n})\n')
   assert.match(
     sizeText,
-    /if \(i\.limit_bytes\) return `\$\{humanSize\(i\.size_bytes\)\} \/ \$\{humanSize\(i\.limit_bytes\)\}`/,
-    '字节上限行（Caddy/任务日志等）不变',
+    /if \(i\.limit_bytes\) return t\('common\.app\.views\.logStorage\.bytesSize', \{ size: humanSize\(i\.size_bytes\), limit: humanSize\(i\.limit_bytes\) \}\)/,
+    '字节上限行（Caddy/任务日志等）不变（键化）',
   )
+  assert.ok(zhViews().includes('{size} / {limit}'), '字节口径文案必须在 zh 母本词条中')
   assert.match(sizeText, /return humanSize\(i\.size_bytes\)/, '无上限行仍按字节呈现')
   const noteText = codeSection('src/components/LogStorageBar.vue', 'const noteText = computed(', '\n})\n')
-  assert.match(noteText, /满 \$\{humanSize\(i\.limit_bytes\)\} 轮转/, '轮转阈值文案不变')
-  assert.match(noteText, /暂无归档（满额保留 \$\{i\.keep_count\} 份）/, '份数上限文案不变')
-  assert.match(noteText, /超限按最旧优先清理/, '条数口径附注不变')
+  assert.match(noteText, /t\('common\.app\.views\.logStorage\.rotateAtSize', \{ size: humanSize\(i\.limit_bytes\) \}\)/, '轮转阈值文案不变（键化）')
+  assert.ok(zhViews().includes('满 {size} 轮转'), '轮转阈值文案必须在 zh 母本词条中')
+  assert.match(noteText, /t\('common\.app\.views\.logStorage\.noArchiveKeep', \{ keep: i\.keep_count \}\)/, '份数上限文案不变（键化）')
+  assert.ok(zhViews().includes('暂无归档（满额保留 {keep} 份）'), '份数上限文案必须在 zh 母本词条中')
+  assert.match(noteText, /t\('common\.app\.views\.logStorage\.oldestFirstNote'\)/, '条数口径附注不变（键化）')
+  assert.ok(zhViews().includes('超限按最旧优先清理'), '条数口径附注必须在 zh 母本词条中')
   // 缓存段只属于有该指标的日志行：通用路径（无 limit_rows）不得插入缓存字面量。
   const rowsBranch = section(sizeText, 'if (i.limit_rows) {', '\n  }\n')
   assert.match(rowsBranch, /cacheCountText\.value/)

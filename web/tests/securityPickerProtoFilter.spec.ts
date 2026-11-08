@@ -21,7 +21,7 @@ test('策略向导关联规则选择器：协议筛选默认 HTTP，三档可切
   // 控件与三档选项（「全部」已抽词:调用点钉键,zh 母本钉原文;HTTP/TCP 协议词保持字面量）
   assert.match(policies, /v-model="pickerProtoFilter"/)
   assert.match(policies, /<el-option :label="t\('app\.security\.policies\.common\.all'\)" value="all" \/>/)
-  assert.ok(code('src/locales/zh/security.ts').includes('"zh": "全部"'), '「全部」原文必须在 zh 母本词条中')
+  assert.ok(code('src/locales/zh/security.ts').includes('全部'), '「全部」原文必须在 zh 母本词条中')
   assert.match(policies, /<el-option label="HTTP" value="http" \/>/)
   assert.match(policies, /<el-option label="TCP" value="tcp" \/>/)
 })
@@ -55,9 +55,10 @@ test('策略向导关联规则选择器：TCP 行能力门置灰逻辑保持', (
 test('绑定规则弹框（策略侧规则选择器）：协议筛选默认 HTTP，三档可切', () => {
   assert.match(editor, /const pickerProtoFilter = ref<'all' \| 'http' \| 'tcp'>\('http'\)/)
   assert.match(editor, /v-model="pickerProtoFilter"/)
-  assert.match(editor, /<el-option label="全部" value="all" \/>/)
-  assert.match(editor, /<el-option label="HTTP" value="http" \/>/)
-  assert.match(editor, /<el-option label="TCP" value="tcp" \/>/)
+  assert.match(editor, /<el-option :label="t\('common\.app\.views\.secBinding\.protoAll'\)" value="all" \/>/)
+  assert.ok(code('src/locales/zh/views.ts').includes("'protoAll': '全部'"), '「全部」原文必须在 zh 母本词条中')
+  assert.match(editor, /<el-option :label="t\('common\.app\.views\.secBinding\.protoHttp'\)" value="http" \/>/)
+  assert.match(editor, /<el-option :label="t\('common\.app\.views\.secBinding\.protoTcp'\)" value="tcp" \/>/)
 })
 
 test('绑定规则弹框（策略侧规则选择器）：筛选作用于候选列表并复位分页', () => {

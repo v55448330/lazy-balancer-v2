@@ -575,6 +575,7 @@ export default {
           "failed": "失败",
           "cancelled": "已取消",
           "interrupted": "中断",
+    "running": "运行中",
           "skipped": "已跳过"
         },
         "actions": {
@@ -680,6 +681,8 @@ export default {
           "label": "下载代理",
           "hint": "GitHub 下载代理，加速 CRS 规则库与 IP2Region",
           "notLoaded": "代理设置未加载：已禁用编辑且保存不会写入该项",
+    "selectPlaceholder": "选择代理",
+    "notLoadedShort": "未加载",
           "accessToken": "访问令牌",
           "tokenConfiguredPlaceholder": "已配置（留空保持不变）",
           "tokenMissingPlaceholder": "未配置（未认证限流 60 次/小时）",
@@ -693,7 +696,8 @@ export default {
           "mfaLabel": "写操作验证",
           "mfaHint": "写操作需 1 分钟内的 MFA 验证",
           "lockout": "登录失败锁定",
-          "lockoutHint": "密码或验证码失败 5 次锁 10 分钟（关闭则不锁定）"
+          "lockoutHint": "密码或验证码失败 5 次锁 10 分钟（关闭则不锁定）",
+    "mfaScopeLink": "支持的操作"
         },
         "tls": {
           "forceLabel": "强制加密",
@@ -719,6 +723,7 @@ export default {
           "domain": "域名",
           "issuer": "签发者",
           "expiry": "过期时间",
+      "daysLeft": "（剩余 {days} 天）",
           "selfsignedNote": "自动生成自签名证书，浏览器会提示不受信任；集群同步会自动跳过自签验证",
           "needKeyFirst": "已选择证书文件，还需选择私钥文件才能解析证书",
           "needCertFirst": "已选择私钥文件，还需选择证书文件才能解析证书",

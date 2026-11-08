@@ -143,7 +143,7 @@ test('服务控制卡：roving + 方向键 + 焦点跟进（四张卡片不再�
   assert.match(grid, /@keydown\.enter\.prevent="activateOnce\(\$event, \(\) => selectServiceAction\(item\.value\)\)"/)
   assert.doesNotMatch(grid, /tabindex="0"/, '不得每张卡片都是 tab stop')
   const handlers = section(page, 'const serviceCardRefs = new Map', 'const openServiceControlDialog')
-  assert.match(handlers, /rovingTabindex\(serviceControlOptions\.map\(\(item\) => item\.value\), serviceControlAction\.value, \(\) => false, value\)/)
+  assert.match(handlers, /rovingTabindex\(serviceControlOptions\.value\.map\(\(item\) => item\.value\), serviceControlAction\.value, \(\) => false, value\)/)
   assert.match(handlers, /nextRadioValue\(/)
   assert.match(handlers, /serviceCardRefs\.get\(next\)\?\.focus\(\)/)
 })

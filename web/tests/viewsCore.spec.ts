@@ -141,8 +141,10 @@ test('审计日志加载失败显性化（横幅 + 重试 + 空态分文案）',
   assert.match(fetchLogs, /if \(currentRequestSeq === requestSeq\) loadError\.value = true/, '仅最新请求可置错误态')
   assert.match(auditLog, /v-if="loadError"/)
   assert.match(auditLog, /@click="fetchLogs"/)
-  assert.match(auditLog, /操作日志加载失败：列表为空不代表没有日志/)
-  assert.match(auditLog, /loadError \? '日志加载失败' : '暂无操作日志'/)
+  // i18n 后双钉:调用点钉键,zh 母本钉原文(任一漂移必红)
+  assert.match(auditLog, /t\('common\.app\.views\.audit\.loadFailedBanner'\)/)
+  assert.ok(code('src/locales/zh/views.ts').includes('操作日志加载失败：列表为空不代表没有日志'), '失败横幅原文必须在 zh 母本词条中')
+  assert.match(auditLog, /loadError \? t\('common\.app\.views\.audit\.listLoadFailed'\) : t\('common\.app\.views\.audit\.emptyLogs'\)/)
 })
 
 // ============ 消费 /audit-logs/options 的 partial ============
@@ -175,7 +177,9 @@ test('日期范围筛选全局类按页前缀命名（同名全局类冲突清�
 test('非管理员渲染权限空态且不发请求（深链同样覆盖）', () => {
   assert.match(caddyConfig, /const canViewConfig = computed\(\(\) => authStore\.user\?\.role === 'admin'\)/)
   assert.match(caddyConfig, /v-if="!canViewConfig"/)
-  assert.match(caddyConfig, /仅管理员可查看 Caddy 配置预览/)
+  // i18n 后双钉:调用点钉键,zh 母本钉原文(任一漂移必红)
+  assert.match(caddyConfig, /t\('common\.app\.views\.caddyCfg\.adminOnlyHint'\)/)
+  assert.ok(code('src/locales/zh/views.ts').includes('仅管理员可查看 Caddy 配置预览'), '权限空态原文必须在 zh 母本词条中')
   assert.match(caddyConfig, /if \(canViewConfig\.value\) void fetchCaddyConfig\(\)/)
   assert.doesNotMatch(caddyConfig, /onMounted\(\(\) => void fetchCaddyConfig\(\)\)/)
   // 角色补齐后自动补拉
@@ -187,11 +191,13 @@ test('非管理员渲染权限空态且不发请求（深链同样覆盖）', ()
 test('用户页：非管理员只读——操作位保留仅禁用，个人自助迁出', () => {
   assert.doesNotMatch(users, /openMfaBinding|mfaBinding|isSelfRow|selfServiceBlocked/, '个人自助与本人行特例已迁出用户页')
   // 只读语义=可见但禁用，不是隐藏：操作列常驻，按钮门为 isReadOnly。
-  assert.match(users, /<el-table-column label="操作" width="200"/, '操作列必须常驻')
+  // i18n 后双钉:调用点钉键,zh 母本钉原文(任一漂移必红)
+  assert.match(users, /<el-table-column :label="t\('common\.app\.views\.users\.actions'\)" width="200"/, '操作列必须常驻')
+  assert.ok(code('src/locales/zh/views.ts').includes("'操作'"), '操作列标题原文必须在 zh 母本词条中')
   // 绑定目标元素：操作列内 @click="editUser(row)" 的开标签（文件级定长窗口会把
   // 「某处 disabled + 附近出现编辑」当命中——同文件新建按钮/弹框表单也是同一
   // 表达式，按钮加一个属性即越窗假红）。
-  const actions = section(users, '<el-table-column label="操作"', '</el-table-column>')
+  const actions = section(users, `<el-table-column :label="t('common.app.views.users.actions')"`, '</el-table-column>')
   const editButtons = openTags(actions, 'el-button').filter((tag) => /@click="editUser\(row(?: as [A-Za-z]+)?\)"/.test(tag))
   assert.equal(editButtons.length, 1, '操作列里的编辑按钮必须唯一可定位')
   assert.match(editButtons[0]!, /:disabled="[^"]*isReadOnly/, '编辑按钮只读禁用')
@@ -207,7 +213,9 @@ test('MFA 绑定向导：6 位门、在途禁关、恢复码关闭确认', () =>
   // 在途禁关与恢复码步确认收敛进一次性凭据守卫单源（utils/oneTimeSecretGuard）
   assert.match(wizard, /blocked: \(\) => loading\.value/, '在途提交期间禁止关闭')
   assert.match(wizard, /skip: \(\) => step\.value !== 2/, '未到恢复码步（无秘密可丢）直接关闭')
-  assert.match(wizard, /恢复代码仅此一次显示/, '恢复码步关闭必须确认已保存')
+  // i18n 后双钉:调用点钉键,zh 母本钉原文(任一漂移必红)
+  assert.match(wizard, /t\('common\.app\.views\.mfa\.closeGuardMessage'\)/, '恢复码步关闭必须确认已保存')
+  assert.ok(code('src/locales/zh/views.ts').includes('恢复代码仅此一次显示'), '恢复码守卫文案原文必须在 zh 母本词条中')
   assert.match(wizard, /:before-close="beforeClose"/)
 })
 
@@ -235,7 +243,9 @@ test('用户页重置密码：行对象签名 + 请求路径内插数字 id', ()
   assert.match(reset, /const resetPassword = async \(row: UserListItem\)/, '签名收整行（与 deleteUser/resetMfa 同口径）')
   assert.match(reset, /request\.post\(`\/users\/\$\{row\.id\}\/reset-password`/, '请求路径必须内插行对象 id')
   assert.doesNotMatch(reset, /\/users\/\$\{id\}\/reset-password/, '不得再内插局部 id（签名与调用点漂移即回归）')
-  assert.match(reset, /为「\$\{row\.username\}」设置新密码/, '确认框必须点名目标用户')
+  // i18n 后双钉:调用点钉键,zh 母本钉原文(任一漂移必红)
+  assert.match(reset, /subtitle: t\('common\.app\.views\.users\.resetPwdSubtitle', \{ name: row\.username \}\)/, '确认框必须点名目标用户')
+  assert.ok(code('src/locales/zh/views.ts').includes('为「{name}」设置新密码'), '确认文案原文必须在 zh 母本词条中')
   assert.match(users, /@click="resetPassword\(row(?: as [A-Za-z]+)?\)"/, '调用点传整行对象（断言只抹平 DefaultRow 类型，不改变实参）')
 })
 
@@ -363,8 +373,10 @@ test('只读 Key 工具清单与后端只读探测集一致', () => {
   const block = section(visibility, 'var ReadOnlyProbeTools = map[string]struct{}{', '\n}')
   const probeTools = [...block.matchAll(/"([a-z0-9_]+)":\s*\{\},/g)].map((match) => match[1]).sort()
   assert.ok(probeTools.length > 0, '后端只读探测集必须可解析（marker 漂移会让守卫静默失效）')
-  const claim = keys.match(/(\d+) 个读探测 POST 工具（([^）]*)）/)
-  assert.ok(claim, 'Keys.vue 必须声明只读探测 POST 工具清单')
+  // i18n 后双钉:Keys.vue 调用点钉键,清单本体在 zh 母本原文中对表
+  assert.match(keys, /t\('common\.app\.views\.keys\.scopeBodyA'\)/, 'Keys.vue 必须引用 scopeBodyA 披露口径')
+  const claim = code('src/locales/zh/views.ts').match(/(\d+) 个读探测 POST 工具（([^）]*)）/)
+  assert.ok(claim, 'Keys.vue 披露口径原文（zh 母本）必须可解析出探测 POST 清单')
   // 括号内先以「；」接说明（写语义工具不在此列），清单本体在其前。
   const claimed = claim[2].split('；')[0].split(' / ').map((name) => name.trim()).sort()
   assert.deepEqual(claimed, probeTools, '文案清单必须与后端只读探测集逐一相同')
@@ -420,12 +432,16 @@ test('用户页：初始化管理员不可删除/禁用（标记由列表响应�
   // 列表响应必须携带标记，否则前端无法区分「保护行」与普通管理员。
   assert.match(types, /is_setup_admin\?: boolean/, 'UserListItem 必须声明 is_setup_admin')
   // 启停与删除两处：内容提示 + 禁用条件都要覆盖初始化管理员。
-  assert.match(users, /系统初始化管理员不可禁用/, '状态开关须给出不可禁用原因')
+  // i18n 后双钉:调用点钉键,zh 母本钉原文(任一漂移必红)
+  assert.match(users, /t\('common\.app\.views\.users\.setupAdminNoDisable'\)/, '状态开关须给出不可禁用原因')
+  assert.ok(code('src/locales/zh/views.ts').includes('系统初始化管理员不可禁用'), '禁用原因原文必须在 zh 母本词条中')
   assert.match(users, /isReadOnly \|\| row\.is_setup_admin \|\| switchingIds\.has\(row\.id\)/, '状态开关须对初始化管理员禁用')
-  assert.match(users, /系统初始化管理员不可删除/, '删除按钮须给出不可删除原因')
+  assert.match(users, /t\('common\.app\.views\.users\.setupAdminNoDelete'\)/, '删除按钮须给出不可删除原因')
+  assert.ok(code('src/locales/zh/views.ts').includes('系统初始化管理员不可删除'), '不可删除原因原文必须在 zh 母本词条中')
   assert.match(users, /isReadOnly \|\| row\.is_setup_admin \|\| row\.id === authStore\.user\?\.id/, '删除按钮须对初始化管理员禁用')
   // 第三个保护面：编辑弹框的角色下拉（后端 protected 恒 400「不可降级」）
   assert.match(users, /const roleLocked = computed\(\(\) => editingSelf\.value \|\| editingUser\.value\?\.is_setup_admin === true\)/)
   assert.match(users, /<el-select v-model="form\.role" style="width: 100%" :disabled="roleLocked">/)
-  assert.match(users, /系统初始化管理员不可降级/)
+  assert.match(users, /t\('common\.app\.views\.users\.setupAdminNoDemote'\)/)
+  assert.ok(code('src/locales/zh/views.ts').includes('系统初始化管理员不可降级'), '不可降级原因原文必须在 zh 母本词条中')
 })

@@ -308,7 +308,8 @@ test('⑦地图/地球引擎修复契约', () => {
   // 数据源」渲染成「该省 0 次攻击」——地图侧在此钉住，地球侧由
   // threatGlobe.spec（同断言归属地）承担，避免同一文本钉两处。
   assert.match(mapSrc, /hasProvinceStats\(/, '省级统计边界必须走共享判定')
-  assert.match(mapSrc, /无省级统计/, '海外下钻浮签必须显式标注无省级统计')
+  assert.match(mapSrc, /t\('common\.app\.views\.threat\.noProvinceStats'/, '海外下钻浮签必须走词条键')
+  assert.ok(code('src/locales/zh/views.ts').includes('无省级统计'), '无省级统计标注必须在 zh 母本词条中')
 })
 
 // ---- 数据级：省板包含断言（消费运行时导出的真实数据） ----

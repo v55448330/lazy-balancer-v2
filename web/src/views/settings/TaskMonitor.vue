@@ -935,7 +935,7 @@ const triggerLabel = (key: string) => (hasOwn(triggerLabels.value, key) ? trigge
 // 未知值显性回显「未知」——不借用 cert_jobs 状态机词表（issued/waiting_ca 等
 // 属证书业务域，进了结果列只会域错位误导；cert-job 动态行的业务状态由任务
 // 名称/详情的业务文本承载）。
-const resultLabels = computed<Record<string, string>>(() => ({ success: t('app.settings.taskMonitor.result.success'), failed: t('app.settings.taskMonitor.result.failed'), cancelled: t('app.settings.taskMonitor.result.cancelled'), interrupted: t('app.settings.taskMonitor.result.interrupted'), running: t('app.settings.taskMonitor.status.running'), skipped: t('app.settings.taskMonitor.result.skipped') }))
+const resultLabels = computed<Record<string, string>>(() => ({ success: t('app.settings.taskMonitor.result.success'), failed: t('app.settings.taskMonitor.result.failed'), cancelled: t('app.settings.taskMonitor.result.cancelled'), interrupted: t('app.settings.taskMonitor.result.interrupted'), running: t('app.settings.taskMonitor.result.running'), skipped: t('app.settings.taskMonitor.result.skipped') }))
 const statusResultLabel = (r: string): string =>
   hasOwn(resultLabels.value, r) ? resultLabels.value[r]! : t('app.settings.taskMonitor.status.unknown')
 const resultTagType = (r: string): 'success' | 'danger' | 'info' | 'warning' =>

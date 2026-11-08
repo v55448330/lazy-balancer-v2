@@ -14,7 +14,9 @@ test('规则流程弹框的证书到期时间走 formatDate（配置时区口径
   const dialog = code('src/components/RuleFlowDialog.vue')
   assert.match(dialog, /import \{ formatDate \} from '@\/utils\/date'/, '弹框必须复用全局 formatDate（单源时区口径）')
 
-  const cell = codeSection('src/components/RuleFlowDialog.vue', 'flow-kv-label">到期时间</span>', '</div>')
+  // i18n 后双钉:调用点钉键,zh 母本钉文案原文(任一漂移必红)
+  assert.ok(code('src/locales/zh/rules.ts').includes("expireTimeLabel: '到期时间'"), '到期时间原文必须在 zh 母本词条中')
+  const cell = codeSection('src/components/RuleFlowDialog.vue', "flow-kv-label\">{{ t('common.app.rules.flow.expireTimeLabel') }}</span>", '</div>')
   assert.match(cell, /formatDate\(certInfo\.not_after\)/, '到期时间必须经 formatDate 换算')
   assert.doesNotMatch(
     cell,

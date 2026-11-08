@@ -41,9 +41,14 @@ test('B 提交路径镜像步进完整性门（跳步保存不得静默剔除空
     /upstreamTouched\.value = wizardForm\.upstreams\.map\(\(\) => true\)/,
     '提交门须与步进门同口径（先全量置 touched 再判定）',
   )
+  // i18n 后双钉:调用点钉键,zh 母本钉文案原文(任一漂移必红)
+  assert.ok(
+    code('src/locales/zh/rules.ts').includes("upHostsRequired: '请填写所有已启用上游服务器的主机地址与端口'"),
+    '上游完整性门文案必须在 zh 母本词条中',
+  )
   assert.match(
     body,
-    /if \(wizardForm\.upstreams\.some\(\(u, i\) => upstreamRowInvalid\(u, i\)\)\) \{\s*ElMessage\.warning\(upstreamFieldWarning\.value \|\| '请填写所有已启用上游服务器的主机地址与端口'\)/,
+    /if \(wizardForm\.upstreams\.some\(\(u, i\) => upstreamRowInvalid\(u, i\)\)\) \{\s*ElMessage\.warning\(upstreamFieldWarning\.value \|\| t\('common\.app\.rules\.msgs\.upHostsRequired'\)\)/,
     '缺 host/port 门时空行会被载荷过滤静默剔除，保存「成功」但规则少了上游',
   )
   // 谓词两腿：host 与 port 缺一即无效（端口清空曾不报错也不进载荷）
@@ -70,7 +75,12 @@ test('C 三个辅助端点失败有错误态 + 横幅重试（不再仅 console�
   // 否则纯样式改动会被误判成回归。
   assert.match(
     page,
-    /v-if="certConfigsLoadError" class="form-tip-line port-warning">DNS 提供商配置加载失败/,
+    /v-if="certConfigsLoadError" class="form-tip-line port-warning">\{\{ t\('common\.app\.rules\.msgs\.dnsConfigLoadFail'\) \}\}/,
+  )
+  // i18n 后双钉:zh 母本钉文案原文(键改名后原断言不至空转)
+  assert.ok(
+    code('src/locales/zh/rules.ts').includes('DNS 提供商配置加载失败'),
+    'DNS 提供商配置加载失败文案必须在 zh 母本词条中',
   )
   for (const fetchName of ['fetchUsers', 'fetchCertConfigs', 'fetchCAProviders']) {
     const fn = section(page, `const ${fetchName} = async`, '\n}\n')
@@ -168,9 +178,14 @@ test('G 自定义路由提交门镜像步进门（空清单不得落 custom_rout
   const body = section(page, 'const submitWizard = async', 'const data: UpdateRuleRequest')
   const gate = section(body, "if (wizardForm.protocol === 'http' && wizardForm.custom_routes_enabled) {", 'const pathRuleError = validatePathRules')
   assert.match(gate, /wizardForm\.path_rules\.length === 0/, '空清单必须先于形状校验被拦下')
-  assert.match(gate, /请至少添加一条路径规则/, '与步进门同文案')
+  // i18n 后双钉:调用点钉键,zh 母本钉文案原文(任一漂移必红)
+  assert.ok(
+    code('src/locales/zh/rules.ts').includes("pathRuleRequired: '请至少添加一条路径规则'"),
+    '路径规则门文案必须在 zh 母本词条中',
+  )
+  assert.match(gate, /t\('common\.app\.rules\.msgs\.pathRuleRequired'\)/, '与步进门同文案')
   const next = section(page, 'const nextStep = ', 'const prevStep = ')
-  assert.match(next, /请至少添加一条路径规则/, '步进门仍在（两门同口径）')
+  assert.match(next, /t\('common\.app\.rules\.msgs\.pathRuleRequired'\)/, '步进门仍在（两门同口径）')
 })
 
 test('H 规则名称与后端 100 字符门同源（不再过确认才 400）', () => {
@@ -200,13 +215,29 @@ test('I 负载策略卡与流程入口键盘可达', () => {
 })
 
 test('J 上游行内控件与图标按钮带可访问名（含行序）', () => {
-  for (const label of ['主机地址', '端口', '协议', '回源域名', '权重（%）', '启用']) {
-    assert.match(page, new RegExp(`上游第 \\$\\{\\$index \\+ 1\\} 行${label}`), `缺 ${label} 的 aria-label`)
+  // i18n 后双钉:逐行可访问名走 t() 键,zh 母本钉同款原文(任一漂移必红)
+  const zhLexicon = code('src/locales/zh/rules.ts')
+  for (const [key, literal] of [
+    ['upstreamRowHost', '上游第 {rowNumber} 行主机地址'],
+    ['upstreamRowPort', '上游第 {rowNumber} 行端口'],
+    ['upstreamRowProtocol', '上游第 {rowNumber} 行协议'],
+    ['upstreamRowOriginDomain', '上游第 {rowNumber} 行回源域名'],
+    ['upstreamRowWeight', '上游第 {rowNumber} 行权重（%）'],
+    ['upstreamRowEnable', '上游第 {rowNumber} 行启用'],
+  ] as const) {
+    assert.match(
+      page,
+      new RegExp(`aria-label="t\\('common\\.app\\.rules\\.wizard\\.${key}', \\{ rowNumber: \\$index \\+ 1 \\}\\)"`),
+      `缺 ${key} 的 aria-label`,
+    )
+    assert.ok(zhLexicon.includes(`${key}: '${literal}'`), `${key} 原文必须在 zh 母本词条中`)
   }
   // 最大连接/请求数按协议换词，仍是逐行名称
-  assert.match(page, /上游第 \$\{\$index \+ 1\} 行\$\{wizardForm\.protocol === 'tcp' \? '最大连接' : '最大请求数'\}/)
+  assert.match(page, /upRowField', \{ row: \$index \+ 1, field: wizardForm\.protocol === 'tcp' \? t\('common\.app\.rules\.wizard\.maxConnections'\) : t\('common\.app\.rules\.wizard\.maxRequests'\) \}\)/)
+  assert.ok(zhLexicon.includes("upRowField: '上游第 {row} 行{field}'"), 'upRowField 原文必须在 zh 母本词条中')
   // 图标记删除按钮 N 行同名 → 必须带行序
-  assert.match(page, /:aria-label="`删除上游第 \$\{\$index \+ 1\} 行`"/)
+  assert.match(page, /:aria-label="t\('common\.app\.rules\.wizard\.deleteUpstreamRow', \{ rowNumber: \$index \+ 1 \}\)"/)
+  assert.ok(zhLexicon.includes("deleteUpstreamRow: '删除上游第 {rowNumber} 行'"), 'deleteUpstreamRow 原文必须在 zh 母本词条中')
 })
 
 test('K TLS 证书详情重试成功后触发解析（验证块与预览不得留空）', () => {
@@ -218,11 +249,11 @@ test('K TLS 证书详情重试成功后触发解析（验证块与预览不得�
 })
 
 test('L 预览覆盖高级步全部可编辑项（请求体/Keepalive/代理超时/强制 HTTP1）', () => {
-  const preview = section(page, 'title="配置预览"', '</el-descriptions>')
-  assert.match(preview, /label="请求体大小"/, '请求体大小 0=全局默认的特殊语义必须可核')
-  assert.match(preview, /label="Keepalive 超时"/)
-  assert.match(preview, /label="代理超时"/)
-  assert.match(preview, /label="强制 HTTP\/1\.1"/)
+  const preview = section(page, ":title=\"t('common.app.rules.cfg.previewTitle')\"", '</el-descriptions>')
+  assert.match(preview, /:label="t\('common\.app\.rules\.wizard\.bodySize'\)"/, '请求体大小 0=全局默认的特殊语义必须可核')
+  assert.match(preview, /:label="t\('common\.app\.rules\.wizard\.keepaliveTimeout'\)"/)
+  assert.match(preview, /:label="t\('common\.app\.rules\.wizard\.proxyTimeout'\)"/)
+  assert.match(preview, /:label="t\('common\.app\.rules\.wizard\.forceHttp11'\)"/)
   // 代理超时七项不另造第二份清单：摘要取自字段单源
   assert.match(preview, /\{\{ proxyTimeoutSummary\(wizardForm\) \}\}/)
 

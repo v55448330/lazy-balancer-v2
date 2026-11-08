@@ -118,3 +118,41 @@ test('首帧即处于状态加载中，禁止 is_master 初值触发徽章闪现
   const page = code('src/views/security/SecurityEvents.vue')
   assert.match(page, /const autobanStatusLoading = ref\(true\)/)
 })
+
+// ── 批次 D(autoban 域)双钉:状态标签与名单剩余时长文案 i18n 接线 ──
+// 调用点钉键(common.app.views.autoban.*),zh 母本(locales/zh/views.ts)钉原文;
+// 非 settings 族钉,批次 F 重做面不覆盖本文件。
+
+import { tSafe } from '../src/i18n/tSafe.ts'
+import { existsSync } from 'node:fs'
+
+const autoban = (key: string, params?: Record<string, unknown>): string =>
+  tSafe(`common.app.views.autoban.${key}`, params)
+
+test('autoban 文案走 i18n 单键(调用点钉键):状态四态 + 剩余时长三档', () => {
+  const statusUtil = code('src/utils/autobanStatus.ts')
+  for (const key of ['stateUnknown', 'stateNotEnabled', 'stateDryRun', 'stateRunning']) {
+    assert.ok(statusUtil.includes(`common.app.views.autoban.${key}`), `autobanStateLabel 必须消费 autoban.${key} 词条键`)
+  }
+  assert.doesNotMatch(statusUtil, /'[状态观运][态察行]?'/, '状态标签不得再写中文文案字面量(词条外第二份)')
+  const entryUtil = code('src/utils/autobanEntry.ts')
+  for (const key of ['remainingMinutes', 'remainingHoursMinutes', 'remainingDaysHours']) {
+    assert.ok(entryUtil.includes(`common.app.views.autoban.${key}`), `autobanEntryRemaining 必须消费 autoban.${key} 词条键`)
+  }
+  // 行为相位:键解析为 zh 原文(解析失败=键漂移)
+  assert.equal(autoban('stateUnknown'), '状态未知')
+  assert.equal(autoban('stateNotEnabled'), '未启用')
+  assert.equal(autoban('stateDryRun'), '观察模式')
+  assert.equal(autoban('stateRunning'), '运行中')
+  assert.equal(autoban('remainingMinutes', { count: 0 }), '0 分钟')
+  assert.equal(autoban('remainingHoursMinutes', { hours: 3, minutes: 5 }), '3 小时 5 分')
+  assert.equal(autoban('remainingDaysHours', { days: 2, hours: 5 }), '2 天 5 时')
+})
+
+test('autoban 词条 zh 母本钉(逐字)', () => {
+  assert.ok(existsSync(new URL('../src/locales/zh/views.ts', import.meta.url)), '词条母本 src/locales/zh/views.ts 未落库(integrator 接线)')
+  const zhLexicon = code('src/locales/zh/views.ts')
+  for (const text of ['状态未知', '未启用', '观察模式', '运行中', '{count} 分钟', '{hours} 小时 {minutes} 分', '{days} 天 {hours} 时']) {
+    assert.ok(zhLexicon.includes(text), `autoban 词条 zh 原文「${text}」必须在母本中`)
+  }
+})

@@ -24,7 +24,9 @@ test('归一还原反馈 moveSelfInChain：归一还原分支给 info 反馈，�
   const move = section(page, 'const moveSelfInChain', 'interface MigratePolicyResult')
   // 归一还原检测：交换后 normalizeOrder 逐位比较未变 = 相邻 stage0×非 stage0
   assert.match(move, /JSON\.stringify\(normalizeOrder\(next\)\) === JSON\.stringify\(normalizeOrder\(order\)\)/)
-  assert.match(move, /ElMessage\.info\('相邻为信任名单策略（阶段 0 恒置顶），交换不改变触发顺序'\)/)
+  // i18n 后双钉:调用点钉键,zh 母本钉原文(任一漂移必红)
+  assert.match(move, /ElMessage\.info\(t\('app\.security\.policies\.msg\.swapNoop'\)\)/)
+  assert.ok(code('src/locales/zh/security.ts').includes('相邻为信任名单策略（阶段 0 恒置顶），交换不改变触发顺序'), '归一还原反馈原文必须在 zh 母本词条中')
   // 保留现状行为：暂存照常写入（不硬禁用按钮、不阻断操作）
   assert.match(move, /bindingOrderEdits\.value = \{ \.\.\.bindingOrderEdits\.value, \[caddyId\]: next \}/)
 })
@@ -38,9 +40,11 @@ test('区间 ghost 释义 排除目标 ghost：区间遗留形态补释义 title
   const ghostTitle = section(page, 'const exclusionRowGhostTitle', 'const crsFieldsOff')
   assert.match(page, /const CRS_RANGE_TARGET_RE = \/\^\(\\d\{6\}\)\\s\*\[-:\]\\s\*\(\\d\{6\}\)\$\//, '区间形态判定须单源共用（6 位数字区间，含 [-:] 分隔）')
   assert.match(ghostTitle, /CRS_RANGE_TARGET_RE\.test\(v\)/)
-  assert.match(ghostTitle, /按字面保存/)
-  assert.match(ghostTitle, /不展开.{0,6}组内 ID|不展开为规则组内全部规则 ID/)
-  assert.match(ghostTitle, /作用域/)
+  // i18n 后:释义文案走词条,调用点钉键,zh 母本钉三段措辞原文(措辞漂移仍必红)
+  assert.match(ghostTitle, /return t\('app\.security\.policies\.waf\.rangeGhostTitle'\)/)
+  assert.ok(code('src/locales/zh/security.ts').includes('按字面保存'), '区间 ghost 措辞(按字面保存)必须在 zh 母本词条中')
+  assert.ok(code('src/locales/zh/security.ts').includes('不展开为规则组内全部规则 ID'), '区间 ghost 措辞(不展开组内 ID)必须在 zh 母本词条中')
+  assert.ok(code('src/locales/zh/security.ts').includes('作用域'), '区间 ghost 措辞(作用域)必须在 zh 母本词条中')
 })
 
 test('去重键归一 排除行去重键：ips/listRefs 排序后参与键，载荷保持输入序', () => {

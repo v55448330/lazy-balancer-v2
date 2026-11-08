@@ -80,14 +80,14 @@ test('重签禁用面收敛：只读与退役仍禁用，冷却不再禁用', ()
   const page = code('src/views/settings/CertJobs.vue')
   const fn = section(page, 'const retryDisabledReason', '\n}')
   assert.match(fn, /readOnlyMessage/, '只读仍禁用')
-  assert.match(fn, /已禁用的任务无法重签/, '退役（disabled）仍禁用')
+  assert.match(fn, /app\.settings\.certJobs\.disabledNoRenew/, '退役（disabled）仍禁用')
   assert.doesNotMatch(fn, /需等待/, '冷却禁用文案必须退役')
   assert.doesNotMatch(fn, /当前状态暂不可重签/, 'null 契约形态随禁用逻辑一并退役')
 })
 
 test('重签松绑：冷却中可点且确认弹框含配额警示；就绪判定工具退役', () => {
   const page = code('src/views/settings/CertJobs.vue')
-  assert.match(page, /当前处于重试冷却期，重签将立即尝试并消耗 CA 配额/, '冷却中重签确认弹框必须明示 CA 配额消耗')
+  assert.match(page, /app\.settings\.certJobs\.confirmCooldown/, '冷却中重签确认弹框必须明示 CA 配额消耗')
   assert.doesNotMatch(page + code('src/views/settings/TaskMonitor.vue'), /certJobRetryReady/, '退役工具不得回潮')
 })
 
@@ -230,18 +230,18 @@ test('双标签 dismiss 不互覆：save 前重读 localStorage 合并', () => {
 test('CertJobs.vue 消费面接线：派生 hover/failed-only 重试列/冷却列档位/横幅指纹', () => {
   const page = code('src/views/settings/CertJobs.vue')
   // 状态列：标签与 hover 都走派生单源（SFC 侧薄包装与 renewalAt/statusType 同约定）
-  const statusCol = section(page, 'label="状态"', '</el-table-column>')
+  const statusCol = section(page, "t('app.settings.certJobs.colStatus')", '</el-table-column>')
   assert.match(statusCol, /rowStatusLabel\(row(?: as [A-Za-z]+)?\)/, '状态标签必须走细分单源包装')
   assert.match(page, /const rowStatusLabel[^\n]*certJobRowStatusLabel\(/, '包装必须委托细分单源')
   assert.match(statusCol, /:content="statusHover\(row(?: as [A-Za-z]+)?\)"/, '状态 hover 必须走派生单源')
   assert.doesNotMatch(statusCol, /row\.message/, '状态列模板不得直接消费 message（CA 原文）')
   // 重试次数列：仅终态失败显示 N
-  const attemptsCol = section(page, 'label="重试次数"', '</el-table-column>')
+  const attemptsCol = section(page, "t('app.settings.certJobs.colRetries')", '</el-table-column>')
   assert.match(attemptsCol, /attemptsCell\(row(?: as [A-Za-z]+)?\)/)
   const attemptsFn = member(code('src/views/settings/CertJobs.vue'), 'const attemptsCell')
   assert.match(attemptsFn, /row\.status === 'failed'/, '重试次数仅终态失败显示')
   // 冷却列：failed 档位形态
-  const coolingCol = section(page, 'label="冷却时间"', '</el-table-column>')
+  const coolingCol = section(page, "t('app.settings.certJobs.colCooling')", '</el-table-column>')
   assert.match(coolingCol, /coolingCell\(row(?: as [A-Za-z]+)?\)/)
   const coolingFn = member(code('src/views/settings/CertJobs.vue'), 'const coolingCell')
   assert.match(coolingFn, /certJobCooldownCell\(/, 'failed 行冷却值必须走档位单源')
