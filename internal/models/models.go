@@ -855,7 +855,10 @@ type HostMetrics struct {
 }
 
 type APIResponse struct {
-	Code    int         `json:"code"`
-	Message string      `json:"message"`
-	Data    interface{} `json:"data,omitempty"`
+	Code    int    `json:"code"`
+	Message string `json:"message"`
+	// MessageKey 稳定语义键(i18n codemod 生成):前端本地词表优先、
+	// 缺译回落 message 原文。老客户端零感知(omitempty)。
+	MessageKey string      `json:"message_key,omitempty"`
+	Data       interface{} `json:"data,omitempty"`
 }

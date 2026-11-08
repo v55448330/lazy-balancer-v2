@@ -788,6 +788,9 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 
 	// CORS
 	r.Use(corsMiddleware())
+	// 语言协商:i18n.Negotiate 解析 Accept-Language 注入 gin 上下文
+	// (i18n.Msg/TrErr 取用),响应回写 Content-Language 供前端对账。
+	r.Use(i18nMiddleware())
 	// 压缩中间件为本项目实现（internal/middleware/gzip.go）：错误/无体响应保留
 	// Vary，避免把 CORS 的 Vary: Origin 一起删掉。
 	r.Use(gzipMiddleware())
