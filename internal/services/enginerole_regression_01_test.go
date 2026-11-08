@@ -103,7 +103,7 @@ func TestPromote_lifecycleStartsOnlyThroughEngine(t *testing.T) {
 	}
 
 	// Then：StartACME 只能由 cert-issuance daemon 调一次，不得再有直调旁路。
-	// 条件窗 5s（全量套件并发下 goroutine 调度延迟可超 2s，实测 audit133
+	// 条件窗 5s（全量套件并发下 goroutine 调度延迟可超 2s，实测校准
 	// 发布门禁全量跑间歇红而包级/单跑恒绿）+ 短窗稳定性断言。
 	waitForCond(t, 5*time.Second, func() bool { return probe.acmeStarts.Load() == 1 })
 	assertCounterStable(t, &probe.acmeStarts, 1, 100*time.Millisecond)

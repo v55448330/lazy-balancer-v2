@@ -9,6 +9,7 @@ package mcpserver
 
 import (
 	"encoding/json"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -92,17 +93,22 @@ func TestUserToolSchemasMatchPasswordAndUsernamePolicy(t *testing.T) {
 // 保护文案从 handlers 的实现字面量派生（AST 字面量面，注释不计），两侧漂移即红。
 func TestUserToolsDocumentSetupAdminProtection(t *testing.T) {
 	source := readHandlerCodeText(t, "users.go")
+	// i18n 迁移后双钉:调用点钉 message_key,catalog 钉 zh 母本(文案漂移任一侧必红)
 	for _, tc := range []struct {
-		tool  string
-		guard string // handlers 实现里的 400 文案
-		verb  string // MCP 侧必须点名的保护动作
+		tool string
+		key  string // handlers 实现里的 message_key
+		zh   string // catalog 母本
+		verb string // MCP 侧必须点名的保护动作
 	}{
-		{"update_user", "初始管理员不可降级", "降级"},
-		{"toggle_user_status", "初始管理员不可禁用", "禁用"},
-		{"delete_user", "初始管理员不可删除", "删除"},
+		{"update_user", "k_e006c462", "初始管理员不可降级", "降级"},
+		{"toggle_user_status", "k_d7b79496", "初始管理员不可禁用", "禁用"},
+		{"delete_user", "k_93ea00a0", "初始管理员不可删除", "删除"},
 	} {
-		if !strings.Contains(source, tc.guard) {
-			t.Errorf("handlers/users.go 未出现保护文案 %q（派生单源已漂移）", tc.guard)
+		if !strings.Contains(source, tc.key) {
+			t.Errorf("handlers/users.go 未使用保护键 %s（%s 派生单源已漂移）", tc.key, tc.zh)
+		}
+		if catalog := catalogZh(); !strings.Contains(catalog, `Register("`+tc.key+`", "`+tc.zh+`"`) {
+			t.Errorf("catalog 母本漂移:%s", tc.zh)
 		}
 		var spec toolSpec
 		found := false
@@ -118,8 +124,20 @@ func TestUserToolsDocumentSetupAdminProtection(t *testing.T) {
 		usage := toolUsage[tc.tool]
 		for label, text := range map[string]string{"description": spec.description, "usage": usage} {
 			if !strings.Contains(text, "初始化管理员") || !strings.Contains(text, tc.verb) {
-				t.Errorf("%s 的 %s=%q 未提示「初始化管理员不可%s」（对应 400 %q）", tc.tool, label, text, tc.verb, tc.guard)
+				t.Errorf("%s 的 %s=%q 未提示「初始化管理员不可%s」（对应 400 %q）", tc.tool, label, text, tc.verb, tc.zh)
 			}
 		}
 	}
+}
+
+// catalogZh 读 catalog 母本源(测试进程相对仓根运行;路径漂移时显性报错)。
+func catalogZh() string {
+	b, err := os.ReadFile("../../internal/i18n/catalog_gen.go")
+	if err != nil {
+		b, err = os.ReadFile("internal/i18n/catalog_gen.go")
+	}
+	if err != nil {
+		return ""
+	}
+	return string(b)
 }

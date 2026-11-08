@@ -295,7 +295,7 @@ func TestUpdateCertificateConfig_sameFamilyBareTokenKeptOnDnspodSubmit(t *testin
 	assertStoredCredentialFields(t, id, nil, map[string]string{"api_token": "legacy-id,legacy-tok", "app_id": "new-id"})
 }
 
-// 跨族掩码继承守卫（CERT135-1）：dnspod 存量（裸 api_token 形态）+ provider
+// 跨族掩码继承守卫：dnspod 存量（裸 api_token 形态）+ provider
 // 切换 cloudflare + 表单回传掩码 api_token → merged 携带旧族 token，保存必须
 // 400 点名（fail-visible），不得静默沿用旧族凭据。
 func TestUpdateRuleCredentials_rejectsCrossFamilyMaskedInheritance(t *testing.T) {

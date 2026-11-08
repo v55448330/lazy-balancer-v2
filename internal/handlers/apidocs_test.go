@@ -2023,17 +2023,19 @@ func TestAPIDocs_setupAdminProtectionRejectionsDocumented(t *testing.T) {
 	if err != nil {
 		t.Fatalf("读 users.go: %v", err)
 	}
+	// i18n 后双钉:调用点钉 message_key,catalog 钉 zh 母本
 	for _, want := range []struct {
 		route    string
+		key      string
 		message  string
 		keywords []string
 	}{
-		{"PUT /users/:id", "初始管理员不可降级", []string{"不可降级"}},
-		{"PUT /users/:id/status", "初始管理员不可禁用", []string{"不可禁用"}},
-		{"DELETE /users/:id", "初始管理员不可删除", []string{"不可删除"}},
+		{"PUT /users/:id", "k_e006c462", "初始管理员不可降级", []string{"不可降级"}},
+		{"PUT /users/:id/status", "k_d7b79496", "初始管理员不可禁用", []string{"不可禁用"}},
+		{"DELETE /users/:id", "k_93ea00a0", "初始管理员不可删除", []string{"不可删除"}},
 	} {
-		if !strings.Contains(string(source), want.message) {
-			t.Errorf("users.go 未出现保护文案 %q（实现与文档对账的单源已漂移）", want.message)
+		if !strings.Contains(string(source), want.key) {
+			t.Errorf("users.go 未使用保护键 %s（%s 实现与文档对账的单源已漂移）", want.key, want.message)
 		}
 		route := routesEntry(t, want.route)
 		entry, ok := "", false
@@ -3063,7 +3065,8 @@ func TestAPIDocs_proxyProtocolSemanticsFaceConsistency(t *testing.T) {
 		"server.go":   "绑定了安全策略的 TCP 规则解析入站 PROXY 头",
 	}
 	sources := map[string]string{
-		"Rules.vue":   readFace(filepath.Join("..", "..", "web", "src", "views", "Rules.vue")),
+		// i18n 后面板向导文案单源=rules.ts zh 母本(措辞漂移仍会被钉住)
+		"Rules.vue":   readFace(filepath.Join("..", "..", "web", "src", "locales", "zh", "rules.ts")),
 		"playbook.md": readFace(filepath.Join("..", "mcpserver", "playbook.md")),
 		"安全文档":        readFace(filepath.Join("..", "..", "docs", "security.zh-CN.md")),
 		"apidocs":     routesEntry(t, "GET /rules").Description,
@@ -3206,10 +3209,17 @@ func TestAPIDocs_ntlmUpstreamCombinationDisclosureParity(t *testing.T) {
 		"POST /rules":          routesEntry(t, "POST /rules").Description,
 		"PUT /rules/:caddy_id": routesEntry(t, "PUT /rules/:caddy_id").Description,
 		"MCP schema":           readFace(filepath.Join("..", "mcpserver", "server.go")),
-		"面板向导":                 readFace(filepath.Join("..", "..", "web", "src", "views", "Rules.vue")),
+		// i18n 后面板向导文案单源=rules.ts zh 母本
+		"面板向导": readFace(filepath.Join("..", "..", "web", "src", "locales", "zh", "rules.ts")),
 	}
+	// i18n 后:代码标识符钉 Rules.vue 本体;叙述文案钉 rules.ts zh 母本
+	faces["面板向导代码面"] = readFace(filepath.Join("..", "..", "web", "src", "views", "Rules.vue"))
+	codeFragments := map[string]bool{"ntlm_compatible": true, "origin_domain": true}
 	for name, text := range faces {
 		for _, fragment := range []string{"ntlm_compatible", "origin_domain", "后端将拒绝（400）", "TLS 直连通道", "NTLM 长连接亲和失效", "连接不回收"} {
+			if codeFragments[fragment] != (name == "面板向导代码面") {
+				continue // 标识符只钉代码面;叙述文案只钉词条面
+			}
 			if !strings.Contains(text, fragment) {
 				t.Errorf("%s 缺 NTLM 危险组合硬拒披露 %q", name, fragment)
 			}
@@ -3273,6 +3283,34 @@ func TestAPIDocs_certJobRetryCauseEnumerationParity(t *testing.T) {
 			exits = append(exits, rejection{code: code, message: m[2]})
 		}
 	}
+	// i18n 迁移:出口消息=apimsg.T(c,"k_x") 的,以 catalog_gen.go 的 zh 母本回填
+	catalogSrc, catErr := os.ReadFile(filepath.Join("..", "i18n", "catalog_gen.go"))
+	if catErr != nil {
+		t.Fatalf("读 catalog 母本失败: %v", catErr)
+	}
+	catalogZh := func(key string) string {
+		m := regexp.MustCompile(`Register\("` + key + `", "([^"]+)"`).FindStringSubmatch(string(catalogSrc))
+		if m == nil {
+			return ""
+		}
+		return m[1]
+	}
+	extractKeyed := func(src, pattern string) {
+		for _, m := range regexp.MustCompile(pattern).FindAllStringSubmatch(src, -1) {
+			code := m[1]
+			if alias, ok := codeAlias[code]; ok {
+				code = alias
+			}
+			zh := catalogZh(m[2])
+			if zh == "" {
+				t.Fatalf("出口键 %s 未登记进 catalog(措辞单源漂移)", m[2])
+			}
+			exits = append(exits, rejection{code: code, message: zh})
+		}
+	}
+	extractKeyed(body, `Code: (409|500|http\.StatusConflict|http\.StatusInternalServerError), Message: apimsg\.T\([^,]+, "(k_[a-f0-9]+)"\)`)
+	extractKeyed(cooldownBody, `return true, (http\.StatusConflict), apimsg\.T\([^,]+, "(k_[a-f0-9]+)"\)`)
+	extractKeyed(deployBody, `return (http\.StatusConflict|http\.StatusInternalServerError), apimsg\.T\([^,]+, "(k_[a-f0-9]+)"\)`)
 	extract(body, `Code: (409|500|http\.StatusConflict|http\.StatusInternalServerError), Message: "([^"]+)"`)
 	extract(cooldownBody, `return true, (http\.StatusConflict), "([^"]+)"`)
 	extract(deployBody, `return (http\.StatusConflict|http\.StatusInternalServerError), "([^"]+)"`)
@@ -3372,7 +3410,7 @@ func TestAPIDocs_ruleUpdate_certJobActiveDisclosure(t *testing.T) {
 	}
 }
 
-// 端口/协议语义门三面 parity（audit135）：REST 描述句、MCP schema description、
+// 端口/协议语义门三面 parity：REST 描述句、MCP schema description、
 // 后端实现（checkPortTLSMix 400 文案）三面必须同步——任一面漂移即红。
 // 覆盖：明文 HTTP 禁 443、TLS 禁 80、同端口跳转 301/白名单外 400、443 豁免。
 func TestAPIDocs_portSemanticGateThreeFaceParity(t *testing.T) {
@@ -3411,7 +3449,7 @@ func TestAPIDocs_portSemanticGateThreeFaceParity(t *testing.T) {
 	}
 }
 
-// /rules 列表示例键集 ⊆ models.Rule 实投影（audit135 APIMCP135-4）：示例为
+// /rules 列表示例键集 ⊆ models.Rule 实投影：示例为
 // 节选投影，不得出现实现不存在的幻影键；节选语义由行内「示例为节选投影」
 // 标注承载（有键集门防幻影，完整性由详情端点承担）。
 func TestAPIDocs_rulesListExampleKeysAreSubsetOfImplementation(t *testing.T) {

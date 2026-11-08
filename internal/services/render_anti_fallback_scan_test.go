@@ -137,7 +137,7 @@ var antiFallbackAllowlist = map[string]map[string]string{
 		"domains":	domains,
 	},
 	map[string]interface{}{"wrapper": "tls"},
-}`:                   "TLS 端口同端口跳转包装器：开启跳转规则的域名并集驱动挂载（库值发射面）——Ruling 2026-11-08",
+}`: "TLS 端口同端口跳转包装器：开启跳转规则的域名并集驱动挂载（库值发射面）——Ruling 2026-11-08",
 	},
 	"trustedProxyServerFields": {
 		`degraded = "受信代理已启用但没有任何有效网段（内联条目全部非法/过宽，或引用名单为空/全部悬空）：真实 IP 还原未生效，依赖真实 IP 的 IP 访问控制/限流/GeoIP 均按回源地址判定"`: "受信代理 enabled=1 但零有效网段：这是用户可见降级信号文案（字段形态不变，仅附加提示），不是用默认值替换无效库值；写侧允许该形态且需显性告知——Ruling 2026-10-28",
