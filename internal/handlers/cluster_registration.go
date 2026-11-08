@@ -11,6 +11,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"lazy-balancer-v2/internal/apimsg"
 	"lazy-balancer-v2/internal/models"
 	"lazy-balancer-v2/internal/services"
 )
@@ -58,7 +59,7 @@ func (h *Handlers) GenerateClusterRegisterToken(c *gin.Context) {
 		return
 	}
 	recordAudit(c, "生成", "注册令牌", services.FormatAuditDetail(fmt.Sprintf("有效期至：%s", expiresAt.UTC().Format("2006-01-02 15:04:05 UTC")), services.AuditResultPart("success")))
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "注册令牌已生成，仅显示一次", Data: gin.H{"token": token, "expires_at": expiresAt.UTC().Format(time.RFC3339)}})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_9fc1e233"), MessageKey: "k_9fc1e233", Data: gin.H{"token": token, "expires_at": expiresAt.UTC().Format(time.RFC3339)}})
 }
 
 func (h *Handlers) RegisterClusterNode(c *gin.Context) {
@@ -187,7 +188,7 @@ func (h *Handlers) GetClusterRegistrationStatus(c *gin.Context) {
 		clusterError(c, http.StatusInternalServerError, "查询注册状态失败", err)
 		return
 	}
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "注册状态查询成功", Data: status})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_98221b20"), MessageKey: "k_98221b20", Data: status})
 }
 
 func (h *Handlers) ConfirmClusterRegistration(c *gin.Context) {
@@ -219,7 +220,7 @@ func (h *Handlers) ConfirmClusterRegistration(c *gin.Context) {
 		return
 	}
 	services.RecordAuditLog("system", "确认", "集群节点", services.FormatAuditDetail(fmt.Sprintf("节点 %s", nodeName), "注册密钥已失效", services.AuditResultPart("success")), c.ClientIP())
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "集群注册已确认"})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_e0e46090"), MessageKey: "k_e0e46090"})
 }
 
 func (h *Handlers) ApproveClusterNode(c *gin.Context) {
@@ -295,7 +296,7 @@ func (h *Handlers) UpdateClusterNodeSiteCoordinates(c *gin.Context) {
 		fmt.Sprintf("节点 %d", id),
 		fmt.Sprintf("站点坐标：纬度 %.4f，经度 %.4f", *req.ServerMapLat, *req.ServerMapLon),
 		services.AuditResultPart("success")))
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "节点站点坐标已保存", Data: gin.H{
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_fc52663d"), MessageKey: "k_fc52663d", Data: gin.H{
 		"server_map_lat": *req.ServerMapLat,
 		"server_map_lon": *req.ServerMapLon,
 	}})

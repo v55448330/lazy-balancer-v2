@@ -5,6 +5,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"lazy-balancer-v2/internal/apimsg"
 	"lazy-balancer-v2/internal/mcpserver"
 	"lazy-balancer-v2/internal/models"
 )
@@ -12,8 +13,8 @@ import (
 func (h *Handlers) GetMCPTools(c *gin.Context) {
 	c.JSON(http.StatusOK, models.APIResponse{
 		Code:    0,
-		Message: "查询成功",
-		Data:    mcpserver.ListToolSpecs(),
+		Message: apimsg.T(c, "k_02835350"), MessageKey: "k_02835350",
+		Data: mcpserver.ListToolSpecs(),
 	})
 }
 

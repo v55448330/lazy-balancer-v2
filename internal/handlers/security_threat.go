@@ -7,6 +7,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"lazy-balancer-v2/internal/apimsg"
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
 	"lazy-balancer-v2/internal/services"
@@ -112,7 +113,7 @@ func (h *Handlers) UpdateThreatAutoUpdate(c *gin.Context) {
 		return
 	}
 	recordAudit(c, "更新", "威胁情报库", "自动更新总开关："+enabledStateLabel(autoUpdate))
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "已更新"})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_573eb966"), MessageKey: "k_573eb966"})
 }
 
 // UpdateThreatSchedule 任务级排程保存（弹框「定时更新」区；镜像
@@ -124,7 +125,7 @@ func (h *Handlers) UpdateThreatSchedule(c *gin.Context) {
 		return
 	}
 	recordAudit(c, "更新", "威胁情报库", fmt.Sprintf("定时更新设置：每周%s %s", scheduleDaysLabel(days), hhmm))
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "已更新"})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_573eb966"), MessageKey: "k_573eb966"})
 }
 
 // UpdateThreatSourceFlags 仅允许改 update_enabled——名单化后「应用」=

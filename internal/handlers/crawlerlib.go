@@ -6,6 +6,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"lazy-balancer-v2/internal/apimsg"
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
 	"lazy-balancer-v2/internal/services"
@@ -97,7 +98,7 @@ func (h *Handlers) StartCrawlerLibUpdate(c *gin.Context) {
 		return
 	}
 	if te.IsTaskInFlight(services.CrawlerTaskID) {
-		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "任务运行中，请稍后重试"})
+		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: apimsg.T(c, "k_723ca537"), MessageKey: "k_723ca537"})
 		return
 	}
 	op := auditOperator(c)
@@ -126,7 +127,7 @@ func (h *Handlers) UpdateCrawlerAutoUpdate(c *gin.Context) {
 		return
 	}
 	recordAudit(c, "更新", "爬虫地址库", "自动更新总开关："+enabledStateLabel(autoUpdate))
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "已更新"})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_573eb966"), MessageKey: "k_573eb966"})
 }
 
 // UpdateCrawlerSchedule 保存爬虫地址库独立排程并重排全部启用源。
@@ -136,7 +137,7 @@ func (h *Handlers) UpdateCrawlerSchedule(c *gin.Context) {
 		return
 	}
 	recordAudit(c, "更新", "爬虫地址库", fmt.Sprintf("定时更新设置：每周%s %s", scheduleDaysLabel(days), hhmm))
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "已更新"})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_573eb966"), MessageKey: "k_573eb966"})
 }
 
 // GetCrawlerLibUpdateStatus 爬虫地址库任务状态（直接读 crawlerbot-update

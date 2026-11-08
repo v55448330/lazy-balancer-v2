@@ -17,6 +17,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"lazy-balancer-v2/internal/apimsg"
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
 	"lazy-balancer-v2/internal/services"
@@ -34,10 +35,10 @@ func requireAPIKeyStepUp(c *gin.Context) bool {
 	decision, derr := DecideMFAStepUp(c, true, db.DB, services.MFAUserEnabled)
 	if derr != nil {
 		if errors.Is(derr, ErrMFAStepUpGuardUnreadable) {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "MFA 写操作验证开关读取失败"})
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_8ac165ea"), MessageKey: "k_8ac165ea"})
 			return true
 		}
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "MFA 状态查询失败"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_19ea8685"), MessageKey: "k_19ea8685"})
 		return true
 	}
 	if !decision.Applies {
@@ -115,18 +116,18 @@ func (h *Handlers) ListCurrentUserAPIKeys(c *gin.Context) {
 	// 与创建/更新/删除三入口同形的认证上下文门：缺身份时不得退化为
 	// created_by=0 的孤儿行查询（会话异常的前端应重登而非拿 200 空列表）。
 	if userID <= 0 {
-		c.JSON(http.StatusUnauthorized, models.APIResponse{Code: 401, Message: "认证上下文缺失"})
+		c.JSON(http.StatusUnauthorized, models.APIResponse{Code: 401, Message: apimsg.T(c, "k_b3459518"), MessageKey: "k_b3459518"})
 		return
 	}
 	rows, err := queryAPIKeys("WHERE k.created_by = ?", userID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "数据库错误"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_c9682421"), MessageKey: "k_c9682421"})
 		return
 	}
 	defer rows.Close()
 	keys, err := scanAPIKeys(rows)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "数据库错误"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_c9682421"), MessageKey: "k_c9682421"})
 		return
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: keys})
@@ -144,7 +145,7 @@ func (h *Handlers) DeleteCurrentUserAPIKey(c *gin.Context) {
 	// scopedUserID==0 在 deleteAPIKey 中表示「全局删除」；自助入口缺少
 	// 认证上下文时必须拒绝，不能退化成管理员级删除。
 	if userID <= 0 {
-		c.JSON(http.StatusUnauthorized, models.APIResponse{Code: 401, Message: "认证上下文缺失"})
+		c.JSON(http.StatusUnauthorized, models.APIResponse{Code: 401, Message: apimsg.T(c, "k_b3459518"), MessageKey: "k_b3459518"})
 		return
 	}
 	deleteAPIKey(c, userID)
@@ -166,7 +167,7 @@ func deleteAPIKey(c *gin.Context, scopedUserID int) {
 	}
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil || id <= 0 {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "ID 参数无效"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_deb33805"), MessageKey: "k_deb33805"})
 		return
 	}
 	where := "id = ?"
@@ -184,21 +185,21 @@ func deleteAPIKey(c *gin.Context, scopedUserID int) {
 	}
 	result, err := db.DB.Exec("DELETE FROM api_keys WHERE "+where, args...)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "删除 API 密钥失败"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_c359ad05"), MessageKey: "k_c359ad05"})
 		return
 	}
 	rows, err := result.RowsAffected()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "确认 API 密钥删除结果失败"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_3ef4b456"), MessageKey: "k_3ef4b456"})
 		return
 	}
 	if rows == 0 {
-		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "API 密钥不存在"})
+		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: apimsg.T(c, "k_d82bcb79"), MessageKey: "k_d82bcb79"})
 		return
 	}
 	recordAudit(c, "删除", "API密钥", services.FormatAuditDetail(fmt.Sprintf("密钥 %d", id), name))
 	purgeAPIKeyWhitelistCache(id)
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "API 密钥已删除"})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_1b27cea2"), MessageKey: "k_1b27cea2"})
 }
 
 func scanAPIKeys(rows *sql.Rows) ([]models.APIKeyWithUserResponse, error) {
@@ -237,7 +238,7 @@ func createAPIKeyForUser(c *gin.Context, userID int) {
 	// created_by=0 的孤儿 Key（配额按 0 计数，列表 JOIN users 隐藏它 →
 	// 不可见但可用）。生产链 jwtAuth/apiKeyAuth 必写 user_id，此为防御门。
 	if userID <= 0 {
-		c.JSON(http.StatusUnauthorized, models.APIResponse{Code: 401, Message: "认证上下文缺失"})
+		c.JSON(http.StatusUnauthorized, models.APIResponse{Code: 401, Message: apimsg.T(c, "k_b3459518"), MessageKey: "k_b3459518"})
 		return
 	}
 	// 导入窗口 409，先于解析 body。
@@ -249,7 +250,7 @@ func createAPIKeyForUser(c *gin.Context, userID int) {
 		return
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求格式错误"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_76de02a0"), MessageKey: "k_76de02a0"})
 		return
 	}
 	// 名称 TrimSpace 后非空且 ≤100 字符——空白名/超长名
@@ -257,11 +258,11 @@ func createAPIKeyForUser(c *gin.Context, userID int) {
 	// 审计出现不可读名;修剪后落库。重名不拒绝(既有产品决策保持)。
 	req.Name = strings.TrimSpace(req.Name)
 	if req.Name == "" {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "名称不能为空"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_751767f2"), MessageKey: "k_751767f2"})
 		return
 	}
 	if utf8.RuneCountInString(req.Name) > 100 {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "名称过长(上限 100 字符)"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_a713f534"), MessageKey: "k_a713f534"})
 		return
 	}
 	// 每用户配额 ≤50：此前无数量上限，普通用户可
@@ -271,7 +272,7 @@ func createAPIKeyForUser(c *gin.Context, userID int) {
 		req.ReadOnly = true
 	}
 	if req.ExpiresAt != nil && req.ExpiresAt.Before(time.Now()) {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "过期时间不能早于当前时间"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_34629623"), MessageKey: "k_34629623"})
 		return
 	}
 	// （2026-09 用户裁定）：特权 Key（非只读或 MCP）创建不验密码——API Key
@@ -297,13 +298,13 @@ func createAPIKeyForUser(c *gin.Context, userID int) {
 	}
 	whitelistJSON, err := encodeMCPIPWhitelist(whitelist)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "序列化 MCP IP 白名单失败"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_42f1000c"), MessageKey: "k_42f1000c"})
 		return
 	}
 
 	keyBytes := make([]byte, 32)
 	if _, err := rand.Read(keyBytes); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "生成 API 密钥失败"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_7bb663b6"), MessageKey: "k_7bb663b6"})
 		return
 	}
 	apiKey := "lb_sk_" + base64.URLEncoding.EncodeToString(keyBytes)[:32]
@@ -321,12 +322,12 @@ func createAPIKeyForUser(c *gin.Context, userID int) {
 		WHERE (SELECT COUNT(*) FROM api_keys WHERE created_by = ?) < ?
 	`, req.Name, keyHash, keyPrefix, userID, req.ExpiresAt, req.MCPEnabled, req.ReadOnly, whitelistJSON, userID, apiKeyMaxPerUser)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "创建 API 密钥失败"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_7a4f4b1c"), MessageKey: "k_7a4f4b1c"})
 		return
 	}
 	inserted, err := result.RowsAffected()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取创建结果失败"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_82e691f7"), MessageKey: "k_82e691f7"})
 		return
 	}
 	if inserted == 0 {
@@ -335,7 +336,7 @@ func createAPIKeyForUser(c *gin.Context, userID int) {
 	}
 	id, err := result.LastInsertId()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取新建 API 密钥 ID 失败"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_23096e05"), MessageKey: "k_23096e05"})
 		return
 	}
 	expiry := "永不过期"
@@ -363,13 +364,13 @@ func createAPIKeyForUser(c *gin.Context, userID int) {
 func (h *Handlers) ListAPIKeys(c *gin.Context) {
 	rows, err := queryAPIKeys("")
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "数据库错误"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_c9682421"), MessageKey: "k_c9682421"})
 		return
 	}
 	defer rows.Close()
 	keys, err := scanAPIKeys(rows)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "数据库错误"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_c9682421"), MessageKey: "k_c9682421"})
 		return
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: keys})
@@ -390,7 +391,7 @@ func updateAPIKeyStatus(c *gin.Context, currentUserOnly bool) {
 	}
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil || id <= 0 {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "ID 参数无效"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_deb33805"), MessageKey: "k_deb33805"})
 		return
 	}
 	userID := int(contextUserID(c))
@@ -398,7 +399,7 @@ func updateAPIKeyStatus(c *gin.Context, currentUserOnly bool) {
 	// 按 created_by=0 查询后回答「不存在」的 404（客户端无法区分未认证与
 	// 不存在，三入口契约须一致）。
 	if currentUserOnly && userID <= 0 {
-		c.JSON(http.StatusUnauthorized, models.APIResponse{Code: 401, Message: "认证上下文缺失"})
+		c.JSON(http.StatusUnauthorized, models.APIResponse{Code: 401, Message: apimsg.T(c, "k_b3459518"), MessageKey: "k_b3459518"})
 		return
 	}
 	var req models.UpdateAPIKeyRequest
@@ -406,15 +407,15 @@ func updateAPIKeyStatus(c *gin.Context, currentUserOnly bool) {
 		return
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求格式错误"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_76de02a0"), MessageKey: "k_76de02a0"})
 		return
 	}
 	if req.IsEnabled == nil && req.MCPEnabled == nil && req.ReadOnly == nil && req.MCPIPWhitelist == nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "至少需要提交一个字段"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_2e768bc2"), MessageKey: "k_2e768bc2"})
 		return
 	}
 	if currentUserOnly && c.GetString("role") != "admin" && req.ReadOnly != nil && !*req.ReadOnly {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "普通用户密钥必须为只读"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_d3abbbed"), MessageKey: "k_d3abbbed"})
 		return
 	}
 	if currentUserOnly && c.GetString("role") != "admin" {
@@ -438,7 +439,7 @@ func updateAPIKeyStatus(c *gin.Context, currentUserOnly bool) {
 		whitelistCount = len(whitelist)
 		encoded, err := encodeMCPIPWhitelist(whitelist)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "序列化 MCP IP 白名单失败"})
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_42f1000c"), MessageKey: "k_42f1000c"})
 			return
 		}
 		whitelistJSON = &encoded
@@ -449,7 +450,7 @@ func updateAPIKeyStatus(c *gin.Context, currentUserOnly bool) {
 	// 作用）；早退路径（404/step-up/更新失败/提交失败）由 defer 回滚兜住。
 	tx, err := db.DB.BeginTx(c.Request.Context(), nil)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "更新 API 密钥失败"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_8b56878d"), MessageKey: "k_8b56878d"})
 		return
 	}
 	committed := false
@@ -532,21 +533,21 @@ func updateAPIKeyStatus(c *gin.Context, currentUserOnly bool) {
 	}
 	result, err := tx.Exec(update, updateArgs...)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "更新 API 密钥失败"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_8b56878d"), MessageKey: "k_8b56878d"})
 		return
 	}
 	rows, err := result.RowsAffected()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "确认 API 密钥更新结果失败"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_8e6f9476"), MessageKey: "k_8e6f9476"})
 		return
 	}
 	if rows == 0 {
-		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "API 密钥不存在"})
+		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: apimsg.T(c, "k_d82bcb79"), MessageKey: "k_d82bcb79"})
 		return
 	}
 	// 提交先于审计：审计（独立 AuditDB 连接）不得记录可能随后回滚的变更。
 	if err := commitTx(tx); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "更新 API 密钥失败"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_8b56878d"), MessageKey: "k_8b56878d"})
 		return
 	}
 	committed = true
@@ -579,7 +580,7 @@ func updateAPIKeyStatus(c *gin.Context, currentUserOnly bool) {
 	if (req.IsEnabled != nil && !*req.IsEnabled) || req.MCPIPWhitelist != nil {
 		purgeAPIKeyWhitelistCache(id)
 	}
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "API 密钥已更新"})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_bf38ceaa"), MessageKey: "k_bf38ceaa"})
 }
 
 // apiKeyWhitelistCount 统计库内 IP 白名单条目数（审计 delta 用；字段名

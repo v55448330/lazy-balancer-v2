@@ -18,6 +18,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"lazy-balancer-v2/internal/apimsg"
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
 	"lazy-balancer-v2/internal/services"
@@ -767,24 +768,24 @@ func (h *Handlers) UpdateAutoBackupSettings(c *gin.Context) {
 		// 用户会去排查格式而不是体积（与同族端点 413 口径不一致）。
 		var maxBytesErr *http.MaxBytesError
 		if errors.As(err, &maxBytesErr) {
-			c.JSON(http.StatusRequestEntityTooLarge, models.APIResponse{Code: 413, Message: "请求体超过 16 KiB 上限"})
+			c.JSON(http.StatusRequestEntityTooLarge, models.APIResponse{Code: 413, Message: apimsg.T(c, "k_2d5c074c"), MessageKey: "k_2d5c074c"})
 			return
 		}
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求格式不正确"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_897112a9"), MessageKey: "k_897112a9"})
 		return
 	}
 	if req.Enabled == nil || req.Frequency == nil || req.Time == nil || req.Day == nil || req.Keep == nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "缺少必填字段（enabled/frequency/time/day/keep）"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_87a0aade"), MessageKey: "k_87a0aade"})
 		return
 	}
 	switch *req.Frequency {
 	case "daily", "weekly", "monthly":
 	default:
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "备份频率必须是 daily/weekly/monthly"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_ccbb5777"), MessageKey: "k_ccbb5777"})
 		return
 	}
 	if !services.ValidScheduleHHMM(*req.Time) {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "备份时间必须为 HH:MM（00:00-23:59）"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_7bf891df"), MessageKey: "k_7bf891df"})
 		return
 	}
 	if !autoBackupKeepValid(*req.Keep) {
@@ -797,12 +798,12 @@ func (h *Handlers) UpdateAutoBackupSettings(c *gin.Context) {
 		return
 	}
 	if len(req.Sections) == 0 {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "备份范围不能为空"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_22bd5751"), MessageKey: "k_22bd5751"})
 		return
 	}
 	req.Sections = normalizeBackupSectionKeys(req.Sections)
 	if _, _, ok := configBackupSectionTables(req.Sections); !ok {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "未知的配置分类"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_38727488"), MessageKey: "k_38727488"})
 		return
 	}
 	sectionsJSON, err := json.Marshal(req.Sections)
@@ -848,7 +849,7 @@ func (h *Handlers) UpdateAutoBackupSettings(c *gin.Context) {
 		fmt.Sprintf("保留份数：%d", *req.Keep),
 		"范围："+strings.Join(autoBackupSectionLabels(req.Sections), "、"),
 		services.AuditResultPart("success")))
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "自动备份设置已保存"})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_ae59d879"), MessageKey: "k_ae59d879"})
 }
 
 // autoBackupDirPerm 备份目录权限：目录内是含私钥与凭证明文的备份文件
@@ -926,20 +927,20 @@ func (h *Handlers) RunAutoBackupNow(c *gin.Context) {
 	if err := services.TriggerTaskAsync(te, "auto-backup", actx); err != nil {
 		switch {
 		case errors.Is(err, taskengine.ErrAlreadyRunning):
-			c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "已有备份任务正在执行（含定时备份），请稍后重试"})
+			c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: apimsg.T(c, "k_b2018a58"), MessageKey: "k_b2018a58"})
 		case errors.Is(err, taskengine.ErrSchedulingPaused):
-			c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "任务调度已暂停（配置导入进行中），请稍后重试"})
+			c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: apimsg.T(c, "k_4d89f1b5"), MessageKey: "k_4d89f1b5"})
 		case errors.Is(err, taskengine.ErrEngineStopped):
-			c.JSON(http.StatusServiceUnavailable, models.APIResponse{Code: 503, Message: "任务引擎已停止，无法触发备份"})
+			c.JSON(http.StatusServiceUnavailable, models.APIResponse{Code: 503, Message: apimsg.T(c, "k_a84c7f8f"), MessageKey: "k_a84c7f8f"})
 		case errors.Is(err, taskengine.ErrNotMaster):
-			c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: err.Error()})
+			c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: apimsg.ErrMsg(c, err)})
 		default:
 			services.Logf("error", "手动备份触发失败: %v", err)
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "触发备份失败: " + err.Error()})
 		}
 		return
 	}
-	c.JSON(http.StatusAccepted, models.APIResponse{Code: 0, Message: "手动备份已开始，完成后可在备份列表查看"})
+	c.JSON(http.StatusAccepted, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_3ff55af8"), MessageKey: "k_3ff55af8"})
 }
 
 // autoBackupDir 返回可安全 filepath.Join 的备份目录：必须非空且绝对。
@@ -1065,7 +1066,7 @@ func (h *Handlers) DeleteAutoBackup(c *gin.Context) {
 	}
 	recordAudit(c, "备份删除", "配置备份", services.FormatAuditDetail(
 		fmt.Sprintf("备份 #%d", view.ID), "文件："+view.Filename, services.AuditResultPart("success")))
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "备份已删除"})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_893e9c60"), MessageKey: "k_893e9c60"})
 }
 
 // failAutoBackupAccess 是自动备份高危操作族（还原/下载/删除）失败收尾的单一

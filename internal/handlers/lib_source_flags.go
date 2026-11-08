@@ -13,6 +13,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"lazy-balancer-v2/internal/apimsg"
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
 )
@@ -62,18 +63,18 @@ func updateLibSourceFlags(c *gin.Context, spec libSourceFlagsSpec) {
 	}
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "无效的源 ID"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_7014aa1d"), MessageKey: "k_7014aa1d"})
 		return
 	}
 	var body struct {
 		UpdateEnabled *bool `json:"update_enabled"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求无效"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_ef2be2f6"), MessageKey: "k_ef2be2f6"})
 		return
 	}
 	if body.UpdateEnabled == nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "无可更新字段"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_cffbd55a"), MessageKey: "k_cffbd55a"})
 		return
 	}
 	if !requireMasterNode(c) {
@@ -138,5 +139,5 @@ func updateLibSourceFlags(c *gin.Context, spec libSourceFlagsSpec) {
 		spec.ArmFirstSlots()
 	}
 	recordAudit(c, "更新", spec.Family, fmt.Sprintf("%s 更新开关：%s", name, enabledStateLabel(*body.UpdateEnabled)))
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "已更新"})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_573eb966"), MessageKey: "k_573eb966"})
 }

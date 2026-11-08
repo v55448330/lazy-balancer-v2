@@ -13,6 +13,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"lazy-balancer-v2/internal/apimsg"
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
 	"lazy-balancer-v2/internal/services"
@@ -49,7 +50,7 @@ func (h *Handlers) RestartService(c *gin.Context) {
 		return
 	}
 	recordAudit(c, "重启", "系统", "用户触发服务重启")
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "服务正在重启"})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_84128d5e"), MessageKey: "k_84128d5e"})
 	restartProcess()
 }
 

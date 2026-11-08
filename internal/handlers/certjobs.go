@@ -16,6 +16,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"lazy-balancer-v2/internal/apimsg"
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
 	"lazy-balancer-v2/internal/services"
@@ -186,7 +187,7 @@ func (h *Handlers) ListCertJobs(c *gin.Context) {
 	statusCounts := map[string]int64{}
 	statusRows, err := db.DB.Query("SELECT j.status, COUNT(*) FROM cert_jobs j"+whereClause+" GROUP BY j.status", filterArgs...)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "统计证书任务状态失败"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_72286097"), MessageKey: "k_72286097"})
 		return
 	}
 	for statusRows.Next() {
@@ -194,7 +195,7 @@ func (h *Handlers) ListCertJobs(c *gin.Context) {
 		var count int64
 		if err := statusRows.Scan(&status, &count); err != nil {
 			statusRows.Close()
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "统计证书任务状态失败"})
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_72286097"), MessageKey: "k_72286097"})
 			return
 		}
 		statusCounts[status] = count
@@ -202,7 +203,7 @@ func (h *Handlers) ListCertJobs(c *gin.Context) {
 	}
 	if err := statusRows.Err(); err != nil {
 		statusRows.Close()
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "统计证书任务状态失败"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_72286097"), MessageKey: "k_72286097"})
 		return
 	}
 	statusRows.Close()
@@ -261,11 +262,11 @@ func (h *Handlers) GetCurrentCertJobs(c *gin.Context) {
 		// gin 解析文本含 Go 字段名/英文（只读白名单端点，任意只读凭据可触发）：
 		// 响应固定中文文案，细节只进运行日志。
 		services.Logf("warn", "GetCurrentCertJobs: 请求体校验失败: %v", err)
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求格式错误"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_76de02a0"), MessageKey: "k_76de02a0"})
 		return
 	}
 	if len(req.RuleIDs) > 200 {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "invalid_request：rule_ids 数量不能超过 200"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_931fff64"), MessageKey: "k_931fff64"})
 		return
 	}
 	result := make(map[string]*models.CertJob, len(req.RuleIDs))
@@ -286,7 +287,7 @@ func (h *Handlers) GetCurrentCertJobs(c *gin.Context) {
 		WHERE j.rule_id IN (`+placeholders+`) AND j.status <> 'disabled'
 		ORDER BY j.rule_id, j.created_at DESC, j.id DESC`, args...)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "查询证书任务失败"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_719add36"), MessageKey: "k_719add36"})
 		return
 	}
 	defer rows.Close()
@@ -403,7 +404,7 @@ func (h *Handlers) retryCertJobByID(c *gin.Context, id int) {
 	// 契约。409 fast-fail（拒绝重试是幂等可重试语义，不改变任何任务状态），
 	// 两个入口（RetryCertJob / TriggerSystemTask 的 cert-job 分支）共用本核心。
 	if configImportBusy() {
-		c.JSON(http.StatusConflict, models.APIResponse{Code: http.StatusConflict, Message: "配置导入进行中，暂不能重试证书任务"})
+		c.JSON(http.StatusConflict, models.APIResponse{Code: http.StatusConflict, Message: apimsg.T(c, "k_f168c72b"), MessageKey: "k_f168c72b"})
 		return
 	}
 	operationLock := certJobOperationLock(id)
@@ -592,23 +593,23 @@ func (h *Handlers) retryCertJobByID(c *gin.Context, id int) {
 			// 显式区分 500。
 			services.Logf("error", "RetryCertJob reread job %d status failed: %v", id, scanErr)
 			auditFailureWithRule("status_read_failed")
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取任务状态失败"})
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_561c3fa4"), MessageKey: "k_561c3fa4"})
 			return
 		}
 		if currentStatus != status {
 			auditFailureWithRule("state_changed")
-			c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "任务状态已变更，请刷新后重试"})
+			c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: apimsg.T(c, "k_cd25755f"), MessageKey: "k_cd25755f"})
 			return
 		}
 		// EnqueueIfActive 的在途命中同样走!changed 且重读
 		// 状态未变，需优先归因"任务正在队列中"，避免误导为规则禁用/配置变更。
 		if qm.IsJobActive(id) {
 			auditFailureWithRule("in_flight")
-			c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "任务正在签发队列中，请勿重复操作"})
+			c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: apimsg.T(c, "k_be699a9c"), MessageKey: "k_be699a9c"})
 			return
 		}
 		auditFailureWithRule("not_retryable")
-		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "任务关联规则已禁用、证书配置已变更或队列已暂停"})
+		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: apimsg.T(c, "k_65bf5516"), MessageKey: "k_65bf5516"})
 		return
 	}
 	// 手动重试入队成功=有在途证书工作——唤醒 cert-waiting-ca
@@ -813,7 +814,7 @@ func (h *Handlers) DeleteCertJob(c *gin.Context) {
 	// 文件）。与 retryCertJobByID 共用同一探测。
 	if configImportBusy() {
 		recordAudit(c, "删除失败", "证书任务", services.FormatAuditDetail(services.AuditResultPart("import_in_progress")))
-		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "配置导入进行中，暂不能删除证书任务"})
+		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: apimsg.T(c, "k_c8b1cb09"), MessageKey: "k_c8b1cb09"})
 		return
 	}
 	id, err := strconv.Atoi(c.Param("id"))
@@ -957,12 +958,12 @@ func (h *Handlers) DeleteCertJob(c *gin.Context) {
 			releaseCaddyOp()
 			services.Logf("error", "DeleteCertJob reread job %d status failed: %v", id, scanErr)
 			auditFailure("status_read_failed")
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取任务状态失败"})
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_561c3fa4"), MessageKey: "k_561c3fa4"})
 			return
 		}
 		releaseCaddyOp()
 		auditFailure("state_changed")
-		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "任务状态已变更，请刷新后重试"})
+		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: apimsg.T(c, "k_cd25755f"), MessageKey: "k_cd25755f"})
 		return
 	}
 	// 取消移出全局 CaddyOpLock 临界区——原顺序
@@ -1159,7 +1160,7 @@ func (h *Handlers) GetCertJobLogs(c *gin.Context) {
 		// 读不出与「尚无日志」必须可区分（与 services.rulelog 同口径）：
 		// 恒 200 空内容会让排障把权限漂移/目录被替换误判为「没有签发记录」。
 		services.Logf("warn", "读取证书任务 %d 日志失败（规则 %s，路径 %s）: %v", id, ruleID, logPath, readErr)
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取任务日志失败"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_e82ce0ad"), MessageKey: "k_e82ce0ad"})
 		return
 	}
 

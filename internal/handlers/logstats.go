@@ -13,6 +13,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"lazy-balancer-v2/internal/apimsg"
 	"lazy-balancer-v2/internal/config"
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
@@ -838,7 +839,7 @@ func (h *Handlers) GetLogStats(c *gin.Context) {
 		// 文件名改为可逆编码（合法字母表原样、其余字符 %hex），含点等 v2 导入
 		// ID 的日志因此可读。这里只保留路径穿越形状的拒绝；文件名一律经
 		// services.RuleLogFileComponent 生成，输出恒为安全字符集。
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "无效的规则 ID"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_f7451d72"), MessageKey: "k_f7451d72"})
 		return
 	}
 	if info := byKey("certjob"); info != nil && want("certjob") {

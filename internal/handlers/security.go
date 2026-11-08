@@ -18,6 +18,7 @@ import (
 	"unicode/utf8"
 
 	"lazy-balancer-v2/geoipnames"
+	"lazy-balancer-v2/internal/apimsg"
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
 	"lazy-balancer-v2/internal/services"
@@ -199,7 +200,7 @@ func (h *Handlers) CreateSecurityCustomRule(c *gin.Context) {
 		return
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求参数无效"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_868de64b"), MessageKey: "k_868de64b"})
 		return
 	}
 	// 省略 enabled = 启用（零值陷阱家族）——
@@ -222,13 +223,13 @@ func (h *Handlers) CreateSecurityCustomRule(c *gin.Context) {
 	h.caddyOpMu.Lock()
 	defer h.caddyOpMu.Unlock()
 	if err := validateSecurityCustomRule(&rule); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.ErrMsg(c, err)})
 		return
 	}
 	conditionsJSON, _ := json.Marshal(rule.Conditions)
 	tx, err := beginCaddyWriteTx(c)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "开启事务失败"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_ef7fddde"), MessageKey: "k_ef7fddde"})
 		return
 	}
 	defer tx.Rollback()
@@ -238,7 +239,7 @@ func (h *Handlers) CreateSecurityCustomRule(c *gin.Context) {
 	// 拒绝——此前 `err == nil &&` 判定使 DB 故障静默跳过上限继续创建。
 	var ruleCount int
 	if err := tx.QueryRowContext(caddyWriteCtx(c), "SELECT COUNT(*) FROM security_custom_rules").Scan(&ruleCount); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "统计自定义规则数量失败"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_c9b6883f"), MessageKey: "k_c9b6883f"})
 		return
 	}
 	if ruleCount >= securityCustomRuleMaxGlobalCount {
@@ -266,7 +267,7 @@ func (h *Handlers) UpdateSecurityCustomRule(c *gin.Context) {
 	}
 	id := c.Param("id")
 	if _, ok := parsePositiveNumericID(id); !ok {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "规则 ID 无效"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_876db263"), MessageKey: "k_876db263"})
 		return
 	}
 	var req models.UpdateCustomRuleRequest
@@ -274,7 +275,7 @@ func (h *Handlers) UpdateSecurityCustomRule(c *gin.Context) {
 		return
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求参数无效"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_868de64b"), MessageKey: "k_868de64b"})
 		return
 	}
 	h.caddyOpMu.Lock()
@@ -288,7 +289,7 @@ func (h *Handlers) UpdateSecurityCustomRule(c *gin.Context) {
 	// 部分更新会互相静默覆盖（丢 enabled 翻转 = WAF 规则静默启/禁用）。
 	tx, err := beginCaddyWriteTx(c)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "开启事务失败"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_ef7fddde"), MessageKey: "k_ef7fddde"})
 		return
 	}
 	defer tx.Rollback()
@@ -298,7 +299,7 @@ func (h *Handlers) UpdateSecurityCustomRule(c *gin.Context) {
 		`SELECT name, COALESCE(description,''), COALESCE(conditions,'[]'), COALESCE(NULLIF(condition_logic,''),'and'), COALESCE(action,'block'), COALESCE(score,5), COALESCE(enabled,1) FROM security_custom_rules WHERE id=?`, id,
 	).Scan(&existing.Name, &existing.Description, &existingConditionsJSON, &existing.ConditionLogic, &existing.Action, &existing.Score, &existing.Enabled); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "规则不存在"})
+			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: apimsg.T(c, "k_814ff4da"), MessageKey: "k_814ff4da"})
 			return
 		}
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("读取规则失败", err)})
@@ -310,7 +311,7 @@ func (h *Handlers) UpdateSecurityCustomRule(c *gin.Context) {
 	if existingConditionsJSON != "" {
 		if uerr := json.Unmarshal([]byte(existingConditionsJSON), &existing.Conditions); uerr != nil {
 			recordAudit(c, "更新失败", "自定义规则", services.FormatAuditDetail(fmt.Sprintf("规则 #%s", id), services.AuditResultPart("storage_corrupted")))
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "存储的自定义规则条件已损坏，请删除后重建"})
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_fca0524c"), MessageKey: "k_fca0524c"})
 			return
 		}
 	}
@@ -345,7 +346,7 @@ func (h *Handlers) UpdateSecurityCustomRule(c *gin.Context) {
 		merged.Enabled = *req.Enabled
 	}
 	if err := validateSecurityCustomRule(&merged); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.ErrMsg(c, err)})
 		return
 	}
 	conditionsJSON, _ := json.Marshal(merged.Conditions)
@@ -374,7 +375,7 @@ func (h *Handlers) DeleteSecurityCustomRule(c *gin.Context) {
 	// （与 DeleteIPList 的 ParseInt 门同族口径）。
 	listID, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil || listID <= 0 {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "无效的规则 ID"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_f7451d72"), MessageKey: "k_f7451d72"})
 		return
 	}
 	h.caddyOpMu.Lock()
@@ -387,7 +388,7 @@ func (h *Handlers) DeleteSecurityCustomRule(c *gin.Context) {
 	// UpdateSecurityPolicy/CreateSecurityPolicy 无法在检查与 DELETE 之间提交。
 	tx, err := beginCaddyWriteTx(c)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "开启数据库事务失败"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_aa47c2a6"), MessageKey: "k_aa47c2a6"})
 		return
 	}
 	defer tx.Rollback()
@@ -494,35 +495,35 @@ func (h *Handlers) CreateSecurityBlockPage(c *gin.Context) {
 		return
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求参数无效"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_868de64b"), MessageKey: "k_868de64b"})
 		return
 	}
 	h.caddyOpMu.Lock()
 	defer h.caddyOpMu.Unlock()
 	if err := validateBlockPagePayload(&req); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.ErrMsg(c, err)})
 		return
 	}
 	// API 不允许创建默认拦截页：默认页仅 db 种子行，第二个
 	// is_default=1 页面不可编辑（:243）不可删除（:283），且 branding 重渲染
 	// 会覆盖全部默认页内容——产生不可管理的死行。
 	if req.IsDefault {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "默认拦截页由系统管理，不允许创建"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_4cfb44e7"), MessageKey: "k_4cfb44e7"})
 		return
 	}
 	// 内置页（is_builtin）与显式 id 同口径拒绝：INSERT 列清单不含这两列，
 	// 静默丢弃会让调用方以为「已创建内置页/指定了 id」，实际落普通行。
 	if req.IsBuiltin {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "内置拦截页由系统管理，不允许创建"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_80885291"), MessageKey: "k_80885291"})
 		return
 	}
 	if req.ID != 0 {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "拦截页 ID 由系统分配，不接受指定"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_0f638ace"), MessageKey: "k_0f638ace"})
 		return
 	}
 	tx, err := beginCaddyWriteTx(c)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "开启事务失败"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_ef7fddde"), MessageKey: "k_ef7fddde"})
 		return
 	}
 	defer tx.Rollback()
@@ -530,7 +531,7 @@ func (h *Handlers) CreateSecurityBlockPage(c *gin.Context) {
 	// （单页 ≤64KiB），无上限时一次列表可回传数十 MB。计数与插入同事务。
 	var pageCount int
 	if err := tx.QueryRowContext(caddyWriteCtx(c), "SELECT COUNT(*) FROM security_block_pages").Scan(&pageCount); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "统计拦截页面数量失败"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_a15063b0"), MessageKey: "k_a15063b0"})
 		return
 	}
 	if pageCount >= securityBlockPageMaxGlobalCount {
@@ -558,7 +559,7 @@ func (h *Handlers) UpdateSecurityBlockPage(c *gin.Context) {
 	}
 	id := c.Param("id")
 	if _, ok := parsePositiveNumericID(id); !ok {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "无效的拦截页面 ID"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_c574617b"), MessageKey: "k_c574617b"})
 		return
 	}
 	// 指针合并语义（与 UpdateRule/PUT 同域口径）：省略字段保留库中原值，
@@ -574,7 +575,7 @@ func (h *Handlers) UpdateSecurityBlockPage(c *gin.Context) {
 		return
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求参数无效"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_868de64b"), MessageKey: "k_868de64b"})
 		return
 	}
 	h.caddyOpMu.Lock()
@@ -585,7 +586,7 @@ func (h *Handlers) UpdateSecurityBlockPage(c *gin.Context) {
 	// UPDATE 之间把该页重建为默认页，使 UPDATE 绕过 403 契约改到默认页内容。
 	tx, err := beginCaddyWriteTx(c)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "开启数据库事务失败"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_aa47c2a6"), MessageKey: "k_aa47c2a6"})
 		return
 	}
 	defer tx.Rollback()
@@ -593,7 +594,7 @@ func (h *Handlers) UpdateSecurityBlockPage(c *gin.Context) {
 	if err := tx.QueryRowContext(caddyWriteCtx(c), `SELECT COALESCE(is_default,0), COALESCE(is_builtin,0), name, COALESCE(description,''), COALESCE(content,''), COALESCE(content_type,'') FROM security_block_pages WHERE id=?`, id).
 		Scan(&isDefault, &isBuiltin, &page.Name, &page.Description, &page.Content, &page.ContentType); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "拦截页面不存在"})
+			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: apimsg.T(c, "k_2cfe04cf"), MessageKey: "k_2cfe04cf"})
 		} else {
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
 		}
@@ -615,16 +616,16 @@ func (h *Handlers) UpdateSecurityBlockPage(c *gin.Context) {
 		page.ContentType = *req.ContentType
 	}
 	if err := validateBlockPagePayload(&page); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.ErrMsg(c, err)})
 		return
 	}
 	// 内置备选页（限流/维护）与默认页同门禁（2026-09-25 用户裁定：不可编辑/删除）
 	if isDefault {
-		c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: "默认拦截页面不可编辑"})
+		c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: apimsg.T(c, "k_fce008f5"), MessageKey: "k_fce008f5"})
 		return
 	}
 	if isBuiltin {
-		c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: "内置拦截页面不可编辑"})
+		c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: apimsg.T(c, "k_43628b87"), MessageKey: "k_43628b87"})
 		return
 	}
 	result, err := tx.ExecContext(caddyWriteCtx(c), `UPDATE security_block_pages SET name=?, description=?, content=?, content_type=?, updated_by=?, updated_at=datetime('now') WHERE id=?`,
@@ -648,7 +649,7 @@ func (h *Handlers) DeleteSecurityBlockPage(c *gin.Context) {
 		return
 	}
 	if _, ok := parsePositiveNumericID(c.Param("id")); !ok {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "无效的拦截页面 ID"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_c574617b"), MessageKey: "k_c574617b"})
 		return
 	}
 	h.caddyOpMu.Lock()
@@ -662,26 +663,26 @@ func (h *Handlers) DeleteSecurityBlockPage(c *gin.Context) {
 	// DELETE 之间提交（同 DeleteSecurityCustomRule）。
 	tx, err := beginCaddyWriteTx(c)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "开启数据库事务失败"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_aa47c2a6"), MessageKey: "k_aa47c2a6"})
 		return
 	}
 	defer tx.Rollback()
 	var isDefault, isBuiltin bool
 	if err := tx.QueryRowContext(caddyWriteCtx(c), "SELECT COALESCE(is_default,0), COALESCE(is_builtin,0) FROM security_block_pages WHERE id=?", id).Scan(&isDefault, &isBuiltin); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "拦截页面不存在"})
+			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: apimsg.T(c, "k_2cfe04cf"), MessageKey: "k_2cfe04cf"})
 		} else {
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
 		}
 		return
 	}
 	if isDefault {
-		c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: "默认拦截页面不可删除"})
+		c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: apimsg.T(c, "k_57a19102"), MessageKey: "k_57a19102"})
 		return
 	}
 	// 内置备选页（限流/维护）与默认页同门禁（2026-09-25 用户裁定：不可编辑/删除）
 	if isBuiltin {
-		c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: "内置拦截页面不可删除"})
+		c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: apimsg.T(c, "k_d493ee70"), MessageKey: "k_d493ee70"})
 		return
 	}
 	// 被启用策略引用的拦截页面不可删除：静默删除会让这些策略的拦截
@@ -795,7 +796,7 @@ func (h *Handlers) ListSecurityPolicies(c *gin.Context) {
 		// 解析失败 500(与 ListIPLists 同款口径)——吞错时带外脏
 		// 行显示 0 排除、实际 N 排除,观测缺口。
 		if err := json.Unmarshal(p.CRSExcludedRules, &crsExcluded); err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "解析策略 CRS 排除列表失败"})
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_701d9db4"), MessageKey: "k_701d9db4"})
 			return
 		}
 		loadedPolicies = append(loadedPolicies, policyListRow{p: p, crsExcludedCount: len(crsExcluded)})
@@ -921,13 +922,13 @@ func (h *Handlers) GetSecurityPolicy(c *gin.Context) {
 	// 读路径补齐非规范数字 ID 家族门（SQLite 数值亲和使 '5.0' 命中
 	// id=5）——与 Update/Delete/Split/Bind/Unbind 全部写路径同口径 400。
 	if _, ok := parsePositiveNumericID(id); !ok {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "策略 ID 无效"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_e132048f"), MessageKey: "k_e132048f"})
 		return
 	}
 	var p models.SecurityPolicy
 	err := scanSecurityPolicyRow(db.DB.QueryRow(`SELECT `+securityPolicySelectColumns+` FROM security_policies WHERE id=?`, id), &p)
 	if err == sql.ErrNoRows {
-		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "策略不存在"})
+		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: apimsg.T(c, "k_45c84896"), MessageKey: "k_45c84896"})
 		return
 	}
 	if err != nil {
@@ -1122,22 +1123,22 @@ func (h *Handlers) CreateSecurityPolicy(c *gin.Context) {
 		return
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求参数无效"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_868de64b"), MessageKey: "k_868de64b"})
 		return
 	}
 	h.caddyOpMu.Lock()
 	defer h.caddyOpMu.Unlock()
 	if strings.TrimSpace(req.Name) == "" {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "策略名称不能为空"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_a8a126e3"), MessageKey: "k_a8a126e3"})
 		return
 	}
 	// DB 列无长度约束,超长名/描述随审计与列表响应放大。
 	if utf8.RuneCountInString(req.Name) > securityNameMaxRunes {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "策略名称不能超过 100 字符"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_bcc9d5c9"), MessageKey: "k_bcc9d5c9"})
 		return
 	}
 	if utf8.RuneCountInString(req.Description) > securityDescriptionMaxRunes {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "策略描述不能超过 500 字符"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_c7b5dcce"), MessageKey: "k_c7b5dcce"})
 		return
 	}
 	if req.Mode == "" {
@@ -1176,7 +1177,7 @@ func (h *Handlers) CreateSecurityPolicy(c *gin.Context) {
 	// 渲染侧仍按功能字段发射（行为零变化）。
 	policyType, typeErr := resolveCreatePolicyType(&req)
 	if typeErr != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: typeErr.Error()})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.ErrMsg(c, typeErr)})
 		return
 	}
 	// trust_detection 仅 stage0（信任名单）策略消费——
@@ -1196,16 +1197,16 @@ func (h *Handlers) CreateSecurityPolicy(c *gin.Context) {
 		{"crs_excluded_rules", &req.CRSExcludedRules},
 	} {
 		if err := validateAndNormalizeCRSField(f.name, f.val, true); err != nil {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.ErrMsg(c, err)})
 			return
 		}
 	}
 	if err := validatePolicyCrawlerExemption(req.GeoIPCrawlerExempt, req.GeoIPCrawlerEngines, req.GeoIPMode); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.ErrMsg(c, err)})
 		return
 	}
 	if err := services.ValidateGeoIPCountries(req.GeoIPCountries, req.GeoIPMode); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.ErrMsg(c, err)})
 		return
 	}
 	for _, f := range []struct{ name, val string }{
@@ -1214,16 +1215,16 @@ func (h *Handlers) CreateSecurityPolicy(c *gin.Context) {
 		{"ip_blacklist", req.IPBlacklist},
 	} {
 		if err := validateIPCIDRList(f.name, f.val); err != nil {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.ErrMsg(c, err)})
 			return
 		}
 	}
 	if err := validateSecurityPolicyEnums(req.Mode, req.IPACLMode, req.GeoIPMode, req.BlockStatusCode, req.AnomalyThreshold); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.ErrMsg(c, err)})
 		return
 	}
 	if err := validateRateLimitShape(req.Name, req.RateLimitEnabled, req.RateLimitRPS, req.RateLimitBurst); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.ErrMsg(c, err)})
 		return
 	}
 	// allow 模式 + 空生效名单：渲染端把空 allow 集照常并入交集，交集为空即
@@ -1236,17 +1237,17 @@ func (h *Handlers) CreateSecurityPolicy(c *gin.Context) {
 	// ImportConfigBackup 不持 caddyOpMu，可在校验与 INSERT 之间清空被引用
 	// 名单，于是请求被拒却没有任何写入）——与 Update 的同口径。
 	if err := services.ValidateCustomRulesJSON(req.CustomRules); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.ErrMsg(c, err)})
 		return
 	}
 	aclRefsIDs, err := parseIPListRefsPayload("ip_acl_list_refs", &req.IPACLListRefs)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.ErrMsg(c, err)})
 		return
 	}
 	wlRefsIDs, err := parseIPListRefsPayload("ip_whitelist_refs", &req.IPWhitelistRefs)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.ErrMsg(c, err)})
 		return
 	}
 	// 引用校验与写入必须同事务：校验通过后、
@@ -1257,7 +1258,7 @@ func (h *Handlers) CreateSecurityPolicy(c *gin.Context) {
 	// 即持写锁，并发的删除无法在校验与 INSERT 之间提交。
 	tx, err := beginCaddyWriteTx(c)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "开启数据库事务失败"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_aa47c2a6"), MessageKey: "k_aa47c2a6"})
 		return
 	}
 	defer tx.Rollback()
@@ -1266,7 +1267,7 @@ func (h *Handlers) CreateSecurityPolicy(c *gin.Context) {
 	// 可无界增长，列表按策略逐行消费（每策略 N 次查询 + 事件归因扫描）。
 	var policyCount int
 	if err := tx.QueryRowContext(caddyWriteCtx(c), "SELECT COUNT(*) FROM security_policies").Scan(&policyCount); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "统计安全策略数量失败"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_6415a80f"), MessageKey: "k_6415a80f"})
 		return
 	}
 	if policyCount >= securityPolicyMaxGlobalCount {
@@ -1653,7 +1654,7 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 	}
 	id := c.Param("id")
 	if _, ok := parsePositiveNumericID(id); !ok {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "策略 ID 无效"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_e132048f"), MessageKey: "k_e132048f"})
 		return
 	}
 	var req models.UpdateSecurityPolicyRequest
@@ -1661,22 +1662,22 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 		return
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求参数无效"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_868de64b"), MessageKey: "k_868de64b"})
 		return
 	}
 	h.caddyOpMu.Lock()
 	defer h.caddyOpMu.Unlock()
 	if req.Name != nil && strings.TrimSpace(*req.Name) == "" {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "策略名称不能为空"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_a8a126e3"), MessageKey: "k_a8a126e3"})
 		return
 	}
 	// 更新侧同封顶(指针字段仅在提供时校验)。
 	if req.Name != nil && utf8.RuneCountInString(*req.Name) > securityNameMaxRunes {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "策略名称不能超过 100 字符"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_bcc9d5c9"), MessageKey: "k_bcc9d5c9"})
 		return
 	}
 	if req.Description != nil && utf8.RuneCountInString(*req.Description) > securityDescriptionMaxRunes {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "策略描述不能超过 500 字符"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_c7b5dcce"), MessageKey: "k_c7b5dcce"})
 		return
 	}
 	// 显式空串按 Create 口径归一为 "[]"，保持列形状一致，避免库内 "" 与
@@ -1698,7 +1699,7 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 	} {
 		if f.val != nil {
 			if err := validateIPCIDRList(f.name, *f.val); err != nil {
-				c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+				c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.ErrMsg(c, err)})
 				return
 			}
 		}
@@ -1731,7 +1732,7 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 			// Create/Update 共用同一份描述，逐字段赋值见 applyStageZerosToUpdate。
 			applyStageZerosToUpdate(&req, *req.PolicyType)
 		case models.PolicyTypeMixed:
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "混合策略为存量兼容形态，不可显式设置"})
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_c13fb1ee"), MessageKey: "k_c13fb1ee"})
 			return
 		default:
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: fmt.Sprintf("无效的策略类型：%s（可选 stage1/stage2/stage3）", *req.PolicyType)})
@@ -1757,7 +1758,7 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 		}
 		ids, err := parseIPListRefsPayload(f.name, f.val)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.ErrMsg(c, err)})
 			return
 		}
 		*f.ids = ids
@@ -1798,7 +1799,7 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 	}
 	blockStatusCode, anomalyThreshold := derefInt(req.BlockStatusCode), derefInt(req.AnomalyThreshold)
 	if err := validateSecurityPolicyEnums(mode, ipACLMode, geoIPMode, blockStatusCode, anomalyThreshold); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.ErrMsg(c, err)})
 		return
 	}
 	// 下方三处门控读(限流/ allow/GeoIP)原以裸连接
@@ -1808,7 +1809,7 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 	// 校验 SELECT 即持写锁,消除 TOCTOU(同三-3 镜像方向)。
 	tx, err := beginCaddyWriteTx(c)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "开启数据库事务失败"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_aa47c2a6"), MessageKey: "k_aa47c2a6"})
 		return
 	}
 	defer tx.Rollback()
@@ -1821,9 +1822,9 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 	if err := scanSecurityPolicyRow(tx.QueryRowContext(caddyWriteCtx(c), `SELECT `+securityPolicySelectColumns+` FROM security_policies WHERE id=?`, id), &stored); err != nil {
 		// 不存在 404 / 其余 500（各门吞错会把读取失败误报成 400）。
 		if errors.Is(err, sql.ErrNoRows) {
-			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "策略不存在"})
+			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: apimsg.T(c, "k_45c84896"), MessageKey: "k_45c84896"})
 		} else {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取策略现值失败"})
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_9597e8ed"), MessageKey: "k_9597e8ed"})
 		}
 		return
 	}
@@ -1841,7 +1842,7 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 			effBurst = *req.RateLimitBurst
 		}
 		if err := validateRateLimitShape(fmt.Sprintf("id=%s", id), effRLEnabled, effRPS, effBurst); err != nil {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.ErrMsg(c, err)})
 			return
 		}
 	}
@@ -1875,7 +1876,7 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 			effCountries = *req.GeoIPCountries
 		}
 		if err := services.ValidateGeoIPCountries(effCountries, effectiveGeoIPMode); err != nil {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.ErrMsg(c, err)})
 			return
 		}
 	}
@@ -1901,13 +1902,13 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 			effEngines = *req.GeoIPCrawlerEngines
 		}
 		if err := validatePolicyCrawlerExemption(effectiveCrawlerExempt, effEngines, effectiveGeoIPMode); err != nil {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.ErrMsg(c, err)})
 			return
 		}
 	}
 	if req.CustomRules != nil {
 		if err := services.ValidateCustomRulesJSON(*req.CustomRules); err != nil {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.ErrMsg(c, err)})
 			return
 		}
 		// 显式空串按 Create 口径归一为 "[]"，保持列形状一致，避免库内出现 ""
@@ -1991,7 +1992,7 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 		{"crs_excluded_rules", req.CRSExcludedRules},
 	} {
 		if err := validateAndNormalizeCRSField(f.name, f.val, true); err != nil {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.ErrMsg(c, err)})
 			return
 		}
 	}
@@ -2212,13 +2213,13 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 				// 归一到内容实际形态，不构成本次请求引入的漂移——放行（否则
 				// 这类行永远只能靠整表单迁移修）。
 				if models.InferPolicyType(&stored) != models.PolicyTypeMixed {
-					c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "策略内容跨多个阶段，请显式按阶段类型（信任名单/IP 访问控制/限流/WAF）分别创建；如需合并能力请使用现有混合策略的更新迁移或拆分"})
+					c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_09ac7ae8"), MessageKey: "k_09ac7ae8"})
 					return
 				}
 			}
 			if inferred != merged.PolicyType {
 				if _, err := tx.ExecContext(caddyWriteCtx(c), "UPDATE security_policies SET policy_type=? WHERE id=?", inferred, id); err != nil {
-					c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "更新策略类型失败"})
+					c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_b83ecbc7"), MessageKey: "k_b83ecbc7"})
 					return
 				}
 				reinferredFrom, reinferredTo = merged.PolicyType, inferred
@@ -2243,7 +2244,7 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 		services.Logf("warn", "更新策略 #%s 后读取拦截状态码终态失败（未执行写侧归一）: %v", id, err)
 	} else if normalized := normalizeBlockStatusCode(finalBlockStatus, finalPolicyType, finalBlockPageID); normalized != finalBlockStatus {
 		if _, err := tx.ExecContext(caddyWriteCtx(c), "UPDATE security_policies SET block_status_code=? WHERE id=?", normalized, id); err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "更新拦截状态码失败"})
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_7944c0c2"), MessageKey: "k_7944c0c2"})
 			return
 		}
 		// 审计 delta 以实际落库值为准：归零同样是本次写入的真实变更。
@@ -2411,7 +2412,7 @@ func (h *Handlers) DeleteSecurityPolicy(c *gin.Context) {
 		return
 	}
 	if _, ok := parsePositiveNumericID(c.Param("id")); !ok {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "无效的策略 ID"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_4075a62e"), MessageKey: "k_4075a62e"})
 		return
 	}
 	h.caddyOpMu.Lock()
@@ -2425,7 +2426,7 @@ func (h *Handlers) DeleteSecurityPolicy(c *gin.Context) {
 	// 并发绑定插队的写窗口。
 	tx, err := beginCaddyWriteTx(c)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "开启数据库事务失败"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_aa47c2a6"), MessageKey: "k_aa47c2a6"})
 		return
 	}
 	defer tx.Rollback()
@@ -2472,7 +2473,7 @@ func (h *Handlers) BindRuleToPolicy(c *gin.Context) {
 	// 规范数字 ID 门（同族删除/名单写路径一致）：SQLite INTEGER 亲和会让
 	// "5.0" 命中行 5，而 Atoi("5.0") 失败得到 0 使 mixed 门禁失效。
 	if _, ok := parsePositiveNumericID(policyID); !ok {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "策略 ID 无效"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_e132048f"), MessageKey: "k_e132048f"})
 		return
 	}
 	var req struct {
@@ -2482,7 +2483,7 @@ func (h *Handlers) BindRuleToPolicy(c *gin.Context) {
 		return
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求参数无效"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_868de64b"), MessageKey: "k_868de64b"})
 		return
 	}
 	h.caddyOpMu.Lock()
@@ -2510,7 +2511,7 @@ func (h *Handlers) BindRuleToPolicy(c *gin.Context) {
 		return
 	}
 	if policyExists == 0 {
-		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "策略不存在"})
+		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: apimsg.T(c, "k_45c84896"), MessageKey: "k_45c84896"})
 		return
 	}
 	// 混合策略仅可更新迁移（2026-09-20 用户裁定）：兼容旧版形态，不得新绑定到
@@ -2534,7 +2535,7 @@ func (h *Handlers) BindRuleToPolicy(c *gin.Context) {
 			return
 		}
 		if otherStage2 > 0 {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "每条规则最多绑定一条限流策略，请先解绑现有限流策略"})
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_94ac5455"), MessageKey: "k_94ac5455"})
 			return
 		}
 	}
@@ -2550,7 +2551,7 @@ func (h *Handlers) BindRuleToPolicy(c *gin.Context) {
 		return
 	}
 	if !target.exists {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "规则不存在"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_814ff4da"), MessageKey: "k_814ff4da"})
 		return
 	}
 	if !target.http {
@@ -2617,7 +2618,7 @@ func (h *Handlers) SetRuleSecurityPolicies(c *gin.Context) {
 		return
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求参数无效"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_868de64b"), MessageKey: "k_868de64b"})
 		return
 	}
 	h.caddyOpMu.Lock()
@@ -2634,7 +2635,7 @@ func (h *Handlers) SetRuleSecurityPolicies(c *gin.Context) {
 	policyIDs := normalizePolicyIDs(req.PolicyIDs)
 	if msg, err := setRulePoliciesInTx(caddyWriteCtx(c), tx, ruleCaddyID, policyIDs); err != nil {
 		// DB 故障（锁/IO）映射 500 而非 400 裸串外泄。
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取/写入策略绑定失败"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_460f2ef3"), MessageKey: "k_460f2ef3"})
 		return
 	} else if msg != "" {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: msg})
@@ -2918,7 +2919,7 @@ func (h *Handlers) BulkUpdatePolicyBindings(c *gin.Context) {
 	}
 	policyID, err := strconv.Atoi(c.Param("id"))
 	if err != nil || policyID <= 0 {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "无效的策略 ID"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_4075a62e"), MessageKey: "k_4075a62e"})
 		return
 	}
 	const maxBulkBindings = 100
@@ -2931,7 +2932,7 @@ func (h *Handlers) BulkUpdatePolicyBindings(c *gin.Context) {
 		return
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求参数无效"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_868de64b"), MessageKey: "k_868de64b"})
 		return
 	}
 	h.caddyOpMu.Lock()
@@ -3009,7 +3010,7 @@ func (h *Handlers) BulkUpdatePolicyBindings(c *gin.Context) {
 		return
 	}
 	if policyExists == 0 {
-		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "策略不存在"})
+		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: apimsg.T(c, "k_45c84896"), MessageKey: "k_45c84896"})
 		return
 	}
 	// 混合策略仅可更新迁移（与单条 bind 端点同口径；历史 共用判定）。
@@ -3148,7 +3149,7 @@ func (h *Handlers) BulkUpdatePolicyBindings(c *gin.Context) {
 	for _, ruleCaddyID := range bindIDs {
 		msg, err := applyOne(ruleCaddyID, true)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取/写入策略绑定失败"})
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_460f2ef3"), MessageKey: "k_460f2ef3"})
 			return
 		}
 		if msg != "" {
@@ -3159,7 +3160,7 @@ func (h *Handlers) BulkUpdatePolicyBindings(c *gin.Context) {
 	for _, ruleCaddyID := range unbindIDs {
 		msg, err := applyOne(ruleCaddyID, false)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取/写入策略绑定失败"})
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_460f2ef3"), MessageKey: "k_460f2ef3"})
 			return
 		}
 		if msg != "" {
@@ -3285,7 +3286,7 @@ func (h *Handlers) BatchBindSecurityPolicies(c *gin.Context) {
 		return
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求参数无效"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_868de64b"), MessageKey: "k_868de64b"})
 		return
 	}
 	h.caddyOpMu.Lock()
@@ -3294,12 +3295,12 @@ func (h *Handlers) BatchBindSecurityPolicies(c *gin.Context) {
 		req.Mode = "merge"
 	}
 	if req.Mode != "merge" && req.Mode != "replace" {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "mode 仅支持 merge 或 replace"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_e09ab3f2"), MessageKey: "k_e09ab3f2"})
 		return
 	}
 	req.RuleIDs = normalizeRuleIDs(req.RuleIDs)
 	if len(req.RuleIDs) == 0 {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "rule_ids 不能为空"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_a0ca2e4f"), MessageKey: "k_a0ca2e4f"})
 		return
 	}
 	// 单次规则数上限与兄弟批量端点同口径（归一后计数）
@@ -3334,7 +3335,7 @@ func (h *Handlers) BatchBindSecurityPolicies(c *gin.Context) {
 			return
 		}
 		if found != len(uniqueIDs) {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "部分策略不存在"})
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_8ed40b1d"), MessageKey: "k_8ed40b1d"})
 			return
 		}
 	}
@@ -3356,7 +3357,7 @@ func (h *Handlers) BatchBindSecurityPolicies(c *gin.Context) {
 			return
 		}
 		if stage2Count > 1 {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "每条规则最多绑定一条限流策略，请从提交集中移除多余的限流策略"})
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_b8b4d850"), MessageKey: "k_b8b4d850"})
 			return
 		}
 	}
@@ -3643,7 +3644,7 @@ func (h *Handlers) SplitSecurityPolicy(c *gin.Context) {
 	// "5.0" 命中行 5，使本端点绕过同族一致的输入门（Delete/Unbind/更新端点
 	// 均在此 400）。
 	if _, ok := parsePositiveNumericID(c.Param("id")); !ok {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "无效的策略 ID"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_4075a62e"), MessageKey: "k_4075a62e"})
 		return
 	}
 	h.caddyOpMu.Lock()
@@ -3652,21 +3653,21 @@ func (h *Handlers) SplitSecurityPolicy(c *gin.Context) {
 	id := c.Param("id")
 	tx, err := beginCaddyWriteTx(c)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "开启数据库事务失败"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_aa47c2a6"), MessageKey: "k_aa47c2a6"})
 		return
 	}
 	defer tx.Rollback()
 	var p models.SecurityPolicy
 	if err := scanSecurityPolicyRow(tx.QueryRowContext(caddyWriteCtx(c), `SELECT `+securityPolicySelectColumns+` FROM security_policies WHERE id=?`, id), &p); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "策略不存在"})
+			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: apimsg.T(c, "k_45c84896"), MessageKey: "k_45c84896"})
 			return
 		}
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
 		return
 	}
 	if p.PolicyType != models.PolicyTypeMixed {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "仅混合策略支持拆分迁移（单职策略无需拆分）"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_96fb406a"), MessageKey: "k_96fb406a"})
 		return
 	}
 	features := models.PolicyTypeFeatures(&p)
@@ -3720,7 +3721,7 @@ func (h *Handlers) SplitSecurityPolicy(c *gin.Context) {
 		return false
 	}()
 	if utf8.RuneCountInString(p.Name)+utf8.RuneCountInString(stageSuffix[models.PolicyTypeStage3]) > securityNameMaxRunes {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "拆分后的子策略名称将超过 100 字符，请先缩短原策略名称"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_3e18a460"), MessageKey: "k_3e18a460"})
 		return
 	}
 	// 拆分的校验面（与 Create 共享的三门，非「完全同门」）：①按本次将落库的
@@ -3839,7 +3840,7 @@ func (h *Handlers) SplitSecurityPolicy(c *gin.Context) {
 	// 查询之后——空特征策略会先空转一次绑定查询，且阅读顺序暗示判定依赖
 	// 那些查询结果，实际只依赖 features/trustEntriesNonEmpty）。
 	if !trustEntriesNonEmpty && !features.G1 && !features.G2 && !features.G3 {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "该混合策略没有可拆分的特征组，无需拆分"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_6acb6795"), MessageKey: "k_6acb6795"})
 		return
 	}
 	// 解析既有子策略：配置完全一致 → 复用首轮 ID（不重复插入）；同名同阶段但
@@ -3869,7 +3870,7 @@ func (h *Handlers) SplitSecurityPolicy(c *gin.Context) {
 	if pendingInsert > 0 {
 		var policyCount int
 		if err := tx.QueryRowContext(caddyWriteCtx(c), "SELECT COUNT(*) FROM security_policies").Scan(&policyCount); err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "统计安全策略数量失败"})
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_6415a80f"), MessageKey: "k_6415a80f"})
 			return
 		}
 		if policyCount+pendingInsert > securityPolicyMaxGlobalCount {
@@ -4013,7 +4014,7 @@ func (h *Handlers) UnbindRuleFromPolicy(c *gin.Context) {
 	}
 	policyID := c.Param("id")
 	if _, ok := parsePositiveNumericID(policyID); !ok {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "策略 ID 无效"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_e132048f"), MessageKey: "k_e132048f"})
 		return
 	}
 	h.caddyOpMu.Lock()
@@ -4022,7 +4023,7 @@ func (h *Handlers) UnbindRuleFromPolicy(c *gin.Context) {
 	ruleCaddyID := c.Param("caddy_id")
 	tx, err := beginCaddyWriteTx(c)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "开启事务失败"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_ef7fddde"), MessageKey: "k_ef7fddde"})
 		return
 	}
 	defer tx.Rollback()
@@ -4040,7 +4041,7 @@ func (h *Handlers) UnbindRuleFromPolicy(c *gin.Context) {
 		// 幂等入口保留 200，但无变更不得写「已解除」审计：重复提交/并发解绑
 		// 会制造一条未发生的绑定解除记录（审计是取证面，虚假变更为害）。
 		_ = tx.Rollback()
-		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "该规则未与此策略建立绑定", Data: gin.H{"changed": false}})
+		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_9610a8db"), MessageKey: "k_9610a8db", Data: gin.H{"changed": false}})
 		return
 	}
 	h.finishTxApply(c, tx, txApplyFinish{
@@ -4415,7 +4416,7 @@ func ruleTriggeredFilterSQL(input string, args *[]any) string {
 func (h *Handlers) GetIPEventCount(c *gin.Context) {
 	ip := strings.TrimSpace(c.Query("ip"))
 	if ip == "" {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "缺少 ip 参数"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_03a7d47e"), MessageKey: "k_03a7d47e"})
 		return
 	}
 	days := 30
@@ -4424,7 +4425,7 @@ func (h *Handlers) GetIPEventCount(c *gin.Context) {
 		// <1 沿用默认、>365 钳到上限。
 		v, err := strconv.Atoi(raw)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "days 参数无效"})
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_c7226103"), MessageKey: "k_c7226103"})
 			return
 		}
 		if v >= 1 {
@@ -4441,7 +4442,7 @@ func (h *Handlers) GetIPEventCount(c *gin.Context) {
 		return
 	}
 	if err := db.MetricsDB.QueryRow(`SELECT COUNT(*) FROM security_events WHERE client_ip=? AND event_time >= datetime('now', '-' || ? || ' days')`, ip, days).Scan(&count); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "查询事件计数失败"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_4747135d"), MessageKey: "k_4747135d"})
 		return
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: map[string]int{"count": count}})
@@ -4469,7 +4470,7 @@ func parsePaginationParam(c *gin.Context, name string, def, cap int) (int, bool)
 	}
 	v, err := strconv.Atoi(raw)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "分页参数无效"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_17808882"), MessageKey: "k_17808882"})
 		return 0, false
 	}
 	if v < 1 {
@@ -4574,17 +4575,17 @@ func (h *Handlers) ListSecurityEvents(c *gin.Context) {
 	// 当成「无边界」返回全量数据，误导排查方向。
 	startBoundary, hasStart, err := parseBoundary(c.Query("start_time"), "00:00:00")
 	if err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.ErrMsg(c, err)})
 		return
 	}
 	endBoundary, hasEnd, err := parseBoundary(c.Query("end_time"), "23:59:59")
 	if err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.ErrMsg(c, err)})
 		return
 	}
 	// 同为合法时间且开始晚于结束时直接拒绝：语义错误的区间否则只会静默返回空页
 	if hasStart && hasEnd && startBoundary > endBoundary {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "开始时间不能晚于结束时间"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_1675ded4"), MessageKey: "k_1675ded4"})
 		return
 	}
 	if db.MetricsDB == nil {
@@ -4609,7 +4610,7 @@ func (h *Handlers) ListSecurityEvents(c *gin.Context) {
 	var total int
 	if err := db.MetricsDB.QueryRow("SELECT COUNT(*) FROM security_events"+where, args...).Scan(&total); err != nil {
 		services.Logf("error", "security events: count query failed: %v", err)
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "安全事件查询失败"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_cda4ee31"), MessageKey: "k_cda4ee31"})
 		return
 	}
 
@@ -4632,7 +4633,7 @@ func (h *Handlers) ListSecurityEvents(c *gin.Context) {
 		// 与计数/扫描分支同口径：泛化文案 + 服务端留痕（不向登录用户泄露
 		// 存储层错误文本）。
 		services.Logf("error", "security events: list query failed: %v", err)
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "安全事件查询失败"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_cda4ee31"), MessageKey: "k_cda4ee31"})
 		return
 	}
 	defer rows.Close()
@@ -4646,7 +4647,7 @@ func (h *Handlers) ListSecurityEvents(c *gin.Context) {
 		// Scan 失败必须中止：否则部分零值的事件行会被当作真实事件返回
 		if err := rows.Scan(&e.ID, &e.EventTime, &e.RuleCaddyID, &e.PolicyID, &e.ClientIP, &e.Method, &e.URI, &e.EventType, &e.RuleTriggered, &e.RuleMsg, &e.Action, &e.AnomalyScore, &e.RuleName, &e.PolicyName, &e.DurationUs, &e.PrecheckUs, &e.RequestHeaders, &headersTotalKeys, &e.RequestBody); err != nil {
 			services.Logf("error", "security events: scan failed: %v", err)
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "安全事件查询失败"})
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_cda4ee31"), MessageKey: "k_cda4ee31"})
 			return
 		}
 		e.IPLocation = enrichIPLocation(e.ClientIP)
@@ -4665,7 +4666,7 @@ func (h *Handlers) ListSecurityEvents(c *gin.Context) {
 	}
 	if err := rows.Err(); err != nil {
 		services.Logf("error", "security events: rows iteration failed: %v", err)
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "安全事件查询失败"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_cda4ee31"), MessageKey: "k_cda4ee31"})
 		return
 	}
 	if events == nil {
@@ -5325,7 +5326,7 @@ func (h *Handlers) GetSecurityOverview(c *gin.Context) {
 		overview.AttackTypesStage = []models.SecurityAttackType{}
 		if firstErr != nil {
 			services.Logf("error", "security overview: query failed: %v", firstErr)
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "安全总览查询失败"})
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_e0da7bff"), MessageKey: "k_e0da7bff"})
 			return
 		}
 		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: securityOverviewResponse{
@@ -5367,7 +5368,7 @@ func (h *Handlers) GetSecurityOverview(c *gin.Context) {
 
 	if firstErr != nil {
 		services.Logf("error", "security overview: query failed: %v", firstErr)
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "安全总览查询失败"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_e0da7bff"), MessageKey: "k_e0da7bff"})
 		return
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: securityOverviewResponse{
@@ -5407,7 +5408,7 @@ func (h *Handlers) GetCRSInfo(c *gin.Context) {
 	// 仅行缺失(新安装)合法回落默认;真实 DB 故障 500
 	// 可见——此前一律吞错,用户看到假默认值。
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取 CRS 版本信息失败"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_cbbed38e"), MessageKey: "k_cbbed38e"})
 		return
 	}
 	if err == nil {
@@ -5461,7 +5462,7 @@ func (h *Handlers) UpdateCRSAutoUpdate(c *gin.Context) {
 		return
 	}
 	recordAudit(c, "更新", "CRS规则库", "自动更新已"+enabledStateLabel(autoUpdate))
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "已更新"})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_573eb966"), MessageKey: "k_573eb966"})
 }
 
 // updateLibSchedule 三库定时调度端点共享骨架：载荷校验（星期集去重后非空、
@@ -5483,16 +5484,16 @@ func (h *Handlers) updateLibSchedule(c *gin.Context, save func([]int, string) er
 		return nil, "", false
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求参数无效"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_868de64b"), MessageKey: "k_868de64b"})
 		return nil, "", false
 	}
 	days := services.NormalizeScheduleDays(req.Days)
 	if len(days) == 0 {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "至少选择一天"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_a2838a09"), MessageKey: "k_a2838a09"})
 		return nil, "", false
 	}
 	if !services.ValidScheduleHHMM(req.Time) {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "时间格式无效（HH:MM）"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_635c196b"), MessageKey: "k_635c196b"})
 		return nil, "", false
 	}
 	if !requireMasterNode(c) {
@@ -5565,7 +5566,7 @@ func (h *Handlers) startLibUpdate(c *gin.Context, taskID, family, displayName st
 		return
 	}
 	if te.IsTaskInFlight(taskID) {
-		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "任务运行中，请稍后重试"})
+		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: apimsg.T(c, "k_723ca537"), MessageKey: "k_723ca537"})
 		return
 	}
 	op := auditOperator(c)
@@ -5617,7 +5618,7 @@ func (h *Handlers) UpdateCRSSchedule(c *gin.Context) {
 		return
 	}
 	recordAudit(c, "更新", "CRS规则库", fmt.Sprintf("定时更新设置：每周%s %s", scheduleDaysLabel(days), hhmm))
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "已更新"})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_573eb966"), MessageKey: "k_573eb966"})
 }
 
 func (h *Handlers) StartCRSUpdate(c *gin.Context) {
@@ -5695,7 +5696,7 @@ func (h *Handlers) GetIP2RegionInfo(c *gin.Context) {
 		Scan(&info.UpdatedAt, &info.UpdateStatus, &info.Message, &info.Trigger, &info.LastChecked, &info.NextUpdate, &info.AutoUpdate)
 	// 同 GetCRSInfo——真实 DB 故障 500,仅缺行回落。
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取 IP2Region 版本信息失败"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_1b76435f"), MessageKey: "k_1b76435f"})
 		return
 	}
 	// 同 GetCRSInfo：库值活动态按角色投影（读侧单源、不写库）——从节点的
@@ -5749,7 +5750,7 @@ func (h *Handlers) SetIP2RegionV6Enabled(c *gin.Context) {
 		Enabled *bool `json:"enabled"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil || req.Enabled == nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求参数无效"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_868de64b"), MessageKey: "k_868de64b"})
 		return
 	}
 	enabled := *req.Enabled
@@ -5811,7 +5812,7 @@ func (h *Handlers) UpdateIP2RegionAutoUpdate(c *gin.Context) {
 		return
 	}
 	recordAudit(c, "更新", "IP数据库", "自动更新已"+enabledStateLabel(autoUpdate))
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "已更新"})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_573eb966"), MessageKey: "k_573eb966"})
 }
 
 // UpdateIP2RegionSchedule 保存 IP2Region 定时更新排程（星期多选 + 时间；
@@ -5822,7 +5823,7 @@ func (h *Handlers) UpdateIP2RegionSchedule(c *gin.Context) {
 		return
 	}
 	recordAudit(c, "更新", "IP数据库", fmt.Sprintf("定时更新设置：每周%s %s", scheduleDaysLabel(days), hhmm))
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "已更新"})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_573eb966"), MessageKey: "k_573eb966"})
 }
 
 func (h *Handlers) StartIP2RegionUpdate(c *gin.Context) {
@@ -6498,7 +6499,7 @@ func (h *Handlers) GetCRSRuleIndex(c *gin.Context) {
 func (h *Handlers) GetCRSRuleContent(c *gin.Context) {
 	filename := c.Param("filename")
 	if strings.Contains(filename, "..") || strings.Contains(filename, "/") {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "无效的文件名"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_3cea5ee2"), MessageKey: "k_3cea5ee2"})
 		return
 	}
 	// 经 crsRulesDir 测试缝解析（与 ListCRSRules 同源），消除硬编码路径与
@@ -6506,7 +6507,7 @@ func (h *Handlers) GetCRSRuleContent(c *gin.Context) {
 	path := filepath.Join(crsRulesDirPath(), filename)
 	f, err := os.Open(path)
 	if err != nil {
-		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "规则文件不存在"})
+		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: apimsg.T(c, "k_ef179e24"), MessageKey: "k_ef179e24"})
 		return
 	}
 	defer f.Close()
@@ -6520,7 +6521,7 @@ func (h *Handlers) GetCRSRuleContent(c *gin.Context) {
 		return
 	}
 	if len(content) > 1<<20 {
-		c.JSON(http.StatusRequestEntityTooLarge, models.APIResponse{Code: 413, Message: "规则文件超过 1MB 读取上限"})
+		c.JSON(http.StatusRequestEntityTooLarge, models.APIResponse{Code: 413, Message: apimsg.T(c, "k_7ebf09cd"), MessageKey: "k_7ebf09cd"})
 		return
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"filename": filename, "content": string(content), "size": len(content)}})
@@ -6537,7 +6538,7 @@ func (h *Handlers) GetCRSSetupConfig(c *gin.Context) {
 	// 变更必须经 CRS 更新流程；本端点仅为只读查看。
 	f, err := os.Open(crsSetupConfPath())
 	if err != nil {
-		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "CRS 配置文件不存在"})
+		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: apimsg.T(c, "k_5974d10a"), MessageKey: "k_5974d10a"})
 		return
 	}
 	defer f.Close()
@@ -6547,7 +6548,7 @@ func (h *Handlers) GetCRSSetupConfig(c *gin.Context) {
 		return
 	}
 	if len(content) > 1<<20 {
-		c.JSON(http.StatusRequestEntityTooLarge, models.APIResponse{Code: 413, Message: "CRS 配置文件超过 1MB 读取上限"})
+		c.JSON(http.StatusRequestEntityTooLarge, models.APIResponse{Code: 413, Message: apimsg.T(c, "k_090f228f"), MessageKey: "k_090f228f"})
 		return
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"content": string(content)}})

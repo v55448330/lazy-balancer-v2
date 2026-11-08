@@ -15,6 +15,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"lazy-balancer-v2/internal/apimsg"
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
 	"lazy-balancer-v2/internal/services"
@@ -207,12 +208,12 @@ func (h *Handlers) ClusterServiceControl(c *gin.Context) {
 			action = "<解析失败>"
 		}
 		recordClusterServiceControlAudit(c, action, "失败：请求格式错误")
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: http.StatusBadRequest, Message: "请求格式错误"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: http.StatusBadRequest, Message: apimsg.T(c, "k_76de02a0"), MessageKey: "k_76de02a0"})
 		return
 	}
 	if !models.IsValidClusterServiceAction(req.Action) {
 		recordClusterServiceControlAudit(c, req.Action, "失败：不支持的动作")
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: http.StatusBadRequest, Message: "不支持的服务控制动作"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: http.StatusBadRequest, Message: apimsg.T(c, "k_ce60867e"), MessageKey: "k_ce60867e"})
 		return
 	}
 	// 导入窗口内的 Caddy 启停会与导入会话互抢 caddyOpMu（导入自
@@ -240,7 +241,7 @@ func (h *Handlers) ClusterServiceControl(c *gin.Context) {
 		// 与 caddy 分支同口径带 operator——空 operator 回退「主节点」，
 		// 非空则记录主节点侧实际操作人（此前 restart_app 恒匿名）。
 		recordClusterServiceControlAuditBy(c, req.Action, "已接受：服务即将重启", req.Operator)
-		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "服务正在重启"})
+		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_84128d5e"), MessageKey: "k_84128d5e"})
 		go func() {
 			time.Sleep(clusterServiceExitDelay)
 			clusterServiceExit()
@@ -250,7 +251,7 @@ func (h *Handlers) ClusterServiceControl(c *gin.Context) {
 	message, err := h.executeClusterCaddyAction(req.Action)
 	if err != nil {
 		recordClusterServiceControlAuditBy(c, req.Action, "失败："+err.Error(), req.Operator)
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: http.StatusInternalServerError, Message: err.Error()})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: http.StatusInternalServerError, Message: apimsg.ErrMsg(c, err)})
 		return
 	}
 	// 成功消息一并落审计——从节点操作日志可见「配置已从数据库载入」等

@@ -13,6 +13,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"golang.org/x/sync/singleflight"
 
+	"lazy-balancer-v2/internal/apimsg"
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
 	"lazy-balancer-v2/internal/services"
@@ -317,7 +318,7 @@ func buildAuditLogFilters(c *gin.Context, loc *time.Location) (string, []interfa
 		}
 		t, err := time.ParseInLocation("2006-01-02 15:04:05", raw, loc)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "时间筛选格式无效，应为 YYYY-MM-DD 或 YYYY-MM-DD HH:MM:SS"})
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_a1d19e7f"), MessageKey: "k_a1d19e7f"})
 			return time.Time{}, false, true
 		}
 		return t.UTC(), true, false
@@ -377,7 +378,7 @@ func (h *Handlers) GetAuditLogs(c *gin.Context) {
 	// total_stale=true（计数不可信）+ partial=true，消费方无需按状态切换解码。
 	auditDB := db.AuditDB
 	if auditDB == nil {
-		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "审计库未就绪",
+		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_65e6a8d6"), MessageKey: "k_65e6a8d6",
 			Data: auditLogListPayload([]map[string]any{}, 0, true, true, page, pageSize)})
 		return
 	}

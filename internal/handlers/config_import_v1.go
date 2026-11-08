@@ -11,6 +11,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"lazy-balancer-v2/internal/apimsg"
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
 	"lazy-balancer-v2/internal/services"
@@ -637,7 +638,7 @@ func (h *Handlers) ValidateConfigImport(c *gin.Context) {
 		c.Set("lbbak_payload", payload)
 	}
 	if len(body) == 0 {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "备份文件内容为空"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_d1f91b35"), MessageKey: "k_d1f91b35"})
 		return
 	}
 	body = bytes.TrimPrefix(body, []byte("\xef\xbb\xbf"))

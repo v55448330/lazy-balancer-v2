@@ -15,6 +15,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"golang.org/x/sync/singleflight"
 
+	"lazy-balancer-v2/internal/apimsg"
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
 	"lazy-balancer-v2/internal/services"
@@ -401,7 +402,7 @@ func (h *Handlers) GetRuleMetrics(c *gin.Context) {
 	var rule models.LbRule
 	database := db.DB
 	if database == nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "数据库未初始化"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_9ac2e1cd"), MessageKey: "k_9ac2e1cd"})
 		return
 	}
 	err := database.QueryRowContext(c.Request.Context(), `SELECT COALESCE(domain,''), listen_port, COALESCE(protocol,''), COALESCE(enable_tls,0) FROM lb_rules WHERE caddy_id = ?`, ruleID).Scan(
@@ -600,7 +601,7 @@ func (h *Handlers) GetRuleMetricsHistory(c *gin.Context) {
 	var protocol string
 	database := db.DB
 	if database == nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "数据库未初始化"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_9ac2e1cd"), MessageKey: "k_9ac2e1cd"})
 		return
 	}
 	if err := database.QueryRowContext(c.Request.Context(), "SELECT COALESCE(protocol,'') FROM lb_rules WHERE caddy_id = ?", caddyID).Scan(&protocol); dbQueryNotFound(c, err, "规则不存在", "GetRuleMetricsHistory query rule") {

@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 
+	"lazy-balancer-v2/internal/apimsg"
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
 
@@ -664,7 +665,7 @@ func (h *Handlers) ListIPLists(c *gin.Context) {
 		// 与删除守卫同口径 fail-closed——查询失败时不得把引用面
 		// 展示为空（页面「无引用可删」与删除 409/500 自相矛盾）；显式
 		// 500 让运维区分「真无引用」与「观测失败」。
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取受信代理引用失败"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_1967aef1"), MessageKey: "k_1967aef1"})
 		return
 	}
 	// RDB 文件化：威胁库条数以 threat_sources 为准（DB entries 恒空）
@@ -721,7 +722,7 @@ func (h *Handlers) GetIPList(c *gin.Context) {
 	// 会让 "5.0" 命中 id=5，必须 400。例外：导出端点（ExportIPList）保留
 	// 容忍形态——文本附件下载无歧义面，且文件名已回库内行 ID。
 	if _, ok := parsePositiveNumericID(id); !ok {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "无效的列表 ID"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_696b4eec"), MessageKey: "k_696b4eec"})
 		return
 	}
 	var row ipListRow
@@ -729,7 +730,7 @@ func (h *Handlers) GetIPList(c *gin.Context) {
 	if err := db.DB.QueryRow("SELECT id, name, COALESCE(description,''), COALESCE(category,''), COALESCE(entries,'[]'), COALESCE(created_by,0), COALESCE(created_at,''), COALESCE(updated_by,0), COALESCE(updated_at,''), COALESCE(system,0) FROM security_ip_lists WHERE id=?", id).
 		Scan(&row.ID, &row.Name, &row.Description, &row.Category, &entriesJSON, &row.CreatedBy, &row.CreatedAt, &row.UpdatedBy, &row.UpdatedAt, &row.System); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "IP 地址列表不存在"})
+			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: apimsg.T(c, "k_262eb28a"), MessageKey: "k_262eb28a"})
 			return
 		}
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
@@ -774,7 +775,7 @@ func (h *Handlers) GetIPList(c *gin.Context) {
 	}
 	trustedProxyRefs, tpErr := loadTrustedProxyRefIDs()
 	if tpErr != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取受信代理引用失败"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_1967aef1"), MessageKey: "k_1967aef1"})
 		return
 	}
 	applyIPListRefView(&row, refs, trustedProxyRefs)
@@ -792,7 +793,7 @@ func (h *Handlers) CreateIPList(c *gin.Context) {
 		return
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求参数无效"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_868de64b"), MessageKey: "k_868de64b"})
 		return
 	}
 	h.caddyOpMu.Lock()
@@ -802,7 +803,7 @@ func (h *Handlers) CreateIPList(c *gin.Context) {
 	}
 	entries, prunedExpired, err := validateIPListShape(req.Name, req.Description, req.Category, req.Entries)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.ErrMsg(c, err)})
 		return
 	}
 	// 落库形态=校验返回的生效条目（到期条目已剔除，见 validateIPListShape）。
@@ -813,7 +814,7 @@ func (h *Handlers) CreateIPList(c *gin.Context) {
 	}
 	tx, err := beginCaddyWriteTx(c)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "开启数据库事务失败"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_aa47c2a6"), MessageKey: "k_aa47c2a6"})
 		return
 	}
 	defer tx.Rollback()
@@ -829,7 +830,7 @@ func (h *Handlers) CreateIPList(c *gin.Context) {
 			c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: fmt.Sprintf("该名称为%s保留，请换一个名称", builtinIPListLabel(dupName))})
 			return
 		}
-		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "IP 列表名称已存在"})
+		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: apimsg.T(c, "k_58751208"), MessageKey: "k_58751208"})
 		return
 	}
 	// 额度只计**用户创建**的名单：系统内置名单（威胁情报库/爬虫地址库/自动
@@ -871,7 +872,7 @@ func (h *Handlers) UpdateIPList(c *gin.Context) {
 	id := c.Param("id")
 	listID, idOK := parsePositiveNumericID(id)
 	if !idOK {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "无效的列表 ID"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_696b4eec"), MessageKey: "k_696b4eec"})
 		return
 	}
 	var req models.UpdateIPListRequest
@@ -879,14 +880,14 @@ func (h *Handlers) UpdateIPList(c *gin.Context) {
 		return
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求参数无效"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_868de64b"), MessageKey: "k_868de64b"})
 		return
 	}
 	h.caddyOpMu.Lock()
 	defer h.caddyOpMu.Unlock()
 	tx, err := beginCaddyWriteTx(c)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "开启数据库事务失败"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_aa47c2a6"), MessageKey: "k_aa47c2a6"})
 		return
 	}
 	defer tx.Rollback()
@@ -894,7 +895,7 @@ func (h *Handlers) UpdateIPList(c *gin.Context) {
 	var system int
 	if err := tx.QueryRowContext(caddyWriteCtx(c), "SELECT name, COALESCE(description,''), COALESCE(category,''), COALESCE(entries,'[]'), COALESCE(system,0) FROM security_ip_lists WHERE id=?", id).Scan(&name, &description, &category, &entriesJSON, &system); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "IP 地址列表不存在"})
+			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: apimsg.T(c, "k_262eb28a"), MessageKey: "k_262eb28a"})
 			return
 		}
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
@@ -910,19 +911,19 @@ func (h *Handlers) UpdateIPList(c *gin.Context) {
 	// 预置行，改名即失联；分类/描述是预置行身份的一部分，同样禁改。
 	autobanPreset := system != 0 && name == services.AutobanPresetListName
 	if system != 0 && !autobanPreset {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "内置名单只读，由威胁情报库更新任务维护"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_e1da6d91"), MessageKey: "k_e1da6d91"})
 		return
 	}
 	if autobanPreset && req.Name != nil && *req.Name != name {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "自动封禁名单为预置名单，名称不可修改"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_7371c571"), MessageKey: "k_7371c571"})
 		return
 	}
 	if autobanPreset && req.Category != nil && *req.Category != category {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "自动封禁名单为预置名单，分类不可修改"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_bf74244d"), MessageKey: "k_bf74244d"})
 		return
 	}
 	if autobanPreset && req.Description != nil && *req.Description != description {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "自动封禁名单为预置名单，描述不可修改"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_92835478"), MessageKey: "k_92835478"})
 		return
 	}
 	if req.Name != nil {
@@ -943,7 +944,7 @@ func (h *Handlers) UpdateIPList(c *gin.Context) {
 	if req.Entries != nil {
 		entries, prunedExpired, err = validateIPListShape(name, description, category, entriesJSON)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.ErrMsg(c, err)})
 			return
 		}
 		// 落库形态=生效条目（到期条目已剔除）：原始条数与生效条数不再有两个
@@ -961,7 +962,7 @@ func (h *Handlers) UpdateIPList(c *gin.Context) {
 		// 审计条数取存量行数（与导出/删除口径一致），而非到期剔除后的生效集
 		// 条数——此前「（N 条）」可能小于库内真实行数。
 		if err := validateIPListMetadataShape(name, description, category); err != nil {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.ErrMsg(c, err)})
 			return
 		}
 		if uerr := json.Unmarshal([]byte(entriesJSON), &entries); uerr != nil {
@@ -990,7 +991,7 @@ func (h *Handlers) UpdateIPList(c *gin.Context) {
 		}
 		if blocked {
 			c.JSON(http.StatusConflict, models.APIResponse{Code: 409,
-				Message: "清空后会使引用它的白名单策略生效集合为空（空名单会拒绝该策略的全部请求）；请先为相关策略补充内联条目或其他引用名单，或解除引用"})
+				Message: apimsg.T(c, "k_6c0f1a92"), MessageKey: "k_6c0f1a92"})
 			return
 		}
 	}
@@ -1005,7 +1006,7 @@ func (h *Handlers) UpdateIPList(c *gin.Context) {
 			c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: fmt.Sprintf("该名称为%s保留，请换一个名称", builtinIPListLabel(dupName))})
 			return
 		}
-		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "IP 列表名称已存在"})
+		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: apimsg.T(c, "k_58751208"), MessageKey: "k_58751208"})
 		return
 	}
 	result, err := tx.ExecContext(caddyWriteCtx(c), `UPDATE security_ip_lists SET name=?, description=?, category=?, entries=?, updated_by=?, updated_at=datetime('now') WHERE id=?`,
@@ -1076,14 +1077,14 @@ func (h *Handlers) DeleteIPList(c *gin.Context) {
 	// 命中（"5.0"→行 5），错误码文案与家族分叉。
 	listID, idOK := parsePositiveNumericID(id)
 	if !idOK {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "无效的列表 ID"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_696b4eec"), MessageKey: "k_696b4eec"})
 		return
 	}
 	// 引用检查与删除同事务（镜像 DeleteSecurityBlockPage 的口径）
 	// 检查通过后、DELETE 之前并发的策略更新不得插入新引用。
 	tx, err := beginCaddyWriteTx(c)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "开启数据库事务失败"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_aa47c2a6"), MessageKey: "k_aa47c2a6"})
 		return
 	}
 	defer tx.Rollback()
@@ -1093,7 +1094,7 @@ func (h *Handlers) DeleteIPList(c *gin.Context) {
 	var listName string
 	if err := tx.QueryRowContext(caddyWriteCtx(c), "SELECT COALESCE(system,0), COALESCE(name,'') FROM security_ip_lists WHERE id=?", id).Scan(&system, &listName); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "IP 地址列表不存在"})
+			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: apimsg.T(c, "k_262eb28a"), MessageKey: "k_262eb28a"})
 			return
 		}
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
@@ -1103,10 +1104,10 @@ func (h *Handlers) DeleteIPList(c *gin.Context) {
 		// 预置「自动封禁名单」禁删（自动封禁任务按名定位+策略引用目标），
 		// 与威胁名单只读门文案区分——放行路径=移除对应条目。
 		if listName == services.AutobanPresetListName {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "自动封禁名单为预置名单，不可删除（如需放行请移除对应条目）"})
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_63623fbd"), MessageKey: "k_63623fbd"})
 			return
 		}
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "内置名单只读，由威胁情报库更新任务维护"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_e1da6d91"), MessageKey: "k_e1da6d91"})
 		return
 	}
 	// 仅 enabled=1 策略的引用阻止删除，与
@@ -1160,12 +1161,12 @@ func (h *Handlers) DeleteIPList(c *gin.Context) {
 	// 带外写入，按空集不虚构引用关系；保存侧对提交的非法 refs 显式 400）。
 	var trustedRefs string
 	if err := tx.QueryRowContext(caddyWriteCtx(c), `SELECT COALESCE(trusted_proxy_range_refs,'[]') FROM global_config WHERE id=1`).Scan(&trustedRefs); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "校验受信代理引用失败"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_df848faf"), MessageKey: "k_df848faf"})
 		return
 	}
 	for _, refID := range parseIPListRefsIDs(trustedRefs) {
 		if refID == listID {
-			c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "该 IP 列表正被受信代理网段引用，请先在 Caddy 全局设置中解除引用"})
+			c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: apimsg.T(c, "k_e22930c4"), MessageKey: "k_e22930c4"})
 			return
 		}
 	}
@@ -1211,7 +1212,7 @@ func (h *Handlers) AddIPToList(c *gin.Context) {
 	id := c.Param("id")
 	listID, idOK := parsePositiveNumericID(id)
 	if !idOK {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "无效的列表 ID"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_696b4eec"), MessageKey: "k_696b4eec"})
 		return
 	}
 	var req models.AddIPToListRequest
@@ -1219,7 +1220,7 @@ func (h *Handlers) AddIPToList(c *gin.Context) {
 		return
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求参数无效"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_868de64b"), MessageKey: "k_868de64b"})
 		return
 	}
 	h.caddyOpMu.Lock()
@@ -1230,7 +1231,7 @@ func (h *Handlers) AddIPToList(c *gin.Context) {
 	}
 	tx, err := beginCaddyWriteTx(c)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "开启数据库事务失败"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_aa47c2a6"), MessageKey: "k_aa47c2a6"})
 		return
 	}
 	defer tx.Rollback()
@@ -1238,7 +1239,7 @@ func (h *Handlers) AddIPToList(c *gin.Context) {
 	var system int
 	if err := tx.QueryRowContext(caddyWriteCtx(c), "SELECT COALESCE(name,''), COALESCE(entries,'[]'), COALESCE(system,0) FROM security_ip_lists WHERE id=?", id).Scan(&listName, &entriesJSON, &system); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "IP 地址列表不存在"})
+			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: apimsg.T(c, "k_262eb28a"), MessageKey: "k_262eb28a"})
 			return
 		}
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
@@ -1248,14 +1249,14 @@ func (h *Handlers) AddIPToList(c *gin.Context) {
 		// 例外：自动封禁预置名单允许手动追加（手动封禁条目，任务 merge
 		// 永不挤出）；威胁情报名单保持只读。
 		if listName != services.AutobanPresetListName {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "内置名单只读，由威胁情报库更新任务维护"})
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_e1da6d91"), MessageKey: "k_e1da6d91"})
 			return
 		}
 	}
 	entriesJSON = normalizeIPListEntriesJSON(entriesJSON)
 	var entries []models.IPListEntry
 	if err := json.Unmarshal([]byte(entriesJSON), &entries); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "存储的 IP 列表条目已损坏，请用整表覆盖（清空/重新导入）修复"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_b87ca67c"), MessageKey: "k_b87ca67c"})
 		return
 	}
 	// 预置名单手动追加条目的默认备注：手动封禁（任务 merge 的挤出豁免判据
@@ -1342,7 +1343,7 @@ func (h *Handlers) RemoveIPFromList(c *gin.Context) {
 	id := c.Param("id")
 	listID, idOK := parsePositiveNumericID(id)
 	if !idOK {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "无效的列表 ID"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_696b4eec"), MessageKey: "k_696b4eec"})
 		return
 	}
 	var req models.AddIPToListRequest
@@ -1350,7 +1351,7 @@ func (h *Handlers) RemoveIPFromList(c *gin.Context) {
 		return
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求参数无效"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_868de64b"), MessageKey: "k_868de64b"})
 		return
 	}
 	// 名单写路径统一持锁（同文件 Create/Update/Delete/Add 均持，
@@ -1363,7 +1364,7 @@ func (h *Handlers) RemoveIPFromList(c *gin.Context) {
 	}
 	tx, err := beginCaddyWriteTx(c)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "开启数据库事务失败"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_aa47c2a6"), MessageKey: "k_aa47c2a6"})
 		return
 	}
 	defer tx.Rollback()
@@ -1371,7 +1372,7 @@ func (h *Handlers) RemoveIPFromList(c *gin.Context) {
 	var system int
 	if err := tx.QueryRowContext(caddyWriteCtx(c), "SELECT COALESCE(name,''), COALESCE(entries,'[]'), COALESCE(system,0) FROM security_ip_lists WHERE id=?", id).Scan(&listName, &entriesJSON, &system); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "IP 地址列表不存在"})
+			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: apimsg.T(c, "k_262eb28a"), MessageKey: "k_262eb28a"})
 			return
 		}
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
@@ -1382,14 +1383,14 @@ func (h *Handlers) RemoveIPFromList(c *gin.Context) {
 		// 2026-10-15 用户裁定：无抑制窗口，IP 重新达标会被再次封禁）；
 		// 威胁情报名单保持只读。
 		if listName != services.AutobanPresetListName {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "内置名单只读，由威胁情报库更新任务维护"})
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_e1da6d91"), MessageKey: "k_e1da6d91"})
 			return
 		}
 	}
 	entriesJSON = normalizeIPListEntriesJSON(entriesJSON)
 	var entries []models.IPListEntry
 	if err := json.Unmarshal([]byte(entriesJSON), &entries); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "存储的 IP 列表条目已损坏，请用整表覆盖（清空/重新导入）修复"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_b87ca67c"), MessageKey: "k_b87ca67c"})
 		return
 	}
 	kept := make([]models.IPListEntry, 0, len(entries))
@@ -1427,7 +1428,7 @@ func (h *Handlers) RemoveIPFromList(c *gin.Context) {
 			return
 		}
 		if blocked {
-			c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "移除后该名单为空，会使引用它的白名单策略生效集合为空（空名单会拒绝所有请求）；请先调整相关安全策略"})
+			c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: apimsg.T(c, "k_4264d659"), MessageKey: "k_4264d659"})
 			return
 		}
 	}
@@ -1629,7 +1630,7 @@ func (h *Handlers) ExportIPList(c *gin.Context) {
 		`SELECT id, COALESCE(name,''), COALESCE(entries,'[]'), COALESCE(system,0) FROM security_ip_lists WHERE id=?`, id).
 		Scan(&listID, &name, &entriesJSON, &system)
 	if errors.Is(err, sql.ErrNoRows) {
-		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "IP 地址列表不存在"})
+		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: apimsg.T(c, "k_262eb28a"), MessageKey: "k_262eb28a"})
 		return
 	}
 	if err != nil {
@@ -1659,7 +1660,7 @@ func (h *Handlers) ExportIPList(c *gin.Context) {
 		if strings.TrimSpace(entriesJSON) != "" {
 			if err := json.Unmarshal([]byte(entriesJSON), &entries); err != nil {
 				services.Logf("error", "导出名单 %q entries 解析失败: %v", name, err)
-				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "名单条目数据损坏"})
+				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_3586dd49"), MessageKey: "k_3586dd49"})
 				return
 			}
 		}

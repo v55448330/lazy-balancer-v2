@@ -11,6 +11,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"lazy-balancer-v2/internal/apimsg"
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
 	"lazy-balancer-v2/internal/services"
@@ -43,7 +44,7 @@ func (h *Handlers) UpdateAutobanConfig(c *gin.Context) {
 	}
 	var req services.AutobanConfig
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求参数无效"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_868de64b"), MessageKey: "k_868de64b"})
 		return
 	}
 	if !requireMasterNode(c) {
@@ -54,7 +55,7 @@ func (h *Handlers) UpdateAutobanConfig(c *gin.Context) {
 	// 其它写端点同口径。旧实现把两者压成 400 并回传存储层原文，真实故障被
 	// 报成「请求参数无效」，调用方停止重试且响应泄露表/列名。
 	if err := services.ValidateAutobanConfig(req); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.ErrMsg(c, err)})
 		return
 	}
 	if err := services.SetAutobanConfig(req); err != nil {
@@ -73,7 +74,7 @@ func (h *Handlers) UpdateAutobanConfig(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("回读自动封禁配置失败", err)})
 		return
 	}
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "自动封禁配置已更新", Data: updated})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_7c026b1f"), MessageKey: "k_7c026b1f", Data: updated})
 }
 
 func boolOnOff(b bool) string {

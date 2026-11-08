@@ -8,6 +8,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"lazy-balancer-v2/internal/apimsg"
 	"lazy-balancer-v2/internal/models"
 	"lazy-balancer-v2/internal/services"
 )
@@ -54,7 +55,7 @@ func (h *Handlers) GetClusterSnapshot(c *gin.Context) {
 			services.RecordAuditLog("system", "同步下发", "集群节点", services.FormatAuditDetail(nodeLabel, fmt.Sprintf("下发版本：%d", snapshot.Version)), c.ClientIP())
 		}
 	}
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "快照生成成功", Data: snapshot})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_e2134b03"), MessageKey: "k_e2134b03", Data: snapshot})
 }
 
 // authenticatedClusterToken 读取集群令牌。两处调用方
@@ -98,7 +99,7 @@ func (h *Handlers) PullClusterSnapshot(c *gin.Context) {
 	// 窗口内提交要么被导入覆盖，要么阻塞在 SQLite 写锁上至 busy_timeout 后 500。
 	// 与节点写族同口径 409；后台 daemon 仍按「主节点为准」保留。
 	if configImportBusy() {
-		c.JSON(http.StatusConflict, models.APIResponse{Code: http.StatusConflict, Message: "配置导入进行中，暂不能手动同步，请稍后重试"})
+		c.JSON(http.StatusConflict, models.APIResponse{Code: http.StatusConflict, Message: apimsg.T(c, "k_86db0e60"), MessageKey: "k_86db0e60"})
 		return
 	}
 	result, err := h.syncService.Pull(c.Request.Context())
@@ -113,7 +114,7 @@ func (h *Handlers) PullClusterSnapshot(c *gin.Context) {
 		recordAudit(c, "手动同步", "集群同步", services.FormatAuditDetail("配置无变化", services.AuditResultPart("success")))
 	}
 	h.syncService.Resume()
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "手动同步完成", Data: result})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_91110f22"), MessageKey: "k_91110f22", Data: result})
 }
 
 // ForgetClusterPins 是从节点管理员的 PinMismatch 补救端点：主节点更换
@@ -147,7 +148,7 @@ func (h *Handlers) ForgetClusterPins(c *gin.Context) {
 		}
 		if isMaster {
 			recordAudit(c, "清除失败", "证书指纹", services.FormatAuditDetail("主节点调用被拒绝：主节点 pin 目录存各从节点钉", services.AuditResultPart("failure")))
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "主节点无需清除指纹（本端点仅从节点使用）"})
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_14d8a178"), MessageKey: "k_14d8a178"})
 			return
 		}
 	}
@@ -161,7 +162,7 @@ func (h *Handlers) ForgetClusterPins(c *gin.Context) {
 		fmt.Sprintf("已清除 %d 个主节点证书指纹，下次同步将重新验证并钉扎", removed),
 		services.AuditResultPart("success"),
 	))
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "已清除全部主节点证书指纹，下次同步将按当前证书重新钉扎"})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_d94bc52e"), MessageKey: "k_d94bc52e"})
 }
 
 // ForgetClusterNodePin 是主节点侧「单节点 TOFU 指纹钉」重置端点（与从节点
@@ -200,7 +201,7 @@ func (h *Handlers) ForgetClusterNodePin(c *gin.Context) {
 			// 不阻断运维排障流程。
 			recordAudit(c, "清除", "证书指纹", services.FormatAuditDetail(
 				fmt.Sprintf("节点 %d", nodeID), "该节点没有已钉扎的证书指纹，无需清除"))
-			c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "该节点没有已钉扎的证书指纹，无需清除"})
+			c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_ec34e103"), MessageKey: "k_ec34e103"})
 			return
 		}
 		recordAudit(c, "清除失败", "证书指纹", services.FormatAuditDetail(fmt.Sprintf("节点 %d", nodeID), err.Error()))
@@ -212,7 +213,7 @@ func (h *Handlers) ForgetClusterNodePin(c *gin.Context) {
 	}
 	recordAudit(c, "清除", "证书指纹", services.FormatAuditDetail(
 		fmt.Sprintf("节点 %d（%s）", nodeID, host), services.AuditResultPart("success")))
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "已清除该节点的证书指纹，下次服务控制将按其当前证书重新钉扎"})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_bcd41466"), MessageKey: "k_bcd41466"})
 }
 
 // GetClusterWafFiles serves the full CRS/IP2Region file bundle on demand to
@@ -231,7 +232,7 @@ func (h *Handlers) GetClusterWafFiles(c *gin.Context) {
 	}
 	body := services.BuildWafFileBundleResponse()
 	if body == nil {
-		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "主节点无安全数据"})
+		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: apimsg.T(c, "k_cf2eac23"), MessageKey: "k_cf2eac23"})
 		return
 	}
 	c.Data(http.StatusOK, "application/json; charset=utf-8", body)

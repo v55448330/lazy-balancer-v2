@@ -9,6 +9,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"lazy-balancer-v2/internal/apimsg"
 	"lazy-balancer-v2/internal/models"
 	"lazy-balancer-v2/internal/services"
 )
@@ -100,8 +101,8 @@ func (h *Handlers) SetClusterMode(c *gin.Context) {
 		recordAudit(c, "切换失败", "集群模式", services.FormatAuditDetail("目标：从节点", fmt.Sprintf("registration_id：%d", registration.RegistrationID), err.Error()))
 		c.JSON(http.StatusInternalServerError, models.APIResponse{
 			Code:    http.StatusInternalServerError,
-			Message: "保存从节点模式失败；远端注册已创建，请管理员清理后重试",
-			Data:    gin.H{"registration_id": registration.RegistrationID},
+			Message: apimsg.T(c, "k_300d6248"), MessageKey: "k_300d6248",
+			Data: gin.H{"registration_id": registration.RegistrationID},
 		})
 		return
 	}
@@ -168,7 +169,7 @@ func (h *Handlers) PromoteClusterNode(c *gin.Context) {
 	// 生命周期由任务引擎统一驱动（Promote → SetRole → daemon hook/角色门），
 	// handler 不再直调管理器或旧调度器。
 	recordAudit(c, "提升", "集群模式", services.FormatAuditDetail("从节点 → 主节点", services.AuditResultPart("success")))
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "已提升为主节点"})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_ede3e4ae"), MessageKey: "k_ede3e4ae"})
 }
 
 func (h *Handlers) UpdateClusterSettings(c *gin.Context) {
@@ -226,7 +227,7 @@ func (h *Handlers) UpdateClusterSettings(c *gin.Context) {
 		detail = "无修改"
 	}
 	recordAudit(c, "更新", "集群设置", services.FormatAuditDetail(detail, services.AuditResultPart("success")))
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "集群设置已更新"})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_42589787"), MessageKey: "k_42589787"})
 }
 
 // switchToSlaveAuditDetail 构建切换从节点的审计详情;出口 IP 探测失败

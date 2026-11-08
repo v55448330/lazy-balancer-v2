@@ -19,6 +19,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/gin-gonic/gin/binding"
 
+	"lazy-balancer-v2/internal/apimsg"
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
 	"lazy-balancer-v2/internal/services"
@@ -43,7 +44,7 @@ func (h *Handlers) ListRules(c *gin.Context) {
 	// 实践上即 rowid 序）。
 	rows, err := db.DB.Query(`SELECT ` + lbRuleListColumns + ` FROM lb_rules ORDER BY rowid`)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "数据库错误"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_c9682421"), MessageKey: "k_c9682421"})
 		return
 	}
 	rules, err := scanLbRules(rows)
@@ -53,12 +54,12 @@ func (h *Handlers) ListRules(c *gin.Context) {
 	}
 	if err != nil {
 		services.Logf("error", "ListRules scan error: %v", err)
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取规则失败"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_70a21b93"), MessageKey: "k_70a21b93"})
 		return
 	}
 	if err := hydrateRuleRelations(c.Request.Context(), rules); err != nil {
 		services.Logf("error", "ListRules relations error: %v", err)
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取规则关联数据失败"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_1248b1d7"), MessageKey: "k_1248b1d7"})
 		return
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: rules})
@@ -68,7 +69,7 @@ func (h *Handlers) GetRule(c *gin.Context) {
 	caddyID := c.Param("caddy_id")
 	rows, err := db.DB.Query(`SELECT `+lbRuleColumns+` FROM lb_rules WHERE caddy_id = ?`, caddyID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取规则失败"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_70a21b93"), MessageKey: "k_70a21b93"})
 		return
 	}
 	rules, err := scanLbRules(rows)
@@ -78,16 +79,16 @@ func (h *Handlers) GetRule(c *gin.Context) {
 	}
 	if err != nil {
 		services.Logf("error", "GetRule scan error for caddy_id=%s: %v", caddyID, err)
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取规则失败"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_70a21b93"), MessageKey: "k_70a21b93"})
 		return
 	}
 	if len(rules) == 0 {
-		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "规则不存在"})
+		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: apimsg.T(c, "k_814ff4da"), MessageKey: "k_814ff4da"})
 		return
 	}
 	if err := hydrateRuleRelations(c.Request.Context(), rules); err != nil {
 		services.Logf("error", "GetRule relations error for caddy_id=%s: %v", caddyID, err)
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取规则关联数据失败"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_1248b1d7"), MessageKey: "k_1248b1d7"})
 		return
 	}
 	rule := rules[0]
@@ -153,13 +154,13 @@ func (h *Handlers) GetRuleCaddyConfig(c *gin.Context) {
 	`, caddyID).Scan(&r.CaddyID, &r.ListenPort, &r.Enabled)
 
 	if errors.Is(err, sql.ErrNoRows) {
-		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "规则不存在"})
+		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: apimsg.T(c, "k_814ff4da"), MessageKey: "k_814ff4da"})
 		return
 	}
 
 	if err != nil {
 		services.Logf("error", "GetRuleCaddyConfig: query/scan error for rule caddy_id=%s: %v", caddyID, err)
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "规则 Caddy 配置查询失败"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_d63eec48"), MessageKey: "k_d63eec48"})
 		return
 	}
 
@@ -888,7 +889,7 @@ func recordRuleWriteFailure(c *gin.Context, verb, phase string, err error) {
 // 的前置条件会被拖到提交后以 500 整体回滚（一次真实 apply 白做）。
 func respondCAProviderResolveFailure(c *gin.Context, verb string, resolveErr error) {
 	if errors.Is(resolveErr, sql.ErrNoRows) {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "没有可用的 CA 提供商，请先在 CA 提供商页面添加并启用"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_ffbd9273"), MessageKey: "k_ffbd9273"})
 		return
 	}
 	recordRuleWriteFailure(c, verb, "解析 CA 提供商失败", resolveErr)
@@ -1317,7 +1318,7 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 	// 限制请求体大小防止 OOM（与 config_backup.go limitConfigImportBody 一致策略）。
 	const maxCreateRuleBodyBytes int64 = 1 << 20 // 1MB
 	if c.Request.ContentLength > maxCreateRuleBodyBytes {
-		c.JSON(http.StatusRequestEntityTooLarge, models.APIResponse{Code: 413, Message: "请求体过大"})
+		c.JSON(http.StatusRequestEntityTooLarge, models.APIResponse{Code: 413, Message: apimsg.T(c, "k_45aadcca"), MessageKey: "k_45aadcca"})
 		return
 	}
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxCreateRuleBodyBytes)
@@ -1329,14 +1330,14 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 	// 不触发)映射 413,与 PutCaddyConfig/导入路径同口径——预读会吞掉
 	// MaxBytesError 让 bind 落在「unexpected EOF」的 400 上,须在预读处判。
 	if isRequestBodyTooLarge(readErr) {
-		c.JSON(http.StatusRequestEntityTooLarge, models.APIResponse{Code: 413, Message: "请求体过大"})
+		c.JSON(http.StatusRequestEntityTooLarge, models.APIResponse{Code: 413, Message: apimsg.T(c, "k_45aadcca"), MessageKey: "k_45aadcca"})
 		return
 	}
 	var req models.CreateRuleRequest
 	// ShouldBindBodyWith（缓存请求体）供 weight 省略探针二次解码。
 	if err := c.ShouldBindBodyWith(&req, binding.JSON); err != nil {
 		if isRequestBodyTooLarge(err) {
-			c.JSON(http.StatusRequestEntityTooLarge, models.APIResponse{Code: 413, Message: "请求体过大"})
+			c.JSON(http.StatusRequestEntityTooLarge, models.APIResponse{Code: 413, Message: apimsg.T(c, "k_45aadcca"), MessageKey: "k_45aadcca"})
 			return
 		}
 		// 畸形 JSON 的请求体可能含
@@ -1358,16 +1359,16 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 	services.Logf("info", "CreateRule bind success: name=%s, protocol=%s, port=%d, upstreams=%d", req.Name, req.Protocol, req.ListenPort, len(req.Upstreams))
 
 	if req.Name == "" {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "名称不能为空"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_751767f2"), MessageKey: "k_751767f2"})
 		return
 	}
 	// 规则文本长度上限：name/description 长度门（DDL 声明值，SQLite 不强制）。
 	if err := validateRuleTextLengths(req.Name, req.Description); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.ErrMsg(c, err)})
 		return
 	}
 	if req.Protocol == "" {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "协议不能为空"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_4171b401"), MessageKey: "k_4171b401"})
 		return
 	}
 	// When TLS is enabled for HTTP, default the listen port to 443 unless the user explicitly set another port.
@@ -1376,12 +1377,12 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 	}
 
 	if req.ListenPort <= 0 {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "监听端口必须大于 0"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_b5a579d1"), MessageKey: "k_b5a579d1"})
 		return
 	}
 
 	if len(req.Upstreams) == 0 {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "至少需要一个上游服务器"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_43328086"), MessageKey: "k_43328086"})
 		return
 	}
 
@@ -1410,13 +1411,13 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 	}
 
 	if req.Protocol == "http" && strings.TrimSpace(req.Domain) == "" {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "HTTP/HTTPS 规则的域名不能为空"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_b42ceb45"), MessageKey: "k_b42ceb45"})
 		return
 	}
 	if req.Protocol == "http" && req.Domain != "" {
 		canonicalDomain, err := db.CanonicalDomains(req.Domain)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "域名格式无效"})
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_98294eda"), MessageKey: "k_98294eda"})
 			return
 		}
 		req.Domain = canonicalDomain
@@ -1436,12 +1437,12 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 	creatingDisabled := req.Enabled != nil && !*req.Enabled
 
 	if err := h.validateRuleListenPortForSave(req.Protocol, req.ListenPort); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.ErrMsg(c, err)})
 		return
 	}
 	if !creatingDisabled {
 		if err := h.validatePortFromDB(req.Protocol, req.ListenPort, ""); err != nil {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.ErrMsg(c, err)})
 			return
 		}
 	}
@@ -1452,18 +1453,18 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 		if err != nil {
 			services.Logf("error", "CreateRule domain conflict query failed for domain=%s: %v", req.Domain, err)
 			recordRuleWriteFailure(c, "创建", "检查域名冲突失败", err)
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "检查域名冲突失败"})
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_c1c65ead"), MessageKey: "k_c1c65ead"})
 			return
 		}
 		if existing {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "域名已被其他 HTTP/HTTPS 规则使用"})
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_d0cfe028"), MessageKey: "k_d0cfe028"})
 			return
 		}
 		shadowRule, shadowDomain, err := queryRedirectShadowConflict(req.Domain, req.ListenPort, req.EnableTLS, req.TLSHTTPRedirect, "")
 		if err != nil {
 			services.Logf("error", "CreateRule redirect shadow query failed for domain=%s: %v", req.Domain, err)
 			recordRuleWriteFailure(c, "创建", "检查域名跳转冲突失败", err)
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "检查域名冲突失败"})
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_c1c65ead"), MessageKey: "k_c1c65ead"})
 			return
 		}
 		if shadowRule != "" {
@@ -1498,7 +1499,7 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 	var certWarnings []string
 	if req.EnableTLS && req.TLSSource == "manual" {
 		if strings.TrimSpace(req.TLSCert) == "" || strings.TrimSpace(req.TLSKey) == "" {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "手动证书模式下必须提供 TLS 证书和私钥"})
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_bb243dd3"), MessageKey: "k_bb243dd3"})
 			return
 		}
 		if err := validateTLSCertificate(req.TLSCert, req.TLSKey); err != nil {
@@ -1520,11 +1521,11 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 	}
 
 	if req.UpstreamKeepaliveTimeout < 0 {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "上游 keepalive 超时不能为负数"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_f771b81a"), MessageKey: "k_f771b81a"})
 		return
 	}
 	if req.ServerTokensHidden < 0 || req.ServerTokensHidden > 2 {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "server_tokens_hidden 必须为 0、1 或 2"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_8b3abad9"), MessageKey: "k_8b3abad9"})
 		return
 	}
 	// 认证网关写侧归一（空 uri/身份头回填确定默认、upstream 收敛空白）先于
@@ -1533,7 +1534,7 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 		normalizeForwardAuthValues(req.ForwardAuthEnabled, req.ForwardAuthUpstream, req.ForwardAuthURI, req.ForwardAuthCopyHeaders)
 	features := createRuleFeatures(req)
 	if err := validateRuleFeatures(features); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.ErrMsg(c, err)})
 		return
 	}
 	// 后端字段层校验（三层校验第 2 层；Caddy 层由 applyFromTxNote 的 CLI 预检
@@ -1541,14 +1542,14 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 	// 承担 tls_source 白名单与请求体上限——Create/Update 入口的同款本地检查
 	// 已删除（单源，杜绝两处文案/边界漂移）。
 	if err := h.validateRulePayloadBeforeSave(req); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.ErrMsg(c, err)})
 		return
 	}
 	// 同端口 TLS/明文混布拦截(创建方向)。创建即禁用
 	// 同样跳过——禁用规则不进入监听器渲染，启用方向由 EnableRule 同函数把守。
 	if req.Protocol == "http" && !creatingDisabled {
 		if err := checkPortTLSMix("", req.ListenPort, req.EnableTLS); err != nil {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.ErrMsg(c, err)})
 			return
 		}
 	}
@@ -1559,7 +1560,7 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 	caddyID, err := services.GenerateCaddyID()
 	if err != nil {
 		recordRuleWriteFailure(c, "创建", "生成规则 ID 失败", err)
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "生成规则 ID 失败"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_b10d0772"), MessageKey: "k_b10d0772"})
 		return
 	}
 
@@ -1790,7 +1791,7 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 			}
 			recordAudit(c, "创建失败", "负载规则", services.FormatAuditDetail(
 				services.AuditRulePart(caddyID), detail, services.AuditResultPart("failure")))
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "CA 队列未初始化"})
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_1fa1c9d5"), MessageKey: "k_1fa1c9d5"})
 			return
 		}
 		if _, err := services.CreateOrRequeueCertJob(caddyID, req.Domain, req.CAProviderID, qm); err != nil {
@@ -1826,7 +1827,7 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 	}
 	recordAudit(c, "创建", "负载规则", services.FormatAuditDetail(createAuditParts...))
 	reloadNote.finalize()
-	c.JSON(http.StatusCreated, models.APIResponse{Code: 0, Message: "规则已创建", Data: gin.H{"caddy_id": caddyID}})
+	c.JSON(http.StatusCreated, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_6162ed62"), MessageKey: "k_6162ed62", Data: gin.H{"caddy_id": caddyID}})
 }
 
 // certEnqueueErrorResponse 证书任务入队失败的状态/文案单源
@@ -2197,7 +2198,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	// OOM 单进程服务（gin + Caddy 编排 + 证书队列同进程）。
 	const maxUpdateRuleBodyBytes int64 = 1 << 20 // 1MB
 	if c.Request.ContentLength > maxUpdateRuleBodyBytes {
-		c.JSON(http.StatusRequestEntityTooLarge, models.APIResponse{Code: 413, Message: "请求体过大"})
+		c.JSON(http.StatusRequestEntityTooLarge, models.APIResponse{Code: 413, Message: apimsg.T(c, "k_45aadcca"), MessageKey: "k_45aadcca"})
 		return
 	}
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxUpdateRuleBodyBytes)
@@ -2207,7 +2208,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		// MaxBytesReader 超限(chunked/未知长度)映射 413,
 		// 与 CreateRule/PutCaddyConfig/导入路径口径一致。
 		if isRequestBodyTooLarge(err) {
-			c.JSON(http.StatusRequestEntityTooLarge, models.APIResponse{Code: 413, Message: "请求体过大"})
+			c.JSON(http.StatusRequestEntityTooLarge, models.APIResponse{Code: 413, Message: apimsg.T(c, "k_45aadcca"), MessageKey: "k_45aadcca"})
 			return
 		}
 		services.Logf("error", "UpdateRule bind error for caddy_id=%s: %v", caddyID, err)
@@ -2223,7 +2224,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	// 「读库版本 → 写库」不被并发写者穿插，锁内比较才是可证明的。
 	expectedUpdatedAt, hasExpectedUpdatedAt, versionErr := parseRuleVersionExpectation(req.ExpectedUpdatedAt)
 	if versionErr != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: versionErr.Error()})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.ErrMsg(c, versionErr)})
 		return
 	}
 
@@ -2277,14 +2278,14 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 			return
 		}
 		recordRuleWriteFailure(c, "更新", "读取规则失败", err)
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取规则失败"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_70a21b93"), MessageKey: "k_70a21b93"})
 		return
 	}
 	existingRule.PathRules, err = db.LoadPathRules(c.Request.Context(), db.DB, caddyID)
 	if err != nil {
 		services.Logf("error", "UpdateRule failed to load path_rules for caddy_id=%s: %v", caddyID, err)
 		recordRuleWriteFailure(c, "更新", "读取自定义路径规则失败", err)
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取自定义路径规则失败"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_eb5a6de8"), MessageKey: "k_eb5a6de8"})
 		return
 	}
 
@@ -2296,7 +2297,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	if err != nil {
 		services.Logf("error", "UpdateRule failed to read existing upstreams for caddy_id=%s: %v", caddyID, err)
 		recordRuleWriteFailure(c, "更新", "读取现有上游服务器失败", err)
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取现有上游服务器失败"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_2c6a2cc5"), MessageKey: "k_2c6a2cc5"})
 		return
 	}
 	for oldUpstreamRows.Next() {
@@ -2307,7 +2308,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 			}
 			services.Logf("error", "UpdateRule failed to scan existing upstream for caddy_id=%s: %v", caddyID, err)
 			recordRuleWriteFailure(c, "更新", "读取现有上游服务器失败", err)
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取现有上游服务器失败"})
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_2c6a2cc5"), MessageKey: "k_2c6a2cc5"})
 			return
 		}
 		oldUpstreams = append(oldUpstreams, u)
@@ -2318,13 +2319,13 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		}
 		services.Logf("error", "UpdateRule existing upstream cursor failed for caddy_id=%s: %v", caddyID, err)
 		recordRuleWriteFailure(c, "更新", "读取现有上游服务器失败", err)
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取现有上游服务器失败"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_2c6a2cc5"), MessageKey: "k_2c6a2cc5"})
 		return
 	}
 	if err := oldUpstreamRows.Close(); err != nil {
 		services.Logf("error", "UpdateRule failed to close existing upstream cursor for caddy_id=%s: %v", caddyID, err)
 		recordRuleWriteFailure(c, "更新", "读取现有上游服务器失败", err)
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取现有上游服务器失败"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_2c6a2cc5"), MessageKey: "k_2c6a2cc5"})
 		return
 	}
 
@@ -2547,7 +2548,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	}
 	// 规则文本长度上限：合并后的 name/description 长度门（DDL 声明值）。
 	if err := validateRuleTextLengths(req.Name, *req.Description); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.ErrMsg(c, err)})
 		return
 	}
 
@@ -2750,13 +2751,13 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	}
 
 	if req.Protocol == "http" && strings.TrimSpace(req.Domain) == "" {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "HTTP/HTTPS 规则的域名不能为空"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_b42ceb45"), MessageKey: "k_b42ceb45"})
 		return
 	}
 	if req.Protocol == "http" && req.Domain != "" {
 		canonicalDomain, err := db.CanonicalDomains(req.Domain)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "域名格式无效"})
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_98294eda"), MessageKey: "k_98294eda"})
 			return
 		}
 		req.Domain = canonicalDomain
@@ -2780,11 +2781,11 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 			if err != nil {
 				services.Logf("error", "UpdateRule domain conflict query failed for caddy_id=%s domain=%s: %v", caddyID, req.Domain, err)
 				recordRuleWriteFailure(c, "更新", "检查域名冲突失败", err)
-				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "检查域名冲突失败"})
+				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_c1c65ead"), MessageKey: "k_c1c65ead"})
 				return
 			}
 			if existing {
-				c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "域名已被其他 HTTP/HTTPS 规则使用"})
+				c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_d0cfe028"), MessageKey: "k_d0cfe028"})
 				return
 			}
 		}
@@ -2812,7 +2813,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 			if err != nil {
 				services.Logf("error", "UpdateRule redirect shadow query failed for caddy_id=%s domain=%s: %v", caddyID, req.Domain, err)
 				recordRuleWriteFailure(c, "更新", "检查域名跳转冲突失败", err)
-				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "检查域名冲突失败"})
+				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_c1c65ead"), MessageKey: "k_c1c65ead"})
 				return
 			}
 			if shadowRule != "" {
@@ -2871,11 +2872,11 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	}
 
 	if req.UpstreamKeepaliveTimeout != nil && *req.UpstreamKeepaliveTimeout < 0 {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "上游 keepalive 超时不能为负数"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_f771b81a"), MessageKey: "k_f771b81a"})
 		return
 	}
 	if req.ServerTokensHidden != nil && (*req.ServerTokensHidden < 0 || *req.ServerTokensHidden > 2) {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "server_tokens_hidden 必须为 0、1 或 2"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_8b3abad9"), MessageKey: "k_8b3abad9"})
 		return
 	}
 	// 认证网关写侧归一（指针合并后、特性构建前）：空 uri/身份头回填确定默认、
@@ -2887,12 +2888,12 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	features := updateRuleFeatures(req, existingRule)
 	features.Protocol = req.Protocol
 	if err := validateRuleFeatures(features); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.ErrMsg(c, err)})
 		return
 	}
 	// 后端字段层校验（三层校验第 2 层，同 CreateRule，裁定 2026-09-06 ④'）。
 	if err := h.validateRulePayloadBeforeSave(req); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.ErrMsg(c, err)})
 		return
 	}
 	// 生效 CA 提供商必须在写前可解析：「跟随默认」解析不到任何启用提供商是
@@ -2918,7 +2919,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	// 让读侧误以为此处仍接受 nil 语义。
 	if req.Protocol == "http" {
 		if err := checkPortTLSMix(caddyID, req.ListenPort, *req.EnableTLS); err != nil {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.ErrMsg(c, err)})
 			return
 		}
 	}
@@ -2933,7 +2934,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		// 实际在用旧证书）；仅同为 manual 且未修改证书时允许 DB 回退。
 		if existingRule.TLSSource == "acme_dns" {
 			if strings.TrimSpace(req.TLSCert) == "" || strings.TrimSpace(req.TLSKey) == "" {
-				c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "从自动签发切换到手动模式必须上传或填写新的证书和私钥，不能沿用自动签发的旧证书"})
+				c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_89b7532d"), MessageKey: "k_89b7532d"})
 				return
 			}
 		} else {
@@ -2946,7 +2947,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 			}
 		}
 		if *req.EnableTLS && (strings.TrimSpace(tlsCert) == "" || strings.TrimSpace(tlsKey) == "") {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "手动证书模式下必须提供 TLS 证书和私钥"})
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_bb243dd3"), MessageKey: "k_bb243dd3"})
 			return
 		}
 		if tlsCert != "" && tlsKey != "" {
@@ -2969,11 +2970,11 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	// 的 server 替换为候选（跨规则流量顶替），此前端口冲突在 validate 之后才拒绝且
 	// 无运行配置恢复。前移后该场景在副作用发生前拦截。
 	if err := h.validateRuleListenPortForSave(req.Protocol, req.ListenPort); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.ErrMsg(c, err)})
 		return
 	}
 	if err := h.validatePortFromDB(req.Protocol, req.ListenPort, caddyID); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.ErrMsg(c, err)})
 		return
 	}
 
@@ -2989,7 +2990,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 			// 与 /disable、DELETE 同口径：被在途签发挡住的禁用尝试必须留痕
 			//（同场景走 /disable 有账、走编辑入口无账，审计会出现动作盲区）。
 			recordAudit(c, "更新失败", "负载规则", ruleConflictDetail(caddyID, "该规则有正在进行的证书签发任务（约需几分钟），请任务完成后再禁用或稍后重试"))
-			c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "该规则有正在进行的证书签发任务（约需几分钟），请任务完成后再禁用或稍后重试"})
+			c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: apimsg.T(c, "k_a4f8191e"), MessageKey: "k_a4f8191e"})
 			return
 		}
 	}
@@ -3041,14 +3042,14 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	if oldRuleRowErr != nil {
 		services.Logf("error", "UpdateRule failed to snapshot lb_rules row for caddy_id=%s: %v", caddyID, oldRuleRowErr)
 		recordRuleWriteFailure(c, "更新", "备份规则数据失败", oldRuleRowErr)
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "备份规则数据失败"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_bd8accf5"), MessageKey: "k_bd8accf5"})
 		return
 	}
 	oldUpstreamRowsMap, oldUpstreamRowsErr := dumpRowsByKey(c.Request.Context(), "upstreams", "rule_id", caddyID)
 	if oldUpstreamRowsErr != nil {
 		services.Logf("error", "UpdateRule failed to snapshot upstreams for caddy_id=%s: %v", caddyID, oldUpstreamRowsErr)
 		recordRuleWriteFailure(c, "更新", "备份上游数据失败", oldUpstreamRowsErr)
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "备份上游数据失败"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_208fdb64"), MessageKey: "k_208fdb64"})
 		return
 	}
 	restoreRuleDBSnapshot := func() error {
@@ -3111,13 +3112,13 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		if err := tx.QueryRow(`SELECT COALESCE(updated_at,'') FROM lb_rules WHERE caddy_id = ?`, caddyID).Scan(&currentVersion); err != nil {
 			services.Logf("error", "UpdateRule failed to read rule version for caddy_id=%s: %v", caddyID, err)
 			recordRuleWriteFailure(c, "更新", "读取规则版本失败", err)
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取规则版本失败"})
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_c88a7cf1"), MessageKey: "k_c88a7cf1"})
 			return
 		}
 		if ruleVersionConflicts(currentVersion, expectedUpdatedAt) {
 			recordAudit(c, "更新失败", "负载规则", services.FormatAuditDetail(
 				services.AuditRulePart(caddyID), "并发修改：规则已被他人修改，请刷新后重试", services.AuditResultPart("failure")))
-			c.JSON(http.StatusConflict, models.APIResponse{Code: http.StatusConflict, Message: "规则已被他人修改，请刷新后重试"})
+			c.JSON(http.StatusConflict, models.APIResponse{Code: http.StatusConflict, Message: apimsg.T(c, "k_60ab0761"), MessageKey: "k_60ab0761"})
 			return
 		}
 	}
@@ -3163,7 +3164,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 			if executingJobs > 0 {
 				rollbackRuleWriteTx(tx, "UpdateRule", caddyID)
 				recordAudit(c, "更新失败", "负载规则", ruleConflictDetail(caddyID, "证书申请中，请等待完成或失败后再修改规则"))
-				c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "证书申请中，请等待完成或失败后再修改规则"})
+				c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: apimsg.T(c, "k_0b4dca75"), MessageKey: "k_0b4dca75"})
 				return
 			}
 		}
@@ -3240,7 +3241,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		// 409 早退（非终态证书任务在途）。裁定 ④' 后保存路径无预校验
 		// 探针，此处早退零运行时扰动，无需恢复。
 		recordAudit(c, "更新失败", "负载规则", ruleConflictDetail(caddyID, "证书申请中，请等待完成或失败后再修改规则"))
-		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "证书申请中，请等待完成或失败后再修改规则"})
+		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: apimsg.T(c, "k_0b4dca75"), MessageKey: "k_0b4dca75"})
 		return
 	}
 	// TCP 终态收口（不只协议切换）——按 L4 阶段 0/1 语义（契约 C4）只清理
@@ -3694,7 +3695,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 					writeInternalError(c, http.StatusInternalServerError, "CA 队列未初始化且恢复失败", nil)
 					return
 				}
-				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "CA 队列未初始化"})
+				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_1fa1c9d5"), MessageKey: "k_1fa1c9d5"})
 				return
 			}
 			services.Logf("info", "UpdateRule enqueueing cert job for caddy_id=%s domain=%s ca_provider_id=%d", caddyID, domain, caProviderID)
@@ -3764,10 +3765,10 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	recordAudit(c, "更新", "负载规则", services.FormatAuditDetail(auditParts...))
 	reloadNote.finalize()
 	if len(updateWarnings) > 0 {
-		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "规则已更新", Data: gin.H{"warnings": updateWarnings}})
+		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_a79e5c4d"), MessageKey: "k_a79e5c4d", Data: gin.H{"warnings": updateWarnings}})
 		return
 	}
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "规则已更新"})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_a79e5c4d"), MessageKey: "k_a79e5c4d"})
 }
 
 func (h *Handlers) DeleteRule(c *gin.Context) {
@@ -3795,7 +3796,7 @@ func (h *Handlers) DeleteRule(c *gin.Context) {
 	// TOCTOU 窗口落入既有超时中止+快照回滚保护，正确性不变。
 	if qm := services.GetCAQueueManager(); qm != nil && qm.HasRunningJobForRule(caddyID) {
 		recordAudit(c, "删除失败", "负载规则", ruleConflictDetail(caddyID, "该规则有正在进行的证书签发任务（约需几分钟），请任务完成后再删除或稍后重试"))
-		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "该规则有正在进行的证书签发任务（约需几分钟），请任务完成后再删除或稍后重试"})
+		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: apimsg.T(c, "k_314d0900"), MessageKey: "k_314d0900"})
 		return
 	}
 	certJobsSnapshot, err := services.SnapshotCertJobsForRule(caddyID)
@@ -3869,7 +3870,7 @@ func (h *Handlers) DeleteRule(c *gin.Context) {
 	tx, err := beginCaddyWriteTx(c)
 	if err != nil {
 		recordRuleWriteFailure(c, "删除", "开启数据库事务失败", err)
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "开启数据库事务失败"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_aa47c2a6"), MessageKey: "k_aa47c2a6"})
 		return
 	}
 	committed := false
@@ -3884,7 +3885,7 @@ func (h *Handlers) DeleteRule(c *gin.Context) {
 	if _, err := tx.Exec("DELETE FROM cert_jobs WHERE rule_id = ?", caddyID); err != nil {
 		services.Logf("error", "DeleteRule cert_jobs delete error for caddy_id=%s: %v", caddyID, err)
 		recordRuleWriteFailure(c, "删除", "删除证书任务失败", err)
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "删除证书任务失败"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_ee013876"), MessageKey: "k_ee013876"})
 		return
 	}
 	// 删除规则时一并清理安全策略绑定，避免遗留孤儿绑定导致该规则 caddy_id
@@ -3892,13 +3893,13 @@ func (h *Handlers) DeleteRule(c *gin.Context) {
 	if _, err := tx.Exec("DELETE FROM security_policy_bindings WHERE rule_caddy_id = ?", caddyID); err != nil {
 		services.Logf("error", "DeleteRule security_policy_bindings delete error for caddy_id=%s: %v", caddyID, err)
 		recordRuleWriteFailure(c, "删除", "删除安全策略绑定失败", err)
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "删除安全策略绑定失败"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_6d00f87c"), MessageKey: "k_6d00f87c"})
 		return
 	}
 	if _, err := tx.Exec("DELETE FROM upstreams WHERE rule_id = ?", caddyID); err != nil {
 		services.Logf("error", "DeleteRule upstreams delete error for caddy_id=%s: %v", caddyID, err)
 		recordRuleWriteFailure(c, "删除", "删除上游服务器失败", err)
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "删除上游服务器失败"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_9a9305dc"), MessageKey: "k_9a9305dc"})
 		return
 	}
 	// 审计 FK 刻意 OFF（sqlite_pragmas.go），CASCADE 是死条款——path_rules
@@ -3906,13 +3907,13 @@ func (h *Handlers) DeleteRule(c *gin.Context) {
 	if _, err := tx.Exec("DELETE FROM path_rules WHERE rule_id = ?", caddyID); err != nil {
 		services.Logf("error", "DeleteRule path_rules delete error for caddy_id=%s: %v", caddyID, err)
 		recordRuleWriteFailure(c, "删除", "删除自定义路径失败", err)
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "删除自定义路径失败"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_3e5e1c3c"), MessageKey: "k_3e5e1c3c"})
 		return
 	}
 	if _, err := tx.Exec("DELETE FROM lb_rules WHERE caddy_id = ?", caddyID); err != nil {
 		services.Logf("error", "DeleteRule lb_rules delete error for caddy_id=%s: %v", caddyID, err)
 		recordRuleWriteFailure(c, "删除", "删除规则失败", err)
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "删除规则失败"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_0494e34c"), MessageKey: "k_0494e34c"})
 		return
 	}
 
@@ -4022,7 +4023,7 @@ func (h *Handlers) DeleteRule(c *gin.Context) {
 
 	recordAudit(c, "删除", "负载规则", services.FormatAuditDetail(services.AuditRulePart(caddyID), fmt.Sprintf("协议：%s", protocol), fmt.Sprintf("端口：%d", listenPort), domain))
 	reloadNote.finalize()
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "规则已删除"})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_63e66ff5"), MessageKey: "k_63e66ff5"})
 }
 
 func (h *Handlers) DuplicateRule(c *gin.Context) {
@@ -4579,7 +4580,7 @@ func (h *Handlers) BatchRuleBlockPages(c *gin.Context) {
 	// 生效）。与 CreateRule/PutCaddyConfig 同口径。
 	const maxBatchBlockPagesBodyBytes int64 = 1 << 20
 	if c.Request.ContentLength > maxBatchBlockPagesBodyBytes {
-		c.JSON(http.StatusRequestEntityTooLarge, models.APIResponse{Code: 413, Message: "请求体过大"})
+		c.JSON(http.StatusRequestEntityTooLarge, models.APIResponse{Code: 413, Message: apimsg.T(c, "k_45aadcca"), MessageKey: "k_45aadcca"})
 		return
 	}
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxBatchBlockPagesBodyBytes)
@@ -4588,14 +4589,14 @@ func (h *Handlers) BatchRuleBlockPages(c *gin.Context) {
 		// 长度）：与 CreateRule/UpdateRule 同口径，按 413 回应体积超限，
 		// 不得折成「请求参数无效」。
 		if isRequestBodyTooLarge(err) {
-			c.JSON(http.StatusRequestEntityTooLarge, models.APIResponse{Code: 413, Message: "请求体过大"})
+			c.JSON(http.StatusRequestEntityTooLarge, models.APIResponse{Code: 413, Message: apimsg.T(c, "k_45aadcca"), MessageKey: "k_45aadcca"})
 			return
 		}
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求参数无效"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_868de64b"), MessageKey: "k_868de64b"})
 		return
 	}
 	if len(req.RuleIDs) == 0 {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "rule_ids 不能为空"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_a0ca2e4f"), MessageKey: "k_a0ca2e4f"})
 		return
 	}
 	// trim+去重保序——重复 id 只处理一次（修复前逐个
@@ -4614,7 +4615,7 @@ func (h *Handlers) BatchRuleBlockPages(c *gin.Context) {
 		dedupedRuleIDs = append(dedupedRuleIDs, ruleID)
 	}
 	if len(dedupedRuleIDs) == 0 {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "rule_ids 不能为空"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_a0ca2e4f"), MessageKey: "k_a0ca2e4f"})
 		return
 	}
 	req.RuleIDs = dedupedRuleIDs
@@ -4694,8 +4695,8 @@ func (h *Handlers) BatchRuleBlockPages(c *gin.Context) {
 	// 的「成功」只是语法兼容回执。
 	c.JSON(http.StatusOK, models.APIResponse{
 		Code:    0,
-		Message: "批量设置阶段拦截页已停用（规则级阶段拦截页功能下线，请求已忽略）",
-		Data:    gin.H{"bound": bound, "unchanged": unchanged, "skipped": skipped},
+		Message: apimsg.T(c, "k_f6c953aa"), MessageKey: "k_f6c953aa",
+		Data: gin.H{"bound": bound, "unchanged": unchanged, "skipped": skipped},
 	})
 }
 
@@ -4721,7 +4722,7 @@ func (h *Handlers) EnableRule(c *gin.Context) {
 	}
 	if err != nil {
 		recordRuleWriteFailure(c, "启用", "读取规则失败", err)
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取规则失败"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_70a21b93"), MessageKey: "k_70a21b93"})
 		return
 	}
 	// 补偿需要恢复启用 UPDATE 改写前的原始域名/操作者——
@@ -4730,12 +4731,12 @@ func (h *Handlers) EnableRule(c *gin.Context) {
 	if ruleProtocol == "http" && ruleDomain != "" {
 		ruleDomain, err = db.CanonicalDomains(ruleDomain)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "域名格式无效"})
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_98294eda"), MessageKey: "k_98294eda"})
 			return
 		}
 	}
 	if originalEnabled {
-		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "规则已启用"})
+		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_941bac5d"), MessageKey: "k_941bac5d"})
 		return
 	}
 	if err := validateStoredRuleConfig(c.Request.Context(), caddyID); err != nil {
@@ -4743,12 +4744,12 @@ func (h *Handlers) EnableRule(c *gin.Context) {
 			// 放锁窗口内规则被并发删除：启用成功没有对象，按冲突语义回报。
 			services.Logf("warn", "EnableRule validation re-read lost rule caddy_id=%s (deleted concurrently)", caddyID)
 			recordAudit(c, "启用失败", "负载规则", ruleConflictDetail(caddyID, "规则已被删除或并发变更，请刷新后重试"))
-			c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "规则已被删除或并发变更，请刷新后重试"})
+			c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: apimsg.T(c, "k_5a59c9b5"), MessageKey: "k_5a59c9b5"})
 			return
 		}
 		var validationErr *configValidationError
 		if errors.As(err, &validationErr) {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: validationErr.Error()})
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.ErrMsg(c, validationErr)})
 			return
 		}
 		recordRuleWriteFailure(c, "启用", "预校验规则配置失败", err)
@@ -4777,7 +4778,7 @@ func (h *Handlers) EnableRule(c *gin.Context) {
 		if err != nil {
 			services.Logf("error", "EnableRule domain conflict query failed for caddy_id=%s domain=%s: %v", caddyID, ruleDomain, err)
 			recordRuleWriteFailure(c, "启用", "检查域名冲突失败", err)
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "检查域名冲突失败"})
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_c1c65ead"), MessageKey: "k_c1c65ead"})
 			return
 		}
 		if conflict {
@@ -4788,7 +4789,7 @@ func (h *Handlers) EnableRule(c *gin.Context) {
 		if err != nil {
 			services.Logf("error", "EnableRule redirect shadow query failed for caddy_id=%s domain=%s: %v", caddyID, ruleDomain, err)
 			recordRuleWriteFailure(c, "启用", "检查域名跳转冲突失败", err)
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "检查域名冲突失败"})
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_c1c65ead"), MessageKey: "k_c1c65ead"})
 			return
 		}
 		if shadowRule != "" {
@@ -4809,7 +4810,7 @@ func (h *Handlers) EnableRule(c *gin.Context) {
 		// 非法域名集（如 "a.com,b.com,c.com"）会随导入落库；启用时若不在这里拦下，
 		// 入队阶段才以 certEnqueue 的默认映射冒 500。与创建/更新/预校验同口径 400。
 		if err := services.ValidateACMEDomainsForIssuance(ruleDomain); err != nil {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.ErrMsg(c, err)})
 			return
 		}
 		// 写前解析生效 CA 提供商：无可用提供商是用户可修复的配置状态
@@ -4837,7 +4838,7 @@ func (h *Handlers) EnableRule(c *gin.Context) {
 	tx, err := beginCaddyWriteTx(c)
 	if err != nil {
 		recordRuleWriteFailure(c, "启用", "开启数据库事务失败", err)
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "开启数据库事务失败"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_aa47c2a6"), MessageKey: "k_aa47c2a6"})
 		return
 	}
 	committed := false
@@ -4855,19 +4856,19 @@ func (h *Handlers) EnableRule(c *gin.Context) {
 	if ruleProtocol == "tcp" {
 		if _, err := tx.ExecContext(caddyWriteCtx(c), tcpRuleDeadFieldsResetForRuleSQL, caddyID); err != nil {
 			recordRuleWriteFailure(c, "启用", "清理 TCP 死配置失败", err)
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "启用规则失败"})
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_fe056e38"), MessageKey: "k_fe056e38"})
 			return
 		}
 		if _, err := tx.ExecContext(caddyWriteCtx(c), `DELETE FROM path_rules WHERE rule_id = ?`, caddyID); err != nil {
 			recordRuleWriteFailure(c, "启用", "清理 TCP 自定义路径失败", err)
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "启用规则失败"})
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_fe056e38"), MessageKey: "k_fe056e38"})
 			return
 		}
 		// 同族：TCP 零消费 upstreams.origin_domain（仅 HTTP 回源域名），启用时
 		// 一并清零，避免启用成功却把死配置留在库里随导出/备份/集群快照放大。
 		if _, err := tx.ExecContext(caddyWriteCtx(c), `UPDATE upstreams SET origin_domain = '' WHERE rule_id = ? AND COALESCE(origin_domain,'') <> ''`, caddyID); err != nil {
 			recordRuleWriteFailure(c, "启用", "清理上游回源域名失败", err)
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "启用规则失败"})
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_fe056e38"), MessageKey: "k_fe056e38"})
 			return
 		}
 		// 同族收口：TCP 渲染链不加载安全策略，存量/带外绑定会在策略页显示
@@ -4877,14 +4878,14 @@ func (h *Handlers) EnableRule(c *gin.Context) {
 		if err != nil {
 			services.Logf("error", "EnableRule security_policy_bindings cleanup error for caddy_id=%s: %v", caddyID, err)
 			recordRuleWriteFailure(c, "启用", "清理安全策略绑定失败", err)
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "启用规则失败"})
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_fe056e38"), MessageKey: "k_fe056e38"})
 			return
 		}
 		affected, raErr := bindingResult.RowsAffected()
 		if raErr != nil {
 			services.Logf("error", "EnableRule security_policy_bindings RowsAffected error for caddy_id=%s: %v", caddyID, raErr)
 			recordRuleWriteFailure(c, "启用", "确认安全策略绑定清理结果失败", raErr)
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "启用规则失败"})
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_fe056e38"), MessageKey: "k_fe056e38"})
 			return
 		}
 		droppedBindings = affected
@@ -4893,7 +4894,7 @@ func (h *Handlers) EnableRule(c *gin.Context) {
 	enableResult, err := tx.Exec("UPDATE lb_rules SET enabled = 1, domain = ?, updated_at = datetime('now'), updated_by = ? WHERE caddy_id = ?", ruleDomain, userIDInt, caddyID)
 	if err != nil {
 		recordRuleWriteFailure(c, "启用", "写入数据库失败（启用规则）", err)
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "启用规则失败"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_fe056e38"), MessageKey: "k_fe056e38"})
 		return
 	}
 	// 放锁窗口（快照/预校验期间）内规则可被并发删除：0 行更新意味着后续
@@ -4902,7 +4903,7 @@ func (h *Handlers) EnableRule(c *gin.Context) {
 	if affected, raErr := enableResult.RowsAffected(); raErr != nil || affected == 0 {
 		services.Logf("warn", "EnableRule updated 0 rows for caddy_id=%s (deleted concurrently): affected=%d err=%v", caddyID, affected, raErr)
 		recordAudit(c, "启用失败", "负载规则", ruleConflictDetail(caddyID, "规则已被删除或并发变更，请刷新后重试"))
-		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "规则已被删除或并发变更，请刷新后重试"})
+		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: apimsg.T(c, "k_5a59c9b5"), MessageKey: "k_5a59c9b5"})
 		return
 	}
 	reloadNote, applyErr := h.applyFromTxNote(c, tx, txReloadDetail("rule_enable", caddyID), true)
@@ -5151,7 +5152,7 @@ func (h *Handlers) EnableRule(c *gin.Context) {
 
 	recordAudit(c, "启用", "负载规则", services.FormatAuditDetail(services.AuditRulePart(caddyID), "状态：已启用"))
 	reloadNote.finalize()
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "规则已启用"})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_941bac5d"), MessageKey: "k_941bac5d"})
 }
 
 // upstreamWeightPresenceProbe 区分「省略 weight」与「显式 0」
@@ -5303,13 +5304,13 @@ func abortIfRuleDeleted(c *gin.Context, caddyID string) bool {
 	exists, err := ruleExistsByCaddyID(caddyID)
 	if err != nil {
 		services.Logf("error", "UpdateRule: 复核规则存在性失败 for caddy_id=%s: %v", caddyID, err)
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取规则失败"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_70a21b93"), MessageKey: "k_70a21b93"})
 		return true
 	}
 	if !exists {
 		services.Logf("warn", "UpdateRule: 规则 %s 已在放锁窗口内被删除，中止后续迁移/补偿（不复活规则）", caddyID)
 		recordAudit(c, "更新失败", "负载规则", ruleConflictDetail(caddyID, "规则已被删除，本次更新已中止"))
-		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "规则已被删除，本次更新已中止"})
+		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: apimsg.T(c, "k_2d42005f"), MessageKey: "k_2d42005f"})
 		return true
 	}
 	return false
@@ -5416,7 +5417,7 @@ func abortIfRuleConcurrentlyModifiedAs(c *gin.Context, caddyID, baseline, opName
 	default:
 		recordAudit(c, "更新失败", "负载规则", detail)
 	}
-	c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "本次变更已保存，随后检测到并发修改，已跳过后续证书迁移/补偿，请刷新确认"})
+	c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: apimsg.T(c, "k_a54baea2"), MessageKey: "k_a54baea2"})
 	return true
 }
 
@@ -5437,11 +5438,11 @@ func (h *Handlers) DisableRule(c *gin.Context) {
 	}
 	if err != nil {
 		recordRuleWriteFailure(c, "禁用", "读取规则失败", err)
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取规则失败"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_70a21b93"), MessageKey: "k_70a21b93"})
 		return
 	}
 	if !originalEnabled {
-		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "规则已禁用"})
+		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_c427b5bb"), MessageKey: "k_c427b5bb"})
 		return
 	}
 
@@ -5450,7 +5451,7 @@ func (h *Handlers) DisableRule(c *gin.Context) {
 	// 「执行中」；TOCTOU 窗口落入既有超时中止+回滚保护，正确性不变。
 	if qm := services.GetCAQueueManager(); qm != nil && qm.HasRunningJobForRule(caddyID) {
 		recordAudit(c, "禁用失败", "负载规则", ruleConflictDetail(caddyID, "该规则有正在进行的证书签发任务（约需几分钟），请任务完成后再禁用或稍后重试"))
-		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "该规则有正在进行的证书签发任务（约需几分钟），请任务完成后再禁用或稍后重试"})
+		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: apimsg.T(c, "k_a4f8191e"), MessageKey: "k_a4f8191e"})
 		return
 	}
 
@@ -5462,7 +5463,7 @@ func (h *Handlers) DisableRule(c *gin.Context) {
 	tx, err := beginCaddyWriteTx(c)
 	if err != nil {
 		recordRuleWriteFailure(c, "禁用", "开启数据库事务失败", err)
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "开启数据库事务失败"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_aa47c2a6"), MessageKey: "k_aa47c2a6"})
 		return
 	}
 	committed := false
@@ -5477,7 +5478,7 @@ func (h *Handlers) DisableRule(c *gin.Context) {
 	disableResult, err := tx.Exec("UPDATE lb_rules SET enabled = 0, updated_at = datetime('now'), updated_by = ? WHERE caddy_id = ?", userIDInt, caddyID)
 	if err != nil {
 		recordRuleWriteFailure(c, "禁用", "写入数据库失败（禁用规则）", err)
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "禁用规则失败"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_52d9cfb2"), MessageKey: "k_52d9cfb2"})
 		return
 	}
 	// 同 EnableRule：快照窗口内规则可被并发删除，0 行更新必须中止（事务
@@ -5485,7 +5486,7 @@ func (h *Handlers) DisableRule(c *gin.Context) {
 	if affected, raErr := disableResult.RowsAffected(); raErr != nil || affected == 0 {
 		services.Logf("warn", "DisableRule updated 0 rows for caddy_id=%s (deleted concurrently): affected=%d err=%v", caddyID, affected, raErr)
 		recordAudit(c, "禁用失败", "负载规则", ruleConflictDetail(caddyID, "规则已被删除或并发变更，请刷新后重试"))
-		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "规则已被删除或并发变更，请刷新后重试"})
+		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: apimsg.T(c, "k_5a59c9b5"), MessageKey: "k_5a59c9b5"})
 		return
 	}
 	var disabledJobs int64
@@ -5577,7 +5578,7 @@ func (h *Handlers) DisableRule(c *gin.Context) {
 
 	recordAudit(c, "禁用", "负载规则", services.FormatAuditDetail(services.AuditRulePart(caddyID), "状态：已禁用"))
 	reloadNote.finalize()
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "规则已禁用"})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_c427b5bb"), MessageKey: "k_c427b5bb"})
 }
 
 // ensureRuleExistsForLogs 规则日志两端点的存在性门：与 metrics-history 同
@@ -5606,7 +5607,7 @@ func (h *Handlers) GetRuleLogStream(c *gin.Context) {
 	if raw := c.Query("offset"); raw != "" {
 		parsed, parseErr := strconv.ParseInt(raw, 10, 64)
 		if parseErr != nil || parsed < 0 {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "offset 参数必须是非负整数"})
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_86375b97"), MessageKey: "k_86375b97"})
 			return
 		}
 		offset = parsed
@@ -5614,7 +5615,7 @@ func (h *Handlers) GetRuleLogStream(c *gin.Context) {
 	lines, next, err := services.ReadRuleLogFrom(caddyID, offset)
 	if err != nil {
 		services.Logf("warn", "读取规则日志失败（caddy_id=%s offset=%d）: %v", caddyID, offset, err)
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取规则日志失败"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_374ddaf4"), MessageKey: "k_374ddaf4"})
 		return
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"offset": next, "lines": lines}})
@@ -5628,7 +5629,7 @@ func (h *Handlers) GetRuleLogs(c *gin.Context) {
 	content, offset, err := services.ReadRuleLogTail(caddyID, 1000)
 	if err != nil {
 		services.Logf("warn", "读取规则日志末尾失败（caddy_id=%s）: %v", caddyID, err)
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取规则日志失败"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_374ddaf4"), MessageKey: "k_374ddaf4"})
 		return
 	}
 	// offset must point just past the returned tail so a following stream

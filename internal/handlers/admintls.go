@@ -16,6 +16,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"lazy-balancer-v2/internal/apimsg"
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
 	"lazy-balancer-v2/internal/services"
@@ -273,10 +274,10 @@ func (in *adminTLSInput) certificatePair() (string, string, error) {
 func respondAdminTLSBodyError(c *gin.Context, err error) {
 	var maxBytesErr *http.MaxBytesError
 	if errors.As(err, &maxBytesErr) {
-		c.JSON(http.StatusRequestEntityTooLarge, models.APIResponse{Code: 413, Message: "请求体超过 4 MiB 上限"})
+		c.JSON(http.StatusRequestEntityTooLarge, models.APIResponse{Code: 413, Message: apimsg.T(c, "k_e49370e9"), MessageKey: "k_e49370e9"})
 		return
 	}
-	c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+	c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.ErrMsg(c, err)})
 }
 
 // InspectAdminTLSCert parses uploaded cert/key files without saving, so the
@@ -290,7 +291,7 @@ func (h *Handlers) InspectAdminTLSCert(c *gin.Context) {
 	}
 	certPEM, keyPEM, err := input.certificatePair()
 	if err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.ErrMsg(c, err)})
 		return
 	}
 	if _, err := tls.X509KeyPair([]byte(certPEM), []byte(keyPEM)); err != nil {
@@ -298,7 +299,7 @@ func (h *Handlers) InspectAdminTLSCert(c *gin.Context) {
 		return
 	}
 	if err := validateAdminTLSCertPeriod(certPEM, time.Now()); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.ErrMsg(c, err)})
 		return
 	}
 	info, err := parseAdminTLSCertInfo(certPEM)
@@ -459,7 +460,7 @@ func (h *Handlers) UpdateAdminTLS(c *gin.Context) {
 		certPEM, keyPEM, err := input.certificatePair()
 		if err != nil {
 			auditAdminTLSFailure(c, "证书材料读取失败: "+err.Error())
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.ErrMsg(c, err)})
 			return
 		}
 		cert, key = certPEM, keyPEM
@@ -487,11 +488,11 @@ func (h *Handlers) UpdateAdminTLS(c *gin.Context) {
 			return
 		}
 		auditAdminTLSFailure(c, "配置校验失败: "+err.Error())
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.ErrMsg(c, err)})
 		return
 	}
 	if unchanged {
-		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "配置未变更，无需重启"})
+		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_4f413469"), MessageKey: "k_4f413469"})
 		return
 	}
 	// 独有探针：启用态以真实落盘目录探测证书可用性（自签名生成/文件读写），
@@ -509,7 +510,7 @@ func (h *Handlers) UpdateAdminTLS(c *gin.Context) {
 	if mode == "upload" && uploadedCertificate && !enabled {
 		if err := validateUploadCertificatePair(cert, key, time.Now()); err != nil {
 			auditAdminTLSFailure(c, "证书材料校验失败: "+err.Error())
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.ErrMsg(c, err)})
 			return
 		}
 	}
@@ -532,7 +533,7 @@ func (h *Handlers) UpdateAdminTLS(c *gin.Context) {
 			reason = "读取更新结果失败: " + rowsErr.Error()
 		}
 		auditAdminTLSFailure(c, "HTTPS 配置未落库（"+reason+"）")
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "HTTPS 配置未落库（配置行不存在）"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_8091d711"), MessageKey: "k_8091d711"})
 		return
 	}
 
@@ -558,7 +559,7 @@ func (h *Handlers) UpdateAdminTLS(c *gin.Context) {
 		certPart,
 		services.AuditResultPart("success"),
 	))
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "已保存，服务正在重启以应用 HTTPS 配置"})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_fc8d003f"), MessageKey: "k_fc8d003f"})
 	// 改走统一重启触发器（restartProcess，见 system.go）——与集群同步的
 	// Admin TLS 热切换同一优雅停机信号；测试环境回退 exitProcess。
 	// 先解锁再重启：重启期间不得让并发的配置写请求阻塞在 caddyOpMu 上。

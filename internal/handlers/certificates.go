@@ -14,6 +14,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"lazy-balancer-v2/internal/apimsg"
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
 	"lazy-balancer-v2/internal/services"
@@ -304,7 +305,7 @@ func (h *Handlers) CreateCertificateConfig(c *gin.Context) {
 	// 名称与 CA 提供商同族校验：trim 后非空且 ≤100 rune，写 trimmed 值入库。
 	name, nameErr := normalizeCertificateConfigName(req.Name)
 	if nameErr != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: nameErr.Error()})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.ErrMsg(c, nameErr)})
 		return
 	}
 
@@ -319,13 +320,13 @@ func (h *Handlers) CreateCertificateConfig(c *gin.Context) {
 	// Create 无库值可取,含掩码占位直接拒绝。
 	for _, v := range req.DNSCredentials {
 		if v == maskedDNSCredentialsSentinel {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "凭证字段不能为掩码占位符"})
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_3c18246b"), MessageKey: "k_3c18246b"})
 			return
 		}
 	}
 
 	if _, err := provider.BuildCredentialsJSON(req.DNSCredentials); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.ErrMsg(c, err)})
 		return
 	}
 
@@ -512,7 +513,7 @@ func (h *Handlers) UpdateCertificateConfig(c *gin.Context) {
 		}
 		merged, merr := mergeMaskedDNSCredentials(effectiveCredentials, stored, effectiveProvider == oldProvider)
 		if merr != nil {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: merr.Error()})
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.ErrMsg(c, merr)})
 			return
 		}
 		prunedStaleCredentialFields = pruneSupersededDNSCredentialFamily(merged, stored)
@@ -532,7 +533,7 @@ func (h *Handlers) UpdateCertificateConfig(c *gin.Context) {
 	// + provider 变更路径不受影响（旧值携带旧 mode → buildCredentials 族门 400）。
 	if effectiveProvider != oldProvider {
 		if family := dnsCredentialFamilyMode(effectiveCredentials); family != "" && family != effectiveProvider {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "凭证族与目标 DNS 提供商不一致（掩码继承携带了旧提供商的 token），请显式提交新提供商的凭证"})
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_ce55150e"), MessageKey: "k_ce55150e"})
 			return
 		}
 	}
@@ -557,7 +558,7 @@ func (h *Handlers) UpdateCertificateConfig(c *gin.Context) {
 		services.CredentialsSemanticallyEqual(string(effectiveCredentialsJSON), oldCredentials) && !enabling
 	if (!legacyEmptyUnchanged || enablingLegacyEmpty) && !credentialsUnchangedFromStored {
 		if _, err := provider.BuildCredentialsJSON(effectiveCredentials); err != nil {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.ErrMsg(c, err)})
 			return
 		}
 	}
@@ -588,7 +589,7 @@ func (h *Handlers) UpdateCertificateConfig(c *gin.Context) {
 	if req.Name != "" {
 		normalizedName, nameErr := normalizeCertificateConfigName(req.Name)
 		if nameErr != nil {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: nameErr.Error()})
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.ErrMsg(c, nameErr)})
 			return
 		}
 		req.Name = normalizedName
@@ -812,7 +813,7 @@ func (h *Handlers) TestCertificateConfig(c *gin.Context) {
 	}
 	if req.Domain == "" {
 		recordAudit(c, "测试失败", "DNS配置", services.FormatAuditDetail(auditTarget, configName, provider, services.AuditResultPart("missing_domain")))
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请输入用于测试的域名"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_3bb63314"), MessageKey: "k_3bb63314"})
 		return
 	}
 
@@ -824,11 +825,11 @@ func (h *Handlers) TestCertificateConfig(c *gin.Context) {
 	}
 	if err := p.Validate(c.Request.Context(), creds, req.Domain); err != nil {
 		recordAudit(c, "测试失败", "DNS配置", services.FormatAuditDetail(auditTarget, configName, provider, req.Domain, services.AuditResultPart("credentials_invalid")))
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.ErrMsg(c, err)})
 		return
 	}
 	recordAudit(c, "测试成功", "DNS配置", services.FormatAuditDetail(auditTarget, configName, provider, req.Domain, services.AuditResultPart("success")))
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "凭证有效"})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_c8802b24"), MessageKey: "k_c8802b24"})
 }
 
 // ListCertificates 返回证书任务聚合清单（2026-09-10:原实现请求
@@ -966,12 +967,12 @@ func (h *Handlers) IssueCertificate(c *gin.Context) {
 	}
 	if bindErr != nil && !(errors.Is(bindErr, io.EOF) && c.Request.ContentLength == 0) {
 		auditFailure("invalid_request")
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求格式错误"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_76de02a0"), MessageKey: "k_76de02a0"})
 		return
 	}
 	if req.CaddyID == "" && req.Domain != "" {
 		auditFailure("invalid_request")
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求格式错误"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_76de02a0"), MessageKey: "k_76de02a0"})
 		return
 	}
 	qm := services.GetCAQueueManager()
@@ -986,7 +987,7 @@ func (h *Handlers) IssueCertificate(c *gin.Context) {
 	// 两条 changed=false 出口在下方定向/批量分支分别归因。
 	if !qm.IsActive() {
 		auditFailure("skipped", "证书签发队列已暂停")
-		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "证书签发队列已暂停，无法创建签发任务"})
+		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: apimsg.T(c, "k_9b2fa36c"), MessageKey: "k_9b2fa36c"})
 		return
 	}
 	// 手动签发的 规则当前态读取→冷却门→upsert/入队
@@ -1082,7 +1083,7 @@ func (h *Handlers) IssueCertificate(c *gin.Context) {
 		// 同判据兜底，此处给出可读原因）。
 		if qm.IsRuleBlocked(req.CaddyID) {
 			auditFailure("skipped", "规则证书操作被屏障阻塞（规则正在删除或迁移）")
-			c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "规则证书操作被屏障阻塞（规则正在删除或迁移），请稍后重试"})
+			c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: apimsg.T(c, "k_4a8499b5"), MessageKey: "k_4a8499b5"})
 			return
 		}
 		var enabled, enableTLS bool
@@ -1101,20 +1102,20 @@ func (h *Handlers) IssueCertificate(c *gin.Context) {
 		}
 		if !enabled || protocol != "http" || !enableTLS || tlsSource != "acme_dns" {
 			auditFailure("failed", "规则状态不支持 ACME 签发")
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "规则不是启用状态的 ACME HTTPS 规则"})
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_606bee02"), MessageKey: "k_606bee02"})
 			return
 		}
 		canonicalRuleDomain, canonicalErr := services.CanonicalACMEDomains(ruleDomain)
 		if canonicalErr != nil {
 			auditFailure("failed", "规则域名无效")
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "规则域名不符合 ACME 签发要求"})
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_2efd9505"), MessageKey: "k_2efd9505"})
 			return
 		}
 		if req.Domain != "" {
 			canonicalRequestDomain, canonicalErr := services.CanonicalACMEDomains(req.Domain)
 			if canonicalErr != nil || canonicalRequestDomain != canonicalRuleDomain {
 				auditFailure("failed", "域名集合与规则不一致")
-				c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "域名集合与规则不一致"})
+				c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_e3cc8c92"), MessageKey: "k_e3cc8c92"})
 				return
 			}
 		}
@@ -1190,7 +1191,7 @@ func (h *Handlers) IssueCertificate(c *gin.Context) {
 						return
 					}
 					recordAudit(c, "触发签发", "证书", services.FormatAuditDetail(scope, "已触发重新部署（不重新签发）", services.AuditResultPart("deployment_retry")))
-					c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "已触发重新部署（不重新签发）", Data: gin.H{"queued": 0, "redeployed": true}})
+					c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_4b088558"), MessageKey: "k_4b088558", Data: gin.H{"queued": 0, "redeployed": true}})
 					return
 				}
 				// rescheduled=false：规则/材料在窗口内刚变化，回落整轮重签。
@@ -1206,7 +1207,7 @@ func (h *Handlers) IssueCertificate(c *gin.Context) {
 				// upsert 落库闸的规则当前态复核拒绝（防御纵深——
 				// 持锁临界区内正常不可达）——409 冲突语义，不得折成 500。
 				auditFailure("conflict", "规则状态已变更（规则已删除、禁用或域名已修改）")
-				c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "规则状态已变更（规则已删除、禁用或域名已修改），请刷新后重试"})
+				c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: apimsg.T(c, "k_7fef1885"), MessageKey: "k_7fef1885"})
 				return
 			}
 			// 入队族错误（队列暂停/规则屏障）是可行动 409，与规则写/任务重试
@@ -1232,18 +1233,18 @@ func (h *Handlers) IssueCertificate(c *gin.Context) {
 			switch {
 			case !qm.IsActive():
 				auditFailure("skipped", "证书签发队列已暂停")
-				c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "证书签发队列已暂停，无法创建签发任务"})
+				c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: apimsg.T(c, "k_9b2fa36c"), MessageKey: "k_9b2fa36c"})
 			case qm.IsRuleBlocked(req.CaddyID):
 				auditFailure("skipped", "规则证书操作被屏障阻塞（规则正在删除或迁移）")
-				c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "规则证书操作被屏障阻塞（规则正在删除或迁移），请稍后重试"})
+				c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: apimsg.T(c, "k_4a8499b5"), MessageKey: "k_4a8499b5"})
 			case qm.IsJobActive(jobID):
 				// 在途：保留 200，但明确 queued=0 与归因（未新建任务）。
 				recordAudit(c, "触发签发", "证书", services.FormatAuditDetail(scope, "任务正在执行中，未重复入队", services.AuditResultPart("skipped")))
-				c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "签发任务正在执行中，未重复入队", Data: gin.H{"queued": 0, "skipped_cooldown": 0, "in_flight": true}})
+				c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_82ce5b7a"), MessageKey: "k_82ce5b7a", Data: gin.H{"queued": 0, "skipped_cooldown": 0, "in_flight": true}})
 			default:
 				// 任务处于不可重排状态（非在途、非冷却）——如实 409，不伪装成功。
 				auditFailure("skipped", "任务状态不支持重新入队")
-				c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "签发任务状态不支持重新入队，请刷新任务状态后重试"})
+				c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: apimsg.T(c, "k_86cb4d68"), MessageKey: "k_86cb4d68"})
 			}
 			return
 		}
@@ -1251,7 +1252,7 @@ func (h *Handlers) IssueCertificate(c *gin.Context) {
 	} else {
 		if !req.All {
 			auditFailure("invalid_request", "请求格式错误")
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "批量签发需要显式确认：请求体须包含 {\"all\": true}（定向签发请提供 caddy_id）"})
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_a1f26fc3"), MessageKey: "k_a1f26fc3"})
 			return
 		}
 		var failed []string
@@ -1426,7 +1427,7 @@ func (h *Handlers) IssueCertificate(c *gin.Context) {
 		}
 		if pausedMidBatch && queued == 0 && redeployed == 0 {
 			auditFailure("skipped", withForceNote(formulaSkippedNote(skippedCooldown+skippedWaitingCA, skippedInFlight, skippedBlocked, skippedUnsupported, skippedRetired)), "证书签发队列已暂停")
-			c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "证书签发队列已暂停，无法创建签发任务"})
+			c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: apimsg.T(c, "k_9b2fa36c"), MessageKey: "k_9b2fa36c"})
 			return
 		}
 		if pausedMidBatch && (queued > 0 || redeployed > 0) {
@@ -1461,7 +1462,7 @@ func (h *Handlers) IssueCertificate(c *gin.Context) {
 			if enqueueConflict == len(failed) {
 				if conflictFailed == enqueueConflict {
 					auditFailure("conflict", "规则状态已变更（规则已删除、禁用或域名已修改）")
-					c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "规则状态已变更（规则已删除、禁用或域名已修改），请刷新后重试"})
+					c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: apimsg.T(c, "k_7fef1885"), MessageKey: "k_7fef1885"})
 					return
 				}
 				auditFailure("skipped", enqueueConflictMessage)
@@ -1617,7 +1618,7 @@ func (h *Handlers) ParseCertificate(c *gin.Context) {
 		// 体积超限是与「PEM 格式非法」不同的可重试语义——与 ca-providers 等
 		// 同域写端点同口径映射 413。
 		if isRequestBodyTooLarge(err) {
-			c.JSON(http.StatusRequestEntityTooLarge, models.APIResponse{Code: 413, Message: "请求体过大"})
+			c.JSON(http.StatusRequestEntityTooLarge, models.APIResponse{Code: 413, Message: apimsg.T(c, "k_45aadcca"), MessageKey: "k_45aadcca"})
 			return
 		}
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Invalid request"})
@@ -1629,7 +1630,7 @@ func (h *Handlers) ParseCertificate(c *gin.Context) {
 		// 解析错误含 tls/x509 英文内部文本（仅只读白名单端点也须固定中文文案）：
 		// 细节只进运行日志，响应固定为可行动的用户语义。
 		services.Logf("warn", "ParseCertificate: 证书解析失败: %v", err)
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "证书或私钥格式无效，或二者不匹配"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_6e3a2c55"), MessageKey: "k_6e3a2c55"})
 		return
 	}
 

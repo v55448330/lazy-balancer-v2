@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"lazy-balancer-v2/internal/apimsg"
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
 	"lazy-balancer-v2/internal/services"
@@ -39,7 +40,7 @@ func (h *Handlers) GetRulesCertInfo(c *gin.Context) {
 		// 与英文 tag：本端点在只读白名单（任何只读凭据可触发），响应固定中文
 		// 文案，细节只进运行日志。
 		services.Logf("warn", "GetRulesCertInfo: 请求体校验失败: %v", err)
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求参数无效"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_868de64b"), MessageKey: "k_868de64b"})
 		return
 	}
 
@@ -50,7 +51,7 @@ func (h *Handlers) GetRulesCertInfo(c *gin.Context) {
 
 	// Limit batch size to prevent abuse
 	if len(req.CaddyIDs) > 200 {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "invalid_request：caddy_ids 数量不能超过 200"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_d69d3a01"), MessageKey: "k_d69d3a01"})
 		return
 	}
 

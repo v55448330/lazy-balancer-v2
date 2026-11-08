@@ -16,6 +16,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"golang.org/x/sync/singleflight"
 
+	"lazy-balancer-v2/internal/apimsg"
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
 	"lazy-balancer-v2/internal/services"
@@ -31,7 +32,7 @@ func (h *Handlers) GetSecurityRateLimitBlocks(c *gin.Context) {
 	blocks, err := services.ScrapeRateLimitBlocks(h.cfg.CaddyMetricsURL)
 	if err != nil {
 		services.Logf("error", "Scrape rate-limit blocks failed: %v", err)
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "限流拦截数据不可用"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_ee05fc23"), MessageKey: "k_ee05fc23"})
 		return
 	}
 	var total float64
@@ -85,11 +86,11 @@ func (h *Handlers) GetRuleStageStats(c *gin.Context) {
 		// not_found，后者保持 500 且 message 归位查询失败（不再借「规则不存在」
 		// 文案）。前端对非 200 一律 stats=null，404 化不改变前端表现。
 		if errors.Is(err, sql.ErrNoRows) {
-			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "规则不存在"})
+			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: apimsg.T(c, "k_814ff4da"), MessageKey: "k_814ff4da"})
 			return
 		}
 		services.Logf("error", "stage-stats read rule domain failed for %s: %v", ruleCaddyID, err)
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "阶段统计查询失败"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_50531a0d"), MessageKey: "k_50531a0d"})
 		return
 	}
 	if db.MetricsDB == nil {
@@ -112,7 +113,7 @@ func (h *Handlers) GetRuleStageStats(c *gin.Context) {
 	stats, err := loadRuleStageStats(db.MetricsDB, ruleCaddyID, time.Now())
 	if err != nil {
 		services.Logf("error", "stage-stats query failed for %s: %v", ruleCaddyID, err)
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "阶段统计查询失败"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_50531a0d"), MessageKey: "k_50531a0d"})
 		return
 	}
 
@@ -124,7 +125,7 @@ func (h *Handlers) GetRuleStageStats(c *gin.Context) {
 		blocks, err := services.ScrapeRateLimitBlocksByHostServer(h.cfg.CaddyMetricsURL)
 		if err != nil {
 			services.Logf("error", "stage-stats scrape rate-limit blocks failed: %v", err)
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "限流拦截数据不可用"})
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_ee05fc23"), MessageKey: "k_ee05fc23"})
 			return
 		}
 		serverName := fmt.Sprintf("http_%d", listenPort)

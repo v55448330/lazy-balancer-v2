@@ -13,6 +13,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"lazy-balancer-v2/internal/apimsg"
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
 	"lazy-balancer-v2/internal/services"
@@ -515,10 +516,10 @@ func (h *Handlers) beginConfigImportWithPrelock(ctx context.Context, prelock fun
 // （可重试语义），其余（读规则/开事务）→ 500。
 func respondImportBeginError(c *gin.Context, err error) {
 	if errors.Is(err, errCertQueueDrainIncomplete) || errors.Is(err, errImportTaskDrainIncomplete) {
-		c.JSON(http.StatusConflict, models.APIResponse{Code: http.StatusConflict, Message: err.Error()})
+		c.JSON(http.StatusConflict, models.APIResponse{Code: http.StatusConflict, Message: apimsg.ErrMsg(c, err)})
 		return
 	}
-	c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "建立导入会话失败，请稍后重试"})
+	c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_c2f40aab"), MessageKey: "k_c2f40aab"})
 }
 
 func (session *configImportSession) close() {

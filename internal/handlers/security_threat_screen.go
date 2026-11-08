@@ -19,6 +19,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"lazy-balancer-v2/geoipnames"
+	"lazy-balancer-v2/internal/apimsg"
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
 	"lazy-balancer-v2/internal/services"
@@ -1682,11 +1683,11 @@ func (h *Handlers) ControlThreatScreenCollector(c *gin.Context) {
 	const collectorBodyLimit = 4096
 	body, err := io.ReadAll(io.LimitReader(c.Request.Body, collectorBodyLimit+1))
 	if err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "请求体读取失败"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_ae1fc209"), MessageKey: "k_ae1fc209"})
 		return
 	}
 	if len(body) > collectorBodyLimit {
-		c.JSON(http.StatusRequestEntityTooLarge, models.APIResponse{Code: 413, Message: "采集控制请求体超过 4KB 上限"})
+		c.JSON(http.StatusRequestEntityTooLarge, models.APIResponse{Code: 413, Message: apimsg.T(c, "k_02bfce69"), MessageKey: "k_02bfce69"})
 		return
 	}
 	target := strings.TrimRight(h.cfg.CaddyAdminURL, "/") + "/lb/traffic-collector"
@@ -1701,7 +1702,7 @@ func (h *Handlers) ControlThreatScreenCollector(c *gin.Context) {
 	}
 	if len(bytes.TrimSpace(body)) > 0 {
 		if err := json.Unmarshal(body, &collectorReq); err != nil {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "采集控制请求体格式无效"})
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_0d2525e7"), MessageKey: "k_0d2525e7"})
 			return
 		}
 	}
@@ -1717,7 +1718,7 @@ func (h *Handlers) ControlThreatScreenCollector(c *gin.Context) {
 	}
 	req, err := http.NewRequestWithContext(c.Request.Context(), c.Request.Method, target, bytes.NewReader(body))
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "采集控制请求构造失败"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_2de3d055"), MessageKey: "k_2de3d055"})
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
@@ -1725,7 +1726,7 @@ func (h *Handlers) ControlThreatScreenCollector(c *gin.Context) {
 	resp, err := client.Do(req)
 	if err != nil {
 		services.Logf("warn", "threat-screen collector: admin request failed: %v", err)
-		c.JSON(http.StatusServiceUnavailable, models.APIResponse{Code: 503, Message: "流量采集控制不可达"})
+		c.JSON(http.StatusServiceUnavailable, models.APIResponse{Code: 503, Message: apimsg.T(c, "k_71c129b9"), MessageKey: "k_71c129b9"})
 		return
 	}
 	defer resp.Body.Close()
@@ -1736,12 +1737,12 @@ func (h *Handlers) ControlThreatScreenCollector(c *gin.Context) {
 	respBody, readErr := io.ReadAll(io.LimitReader(resp.Body, collectorBodyLimit+1))
 	if readErr != nil {
 		services.Logf("warn", "threat-screen collector: read admin body failed: %v", readErr)
-		c.JSON(http.StatusServiceUnavailable, models.APIResponse{Code: 503, Message: "流量采集控制响应读取失败"})
+		c.JSON(http.StatusServiceUnavailable, models.APIResponse{Code: 503, Message: apimsg.T(c, "k_3d497a6c"), MessageKey: "k_3d497a6c"})
 		return
 	}
 	if len(respBody) > collectorBodyLimit {
 		services.Logf("warn", "threat-screen collector: admin response exceeds %d bytes", collectorBodyLimit)
-		c.JSON(http.StatusBadGateway, models.APIResponse{Code: 502, Message: "流量采集控制上游响应超过 4KB 上限"})
+		c.JSON(http.StatusBadGateway, models.APIResponse{Code: 502, Message: apimsg.T(c, "k_74f1ae29"), MessageKey: "k_74f1ae29"})
 		return
 	}
 	// 先转发成功再落本地：admin 失败（503/400）时本地租约保持原状，
@@ -1778,14 +1779,14 @@ func (h *Handlers) GetThreatScreenFlowEvents(c *gin.Context) {
 	}
 	req, err := http.NewRequestWithContext(c.Request.Context(), http.MethodGet, target, nil)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "事件流请求构造失败"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_40bb937c"), MessageKey: "k_40bb937c"})
 		return
 	}
 	client := &http.Client{Timeout: 2 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		services.Logf("warn", "threat-screen events: admin request failed: %v", err)
-		c.JSON(http.StatusServiceUnavailable, models.APIResponse{Code: 503, Message: "逐请求事件流不可达"})
+		c.JSON(http.StatusServiceUnavailable, models.APIResponse{Code: 503, Message: apimsg.T(c, "k_43766663"), MessageKey: "k_43766663"})
 		return
 	}
 	defer resp.Body.Close()
@@ -1797,10 +1798,10 @@ func (h *Handlers) GetThreatScreenFlowEvents(c *gin.Context) {
 	if resp.StatusCode != http.StatusOK {
 		services.Logf("warn", "threat-screen events: admin status %d", resp.StatusCode)
 		if resp.StatusCode >= 500 {
-			c.JSON(http.StatusServiceUnavailable, models.APIResponse{Code: 503, Message: "逐请求事件流不可达"})
+			c.JSON(http.StatusServiceUnavailable, models.APIResponse{Code: 503, Message: apimsg.T(c, "k_43766663"), MessageKey: "k_43766663"})
 			return
 		}
-		c.JSON(http.StatusBadGateway, models.APIResponse{Code: 502, Message: "逐请求事件流上游响应失败"})
+		c.JSON(http.StatusBadGateway, models.APIResponse{Code: 502, Message: apimsg.T(c, "k_22a58ac2"), MessageKey: "k_22a58ac2"})
 		return
 	}
 	// 对齐同族读端点（GetCRSRuleContent/GetCRSSetupConfig 的 413 口径）
@@ -1809,11 +1810,11 @@ func (h *Handlers) GetThreatScreenFlowEvents(c *gin.Context) {
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20+1))
 	if err != nil {
 		services.Logf("warn", "threat-screen events: read body failed: %v", err)
-		c.JSON(http.StatusServiceUnavailable, models.APIResponse{Code: 503, Message: "逐请求事件流不可达"})
+		c.JSON(http.StatusServiceUnavailable, models.APIResponse{Code: 503, Message: apimsg.T(c, "k_43766663"), MessageKey: "k_43766663"})
 		return
 	}
 	if len(body) > 1<<20 {
-		c.JSON(http.StatusRequestEntityTooLarge, models.APIResponse{Code: 413, Message: "逐请求事件流响应超过 1MB 读取上限"})
+		c.JSON(http.StatusRequestEntityTooLarge, models.APIResponse{Code: 413, Message: apimsg.T(c, "k_60b189b4"), MessageKey: "k_60b189b4"})
 		return
 	}
 	// 应用统一信封：Caddy admin 返回裸 JSON，前端 request 封装按 data 字段
@@ -1834,7 +1835,7 @@ func (h *Handlers) GetThreatScreenFlowEvents(c *gin.Context) {
 	}
 	if err := json.Unmarshal(body, &payload); err != nil {
 		services.Logf("warn", "threat-screen events: decode failed: %v", err)
-		c.JSON(http.StatusBadGateway, models.APIResponse{Code: 502, Message: "逐请求事件流响应格式无效"})
+		c.JSON(http.StatusBadGateway, models.APIResponse{Code: 502, Message: apimsg.T(c, "k_20b183a9"), MessageKey: "k_20b183a9"})
 		return
 	}
 	// 国名与聚合端点/前端质心表同口径（geoipnames 单源）：Caddy 发射 xdb
@@ -2138,7 +2139,7 @@ func (h *Handlers) GetSecurityThreatScreen(c *gin.Context) {
 	trackErr(terr)
 	if firstErr != nil {
 		services.Logf("error", "threat-screen query failed: %v", firstErr)
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "威胁大屏数据查询失败"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_69852638"), MessageKey: "k_69852638"})
 		return
 	}
 
@@ -2178,7 +2179,7 @@ func (h *Handlers) GetSecurityThreatScreen(c *gin.Context) {
 	// 产品语义保持整卡 500：不引入「部分卡片降级」的隐式可用性位。
 	if firstErr != nil {
 		services.Logf("error", "threat-screen query failed: %v", firstErr)
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "威胁大屏数据查询失败"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_69852638"), MessageKey: "k_69852638"})
 		return
 	}
 	recentRate := float64(int(float64(blocked5)/5.0*10+0.5)) / 10
@@ -2326,7 +2327,7 @@ func (h *Handlers) GetSecurityEventToastSummary(c *gin.Context) {
 	}
 	var maxID int64
 	if err := db.MetricsDB.QueryRow(`SELECT COALESCE(MAX(id),0) FROM security_events`).Scan(&maxID); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "安全事件查询失败"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_cda4ee31"), MessageKey: "k_cda4ee31"})
 		return
 	}
 	if baseline {
@@ -2373,7 +2374,7 @@ func (h *Handlers) GetSecurityEventToastSummary(c *gin.Context) {
 		LIMIT 200`, sinceID, maxID, toastSummaryMaxEvents)
 	if err != nil {
 		services.Logf("error", "security event toast summary: query failed: %v", err)
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "安全事件查询失败"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_cda4ee31"), MessageKey: "k_cda4ee31"})
 		return
 	}
 	defer rows.Close()
@@ -2394,7 +2395,7 @@ func (h *Handlers) GetSecurityEventToastSummary(c *gin.Context) {
 		var avgDuration float64
 		if err := rows.Scan(&ip, &action, &ruleTriggered, &ruleMsg, &count, &lastID, &avgDuration); err != nil {
 			services.Logf("error", "security event toast summary: scan failed: %v", err)
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "安全事件查询失败"})
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_cda4ee31"), MessageKey: "k_cda4ee31"})
 			return
 		}
 		if isMissingOrReservedIP(ip) {
@@ -2422,7 +2423,7 @@ func (h *Handlers) GetSecurityEventToastSummary(c *gin.Context) {
 	}
 	if err := rows.Err(); err != nil {
 		services.Logf("error", "security event toast summary: rows iteration failed: %v", err)
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "安全事件查询失败"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_cda4ee31"), MessageKey: "k_cda4ee31"})
 		return
 	}
 	groups := make([]*summary, 0, len(merged))
@@ -2486,7 +2487,7 @@ func (h *Handlers) GetSecurityEventFeed(c *gin.Context) {
 	if sinceID > 0 {
 		var maxID int64
 		if err := db.MetricsDB.QueryRow(`SELECT COALESCE(MAX(id),0) FROM security_events`).Scan(&maxID); err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "安全事件查询失败"})
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_cda4ee31"), MessageKey: "k_cda4ee31"})
 			return
 		}
 		if sinceID > maxID {
@@ -2571,7 +2572,7 @@ func (h *Handlers) GetSecurityEventFeed(c *gin.Context) {
 			args = append(args, pageLimit)
 			scanned, lastID := scanPage(query, args...)
 			if scanFailed {
-				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "安全事件查询失败"})
+				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_cda4ee31"), MessageKey: "k_cda4ee31"})
 				return
 			}
 			if lastID > 0 {
@@ -2592,7 +2593,7 @@ func (h *Handlers) GetSecurityEventFeed(c *gin.Context) {
 			pageLimit := limit - len(events)
 			scanned, lastID := scanPage(selectCols+` WHERE id > ? ORDER BY id ASC LIMIT ?`, cursor, pageLimit)
 			if scanFailed {
-				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "安全事件查询失败"})
+				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_cda4ee31"), MessageKey: "k_cda4ee31"})
 				return
 			}
 			if lastID > 0 {

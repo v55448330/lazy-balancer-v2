@@ -8,6 +8,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"lazy-balancer-v2/internal/apimsg"
 	"lazy-balancer-v2/internal/models"
 	"lazy-balancer-v2/internal/services"
 )
@@ -25,7 +26,7 @@ func (h *Handlers) GetClusterStatus(c *gin.Context) {
 		clusterError(c, http.StatusInternalServerError, "读取集群状态失败", err)
 		return
 	}
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "查询成功", Data: status})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_02835350"), MessageKey: "k_02835350", Data: status})
 }
 
 func (h *Handlers) ListClusterNodes(c *gin.Context) {
@@ -37,7 +38,7 @@ func (h *Handlers) ListClusterNodes(c *gin.Context) {
 		clusterError(c, http.StatusInternalServerError, "读取集群节点失败", err)
 		return
 	}
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "查询成功", Data: nodes})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_02835350"), MessageKey: "k_02835350", Data: nodes})
 }
 
 func (h *Handlers) ReportClusterNode(c *gin.Context) {
@@ -80,7 +81,7 @@ func (h *Handlers) ReportClusterNode(c *gin.Context) {
 				// 从端重试脱离通知（DELETE 成功但响应丢失）时节点已不存在：
 				// 按幂等成功应答，从端据 200 停止重试；500 会让从端按
 				// 「服务端故障」持续重试并写入 last_sync_error。
-				c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "节点已不在集群"})
+				c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_31bcc3da"), MessageKey: "k_31bcc3da"})
 				return
 			}
 			recordDetached("failed")
@@ -88,7 +89,7 @@ func (h *Handlers) ReportClusterNode(c *gin.Context) {
 			return
 		}
 		recordDetached("success")
-		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "节点已脱离集群"})
+		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_8048c223"), MessageKey: "k_8048c223"})
 		return
 	}
 	if err := h.clusterService.ReportNode(c.Request.Context(), nodeID, req, time.Now()); err != nil {
@@ -108,5 +109,5 @@ func (h *Handlers) ReportClusterNode(c *gin.Context) {
 		clusterError(c, http.StatusInternalServerError, "节点状态上报失败", err)
 		return
 	}
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "节点状态已更新"})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_ab3f9930"), MessageKey: "k_ab3f9930"})
 }

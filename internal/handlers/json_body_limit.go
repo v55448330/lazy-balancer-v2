@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 
+	"lazy-balancer-v2/internal/apimsg"
 	"lazy-balancer-v2/internal/models"
 	"lazy-balancer-v2/internal/services"
 
@@ -38,7 +39,7 @@ func configuredRequestBodyBytes() int64 {
 func guardConfiguredJSONBody(c *gin.Context) bool {
 	limit := configuredRequestBodyBytes()
 	if c.Request.ContentLength > limit {
-		c.JSON(http.StatusRequestEntityTooLarge, models.APIResponse{Code: 413, Message: "请求体过大"})
+		c.JSON(http.StatusRequestEntityTooLarge, models.APIResponse{Code: 413, Message: apimsg.T(c, "k_45aadcca"), MessageKey: "k_45aadcca"})
 		return false
 	}
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, limit)
