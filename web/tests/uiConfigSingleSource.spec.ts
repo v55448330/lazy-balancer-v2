@@ -21,14 +21,18 @@ test('全局 DNS 提供商：表单入口、过度承诺文案与保存传播均
 
 test('Dashboard 规则卡：刷新失败且有缓存时明示陈旧，首轮失败仍报「采集失败」', () => {
   const page = code('src/views/Dashboard.vue')
-  assert.match(page, /<el-tag v-if="rulesUnavailable && rules\.length > 0"[^>]*>规则列表刷新失败：展示上次结果<\/el-tag>/)
+  const zhLexicon = code('src/locales/zh/common.ts')
+  // i18n 后双钉:调用点钉键,zh 母本钉文案原文(任一漂移必红)
+  assert.match(page, /<el-tag v-if="rulesUnavailable && rules\.length > 0"[^>]*>\{\{ t\('common\.app\.dashboard\.rulesStaleTag'\) \}\}<\/el-tag>/)
+  assert.ok(zhLexicon.includes('规则列表刷新失败：展示上次结果'), '陈旧徽标文案必须在 zh 母本词条中')
   const card = section(page, 'class="rules-card"', '</el-card>')
-  const badgeAt = card.indexOf('规则列表刷新失败')
+  const badgeAt = card.indexOf("t('common.app.dashboard.rulesStaleTag')")
   const tableAt = card.indexOf('<el-table')
   assert.ok(badgeAt > 0, '缺陈旧徽标')
   assert.ok(tableAt > badgeAt, '徽标必须在规则表之前的卡头，不能落到表尾')
   const empty = section(page, 'const rulesEmptyText', 'const hasRuleRequests')
-  assert.match(empty, /采集失败/, '无缓存时（首轮失败）仍走采集失败空态')
+  assert.match(empty, /t\('common\.app\.dashboard\.loadFailed'\)/, '无缓存时（首轮失败）仍走采集失败空态')
+  assert.ok(zhLexicon.includes('"loadFailed": "采集失败"'), '采集失败空态文案必须在 zh 母本词条中')
 })
 
 test('OIDC 配置读取：乱序旧成功/失败都不得覆盖新表单或重复通知', async () => {

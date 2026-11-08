@@ -13,15 +13,15 @@ test('Login：OIDC 状态读取失败可见且可重试，403 才静默回退本
   assert.match(loader, /caught:\s*unknown/, '失败分支必须读取真实错误')
   assert.match(loader, /caught instanceof ApiRequestError \? caught\.status : undefined/)
   assert.match(loader, /status === 403/, '仅明确禁止的状态可静默回退')
-  assert.match(loader, /oidcStatusError\.value = '无法获取企业登录状态，请重试或使用本地账号登录'/)
+  assert.match(loader, /oidcStatusError\.value = t\('common\.app\.login\.ssoStatusFailed'\)/)
   assert.match(login, /v-if="oidcStatusError"/)
-  assert.match(login, /@click="loadOidcStatus"[^>]*>重试</)
+  assert.match(login, /@click="loadOidcStatus"[^>]*>\{\{ t\('common\.app\.login\.retry'\) \}\}</)
 })
 
 test('Login：初始化探测期间卡片显示加载态而非空白', () => {
   const login = code('src/views/Login.vue')
   assert.match(login, /<el-card class="login-card" v-loading="checkingSetup"/)
-  assert.match(login, /element-loading-text="正在检查登录状态/)
+  assert.match(login, /:element-loading-text="t\('common\.app\.login\.checkingStatus'\)"/)
 })
 
 test('Login：OIDC 顶层跳转被中止后十秒解除按钮锁，卸载清理计时器', () => {

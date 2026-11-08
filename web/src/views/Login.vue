@@ -1,6 +1,6 @@
 <template>
   <div class="login-container">
-    <el-card class="login-card" v-loading="checkingSetup" element-loading-text="正在检查登录状态...">
+    <el-card class="login-card" v-loading="checkingSetup" :element-loading-text="t('common.app.login.checkingStatus')">
       <div class="login-header">
         <div class="logo-wrapper">
           <AppLogo :size="64" />
@@ -8,34 +8,34 @@
         <h1 class="login-title">
           {{ appName }} <span class="v2-badge">V2</span>
         </h1>
-        <p class="login-subtitle">负载均衡与安全防护管理平台</p>
+        <p class="login-subtitle">{{ t('common.app.login.subtitle') }}</p>
       </div>
 
       <template v-if="!checkingSetup">
         <el-form v-if="setupMode" ref="setupFormRef" :model="setupForm" :rules="setupRules" @submit.prevent="handleSetup" class="login-form">
-          <div class="info-note-bar"><span class="info-note-desc">首次启动，请创建管理员账号</span></div>
+          <div class="info-note-bar"><span class="info-note-desc">{{ t('common.app.login.setupNote') }}</span></div>
           <el-form-item prop="username">
-            <el-input v-model="setupForm.username" name="username" autocomplete="username" placeholder="管理员用户名（小写英文开头，仅限小写字母和数字）" size="large" :prefix-icon="User" maxlength="50" clearable />
+            <el-input v-model="setupForm.username" name="username" autocomplete="username" :placeholder="t('common.app.login.adminUsernamePlaceholder')" size="large" :prefix-icon="User" maxlength="50" clearable />
           </el-form-item>
           <el-form-item prop="display_name">
-            <el-input v-model="setupForm.display_name" placeholder="显示名（选填）" size="large" :prefix-icon="Postcard" maxlength="50" clearable />
+            <el-input v-model="setupForm.display_name" :placeholder="t('common.app.login.displayNamePlaceholder')" size="large" :prefix-icon="Postcard" maxlength="50" clearable />
           </el-form-item>
           <el-form-item prop="password">
-            <el-input v-model="setupForm.password" type="password" name="new-password" autocomplete="new-password" placeholder="密码（8-24 位，仅限数字、大小写字母和特殊字符）" size="large" :prefix-icon="Lock" maxlength="24" show-password />
+            <el-input v-model="setupForm.password" type="password" name="new-password" autocomplete="new-password" :placeholder="t('common.app.login.passwordPlaceholder')" size="large" :prefix-icon="Lock" maxlength="24" show-password />
           </el-form-item>
           <el-form-item prop="confirm">
-            <el-input v-model="setupForm.confirm" type="password" name="new-password-confirm" autocomplete="new-password" placeholder="确认密码" size="large" :prefix-icon="Lock" maxlength="24" show-password />
+            <el-input v-model="setupForm.confirm" type="password" name="new-password-confirm" autocomplete="new-password-confirm" :placeholder="t('common.app.login.confirmPasswordPlaceholder')" size="large" :prefix-icon="Lock" maxlength="24" show-password />
           </el-form-item>
           <el-alert v-if="error" :title="error" type="error" show-icon :closable="false" class="login-error" />
           <el-form-item>
             <el-button type="primary" native-type="submit" :loading="loading" size="large" class="login-btn">
-              {{ loading ? '创建中...' : '创建管理员并登录' }}
+              {{ loading ? t('common.app.login.creating') : t('common.app.login.createAndSignIn') }}
             </el-button>
           </el-form-item>
         </el-form>
 
         <el-form v-else-if="mfaStage" @submit.prevent="handleMfaVerify" class="login-form">
-          <div class="mfa-step-title">两步验证</div>
+          <div class="mfa-step-title">{{ t('common.app.login.mfaTitle') }}</div>
           <el-form-item v-if="!mfaUseRecovery">
             <el-input-otp
               ref="mfaOtpRef"
@@ -50,7 +50,7 @@
           <el-form-item v-else>
             <el-input
               v-model="mfaCode"
-              placeholder="请输入恢复代码"
+              :placeholder="t('common.app.login.recoveryCodePlaceholder')"
               size="large"
               :prefix-icon="Key"
               maxlength="200"
@@ -61,30 +61,30 @@
           <el-alert v-if="error" :title="error" type="error" show-icon :closable="false" class="login-error" />
           <el-form-item>
             <el-button type="primary" native-type="submit" :loading="loading" size="large" class="login-btn">
-              {{ loading ? '验证中...' : '验 证' }}
+              {{ loading ? t('common.app.login.verifying') : t('common.app.login.verify') }}
             </el-button>
           </el-form-item>
           <div class="mfa-switch">
             <AccessibleLink type="primary" underline="never" @click="mfaUseRecovery = !mfaUseRecovery; mfaCode = ''">
-              {{ mfaUseRecovery ? '使用验证码' : '使用恢复代码' }}
+              {{ mfaUseRecovery ? t('common.app.login.useAuthCode') : t('common.app.login.useRecoveryCode') }}
             </AccessibleLink>
-            <AccessibleLink type="info" underline="never" @click="resetToPasswordStep">返回重新登录</AccessibleLink>
+            <AccessibleLink type="info" underline="never" @click="resetToPasswordStep">{{ t('common.app.login.backToSignIn') }}</AccessibleLink>
           </div>
         </el-form>
 
         <template v-else>
           <div v-if="oidcStatusError" class="oidc-status-error">
             <el-alert :title="oidcStatusError" type="error" show-icon :closable="false" class="login-error" />
-            <el-button text type="primary" :loading="oidcStatusLoading" @click="loadOidcStatus">重试</el-button>
+            <el-button text type="primary" :loading="oidcStatusLoading" @click="loadOidcStatus">{{ t('common.app.login.retry') }}</el-button>
           </div>
           <!-- v2.3.0 OIDC:品牌主按钮;本地账号次级入口,可双向切换 -->
           <div v-if="oidcEnabled && !showLocalForm" class="oidc-login">
             <button class="oidc-sso-btn" :disabled="oidcRedirecting" @click="goOIDCLogin">
-              <span class="oidc-sso-title">使用 {{ oidcDisplayName }} 登录</span>
-              <span class="oidc-sso-sub">企业认证服务 · 单点登录</span>
+              <span class="oidc-sso-title">{{ t('common.app.login.ssoWith', { name: oidcDisplayName }) }}</span>
+              <span class="oidc-sso-sub">{{ t('common.app.login.ssoSubtitle') }}</span>
             </button>
-            <div class="login-alt-divider"><span>或</span></div>
-            <el-button text size="default" class="local-toggle" :icon="User" @click="showLocalForm = true">使用本地账号登录</el-button>
+            <div class="login-alt-divider"><span>{{ t('common.app.login.or') }}</span></div>
+            <el-button text size="default" class="local-toggle" :icon="User" @click="showLocalForm = true">{{ t('common.app.login.useLocalAccount') }}</el-button>
           </div>
           <template v-else>
           <el-form v-show="!oidcEnabled || showLocalForm" ref="formRef" :model="form" :rules="rules" @submit.prevent="handleLogin" class="login-form">
@@ -93,7 +93,7 @@
               v-model="form.username"
               name="username"
               autocomplete="username"
-              placeholder="请输入用户名"
+              :placeholder="t('common.app.login.enterUsername')"
               size="large"
               :prefix-icon="User"
               clearable
@@ -106,7 +106,7 @@
               type="password"
               name="password"
               autocomplete="current-password"
-              placeholder="请输入密码"
+              :placeholder="t('common.app.login.enterPassword')"
               size="large"
               :prefix-icon="Lock"
               maxlength="72"
@@ -124,14 +124,14 @@
               size="large"
               class="login-btn"
             >
-              {{ loading ? '登录中...' : '登 录' }}
+              {{ loading ? t('common.app.login.signingIn') : t('common.app.login.signIn') }}
             </el-button>
           </el-form-item>
           </el-form>
             <div v-if="oidcEnabled" class="back-to-oidc">
               <el-button text size="small" @click="showLocalForm = false">
                 <el-icon><ArrowLeft /></el-icon>
-                返回 {{ oidcDisplayName }} 登录
+                {{ t('common.app.login.backToSso', { name: oidcDisplayName }) }}
               </el-button>
             </div>
           </template>
@@ -140,7 +140,7 @@
 
 
       <div class="login-footer">
-        <span class="version">版本 {{ appVersion }}</span>
+        <span class="version">{{ t('common.app.login.version', { version: appVersion }) }}</span>
       </div>
     </el-card>
   </div>
@@ -157,6 +157,7 @@ import AccessibleLink from '@/components/common/AccessibleLink.vue'
 import { appName, appVersion } from '@/utils/branding'
 import { validatePassword, validateUsername } from '@/utils/credentials'
 import { OIDC_APP_NONCE_KEY, createOidcAppNonce, withOidcAppNonce } from '@/utils/oidcCallback'
+import { useI18n } from 'vue-i18n'
 import type { FormInstance, FormRules, InputOtpInstance } from 'element-plus'
 
 interface SetupStatusResponse {
@@ -165,6 +166,7 @@ interface SetupStatusResponse {
 }
 
 const authStore = useAuthStore()
+const { t } = useI18n()
 const formRef = ref<FormInstance>()
 const setupFormRef = ref<FormInstance>()
 
@@ -185,16 +187,16 @@ const setupForm = reactive({
 
 const rules: FormRules = {
   username: [
-    { required: true, message: '请输入用户名', trigger: 'blur' },
+    { required: true, message: t('common.app.login.enterUsername'), trigger: 'blur' },
   ],
   password: [
-    { required: true, message: '请输入密码', trigger: 'blur' },
+    { required: true, message: t('common.app.login.enterPassword'), trigger: 'blur' },
   ],
 }
 
 const setupRules: FormRules = {
   username: [
-    { required: true, message: '请输入管理员用户名', trigger: 'blur' },
+    { required: true, message: t('common.app.login.adminUsernameRequired'), trigger: 'blur' },
     {
       validator: (_rule: unknown, value: string, callback: (error?: Error) => void) => {
         const message = validateUsername(value)
@@ -204,10 +206,10 @@ const setupRules: FormRules = {
     },
   ],
   display_name: [
-    { max: 50, message: '显示名最多50位', trigger: 'blur' },
+    { max: 50, message: t('common.app.login.displayNameTooLong'), trigger: 'blur' },
   ],
   password: [
-    { required: true, message: '请输入密码', trigger: 'blur' },
+    { required: true, message: t('common.app.login.enterPassword'), trigger: 'blur' },
     {
       validator: (_rule: unknown, value: string, callback: (error?: Error) => void) => {
         const message = validatePassword(value)
@@ -217,11 +219,11 @@ const setupRules: FormRules = {
     },
   ],
   confirm: [
-    { required: true, message: '请再次输入密码', trigger: 'blur' },
+    { required: true, message: t('common.app.login.reenterPassword'), trigger: 'blur' },
     {
       validator: (_rule: unknown, value: string, callback: (error?: Error) => void) => {
         if (value !== setupForm.password) {
-          callback(new Error('两次输入的密码不一致'))
+          callback(new Error(t('common.app.login.passwordMismatch')))
           return
         }
         callback()
@@ -276,12 +278,12 @@ const handleMfaVerify = async () => {
     // 兼容整段粘贴恢复代码块（@input 已在恢复模式归一化，此处兜底）。
     const result = await authStore.verifyMfaLogin(mfaToken.value, normalizeMfaCodeInput(mfaCode.value))
     // store 重入护栏命中（请求未发出）——显式提示而非静默无事发生。
-    if (result.skipped) error.value = '登录请求进行中，请稍候'
+    if (result.skipped) error.value = t('common.app.login.loginInProgress')
   } catch (caught: unknown) {
     // 失败即清空验证码（watch 已自动 refocus）：残留同一串错误码会让
     // 用户回车重复提交同一失败值。
     mfaCode.value = ''
-    error.value = errorMessage(caught, '验证失败，请重试')
+    error.value = errorMessage(caught, t('common.app.login.verifyFailedRetry'))
   } finally {
     loading.value = false
   }
@@ -312,7 +314,7 @@ const loadOidcStatus = async (): Promise<void> => {
     } else {
       // 状态未知不等于未启用：纯 OIDC 账户必须看到故障与重试入口，
       // 本地表单仍保留给已有本地密码的账户使用。
-      oidcStatusError.value = '无法获取企业登录状态，请重试或使用本地账号登录'
+      oidcStatusError.value = t('common.app.login.ssoStatusFailed')
     }
   } finally {
     oidcStatusLoading.value = false
@@ -378,7 +380,7 @@ const handleLogin = async () => {
       const result = await authStore.login(form.username, form.password)
       // 重入护栏命中时不再伪装成功——分流前先判 skipped。
       if (result.skipped) {
-        error.value = '登录请求进行中，请稍候'
+        error.value = t('common.app.login.loginInProgress')
         return
       }
       if (result.mfaRequired && result.mfaToken) {
@@ -388,7 +390,7 @@ const handleLogin = async () => {
         return
       }
     } catch (caught: unknown) {
-      error.value = errorMessage(caught, '登录失败，请稍后重试')
+      error.value = errorMessage(caught, t('common.app.login.loginFailedRetry'))
     } finally {
       loading.value = false
     }
@@ -423,10 +425,10 @@ const handleSetup = async () => {
           if (!res.data.needs_setup) setupMode.value = false
           error.value = ''
         } catch {
-          error.value = '初始化状态确认失败，请重试或刷新页面'
+          error.value = t('common.app.login.setupConfirmFailed')
         }
       } else {
-        error.value = errorMessage(caught, '创建管理员失败，请稍后重试')
+        error.value = errorMessage(caught, t('common.app.login.createAdminFailed'))
       }
       loading.value = false
       return
@@ -437,9 +439,9 @@ const handleSetup = async () => {
     try {
       const loginResult = await authStore.login(setupForm.username, setupForm.password)
       // 管理员已创建但登录被重入护栏跳过（防御路径）——切回登录表单提示手动登录。
-      if (loginResult.skipped) error.value = '管理员已创建，请登录'
+      if (loginResult.skipped) error.value = t('common.app.login.adminCreated')
     } catch (caught: unknown) {
-      error.value = `管理员已创建，请手动登录（自动登录失败：${errorMessage(caught, '请重试')}）`
+      error.value = t('common.app.login.adminCreatedManual', { reason: errorMessage(caught, t('common.app.login.pleaseRetry')) })
     } finally {
       loading.value = false
     }
@@ -458,7 +460,7 @@ onMounted(async () => {
     setupMode.value = false
     const status = caught instanceof ApiRequestError ? caught.status : undefined
     if (status !== 403 && status !== 404) {
-      ElMessage.error('无法确认初始化状态，请稍后刷新')
+      ElMessage.error(t('common.app.login.setupStatusUnknown'))
     }
   } finally {
     checkingSetup.value = false

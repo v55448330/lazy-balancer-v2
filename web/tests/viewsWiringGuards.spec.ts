@@ -587,7 +587,7 @@ test('仪表盘：/caddy/status 失败置采集失败并阻断陈旧状态呈现
     /\}\)\.catch\(\(\) => \{ if \(!disposed\) caddyStatusUnavailable\.value = true \}\)/,
     '缺 catch 时状态标签/一致性静默陈旧',
   )
-  assert.match(page, /v-if="caddyStatusUnavailable" type="info"[^>]*>状态采集失败/)
+  assert.match(page, /v-if="caddyStatusUnavailable" type="info"[^>]*>\{\{ t\('common\.app\.dashboard\.statusLoadFailed'\) \}\}/)
   assert.match(page, /v-if="caddyApplyError && !caddyStatusUnavailable"/)
   assert.match(page, /v-if="caddyBackgroundApplyError && !caddyStatusUnavailable"/)
   assert.match(page, /configConsistent === 'true' && !caddyStatusUnavailable/)

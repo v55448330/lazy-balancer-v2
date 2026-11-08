@@ -7,7 +7,7 @@
             <div class="card-header">
               <div class="card-title">
                 <el-icon class="title-icon"><Monitor /></el-icon>
-                <span>系统概览</span>
+                <span>{{ t('common.app.dashboard.systemOverview') }}</span>
               </div>
               <el-tag :type="nodeModeTagType" size="small" effect="plain">
                 {{ nodeModeLabel }}
@@ -15,19 +15,19 @@
             </div>
           </template>
           <el-descriptions :column="6" border>
-            <el-descriptions-item label="主机名">
-              <span class="text-primary">{{ systemInfoUnavailable ? '采集失败' : systemInfo?.hostname || '-' }}</span>
+            <el-descriptions-item :label="t('common.app.dashboard.hostname')">
+              <span class="text-primary">{{ systemInfoUnavailable ? t('common.app.dashboard.loadFailed') : systemInfo?.hostname || '-' }}</span>
             </el-descriptions-item>
-            <el-descriptions-item label="操作系统">{{ systemInfoUnavailable ? '采集失败' : systemInfo?.os_info || '-' }}</el-descriptions-item>
-            <el-descriptions-item label="内核">{{ systemInfoUnavailable ? '采集失败' : systemInfo?.kernel || '-' }}</el-descriptions-item>
-            <el-descriptions-item label="架构">{{ systemInfoUnavailable ? '采集失败' : systemInfo?.architecture || '-' }}</el-descriptions-item>
-            <el-descriptions-item label="Caddy版本">
-              <el-tag type="info" size="small">{{ systemInfoUnavailable ? '采集失败' : systemInfo?.caddy_version || '-' }}</el-tag>
+            <el-descriptions-item :label="t('common.app.dashboard.os')">{{ systemInfoUnavailable ? t('common.app.dashboard.loadFailed') : systemInfo?.os_info || '-' }}</el-descriptions-item>
+            <el-descriptions-item :label="t('common.app.dashboard.kernel')">{{ systemInfoUnavailable ? t('common.app.dashboard.loadFailed') : systemInfo?.kernel || '-' }}</el-descriptions-item>
+            <el-descriptions-item :label="t('common.app.dashboard.arch')">{{ systemInfoUnavailable ? t('common.app.dashboard.loadFailed') : systemInfo?.architecture || '-' }}</el-descriptions-item>
+            <el-descriptions-item :label="t('common.app.dashboard.caddyVersion')">
+              <el-tag type="info" size="small">{{ systemInfoUnavailable ? t('common.app.dashboard.loadFailed') : systemInfo?.caddy_version || '-' }}</el-tag>
             </el-descriptions-item>
-            <el-descriptions-item label="运行时间">{{ systemInfoUnavailable ? '采集失败' : formatUptime(systemInfo?.uptime) }}</el-descriptions-item>
+            <el-descriptions-item :label="t('common.app.dashboard.uptime')">{{ systemInfoUnavailable ? t('common.app.dashboard.loadFailed') : formatUptime(systemInfo?.uptime) }}</el-descriptions-item>
           </el-descriptions>
           <div v-if="ipList.length > 0" class="network-section">
-            <div class="section-label">网络接口</div>
+            <div class="section-label">{{ t('common.app.dashboard.networkInterfaces') }}</div>
             <div class="network-tags">
               <el-tag v-for="item in ipList" :key="item.iface" size="small" effect="plain" class="network-tag">
                 {{ item.iface }}: {{ item.ip }}
@@ -45,18 +45,18 @@
             <div class="card-header">
               <div class="card-title">
                 <el-icon class="title-icon caddy-icon"><Cpu /></el-icon>
-                <span>Caddy 服务状态</span>
+                <span>{{ t('common.app.dashboard.caddyStatus') }}</span>
                 <el-tooltip v-if="caddyApplyError && !caddyStatusUnavailable" placement="bottom" :content="caddyApplyError">
-                  <el-tag type="danger" size="small" effect="plain" style="margin-left: 8px">配置应用失败</el-tag>
+                  <el-tag type="danger" size="small" effect="plain" style="margin-left: 8px">{{ t('common.app.dashboard.applyFailedTag') }}</el-tag>
                 </el-tooltip>
                 <!-- 审计项：后台数据类重载（证书部署/CRS/IP库/威胁库/自动封禁）失败
                      独立横幅——库已更新但运行配置未收敛，与写路径「保存失败」区分。 -->
                 <el-tooltip v-if="caddyBackgroundApplyError && !caddyStatusUnavailable" placement="bottom" :content="caddyBackgroundApplyError" :popper-style="{ maxWidth: '420px' }">
-                  <el-tag type="warning" size="small" effect="plain" style="margin-left: 8px">后台重载失败</el-tag>
+                  <el-tag type="warning" size="small" effect="plain" style="margin-left: 8px">{{ t('common.app.dashboard.bgReloadFailedTag') }}</el-tag>
                 </el-tooltip>
               </div>
               <div class="header-actions">
-                <el-tag v-if="caddyStatusUnavailable" type="info" size="small" effect="plain">状态采集失败</el-tag>
+                <el-tag v-if="caddyStatusUnavailable" type="info" size="small" effect="plain">{{ t('common.app.dashboard.statusLoadFailed') }}</el-tag>
                 <el-tag
                   v-else
                   :type="caddyStatus === 'running' ? 'success' : caddyStatus === 'stopped' ? 'danger' : 'info'"
@@ -64,7 +64,7 @@
                   effect="plain"
                   :class="['status-tag', caddyStatusClass]"
                 >
-                  {{ caddyStatus === 'running' ? (caddyPid !== '0' && caddyPid !== '' ? `运行中 ${caddyPid}` : '运行中') : caddyStatus === 'stopped' ? '已停止' : '未知' }}
+                  {{ caddyStatus === 'running' ? (caddyPid !== '0' && caddyPid !== '' ? t('common.app.dashboard.runningPid', { pid: caddyPid }) : t('common.app.dashboard.running')) : caddyStatus === 'stopped' ? t('common.app.dashboard.stopped') : t('common.app.dashboard.unknown') }}
                 </el-tag>
                 <!-- 审计项：从节点不执行独立的配置一致性检查（配置由主节点快照
                      下发），此前沿用主节点口径显示「配置正常」= 从未执行过的检查。
@@ -72,25 +72,25 @@
                      角色未知窗口（nodeMode===null：/config 首拉失败或 15s 重试期）
                      同样不得宣告「配置正常」——此时 configConsistent 是上一轮/
                      默认值，展示层必须 fail-closed 声明角色未知。 -->
-                <el-tooltip v-if="authStore.isSlaveNode" placement="bottom" content="从节点配置由主节点快照下发，本机不执行独立一致性检查" :popper-style="{ maxWidth: '360px' }">
-                  <el-tag type="info" size="small" effect="plain">主节点权威</el-tag>
+                <el-tooltip v-if="authStore.isSlaveNode" placement="bottom" :content="t('common.app.dashboard.slaveConsistencyNote')" :popper-style="{ maxWidth: '360px' }">
+                  <el-tag type="info" size="small" effect="plain">{{ t('common.app.dashboard.masterAuthoritative') }}</el-tag>
                 </el-tooltip>
-                <el-tooltip v-else-if="nodeModeRole === 'unknown'" placement="bottom" content="节点角色尚未确认（配置拉取中或失败），暂不判定配置一致性" :popper-style="{ maxWidth: '360px' }">
-                  <el-tag type="info" size="small" effect="plain">角色未知</el-tag>
+                <el-tooltip v-else-if="nodeModeRole === 'unknown'" placement="bottom" :content="t('common.app.dashboard.roleUnknownNote')" :popper-style="{ maxWidth: '360px' }">
+                  <el-tag type="info" size="small" effect="plain">{{ t('common.app.dashboard.roleUnknown') }}</el-tag>
                 </el-tooltip>
-                <el-tag v-else-if="configConsistent === 'true' && !caddyStatusUnavailable" type="success" size="small" effect="plain">配置正常</el-tag>
+                <el-tag v-else-if="configConsistent === 'true' && !caddyStatusUnavailable" type="success" size="small" effect="plain">{{ t('common.app.dashboard.configOk') }}</el-tag>
                 <el-tooltip v-else-if="configConsistent === 'false' && !caddyStatusUnavailable" placement="bottom" :content="configDrift" :popper-style="{ maxWidth: '360px' }">
-                  <el-tag type="danger" size="small" effect="plain">配置异常</el-tag>
+                  <el-tag type="danger" size="small" effect="plain">{{ t('common.app.dashboard.configBad') }}</el-tag>
                 </el-tooltip>
                 <div v-if="authStore.readOnlyReason === null && !caddyStatusUnavailable" class="caddy-actions">
                   <el-button v-if="caddyStatus === 'running'" type="warning" size="small" @click="controlCaddy('restart')" :loading="caddyLoading">
-                    重启
+                    {{ t('common.app.dashboard.restartBtn') }}
                   </el-button>
                   <el-button v-if="caddyStatus === 'running'" type="danger" size="small" @click="controlCaddy('stop')" :loading="caddyLoading">
-                    停止
+                    {{ t('common.app.dashboard.stopBtn') }}
                   </el-button>
                   <el-button v-if="caddyStatus === 'stopped'" type="success" size="small" @click="controlCaddy('start')" :loading="caddyLoading">
-                    启动
+                    {{ t('common.app.dashboard.startBtn') }}
                   </el-button>
                 </div>
               </div>
@@ -103,8 +103,8 @@
                   <el-icon><Document /></el-icon>
                 </div>
                 <div class="stat-content">
-                  <div class="stat-value">{{ caddyMetricsUnavailable ? '采集失败' : caddyMetrics ? formatInt(caddyMetrics.requests_total) : '-' }}</div>
-                  <div class="stat-label" :title="METRIC_RELOAD_RESET_NOTE">总请求数</div>
+                  <div class="stat-value">{{ caddyMetricsUnavailable ? t('common.app.dashboard.loadFailed') : caddyMetrics ? formatInt(caddyMetrics.requests_total) : '-' }}</div>
+                  <div class="stat-label" :title="METRIC_RELOAD_RESET_NOTE">{{ t('common.app.dashboard.totalRequests') }}</div>
                 </div>
               </div>
             </el-col>
@@ -114,8 +114,8 @@
                   <el-icon><Loading /></el-icon>
                 </div>
                 <div class="stat-content">
-                  <div class="stat-value">{{ caddyMetricsUnavailable ? '采集失败' : caddyMetrics ? caddyMetrics.requests_in_flight : '-' }}</div>
-                  <div class="stat-label">进行中请求</div>
+                  <div class="stat-value">{{ caddyMetricsUnavailable ? t('common.app.dashboard.loadFailed') : caddyMetrics ? caddyMetrics.requests_in_flight : '-' }}</div>
+                  <div class="stat-label">{{ t('common.app.dashboard.inFlightRequests') }}</div>
                 </div>
               </div>
             </el-col>
@@ -125,8 +125,8 @@
                   <el-icon><CircleCheck /></el-icon>
                 </div>
                 <div class="stat-content">
-                  <div class="stat-value">{{ hostMetricsUnavailable ? '采集失败' : hostMetrics ? hostMetrics.length : '-' }}</div>
-                  <div class="stat-label">域名统计</div>
+                  <div class="stat-value">{{ hostMetricsUnavailable ? t('common.app.dashboard.loadFailed') : hostMetrics ? hostMetrics.length : '-' }}</div>
+                  <div class="stat-label">{{ t('common.app.dashboard.domainCount') }}</div>
                 </div>
               </div>
             </el-col>
@@ -138,8 +138,8 @@
                   <el-icon><TrendCharts /></el-icon>
                 </div>
                 <div class="stat-content">
-                  <div class="stat-value">{{ overviewUnavailable ? '采集失败' : overview ? overview.requests_per_sec.toFixed(2) : '-' }}</div>
-                  <div class="stat-label">请求速率 /s</div>
+                  <div class="stat-value">{{ overviewUnavailable ? t('common.app.dashboard.loadFailed') : overview ? overview.requests_per_sec.toFixed(2) : '-' }}</div>
+                  <div class="stat-label">{{ t('common.app.dashboard.reqRate') }}</div>
                 </div>
               </div>
             </el-col>
@@ -149,8 +149,8 @@
                   <el-icon><Odometer /></el-icon>
                 </div>
                 <div class="stat-content">
-                  <div class="stat-value">{{ overviewUnavailable ? '采集失败' : overview ? `${overview.latency_p50}ms` : '-' }}</div>
-                  <div class="stat-label">延迟 P50</div>
+                  <div class="stat-value">{{ overviewUnavailable ? t('common.app.dashboard.loadFailed') : overview ? `${overview.latency_p50}ms` : '-' }}</div>
+                  <div class="stat-label">{{ t('common.app.dashboard.latencyP50') }}</div>
                 </div>
               </div>
             </el-col>
@@ -160,8 +160,8 @@
                   <el-icon><Odometer /></el-icon>
                 </div>
                 <div class="stat-content">
-                  <div class="stat-value">{{ overviewUnavailable ? '采集失败' : overview ? `${overview.latency_p95}ms` : '-' }}</div>
-                  <div class="stat-label">延迟 P95</div>
+                  <div class="stat-value">{{ overviewUnavailable ? t('common.app.dashboard.loadFailed') : overview ? `${overview.latency_p95}ms` : '-' }}</div>
+                  <div class="stat-label">{{ t('common.app.dashboard.latencyP95') }}</div>
                 </div>
               </div>
             </el-col>
@@ -171,8 +171,8 @@
                   <el-icon><Odometer /></el-icon>
                 </div>
                 <div class="stat-content">
-                  <div class="stat-value">{{ overviewUnavailable ? '采集失败' : overview ? `${overview.latency_p99}ms` : '-' }}</div>
-                  <div class="stat-label">延迟 P99</div>
+                  <div class="stat-value">{{ overviewUnavailable ? t('common.app.dashboard.loadFailed') : overview ? `${overview.latency_p99}ms` : '-' }}</div>
+                  <div class="stat-label">{{ t('common.app.dashboard.latencyP99') }}</div>
                 </div>
               </div>
             </el-col>
@@ -188,32 +188,32 @@
             <div class="card-header">
               <div class="card-title">
                 <el-icon class="title-icon resource-icon"><Odometer /></el-icon>
-                <span>系统资源</span>
+                <span>{{ t('common.app.dashboard.systemResources') }}</span>
               </div>
             </div>
           </template>
           <el-skeleton v-if="initialLoading" :rows="2" animated />
-          <div v-else-if="systemMetricsUnavailable" class="collection-state">采集失败</div>
+          <div v-else-if="systemMetricsUnavailable" class="collection-state">{{ t('common.app.dashboard.loadFailed') }}</div>
           <template v-else-if="systemMetrics">
             <div v-if="degradedSystemParts.size" class="info-note-bar">
-              <span class="info-note-desc">部分指标采集失败：{{ degradedSystemLabels.join('、') }}</span>
-              <span>（仅展示其余可用指标；该项数值不代表真实用量）</span>
+              <span class="info-note-desc">{{ t('common.app.dashboard.partialMetricsFailed', { labels: degradedSystemLabels.join('、') }) }}</span>
+              <span>{{ t('common.app.dashboard.degradedNote') }}</span>
             </div>
             <div class="resource-grid">
               <div class="resource-item">
                 <div class="resource-header">
-                  <span class="resource-label">CPU 使用率</span>
+                  <span class="resource-label">{{ t('common.app.dashboard.cpuUsage') }}</span>
                   <span class="resource-value text-blue">
-                    {{ degradedSystemParts.has('cpu') ? '采集失败' : `${systemMetrics.cpu_percent.toFixed(1)}%` }}
+                    {{ degradedSystemParts.has('cpu') ? t('common.app.dashboard.loadFailed') : `${systemMetrics.cpu_percent.toFixed(1)}%` }}
                   </span>
                 </div>
                 <el-progress v-if="cpuProgressPercent !== null" :percentage="cpuProgressPercent" :stroke-width="6" color="#3b82f6" :show-text="false" />
               </div>
               <div class="resource-item">
                 <div class="resource-header">
-                  <span class="resource-label">内存使用</span>
+                  <span class="resource-label">{{ t('common.app.dashboard.memoryUsage') }}</span>
                   <span class="resource-value text-purple">
-                    <template v-if="degradedSystemParts.has('memory')">采集失败</template>
+                    <template v-if="degradedSystemParts.has('memory')">{{ t('common.app.dashboard.loadFailed') }}</template>
                     <template v-else>
                       {{ formatBytes(systemMetrics.memory_used) }}
                       <span class="resource-total">/ {{ formatBytes(systemMetrics.memory_total) }}</span>
@@ -224,9 +224,9 @@
               </div>
               <div class="resource-item">
                 <div class="resource-header">
-                  <span class="resource-label">磁盘使用</span>
+                  <span class="resource-label">{{ t('common.app.dashboard.diskUsage') }}</span>
                   <span class="resource-value text-cyan">
-                    <template v-if="degradedSystemParts.has('disk')">采集失败</template>
+                    <template v-if="degradedSystemParts.has('disk')">{{ t('common.app.dashboard.loadFailed') }}</template>
                     <template v-else>
                       {{ formatBytes(systemMetrics.disk_used) }}
                       <span class="resource-total">/ {{ formatBytes(systemMetrics.disk_total) }}</span>
@@ -238,11 +238,11 @@
               <div class="resource-item">
                 <div class="resource-header">
                   <span class="resource-label-group">
-                    <span class="resource-label">进程配额</span>
+                    <span class="resource-label">{{ t('common.app.dashboard.pidsQuota') }}</span>
                     <FieldHelpIcon :content="pidsTooltip" />
                   </span>
                   <span class="resource-value-group">
-                    <template v-if="degradedSystemParts.has('pids')">采集失败</template>
+                    <template v-if="degradedSystemParts.has('pids')">{{ t('common.app.dashboard.loadFailed') }}</template>
                     <template v-else>
                       <span class="resource-value" :class="pidsValueClass">{{ pidsUsageParts.current }}</span>
                       <span class="resource-total">/ {{ pidsUsageParts.maxPart }}<template v-if="systemMetrics.pids_max > 0"> ({{ pidsPercentLabel(systemMetrics.pids_percent) }}%)</template></span>
@@ -265,14 +265,14 @@
             <div class="card-header">
               <div class="card-title">
                 <el-icon class="title-icon chart-icon"><TrendCharts /></el-icon>
-                <span>流量监控</span>
+                <span>{{ t('common.app.dashboard.trafficMonitor') }}</span>
               </div>
             </div>
           </template>
           <el-skeleton v-if="initialLoading" :rows="4" animated class="chart-skeleton" />
-          <div v-else-if="trafficUnavailable && trafficTimestamps.length === 0" class="chart-container collection-state">采集失败</div>
+          <div v-else-if="trafficUnavailable && trafficTimestamps.length === 0" class="chart-container collection-state">{{ t('common.app.dashboard.loadFailed') }}</div>
           <div v-else class="chart-container">
-            <div v-if="trafficUnavailable" class="chart-stale-hint">采集失败：展示上次结果</div>
+            <div v-if="trafficUnavailable" class="chart-stale-hint">{{ t('common.app.dashboard.staleHint') }}</div>
             <v-chart :option="trafficChartOption" autoresize />
           </div>
         </el-card>
@@ -283,14 +283,14 @@
             <div class="card-header">
               <div class="card-title">
                 <el-icon class="title-icon chart-icon"><DataLine /></el-icon>
-                <span>连接统计</span>
+                <span>{{ t('common.app.dashboard.connections') }}</span>
               </div>
             </div>
           </template>
           <el-skeleton v-if="initialLoading" :rows="4" animated class="chart-skeleton" />
-          <div v-else-if="connectionsUnavailable && connTimestamps.length === 0" class="chart-container collection-state">采集失败</div>
+          <div v-else-if="connectionsUnavailable && connTimestamps.length === 0" class="chart-container collection-state">{{ t('common.app.dashboard.loadFailed') }}</div>
           <div v-else class="chart-container">
-            <div v-if="connectionsUnavailable" class="chart-stale-hint">采集失败：展示上次结果</div>
+            <div v-if="connectionsUnavailable" class="chart-stale-hint">{{ t('common.app.dashboard.staleHint') }}</div>
             <v-chart :option="connChartOption" autoresize />
           </div>
         </el-card>
@@ -304,24 +304,24 @@
             <div class="card-header">
               <div class="card-title">
                 <el-icon class="title-icon rules-icon"><List /></el-icon>
-                <span>负载均衡规则</span>
+                <span>{{ t('common.app.dashboard.lbRules') }}</span>
               </div>
               <div class="card-header-actions">
                 <!-- 刷新失败但有缓存时必须明示陈旧：表格仍渲染上一次结果，与
                      新鲜的指标列混排，不提示会被误读为当前真实规则集 -->
-                <el-tag v-if="rulesUnavailable && rules.length > 0" type="warning" size="small" effect="plain" title="规则列表刷新失败，当前展示上次拉取的结果">规则列表刷新失败：展示上次结果</el-tag>
+                <el-tag v-if="rulesUnavailable && rules.length > 0" type="warning" size="small" effect="plain" :title="t('common.app.dashboard.rulesStaleTitle')">{{ t('common.app.dashboard.rulesStaleTag') }}</el-tag>
                 <el-tag v-if="ruleMetricsEpochSeconds" class="epoch-tag" type="info" size="small" effect="plain" :title="METRIC_RELOAD_RESET_NOTE">{{ ruleMetricsEpochLabel() }}</el-tag>
-                <el-radio-group v-model="rankBy" size="small" aria-label="规则排序方式">
-                  <el-radio-button value="requests">按请求数</el-radio-button>
-                  <el-radio-button value="bytes">按流量</el-radio-button>
+                <el-radio-group v-model="rankBy" size="small" :aria-label="t('common.app.dashboard.sortRulesBy')">
+                  <el-radio-button value="requests">{{ t('common.app.dashboard.byRequests') }}</el-radio-button>
+                  <el-radio-button value="bytes">{{ t('common.app.dashboard.byTraffic') }}</el-radio-button>
                 </el-radio-group>
-                <span class="rules-count" :title="`共 ${rules.length} 条规则；本卡展示请求数/流量前 10 条 + 指标采集失败行（零流量规则不进入排行）`">{{ rules.length }}</span>
+                <span class="rules-count" :title="t('common.app.dashboard.rulesCountTitle', { n: rules.length })">{{ rules.length }}</span>
               </div>
             </div>
           </template>
           <el-table
             v-loading="initialLoading"
-            element-loading-text="加载中"
+            :element-loading-text="t('common.app.dashboard.loading')"
             :data="sortedRules"
             row-key="caddy_id"
             stripe
@@ -330,7 +330,7 @@
             <!-- 宽度二调（用户实测 458/230 失调）：min-width 弹性列按
                  值比例分配剩余空间（260:130 把 2/3 剩余给了状态码列）——改固定 width
                  才能精确控制比例；名称列取 280（内容列），右端空白由表格自然留白。 -->
-            <el-table-column prop="name" label="规则名称" min-width="300" show-overflow-tooltip>
+            <el-table-column prop="name" :label="t('common.app.dashboard.ruleName')" min-width="300" show-overflow-tooltip>
               <template #default="{ row }">
                 <!-- 长规则名省略号 + 悬浮全文（列宽 100→130 用户反馈调整）。-->
                 <!-- 省略号样式必须放在 slot 内层 span——el-link 根是
@@ -339,29 +339,29 @@
                 <AccessibleLink type="primary" underline="never" :title="row.name" @click="openRuleHistory(row as Rule)"><span style="display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{{ row.name }}</span></AccessibleLink>
               </template>
             </el-table-column>
-            <el-table-column label="协议" width="85">
+            <el-table-column :label="t('common.app.dashboard.protocol')" width="85">
               <template #default="{ row }">
                 <el-tag :type="getRuleProtocolTagType(row as Rule)" size="small" effect="plain">
                   {{ getRuleProtocolLabel(row as Rule) }}
                 </el-tag>
               </template>
             </el-table-column>
-            <el-table-column prop="listen_port" label="端口" width="70" />
-            <el-table-column label="负载策略" width="80">
+            <el-table-column prop="listen_port" :label="t('common.app.dashboard.port')" width="70" />
+            <el-table-column :label="t('common.app.dashboard.strategy')" width="80">
               <template #default="{ row }">
                 <span class="text-secondary">{{ getStrategyLabel(row.strategy) }}</span>
               </template>
             </el-table-column>
-            <el-table-column label="状态" width="70">
+            <el-table-column :label="t('common.app.dashboard.status')" width="70">
               <template #default="{ row }">
                 <el-tag :type="row.enabled ? 'success' : 'info'" size="small" effect="plain">
-                  {{ row.enabled ? '启用' : '禁用' }}
+                  {{ row.enabled ? t('common.app.dashboard.enabled') : t('common.app.dashboard.disabled') }}
                 </el-tag>
               </template>
             </el-table-column>
-            <el-table-column label="请求数" width="110">
+            <el-table-column :label="t('common.app.dashboard.requestsCol')" width="110">
               <template #default="{ row }">
-                <span class="text-primary" :title="ruleMetricCellTitle({ disabled: isRuleDisabled(row as Rule), unavailable: !!ruleMetricsUnavailable[row.caddy_id], tcp: row.protocol === 'tcp', value: ruleRequestsTotalText(row.caddy_id) })">{{ isRuleDisabled(row as Rule) ? '已禁用' : ruleMetricsUnavailable[row.caddy_id] ? '采集失败' : ruleRequestsTotalText(row.caddy_id) }}</span>
+                <span class="text-primary" :title="ruleMetricCellTitle({ disabled: isRuleDisabled(row as Rule), unavailable: !!ruleMetricsUnavailable[row.caddy_id], tcp: row.protocol === 'tcp', value: ruleRequestsTotalText(row.caddy_id) })">{{ isRuleDisabled(row as Rule) ? t('common.app.dashboard.isDisabled') : ruleMetricsUnavailable[row.caddy_id] ? t('common.app.dashboard.loadFailed') : ruleRequestsTotalText(row.caddy_id) }}</span>
               </template>
             </el-table-column>
             <!-- 初版 310 过宽（用户反馈）→ 260：常见量级（万级以内）
@@ -371,49 +371,49 @@
                  那会把末尾 Block 静默裁掉，让「有拦截」看起来是「无拦截」。
                  历史（用户反馈）：入站/出站流量列 90→100（字节量级数字易被截），
                  差额从状态码列 380→360 划出。 -->
-            <el-table-column label="状态码" width="360">
+            <el-table-column :label="t('common.app.dashboard.statusCodes')" width="360">
               <template #default="{ row }">
-                <span v-if="isRuleDisabled(row as Rule)" class="text-secondary">已禁用</span>
+                <span v-if="isRuleDisabled(row as Rule)" class="text-secondary">{{ t('common.app.dashboard.isDisabled') }}</span>
                 <div v-else-if="row.protocol === 'tcp'" class="text-secondary">-</div>
-                <span v-else-if="ruleMetricsUnavailable[row.caddy_id]" class="text-secondary">采集失败</span>
+                <span v-else-if="ruleMetricsUnavailable[row.caddy_id]" class="text-secondary">{{ t('common.app.dashboard.loadFailed') }}</span>
                 <div v-else-if="hasRuleRequests(row.caddy_id)" class="status-codes">
-                  <span class="status-code status-2xx" :title="`成功 ${ruleMetrics[row.caddy_id].status_2xx}`">2xx {{ ruleMetrics[row.caddy_id].status_2xx }}</span>
-                  <span class="status-code status-3xx" :title="`重定向 ${ruleMetrics[row.caddy_id].status_3xx}`">3xx {{ ruleMetrics[row.caddy_id].status_3xx }}</span>
-                  <span class="status-code status-4xx" :title="`客户端错误 ${ruleMetrics[row.caddy_id].status_4xx}`">4xx {{ ruleMetrics[row.caddy_id].status_4xx }}</span>
-                  <span class="status-code status-5xx" :title="`服务器错误 ${ruleMetrics[row.caddy_id].status_5xx}`">5xx {{ ruleMetrics[row.caddy_id].status_5xx }}</span>
-                  <span class="status-code status-blocked" :title="`安全拦截(WAF/GeoIP/IP ACL/限流) ${ruleMetrics[row.caddy_id].blocked ?? 0}`">Block {{ ruleMetrics[row.caddy_id].blocked ?? 0 }}</span>
+                  <span class="status-code status-2xx" :title="t('common.app.dashboard.title2xx', { n: ruleMetrics[row.caddy_id].status_2xx })">2xx {{ ruleMetrics[row.caddy_id].status_2xx }}</span>
+                  <span class="status-code status-3xx" :title="t('common.app.dashboard.title3xx', { n: ruleMetrics[row.caddy_id].status_3xx })">3xx {{ ruleMetrics[row.caddy_id].status_3xx }}</span>
+                  <span class="status-code status-4xx" :title="t('common.app.dashboard.title4xx', { n: ruleMetrics[row.caddy_id].status_4xx })">4xx {{ ruleMetrics[row.caddy_id].status_4xx }}</span>
+                  <span class="status-code status-5xx" :title="t('common.app.dashboard.title5xx', { n: ruleMetrics[row.caddy_id].status_5xx })">5xx {{ ruleMetrics[row.caddy_id].status_5xx }}</span>
+                  <span class="status-code status-blocked" :title="t('common.app.dashboard.titleBlocked', { n: ruleMetrics[row.caddy_id].blocked ?? 0 })">Block {{ ruleMetrics[row.caddy_id].blocked ?? 0 }}</span>
                 </div>
                 <span v-else class="text-secondary">-</span>
               </template>
             </el-table-column>
-            <el-table-column label="入站流量" width="100">
+            <el-table-column :label="t('common.app.dashboard.inboundCol')" width="100">
               <template #default="{ row }">
-                <span v-if="isRuleDisabled(row as Rule)" class="text-secondary">已禁用</span>
+                <span v-if="isRuleDisabled(row as Rule)" class="text-secondary">{{ t('common.app.dashboard.isDisabled') }}</span>
                 <span v-else-if="row.protocol === 'tcp'" class="text-secondary">-</span>
-                <span v-else-if="ruleMetricsUnavailable[row.caddy_id]" class="text-secondary">采集失败</span>
+                <span v-else-if="ruleMetricsUnavailable[row.caddy_id]" class="text-secondary">{{ t('common.app.dashboard.loadFailed') }}</span>
                 <span v-else class="text-secondary">{{ ruleMetrics[row.caddy_id] ? formatBytes(ruleMetrics[row.caddy_id].bytes_in) : '-' }}</span>
               </template>
             </el-table-column>
-            <el-table-column label="出站流量" width="100">
+            <el-table-column :label="t('common.app.dashboard.outboundCol')" width="100">
               <template #default="{ row }">
-                <span v-if="isRuleDisabled(row as Rule)" class="text-secondary">已禁用</span>
+                <span v-if="isRuleDisabled(row as Rule)" class="text-secondary">{{ t('common.app.dashboard.isDisabled') }}</span>
                 <span v-else-if="row.protocol === 'tcp'" class="text-secondary">-</span>
-                <span v-else-if="ruleMetricsUnavailable[row.caddy_id]" class="text-secondary">采集失败</span>
+                <span v-else-if="ruleMetricsUnavailable[row.caddy_id]" class="text-secondary">{{ t('common.app.dashboard.loadFailed') }}</span>
                 <span v-else class="text-secondary">{{ ruleMetrics[row.caddy_id] ? formatBytes(ruleMetrics[row.caddy_id].bytes_out) : '-' }}</span>
               </template>
             </el-table-column>
-            <el-table-column label="处理中" width="70">
+            <el-table-column :label="t('common.app.dashboard.inFlightCol')" width="70">
               <template #default="{ row }">
-                <span class="text-secondary" :title="ruleMetricCellTitle({ disabled: isRuleDisabled(row as Rule), unavailable: !!ruleMetricsUnavailable[row.caddy_id], tcp: row.protocol === 'tcp', value: String(ruleMetrics[row.caddy_id]?.requests_in_flight ?? '-') })">{{ isRuleDisabled(row as Rule) ? '已禁用' : ruleMetricsUnavailable[row.caddy_id] ? '采集失败' : ruleMetrics[row.caddy_id]?.requests_in_flight ?? '-' }}</span>
+                <span class="text-secondary" :title="ruleMetricCellTitle({ disabled: isRuleDisabled(row as Rule), unavailable: !!ruleMetricsUnavailable[row.caddy_id], tcp: row.protocol === 'tcp', value: String(ruleMetrics[row.caddy_id]?.requests_in_flight ?? '-') })">{{ isRuleDisabled(row as Rule) ? t('common.app.dashboard.isDisabled') : ruleMetricsUnavailable[row.caddy_id] ? t('common.app.dashboard.loadFailed') : ruleMetrics[row.caddy_id]?.requests_in_flight ?? '-' }}</span>
               </template>
             </el-table-column>
-            <el-table-column label="健康状态" width="80">
+            <el-table-column :label="t('common.app.dashboard.health')" width="80">
               <template #default="{ row }">
                 <el-tag v-if="!row.enabled" type="info" size="small" effect="plain">-</el-tag>
                 <el-tag v-else-if="ruleHealthUnavailable || !ruleHealth[row.caddy_id] || ruleHealth[row.caddy_id] === 'unknown'" type="info" size="small" effect="plain">-</el-tag>
-                <el-tag v-else-if="ruleHealth[row.caddy_id] === 'unhealthy'" type="danger" size="small" effect="plain">异常</el-tag>
-                <el-tag v-else-if="ruleHealth[row.caddy_id] === 'degraded'" type="warning" size="small" effect="plain">降级</el-tag>
-                <el-tag v-else type="success" size="small" effect="plain">健康</el-tag>
+                <el-tag v-else-if="ruleHealth[row.caddy_id] === 'unhealthy'" type="danger" size="small" effect="plain">{{ t('common.app.dashboard.unhealthy') }}</el-tag>
+                <el-tag v-else-if="ruleHealth[row.caddy_id] === 'degraded'" type="warning" size="small" effect="plain">{{ t('common.app.dashboard.degraded') }}</el-tag>
+                <el-tag v-else type="success" size="small" effect="plain">{{ t('common.app.dashboard.healthy') }}</el-tag>
               </template>
             </el-table-column>
             <template #empty>
@@ -426,37 +426,37 @@
 
     <el-dialog v-model="ruleHistoryVisible" width="min(900px, 92vw)" destroy-on-close class="history-dialog">
       <template #header>
-        <DialogHeader :icon="TrendCharts" title="历史统计" :subtitle="`${ruleHistoryRule?.name || ''} · ${ruleHistoryRule ? getRuleProtocolLabel(ruleHistoryRule) : ''} · :${ruleHistoryRule?.listen_port}`" />
+        <DialogHeader :icon="TrendCharts" :title="t('common.app.dashboard.history')" :subtitle="`${ruleHistoryRule?.name || ''} · ${ruleHistoryRule ? getRuleProtocolLabel(ruleHistoryRule) : ''} · :${ruleHistoryRule?.listen_port}`" />
       </template>
       <div class="history-toolbar">
-        <el-radio-group v-model="ruleHistoryRange" size="small" aria-label="历史统计时间范围" @change="fetchRuleHistory">
-          <el-radio-button value="1h">近 1 小时</el-radio-button>
-          <el-radio-button value="6h">近 6 小时</el-radio-button>
-          <el-radio-button value="24h">近 24 小时</el-radio-button>
-          <el-radio-button value="7d">近 7 天</el-radio-button>
+        <el-radio-group v-model="ruleHistoryRange" size="small" :aria-label="t('common.app.dashboard.historyRange')" @change="fetchRuleHistory">
+          <el-radio-button value="1h">{{ t('common.app.dashboard.last1h') }}</el-radio-button>
+          <el-radio-button value="6h">{{ t('common.app.dashboard.last6h') }}</el-radio-button>
+          <el-radio-button value="24h">{{ t('common.app.dashboard.last24h') }}</el-radio-button>
+          <el-radio-button value="7d">{{ t('common.app.dashboard.last7d') }}</el-radio-button>
         </el-radio-group>
       </div>
-      <el-empty v-if="ruleHistoryUnsupported" description="TCP 规则暂无历史流量统计（四层代理无流量计数指标）" :image-size="60" />
+      <el-empty v-if="ruleHistoryUnsupported" :description="t('common.app.dashboard.tcpNoHistory')" :image-size="60" />
       <template v-else>
         <!-- 加载失败 ≠ 该时间范围无数据——失败态与空态分文案（同页
              「采集失败 ≠ 无数据」固化口径），并提供重试。-->
         <el-alert v-if="ruleHistoryError" type="error" :closable="false" show-icon class="polling-error-alert error-banner history-error-alert">
           <template #title>
             <div class="polling-error-title">
-              <span>历史统计加载失败：图表为空不代表该时间范围没有流量</span>
-              <el-button link type="danger" @click="fetchRuleHistory">立即重试</el-button>
+              <span>{{ t('common.app.dashboard.historyLoadFailed') }}</span>
+              <el-button link type="danger" @click="fetchRuleHistory">{{ t('common.app.dashboard.retryNow') }}</el-button>
             </div>
           </template>
         </el-alert>
         <template v-else>
-          <el-empty v-if="!ruleHistoryLoading && ruleHistoryDeltas.deltas.length === 0" description="该时间范围内暂无数据" :image-size="60" />
+          <el-empty v-if="!ruleHistoryLoading && ruleHistoryDeltas.deltas.length === 0" :description="t('common.app.dashboard.noDataInRange')" :image-size="60" />
           <div v-else v-loading="ruleHistoryLoading">
             <section class="dialog-panel history-card">
-              <DialogSectionHeader title="请求数与状态码" />
+              <DialogSectionHeader :title="t('common.app.dashboard.reqAndCodes')" />
               <v-chart :option="ruleRequestsChartOption" autoresize style="height: 260px;" />
             </section>
             <section class="dialog-panel history-card">
-              <DialogSectionHeader title="流量（入站 / 出站）" />
+              <DialogSectionHeader :title="t('common.app.dashboard.trafficInOut')" />
               <v-chart :option="ruleBytesChartOption" autoresize style="height: 260px;" />
             </section>
           </div>
@@ -490,9 +490,11 @@ import { buildRuleMetricsUnavailable, METRIC_RELOAD_RESET_NOTE, ruleMetricCellTi
 import { degradedMetricLabels, degradedMetricParts, metricProgressPercent, pidsPercentLabel, pidsProgressPercent, pidsTooltipText, pidsUsageLabel, pidsValueTone } from '@/utils/systemMetrics'
 import AccessibleLink from '@/components/common/AccessibleLink.vue'
 import FieldHelpIcon from '@/components/common/FieldHelpIcon.vue'
+import { useI18n } from 'vue-i18n'
 
 
 const authStore = useAuthStore()
+const { t } = useI18n()
 
 const formatUptime = (seconds?: number): string => {
   // 0 秒是合法运行时长（刚启动）：仅缺失/负数才显示「-」，否则会被读成「无数据」。
@@ -500,10 +502,10 @@ const formatUptime = (seconds?: number): string => {
   const d = Math.floor(seconds / 86400)
   const h = Math.floor((seconds % 86400) / 3600)
   const m = Math.floor((seconds % 3600) / 60)
-  if (d > 0) return `${d} 天 ${h} 小时`
-  if (h > 0) return `${h} 小时 ${m} 分`
-  if (m > 0) return `${m} 分 ${Math.floor(seconds % 60)} 秒`
-  return `${Math.floor(seconds)} 秒`
+  if (d > 0) return t('common.app.dashboard.uptimeDh', { d, h })
+  if (h > 0) return t('common.app.dashboard.uptimeHm', { h, m })
+  if (m > 0) return t('common.app.dashboard.uptimeMs', { m, s: Math.floor(seconds % 60) })
+  return t('common.app.dashboard.uptimeS', { s: Math.floor(seconds) })
 }
 
 const formatChartTime = (ms: number): string => formatChartTimeInConfigTz(ms)
@@ -522,7 +524,7 @@ const ruleMetricsEpochLabel = () => {
   if (!ruleMetricsEpochSeconds.value) return ''
   // 经 utils/date 配置时区单源入口（同卡图表轴同一钟面；同日 HH:MM、
   // 跨日 MM-DD HH:MM）。
-  return `统计自 ${formatEpochStatLabel(ruleMetricsEpochSeconds.value, Date.now())}（上次配置重载）`
+  return t('common.app.dashboard.sinceReload', { time: formatEpochStatLabel(ruleMetricsEpochSeconds.value, Date.now()) })
 }
 const caddyStatus = ref('unknown')
 // /caddy/status 失败显性标记（与 systemInfoUnavailable 等 8 项同构）——
@@ -703,7 +705,7 @@ const fetchRuleHistory = async () => {
     if (!disposed && seq === ruleHistorySeq) {
       console.error('Failed to fetch rule history:', error)
       ruleHistoryRows.value = []
-      ruleHistoryError.value = error instanceof Error ? error.message : '历史统计请求失败'
+      ruleHistoryError.value = error instanceof Error ? error.message : t('common.app.dashboard.historyReqFailed')
     }
   } finally {
     if (!disposed && seq === ruleHistorySeq) {
@@ -762,8 +764,8 @@ const historyChartBase = (legend: string[], series: LineSeriesOption[], valueFor
 
 const ruleRequestsChartOption = computed<EChartsOption>(() => {
   const mk = (name: string, key: keyof RuleHistoryDelta, color: string): LineSeriesOption => ({ name, type: 'line', color, data: ruleHistoryDeltas.value.deltas.map((row) => row === null ? null : row[key]), sampling: 'lttb', connectNulls: false, smooth: true, showSymbol: false, lineStyle: { color, width: 2 }, areaStyle: { color: `${color}1a` } })
-  return historyChartBase(['总请求', '2xx', '3xx', '4xx', '5xx', 'Block'], [
-    mk('总请求', 'requests', httpStatusColors.requests),
+  return historyChartBase([t('common.app.dashboard.legendTotal'), '2xx', '3xx', '4xx', '5xx', 'Block'], [
+    mk(t('common.app.dashboard.legendTotal'), 'requests', httpStatusColors.requests),
     mk('2xx', 'status2xx', httpStatusColors.s2xx),
     mk('3xx', 'status3xx', httpStatusColors.s3xx),
     mk('4xx', 'status4xx', httpStatusColors.s4xx),
@@ -774,7 +776,7 @@ const ruleRequestsChartOption = computed<EChartsOption>(() => {
 
 const ruleBytesChartOption = computed<EChartsOption>(() => {
   const mk = (name: string, key: 'bytesIn' | 'bytesOut', color: string): LineSeriesOption => ({ name, type: 'line', color, data: ruleHistoryDeltas.value.deltas.map((row) => row === null ? null : row[key]), sampling: 'lttb', connectNulls: false, smooth: true, showSymbol: false, lineStyle: { color, width: 2 }, areaStyle: { color: `${color}1a` } })
-  return historyChartBase(['入站', '出站'], [mk('入站', 'bytesIn', '#3b82f6'), mk('出站', 'bytesOut', '#10b981')], formatBytes)
+  return historyChartBase([t('common.app.dashboard.legendInbound'), t('common.app.dashboard.legendOutbound')], [mk(t('common.app.dashboard.legendInbound'), 'bytesIn', '#3b82f6'), mk(t('common.app.dashboard.legendOutbound'), 'bytesOut', '#10b981')], formatBytes)
 })
 
 const ruleRankValue = (caddyId: string): number => {
@@ -807,12 +809,12 @@ const sortedRules = computed(() => {
 })
 
 const rulesEmptyText = computed(() => {
-  if (rulesUnavailable.value) return '采集失败'
-  if (rules.value.length === 0) return '暂无负载均衡规则'
+  if (rulesUnavailable.value) return t('common.app.dashboard.loadFailed')
+  if (rules.value.length === 0) return t('common.app.dashboard.noRules')
   // 指标采集失败 ≠ 无流量——失败口径与页面其它「采集失败」一致，
   // 不再把采集故障误报为「暂无请求/流量数据」。
-  if (caddyMetricsUnavailable.value) return '采集失败'
-  return rankBy.value === 'bytes' ? '暂无流量数据' : '暂无请求数据'
+  if (caddyMetricsUnavailable.value) return t('common.app.dashboard.loadFailed')
+  return rankBy.value === 'bytes' ? t('common.app.dashboard.noTrafficData') : t('common.app.dashboard.noRequestData')
 })
 
 const hasRuleRequests = (caddyId: string): boolean => {
@@ -860,7 +862,7 @@ const trafficChartOption = computed<EChartsOption>(() => ({
       return result
     }
   },
-  legend: { data: ['入站', '出站'], bottom: 0, textStyle: { fontSize: 11, color: '#6b7280' } },
+  legend: { data: [t('common.app.dashboard.legendInbound'), t('common.app.dashboard.legendOutbound')], bottom: 0, textStyle: { fontSize: 11, color: '#6b7280' } },
   grid: { left: 45, right: 15, top: 15, bottom: 40 },
   xAxis: { 
     type: 'category', 
@@ -875,14 +877,14 @@ const trafficChartOption = computed<EChartsOption>(() => ({
     splitLine: { lineStyle: { color: '#f3f4f6' } }
   },
   series: [
-    { name: '入站', type: 'line', color: '#3b82f6', data: trafficInHistory.value, smooth: true, showSymbol: trafficInHistory.value.length < 2, lineStyle: { color: '#3b82f6', width: 2 }, areaStyle: { color: 'rgba(59,130,246,0.1)' } },
-    { name: '出站', type: 'line', color: '#10b981', data: trafficOutHistory.value, smooth: true, showSymbol: trafficOutHistory.value.length < 2, lineStyle: { color: '#10b981', width: 2 }, areaStyle: { color: 'rgba(16,185,129,0.1)' } },
+    { name: t('common.app.dashboard.legendInbound'), type: 'line', color: '#3b82f6', data: trafficInHistory.value, smooth: true, showSymbol: trafficInHistory.value.length < 2, lineStyle: { color: '#3b82f6', width: 2 }, areaStyle: { color: 'rgba(59,130,246,0.1)' } },
+    { name: t('common.app.dashboard.legendOutbound'), type: 'line', color: '#10b981', data: trafficOutHistory.value, smooth: true, showSymbol: trafficOutHistory.value.length < 2, lineStyle: { color: '#10b981', width: 2 }, areaStyle: { color: 'rgba(16,185,129,0.1)' } },
   ],
 }))
 
 const connChartOption = computed<EChartsOption>(() => ({
   tooltip: { trigger: 'axis', backgroundColor: 'rgba(255,255,255,0.95)', borderColor: '#e5e7eb', textStyle: { color: '#374151', fontSize: 12 } },
-  legend: { data: ['已建立', '等待释放'], bottom: 0, textStyle: { fontSize: 11, color: '#6b7280' } },
+  legend: { data: [t('common.app.dashboard.legendEstablished'), t('common.app.dashboard.legendWaitRelease')], bottom: 0, textStyle: { fontSize: 11, color: '#6b7280' } },
   grid: { left: 45, right: 15, top: 15, bottom: 40 },
   xAxis: { 
     type: 'category', 
@@ -897,8 +899,8 @@ const connChartOption = computed<EChartsOption>(() => ({
     splitLine: { lineStyle: { color: '#f3f4f6' } }
   },
   series: [
-    { name: '已建立', type: 'line', color: '#10b981', data: connEstablishedHistory.value, smooth: true, showSymbol: connEstablishedHistory.value.length < 2, lineStyle: { color: '#10b981', width: 2 } },
-    { name: '等待释放', type: 'line', color: '#f59e0b', data: connTimeWaitHistory.value, smooth: true, showSymbol: connTimeWaitHistory.value.length < 2, lineStyle: { color: '#f59e0b', width: 2 } },
+    { name: t('common.app.dashboard.legendEstablished'), type: 'line', color: '#10b981', data: connEstablishedHistory.value, smooth: true, showSymbol: connEstablishedHistory.value.length < 2, lineStyle: { color: '#10b981', width: 2 } },
+    { name: t('common.app.dashboard.legendWaitRelease'), type: 'line', color: '#f59e0b', data: connTimeWaitHistory.value, smooth: true, showSymbol: connTimeWaitHistory.value.length < 2, lineStyle: { color: '#f59e0b', width: 2 } },
   ],
 }))
 
@@ -1150,17 +1152,17 @@ const controlCaddy = async (action: 'start' | 'stop' | 'restart') => {
   if (caddyLoading.value) return
   caddyLoading.value = true
   
-  const actionText = { start: '启动', stop: '停止', restart: '重启' }[action]
+  const actionText = { start: t('common.app.dashboard.actionStart'), stop: t('common.app.dashboard.actionStop'), restart: t('common.app.dashboard.actionRestart') }[action]
   const actionDesc = {
-    start: '确定要启动 Caddy 服务吗？',
-    stop: '确定要停止 Caddy 服务吗？停止后网站将无法访问。',
-    restart: '确定要重启 Caddy 服务吗？'
+    start: t('common.app.dashboard.confirmStart'),
+    stop: t('common.app.dashboard.confirmStop'),
+    restart: t('common.app.dashboard.confirmRestart')
   }[action]
-  
+
   try {
-    await ElMessageBox.confirm(actionDesc, `${actionText} Caddy 服务`, {
-      confirmButtonText: '确定',
-      cancelButtonText: '取消',
+    await ElMessageBox.confirm(actionDesc, t('common.app.dashboard.caddyServiceTitle', { action: actionText }), {
+      confirmButtonText: t('common.app.dashboard.dialogConfirm'),
+      cancelButtonText: t('common.app.dashboard.dialogCancel'),
       type: 'warning',
     })
     if (disposed) return
@@ -1181,7 +1183,8 @@ const controlCaddy = async (action: 'start' | 'stop' | 'restart') => {
       caddyStatus.value = 'running'
     }
     
-    mfaAwareSuccess(`Caddy ${actionText}成功`)
+    const actionDone = { start: t('common.app.dashboard.actionStarted'), stop: t('common.app.dashboard.actionStopped'), restart: t('common.app.dashboard.actionRestarted') }[action]
+    mfaAwareSuccess(t('common.app.dashboard.caddyActionSuccess', { action: actionDone }))
     
     // Also fetch actual status to confirm
     if (statusRefreshTimer) clearTimeout(statusRefreshTimer)
@@ -1333,7 +1336,9 @@ onUnmounted(() => {
   gap: 24px;
 }
 .resource-item { padding: 4px 0; min-width: 0; }
-.resource-header { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin-bottom: 10px; white-space: nowrap; }
+/* i18n:英文标签比中文宽 30-80%（Process quota 等）——标头允许换行（label 与数值分两行），
+   数值组自身仍 nowrap 不拆数；禁止整组溢出撑破 minmax(0,1fr) 网格列。 */
+.resource-header { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 4px 8px; margin-bottom: 10px; }
 .resource-label-group { display: inline-flex; align-items: center; gap: 4px; min-width: 0; }
 .resource-label { color: #4b5563; font-size: 13px; white-space: nowrap; }
 .resource-value-group { display: inline-flex; align-items: baseline; gap: 2px; white-space: nowrap; }

@@ -146,7 +146,7 @@ test('大屏：窗口切换保留上一帧并标注切换中，配置读取失�
 test('登录：创建管理员与自动登录分阶段，OIDC 保持深链', () => {
   const login = code('src/views/Login.vue')
   const setup = section(login, 'const handleSetup = async', 'onMounted(async')
-  assert.match(setup, /管理员已创建，请手动登录/, '登录失败不得报「创建管理员失败」')
+  assert.match(setup, /t\('common\.app\.login\.adminCreatedManual'/, '登录失败不得报「创建管理员失败」')
   // 深链 + 来源绑定：return_to 仍按当前页面键组装，同时并入本标签页 nonce
   //（回调侧据此拒绝构造链接投递的令牌）
   assert.match(login, /withOidcAppNonce\(`\/\$\{authStore\.currentPage\}`, nonce\)/, 'OIDC return_to 必须携带当前页面键与本轮 nonce')
@@ -204,7 +204,9 @@ test('视图口径与样式契约：端口门、CA 门、摘要披露、分页�
   assert.match(certs, /默认 CA 提供商已被禁用/, '默认 CA 被禁用必须前置中文提示')
   assert.match(certs, /caForm\.min_interval_ms" :min="1"/, '最小间隔下限与写侧门（1..60000）同源')
   const dash = code('src/views/Dashboard.vue')
-  assert.match(dash, /零流量规则不进入排行/, '规则卡必须披露截断口径')
+  // i18n 后双钉:调用点钉键,zh 母本钉披露口径原文(任一漂移必红)
+  assert.match(dash, /t\('common\.app\.dashboard\.rulesCountTitle'/, '规则卡必须披露截断口径')
+  assert.ok(code('src/locales/zh/common.ts').includes('零流量规则不进入排行'), '截断口径披露必须在 zh 母本词条中')
   assert.match(dash, /chart-stale-hint/, '采集失败保留曲线并标陈旧')
   const screen = code('src/views/security/ThreatScreen.vue')
   assert.doesNotMatch(screen, /'mixed'/, '动作分支仅 blocked/logged，mixed 不可达')

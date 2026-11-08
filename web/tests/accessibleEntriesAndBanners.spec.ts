@@ -85,7 +85,7 @@ test('登录页恢复码切换是真正的可聚焦控件（丢失验证器时�
     links.some((tag) => tag.includes('type="info"') && tag.includes('underline="never"') && tag.includes('@click="resetToPasswordStep"')),
     '「返回重新登录」入口缺失',
   )
-  assert.match(login, />返回重新登录<\/AccessibleLink>/)
+  assert.match(login, />\{\{ t\('common\.app\.login\.backToSignIn'\) \}\}<\/AccessibleLink>/)
 })
 
 test('首屏加载遮罩：读屏可达（status+aria-live）且配色走主题变量', () => {

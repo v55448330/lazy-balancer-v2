@@ -96,12 +96,13 @@ test('排行榜纳入采集失败行并排在正常行之后（逐列「采集�
   // 逐列「采集失败」分支保持存在（现为可达态）。必须逐列判定：按出现次数
   // 代理时，两列各有 title+文案两处命中，删掉整列后仍有 6 处 ≥ 5 → 守卫假绿，
   // 该列采集失败会静默渲染成 `-`（把「没采到」读成「零流量」）。
-  for (const label of ['请求数', '状态码', '入站流量', '出站流量', '处理中']) {
-    const column = section(dashboard, `<el-table-column label="${label}"`, '</el-table-column>')
+  // i18n 后列头为 t() 键（zh 母本原文在 locales/zh/common.ts 钉同名字面量）。
+  for (const key of ['requestsCol', 'statusCodes', 'inboundCol', 'outboundCol', 'inFlightCol'] as const) {
+    const column = section(dashboard, `<el-table-column :label="t('common.app.dashboard.${key}')"`, '</el-table-column>')
     assert.match(
       column,
       /ruleMetricsUnavailable\[row\.caddy_id\]/,
-      `「${label}」列缺采集失败分支——采不到的单元格会渲染成 -（与零流量不可区分）`,
+      `「${key}」列缺采集失败分支——采不到的单元格会渲染成 -（与零流量不可区分）`,
     )
   }
 })
@@ -113,10 +114,13 @@ test('历史统计失败置错误态并给重试，空态文案不再代表失�
   const dialog = section(dashboard, '<el-dialog v-model="ruleHistoryVisible"', '</el-dialog>')
   assert.match(dialog, /v-if="ruleHistoryError"/)
   assert.match(dialog, /@click="fetchRuleHistory"/)
-  // 错误态分支内不得再出现「该时间范围内暂无数据」
+  // 错误态分支内不得再出现「该时间范围内暂无数据」（zh 母本钉原文，避免键改名后负断言空转）
   const errorBranch = dialog.slice(dialog.indexOf('v-if="ruleHistoryError"'), dialog.indexOf('<template v-else>', dialog.indexOf('v-if="ruleHistoryError"')))
   assert.doesNotMatch(errorBranch, /该时间范围内暂无数据/)
-  assert.match(dialog, /图表为空不代表该时间范围没有流量/)
+  assert.ok(code('src/locales/zh/common.ts').includes('该时间范围内暂无数据'), '空态文案必须在 zh 母本词条中')
+  // i18n 后双钉:失败文案调用点钉键 + zh 母本钉原文
+  assert.match(dialog, /t\('common\.app\.dashboard\.historyLoadFailed'\)/)
+  assert.ok(code('src/locales/zh/common.ts').includes('图表为空不代表该时间范围没有流量'), '失败文案必须在 zh 母本词条中')
 })
 
 // ============ 节点角色三态的派生/渲染由 dashboardNodeRole.spec 唯一承担 ============

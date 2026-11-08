@@ -18,7 +18,9 @@ test('角色未知分支位于配置正常/异常之前，且文案与 tag 形�
   assert.ok(unknownAt > 0, '缺少 nodeModeRole === \'unknown\' 分支')
   assert.ok(consistentAt > unknownAt, '角色未知分支必须在「配置正常」之前（否则未知窗口仍显示配置正常）')
   const unknownBranch = chain.slice(unknownAt, consistentAt)
-  assert.match(unknownBranch, /角色未知/)
+  // i18n 后双钉:调用点钉键,zh 母本钉「角色未知」原文(任一漂移必红)
+  assert.match(unknownBranch, /t\('common\.app\.dashboard\.roleUnknown'\)/)
+  assert.ok(code('src/locales/zh/common.ts').includes('"roleUnknown": "角色未知"'), '角色未知文案必须在 zh 母本词条中')
   assert.match(unknownBranch, /<el-tag type="info" size="small" effect="plain">/)
 })
 

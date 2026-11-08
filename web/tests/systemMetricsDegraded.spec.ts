@@ -96,7 +96,7 @@ test('进程配额说明复用可聚焦帮助角标', () => {
   assert.ok(groupAt > 0, '进程配额标签组缺失')
   const openAt = page.lastIndexOf('<span', groupAt)
   const group = elementSlice(page, openAt, 'span')
-  assert.ok(group.includes('进程配额'), `标签组必须含「进程配额」：${group}`)
+  assert.ok(group.includes("t('common.app.dashboard.pidsQuota')"), `标签组必须含「进程配额」词条调用点：${group}`)
   assert.ok(group.includes('<FieldHelpIcon :content="pidsTooltip"'), `可聚焦帮助角标必须与标签同组：${group}`)
   assert.doesNotMatch(group, /<el-tooltip/, '组内不得用不可聚焦的 tooltip 代替帮助角标')
   // 值/总量双 span 按「同一开标签的属性集」定位（属性书写顺序与新增属性无关，
