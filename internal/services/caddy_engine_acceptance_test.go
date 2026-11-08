@@ -139,8 +139,8 @@ func TestGenerateCaddyConfig_samePortTLSRedirectEngineAcceptance(t *testing.T) {
 	}
 	rendered := generatedCaddyJSONForAcceptance(t)
 	for _, marker := range [][]byte{
-		[]byte(`"caddy.listeners.lb_https_redirect"`),
-		[]byte(`"caddy.listeners.tls"`),
+		[]byte(`"wrapper":"lb_https_redirect"`),
+		[]byte(`"wrapper":"tls"`),
 		[]byte(`"https_port":1666`),
 		[]byte(`"sameredirect.example.test"`),
 	} {

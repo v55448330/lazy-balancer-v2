@@ -2715,11 +2715,14 @@ func generateCaddyConfigWithCertSource(store, certSource caddyConfigStore, rules
 			sort.Strings(domains)
 			server["listener_wrappers"] = []interface{}{
 				map[string]interface{}{
-					"wrapper":    "caddy.listeners.lb_https_redirect",
+					// wrapper 值=命名空间后缀：加载器自动加 caddy.listeners. 前缀
+					// （全 ID 会导致双重前缀 unknown module——v2.4.3-beta 首发
+					// 缺陷实证，保存门拦截回滚后修正）。
+					"wrapper":    "lb_https_redirect",
 					"https_port": port,
 					"domains":    domains,
 				},
-				map[string]interface{}{"wrapper": "caddy.listeners.tls"},
+				map[string]interface{}{"wrapper": "tls"},
 			}
 		}
 

@@ -82,7 +82,7 @@ func TestGenerateCaddyConfig_samePortTLSRedirectListenerWrapper(t *testing.T) {
 		t.Fatalf("listener_wrappers=%v, want [lb_https_redirect, tls]", server["listener_wrappers"])
 	}
 	first := wrappers[0].(map[string]interface{})
-	if first["wrapper"] != "caddy.listeners.lb_https_redirect" {
+	if first["wrapper"] != "lb_https_redirect" {
 		t.Fatalf("首个包装器=%v, want lb_https_redirect（必须在 TLS 握手之前嗅探）", first)
 	}
 	if first["https_port"] != 666 {
@@ -92,7 +92,7 @@ func TestGenerateCaddyConfig_samePortTLSRedirectListenerWrapper(t *testing.T) {
 	if len(domains) != 1 || domains[0] != "shop.example.test" {
 		t.Fatalf("domains=%v, want [shop.example.test]（Host 限定=防反射开放重定向）", domains)
 	}
-	if wrappers[1].(map[string]interface{})["wrapper"] != "caddy.listeners.tls" {
+	if wrappers[1].(map[string]interface{})["wrapper"] != "tls" {
 		t.Fatalf("第二包装器=%v, want caddy.listeners.tls（TLS 位置占位）", wrappers[1])
 	}
 

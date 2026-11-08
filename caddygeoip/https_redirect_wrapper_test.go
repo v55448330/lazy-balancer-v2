@@ -155,3 +155,40 @@ func TestHTTPSRedirectSplit_hostWithoutPortGetsPortAppended(t *testing.T) {
 		t.Fatalf("Location=%q, want https://shop.example.test:666/a（Host 缺端口时补目标端口）", loc)
 	}
 }
+
+// 模块名可解析守卫（v2.4.3-beta 首发缺陷回归钉）：listener wrapper 的 JSON
+// wrapper 值必须是命名空间后缀（加载器自动加 caddy.listeners. 前缀）——
+// 渲染全 ID（caddy.listeners.lb_https_redirect）会双重前缀 unknown module，
+// 配置应用整单失败回滚。本钉经进程内 caddy 校验解析完整 listener_wrappers
+// 形状，名称漂移即红（变异验证：全 ID 形态复现与线上完全一致的 unknown
+// module 双重前缀错误）。
+func TestSamePortWrapperModuleNameResolvable(t *testing.T) {
+	wrapperJSON := `{
+		"apps": {
+			"http": {
+				"http_port": 16660,
+				"servers": {
+					"http_16666": {
+						"listen": ["127.0.0.1:16666"],
+						"listener_wrappers": [
+							{"wrapper": "lb_https_redirect", "https_port": 16666, "domains": ["resolve.example.test"]},
+							{"wrapper": "tls"}
+						],
+						"routes": []
+					}
+				}
+			},
+			"tls": {
+				"certificates": {"load_files": []},
+				"automation": {"policies": [{"issuers": [{"module": "internal"}]}]}
+			}
+		}
+	}`
+	var cfg caddy.Config
+	if err := caddy.StrictUnmarshalJSON([]byte(wrapperJSON), &cfg); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if err := caddy.Validate(&cfg); err != nil {
+		t.Fatalf("caddy 校验必须能解析 lb_https_redirect 包装器（模块名=命名空间后缀）: %v", err)
+	}
+}
