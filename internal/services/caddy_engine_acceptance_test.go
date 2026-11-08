@@ -125,3 +125,28 @@ func TestGenerateCaddyConfig_realEngineAcceptance(t *testing.T) {
 		validateCaddyJSONForAcceptance(t, binary, rendered)
 	})
 }
+
+func TestGenerateCaddyConfig_samePortTLSRedirectEngineAcceptance(t *testing.T) {
+	binary := caddyBinaryForAcceptance(t)
+	useTemporaryCertDir(t)
+	_, database := newClusterTestService(t)
+	certPEM, keyPEM := matchingCertificatePair(t, "sameredirect.example.test")
+	if _, err := database.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,strategy,enable_tls,tls_source,tls_cert,tls_key,tls_http_redirect,enabled) VALUES ('lb_engine_sameredirect','sameport redirect','http','sameredirect.example.test',1666,'weighted_round_robin',1,'manual',?,?,1,1)`, certPEM, keyPEM); err != nil {
+		t.Fatalf("seed TLS redirect rule: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO upstreams (rule_id,host,port,weight,enabled,protocol) VALUES ('lb_engine_sameredirect','127.0.0.1',19010,1,1,'http')`); err != nil {
+		t.Fatalf("seed upstream: %v", err)
+	}
+	rendered := generatedCaddyJSONForAcceptance(t)
+	for _, marker := range [][]byte{
+		[]byte(`"caddy.listeners.lb_https_redirect"`),
+		[]byte(`"caddy.listeners.tls"`),
+		[]byte(`"https_port":1666`),
+		[]byte(`"sameredirect.example.test"`),
+	} {
+		if !bytes.Contains(rendered, marker) {
+			t.Errorf("generated JSON lacks same-port redirect marker %s", marker)
+		}
+	}
+	validateCaddyJSONForAcceptance(t, binary, rendered)
+}

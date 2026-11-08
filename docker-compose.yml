@@ -51,7 +51,7 @@ services:
         # docker build 示例（--build-arg VERSION 与镜像 tag）、
         # web/src/utils/branding.ts 的 appVersion 回退值；发布时另需 buildx
         # --build-arg 显式传参。以上各处须同步递增。
-        # VERSION=正式版本号（v2.4.2，镜像内 APP_VERSION 同口径）；beta 通道见 v2.4.2-beta
+        # VERSION=正式版本号（v2.4.2，镜像内 APP_VERSION 同口径）；beta 通道见 v2.4.3-beta
         # 测试通道在 image tag 上加 -beta 后缀。
         VERSION: v2.4.2
     container_name: lazy-balancer

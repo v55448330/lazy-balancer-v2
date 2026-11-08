@@ -26,7 +26,6 @@ import (
 func newProcessControlTestHandlers(t *testing.T) (*Handlers, *int32, *int32) {
 	t.Helper()
 	var runs, stops int32
-	origRun, origStop := caddyRunCommand, caddyStopCommand
 	origPause, origPid, origWait := caddyPauseFile, caddySupervisorPidFile, caddySupervisorWaitTimeout
 	tempDir := t.TempDir()
 	caddyRunCommand = func() *exec.Cmd {
@@ -40,12 +39,18 @@ func newProcessControlTestHandlers(t *testing.T) (*Handlers, *int32, *int32) {
 	caddyPauseFile = filepath.Join(tempDir, "paused")
 	caddySupervisorPidFile = filepath.Join(tempDir, "supervisor.pid")
 	caddySupervisorWaitTimeout = 200 * time.Millisecond
+	// admin 探针桩：caddyAdminReady 判定此前隐式依赖宿主机 2019 端口存在
+	// 本地容器 caddy（Docker 停机后探针不可达 → stopCaddy 按事实分类器判
+	// 「已停止」→ 用例期望的 500 变 200）。桩恒应答 <500，使「admin 在服务」
+	// 与宿主机环境解耦——桩命令失败 + admin 仍在服务 = 分类器必走 500 分支。
+	adminStub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(adminStub.Close)
 	t.Cleanup(func() {
-		caddyRunCommand, caddyStopCommand = origRun, origStop
-		caddyPauseFile, caddySupervisorPidFile = origPause, origPid
-		caddySupervisorWaitTimeout = origWait
+		caddyPauseFile, caddySupervisorPidFile, caddySupervisorWaitTimeout = origPause, origPid, origWait
 	})
-	return &Handlers{cfg: &config.Config{CaddyAdminURL: "http://127.0.0.1:2019"}}, &runs, &stops
+	return &Handlers{cfg: &config.Config{CaddyAdminURL: adminStub.URL}}, &runs, &stops
 }
 
 func TestCaddyProcessControlRejectsDuringImportWindow(t *testing.T) {

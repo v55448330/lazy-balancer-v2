@@ -47,3 +47,87 @@ func Test_manualTLSRedirectRequiresReadyCert(t *testing.T) {
 		t.Fatal("证书就绪后 301 跳转必须发射")
 	}
 }
+
+// 同端口明文跳转（TLS 端口上 http→https）：规则监听什么端口，就在该端口
+// 完成跳转——TLS server 挂 lb_https_redirect 监听包装器（首字节嗅探：明文
+// 连接由包装器以 301 应答，TLS 连接透传），不再要求用户为同域名补 80 端口
+// 规则。安全约束钉住：包装器配置必须携带该端口全部跳转域名集（Host 限定，
+// 防反射开放重定向）；明文请求永不进入代理路由（包装器 terminal 应答，
+// fail-closed 保持）。
+func TestGenerateCaddyConfig_samePortTLSRedirectListenerWrapper(t *testing.T) {
+	useTemporaryCertDir(t)
+	_, database := newClusterTestService(t)
+	certPEM, keyPEM := matchingCertificatePair(t, "shop.example.test")
+	if _, err := database.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,strategy,enable_tls,tls_source,tls_cert,tls_key,tls_http_redirect,enabled) VALUES ('lb-sameredirect','sameport','http','shop.example.test',666,'weighted_round_robin',1,'manual',?,?,1,1)`, certPEM, keyPEM); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`INSERT INTO upstreams (rule_id,host,port,weight,enabled,protocol) VALUES ('lb-sameredirect','127.0.0.1',8080,1,1,'http')`); err != nil {
+		t.Fatal(err)
+	}
+	config := GenerateCaddyConfig()
+	if message, failed := config[caddyConfigGenerationErrorKey].(string); failed {
+		t.Fatalf("generate: %s", message)
+	}
+	servers := config["apps"].(map[string]interface{})["http"].(map[string]interface{})["servers"].(map[string]interface{})
+	sv, exists := servers["http_666"]
+	if !exists {
+		t.Fatalf("server http_666 missing（证书已就绪的 TLS 规则必须发布）: %v", servers)
+	}
+	server := sv.(map[string]interface{})
+
+	// 形状①：TLS server 必须挂 proto 嗅探包装器（放最前=TLS 握手之前），
+	// 且携带该端口跳转域名集与 https 目标端口。
+	wrappers, ok := server["listener_wrappers"].([]interface{})
+	if !ok || len(wrappers) != 2 {
+		t.Fatalf("listener_wrappers=%v, want [lb_https_redirect, tls]", server["listener_wrappers"])
+	}
+	first := wrappers[0].(map[string]interface{})
+	if first["wrapper"] != "caddy.listeners.lb_https_redirect" {
+		t.Fatalf("首个包装器=%v, want lb_https_redirect（必须在 TLS 握手之前嗅探）", first)
+	}
+	if first["https_port"] != 666 {
+		t.Fatalf("https_port=%v, want 666", first["https_port"])
+	}
+	domains := first["domains"].([]string)
+	if len(domains) != 1 || domains[0] != "shop.example.test" {
+		t.Fatalf("domains=%v, want [shop.example.test]（Host 限定=防反射开放重定向）", domains)
+	}
+	if wrappers[1].(map[string]interface{})["wrapper"] != "caddy.listeners.tls" {
+		t.Fatalf("第二包装器=%v, want caddy.listeners.tls（TLS 位置占位）", wrappers[1])
+	}
+
+	// 形状②（回归）：纯 HTTP 规则端口不得挂包装器（无 https 目标）。
+	plain := servers["http_80"]
+	if plain == nil {
+		t.Fatalf("server http_80 missing（跳转默认站必须在场）")
+	}
+	if _, has := plain.(map[string]interface{})["listener_wrappers"]; has {
+		t.Fatal("纯 HTTP/跳转默认站不得挂 lb_https_redirect 包装器")
+	}
+}
+
+// 形状③（fail-closed）：TLS 规则未开跳转时——包装器不挂载，明文打到该端口
+// 维持既有姿态（Go 栈 400），不得顺手获得明文服务能力。
+func TestGenerateCaddyConfig_tlsWithoutRedirectNoWrapper(t *testing.T) {
+	useTemporaryCertDir(t)
+	_, database := newClusterTestService(t)
+	certPEM, keyPEM := matchingCertificatePair(t, "noredirect.example.test")
+	if _, err := database.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,strategy,enable_tls,tls_source,tls_cert,tls_key,tls_http_redirect,enabled) VALUES ('lb-noredirect','noredirect','http','noredirect.example.test',667,'weighted_round_robin',1,'manual',?,?,0,1)`, certPEM, keyPEM); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`INSERT INTO upstreams (rule_id,host,port,weight,enabled,protocol) VALUES ('lb-noredirect','127.0.0.1',8080,1,1,'http')`); err != nil {
+		t.Fatal(err)
+	}
+	config := GenerateCaddyConfig()
+	if message, failed := config[caddyConfigGenerationErrorKey].(string); failed {
+		t.Fatalf("generate: %s", message)
+	}
+	servers := config["apps"].(map[string]interface{})["http"].(map[string]interface{})["servers"].(map[string]interface{})
+	sv, exists := servers["http_667"]
+	if !exists {
+		t.Fatal("server http_667 missing")
+	}
+	if _, has := sv.(map[string]interface{})["listener_wrappers"]; has {
+		t.Fatal("未开跳转的 TLS 端口不得挂包装器（明文姿态必须与既有行为一致）")
+	}
+}
