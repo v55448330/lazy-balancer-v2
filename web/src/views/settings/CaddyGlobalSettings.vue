@@ -4,72 +4,72 @@
       <div class="card-header">
         <div class="card-title">
           <el-icon><Setting /></el-icon>
-          <span>Caddy 全局配置</span>
+          <span>{{ t('app.settings.caddy.title') }}</span>
         </div>
       </div>
     </template>
 
     <el-form :model="settings" label-width="140px" class="caddy-form" :disabled="formFrozen">
-      <el-divider content-position="left">运行日志</el-divider>
-      <el-form-item label="日志级别">
+      <el-divider content-position="left">{{ t('app.settings.caddy.log.title') }}</el-divider>
+      <el-form-item :label="t('app.settings.caddy.log.level')">
         <el-select v-model="settings.caddy_log_level" :disabled="formFrozen" style="width: 140px">
           <el-option label="debug" value="debug" />
           <el-option label="info" value="info" />
           <el-option label="warn" value="warn" />
           <el-option label="error" value="error" />
         </el-select>
-        <span class="form-tip-inline">建议 info；debug 日志量大</span>
+        <span class="form-tip-inline">{{ t('app.settings.caddy.log.levelHint') }}</span>
       </el-form-item>
-      <el-form-item label="日志大小">
+      <el-form-item :label="t('app.settings.caddy.log.size')">
         <el-input-number v-model="settings.caddy_log_size_mb" :disabled="formFrozen" :min="100" :max="10240" controls-position="right" class="number-input" />
-        <span class="form-tip-inline tip-nowrap">MB，超限归档保留 5 份</span>
+        <span class="form-tip-inline tip-nowrap">{{ t('app.settings.caddy.log.sizeHint') }}</span>
       </el-form-item>
-      <el-form-item label="运行日志" for="caddy-log-view-static">
+      <el-form-item :label="t('app.settings.caddy.log.title')" for="caddy-log-view-static">
         <input type="text" id="caddy-log-view-static" aria-hidden="true" tabindex="-1" autocomplete="off" style="display:none">
-        <el-button size="small" :icon="View" @click="openLogDialog">查看日志</el-button>
-        <span class="form-tip-inline">查看 Caddy 运行时、TLS、HTTP 服务器与反向代理日志</span>
+        <el-button size="small" :icon="View" @click="openLogDialog">{{ t('app.settings.caddy.log.viewBtn') }}</el-button>
+        <span class="form-tip-inline">{{ t('app.settings.caddy.log.viewDesc') }}</span>
       </el-form-item>
 
-      <el-divider content-position="left">请求与超时</el-divider>
-      <el-form-item label="请求体大小">
+      <el-divider content-position="left">{{ t('app.settings.caddy.timeout.title') }}</el-divider>
+      <el-form-item :label="t('app.settings.caddy.timeout.bodySize')">
         <el-input-number v-model="settings.request_body_max_size_mb" :disabled="formFrozen" :min="1" :max="1024" controls-position="right" class="number-input" />
-        <span class="form-tip-inline tip-nowrap">MB，请求体上限；默认 128，必须为 1-1024（0 不再表示默认）</span>
+        <span class="form-tip-inline tip-nowrap">{{ t('app.settings.caddy.timeout.bodySizeHint') }}</span>
       </el-form-item>
-      <el-form-item label="读取超时">
+      <el-form-item :label="t('app.settings.caddy.timeout.read')">
         <el-input-number v-model="settings.http_read_timeout" :disabled="formFrozen" :min="1" controls-position="right" class="number-input" />
-        <span class="form-tip-inline tip-nowrap">秒，读请求超时；必须 ≥1（0 不再表示无超时），常用 60</span>
+        <span class="form-tip-inline tip-nowrap">{{ t('app.settings.caddy.timeout.readHint') }}</span>
       </el-form-item>
-      <el-form-item label="写入超时">
+      <el-form-item :label="t('app.settings.caddy.timeout.write')">
         <el-input-number v-model="settings.http_write_timeout" :disabled="formFrozen" :min="1" controls-position="right" class="number-input" />
-        <span class="form-tip-inline">秒，写响应超时；必须 ≥1（0 不再表示无超时），常用 60</span>
+        <span class="form-tip-inline">{{ t('app.settings.caddy.timeout.writeHint') }}</span>
       </el-form-item>
-      <el-form-item label="空闲超时">
+      <el-form-item :label="t('app.settings.caddy.timeout.idle')">
         <el-input-number v-model="settings.http_idle_timeout" :disabled="formFrozen" :min="1" controls-position="right" class="number-input" />
-        <span class="form-tip-inline">秒，Keep-Alive 空闲超时；必须 ≥1（0 不再表示默认），常用 120</span>
+        <span class="form-tip-inline">{{ t('app.settings.caddy.timeout.idleHint') }}</span>
       </el-form-item>
-      <el-form-item label="上游 Keepalive">
+      <el-form-item :label="t('app.settings.caddy.timeout.upstreamKeepalive')">
         <el-input-number v-model="settings.upstream_keepalive_timeout" :disabled="formFrozen" :min="0" controls-position="right" class="number-input" />
-        <span class="form-tip-inline">秒，上游空闲保持；0 = 默认 2 分钟</span>
+        <span class="form-tip-inline">{{ t('app.settings.caddy.timeout.upstreamKeepaliveHint') }}</span>
       </el-form-item>
 
-      <el-divider content-position="left">代理超时</el-divider>
-      <ProxyTimeoutFields :value="settings" inherit-label="Caddy 默认" :disabled="formFrozen" show-suggested @update="updateProxyTimeout" />
+      <el-divider content-position="left">{{ t('app.settings.caddy.proxy.title') }}</el-divider>
+      <ProxyTimeoutFields :value="settings" :inherit-label="t('app.settings.caddy.proxy.caddyDefault')" :disabled="formFrozen" show-suggested @update="updateProxyTimeout" />
 
-      <el-divider content-position="left">响应头</el-divider>
+      <el-divider content-position="left">{{ t('app.settings.caddy.headers.title') }}</el-divider>
       <el-form-item label="Server Tokens">
-        <el-switch v-model="settings.server_tokens_hidden" :disabled="formFrozen" active-text="开启" inactive-text="关闭" />
-        <span class="form-tip-inline">隐藏响应 Server 头，减少指纹暴露</span>
+        <el-switch v-model="settings.server_tokens_hidden" :disabled="formFrozen" :active-text="t('app.settings.caddy.on')" :inactive-text="t('app.settings.caddy.off')" />
+        <span class="form-tip-inline">{{ t('app.settings.caddy.headers.hideServerHint') }}</span>
       </el-form-item>
 
-      <el-divider content-position="left">安全防护</el-divider>
-      <el-form-item label="受信代理">
+      <el-divider content-position="left">{{ t('app.settings.caddy.security.title') }}</el-divider>
+      <el-form-item :label="t('app.settings.caddy.trust.title')">
         <div class="trusted-toggle">
-          <el-switch v-model="settings.trusted_proxy_enabled" :disabled="formFrozen" active-text="开启" inactive-text="关闭" />
-          <div class="form-tip-line">CDN/前置代理回源时开启，按真实客户端 IP 判定名单/地域/限流</div>
+          <el-switch v-model="settings.trusted_proxy_enabled" :disabled="formFrozen" :active-text="t('app.settings.caddy.on')" :inactive-text="t('app.settings.caddy.off')" />
+          <div class="form-tip-line">{{ t('app.settings.caddy.trust.desc') }}</div>
         </div>
       </el-form-item>
       <template v-if="settings.trusted_proxy_enabled">
-        <el-form-item label="受信网段">
+        <el-form-item :label="t('app.settings.caddy.trust.ranges')">
           <div class="trusted-inline-row">
             <el-select
               v-model="trustedRanges"
@@ -78,7 +78,7 @@
               allow-create
               default-first-option
               :disabled="formFrozen"
-              placeholder="粘贴该 CDN 回源网段（CIDR），以官方公布为准"
+              :placeholder="t('app.settings.caddy.trust.rangesPlaceholder')"
               class="trusted-field"
             />
             <el-button
@@ -88,36 +88,36 @@
               class="trusted-save-list-btn"
               :disabled="formFrozen || trustedRanges.length === 0"
               @click="openSaveListDialog"
-            >存为列表</el-button>
+            >{{ t('app.settings.caddy.trust.saveAsListBtn') }}</el-button>
           </div>
           <div v-if="trustedRangesError" class="form-tip-line trusted-ranges-error">{{ trustedRangesError }}</div>
-          <div class="form-tip-line">仅这些网段发来的请求头会被采信；未配对网段时所有头一律被忽略（最小 /8 与 /29）。{{ trustedPresetRangesDoc }}</div>
+          <div class="form-tip-line">{{ t('app.settings.caddy.trust.headersAcceptedHint') }}{{ trustedPresetRangesDoc }}</div>
         </el-form-item>
         <div v-if="ipListsLoadError" class="info-note-bar">
-          <span class="info-note-desc">IP 地址列表加载失败：「引用地址列表」下拉为空≠未配置，下方「合计 N 条」也未计入已引用列表的条目</span>
-          <el-button size="small" type="primary" plain :loading="ipListsLoading" @click="fetchIpLists">重新加载</el-button>
+          <span class="info-note-desc">{{ t('app.settings.caddy.trust.listLoadWarn') }}</span>
+          <el-button size="small" type="primary" plain :loading="ipListsLoading" @click="fetchIpLists">{{ t('app.settings.caddy.trust.reloadBtn') }}</el-button>
         </div>
-        <el-form-item label="引用地址列表">
+        <el-form-item :label="t('app.settings.caddy.trust.referencedList')">
           <el-select
             v-model="trustedRangeRefs"
             multiple
             filterable
             :disabled="formFrozen"
-            placeholder="选择要引用的 IP 地址列表"
+            :placeholder="t('app.settings.caddy.trust.referencedListPlaceholder')"
             class="trusted-field"
           >
-            <el-option v-for="l in customIpLists" :key="l.id" :label="`${l.name}（${l.entry_count} 条）`" :value="l.id" />
+            <el-option v-for="l in customIpLists" :key="l.id" :label="t('app.settings.caddy.trust.listOptionLabel', { name: l.name, count: l.entry_count })" :value="l.id" />
           </el-select>
           <div v-if="trustedTotalError" class="form-tip-line trusted-ranges-error">{{ trustedTotalError }}</div>
           <div v-else-if="trustedTotalWarning" class="form-tip-line">{{ trustedTotalWarning }}</div>
           <div v-if="trustedReferencedRangesError" class="form-tip-line trusted-ranges-error">{{ trustedReferencedRangesError }}</div>
           <div v-if="refListEntriesRetryIds.length" class="info-note-bar">
-            <span class="info-note-desc">{{ refListEntriesRetryIds.length }} 个引用列表的条目未加载成功，「合计」条数按名单记录数估算（重叠网段未去重）；若名单已被删除，保存会被拒绝；服务端以去重后结果为准</span>
-            <el-button size="small" type="primary" plain @click="retryRefListEntries">重新加载名单条目</el-button>
+            <span class="info-note-desc">{{ t('app.settings.caddy.trust.refListLoadFailHint', { count: refListEntriesRetryIds.length }) }}</span>
+            <el-button size="small" type="primary" plain @click="retryRefListEntries">{{ t('app.settings.caddy.trust.reloadEntriesBtn') }}</el-button>
           </div>
-          <div class="form-tip-line">引用「规则集 → IP 地址列表」中的可复用列表，条目与上方内联网段合并生效（合计 {{ trustedRangesTotalCount }} 条，上限 {{ TRUSTED_PROXY_MAX_TOTAL_ENTRIES }}）</div>
+          <div class="form-tip-line">{{ t('app.settings.caddy.trust.mergedEffectHint', { total: trustedRangesTotalCount, cap: TRUSTED_PROXY_MAX_TOTAL_ENTRIES }) }}</div>
         </el-form-item>
-        <el-form-item label="请求头">
+        <el-form-item :label="t('app.settings.caddy.trust.headersLabel')">
           <el-select
             :model-value="trustedHeaders"
             multiple
@@ -125,48 +125,48 @@
             allow-create
             default-first-option
             :disabled="formFrozen"
-            placeholder="留空 = 仅 X-Forwarded-For"
+            :placeholder="t('app.settings.caddy.trust.headersEmptyHint')"
             class="trusted-field"
             @update:model-value="onTrustedHeadersEdit"
           />
           <div v-if="trustedHeadersError" class="form-tip-line trusted-ranges-error">{{ trustedHeadersError }}</div>
-          <div class="form-tip-line">按顺序优先取：把该 CDN 保证覆盖的权威头放最前。{{ trustedPresetNote }}</div>
+          <div class="form-tip-line">{{ t('app.settings.caddy.trust.presetOrderHint') }}{{ trustedPresetNote }}</div>
         </el-form-item>
-        <el-form-item label="预设填充">
+        <el-form-item :label="t('app.settings.caddy.trust.presetFillLabel')">
           <el-select
             v-model="trustedPresetKey"
             :disabled="formFrozen"
-            placeholder="按 CDN 填充请求头"
+            :placeholder="t('app.settings.caddy.trust.presetFillBtn')"
             clearable
             class="trusted-preset-field"
             @change="applyTrustedPreset"
           >
             <el-option v-for="preset in CDN_PRESETS" :key="preset.label" :label="preset.label" :value="preset.label" />
           </el-select>
-          <div class="form-tip-line">按所选 CDN 一键填充上方「请求头」推荐值；仅辅助输入，不影响已填内容以外的配置</div>
+          <div class="form-tip-line">{{ t('app.settings.caddy.trust.presetFillHint') }}</div>
         </el-form-item>
-        <el-form-item label="严格模式">
-          <el-switch v-model="settings.trusted_proxy_strict" :disabled="formFrozen" active-text="开启" inactive-text="关闭" />
-          <el-tooltip content="关闭后按最左值取 IP，可被伪造，不建议关闭" placement="top">
-            <span class="form-tip-inline">严格取「最右可信」值；关闭仅用于特殊代理链</span>
+        <el-form-item :label="t('app.settings.caddy.trust.strictMode')">
+          <el-switch v-model="settings.trusted_proxy_strict" :disabled="formFrozen" :active-text="t('app.settings.caddy.on')" :inactive-text="t('app.settings.caddy.off')" />
+          <el-tooltip :content="t('app.settings.caddy.trust.strictOffWarn')" placement="top">
+            <span class="form-tip-inline">{{ t('app.settings.caddy.trust.strictHint') }}</span>
           </el-tooltip>
         </el-form-item>
       </template>
 
       <!-- 关闭态：隐藏字段仍参与后端写侧校验（与开关无关），非法存量值
            必须可见且给出可修复路径——否则用户看不到控件也无法定位。 -->
-      <el-form-item v-else-if="trustedProxyDisabledStaleError" label="受信代理" for="caddy-trusted-ranges-static">
+      <el-form-item v-else-if="trustedProxyDisabledStaleError" :label="t('app.settings.caddy.trust.title')" for="caddy-trusted-ranges-static">
         <input type="text" id="caddy-trusted-ranges-static" aria-hidden="true" tabindex="-1" autocomplete="off" style="display:none">
         <div class="form-tip-line trusted-ranges-error">{{ trustedProxyDisabledStaleError }}</div>
-        <div class="form-tip-line">受信代理已关闭，但存量配置仍会被写侧校验：请临时开启「受信代理」修正上述条目后再关闭，否则保存会被拒绝。</div>
+        <div class="form-tip-line">{{ t('app.settings.caddy.trust.trustOffSaveWarn') }}</div>
       </el-form-item>
 
-      <el-divider content-position="left">访问日志</el-divider>
-      <el-form-item label="自定义格式">
-        <el-switch v-model="settings.access_log_json" :disabled="formFrozen" active-text="自定义 JSON" inactive-text="Caddy JSON" />
-        <div class="form-tip-line">开启后使用 filter 编码器按自定义格式输出；关闭时输出 Caddy 原生 JSON（X-API-Key 请求头始终脱敏）。关闭后保存会清空已配置的自定义字段映射</div>
+      <el-divider content-position="left">{{ t('app.settings.caddy.accessLog.title') }}</el-divider>
+      <el-form-item :label="t('app.settings.caddy.accessLog.customFormat')">
+        <el-switch v-model="settings.access_log_json" :disabled="formFrozen" :active-text="t('app.settings.caddy.accessLog.customJson')" inactive-text="Caddy JSON" />
+        <div class="form-tip-line">{{ t('app.settings.caddy.accessLog.customJsonHint') }}</div>
       </el-form-item>
-      <el-form-item v-if="settings.access_log_json" label="日志格式">
+      <el-form-item v-if="settings.access_log_json" :label="t('app.settings.caddy.accessLog.format')">
         <div class="format-field">
           <el-input
             v-model="settings.access_log_format"
@@ -175,23 +175,23 @@
             maxlength="16384"
             show-word-limit
             :disabled="formFrozen"
-            placeholder="每行一个字段映射，格式: caddy字段路径 -> 自定义名称，或 caddy字段路径 -> delete"
+            :placeholder="t('app.settings.caddy.accessLog.mappingPlaceholder')"
           />
-          <el-button text type="primary" size="small" :disabled="formFrozen" @click="settings.access_log_format = DEFAULT_ACCESS_LOG_FORMAT">还原默认格式</el-button>
+          <el-button text type="primary" size="small" :disabled="formFrozen" @click="settings.access_log_format = DEFAULT_ACCESS_LOG_FORMAT">{{ t('app.settings.caddy.accessLog.resetFormatBtn') }}</el-button>
           <div class="form-tip-line format-tip">
             <!-- 上限与后端写侧门同源（internal/handlers/caddy.go：16KiB / 200 行，
                  按 UTF-8 字节计）——超限保存会被拒绝，先在此告知而不是让用户试错 -->
-            <div>最多 200 行、16 KiB（后端按 UTF-8 字节计）；超限保存会被拒绝。</div>
-            每行一条规则：字段重命名 <code>request&gt;remote_ip -&gt; src</code> 或删除字段 <code>request&gt;headers -&gt; delete</code>。
-            无论格式如何，<code>request&gt;headers&gt;X-Api-Key</code> 恒被删除（面板 API Key 不落日志）。
-            可用字段：<code>request&gt;remote_ip</code> <code>request&gt;client_ip</code> <code>request&gt;method</code> <code>request&gt;host</code> <code>request&gt;uri</code> <code>request&gt;proto</code> <code>request&gt;headers&gt;User-Agent</code> <code>status</code> <code>size</code> <code>duration</code> <code>bytes_read</code> <code>user_id</code> <code>ts</code> <code>resp_headers</code> <code>request&gt;tls</code>。
-            Caddy 日志文档：<a href="https://caddyserver.com/docs/json/apps/http/servers/logs/" target="_blank" rel="noopener noreferrer">官方字段说明</a>
+            <div>{{ t('app.settings.caddy.accessLog.mappingLimitHint') }}</div>
+            {{ t('app.settings.caddy.accessLog.mappingRuleIntro') }} <code>request&gt;remote_ip -&gt; src</code> {{ t('app.settings.caddy.accessLog.orDeleteField') }} <code>request&gt;headers -&gt; delete</code>。
+            {{ t('app.settings.caddy.accessLog.alwaysDelPrefix') }}<code>request&gt;headers&gt;X-Api-Key</code>{{ t('app.settings.caddy.accessLog.alwaysDelSuffix') }}
+            {{ t('app.settings.caddy.accessLog.availableFields') }}<code>request&gt;remote_ip</code> <code>request&gt;client_ip</code> <code>request&gt;method</code> <code>request&gt;host</code> <code>request&gt;uri</code> <code>request&gt;proto</code> <code>request&gt;headers&gt;User-Agent</code> <code>status</code> <code>size</code> <code>duration</code> <code>bytes_read</code> <code>user_id</code> <code>ts</code> <code>resp_headers</code> <code>request&gt;tls</code>。
+            {{ t('app.settings.caddy.accessLog.caddyDocsLabel') }}<a href="https://caddyserver.com/docs/json/apps/http/servers/logs/" target="_blank" rel="noopener noreferrer">{{ t('app.settings.caddy.accessLog.fieldDocsLink') }}</a>
           </div>
         </div>
       </el-form-item>
       <div class="form-actions">
-        <el-button type="primary" :loading="saving" :disabled="isReadOnly || !props.configLoaded" @click="handleSave">保存</el-button>
-        <el-button type="warning" :loading="reloading" :disabled="formFrozen || reloading" @click="handleReloadCaddy">重载 Caddy</el-button>
+        <el-button type="primary" :loading="saving" :disabled="isReadOnly || !props.configLoaded" @click="handleSave">{{ t('app.settings.caddy.actions.save') }}</el-button>
+        <el-button type="warning" :loading="reloading" :disabled="formFrozen || reloading" @click="handleReloadCaddy">{{ t('app.settings.caddy.actions.reloadCaddy') }}</el-button>
       </div>
     </el-form>
   </el-card>
@@ -206,25 +206,25 @@
     @close="onLogDialogClosed"
   >
     <template #header>
-      <DialogHeader :icon="Tickets" title="Caddy 日志" subtitle="运行时 / TLS / HTTP 服务器 / 反向代理四通道实时日志" />
+      <DialogHeader :icon="Tickets" :title="t('app.settings.caddy.viewer.title')" :subtitle="t('app.settings.caddy.viewer.subtitle')" />
     </template>
     <el-tabs v-model="activeLogTab" @tab-change="onLogTabChange">
-      <el-tab-pane label="运行时" name="runtime" />
+      <el-tab-pane :label="t('app.settings.caddy.viewer.tabRuntime')" name="runtime" />
       <el-tab-pane label="TLS" name="tls" />
-      <el-tab-pane label="HTTP 服务器" name="server" />
-      <el-tab-pane label="反向代理" name="proxy" />
+      <el-tab-pane :label="t('app.settings.caddy.viewer.tabHttp')" name="server" />
+      <el-tab-pane :label="t('app.settings.caddy.viewer.tabProxy')" name="proxy" />
     </el-tabs>
     <div class="log-toolbar">
-      <el-switch v-model="autoRefresh" active-text="自动刷新" />
+      <el-switch v-model="autoRefresh" :active-text="t('app.settings.caddy.viewer.autoRefresh')" />
       <el-button type="primary" :loading="logLoading" size="small" @click="refreshLogs">
-        <el-icon><RefreshRight /></el-icon>刷新
+        <el-icon><RefreshRight /></el-icon>{{ t('app.settings.caddy.viewer.refreshBtn') }}
       </el-button>
     </div>
     <div ref="logContainerRef" class="dialog-panel log-viewer" v-html="logHtml" />
     <template #footer>
       <div style="display: flex; align-items: center;">
         <LogStorageBar :key="activeLogTab" :log-key="caddyTabLogKey" style="margin-right: auto" />
-        <el-button @click="logDialogVisible = false">关闭</el-button>
+        <el-button @click="logDialogVisible = false">{{ t('app.settings.caddy.off') }}</el-button>
       </div>
     </template>
   </el-dialog>
@@ -238,31 +238,32 @@
     :show-close="!savingList"
   >
     <template #header>
-      <DialogHeader :icon="Tickets" title="存为地址列表" subtitle="内联网段转为可复用的共享 IP 列表" />
+      <DialogHeader :icon="Tickets" :title="t('app.settings.caddy.list.title')" :subtitle="t('app.settings.caddy.list.subtitle')" />
     </template>
     <el-form label-width="80px" @submit.prevent :disabled="savingList">
-      <el-form-item label="来源" for="caddy-trusted-source-static">
+      <el-form-item :label="t('app.settings.caddy.list.source')" for="caddy-trusted-source-static">
         <input type="text" id="caddy-trusted-source-static" aria-hidden="true" tabindex="-1" autocomplete="off" style="display:none">
-        <span>当前内联网段（{{ trustedRanges.length }} 条）</span>
+        <span>{{ t('app.settings.caddy.trust.currentInlineRanges', { count: trustedRanges.length }) }}</span>
       </el-form-item>
-      <el-form-item label="列表名称" required>
-        <el-input v-model="saveListForm.name" placeholder="列表名称" maxlength="50" show-word-limit />
+      <el-form-item :label="t('app.settings.caddy.list.name')" required>
+        <el-input v-model="saveListForm.name" :placeholder="t('app.settings.caddy.list.name')" maxlength="50" show-word-limit />
       </el-form-item>
-      <el-form-item label="分类">
-        <el-select v-model="saveListForm.category" allow-create filterable default-first-option placeholder="选择或输入分类" style="width: 100%">
+      <el-form-item :label="t('app.settings.caddy.list.category')">
+        <el-select v-model="saveListForm.category" allow-create filterable default-first-option :placeholder="t('app.settings.caddy.list.categoryPlaceholder')" style="width: 100%">
           <el-option v-for="c in IP_LIST_CATEGORIES" :key="c" :label="c" :value="c" />
         </el-select>
       </el-form-item>
     </el-form>
     <template #footer>
-      <el-button @click="saveListDialogVisible = false" :disabled="savingList">取消</el-button>
-      <el-button type="primary" :loading="savingList" @click="confirmSaveAsList">创建并引用</el-button>
+      <el-button @click="saveListDialogVisible = false" :disabled="savingList">{{ t('app.settings.caddy.actions.cancel') }}</el-button>
+      <el-button type="primary" :loading="savingList" @click="confirmSaveAsList">{{ t('app.settings.caddy.list.createAndUseBtn') }}</el-button>
     </template>
   </el-dialog>
 </template>
 
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { RefreshRight, Setting, Tickets, View } from '@element-plus/icons-vue'
 import DialogHeader from '@/components/DialogHeader.vue'
@@ -279,6 +280,8 @@ import type { TrustedProxyReferencedEntries } from '@/utils/trustedProxyRanges'
 import { IP_LIST_CATEGORIES, parseIPList, parseRefIds } from '@/utils/securityStages'
 import type { APIResponse, ProxyTimeoutConfig } from '@/types'
 import ProxyTimeoutFields from '@/components/rules/ProxyTimeoutFields.vue'
+
+const { t } = useI18n()
 
 type CaddySettingsConfig = ProxyTimeoutConfig & {
   caddy_log_level: string
@@ -362,7 +365,7 @@ const trustedPresetKey = ref('')
 const trustedPresetNote = computed(() => CDN_PRESETS.find(p => p.label === trustedPresetKey.value)?.note || '')
 const trustedPresetRangesDoc = computed(() => {
   const doc = CDN_PRESETS.find(p => p.label === trustedPresetKey.value)?.rangesDoc
-  return doc ? `官方网段：${doc}` : ''
+  return doc ? t('app.settings.caddy.list.docLink', { doc }) : ''
 })
 
 // JSON 数组文本解析统一走 utils/securityStages（parseIPList/parseRefIds 单源，
@@ -510,7 +513,7 @@ const retryRefListEntries = (): void => {
 
 type NamedTrustedProxyReferenced = TrustedProxyReferencedEntries & { readonly name: string }
 const referencedLists = computed<NamedTrustedProxyReferenced[]>(() => trustedRangeRefs.value.map((id) => ({
-  name: ipLists.value.find((l) => l.id === id)?.name ?? `列表 #${id}`,
+  name: ipLists.value.find((l) => l.id === id)?.name ?? t('app.settings.caddy.list.listId', { id }),
   values: refListEntries.value[id] ?? null,
   entryCount: ipLists.value.find((l) => l.id === id)?.entry_count ?? 0,
 })))
@@ -549,11 +552,11 @@ const confirmSaveAsList = async (): Promise<void> => {
   // 创建名单是写操作——弹框打开期间角色/节点模式变化时函数级拦截。
   if (isReadOnly.value || savingList.value) return
   const name = saveListForm.value.name.trim()
-  if (!name) { ElMessage.warning('请输入列表名称'); return }
-  if (name.length > 50) { ElMessage.warning('列表名称不能超过 50 字符'); return }
-  if (saveListForm.value.category.length > 32) { ElMessage.warning('分类不能超过 32 字符'); return }
+  if (!name) { ElMessage.warning(t('app.settings.caddy.list.nameRequired')); return }
+  if (name.length > 50) { ElMessage.warning(t('app.settings.caddy.list.nameTooLong')); return }
+  if (saveListForm.value.category.length > 32) { ElMessage.warning(t('app.settings.caddy.list.categoryTooLong')); return }
   const sourceEntries = trustedRanges.value.map((value) => value.trim()).filter((value) => value !== '')
-  if (sourceEntries.length === 0) { ElMessage.warning('内联网段为空，无需存为列表'); return }
+  if (sourceEntries.length === 0) { ElMessage.warning(t('app.settings.caddy.list.emptyRanges')); return }
   savingList.value = true
   try {
     const res = await request.post<APIResponse<{ id: number }>>('/security/ip-lists', {
@@ -564,7 +567,7 @@ const confirmSaveAsList = async (): Promise<void> => {
       entries: JSON.stringify(sourceEntries.map((value) => ({ value, remark: '受信代理网段' }))),
     })
     const newId = res.data?.id
-    if (!newId) throw new Error('创建列表响应缺少 id')
+    if (!newId) throw new Error(t('app.settings.caddy.list.createMissingId'))
     // 交换语义：新建列表 → 并入 refs → 清空内联（合并生效集不变）；
     // 配置不在此保存——用户点「保存」才提交（PUT /config 落库并重载）
     trustedRangeRefs.value = [...new Set([...trustedRangeRefs.value, newId])]
@@ -572,7 +575,7 @@ const confirmSaveAsList = async (): Promise<void> => {
     saveListDialogVisible.value = false
     // 刷新选项缓存：选择器与「合计 N 条」立即反映新列表
     await fetchIpLists()
-    mfaAwareSuccess(`已创建列表「${name}」并转为引用，内联网段已清空（语义不变），保存配置后生效`)
+    mfaAwareSuccess(t('app.settings.caddy.list.created', { name }))
   } catch (error: unknown) {
     // 409 重名 / 400 条目非法已由全局拦截器 toast，这里仅记录避免 unhandled rejection
     console.error('Failed to save trusted ranges as IP list:', error)
@@ -619,14 +622,14 @@ const updateProxyTimeout = (field: keyof ProxyTimeoutConfig, value: number): voi
 const handleSave = async (): Promise<void> => {
   // 配置未加载完成时表单为默认值——保存即整体覆盖真实配置
   if (!props.configLoaded) {
-    ElMessage.warning('配置尚未加载完成，暂不能保存')
+    ElMessage.warning(t('app.settings.caddy.messages.configNotLoaded'))
     return
   }
   if (isReadOnly.value || saving.value) return
   // 关闭态同样被后端写侧校验（开关不影响 validateTrustedProxyFields）：
   // 提示中给出「临时开启后修正」的修复路径，而不是让用户对着隐藏字段无计可施。
   const trustedGateMessage = (error: string): string =>
-    settings.value.trusted_proxy_enabled ? error : `${error}（受信代理已关闭：请临时开启后修正）`
+    settings.value.trusted_proxy_enabled ? error : t('app.settings.caddy.messages.saveFailTrustOff', { error })
   // 非法/过宽网段在表单内即拦下（后端 PUT/preview 同样拒绝，但不点名具体条目）
   if (trustedRangesError.value) {
     ElMessage.warning(trustedGateMessage(trustedRangesError.value))
@@ -679,19 +682,19 @@ const handleSave = async (): Promise<void> => {
     const preview = await request.post<ConfigPreviewResponse>('/config/preview', payload)
     const changed = preview.data?.changed ?? false
     if (changed) {
-      const changes = preview.data?.changes?.length ? preview.data.changes.join('；') : '检测到配置变更'
+      const changes = preview.data?.changes?.length ? preview.data.changes.join('；') : t('app.settings.caddy.messages.configChanged')
       // 清空语义必须在确认框显性告知（载荷已剔除该键，用户此后无处可查）
-      const clearedNote = accessLogFormatCleared ? '；已关闭自定义 JSON：库中自定义字段映射将被清空（该格式不生效）' : ''
-      await ElMessageBox.confirm(`${changes}${clearedNote}`, `确认保存${preview.data?.section || 'Caddy 配置'}？`, {
-        confirmButtonText: '确认', cancelButtonText: '取消', type: 'warning',
+      const clearedNote = accessLogFormatCleared ? t('app.settings.caddy.messages.customJsonCleared') : ''
+      await ElMessageBox.confirm(`${changes}${clearedNote}`, t('app.settings.caddy.messages.confirmSaveSection', { section: preview.data?.section || t('app.settings.caddy.messages.caddyConfig') }), {
+        confirmButtonText: t('app.settings.caddy.actions.confirm'), cancelButtonText: t('app.settings.caddy.actions.cancel'), type: 'warning',
       })
     }
     const saved = await request.put('/config', payload)
     // 诚实提示（v2.3.2 用户反馈）：无变化时不得谎报「保存成功」
-    if (!changed || saved?.message?.startsWith('配置无变化')) {
-      ElMessage.info('配置无变化')
+    if (!changed || saved?.message?.startsWith(t('app.settings.caddy.messages.noChanges'))) {
+      ElMessage.info(t('app.settings.caddy.messages.noChanges'))
     } else {
-      mfaAwareSuccess('保存成功')
+      mfaAwareSuccess(t('app.settings.caddy.messages.saved'))
     }
     // 等待父级回填后再由 finally 解冻，避免迟到的 /config 覆盖在途编辑；
     // onSave 为必填回调（Settings.vue 三卡统一接线）。
@@ -708,8 +711,8 @@ const handleSave = async (): Promise<void> => {
 const handleReloadCaddy = async (): Promise<void> => {
   if (isReadOnly.value || reloading.value) return
   try {
-    await ElMessageBox.confirm('此操作将重新加载 Caddy 配置，是否继续？', '确认重载', {
-      confirmButtonText: '确认', cancelButtonText: '取消', type: 'warning',
+    await ElMessageBox.confirm(t('app.settings.caddy.confirm.reloadText'), t('app.settings.caddy.confirm.reloadTitle'), {
+      confirmButtonText: t('app.settings.caddy.actions.confirm'), cancelButtonText: t('app.settings.caddy.actions.cancel'), type: 'warning',
     })
   } catch (error: unknown) {
     // 确认门在任何 reject 形态下都必须中止——原实现对非 cancel/close
@@ -722,7 +725,7 @@ const handleReloadCaddy = async (): Promise<void> => {
   reloading.value = true
   try {
     await request.post('/config/reload')
-    mfaAwareSuccess('Caddy 配置已重载')
+    mfaAwareSuccess(t('app.settings.caddy.messages.reloaded'))
   } catch (error: unknown) {
     console.error('Failed to reload Caddy:', error)
   } finally {

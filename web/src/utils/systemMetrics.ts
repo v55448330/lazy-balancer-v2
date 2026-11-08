@@ -7,11 +7,15 @@
 const SYSTEM_METRIC_PARTS = ['cpu', 'memory', 'disk', 'pids'] as const
 type SystemMetricPart = (typeof SYSTEM_METRIC_PARTS)[number]
 
-const SYSTEM_METRIC_LABELS: Record<SystemMetricPart, string> = {
-  cpu: 'CPU',
-  memory: '内存',
-  disk: '磁盘',
-  pids: '进程配额',
+// 展示文案走 i18n（批次 D metrics 域）：键形与 zh 母本原文由 systemMetricsDegraded
+// 行为钉（跨域）+ metrics 域双钉承载；label 在调用时刻解析。
+import { tSafe as t } from '../i18n/tSafe.ts'
+
+const SYSTEM_METRIC_LABEL_KEYS: Record<SystemMetricPart, string> = {
+  cpu: 'common.app.views.metrics.partCpu',
+  memory: 'common.app.views.metrics.partMemory',
+  disk: 'common.app.views.metrics.partDisk',
+  pids: 'common.app.views.metrics.partPids',
 }
 
 /** 只收已知分项（未知值忽略，向前兼容后端新增分项）。 */
@@ -26,7 +30,7 @@ export const degradedMetricParts = (degraded: readonly string[] | undefined): Se
 /** 降级提示文案用的分项名（保持稳定顺序 cpu→memory→disk）。 */
 export const degradedMetricLabels = (degraded: readonly string[] | undefined): string[] => {
   const parts = degradedMetricParts(degraded)
-  return SYSTEM_METRIC_PARTS.filter((part) => parts.has(part)).map((part) => SYSTEM_METRIC_LABELS[part])
+  return SYSTEM_METRIC_PARTS.filter((part) => parts.has(part)).map((part) => t(SYSTEM_METRIC_LABEL_KEYS[part]))
 }
 
 /** 文本百分比保留后端原始值：超过配额仍显示 122% 等真实超限程度。 */
@@ -42,7 +46,7 @@ export const pidsProgressPercent = (percent: number, max: number, degraded: bool
 
 /** 「已用 / 上限」文案：上限 0 视为不限额（cgroup pids.max = max）。 */
 export const pidsUsageLabel = (current: number, max: number): string =>
-  `${Math.max(current, 0)} / ${max > 0 ? max : '不限'}`
+  `${Math.max(current, 0)} / ${max > 0 ? max : t('common.app.views.metrics.unlimited')}`
 
 /**
  * 接近配额的比例分级：≥95% 危险、≥80% 警告。
@@ -59,8 +63,8 @@ export const pidsValueTone = (percent: number, degraded: boolean): 'normal' | 'w
   degraded ? null : pidsTone(percent)
 
 /** 后端 0 同时覆盖未采集/读取失败与真正不限额，不能断言为「不限」。 */
-export const nprocLimitLabel = (limit: number): string => limit > 0 ? String(limit) : '未采集或不限'
+export const nprocLimitLabel = (limit: number): string => limit > 0 ? String(limit) : t('common.app.views.metrics.nprocUnknown')
 
 /** 进程配额帮助文案单源：ulimit 的零值歧义由 nprocLimitLabel 保留。 */
 export const pidsTooltipText = (limit: number): string =>
-  `cgroup 进程/线程配额（含僵尸进程）。接近上限时容器内无法创建新进程，表现为 fork 失败。ulimit -u：${nprocLimitLabel(limit)}`
+  t('common.app.views.metrics.pidsTooltip', { limit: nprocLimitLabel(limit) })

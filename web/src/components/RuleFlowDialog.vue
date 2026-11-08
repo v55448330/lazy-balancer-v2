@@ -10,7 +10,7 @@
   >
     <template #header>
       <div class="flow-header">
-        <DialogHeader :icon="Connection" title="处理流程" :subtitle="target?.name" />
+        <DialogHeader :icon="Connection" :title="t('common.app.rules.flow.title')" :subtitle="target?.name" />
         <!-- 协议徽标：HTTP 蓝 / TCP 青（全局 proto-tcp-tag 单源） -->
         <el-tag v-if="isTcp" size="small" effect="plain" class="proto-tcp-tag flow-proto-badge">TCP</el-tag>
         <el-tag v-else size="small" effect="plain" type="primary" class="flow-proto-badge">{{ protocolLabel }}</el-tag>
@@ -19,8 +19,8 @@
 
     <div v-if="target" class="flow-body">
       <div v-if="model?.ruleDisabled" class="info-note-bar info-note-bar--inset">
-        <span class="info-note-desc">规则已禁用——安全链未进入运行配置</span>
-        <span class="info-note-sub">绑定与阶段页保留，启用后生效；当前该规则不产生任何 listener 路由，下方阶段按「保留配置」展示。</span>
+        <span class="info-note-desc">{{ t('common.app.rules.flow.ruleDisabledNote') }}</span>
+        <span class="info-note-sub">{{ t('common.app.rules.flow.disabledKeptConfigNote') }}</span>
       </div>
 
       <!-- 纵向时间线：接入 → 阶段 0 → 阶段 1 → 阶段 2 → 阶段 3 → 上游 -->
@@ -51,10 +51,10 @@
         <!-- 接入信息（选中节点下方展开）：我们收到什么样的请求 -->
         <el-collapse-transition v-if="node.key === 'access'">
           <div v-if="activeNode === 'access'" class="flow-panel dialog-panel tl-panel">
-            <DialogSectionHeader title="接入 · 收到的请求" />
+            <DialogSectionHeader :title="t('common.app.rules.flow.intake')" />
             <div class="flow-kv-grid">
               <div class="flow-kv flow-kv--wide">
-                <span class="flow-kv-label">域名</span>
+                <span class="flow-kv-label">{{ t('common.app.rules.common.domain') }}</span>
                 <span class="flow-kv-value">
                   <template v-if="target.domains && target.domains.length > 0">
                     <el-tag v-for="domain in target.domains" :key="domain" size="small" effect="plain" class="flow-domain-chip">{{ domain }}</el-tag>
@@ -62,48 +62,48 @@
                   <template v-else>-</template>
                 </span>
               </div>
-              <div class="flow-kv"><span class="flow-kv-label">协议</span><span class="flow-kv-value">{{ protocolLabel }}</span></div>
-              <div class="flow-kv"><span class="flow-kv-label">监听端口</span><span class="flow-kv-value">{{ target.listenPort }}</span></div>
+              <div class="flow-kv"><span class="flow-kv-label">{{ t('common.app.rules.common.protocol') }}</span><span class="flow-kv-value">{{ protocolLabel }}</span></div>
+              <div class="flow-kv"><span class="flow-kv-label">{{ t('common.app.rules.wizard.listenPort') }}</span><span class="flow-kv-value">{{ target.listenPort }}</span></div>
               <div class="flow-kv">
                 <span class="flow-kv-label">TLS</span>
-                <span class="flow-kv-value">{{ target.enableTls ? `启用（${target.tlsSource === 'acme_dns' ? 'ACME 自动' : '手动上传'}）` : '关闭' }}</span>
+                <span class="flow-kv-value">{{ target.enableTls ? t('common.app.rules.flow.tlsEnabled', { source: target.tlsSource === 'acme_dns' ? t('common.app.rules.wizard.acmeAuto') : t('common.app.rules.wizard.manualUpload') }) : t('common.app.rules.common.off') }}</span>
               </div>
               <div v-if="!isTcp" class="flow-kv">
-                <span class="flow-kv-label">后端域名</span>
-                <span class="flow-kv-value">{{ target.hostHeader || '透传原始 Host' }}</span>
+                <span class="flow-kv-label">{{ t('common.app.rules.wizard.backendDomain') }}</span>
+                <span class="flow-kv-value">{{ target.hostHeader || t('common.app.rules.wizard.passthroughHost') }}</span>
               </div>
             </div>
             <template v-if="target.enableTls && !isTcp">
               <div v-if="certLoading" class="flow-cert-loading"><el-skeleton :rows="2" animated /></div>
               <div v-else-if="certFailed" class="flow-detail-line">
-                证书信息加载失败
-                <el-button link type="warning" size="small" @click="retryCertInfo">重试</el-button>
+                {{ t('common.app.rules.flow.certInfoLoadFail') }}
+                <el-button link type="warning" size="small" @click="retryCertInfo">{{ t('common.app.rules.common.retry') }}</el-button>
               </div>
               <template v-else-if="certInfo">
-                <div class="flow-cert-section"><DialogSectionHeader title="TLS 证书" /></div>
+                <div class="flow-cert-section"><DialogSectionHeader :title="t('common.app.rules.wizard.tlsCertificate')" /></div>
                 <div class="flow-kv-grid">
-                  <div class="flow-kv"><span class="flow-kv-label">签发者</span><span class="flow-kv-value" :title="certInfo.issuer">{{ certInfo.issuer || '-' }}</span></div>
-                  <div class="flow-kv"><span class="flow-kv-label">证书域名</span><span class="flow-kv-value" :title="certInfo.domains">{{ certInfo.domains || '-' }}</span></div>
+                  <div class="flow-kv"><span class="flow-kv-label">{{ t('common.app.rules.flow.certIssuer') }}</span><span class="flow-kv-value" :title="certInfo.issuer">{{ certInfo.issuer || '-' }}</span></div>
+                  <div class="flow-kv"><span class="flow-kv-label">{{ t('common.app.rules.flow.certDomains') }}</span><span class="flow-kv-value" :title="certInfo.domains">{{ certInfo.domains || '-' }}</span></div>
                   <!-- 到期时间与规则列表同口径（formatDate=配置时区换算）：后端 not_after 是
                        UTC 墙钟串，直出会让弹框与列表相差一个时区偏移。 -->
-                  <div class="flow-kv"><span class="flow-kv-label">到期时间</span><span class="flow-kv-value">{{ formatDate(certInfo.not_after) || '-' }}</span></div>
+                  <div class="flow-kv"><span class="flow-kv-label">{{ t('common.app.rules.flow.expireTimeLabel') }}</span><span class="flow-kv-value">{{ formatDate(certInfo.not_after) || '-' }}</span></div>
                   <div class="flow-kv">
-                    <span class="flow-kv-label">剩余天数</span>
+                    <span class="flow-kv-label">{{ t('common.app.rules.wizard.daysRemaining') }}</span>
                     <span class="flow-kv-value" :class="{ 'is-expired': certInfo.status === 'expired' }">
-                      {{ certInfo.status === 'expired' ? `已过期 ${Math.abs(certInfo.days_remaining)} 天` : `${certInfo.days_remaining} 天` }}
+                      {{ certInfo.status === 'expired' ? t('common.app.rules.flow.certExpiredDays', { days: Math.abs(certInfo.days_remaining) }) : t('common.app.rules.wizard.certDays', { n: certInfo.days_remaining }) }}
                     </span>
                   </div>
                   <div v-if="certInfo.source === 'acme_dns' && target.acmeConfigName" class="flow-kv">
-                    <span class="flow-kv-label">ACME 配置</span>
+                    <span class="flow-kv-label">{{ t('common.app.rules.wizard.acmeConfig') }}</span>
                     <span class="flow-kv-value">{{ target.acmeConfigName }}</span>
                   </div>
                   <div v-if="certInfo.error" class="flow-kv">
-                    <span class="flow-kv-label">解析错误</span>
+                    <span class="flow-kv-label">{{ t('common.app.rules.flow.parseErrorLabel') }}</span>
                     <span class="flow-kv-value is-expired" :title="certInfo.error">{{ certInfo.error }}</span>
                   </div>
                 </div>
               </template>
-              <div v-else class="flow-detail-line">证书信息不可用（规则禁用或证书未就绪）</div>
+              <div v-else class="flow-detail-line">{{ t('common.app.rules.flow.certInfoUnavailable') }}</div>
             </template>
           </div>
         </el-collapse-transition>
@@ -114,8 +114,8 @@
             <template v-if="stageZero">
             <DialogSectionHeader :title="stageZero.title" />
             <div v-if="detailFailedSources.length > 0" class="flow-detail-line">
-              部分明细加载失败（{{ detailFailedSources.join('、') }}）
-              <el-button link type="warning" size="small" @click="ensureDetails(true)">重试</el-button>
+              {{ t('common.app.rules.flow.detailPartialFail', { names: detailFailedSources.join('、') }) }}
+              <el-button link type="warning" size="small" @click="ensureDetails(true)">{{ t('common.app.rules.common.retry') }}</el-button>
             </div>
             <div
               v-for="group in stageZero.groups"
@@ -126,7 +126,7 @@
               <div class="flow-policy-head">
                 <span class="flow-policy-order">#{{ group.order }}</span>
                 <span class="flow-policy-name" :title="group.name">{{ group.name }}</span>
-                <el-tag v-if="!group.enabled" type="info" size="small" effect="plain">已禁用</el-tag>
+                <el-tag v-if="!group.enabled" type="info" size="small" effect="plain">{{ t('common.app.rules.list.disabled') }}</el-tag>
                 <el-button
                   v-if="groupHasDetails(group) || detailFailedSources.length > 0"
                   link
@@ -134,33 +134,33 @@
                   size="small"
                   class="flow-detail-toggle"
                   @click="togglePolicyDetail(0, group.key)"
-                >{{ expandedPolicyKey === `0:${group.key}` ? '收起明细' : '明细' }}</el-button>
+                >{{ expandedPolicyKey === `0:${group.key}` ? t('common.app.rules.flow.collapseDetails') : t('common.app.rules.flow.details') }}</el-button>
               </div>
               <div v-for="row in group.rows" :key="row.label" class="flow-row">
                 <span class="flow-row-label">{{ row.label }}</span>
                 <span class="flow-row-detail" :title="row.detail">{{ row.detail }}</span>
               </div>
               <div v-if="group.preview" class="flow-row">
-                <span class="flow-row-label">条目预览</span>
+                <span class="flow-row-label">{{ t('common.app.rules.flow.entryPreview') }}</span>
                 <span class="flow-row-detail" :title="group.preview">{{ group.preview }}</span>
               </div>
               <el-collapse-transition>
                 <div v-if="expandedPolicyKey === `0:${group.key}`" class="flow-policy-details">
                   <template v-if="group.details?.trustEntries">
-                    <div class="flow-detail-block-title">信任名单（{{ group.details.trustEntries.length }} 条{{ group.details.trustEntries.length > 200 ? '，仅显示前 200 条' : '' }}）</div>
+                    <div class="flow-detail-block-title">{{ t('common.app.rules.flow.trustListTitle', { n: group.details.trustEntries.length, s: group.details.trustEntries.length > 200 ? t('common.app.rules.flow.showFirst200') : '' }) }}</div>
                     <div v-for="entry in group.details.trustEntries.slice(0, 200)" :key="`trust:${entry.value}`" class="flow-detail-entry">
                       <span class="flow-detail-value">{{ entry.value }}</span>
                       <span class="flow-detail-meta">{{ entry.source }}<template v-if="entry.remark"> · {{ entry.remark }}</template></span>
                     </div>
                   </template>
-                  <div v-else class="flow-detail-line">该策略无更多明细</div>
+                  <div v-else class="flow-detail-line">{{ t('common.app.rules.flow.policyNoMoreDetails') }}</div>
                 </div>
               </el-collapse-transition>
             </div>
-            <div v-if="isTcp" class="info-note-bar"><span class="info-note-desc">「直通上游」模式：连接直达上游（不产生安全事件，故无计数 chip）；「保留检测记录」模式：命中产检测事件（记录为检测）后直达上游，不拦截（与 HTTP 语义一致）；未命中继续进入阶段 1 判定</span></div>
-            <div v-else class="info-note-bar"><span class="info-note-desc">「直通上游」模式：信任 IP 命中后跳过全部后续安全阶段，不产生任何安全事件（故无计数 chip）；「保留检测记录」模式：信任 IP 命中后同样跳过全部后续安全阶段，由独立轻量检测事务记录（动作=检测）后直达上游，不拦截</span></div>
+            <div v-if="isTcp" class="info-note-bar"><span class="info-note-desc">{{ t('common.app.rules.flow.trustModeTcpNote') }}</span></div>
+            <div v-else class="info-note-bar"><span class="info-note-desc">{{ t('common.app.rules.flow.trustModeHttpNote') }}</span></div>
             </template>
-            <div v-else class="flow-detail-line">未启用——未绑定信任名单策略，请求直接进入阶段 1</div>
+            <div v-else class="flow-detail-line">{{ t('common.app.rules.flow.trustNotEnabled') }}</div>
           </div>
         </el-collapse-transition>
 
@@ -169,24 +169,24 @@
           <div v-if="activeNode === node.key && typedStageByKey(node.key)" class="flow-panel dialog-panel tl-panel">
               <!-- TCP 规则阶段 2/3 整组灰态：无 429/WAF 引擎面，面板只出不适用说明
                    （无策略组/明细/计数——绑定侧已拒绝此类策略） -->
-              <div v-if="isTcp && typedStageByKey(node.key)!.stage >= 2" class="flow-stage-empty">TCP 规则不适用（TCP 仅支持阶段 0/1：信任名单 · IP 访问控制/地域拦截）</div>
+              <div v-if="isTcp && typedStageByKey(node.key)!.stage >= 2" class="flow-stage-empty">{{ t('common.app.rules.flow.tcpStagesNote') }}</div>
               <template v-else>
               <div class="flow-panel-head">
                 <DialogSectionHeader :title="typedStageByKey(node.key)!.title" />
                 <div class="flow-panel-meta">
                   <!-- TCP（L4）拒绝=断连无拦截页：跟随策略措辞仅 HTTP 渲染面成立。
                        规则级阶段页覆盖徽标已随触发归因裁定退役。 -->
-                  <el-tag v-if="typedStageByKey(node.key)!.stage !== 2" type="info" size="small" effect="plain">{{ isTcp ? '拦截页不支持' : '拦截页跟随策略' }}</el-tag>
-                  <el-tag v-if="!typedStageByKey(node.key)!.enabled" type="info" size="small" effect="plain">未启用</el-tag>
+                  <el-tag v-if="typedStageByKey(node.key)!.stage !== 2" type="info" size="small" effect="plain">{{ isTcp ? t('common.app.rules.flow.interceptUnsupported') : t('common.app.rules.flow.interceptFollowsPolicy') }}</el-tag>
+                  <el-tag v-if="!typedStageByKey(node.key)!.enabled" type="info" size="small" effect="plain">{{ t('common.app.rules.common.notEnabled') }}</el-tag>
                 </div>
               </div>
               <div v-if="detailFailedSources.length > 0" class="flow-detail-line">
-                部分明细加载失败（{{ detailFailedSources.join('、') }}）
-                <el-button link type="warning" size="small" @click="ensureDetails(true)">重试</el-button>
+                {{ t('common.app.rules.flow.detailPartialFail', { names: detailFailedSources.join('、') }) }}
+                <el-button link type="warning" size="small" @click="ensureDetails(true)">{{ t('common.app.rules.common.retry') }}</el-button>
               </div>
               <div v-if="statsFailed" class="flow-detail-line">
-                阶段计数加载失败：24h 拦截数不可用
-                <el-button link type="warning" size="small" @click="retryStageStats">重试</el-button>
+                {{ t('common.app.rules.flow.stageStatsLoadFail') }}
+                <el-button link type="warning" size="small" @click="retryStageStats">{{ t('common.app.rules.common.retry') }}</el-button>
               </div>
               <div v-if="stageStatsText(typedStageByKey(node.key)!.stage)" class="flow-panel-stats">{{ stageStatsText(typedStageByKey(node.key)!.stage) }}</div>
               <template v-if="typedStageByKey(node.key)!.enabled">
@@ -199,8 +199,8 @@
                   <div class="flow-policy-head">
                     <span class="flow-policy-order">#{{ group.order }}</span>
                     <span class="flow-policy-name" :title="group.name">{{ group.name }}</span>
-                    <el-tag v-if="policyTypeOf(group.key) === 'mixed'" type="warning" size="small" effect="plain">混合</el-tag>
-                    <el-tag v-if="!group.enabled" type="info" size="small" effect="plain">已禁用</el-tag>
+                    <el-tag v-if="policyTypeOf(group.key) === 'mixed'" type="warning" size="small" effect="plain">{{ t('common.app.rules.flow.policyMixed') }}</el-tag>
+                    <el-tag v-if="!group.enabled" type="info" size="small" effect="plain">{{ t('common.app.rules.list.disabled') }}</el-tag>
                     <el-button
                       v-if="groupHasDetails(group) || detailFailedSources.length > 0"
                       link
@@ -208,7 +208,7 @@
                       size="small"
                       class="flow-detail-toggle"
                       @click="togglePolicyDetail(typedStageByKey(node.key)!.stage, group.key)"
-                    >{{ expandedPolicyKey === `${typedStageByKey(node.key)!.stage}:${group.key}` ? '收起明细' : '明细' }}</el-button>
+                    >{{ expandedPolicyKey === `${typedStageByKey(node.key)!.stage}:${group.key}` ? t('common.app.rules.flow.collapseDetails') : t('common.app.rules.flow.details') }}</el-button>
                   </div>
                   <div v-for="row in group.rows" :key="row.label" class="flow-row">
                     <span class="flow-row-label">{{ row.label }}</span>
@@ -221,33 +221,33 @@
                         <!-- ACL 明细=列表级汇总（2026-09-24 用户裁定）：不逐条列 IP，
                              只列内联条数+各引用名单的名称/条数（威胁库上万条逐条渲染不可行） -->
                         <template v-if="group.details.aclInlineCount || (group.details.aclLists && group.details.aclLists.length > 0)">
-                          <div class="flow-detail-block-title">IP 访问控制列表（合计 {{ (group.details.aclInlineCount ?? 0) + (group.details.aclLists ?? []).reduce((sum, l) => sum + l.count, 0) }} 条）</div>
+                          <div class="flow-detail-block-title">{{ t('common.app.rules.flow.aclListTitle', { n: (group.details.aclInlineCount ?? 0) + (group.details.aclLists ?? []).reduce((sum, l) => sum + l.count, 0) }) }}</div>
                           <div v-if="group.details.aclInlineCount" class="flow-detail-entry">
-                            <span class="flow-detail-value">直接填写</span>
-                            <span class="flow-detail-meta">{{ group.details.aclInlineCount }} 条</span>
+                            <span class="flow-detail-value">{{ t('common.app.rules.flow.enteredInline') }}</span>
+                            <span class="flow-detail-meta">{{ t('common.app.rules.flow.countEntries', { n: group.details.aclInlineCount }) }}</span>
                           </div>
                           <div v-for="list in group.details.aclLists" :key="`acl-list:${list.name}`" class="flow-detail-entry">
                             <span class="flow-detail-value">{{ list.name }}</span>
-                            <span class="flow-detail-meta">{{ list.count }} 条</span>
+                            <span class="flow-detail-meta">{{ t('common.app.rules.flow.countEntries', { n: list.count }) }}</span>
                           </div>
                         </template>
                         <template v-if="group.details.blacklistEntries && group.details.blacklistEntries.length > 0">
                           <!-- 遗留独立黑名单：摘要对非 deny 模式明示「N 条仍生效」，
                                明细逐条对账（不受 ACL 开关门控） -->
-                          <div class="flow-detail-block-title">独立黑名单（{{ group.details.blacklistEntries.length }} 条{{ group.details.blacklistEntries.length > 200 ? '，仅显示前 200 条' : '' }}）</div>
+                          <div class="flow-detail-block-title">{{ t('common.app.rules.flow.blacklistTitle', { n: group.details.blacklistEntries.length, s: group.details.blacklistEntries.length > 200 ? t('common.app.rules.flow.showFirst200') : '' }) }}</div>
                           <div v-for="entry in group.details.blacklistEntries.slice(0, 200)" :key="`bl:${entry}`" class="flow-detail-entry">
                             <span class="flow-detail-value">{{ entry }}</span>
                           </div>
                         </template>
                         <template v-if="group.details.trustEntries">
-                          <div class="flow-detail-block-title">信任名单（{{ group.details.trustEntries.length }} 条{{ group.details.trustEntries.length > 200 ? '，仅显示前 200 条' : '' }}）</div>
+                          <div class="flow-detail-block-title">{{ t('common.app.rules.flow.trustListTitle', { n: group.details.trustEntries.length, s: group.details.trustEntries.length > 200 ? t('common.app.rules.flow.showFirst200') : '' }) }}</div>
                           <div v-for="entry in group.details.trustEntries.slice(0, 200)" :key="`trust:${entry.value}`" class="flow-detail-entry">
                             <span class="flow-detail-value">{{ entry.value }}</span>
                             <span class="flow-detail-meta">{{ entry.source }}<template v-if="entry.remark"> · {{ entry.remark }}</template></span>
                           </div>
                         </template>
                         <template v-if="group.details.geoipRegions && group.details.geoipRegions.length > 0">
-                          <div class="flow-detail-block-title">地域拦截区域（{{ group.details.geoipRegions.length }} 个）</div>
+                          <div class="flow-detail-block-title">{{ t('common.app.rules.flow.geoRegionTitle', { n: group.details.geoipRegions.length }) }}</div>
                           <!-- 国家条目展示层翻译（country_names_cn 单源），
                                省份/省市联值/海外哨兵未命中回退原文；geoipRegions 值零改动 -->
                           <div class="flow-detail-chips">
@@ -255,31 +255,31 @@
                           </div>
                         </template>
                         <template v-if="group.details.rateLimit">
-                          <div class="flow-detail-block-title">限流窗口口径</div>
+                          <div class="flow-detail-block-title">{{ t('common.app.rules.flow.rateLimitWindowBasis') }}</div>
                           <div class="flow-detail-line">{{ group.details.rateLimit.caption }}</div>
                         </template>
                         <template v-if="group.details.customRules">
-                          <div class="flow-detail-block-title">自定义规则（{{ group.details.customRules.length }} 条）</div>
+                          <div class="flow-detail-block-title">{{ t('common.app.rules.flow.customRuleTitle', { n: group.details.customRules.length }) }}</div>
                           <div v-for="rule in group.details.customRules" :key="rule.id" class="flow-detail-entry" :class="{ 'is-disabled': !rule.enabled }">
-                            <span class="flow-detail-value">{{ rule.name }}<span class="flow-detail-score">计分 {{ rule.score }}</span></span>
-                            <span class="flow-detail-meta">{{ rule.action === 'pass' ? '放行' : rule.action === 'log' ? '仅记录' : '拦截' }}<template v-if="rule.targets"> · {{ rule.targets }}</template></span>
+                            <span class="flow-detail-value">{{ rule.name }}<span class="flow-detail-score">{{ t('common.app.rules.flow.score', { score: rule.score }) }}</span></span>
+                            <span class="flow-detail-meta">{{ rule.action === 'pass' ? t('common.app.rules.flow.actionPass') : rule.action === 'log' ? t('common.app.rules.flow.actionLog') : t('common.app.rules.flow.actionBlock') }}<template v-if="rule.targets"> · {{ rule.targets }}</template></span>
                           </div>
                         </template>
                         <template v-if="group.details.crsGroups && group.details.crsGroups.length > 0">
-                          <div class="flow-detail-block-title">CRS 规则组（{{ group.details.crsGroups.length }} 组）</div>
+                          <div class="flow-detail-block-title">{{ t('common.app.rules.flow.crsGroupTitle', { n: group.details.crsGroups.length }) }}</div>
                           <div class="flow-detail-chips">
                             <el-tag v-for="groupLabel in group.details.crsGroups" :key="groupLabel" size="small" effect="plain" class="flow-detail-chip">{{ groupLabel }}</el-tag>
                           </div>
                         </template>
                       </template>
-                      <div v-else class="flow-detail-line">该阶段此策略无更多明细</div>
+                      <div v-else class="flow-detail-line">{{ t('common.app.rules.flow.stagePolicyNoMoreDetails') }}</div>
                     </div>
                   </el-collapse-transition>
                 </div>
               </template>
-              <div v-else class="flow-stage-empty">该阶段未启用（无策略配置对应能力）</div>
+              <div v-else class="flow-stage-empty">{{ t('common.app.rules.flow.stageNotEnabled') }}</div>
               <div class="info-note-bar">
-                <span class="info-note-desc">{{ typedStageByKey(node.key)!.stage === 1 ? (isTcp ? TCP_STAGE1_FOOTNOTE : stage1Footnote) : `未通过即终止${typedStageByKey(node.key)!.footnote ? `；${typedStageByKey(node.key)!.footnote}` : ''}` }}</span>
+                <span class="info-note-desc">{{ typedStageByKey(node.key)!.stage === 1 ? (isTcp ? TCP_STAGE1_FOOTNOTE : stage1Footnote) : t('common.app.rules.flow.stageFailStopHint', { footnote: typedStageByKey(node.key)!.footnote ? `；${typedStageByKey(node.key)!.footnote}` : '' }) }}</span>
               </div>
               </template>
           </div>
@@ -289,29 +289,29 @@
         <el-collapse-transition v-if="node.key === 'upstream'">
           <div v-if="activeNode === 'upstream'" class="flow-panel dialog-panel tl-panel">
             <div class="flow-panel-head">
-              <DialogSectionHeader title="上游 · 转发目标" />
+              <DialogSectionHeader :title="t('common.app.rules.flow.upstreamTarget')" />
               <el-tag v-if="target.health" size="small" effect="plain" :type="target.health.unhealthy + target.health.degraded > 0 ? 'warning' : 'success'" class="flow-panel-meta">
-                健康 {{ target.health.healthy }}/{{ target.health.total }}
+                {{ t('common.app.rules.flow.healthRatio', { a: target.health.healthy, b: target.health.total }) }}
               </el-tag>
             </div>
             <div v-if="!isTcp" class="flow-kv" style="margin-bottom: 10px;">
-              <span class="flow-kv-label">后端域名</span>
-              <span class="flow-kv-value">{{ target.hostHeader || '透传原始 Host' }}</span>
+              <span class="flow-kv-label">{{ t('common.app.rules.wizard.backendDomain') }}</span>
+              <span class="flow-kv-value">{{ target.hostHeader || t('common.app.rules.wizard.passthroughHost') }}</span>
             </div>
             <el-table v-if="target.upstreams && target.upstreams.length > 0" :data="target.upstreams" size="small" class="flow-upstream-table">
-              <el-table-column label="上游" min-width="170">
+              <el-table-column :label="t('common.app.rules.common.upstream')" min-width="170">
                 <template #default="{ row }"><span class="flow-upstream-addr">{{ row.host }}:{{ row.port }}</span></template>
               </el-table-column>
-              <el-table-column label="协议" width="70" align="center">
+              <el-table-column :label="t('common.app.rules.common.protocol')" width="70" align="center">
                 <template #default="{ row }"><el-tag size="small" effect="plain" :type="row.protocol === 'https' || row.protocol === 'tls' ? 'warning' : 'primary'">{{ (row.protocol || 'http').toUpperCase() }}</el-tag></template>
               </el-table-column>
-              <el-table-column label="权重 %" width="70" align="center">
+              <el-table-column :label="t('common.app.rules.paths.weightPercent')" width="70" align="center">
                 <template #default="{ row }">{{ weightPercent(target.upstreams ?? [], row) }}</template>
               </el-table-column>
-              <el-table-column prop="max_connections" :label="isTcp ? '最大连接' : '最大请求数'" width="90" align="center">
-                <template #default="{ row }">{{ row.max_connections > 0 ? row.max_connections : '不限' }}</template>
+              <el-table-column prop="max_connections" :label="isTcp ? t('common.app.rules.wizard.maxConnections') : t('common.app.rules.wizard.maxRequests')" width="90" align="center">
+                <template #default="{ row }">{{ row.max_connections > 0 ? row.max_connections : t('common.app.rules.flow.unlimited') }}</template>
               </el-table-column>
-              <el-table-column label="状态" width="110" align="center">
+              <el-table-column :label="t('common.app.rules.common.status')" width="110" align="center">
                 <template #default="{ row }">
                   <el-tag size="small" effect="plain" :type="upstreamStateType(row as Pick<RuleFlowUpstream, 'host' | 'port' | 'enabled'>)">{{ upstreamStateText(row as Pick<RuleFlowUpstream, 'host' | 'port' | 'enabled'>) }}</el-tag>
                 </template>
@@ -321,9 +321,9 @@
             <!-- 路由分发明细分组：主路由+逐条路径行的健康明细（自定义路由信息唯一呈现处，
                  不再设独立流程节点）；主路由行含禁用位（主上游表上方已列全量，明细口径一致） -->
             <div v-if="target.pathRules && target.pathRules.length > 0" class="flow-route-group">
-              <DialogSectionHeader title="路由分发" :description="`${target.pathRules.length} 条自定义路由 · 未命中走主路由`" />
+              <DialogSectionHeader :title="t('common.app.rules.flow.routing')" :description="t('common.app.rules.list.customRoutesSummary', { n: target.pathRules.length })" />
               <div class="flow-route-row">
-                <span class="flow-route-match">/<em class="flow-route-type">主路由</em></span>
+                <span class="flow-route-match">/<em class="flow-route-type">{{ t('common.app.rules.flow.mainRoute') }}</em></span>
                 <span class="flow-route-arrow">→</span>
                 <span class="flow-route-targets">
                   <template v-if="target.upstreams && target.upstreams.length > 0">
@@ -332,7 +332,7 @@
                       <el-tag size="small" effect="plain" :type="upstreamStateType(u)">{{ upstreamStateText(u) }}</el-tag>
                     </span>
                   </template>
-                  <span v-else class="flow-route-none">无主上游</span>
+                  <span v-else class="flow-route-none">{{ t('common.app.rules.flow.unownedUpstream') }}</span>
                 </span>
               </div>
               <div v-for="pr in target.pathRules" :key="`${pr.match_type}:${pr.path}`" class="flow-route-row">
@@ -341,8 +341,8 @@
                 <span class="flow-route-targets">
                   <template v-if="pr.response_mode === 'static'">
                     <span class="flow-route-target">
-                      <el-tag size="small" effect="plain" type="success">静态返回</el-tag>
-                      <span class="flow-upstream-addr">状态码 {{ pr.response_status || 200 }}</span>
+                      <el-tag size="small" effect="plain" type="success">{{ t('common.app.rules.flow.staticReturnTag') }}</el-tag>
+                      <span class="flow-upstream-addr">{{ t('common.app.rules.flow.statusCodeValue', { code: pr.response_status || 200 }) }}</span>
                     </span>
                   </template>
                   <template v-else-if="pr.response_mode === 'redirect'">
@@ -353,7 +353,7 @@
                   </template>
                   <template v-else-if="pr.upstreams === null">
                     <span class="flow-route-target">
-                      <el-tag size="small" effect="plain" type="info">跟随主路由上游</el-tag>
+                      <el-tag size="small" effect="plain" type="info">{{ t('common.app.rules.flow.followMainUpstreamTag') }}</el-tag>
                     </span>
                     <template v-if="target.upstreams && target.upstreams.length > 0">
                       <span v-for="u in target.upstreams" :key="`${pr.path}-default-${u.host}:${u.port}`" class="flow-route-target">
@@ -361,7 +361,7 @@
                         <el-tag size="small" effect="plain" :type="upstreamStateType(u)">{{ upstreamStateText(u) }}</el-tag>
                       </span>
                     </template>
-                    <span v-else class="flow-route-none">无主上游</span>
+                    <span v-else class="flow-route-none">{{ t('common.app.rules.flow.unownedUpstream') }}</span>
                   </template>
                   <template v-else-if="enabledPathUpstreams(pr).length > 0">
                     <span v-for="u in enabledPathUpstreams(pr)" :key="`${u.host}:${u.port}`" class="flow-route-target">
@@ -369,11 +369,11 @@
                       <el-tag size="small" effect="plain" :type="upstreamStateType(u)">{{ upstreamStateText(u) }}</el-tag>
                     </span>
                   </template>
-                  <span v-else class="flow-route-none">无启用上游</span>
+                  <span v-else class="flow-route-none">{{ t('common.app.rules.flow.noEnabledUpstreams') }}</span>
                 </span>
               </div>
             </div>
-            <div class="info-note-bar"><span class="info-note-desc">健康口径：规则级计数（健康 {{ target.health?.healthy ?? 0 }}/共 {{ target.health?.total ?? 0 }}）；无逐上游实时探针数据时按「上游启用/禁用 + 规则健康计数」呈现——逐上游状态为最近一次轮询快照；转发型自定义路由上游与主路由同享规则级健康检查（静态返回 / 301 跳转不转发上游）</span></div>
+            <div class="info-note-bar"><span class="info-note-desc">{{ t('common.app.rules.flow.healthNote', { healthy: target.health?.healthy ?? 0, total: target.health?.total ?? 0 }) }}</span></div>
           </div>
         </el-collapse-transition>
           </div>
@@ -411,6 +411,9 @@ import type {
   StageGroup,
   StagePolicyGroup,
 } from '@/utils/securityStages'
+import { useI18n } from 'vue-i18n'
+
+const { t } = useI18n()
 
 const props = defineProps<{
   modelValue: boolean
@@ -508,7 +511,7 @@ const stageZero = computed<StageZeroPanel | undefined>(() => {
     const entries = mergeIpEntries(enrichedIpLists.value, parseIPList(policy.ip_whitelist), parseRefIds(policy.ip_whitelist_refs))
     if (entries.length === 0) return { ...group, preview: '' }
     const head = entries.slice(0, 2).join('、')
-    return { ...group, preview: entries.length > 2 ? `${head} 等` : head }
+    return { ...group, preview: entries.length > 2 ? t('common.app.rules.msgs.andMore', { head: head }) : head }
   })
   return { ...stage, groups }
 })
@@ -524,10 +527,10 @@ const stageZeroSubtitle = computed(() => {
   })
   // 空数组时 every(Boolean) 恒真会误报「保留检测记录」：阶段 0 已启用但未绑定
   // 任何名单/策略时，副标题按「未启用」呈现（不暗示存在检测保留语义）。
-  if (states.length === 0) return '未启用'
-  if (states.every(Boolean)) return '保留检测记录'
-  if (states.every((v) => !v)) return '直通上游'
-  return '直通 + 保留检测'
+  if (states.length === 0) return t('common.app.rules.common.notEnabled')
+  if (states.every(Boolean)) return t('common.app.rules.flow.keepDetectRecords')
+  if (states.every((v) => !v)) return t('common.app.rules.flow.passthrough')
+  return t('common.app.rules.flow.passthroughDetect')
 })
 
 const policyTypeOf = (policyId: number) =>
@@ -569,11 +572,11 @@ const ensureDetails = async (force = false): Promise<void> => {
     const failedSources: string[] = []
     if (policyRes.status === 'fulfilled') {
       fullPolicies.value = new Map((policyRes.value.data ?? []).map((p) => [p.id, p]))
-    } else failedSources.push('策略明细')
+    } else failedSources.push(t('common.app.rules.flow.sourcePolicyDetails'))
     if (customRes.status === 'fulfilled') customRules.value = customRes.value.data ?? []
-    else failedSources.push('自定义规则')
+    else failedSources.push(t('common.app.rules.flow.sourceCustomRules'))
     if (crsRes.status === 'fulfilled') crsFiles.value = crsRes.value
-    else failedSources.push('CRS 规则组')
+    else failedSources.push(t('common.app.rules.wizard.crsRuleGroups'))
     // 引用名单条目：仅信任名单引用需条目值（阶段 0 明细逐条展示）；
     // ACL 明细为列表级汇总（名称+entry_count），不拉条目
     const refIds = new Set<number>()
@@ -598,7 +601,7 @@ const ensureDetails = async (force = false): Promise<void> => {
       })
       ipListEntryCache.value = cache
       // 名单条目失败不得静默——阶段 0 信任预览/明细会因此缺条目
-      if (entriesFailed) failedSources.push('引用名单条目')
+      if (entriesFailed) failedSources.push(t('common.app.rules.flow.listEntriesRef'))
     }
     // 三端点全部 rejected 时不置 detailsAttached——原无条件置位会把弹框
     // 锁死在「明细按钮缺失且不可重试」且 silent 请求零反馈；保持可重试（下次点击
@@ -606,12 +609,12 @@ const ensureDetails = async (force = false): Promise<void> => {
     if (policyRes.status === 'rejected' && customRes.status === 'rejected' && crsRes.status === 'rejected') {
       // 全源失败同样保留失败位：面板级说明与「明细」按钮据此恒可见（可重试）。
       detailFailedSources.value = failedSources
-      ElMessage.warning('明细数据加载失败，可重试')
+      ElMessage.warning(t('common.app.rules.msgs.detailsLoadFail'))
       return
     }
     detailFailedSources.value = failedSources
     // 部分失败：可用数据降级展示但显式提示——否则故障被读成「确无明细」业务结论
-    if (failedSources.length > 0) ElMessage.warning('部分明细加载失败（可收起重开重试）')
+    if (failedSources.length > 0) ElMessage.warning(t('common.app.rules.flow.partialDetailsLoadFail'))
     detailsAttached.value = true
   } finally {
     // 失配会话不回落 detailLoading——现行会话（重置区或新一次拉取）自行管理该锁
@@ -643,11 +646,11 @@ const toggleNode = (key: string): void => {
 // 而非健康异常（2026-09-21 用户问询口径）；触发过流量后被动熔断数据到位即转「健康/异常」。
 // 参数取结构子集（host/port/enabled）——主上游表行与上游面板路由分发分组行共用
 const upstreamStateText = (row: Pick<RuleFlowUpstream, 'host' | 'port' | 'enabled'>): string => {
-  if (!row.enabled) return '禁用'
+  if (!row.enabled) return t('common.app.rules.common.disable')
   const snapshot = props.target?.upstreamHealth?.[hostPortKey(row.host, row.port)]
-  if (!snapshot || snapshot.unknown) return '启用·待观测'
-  if (snapshot.degraded) return '降级'
-  return snapshot.healthy ? '健康' : '异常'
+  if (!snapshot || snapshot.unknown) return t('common.app.rules.list.enabledPending')
+  if (snapshot.degraded) return t('common.app.rules.common.degraded')
+  return snapshot.healthy ? t('common.app.rules.common.health') : t('common.app.rules.common.unhealthy')
 }
 const upstreamStateType = (row: Pick<RuleFlowUpstream, 'host' | 'port' | 'enabled'>): 'success' | 'warning' | 'danger' | 'info' => {
   if (!row.enabled) return 'info'
@@ -662,7 +665,7 @@ const enabledPathUpstreams = (pr: RuleFlowPathRule): Array<{ host: string; port:
   pr.upstreams?.filter((u) => u.enabled) ?? []
 
 
-const pathMatchLabel = (matchType: string): string => (matchType === 'exact' ? '精确' : '前缀')
+const pathMatchLabel = (matchType: string): string => (matchType === 'exact' ? t('common.app.rules.common.exact') : t('common.app.rules.common.prefix'))
 
 // 计数 chip / 面板统计行：口径单源在 utils/ruleStageStats（形态区分与未归因桶
 // 披露均在那里实现并有行为测试）；此处只负责「本弹框是否具备取数前提」。
@@ -699,18 +702,18 @@ interface FlowNode {
 const flowNodes = computed<FlowNode[]>(() => {
   const target = props.target
   if (!target) return []
-  const access: FlowNode = { key: 'access', title: '接入', subtitle: `${protocolLabel.value} · 端口 ${target.listenPort}`, tone: 'primary', icon: Connection }
-  const upstream: FlowNode = { key: 'upstream', title: '上游', subtitle: target.upstreamSummary, tone: 'primary', icon: TopRight }
+  const access: FlowNode = { key: 'access', title: t('common.app.rules.flow.nodeAccess'), subtitle: t('common.app.rules.list.protocolPort', { protocol: protocolLabel.value, port: target.listenPort }), tone: 'primary', icon: Connection }
+  const upstream: FlowNode = { key: 'upstream', title: t('common.app.rules.common.upstream'), subtitle: target.upstreamSummary, tone: 'primary', icon: TopRight }
   if (isTcp.value) {
     // TCP（L4）阶段 0/1 放开：节点与 HTTP 同构（同图标/色阶/灰态语义）；
     // 阶段 2/3 恒出但灰态「不适用」——L4 无 429/WAF 引擎面（绑定侧已拒绝此类策略）。
     const s1 = typedStagePanels.value.find((s) => s.stage === 1)
     return [
       access,
-      { key: 'stage0', title: STAGE_TITLES[0], subtitle: stageZero.value ? stageZeroSubtitle.value : '未启用', tone: 'green', icon: CircleCheck, disabled: !stageZero.value },
-      { key: 'stage1', title: STAGE_TITLES[1], subtitle: s1?.enabled ? '命中即断连（无拦截页）' : '未启用', tone: 'blue', icon: Key, disabled: !s1?.enabled },
-      { key: 'stage2', title: STAGE_TITLES[2], subtitle: 'TCP 规则不适用', tone: 'orange', icon: Odometer, disabled: true },
-      { key: 'stage3', title: STAGE_TITLES[3], subtitle: 'TCP 规则不适用', tone: 'red', icon: Aim, disabled: true },
+      { key: 'stage0', title: STAGE_TITLES[0], subtitle: stageZero.value ? stageZeroSubtitle.value : t('common.app.rules.common.notEnabled'), tone: 'green', icon: CircleCheck, disabled: !stageZero.value },
+      { key: 'stage1', title: STAGE_TITLES[1], subtitle: s1?.enabled ? t('common.app.rules.flow.hitDisconnectSubtitle') : t('common.app.rules.common.notEnabled'), tone: 'blue', icon: Key, disabled: !s1?.enabled },
+      { key: 'stage2', title: STAGE_TITLES[2], subtitle: t('common.app.rules.flow.tcpNotApplicable'), tone: 'orange', icon: Odometer, disabled: true },
+      { key: 'stage3', title: STAGE_TITLES[3], subtitle: t('common.app.rules.flow.tcpNotApplicable'), tone: 'red', icon: Aim, disabled: true },
       upstream,
     ]
   }
@@ -720,7 +723,7 @@ const flowNodes = computed<FlowNode[]>(() => {
   nodes.push({
     key: 'stage0',
     title: STAGE_TITLES[0],
-    subtitle: stageZero.value ? stageZeroSubtitle.value : '未启用',
+    subtitle: stageZero.value ? stageZeroSubtitle.value : t('common.app.rules.common.notEnabled'),
     tone: 'green',
     icon: CircleCheck,
     disabled: !stageZero.value,
@@ -731,7 +734,7 @@ const flowNodes = computed<FlowNode[]>(() => {
     nodes.push({
       key: `stage${stage.stage}`,
       title: STAGE_TITLES[stage.stage],
-      subtitle: stage.enabled ? stageSub(stageNo) : '未启用',
+      subtitle: stage.enabled ? stageSub(stageNo) : t('common.app.rules.common.notEnabled'),
       tone: stageNo === 1 ? 'blue' : stageNo === 2 ? 'orange' : 'red',
       icon: stageNo === 1 ? Key : stageNo === 2 ? Odometer : Aim,
       disabled: !stage.enabled,
@@ -766,7 +769,7 @@ const stageSub = (stage: 1 | 2 | 3): string => stageSubLabel(stage)
 
 // TCP 规则阶段 1 脚注：L4 无 HTTP 拦截页/状态码面——拒绝动作是断连（close），
 // 不是 403；替换 HTTP 版 stage1Footnote（预检链序文案对 TCP 不适用）。
-const TCP_STAGE1_FOOTNOTE = '拒绝动作=断连（连接直接关闭，无拦截页/状态码）；保留检测信任命中记录为检测后直达上游；名单/地域未命中的连接直达上游'
+const TCP_STAGE1_FOOTNOTE = t('common.app.rules.flow.tcpStage1Footnote')
 
 // 计数取数（弹框打开与面板「重试」共用）：失败置 statsFailed，使「请求失败」
 // 与「成功但载荷为空」可区分（此前两者同落 stats=null，统一渲染成 '—'）。

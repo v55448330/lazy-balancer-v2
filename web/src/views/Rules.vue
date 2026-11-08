@@ -4,21 +4,21 @@
       <div class="header-left">
         <h2 class="page-title">
           <el-icon class="title-icon"><Operation /></el-icon>
-          负载均衡规则
+          {{ t('common.app.rules.list.pageTitle') }}
         </h2>
-        <p class="page-desc">管理流量分发策略和上游服务器配置</p>
+        <p class="page-desc">{{ t('common.app.rules.list.pageDescription') }}</p>
       </div>
       <el-button type="primary" :disabled="isReadOnly || saving" @click="openWizard()">
         <el-icon><Plus /></el-icon>
-        新建规则
+        {{ t('common.app.rules.wizard.newRule') }}
       </el-button>
     </div>
 
     <el-alert v-if="certPollingError.errorMessage.value" type="error" :closable="false" show-icon class="polling-error-alert error-banner">
       <template #title>
         <div class="polling-error-title">
-          <span>证书状态加载失败：{{ certPollingError.errorMessage.value }}</span>
-          <el-button link type="danger" :loading="certRetryLoading" @click="retryCertPolling">立即重试</el-button>
+          <span>{{ t('common.app.rules.list.certLoadFailPrefix') }}{{ certPollingError.errorMessage.value }}{{ certPollingError.errorMessage.value }}</span>
+          <el-button link type="danger" :loading="certRetryLoading" @click="retryCertPolling">{{ t('common.app.rules.list.retryNow') }}</el-button>
         </div>
       </template>
       <div class="polling-error-meta">{{ certPollingErrorDescription }}</div>
@@ -27,8 +27,8 @@
     <el-alert v-if="certInfoError" type="error" :closable="false" show-icon class="polling-error-alert error-banner">
       <template #title>
         <div class="polling-error-title">
-          <span>证书详情加载失败：TLS 列可能显示为「加载失败」（非真实证书状态）</span>
-          <el-button link type="danger" :loading="certInfoRetryLoading" @click="retryCertInfo">立即重试</el-button>
+          <span>{{ t('common.app.rules.list.certDetailFailBanner') }}</span>
+          <el-button link type="danger" :loading="certInfoRetryLoading" @click="retryCertInfo">{{ t('common.app.rules.list.retryNow') }}</el-button>
         </div>
       </template>
     </el-alert>
@@ -36,8 +36,8 @@
     <el-alert v-if="healthPollingError.errorMessage.value" type="error" :closable="false" show-icon class="polling-error-alert error-banner">
       <template #title>
         <div class="polling-error-title">
-          <span>上游健康状态加载失败：{{ healthPollingError.errorMessage.value }}</span>
-          <el-button link type="danger" :loading="healthRetryLoading" @click="retryHealthPolling">立即重试</el-button>
+          <span>{{ t('common.app.rules.list.healthLoadFailPrefix') }}{{ healthPollingError.errorMessage.value }}{{ healthPollingError.errorMessage.value }}</span>
+          <el-button link type="danger" :loading="healthRetryLoading" @click="retryHealthPolling">{{ t('common.app.rules.list.retryNow') }}</el-button>
         </div>
       </template>
       <div class="polling-error-meta">{{ healthPollingErrorDescription }}</div>
@@ -46,8 +46,8 @@
     <el-alert v-if="rulesLoadError" type="error" :closable="false" show-icon class="polling-error-alert error-banner">
       <template #title>
         <div class="polling-error-title">
-          <span>负载均衡规则加载失败，下方「暂无规则」不代表真实状态</span>
-          <el-button link type="danger" :loading="loading" @click="fetchRules()">立即重试</el-button>
+          <span>{{ t('common.app.rules.list.loadFailBanner') }}</span>
+          <el-button link type="danger" :loading="loading" @click="fetchRules()">{{ t('common.app.rules.list.retryNow') }}</el-button>
         </div>
       </template>
     </el-alert>
@@ -55,12 +55,12 @@
     <el-alert v-if="auxDataLoadFailed" type="error" :closable="false" show-icon class="polling-error-alert error-banner">
       <template #title>
         <div class="polling-error-title">
-          <span>辅助数据加载失败（{{ [
-            usersLoadError ? '更新者列表（更新者列将显示「-」）' : '',
-            certConfigsLoadError ? 'DNS 提供商配置（ACME 规则编辑无法选择 DNS 配置）' : '',
-            caProvidersLoadError ? 'CA 提供商（选择器仅剩「系统默认」）' : '',
+          <span>{{ t('common.app.rules.list.auxLoadFailPrefix') }}{{ [
+            usersLoadError ? t('common.app.rules.list.auxUpdatersFailHint') : '',
+            certConfigsLoadError ? t('common.app.rules.wizard.dnsConfigSelectorNote') : '',
+            caProvidersLoadError ? t('common.app.rules.wizard.caProviderSelectorNote') : '',
           ].filter(Boolean).join('；') }}）</span>
-          <el-button link type="danger" :loading="auxDataRetryLoading" @click="retryAuxData">立即重试</el-button>
+          <el-button link type="danger" :loading="auxDataRetryLoading" @click="retryAuxData">{{ t('common.app.rules.list.retryNow') }}</el-button>
         </div>
       </template>
     </el-alert>
@@ -68,18 +68,18 @@
     <el-alert v-if="securityBindingsError" type="warning" :closable="false" show-icon class="polling-error-alert">
       <template #title>
         <div class="polling-error-title">
-          <span>安全策略绑定数据加载失败：锁图标与流程投影可能显示为未绑定（非真实状态）</span>
-          <el-button link type="warning" :loading="securityBindingsLoading" @click="retrySecurityBindings">重新加载</el-button>
+          <span>{{ t('common.app.rules.list.securityBindingsFailHint') }}</span>
+          <el-button link type="warning" :loading="securityBindingsLoading" @click="retrySecurityBindings">{{ t('common.app.rules.cfg.reload') }}</el-button>
         </div>
       </template>
     </el-alert>
 
     <el-card>
       <div class="table-toolbar">
-        <el-input v-model="searchQuery" placeholder="搜索规则名 / 域名 / 端口 / ID" clearable :prefix-icon="Search" class="search-input" />
+        <el-input v-model="searchQuery" :placeholder="t('common.app.rules.list.searchPlaceholder')" clearable :prefix-icon="Search" class="search-input" />
       </div>
       <el-table :data="pagedRules" row-key="caddy_id" v-loading="loading" stripe class="rules-table" :header-cell-style="{ background: '#f9fafb' }" empty-text="">
-        <el-table-column prop="name" label="规则名称" min-width="140">
+        <el-table-column prop="name" :label="t('common.app.rules.common.ruleName')" min-width="140">
           <template #default="{ row }">
             <div class="rule-name-cell">
               <!-- 锁 hover 摘要（鼠标悬停）：按阶段 0/1/2/3 分组的紧凑摘要；
@@ -107,26 +107,26 @@
                     :class="ruleStageModel(row as Rule).ruleDisabled ? 'is-unbound' : ruleStageModel(row as Rule).hasAnyPolicy ? 'is-allow' : 'is-unbound'"
                     role="button"
                     tabindex="0"
-                    :aria-label="`查看「${row.name}」的安全处理流程`"
+                    :aria-label="t('common.app.rules.list.viewFlowAria', { ruleName: row.name })"
                     @keydown.enter.prevent="activateOnce($event, () => openFlowFromLock(row as Rule))"
                     @keydown.space.prevent="activateOnce($event, () => openFlowFromLock(row as Rule))"
                   ><Lock /></el-icon>
                 </template>
                 <div class="lock-summary">
-                  <div class="popover-title">安全防护 · 阶段摘要</div>
+                  <div class="popover-title">{{ t('common.app.rules.list.stageSummaryTitle') }}</div>
                   <!-- 禁用规则的安全链不进入运行配置（零 listener 路由）——
                        摘要顶部必须点名，否则从锁图标巡检会高估防护 -->
                   <div v-if="ruleStageModel(row as Rule).ruleDisabled" class="lock-summary-hint">
-                    规则已禁用——安全链未进入运行配置（绑定与阶段页保留，启用后生效）
+                    {{ t('common.app.rules.list.disabledHint') }}
                   </div>
                   <template v-for="stage in ruleStageModel(row as Rule).stages" :key="stage.stage">
                     <div class="lock-stage">
                       <div class="lock-stage-head" :class="`lock-stage-head--s${stage.stage}`">{{ stage.title }}</div>
                       <!-- TCP 规则阶段 2/3 恒灰态「不适用」（L4 无限流/WAF 引擎面，绑定侧已门）——
                            组有无均不落「未启用」（未启用=可绑未绑，语义不同） -->
-                      <div v-if="row.protocol === 'tcp' && stage.stage >= 2" class="lock-stage-line lock-stage-empty">不适用（TCP 仅支持阶段 0/1）</div>
+                      <div v-if="row.protocol === 'tcp' && stage.stage >= 2" class="lock-stage-line lock-stage-empty">{{ t('common.app.rules.list.stageNotApplicable') }}</div>
                       <!-- 四阶段恒出（2026-09-21 用户裁定：与流程弹框同口径）——空阶段灰态「未启用」不再整段缺席 -->
-                      <div v-else-if="stage.groups.length === 0" class="lock-stage-line lock-stage-empty">未启用</div>
+                      <div v-else-if="stage.groups.length === 0" class="lock-stage-line lock-stage-empty">{{ t('common.app.rules.common.notEnabled') }}</div>
                       <!-- 按策略分小组（2026-09-21 用户裁定）：策略名做弱化小标题，该策略的阶段能力行
                            （含拦截页行）逐行挂其下，信息密度与流程弹框面板一致；单策略绑定时免分组框
                            保持紧凑。阶段 3 的 WAF 模式由投影首行（WAF（拦截/检测/仅自定义））承载，
@@ -149,7 +149,7 @@
                       </template>
                     </div>
                   </template>
-                  <div class="lock-summary-hint"><el-button link type="primary" @click="openFlowFromLock(row as Rule)">查看完整处理流程 →</el-button></div>
+                  <div class="lock-summary-hint"><el-button link type="primary" @click="openFlowFromLock(row as Rule)">{{ t('common.app.rules.list.viewFullFlow') }}</el-button></div>
                 </div>
               </el-popover>
               <!-- 规则名入口复用 AccessibleLink：手写 <a role=button> 缺按键自动重复
@@ -158,32 +158,32 @@
             </div>
           </template>
         </el-table-column>
-        <el-table-column prop="domain" label="域名" min-width="210" show-overflow-tooltip>
+        <el-table-column prop="domain" :label="t('common.app.rules.common.domain')" min-width="210" show-overflow-tooltip>
           <template #default="{ row }">
             <span class="domain">{{ row.domain || '-' }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="协议" width="80">
+        <el-table-column :label="t('common.app.rules.common.protocol')" width="80">
           <template #default="{ row }">
             <el-tag :type="row.protocol === 'tcp' ? 'warning' : (row.enable_tls ? 'success' : 'primary')" size="small" effect="plain">
               {{ row.protocol === 'tcp' ? 'TCP' : (row.enable_tls ? 'HTTPS' : 'HTTP') }}
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="负载策略" width="101" align="center" show-overflow-tooltip>
+        <el-table-column :label="t('common.app.rules.common.lbPolicy')" width="101" align="center" show-overflow-tooltip>
           <template #default="{ row }">
             <span>{{ getStrategyLabel(row.strategy) }}</span>
           </template>
         </el-table-column>
-        <el-table-column prop="listen_port" label="端口" width="67" align="center">
+        <el-table-column prop="listen_port" :label="t('common.app.rules.common.port')" width="67" align="center">
           <template #default="{ row }">
             <span class="port">{{ row.listen_port }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="上游" width="64" align="center">
+        <el-table-column :label="t('common.app.rules.common.upstream')" width="64" align="center">
           <template #default="{ row }">
             <el-tag :type="row.dynamic_dns ? 'primary' : 'success'" size="small" effect="plain">
-              {{ row.dynamic_dns ? '动态' : '静态' }}
+              {{ row.dynamic_dns ? t('common.app.rules.list.dnsDynamic') : t('common.app.rules.list.dnsStatic') }}
             </el-tag>
           </template>
         </el-table-column>
@@ -203,61 +203,61 @@
                 </el-tag>
               </template>
               <div class="cert-tooltip" v-if="certInfoMap[row.caddy_id]">
-                <div class="popover-title">证书信息</div>
+                <div class="popover-title">{{ t('common.app.rules.list.certInfoTitle') }}</div>
                 <div class="cert-row">
-                  <span class="cert-label">来源</span>
+                  <span class="cert-label">{{ t('common.app.rules.list.certSourceLabel') }}</span>
                   <el-tag size="small" :type="certInfoMap[row.caddy_id]?.source === 'manual' ? 'primary' : 'success'">
-                    {{ certInfoMap[row.caddy_id]?.source === 'manual' ? '手动上传' : 'ACME 自动' }}
+                    {{ certInfoMap[row.caddy_id]?.source === 'manual' ? t('common.app.rules.wizard.manualUpload') : t('common.app.rules.wizard.acmeAuto') }}
                   </el-tag>
                 </div>
                 <div class="cert-row">
-                  <span class="cert-label">域名</span>
+                  <span class="cert-label">{{ t('common.app.rules.common.domain') }}</span>
                   <span class="cert-value" :title="certInfoMap[row.caddy_id]?.domains">{{ certInfoMap[row.caddy_id]?.domains || '-' }}</span>
                 </div>
                 <div class="cert-row">
-                  <span class="cert-label">颁发者</span>
+                  <span class="cert-label">{{ t('common.app.rules.list.certIssuerLabel') }}</span>
                   <span class="cert-value" :title="certInfoMap[row.caddy_id]?.issuer">{{ certInfoMap[row.caddy_id]?.issuer || '-' }}</span>
                 </div>
                 <div class="cert-row">
-                  <span class="cert-label">生效时间</span>
+                  <span class="cert-label">{{ t('common.app.rules.list.certValidFrom') }}</span>
                   <span class="cert-value">{{ formatDate(certInfoMap[row.caddy_id]?.not_before || '') || '-' }}</span>
                 </div>
                 <div class="cert-row">
-                  <span class="cert-label">过期时间</span>
+                  <span class="cert-label">{{ t('common.app.rules.list.certExpiryLabel') }}</span>
                   <span class="cert-value">{{ formatDate(certInfoMap[row.caddy_id]?.not_after || '') || '-' }}</span>
                 </div>
                 <div class="cert-row">
-                  <span class="cert-label">剩余天数</span>
+                  <span class="cert-label">{{ t('common.app.rules.wizard.daysRemaining') }}</span>
                   <!-- 过期证书不渲染裸负数（「-1 天」易误读为已过期一整天）-->
                   <span :class="['cert-days', certInfoMap[row.caddy_id]?.status]">
                     {{ certInfoMap[row.caddy_id]?.status === 'expired'
-                      ? `已过期 ${Math.abs(certInfoMap[row.caddy_id]?.days_remaining ?? 0)} 天`
-                      : `${certInfoMap[row.caddy_id]?.days_remaining} 天` }}
+                      ? t('common.app.rules.list.expiredDays', { days: Math.abs(certInfoMap[row.caddy_id]?.days_remaining ?? 0) })
+                      : t('common.app.rules.wizard.tableCertDays', { n: certInfoMap[row.caddy_id]?.days_remaining }) }}
                   </span>
                 </div>
                 <div class="cert-row" v-if="certInfoMap[row.caddy_id]?.error">
-                  <span class="cert-label">错误</span>
+                  <span class="cert-label">{{ t('common.app.rules.list.certErrorLabel') }}</span>
                   <span class="cert-error" :title="certInfoMap[row.caddy_id]?.error">{{ certInfoMap[row.caddy_id]?.error }}</span>
                 </div>
                 <div class="cert-row" v-if="certInfoMap[row.caddy_id]?.status === 'valid' && certJobMap[row.caddy_id]?.status === 'failed'">
-                  <span class="cert-label">最近重签</span>
-                  <span class="cert-error" :title="certJobMap[row.caddy_id]?.message">失败：{{ certJobMap[row.caddy_id]?.message || '未知错误' }}</span>
+                  <span class="cert-label">{{ t('common.app.rules.list.certLastRenew') }}</span>
+                  <span class="cert-error" :title="certJobMap[row.caddy_id]?.message"> {{ t('common.app.rules.list.failPrefix') }}{{ certJobMap[row.caddy_id]?.message || t('common.app.rules.list.unknownError') }}</span>
                 </div>
               </div>
             </el-popover>
             <span v-else class="text-secondary">-</span>
           </template>
         </el-table-column>
-        <el-table-column label="健康" width="64" align="center">
+        <el-table-column :label="t('common.app.rules.common.health')" width="64" align="center">
           <template #default="{ row }">
             <!-- 零启用上游的启用态规则：渲染层跳过（不发路由/不注册 logger），
                  与「已禁用」的「-」同形会让用户无法从列表区分「未发布」。 -->
             <el-tooltip
               v-if="row.enabled && Array.isArray(row.upstreams) && getEnabledUpstreams(row as Rule).length === 0"
-              content="未发布：已启用但零启用上游，运行配置跳过该规则（Caddy 不会代理）"
+              :content="t('common.app.rules.list.unpublishedHint')"
               placement="top"
             >
-              <el-tag type="warning" size="small" effect="plain">未发布</el-tag>
+              <el-tag type="warning" size="small" effect="plain">{{ t('common.app.rules.list.statusUnpublished') }}</el-tag>
             </el-tooltip>
             <el-popover v-else-if="row.enabled && healthStatus[row.caddy_id]" placement="top" trigger="hover" :width="240" :popper-options="popperViewportSafe">
               <template #reference>
@@ -266,12 +266,12 @@
                 </el-tag>
               </template>
               <div class="health-tooltip">
-                <div class="popover-title">上游服务器状态</div>
+                <div class="popover-title">{{ t('common.app.rules.list.upstreamStatusTitle') }}</div>
                 <template v-if="row.dynamic_dns">
                   <div v-for="(status, address) in healthStatus[row.caddy_id]?.upstreams || {}" :key="address" class="upstream-item">
                     <span class="upstream-address">{{ address }}</span>
-                    <el-tooltip v-if="status.unknown && status.dynamic" content="健康不可观测（动态 DNS 按解析后 IP 跟踪 / TCP 被动熔断无指标端点）" placement="top"><span class="upstream-na">N/A</span></el-tooltip>
-                    <el-tag v-else-if="status.unknown" size="small" effect="plain" type="info">启用·待观测</el-tag>
+                    <el-tooltip v-if="status.unknown && status.dynamic" :content="t('common.app.rules.list.healthUnobservable')" placement="top"><span class="upstream-na">N/A</span></el-tooltip>
+                    <el-tag v-else-if="status.unknown" size="small" effect="plain" type="info">{{ t('common.app.rules.list.enabledPending') }}</el-tag>
                     <el-icon v-else-if="status.degraded" class="upstream-degraded"><WarningFilled /></el-icon>
                     <el-icon v-else-if="status.healthy" class="upstream-healthy"><CircleCheckFilled /></el-icon>
                     <el-icon v-else class="upstream-unhealthy"><CircleCloseFilled /></el-icon>
@@ -282,12 +282,12 @@
                     <div class="upstream-item-row">
                       <span class="upstream-address">{{ upstream.host }}:{{ upstream.port }}</span>
                       <span class="upstream-status">
-                        <el-tooltip v-if="getUpstreamHealthStatus(row.caddy_id, upstream).unknown && (getUpstreamHealthStatus(row.caddy_id, upstream).dynamic || (row.protocol === 'tcp' && !row.enable_active_health_check))" content="健康不可观测（动态 DNS 按解析后 IP 跟踪 / TCP 被动熔断无指标端点）" placement="top"><span class="upstream-na">N/A</span></el-tooltip>
-                        <el-tag v-else-if="getUpstreamHealthStatus(row.caddy_id, upstream).unknown" size="small" effect="plain" type="info">启用·待观测</el-tag>
+                        <el-tooltip v-if="getUpstreamHealthStatus(row.caddy_id, upstream).unknown && (getUpstreamHealthStatus(row.caddy_id, upstream).dynamic || (row.protocol === 'tcp' && !row.enable_active_health_check))" :content="t('common.app.rules.list.healthUnobservable')" placement="top"><span class="upstream-na">N/A</span></el-tooltip>
+                        <el-tag v-else-if="getUpstreamHealthStatus(row.caddy_id, upstream).unknown" size="small" effect="plain" type="info">{{ t('common.app.rules.list.enabledPending') }}</el-tag>
                         <el-icon v-else-if="getUpstreamHealthStatus(row.caddy_id, upstream).degraded" class="upstream-degraded"><WarningFilled /></el-icon>
                         <el-icon v-else-if="getUpstreamHealthStatus(row.caddy_id, upstream).healthy" class="upstream-healthy"><CircleCheckFilled /></el-icon>
                         <el-icon v-else class="upstream-unhealthy"><CircleCloseFilled /></el-icon>
-                        <span v-if="getUpstreamMetrics(row.caddy_id, upstream).fails > 0" class="upstream-fails">失败 {{ getUpstreamMetrics(row.caddy_id, upstream).fails }}</span>
+                        <span v-if="getUpstreamMetrics(row.caddy_id, upstream).fails > 0" class="upstream-fails"> {{ t('common.app.rules.list.failsCount', { n: getUpstreamMetrics(row.caddy_id, upstream).fails }) }}</span>
                       </span>
                     </div>
                   </div>
@@ -296,17 +296,17 @@
                      主上游之后按路径规则分组展示（健康/指标键同 host:port，复用既有查询函数） -->
                 <template v-for="pathRule in healthPathRules(row as Rule)" :key="pathRule.id ?? pathRule.path">
                   <div v-if="pathRule.upstreams && pathRule.upstreams.length > 0" class="path-rule-health-group">
-                    <div class="path-rule-health-title">{{ pathRule.path }}（{{ pathRule.match_type === 'exact' ? '精确' : '前缀' }}）</div>
+                    <div class="path-rule-health-title">{{ pathRule.path }}（{{ pathRule.match_type === 'exact' ? t('common.app.rules.common.exact') : t('common.app.rules.common.prefix') }}）</div>
                     <div v-for="pu in pathRule.upstreams" :key="`${pu.address}:${pu.port}`" class="upstream-item">
                       <div class="upstream-item-row">
                         <span class="upstream-address">{{ pu.address }}:{{ pu.port }}</span>
                         <span class="upstream-status">
-                          <el-tooltip v-if="getUpstreamHealthStatus(row.caddy_id, pathUpstreamRef(pu)).unknown && getUpstreamHealthStatus(row.caddy_id, pathUpstreamRef(pu)).dynamic" content="健康不可观测（动态 DNS 按解析后 IP 跟踪 / TCP 被动熔断无指标端点）" placement="top"><span class="upstream-na">N/A</span></el-tooltip>
-                          <el-tag v-else-if="getUpstreamHealthStatus(row.caddy_id, pathUpstreamRef(pu)).unknown" size="small" effect="plain" type="info">启用·待观测</el-tag>
+                          <el-tooltip v-if="getUpstreamHealthStatus(row.caddy_id, pathUpstreamRef(pu)).unknown && getUpstreamHealthStatus(row.caddy_id, pathUpstreamRef(pu)).dynamic" :content="t('common.app.rules.list.healthUnobservable')" placement="top"><span class="upstream-na">N/A</span></el-tooltip>
+                          <el-tag v-else-if="getUpstreamHealthStatus(row.caddy_id, pathUpstreamRef(pu)).unknown" size="small" effect="plain" type="info">{{ t('common.app.rules.list.enabledPending') }}</el-tag>
                           <el-icon v-else-if="getUpstreamHealthStatus(row.caddy_id, pathUpstreamRef(pu)).degraded" class="upstream-degraded"><WarningFilled /></el-icon>
                           <el-icon v-else-if="getUpstreamHealthStatus(row.caddy_id, pathUpstreamRef(pu)).healthy" class="upstream-healthy"><CircleCheckFilled /></el-icon>
                           <el-icon v-else class="upstream-unhealthy"><CircleCloseFilled /></el-icon>
-                          <span v-if="getUpstreamMetrics(row.caddy_id, pathUpstreamRef(pu)).fails > 0" class="upstream-fails">失败 {{ getUpstreamMetrics(row.caddy_id, pathUpstreamRef(pu)).fails }}</span>
+                          <span v-if="getUpstreamMetrics(row.caddy_id, pathUpstreamRef(pu)).fails > 0" class="upstream-fails"> {{ t('common.app.rules.list.failsCount', { n: getUpstreamMetrics(row.caddy_id, pathUpstreamRef(pu)).fails }) }}</span>
                         </span>
                       </div>
                     </div>
@@ -318,28 +318,28 @@
             <span v-else class="text-secondary">-</span>
           </template>
         </el-table-column>
-        <el-table-column label="更新者" width="66" align="center" show-overflow-tooltip>
+        <el-table-column :label="t('common.app.rules.list.updatedBy')" width="66" align="center" show-overflow-tooltip>
           <template #default="{ row }">
             <span class="updater-name">{{ getUpdaterName(row.updated_by || row.created_by) }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="更新时间" width="164" align="center" show-overflow-tooltip>
+        <el-table-column :label="t('common.app.rules.list.updatedAt')" width="164" align="center" show-overflow-tooltip>
           <template #default="{ row }">
             <span class="updated-time">{{ formatUpdatedTime(row.updated_at) }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="状态" width="64" align="center">
+        <el-table-column :label="t('common.app.rules.common.status')" width="64" align="center">
           <template #default="{ row }">
             <el-tooltip
               :disabled="!isReadOnly && !isCertJobActive(certJobMap[row.caddy_id]?.status) && !ruleTogglePending[row.caddy_id]"
-              :content="isReadOnly ? readOnlyMessage : ruleTogglePending[row.caddy_id] ? '规则状态更新中，请稍候' : certJobLockTooltip(row as Rule, '证书申请中，请等待完成或失败后再启停规则')"
+              :content="isReadOnly ? readOnlyMessage : ruleTogglePending[row.caddy_id] ? t('common.app.rules.list.togglePendingTooltip') : certJobLockTooltip(row as Rule, t('common.app.rules.list.certJobToggleLockTooltip'))"
             >
               <div>
                 <el-switch
                   v-model="row.enabled"
                   :loading="ruleTogglePending[row.caddy_id]"
                   :disabled="isReadOnly || isCertJobActive(certJobMap[row.caddy_id]?.status) || ruleTogglePending[row.caddy_id]"
-                  :aria-label="`${row.name} 的启用状态`"
+                  :aria-label="t('common.app.rules.list.toggleStatusLabel', { name: row.name })"
                   @change="toggleRule(row as Rule)"
                   class="status-switch"
                 />
@@ -347,49 +347,49 @@
             </el-tooltip>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="172" fixed="right" align="center">
+        <el-table-column :label="t('common.app.rules.common.actions')" width="172" fixed="right" align="center">
           <template #default="{ row }">
             <div class="operation-buttons">
               <!-- 只读态（从节点/非管理员）全部渲染但禁用，tooltip 显示原因（authStore.readOnlyMessage 同构） -->
               <el-tooltip
                 :disabled="!isReadOnly && canEditRule(row as Rule)"
-                :content="isReadOnly ? readOnlyMessage : certJobLockTooltip(row as Rule, '证书申请中，请等待完成或失败后再修改规则')"
+                :content="isReadOnly ? readOnlyMessage : certJobLockTooltip(row as Rule, t('common.app.rules.list.certJobEditLockTooltip'))"
               >
                 <div>
                 <el-button type="primary" link size="small" @click="openWizard(row as Rule)" :disabled="isReadOnly || saving || !canEditRule(row as Rule)">
-                    编辑
+                    {{ t('common.app.rules.common.edit') }}
                   </el-button>
                 </div>
               </el-tooltip>
               <el-tooltip :disabled="!isReadOnly" :content="readOnlyMessage">
                 <div>
                 <el-button type="primary" link size="small" :disabled="isReadOnly || saving" @click="duplicateRule(row as Rule)">
-                  复制
+                  {{ t('common.app.rules.common.copy') }}
                 </el-button>
                 </div>
               </el-tooltip>
-              <el-tooltip :disabled="!isReadOnly && row.log_enabled" :content="isReadOnly ? readOnlyMessage : '该规则未开启访问日志'">
+              <el-tooltip :disabled="!isReadOnly && row.log_enabled" :content="isReadOnly ? readOnlyMessage : t('common.app.rules.list.logDisabledTooltip')">
                 <div>
                 <el-button type="primary" link size="small" :disabled="isReadOnly || !row.log_enabled" @click="openRuleLogDialog(row as Rule)">
-                  日志
+                  {{ t('common.app.rules.common.log') }}
                 </el-button>
                 </div>
               </el-tooltip>
               <!-- TCP（阶段 0/1）与 HTTP 同入口；含 2/3 特征策略的拒绝由编辑器选择侧置灰 + 后端 400 承接 -->
-              <el-tooltip :disabled="!isReadOnly && !securityBindingsLoading && !securityBindingsError" :content="securityBindingsLoading ? '安全策略绑定加载中…' : securityBindingsError ? '安全策略绑定加载失败，请先点击上方重新加载' : readOnlyMessage">
+              <el-tooltip :disabled="!isReadOnly && !securityBindingsLoading && !securityBindingsError" :content="securityBindingsLoading ? t('common.app.rules.list.securityBindingsLoadingTip') : securityBindingsError ? t('common.app.rules.list.securityBindingsFailReloadTip') : readOnlyMessage">
                 <div>
                 <el-button type="primary" link size="small" :disabled="isReadOnly || saving || securityBindingsLoading || securityBindingsError || bindDialogOpening" @click="openBindDialog(row as Rule)">
-                  安全
+                  {{ t('common.app.rules.common.security') }}
                 </el-button>
                 </div>
               </el-tooltip>
               <el-tooltip
                 :disabled="!isReadOnly && canDeleteRule(row as Rule) && certJobStatusOf(row as Rule) !== 'waiting_ca'"
-                :content="isReadOnly ? readOnlyMessage : certJobLockTooltip(row as Rule, '证书申请中，请等待完成或失败后再删除规则')"
+                :content="isReadOnly ? readOnlyMessage : certJobLockTooltip(row as Rule, t('common.app.rules.list.certJobDeleteLockTooltip'))"
               >
                 <div>
                 <el-button type="danger" link size="small" @click="deleteRule(row as Rule)" :disabled="isReadOnly || !canDeleteRule(row as Rule)">
-                    删除
+                    {{ t('common.app.rules.common.delete') }}
                   </el-button>
                 </div>
               </el-tooltip>
@@ -397,7 +397,7 @@
           </template>
         </el-table-column>
         <template #empty>
-          <el-empty description="暂无负载均衡规则" :image-size="80" />
+          <el-empty :description="t('common.app.rules.list.empty')" :image-size="80" />
         </template>
       </el-table>
       <el-pagination
@@ -413,67 +413,67 @@
 
     <el-dialog v-model="wizardVisible" class="dialog-body-inset" width="min(960px, 94vw)" top="5vh" :close-on-click-modal="false" :before-close="beforeWizardClose" @close="resetWizard">
       <template #header>
-        <DialogHeader :icon="Connection" :title="editingRule ? '编辑规则' : (isCopyMode ? '复制规则' : '新建规则')"
-          subtitle="配置负载均衡规则的监听、TLS、上游与路由行为" />
+        <DialogHeader :icon="Connection" :title="editingRule ? t('common.app.rules.wizard.editRule') : (isCopyMode ? t('common.app.rules.wizard.copyRule') : t('common.app.rules.wizard.newRule'))"
+          :subtitle="t('common.app.rules.list.pageSubtitle')" />
       </template>
       <el-steps :active="visualStepIndex" finish-status="success" align-center class="wizard-steps" :class="{ 'is-clickable': stepsClickable }">
-        <el-step title="基本配置" :icon="InfoFilled" @click="jumpToStep(WIZARD_STEP.BASIC)" />
-        <el-step v-if="showTlsStep" title="TLS 配置" :icon="Lock" @click="jumpToStep(WIZARD_STEP.TLS)" />
-        <el-step title="上游服务器" :icon="Connection" @click="jumpToStep(WIZARD_STEP.UPSTREAMS)" />
-        <el-step v-if="showCustomRoutesStep" title="自定义路由" :icon="Guide" @click="jumpToStep(WIZARD_STEP.CUSTOM_ROUTES)" />
-        <el-step title="高级选项" :icon="Setting" @click="jumpToStep(WIZARD_STEP.ADVANCED)" />
-        <el-step title="预览保存" :icon="Check" @click="jumpToStep(WIZARD_STEP.PREVIEW)" />
+        <el-step :title="t('common.app.rules.wizard.basicConfig')" :icon="InfoFilled" @click="jumpToStep(WIZARD_STEP.BASIC)" />
+        <el-step v-if="showTlsStep" :title="t('common.app.rules.wizard.tlsConfig')" :icon="Lock" @click="jumpToStep(WIZARD_STEP.TLS)" />
+        <el-step :title="t('common.app.rules.wizard.upstreamServers')" :icon="Connection" @click="jumpToStep(WIZARD_STEP.UPSTREAMS)" />
+        <el-step v-if="showCustomRoutesStep" :title="t('common.app.rules.common.customRoutes')" :icon="Guide" @click="jumpToStep(WIZARD_STEP.CUSTOM_ROUTES)" />
+        <el-step :title="t('common.app.rules.wizard.advancedOptions')" :icon="Setting" @click="jumpToStep(WIZARD_STEP.ADVANCED)" />
+        <el-step :title="t('common.app.rules.wizard.previewSave')" :icon="Check" @click="jumpToStep(WIZARD_STEP.PREVIEW)" />
       </el-steps>
 
       <div class="wizard-content">
         <!-- Step 0: 基本配置 -->
         <div v-show="currentStep === WIZARD_STEP.BASIC" class="step-content">
           <el-form :model="wizardForm" label-width="100px" :disabled="saving">
-            <el-form-item label="规则名称" required>
-              <el-input v-model="wizardForm.name" placeholder="例如：我的网站负载均衡" maxlength="100" show-word-limit />
+            <el-form-item :label="t('common.app.rules.common.ruleName')" required>
+              <el-input v-model="wizardForm.name" :placeholder="t('common.app.rules.wizard.nameExample')" maxlength="100" show-word-limit />
             </el-form-item>
             
             <!-- 原生表单行（2026-10-11 用户裁定：对齐统一走 el-form-item，弃自管标签行
                  ——后者曾因侧距与 el-form-item 不一致致 20px 漂移；radio-group 的 Firefox
                  label-for 控制台告警为 EP 上游已知形态，非用户可见） -->
-            <el-form-item label="协议" required for="radio---0">
+            <el-form-item :label="t('common.app.rules.common.protocol')" required for="radio---0">
               <input type="text" id="radio---0" aria-hidden="true" tabindex="-1" autocomplete="off" style="display:none">
-              <el-radio-group v-model="wizardForm.protocol" aria-label="协议">
+              <el-radio-group v-model="wizardForm.protocol" :aria-label="t('common.app.rules.common.protocol')">
                 <el-radio value="http">HTTP</el-radio>
                 <el-radio value="tcp">TCP</el-radio>
               </el-radio-group>
             </el-form-item>
 
-            <el-form-item label="域名" required v-if="wizardForm.protocol === 'http'" class="domain-item">
-              <el-input v-model="wizardForm.domain" placeholder="例如：example.com, www.example.com" />
-              <div class="form-tip-line">多个域名用逗号分隔，用于 HTTPS 证书和 HTTP 重定向</div>
+            <el-form-item :label="t('common.app.rules.common.domain')" required v-if="wizardForm.protocol === 'http'" class="domain-item">
+              <el-input v-model="wizardForm.domain" :placeholder="t('common.app.rules.wizard.domainsExample')" />
+              <div class="form-tip-line">{{ t('common.app.rules.wizard.domainsHint') }}</div>
             </el-form-item>
 
-            <el-form-item label="监听端口" required>
+            <el-form-item :label="t('common.app.rules.wizard.listenPort')" required>
               <el-input-number v-model="wizardForm.listen_port" :min="1" :max="65535" controls-position="right" @change="userExplicitPort = true" />
               <span class="form-tip-inline">
                 <span v-if="portWarning" class="port-warning">{{ portWarning }}</span>
-                <span v-else-if="wizardForm.protocol === 'http'">建议使用 80 或其他非保留端口</span>
-                <span v-else>建议使用 10000-60000 范围内的端口</span>
+                <span v-else-if="wizardForm.protocol === 'http'">{{ t('common.app.rules.wizard.portHintHttp') }}</span>
+                <span v-else>{{ t('common.app.rules.wizard.portHintTcp') }}</span>
               </span>
-              <div class="form-tip-line">服务端还会按当前部署校验实际管理端口（面板监听端口与 Caddy admin 端口），自定义端口以保存结果为准</div>
+              <div class="form-tip-line">{{ t('common.app.rules.wizard.portServerValidationHint') }}</div>
             </el-form-item>
 
-            <el-form-item label="启用 HTTPS" v-if="wizardForm.protocol === 'http'">
+            <el-form-item :label="t('common.app.rules.wizard.enableHttps')" v-if="wizardForm.protocol === 'http'">
               <el-switch v-model="wizardForm.enable_tls" :disabled="isCurrentRuleLocked" />
               <span class="form-tip-inline">
-                <span v-if="isCurrentRuleLocked" class="port-warning">证书申请中，暂不能修改 TLS 设置</span>
-                <span v-else>启用 TLS 加密传输</span>
+                <span v-if="isCurrentRuleLocked" class="port-warning">{{ t('common.app.rules.wizard.certJobTlsLockedHint') }}</span>
+                <span v-else>{{ t('common.app.rules.wizard.enableTlsTransport') }}</span>
               </span>
             </el-form-item>
 
-            <el-form-item label="描述">
-              <el-input v-model="wizardForm.description" type="textarea" :rows="3" placeholder="可选填写，便于理解规则用途" maxlength="300" show-word-limit class="description-input" />
+            <el-form-item :label="t('common.app.rules.common.description')">
+              <el-input v-model="wizardForm.description" type="textarea" :rows="3" :placeholder="t('common.app.rules.wizard.descHint')" maxlength="300" show-word-limit class="description-input" />
             </el-form-item>
 
-            <el-form-item label="访问日志" v-if="wizardForm.protocol === 'http'">
+            <el-form-item :label="t('common.app.rules.common.accessLog')" v-if="wizardForm.protocol === 'http'">
               <el-switch v-model="wizardForm.log_enabled" />
-              <span class="form-tip-inline">开启后记录该规则的访问日志到 /app/logs/rules/ 目录</span>
+              <span class="form-tip-inline">{{ t('common.app.rules.wizard.accessLogHint') }}</span>
             </el-form-item>
           </el-form>
         </div>
@@ -481,40 +481,40 @@
         <!-- Step 1: TLS 配置 (仅当启用 HTTPS 时显示) -->
         <div v-show="currentStep === WIZARD_STEP.TLS" class="step-content">
           <div v-if="tlsDetailError && wizardForm.tls_source === 'manual'" class="info-note-bar">
-            <span class="info-note-desc">证书详情加载失败：手动 TLS 配置可能不完整，已阻止进入下一步与保存。</span>
-            <el-button size="small" type="primary" plain :loading="tlsDetailLoading" @click="retryTlsDetail">重新加载</el-button>
+            <span class="info-note-desc">{{ t('common.app.rules.wizard.certDetailManualBlockNote') }}</span>
+            <el-button size="small" type="primary" plain :loading="tlsDetailLoading" @click="retryTlsDetail">{{ t('common.app.rules.cfg.reload') }}</el-button>
           </div>
           <el-form :model="wizardForm" label-width="100px" v-if="wizardForm.enable_tls && wizardForm.protocol === 'http'" :disabled="saving">
-            <el-form-item label="证书来源" for="radio---1">
+            <el-form-item :label="t('common.app.rules.wizard.certSource')" for="radio---1">
               <input type="text" id="radio---1" aria-hidden="true" tabindex="-1" autocomplete="off" style="display:none">
-              <el-radio-group v-model="wizardForm.tls_source" :disabled="isCurrentRuleLocked" aria-label="证书来源">
-                <el-radio value="manual">手动上传</el-radio>
-                <el-radio value="acme_dns">ACME + DNS 自动</el-radio>
+              <el-radio-group v-model="wizardForm.tls_source" :disabled="isCurrentRuleLocked" :aria-label="t('common.app.rules.wizard.certSource')">
+                <el-radio value="manual">{{ t('common.app.rules.wizard.manualUpload') }}</el-radio>
+                <el-radio value="acme_dns">{{ t('common.app.rules.wizard.acmeDnsAuto') }}</el-radio>
               </el-radio-group>
-              <div v-if="isCurrentRuleLocked" class="form-tip-line port-warning">证书申请中，暂不能修改证书来源</div>
+              <div v-if="isCurrentRuleLocked" class="form-tip-line port-warning">{{ t('common.app.rules.wizard.certJobSourceLockedHint') }}</div>
             </el-form-item>
             <template v-if="wizardForm.tls_source === 'acme_dns'">
-              <el-form-item label="DNS 配置">
-                <el-select v-model="wizardForm.acme_config_id" placeholder="选择 DNS 提供商配置" style="width: 100%;">
+              <el-form-item :label="t('common.app.rules.wizard.dnsConfig')">
+                <el-select v-model="wizardForm.acme_config_id" :placeholder="t('common.app.rules.wizard.dnsConfigPlaceholder')" style="width: 100%;">
                   <!-- 口径与下方 CA 下拉同源：启用项 ∪ 当前值（已禁用仅回显、置 disabled
                        不可新选；后端写侧要求 enabled=1，选禁用项保存必 400） -->
                   <el-option v-for="cfg in wizardCertConfigOptions" :key="cfg.id" :label="referencedOptionLabel(cfg)" :value="cfg.id" :disabled="!cfg.enabled" />
                 </el-select>
-                <div v-if="certConfigsLoadError" class="form-tip-line port-warning">DNS 提供商配置加载失败（下拉为空≠未配置）——请经页面顶部横幅重试后再编辑</div>
-                <div v-else class="form-tip-line">请先在「系统设置 / 免费证书」中添加 DNS 提供商配置</div>
+                <div v-if="certConfigsLoadError" class="form-tip-line port-warning">{{ t('common.app.rules.msgs.dnsConfigLoadFail') }}</div>
+                <div v-else class="form-tip-line">{{ t('common.app.rules.wizard.dnsProviderMissingHint') }}</div>
               </el-form-item>
-              <el-form-item label="CA 提供商">
-                <el-select v-model="wizardForm.ca_provider_id" placeholder="系统默认" clearable style="width: 100%">
-                  <el-option label="系统默认" :value="0" />
+              <el-form-item :label="t('common.app.rules.wizard.caProvider')">
+                <el-select v-model="wizardForm.ca_provider_id" :placeholder="t('common.app.rules.common.systemDefault')" clearable style="width: 100%">
+                  <el-option :label="t('common.app.rules.common.systemDefault')" :value="0" />
                   <!-- 选项=启用 ∪ 当前值（已禁用项仅回显、置 disabled 不可新选；
                        口径单源 utils/caProviderOptions） -->
                   <el-option v-for="p in wizardCAProviderOptions" :key="p.id" :label="referencedOptionLabel(p)" :value="p.id" :disabled="!p.enabled" />
                 </el-select>
-                <div class="form-tip-line">选择自动签发证书使用的 CA 提供商，留空或「系统默认」将跟随全局默认设置</div>
+                <div class="form-tip-line">{{ t('common.app.rules.wizard.caProviderHint') }}</div>
               </el-form-item>
             </template>
             <template v-else>
-              <el-form-item label="证书 (PEM)">
+              <el-form-item :label="t('common.app.rules.wizard.certificatePem')">
                 <div class="cert-input-wrapper">
                   <el-input 
                     v-model="wizardForm.tls_cert" 
@@ -525,22 +525,22 @@
                     @blur="validateCertificate"
                   />
                   <el-button size="small" class="paste-btn" @click="pasteFromFile('cert')">
-                    <el-icon><Document /></el-icon>从文件粘贴
+                    <el-icon><Document /></el-icon>{{ t('common.app.rules.wizard.pasteFromFile') }}
                   </el-button>
                 </div>
               </el-form-item>
-              <el-form-item label="私钥 (KEY)">
+              <el-form-item :label="t('common.app.rules.wizard.privateKey')">
                 <div class="cert-input-wrapper">
                   <el-input 
                     v-model="wizardForm.tls_key" 
                     type="textarea" 
                     :rows="8" 
-                    :placeholder="wizardForm.tlsKeySet && !wizardForm.tls_key.trim() ? '已配置（私钥已隐藏，粘贴新私钥可更换）' : '-----BEGIN PRIVATE KEY-----...'"
+                    :placeholder="wizardForm.tlsKeySet && !wizardForm.tls_key.trim() ? t('common.app.rules.wizard.keyHiddenPlaceholder') : '-----BEGIN PRIVATE KEY-----...'"
                     class="cert-textarea"
                     @blur="validateCertificate"
                   />
                   <el-button size="small" class="paste-btn" @click="pasteFromFile('key')">
-                    <el-icon><Document /></el-icon>从文件粘贴
+                    <el-icon><Document /></el-icon>{{ t('common.app.rules.wizard.pasteFromFile') }}
                   </el-button>
                 </div>
               </el-form-item>
@@ -548,16 +548,16 @@
               <!-- Certificate Info Display -->
               <div v-if="certInfo.valid || certInfo.warning || certInfo.error" class="cert-info-container">
                 <div v-if="certInfo.valid" class="info-note-bar cert-info-alert">
-                  <span class="info-note-desc">{{ certInfo.warning ? '证书验证通过（有警告）' : '证书验证通过' }}</span>
-                  <span class="info-note-sub">域名: {{ certInfo.domain }} | 过期时间: {{ certInfo.expiryDate }} <span v-if="certInfo.daysUntilExpiry <= 30" class="cert-expiry-warning">(剩余 {{ certInfo.daysUntilExpiry }} 天)</span><span v-else class="cert-expiry-normal">(剩余 {{ certInfo.daysUntilExpiry }} 天)</span></span>
+                  <span class="info-note-desc">{{ certInfo.warning ? t('common.app.rules.wizard.certVerifyPassedWarned') : t('common.app.rules.wizard.certVerifyPassed') }}</span>
+                  <span class="info-note-sub">{{ t('common.app.rules.wizard.certDomainPrefix') }}{{ certInfo.domain }} | {{ t('common.app.rules.wizard.expiryPrefix') }}{{ certInfo.expiryDate }} <span v-if="certInfo.daysUntilExpiry <= 30" class="cert-expiry-warning">{{ t('common.app.rules.wizard.daysLeftParen', { n: certInfo.daysUntilExpiry }) }}</span><span v-else class="cert-expiry-normal">(剩余 {{ certInfo.daysUntilExpiry }} 天)</span></span>
                   <span v-if="certInfo.warning" class="info-note-sub">⚠️ {{ certInfo.warning }}</span>
                 </div>
                 <div v-if="certInfo.error" class="info-note-bar cert-info-alert"><span class="info-note-desc">{{ certInfo.error }}</span></div>
               </div>
             </template>
-            <el-form-item label="HTTP 重定向">
+            <el-form-item :label="t('common.app.rules.wizard.httpRedirect')">
               <el-switch v-model="wizardForm.tls_http_redirect" />
-              <span class="form-tip-inline">将 HTTP 请求自动重定向到 HTTPS</span>
+              <span class="form-tip-inline">{{ t('common.app.rules.wizard.httpRedirectHint') }}</span>
             </el-form-item>
           </el-form>
           <!-- 原「请先在基本配置中启用 HTTPS」说明框已删除：
@@ -570,35 +570,35 @@
         <div v-show="currentStep === WIZARD_STEP.UPSTREAMS" class="step-content">
           <el-form :model="wizardForm" label-width="100px" :disabled="saving">
             <div class="upstream-header">
-              <span class="section-title">上游服务器列表</span>
+              <span class="section-title">{{ t('common.app.rules.wizard.upstreamListTitle') }}</span>
               <el-button size="small" type="primary" @click="addUpstream" :disabled="wizardForm.upstreams.length >= MAX_UPSTREAM_ROWS || (wizardForm.dynamic_dns && wizardForm.upstreams.length >= 1)">
-                <el-icon><Plus /></el-icon>添加上游
+                <el-icon><Plus /></el-icon>{{ t('common.app.rules.wizard.addUpstream') }}
               </el-button>
             </div>
-            <div v-if="wizardForm.dynamic_dns" class="info-note-bar"><span class="info-note-desc">动态上游模式下仅需一个上游条目，DNS 将动态解析出多个 IP</span></div>
+            <div v-if="wizardForm.dynamic_dns" class="info-note-bar"><span class="info-note-desc">{{ t('common.app.rules.wizard.dynamicUpstreamHint') }}</span></div>
 
             <el-table :data="wizardForm.upstreams" border class="upstream-table" :fit="true">
-              <el-table-column label="主机地址 *" min-width="150">
+              <el-table-column :label="t('common.app.rules.wizard.hostAddressRequired')" min-width="150">
                 <template #default="{ row, $index }">
                   <el-input 
                     v-model="row.host" 
-                    placeholder="IP 或域名" 
+                    :placeholder="t('common.app.rules.common.ipOrDomain')" 
                     size="small" 
                     class="upstream-input"
-                    :aria-label="`上游第 ${$index + 1} 行主机地址`"
+                    :aria-label="t('common.app.rules.wizard.upstreamRowHost', { rowNumber: $index + 1 })"
                     :class="{ 'is-error': upstreamRowInvalid(row as UpstreamInput, $index) }"
                     @blur="upstreamTouched[$index] = true"
                   />
                 </template>
               </el-table-column>
-              <el-table-column label="端口" width="96">
+              <el-table-column :label="t('common.app.rules.common.port')" width="96">
                 <template #default="{ row, $index }">
-                  <el-input-number v-model="row.port" :min="1" :max="65535" size="small" controls-position="right" class="upstream-input-small" :class="{ 'is-error': upstreamRowMissingPort(row as UpstreamInput, $index) }" :aria-label="`上游第 ${$index + 1} 行端口`" @blur="upstreamTouched[$index] = true" />
+                  <el-input-number v-model="row.port" :min="1" :max="65535" size="small" controls-position="right" class="upstream-input-small" :class="{ 'is-error': upstreamRowMissingPort(row as UpstreamInput, $index) }" :aria-label="t('common.app.rules.wizard.upstreamRowPort', { rowNumber: $index + 1 })" @blur="upstreamTouched[$index] = true" />
                 </template>
               </el-table-column>
-              <el-table-column label="协议" width="88">
+              <el-table-column :label="t('common.app.rules.common.protocol')" width="88">
                 <template #default="{ row, $index }">
-                  <el-select v-model="row.protocol" size="small" placeholder="协议" :aria-label="`上游第 ${$index + 1} 行协议`">
+                  <el-select v-model="row.protocol" size="small" :placeholder="t('common.app.rules.common.protocol')" :aria-label="t('common.app.rules.wizard.upstreamRowProtocol', { rowNumber: $index + 1 })">
                     <template v-if="wizardForm.protocol === 'tcp'">
                       <el-option value="tcp" label="TCP" />
                       <el-option value="tls" label="TLS" />
@@ -612,16 +612,16 @@
               </el-table-column>
               <el-table-column min-width="124" v-if="wizardForm.protocol === 'http'">
                 <template #header>
-                  回源域名<FieldHelpIcon content="该上游独立的回源 Host 头与 HTTPS SNI（主机名，不带端口；端口沿用左侧端口列配置）。留空=不覆盖（Host 跟随客户端请求或上游地址）" />
+                  {{ t('common.app.rules.wizard.originHostDomain') }}<FieldHelpIcon :content="t('common.app.rules.wizard.hostHeaderHint')" />
                 </template>
                 <template #default="{ row, $index }">
-                  <el-tooltip placement="top" :disabled="!wizardForm.dynamic_dns" content="动态上游模式不支持回源域名（改写 Host 请经 API/MCP 设置规则级 host_header）">
+                  <el-tooltip placement="top" :disabled="!wizardForm.dynamic_dns" :content="t('common.app.rules.msgs.duHostHeaderUnsupported')">
                     <el-input
                       v-model="row.origin_domain"
-                      placeholder="留空=不覆盖"
+                      :placeholder="t('common.app.rules.wizard.hostHeaderLeaveEmpty')"
                       size="small"
                       class="upstream-input"
-                      :aria-label="`上游第 ${$index + 1} 行回源域名`"
+                      :aria-label="t('common.app.rules.wizard.upstreamRowOriginDomain', { rowNumber: $index + 1 })"
                       :disabled="wizardForm.dynamic_dns"
                     />
                   </el-tooltip>
@@ -629,32 +629,32 @@
               </el-table-column>
               <el-table-column width="80">
                 <template #header>
-                  权重 %<FieldHelpIcon content="数字越大，分配到的请求越多；权重相同时即为普通轮询。至少需要添加一个上游服务器。" />
+                  {{ t('common.app.rules.paths.weightPercent') }}<FieldHelpIcon :content="t('common.app.rules.wizard.weightHint')" />
                 </template>
                 <template #default="{ row, $index }">
-                  <el-input-number v-model="row.weight" :min="1" :max="100" size="small" controls-position="right" class="upstream-input-small" :aria-label="`上游第 ${$index + 1} 行权重（%）`" :disabled="!row.enabled" @change="onWeightChange($index)" />
+                  <el-input-number v-model="row.weight" :min="1" :max="100" size="small" controls-position="right" class="upstream-input-small" :aria-label="t('common.app.rules.wizard.upstreamRowWeight', { rowNumber: $index + 1 })" :disabled="!row.enabled" @change="onWeightChange($index)" />
                 </template>
               </el-table-column>
               <el-table-column width="104">
                 <template #header>
-                  {{ wizardForm.protocol === 'tcp' ? '最大连接' : '最大请求数' }}<FieldHelpIcon :content="wizardForm.protocol === 'tcp'
-                    ? '该上游并发连接数上限（HTTP 规则映射为 reverse_proxy 每上游并发请求数 max_requests；TCP 规则映射为 caddy-l4 max_connections），0 为不限制'
-                    : '该上游同时处理的请求数达到上限后判定不可用并移出负载，0 为不限制——HTTP 反代无逐上游并发连接限制'" />
+                  {{ wizardForm.protocol === 'tcp' ? t('common.app.rules.wizard.maxConnections') : t('common.app.rules.wizard.maxRequests') }}<FieldHelpIcon :content="wizardForm.protocol === 'tcp'
+                    ? t('common.app.rules.wizard.maxConnTcpHint')
+                    : t('common.app.rules.wizard.maxRequestsHttpHint')" />
                 </template>
                 <template #default="{ row, $index }">
-                  <el-tooltip placement="top" :disabled="!wizardForm.dynamic_dns" :content="`动态上游模式下${wizardForm.protocol === 'tcp' ? '最大连接' : '最大请求数'}不生效`">
-                    <el-input-number v-model="row.max_connections" :min="RULE_NUMERIC_LIMITS.maxConnectionsMin" size="small" controls-position="right" class="upstream-input-small" :aria-label="`上游第 ${$index + 1} 行${wizardForm.protocol === 'tcp' ? '最大连接' : '最大请求数'}`" :disabled="wizardForm.dynamic_dns" />
+                  <el-tooltip placement="top" :disabled="!wizardForm.dynamic_dns" :content="t('common.app.rules.wizard.duLimitNA', { field: wizardForm.protocol === 'tcp' ? t('common.app.rules.wizard.maxConnections') : t('common.app.rules.wizard.maxRequests') })">
+                    <el-input-number v-model="row.max_connections" :min="RULE_NUMERIC_LIMITS.maxConnectionsMin" size="small" controls-position="right" class="upstream-input-small" :aria-label="t('common.app.rules.wizard.upRowField', { row: $index + 1, field: wizardForm.protocol === 'tcp' ? t('common.app.rules.wizard.maxConnections') : t('common.app.rules.wizard.maxRequests') })" :disabled="wizardForm.dynamic_dns" />
                   </el-tooltip>
                 </template>
               </el-table-column>
-              <el-table-column label="启用" width="52" align="center">
+              <el-table-column :label="t('common.app.rules.list.enabledCol')" width="52" align="center">
                 <template #default="{ row, $index }">
-                  <el-switch v-model="row.enabled" size="small" :aria-label="`上游第 ${$index + 1} 行启用`" @change="onWeightChange($index)" />
+                  <el-switch v-model="row.enabled" size="small" :aria-label="t('common.app.rules.wizard.upstreamRowEnable', { rowNumber: $index + 1 })" @change="onWeightChange($index)" />
                 </template>
               </el-table-column>
               <el-table-column width="48" align="center">
                 <template #default="{ $index }">
-                  <el-button type="danger" link size="small" :aria-label="`删除上游第 ${$index + 1} 行`" @click="removeUpstream($index)">
+                  <el-button type="danger" link size="small" :aria-label="t('common.app.rules.wizard.deleteUpstreamRow', { rowNumber: $index + 1 })" @click="removeUpstream($index)">
                     <el-icon><Delete /></el-icon>
                   </el-button>
                 </template>
@@ -665,87 +665,87 @@
             </div>
 
             <template v-if="wizardForm.protocol === 'http'">
-              <el-divider content-position="left" class="compact-divider">路由与后端兼容</el-divider>
-              <el-form-item label="自定义路由">
+              <el-divider content-position="left" class="compact-divider">{{ t('common.app.rules.wizard.routeBackendCompat') }}</el-divider>
+              <el-form-item :label="t('common.app.rules.common.customRoutes')">
                 <el-switch v-model="wizardForm.custom_routes_enabled" @change="onCustomRoutesToggle" />
-                <span class="form-tip-inline">开启后在下一步配置按路径转发规则</span>
+                <span class="form-tip-inline">{{ t('common.app.rules.wizard.customRoutesHint') }}</span>
               </el-form-item>
               <!-- NTLM 兼容（2026-10-12 用户定稿）：与自定义路由同区（后端兼容域）；
                    开启后以 NTLM 接管形态锁定 7 字段（清单见 onNtlmToggle 弹框） -->
               <el-form-item>
-                <template #label><span>NTLM 兼容<FieldHelpIcon popper-class="ntlm-help-popper">
+                <template #label><span>{{ t('common.app.rules.wizard.ntlmCompat') }}<FieldHelpIcon popper-class="ntlm-help-popper">
                     <template #content>
-                      <div class="ntlm-help-line">适用场景：Exchange / AD / 旧版 IIS 等使用 NTLM / 协商认证的后端</div>
-                      <div class="ntlm-help-line">已知限制：</div>
-                      <div class="ntlm-help-line">· 若后端协商到 Kerberos，建议不改写 Host</div>
-                      <div class="ntlm-help-line">· 入口 HTTP/2 由客户端自动降级，不受本开关控制</div>
-                      <div class="ntlm-help-line">· 接管形态：负载策略锁定 Cookie 会话保持；请求重试禁用；响应立即透传；Keepalive 300s + 强制 HTTP/1.1；主动健康检查关闭（被动仍在役）</div>
-                      <div class="ntlm-help-line">· 与认证网关同时启用时形成双重认证：未认证请求先被网关拦截（厚客户端如 Outlook 无法完成网页登录），NTLM 协商仅对已通过网关认证的流量生效</div>
-                      <div class="ntlm-help-line">· 禁止与「HTTPS 上游 + 上游独立域名（origin_domain）」组合：该组合后端将拒绝（400）——该组合下连接走 TLS 直连通道，NTLM 长连接亲和失效且连接不回收</div>
+                      <div class="ntlm-help-line">{{ t('common.app.rules.wizard.ntlmSceneHint') }}</div>
+                      <div class="ntlm-help-line">{{ t('common.app.rules.wizard.ntlmKnownLimits') }}</div>
+                      <div class="ntlm-help-line">{{ t('common.app.rules.wizard.ntlmKerberosHint') }}</div>
+                      <div class="ntlm-help-line">{{ t('common.app.rules.wizard.ntlmHttp2Hint') }}</div>
+                      <div class="ntlm-help-line">{{ t('common.app.rules.wizard.ntlmTakeoverHint') }}</div>
+                      <div class="ntlm-help-line">{{ t('common.app.rules.wizard.ntlmDoubleAuthHint') }}</div>
+                      <div class="ntlm-help-line">{{ t('common.app.rules.wizard.ntlmHttpsOriginHint') }}</div>
                     </template>
                   </FieldHelpIcon></span>
                 </template>
                 <div class="ntlm-switch-control">
                   <el-switch :model-value="ntlmOn" @change="onNtlmToggle" />
-                  <span class="form-tip-inline">为 NTLM / 协商认证后端锁定长连接亲和的代理形态</span>
+                  <span class="form-tip-inline">{{ t('common.app.rules.wizard.ntlmHint') }}</span>
                 </div>
               </el-form-item>
 
               <!-- 认证网关（forward_auth，NTLM 同款开关形态）：开启后全部请求
                    先经网关校验；配置项开启后展示（路径/身份头折叠在高级项） -->
               <el-form-item>
-                <template #label><span>认证网关<FieldHelpIcon popper-class="fa-help-popper">
+                <template #label><span>{{ t('common.app.rules.wizard.forwardAuthLabel') }}<FieldHelpIcon popper-class="fa-help-popper">
                     <template #content>
-                      <div class="ntlm-help-line">适用场景：Authelia / Authentik / Tailscale 等外部认证网关（forward auth）</div>
-                      <div class="ntlm-help-line">已知注意事项：</div>
-                      <div class="ntlm-help-line">· 认证子请求不经过本规则的 WAF/审计/限流</div>
-                      <div class="ntlm-help-line">· 与 Host 改写同用时，网关收到的 Host 为改写前原值</div>
-                      <div class="ntlm-help-line">· 受信代理场景网关看到的是真实客户端 IP（X-Forwarded-For）</div>
+                      <div class="ntlm-help-line">{{ t('common.app.rules.wizard.forwardAuthSceneHint') }}</div>
+                      <div class="ntlm-help-line">{{ t('common.app.rules.wizard.faKnownNotes') }}</div>
+                      <div class="ntlm-help-line">{{ t('common.app.rules.wizard.authGatewaySubrequestHint') }}</div>
+                      <div class="ntlm-help-line">{{ t('common.app.rules.wizard.ntlmHostRewriteHint') }}</div>
+                      <div class="ntlm-help-line">{{ t('common.app.rules.wizard.authGatewayTrustedProxyHint') }}</div>
                     </template>
                   </FieldHelpIcon></span>
                 </template>
                 <div class="ntlm-switch-control">
                   <el-switch :model-value="forwardAuthOn" @change="onForwardAuthToggle" />
-                  <span class="form-tip-inline">全部请求先经外部认证网关校验，未认证返回网关响应（通常跳登录页）</span>
+                  <span class="form-tip-inline">{{ t('common.app.rules.wizard.authGatewayHint') }}</span>
                 </div>
               </el-form-item>
 
               <template v-if="forwardAuthOn">
-                <el-form-item label="网关地址" required>
+                <el-form-item :label="t('common.app.rules.wizard.gatewayAddress')" required>
                   <el-input
                     v-model="wizardForm.forward_auth_upstream"
-                    placeholder="http://authelia:9091 或 https://auth.example.test"
+                    :placeholder="t('common.app.rules.wizard.forwardAuthPlaceholder')"
                     clearable
                     style="max-width: 480px;"
                   />
-                  <span class="form-tip-inline">http(s)://host:port；认证通过后自动注入身份头转发后端</span>
+                  <span class="form-tip-inline">{{ t('common.app.rules.wizard.authGatewayAddrHint') }}</span>
                 </el-form-item>
-                <el-form-item label="认证路径">
+                <el-form-item :label="t('common.app.rules.wizard.authPath')">
                   <el-input v-model="wizardForm.forward_auth_uri" style="max-width: 480px;" />
-                  <span class="form-tip-inline">网关校验端点路径，默认 /api/authz/forward-auth</span>
+                  <span class="form-tip-inline">{{ t('common.app.rules.wizard.forwardAuthPathHint') }}</span>
                 </el-form-item>
                 <el-collapse class="fa-advanced-collapse">
-                  <el-collapse-item title="高级：身份头清单" name="headers">
+                  <el-collapse-item :title="t('common.app.rules.wizard.identityHeadersAdvanced')" name="headers">
                     <el-input
                       v-model="wizardForm.forward_auth_copy_headers"
                       placeholder="Remote-User,Remote-Groups,Remote-Email,Remote-Name"
                       style="max-width: 480px;"
                     />
-                    <span class="form-tip-inline">逗号分隔，最多 16 个；认证通过后从网关响应拷入原请求转发后端</span>
+                    <span class="form-tip-inline">{{ t('common.app.rules.wizard.forwardAuthHeadersHint') }}</span>
                   </el-collapse-item>
                 </el-collapse>
               </template>
             </template>
 
-            <el-divider content-position="left" class="compact-divider">负载策略</el-divider>
+            <el-divider content-position="left" class="compact-divider">{{ t('common.app.rules.common.lbPolicy') }}</el-divider>
 
-            <div class="strategy-cards" role="radiogroup" aria-label="负载策略">
+            <div class="strategy-cards" role="radiogroup" :aria-label="t('common.app.rules.common.lbPolicy')">
               <el-tooltip
                 v-for="card in strategyCardOptions"
                 :key="card.value"
                 placement="top"
                 :disabled="!ntlmOn || card.value === 'cookie'"
-                content="NTLM 模式下已锁定"
+                :content="t('common.app.rules.wizard.ntlmLocked')"
               >
                 <div
                   class="strategy-card"
@@ -776,29 +776,29 @@
             </div>
 
 
-            <el-divider content-position="left" class="compact-divider">健康检查</el-divider>
+            <el-divider content-position="left" class="compact-divider">{{ t('common.app.rules.wizard.healthCheck') }}</el-divider>
 
             <!-- 三个健康阈值控件均不设上限：后端只校验 ≥1（handlers.go），
                  带外合法值（API/MCP 写入 20）不得在编辑触碰控件时被静默夹到 10。 -->
-            <el-form-item label="失败阈值">
+            <el-form-item :label="t('common.app.rules.wizard.failThreshold')">
               <el-input-number v-model="wizardForm.health_check_unhealthy_threshold" :min="1" controls-position="right" style="width: 120px;" />
-              <span class="form-tip-inline">次失败后标记为不健康（被动计数与主动探测共用）</span>
+              <span class="form-tip-inline">{{ t('common.app.rules.wizard.unhealthyThresholdHint') }}</span>
             </el-form-item>
 
 
-            <el-form-item label="检查间隔">
+            <el-form-item :label="t('common.app.rules.wizard.checkInterval')">
               <el-input-number v-model="wizardForm.health_check_interval" :min="RULE_NUMERIC_LIMITS.healthCheckIntervalMin" controls-position="right" style="width: 120px;" />
-              <span class="form-tip-inline">秒，主动探测间隔；被动失败记忆窗口为其 3 倍</span>
+              <span class="form-tip-inline">{{ t('common.app.rules.wizard.checkIntervalHint') }}</span>
             </el-form-item>
 
             <template v-if="wizardForm.protocol === 'http'">
-              <el-form-item label="主动检查">
+              <el-form-item :label="t('common.app.rules.wizard.activeCheck')">
                 <div class="active-check-control">
                   <el-switch v-model="wizardForm.enable_active_health_check" :disabled="ntlmOn" />
                   <TakeoverBadge v-if="ntlmOn" />
                   <span class="form-tip-inline">{{ ntlmOn
-                    ? '已关闭：NTLM 后端探测返回 401 会被误判摘除；被动健康检查仍在役'
-                    : (wizardForm.enable_active_health_check ? '周期探测，异常节点持续摘除直至恢复（推荐）' : '仅被动熔断，异常节点会周期恢复并重新接收流量') }}</span>
+                    ? t('common.app.rules.wizard.activeCheckNtlmOffHint')
+                    : (wizardForm.enable_active_health_check ? t('common.app.rules.wizard.activeCheckHint') : t('common.app.rules.wizard.passiveOnlyHint')) }}</span>
                 </div>
               </el-form-item>
 
@@ -806,49 +806,49 @@
                    逐上游回源域名（引擎硬墙：probe 不走处理链、replacer 无提供者），
                    统一 Host 探测可能误摘按域名严格校验的后端节点 -->
               <div v-if="mixedOriginActiveCheckWarn" class="info-note-bar">
-                <span class="info-note-desc">已配置逐上游回源域名：主动健康检查不感知回源域名，探测请求的 Host 将统一使用「健康检查域名」（留空则跟随后端域名（若配置），否则用上游地址）——按域名严格校验 Host 的后端可能被误摘为不健康。建议设置一个所有后端都接受的健康检查域名，或关闭主动检查改用被动熔断</span>
+                <span class="info-note-desc">{{ t('common.app.rules.wizard.mixedOriginCheckHint') }}</span>
               </div>
 
               <template v-if="wizardForm.enable_active_health_check">
-                <el-form-item label="主动探测超时">
+                <el-form-item :label="t('common.app.rules.wizard.probeTimeout')">
                   <el-input-number v-model="wizardForm.health_check_timeout" :min="RULE_NUMERIC_LIMITS.healthCheckTimeoutMin" controls-position="right" style="width: 120px;" />
-                  <span class="form-tip-inline">秒，仅主动探测单次超时；被动熔断不使用该值</span>
+                  <span class="form-tip-inline">{{ t('common.app.rules.wizard.probeTimeoutSuffix') }}</span>
                 </el-form-item>
-                <el-form-item label="检查路径">
-                  <el-input v-model="wizardForm.health_check_path" placeholder="默认 /" style="width: 180px;" />
-                  <span class="form-tip-inline">留空探测 /，需返回 2xx 否则判为异常</span>
+                <el-form-item :label="t('common.app.rules.wizard.checkPath')">
+                  <el-input v-model="wizardForm.health_check_path" :placeholder="t('common.app.rules.paths.defaultSlash')" style="width: 180px;" />
+                  <span class="form-tip-inline">{{ t('common.app.rules.wizard.checkPathHint') }}</span>
                 </el-form-item>
-                <el-form-item label="健康检查域名">
-                  <el-input v-model="wizardForm.health_check_host" placeholder="留空=跟随后端域名（若配置），否则用上游地址" style="width: 220px;" />
-                  <span class="form-tip-inline">探测请求的 Host 头；HTTPS 上游的探测不携带独立 SNI（回源域名仅作用于代理流量）</span>
+                <el-form-item :label="t('common.app.rules.wizard.healthCheckDomain')">
+                  <el-input v-model="wizardForm.health_check_host" :placeholder="t('common.app.rules.wizard.healthCheckDomainHint')" style="width: 220px;" />
+                  <span class="form-tip-inline">{{ t('common.app.rules.wizard.checkHostHint') }}</span>
                 </el-form-item>
-                <el-form-item label="恢复阈值">
+                <el-form-item :label="t('common.app.rules.wizard.recoverThreshold')">
                   <el-input-number v-model="wizardForm.health_check_healthy_threshold" :min="1" controls-position="right" style="width: 120px;" />
-                  <span class="form-tip-inline">次连续探测成功后恢复为健康</span>
+                  <span class="form-tip-inline">{{ t('common.app.rules.wizard.recoverSuffix') }}</span>
                 </el-form-item>
               </template>
             </template>
 
             <template v-if="wizardForm.protocol === 'tcp'">
-              <el-form-item label="主动检查">
+              <el-form-item :label="t('common.app.rules.wizard.activeCheck')">
                 <div class="active-check-control">
                   <el-switch v-model="wizardForm.enable_active_health_check" />
-                  <span class="form-tip-inline">{{ wizardForm.enable_active_health_check ? '周期探测上游端口，异常节点持续摘除直至恢复（推荐）' : '仅被动熔断，异常节点会周期恢复并重新接收流量' }}</span>
+                  <span class="form-tip-inline">{{ wizardForm.enable_active_health_check ? t('common.app.rules.wizard.upstreamProbeHint') : t('common.app.rules.wizard.passiveOnlyHint') }}</span>
                 </div>
               </el-form-item>
 
               <template v-if="wizardForm.enable_active_health_check">
-                <el-form-item label="主动探测超时">
+                <el-form-item :label="t('common.app.rules.wizard.probeTimeout')">
                   <el-input-number v-model="wizardForm.health_check_timeout" :min="RULE_NUMERIC_LIMITS.healthCheckTimeoutMin" controls-position="right" style="width: 120px;" />
-                  <span class="form-tip-inline">秒，仅主动探测单次超时；被动熔断不使用该值</span>
+                  <span class="form-tip-inline">{{ t('common.app.rules.wizard.probeTimeoutSuffix') }}</span>
                 </el-form-item>
-                <el-form-item label="检查端口">
+                <el-form-item :label="t('common.app.rules.wizard.checkPort')">
                   <el-input-number v-model="wizardForm.tcp_health_check_port" :min="0" :max="65535" controls-position="right" style="width: 120px;" />
-                  <span class="form-tip-inline">留空或 0 表示按各上游自身端口探测</span>
+                  <span class="form-tip-inline">{{ t('common.app.rules.wizard.checkPortHint') }}</span>
                 </el-form-item>
-                <el-form-item label="恢复阈值">
+                <el-form-item :label="t('common.app.rules.wizard.recoverThreshold')">
                   <el-input-number v-model="wizardForm.health_check_healthy_threshold" :min="1" controls-position="right" style="width: 120px;" />
-                  <span class="form-tip-inline">次连续探测成功后恢复为健康</span>
+                  <span class="form-tip-inline">{{ t('common.app.rules.wizard.recoverSuffix') }}</span>
                 </el-form-item>
               </template>
             </template>
@@ -864,218 +864,218 @@
         <div v-show="currentStep === WIZARD_STEP.ADVANCED" class="step-content">
           <el-form :model="wizardForm" label-width="130px" :disabled="saving">
             <template v-if="wizardForm.protocol === 'http'">
-              <el-divider content-position="left" class="compact-divider">DNS 服务器</el-divider>
+              <el-divider content-position="left" class="compact-divider">{{ t('common.app.rules.wizard.dnsServers') }}</el-divider>
 
-              <el-form-item label="启用 DNS">
+              <el-form-item :label="t('common.app.rules.wizard.enableDns')">
                 <div class="dynamic-dns-content">
                   <el-switch v-model="wizardForm.enable_dns_server" />
-                  <span class="form-tip-inline">启用后，DNS 配置会在转发时生效</span>
+                  <span class="form-tip-inline">{{ t('common.app.rules.wizard.dnsForwardHint') }}</span>
                 </div>
               </el-form-item>
 
               <template v-if="wizardForm.enable_dns_server">
-                <el-form-item label="DNS 服务器">
-                  <el-input v-model="wizardForm.dns_server" placeholder="8.8.8.8 或 8.8.8.8,1.1.1.1" style="width: 220px;" />
-                  <span class="form-tip-inline">多个地址用逗号分隔，按顺序尝试</span>
+                <el-form-item :label="t('common.app.rules.wizard.dnsServers')">
+                  <el-input v-model="wizardForm.dns_server" :placeholder="t('common.app.rules.wizard.dnsServersPlaceholder')" style="width: 220px;" />
+                  <span class="form-tip-inline">{{ t('common.app.rules.wizard.dnsServersHint') }}</span>
                 </el-form-item>
               </template>
 
-              <el-divider content-position="left" class="compact-divider">压缩配置</el-divider>
+              <el-divider content-position="left" class="compact-divider">{{ t('common.app.rules.wizard.compressionTitle') }}</el-divider>
 
-              <el-form-item label="启用压缩">
+              <el-form-item :label="t('common.app.rules.wizard.enableCompression')">
                 <div class="dynamic-dns-content">
                   <el-switch v-model="wizardForm.enable_compress" />
-                  <span class="form-tip-inline">启用后，响应将被压缩传输以减少带宽</span>
+                  <span class="form-tip-inline">{{ t('common.app.rules.wizard.compressionHint') }}</span>
                 </div>
               </el-form-item>
-              <el-form-item v-if="wizardForm.enable_compress" label="压缩方式" for="radio---2">
+              <el-form-item v-if="wizardForm.enable_compress" :label="t('common.app.rules.wizard.compressionType')" for="radio---2">
                 <input type="text" id="radio---2" aria-hidden="true" tabindex="-1" autocomplete="off" style="display:none">
-                <el-radio-group v-model="compressType" aria-label="压缩方式">
+                <el-radio-group v-model="compressType" :aria-label="t('common.app.rules.wizard.compressionType')">
                   <el-radio value="gzip">gzip</el-radio>
-                  <el-radio value="zstd">zstd（更快、压缩比更高，需客户端支持）</el-radio>
+                  <el-radio value="zstd">{{ t('common.app.rules.wizard.zstdOption') }}</el-radio>
                 </el-radio-group>
               </el-form-item>
 
-              <el-divider content-position="left" class="compact-divider">动态上游</el-divider>
+              <el-divider content-position="left" class="compact-divider">{{ t('common.app.rules.wizard.dynamicUpstreams') }}</el-divider>
 
-              <el-form-item label="启用动态上游">
+              <el-form-item :label="t('common.app.rules.wizard.enableDynamicUpstreams')">
                 <div class="dynamic-dns-content">
                   <el-switch v-model="wizardForm.dynamic_dns" @change="onDynamicDnsToggle" />
-                  <span class="form-tip-inline">启用后，通过 DNS A/AAAA 记录动态发现上游 IP 变化（仅使用第一个上游条目）</span>
+                  <span class="form-tip-inline">{{ t('common.app.rules.wizard.dynamicDnsHint') }}</span>
                 </div>
               </el-form-item>
 
               <template v-if="wizardForm.dynamic_dns">
-                <el-form-item label="协议栈">
-                  <el-checkbox-group v-model="wizardForm.dns_family" style="width: 200px;" aria-label="协议栈">
+                <el-form-item :label="t('common.app.rules.wizard.protocolStack')">
+                  <el-checkbox-group v-model="wizardForm.dns_family" style="width: 200px;" :aria-label="t('common.app.rules.wizard.protocolStack')">
                     <el-checkbox value="ipv4">IPv4</el-checkbox>
                     <el-checkbox value="ipv6">IPv6</el-checkbox>
                   </el-checkbox-group>
                 </el-form-item>
               </template>
 
-              <el-divider content-position="left" class="compact-divider">代理超时</el-divider>
-              <ProxyTimeoutFields :value="wizardForm" inherit-label="全局" :field-overrides="proxyTimeoutFieldOverrides" @update="updateRuleProxyTimeout" />
+              <el-divider content-position="left" class="compact-divider">{{ t('common.app.rules.wizard.proxyTimeout') }}</el-divider>
+              <ProxyTimeoutFields :value="wizardForm" :inherit-label="t('common.app.rules.common.global')" :field-overrides="proxyTimeoutFieldOverrides" @update="updateRuleProxyTimeout" />
 
               <!-- 上游兼容：通用强制 HTTP/1.1（https 上游禁 ALPN h2）；
                    NTLM 接管时由开关锁定为开，呈灰态 -->
-              <el-divider content-position="left" class="compact-divider">上游兼容</el-divider>
+              <el-divider content-position="left" class="compact-divider">{{ t('common.app.rules.wizard.upstreamCompatTitle') }}</el-divider>
 
-              <el-form-item label="强制 HTTP/1.1">
+              <el-form-item :label="t('common.app.rules.wizard.forceHttp11')">
                 <div class="active-check-control">
                   <el-switch v-model="wizardForm.upstream_force_http1" :active-value="1" :inactive-value="0" :disabled="ntlmOn" />
                   <TakeoverBadge v-if="ntlmOn" />
-                  <span class="form-tip-inline">后端不支持 HTTP/2 或使用 NTLM 认证时开启；仅对 https 上游生效</span>
+                  <span class="form-tip-inline">{{ t('common.app.rules.wizard.http2UpgradeHint') }}</span>
                 </div>
               </el-form-item>
             </template>
 
             <template v-if="wizardForm.protocol === 'http' || wizardForm.protocol === 'tcp'">
-              <el-divider content-position="left" class="compact-divider">连接重试</el-divider>
+              <el-divider content-position="left" class="compact-divider">{{ t('common.app.rules.wizard.connectRetry') }}</el-divider>
 
               <el-form-item>
-                <template #label>重试窗口
+                <template #label>{{ t('common.app.rules.wizard.retryWindow') }}
                 </template>
                 <el-input-number v-model="wizardForm.tcp_try_duration" :min="ntlmOn ? -1 : 0" :max="60000" controls-position="right" style="width: 120px;" :disabled="ntlmOn" />
                 <span class="form-tip-inline"><TakeoverBadge v-if="ntlmOn" />{{ ntlmOn
-                  ? '禁用重试（NTLM 模式锁定）'
+                  ? t('common.app.rules.wizard.retryWindowNtlmHint')
                   : (wizardForm.protocol === 'tcp'
-                      ? '毫秒，0 表示不重试；连接失败后在窗口期内尝试其他上游'
-                      : '毫秒，0 = 默认 5 秒窗口；失败后在窗口期内尝试其他上游') }}</span>
+                      ? t('common.app.rules.wizard.retryWindowTcpHint')
+                      : t('common.app.rules.wizard.retryWindowHint')) }}</span>
               </el-form-item>
 
-              <el-form-item label="重试间隔">
+              <el-form-item :label="t('common.app.rules.wizard.retryInterval')">
                 <el-input-number v-model="wizardForm.tcp_try_interval" :min="(wizardForm.tcp_try_duration || 0) > 0 ? 1 : 0" :max="RULE_NUMERIC_LIMITS.tcpTryIntervalMax" controls-position="right" style="width: 120px;" :disabled="ntlmOn || (wizardForm.tcp_try_duration || 0) <= 0" />
-                <span class="form-tip-inline"><TakeoverBadge v-if="ntlmOn" />{{ ntlmOn ? '重试已禁用，间隔不生效' : ((wizardForm.tcp_try_duration || 0) <= 0 ? '窗口未启用时间隔不生效' : '毫秒，每次重试间隔；窗口启用时必须 ≥1') }}</span>
+                <span class="form-tip-inline"><TakeoverBadge v-if="ntlmOn" />{{ ntlmOn ? t('common.app.rules.wizard.retryDisabledIntervalIgnoredHint') : ((wizardForm.tcp_try_duration || 0) <= 0 ? t('common.app.rules.wizard.retryIntervalOffHint') : t('common.app.rules.wizard.retryIntervalHint')) }}</span>
               </el-form-item>
 
               <el-form-item v-if="wizardForm.protocol === 'tcp'" label="PROXY V2">
                 <el-switch v-model="wizardForm.tcp_proxy_protocol" />
-                <span class="form-tip-inline">开启后向上游发送 PROXY v2 协议头传递真实客户端 IP，需后端支持；入站 PROXY 头仅在绑定了安全策略的 TCP 规则上解析，且仅来自系统设置受信代理网段内的来源时采信（用于事件归因与发往上游的源地址），其余来源按直连地址处理（直连客户端无需发送 PROXY 头）；未绑定安全策略的 TCP 规则不解析 PROXY 头，伪造头原样透传上游</span>
+                <span class="form-tip-inline">{{ t('common.app.rules.wizard.proxyV2Hint') }}</span>
               </el-form-item>
             </template>
 
-            <el-divider content-position="left" class="compact-divider">Caddy 全局覆盖</el-divider>
+            <el-divider content-position="left" class="compact-divider">{{ t('common.app.rules.wizard.caddyGlobalOverride') }}</el-divider>
 
-            <el-form-item label="请求体大小">
+            <el-form-item :label="t('common.app.rules.wizard.bodySize')">
               <el-input-number v-model="wizardForm.request_body_max_size_mb" :min="0" :max="1024" controls-position="right" style="width: 120px;" />
-              <span class="form-tip-inline">MB，0 = 全局默认；最大 1024，限制单个请求体的最大大小</span>
+              <span class="form-tip-inline">{{ t('common.app.rules.wizard.bodySizeHint') }}</span>
             </el-form-item>
 
-            <el-form-item label="Keepalive 超时">
+            <el-form-item :label="t('common.app.rules.wizard.keepaliveTimeout')">
               <!-- 不设上限：后端只拒绝负值（rules.go），带外合法值（API/MCP 写入 7200）
                    在编辑时不得被控件静默夹到 3600 —— 与 ProxyTimeoutFields 同口径。 -->
               <el-input-number v-model="wizardForm.upstream_keepalive_timeout" :min="0" controls-position="right" style="width: 120px;" :disabled="ntlmOn" />
-              <span class="form-tip-inline"><TakeoverBadge v-if="ntlmOn" />{{ ntlmOn ? 'NTLM 模式锁定 300s（关闭后恢复全局继承）' : '秒，0 = 全局默认；与上游服务器长连接的空闲超时' }}</span>
+              <span class="form-tip-inline"><TakeoverBadge v-if="ntlmOn" />{{ ntlmOn ? t('common.app.rules.wizard.ntlmLockedNote') : t('common.app.rules.wizard.keepaliveTimeoutHint') }}</span>
             </el-form-item>
           </el-form>
         </div>
 
         <!-- Step 5: 预览保存 -->
         <div v-show="currentStep === WIZARD_STEP.PREVIEW" class="step-content">
-          <el-descriptions title="配置预览" :column="1" border>
-            <el-descriptions-item label="规则名称">{{ wizardForm.name }}</el-descriptions-item>
-            <el-descriptions-item label="协议">
+          <el-descriptions :title="t('common.app.rules.cfg.previewTitle')" :column="1" border>
+            <el-descriptions-item :label="t('common.app.rules.common.ruleName')">{{ wizardForm.name }}</el-descriptions-item>
+            <el-descriptions-item :label="t('common.app.rules.common.protocol')">
               <el-tag :type="wizardForm.protocol === 'tcp' ? 'warning' : (wizardForm.enable_tls ? 'success' : 'primary')">
                 {{ wizardForm.protocol === 'tcp' ? 'TCP' : (wizardForm.enable_tls ? 'HTTPS' : 'HTTP') }}
               </el-tag>
             </el-descriptions-item>
-            <el-descriptions-item label="域名" v-if="wizardForm.protocol === 'http'">{{ wizardForm.domain || '-' }}</el-descriptions-item>
-            <el-descriptions-item label="监听端口">{{ wizardForm.listen_port }}</el-descriptions-item>
-            <el-descriptions-item label="负载策略">{{ getStrategyLabel(wizardForm.strategy) }}</el-descriptions-item>
-            <el-descriptions-item label="NTLM 兼容" v-if="wizardForm.protocol === 'http' && ntlmOn">
-              开启（Cookie 会话保持 · 禁用重试 · 立即透传 · Keepalive 300s · 强制 HTTP/1.1 · 主动健康检查关闭）
+            <el-descriptions-item :label="t('common.app.rules.common.domain')" v-if="wizardForm.protocol === 'http'">{{ wizardForm.domain || '-' }}</el-descriptions-item>
+            <el-descriptions-item :label="t('common.app.rules.wizard.listenPort')">{{ wizardForm.listen_port }}</el-descriptions-item>
+            <el-descriptions-item :label="t('common.app.rules.common.lbPolicy')">{{ getStrategyLabel(wizardForm.strategy) }}</el-descriptions-item>
+            <el-descriptions-item :label="t('common.app.rules.wizard.ntlmCompat')" v-if="wizardForm.protocol === 'http' && ntlmOn">
+              {{ t('common.app.rules.wizard.ntlmLockedSummary') }}
             </el-descriptions-item>
             <!-- 健康检查行取自 utils/healthCheckSummary 单源：主动分支曾只打印
                  path/interval/timeout（HTTP）或探测端口（TCP），失败/恢复阈值只在
                  被动分支出现——预览自称配置核对面，改过的阈值必须同处可见。 -->
-            <el-descriptions-item label="健康检查" v-if="wizardForm.protocol === 'http' || wizardForm.protocol === 'tcp'">
+            <el-descriptions-item :label="t('common.app.rules.wizard.healthCheck')" v-if="wizardForm.protocol === 'http' || wizardForm.protocol === 'tcp'">
               {{ healthCheckSummary(wizardForm) }}
             </el-descriptions-item>
-            <el-descriptions-item label="连接重试" v-if="wizardForm.protocol === 'http' || wizardForm.protocol === 'tcp'">
+            <el-descriptions-item :label="t('common.app.rules.wizard.connectRetry')" v-if="wizardForm.protocol === 'http' || wizardForm.protocol === 'tcp'">
               <template v-if="(wizardForm.tcp_try_duration || 0) > 0">
-                窗口 {{ wizardForm.tcp_try_duration || 0 }}ms / 间隔 {{ wizardForm.tcp_try_interval || 0 }}ms
+                {{ t('common.app.rules.wizard.windowInterval', { a: wizardForm.tcp_try_duration || 0, b: wizardForm.tcp_try_interval || 0 }) }}
               </template>
-              <template v-else-if="(wizardForm.tcp_try_duration || 0) < 0">禁用重试（NTLM 模式）</template>
-              <template v-else>{{ wizardForm.protocol === 'tcp' ? '禁用' : '默认 5s 窗口' }}</template>
+              <template v-else-if="(wizardForm.tcp_try_duration || 0) < 0">{{ t('common.app.rules.wizard.disableRetryNtlm') }}</template>
+              <template v-else>{{ wizardForm.protocol === 'tcp' ? t('common.app.rules.list.statusOff') : t('common.app.rules.wizard.defaultWindow5s') }}</template>
             </el-descriptions-item>
             <!-- 访问日志与连接重试都是高级步可编辑项：预览自称配置核对面，
                  漏项会让误配置只能保存后从单规则配置查看器发现 -->
-            <el-descriptions-item label="访问日志" v-if="wizardForm.protocol === 'http'">
-              {{ wizardForm.log_enabled ? '开启' : '关闭' }}
+            <el-descriptions-item :label="t('common.app.rules.common.accessLog')" v-if="wizardForm.protocol === 'http'">
+              {{ wizardForm.log_enabled ? t('common.app.rules.common.on') : t('common.app.rules.common.off') }}
             </el-descriptions-item>
             <!-- 高级步其余可编辑项同为「配置核对面」成员：口径取自单规则配置
                  查看器与代理超时字段单源（utils/proxyTimeouts.ts），预览不另造
                  第二份文案——漏项会让误配置只能保存后才发现。 -->
-            <el-descriptions-item label="请求体大小">
-              {{ (wizardForm.request_body_max_size_mb || 0) > 0 ? `${wizardForm.request_body_max_size_mb}MB` : '全局默认' }}
+            <el-descriptions-item :label="t('common.app.rules.wizard.bodySize')">
+              {{ (wizardForm.request_body_max_size_mb || 0) > 0 ? `${wizardForm.request_body_max_size_mb}MB` : t('common.app.rules.common.globalDefault') }}
             </el-descriptions-item>
-            <el-descriptions-item label="Keepalive 超时">
-              {{ (wizardForm.upstream_keepalive_timeout || 0) > 0 ? `${wizardForm.upstream_keepalive_timeout}s` : '全局默认' }}
+            <el-descriptions-item :label="t('common.app.rules.wizard.keepaliveTimeout')">
+              {{ (wizardForm.upstream_keepalive_timeout || 0) > 0 ? `${wizardForm.upstream_keepalive_timeout}s` : t('common.app.rules.common.globalDefault') }}
             </el-descriptions-item>
-            <el-descriptions-item label="代理超时" v-if="wizardForm.protocol === 'http'">
+            <el-descriptions-item :label="t('common.app.rules.wizard.proxyTimeout')" v-if="wizardForm.protocol === 'http'">
               {{ proxyTimeoutSummary(wizardForm) }}
             </el-descriptions-item>
-            <el-descriptions-item label="强制 HTTP/1.1" v-if="wizardForm.protocol === 'http'">
-              {{ wizardForm.upstream_force_http1 ? '开启' : '关闭' }}
+            <el-descriptions-item :label="t('common.app.rules.wizard.forceHttp11')" v-if="wizardForm.protocol === 'http'">
+              {{ wizardForm.upstream_force_http1 ? t('common.app.rules.common.on') : t('common.app.rules.common.off') }}
             </el-descriptions-item>
-            <el-descriptions-item label="PROXY 协议 v2" v-if="wizardForm.protocol === 'tcp'">
-              {{ wizardForm.tcp_proxy_protocol ? '启用' : '禁用' }}
+            <el-descriptions-item :label="t('common.app.rules.wizard.proxyProtocolV2')" v-if="wizardForm.protocol === 'tcp'">
+              {{ wizardForm.tcp_proxy_protocol ? t('common.app.rules.common.enable') : t('common.app.rules.common.disable') }}
             </el-descriptions-item>
-            <el-descriptions-item label="DNS 服务器" v-if="wizardForm.protocol === 'http'">
+            <el-descriptions-item :label="t('common.app.rules.wizard.dnsServers')" v-if="wizardForm.protocol === 'http'">
               <template v-if="wizardForm.enable_dns_server">
-                {{ wizardForm.dns_server || '默认' }}
+                {{ wizardForm.dns_server || t('common.app.rules.wizard.dnsServerDefault') }}
               </template>
-              <template v-else>禁用</template>
+              <template v-else>{{ t('common.app.rules.common.disable') }}</template>
             </el-descriptions-item>
-            <el-descriptions-item label="动态上游" v-if="wizardForm.protocol === 'http'">
+            <el-descriptions-item :label="t('common.app.rules.wizard.dynamicUpstreams')" v-if="wizardForm.protocol === 'http'">
               <template v-if="wizardForm.dynamic_dns">
-                启用 (协议栈: {{ (() => { const families = wizardForm.dns_family || []; if (families.length === 2) return 'IPv4/IPv6'; if (families.includes('ipv4')) return 'IPv4'; if (families.includes('ipv6')) return 'IPv6'; return '无'; })() }})
+                {{ t('common.app.rules.wizard.dnsStackPrefix') }}{{ (() => { const families = wizardForm.dns_family || []; if (families.length === 2) return 'IPv4/IPv6'; if (families.includes('ipv4')) return 'IPv4'; if (families.includes('ipv6')) return 'IPv6'; return t('common.app.rules.wizard.stackNone'); })() }}）
               </template>
-              <template v-else>禁用</template>
+              <template v-else>{{ t('common.app.rules.list.statusOff') }}</template>
             </el-descriptions-item>
-            <el-descriptions-item label="压缩" v-if="wizardForm.protocol === 'http'">
-              {{ wizardForm.enable_compress ? compressType : '禁用' }}
+            <el-descriptions-item :label="t('common.app.rules.wizard.compression')" v-if="wizardForm.protocol === 'http'">
+              {{ wizardForm.enable_compress ? compressType : t('common.app.rules.common.disable') }}
             </el-descriptions-item>
-            <el-descriptions-item label="自定义路由" v-if="wizardForm.protocol === 'http'">
+            <el-descriptions-item :label="t('common.app.rules.common.customRoutes')" v-if="wizardForm.protocol === 'http'">
               {{ customRoutesPreview() }}
             </el-descriptions-item>
-            <el-descriptions-item label="TLS 证书" v-if="wizardForm.enable_tls">
+            <el-descriptions-item :label="t('common.app.rules.wizard.tlsCertificate')" v-if="wizardForm.enable_tls">
               <div v-if="wizardForm.tls_source === 'acme_dns'">{{ certTypeLabels.auto }} ({{ caProviderLabel }})</div>
               <div v-else>
                 <div>{{ certTypeLabels.manual }}</div>
                 <div v-if="certInfo.valid">
                   <el-tag size="small" :type="certInfo.warning ? 'warning' : 'success'">{{ certInfo.domain }}</el-tag>
-                  <span>过期: {{ certInfo.expiryDate }}</span>
-                  <span v-if="certInfo.daysUntilExpiry <= 30" class="cert-expiry-warning">({{ certInfo.daysUntilExpiry }} 天后)</span>
+                  <span>{{ t('common.app.rules.wizard.expiresColon') }}{{ certInfo.expiryDate }}</span>
+                  <span v-if="certInfo.daysUntilExpiry <= 30" class="cert-expiry-warning">{{ t('common.app.rules.wizard.expiresInDays', { n: certInfo.daysUntilExpiry }) }}</span>
                 </div>
               </div>
             </el-descriptions-item>
-            <el-descriptions-item label="HTTP 重定向" v-if="wizardForm.enable_tls">
-              {{ wizardForm.tls_http_redirect ? '启用' : '禁用' }}
+            <el-descriptions-item :label="t('common.app.rules.wizard.httpRedirect')" v-if="wizardForm.enable_tls">
+              {{ wizardForm.tls_http_redirect ? t('common.app.rules.common.enable') : t('common.app.rules.common.disable') }}
             </el-descriptions-item>
-            <el-descriptions-item label="状态">
-              <el-tag :type="wizardForm.enabled ? 'success' : 'info'">{{ wizardForm.enabled ? '启用' : '禁用' }}</el-tag>
+            <el-descriptions-item :label="t('common.app.rules.common.status')">
+              <el-tag :type="wizardForm.enabled ? 'success' : 'info'">{{ wizardForm.enabled ? t('common.app.rules.common.enable') : t('common.app.rules.common.disable') }}</el-tag>
             </el-descriptions-item>
-            <el-descriptions-item label="上游服务器" :span="1">
+            <el-descriptions-item :label="t('common.app.rules.wizard.upstreamServers')" :span="1">
               <el-table :data="wizardForm.upstreams" size="small" border>
-                <el-table-column prop="host" label="主机" />
-                <el-table-column prop="port" label="端口" width="80" />
-                <el-table-column prop="protocol" label="协议" width="80">
+                <el-table-column prop="host" :label="t('common.app.rules.wizard.host')" />
+                <el-table-column prop="port" :label="t('common.app.rules.common.port')" width="80" />
+                <el-table-column prop="protocol" :label="t('common.app.rules.common.protocol')" width="80">
                   <template #default="{ row }">
                     {{ row.protocol || 'http' }}
                   </template>
                 </el-table-column>
-                <el-table-column label="权重" width="70">
-                  <template #default="{ row }">{{ row.enabled ? `${weightPercent(wizardForm.upstreams, row)}%` : '禁用' }}</template>
+                <el-table-column :label="t('common.app.rules.common.weight')" width="70">
+                  <template #default="{ row }">{{ row.enabled ? `${weightPercent(wizardForm.upstreams, row)}%` : t('common.app.rules.list.statusOff') }}</template>
                 </el-table-column>
-                <el-table-column prop="max_connections" :label="wizardForm.protocol === 'http' ? '最大请求数' : '最大连接'" width="100" />
-                <el-table-column v-if="wizardForm.protocol === 'http'" label="回源域名" min-width="130">
+                <el-table-column prop="max_connections" :label="wizardForm.protocol === 'http' ? t('common.app.rules.wizard.maxRequests') : t('common.app.rules.wizard.maxConnections')" width="100" />
+                <el-table-column v-if="wizardForm.protocol === 'http'" :label="t('common.app.rules.wizard.originHostDomain')" min-width="130">
                   <template #default="{ row }">{{ row.origin_domain || '-' }}</template>
                 </el-table-column>
-                <el-table-column prop="enabled" label="状态" width="70">
+                <el-table-column prop="enabled" :label="t('common.app.rules.common.status')" width="70">
                   <template #default="{ row }">
-                    {{ row.enabled ? '启用' : '禁用' }}
+                    {{ row.enabled ? t('common.app.rules.common.enable') : t('common.app.rules.common.disable') }}
                   </template>
                 </el-table-column>
               </el-table>
@@ -1087,13 +1087,13 @@
       <template #footer>
         <div class="wizard-footer">
           <el-button v-if="hasPreviousStep" :disabled="saving" @click="prevStep">
-            <el-icon><ArrowLeft /></el-icon>上一步
+            <el-icon><ArrowLeft /></el-icon>{{ t('common.app.rules.wizard.prevStep') }}
           </el-button>
           <el-button v-if="hasNextStep" type="primary" :disabled="saving" @click="nextStep">
-            下一步<el-icon><ArrowRight /></el-icon>
+            {{ t('common.app.rules.wizard.nextStep') }}<el-icon><ArrowRight /></el-icon>
           </el-button>
-          <el-button v-if="currentStep === WIZARD_STEP.PREVIEW" type="primary" :loading="saving" :disabled="tlsDetailError && wizardForm.tls_source === 'manual'" :title="tlsDetailError && wizardForm.tls_source === 'manual' ? '证书详情加载失败：请先在 TLS 步骤重新加载' : ''" @click="submitWizard">
-            <span>保存规则</span><el-icon style="margin-left: 6px;"><Check /></el-icon>
+          <el-button v-if="currentStep === WIZARD_STEP.PREVIEW" type="primary" :loading="saving" :disabled="tlsDetailError && wizardForm.tls_source === 'manual'" :title="tlsDetailError && wizardForm.tls_source === 'manual' ? t('common.app.rules.msgs.certDetailReloadTitleHint') : ''" @click="submitWizard">
+            <span>{{ t('common.app.rules.wizard.saveRule') }}</span><el-icon style="margin-left: 6px;"><Check /></el-icon>
           </el-button>
         </div>
       </template>
@@ -1102,98 +1102,98 @@
     <!-- View Config Dialog -->
     <el-dialog v-model="configDialogVisible" width="min(900px, 94vw)" top="5vh" :close-on-click-modal="true" @close="onConfigDialogClosed">
       <template #header>
-        <DialogHeader :icon="Document" title="Caddy 配置"
-          subtitle="单规则渲染产物的只读预览（规则信息 / JSON / Caddyfile）" />
+        <DialogHeader :icon="Document" :title="t('common.app.rules.cfg.caddyConfig')"
+          :subtitle="t('common.app.rules.cfg.previewHint')" />
       </template>
       <div v-if="configLoading" v-loading="configLoading" style="min-height: 200px;"></div>
-      <el-result v-else-if="configLoadError" icon="error" title="Caddy 配置加载失败" :sub-title="configLoadError">
-        <template #extra><el-button type="primary" @click="retryViewConfig">重试</el-button></template>
+      <el-result v-else-if="configLoadError" icon="error" :title="t('common.app.rules.cfg.caddyConfigLoadFail')" :sub-title="configLoadError">
+        <template #extra><el-button type="primary" @click="retryViewConfig">{{ t('common.app.rules.common.retry') }}</el-button></template>
       </el-result>
       <div v-else-if="ruleConfig" class="config-view">
         <section class="dialog-panel">
-          <DialogSectionHeader title="规则信息" />
+          <DialogSectionHeader :title="t('common.app.rules.cfg.ruleInfo')" />
         <el-descriptions :column="2" border size="small" class="config-info">
-          <el-descriptions-item label="规则ID">{{ ruleConfig.caddy_id || '-' }}</el-descriptions-item>
-          <el-descriptions-item label="规则名称">{{ ruleConfig.name }}</el-descriptions-item>
-          <el-descriptions-item label="域名">{{ ruleConfig.domain || '-' }}</el-descriptions-item>
-          <el-descriptions-item label="端口">{{ ruleConfig.listen_port }}</el-descriptions-item>
-          <el-descriptions-item label="协议">
+          <el-descriptions-item :label="t('common.app.rules.cfg.ruleId')">{{ ruleConfig.caddy_id || '-' }}</el-descriptions-item>
+          <el-descriptions-item :label="t('common.app.rules.common.ruleName')">{{ ruleConfig.name }}</el-descriptions-item>
+          <el-descriptions-item :label="t('common.app.rules.common.domain')">{{ ruleConfig.domain || '-' }}</el-descriptions-item>
+          <el-descriptions-item :label="t('common.app.rules.common.port')">{{ ruleConfig.listen_port }}</el-descriptions-item>
+          <el-descriptions-item :label="t('common.app.rules.common.protocol')">
             <el-tag :type="ruleConfig.protocol === 'tcp' ? 'warning' : (ruleConfig.enable_tls ? 'success' : 'primary')" size="small">
               {{ ruleConfig.protocol === 'tcp' ? 'TCP' : (ruleConfig.enable_tls ? 'HTTPS' : 'HTTP') }}
             </el-tag>
           </el-descriptions-item>
-          <el-descriptions-item label="负载策略">{{ getStrategyLabel(ruleConfig.strategy) }}</el-descriptions-item>
-          <el-descriptions-item label="动态上游">{{ ruleConfig.dynamic_dns ? '启用' : '禁用' }}</el-descriptions-item>
-          <el-descriptions-item label="DNS 服务器" v-if="ruleConfig.protocol === 'http'">
-            {{ ruleConfig.enable_dns_server ? (ruleConfig.dns_server || '未配置') : '禁用' }}
+          <el-descriptions-item :label="t('common.app.rules.common.lbPolicy')">{{ getStrategyLabel(ruleConfig.strategy) }}</el-descriptions-item>
+          <el-descriptions-item :label="t('common.app.rules.wizard.dynamicUpstreams')">{{ ruleConfig.dynamic_dns ? t('common.app.rules.common.enable') : t('common.app.rules.common.disable') }}</el-descriptions-item>
+          <el-descriptions-item :label="t('common.app.rules.wizard.dnsServers')" v-if="ruleConfig.protocol === 'http'">
+            {{ ruleConfig.enable_dns_server ? (ruleConfig.dns_server || t('common.app.rules.cfg.dnsNotConfigured')) : t('common.app.rules.common.disable') }}
           </el-descriptions-item>
-          <el-descriptions-item label="后端域名" v-if="ruleConfig.protocol === 'http'">{{ ruleConfig.host_header || '-' }}</el-descriptions-item>
+          <el-descriptions-item :label="t('common.app.rules.wizard.backendDomain')" v-if="ruleConfig.protocol === 'http'">{{ ruleConfig.host_header || '-' }}</el-descriptions-item>
           <el-descriptions-item label="TLS" v-if="ruleConfig.enable_tls">
-            {{ ruleConfig.tls_http_redirect ? '启用 (HTTP重定向)' : '启用' }}
-            <span v-if="ruleConfig.tls_source === 'manual'">(手动上传)</span>
-            <span v-else-if="ruleConfig.tls_source === 'acme_dns'">(ACME 自动)</span>
+            {{ ruleConfig.tls_http_redirect ? t('common.app.rules.cfg.tlsRedirectEnabled') : t('common.app.rules.common.enable') }}
+            <span v-if="ruleConfig.tls_source === 'manual'">{{ t('common.app.rules.wizard.manualUploadParen') }}</span>
+            <span v-else-if="ruleConfig.tls_source === 'acme_dns'">{{ t('common.app.rules.wizard.acmeAutoParen') }}</span>
           </el-descriptions-item>
-          <el-descriptions-item label="TLS" v-else>禁用</el-descriptions-item>
-          <el-descriptions-item label="压缩" v-if="ruleConfig.protocol === 'http'">
-            {{ ruleConfig.enable_compress ? (Array.isArray(ruleConfig.compress_types) ? ruleConfig.compress_types[0] : (ruleConfig.compress_types || 'gzip')) : '禁用' }}
+          <el-descriptions-item label="TLS" v-else>{{ t('common.app.rules.common.disable') }}</el-descriptions-item>
+          <el-descriptions-item :label="t('common.app.rules.wizard.compression')" v-if="ruleConfig.protocol === 'http'">
+            {{ ruleConfig.enable_compress ? (Array.isArray(ruleConfig.compress_types) ? ruleConfig.compress_types[0] : (ruleConfig.compress_types || 'gzip')) : t('common.app.rules.common.disable') }}
           </el-descriptions-item>
           <!-- 与向导预览同一份摘要单源（utils/healthCheckSummary）：主动行同样点名
                失败/恢复阈值，被动行只在未启用主动探测时补位。 -->
-          <el-descriptions-item label="主动健康检查" v-if="ruleConfig.enable_active_health_check">
+          <el-descriptions-item :label="t('common.app.rules.wizard.activeHealthCheck')" v-if="ruleConfig.enable_active_health_check">
             {{ activeHealthCheckSummary(ruleConfig) }}
           </el-descriptions-item>
-          <el-descriptions-item label="主动健康检查" v-else>未启用</el-descriptions-item>
-          <el-descriptions-item label="被动健康检查" v-if="!ruleConfig.enable_active_health_check">
+          <el-descriptions-item :label="t('common.app.rules.wizard.activeHealthCheck')" v-else>{{ t('common.app.rules.common.notEnabled') }}</el-descriptions-item>
+          <el-descriptions-item :label="t('common.app.rules.wizard.passiveHealthCheck')" v-if="!ruleConfig.enable_active_health_check">
             {{ passiveHealthCheckSummary(ruleConfig) }}
           </el-descriptions-item>
-          <el-descriptions-item label="连接重试" v-if="ruleConfig.protocol === 'http' || ruleConfig.protocol === 'tcp'">
+          <el-descriptions-item :label="t('common.app.rules.wizard.connectRetry')" v-if="ruleConfig.protocol === 'http' || ruleConfig.protocol === 'tcp'">
             <template v-if="ruleConfig.tcp_try_duration > 0">
-              窗口 {{ ruleConfig.tcp_try_duration }}ms / 间隔 {{ ruleConfig.tcp_try_interval }}ms
+              {{ t('common.app.rules.wizard.windowInterval', { a: ruleConfig.tcp_try_duration, b: ruleConfig.tcp_try_interval }) }}
             </template>
-            <template v-else-if="ruleConfig.tcp_try_duration === -1">禁用重试（NTLM 模式）</template>
-            <template v-else>{{ ruleConfig.protocol === 'tcp' ? '禁用' : '默认 5s 窗口' }}</template>
+            <template v-else-if="ruleConfig.tcp_try_duration === -1">{{ t('common.app.rules.wizard.disableRetryNtlm') }}</template>
+            <template v-else>{{ ruleConfig.protocol === 'tcp' ? t('common.app.rules.list.statusOff') : t('common.app.rules.wizard.defaultWindow5s') }}</template>
           </el-descriptions-item>
-          <el-descriptions-item label="请求体大小">{{ (ruleConfig.request_body_max_size_mb || 0) > 0 ? ruleConfig.request_body_max_size_mb + 'MB' : '全局默认' }}</el-descriptions-item>
-            <el-descriptions-item label="Keepalive 超时">{{ (ruleConfig.upstream_keepalive_timeout || 0) > 0 ? ruleConfig.upstream_keepalive_timeout + 's' : '全局默认' }}</el-descriptions-item>
-          <el-descriptions-item label="状态">
-            <el-tag :type="ruleConfig.enabled ? 'success' : 'info'" size="small">{{ ruleConfig.enabled ? '启用' : '禁用' }}</el-tag>
+          <el-descriptions-item :label="t('common.app.rules.wizard.bodySize')">{{ (ruleConfig.request_body_max_size_mb || 0) > 0 ? ruleConfig.request_body_max_size_mb + 'MB' : t('common.app.rules.common.globalDefault') }}</el-descriptions-item>
+            <el-descriptions-item :label="t('common.app.rules.wizard.keepaliveTimeout')">{{ (ruleConfig.upstream_keepalive_timeout || 0) > 0 ? ruleConfig.upstream_keepalive_timeout + 's' : t('common.app.rules.common.globalDefault') }}</el-descriptions-item>
+          <el-descriptions-item :label="t('common.app.rules.common.status')">
+            <el-tag :type="ruleConfig.enabled ? 'success' : 'info'" size="small">{{ ruleConfig.enabled ? t('common.app.rules.common.enable') : t('common.app.rules.common.disable') }}</el-tag>
           </el-descriptions-item>
         </el-descriptions>
         </section>
 
         <section class="dialog-panel">
-          <DialogSectionHeader title="上游服务器" />
+          <DialogSectionHeader :title="t('common.app.rules.wizard.upstreamServers')" />
         <el-table :data="ruleConfig.upstreams" size="small" border v-if="ruleConfig.upstreams?.length">
-          <el-table-column prop="host" label="主机地址" />
-          <el-table-column prop="port" label="端口" align="center" />
-          <el-table-column prop="protocol" label="协议" align="center">
+          <el-table-column prop="host" :label="t('common.app.rules.wizard.hostAddress')" />
+          <el-table-column prop="port" :label="t('common.app.rules.common.port')" align="center" />
+          <el-table-column prop="protocol" :label="t('common.app.rules.common.protocol')" align="center">
             <template #default="{ row }">
               <el-tag size="small" :type="row.protocol === 'https' ? 'warning' : 'primary'">{{ row.protocol || 'http' }}</el-tag>
             </template>
           </el-table-column>
-          <el-table-column label="权重" align="center">
+          <el-table-column :label="t('common.app.rules.common.weight')" align="center">
             <template #default="{ row }">{{ weightPercent(ruleConfig?.upstreams, row) }}%</template>
           </el-table-column>
-          <el-table-column prop="max_connections" :label="ruleConfig?.protocol === 'http' ? '最大请求数' : '最大连接'" align="center" />
-          <el-table-column v-if="ruleConfig?.protocol === 'http'" label="回源域名" align="center">
+          <el-table-column prop="max_connections" :label="ruleConfig?.protocol === 'http' ? t('common.app.rules.wizard.maxRequests') : t('common.app.rules.wizard.maxConnections')" align="center" />
+          <el-table-column v-if="ruleConfig?.protocol === 'http'" :label="t('common.app.rules.wizard.originHostDomain')" align="center">
             <template #default="{ row }">{{ row.origin_domain || '-' }}</template>
           </el-table-column>
-          <el-table-column prop="enabled" label="状态" align="center">
+          <el-table-column prop="enabled" :label="t('common.app.rules.common.status')" align="center">
             <template #default="{ row }">
-              <el-tag size="small" :type="row.enabled ? 'success' : 'info'">{{ row.enabled ? '启用' : '禁用' }}</el-tag>
+              <el-tag size="small" :type="row.enabled ? 'success' : 'info'">{{ row.enabled ? t('common.app.rules.common.enable') : t('common.app.rules.common.disable') }}</el-tag>
             </template>
           </el-table-column>
         </el-table>
         </section>
 
         <section class="dialog-panel">
-          <DialogSectionHeader title="Caddy 配置（JSON）" />
-          <el-empty v-if="ruleConfig.config_not_exists" description="配置不存在" :image-size="60" />
+          <DialogSectionHeader :title="t('common.app.rules.cfg.caddyConfigJson')" />
+          <el-empty v-if="ruleConfig.config_not_exists" :description="t('common.app.rules.msgs.configMissing')" :image-size="60" />
           <SyntaxHighlight v-else :content="JSON.stringify(ruleConfig.config, null, 2)" language="json" />
         </section>
       </div>
       <div v-else class="config-empty">
-        <el-empty description="未找到该规则的配置信息" :image-size="60" />
+        <el-empty :description="t('common.app.rules.cfg.noRuleConfig')" :image-size="60" />
       </div>
     </el-dialog>
 
@@ -1206,37 +1206,37 @@
       @close="onRuleLogDialogClosed"
     >
       <template #header>
-        <DialogHeader :icon="Tickets" :title="`访问日志 - ${ruleLogRuleName}`" subtitle="负载均衡规则请求访问日志" />
+        <DialogHeader :icon="Tickets" :title="t('common.app.rules.cfg.accessLogDialogTitle', { ruleName: ruleLogRuleName })" :subtitle="t('common.app.rules.list.accessLogTitle')" />
       </template>
       <div class="log-toolbar">
-        <el-switch v-model="ruleLogAutoRefresh" active-text="自动刷新" />
+        <el-switch v-model="ruleLogAutoRefresh" :active-text="t('common.app.rules.cfg.autoRefresh')" />
         <el-button type="primary" :loading="ruleLogLoading" size="small" @click="refreshRuleLogs">
-          <el-icon><RefreshRight /></el-icon>刷新
+          <el-icon><RefreshRight /></el-icon>{{ t('common.app.rules.common.refresh') }}
         </el-button>
       </div>
       <el-tabs v-model="ruleLogTab" @tab-change="onRuleLogTabChange">
-        <el-tab-pane label="日志" name="log">
+        <el-tab-pane :label="t('common.app.rules.common.log')" name="log">
           <div ref="ruleLogContainerRef" class="dialog-panel rule-log-viewer" v-html="ruleLogHtml" />
         </el-tab-pane>
-        <el-tab-pane label="统计" name="stats">
+        <el-tab-pane :label="t('common.app.rules.common.stats')" name="stats">
           <div v-if="ruleLogStatsLoading || (!ruleLogStats && !ruleLogStatsError)" class="stats-state" aria-live="polite">
-            <el-text type="info">正在统计日志...</el-text>
+            <el-text type="info">{{ t('common.app.rules.cfg.statsLoading') }}</el-text>
             <el-skeleton :rows="6" animated />
           </div>
           <el-result
             v-else-if="ruleLogStatsError"
             icon="error"
-            title="日志统计加载失败"
+            :title="t('common.app.rules.cfg.logStatsLoadFail')"
             :sub-title="ruleLogStatsError"
           >
             <template #extra>
-              <el-button type="primary" @click="startLogStats">重试</el-button>
+              <el-button type="primary" @click="startLogStats">{{ t('common.app.rules.common.retry') }}</el-button>
             </template>
           </el-result>
           <template v-else-if="ruleLogStats">
             <div class="stats-summary">
-              <el-tag size="small" type="info" effect="plain">共 {{ ruleLogStats.total }} 次请求</el-tag>
-              <el-text type="info" size="small" style="margin-left: 8px;">含最近 ≤1000 行日志（自 {{ ruleLogStats.started_at }}）· 每 5 秒实时叠加</el-text>
+              <el-tag size="small" type="info" effect="plain">{{ t('common.app.rules.cfg.totalRequests', { n: ruleLogStats.total }) }}</el-tag>
+              <el-text type="info" size="small" style="margin-left: 8px;">{{ t('common.app.rules.cfg.logCoverageNote', { since: ruleLogStats.started_at }) }}</el-text>
             </div>
             <div class="stats-grid">
               <section class="dialog-panel stats-card">
@@ -1246,17 +1246,17 @@
                   <el-table-column prop="count" width="70" align="right">
                     <template #default="{ row }"><span class="stats-count">{{ row.count }}</span></template>
                   </el-table-column>
-                  <template #empty><el-empty description="暂无数据" :image-size="40" /></template>
+                  <template #empty><el-empty :description="t('common.app.rules.common.noData')" :image-size="40" /></template>
                 </el-table>
               </section>
               <section class="dialog-panel stats-card">
-                <DialogSectionHeader title="客户端 TOP" />
+                <DialogSectionHeader :title="t('common.app.rules.cfg.clientTop')" />
                 <el-table :data="ruleLogStats.top_uas" size="small" :show-header="false">
                   <el-table-column prop="value" show-overflow-tooltip />
                   <el-table-column prop="count" width="70" align="right">
                     <template #default="{ row }"><span class="stats-count">{{ row.count }}</span></template>
                   </el-table-column>
-                  <template #empty><el-empty description="暂无数据" :image-size="40" /></template>
+                  <template #empty><el-empty :description="t('common.app.rules.common.noData')" :image-size="40" /></template>
                 </el-table>
               </section>
               <section class="dialog-panel stats-card">
@@ -1266,7 +1266,7 @@
                   <el-table-column prop="count" width="70" align="right">
                     <template #default="{ row }"><span class="stats-count">{{ row.count }}</span></template>
                   </el-table-column>
-                  <template #empty><el-empty description="暂无数据" :image-size="40" /></template>
+                  <template #empty><el-empty :description="t('common.app.rules.common.noData')" :image-size="40" /></template>
                 </el-table>
               </section>
             </div>
@@ -1276,7 +1276,7 @@
       <template #footer>
         <div style="display: flex; align-items: center;">
           <LogStorageBar log-key="rule_access" :caddy-id="ruleLogCaddyId" style="margin-right: auto" />
-          <el-button @click="ruleLogDialogVisible = false">关闭</el-button>
+          <el-button @click="ruleLogDialogVisible = false">{{ t('common.app.rules.common.close') }}</el-button>
         </div>
       </template>
     </el-dialog>
@@ -1285,66 +1285,66 @@
     <el-dialog v-model="ntlmConfirmVisible" class="dialog-body-inset" width="min(560px, 94vw)" top="10vh" :close-on-click-modal="false">
       <template #header>
         <DialogHeader :icon="ntlmConfirmMode === 'on' ? WarningFilled : CircleCheckFilled"
-          :title="ntlmConfirmMode === 'on' ? '开启 NTLM 兼容' : 'NTLM 兼容已关闭'"
-          :subtitle="ntlmConfirmMode === 'on' ? '为 NTLM / 协商认证后端锁定长连接亲和的代理形态' : '已恢复默认配置'" />
+          :title="ntlmConfirmMode === 'on' ? t('common.app.rules.wizard.ntlmEnableConfirmTitle') : t('common.app.rules.wizard.ntlmOffNote')"
+          :subtitle="ntlmConfirmMode === 'on' ? t('common.app.rules.wizard.ntlmHint') : t('common.app.rules.wizard.ntlmOffSubtitle')" />
       </template>
       <div v-if="ntlmConfirmMode === 'on'" class="ntlm-confirm-body">
-        <div class="ntlm-confirm-title">开启后将接管以下配置：</div>
+        <div class="ntlm-confirm-title">{{ t('common.app.rules.wizard.ntlmTakeoverListTitle') }}</div>
         <ul class="ntlm-confirm-list">
-          <li>负载策略锁定为 <b>Cookie 会话保持</b></li>
-          <li>禁用请求重试</li>
-          <li>响应立即透传</li>
-          <li>上游连接保持 300s + 强制 HTTP/1.1</li>
-          <li>主动健康检查关闭（探测返回 401 会被误判摘除；被动健康检查仍在役）</li>
-          <li>已启用 NTLM 专用 transport（连接级协商亲和）</li>
+          <li>{{ t('common.app.rules.wizard.ntlmLoadPolicyLockedTo') }} <b>{{ t('common.app.rules.wizard.cookieAffinity') }}</b></li>
+          <li>{{ t('common.app.rules.wizard.ntlmTakeoverDisableRetry') }}</li>
+          <li>{{ t('common.app.rules.wizard.ntlmPassThroughItem') }}</li>
+          <li>{{ t('common.app.rules.wizard.ntlmKeepaliveItem') }}</li>
+          <li>{{ t('common.app.rules.wizard.ntlmHealthDisabledItem') }}</li>
+          <li>{{ t('common.app.rules.wizard.ntlmTransportItem') }}</li>
         </ul>
-        <div class="info-note-bar"><span class="info-note-desc">原配置不保留记忆，关闭时恢复默认</span></div>
+        <div class="info-note-bar"><span class="info-note-desc">{{ t('common.app.rules.wizard.ntlmResetNote') }}</span></div>
       </div>
       <div v-else class="ntlm-confirm-body">
         <ul class="ntlm-confirm-list">
-          <li>负载策略解锁为轮询</li>
-          <li>重试窗口恢复 5s 默认</li>
-          <li>透传 / Keepalive / HTTP 版本恢复全局继承</li>
-          <li>主动健康检查保持关闭，可按需重新开启</li>
+          <li>{{ t('common.app.rules.wizard.ntlmPolicyUnlockRoundRobin') }}</li>
+          <li>{{ t('common.app.rules.wizard.ntlmRetryWindowResetHint') }}</li>
+          <li>{{ t('common.app.rules.wizard.ntlmPassthroughResetHint') }}</li>
+          <li>{{ t('common.app.rules.wizard.ntlmHealthOffItem') }}</li>
         </ul>
       </div>
       <template #footer>
-        <el-button v-if="ntlmConfirmMode === 'on'" @click="ntlmConfirmVisible = false">取消</el-button>
-        <el-button v-if="ntlmConfirmMode === 'on'" type="warning" @click="confirmNtlmToggle">开启</el-button>
-        <el-button v-else type="primary" @click="confirmNtlmToggle">确认关闭</el-button>
+        <el-button v-if="ntlmConfirmMode === 'on'" @click="ntlmConfirmVisible = false">{{ t('common.app.rules.common.cancel') }}</el-button>
+        <el-button v-if="ntlmConfirmMode === 'on'" type="warning" @click="confirmNtlmToggle">{{ t('common.app.rules.common.turnOn') }}</el-button>
+        <el-button v-else type="primary" @click="confirmNtlmToggle">{{ t('common.app.rules.msgs.closeConfirm') }}</el-button>
       </template>
     </el-dialog>
     <!-- 认证网关开关确认（NTLM 同款范式）：开启=行为披露；关闭=确认 -->
     <el-dialog v-model="faConfirmVisible" class="dialog-body-inset" width="min(560px, 94vw)" top="10vh" :close-on-click-modal="false">
       <template #header>
         <DialogHeader :icon="faConfirmMode === 'on' ? WarningFilled : CircleCheckFilled"
-          :title="faConfirmMode === 'on' ? '开启认证网关' : '认证网关已关闭'"
-          :subtitle="faConfirmMode === 'on' ? '全部请求先经外部认证网关校验' : '已恢复直连后端'" />
+          :title="faConfirmMode === 'on' ? t('common.app.rules.wizard.faEnableConfirmTitle') : t('common.app.rules.wizard.faOffConfirmTitle')"
+          :subtitle="faConfirmMode === 'on' ? t('common.app.rules.wizard.faOnState') : t('common.app.rules.wizard.faOffState')" />
       </template>
       <div v-if="faConfirmMode === 'on'" class="ntlm-confirm-body">
-        <div class="ntlm-confirm-title">开启后本规则的行为变化：</div>
+        <div class="ntlm-confirm-title">{{ t('common.app.rules.wizard.faChangesListTitle') }}</div>
         <ul class="ntlm-confirm-list">
-          <li>全部请求先经认证网关校验（GET 子请求）</li>
-          <li>未认证返回网关响应（通常跳转登录页），不再到达后端</li>
-          <li>未认证请求不经过该规则的黑名单/限流/自动封禁（这些仅对已认证流量生效）</li>
-          <li>网关拒绝的未认证请求不计入总览任一 KPI 统计列（不进规则指标与安全链，仅网关侧可见）</li>
-          <li>认证通过自动注入身份头（Remote-User/Groups/Email/Name）转发后端</li>
-          <li>认证子请求不进入本规则的 WAF/审计/限流</li>
-          <li>与直返/301 跳转路径规则互斥（保存时校验）</li>
-          <li>与 NTLM 兼容同时启用时形成双重认证：未认证流量先被网关拦截，NTLM 协商仅对已通过网关认证的流量生效</li>
+          <li>{{ t('common.app.rules.wizard.authGatewayGetItem') }}</li>
+          <li>{{ t('common.app.rules.wizard.faUnauthResponseItem') }}</li>
+          <li>{{ t('common.app.rules.wizard.faUnauthBypassItem') }}</li>
+          <li>{{ t('common.app.rules.wizard.faRejectedNotCountedHint') }}</li>
+          <li>{{ t('common.app.rules.wizard.faInjectIdentityHeadersHint') }}</li>
+          <li>{{ t('common.app.rules.wizard.faSubrequestExemptHint') }}</li>
+          <li>{{ t('common.app.rules.wizard.authGatewayPathExclusiveItem') }}</li>
+          <li>{{ t('common.app.rules.wizard.authGatewayNtlmItem') }}</li>
         </ul>
-        <div class="info-note-bar"><span class="info-note-desc">注意与 Host 改写同用：网关收到的 Host 为改写前原值；网关地址须 http(s)://host:port 形态</span></div>
+        <div class="info-note-bar"><span class="info-note-desc">{{ t('common.app.rules.wizard.faHostRewriteNote') }}</span></div>
       </div>
       <div v-else class="ntlm-confirm-body">
         <ul class="ntlm-confirm-list">
-          <li>请求直接转发后端，不再经网关校验</li>
-          <li>网关地址保留，重新开启即可恢复</li>
+          <li>{{ t('common.app.rules.wizard.faDirectForwardHint') }}</li>
+          <li>{{ t('common.app.rules.wizard.faAddressKeptHint') }}</li>
         </ul>
       </div>
       <template #footer>
-        <el-button v-if="faConfirmMode === 'on'" @click="faConfirmVisible = false">取消</el-button>
-        <el-button v-if="faConfirmMode === 'on'" type="warning" @click="confirmForwardAuthToggle">开启</el-button>
-        <el-button v-else type="primary" @click="confirmForwardAuthToggle">确认关闭</el-button>
+        <el-button v-if="faConfirmMode === 'on'" @click="faConfirmVisible = false">{{ t('common.app.rules.common.cancel') }}</el-button>
+        <el-button v-if="faConfirmMode === 'on'" type="warning" @click="confirmForwardAuthToggle">{{ t('common.app.rules.common.turnOn') }}</el-button>
+        <el-button v-else type="primary" @click="confirmForwardAuthToggle">{{ t('common.app.rules.msgs.closeConfirm') }}</el-button>
       </template>
     </el-dialog>
     <SecurityBindingEditor
@@ -1426,6 +1426,9 @@ import type { CertJobStatus } from '@/utils/certJobStatus'
 import { usePollingTask } from '@/composables/usePollingTask'
 import { useClampedPagination } from '@/composables/useClampedPagination'
 import { usePollingErrorState } from '@/composables/usePollingErrorState'
+import { useI18n } from 'vue-i18n'
+
+const { t } = useI18n()
 
 interface RuleForm extends Omit<CreateRuleRequest, 'dns_family' | 'upstreams' | 'acme_config_id' | 'ca_provider_id' | 'compress_types' | 'host_header'> {
   dns_family: string[]
@@ -1571,14 +1574,14 @@ const readOnlyMessage = computed(() => authStore.readOnlyMessage)
 let disposed = false
 
 const certTypeLabels = {
-  auto: 'ACME 自动证书',
-  manual: '手动证书',
+  auto: t('common.app.rules.wizard.acmeAutoCert'),
+  manual: t('common.app.rules.wizard.certManual'),
 }
 
 const caProviderLabel = computed(() => {
   const id = wizardForm.ca_provider_id
-  if (id === undefined || id === null || id === 0) return '系统默认'
-  return caProviders.value.find(p => p.id === id)?.name || '未知 CA'
+  if (id === undefined || id === null || id === 0) return t('common.app.rules.common.systemDefault')
+  return caProviders.value.find(p => p.id === id)?.name || t('common.app.rules.wizard.certCaUnknown')
 })
 
 interface CertInfo {
@@ -1601,7 +1604,7 @@ class CertInfoRefreshError extends Error {
   readonly name = 'CertInfoRefreshError'
 
   constructor() {
-    super('证书任务已更新，但证书详情刷新失败')
+    super(t('common.app.rules.msgs.certJobRefreshFail'))
   }
 }
 
@@ -1830,14 +1833,14 @@ const fetchCertJobs = async (roundSignal?: AbortSignal): Promise<void> => {
   const res = await request.post<APIResponse<Record<string, CertJob | null>>>('/certificates/jobs/current', {
     rule_ids: requestedRuleIds,
   }, { signal: roundSignal ?? certJobsPolling.signal, silent: true })
-  if (!res.data) throw new TypeError('当前证书任务响应缺少 data')
+  if (!res.data) throw new TypeError(t('common.app.rules.msgs.certTaskMissingData'))
   if (disposed) return
   const nextMap = { ...certJobMap.value }
   requestedRuleIds.forEach((ruleId) => delete nextMap[ruleId])
   Object.entries(res.data).forEach(([ruleId, job]) => {
     if (job === null) return
     if (!requestedRuleIdSet.has(ruleId) || job.rule_id !== ruleId) {
-      throw new TypeError(`当前证书任务响应包含未请求的规则 ${ruleId}`)
+      throw new TypeError(t('common.app.rules.msgs.certTaskUnexpectedRule', { ruleId: ruleId }))
     }
     nextMap[ruleId] = job
   })
@@ -1883,10 +1886,10 @@ const certJobLockTooltip = (row: Rule, activeText: string): string => {
   if (isReadOnly.value) return authStore.readOnlyMessage
   const status = certJobStatusOf(row)
   if (status === 'waiting_ca') {
-    return 'CA 限流冷却中，不阻塞规则启停、删除与编辑（后台稍后重试签发）'
+    return t('common.app.rules.list.caCooldownNote')
   }
   if (status === 'downloaded') {
-    return '证书已签发、部署退避重试中，不阻塞编辑；启停/删除待部署收敛'
+    return t('common.app.rules.list.certDeployBackoffTooltip')
   }
   return activeText
 }
@@ -1930,20 +1933,20 @@ const tlsTagType = (row: Rule) => {
 
 const tlsTagLabel = (row: Rule) => {
   const cert = certInfoMap.value[row.caddy_id]
-  if (certInfoError.value && cert === undefined) return '加载失败'
+  if (certInfoError.value && cert === undefined) return t('common.app.rules.list.certLoadFailBadge')
   const jobStatus = certJobMap.value[row.caddy_id]?.status
   // 活动签发态（含限流冷却）优先用任务阶段性短标签（certJobStatusLabel 2-4 字，
   // 适配 106px 列宽）——重新签发/切 CA 期间每个阶段实时可见。
   if (row.tls_source === 'acme_dns' && jobStatus && (isCertJobActive(jobStatus) || jobStatus === 'waiting_ca')) {
     return certJobStatusLabel(jobStatus)
   }
-  if (cert?.status === 'expired') return '已过期'
-  if (cert?.status === 'expiring') return `临期 ${cert.days_remaining} 天`
-  if (cert?.status === 'valid') return row.tls_source === 'acme_dns' ? '已签发' : '手动'
+  if (cert?.status === 'expired') return t('common.app.rules.list.certExpired')
+  if (cert?.status === 'expiring') return t('common.app.rules.list.certExpiringBadge', { daysRemaining: cert.days_remaining })
+  if (cert?.status === 'valid') return row.tls_source === 'acme_dns' ? t('common.app.rules.list.certIssued') : t('common.app.rules.common.manual')
   if (row.tls_source === 'acme_dns') {
-    return (jobStatus ? certJobStatusLabel(jobStatus) : '') || '未签发'
+    return (jobStatus ? certJobStatusLabel(jobStatus) : '') || t('common.app.rules.list.certNotIssued')
   }
-  return '手动'
+  return t('common.app.rules.common.manual')
 }
 
 const isCurrentRuleLocked = computed(() => {
@@ -2003,7 +2006,7 @@ const ruleLogContainerRef = ref<HTMLElement | null>(null)
 let ruleLogPollTimer: ReturnType<typeof setInterval> | null = null
 let ruleLogRequestSeq = 0
 
-const ruleLogHtml = computed(() => ansiToHtml(ruleLogContent.value || '暂无日志'))
+const ruleLogHtml = computed(() => ansiToHtml(ruleLogContent.value || t('common.app.rules.cfg.noLogs')))
 const ruleConfig = ref<RuleConfigView | null>(null)
 
 // 结构性简化（D 域 2(e)）：上游启用行的完整性门谓词单源化——红框、常驻警告、
@@ -2028,9 +2031,9 @@ const upstreamFieldWarning = computed(() => {
     else if (upstreamRowMissingPort(u, i)) missingPort.push(i + 1)
   })
   const parts: string[] = []
-  if (missingHost.length) parts.push(`第 ${missingHost.join('、')} 行主机地址`)
-  if (missingPort.length) parts.push(`第 ${missingPort.join('、')} 行端口`)
-  return parts.length ? `${parts.join('，')}为必填项，请填写完整` : ''
+  if (missingHost.length) parts.push(t('common.app.rules.msgs.rowHostMissing', { rows: missingHost.join('、') }))
+  if (missingPort.length) parts.push(t('common.app.rules.msgs.rowPortMissing', { rows: missingPort.join('、') }))
+  return parts.length ? t('common.app.rules.msgs.requiredIncomplete', { fields: parts.join('，') }) : ''
 })
 
 // 混合回源域名 + 主动健康检查警告谓词（2026-10-10 用户裁定）：HTTP 规则 +
@@ -2069,12 +2072,12 @@ const getHealthTagType = (status: HealthSummary) => {
 }
 
 const getHealthLabel = (status: HealthSummary) => {
-  if (status.unhealthy + status.degraded === status.total) return '异常'
-  if (status.unhealthy + status.degraded > 0) return '降级'
-  if (status.unknown === status.total) return '未知'
-  if (status.unknown > 0) return '降级'
+  if (status.unhealthy + status.degraded === status.total) return t('common.app.rules.common.unhealthy')
+  if (status.unhealthy + status.degraded > 0) return t('common.app.rules.common.degraded')
+  if (status.unknown === status.total) return t('common.app.rules.common.unknown')
+  if (status.unknown > 0) return t('common.app.rules.common.degraded')
   if (status.na === status.total) return 'N/A'
-  return '正常'
+  return t('common.app.rules.list.healthNormal')
 }
 
 // hostPortKey 提取至 utils/upstreamKeys（Dashboard 共用）。
@@ -2244,7 +2247,7 @@ let tlsDetailSeq = 0
 function markTlsDetailFailed(caddyId: string): void {
   tlsDetailError.value = true
   tlsDetailRuleId.value = caddyId
-  ElMessage.warning('证书详情加载失败：TLS 配置可能不完整，已阻止保存；请在 TLS 步骤点「重新加载」')
+  ElMessage.warning(t('common.app.rules.msgs.certDetailBlockSaveReloadHint'))
 }
 
 /** TLS 步重试：只回填证书相关字段（不重水合整表单，避免覆盖用户已改内容）。 */
@@ -2268,7 +2271,7 @@ async function retryTlsDetail(): Promise<void> {
     const resp = await request.get<APIResponse<Rule>>(`/rules/${encodeURIComponent(caddyId)}`)
     if (!sessionAlive()) return
     if (resp.code !== 0 || !resp.data) {
-      ElMessage.warning('证书详情仍不可用，请稍后重试')
+      ElMessage.warning(t('common.app.rules.msgs.certDetailStillUnavailable'))
       return
     }
     wizardForm.tls_cert = resp.data.tls_cert || ''
@@ -2281,11 +2284,11 @@ async function retryTlsDetail(): Promise<void> {
     // validateCertificate 自带 certValidationSeq/会话序号守卫，换表单/关向导后
     // 的迟到响应不会写回。
     void validateCertificate()
-    ElMessage.success('证书详情已重新加载')
+    ElMessage.success(t('common.app.rules.msgs.certDetailReloaded'))
   } catch (error: unknown) {
     if (!sessionAlive()) return
     console.warn('[retryTlsDetail] failed', error)
-    ElMessage.warning('证书详情加载失败，请稍后重试')
+    ElMessage.warning(t('common.app.rules.msgs.certDetailLoadFailRetry'))
   } finally {
     // 仅当前会话负责收尾 loading；会话已被新一代接管时由新一代自行管理
     if (sessionSeq === tlsDetailSeq) tlsDetailLoading.value = false
@@ -2395,12 +2398,12 @@ watch(() => wizardForm.enable_tls, (newVal, oldVal) => {
   if (newVal && !oldVal) {
     if (wizardForm.listen_port !== 443) {
       wizardForm.listen_port = 443
-      showTlsHint('已默认切换为 443 端口')
+      showTlsHint(t('common.app.rules.msgs.switchedToPort443'))
     }
     return
   }
   if (!newVal && oldVal && userExplicitPort.value && wizardForm.listen_port === 443) {
-    showTlsHint('端口当前为 443，关闭 TLS 后如需 HTTP 访问建议改为 80')
+    showTlsHint(t('common.app.rules.wizard.tlsOffPortHint'))
   }
   if (userExplicitPort.value) return
   if (!newVal && oldVal) {
@@ -2422,7 +2425,7 @@ watch(() => wizardForm.protocol, (newVal, oldVal) => {
     // 无条件迁移：DB 中不存在 TCP:80/443 存量规则（后端无条件拒绝），编辑态无需保留该值
     if (wizardForm.listen_port === 80 || wizardForm.listen_port === 443) {
       wizardForm.listen_port = 8080
-      ElMessage.info('已切换为 TCP，监听端口自动调整为 8080')
+      ElMessage.info(t('common.app.rules.msgs.switchedToTcpPort8080'))
     }
     wizardForm.enable_tls = false
     if (wizardForm.strategy === 'cookie') wizardForm.strategy = 'weighted_round_robin'
@@ -2469,9 +2472,9 @@ watch(() => wizardForm.protocol, (newVal, oldVal) => {
     })
     // 回转提示：仅在实际改端口 / 曾强制关 TLS 时给出，走 showTlsHint 去重通道
     const notes: string[] = []
-    if (portChanged && preTcpSnapshot) notes.push(`监听端口已调整为 ${preTcpSnapshot.listenPort}`)
-    if (tlsWasOn) notes.push('TLS 已在 TCP 模式下关闭，如需 HTTPS 请重新开启')
-    if (notes.length > 0) showTlsHint(`已切换为 HTTP，${notes.join('；')}`)
+    if (portChanged && preTcpSnapshot) notes.push(t('common.app.rules.msgs.listenPortAdjusted', { port: preTcpSnapshot.listenPort }))
+    if (tlsWasOn) notes.push(t('common.app.rules.msgs.tlsClosedInTcp'))
+    if (notes.length > 0) showTlsHint(t('common.app.rules.msgs.switchedHttp', { notes: notes.join('；') }))
   }
 }, { flush: 'sync' })
 
@@ -2540,26 +2543,26 @@ const portWarning = computed(() => {
   if (wizardForm.protocol === 'http') {
     // HTTP rules cannot use admin ports and cannot share a port with any TCP rule.
     if (DEFAULT_DEPLOYMENT_ADMIN_PORTS.includes(wizardForm.listen_port)) {
-      return `端口 ${wizardForm.listen_port} 为管理端口，不可使用`
+      return t('common.app.rules.msgs.portReserved', { port: wizardForm.listen_port })
     }
     if (tcpPorts.includes(wizardForm.listen_port)) {
-      return `端口已被 TCP 规则占用`
+      return t('common.app.rules.msgs.portTakenByTcp')
     }
     // 80 端口 + TLS 跳转自环（跳转目标 https://host:80 与来源同端口）：
     // 后端保存门同判据，前端先拦并在端口行内提示。
     if (wizardForm.listen_port === 80 && wizardForm.enable_tls && wizardForm.tls_http_redirect) {
-      return '80 端口开启 TLS 跳转无意义（目标与来源相同端口），请改用 443 端口或关闭跳转'
+      return t('common.app.rules.msgs.port80TlsRedirect')
     }
   } else if (wizardForm.protocol === 'tcp') {
     // TCP rules cannot use admin ports, 80/443, or share a port with any other rule.
     if (httpReservedPorts.includes(wizardForm.listen_port)) {
-      return `端口 ${wizardForm.listen_port} 为 HTTP/Web 端口，TCP 规则不可使用`
+      return t('common.app.rules.msgs.portHttpReservedForTcp', { port: wizardForm.listen_port })
     }
     if (DEFAULT_DEPLOYMENT_ADMIN_PORTS.includes(wizardForm.listen_port)) {
-      return `端口 ${wizardForm.listen_port} 为管理端口，不可使用`
+      return t('common.app.rules.msgs.portReserved', { port: wizardForm.listen_port })
     }
     if (httpPorts.includes(wizardForm.listen_port) || tcpPorts.includes(wizardForm.listen_port)) {
-      return `端口已被其他规则占用`
+      return t('common.app.rules.msgs.portTakenByOther')
     }
   }
   return ''
@@ -2636,7 +2639,7 @@ const validateCertificate = async () => {
   if (!certPEM && !keyPEM) return
 
   if (!certPEM) {
-    certInfo.error = '请提供证书 (PEM)'
+    certInfo.error = t('common.app.rules.msgs.provideCertPem')
     return
   }
 
@@ -2644,13 +2647,13 @@ const validateCertificate = async () => {
     // 掩码私钥（后端 tls_key 空 + tls_key_set=true）：沿用已保存私钥，
     // 不误报「请提供私钥」（保存门已按同一契约放行）。
     if (wizardForm.tlsKeySet) return
-    certInfo.error = '请提供私钥 (KEY)'
+    certInfo.error = t('common.app.rules.msgs.providePrivKey')
     return
   }
 
   // Validate certificate format
   if (!certPEM.includes('-----BEGIN CERTIFICATE-----') || !certPEM.includes('-----END CERTIFICATE-----')) {
-    certInfo.error = '证书格式无效，必须以 -----BEGIN CERTIFICATE----- 开头'
+    certInfo.error = t('common.app.rules.msgs.certFormatInvalid')
     return
   }
 
@@ -2661,7 +2664,7 @@ const validateCertificate = async () => {
   // * PRIVATE KEY 形态）；本门仅 advisory，终裁仍由后端 parseTLSCertificate
   // （tls.X509KeyPair）判定。
   if (!/-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----/.test(keyPEM)) {
-    certInfo.error = '私钥格式无效，须以 -----BEGIN ... PRIVATE KEY----- 开头'
+    certInfo.error = t('common.app.rules.msgs.privateKeyInvalid')
     return
   }
 
@@ -2676,17 +2679,17 @@ const validateCertificate = async () => {
     if (res.code === 0 && res.data) {
       const data = res.data
       certInfo.valid = data.valid
-      certInfo.domain = data.domain || '未知'
+      certInfo.domain = data.domain || t('common.app.rules.common.unknown')
       certInfo.expiryDate = data.not_after || ''
       certInfo.daysUntilExpiry = data.days_until_expiry || 0
       certInfo.warning = data.warning || ''
       certInfo.error = ''
     } else {
-      certInfo.error = res.message || '证书验证失败'
+      certInfo.error = res.message || t('common.app.rules.msgs.certVerifyFail')
     }
   } catch (error: unknown) {
     if (validationSeq !== certValidationSeq || sessionSeq !== certValidationSessionSeq) return
-    certInfo.error = error instanceof Error ? error.message : '证书验证请求失败'
+    certInfo.error = error instanceof Error ? error.message : t('common.app.rules.msgs.certVerifyRequestFail')
   }
 }
 
@@ -2841,7 +2844,7 @@ const pasteFromFile = (type: 'cert' | 'key'): void => {
     const file = (e.target as HTMLInputElement).files?.[0]
     if (!file) return
     if (file.size > CERT_FILE_MAX_BYTES) {
-      ElMessage.error(`文件超过 ${Math.round(CERT_FILE_MAX_BYTES / 1024)}KB 上限，请手动粘贴证书或私钥内容`)
+      ElMessage.error(t('common.app.rules.msgs.fileTooLargePaste', { maxKb: Math.round(CERT_FILE_MAX_BYTES / 1024) }))
       return
     }
 
@@ -2849,7 +2852,7 @@ const pasteFromFile = (type: 'cert' | 'key'): void => {
     reader.onload = (event) => {
       const content = event.target?.result
       if (typeof content !== 'string') {
-        ElMessage.error('读取文件失败，请重试或手动粘贴')
+        ElMessage.error(t('common.app.rules.msgs.fileReadFail'))
         return
       }
       if (type === 'cert') {
@@ -2857,7 +2860,7 @@ const pasteFromFile = (type: 'cert' | 'key'): void => {
       } else {
         wizardForm.tls_key = content
       }
-      ElMessage.success('已从文件读取内容')
+      ElMessage.success(t('common.app.rules.msgs.fileReadSuccess'))
       // 写入后必须重算校验：原实现只由 textarea @blur 触发（点击按钮本身会让
       // textarea 失焦、以旧内容校验一次），新内容不回填结论会让校验块与预览
       // 停留在上一份证书的域名/到期日。validateCertificate 自带
@@ -2865,7 +2868,7 @@ const pasteFromFile = (type: 'cert' | 'key'): void => {
       void validateCertificate()
     }
     reader.onerror = () => {
-      ElMessage.error('读取文件失败，请重试或手动粘贴')
+      ElMessage.error(t('common.app.rules.msgs.fileReadFail'))
     }
     reader.readAsText(file)
   }
@@ -3037,11 +3040,11 @@ const onDynamicDnsToggle = (enabled: string | number | boolean): void => {
 
 const validateEnabledUpstreams = (): string => {
   const enabledUpstreams = wizardForm.upstreams.filter((upstream) => upstream.enabled !== false)
-  if (enabledUpstreams.length === 0) return '至少需要一个启用的上游服务器'
-  if (wizardForm.dynamic_dns && enabledUpstreams.length !== 1) return '动态上游模式仅允许一个启用的上游服务器'
-  if (wizardForm.dynamic_dns && wizardForm.dns_family.length === 0) return '动态上游模式至少需要选择一种协议栈'
+  if (enabledUpstreams.length === 0) return t('common.app.rules.msgs.upstreamEnabledRequired')
+  if (wizardForm.dynamic_dns && enabledUpstreams.length !== 1) return t('common.app.rules.msgs.dynamicUpstreamLimit')
+  if (wizardForm.dynamic_dns && wizardForm.dns_family.length === 0) return t('common.app.rules.msgs.duStackRequired')
   const totalWeight = enabledUpstreams.reduce((total, upstream) => total + (upstream.weight || 0), 0)
-  if (totalWeight !== 100) return `启用的上游权重总和必须为 100%，当前为 ${totalWeight}%`
+  if (totalWeight !== 100) return t('common.app.rules.msgs.weightTotalInvalid', { totalWeight: totalWeight })
   return ''
 }
 
@@ -3059,10 +3062,10 @@ const addUpstream = () => {
 }
 
 const customRoutesPreview = (): string => {
-  if (!wizardForm.custom_routes_enabled || wizardForm.path_rules.length === 0) return '禁用'
+  if (!wizardForm.custom_routes_enabled || wizardForm.path_rules.length === 0) return t('common.app.rules.list.statusOff')
   const paths = wizardForm.path_rules.slice(0, 3).map((rule) => rule.path || '/').join('、')
-  const suffix = wizardForm.path_rules.length > 3 ? ' 等' : ''
-  return `${wizardForm.path_rules.length} 条 · ${paths}${suffix}`
+  const suffix = wizardForm.path_rules.length > 3 ? t('common.app.rules.wizard.customRoutesEtcSuffix') : ''
+  return t('common.app.rules.wizard.pathRulesSummary', { n: wizardForm.path_rules.length, paths: paths, suffix: suffix })
 }
 
 const removeUpstream = (index: number) => {
@@ -3194,7 +3197,7 @@ const confirmForwardAuthToggle = (): void => {
 
 // 代理超时区被接管字段（仅刷新间隔）：灰态 + 徽标 + 「立即透传」显示值
 const proxyTimeoutFieldOverrides = computed(() => ntlmOn.value
-  ? { proxy_flush_interval: { disabled: true, badge: 'NTLM 接管', note: '立即透传（-1 = 所有响应无缓冲）' } }
+  ? { proxy_flush_interval: { disabled: true, badge: t('common.app.rules.wizard.ntlmTakeover'), note: t('common.app.rules.wizard.flushImmediateNote') } }
   : undefined)
 
 const moveToAdjacentWizardStep = (direction: -1 | 1): void => {
@@ -3228,15 +3231,15 @@ const hasInvalidActiveHealthCheckPath = (): boolean =>
 const nextStep = (): void => {
   if (currentStep.value === WIZARD_STEP.BASIC) {
     if (!wizardForm.name) {
-      ElMessage.warning('请输入规则名称')
+      ElMessage.warning(t('common.app.rules.wizard.ruleNamePlaceholder'))
       return
     }
     if (wizardForm.protocol === 'http' && !wizardForm.domain) {
-      ElMessage.warning('HTTP 协议必须填写域名')
+      ElMessage.warning(t('common.app.rules.msgs.httpDomainRequired'))
       return
     }
     if (!wizardForm.listen_port) {
-      ElMessage.warning('请输入监听端口')
+      ElMessage.warning(t('common.app.rules.wizard.listenPortPlaceholder'))
       return
     }
     if (portWarning.value) {
@@ -3250,16 +3253,16 @@ const nextStep = (): void => {
     // 详情失败只影响「手动 TLS」的证书材料：切到 ACME 后证书正文不再参与保存，
     // 无条件的门会把用户钉死在 TLS 步（横幅文案本身也自述「手动 TLS 配置」）。
     if (tlsDetailError.value && wizardForm.tls_source === 'manual') {
-      ElMessage.warning('证书详情加载失败：请先在 TLS 步骤点「重新加载」')
+      ElMessage.warning(t('common.app.rules.msgs.certDetailReloadFirstHint'))
       return
     }
     if (wizardForm.tls_source === 'acme_dns' && !wizardForm.acme_config_id) {
-      ElMessage.warning('请选择 DNS 提供商配置')
+      ElMessage.warning(t('common.app.rules.msgs.dnsConfigRequired'))
       return
     }
     // 掩码私钥（tlsKeySet=true）且未粘贴新私钥时允许通过——后端保留原值
     if (wizardForm.tls_source === 'manual' && (!wizardForm.tls_cert.trim() || (!wizardForm.tls_key.trim() && !wizardForm.tlsKeySet))) {
-      ElMessage.warning(wizardForm.tls_cert.trim() ? '请上传证书和私钥（或粘贴新私钥以更换）' : '请上传证书和私钥')
+      ElMessage.warning(wizardForm.tls_cert.trim() ? t('common.app.rules.msgs.uploadCertAndKeyReplace') : t('common.app.rules.msgs.uploadCertAndKey'))
       return
     }
     moveToAdjacentWizardStep(1)
@@ -3271,12 +3274,12 @@ const nextStep = (): void => {
     // 故与红框/警告共用同一谓词）：host 与 port 缺一不放过——提交侧按
     // host+port 过滤身份，端口清空行会被静默剔除。
     if (wizardForm.upstreams.some((u, i) => upstreamRowInvalid(u, i))) {
-      ElMessage.warning(upstreamFieldWarning.value || '请填写所有已启用上游服务器的主机地址与端口')
+      ElMessage.warning(upstreamFieldWarning.value || t('common.app.rules.msgs.upHostsRequired'))
       return
     }
     const validUpstreams = wizardForm.upstreams.filter(u => u.host && u.port)
     if (validUpstreams.length === 0) {
-      ElMessage.warning('请至少添加一个有效的上游服务器')
+      ElMessage.warning(t('common.app.rules.msgs.upstreamValidRequired'))
       return
     }
     // Check if at least one upstream is enabled
@@ -3288,11 +3291,11 @@ const nextStep = (): void => {
     // M33/M34：上游 host:port 查重与健康检查路径门在此步前置拦截（提交侧同款双保险）
     const duplicated = findDuplicateUpstream()
     if (duplicated) {
-      ElMessage.error(`上游第 ${duplicated.rowIndex} 行重复：${duplicated.key}`)
+      ElMessage.error(t('common.app.rules.msgs.upRowDuplicate', { row: duplicated.rowIndex, key: duplicated.key }))
       return
     }
     if (hasInvalidActiveHealthCheckPath()) {
-      ElMessage.error('健康检查路径必须以 / 开头')
+      ElMessage.error(t('common.app.rules.msgs.healthPathSlash'))
       return
     }
     moveToAdjacentWizardStep(1)
@@ -3300,7 +3303,7 @@ const nextStep = (): void => {
   }
   if (currentStep.value === WIZARD_STEP.CUSTOM_ROUTES) {
     if (wizardForm.path_rules.length === 0) {
-      ElMessage.warning('请至少添加一条路径规则')
+      ElMessage.warning(t('common.app.rules.msgs.pathRuleRequired'))
       return
     }
     const pathRuleError = validatePathRules(wizardForm.path_rules)
@@ -3310,7 +3313,7 @@ const nextStep = (): void => {
     }
   }
   if (currentStep.value === WIZARD_STEP.ADVANCED && wizardForm.dynamic_dns && wizardForm.dns_family.length === 0) {
-    ElMessage.warning('动态上游模式至少需要选择一种协议栈')
+    ElMessage.warning(t('common.app.rules.msgs.duStackRequired'))
     return
   }
   moveToAdjacentWizardStep(1)
@@ -3324,19 +3327,19 @@ const submitWizard = async () => {
   if (isReadOnly.value || saving.value) return
   saving.value = true
   if (!wizardForm.name) {
-    ElMessage.warning('请输入规则名称')
+    ElMessage.warning(t('common.app.rules.wizard.ruleNamePlaceholder'))
     saving.value = false
     return
   }
   // step 标题可点击跳步绕过步进校验——提交前镜像 BASIC 步
   // 的 domain/端口前置（后端 400 兜底仍在，但报错晚且不带定位）。
   if (wizardForm.protocol === 'http' && !wizardForm.domain) {
-    ElMessage.warning('HTTP 协议必须填写域名')
+    ElMessage.warning(t('common.app.rules.msgs.httpDomainRequired'))
     saving.value = false
     return
   }
   if (!wizardForm.listen_port) {
-    ElMessage.warning('请输入监听端口')
+    ElMessage.warning(t('common.app.rules.wizard.listenPortPlaceholder'))
     saving.value = false
     return
   }
@@ -3351,7 +3354,7 @@ const submitWizard = async () => {
     // enable_tls+acme_dns 且 acme_config_id=0 时返回 400；不在此前置拦截时
     // 从 TLS 步直接跳预览保存才报错，晚且无定位。
     if (wizardForm.tls_source === 'acme_dns' && !wizardForm.acme_config_id) {
-      ElMessage.warning('请选择 DNS 提供商配置')
+      ElMessage.warning(t('common.app.rules.msgs.dnsConfigRequired'))
       saving.value = false
       return
     }
@@ -3359,19 +3362,19 @@ const submitWizard = async () => {
     // 新私钥时允许通过, 契约:空 key+tlsKeySet=保留原私钥)
     if (!wizardForm.tls_cert?.trim() || (!wizardForm.tls_key?.trim() && !wizardForm.tlsKeySet)) {
       if (wizardForm.tls_source === 'manual') {
-        ElMessage.warning('TLS 手动模式须上传证书与私钥')
+        ElMessage.warning(t('common.app.rules.msgs.tlsManualNeedsPair'))
         saving.value = false
         return
       }
     }
   }
   if (wizardForm.upstreams.length === 0) {
-    ElMessage.warning('请至少添加一个上游服务器')
+    ElMessage.warning(t('common.app.rules.msgs.upstreamRequired'))
     saving.value = false
     return
   }
   if (wizardForm.upstreams.length > MAX_UPSTREAM_ROWS) {
-    ElMessage.warning(`上游服务器最多允许 ${MAX_UPSTREAM_ROWS} 条`)
+    ElMessage.warning(t('common.app.rules.msgs.upstreamRowLimit', { maxRows: MAX_UPSTREAM_ROWS }))
     saving.value = false
     return
   }
@@ -3381,7 +3384,7 @@ const submitWizard = async () => {
   // 同时让红框标出待补行。
   upstreamTouched.value = wizardForm.upstreams.map(() => true)
   if (wizardForm.upstreams.some((u, i) => upstreamRowInvalid(u, i))) {
-    ElMessage.warning(upstreamFieldWarning.value || '请填写所有已启用上游服务器的主机地址与端口')
+    ElMessage.warning(upstreamFieldWarning.value || t('common.app.rules.msgs.upHostsRequired'))
     saving.value = false
     return
   }
@@ -3390,7 +3393,7 @@ const submitWizard = async () => {
     // 却没有路径规则时，载荷会落 custom_routes_enabled=1 + path_rules=[]，
     // 预览却按空数组显示「禁用」——字段与文案相反的死配置。
     if (wizardForm.path_rules.length === 0) {
-      ElMessage.warning('请至少添加一条路径规则')
+      ElMessage.warning(t('common.app.rules.msgs.pathRuleRequired'))
       saving.value = false
       return
     }
@@ -3411,13 +3414,13 @@ const submitWizard = async () => {
   // M33：上游 host:port 查重（不分启用状态，同后端口径）
   const duplicated = findDuplicateUpstream()
   if (duplicated) {
-    ElMessage.error(`上游第 ${duplicated.rowIndex} 行重复：${duplicated.key}`)
+    ElMessage.error(t('common.app.rules.msgs.upRowDuplicate', { row: duplicated.rowIndex, key: duplicated.key }))
     saving.value = false
     return
   }
   // M34：主动健康检查路径必须以 / 开头
   if (hasInvalidActiveHealthCheckPath()) {
-    ElMessage.error('健康检查路径必须以 / 开头')
+    ElMessage.error(t('common.app.rules.msgs.healthPathSlash'))
     saving.value = false
     return
   }
@@ -3428,7 +3431,7 @@ const submitWizard = async () => {
   if (!wizardForm.enable_active_health_check) {
     const clampedTimeout = clampPassiveHealthCheckTimeout(wizardForm.health_check_interval, wizardForm.health_check_timeout)
     if (clampedTimeout.clamped) {
-      ElMessage.info(`被动检查不展示「健康检查超时」：该值须小于间隔 ${wizardForm.health_check_interval} 秒，已自动从 ${wizardForm.health_check_timeout} 秒调整为 ${clampedTimeout.timeout} 秒`)
+      ElMessage.info(t('common.app.rules.msgs.passiveCheckTimeoutAdjusted', { healthCheckInterval: wizardForm.health_check_interval, healthCheckTimeout: wizardForm.health_check_timeout, clampedTimeoutTimeout: clampedTimeout.timeout }))
       wizardForm.health_check_timeout = clampedTimeout.timeout
     }
   }
@@ -3437,13 +3440,13 @@ const submitWizard = async () => {
   if (wizardForm.health_check_interval > 0
       && wizardForm.health_check_timeout > 0
       && wizardForm.health_check_timeout >= wizardForm.health_check_interval) {
-    ElMessage.warning(`健康检查超时时间（${wizardForm.health_check_timeout} 秒）必须小于检查间隔（${wizardForm.health_check_interval} 秒）`)
+    ElMessage.warning(t('common.app.rules.msgs.healthTimeoutInvalid', { healthTimeout: wizardForm.health_check_timeout, healthInterval: wizardForm.health_check_interval }))
     saving.value = false
     return
   }
   const allowedProtocols: readonly UpstreamProtocol[] = wizardForm.protocol === 'tcp' ? ['tcp', 'tls'] : ['http', 'https']
   if (wizardForm.upstreams.some(u => !allowedProtocols.includes(u.protocol))) {
-    ElMessage.warning(`${wizardForm.protocol.toUpperCase()} 规则包含协议族不匹配的上游服务器`)
+    ElMessage.warning(t('common.app.rules.msgs.protoFamilyUpstream', { protocol: wizardForm.protocol.toUpperCase() }))
     saving.value = false
     return
   }
@@ -3452,7 +3455,7 @@ const submitWizard = async () => {
   if (wizardForm.protocol === 'http') {
     const enabledProtos = new Set(wizardForm.upstreams.filter(u => u.enabled !== false).map(u => u.protocol || 'http'))
     if (enabledProtos.has('http') && enabledProtos.has('https')) {
-      ElMessage.warning('同一 HTTP 规则的启用上游协议须一致（http/https 混布时 http 上游会被 TLS 化而无法访问；如需共存请拆分为两条规则）')
+      ElMessage.warning(t('common.app.rules.msgs.upstreamProtocolMismatch'))
       saving.value = false
       return
     }
@@ -3464,17 +3467,17 @@ const submitWizard = async () => {
     const origin = (upstream.origin_domain || '').trim()
     if (origin === '') continue
     if (wizardForm.protocol !== 'http') {
-      ElMessage.warning(`上游 #${index + 1}：回源域名仅 HTTP 规则支持`)
+      ElMessage.warning(t('common.app.rules.msgs.upstreamOriginHttpOnly', { upstreamIndex: index + 1 }))
       saving.value = false
       return
     }
     if (wizardForm.dynamic_dns) {
-      ElMessage.warning(`上游 #${index + 1}：动态上游模式不支持回源域名（改写 Host 请经 API/MCP 设置规则级 host_header）`)
+      ElMessage.warning(t('common.app.rules.msgs.upstreamDynamicOriginUnsupported', { upstreamIndex: index + 1 }))
       saving.value = false
       return
     }
     if (!isValidHostName(origin)) {
-      ElMessage.warning(`上游 #${index + 1}：回源域名 "${origin}" 无效（仅支持主机名，不带端口）`)
+      ElMessage.warning(t('common.app.rules.msgs.upOriginHostInvalid', { index: index + 1, origin }))
       saving.value = false
       return
     }
@@ -3482,25 +3485,25 @@ const submitWizard = async () => {
   // 健康检查域名：probe Host 头，纯主机名不带端口（与后端同口径）
   const healthCheckHost = (wizardForm.health_check_host || '').trim()
   if (healthCheckHost !== '' && wizardForm.protocol === 'http' && !isValidHostName(healthCheckHost)) {
-    ElMessage.warning(`健康检查域名 "${healthCheckHost}" 无效（仅支持主机名，不带端口）`)
+    ElMessage.warning(t('common.app.rules.msgs.healthHostInvalid', { host: healthCheckHost }))
     saving.value = false
     return
   }
   const allowedStrategies = strategyValuesForProtocol(wizardForm.protocol)
   if (!allowedStrategies.includes(wizardForm.strategy)) {
-    ElMessage.warning(`${wizardForm.protocol.toUpperCase()} 规则包含协议族不匹配的负载策略`)
+    ElMessage.warning(t('common.app.rules.msgs.protoFamilyPolicy', { protocol: wizardForm.protocol.toUpperCase() }))
     saving.value = false
     return
   }
   // NTLM 兼容预校验（与后端 validateRuleFeatures 同口径；正常交互不可达，
   // 兜直改 DB/导入产生的失配态）
   if (wizardForm.protocol === 'http' && wizardForm.ntlm_compatible === 1 && wizardForm.strategy !== 'cookie') {
-    ElMessage.warning('NTLM 兼容模式要求负载策略为 Cookie 会话保持')
+    ElMessage.warning(t('common.app.rules.msgs.ntlmRequiresCookie'))
     saving.value = false
     return
   }
   if (wizardForm.protocol === 'tcp' && wizardForm.ntlm_compatible === 1) {
-    ElMessage.warning('TCP 规则不支持 NTLM 兼容模式（仅 HTTP 规则可用）')
+    ElMessage.warning(t('common.app.rules.msgs.ntlmHttpOnly'))
     saving.value = false
     return
   }
@@ -3508,18 +3511,18 @@ const submitWizard = async () => {
   // 兜直改 DOM/导入产生的失配态）
   if (wizardForm.protocol === 'http' && wizardForm.forward_auth_enabled === 1) {
     if (!/^https?:\/\/.+/.test(wizardForm.forward_auth_upstream.trim())) {
-      ElMessage.warning('认证网关地址须为 http(s)://host:port 形态')
+      ElMessage.warning(t('common.app.rules.msgs.forwardAuthAddressFormat'))
       saving.value = false
       return
     }
     if (!(wizardForm.forward_auth_uri || '').startsWith('/') || /[\r\n]/.test(wizardForm.forward_auth_uri)) {
-      ElMessage.warning('认证路径须以 / 开头且不含换行')
+      ElMessage.warning(t('common.app.rules.msgs.forwardAuthPathFormat'))
       saving.value = false
       return
     }
     const faHeaders = wizardForm.forward_auth_copy_headers.split(',').map((item) => item.trim()).filter(Boolean)
     if (faHeaders.length === 0 || faHeaders.length > 16 || faHeaders.some((item) => /[\s:]/.test(item))) {
-      ElMessage.warning('认证网关身份头清单须为 1-16 个头且不含空白/冒号')
+      ElMessage.warning(t('common.app.rules.msgs.forwardAuthHeaderListFormat'))
       saving.value = false
       return
     }
@@ -3530,16 +3533,16 @@ const submitWizard = async () => {
   let copyWithBindings = false
   if (!editingRule.value && isCopyMode.value) {
     if (securityBindingsLoading.value || securityBindingsError.value) {
-      ElMessage.warning(securityBindingsLoading.value ? '安全策略绑定加载中，请稍后再复制' : '安全策略绑定加载失败，请先重新加载后再复制')
+      ElMessage.warning(securityBindingsLoading.value ? t('common.app.rules.msgs.securityBindingsCopyWait') : t('common.app.rules.msgs.securityBindingsCopyFailFirst'))
       saving.value = false
       return
     }
     const sourceBoundCount = copySourceRuleId.value ? (securityBindings.value[copySourceRuleId.value] || []).length : 0
     try {
       await ElMessageBox.confirm(
-        `复制规则 "${wizardForm.name}"：「含安全策略」副本携带源规则的全部 ${sourceBoundCount} 条策略绑定；「仅负载规则」副本不含任何安全策略绑定，保存后可到规则行「安全」再绑定。`,
-        '复制确认',
-        { type: 'warning', confirmButtonText: '含安全策略', cancelButtonText: '仅负载规则', distinguishCancelAndClose: true }
+        t('common.app.rules.msgs.copyBody', { name: wizardForm.name, count: sourceBoundCount }),
+        t('common.app.rules.msgs.copyConfirmTitle'),
+        { type: 'warning', confirmButtonText: t('common.app.rules.msgs.copyWithSecurityBtn'), cancelButtonText: t('common.app.rules.msgs.copyRulesOnlyBtn'), distinguishCancelAndClose: true }
       )
       copyWithBindings = true
     } catch (e) {
@@ -3552,12 +3555,12 @@ const submitWizard = async () => {
       }
     }
   } else {
-    const action = editingRule.value ? '更新' : '创建'
+    const action = editingRule.value ? t('common.app.rules.common.update') : t('common.app.rules.common.create')
     try {
       await ElMessageBox.confirm(
-        `确定要${action}规则 "${wizardForm.name}" 吗？`,
-        `${action}确认`,
-        { type: 'warning', confirmButtonText: '确定', cancelButtonText: '取消' }
+        t('common.app.rules.msgs.ruleActionConfirm', { action, name: wizardForm.name }),
+        t('common.app.rules.msgs.actionConfirmTitle', { action: action }),
+        { type: 'warning', confirmButtonText: t('common.app.rules.common.confirm'), cancelButtonText: t('common.app.rules.common.cancel') }
       )
     } catch (e) {
       saving.value = false
@@ -3666,7 +3669,7 @@ const submitWizard = async () => {
     let submitWarnings: string[] = []
     if (editingRule.value) {
       const updateRes = await request.put<APIResponse<{ warnings?: string[] }>>(`/rules/${editingRule.value.caddy_id}`, data)
-      mfaAwareSuccess('更新成功')
+      mfaAwareSuccess(t('common.app.rules.msgs.updateSuccess'))
       // 后端把「本次保存造成的可用性变化」放在 data.warnings（如 ACME 改域：
       // 旧证书已弃用、新证书签发完成前 HTTPS 不可用）。只弹 toast 等于没告知
       // ——这些披露描述的正是「保存成功后马上会遇到的故障」。
@@ -3676,21 +3679,21 @@ const submitWizard = async () => {
       const createRes = await request.post<APIResponse<{ caddy_id: string }>>('/rules', data)
       // 复制路径（openCopyWizard 带入的源规则）：POST /rules 不经 /duplicate、不携带绑定——
       // 源绑定从 bindings 快照取经 PUT 复制到新规则；绑定失败不回滚副本（口径同策略绑定失败）
-      let createMessage = createRes.message || '创建成功'
+      let createMessage = createRes.message || t('common.app.rules.msgs.createSuccess')
       const sourceId = isCopyMode.value ? copySourceRuleId.value : null
       const sourcePolicyIds = sourceId && copyWithBindings ? (securityBindings.value[sourceId] || []).map((b) => b.policy_id) : []
       const newCaddyId = createRes.data?.caddy_id
       if (sourceId && sourcePolicyIds.length > 0) {
         if (!newCaddyId) {
           console.error('copy bindings failed: create response missing caddy_id')
-          ElMessage.error('副本已创建，策略绑定复制失败')
+          ElMessage.error(t('common.app.rules.msgs.copyPartialFail'))
         } else {
           try {
             await request.put<APIResponse>(`/security/rules/${encodeURIComponent(newCaddyId)}/policies`, { policy_ids: sourcePolicyIds })
-            createMessage += `，已携带 ${sourcePolicyIds.length} 条策略绑定`
+            createMessage += t('common.app.rules.msgs.copyBoundSuffix', { n: sourcePolicyIds.length })
           } catch (bindError: unknown) {
             console.error('copy bindings failed', bindError)
-            ElMessage.error('副本已创建，策略绑定复制失败')
+            ElMessage.error(t('common.app.rules.msgs.copyPartialFail'))
           }
         }
       }
@@ -3703,16 +3706,16 @@ const submitWizard = async () => {
       // （可用性变化不是可忽略的提示条）。
       await ElMessageBox.alert(
         h('div', submitWarnings.map((warning) => h('div', warning))),
-        '规则已更新，请留意',
-        { confirmButtonText: '知道了', type: 'warning' },
+        t('common.app.rules.msgs.ruleUpdatedNotice'),
+        { confirmButtonText: t('common.app.rules.common.gotIt'), type: 'warning' },
       ).catch(() => undefined)
     }
   } catch (error: unknown) {
     // 版本前置条件冲突：他人已提交该规则，本表单是陈旧快照。刷新列表并
     // 提示重开——继续用旧表单重试只会重复 409（或在不带版本时静默覆盖）。
-    if (error instanceof ApiRequestError && error.status === 409 && error.message.includes('规则已被他人修改')) {
+    if (error instanceof ApiRequestError && error.status === 409 && error.message.includes(t('common.app.rules.msgs.ruleModifiedByOther'))) {
       fetchRules()
-      ElMessage.warning('规则已被他人修改，已刷新列表，请关闭向导后重新打开再编辑')
+      ElMessage.warning(t('common.app.rules.msgs.ruleConflictReloadHint'))
     }
     // Error message is already shown by the global axios interceptor.
     console.error('submit wizard failed', error)
@@ -3730,8 +3733,8 @@ const flowDialogModel = ref<RuleStageModel | null>(null)
 const upstreamSummaryForRule = (rule: Rule): string => {
   const count = getEnabledUpstreams(rule).length
   const health = healthStatus.value[rule.caddy_id]
-  if (health && health.total > 0) return `${count} 个上游 · 健康 ${health.healthy}/${health.total}`
-  return `${count} 个上游`
+  if (health && health.total > 0) return t('common.app.rules.wizard.upCountHealth', { count: count, healthy: health.healthy, total: health.total })
+  return t('common.app.rules.wizard.upCount', { count: count })
 }
 
 const openFlowDialog = (rule: Rule): void => {
@@ -3786,8 +3789,8 @@ const bindDialogOpening = ref(false)
 const openBindDialog = async (rule: Rule): Promise<void> => {
   if (securityBindingsLoading.value || securityBindingsError.value || bindDialogOpening.value) {
     ElMessage.warning(securityBindingsLoading.value
-      ? '安全策略绑定加载中，请稍后再试'
-      : securityBindingsError.value ? '安全策略绑定加载失败，请先重新加载' : '安全策略绑定数据刷新中，请稍候')
+      ? t('common.app.rules.msgs.securityBindingsRetryWait')
+      : securityBindingsError.value ? t('common.app.rules.msgs.securityBindingsReloadFirst') : t('common.app.rules.msgs.securityBindingsRefreshWait'))
     return
   }
   bindDialogOpening.value = true
@@ -3799,7 +3802,7 @@ const openBindDialog = async (rule: Rule): Promise<void> => {
     // 含策略目录（true）：编辑器的阶段门与流程投影依赖策略摘要。
     await fetchSecurityBindings(true)
     if (securityBindingsError.value) {
-      ElMessage.error('安全策略绑定数据刷新失败，已取消打开；请点击上方「重新加载」后重试')
+      ElMessage.error(t('common.app.rules.msgs.securityBindingsRefreshFailCancelled'))
       return
     }
     bindDialogRule.value = rule
@@ -3825,16 +3828,16 @@ const toggleRule = async (rule: Rule) => {
   if (isReadOnly.value) return
   if (ruleTogglePending.value[rule.caddy_id]) return
   const nextEnabled = rule.enabled
-  const action = rule.enabled ? '启用' : '禁用'
+  const action = rule.enabled ? t('common.app.rules.common.enable') : t('common.app.rules.common.disable')
   ruleTogglePending.value[rule.caddy_id] = true
   try {
-    await ElMessageBox.confirm(`确定要${action}规则 "${rule.name}" 吗？`, `${action}确认`, { type: 'warning' })
+    await ElMessageBox.confirm(t('common.app.rules.msgs.ruleActionConfirm', { action, name: rule.name }), t('common.app.rules.msgs.actionConfirmTitle', { action: action }), { type: 'warning' })
     if (rule.enabled) {
       await request.post<APIResponse>(`/rules/${rule.caddy_id}/enable`)
     } else {
       await request.post<APIResponse>(`/rules/${rule.caddy_id}/disable`)
     }
-    mfaAwareSuccess(`${action}成功`)
+    mfaAwareSuccess(t('common.app.rules.msgs.actionSuccess', { action: action }))
     await fetchRules()
   } catch (e) {
     // 回滚开关后必须回读列表：写其实已生效但响应丢失（网关 5xx/超时）时，
@@ -3855,9 +3858,9 @@ const deleteRule = async (rule: Rule) => {
   if (deletingRuleId.value !== null) return
   deletingRuleId.value = rule.caddy_id
   try {
-    await ElMessageBox.confirm(`确定要删除规则 "${rule.name}" 吗？`, '删除确认', { type: 'warning' })
+    await ElMessageBox.confirm(t('common.app.rules.msgs.ruleDeleteConfirm', { name: rule.name }), t('common.app.rules.msgs.deleteConfirmTitle'), { type: 'warning' })
     await request.delete<APIResponse>(`/rules/${rule.caddy_id}`)
-    mfaAwareSuccess('删除成功')
+    mfaAwareSuccess(t('common.app.rules.msgs.deleteSuccess'))
     fetchRules()
   } catch (error: unknown) {
     if (error === 'cancel' || error === 'close') return
@@ -3870,7 +3873,7 @@ const deleteRule = async (rule: Rule) => {
 const duplicateRule = async (rule: Rule) => {
   if (isReadOnly.value) return
   try {
-    await ElMessageBox.confirm(`确定要复制规则 "${rule.name}" 吗？`, '复制确认', { type: 'info' })
+    await ElMessageBox.confirm(t('common.app.rules.msgs.ruleCopyConfirm', { name: rule.name }), t('common.app.rules.msgs.copyConfirmTitle'), { type: 'info' })
     openCopyWizard(rule)
   } catch (error: unknown) {
     if (error === 'cancel' || error === 'close') return
@@ -3919,7 +3922,7 @@ const openCopyWizard = async (rule: Rule) => {
   }
   copySourceHostHeader.value = copyRuleHostHeader(fullRule)
   Object.assign(wizardForm, wizardFormFromRule(fullRule), {
-    name: `${fullRule.name}（副本）`,
+    name: t('common.app.rules.msgs.copyName', { name: fullRule.name }),
     enabled: false,
   })
   weightsToPercent(wizardForm.upstreams)
@@ -3953,7 +3956,7 @@ const viewConfig = async (rule: Rule) => {
     // Error message is already shown by the global axios interceptor; the dialog
     // keeps an independent visible error instead of presenting synthetic JSON.
     console.error('view config failed', error)
-    configLoadError.value = error instanceof Error ? error.message : '获取配置失败'
+    configLoadError.value = error instanceof Error ? error.message : t('common.app.rules.cfg.configLoadFail')
   } finally {
     if (requestSeq === configRequestSeq) configLoading.value = false
   }
@@ -4115,7 +4118,7 @@ const fetchLogStream = async () => {
   } catch (error: unknown) {
     if (disposed || axios.isCancel(error) || requestSeq !== ruleLogRequestSeq || !ruleLogDialogVisible.value || ruleLogTab.value !== 'stats' || ruleLogCaddyId.value !== targetId) return
     console.error('Failed to fetch log stream:', error)
-    ruleLogStatsError.value = error instanceof Error ? error.message : '请稍后重试'
+    ruleLogStatsError.value = error instanceof Error ? error.message : t('common.app.rules.common.retryLater')
   } finally {
     if (!disposed && requestSeq === ruleLogRequestSeq) logStatsInFlight.value = false
   }
@@ -4162,7 +4165,7 @@ const startLogStats = async () => {
   } catch (error: unknown) {
     if (disposed || requestSeq !== ruleLogRequestSeq || !ruleLogDialogVisible.value || ruleLogTab.value !== 'stats' || ruleLogCaddyId.value !== targetId) return
     console.error('Failed to init log stats:', error)
-    ruleLogStatsError.value = error instanceof Error ? error.message : '请稍后重试'
+    ruleLogStatsError.value = error instanceof Error ? error.message : t('common.app.rules.common.retryLater')
   } finally {
     if (!disposed && requestSeq === ruleLogRequestSeq) ruleLogStatsLoading.value = false
   }
@@ -4271,7 +4274,7 @@ const healthPolling = usePollingTask(async (task) => {
 const healthPollingErrorDescription = computed(() => {
   const lastError = formatDate(healthPollingError.lastErrorAt.value)
   const retryAt = formatDate(healthPollingError.retryAt.value)
-  return retryAt ? `最后错误：${lastError}；契约响应异常，自动重试已退避至 ${retryAt}` : `最后错误：${lastError}`
+  return retryAt ? t('common.app.rules.cfg.lastErrorBackoff', { lastError: lastError, retryAt: retryAt }) : t('common.app.rules.cfg.lastError', { lastError: lastError })
 })
 const healthRetryLoading = ref(false)
 const retryHealthPolling = async (): Promise<void> => {
@@ -4289,8 +4292,8 @@ const certPollingErrorDescription = computed(() => {
   const lastError = formatDate(certPollingError.lastErrorAt.value)
   const retryAt = formatDate(certPollingError.retryAt.value)
   return retryAt
-    ? `最后错误：${lastError}；契约响应异常，自动重试已退避至 ${retryAt}`
-    : `最后错误：${lastError}`
+    ? t('common.app.rules.cfg.lastErrorBackoff', { lastError: lastError, retryAt: retryAt })
+    : t('common.app.rules.cfg.lastError', { lastError: lastError })
 })
 const certJobsPolling = usePollingTask(async (task) => {
   if (!certPollingError.canRun()) return

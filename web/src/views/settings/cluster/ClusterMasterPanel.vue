@@ -4,9 +4,9 @@
       <div class="card-header">
         <div class="card-title">
           <el-icon><Setting /></el-icon>
-          <span>{{ status.node_mode === 'slave' ? '集群同步设置（主端下发）' : '主节点同步设置' }}</span>
+          <span>{{ status.node_mode === 'slave' ? t('common.app.views.cluster.syncSettingsSlaveTitle') : t('common.app.views.cluster.syncSettingsMasterTitle') }}</span>
         </div>
-        <el-button type="primary" size="small" :loading="tokenLoading" :disabled="readOnly" @click="$emit('generate-token')">生成注册令牌</el-button>
+        <el-button type="primary" size="small" :loading="tokenLoading" :disabled="readOnly" @click="$emit('generate-token')">{{ t('common.app.views.cluster.generateToken') }}</el-button>
       </div>
     </template>
     <el-form label-width="120px" class="settings-form" :disabled="readOnly">
@@ -28,22 +28,22 @@
       <div class="card-header">
         <div class="card-title">
           <el-icon><List /></el-icon>
-          <span>节点列表</span>
+          <span>{{ t('common.app.views.cluster.nodeList') }}</span>
         </div>
-        <span class="card-tip">每 15 秒自动刷新</span>
+        <span class="card-tip">{{ t('common.app.views.cluster.autoRefreshTip') }}</span>
       </div>
     </template>
 
     <!-- el-table 的 data 只接受可变数组；这里只读投影（组件不会写回），断言仅抹平 readonly 修饰 -->
       <el-table :data="nodes as ClusterNodeWithSyncError[]" row-key="id" v-loading="loading" stripe :header-cell-style="{ background: 'var(--bg-secondary)' }" empty-text="">
-      <el-table-column prop="name" label="名称" min-width="90" show-overflow-tooltip />
-      <el-table-column label="地址" min-width="130" show-overflow-tooltip>
+      <el-table-column prop="name" :label="t('common.app.views.cluster.colName')" min-width="90" show-overflow-tooltip />
+      <el-table-column :label="t('common.app.views.cluster.colAddress')" min-width="130" show-overflow-tooltip>
         <template #default="{ row }"><span class="mono-value">{{ row.ip_address }}:{{ row.port }}</span></template>
       </el-table-column>
-      <el-table-column label="状态" width="70" align="center" class-name="node-status-col">
+      <el-table-column :label="t('common.app.views.cluster.colStatus')" width="70" align="center" class-name="node-status-col">
         <template #default="{ row }">
           <el-tooltip v-if="versionIncompatibilityError(row as ClusterNodeWithSyncError)" :content="versionIncompatibilityError(row as ClusterNodeWithSyncError)" placement="top">
-            <el-tag type="danger" size="small">版本不兼容</el-tag>
+            <el-tag type="danger" size="small">{{ t('common.app.views.cluster.versionIncompatible') }}</el-tag>
           </el-tooltip>
           <!-- 状态 hover 展示从节点四个规则库版本（跟随主节点同步，名称与
                规则库列表严格一致；缺失显示「—」） -->
@@ -54,10 +54,10 @@
             <el-tag :type="statusType(row.status)" size="small">{{ statusLabel(row.status) }}</el-tag>
           </el-tooltip>
           <el-tag v-else :type="statusType(row.status)" size="small">{{ statusLabel(row.status) }}</el-tag>
-          <div v-if="row.status === 'offline'" class="offline-duration">离线 {{ offlineDuration(row.last_seen) }}</div>
+          <div v-if="row.status === 'offline'" class="offline-duration">{{ t('common.app.views.cluster.offlineFor', { duration: offlineDuration(row.last_seen) }) }}</div>
         </template>
       </el-table-column>
-      <el-table-column label="配置版本" min-width="110">
+      <el-table-column :label="t('common.app.views.cluster.colConfigVersion')" min-width="110">
         <template #default="{ row }">
           <el-popover v-if="row.section_sync?.length" placement="top" trigger="hover" :width="460" :show-after="150" :popper-options="popperViewportSafe">
             <template #reference>
@@ -66,68 +66,68 @@
                 <!-- UI(用户裁定):合并状态标签消除换行——分区滞后优先
                      (节级哈希不一致蕴含版本待同步,hover 明细见 popover 分区列表);
                      两者同现时不再双标签叠行,单标签+数字紧凑呈现。 -->
-                <el-tag v-if="laggingSectionCount(row as ClusterNodeWithSyncError) > 0" type="warning" size="small" effect="plain">分区滞后 {{ laggingSectionCount(row as ClusterNodeWithSyncError) }}</el-tag>
-                <el-tag v-else-if="row.reported_version < row.current_version" type="warning" size="small" effect="plain">待同步</el-tag>
-                <el-tag v-else-if="row.reported_version === row.current_version" type="success" size="small" effect="plain">已同步</el-tag>
+                <el-tag v-if="laggingSectionCount(row as ClusterNodeWithSyncError) > 0" type="warning" size="small" effect="plain">{{ t('common.app.views.cluster.sectionLagging', { count: laggingSectionCount(row as ClusterNodeWithSyncError) }) }}</el-tag>
+                <el-tag v-else-if="row.reported_version < row.current_version" type="warning" size="small" effect="plain">{{ t('common.app.views.cluster.pendingSync') }}</el-tag>
+                <el-tag v-else-if="row.reported_version === row.current_version" type="success" size="small" effect="plain">{{ t('common.app.views.cluster.synced') }}</el-tag>
                 <!-- reported>current 罕见形态(主版本回退)——不误显已同步-->
-                <el-tag v-else type="info" size="small" effect="plain">版本异常</el-tag>
+                <el-tag v-else type="info" size="small" effect="plain">{{ t('common.app.views.cluster.versionAbnormal') }}</el-tag>
               </div>
             </template>
             <div class="section-sync-panel">
-              <div class="popover-title">分区同步状态</div>
+              <div class="popover-title">{{ t('common.app.views.cluster.sectionSyncTitle') }}</div>
               <div v-for="section in row.section_sync" :key="section.section" class="section-sync-row">
                 <div class="section-sync-head">
                   <span class="section-sync-label">{{ section.label }}</span>
-                  <el-tag v-if="!section.synced" type="warning" size="small">滞后</el-tag>
-                  <el-tag v-else type="success" size="small">已同步</el-tag>
+                  <el-tag v-if="!section.synced" type="warning" size="small">{{ t('common.app.views.cluster.lagging') }}</el-tag>
+                  <el-tag v-else type="success" size="small">{{ t('common.app.views.cluster.synced') }}</el-tag>
                 </div>
                 <!-- 全量哈希(2026-09-19 用户裁定):宽度有富裕,完整展示便于
                      与对端 DB/节点比对取证;滞后行追加主端哈希行。 -->
-                <div class="section-sync-hash mono-value">{{ section.hash || '无记录' }}</div>
-                <div v-if="!section.synced" class="section-sync-hash section-sync-hash-master">主端 {{ section.master_hash }}</div>
+                <div class="section-sync-hash mono-value">{{ section.hash || t('common.app.views.cluster.noRecord') }}</div>
+                <div v-if="!section.synced" class="section-sync-hash section-sync-hash-master">{{ t('common.app.views.cluster.masterHash', { hash: section.master_hash }) }}</div>
               </div>
             </div>
           </el-popover>
           <div v-else class="version-cell version-cell-wrap">
             <span class="version-nums">{{ row.reported_version }}<template v-if="row.reported_version < row.current_version"> → {{ row.current_version }}</template></span>
-            <el-tag v-if="row.reported_version < row.current_version" type="warning" size="small" effect="plain">待同步</el-tag>
-            <el-tag v-else-if="row.reported_version === row.current_version" type="success" size="small" effect="plain">已同步</el-tag>
+            <el-tag v-if="row.reported_version < row.current_version" type="warning" size="small" effect="plain">{{ t('common.app.views.cluster.pendingSync') }}</el-tag>
+            <el-tag v-else-if="row.reported_version === row.current_version" type="success" size="small" effect="plain">{{ t('common.app.views.cluster.synced') }}</el-tag>
             <!-- reported>current 罕见形态(主版本回退)——不误显已同步-->
-            <el-tag v-else type="info" size="small" effect="plain">版本异常</el-tag>
-            <span v-if="row.is_approved" class="section-sync-stale">暂无分区上报</span>
+            <el-tag v-else type="info" size="small" effect="plain">{{ t('common.app.views.cluster.versionAbnormal') }}</el-tag>
+            <span v-if="row.is_approved" class="section-sync-stale">{{ t('common.app.views.cluster.noSectionReport') }}</span>
           </div>
         </template>
       </el-table-column>
-      <el-table-column v-if="showHealthColumn" label="健康" width="64" align="center">
+      <el-table-column v-if="showHealthColumn" :label="t('common.app.views.cluster.colHealth')" width="64" align="center">
         <template #default="{ row }">
           <el-tooltip v-if="row.health" :content="healthSummary(row.health)" placement="top">
             <el-tag :type="row.health.caddy_ok ? 'success' : 'danger'" size="small">
-              {{ row.health.caddy_ok ? '正常' : '异常' }}
+              {{ row.health.caddy_ok ? t('common.app.views.cluster.healthy') : t('common.app.views.cluster.abnormal') }}
             </el-tag>
           </el-tooltip>
-          <span v-else class="form-tip-line">暂无</span>
+          <span v-else class="form-tip-line">{{ t('common.app.views.cluster.notAvailable') }}</span>
         </template>
       </el-table-column>
-      <el-table-column v-if="showLastSeenColumn" label="最后上报时间" min-width="130">
+      <el-table-column v-if="showLastSeenColumn" :label="t('common.app.views.cluster.colLastSeen')" min-width="130">
         <template #default="{ row }">{{ formatDate(row.last_seen) || '-' }}</template>
       </el-table-column>
-      <el-table-column label="操作" width="190" :fixed="operationColumnFixed" align="center">
+      <el-table-column :label="t('common.app.views.cluster.colActions')" width="190" :fixed="operationColumnFixed" align="center">
         <template #default="{ row }">
           <template v-if="row.status === 'pending' || !row.is_approved">
-            <el-button link type="primary" size="small" :loading="pendingNodeId === row.id" :disabled="readOnly || pendingNodeId !== null" @click="$emit('approve', row as ClusterNodeWithSyncError)">确认</el-button>
-            <el-button link type="danger" size="small" :disabled="readOnly || pendingNodeId !== null" @click="$emit('reject', row as ClusterNodeWithSyncError)">拒绝</el-button>
+            <el-button link type="primary" size="small" :loading="pendingNodeId === row.id" :disabled="readOnly || pendingNodeId !== null" @click="$emit('approve', row as ClusterNodeWithSyncError)">{{ t('common.app.views.cluster.approve') }}</el-button>
+            <el-button link type="danger" size="small" :disabled="readOnly || pendingNodeId !== null" @click="$emit('reject', row as ClusterNodeWithSyncError)">{{ t('common.app.views.cluster.reject') }}</el-button>
           </template>
           <template v-else>
             <div class="op-buttons">
-              <el-button v-if="!readOnly" link type="primary" size="small" @click="$emit('edit-config', row as ClusterNodeWithSyncError)">配置</el-button>
-              <el-button v-if="!readOnly" link type="primary" size="small" :loading="loginNodeId === row.id" :disabled="row.status !== 'online' || loginNodeId !== null" @click="$emit('login', row as ClusterNodeWithSyncError)">登录</el-button>
-              <el-button v-if="!readOnly && row.status === 'online'" link type="warning" size="small" @click="$emit('service-control', row as ClusterNodeWithSyncError)">服务</el-button>
-              <el-button link type="danger" size="small" :loading="pendingNodeId === row.id" :disabled="readOnly || pendingNodeId !== null" @click="$emit('remove', row as ClusterNodeWithSyncError)">删除</el-button>
+              <el-button v-if="!readOnly" link type="primary" size="small" @click="$emit('edit-config', row as ClusterNodeWithSyncError)">{{ t('common.app.views.cluster.configure') }}</el-button>
+              <el-button v-if="!readOnly" link type="primary" size="small" :loading="loginNodeId === row.id" :disabled="row.status !== 'online' || loginNodeId !== null" @click="$emit('login', row as ClusterNodeWithSyncError)">{{ t('common.app.views.cluster.login') }}</el-button>
+              <el-button v-if="!readOnly && row.status === 'online'" link type="warning" size="small" @click="$emit('service-control', row as ClusterNodeWithSyncError)">{{ t('common.app.views.cluster.service') }}</el-button>
+              <el-button link type="danger" size="small" :loading="pendingNodeId === row.id" :disabled="readOnly || pendingNodeId !== null" @click="$emit('remove', row as ClusterNodeWithSyncError)">{{ t('common.app.views.cluster.remove') }}</el-button>
             </div>
           </template>
         </template>
       </el-table-column>
-      <template #empty><el-empty description="暂无集群节点" :image-size="60" /></template>
+      <template #empty><el-empty :description="t('common.app.views.cluster.emptyNodes')" :image-size="60" /></template>
     </el-table>
   </el-card>
 </template>
@@ -135,12 +135,16 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useWindowSize } from '@vueuse/core'
+import { useI18n } from 'vue-i18n'
 import { formatDate } from '@/utils/date'
 import { CLUSTER_SYNC_SWITCHES } from '@/utils/clusterSyncSwitches'
 import { popperViewportSafe } from '@/utils/popper'
 import { List, Setting } from '@element-plus/icons-vue'
 import FieldHelpIcon from '@/components/common/FieldHelpIcon.vue'
 import type { ClusterHealth, ClusterNode, ClusterNodeStatus, ClusterNodeWithSyncError, ClusterStatus } from '@/types'
+
+// 面板文案走 i18n(批次 D cluster 域,common.app.views.cluster.*)。
+const { t } = useI18n()
 
 const props = defineProps<{
   settingsOnly?: boolean
@@ -175,7 +179,7 @@ const showLastSeenColumn = computed(() => viewportWidth.value >= 1580)
 // 防护）随单源一并保留。
 const syncSwitchItems = CLUSTER_SYNC_SWITCHES
 
-const syncSwitchFreezeHint = '关闭后从节点保留最近一次同步内容，不自动删除'
+const syncSwitchFreezeHint = t('common.app.views.cluster.syncFreezeHint')
 
 const handleSwitchChange = (field: string, value: string | number | boolean): void => {
   if (props.readOnly) return
@@ -189,23 +193,28 @@ const statusType = (status: ClusterNodeStatus): 'success' | 'info' | 'warning' =
 }
 
 const statusLabel = (status: ClusterNodeStatus): string => {
-  if (status === 'online') return '在线'
-  if (status === 'pending') return '待确认'
-  return '离线'
+  if (status === 'online') return t('common.app.views.cluster.statusOnline')
+  if (status === 'pending') return t('common.app.views.cluster.statusPending')
+  return t('common.app.views.cluster.statusOffline')
 }
 
 const healthSummary = (health: ClusterHealth): string => {
-  const summary = `Caddy ${health.caddy_ok ? '正常' : '异常'} · 规则 ${health.rules_count} · 30 天内到期 ${health.certs_expiring_30d}`
+  const summary = t('common.app.views.cluster.healthSummary', {
+    caddy: health.caddy_ok ? t('common.app.views.cluster.healthy') : t('common.app.views.cluster.abnormal'),
+    rules: health.rules_count,
+    certs: health.certs_expiring_30d,
+  })
   return health.last_sync_error ? `${summary} · ${health.last_sync_error}` : summary
 }
 
 // 规则库版本行——名称与 SecurityRules 规则库列表严格一致（单源语义：
 // CRS 规则库 / IP 地理库 / 威胁情报库 / 爬虫地址库），缺失显示「—」。
+// 名称走 i18n（批次 D cluster 域）：tooltip 内容在渲染时解析。
 const NODE_LIBRARY_FIELDS = [
-  { label: 'CRS 规则库', key: 'crs_version' },
-  { label: 'IP 地理库', key: 'ip2region_version' },
-  { label: '威胁情报库', key: 'threat_version' },
-  { label: '爬虫地址库', key: 'crawler_version' },
+  { label: t('common.app.views.cluster.libCrs'), key: 'crs_version' },
+  { label: t('common.app.views.cluster.libIpGeo'), key: 'ip2region_version' },
+  { label: t('common.app.views.cluster.libThreat'), key: 'threat_version' },
+  { label: t('common.app.views.cluster.libCrawler'), key: 'crawler_version' },
 ] as const satisfies readonly { readonly label: string; readonly key: keyof ClusterHealth }[]
 
 const nodeLibraryVersions = (node: ClusterNodeWithSyncError): { label: string; version: string }[] | null => {

@@ -7,6 +7,7 @@
 //
 // 折叠态用户区只剩图标条时仍必须可发现：给出可见标识（用户名首字）与无障碍
 // 名称，否则「退出登录」在窄屏上没有可宣布的入口。
+import { tSafe as t } from '../i18n/tSafe.ts'
 
 interface SidebarLayoutState {
   /** 视口是否 ≤768px */
@@ -35,7 +36,8 @@ export const sidebarOverlay = (state: { narrow: boolean; collapsed: boolean }): 
   state.narrow && !state.collapsed
 
 /** 折叠态账户入口的无障碍名称（折叠后无可见文本，读屏必须可宣布）。 */
-export const accountTriggerLabel = (name: string): string => `账户菜单：${name.trim() || '当前用户'}`
+export const accountTriggerLabel = (name: string): string =>
+  t('common.app.views.layout.accountMenuLabel', { name: name.trim() || t('common.app.views.layout.accountFallbackName') })
 
 /** 折叠态可见标识：用户名首字（缺省「用」）。 */
-export const accountInitial = (name: string): string => Array.from(name.trim())[0] ?? '用'
+export const accountInitial = (name: string): string => Array.from(name.trim())[0] ?? t('common.app.views.layout.accountInitialFallback')

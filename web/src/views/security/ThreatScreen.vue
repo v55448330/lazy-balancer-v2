@@ -1,6 +1,6 @@
 <template>
   <div class="threat-screen" :class="{ 'is-paused': paused, 'mode-globe': isGlobeMode }">
-    <div class="globe-wrap hud" aria-label="攻击态势">
+    <div class="globe-wrap hud" :aria-label="t('app.security.threat.attackMapAria')">
       <!-- 引擎专用挂载点：globe.gl 构造时会清空容器 innerHTML，
            绝不可与 HUD 覆盖层同容器（曾致 hud-tl/ticker/返回按钮被清） -->
       <div ref="mapHost" class="stage-mount"></div>
@@ -12,11 +12,11 @@
         <div class="readout">TGT <b>{{ tgtReadout }}</b></div>
         <div class="readout">FLOW <b>{{ flowSampleLabel }}</b></div>
       </div>
-      <div class="hud-tr" aria-label="图例">
-        <div class="row">正常请求 <span class="legend-arc normal"></span></div>
-        <div class="row">攻击光流 <span class="legend-arc"></span></div>
+      <div class="hud-tr" :aria-label="t('app.security.threat.legendAria')">
+        <div class="row">{{ t('app.security.threat.legendNormalRequests') }} <span class="legend-arc normal"></span></div>
+        <div class="row">{{ t('app.security.threat.legendAttackFlows') }} <span class="legend-arc"></span></div>
         <div class="row">
-          <span>国家命中（对数）</span>
+          <span>{{ t('app.security.threat.legendCountryHits') }}</span>
           <span class="legend-ramp-stack">
             <i class="legend-ramp" :style="{ background: heatRamp }"></i>
             <span class="legend-ticks"><i v-for="tick in heatLegend" :key="tick.pos">{{ tick.label }}</i></span>
@@ -27,12 +27,12 @@
       <transition name="fade">
         <button v-if="zoomedName" type="button" class="btn back-btn" @click="backToWorld">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
-          <span class="btn-text">返回世界</span>
+          <span class="btn-text">{{ t('app.security.threat.backToWorld') }}</span>
         </button>
       </transition>
 
       <!-- 攻击事件弹框：feed 新事件到达即弹（最多 3 条，4.5s 淡出） -->
-      <transition-group name="toast" tag="div" class="toasts" role="status" aria-live="polite" aria-label="新攻击告警">
+      <transition-group name="toast" tag="div" class="toasts" role="status" aria-live="polite" :aria-label="t('app.security.threat.newAttackAlerts')">
         <div v-for="t in attackToasts" :key="t.id" class="toast" :class="t.action === 'blocked' ? 'sev-high' : 'sev-low'">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2.5 4.5 5.4v6.1c0 4.6 3.2 8.6 7.5 9.9 4.3-1.3 7.5-5.3 7.5-9.9V5.4Z"/><path d="m9 12 2 2 4-4.5"/></svg>
           <b>{{ t.country }}</b>
@@ -44,53 +44,53 @@
       </transition-group>
 
       <div class="hint">
-        <span>拖动{{ isGlobeMode ? '旋转' : '平移' }} · 点击国家下钻 · 点击空白返回</span>
+        <span>{{ t('app.security.threat.hintControls', { mode: isGlobeMode ? t('app.security.threat.hintRotate') : t('app.security.threat.hintPan') }) }}</span>
       </div>
 
       <transition name="fade">
-        <div v-if="showEmptyState" class="empty-state">近 {{ bucketTerms.windowLabel }}无安全事件</div>
+        <div v-if="showEmptyState" class="empty-state">{{ t('app.security.threat.emptyNoEvents', { window: bucketTerms.windowLabel }) }}</div>
       </transition>
       <div class="error-stack" role="status" aria-live="polite">
-        <div v-if="statsError" class="error-banner">大屏数据加载失败，正在重试…</div>
+        <div v-if="statsError" class="error-banner">{{ t('app.security.threat.statsLoadFailed') }}</div>
         <!-- 采集健康位（任务已停/连续失败/审计写侧降级）：判据与文案与事件列表/总览同源 -->
         <div v-if="ingestionWarning" class="info-note-bar">
           <span class="info-note-desc">{{ ingestionWarning }}</span>
         </div>
         <div v-if="stats?.backfill_incomplete && !backfillDismissed" class="info-note-bar">
-          <span class="info-note-desc">历史统计回填尚未完成，当前窗口总量可能少计；回填会自动继续补齐，无需处理</span>
-          <button type="button" class="info-note-dismiss" @click="dismissBackfill">知道了</button>
+          <span class="info-note-desc">{{ t('app.security.threat.backfillNotice') }}</span>
+          <button type="button" class="info-note-dismiss" @click="dismissBackfill">{{ t('app.security.threat.gotIt') }}</button>
         </div>
         <!-- 原始表覆盖受限只作信息提示：窗口聚合来自分钟 rollup，完整性不受影响 -->
         <!-- 知悉记忆：同一覆盖起点只提示一次（覆盖起点前移=新裁剪事件，重新提示） -->
         <div v-if="stats?.rollup_stale && !rollupStaleDismissed" class="info-note-bar">
-          <span class="info-note-desc">统计汇总更新延迟，当前窗口数据可能不是最新；汇总恢复后自动显示最新数据，无需处理</span>
-          <button type="button" class="info-note-dismiss" @click="dismissRollupStale">知道了</button>
+          <span class="info-note-desc">{{ t('app.security.threat.rollupStaleNotice') }}</span>
+          <button type="button" class="info-note-dismiss" @click="dismissRollupStale">{{ t('app.security.threat.gotIt') }}</button>
         </div>
         <div v-if="engineError" class="error-banner">
-          大屏引擎加载失败
-          <button type="button" class="btn error-retry" @click="mountEngine">重试</button>
+          {{ t('app.security.threat.engineLoadFailed') }}
+          <button type="button" class="btn error-retry" @click="mountEngine">{{ t('app.security.threat.retry') }}</button>
         </div>
-        <div v-if="trafficError" class="error-banner traffic-error">流量采集不可用（Caddy admin 不可达），曲线已保留上一帧</div>
-        <div v-if="flowError || attackFlowError" class="error-banner site-unset">光流数据加载失败，正在重试…</div>
+        <div v-if="trafficError" class="error-banner traffic-error">{{ t('app.security.threat.trafficUnavailable') }}</div>
+        <div v-if="flowError || attackFlowError" class="error-banner site-unset">{{ t('app.security.threat.flowLoadFailed') }}</div>
         <div v-if="flowGap || attackFlowGap" class="info-note-bar">
-          <span class="info-note-desc">事件流有空洞：{{ flowGap || attackFlowGap }} 条事件因缓冲溢出未送达，弹道不连续属正常现象</span>
+          <span class="info-note-desc">{{ t('app.security.threat.flowGapNotice', { count: flowGap || attackFlowGap }) }}</span>
         </div>
-        <div v-if="collectorError" class="error-banner site-unset">大屏流量采集续租失败（Caddy 侧逐请求计数已中断），正在重试…</div>
+        <div v-if="collectorError" class="error-banner site-unset">{{ t('app.security.threat.collectorRenewFailed') }}</div>
         <div v-if="configLoadFailed" class="error-banner site-unset">
-          大屏配置读取失败，暂用默认视图与未设置坐标
-          <button type="button" class="btn error-retry" @click="retryConfigLoad">重试</button>
+          {{ t('app.security.threat.configLoadFailedNotice') }}
+          <button type="button" class="btn error-retry" @click="retryConfigLoad">{{ t('app.security.threat.retry') }}</button>
         </div>
-        <div v-else-if="!siteConfigured" class="error-banner site-unset">未配置站点坐标，本站信标与攻击弹道已隐藏</div>
+        <div v-else-if="!siteConfigured" class="error-banner site-unset">{{ t('app.security.threat.siteNotConfigured') }}</div>
       </div>
     </div>
 
     <!-- 左列：实时威胁事件 -->
-    <aside class="panel panel-left hud" aria-label="实时威胁事件">
+    <aside class="panel panel-left hud" :aria-label="t('app.security.threat.liveThreatEvents')">
       <div class="panel-head">
-        <h2>实时威胁事件 <span class="en">LIVE FEED</span></h2>
+        <h2>{{ t('app.security.threat.liveThreatEvents') }} <span class="en">LIVE FEED</span></h2>
         <span class="live-chip" role="status" :class="{ 'is-error': feedError }"><i></i>{{ feedError ? 'RETRY' : 'LIVE' }}</span>
       </div>
-      <div class="filters" role="group" aria-label="按危险等级筛选">
+      <div class="filters" role="group" :aria-label="t('app.security.threat.severityFilterAria')">
         <button v-for="f in sevFilters" :key="f.key" class="chip" type="button" :aria-pressed="sevFilter === f.key" @click="sevFilter = f.key">
           {{ f.label }} <b>{{ f.count }}</b>
         </button>
@@ -107,7 +107,7 @@
             </div>
             <div class="ev-main">
               <span class="ev-ip">{{ event.client_ip }}</span>
-              <span class="ev-geo">{{ event.ip_location || '未知' }}</span>
+              <span class="ev-geo">{{ event.ip_location || t('app.security.threat.unknown') }}</span>
             </div>
             <div class="ev-type">
               <b :style="{ color: typeColorFor(event.attack_type) }">{{ event.attack_type }}</b>
@@ -116,7 +116,7 @@
             </div>
           </div>
         </transition-group>
-        <div v-if="filteredFeed.length === 0" class="empty">{{ feedError ? '事件流加载失败，正在重试…' : '暂无事件' }}</div>
+        <div v-if="filteredFeed.length === 0" class="empty">{{ feedError ? t('app.security.threat.feedLoadFailed') : t('app.security.threat.noEvents') }}</div>
       </div>
     </aside>
 
@@ -128,63 +128,63 @@
           <svg class="shield" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2.5 4.5 5.4v6.1c0 4.6 3.2 8.6 7.5 9.9 4.3-1.3 7.5-5.3 7.5-9.9V5.4Z"/><path d="m9 12 2 2 4-4.5"/></svg>
         </div>
         <div>
-          <h1 class="glitch" data-text="安全威胁大屏">安全威胁大屏</h1>
-          <p>近 {{ frameTerms.windowLabel }}安全态势实时监控 <time>{{ clockText }}</time><span class="clock-date">{{ clockDate }}</span><em v-if="staleFrameLabel" class="ov-switch-hint" role="status">{{ staleFrameLabel }}</em></p>
+          <h1 class="glitch" :data-text="t('app.security.threat.screenTitle')">{{ t('app.security.threat.screenTitle') }}</h1>
+          <p>{{ t('app.security.threat.subtitleRealtime', { window: frameTerms.windowLabel }) }} <time>{{ clockText }}</time><span class="clock-date">{{ clockDate }}</span><em v-if="staleFrameLabel" class="ov-switch-hint" role="status">{{ staleFrameLabel }}</em></p>
         </div>
       </div>
 
-      <div class="kpis" role="group" aria-label="核心指标">
-        <div class="kpi"><span class="kpi-value">{{ displayTotal }}</span><span class="kpi-label">{{ frameTerms.windowLabel }}安全事件 · 拦截 {{ stats?.blocked_events ?? 0 }} / 检测 {{ loggedEvents }}</span></div>
-        <div class="kpi"><span class="kpi-value cool">{{ blockRateText }}</span><span class="kpi-label">拦截率 · 拦截 / 全部安全事件</span></div>
-        <div class="kpi"><span class="kpi-value">{{ displayRecentRate }}</span><span class="kpi-label">拦截/分钟 · 近 5 分钟</span></div>
-        <div class="kpi"><span class="kpi-value">{{ displayActive }}</span><span class="kpi-label">活跃攻击 IP · 近 10 分钟</span></div>
+      <div class="kpis" role="group" :aria-label="t('app.security.threat.coreMetricsAria')">
+        <div class="kpi"><span class="kpi-value">{{ displayTotal }}</span><span class="kpi-label">{{ t('app.security.threat.kpiWindowEvents', { window: frameTerms.windowLabel, blocked: stats?.blocked_events ?? 0, detected: loggedEvents }) }}</span></div>
+        <div class="kpi"><span class="kpi-value cool">{{ blockRateText }}</span><span class="kpi-label">{{ t('app.security.threat.kpiBlockRate') }}</span></div>
+        <div class="kpi"><span class="kpi-value">{{ displayRecentRate }}</span><span class="kpi-label">{{ t('app.security.threat.kpiBlocksPerMin') }}</span></div>
+        <div class="kpi"><span class="kpi-value">{{ displayActive }}</span><span class="kpi-label">{{ t('app.security.threat.kpiActiveIps') }}</span></div>
       </div>
 
       <div class="actions">
-        <div class="window-switch" role="group" aria-label="时间窗口">
+        <div class="window-switch" role="group" :aria-label="t('app.security.threat.timeWindowAria')">
           <button v-for="opt in windowOptions" :key="opt.value" type="button" class="window-btn" :aria-pressed="windowHours === opt.value" @click="setWindow(opt.value)">{{ opt.label }}</button>
         </div>
-        <button type="button" class="btn" title="复位视角" @click="resetView">
+        <button type="button" class="btn" :title="t('app.security.threat.resetView')" @click="resetView">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/></svg>
-          <span class="btn-text">复位视角</span>
+          <span class="btn-text">{{ t('app.security.threat.resetView') }}</span>
         </button>
-        <button type="button" class="btn" :aria-pressed="paused" :title="paused ? '继续（恢复轮询与服务端流量采集）' : '暂停（同时停止服务端流量采集）'" @click="togglePause">
+        <button type="button" class="btn" :aria-pressed="paused" :title="paused ? t('app.security.threat.resumeTitle') : t('app.security.threat.pauseTitle')" @click="togglePause">
           <svg v-if="!paused" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg>
           <svg v-else viewBox="0 0 24 24" fill="currentColor"><path d="M7 4.5v15l12-7.5Z"/></svg>
-          <span class="btn-text">{{ paused ? '继续' : '暂停' }}</span>
+          <span class="btn-text">{{ paused ? t('app.security.threat.resumeBtn') : t('app.security.threat.pauseBtn') }}</span>
         </button>
-        <button type="button" class="btn" title="退出大屏" @click="exitScreen">
+        <button type="button" class="btn" :title="t('app.security.threat.exitScreenTitle')" @click="exitScreen">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/></svg>
-          <span class="btn-text">退出</span>
+          <span class="btn-text">{{ t('app.security.threat.exitBtn') }}</span>
         </button>
       </div>
     </header>
 
     <!-- 右列：安全态势统计 -->
-    <aside class="panel panel-right hud" aria-label="安全态势统计">
+    <aside class="panel panel-right hud" :aria-label="t('app.security.threat.postureStats')">
       <div class="panel-head">
-        <h2>安全态势统计 <span class="en">POSTURE</span></h2>
+        <h2>{{ t('app.security.threat.postureStats') }} <span class="en">POSTURE</span></h2>
       </div>
       <div class="stats">
         <div class="stat-section overview-section">
-          <div class="stat-title"><span>窗口概览</span><em v-if="statsPending" class="ov-switch-hint" role="status">切换中…</em><em v-else-if="staleFrameLabel" class="ov-switch-hint" role="status">{{ staleFrameLabel }}</em></div>
+          <div class="stat-title"><span>{{ t('app.security.threat.windowOverview') }}</span><em v-if="statsPending" class="ov-switch-hint" role="status">{{ t('app.security.threat.switching') }}</em><em v-else-if="staleFrameLabel" class="ov-switch-hint" role="status">{{ staleFrameLabel }}</em></div>
           <div class="overview-grid">
-            <div class="ov-item"><span>事件总量</span><b>{{ stats?.total_events ?? 0 }}</b></div>
-            <div class="ov-item"><span>拦截 / 检测</span><b>{{ stats?.blocked_events ?? 0 }} / {{ loggedEvents }}</b></div>
+            <div class="ov-item"><span>{{ t('app.security.threat.totalEvents') }}</span><b>{{ stats?.total_events ?? 0 }}</b></div>
+            <div class="ov-item"><span>{{ t('app.security.threat.blockedDetected') }}</span><b>{{ stats?.blocked_events ?? 0 }} / {{ loggedEvents }}</b></div>
             <div class="ov-item">
               <span>{{ frameTerms.peakLabel }}</span>
               <b>{{ peakSlot.value > 0 ? peakSlot.name : '—' }}</b>
-              <em v-if="peakSlot.value > 0">{{ peakSlot.value }} 次</em>
+              <em v-if="peakSlot.value > 0">{{ t('app.security.threat.peakHits', { n: peakSlot.value }) }}</em>
             </div>
             <div class="ov-item"><span>{{ frameTerms.countLabel }}</span><b>{{ activeHourCount }}/{{ hourlyHist.length }}</b></div>
           </div>
         </div>
 
         <div class="stat-section">
-          <div class="stat-title"><span>事件族构成</span><span class="n">{{ shareTotal }}</span></div>
+          <div class="stat-title"><span>{{ t('app.security.threat.familyComposition') }}</span><span class="n">{{ shareTotal }}</span></div>
           <div class="donut-row">
             <div class="donut">
-              <svg viewBox="0 0 36 36" role="img" :aria-label="`攻击类型占比：共 ${shareTotal} 次`">
+              <svg viewBox="0 0 36 36" role="img" :aria-label="t('app.security.threat.attackTypeShareAria', { total: shareTotal })">
                 <circle class="donut-track" cx="18" cy="18" r="15.9" pathLength="100"></circle>
                 <circle
                   v-for="seg in shareSegments"
@@ -196,7 +196,7 @@
                   :stroke-dashoffset="seg.offset"
                 ></circle>
               </svg>
-              <div class="donut-center"><b>{{ shareTotal }}</b><span>事件</span></div>
+              <div class="donut-center"><b>{{ shareTotal }}</b><span>{{ t('app.security.threat.eventsUnit') }}</span></div>
             </div>
             <ul class="type-legend">
               <li v-for="item in shareTop" :key="item.name">
@@ -206,7 +206,7 @@
               </li>
               <li v-if="shareRest > 0">
                 <span class="sw" :style="{ background: SHARE_REST_COLOR }"></span>
-                <span class="rule-name">其余</span>
+                <span class="rule-name">{{ t('app.security.threat.others') }}</span>
                 <span class="cnt">{{ shareRest }}</span>
               </li>
             </ul>
@@ -214,7 +214,7 @@
         </div>
 
         <div class="stat-section">
-          <div class="stat-title"><span title="仅统计窗口内具备 GeoIP 归属地的事件来源">有归属地国家 TOP3</span><span class="n">{{ countryCount }}</span></div>
+          <div class="stat-title"><span :title="t('app.security.threat.geoipCountriesTip')">{{ t('app.security.threat.topCountriesTitle') }}</span><span class="n">{{ countryCount }}</span></div>
           <ul v-if="topCountries.length" class="rules country-bars">
             <li v-for="item in topCountries" :key="item.name" class="rule" :title="item.name">
               <span class="rule-name">{{ item.name }}</span>
@@ -222,14 +222,14 @@
               <span class="rule-bar"><i :style="{ width: countryBarWidth(item.value), background: countryHeat(item.value) }"></i></span>
             </li>
           </ul>
-          <div v-else class="empty">暂无归属地数据</div>
+          <div v-else class="empty">{{ t('app.security.threat.noGeoData') }}</div>
         </div>
 
         <div class="stat-section">
-          <div class="stat-title"><span>TOP 目标 / 规则</span><span class="n" title="当前维度前 3 条命中合计">{{ activeStatSum }}</span></div>
-          <div class="stat-tabs" role="tablist" aria-label="TOP 排名维度" @keydown="onStatTabKeydown">
-            <button id="threat-stat-tab-targets" type="button" class="stat-tab" role="tab" :aria-selected="statTab === 'targets'" aria-controls="threat-stat-panel-targets" :tabindex="statTabindex('targets')" :ref="(el: unknown) => setStatTabRef('targets', el)" @click="statTab = 'targets'">被攻击目标</button>
-            <button id="threat-stat-tab-rules" type="button" class="stat-tab" role="tab" :aria-selected="statTab === 'rules'" aria-controls="threat-stat-panel-rules" :tabindex="statTabindex('rules')" :ref="(el: unknown) => setStatTabRef('rules', el)" @click="statTab = 'rules'">命中规则</button>
+          <div class="stat-title"><span>{{ t('app.security.threat.topTargetsRules') }}</span><span class="n" :title="t('app.security.threat.topSumTip')">{{ activeStatSum }}</span></div>
+          <div class="stat-tabs" role="tablist" :aria-label="t('app.security.threat.topDimensionAria')" @keydown="onStatTabKeydown">
+            <button id="threat-stat-tab-targets" type="button" class="stat-tab" role="tab" :aria-selected="statTab === 'targets'" aria-controls="threat-stat-panel-targets" :tabindex="statTabindex('targets')" :ref="(el: unknown) => setStatTabRef('targets', el)" @click="statTab = 'targets'">{{ t('app.security.threat.tabTargets') }}</button>
+            <button id="threat-stat-tab-rules" type="button" class="stat-tab" role="tab" :aria-selected="statTab === 'rules'" aria-controls="threat-stat-panel-rules" :tabindex="statTabindex('rules')" :ref="(el: unknown) => setStatTabRef('rules', el)" @click="statTab = 'rules'">{{ t('app.security.threat.tabRules') }}</button>
           </div>
           <div v-if="statTab === 'targets'" id="threat-stat-panel-targets" role="tabpanel" aria-labelledby="threat-stat-tab-targets" tabindex="0">
             <ul v-if="topTargets.length" class="rules">
@@ -239,7 +239,7 @@
                 <span class="rule-bar"><i :style="{ width: targetBarWidth(item.value) }"></i></span>
               </li>
             </ul>
-            <div v-else class="empty">暂无目标数据</div>
+            <div v-else class="empty">{{ t('app.security.threat.noTargetData') }}</div>
           </div>
           <div v-else id="threat-stat-panel-rules" role="tabpanel" aria-labelledby="threat-stat-tab-rules" tabindex="0">
             <ul v-if="topRules.length" class="rules">
@@ -249,14 +249,14 @@
                 <span class="rule-bar"><i :style="{ width: ruleBarWidth(item.value) }"></i></span>
               </li>
             </ul>
-            <div v-else class="empty">暂无数据</div>
+            <div v-else class="empty">{{ t('app.security.threat.noData') }}</div>
           </div>
         </div>
       </div>
-      <div class="panel-footer" title="自最近一次 Caddy 配置重载/进程启动以来累计；含上游自返 429；不受窗口切换影响">
-        <span>限流累计 · 自重载</span>
+      <div class="panel-footer" :title="t('app.security.threat.ratelimitTip')">
+        <span>{{ t('app.security.threat.ratelimitTotal') }}</span>
         <b>{{ ratelimitAvailable ? displayRatelimit : '—' }}</b>
-        <em>不受窗口影响</em>
+        <em>{{ t('app.security.threat.windowIndependent') }}</em>
       </div>
     </aside>
 
@@ -264,8 +264,8 @@
     <div class="charts-row">
       <div class="panel hud">
         <div class="panel-head">
-          <h2>{{ frameTerms.windowLabel }}事件趋势 <span class="en">{{ frameBucketLabel }}</span></h2>
-          <span class="meta">合计 <b>{{ hourlyTotal }}</b></span>
+          <h2>{{ t('app.security.threat.trendTitle', { window: frameTerms.windowLabel }) }} <span class="en">{{ frameBucketLabel }}</span></h2>
+          <span class="meta">{{ t('app.security.threat.totalLabel') }} <b>{{ hourlyTotal }}</b></span>
         </div>
         <div class="chart-box">
           <svg class="timeline-svg" viewBox="0 0 100 40" preserveAspectRatio="none">
@@ -279,15 +279,15 @@
               y="0"
               :width="100 / Math.max(1, hourlyHist.length) + 0.05"
               height="40"
-            ><title>{{ hourlyTooltip(slot.name) }} — {{ slot.value }} 次</title></rect>
+            ><title>{{ t('app.security.threat.histTooltip', { label: hourlyTooltip(slot.name), count: slot.value }) }}</title></rect>
           </svg>
           <div class="timeline-axis"><span v-for="label in histAxis" :key="label">{{ label }}</span></div>
         </div>
       </div>
       <div class="panel hud">
         <div class="panel-head">
-          <h2>请求流量 <span class="en">TRAFFIC · 90s</span></h2>
-          <span class="meta" title="仅统计经过 GeoIP 处理器规则的请求；正常桶含上游透传，不等于 2xx">正常 <b>{{ normalQps }}</b>/s · 攻击 <b class="attack-qps">{{ attackQps }}</b>/s · 累计 正常 {{ normalTotalText }} / 攻击 {{ attackTotalText }}<template v-if="trafficSampled"> · 抽样估算</template><template v-if="trafficFrozen"> · 采集租约未生效，累计已冻结</template></span>
+          <h2>{{ t('app.security.threat.trafficTitle') }} <span class="en">TRAFFIC · 90s</span></h2>
+          <span class="meta" :title="t('app.security.threat.trafficTip')"><i18n-t keypath="app.security.threat.trafficMeta" tag="span"><template #normal><b>{{ normalQps }}</b></template><template #attack><b class="attack-qps">{{ attackQps }}</b></template><template #normalTotal>{{ normalTotalText }}</template><template #attackTotal>{{ attackTotalText }}</template></i18n-t><template v-if="trafficSampled"> {{ t('app.security.threat.sampledSuffix') }}</template><template v-if="trafficFrozen"> {{ t('app.security.threat.leaseFrozenSuffix') }}</template></span>
         </div>
         <div class="chart-box">
           <svg class="normal-spark" viewBox="0 0 100 40" preserveAspectRatio="none">
@@ -295,8 +295,8 @@
             <polyline class="normal-stroke" :points="normalPoints"></polyline>
             <polyline class="attack-stroke" :points="attackPoints"></polyline>
           </svg>
-          <div class="traffic-legend"><span class="sw normal"></span>正常<span class="sw attack"></span>攻击<span class="sw tcp"></span><span title="TCP 拒绝连接=断连（无 HTTP 拦截页），计入攻击通道；放行连接并入正常通道">TCP 断连</span></div>
-          <div class="timeline-axis"><span>90s 前</span><span>现在</span></div>
+          <div class="traffic-legend"><span class="sw normal"></span>{{ t('app.security.threat.normalSwatch') }}<span class="sw attack"></span>{{ t('app.security.threat.attackSwatch') }}<span class="sw tcp"></span><span :title="t('app.security.threat.tcpTip')">{{ t('app.security.threat.tcpDisconnected') }}</span></div>
+          <div class="timeline-axis"><span>{{ t('app.security.threat.ninetySecondsAgo') }}</span><span>{{ t('app.security.threat.nowLabel') }}</span></div>
         </div>
       </div>
     </div>
@@ -305,6 +305,7 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { ElMessage } from 'element-plus'
 import { request } from '@/utils/api'
 import { ingestionWarningMessage, type IngestionHealth } from '@/utils/ingestionHealth'
@@ -321,6 +322,8 @@ import { anomalySeverity, overlayDetectionGrade, zeroScoreSeverity, type Anomaly
 import { displayThreatScreenMode } from '@/utils/configValues'
 import { flowTimestamp, normalizeTrafficSampleN, reconstructObservedRate, stepAdaptiveSample, nextFlowCursor, planFlowEvents, freshFlowEvents } from '@/utils/threatFlowRules'
 import { nextRadioValue, rovingTabindex } from '@/utils/rovingRadio'
+
+const { t } = useI18n()
 import { heatLegendTicks, heatRampGradientCss, maxHeatCount, aggregateCountryCounts } from '@/utils/threatShared'
 import type { ThreatScene, ThreatSceneOptions } from '@/utils/threatScene'
 
@@ -488,7 +491,7 @@ const statsPending = computed(() => !statsError.value && stats.value !== null &&
 const staleFrameLabel = computed(() => {
   const hours = stats.value?.hours
   if (hours === undefined || hours === windowHours.value) return ''
-  return `上次结果 · ${bucketTerminology(hours).windowLabel}`
+  return t('app.security.threat.staleFrameLabel', { window: bucketTerminology(hours).windowLabel })
 })
 const attackTypeShare = computed(() => stats.value?.attack_type_share ?? [])
 const displayRecentRateX10 = useCountUp(computed(() => Math.round((stats.value?.recent_rate ?? 0) * 10)), 500)
@@ -530,7 +533,7 @@ const countryHeat = (count: number): string => {
 }
 const maxRuleCount = computed(() => topRules.value.reduce((m, item) => Math.max(m, item.value), 0))
 const ruleBarWidth = (count: number): string => `${maxRuleCount.value > 0 ? Math.max(5, (count / maxRuleCount.value) * 100) : 0}%`
-const ruleLabel = (name: string): string => (/^\d+$/.test(name) ? `规则 #${name}` : name)
+const ruleLabel = (name: string): string => (/^\d+$/.test(name) ? t('app.security.threat.ruleIdLabel', { id: name }) : name)
 
 // 事件族切片与实时事件类型哈希共用的三主色（原 SHARE_PALETTE/TYPE_PALETTE 两
 // 份同值常量，单源后新增色只改一处）。
@@ -599,7 +602,7 @@ const clockText = ref('--:--:--')
 const clockDate = ref('')
 // 实时事件时间窗过滤的时钟源（1h/24h/168h）；每秒推进，旧事件到点即隐藏。
 const feedNow = ref(Date.now())
-const WEEKDAYS = ['日', '一', '二', '三', '四', '五', '六']
+const WEEKDAYS = computed(() => [t('app.security.threat.weekdaySun'), t('app.security.threat.weekdayMon'), t('app.security.threat.weekdayTue'), t('app.security.threat.weekdayWed'), t('app.security.threat.weekdayThu'), t('app.security.threat.weekdayFri'), t('app.security.threat.weekdaySat')])
 const camReadout = ref('--')
 const tgtReadout = ref('--')
 function tickClock(): void {
@@ -607,7 +610,7 @@ function tickClock(): void {
   feedNow.value = now.getTime()
   const p2 = (n: number): string => String(n).padStart(2, '0')
   clockText.value = `${p2(now.getHours())}:${p2(now.getMinutes())}:${p2(now.getSeconds())}`
-  clockDate.value = `${now.getFullYear()}-${p2(now.getMonth() + 1)}-${p2(now.getDate())} 星期${WEEKDAYS[now.getDay()]}`
+  clockDate.value = t('app.security.threat.clockDateFormat', { date: `${now.getFullYear()}-${p2(now.getMonth() + 1)}-${p2(now.getDate())}`, day: WEEKDAYS.value[now.getDay()] })
   // HUD 读数：引擎相机地理中心 + 本站坐标
   const cam = threatMap?.cameraState()
   if (cam) camReadout.value = `${cam.cy.toFixed(1)}° ${cam.cx.toFixed(1)}°`
@@ -647,7 +650,7 @@ function pushAttackToasts(groups: ToastSummaryGroup[]): void {
     const durMs = Math.max(0.1, (group.avg_duration_us ?? 0) / 1000)
     const toast: AttackToast = {
       id: group.last_id,
-      country: (group.ip_location.split('·')[0] || '未知'),
+      country: (group.ip_location.split('·')[0] || t('app.security.threat.unknown')),
       ip: group.client_ip,
       attackType: group.attack_type || '—',
       action: group.action,
@@ -709,7 +712,7 @@ function sevOf(ev: FeedEvent): Sev {
 }
 function sevLabel(ev: FeedEvent): string {
   const s = sevOf(ev)
-  return s === 'high' ? '高危' : s === 'mid' ? '中危' : '低危'
+  return s === 'high' ? t('app.security.threat.severityHigh') : s === 'mid' ? t('app.security.threat.severityMid') : t('app.security.threat.severityLow')
 }
 
 const windowFeed = computed(() => {
@@ -729,10 +732,10 @@ const sevFilters = computed(() => {
     else low++
   }
   return [
-    { key: 'all' as const, label: '全部', count: windowFeed.value.length },
-    { key: 'high' as const, label: '高危', count: high },
-    { key: 'mid' as const, label: '中危', count: mid },
-    { key: 'low' as const, label: '低危', count: low },
+    { key: 'all' as const, label: t('app.security.threat.severityAll'), count: windowFeed.value.length },
+    { key: 'high' as const, label: t('app.security.threat.severityHigh'), count: high },
+    { key: 'mid' as const, label: t('app.security.threat.severityMid'), count: mid },
+    { key: 'low' as const, label: t('app.security.threat.severityLow'), count: low },
   ]
 })
 const filteredFeed = computed(() =>
@@ -1092,7 +1095,7 @@ async function mountEngine(): Promise<void> {
       // （静默无动作），与 admin1Provinces「全球省级行政界」/ admin1Loader「首次
       // 下钻才拉取」及全量国家省层钉测冲突。省略 = 不限国家（threatShared 缺省语义）。
       onDrillChange: (name: string | null) => { zoomedName.value = name },
-      onProvinceLoadError: () => { ElMessage.warning('省界数据加载失败，本次下钻未展开；可再次点击国家重试') },
+      onProvinceLoadError: () => { ElMessage.warning(t('app.security.threat.provinceLoadFailedMsg')) },
     })
     threatMap = engine
     mountedMode = mode

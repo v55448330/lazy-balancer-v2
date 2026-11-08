@@ -4,21 +4,21 @@
       <div class="header-left">
         <h2 class="page-title">
           <el-icon class="title-icon"><Document /></el-icon>
-          拦截页面
+          {{ t('app.security.blockPages.page.title') }}
         </h2>
-        <p class="page-desc">管理各阶段拦截（IP 访问控制 / 限流 / WAF）返回给客户端的自定义页面</p>
+        <p class="page-desc">{{ t('app.security.blockPages.page.desc') }}</p>
       </div>
       <el-button v-if="!isReadOnly" type="primary" :disabled="loading" @click="openDialog()">
         <el-icon><Plus /></el-icon>
-        新建页面
+        {{ t('app.security.blockPages.page.newPage') }}
       </el-button>
     </div>
 
     <el-alert v-if="loadError" type="error" :closable="false" show-icon class="polling-error-alert error-banner">
       <template #title>
         <div class="polling-error-title">
-          <span>{{ pages.length > 0 ? '拦截页面加载失败：当前显示的是上次成功结果' : '拦截页面加载失败：列表为空不代表没有页面' }}</span>
-          <el-button link type="danger" :loading="loading" @click="fetchData">立即重试</el-button>
+          <span>{{ pages.length > 0 ? t('app.security.blockPages.alert.loadFailedStale') : t('app.security.blockPages.alert.loadFailedEmpty') }}</span>
+          <el-button link type="danger" :loading="loading" @click="fetchData">{{ t('app.security.blockPages.alert.retryNow') }}</el-button>
         </div>
       </template>
     </el-alert>
@@ -26,46 +26,46 @@
     <el-card class="list-card">
       <el-table :data="pagedPages" v-loading="loading" stripe :header-cell-style="{ background: '#f9fafb' }" empty-text="">
         <template #empty>
-          <el-empty v-if="!loadError" description="暂无拦截页面" :image-size="60" />
-          <span v-else class="text-secondary">加载失败</span>
+          <el-empty v-if="!loadError" :description="t('app.security.blockPages.table.empty')" :image-size="60" />
+          <span v-else class="text-secondary">{{ t('app.security.blockPages.table.loadFailed') }}</span>
         </template>
-        <el-table-column prop="name" label="页面名称" min-width="180">
+        <el-table-column prop="name" :label="t('app.security.blockPages.table.colName')" min-width="180">
           <template #default="{ row }">
             <AccessibleLink type="primary" @click="previewPage(row as BlockPage)">{{ row.name }}</AccessibleLink>
-            <el-tag v-if="row.is_default || row.is_builtin" size="small" type="info" effect="plain" style="margin-left: 8px">内置</el-tag>
+            <el-tag v-if="row.is_default || row.is_builtin" size="small" type="info" effect="plain" style="margin-left: 8px">{{ t('app.security.blockPages.table.builtin') }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="内容类型" width="105" align="center">
+        <el-table-column :label="t('app.security.blockPages.table.contentType')" width="105" align="center">
           <template #default="{ row }">
             <el-tag size="small" :type="contentTypeTagType(row.content_type)" effect="plain">{{ contentTypeLabel(row.content_type) }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="大小" width="90" align="center">
+        <el-table-column :label="t('app.security.blockPages.table.size')" width="90" align="center">
           <template #default="{ row }">
-            <el-tooltip content="拦截响应体字节数——评估拦截面传输压力（出站流量 ≈ 每秒拦截次数 × 页面大小，64KB 上限）" placement="top">
+            <el-tooltip :content="t('app.security.blockPages.table.sizeTip')" placement="top">
               <span>{{ contentSizes.get(row.id) }}</span>
             </el-tooltip>
           </template>
         </el-table-column>
-        <el-table-column prop="description" label="描述" min-width="180" show-overflow-tooltip />
-        <el-table-column label="规则引用" width="90" align="center">
+        <el-table-column prop="description" :label="t('app.security.blockPages.table.description')" min-width="180" show-overflow-tooltip />
+        <el-table-column :label="t('app.security.blockPages.table.ruleRefs')" width="90" align="center">
           <template #default="{ row }">
-            <el-tooltip :disabled="!row.rule_ref_count" content="引用本页的负载均衡规则数（启用策略绑定 ∪ 规则级阶段覆盖）" placement="top">
+            <el-tooltip :disabled="!row.rule_ref_count" :content="t('app.security.blockPages.table.ruleRefsTip')" placement="top">
               <span>{{ row.rule_ref_count ?? 0 }}</span>
             </el-tooltip>
           </template>
         </el-table-column>
-        <el-table-column label="更新时间" width="170" align="center">
+        <el-table-column :label="t('app.security.blockPages.table.updatedAt')" width="170" align="center">
           <template #default="{ row }">{{ formatDate(row.updated_at) || '-' }}</template>
         </el-table-column>
-        <el-table-column label="更新者" width="100" align="center">
+        <el-table-column :label="t('app.security.blockPages.table.updatedBy')" width="100" align="center">
           <template #default="{ row }">{{ getUpdaterName(row.updated_by) }}</template>
         </el-table-column>
-        <el-table-column label="操作" width="200" fixed="right">
+        <el-table-column :label="t('app.security.blockPages.table.actions')" width="200" fixed="right">
           <template #default="{ row }">
-            <el-button size="small" link type="primary" @click="previewPage(row as BlockPage)">预览</el-button>
-            <el-button size="small" link :type="row.is_default || row.is_builtin || isReadOnly ? 'info' : 'primary'" @click="openDialog(row as BlockPage)">{{ row.is_default || row.is_builtin || isReadOnly ? '查看' : '编辑' }}</el-button>
-            <el-button size="small" link type="danger" :loading="deletingId === row.id" :disabled="row.is_default || row.is_builtin || isReadOnly || deletingId !== null" @click="handleDelete(row as BlockPage)">删除</el-button>
+            <el-button size="small" link type="primary" @click="previewPage(row as BlockPage)">{{ t('app.security.blockPages.rowActions.preview') }}</el-button>
+            <el-button size="small" link :type="row.is_default || row.is_builtin || isReadOnly ? 'info' : 'primary'" @click="openDialog(row as BlockPage)">{{ row.is_default || row.is_builtin || isReadOnly ? t('app.security.blockPages.rowActions.view') : t('app.security.blockPages.rowActions.edit') }}</el-button>
+            <el-button size="small" link type="danger" :loading="deletingId === row.id" :disabled="row.is_default || row.is_builtin || isReadOnly || deletingId !== null" @click="handleDelete(row as BlockPage)">{{ t('app.security.blockPages.rowActions.delete') }}</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -86,43 +86,43 @@
     <el-dialog v-model="dialogVisible" width="min(960px, 94vw)" top="3vh" class="dialog-body-inset" :close-on-click-modal="false" :close-on-press-escape="!saving" :show-close="!saving">
       <template #header>
         <DialogHeader :icon="Document" :title="dialogTitle" tone="warning"
-          subtitle="命中拦截规则时返回给客户端的响应页面，支持自定义内容类型" />
+          :subtitle="t('app.security.blockPages.dialog.subtitle')" />
       </template>
       <el-form :model="form" label-width="80px" label-position="right" class="block-page-form" :disabled="saving">
-        <el-form-item label="名称" required>
-          <el-input v-model="form.name" placeholder="页面名称" :maxlength="SECURITY_NAME_MAX_RUNES" show-word-limit :readonly="isReadOnly || currentPage?.is_default || currentPage?.is_builtin || saving" />
+        <el-form-item :label="t('app.security.blockPages.dialog.labelName')" required>
+          <el-input v-model="form.name" :placeholder="t('app.security.blockPages.dialog.placeholderName')" :maxlength="SECURITY_NAME_MAX_RUNES" show-word-limit :readonly="isReadOnly || currentPage?.is_default || currentPage?.is_builtin || saving" />
         </el-form-item>
-        <el-form-item label="描述">
-          <el-input v-model="form.description" placeholder="页面描述" :maxlength="SECURITY_DESCRIPTION_MAX_RUNES" show-word-limit :readonly="isReadOnly || currentPage?.is_default || currentPage?.is_builtin || saving" />
+        <el-form-item :label="t('app.security.blockPages.table.description')">
+          <el-input v-model="form.description" :placeholder="t('app.security.blockPages.dialog.placeholderDesc')" :maxlength="SECURITY_DESCRIPTION_MAX_RUNES" show-word-limit :readonly="isReadOnly || currentPage?.is_default || currentPage?.is_builtin || saving" />
         </el-form-item>
-        <el-form-item label="内容类型">
+        <el-form-item :label="t('app.security.blockPages.table.contentType')">
           <el-select v-model="form.content_type" style="width: 320px" :disabled="isReadOnly || currentPage?.is_default || currentPage?.is_builtin || saving">
-            <el-option v-for="opt in CONTENT_TYPE_OPTIONS" :key="opt.value" :value="opt.value" :label="opt.label" />
+            <el-option v-for="opt in contentTypeOptions" :key="opt.value" :value="opt.value" :label="opt.label" />
           </el-select>
-          <span class="form-tip-inline">拦截响应的 Content-Type（均 UTF-8 编码）</span>
+          <span class="form-tip-inline">{{ t('app.security.blockPages.dialog.contentTypeTip') }}</span>
         </el-form-item>
-        <el-form-item label="内容" class="content-form-item" for="block-content-static">
+        <el-form-item :label="t('app.security.blockPages.dialog.labelContent')" class="content-form-item" for="block-content-static">
           <input type="text" id="block-content-static" aria-hidden="true" tabindex="-1" autocomplete="off" style="display:none">
           <div class="block-content-editor" style="width: 100%">
             <SyntaxHighlight v-if="isReadOnly || currentPage?.is_default || currentPage?.is_builtin" :content="form.content" language="markup" height="520px" />
-            <CodeEditor v-else v-model="form.content" language="markup" height="520px" aria-label="拦截页面内容" placeholder="响应内容（HTML 类型支持内联 CSS）" :readonly="saving" />
+            <CodeEditor v-else v-model="form.content" language="markup" height="520px" :aria-label="t('app.security.blockPages.dialog.editorAria')" :placeholder="t('app.security.blockPages.dialog.placeholderContent')" :readonly="saving" />
           </div>
           <div class="form-tip-line">
-            {{ (currentPage?.is_default || currentPage?.is_builtin) ? '内置页面内容只读，仅可查看' : '拦截时返回给客户端的响应内容（HTML 类型支持内联 CSS）' }}
+            {{ (currentPage?.is_default || currentPage?.is_builtin) ? t('app.security.blockPages.dialog.contentTipReadonly') : t('app.security.blockPages.dialog.contentTipEditable') }}
           </div>
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button :disabled="saving" @click="dialogVisible = false">取消</el-button>
-        <el-button v-if="!currentPage?.is_default && !currentPage?.is_builtin && !isReadOnly" type="primary" :loading="saving" :disabled="saving" @click="handleSave">保存</el-button>
+        <el-button :disabled="saving" @click="dialogVisible = false">{{ t('app.security.blockPages.dialog.cancel') }}</el-button>
+        <el-button v-if="!currentPage?.is_default && !currentPage?.is_builtin && !isReadOnly" type="primary" :loading="saving" :disabled="saving" @click="handleSave">{{ t('app.security.blockPages.dialog.save') }}</el-button>
       </template>
     </el-dialog>
 
     <el-dialog v-model="previewVisible" width="min(960px, 94vw)" top="3vh" @close="previewContent = ''">
       <template #header>
-        <DialogHeader :icon="Document" title="拦截页面预览" subtitle="在隔离沙箱中预览客户端接收的响应内容" />
+        <DialogHeader :icon="Document" :title="t('app.security.blockPages.preview.title')" :subtitle="t('app.security.blockPages.preview.subtitle')" />
       </template>
-      <DialogSectionHeader title="页面效果" />
+      <DialogSectionHeader :title="t('app.security.blockPages.preview.effectTitle')" />
       <div class="dialog-panel dialog-panel--flush">
         <iframe v-if="previewVisible && previewContent" :srcdoc="previewContent" sandbox="" :key="previewKey" style="width: 100%; aspect-ratio: 16/9; border: 0; background: #fff; display: block" />
       </div>
@@ -132,6 +132,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { Plus, Document } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { request } from '@/utils/api'
@@ -149,6 +150,8 @@ import DialogHeader from '@/components/DialogHeader.vue'
 import DialogSectionHeader from '@/components/DialogSectionHeader.vue'
 import AccessibleLink from '@/components/common/AccessibleLink.vue'
 import type { APIResponse, UserListItem } from '@/types'
+
+const { t } = useI18n()
 interface BlockPage { id: number; name: string; description: string; content: string; content_type?: string; rule_ref_count?: number; is_default: boolean; is_builtin?: boolean; updated_at: string; updated_by: number }
 
 const authStore = useAuthStore()
@@ -175,9 +178,9 @@ const editingId = ref<number | null>(null)
 const currentPage = ref<BlockPage | null>(null)
 
 const dialogTitle = computed(() => {
-  if (!editingId.value) return '新建拦截页面'
+  if (!editingId.value) return t('app.security.blockPages.dialog.createTitle')
   // 只读用户打开非默认页也应显示「查看」（此前编辑态误导）。
-  return currentPage.value?.is_default || currentPage.value?.is_builtin || isReadOnly.value ? '查看拦截页面' : '编辑拦截页面'
+  return currentPage.value?.is_default || currentPage.value?.is_builtin || isReadOnly.value ? t('app.security.blockPages.dialog.viewTitle') : t('app.security.blockPages.dialog.editTitle')
 })
 
 
@@ -193,12 +196,12 @@ const form = ref({ name: '', description: '', content: '', content_type: 'text/h
 const BLOCK_PAGE_CONTENT_MAX_BYTES = 64 << 10
 
 // 可选内容类型（与后端 models.BlockPageContentTypeWhitelist 白名单同口径）
-const CONTENT_TYPE_OPTIONS = [
-  { value: 'text/html; charset=utf-8', label: 'HTML 页面（text/html）' },
+const contentTypeOptions = computed(() => [
+  { value: 'text/html; charset=utf-8', label: t('app.security.blockPages.contentTypeOptions.html') },
   { value: 'application/json; charset=utf-8', label: 'JSON（application/json）' },
   { value: 'application/xml; charset=utf-8', label: 'XML（application/xml）' },
-  { value: 'text/plain; charset=utf-8', label: '纯文本（text/plain）' },
-] as const
+  { value: 'text/plain; charset=utf-8', label: t('app.security.blockPages.contentTypeOptions.plainText') },
+])
 const contentTypeLabel = (ct?: string): string => {
   if (!ct) return 'HTML'
   if (ct.includes('json')) return 'JSON'
@@ -250,13 +253,13 @@ const openDialog = (row?: BlockPage) => {
   dialogVisible.value = true
 }
 const handleSave = async () => {
-  if (!form.value.name.trim()) { ElMessage.warning('请输入页面名称'); return }
+  if (!form.value.name.trim()) { ElMessage.warning(t('app.security.blockPages.messages.nameRequired')); return }
   // 与后端 validateBlockPagePayload 同源的前置门：内容非空 + ≤64KB（UTF-8 字节）。
   // 此前只判名称，超限内容过确认后由后端 400 拒绝，错误文案不落到字段。
-  if (!form.value.content.trim()) { ElMessage.warning('请输入页面内容'); return }
+  if (!form.value.content.trim()) { ElMessage.warning(t('app.security.blockPages.messages.contentRequired')); return }
   const contentBytes = new TextEncoder().encode(form.value.content).byteLength
   if (contentBytes > BLOCK_PAGE_CONTENT_MAX_BYTES) {
-    ElMessage.warning(`页面内容 ${formatBytes(contentBytes)} 超出 64KB 上限，请精简后保存`)
+    ElMessage.warning(t('app.security.blockPages.messages.contentTooLarge', { size: formatBytes(contentBytes) }))
     return
   }
   saving.value = true
@@ -264,7 +267,7 @@ const handleSave = async () => {
     const res = editingId.value
       ? await request.put(`/security/block-pages/${editingId.value}`, form.value)
       : await request.post('/security/block-pages', form.value)
-    showSaveResult(res, '保存成功')
+    showSaveResult(res, t('app.security.blockPages.messages.saved'))
     dialogVisible.value = false
     await fetchData()
   } catch { /* 具体错误已由全局 axios 拦截器统一展示 */ } finally { saving.value = false }
@@ -276,8 +279,8 @@ const deletingId = ref<number | null>(null)
 const handleDelete = (row: BlockPage) => {
   if (deletingId.value !== null) return
   deletingId.value = row.id
-  ElMessageBox.confirm(`将删除拦截页面「${row.name}」。删除后无法恢复，引用它的策略将失去该自定义页面。`, '删除拦截页面', { type: 'warning', confirmButtonText: '确认删除', cancelButtonText: '取消' })
-    .then(async () => { const del = await request.delete(`/security/block-pages/${row.id}`); showSaveResult(del, '已删除'); fetchData() })
+  ElMessageBox.confirm(t('app.security.blockPages.deleteConfirm.text', { name: row.name }), t('app.security.blockPages.deleteConfirm.title'), { type: 'warning', confirmButtonText: t('app.security.blockPages.deleteConfirm.confirm'), cancelButtonText: t('app.security.blockPages.dialog.cancel') })
+    .then(async () => { const del = await request.delete(`/security/block-pages/${row.id}`); showSaveResult(del, t('app.security.blockPages.messages.deleted')); fetchData() })
     .catch(() => { /* 用户取消或请求失败（全局拦截器已 toast）——列表保持不变 */ })
     .finally(() => { deletingId.value = null })
 }
@@ -288,7 +291,7 @@ const previewPage = (row: BlockPage) => {
   const content = row.content || ''
   const isHtml = !row.content_type || row.content_type.startsWith('text/html')
   previewContent.value = !content
-    ? '<p style="color: #999; padding: 20px; text-align: center">(空内容)</p>'
+    ? '<p style="color: #999; padding: 20px; text-align: center">' + t('app.security.blockPages.preview.emptyContent') + '</p>'
     : isHtml
       ? content
       : `<pre style="white-space: pre-wrap; word-break: break-all; margin: 0; padding: 12px; font: 13px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace">${escapeHtml(content)}</pre>`

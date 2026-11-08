@@ -10,7 +10,7 @@
     @open="onOpen"
   >
     <template #header>
-      <DialogHeader :icon="Lock" :title="mode === 'rule' ? '安全策略绑定' : '绑定规则'" :subtitle="bindSubtitle" />
+      <DialogHeader :icon="Lock" :title="mode === 'rule' ? t('common.app.views.secBinding.ruleModeTitle') : t('common.app.views.secBinding.policyModeTitle')" :subtitle="bindSubtitle" />
     </template>
 
     <!-- 规则侧：按阶段分区选策略 -->
@@ -19,7 +19,7 @@
         <div class="bind-stage-head">
           <DialogSectionHeader :title="section.title" />
           <span class="bind-stage-head-meta">
-            <span class="bind-stage-count">已选 {{ section.selection.value.length }} 条</span>
+            <span class="bind-stage-count">{{ t('common.app.views.secBinding.selectedCount', { count: section.selection.value.length }) }}</span>
             <!-- 存量多限流绑定（裁定：运行兼容 + 保存即引导清理）：单选控件
                  仅展示首条，徽标使显示与 ruleModeTotal 计数口径一致-->
             <el-tag
@@ -28,7 +28,7 @@
               size="small"
               effect="plain"
             >
-              已绑定 {{ section.selection.value.length }} 条限流策略 · 单选仅显示首条（保存即引导清理）
+              {{ t('common.app.views.secBinding.multiRateLimitBadge', { count: section.selection.value.length }) }}
             </el-tag>
           </span>
         </div>
@@ -37,43 +37,43 @@
           :multiple="!section.single"
           :clearable="section.single"
           :disabled="saving || section.tcpLocked === true"
-          :placeholder="section.single ? '选择策略（单选，换选=替换）' : '选择策略（可多选）'"
+          :placeholder="section.single ? t('common.app.views.secBinding.singlePolicyPlaceholder') : t('common.app.views.secBinding.multiPolicyPlaceholder')"
           style="width: 100%"
           @update:model-value="section.single ? (section.selection.value = $event == null ? [] : [Number($event)]) : (section.selection.value = $event)"
         >
           <el-option v-for="policy in section.options" :key="policy.id" :value="policy.id" :label="policy.name" :disabled="section.tcpLocked === true">
             <span>{{ policy.name }}</span>
-            <el-tag size="small" effect="plain" :type="policy.enabled ? 'success' : 'info'" class="bind-state-tag">{{ policy.enabled ? '启用' : '已禁用' }}</el-tag>
+            <el-tag size="small" effect="plain" :type="policy.enabled ? 'success' : 'info'" class="bind-state-tag">{{ policy.enabled ? t('common.app.views.secBinding.enabledTag') : t('common.app.views.secBinding.disabledTag') }}</el-tag>
           </el-option>
         </el-select>
         <!-- TCP 规则的阶段 2/3 分区置灰 + 行内原因（L4 无 429/WAF 引擎面，后端同门 400） -->
         <div v-if="section.tcpLocked === true" class="form-tip-line">{{ TCP_BIND_UNSUPPORTED_REASON }}</div>
-        <div v-if="section.single" class="form-tip-line">每条规则最多绑定一条限流策略（后端对多限流绑定一律 400，消息原样透出）</div>
-        <div v-if="section.options.length === 0" class="form-tip-line">暂无该类策略，到「安全防护 → 安全策略」页创建</div>
+        <div v-if="section.single" class="form-tip-line">{{ t('common.app.views.secBinding.singleRateLimitTip') }}</div>
+        <div v-if="section.options.length === 0" class="form-tip-line">{{ t('common.app.views.secBinding.noPoliciesHint') }}</div>
       </div>
       <!-- 混合策略（兼容旧版）：可选策略中过滤 mixed；当前已绑定的只读展示，不可增减选择。
            存在绑定 mixed 时保存禁用——后端按提交集全量替换绑定，照常提交会静默剥离 mixed -->
       <div v-if="boundMixedPolicies.length > 0" class="bind-stage-group bind-stage-group--readonly dialog-panel">
         <div class="bind-stage-head">
-          <DialogSectionHeader title="混合策略（兼容旧版）" />
-          <span class="bind-stage-count">{{ boundMixedPolicies.length }} 条</span>
+          <DialogSectionHeader :title="t('common.app.views.secBinding.mixedSectionTitle')" />
+          <span class="bind-stage-count">{{ t('common.app.views.secBinding.countItems', { count: boundMixedPolicies.length }) }}</span>
         </div>
         <div class="bind-mixed-tags">
           <el-tag v-for="policy in boundMixedPolicies" :key="policy.id" type="warning" size="small" effect="plain">{{ policy.name }}</el-tag>
         </div>
-        <div class="form-tip-line">混合策略（兼容旧版）· 仅可更新迁移——到「安全防护 → 安全策略」页对该策略执行「更新迁移」拆分为单职策略</div>
+        <div class="form-tip-line">{{ t('common.app.views.secBinding.mixedSectionTip') }}</div>
       </div>
     </div>
 
     <!-- 策略侧：规则选择器（复用 rule picker 交互；每行显示当前绑定集合） -->
     <template v-else>
       <div class="picker-toolbar">
-        <el-input v-model="pickerSearch" placeholder="搜索规则名 / 域名 / 规则 ID" clearable :prefix-icon="Search" class="picker-search" :disabled="saving" />
+        <el-input v-model="pickerSearch" :placeholder="t('common.app.views.secBinding.searchPlaceholder')" clearable :prefix-icon="Search" class="picker-search" :disabled="saving" />
         <!-- 协议筛选（默认 HTTP）：TCP（阶段 0/1）放开后候选混排，默认档保持既有 HTTP 选择视野 -->
-        <el-select v-model="pickerProtoFilter" class="picker-proto-filter" aria-label="按协议筛选规则" :disabled="saving">
-          <el-option label="全部" value="all" />
-          <el-option label="HTTP" value="http" />
-          <el-option label="TCP" value="tcp" />
+        <el-select v-model="pickerProtoFilter" class="picker-proto-filter" :aria-label="t('common.app.views.secBinding.protoFilterAria')" :disabled="saving">
+          <el-option :label="t('common.app.views.secBinding.protoAll')" value="all" />
+          <el-option :label="t('common.app.views.secBinding.protoHttp')" value="http" />
+          <el-option :label="t('common.app.views.secBinding.protoTcp')" value="tcp" />
         </el-select>
       </div>
       <div class="picker-header">
@@ -82,8 +82,8 @@
           :indeterminate="pickerIndeterminate"
           :disabled="pickerSelectableRules.length === 0 || saving"
           @change="toggleSelectAll"
-        >全选</el-checkbox>
-        <span class="picker-header-meta">筛选 {{ pickerFilteredRules.length }} 条</span>
+        >{{ t('common.app.views.secBinding.selectAll') }}</el-checkbox>
+        <span class="picker-header-meta">{{ t('common.app.views.secBinding.filteredCount', { count: pickerFilteredRules.length }) }}</span>
       </div>
       <div class="picker-list">
         <div v-for="rule in pickerPagedRules" :key="rule.caddy_id" class="picker-rule-item">
@@ -119,11 +119,11 @@
                 >{{ binding.name }}</el-tag>
               </span>
             </template>
-            <span v-if="(bindings[rule.caddy_id] || []).length === 0" class="picker-bind-none">未绑定策略</span>
+            <span v-if="(bindings[rule.caddy_id] || []).length === 0" class="picker-bind-none">{{ t('common.app.views.secBinding.noBinding') }}</span>
             </template>
           </div>
         </div>
-        <el-empty v-if="pickerFilteredRules.length === 0" description="无可选规则" :image-size="60" />
+        <el-empty v-if="pickerFilteredRules.length === 0" :description="t('common.app.views.secBinding.noRules')" :image-size="60" />
       </div>
       <el-pagination
         v-model:current-page="pickerPage"
@@ -139,14 +139,14 @@
     <template #footer>
       <div class="bind-editor-footer">
         <span v-if="mode === 'rule'" class="bind-total" :class="{ 'is-over': ruleModeTotal > MAX_POLICIES_PER_RULE }">
-          已选合计 {{ ruleModeTotal }} 条（每条规则上限 {{ MAX_POLICIES_PER_RULE }} 条）
+          {{ t('common.app.views.secBinding.ruleTotalSummary', { count: ruleModeTotal, max: MAX_POLICIES_PER_RULE }) }}
         </span>
-        <span v-else class="bind-total">已选 {{ pickerSelected.length }} 条规则</span>
+        <span v-else class="bind-total">{{ t('common.app.views.secBinding.selectedRulesCount', { count: pickerSelected.length }) }}</span>
         <div class="bind-footer-buttons">
-          <el-button :disabled="saving" @click="emit('update:modelValue', false)">取消</el-button>
+          <el-button :disabled="saving" @click="emit('update:modelValue', false)">{{ t('common.app.views.secBinding.cancel') }}</el-button>
           <el-tooltip
             :disabled="!(mode === 'rule' && boundMixedPolicies.length > 0)"
-            content="存在已绑定的混合策略（只读），请先在策略页对其执行「更新迁移」，再调整绑定"
+            :content="t('common.app.views.secBinding.mixedBlockTooltip')"
             placement="top"
           >
             <span>
@@ -155,7 +155,7 @@
                 :loading="saving"
                 :disabled="mode === 'rule' && (ruleModeTotal > MAX_POLICIES_PER_RULE || boundMixedPolicies.length > 0)"
                 @click="submit"
-              >保存绑定</el-button>
+              >{{ t('common.app.views.secBinding.saveBindings') }}</el-button>
             </span>
           </el-tooltip>
         </div>
@@ -166,6 +166,7 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { ElMessage } from 'element-plus'
 import { Lock, Search, WarningFilled } from '@element-plus/icons-vue'
 import { request } from '@/utils/api'
@@ -209,6 +210,7 @@ interface BindingEditorRule {
   protocol: string
 }
 
+const { t } = useI18n()
 const props = defineProps<{
   modelValue: boolean
   mode: 'rule' | 'policy'
@@ -226,8 +228,8 @@ const emit = defineEmits<{
 
 const bindSubtitle = computed(() =>
   props.mode === 'rule'
-    ? `${props.rule?.name ?? ''} · 按阶段分区选择；已绑定策略保持当前执行序（含向导自定义交错序），新增策略插入其阶段首个已绑成员之后`
-    : `${props.policyName ?? ''} · 选择要绑定该策略的规则（全量重置该策略的绑定集；TCP 规则仅可绑阶段 0/1 策略）`
+    ? t('common.app.views.secBinding.ruleModeSubtitle', { name: props.rule?.name ?? '' })
+    : t('common.app.views.secBinding.policyModeSubtitle', { name: props.policyName ?? '' })
 )
 
 const saving = ref(false)
@@ -250,10 +252,10 @@ const policiesByType = computed<Record<SecurityPolicyType, BindingEditorPolicy[]
 const isTcpRule = computed(() => props.rule?.protocol === 'tcp')
 interface StageSection { type: SecurityPolicyType; title: string; options: BindingEditorPolicy[]; selection: typeof bindStage0; single?: boolean; tcpLocked?: boolean }
 const stageSections = computed<StageSection[]>(() => [
-  { type: 'stage0' as const, title: '阶段 0 · 信任名单（直通上游 / 保留检测记录）', options: policiesByType.value.stage0, selection: bindStage0 },
-  { type: 'stage1' as const, title: '阶段 1 · IP 访问控制', options: policiesByType.value.stage1, selection: bindStage1 },
-  { type: 'stage2' as const, title: '阶段 2 · 限流（拦截恒 429）', options: policiesByType.value.stage2, selection: bindStage2, single: true as const, tcpLocked: isTcpRule.value },
-  { type: 'stage3' as const, title: '阶段 3 · WAF（自定义规则 / CRS）', options: policiesByType.value.stage3, selection: bindStage3, tcpLocked: isTcpRule.value },
+  { type: 'stage0' as const, title: t('common.app.views.secBinding.stage0Title'), options: policiesByType.value.stage0, selection: bindStage0 },
+  { type: 'stage1' as const, title: t('common.app.views.secBinding.stage1Title'), options: policiesByType.value.stage1, selection: bindStage1 },
+  { type: 'stage2' as const, title: t('common.app.views.secBinding.stage2Title'), options: policiesByType.value.stage2, selection: bindStage2, single: true as const, tcpLocked: isTcpRule.value },
+  { type: 'stage3' as const, title: t('common.app.views.secBinding.stage3Title'), options: policiesByType.value.stage3, selection: bindStage3, tcpLocked: isTcpRule.value },
 ])
 
 // 当前规则已绑定的 mixed 策略（只读 tag，不可增减）
@@ -326,10 +328,10 @@ const pickerBlockReason = (rule: BindingEditorRule): string => {
   }
   if (currentPolicyType.value === 'stage2'
     && hasOtherStage2Binding(current, props.policyId, (id) => policyTypeById.value.get(id))) {
-    return '该规则已绑定其它限流策略（每规则仅一条），需先解绑'
+    return t('common.app.views.secBinding.otherRateLimitBlock')
   }
   if (current.length >= MAX_POLICIES_PER_RULE) {
-    return `该规则已绑定 ${MAX_POLICIES_PER_RULE} 条策略（上限），需先解绑`
+    return t('common.app.views.secBinding.policyCapBlock', { max: MAX_POLICIES_PER_RULE })
   }
   return ''
 }
@@ -431,7 +433,7 @@ const submit = async (): Promise<void> => {
     const rule = props.rule
     if (!rule) return
     if (ruleModeTotal.value > MAX_POLICIES_PER_RULE) {
-      ElMessage.warning(`每条规则最多绑定 ${MAX_POLICIES_PER_RULE} 条策略，当前已选 ${ruleModeTotal.value} 条`)
+      ElMessage.warning(t('common.app.views.secBinding.ruleTotalExceeded', { max: MAX_POLICIES_PER_RULE, count: ruleModeTotal.value }))
       return
     }
     saving.value = true
@@ -456,7 +458,7 @@ const submit = async (): Promise<void> => {
           ],
         ),
       })
-      showSaveResult(res, '安全策略绑定已保存')
+      showSaveResult(res, t('common.app.views.secBinding.savedToast'))
       emit('update:modelValue', false)
       emit('saved')
     } catch (error: unknown) {
@@ -485,7 +487,7 @@ const submit = async (): Promise<void> => {
     else toUnbind.push(rule.caddy_id)
   }
   if (toBind.length === 0 && toUnbind.length === 0) {
-    ElMessage.info('绑定关系无变化')
+    ElMessage.info(t('common.app.views.secBinding.noChanges'))
     emit('update:modelValue', false)
     return
   }
@@ -502,7 +504,7 @@ const submit = async (): Promise<void> => {
     for (const ids of chunkForBulk(toUnbind, SECURITY_BULK_LIMITS.policyBindings)) {
       responses.push(await request.post<APIResponse>(`/security/policies/${pid}/bindings/bulk`, { bind: [], unbind: ids }))
     }
-    showSaveResult(mergeBulkResults(responses), `已更新 ${toBind.length + toUnbind.length} 条规则的绑定`)
+    showSaveResult(mergeBulkResults(responses), t('common.app.views.secBinding.updatedCount', { count: toBind.length + toUnbind.length }))
     emit('update:modelValue', false)
     emit('saved')
   } catch (error: unknown) {

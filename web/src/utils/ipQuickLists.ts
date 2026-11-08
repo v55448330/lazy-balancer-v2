@@ -1,4 +1,5 @@
 import { entryMatchesIp, parseIPList, parseRefIds } from './securityStages.ts'
+import { tSafe as t } from '../i18n/tSafe.ts'
 
 export type IpQuickSide = 'deny' | 'allow' | 'trust'
 
@@ -152,7 +153,7 @@ export const buildIpQuickModel = (
         targetMap.set(`policy:${policy.id}`, {
           key: `policy:${policy.id}`,
           kind: 'policy',
-          name: `${policy.name} · 新建名单`,
+          name: t('common.app.ipQuickLists.newListTarget', { name: policy.name }),
           policyId: policy.id,
           entryCount: 0,
           policies: [{ id: policy.id, name: policy.name }],

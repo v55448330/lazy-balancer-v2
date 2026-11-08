@@ -4,13 +4,13 @@
       <div class="header-left">
         <h2 class="page-title">
           <el-icon class="title-icon"><DataAnalysis /></el-icon>
-          安全总览
+          {{ t('app.security.overview.page.title') }}
         </h2>
-        <p class="page-desc">安全防护统计概览</p>
+        <p class="page-desc">{{ t('app.security.overview.page.desc') }}</p>
       </div>
       <el-button type="primary" plain @click="openThreatScreen">
         <el-icon style="margin-right: 6px"><Monitor /></el-icon>
-        威胁大屏
+        {{ t('app.security.overview.page.threatScreen') }}
       </el-button>
     </div>
 
@@ -23,8 +23,8 @@
     >
       <template #title>
         <div class="polling-error-title">
-          <span>安全总览数据加载失败</span>
-          <el-button link type="danger" :loading="reloading" @click="reloadAll">立即重试</el-button>
+          <span>{{ t('app.security.overview.page.loadFailed') }}</span>
+          <el-button link type="danger" :loading="reloading" @click="reloadAll">{{ t('app.security.overview.page.retryNow') }}</el-button>
         </div>
       </template>
     </el-alert>
@@ -41,7 +41,7 @@
         <div class="card-header">
           <div class="card-title">
             <el-icon class="title-icon"><Stopwatch /></el-icon>
-            <span>防护运行状态</span>
+            <span>{{ t('app.security.overview.status.cardTitle') }}</span>
           </div>
         </div>
       </template>
@@ -49,13 +49,13 @@
         <div class="status-guard">
           <div class="guard-item">
             <div class="strip-label">
-              拦截
+              {{ t('app.security.overview.status.blocked') }}
               <el-tooltip :content="todayCountTip" placement="top">
                 <el-icon><InfoFilled /></el-icon>
               </el-tooltip>
             </div>
             <div class="strip-value is-danger">{{ fmtStatNum(overview.today_blocked) }}</div>
-            <div v-if="yesterdayBlocked !== null" class="strip-sub"><span class="strip-sub-label">昨日</span> {{ fmtStatNum(yesterdayBlocked) }}</div>
+            <div v-if="yesterdayBlocked !== null" class="strip-sub"><span class="strip-sub-label">{{ t('app.security.overview.status.yesterday') }}</span> {{ fmtStatNum(yesterdayBlocked) }}</div>
             <!-- 协议拆分（L4 阶段 0/1 披露，今日口径）：HTTP = 合计 − TCP；响应缺字段或 TCP=0 时隐藏 -->
             <div v-if="todayBlockedSplit" class="strip-sub">
               <span class="proto-split-item"><i class="proto-dot proto-dot--http"></i><span class="proto-split-label">HTTP</span><span class="strip-sub-num">{{ fmtStatNum(todayBlockedSplit.http) }}</span></span><span class="proto-split-item proto-split-item--tcp"><i class="proto-dot proto-dot--tcp"></i><span class="proto-split-label">TCP</span><span class="strip-sub-num">{{ fmtStatNum(todayBlockedSplit.tcp) }}</span></span>
@@ -63,9 +63,9 @@
           </div>
           <div class="strip-divider"></div>
           <div class="guard-item">
-            <div class="strip-label">检测</div>
+            <div class="strip-label">{{ t('app.security.overview.status.detected') }}</div>
             <div class="strip-value is-warning">{{ fmtStatNum(overview.today_detected) }}</div>
-            <div v-if="yesterdayDetected !== null" class="strip-sub"><span class="strip-sub-label">昨日</span> {{ fmtStatNum(yesterdayDetected) }}</div>
+            <div v-if="yesterdayDetected !== null" class="strip-sub"><span class="strip-sub-label">{{ t('app.security.overview.status.yesterday') }}</span> {{ fmtStatNum(yesterdayDetected) }}</div>
             <!-- 协议拆分：TCP 检测来自信任检测（trust_detect） logged 事件——可能产生数据就如实显示；
                  字段缺失（旧后端）整行隐藏。HTTP = 合计 − TCP（负值钳 0） -->
             <div v-if="todayDetectedSplit" class="strip-sub">
@@ -74,13 +74,13 @@
           </div>
           <div class="strip-divider"></div>
           <div class="guard-item">
-            <div class="strip-label">正常请求
-              <el-tooltip content="成功代理的流量：HTTP=总请求−拦截−检测放行；TCP=全部放行连接（含信任名单 IP 的保留检测流量，计入正常列）" placement="top">
+            <div class="strip-label">{{ t('app.security.overview.status.normal') }}
+              <el-tooltip :content="t('app.security.overview.status.normalTip')" placement="top">
                 <el-icon><InfoFilled /></el-icon>
               </el-tooltip>
             </div>
             <div class="strip-value">{{ fmtStatNum(overview.normal_today) }}</div>
-            <div v-if="normalYesterday !== null" class="strip-sub"><span class="strip-sub-label">昨日</span> {{ fmtStatNum(normalYesterday) }}</div>
+            <div v-if="normalYesterday !== null" class="strip-sub"><span class="strip-sub-label">{{ t('app.security.overview.status.yesterday') }}</span> {{ fmtStatNum(normalYesterday) }}</div>
             <!-- 字段缺失（旧后端）整行隐藏 -->
             <div v-if="normalTodaySplit" class="strip-sub">
               <span class="proto-split-item"><i class="proto-dot proto-dot--http"></i><span class="proto-split-label">HTTP</span><span class="strip-sub-num">{{ fmtStatNum(normalTodaySplit.http) }}</span></span><span class="proto-split-item proto-split-item--tcp"><i class="proto-dot proto-dot--tcp"></i><span class="proto-split-label">TCP</span><span class="strip-sub-num">{{ fmtStatNum(normalTodaySplit.tcp) }}</span></span>
@@ -90,32 +90,32 @@
         <div class="status-lib">
           <div class="lib-row">
             <i class="status-dot" :class="overview.crs_available === false ? 'is-down' : 'is-up'"></i>
-            <span class="lib-name">CRS 规则集</span>
-            <span class="lib-ver">{{ overview.crs_available === false ? '未安装' : overview.crs_version }}</span>
-            <el-tag v-if="overview.crs_available === false" type="danger" size="small" effect="plain" disable-transitions>未安装</el-tag>
+            <span class="lib-name">{{ t('app.security.overview.libStatus.crs') }}</span>
+            <span class="lib-ver">{{ overview.crs_available === false ? t('app.security.overview.libStatus.notInstalled') : overview.crs_version }}</span>
+            <el-tag v-if="overview.crs_available === false" type="danger" size="small" effect="plain" disable-transitions>{{ t('app.security.overview.libStatus.notInstalled') }}</el-tag>
             <el-tag v-else-if="overview.update_status" :type="libraryStatusTagType(overview.update_status)" size="small" effect="plain" disable-transitions>{{ libraryStatusLabel(overview.update_status) }}</el-tag>
           </div>
           <div class="lib-row">
             <i class="status-dot" :class="overview.ip2region_available === false || ip2regionError ? 'is-down' : 'is-up'"></i>
-            <span class="lib-name">IP 地理库</span>
-            <span class="lib-ver">{{ overview.ip2region_available === false || ip2regionVersion === 'unknown' ? '未安装' : ip2regionVersion === 'bundled' ? '内置版本' : ip2regionVersion }}</span>
-            <el-tag v-if="ip2regionError" type="danger" size="small" effect="plain" disable-transitions>加载失败</el-tag>
-            <el-tag v-else-if="overview.ip2region_available === false" type="danger" size="small" effect="plain" disable-transitions>未安装</el-tag>
-            <el-tag v-else-if="ip2regionVersion === 'unknown'" type="info" size="small" effect="plain" disable-transitions>未安装</el-tag>
+            <span class="lib-name">{{ t('app.security.overview.libStatus.ipGeo') }}</span>
+            <span class="lib-ver">{{ overview.ip2region_available === false || ip2regionVersion === 'unknown' ? t('app.security.overview.libStatus.notInstalled') : ip2regionVersion === 'bundled' ? t('app.security.overview.libStatus.bundled') : ip2regionVersion }}</span>
+            <el-tag v-if="ip2regionError" type="danger" size="small" effect="plain" disable-transitions>{{ t('app.security.overview.libStatus.loadFailed') }}</el-tag>
+            <el-tag v-else-if="overview.ip2region_available === false" type="danger" size="small" effect="plain" disable-transitions>{{ t('app.security.overview.libStatus.notInstalled') }}</el-tag>
+            <el-tag v-else-if="ip2regionVersion === 'unknown'" type="info" size="small" effect="plain" disable-transitions>{{ t('app.security.overview.libStatus.notInstalled') }}</el-tag>
             <el-tag v-else-if="ip2regionStatus" :type="libraryStatusTagType(ip2regionStatus)" size="small" effect="plain" disable-transitions>{{ libraryStatusLabel(ip2regionStatus) }}</el-tag>
           </div>
           <div class="lib-row">
             <i class="status-dot" :class="threatError ? 'is-down' : 'is-up'"></i>
-            <span class="lib-name">威胁情报库</span>
-            <span class="lib-ver">{{ threatError ? '—' : (threatLatestVersion || '未更新') }}</span>
-            <el-tag v-if="threatError" type="danger" size="small" effect="plain" disable-transitions>加载失败</el-tag>
+            <span class="lib-name">{{ t('app.security.overview.libStatus.threatIntel') }}</span>
+            <span class="lib-ver">{{ threatError ? '—' : (threatLatestVersion || t('app.security.overview.libStatus.notUpdated')) }}</span>
+            <el-tag v-if="threatError" type="danger" size="small" effect="plain" disable-transitions>{{ t('app.security.overview.libStatus.loadFailed') }}</el-tag>
             <el-tag v-else-if="threatStatus" :type="libraryStatusTagType(threatStatus)" size="small" effect="plain" disable-transitions>{{ libraryStatusLabel(threatStatus) }}</el-tag>
           </div>
           <div class="lib-row">
             <i class="status-dot" :class="crawlerError ? 'is-down' : 'is-up'"></i>
-            <span class="lib-name">爬虫地址库</span>
-            <span class="lib-ver">{{ crawlerError ? '—' : (crawlerLatestVersion || '未更新') }}</span>
-            <el-tag v-if="crawlerError" type="danger" size="small" effect="plain" disable-transitions>加载失败</el-tag>
+            <span class="lib-name">{{ t('app.security.overview.libStatus.crawlerDb') }}</span>
+            <span class="lib-ver">{{ crawlerError ? '—' : (crawlerLatestVersion || t('app.security.overview.libStatus.notUpdated')) }}</span>
+            <el-tag v-if="crawlerError" type="danger" size="small" effect="plain" disable-transitions>{{ t('app.security.overview.libStatus.loadFailed') }}</el-tag>
             <el-tag v-else-if="crawlerStatus" :type="libraryStatusTagType(crawlerStatus)" size="small" effect="plain" disable-transitions>{{ libraryStatusLabel(crawlerStatus) }}</el-tag>
           </div>
         </div>
@@ -131,13 +131,13 @@
             <div class="card-header">
               <div class="card-title">
                 <el-icon class="title-icon"><TrendCharts /></el-icon>
-                <span>7 天拦截趋势</span>
+                <span>{{ t('app.security.overview.trend.title') }}</span>
               </div>
             </div>
           </template>
           <div class="chart-container">
             <v-chart v-if="overview.trend.length > 0" :option="trendChartOption" autoresize style="height: 260px" />
-            <el-empty v-else description="暂无趋势数据" :image-size="80" style="height: 260px; display: flex; align-items: center; justify-content: center" />
+            <el-empty v-else :description="t('app.security.overview.trend.empty')" :image-size="80" style="height: 260px; display: flex; align-items: center; justify-content: center" />
           </div>
         </el-card>
       </el-col>
@@ -147,14 +147,14 @@
             <div class="card-header">
               <div class="card-title">
                 <el-icon class="title-icon"><PieChart /></el-icon>
-                <span>攻击类型分布（近 7 天）</span>
-                <el-checkbox v-model="attackByStage" size="small" class="header-checkbox">按阶段展示</el-checkbox>
+                <span>{{ t('app.security.overview.trend.attackTitle') }}</span>
+                <el-checkbox v-model="attackByStage" size="small" class="header-checkbox">{{ t('app.security.overview.trend.byStage') }}</el-checkbox>
               </div>
             </div>
           </template>
           <div class="chart-container">
             <v-chart v-if="(attackByStage ? overview.attack_types_stage : overview.attack_types).length > 0" :option="attackChartOption" autoresize style="height: 260px" />
-            <el-empty v-else description="暂无攻击数据" :image-size="80" style="height: 260px; display: flex; align-items: center; justify-content: center" />
+            <el-empty v-else :description="t('app.security.overview.trend.emptyAttack')" :image-size="80" style="height: 260px; display: flex; align-items: center; justify-content: center" />
           </div>
         </el-card>
       </el-col>
@@ -167,37 +167,37 @@
             <div class="card-header">
               <div class="card-title">
                 <el-icon class="title-icon"><Warning /></el-icon>
-                <span>最近拦截事件</span>
+                <span>{{ t('app.security.overview.events.title') }}</span>
               </div>
-              <AccessibleLink type="primary" @click="goToEvents">查看全部</AccessibleLink>
+              <AccessibleLink type="primary" @click="goToEvents">{{ t('app.security.overview.events.viewAll') }}</AccessibleLink>
             </div>
           </template>
           <el-alert v-if="blockedEventsError" type="error" show-icon :closable="false" class="error-banner">
             <template #title>
               <div class="polling-error-title">
-                <span>最近拦截事件加载失败</span>
-                <el-button link type="danger" :loading="reloading" @click="reloadAll">立即重试</el-button>
+                <span>{{ t('app.security.overview.events.loadFailed') }}</span>
+                <el-button link type="danger" :loading="reloading" @click="reloadAll">{{ t('app.security.overview.page.retryNow') }}</el-button>
               </div>
             </template>
           </el-alert>
           <el-table v-else :data="blockedEvents" stripe :header-cell-style="{ background: '#f9fafb', textAlign: 'left' }" :cell-style="{ textAlign: 'left' }" empty-text="">
-            <template #empty><el-empty description="暂无拦截事件" :image-size="60" /></template>
-            <el-table-column prop="event_time" label="时间" width="170" :formatter="(row: SecurityEvent) => formatDate(row.event_time)" />
-            <el-table-column label="来源 IP" min-width="150">
+            <template #empty><el-empty :description="t('app.security.overview.events.empty')" :image-size="60" /></template>
+            <el-table-column prop="event_time" :label="t('app.security.overview.events.colTime')" width="170" :formatter="(row: SecurityEvent) => formatDate(row.event_time)" />
+            <el-table-column :label="t('app.security.overview.events.colSourceIp')" min-width="150">
               <template #default="{ row }">
               <IPLocationAction :ip="row.client_ip" :location="row.ip_location" />
               </template>
             </el-table-column>
-            <el-table-column label="协议" width="80">
+            <el-table-column :label="t('app.security.overview.events.colProtocol')" width="80">
               <template #default="{ row }">
                 <el-tag v-if="row.event_type === 'tcp'" size="small" effect="plain" class="proto-tcp-tag event-proto-tag">TCP</el-tag>
                 <el-tag v-else size="small" effect="plain" type="primary" class="event-proto-tag">HTTP</el-tag>
               </template>
             </el-table-column>
-            <el-table-column label="规则" min-width="150" show-overflow-tooltip>
+            <el-table-column :label="t('app.security.overview.events.colRule')" min-width="150" show-overflow-tooltip>
               <template #default="{ row }">{{ row.rule_name || row.rule_caddy_id || '—' }}</template>
             </el-table-column>
-            <el-table-column label="策略" min-width="140" show-overflow-tooltip>
+            <el-table-column :label="t('app.security.overview.events.colPolicy')" min-width="140" show-overflow-tooltip>
               <template #default="{ row }">{{ row.policy_name || '—' }}</template>
             </el-table-column>
           </el-table>
@@ -209,33 +209,33 @@
             <div class="card-header">
               <div class="card-title">
                 <el-icon class="title-icon"><Odometer /></el-icon>
-                <span>限流拦截</span>
+                <span>{{ t('app.security.overview.rateLimit.title') }}</span>
               </div>
-            <el-tooltip placement="top" content="按 429 响应计（含上游自返 429）；自最近一次配置重载以来累计">
-              <el-tag type="info" size="small" effect="plain" class="rate-limit-hint">429 计数 · 重载后累计</el-tag>
+            <el-tooltip placement="top" :content="t('app.security.overview.rateLimit.tip')">
+              <el-tag type="info" size="small" effect="plain" class="rate-limit-hint">{{ t('app.security.overview.rateLimit.tag') }}</el-tag>
             </el-tooltip>
             </div>
           </template>
           <el-alert v-if="rateLimitError" type="error" show-icon :closable="false" class="error-banner">
             <template #title>
               <div class="polling-error-title">
-                <span>限流拦截数据加载失败</span>
-                <el-button link type="danger" :loading="reloading" @click="reloadAll">立即重试</el-button>
+                <span>{{ t('app.security.overview.rateLimit.loadFailed') }}</span>
+                <el-button link type="danger" :loading="reloading" @click="reloadAll">{{ t('app.security.overview.page.retryNow') }}</el-button>
               </div>
             </template>
           </el-alert>
           <template v-else>
             <div class="rate-limit-total">
-              <span class="stat-label">累计拦截</span>
+              <span class="stat-label">{{ t('app.security.overview.rateLimit.total') }}</span>
               <span class="stat-value" style="color: #f56c6c">{{ rateLimitBlocks.total }}</span>
             </div>
             <el-table v-if="rateLimitBlocks.hosts.length > 0" :data="rateLimitBlocks.hosts" stripe size="small" :header-cell-style="{ background: '#f9fafb' }" empty-text="">
-              <el-table-column prop="host" label="域名" min-width="120" show-overflow-tooltip />
-              <el-table-column prop="count" label="拦截次数" width="90" align="center">
+              <el-table-column prop="host" :label="t('app.security.overview.rateLimit.colDomain')" min-width="120" show-overflow-tooltip />
+              <el-table-column prop="count" :label="t('app.security.overview.rateLimit.colCount')" width="90" align="center">
                 <template #default="{ row }"><el-tag type="danger" size="small" effect="plain">{{ row.count }}</el-tag></template>
               </el-table-column>
             </el-table>
-            <el-empty v-else description="暂无限流拦截" :image-size="60" />
+            <el-empty v-else :description="t('app.security.overview.rateLimit.empty')" :image-size="60" />
           </template>
         </el-card>
       </el-col>
@@ -246,38 +246,38 @@
         <div class="card-header">
           <div class="card-title">
             <el-icon class="title-icon"><Location /></el-icon>
-            <span>Top 10 源 IP（近 7 天）</span>
+            <span>{{ t('app.security.overview.topIps.title') }}</span>
           </div>
         </div>
       </template>
       <el-table :data="overview.top_ips" stripe :header-cell-style="{ background: '#f9fafb' }" empty-text="">
-        <template #empty><el-empty description="暂无数据" :image-size="60" /></template>
-        <el-table-column label="IP 地址" min-width="160">
+        <template #empty><el-empty :description="t('app.security.overview.topIps.empty')" :image-size="60" /></template>
+        <el-table-column :label="t('app.security.overview.topIps.colIp')" min-width="160">
           <template #default="{ row }">
             <IPLocationAction :ip="row.ip" :location="row.ip_location" />
           </template>
         </el-table-column>
-        <el-table-column prop="blocked" label="拦截" width="100" align="center">
+        <el-table-column prop="blocked" :label="t('app.security.overview.status.blocked')" width="100" align="center">
           <template #default="{ row }"><el-tag type="danger" size="small" effect="plain">{{ row.blocked }}</el-tag></template>
         </el-table-column>
-        <el-table-column prop="detected" label="检测" width="100" align="center">
+        <el-table-column prop="detected" :label="t('app.security.overview.status.detected')" width="100" align="center">
           <template #default="{ row }"><el-tag type="warning" size="small" effect="plain">{{ row.detected }}</el-tag></template>
         </el-table-column>
-        <el-table-column prop="recent_10m" label="近10分钟" width="120" align="center">
-          <template #default="{ row }"><span style="color:#059669;font-weight:600">{{ row.recent_10m }}</span> 次</template>
+        <el-table-column prop="recent_10m" :label="t('app.security.overview.topIps.colRecent10m')" width="120" align="center">
+          <template #default="{ row }"><span style="color:#059669;font-weight:600">{{ row.recent_10m }}</span> {{ t('app.security.overview.topIps.unitTimes') }}</template>
         </el-table-column>
-        <el-table-column prop="recent_1h" label="近1小时" width="128" align="center">
-          <template #default="{ row }"><span style="color:#059669;font-weight:600">{{ row.recent_1h }}</span> 次</template>
+        <el-table-column prop="recent_1h" :label="t('app.security.overview.topIps.colRecent1h')" width="128" align="center">
+          <template #default="{ row }"><span style="color:#059669;font-weight:600">{{ row.recent_1h }}</span> {{ t('app.security.overview.topIps.unitTimes') }}</template>
         </el-table-column>
-        <el-table-column prop="recent_24h" label="近24小时" width="110" align="center">
-          <template #default="{ row }"><span style="color:#059669;font-weight:600">{{ row.recent_24h }}</span> 次</template>
+        <el-table-column prop="recent_24h" :label="t('app.security.overview.topIps.colRecent24h')" width="110" align="center">
+          <template #default="{ row }"><span style="color:#059669;font-weight:600">{{ row.recent_24h }}</span> {{ t('app.security.overview.topIps.unitTimes') }}</template>
         </el-table-column>
-        <el-table-column label="攻击类型" min-width="140" show-overflow-tooltip>
+        <el-table-column :label="t('app.security.overview.topIps.colAttackType')" min-width="140" show-overflow-tooltip>
           <template #default="{ row }">
             <span>{{ topIpAttackLabel(row as TopIP) }}</span>
           </template>
         </el-table-column>
-        <el-table-column prop="last_time" label="最后攻击" width="170" :formatter="(row: TopIP) => formatDate(row.last_time)" />
+        <el-table-column prop="last_time" :label="t('app.security.overview.topIps.colLastAttack')" width="170" :formatter="(row: TopIP) => formatDate(row.last_time)" />
       </el-table>
     </el-card>
   </div>
@@ -286,6 +286,7 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
 import { DataAnalysis, TrendCharts, PieChart, Location, Warning, Odometer, Monitor, InfoFilled, Stopwatch } from '@element-plus/icons-vue'
+import { useI18n } from 'vue-i18n'
 import { request } from '@/utils/api'
 import { useAuthStore } from '@/stores/auth'
 import IPLocationAction from '@/views/security/IPLocationAction.vue'
@@ -299,6 +300,8 @@ import type { APIResponse } from '@/types'
 import { securityActionColors } from '@/utils/chartTheme'
 import { normalizeRateLimitBlocks, type RateLimitBlocks } from '@/utils/rateLimitBlocks'
 import { ingestionWarningMessage, type IngestionHealth } from '@/utils/ingestionHealth'
+
+const { t } = useI18n()
 
 
 interface TrendPoint { date: string; blocked: number; detected: number }
@@ -382,23 +385,22 @@ const normalTodaySplit = computed<{ http: number; tcp: number } | null>(() => {
   if (typeof tcp !== 'number' || !Number.isFinite(tcp)) return null
   return { http, tcp }
 })
-const crawlerCountingNote = '；已验证爬虫放行流量计入检测放行（logged）、不计入正常请求列'
 const todayCountTip = computed(() => overview.value.includes_reserved
-  ? '总量含私网/保留地址事件（内网扫描、文档测试段等也会计入，与大屏排除口径不同）' + crawlerCountingNote
-  : '与大屏同口径（分钟汇总）：不含私网/保留地址事件，含当前分钟截至最近一次汇总的事件（滞后约 1 分钟）' + crawlerCountingNote)
+  ? t('app.security.overview.status.tipReserved') + t('app.security.overview.status.tipCrawlerNote')
+  : t('app.security.overview.status.tipRollup') + t('app.security.overview.status.tipCrawlerNote'))
 const trendChartOption = computed(() => {
-  const dates = overview.value.trend.map(t => t.date)
-  const blocked = overview.value.trend.map(t => t.blocked)
-  const detected = overview.value.trend.map(t => t.detected)
+  const dates = overview.value.trend.map((row) => row.date)
+  const blocked = overview.value.trend.map((row) => row.blocked)
+  const detected = overview.value.trend.map((row) => row.detected)
   return {
     tooltip: { trigger: 'axis' },
-    legend: { data: ['拦截', '检测'], top: 0, itemGap: 24 },
+    legend: { data: [t('app.security.overview.status.blocked'), t('app.security.overview.status.detected')], top: 0, itemGap: 24 },
     grid: { left: 40, right: 20, top: 36, bottom: 30, containLabel: false },
     xAxis: { type: 'category', data: dates },
     yAxis: { type: 'value' },
     series: [
-      { name: '拦截', type: 'bar', data: blocked, itemStyle: { color: securityActionColors.blocked }, stack: 'total' },
-      { name: '检测', type: 'bar', data: detected, itemStyle: { color: securityActionColors.detected }, stack: 'total' },
+      { name: t('app.security.overview.status.blocked'), type: 'bar', data: blocked, itemStyle: { color: securityActionColors.blocked }, stack: 'total' },
+      { name: t('app.security.overview.status.detected'), type: 'bar', data: detected, itemStyle: { color: securityActionColors.detected }, stack: 'total' },
     ],
   }
 })

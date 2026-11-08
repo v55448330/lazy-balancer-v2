@@ -1,6 +1,7 @@
 import { ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { request } from '@/utils/api'
+import { tSafe as t } from '../i18n/tSafe.ts'
 import { showSaveResult } from '@/utils/saveResult'
 import type { APIResponse } from '@/types'
 
@@ -33,16 +34,16 @@ export const useIpListAdd = () => {
 
   const addIpToList = async (ip: string, list: IpListOption, options: AddIpToListOptions = {}): Promise<boolean> => {
     if (adding.value) return false
-    const verb = options.verb ?? '加入'
+    const verb = options.verb ?? t('common.app.views.ipAdd.verbAdd')
     // 确认框弹出前即占位——双击不再叠两个确认框、两次 POST（与
     // useTrustAssociation 同型）；取消分支统一由 finally 复位。
     adding.value = true
     try {
       try {
         await ElMessageBox.confirm(
-          `将把 ${ip} ${verb}地址列表「${list.name}」（幂等，已存在时不会重复添加）。是否继续？`,
-          `${verb}地址列表`,
-          { confirmButtonText: '确定', cancelButtonText: '取消', type: 'info' },
+          t('common.app.views.ipAdd.confirmMessage', { ip, verb, list: list.name }),
+          t('common.app.views.ipAdd.confirmTitle', { verb }),
+          { confirmButtonText: t('common.app.views.ipAdd.confirmOk'), cancelButtonText: t('common.app.views.ipAdd.cancel'), type: 'info' },
         )
       } catch { return false }
       // 非 silent：错误走全局拦截器提示，428 时全局 MFA step-up 弹码链完整生效
@@ -50,8 +51,8 @@ export const useIpListAdd = () => {
       if (res.data?.added) {
         // 2026-09-07 裁定 L1：经 showSaveResult 呈现——退化 200+后缀（Caddy 应用
         // 失败但 DB 已提交）时弹持续警告而非成功 toast，安全处置操作不可静默。
-        showSaveResult(res as unknown as { message?: string }, options.successText ?? `已${verb}地址列表「${list.name}」`)
-      } else ElMessage.info(`该 IP 已在列表「${list.name}」中`)
+        showSaveResult(res as unknown as { message?: string }, options.successText ?? t('common.app.views.ipAdd.successDefault', { verb, list: list.name }))
+      } else ElMessage.info(t('common.app.views.ipAdd.alreadyInList', { list: list.name }))
       return true
     } catch {
       // 失败提示由全局拦截器弹出，这里只需终止流程

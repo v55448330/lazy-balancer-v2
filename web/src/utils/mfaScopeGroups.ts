@@ -1,6 +1,11 @@
 // MFA 弹框「受保护操作范围」清单单源：与 middleware.go 的 mfaStepUpGuard 挂载面
 // （admin/business 两组级）及 readOnlyWriteRoutes 豁免清单逐族对齐。新增写端点族
 // 必须同步入列（否则弹框会低估受保护范围），测试按本清单反查缺失项。
+// i18n：title/items 走 views.mfa 词条键（zh 母本与键的逐条对表钉测见
+// tests/mfaErrors.spec.ts 的清单词条化用例）——键化后 zh 直出与原字面量逐字等价，
+// mfaErrors.spec 的族锚点运行时断言不受影响。
+
+import { tSafe as t } from '../i18n/tSafe.ts'
 
 // 形状只作下方清单的元素类型——全仓零外部消费，不导出（避免视图绕开清单
 // 单源自行构造受保护操作集合）。
@@ -10,10 +15,28 @@ interface MfaScopeGroup {
 }
 
 export const MFA_SCOPE_GROUPS: MfaScopeGroup[] = [
-  { title: '负载规则', items: ['创建', '编辑', '删除', '启用', '禁用', '复制'] },
-  { title: '证书与 DNS', items: ['DNS 配置增删改', '证书配置增删改', 'DNS 凭证连通性测试', 'CA 提供商修改/测试', '触发证书签发', '证书任务重试/删除'] },
-  { title: '安全防护', items: ['安全策略增删改/绑定/拆分', '自定义规则增删改', '拦截页面增删改', 'IP 名单增删改与条目增删', 'CRS/IP 库更新与自动更新开关', '威胁情报库/爬虫库更新与开关', '自动封禁配置'] },
-  { title: '用户与密钥', items: ['用户增删改/启停/重置密码（管理员）', '个人资料修改', 'API 密钥创建/启停/删除（含自己的）', '重置 MFA（含管理员代重置）', '启用/禁用/重新生成恢复码（自己的）'] },
-  { title: '系统与服务', items: ['基础设置/Caddy 全局配置保存', '配置重载/校验', '配置导入（v1/v2）', '配置导出与自动备份（设置保存/立即备份/删除/还原/下载）', '管理 TLS 设置修改', 'OIDC 配置修改/删除', 'Caddy 服务启动/停止/重启', '原始 Caddy 配置覆写（JSON 逃生口）', '任务监控 运行/停止调度/取消/重启', '系统重启'] },
-  { title: '集群管理', items: ['节点审批/拒绝/删除', '访问地址修改', '节点站点坐标配置', '服务控制（启动/停止/重启 Caddy、重启应用）', '清除节点证书指纹/清空指纹钉', '注册令牌生成', '主从模式切换/提升', '手动同步', '集群同步设置', '登录从节点（票据签发，每次验证）'] },
+  {
+    title: t('common.app.views.mfa.scopeGroupRules'),
+    items: [t('common.app.views.mfa.scopeCreate'), t('common.app.views.mfa.scopeEdit'), t('common.app.views.mfa.scopeDelete'), t('common.app.views.mfa.scopeEnable'), t('common.app.views.mfa.scopeDisable'), t('common.app.views.mfa.scopeDuplicate')],
+  },
+  {
+    title: t('common.app.views.mfa.scopeGroupCertDns'),
+    items: [t('common.app.views.mfa.scopeDnsConfigCrud'), t('common.app.views.mfa.scopeCertConfigCrud'), t('common.app.views.mfa.scopeDnsCredentialTest'), t('common.app.views.mfa.scopeCaProviderChangeTest'), t('common.app.views.mfa.scopeTriggerIssue'), t('common.app.views.mfa.scopeCertJobRetryDelete')],
+  },
+  {
+    title: t('common.app.views.mfa.scopeGroupSecurity'),
+    items: [t('common.app.views.mfa.scopeSecurityPolicyCrud'), t('common.app.views.mfa.scopeCustomRuleCrud'), t('common.app.views.mfa.scopeBlockPageCrud'), t('common.app.views.mfa.scopeIpListCrud'), t('common.app.views.mfa.scopeLibUpdate'), t('common.app.views.mfa.scopeThreatCrawlerUpdate'), t('common.app.views.mfa.scopeAutobanConfig')],
+  },
+  {
+    title: t('common.app.views.mfa.scopeGroupUsersKeys'),
+    items: [t('common.app.views.mfa.scopeUserCrud'), t('common.app.views.mfa.scopeProfileUpdate'), t('common.app.views.mfa.scopeApiKeyMgmt'), t('common.app.views.mfa.scopeMfaReset'), t('common.app.views.mfa.scopeRecoveryCodes')],
+  },
+  {
+    title: t('common.app.views.mfa.scopeGroupSystem'),
+    items: [t('common.app.views.mfa.scopeSettingsSave'), t('common.app.views.mfa.scopeConfigReloadValidate'), t('common.app.views.mfa.scopeConfigImport'), t('common.app.views.mfa.scopeConfigExportBackup'), t('common.app.views.mfa.scopeAdminTls'), t('common.app.views.mfa.scopeOidcConfig'), t('common.app.views.mfa.scopeCaddyService'), t('common.app.views.mfa.scopeRawCaddyOverwrite'), t('common.app.views.mfa.scopeTaskMonitor'), t('common.app.views.mfa.scopeSystemRestart')],
+  },
+  {
+    title: t('common.app.views.mfa.scopeGroupCluster'),
+    items: [t('common.app.views.mfa.scopeNodeApproval'), t('common.app.views.mfa.scopeAccessUrl'), t('common.app.views.mfa.scopeNodeSite'), t('common.app.views.mfa.scopeNodeService'), t('common.app.views.mfa.scopeForgetPin'), t('common.app.views.mfa.scopeRegisterToken'), t('common.app.views.mfa.scopeModeSwitch'), t('common.app.views.mfa.scopeManualSync'), t('common.app.views.mfa.scopeClusterSync'), t('common.app.views.mfa.scopeReplicaLogin')],
+  },
 ]

@@ -18,9 +18,10 @@ const editor = code('src/components/SecurityBindingEditor.vue')
 
 test('策略向导关联规则选择器：协议筛选默认 HTTP，三档可切', () => {
   assert.match(policies, /const pickerProtoFilter = ref<'all' \| 'http' \| 'tcp'>\('http'\)/, '默认档必须是 HTTP（保持既有选择视野）')
-  // 控件与三档选项
+  // 控件与三档选项（「全部」已抽词:调用点钉键,zh 母本钉原文;HTTP/TCP 协议词保持字面量）
   assert.match(policies, /v-model="pickerProtoFilter"/)
-  assert.match(policies, /<el-option label="全部" value="all" \/>/)
+  assert.match(policies, /<el-option :label="t\('app\.security\.policies\.common\.all'\)" value="all" \/>/)
+  assert.ok(code('src/locales/zh/security.ts').includes('"zh": "全部"'), '「全部」原文必须在 zh 母本词条中')
   assert.match(policies, /<el-option label="HTTP" value="http" \/>/)
   assert.match(policies, /<el-option label="TCP" value="tcp" \/>/)
 })

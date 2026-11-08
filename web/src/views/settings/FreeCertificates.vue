@@ -3,8 +3,8 @@
     <el-alert v-if="loadError" type="error" :closable="false" show-icon class="polling-error-alert error-banner">
       <template #title>
         <div class="polling-error-title">
-          <span>证书配置数据加载失败：证书配置/DNS 提供商/CA 提供商列表可能为空（非真实状态）</span>
-          <el-button link type="danger" @click="retryLoad">立即重试</el-button>
+          <span>{{ t('app.settings.freeCerts.loadFailBanner') }}</span>
+          <el-button link type="danger" @click="retryLoad">{{ t('app.settings.freeCerts.actions.retryNow') }}</el-button>
         </div>
       </template>
     </el-alert>
@@ -14,42 +14,42 @@
         <div class="card-header">
           <div class="card-title">
             <el-icon><Setting /></el-icon>
-            <span>ACME 全局设置</span>
+            <span>{{ t('app.settings.freeCerts.acme.title') }}</span>
           </div>
         </div>
       </template>
       <el-form :model="global" label-width="140px" :disabled="isReadOnly || savingGlobal">
-        <el-form-item label="ACME 邮箱" required>
+        <el-form-item :label="t('app.settings.freeCerts.acme.email')" required>
           <el-input v-model="global.acme_email" placeholder="your@email.com" style="width: 240px;" />
-          <span class="form-tip-inline">用于 CA 账户注册，使用 ACME 签发时必须填写</span>
+          <span class="form-tip-inline">{{ t('app.settings.freeCerts.acme.emailHint') }}</span>
         </el-form-item>
-        <el-form-item label="过期提醒天数">
+        <el-form-item :label="t('app.settings.freeCerts.acme.expiryWarnDays')">
           <el-input-number v-model="global.cert_expiry_days" :min="1" :max="365" />
-          <span class="form-tip-inline">证书剩余天数少于该值时标记为「即将过期」，并在证书列表与告警中提醒。</span>
+          <span class="form-tip-inline">{{ t('app.settings.freeCerts.acme.expiryWarnHint') }}</span>
         </el-form-item>
-        <el-form-item label="自动续签时间">
+        <el-form-item :label="t('app.settings.freeCerts.acme.renewalTime')">
           <el-input-number v-model="global.cert_renewal_days" :min="1" :max="CERT_RENEWAL_DAYS_MAX" />
           <span
             class="form-tip-inline"
-            title="选择 84–88 天（超过证书寿命 − 7 天）时，系统按证书实际寿命把窗口收敛为到期前 7 天再续签，并对该规则每小时留一条告警（库值保持原样）。0 = 默认 30 天，仅 API 直写/备份导入可达，本控件下限为 1。"
-          >到期前多少天开始自动续签，建议不超过 60 天（上限 {{ CERT_RENEWAL_DAYS_MAX }} 天）；到期前 7 天内必定续签。</span>
+            :title="t('app.settings.freeCerts.acme.renewalTimeTitle')"
+          >{{ t('app.settings.freeCerts.acme.renewalTimeHint', { max: CERT_RENEWAL_DAYS_MAX }) }}</span>
         </el-form-item>
-        <el-form-item label="续签重试次数">
+        <el-form-item :label="t('app.settings.freeCerts.acme.renewalAttempts')">
           <el-input-number v-model="global.cert_renewal_attempts" :min="1" :max="10" />
-          <span class="form-tip-inline">证书续签失败（包括 CA 频率限制）后的最大自动重试次数</span>
+          <span class="form-tip-inline">{{ t('app.settings.freeCerts.acme.renewalAttemptsHint') }}</span>
         </el-form-item>
-        <el-form-item label="CA 提供商" required>
-          <el-select v-model="global.default_ca_provider_id" style="width: 240px;" placeholder="请选择 CA 提供商">
+        <el-form-item :label="t('app.settings.freeCerts.acme.caProvider')" required>
+          <el-select v-model="global.default_ca_provider_id" style="width: 240px;" :placeholder="t('app.settings.freeCerts.acme.caProviderPlaceholder')">
             <!-- 选项=启用 ∪ 当前值（已禁用项仅回显、置 disabled 不可新选——
                  原口径下存量指向已禁用 CA 时显示裸数字 id 但校验照过，自相矛盾） -->
             <el-option v-for="p in defaultCAProviderOptions" :key="p.id" :label="referencedOptionLabel(p)" :value="p.id" :disabled="!p.enabled" />
           </el-select>
-          <span class="form-tip-inline">系统默认使用的证书签发机构</span>
+          <span class="form-tip-inline">{{ t('app.settings.freeCerts.acme.caProviderHint') }}</span>
         </el-form-item>
           <el-form-item>
             <el-button type="primary" :loading="savingGlobal" :disabled="isReadOnly || !props.configLoaded" @click="handleSave">
               <el-icon><Check /></el-icon>
-              <span class="btn-text">保存</span>
+              <span class="btn-text">{{ t('app.settings.freeCerts.actions.save') }}</span>
             </el-button>
           </el-form-item>
       </el-form>
@@ -60,29 +60,29 @@
         <div class="card-header">
           <div class="card-title">
             <el-icon><OfficeBuilding /></el-icon>
-            <span>CA 提供商</span>
+            <span>{{ t('app.settings.freeCerts.acme.caProvider') }}</span>
           </div>
         </div>
       </template>
       <el-table v-if="caProviders.length > 0" :data="caProviders" size="small" v-loading="loadingCAProviders">
-        <el-table-column prop="name" label="名称" />
-        <el-table-column prop="provider" label="类型" />
+        <el-table-column prop="name" :label="t('app.settings.freeCerts.ca.colName')" />
+        <el-table-column prop="provider" :label="t('app.settings.freeCerts.ca.colType')" />
         <el-table-column prop="directory_url" label="Directory URL" show-overflow-tooltip />
-        <el-table-column prop="max_concurrent" label="最大并发" width="90" />
-        <el-table-column prop="min_interval_ms" label="最小间隔(ms)" width="120" />
-        <el-table-column prop="enabled" label="状态" width="80" align="center">
+        <el-table-column prop="max_concurrent" :label="t('app.settings.freeCerts.ca.colMaxConcurrent')" width="90" />
+        <el-table-column prop="min_interval_ms" :label="t('app.settings.freeCerts.ca.colMinInterval')" width="120" />
+        <el-table-column prop="enabled" :label="t('app.settings.freeCerts.ca.colStatus')" width="80" align="center">
           <template #default="{ row }">
-            <el-tag :type="row.enabled ? 'success' : 'info'" size="small">{{ row.enabled ? '启用' : '禁用' }}</el-tag>
+            <el-tag :type="row.enabled ? 'success' : 'info'" size="small">{{ row.enabled ? t('app.settings.freeCerts.ca.enabled') : t('app.settings.freeCerts.ca.disabled') }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="140" align="center">
+        <el-table-column :label="t('app.settings.freeCerts.ca.colActions')" width="140" align="center">
           <template #default="{ row }">
-            <el-button link type="primary" size="small" :loading="testingCAId === row.id" :disabled="isReadOnly || isTesting" @click="testCAProvider(row as CAProvider)">测试</el-button>
-            <el-button link type="primary" size="small" :disabled="isReadOnly || savingCA" @click="openCAProviderDialog(row as CAProvider)">编辑</el-button>
+            <el-button link type="primary" size="small" :loading="testingCAId === row.id" :disabled="isReadOnly || isTesting" @click="testCAProvider(row as CAProvider)">{{ t('app.settings.freeCerts.ca.testBtn') }}</el-button>
+            <el-button link type="primary" size="small" :disabled="isReadOnly || savingCA" @click="openCAProviderDialog(row as CAProvider)">{{ t('app.settings.freeCerts.ca.editBtn') }}</el-button>
           </template>
         </el-table-column>
       </el-table>
-      <el-empty v-else description="暂无 CA 提供商" :image-size="60" />
+      <el-empty v-else :description="t('app.settings.freeCerts.ca.empty')" :image-size="60" />
     </el-card>
 
     <el-card class="settings-card" style="margin-top: 20px">
@@ -90,31 +90,31 @@
         <div class="card-header">
           <div class="card-title">
             <el-icon><Connection /></el-icon>
-            <span>DNS 提供商配置</span>
+            <span>{{ t('app.settings.freeCerts.dns.title') }}</span>
           </div>
           <el-button type="primary" size="small" :disabled="isReadOnly || savingConfig" @click="openConfigDialog()">
             <el-icon><Plus /></el-icon>
-            <span class="btn-text">添加</span>
+            <span class="btn-text">{{ t('app.settings.freeCerts.dns.addBtn') }}</span>
           </el-button>
         </div>
       </template>
       <el-table v-if="configs.length > 0" :data="configs" size="small">
-        <el-table-column prop="name" label="名称" />
-        <el-table-column prop="dns_provider" label="提供商" />
-        <el-table-column prop="enabled" label="状态" width="80" align="center">
+        <el-table-column prop="name" :label="t('app.settings.freeCerts.ca.colName')" />
+        <el-table-column prop="dns_provider" :label="t('app.settings.freeCerts.dns.colProvider')" />
+        <el-table-column prop="enabled" :label="t('app.settings.freeCerts.ca.colStatus')" width="80" align="center">
           <template #default="{ row }">
-            <el-tag :type="row.enabled ? 'success' : 'info'" size="small">{{ row.enabled ? '启用' : '禁用' }}</el-tag>
+            <el-tag :type="row.enabled ? 'success' : 'info'" size="small">{{ row.enabled ? t('app.settings.freeCerts.ca.enabled') : t('app.settings.freeCerts.ca.disabled') }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="180" align="center">
+        <el-table-column :label="t('app.settings.freeCerts.ca.colActions')" width="180" align="center">
           <template #default="{ row }">
-            <el-button link type="primary" size="small" :loading="testingId === row.id" :disabled="isReadOnly || isTesting" @click="testConfig(row as CertConfig)">测试</el-button>
-            <el-button link type="primary" size="small" :disabled="isReadOnly || savingConfig" @click="openConfigDialog(row as CertConfig)">编辑</el-button>
-            <el-button link type="danger" size="small" :loading="deletingId === row.id" :disabled="isReadOnly || deletingId !== null" @click="deleteConfig(row as CertConfig)">删除</el-button>
+            <el-button link type="primary" size="small" :loading="testingId === row.id" :disabled="isReadOnly || isTesting" @click="testConfig(row as CertConfig)">{{ t('app.settings.freeCerts.ca.testBtn') }}</el-button>
+            <el-button link type="primary" size="small" :disabled="isReadOnly || savingConfig" @click="openConfigDialog(row as CertConfig)">{{ t('app.settings.freeCerts.ca.editBtn') }}</el-button>
+            <el-button link type="danger" size="small" :loading="deletingId === row.id" :disabled="isReadOnly || deletingId !== null" @click="deleteConfig(row as CertConfig)">{{ t('app.settings.freeCerts.dns.deleteBtn') }}</el-button>
           </template>
         </el-table-column>
       </el-table>
-      <el-empty v-else description="暂无 DNS 提供商配置" :image-size="60" />
+      <el-empty v-else :description="t('app.settings.freeCerts.dns.empty')" :image-size="60" />
     </el-card>
 
     <el-card class="settings-card" style="margin-top: 20px">
@@ -122,7 +122,7 @@
         <div class="card-header">
           <div class="card-title">
             <el-icon><Document /></el-icon>
-            <span>签发任务</span>
+            <span>{{ t('app.settings.freeCerts.jobs.title') }}</span>
           </div>
         </div>
       </template>
@@ -138,22 +138,22 @@
       top="6vh"
     >
       <template #header>
-        <DialogHeader :icon="Connection" :title="editingId ? '编辑 DNS 提供商配置' : '添加 DNS 提供商配置'" tone="success"
-          subtitle="ACME DNS-01 验证使用的解析商凭证，保存后可测试连通性" />
+        <DialogHeader :icon="Connection" :title="editingId ? t('app.settings.freeCerts.dns.editTitle') : t('app.settings.freeCerts.dns.addTitle')" tone="success"
+          :subtitle="t('app.settings.freeCerts.dns.formHint')" />
       </template>
       <!-- label-width 140px：最长官方标签「AccessKey Secret」单行不折行（弹框随宽度增至 640px，输入列不受挤压） -->
       <el-form :model="form" label-width="140px" class="lb-form" :disabled="savingConfig">
-        <el-form-item label="配置名称" required>
-          <el-input v-model="form.name" placeholder="例如：我的证书配置" maxlength="100" />
+        <el-form-item :label="t('app.settings.freeCerts.dns.name')" required>
+          <el-input v-model="form.name" :placeholder="t('app.settings.freeCerts.dns.namePlaceholder')" maxlength="100" />
         </el-form-item>
-        <el-form-item label="DNS 提供商" required>
+        <el-form-item :label="t('app.settings.freeCerts.dns.provider')" required>
           <el-select v-model="form.dns_provider" style="width: 100%" @change="onProviderChange">
             <el-option v-for="p in providers" :key="p.code" :label="p.name" :value="p.code" />
           </el-select>
-          <div class="form-tip-line">DNS-01 验证时向该提供商写入/清理 TXT 记录</div>
+          <div class="form-tip-line">{{ t('app.settings.freeCerts.dns.providerHint') }}</div>
         </el-form-item>
         <template v-if="selectedProvider">
-          <el-divider content-position="left" class="section-divider">认证凭证</el-divider>
+          <el-divider content-position="left" class="section-divider">{{ t('app.settings.freeCerts.dns.credentials') }}</el-divider>
           <template v-for="field in selectedProvider.credential_fields" :key="field.name">
             <el-form-item :label="field.label" v-if="shouldShowField(field)">
               <el-select
@@ -180,80 +180,80 @@
             </el-form-item>
           </template>
         </template>
-        <el-divider content-position="left" class="section-divider">状态</el-divider>
-        <el-form-item label="启用">
+        <el-divider content-position="left" class="section-divider">{{ t('app.settings.freeCerts.ca.colStatus') }}</el-divider>
+        <el-form-item :label="t('app.settings.freeCerts.ca.enabled')">
           <el-switch v-model="form.enabled" />
-          <span class="form-tip-inline">停用后签发/续签不再使用该配置</span>
+          <span class="form-tip-inline">{{ t('app.settings.freeCerts.dns.disableNote') }}</span>
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button :disabled="savingConfig" @click="closeConfigDialog">取消</el-button>
-        <el-button type="primary" :loading="savingConfig" :disabled="savingConfig" @click="saveConfig">保存</el-button>
+        <el-button :disabled="savingConfig" @click="closeConfigDialog">{{ t('app.settings.freeCerts.actions.cancel') }}</el-button>
+        <el-button type="primary" :loading="savingConfig" :disabled="savingConfig" @click="saveConfig">{{ t('app.settings.freeCerts.actions.save') }}</el-button>
       </template>
     </el-dialog>
 
     <el-dialog v-model="caDialogVisible" width="min(560px, 92vw)" :close-on-click-modal="false" :before-close="beforeCADialogClose" class="ca-config-dialog" top="6vh">
       <template #header>
-        <DialogHeader :icon="Postcard" title="编辑 CA 提供商" subtitle="证书签发机构对接参数：并发 / 间隔与 EAB 凭证（ZeroSSL）" tone="warning" />
+        <DialogHeader :icon="Postcard" :title="t('app.settings.freeCerts.ca.editTitle')" :subtitle="t('app.settings.freeCerts.ca.editSubtitle')" tone="warning" />
       </template>
       <el-form :model="caForm" label-width="120px" :disabled="savingCA" class="lb-form">
-        <el-form-item label="名称">
+        <el-form-item :label="t('app.settings.freeCerts.ca.colName')">
           <el-input v-model="caForm.name" disabled />
         </el-form-item>
-        <el-form-item label="类型">
+        <el-form-item :label="t('app.settings.freeCerts.ca.colType')">
           <el-input v-model="caForm.provider" disabled />
         </el-form-item>
         <el-form-item label="Directory URL">
           <el-input v-model="caForm.directory_url" disabled />
-          <div class="form-tip-line">官方固定地址，不可修改</div>
+          <div class="form-tip-line">{{ t('app.settings.freeCerts.ca.acmeUrlFixed') }}</div>
         </el-form-item>
-        <el-divider content-position="left" class="section-divider">签发速率</el-divider>
-        <el-form-item label="最大并发">
+        <el-divider content-position="left" class="section-divider">{{ t('app.settings.freeCerts.ca.rateTitle') }}</el-divider>
+        <el-form-item :label="t('app.settings.freeCerts.ca.colMaxConcurrent')">
           <el-input-number v-model="caForm.max_concurrent" :min="1" :max="100" />
-          <span class="form-tip-inline">同时进行的签发任务数</span>
+          <span class="form-tip-inline">{{ t('app.settings.freeCerts.ca.rateConcurrentHint') }}</span>
         </el-form-item>
-        <el-form-item label="最小间隔">
+        <el-form-item :label="t('app.settings.freeCerts.ca.minInterval')">
           <el-input-number v-model="caForm.min_interval_ms" :min="1" :max="60000" :step="1000" />
-          <span class="form-tip-inline">两次新签发之间的最小间隔（毫秒）</span>
+          <span class="form-tip-inline">{{ t('app.settings.freeCerts.ca.minIntervalHint') }}</span>
         </el-form-item>
         <template v-if="caForm.provider === 'zerossl'">
-          <el-divider content-position="left" class="section-divider">EAB 凭证（ZeroSSL）</el-divider>
+          <el-divider content-position="left" class="section-divider">{{ t('app.settings.freeCerts.ca.eabTitle') }}</el-divider>
           <el-form-item label="EAB KID">
-            <el-input v-model="caCreds.eab_kid" placeholder="留空则自动获取" />
+            <el-input v-model="caCreds.eab_kid" :placeholder="t('app.settings.freeCerts.ca.eabPlaceholder')" />
             <div class="form-tip-line">
-              可选，留空时会在测试或签发时自动从 ZeroSSL API 获取；也可手动填写（见
+              {{ t('app.settings.freeCerts.ca.eabHelpPrefix') }}
               <el-link type="primary" href="https://app.zerossl.com/developer" target="_blank" rel="noopener noreferrer">ZeroSSL Developer</el-link>
-              ）
+              {{ t('app.settings.freeCerts.ca.eabHelpSuffix') }}
             </div>
           </el-form-item>
           <el-form-item label="EAB HMAC Key">
-            <el-input v-model="caCreds.eab_hmac_key" type="password" placeholder="留空则自动获取" show-password />
+            <el-input v-model="caCreds.eab_hmac_key" type="password" :placeholder="t('app.settings.freeCerts.ca.eabPlaceholder')" show-password />
           </el-form-item>
         </template>
-        <el-divider content-position="left" class="section-divider">状态</el-divider>
-        <el-form-item label="启用">
+        <el-divider content-position="left" class="section-divider">{{ t('app.settings.freeCerts.ca.colStatus') }}</el-divider>
+        <el-form-item :label="t('app.settings.freeCerts.ca.enabled')">
           <el-switch v-model="caForm.enabled" />
-          <span class="form-tip-inline">停用后新签发任务不再使用该 CA</span>
+          <span class="form-tip-inline">{{ t('app.settings.freeCerts.ca.disabledNote') }}</span>
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button :disabled="savingCA" @click="closeCADialog">取消</el-button>
-        <el-button type="primary" :loading="savingCA" :disabled="savingCA" @click="saveCAProvider">保存</el-button>
+        <el-button :disabled="savingCA" @click="closeCADialog">{{ t('app.settings.freeCerts.actions.cancel') }}</el-button>
+        <el-button type="primary" :loading="savingCA" :disabled="savingCA" @click="saveCAProvider">{{ t('app.settings.freeCerts.actions.save') }}</el-button>
       </template>
     </el-dialog>
 
     <el-dialog v-model="dnsVerifyVisible" width="min(560px, 92vw)" class="dialog-body-inset" :close-on-click-modal="false" @closed="onDnsVerifyClosed">
       <template #header>
-        <DialogHeader :icon="Connection" title="验证 DNS 凭证" :subtitle="dnsVerifySubtitle" tone="warning" />
+        <DialogHeader :icon="Connection" :title="t('app.settings.freeCerts.dns.verifyCredentialsBtn')" :subtitle="dnsVerifySubtitle" tone="warning" />
       </template>
       <el-form label-width="90px" @submit.prevent="confirmDnsVerify">
-        <el-form-item label="管理域名" :error="dnsVerifyError">
+        <el-form-item :label="t('app.settings.freeCerts.dns.manageDomainsBtn')" :error="dnsVerifyError">
           <el-input v-model="dnsVerifyDomain" placeholder="example.com" autofocus clearable @keyup.enter="confirmDnsVerify" />
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="dnsVerifyVisible = false">取消</el-button>
-        <el-button type="primary" @click="confirmDnsVerify">{{ dnsVerifyIsSave ? '验证并保存' : '验证' }}</el-button>
+        <el-button @click="dnsVerifyVisible = false">{{ t('app.settings.freeCerts.actions.cancel') }}</el-button>
+        <el-button type="primary" @click="confirmDnsVerify">{{ dnsVerifyIsSave ? t('app.settings.freeCerts.dns.verifyAndSaveBtn') : t('app.settings.freeCerts.dns.verifyBtn') }}</el-button>
       </template>
     </el-dialog>
   </div>
@@ -261,6 +261,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted, computed, reactive } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { request, mfaAwareSuccess } from '@/utils/api'
 import { useAuthStore } from '@/stores/auth'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -272,6 +273,8 @@ import { dnsConfigNeedsChallenge, type DnsConfigBaseline } from '@/utils/dnsConf
 import { selectableReferencedOptions, referencedOptionLabel } from '@/utils/caProviderOptions'
 import { acmeGlobalWritePayload, CERT_RENEWAL_DAYS_MAX } from '@/utils/configValues'
 import type { APIResponse } from '@/types'
+
+const { t } = useI18n()
 
 // 字段可见性/选项文案由后端元数据驱动（visible_when/option_labels），
 // 不再按 dnspod 的两种认证模式在前端硬编码字段名。
@@ -520,13 +523,13 @@ const saveCAProvider = async () => {
   if (isReadOnly.value || savingCA.value) return
   const credentials = caProviderCredentialsPayload(caForm.provider)
   if (credentials === null) {
-    ElMessage.error(`未知的 CA 提供商「${caForm.provider}」——无法生成凭证载荷，请刷新页面后重试`)
+    ElMessage.error(t('app.settings.freeCerts.ca.unknownProvider', { provider: caForm.provider }))
     return
   }
 
   try {
-    await ElMessageBox.confirm(`将保存 CA 提供商「${caForm.name}」的配置修改，是否继续？`, '确认保存', {
-      type: 'warning', confirmButtonText: '确认保存', cancelButtonText: '取消',
+    await ElMessageBox.confirm(t('app.settings.freeCerts.ca.saveConfirm', { name: caForm.name }), t('app.settings.freeCerts.actions.confirmSave'), {
+      type: 'warning', confirmButtonText: t('app.settings.freeCerts.actions.confirmSave'), cancelButtonText: t('app.settings.freeCerts.actions.cancel'),
     })
   } catch { return }
   savingCA.value = true
@@ -543,7 +546,7 @@ const saveCAProvider = async () => {
     const provider = editingCAProvider.value
     if (!provider) return
     await request.put(`/ca-providers/${provider.id}`, payload)
-    mfaAwareSuccess('CA 提供商配置已更新')
+    mfaAwareSuccess(t('app.settings.freeCerts.ca.updated'))
     caDialogVisible.value = false
     fetchCAProviders()
   } catch (caught: unknown) {
@@ -557,16 +560,16 @@ const saveCAProvider = async () => {
 const testCAProvider = async (p: CAProvider) => {
   // 测试会真实申请 EAB（写 ca_providers.credentials），属写操作；先明确确认再发起。
   if (isReadOnly.value || isTesting.value) return
-  const eabNote = p.provider === 'zerossl' ? '，ZeroSSL 可能自动申请并保存 EAB 凭证' : ''
+  const eabNote = p.provider === 'zerossl' ? t('app.settings.freeCerts.ca.eabNote') : ''
   try {
-    await ElMessageBox.confirm(`将对 CA 提供商「${p.name}」发起真实连通性测试${eabNote}。是否继续？`, '测试 CA 提供商', {
-      type: 'warning', confirmButtonText: '开始测试', cancelButtonText: '取消',
+    await ElMessageBox.confirm(t('app.settings.freeCerts.ca.testConfirm', { name: p.name, note: eabNote }), t('app.settings.freeCerts.ca.testTitle'), {
+      type: 'warning', confirmButtonText: t('app.settings.freeCerts.ca.testStartBtn'), cancelButtonText: t('app.settings.freeCerts.actions.cancel'),
     })
   } catch { return }
   testingCAId.value = p.id
   try {
     const res = await request.post<APIResponse>(`/ca-providers/${p.id}/test`)
-    mfaAwareSuccess(res.message || 'CA 提供商测试通过')
+    mfaAwareSuccess(res.message || t('app.settings.freeCerts.ca.testPassed'))
     // 测试可能写入测试前不存在的 ZeroSSL EAB：列表必须刷新，否则随后用陈旧
     // 表单保存会把刚申请到的 EAB 覆盖回空值（后端凭证列虽已按语义比较跳过
     // 未变更的写入，这里仍以最新凭证为编辑基线）。
@@ -585,8 +588,8 @@ const openConfigDialog = (config?: CertConfig) => {
   // 用户填完点保存只会拿到 400（等同让用户白填一屏）。
   if (providersError.value || providers.value.length === 0) {
     ElMessage.warning(providersError.value
-      ? 'DNS 提供商列表加载失败，请刷新页面或稍后重试'
-      : '暂无可用的 DNS 提供商，无法新建配置')
+      ? t('app.settings.freeCerts.dns.listLoadFail')
+      : t('app.settings.freeCerts.dns.noneAvailable'))
     return
   }
   if (config) {
@@ -683,12 +686,12 @@ const saveConfig = async () => {
     payload.dns_credentials = { ...form.value.dns_credentials }
   }
   if (!payload.name || !payload.dns_provider) {
-    ElMessage.warning('请填写配置名称和 DNS 提供商')
+    ElMessage.warning(t('app.settings.freeCerts.dns.nameAndProviderRequired'))
     return
   }
   try {
-    await ElMessageBox.confirm(`将${targetId ? '更新' : '创建'} DNS 提供商配置「${payload.name}」，是否继续？`, '确认保存', {
-      type: 'warning', confirmButtonText: '确认保存', cancelButtonText: '取消',
+    await ElMessageBox.confirm(t('app.settings.freeCerts.dns.saveConfirm', { action: targetId ? t('app.settings.freeCerts.dns.updateBtn') : t('app.settings.freeCerts.dns.createBtn'), name: payload.name }), t('app.settings.freeCerts.actions.confirmSave'), {
+      type: 'warning', confirmButtonText: t('app.settings.freeCerts.actions.confirmSave'), cancelButtonText: t('app.settings.freeCerts.actions.cancel'),
     })
   } catch { return }
   savingConfig.value = true
@@ -730,10 +733,10 @@ const saveConfig = async () => {
   try {
     if (targetId) {
       await request.put(`/certificate-configs/${targetId}`, payload)
-      mfaAwareSuccess('配置已更新')
+      mfaAwareSuccess(t('app.settings.freeCerts.dns.updated'))
     } else {
       await request.post('/certificate-configs', payload)
-      mfaAwareSuccess('配置已创建')
+      mfaAwareSuccess(t('app.settings.freeCerts.dns.created'))
     }
     dialogVisible.value = false
     fetchConfigs()
@@ -752,7 +755,7 @@ const deleteConfig = async (config: CertConfig) => {
   const configId = config.id
   if (configId === undefined) return
   try {
-    await ElMessageBox.confirm(`确定要删除配置 "${config.name}" 吗？`, '删除确认', { type: 'warning' })
+    await ElMessageBox.confirm(t('app.settings.freeCerts.dns.deleteConfirm', { name: config.name }), t('app.settings.freeCerts.dns.deleteConfirmTitle'), { type: 'warning' })
   } catch (error: unknown) {
     if (error === 'cancel' || error === 'close') return
     console.error('Failed to confirm cert config deletion:', error)
@@ -762,7 +765,7 @@ const deleteConfig = async (config: CertConfig) => {
   deletingId.value = configId
   try {
     await request.delete(`/certificate-configs/${configId}`)
-    mfaAwareSuccess('配置已删除')
+    mfaAwareSuccess(t('app.settings.freeCerts.dns.deleted'))
     fetchConfigs()
   } catch (error: unknown) {
     console.error('Failed to delete cert config:', error)
@@ -778,8 +781,8 @@ const dnsVerifyIsSave = ref(false)
 let dnsVerifyResolver: ((domain: string | null) => void) | null = null
 
 const dnsVerifySubtitle = computed(() => dnsVerifyIsSave.value
-  ? '保存前需验证 DNS 权限。系统将临时写入并删除 _acme-challenge.lb-test TXT 记录'
-  : '请输入该 DNS 账户下可管理的域名。系统将临时写入并删除 _acme-challenge.lb-test TXT 记录')
+  ? t('app.settings.freeCerts.dns.verifyDnsHelp')
+  : t('app.settings.freeCerts.dns.manageDomainsHelp'))
 
 const resolveDnsVerify = (domain: string | null): void => {
   const resolve = dnsVerifyResolver
@@ -792,11 +795,11 @@ const onDnsVerifyClosed = (): void => resolveDnsVerify(null)
 const confirmDnsVerify = (): void => {
   const domain = dnsVerifyDomain.value.trim()
   if (!domain) {
-    dnsVerifyError.value = '请输入域名'
+    dnsVerifyError.value = t('app.settings.freeCerts.dns.domainPlaceholder')
     return
   }
   if (!/^([a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}$/.test(domain)) {
-    dnsVerifyError.value = '域名格式不正确'
+    dnsVerifyError.value = t('app.settings.freeCerts.dns.domainInvalid')
     return
   }
   dnsVerifyError.value = ''
@@ -821,7 +824,7 @@ const testConfig = async (config: CertConfig) => {
     const domain = await promptTestDomain(false)
     if (!domain) return
     const res = await request.post(`/certificate-configs/${config.id}/test`, { domain })
-    mfaAwareSuccess(res.message || '凭证有效')
+    mfaAwareSuccess(res.message || t('app.settings.freeCerts.dns.credentialsValid'))
   } catch (caught: unknown) {
     // Error toast is already shown by the global axios interceptor.
     console.error('Failed to test cert config:', caught)
@@ -832,43 +835,43 @@ const testConfig = async (config: CertConfig) => {
 
 const handleSave = async () => {
   if (!props.configLoaded) {
-    ElMessage.warning('配置尚未加载完成，暂不能保存')
+    ElMessage.warning(t('app.settings.freeCerts.messages.configNotLoaded'))
     return
   }
   if (isReadOnly.value) return
   if (savingGlobal.value) return
   if (!global.value.acme_email || !global.value.acme_email.trim()) {
-    ElMessage.warning('请填写 ACME 邮箱')
+    ElMessage.warning(t('app.settings.freeCerts.messages.acmeEmailRequired'))
     return
   }
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(global.value.acme_email.trim())) {
-    ElMessage.warning('ACME 邮箱格式不正确')
+    ElMessage.warning(t('app.settings.freeCerts.messages.acmeEmailInvalid'))
     return
   }
   if (!global.value.default_ca_provider_id) {
-    ElMessage.warning('请选择 CA 提供商')
+    ElMessage.warning(t('app.settings.freeCerts.acme.caProviderPlaceholder'))
     return
   }
   // CA 提供商列表未就绪时不能把「加载失败/加载中」误报成「不存在」：前者
   // 下拉本就没有选项，用户「重新选择」无从下手，且整卡保存被无故阻断。
   // 前置门按「加载态 → 失败态 → 真不存在」排序。
   if (loadingCAProviders.value) {
-    ElMessage.warning('CA 提供商列表加载中，请稍后再保存')
+    ElMessage.warning(t('app.settings.freeCerts.messages.caListLoading'))
     return
   }
   if (caProvidersError.value) {
-    ElMessage.warning('CA 提供商列表加载失败，请点顶部「立即重试」后再保存')
+    ElMessage.warning(t('app.settings.freeCerts.messages.caListLoadFail'))
     return
   }
   // 默认 CA 被禁用/删除后，整卡任何保存都会被写侧门拒绝（英文 400）——
   // 前置为可定位的中文提示，避免只改其它字段也无法保存。
   const defaultCA = caProviders.value.find((p) => p.id === global.value.default_ca_provider_id)
   if (!defaultCA) {
-    ElMessage.warning('默认 CA 提供商不存在，请重新选择')
+    ElMessage.warning(t('app.settings.freeCerts.messages.defaultCaMissing'))
     return
   }
   if (!defaultCA.enabled) {
-    ElMessage.warning('默认 CA 提供商已被禁用：请先在 CA 提供商列表中启用它，或改选其他 CA')
+    ElMessage.warning(t('app.settings.freeCerts.messages.defaultCaDisabled'))
     return
   }
   savingGlobal.value = true
@@ -882,16 +885,16 @@ const handleSave = async () => {
     })
     const preview = await request.post<ConfigPreviewResponse>('/config/preview', payload)
     if (preview.data?.changed) {
-      const changes = preview.data.changes.length > 0 ? preview.data.changes.join('；') : '检测到配置变更'
-      await ElMessageBox.confirm(changes, `确认保存${preview.data.section || 'ACME 设置'}？`, {
-        confirmButtonText: '确认',
-        cancelButtonText: '取消',
+      const changes = preview.data.changes.length > 0 ? preview.data.changes.join('；') : t('app.settings.freeCerts.messages.configChanged')
+      await ElMessageBox.confirm(changes, t('app.settings.freeCerts.messages.confirmSaveSection', { section: preview.data.section || t('app.settings.freeCerts.messages.acmeSettingsTitle') }), {
+        confirmButtonText: t('app.settings.freeCerts.actions.confirm'),
+        cancelButtonText: t('app.settings.freeCerts.actions.cancel'),
         type: 'warning',
       })
     }
     const saveResp = await request.put('/config', payload)
     const saveMessage = (saveResp as unknown as { message?: string }).message ?? ''
-    mfaAwareSuccess(saveMessage.includes('配置无变化') ? saveMessage : '保存成功')
+    mfaAwareSuccess(saveMessage.includes('配置无变化') ? saveMessage : t('app.settings.freeCerts.messages.saved'))
     // 等待父级回填后再由 finally 解冻，避免迟到的 /config 覆盖在途编辑；
     // onSave 为必填回调（Settings.vue 三卡统一接线）。
     await props.onSave()

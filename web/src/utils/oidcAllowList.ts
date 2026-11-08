@@ -7,6 +7,8 @@
 //   **不得**当分隔符，只按逗号/分号（含全角）与换行切分。
 // 两侧都 trim、去空、保序去重；formatAllowList 用换行拼接，两种字段都能无损往返。
 
+import { tSafe as t } from '../i18n/tSafe.ts'
+
 const EMAIL_DOMAIN_SEPARATORS = /[\s,;，、；]+/
 const GROUP_SEPARATORS = /[,;，；\r\n]+/
 
@@ -46,11 +48,11 @@ export const OIDC_ALLOW_LIST_ENTRY_MAX_CHARS = 128
  */
 export const validateAllowList = (label: string, values: readonly string[]): string | null => {
   if (values.length > OIDC_ALLOW_LIST_MAX_ENTRIES) {
-    return `${label}最多 ${OIDC_ALLOW_LIST_MAX_ENTRIES} 条（当前 ${values.length} 条）`
+    return t('common.app.oidcAllowList.maxEntries', { label, max: OIDC_ALLOW_LIST_MAX_ENTRIES, current: values.length })
   }
   for (const value of values) {
     if ([...value].length > OIDC_ALLOW_LIST_ENTRY_MAX_CHARS) {
-      return `${label}单条最多 ${OIDC_ALLOW_LIST_ENTRY_MAX_CHARS} 个字符`
+      return t('common.app.oidcAllowList.entryTooLong', { label, max: OIDC_ALLOW_LIST_ENTRY_MAX_CHARS })
     }
   }
   return null

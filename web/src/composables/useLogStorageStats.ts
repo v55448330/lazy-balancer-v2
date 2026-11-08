@@ -1,5 +1,6 @@
 import { ref, watch } from 'vue'
 import { request } from '@/utils/api'
+import { tSafe as t } from '../i18n/tSafe.ts'
 
 /** GET /logs/stats 的单行统计（服务端按 key 收窄后返回的条目）。 */
 interface LogStorageInfo {
@@ -93,7 +94,7 @@ export const useLogStorageStats = (options: {
       }
     } catch (e) {
       if (seq === loadStatsSeq) {
-        error.value = e instanceof Error ? e.message : '日志统计取数失败'
+        error.value = e instanceof Error ? e.message : t('common.app.views.logStorage.loadFailed')
         // 失败是「本轮结果」，缺行标记随之作废：消费方按 error 呈现重试口径，
         // 不得同时挂「暂无统计数据」（两者含义不同）。
         unavailable.value = false

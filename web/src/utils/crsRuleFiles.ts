@@ -7,6 +7,7 @@
 import { request } from './api'
 import type { APIResponse } from '@/types'
 import type { CrsRuleFileOption } from './securityStages'
+import { tSafe as t } from '../i18n/tSafe.ts'
 
 export const CRS_RULE_PAGE_SIZE = 50
 // 上限 40 页（2000 个文件）：防御异常 total/分页不收敛，当前 CRS 约 40 个文件。
@@ -40,8 +41,8 @@ export const fetchAllCrsRuleFiles = async (): Promise<CrsRuleFileOption[]> => {
     ? all.length < total
     : all.length >= CRS_RULE_PAGE_SIZE * CRS_RULE_MAX_PAGES
   if (truncated) {
-    const counted = typeof total === 'number' ? `，服务端 total=${total}` : ''
-    throw new Error(`CRS 规则文件清单未取全（已取 ${all.length} 条${counted}）`)
+    const counted = typeof total === 'number' ? t('common.app.crsRuleFiles.serverTotalSuffix', { total }) : ''
+    throw new Error(t('common.app.crsRuleFiles.listIncomplete', { count: all.length, suffix: counted }))
   }
   return all
 }

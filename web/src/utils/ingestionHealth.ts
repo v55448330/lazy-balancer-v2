@@ -6,6 +6,9 @@
 // 字节数人类可读走站内单源 formatBytes（与日志占用条/备份大小/仪表盘同精度）；
 // 本模块原持私有 humanBytes（一位小数、上限 GB），同一量级在两处显示不同精度。
 import { formatBytes as humanBytes } from './formatBytes.ts'
+// 提示文案走 i18n（批次 D ingest 域）：键形与 zh 母本原文由 ingestionHealth.spec
+// 双钉承载；判据不动，仅文案改词条参数化。
+import { tSafe as t } from '../i18n/tSafe.ts'
 
 export interface IngestionHealth {
   observed: boolean
@@ -36,16 +39,16 @@ export interface IngestionHealth {
 /** 整条事件丢失来源（写侧丢弃/写盘/格式化/畸形区跳过）。 */
 function eventLossParts(status: IngestionHealth): string[] {
   const parts: string[] = []
-  if ((status.writer_dropped ?? 0) > 0) parts.push(`丢弃 ${status.writer_dropped} 条`)
-  if ((status.writer_io_errors ?? 0) > 0) parts.push(`写盘错误 ${status.writer_io_errors} 次`)
-  if ((status.writer_format_errors ?? 0) > 0) parts.push(`格式化失败 ${status.writer_format_errors} 次`)
-  if ((status.skipped_regions ?? 0) > 0) parts.push(`跳过畸形区 ${status.skipped_regions} 处（${humanBytes(status.skipped_bytes ?? 0)}）`)
+  if ((status.writer_dropped ?? 0) > 0) parts.push(t('common.app.views.ingest.lossDropped', { count: status.writer_dropped }))
+  if ((status.writer_io_errors ?? 0) > 0) parts.push(t('common.app.views.ingest.lossIoErrors', { count: status.writer_io_errors }))
+  if ((status.writer_format_errors ?? 0) > 0) parts.push(t('common.app.views.ingest.lossFormatErrors', { count: status.writer_format_errors }))
+  if ((status.skipped_regions ?? 0) > 0) parts.push(t('common.app.views.ingest.lossSkippedRegions', { count: status.skipped_regions, size: humanBytes(status.skipped_bytes ?? 0) }))
   return parts
 }
 
 /** 命中明细截断：事件本身在库，只缺部分规则命中明细。 */
 function detailLossParts(status: IngestionHealth): string[] {
-  return (status.messages_dropped ?? 0) > 0 ? [`命中明细截断 ${status.messages_dropped} 条`] : []
+  return (status.messages_dropped ?? 0) > 0 ? [t('common.app.views.ingest.lossDetailTruncated', { count: status.messages_dropped })] : []
 }
 
 /** 统一提示文案（空串 = 不提示）：判据与文案同源，三处视图只调这一个函数。 */
@@ -60,42 +63,51 @@ export function ingestionWarningMessage(status?: IngestionHealth | null): string
   if (status.task_state === 'stopped') {
     // 任务只拥有「尾读存量 + spool 补采 + 审计日志轮转 + 健康记账」；实时 IPC
     // 主路径不经调度，事件仍入库。文案不得说成「事件不再更新」。
-    return '安全事件采集任务已停止（未在运行）：spool 补采与审计日志轮转已暂停，实时 IPC 入库仍在运行（新事件仍会入库）；请到「任务监控」检查并启用「安全事件采集」任务。'
+    return t('common.app.views.ingest.taskStopped')
   }
   if (status.writer_stats_unavailable === true) {
-    return '审计写侧计数不可用（计数侧车连续读取失败）：写侧丢弃/写盘错误计数显示 0 不代表无丢弃；请检查审计日志目录的磁盘空间与写权限。'
+    return t('common.app.views.ingest.writerStatsUnavailable')
   }
   if (status.writer_degraded === true) {
     const format = status.writer_format_errors ?? 0
-    const formatPart = format > 0 ? `、格式化失败 ${format} 次` : ''
+    const formatPart = format > 0 ? t('common.app.views.ingest.writerDegradedFormatPart', { count: format }) : ''
     const hint = format > 0
-      ? '格式化失败属 formatter 契约/代码缺陷，请同时检查审计格式化实现与镜像版本'
-      : '请检查审计日志目录的磁盘空间与写权限'
-    return `审计日志写侧失败：累计丢弃 ${status.writer_dropped ?? 0} 条、写盘错误 ${status.writer_io_errors ?? 0} 次${formatPart}，安全事件可能缺失；${hint}。`
+      ? t('common.app.views.ingest.writerDegradedFormatHint')
+      : t('common.app.views.ingest.writerDegradedHint')
+    return t('common.app.views.ingest.writerDegraded', {
+      dropped: status.writer_dropped ?? 0,
+      io: status.writer_io_errors ?? 0,
+      formatPart,
+      hint,
+    })
   }
   if (status.observed === true && status.healthy === false) {
     const failures = status.consecutive_failures ?? 0
     if (failures > 0) {
-      const detail = status.last_error ? `：${status.last_error}` : ''
-      return `安全事件采集连续失败 ${failures} 次${detail}：spool 待补采事件可能滞后入库（实时 IPC 入库仍在运行）；请检查任务日志与审计日志目录。`
+      const detail = status.last_error ? t('common.app.views.ingest.lastErrorSuffix', { error: status.last_error }) : ''
+      return t('common.app.views.ingest.consecutiveFailures', { failures, detail })
     }
     if ((status.skipped_regions ?? 0) > 0) {
-      const lastSkip = status.last_skip_at ? `，最近 ${status.last_skip_at}` : ''
-      return `安全事件采集跳过了 ${status.skipped_regions} 处畸形区（累计 ${humanBytes(status.skipped_bytes ?? 0)}${lastSkip}）：该段审计数据对应的事件已永久丢失；请检查审计日志是否被截断或存在并发写入异常。`
+      const lastSkip = status.last_skip_at ? t('common.app.views.ingest.skipLastSuffix', { at: status.last_skip_at }) : ''
+      return t('common.app.views.ingest.skippedRegions', {
+        regions: status.skipped_regions,
+        size: humanBytes(status.skipped_bytes ?? 0),
+        lastSkip,
+      })
     }
     // 后端健康位为 false 但前端已知归因均不成立：不虚构「连续失败 0 次」，
     // 也不得暗示事件停更（实时 IPC 入库不经该任务调度）。
-    return '安全事件采集健康位异常（后端未提供进一步归因，可能为补采任务未运行或补采停摆；实时 IPC 入库仍在运行）；请检查任务日志与审计日志目录。'
+    return t('common.app.views.ingest.healthAnomaly')
   }
   // data_loss 单独成立（当前已恢复但曾丢失）：必须区分「整条事件丢失」与
   // 「事件在库但规则命中明细被截断」——后者说成「事件可能缺失」会误导排障。
   const eventParts = eventLossParts(status)
   const detailParts = detailLossParts(status)
   if (eventParts.length === 0 && detailParts.length > 0) {
-    return `此前曾发生安全事件明细截断（累计${detailParts.join('、')}，当前已恢复）：事件本身已记录，但部分规则命中明细永久缺失。`
+    return t('common.app.views.ingest.detailTruncatedOnly', { parts: detailParts.join('、') })
   }
   const parts = [...eventParts, ...detailParts]
-  const detailSuffix = detailParts.length > 0 ? '；部分规则命中明细永久缺失。' : ''
-  return `此前曾发生安全事件丢失（累计${parts.join('、') || '计数不可用'}，当前已恢复）：对应时间窗内的事件可能缺失${detailSuffix}`
+  const detailSuffix = detailParts.length > 0 ? t('common.app.views.ingest.detailLossSuffix') : ''
+  return t('common.app.views.ingest.dataLoss', { parts: parts.join('、') || t('common.app.views.ingest.lossPartsUnavailable'), suffix: detailSuffix })
 
 }

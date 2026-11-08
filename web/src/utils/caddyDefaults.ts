@@ -4,6 +4,9 @@
 // 拼写必须是引擎实际看到的头键形态（net/http 规范化的 X-Api-Key）：Caddy 的
 // filter 编码器对字段路径做精确匹配，手写 X-API-Key 恒不命中。
 // 注意：后端 db.go 迁移会在既有格式上补齐同一行。
+// CDN 预设 label/note 为展示串:经 tSafe 词条安全 t() 进 common.app.views.caddyCfg;
+// DEFAULT_ACCESS_LOG_FORMAT 是引擎契约模板(逐字跨栈钉),不参与抽词。
+import { tSafe as t } from '../i18n/tSafe.ts'
 export const DEFAULT_ACCESS_LOG_FORMAT =
   'resp_headers -> delete\nrequest>tls -> delete\nrequest>remote_port -> delete\nlevel -> delete\nlogger -> delete\nmsg -> delete\nrequest>remote_ip -> src\nrequest>client_ip -> src_ip\nrequest>method -> http_method\nrequest>host -> server\nrequest>uri -> uri_path\nrequest>proto -> protocol\nuser_id -> user\nts -> time_local\nsize -> bytes_out\nbytes_read -> bytes_in\nduration -> request_time\nrequest>headers>X-Api-Key -> delete'
 
@@ -18,17 +21,17 @@ interface CDNPreset {
 }
 
 export const CDN_PRESETS: CDNPreset[] = [
-  { label: '通用（仅 X-Forwarded-For）', headers: ['X-Forwarded-For'], note: '仅采信 XFF 链，适合无专用头的 CDN', rangesDoc: '' },
-  { label: 'Cloudflare', headers: ['CF-Connecting-IP', 'X-Forwarded-For'], note: '单值权威头优先；网段见官方列表', rangesDoc: 'https://www.cloudflare.com/ips/' },
-  { label: 'Akamai', headers: ['True-Client-IP', 'X-Forwarded-For'], note: '需在 Akamai property 启用 True-Client-IP', rangesDoc: 'https://techdocs.akamai.com/' },
-  { label: 'Fastly', headers: ['Fastly-Client-IP', 'X-Forwarded-For'], note: 'Fastly 默认注入 Fastly-Client-IP', rangesDoc: 'https://www.fastly.com/documentation/reference/api/utils/public-ip-list/' },
-  { label: 'AWS CloudFront', headers: ['CloudFront-Viewer-Address', 'X-Forwarded-For'], note: 'CloudFront-Viewer-Address 含端口后缀', rangesDoc: 'https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/LocationsOfEdgeServers.html' },
-  { label: 'Google Cloud CDN', headers: ['X-Forwarded-For'], note: 'Google 前端追加真实 IP 到 XFF 链', rangesDoc: 'https://cloud.google.com/vpc/docs/identifying-ip-addresses' },
-  { label: 'Azure Front Door', headers: ['X-Azure-ClientIP', 'X-Forwarded-For'], note: 'X-Azure-ClientIP 为单值权威头', rangesDoc: 'https://learn.microsoft.com/azure/frontdoor/front-door-faq' },
-  { label: '阿里云 CDN', headers: ['X-Forwarded-For'], note: '阿里云 CDN 回源注入 XFF', rangesDoc: 'https://help.aliyun.com/zh/cdn/' },
-  { label: '阿里云 ESA', headers: ['Ali-Real-Client-IP', 'X-Forwarded-For'], note: 'ESA 权威头为 Ali-Real-Client-IP', rangesDoc: 'https://help.aliyun.com/zh/esa/' },
-  { label: '腾讯云 CDN', headers: ['X-Forwarded-For'], note: '回源重置注入，XFF 即真实 IP', rangesDoc: 'https://cloud.tencent.com/document/product/228' },
-  { label: '腾讯云 EdgeOne', headers: ['EO-Connecting-IP', 'X-Forwarded-For'], note: 'EdgeOne 权威头为 EO-Connecting-IP', rangesDoc: 'https://cloud.tencent.com/document/product/1552' },
-  { label: '华为云 CDN', headers: ['X-Forwarded-For'], note: '华为云 CDN 回源注入 XFF', rangesDoc: 'https://support.huaweicloud.com/cdn/' },
-  { label: 'UCloud', headers: ['X-Real-IP', 'X-Forwarded-For'], note: 'UCloud 回源注入 X-Real-IP', rangesDoc: 'https://docs.ucloud.cn/' },
+  { label: t('common.app.views.caddyCfg.presetGeneric'), headers: ['X-Forwarded-For'], note: t('common.app.views.caddyCfg.presetGenericNote'), rangesDoc: '' },
+  { label: t('common.app.views.caddyCfg.presetCloudflare'), headers: ['CF-Connecting-IP', 'X-Forwarded-For'], note: t('common.app.views.caddyCfg.presetCloudflareNote'), rangesDoc: 'https://www.cloudflare.com/ips/' },
+  { label: t('common.app.views.caddyCfg.presetAkamai'), headers: ['True-Client-IP', 'X-Forwarded-For'], note: t('common.app.views.caddyCfg.presetAkamaiNote'), rangesDoc: 'https://techdocs.akamai.com/' },
+  { label: t('common.app.views.caddyCfg.presetFastly'), headers: ['Fastly-Client-IP', 'X-Forwarded-For'], note: t('common.app.views.caddyCfg.presetFastlyNote'), rangesDoc: 'https://www.fastly.com/documentation/reference/api/utils/public-ip-list/' },
+  { label: t('common.app.views.caddyCfg.presetCloudFront'), headers: ['CloudFront-Viewer-Address', 'X-Forwarded-For'], note: t('common.app.views.caddyCfg.presetCloudFrontNote'), rangesDoc: 'https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/LocationsOfEdgeServers.html' },
+  { label: t('common.app.views.caddyCfg.presetGoogleCdn'), headers: ['X-Forwarded-For'], note: t('common.app.views.caddyCfg.presetGoogleCdnNote'), rangesDoc: 'https://cloud.google.com/vpc/docs/identifying-ip-addresses' },
+  { label: t('common.app.views.caddyCfg.presetAzureFd'), headers: ['X-Azure-ClientIP', 'X-Forwarded-For'], note: t('common.app.views.caddyCfg.presetAzureFdNote'), rangesDoc: 'https://learn.microsoft.com/azure/frontdoor/front-door-faq' },
+  { label: t('common.app.views.caddyCfg.presetAliyunCdn'), headers: ['X-Forwarded-For'], note: t('common.app.views.caddyCfg.presetAliyunCdnNote'), rangesDoc: 'https://help.aliyun.com/zh/cdn/' },
+  { label: t('common.app.views.caddyCfg.presetAliyunEsa'), headers: ['Ali-Real-Client-IP', 'X-Forwarded-For'], note: t('common.app.views.caddyCfg.presetAliyunEsaNote'), rangesDoc: 'https://help.aliyun.com/zh/esa/' },
+  { label: t('common.app.views.caddyCfg.presetTencentCdn'), headers: ['X-Forwarded-For'], note: t('common.app.views.caddyCfg.presetTencentCdnNote'), rangesDoc: 'https://cloud.tencent.com/document/product/228' },
+  { label: t('common.app.views.caddyCfg.presetEdgeOne'), headers: ['EO-Connecting-IP', 'X-Forwarded-For'], note: t('common.app.views.caddyCfg.presetEdgeOneNote'), rangesDoc: 'https://cloud.tencent.com/document/product/1552' },
+  { label: t('common.app.views.caddyCfg.presetHuaweiCdn'), headers: ['X-Forwarded-For'], note: t('common.app.views.caddyCfg.presetHuaweiCdnNote'), rangesDoc: 'https://support.huaweicloud.com/cdn/' },
+  { label: t('common.app.views.caddyCfg.presetUcloud'), headers: ['X-Real-IP', 'X-Forwarded-For'], note: t('common.app.views.caddyCfg.presetUcloudNote'), rangesDoc: 'https://docs.ucloud.cn/' },
 ]

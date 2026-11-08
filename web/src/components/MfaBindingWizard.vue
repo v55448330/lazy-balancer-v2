@@ -11,56 +11,57 @@
     @closed="handleClosed"
   >
     <template #header>
-      <DialogHeader :icon="Lock" title="启用 MFA（两步验证）" subtitle="扫码绑定验证器 → 输码验证 → 保存恢复码" tone="primary" />
+      <DialogHeader :icon="Lock" :title="t('common.app.views.mfa.wizardTitle')" :subtitle="t('common.app.views.mfa.wizardSubtitle')" tone="primary" />
     </template>
     <el-steps :active="step" simple style="margin-bottom: 18px">
-      <el-step title="扫码" />
-      <el-step title="验证" />
-      <el-step title="恢复码" />
+      <el-step :title="t('common.app.views.mfa.stepScan')" />
+      <el-step :title="t('common.app.views.mfa.stepVerify')" />
+      <el-step :title="t('common.app.views.mfa.stepRecovery')" />
     </el-steps>
     <div v-if="step === 0" class="mfa-step-column">
       <div v-if="!qrError" class="mfa-qr-frame">
         <canvas ref="qrCanvas" width="220" height="220" />
       </div>
       <div v-else class="info-note-bar" role="status">
-        <span class="info-note-desc">二维码生成失败，无法扫码</span>
-        <span class="info-note-sub">请使用下方密钥在 Google/Microsoft Authenticator 等验证器中手动添加</span>
+        <span class="info-note-desc">{{ t('common.app.views.mfa.qrFailedTitle') }}</span>
+        <span class="info-note-sub">{{ t('common.app.views.mfa.qrFailedHint') }}</span>
       </div>
-      <el-text type="info" size="small">无法扫码时手动输入密钥：</el-text>
+      <el-text type="info" size="small">{{ t('common.app.views.mfa.manualKeyHint') }}</el-text>
       <el-text size="small" class="mfa-secret">{{ secret }}</el-text>
-      <el-text type="info" size="small">使用 Google/Microsoft Authenticator 等扫码</el-text>
+      <el-text type="info" size="small">{{ t('common.app.views.mfa.scanWithApp') }}</el-text>
     </div>
     <div v-else-if="step === 1" class="mfa-step-column mfa-step-column--verify">
       <el-input
         v-model="code"
-        placeholder="请输入 6 位验证码"
+        :placeholder="t('common.app.views.mfa.codePlaceholder')"
         size="large"
         maxlength="6"
-        aria-label="6 位动态验证码"
+        :aria-label="t('common.app.views.mfa.codeAria')"
         class="mfa-code-input"
         @input="code = sanitizeTotpDigits(code)"
       />
-      <el-text type="info" size="small">为「{{ username }}」绑定</el-text>
+      <el-text type="info" size="small">{{ t('common.app.views.mfa.bindingFor', { username }) }}</el-text>
     </div>
     <div v-else class="mfa-recovery-column">
-      <div class="info-note-bar"><span class="info-note-desc">恢复代码仅此一次显示</span><span class="info-note-sub">每个恢复代码只能使用一次，请妥善保存。丢失验证器时用于登录。</span></div>
+      <div class="info-note-bar"><span class="info-note-desc">{{ t('common.app.views.mfa.recoveryOnceBadge') }}</span><span class="info-note-sub">{{ t('common.app.views.mfa.recoveryOnceHint') }}</span></div>
       <div class="mfa-recovery-grid">
         <div v-for="item in recoveryCodes" :key="item" class="mfa-recovery-code">{{ item }}</div>
       </div>
     </div>
     <template #footer>
-      <el-button v-if="step === 0" :disabled="loading" @click="emit('update:modelValue', false)">取消</el-button>
-      <el-button v-if="step === 0" type="primary" @click="step = 1">下一步</el-button>
-      <el-button v-if="step === 1" :disabled="loading" @click="step = 0">上一步</el-button>
-      <el-button v-if="step === 1" type="primary" :loading="loading" :disabled="code.length !== 6" @click="activate">验证并启用</el-button>
-      <el-button v-if="step === 2" @click="copyRecovery">复制全部</el-button>
-      <el-button v-if="step === 2" type="primary" @click="confirmRecoverySaved">我已保存</el-button>
+      <el-button v-if="step === 0" :disabled="loading" @click="emit('update:modelValue', false)">{{ t('common.app.views.mfa.cancel') }}</el-button>
+      <el-button v-if="step === 0" type="primary" @click="step = 1">{{ t('common.app.views.mfa.next') }}</el-button>
+      <el-button v-if="step === 1" :disabled="loading" @click="step = 0">{{ t('common.app.views.mfa.prev') }}</el-button>
+      <el-button v-if="step === 1" type="primary" :loading="loading" :disabled="code.length !== 6" @click="activate">{{ t('common.app.views.mfa.verifyActivate') }}</el-button>
+      <el-button v-if="step === 2" @click="copyRecovery">{{ t('common.app.views.mfa.copyAll') }}</el-button>
+      <el-button v-if="step === 2" type="primary" @click="confirmRecoverySaved">{{ t('common.app.views.mfa.savedButton') }}</el-button>
     </template>
   </el-dialog>
 </template>
 
 <script setup lang="ts">
 import { nextTick, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Lock } from '@element-plus/icons-vue'
 import QRCode from 'qrcode'
@@ -74,6 +75,7 @@ import type { APIResponse } from '@/types'
 // MFA 绑定/换绑向导（个人自助）：父组件负责在打开前取到 pending secret/uri
 // （换绑需先验当前动态码），本组件只承担「扫码 → 验证 → 恢复码」三步与
 // 一次性凭据的生命周期——关闭即清 secret/恢复码，恢复码步禁止静默关闭。
+const { t } = useI18n()
 const props = defineProps<{
   modelValue: boolean
   secret: string
@@ -97,8 +99,8 @@ const loading = ref(false)
 /** 恢复码是仅此一次下发的登录凭证：关闭前必须明确确认已保存；提交中不得关闭，
  *  未走到恢复码步（无秘密可丢）直接关闭（一次性凭据守卫单源）。 */
 const beforeClose = createOneTimeSecretCloseGuard({
-  message: '恢复代码仅此一次显示，关闭后将无法再次查看。确认已保存？',
-  title: '保存恢复代码',
+  message: t('common.app.views.mfa.closeGuardMessage'),
+  title: t('common.app.views.mfa.closeGuardTitle'),
   blocked: () => loading.value,
   skip: () => step.value !== 2,
 })
@@ -146,13 +148,13 @@ const activate = async (): Promise<void> => {
     const res = await request.post<APIResponse<{ recovery_codes: string[] }>>('/auth/mfa/activate', { code: code.value }, { silent: true })
     // 契约违约（200 无 data）经 requireData 抛错落到下方 catch——不得静默停在
     // 验证步：按钮已从 loading 复位，无提示会让用户以为没点上而重复提交。
-    const data = requireData(res.data, '响应异常，请重试')
+    const data = requireData(res.data, t('common.app.views.mfa.responseAbnormal'))
     recoveryCodes.value = data.recovery_codes
     step.value = 2
-    mfaAwareSuccess('MFA 已启用')
+    mfaAwareSuccess(t('common.app.views.mfa.enabledToast'))
     emit('activated')
   } catch (error: unknown) {
-    ElMessage.error(error instanceof Error ? error.message : '验证失败')
+    ElMessage.error(error instanceof Error ? error.message : t('common.app.views.mfa.verifyFailed'))
   } finally {
     loading.value = false
   }
@@ -160,14 +162,14 @@ const activate = async (): Promise<void> => {
 
 const copyRecovery = async (): Promise<void> => {
   const ok = await copyText(recoveryCodes.value.join('\n'))
-  if (ok) ElMessage.success('恢复代码已复制')
-  else ElMessage.warning('复制失败，请手动选择复制')
+  if (ok) ElMessage.success(t('common.app.views.mfa.copiedToast'))
+  else ElMessage.warning(t('common.app.views.mfa.copyFailedToast'))
 }
 
 const confirmRecoverySaved = async (): Promise<void> => {
   try {
-    await ElMessageBox.confirm('恢复代码仅此一次显示。请确认已复制并妥善保存恢复代码；未保存将无法在丢失验证器时恢复登录。', '确认已保存', {
-      type: 'warning', confirmButtonText: '我已保存', cancelButtonText: '返回检查',
+    await ElMessageBox.confirm(t('common.app.views.mfa.confirmSavedMessage'), t('common.app.views.mfa.confirmSavedTitle'), {
+      type: 'warning', confirmButtonText: t('common.app.views.mfa.savedButton'), cancelButtonText: t('common.app.views.mfa.backToCheck'),
     })
     emit('update:modelValue', false)
   } catch { /* 返回检查，不关闭 */ }

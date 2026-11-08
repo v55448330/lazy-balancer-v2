@@ -20,6 +20,7 @@
  * @param confirm 确认框实现（默认 ElMessageBox.confirm；测试可注入替身）
  */
 import { ElMessageBox } from 'element-plus'
+import { tSafe as t } from '../i18n/tSafe.ts'
 
 interface OneTimeSecretGuardOptions {
   readonly message: string
@@ -56,8 +57,8 @@ export const createOneTimeSecretCloseGuard = (
     }
     confirm(options.message, options.title, {
       type: 'warning',
-      confirmButtonText: options.confirmText ?? '我已保存',
-      cancelButtonText: options.cancelText ?? '继续查看',
+      confirmButtonText: options.confirmText ?? t('common.app.views.mfa.guardConfirmDefault'),
+      cancelButtonText: options.cancelText ?? t('common.app.views.mfa.guardCancelDefault'),
     }).then(
       () => done(),
       () => undefined,

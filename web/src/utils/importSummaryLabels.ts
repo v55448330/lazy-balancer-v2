@@ -1,7 +1,9 @@
 import { hasOwn } from './hasOwn.ts'
+import { tSafe as t } from '../i18n/tSafe.ts'
 
 /**
- * 导入/还原预览摘要的中文标签单源。
+ * 导入/还原预览摘要的展示标签单源（i18n：标签走 views.impexp 词条键，
+ * zh 直出与原字面量逐字等价；键↔zh 对表钉测见 tests/importPreview.spec.ts）。
  *
  * 后端校验响应的 summary 以**表名**为键（internal/handlers/config_import_v1.go
  * 遍历 backup.Tables 逐个 len(rows)），表集即 configBackupTables
@@ -14,30 +16,30 @@ import { hasOwn } from './hasOwn.ts'
  */
 const IMPORT_SUMMARY_LABELS: Readonly<Record<string, string>> = {
   // 负载均衡
-  lb_rules: '规则',
-  upstreams: '上游',
-  path_rules: '自定义路由',
+  lb_rules: t('common.app.views.impexp.tblLbRules'),
+  upstreams: t('common.app.views.impexp.tblUpstreams'),
+  path_rules: t('common.app.views.impexp.tblPathRules'),
   // 凭证与证书
-  users: '用户',
-  api_keys: 'API 密钥',
-  ca_providers: 'CA 提供商',
-  certificate_configs: 'DNS 提供商',
-  cert_jobs: '证书任务',
+  users: t('common.app.views.impexp.tblUsers'),
+  api_keys: t('common.app.views.impexp.tblApiKeys'),
+  ca_providers: t('common.app.views.impexp.tblCaProviders'),
+  certificate_configs: t('common.app.views.impexp.tblDnsProviders'),
+  cert_jobs: t('common.app.views.impexp.tblCertJobs'),
   // 安全防护
-  security_policies: '安全策略',
-  security_policy_bindings: '策略绑定',
-  security_custom_rules: '自定义规则',
-  security_block_pages: '拦截页',
-  security_ip_lists: 'IP 地址列表',
-  security_crs_version: 'CRS 版本',
-  security_ip2region_version: 'IP2Region 版本',
-  security_threat_sources: '威胁情报源',
-  security_crawler_sources: '爬虫地址源',
+  security_policies: t('common.app.views.impexp.tblSecurityPolicies'),
+  security_policy_bindings: t('common.app.views.impexp.tblPolicyBindings'),
+  security_custom_rules: t('common.app.views.impexp.tblCustomRules'),
+  security_block_pages: t('common.app.views.impexp.tblBlockPages'),
+  security_ip_lists: t('common.app.views.impexp.tblIpLists'),
+  security_crs_version: t('common.app.views.impexp.tblCrsVersion'),
+  security_ip2region_version: t('common.app.views.impexp.tblIp2regionVersion'),
+  security_threat_sources: t('common.app.views.impexp.tblThreatSources'),
+  security_crawler_sources: t('common.app.views.impexp.tblCrawlerSources'),
   // 集群
-  nodes: '节点拓扑',
+  nodes: t('common.app.views.impexp.tblNodes'),
   // 旧版预览的派生键（非表名）：保留以免旧响应回退成英文键
-  rules: '规则',
-  tls_rules: '其中 TLS 规则',
+  rules: t('common.app.views.impexp.tblRules'),
+  tls_rules: t('common.app.views.impexp.tblTlsRules'),
 }
 
 /** 摘要键的中文标签；未知键回退原键（fail-visible：新表未登记时立刻可见）。

@@ -12,7 +12,7 @@
         class="ip-cell ip-clickable"
         role="button"
         tabindex="0"
-        :aria-label="`IP 名单管理：${ip}`"
+        :aria-label="t('app.security.ipLocation.cell.ariaLabel', { ip })"
         :title="location ? `${ip} · ${location}` : ip"
         @keydown.enter.prevent="activateOnce($event, () => openFromKeyboard($event))"
         @keydown.space.prevent="activateOnce($event, () => openFromKeyboard($event))"
@@ -25,18 +25,18 @@
     <div class="ipm-shell">
       <header class="ipm-header">
         <div>
-          <div class="ipm-kicker">IP 名单管理</div>
+          <div class="ipm-kicker">{{ t('app.security.ipLocation.header.kicker') }}</div>
           <div class="ipm-ip">{{ trimmedIp }}</div>
           <div v-if="location" class="ipm-location">{{ location }}</div>
         </div>
-        <el-tooltip v-if="eventCount !== null" content="近 30 天安全事件" placement="top">
-          <span class="ipm-event-count"><strong>{{ eventCount }}</strong> 次事件</span>
+        <el-tooltip v-if="eventCount !== null" :content="t('app.security.ipLocation.header.eventCountTip')" placement="top">
+          <span class="ipm-event-count"><strong>{{ eventCount }}</strong> {{ t('app.security.ipLocation.header.eventCountUnit') }}</span>
         </el-tooltip>
       </header>
 
       <div v-if="loadError" class="ipm-error" role="alert">
-        <span>名单状态读取不完整，暂不能写入</span>
-        <button type="button" @click="retryAll">重新加载</button>
+        <span>{{ t('app.security.ipLocation.loadError.incomplete') }}</span>
+        <button type="button" @click="retryAll">{{ t('app.security.ipLocation.loadError.reload') }}</button>
       </div>
 
       <main class="ipm-body">
@@ -54,13 +54,13 @@
               @click="openAdd(section.side)"
             >
               <el-icon><Plus /></el-icon>
-              添加
+              {{ t('app.security.ipLocation.sections.add') }}
             </button>
           </div>
 
           <div v-if="activeAddSide === section.side" class="ipm-target-panel">
             <template v-if="model[section.side].targets.length > 0">
-              <div class="ipm-target-title">选择目标名单</div>
+              <div class="ipm-target-title">{{ t('app.security.ipLocation.sections.chooseTarget') }}</div>
               <label
                 v-for="target in model[section.side].targets"
                 :key="target.key"
@@ -70,29 +70,29 @@
                 <input v-model="selectedTargetKey" type="radio" :value="target.key" />
                 <span class="ipm-target-copy">
                   <strong>{{ target.name }}</strong>
-                  <small>{{ target.kind === 'list' ? `${target.entryCount} 条 · ${target.policies.length} 个策略引用` : `关联策略：${target.policies[0]?.name}` }}</small>
+                  <small>{{ target.kind === 'list' ? t('app.security.ipLocation.sections.targetMeta', { count: target.entryCount, refs: target.policies.length }) : t('app.security.ipLocation.sections.targetPolicy', { name: target.policies[0]?.name }) }}</small>
                 </span>
               </label>
               <div class="ipm-target-actions">
-                <button type="button" class="ipm-button is-quiet" @click="activeAddSide = null">取消</button>
+                <button type="button" class="ipm-button is-quiet" @click="activeAddSide = null">{{ t('app.security.ipLocation.sections.cancel') }}</button>
                 <button
                   type="button"
                   class="ipm-button is-primary"
                   :disabled="!selectedTargetKey || actionBusy"
                   @click="executeAdd"
                 >
-                  {{ actionBusy ? '正在写入…' : '确认添加' }}
+                  {{ actionBusy ? t('app.security.ipLocation.sections.writing') : t('app.security.ipLocation.sections.confirmAdd') }}
                 </button>
               </div>
             </template>
             <div v-else class="ipm-no-target">
-              <span>没有可写入的{{ section.title }}策略。请先在安全策略中创建对应策略。</span>
-              <a href="#/security-policies" @click.prevent="goSecurityPolicies">前往安全策略</a>
+              <span>{{ t('app.security.ipLocation.sections.noTarget', { title: section.title }) }}</span>
+              <a href="#/security-policies" @click.prevent="goSecurityPolicies">{{ t('app.security.ipLocation.sections.goPolicies') }}</a>
             </div>
           </div>
 
           <div v-if="model[section.side].sources.length === 0" class="ipm-empty">
-            {{ loading ? '正在读取名单…' : `未加入${section.title}` }}
+            {{ loading ? t('app.security.ipLocation.sections.readingLists') : t('app.security.ipLocation.sections.notJoined', { title: section.title }) }}
           </div>
           <div v-else class="ipm-source-list">
             <article
@@ -110,17 +110,17 @@
               <div class="ipm-source-main">
                 <div class="ipm-source-name" :title="source.name">{{ source.name }}</div>
                 <div class="ipm-source-meta">
-                  <span v-if="source.kind === 'inline'">策略内联 · {{ source.entryCount }} 条</span>
-                  <span v-else>{{ source.entryCount }} 条 · {{ source.policies.length }} 个策略引用</span>
-                  <span v-if="!source.exact" class="ipm-cidr">命中 {{ source.matchedEntry }}</span>
+                  <span v-if="source.kind === 'inline'">{{ t('app.security.ipLocation.sections.sourceInline', { count: source.entryCount }) }}</span>
+                  <span v-else>{{ t('app.security.ipLocation.sections.targetMeta', { count: source.entryCount, refs: source.policies.length }) }}</span>
+                  <span v-if="!source.exact" class="ipm-cidr">{{ t('app.security.ipLocation.sections.matchedCidr', { entry: source.matchedEntry }) }}</span>
                 </div>
                 <div v-if="expandedRefs.has(source.key)" class="ipm-ref-list">
-                  <div class="ipm-ref-title">引用此名单的策略</div>
+                  <div class="ipm-ref-title">{{ t('app.security.ipLocation.sections.refsTitle') }}</div>
                   <span v-for="policy in source.policies" :key="policy.id">{{ policy.name }}</span>
                 </div>
               </div>
               <div class="ipm-source-actions">
-                <a v-if="!source.exact" class="ipm-text-button" :href="source.kind === 'list' ? '#/security-rules?tab=ip-lists' : '#/security-policies'" @click.stop>编辑</a>
+                <a v-if="!source.exact" class="ipm-text-button" :href="source.kind === 'list' ? '#/security-rules?tab=ip-lists' : '#/security-policies'" @click.stop>{{ t('app.security.ipLocation.sections.edit') }}</a>
                 <button
                   v-else
                   type="button"
@@ -128,7 +128,7 @@
                   @click.stop="removeSource(section.side, source)"
                   :disabled="writeUnavailable || actionBusy"
                 >
-                  移除
+                  {{ t('app.security.ipLocation.sections.remove') }}
                 </button>
               </div>
             </article>
@@ -139,39 +139,39 @@
           <div class="ipm-section-head">
             <span class="ipm-section-mark" aria-hidden="true"></span>
             <div class="ipm-section-title">
-              <h3>自动封禁</h3>
-              <p>仅管理自动封禁名单，不改变其它名单</p>
+              <h3>{{ t('app.security.ipLocation.autoban.title') }}</h3>
+              <p>{{ t('app.security.ipLocation.autoban.desc') }}</p>
             </div>
           </div>
-          <div v-if="autobanLoading" class="ipm-empty">正在读取封禁状态…</div>
+          <div v-if="autobanLoading" class="ipm-empty">{{ t('app.security.ipLocation.autoban.loadingStatus') }}</div>
           <div v-else-if="autobanError" class="ipm-autoban-error">
-            封禁状态读取失败
-            <button type="button" class="ipm-text-button" @click="retryAutoban">重试</button>
+            {{ t('app.security.ipLocation.autoban.loadFailed') }}
+            <button type="button" class="ipm-text-button" @click="retryAutoban">{{ t('app.security.ipLocation.autoban.retry') }}</button>
           </div>
-          <div v-else-if="!autobanHit" class="ipm-empty">当前未被封禁</div>
+          <div v-else-if="!autobanHit" class="ipm-empty">{{ t('app.security.ipLocation.autoban.none') }}</div>
           <article v-else class="ipm-source ipm-autoban-hit">
             <div class="ipm-source-main">
               <div class="ipm-source-name">
-                {{ autoban?.listName || '自动封禁名单' }}
-                <span class="ipm-ban-state">{{ autobanExpired ? '已到期' : '封禁中' }}</span>
+                {{ autoban?.listName || t('app.security.ipLocation.autoban.listName') }}
+                <span class="ipm-ban-state">{{ autobanExpired ? t('app.security.ipLocation.autoban.stateExpired') : t('app.security.ipLocation.autoban.stateActive') }}</span>
               </div>
-              <div class="ipm-source-meta">命中条目：{{ autobanHit.value }}</div>
+              <div class="ipm-source-meta">{{ t('app.security.ipLocation.autoban.matchedEntry', { value: autobanHit.value }) }}</div>
               <div class="ipm-source-meta">
-                <template v-if="!autobanHit.expires_at">永久封禁</template>
-                <template v-else>{{ formatDate(autobanHit.expires_at) }} · {{ autobanExpired ? '可清理' : `剩余 ${autobanRemaining}` }}</template>
+                <template v-if="!autobanHit.expires_at">{{ t('app.security.ipLocation.autoban.permanent') }}</template>
+                <template v-else>{{ formatDate(autobanHit.expires_at) }} · {{ autobanExpired ? t('app.security.ipLocation.autoban.clearable') : t('app.security.ipLocation.autoban.remaining', { time: autobanRemaining }) }}</template>
               </div>
             </div>
             <div class="ipm-source-actions">
-              <a v-if="autobanHitIsCidr" class="ipm-text-button" href="#/security-rules?tab=ip-lists">编辑</a>
+              <a v-if="autobanHitIsCidr" class="ipm-text-button" href="#/security-rules?tab=ip-lists">{{ t('app.security.ipLocation.sections.edit') }}</a>
               <button v-else type="button" class="ipm-remove" :disabled="autobanUnbanning" @click="unbanAutoban">
-                {{ autobanExpired ? '清理' : '移除封禁' }}
+                {{ autobanExpired ? t('app.security.ipLocation.autoban.clear') : t('app.security.ipLocation.autoban.removeBan') }}
               </button>
             </div>
           </article>
         </section>
       </main>
 
-      <footer class="ipm-footer">名单修改会同步到所有引用它的策略</footer>
+      <footer class="ipm-footer">{{ t('app.security.ipLocation.footer.syncNote') }}</footer>
     </div>
   </el-popover>
 
@@ -183,6 +183,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { ElMessageBox } from 'element-plus'
 import { Plus } from '@element-plus/icons-vue'
 import { request } from '@/utils/api'
@@ -198,14 +199,17 @@ import { formatDate } from '@/utils/date'
 import { autobanEntryExpired, autobanEntryRemaining } from '@/utils/autobanEntry'
 import type { APIResponse } from '@/types'
 
+const { t } = useI18n()
+
 const props = defineProps<{ ip: string; location: string }>()
 const trimmedIp = computed(() => props.ip.trim())
 const compactLocation = computed(() => {
   if (!props.location) return ''
   const parts = props.location.split('·').map((part) => part.trim()).filter(Boolean)
-  if (parts[0] === '保留地址') return '保留地址'
+  // 地理库数据值为中文原文（保留地址/中国）：判定锚定后端数据值，展示走词条本地化
+  if (parts[0] === '保留地址') return t('app.security.ipLocation.geo.reserved')
   if (parts[0] !== '中国') return parts[0]
-  if (parts.length === 1) return '中国'
+  if (parts.length === 1) return t('app.security.ipLocation.geo.china')
   return parts.length === 2 ? parts[1] : parts[2]
 })
 
@@ -213,11 +217,11 @@ const authStore = useAuthStore()
 const canManage = computed(() => authStore.readOnlyReason === null)
 const openFromKeyboard = (event: KeyboardEvent): void => (event.currentTarget as HTMLElement).click()
 
-const sections: Array<{ side: IpQuickSide; title: string; description: string }> = [
-  { side: 'deny', title: '黑名单', description: '用于显式拒绝的 IP 名单' },
-  { side: 'allow', title: '白名单', description: '用于允许访问的 IP 名单' },
-  { side: 'trust', title: '信任列表', description: '用于信任策略的 IP 名单' },
-]
+const sections = computed<Array<{ side: IpQuickSide; title: string; description: string }>>(() => [
+  { side: 'deny', title: t('app.security.ipLocation.sideDefs.deny'), description: t('app.security.ipLocation.sideDefs.denyDesc') },
+  { side: 'allow', title: t('app.security.ipLocation.sideDefs.allow'), description: t('app.security.ipLocation.sideDefs.allowDesc') },
+  { side: 'trust', title: t('app.security.ipLocation.sideDefs.trust'), description: t('app.security.ipLocation.sideDefs.trustDesc') },
+])
 
 interface IpListSummary extends IpListOption, IpQuickList {
   preset_autoban?: boolean
@@ -323,7 +327,7 @@ const executeAdd = async (): Promise<void> => {
   if (!side || actionBusy.value) return
   const target = model.value[side].targets.find((item) => item.key === selectedTargetKey.value)
   if (!target) return
-  const verb = side === 'deny' ? '拦截' : side === 'allow' ? '放行' : '信任'
+  const verb = side === 'deny' ? t('app.security.ipLocation.verbs.block') : side === 'allow' ? t('app.security.ipLocation.verbs.allow') : t('app.security.ipLocation.verbs.trust')
   actionBusy.value = true
   let done = false
   try {
@@ -359,16 +363,16 @@ const removeSource = async (side: IpQuickSide, source: IpQuickSource): Promise<v
   if (!source.policyId) return
   actionBusy.value = true
   try {
-    await ElMessageBox.confirm(`将从策略「${source.name}」的内联名单移除 ${trimmedIp.value}。是否继续？`, '从内联名单移除', {
-      confirmButtonText: '确认移除', cancelButtonText: '取消', type: 'warning',
+    await ElMessageBox.confirm(t('app.security.ipLocation.inlineRemove.confirmText', { name: source.name, ip: trimmedIp.value }), t('app.security.ipLocation.inlineRemove.confirmTitle'), {
+      confirmButtonText: t('app.security.ipLocation.inlineRemove.confirm'), cancelButtonText: t('app.security.ipLocation.sections.cancel'), type: 'warning',
     })
     const detail = await request.get<APIResponse<{ policy: IpQuickPolicy }>>(`/security/policies/${source.policyId}`)
     const latest = detail.data?.policy
-    if (!latest) throw new Error('策略读取失败')
+    if (!latest) throw new Error(t('app.security.ipLocation.inlineRemove.policyLoadFailed'))
     const field = side === 'trust' ? 'ip_whitelist' : 'ip_acl_list'
     const remaining = parseIPList(latest[field]).filter((entry) => entry !== trimmedIp.value)
     const res = await request.put(`/security/policies/${source.policyId}`, { [field]: JSON.stringify(remaining) })
-    showSaveResult(res as unknown as { message?: string }, `已从「${source.name}」移除 ${trimmedIp.value}`)
+    showSaveResult(res as unknown as { message?: string }, t('app.security.ipLocation.inlineRemove.removedToast', { name: source.name, ip: trimmedIp.value }))
     await refreshAfterWrite()
   } catch {
     // 取消或失败由既有确认框/全局请求拦截器处理。
@@ -433,12 +437,12 @@ const unbanAutoban = async (): Promise<void> => {
   autobanUnbanning.value = true
   try {
     await ElMessageBox.confirm(
-      `将把 ${hit.value} 从自动封禁名单移除，并清空该 IP 的自动封禁计数。其它黑名单和安全策略不受影响。是否继续？`,
-      autobanExpired.value ? '清理过期封禁' : '移除自动封禁',
-      { confirmButtonText: '确认移除', cancelButtonText: '取消', type: 'warning' },
+      t('app.security.ipLocation.autobanRemove.confirmText', { ip: hit.value }),
+      autobanExpired.value ? t('app.security.ipLocation.autobanRemove.clearTitle') : t('app.security.ipLocation.autobanRemove.removeTitle'),
+      { confirmButtonText: t('app.security.ipLocation.inlineRemove.confirm'), cancelButtonText: t('app.security.ipLocation.sections.cancel'), type: 'warning' },
     )
     const res = await request.post(`/security/ip-lists/${listId}/remove-ip`, { value: hit.value })
-    showSaveResult(res as unknown as { message?: string }, `已从自动封禁名单移除 ${hit.value}`)
+    showSaveResult(res as unknown as { message?: string }, t('app.security.ipLocation.autobanRemove.removedToast', { ip: hit.value }))
     invalidateSharedEntriesCache()
     await Promise.all([loadAll(), loadAutoban()])
   } catch {

@@ -5,6 +5,7 @@
 //     1/N 抽样时按 N 累加），前端不得再乘 sample_n（旧实现二次放大，N=8 时
 //     QPS/光流最高高估 8 倍）。sample_n 仅用于基线重建判定（抽样比切换时
 //     计数口径改变，必须重置基线避免尖峰）。
+import { tSafe as t } from '../i18n/tSafe.ts'
 export interface TrafficBaseline {
   readonly counts: ReadonlyMap<string, { normal: number; attack: number }>
   /** 采样时刻（与 now 同源）。 */
@@ -98,7 +99,7 @@ export function hourlyBucketLabel(name: string): string {
  * 否则 7d 视图会把「有事件的天数」读成小时密度。
  */
 export function bucketTerminology(windowHours: number): {
-  readonly unit: '小时' | '天'
+  readonly unit: string
   readonly peakLabel: string
   readonly countLabel: string
   /** 窗口长度本身的展示词（`7 天` / `24 小时`）：页头、KPI、趋势标题共用，
@@ -107,12 +108,12 @@ export function bucketTerminology(windowHours: number): {
 } {
   return windowHours > 24
     ? {
-      unit: '天',
-      peakLabel: '峰值日期',
-      countLabel: '有事件天',
-      windowLabel: `${Math.round(windowHours / 24)} 天`,
+      unit: t('common.app.views.threat.unitDay'),
+      peakLabel: t('common.app.views.threat.peakDay'),
+      countLabel: t('common.app.views.threat.countDay'),
+      windowLabel: t('common.app.views.threat.windowDays', { count: Math.round(windowHours / 24) }),
     }
-    : { unit: '小时', peakLabel: '峰值时段', countLabel: '有事件小时', windowLabel: `${windowHours} 小时` }
+    : { unit: t('common.app.views.threat.unitHour'), peakLabel: t('common.app.views.threat.peakHours'), countLabel: t('common.app.views.threat.countHours'), windowLabel: t('common.app.views.threat.windowHours', { count: windowHours }) }
 }
 
 /**

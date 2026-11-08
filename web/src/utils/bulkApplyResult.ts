@@ -7,7 +7,10 @@
 //
 // 本模块只做纯合并（无依赖），供 showSaveResult 的判定与各分片提交点共用。
 
-/** 后端退化 200 的 message 标记（DB 已提交、Caddy 应用失败） */
+import { tSafe as t } from '../i18n/tSafe.ts'
+
+/** 后端退化 200 的 message 标记（DB 已提交、Caddy 应用失败）。匹配键=后端字面量，
+ *  不随 locale 变化（分类语义同 utils/mfaErrors 的白名单）。 */
 export const CADDY_APPLY_FAILED_MARKER = 'Caddy 配置应用失败'
 
 interface BulkResponseLike {
@@ -30,5 +33,5 @@ export const mergeBulkResults = (
   }
   if (degraded.length === 0) return defined[defined.length - 1]
   if (degraded.length === 1) return { message: degraded[0] }
-  return { message: `${degraded[0]}（另有 ${degraded.length - 1} 个分片同样应用失败）` }
+  return { message: t('common.app.views.impexp.bulkDegradedMore', { message: degraded[0], count: degraded.length - 1 }) }
 }

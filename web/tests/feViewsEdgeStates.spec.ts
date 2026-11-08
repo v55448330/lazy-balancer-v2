@@ -125,12 +125,16 @@ test('证书详情失败只拦手动 TLS：改为 ACME 后可进下一步与保�
 
 test('配置预览补齐「访问日志」与 HTTP 连接重试', () => {
   const rules = code('src/views/Rules.vue')
-  assert.match(rules, /<el-descriptions title="配置预览"/)
-  const body = section(rules, '<el-descriptions title="配置预览"', '<el-descriptions-item label="上游服务器"')
-  assert.match(body, /<el-descriptions-item label="连接重试" v-if="wizardForm\.protocol === 'http' \|\| wizardForm\.protocol === 'tcp'">/, 'HTTP 也必须展示重试窗口')
-  assert.match(body, /默认 5s 窗口/, 'HTTP 未设置时必须点明默认窗口口径')
-  assert.match(body, /禁用重试（NTLM 模式）/)
-  assert.match(body, /<el-descriptions-item label="访问日志" v-if="wizardForm\.protocol === 'http'">/, '访问日志是高级步可编辑项，预览必须覆盖')
+  // i18n 后双钉:调用点钉键,zh 母本钉文案原文(任一漂移必红)
+  const zhLexicon = code('src/locales/zh/rules.ts')
+  assert.ok(zhLexicon.includes("defaultWindow5s: '默认 5s 窗口'"), '默认窗口原文必须在 zh 母本词条中')
+  assert.ok(zhLexicon.includes("disableRetryNtlm: '禁用重试（NTLM 模式）'"), 'NTLM 禁用原文必须在 zh 母本词条中')
+  assert.match(rules, /<el-descriptions :title="t\('common\.app\.rules\.cfg\.previewTitle'\)"/)
+  const body = section(rules, '<el-descriptions :title="t(\'common.app.rules.cfg.previewTitle\')"', "<el-descriptions-item :label=\"t('common.app.rules.wizard.upstreamServers')\"")
+  assert.match(body, /<el-descriptions-item :label="t\('common\.app\.rules\.wizard\.connectRetry'\)" v-if="wizardForm\.protocol === 'http' \|\| wizardForm\.protocol === 'tcp'">/, 'HTTP 也必须展示重试窗口')
+  assert.match(body, /t\('common\.app\.rules\.wizard\.defaultWindow5s'\)/, 'HTTP 未设置时必须点明默认窗口口径')
+  assert.match(body, /t\('common\.app\.rules\.wizard\.disableRetryNtlm'\)/)
+  assert.match(body, /<el-descriptions-item :label="t\('common\.app\.rules\.common\.accessLog'\)" v-if="wizardForm\.protocol === 'http'">/, '访问日志是高级步可编辑项，预览必须覆盖')
 })
 
 test('证书/私钥从文件读取：onerror 反馈 + 大小上限 + 不放开任意文件', () => {
@@ -212,8 +216,12 @@ test('TCP 锁图标有名称、规则开关有名称', () => {
   assert.doesNotMatch(rules, /TCP 规则不支持安全策略/)
   const reference = section(rules, '<template #reference>', '</template>')
   assert.match(reference, /role="button"/)
-  assert.match(reference, /:aria-label="`查看「\$\{row\.name\}」的安全处理流程`"/)
-  assert.match(rules, /:aria-label="`\$\{row\.name\} 的启用状态`"/)
+  // i18n 后双钉:调用点钉键,zh 母本钉文案原文(任一漂移必红)
+  const zhLexicon = code('src/locales/zh/rules.ts')
+  assert.ok(zhLexicon.includes("viewFlowAria: '查看「{ruleName}」的安全处理流程'"), '流程入口 aria 原文必须在 zh 母本词条中')
+  assert.ok(zhLexicon.includes("toggleStatusLabel: '{name} 的启用状态'"), '开关 aria 原文必须在 zh 母本词条中')
+  assert.match(reference, /:aria-label="t\('common\.app\.rules\.list\.viewFlowAria', \{ ruleName: row\.name \}\)"/)
+  assert.match(rules, /:aria-label="t\('common\.app\.rules\.list\.toggleStatusLabel', \{ name: row\.name \}\)"/)
 })
 
 test('CRS 源码折叠暴露展开态与焦点环', () => {
@@ -228,7 +236,9 @@ test('关联规则 drill-down 与触发明细 tooltip 键盘可达', () => {
   // hover-only tooltip 的内容也从进不了焦点序。el-dropdown 的 click 触发 +
   // 菜单 roving focus + Esc 关闭给出可用键盘路径。
   assert.match(policies, /<el-dropdown\s+v-if="policyBoundRules\(row\.id\)\.length > 0"\s+trigger="click"/)
-  assert.match(policies, /<button type="button" class="policy-rule-count" :aria-label="`关联规则/, 'reference 必须是真按钮')
+  // i18n 后双钉:调用点钉键,zh 母本钉原文(任一漂移必红)
+  assert.match(policies, /<button type="button" class="policy-rule-count" :aria-label="t\('app\.security\.policies\.table\.relatedRulesAria'/, 'reference 必须是真按钮')
+  assert.ok(code('src/locales/zh/security.ts').includes('关联规则'), '关联规则可访问名原文必须在 zh 母本词条中')
   assert.match(policies, /<el-dropdown-item v-for="rule in policyBoundRules\(row\.id\)"/, '菜单项须逐条具名')
   assert.match(policies, /@command="openRuleInNewTab"/, '菜单命令必须接到跳转动作')
   assert.match(policies, /\.policy-rule-count:focus-visible/)
@@ -245,7 +255,9 @@ test('安全总览六路数据失败后提供「立即重试」，且并发门�
   const page = code('src/views/security/SecurityOverview.vue')
   assert.match(page, /const reloadAll = async \(\): Promise<void> => \{/)
   assert.match(page, /if \(reloading\.value\) return/, '重复点击不得叠发六组请求')
-  assert.equal([...page.matchAll(/@click="reloadAll">立即重试<\/el-button>/g)].length, 3, '总览/最近拦截/限流三处失败态都要有重试入口')
+  // i18n 后双钉:调用点钉键,zh 母本钉原文(任一漂移必红)
+  assert.equal([...page.matchAll(/@click="reloadAll">\{\{ t\('app\.security\.overview\.page\.retryNow'\) \}\}<\/el-button>/g)].length, 3, '总览/最近拦截/限流三处失败态都要有重试入口')
+  assert.ok(code('src/locales/zh/security.ts').includes('立即重试'), '立即重试原文必须在 zh 母本词条中')
   assert.match(page, /onMounted\(\(\) => \{ void reloadAll\(\) \}\)/)
 })
 
@@ -253,6 +265,8 @@ test('安全总览威胁/爬虫库状态失败时切红点并显示「—」（�
   const page = code('src/views/security/SecurityOverview.vue')
   assert.match(page, /:class="threatError \? 'is-down' : 'is-up'"/)
   assert.match(page, /:class="crawlerError \? 'is-down' : 'is-up'"/)
-  assert.match(page, /\{\{ threatError \? '—' : \(threatLatestVersion \|\| '未更新'\) \}\}/)
-  assert.match(page, /\{\{ crawlerError \? '—' : \(crawlerLatestVersion \|\| '未更新'\) \}\}/)
+  // i18n 后双钉:调用点钉键,zh 母本钉原文(任一漂移必红)
+  assert.match(page, /\{\{ threatError \? '—' : \(threatLatestVersion \|\| t\('app\.security\.overview\.libStatus\.notUpdated'\)\) \}\}/)
+  assert.match(page, /\{\{ crawlerError \? '—' : \(crawlerLatestVersion \|\| t\('app\.security\.overview\.libStatus\.notUpdated'\)\) \}\}/)
+  assert.ok(code('src/locales/zh/security.ts').includes('未更新'), '库状态未更新原文必须在 zh 母本词条中')
 })

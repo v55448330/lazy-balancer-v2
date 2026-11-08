@@ -6,8 +6,12 @@
 // 真值以后端投影过滤为准。
 
 // 与 utils/date.ts 的 parseDbTimeMs 同一内核（其规范化+解析实现即
-// timeZoneFormat.parseDbDateMs，本模块零依赖以便 node --test 直接求值）。
+// timeZoneFormat.parseDbDateMs；展示文案再经 i18n/tSafe 兜底链解析，
+// node --test 仍可直接求值——tSafe 不依赖 @/ 别名钩子）。
 import { parseDbDateMs } from './timeZoneFormat.ts'
+// 可读文案走 i18n（批次 D autoban 域）：键形与 zh 母本原文由 ipAutobanQuickAction
+// 行为钉 + autobanStatus 域双钉承载。
+import { tSafe as t } from '../i18n/tSafe.ts'
 
 /** 是否已过到期时刻。空值/不可解析（永久或脏数据）一律不算到期。 */
 export const autobanEntryExpired = (expiresAt: string): boolean => {
@@ -20,8 +24,8 @@ export const autobanEntryRemaining = (expiresAt: string): string => {
   const ms = parseDbDateMs(expiresAt)
   if (ms === null) return '—'
   const minutes = Math.floor((ms - Date.now()) / 60000)
-  if (minutes < 60) return `${Math.max(minutes, 0)} 分钟`
+  if (minutes < 60) return t('common.app.views.autoban.remainingMinutes', { count: Math.max(minutes, 0) })
   const hours = Math.floor(minutes / 60)
-  if (hours < 24) return `${hours} 小时 ${minutes % 60} 分`
-  return `${Math.floor(hours / 24)} 天 ${hours % 24} 时`
+  if (hours < 24) return t('common.app.views.autoban.remainingHoursMinutes', { hours, minutes: minutes % 60 })
+  return t('common.app.views.autoban.remainingDaysHours', { days: Math.floor(hours / 24), hours: hours % 24 })
 }

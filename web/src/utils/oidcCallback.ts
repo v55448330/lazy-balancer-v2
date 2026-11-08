@@ -20,13 +20,14 @@
 
 import { hasOwn } from './hasOwn.ts'
 import { decodeJwtPayload } from './jwt.ts'
+import { tSafe as t } from '../i18n/tSafe.ts'
 
 /** 本标签页发起 OIDC 登录的 nonce 键（sessionStorage）。 */
 export const OIDC_APP_NONCE_KEY = 'oidc_app_nonce'
 /** `return_to` 里承载 nonce 的查询项名。 */
 const OIDC_APP_NONCE_PARAM = 'app_nonce'
 /** 未命中白名单时统一呈现的失败文案。 */
-const OIDC_GENERIC_ERROR = '登录失败，请重新登录'
+const OIDC_GENERIC_ERROR = t('common.app.oidc.genericError')
 
 /** 生成 32 位十六进制 nonce（crypto 不可用时退化为时间+随机，仅作一次性标记）。 */
 export const createOidcAppNonce = (): string => {
@@ -77,12 +78,12 @@ type OidcTokenVerdict = { ok: true; username: string } | { ok: false; reason: Oi
 
 /** 各拒绝原因的固定用户文案。 */
 export const OIDC_REJECTION_TEXT: Record<OidcTokenRejection, string> = {
-  malformed: '登录链接无效，请重新登录',
-  'not-oidc': '登录链接不是本次单点登录签发的令牌，已拒绝',
-  'expiry-mismatch': '登录链接已损坏，请重新登录',
-  expired: '登录链接已过期，请重新登录',
-  'nonce-missing': '登录链接已失效，请重新登录',
-  'nonce-mismatch': '登录链接与本次登录不匹配，已拒绝',
+  malformed: t('common.app.oidc.rejectMalformed'),
+  'not-oidc': t('common.app.oidc.rejectNotOidc'),
+  'expiry-mismatch': t('common.app.oidc.rejectExpiryMismatch'),
+  expired: t('common.app.oidc.rejectExpired'),
+  'nonce-missing': t('common.app.oidc.rejectNonceMissing'),
+  'nonce-mismatch': t('common.app.oidc.rejectNonceMismatch'),
 }
 
 /**
@@ -141,27 +142,27 @@ const OIDC_BACKEND_MESSAGES: readonly string[] = [
 
 /** RFC 6749 / OIDC Core 标准错误码 → 固定中文文案。 */
 const OIDC_STANDARD_ERRORS: Record<string, string> = {
-  invalid_request: '请求无效',
-  unauthorized_client: '客户端无权使用该方式登录',
-  access_denied: '授权被拒绝',
-  unsupported_response_type: '认证服务不支持该登录方式',
-  invalid_scope: '授权范围无效',
-  server_error: '认证服务内部错误',
-  temporarily_unavailable: '认证服务暂时不可用',
-  interaction_required: '需要交互式登录',
-  login_required: '需要重新登录',
-  account_selection_required: '需要选择账号',
-  consent_required: '需要授权确认',
-  invalid_grant: '授权已失效，请重新登录',
+  invalid_request: t('common.app.oidc.errInvalidRequest'),
+  unauthorized_client: t('common.app.oidc.errUnauthorizedClient'),
+  access_denied: t('common.app.oidc.errAccessDenied'),
+  unsupported_response_type: t('common.app.oidc.errUnsupportedResponseType'),
+  invalid_scope: t('common.app.oidc.errInvalidScope'),
+  server_error: t('common.app.oidc.errServerError'),
+  temporarily_unavailable: t('common.app.oidc.errTemporarilyUnavailable'),
+  interaction_required: t('common.app.oidc.errInteractionRequired'),
+  login_required: t('common.app.oidc.errLoginRequired'),
+  account_selection_required: t('common.app.oidc.errAccountSelectionRequired'),
+  consent_required: t('common.app.oidc.errConsentRequired'),
+  invalid_grant: t('common.app.oidc.errInvalidGrant'),
   // 以下 6 码后端 oidcStandardErrorCodes 同样放行（回调 error 参数白名单），
   // 原表缺失会让它们一律落到「授权被拒绝」，把客户端配置类故障说成用户拒绝：
   // 由 oidcCallback.spec 的跨栈码表对表机械钉住（漏一码即红）。
-  invalid_request_uri: '请求地址无效',
-  invalid_request_object: '请求对象无效',
-  invalid_client: '客户端凭证无效，请联系管理员检查 OIDC 配置',
-  unsupported_grant_type: '认证服务不支持该授权类型',
-  unsupported_token_type: '认证服务不支持该令牌类型',
-  expired_token: '登录令牌已过期，请重新登录',
+  invalid_request_uri: t('common.app.oidc.errInvalidRequestUri'),
+  invalid_request_object: t('common.app.oidc.errInvalidRequestObject'),
+  invalid_client: t('common.app.oidc.errInvalidClient'),
+  unsupported_grant_type: t('common.app.oidc.errUnsupportedGrantType'),
+  unsupported_token_type: t('common.app.oidc.errUnsupportedTokenType'),
+  expired_token: t('common.app.oidc.errExpiredToken'),
 }
 
 /**

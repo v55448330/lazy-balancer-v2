@@ -659,9 +659,9 @@ test('安全事件：tooltip 死条件删除，crawler 族展示词单源，旧 
   assert.match(show, /!!row\.rule_triggered && !!row\.rule_msg/)
   assert.doesNotMatch(show, /!== '2'|!== '3'|!== '4'|!== '5'|\^949/, '这些排除项永不命中（前两个 el-link 分支已截走）')
   assert.match(page, /case 'crawler': return CRAWLER_FAMILY_LABEL/)
-  assert.match(page, /if \(row\.rule_triggered === '8'\) return '地域拦截（旧 id）'/)
-  // 分类例外保持不变（triggerStageFamily 对 8 归 ipAcl）
-  assert.match(page, /switch \(triggerStageFamily\(t\)\)/)
+  assert.match(page, /if \(row\.rule_triggered === '8'\) return t\('app\.security\.events\.stageLegacyGeo'\)/)
+  // 分类例外保持不变（triggerStageFamily 对 8 归 ipAcl;局部形参改名 trig 避让 i18n t）
+  assert.match(page, /switch \(triggerStageFamily\(trig\)\)/)
 })
 
 test('OIDC 设置卡：访问白名单字段（email 域 / 用户组）读回显与整表保存', () => {

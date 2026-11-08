@@ -1,8 +1,8 @@
 <template>
   <div class="schedule-editor">
     <div class="schedule-editor__head">
-      <span class="schedule-editor__title">定时更新</span>
-      <span class="schedule-editor__hint">按基础设置时区（{{ tz || '…' }}）执行</span>
+      <span class="schedule-editor__title">{{ t('common.app.rules.sched.title') }}</span>
+      <span class="schedule-editor__hint">{{ t('common.app.rules.sched.tzHint', { tz: tz || '…' }) }}</span>
     </div>
     <div class="schedule-editor__controls">
       <el-select
@@ -10,7 +10,7 @@
         multiple
         :disabled="controlsDisabled"
         class="schedule-editor__days"
-        placeholder="选择星期"
+        :placeholder="t('common.app.rules.sched.selectDays')"
       >
         <el-option v-for="d in weekdayOptions" :key="d.value" :label="d.label" :value="d.value" />
       </el-select>
@@ -19,13 +19,13 @@
         :disabled="controlsDisabled"
         format="HH:mm"
         value-format="HH:mm"
-        placeholder="时间"
+        :placeholder="t('common.app.rules.sched.time')"
         class="schedule-editor__time"
       />
-      <el-button size="small" type="primary" :disabled="controlsDisabled" :loading="saving" @click="emitSave">保存定时</el-button>
+      <el-button size="small" type="primary" :disabled="controlsDisabled" :loading="saving" @click="emitSave">{{ t('common.app.rules.sched.save') }}</el-button>
     </div>
     <div v-if="unavailableHint" class="schedule-editor__tip schedule-editor__tip--error" role="status">{{ unavailableHint }}</div>
-    <div v-else class="schedule-editor__tip">自动更新开关关闭时不执行；手动「立即更新」不受影响</div>
+    <div v-else class="schedule-editor__tip">{{ t('common.app.rules.sched.autoUpdateOffHint') }}</div>
   </div>
 </template>
 
@@ -33,6 +33,9 @@
 import { computed, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { libraryScheduleError, scheduleEditUntouched } from '@/utils/securityLibraries'
+import { useI18n } from 'vue-i18n'
+
+const { t } = useI18n()
 
 // 规则库（CRS/IP2Region/威胁情报库/爬虫地址库）更新弹框共享的「定时更新」卡片区：
 // 星期多选（1=周一…7=周日）+ HH:MM 时间，保存即由后端重排下次更新。
@@ -53,13 +56,13 @@ const emit = defineEmits<{ save: [payload: { days: number[]; time: string }] }>(
 const controlsDisabled = computed(() => props.disabled || props.saving || Boolean(props.unavailableHint))
 
 const weekdayOptions = [
-  { value: 1, label: '周一' },
-  { value: 2, label: '周二' },
-  { value: 3, label: '周三' },
-  { value: 4, label: '周四' },
-  { value: 5, label: '周五' },
-  { value: 6, label: '周六' },
-  { value: 7, label: '周日' },
+  { value: 1, label: t('common.app.rules.sched.mon') },
+  { value: 2, label: t('common.app.rules.sched.tue') },
+  { value: 3, label: t('common.app.rules.sched.wed') },
+  { value: 4, label: t('common.app.rules.sched.thu') },
+  { value: 5, label: t('common.app.rules.sched.fri') },
+  { value: 6, label: t('common.app.rules.sched.sat') },
+  { value: 7, label: t('common.app.rules.sched.sun') },
 ]
 
 const editDays = ref<number[]>([...props.days])

@@ -18,7 +18,7 @@
          只能整页刷新 -->
     <el-alert v-if="configBannerVisible" type="error" :closable="false" show-icon class="error-banner" style="margin-bottom: 16px">
       <template #title>
-        基础配置加载失败，保存已暂停以避免默认值覆盖真实配置。<el-button link type="danger" @click="fetchSettings">重试</el-button>
+        {{ t('app.settings.page.configLoadFailBanner') }}<el-button link type="danger" @click="fetchSettings">{{ t('app.settings.page.retry') }}</el-button>
       </template>
     </el-alert>
 
@@ -54,6 +54,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { resetSettingsDraft, syncSettingsDraftIdentity } from '@/composables/useSettingsDraft'
 import { request } from '@/utils/api'
 import { DEFAULT_ACCESS_LOG_FORMAT } from '@/utils/caddyDefaults'
@@ -68,6 +69,8 @@ import ClusterSettings from './settings/ClusterSettings.vue'
 import FreeCertificates from './settings/FreeCertificates.vue'
 import APIKeys from '@/views/Keys.vue'
 import TaskMonitor from './settings/TaskMonitor.vue'
+
+const { t } = useI18n()
 
 const authStore = useAuthStore()
 

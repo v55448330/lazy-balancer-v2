@@ -20,6 +20,7 @@ import { FLOW_ATTACK_COLOR, FLOW_NORMAL_COLOR, FLOW_FLIGHT_MS, FLOW_HOVER_TIP_CO
 import { planTrafficArcs } from '@/utils/threatFlowRules'
 import { sphereSurfacePoint, DOT_LAT_TOP, DOT_LAT_BOTTOM } from '@/utils/threatProjection'
 import { buildSphericalArc, SPHERICAL_ARC_SAMPLES } from '@/utils/threatArcCurve'
+import { tSafe as t } from '../i18n/tSafe.ts'
 
 interface ArcDatum {
   startLat: number
@@ -584,7 +585,7 @@ export function createThreatGlobe(container: HTMLElement, opts?: ThreatSceneOpti
       hoverTipEl.style.display = 'block'
       // 省级统计只覆盖中国，海外下钻不得显示「该省 0 次攻击」。
       hoverTipEl.textContent = provinceHover && drilledName && !hasProvinceStats(drilledName)
-        ? `${name} 无省级统计`
+        ? t('common.app.views.threat.noProvinceStats', { name })
         : `${name} ${count}`
       hoverTipEl.style.left = `${move.x - r.left + 14}px`
       hoverTipEl.style.top = `${move.y - r.top - 6}px`

@@ -9,53 +9,53 @@
     @opened="handleOpen"
   >
     <template #header>
-      <DialogHeader :icon="User" title="个人资料" :subtitle="isOIDCUser ? 'OIDC 企业认证账户' : '本地账户'" />
+      <DialogHeader :icon="User" :title="t('common.app.views.profile.title')" :subtitle="isOIDCUser ? t('common.app.views.profile.oidcSubtitle') : t('common.app.views.profile.localSubtitle')" />
     </template>
     <div v-if="isReadOnly" class="info-note-bar profile-readonly-note"><span class="info-note-desc">{{ authStore.readOnlyMessage }}</span></div>
     <el-form :model="profileForm" label-width="96px" class="profile-form" :disabled="saving">
-      <el-form-item label="用户名">
+      <el-form-item :label="t('common.app.views.profile.usernameLabel')">
         <el-input v-model="profileForm.username" disabled />
       </el-form-item>
       <template v-if="isOIDCUser">
-        <el-form-item label="显示名">
+        <el-form-item :label="t('common.app.views.profile.displayNameLabel')">
           <el-input :model-value="profileForm.display_name" disabled />
         </el-form-item>
-        <el-form-item label="认证方式" for="policy-auth-mode-static">
+        <el-form-item :label="t('common.app.views.profile.authMethodLabel')" for="policy-auth-mode-static">
           <input type="text" id="policy-auth-mode-static" aria-hidden="true" tabindex="-1" autocomplete="off" style="display:none">
-          <el-tag type="primary" effect="plain" size="small">OIDC 企业认证</el-tag>
+          <el-tag type="primary" effect="plain" size="small">{{ t('common.app.views.profile.oidcTag') }}</el-tag>
         </el-form-item>
       </template>
       <template v-else>
-        <el-form-item label="显示名">
-          <el-input v-model="profileForm.display_name" :disabled="isReadOnly" placeholder="选填" maxlength="50" />
+        <el-form-item :label="t('common.app.views.profile.displayNameLabel')">
+          <el-input v-model="profileForm.display_name" :disabled="isReadOnly" :placeholder="t('common.app.views.profile.optionalPlaceholder')" maxlength="50" />
         </el-form-item>
-        <el-form-item label="新密码">
-          <el-input v-model="profileForm.password" :disabled="isReadOnly" type="password" minlength="8" maxlength="24" placeholder="如不修改请留空（8-24位）" show-password />
+        <el-form-item :label="t('common.app.views.profile.newPasswordLabel')">
+          <el-input v-model="profileForm.password" :disabled="isReadOnly" type="password" minlength="8" maxlength="24" :placeholder="t('common.app.views.profile.newPasswordPlaceholder')" show-password />
         </el-form-item>
-        <el-form-item label="确认新密码">
-          <el-input v-model="profileForm.passwordConfirm" :disabled="isReadOnly" type="password" minlength="8" maxlength="24" placeholder="再次输入新密码" show-password />
+        <el-form-item :label="t('common.app.views.profile.confirmPasswordLabel')">
+          <el-input v-model="profileForm.passwordConfirm" :disabled="isReadOnly" type="password" minlength="8" maxlength="24" :placeholder="t('common.app.views.profile.confirmPasswordPlaceholder')" show-password />
         </el-form-item>
-        <el-form-item label="当前密码">
-          <el-input v-model="profileForm.currentPassword" :disabled="isReadOnly" type="password" maxlength="72" :placeholder="profileForm.password ? '修改密码时必填' : '填写新密码后需确认'" show-password />
+        <el-form-item :label="t('common.app.views.profile.currentPasswordLabel')">
+          <el-input v-model="profileForm.currentPassword" :disabled="isReadOnly" type="password" maxlength="72" :placeholder="profileForm.password ? t('common.app.views.profile.currentPasswordRequired') : t('common.app.views.profile.currentPasswordHint')" show-password />
         </el-form-item>
-        <el-form-item label="两步验证" for="profile-mfa-static">
+        <el-form-item :label="t('common.app.views.profile.twoFactorLabel')" for="profile-mfa-static">
           <input type="text" id="profile-mfa-static" aria-hidden="true" tabindex="-1" autocomplete="off" style="display:none">
           <div class="mfa-row">
-            <el-tag :type="mfaEnabled ? 'success' : 'info'" size="small" effect="plain">{{ mfaEnabled ? '已启用' : '未启用' }}</el-tag>
-            <el-button v-if="!mfaEnabled" size="small" type="primary" plain :disabled="isReadOnly" @click="startEnable">启用 MFA</el-button>
+            <el-tag :type="mfaEnabled ? 'success' : 'info'" size="small" effect="plain">{{ mfaEnabled ? t('common.app.views.profile.mfaOn') : t('common.app.views.profile.mfaOff') }}</el-tag>
+            <el-button v-if="!mfaEnabled" size="small" type="primary" plain :disabled="isReadOnly" @click="startEnable">{{ t('common.app.views.profile.enableMfa') }}</el-button>
             <template v-else>
-              <el-button size="small" :disabled="isReadOnly" @click="startMfaAction('disable')">关闭 MFA</el-button>
-              <el-button size="small" type="warning" plain :disabled="isReadOnly" @click="startMfaAction('reset')">重置 MFA</el-button>
+              <el-button size="small" :disabled="isReadOnly" @click="startMfaAction('disable')">{{ t('common.app.views.profile.disableMfa') }}</el-button>
+              <el-button size="small" type="warning" plain :disabled="isReadOnly" @click="startMfaAction('reset')">{{ t('common.app.views.profile.resetMfa') }}</el-button>
             </template>
           </div>
-          <div class="form-tip-line">关闭或重置需输入当前动态验证码；重置会立即换绑新的验证器并重新生成恢复代码。</div>
+          <div class="form-tip-line">{{ t('common.app.views.profile.mfaRowTip') }}</div>
         </el-form-item>
       </template>
     </el-form>
-    <div v-if="isOIDCUser" class="info-note-bar"><span class="info-note-desc">显示名与密码由认证服务管理，如需修改请前往 OIDC 服务</span></div>
+    <div v-if="isOIDCUser" class="info-note-bar"><span class="info-note-desc">{{ t('common.app.views.profile.oidcManagedNote') }}</span></div>
     <template #footer>
-      <el-button :disabled="saving" @click="closeProfile">取消</el-button>
-      <el-button v-if="!isOIDCUser" type="primary" :loading="saving" :disabled="isReadOnly || saving" @click="saveProfile">保存</el-button>
+      <el-button :disabled="saving" @click="closeProfile">{{ t('common.app.views.profile.cancel') }}</el-button>
+      <el-button v-if="!isOIDCUser" type="primary" :loading="saving" :disabled="isReadOnly || saving" @click="saveProfile">{{ t('common.app.views.profile.save') }}</el-button>
     </template>
     <!-- 关闭/重置 MFA 前的动态码确认：与全站 MFA 写操作同一验证语义 -->
     <el-dialog
@@ -67,22 +67,22 @@
       :show-close="!mfaSubmitting"
     >
       <template #header>
-        <DialogHeader :icon="Lock" :title="mfaAction === 'reset' ? '重置 MFA' : '关闭 MFA'" />
+        <DialogHeader :icon="Lock" :title="mfaAction === 'reset' ? t('common.app.views.profile.resetMfa') : t('common.app.views.profile.disableMfa')" />
       </template>
-      <div class="form-tip-line">{{ mfaAction === 'reset' ? '重置会立即换绑验证器，旧验证器与旧恢复代码全部失效。' : '关闭后登录不再需要动态验证码。' }}</div>
+      <div class="form-tip-line">{{ mfaAction === 'reset' ? t('common.app.views.profile.resetConfirmTip') : t('common.app.views.profile.disableConfirmTip') }}</div>
       <el-input
         v-if="!mfaWriteGuard"
         v-model="mfaCode"
         class="mfa-code-field"
-        placeholder="当前 6 位动态验证码"
+        :placeholder="t('common.app.views.profile.currentCodePlaceholder')"
         maxlength="6"
-        aria-label="当前 6 位动态验证码"
+        :aria-label="t('common.app.views.profile.currentCodePlaceholder')"
         @input="mfaCode = sanitizeTotpDigits(mfaCode)"
       />
       <template #footer>
-        <el-button :disabled="mfaSubmitting" @click="mfaCodeDialog = false">取消</el-button>
+        <el-button :disabled="mfaSubmitting" @click="mfaCodeDialog = false">{{ t('common.app.views.profile.cancel') }}</el-button>
         <el-button type="primary" :loading="mfaSubmitting" :disabled="!mfaWriteGuard && mfaCode.length !== 6" @click="confirmMfaAction">
-          {{ mfaAction === 'reset' ? (mfaWriteGuard ? '确认重置' : '验证并重置') : (mfaWriteGuard ? '确认关闭' : '验证并关闭') }}
+          {{ mfaAction === 'reset' ? (mfaWriteGuard ? t('common.app.views.profile.confirmReset') : t('common.app.views.profile.verifyAndReset')) : (mfaWriteGuard ? t('common.app.views.profile.confirmDisable') : t('common.app.views.profile.verifyAndDisable')) }}
         </el-button>
       </template>
     </el-dialog>
@@ -99,6 +99,7 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Lock, User } from '@element-plus/icons-vue'
 import DialogHeader from '@/components/DialogHeader.vue'
@@ -110,6 +111,7 @@ import { missingNewPasswordMessage, validatePassword } from '@/utils/credentials
 import { useAuthStore } from '@/stores/auth'
 import type { APIResponse } from '@/types'
 
+const { t } = useI18n()
 const props = defineProps<{ modelValue: boolean }>()
 const emit = defineEmits<{ 'update:modelValue': [value: boolean] }>()
 const authStore = useAuthStore()
@@ -136,7 +138,9 @@ const beforeClose = (done: () => void): void => {
   // 关闭/重置 MFA 与绑定向导在途期间不得关闭个人资料弹框（向导为嵌套弹框）
   if (!saving.value && !mfaSubmitting.value && !wizardVisible.value) done()
 }
-const closeProfile = (): void => { if (!saving.value && !mfaSubmitting.value && !wizardVisible.value) emit('update:modelValue', false) }
+const closeProfile = (): void => {
+  emit('update:modelValue', false)
+}
 const saveProfile = async () => {
   if (isReadOnly.value || saving.value) return
   const passwordError = validatePassword(profileForm.value.password)
@@ -146,8 +150,8 @@ const saveProfile = async () => {
   // 先于「两次不一致」判定，否则该形态被当成不一致话术。
   const missingNewPassword = missingNewPasswordMessage(profileForm.value.password, profileForm.value.passwordConfirm)
   if (missingNewPassword) { authStore.showToast('warning', missingNewPassword); return }
-  if (profileForm.value.password && !profileForm.value.currentPassword) { authStore.showToast('warning', '请输入当前密码'); return }
-  if (profileForm.value.password && profileForm.value.password !== profileForm.value.passwordConfirm) { authStore.showToast('warning', '两次输入的新密码不一致'); return }
+  if (profileForm.value.password && !profileForm.value.currentPassword) { authStore.showToast('warning', t('common.app.views.profile.currentPasswordMissing')); return }
+  if (profileForm.value.password && profileForm.value.password !== profileForm.value.passwordConfirm) { authStore.showToast('warning', t('common.app.views.profile.newPasswordMismatch')); return }
   const passwordChanged = Boolean(profileForm.value.password)
   // 占位先于确认：确认框悬挂期按钮已进入在途态，第二击不会再叠一个确认框。
   saving.value = true
@@ -155,9 +159,9 @@ const saveProfile = async () => {
     if (passwordChanged) {
       try {
         await ElMessageBox.confirm(
-          '将保存个人资料并修改密码，保存后需要重新登录。确认继续？',
-          '保存个人资料',
-          { type: 'warning', confirmButtonText: '确认保存', cancelButtonText: '取消' },
+          t('common.app.views.profile.passwordChangeConfirmMsg'),
+          t('common.app.views.profile.passwordChangeConfirmTitle'),
+          { type: 'warning', confirmButtonText: t('common.app.views.profile.confirmSave'), cancelButtonText: t('common.app.views.profile.cancel') },
         )
       } catch { return }
     }
@@ -167,10 +171,10 @@ const saveProfile = async () => {
     })
     emit('update:modelValue', false)
     if (passwordChanged) {
-      authStore.showToast('success', '密码已修改，请重新登录')
+      authStore.showToast('success', t('common.app.views.profile.passwordChangedRelogin'))
       await authStore.logout()
     } else {
-      mfaAwareSuccess('保存成功')
+      mfaAwareSuccess(t('common.app.views.profile.saved'))
       await authStore.fetchUser()
     }
   } catch (error: unknown) {
@@ -208,12 +212,12 @@ const startEnable = async (): Promise<void> => {
     // 200 但无 data = 后端契约违约（弱网截断/网关改包）：requireData 抛错落到
     // 下方 catch 显性报错，静默 return 会让按钮复位、弹框不动，与「没点上」
     // 不可区分
-    const data = requireData(res.data, '响应异常，请重试')
+    const data = requireData(res.data, t('common.app.views.profile.responseAbnormal'))
     pendingSecret.value = data.secret
     pendingUri.value = data.uri
     wizardVisible.value = true
   } catch (error: unknown) {
-    ElMessage.error(error instanceof Error ? error.message : '生成 MFA 密钥失败')
+    ElMessage.error(error instanceof Error ? error.message : t('common.app.views.profile.mfaSetupFailed'))
   } finally {
     mfaSubmitting.value = false
   }
@@ -234,20 +238,20 @@ const confirmMfaAction = async (): Promise<void> => {
     if (mfaAction.value === 'disable') {
       await request.post('/auth/mfa/disable', { code }, { silent: true })
       mfaCodeDialog.value = false
-      mfaAwareSuccess('MFA 已关闭')
+      mfaAwareSuccess(t('common.app.views.profile.mfaDisabledToast'))
       await authStore.fetchUser()
       return
     }
     const res = await request.post<APIResponse<{ secret: string; uri: string }>>('/auth/mfa/setup', { code }, { silent: true })
     // 同 startEnable：200 无 data 经 requireData 抛错显性报错（验码弹框保持
     // 打开，凭据不复位）
-    const data = requireData(res.data, '响应异常，请重试')
+    const data = requireData(res.data, t('common.app.views.profile.responseAbnormal'))
     mfaCodeDialog.value = false
     pendingSecret.value = data.secret
     pendingUri.value = data.uri
     wizardVisible.value = true
   } catch (error: unknown) {
-    ElMessage.error(error instanceof Error ? error.message : '操作失败')
+    ElMessage.error(error instanceof Error ? error.message : t('common.app.views.profile.actionFailed'))
   } finally {
     mfaSubmitting.value = false
   }

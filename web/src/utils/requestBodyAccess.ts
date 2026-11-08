@@ -7,6 +7,7 @@
 // 区（值掩码、可眼睛图标切换）给出相反结论，误导排障。
 //
 // 判据只覆盖面板侧会话（管理员角色）；只读 API Key 不走本视图，故不在此建模。
+import { tSafe as t } from '../i18n/tSafe.ts'
 
 /** 当前会话是否能读到请求体原文（服务端掩码条件是角色 admin 且非只读 Key）。 */
 export const viewerCanReadRequestBody = (role: string | null | undefined): boolean => role === 'admin'
@@ -14,5 +15,5 @@ export const viewerCanReadRequestBody = (role: string | null | undefined): boole
 /** 请求体空态文案：对无权读者必须披露「可能是掩码，不能据此判断未记录」。 */
 export const requestBodyEmptyNotice = (adminViewer: boolean): string =>
   adminViewer
-    ? '无请求体记录'
-    : '无请求体记录（当前账号看不到请求体正文：服务端对非管理员会掩码该字段，不能据此判断该事件未记录请求体；需要时请用管理员账号查看）'
+    ? t('common.app.views.misc.bodyEmptyNotice')
+    : t('common.app.views.misc.bodyMaskedNotice')

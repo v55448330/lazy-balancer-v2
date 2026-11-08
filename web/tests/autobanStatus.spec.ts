@@ -95,7 +95,7 @@ test('状态首次加载期间不渲染主节点徽章，避免刷新时参数�
   // 按「条件集」判定：徽章渲染必须同时要求「非加载中 ∧ 非错误 ∧ 已确认为从节点」。
   // 逐字整串钉（含条件顺序）在调整顺序或改用计算属性时假红，而这三条缺任何一条
   // 都会让初值（loading=true / is_master=false）把参数区先右移再回位。
-  const labelAt = page.indexOf('仅主节点调度')
+  const labelAt = page.indexOf("t('app.security.events.masterOnlyBadge')")
   assert.ok(labelAt > 0, '前置：从节点徽章必须存在（否则本断言空转）')
   const badge = elementSlice(page, page.lastIndexOf('<el-tag', labelAt), 'el-tag')
   const guard = /v-if="([^"]+)"/.exec(badge)

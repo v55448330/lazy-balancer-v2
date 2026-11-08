@@ -44,14 +44,19 @@ test('安全总览 Top10 源 IP 展示近 10 分钟/近 1 小时/近 24 小时�
     assert.match(topIp, new RegExp(`\\b${field}\\??:\\s*number\\b`), `TopIP 必须声明后端字段 ${field}`)
   }
   assert.doesNotMatch(page, /prop="frequency"/)
-  assert.match(page, /prop="blocked" label="拦截" width="100"/)
-  assert.match(page, /prop="detected" label="检测" width="100"/)
-  assert.match(page, /prop="recent_10m" label="近10分钟" width="120"/)
-  assert.match(page, /prop="recent_1h" label="近1小时" width="128"/)
-  assert.match(page, /prop="recent_24h" label="近24小时" width="110"/, '近 24 小时列（用户要求 110 宽）')
-  // 新增列后不得整体撑破表格：IP 地址与攻击类型让宽
-  assert.match(page, /label="IP 地址" min-width="160"/, 'IP 地址列让宽到 160（原 200）')
-  assert.match(page, /label="攻击类型" min-width="140"/, '攻击类型列让宽到 140（原 180）')
+  // i18n 后双钉:列头调用点钉键,zh 母本钉原文(列绑定关系漂移仍必红)
+  assert.match(page, /prop="blocked" :label="t\('app\.security\.overview\.status\.blocked'\)" width="100"/)
+  assert.match(page, /prop="detected" :label="t\('app\.security\.overview\.status\.detected'\)" width="100"/)
+  assert.match(page, /prop="recent_10m" :label="t\('app\.security\.overview\.topIps\.colRecent10m'\)" width="120"/)
+  assert.match(page, /prop="recent_1h" :label="t\('app\.security\.overview\.topIps\.colRecent1h'\)" width="128"/)
+  assert.match(page, /prop="recent_24h" :label="t\('app\.security\.overview\.topIps\.colRecent24h'\)" width="110"/, '近 24 小时列（用户要求 110 宽）')
+  assert.ok(code('src/locales/zh/security.ts').includes('"zh": "近10分钟"'), '近10分钟列头原文必须在 zh 母本词条中')
+  assert.ok(code('src/locales/zh/security.ts').includes('"zh": "近1小时"'), '近1小时列头原文必须在 zh 母本词条中')
+  assert.ok(code('src/locales/zh/security.ts').includes('"zh": "近24小时"'), '近24小时列头原文必须在 zh 母本词条中')
+  // 新增列后不得整体撑破表格：IP 地址与攻击类型让宽（列头已抽词,调用点钉键）
+  assert.match(page, /:label="t\('app\.security\.overview\.topIps\.colIp'\)" min-width="160"/, 'IP 地址列让宽到 160（原 200）')
+  assert.match(page, /:label="t\('app\.security\.overview\.topIps\.colAttackType'\)" min-width="140"/, '攻击类型列让宽到 140（原 180）')
+  assert.ok(code('src/locales/zh/security.ts').includes('"zh": "IP 地址"'), 'IP 地址列头原文必须在 zh 母本词条中')
 })
 
 test('策略向导 WAF 步骤：排除行撑满内容列，记录请求体警示条对齐控件列（2026-11-03 用户验收反馈）', () => {
@@ -68,11 +73,14 @@ test('策略向导 WAF 步骤：排除行撑满内容列，记录请求体警示
   //    无标签项内容从行首起渲染，比控件列宽 ~100px、左缘贴弹框内容边）——
   //    移入带标签项后宽度自然对齐控件列；样式主体走全局 info-note-bar（padding
   //    8px 12px 由全局类提供，禁止本地重定义）。
-  const item = section(page, 'label="记录请求体"', '</el-form-item>')
+  //    i18n 后表单项标签/警示文案抽词:调用点钉键,zh 母本钉原文(任一漂移必红)
+  const item = section(page, ':label="t(\'app.security.policies.waf.logRequestBody\')"', '</el-form-item>')
   assert.match(item, /<el-switch v-model="form\.log_request_body"/, '开关必须仍在原表单项')
   assert.match(item, /class="form-tip-line"/, '控件说明行必须保留')
   assert.match(item, /v-if="form\.log_request_body"[^>]*class="info-note-bar form-item-note-bar"/, '警示条必须移入带标签表单项内')
-  assert.match(item, /请仅在排障期间开启/, '警示文案必须保留')
+  assert.match(item, /t\('app\.security\.policies\.waf\.logRequestBodyWarn'\)/, '警示文案必须保留')
+  assert.ok(code('src/locales/zh/security.ts').includes('"zh": "记录请求体"'), '表单项标签原文必须在 zh 母本词条中')
+  assert.ok(code('src/locales/zh/security.ts').includes('请仅在排障期间开启'), '警示文案原文必须在 zh 母本词条中')
   // 全局规范不被局部覆写：本文件不得重定义 info-note-bar 的盒模型
   assert.doesNotMatch(page, /\.info-note-bar[^{]*\{[^}]*padding/, 'info-note-bar 内边距必须走全局规范，禁局部覆写')
   assert.equal(cssDeclarations(page, '.form-item-note-bar').get('width'), '100%', '警示条必须撑满控件列')

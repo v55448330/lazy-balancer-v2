@@ -7,6 +7,8 @@
 // 密码：8-24 位可打印 ASCII（数字/大小写字母/特殊字符），不允许汉字或
 // 其他非 ASCII；空值=不修改（由调用方按入口语义决定是否必填）。
 
+import { tSafe as t } from '../i18n/tSafe.ts'
+
 export const USERNAME_MIN_LENGTH = 3
 export const USERNAME_MAX_LENGTH = 50
 export const USERNAME_POLICY_RE = /^[a-z][a-z0-9]*$/
@@ -14,10 +16,10 @@ export const USERNAME_POLICY_RE = /^[a-z][a-z0-9]*$/
 export const PASSWORD_MIN_LENGTH = 8
 export const PASSWORD_MAX_LENGTH = 24
 
-export const USERNAME_LENGTH_MESSAGE = `用户名长度需为 ${USERNAME_MIN_LENGTH}-${USERNAME_MAX_LENGTH} 位`
-export const USERNAME_POLICY_MESSAGE = '用户名仅允许小写英文开头，字符只允许小写字母和数字'
-export const PASSWORD_LENGTH_MESSAGE = `密码长度需为 ${PASSWORD_MIN_LENGTH}-${PASSWORD_MAX_LENGTH} 位`
-export const PASSWORD_CHARSET_MESSAGE = '密码仅支持数字、大小写字母和特殊字符，不允许汉字或其他非 ASCII 字符'
+export const USERNAME_LENGTH_MESSAGE = t('common.app.credPolicy.usernameLength', { min: USERNAME_MIN_LENGTH, max: USERNAME_MAX_LENGTH })
+export const USERNAME_POLICY_MESSAGE = t('common.app.credPolicy.usernamePolicy')
+export const PASSWORD_LENGTH_MESSAGE = t('common.app.credPolicy.passwordLength', { min: PASSWORD_MIN_LENGTH, max: PASSWORD_MAX_LENGTH })
+export const PASSWORD_CHARSET_MESSAGE = t('common.app.credPolicy.passwordCharset')
 
 /** 用户名校验；空值返回 null（必填由调用方按入口语义拦截）。 */
 export function validateUsername(value: string): string | null {
@@ -47,5 +49,5 @@ export function validatePassword(value: string): string | null {
  */
 export function missingNewPasswordMessage(password: string, passwordConfirm: string): string | null {
   if (password || !passwordConfirm) return null
-  return '请填写新密码（新密码留空表示不修改密码）'
+  return t('common.app.credPolicy.newPasswordRequired')
 }

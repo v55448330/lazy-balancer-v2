@@ -4,9 +4,9 @@
       <div class="header-left">
         <h2 class="page-title">
           <el-icon class="title-icon"><Cpu /></el-icon>
-          配置预览
+          {{ t('common.app.views.caddyCfg.pageTitle') }}
         </h2>
-        <p class="page-desc">查看从数据库渲染并应用到 Caddy 的完整配置</p>
+        <p class="page-desc">{{ t('common.app.views.caddyCfg.pageDesc') }}</p>
       </div>
     </div>
 
@@ -27,7 +27,7 @@
         :closable="false"
         show-icon
         class="config-error-alert"
-        title="配置加载失败"
+        :title="t('common.app.views.caddyCfg.loadFailedTitle')"
         :description="fetchError"
       />
 
@@ -36,10 +36,10 @@
           <div class="card-header">
             <div class="card-title">
               <el-icon><Document /></el-icon>
-              <span>Caddy 配置预览 (JSON)</span>
+              <span>{{ t('common.app.views.caddyCfg.cardTitle') }}</span>
             </div>
             <el-button size="small" :loading="loading" @click="fetchCaddyConfig">
-              <el-icon><RefreshRight /></el-icon>刷新
+              <el-icon><RefreshRight /></el-icon>{{ t('common.app.views.caddyCfg.refreshBtn') }}
             </el-button>
           </div>
         </template>
@@ -47,7 +47,7 @@
           <SyntaxHighlight v-if="caddyConfigData" :content="jsonText" language="json" />
           <!-- 首拉失败且无数据时，空态不得误导读作「暂无配置」——错误横幅已
                在上方展示，此处改「加载失败」（有数据时保留最后渲染）。-->
-          <el-empty v-else :description="fetchError ? '加载失败' : '暂无配置'" :image-size="64" />
+          <el-empty v-else :description="fetchError ? t('common.app.views.caddyCfg.loadFailed') : t('common.app.views.caddyCfg.emptyConfig')" :image-size="64" />
         </div>
       </el-card>
     </template>
@@ -60,6 +60,9 @@ import { Cpu, Document, RefreshRight } from '@element-plus/icons-vue'
 import SyntaxHighlight from '@/components/SyntaxHighlight.vue'
 import { request } from '@/utils/api'
 import { useAuthStore } from '@/stores/auth'
+import { useI18n } from 'vue-i18n'
+
+const { t } = useI18n()
 
 type JsonPrimitive = string | number | boolean | null
 type JsonValue = JsonPrimitive | { readonly [key: string]: JsonValue } | JsonValue[]
@@ -69,7 +72,7 @@ const authStore = useAuthStore()
 // 权限态收口——只有 admin 能读 /caddy/config（服务端另有纵深 403）。
 // user 尚未拉到（null）时给「读取权限中」而非「无权限」，避免 admin 首屏误判。
 const canViewConfig = computed(() => authStore.user?.role === 'admin')
-const permissionEmptyText = computed(() => authStore.user === null ? '正在读取账户权限…' : '仅管理员可查看 Caddy 配置预览')
+const permissionEmptyText = computed(() => authStore.user === null ? t('common.app.views.caddyCfg.readingPermissions') : t('common.app.views.caddyCfg.adminOnlyHint'))
 
 const caddyConfigData = shallowRef<JsonValue | null>(null)
 const loading = ref(false)
@@ -84,7 +87,7 @@ const fetchCaddyConfig = async (): Promise<void> => {
     fetchError.value = null
   } catch (error: unknown) {
     // 拉取失败保留最后一份已渲染配置（全局拦截器已 toast），仅置页面级错误状态
-    fetchError.value = error instanceof Error ? error.message : '配置加载失败'
+    fetchError.value = error instanceof Error ? error.message : t('common.app.views.caddyCfg.loadFailedTitle')
     console.error('Failed to fetch Caddy config:', error)
   } finally {
     loading.value = false

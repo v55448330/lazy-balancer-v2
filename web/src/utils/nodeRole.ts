@@ -6,6 +6,8 @@
 // === 'slave' 出现过」，两支互换仍然全绿（存在性不等于方向）。抽成纯函数后
 // 由行为用例穷举四态钉住方向。
 
+import { tSafe as t } from '../i18n/tSafe.ts'
+
 // 后端 node_mode 是 'master' | 'slave' | 'unknown'（types/ClusterNodeMode）；
 // 展示侧再叠两种「还没取到」：null（/config 首拉失败或重试期）与 undefined。
 type NodeModeInput = 'master' | 'slave' | 'unknown' | null | undefined
@@ -20,14 +22,10 @@ interface NodeRoleView {
   tagType: 'success' | 'warning' | 'info'
 }
 
-const NODE_ROLE_VIEWS: Record<NodeRole, NodeRoleView> = {
-  master: { role: 'master', label: '主节点', tagType: 'success' },
-  slave: { role: 'slave', label: '从节点', tagType: 'warning' },
-  unknown: { role: 'unknown', label: '节点角色未知', tagType: 'info' },
-}
-
+// 展示文案走 i18n（批次 D cluster 域）：label 在调用时刻解析（与 certJobStatus
+// 同款 tSafe 兜底链），键形与 zh 母本原文由 nodeRole.spec 双钉。
 export const resolveNodeRole = (mode: NodeModeInput): NodeRoleView => {
-  if (mode === 'master') return NODE_ROLE_VIEWS.master
-  if (mode === 'slave') return NODE_ROLE_VIEWS.slave
-  return NODE_ROLE_VIEWS.unknown
+  if (mode === 'master') return { role: 'master', label: t('common.app.views.cluster.master'), tagType: 'success' }
+  if (mode === 'slave') return { role: 'slave', label: t('common.app.views.cluster.slave'), tagType: 'warning' }
+  return { role: 'unknown', label: t('common.app.views.cluster.roleUnknown'), tagType: 'info' }
 }

@@ -124,7 +124,9 @@ test('规则列表锁图标：Enter/Space 打开流程弹框，不依赖 telepor
   const rules = code('src/views/Rules.vue')
   const reference = section(rules, '<template #reference>', '</template>')
   assert.match(reference, /role="button"/)
-  assert.match(reference, /:aria-label="`查看「\$\{row\.name\}」的安全处理流程`"/)
+  // i18n 后双钉:调用点钉键,zh 母本钉原文(任一漂移必红)
+  assert.match(reference, /:aria-label="t\('common\.app\.rules\.list\.viewFlowAria', \{ ruleName: row\.name \}\)"/)
+  assert.ok(code('src/locales/zh/rules.ts').includes('查看「{ruleName}」的安全处理流程'), '锁图标 aria 原文必须在 zh 母本词条中')
   // 插槽 row 是 Element Plus 的 DefaultRow（Record<PropertyKey, any>），传给
   // 强类型处理器时带 `as Rule` 断言——断言不影响「收到整行」这一语义。
   assert.match(reference, /@keydown\.enter\.prevent="activateOnce\(\$event, \(\) => openFlowFromLock\(row(?: as [A-Za-z]+)?\)\)"/)

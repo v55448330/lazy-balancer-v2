@@ -59,18 +59,19 @@ test('摘要按开关选分支：主动开启不再打印被动行', () => {
 })
 
 test('向导预览与单规则查看器共用同一摘要单源（不再各拼一份）', () => {
-  const preview = section(page, '<el-descriptions-item label="健康检查"', '<el-descriptions-item label="连接重试"')
+  // i18n 后描述项标签走 t() 键（zh 母本原文已由 rulesUi 双钉承载）
+  const preview = section(page, "<el-descriptions-item :label=\"t('common.app.rules.wizard.healthCheck')\"", "<el-descriptions-item :label=\"t('common.app.rules.wizard.connectRetry')\"")
   assert.match(preview, /\{\{ healthCheckSummary\(wizardForm\) \}\}/)
   assert.doesNotMatch(preview, /主动探测端口|被动检查 \(失败/, '预览不得再自行拼装文案')
 
-  const viewer = section(page, '<el-descriptions-item label="主动健康检查"', '<el-descriptions-item label="连接重试"')
+  const viewer = section(page, "<el-descriptions-item :label=\"t('common.app.rules.wizard.activeHealthCheck')\"", "<el-descriptions-item :label=\"t('common.app.rules.wizard.connectRetry')\"")
   assert.match(viewer, /activeHealthCheckSummary\(ruleConfig\)/)
   assert.match(viewer, /passiveHealthCheckSummary\(ruleConfig\)/)
   assert.doesNotMatch(viewer, /TCP 探测端口/, '查看器不得再自行拼装文案')
 })
 
 test('渲染层零写死兜底：查看器不再用 || 默认值掩盖未配置阈值', () => {
-  const viewer = section(page, '<el-descriptions-item label="主动健康检查"', '<el-descriptions-item label="连接重试"')
+  const viewer = section(page, "<el-descriptions-item :label=\"t('common.app.rules.wizard.activeHealthCheck')\"", "<el-descriptions-item :label=\"t('common.app.rules.wizard.connectRetry')\"")
   assert.doesNotMatch(viewer, /health_check_unhealthy_threshold \|\|/)
   assert.doesNotMatch(viewer, /health_check_interval \|\|/)
 })

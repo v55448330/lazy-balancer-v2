@@ -4,7 +4,7 @@
       <div class="card-header">
         <div class="card-title">
           <el-icon><Refresh /></el-icon>
-          <span>从节点操作</span>
+          <span>{{ t('common.app.views.cluster.slaveActionsTitle') }}</span>
         </div>
       </div>
     </template>
@@ -14,8 +14,8 @@
          的自动激活不会发生，不能再按无错误时的分支误导用户。 -->
     <el-alert
       v-if="!status.cluster_active && !status.last_sync_error"
-      title="等待主节点审批"
-      description="主节点确认后将自动激活同步。您也可以重新注册或提升为主节点。"
+      :title="t('common.app.views.cluster.awaitingApprovalTitle')"
+      :description="t('common.app.views.cluster.awaitingApprovalDesc')"
       type="warning"
       :closable="false"
       show-icon
@@ -23,7 +23,7 @@
     />
     <el-alert
       v-else-if="status.last_sync_error"
-      title="最近同步失败"
+      :title="t('common.app.views.cluster.lastSyncFailedTitle')"
       :description="syncErrorDisplay"
       type="error"
       :closable="false"
@@ -33,26 +33,30 @@
 
     <div class="actions">
       <el-button type="primary" :loading="syncing" :disabled="readOnly || !status.cluster_active || promoting" @click="$emit('sync')">
-        <el-icon><Refresh /></el-icon>立即同步
+        <el-icon><Refresh /></el-icon>{{ t('common.app.views.cluster.syncNow') }}
       </el-button>
       <!-- PinMismatch 补救——主节点更换管理面板证书后同步持续指纹不匹配，
            「重新注册」复用同一 TOFU transport 无法自救；清空本节点 TOFU 指纹钉
            （POST /cluster/forget-pins）后，下一同步周期按主节点当前证书重新钉扎。 -->
       <el-button v-if="status.sync_error_code === 'pin_mismatch'" type="danger" plain :loading="forgettingPins" :disabled="readOnly || forgettingPins" @click="$emit('forget-pins')">
-        清除证书指纹并重新钉扎
+        {{ t('common.app.views.cluster.forgetPinsAndReregister') }}
       </el-button>
-      <el-button :disabled="readOnly || syncing || promoting" @click="$emit('reregister')">重新注册</el-button>
-      <el-button type="danger" plain :loading="promoting" :disabled="readOnly || syncing" @click="$emit('promote')">提升为主节点</el-button>
-      <span class="promote-tip">提升后将脱离当前集群，本地数据将成为权威数据。</span>
+      <el-button :disabled="readOnly || syncing || promoting" @click="$emit('reregister')">{{ t('common.app.views.cluster.reregister') }}</el-button>
+      <el-button type="danger" plain :loading="promoting" :disabled="readOnly || syncing" @click="$emit('promote')">{{ t('common.app.views.cluster.promoteToMaster') }}</el-button>
+      <span class="promote-tip">{{ t('common.app.views.cluster.promoteTip') }}</span>
     </div>
   </el-card>
 </template>
 
 <script setup lang="ts">
 import { computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { formatSyncErrorDisplay } from '@/utils/syncErrorDisplay'
 import { Refresh } from '@element-plus/icons-vue'
 import type { ClusterStatus } from '@/types'
+
+// 面板文案走 i18n(批次 D cluster 域,common.app.views.cluster.*)。
+const { t } = useI18n()
 
 const props = defineProps<{
   readonly status: ClusterStatus

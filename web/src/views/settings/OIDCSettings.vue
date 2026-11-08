@@ -3,15 +3,15 @@
   <el-dialog :model-value="modelValue" width="min(720px, 92vw)" :close-on-click-modal="false" :close-on-press-escape="!saving" :show-close="!saving"
     destroy-on-close append-to-body class="oidc-dialog" @update:model-value="emit('update:modelValue', $event)">
     <template #header>
-      <DialogHeader :icon="Connection" title="登录认证（OIDC）"
-        :subtitle="loadFailed ? '配置读取失败' : configured ? (enabled ? '已启用——登录页展示认证服务入口' : '已配置未启用') : '配置企业认证服务,本地账号登录始终保留'" />
+      <DialogHeader :icon="Connection" :title="t('app.settings.oidc.title')"
+        :subtitle="loadFailed ? t('app.settings.oidc.subtitleLoadFailed') : configured ? (enabled ? t('app.settings.oidc.subtitleEnabled') : t('app.settings.oidc.subtitleDisabled')) : t('app.settings.oidc.subtitleUnconfigured')" />
     </template>
     <!-- 读取失败显性化（此前静默呈现上一轮残留状态或空白表单）-->
     <el-alert v-if="loadFailed" type="error" :closable="false" show-icon class="mb12"
-      title="OIDC 配置读取失败——当前按「未配置」展示，读取成功前无法保存；请关闭弹框后重试" />
-    <div v-else-if="!configured" class="info-note-bar"><span class="info-note-desc">通过企业认证服务（OIDC）登录——必需配置 3 项，端点自动发现；访问白名单可选；本地账号登录始终保留。</span></div>
+      :title="t('app.settings.oidc.loadFailBannerTitle')" />
+    <div v-else-if="!configured" class="info-note-bar"><span class="info-note-desc">{{ t('app.settings.oidc.unconfiguredNote') }}</span></div>
     <el-alert v-else-if="enabled" type="success" :closable="false" class="mb12"
-      :title="`OIDC 已启用（${displayName || 'OIDC'}）——登录页默认展示认证服务入口，本地账号可折叠进入。`" />
+      :title="t('app.settings.oidc.enabledBanner', { name: displayName || 'OIDC' })" />
 
     <!-- 只读（从节点/非管理员）时整表单禁用：footer 按钮禁用是双保险而非唯一面，
          与 FreeCertificates/BasicSettings 的整表单 :disabled 口径一致。
@@ -21,17 +21,17 @@
     <div class="oidc-step">
       <div class="oidc-step-badge">1</div>
       <div class="oidc-step-body">
-      <div class="step-title">服务地址</div>
-      <el-input v-model="form.issuer" placeholder="https://auth.example.com（企业认证服务地址）" clearable @blur="probeOnBlur">
+      <div class="step-title">{{ t('app.settings.oidc.steps.issuer') }}</div>
+      <el-input v-model="form.issuer" :placeholder="t('app.settings.oidc.steps.issuerPlaceholder')" clearable @blur="probeOnBlur">
         <template #suffix>
           <el-icon v-if="probe.ok" color="#67c23a"><CircleCheckFilled /></el-icon>
           <el-icon v-else-if="probe.checked && !probe.ok" color="#f56c6c"><CircleCloseFilled /></el-icon>
         </template>
       </el-input>
       <div v-if="probe.ok" class="probe-ok">
-        发现成功：{{ probe.providerName }} · 授权/令牌/JWKS 端点已自动获取
-        <template v-if="probe.credentialsChecked === true">｜凭证校验通过</template>
-        <template v-else-if="probe.credentialsChecked === false && (form.clientId || hasSecret)">｜该服务不支持离线凭证校验</template>
+        {{ t('app.settings.oidc.probe.ok', { name: probe.providerName }) }}
+        <template v-if="probe.credentialsChecked === true">{{ t('app.settings.oidc.probe.credChecked') }}</template>
+        <template v-else-if="probe.credentialsChecked === false && (form.clientId || hasSecret)">{{ t('app.settings.oidc.probe.credUnchecked') }}</template>
       </div>
       <div v-else-if="probe.checked && !probe.ok && probe.error" class="probe-err">{{ probe.error }}</div>
       </div>
@@ -41,7 +41,7 @@
     <div class="oidc-step">
       <div class="oidc-step-badge">2</div>
       <div class="oidc-step-body">
-      <div class="step-title">在认证服务后台创建应用，填入以下信息</div>
+      <div class="step-title">{{ t('app.settings.oidc.steps.createApp') }}</div>
       <div class="dialog-panel reg-info">
           <!-- 两行样式(2026-09-19 用户裁定):第一行=回调地址(节点名)标题,
                第二行=地址+复制按钮——防节点名过长时行内挤压换行错位 -->
@@ -49,7 +49,7 @@
             <div class="reg-label">{{ node.label }}</div>
             <div class="reg-value-row">
               <code class="reg-value">{{ node.url }}</code>
-              <el-button size="small" text type="primary" @click="copy(node.url)">复制</el-button>
+              <el-button size="small" text type="primary" @click="copy(node.url)">{{ t('app.settings.oidc.copyBtn') }}</el-button>
             </div>
           </div>
         </div>
@@ -60,22 +60,22 @@
     <div class="oidc-step">
       <div class="oidc-step-badge">3</div>
       <div class="oidc-step-body">
-      <div class="step-title">应用凭证</div>
+      <div class="step-title">{{ t('app.settings.oidc.steps.credentials') }}</div>
       <div class="cred-form">
         <div class="cred-row">
           <div class="cred-row__label">Client ID</div>
-          <div class="cred-row__field"><el-input v-model="form.clientId" placeholder="认证服务后台的 Client ID" clearable /></div>
+          <div class="cred-row__field"><el-input v-model="form.clientId" :placeholder="t('app.settings.oidc.clientIdPlaceholder')" clearable /></div>
         </div>
         <div class="cred-row">
           <div class="cred-row__label">Client Secret</div>
           <div class="cred-row__field">
             <el-input v-model="form.clientSecret" type="password" show-password
-              :placeholder="hasSecret ? '已保存（留空保持不变）' : '认证服务后台的 Client Secret'" />
+              :placeholder="hasSecret ? t('app.settings.oidc.clientSecretSavedPlaceholder') : t('app.settings.oidc.clientSecretPlaceholder')" />
           </div>
         </div>
         <div class="cred-row">
-          <div class="cred-row__label">登录按钮显示名</div>
-          <div class="cred-row__field"><el-input v-model="form.displayName" placeholder="选填，默认取服务域名" maxlength="30" /></div>
+          <div class="cred-row__label">{{ t('app.settings.oidc.displayNameLabel') }}</div>
+          <div class="cred-row__field"><el-input v-model="form.displayName" :placeholder="t('app.settings.oidc.displayNamePlaceholder')" maxlength="30" /></div>
         </div>
       </div>
       </div>
@@ -86,39 +86,39 @@
     <div class="oidc-step">
       <div class="oidc-step-badge">4</div>
       <div class="oidc-step-body">
-      <div class="step-title">访问白名单（选填）</div>
+      <div class="step-title">{{ t('app.settings.oidc.steps.allowList') }}</div>
       <div class="cred-form">
         <div class="cred-row">
-          <div class="cred-row__label">邮箱域</div>
+          <div class="cred-row__label">{{ t('app.settings.oidc.emailDomainsLabel') }}</div>
           <div class="cred-row__field">
-            <el-input v-model="form.allowedEmailDomains" placeholder="example.com, corp.example.org（逗号分隔；留空=不限制）" :maxlength="allowListMaxChars" clearable />
-            <div class="form-tip-line">仅这些邮箱域的用户可登录（写入侧自动去空白、转小写并去重）；邮箱还须由认证服务标记为已验证（email_verified=true），未验证的邮箱一律拒登；最多 {{ OIDC_ALLOW_LIST_MAX_ENTRIES }} 条、单条 ≤{{ OIDC_ALLOW_LIST_ENTRY_MAX_CHARS }} 个字符</div>
+            <el-input v-model="form.allowedEmailDomains" :placeholder="t('app.settings.oidc.emailDomainsPlaceholder')" :maxlength="allowListMaxChars" clearable />
+            <div class="form-tip-line">{{ t('app.settings.oidc.emailDomainsHint', { max: OIDC_ALLOW_LIST_MAX_ENTRIES, chars: OIDC_ALLOW_LIST_ENTRY_MAX_CHARS }) }}</div>
           </div>
         </div>
         <div class="cred-row">
-          <div class="cred-row__label">用户组</div>
+          <div class="cred-row__label">{{ t('app.settings.oidc.groupsLabel') }}</div>
           <div class="cred-row__field">
-            <el-input v-model="form.allowedGroups" placeholder="ops, Domain Admins（逗号分隔；留空=不限制）" :maxlength="allowListMaxChars" clearable />
-            <div class="form-tip-line">仅这些 IdP 用户组的成员可登录（组名大小写敏感；组名可含空格，仅按逗号/分号/换行分隔）；最多 {{ OIDC_ALLOW_LIST_MAX_ENTRIES }} 条、单条 ≤{{ OIDC_ALLOW_LIST_ENTRY_MAX_CHARS }} 个字符</div>
+            <el-input v-model="form.allowedGroups" :placeholder="t('app.settings.oidc.groupsPlaceholder')" :maxlength="allowListMaxChars" clearable />
+            <div class="form-tip-line">{{ t('app.settings.oidc.groupsHint', { max: OIDC_ALLOW_LIST_MAX_ENTRIES, chars: OIDC_ALLOW_LIST_ENTRY_MAX_CHARS }) }}</div>
           </div>
         </div>
       </div>
-      <div class="info-note-bar"><span class="info-note-desc">两项都填写时须同时满足；IdP 未返回 email/groups 声明时直接拒登（fail-visible），不会静默放行</span></div>
+      <div class="info-note-bar"><span class="info-note-desc">{{ t('app.settings.oidc.bothRequiredNote') }}</span></div>
       </div>
     </div>
     </el-form>
 
     <el-alert v-if="lastTest" :type="lastTest.ok ? 'success' : 'error'" :closable="false" class="mt8"
       :title="lastTest.ok
-          ? `连接正常：${lastTest.providerName ?? ''}${lastTest.credentialsChecked ? '（凭证校验通过）' : ''}`
-          : `连接失败：${lastTest.error ?? '未知错误'}`" />
+          ? t('app.settings.oidc.testOk', { name: lastTest.providerName ?? '', cred: lastTest.credentialsChecked ? t('app.settings.oidc.probe.credChecked') : '' })
+          : t('app.settings.oidc.testFail', { error: lastTest.error ?? t('app.settings.oidc.probe.unknownError') })" />
 
     <template #footer>
       <div class="dialog-footer">
-        <el-button :loading="testing" :disabled="isReadOnly || saving" @click="test">测试连接</el-button>
-        <el-button v-if="enabled" plain type="warning" :loading="saving" :disabled="isReadOnly" @click="toggleEnabled(false)">暂停使用</el-button>
-        <el-button v-if="configured" plain type="danger" :disabled="saving || isReadOnly" @click="remove">删除配置</el-button>
-        <el-button type="primary" :loading="saving" :disabled="isReadOnly" @click="save">{{ enabled ? '更新配置' : '保存并启用' }}</el-button>
+        <el-button :loading="testing" :disabled="isReadOnly || saving" @click="test">{{ t('app.settings.oidc.testBtn') }}</el-button>
+        <el-button v-if="enabled" plain type="warning" :loading="saving" :disabled="isReadOnly" @click="toggleEnabled(false)">{{ t('app.settings.oidc.pauseBtn') }}</el-button>
+        <el-button v-if="configured" plain type="danger" :disabled="saving || isReadOnly" @click="remove">{{ t('app.settings.oidc.deleteBtn') }}</el-button>
+        <el-button type="primary" :loading="saving" :disabled="isReadOnly" @click="save">{{ enabled ? t('app.settings.oidc.updateBtn') : t('app.settings.oidc.saveEnableBtn') }}</el-button>
       </div>
     </template>
   </el-dialog>
@@ -126,6 +126,7 @@
 
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { CircleCheckFilled, CircleCloseFilled, Connection } from '@element-plus/icons-vue'
 import DialogHeader from '@/components/DialogHeader.vue'
@@ -136,6 +137,8 @@ import { formatAllowList, parseDomainAllowList, parseGroupAllowList, validateAll
 import { createOidcProbeGuard, isOidcProbeFresh, oidcProbeKey } from '@/utils/oidcProbe'
 import { createLatestReadSession, runExclusive } from '@/utils/viewAsyncState'
 import type { OidcProbeToken, OidcProbeValues } from '@/utils/oidcProbe'
+
+const { t } = useI18n()
 
 const authStore = useAuthStore()
 const isReadOnly = computed(() => authStore.readOnlyReason !== null)
@@ -173,7 +176,7 @@ const callbackUrl = computed(() => `${window.location.origin}${CALLBACK_PATH}`)
 // 从节点清单(GET /cluster/nodes,主节点才返回;单机/失败=空,静默降级只显示本节点)
 const slaveOrigins = ref<{ label: string; url: string }[]>([])
 const callbackNodes = computed(() => [
-  { label: '回调地址（本节点）', url: callbackUrl.value },
+  { label: t('app.settings.oidc.callbackLocal'), url: callbackUrl.value },
   ...slaveOrigins.value,
 ])
 
@@ -209,7 +212,7 @@ const loadSlaves = async () => {
       .map(n => {
         const base = n.access_url?.trim() || `${n.protocol || 'http'}://${n.ip_address}:${n.port}`
         const trimmed = base.replace(/\/+$/, '')
-        return { label: `回调地址（${n.name || n.ip_address}）`, url: `${trimmed}${CALLBACK_PATH}` }
+        return { label: t('app.settings.oidc.callbackNode', { name: n.name || n.ip_address }), url: `${trimmed}${CALLBACK_PATH}` }
       })
   } catch { /* 单机部署或非主节点——只显示本节点 */ }
 }
@@ -293,8 +296,8 @@ const runProbe = async (): Promise<boolean> => {
 
 const doRunProbe = async (values: OidcProbeValues, token: OidcProbeToken): Promise<boolean> => {
   const issuer = values.issuer.trim()
-  if (!issuer) { probe.checked = true; probe.ok = false; probe.error = '请先填写服务地址'; return false }
-  if (!/^https?:\/\//.test(issuer)) { probe.checked = true; probe.ok = false; probe.error = '服务地址须为 http(s) URL'; return false }
+  if (!issuer) { probe.checked = true; probe.ok = false; probe.error = t('app.settings.oidc.probe.needIssuer'); return false }
+  if (!/^https?:\/\//.test(issuer)) { probe.checked = true; probe.ok = false; probe.error = t('app.settings.oidc.probe.issuerUrl'); return false }
   try {
     const body: Record<string, string> = { issuer }
     if (values.clientId.trim()) body.client_id = values.clientId.trim()
@@ -313,7 +316,7 @@ const doRunProbe = async (values: OidcProbeValues, token: OidcProbeToken): Promi
     probe.checked = true
     probe.key = token.key
     probe.ok = false
-    probe.error = err instanceof ApiRequestError && err.message ? err.message : '探测请求失败'
+    probe.error = err instanceof ApiRequestError && err.message ? err.message : t('app.settings.oidc.probe.requestFail')
     return false
   }
 }
@@ -337,22 +340,22 @@ const test = async () => {
   if (!probeGuard.isCurrent(token, currentProbeValues())) return
   lastTest.value = ok
     ? { ok: true, providerName: probe.providerName, credentialsChecked: probe.credentialsChecked }
-    : { ok: false, error: probe.error || '未知错误' }
+    : { ok: false, error: probe.error || t('app.settings.oidc.probe.unknownError') }
 }
 
 const save = async () => {
   // 函数级守卫 + 读取未成功时禁止保存（空表单会覆盖现有配置）
   if (isReadOnly.value || saving.value) return
-  if (loadFailed.value) { ElMessage.warning('OIDC 配置读取失败，请关闭弹框后重试'); return }
-  if (!form.issuer.trim()) { ElMessage.warning('请填写服务地址'); return }
-  if (!form.clientId.trim()) { ElMessage.warning('请填写 Client ID'); return }
-  if (!hasSecret.value && !form.clientSecret) { ElMessage.warning('请填写 Client Secret'); return }
+  if (loadFailed.value) { ElMessage.warning(t('app.settings.oidc.messages.loadFailRetry')); return }
+  if (!form.issuer.trim()) { ElMessage.warning(t('app.settings.oidc.messages.needIssuer')); return }
+  if (!form.clientId.trim()) { ElMessage.warning(t('app.settings.oidc.messages.needClientId')); return }
+  if (!hasSecret.value && !form.clientSecret) { ElMessage.warning(t('app.settings.oidc.messages.needClientSecret')); return }
   // 白名单预算本地先拦：保存门要先跑一次 discovery 探测，超限输入不该先花
   // 那几秒再吃后端 400（后端同样校验，这里只是把反馈提前）。
   const allowedEmailDomains = parseDomainAllowList(form.allowedEmailDomains)
   const allowedGroups = parseGroupAllowList(form.allowedGroups)
-  const allowListError = validateAllowList('允许的 email 域', allowedEmailDomains)
-    ?? validateAllowList('允许的组', allowedGroups)
+  const allowListError = validateAllowList(t('app.settings.oidc.allowEmailDomainsLabel'), allowedEmailDomains)
+    ?? validateAllowList(t('app.settings.oidc.allowGroupsLabel'), allowedGroups)
   if (allowListError) { ElMessage.warning(allowListError); return }
   // 在途门须先于探测与二次确认置位——discovery 常 0.2–2s，这段窗口内
   // 按钮 loading 缺席会让连点叠出两个确认框与两条 PUT。
@@ -361,19 +364,19 @@ const save = async () => {
     // 保存门:以「当前表单值」测试通过才允许保存——防止改了凭证未测就落库
     if (!isOidcProbeFresh(probe, currentProbeValues())) {
       const ok = await runProbe()
-      if (!ok) { ElMessage.warning('测试连接未通过，请先修正配置再保存'); return }
+      if (!ok) { ElMessage.warning(t('app.settings.oidc.messages.testBeforeSave')); return }
     }
     if (configured.value) {
       try {
         await ElMessageBox.confirm(
-          enabled.value ? '确认更新 OIDC 配置？' : '确认保存并启用 OIDC 登录？',
-          enabled.value ? '更新配置' : '保存并启用',
+          enabled.value ? t('app.settings.oidc.messages.confirmUpdateTitle') : t('app.settings.oidc.messages.confirmSaveEnableTitle'),
+          enabled.value ? t('app.settings.oidc.updateBtn') : t('app.settings.oidc.saveEnableBtn'),
           { type: 'warning' },
         )
       } catch { return }
     }
     if (!probe.ok || probe.key !== oidcProbeKey(currentProbeValues())) {
-      ElMessage.warning('配置已变更，请重新测试连接后再保存')
+      ElMessage.warning(t('app.settings.oidc.messages.changedRetest'))
       return
     }
     const payload: Record<string, unknown> = {
@@ -390,7 +393,7 @@ const save = async () => {
     await load()
     form.clientSecret = '' // 已保存,清空避免下次测试误带旧输入
     // load() 已回填最新启用态,按回填值提示(修复保存后恒走启用分支的死文案)
-    mfaAwareSuccess(enabled.value ? 'OIDC 已启用——登录页将出现认证服务入口' : '配置已更新')
+    mfaAwareSuccess(enabled.value ? t('app.settings.oidc.messages.enabledDone') : t('app.settings.oidc.messages.updatedDone'))
     emit('update:modelValue', false) // 成功即关闭;失败留在弹框由拦截器报错
   } catch { /* 拦截器已提示 */ } finally {
     saving.value = false
@@ -401,15 +404,15 @@ const toggleEnabled = async (on: boolean) => {
   if (isReadOnly.value || saving.value || loadFailed.value) return
   if (!on) {
     try {
-      await ElMessageBox.confirm('暂停后 OIDC 用户将无法通过该入口登录，本地账号登录不受影响。确认暂停？', '暂停 OIDC', {
-        type: 'warning', confirmButtonText: '确认暂停', cancelButtonText: '取消',
+      await ElMessageBox.confirm(t('app.settings.oidc.messages.pauseConfirm'), t('app.settings.oidc.messages.pauseTitle'), {
+        type: 'warning', confirmButtonText: t('app.settings.oidc.messages.confirmPause'), cancelButtonText: t('app.settings.oidc.actions.cancel'),
       })
     } catch { return }
   }
   saving.value = true
   try {
     await request.put('/settings/oidc', { enabled: on })
-    mfaAwareSuccess(on ? '已启用' : '已暂停（本地账号登录不受影响）')
+    mfaAwareSuccess(on ? t('app.settings.oidc.messages.enabled') : t('app.settings.oidc.messages.paused'))
     await load()
   } catch { /* 拦截器已提示 */ } finally {
     saving.value = false
@@ -420,9 +423,9 @@ const remove = async () => {
   if (isReadOnly.value || saving.value || loadFailed.value) return
   await runExclusive(() => saving.value, (locked) => { saving.value = locked }, async () => {
     try {
-      await ElMessageBox.confirm('删除后 OIDC 登录入口消失，已创建的 OIDC 用户将保留但无法登录。重新配置同一 issuer 可恢复原身份绑定；改用不同 issuer 会重新开户。确认删除？', '删除 OIDC 配置', { type: 'warning' })
+      await ElMessageBox.confirm(t('app.settings.oidc.messages.deleteConfirm'), t('app.settings.oidc.messages.deleteTitle'), { type: 'warning' })
     } catch { return }
-    let message = '已删除'
+    let message = t('app.settings.oidc.messages.deleted')
     try {
       const res = await request.delete<{ message?: string }>('/settings/oidc')
       message = res.message || message
@@ -439,10 +442,10 @@ const remove = async () => {
 const copy = async (text: string) => {
   // 复用 utils/copy 的 copyText（clipboard API + textarea 降级双通道，与全站一致）。
   if (await copyText(text)) {
-    ElMessage.success('已复制')
+    ElMessage.success(t('app.settings.oidc.messages.copied'))
     return
   }
-  ElMessage.error('复制失败，请手动复制')
+  ElMessage.error(t('app.settings.oidc.messages.copyFail'))
 }
 </script>
 

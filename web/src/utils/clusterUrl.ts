@@ -16,6 +16,8 @@
  * 被拒，而浏览器解析出的 username 为空）。
  */
 
+import { tSafe as t } from '../i18n/tSafe.ts'
+
 interface ClusterUrlValidationOptions {
   /** 错误文案前缀，如「主节点地址」/「访问地址」。 */
   readonly label: string
@@ -35,15 +37,15 @@ export const validateClusterUrl = (
     parsed = new URL(normalized)
   } catch {
     // new URL() 仅抛 TypeError；其余异常同样视为地址非法，走统一提示，不向外抛。
-    return `${options.label}格式不正确`
+    return t('common.app.clusterUrl.formatInvalid', { label: options.label })
   }
-  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return `${options.label}必须使用 HTTP 或 HTTPS`
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return t('common.app.clusterUrl.mustBeHttp', { label: options.label })
   // scheme 后的 authority 形态门（见文件头）：`//` 缺失或 authority 为空即
   // 后端必然 400 的形态，字段级直接拦下。
   const authority = /^[a-z][a-z0-9+.-]*:\/\/([^/?#]*)/i.exec(normalized)
-  if (!authority || !authority[1] || !parsed.host) return `${options.label}格式不正确`
-  if (parsed.username || parsed.password || authority[1].includes('@')) return `${options.label}不能包含用户名或密码`
-  if (parsed.search) return `${options.label}不能包含查询参数`
-  if (parsed.hash) return `${options.label}不能包含片段`
+  if (!authority || !authority[1] || !parsed.host) return t('common.app.clusterUrl.formatInvalid', { label: options.label })
+  if (parsed.username || parsed.password || authority[1].includes('@')) return t('common.app.clusterUrl.noCredentials', { label: options.label })
+  if (parsed.search) return t('common.app.clusterUrl.noQuery', { label: options.label })
+  if (parsed.hash) return t('common.app.clusterUrl.noFragment', { label: options.label })
   return null
 }

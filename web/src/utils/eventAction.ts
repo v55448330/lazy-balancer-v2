@@ -9,21 +9,35 @@
 
 // 色调联合只服务本文件的映射表与返回类型（全仓零外部消费——不导出，避免被
 // 误当作跨模块稳定契约而在视图里直接构造动作色）。
+import { tSafe as t } from '../i18n/tSafe.ts'
+
 type EventActionTone = 'danger' | 'warning'
 
-const EVENT_ACTION_LABELS: Readonly<Record<string, { readonly short: string; readonly full: string; readonly tone: EventActionTone }>> = {
-  blocked: { short: '拦截', full: '已拦截', tone: 'danger' },
-  logged: { short: '检测', full: '已记录', tone: 'warning' },
+// 映射表存词条键（文案在 locales views.eventAction 母本），调用点经 t() 现取——
+// 表值快照会把 en 译文钉死在进程首帧（certJobStatus 的模块级表口径与此不同：
+// 那边键集是封闭枚举且进程生命周期内 locale 不变）。两值枚举直接字面量分派，
+// 键保持调用点字面量形态（integrator 键扫描只认 t('common.app.views.*') 字面量）。
+const EVENT_ACTION_TONES: Readonly<Record<string, EventActionTone>> = {
+  blocked: 'danger',
+  logged: 'warning',
 }
 
 /** 短标签（列表/筛选等紧凑位）：拦截 / 检测。 */
-export const eventActionShort = (action: string | undefined | null): string =>
-  (action ? EVENT_ACTION_LABELS[action]?.short : '') || action || '—'
+export const eventActionShort = (action: string | undefined | null): string => {
+  if (!action) return '—'
+  if (action === 'blocked') return t('common.app.views.eventAction.blockedShort') || action
+  if (action === 'logged') return t('common.app.views.eventAction.loggedShort') || action
+  return action
+}
 
 /** 完整标签（详情/告警等叙述位）：已拦截 / 已记录。 */
-export const eventActionFull = (action: string | undefined | null): string =>
-  (action ? EVENT_ACTION_LABELS[action]?.full : '') || action || '—'
+export const eventActionFull = (action: string | undefined | null): string => {
+  if (!action) return '—'
+  if (action === 'blocked') return t('common.app.views.eventAction.blockedFull') || action
+  if (action === 'logged') return t('common.app.views.eventAction.loggedFull') || action
+  return action
+}
 
 /** el-tag 色调：拦截 danger、检测 warning；未知动作按检测色（未拦截语义）。 */
 export const eventActionTone = (action: string | undefined | null): EventActionTone =>
-  (action ? EVENT_ACTION_LABELS[action]?.tone : undefined) ?? 'warning'
+  (action ? EVENT_ACTION_TONES[action] : undefined) ?? 'warning'

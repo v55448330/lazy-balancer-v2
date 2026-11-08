@@ -2,13 +2,15 @@
 // 为其镜像）。SFC 内声明会让测试只能靠正则剥类型求值——本模块是可 import 的纯
 // 数据模块，前后端对表测试直接消费。
 import { hasOwn } from './hasOwn.ts'
+import { tSafe as t } from '../i18n/tSafe.ts'
 
-/** 备份分类键 → 展示标签；顺序即 UI 顺序。 */
+/** 备份分类键 → 展示标签；顺序即 UI 顺序。i18n：标签走 views.impexp 词条键（zh 直出
+ *  与原字面量逐字等价，跨栈对表测试不受影响）；确认文案三态同键化。 */
 export const BACKUP_SECTIONS = [
-  { key: 'users', label: '系统数据' },
-  { key: 'rules', label: '负载规则' },
-  { key: 'security', label: '安全防护' },
-  { key: 'cluster', label: '节点拓扑' },
+  { key: 'users', label: t('common.app.views.impexp.secUsers') },
+  { key: 'rules', label: t('common.app.views.impexp.secRules') },
+  { key: 'security', label: t('common.app.views.impexp.secSecurity') },
+  { key: 'cluster', label: t('common.app.views.impexp.secCluster') },
 ] as const
 
 /** legacy 分类键别名：升级前的 global_config/waf_files 读出即归一。 */
@@ -25,13 +27,13 @@ export const LEGACY_SECTION_ALIASES: Record<string, string> = { global_config: '
  */
 export const importConfirmMessage = (type: string | undefined, sections: readonly string[]): string => {
   if (type === 'v1') {
-    return '导入将覆盖全部负载均衡规则及其安全策略绑定；用户、API 密钥、证书任务与其它配置保持不变。此操作不可撤销。确认导入？'
+    return t('common.app.views.impexp.importConfirmV1')
   }
   if (sections.length === BACKUP_SECTIONS.length) {
-    return '导入将覆盖当前全部配置（规则、用户、API 密钥、证书任务、节点拓扑及全部凭证），此操作不可撤销。确认导入？'
+    return t('common.app.views.impexp.importConfirmFull')
   }
   const labels = sections.map((key) => BACKUP_SECTIONS.find((section) => section.key === key)?.label || key)
-  return `将仅覆盖所选分类：${labels.join('、')}，未选分类保持现状。此操作不可撤销。确认导入？`
+  return t('common.app.views.impexp.importConfirmPartial', { sections: labels.join(t('common.app.views.impexp.labelJoin')) })
 }
 
 /** 归一分类键（映射 legacy 别名、去重、保序、未知键透传）。 */

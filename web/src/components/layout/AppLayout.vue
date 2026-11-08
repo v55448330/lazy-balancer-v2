@@ -7,7 +7,7 @@
         <!-- 折叠入口的展开状态必须对读屏可见：折叠只由宽度表达，此前读屏无从得知
              （aria-expanded + aria-controls 指向被折叠的导航）。长按 Enter/Space
              经 activateOnce 去重，否则按系统重复率反复切换。 -->
-        <div class="logo-area" role="button" tabindex="0" aria-label="切换侧边栏" :aria-expanded="!effectiveCollapsed" aria-controls="app-sidebar-nav" @click="toggleSidebar" @keydown.enter.prevent="activateOnce($event, toggleSidebar)" @keydown.space.prevent="activateOnce($event, toggleSidebar)">
+        <div class="logo-area" role="button" tabindex="0" :aria-label="t('common.app.views.layout.toggleSidebarAria')" :aria-expanded="!effectiveCollapsed" aria-controls="app-sidebar-nav" @click="toggleSidebar" @keydown.enter.prevent="activateOnce($event, toggleSidebar)" @keydown.space.prevent="activateOnce($event, toggleSidebar)">
           <AppLogo :size="28" />
           <transition name="fade">
             <span v-if="!effectiveCollapsed" class="logo-text">
@@ -114,7 +114,7 @@
                   <span class="user-name-text">{{ menuDisplayName }}</span>
                   <!-- v2.3.0:来源标签——与用户列表列同款(warning/OIDC、info/本地);
                        flex 同行居中,缩放用字号而非 transform(避免基线漂移) -->
-                  <el-tag :type="isOIDCUser ? 'warning' : 'info'" size="small" effect="plain" class="user-source-tag">{{ isOIDCUser ? 'OIDC' : '本地' }}</el-tag>
+                  <el-tag :type="isOIDCUser ? 'warning' : 'info'" size="small" effect="plain" class="user-source-tag">{{ isOIDCUser ? 'OIDC' : t('common.app.views.layout.userSourceLocal') }}</el-tag>
                 </div>
                 <div v-if="hasCustomDisplayName" class="user-role">{{ authStore.user?.username || '-' }}</div>
               </div>
@@ -122,8 +122,8 @@
           </div>
           <template #dropdown>
             <el-dropdown-menu>
-              <el-dropdown-item command="profile">个人资料</el-dropdown-item>
-              <el-dropdown-item command="logout" divided>退出登录</el-dropdown-item>
+              <el-dropdown-item command="profile">{{ t('common.app.views.layout.profileMenuItem') }}</el-dropdown-item>
+              <el-dropdown-item command="logout" divided>{{ t('common.app.views.layout.logoutMenuItem') }}</el-dropdown-item>
             </el-dropdown-menu>
           </template>
         </el-dropdown>
@@ -135,16 +135,16 @@
         <div class="header-left">
           <el-breadcrumb separator="/">
             <el-breadcrumb-item>{{ appName }}</el-breadcrumb-item>
-            <el-breadcrumb-item>{{ hasOwn(pageTitle, currentPage) ? pageTitle[currentPage] : '仪表盘' }}</el-breadcrumb-item>
+            <el-breadcrumb-item>{{ hasOwn(pageTitle, currentPage) ? pageTitle[currentPage] : t('common.app.views.layout.navDashboard') }}</el-breadcrumb-item>
           </el-breadcrumb>
         </div>
         <div class="header-right">
           <el-tooltip v-if="authStore.readOnlyReason" :content="authStore.readOnlyMessage" placement="bottom">
-            <el-tag type="warning" size="small" effect="plain" class="readonly-tag">只读</el-tag>
+            <el-tag type="warning" size="small" effect="plain" class="readonly-tag">{{ t('common.app.views.layout.readOnlyTag') }}</el-tag>
           </el-tooltip>
           <div class="node-tag" :class="authStore.nodeMode">
             <el-icon><Connection /></el-icon>
-            <span>{{ authStore.nodeMode === 'master' ? '主节点' : authStore.nodeMode === 'slave' ? '从节点' : '加载中' }}</span>
+            <span>{{ authStore.nodeMode === 'master' ? t('common.app.views.layout.nodeMaster') : authStore.nodeMode === 'slave' ? t('common.app.views.layout.nodeSlave') : t('common.app.views.layout.nodeLoading') }}</span>
           </div>
         </div>
       </el-header>
@@ -161,8 +161,8 @@
       >
         <template #title>
           <div class="polling-error-title">
-            <span>Caddy 服务未运行：站点当前无法提供服务（面板操作不受影响）</span>
-            <el-button v-if="authStore.readOnlyReason === null" link type="danger" :loading="restarting" @click="handleRestartForDrift">重启服务</el-button>
+            <span>{{ t('common.app.views.layout.caddyStoppedBanner') }}</span>
+            <el-button v-if="authStore.readOnlyReason === null" link type="danger" :loading="restarting" @click="handleRestartForDrift">{{ t('common.app.views.layout.restartServiceBtn') }}</el-button>
           </div>
         </template>
       </el-alert>
@@ -176,12 +176,12 @@
       >
         <template #title>
           <div class="polling-error-title">
-            <span class="drift-text">运行配置与规则数据不一致：{{ configDrift }}</span>
-            <el-button v-if="authStore.readOnlyReason === null" link type="danger" :loading="restarting" @click="handleRestartForDrift">重启服务恢复</el-button>
+            <span class="drift-text">{{ t('common.app.views.layout.driftTitle', { detail: configDrift }) }}</span>
+            <el-button v-if="authStore.readOnlyReason === null" link type="danger" :loading="restarting" @click="handleRestartForDrift">{{ t('common.app.views.layout.restartRestoreBtn') }}</el-button>
           </div>
           <!-- 高度稳定（2026-09-25：安全总览偶发 43px 塌缩实证）——Since 未回填的瞬时窗口
                meta 行不卸载，横幅恒两行，杜绝跨页/轮询周期内的高度跳变 -->
-          <div class="polling-error-meta error-banner-meta">{{ configDriftSince ? `检测于 ${configDriftSince} UTC（重启服务后按数据库重新应用全部规则配置）` : '检测中…（重启服务后按数据库重新应用全部规则配置）' }}</div>
+          <div class="polling-error-meta error-banner-meta">{{ configDriftSince ? t('common.app.views.layout.driftDetectedAt', { time: configDriftSince }) : t('common.app.views.layout.driftDetecting') }}</div>
         </template>
       </el-alert>
 
@@ -197,7 +197,7 @@
       >
         <template #title>
           <span>{{ applyErrorBanner }}</span>
-          <div v-if="backgroundApplyErrorBanner" class="polling-error-meta error-banner-meta">另有后台重载失败：{{ backgroundApplyErrorBanner }}</div>
+          <div v-if="backgroundApplyErrorBanner" class="polling-error-meta error-banner-meta">{{ t('common.app.views.layout.bgReloadFailedPrefix', { detail: backgroundApplyErrorBanner }) }}</div>
         </template>
       </el-alert>
 
@@ -230,7 +230,9 @@ import { createVisibilityIntervals } from '@/composables/useVisibilityIntervals'
 import { SETTINGS_BREADCRUMB_PARENT, SETTINGS_TAB_IDS, SETTINGS_TAB_TITLES } from '@/utils/settingsPages'
 import { activateOnce } from '@/utils/keyboardActivate'
 import { hasOwn } from '@/utils/hasOwn'
+import { useI18n } from 'vue-i18n'
 
+const { t } = useI18n()
 const authStore = useAuthStore()
 // 宽屏用户折叠记忆与窄屏显式展开分开持有：窄屏强制折叠只是默认态，折叠入口
 // 必须真的有可观察效果（此前点击/回车/空格只翻转 collapsed，窄屏下完全无效）。
@@ -264,7 +266,7 @@ const currentPage = computed(() => authStore.currentPage)
 // 自助资料编辑；非管理员的自我显示名/改密是自助能力而非管理员操作，不随此收紧
 //（后端恢复后仍按自身身份正确鉴权）。
 const isOIDCUser = computed(() => authStore.user?.auth_provider === 'oidc')
-const menuDisplayName = computed(() => authStore.user?.display_name || authStore.user?.username || '用户')
+const menuDisplayName = computed(() => authStore.user?.display_name || authStore.user?.username || t('common.app.views.layout.defaultUserName'))
 const hasCustomDisplayName = computed(() => {
   const displayName = authStore.user?.display_name || ''
   return displayName !== '' && displayName !== authStore.user?.username
@@ -274,18 +276,18 @@ const hasCustomDisplayName = computed(() => {
 // 此前侧栏 menu 与 pageTitle 各持一份页面名字面量，改名必漏一侧（菜单与
 // 面包屑不一致）；现在模板与面包屑都从本表取值，settings 段继续复用
 // utils/settingsPages 的标题单源。
-const SECURITY_PARENT = '安全防护'
+const SECURITY_PARENT = t('common.app.views.layout.securityParent')
 const NAV_ITEMS: ReadonlyArray<{ id: string; label: string; parent?: string }> = [
-  { id: 'dashboard', label: '仪表盘' },
-  { id: 'rules', label: '负载均衡' },
-  { id: 'security-overview', label: '安全总览', parent: SECURITY_PARENT },
-  { id: 'security-policies', label: '安全策略', parent: SECURITY_PARENT },
-  { id: 'security-rules', label: '规则集', parent: SECURITY_PARENT },
-  { id: 'security-block-pages', label: '拦截页面', parent: SECURITY_PARENT },
-  { id: 'security-events', label: '事件日志', parent: SECURITY_PARENT },
-  { id: 'caddy', label: '配置预览' },
-  { id: 'users', label: '用户认证', parent: SETTINGS_BREADCRUMB_PARENT },
-  { id: 'audit-log', label: '操作日志' },
+  { id: 'dashboard', label: t('common.app.views.layout.navDashboard') },
+  { id: 'rules', label: t('common.app.views.layout.navRules') },
+  { id: 'security-overview', label: t('common.app.views.layout.navSecurityOverview'), parent: SECURITY_PARENT },
+  { id: 'security-policies', label: t('common.app.views.layout.navSecurityPolicies'), parent: SECURITY_PARENT },
+  { id: 'security-rules', label: t('common.app.views.layout.navSecurityRules'), parent: SECURITY_PARENT },
+  { id: 'security-block-pages', label: t('common.app.views.layout.navSecurityBlockPages'), parent: SECURITY_PARENT },
+  { id: 'security-events', label: t('common.app.views.layout.navSecurityEvents'), parent: SECURITY_PARENT },
+  { id: 'caddy', label: t('common.app.views.layout.navCaddy') },
+  { id: 'users', label: t('common.app.views.layout.navUsers'), parent: SETTINGS_BREADCRUMB_PARENT },
+  { id: 'audit-log', label: t('common.app.views.layout.navAuditLog') },
 ]
 
 // 系统设置五个分页标题与 Settings.vue 页头同源（utils/settingsPages）——原两处
@@ -351,7 +353,7 @@ const fetchDriftStatus = async () => {
   try {
     const res = await request.get('/caddy/status', { silent: true })
     const drifted = res.data?.config_consistent === 'false' && authStore.nodeMode === 'master'
-    configDrift.value = drifted ? (res.data?.config_drift || '规则路由与运行配置不一致') : ''
+    configDrift.value = drifted ? (res.data?.config_drift || t('common.app.views.layout.driftFallback')) : ''
     configDriftSince.value = drifted ? (res.data?.config_drift_since || '') : ''
     const applyErr = res.data?.apply_error || ''
     const bgErr = res.data?.background_apply_error || ''
@@ -371,10 +373,10 @@ const handleRestartForDrift = async () => {
   restarting.value = true
   // 确认/重启/就绪轮询流程单源（utils/restart），与设置页同一实现
   const result = await restartServiceWithFeedback({
-    confirmMessage: '将重启服务以重新应用全部规则配置，期间服务短暂不可用。确认重启？',
-    confirmTitle: '重启服务恢复',
-    confirmButtonText: '确认重启',
-    successMessage: '服务正在重启，就绪后自动刷新页面',
+    confirmMessage: t('common.app.views.layout.restartConfirmMessage'),
+    confirmTitle: t('common.app.views.layout.restartConfirmTitle'),
+    confirmButtonText: t('common.app.views.layout.restartConfirmBtn'),
+    successMessage: t('common.app.views.layout.restartSuccessMessage'),
     isDisposed: () => disposed,
   })
   if (result !== 'reloaded') restarting.value = false

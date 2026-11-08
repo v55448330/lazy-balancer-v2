@@ -11,6 +11,8 @@
  * 路径的结果弹框同布局）；纯函数，便于 node 测试直接断言渲染结果。
  */
 
+import { tSafe as t } from '../i18n/tSafe.ts'
+
 /** 失败处置的展示内容。 */
 interface ImportFailureReport {
   /** 主文案：后端 message（缺省时用调用方兜底文案）。 */
@@ -54,7 +56,7 @@ export const importFailureReport = (error: unknown, fallbackMessage: string): Im
 export const importFailureLines = (report: ImportFailureReport): string[] => [
   report.message,
   ...(report.conflictCount > 0
-    ? [`若导入成功将禁用冲突规则：${report.conflictCount} 条（本次失败，实际状态以规则页为准）`]
+    ? [t('common.app.importFailure.conflictDisableNote', { count: report.conflictCount })]
     : []),
   ...report.warnings,
 ]

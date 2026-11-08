@@ -4,9 +4,9 @@
       <div class="header-left">
         <h2 class="page-title">
           <el-icon class="title-icon"><Notebook /></el-icon>
-          规则集
+          {{ t('common.app.views.secRules.page.title') }}
         </h2>
-        <p class="page-desc">管理 WAF 规则来源：OWASP CRS 规则库、IP 地理库、威胁情报库、爬虫地址库、自定义规则与 IP 地址列表</p>
+        <p class="page-desc">{{ t('common.app.views.secRules.page.desc') }}</p>
       </div>
     </div>
 
@@ -14,18 +14,18 @@
       <template #header>
         <div class="crs-header">
           <div class="crs-header-title">
-            <span style="font-weight: 500;">规则库</span>
+            <span style="font-weight: 500;">{{ t('common.app.views.secRules.lib.cardTitle') }}</span>
           </div>
           <!-- 库健康标签组（2026-09-24 用户裁定）：逐库彩色标签（正常=success/
                异常=danger），缺库时追加红色警示后缀；替换原统计文本摘要 -->
           <div class="lib-summary lib-summary-tags">
             <el-tag v-for="t in libHealthTags" :key="t.label" :type="t.type" size="small" effect="light" disable-transitions class="lib-health-tag">{{ t.label }}</el-tag>
-            <span v-if="libSummaryWarn" class="lib-summary-warn-text">所有安全规则已暂停生效，请立即检查规则库</span>
+            <span v-if="libSummaryWarn" class="lib-summary-warn-text">{{ t('common.app.views.secRules.lib.allPausedWarn') }}</span>
           </div>
         </div>
       </template>
       <el-table :data="libRows" size="small" class="lib-table">
-        <el-table-column label="名称" min-width="340">
+        <el-table-column :label="t('common.app.views.secRules.common.name')" min-width="340">
           <template #default="{ row }">
             <div class="lib-name">
               <span class="lib-icon" :class="row.iconClass"><el-icon :size="15"><component :is="row.icon" /></el-icon></span>
@@ -36,15 +36,15 @@
             </div>
           </template>
         </el-table-column>
-        <el-table-column label="版本" width="120">
+        <el-table-column :label="t('common.app.views.secRules.lib.colVersion')" width="120">
           <template #default="{ row }"><span class="lib-version">{{ row.version }}</span></template>
         </el-table-column>
         <!-- 本列对 CRS/威胁/爬虫是条目数，对 IP 地理库是库文件大小——
              列名必须两义都覆盖，否则字节数会被读成条目数 -->
-        <el-table-column label="数量 / 大小" width="120" align="right">
+        <el-table-column :label="t('common.app.views.secRules.lib.colCountSize')" width="120" align="right">
           <template #default="{ row }"><span class="lib-count">{{ row.count }}</span></template>
         </el-table-column>
-        <el-table-column label="状态" width="110">
+        <el-table-column :label="t('common.app.views.secRules.common.status')" width="110">
           <template #default="{ row }">
             <!-- 失败 hover 长文案已撤（2026-09-25 用户裁定）：用户直接看更新日志，
                  状态标签自身已表达失败态 -->
@@ -52,97 +52,97 @@
             <span v-else class="text-secondary">—</span>
           </template>
         </el-table-column>
-        <el-table-column label="自动更新" width="90" align="center">
+        <el-table-column :label="t('common.app.views.secRules.lib.colAutoUpdate')" width="90" align="center">
           <template #default="{ row }">
             <!-- 库状态读取失败/首次响应未落地时开关态不可信——显示「—」并禁用，
                  不得按本地默认 true 冒充「已开启」 -->
-            <span v-if="!row.autoUpdateKnown" class="text-secondary" title="库状态未知（读取失败），开关态不可信">—</span>
+            <span v-if="!row.autoUpdateKnown" class="text-secondary" :title="t('common.app.views.secRules.lib.autoUpdateUnknownTip')">—</span>
             <el-switch v-else :model-value="row.autoUpdate" :loading="autoUpdateSaving.has(row.key)" :disabled="isReadOnly || isSlaveNode || autoUpdateSaving.has(row.key)" @change="(v: string | number | boolean) => toggleLibAutoUpdate(row as LibRow, v === true)" />
           </template>
         </el-table-column>
-        <el-table-column v-if="!isSlaveNode" label="上次更新" width="150">
+        <el-table-column v-if="!isSlaveNode" :label="t('common.app.views.secRules.lib.colLastUpdate')" width="150">
           <template #default="{ row }">{{ row.lastChecked }}</template>
         </el-table-column>
-        <el-table-column v-if="!isSlaveNode" label="下次更新" width="150">
+        <el-table-column v-if="!isSlaveNode" :label="t('common.app.views.secRules.lib.colNextUpdate')" width="150">
           <template #default="{ row }">{{ row.nextUpdate }}</template>
         </el-table-column>
-        <el-table-column label="操作" width="170" align="center">
+        <el-table-column :label="t('common.app.views.secRules.common.actions')" width="170" align="center">
           <template #default="{ row }">
-            <el-button size="small" link type="primary" @click="openLibDialog(row as LibRow)">更新详情</el-button>
+            <el-button size="small" link type="primary" @click="openLibDialog(row as LibRow)">{{ t('common.app.views.secRules.lib.updateDetail') }}</el-button>
           </template>
         </el-table-column>
       </el-table>
       <div v-if="isSlaveNode" style="margin-top: 8px;">
-        <el-tag type="info" size="small" effect="plain">跟随主节点同步</el-tag>
+        <el-tag type="info" size="small" effect="plain">{{ t('common.app.views.secRules.lib.followSlave') }}</el-tag>
       </div>
     </el-card>
 
     <el-alert v-if="rulesLoadError" type="error" :closable="false" show-icon class="polling-error-alert error-banner">
       <template #title>
         <div class="polling-error-title">
-          <span>{{ rules.length === 0 ? 'CRS 规则文件加载失败，「暂无规则文件」不代表真实状态' : 'CRS 规则文件加载失败：当前显示的是上次成功结果（与分页/搜索条件不符）' }}</span>
-          <el-button link type="danger" :loading="loadingRules" @click="fetchRules">立即重试</el-button>
+          <span>{{ rules.length === 0 ? t('common.app.views.secRules.rulesTab.crsLoadFailEmpty') : t('common.app.views.secRules.rulesTab.crsLoadFailStale') }}</span>
+          <el-button link type="danger" :loading="loadingRules" @click="fetchRules">{{ t('common.app.views.secRules.common.retryNow') }}</el-button>
         </div>
       </template>
     </el-alert>
 
     <el-card>
       <el-tabs v-model="activeTab">
-        <el-tab-pane label="CRS 规则" name="rules">
+        <el-tab-pane :label="t('common.app.views.secRules.rulesTab.tabCrs')" name="rules">
           <div class="table-toolbar">
-            <el-input v-model="searchQuery" placeholder="搜索规则文件名或分类" clearable :prefix-icon="Search" class="search-input" @clear="searchRules" @keyup.enter="searchRules" />
+            <el-input v-model="searchQuery" :placeholder="t('common.app.views.secRules.rulesTab.searchPlaceholder')" clearable :prefix-icon="Search" class="search-input" @clear="searchRules" @keyup.enter="searchRules" />
           </div>
           <el-table :data="rules" v-loading="loadingRules" stripe :header-cell-style="{ background: '#f9fafb' }" empty-text="" @row-click="openRuleContent" style="cursor: pointer">
-            <template #empty><el-empty :description="rulesLoadError ? '加载失败，请重试' : '暂无规则文件'" :image-size="60" /></template>
-            <el-table-column prop="filename" label="文件名" min-width="320" show-overflow-tooltip />
-            <el-table-column prop="category" label="分类" width="160">
+            <template #empty><el-empty :description="rulesLoadError ? t('common.app.views.secRules.rulesTab.loadFailRetry') : t('common.app.views.secRules.rulesTab.emptyRules')" :image-size="60" /></template>
+            <el-table-column prop="filename" :label="t('common.app.views.secRules.rulesTab.colFilename')" min-width="320" show-overflow-tooltip />
+            <el-table-column prop="category" :label="t('common.app.views.secRules.common.category')" width="160">
               <template #default="{ row }"><el-tag size="small" effect="plain" type="info">{{ row.category }}</el-tag></template>
             </el-table-column>
-            <el-table-column label="大小" width="100" align="right">
+            <el-table-column :label="t('common.app.views.secRules.rulesTab.colSize')" width="100" align="right">
               <template #default="{ row }">{{ formatSize(row.size) }}</template>
             </el-table-column>
-            <el-table-column label="更新时间" width="170" align="center">
+            <el-table-column :label="t('common.app.views.secRules.common.updateTime')" width="170" align="center">
               <template #default="{ row }">{{ formatDate(row.updated_at) || '-' }}</template>
             </el-table-column>
             <el-table-column label="" width="80" align="center">
-              <template #default><el-button link type="primary" size="small">查看</el-button></template>
+              <template #default><el-button link type="primary" size="small">{{ t('common.app.views.secRules.common.view') }}</el-button></template>
             </el-table-column>
           </el-table>
           <div class="rules-pagination">
             <el-pagination v-model:current-page="page" v-model:page-size="pageSize" :page-sizes="[10, 20, 50]" :total="total" layout="total, sizes, prev, pager, next" @current-change="fetchRules" @size-change="onRulesSizeChange" />
           </div>
         </el-tab-pane>
-      <el-tab-pane label="自定义规则" name="custom">
+      <el-tab-pane :label="t('common.app.views.secRules.customTab.tabCustom')" name="custom">
             <el-alert v-if="customRulesError || usersError" type="error" :closable="false" show-icon class="polling-error-alert error-banner">
               <template #title>
                 <div class="polling-error-title">
-                  <span>{{ customRulesError ? '自定义规则加载失败：表格为空不代表没有规则' : '用户名册加载失败：更新者列显示为 -（规则数据不受影响）' }}</span>
-                  <el-button link type="danger" :loading="loadingCustom" @click="retryCustomRules">立即重试</el-button>
+                  <span>{{ customRulesError ? t('common.app.views.secRules.customTab.customLoadFailEmpty') : t('common.app.views.secRules.customTab.rosterLoadFailNote') }}</span>
+                  <el-button link type="danger" :loading="loadingCustom" @click="retryCustomRules">{{ t('common.app.views.secRules.common.retryNow') }}</el-button>
                 </div>
               </template>
             </el-alert>
             <div class="table-toolbar">
-              <el-button v-if="!isReadOnly" type="primary" :icon="Plus" @click="openRuleDialog()">新建规则</el-button>
+              <el-button v-if="!isReadOnly" type="primary" :icon="Plus" @click="openRuleDialog()">{{ t('common.app.views.secRules.customTab.newRule') }}</el-button>
             </div>
             <el-table :data="customRulesPaged" v-loading="loadingCustom" stripe :header-cell-style="{ background: '#f9fafb' }" empty-text="">
             <template #empty>
-              <el-empty v-if="!customRulesError" description="暂无自定义规则" :image-size="60" />
-              <span v-else class="text-secondary">加载失败</span>
+              <el-empty v-if="!customRulesError" :description="t('common.app.views.secRules.customTab.emptyCustomRules')" :image-size="60" />
+              <span v-else class="text-secondary">{{ t('common.app.views.secRules.common.loadFailed') }}</span>
             </template>
-            <el-table-column prop="name" label="规则名称" min-width="150">
+            <el-table-column prop="name" :label="t('common.app.views.secRules.customTab.colRuleName')" min-width="150">
               <template #default="{ row }">
                 <AccessibleLink type="primary" @click="openRuleDialog(row as CustomRule)">{{ row.name }}</AccessibleLink>
               </template>
             </el-table-column>
-            <el-table-column prop="description" label="描述" min-width="200" show-overflow-tooltip />
+            <el-table-column prop="description" :label="t('common.app.views.secRules.common.description')" min-width="200" show-overflow-tooltip />
             <!-- 条件关系（AND/OR）独立成窄列：与条件内容同列时标签挤占文本宽度，
                  长正则被压成折行/错位（2026-10-27 用户裁定）。 -->
-            <el-table-column label="条件关系" width="140" align="center">
+            <el-table-column :label="t('common.app.views.secRules.customTab.colConditionLogic')" width="140" align="center">
               <template #default="{ row }">
-                <el-tag size="small" effect="light" :type="row.condition_logic === 'or' ? 'warning' : 'info'">{{ row.condition_logic === 'or' ? '任一满足（OR）' : '同时满足（AND）' }}</el-tag>
+                <el-tag size="small" effect="light" :type="row.condition_logic === 'or' ? 'warning' : 'info'">{{ row.condition_logic === 'or' ? t('common.app.views.secRules.customTab.condOr') : t('common.app.views.secRules.customTab.condAnd') }}</el-tag>
               </template>
             </el-table-column>
-            <el-table-column label="条件" min-width="320" class-name="rule-cond-cell">
+            <el-table-column :label="t('common.app.views.secRules.customTab.colConditions')" min-width="320" class-name="rule-cond-cell">
               <template #default="{ row }">
                 <!-- 逐条单行 chip：长正则省略 + tooltip 全文，多条按行排布不挤压
                      （样式在 styles/main.css 的 .cond-chip-list/.cond-chip） -->
@@ -153,28 +153,28 @@
                 </div>
               </template>
             </el-table-column>
-            <el-table-column label="动作" width="80" align="center">
+            <el-table-column :label="t('common.app.views.secRules.customTab.colAction')" width="80" align="center">
               <template #default="{ row }">
                 <!-- 三态映射与编辑器（拦截/仅记录/放行计分）语义对齐——
                      pass 会累加异常分参与 949 评分拦截，与 log（仅记录）不可混示 -->
                 <el-tag :type="customActionView(row.action).type" size="small" effect="light">{{ customActionView(row.action).label }}</el-tag>
               </template>
             </el-table-column>
-            <el-table-column label="状态" width="80" align="center">
+            <el-table-column :label="t('common.app.views.secRules.common.status')" width="80" align="center">
               <template #default="{ row }">
-                <el-tag :type="row.enabled ? 'success' : 'info'" size="small" effect="light">{{ row.enabled ? '启用' : '禁用' }}</el-tag>
+                <el-tag :type="row.enabled ? 'success' : 'info'" size="small" effect="light">{{ row.enabled ? t('common.app.views.secRules.common.enabled') : t('common.app.views.secRules.common.disabled') }}</el-tag>
               </template>
             </el-table-column>
-            <el-table-column label="更新时间" width="170" align="center">
+            <el-table-column :label="t('common.app.views.secRules.common.updateTime')" width="170" align="center">
               <template #default="{ row }">{{ formatDate(row.updated_at) || '-' }}</template>
             </el-table-column>
-            <el-table-column label="更新者" width="100" align="center">
+            <el-table-column :label="t('common.app.views.secRules.common.updater')" width="100" align="center">
               <template #default="{ row }">{{ getUpdaterName(row.updated_by) }}</template>
             </el-table-column>
-            <el-table-column label="操作" width="140" fixed="right">
+            <el-table-column :label="t('common.app.views.secRules.common.actions')" width="140" fixed="right">
               <template #default="{ row }">
-                <el-button size="small" link type="primary" @click="openRuleDialog(row as CustomRule)">{{ isReadOnly ? '查看' : '编辑' }}</el-button>
-                <el-button size="small" link type="danger" :disabled="isReadOnly" @click="deleteCustomRule(row as CustomRule)">删除</el-button>
+                <el-button size="small" link type="primary" @click="openRuleDialog(row as CustomRule)">{{ isReadOnly ? t('common.app.views.secRules.common.view') : t('common.app.views.secRules.common.edit') }}</el-button>
+                <el-button size="small" link type="danger" :disabled="isReadOnly" @click="deleteCustomRule(row as CustomRule)">{{ t('common.app.views.secRules.common.delete') }}</el-button>
             </template>
             </el-table-column>
           </el-table>
@@ -182,67 +182,67 @@
             <el-pagination v-model:current-page="customPage" v-model:page-size="customPageSize" :total="customRules.length" layout="total, sizes, prev, pager, next" @size-change="customPage = 1" />
           </div>
         </el-tab-pane>
-        <el-tab-pane label="IP 地址列表" name="ip-lists">
+        <el-tab-pane :label="t('common.app.views.secRules.ipTab.tabIpLists')" name="ip-lists">
             <el-alert v-if="ipListsError" type="error" :closable="false" show-icon class="polling-error-alert error-banner">
               <template #title>
                 <div class="polling-error-title">
-                  <span>IP 地址列表加载失败：表格为空不代表没有名单</span>
-                  <el-button link type="danger" :loading="loadingIpLists" @click="retryIpLists">立即重试</el-button>
+                  <span>{{ t('common.app.views.secRules.ipTab.ipListsLoadFail') }}</span>
+                  <el-button link type="danger" :loading="loadingIpLists" @click="retryIpLists">{{ t('common.app.views.secRules.common.retryNow') }}</el-button>
                 </div>
               </template>
             </el-alert>
           <div class="table-toolbar ip-list-toolbar">
-            <el-input v-model="ipListSearch" placeholder="搜索名称或分类" clearable :prefix-icon="Search" class="search-input" />
-            <el-button v-if="!isReadOnly" type="primary" :icon="Plus" @click="openIpListDialog()">新建列表</el-button>
+            <el-input v-model="ipListSearch" :placeholder="t('common.app.views.secRules.ipTab.ipSearchPlaceholder')" clearable :prefix-icon="Search" class="search-input" />
+            <el-button v-if="!isReadOnly" type="primary" :icon="Plus" @click="openIpListDialog()">{{ t('common.app.views.secRules.ipTab.newList') }}</el-button>
           </div>
           <el-table :data="ipListsPaged" v-loading="loadingIpLists" stripe :header-cell-style="{ background: '#f9fafb' }" empty-text="">
             <template #empty>
-              <el-empty v-if="!ipListsError" description="暂无 IP 地址列表" :image-size="60" />
-              <span v-else class="text-secondary">加载失败</span>
+              <el-empty v-if="!ipListsError" :description="t('common.app.views.secRules.ipTab.emptyIpLists')" :image-size="60" />
+              <span v-else class="text-secondary">{{ t('common.app.views.secRules.common.loadFailed') }}</span>
             </template>
-            <el-table-column prop="name" label="名称" min-width="150">
+            <el-table-column prop="name" :label="t('common.app.views.secRules.common.name')" min-width="150">
               <template #default="{ row }">
                 <AccessibleLink type="primary" @click="openIpListDialog(row as IPListRow)">{{ row.name }}</AccessibleLink>
-                <el-tag v-if="row.preset_autoban" size="small" type="danger" effect="plain" style="margin-left: 6px;">自动封禁</el-tag>
-                <el-tag v-else-if="row.system" size="small" type="warning" effect="plain" style="margin-left: 6px;">内置</el-tag>
+                <el-tag v-if="row.preset_autoban" size="small" type="danger" effect="plain" style="margin-left: 6px;">{{ t('common.app.views.secRules.ipTab.autoBanTag') }}</el-tag>
+                <el-tag v-else-if="row.system" size="small" type="warning" effect="plain" style="margin-left: 6px;">{{ t('common.app.views.secRules.ipTab.builtinTag') }}</el-tag>
               </template>
             </el-table-column>
-            <el-table-column label="分类" width="120" align="center">
+            <el-table-column :label="t('common.app.views.secRules.common.category')" width="120" align="center">
               <template #default="{ row }">
                 <el-tag v-if="row.category" size="small" effect="plain" type="info">{{ row.category }}</el-tag>
                 <template v-else>—</template>
               </template>
             </el-table-column>
-            <el-table-column label="条目数" width="100" align="center">
+            <el-table-column :label="t('common.app.views.secRules.common.entryCount')" width="100" align="center">
               <template #default="{ row }">
                 {{ row.entry_count }}
-                <el-tooltip v-if="row.preset_autoban" content="含已到期条目：到期即自动解封，此处为名单总条数（含待清理的到期项）" placement="top">
+                <el-tooltip v-if="row.preset_autoban" :content="t('common.app.views.secRules.ipTab.presetExpiryTip')" placement="top">
                   <el-icon class="count-tip"><InfoFilled /></el-icon>
                 </el-tooltip>
               </template>
             </el-table-column>
-            <el-table-column label="引用" width="90" align="center">
+            <el-table-column :label="t('common.app.views.secRules.ipTab.colRef')" width="90" align="center">
               <template #default="{ row }">
                 <el-tooltip v-if="row.ref_policies.length > 0 || row.trusted_proxy_referenced" placement="top" popper-class="ip-list-refs-popper" :popper-options="popperViewportSafe">
                   <template #content>
-                    <div v-for="p in row.ref_policies" :key="p.id">{{ p.name }}<template v-if="!p.enabled">（已禁用，不阻止删除）</template></div>
-                    <div v-if="row.trusted_proxy_referenced">{{ row.trusted_proxy_scope || '受信代理网段' }}</div>
+                    <div v-for="p in row.ref_policies" :key="p.id">{{ p.name }}<template v-if="!p.enabled">{{ t('common.app.views.secRules.ipTab.refDisabledNote') }}</template></div>
+                    <div v-if="row.trusted_proxy_referenced">{{ row.trusted_proxy_scope || t('common.app.views.secRules.ipTab.trustedProxyScope') }}</div>
                   </template>
                   <span>{{ row.ref_count }}</span>
                 </el-tooltip>
                 <template v-else>{{ row.ref_count }}</template>
               </template>
             </el-table-column>
-            <el-table-column label="更新时间" width="170" align="center">
+            <el-table-column :label="t('common.app.views.secRules.common.updateTime')" width="170" align="center">
               <template #default="{ row }">{{ formatDate(row.updated_at) || '-' }}</template>
             </el-table-column>
-            <el-table-column label="更新者" width="100" align="center">
+            <el-table-column :label="t('common.app.views.secRules.common.updater')" width="100" align="center">
               <template #default="{ row }">{{ getUpdaterName(row.updated_by) }}</template>
             </el-table-column>
-            <el-table-column label="操作" width="140" fixed="right">
+            <el-table-column :label="t('common.app.views.secRules.common.actions')" width="140" fixed="right">
               <template #default="{ row }">
-                <el-button size="small" link type="primary" @click="openIpListDialog(row as IPListRow)">{{ isReadOnly || (row.system && !row.preset_autoban) ? '查看' : '编辑' }}</el-button>
-                <el-button v-if="!row.system" size="small" link type="danger" :disabled="isReadOnly" @click="deleteIpList(row as IPListRow)">删除</el-button>
+                <el-button size="small" link type="primary" @click="openIpListDialog(row as IPListRow)">{{ isReadOnly || (row.system && !row.preset_autoban) ? t('common.app.views.secRules.common.view') : t('common.app.views.secRules.common.edit') }}</el-button>
+                <el-button v-if="!row.system" size="small" link type="danger" :disabled="isReadOnly" @click="deleteIpList(row as IPListRow)">{{ t('common.app.views.secRules.common.delete') }}</el-button>
               </template>
             </el-table-column>
           </el-table>
@@ -255,54 +255,54 @@
 
     <el-dialog v-model="contentDialogVisible" width="min(900px, 94vw)" top="5vh">
       <template #header>
-        <DialogHeader :icon="Notebook" title="规则文件预览" :subtitle="currentFilename" />
+        <DialogHeader :icon="Notebook" :title="t('common.app.views.secRules.ruleDialog.previewTitle')" :subtitle="currentFilename" />
       </template>
-      <DialogSectionHeader title="规则内容" />
+      <DialogSectionHeader :title="t('common.app.views.secRules.ruleDialog.previewContentSection')" />
       <div v-loading="loadingContent" class="dialog-panel dialog-panel--flush"><SyntaxHighlight :content="currentContent" language="apacheconf" /></div>
     </el-dialog>
 
     <el-dialog v-model="ruleDialogVisible" width="min(880px, 94vw)" class="custom-rule-dialog" top="6vh" :close-on-click-modal="false" :close-on-press-escape="!savingRule" :show-close="!savingRule">
       <template #header>
-        <DialogHeader :icon="Filter" :title="editingRuleId ? (isReadOnly ? '查看自定义规则' : '编辑自定义规则') : '新建自定义规则'"
-          subtitle="按请求特征匹配并执行拦截 / 记录 / 计分动作，多条件可同时满足或任一满足" tone="danger" />
+        <DialogHeader :icon="Filter" :title="editingRuleId ? (isReadOnly ? t('common.app.views.secRules.ruleDialog.viewCustomRule') : t('common.app.views.secRules.ruleDialog.editCustomRule')) : t('common.app.views.secRules.ruleDialog.newCustomRule')"
+          :subtitle="t('common.app.views.secRules.ruleDialog.subtitle')" tone="danger" />
       </template>
       <el-form :model="ruleForm" label-width="80px" label-position="right" :disabled="isReadOnly || savingRule">
         <!-- 值与后端写侧门同源（internal/handlers/security.go：名称 ≤100 rune、
              描述 ≤500 rune）——超长只能等 400 的旧形态没有字段级定位 -->
-        <el-form-item label="名称" required>
-          <el-input v-model="ruleForm.name" placeholder="规则名称" :maxlength="SECURITY_NAME_MAX_RUNES" show-word-limit />
+        <el-form-item :label="t('common.app.views.secRules.common.name')" required>
+          <el-input v-model="ruleForm.name" :placeholder="t('common.app.views.secRules.customTab.colRuleName')" :maxlength="SECURITY_NAME_MAX_RUNES" show-word-limit />
         </el-form-item>
-        <el-form-item label="描述">
-          <el-input v-model="ruleForm.description" placeholder="规则描述" :maxlength="SECURITY_DESCRIPTION_MAX_RUNES" show-word-limit />
+        <el-form-item :label="t('common.app.views.secRules.common.description')">
+          <el-input v-model="ruleForm.description" :placeholder="t('common.app.views.secRules.ruleDialog.descPlaceholder')" :maxlength="SECURITY_DESCRIPTION_MAX_RUNES" show-word-limit />
         </el-form-item>
-        <el-form-item label="条件关系" for="radio---7">
+        <el-form-item :label="t('common.app.views.secRules.customTab.colConditionLogic')" for="radio---7">
           <input type="text" id="radio---7" aria-hidden="true" tabindex="-1" autocomplete="off" style="display:none">
-          <el-radio-group v-model="ruleForm.condition_logic" aria-label="条件关系">
-            <el-radio value="and">同时满足（AND）</el-radio>
-            <el-radio value="or">任一满足（OR）</el-radio>
+          <el-radio-group v-model="ruleForm.condition_logic" :aria-label="t('common.app.views.secRules.customTab.colConditionLogic')">
+            <el-radio value="and">{{ t('common.app.views.secRules.customTab.condAnd') }}</el-radio>
+            <el-radio value="or">{{ t('common.app.views.secRules.customTab.condOr') }}</el-radio>
           </el-radio-group>
         </el-form-item>
-        <el-form-item label="条件">
+        <el-form-item :label="t('common.app.views.secRules.customTab.colConditions')">
           <div style="width: 100%">
             <div v-for="(cond, idx) in ruleForm.conditions" :key="idx" class="rule-condition-row">
               <el-select v-model="cond.target" style="width: 120px" size="small" @change="onConditionTargetChange(cond)">
-                <el-option label="请求路径" value="uri" />
-                <el-option label="请求参数" value="args" />
-                <el-option label="请求头" value="headers" />
-                <el-option label="请求体" value="body" />
+                <el-option :label="t('common.app.views.secRules.ruleDialog.targetUri')" value="uri" />
+                <el-option :label="t('common.app.views.secRules.ruleDialog.targetArgs')" value="args" />
+                <el-option :label="t('common.app.views.secRules.ruleDialog.targetHeaders')" value="headers" />
+                <el-option :label="t('common.app.views.secRules.ruleDialog.targetBody')" value="body" />
                 <el-option label="User-Agent" value="user_agent" />
               </el-select>
               <el-select v-model="cond.operator" style="width: 110px" size="small">
-                <el-option label="包含" value="contains" />
-                <el-option label="正则匹配" value="regex" />
-                <el-option label="完全匹配" value="equals" />
-                <el-option label="前缀匹配" value="starts_with" />
+                <el-option :label="t('common.app.views.secRules.ruleDialog.opContains')" value="contains" />
+                <el-option :label="t('common.app.views.secRules.ruleDialog.opRegex')" value="regex" />
+                <el-option :label="t('common.app.views.secRules.ruleDialog.opEquals')" value="equals" />
+                <el-option :label="t('common.app.views.secRules.ruleDialog.opStartsWith')" value="starts_with" />
               </el-select>
               <el-input
                 v-if="cond.target === 'headers'"
                 v-model="cond.header_name"
                 class="header-name-input"
-                placeholder="头名，如 Content-Encoding"
+                :placeholder="t('common.app.views.secRules.ruleDialog.headerNamePlaceholder')"
                 size="small"
                 maxlength="64"
                 :class="{ 'is-error': !headerNameSaveAllowed(cond.header_name) }"
@@ -316,19 +316,19 @@
                 <!-- 与后端写侧门同口径：4KiB 按 UTF-8 字节计（中文字符 3 字节），
                      按字符数看不出超限，故给出实时字节数 -->
                 <div v-if="patternOverLimit(cond.pattern)" class="form-tip-line port-warning">
-                  匹配内容不能超过 {{ CUSTOM_RULE_MAX_PATTERN_BYTES }} 字节（当前 {{ patternByteLength(cond.pattern) }} 字节）
+                  {{ t('common.app.views.secRules.ruleDialog.patternByteTip', { max: CUSTOM_RULE_MAX_PATTERN_BYTES, current: patternByteLength(cond.pattern) }) }}
                 </div>
                 <div v-if="cond.target === 'body'" class="form-tip-line">
-                  匹配请求体解析后的参数值（JSON 请求体按扁平化键值匹配，如嵌套字段取其值；不支持跨键的原始 JSON 语法匹配）
+                  {{ t('common.app.views.secRules.ruleDialog.bodyArgsTip') }}
                 </div>
                 <div v-else-if="cond.target === 'headers' && cond.header_name" class="form-tip-line">
-                  仅匹配头「{{ cond.header_name }}」的值；留空头名则匹配全部头的值
+                  {{ t('common.app.views.secRules.ruleDialog.headerValueTip', { name: cond.header_name }) }}
                 </div>
               </div>
-              <el-button link type="danger" size="small" :disabled="isReadOnly || savingRule" @click="removeCondition(idx)">删除</el-button>
+              <el-button link type="danger" size="small" :disabled="isReadOnly || savingRule" @click="removeCondition(idx)">{{ t('common.app.views.secRules.common.delete') }}</el-button>
                 <div v-if="cond.target === 'user_agent'" class="preset-section">
                   <button type="button" class="preset-header" :aria-expanded="!uaCollapsed[idx]" @click="uaCollapsed[idx] = !uaCollapsed[idx]">
-                    <span class="preset-toggle">{{ uaCollapsed[idx] ? '▶' : '▼' }} 快捷标签</span>
+                    <span class="preset-toggle">{{ uaCollapsed[idx] ? '▶' : '▼' }} {{ t('common.app.views.secRules.ruleDialog.quickTags') }}</span>
                   </button>
                   <div v-show="!uaCollapsed[idx]" class="preset-tags-block">
                     <div v-for="g in UA_PRESET_GROUPS" :key="g.label" class="preset-group">
@@ -337,19 +337,19 @@
                         <el-tag v-for="t in g.values" :key="t.value" size="small" effect="plain" class="preset-tag" role="button" tabindex="0" @click="cond.pattern = t.value" @keydown.enter.prevent="activateOnce($event, () => { cond.pattern = t.value })" @keydown.space.prevent="activateOnce($event, () => { cond.pattern = t.value })">{{ t.label }}</el-tag>
                       </div>
                     </div>
-                    <div class="info-note-bar"><span class="info-note-desc">标签写入真实 UA 片段（contains 精确匹配，区分大小写）</span></div>
+                    <div class="info-note-bar"><span class="info-note-desc">{{ t('common.app.views.secRules.ruleDialog.uaPresetNote') }}</span></div>
                   </div>
                 </div>
                 <div v-if="cond.operator === 'regex'" class="preset-section">
                   <button type="button" class="preset-header" :aria-expanded="!regexCollapsed[idx]" @click="regexCollapsed[idx] = !regexCollapsed[idx]">
-                    <span class="preset-toggle">{{ regexCollapsed[idx] ? '▶' : '▼' }} 正则模板与测试</span>
+                    <span class="preset-toggle">{{ regexCollapsed[idx] ? '▶' : '▼' }} {{ t('common.app.views.secRules.ruleDialog.regexTemplatesTitle') }}</span>
                   </button>
                   <div v-show="!regexCollapsed[idx]" class="regex-extras">
                     <div class="regex-presets">
                       <el-button v-for="p in REGEX_PRESETS" :key="p.label" link type="primary" size="small" class="regex-preset-link" @click="cond.pattern = p.value">{{ p.label }}</el-button>
                     </div>
                     <div class="regex-tester">
-                      <el-input v-model="regexTestStrings[idx]" placeholder="输入测试字符串" size="small" class="regex-test-input" />
+                      <el-input v-model="regexTestStrings[idx]" :placeholder="t('common.app.views.secRules.ruleDialog.regexTestPlaceholder')" size="small" class="regex-test-input" />
                       <span class="regex-test-result" :class="regexResultClass(cond, idx)">{{ regexResultText(cond, idx) }}</span>
                     </div>
                   </div>
@@ -357,7 +357,7 @@
             </div>
             <div class="add-condition-row">
               <el-button v-if="!isReadOnly" size="small" type="primary" plain class="add-condition-btn" :disabled="!canAddCondition(ruleForm.conditions.length) || savingRule" @click="ruleForm.conditions.push({ target: 'uri', operator: 'contains', pattern: '' })">
-                + 添加条件
+                + {{ t('common.app.views.secRules.ruleDialog.addCondition') }}
               </el-button>
               <!-- 条件数上限与后端 customRuleMaxConditions 同源：超出只能提交后吃 400 -->
               <span class="form-tip-inline">{{ ruleForm.conditions.length }}/{{ CUSTOM_RULE_MAX_CONDITIONS }}</span>
@@ -366,106 +366,106 @@
         </el-form-item>
         <!-- 原生表单行（2026-10-11 用户裁定：对齐统一走 el-form-item；Firefox
              label-for 控制台告警为 EP 上游已知形态，非用户可见） -->
-        <el-form-item label="动作" for="radio---8">
+        <el-form-item :label="t('common.app.views.secRules.customTab.colAction')" for="radio---8">
           <input type="text" id="radio---8" aria-hidden="true" tabindex="-1" autocomplete="off" style="display:none">
-          <el-radio-group v-model="ruleForm.action" aria-label="动作">
-            <el-radio value="block">拦截</el-radio>
-            <el-radio value="log">仅记录</el-radio>
-            <el-radio value="pass">放行计分</el-radio>
+          <el-radio-group v-model="ruleForm.action" :aria-label="t('common.app.views.secRules.customTab.colAction')">
+            <el-radio value="block">{{ t('common.app.views.secRules.ruleDialog.actionBlock') }}</el-radio>
+            <el-radio value="log">{{ t('common.app.views.secRules.ruleDialog.actionLog') }}</el-radio>
+            <el-radio value="pass">{{ t('common.app.views.secRules.ruleDialog.actionPass') }}</el-radio>
           </el-radio-group>
-          <div class="form-tip-line">拦截=命中即阻断；仅记录=只记录事件；放行计分=记录并向异常分累加（CRS 检测/拦截模式下由异常阈值统一裁决；仅自定义模式下只记录不拦截）</div>
+          <div class="form-tip-line">{{ t('common.app.views.secRules.ruleDialog.actionHint') }}</div>
         </el-form-item>
-        <el-form-item label="异常分值">
+        <el-form-item :label="t('common.app.views.secRules.ruleDialog.labelScore')">
           <el-select v-model="ruleForm.score" style="width: 160px">
-            <el-option :value="1" label="轻微（1）" />
-            <el-option :value="3" label="较低（3）" />
-            <el-option :value="5" label="中等（5）" />
-            <el-option :value="10" label="较高（10）" />
-            <el-option :value="20" label="严重（20）" />
+            <el-option :value="1" :label="t('common.app.views.secRules.ruleDialog.score1')" />
+            <el-option :value="3" :label="t('common.app.views.secRules.ruleDialog.score3')" />
+            <el-option :value="5" :label="t('common.app.views.secRules.ruleDialog.score5')" />
+            <el-option :value="10" :label="t('common.app.views.secRules.ruleDialog.score10')" />
+            <el-option :value="20" :label="t('common.app.views.secRules.ruleDialog.score20')" />
           </el-select>
-          <div class="form-tip-line">匹配此规则时累加的异常分值，累计达到策略异常阈值后触发拦截；仅自定义模式无阈值评估，只记录</div>
+          <div class="form-tip-line">{{ t('common.app.views.secRules.ruleDialog.scoreHint') }}</div>
         </el-form-item>
-        <el-form-item label="启用">
+        <el-form-item :label="t('common.app.views.secRules.common.enabled')">
           <el-switch v-model="ruleForm.enabled" />
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button :disabled="savingRule" @click="ruleDialogVisible = false">取消</el-button>
-        <el-button type="primary" :disabled="isReadOnly || savingRule" :loading="savingRule" @click="saveCustomRule">保存</el-button>
+        <el-button :disabled="savingRule" @click="ruleDialogVisible = false">{{ t('common.app.views.secRules.common.cancel') }}</el-button>
+        <el-button type="primary" :disabled="isReadOnly || savingRule" :loading="savingRule" @click="saveCustomRule">{{ t('common.app.views.secRules.common.save') }}</el-button>
       </template>
     </el-dialog>
 
     <el-dialog v-model="ipListDialogVisible" width="min(900px, 94vw)" class="ip-list-dialog" top="6vh" :close-on-click-modal="false" :close-on-press-escape="!savingIpList" :show-close="!savingIpList">
       <template #header>
-        <DialogHeader :icon="List" :title="editingIpListId ? (ipListDialogReadOnly ? '查看 IP 地址列表' : '编辑 IP 地址列表') : '新建 IP 地址列表'"
-          subtitle="可复用 IP/CIDR 集合，供安全策略引用（黑白名单 / 信任名单）" />
+        <DialogHeader :icon="List" :title="editingIpListId ? (ipListDialogReadOnly ? t('common.app.views.secRules.ipDialog.viewIpList') : t('common.app.views.secRules.ipDialog.editIpList')) : t('common.app.views.secRules.ipDialog.newIpList')"
+          :subtitle="t('common.app.views.secRules.ipDialog.subtitle')" />
       </template>
       <div v-if="ipListDetailFailed" class="info-note-bar">
-        <span class="info-note-desc">名单条目加载失败：为避免以空条目覆盖原列表，保存与条目增删/导入已禁用；请先重新加载。</span>
-        <el-button size="small" type="primary" plain @click="reloadIpListDetail">重新加载</el-button>
+        <span class="info-note-desc">{{ t('common.app.views.secRules.ipDialog.entriesLoadFailBanner') }}</span>
+        <el-button size="small" type="primary" plain @click="reloadIpListDetail">{{ t('common.app.views.secRules.common.reload') }}</el-button>
       </div>
       <el-form :model="ipListForm" label-width="80px" label-position="right" v-loading="loadingIpListDetail" :disabled="savingIpList">
         <!-- 自动封禁预置名单名称/分类/描述为内置字段（后端 400 守卫同口径），
              前端直接禁用灰态——禁止修改的字段不可输入，而非提交后报 400 -->
-        <el-form-item label="名称" required>
-          <el-input v-model="ipListForm.name" placeholder="列表名称" maxlength="50" show-word-limit :disabled="ipListDialogReadOnly || editingIpListPreset || savingIpList" />
+        <el-form-item :label="t('common.app.views.secRules.common.name')" required>
+          <el-input v-model="ipListForm.name" :placeholder="t('common.app.views.secRules.ipDialog.listNamePlaceholder')" maxlength="50" show-word-limit :disabled="ipListDialogReadOnly || editingIpListPreset || savingIpList" />
         </el-form-item>
-        <el-form-item label="分类">
-          <el-select v-model="ipListForm.category" allow-create filterable default-first-option placeholder="选择或输入分类" style="width: 100%" :disabled="ipListDialogReadOnly || editingIpListPreset || savingIpList">
+        <el-form-item :label="t('common.app.views.secRules.common.category')">
+          <el-select v-model="ipListForm.category" allow-create filterable default-first-option :placeholder="t('common.app.views.secRules.ipDialog.categoryPlaceholder')" style="width: 100%" :disabled="ipListDialogReadOnly || editingIpListPreset || savingIpList">
             <el-option v-for="c in IP_LIST_CATEGORIES" :key="c" :label="c" :value="c" />
           </el-select>
-          <div class="form-tip-line">预设分类可直接选择，也可自定义（≤32 字符）</div>
+          <div class="form-tip-line">{{ t('common.app.views.secRules.ipDialog.categoryTip') }}</div>
         </el-form-item>
-        <el-form-item label="描述">
-          <el-input v-model="ipListForm.description" placeholder="列表用途说明" maxlength="200" show-word-limit :disabled="ipListDialogReadOnly || editingIpListPreset || savingIpList" />
+        <el-form-item :label="t('common.app.views.secRules.common.description')">
+          <el-input v-model="ipListForm.description" :placeholder="t('common.app.views.secRules.ipDialog.usagePlaceholder')" maxlength="200" show-word-limit :disabled="ipListDialogReadOnly || editingIpListPreset || savingIpList" />
         </el-form-item>
-        <el-form-item label="条目" required>
+        <el-form-item :label="t('common.app.views.secRules.ipDialog.labelEntries')" required>
           <div class="entries-block">
             <div class="entries-head-bar">
-              <DialogSectionHeader title="名单条目" />
+              <DialogSectionHeader :title="t('common.app.views.secRules.ipDialog.entriesSection')" />
             <div v-if="ipListForm.entries.length > 0" class="ip-query-bar">
-              <el-input v-model="ipListQueryInput" placeholder="输入 IP 或关键词" clearable size="small" class="ip-query-input" @keyup.enter="applyIpListQuery" @clear="clearIpListQuery" />
+              <el-input v-model="ipListQueryInput" :placeholder="t('common.app.views.secRules.ipDialog.ipQueryPlaceholder')" clearable size="small" class="ip-query-input" @keyup.enter="applyIpListQuery" @clear="clearIpListQuery" />
               <el-radio-group v-model="ipListQueryMode" size="small">
-                <el-radio-button value="cidr">CIDR 匹配</el-radio-button>
-                <el-radio-button value="fuzzy">模糊搜索</el-radio-button>
+                <el-radio-button value="cidr">{{ t('common.app.views.secRules.ipDialog.cidrMode') }}</el-radio-button>
+                <el-radio-button value="fuzzy">{{ t('common.app.views.secRules.ipDialog.fuzzyMode') }}</el-radio-button>
               </el-radio-group>
-              <el-button type="primary" size="small" :disabled="!ipListQueryInput.trim()" @click="applyIpListQuery">搜索</el-button>
+              <el-button type="primary" size="small" :disabled="!ipListQueryInput.trim()" @click="applyIpListQuery">{{ t('common.app.views.secRules.common.search') }}</el-button>
             </div>
             </div>
             <div class="dialog-panel dialog-panel--flush">
               <el-table :data="ipListEntriesPaged" size="small" max-height="360" empty-text="">
-              <template #empty><el-empty description="暂无条目，点击下方按钮添加" :image-size="50" /></template>
+              <template #empty><el-empty :description="t('common.app.views.secRules.ipDialog.emptyEntriesAdd')" :image-size="50" /></template>
               <el-table-column label="#" width="50" align="right">
                 <template #default="{ $index }"><span class="ip-entry-index">{{ (ipListPagedIndexes[$index] ?? 0) + 1 }}</span></template>
               </el-table-column>
               <el-table-column label="IP / CIDR" min-width="230">
                 <template #default="{ row }">
                   <span v-if="ipListDialogReadOnly" class="ip-entry-text">{{ row.value }}</span>
-                  <el-input v-else v-model="row.value" placeholder="如 192.168.1.0/24" size="small" :class="{ 'is-error': !isValidCidr(row.value) }" />
+                  <el-input v-else v-model="row.value" :placeholder="t('common.app.views.secRules.ipDialog.cidrPlaceholder')" size="small" :class="{ 'is-error': !isValidCidr(row.value) }" />
                 </template>
               </el-table-column>
-              <el-table-column label="备注" min-width="140">
+              <el-table-column :label="t('common.app.views.secRules.ipDialog.colRemark')" min-width="140">
                 <template #default="{ row }">
                   <span v-if="ipListDialogReadOnly" class="ip-entry-text">{{ row.remark }}</span>
-                  <el-input v-else v-model="row.remark" placeholder="可选备注" size="small" maxlength="100" />
+                  <el-input v-else v-model="row.remark" :placeholder="t('common.app.views.secRules.ipDialog.remarkPlaceholder')" size="small" maxlength="100" />
                 </template>
               </el-table-column>
               <!-- 自动封禁名单条目展示加入时间/剩余（到期时间由剩余列表达；删除条目即解封）-->
               <template v-if="editingIpListPreset">
-                <el-table-column label="加入时间" width="170" align="center" class-name="ip-entry-created">
+                <el-table-column :label="t('common.app.views.secRules.ipDialog.colJoinedAt')" width="170" align="center" class-name="ip-entry-created">
                   <template #default="{ row }">{{ formatDate(row.created_at) || '—' }}</template>
                 </el-table-column>
-                <el-table-column label="剩余时长" width="90" align="center">
+                <el-table-column :label="t('common.app.views.secRules.ipDialog.colRemaining')" width="90" align="center">
                   <template #default="{ row }">
-                    <el-tag v-if="!row.expires_at" size="small" effect="plain" type="info">永久</el-tag>
-                    <el-tag v-else-if="autobanEntryExpired(row.expires_at)" size="small" effect="plain" type="info">已到期</el-tag>
+                    <el-tag v-if="!row.expires_at" size="small" effect="plain" type="info">{{ t('common.app.views.secRules.ipDialog.permanent') }}</el-tag>
+                    <el-tag v-else-if="autobanEntryExpired(row.expires_at)" size="small" effect="plain" type="info">{{ t('common.app.views.secRules.ipDialog.expiredTag') }}</el-tag>
                     <span v-else class="text-secondary">{{ autobanEntryRemaining(row.expires_at) }}</span>
                   </template>
                 </el-table-column>
               </template>
               <el-table-column v-if="!ipListDialogReadOnly" label="" width="60" align="center">
                 <template #default="{ $index }">
-                  <el-button link type="danger" size="small" :disabled="savingIpList" @click="removeIpListEntry(ipListPagedIndexes[$index] ?? -1)">删除</el-button>
+                  <el-button link type="danger" size="small" :disabled="savingIpList" @click="removeIpListEntry(ipListPagedIndexes[$index] ?? -1)">{{ t('common.app.views.secRules.common.delete') }}</el-button>
                 </template>
               </el-table-column>
               </el-table>
@@ -481,51 +481,51 @@
             </div>
             <div class="entries-toolbar">
               <el-button v-if="!ipListDialogReadOnly" size="small" type="primary" plain :disabled="ipListDetailFailed || savingIpList" @click="addIpListEntry">
-                + 添加条目
+                + {{ t('common.app.views.secRules.ipDialog.addEntry') }}
               </el-button>
               <div class="entries-toolbar-right">
-                <el-button v-if="!ipListDialogReadOnly" size="small" type="primary" plain :disabled="ipListDetailFailed || savingIpList" @click="triggerImportEntries">导入</el-button>
-                <el-button size="small" type="primary" plain @click="exportIpListEntries">导出</el-button>
+                <el-button v-if="!ipListDialogReadOnly" size="small" type="primary" plain :disabled="ipListDetailFailed || savingIpList" @click="triggerImportEntries">{{ t('common.app.views.secRules.ipDialog.importBtn') }}</el-button>
+                <el-button size="small" type="primary" plain @click="exportIpListEntries">{{ t('common.app.views.secRules.ipDialog.exportBtn') }}</el-button>
               </div>
             </div>
             <input ref="importEntriesInput" type="file" accept=".txt,.csv" class="entries-import-input" @change="onImportEntriesFileChange" />
-            <div class="form-tip-line">每条支持单 IP 或 CIDR（如 10.0.0.1、2001:db8::/32）；每个列表最多 {{ IP_LIST_MAX_ENTRIES }} 条（已到期条目不计入），用户创建的名单最多 200 个（内置名单不占额度），格式错误的行以红色标出；导入支持 .txt/.csv（每行一条：IP/CIDR + 可选备注，逗号或空白分隔）</div>
+            <div class="form-tip-line">{{ t('common.app.views.secRules.ipDialog.entriesTip', { max: IP_LIST_MAX_ENTRIES }) }}</div>
           </div>
         </el-form-item>
       </el-form>
       <template #footer>
         <template v-if="ipListDialogReadOnly">
-          <el-button :disabled="savingIpList" @click="ipListDialogVisible = false">关闭</el-button>
+          <el-button :disabled="savingIpList" @click="ipListDialogVisible = false">{{ t('common.app.views.secRules.common.close') }}</el-button>
         </template>
         <template v-else>
-          <el-button :disabled="savingIpList" @click="ipListDialogVisible = false">取消</el-button>
-          <el-tooltip v-if="ipListDetailFailed" content="名单条目加载失败：保存会以空条目覆盖列表，已禁用；请重试加载" placement="top">
+          <el-button :disabled="savingIpList" @click="ipListDialogVisible = false">{{ t('common.app.views.secRules.common.cancel') }}</el-button>
+          <el-tooltip v-if="ipListDetailFailed" :content="t('common.app.views.secRules.ipDialog.saveDisabledTip')" placement="top">
             <span>
-              <el-button type="primary" disabled>保存</el-button>
+              <el-button type="primary" disabled>{{ t('common.app.views.secRules.common.save') }}</el-button>
             </span>
           </el-tooltip>
 
-          <el-button v-else type="primary" :loading="savingIpList" :disabled="!canSaveIpList(loadingIpListDetail, ipListDetailFailed)" @click="saveIpList">保存</el-button>
+          <el-button v-else type="primary" :loading="savingIpList" :disabled="!canSaveIpList(loadingIpListDetail, ipListDetailFailed)" @click="saveIpList">{{ t('common.app.views.secRules.common.save') }}</el-button>
         </template>
       </template>
     </el-dialog>
 
 <!-- 导入重复条目弹窗（点导入即判定，不写表不执行导入）：简易样式 -->
-<el-dialog v-model="importDuplicateVisible" title="导入条目重复" width="min(640px, 94vw)" append-to-body :close-on-click-modal="false">
+<el-dialog v-model="importDuplicateVisible" :title="t('common.app.views.secRules.importDup.title')" width="min(640px, 94vw)" append-to-body :close-on-click-modal="false">
   <el-table :data="importDuplicates" size="small" max-height="300">
-    <el-table-column label="行号" width="70" align="center">
+    <el-table-column :label="t('common.app.views.secRules.importDup.colLineNo')" width="70" align="center">
       <template #default="{ row }">{{ row.lineNo }}</template>
     </el-table-column>
-    <el-table-column label="地址 / CIDR" min-width="180">
+    <el-table-column :label="t('common.app.views.secRules.importDup.colAddress')" min-width="180">
       <template #default="{ row }"><span class="ip-entry-mono">{{ row.value }}</span></template>
     </el-table-column>
-    <el-table-column label="该行备注" min-width="160">
+    <el-table-column :label="t('common.app.views.secRules.importDup.colRemark')" min-width="160">
       <template #default="{ row }">{{ row.remark || '—' }}</template>
     </el-table-column>
   </el-table>
-  <div class="info-note-bar"><span class="info-note-desc">重复 {{ importDuplicates.length }} 条导入时跳过（以 IP 为准，同 IP 不同备注按首条为准）；其余新条目已渲染到下方条目列表，保存后生效{{ pendingInvalidCount ? `；另有 ${pendingInvalidCount} 条非法行跳过（第 ${pendingInvalidLineNos} 行）` : '' }}。</span></div>
+  <div class="info-note-bar"><span class="info-note-desc">{{ t('common.app.views.secRules.importDup.summary', { count: importDuplicates.length }) }}{{ pendingInvalidCount ? t('common.app.views.secRules.importDup.invalidSuffix', { count: pendingInvalidCount, lines: pendingInvalidLineNos }) : '' }}。</span></div>
   <template #footer>
-    <el-button type="primary" @click="importDuplicateVisible = false">知道了</el-button>
+    <el-button type="primary" @click="importDuplicateVisible = false">{{ t('common.app.views.secRules.common.gotIt') }}</el-button>
   </template>
 </el-dialog>
 
@@ -538,7 +538,7 @@
       @closed="onUpdateDialogClosed"
     >
       <template #header>
-        <DialogHeader :icon="Lock" title="更新 CRS 规则库" subtitle="OWASP 核心规则集的更新任务与更新日志" tone-class="lib-icon--crs" />
+        <DialogHeader :icon="Lock" :title="t('common.app.views.secRules.updateDialogs.crsTitle')" :subtitle="t('common.app.views.secRules.updateDialogs.crsSubtitle')" tone-class="lib-icon--crs" />
       </template>
       <RuleLibScheduleEditor
         :days="crsInfo.schedule_days"
@@ -549,18 +549,18 @@
         :tz="scheduleTz"
         @save="saveCRSSchedule"
       />
-      <DialogSectionHeader title="更新日志" />
+      <DialogSectionHeader :title="t('common.app.views.secRules.updateDialogs.updateLog')" />
       <div class="dialog-panel dialog-panel--flush">
         <div ref="updateLogRef" class="update-log-container">
           <pre v-if="updateLog" class="update-log-content">{{ updateLog }}</pre>
-          <el-empty v-else description="暂无更新日志" :image-size="60" />
+          <el-empty v-else :description="t('common.app.views.secRules.updateDialogs.emptyUpdateLog')" :image-size="60" />
         </div>
       </div>
       <template #footer>
         <div style="display: flex; align-items: center;">
           <LogStorageBar log-key="crs_update" style="margin-right: auto" />
-          <el-button @click="updateDialogVisible = false">关闭</el-button>
-        <el-button v-if="!crsUpdateRunning" type="primary" :disabled="isReadOnly || isSlaveNode" :loading="startingUpdate" @click="confirmUpdate">立即更新</el-button>
+          <el-button @click="updateDialogVisible = false">{{ t('common.app.views.secRules.common.close') }}</el-button>
+        <el-button v-if="!crsUpdateRunning" type="primary" :disabled="isReadOnly || isSlaveNode" :loading="startingUpdate" @click="confirmUpdate">{{ t('common.app.views.secRules.updateDialogs.updateNow') }}</el-button>
         </div>
       </template>
     </el-dialog>
@@ -574,13 +574,13 @@
       @closed="onIP2RegionUpdateDialogClosed"
     >
       <template #header>
-        <DialogHeader :icon="Location" title="更新 IP 库" subtitle="IP2Region 地理归属数据库的更新任务与更新日志" tone-class="lib-icon--ip" />
+        <DialogHeader :icon="Location" :title="t('common.app.views.secRules.updateDialogs.ipTitle')" :subtitle="t('common.app.views.secRules.updateDialogs.ipSubtitle')" tone-class="lib-icon--ip" />
       </template>
 
-      <DialogSectionHeader title="数据源" />
+      <DialogSectionHeader :title="t('common.app.views.secRules.updateDialogs.dataSource')" />
       <div class="dialog-panel dialog-panel--flush library-sources-panel">
         <el-table :data="ip2regionSourceRows" size="small" class="threat-source-table">
-          <el-table-column label="来源" min-width="260">
+          <el-table-column :label="t('common.app.views.secRules.updateDialogs.colSource')" min-width="260">
             <template #default="{ row }">
               <div class="lib-name-text">
                 <div class="lib-name-main">{{ row.name }}</div>
@@ -588,21 +588,21 @@
               </div>
             </template>
           </el-table-column>
-          <el-table-column label="条目数" width="100" align="right">
+          <el-table-column :label="t('common.app.views.secRules.common.entryCount')" width="100" align="right">
             <template #default="{ row }">{{ row.entries ? formatInt(row.entries) : '—' }}</template>
           </el-table-column>
-          <el-table-column label="版本" width="110">
-            <template #default="{ row }"><span class="lib-version">{{ row.version || '未更新' }}</span></template>
+          <el-table-column :label="t('common.app.views.secRules.lib.colVersion')" width="110">
+            <template #default="{ row }"><span class="lib-version">{{ row.version || t('common.app.views.secRules.lib.notUpdated') }}</span></template>
           </el-table-column>
-          <el-table-column label="状态" width="110">
+          <el-table-column :label="t('common.app.views.secRules.common.status')" width="110">
             <template #default="{ row }">
-              <el-tag v-if="!row.enabled" type="info" size="small" effect="light">已关闭</el-tag>
+              <el-tag v-if="!row.enabled" type="info" size="small" effect="light">{{ t('common.app.views.secRules.lib.closed') }}</el-tag>
               <el-tag v-else :type="ip2regionSourceTagType(row.status)" size="small" effect="light">{{ ip2regionSourceLabel(row.status) }}</el-tag>
             </template>
           </el-table-column>
-          <el-table-column label="自动更新" width="90" align="center">
+          <el-table-column :label="t('common.app.views.secRules.lib.colAutoUpdate')" width="90" align="center">
             <template #default="{ row }">
-              <el-switch v-if="row.kind === 'v4'" :model-value="row.enabled" :disabled="isReadOnly || isSlaveNode" @change="(v: string | number | boolean) => toggleLibAutoUpdate({ key: 'ip2region', name: 'IP 地理库' } as LibRow, v === true)" />
+              <el-switch v-if="row.kind === 'v4'" :model-value="row.enabled" :disabled="isReadOnly || isSlaveNode" @change="(v: string | number | boolean) => toggleLibAutoUpdate({ key: 'ip2region', name: t('common.app.views.secRules.lib.ipLibrary') } as LibRow, v === true)" />
               <el-switch v-else :model-value="row.enabled" :disabled="isReadOnly || isSlaveNode || savingIP2RegionV6" :loading="savingIP2RegionV6" @change="(v: string | number | boolean) => toggleIP2RegionV6(v === true)" />
             </template>
           </el-table-column>
@@ -620,18 +620,18 @@
         @save="saveIP2RegionSchedule"
       />
 
-      <DialogSectionHeader title="更新日志" />
+      <DialogSectionHeader :title="t('common.app.views.secRules.updateDialogs.updateLog')" />
       <div class="dialog-panel dialog-panel--flush">
         <div ref="ip2regionUpdateLogRef" class="update-log-container">
           <pre v-if="ip2regionUpdateLog" class="update-log-content">{{ ip2regionUpdateLog }}</pre>
-          <el-empty v-else description="暂无更新日志" :image-size="60" />
+          <el-empty v-else :description="t('common.app.views.secRules.updateDialogs.emptyUpdateLog')" :image-size="60" />
         </div>
       </div>
       <template #footer>
         <div style="display: flex; align-items: center;">
           <LogStorageBar log-key="ip2region_update" style="margin-right: auto" />
-          <el-button @click="ip2regionUpdateDialogVisible = false">关闭</el-button>
-        <el-button v-if="!ip2regionUpdateRunning" type="primary" :disabled="isReadOnly || isSlaveNode" :loading="startingIP2RegionUpdate" @click="confirmIP2RegionUpdate">立即更新</el-button>
+          <el-button @click="ip2regionUpdateDialogVisible = false">{{ t('common.app.views.secRules.common.close') }}</el-button>
+        <el-button v-if="!ip2regionUpdateRunning" type="primary" :disabled="isReadOnly || isSlaveNode" :loading="startingIP2RegionUpdate" @click="confirmIP2RegionUpdate">{{ t('common.app.views.secRules.updateDialogs.updateNow') }}</el-button>
         </div>
       </template>
     </el-dialog>
@@ -645,12 +645,12 @@
       @closed="onThreatUpdateDialogClosed"
     >
       <template #header>
-        <DialogHeader :icon="Aim" title="更新威胁情报库" subtitle="三个内置恶意 IP 源的更新任务与更新日志" tone-class="lib-icon--threat" />
+        <DialogHeader :icon="Aim" :title="t('common.app.views.secRules.updateDialogs.threatTitle')" :subtitle="t('common.app.views.secRules.updateDialogs.threatSubtitle')" tone-class="lib-icon--threat" />
       </template>
-      <DialogSectionHeader title="威胁情报来源" />
+      <DialogSectionHeader :title="t('common.app.views.secRules.updateDialogs.threatSourceSection')" />
       <div class="dialog-panel dialog-panel--flush library-sources-panel">
         <el-table :data="threatSources" size="small" class="threat-source-table">
-        <el-table-column label="来源" min-width="260">
+        <el-table-column :label="t('common.app.views.secRules.updateDialogs.colSource')" min-width="260">
           <!-- 标题加粗 + 更新地址次行（与规则库表格「名称+描述」两行同构，
                2026-09-24 用户裁定替代独立更新地址列） -->
           <template #default="{ row }">
@@ -660,19 +660,19 @@
             </div>
           </template>
         </el-table-column>
-        <el-table-column label="条目数" width="100" align="right">
+        <el-table-column :label="t('common.app.views.secRules.common.entryCount')" width="100" align="right">
           <template #default="{ row }">{{ row.entry_count ? formatInt(row.entry_count) : '—' }}</template>
         </el-table-column>
-        <el-table-column label="版本" width="110">
-          <template #default="{ row }"><span class="lib-version">{{ row.version || '未更新' }}</span></template>
+        <el-table-column :label="t('common.app.views.secRules.lib.colVersion')" width="110">
+          <template #default="{ row }"><span class="lib-version">{{ row.version || t('common.app.views.secRules.lib.notUpdated') }}</span></template>
         </el-table-column>
-        <el-table-column label="状态" width="110">
+        <el-table-column :label="t('common.app.views.secRules.common.status')" width="110">
           <template #default="{ row }">
-            <el-tag v-if="!row.update_enabled" type="info" size="small" effect="light">已关闭</el-tag>
+            <el-tag v-if="!row.update_enabled" type="info" size="small" effect="light">{{ t('common.app.views.secRules.lib.closed') }}</el-tag>
             <el-tag v-else :type="libraryStatusTagType(row.update_status)" size="small" effect="light">{{ libraryStatusLabel(row.update_status) }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="自动更新" width="90" align="center">
+        <el-table-column :label="t('common.app.views.secRules.lib.colAutoUpdate')" width="90" align="center">
           <template #default="{ row }">
             <el-switch v-model="row.update_enabled" :loading="sourceFlagPending('threat', row.id)" :disabled="isReadOnly || isSlaveNode || sourceFlagPending('threat', row.id)" @change="(v: string | number | boolean) => toggleThreatFlag(row as ThreatSource, v === true)" />
           </template>
@@ -688,18 +688,18 @@
         :tz="scheduleTz"
         @save="saveThreatSchedule"
       />
-      <DialogSectionHeader title="更新日志" />
+      <DialogSectionHeader :title="t('common.app.views.secRules.updateDialogs.updateLog')" />
       <div class="dialog-panel dialog-panel--flush">
         <div ref="threatUpdateLogRef" class="update-log-container update-log-container--compact">
           <pre v-if="threatUpdateLog" class="update-log-content">{{ threatUpdateLog }}</pre>
-          <el-empty v-else description="暂无更新日志" :image-size="60" />
+          <el-empty v-else :description="t('common.app.views.secRules.updateDialogs.emptyUpdateLog')" :image-size="60" />
         </div>
       </div>
       <template #footer>
         <div style="display: flex; align-items: center;">
           <LogStorageBar log-key="threat_update" style="margin-right: auto" />
-          <el-button @click="threatUpdateDialogVisible = false">关闭</el-button>
-          <el-button v-if="!threatUpdateRunning" type="primary" :disabled="isReadOnly || isSlaveNode" :loading="startingThreatUpdate" @click="confirmThreatUpdate">立即更新</el-button>
+          <el-button @click="threatUpdateDialogVisible = false">{{ t('common.app.views.secRules.common.close') }}</el-button>
+          <el-button v-if="!threatUpdateRunning" type="primary" :disabled="isReadOnly || isSlaveNode" :loading="startingThreatUpdate" @click="confirmThreatUpdate">{{ t('common.app.views.secRules.updateDialogs.updateNow') }}</el-button>
         </div>
       </template>
     </el-dialog>
@@ -713,12 +713,12 @@
       @closed="onCrawlerUpdateDialogClosed"
     >
       <template #header>
-        <DialogHeader :icon="Link" title="爬虫地址更新" subtitle="四个官方爬虫 IP 源的更新任务与更新日志" tone-class="lib-icon--crawler" />
+        <DialogHeader :icon="Link" :title="t('common.app.views.secRules.updateDialogs.crawlerTitle')" :subtitle="t('common.app.views.secRules.updateDialogs.crawlerSubtitle')" tone-class="lib-icon--crawler" />
       </template>
-      <DialogSectionHeader title="爬虫地址来源" />
+      <DialogSectionHeader :title="t('common.app.views.secRules.updateDialogs.crawlerSourceSection')" />
       <div class="dialog-panel dialog-panel--flush library-sources-panel">
         <el-table :data="crawlerSources" size="small" class="threat-source-table">
-        <el-table-column label="来源" min-width="260">
+        <el-table-column :label="t('common.app.views.secRules.updateDialogs.colSource')" min-width="260">
           <template #default="{ row }">
             <div class="lib-name-text">
               <div class="lib-name-main">{{ row.display_name }}</div>
@@ -726,19 +726,19 @@
             </div>
           </template>
         </el-table-column>
-        <el-table-column label="条目数" width="100" align="right">
+        <el-table-column :label="t('common.app.views.secRules.common.entryCount')" width="100" align="right">
           <template #default="{ row }">{{ row.entry_count ? formatInt(row.entry_count) : '—' }}</template>
         </el-table-column>
-        <el-table-column label="版本" width="110">
-          <template #default="{ row }"><span class="lib-version">{{ row.version || '未更新' }}</span></template>
+        <el-table-column :label="t('common.app.views.secRules.lib.colVersion')" width="110">
+          <template #default="{ row }"><span class="lib-version">{{ row.version || t('common.app.views.secRules.lib.notUpdated') }}</span></template>
         </el-table-column>
-        <el-table-column label="状态" width="110">
+        <el-table-column :label="t('common.app.views.secRules.common.status')" width="110">
           <template #default="{ row }">
-            <el-tag v-if="!row.update_enabled" type="info" size="small" effect="light">已关闭</el-tag>
+            <el-tag v-if="!row.update_enabled" type="info" size="small" effect="light">{{ t('common.app.views.secRules.lib.closed') }}</el-tag>
             <el-tag v-else :type="libraryStatusTagType(row.update_status)" size="small" effect="light">{{ libraryStatusLabel(row.update_status) }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="自动更新" width="90" align="center">
+        <el-table-column :label="t('common.app.views.secRules.lib.colAutoUpdate')" width="90" align="center">
           <template #default="{ row }">
             <el-switch v-model="row.update_enabled" :loading="sourceFlagPending('crawler', row.id)" :disabled="isReadOnly || isSlaveNode || sourceFlagPending('crawler', row.id)" @change="(v: string | number | boolean) => toggleCrawlerFlag(row as ThreatSource, v === true)" />
           </template>
@@ -754,18 +754,18 @@
         :tz="scheduleTz"
         @save="saveCrawlerSchedule"
       />
-      <DialogSectionHeader title="更新日志" />
+      <DialogSectionHeader :title="t('common.app.views.secRules.updateDialogs.updateLog')" />
       <div class="dialog-panel dialog-panel--flush">
         <div ref="crawlerUpdateLogRef" class="update-log-container update-log-container--compact">
           <pre v-if="crawlerUpdateLog" class="update-log-content">{{ crawlerUpdateLog }}</pre>
-          <el-empty v-else description="暂无更新日志" :image-size="60" />
+          <el-empty v-else :description="t('common.app.views.secRules.updateDialogs.emptyUpdateLog')" :image-size="60" />
         </div>
       </div>
       <template #footer>
         <div style="display: flex; align-items: center;">
           <LogStorageBar log-key="crawlerbot_update" style="margin-right: auto" />
-          <el-button @click="crawlerUpdateDialogVisible = false">关闭</el-button>
-          <el-button v-if="!crawlerUpdateRunning" type="primary" :disabled="isReadOnly || isSlaveNode" :loading="startingCrawlerUpdate" @click="confirmCrawlerUpdate">立即更新</el-button>
+          <el-button @click="crawlerUpdateDialogVisible = false">{{ t('common.app.views.secRules.common.close') }}</el-button>
+          <el-button v-if="!crawlerUpdateRunning" type="primary" :disabled="isReadOnly || isSlaveNode" :loading="startingCrawlerUpdate" @click="confirmCrawlerUpdate">{{ t('common.app.views.secRules.updateDialogs.updateNow') }}</el-button>
         </div>
       </template>
     </el-dialog>
@@ -775,6 +775,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { Aim, Filter, List, Location, Lock, Search, Notebook, Plus, WarningFilled, Link, InfoFilled } from '@element-plus/icons-vue'
 import LogStorageBar from '@/components/LogStorageBar.vue'
 import { formatDate } from '@/utils/date'
@@ -809,6 +810,8 @@ import { useClampedPagination } from '@/composables/useClampedPagination'
 import { useLibUpdateDialog } from '@/composables/useLibUpdateDialog'
 import { createVisibilityIntervals } from '@/composables/useVisibilityIntervals'
 import type { APIResponse, UserListItem } from '@/types'
+
+const { t } = useI18n()
 // —— 威胁情报库（v2.3.x 第二张规则来源卡）——
 interface ThreatSource {
   id: number; name: string; display_name: string; url: string; format: string
@@ -860,8 +863,8 @@ const toggleSourceFlag = async (
   if (sourceFlagSaving.value.has(key)) return
   if (!val) {
     try {
-      await ElMessageBox.confirm(`将停止来源「${row.display_name || row.name}」的自动更新，已下载条目保留但不再自动更新。确认关闭？`, '关闭自动更新', {
-        type: 'warning', confirmButtonText: '确认关闭', cancelButtonText: '取消',
+      await ElMessageBox.confirm(t('common.app.views.secRules.lib.autoUpdateOffConfirmSource', { name: row.display_name || row.name }), t('common.app.views.secRules.lib.autoUpdateOffTitle'), {
+        type: 'warning', confirmButtonText: t('common.app.views.secRules.lib.confirmOff'), cancelButtonText: t('common.app.views.secRules.common.cancel'),
       })
     } catch { row.update_enabled = !val; return }
   }
@@ -871,7 +874,7 @@ const toggleSourceFlag = async (
   try {
     try {
       await request.put(`/security/${library}-lib/${row.id}/flags`, { update_enabled: val })
-      mfaAwareSuccess('已更新')
+      mfaAwareSuccess(t('common.app.views.secRules.msgs.updated'))
     } catch {
       if (sourceFlagRequestSeq.get(key) === requestSeq) row.update_enabled = !val
     }
@@ -935,9 +938,9 @@ interface LibRow {
 const libRows = computed<LibRow[]>(() => {
   const rows: LibRow[] = [
     {
-      key: 'crs', icon: Lock, iconClass: 'lib-icon--crs', name: 'CRS 规则库', sub: 'OWASP Core Rule Set',
+      key: 'crs', icon: Lock, iconClass: 'lib-icon--crs', name: t('common.app.views.secRules.lib.crsLibrary'), sub: 'OWASP Core Rule Set',
       // 读取失败时版本/条目显示 —（行保留，不冒充默认值）
-      version: crsInfoError.value ? '—' : crsInfo.value.available === false ? '未安装' : (crsInfo.value.version || '—'),  // 缺失态文案与 IP 库统一「未安装」（2026-09-24 用户裁定）
+      version: crsInfoError.value ? '—' : crsInfo.value.available === false ? t('common.app.views.secRules.lib.notInstalled') : (crsInfo.value.version || '—'),  // 缺失态文案与 IP 库统一「未安装」（2026-09-24 用户裁定）
       // 库容量=GET /security/crs 的 rule_count（服务端全量）；分页 total 只反映
       // 当前搜索条件下的结果集，二者不可共用。
       // rule_count 是 SecRule 指令条数（后端 countSecRules 只数 SecRule 行），
@@ -950,8 +953,8 @@ const libRows = computed<LibRow[]>(() => {
       nextUpdate: formatDate(crsInfo.value.next_update) || '—',
     },
     {
-      key: 'ip2region', icon: Location, iconClass: 'lib-icon--ip', name: 'IP 地理库', sub: 'IP 地理归属数据库',
-      version: ip2regionInfoError.value ? '—' : ip2regionInfo.value.available === false ? '未安装' : ip2regionVersionLabel.value,
+      key: 'ip2region', icon: Location, iconClass: 'lib-icon--ip', name: t('common.app.views.secRules.lib.ipLibrary'), sub: t('common.app.views.secRules.lib.ipDbSub'),
+      version: ip2regionInfoError.value ? '—' : ip2regionInfo.value.available === false ? t('common.app.views.secRules.lib.notInstalled') : ip2regionVersionLabel.value,
       // db_size 是库文件字节数——必须带单位（B/KB/MB）呈现，不得让
       // 用户把字节数读成条目数（条目口径见「数量/大小」列名的「大小」段）。
       count: !ip2regionInfoError.value && ip2regionInfo.value.db_size && ip2regionInfo.value.version && ip2regionInfo.value.version !== 'unknown' ? formatSize(ip2regionInfo.value.db_size) : '—',
@@ -975,10 +978,10 @@ const libRows = computed<LibRow[]>(() => {
       : summarize(threatSources.value)
     rows.push({
       key: 'threat', icon: Aim, iconClass: 'lib-icon--threat',
-      name: '威胁情报库',
-      sub: 'IP 威胁名单，可被黑名单策略引用',
-      version: configured ? (summary.latestVersion || '未更新') : '—',
-      count: configured && summary.totalEntries > 0 ? formatInt(summary.totalEntries) + ' 条' : '—',
+      name: t('common.app.views.secRules.lib.threatLibrary'),
+      sub: t('common.app.views.secRules.lib.threatSub'),
+      version: configured ? (summary.latestVersion || t('common.app.views.secRules.lib.notUpdated')) : '—',
+      count: configured && summary.totalEntries > 0 ? formatInt(summary.totalEntries) + t('common.app.views.secRules.lib.entriesUnit') : '—',
       status: threatLibError.value ? 'failed' : configured ? summary.status : 'not-configured',
       autoUpdate: threatAutoUpdate.value,
       autoUpdateKnown: threatLibLoaded.value && !threatLibError.value,
@@ -993,10 +996,10 @@ const libRows = computed<LibRow[]>(() => {
       : summarize(crawlerSources.value)
     rows.push({
       key: 'crawler', icon: Link, iconClass: 'lib-icon--crawler',
-      name: '爬虫地址库',
-      sub: 'Google/OpenAI/Bing/360 官方爬虫 IP 段',
-      version: configured ? (summary.latestVersion || '未更新') : '—',
-      count: configured && summary.totalEntries > 0 ? formatInt(summary.totalEntries) + ' 条' : '—',
+      name: t('common.app.views.secRules.lib.crawlerLibrary'),
+      sub: t('common.app.views.secRules.lib.crawlerSub'),
+      version: configured ? (summary.latestVersion || t('common.app.views.secRules.lib.notUpdated')) : '—',
+      count: configured && summary.totalEntries > 0 ? formatInt(summary.totalEntries) + t('common.app.views.secRules.lib.entriesUnit') : '—',
       status: crawlerLibError.value ? 'failed' : configured ? summary.status : 'not-configured',
       autoUpdate: crawlerAutoUpdate.value,
       autoUpdateKnown: crawlerLibLoaded.value && !crawlerLibError.value,
@@ -1013,21 +1016,21 @@ const libRows = computed<LibRow[]>(() => {
 const libHealthTags = computed(() => [
   // 健康标签单源（utils/securityLibraries）——IP 库未安装时
   // 显示「未安装」警示，不再与版本列「未安装」/状态列「已最新」互相矛盾。
-  libraryHealthTag('CRS 规则库', {
+  libraryHealthTag(t('common.app.views.secRules.lib.crsLibrary'), {
     // 首次响应未落地不得冒充「正常」——loaded 三态
     loaded: crsInfoLoaded.value,
     loadError: crsInfoError.value,
     available: crsInfo.value.available,
     status: crsInfoError.value ? 'failed' : crsInfo.value.update_status,
   }),
-  libraryHealthTag('IP 地理库', {
+  libraryHealthTag(t('common.app.views.secRules.lib.ipLibrary'), {
     loaded: ip2regionInfoLoaded.value,
     loadError: ip2regionInfoError.value,
     available: ip2regionInfo.value.available,
     status: ip2regionInfoError.value ? 'failed' : ip2regionStatusForTag.value,
   }),
-  librarySourceHealthTag('威胁情报库', threatSources.value, threatLibError.value, threatLibLoaded.value),
-  librarySourceHealthTag('爬虫地址库', crawlerSources.value, crawlerLibError.value, crawlerLibLoaded.value),
+  librarySourceHealthTag(t('common.app.views.secRules.lib.threatLibrary'), threatSources.value, threatLibError.value, threatLibLoaded.value),
+  librarySourceHealthTag(t('common.app.views.secRules.lib.crawlerLibrary'), crawlerSources.value, crawlerLibError.value, crawlerLibLoaded.value),
 ])
 const libSummaryWarn = computed(() => crsInfo.value.available === false || ip2regionInfo.value.available === false)
 
@@ -1044,8 +1047,8 @@ const toggleLibAutoUpdate = async (row: LibRow, val: boolean): Promise<void> => 
   if (autoUpdateSaving.value.has(row.key)) return
   if (!val) {
     try {
-      await ElMessageBox.confirm(`将停止「${row.name}」的自动更新，当前版本保留但不再自动更新。确认关闭？`, '关闭自动更新', {
-        type: 'warning', confirmButtonText: '确认关闭', cancelButtonText: '取消',
+      await ElMessageBox.confirm(t('common.app.views.secRules.lib.autoUpdateOffConfirmIp', { name: row.name }), t('common.app.views.secRules.lib.autoUpdateOffTitle'), {
+        type: 'warning', confirmButtonText: t('common.app.views.secRules.lib.confirmOff'), cancelButtonText: t('common.app.views.secRules.common.cancel'),
       })
     } catch { return }
   }
@@ -1054,7 +1057,7 @@ const toggleLibAutoUpdate = async (row: LibRow, val: boolean): Promise<void> => 
   setLibAutoUpdateShown(row.key, val)
   try {
     await applyLibAutoUpdate(row.key, val)
-    mfaAwareSuccess('已更新')
+    mfaAwareSuccess(t('common.app.views.secRules.msgs.updated'))
   } catch {
     // 失败回滚显示值（服务端为准；各库 fetch 亦会回填）
     setLibAutoUpdateShown(row.key, previous)
@@ -1152,15 +1155,15 @@ const ip2regionInfo = ref({ version: '', db_size: 0, auto_update: true, updated_
 const savingIP2RegionV6 = ref(false)
 const ip2regionSourceRows = computed(() => [
   {
-    kind: 'v4', name: 'IPv4 数据源', sub: '',
+    kind: 'v4', name: t('common.app.views.secRules.lib.v4Source'), sub: '',
     entries: ip2regionInfo.value.db_size,
     version: ip2regionSourceVersion(ip2regionInfo.value.version),
     status: ip2regionInfo.value.update_status,
     enabled: ip2regionInfo.value.auto_update,
   },
   {
-    kind: 'v6', name: 'IPv6 数据源',
-    sub: ip2regionInfo.value.v6_enabled ? '' : '未启用（开启后 IPv6 客户端与 IPv4 同语义解析，关闭时按「海外」处理）',
+    kind: 'v6', name: t('common.app.views.secRules.lib.v6Source'),
+    sub: ip2regionInfo.value.v6_enabled ? '' : t('common.app.views.secRules.lib.v6DisabledHint'),
     entries: ip2regionInfo.value.v6_enabled ? ip2regionInfo.value.v6_db_size : 0,
     version: ip2regionInfo.value.v6_enabled ? ip2regionSourceVersion(ip2regionInfo.value.v6_version) : '',
     status: ip2regionInfo.value.v6_update_status,
@@ -1169,17 +1172,17 @@ const ip2regionSourceRows = computed(() => [
 ])
 
 const ip2regionSourceVersion = (v: string) => {
-  if (!v || v === 'unknown') return '未安装'
-  if (v === 'bundled') return '内置版本'
+  if (!v || v === 'unknown') return t('common.app.views.secRules.lib.notInstalled')
+  if (v === 'bundled') return t('common.app.views.secRules.lib.bundledVersion')
   return v
 }
 const ip2regionSourceLabel = (status: string) => {
   switch (status) {
-    case 'success': return '正常'
-    case 'failed': return '失败'
-    case 'cancelled': return '已取消'
-    case 'skipped': return '已跳过'
-    default: return '待更新'
+    case 'success': return t('common.app.views.secRules.lib.statusNormal')
+    case 'failed': return t('common.app.views.secRules.lib.statusFailed')
+    case 'cancelled': return t('common.app.views.secRules.lib.statusCancelled')
+    case 'skipped': return t('common.app.views.secRules.lib.statusSkipped')
+    default: return t('common.app.views.secRules.lib.statusPending')
   }
 }
 const ip2regionSourceTagType = (status: string) => {
@@ -1196,7 +1199,7 @@ const toggleIP2RegionV6 = async (val: boolean | string | number) => {
     if (res.data?.message && res.data.message !== '已更新') {
       ElMessage.warning(res.data.message)
     } else {
-      mfaAwareSuccess(`IPv6 地理库已${val ? '开启' : '关闭'}`)
+      mfaAwareSuccess(t('common.app.views.secRules.lib.v6ToggleResult', { state: val ? t('common.app.views.secRules.lib.stateOn') : t('common.app.views.secRules.lib.stateOff') }))
     }
   } catch { /* request 层已提示；下方刷新回读权威值 */ } finally {
     savingIP2RegionV6.value = false
@@ -1223,14 +1226,14 @@ let threatLibInfoSeq = 0
 let crawlerLibInfoSeq = 0
 // 库信息未落地/读取失败时排程未知：编辑器禁用并显性提示，
 // 不得用默认值（周一–周日 04:00）冒充库内排程被保存覆盖。
-const SCHEDULE_UNKNOWN_HINT = '排程未知：库信息读取失败，请关闭后重新加载'
+const SCHEDULE_UNKNOWN_HINT = t('common.app.views.secRules.lib.scheduleUnknownHint')
 const crsScheduleHint = computed(() => (!crsInfoLoaded.value || crsInfoError.value) ? SCHEDULE_UNKNOWN_HINT : '')
 const ip2regionScheduleHint = computed(() => (!ip2regionInfoLoaded.value || ip2regionInfoError.value) ? SCHEDULE_UNKNOWN_HINT : '')
 const threatScheduleHint = computed(() => (!threatLibLoaded.value || threatLibError.value) ? SCHEDULE_UNKNOWN_HINT : '')
 const crawlerScheduleHint = computed(() => (!crawlerLibLoaded.value || crawlerLibError.value) ? SCHEDULE_UNKNOWN_HINT : '')
 const ip2regionVersionLabel = computed(() => {
-  if (ip2regionInfo.value.version === 'bundled') return '内置版本（未更新）'
-  return (ip2regionInfo.value.version && ip2regionInfo.value.version !== 'unknown') ? ip2regionInfo.value.version : '未安装'
+  if (ip2regionInfo.value.version === 'bundled') return t('common.app.views.secRules.lib.bundledNotUpdated')
+  return (ip2regionInfo.value.version && ip2regionInfo.value.version !== 'unknown') ? ip2regionInfo.value.version : t('common.app.views.secRules.lib.notInstalled')
 })// unknown/空版本统一显示「未安装」（灰），结构上与正常态同一 tag 元素。
 const ip2regionStatusForTag = computed(() => {
   const v = ip2regionInfo.value.version
@@ -1265,9 +1268,9 @@ const savingRule = ref(false)
 const ruleForm = ref({ name: '', description: '', conditions: [] as CustomRuleCondition[], condition_logic: 'and' as 'and' | 'or', action: 'block', score: 5, enabled: true })
 
 const CUSTOM_ACTION_VIEWS: Record<string, { label: string; type: 'danger' | 'info' | 'warning' }> = {
-  block: { label: '拦截', type: 'danger' },
-  log: { label: '仅记录', type: 'info' },
-  pass: { label: '放行计分', type: 'warning' },
+  block: { label: t('common.app.views.secRules.ruleDialog.actionBlock'), type: 'danger' },
+  log: { label: t('common.app.views.secRules.ruleDialog.actionLog'), type: 'info' },
+  pass: { label: t('common.app.views.secRules.ruleDialog.actionPass'), type: 'warning' },
 }
 // 自定义规则动作三态视图：block=拦截 / log=仅记录 / pass=放行计分，
 // 与编辑器 radio 及后端发射语义（pass 累加异常分、log 不累分）一一对应；
@@ -1368,12 +1371,12 @@ const applyIpListQuery = (): void => {
   ipListQueryApplied.value = applied
   ipListQueryAppliedMode.value = ipListQueryMode.value
   ipListEntryPage.value = 1
-  const label = ipListQueryMode.value === 'cidr' ? 'CIDR 匹配' : '模糊搜索'
+  const label = ipListQueryMode.value === 'cidr' ? t('common.app.views.secRules.ipDialog.cidrMode') : t('common.app.views.secRules.ipDialog.fuzzyMode')
   const hits = ipListEntriesFiltered.value.length
   if (hits === 0) {
-    ElMessage.warning(`${label}：未找到匹配条目`)
+    ElMessage.warning(t('common.app.views.secRules.msgs.searchNotFound', { mode: label }))
   } else {
-    mfaAwareSuccess(`${label}：命中 ${hits} 条`)
+    mfaAwareSuccess(t('common.app.views.secRules.msgs.searchHits', { mode: label, hits }))
   }
 }
 
@@ -1453,7 +1456,7 @@ const openIpListDialog = async (row?: IPListRow) => {
     if (requestSeq !== ipListDetailSeq) return
     // 失败态显性化并禁用保存：空 entries 下保存=全量清空名单
     ipListDetailFailed.value = true
-    ElMessage.error('加载列表条目失败，已禁用保存；请重新加载')
+    ElMessage.error(t('common.app.views.secRules.msgs.loadEntriesFailReload'))
   } finally {
     if (requestSeq === ipListDetailSeq) loadingIpListDetail.value = false
   }
@@ -1468,9 +1471,9 @@ const reloadIpListDetail = async (): Promise<void> => {
   if (ipListForm.value.entries.length > 0) {
     try {
       await ElMessageBox.confirm(
-        `重新加载将用服务端条目覆盖当前 ${ipListForm.value.entries.length} 条（含未保存的新增/编辑），确定继续？`,
-        '重新加载确认',
-        { type: 'warning', confirmButtonText: '重新加载', cancelButtonText: '取消' },
+        t('common.app.views.secRules.msgs.reloadConfirmBody', { count: ipListForm.value.entries.length }),
+        t('common.app.views.secRules.msgs.reloadConfirmTitle'),
+        { type: 'warning', confirmButtonText: t('common.app.views.secRules.common.reload'), cancelButtonText: t('common.app.views.secRules.common.cancel') },
       )
     } catch { return }
   }
@@ -1484,11 +1487,11 @@ const reloadIpListDetail = async (): Promise<void> => {
     ipListOpenSnapshot.value = ipListForm.value.entries.map((e) => e.value)
     ipListDetailFailed.value = false
     ipListEntryPage.value = 1
-    ElMessage.success('已加载最新条目')
+    ElMessage.success(t('common.app.views.secRules.msgs.loadedLatest'))
   } catch {
     if (requestSeq !== ipListDetailSeq) return
     ipListDetailFailed.value = true
-    ElMessage.error('加载列表条目失败，请稍后重试')
+    ElMessage.error(t('common.app.views.secRules.msgs.loadEntriesFailLater'))
   } finally {
     if (requestSeq === ipListDetailSeq) loadingIpListDetail.value = false
   }
@@ -1509,13 +1512,13 @@ const mergeFreshAutobanEntries = async (id: number, entries: IPListEntry[]): Pro
     const res = await request.get<APIResponse<IPListRow>>(`/security/ip-lists/${id}`, { silent: true })
     serverEntries = res.data?.entries || []
   } catch {
-    ElMessage.error('无法核对最新封禁条目，已中止保存（避免解封刚封禁的 IP）；请稍后重试')
+    ElMessage.error(t('common.app.views.secRules.msgs.concurrentBanAbort'))
     return null
   }
   const merged = mergeConcurrentBanEntries(serverEntries, entries, ipListOpenSnapshot.value)
   if (merged.preserved.length > 0) {
-    const preview = merged.preserved.slice(0, 5).join('、') + (merged.preserved.length > 5 ? ' 等' : '')
-    ElMessage.warning(`保存期间新增的 ${merged.preserved.length} 条封禁条目已保留（${preview}），不会随本次保存移除`)
+    const preview = merged.preserved.slice(0, 5).join('、') + (merged.preserved.length > 5 ? t('common.app.views.secRules.msgs.etcSuffix') : '')
+    ElMessage.warning(t('common.app.views.secRules.msgs.preservedKept', { count: merged.preserved.length, preview }))
   }
   return merged.entries
 }
@@ -1523,10 +1526,10 @@ const mergeFreshAutobanEntries = async (id: number, entries: IPListEntry[]): Pro
 const saveIpList = async () => {
   if (savingIpList.value) return
   const name = ipListForm.value.name.trim()
-  if (!name) { ElMessage.warning('请输入列表名称'); return }
-  if (name.length > 50) { ElMessage.warning('列表名称不能超过 50 字符'); return }
-  if (ipListForm.value.category.length > 32) { ElMessage.warning('分类不能超过 32 字符'); return }
-  if (ipListForm.value.description.length > 200) { ElMessage.warning('描述不能超过 200 字符'); return }
+  if (!name) { ElMessage.warning(t('common.app.views.secRules.msgs.nameRequired')); return }
+  if (name.length > 50) { ElMessage.warning(t('common.app.views.secRules.msgs.nameTooLong')); return }
+  if (ipListForm.value.category.length > 32) { ElMessage.warning(t('common.app.views.secRules.msgs.categoryTooLong')); return }
+  if (ipListForm.value.description.length > 200) { ElMessage.warning(t('common.app.views.secRules.msgs.descTooLong')); return }
 
   // 值与备注均为空的行视为未填写的占位行，保存时静默丢弃
   const entries = ipListForm.value.entries
@@ -1535,8 +1538,8 @@ const saveIpList = async () => {
   const invalidEntry = entries.find((e) => e.value === '' || !isValidCidr(e.value))
   if (invalidEntry) {
     ElMessage.error(invalidEntry.value
-      ? `条目格式不正确：${invalidEntry.value}（仅支持单 IP 或 CIDR）`
-      : '存在未填写条目值的行，请补全或删除空行')
+      ? t('common.app.views.secRules.msgs.entryInvalid', { entry: invalidEntry.value })
+      : t('common.app.views.secRules.msgs.emptyEntryRows'))
     return
   }
   // 允许空列表保存（用户裁定）：后端 validateIPListShape 不要求非空；
@@ -1546,17 +1549,17 @@ const saveIpList = async () => {
   // 的到期条目会把整表保存顶到上限（用户只能逐行删除）。
   const expiredEntryCount = entries.filter((e) => !!e.expires_at && autobanEntryExpired(e.expires_at)).length
   const activeEntryCount = entries.length - expiredEntryCount
-  if (activeEntryCount > IP_LIST_MAX_ENTRIES) { ElMessage.warning(`每个列表最多 ${IP_LIST_MAX_ENTRIES} 条生效条目（已到期条目不计入，当前 ${activeEntryCount} 条）`); return }
+  if (activeEntryCount > IP_LIST_MAX_ENTRIES) { ElMessage.warning(t('common.app.views.secRules.msgs.maxEntriesExceeded', { max: IP_LIST_MAX_ENTRIES, current: activeEntryCount })); return }
   // 已有名单 + 0 条：全量 PUT 会清空——必须二次确认且文案明示
   if (needsEmptyListConfirm(editingIpListId.value, entries.length)) {
     try {
-      await ElMessageBox.confirm(`将清空列表「${name}」的全部条目（保存后不可恢复），确定继续？`, '清空确认', { type: 'warning', confirmButtonText: '清空并保存' })
+      await ElMessageBox.confirm(t('common.app.views.secRules.msgs.clearConfirmBody', { name }), t('common.app.views.secRules.msgs.clearConfirmTitle'), { type: 'warning', confirmButtonText: t('common.app.views.secRules.msgs.clearSaveBtn') })
     } catch { return }
   }
-  const action = editingIpListId.value ? '保存' : '创建'
-  const expiredNote = expiredEntryCount > 0 ? `，其中 ${expiredEntryCount} 条已到期（保存后自动移除）` : ''
+  const action = editingIpListId.value ? t('common.app.views.secRules.common.save') : t('common.app.views.secRules.common.create')
+  const expiredNote = expiredEntryCount > 0 ? t('common.app.views.secRules.msgs.expiredNote', { count: expiredEntryCount }) : ''
   try {
-    await ElMessageBox.confirm(`确定${action} IP 地址列表「${name}」（${entries.length} 条条目${expiredNote}）？`, '确认', { type: 'warning' })
+    await ElMessageBox.confirm(t('common.app.views.secRules.msgs.ipListSaveConfirm', { action, name, count: entries.length, note: expiredNote }), t('common.app.views.secRules.common.confirm'), { type: 'warning' })
   } catch { return }
   // 并发新增核对必须落在最后一次确认之后。保存占位先于复核取得，
   // 使核对 GET 与 PUT 在途期间表单均保持冻结。
@@ -1576,7 +1579,7 @@ const saveIpList = async () => {
     // 名单直编是共享条目缓存的另一写入口（此前仅 IPLocationAction
     // 失效缓存）——不失效时策略向导/处置弹层会继续读旧条目。
     invalidateSharedEntriesCache()
-    showSaveResult(res, '保存成功'); ipListDialogVisible.value = false; fetchIpLists()
+    showSaveResult(res, t('common.app.views.secRules.common.saveOk')); ipListDialogVisible.value = false; fetchIpLists()
   } catch (error: unknown) {
     // 409 重名 / 400 条目非法等已由全局拦截器 toast，这里仅记录避免 unhandled rejection
     console.error('Failed to save IP list:', error)
@@ -1589,13 +1592,13 @@ const deleteIpList = (row: IPListRow) => {
   // 不再叠加双确认框→双 DELETE 误报
   if (deletingIpListId.value !== null) return
   deletingIpListId.value = row.id
-  ElMessageBox.confirm(`确定删除 IP 地址列表"${row.name}"？`, '确认', { type: 'warning' })
+  ElMessageBox.confirm(t('common.app.views.secRules.msgs.ipListDeleteConfirm', { name: row.name }), t('common.app.views.secRules.common.confirm'), { type: 'warning' })
     .then(async () => {
       // 被策略引用时后端返回 409（含引用策略名的 message 由全局拦截器 toast）
       const del = await request.delete(`/security/ip-lists/${row.id}`)
       // 删除同样使条目缓存失效。
       invalidateSharedEntriesCache()
-      showSaveResult(del, '已删除'); fetchIpLists()
+      showSaveResult(del, t('common.app.views.secRules.common.deleted')); fetchIpLists()
     }).catch(() => { /* 用户取消:不动列表;HTTP 失败已由全局拦截器 toast */ })
     .finally(() => { deletingIpListId.value = null })
 }
@@ -1628,16 +1631,16 @@ const onImportEntriesFileChange = (event: Event): void => {
     // 新条目直接渲染进条目表（跳到首个新增条目所在页）；重复条目弹窗点名
     ipListForm.value.entries.push(...outcome.newEntries)
     pendingInvalidCount.value = outcome.invalidLines.length
-    pendingInvalidLineNos.value = outcome.invalidLines.slice(0, 10).join('、') + (outcome.invalidLines.length > 10 ? ' 等' : '')
+    pendingInvalidLineNos.value = outcome.invalidLines.slice(0, 10).join('、') + (outcome.invalidLines.length > 10 ? t('common.app.views.secRules.msgs.etcSuffix') : '')
     if (outcome.duplicates.length > 0) {
       importDuplicates.value = outcome.duplicates
       importDuplicateVisible.value = true
     } else {
-      mfaAwareSuccess(`导入完成：成功 ${outcome.newEntries.length} 条，保存后生效`)
+      mfaAwareSuccess(t('common.app.views.secRules.msgs.importDone', { count: outcome.newEntries.length }))
       return
     }
   }
-  reader.onerror = () => { ElMessage.error('读取文件失败，请重试') }
+  reader.onerror = () => { ElMessage.error(t('common.app.views.secRules.msgs.readFileFail')) }
   reader.readAsText(file)
 }
 
@@ -1647,7 +1650,7 @@ const exportIpListEntries = (): void => {
     .map((e) => ({ value: e.value.trim(), remark: e.remark.trim() }))
     .filter((e) => e.value !== '' || e.remark !== '')
   if (entries.length === 0) {
-    ElMessage.warning('当前没有可导出的条目')
+    ElMessage.warning(t('common.app.views.secRules.msgs.nothingToExport'))
     return
   }
   // 首字符写入 UTF-8 BOM，避免 Excel 直接打开中文备注乱码；字段级 CSV
@@ -1658,45 +1661,45 @@ const exportIpListEntries = (): void => {
 }
 
 const PATTERN_PLACEHOLDERS: Record<string, string> = {
-  uri: '如 /admin',
-  args: '如 debug=1',
-  headers: '如 X-Custom-Header',
-  body: '如 password',
-  user_agent: '如 sqlmap',
+  uri: t('common.app.views.secRules.patterns.uri'),
+  args: t('common.app.views.secRules.patterns.args'),
+  headers: t('common.app.views.secRules.patterns.headers'),
+  body: t('common.app.views.secRules.patterns.body'),
+  user_agent: t('common.app.views.secRules.patterns.ua'),
 }
 const patternPlaceholder = (cond: CustomRuleCondition): string => {
-  if (cond.operator === 'regex') return '如 ^/admin/.*$'
+  if (cond.operator === 'regex') return t('common.app.views.secRules.patterns.regex')
   // 同表查表过 hasOwn（target 来自库值，原型键不得渲染函数源码）
-  return hasOwn(PATTERN_PLACEHOLDERS, cond.target) ? PATTERN_PLACEHOLDERS[cond.target] : '匹配值'
+  return hasOwn(PATTERN_PLACEHOLDERS, cond.target) ? PATTERN_PLACEHOLDERS[cond.target] : t('common.app.views.secRules.patterns.fallback')
 }
 
 // 快捷预设：标签为用户友好文案，value 为真实 UA 中的准确片段
 // （@contains 大小写敏感，value 必须与线上 UA 实际大小写一致才能命中）
 const UA_PRESET_GROUPS: ReadonlyArray<{ label: string; values: ReadonlyArray<{ label: string; value: string }> }> = [
-  { label: '攻击工具', values: [
+  { label: t('common.app.views.secRules.presets.uaGroupAttack'), values: [
     { label: 'sqlmap', value: 'sqlmap/' },
     { label: 'Nikto', value: 'Nikto/' },
     { label: 'Nmap NSE', value: 'Nmap Scripting Engine' },
     { label: 'masscan', value: 'masscan/' },
     { label: 'hydra', value: 'Hydra' },
   ] },
-  { label: '爬虫', values: [
-    { label: '机器人', value: 'bot' },
-    { label: 'Spider 爬虫', value: 'spider' },
-    { label: 'Python 脚本', value: 'python-requests' },
-    { label: 'Go 脚本', value: 'Go-http-client' },
+  { label: t('common.app.views.secRules.presets.uaGroupCrawler'), values: [
+    { label: t('common.app.views.secRules.presets.uaBot'), value: 'bot' },
+    { label: t('common.app.views.secRules.presets.uaSpider'), value: 'spider' },
+    { label: t('common.app.views.secRules.presets.uaPython'), value: 'python-requests' },
+    { label: t('common.app.views.secRules.presets.uaGo'), value: 'Go-http-client' },
     { label: 'curl', value: 'curl/' },
     { label: 'Wget', value: 'Wget/' },
   ] },
-  { label: '浏览器', values: [
+  { label: t('common.app.views.secRules.presets.uaGroupBrowser'), values: [
     { label: 'Chromium', value: 'Chrome/' },
     { label: 'Firefox', value: 'Firefox/' },
     { label: 'Safari', value: 'Safari/' },
     { label: 'Edge', value: 'Edg' },
   ] },
-  { label: '系统', values: [
+  { label: t('common.app.views.secRules.presets.uaGroupSystem'), values: [
     { label: 'Windows', value: 'Windows NT' },
-    { label: 'Linux 桌面', value: 'X11; Linux' },
+    { label: t('common.app.views.secRules.presets.uaLinuxDesktop'), value: 'X11; Linux' },
     { label: 'macOS', value: 'Macintosh' },
     { label: 'iPhone', value: 'iPhone' },
     { label: 'Android', value: 'Android' },
@@ -1705,13 +1708,13 @@ const UA_PRESET_GROUPS: ReadonlyArray<{ label: string; values: ReadonlyArray<{ l
 
 // 正则模板：点击即填充
 const REGEX_PRESETS: ReadonlyArray<{ label: string; value: string }> = [
-  { label: 'SQL注入', value: '(?i)(union|select|insert|drop)' },
+  { label: t('common.app.views.secRules.presets.rxSqlInjection'), value: '(?i)(union|select|insert|drop)' },
   { label: 'XSS', value: '(?i)(<script|javascript:|onerror=)' },
-  { label: '路径穿越', value: '\\.\\.[\\\\/]' },
-  { label: '命令注入', value: '(?i)(;|\\|\\||&&|\\$\\()' },
-  { label: '敏感文件', value: '(?i)(\\.(env|git|svn|htaccess))' },
-  { label: 'Linux 服务器', value: '(?i)linux (x86_64|aarch64|armv7l|armv6l|armv8l|i686|riscv64)' },
-  { label: '手机浏览器', value: '(?i)(iphone|android)' },
+  { label: t('common.app.views.secRules.presets.rxPathTraversal'), value: '\\.\\.[\\\\/]' },
+  { label: t('common.app.views.secRules.presets.rxCmdInjection'), value: '(?i)(;|\\|\\||&&|\\$\\()' },
+  { label: t('common.app.views.secRules.presets.rxSensitiveFiles'), value: '(?i)(\\.(env|git|svn|htaccess))' },
+  { label: t('common.app.views.secRules.presets.rxLinuxServer'), value: '(?i)linux (x86_64|aarch64|armv7l|armv6l|armv8l|i686|riscv64)' },
+  { label: t('common.app.views.secRules.presets.rxMobileBrowser'), value: '(?i)(iphone|android)' },
 ]
 
 // 每条 regex 条件的临时测试字符串（按 idx 索引；条件删除时同步重排避免错位）
@@ -1740,10 +1743,10 @@ const regexResultClass = (cond: CustomRuleCondition, idx: number): string => {
 const regexResultText = (cond: CustomRuleCondition, idx: number): string => {
   if (!cond.pattern) return ''
   const { re, valid } = buildJSRegex(cond.pattern)
-  if (!valid) return '正则语法错误'
+  if (!valid) return t('common.app.views.secRules.msgs.regexSyntaxErrorShort')
   const ts = regexTestStrings.value[idx] || ''
   if (!ts) return ''
-  return re!.test(ts) ? '匹配 ✓' : '不匹配 ✗'
+  return re!.test(ts) ? t('common.app.views.secRules.msgs.regexMatch') : t('common.app.views.secRules.msgs.regexNoMatch')
 }
 
 const isValidRegex = (pattern: string): boolean => {
@@ -1925,10 +1928,10 @@ const openRuleContent = async (row: CRSRuleFile) => {
   try {
     const res = await request.get<APIResponse<{ content: string; size: number }>>(`/security/crs/rules/${encodeURIComponent(row.filename)}`)
     if (requestSeq !== ruleContentSeq) return
-    currentContent.value = res.data?.content || '(空文件)'
+    currentContent.value = res.data?.content || t('common.app.views.secRules.ruleDialog.previewEmpty')
   } catch {
     if (requestSeq !== ruleContentSeq) return
-    currentContent.value = '加载失败'
+    currentContent.value = t('common.app.views.secRules.common.loadFailed')
   } finally {
     if (requestSeq === ruleContentSeq) loadingContent.value = false
   }
@@ -1970,7 +1973,7 @@ const saveCRSSchedule = async ({ days, time }: { days: number[]; time: string })
   savingCRSSchedule.value = true
   try {
     await request.put('/security/crs/schedule', { days, time })
-    mfaAwareSuccess('定时更新设置已保存')
+    mfaAwareSuccess(t('common.app.views.secRules.lib.scheduleSaved'))
     await fetchCRS()
   } catch { /* 全局拦截器已 toast */ } finally { savingCRSSchedule.value = false }
 }
@@ -1981,7 +1984,7 @@ const saveIP2RegionSchedule = async ({ days, time }: { days: number[]; time: str
   savingIP2RegionSchedule.value = true
   try {
     await request.put('/security/ip2region/schedule', { days, time })
-    mfaAwareSuccess('定时更新设置已保存')
+    mfaAwareSuccess(t('common.app.views.secRules.lib.scheduleSaved'))
     await fetchIP2RegionInfo()
   } catch { /* 全局拦截器已 toast */ } finally { savingIP2RegionSchedule.value = false }
 }
@@ -1992,7 +1995,7 @@ const saveThreatSchedule = async ({ days, time }: { days: number[]; time: string
   savingThreatSchedule.value = true
   try {
     await request.put('/security/threat-lib/schedule', { days, time })
-    mfaAwareSuccess('定时更新设置已保存')
+    mfaAwareSuccess(t('common.app.views.secRules.lib.scheduleSaved'))
     await fetchThreatLib()
   } catch { /* 全局拦截器已 toast */ } finally { savingThreatSchedule.value = false }
 }
@@ -2003,7 +2006,7 @@ const saveCrawlerSchedule = async ({ days, time }: { days: number[]; time: strin
   savingCrawlerSchedule.value = true
   try {
     await request.put('/security/crawler-lib/schedule', { days, time })
-    mfaAwareSuccess('定时更新设置已保存')
+    mfaAwareSuccess(t('common.app.views.secRules.lib.scheduleSaved'))
     await fetchCrawlerLib()
   } catch { /* 全局拦截器已 toast */ } finally { savingCrawlerSchedule.value = false }
 }
@@ -2071,29 +2074,29 @@ const openRuleDialog = (row?: CustomRule) => {
 
 const saveCustomRule = async () => {
   if (isReadOnly.value || savingRule.value) return
-  if (!ruleForm.value.name.trim()) { ElMessage.warning('请输入规则名称'); return }
-  if (!ruleForm.value.conditions.length) { ElMessage.warning('至少需要一个匹配条件'); return }
+  if (!ruleForm.value.name.trim()) { ElMessage.warning(t('common.app.views.secRules.msgs.ruleNameRequired')); return }
+  if (!ruleForm.value.conditions.length) { ElMessage.warning(t('common.app.views.secRules.msgs.needCondition')); return }
   // 上限与后端写侧门同源（条件数/pattern 字节）：不前置拦截只能等 400，且无字段定位。
   if (ruleForm.value.conditions.length > CUSTOM_RULE_MAX_CONDITIONS) {
-    ElMessage.error(`自定义规则最多支持 ${CUSTOM_RULE_MAX_CONDITIONS} 个匹配条件（当前 ${ruleForm.value.conditions.length} 个）`)
+    ElMessage.error(t('common.app.views.secRules.msgs.maxConditionsExceeded', { max: CUSTOM_RULE_MAX_CONDITIONS, current: ruleForm.value.conditions.length }))
     return
   }
   for (const cond of ruleForm.value.conditions) {
-    if (!cond.pattern.trim()) { ElMessage.error('每个条件必须填写匹配值'); return }
+    if (!cond.pattern.trim()) { ElMessage.error(t('common.app.views.secRules.msgs.patternRequired')); return }
     if (patternOverLimit(cond.pattern)) {
-      ElMessage.error(`匹配内容不能超过 ${CUSTOM_RULE_MAX_PATTERN_BYTES} 字节（当前「${cond.pattern.slice(0, 20)}…」${patternByteLength(cond.pattern)} 字节）`)
+      ElMessage.error(t('common.app.views.secRules.msgs.patternOverLimitErr', { max: CUSTOM_RULE_MAX_PATTERN_BYTES, preview: cond.pattern.slice(0, 20), bytes: patternByteLength(cond.pattern) }))
       return
     }
     if (cond.pattern.endsWith('\\')) {
       ElMessage.error(cond.operator === 'regex'
-        ? '正则匹配内容不能以反斜杠结尾，可用 `\\$` 结尾锚定或末尾追加 `(?:)` 空组表达尾部反斜杠'
-        : '该运算符不支持以反斜杠结尾的匹配内容，请改用正则运算符（如 `\\$`）表达')
+        ? t('common.app.views.secRules.msgs.regexBackslashTail')
+        : t('common.app.views.secRules.msgs.opBackslashTail'))
       return
     }
-    if (cond.operator === 'regex' && !isValidRegex(cond.pattern)) { ElMessage.error(`正则表达式语法错误：${cond.pattern}`); return }
+    if (cond.operator === 'regex' && !isValidRegex(cond.pattern)) { ElMessage.error(t('common.app.views.secRules.msgs.regexSyntaxErr', { pattern: cond.pattern })); return }
     // 空串放行=匹配全部头的值（与模板提示文案/后端契约一致）；非空必须合法 token。
     if (cond.target === 'headers' && !headerNameSaveAllowed(cond.header_name)) {
-      ElMessage.error('请求头名仅允许字母、数字与 "-"（1-64 字符），留空则匹配全部头的值');
+      ElMessage.error(t('common.app.views.secRules.msgs.headerNameInvalid'));
       return
     }
   }
@@ -2102,7 +2105,7 @@ const saveCustomRule = async () => {
     const res = editingRuleId.value
       ? await request.put(`/security/custom-rules/${editingRuleId.value}`, ruleForm.value)
       : await request.post('/security/custom-rules', ruleForm.value)
-    showSaveResult(res, '保存成功'); ruleDialogVisible.value = false; fetchCustomRules()
+    showSaveResult(res, t('common.app.views.secRules.common.saveOk')); ruleDialogVisible.value = false; fetchCustomRules()
   } catch (error: unknown) {
     // 全局拦截器已弹 toast，这里仅记录避免 unhandled rejection
     console.error('Failed to save custom rule:', error)
@@ -2115,8 +2118,8 @@ const deleteCustomRule = (row: CustomRule) => {
   // 不再叠加双确认框→双 DELETE 误报
   if (deletingCustomRuleId.value !== null) return
   deletingCustomRuleId.value = row.id
-  ElMessageBox.confirm(`确定删除规则"${row.name}"？`, '确认', { type: 'warning' })
-    .then(async () => { const del = await request.delete(`/security/custom-rules/${row.id}`); showSaveResult(del, '已删除'); fetchCustomRules() })
+  ElMessageBox.confirm(t('common.app.views.secRules.msgs.ruleDeleteConfirm', { name: row.name }), t('common.app.views.secRules.common.confirm'), { type: 'warning' })
+    .then(async () => { const del = await request.delete(`/security/custom-rules/${row.id}`); showSaveResult(del, t('common.app.views.secRules.common.deleted')); fetchCustomRules() })
     .catch((reason: unknown) => {
       // 取消与失败分离：ElMessageBox 取消/close 以字符串 reject；其余为真失败
       // （toast 已由全局拦截器弹出），留痕避免吞错

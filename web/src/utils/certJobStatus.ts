@@ -2,6 +2,7 @@
 // 此处 re-export 保持既有 `@/utils/certJobStatus` 导入面不变。
 import type { CertJobStatus } from '../types/index.ts'
 import { hasOwn } from './hasOwn.ts'
+import { tSafe as t } from '../i18n/tSafe.ts'
 export type { CertJobStatus }
 
 /**
@@ -10,39 +11,39 @@ export type { CertJobStatus }
  * 缺 case 只会静默落 unknown 分支，标签显示原始 token）。
  */
 const CERT_JOB_STATUS_LABELS = {
-  issued: '已签发',
-  failed: '失败',
-  disabled: '已禁用',
-  queued: '排队中',
-  waiting_ca: '限流中',
-  pending: '待处理',
-  processing: '处理中',
-  creating_account: '创建账户',
-  creating_order: '创建订单',
-  order_created: '建单完成',
-  waiting_order_ready: '等待就绪',
-  order_ready: '订单就绪',
-  cleanup_dns: '清理中',
-  cleanup_warning: '清理警告',
-  presenting_dns: '配置解析',
-  waiting_propagation: '等待传播',
-  dns_propagated: '已传播',
-  accepting_challenge: '提交验证',
-  waiting_order_valid: '等待验证',
-  order_valid: '验证完成',
-  validating: '验证中',
-  validated: '验证通过',
-  finalizing: '最终化',
-  finalized: '订单完成',
-  downloading: '下载证书',
-  downloaded: '下载完成',
+  issued: t('common.app.certJob.issued'),
+  failed: t('common.app.certJob.failed'),
+  disabled: t('common.app.certJob.disabled'),
+  queued: t('common.app.certJob.queued'),
+  waiting_ca: t('common.app.certJob.waitingCa'),
+  pending: t('common.app.certJob.pending'),
+  processing: t('common.app.certJob.processing'),
+  creating_account: t('common.app.certJob.creatingAccount'),
+  creating_order: t('common.app.certJob.creatingOrder'),
+  order_created: t('common.app.certJob.orderCreated'),
+  waiting_order_ready: t('common.app.certJob.waitingOrderReady'),
+  order_ready: t('common.app.certJob.orderReady'),
+  cleanup_dns: t('common.app.certJob.cleanupDns'),
+  cleanup_warning: t('common.app.certJob.cleanupWarning'),
+  presenting_dns: t('common.app.certJob.presentingDns'),
+  waiting_propagation: t('common.app.certJob.waitingPropagation'),
+  dns_propagated: t('common.app.certJob.dnsPropagated'),
+  accepting_challenge: t('common.app.certJob.acceptingChallenge'),
+  waiting_order_valid: t('common.app.certJob.waitingOrderValid'),
+  order_valid: t('common.app.certJob.orderValid'),
+  validating: t('common.app.certJob.validating'),
+  validated: t('common.app.certJob.validated'),
+  finalizing: t('common.app.certJob.finalizing'),
+  finalized: t('common.app.certJob.finalized'),
+  downloading: t('common.app.certJob.downloading'),
+  downloaded: t('common.app.certJob.downloaded'),
 } satisfies Record<CertJobStatus, string>
 
 export const certJobStatusLabel = (status: CertJobStatus): string => {
   // 空值/undefined 静默回退（存量行 status 空列的瞬时形态，非异常——
   // 控制台噪音「Unknown cert job status: undefined」治理，2026-10-11）；
   // 非空未知值仍 warn 暴露真实状态机漂移。
-  if (!status) return '未知'
+  if (!status) return t('common.app.certJob.unknown')
   // 状态表是普通对象：原型键（constructor/toString 等）直接下标会返回函数并
   // 被下方真值判断当成命中，必须走自有属性守卫（缺失即落 warn 分支）。
   const label = hasOwn(CERT_JOB_STATUS_LABELS, status) ? CERT_JOB_STATUS_LABELS[status] : undefined
@@ -129,9 +130,9 @@ const certJobHasOldCert = (job: CertJobRenewalViewFields): boolean => certJobEff
  */
 export const certJobRowStatusLabel = (job: CertJobRenewalViewFields, capAttempts: number): string => {
   if (job.status !== 'failed') return certJobStatusLabel(job.status)
-  if (certJobManualNeeded(job, capAttempts)) return '需人工'
-  if (certJobHasOldCert(job)) return '续签失败'
-  return '失败'
+  if (certJobManualNeeded(job, capAttempts)) return t('common.app.certJob.manualNeeded')
+  if (certJobHasOldCert(job)) return t('common.app.certJob.renewFailed')
+  return t('common.app.certJob.failed')
 }
 
 /** 冷却档位（小时）——与后端 computeBackoff 阶梯同规则：1→1h、2→2h、≥3→3h。 */
@@ -181,7 +182,9 @@ const certJobNextRetryPart = (job: CertJobRenewalViewFields, now: number, clock:
   const time = clock(job.ca_available_after)
   if (!time) return ''
   const remainMinutes = Math.ceil((at - now) / 60_000)
-  return remainMinutes > 0 ? `下次自动重试 ${time}（剩 ${remainMinutes} 分钟）` : `下次自动重试 ${time}`
+  return remainMinutes > 0
+    ? t('common.app.certJob.nextRetryWithRemain', { time, remain: remainMinutes })
+    : t('common.app.certJob.nextRetry', { time })
 }
 
 /**
@@ -208,22 +211,22 @@ export const certJobStatusHover = (
 ): string => {
   if (job.status === 'failed') {
     if (certJobManualNeeded(job, capAttempts)) {
-      return '自动重试已停止 · 查看日志 / 检查 DNS 或凭据 / 手动重签'
+      return t('common.app.certJob.retryStopped')
     }
     const parts: string[] = []
     if (certJobHasOldCert(job) && typeof job.days_remaining === 'number' && Number.isFinite(job.days_remaining)) {
       // 旧证书过期不渲染裸负数（与有效期列「已过期 N 天」同口径）
       parts.push(job.days_remaining >= 0
-        ? `旧证书剩 ${job.days_remaining} 天`
-        : `旧证书已过期 ${Math.abs(job.days_remaining)} 天`)
+        ? t('common.app.certJob.oldCertRemaining', { days: job.days_remaining })
+        : t('common.app.certJob.oldCertExpired', { days: Math.abs(job.days_remaining) }))
     }
-    parts.push(`已失败 ${job.renewal_attempts ?? 0} 次（上限 ${capAttempts}）`)
+    parts.push(t('common.app.certJob.failedAttempts', { attempts: job.renewal_attempts ?? 0, cap: capAttempts }))
     const retry = certJobNextRetryPart(job, now, clock)
     if (retry) parts.push(retry)
     return joinHoverParts(parts)
   }
   if (job.status === 'waiting_ca') {
-    const parts = [`已失败 ${job.renewal_attempts ?? 0} 次（上限 ${capAttempts}）`]
+    const parts = [t('common.app.certJob.failedAttempts', { attempts: job.renewal_attempts ?? 0, cap: capAttempts })]
     const retry = certJobNextRetryPart(job, now, clock)
     if (retry) parts.push(retry)
     return joinHoverParts(parts)

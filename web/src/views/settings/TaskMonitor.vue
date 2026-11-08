@@ -5,8 +5,8 @@
     <el-alert v-if="pollingError.errorMessage.value" type="error" :closable="false" show-icon class="polling-error-alert error-banner">
       <template #title>
         <div class="polling-error-title">
-          <span>任务监控加载失败：{{ pollingError.errorMessage.value }}</span>
-          <el-button link type="danger" :loading="refreshing" @click="retryPolling">立即重试</el-button>
+          <span>{{ t('app.settings.taskMonitor.loadFailPrefix') }}{{ pollingError.errorMessage.value }}</span>
+          <el-button link type="danger" :loading="refreshing" @click="retryPolling">{{ t('app.settings.taskMonitor.retryNowBtn') }}</el-button>
         </div>
       </template>
       <div class="polling-error-meta">{{ pollingErrorDescription }}</div>
@@ -16,25 +16,25 @@
       <el-col :xs="12" :md="6">
         <el-card class="tm-kpi">
           <div class="tm-kpi-num">{{ taskFamilyCount }}</div>
-          <div class="tm-kpi-label" title="仅统计引擎任务族，不含证书签发工作项（cert-job 动态行）">任务族</div>
+          <div class="tm-kpi-label" :title="t('app.settings.taskMonitor.kpi.taskFamiliesTip')">{{ t('app.settings.taskMonitor.kpi.taskFamilies') }}</div>
         </el-card>
       </el-col>
       <el-col :xs="12" :md="6">
         <el-card class="tm-kpi">
           <div class="tm-kpi-num tm-kpi-run">{{ runningCount }}</div>
-          <div class="tm-kpi-label" title="在途工作项：含证书签发工作项（排队/等待 CA 均计为运行中），可能大于任务族数">运行中</div>
+          <div class="tm-kpi-label" :title="t('app.settings.taskMonitor.kpi.runningTip')">{{ t('app.settings.taskMonitor.status.running') }}</div>
         </el-card>
       </el-col>
       <el-col :xs="12" :md="6">
         <el-card class="tm-kpi">
           <div class="tm-kpi-num">{{ total24h }}</div>
-          <div class="tm-kpi-label">24h 执行</div>
+          <div class="tm-kpi-label">{{ t('app.settings.taskMonitor.kpi.runs24h') }}</div>
         </el-card>
       </el-col>
       <el-col :xs="12" :md="6">
         <el-card class="tm-kpi">
           <div class="tm-kpi-num" :class="{ 'tm-kpi-bad': fail24h > 0 }">{{ fail24h }}</div>
-          <div class="tm-kpi-label">24h 失败</div>
+          <div class="tm-kpi-label">{{ t('app.settings.taskMonitor.kpi.fails24h') }}</div>
         </el-card>
       </el-col>
     </el-row>
@@ -45,10 +45,10 @@
         <el-card>
           <template #header>
             <div class="card-header">
-              <div class="card-title"><el-icon class="title-icon"><PieChartIcon /></el-icon><span>任务状态分布</span></div>
+              <div class="card-title"><el-icon class="title-icon"><PieChartIcon /></el-icon><span>{{ t('app.settings.taskMonitor.chart.distTitle') }}</span></div>
               <!-- 口径显性化：本图是「列表全部任务行」的分布，与只数引擎族的 KPI
                    不同源（cert-job 动态行最多 100 条会主导占比）。 -->
-              <span class="form-tip-inline">口径：全部任务行（含证书工作项，上限 100）</span>
+              <span class="form-tip-inline">{{ t('app.settings.taskMonitor.chart.distHint') }}</span>
             </div>
           </template>
           <v-chart v-if="loaded" :option="statusPieOption" autoresize class="tm-chart" />
@@ -59,16 +59,16 @@
         <el-card>
           <template #header>
             <div class="card-header">
-              <div class="card-title"><el-icon class="title-icon"><DataLine /></el-icon><span>近 24 小时执行（成功 / 失败）</span></div>
-              <el-button :icon="Refresh" circle size="small" :loading="refreshing" @click="() => refreshNow()" title="立即刷新" />
+              <div class="card-title"><el-icon class="title-icon"><DataLine /></el-icon><span>{{ t('app.settings.taskMonitor.chart.runs24hTitle') }}</span></div>
+              <el-button :icon="Refresh" circle size="small" :loading="refreshing" @click="() => refreshNow()" :title="t('app.settings.taskMonitor.chart.refreshBtn')" />
             </div>
           </template>
           <!-- 数据就位后再挂载（vue-echarts 8 增量规划对「空 option 挂载→数据后到达」
                的 series/legend 合并不稳——实证轴渲染而序列/图例缺失；挂载即完整
                option 与独立 echarts 实证一致） -->
-          <div v-if="seriesStale && series24h.length" class="chart-stale-hint">采集失败：展示上次结果</div>
+          <div v-if="seriesStale && series24h.length" class="chart-stale-hint">{{ t('app.settings.taskMonitor.chart.staleHint') }}</div>
           <v-chart v-if="loaded && series24h.length" :option="statsBarOption" :update-options="{ notMerge: true }" autoresize class="tm-chart" />
-          <el-empty v-else-if="loaded && !series24h.length" description="该时间范围内暂无数据" :image-size="60" />
+          <el-empty v-else-if="loaded && !series24h.length" :description="t('app.settings.taskMonitor.chart.emptyRange')" :image-size="60" />
           <div v-else class="tm-chart tm-skeleton"></div>
         </el-card>
       </el-col>
@@ -77,19 +77,19 @@
     <!-- 证书队列横幅（实时——非任务） -->
     <el-card class="tm-cq-banner">
       <div class="tm-cq-banner-inner">
-        <div class="tm-cq-banner-title"><el-icon class="title-icon"><Lock /></el-icon><span>ACME 证书任务队列</span></div>
+        <div class="tm-cq-banner-title"><el-icon class="title-icon"><Lock /></el-icon><span>{{ t('app.settings.taskMonitor.certQueue.title') }}</span></div>
         <div v-if="certQueueError" class="tm-cq-banner-stats">
-          <span class="tm-cq-chip">排队 <b>—</b></span>
-          <span class="tm-cq-chip">进行中 <b>—</b></span>
-          <span class="tm-cq-chip">等 CA <b>—</b></span>
+          <span class="tm-cq-chip">{{ t('app.settings.taskMonitor.certQueue.queued') }} <b>—</b></span>
+          <span class="tm-cq-chip">{{ t('app.settings.taskMonitor.status.inProgress') }} <b>—</b></span>
+          <span class="tm-cq-chip">{{ t('app.settings.taskMonitor.certQueue.waitingCa') }} <b>—</b></span>
         </div>
         <div v-else class="tm-cq-banner-stats">
-          <span class="tm-cq-chip">排队 <b>{{ certQueue.truncated ? '≥' : '' }}{{ certQueue.queued }}</b></span>
-          <span class="tm-cq-chip">进行中 <b class="tm-c-run">{{ certQueue.truncated ? '≥' : '' }}{{ certQueue.running }}</b></span>
-          <span class="tm-cq-chip">等 CA <b class="tm-c-wait">{{ certQueue.truncated ? '≥' : '' }}{{ certQueue.waiting }}</b></span>
+          <span class="tm-cq-chip">{{ t('app.settings.taskMonitor.certQueue.queued') }} <b>{{ certQueue.truncated ? '≥' : '' }}{{ certQueue.queued }}</b></span>
+          <span class="tm-cq-chip">{{ t('app.settings.taskMonitor.status.inProgress') }} <b class="tm-c-run">{{ certQueue.truncated ? '≥' : '' }}{{ certQueue.running }}</b></span>
+          <span class="tm-cq-chip">{{ t('app.settings.taskMonitor.certQueue.waitingCa') }} <b class="tm-c-wait">{{ certQueue.truncated ? '≥' : '' }}{{ certQueue.waiting }}</b></span>
         </div>
         <div class="tm-cq-banner-live">
-          <span v-if="certQueueError" class="tm-cq-idle">证书队列状态加载失败（下一轮轮询自动重试）</span>
+          <span v-if="certQueueError" class="tm-cq-idle">{{ t('app.settings.taskMonitor.certQueue.loadFail') }}</span>
           <!-- 正文空态改按聚合存活计数判定（原只看首页存活行——
                首页均为终态而聚合计数非空时会谎报「空闲」）。 -->
           <template v-else-if="certQueueHasLive(certQueue)">
@@ -98,63 +98,63 @@
             </span>
             <span v-if="certQueueMoreCount(certQueue) > 0" class="tm-cq-more">+{{ certQueueMoreCount(certQueue) }}</span>
           </template>
-          <span v-else class="tm-cq-idle">空闲——临期证书由「证书续期扫描」自动入队</span>
+          <span v-else class="tm-cq-idle">{{ t('app.settings.taskMonitor.certQueue.idleHint') }}</span>
         </div>
         <!-- 标签判据与聚合计数同口径——排队/等 CA 亦为「非空闲」。-->
         <el-tag :type="certQueueError ? 'danger' : certQueueIsBusy(certQueue) ? 'primary' : 'success'" size="small" effect="plain">
-          {{ certQueueError ? '加载失败' : certQueueIsBusy(certQueue) ? '队列非空' : '空闲' }}
+          {{ certQueueError ? t('app.settings.taskMonitor.certQueue.loadFailShort') : certQueueIsBusy(certQueue) ? t('app.settings.taskMonitor.certQueue.busy') : t('app.settings.taskMonitor.certQueue.idle') }}
         </el-tag>
       </div>
     </el-card>
 
     <!-- 任务列表 -->
-    <div v-if="certJobsTruncated" class="info-note-bar"><span class="info-note-desc">证书任务行仅显示最近 100 条（更老的签发记录请在证书任务页按规则查看）</span></div>
+    <div v-if="certJobsTruncated" class="info-note-bar"><span class="info-note-desc">{{ t('app.settings.taskMonitor.certQueue.truncatedNote') }}</span></div>
 
     <el-card>
       <template #header>
         <div class="card-header">
-          <div class="card-title"><el-icon class="title-icon"><List /></el-icon><span>全部任务</span>
+          <div class="card-title"><el-icon class="title-icon"><List /></el-icon><span>{{ t('app.settings.taskMonitor.table.title') }}</span>
             <span class="tm-count">{{ filteredTasks.length }}</span>
           </div>
           <div class="tm-filter-group">
-            <el-select v-model="categoryFilter" size="small" clearable placeholder="全部分类" class="tm-category-filter" @change="page = 1">
-              <el-option label="全部分类" value="all" />
+            <el-select v-model="categoryFilter" size="small" clearable :placeholder="t('app.settings.taskMonitor.table.allCategories')" class="tm-category-filter" @change="page = 1">
+              <el-option :label="t('app.settings.taskMonitor.table.allCategories')" value="all" />
               <el-option v-for="c in categoryOptions" :key="c" :label="c" :value="c" />
             </el-select>
             <el-radio-group v-model="kindFilter" size="small">
-              <el-radio-button value="all">全部</el-radio-button>
-              <el-radio-button value="scheduled">定时</el-radio-button>
-              <el-radio-button value="daemon">常驻</el-radio-button>
-              <el-radio-button value="periodic">循环</el-radio-button>
-              <el-radio-button value="oneshot">触发</el-radio-button>
+              <el-radio-button value="all">{{ t('app.settings.taskMonitor.triggerFamily.all') }}</el-radio-button>
+              <el-radio-button value="scheduled">{{ t('app.settings.taskMonitor.triggerFamily.scheduled') }}</el-radio-button>
+              <el-radio-button value="daemon">{{ t('app.settings.taskMonitor.triggerFamily.daemon') }}</el-radio-button>
+              <el-radio-button value="periodic">{{ t('app.settings.taskMonitor.triggerFamily.periodic') }}</el-radio-button>
+              <el-radio-button value="oneshot">{{ t('app.settings.taskMonitor.col.trigger') }}</el-radio-button>
             </el-radio-group>
           </div>
         </div>
       </template>
       <el-table :data="pagedTasks" v-loading="!loaded" size="default" row-key="id" class="tm-nowrap-table">
-        <el-table-column label="任务" min-width="128" show-overflow-tooltip>
+        <el-table-column :label="t('app.settings.taskMonitor.col.task')" min-width="128" show-overflow-tooltip>
           <template #default="{ row }">
             <el-tooltip :disabled="!row.description" placement="top" :offset="8" :show-after="150" :show-arrow="false" popper-class="tm-name-tip">
               <template #content>
                 <div class="tm-tip-title">{{ row.name }}</div>
-                <div v-if="row.cadence" class="tm-tip-cadence">节奏：{{ row.cadence }}</div>
+                <div v-if="row.cadence" class="tm-tip-cadence">{{ t('app.settings.taskMonitor.cadencePrefix') }}{{ row.cadence }}</div>
                 <div class="tm-tip-desc">{{ row.description }}</div>
               </template>
               <div class="tm-task-name">{{ row.name }}</div>
             </el-tooltip>
           </template>
         </el-table-column>
-        <el-table-column label="分类" width="92">
+        <el-table-column :label="t('app.settings.taskMonitor.col.category')" width="92">
           <template #default="{ row }">
             <el-tag size="small" effect="plain" :type="categoryTagType(row.category)">{{ row.category }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="类型" width="72">
+        <el-table-column :label="t('app.settings.taskMonitor.col.kind')" width="72">
           <template #default="{ row }">
             <el-tag size="small" :type="kindTag(row.kind)" effect="plain" :class="kindTagClass(row.kind)">{{ kindLabel(row.kind) }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="状态" width="96">
+        <el-table-column :label="t('app.settings.taskMonitor.col.status')" width="96">
           <template #default="{ row }">
             <!-- 状态列词表=引擎执行语义三态（空闲/运行中/失败，2026-10-22 用户
                  裁定）：证书业务生命周期态（已签发/限流中…）不进状态列，
@@ -162,7 +162,7 @@
             <span class="tm-status" :data-status="row.status"><span class="tm-dot"></span>{{ statusLabel(row.status) }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="调度" width="92">
+        <el-table-column :label="t('app.settings.taskMonitor.col.schedule')" width="92">
           <template #default="{ row }">
             <!-- v2.0 调度开关统一：定时/循环=停止/恢复调度、
                  常驻=启停自管理循环——绑定 loop_on 走 /toggle（后端按 Kind 路由）。
@@ -173,35 +173,35 @@
                  唤醒——开关上加 tooltip 说明自动唤醒语义（页内既有 tooltip 范式） -->
             <!-- 角色不适用（从节点上的 master-only 族）：调度开关在本节点
                  不可用——显性标注原因，避免把「永不投递」误读为开关故障 -->
-            <el-tooltip v-if="row.role_applicable === false" content="仅主节点生效：从节点不调度此任务，调度开关仅在主节点可用" placement="top" :offset="8" :show-after="150" :show-arrow="false">
-              <el-tag size="small" type="info" effect="plain">仅主节点</el-tag>
+            <el-tooltip v-if="row.role_applicable === false" :content="t('app.settings.taskMonitor.schedule.masterOnlyTip')" placement="top" :offset="8" :show-after="150" :show-arrow="false">
+              <el-tag size="small" type="info" effect="plain">{{ t('app.settings.taskMonitor.schedule.masterOnlyTag') }}</el-tag>
             </el-tooltip>
-            <el-tooltip v-else-if="row.id === 'cert-waiting-ca'" :content="scheduleStoppedTip(row as TaskInfo) || '有证书任务入队时自动唤醒'" placement="top" :offset="8" :show-after="150" :show-arrow="false">
+            <el-tooltip v-else-if="row.id === 'cert-waiting-ca'" :content="scheduleStoppedTip(row as TaskInfo) || t('app.settings.taskMonitor.schedule.certWakeHint')" placement="top" :offset="8" :show-after="150" :show-arrow="false">
               <el-switch :model-value="!!row.loop_on" :disabled="!canOperate" @change="(v: string | number | boolean) => onToggle(row as TaskInfo, !!v)" />
             </el-tooltip>
-            <el-tooltip v-else-if="row.kind !== 'oneshot'" :content="scheduleStoppedTip(row as TaskInfo) || (isBusinessDrivenTask(row as TaskInfo) ? '由对应业务页自动更新控制' : '停止/恢复调度')" placement="top" :offset="8" :show-after="150" :show-arrow="false">
+            <el-tooltip v-else-if="row.kind !== 'oneshot'" :content="scheduleStoppedTip(row as TaskInfo) || (isBusinessDrivenTask(row as TaskInfo) ? t('app.settings.taskMonitor.schedule.businessDriven') : t('app.settings.taskMonitor.schedule.toggle'))" placement="top" :offset="8" :show-after="150" :show-arrow="false">
               <!-- 引擎自行停调（连续失败未推进排程槽）：业务驱动任务的开关在本页
                    只读，恢复入口在业务页——用警示标签替代不可用开关，避免「关着的
                    开关」被读成用户主动停止；非业务驱动任务保留开关（打开即恢复）。 -->
-              <el-tag v-if="row.schedule_stopped_reason && isBusinessDrivenTask(row as TaskInfo)" size="small" type="danger" effect="plain">已停调</el-tag>
+              <el-tag v-if="row.schedule_stopped_reason && isBusinessDrivenTask(row as TaskInfo)" size="small" type="danger" effect="plain">{{ t('app.settings.taskMonitor.schedule.stoppedTag') }}</el-tag>
               <el-switch v-else :model-value="!!row.loop_on" :disabled="!canOperate || isBusinessDrivenTask(row as TaskInfo)" @change="(v: string | number | boolean) => onToggle(row as TaskInfo, !!v)" />
             </el-tooltip>
             <!-- 触发类（含 cert-job 动态行）：统一显示禁用开关保持页面一致性——
                  仅手动/代码触发执行（2026-10-01 用户裁定；cert-job 特例已消除） -->
-            <el-tooltip v-else content="触发类任务不可调度——仅手动/代码触发执行" placement="top" :offset="8" :show-after="150" :show-arrow="false">
+            <el-tooltip v-else :content="t('app.settings.taskMonitor.schedule.oneshotTip')" placement="top" :offset="8" :show-after="150" :show-arrow="false">
               <el-switch :model-value="false" disabled />
             </el-tooltip>
           </template>
         </el-table-column>
-        <el-table-column label="执行时间" width="180">
+        <el-table-column :label="t('app.settings.taskMonitor.col.execTime')" width="180">
           <template #default="{ row }">
             <el-tooltip :disabled="!row.last_run" placement="top" :offset="8" :show-after="150" :show-arrow="false">
               <template #content>
-                <div class="tm-tip-title">最近执行</div>
-                <div>{{ fmtTime(row.last_run?.started_at) || '—' }}<template v-if="row.last_run?.duration_ms > 0">（耗时 {{ fmtDuration(row.last_run.duration_ms) }}）</template></div>
+                <div class="tm-tip-title">{{ t('app.settings.taskMonitor.detail.lastRun') }}</div>
+                <div>{{ fmtTime(row.last_run?.started_at) || '—' }}<template v-if="row.last_run?.duration_ms > 0">{{ t('app.settings.taskMonitor.durationNote', { time: fmtDuration(row.last_run.duration_ms) }) }}</template></div>
                 <div class="tm-tip-sep"></div>
-                <div class="tm-tip-title">完成时间</div>
-                <div>{{ row.status === 'running' ? '进行中' : fmtTime(row.last_run?.finished_at) || '—' }}</div>
+                <div class="tm-tip-title">{{ t('app.settings.taskMonitor.detail.finishedAt') }}</div>
+                <div>{{ row.status === 'running' ? t('app.settings.taskMonitor.status.inProgress') : fmtTime(row.last_run?.finished_at) || '—' }}</div>
               </template>
               <!-- 执行时间列=最近执行时刻（全类型统一，含常驻——其执行记录=boot 行）；
                    不再显示「常驻 · 启动于」文案（2026-10-03 用户裁定） -->
@@ -210,7 +210,7 @@
             </el-tooltip>
           </template>
         </el-table-column>
-        <el-table-column label="下次执行" width="180">
+        <el-table-column :label="t('app.settings.taskMonitor.detail.nextRun')" width="180">
           <template #default="{ row }">
             <span v-if="row.next_run_at && row.loop_on && row.kind !== 'daemon' && row.role_applicable !== false">{{ row.next_run_at }}</span>
             <span v-else class="tm-dim">—</span>
@@ -218,39 +218,39 @@
         </el-table-column>
         <el-table-column width="104">
           <template #header>
-            <el-tooltip content="近 24 小时成功 / 失败次数；历史明细最多 50 条（见详情）" placement="top" :show-arrow="false">
-              <span>成功/失败 ⓘ</span>
+            <el-tooltip :content="t('app.settings.taskMonitor.col.successFailTip')" placement="top" :show-arrow="false">
+              <span>{{ t('app.settings.taskMonitor.col.successFail') }}</span>
             </el-tooltip>
           </template>
           <template #default="{ row }">
             <span class="tm-ok">{{ row.success_24h }}</span> / <span :class="{ 'tm-bad': row.fail_24h > 0 }">{{ row.fail_24h }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="250" fixed="right" class-name="tm-op-cell">
+        <el-table-column :label="t('app.settings.taskMonitor.col.actions')" width="250" fixed="right" class-name="tm-op-cell">
           <template #default="{ row }">
             <el-tooltip v-if="row.triggerable" :disabled="!runCooldownReason(row as TaskInfo)" :content="runCooldownReason(row as TaskInfo)">
               <span class="tm-op-trigger">
                 <el-button
                   link type="primary" size="small"
-                  :disabled="!canOperate || taskActionPendingId !== null || row.status === 'running' || runCooldownReason(row as TaskInfo) === '该任务永久不可重试'"
+                  :disabled="!canOperate || taskActionPendingId !== null || row.status === 'running' || runCooldownReason(row as TaskInfo) === t('app.settings.taskMonitor.cooldown.permanent')"
                   @click="onTrigger(row as TaskInfo)"
-                >运行</el-button>
+                >{{ t('app.settings.taskMonitor.actions.run') }}</el-button>
               </span>
             </el-tooltip>
             <el-button
               v-if="row.cancellable && row.status === 'running'"
               link type="danger" size="small" :disabled="!canOperate || taskActionPendingId !== null"
               @click="onCancel(row as TaskInfo)"
-            >取消</el-button>
+            >{{ t('app.settings.taskMonitor.actions.cancel') }}</el-button>
             <!-- 常驻行启停已由调度列开关承担（loop_on 同源）——操作列改「重启」-->
             <el-button
               v-if="row.controllable"
               link type="primary" size="small"
               :disabled="!canOperate || taskActionPendingId !== null"
               @click="onRestart(row as TaskInfo)"
-            >重启</el-button>
-            <el-button link type="info" size="small" @click="openLogs(row as TaskInfo)">日志</el-button>
-            <el-button link type="info" size="small" @click="openDetail(row as TaskInfo)">详情</el-button>
+            >{{ t('app.settings.taskMonitor.actions.restart') }}</el-button>
+            <el-button link type="info" size="small" @click="openLogs(row as TaskInfo)">{{ t('app.settings.taskMonitor.actions.logs') }}</el-button>
+            <el-button link type="info" size="small" @click="openDetail(row as TaskInfo)">{{ t('app.settings.taskMonitor.actions.detail') }}</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -278,62 +278,62 @@
       </template>
       <div v-if="detailTask" class="tm-detail">
         <section class="dialog-panel">
-          <DialogSectionHeader title="任务信息" :description="detailTask.description" />
+          <DialogSectionHeader :title="t('app.settings.taskMonitor.detail.infoTitle')" :description="detailTask.description" />
         <el-descriptions :column="2" border size="small" class="tm-detail-descs">
-          <el-descriptions-item label="运行节奏">{{ detailTask.cadence || '—' }}</el-descriptions-item>
-          <el-descriptions-item label="角色适用性">
-            <el-tag v-if="detailTask.role_applicable === false" size="small" type="info" effect="plain">仅主节点运行（本节点不调度）</el-tag>
-            <el-tag v-else size="small" type="success" effect="plain">本节点可运行</el-tag>
+          <el-descriptions-item :label="t('app.settings.taskMonitor.detail.cadence')">{{ detailTask.cadence || '—' }}</el-descriptions-item>
+          <el-descriptions-item :label="t('app.settings.taskMonitor.detail.roleApplicability')">
+            <el-tag v-if="detailTask.role_applicable === false" size="small" type="info" effect="plain">{{ t('app.settings.taskMonitor.detail.masterOnlyRun') }}</el-tag>
+            <el-tag v-else size="small" type="success" effect="plain">{{ t('app.settings.taskMonitor.detail.nodeRunnable') }}</el-tag>
           </el-descriptions-item>
-          <el-descriptions-item label="调度开关">
-            <el-tooltip content="引擎调度投递开关（列表「调度」列同源）" placement="top" :offset="8" :show-after="150" :show-arrow="false">
-              <el-tag v-if="detailTask.role_applicable === false" size="small" type="info" effect="plain">仅主节点生效</el-tag>
-              <el-tag v-else-if="detailTask.kind !== 'oneshot'" size="small" :type="detailTask.loop_on ? 'success' : 'warning'" effect="plain">{{ detailTask.loop_on ? '开启' : '关闭' }}</el-tag>
-              <el-tag v-else size="small" type="info" effect="plain">不可调度</el-tag>
+          <el-descriptions-item :label="t('app.settings.taskMonitor.detail.scheduleSwitch')">
+            <el-tooltip :content="t('app.settings.taskMonitor.detail.scheduleSwitchTip')" placement="top" :offset="8" :show-after="150" :show-arrow="false">
+              <el-tag v-if="detailTask.role_applicable === false" size="small" type="info" effect="plain">{{ t('app.settings.taskMonitor.schedule.masterOnlyEffect') }}</el-tag>
+              <el-tag v-else-if="detailTask.kind !== 'oneshot'" size="small" :type="detailTask.loop_on ? 'success' : 'warning'" effect="plain">{{ detailTask.loop_on ? t('app.settings.taskMonitor.schedule.on') : t('app.settings.taskMonitor.schedule.off') }}</el-tag>
+              <el-tag v-else size="small" type="info" effect="plain">{{ t('app.settings.taskMonitor.schedule.notSchedulable') }}</el-tag>
             </el-tooltip>
           </el-descriptions-item>
-          <el-descriptions-item v-if="detailTask.schedule_stopped_reason" label="停调原因">
+          <el-descriptions-item v-if="detailTask.schedule_stopped_reason" :label="t('app.settings.taskMonitor.detail.stopReason')">
             <span class="tm-bad">{{ scheduleStoppedTip(detailTask) }}</span>
           </el-descriptions-item>
           <!-- 与列表「下次执行」列同门（loop_on 且非常驻且角色适用）——停用
                任务的排程槽是陈旧预约值，详情无条件显示会与列表「—」口径分叉 -->
-          <el-descriptions-item label="下次执行">{{ (detailTask.next_run_at && detailTask.loop_on && detailTask.kind !== 'daemon' && detailTask.role_applicable !== false) ? detailTask.next_run_at : '—' }}</el-descriptions-item>
-          <el-descriptions-item label="24h 成功 / 失败">
+          <el-descriptions-item :label="t('app.settings.taskMonitor.detail.nextRun')">{{ (detailTask.next_run_at && detailTask.loop_on && detailTask.kind !== 'daemon' && detailTask.role_applicable !== false) ? detailTask.next_run_at : '—' }}</el-descriptions-item>
+          <el-descriptions-item :label="t('app.settings.taskMonitor.detail.runs24h')">
             <span class="tm-ok">{{ detailTask.success_24h }}</span> / <span :class="{ 'tm-bad': detailTask.fail_24h > 0 }">{{ detailTask.fail_24h }}</span>
           </el-descriptions-item>
-          <el-descriptions-item v-if="detailTask.kind === 'daemon'" label="启动时间">{{ fmtTime(detailTask.started_at) || '—' }}</el-descriptions-item>
-          <el-descriptions-item v-if="detailTask.last_run" label="开始时间">{{ fmtTime(detailTask.last_run.started_at) || '—' }}</el-descriptions-item>
-          <el-descriptions-item v-if="detailTask.last_run" label="完成时间">{{ detailTask.status === 'running' ? '进行中' : fmtTime(detailTask.last_run.finished_at) || '—' }}</el-descriptions-item>
-          <el-descriptions-item v-if="detailTask.last_run" label="耗时">{{ fmtDuration(detailTask.last_run.duration_ms) }}</el-descriptions-item>
-          <el-descriptions-item v-if="detailTask.last_run" label="触发 / 结果"><span class="tm-inline-flex">{{ triggerLabel(detailTask.last_run.trigger) }} · {{ detailTask.last_run.operator || '系统' }} · <el-tag size="small" :type="resultTagType(detailTask.last_run.result)">{{ statusResultLabel(detailTask.last_run.result) }}</el-tag></span></el-descriptions-item>
+          <el-descriptions-item v-if="detailTask.kind === 'daemon'" :label="t('app.settings.taskMonitor.detail.startedAt')">{{ fmtTime(detailTask.started_at) || '—' }}</el-descriptions-item>
+          <el-descriptions-item v-if="detailTask.last_run" :label="t('app.settings.taskMonitor.detail.startTime')">{{ fmtTime(detailTask.last_run.started_at) || '—' }}</el-descriptions-item>
+          <el-descriptions-item v-if="detailTask.last_run" :label="t('app.settings.taskMonitor.detail.finishedAt')">{{ detailTask.status === 'running' ? t('app.settings.taskMonitor.status.inProgress') : fmtTime(detailTask.last_run.finished_at) || '—' }}</el-descriptions-item>
+          <el-descriptions-item v-if="detailTask.last_run" :label="t('app.settings.taskMonitor.col.duration')">{{ fmtDuration(detailTask.last_run.duration_ms) }}</el-descriptions-item>
+          <el-descriptions-item v-if="detailTask.last_run" :label="t('app.settings.taskMonitor.detail.triggerResult')"><span class="tm-inline-flex">{{ triggerLabel(detailTask.last_run.trigger) }} · {{ detailTask.last_run.operator || t('app.settings.taskMonitor.detail.systemOperator') }} · <el-tag size="small" :type="resultTagType(detailTask.last_run.result)">{{ statusResultLabel(detailTask.last_run.result) }}</el-tag></span></el-descriptions-item>
         </el-descriptions>
         </section>
         <div v-if="detailTask.last_run?.message" class="dialog-panel tm-detail-msg">{{ detailTask.last_run.message }}</div>
         <!-- 历史加载失败显性化（原静默呈现为空表，与「无记录」不可区分）-->
-        <el-alert v-if="detailHistoryError" type="error" :closable="false" show-icon title="运行历史加载失败，请关闭后重新打开" style="margin-bottom: 12px" />
+        <el-alert v-if="detailHistoryError" type="error" :closable="false" show-icon :title="t('app.settings.taskMonitor.detail.historyLoadFail')" style="margin-bottom: 12px" />
         <section v-if="history.length" class="tm-history-section">
           <DialogSectionHeader :title="historyTitle" />
           <div class="dialog-panel dialog-panel--flush">
             <el-table :data="history" size="small" max-height="240" class="tm-nowrap-table">
-              <el-table-column prop="started_at" label="开始" width="152">
+              <el-table-column prop="started_at" :label="t('app.settings.taskMonitor.col.start')" width="152">
                 <template #default="{ row }">{{ fmtTime(row.started_at) }}</template>
               </el-table-column>
-              <el-table-column prop="duration_ms" label="耗时" width="78">
+              <el-table-column prop="duration_ms" :label="t('app.settings.taskMonitor.col.duration')" width="78">
                 <template #default="{ row }">{{ fmtDuration(row.duration_ms) }}</template>
               </el-table-column>
-              <el-table-column prop="trigger" label="触发" width="72">
+              <el-table-column prop="trigger" :label="t('app.settings.taskMonitor.col.trigger')" width="72">
                 <template #default="{ row }">{{ triggerLabel(row.trigger) }}</template>
               </el-table-column>
-              <el-table-column label="操作者" width="120" show-overflow-tooltip>
+              <el-table-column :label="t('app.settings.taskMonitor.col.operator')" width="120" show-overflow-tooltip>
                 <!-- operator 为空=自动/排程/启动等系统触发（后端 auto/startup/legacy 恒空） -->
-                <template #default="{ row }">{{ row.operator || '系统' }}</template>
+                <template #default="{ row }">{{ row.operator || t('app.settings.taskMonitor.detail.systemOperator') }}</template>
               </el-table-column>
-              <el-table-column prop="status" label="结果" width="88">
+              <el-table-column prop="status" :label="t('app.settings.taskMonitor.col.result')" width="88">
                 <template #default="{ row }">
                   <el-tag size="small" :type="resultTagType(row.status)">{{ statusResultLabel(row.status) }}</el-tag>
                 </template>
               </el-table-column>
-              <el-table-column prop="message" label="信息" min-width="120" show-overflow-tooltip />
+              <el-table-column prop="message" :label="t('app.settings.taskMonitor.col.message')" min-width="120" show-overflow-tooltip />
             </el-table>
           </div>
         </section>
@@ -343,7 +343,7 @@
     <!-- 任务日志弹框（与证书日志同款：暗色终端流） -->
     <el-dialog v-model="logsVisible" width="min(1100px, 94vw)" top="5vh" destroy-on-close @closed="closeLogs">
       <template #header>
-        <DialogHeader :icon="Timer" :title="`任务日志 · ${logsTask?.name || ''}`" subtitle="统一任务引擎文本日志（实时刷新）" />
+        <DialogHeader :icon="Timer" :title="t('app.settings.taskMonitor.logDialogTitle', { name: logsTask?.name || '' })" :subtitle="t('app.settings.taskMonitor.log.subtitle')" />
       </template>
       <!-- 日志存储统计栏：task:<id> 逐任务真实文件（含 cert-job 动态行）；后端未含该键时组件自隐 -->
       <div class="tm-log-stats">
@@ -351,13 +351,13 @@
       </div>
           <div ref="logContainerRef" class="dialog-panel tm-log-container">
         <pre v-if="logsText" class="tm-log-content">{{ logsText }}</pre>
-        <el-empty v-else description="暂无日志" :image-size="60" />
+        <el-empty v-else :description="t('app.settings.taskMonitor.log.empty')" :image-size="60" />
       </div>
       <template #footer>
         <div style="display: flex; align-items: center;">
-          <span v-if="logsLoadError" style="font-size: 12px; color: var(--el-color-danger); margin-right: 12px;">日志加载失败，自动重试中</span>
-          <span style="font-size: 12px; color: #9aa0b5; margin-right: auto;">每 5 秒自动刷新</span>
-          <el-button @click="logsVisible = false">关闭</el-button>
+          <span v-if="logsLoadError" style="font-size: 12px; color: var(--el-color-danger); margin-right: 12px;">{{ t('app.settings.taskMonitor.log.loadFailRetry') }}</span>
+          <span style="font-size: 12px; color: #9aa0b5; margin-right: auto;">{{ t('app.settings.taskMonitor.log.autoRefresh5s') }}</span>
+          <el-button @click="logsVisible = false">{{ t('app.settings.taskMonitor.actions.close') }}</el-button>
         </div>
       </template>
     </el-dialog>
@@ -366,6 +366,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import '@/utils/echarts' // 统一注册（含 LineChart——直刷本页不再依赖先到 Dashboard）
 import type { EChartsOption } from 'echarts'
 import VChart from 'vue-echarts'
@@ -387,6 +388,8 @@ import DialogHeader from '@/components/DialogHeader.vue'
 import DialogSectionHeader from '@/components/DialogSectionHeader.vue'
 import LogStorageBar from '@/components/LogStorageBar.vue'
 import type { APIResponse } from '@/types'
+
+const { t } = useI18n()
 
 
 interface TaskRunInfo { started_at: string; finished_at: string; duration_ms: number; trigger: string; operator?: string; result: string; message?: string }
@@ -430,12 +433,12 @@ const canOperate = computed(() => isAdmin.value && !readOnly.value)
 // 错误横幅（原 `res.data?.tasks || []` 把违约伪装成合法空集）。
 const fetchTasks = async (signal?: AbortSignal) => {
   const res = await request.get<APIResponse<{ tasks: TaskInfo[]; cert_jobs_truncated?: boolean }>>('/system/tasks', { silent: true, signal })
-  if (!res.data) throw new TypeError('任务列表响应缺少 data')
+  if (!res.data) throw new TypeError(t('app.settings.taskMonitor.messages.listRespMissingData'))
   return { data: res.data }
 }
 const fetchSeries = async (signal?: AbortSignal) => {
   const res = await request.get<APIResponse<{ series: TaskHourlyStat[] }>>('/system/tasks/stats-24h-series', { silent: true, signal })
-  if (!res.data) throw new TypeError('任务统计响应缺少 data')
+  if (!res.data) throw new TypeError(t('app.settings.taskMonitor.messages.statsRespMissingData'))
   return { data: res.data }
 }
 // 手动刷新与 10s 轮询共用最新读取会话：后发轮次推进世代，旧快照（含任务、序列、
@@ -522,8 +525,8 @@ const pollingErrorDescription = computed(() => {
   const lastError = formatDate(pollingError.lastErrorAt.value)
   const retryAt = formatDate(pollingError.retryAt.value)
   return retryAt
-    ? `最后错误：${lastError}；契约响应异常，自动重试已退避至 ${retryAt}`
-    : `最后错误：${lastError}`
+    ? t('app.settings.taskMonitor.lastErrorWithBackoff', { lastError, retryAt })
+    : t('app.settings.taskMonitor.lastError', { lastError })
 })
 const polling = usePollingTask(async ({ signal }) => {
   // 证书队列横幅与任务列表同频 10s（曾只在 mounted/手动刷新拉取，横幅最长陈旧一个会话）
@@ -569,7 +572,7 @@ const fetchCertQueue = async (signal?: AbortSignal): Promise<CertQueueRead> => {
   try {
     const res = await request.get<APIResponse<{ list: CertJobRow[]; total: number; status_counts?: Record<string, number> }>>('/certificates/jobs', { params: { page: 1, page_size: CERT_QUEUE_PAGE_SIZE }, silent: true, signal })
     // 缺 data 为契约违约（同 fetchTasks/fetchSeries），下面向上抛。
-    if (!res.data) throw new TypeError('证书队列响应缺少 data')
+    if (!res.data) throw new TypeError(t('app.settings.taskMonitor.messages.queueRespMissingData'))
     const list = res.data.list || []
     const counts = res.data?.status_counts
     const statusCount = (statuses: string[]): number => statuses.reduce((sum, s) => sum + (counts?.[s] || 0), 0)
@@ -681,8 +684,8 @@ const statsBarOption = computed<EChartsOption>((): EChartsOption => {
     xAxis: { type: 'category', boundaryGap: false, data: buckets.map(b => b.hour.slice(11, 16)), axisLabel: { interval: 3 } },
     yAxis: { type: 'value', minInterval: 1 },
     series: [
-      { name: '成功', type: 'line', stack: 'runs', smooth: true, symbol: 'none', areaStyle: { opacity: 0.35 }, data: buckets.map(b => b.success), itemStyle: { color: '#34d399' }, lineStyle: { color: '#34d399' } },
-      { name: '失败', type: 'line', stack: 'runs', smooth: true, symbol: 'none', areaStyle: { opacity: 0.35 }, data: buckets.map(b => b.failed), itemStyle: { color: '#f87171' }, lineStyle: { color: '#f87171' } },
+      { name: t('app.settings.taskMonitor.result.success'), type: 'line', stack: 'runs', smooth: true, symbol: 'none', areaStyle: { opacity: 0.35 }, data: buckets.map(b => b.success), itemStyle: { color: '#34d399' }, lineStyle: { color: '#34d399' } },
+      { name: t('app.settings.taskMonitor.result.failed'), type: 'line', stack: 'runs', smooth: true, symbol: 'none', areaStyle: { opacity: 0.35 }, data: buckets.map(b => b.failed), itemStyle: { color: '#f87171' }, lineStyle: { color: '#f87171' } },
     ],
   }
 })
@@ -745,53 +748,53 @@ async function runTaskAction(row: TaskInfo, options: TaskActionOptions): Promise
 // 上限后 ca_available_after 为空的 failed 行）触发放行并留越冷审计，tooltip
 // 不得声称被拒。null 仍是「永久不可重试」禁用态。非证书行恒 0 不进此路径。
 const runCooldownReason = (row: TaskInfo): string => {
-  if (row.retry_cooldown_seconds === null) return '该任务永久不可重试'
+  if (row.retry_cooldown_seconds === null) return t('app.settings.taskMonitor.cooldown.permanent')
   const seconds = Number(row.retry_cooldown_seconds ?? 0)
   if (!Number.isFinite(seconds) || seconds <= 0) return ''
   const minutes = Math.ceil(seconds / 60)
   if (row.cert_job_ca_cooldown_active) {
-    return `冷却中（约 ${minutes} 分钟）· CA 退避窗口内手动触发将被拒绝；如需越过退避窗请到证书任务页使用「重签」`
+    return t('app.settings.taskMonitor.cooldown.caWindow', { minutes })
   }
-  return `冷却中（约 ${minutes} 分钟）· 冷却期后可直接重试`
+  return t('app.settings.taskMonitor.cooldown.normal', { minutes })
 }
 
 const onTrigger = (row: TaskInfo): Promise<void> => runTaskAction(row, {
-  confirm: { message: `立即执行「${row.name}」？`, title: '手动触发', type: 'info', confirmButtonText: '执行' },
+  confirm: { message: t('app.settings.taskMonitor.runConfirm', { name: row.name }), title: t('app.settings.taskMonitor.actions.triggerTitle'), type: 'info', confirmButtonText: t('app.settings.taskMonitor.actions.execute') },
   request: () => request.post<APIResponse>(`/system/tasks/${row.id}/trigger`),
-  successFallback: '已触发',
+  successFallback: t('app.settings.taskMonitor.messages.triggered'),
   failureLabel: 'trigger task',
 })
 
 const onToggle = async (row: TaskInfo, enabled: boolean): Promise<void> => {
   if (isBusinessDrivenTask(row)) {
-    ElMessage.warning('该任务由对应业务页自动更新控制，请在业务页修改')
+    ElMessage.warning(t('app.settings.taskMonitor.messages.businessDrivenWarn'))
     return
   }
   // 常驻族停止前确认（功能中断影响大——如安全事件采集停摆）
   const needConfirm = !enabled && row.kind === 'daemon'
   await runTaskAction(row, {
     confirm: needConfirm
-      ? { message: `确认停止「${row.name}」？停止后相关功能将中断，可随时重新启动。`, title: '常驻任务控制', confirmButtonText: '停止' }
+      ? { message: t('app.settings.taskMonitor.stopConfirm', { name: row.name }), title: t('app.settings.taskMonitor.actions.daemonControlTitle'), confirmButtonText: t('app.settings.taskMonitor.actions.stop') }
       : undefined,
     request: () => request.post<APIResponse>(`/system/tasks/${row.id}/toggle`, { enabled }),
-    successFallback: '已更新',
+    successFallback: t('app.settings.taskMonitor.messages.updated'),
     failureLabel: 'toggle task',
     refreshOnError: true,
   })
 }
 
 const onCancel = (row: TaskInfo): Promise<void> => runTaskAction(row, {
-  confirm: { message: `取消运行中的「${row.name}」？下载阶段将中断，已完成部分保留。`, title: '手动取消', confirmButtonText: '取消任务' },
+  confirm: { message: t('app.settings.taskMonitor.cancelConfirm', { name: row.name }), title: t('app.settings.taskMonitor.actions.cancelTitle'), confirmButtonText: t('app.settings.taskMonitor.actions.cancelTask') },
   request: () => request.post<APIResponse>(`/system/tasks/${row.id}/cancel`),
-  successFallback: '已发出取消信号',
+  successFallback: t('app.settings.taskMonitor.messages.cancelSent'),
   failureLabel: 'cancel task',
 })
 
 // 常驻行操作列「重启」（control restart——启停已由调度列开关承担）
 const onRestart = (row: TaskInfo): Promise<void> => runTaskAction(row, {
-  confirm: { message: `确认重启「${row.name}」？重启期间相关功能将短暂中断。`, title: '常驻任务控制', confirmButtonText: '重启' },
+  confirm: { message: t('app.settings.taskMonitor.restartConfirm', { name: row.name }), title: t('app.settings.taskMonitor.actions.daemonControlTitle'), confirmButtonText: t('app.settings.taskMonitor.actions.restart') },
   request: () => request.post<APIResponse>(`/system/tasks/${row.id}/control`, { action: 'restart' }),
-  successFallback: '已重启',
+  successFallback: t('app.settings.taskMonitor.messages.restarted'),
   failureLabel: 'restart task',
 })
 
@@ -819,7 +822,7 @@ const isCertJobRow = (id: string): boolean => id.startsWith('cert-job:')
 // cert-job 动态行无引擎运行历史——历史区域接 cert_jobs 数据源（每规则+域名
 // 单行在册，展示该签发任务当前记录）
 const historyTitle = computed(() =>
-  detailTask.value && isCertJobRow(detailTask.value.id) ? '签发任务记录（cert_jobs）' : `运行历史（最近 ${history.value.length} 次）`)
+  detailTask.value && isCertJobRow(detailTask.value.id) ? t('app.settings.taskMonitor.history.certJobsTitle') : t('app.settings.taskMonitor.history.runsTitle', { count: history.value.length }))
 // cert-job 动态行历史与引擎族同端点（GET /system/tasks/:id/history 的
 // cert-job 分支直接返回 RunRecord 形状，时间已按配置时区转换）——
 // 前端不再自建映射（字段推导/时区转换双实现漂移面收敛到后端单源）。
@@ -864,7 +867,7 @@ const logsTail = useLogTailPolling({
     const res = await request.get<APIResponse<{ content: string }>>(taskLogEndpoint(task.id), { silent: true })
     // 先确认仍是同一任务，再清错误态：切任务后迟到的成功不得清掉新任务的失败提示。
     if (logsTask.value?.id !== task.id) return null
-    if (!res.data) throw new TypeError('任务日志响应缺少 data')
+    if (!res.data) throw new TypeError(t('app.settings.taskMonitor.messages.logsRespMissingData'))
     logsLoadError.value = false
     return res.data.content.trim()
   },
@@ -894,15 +897,15 @@ onUnmounted(closeLogs)
 // 三态（cert-job 动态行同口径：退役/终态成功归 idle，证书业务生命周期态
 // 由业务文本承载，不进状态列）。
 // stopped/disabled 已从引擎族状态产出退役（调度语义归开关列 loop_on&&enabled）。
-const statusLabels: Record<string, string> = {
-  running: '运行中', idle: '空闲', failed: '失败',
-}
+const statusLabels = computed<Record<string, string>>(() => ({
+  running: t('app.settings.taskMonitor.status.running'), idle: t('app.settings.taskMonitor.status.idle'), failed: t('app.settings.taskMonitor.status.failed'),
+}))
 // 状态列兜底只回显原值——禁止把 cert_jobs 业务生命周期态（issued/waiting_ca…）
 // 经证书标签兜底渲染进状态列（2026-10-22 用户裁定三态词表）。
-const statusLabel = (s: string) => hasOwn(statusLabels, s) ? statusLabels[s] : s
+const statusLabel = (s: string) => hasOwn(statusLabels.value, s) ? statusLabels.value[s] : s
 // v2.0 四类型：定时(蓝)/常驻(绿)/循环(青)/触发(橙)
-const kindLabels: Record<string, string> = { scheduled: '定时', daemon: '常驻', periodic: '循环', oneshot: '触发' }
-const kindLabel = (k: string) => hasOwn(kindLabels, k) ? kindLabels[k] : k
+const kindLabels = computed<Record<string, string>>(() => ({ scheduled: t('app.settings.taskMonitor.kind.scheduled'), daemon: t('app.settings.taskMonitor.kind.daemon'), periodic: t('app.settings.taskMonitor.kind.periodic'), oneshot: t('app.settings.taskMonitor.kind.oneshot') }))
+const kindLabel = (k: string) => hasOwn(kindLabels.value, k) ? kindLabels.value[k] : k
 const kindTag = (k: string): 'primary' | 'success' | 'info' | 'warning' =>
   k === 'scheduled' ? 'primary' : k === 'daemon' ? 'success' : k === 'periodic' ? 'info' : 'warning'
 const kindTagClass = (k: string) => (k === 'periodic' ? 'tm-tag-periodic' : '')
@@ -913,28 +916,28 @@ const isBusinessDrivenTask = (row: TaskInfo) => !!row.business_driven
 const scheduleStoppedTip = (row: TaskInfo) => {
   if (!row.schedule_stopped_reason) return ''
   if (row.schedule_stopped_reason !== 'fail-streak') {
-    return '引擎已停止该任务自动调度：请先修复失败原因，再重新开启调度，或重启进程恢复'
+    return t('app.settings.taskMonitor.stopTip.generic')
   }
-  const head = '引擎已停止自动调度（自动轮连续失败且排程槽未推进）'
+  const head = t('app.settings.taskMonitor.stopTip.head')
   return isBusinessDrivenTask(row)
-    ? `${head}：请先修复失败原因，再到对应业务页重新保存「自动更新」开关，或重启进程恢复`
-    : `${head}：请先修复失败原因，再打开本页调度开关恢复，或重启进程恢复`
+    ? t('app.settings.taskMonitor.stopTip.businessDriven', { head })
+    : t('app.settings.taskMonitor.stopTip.genericFix', { head })
 }
 const categoryOrder: Record<string, number> = { '安全防护': 0, '证书': 1, '备份': 2, '集群': 3, '系统': 4 }
 const categoryTagType = (c: string): 'primary' | 'success' | 'warning' | 'info' =>
   c === '安全防护' ? 'primary' : c === '证书' ? 'success' : c === '备份' ? 'warning' : 'info'
 // caddy-restart（Caddy 崩溃自愈 watcher 通道）此前裸显
 // 英文 token——补中文标签，未列触发值仍回退原文。
-const triggerLabels: Record<string, string> = { manual: '手动', auto: '自动', schedule: '排程', queue: '队列', startup: '启动', 'caddy-restart': 'Caddy重启' }
-const triggerLabel = (t: string) => (hasOwn(triggerLabels, t) ? triggerLabels[t] : t) || '—'
+const triggerLabels = computed<Record<string, string>>(() => ({ manual: t('app.settings.taskMonitor.trigger.manual'), auto: t('app.settings.taskMonitor.trigger.auto'), schedule: t('app.settings.taskMonitor.trigger.schedule'), queue: t('app.settings.taskMonitor.trigger.queue'), startup: t('app.settings.taskMonitor.trigger.startup'), 'caddy-restart': t('app.settings.taskMonitor.trigger.caddyRestart') }))
+const triggerLabel = (key: string) => (hasOwn(triggerLabels.value, key) ? triggerLabels.value[key] : key) || '—'
 // 结果词表=引擎 task_runs 结果域自有映射（running/success/failed/cancelled/
 // skipped/interrupted，与 GET /system/tasks/:id/history 的 status 枚举同源）；
 // 未知值显性回显「未知」——不借用 cert_jobs 状态机词表（issued/waiting_ca 等
 // 属证书业务域，进了结果列只会域错位误导；cert-job 动态行的业务状态由任务
 // 名称/详情的业务文本承载）。
-const resultLabels: Record<string, string> = { success: '成功', failed: '失败', cancelled: '已取消', interrupted: '中断', running: '运行中', skipped: '已跳过' }
+const resultLabels = computed<Record<string, string>>(() => ({ success: t('app.settings.taskMonitor.result.success'), failed: t('app.settings.taskMonitor.result.failed'), cancelled: t('app.settings.taskMonitor.result.cancelled'), interrupted: t('app.settings.taskMonitor.result.interrupted'), running: t('app.settings.taskMonitor.status.running'), skipped: t('app.settings.taskMonitor.result.skipped') }))
 const statusResultLabel = (r: string): string =>
-  hasOwn(resultLabels, r) ? resultLabels[r]! : '未知'
+  hasOwn(resultLabels.value, r) ? resultLabels.value[r]! : t('app.settings.taskMonitor.status.unknown')
 const resultTagType = (r: string): 'success' | 'danger' | 'info' | 'warning' =>
   r === 'success' ? 'success' : r === 'failed' ? 'danger' : r === 'cancelled' ? 'warning' : 'info'
 

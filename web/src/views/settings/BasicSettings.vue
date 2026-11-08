@@ -5,81 +5,81 @@
         <div class="card-header">
           <div class="card-title">
             <el-icon><Setting /></el-icon>
-            <span>基础设置</span>
+            <span>{{ t('app.settings.basic.title') }}</span>
           </div>
         </div>
       </template>
         <el-form :model="settings" label-width="120px" class="settings-form" :disabled="formFrozen">
-          <el-form-item label="日志级别">
+          <el-form-item :label="t('app.settings.basic.log.appLogLevel')">
             <el-select v-model="settings.log_level" :disabled="formFrozen" style="width: 140px">
               <el-option label="Debug" value="debug" />
               <el-option label="Info" value="info" />
               <el-option label="Warning" value="warn" />
               <el-option label="Error" value="error" />
             </el-select>
-            <span class="form-tip-inline">控制 Lazy Balancer 自身日志详细程度</span>
+            <span class="form-tip-inline">{{ t('app.settings.basic.log.appLogLevelHint') }}</span>
           </el-form-item>
-          <el-form-item label="任务日志大小">
+          <el-form-item :label="t('app.settings.basic.log.taskLogSize')">
             <el-input-number v-model="settings.task_log_size_mb" :disabled="formFrozen" :min="1" :max="1024" controls-position="right" style="width: 120px;" />
-            <span class="form-tip-inline">MB，任务与库更新日志轮转阈值</span>
+            <span class="form-tip-inline">{{ t('app.settings.basic.log.taskLogSizeHint') }}</span>
           </el-form-item>
-          <el-form-item label="审计日志大小">
+          <el-form-item :label="t('app.settings.basic.log.auditLogSize')">
           <el-input-number v-model="settings.audit_log_size_mb" :disabled="formFrozen" :min="1" :max="512" controls-position="right" style="width: 120px;" />
-            <span class="form-tip-inline">MB，WAF 审计日志轮转阈值</span>
+            <span class="form-tip-inline">{{ t('app.settings.basic.log.auditLogSizeHint') }}</span>
           </el-form-item>
-          <el-form-item label="运行日志大小">
+          <el-form-item :label="t('app.settings.basic.log.runLogSize')">
             <el-input-number v-model="settings.runtime_log_size_mb" :disabled="formFrozen" :min="1" :max="1024" controls-position="right" style="width: 120px;" />
-            <span class="form-tip-inline">MB，轮转阈值</span>
+            <span class="form-tip-inline">{{ t('app.settings.basic.log.runLogSizeHint') }}</span>
           </el-form-item>
-          <el-form-item label="操作审计保留">
+          <el-form-item :label="t('app.settings.basic.log.auditRetention')">
             <el-input-number v-model="settings.audit_retention_months" :disabled="formFrozen" :min="1" :max="12" controls-position="right" style="width: 120px;" />
-            <span class="form-tip-inline">个月，仅操作审计日志超期自动清理</span>
+            <span class="form-tip-inline">{{ t('app.settings.basic.log.auditRetentionHint') }}</span>
           </el-form-item>
-          <el-form-item label="安全事件保留">
+          <el-form-item :label="t('app.settings.basic.log.secEventRetention')">
             <el-input-number v-model="seRetentionDays" :disabled="formFrozen" :min="1" :max="3650" :step="30" controls-position="right" style="width: 120px;" />
-            <span class="form-tip-inline">天</span>
+            <span class="form-tip-inline">{{ t('app.settings.basic.log.daysUnit') }}</span>
             <el-input-number v-model="seRowCap" :disabled="formFrozen" :min="1" :max="100000000" :step="100000" controls-position="right" style="width: 170px; margin-left: 10px;" />
-            <span class="form-tip-inline">行数上限</span>
-            <div class="form-tip-line">安全事件日志每日清理：超出保留天数或行数上限时按最旧优先删除（行数上限在两次清理之间可能短暂超出）。默认 90 天 / 1,000,000 行；高攻击流量部署可按需上调。</div>
+            <span class="form-tip-inline">{{ t('app.settings.basic.log.rowCap') }}</span>
+            <div class="form-tip-line">{{ t('app.settings.basic.log.secEventCleanupHint') }}</div>
           </el-form-item>
-          <el-form-item label="登录过期">
+          <el-form-item :label="t('app.settings.basic.log.loginExpiry')">
             <el-input-number v-model="settings.jwt_expire_minutes" :disabled="formFrozen" :min="1" :max="1440" controls-position="right" style="width: 120px;" />
-            <span class="form-tip-inline">分钟，登录令牌有效期</span>
+            <span class="form-tip-inline">{{ t('app.settings.basic.log.loginExpiryHint') }}</span>
           </el-form-item>
-          <el-form-item label="时区">
+          <el-form-item :label="t('app.settings.basic.tz.label')">
             <el-select v-model="settings.timezone" :disabled="formFrozen" filterable allow-create default-first-option class="compact-select">
               <el-option v-for="opt in timezoneOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
             </el-select>
-            <div class="form-tip-line">影响日志时间戳与证书时间；标注夏令时的时区会随夏令时自动偏移；标注「自定义」的值为 API/备份写入、不在常用列表内的 IANA 时区（可继续使用或改选）；仅 Caddy 日志需重启服务生效</div>
+            <div class="form-tip-line">{{ t('app.settings.basic.tz.hint') }}</div>
           </el-form-item>
-          <el-form-item label="大屏本站坐标">
-            <el-select v-model="siteLocationKey" :disabled="formFrozen" filterable clearable placeholder="选择省份或国家" style="width: 260px" @change="applySiteLocation">
-              <el-option-group label="中国省份">
+          <el-form-item :label="t('app.settings.basic.map.siteLocation')">
+            <el-select v-model="siteLocationKey" :disabled="formFrozen" filterable clearable :placeholder="t('app.settings.basic.map.siteLocationPlaceholder')" style="width: 260px" @change="applySiteLocation">
+              <el-option-group :label="t('app.settings.basic.map.chinaProvincesGroup')">
                 <el-option v-for="item in CHINA_SITE_CHOICES" :key="item.key" :label="item.label" :value="item.key" />
               </el-option-group>
-              <el-option-group label="海外国家">
+              <el-option-group :label="t('app.settings.basic.map.overseasGroup')">
                 <el-option v-for="item in COUNTRY_SITE_CHOICES" :key="item.key" :label="item.label" :value="item.key" />
               </el-option-group>
             </el-select>
-            <span class="form-tip-inline">纬度 {{ (settings.server_map_lat ?? 0).toFixed(4) }} · 经度 {{ (settings.server_map_lon ?? 0).toFixed(4) }}</span>
-            <div class="form-tip-line">威胁大屏地图本站信标坐标；选择中国省份或海外国家后自动换算经纬度。未选择表示未设置，按地图视觉中心显示。</div>
+            <span class="form-tip-inline">{{ t('app.settings.basic.siteCoord', { lat: (settings.server_map_lat ?? 0).toFixed(4), lng: (settings.server_map_lon ?? 0).toFixed(4) }) }}</span>
+            <div class="form-tip-line">{{ t('app.settings.basic.map.siteLocationHint') }}</div>
           </el-form-item>
-          <el-form-item label="大屏视觉模式" for="radio---3">
+          <el-form-item :label="t('app.settings.basic.map.visualMode')" for="radio---3">
             <input type="text" id="radio---3" aria-hidden="true" tabindex="-1" autocomplete="off" style="display:none">
             <el-radio-group v-model="threatScreenMode" :disabled="formFrozen">
-              <el-radio value="map">360° 地图 · 雷达扫掠</el-radio>
-              <el-radio value="globe">3D 地球 · 垂直扫描</el-radio>
+              <el-radio value="map">{{ t('app.settings.basic.map.visualMap') }}</el-radio>
+              <el-radio value="globe">{{ t('app.settings.basic.map.visualGlobe') }}</el-radio>
             </el-radio-group>
-            <div class="form-tip-line">威胁大屏中央攻击流光的呈现方式；进入大屏时生效（已打开的大屏重新进入后切换）</div>
+            <div class="form-tip-line">{{ t('app.settings.basic.map.visualModeHint') }}</div>
           </el-form-item>
-          <el-form-item label="流量采样">
+          <el-form-item :label="t('app.settings.basic.map.trafficSample')">
             <el-select v-model="trafficSampleN" :disabled="formFrozen" style="width: 160px">
-              <el-option label="自适应（推荐）" :value="-1" />
-              <el-option label="关闭逐请求光流" :value="0" />
+              <el-option :label="t('app.settings.basic.map.sampleAdaptive')" :value="-1" />
+              <el-option :label="t('app.settings.basic.map.sampleOff')" :value="0" />
             </el-select>
-            <div class="form-tip-line">大屏逐请求光流的采样开关；自适应从全量起步，并随事件量在 1/4、1/8 档之间自动切换。关闭后仅保留聚合流量统计，不影响安全事件日志。</div>
+            <div class="form-tip-line">{{ t('app.settings.basic.map.trafficSampleHint') }}</div>
           </el-form-item>
-          <el-form-item label="下载代理">
+          <el-form-item :label="t('app.settings.basic.proxy.label')">
             <el-select v-model="githubProxyUrl" :disabled="formFrozen || !githubProxyLoaded" style="width: 160px" :placeholder="githubProxyLoaded ? '选择代理' : '未加载'">
               <el-option
                 v-for="option in githubProxyOptions"
@@ -88,66 +88,66 @@
                 :value="option.value"
               />
             </el-select>
-            <span v-if="githubProxyLoaded" class="form-tip-inline">GitHub 下载代理，加速 CRS 规则库与 IP2Region</span>
-            <span v-else class="form-tip-inline">代理设置未加载：已禁用编辑且保存不会写入该项</span>
+            <span v-if="githubProxyLoaded" class="form-tip-inline">{{ t('app.settings.basic.proxy.hint') }}</span>
+            <span v-else class="form-tip-inline">{{ t('app.settings.basic.proxy.notLoaded') }}</span>
           </el-form-item>
-          <el-form-item label="访问令牌">
+          <el-form-item :label="t('app.settings.basic.proxy.accessToken')">
             <el-input
               v-model="githubTokenInput"
               type="password"
               show-password
               style="width: 320px"
-              :placeholder="settings.has_github_token ? '已配置（留空保持不变）' : '未配置（未认证限流 60 次/小时）'"
+              :placeholder="settings.has_github_token ? t('app.settings.basic.proxy.tokenConfiguredPlaceholder') : t('app.settings.basic.proxy.tokenMissingPlaceholder')"
               :disabled="formFrozen"
               maxlength="255"
               @input="githubTokenClearPending = false"
             />
-            <el-button v-if="settings.has_github_token && !githubTokenClearPending" type="danger" link size="small" style="margin-left: 8px" :disabled="formFrozen" @click="clearGithubToken">清除</el-button>
-            <el-text v-if="githubTokenClearPending" type="danger" size="small" style="margin-left: 8px">已标记清除，保存后生效</el-text>
-            <div class="form-tip-line">可选 GITHUB_TOKEN：令牌认证后 GitHub API 限流由 60 提升至 5000 次/小时，缓解规则库自动更新 403；令牌仅随 GitHub 直连发送，不经第三方代理；点「清除」可撤销已配置令牌（保存后生效）。<el-link type="primary" href="https://github.com/settings/tokens" target="_blank" rel="noopener">前往 GitHub 创建令牌</el-link>（只需公共仓库只读权限，无需勾选任何 scope）</div>
+            <el-button v-if="settings.has_github_token && !githubTokenClearPending" type="danger" link size="small" style="margin-left: 8px" :disabled="formFrozen" @click="clearGithubToken">{{ t('app.settings.basic.proxy.clearBtn') }}</el-button>
+            <el-text v-if="githubTokenClearPending" type="danger" size="small" style="margin-left: 8px">{{ t('app.settings.basic.proxy.clearPending') }}</el-text>
+            <div class="form-tip-line">{{ t('app.settings.basic.proxy.tokenHint') }}<el-link type="primary" href="https://github.com/settings/tokens" target="_blank" rel="noopener">{{ t('app.settings.basic.proxy.tokenCreateLink') }}</el-link>{{ t('app.settings.basic.proxy.tokenScopeNote') }}</div>
           </el-form-item>
-          <el-form-item label="写操作验证">
+          <el-form-item :label="t('app.settings.basic.security.mfaLabel')">
             <el-switch v-model="settings.mfa_write_guard" :disabled="formFrozen" />
-            <span class="form-tip-inline">写操作需 1 分钟内的 MFA 验证</span>
+            <span class="form-tip-inline">{{ t('app.settings.basic.security.mfaHint') }}</span>
             <AccessibleLink type="info" underline="never" size="small" class="tip-link" style="margin-left: 6px" @click="mfaScopeVisible = true">支持的操作</AccessibleLink>
           </el-form-item>
-          <el-form-item label="登录失败锁定">
+          <el-form-item :label="t('app.settings.basic.security.lockout')">
             <el-switch v-model="settings.mfa_lockout_enabled" :disabled="formFrozen" />
-            <span class="form-tip-inline">密码或验证码失败 5 次锁 10 分钟（关闭则不锁定）</span>
+            <span class="form-tip-inline">{{ t('app.settings.basic.security.lockoutHint') }}</span>
           </el-form-item>
-          <el-form-item label="强制加密">
+          <el-form-item :label="t('app.settings.basic.tls.forceLabel')">
             <el-switch v-model="adminTls.enabled" :disabled="formFrozen || !adminTlsLoaded" @change="onAdminTlsToggle" />
-            <el-button v-if="adminTls.enabled" size="small" style="margin-left: 8px;" :disabled="formFrozen" @click="openAdminTlsDialog">配置证书</el-button>
+            <el-button v-if="adminTls.enabled" size="small" style="margin-left: 8px;" :disabled="formFrozen" @click="openAdminTlsDialog">{{ t('app.settings.basic.tls.configBtn') }}</el-button>
             <!-- 降级读优先于暂存/失败提示：开关当前显示的是后端降级值，
                  用户必须先知道「不可信」再考虑其它动作（重试走同一读路径）。 -->
             <template v-if="adminTlsUnavailable">
-              <el-text type="danger" size="small" style="margin-left: 8px">配置读取失败，显示的开关不可信</el-text>
-              <AccessibleLink type="primary" underline="never" size="small" style="margin-left: 6px" @click="retryLoadAdminTls">重试</AccessibleLink>
+              <el-text type="danger" size="small" style="margin-left: 8px">{{ t('app.settings.basic.tls.readFailUntrusted') }}</el-text>
+              <AccessibleLink type="primary" underline="never" size="small" style="margin-left: 6px" @click="retryLoadAdminTls">{{ t('app.settings.basic.actions.retry') }}</AccessibleLink>
             </template>
-            <el-text v-else-if="adminTlsDirty" type="warning" size="small" style="margin-left: 8px">已暂存，点击下方保存后生效</el-text>
+            <el-text v-else-if="adminTlsDirty" type="warning" size="small" style="margin-left: 8px">{{ t('app.settings.basic.tls.stagedNote') }}</el-text>
             <!-- 读取失败显性化 + 重试（与 githubProxyLoaded 的提示同口径）-->
             <template v-else-if="adminTlsLoadFailed">
-              <el-text type="danger" size="small" style="margin-left: 8px">TLS 配置读取失败，开关暂不可用</el-text>
-              <AccessibleLink type="primary" underline="never" size="small" style="margin-left: 6px" @click="retryLoadAdminTls">重试</AccessibleLink>
+              <el-text type="danger" size="small" style="margin-left: 8px">{{ t('app.settings.basic.tls.readFailUnavailable') }}</el-text>
+              <AccessibleLink type="primary" underline="never" size="small" style="margin-left: 6px" @click="retryLoadAdminTls">{{ t('app.settings.basic.actions.retry') }}</AccessibleLink>
             </template>
-            <span v-else class="form-tip-inline">启用后 :8000 仅经 HTTPS 访问，需重启服务生效</span>
+            <span v-else class="form-tip-inline">{{ t('app.settings.basic.tls.forceHint') }}</span>
             <!-- 库内证书不可读（fail-visible）：后端以 cert_info_error 显式申报，
                  页面必须消费——否则损坏证书与「未配置证书」在界面上无法区分。 -->
             <div v-if="adminTlsCertBroken" class="info-note-bar">
               <el-text type="danger" size="small" class="info-note-desc">
-                已保存的管理面板证书无法解析（{{ adminTlsCertError }}），HTTPS 可能无法正常访问；请点「配置证书」重新上传，或切换为自签名后保存以修复。
+                {{ t('app.settings.basic.tls.certUnreadable', { error: adminTlsCertError }) }}
               </el-text>
             </div>
           </el-form-item>
-          <el-form-item label="运行日志" for="app-log-view-static">
+          <el-form-item :label="t('app.settings.basic.appLog.label')" for="app-log-view-static">
             <input type="text" id="app-log-view-static" aria-hidden="true" tabindex="-1" autocomplete="off" style="display:none">
-            <el-button size="small" :icon="View" @click="openAppLogDialog">查看日志</el-button>
-            <span class="form-tip-inline">查看 Lazy Balancer 自身运行日志</span>
+            <el-button size="small" :icon="View" @click="openAppLogDialog">{{ t('app.settings.basic.appLog.viewBtn') }}</el-button>
+            <span class="form-tip-inline">{{ t('app.settings.basic.appLog.viewHint') }}</span>
           </el-form-item>
           <el-form-item>
             <el-button type="primary" :loading="saving" :disabled="isReadOnly || !props.configLoaded" @click="handleSave">
               <el-icon><Check /></el-icon>
-              <span class="btn-text">保存</span>
+              <span class="btn-text">{{ t('app.settings.basic.actions.save') }}</span>
             </el-button>
           </el-form-item>
         </el-form>
@@ -158,13 +158,13 @@
         <div class="card-header">
           <div class="card-title">
             <el-icon><InfoFilled /></el-icon>
-            <span>系统信息</span>
+            <span>{{ t('app.settings.basic.system.title') }}</span>
           </div>
         </div>
       </template>
       <div class="info-list">
         <div class="info-item">
-          <span class="info-label">版本</span>
+          <span class="info-label">{{ t('app.settings.basic.system.version') }}</span>
           <div class="version-actions">
             <!-- 检查更新入口：进页拉取一次官网版本目录，仅在有更新时渲染；
                  AccessibleLink 保证键盘/读屏可达（与页内「支持的操作」同族）。
@@ -174,60 +174,60 @@
           </div>
         </div>
         <div class="info-item">
-          <span class="info-label">运行模式</span>
+          <span class="info-label">{{ t('app.settings.basic.system.runMode') }}</span>
           <el-tag :type="authStore.nodeMode === 'master' ? 'success' : authStore.nodeMode === 'slave' ? 'warning' : 'info'" size="small">
-            {{ authStore.nodeMode === 'master' ? '主节点' : authStore.nodeMode === 'slave' ? '从节点' : '加载中' }}
+            {{ authStore.nodeMode === 'master' ? t('app.settings.basic.system.master') : authStore.nodeMode === 'slave' ? t('app.settings.basic.system.slave') : t('app.settings.basic.system.loading') }}
           </el-tag>
         </div>
         <div class="info-item">
-          <span class="info-label">配置备份</span>
+          <span class="info-label">{{ t('app.settings.basic.system.backup') }}</span>
           <div class="backup-actions">
-            <el-button size="small" :icon="Download" :disabled="backupDisabled" :loading="exporting" @click="openExportDialog">导出</el-button>
-            <el-button size="small" :icon="Upload" :disabled="backupDisabled" @click="triggerImport">导入</el-button>
-            <el-button size="small" :icon="Timer" :disabled="backupDisabled" @click="openAutoBackupDialog">自动备份</el-button>
+            <el-button size="small" :icon="Download" :disabled="backupDisabled" :loading="exporting" @click="openExportDialog">{{ t('app.settings.basic.system.export') }}</el-button>
+            <el-button size="small" :icon="Upload" :disabled="backupDisabled" @click="triggerImport">{{ t('app.settings.basic.system.import') }}</el-button>
+            <el-button size="small" :icon="Timer" :disabled="backupDisabled" @click="openAutoBackupDialog">{{ t('app.settings.basic.autoBackup.title') }}</el-button>
           </div>
         </div>
 
         <div class="info-item">
-          <span class="info-label">重启服务</span>
-          <el-button size="small" type="danger" plain :disabled="isReadOnly" :loading="restarting" @click="handleRestart">重启</el-button>
+          <span class="info-label">{{ t('app.settings.basic.system.restart') }}</span>
+          <el-button size="small" type="danger" plain :disabled="isReadOnly" :loading="restarting" @click="handleRestart">{{ t('app.settings.basic.system.restartBtn') }}</el-button>
         </div>
-        <el-text type="info" size="small" class="backup-tip">备份包含全部配置、规则、用户、密钥与证书任务（含凭证与私钥，请加密保管）；导入将覆盖当前配置，仅主节点可用</el-text>
+        <el-text type="info" size="small" class="backup-tip">{{ t('app.settings.basic.system.backupNote') }}</el-text>
       </div>
     </el-card>
 
     <el-dialog v-model="adminTlsDialogVisible" class="dialog-body-inset" width="min(560px, 92vw)" destroy-on-close @closed="onAdminTlsDialogClose">
       <template #header>
-        <DialogHeader :icon="Lock" title="HTTPS 证书配置"
-          subtitle="管理面板（:8000）强制 HTTPS 使用的证书，保存后服务重启生效" />
+        <DialogHeader :icon="Lock" :title="t('app.settings.basic.tls.title')"
+          :subtitle="t('app.settings.basic.tls.subtitle')" />
       </template>
       <el-form label-width="110px">
-        <el-form-item label="证书来源" for="radio---4">
+        <el-form-item :label="t('app.settings.basic.tls.source')" for="radio---4">
           <input type="text" id="radio---4" aria-hidden="true" tabindex="-1" autocomplete="off" style="display:none">
-          <el-radio-group v-model="adminTlsForm.mode" aria-label="证书来源">
-            <el-radio value="selfsigned">本地自签名证书</el-radio>
-            <el-radio value="upload">上传证书</el-radio>
+          <el-radio-group v-model="adminTlsForm.mode" :aria-label="t('app.settings.basic.tls.source')">
+            <el-radio value="selfsigned">{{ t('app.settings.basic.tls.selfsigned') }}</el-radio>
+            <el-radio value="upload">{{ t('app.settings.basic.tls.upload') }}</el-radio>
           </el-radio-group>
         </el-form-item>
         <template v-if="adminTlsForm.mode === 'upload'">
-          <div v-if="adminTlsReuseSaved" class="info-note-bar"><span class="info-note-desc">库内已有可用的上传证书：不选择新文件即沿用该证书，无需重新上传</span></div>
-          <el-form-item label="证书文件" for="tls-cert-file-static">
+          <div v-if="adminTlsReuseSaved" class="info-note-bar"><span class="info-note-desc">{{ t('app.settings.basic.tls.reuseSaved') }}</span></div>
+          <el-form-item :label="t('app.settings.basic.tls.certFile')" for="tls-cert-file-static">
             <input type="text" id="tls-cert-file-static" aria-hidden="true" tabindex="-1" autocomplete="off" style="display:none">
             <div class="tls-file-field">
-              <el-button size="small" @click="pickTlsFile('cert')">选择文件</el-button>
-              <span class="tls-file-name" :class="{ 'is-empty': !adminTlsForm.certFile }">{{ adminTlsForm.certFile?.name ?? '未选择（支持 .crt / .pem / .cer）' }}</span>
+              <el-button size="small" @click="pickTlsFile('cert')">{{ t('app.settings.basic.tls.chooseFile') }}</el-button>
+              <span class="tls-file-name" :class="{ 'is-empty': !adminTlsForm.certFile }">{{ adminTlsForm.certFile?.name ?? t('app.settings.basic.tls.noCertFile') }}</span>
             </div>
           </el-form-item>
-          <el-form-item label="私钥文件" for="tls-key-file-static">
+          <el-form-item :label="t('app.settings.basic.tls.keyFile')" for="tls-key-file-static">
             <input type="text" id="tls-key-file-static" aria-hidden="true" tabindex="-1" autocomplete="off" style="display:none">
             <div class="tls-file-field">
-              <el-button size="small" @click="pickTlsFile('key')">选择文件</el-button>
-              <span class="tls-file-name" :class="{ 'is-empty': !adminTlsForm.keyFile }">{{ adminTlsForm.keyFile?.name ?? '未选择（支持 .key / .pem）' }}</span>
+              <el-button size="small" @click="pickTlsFile('key')">{{ t('app.settings.basic.tls.chooseFile') }}</el-button>
+              <span class="tls-file-name" :class="{ 'is-empty': !adminTlsForm.keyFile }">{{ adminTlsForm.keyFile?.name ?? t('app.settings.basic.tls.noKeyFile') }}</span>
             </div>
           </el-form-item>
           <el-form-item v-if="adminTlsForm.inspecting" label=" " for="tls-parsing-static">
             <input type="text" id="tls-parsing-static" aria-hidden="true" tabindex="-1" autocomplete="off" style="display:none">
-            <el-text type="info" size="small">解析中…</el-text>
+            <el-text type="info" size="small">{{ t('app.settings.basic.tls.parsing') }}</el-text>
           </el-form-item>
           <!-- 失败原因必须常驻弹框内（toast 一闪而过；「确定」变灰需可解释） -->
           <div v-if="adminTlsForm.inspectError && !adminTlsForm.inspecting" class="info-note-bar">
@@ -240,33 +240,33 @@
             <el-form-item label=" " for="tls-cert-info-static">
               <input type="text" id="tls-cert-info-static" aria-hidden="true" tabindex="-1" autocomplete="off" style="display:none">
               <div class="dialog-panel tls-cert-info">
-                <DialogSectionHeader title="证书详情" />
-                <div class="tls-cert-info-row"><span class="tls-cert-info-label">域名</span><span>{{ adminTlsForm.certInfo.domain }}</span></div>
-                <div class="tls-cert-info-row"><span class="tls-cert-info-label">签发者</span><span>{{ adminTlsForm.certInfo.issuer }}</span></div>
-                <div class="tls-cert-info-row"><span class="tls-cert-info-label">过期时间</span><span :class="{ 'is-expired': adminTlsForm.certInfo.days_left <= 0 }">{{ adminTlsForm.certInfo.not_after }}（剩余 {{ adminTlsForm.certInfo.days_left }} 天）</span></div>
+                <DialogSectionHeader :title="t('app.settings.basic.tls.details')" />
+                <div class="tls-cert-info-row"><span class="tls-cert-info-label">{{ t('app.settings.basic.tls.domain') }}</span><span>{{ adminTlsForm.certInfo.domain }}</span></div>
+                <div class="tls-cert-info-row"><span class="tls-cert-info-label">{{ t('app.settings.basic.tls.issuer') }}</span><span>{{ adminTlsForm.certInfo.issuer }}</span></div>
+                <div class="tls-cert-info-row"><span class="tls-cert-info-label">{{ t('app.settings.basic.tls.expiry') }}</span><span :class="{ 'is-expired': adminTlsForm.certInfo.days_left <= 0 }">{{ adminTlsForm.certInfo.not_after }}（剩余 {{ adminTlsForm.certInfo.days_left }} 天）</span></div>
               </div>
             </el-form-item>
           </template>
         </template>
-        <div v-if="adminTlsForm.mode === 'selfsigned'" class="info-note-bar"><span class="info-note-desc">自动生成自签名证书，浏览器会提示不受信任；集群同步会自动跳过自签验证</span></div>
+        <div v-if="adminTlsForm.mode === 'selfsigned'" class="info-note-bar"><span class="info-note-desc">{{ t('app.settings.basic.tls.selfsignedNote') }}</span></div>
       </el-form>
       <template #footer>
-        <el-button @click="adminTlsDialogVisible = false">取消</el-button>
-        <el-button type="primary" :disabled="adminTlsConfirmBlocked" @click="confirmAdminTls">确定</el-button>
+        <el-button @click="adminTlsDialogVisible = false">{{ t('app.settings.basic.actions.cancel') }}</el-button>
+        <el-button type="primary" :disabled="adminTlsConfirmBlocked" @click="confirmAdminTls">{{ t('app.settings.basic.actions.confirm') }}</el-button>
       </template>
     </el-dialog>
     <!-- 检查更新弹框：稳定版/测试版分 tab 展示（无更新内容的 tab 随条目隐藏），
          版本号 + 发布说明列表；说明文字一律插值渲染（textContent，禁 v-html）。 -->
     <el-dialog v-model="updateDialogVisible" class="dialog-body-inset" width="min(560px, 92vw)">
       <template #header>
-        <DialogHeader :icon="RefreshRight" title="发现新版本" subtitle="官网发布了新版本，以下为版本号与更新内容" />
+        <DialogHeader :icon="RefreshRight" :title="t('app.settings.basic.update.title')" :subtitle="t('app.settings.basic.update.subtitle')" />
       </template>
       <el-tabs v-model="updateActiveTab">
-        <el-tab-pane v-if="stableUpdate" label="稳定版" name="stable">
+        <el-tab-pane v-if="stableUpdate" :label="t('app.settings.basic.update.stable')" name="stable">
           <div class="dialog-panel release-panel">
             <div class="release-version-row">
               <span class="release-version">{{ stableUpdate.version }}</span>
-              <el-tag type="success" size="small">稳定版</el-tag>
+              <el-tag type="success" size="small">{{ t('app.settings.basic.update.stable') }}</el-tag>
             </div>
             <p v-if="stableUpdate.theme" class="release-theme">{{ stableUpdate.theme }}</p>
             <ul v-if="stableUpdate.notes?.length" class="release-notes">
@@ -274,11 +274,11 @@
             </ul>
           </div>
         </el-tab-pane>
-        <el-tab-pane v-if="betaUpdate" label="测试版" name="beta">
+        <el-tab-pane v-if="betaUpdate" :label="t('app.settings.basic.update.beta')" name="beta">
           <div class="dialog-panel release-panel">
             <div class="release-version-row">
               <span class="release-version">{{ betaUpdate.version }}</span>
-              <el-tag type="warning" size="small">测试版</el-tag>
+              <el-tag type="warning" size="small">{{ t('app.settings.basic.update.beta') }}</el-tag>
             </div>
             <p v-if="betaUpdate.theme" class="release-theme">{{ betaUpdate.theme }}</p>
             <ul v-if="betaUpdate.notes?.length" class="release-notes">
@@ -289,8 +289,8 @@
       </el-tabs>
       <template #footer>
         <div class="release-footer">
-          <el-link type="primary" href="https://www.lazybalancer.org/docs.html#changelog" target="_blank" rel="noopener">前往官网查看更新日志</el-link>
-          <el-button @click="updateDialogVisible = false">关闭</el-button>
+          <el-link type="primary" href="https://www.lazybalancer.org/docs.html#changelog" target="_blank" rel="noopener">{{ t('app.settings.basic.update.changelogLink') }}</el-link>
+          <el-button @click="updateDialogVisible = false">{{ t('app.settings.basic.actions.close') }}</el-button>
         </div>
       </template>
     </el-dialog>
@@ -301,43 +301,43 @@
 
     <el-dialog v-model="appLogVisible" width="min(1100px, 94vw)" top="5vh" destroy-on-close @opened="onAppLogOpened" @closed="onAppLogClosed">
       <template #header>
-        <DialogHeader :icon="Document" title="Lazy Balancer 运行日志" subtitle="实时查看应用运行日志与自愈事件（最近 500 行）" />
+        <DialogHeader :icon="Document" :title="t('app.settings.basic.appLog.dialogTitle')" :subtitle="t('app.settings.basic.appLog.dialogSubtitle')" />
       </template>
       <div class="log-toolbar">
-        <el-switch v-model="appLogAutoRefresh" active-text="自动刷新" />
-        <el-text v-if="appLogError" type="danger" size="small">日志加载失败，自动重试中（当前展示上一次内容）</el-text>
-        <el-button size="small" :loading="appLogLoading" @click="fetchAppLogs">刷新</el-button>
+        <el-switch v-model="appLogAutoRefresh" :active-text="t('app.settings.basic.appLog.autoRefresh')" />
+        <el-text v-if="appLogError" type="danger" size="small">{{ t('app.settings.basic.appLog.loadFail') }}</el-text>
+        <el-button size="small" :loading="appLogLoading" @click="fetchAppLogs">{{ t('app.settings.basic.actions.refresh') }}</el-button>
       </div>
       <div ref="appLogContainer" class="dialog-panel log-viewer"><pre>{{ appLogContent || appLogEmptyText }}</pre></div>
       <template #footer>
         <div style="display: flex; align-items: center;">
           <LogStorageBar log-key="runtime" style="margin-right: auto" />
-          <el-button @click="appLogVisible = false">关闭</el-button>
+          <el-button @click="appLogVisible = false">{{ t('app.settings.basic.actions.close') }}</el-button>
         </div>
       </template>
     </el-dialog>
 
     <el-dialog v-model="importDialogVisible" width="min(720px, 92vw)" :close-on-click-modal="false" class="backup-dialog dialog-body-inset" @close="onImportDialogClosed">
       <template #header>
-        <DialogHeader :icon="Upload" title="导入配置备份" subtitle="选择备份文件与要导入的分类" />
+        <DialogHeader :icon="Upload" :title="t('app.settings.basic.import.title')" :subtitle="t('app.settings.basic.import.subtitle')" />
       </template>
       <div class="import-picker">
-        <el-button :icon="Upload" @click="chooseImportFile">选择备份文件</el-button>
+        <el-button :icon="Upload" @click="chooseImportFile">{{ t('app.settings.basic.import.chooseFile') }}</el-button>
         <span v-if="importFileName" class="import-filename">{{ importFileName }}</span>
-        <span v-else class="import-hint">支持 V2 完整备份与 V1（nginx 版）备份</span>
+        <span v-else class="import-hint">{{ t('app.settings.basic.import.formatsHint') }}</span>
       </div>
       <input ref="importInput" type="file" accept="application/json,.json,.bak,.lbbak,application/gzip" class="import-input" @change="handleImportFile" />
 
-      <div v-if="importValidating" v-loading="true" class="import-validating">正在校验备份文件...</div>
+      <div v-if="importValidating" v-loading="true" class="import-validating">{{ t('app.settings.basic.import.validating') }}</div>
 
       <template v-if="importValidation && !importValidating">
-        <div v-if="!importValidation.valid && importPreviewSelected" class="info-note-bar import-alert"><span class="info-note-desc">{{ importValidation.error || '备份文件校验失败' }}</span></div>
+        <div v-if="!importValidation.valid && importPreviewSelected" class="info-note-bar import-alert"><span class="info-note-desc">{{ importValidation.error || t('app.settings.basic.import.validateFail') }}</span></div>
         <!-- 预览无效时分类 chip 保持可见可用——取消勾选坏行分类后
              revalidateImport 自动重校验恢复 valid 即解锁确认；0 分类时保留
              校验对象与 chip，仅隐藏预览并禁用确认，用户可直接重新勾选。 -->
         <div class="import-result">
           <div class="import-sections">
-            <div class="import-sections-label">导入分类（未选分类保持现状）</div>
+            <div class="import-sections-label">{{ t('app.settings.basic.import.sectionsLabel') }}</div>
             <div class="section-chips">
               <button
                 v-for="sec in BACKUP_SECTIONS" :key="sec.key"
@@ -346,14 +346,14 @@
                 @click="toggleImportSection(sec.key)"
               >{{ sec.label }}</button>
             </div>
-            <el-text v-if="importValidation.type === 'v1'" type="info" size="small" class="import-v1-hint">V1 备份仅支持负载均衡规则导入</el-text>
-            <el-text v-else-if="!importValidation.valid && importPreviewSelected" type="warning" size="small" class="import-v1-hint">校验未通过——取消勾选包含异常数据的分类后将自动重新校验</el-text>
+            <el-text v-if="importValidation.type === 'v1'" type="info" size="small" class="import-v1-hint">{{ t('app.settings.basic.import.v1OnlyHint') }}</el-text>
+            <el-text v-else-if="!importValidation.valid && importPreviewSelected" type="warning" size="small" class="import-v1-hint">{{ t('app.settings.basic.import.revalidateHint') }}</el-text>
           </div>
           <!-- 0 选择时摘要/冲突/覆盖范围必须一并隐藏（否则与「本次不会
                覆盖任何数据」并存，展示的是上次选择的陈旧预览）。 -->
           <template v-if="importValidation.valid && importPreviewSelected">
             <el-tag :type="importValidation.type === 'v1' ? 'warning' : 'success'" size="small">
-              {{ importValidation.type === 'v1' ? 'V1 兼容导入' : 'V2 完整备份' }}
+              {{ importValidation.type === 'v1' ? t('app.settings.basic.import.v1Compat') : t('app.settings.basic.import.v2Full') }}
             </el-tag>
             <div class="import-summary">
               <span v-for="(count, key) in importValidation.summary" :key="key" class="import-summary-chip" :class="{ 'is-zero': !count }">
@@ -368,7 +368,7 @@
             <el-text
               v-if="importValidation.has_waf_files === false && importSections.includes('security')"
               type="warning" size="small" class="import-waf-hint"
-            >该备份不含规则库版本文件（CRS/IP2Region 与威胁库名单条目），导入「安全防护」将跳过规则库版本记录</el-text>
+            >{{ t('app.settings.basic.import.noRuleLibNote') }}</el-text>
             <ul v-if="importValidation.warnings?.length" class="import-warnings">
               <li v-for="warning in importValidation.warnings" :key="warning">{{ warning }}</li>
             </ul>
@@ -379,23 +379,23 @@
             </ul>
             <!-- 空分类选择不再拼出「将仅覆盖所选分类：，」残句
                  （0 选择的文案已由下方 v-else 分支承担，本块恒有 ≥1 分类） -->
-            <div v-if="importValidation.type !== 'v1'" class="info-note-bar import-alert"><span class="info-note-desc">{{ importSections.length === BACKUP_SECTIONS.length ? '导入将覆盖当前全部配置（规则、用户、密钥、证书任务、节点拓扑）' : `将仅覆盖所选分类：${importSections.map((k) => BACKUP_SECTIONS.find((s) => s.key === k)?.label || k).join('、')}，未选分类保持现状` }}</span></div>
-            <div v-else class="info-note-bar" style="margin-top: 4px"><span class="info-note-desc">仅导入负载均衡规则，其他数据不受影响</span></div>
+            <div v-if="importValidation.type !== 'v1'" class="info-note-bar import-alert"><span class="info-note-desc">{{ importSections.length === BACKUP_SECTIONS.length ? t('app.settings.basic.import.coverAll') : t('app.settings.basic.import.coverSelected', { list: importSections.map((k) => BACKUP_SECTIONS.find((s) => s.key === k)?.label || k).join('、') }) }}</span></div>
+            <div v-else class="info-note-bar" style="margin-top: 4px"><span class="info-note-desc">{{ t('app.settings.basic.import.v1Scope') }}</span></div>
           </template>
-          <div v-else-if="!importPreviewSelected" class="info-note-bar import-alert"><span class="info-note-desc">未选择导入分类——本次导入不会覆盖任何数据（请至少选择一个分类）</span></div>
+          <div v-else-if="!importPreviewSelected" class="info-note-bar import-alert"><span class="info-note-desc">{{ t('app.settings.basic.import.noneSelected') }}</span></div>
         </div>
       </template>
 
       <template #footer>
-        <el-button @click="importDialogVisible = false">取消</el-button>
+        <el-button @click="importDialogVisible = false">{{ t('app.settings.basic.actions.cancel') }}</el-button>
         <!-- 未选分类、无有效校验、只读或非主节点一律置灰（函数级守卫见 confirmImport）-->
-        <el-button type="primary" :disabled="!importValidation?.valid || !importPreviewSelected || backupDisabled" :loading="importing" @click="confirmImport">确认导入</el-button>
+        <el-button type="primary" :disabled="!importValidation?.valid || !importPreviewSelected || backupDisabled" :loading="importing" @click="confirmImport">{{ t('app.settings.basic.import.confirmBtn') }}</el-button>
       </template>
     </el-dialog>
 
     <el-dialog v-model="exportDialogVisible" width="min(720px, 92vw)" :close-on-click-modal="false" class="backup-dialog dialog-body-inset">
       <template #header>
-        <DialogHeader :icon="Download" title="导出配置备份" subtitle="选择要导出的配置分类" />
+        <DialogHeader :icon="Download" :title="t('app.settings.basic.export.title')" :subtitle="t('app.settings.basic.export.subtitle')" />
       </template>
       <div class="section-chips">
         <button
@@ -405,33 +405,33 @@
         >{{ sec.label }}</button>
       </div>
       <div class="backup-dialog-actions">
-        <el-button text size="small" @click="exportSections = []">全不选</el-button>
-        <el-button text size="small" @click="exportSections = BACKUP_SECTIONS.map((s) => s.key)">全选</el-button>
+        <el-button text size="small" @click="exportSections = []">{{ t('app.settings.basic.export.noneBtn') }}</el-button>
+        <el-button text size="small" @click="exportSections = BACKUP_SECTIONS.map((s) => s.key)">{{ t('app.settings.basic.export.allBtn') }}</el-button>
       </div>
-      <div class="info-note-bar" style="margin-top: 8px"><span class="info-note-desc">导出为 .lbbak 备份包（勾选「安全防护」时含 CRS/IP2Region 规则库文件；勾选「节点拓扑」时含从节点列表与站点坐标，含节点令牌哈希）；包含凭证与证书材料，请加密保管</span></div>
+      <div class="info-note-bar" style="margin-top: 8px"><span class="info-note-desc">{{ t('app.settings.basic.export.packageNote') }}</span></div>
       <template #footer>
-        <el-button @click="exportDialogVisible = false">取消</el-button>
+        <el-button @click="exportDialogVisible = false">{{ t('app.settings.basic.actions.cancel') }}</el-button>
         <el-button type="primary" :loading="exporting" :disabled="exportSections.length === 0" @click="exportBackup">
-          确认导出{{ exportSections.length ? `（${exportSections.length}/${BACKUP_SECTIONS.length}）` : '' }}
+          {{ exportSections.length ? t('app.settings.basic.export.confirmExportN', { count: exportSections.length, total: BACKUP_SECTIONS.length }) : t('app.settings.basic.export.confirmExport') }}
         </el-button>
       </template>
     </el-dialog>
 
     <el-dialog v-model="autoBackupVisible" width="min(880px, 96vw)" :close-on-click-modal="false" class="backup-dialog dialog-body-inset" destroy-on-close @opened="onAutoBackupOpened" @close="onAutoBackupClosed">
       <template #header>
-        <DialogHeader :icon="Timer" title="自动备份" subtitle="定时将配置备份到服务器 backup 目录（仅主节点）" />
+        <DialogHeader :icon="Timer" :title="t('app.settings.basic.autoBackup.title')" :subtitle="t('app.settings.basic.autoBackup.subtitle')" />
       </template>
       <el-form label-width="110px" class="auto-backup-form">
-        <el-form-item label="启用">
+        <el-form-item :label="t('app.settings.basic.autoBackup.enable')">
           <el-switch v-model="autoBackupForm.enabled" />
-          <span class="form-tip-inline">调度器仅主节点运行；主从切换后自动开始，无需重启进程</span>
+          <span class="form-tip-inline">{{ t('app.settings.basic.autoBackup.enableHint') }}</span>
         </el-form-item>
-        <el-form-item label="频率" for="radio---5">
+        <el-form-item :label="t('app.settings.basic.autoBackup.frequency')" for="radio---5">
           <input type="text" id="radio---5" aria-hidden="true" tabindex="-1" autocomplete="off" style="display:none">
-          <el-radio-group v-model="autoBackupForm.frequency" aria-label="频率">
-            <el-radio value="daily">日</el-radio>
-            <el-radio value="weekly">周</el-radio>
-            <el-radio value="monthly">月</el-radio>
+          <el-radio-group v-model="autoBackupForm.frequency" :aria-label="t('app.settings.basic.autoBackup.frequency')">
+            <el-radio value="daily">{{ t('app.settings.basic.autoBackup.daily') }}</el-radio>
+            <el-radio value="weekly">{{ t('app.settings.basic.autoBackup.weekly') }}</el-radio>
+            <el-radio value="monthly">{{ t('app.settings.basic.autoBackup.monthly') }}</el-radio>
           </el-radio-group>
           <el-select v-if="autoBackupForm.frequency === 'weekly'" v-model="autoBackupForm.day" size="small" style="width: 110px; margin-left: 12px">
             <el-option v-for="(label, idx) in AUTO_BACKUP_WEEKDAYS" :key="label" :value="idx + 1" :label="label" />
@@ -440,15 +440,15 @@
             <el-option v-for="d in 28" :key="d" :value="d" :label="`${d} 日`" />
           </el-select>
         </el-form-item>
-        <el-form-item label="备份时间">
+        <el-form-item :label="t('app.settings.basic.autoBackup.time')">
           <el-time-select v-model="autoBackupForm.time" start="00:00" end="23:30" step="00:30" style="width: 120px" />
-          <span class="form-tip-inline">按系统配置时区执行；停机跨槽会在下次启动补跑一次</span>
+          <span class="form-tip-inline">{{ t('app.settings.basic.autoBackup.timeHint') }}</span>
         </el-form-item>
-        <el-form-item label="保留份数">
+        <el-form-item :label="t('app.settings.basic.autoBackup.keep')">
           <el-input-number v-model="autoBackupForm.keep" :min="1" :max="30" controls-position="right" style="width: 120px" />
-          <span class="form-tip-inline">1-30 份，超出自动清理；失败记录另保留最近 20 条</span>
+          <span class="form-tip-inline">{{ t('app.settings.basic.autoBackup.keepHint') }}</span>
         </el-form-item>
-        <el-form-item label="备份范围" for="auto-backup-range-static">
+        <el-form-item :label="t('app.settings.basic.autoBackup.scope')" for="auto-backup-range-static">
           <input type="text" id="auto-backup-range-static" aria-hidden="true" tabindex="-1" autocomplete="off" style="display:none">
           <div class="section-chips auto-backup-chips">
             <button
@@ -459,61 +459,61 @@
             >{{ sec.label }}</button>
           </div>
           <div class="auto-backup-chips-actions">
-            <el-button size="small" plain @click="autoBackupSections = []">全不选</el-button>
-            <el-button size="small" plain @click="autoBackupSections = BACKUP_SECTIONS.map((s) => s.key)">全选</el-button>
-            <el-text type="info" size="small" class="auto-backup-scope-hint">至少选择一个分类（未选分类不进入备份）</el-text>
+            <el-button size="small" plain @click="autoBackupSections = []">{{ t('app.settings.basic.export.noneBtn') }}</el-button>
+            <el-button size="small" plain @click="autoBackupSections = BACKUP_SECTIONS.map((s) => s.key)">{{ t('app.settings.basic.export.allBtn') }}</el-button>
+            <el-text type="info" size="small" class="auto-backup-scope-hint">{{ t('app.settings.basic.autoBackup.scopeHint') }}</el-text>
           </div>
         </el-form-item>
       </el-form>
       <section class="auto-backup-list-section">
         <DialogSectionHeader
-          title="备份历史"
-          :description="autoBackupNextRunLabel ? `上次成功备份：${autoBackupLastRunLabel} · 下次备份：${autoBackupNextRunLabel}` : `上次成功备份：${autoBackupLastRunLabel}`"
+          :title="t('app.settings.basic.autoBackup.history')"
+          :description="autoBackupNextRunLabel ? t('app.settings.basic.autoBackup.lastAndNext', { last: autoBackupLastRunLabel, next: autoBackupNextRunLabel }) : t('app.settings.basic.autoBackup.lastOnly', { last: autoBackupLastRunLabel })"
         />
         <div class="dialog-panel dialog-panel--flush auto-backup-list">
         <el-table v-loading="autoBackupLoading" :data="autoBackupRows" size="small" :max-height="320">
-          <el-table-column label="备份时间" width="170">
+          <el-table-column :label="t('app.settings.basic.autoBackup.time')" width="170">
             <template #default="{ row }">{{ formatDate(row.created_at) }}</template>
           </el-table-column>
-          <el-table-column label="版本号" width="110">
+          <el-table-column :label="t('app.settings.basic.autoBackup.colVersion')" width="110">
             <template #default="{ row }">{{ row.app_version || '—' }}</template>
           </el-table-column>
-          <el-table-column label="状态" width="70">
+          <el-table-column :label="t('app.settings.basic.autoBackup.colStatus')" width="70">
             <template #default="{ row }">
               <el-tag :type="row.status === 'success' ? 'success' : 'danger'" size="small" effect="light">
-                {{ row.status === 'success' ? '成功' : '失败' }}
+                {{ row.status === 'success' ? t('app.settings.basic.autoBackup.success') : t('app.settings.basic.autoBackup.failure') }}
               </el-tag>
             </template>
           </el-table-column>
           <!-- 内容列只显备份范围（2026-09-21 用户裁定）；各表行数明细+触发方式移入 hover -->
-          <el-table-column label="内容" width="230" class-name="auto-backup-scope-cell">
+          <el-table-column :label="t('app.settings.basic.autoBackup.colContent')" width="230" class-name="auto-backup-scope-cell">
             <template #default="{ row }">
               <el-tooltip :content="autoBackupDetailTip(row as AutoBackupRow)" placement="top" :show-after="150">
                 <span class="auto-backup-scope-text" :class="{ 'is-warning': row.sections_error }">{{ autoBackupScopeText(row as AutoBackupRow) }}</span>
               </el-tooltip>
             </template>
           </el-table-column>
-          <el-table-column label="大小" width="90">
+          <el-table-column :label="t('app.settings.basic.autoBackup.colSize')" width="90">
             <template #default="{ row }">{{ formatBackupSize(row.size_bytes) }}</template>
           </el-table-column>
-          <el-table-column label="操作" width="150" align="right">
+          <el-table-column :label="t('app.settings.basic.autoBackup.colActions')" width="150" align="right">
             <template #default="{ row }">
-              <el-button v-if="row.status === 'success'" link type="primary" size="small" :disabled="autoBackupActionBusy" @click="downloadAutoBackup(row as AutoBackupRow)">下载</el-button>
-              <el-button v-if="row.status === 'success'" link type="warning" size="small" :loading="restoringBackupId === row.id" :disabled="autoBackupActionBusy || backupDisabled" @click="restoreAutoBackup(row as AutoBackupRow)">还原</el-button>
-              <el-button link type="danger" size="small" :loading="deletingBackupId === row.id" :disabled="autoBackupActionBusy || backupDisabled" @click="deleteAutoBackup(row as AutoBackupRow)">删除</el-button>
+              <el-button v-if="row.status === 'success'" link type="primary" size="small" :disabled="autoBackupActionBusy" @click="downloadAutoBackup(row as AutoBackupRow)">{{ t('app.settings.basic.autoBackup.download') }}</el-button>
+              <el-button v-if="row.status === 'success'" link type="warning" size="small" :loading="restoringBackupId === row.id" :disabled="autoBackupActionBusy || backupDisabled" @click="restoreAutoBackup(row as AutoBackupRow)">{{ t('app.settings.basic.autoBackup.restore') }}</el-button>
+              <el-button link type="danger" size="small" :loading="deletingBackupId === row.id" :disabled="autoBackupActionBusy || backupDisabled" @click="deleteAutoBackup(row as AutoBackupRow)">{{ t('app.settings.basic.autoBackup.delete') }}</el-button>
             </template>
           </el-table-column>
-          <template #empty><el-empty description="暂无备份" :image-size="70" /></template>
+          <template #empty><el-empty :description="t('app.settings.basic.autoBackup.empty')" :image-size="70" /></template>
         </el-table>
         </div>
       </section>
       <template #footer>
-        <el-button @click="autoBackupVisible = false">取消</el-button>
-        <el-button type="primary" plain :loading="autoBackupRunning" :disabled="!autoBackupCanRunNow" title="按已保存的自动备份设置执行一次备份；上方表单改动需先保存设置" @click="runAutoBackupNow">
-          立即备份
+        <el-button @click="autoBackupVisible = false">{{ t('app.settings.basic.actions.cancel') }}</el-button>
+        <el-button type="primary" plain :loading="autoBackupRunning" :disabled="!autoBackupCanRunNow" :title="t('app.settings.basic.autoBackup.runNowTip')" @click="runAutoBackupNow">
+          {{ t('app.settings.basic.autoBackup.runNow') }}
         </el-button>
         <el-button type="primary" :loading="autoBackupSaving" :disabled="!autoBackupSectionsValid || !autoBackupLoaded || autoBackupLoading" @click="saveAutoBackupSettings">
-          保存设置
+          {{ t('app.settings.basic.autoBackup.saveSettings') }}
         </el-button>
       </template>
     </el-dialog>
@@ -528,13 +528,13 @@
        写 DNS TXT / 申请 EAB）。 -->
   <el-dialog v-model="mfaScopeVisible" class="dialog-body-inset" width="min(640px, 94vw)">
     <template #header>
-      <DialogHeader :icon="Lock" title="写操作验证支持的操作" subtitle="覆盖全部管理写操作（只读语义写操作与 MFA 验码、登出端点除外）" />
+      <DialogHeader :icon="Lock" :title="t('app.settings.basic.mfaScope.title')" :subtitle="t('app.settings.basic.mfaScope.subtitle')" />
     </template>
     <!-- 与 middleware.go 的 mfaStepUpGuard 挂载面（admin/business 两组级）
          及 readOnlyWriteRoutes 豁免清单同源。注意：证书配置/DNS 凭证/CA 提供商
          的「测试」会真实写入 DNS TXT 或自动申请 EAB——属写操作，需验证；仅
          OIDC 连接测试、配置预览/备份校验、证书解析、批量查询为读语义豁免。 -->
-    <div class="info-note-bar"><span class="info-note-desc">开启后，以下操作需要 1 分钟内验证过 MFA（TOTP 同片不可重用，验证后 60 秒内的连续操作免重复弹码）。配置预览、备份校验、证书解析、批量证书状态查询与 OIDC 连接测试等只读语义操作不受影响。</span></div>
+    <div class="info-note-bar"><span class="info-note-desc">{{ t('app.settings.basic.mfaScope.note') }}</span></div>
     <div class="mfa-scope-list">
       <div v-for="group in MFA_SCOPE_GROUPS" :key="group.title" class="dialog-panel mfa-scope-row">
         <DialogSectionHeader :title="group.title" />
@@ -546,6 +546,7 @@
 
 <script setup lang="ts">
 import { computed, h, onMounted, onUnmounted, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useAuthStore } from '@/stores/auth'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { request, mfaAwareSuccess } from '@/utils/api'
@@ -573,6 +574,8 @@ import DialogSectionHeader from '@/components/DialogSectionHeader.vue'
 import AccessibleLink from '@/components/common/AccessibleLink.vue'
 import { useUpdateCheck } from '@/composables/useUpdateCheck'
 import type { SystemInfo } from '@/types'
+
+const { t } = useI18n()
 
 const authStore = useAuthStore()
 const isReadOnly = computed(() => authStore.readOnlyReason !== null)
@@ -610,7 +613,7 @@ const appLogContainer = ref<HTMLElement | null>(null)
 // 日志端点失败必须显性化：此前失败只写 console，模板继续以空内容渲染
 // 「暂无日志」——排障最需要日志的时刻给出「没有日志」的错误结论。
 const appLogError = ref(false)
-const appLogEmptyText = computed(() => appLogError.value ? '日志加载失败（自动重试中）' : '暂无日志')
+const appLogEmptyText = computed(() => appLogError.value ? t('app.settings.basic.appLog.emptyFail') : t('app.settings.basic.appLog.empty'))
 
 // （过度修复审查 REMOVE：appLogRequestSeq 已删——入口 loading 门 +
 // appLogVisible 析取使其作为裁决条件永不为真。）
@@ -696,7 +699,7 @@ const exportBackup = async (): Promise<void> => {
     })
     saveBlob(blob, `lazy-balancer-backup-${formatDateShort(new Date())}.lbbak`)
     exportDialogVisible.value = false
-    mfaAwareSuccess('配置备份已导出')
+    mfaAwareSuccess(t('app.settings.basic.export.done'))
   } catch {
     // 错误提示已由全局拦截器（含 Blob 错误体解析）展示
   } finally {
@@ -705,7 +708,10 @@ const exportBackup = async (): Promise<void> => {
 }
 
 // —— 自动备份（v2.3.x）：设置/手动备份/列表/下载/还原/删除 ——
-const AUTO_BACKUP_WEEKDAYS = ['周一', '周二', '周三', '周四', '周五', '周六', '周日']
+const AUTO_BACKUP_WEEKDAYS = computed(() => [
+  t('app.settings.basic.autoBackup.mon'), t('app.settings.basic.autoBackup.tue'), t('app.settings.basic.autoBackup.wed'),
+  t('app.settings.basic.autoBackup.thu'), t('app.settings.basic.autoBackup.fri'), t('app.settings.basic.autoBackup.sat'), t('app.settings.basic.autoBackup.sun'),
+])
 
 interface AutoBackupRow {
   id: number
@@ -771,7 +777,7 @@ const autoBackupNextRunLabel = computed<string | null>(() => {
   if (!autoBackupVisible.value || !autoBackupNextRunAt.value) return null
   const formatted = formatDate(autoBackupNextRunAt.value)
   if (!formatted) return null
-  return autoBackupCatchUpDue.value ? `待补跑（${formatted}）` : formatted
+  return autoBackupCatchUpDue.value ? t('app.settings.basic.autoBackup.catchUp', { time: formatted }) : formatted
 })
 const autoBackupCanRunNow = computed(() => !backupDisabled.value && autoBackupLoaded.value && !autoBackupLoading.value && autoBackupSavedSections.value.length > 0)
 // 与导出按钮同口径：范围非空(users 恒有表,不存在不可还原形态)
@@ -804,7 +810,7 @@ const fetchAutoBackup = async (quiet = false): Promise<void> => {
       const now = Date.now()
       if (shouldToastQuietPollError(autoBackupLoaded.value, now, lastAutoBackupErrorToastAt)) {
         lastAutoBackupErrorToastAt = now
-        ElMessage.error('自动备份状态刷新失败，将持续自动重试')
+        ElMessage.error(t('app.settings.basic.autoBackup.refreshFail'))
       }
     }
     return
@@ -834,7 +840,7 @@ const fetchAutoBackup = async (quiet = false): Promise<void> => {
       },
       onError: () => {
         // silent 模式全局拦截器不会提示：只让当前会话披露失败。
-        ElMessage.error('自动备份设置读取失败，请关闭弹框后重试；读取完成前无法保存')
+        ElMessage.error(t('app.settings.basic.autoBackup.readFail'))
       },
       onFinally: () => { autoBackupLoading.value = false },
     },
@@ -861,22 +867,22 @@ const saveAutoBackupSettings = async (): Promise<boolean> => {
   // （按钮禁用只是入口层，不能覆盖全部触发路径；backupDisabled 同时含节点模式门）。
   if (backupDisabled.value || !autoBackupSectionsValid.value || autoBackupSaving.value) return false
   if (!autoBackupLoaded.value || autoBackupLoading.value) {
-    ElMessage.warning('自动备份设置尚未加载完成，暂不能保存')
+    ElMessage.warning(t('app.settings.basic.autoBackup.notLoaded'))
     return false
   }
   // 占位先于确认：确认框悬挂期按钮已进入在途态，第二击不会再叠一个确认框。
   autoBackupSaving.value = true
   try {
     try {
-      await ElMessageBox.confirm(`将保存自动备份设置${autoBackupForm.value.enabled ? '并启用定时备份' : '，定时备份保持关闭'}，是否继续？`, '保存自动备份设置', {
-        type: 'warning', confirmButtonText: '确认保存', cancelButtonText: '取消',
+      await ElMessageBox.confirm(t('app.settings.basic.autoBackup.saveConfirm', { mode: autoBackupForm.value.enabled ? t('app.settings.basic.autoBackup.saveConfirmEnable') : t('app.settings.basic.autoBackup.saveConfirmOff') }), t('app.settings.basic.autoBackup.saveConfirmTitle'), {
+        type: 'warning', confirmButtonText: t('app.settings.basic.actions.confirmSave'), cancelButtonText: t('app.settings.basic.actions.cancel'),
       })
     } catch { return false }
     await request.put('/settings/auto-backup', { ...autoBackupForm.value, sections: autoBackupSections.value })
     autoBackupSavedSections.value = [...autoBackupSections.value]
     autoBackupNextRunAt.value = null
     await fetchAutoBackup(true)
-    mfaAwareSuccess('自动备份设置已保存')
+    mfaAwareSuccess(t('app.settings.basic.autoBackup.saved'))
     return true
   } catch {
     // 全局拦截器已提示（含 428 MFA 弹码重试）
@@ -892,7 +898,7 @@ const saveAutoBackupSettings = async (): Promise<boolean> => {
 const runAutoBackupNow = async (): Promise<void> => {
   if (backupDisabled.value || autoBackupRunning.value) return
   if (!autoBackupCanRunNow.value) {
-    ElMessage.warning('自动备份设置尚未加载或已保存的备份范围为空，暂不能立即备份')
+    ElMessage.warning(t('app.settings.basic.autoBackup.runBlocked'))
     return
   }
   // 占位先于确认：确认框悬挂期按钮已进入在途态，第二击不会再叠一个确认框。
@@ -902,12 +908,12 @@ const runAutoBackupNow = async (): Promise<void> => {
   const baselineId = autoBackupRows.value.reduce((max, row) => Math.max(max, Number(row.id) || 0), 0)
   try {
     try {
-      await ElMessageBox.confirm('将按最近一次已保存的自动备份设置立即生成一份配置备份，是否继续？', '立即备份', {
-        type: 'warning', confirmButtonText: '立即备份', cancelButtonText: '取消',
+      await ElMessageBox.confirm(t('app.settings.basic.autoBackup.runNowConfirm'), t('app.settings.basic.autoBackup.runNow'), {
+        type: 'warning', confirmButtonText: t('app.settings.basic.autoBackup.runNow'), cancelButtonText: t('app.settings.basic.actions.cancel'),
       })
     } catch { return }
     await request.post('/auto-backup/run')
-    mfaAwareSuccess('备份已开始，完成后将自动刷新列表')
+    mfaAwareSuccess(t('app.settings.basic.autoBackup.started'))
     const deadline = Date.now() + 60000
     let completed: AutoBackupRow | undefined
     // 组件卸载（切到其它设置页/离开系统设置）后必须终止轮询——原只以
@@ -921,11 +927,11 @@ const runAutoBackupNow = async (): Promise<void> => {
     }
     if (disposed) return
     if (completed?.status === 'success') {
-      mfaAwareSuccess('手动备份完成')
+      mfaAwareSuccess(t('app.settings.basic.autoBackup.manualDone'))
     } else if (completed) {
-      ElMessage.error(completed.message || '手动备份失败')
+      ElMessage.error(completed.message || t('app.settings.basic.autoBackup.manualFail'))
     } else if (!completed && autoBackupVisible.value) {
-      ElMessage.warning('60 秒内未检测到本次备份结果，任务可能仍在执行；请稍后刷新列表查看')
+      ElMessage.warning(t('app.settings.basic.autoBackup.resultTimeout'))
     }
   } catch {
     // 全局拦截器已提示（409=已有备份在执行）
@@ -941,12 +947,12 @@ const formatBackupSize = (bytes: number): string => (!bytes || bytes <= 0 ? '-' 
 const autoBackupScopeText = (row: AutoBackupRow): string => {
   // 范围损坏 ≠ 范围为空：行内 sections 列解析失败时显示「-」会被读成「不含任何
   // 分类的备份」而放弃一次内容完整的还原（还原按包内 sections 走，不读该列）。
-  if (row.sections_error) return '范围损坏（见日志）'
+  if (row.sections_error) return t('app.settings.basic.autoBackup.scopeBroken')
   const labels = normalizeBackupSectionKeys(row.sections || []).map((k) => BACKUP_SECTIONS.find((s) => s.key === k)?.label || k)
   return labels.length > 0 ? labels.join('、') : '-'
 }
 const autoBackupDetailTip = (row: AutoBackupRow): string => {
-  const trigger = row.trigger_type === 'manual' ? '手动' : '定时'
+  const trigger = row.trigger_type === 'manual' ? t('app.settings.basic.autoBackup.triggerManual') : t('app.settings.basic.autoBackup.triggerScheduled')
   return row.message ? `${row.message}（${trigger}）` : `${autoBackupScopeText(row)}（${trigger}）`
 }
 
@@ -968,9 +974,9 @@ const restoreAutoBackup = async (row: AutoBackupRow): Promise<void> => {
     const scope = autoBackupScopeText(row)
     try {
       await ElMessageBox.confirm(
-        `将使用备份「${row.filename}」覆盖该备份包含的分类：${scope}；未包含的分类保持现状。此操作不可撤销。确认还原？`,
-        '还原配置',
-        { type: 'warning', confirmButtonText: '确认还原', cancelButtonText: '取消' },
+        t('app.settings.basic.autoBackup.restoreConfirm', { name: row.filename, scope }),
+        t('app.settings.basic.autoBackup.restoreTitle'),
+        { type: 'warning', confirmButtonText: t('app.settings.basic.autoBackup.restoreConfirmBtn'), cancelButtonText: t('app.settings.basic.actions.cancel') },
       )
     } catch {
       return
@@ -984,16 +990,16 @@ const restoreAutoBackup = async (row: AutoBackupRow): Promise<void> => {
       const warnings = res.data?.warnings ?? []
       const disabledConflicts = res.data?.disabled_conflicts ?? []
       const resultLines = [
-        res.message || '配置还原成功',
+        res.message || t('app.settings.basic.restore.success'),
         ...warnings,
-        ...(disabledConflicts.length > 0 ? [`冲突置为禁用：${disabledConflicts.length} 条`] : []),
+        ...(disabledConflicts.length > 0 ? [t('app.settings.basic.conflictsDisabled', { count: disabledConflicts.length })] : []),
         ...disabledConflicts.map((conflict) => formatImportConflict(conflict, true)),
       ]
       await ElMessageBox.alert(
         h('div', resultLines.map((line) => h('div', line))),
-        '还原完成',
+        t('app.settings.basic.restore.done'),
         {
-          confirmButtonText: '刷新页面',
+          confirmButtonText: t('app.settings.basic.actions.reloadPage'),
           type: warnings.length > 0 || disabledConflicts.length > 0 ? 'warning' : 'success',
           showClose: false,
           closeOnClickModal: false,
@@ -1005,7 +1011,7 @@ const restoreAutoBackup = async (row: AutoBackupRow): Promise<void> => {
       // 全局拦截器已弹 message toast；失败响应携带的文件面判决（回退失败=文件与
       // 版本记录可能分裂 / 提交结果不确定=需人工核对）必须展示——回滚只覆盖库侧，
       // 回退失败或提交不确定时执行面可能已与库分叉，不得按「已回滚即无需动作」处理。
-      await showImportFailure(error, '配置还原失败', '还原失败')
+      await showImportFailure(error, t('app.settings.basic.restore.failTitle'), t('app.settings.basic.restore.failShort'))
     }
   } finally {
     restoringBackupId.value = null
@@ -1018,16 +1024,16 @@ const deleteAutoBackup = async (row: AutoBackupRow): Promise<void> => {
   deletingBackupId.value = row.id
   try {
     try {
-      await ElMessageBox.confirm(`确认删除备份「${row.filename}」？删除后不可恢复。`, '删除备份', {
+      await ElMessageBox.confirm(t('app.settings.basic.autoBackup.deleteConfirm', { name: row.filename }), t('app.settings.basic.autoBackup.deleteTitle'), {
         type: 'warning',
-        confirmButtonText: '删除',
-        cancelButtonText: '取消',
+        confirmButtonText: t('app.settings.basic.autoBackup.delete'),
+        cancelButtonText: t('app.settings.basic.actions.cancel'),
       })
     } catch {
       return
     }
     await request.delete(`/auto-backup/${row.id}`)
-    mfaAwareSuccess('备份已删除')
+    mfaAwareSuccess(t('app.settings.basic.autoBackup.deleted'))
     // quiet=true：删除只影响列表——非 quiet 会用服务端值整体覆盖上方表单，
     // 把用户未保存的频率/时间/保留份数/范围静默回退（同保存与立即备份轮询口径）。
     await fetchAutoBackup(true)
@@ -1093,13 +1099,13 @@ let importPreviewSession: ImportPreviewSession<ImportValidation> | null = null
 // 摘要标签单源 utils/importSummaryLabels（后端表集完整覆盖由跨栈测试钉住）——
 // 原页内表只覆盖 12 个键，其余按原键回退，用户会在预览里看到后端表名。
 
-const conflictIdentifier = (conflict: { name?: string; caddy_id?: string }): string => conflict.name || conflict.caddy_id || '未命名规则'
+const conflictIdentifier = (conflict: { name?: string; caddy_id?: string }): string => conflict.name || conflict.caddy_id || t('app.settings.basic.import.unnamedRule')
 
 const formatImportConflict = (conflict: DisabledRuleConflict, alreadyDisabled = false): string => {
   const opponents = conflict.conflicts_with
     .map((opponent) => `${conflictIdentifier(opponent)}（${opponent.reason}）`)
     .join('；')
-  return `规则 ${conflictIdentifier(conflict)} ${alreadyDisabled ? '已禁用' : '将被禁用'}：与${opponents}冲突`
+  return t('app.settings.basic.import.conflictLine', { rule: conflictIdentifier(conflict), state: alreadyDisabled ? t('app.settings.basic.import.alreadyDisabled') : t('app.settings.basic.import.willDisable'), opponents })
 }
 
 // showImportFailure 导入/还原失败响应的处置结果弹框。
@@ -1117,7 +1123,7 @@ const showImportFailure = async (error: unknown, fallbackMessage: string, title:
     await ElMessageBox.alert(
       h('div', lines.map((line) => h('div', line))),
       title,
-      { confirmButtonText: '知道了', type: 'error' },
+      { confirmButtonText: t('app.settings.basic.actions.gotIt'), type: 'error' },
     )
   } catch {
     // 弹框被关闭（X/ESC）不影响任何状态：失败已由后端回滚或文件面判决披露。
@@ -1174,7 +1180,7 @@ const handleImportFile = async (event: Event): Promise<void> => {
   importValidating.value = false
   if (file.size > IMPORT_MAX_BYTES) {
     // 先于全量读入内存拒绝(后端 413 同口径),防超大文件撑爆标签页
-    importValidation.value = { valid: false, error: '备份文件不能超过 128MB', disabled_conflicts: [] }
+    importValidation.value = { valid: false, error: t('app.settings.basic.import.tooLarge'), disabled_conflicts: [] }
     return
   }
   importValidating.value = true
@@ -1222,7 +1228,7 @@ const handleImportFile = async (event: Event): Promise<void> => {
     }
   } catch {
     if (validationSeq === importValidationSeq) {
-      importValidation.value = { valid: false, error: '校验请求失败，请重试', disabled_conflicts: [] }
+      importValidation.value = { valid: false, error: t('app.settings.basic.import.validateRequestFail'), disabled_conflicts: [] }
     }
   } finally {
     if (validationSeq === importValidationSeq) {
@@ -1278,7 +1284,7 @@ const revalidateImport = async (): Promise<void> => {
     importValidation.value = data ?? null
   } catch {
     if (validationSeq === importValidationSeq) {
-      importValidation.value = { valid: false, error: '校验请求失败，请重试', disabled_conflicts: [] }
+      importValidation.value = { valid: false, error: t('app.settings.basic.import.validateRequestFail'), disabled_conflicts: [] }
     }
   }
 }
@@ -1291,7 +1297,7 @@ const confirmImport = async (): Promise<void> => {
   const validation = importValidation.value
   if (!validation?.valid || importing.value) return
   // 未选分类先于最终确认弹框拦截（路径强制 ['rules']，不可达此分支）
-  if (importSections.value.length === 0) { ElMessage.warning('请至少选择一个导入分类'); return }
+  if (importSections.value.length === 0) { ElMessage.warning(t('app.settings.basic.import.needSection')); return }
   // 全量导入是全仓破坏性最强的操作（覆盖规则、用户、密钥、证书任务与全部凭证），
   // 此前是唯一缺二次确认弹框的破坏性操作——「确认导入」按钮与警示文案不足以兜底误点。
   try {
@@ -1299,8 +1305,8 @@ const confirmImport = async (): Promise<void> => {
     // 节点拓扑）——预览与最终确认必须同一覆盖面口径。
     await ElMessageBox.confirm(
       importConfirmMessage(validation.type, importSections.value),
-      '最终确认',
-      { type: 'warning', confirmButtonText: '确认导入', cancelButtonText: '取消' },
+      t('app.settings.basic.import.finalConfirm'),
+      { type: 'warning', confirmButtonText: t('app.settings.basic.import.confirmBtn'), cancelButtonText: t('app.settings.basic.actions.cancel') },
     )
   } catch {
     return
@@ -1324,17 +1330,17 @@ const confirmImport = async (): Promise<void> => {
     // 跳过)此前被丢弃——与冲突同级展示,非空时结果至少 warning 级
     const warnings = res.data?.warnings ?? []
     const resultLines = [
-      res.message || '配置导入成功',
+      res.message || t('app.settings.basic.import.success'),
       ...warnings,
       // 无冲突时不占位——「冲突置为禁用：0 条」恒显属噪音行
-      ...(disabledConflicts.length > 0 ? [`冲突置为禁用：${disabledConflicts.length} 条`] : []),
+      ...(disabledConflicts.length > 0 ? [t('app.settings.basic.conflictsDisabled', { count: disabledConflicts.length })] : []),
       ...disabledConflicts.map((conflict) => formatImportConflict(conflict)),
     ]
     await ElMessageBox.alert(
       h('div', resultLines.map((line) => h('div', line))),
-      '导入完成',
+      t('app.settings.basic.import.done'),
       {
-        confirmButtonText: '刷新页面',
+        confirmButtonText: t('app.settings.basic.actions.reloadPage'),
         type: disabledConflicts.length > 0 || warnings.length > 0 ? 'warning' : 'success',
         showClose: false,
         closeOnClickModal: false,
@@ -1346,7 +1352,7 @@ const confirmImport = async (): Promise<void> => {
     // 全局拦截器只弹 message toast；失败响应的 data.warnings（规则库文件面
     // 三态判决/提交不确定的人工核对指引/软跳过清单）与冲突明细必须同框展示，
     // 与成功路径同口径。
-    await showImportFailure(error, '配置导入失败', '导入失败')
+    await showImportFailure(error, t('app.settings.basic.import.failTitle'), t('app.settings.basic.import.failShort'))
   } finally {
     importing.value = false
   }
@@ -1419,7 +1425,7 @@ const settings = defineModel<BasicSettingsConfig>('settings', { required: true }
 // 时区选项目录（常用项）——写侧接受任意 IANA 时区名（后端 time.LoadLocation
 // 校验），因此「启用 ∪ 当前值」：API/备份写入的非枚举值以自定义项原值回显，
 // 否则下拉空白、用户一改选就无法再改回该值。
-const PRESET_TIMEZONES: readonly { label: string; value: string }[] = [
+const PRESET_TIMEZONES = computed<readonly { label: string; value: string }[]>(() => [
   { label: 'Asia/Shanghai (UTC+8)', value: 'Asia/Shanghai' },
   { label: 'Asia/Hong_Kong (UTC+8)', value: 'Asia/Hong_Kong' },
   { label: 'Asia/Tokyo (UTC+9)', value: 'Asia/Tokyo' },
@@ -1428,23 +1434,23 @@ const PRESET_TIMEZONES: readonly { label: string; value: string }[] = [
   { label: 'Asia/Bangkok (UTC+7)', value: 'Asia/Bangkok' },
   { label: 'Asia/Kolkata (UTC+5:30)', value: 'Asia/Kolkata' },
   { label: 'Asia/Dubai (UTC+4)', value: 'Asia/Dubai' },
-  { label: 'Europe/London (UTC+0，夏令时 UTC+1)', value: 'Europe/London' },
-  { label: 'Europe/Paris (UTC+1，夏令时 UTC+2)', value: 'Europe/Paris' },
-  { label: 'Europe/Berlin (UTC+1，夏令时 UTC+2)', value: 'Europe/Berlin' },
+  { label: t('app.settings.basic.tz.dst', { base: 'Europe/London (UTC+0', dst: 'UTC+1' }), value: 'Europe/London' },
+  { label: t('app.settings.basic.tz.dst', { base: 'Europe/Paris (UTC+1', dst: 'UTC+2' }), value: 'Europe/Paris' },
+  { label: t('app.settings.basic.tz.dst', { base: 'Europe/Berlin (UTC+1', dst: 'UTC+2' }), value: 'Europe/Berlin' },
   { label: 'Europe/Moscow (UTC+3)', value: 'Europe/Moscow' },
-  { label: 'America/New_York (UTC-5，夏令时 UTC-4)', value: 'America/New_York' },
-  { label: 'America/Chicago (UTC-6，夏令时 UTC-5)', value: 'America/Chicago' },
-  { label: 'America/Denver (UTC-7，夏令时 UTC-6)', value: 'America/Denver' },
-  { label: 'America/Los_Angeles (UTC-8，夏令时 UTC-7)', value: 'America/Los_Angeles' },
+  { label: t('app.settings.basic.tz.dst', { base: 'America/New_York (UTC-5', dst: 'UTC-4' }), value: 'America/New_York' },
+  { label: t('app.settings.basic.tz.dst', { base: 'America/Chicago (UTC-6', dst: 'UTC-5' }), value: 'America/Chicago' },
+  { label: t('app.settings.basic.tz.dst', { base: 'America/Denver (UTC-7', dst: 'UTC-6' }), value: 'America/Denver' },
+  { label: t('app.settings.basic.tz.dst', { base: 'America/Los_Angeles (UTC-8', dst: 'UTC-7' }), value: 'America/Los_Angeles' },
   { label: 'America/Sao_Paulo (UTC-3)', value: 'America/Sao_Paulo' },
-  { label: 'Australia/Sydney (UTC+10，夏令时 UTC+11)', value: 'Australia/Sydney' },
+  { label: t('app.settings.basic.tz.dst', { base: 'Australia/Sydney (UTC+10', dst: 'UTC+11' }), value: 'Australia/Sydney' },
   { label: 'UTC', value: 'UTC' },
-]
+])
 const timezoneOptions = computed(() => {
-  const options = PRESET_TIMEZONES.map((item) => ({ ...item }))
+  const options = PRESET_TIMEZONES.value.map((item) => ({ ...item }))
   const current = settings.value.timezone
   if (current && !options.some((item) => item.value === current)) {
-    options.push({ label: `${current}（自定义）`, value: current })
+    options.push({ label: t('app.settings.basic.tz.custom', { name: current }), value: current })
   }
   return options
 })
@@ -1453,13 +1459,13 @@ const timezoneOptions = computed(() => {
 // 运行时 Intl 与 Go 共用 IANA 库，本地即可定位到字段。
 const timezoneError = (value: string): string => {
   const tz = value.trim()
-  if (!tz) return '时区不能为空'
+  if (!tz) return t('app.settings.basic.tz.empty')
   try {
     // 只借它做校验：构造即抛 RangeError 表示库中无此时区。
     new Intl.DateTimeFormat(undefined, { timeZone: tz })
     return ''
   } catch {
-    return `无效的时区：${tz}`
+    return t('app.settings.basic.tz.invalid', { tz })
   }
 }
 // 父级 /config 加载完成前禁止保存：表单此刻仍是默认值。
@@ -1524,7 +1530,7 @@ const applySiteLocation = (key: string): void => {
   }
   const coords = coordsForSiteLocation(key)
   if (!coords) {
-    ElMessage.error('地点数据缺失，请重新选择')
+    ElMessage.error(t('app.settings.basic.tz.locationMissing'))
     siteLocationKey.value = nearestSiteLocation(settings.value.server_map_lat ?? 0, settings.value.server_map_lon ?? 0)
     return
   }
@@ -1613,7 +1619,7 @@ const adminTlsMissingPairHint = computed(() => {
   const hasCert = adminTlsForm.value.certFile !== null
   const hasKey = adminTlsForm.value.keyFile !== null
   if (hasCert === hasKey) return ''
-  return hasCert ? '已选择证书文件，还需选择私钥文件才能解析证书' : '已选择私钥文件，还需选择证书文件才能解析证书'
+  return hasCert ? t('app.settings.basic.tls.needKeyFirst') : t('app.settings.basic.tls.needCertFirst')
 })
 const adminTlsConfirmBlocked = computed(() => adminTlsConfirmDisabled(adminTlsStoredCertState.value, adminTlsForm.value))
 // 待提交判据单源 utils/adminTlsGate：暂存证书与 enabled 解耦（禁用态同样算
@@ -1744,14 +1750,14 @@ const onTlsFile = async (e: Event, kind: 'cert' | 'key') => {
       if (seq === tlsInspectSeq) {
         adminTlsForm.value.certInfo = res.data ?? null
         // 解析成功但无证书信息：同样要给出可见原因，避免「确定」无声变灰
-        adminTlsForm.value.inspectError = adminTlsForm.value.certInfo ? '' : '未能从所选文件解析出证书信息，请确认文件内容完整'
+        adminTlsForm.value.inspectError = adminTlsForm.value.certInfo ? '' : t('app.settings.basic.tls.parseEmpty')
       }
     } catch {
       if (seq === tlsInspectSeq) {
         adminTlsForm.value.certInfo = null
         // 具体原因（不匹配/损坏）由后端 message 经全局拦截器 toast 呈现；此处给出
         // 弹框内常驻解释 +「重新选择」动作，用户不必依赖一闪而过的 toast 试错。
-        adminTlsForm.value.inspectError = '证书解析失败：证书与私钥可能不匹配，或文件已损坏／不是 PEM 格式；请重新选择两个文件'
+        adminTlsForm.value.inspectError = t('app.settings.basic.tls.parseFail')
       }
     } finally {
       if (seq === tlsInspectSeq) {
@@ -1770,12 +1776,12 @@ const notifyTlsRestarting = (toHttps: boolean) => {
   // 注入面（且 ESLint 不拦）。
   ElMessageBox.alert(
     h('div', [
-      '已保存，服务正在自动重启（从节点同步后将自动重启生效），就绪后请访问：',
+      t('app.settings.basic.restart.savedRestarting'),
       h('a', { href: target, target: '_blank', rel: 'noopener noreferrer', style: 'word-break: break-all;' }, target),
     ]),
-    '正在重启',
+    t('app.settings.basic.restart.restarting'),
     {
-      confirmButtonText: '知道了',
+      confirmButtonText: t('app.settings.basic.actions.gotIt'),
       type: 'success',
       showClose: false,
       closeOnClickModal: false,
@@ -1787,7 +1793,7 @@ const notifyTlsRestarting = (toHttps: boolean) => {
   // 兜底提醒（不导航）：无论是否已关闭弹窗，15s 后提示一次手动访问新地址
   tlsProtocolFallbackTimer = setTimeout(() => {
     // 实现明确「不盲跳」（见上），文案不得再承诺自动跳转
-    if (!disposed) ElMessage.warning(`请手动访问新地址：${target}`)
+    if (!disposed) ElMessage.warning(t('app.settings.basic.restart.manualUrl', { target }))
   }, 15000)
 }
 
@@ -1816,9 +1822,9 @@ const handleRestart = async () => {
   restarting.value = true
   // 确认/重启/就绪轮询流程单源（utils/restart），与漂移恢复横幅同一实现
   const result = await restartServiceWithFeedback({
-    confirmMessage: '重启期间服务短暂不可用，容器将自动拉起，就绪后自动刷新页面。确认重启？',
-    confirmTitle: '重启服务',
-    successMessage: '服务正在重启，就绪后自动刷新页面',
+    confirmMessage: t('app.settings.basic.restart.confirmMessage'),
+    confirmTitle: t('app.settings.basic.system.restart'),
+    successMessage: t('app.settings.basic.restart.successMessage'),
     isDisposed: () => disposed,
   })
   if (result !== 'reloaded') restarting.value = false
@@ -1826,7 +1832,7 @@ const handleRestart = async () => {
 
 const handleSave = async () => {
   if (!props.configLoaded) {
-    ElMessage.warning('配置尚未加载完成，暂不能保存')
+    ElMessage.warning(t('app.settings.basic.messages.configNotLoaded'))
     return
   }
   if (isReadOnly.value) return
@@ -1835,12 +1841,12 @@ const handleSave = async () => {
   // 材料发送判据单源（与 enabled 解耦）：后端对禁用态新上传材料同样校验并落库。
   const tlsStaged = adminTlsSendsStagedCert({ mode: adminTls.value.mode, hasStagedCert: stagedAdminTlsCert.value !== null })
   if (tlsPending && adminTls.value.enabled && adminTls.value.mode === 'upload' && !stagedAdminTlsCert.value && !adminTlsHasCert.value) {
-    ElMessage.warning('请先在「配置证书」中选择并校验上传证书')
+    ElMessage.warning(t('app.settings.basic.messages.tlsUploadRequired'))
     return
   }
   const tzError = timezoneError(settings.value.timezone)
   if (tzError) {
-    ElMessage.warning(`${tzError}（请从列表选择，或输入 IANA 格式时区名，如 Asia/Shanghai）`)
+    ElMessage.warning(t('app.settings.basic.messages.tzErrorHint', { error: tzError }))
     return
   }
   settings.value.timezone = settings.value.timezone.trim()
@@ -1886,14 +1892,14 @@ const handleSave = async () => {
     const preview = await request.post<ConfigPreviewResponse>('/config/preview', payload)
     const changes = [...(preview.data?.changes ?? [])]
     if (tlsPending) {
-      const source = adminTls.value.mode === 'upload' ? '上传证书' : '本地自签名证书'
-      const head = adminTls.value.enabled ? `强制 HTTPS：启用（${source}）` : '强制 HTTPS：禁用'
-      changes.unshift(`${head}${tlsStaged ? '，并替换已上传证书' : ''}，保存后服务将重启`)
+      const source = adminTls.value.mode === 'upload' ? t('app.settings.basic.tls.upload') : t('app.settings.basic.tls.selfsigned')
+      const head = adminTls.value.enabled ? t('app.settings.basic.tls.forceOn', { source }) : t('app.settings.basic.tls.forceOff')
+      changes.unshift(t('app.settings.basic.tls.changeNote', { head, staged: tlsStaged ? t('app.settings.basic.tls.stagedCert') : '' }))
     }
     if (preview.data?.changed || tlsPending) {
-      await ElMessageBox.confirm(changes.length > 0 ? changes.join('；') : '检测到配置变更', `确认保存${preview.data?.section || '基础设置'}？`, {
-        confirmButtonText: '确认',
-        cancelButtonText: '取消',
+      await ElMessageBox.confirm(changes.length > 0 ? changes.join('；') : t('app.settings.basic.messages.configChanged'), t('app.settings.basic.messages.confirmSaveSection', { section: preview.data?.section || t('app.settings.basic.title') }), {
+        confirmButtonText: t('app.settings.basic.actions.confirm'),
+        cancelButtonText: t('app.settings.basic.actions.cancel'),
         type: 'warning',
       })
     }
@@ -1944,12 +1950,12 @@ const handleSave = async () => {
       } catch (tlsError) {
         // 部分成功必须显性披露：基础键已落库，证书与重启语义未生效
         console.error('Failed to save admin TLS config:', tlsError)
-        const reason = tlsError instanceof Error && tlsError.message ? tlsError.message : '未知错误'
-        ElMessage.error(`基础设置已保存；HTTPS 配置保存失败：${reason}。证书未变更，可再次保存以仅重试 HTTPS 段`)
+        const reason = tlsError instanceof Error && tlsError.message ? tlsError.message : t('app.settings.basic.messages.unknownError')
+        ElMessage.error(t('app.settings.basic.messages.tlsSaveFail', { reason }))
       }
     } else {
       const message = (saveResp as unknown as { message?: string }).message ?? ''
-      mfaAwareSuccess(message.includes('配置无变化') ? message : '保存成功')
+      mfaAwareSuccess(message.includes('配置无变化') ? message : t('app.settings.basic.messages.saved'))
     }
   } catch (error) {
     // MessageBox 仅以 'cancel'/'close' 字符串 reject（用户取消），静默短路；

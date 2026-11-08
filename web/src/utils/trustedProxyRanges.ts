@@ -19,6 +19,7 @@
  */
 
 import { isValidCidr, parseIPv4Octets, parseIPv6Groups } from './ipAddress.ts'
+import { tSafe as t } from '../i18n/tSafe.ts'
 
 /** 允许的最小前缀长度（/29 覆盖 Cloudflare 官方最宽回源段）。
  *  导出供跨栈对表测试与后端 trustedProxyMinPrefixBits 直接同值比对。 */
@@ -46,7 +47,10 @@ export const TRUSTED_PROXY_MAX_TOTAL_ENTRIES = 2000
 const ALL_SPACE_PREFIXES: readonly string[] = ['0.0.0.0/8', '0.0.0.0/0', '::/0']
 
 /** 最小前缀长度的统一文案（全空间判据优先，故两处共用）。 */
-const MIN_PREFIX_BITS_MESSAGE = `最小允许 /${TRUSTED_PROXY_MIN_PREFIX_BITS.ipv4}（IPv4）与 /${TRUSTED_PROXY_MIN_PREFIX_BITS.ipv6}（IPv6）`
+const MIN_PREFIX_BITS_MESSAGE = t('common.app.trustedProxy.minPrefixMessage', {
+  v4: TRUSTED_PROXY_MIN_PREFIX_BITS.ipv4,
+  v6: TRUSTED_PROXY_MIN_PREFIX_BITS.ipv6,
+})
 
 /**
  * 单条目校验：返回空串=通过，否则为可直接展示的原因。
@@ -56,8 +60,8 @@ const MIN_PREFIX_BITS_MESSAGE = `最小允许 /${TRUSTED_PROXY_MIN_PREFIX_BITS.i
  */
 const trustedProxyRangeError = (rawValue: string): string => {
   const value = rawValue.trim()
-  if (!value) return '不能为空'
-  if (!isValidCidr(value)) return '不是合法的 IP 或 CIDR'
+  if (!value) return t('common.app.trustedProxy.notEmpty')
+  if (!isValidCidr(value)) return t('common.app.trustedProxy.invalidCidr')
   const [address = '', bitsText] = value.split('/')
   const isIpv6 = address.includes(':')
   const bits = bitsText === undefined ? (isIpv6 ? 128 : 32) : Number(bitsText)
@@ -66,13 +70,13 @@ const trustedProxyRangeError = (rawValue: string): string => {
   // 绕过全空间门，前端不得静默放行）。
   const mapped = isIpv6 ? mappedV4Prefix(address, bits) : null
   if (mapped) {
-    if (mapped.network === '0.0.0.0' && (mapped.bits === 0 || mapped.bits === 8)) return '覆盖全部地址空间，等同信任任意来源'
+    if (mapped.network === '0.0.0.0' && (mapped.bits === 0 || mapped.bits === 8)) return t('common.app.trustedProxy.coversAll')
     if (mapped.bits < TRUSTED_PROXY_MIN_PREFIX_BITS.ipv4) return MIN_PREFIX_BITS_MESSAGE
     return ''
   }
   const canonical = trustedProxyPrefixKey(value)
   if (canonical !== null && ALL_SPACE_PREFIXES.some((prefix) => trustedProxyPrefixKey(prefix) === canonical)) {
-    return '覆盖全部地址空间，等同信任任意来源'
+    return t('common.app.trustedProxy.coversAll')
   }
   if (bitsText === undefined) return ''
   const minBits = isIpv6 ? TRUSTED_PROXY_MIN_PREFIX_BITS.ipv6 : TRUSTED_PROXY_MIN_PREFIX_BITS.ipv4
@@ -90,9 +94,9 @@ export const trustedProxyRangesError = (values: readonly string[]): string => {
     .filter((item) => item.error !== '')
   const parts = problems.map((item) => `${item.value || '(空)'}（${item.error}）`)
   if (values.length > TRUSTED_PROXY_MAX_INLINE_ENTRIES) {
-    parts.push(`内联网段最多 ${TRUSTED_PROXY_MAX_INLINE_ENTRIES} 条（当前 ${values.length} 条），超出部分请存为地址列表后引用`)
+    parts.push(t('common.app.trustedProxy.inlineEntryLimit', { max: TRUSTED_PROXY_MAX_INLINE_ENTRIES, current: values.length }))
   }
-  return parts.length === 0 ? '' : `受信网段不可用：${parts.join('；')}`
+  return parts.length === 0 ? '' : t('common.app.trustedProxy.rangesUnavailable', { details: parts.join('；') })
 }
 
 /**
@@ -101,7 +105,7 @@ export const trustedProxyRangesError = (values: readonly string[]): string => {
  * 模块内实现细节：对外只暴露整组入口 trustedProxyHeadersError。
  */
 const trustedProxyHeaderError = (rawValue: string): string =>
-  TRUSTED_PROXY_HEADER_PATTERN.test(rawValue) ? '' : '非法请求头名（仅允许字母/数字/连字符，1-64 字符）'
+  TRUSTED_PROXY_HEADER_PATTERN.test(rawValue) ? '' : t('common.app.trustedProxy.headerInvalid')
 
 /**
  * 整组请求头校验：空串=通过，否则为「逐项点名」的汇总文案。
@@ -117,10 +121,10 @@ export const trustedProxyHeadersError = (values: readonly string[]): string => {
     .map((item) => `${item.value || '(空)'}（${item.error}）`)
   const uniqueCount = new Set(values.map((value) => value.toLowerCase())).size
   if (uniqueCount > TRUSTED_PROXY_MAX_HEADERS) {
-    const merged = uniqueCount < values.length ? '，重复项已合并' : ''
-    parts.push(`最多 ${TRUSTED_PROXY_MAX_HEADERS} 条（去重后 ${uniqueCount} 条${merged}）`)
+    const merged = uniqueCount < values.length ? t('common.app.trustedProxy.headerMergedNote') : ''
+    parts.push(t('common.app.trustedProxy.headerLimit', { max: TRUSTED_PROXY_MAX_HEADERS, unique: uniqueCount, merged }))
   }
-  return parts.length === 0 ? '' : `受信代理请求头不可用：${parts.join('；')}`
+  return parts.length === 0 ? '' : t('common.app.trustedProxy.headersUnavailable', { details: parts.join('；') })
 }
 
 /**
@@ -157,10 +161,10 @@ export const trustedProxyReferencedRangesError = (
     if (ref.values === null) continue
     for (const value of ref.values) {
       const error = trustedProxyRangeError(value)
-      if (error) problems.push(`引用名单「${ref.name}」：${value.trim() || '(空)'}（${error}）`)
+      if (error) problems.push(t('common.app.trustedProxy.refEntryProblem', { name: ref.name, value: value.trim() || '(空)', error }))
     }
   }
-  return problems.length === 0 ? '' : `受信网段不可用：${problems.join('；')}`
+  return problems.length === 0 ? '' : t('common.app.trustedProxy.rangesUnavailable', { details: problems.join('；') })
 }
 
 /** 展开规模（并集口径）。referenced 含与内联重叠的键，与后端错误文案同构。 */
@@ -289,9 +293,9 @@ export const trustedProxyExpansion = (
 /** 硬门文案（可证超限形态共用）：与后端错误文案同结构。 */
 const totalExceededMessage = (union: number, inline: number, referencedCount: number, unresolved: number): string => {
   const estimate = unresolved > 0
-    ? `；其中 ${unresolved} 条按条数估算（引用名单条目未加载，重叠网段未参与去重）`
+    ? t('common.app.trustedProxy.estimateNote', { unresolved })
     : ''
-  return `受信网段总数超过 ${TRUSTED_PROXY_MAX_TOTAL_ENTRIES} 上限（去重后合计 ${union}：内联 ${inline} + 引用展开 ${referencedCount}；重叠网段只计一次${estimate}），请收窄内联网段或减少引用列表`
+  return t('common.app.trustedProxy.totalExceeded', { max: TRUSTED_PROXY_MAX_TOTAL_ENTRIES, union, inline, ref: referencedCount, estimate })
 }
 
 /** 总量门：返回空串=通过，否则为可直接展示的汇总文案（与后端文案同结构）。 */
@@ -322,5 +326,5 @@ export const trustedProxyTotalWarning = (
   if (unresolved === 0 || union <= TRUSTED_PROXY_MAX_TOTAL_ENTRIES) return ''
   // 可证超限由硬门报错，不重复提示
   if (resolvedUnion > TRUSTED_PROXY_MAX_TOTAL_ENTRIES || maxUnresolvedEntryCount > TRUSTED_PROXY_MAX_TOTAL_ENTRIES) return ''
-  return `受信网段合计约 ${union} 条，可能超过 ${TRUSTED_PROXY_MAX_TOTAL_ENTRIES} 上限（内联 ${inline} + 引用展开 ${referencedCount}；其中 ${unresolved} 条来自条目未加载的引用列表，按条数估算且未参与去重）。仍可保存，最终以服务端按去重后的网段集合判定为准`
+  return t('common.app.trustedProxy.softTotalWarn', { union, max: TRUSTED_PROXY_MAX_TOTAL_ENTRIES, inline, ref: referencedCount, unresolved })
 }

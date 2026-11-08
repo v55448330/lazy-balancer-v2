@@ -4,9 +4,9 @@
       <div class="header-left">
         <h2 class="page-title">
           <el-icon class="title-icon"><Document /></el-icon>
-          操作日志
+          {{ t('common.app.views.audit.title') }}
         </h2>
-        <p class="page-desc">记录系统中所有写操作和配置变更</p>
+        <p class="page-desc">{{ t('common.app.views.audit.subtitle') }}</p>
       </div>
     </div>
 
@@ -15,8 +15,8 @@
     <el-alert v-if="loadError" type="error" :closable="false" show-icon class="polling-error-alert error-banner">
       <template #title>
         <div class="polling-error-title">
-          <span>操作日志加载失败：列表为空不代表没有日志</span>
-          <el-button link type="danger" @click="fetchLogs">立即重试</el-button>
+          <span>{{ t('common.app.views.audit.loadFailedBanner') }}</span>
+          <el-button link type="danger" @click="fetchLogs">{{ t('common.app.views.audit.retryNow') }}</el-button>
         </div>
       </template>
     </el-alert>
@@ -27,56 +27,56 @@
           v-model="filters.timeRange"
           name="audit-time-range"
           type="datetimerange"
-          range-separator="至"
-          start-placeholder="开始时间"
-          end-placeholder="结束时间"
+          :range-separator="t('common.app.views.audit.rangeSeparator')"
+          :start-placeholder="t('common.app.views.audit.rangeStartPlaceholder')"
+          :end-placeholder="t('common.app.views.audit.rangeEndPlaceholder')"
           format="YYYY-MM-DD HH:mm:ss"
           value-format="YYYY-MM-DD HH:mm:ss"
           :default-time="[new Date(2000, 0, 1, 0, 0, 0), new Date(2000, 0, 1, 23, 59, 59)]"
           class="audit-filter-date-range"
         />
-        <el-select v-model="filters.username" :placeholder="optionsIncomplete ? '操作人（选项加载失败）' : '操作人'" clearable filterable style="width: 130px">
+        <el-select v-model="filters.username" :placeholder="optionsIncomplete ? t('common.app.views.audit.operatorOptionsFailed') : t('common.app.views.audit.operator')" clearable filterable style="width: 130px">
           <el-option v-for="o in usernameOptions" :key="o" :label="o" :value="o" />
         </el-select>
-        <el-select v-model="filters.action" :placeholder="optionsIncomplete ? '操作（选项加载失败）' : '操作'" clearable filterable style="width: 120px">
+        <el-select v-model="filters.action" :placeholder="optionsIncomplete ? t('common.app.views.audit.actionOptionsFailed') : t('common.app.views.audit.action')" clearable filterable style="width: 120px">
           <el-option v-for="o in actionOptions" :key="o" :label="o" :value="o" />
         </el-select>
-        <el-select v-model="filters.resource" :placeholder="optionsIncomplete ? '对象（选项加载失败）' : '对象'" clearable filterable allow-create style="width: 150px">
+        <el-select v-model="filters.resource" :placeholder="optionsIncomplete ? t('common.app.views.audit.resourceOptionsFailed') : t('common.app.views.audit.resource')" clearable filterable allow-create style="width: 150px">
           <el-option v-for="o in resourceOptions" :key="o" :label="o" :value="o" />
         </el-select>
         <el-input v-model="filters.ip" placeholder="IP" clearable style="width: 120px" @keyup.enter="applyFilters" />
-        <el-input v-model="filters.keyword" placeholder="详情关键词" clearable style="width: 160px" @keyup.enter="applyFilters" />
+        <el-input v-model="filters.keyword" :placeholder="t('common.app.views.audit.keywordPlaceholder')" clearable style="width: 160px" @keyup.enter="applyFilters" />
         <div class="filter-actions">
-          <el-button type="primary" @click="applyFilters">筛选</el-button>
-          <el-button @click="resetFilters">重置</el-button>
+          <el-button type="primary" @click="applyFilters">{{ t('common.app.views.audit.filter') }}</el-button>
+          <el-button @click="resetFilters">{{ t('common.app.views.audit.reset') }}</el-button>
         </div>
         <!-- 消费后端 partial=true（部分下拉）与整体失败——下拉缺项必须可见，
              且不得与「真空库」混淆。 -->
         <el-text v-if="optionsIncomplete" type="warning" size="small">
-          筛选选项未完整加载，下拉列表可能缺项
-          <el-button link type="warning" size="small" @click="fetchOptions">重试</el-button>
+          {{ t('common.app.views.audit.optionsIncomplete') }}
+          <el-button link type="warning" size="small" @click="fetchOptions">{{ t('common.app.views.audit.retry') }}</el-button>
         </el-text>
       </div>
       <el-table :data="logs" v-loading="loading" stripe :header-cell-style="{ background: '#f9fafb' }" empty-text="" :tooltip-options="{ popperClass: 'log-overflow-popper' }">
         <template #empty>
-          <el-empty :description="loadError ? '日志加载失败' : '暂无操作日志'" :image-size="60" />
+          <el-empty :description="loadError ? t('common.app.views.audit.listLoadFailed') : t('common.app.views.audit.emptyLogs')" :image-size="60" />
         </template>
-        <el-table-column prop="created_at" label="时间" width="190" :formatter="(row: AuditLogEntry) => formatDate(row.created_at)" />
-        <el-table-column label="操作人" width="200">
+        <el-table-column prop="created_at" :label="t('common.app.views.audit.colTime')" width="190" :formatter="(row: AuditLogEntry) => formatDate(row.created_at)" />
+        <el-table-column :label="t('common.app.views.audit.operator')" width="200">
           <template #default="{ row }">
-            <el-tooltip v-if="row.display_name && row.display_name !== row.username" :content="`${row.display_name}（${row.username}）`" placement="top">
-              <span class="operator-cell">{{ row.display_name }}<span class="operator-email">（{{ row.username }}）</span></span>
+            <el-tooltip v-if="row.display_name && row.display_name !== row.username" :content="t('common.app.views.audit.operatorWithUsername', { name: row.display_name, username: row.username })" placement="top">
+              <span class="operator-cell">{{ row.display_name }}<span class="operator-email">{{ t('common.app.views.audit.usernameSuffix', { username: row.username }) }}</span></span>
             </el-tooltip>
             <span v-else class="operator-cell">{{ row.username || '-' }}</span>
           </template>
         </el-table-column>
-        <el-table-column prop="action" label="操作" width="90">
+        <el-table-column prop="action" :label="t('common.app.views.audit.action')" width="90">
           <template #default="{ row }">
             <el-tag :type="actionTagType(row.action)" size="small">{{ row.action }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="resource" label="对象" width="160" />
-        <el-table-column prop="detail" label="详情" show-overflow-tooltip />
+        <el-table-column prop="resource" :label="t('common.app.views.audit.resource')" width="160" />
+        <el-table-column prop="detail" :label="t('common.app.views.audit.colDetail')" show-overflow-tooltip />
         <el-table-column prop="ip_address" label="IP" width="160" show-overflow-tooltip />
       </el-table>
 
@@ -85,7 +85,7 @@
         <!-- 后端 total 走 5 秒进程内缓存并以 total_stale 披露来源——陈旧计数
              必须可见，避免列表条数与总数短暂不一致时无任何提示。 -->
         <el-text v-if="totalStale" type="info" size="small" style="margin-right: 12px">
-          统计总数来自缓存，可能滞后数秒
+          {{ t('common.app.views.audit.totalStaleHint') }}
         </el-text>
         <el-pagination
           v-model:current-page="page"
@@ -103,6 +103,7 @@
 
 <script setup lang="ts">
 import { computed, ref, onMounted } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { request } from '@/utils/api'
 import { formatDate } from '@/utils/date'
 import { Document } from '@element-plus/icons-vue'
@@ -110,6 +111,9 @@ import LogStorageBar from '@/components/LogStorageBar.vue'
 
 import { buildAuditLogParams } from '@/utils/auditLogFilters'
 import { actionTagType } from '@/utils/auditActionTone'
+
+// 页面文案走 i18n（批次 D audit 域，common.app.views.audit.*）。
+const { t } = useI18n()
 
 interface AuditLogEntry {
   id: number

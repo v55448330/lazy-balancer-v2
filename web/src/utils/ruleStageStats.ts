@@ -12,6 +12,8 @@
 // 读成「零拦截」，故两个阶段的面板行都要披露它。
 
 import { formatDurationUs } from './securityStages.ts'
+import { tSafe as t } from '../i18n/tSafe.ts'
+
 
 /** 后端 stage-stats 响应载荷（键集与 internal/handlers/security_overview.go 对表） */
 export interface RuleStageCounts {
@@ -42,20 +44,20 @@ export const stageAvgDurationUs = (stage: 1 | 3, counts: RuleStageCounts | null)
 /** 时间线卡片上的「平均耗时」角标；无采样返回空串（不占位） */
 export const stageTimingChip = (stage: 1 | 3, counts: RuleStageCounts | null): string => {
   const us = stageAvgDurationUs(stage, counts)
-  return us > 0 ? `平均耗时 ${formatDurationUs(us)}` : ''
+  return us > 0 ? t('common.app.views.stageStats.avgDurationChip', { duration: formatDurationUs(us) }) : ''
 }
 
 const timingDetailText = (stage: 1 | 3, counts: RuleStageCounts): string => {
   const us = stageAvgDurationUs(stage, counts)
   if (us <= 0) return ''
   const samples = stage === 1 ? (counts.precheck_samples ?? 0) : (counts.waf_samples ?? 0)
-  return ` · 平均耗时 ${formatDurationUs(us)}（近 24 小时 ${samples} 次采样）`
+  return t('common.app.views.stageStats.timingDetail', { duration: formatDurationUs(us), samples })
 }
 
 /** 未归因桶披露；无未归因记录返回空串（默认不打扰） */
 export const unattributedCountText = (counts: RuleStageCounts | null): string => {
   const count = counts?.stage_unattributed_24h ?? 0
-  return count > 0 ? `；另有 ${count} 次未能归因阶段（旧数据/带外写入，未计入本阶段）` : ''
+  return count > 0 ? t('common.app.views.stageStats.unattributedNote', { count }) : ''
 }
 
 /** 阶段节点 chip：未到数不出 chip；失败=「计数不可用」；空载荷='—' */
@@ -65,11 +67,11 @@ export const stageCountChip = (
   view: RuleStageCountsView,
 ): { chip?: string; caption?: string } => {
   if (!view.settled) return {}
-  if (view.failed) return { chip: '计数不可用' }
+  if (view.failed) return { chip: t('common.app.views.stageStats.countUnavailable') }
   if (!counts) return { chip: '—' }
-  if (stage === 1) return { chip: `24h 拦截 ${counts.stage1_blocked_24h}` }
-  if (stage === 2) return { chip: `429 拦截 ${counts.ratelimit_blocks_reload}`, caption: '自最近重载 · 本端口' }
-  return { chip: `24h 拦截 ${counts.stage3_blocked_24h}` }
+  if (stage === 1) return { chip: t('common.app.views.stageStats.chipStage24h', { count: counts.stage1_blocked_24h }) }
+  if (stage === 2) return { chip: t('common.app.views.stageStats.chip429', { count: counts.ratelimit_blocks_reload }), caption: t('common.app.views.stageStats.chip429Caption') }
+  return { chip: t('common.app.views.stageStats.chipStage24h', { count: counts.stage3_blocked_24h }) }
 }
 
 /**
@@ -82,7 +84,7 @@ export const stageCountSummary = (
   view: RuleStageCountsView,
 ): string => {
   if (stage === 0 || !view.settled || view.failed || !counts) return ''
-  if (stage === 1) return `近 24 小时本阶段拦截 ${counts.stage1_blocked_24h} 次${timingDetailText(1, counts)}${unattributedCountText(counts)}`
-  if (stage === 2) return `自最近重载以来本规则监听端口的限流拦截 ${counts.ratelimit_blocks_reload} 次（恒 429，含上游自返）`
-  return `近 24 小时本阶段拦截 ${counts.stage3_blocked_24h} 次${timingDetailText(3, counts)}${unattributedCountText(counts)}`
+  if (stage === 1) return t('common.app.views.stageStats.summaryStage24h', { count: counts.stage1_blocked_24h }) + timingDetailText(1, counts) + unattributedCountText(counts)
+  if (stage === 2) return t('common.app.views.stageStats.summary429', { count: counts.ratelimit_blocks_reload })
+  return t('common.app.views.stageStats.summaryStage24h', { count: counts.stage3_blocked_24h }) + timingDetailText(3, counts) + unattributedCountText(counts)
 }

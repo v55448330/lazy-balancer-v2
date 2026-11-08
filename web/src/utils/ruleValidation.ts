@@ -1,5 +1,6 @@
 import { upstreamDedupeKey } from './upstreamKeys.ts'
 import { isValidV4, isValidV6 } from './ipAddress.ts'
+import { tSafe as t } from '../i18n/tSafe.ts'
 
 type PathUpstreamInput = {
   readonly protocol: 'http' | 'https'
@@ -77,8 +78,8 @@ const STATIC_RESPONSE_STATUS_SET: Readonly<Record<number, true>> = Object.fromEn
  */
 export const upstreamPathRuleError = (upstreamPath: string): string | null => {
   if (!upstreamPath) return null
-  if (!upstreamPath.startsWith('/')) return '必须以 / 开头'
-  if (/[\s?#]/.test(upstreamPath)) return '不能包含空格 ? # 字符'
+  if (!upstreamPath.startsWith('/')) return t('common.app.ruleValidation.pathLeadingSlash')
+  if (/[\s?#]/.test(upstreamPath)) return t('common.app.ruleValidation.upstreamPathSpaceChars')
   return null
 }
 
@@ -90,10 +91,10 @@ export const upstreamPathRuleError = (upstreamPath: string): string | null => {
  */
 export const pathRuleError = (rule: PathRuleInput): string | null => {
   // 与后端同口径：前缀校验用原始串（后端 HasPrefix 在 TrimSpace 之前）
-  if (!rule.path.startsWith('/')) return '必须以 / 开头'
-  if (/[*?{}]/.test(rule.path)) return '不能包含 * ? { } 通配字符'
+  if (!rule.path.startsWith('/')) return t('common.app.ruleValidation.pathLeadingSlash')
+  if (/[*?{}]/.test(rule.path)) return t('common.app.ruleValidation.pathWildcardChars')
   const upstreamError = upstreamPathRuleError(rule.upstream_path ?? '')
-  if (upstreamError) return `上游路径${upstreamError}`
+  if (upstreamError) return t('common.app.ruleValidation.upstreamPathWrapped', { error: upstreamError })
   return null
 }
 
@@ -107,19 +108,19 @@ export const validatePathRules = (rules: readonly PathRuleInput[]): string | nul
     const rowNumber = index + 1
     // 字段级错误优先于组级（重复/遮蔽）——与行内红框同一判据、同一文案。
     const fieldError = pathRuleError(rule)
-    if (fieldError) return `第 ${rowNumber} 条路径：${fieldError}`
+    if (fieldError) return t('common.app.ruleValidation.rowPathError', { row: rowNumber, error: fieldError })
     const canonical = canonicalPathKey(rule.match_type, rule.path)
     const duplicateKey = pathDuplicateKey(rule.match_type, rule.path)
     const seenAt = seen.get(duplicateKey)
-    if (seenAt !== undefined) return `第 ${rowNumber} 条路径与第 ${seenAt} 条重复（${rule.path.trim()}）`
+    if (seenAt !== undefined) return t('common.app.ruleValidation.rowDuplicate', { row: rowNumber, other: seenAt, path: rule.path.trim() })
     seen.set(duplicateKey, rowNumber)
     if (rule.match_type === 'prefix') {
       const shadowAt = seenExactNorms.get(canonical)
-      if (shadowAt !== undefined) return `第 ${rowNumber} 条路径与第 ${shadowAt} 条：同一路径同时存在前缀与精确匹配规则会造成遮蔽，请调整`
+      if (shadowAt !== undefined) return t('common.app.ruleValidation.rowShadow', { row: rowNumber, other: shadowAt })
       seenPrefixRoots.set(canonical, rowNumber)
     } else {
       const shadowAt = seenPrefixRoots.get(canonical)
-      if (shadowAt !== undefined) return `第 ${rowNumber} 条路径与第 ${shadowAt} 条：同一路径同时存在前缀与精确匹配规则会造成遮蔽，请调整`
+      if (shadowAt !== undefined) return t('common.app.ruleValidation.rowShadow', { row: rowNumber, other: shadowAt })
       seenExactNorms.set(canonical, rowNumber)
     }
     // 直接返回/301 跳转（2026-10-10 用户裁定）：与后端 validateRuleFeatures 同口径
@@ -127,31 +128,31 @@ export const validatePathRules = (rules: readonly PathRuleInput[]): string | nul
     const responseMode = rule.response_mode === 'forward' ? '' : (rule.response_mode ?? '')
     if (responseMode === 'static') {
       const status = rule.response_status || 200
-      if (!STATIC_RESPONSE_STATUS_SET[status]) return `第 ${rowNumber} 条路径：直接返回的状态码 ${status} 不在常用集合`
-      if ([...rule.response_body ?? ''].length > 64) return `第 ${rowNumber} 条路径：响应内容不能超过 64 个字符`
+      if (!STATIC_RESPONSE_STATUS_SET[status]) return t('common.app.ruleValidation.staticStatusNotCommon', { row: rowNumber, status })
+      if ([...rule.response_body ?? ''].length > 64) return t('common.app.ruleValidation.responseBodyTooLong', { row: rowNumber })
       const ct = rule.response_content_type ?? ''
-      if (ct !== '' && ct !== 'text/plain' && ct !== 'application/json' && ct !== 'text/html') return `第 ${rowNumber} 条路径：响应格式仅支持纯文本/JSON/HTML`
-      if (rule.redirect_to) return `第 ${rowNumber} 条路径：直接返回与跳转地址互斥`
-      if (rule.upstreams !== null || rule.upstream_path) return `第 ${rowNumber} 条路径：直接返回模式与上游配置互斥`
+      if (ct !== '' && ct !== 'text/plain' && ct !== 'application/json' && ct !== 'text/html') return t('common.app.ruleValidation.responseFormatLimited', { row: rowNumber })
+      if (rule.redirect_to) return t('common.app.ruleValidation.staticRedirectConflict', { row: rowNumber })
+      if (rule.upstreams !== null || rule.upstream_path) return t('common.app.ruleValidation.staticUpstreamConflict', { row: rowNumber })
       continue
     }
     if (responseMode === 'redirect') {
       const target = rule.redirect_to ?? ''
-      if (!target.trim()) return `第 ${rowNumber} 条路径：301 跳转需要填写跳转地址`
+      if (!target.trim()) return t('common.app.ruleValidation.redirectAddressRequired', { row: rowNumber })
       // 形状校验查原串（与后端 rule_features.go 同位）——
       // 此前 trim 后判定，" http://x" 前端放行、后端按原串 400，口径分叉。
       // eslint-disable-next-line no-control-regex
-      if (/[\x00-\x1f\x7f]/.test(target)) return `第 ${rowNumber} 条路径：跳转地址含非法字符`
-      if (!target.startsWith('/') && !target.startsWith('http://') && !target.startsWith('https://')) return `第 ${rowNumber} 条路径：跳转地址须为 http(s):// 绝对地址或 / 开头路径`
+      if (/[\x00-\x1f\x7f]/.test(target)) return t('common.app.ruleValidation.redirectInvalidChars', { row: rowNumber })
+      if (!target.startsWith('/') && !target.startsWith('http://') && !target.startsWith('https://')) return t('common.app.ruleValidation.redirectAbsoluteRequired', { row: rowNumber })
       // 与后端 rule_features.go:464 同句——301 跳转与响应内容互斥
       //（UI 正常切换模式会清空内容，此处防回读载荷/残留表单态双携，后端恒 400）。
-      if (rule.response_body || rule.response_content_type) return `第 ${rowNumber} 条路径：301 跳转与响应内容互斥（请清空内容/格式）`
-      if (rule.upstreams !== null || rule.upstream_path) return `第 ${rowNumber} 条路径：301 跳转模式与上游配置互斥`
+      if (rule.response_body || rule.response_content_type) return t('common.app.ruleValidation.redirectResponseConflict', { row: rowNumber })
+      if (rule.upstreams !== null || rule.upstream_path) return t('common.app.ruleValidation.redirectUpstreamConflict', { row: rowNumber })
       continue
     }
-    if (responseMode) return `第 ${rowNumber} 条路径：response_mode 无效`
+    if (responseMode) return t('common.app.ruleValidation.responseModeInvalid', { row: rowNumber })
     if (rule.upstreams === null) continue
-    if (rule.upstreams.length === 0) return `第 ${rowNumber} 条路径至少需要一个自定义上游`
+    if (rule.upstreams.length === 0) return t('common.app.ruleValidation.upstreamRequired', { row: rowNumber })
 
     // 自定义上游池：与后端 rule_features.go 同口径的三项池级
     // 校验——http/https 混布（同池 reverse_proxy 池级 TLS 传输下 http 上游静默
@@ -160,27 +161,27 @@ export const validatePathRules = (rules: readonly PathRuleInput[]): string | nul
     // 行内无错、点保存才被全局 toast 拒绝且不定位到行。
     const poolProtocols = new Set(rule.upstreams.map((upstream) => (upstream.protocol || 'http')))
     if (poolProtocols.has('http') && poolProtocols.has('https')) {
-      return `第 ${rowNumber} 条路径的自定义上游 http/https 混布（同一上游池协议须一致）`
+      return t('common.app.ruleValidation.upstreamMixedProtocol', { row: rowNumber })
     }
     const seenHostPorts = new Set<string>()
     for (const upstream of rule.upstreams) {
       const address = upstream.address.trim()
-      if (!address) return `第 ${rowNumber} 条路径的自定义上游地址不能为空`
+      if (!address) return t('common.app.ruleValidation.upstreamAddressRequired', { row: rowNumber })
       // 上游地址接受 IP 字面量与主机名（isValidHostName 有意排除 IP 字面量——
       // SNI 语义不需要，上游地址需要），与后端 isValidHost 同形。
       if (!(isValidV4(address) || isValidV6(address) || isValidHostName(address))) {
-        return `第 ${rowNumber} 条路径的自定义上游主机「${address}」无效`
+        return t('common.app.ruleValidation.upstreamHostInvalid', { row: rowNumber, address })
       }
-      if (upstream.port < 1 || upstream.port > 65535) return `第 ${rowNumber} 条路径的自定义上游端口无效`
+      if (upstream.port < 1 || upstream.port > 65535) return t('common.app.ruleValidation.upstreamPortInvalid', { row: rowNumber })
       const protocol = (upstream.protocol ?? '') as string
       if (protocol !== '' && protocol !== 'http' && protocol !== 'https') {
-        return `第 ${rowNumber} 条路径的自定义上游协议只能是 http 或 https`
+        return t('common.app.ruleValidation.upstreamProtocolLimited', { row: rowNumber })
       }
-      if (upstream.weight < 1) return `第 ${rowNumber} 条路径的自定义上游权重必须大于 0`
+      if (upstream.weight < 1) return t('common.app.ruleValidation.upstreamWeightPositive', { row: rowNumber })
       // 与后端 upstreamDedupeHost 同口径：IP 按地址语义归一（IPv6 等价写法
       // 是同一后端），主机名 lower+trim；后端写侧是权威门。
       const hostPort = upstreamDedupeKey(address, upstream.port)
-      if (seenHostPorts.has(hostPort)) return `第 ${rowNumber} 条路径的自定义上游 ${hostPort} 重复`
+      if (seenHostPorts.has(hostPort)) return t('common.app.ruleValidation.upstreamDuplicate', { row: rowNumber, hostPort })
       seenHostPorts.add(hostPort)
     }
   }

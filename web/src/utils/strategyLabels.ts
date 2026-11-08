@@ -5,14 +5,18 @@
 // 映射对象收窄为模块内私有（外泄面只剩 getStrategyLabel 一个函数，
 // 消费方禁止绕过函数直读映射，防第二份映射/直改键值）
 import { hasOwn } from './hasOwn.ts'
+import { tSafe as t } from '../i18n/tSafe.ts'
 
+
+// 词条文案模块首帧快照：键集为封闭枚举（与后端 httpStrategies/tcpStrategies
+// 对表，strategyLabels.spec 钉死），运行期 locale 切换走整页重载，无跨帧漂移。
 const strategyLabels: Record<string, string> = {
-  weighted_round_robin: '轮询',
-  least_conn: '最少连接',
-  ip_hash: 'IP 哈希',
-  cookie: '粘滞',
-  first: '首个可用',
-  random: '随机',
+  weighted_round_robin: t('common.app.views.strategy.weightedRoundRobin'),
+  least_conn: t('common.app.views.strategy.leastConn'),
+  ip_hash: t('common.app.views.strategy.ipHash'),
+  cookie: t('common.app.views.strategy.cookieSticky'),
+  first: t('common.app.views.strategy.firstAvailable'),
+  random: t('common.app.views.strategy.randomLabel'),
 }
 
 // 映射是普通对象且 strategy 可能来自导入/API（非向导白名单路径）：原型键直接
@@ -36,12 +40,12 @@ interface StrategyCardOption {
 }
 
 export const STRATEGY_CARD_OPTIONS: readonly StrategyCardOption[] = [
-  { value: 'weighted_round_robin', title: '轮询', desc: '按上游权重比例分配，权重相同即为普通轮询' },
-  { value: 'least_conn', title: '最少连接', desc: '优先分配给连接数最少的服务器' },
-  { value: 'ip_hash', title: 'IP 哈希', desc: '按客户端 IP 固定分配' },
-  { value: 'random', title: '随机', desc: '随机分配给一个可用上游' },
-  { value: 'first', title: '首个可用', desc: '始终使用列表中第一个可用上游' },
-  { value: 'cookie', title: 'Cookie 粘滞', desc: '通过 Cookie 实现精确会话粘滞', httpOnly: true },
+  { value: 'weighted_round_robin', title: t('common.app.views.strategy.card.weightedRoundRobin.title'), desc: t('common.app.views.strategy.card.weightedRoundRobin.desc') },
+  { value: 'least_conn', title: t('common.app.views.strategy.card.leastConn.title'), desc: t('common.app.views.strategy.card.leastConn.desc') },
+  { value: 'ip_hash', title: t('common.app.views.strategy.card.ipHash.title'), desc: t('common.app.views.strategy.card.ipHash.desc') },
+  { value: 'random', title: t('common.app.views.strategy.card.random.title'), desc: t('common.app.views.strategy.card.random.desc') },
+  { value: 'first', title: t('common.app.views.strategy.card.first.title'), desc: t('common.app.views.strategy.card.first.desc') },
+  { value: 'cookie', title: t('common.app.views.strategy.card.cookie.title'), desc: t('common.app.views.strategy.card.cookie.desc'), httpOnly: true },
 ]
 
 /** 该协议可选的策略卡片（TCP 剔除 cookie）。 */

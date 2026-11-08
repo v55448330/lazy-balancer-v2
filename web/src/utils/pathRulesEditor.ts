@@ -4,6 +4,7 @@
 // 用户可见的重复/遮蔽/模式归一语义埋在 SFC 里只能靠文本钉。
 import type { PathRule } from '@/types'
 import { canonicalPathKey, pathDuplicateKey, pathRuleError } from './ruleValidation.ts'
+import { tSafe as t } from '../i18n/tSafe.ts'
 
 /** 行内错误：字段级（空/非法/上游路径）+ 同类型查重 + 跨类型遮蔽互查。 */
 export const pathRuleRowError = (rules: readonly PathRule[], index: number): string => {
@@ -26,8 +27,8 @@ export const pathRuleRowError = (rules: readonly PathRule[], index: number): str
     const other = rules[duplicateIndex]
     if (!other) return ''
     return other.match_type === rule.match_type
-      ? `与规则 ${duplicateIndex + 1} 重复`
-      : `与规则 ${duplicateIndex + 1} 同路径前缀+精确互相遮蔽`
+      ? t('common.app.pathRules.duplicateRule', { n: duplicateIndex + 1 })
+      : t('common.app.pathRules.shadowRule', { n: duplicateIndex + 1 })
   }
   return ''
 }
@@ -95,10 +96,10 @@ export const pathRuleResponseError = (rule: PathRule): string => {
     // 形状判定查原串（仅空判用 trim）：后端 HasPrefix 按原串——`" http://x"`
     // 若前端 trim 后放行，会在离开该步时被整组拒绝（late failure 复发）。
     const raw = rule.redirect_to ?? ''
-    if (!raw.trim()) return '301 跳转需要填写跳转地址'
+    if (!raw.trim()) return t('common.app.pathRules.redirectAddressRequired')
     // eslint-disable-next-line no-control-regex
-    if (/[\x00-\x1f\x7f]/.test(raw)) return '跳转地址含非法字符'
-    if (!raw.startsWith('/') && !raw.startsWith('http://') && !raw.startsWith('https://')) return '跳转地址须为 http(s):// 绝对地址或 / 开头路径'
+    if (/[\x00-\x1f\x7f]/.test(raw)) return t('common.app.pathRules.redirectInvalidChars')
+    if (!raw.startsWith('/') && !raw.startsWith('http://') && !raw.startsWith('https://')) return t('common.app.pathRules.redirectAbsoluteRequired')
   }
   return ''
 }

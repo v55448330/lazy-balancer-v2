@@ -26,7 +26,11 @@ test('健康检查超时只属于主动探测（HTTP/TCP 均隐藏在被动模�
   // TCP 段起点必须从「健康检查」分隔符之后取首个 TCP 标记——原实现
   // 从页面头 indexOf，命中的是上游表协议列（:549），随后 enable_active 标记又
   // 命中 HTTP 段（:698），断言对象整体错位（钉空转）。
-  const healthStart = markerIndex(page, /<el-divider[^>]*>健康检查<\/el-divider>/, '健康检查分隔符')
+  // i18n 后双钉:调用点钉键,zh 母本钉文案原文(任一漂移必红)
+  const zhLexicon = code('src/locales/zh/rules.ts')
+  assert.ok(zhLexicon.includes("healthCheck: '健康检查'"), '健康检查分隔符原文必须在 zh 母本词条中')
+  assert.ok(zhLexicon.includes("probeTimeout: '主动探测超时'"), '主动探测超时原文必须在 zh 母本词条中')
+  const healthStart = markerIndex(page, /<el-divider[^>]*>\{\{ t\('common\.app\.rules\.wizard\.healthCheck'\) \}\}<\/el-divider>/, '健康检查分隔符')
   const healthEnd = page.indexOf('<div v-show="currentStep === WIZARD_STEP.CUSTOM_ROUTES"', healthStart)
   assert.ok(healthEnd > healthStart, 'missing custom routes step marker')
   const healthBlock = page.slice(healthStart, healthEnd)
@@ -38,10 +42,10 @@ test('健康检查超时只属于主动探测（HTTP/TCP 均隐藏在被动模�
   const httpActiveAt = httpHealth.indexOf(activeMarker)
   assert.ok(httpActiveAt > 0, 'missing HTTP active health section')
   const httpActive = httpHealth.slice(httpActiveAt)
-  assert.match(httpActive, /健康检查超时时间|health_check_timeout/)
+  assert.match(httpActive, /:label="t\('common\.app\.rules\.wizard\.probeTimeout'\)"/)
+  assert.match(httpActive, /v-model="wizardForm\.health_check_timeout"/)
   const beforeHttpActive = httpHealth.slice(0, httpActiveAt)
   assert.doesNotMatch(beforeHttpActive, /v-model="wizardForm\.health_check_timeout"/)
-  assert.match(httpActive, /主动探测超时/)
 
   const tcpHealth = healthBlock.slice(tcpRel)
   const tcpActiveStart = tcpHealth.indexOf(activeMarker)
@@ -51,7 +55,7 @@ test('健康检查超时只属于主动探测（HTTP/TCP 均隐藏在被动模�
   // 独立断言：TCP 被动段（开关 + 提示）不得出现超时输入。
   assert.doesNotMatch(beforeTcpActive, /v-model="wizardForm\.health_check_timeout"/)
   assert.match(tcpActive, /v-model="wizardForm\.health_check_timeout"/)
-  assert.match(tcpActive, /主动探测超时/)
+  assert.match(tcpActive, /t\('common\.app\.rules\.wizard\.probeTimeout'\)/)
   // 锚点自证：TCP 主动段必须含 TCP 专属的检查端口字段（HTTP 主动段没有），
   // 否则说明切段又错位到 HTTP。
   assert.match(tcpActive, /tcp_health_check_port/)
@@ -60,8 +64,8 @@ test('健康检查超时只属于主动探测（HTTP/TCP 均隐藏在被动模�
 test('被动健康检查预览不再宣称超时语义', () => {
   // 预览健康检查行改由 utils/healthCheckSummary 单源生成（阈值与预览同处可见）
   const wizardPreview = sectionFrom(
-    /<el-descriptions-item[^>]*label="健康检查"[^>]*>/,
-    '<el-descriptions-item label="连接重试"',
+    /<el-descriptions-item[^>]*:label="t\('common\.app\.rules\.wizard\.healthCheck'\)"[^>]*>/,
+    "<el-descriptions-item :label=\"t('common.app.rules.wizard.connectRetry')\"",
     '向导预览健康检查描述项',
   )
   assert.match(wizardPreview, /\{\{ healthCheckSummary\(wizardForm\) \}\}/, '预览必须走健康摘要单源')
@@ -69,7 +73,7 @@ test('被动健康检查预览不再宣称超时语义', () => {
   const passive = section(helper, 'export function passiveHealthCheckSummary', 'export function healthCheckSummary')
   assert.doesNotMatch(passive, /超时/, '被动摘要不得宣称超时语义')
   assert.match(passive, /恢复窗口/)
-  const configViewer = section(page, '<el-descriptions-item label="被动健康检查"', '</el-descriptions-item>')
+  const configViewer = section(page, "<el-descriptions-item :label=\"t('common.app.rules.wizard.passiveHealthCheck')\"", '</el-descriptions-item>')
   assert.doesNotMatch(configViewer, /超时/)
   assert.match(configViewer, /passiveHealthCheckSummary\(ruleConfig\)/)
 })
@@ -78,13 +82,13 @@ test('配置预览的主动健康检查判据是 enable_active_health_check', ()
   // 查看器的主动行以 enable_active_health_check 判定（不是「path 非空」这类推断），
   // 且主动/被动互斥——主动开启时不再重复打印被动行。
   const preview = sectionFrom(
-    /<el-descriptions-item[^>]*label="主动健康检查"[^>]*>/,
-    '<el-descriptions-item label="连接重试"',
+    /<el-descriptions-item[^>]*:label="t\('common\.app\.rules\.wizard\.activeHealthCheck'\)"[^>]*>/,
+    "<el-descriptions-item :label=\"t('common.app.rules.wizard.connectRetry')\"",
     '配置预览主动健康检查描述项',
   )
   assert.match(preview, /v-if="ruleConfig\.enable_active_health_check"/)
   assert.match(preview, /activeHealthCheckSummary\(ruleConfig\)/)
-  assert.match(preview, /<el-descriptions-item label="主动健康检查" v-else>未启用<\/el-descriptions-item>/)
+  assert.match(preview, /<el-descriptions-item :label="t\('common\.app\.rules\.wizard\.activeHealthCheck'\)" v-else>\{\{ t\('common\.app\.rules\.common\.notEnabled'\) \}\}<\/el-descriptions-item>/)
   assert.match(preview, /v-if="!ruleConfig\.enable_active_health_check"/)
   assert.doesNotMatch(preview, /health_check_path \|\| '\/'/, '口径不得在模板里再写一份')
   // 失败/恢复阈值都在主动摘要里（预览曾只给 path/interval/timeout）
@@ -124,9 +128,14 @@ test('零启用上游的启用态规则在健康列显示「未发布」信息�
   // 渲染层对零启用上游的规则跳过发布（warn+跳过），列表若与「已禁用」同显示「-」，
   // 用户无法区分「未生效」与「已关闭」。徽标与健康 popover 互斥（v-else-if），
   // 判据复用既有 getEnabledUpstreams（启用≠false，与后端 Enabled 同口径）。
-  const healthColumn = section(page, '<el-table-column label="健康"', '<el-table-column label="更新者"')
+  // i18n 后双钉:调用点钉键,zh 母本钉文案原文(任一漂移必红)
+  const zhLexicon = code('src/locales/zh/rules.ts')
+  assert.ok(zhLexicon.includes("health: '健康'"), '健康列头原文必须在 zh 母本词条中')
+  assert.ok(zhLexicon.includes("updatedBy: '更新者'"), '更新者列头原文必须在 zh 母本词条中')
+  assert.ok(zhLexicon.includes("statusUnpublished: '未发布'"), '未发布徽标原文必须在 zh 母本词条中')
+  const healthColumn = section(page, "<el-table-column :label=\"t('common.app.rules.common.health')\"", "<el-table-column :label=\"t('common.app.rules.list.updatedBy')\"")
   assert.match(healthColumn, /v-if="row\.enabled && Array\.isArray\(row\.upstreams\) && getEnabledUpstreams\(row(?: as [A-Za-z]+)?\)\.length === 0"/)
-  assert.match(healthColumn, /未发布/)
+  assert.match(healthColumn, /t\('common\.app\.rules\.list\.statusUnpublished'\)/)
   assert.match(healthColumn, /<el-popover v-else-if="row\.enabled && healthStatus\[row\.caddy_id\]"/, '徽标与健康 popover 必须互斥')
 })
 

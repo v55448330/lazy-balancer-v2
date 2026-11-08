@@ -168,14 +168,17 @@ const page = code('src/views/security/SecurityPolicies.vue')
 
 test('scope radios 新增路径 URI 选项，行内 path 输入框（前缀匹配提示 + 256 上限）', () => {
   const radios = section(page, '<el-radio-group v-model="row.scope"', '</el-radio-group>')
-  assert.match(radios, /<el-radio value="all">全部 IP<\/el-radio>/, '旧选项回归钉')
-  assert.match(radios, /<el-radio value="ip">指定 IP<\/el-radio>/, '旧选项回归钉')
-  assert.match(radios, /<el-radio value="list">地址列表<\/el-radio>/, '旧选项回归钉')
-  assert.match(radios, /<el-radio value="path">路径 URI<\/el-radio>/)
+  // i18n 后:选项文案为词条插值,value 契约值不变
+  assert.match(radios, /<el-radio value="all">\{\{ t\('app\.security\.policies\.waf\.scopeAll'\) \}\}<\/el-radio>/, '旧选项回归钉')
+  assert.match(radios, /<el-radio value="ip">\{\{ t\('app\.security\.policies\.waf\.scopeIp'\) \}\}<\/el-radio>/, '旧选项回归钉')
+  assert.match(radios, /<el-radio value="list">\{\{ t\('app\.security\.policies\.waf\.scopeList'\) \}\}<\/el-radio>/, '旧选项回归钉')
+  assert.match(radios, /<el-radio value="path">\{\{ t\('app\.security\.policies\.waf\.scopePath'\) \}\}<\/el-radio>/)
 
   const pathInput = section(page, 'v-else-if="row.scope === \'path\'"', '/>')
   assert.match(pathInput, /v-model="row\.path"/)
-  assert.match(pathInput, /placeholder="如 \/api\/upload（前缀匹配）"/)
+  // i18n 后双钉:占位符钉键,zh 母本钉原文(前缀匹配语义披露)
+  assert.match(pathInput, /:placeholder="t\('app\.security\.policies\.waf\.pathPlaceholder'\)"/)
+  assert.ok(code('src/locales/zh/security.ts').includes('如 /api/upload（前缀匹配）'), 'path 占位符原文必须在 zh 母本词条中')
   assert.match(pathInput, /class="exclusion-scope-control-path"/)
   assert.match(pathInput, /maxlength="256"/)
 })
@@ -195,11 +198,15 @@ test('序列化：仅 scope=path 带 path 字段；旧三态序列化形状逐�
 test('校验与作用域切换：path 作用域必填路径；切换清残留对称扩展', () => {
   // section 切片（member 的花括号配对不含正则字面量，validate 体内含正则校验）
   const validate = section(page, 'const validateExcludedRules', '\n}')
-  assert.match(validate, /（路径 URI）未填写路径/, '必填钉（后端 400 最终裁决，此处前置拦截）')
-  assert.match(validate, /以 \/ 开头/, 'BE 契约：路径必须以 / 开头，FE 前置拦截避免保存卡 400')
-  assert.match(validate, /含非法字符/, 'BE 契约：无空白/控制字符/双引号/反斜杠，FE 前置拦截')
-  assert.match(validate, /（指定 IP）未填写 IP/, '旧校验回归钉')
-  assert.match(validate, /（地址列表）未选择列表/, '旧校验回归钉')
+  // i18n 后双钉:调用点钉键(参数化 {n}),zh 母本钉原文——BE 契约三段前置拦截仍各自可达
+  assert.match(validate, /t\('app\.security\.policies\.msg\.exclusionNoPath'/, '必填钉（后端 400 最终裁决，此处前置拦截）')
+  assert.ok(code('src/locales/zh/security.ts').includes('（路径 URI）未填写路径'), '必填原文必须在 zh 母本词条中')
+  assert.match(validate, /t\('app\.security\.policies\.msg\.exclusionPathSlash'/, 'BE 契约：路径必须以 / 开头，FE 前置拦截避免保存卡 400')
+  assert.ok(code('src/locales/zh/security.ts').includes('必须以 / 开头'), '斜杠开头原文必须在 zh 母本词条中')
+  assert.match(validate, /t\('app\.security\.policies\.msg\.exclusionPathChars'/, 'BE 契约：无空白/控制字符/双引号/反斜杠，FE 前置拦截')
+  assert.ok(code('src/locales/zh/security.ts').includes('含非法字符'), '非法字符原文必须在 zh 母本词条中')
+  assert.match(validate, /t\('app\.security\.policies\.msg\.exclusionNoIp'/, '旧校验回归钉')
+  assert.match(validate, /t\('app\.security\.policies\.msg\.exclusionNoList'/, '旧校验回归钉')
 
   const scopeChange = member(page, 'const onScopeChange')
   assert.match(scopeChange, /row\.path = ''/, '离开 path 作用域必须清残留路径')
@@ -210,7 +217,9 @@ test('校验与作用域切换：path 作用域必填路径；切换清残留对
 })
 
 test('tip 文案：两处作用域说明更新为 IP/地址列表/路径', () => {
-  assert.equal((page.match(/作用域限定排除仅对所选来源 IP\/地址列表\/路径生效/g) ?? []).length, 2, '空态提示与表尾提示同文案各一处')
+  // i18n 后:同源词条两处接线(空态提示+表尾提示),计数钉键而非字面量
+  assert.equal((page.match(/t\('app\.security\.policies\.waf\.exclusion(?:EmptyTip|TableTip)'\)/g) ?? []).length, 2, '空态提示与表尾提示同文案各一处')
+  assert.ok(code('src/locales/zh/security.ts').includes('作用域限定排除仅对所选来源 IP/地址列表/路径生效'), '两处 tip 的共享原文必须在 zh 母本词条中')
 })
 
 test('target 自动补全：el-autocomplete 接线目录数据源，级联退役', () => {
@@ -219,8 +228,9 @@ test('target 自动补全：el-autocomplete 接线目录数据源，级联退役
   assert.match(autocomplete, /:fetch-suggestions="fetchExclusionSuggestions"/)
   assert.match(autocomplete, /popper-class="crs-rule-popper"/)
   assert.match(autocomplete, /class="exclusion-target-select"/)
-  // 降级不阻塞：占位符披露自由输入能力（目录缺失/失败时纯输入仍可提交）
-  assert.match(autocomplete, /placeholder="[^"]*输入[^"]*"/)
+  // 降级不阻塞：占位符披露自由输入能力（目录缺失/失败时纯输入仍可提交）;i18n 后钉键+zh 母本
+  assert.match(autocomplete, /:placeholder="t\('app\.security\.policies\.waf\.exclusionSearchPlaceholder'\)"/)
+  assert.ok(code('src/locales/zh/security.ts').includes('搜索规则 ID/描述，或输入组号、文件名'), '补全占位符原文必须在 zh 母本词条中')
   // 建议项两列：id 列 + 描述列（msg（file））
   assert.match(autocomplete, /crs-rule-suggestion/)
   // 级联退役：排除行单元内不再出现 el-cascader（CRS 规则组/区域选择 cascader 不在本列）
@@ -246,6 +256,8 @@ test('新增行与只读详情：addExcludedRule 带 path 空串；详情排除�
 
   const detail = member(page, 'const viewPolicySections')
   assert.match(detail, /excludedPaths/, '路径作用域排除必须在只读详情披露')
-  assert.match(detail, /（路径 /)
+  // i18n 后双钉:披露走参数化词条(路径 {paths}),键+母本原文
+  assert.match(detail, /t\('app\.security\.policies\.view\.excludedWithPath'/)
+  assert.ok(code('src/locales/zh/security.ts').includes('{n} 条（路径 {paths}）'), '路径披露原文必须在 zh 母本词条中')
   assert.match(detail, /value: excludedPaths\.length > 0/, '排除规则行值必须按路径作用域展开')
 })

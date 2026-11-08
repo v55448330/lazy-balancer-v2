@@ -106,7 +106,7 @@ onMounted(async () => {
   // fragment 内容不可信，任意链接都能在面板里投放提示文案（见 oidcErrorMessage）。
   const oidcErrorParam = fragment.get('oidc_error') ?? ''
   const oidcError = oidcErrorParam || (oidcCallback ? (fragment.get('error') ?? '') : '')
-  if (oidcError) ElMessage.error(`OIDC 登录失败：${oidcErrorMessage(oidcError)}`)
+  if (oidcError) ElMessage.error(t('common.app.views.appShell.oidcLoginFailed', { detail: oidcErrorMessage(oidcError) }))
   if (hasLoginTicket || oidcCallback || oidcErrorParam) {
     stripHashParams(['login_ticket', 'token', 'return_to', 'expires_at', 'error', 'oidc_error'])
   }
@@ -128,21 +128,21 @@ onMounted(async () => {
       // 本轮令牌是否真正落到会话（拒绝/取消都保持 false）——return_to 导航的门。
       let tokenApplied = false
       if (!verdict.ok) {
-        ElMessage.error(`OIDC 登录失败：${OIDC_REJECTION_TEXT[verdict.reason]}`)
+        ElMessage.error(t('common.app.views.appShell.oidcLoginFailed', { detail: OIDC_REJECTION_TEXT[verdict.reason] }))
         // 拒绝分支与成功分支共用下方无条件 init()，不得再发起一轮 /users/me+/config
       } else if (authStore.token && !isTokenExpired(authStore.token)) {
         // 已登录会话被 URL 令牌替换=一次身份切换：必须显式确认（换人/账号被
         // 顶替不该由一条链接决定），取消则完全不动现有会话。
-        const target = verdict.username ? `「${verdict.username}」` : '另一个账号'
+        const target = verdict.username ? t('common.app.views.appShell.targetQuoted', { name: verdict.username }) : t('common.app.views.appShell.anotherAccount')
         const confirmed = await ElMessageBox.confirm(
-          `当前浏览器的登录链接将切换到${target}的会话，是否继续？`,
-          '切换登录账号',
-          { type: 'warning', confirmButtonText: '切换', cancelButtonText: '保持当前登录' },
+          t('common.app.views.appShell.switchSessionConfirm', { target }),
+          t('common.app.views.appShell.switchSessionTitle'),
+          { type: 'warning', confirmButtonText: t('common.app.views.appShell.switchConfirmBtn'), cancelButtonText: t('common.app.views.appShell.keepCurrentCancel') },
         ).then(() => true).catch(() => false)
         if (confirmed) {
           authStore.applyOIDCToken(oidcToken)
           tokenApplied = true
-        } else ElMessage.info('已保持当前登录')
+        } else ElMessage.info(t('common.app.views.appShell.keptCurrentLogin'))
       } else {
         // OIDC 登录:令牌直接建会话,return_to 为已知页面键时回跳，否则保留
         // 当前页（不覆盖 localStorage 复原页）
@@ -167,7 +167,7 @@ onMounted(async () => {
         if (!result.skipped) authStore.setCurrentPage('dashboard')
       } catch (error: unknown) {
         if (hadValidSession) await authStore.init()
-        ElMessage.error(error instanceof ApiRequestError && (error.status === 400 || error.status === 401) ? '票据无效或已过期' : '登录服务异常')
+        ElMessage.error(error instanceof ApiRequestError && (error.status === 400 || error.status === 401) ? t('common.app.views.appShell.ticketInvalid') : t('common.app.views.appShell.loginServiceError'))
       }
     } else {
       await authStore.init()

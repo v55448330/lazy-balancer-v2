@@ -3,7 +3,7 @@
     <el-tooltip :content="tooltipContent" placement="top">
       <div class="bar-body">
         <span class="name">{{ info.name }}</span>
-        <span v-if="isEmpty" class="note">暂无日志</span>
+        <span v-if="isEmpty" class="note">{{ t('common.app.views.logStorage.empty') }}</span>
         <template v-else>
           <span class="sizes">{{ sizeText }}</span>
           <el-progress
@@ -17,22 +17,24 @@
           <span class="note">{{ noteText }}</span>
         </template>
         <!-- 取数失败保留上一次统计（不整条消失），并显式标注数值可能陈旧 -->
-        <span v-if="error" class="note note--error">统计暂不可用</span>
+        <span v-if="error" class="note note--error">{{ t('common.app.views.logStorage.statsUnavailableInline') }}</span>
       </div>
     </el-tooltip>
   </div>
   <!-- 从未取到统计时不留空白：先说明取数失败，再说明「请求成功但该日志无统计」
        ——三者（有值/失败/无统计）都必须有可见归宿，否则整条统计会静默消失 -->
-  <div v-else-if="error" class="form-tip-line">日志统计暂不可用</div>
-  <div v-else-if="unavailable" class="form-tip-line">该日志暂无统计数据</div>
+  <div v-else-if="error" class="form-tip-line">{{ t('common.app.views.logStorage.statsUnavailable') }}</div>
+  <div v-else-if="unavailable" class="form-tip-line">{{ t('common.app.views.logStorage.noStatsForLine') }}</div>
 </template>
 
 <script setup lang="ts">
 import { computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { formatBytes } from '@/utils/formatBytes'
 import { formatInt } from '@/utils/formatInt'
 import { useLogStorageStats } from '@/composables/useLogStorageStats'
 
+const { t } = useI18n()
 const props = defineProps<{ logKey: string; caddyId?: string; refreshKey?: number }>()
 
 // 取数（含换行清空 / 换行重取 / 刷新号重取）在组合子内自洽：logKey 或 caddyId
@@ -72,9 +74,9 @@ const cacheKnown = computed(() => {
 const cacheCountText = computed(() => {
   const i = info.value
   if (!i || !cacheKnown.value) return ''
-  if (i.cache_unavailable === true || i.cache_entries == null) return '缓存计数暂不可用'
+  if (i.cache_unavailable === true || i.cache_entries == null) return t('common.app.views.logStorage.cacheCountUnavailable')
   // 0 条也要显示（正常态）；不设 >0 门槛，否则「0 条」与「没这项统计」无法区分。
-  return `缓存 ${formatInt(i.cache_entries)} 条`
+  return t('common.app.views.logStorage.cacheCount', { count: formatInt(i.cache_entries) })
 })
 
 const percentage = computed(() => {
@@ -96,17 +98,17 @@ const sizeText = computed(() => {
   if (!i) return ''
   if (i.limit_rows) {
     const base = rowsUnavailable.value
-      ? `计数暂不可用 / ${formatInt(i.limit_rows)} 条`
-      : `${formatInt(i.rows ?? 0)} / ${formatInt(i.limit_rows)} 条`
+      ? t('common.app.views.logStorage.rowsUnavailableSize', { limit: formatInt(i.limit_rows) })
+      : t('common.app.views.logStorage.rowsSize', { rows: formatInt(i.rows ?? 0), limit: formatInt(i.limit_rows) })
     // 安全事件主容量 = 事件行数/行帽：真实容量在库里，audit.log 的 size_bytes
     // 只是写入侧同文件的体量（随轮转/缓存补采漂移），不再当该行容量展示。
     const parts = [base]
     if (cacheCountText.value) parts.push(cacheCountText.value)
-    if (i.db_bytes) parts.push(`库 ${humanSize(i.db_bytes)}`)
+    if (i.db_bytes) parts.push(t('common.app.views.logStorage.dbSize', { size: humanSize(i.db_bytes) }))
     return parts.join(' · ')
   }
-  if (i.limit_bytes) return `${humanSize(i.size_bytes)} / ${humanSize(i.limit_bytes)}`
-  if (i.rows !== null && i.rows !== undefined) return `${formatInt(i.rows)} 条 · ${humanSize(i.size_bytes)}`
+  if (i.limit_bytes) return t('common.app.views.logStorage.bytesSize', { size: humanSize(i.size_bytes), limit: humanSize(i.limit_bytes) })
+  if (i.rows !== null && i.rows !== undefined) return t('common.app.views.logStorage.rowsBytes', { rows: formatInt(i.rows), size: humanSize(i.size_bytes) })
   return humanSize(i.size_bytes)
 })
 
@@ -116,26 +118,26 @@ const noteText = computed(() => {
   // 条数上限形态(安全事件)：行内只保留清理策略，保留期/行宽/理论体积等
   // 细节放在 hover tooltip（retention_note），避免长文案挤压分页。
   if (i.limit_rows) {
-    return rowsUnavailable.value ? '行数暂不可用；超限按最旧优先清理' : '超限按最旧优先清理'
+    return rowsUnavailable.value ? t('common.app.views.logStorage.rowsUnavailableNote') : t('common.app.views.logStorage.oldestFirstNote')
   }
   const parts: string[] = []
-  if (i.limit_bytes) parts.push(`满 ${humanSize(i.limit_bytes)} 轮转`)
+  if (i.limit_bytes) parts.push(t('common.app.views.logStorage.rotateAtSize', { size: humanSize(i.limit_bytes) }))
   if (i.db_backed) {
     // 纯库内行(操作日志=audit_log 表按保留期清理):没有轮转归档概念,
     // keep_count=0 渲染「暂无归档」会被读成归档失败——只披露清理口径。
     if (i.retention_note) parts.push(i.retention_note)
-    return parts.join('，')
+    return parts.join(t('common.app.views.logStorage.noteJoin'))
   }
   if (i.keep_count > 0) {
     // 固定份数上限(Caddy/certjob 等):已归档时 N/M,未归档时「暂无归档，保留 M 份」
-    parts.push(i.rotated_count > 0 ? `已归档 ${i.rotated_count}/${i.keep_count} 份` : `暂无归档（满额保留 ${i.keep_count} 份）`)
+    parts.push(i.rotated_count > 0 ? t('common.app.views.logStorage.archivedOfCount', { count: i.rotated_count, keep: i.keep_count }) : t('common.app.views.logStorage.noArchiveKeep', { keep: i.keep_count }))
   } else {
     // 时间戳轮转族(运行日志):无固定份数上限——归档数恒显示(含 0)
-    parts.push(i.rotated_count > 0 ? `已归档 ${i.rotated_count} 份` : '暂无归档')
+    parts.push(i.rotated_count > 0 ? t('common.app.views.logStorage.archivedCount', { count: i.rotated_count }) : t('common.app.views.logStorage.noArchive'))
   }
-  if (i.rotated_bytes > 0) parts.push(`副本 ${humanSize(i.rotated_bytes)}`)
+  if (i.rotated_bytes > 0) parts.push(t('common.app.views.logStorage.rotatedBytes', { size: humanSize(i.rotated_bytes) }))
   if (i.keep_count === 0 && i.retention_note) parts.push(i.retention_note)
-  return parts.join('，')
+  return parts.join(t('common.app.views.logStorage.noteJoin'))
 })
 
 // 缓存段的口径说明（hover 展开）：条目/字节/上限，以及它到底是什么——
@@ -146,15 +148,15 @@ const cacheDetail = computed(() => {
   if (!i || !cacheKnown.value) return ''
   const parts: string[] = []
   if (i.cache_unavailable === true || i.cache_entries == null) {
-    parts.push('缓存计数暂不可用（计数读取失败）')
+    parts.push(t('common.app.views.logStorage.cacheCountUnavailableDetail'))
   } else {
-    let head = `缓存 ${formatInt(i.cache_entries)} 条`
+    let head = t('common.app.views.logStorage.cacheCount', { count: formatInt(i.cache_entries) })
     if (i.cache_bytes != null) head += ` · ${humanSize(i.cache_bytes)}`
-    if (i.cache_limit_entries != null && i.cache_limit_entries > 0) head += ` / 上限 ${formatInt(i.cache_limit_entries)} 条`
-    if (i.cache_limit_bytes != null && i.cache_limit_bytes > 0) head += `（${humanSize(i.cache_limit_bytes)}）`
+    if (i.cache_limit_entries != null && i.cache_limit_entries > 0) head += t('common.app.views.logStorage.cacheLimitEntries', { limit: formatInt(i.cache_limit_entries) })
+    if (i.cache_limit_bytes != null && i.cache_limit_bytes > 0) head += t('common.app.views.logStorage.cacheLimitBytes', { size: humanSize(i.cache_limit_bytes) })
     parts.push(head)
   }
-  parts.push('缓存为 IPC 失败后的待补采条目，正常应为 0')
+  parts.push(t('common.app.views.logStorage.cacheExplainer'))
   return parts.join(' · ')
 })
 
@@ -163,7 +165,7 @@ const tooltipContent = computed(() => {
   const parts: string[] = []
   if (i?.config_source) parts.push(i.config_source)
   if (i?.retention_note) parts.push(i.retention_note)
-  if (i?.limit_rows) parts.push('超出上限时按最旧优先清理')
+  if (i?.limit_rows) parts.push(t('common.app.views.logStorage.tooltipOldestFirst'))
   if (cacheDetail.value) parts.push(cacheDetail.value)
   return parts.join(' · ')
 })

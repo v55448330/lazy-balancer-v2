@@ -5,6 +5,7 @@ import { showSaveResult } from '@/utils/saveResult'
 import { CADDY_APPLY_FAILED_MARKER } from '@/utils/bulkApplyResult'
 import { parseRefIds } from '@/utils/securityStages'
 import { useIpListAdd, type IpListOption } from '@/composables/useIpListAdd'
+import { tSafe as t } from '../i18n/tSafe.ts'
 import type { APIResponse } from '@/types'
 
 // 历史（用户裁定）：名单直接动作的共享实现——IP 快捷弹框黑/白/信任三侧
@@ -22,14 +23,17 @@ import type { APIResponse } from '@/types'
 // 信任侧未启用（ip_whitelist_enabled=false）时不阻断操作，仅提示「暂不生效」。
 type ListSide = 'deny' | 'allow' | 'trust'
 
+
+// 后缀/动词为自动名单名与确认文案的组成部分：模块首帧快照（键集=封闭三侧枚举；
+// 运行期 locale 切换整页重载，无跨帧漂移）。
 const SIDE_CONFIG: Record<ListSide, {
   refField: 'ip_acl_list_refs' | 'ip_whitelist_refs'
   suffix: string
   verb: string
 }> = {
-  deny: { refField: 'ip_acl_list_refs', suffix: '-黑名单', verb: '拦截' },
-  allow: { refField: 'ip_acl_list_refs', suffix: '-白名单', verb: '放行' },
-  trust: { refField: 'ip_whitelist_refs', suffix: '-信任', verb: '信任' },
+  deny: { refField: 'ip_acl_list_refs', suffix: t('common.app.views.trustAssoc.suffixDeny'), verb: t('common.app.views.trustAssoc.verbDeny') },
+  allow: { refField: 'ip_acl_list_refs', suffix: t('common.app.views.trustAssoc.suffixAllow'), verb: t('common.app.views.trustAssoc.verbAllow') },
+  trust: { refField: 'ip_whitelist_refs', suffix: t('common.app.views.trustAssoc.suffixTrust'), verb: t('common.app.views.trustAssoc.verbTrust') },
 }
 
 // 后端 IP 名单名上限（securityiplists.go ipListMaxNameLength=50 rune）。
@@ -153,8 +157,8 @@ export const useTrustAssociation = (options: {
   }
 
   /** 加入指定列表（确认+幂等+反馈，历史暴露供逐列表按钮直调） */
-  const joinSpecificList = async (list: IpListOption, ip: string, verb = '加入'): Promise<boolean> => {
-    const done = await addIpToList(ip, list, { verb, successText: `已${verb}——已加入列表「${list.name}」` })
+  const joinSpecificList = async (list: IpListOption, ip: string, verb = t('common.app.views.trustAssoc.verbJoin')): Promise<boolean> => {
+    const done = await addIpToList(ip, list, { verb, successText: t('common.app.views.trustAssoc.joinedList', { verb, name: list.name }) })
     if (done) await options.onChanged?.()
     return done
   }
@@ -166,20 +170,20 @@ export const useTrustAssociation = (options: {
     const existing = resolveSideLists(policy, side)[0] ?? null
     if (existing) {
       const opt: IpListOption = { id: existing.id, name: existing.name, entry_count: 0 }
-      const done = await addIpToList(ip, opt, { verb: cfg.verb, successText: `已${cfg.verb}——已加入列表「${existing.name}」` })
+      const done = await addIpToList(ip, opt, { verb: cfg.verb, successText: t('common.app.views.trustAssoc.joinedList', { verb: cfg.verb, name: existing.name }) })
       if (done) await options.onChanged?.()
       return done
     }
-    const tip = side === 'trust' && policy.ip_whitelist_enabled === false ? '（注意：该策略信任名单当前未启用，加入后暂不生效）' : ''
+    const tip = side === 'trust' && policy.ip_whitelist_enabled === false ? t('common.app.views.trustAssoc.trustDisabledTip') : ''
     // 历史裁定：同侧仅系统内置名单时同样走本出口——此时「尚未关联」不成立，
     // 确认文案按引用实况区分（系统名单不在快捷处置中点名/操作）。
     const lead = parseRefIds(policy[cfg.refField]).length === 0
-      ? `策略「${policy.name}」尚未关联${cfg.verb}用地址列表`
-      : `策略「${policy.name}」同侧仅关联系统内置名单（快捷处置不直接操作系统名单）`
+      ? t('common.app.views.trustAssoc.leadNoList', { name: policy.name, verb: cfg.verb })
+      : t('common.app.views.trustAssoc.leadSystemOnly', { name: policy.name })
     // 自动名先按后端 50 rune 上限预算（超长策略名截断并显式披露），
     // 否则确认后创建必然 400，动作无法在当前弹框内完成。
     const auto = fitAutoListName(policy.name, cfg.suffix)
-    const truncatedNote = auto.truncated ? '（策略名过长，名单名已截断至 50 字符上限）' : ''
+    const truncatedNote = auto.truncated ? t('common.app.views.trustAssoc.nameTruncated') : ''
     const listNow = options.getList()
     const isNameTaken = (name: string): boolean => listNow.some((l) => ipListNameKey(l.name) === ipListNameKey(name))
     // 同名列表只在「未被其它引用面引用」时可复用（category 无关）；判据与后端
@@ -195,10 +199,10 @@ export const useTrustAssociation = (options: {
       try {
         await ElMessageBox.confirm(
           reuseTarget
-            ? `将把 ${ip} 加入既有地址列表「${reuseTarget.name}」${tip}。是否继续？`
-            : `${lead}，将创建「${createName}」${truncatedNote}并把 ${ip} 加入${tip}。是否继续？`,
-          reuseTarget ? `加入${cfg.verb}用列表` : `创建列表并${cfg.verb}`,
-          { confirmButtonText: '确定', cancelButtonText: '取消', type: 'info' },
+            ? t('common.app.views.trustAssoc.confirmJoinExisting', { ip, name: reuseTarget.name, tip })
+            : t('common.app.views.trustAssoc.confirmCreateJoin', { lead, name: createName, note: truncatedNote, ip, tip }),
+          reuseTarget ? t('common.app.views.trustAssoc.titleJoinExisting', { verb: cfg.verb }) : t('common.app.views.trustAssoc.titleCreateJoin', { verb: cfg.verb }),
+          { confirmButtonText: t('common.app.views.trustAssoc.confirmOk'), cancelButtonText: t('common.app.views.trustAssoc.confirmCancel'), type: 'info' },
         )
       } catch {
         return false
@@ -208,7 +212,7 @@ export const useTrustAssociation = (options: {
       // （仍以快照写入比不写更危险）。
       const latestRefs = await fetchLatestPolicyRefs(policy.id, cfg.refField)
       if (latestRefs === null) {
-        ElMessage.error('策略当前引用状态读取失败，本次未做任何修改；请关闭后重试')
+        ElMessage.error(t('common.app.views.trustAssoc.refsReadFailed'))
         return false
       }
       // 名单侧同样按最新状态复核：弹框打开时的复用判据只代表当时——确认期间
@@ -218,11 +222,11 @@ export const useTrustAssociation = (options: {
       if (reuse) {
         const latestList = await fetchLatestListRefs(reuse.id)
         if (latestList === null) {
-          ElMessage.error(`列表「${reuse.name}」当前引用状态读取失败，本次未做任何修改；请关闭后重试`)
+          ElMessage.error(t('common.app.views.trustAssoc.listRefsReadFailed', { name: reuse.name }))
           return false
         }
         if (!isAutoListReusable(latestList, policy.id)) {
-          ElMessage.warning(`列表「${reuse.name}」已被其它策略或受信代理网段引用，本次改为新建「${createName}」`)
+          ElMessage.warning(t('common.app.views.trustAssoc.reuseConflict', { name: reuse.name, create: createName }))
           reuse = null
         }
       }
@@ -239,7 +243,7 @@ export const useTrustAssociation = (options: {
             if (assocRes.message?.includes(CADDY_APPLY_FAILED_MARKER)) showSaveResult(assocRes, '')
           } catch {
             // 半态显性披露：条目已就绪，重试只会补关联（幂等，不重复写入）
-            ElMessage.error(`已把 ${ip} 加入列表「${reuse.name}」，但策略关联失败；条目已就绪，重试不会重复添加`)
+            ElMessage.error(t('common.app.views.trustAssoc.assocFailedAfterAdd', { ip, name: reuse.name }))
             await options.onChanged?.()
             return false
           }
@@ -250,14 +254,16 @@ export const useTrustAssociation = (options: {
         if (added.data?.added === true) {
           showSaveResult(
             added as unknown as { message?: string },
-            alreadyLinked ? `已${cfg.verb}——已加入列表「${reuse.name}」` : `已关联既有「${reuse.name}」并加入 ${ip}`,
+            alreadyLinked
+              ? t('common.app.views.trustAssoc.joinedList', { verb: cfg.verb, name: reuse.name })
+              : t('common.app.views.trustAssoc.linkedExistingJoined', { name: reuse.name, ip }),
           )
         } else if (alreadyLinked) {
           // 条目与关联都已存在：本次零写入，只陈述事实（与 useIpListAdd 同文案）。
-          ElMessage.info(`该 IP 已在列表「${reuse.name}」中`)
+          ElMessage.info(t('common.app.views.trustAssoc.alreadyInList', { name: reuse.name }))
         } else {
           // 条目已在、本次只补了关联：按关联口径反馈，不再声称加入了条目。
-          mfaAwareSuccess(`已关联既有「${reuse.name}」——该 IP 已在列表中，未重复添加`)
+          mfaAwareSuccess(t('common.app.views.trustAssoc.linkedExistingDup', { name: reuse.name }))
         }
         await options.onChanged?.()
         return true
@@ -274,19 +280,19 @@ export const useTrustAssociation = (options: {
       if (created.message?.includes(CADDY_APPLY_FAILED_MARKER)) showSaveResult(created, '')
       const newId = created.data?.id
       if (!newId) {
-        ElMessage.error(`列表「${createName}」创建响应异常，请重试`)
+        ElMessage.error(t('common.app.views.trustAssoc.createBadResponse', { name: createName }))
         return false
       }
       const assocRes = await request.put(`/security/policies/${policy.id}`, { [cfg.refField]: JSON.stringify([...latestRefs, newId]) }).catch(() => null)
       if (!assocRes) {
-        ElMessage.error(`列表「${createName}」已创建并加入 ${ip}，但策略关联失败；重试将复用该名单`)
+        ElMessage.error(t('common.app.views.trustAssoc.assocFailedAfterCreate', { name: createName, ip }))
         await options.onChanged?.()
         return false
       }
       // 关联是最后一步：退化后缀弹警告，正常成功用动作口径文案（响应 message 是
       // 策略更新的通用文案，不能拿来当本次动作的反馈）。
       if (assocRes.message?.includes(CADDY_APPLY_FAILED_MARKER)) showSaveResult(assocRes, '')
-      else mfaAwareSuccess(`已创建「${createName}」并加入 ${ip}`)
+      else mfaAwareSuccess(t('common.app.views.trustAssoc.createdJoined', { name: createName, ip }))
       await options.onChanged?.()
       return true
     } catch {
@@ -306,22 +312,22 @@ export const useTrustAssociation = (options: {
     try {
       try {
         await ElMessageBox.confirm(
-          `将从地址列表「${list.name}」移除 ${ip}。是否继续？`,
-          '从列表移除',
-          { confirmButtonText: '确定', cancelButtonText: '取消', type: 'warning' },
+          t('common.app.views.trustAssoc.confirmRemove', { name: list.name, ip }),
+          t('common.app.views.trustAssoc.titleRemove'),
+          { confirmButtonText: t('common.app.views.trustAssoc.confirmOk'), cancelButtonText: t('common.app.views.trustAssoc.confirmCancel'), type: 'warning' },
         )
       } catch {
         return
       }
       const res = await request.post<APIResponse<{ removed?: boolean }>>(`/security/ip-lists/${list.id}/remove-ip`, { value: ip })
       if (res.data?.removed !== true) {
-        ElMessage.info(`列表「${list.name}」中没有 ${ip} 的精确条目；若由 CIDR 覆盖，请编辑列表处理`)
+        ElMessage.info(t('common.app.views.trustAssoc.removeNotFound', { name: list.name, ip }))
         await options.onChanged?.()
         return
       }
       // 移除是一次写事件（MFA step-up 覆盖）：与同文件「加入/创建」同口径经
       // mfaAwareSuccess 发出——宽限窗内放行时提示必须带「免验证」前缀。
-      mfaAwareSuccess(`已从「${list.name}」移除`)
+      mfaAwareSuccess(t('common.app.views.trustAssoc.removedFromList', { name: list.name }))
       await options.onChanged?.()
     } catch {
       // 全局拦截器已提示

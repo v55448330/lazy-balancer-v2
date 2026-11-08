@@ -81,7 +81,9 @@ test('混合策略只读视图复用独立黑名单生效谓词', () => {
   // 展示口径改为「ip_acl_enabled 开启 或 内容门命中」——
   // 后端 SecurityPolicyHasIPControl 对开启 flag 即算有 AC 管控面，含信任的
   // has_ip_control 摘要标志不得用于本列（会把纯信任策略说成 ACL 生效）。
-  assert.match(code('src/views/security/SecurityPolicies.vue'), /ip_acl_enabled === true \|\| hasIPACLControl\(d\) \? formatAclModeDetail\(ipLists\.value, d\) : '未启用'/)
+  // i18n 后双钉:调用点钉键,zh 母本钉原文(任一漂移必红)
+  assert.match(code('src/views/security/SecurityPolicies.vue'), /ip_acl_enabled === true \|\| hasIPACLControl\(d\) \? formatAclModeDetail\(ipLists\.value, d\) : t\('app\.security\.policies\.common\.notEnabled'\)/)
+  assert.ok(code('src/locales/zh/security.ts').includes('未启用'), '未启用灰态原文必须在 zh 母本词条中')
 })
 
 test('只读态隐藏迁移入口并保留函数级守卫', () => {
@@ -115,10 +117,12 @@ test('自动封禁卡片主体与函数入口统一受只读和节点门控', ()
   assert.match(text, /:aria-disabled="!autobanWritable"/)
   const open = section(text, 'const openAutobanConfig', 'const saveAutobanConfig')
   assert.match(open, /if \(!autobanWritable\.value\) return/)
-  assert.match(text, /自动封禁状态加载中，暂不可配置/)
+  // i18n 后双钉:调用点钉键,zh 母本钉原文(任一漂移必红)
+  assert.match(text, /t\('app\.security\.events\.blockedReasonLoading'\)/)
+  assert.ok(code('src/locales/zh/security.ts').includes('自动封禁状态加载中，暂不可配置'), '加载中文案必须在 zh 母本词条中')
   // 函数级纵深守卫：按钮 :disabled 只是呈现层，保存/禁用直切必须各自带
   // writable 门（与 openAutobanConfig 同构）——键盘/控制台直接调用不得绕过。
-  const save = section(text, 'const saveAutobanConfig', 'const AUTOBAN_ENABLE_CONFIRM_HTML')
+  const save = section(text, 'const saveAutobanConfig', 'const autobanEnableConfirmHtml')
   assert.match(save, /if \(!autobanWritable\.value\) return/, '保存必须带函数级 autobanWritable 守卫')
   const toggle = section(text, 'const toggleAutobanEnabled', 'const ctxWafFamily = computed')
   assert.match(toggle, /!autobanWritable\.value/, '禁用直切必须带函数级 autobanWritable 守卫')
@@ -127,7 +131,9 @@ test('自动封禁卡片主体与函数入口统一受只读和节点门控', ()
 test('默认上游分支不得显示无启用上游', () => {
   const text = code('src/components/RuleFlowDialog.vue')
   assert.match(text, /v-else-if="pr\.upstreams === null"/)
-  assert.match(text, /跟随主路由上游/)
+  // i18n 后双钉:调用点钉键,zh 母本钉文案原文(任一漂移必红)
+  assert.ok(code('src/locales/zh/rules.ts').includes("followMainUpstreamTag: '跟随主路由上游'"), '跟随主路由上游原文必须在 zh 母本词条中')
+  assert.match(text, /t\('common\.app\.rules\.flow\.followMainUpstreamTag'\)/)
 })
 
 test('关闭向导时复位 DNS 开关与服务器', () => {
@@ -140,8 +146,11 @@ test('大屏显性披露回填未完成与汇总陈旧', () => {
   // 原断言只钉 `?: boolean` 类型声明（类型契约由 vue-tsc 承担）。
   // 改为钉渲染接线：两个标志各自绑定独立横幅且文案区分（回填未完成 vs 汇总延迟）。
   const text = code('src/views/security/ThreatScreen.vue')
-  assert.match(text, /历史统计回填尚未完成/, '回填未完成必须渲染横幅文案（不得静默）')
-  assert.match(text, /统计汇总更新延迟/, '汇总陈旧必须渲染独立横幅（不得与回填提示合并或静默）')
+  // i18n 后双钉:调用点钉键,zh 母本钉横幅原文(任一漂移必红)
+  assert.match(text, /t\('app\.security\.threat\.backfillNotice'\)/, '回填未完成必须渲染横幅文案（不得静默）')
+  assert.match(text, /t\('app\.security\.threat\.rollupStaleNotice'\)/, '汇总陈旧必须渲染独立横幅（不得与回填提示合并或静默）')
+  assert.ok(code('src/locales/zh/security.ts').includes('历史统计回填尚未完成'), '回填横幅原文必须在 zh 母本词条中')
+  assert.ok(code('src/locales/zh/security.ts').includes('统计汇总更新延迟'), '汇总陈旧原文必须在 zh 母本词条中')
   // 覆盖受限已撤销横幅（2026-11-02 用户裁定）：窗口统计来自预聚合、无数据丢失，
   // 系统静默处理不打扰用户；明细缺失属保留策略既有行为。横幅与知悉记忆一并移除。
   assert.doesNotMatch(text, /原始事件仅保留自/, '威胁大屏不得再渲染覆盖受限横幅')
@@ -196,7 +205,9 @@ test('库计数列文案与「数量 / 大小」列义', () => {
 test('爬虫豁免空引擎保存守卫（单源谓词）', () => {
   const text = code('src/views/security/SecurityPolicies.vue')
   assert.match(text, /if \(typeAllowsStage\(1\) && crawlerExemptionNeedsEngines\(\{ geoipEnabled: form\.value\.geoip_enabled, crawlerExempt: form\.value\.geoip_crawler_exempt, engines: form\.value\.geoip_crawler_engines \}\)\)/)
-  assert.match(text, /空选等于豁免「全部引擎」/)
+  // i18n 后双钉:调用点钉键,zh 母本钉原文(任一漂移必红)
+  assert.match(text, /t\('app\.security\.policies\.msg\.crawlerNoneSelected'\)/)
+  assert.ok(code('src/locales/zh/security.ts').includes('空选等于豁免「全部引擎」'), '空选豁免口径原文必须在 zh 母本词条中')
   // 空选时的行内提示（用户不必点保存才知道语义）
   assert.match(text, /v-if="form\.geoip_crawler_engines\.length === 0"/)
 })
@@ -205,9 +216,12 @@ test('主列表失败可辨识（错误态 + 横幅重试 + 空态文案切换�
   const text = code('src/views/security/SecurityPolicies.vue')
   assert.match(text, /const policiesLoadError = ref\(false\)/)
   assert.match(text, /v-if="policiesLoadError" type="error"/)
-  assert.match(text, /:loading="loading" @click="fetchData">立即重试/)
+  // i18n 后双钉:调用点钉键,zh 母本钉原文(任一漂移必红)
+  assert.match(text, /:loading="loading" @click="fetchData">\{\{ t\('app\.security\.policies\.common\.retryNow'\) \}\}/)
+  assert.ok(code('src/locales/zh/security.ts').includes('立即重试'), '立即重试原文必须在 zh 母本词条中')
   // 空态：失败与「确实没有策略」不同形
-  assert.match(text, /v-if="!policiesLoadError" description="暂无安全策略"/)
+  assert.match(text, /v-if="!policiesLoadError" :description="t\('app\.security\.policies\.list\.empty'\)"/)
+  assert.ok(code('src/locales/zh/security.ts').includes('暂无安全策略'), '空态原文必须在 zh 母本词条中')
   // 两条失败路径（rejected / catch）都置错误态，成功路径复位
   const rejected = text.indexOf("if (polRes.status === 'rejected')")
   const setErr = text.indexOf('policiesLoadError.value = true', rejected)
@@ -221,8 +235,10 @@ test('自动封禁口径文案与后端喂入门同口径（WAF·CRS+自定义�
   // 文案必须与真实喂入一致：既不得自缩为「WAF 事件」，也不得宣称 ACL/地域/
   // 威胁情报计数（用户按文案校准阈值必须可达）。
   assert.doesNotMatch(events, /WAF 事件固定窗口计数/)
-  assert.match(events, /WAF 拦截（CRS 规则与自定义规则命中，已验证爬虫豁免除外）固定窗口计数/)
-  assert.match(events, /IP 访问控制、地域拦截与威胁情报事件不参与计数/)
+  // i18n 后双钉:调用点钉键,zh 母本钉两句口径原文(喂入口径漂移仍必红)
+  assert.match(events, /:subtitle="t\('app\.security\.events\.dialogSubtitle'\)"/)
+  assert.ok(code('src/locales/zh/security.ts').includes('WAF 拦截（CRS 规则与自定义规则命中，已验证爬虫豁免除外）固定窗口计数'), '计数口径句必须在 zh 母本词条中')
+  assert.ok(code('src/locales/zh/security.ts').includes('IP 访问控制、地域拦截与威胁情报事件不参与计数'), '排除口径句必须在 zh 母本词条中')
   // 跨栈对表（repoCode 剥注释后钉函数体谓词）：后端族门任一谓词改动即红——
   // 文案↔裁定漂移（喂入口径扩/缩而文案不动）不再无声复发。
   const autoban = repoCode('internal/services/autoban.go')
@@ -343,8 +359,11 @@ test('SecurityBindingEditor 先声明 props/emits 再派生 computed', () => {
 test('总览总量卡片按 includes_reserved 切换口径 tooltip（重设计后仅拦截列保留）', () => {
   const text = code('src/views/security/SecurityOverview.vue')
   assert.match(text, /const todayCountTip = computed\(\(\) => overview\.value\.includes_reserved/)
-  assert.match(text, /总量含私网\/保留地址事件/)
-  assert.match(text, /与大屏同口径（分钟汇总）：不含私网\/保留地址事件/)
+  // i18n 后双钉:调用点钉键,zh 母本钉两句口径原文(任一漂移必红)
+  assert.match(text, /t\('app\.security\.overview\.status\.tipReserved'\)/)
+  assert.match(text, /t\('app\.security\.overview\.status\.tipRollup'\)/)
+  assert.ok(code('src/locales/zh/security.ts').includes('总量含私网/保留地址事件'), '含保留地址口径原文必须在 zh 母本词条中')
+  assert.ok(code('src/locales/zh/security.ts').includes('与大屏同口径（分钟汇总）'), '与大屏同口径原文必须在 zh 母本词条中')
   assert.equal([...text.matchAll(/<el-tooltip :content="todayCountTip"/g)].length, 1, '重设计后仅拦截列保留口径 tooltip')
 })
 
@@ -379,16 +398,20 @@ test('大屏光流可用性位/恢复基线/重装复位（L8 前端三项）', 
 test('拦截页汇总必须过阶段能力门（stage3 off / stage1 无能力不得恒绿）', () => {
   const text = code('src/views/security/SecurityPolicies.vue')
   assert.match(text, /blockPageStageCanIntercept/)
-  assert.match(text, /当前配置不会产生该阶段拦截，页面不会被使用/)
+  // i18n 后双钉:调用点钉键,zh 母本钉原文(任一漂移必红)
+  assert.match(text, /t\('app\.security\.policies\.bp\.stageIneffective'/)
+  assert.ok(code('src/locales/zh/security.ts').includes('当前配置不会产生该阶段拦截，页面不会被使用'), '阶段无效注记原文必须在 zh 母本词条中')
   // 能力门经 capableAttributions 单点调用（归因 + 过门同处）：
   const notes = member(text, 'const capableAttributions = (')
   assert.match(notes, /\.filter\(\(stage\) => stageCapableOf\(stage\)\)/)
   // 汇总卡消费同一能力门：未过门阶段单独出「不会产生拦截」行
   const summary = member(text, 'const blockPageSummary = computed')
   assert.match(summary, /stageCapableOf\(/)
-  assert.match(summary, /当前配置不会产生该阶段拦截，页面不会被使用/)
+  assert.match(summary, /t\('app\.security\.policies\.bp\.stageIneffective'/)
   // 限流例外行：429 状态码恒定的口径必须保留
-  assert.match(summary, /429/)
+  // i18n 后双钉:调用点钉键,zh 母本钉 429 口径原文(任一漂移必红)
+  assert.match(summary, /t\('app\.security\.policies\.bp\.stage2NoPage'/)
+  assert.ok(code('src/locales/zh/security.ts').includes('限流拦截返回空响应体 429'), '限流 429 恒定口径原文必须在 zh 母本词条中')
   assert.doesNotMatch(summary, /规则已配置阶段页覆盖/)
 })
 
@@ -424,7 +447,9 @@ test('掩码私钥不得误报「请提供私钥」', () => {
   const errorAt = branch.indexOf('certInfo.error')
   assert.ok(guardAt > 0, '掩码私钥形态必须跳过错误提示')
   assert.ok(errorAt > guardAt, '掩码私钥的 return 必须先于错误文案（顺序倒置即误报）')
-  assert.match(branch.slice(errorAt), /^certInfo\.error = '请提供私钥 \(KEY\)'/, '非掩码形态仍须提示请提供私钥')
+  // i18n 后双钉:调用点钉键,zh 母本钉文案原文(任一漂移必红)
+  assert.ok(code('src/locales/zh/rules.ts').includes("providePrivKey: '请提供私钥 (KEY)'"), '请提供私钥原文必须在 zh 母本词条中')
+  assert.match(branch.slice(errorAt), /^certInfo\.error = t\('common\.app\.rules\.msgs\.providePrivKey'\)/, '非掩码形态仍须提示请提供私钥')
 })
 
 test('信任语义单源：事件详情与流程副标题共用 trustHitMode', () => {
@@ -458,25 +483,37 @@ test('引擎装载失败暂停两条光流（不再每秒重复拉 backlog）', 
 test('辅助端点部分失败必须有可见横幅', () => {
   const text = code('src/views/security/SecurityPolicies.vue')
   assert.match(text, /const auxLoadFailures = ref<string\[\]>\(\[\]\)/)
-  assert.match(text, /部分辅助数据加载失败（\{\{ auxLoadFailures\.join\('、'\) \}\}）/)
-  assert.match(text, /<el-button link type="warning"[^>]*@click="fetchData">重新加载<\/el-button>/)
-  for (const label of ['规则列表', 'CRS 规则选项', '拦截页面', '自定义规则', '规则绑定', '用户列表', 'IP 地址列表']) {
-    assert.ok(text.includes(`failures.push('${label}')`), `必须归集 ${label} 失败源`)
+  // i18n 后双钉:调用点钉键,zh 母本钉横幅原文(任一漂移必红);条目分隔符亦走单源 sep 键
+  assert.match(text, /t\('app\.security\.policies\.list\.auxFailBanner', \{ items: auxLoadFailures\.join\(t\('app\.security\.policies\.common\.sep'\)\) \}\)/)
+  assert.ok(code('src/locales/zh/security.ts').includes('部分辅助数据加载失败'), '辅助失败横幅原文必须在 zh 母本词条中')
+  assert.match(text, /<el-button link type="warning"[^>]*@click="fetchData">\{\{ t\('app\.security\.policies\.common\.reload'\) \}\}<\/el-button>/)
+  // i18n 后双钉:失败源标签走 aux.* 键(调用点钉键,zh 母本钉标签原文)
+  const auxLabels: Array<[string, string]> = [
+    ['rules', '规则列表'], ['crsOptions', 'CRS 规则选项'], ['blockPages', '拦截页面'], ['customRules', '自定义规则'],
+    ['bindings', '规则绑定'], ['users', '用户列表'], ['ipLists', 'IP 地址列表'],
+  ]
+  for (const [key, label] of auxLabels) {
+    assert.ok(text.includes(`failures.push(t('app.security.policies.aux.${key}'))`), `必须归集 ${label} 失败源`)
+    assert.ok(code('src/locales/zh/security.ts').includes(label), `${label} 失败源标签必须在 zh 母本词条中`)
   }
 })
 
 test('阶段 2 拦截页文案按 429 语义分支', () => {
   const text = code('src/views/security/SecurityPolicies.vue')
-  assert.match(text, /editorPolicyType === 'stage2' \? '不使用自定义页面（429 空响应体）'/)
-  // 断言挂在三元臂上（条件 → 臂内文案），条件侧带否定边界：窗口型写法在这里
+  // i18n 后双钉:调用点钉键,zh 母本钉原文(任一漂移必红)
+  assert.match(text, /editorPolicyType === 'stage2' \? t\('app\.security\.policies\.bp\.noPageStage2'\)/)
+  assert.ok(code('src/locales/zh/security.ts').includes('不使用自定义页面（429 空响应体）'), '429 空响应体口径原文必须在 zh 母本词条中')
+  // 断言挂在三元臂上（条件 → 臂内词条键），条件侧带否定边界：窗口型写法在这里
   // 恒真——把条件取反（`!d.rate_limit_enabled`）后两段文字距离照样成立。
-  const blockPageRow = section(text, "{ label: '拦截页面', value: d.block_page_id > 0", "{ label: '归因口径'")
+  const blockPageRow = section(text, "{ label: t('app.security.policies.bp.pageLabel'), value: d.block_page_id > 0", "{ label: t('app.security.policies.view.attributionLabel')")
   assert.match(
     blockPageRow,
-    /(?<![!.\w])d\.rate_limit_enabled\s*\?\s*'不使用自定义页面：限流 429 返回空响应体（[^']*）'/,
+    /(?<![!.\w])d\.rate_limit_enabled\s*\?\s*t\('app\.security\.policies\.view\.noPageRateLimit'\)/,
     '限流启用且无自定义页面时必须说明 429 空响应体（不得落进其他分支或被取反）',
   )
-  assert.match(blockPageRow, /:\s*'不使用自定义页面（Caddy 默认 403）'/, '限流关闭时仍是 Caddy 默认 403')
+  assert.ok(code('src/locales/zh/security.ts').includes('不使用自定义页面：限流 429 返回空响应体'), '限流 429 口径原文必须在 zh 母本词条中')
+  assert.match(blockPageRow, /:\s*t\('app\.security\.policies\.bp\.noPageDefault'\)/, '限流关闭时仍是 Caddy 默认 403')
+  assert.ok(code('src/locales/zh/security.ts').includes('不使用自定义页面（Caddy 默认 403）'), 'Caddy 默认 403 原文必须在 zh 母本词条中')
 })
 
 test('安全规则预设项可键盘操作（折叠头 button + 标签/模板键盘语义）', () => {
@@ -605,7 +642,9 @@ test('安全事件列表加载失败必须有页内错误条（旧数据标注�
   assert.match(fetch, /eventsLoadError\.value = false/)
   assert.match(fetch, /if \(requestSeq !== fetchEventsSeq\) return\n\s+eventsLoadError\.value = true/)
   assert.match(text, /<el-alert v-if="eventsLoadError" type="error"/)
-  assert.match(text, /当前显示的是上次成功结果（与筛选\/分页条件不符）/)
+  // i18n 后双钉:调用点钉键,zh 母本钉降级口径原文
+  assert.match(text, /t\('app\.security\.events\.loadErrorStale'\)/)
+  assert.ok(code('src/locales/zh/security.ts').includes('当前显示的是上次成功结果（与筛选/分页条件不符）'), '降级口径句必须在 zh 母本词条中')
 })
 
 test('WAF 耗时族谓词单源（请求上下文弹框与触发详情共用 isWafDurationFamily）', () => {
@@ -638,7 +677,9 @@ test('TCP 锁与 HTTP 同构：灰 placeholder 退役，阶段 2/3 恒「不适�
   // 锁色三态（未绑/禁用=黄 is-unbound，已绑=绿 is-allow）对 TCP 与 HTTP 同一表达式
   assert.match(rules, /ruleDisabled \? 'is-unbound' : ruleStageModel\(row as Rule\)\.hasAnyPolicy \? 'is-allow' : 'is-unbound'/)
   // TCP 规则阶段 2/3 恒灰态文案（组有无均不落「未启用」分支）
-  assert.match(rules, /不适用（TCP 仅支持阶段 0\/1）/)
+  // i18n 后双钉:调用点钉键,zh 母本钉文案原文(任一漂移必红)
+  assert.ok(code('src/locales/zh/rules.ts').includes("stageNotApplicable: '不适用（TCP 仅支持阶段 0/1）'"), '不适用灰态原文必须在 zh 母本词条中')
+  assert.match(rules, /t\('common\.app\.rules\.list\.stageNotApplicable'\)/)
 })
 
 test('规则行「安全」绑定入口与流程弹框对 TCP 放开', () => {
@@ -657,10 +698,17 @@ test('流程弹框 TCP：协议徽标、阶段 0/1 明细、阶段 2/3 整组灰
   assert.match(dialog, /<el-tag v-else[^>]*type="primary"/)
   // 阶段 0 标注信任双模式语义（直通=零事件；保留检测=记录为检测后直达上游，
   // 与 HTTP 一致）、阶段 1 拒绝动作=断连、阶段 2/3 整组灰态
-  assert.match(dialog, /「直通上游」模式：连接直达上游/)
-  assert.match(dialog, /「保留检测记录」模式：命中产检测事件[^<]*后直达上游，不拦截/)
-  assert.match(dialog, /断连/)
-  assert.match(dialog, /TCP 规则不适用/)
+  // i18n 后双钉:调用点钉键,zh 母本钉文案原文(任一漂移必红)
+  const zhLexicon = code('src/locales/zh/rules.ts')
+  assert.match(dialog, /t\('common\.app\.rules\.flow\.trustModeTcpNote'\)/)
+  const tcpNoteLine = zhLexicon.split('\n').find((l) => l.includes('trustModeTcpNote:'))
+  assert.ok(tcpNoteLine, 'trustModeTcpNote 必须在 zh 母本词条中')
+  assert.match(tcpNoteLine!, /「直通上游」模式：连接直达上游/)
+  assert.match(tcpNoteLine!, /「保留检测记录」模式：命中产检测事件[^]*后直达上游，不拦截/)
+  assert.match(dialog, /TCP_STAGE1_FOOTNOTE = t\('common\.app\.rules\.flow\.tcpStage1Footnote'\)/)
+  assert.ok(zhLexicon.includes('拒绝动作=断连'), '阶段 1 断连口径必须在 zh 母本词条中')
+  assert.match(dialog, /t\('common\.app\.rules\.flow\.tcpStagesNote'\)/)
+  assert.ok(zhLexicon.includes('TCP 规则不适用'), '阶段 2/3 灰态原文必须在 zh 母本词条中')
 })
 
 test('事件日志 TCP：类型筛选 + 青色徽标 + 详情弹框 TCP 形态', () => {
@@ -672,7 +720,7 @@ test('事件日志 TCP：类型筛选 + 青色徽标 + 详情弹框 TCP 形态',
   // TCP 事件行青色徽标
   assert.match(events, /proto-tcp-tag/)
   // 详情弹框：空 method/uri 显示 TCP 连接占位、隐藏请求头/请求体区块
-  assert.match(events, /—（TCP 连接）/)
+  assert.match(events, /t\('app\.security\.events\.tcpPlaceholder'\)/)
   const ctx = section(events, 'const ctxEvent = ref<SecurityEvent', 'const page = ref(1)')
   assert.match(ctx, /ctxIsTcp/)
 })
@@ -684,9 +732,11 @@ test('安全总览 TCP：今日拦截协议双胶囊 + 最近事件独立协议�
   assert.match(overview, /proto-split-label">HTTP<\/span><span class="strip-sub-num">/)
   assert.match(overview, /proto-split-label">TCP<\/span><span class="strip-sub-num">/)
   // 最近拦截事件：独立「协议」列（TCP 青 / HTTP 蓝），规则列不再放徽标
-  assert.match(overview, /label="协议"/)
+  // i18n 后双钉:调用点钉键,zh 母本钉原文(任一漂移必红)
+  assert.match(overview, /:label="t\('app\.security\.overview\.events\.colProtocol'\)"/)
+  assert.ok(code('src/locales/zh/security.ts').includes('协议'), '协议列名原文必须在 zh 母本词条中')
   assert.match(overview, /proto-tcp-tag event-proto-tag">TCP<\/el-tag>/)
-  const ruleColumn = section(overview, 'label="规则"', 'label="策略"')
+  const ruleColumn = section(overview, ':label="t(\'app.security.overview.events.colRule\')"', ':label="t(\'app.security.overview.events.colPolicy\')"')
   assert.doesNotMatch(ruleColumn, /proto-tcp-tag/, '规则列只剩规则名')
 })
 
@@ -698,7 +748,9 @@ test('威胁大屏 TCP：l4 差分并入正常弧 + feed 徽标 + 底部图例�
   // feed 事件 event_type==='tcp' 青色徽标
   assert.match(screen, /event_type === 'tcp'/)
   // 底部流量图例新增「TCP 断连」条目
-  assert.match(screen, /TCP 断连/)
+  // i18n 后双钉:调用点钉键,zh 母本钉原文(任一漂移必红)
+  assert.match(screen, /t\('app\.security\.threat\.tcpDisconnected'\)/)
+  assert.ok(code('src/locales/zh/security.ts').includes('TCP 断连'), 'TCP 断连图例原文必须在 zh 母本词条中')
 })
 
 test('TCP 绑定门谓词与文案单源（securityStages）', () => {
@@ -715,5 +767,7 @@ test('TCP 绑定门谓词与文案单源（securityStages）', () => {
   const policies = code('src/views/security/SecurityPolicies.vue')
   assert.doesNotMatch(policies, /选择器只列 HTTP/)
   // 向导关联规则步骤 TCP 行内标注
-  assert.match(policies, /拦截=断连，无拦截页；CDN 回源需开启 PROXY protocol/)
+  // i18n 后双钉:调用点钉键,zh 母本钉原文(security.ts 为 zh/en 合并词条,原文在 "zh" 行)
+  assert.match(policies, /infoHints\.push\(t\('app\.security\.policies\.bind\.tcpHint'\)\)/)
+  assert.ok(code('src/locales/zh/security.ts').includes('拦截=断连，无拦截页；CDN 回源需开启 PROXY protocol'), 'TCP 行内标注原文必须在 zh 母本词条中')
 })

@@ -11,9 +11,12 @@
 // 不依赖「函数文本里出现某常量」的源码钉。
 
 import { hasOwn } from './hasOwn.ts'
+// 回落桶展示键走 i18n（批次 D ingest 域）：键形与 zh 母本原文由 logStatKeyCap
+// 行为钉（按导出符号求值，键文本漂移不影响该钉）+ ingest 域双钉承载。
+import { tSafe as t } from '../i18n/tSafe.ts'
 
 export const MAX_LOG_STAT_KEYS = 500
-export const OTHER_LOG_STAT_KEY = '其他'
+export const OTHER_LOG_STAT_KEY: string = t('common.app.views.ingest.otherBucket')
 
 type LogStatBucket = 'ip' | 'ua' | 'uri'
 

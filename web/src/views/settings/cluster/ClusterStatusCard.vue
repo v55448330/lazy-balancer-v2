@@ -4,57 +4,61 @@
       <div class="card-header">
         <div class="card-title">
           <el-icon><Monitor /></el-icon>
-          <span>当前节点状态</span>
+          <span>{{ t('common.app.views.cluster.currentNodeStatus') }}</span>
         </div>
       </div>
     </template>
 
     <el-descriptions v-if="status" :column="3" border class="status-descriptions">
-      <el-descriptions-item label="节点角色">
+      <el-descriptions-item :label="t('common.app.views.cluster.roleLabel')">
         <el-tag :type="status.node_mode === 'master' ? 'success' : 'warning'" size="small">
-          {{ status.node_mode === 'master' ? '主节点' : '从节点' }}
+          {{ status.node_mode === 'master' ? t('common.app.views.cluster.master') : t('common.app.views.cluster.slave') }}
         </el-tag>
       </el-descriptions-item>
-      <el-descriptions-item label="集群状态">
+      <el-descriptions-item :label="t('common.app.views.cluster.clusterStatusLabel')">
         <el-tag :type="status.cluster_active ? 'success' : 'warning'" size="small">
-          {{ status.cluster_active ? '已激活' : '未激活' }}
+          {{ status.cluster_active ? t('common.app.views.cluster.activated') : t('common.app.views.cluster.notActivated') }}
         </el-tag>
       </el-descriptions-item>
-      <el-descriptions-item :label="status.node_mode === 'master' ? '配置版本' : '已应用版本'">
+      <el-descriptions-item :label="status.node_mode === 'master' ? t('common.app.views.cluster.colConfigVersion') : t('common.app.views.cluster.appliedVersion')">
         {{ status.node_mode === 'master' ? status.cluster_version : status.applied_version }}
       </el-descriptions-item>
 
       <template v-if="status.node_mode === 'master'">
-        <el-descriptions-item label="待确认节点">{{ status.pending_count }}</el-descriptions-item>
-        <el-descriptions-item label="已批准节点">{{ status.approved_count }}</el-descriptions-item>
-        <el-descriptions-item label="同步间隔">{{ status.sync_interval }} 秒</el-descriptions-item>
+        <el-descriptions-item :label="t('common.app.views.cluster.pendingNodes')">{{ status.pending_count }}</el-descriptions-item>
+        <el-descriptions-item :label="t('common.app.views.cluster.approvedNodes')">{{ status.approved_count }}</el-descriptions-item>
+        <el-descriptions-item :label="t('common.app.views.cluster.syncIntervalLabel')">{{ t('common.app.views.cluster.intervalSecondsValue', { count: status.sync_interval }) }}</el-descriptions-item>
       </template>
 
       <template v-else>
-        <el-descriptions-item label="主节点地址" :span="2">
+        <el-descriptions-item :label="t('common.app.views.cluster.masterUrlLabel')" :span="2">
           <span class="mono-value">{{ status.master_url || '-' }}</span>
         </el-descriptions-item>
-        <el-descriptions-item label="最近同步">{{ formatDate(status.last_sync_at) || '-' }}</el-descriptions-item>
+        <el-descriptions-item :label="t('common.app.views.cluster.lastSyncLabel')">{{ formatDate(status.last_sync_at) || '-' }}</el-descriptions-item>
         <!-- 明文链路常驻提示（注册时刻的一次性审计之外，稳态也要可见）-->
-        <el-descriptions-item v-if="status.transport_insecure" label="链路加密" :span="3">
-          <span class="error-text">明文 HTTP：证书私钥、ACME/DNS 凭据与集群令牌将以明文传输，且没有证书指纹校验；建议改用 HTTPS</span>
+        <el-descriptions-item v-if="status.transport_insecure" :label="t('common.app.views.cluster.transportLabel')" :span="3">
+          <span class="error-text">{{ t('common.app.views.cluster.plainHttpWarning') }}</span>
         </el-descriptions-item>
-        <el-descriptions-item v-if="status.last_sync_error" label="同步错误" :span="3">
+        <el-descriptions-item v-if="status.last_sync_error" :label="t('common.app.views.cluster.syncErrorLabel')" :span="3">
           <span class="error-text">{{ syncErrorDisplay }}</span>
         </el-descriptions-item>
       </template>
     </el-descriptions>
     <!-- 拉取失败且无数据时改「加载失败」，与父级错误横幅口径一致。-->
-    <el-empty v-else :description="error ? '加载失败' : '暂无节点状态'" :image-size="60" />
+    <el-empty v-else :description="error ? t('common.app.views.cluster.loadFailed') : t('common.app.views.cluster.noNodeStatus')" :image-size="60" />
   </el-card>
 </template>
 
 <script setup lang="ts">
 import { computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { formatDate } from '@/utils/date'
 import { formatSyncErrorDisplay } from '@/utils/syncErrorDisplay'
 import { Monitor } from '@element-plus/icons-vue'
 import type { ClusterStatus } from '@/types'
+
+// 卡片文案走 i18n(批次 D cluster 域,common.app.views.cluster.*)。
+const { t } = useI18n()
 
 const props = defineProps<{
   readonly status: ClusterStatus | null

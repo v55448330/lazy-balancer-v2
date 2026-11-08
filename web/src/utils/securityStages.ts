@@ -7,6 +7,7 @@ import type { RuleFlowPathRule } from '@/types/rules'
 import { hasOwn } from './hasOwn.ts'
 import { conditionTargetLabel } from './customRuleLimits.ts'
 import { toV4Long, toV6BigInt } from './ipAddress.ts'
+import { tSafe as t } from '../i18n/tSafe.ts'
 
 interface SecurityStageIPListEntry { value: string; remark?: string }
 export interface SecurityStageIPList {
@@ -137,12 +138,12 @@ export interface CrsRuleFileOption { filename: string; category: string }
  * 文件名解析（组码/相位）在全仓只此一份——向导选项、级联叶、ghost 标签、
  * 阶段明细标签共用，避免外部命名契约变更时多点漏改。
  */
-interface CrsFilenameInfo { readonly phase: '请求' | '响应'; readonly code: string }
+interface CrsFilenameInfo { readonly phase: string; readonly code: string }
 
 export const parseCrsFilename = (filename: string): CrsFilenameInfo | null => {
   const match = /^(REQUEST|RESPONSE)-9(\d{2})-/i.exec(filename)
   if (!match) return null
-  return { phase: match[1].toUpperCase() === 'RESPONSE' ? '响应' : '请求', code: match[2] }
+  return { phase: match[1].toUpperCase() === 'RESPONSE' ? t('common.app.views.stages.crsPhaseResponse') : t('common.app.views.stages.crsPhaseRequest'), code: match[2] }
 }
 
 /**
@@ -241,10 +242,10 @@ export interface RuleFlowTarget {
 // 阶段编号体系：阶段 0 · 信任名单 → 阶段 1 · IP 访问控制 → 阶段 2 · 限流 → 阶段 3 · WAF
 // （STAGE_SHORT_TITLES 与本常量曾逐字同值双源，已合并为单一份）
 export const STAGE_TITLES: Record<0 | 1 | 2 | 3, string> = {
-  0: '阶段 0 · 信任名单',
-  1: '阶段 1 · IP 访问控制',
-  2: '阶段 2 · 限流',
-  3: '阶段 3 · WAF',
+  0: t('common.app.views.stages.title0'),
+  1: t('common.app.views.stages.title1'),
+  2: t('common.app.views.stages.title2'),
+  3: t('common.app.views.stages.title3'),
 }
 
 // 阶段副标题（流程弹框节点）与阶段 1 脚注：渲染链语义的唯一文案源。
@@ -255,9 +256,9 @@ export const STAGE_TITLES: Record<0 | 1 | 2 | 3, string> = {
 // id:5 只在「IP ACL 绕过模式占用 id:3」时承载同一信任名单并集
 // （security.go trustID 分支）——归信任族，不是白名单外拒绝。
 export const stageSubLabel = (stage: 1 | 2 | 3): string => {
-  if (stage === 1) return 'IP 名单 · 爬虫校验 · 地域 · 威胁库'
-  if (stage === 2) return '速率限制'
-  return '自定义 · CRS'
+  if (stage === 1) return t('common.app.views.stages.sub1')
+  if (stage === 2) return t('common.app.views.stages.sub2')
+  return t('common.app.views.stages.sub3')
 }
 
 /**
@@ -272,9 +273,9 @@ export const stageSubLabel = (stage: 1 | 2 | 3): string => {
  * 白名单成员仍会被爬虫校验拦下，排障时误判「规则失效」。
  */
 export const stage1FootnoteText = (trustDetectionBound: boolean): string => {
-  const base = '多策略合并预检：信任（阶段 0）→ 黑名单 → 遗留黑名单（旧字段）→ 白名单外拒绝（白名单命中豁免其后全部预检，含爬虫校验与地域拦截）→ 爬虫校验 → 地域拦截；未通过即终止'
+  const base = t('common.app.views.stages.footnote1Base')
   return trustDetectionBound
-    ? `${base}；命中信任名单的 IP：「类型=信任名单（stage0）」策略跳过本段与全部安全阶段，由独立轻量检测事务记录（动作=检测），不经过任何 WAF 引擎；mixed 等其他类型策略的信任命中为引擎内检测降级（仍逐段评估、仅记录不拦截）`
+    ? t('common.app.views.stages.footnote1TrustBound', { base })
     : base
 }
 
@@ -463,8 +464,8 @@ const buildStage0Rows = (policy: SecurityStagePolicy | undefined, ipLists: reado
   const rows: StageRow[] = []
   if (!policy || !hasTrustEntries(policy)) return rows
   const trustCount = mergeIpEntryCount(ipLists, parseIPList(policy.ip_whitelist), parseRefIds(policy.ip_whitelist_refs))
-  rows.push({ label: '信任名单', detail: trustCount === 0 ? '未配置' : `${trustCount} 条${policy.ip_whitelist_enabled === false ? '（未启用）' : ''}` })
-  rows.push({ label: '模式', detail: trustHitMode(policy.policy_type, policy.trust_detection) === 'detection' ? '保留检测记录（事件动作=检测）' : '直通上游（不产生安全事件）' })
+  rows.push({ label: t('common.app.views.stages.trustListLabel'), detail: trustCount === 0 ? t('common.app.views.stages.notConfigured') : t('common.app.views.stages.countLine', { count: trustCount }) + (policy.ip_whitelist_enabled === false ? t('common.app.views.stages.trustDisabledSuffix') : '') })
+  rows.push({ label: t('common.app.views.stages.modeLabel'), detail: trustHitMode(policy.policy_type, policy.trust_detection) === 'detection' ? t('common.app.views.stages.trustModeDetection') : t('common.app.views.stages.trustModePassthrough') })
   return rows
 }
 
@@ -497,17 +498,17 @@ export const formatAclModeDetail = (
 ): string => {
   const { aclCount, blCount, effective, inlineCount, refCount } = aclEffectiveCounts(ipLists, policy)
   // 独立黑名单无模式门——非 deny 模式下如实追告「仍在生效」（渲染侧照常拦截）
-  const blAlive = blCount > 0 && policy.ip_acl_mode !== 'deny' ? `；独立黑名单 ${blCount} 条仍生效` : ''
+  const blAlive = blCount > 0 && policy.ip_acl_mode !== 'deny' ? t('common.app.views.stages.blAliveSuffix', { count: blCount }) : ''
   // 计数分解（2026-09-25 用户裁定，通俗口径）：直接填写 vs 引用列表——只给一个
   // 总数时用户无法对账「我只加了 1 个 IP 为什么显示上万条」（引用列表含内置威胁
   // 名单，条目量巨大）。仅当两个来源同时存在时才展开；纯引用时标注来源；纯内联
   // 无歧义保持原形。
   const breakdown = inlineCount > 0 && refCount > 0
-    ? `（直接填写 ${inlineCount} + 引用列表 ${refCount}）`
+    ? t('common.app.views.stages.countBreakdown', { inline: inlineCount, ref: refCount })
     : inlineCount === 0 && refCount > 0
-      ? '（全部来自引用列表）'
+      ? t('common.app.views.stages.countFromRefsOnly')
       : ''
-  const total = breakdown !== '' ? `共 ${effective} 条${breakdown}` : `${effective} 条`
+  const total = breakdown !== '' ? t('common.app.views.stages.totalWithBreakdown', { count: effective, breakdown }) : t('common.app.views.stages.countLine', { count: effective })
   // allow 空生效集 = 引擎否定算子空集（恒拒）：空白名单可经确认式保存落库
   // （warning-not-block，用户裁定），摘要必须显性警示，否则用户看到「0 条」
   // 不会察觉全站被拒。但该告警以「ACL 在渲染」为前提——ip_acl_enabled=false
@@ -515,15 +516,15 @@ export const formatAclModeDetail = (
   // 告警在此形态是误报；两条结论（恒拒 / 独立黑名单仍生效）互不替代，
   // 零生效集分支同样要追告。
   if (policy.ip_acl_mode === 'allow') {
-    if (policy.ip_acl_enabled === false) return `白名单模式 · 未启用 ACL${blAlive}`
-    return effective === 0 ? `白名单模式 · ${total}（将拒绝所有请求）${blAlive}` : `白名单模式 · ${total}${blAlive}`
+    if (policy.ip_acl_enabled === false) return t('common.app.views.stages.allowDisabledAcl', { suffix: blAlive })
+    return effective === 0 ? t('common.app.views.stages.allowRejectAll', { total, suffix: blAlive }) : t('common.app.views.stages.allowTotal', { total, suffix: blAlive })
   }
-  if (policy.ip_acl_mode === '绕过') return `免检测模式 · ${total}${blAlive}`
+  if (policy.ip_acl_mode === '绕过') return t('common.app.views.stages.bypassMode', { total, suffix: blAlive })
   // 空/未知模式：名单存在但渲染侧不发射任何拒绝规则（空模式 ACL 零发射）——
   // 如实显示「未配置模式」而非「黑名单模式」，免误导用户以为名单在拦截。
-  if (policy.ip_acl_mode !== 'deny' && aclCount > 0) return `未配置模式 · ${total}${blAlive}`
-  if (aclCount > 0 && blCount > 0) return `黑名单模式 · ${effective} 条（名单 ${aclCount} + 独立 ${blCount}）`
-  return `黑名单模式 · ${total}`
+  if (policy.ip_acl_mode !== 'deny' && aclCount > 0) return t('common.app.views.stages.unsetMode', { total, suffix: blAlive })
+  if (aclCount > 0 && blCount > 0) return t('common.app.views.stages.denyModeSplit', { effective, acl: aclCount, bl: blCount })
+  return t('common.app.views.stages.denyModeTotal', { total })
 }
 
 // IP 快捷弹框「加入名单」动作的模式门控：ip_acl_list_refs 是黑/白
@@ -539,9 +540,9 @@ export const formatAclModeDetail = (
 // buildBlockPageErrorRoute / buildRateLimitErrorRoute），可能正是同链其他策略；
 // 逐策略归因由 resolveBlockPageAttribution 单源计算。行文案不得断言「回落默认」，
 // 否则多策略绑定下会显示错误目标（排障时误判用户看到哪张拦截页）。
-const BLOCK_PAGE_UNSET_403 = '未配置（跟随绑定链首个有效页，无则默认 403）'
-const BLOCK_PAGE_BROKEN_403 = '已失效（回落绑定链首个有效页）'
-const BLOCK_PAGE_BROKEN_429 = '已失效（回落绑定链首个有效页，无则默认 429）'
+const BLOCK_PAGE_UNSET_403 = t('common.app.views.stages.blockPageUnset403')
+const BLOCK_PAGE_BROKEN_403 = t('common.app.views.stages.blockPageBroken403')
+const BLOCK_PAGE_BROKEN_429 = t('common.app.views.stages.blockPageBroken429')
 const buildStage1Rows = (
   policy: SecurityStagePolicy | undefined,
   ipLists: readonly SecurityStageIPList[],
@@ -553,28 +554,28 @@ const buildStage1Rows = (
   // 恒拒，但正常写门不可达，此处同样维持已裁定的内容投影分层。
   if (policy && hasIPACLControl(policy)) {
     // 阶段 1 不再承载信任名单（阶段 0 独立；契约：阶段 1 策略创建/显式切换时服务端归一清除）
-    rows.push({ label: 'IP 访问控制', detail: formatAclModeDetail(ipLists, policy) })
+    rows.push({ label: t('common.app.views.stages.aclRowLabel'), detail: formatAclModeDetail(ipLists, policy) })
   }
   // 地域拦截（启用态）：启用 → 区域数；关闭但保留区域 → 已关闭（保留 N 区域）
   const geoCount = parseGeoipCountryCount(policy?.geoip_countries ?? '')
   if (policy?.has_geoip || geoCount > 0) {
-    const geoModeLabel = policy?.geoip_mode === 'allow' ? '仅允许所选区域' : '拦截所选区域'
-    rows.push({ label: '地域拦截', detail: policy?.has_geoip ? `${geoModeLabel} · ${geoCount} 区域` : `已关闭（保留 ${geoCount} 区域）` })
+    const geoModeLabel = policy?.geoip_mode === 'allow' ? t('common.app.views.stages.geoAllowMode') : t('common.app.views.stages.geoDenyMode')
+    rows.push({ label: t('common.app.views.stages.geoRowLabel'), detail: policy?.has_geoip ? t('common.app.views.stages.geoActive', { mode: geoModeLabel, count: geoCount }) : t('common.app.views.stages.geoClosed', { count: geoCount }) })
   }
   // 爬虫豁免属于阶段 1 真实渲染面：仅在存在阶段 1 能力时显示「未启用」，
   // 避免给纯阶段 2/3 策略虚增阶段 1 组；显式空引擎集=全部引擎。
   if (policy && (policy.geoip_crawler_exempt === true || rows.length > 0)) {
     const engineCount = parseIPList(policy.geoip_crawler_engines ?? '').length
     const detail = policy.geoip_crawler_exempt === true
-      ? `已启用 · ${engineCount > 0 ? `豁免 ${engineCount} 个引擎` : '全部引擎'}`
-      : '未启用'
-    rows.push({ label: '爬虫豁免', detail })
+      ? t('common.app.views.stages.crawlerEnabled', { detail: engineCount > 0 ? t('common.app.views.stages.crawlerExemptEngines', { count: engineCount }) : t('common.app.views.stages.crawlerAllEngines') })
+      : t('common.app.views.stages.crawlerOff')
+    rows.push({ label: t('common.app.views.stages.crawlerRowLabel'), detail })
   }
   // 拦截页行（策略级页，触发归因口径）：HTTP 渲染面（403/429 错误路由与逐策略归因）。
   // TCP（L4）拒绝=断连，拦截页整族不参与——统一「不支持」，不得用
   // 「未配置（跟随绑定链首个有效页…）」这类 HTTP 语义误导排障（2026-10-31 用户裁定）。
   if (isTcp) {
-    if (rows.length > 0) rows.push({ label: '拦截页', detail: '不支持' })
+    if (rows.length > 0) rows.push({ label: t('common.app.views.stages.blockPageRowLabel'), detail: t('common.app.views.stages.tcpNotSupported') })
     return rows
   }
   // 拦截页行（策略级页，触发归因口径）：已配 → 页名（状态码）；页已删/内容空 →
@@ -586,10 +587,10 @@ const buildStage1Rows = (
     const page = s1PageId > 0 ? blockPages.find((p) => p.id === s1PageId) : undefined
     const broken = s1PageId > 0 && (!page || (page.content ?? '') === '')
     rows.push({
-      label: '拦截页',
+      label: t('common.app.views.stages.blockPageRowLabel'),
       detail: s1PageId <= 0 ? BLOCK_PAGE_UNSET_403
         : broken ? BLOCK_PAGE_BROKEN_403
-        : `${page?.name}（状态码 ${policy?.block_status_code || 403}）`,
+        : t('common.app.views.stages.pageWithStatus', { name: page?.name, status: policy?.block_status_code || 403 }),
     })
   }
   return rows
@@ -600,10 +601,10 @@ const buildStage1Rows = (
 // 列表、事件详情、流程弹框需要人工翻译；未登记的新 mode 回落原文 token
 // （fail-visible：不会静默显示空串）。
 export const WAF_MODE_TEXT: Readonly<Record<string, string>> = {
-  blocking: '拦截',
-  detection: '检测',
-  custom_only: '仅自定义',
-  off: '关闭',
+  blocking: t('common.app.views.stages.wafBlocking'),
+  detection: t('common.app.views.stages.wafDetection'),
+  custom_only: t('common.app.views.stages.wafCustomOnly'),
+  off: t('common.app.views.stages.wafOff'),
 }
 
 /**
@@ -628,17 +629,17 @@ const buildStage3Rows = (
   if (mode === 'off') return rows
   // 模式行词取 WAF_MODE_TEXT（与列表摘要/触发详情同源），明细行各模式专属
   const modeWord = wafModeLabel(mode)
-  if (mode === 'blocking') rows.push({ label: `WAF（${modeWord}）`, detail: '命中即阻断' })
-  else if (mode === 'detection') rows.push({ label: `WAF（${modeWord}）`, detail: '仅记录不阻断' })
+  if (mode === 'blocking') rows.push({ label: t('common.app.views.stages.wafRowLabel', { mode: modeWord }), detail: t('common.app.views.stages.wafDetailBlocking') })
+  else if (mode === 'detection') rows.push({ label: t('common.app.views.stages.wafRowLabel', { mode: modeWord }), detail: t('common.app.views.stages.wafDetailDetection') })
   // 仅自定义：CRS 不参与评估由模式名承载，明细行保持短句不折行（2026-09-21 用户裁定）
-  else if (mode === 'custom_only') rows.push({ label: `WAF（${modeWord}）`, detail: '自定义规则按动作执行' })
+  else if (mode === 'custom_only') rows.push({ label: t('common.app.views.stages.wafRowLabel', { mode: modeWord }), detail: t('common.app.views.stages.wafDetailCustomOnly') })
   // 「CRS 规则组」行（blocking/detection 才有 CRS 评估；0=全部默认）
   if (mode === 'blocking' || mode === 'detection') {
     const crsRaw = policy?.crs_rule_groups
     const crsCount = Array.isArray(crsRaw) ? crsRaw.length : parseIPList(typeof crsRaw === 'string' ? crsRaw : undefined).length
-    rows.push({ label: 'CRS 规则组', detail: crsCount > 0 ? `${crsCount} 组` : '全部（默认）' })
+    rows.push({ label: t('common.app.views.stages.crsGroupsRowLabel'), detail: crsCount > 0 ? t('common.app.views.stages.crsGroupsCount', { count: crsCount }) : t('common.app.views.stages.crsGroupsAll') })
   }
-  if (policy?.has_custom_rules) rows.push({ label: '自定义规则', detail: `${policy.custom_rules_count} 条` })
+  if (policy?.has_custom_rules) rows.push({ label: t('common.app.views.stages.customRulesRowLabel'), detail: t('common.app.views.stages.customRulesCount', { count: policy.custom_rules_count }) })
   // 「拦截页」行（触发归因口径）：仅策略级页——已配 → 页名（状态码 X）；
   // 页已删/内容空 → 已失效（回落绑定链首个有效页 = BLOCK_PAGE_BROKEN_403）；
   // 未配 → BLOCK_PAGE_UNSET_403。真实回落目标由绑定链兜底路由决定
@@ -648,10 +649,10 @@ const buildStage3Rows = (
   const page = pageId > 0 ? blockPages.find((p) => p.id === pageId) : undefined
   const pageBroken = pageId > 0 && (!page || (page.content ?? '') === '')
   rows.push({
-    label: '拦截页',
+    label: t('common.app.views.stages.blockPageRowLabel'),
     detail: pageId <= 0 ? BLOCK_PAGE_UNSET_403
       : pageBroken ? BLOCK_PAGE_BROKEN_403
-      : `${page?.name}（状态码 ${binding.block_status_code || 403}）`,
+      : t('common.app.views.stages.pageWithStatus', { name: page?.name, status: binding.block_status_code || 403 }),
   })
   return rows
 }
@@ -689,8 +690,8 @@ export const buildStageModel = (
       stage0Groups.push({
         ...base,
         rows: [
-          { label: '信任名单', detail: '未配置' },
-          { label: '模式', detail: trustHitMode(policy.policy_type, policy.trust_detection) === 'detection' ? '保留检测记录（事件动作=检测）' : '直通上游（不产生安全事件）' },
+          { label: t('common.app.views.stages.trustListLabel'), detail: t('common.app.views.stages.notConfigured') },
+          { label: t('common.app.views.stages.modeLabel'), detail: trustHitMode(policy.policy_type, policy.trust_detection) === 'detection' ? t('common.app.views.stages.trustModeDetection') : t('common.app.views.stages.trustModePassthrough') },
         ],
       })
     }
@@ -700,7 +701,7 @@ export const buildStageModel = (
 
     // 阶段 2：限流（全部策略的限流集中在 WAF 之前，拦截恒 429）
     if (policy?.has_rate_limit) {
-      const s2rows = [{ label: '速率限制', detail: `${policy.rate_limit_rps} 次/秒 · 突发 ${policy.rate_limit_burst} 次` }]
+      const s2rows = [{ label: t('common.app.views.stages.rateLimitRowLabel'), detail: t('common.app.views.stages.rateLimitSummary', { rps: policy.rate_limit_rps, burst: policy.rate_limit_burst }) }]
       // 策略级拦截页（stage2 可配策略页，429 时渲染；未配不虚增行）
       const s2PageId = binding.block_page_id ?? policy?.block_page_id ?? 0
       if (s2PageId > 0) {
@@ -710,8 +711,8 @@ export const buildStageModel = (
         // 其余阶段分裂）。
         const broken = !page || (page.content ?? '') === ''
         s2rows.push({
-          label: '拦截页（策略页）',
-          detail: broken ? BLOCK_PAGE_BROKEN_429 : `${page.name}（429 时渲染）`,
+          label: t('common.app.views.stages.stage2PageLabel'),
+          detail: broken ? BLOCK_PAGE_BROKEN_429 : t('common.app.views.stages.pageOn429', { name: page.name }),
         })
       }
       stage2Groups.push({ ...base, rows: s2rows })
@@ -742,7 +743,7 @@ export const buildStageModel = (
         title: STAGE_TITLES[2],
         enabled: stage2Groups.length > 0,
         groups: stage2Groups,
-        footnote: '限流拦截恒为 429（不产生安全事件，计数见规则指标）',
+        footnote: t('common.app.views.stages.stage2Footnote'),
       },
       {
         stage: 3,
@@ -768,7 +769,7 @@ const mergeIpEntryDetails = (
     const v = raw.trim()
     if (v === '' || seen.has(v)) continue
     seen.add(v)
-    out.push({ value: v, source: '内联' })
+    out.push({ value: v, source: t('common.app.views.stages.sourceInline') })
   }
   for (const id of refs) {
     const list = ipLists.find((l) => l.id === id)
@@ -777,7 +778,7 @@ const mergeIpEntryDetails = (
       const v = entry.value.trim()
       if (v === '' || seen.has(v)) continue
       seen.add(v)
-      out.push({ value: v, remark: entry.remark || undefined, source: `列表：${list.name ?? `#${id}`}` })
+      out.push({ value: v, remark: entry.remark || undefined, source: t('common.app.views.stages.sourceList', { name: list.name ?? `#${id}` }) })
     }
   }
   return out
@@ -791,15 +792,15 @@ const crsGroupLabel = (groupCode: string, crsFiles: readonly CrsRuleFileOption[]
   const file = crsFiles.find((r) => parseCrsFilename(r.filename)?.code === groupCode)
   if (!file) return groupCode
   const info = parseCrsFilename(file.filename)
-  return `${info?.phase ?? '请求'} · 9${groupCode} · ${file.category}`
+  return t('common.app.views.stages.crsGroupTag', { phase: info?.phase ?? t('common.app.views.stages.crsPhaseRequest'), code: groupCode, category: file.category })
 }
 
 // 限流口径文案（与后端 buildRateLimitHandler 双 zone 语义一致）：
 // burst > 0 → 1s 窗口封顶 rps+burst（瞬时），60s 窗口封顶 rps×60（持续）；burst=0 → 单 1s 窗口
 const rateLimitDetailCaption = (rps: number, burst: number): string =>
   burst > 0
-    ? `1s 窗口上限 ${rps + burst} 次（含突发）· 60s 窗口上限 ${rps * 60} 次（持续 ${rps} 次/秒）`
-    : `1s 窗口上限 ${rps} 次`
+    ? t('common.app.views.stages.rateLimitCaptionDual', { burstCap: rps + burst, minuteCap: rps * 60, rps })
+    : t('common.app.views.stages.rateLimitCaptionSingle', { rps })
 
 // 原生 JSON（/security/rules/:id/policy 的 RawMessage 字段）→ 数字 id 数组
 //（兼容对象形态 [{id:…}]；自此导出为单源——SecurityPolicies 的
@@ -847,7 +848,7 @@ const buildGroupDetails = (
       const refs = parseRefIds(policy.ip_acl_list_refs)
       const lists = refs.map((id) => {
         const l = ipLists.find((x) => x.id === id)
-        return { name: l?.name ?? `列表 #${id}`, count: l?.entry_count ?? 0 }
+        return { name: l?.name ?? t('common.app.views.stages.listNameFallback', { id }), count: l?.entry_count ?? 0 }
       })
       if (lists.length > 0) details.aclLists = lists
     }
@@ -873,7 +874,7 @@ const buildGroupDetails = (
         const rule = sources?.customRules?.find((r) => r.id === id)
         return rule
           ? { id, name: rule.name, action: rule.action || 'block', targets: (rule.conditions ?? []).map((c) => conditionTargetLabel(c.target, c.header_name)).join(' / '), score: rule.score ?? 0, enabled: rule.enabled !== false }
-          : { id, name: `规则 #${id}`, action: '-', targets: '', score: 0, enabled: true }
+          : { id, name: t('common.app.views.stages.ruleNameFallback', { id }), action: '-', targets: '', score: 0, enabled: true }
       })
     }
     const groups = parseUnknownStrings(full.crs_rule_groups)
@@ -915,15 +916,15 @@ export const POLICY_TYPE_LABELS: Record<SecurityPolicyType, string> = {
   stage1: STAGE_TITLES[1],
   stage2: STAGE_TITLES[2],
   stage3: STAGE_TITLES[3],
-  mixed: '混合策略（兼容旧版）',
+  mixed: t('common.app.views.stages.mixedPolicyLabel'),
 }
 
 export const POLICY_TYPE_SHORT_LABELS: Record<SecurityPolicyType, string> = {
-  stage0: '阶段 0',
-  stage1: '阶段 1',
-  stage2: '阶段 2',
-  stage3: '阶段 3',
-  mixed: '混合',
+  stage0: t('common.app.views.stages.shortStage0'),
+  stage1: t('common.app.views.stages.shortStage1'),
+  stage2: t('common.app.views.stages.shortStage2'),
+  stage3: t('common.app.views.stages.shortStage3'),
+  mixed: t('common.app.views.stages.shortMixed'),
 }
 
 // 策略列表默认 tab：按阶段顺序取第一个有条目的类型（阶段 0 → 1 → 2 → 3 → 混合），
@@ -1334,7 +1335,7 @@ export const MAX_POLICIES_PER_RULE = 8
 // 无 429/WAF 引擎面）。与后端绑定校验同源（400 文案同款），拒绝动作=断连。
 // SecurityBindingEditor（规则侧分区置灰 + 策略侧选择器）与 SecurityPolicies
 // （向导关联规则选择器）共用本谓词，禁止第二份类型清单。
-export const TCP_BIND_UNSUPPORTED_REASON = '该策略含 TCP 不支持的能力（限流/WAF）'
+export const TCP_BIND_UNSUPPORTED_REASON = t('common.app.views.stages.tcpUnsupportedReason')
 export const policySupportsTcp = (type: SecurityPolicyType | undefined): boolean =>
   type === 'stage0' || type === 'stage1'
 
@@ -1714,11 +1715,11 @@ export const addressAllowDenyConflictText = (input: {
 }): string => {
   if (input.kind === 'trust' && input.policyType === 'stage0') {
     return input.trustDetection === true
-      ? '阶段 0 信任跨策略优先生效：保留检测模式跳过全部安全检测，仅由独立轻量检测事务记录（动作=检测）'
-      : '阶段 0 信任跨策略优先生效：直通模式跳过全部安全检测'
+      ? t('common.app.views.stages.conflictTrustDetection')
+      : t('common.app.views.stages.conflictTrustPassthrough')
   }
-  const allowance = input.kind === 'trust' ? '信任' : '允许'
-  return `${allowance}不跨策略生效，该地址仍会被「${input.denyPolicyName}」拦截`
+  const allowance = input.kind === 'trust' ? t('common.app.views.stages.allowanceTrust') : t('common.app.views.stages.allowanceAllow')
+  return t('common.app.views.stages.conflictNotCrossPolicy', { allowance, policy: input.denyPolicyName })
 }
 
 /**

@@ -14,25 +14,28 @@
 import { compareVersion } from './securityStages.ts'
 import { hasOwn } from './hasOwn.ts'
 import { formatInt } from './formatInt.ts'
+import { tSafe as t } from '../i18n/tSafe.ts'
 
 type LibraryTagType = 'success' | 'warning' | 'danger' | 'info'
 
+// 状态 → 文案表（词条键在 locales views.ruleLib 母本）。模块首帧快照与
+// certJobStatus 同口径：键集为封闭枚举、locale 切换整页重载；hasOwn 守卫语义不变。
 const STATUS_LABELS: Record<string, string> = {
-  missing: '未安装',
-  'not-installed': '未安装',
-  never: '未更新',
-  failed: '更新失败',
-  running: '更新中',
-  checking: '检查中',
-  downloading: '下载中',
-  installing: '安装中',
-  reloading: '重载中',
-  success: '已最新',
-  idle: '已最新',
-  cancelled: '已取消',
-  disabled: '已关闭',
+  missing: t('common.app.views.ruleLib.status.missing'),
+  'not-installed': t('common.app.views.ruleLib.status.notInstalled'),
+  never: t('common.app.views.ruleLib.status.never'),
+  failed: t('common.app.views.ruleLib.status.failed'),
+  running: t('common.app.views.ruleLib.status.running'),
+  checking: t('common.app.views.ruleLib.status.checking'),
+  downloading: t('common.app.views.ruleLib.status.downloading'),
+  installing: t('common.app.views.ruleLib.status.installing'),
+  reloading: t('common.app.views.ruleLib.status.reloading'),
+  success: t('common.app.views.ruleLib.status.success'),
+  idle: t('common.app.views.ruleLib.status.success'),
+  cancelled: t('common.app.views.ruleLib.status.cancelled'),
+  disabled: t('common.app.views.ruleLib.status.disabled'),
   // 零源多源库（威胁/爬虫）的占位行状态：与卡头健康标签「未配置」同词。
-  'not-configured': '未配置',
+  'not-configured': t('common.app.views.ruleLib.status.notConfigured'),
 }
 
 // 状态词表是普通对象：后端异常值（'constructor'/'toString' 等）直接下标会命中
@@ -130,11 +133,11 @@ export const libraryHealthTag = (
   name: string,
   state: { loadError: boolean; available?: boolean; status?: string; loaded?: boolean },
 ): LibraryHealthTag => {
-  if (state.loaded === false) return { label: `${name} · 加载中`, type: 'info' }
-  if (state.loadError) return { label: `${name} · 加载失败`, type: 'danger' }
-  if (state.available === false) return { label: `${name} · 未安装`, type: 'danger' }
-  if (state.status === 'not-installed') return { label: `${name} · 未安装`, type: 'warning' }
-  if (state.status === 'never') return { label: `${name} · 未更新`, type: 'warning' }
+  if (state.loaded === false) return { label: t('common.app.views.ruleLib.health.loading', { name }), type: 'info' }
+  if (state.loadError) return { label: t('common.app.views.ruleLib.health.loadFailed', { name }), type: 'danger' }
+  if (state.available === false) return { label: t('common.app.views.ruleLib.health.notInstalled', { name }), type: 'danger' }
+  if (state.status === 'not-installed') return { label: t('common.app.views.ruleLib.health.notInstalled', { name }), type: 'warning' }
+  if (state.status === 'never') return { label: t('common.app.views.ruleLib.health.neverUpdated', { name }), type: 'warning' }
   // 持久 update_status 的失败/进行中/关闭态必须显性——该列可为
   // failed（更新失败落库），活动期还会 overlay checking/downloading/installing/
   // reloading/running。此前一律落「正常」，与同卡状态列（libraryStatusTagType）
@@ -143,7 +146,7 @@ export const libraryHealthTag = (
   if (status !== '' && status !== 'success' && status !== 'idle') {
     return { label: `${name} · ${libraryStatusLabel(status)}`, type: libraryStatusTagType(status) }
   }
-  return { label: `${name} · 正常`, type: 'success' }
+  return { label: t('common.app.views.ruleLib.health.normal', { name }), type: 'success' }
 }
 
 /** 多源库（威胁情报库/爬虫地址库）健康标签：更新中/部分失败为 warning；
@@ -154,15 +157,15 @@ export const librarySourceHealthTag = (
   loadError: boolean,
   loaded = true,
 ): LibraryHealthTag => {
-  if (!loaded) return { label: `${name} · 加载中`, type: 'info' }
-  if (loadError) return { label: `${name} · 加载失败`, type: 'danger' }
-  if (sources.length === 0) return { label: `${name} · 未配置`, type: 'warning' }
+  if (!loaded) return { label: t('common.app.views.ruleLib.health.loading', { name }), type: 'info' }
+  if (loadError) return { label: t('common.app.views.ruleLib.health.loadFailed', { name }), type: 'danger' }
+  if (sources.length === 0) return { label: t('common.app.views.ruleLib.sourceHealth.notConfigured', { name }), type: 'warning' }
   const active = sources.filter((s) => s.update_enabled !== false)
-  if (active.length === 0) return { label: `${name} · 已关闭`, type: 'info' }
-  if (active.some((s) => s.update_status === 'running')) return { label: `${name} · 更新中`, type: 'warning' }
+  if (active.length === 0) return { label: t('common.app.views.ruleLib.sourceHealth.disabled', { name }), type: 'info' }
+  if (active.some((s) => s.update_status === 'running')) return { label: t('common.app.views.ruleLib.sourceHealth.updating', { name }), type: 'warning' }
   const failed = active.filter((s) => s.update_status === 'failed').length
-  if (failed > 0) return { label: `${name} · ${failed} 源更新失败`, type: 'warning' }
-  return { label: `${name} · 正常`, type: 'success' }
+  if (failed > 0) return { label: t('common.app.views.ruleLib.sourceHealth.nFailed', { name, count: failed }), type: 'warning' }
+  return { label: t('common.app.views.ruleLib.health.normal', { name }), type: 'success' }
 }
 
 /**
@@ -177,7 +180,7 @@ export const librarySourceHealthTag = (
  * de/fr 用户还会把千分位读成小数点。
  */
 export const crsRuleCountLabel = (ruleCount: number | undefined): string =>
-  ruleCount && ruleCount > 0 ? `${formatInt(ruleCount)} 条规则` : '—'
+  ruleCount && ruleCount > 0 ? t('common.app.views.ruleLib.ruleCountUnit', { count: formatInt(ruleCount) }) : '—'
 
 /**
  * 规则库「定时更新」保存前校验：返回错误文案，合法时 null。
@@ -185,8 +188,8 @@ export const crsRuleCountLabel = (ruleCount: number | undefined): string =>
  * 差异。改为显式拒绝保存（不代填），由组件以 warning 呈现。
  */
 export const libraryScheduleError = (days: readonly number[], time: string | null | undefined): string | null => {
-  if (days.length === 0) return '至少选择一天'
-  if (!time) return '请选择时间'
+  if (days.length === 0) return t('common.app.views.ruleLib.scheduleNeedDay')
+  if (!time) return t('common.app.views.ruleLib.scheduleNeedTime')
   return null
 }
 

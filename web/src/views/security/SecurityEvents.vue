@@ -4,13 +4,13 @@
       <div class="header-left">
         <h2 class="page-title">
           <el-icon class="title-icon"><Warning /></el-icon>
-          事件日志
+          {{ t('app.security.events.title') }}
         </h2>
-        <p class="page-desc">查看安全拦截与检测事件记录</p>
+        <p class="page-desc">{{ t('app.security.events.desc') }}</p>
       </div>
       <!-- 刷新联动自动封禁状态卡——建议列表/今日封禁/名单数不再
            停留在进入页面时的快照 -->
-      <el-button :icon="Refresh" @click="refreshPage">刷新</el-button>
+      <el-button :icon="Refresh" @click="refreshPage">{{ t('app.security.events.refresh') }}</el-button>
     </div>
 
     <!-- 自动封禁状态卡：状态/口径/窗口/阈值/时长/今日封禁/名单数；
@@ -19,7 +19,7 @@
          由「启用后按配置调度执行」） -->
     <el-card class="autoban-card" v-loading="autobanStatusLoading">
       <div v-if="autobanStatusError" class="info-note-bar autoban-warn-bar">
-        <span class="info-note-desc">自动封禁状态加载失败：控制项已禁用（不影响事件日志主功能），请稍后刷新重试。</span>
+        <span class="info-note-desc">{{ t('app.security.events.statusLoadFail') }}</span>
       </div>
       <div v-else-if="autobanBlockedReason" class="info-note-bar">
         <span class="info-note-desc">{{ autobanBlockedReason }}</span>
@@ -38,51 +38,51 @@
           >
             <div class="autoban-title">
               <el-icon class="title-icon"><Lock /></el-icon>
-              <span>自动封禁</span>
+              <span>{{ t('app.security.events.autobanTitle') }}</span>
               <el-tag :type="autobanStatusError ? 'info' : autobanStatus.enabled ? (autobanStatus.dry_run ? 'warning' : 'success') : 'info'" size="small" effect="plain">
                 {{ autobanStateLabel(autobanStatusError, autobanStatus.enabled, autobanStatus.dry_run) }}
               </el-tag>
               <!-- 调度仅主节点执行——从端徽章标示+写按钮禁用。加载/读取失败均不渲染：
                    初值 is_master=false 会在未知态谎称「仅主节点调度」，且徽章闪现会把参数区推向右侧 -->
-              <el-tag v-if="!autobanStatusLoading && !autobanStatusError && !autobanStatus.is_master" type="info" size="small" effect="plain">仅主节点调度</el-tag>
+              <el-tag v-if="!autobanStatusLoading && !autobanStatusError && !autobanStatus.is_master" type="info" size="small" effect="plain">{{ t('app.security.events.masterOnlyBadge') }}</el-tag>
             </div>
             <div class="autoban-stats">
-              <span class="autoban-stat">口径 <b>{{ autobanStatValue(autobanStatusError, autobanScopeText) }}</b></span>
+              <span class="autoban-stat">{{ t('app.security.events.statScope') }} <b>{{ autobanStatValue(autobanStatusError, autobanScopeText) }}</b></span>
               <el-divider direction="vertical" />
-              <span class="autoban-stat">窗口 <b>{{ autobanStatValue(autobanStatusError, autobanStatus.window_minutes, ' 分钟') }}</b></span>
+              <span class="autoban-stat">{{ t('app.security.events.statWindow') }} <b>{{ autobanStatValue(autobanStatusError, autobanStatus.window_minutes, t('app.security.events.suffixMinutes')) }}</b></span>
               <el-divider direction="vertical" />
-              <span class="autoban-stat">阈值 <b>{{ autobanStatValue(autobanStatusError, autobanStatus.threshold, ' 次') }}</b></span>
+              <span class="autoban-stat">{{ t('app.security.events.statThreshold') }} <b>{{ autobanStatValue(autobanStatusError, autobanStatus.threshold, t('app.security.events.suffixTimes')) }}</b></span>
               <el-divider direction="vertical" />
-              <span class="autoban-stat">时长 <b>{{ autobanStatValue(autobanStatusError, autobanDurationText) }}</b></span>
+              <span class="autoban-stat">{{ t('app.security.events.statDuration') }} <b>{{ autobanStatValue(autobanStatusError, autobanDurationText) }}</b></span>
               <el-divider direction="vertical" />
-              <span class="autoban-stat">今日封禁 <b class="autoban-danger">{{ autobanStatValue(autobanStatusError, autobanStatus.banned_today) }}</b></span>
+              <span class="autoban-stat">{{ t('app.security.events.statTodayBanned') }} <b class="autoban-danger">{{ autobanStatValue(autobanStatusError, autobanStatus.banned_today) }}</b></span>
               <el-divider direction="vertical" />
-              <span class="autoban-stat">名单 <b>{{ autobanStatValue(autobanStatusError, autobanStatus.list_entries, ' 条') }}</b></span>
+              <span class="autoban-stat">{{ t('app.security.events.statListEntries') }} <b>{{ autobanStatValue(autobanStatusError, autobanStatus.list_entries, t('app.security.events.suffixEntries')) }}</b></span>
             </div>
           </div>
         </el-tooltip>
         <div class="autoban-actions">
           <template v-if="autobanStatus.enabled">
-            <el-button size="small" type="danger" plain :disabled="!autobanWritable" :loading="autobanToggling" @click="toggleAutobanEnabled">禁用</el-button>
-            <el-button size="small" plain :disabled="!autobanWritable" @click="openAutobanConfig">编辑</el-button>
+            <el-button size="small" type="danger" plain :disabled="!autobanWritable" :loading="autobanToggling" @click="toggleAutobanEnabled">{{ t('app.security.events.actionDisable') }}</el-button>
+            <el-button size="small" plain :disabled="!autobanWritable" @click="openAutobanConfig">{{ t('app.security.events.actionEdit') }}</el-button>
           </template>
-          <el-button v-else size="small" type="success" plain :disabled="!autobanWritable" @click="openAutobanConfigForEnable">启用</el-button>
+          <el-button v-else size="small" type="success" plain :disabled="!autobanWritable" @click="openAutobanConfigForEnable">{{ t('app.security.events.actionEnable') }}</el-button>
         </div>
       </div>
       <!-- 未生效黄条：判据=ban_effective（名单非空且被启用+deny 的策略引用），
            不再用 list_referenced（四面引用集会把「仅被白名单/受信代理引用」误当生效） -->
       <div v-if="autobanIneffective" class="info-note-bar autoban-warn-bar">
-        <span class="info-note-desc">「自动封禁名单」尚未生效——名单为空，或尚未被启用中的 IP 访问控制（deny）策略引用；请到「安全规则 → IP 地址列表」将该名单引用到 IP 访问控制（deny）策略</span>
+        <span class="info-note-desc">{{ t('app.security.events.ineffectiveNotice') }}</span>
       </div>
       <!-- 喂入源降级：补采/轮转停摆或写侧持续失败时披露原因。实时 IPC 入库仍在
            运行并继续喂入计数器——兜底文案不得声称「计数不会增长」 -->
       <div v-if="autobanFeedDegraded" class="info-note-bar autoban-warn-bar">
-        <span class="info-note-desc">数据源降级：{{ autobanStatus.feed_degraded_reason || '安全事件补采/日志轮转已暂停，实时 IPC 入库仍在运行（自动封禁计数仍会随实时事件增长）' }}</span>
+        <span class="info-note-desc">{{ t('app.security.events.feedDegradedPrefix') }}{{ autobanStatus.feed_degraded_reason || t('app.security.events.feedDegradedDefault') }}</span>
       </div>
       <!-- 观察模式建议列表：dry-run 下达阈值 IP（不封禁，供评估阈值/口径） -->
       <template v-if="autobanStatus.enabled && autobanStatus.dry_run && (autobanStatus.suggestions?.length ?? 0) > 0">
         <div class="info-note-bar autoban-warn-bar">
-          <span class="info-note-desc">观察模式：以下 IP 在 {{ autobanStatus.window_minutes }} 分钟窗口内达到 {{ autobanStatus.threshold }} 次阈值（仅记录建议，不写入名单）</span>
+          <span class="info-note-desc">{{ t('app.security.events.suggestionSummary', { minutes: autobanStatus.window_minutes, times: autobanStatus.threshold }) }}</span>
         </div>
         <el-table :data="autobanStatus.suggestions" size="small" max-height="320" :header-cell-style="{ background: '#f9fafb' }">
           <el-table-column label="IP" min-width="230">
@@ -91,25 +91,25 @@
               <IPLocationAction :ip="row.ip" :location="row.ip_location || ''" />
             </template>
           </el-table-column>
-          <el-table-column label="命中次数" width="110" align="center" sortable :sort-by="'count'" :sort-orders="['descending']">
+          <el-table-column :label="t('app.security.events.colHitCount')" width="110" align="center" sortable :sort-by="'count'" :sort-orders="['descending']">
             <template #default="{ row }"><span :style="suggestionCountStyle(row.count)">{{ row.count }}</span></template>
           </el-table-column>
-          <el-table-column label="阈值倍数" min-width="150" align="center">
+          <el-table-column :label="t('app.security.events.colThresholdRatio')" min-width="150" align="center">
             <template #default="{ row }">
               <el-progress :percentage="Math.min(100, Math.round(row.count / Math.max(1, autobanStatus.threshold) * 100))" :stroke-width="8" :show-text="false" :color="suggestionProgressColor(row.count)" style="max-width: 130px; display: inline-block; vertical-align: middle;" />
               <span class="text-secondary" style="margin-left: 6px;">{{ (row.count / Math.max(1, autobanStatus.threshold)).toFixed(1) }}×</span>
             </template>
           </el-table-column>
-          <el-table-column label="窗口内首末" min-width="190">
+          <el-table-column :label="t('app.security.events.colWindowSpan')" min-width="190">
             <template #default="{ row }"><span class="text-secondary">{{ suggestionWindowSpan(row as AutobanSuggestion) }}</span></template>
           </el-table-column>
-          <el-table-column label="建议时长" width="100" align="center">
+          <el-table-column :label="t('app.security.events.colSuggestedDuration')" width="100" align="center">
             <template #default>
               <el-tag size="small" effect="plain" type="warning">{{ autobanDurationText }}</el-tag>
             </template>
           </el-table-column>
         </el-table>
-        <div class="form-tip-inline" v-if="(autobanStatus.suggestions?.length ?? 0) >= 50">仅展示命中次数最多的前 50 条，完整建议见任务日志</div>
+        <div class="form-tip-inline" v-if="(autobanStatus.suggestions?.length ?? 0) >= 50">{{ t('app.security.events.suggestionsLimit') }}</div>
       </template>
     </el-card>
 
@@ -122,27 +122,27 @@
           v-model="filters.timeRange"
           name="event-time-range"
           type="datetimerange"
-          range-separator="至"
-          start-placeholder="开始时间"
-          end-placeholder="结束时间"
+          :range-separator="t('app.security.events.rangeSeparator')"
+          :start-placeholder="t('app.security.events.startTime')"
+          :end-placeholder="t('app.security.events.endTime')"
           format="YYYY-MM-DD HH:mm:ss"
           value-format="YYYY-MM-DD HH:mm:ss"
           :default-time="[new Date(2000, 0, 1, 0, 0, 0), new Date(2000, 0, 1, 23, 59, 59)]"
           class="events-filter-date-range"
         />
-        <el-select v-model="filters.action" placeholder="动作" clearable style="width: 90px">
-          <el-option label="拦截" value="blocked" />
-          <el-option label="检测" value="logged" />
+        <el-select v-model="filters.action" :placeholder="t('app.security.events.filterAction')" clearable style="width: 90px">
+          <el-option :label="t('app.security.events.actionBlocked')" value="blocked" />
+          <el-option :label="t('app.security.events.actionLogged')" value="logged" />
         </el-select>
         <!-- 协议类型筛选：TCP（L4 断连事件）/HTTP（waf 口径，含带外 NULL 归并）；
              值原样透传 event_type 查询参数（后端精确匹配） -->
-        <el-select v-model="filters.event_type" placeholder="类型" clearable style="width: 86px">
+        <el-select v-model="filters.event_type" :placeholder="t('app.security.events.filterType')" clearable style="width: 86px">
           <el-option label="TCP" value="tcp" />
           <el-option label="HTTP" value="waf" />
         </el-select>
         <!-- （用户需求）：规则 ID 筛选替换为三列（负载规则/触发规则/策略）
              服务端筛选（rule_name/rule_triggered/policy_name LIKE）。 -->
-        <el-input v-model="filters.rule_name" placeholder="负载规则" clearable style="width: 100px" @keyup.enter="applyFilters" />
+        <el-input v-model="filters.rule_name" :placeholder="t('app.security.events.rulePlaceholder')" clearable style="width: 100px" @keyup.enter="applyFilters" />
         <!-- 触发规则筛选：多选 + 头部全选（勾的就是看的，统一正向心智）。
              全选（八类全中且无自定义 tag）或空选 = 不过滤，不发送参数；子集或含
              自定义 tag 时全部选中值英文逗号连接发送 rule_triggered（后端逐段按
@@ -157,7 +157,7 @@
           collapse-tags
           collapse-tags-tooltip
           :max-collapse-tags="1"
-          placeholder="触发阶段 / 规则 ID"
+          :placeholder="t('app.security.events.triggeredPlaceholder')"
           style="width: 170px"
           popper-class="triggered-filter-popper"
         >
@@ -166,52 +166,52 @@
               :model-value="triggeredCheckAll"
               :indeterminate="triggeredIndeterminate"
               @change="toggleTriggeredAll"
-            >全选</el-checkbox>
+            >{{ t('app.security.events.selectAll') }}</el-checkbox>
           </template>
-          <el-option label="爬虫Bot" value="爬虫Bot" title="已验证爬虫放行/伪装（id 810000-899999）" />
-          <el-option label="地域拦截" value="地域拦截" title="GeoIP 地域拦截（id 8/800xxx）" />
+          <el-option :label="t('app.security.events.crawlerBot')" value="爬虫Bot" :title="t('app.security.events.crawlerBotHint')" />
+          <el-option :label="t('app.security.events.geoBlock')" value="地域拦截" :title="t('app.security.events.geoBlockHint')" />
           <!-- 限流（429）不进安全事件表（caddy-ratelimit 直接返回、无审计行）：
                筛选选项移除，限流数据看安全总览「限流拦截」卡片。 -->
-          <el-option label="IP 访问控制" value="IP 访问控制" title="IP ACL 黑白名单与自维护黑名单（id 2/4/7）" />
-          <el-option label="信任名单" value="信任名单" title="信任名单/保留检测（id 3/12）" />
-          <el-option label="威胁情报库" value="威胁情报库" title="威胁情报库命中（id 14）" />
-          <el-option label="请求体异常" value="请求体异常" title="请求体解析失败（id 11）" />
-          <el-option label="WAF·CRS" value="WAF·CRS" title="OWASP CRS 规则全集（9xxxxx）" />
-          <el-option label="WAF·自定义" value="WAF·自定义" title="自定义规则库（含 AND 链式规则、OR 条件分支与旧版合成规则）" />
+          <el-option :label="t('app.security.events.ipAcl')" value="IP 访问控制" :title="t('app.security.events.ipAclHint')" />
+          <el-option :label="t('app.security.events.trustList')" value="信任名单" :title="t('app.security.events.trustListHint')" />
+          <el-option :label="t('app.security.events.threatIntel')" value="威胁情报库" :title="t('app.security.events.threatIntelHint')" />
+          <el-option :label="t('app.security.events.bodyAnomaly')" value="请求体异常" :title="t('app.security.events.bodyAnomalyHint')" />
+          <el-option label="WAF·CRS" value="WAF·CRS" :title="t('app.security.events.wafCrsHint')" />
+          <el-option :label="t('app.security.events.wafCustom')" value="WAF·自定义" :title="t('app.security.events.wafCustomHint')" />
         </el-select>
-        <el-input v-model="filters.policy_name" placeholder="策略" clearable style="width: 90px" @keyup.enter="applyFilters" />
-        <el-input v-model="filters.ip" placeholder="IP 地址" clearable style="width: 115px" @keyup.enter="applyFilters" />
+        <el-input v-model="filters.policy_name" :placeholder="t('app.security.events.policyPlaceholder')" clearable style="width: 90px" @keyup.enter="applyFilters" />
+        <el-input v-model="filters.ip" :placeholder="t('app.security.events.ipPlaceholder')" clearable style="width: 115px" @keyup.enter="applyFilters" />
         <el-input v-model="filters.uri" placeholder="URI" clearable style="width: 115px" @keyup.enter="applyFilters" />
         <div class="filter-actions">
-          <el-button type="primary" @click="applyFilters">筛选</el-button>
-          <el-button @click="resetFilters">重置</el-button>
+          <el-button type="primary" @click="applyFilters">{{ t('app.security.events.apply') }}</el-button>
+          <el-button @click="resetFilters">{{ t('app.security.events.reset') }}</el-button>
         </div>
       </div>
 
       <el-alert v-if="eventsLoadError" type="error" :closable="false" show-icon class="polling-error-alert error-banner">
         <template #title>
           <div class="polling-error-title">
-            <span>{{ events.length > 0 ? '安全事件加载失败：当前显示的是上次成功结果（与筛选/分页条件不符）' : '安全事件加载失败：表格为空不代表没有事件' }}</span>
-            <el-button link type="danger" :loading="loading" @click="fetchEvents">立即重试</el-button>
+            <span>{{ events.length > 0 ? t('app.security.events.loadErrorStale') : t('app.security.events.loadErrorEmpty') }}</span>
+            <el-button link type="danger" :loading="loading" @click="fetchEvents">{{ t('app.security.events.retryNow') }}</el-button>
           </div>
         </template>
       </el-alert>
 
       <el-table :data="events" v-loading="loading" stripe :header-cell-style="{ background: '#f9fafb' }" empty-text="">
-        <template #empty><el-empty description="暂无安全事件" :image-size="60" /></template>
-        <el-table-column prop="event_time" label="时间" width="190" :formatter="(row: SecurityEvent) => formatDate(row.event_time)" />
-        <el-table-column label="动作" width="80" align="center">
+        <template #empty><el-empty :description="t('app.security.events.empty')" :image-size="60" /></template>
+        <el-table-column prop="event_time" :label="t('app.security.events.colTime')" width="190" :formatter="(row: SecurityEvent) => formatDate(row.event_time)" />
+        <el-table-column :label="t('app.security.events.colAction')" width="80" align="center">
           <template #default="{ row }">
             <el-tag :type="eventActionTone(row.action)" size="small" effect="light">{{ eventActionShort(row.action) }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="规则" min-width="130">
+        <el-table-column :label="t('app.security.events.colRule')" min-width="130">
           <template #default="{ row }">
             <AccessibleLink v-if="row.rule_name || row.rule_caddy_id" type="primary" @click="goToRule(row as SecurityEvent)">{{ row.rule_name || row.rule_caddy_id || '—' }}</AccessibleLink>
             <span v-else>—</span>
           </template>
         </el-table-column>
-        <el-table-column label="触发阶段" min-width="100" class-name="col-nowrap">
+        <el-table-column :label="t('app.security.events.colStage')" min-width="100" class-name="col-nowrap">
           <template #default="{ row }">
             <!-- 触发阶段展示：信任名单 / IP 访问控制（黑白名单+地域+威胁库，点击看触发详情）/
                  WAF（CRS=详情+快捷排除弹框；自定义=规则详情弹框）/ 请求体异常（纯文本） -->
@@ -223,19 +223,19 @@
             <span v-else>{{ stageLabel(row as SecurityEvent) }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="触发类型" min-width="100" class-name="col-nowrap">
+        <el-table-column :label="t('app.security.events.colTriggerType')" min-width="100" class-name="col-nowrap">
           <template #default="{ row }">
             <span>{{ row.trigger_type || '—' }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="策略" min-width="150">
+        <el-table-column :label="t('app.security.events.colPolicy')" min-width="150">
           <template #default="{ row }">
             <AccessibleLink v-if="row.policy_name || row.policy_id > 0" type="primary" @click="goToPolicy(row as SecurityEvent)">{{ row.policy_name || row.policy_id }}</AccessibleLink>
             <span v-else>—</span>
           </template>
         </el-table-column>
         <!-- 用户裁定:内容上限 ~190-200px(IPv4 126+gap+归属地 72),定宽 200 不再挤占方法/URI-->
-        <el-table-column label="客户端 IP" width="200">
+        <el-table-column :label="t('app.security.events.colClientIp')" width="200">
           <template #default="{ row }">
             <IPLocationAction :ip="row.client_ip" :location="row.ip_location" />
           </template>
@@ -243,7 +243,7 @@
         <!-- OPTIONS 为最长方法名(7 字符),90 定宽 -->
         <!-- 方法列统一徽标（用户裁定：两协议都加，样式=el-tag 上一版）；
              disable-transitions 根治翻页时挂载动画引发的行内右飘（用户实测 bug）。 -->
-        <el-table-column prop="method" label="方法" width="90" align="center">
+        <el-table-column prop="method" :label="t('app.security.events.colMethod')" width="90" align="center">
           <template #default="{ row }">
             <el-tag v-if="row.event_type === 'tcp'" size="small" effect="plain" disable-transitions class="proto-tcp-tag event-method-tag">TCP</el-tag>
             <el-tag v-else size="small" effect="plain" type="primary" disable-transitions class="event-method-tag">{{ row.method || '—' }}</el-tag>
@@ -254,7 +254,7 @@
              anomaly_score（后端已返回，此前未展示）；按分数着色便于快速识别高威胁。
              分档与大屏定级同源（utils/severityScale：≥12 高 / ≥6 中）——
              原列表 ≥15/≥5 与大屏 ≥12/≥6 双口径，同分不同色结论打架。 -->
-        <el-table-column label="评分" width="80" align="center">
+        <el-table-column :label="t('app.security.events.colScore')" width="80" align="center">
           <template #default="{ row }">
             <el-tag v-if="row.anomaly_score >= ANOMALY_SCORE_HIGH" type="danger" size="small" effect="plain">{{ row.anomaly_score }}</el-tag>
             <el-tag v-else-if="row.anomaly_score >= ANOMALY_SCORE_MID" type="warning" size="small" effect="plain">{{ row.anomaly_score }}</el-tag>
@@ -262,9 +262,9 @@
             <span v-else>—</span>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="70" fixed="right">
+        <el-table-column :label="t('app.security.events.colOps')" width="70" fixed="right">
           <template #default="{ row }">
-            <el-button size="small" link type="primary" @click="openCtxDialog(row as SecurityEvent)">详情</el-button>
+            <el-button size="small" link type="primary" @click="openCtxDialog(row as SecurityEvent)">{{ t('app.security.events.detail') }}</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -298,38 +298,38 @@
              IP 访问控制/地域/威胁情报/请求体异常等事件不进入计数（10-30 裁定
              自动封禁只吃阶段 3 命中），文案与后端 autobanStage3Eligible 同口径——
              用户按文案校准阈值必须与真实喂入一致，否则阈值永不达标且无告警 -->
-        <DialogHeader :icon="Lock" title="自动封禁配置" subtitle="WAF 拦截（CRS 规则与自定义规则命中，已验证爬虫豁免除外）固定窗口计数达到阈值即写入「自动封禁名单」（调度开启时到期自动解封；IP 访问控制、地域拦截与威胁情报事件不参与计数）" />
+        <DialogHeader :icon="Lock" :title="t('app.security.events.dialogTitle')" :subtitle="t('app.security.events.dialogSubtitle')" />
       </template>
       <el-form :model="autobanForm" label-width="96px" label-position="right" :disabled="autobanSaving">
-        <el-form-item label="观察模式">
+        <el-form-item :label="t('app.security.events.dryRunLabel')">
           <el-switch v-model="autobanForm.dry_run" />
-          <div class="form-tip-line">开启时仅记录达阈值建议、不写入名单（推荐先观察校准阈值）</div>
+          <div class="form-tip-line">{{ t('app.security.events.dryRunHint') }}</div>
         </el-form-item>
-        <el-form-item label="统计口径" for="radio---9">
+        <el-form-item :label="t('app.security.events.scopeLabel')" for="radio---9">
           <input type="text" id="radio---9" aria-hidden="true" tabindex="-1" autocomplete="off" style="display:none">
           <el-radio-group v-model="autobanForm.scope">
-            <el-radio v-for="s in AUTOBAN_SCOPES" :key="s.value" :value="s.value">{{ s.label }}</el-radio>
+            <el-radio v-for="s in AUTOBAN_SCOPES" :key="s" :value="s">{{ autobanScopeLabel(s) }}</el-radio>
           </el-radio-group>
         </el-form-item>
-        <el-form-item label="统计窗口">
+        <el-form-item :label="t('app.security.events.windowLabel')">
           <el-input-number v-model="autobanForm.window_minutes" :min="1" :max="60" :step="5" controls-position="right" style="width: 140px" />
-          <div class="form-tip-line">分钟（同一 IP 窗口内累计计数，跨窗口自动重置）</div>
+          <div class="form-tip-line">{{ t('app.security.events.windowHint') }}</div>
         </el-form-item>
-        <el-form-item label="封禁阈值">
+        <el-form-item :label="t('app.security.events.thresholdLabel')">
           <el-input-number v-model="autobanForm.threshold" :min="1" :max="10000" :step="10" controls-position="right" style="width: 140px" />
-          <div class="form-tip-line">窗口内命中次数</div>
+          <div class="form-tip-line">{{ t('app.security.events.thresholdHint') }}</div>
         </el-form-item>
-        <el-form-item label="封禁时长">
+        <el-form-item :label="t('app.security.events.durationLabel')">
           <el-select v-model="autobanForm.duration" style="width: 160px">
-            <el-option v-for="d in AUTOBAN_DURATIONS" :key="d.value" :label="d.label" :value="d.value" />
+            <el-option v-for="d in AUTOBAN_DURATIONS" :key="d" :label="autobanDurationLabel(d)" :value="d" />
           </el-select>
-          <div class="form-tip-line">到期自动解封（从名单移除）</div>
+          <div class="form-tip-line">{{ t('app.security.events.durationHint') }}</div>
         </el-form-item>
       </el-form>
-      <div class="info-note-bar"><span class="info-note-desc">修改统计窗口或口径会立即重置计数器（旧计数与新口径不可混算）</span></div>
+      <div class="info-note-bar"><span class="info-note-desc">{{ t('app.security.events.counterResetNotice') }}</span></div>
       <template #footer>
-        <el-button :disabled="autobanSaving" @click="autobanDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="autobanSaving" :disabled="!autobanWritable" @click="saveAutobanConfig">保存</el-button>
+        <el-button :disabled="autobanSaving" @click="autobanDialogVisible = false">{{ t('app.security.events.cancel') }}</el-button>
+        <el-button type="primary" :loading="autobanSaving" :disabled="!autobanWritable" @click="saveAutobanConfig">{{ t('app.security.events.save') }}</el-button>
       </template>
     </el-dialog>
 
@@ -342,49 +342,49 @@
          展示原始内容 + 错误说明。宽度/顶距与 crs-event-dialog 一致。 -->
     <el-dialog v-model="ctxDialogVisible" width="min(760px, 94vw)" top="5vh" append-to-body class="ctx-event-dialog dialog-body-inset">
       <template #header>
-        <DialogHeader :icon="Document" title="请求详情"
-          :subtitle="`${ctxEvent ? formatDate(ctxEvent.event_time) : '—'} · ${ctxEvent?.policy_name || '未知策略'}`" />
+        <DialogHeader :icon="Document" :title="t('app.security.events.ctxTitle')"
+          :subtitle="ctxSubtitle" />
       </template>
       <template v-if="ctxEvent">
         <section class="ctx-detail-section">
-          <DialogSectionHeader title="请求摘要" />
+          <DialogSectionHeader :title="t('app.security.events.ctxSummary')" />
           <div class="dialog-panel dialog-panel--flush">
             <el-descriptions :column="2" border size="small">
-              <el-descriptions-item label="时间">{{ ctxEvent.event_time ? formatDate(ctxEvent.event_time) : '—' }}</el-descriptions-item>
-              <el-descriptions-item label="方法">{{ ctxIsTcp ? '—（TCP 连接）' : (ctxEvent.method || '—') }}</el-descriptions-item>
-              <el-descriptions-item label="客户端 IP"><span style="overflow-wrap: anywhere">{{ ctxEvent.client_ip || '—' }}</span></el-descriptions-item>
-              <el-descriptions-item label="归属地">{{ ctxEvent.ip_location || '—' }}</el-descriptions-item>
-              <el-descriptions-item label="URI" :span="2">{{ ctxIsTcp ? '—（TCP 连接）' : (ctxEvent.uri || '—') }}</el-descriptions-item>
+              <el-descriptions-item :label="t('app.security.events.colTime')">{{ ctxEvent.event_time ? formatDate(ctxEvent.event_time) : '—' }}</el-descriptions-item>
+              <el-descriptions-item :label="t('app.security.events.colMethod')">{{ ctxIsTcp ? t('app.security.events.tcpPlaceholder') : (ctxEvent.method || '—') }}</el-descriptions-item>
+              <el-descriptions-item :label="t('app.security.events.colClientIp')"><span style="overflow-wrap: anywhere">{{ ctxEvent.client_ip || '—' }}</span></el-descriptions-item>
+              <el-descriptions-item :label="t('app.security.events.ctxLocation')">{{ ctxEvent.ip_location || '—' }}</el-descriptions-item>
+              <el-descriptions-item label="URI" :span="2">{{ ctxIsTcp ? t('app.security.events.tcpPlaceholder') : (ctxEvent.uri || '—') }}</el-descriptions-item>
               <!-- 规则协议徽标（数据源=event_type；字段缺失不显示——防御式）：
                    TCP 青 = 全局 proto-tcp-tag 单源，HTTP 蓝 = el-tag primary -->
-              <el-descriptions-item label="触发规则"><el-tag v-if="ctxEvent.event_type === 'tcp'" size="small" effect="plain" class="proto-tcp-tag event-proto-tag">TCP</el-tag><el-tag v-else-if="ctxEvent.event_type" size="small" type="primary" effect="plain" class="event-proto-tag">HTTP</el-tag>{{ [ctxEvent.rule_name, ctxEvent.rule_triggered ? `id:${ctxEvent.rule_triggered}` : ''].filter(Boolean).join(' · ') || '—' }}</el-descriptions-item>
-              <el-descriptions-item label="所属策略">{{ ctxEvent.policy_name || '—' }}</el-descriptions-item>
-              <el-descriptions-item label="动作">
+              <el-descriptions-item :label="t('app.security.events.ctxTriggeredRule')"><el-tag v-if="ctxEvent.event_type === 'tcp'" size="small" effect="plain" class="proto-tcp-tag event-proto-tag">TCP</el-tag><el-tag v-else-if="ctxEvent.event_type" size="small" type="primary" effect="plain" class="event-proto-tag">HTTP</el-tag>{{ [ctxEvent.rule_name, ctxEvent.rule_triggered ? `id:${ctxEvent.rule_triggered}` : ''].filter(Boolean).join(' · ') || '—' }}</el-descriptions-item>
+              <el-descriptions-item :label="t('app.security.events.ctxPolicy')">{{ ctxEvent.policy_name || '—' }}</el-descriptions-item>
+              <el-descriptions-item :label="t('app.security.events.colAction')">
                 <el-tag size="small" :type="eventActionTone(ctxEvent.action)" effect="plain">
                   {{ eventActionFull(ctxEvent.action) }}
                 </el-tag>
               </el-descriptions-item>
-              <el-descriptions-item label="异常评分">{{ ctxEvent.anomaly_score > 0 ? ctxEvent.anomaly_score : '—' }}</el-descriptions-item>
-              <el-descriptions-item label="处理时长">{{ formatDurationUs(ctxWafFamily ? ctxEvent.duration_us + ctxEvent.precheck_us : ctxEvent.duration_us) }}{{ ctxWafFamily ? '' : '（预检耗时，含事件记录开销）' }}</el-descriptions-item>
-              <el-descriptions-item v-if="ctxWafFamily && ctxEvent.precheck_us > 0" label="耗时分解">预检 {{ formatDurationUs(ctxEvent.precheck_us) }} + WAF 段 {{ formatDurationUs(ctxEvent.duration_us) }}</el-descriptions-item>
+              <el-descriptions-item :label="t('app.security.events.colScore')">{{ ctxEvent.anomaly_score > 0 ? ctxEvent.anomaly_score : '—' }}</el-descriptions-item>
+              <el-descriptions-item :label="t('app.security.events.ctxDuration')">{{ formatDurationUs(ctxWafFamily ? ctxEvent.duration_us + ctxEvent.precheck_us : ctxEvent.duration_us) }}{{ ctxWafFamily ? '' : t('app.security.events.ctxPrecheckSuffix') }}</el-descriptions-item>
+              <el-descriptions-item v-if="ctxWafFamily && ctxEvent.precheck_us > 0" :label="t('app.security.events.ctxDurationBreakdown')">{{ t('app.security.events.ctxDurationBreakdownValue', { precheck: formatDurationUs(ctxEvent.precheck_us), waf: formatDurationUs(ctxEvent.duration_us) }) }}</el-descriptions-item>
             </el-descriptions>
           </div>
         </section>
 
         <!-- TCP（L4）事件无请求语义：请求头/请求体区块整段隐藏（连接级事件无 HTTP 明细） -->
         <section v-if="!ctxIsTcp" class="ctx-detail-section">
-          <DialogSectionHeader title="请求头" />
+          <DialogSectionHeader :title="t('app.security.events.ctxHeadersTitle')" />
           <template v-if="ctxHeadersParsed.failed">
-            <div class="info-note-bar ctx-banner"><span class="info-note-desc">请求头记录解析失败，以下为原始内容</span></div>
+            <div class="info-note-bar ctx-banner"><span class="info-note-desc">{{ t('app.security.events.ctxHeadersParseFail') }}</span></div>
             <div class="dialog-panel dialog-panel--flush"><pre class="ctx-body-pre">{{ ctxEvent.request_headers }}</pre></div>
           </template>
           <template v-else-if="ctxHeadersParsed.rows.length > 0 || ctxHeadersParsed.dropped > 0 || ctxHeadersParsed.listDropped > 0">
             <div class="dialog-panel" :class="{ 'dialog-panel--flush': ctxHeadersParsed.rows.length > 0 }">
-              <div v-if="ctxHeadersParsed.dropped > 0" class="ctx-info-line">已隐藏 {{ ctxHeadersParsed.dropped }} 个头（请求头超出 64KB 采集上限）</div>
-              <div v-if="ctxHeadersParsed.listDropped > 0" class="ctx-info-line">已隐藏 {{ ctxHeadersParsed.listDropped }} 个头（请求头超出列表 16KB 展示上限）</div>
+              <div v-if="ctxHeadersParsed.dropped > 0" class="ctx-info-line">{{ t('app.security.events.ctxHeadersDropped', { count: ctxHeadersParsed.dropped }) }}</div>
+              <div v-if="ctxHeadersParsed.listDropped > 0" class="ctx-info-line">{{ t('app.security.events.ctxHeadersListDropped', { count: ctxHeadersParsed.listDropped }) }}</div>
               <el-table v-if="ctxHeadersParsed.rows.length > 0" :data="ctxHeadersParsed.rows" size="small" :max-height="260" :header-cell-style="{ background: '#f9fafb' }">
-                <el-table-column prop="name" label="名称" width="200" show-overflow-tooltip />
-                <el-table-column label="值" min-width="380">
+                <el-table-column prop="name" :label="t('app.security.events.ctxHeaderName')" width="200" show-overflow-tooltip />
+                <el-table-column :label="t('app.security.events.ctxHeaderValue')" min-width="380">
                   <template #default="{ row }">
                     <div class="ctx-header-value-cell">
                       <span class="ctx-header-value">{{ ctxHeaderDisplay(row as CtxHeaderRow) }}</span>
@@ -394,7 +394,7 @@
                         type="primary"
                         size="small"
                         class="ctx-reveal-btn"
-                        :title="ctxRevealed.has(row.name.toLowerCase()) ? '点击隐藏' : '点击显示'"
+                        :title="ctxRevealed.has(row.name.toLowerCase()) ? t('app.security.events.ctxRevealHide') : t('app.security.events.ctxRevealShow')"
                         @click="toggleCtxReveal(row.name)"
                       >
                         <el-icon><Hide v-if="ctxRevealed.has(row.name.toLowerCase())" /><View v-else /></el-icon>
@@ -405,22 +405,22 @@
               </el-table>
             </div>
           </template>
-          <div v-else class="dialog-panel"><div class="ctx-empty">暂无请求头记录</div></div>
+          <div v-else class="dialog-panel"><div class="ctx-empty">{{ t('app.security.events.ctxHeadersEmpty') }}</div></div>
         </section>
 
         <section v-if="!ctxIsTcp" class="ctx-detail-section">
-          <DialogSectionHeader title="请求体" />
+          <DialogSectionHeader :title="t('app.security.events.ctxBodyTitle')" />
           <div v-if="ctxBodyParsed.state === 'empty'" class="dialog-panel"><div class="ctx-empty">{{ ctxBodyEmptyText }}</div></div>
           <template v-else>
-            <div v-if="ctxBodyParsed.truncated" class="info-note-bar ctx-banner"><span class="info-note-desc">请求体已截断，仅显示保留的前段内容</span></div>
-            <div v-if="ctxBodyParsed.binary" class="info-note-bar"><span class="info-note-desc">请求体为二进制内容，已按 Base64 解码展示，可能包含不可读字符</span></div>
-            <div v-if="ctxBodyParsed.state === 'error'" class="info-note-bar ctx-banner"><span class="info-note-desc">Base64 解码失败，以下为原始内容</span></div>
+            <div v-if="ctxBodyParsed.truncated" class="info-note-bar ctx-banner"><span class="info-note-desc">{{ t('app.security.events.ctxBodyTruncated') }}</span></div>
+            <div v-if="ctxBodyParsed.binary" class="info-note-bar"><span class="info-note-desc">{{ t('app.security.events.ctxBodyBinary') }}</span></div>
+            <div v-if="ctxBodyParsed.state === 'error'" class="info-note-bar ctx-banner"><span class="info-note-desc">{{ t('app.security.events.ctxBodyDecodeFail') }}</span></div>
             <div class="dialog-panel dialog-panel--flush"><pre class="ctx-body-pre">{{ ctxBodyParsed.text }}</pre></div>
           </template>
         </section>
       </template>
       <template #footer>
-        <el-button @click="ctxDialogVisible = false">关闭</el-button>
+        <el-button @click="ctxDialogVisible = false">{{ t('app.security.events.close') }}</el-button>
       </template>
     </el-dialog>
   </div>
@@ -428,6 +428,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { Refresh, Warning, View, Hide, Document, Lock } from '@element-plus/icons-vue'
 import DialogHeader from '@/components/DialogHeader.vue'
 import DialogSectionHeader from '@/components/DialogSectionHeader.vue'
@@ -450,6 +451,8 @@ import { formatDate } from '@/utils/date'
 import { eventActionFull, eventActionShort, eventActionTone } from '@/utils/eventAction'
 import { ingestionWarningMessage, type IngestionHealth } from '@/utils/ingestionHealth'
 import type { APIResponse } from '@/types'
+
+const { t } = useI18n()
 
 interface SecurityEvent { id: number; event_time: string; rule_caddy_id: string; rule_name: string; policy_id: number; policy_name: string; client_ip: string; ip_location: string; method: string; uri: string; event_type: string; rule_triggered: string; rule_msg: string; trigger_type?: string; action: string; anomaly_score: number; duration_us: number; precheck_us: number; request_headers: string; request_body: string }
 
@@ -474,15 +477,28 @@ interface AutobanStatus {
   // 本卡零消费，不再声明。
   is_master: boolean
 }
-const AUTOBAN_DURATIONS = [
-  { value: '10m', label: '10 分钟' }, { value: '30m', label: '30 分钟' },
-  { value: '1h', label: '1 小时' }, { value: '6h', label: '6 小时' },
-  { value: '12h', label: '12 小时' }, { value: '24h', label: '24 小时' },
-  { value: 'permanent', label: '永久' },
-]
-const AUTOBAN_SCOPES = [
-  { value: 'all', label: '全部事件' }, { value: 'blocked', label: '仅拦截' }, { value: 'logged', label: '仅检测' },
-]
+const AUTOBAN_DURATIONS = ['10m', '30m', '1h', '6h', '12h', '24h', 'permanent']
+const AUTOBAN_SCOPES = ['all', 'blocked', 'logged']
+const autobanDurationLabel = (value: string): string => {
+  switch (value) {
+    case '10m': return t('app.security.events.duration10m')
+    case '30m': return t('app.security.events.duration30m')
+    case '1h': return t('app.security.events.duration1h')
+    case '6h': return t('app.security.events.duration6h')
+    case '12h': return t('app.security.events.duration12h')
+    case '24h': return t('app.security.events.duration24h')
+    case 'permanent': return t('app.security.events.durationPermanent')
+    default: return value
+  }
+}
+const autobanScopeLabel = (value: string): string => {
+  switch (value) {
+    case 'all': return t('app.security.events.scopeAll')
+    case 'blocked': return t('app.security.events.scopeBlockedOnly')
+    case 'logged': return t('app.security.events.scopeLoggedOnly')
+    default: return value
+  }
+}
 
 const autobanStatus = ref<AutobanStatus>({
   enabled: false, dry_run: true, threshold: 100, window_minutes: 5, duration: '1h', scope: 'all',
@@ -505,17 +521,17 @@ const authStore = useAuthStore()
 const autobanWritable = computed(() => authStore.readOnlyReason === null && autobanStatus.value.is_master && !autobanStatusError.value && !autobanStatusLoading.value)
 const autobanBlockedReason = computed(() => {
   if (authStore.readOnlyReason !== null) return authStore.readOnlyMessage
-  if (!autobanStatus.value.is_master) return '仅主节点可修改自动封禁配置'
+  if (!autobanStatus.value.is_master) return t('app.security.events.blockedReasonMasterOnly')
   return ''
 })
 const autobanConfigTooltip = computed(() => {
   if (autobanWritable.value) return ''
-  if (autobanStatusLoading.value) return '自动封禁状态加载中，暂不可配置'
-  if (autobanStatusError.value) return '自动封禁状态加载失败，请刷新后重试'
+  if (autobanStatusLoading.value) return t('app.security.events.blockedReasonLoading')
+  if (autobanStatusError.value) return t('app.security.events.blockedReasonLoadFail')
   return autobanBlockedReason.value
 })
-const autobanScopeText = computed(() => AUTOBAN_SCOPES.find((s) => s.value === autobanStatus.value.scope)?.label ?? autobanStatus.value.scope)
-const autobanDurationText = computed(() => AUTOBAN_DURATIONS.find((d) => d.value === autobanStatus.value.duration)?.label ?? autobanStatus.value.duration)
+const autobanScopeText = computed(() => autobanScopeLabel(autobanStatus.value.scope))
+const autobanDurationText = computed(() => autobanDurationLabel(autobanStatus.value.duration))
 
 // 命中次数色深（命中越多越深）：档位判据单源 utils/autobanStatus 的 suggestionBand，
 // 此处只做「档位 → 样式/颜色」映射。
@@ -583,25 +599,25 @@ const saveAutobanConfig = async (): Promise<void> => {
   // 函数级纵深守卫（与 openAutobanConfig 同构）：按钮 :disabled 仅呈现层
   if (!autobanWritable.value) return
   if (autobanForm.value.threshold < 1 || autobanForm.value.threshold > 10000) {
-    ElMessage.warning('阈值须在 1-10000 之间'); return
+    ElMessage.warning(t('app.security.events.thresholdRange')); return
   }
   if (autobanForm.value.window_minutes < 1 || autobanForm.value.window_minutes > 60) {
-    ElMessage.warning('统计窗口须在 1-60 分钟之间'); return
+    ElMessage.warning(t('app.security.events.windowRange')); return
   }
   // 保存二次确认（用户裁定 2026-10-14）：启用入口=完整须知+建议框（按钮「确认启用」）；
   // 已启用的编辑入口=简化确认（按钮「确认保存」，不带启用描述警告）。
   // 弹框无启用开关（外卡片持有启停职责）——payload enabled 恒 true（启用或保持）。
   if (autobanStatus.value.enabled) {
     try {
-      await ElMessageBox.confirm('确认保存自动封禁配置？新配置将在下一轮调度生效。', '保存配置', {
-        confirmButtonText: '确认保存', cancelButtonText: '取消', type: 'info',
+      await ElMessageBox.confirm(t('app.security.events.saveConfirm'), t('app.security.events.saveConfigTitle'), {
+        confirmButtonText: t('app.security.events.confirmSave'), cancelButtonText: t('app.security.events.cancel'), type: 'info',
       })
     } catch { return }
   } else if (!(await confirmAutobanApply())) return
   autobanSaving.value = true
   try {
     await request.put('/security/autoban', { ...autobanForm.value, enabled: true })
-    mfaAwareSuccess('自动封禁配置已更新')
+    mfaAwareSuccess(t('app.security.events.configUpdated'))
     autobanDialogVisible.value = false
     fetchAutobanStatus()
   } catch { /* 错误已由全局拦截器 toast */ }
@@ -613,27 +629,27 @@ const saveAutobanConfig = async (): Promise<void> => {
 // 的资源救济；建议观察模式起步校准后转正式。取消=不保存。
 // 排版：dangerouslyUseHTMLString 精排两段（启用前须知三条列表 + 使用建议正文），
 // MessageBox 挂 body → 样式放非 scoped 块。纯静态文案、无任何用户输入插值，无注入面。
-const AUTOBAN_ENABLE_CONFIRM_HTML = `
+const autobanEnableConfirmHtml = computed(() => `
 <div class="autoban-confirm">
   <div class="autoban-confirm-hero">
     <div class="autoban-confirm-icon"><svg viewBox="0 0 1024 1024" width="22" height="22"><path d="M512 64a448 448 0 1 1 0 896 448 448 0 0 1 0-896z m0 192a32 32 0 0 0-32 32v256a32 32 0 0 0 64 0V288a32 32 0 0 0-32-32z m0 416a48 48 0 1 0 0-96 48 48 0 0 0 0 96z" fill="currentColor"/></svg></div>
     <div class="autoban-confirm-head">
-      <div class="autoban-confirm-heading">确认启用自动封禁？</div>
-      <div class="autoban-confirm-sub">达到阈值的 IP 将被自动加入封禁名单，到期自动解封</div>
+      <div class="autoban-confirm-heading">${t('app.security.events.enableHeading')}</div>
+      <div class="autoban-confirm-sub">${t('app.security.events.enableSub')}</div>
     </div>
   </div>
   <div class="autoban-confirm-notes">
-    <div class="autoban-confirm-note"><span class="autoban-confirm-dot"></span>新封禁约 1 分钟内生效，重载时长连接可能被重置</div>
-    <div class="autoban-confirm-note"><span class="autoban-confirm-dot"></span>持续攻击时每分钟至多一次重载，有少量性能开销</div>
-    <div class="autoban-confirm-note"><span class="autoban-confirm-dot"></span>建议先以观察模式运行，确认建议准确后再正式封禁</div>
+    <div class="autoban-confirm-note"><span class="autoban-confirm-dot"></span>${t('app.security.events.enableNote1')}</div>
+    <div class="autoban-confirm-note"><span class="autoban-confirm-dot"></span>${t('app.security.events.enableNote2')}</div>
+    <div class="autoban-confirm-note"><span class="autoban-confirm-dot"></span>${t('app.security.events.enableNote3')}</div>
   </div>
-  <div class="autoban-confirm-howto"><span class="autoban-confirm-howto-label">生效方式</span>在 IP 访问控制（黑名单）策略中引用「自动封禁名单」地址列表</div>
-</div>`
+  <div class="autoban-confirm-howto"><span class="autoban-confirm-howto-label">${t('app.security.events.enableHowtoLabel')}</span>${t('app.security.events.enableHowtoText')}</div>
+</div>`)
 const confirmAutobanApply = async (): Promise<boolean> => {
   try {
-    await ElMessageBox.confirm(AUTOBAN_ENABLE_CONFIRM_HTML, '启用自动封禁', {
-      confirmButtonText: '确认启用',
-      cancelButtonText: '取消',
+    await ElMessageBox.confirm(autobanEnableConfirmHtml.value, t('app.security.events.enableConfirmTitle'), {
+      confirmButtonText: t('app.security.events.confirmEnable'),
+      cancelButtonText: t('app.security.events.cancel'),
       dangerouslyUseHTMLString: true,
       customClass: 'autoban-confirm-box',
       customStyle: { width: '540px', paddingTop: '16px' },
@@ -659,9 +675,9 @@ const toggleAutobanEnabled = async (): Promise<void> => {
   autobanToggling.value = true
   try {
     await ElMessageBox.confirm(
-      '确认禁用自动封禁？任务调度将停止，禁用时会立即清除已到期的封禁条目并即时生效；未到期条目保留至到期自动失效。',
-      '禁用自动封禁',
-      { confirmButtonText: '确认禁用', cancelButtonText: '取消', type: 'warning' },
+      t('app.security.events.disableConfirm'),
+      t('app.security.events.disableConfirmTitle'),
+      { confirmButtonText: t('app.security.events.confirmDisable'), cancelButtonText: t('app.security.events.cancel'), type: 'warning' },
     )
     await request.put('/security/autoban', {
       enabled: false,
@@ -671,7 +687,7 @@ const toggleAutobanEnabled = async (): Promise<void> => {
       duration: autobanStatus.value.duration,
       scope: autobanStatus.value.scope,
     })
-    mfaAwareSuccess('自动封禁已禁用（调度已停止）')
+    mfaAwareSuccess(t('app.security.events.disabledNotice'))
     fetchAutobanStatus()
   } catch { /* 取消无需处理；请求错误已由全局拦截器 toast */ }
   finally { autobanToggling.value = false }
@@ -699,9 +715,9 @@ const ctxWafFamily = computed(() => isWafDurationFamily(triggerStageFamily(ctxEv
 // CRAWLER_FAMILY_LABEL「爬虫Bot」——原此处渲染「爬虫校验」，同页三称谓并存）。
 // 点击进入同一触发详情弹框。
 const stageCategory = (row: SecurityEvent): 'trust' | 'acl' | 'crawler' | 'waf' | 'body' | 'other' => {
-  const t = row.rule_triggered
-  if (!t) return 'other'
-  switch (triggerStageFamily(t)) {
+  const trig = row.rule_triggered
+  if (!trig) return 'other'
+  switch (triggerStageFamily(trig)) {
     case 'trust': return 'trust'
     case 'crawler': return 'crawler'
     case 'ipAcl': case 'geoip': case 'threat': return 'acl'
@@ -714,13 +730,13 @@ const stageLabel = (row: SecurityEvent): string => {
   // 存量 id '8' 中和文案（勿改分类——triggerStageFamily 对 8 归 ipAcl 是已钉住
   // 的历史共享 id 口径例外）：后端 trigger_type 显示「地域拦截」，阶段列沿用
   // IP 访问控制会自相矛盾；现代引擎地域事件已发 800xxx，仅存量/带外数据可达。
-  if (row.rule_triggered === '8') return '地域拦截（旧 id）'
+  if (row.rule_triggered === '8') return t('app.security.events.stageLegacyGeo')
   switch (stageCategory(row)) {
-    case 'trust': return '信任名单'
+    case 'trust': return t('app.security.events.trustList')
     case 'crawler': return CRAWLER_FAMILY_LABEL
-    case 'acl': return 'IP 访问控制'
+    case 'acl': return t('app.security.events.ipAcl')
     case 'waf': return 'WAF'
-    case 'body': return '请求体异常'
+    case 'body': return t('app.security.events.bodyAnomaly')
     default: return row.rule_triggered || '—'
   }
 }
@@ -754,6 +770,11 @@ const ctxEvent = ref<SecurityEvent | null>(null)
 // TCP（L4 断连）事件：无请求语义——method/uri 空、无请求头/请求体，
 // 详情弹框按连接级形态渲染（占位符 + 隐藏 headers/body 区块）。
 const ctxIsTcp = computed(() => ctxEvent.value?.event_type === 'tcp')
+const ctxSubtitle = computed(() => {
+  const when = ctxEvent.value ? formatDate(ctxEvent.value.event_time) : '—'
+  const policy = ctxEvent.value?.policy_name || t('app.security.events.ctxUnknownPolicy')
+  return `${when} · ${policy}`
+})
 // 敏感头逐行显示状态（key = 小写头名）：默认掩码 ••••••，眼睛图标点击切换
 const ctxRevealed = ref<Set<string>>(new Set())
 
@@ -900,7 +921,7 @@ const applyFilters = () => {
   // value-format 为 YYYY-MM-DD HH:mm:ss，字符串比较即时间先后比较。
   const range = filters.value.timeRange
   if (range?.[0] && range?.[1] && range[0] > range[1]) {
-    ElMessage.warning('开始时间不能晚于结束时间')
+    ElMessage.warning(t('app.security.events.timeRangeInvalid'))
     // 只清 end 保留已填的 start（原清空整个区间丢两侧输入）
     filters.value.timeRange = [range[0], '']
   }

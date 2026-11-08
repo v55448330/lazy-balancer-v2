@@ -4,7 +4,7 @@
       <div class="card-header">
         <div class="card-title">
           <el-icon><Connection /></el-icon>
-          <span>节点模式设置</span>
+          <span>{{ t('common.app.views.cluster.modeTitle') }}</span>
         </div>
       </div>
     </template>
@@ -12,26 +12,26 @@
     <el-form :model="form" label-width="120px" class="settings-form" :disabled="readOnly">
       <!-- 原生表单行（2026-10-11 用户裁定：对齐统一走 el-form-item，弃自管标签行；
            Firefox label-for 控制台告警为 EP 上游已知形态，非用户可见） -->
-      <el-form-item label="节点模式" for="radio---6">
+      <el-form-item :label="t('common.app.views.cluster.modeLabel')" for="radio---6">
         <input type="text" id="radio---6" aria-hidden="true" tabindex="-1" autocomplete="off" style="display:none">
-        <el-radio-group v-model="selectedMode" :disabled="loading || readOnly || !status" aria-label="节点模式" @change="handleModeChange">
-          <el-radio value="master">主节点</el-radio>
-          <el-radio value="slave">从节点</el-radio>
+        <el-radio-group v-model="selectedMode" :disabled="loading || readOnly || !status" :aria-label="t('common.app.views.cluster.modeLabel')" @change="handleModeChange">
+          <el-radio value="master">{{ t('common.app.views.cluster.master') }}</el-radio>
+          <el-radio value="slave">{{ t('common.app.views.cluster.slave') }}</el-radio>
         </el-radio-group>
-        <div class="form-tip-line">主节点管理权威配置，从节点定期同步主节点数据</div>
+        <div class="form-tip-line">{{ t('common.app.views.cluster.modeTip') }}</div>
       </el-form-item>
 
-      <el-form-item label="同步间隔">
+      <el-form-item :label="t('common.app.views.cluster.syncIntervalLabel')">
         <div class="interval-row">
           <el-input-number v-model="syncInterval" :min="10" :max="86400" :disabled="intervalDisabled" />
           <!-- 单位后缀归一全局 form-tip-inline（原自管.interval-unit
                与全局类仅色差/字号差）；行内 gap 已提供间距，左侧外边距置零 -->
-          <span class="form-tip-inline" style="margin-left: 0">秒</span>
-          <el-button v-if="!isSlave" :loading="intervalSaving" :disabled="intervalDisabled || !syncIntervalValid || syncInterval === status?.sync_interval" @click="saveSyncInterval">保存</el-button>
+          <span class="form-tip-inline" style="margin-left: 0">{{ t('common.app.views.cluster.unitSeconds') }}</span>
+          <el-button v-if="!isSlave" :loading="intervalSaving" :disabled="intervalDisabled || !syncIntervalValid || syncInterval === status?.sync_interval" @click="saveSyncInterval">{{ t('common.app.views.cluster.save') }}</el-button>
         </div>
         <div class="form-tip-line">
-          <span v-if="!syncIntervalValid">请输入 10–86400 之间的同步间隔（清空后无法保存）</span>
-          <span v-else>{{ isSlave ? '由主节点同步下发，从节点不可修改' : '从节点拉取同步与上报状态的周期（10–86400 秒）' }}</span>
+          <span v-if="!syncIntervalValid">{{ t('common.app.views.cluster.intervalInvalid') }}</span>
+          <span v-else>{{ isSlave ? t('common.app.views.cluster.intervalSlaveTip') : t('common.app.views.cluster.intervalMasterTip') }}</span>
         </div>
       </el-form-item>
 
@@ -48,32 +48,32 @@
       destroy-on-close
     >
       <template #header>
-        <DialogHeader :icon="Connection" title="注册为从节点" subtitle="连接主节点，本节点将定期同步主节点数据" tone="warning" />
+        <DialogHeader :icon="Connection" :title="t('common.app.views.cluster.registerDialogTitle')" :subtitle="t('common.app.views.cluster.registerDialogSubtitle')" tone="warning" />
       </template>
       <div class="registration-warnings">
         <el-alert type="error" :closable="false" show-icon>
-          切换后本地数据将被主节点全覆盖，本地已有的差异化配置将丢失
+          {{ t('common.app.views.cluster.registerWarnOverwrite') }}
         </el-alert>
         <el-alert v-if="usesPlainHttp" type="warning" :closable="false" show-icon>
-          主节点地址为 HTTP，证书私钥等敏感数据将明文传输，建议启用 HTTPS
+          {{ t('common.app.views.cluster.registerWarnPlainHttp') }}
         </el-alert>
       </div>
       <el-form ref="dialogFormRef" :model="form" :rules="rules" label-width="100px" :disabled="readOnly" style="margin-top: 16px">
-        <el-form-item label="主节点地址" prop="master_url">
+        <el-form-item :label="t('common.app.views.cluster.masterUrlLabel')" prop="master_url">
           <el-input v-model="form.master_url" placeholder="https://master.example.com:8000" />
-          <div class="form-tip-line">填写可从当前节点访问的主节点管理地址</div>
+          <div class="form-tip-line">{{ t('common.app.views.cluster.masterUrlTip') }}</div>
         </el-form-item>
-        <el-form-item label="注册令牌" prop="register_token">
-          <el-input v-model="form.register_token" type="password" show-password placeholder="请输入一次性注册令牌" />
-          <div class="form-tip-line">在主节点「集群管理」页面生成</div>
+        <el-form-item :label="t('common.app.views.cluster.registerTokenLabel')" prop="register_token">
+          <el-input v-model="form.register_token" type="password" show-password :placeholder="t('common.app.views.cluster.registerTokenPlaceholder')" />
+          <div class="form-tip-line">{{ t('common.app.views.cluster.registerTokenTip') }}</div>
         </el-form-item>
-        <el-form-item label="节点名称" prop="node_name">
-          <el-input v-model="form.node_name" placeholder="选填，例如：上海从节点" maxlength="100" show-word-limit />
+        <el-form-item :label="t('common.app.views.cluster.nodeNameLabel')" prop="node_name">
+          <el-input v-model="form.node_name" :placeholder="t('common.app.views.cluster.nodeNamePlaceholder')" maxlength="100" show-word-limit />
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button :disabled="loading || readOnly" @click="closeRegistration">取消</el-button>
-        <el-button type="primary" :loading="loading" :disabled="readOnly" @click="submitRegistration">注册并切换为从节点</el-button>
+        <el-button :disabled="loading || readOnly" @click="closeRegistration">{{ t('common.app.views.cluster.cancel') }}</el-button>
+        <el-button type="primary" :loading="loading" :disabled="readOnly" @click="submitRegistration">{{ t('common.app.views.cluster.registerAndSwitch') }}</el-button>
       </template>
     </el-dialog>
   </el-card>
@@ -81,12 +81,16 @@
 
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import type { FormInstance, FormRules } from 'element-plus'
 import { Connection } from '@element-plus/icons-vue'
 import DialogHeader from '@/components/DialogHeader.vue'
 import type { ClusterNodeMode, ClusterRegistrationInput, ClusterStatus } from '@/types'
 import { shouldCloseRegistrationDialog } from '@/utils/clusterRegistration'
 import { validateClusterUrl } from '@/utils/clusterUrl'
+
+// 卡片与注册弹框文案走 i18n(批次 D cluster 域,common.app.views.cluster.*)。
+const { t } = useI18n()
 
 interface RegistrationForm {
   master_url: string
@@ -120,7 +124,7 @@ const form = reactive<RegistrationForm>({ master_url: '', register_token: '', no
 // 与节点访问地址共用 utils/clusterUrl——原实现只校验 scheme，带凭证/
 // query/fragment 的地址会通过前端校验、提交时被后端同一规则拒绝（晚失败）。
 const validateMasterUrl = (_rule: unknown, value: string, callback: (error?: Error) => void): void => {
-  const error = validateClusterUrl(value, { label: '主节点地址', emptyMessage: '请输入主节点地址' })
+  const error = validateClusterUrl(value, { label: t('common.app.views.cluster.masterUrlLabel'), emptyMessage: t('common.app.views.cluster.enterMasterUrl') })
   if (error) {
     callback(new Error(error))
     return
@@ -130,7 +134,7 @@ const validateMasterUrl = (_rule: unknown, value: string, callback: (error?: Err
 
 const rules: FormRules<RegistrationForm> = {
   master_url: [{ required: true, validator: validateMasterUrl, trigger: 'blur' }],
-  register_token: [{ required: true, message: '请输入注册令牌', trigger: 'blur' }],
+  register_token: [{ required: true, message: t('common.app.views.cluster.enterRegisterToken'), trigger: 'blur' }],
 }
 
 const usesPlainHttp = computed(() => form.master_url.trim().toLowerCase().startsWith('http://'))

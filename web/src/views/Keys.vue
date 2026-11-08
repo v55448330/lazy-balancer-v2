@@ -4,24 +4,24 @@
       <div class="header-left">
         <h2 class="page-title">
           <el-icon class="title-icon"><Key /></el-icon>
-          API 密钥
+          {{ t('common.app.views.keys.pageTitle') }}
         </h2>
-        <p class="page-desc">仅显示和管理当前登录用户的 API 访问密钥</p>
+        <p class="page-desc">{{ t('common.app.views.keys.pageDesc') }}</p>
       </div>
       <div class="header-actions">
         <el-button tag="a" href="/api/v1/docs" target="_blank" rel="noopener noreferrer">
           <el-icon><Document /></el-icon>
-          接口文档
+          {{ t('common.app.views.keys.apiDocs') }}
         </el-button>
         <el-button @click="mcpDocsVisible = true">
           <el-icon><Connection /></el-icon>
-          MCP 文档
+          {{ t('common.app.views.keys.mcpDocs') }}
         </el-button>
         <el-tooltip :disabled="!nodeWriteBlocked" :content="nodeWriteBlockedReason">
           <div>
             <el-button type="primary" :disabled="nodeWriteBlocked || creating" @click="openCreateDialog">
               <el-icon><Plus /></el-icon>
-              创建密钥
+              {{ t('common.app.views.keys.createKey') }}
             </el-button>
           </div>
         </el-tooltip>
@@ -31,8 +31,8 @@
     <el-alert v-if="loadError" type="error" :closable="false" show-icon class="polling-error-alert error-banner">
       <template #title>
         <div class="polling-error-title">
-          <span>API 密钥加载失败：密钥列表为空不代表没有密钥</span>
-          <el-button link type="danger" @click="fetchKeys">立即重试</el-button>
+          <span>{{ t('common.app.views.keys.loadErrorBanner') }}</span>
+          <el-button link type="danger" @click="fetchKeys">{{ t('common.app.views.keys.retryNow') }}</el-button>
         </div>
       </template>
     </el-alert>
@@ -43,37 +43,37 @@
           <template #header>
             <div class="key-title-row">
               <span class="key-name">{{ key.name }}</span>
-              <el-tag v-if="keyExpired(key)" type="danger" size="small">已过期</el-tag>
+              <el-tag v-if="keyExpired(key)" type="danger" size="small">{{ t('common.app.views.keys.expiredTag') }}</el-tag>
               <el-tag v-else :type="key.is_enabled ? 'success' : 'info'" size="small">
-                {{ key.is_enabled ? '已启用' : '已禁用' }}
+                {{ key.is_enabled ? t('common.app.views.keys.enabledTag') : t('common.app.views.keys.disabledTag') }}
               </el-tag>
             </div>
           </template>
           <el-descriptions :column="1" size="small" border>
-            <el-descriptions-item label="密钥前缀">
+            <el-descriptions-item :label="t('common.app.views.keys.keyPrefix')">
               <code>{{ key.key_prefix || '-' }}</code>
             </el-descriptions-item>
-            <el-descriptions-item label="功能">
+            <el-descriptions-item :label="t('common.app.views.keys.features')">
               <div class="feature-tags">
                 <el-tag :type="key.mcp_enabled ? 'primary' : 'info'" size="small" effect="plain">
-                  MCP {{ key.mcp_enabled ? '开启' : '关闭' }}
+                  MCP {{ key.mcp_enabled ? t('common.app.views.keys.on') : t('common.app.views.keys.off') }}
                 </el-tag>
                 <el-tag :type="key.read_only ? 'warning' : 'success'" size="small" effect="plain">
-                  {{ key.read_only ? '只读' : '读写' }}
+                  {{ key.read_only ? t('common.app.views.keys.readOnly') : t('common.app.views.keys.readWrite') }}
                 </el-tag>
                 <el-tooltip v-if="whitelistEntries(key.mcp_ip_whitelist).length" :content="whitelistSummary(key.mcp_ip_whitelist)" placement="top">
-                  <el-tag type="warning" size="small" effect="plain">IP 白名单</el-tag>
+                  <el-tag type="warning" size="small" effect="plain">{{ t('common.app.views.keys.ipWhitelist') }}</el-tag>
                 </el-tooltip>
               </div>
             </el-descriptions-item>
-            <el-descriptions-item label="创建时间">
+            <el-descriptions-item :label="t('common.app.views.keys.createdAt')">
               {{ formatDateShort(key.created_at) || '-' }}
             </el-descriptions-item>
-            <el-descriptions-item label="最后使用">
-              {{ formatDate(key.last_used) || '从未使用' }}
+            <el-descriptions-item :label="t('common.app.views.keys.lastUsed')">
+              {{ formatDate(key.last_used) || t('common.app.views.keys.neverUsed') }}
             </el-descriptions-item>
-            <el-descriptions-item label="过期时间">
-              {{ formatDate(key.expires_at) || '永不过期' }}
+            <el-descriptions-item :label="t('common.app.views.keys.expiresAt')">
+              {{ formatDate(key.expires_at) || t('common.app.views.keys.neverExpires') }}
             </el-descriptions-item>
           </el-descriptions>
           <div class="key-actions">
@@ -87,7 +87,7 @@
                   @click="openFeatureDialog(key)"
                 >
                   <el-icon><Setting /></el-icon>
-                  功能配置
+                  {{ t('common.app.views.keys.featureConfig') }}
                 </el-button>
               </div>
             </el-tooltip>
@@ -101,7 +101,7 @@
                   @click="toggleKey(key)"
                 >
                   <el-icon><SwitchButton v-if="key.is_enabled" /><VideoPlay v-else /></el-icon>
-                  {{ key.is_enabled ? '禁用' : '启用' }}
+                  {{ key.is_enabled ? t('common.app.views.keys.disable') : t('common.app.views.keys.enable') }}
                 </el-button>
               </div>
             </el-tooltip>
@@ -109,7 +109,7 @@
               <div>
                 <el-button size="small" type="danger" :loading="deletingIds.has(key.id)" :disabled="nodeWriteBlocked || togglePendingId === key.id || deletingIds.has(key.id)" @click="deleteKey(key.id)">
                   <el-icon><Delete /></el-icon>
-                  删除
+                  {{ t('common.app.views.keys.delete') }}
                 </el-button>
               </div>
             </el-tooltip>
@@ -119,7 +119,7 @@
     </el-row>
 
     <el-card v-if="!loading && keys.length === 0 && !loadError" class="empty-card">
-      <el-empty description="暂无 API 密钥" :image-size="80" />
+      <el-empty :description="t('common.app.views.keys.emptyText')" :image-size="80" />
     </el-card>
 
     <el-dialog
@@ -130,22 +130,22 @@
       @opened="fetchMCPTools"
     >
       <template #header>
-        <DialogHeader :icon="SetUp" title="MCP 接入文档" subtitle="服务地址与接入配置，供 AI 客户端（Claude / Cursor 等）连接" />
+        <DialogHeader :icon="SetUp" :title="t('common.app.views.keys.mcpDocsTitle')" :subtitle="t('common.app.views.keys.mcpDocsSubtitle')" />
       </template>
       <section class="dialog-panel mcp-connection-panel">
-        <DialogSectionHeader title="接入配置" description="Streamable HTTP 服务地址与客户端 JSON" />
+        <DialogSectionHeader :title="t('common.app.views.keys.connectionSection')" :description="t('common.app.views.keys.connectionDesc')" />
       <el-form label-position="top">
-        <el-form-item label="MCP 服务地址（Streamable HTTP）">
+        <el-form-item :label="t('common.app.views.keys.mcpUrlLabel')">
           <el-input :model-value="mcpServiceURL" readonly>
             <template #append>
-              <el-button aria-label="复制 MCP 服务地址" @click="copyMCPServiceURL">
+              <el-button :aria-label="t('common.app.views.keys.copyMcpUrlAria')" @click="copyMCPServiceURL">
                 <el-icon><CopyDocument /></el-icon>
-                复制
+                {{ t('common.app.views.keys.copy') }}
               </el-button>
             </template>
           </el-input>
         </el-form-item>
-        <el-form-item label="MCP 客户端配置 JSON（粘贴到客户端，替换 <YOUR_API_KEY> 为密钥全文）">
+        <el-form-item :label="t('common.app.views.keys.mcpConfigLabel')">
           <div style="width: 100%">
             <el-input
               class="mcp-config-json"
@@ -157,98 +157,92 @@
             <div class="mcp-config-toolbar">
               <el-button size="small" @click="copyMCPConfig">
                 <el-icon><CopyDocument /></el-icon>
-                复制配置
+                {{ t('common.app.views.keys.copyConfig') }}
               </el-button>
             </div>
             <div class="info-note-bar">
-              <span class="info-note-desc">如客户端报证书错误，处置方式见下方「AI Agent 接入指南」自签证书段。密钥需保持 MCP 开启，只读 Key 仅暴露只读工具。</span>
+              <span class="info-note-desc">{{ t('common.app.views.keys.certHint') }}</span>
             </div>
           </div>
         </el-form-item>
       </el-form>
       </section>
 
-      <div class="info-note-bar"><span class="info-note-desc">请求需通过 X-API-Key 头携带 API Key（兼容 Authorization: Bearer lb_sk_... 形式），且该 Key 必须开启 MCP 功能。read_only Key 仅能看到只读工具；配置 IP 白名单后，请求来源还必须命中白名单。</span></div>
+      <div class="info-note-bar"><span class="info-note-desc">{{ t('common.app.views.keys.apiKeyHeaderNote') }}</span></div>
 
       <el-collapse class="mcp-agent-guide">
-        <el-collapse-item title="AI Agent 接入指南（协议流程 / 自签证书 / 错误码）" name="agent-guide">
+        <el-collapse-item :title="t('common.app.views.keys.agentGuideTitle')" name="agent-guide">
           <div class="mcp-guide-block">
             <section class="dialog-panel">
-              <DialogSectionHeader title="协议流程" :description="`Streamable HTTP · JSON-RPC 2.0 · POST ${mcpServiceURL}`" />
-            <pre class="mcp-guide-pre">1) 初始化
+              <DialogSectionHeader :title="t('common.app.views.keys.protocolFlowTitle')" :description="t('common.app.views.keys.protocolFlowDesc', { url: mcpServiceURL })" />
+            <pre class="mcp-guide-pre">{{ t('common.app.views.keys.flowInitStep') }}
 {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"your-agent","version":"1.0"}}}
 
-2) 获取工具清单
+{{ t('common.app.views.keys.flowListStep') }}
 {"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}
 
-3) 调用工具（示例：获取指标总览）
+{{ t('common.app.views.keys.flowCallStep') }}
 {"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"get_metrics_overview","arguments":{}}}</pre>
             </section>
             <section class="dialog-panel">
-              <DialogSectionHeader title="自签证书" description="可选配置" />
-            <div class="mcp-guide-text">如客户端报证书错误，在启动环境加 <code>NODE_TLS_REJECT_UNAUTHORIZED=0</code>，或将面板证书加入系统信任。</div>
+              <DialogSectionHeader :title="t('common.app.views.keys.selfSignedTitle')" :description="t('common.app.views.keys.optionalConfig')" />
+            <div class="mcp-guide-text">{{ t('common.app.views.keys.certFixA') }} <code>NODE_TLS_REJECT_UNAUTHORIZED=0</code>{{ t('common.app.views.keys.certFixB') }}</div>
             </section>
             <section class="dialog-panel">
-              <DialogSectionHeader title="常见错误" />
-            <div class="mcp-guide-text">401：密钥无效或缺失 / JWT 无效；403：MCP 未开启 / 只读 Key 调用写工具或 export_config、get_caddy_config / 非管理员属主调用 validate_import、preview_config / 来源 IP 不在白名单；参数错误：校验在 REST 侧执行，以 IsError + 具体 message 文本返回（协议层不做 input_schema 校验，无 -32602）——读 message 修正后重试。</div>
+              <DialogSectionHeader :title="t('common.app.views.keys.commonErrorsTitle')" />
+            <div class="mcp-guide-text">{{ t('common.app.views.keys.commonErrorsBody') }}</div>
             </section>
             <section class="dialog-panel">
-              <DialogSectionHeader title="权限范围（scope）" />
-            <div class="mcp-guide-text">只读 Key 可调用 GET 查询类工具（export_config 与 get_caddy_config 除外——前者导出含用户/密钥哈希，后者原始 Caddy 配置可能含内联私钥，对只读 Key 恒 403 且 tools/list 不展示）及 3 个读探测 POST 工具（parse_certificate / validate_import / preview_config）；其中 parse_certificate 对非管理员开放，validate_import 与 preview_config 要求 Key 属主为管理员（非管理员调用恒 403 且 tools/list 不展示）。证书配置测试与 CA 提供商测试会写入真实 DNS 记录/凭据，属写语义，只读 Key 不可用。其余写工具（POST/PUT/DELETE）需非只读 Key 且 Key 属主为管理员，仅在主节点可用（从节点一律 403——集群端点 promote_cluster / pull_sync / set_cluster_mode / forget_cluster_pins 除外，在从节点本身可用）。写操作校验后即时生效，失败自动回滚，无需手动 reload。完整口径以 <code>lazy-balancer://docs/ops-playbook</code> 资源为准。</div>
+              <DialogSectionHeader :title="t('common.app.views.keys.scopeTitle')" />
+            <div class="mcp-guide-text">{{ t('common.app.views.keys.scopeBodyA') }} <code>lazy-balancer://docs/ops-playbook</code> {{ t('common.app.views.keys.scopeBodyB') }}</div>
             </section>
             <section class="dialog-panel">
-              <DialogSectionHeader title="常用流程" />
-            <pre class="mcp-guide-pre">新建 HTTP 代理：create_rule（protocol=http + domain + listen_port + upstreams）
-  → 需要免费证书再 issue_certificate 传 caddy_id
-新建 TCP 代理：create_rule（protocol=tcp + listen_port + upstreams，不填 domain）
-  → 后端需真实客户端 IP 加 tcp_proxy_protocol=true
-排查流量异常：get_upstream_health → get_metrics_dashboard → list_audit_logs
-快速看全局指标：get_metrics_overview（轻量）
-  dashboard 为全量聚合、数据量大，非必要不用</pre>
+              <DialogSectionHeader :title="t('common.app.views.keys.commonFlowsTitle')" />
+            <pre class="mcp-guide-pre">{{ t('common.app.views.keys.commonFlowsBody') }}</pre>
             </section>
             <section class="dialog-panel">
-              <DialogSectionHeader title="完整操作手册（MCP 资源）" />
-            <div class="mcp-guide-text">Agent 连上后可通过 <code>resources/read</code> 读取 <code>lazy-balancer://docs/ops-playbook</code> 获取完整操作手册（接入/scope/工作流/排障/纪律/性能建议），无需访问代码仓库。</div>
-            <el-button size="small" :loading="mcpPlaybookDownloading" @click="downloadMCPPlaybook">下载手册正文（markdown）</el-button>
+              <DialogSectionHeader :title="t('common.app.views.keys.playbookTitle')" />
+            <div class="mcp-guide-text">{{ t('common.app.views.keys.playbookA') }} <code>resources/read</code> {{ t('common.app.views.keys.playbookRead') }} <code>lazy-balancer://docs/ops-playbook</code> {{ t('common.app.views.keys.playbookC') }}</div>
+            <el-button size="small" :loading="mcpPlaybookDownloading" @click="downloadMCPPlaybook">{{ t('common.app.views.keys.downloadPlaybook') }}</el-button>
             </section>
           </div>
         </el-collapse-item>
-        <el-collapse-item title="工具清单" name="tools-list">
-          <div class="info-note-bar mcp-table-scroll-hint"><span class="info-note-desc">左右滑动表格可查看方法、REST 路径和类型</span></div>
+        <el-collapse-item :title="t('common.app.views.keys.toolListTitle')" name="tools-list">
+          <div class="info-note-bar mcp-table-scroll-hint"><span class="info-note-desc">{{ t('common.app.views.keys.toolListScrollHint') }}</span></div>
           <div v-loading="mcpToolsLoading" class="mcp-tools-table">
             <div v-if="mcpToolsError" class="info-note-bar">
               <span class="info-note-desc">{{ mcpToolsError }}</span>
-              <span class="info-note-sub"><el-button size="small" @click="fetchMCPTools">重新加载</el-button></span>
+              <span class="info-note-sub"><el-button size="small" @click="fetchMCPTools">{{ t('common.app.views.keys.reload') }}</el-button></span>
             </div>
             <div v-else class="dialog-panel dialog-panel--flush">
-            <el-table :data="mcpTools" stripe max-height="38vh" empty-text="暂无工具">
+            <el-table :data="mcpTools" stripe max-height="38vh" :empty-text="t('common.app.views.keys.noTools')">
               <el-table-column type="expand">
                 <template #default="scope">
                   <div class="mcp-tool-expand">
-                    <div v-if="scope.row.usage" class="mcp-tool-usage"><span class="mcp-expand-label">使用场景：</span>{{ scope.row.usage }}</div>
+                    <div v-if="scope.row.usage" class="mcp-tool-usage"><span class="mcp-expand-label">{{ t('common.app.views.keys.usageLabel') }}</span>{{ scope.row.usage }}</div>
                     <template v-if="scope.row.input_schema">
-                      <div class="mcp-expand-label">参数契约（input_schema）：</div>
+                      <div class="mcp-expand-label">{{ t('common.app.views.keys.schemaLabel') }}</div>
                       <pre class="mcp-schema-pre">{{ formatSchema(scope.row.input_schema) }}</pre>
                     </template>
-                    <div v-else class="mcp-tool-usage"><span class="mcp-expand-label">参数：</span>无（空对象调用）</div>
+                    <div v-else class="mcp-tool-usage"><span class="mcp-expand-label">{{ t('common.app.views.keys.paramsLabel') }}</span>{{ t('common.app.views.keys.noParams') }}</div>
                   </div>
                 </template>
               </el-table-column>
-              <el-table-column prop="name" label="名称" min-width="180" />
-              <el-table-column label="详细描述" min-width="260">
+              <el-table-column prop="name" :label="t('common.app.views.keys.nameCol')" min-width="180" />
+              <el-table-column :label="t('common.app.views.keys.descCol')" min-width="260">
                 <template #default="scope">
                   <span class="mcp-tool-description">{{ scope.row.description }}</span>
                 </template>
               </el-table-column>
-              <el-table-column label="方法与 REST 路径" min-width="260">
+              <el-table-column :label="t('common.app.views.keys.methodPathCol')" min-width="260">
                 <template #default="scope">
                   <code>{{ scope.row.method }} {{ scope.row.path }}</code>
                 </template>
               </el-table-column>
-              <el-table-column label="类型" width="90" align="center">
+              <el-table-column :label="t('common.app.views.keys.typeCol')" width="90" align="center">
                 <template #default="scope">
                   <el-tag :type="scope.row.read_only ? 'success' : 'warning'" size="small">
-                    {{ scope.row.read_only ? '只读' : '写' }}
+                    {{ scope.row.read_only ? t('common.app.views.keys.readOnly') : t('common.app.views.keys.write') }}
                   </el-tag>
                 </template>
               </el-table-column>
@@ -270,52 +264,52 @@
       @closed="resetCreateForm"
     >
       <template #header>
-        <DialogHeader :icon="Key" title="创建 API 密钥" subtitle="lb_sk_ 前缀凭证，创建后仅显示一次" tone="warning" />
+        <DialogHeader :icon="Key" :title="t('common.app.views.keys.createKeyTitle')" :subtitle="t('common.app.views.keys.createKeySubtitle')" tone="warning" />
       </template>
       <el-form label-width="110px" :disabled="creating">
-        <el-form-item label="密钥名称" :error="createNameError">
-          <el-input v-model="createForm.name" maxlength="100" show-word-limit placeholder="请输入密钥名称" @input="createNameError = ''" />
+        <el-form-item :label="t('common.app.views.keys.keyName')" :error="createNameError">
+          <el-input v-model="createForm.name" maxlength="100" show-word-limit :placeholder="t('common.app.views.keys.enterKeyName')" @input="createNameError = ''" />
         </el-form-item>
-        <el-divider content-position="left" class="section-divider">权限</el-divider>
-        <el-form-item label="MCP 功能">
+        <el-divider content-position="left" class="section-divider">{{ t('common.app.views.keys.permSection') }}</el-divider>
+        <el-form-item :label="t('common.app.views.keys.mcpFeature')">
           <el-switch v-model="createForm.mcp_enabled" />
-          <span class="switch-hint">允许该密钥调用 MCP 工具接口</span>
+          <span class="switch-hint">{{ t('common.app.views.keys.mcpFeatureHint') }}</span>
         </el-form-item>
-        <el-form-item label="只读模式">
-          <el-tooltip :disabled="isAdmin" content="普通用户密钥仅支持只读权限" placement="top">
+        <el-form-item :label="t('common.app.views.keys.readOnlyMode')">
+          <el-tooltip :disabled="isAdmin" :content="t('common.app.views.keys.readOnlyOnlyTip')" placement="top">
             <el-switch v-model="createForm.read_only" :disabled="!isAdmin" />
           </el-tooltip>
-          <span class="switch-hint">开启后所有写操作被拒绝</span>
+          <span class="switch-hint">{{ t('common.app.views.keys.readOnlyHint') }}</span>
         </el-form-item>
-        <div v-if="createForm.read_only" class="info-note-bar readonly-alert"><span class="info-note-desc">{{ isAdmin ? '只读模式开启后，该密钥的所有写操作都将被拒绝（包括 MCP 写操作）。' : '普通用户密钥仅支持只读权限' }}</span></div>
-        <el-divider content-position="left" class="section-divider">有效期与来源限制</el-divider>
-        <el-form-item label="过期时间" :error="createExpiresError">
+        <div v-if="createForm.read_only" class="info-note-bar readonly-alert"><span class="info-note-desc">{{ isAdmin ? t('common.app.views.keys.readOnlyNote') : t('common.app.views.keys.readOnlyOnlyTip') }}</span></div>
+        <el-divider content-position="left" class="section-divider">{{ t('common.app.views.keys.expirySourceSection') }}</el-divider>
+        <el-form-item :label="t('common.app.views.keys.expiresAt')" :error="createExpiresError">
           <el-date-picker
             v-model="createForm.expiresAt"
             type="datetime"
             clearable
             format="YYYY-MM-DD HH:mm:ss"
             :disabled-date="disablePastDate"
-            placeholder="留空表示永不过期"
+            :placeholder="t('common.app.views.keys.expiresPlaceholder')"
             style="width: 100%"
             @change="createExpiresError = ''"
           />
         </el-form-item>
-        <el-form-item label="IP 白名单" :error="createWhitelistError">
+        <el-form-item :label="t('common.app.views.keys.ipWhitelist')" :error="createWhitelistError">
           <el-input
             v-model="createForm.whitelistText"
             type="textarea"
             :rows="5"
             resize="vertical"
-            placeholder="一行一个 CIDR，例如：10.0.0.0/8 或 192.168.1.10\n留空表示不限制来源 IP"
+            :placeholder="t('common.app.views.keys.whitelistPlaceholder')"
             @input="createWhitelistError = ''"
           />
         </el-form-item>
-        <div class="info-note-bar"><span class="info-note-desc">IP 白名单约束该密钥的全部 REST 与 MCP 调用。</span></div>
+        <div class="info-note-bar"><span class="info-note-desc">{{ t('common.app.views.keys.whitelistNote') }}</span></div>
       </el-form>
       <template #footer>
-        <el-button :disabled="creating" @click="createDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="creating" @click="createKey">创建</el-button>
+        <el-button :disabled="creating" @click="createDialogVisible = false">{{ t('common.app.views.keys.cancel') }}</el-button>
+        <el-button type="primary" :loading="creating" @click="createKey">{{ t('common.app.views.keys.createBtn') }}</el-button>
       </template>
     </el-dialog>
 
@@ -330,37 +324,37 @@
       @closed="resetFeatureForm"
     >
       <template #header>
-        <DialogHeader :icon="Setting" title="功能配置" :subtitle="`目标密钥：${featureTarget?.name || ''}`" />
+        <DialogHeader :icon="Setting" :title="t('common.app.views.keys.featureConfig')" :subtitle="t('common.app.views.keys.featureTargetSubtitle', { name: featureTarget?.name || '' })" />
       </template>
       <el-form label-width="110px" :disabled="featureSaving">
-        <el-divider content-position="left" class="section-divider">权限</el-divider>
-        <el-form-item label="MCP 功能">
+        <el-divider content-position="left" class="section-divider">{{ t('common.app.views.keys.permSection') }}</el-divider>
+        <el-form-item :label="t('common.app.views.keys.mcpFeature')">
           <el-switch v-model="featureForm.mcp_enabled" />
-          <span class="switch-hint">允许该密钥调用 MCP 工具接口</span>
+          <span class="switch-hint">{{ t('common.app.views.keys.mcpFeatureHint') }}</span>
         </el-form-item>
-        <el-form-item label="只读模式">
-          <el-tooltip :disabled="isAdmin" content="普通用户密钥仅支持只读权限" placement="top">
+        <el-form-item :label="t('common.app.views.keys.readOnlyMode')">
+          <el-tooltip :disabled="isAdmin" :content="t('common.app.views.keys.readOnlyOnlyTip')" placement="top">
             <el-switch v-model="featureForm.read_only" :disabled="!isAdmin" />
           </el-tooltip>
-          <span class="switch-hint">开启后所有写操作被拒绝</span>
+          <span class="switch-hint">{{ t('common.app.views.keys.readOnlyHint') }}</span>
         </el-form-item>
-        <div v-if="featureForm.read_only" class="info-note-bar readonly-alert"><span class="info-note-desc">{{ isAdmin ? '只读模式开启后，该密钥的所有写操作都将被拒绝（包括 MCP 写操作）。' : '普通用户密钥仅支持只读权限' }}</span></div>
-        <el-divider content-position="left" class="section-divider">来源限制</el-divider>
-        <el-form-item label="IP 白名单" :error="featureWhitelistError">
+        <div v-if="featureForm.read_only" class="info-note-bar readonly-alert"><span class="info-note-desc">{{ isAdmin ? t('common.app.views.keys.readOnlyNote') : t('common.app.views.keys.readOnlyOnlyTip') }}</span></div>
+        <el-divider content-position="left" class="section-divider">{{ t('common.app.views.keys.sourceRestrictSection') }}</el-divider>
+        <el-form-item :label="t('common.app.views.keys.ipWhitelist')" :error="featureWhitelistError">
           <el-input
             v-model="featureForm.whitelistText"
             type="textarea"
             :rows="5"
             resize="vertical"
-            placeholder="一行一个 CIDR，例如：10.0.0.0/8 或 192.168.1.10\n留空表示不限制来源 IP"
+            :placeholder="t('common.app.views.keys.whitelistPlaceholder')"
             @input="featureWhitelistError = ''"
           />
         </el-form-item>
-        <div class="info-note-bar"><span class="info-note-desc">IP 白名单约束该密钥的全部 REST 与 MCP 调用。</span></div>
+        <div class="info-note-bar"><span class="info-note-desc">{{ t('common.app.views.keys.whitelistNote') }}</span></div>
       </el-form>
       <template #footer>
-        <el-button :disabled="featureSaving" @click="featureDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="featureSaving" @click="saveFeatures">保存</el-button>
+        <el-button :disabled="featureSaving" @click="featureDialogVisible = false">{{ t('common.app.views.keys.cancel') }}</el-button>
+        <el-button type="primary" :loading="featureSaving" @click="saveFeatures">{{ t('common.app.views.keys.save') }}</el-button>
       </template>
     </el-dialog>
 
@@ -373,18 +367,18 @@
       @closed="createdKey = ''"
     >
       <template #header>
-        <DialogHeader :icon="CircleCheckFilled" title="API 密钥已创建" subtitle="仅显示一次，请立即复制并妥善保存" tone="success" />
+        <DialogHeader :icon="CircleCheckFilled" :title="t('common.app.views.keys.createdTitle')" :subtitle="t('common.app.views.keys.createdSubtitle')" tone="success" />
       </template>
-      <div class="info-note-bar"><span class="info-note-desc">此密钥仅显示一次，请立即复制并妥善保存。</span></div>
+      <div class="info-note-bar"><span class="info-note-desc">{{ t('common.app.views.keys.createdNote') }}</span></div>
       <div class="dialog-panel created-key-box">
         <code class="created-key-text">{{ createdKey }}</code>
         <el-button type="primary" @click="copyCreatedKey">
           <el-icon><CopyDocument /></el-icon>
-          复制密钥
+          {{ t('common.app.views.keys.copyKey') }}
         </el-button>
       </div>
       <template #footer>
-        <el-button type="primary" @click="createdKeyVisible = false">我已保存</el-button>
+        <el-button type="primary" @click="createdKeyVisible = false">{{ t('common.app.views.keys.savedAck') }}</el-button>
       </template>
     </el-dialog>
   </div>
@@ -402,6 +396,9 @@ import { saveBlob } from '@/utils/download'
 import { ElMessageBox, ElMessage } from 'element-plus'
 import { CircleCheckFilled, Connection, CopyDocument, Delete, Document, Key, Plus, Setting, SetUp, SwitchButton, VideoPlay } from '@element-plus/icons-vue'
 import type { APIKey, APIResponse, CreateAPIKeyInput, MCPToolSpec, UpdateAPIKeyInput } from '@/types'
+import { useI18n } from 'vue-i18n'
+
+const { t } = useI18n()
 import DialogHeader from '@/components/DialogHeader.vue'
 import DialogSectionHeader from '@/components/DialogSectionHeader.vue'
 
@@ -417,7 +414,7 @@ const authStore = useAuthStore()
 // 从节点判定走 store 单源；节点模式未知仍按既有契约 fail-closed。
 // 主节点非 admin 可管理本人密钥，因此不能复用全站 non-admin 只读门。
 const nodeWriteBlocked = computed(() => authStore.isSlaveNode || authStore.readOnlyReason === 'unknown')
-const nodeWriteBlockedReason = computed(() => authStore.isSlaveNode ? '从节点只读，请在主节点操作' : '节点信息加载中，暂以只读模式呈现')
+const nodeWriteBlockedReason = computed(() => authStore.isSlaveNode ? t('common.app.views.keys.slaveReadOnly') : t('common.app.views.keys.nodeUnknownReadOnly'))
 const isAdmin = computed(() => authStore.user?.role === 'admin')
 
 const keys = ref<readonly APIKey[]>([])
@@ -443,8 +440,8 @@ const createdKeyVisible = ref(false)
  *  否则误触即永久丢失、只能删除重建（一次性凭据守卫单源——与集群注册令牌、
  *  MFA 恢复码同实现）。 */
 const closeCreatedKey = createOneTimeSecretCloseGuard({
-  message: '密钥仅此一次显示，关闭后将无法再次查看。确认已保存？',
-  title: '保存密钥',
+  message: t('common.app.views.keys.closeGuardMessage'),
+  title: t('common.app.views.keys.closeGuardTitle'),
 })
 const mcpDocsVisible = ref(false)
 const mcpTools = ref<MCPToolSpec[]>([])
@@ -463,10 +460,10 @@ const mcpConfigJSON = computed(() => JSON.stringify({
 }, null, 2))
 const copyMCPConfig = async (): Promise<void> => {
   if (await copyText(mcpConfigJSON.value)) {
-    ElMessage.success('MCP 配置已复制')
+    ElMessage.success(t('common.app.views.keys.mcpConfigCopied'))
     return
   }
-  ElMessage.error('复制失败，请手动复制配置')
+  ElMessage.error(t('common.app.views.keys.copyConfigFailed'))
 }
 const formatSchema = (schema: Record<string, unknown>): string => JSON.stringify(schema, null, 2)
 const mcpPlaybookDownloading = ref(false)
@@ -511,7 +508,7 @@ const whitelistEntries = (value: readonly string[]): string[] => value.filter(Bo
 const whitelistSummary = (value: readonly string[]): string => {
   const entries = whitelistEntries(value)
   const preview = entries.slice(0, 3).join('、')
-  return `${entries.length} 条：${preview}${entries.length > 3 ? ' 等' : ''}`
+  return t('common.app.views.keys.whitelistSummary', { count: entries.length, preview, more: entries.length > 3 ? t('common.app.views.keys.summaryMore') : '' })
 }
 
 const openCreateDialog = (): void => {
@@ -543,7 +540,7 @@ async function createKey() {
   if (nodeWriteBlocked.value || creating.value) return
   const name = createForm.value.name.trim()
   if (!name) {
-    createNameError.value = '请输入密钥名称'
+    createNameError.value = t('common.app.views.keys.enterKeyName')
     return
   }
   const whitelist = serializeWhitelist(createForm.value.whitelistText)
@@ -554,15 +551,15 @@ async function createKey() {
   // 日期面板仅按天禁用过去日期，仍可选到当天早于现在的时刻；
   // 该值必被后端 400（apikeys.go「过期时间不能早于当前时间」）——提交前同文案拦截。
   if (createForm.value.expiresAt && createForm.value.expiresAt.getTime() < Date.now()) {
-    createExpiresError.value = '过期时间不能早于当前时间'
+    createExpiresError.value = t('common.app.views.keys.expiresPastError')
     return
   }
 
   creating.value = true
   try {
     try {
-      await ElMessageBox.confirm(`将创建 API 密钥「${name}」，密钥明文仅展示一次，请确认权限范围并妥善保存。是否继续？`, '创建 API 密钥', {
-        type: 'warning', confirmButtonText: '确认创建', cancelButtonText: '取消',
+      await ElMessageBox.confirm(t('common.app.views.keys.createConfirmMsg', { name }), t('common.app.views.keys.createKeyTitle'), {
+        type: 'warning', confirmButtonText: t('common.app.views.keys.confirmCreate'), cancelButtonText: t('common.app.views.keys.cancel'),
       })
     } catch { return }
     const payload: CreateAPIKeyInput = {
@@ -577,11 +574,11 @@ async function createKey() {
     // 先报成功再关框——密钥已入库（列表会多一条），明文却永久不可得，用户只能
     // 删除重建。缺 key 即显性报错、保持创建框并刷新列表，把违约形态摆到眼前。
     if (!res.data?.key) {
-      ElMessage.error('响应异常：密钥未返回，请在列表中删除该条目后重建')
+      ElMessage.error(t('common.app.views.keys.createNoKeyError'))
       await fetchKeys()
       return
     }
-    mfaAwareSuccess('密钥创建成功')
+    mfaAwareSuccess(t('common.app.views.keys.createSuccess'))
     createdKey.value = res.data.key
     createdKeyVisible.value = true
     createDialogVisible.value = false
@@ -622,8 +619,8 @@ const saveFeatures = async (): Promise<void> => {
   featureSaving.value = true
   try {
     try {
-      await ElMessageBox.confirm(`将更新 API 密钥「${featureTarget.value.name}」的 MCP 开关、只读权限和 IP 白名单，新的访问范围立即生效。确认保存？`, '保存功能配置', {
-        type: 'warning', confirmButtonText: '确认保存', cancelButtonText: '取消',
+      await ElMessageBox.confirm(t('common.app.views.keys.featureSaveConfirmMsg', { name: featureTarget.value.name }), t('common.app.views.keys.featureSaveTitle'), {
+        type: 'warning', confirmButtonText: t('common.app.views.keys.confirmSave'), cancelButtonText: t('common.app.views.keys.cancel'),
       })
     } catch { return }
     const payload: UpdateAPIKeyInput = {
@@ -632,7 +629,7 @@ const saveFeatures = async (): Promise<void> => {
       mcp_ip_whitelist: whitelist.value,
     }
     await request.patch(`/users/me/api-keys/${featureTarget.value.id}`, payload)
-    mfaAwareSuccess('功能配置已更新')
+    mfaAwareSuccess(t('common.app.views.keys.featureSaveSuccess'))
     featureDialogVisible.value = false
     await fetchKeys()
   } catch (error: unknown) {
@@ -647,9 +644,9 @@ const deleteKey = async (id: number) => {
   if (nodeWriteBlocked.value || togglePendingId.value === id || deletingIds.value.has(id)) return
   deletingIds.value.add(id)
   try {
-    await ElMessageBox.confirm('将删除这个 API 密钥。删除后无法恢复，使用该密钥的调用会立即失效。', '删除 API 密钥', { type: 'warning', confirmButtonText: '确认删除', cancelButtonText: '取消' })
+    await ElMessageBox.confirm(t('common.app.views.keys.deleteConfirmMsg'), t('common.app.views.keys.deleteTitle'), { type: 'warning', confirmButtonText: t('common.app.views.keys.confirmDelete'), cancelButtonText: t('common.app.views.keys.cancel') })
     await request.delete(`/users/me/api-keys/${id}`)
-    mfaAwareSuccess('删除成功')
+    mfaAwareSuccess(t('common.app.views.keys.deleteSuccess'))
     await fetchKeys()
   } catch (error: unknown) {
     if (error === 'cancel' || error === 'close') return
@@ -669,10 +666,10 @@ const toggleKey = async (key: APIKey) => {
   try {
     if (!isEnabled) {
       try {
-        await ElMessageBox.confirm(`确定要禁用 API 密钥“${key.name}”吗？禁用后该密钥将无法访问接口。`, '禁用确认', {
+        await ElMessageBox.confirm(t('common.app.views.keys.disableConfirmMsg', { name: key.name }), t('common.app.views.keys.disableTitle'), {
           type: 'warning',
-          confirmButtonText: '确认禁用',
-          cancelButtonText: '取消',
+          confirmButtonText: t('common.app.views.keys.confirmDisable'),
+          cancelButtonText: t('common.app.views.keys.cancel'),
         })
       } catch {
         return
@@ -680,7 +677,7 @@ const toggleKey = async (key: APIKey) => {
     }
     const payload: UpdateAPIKeyInput = { is_enabled: isEnabled }
     await request.patch(`/users/me/api-keys/${key.id}`, payload)
-    mfaAwareSuccess(isEnabled ? '密钥已启用' : '密钥已禁用')
+    mfaAwareSuccess(isEnabled ? t('common.app.views.keys.enableSuccess') : t('common.app.views.keys.disableSuccess'))
     await fetchKeys()
   } catch (error: unknown) {
     // Error toast is already shown by the global axios interceptor.
@@ -692,10 +689,10 @@ const toggleKey = async (key: APIKey) => {
 
 const copyCreatedKey = async () => {
   if (await copyText(createdKey.value)) {
-    ElMessage.success('密钥已复制')
+    ElMessage.success(t('common.app.views.keys.keyCopied'))
     return
   }
-  ElMessage.error('复制失败，请手动复制密钥')
+  ElMessage.error(t('common.app.views.keys.copyKeyFailed'))
 }
 
 const fetchMCPTools = async (): Promise<void> => {
@@ -711,11 +708,11 @@ const fetchMCPTools = async (): Promise<void> => {
     mcpToolsLoaded.value = true
   } catch (error: unknown) {
     if (error instanceof Error) {
-      mcpToolsError.value = `工具清单加载失败：${error.message}`
+      mcpToolsError.value = t('common.app.views.keys.toolListLoadFailed', { reason: error.message })
       return
     }
     // 非 Error 异常同样置错误态——否则落入「暂无工具」误态。
-    mcpToolsError.value = `工具清单加载失败：${String(error) || '未知错误'}`
+    mcpToolsError.value = t('common.app.views.keys.toolListLoadFailed', { reason: String(error) || t('common.app.views.keys.unknownError') })
     console.error('Failed to fetch MCP tools:', error)
   } finally {
     mcpToolsLoading.value = false
@@ -724,10 +721,10 @@ const fetchMCPTools = async (): Promise<void> => {
 
 const copyMCPServiceURL = async (): Promise<void> => {
   if (await copyText(mcpServiceURL)) {
-    ElMessage.success('MCP 服务地址已复制')
+    ElMessage.success(t('common.app.views.keys.mcpUrlCopied'))
     return
   }
-  ElMessage.error('复制失败，请手动复制 MCP 服务地址')
+  ElMessage.error(t('common.app.views.keys.copyUrlFailed'))
 }
 
 onMounted(() => {

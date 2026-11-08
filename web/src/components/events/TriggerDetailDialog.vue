@@ -9,12 +9,12 @@
     @close="emit('update:modelValue', false)"
   >
     <template #header>
-      <DialogHeader :icon="Document" title="触发详情" subtitle="命中阶段、策略来源与请求上下文" />
+      <DialogHeader :icon="Document" :title="t('common.app.views.trigDetail.title')" :subtitle="t('common.app.views.trigDetail.subtitle')" />
     </template>
     <div v-loading="loading">
       <!-- ① 命中概览：阶段 → 策略 → 命中源（一眼可读） -->
       <div class="trg-hero dialog-panel" :class="`trg-source--${kind}`">
-        <DialogSectionHeader title="命中概览" />
+        <DialogSectionHeader :title="t('common.app.views.trigDetail.overview')" />
         <div class="trg-hero-row">
           <!-- 规则协议徽标（数据源=event_type；字段缺失不显示——防御式）：
                TCP 青 = 全局 proto-tcp-tag 单源，HTTP 蓝 = el-tag primary -->
@@ -26,7 +26,7 @@
           <!-- geoLabel 回退已移至 trg-hero-ip-row（归属地优先、区域清单兜底） -->
         </div>
         <div class="trg-hero-policy">
-          <span class="trg-hero-policy-name">{{ policy?.name ?? (loading ? '加载中…' : noPolicyAttribution ? '（本次事件无策略归属）' : policyMissing ? '（策略已删除）' : '（策略信息不可用）') }}</span>
+          <span class="trg-hero-policy-name">{{ policy?.name ?? (loading ? t('common.app.views.trigDetail.loading') : noPolicyAttribution ? t('common.app.views.trigDetail.noAttribution') : policyMissing ? t('common.app.views.trigDetail.policyDeletedParen') : t('common.app.views.trigDetail.policyUnavailableParen')) }}</span>
           <el-tag size="small" :type="policyStatusTag.type" effect="plain">
             {{ policyStatusTag.label }}
           </el-tag>
@@ -39,10 +39,10 @@
           <span v-else-if="kind === 'geo' && geoLabel" class="trg-source-geo">{{ geoLabel }}</span>
         </div>
         <div class="trg-hero-hit">{{ heroHitSource }}</div>
-        <div v-if="row?.event_time" class="trg-hero-time">事件时间 · {{ formatTriggerTime(row.event_time) }}</div>
+        <div v-if="row?.event_time" class="trg-hero-time">{{ t('common.app.views.trigDetail.eventTime', { time: formatTriggerTime(row.event_time) }) }}</div>
         <div class="trg-hero-meta">
-          <span>来源 IP {{ row?.client_ip }}</span>
-          <span v-if="(row?.duration_us ?? 0) > 0"><template v-if="isWafFamily">处理时长 {{ formatDurationUs((row?.duration_us ?? 0) + (row?.precheck_us ?? 0)) }}<template v-if="(row?.precheck_us ?? 0) > 0">（预检 {{ formatDurationUs(row?.precheck_us) }} + WAF 段 {{ formatDurationUs(row?.duration_us) }}）</template></template><template v-else>处理时长 {{ formatDurationUs(row?.duration_us ?? 0) }}（预检耗时）</template></span>
+          <span>{{ t('common.app.views.trigDetail.sourceIp', { ip: row?.client_ip }) }}</span>
+          <span v-if="(row?.duration_us ?? 0) > 0"><template v-if="isWafFamily">{{ t('common.app.views.trigDetail.wafDuration', { total: formatDurationUs((row?.duration_us ?? 0) + (row?.precheck_us ?? 0)) }) }}<template v-if="(row?.precheck_us ?? 0) > 0">{{ t('common.app.views.trigDetail.wafDurationSplit', { precheck: formatDurationUs(row?.precheck_us), waf: formatDurationUs(row?.duration_us) }) }}</template></template><template v-else>{{ t('common.app.views.trigDetail.precheckDuration', { total: formatDurationUs(row?.duration_us ?? 0) }) }}</template></span>
           <el-tag size="small" :type="eventActionTone(row?.action)" effect="plain">
             {{ eventActionFull(row?.action) }}
           </el-tag>
@@ -54,73 +54,73 @@
       <!-- 加载失败面：策略信息与名单条目分开呈现（依据不同：前者是配置，
            后者决定命中/豁免归因）。两者都可原地重取——弹框内不必关闭重开。 -->
       <div v-if="loadError" class="info-note-bar">
-        <span class="info-note-desc">策略信息加载失败，配置与命中信息可能不完整</span>
-        <el-button size="small" type="primary" plain :loading="loading" @click="retryLists">重新加载</el-button>
+        <span class="info-note-desc">{{ t('common.app.views.trigDetail.policyLoadFailed') }}</span>
+        <el-button size="small" type="primary" plain :loading="loading" @click="retryLists">{{ t('common.app.views.trigDetail.reload') }}</el-button>
       </div>
       <div v-if="entriesError && !loadError" class="info-note-bar">
-        <span class="info-note-desc">地址列表条目加载失败：命中名单与信任豁免归因不完整</span>
-        <el-button size="small" type="primary" plain :loading="loading" @click="retryLists">重新加载</el-button>
+        <span class="info-note-desc">{{ t('common.app.views.trigDetail.entriesLoadFailed') }}</span>
+        <el-button size="small" type="primary" plain :loading="loading" @click="retryLists">{{ t('common.app.views.trigDetail.reload') }}</el-button>
       </div>
       <div class="trg-card dialog-panel">
-        <DialogSectionHeader :title="`策略配置 · ${dimensionTitle}`" />
-        <div class="trg-kv"><span class="k">当前配置</span><span>{{ relevantSummary }}</span></div>
+        <DialogSectionHeader :title="t('common.app.views.trigDetail.policyConfig', { dimension: dimensionTitle })" />
+        <div class="trg-kv"><span class="k">{{ t('common.app.views.trigDetail.currentConfig') }}</span><span>{{ relevantSummary }}</span></div>
 
         <!-- 命中的地址列表与内联名单（只读信息） -->
         <template v-if="kind === 'acl' || kind === 'geo' || kind === 'threat'">
           <div v-for="m in allHitLists" :key="m.id" class="trg-kv">
-            <span class="k">命中列表</span>
-            <span>{{ m.name }}<el-tag v-if="m.system" size="small" effect="plain" style="margin-left: 6px">内置只读</el-tag></span>
+            <span class="k">{{ t('common.app.views.trigDetail.hitLists') }}</span>
+            <span>{{ m.name }}<el-tag v-if="m.system" size="small" effect="plain" style="margin-left: 6px">{{ t('common.app.views.trigDetail.builtinReadonly') }}</el-tag></span>
           </div>
-          <div v-if="inlineAclHit" class="trg-kv"><span class="k">命中位置</span><span>策略内联{{ policy?.ip_acl_mode === 'allow' ? '白' : '黑' }}名单</span></div>
-          <div v-if="trustHitNote" class="trg-kv"><span class="k">信任豁免</span><span>{{ trustHitNote }}</span></div>
+          <div v-if="inlineAclHit" class="trg-kv"><span class="k">{{ t('common.app.views.trigDetail.hitPosition') }}</span><span>{{ t('common.app.views.trigDetail.inlineAclList', { mode: policy?.ip_acl_mode === 'allow' ? t('common.app.views.trigDetail.sideWhite') : t('common.app.views.trigDetail.sideBlack') }) }}</span></div>
+          <div v-if="trustHitNote" class="trg-kv"><span class="k">{{ t('common.app.views.trigDetail.trustExemption') }}</span><span>{{ trustHitNote }}</span></div>
           <div v-if="memberSystemTip" class="info-note-bar"><span class="info-note-desc">{{ memberSystemTip }}</span></div>
-          <div v-if="allHitLists.length === 0 && !inlineAclHit && kind === 'acl' && !isAllowOutside && !loadError && !entriesError" class="info-note-bar"><span class="info-note-desc">未定位到命中的地址列表（策略名单可能已变更；事件为历史记录）</span></div>
+          <div v-if="allHitLists.length === 0 && !inlineAclHit && kind === 'acl' && !isAllowOutside && !loadError && !entriesError" class="info-note-bar"><span class="info-note-desc">{{ t('common.app.views.trigDetail.noHitListFound') }}</span></div>
         </template>
 
         <!-- 爬虫校验：验证结果与豁免引擎（v2.3.8 独立族，不再误标地域） -->
         <template v-else-if="kind === 'crawler'">
-          <div class="trg-kv"><span class="k">判定</span><span>{{ Number(row?.rule_triggered) >= 850000 ? '伪装爬虫 UA：请求被拒绝并记录攻击事件' : '已验证搜索引擎/AI 爬虫：豁免地域拦截（IP 名单/WAF/限流仍全量生效）' }}</span></div>
-          <div class="trg-kv"><span class="k">豁免引擎</span><span>{{ crawlerEngineIds.length > 0 ? crawlerEngineIds.join('、') : '未配置' }}</span></div>
-          <div class="info-note-bar"><span class="info-note-desc">验证口径：UA + 反向 DNS 双跳（360 按官方 IP 段）；引擎勾选与观察级说明见「安全防护 → 安全策略 → 地域拦截」。</span></div>
+          <div class="trg-kv"><span class="k">{{ t('common.app.views.trigDetail.verdict') }}</span><span>{{ Number(row?.rule_triggered) >= 850000 ? t('common.app.views.trigDetail.crawlerSpoofVerdict') : t('common.app.views.trigDetail.crawlerVerifiedVerdict') }}</span></div>
+          <div class="trg-kv"><span class="k">{{ t('common.app.views.trigDetail.exemptEngines') }}</span><span>{{ crawlerEngineIds.length > 0 ? crawlerEngineIds.join('、') : t('common.app.views.trigDetail.notConfigured') }}</span></div>
+          <div class="info-note-bar"><span class="info-note-desc">{{ t('common.app.views.trigDetail.crawlerVerifyNote') }}</span></div>
         </template>
 
         <!-- 信任名单：直通/保留检测语义说明 -->
         <template v-else-if="kind === 'trust'">
-          <div class="trg-kv"><span class="k">命中名单</span><span>{{ trustHitListsText || '策略信任名单（内联）' }}</span></div>
-          <div class="trg-kv"><span class="k">信任语义</span><span>{{ trustModeText }}</span></div>
+          <div class="trg-kv"><span class="k">{{ t('common.app.views.trigDetail.hitListName') }}</span><span>{{ trustHitListsText || t('common.app.views.trigDetail.trustInlineFallback') }}</span></div>
+          <div class="trg-kv"><span class="k">{{ t('common.app.views.trigDetail.trustSemantics') }}</span><span>{{ trustModeText }}</span></div>
         </template>
 
         <!-- WAF · CRS：规则信息 + 源码折叠（只读） -->
         <template v-else-if="kind === 'waf-crs'">
-          <div class="trg-kv"><span class="k">规则 ID</span><span>{{ row?.rule_triggered }}</span></div>
+          <div class="trg-kv"><span class="k">{{ t('common.app.views.trigDetail.ruleId') }}</span><span>{{ row?.rule_triggered }}</span></div>
           <div class="trg-kv">
-            <span class="k">描述</span>
-            <span v-if="crsIndexLoading">加载中…</span>
-            <template v-else-if="crsEntry">{{ crsEntry.msg || '（无描述）' }}</template>
+            <span class="k">{{ t('common.app.views.trigDetail.description') }}</span>
+            <span v-if="crsIndexLoading">{{ t('common.app.views.trigDetail.loading') }}</span>
+            <template v-else-if="crsEntry">{{ crsEntry.msg || t('common.app.views.trigDetail.noDescription') }}</template>
             <template v-else>—</template>
           </div>
           <div class="trg-kv">
-            <span class="k">文件 / 分类</span>
-            <span v-if="crsIndexLoading">加载中…</span>
+            <span class="k">{{ t('common.app.views.trigDetail.fileCategory') }}</span>
+            <span v-if="crsIndexLoading">{{ t('common.app.views.trigDetail.loading') }}</span>
             <template v-else-if="crsEntry">{{ crsEntry.file }} · {{ crsEntry.category }}</template>
             <template v-else>—</template>
           </div>
-          <div class="trg-kv"><span class="k">规则消息</span><span>{{ row?.rule_msg || '—' }}</span></div>
+          <div class="trg-kv"><span class="k">{{ t('common.app.views.trigDetail.ruleMessage') }}</span><span>{{ row?.rule_msg || '—' }}</span></div>
           <div v-if="!crsIndexLoading && !crsEntry" class="info-note-bar" style="margin-top: 10px">
             <span class="info-note-desc">{{ crsIndexReady
-              ? '此规则已从当前 CRS 移除（存量排除条目仍生效）；排除管理请前往 安全防护 → 安全策略 → 策略编辑 → 排除规则'
-              : '当前 CRS 索引加载失败，无法展示规则详情' }}</span>
+              ? t('common.app.views.trigDetail.crsRemovedNote')
+              : t('common.app.views.trigDetail.crsIndexFailed') }}</span>
           </div>
           <template v-if="crsEntry">
-            <div class="crs-snippet-toggle" role="button" tabindex="0" :aria-expanded="crsSnippetExpanded" aria-label="展开或收起规则源码" @click="toggleCrsSnippet" @keydown.enter.prevent="activateOnce($event, toggleCrsSnippet)" @keydown.space.prevent="activateOnce($event, toggleCrsSnippet)">
+            <div class="crs-snippet-toggle" role="button" tabindex="0" :aria-expanded="crsSnippetExpanded" :aria-label="t('common.app.views.trigDetail.crsSnippetToggleAria')" @click="toggleCrsSnippet" @keydown.enter.prevent="activateOnce($event, toggleCrsSnippet)" @keydown.space.prevent="activateOnce($event, toggleCrsSnippet)">
               <el-icon class="crs-snippet-toggle-icon" :class="{ 'is-expanded': crsSnippetExpanded }"><ArrowRight /></el-icon>
-              <span>{{ crsSnippetExpanded ? '收起规则源码' : '展开规则源码' }}</span>
-              <span class="crs-snippet-toggle-file">{{ crsEntry.file }} · id:{{ row?.rule_triggered }} 所在行 ±10 行</span>
+              <span>{{ crsSnippetExpanded ? t('common.app.views.trigDetail.collapseSnippet') : t('common.app.views.trigDetail.expandSnippet') }}</span>
+              <span class="crs-snippet-toggle-file">{{ t('common.app.views.trigDetail.snippetFileLine', { file: crsEntry.file, id: row?.rule_triggered }) }}</span>
             </div>
             <div v-if="crsSnippetExpanded" v-loading="crsSnippetLoading" class="crs-snippet-body">
               <SyntaxHighlight v-if="crsSnippet" :content="crsSnippet" language="apacheconf" />
-              <div v-else-if="crsSnippetError" class="crs-snippet-empty">规则源码加载失败，可收起后重新展开重试</div>
-              <div v-else-if="!crsSnippetLoading" class="crs-snippet-empty">未在该文件中定位到规则定义（规则文件可能已更新）</div>
+              <div v-else-if="crsSnippetError" class="crs-snippet-empty">{{ t('common.app.views.trigDetail.snippetLoadFailed') }}</div>
+              <div v-else-if="!crsSnippetLoading" class="crs-snippet-empty">{{ t('common.app.views.trigDetail.snippetNotFound') }}</div>
             </div>
           </template>
         </template>
@@ -128,10 +128,10 @@
         <!-- WAF · 自定义规则：规则完整明细 -->
         <template v-else-if="kind === 'waf-custom'">
           <template v-if="customRule">
-            <div class="trg-kv"><span class="k">规则名称</span><span>{{ customRule.name }}</span></div>
-            <div class="trg-kv"><span class="k">条件关系</span><span>{{ customRule.condition_logic === 'or' ? '任一满足（OR）' : '同时满足（AND）' }}</span></div>
+            <div class="trg-kv"><span class="k">{{ t('common.app.views.trigDetail.ruleName') }}</span><span>{{ customRule.name }}</span></div>
+            <div class="trg-kv"><span class="k">{{ t('common.app.views.trigDetail.conditionLogic') }}</span><span>{{ customRule.condition_logic === 'or' ? t('common.app.views.trigDetail.conditionOr') : t('common.app.views.trigDetail.conditionAnd') }}</span></div>
             <div class="trg-kv">
-              <span class="k">匹配条件</span>
+              <span class="k">{{ t('common.app.views.trigDetail.matchConditions') }}</span>
               <span>
                 <div v-for="(c, i) in customConditions" :key="i" class="trg-cond">
                   {{ conditionTargetLabel(c.target, c.header_name) }} {{ c.operator }} <code>{{ c.pattern }}</code>
@@ -139,36 +139,37 @@
                 <span v-if="customConditions.length === 0">—</span>
               </span>
             </div>
-            <div class="trg-kv"><span class="k">动作</span><span>{{ customActionLabel }}</span></div>
-            <div class="trg-kv"><span class="k">状态</span><span>{{ customRule.enabled ? '启用' : '禁用' }}</span></div>
+            <div class="trg-kv"><span class="k">{{ t('common.app.views.trigDetail.actionLabel') }}</span><span>{{ customActionLabel }}</span></div>
+            <div class="trg-kv"><span class="k">{{ t('common.app.views.trigDetail.status') }}</span><span>{{ customRule.enabled ? t('common.app.views.trigDetail.enabled') : t('common.app.views.trigDetail.disabled') }}</span></div>
           </template>
-          <div v-else-if="!loading && customRuleLoadError" class="info-note-bar"><span class="info-note-desc">自定义规则加载失败，可关闭弹框后重新打开重试（事件为历史记录，展示不完整）</span></div>
-          <div v-else-if="!loading && customHasDbParent" class="info-note-bar"><span class="info-note-desc">未找到该自定义规则（可能已被删除；事件为历史记录）</span></div>
+          <div v-else-if="!loading && customRuleLoadError" class="info-note-bar"><span class="info-note-desc">{{ t('common.app.views.trigDetail.customRuleLoadFailed') }}</span></div>
+          <div v-else-if="!loading && customHasDbParent" class="info-note-bar"><span class="info-note-desc">{{ t('common.app.views.trigDetail.customRuleNotFound') }}</span></div>
           <div class="info-note-bar"><span class="info-note-desc">
-            <template v-if="customHasDbParent">自定义规则 id {{ customDisplayID }}（普通与 OR 分支的事件触发 id 均回解到同一规则）。编辑请前往 安全防护 → 规则集 → 自定义规则。</template>
-            <template v-else>旧版合成规则事件 id {{ customDisplayID }}（旧版合成规则无独立父规则记录）。</template>
+            <template v-if="customHasDbParent">{{ t('common.app.views.trigDetail.customRuleEditHint', { id: customDisplayID }) }}</template>
+            <template v-else>{{ t('common.app.views.trigDetail.legacySyntheticHint', { id: customDisplayID }) }}</template>
           </span></div>
         </template>
 
         <!-- 请求体异常 -->
         <template v-else-if="kind === 'body'">
-          <div class="trg-kv"><span class="k">说明</span><span>请求体解析失败（策略开启记录请求体后，无法解析的请求体触发）</span></div>
+          <div class="trg-kv"><span class="k">{{ t('common.app.views.trigDetail.noteLabel') }}</span><span>{{ t('common.app.views.trigDetail.bodyAnomalyNote') }}</span></div>
         </template>
       </div>
 
       <!-- 处置指引：IP 处置统一在快捷弹框（用户裁定） -->
       <div class="info-note-bar">
-        <span class="info-note-desc">IP 处置（移除/加入黑白名单、信任）请点击事件列表中的「IP 地址」打开快捷弹框操作。</span>
+        <span class="info-note-desc">{{ t('common.app.views.trigDetail.ipActionHint') }}</span>
       </div>
     </div>
     <template #footer>
-      <el-button @click="emit('update:modelValue', false)">关闭</el-button>
+      <el-button @click="emit('update:modelValue', false)">{{ t('common.app.views.trigDetail.close') }}</el-button>
     </template>
   </el-dialog>
 </template>
 
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { ArrowRight, Document } from '@element-plus/icons-vue'
 import DialogHeader from '@/components/DialogHeader.vue'
 import DialogSectionHeader from '@/components/DialogSectionHeader.vue'
@@ -211,6 +212,9 @@ const props = defineProps<{
 }>()
 const emit = defineEmits<{ (e: 'update:modelValue', v: boolean): void }>()
 
+// 词条键 common.app.views.trigDetail.*（母本由批次 D 集成落 locales views.ts）
+const { t } = useI18n()
+
 type Kind = 'acl' | 'geo' | 'crawler' | 'threat' | 'trust' | 'waf-crs' | 'waf-custom' | 'body' | 'other'
 
 // kind 改由共享 triggerStageFamily 投影（securityStages 唯一实现，原
@@ -220,10 +224,11 @@ type Kind = 'acl' | 'geo' | 'crawler' | 'threat' | 'trust' | 'waf-crs' | 'waf-cu
 const legacyGeo = computed(() => (props.row?.rule_triggered ?? '') === '8')
 
 const kind = computed<Kind>(() => {
-  const t = props.row?.rule_triggered ?? ''
-  if (!t) return 'other'
+  // 局部名避开 i18n composer t（本文件多处经 t() 取词条）
+  const triggered = props.row?.rule_triggered ?? ''
+  if (!triggered) return 'other'
   if (legacyGeo.value) return 'geo'
-  switch (triggerStageFamily(t)) {
+  switch (triggerStageFamily(triggered)) {
     case 'trust': return 'trust'
     case 'ipAcl': return 'acl'
     case 'geoip': return 'geo'
@@ -243,16 +248,16 @@ const kind = computed<Kind>(() => {
 const isWafFamily = computed(() => isWafDurationFamily(triggerStageFamily(props.row?.rule_triggered ?? '')))
 
 const categoryLabel = computed(() => {
-  if (legacyGeo.value) return '地域拦截（旧 id）'
+  if (legacyGeo.value) return t('common.app.views.trigDetail.categoryLegacyGeo')
   switch (kind.value) {
-    case 'geo': return '地域拦截'
-    case 'crawler': return '爬虫Bot'
-    case 'threat': return '威胁情报库'
-    case 'trust': return '信任名单'
-    case 'waf-crs': return 'WAF · CRS'
-    case 'waf-custom': return 'WAF · 自定义'
-    case 'body': return '请求体异常'
-    default: return 'IP 黑白名单'
+    case 'geo': return t('common.app.views.trigDetail.categoryGeo')
+    case 'crawler': return t('common.app.views.trigDetail.categoryCrawler')
+    case 'threat': return t('common.app.views.trigDetail.categoryThreat')
+    case 'trust': return t('common.app.views.trigDetail.categoryTrust')
+    case 'waf-crs': return t('common.app.views.trigDetail.categoryWafCrs')
+    case 'waf-custom': return t('common.app.views.trigDetail.categoryWafCustom')
+    case 'body': return t('common.app.views.trigDetail.categoryBody')
+    default: return t('common.app.views.trigDetail.categoryAcl')
   }
 })
 const sourceTagType = computed(() =>
@@ -275,35 +280,35 @@ const detectionNote = computed<string>(() => {
   // 检测模式的 DetectionOnly 切换只覆盖 WAF 段（CRS/自定义含 body
   // 目标）——阶段 1 族（IP ACL/地域/威胁/爬虫）的 logged 与模式无关，成因是
   // 信任保留检测，不能归因「检测模式」。
-  if (detectionModeExplains(kind.value) && policy.value?.mode === 'detection') return '所属策略为检测模式：命中只记录，不拦截'
-  if (exemptingTrustPolicy.value) return `信任保留检测（跨策略豁免）：由策略「${exemptingTrustPolicy.value}」的信任名单放行，命中记录为检测`
+  if (detectionModeExplains(kind.value) && policy.value?.mode === 'detection') return t('common.app.views.trigDetail.detectionModeNote')
+  if (exemptingTrustPolicy.value) return t('common.app.views.trigDetail.trustExemptNote', { policy: exemptingTrustPolicy.value })
   return ''
 })
 
 const heroStage = computed(() => {
-  if (legacyGeo.value) return '阶段 1 · 地域拦截（旧 id）'
+  if (legacyGeo.value) return t('common.app.views.trigDetail.stageLegacyGeo')
   switch (kind.value) {
-    case 'trust': return '阶段 0 · 信任名单'
-    case 'acl': return '阶段 1 · IP 访问控制'
-    case 'geo': return '阶段 1 · 地域拦截'
-    case 'crawler': return '阶段 1 · 爬虫校验'
-    case 'threat': return '阶段 1 · 威胁情报库'
-    case 'waf-crs': case 'waf-custom': return '阶段 3 · WAF'
-    case 'body': return '阶段 3 · 请求体检测'
-    default: return '安全防护'
+    case 'trust': return t('common.app.views.trigDetail.stageTrust')
+    case 'acl': return t('common.app.views.trigDetail.stageAcl')
+    case 'geo': return t('common.app.views.trigDetail.stageGeo')
+    case 'crawler': return t('common.app.views.trigDetail.stageCrawler')
+    case 'threat': return t('common.app.views.trigDetail.stageThreat')
+    case 'waf-crs': case 'waf-custom': return t('common.app.views.trigDetail.stageWaf')
+    case 'body': return t('common.app.views.trigDetail.stageBody')
+    default: return t('common.app.views.trigDetail.stageDefault')
   }
 })
 const dimensionTitle = computed(() => {
-  if (legacyGeo.value) return '地域拦截（旧 id）'
+  if (legacyGeo.value) return t('common.app.views.trigDetail.categoryLegacyGeo')
   switch (kind.value) {
-    case 'trust': return '信任名单'
-    case 'acl': return 'IP 黑白名单'
-    case 'geo': return '地域拦截'
-    case 'crawler': return '爬虫校验'
-    case 'threat': return '威胁情报库'
-    case 'waf-crs': case 'waf-custom': return 'WAF'
-    case 'body': return '请求体检测'
-    default: return 'IP 黑白名单'
+    case 'trust': return t('common.app.views.trigDetail.categoryTrust')
+    case 'acl': return t('common.app.views.trigDetail.categoryAcl')
+    case 'geo': return t('common.app.views.trigDetail.categoryGeo')
+    case 'crawler': return t('common.app.views.trigDetail.dimCrawler')
+    case 'threat': return t('common.app.views.trigDetail.categoryThreat')
+    case 'waf-crs': case 'waf-custom': return t('common.app.views.trigDetail.dimWaf')
+    case 'body': return t('common.app.views.trigDetail.dimBody')
+    default: return t('common.app.views.trigDetail.categoryAcl')
   }
 })
 // 相关维度配置摘要：只展示与本次触发相关的维度
@@ -312,7 +317,7 @@ const relevantSummary = computed(() => {
     case 'trust': return trustSummary.value
     case 'geo': return geoSummary.value
     case 'crawler': return crawlerSummary.value
-    case 'threat': return `威胁情报库引用 · ${aclSummary.value}`
+    case 'threat': return t('common.app.views.trigDetail.threatRefSummary', { summary: aclSummary.value })
     case 'waf-crs': case 'waf-custom': return wafSummary.value
     case 'body': return '—'
     default: return aclSummary.value
@@ -325,36 +330,46 @@ const heroHitSource = computed(() => {
   if (!ev) return '—'
   switch (kind.value) {
     case 'acl': {
-      if (isAllowOutside.value) return '不在白名单中（白名单模式：仅名单内 IP 放行）'
-      if (inlineAclHit.value) return `策略内联${policy.value?.ip_acl_mode === 'allow' ? '白' : '黑'}名单（规则 id:${ev.rule_triggered}）`
-      if (allHitLists.value.length > 0) return allHitLists.value.map((m) => `地址列表「${m.name}」${m.system ? '（内置）' : ''}`).join('、')
-      if (ev.rule_triggered === '4') return `遗留独立黑名单字段（id:4）${ev.rule_name ? ` · ${ev.rule_name}` : ''}`
-      return `规则 id:${ev.rule_triggered}${ev.rule_name ? ` · ${ev.rule_name}` : ''}`
+      if (isAllowOutside.value) return t('common.app.views.trigDetail.allowOutsideNote')
+      if (inlineAclHit.value) {
+        const mode = policy.value?.ip_acl_mode === 'allow' ? t('common.app.views.trigDetail.sideWhite') : t('common.app.views.trigDetail.sideBlack')
+        return t('common.app.views.trigDetail.heroInlineAcl', { mode, id: ev.rule_triggered })
+      }
+      if (allHitLists.value.length > 0) {
+        return allHitLists.value.map((m) => t('common.app.views.trigDetail.heroListHit', { name: m.name }) + (m.system ? t('common.app.views.trigDetail.builtinSuffix') : '')).join('、')
+      }
+      if (ev.rule_triggered === '4') return t('common.app.views.trigDetail.legacyBlacklistField') + (ev.rule_name ? ` · ${ev.rule_name}` : '')
+      return t('common.app.views.trigDetail.ruleIdBase', { id: ev.rule_triggered }) + (ev.rule_name ? ` · ${ev.rule_name}` : '')
     }
     case 'geo':
-      return `地域拦截规则 id:${ev.rule_triggered}（区域：${geoLabel.value || '未知'}）`
+      return t('common.app.views.trigDetail.heroGeoRule', { id: ev.rule_triggered, region: geoLabel.value || t('common.app.views.trigDetail.unknownRegion') })
     case 'crawler': {
       // 810000-849999 = 已验证爬虫豁免（放行）；850000-899999 = 爬虫伪装拦截
       const n = Number(ev.rule_triggered)
-      if (n >= 850000) return `爬虫伪装拦截（id:${ev.rule_triggered}）`
-      return `已验证爬虫豁免（id:${ev.rule_triggered}）`
+      if (n >= 850000) return t('common.app.views.trigDetail.heroCrawlerSpoof', { id: ev.rule_triggered })
+      return t('common.app.views.trigDetail.heroCrawlerVerified', { id: ev.rule_triggered })
     }
     case 'threat': {
       const names = allHitLists.value.filter((l) => l.system).map((l) => `「${l.name}」`)
-      return names.length > 0 ? `威胁情报库 ${names.join('、')}` : `威胁情报库预检（id:${ev.rule_triggered}）`
+      return names.length > 0
+        ? t('common.app.views.trigDetail.heroThreatLists', { lists: names.join('、') })
+        : t('common.app.views.trigDetail.heroThreatPrecheck', { id: ev.rule_triggered })
     }
     case 'trust': {
-      const t = trustHitListsText.value
-      return t ? `信任名单「${t}」` : '策略信任名单'
+      // 局部名避开 i18n composer t
+      const trustNames = trustHitListsText.value
+      return trustNames ? t('common.app.views.trigDetail.heroTrustLists', { lists: trustNames }) : t('common.app.views.trigDetail.heroTrustInline')
     }
     case 'waf-crs':
-      return `CRS 规则 ${ev.rule_triggered}${crsEntry.value?.msg ? ` · ${crsEntry.value.msg}` : ''}`
+      return t('common.app.views.trigDetail.heroCrsRule', { id: ev.rule_triggered }) + (crsEntry.value?.msg ? ` · ${crsEntry.value.msg}` : '')
     case 'waf-custom':
-      return customRule.value ? `自定义规则「${customRule.value.name}」` : `自定义规则 id:${customDisplayID.value}`
+      return customRule.value
+        ? t('common.app.views.trigDetail.heroCustomRule', { name: customRule.value.name })
+        : t('common.app.views.trigDetail.heroCustomRuleId', { id: customDisplayID.value })
     case 'body':
-      return '请求体解析失败'
+      return t('common.app.views.trigDetail.heroBodyParseFail')
     default:
-      return `规则 id:${ev.rule_triggered}`
+      return t('common.app.views.trigDetail.ruleIdBase', { id: ev.rule_triggered })
   }
 })
 
@@ -376,12 +391,12 @@ const policyStatusTag = computed<{ label: string; type: 'success' | 'info' }>(()
   if (loading.value) return { label: '…', type: 'info' }
   if (!policy.value) {
     if (noPolicyAttribution.value) return { label: '—', type: 'info' }
-    if (policyMissing.value) return { label: '策略已删除', type: 'info' }
-    return { label: '状态未知', type: 'info' }
+    if (policyMissing.value) return { label: t('common.app.views.trigDetail.statusPolicyDeleted'), type: 'info' }
+    return { label: t('common.app.views.trigDetail.statusUnknown'), type: 'info' }
   }
   return policy.value.enabled
-    ? { label: '已启用', type: 'success' }
-    : { label: '已禁用', type: 'info' }
+    ? { label: t('common.app.views.trigDetail.statusEnabled'), type: 'success' }
+    : { label: t('common.app.views.trigDetail.statusDisabled'), type: 'info' }
 })
 // 弹框会话序号：快速关开换行时丢弃在途响应（同文件 crsDialogSeq
 // / IPLocationAction loadPoliciesSeq 同仓模式）
@@ -527,26 +542,31 @@ const listSummary = (inline: string | undefined, refs: string | undefined): stri
   const inlineCount = parseIPList(inline).length
   const refIds = parseRefIds(refs)
   const names = lists.value.filter((l) => refIds.includes(l.id)).map((l) => l.name)
-  return `内联 ${inlineCount} 条${names.length > 0 ? ` · 引用：${names.join('、')}` : ''}`
+  return t('common.app.views.trigDetail.inlineCount', { count: inlineCount }) + (names.length > 0 ? t('common.app.views.trigDetail.refListsSuffix', { names: names.join('、') }) : '')
 }
 const aclSummary = computed(() => {
   const p = policy.value
   if (!p) return '—'
-  if (!p.ip_acl_enabled) return '未启用'
-  const mode = p.ip_acl_mode === 'allow' ? '白名单模式' : p.ip_acl_mode === '绕过' ? '旁路模式' : '黑名单模式'
+  if (!p.ip_acl_enabled) return t('common.app.views.trigDetail.notEnabled')
+  const mode = p.ip_acl_mode === 'allow'
+    ? t('common.app.views.trigDetail.modeAllow')
+    : p.ip_acl_mode === '绕过' ? t('common.app.views.trigDetail.modeBypass') : t('common.app.views.trigDetail.modeDeny')
   return `${mode} · ${listSummary(p.ip_acl_list, p.ip_acl_list_refs)}`
 })
 const trustSummary = computed(() => {
   const p = policy.value
   if (!p) return '—'
-  if (!p.ip_whitelist_enabled) return '未启用'
+  if (!p.ip_whitelist_enabled) return t('common.app.views.trigDetail.notEnabled')
   return listSummary(p.ip_whitelist, p.ip_whitelist_refs)
 })
 const geoSummary = computed(() => {
   const p = policy.value
   if (!p) return '—'
-  if (!p.geoip_mode || p.geoip_mode === 'off') return '未启用'
-  return `${p.geoip_mode === 'allow' ? '仅允许' : '拦截'}区域：${geoLabel.value || '—'}`
+  if (!p.geoip_mode || p.geoip_mode === 'off') return t('common.app.views.trigDetail.notEnabled')
+  return t('common.app.views.trigDetail.geoScope', {
+    mode: p.geoip_mode === 'allow' ? t('common.app.views.trigDetail.geoModeAllow') : t('common.app.views.trigDetail.geoModeBlock'),
+    region: geoLabel.value || '—',
+  })
 })
 // 爬虫豁免维度：事件来自 v2.3.8 爬虫两族，展示本策略的豁免引擎
 const crawlerEngineIds = computed<string[]>(() => {
@@ -560,8 +580,9 @@ const crawlerEngineIds = computed<string[]>(() => {
 const crawlerSummary = computed(() => {
   const p = policy.value
   if (!p) return '—'
-  if (p.geoip_crawler_exempt !== true) return '未启用爬虫豁免'
-  return `已启用 · 豁免引擎 ${crawlerEngineIds.value.length} 个${crawlerEngineIds.value.length > 0 ? `（${crawlerEngineIds.value.join('、')}）` : ''}`
+  if (p.geoip_crawler_exempt !== true) return t('common.app.views.trigDetail.crawlerExemptOff')
+  const engines = crawlerEngineIds.value.length > 0 ? `（${crawlerEngineIds.value.join('、')}）` : ''
+  return t('common.app.views.trigDetail.crawlerExemptOn', { count: crawlerEngineIds.value.length }) + engines
 })
 const wafSummary = computed(() => {
   const p = policy.value
@@ -571,12 +592,12 @@ const wafSummary = computed(() => {
   let groups = ''
   try {
     const g = (JSON.parse(p.crs_rule_groups ?? '[]') as string[]) || []
-    if (p.mode !== 'off' && p.mode !== 'custom_only' && g.length > 0) groups = ` · CRS ${g.length} 组`
+    if (p.mode !== 'off' && p.mode !== 'custom_only' && g.length > 0) groups = t('common.app.views.trigDetail.crsGroupsSuffix', { count: g.length })
   } catch { /* 畸形按无组处理 */ }
   let custom = ''
   try {
     const c = (JSON.parse(p.custom_rules ?? '[]') as string[]) || []
-    if ((p.mode === 'custom_only' || p.mode === 'blocking') && c.length > 0) custom = ` · 自定义 ${c.length} 条`
+    if ((p.mode === 'custom_only' || p.mode === 'blocking') && c.length > 0) custom = t('common.app.views.trigDetail.customRulesSuffix', { count: c.length })
   } catch { /* 畸形按无规则处理 */ }
   return `${mode}${groups}${custom}`
 })
@@ -651,18 +672,18 @@ const inlineAclHit = computed(() => ipHitScan.value.inlineAcl)
 const trustHitListsText = computed(() => ipHitScan.value.trustHit.map((l) => l.name).join('、'))
 const trustHitNote = computed(() => {
   if (!policy.value || kind.value === 'trust') return ''
-  return ipHitScan.value.ownerTrust ? '该 IP 在策略信任名单中（DetectionOnly：全评估不拦但全记录）' : ''
+  return ipHitScan.value.ownerTrust ? t('common.app.views.trigDetail.ownerTrustNote') : ''
 })
 // 信任命中语义按策略类型单源（非阶段 0 存量信任引擎恒 DetectionOnly）；
 // 文案随类型分流：stage0 跳过全部安全阶段（独立轻量检测事务记录），mixed
 // 等其他类型为引擎内检测降级、不跳段（与 stage1FootnoteText 同口径）。
 const trustModeText = computed(() => trustHitMode(policy.value?.policy_type, policy.value?.trust_detection) === 'detection'
   ? (policy.value?.policy_type !== undefined && policy.value.policy_type !== 'stage0'
-    ? '保留检测：引擎内检测降级，仍逐段评估、仅记录不拦截（动作=检测）'
-    : '保留检测：跳过全部安全阶段，仅由独立轻量检测事务记录（动作=检测）')
-  : '直通上游：跳过全部安全阶段，不产生拦截')
+    ? t('common.app.views.trigDetail.trustDetectionInline')
+    : t('common.app.views.trigDetail.trustDetectionStage0'))
+  : t('common.app.views.trigDetail.trustPassthrough'))
 const memberSystemTip = computed(() =>
-  policy.value && ipHitScan.value.sysAclHit ? '内置威胁名单为只读来源；误报可将该 IP 加入信任名单豁免。' : ''
+  policy.value && ipHitScan.value.sysAclHit ? t('common.app.views.trigDetail.memberSystemTip') : ''
 )
 
 // —— WAF · 自定义规则明细 ——
@@ -680,12 +701,17 @@ const customRule = ref<CustomRule | null>(null)
 const customDbId = computed(() => customRuleEventDbID(props.row?.rule_triggered ?? ''))
 const customHasDbParent = computed(() => Number.isFinite(customDbId.value))
 const customDisplayID = computed(() => customHasDbParent.value ? String(customDbId.value) : (props.row?.rule_triggered || '—'))
-const ACTION_LABELS: Record<string, string> = { block: '拦截', log: '仅记录', pass: '放行' } // 后端合法动作仅 block/log/pass（score 为不可达映射，已删）
+// 后端合法动作仅 block/log/pass（score 为不可达映射，已删）
 const customActionLabel = computed(() => {
   const a = customRule.value?.action ?? ''
   // 查表过 hasOwn：动作来自库值，原型键命中原生函数会渲染成源码文本，
-  // 「未知值回显原文」的兜底形同失效。
-  return hasOwn(ACTION_LABELS, a) ? ACTION_LABELS[a] : a
+  // 「未知值回显原文」的兜底形同失效。词条值调用点现取（不入模块快照）。
+  const labels: Record<string, string> = {
+    block: t('common.app.views.trigDetail.actionBlock'),
+    log: t('common.app.views.trigDetail.actionLog'),
+    pass: t('common.app.views.trigDetail.actionPass'),
+  }
+  return hasOwn(labels, a) ? labels[a] : a
 })
 const customConditions = computed<Array<{ target: string; operator: string; pattern: string; header_name?: string }>>(() => {
   // 后端列表接口 conditions 已是结构化数组（非 JSON 字符串）

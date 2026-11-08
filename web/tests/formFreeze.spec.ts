@@ -97,7 +97,7 @@ test('自动封禁配置弹框：保存中禁 ESC/X/取消并冻结表单', () =
   const page = code('src/views/security/SecurityEvents.vue')
   assert.ok(openTags(page, 'el-dialog').some((tag) => tag.includes(':close-on-press-escape="!autobanSaving"') && tag.includes(':show-close="!autobanSaving"')))
   assert.ok(openTags(page, 'el-form').some((tag) => tag.includes(':model="autobanForm"') && tag.includes(':disabled="autobanSaving"')))
-  assert.match(page, /<el-button :disabled="autobanSaving" @click="autobanDialogVisible = false">取消<\/el-button>/)
+  assert.match(page, /<el-button :disabled="autobanSaving" @click="autobanDialogVisible = false">\{\{ t\('app\.security\.events\.cancel'\) \}\}<\/el-button>/)
 })
 
 test('自动封禁禁用：占位先于确认并在 finally 释放', () => {

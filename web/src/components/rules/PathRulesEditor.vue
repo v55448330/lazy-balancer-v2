@@ -1,8 +1,8 @@
 <template>
   <div class="path-rules-editor">
     <div class="editor-section-header">
-      <DialogSectionHeader title="自定义路由" description="按顺序匹配，先命中先生效；未命中走默认上游" />
-      <el-button type="primary" size="small" :icon="Plus" @click="addRule">添加路径规则</el-button>
+      <DialogSectionHeader :title="t('common.app.rules.common.customRoutes')" :description="t('common.app.rules.paths.orderHint')" />
+      <el-button type="primary" size="small" :icon="Plus" @click="addRule">{{ t('common.app.rules.paths.addRule') }}</el-button>
     </div>
 
     <div class="path-rules-list">
@@ -14,16 +14,16 @@
       >
         <!-- 组内层次(用户裁定重构):徽标+操作行 → 匹配行 → 自定义上游开关行 → 缩进上游表格 -->
         <div class="path-rule-head">
-          <span class="path-rule-order">规则 {{ index + 1 }}</span>
+          <span class="path-rule-order">{{ t('common.app.rules.paths.ruleN', { n: index + 1 }) }}</span>
           <div class="path-rule-actions">
-            <el-tooltip content="上移" placement="top">
-              <el-button :icon="ArrowUp" size="small" plain :disabled="index === 0" aria-label="上移路径规则" @click="moveRule(index, -1)" />
+            <el-tooltip :content="t('common.app.rules.paths.moveUp')" placement="top">
+              <el-button :icon="ArrowUp" size="small" plain :disabled="index === 0" :aria-label="t('common.app.rules.paths.moveUpTitle')" @click="moveRule(index, -1)" />
             </el-tooltip>
-            <el-tooltip content="下移" placement="top">
-              <el-button :icon="ArrowDown" size="small" plain :disabled="index === pathRules.length - 1" aria-label="下移路径规则" @click="moveRule(index, 1)" />
+            <el-tooltip :content="t('common.app.rules.paths.moveDown')" placement="top">
+              <el-button :icon="ArrowDown" size="small" plain :disabled="index === pathRules.length - 1" :aria-label="t('common.app.rules.paths.moveDownTitle')" @click="moveRule(index, 1)" />
             </el-tooltip>
-            <el-tooltip content="删除" placement="top">
-              <el-button :icon="Delete" size="small" type="danger" plain aria-label="删除路径规则" @click="removeRule(index)" />
+            <el-tooltip :content="t('common.app.rules.common.delete')" placement="top">
+              <el-button :icon="Delete" size="small" type="danger" plain :aria-label="t('common.app.rules.paths.deletePathRule')" @click="removeRule(index)" />
             </el-tooltip>
           </div>
         </div>
@@ -31,21 +31,21 @@
         <!-- 匹配行:三字段同一基线;行内标签与向导 el-form-item label 同源样式 -->
         <div class="path-rule-match-row">
           <label class="rule-field match-type-field">
-            <span class="rule-field-label">匹配方式</span>
-            <el-select v-model="rule.match_type" class="match-type-select" size="small" aria-label="匹配方式">
-              <el-option label="前缀匹配" value="prefix" />
-              <el-option label="精确匹配" value="exact" />
+            <span class="rule-field-label">{{ t('common.app.rules.paths.matchType') }}</span>
+            <el-select v-model="rule.match_type" class="match-type-select" size="small" :aria-label="t('common.app.rules.paths.matchType')">
+              <el-option :label="t('common.app.rules.paths.prefixMatch')" value="prefix" />
+              <el-option :label="t('common.app.rules.paths.exactMatch')" value="exact" />
             </el-select>
           </label>
 
           <label class="rule-field path-field">
-            <span class="rule-field-label">路径</span>
+            <span class="rule-field-label">{{ t('common.app.rules.paths.pathLabel') }}</span>
             <div class="rule-field-control">
               <el-input
                 v-model="rule.path"
                 size="small"
-                :aria-label="`路径规则 ${index + 1} 的路径`"
-                placeholder="例如：/api"
+                :aria-label="t('common.app.rules.paths.rulePath', { ruleIndex: index + 1 })"
+                :placeholder="t('common.app.rules.paths.pathExample')"
                 :class="{ 'is-error': rowDiagnostics[index]?.pathError }"
               />
               <span v-if="rowDiagnostics[index]?.pathError" class="path-field-error">{{ rowDiagnostics[index]?.pathError }}</span>
@@ -55,16 +55,16 @@
 
           <label v-if="isForwardResponseMode(rule)" class="rule-field upstream-path-field">
             <span class="rule-field-label">
-              上游路径
+              {{ t('common.app.rules.paths.upPathLabel') }}
               <!-- 语义说明合并为单一 tooltip:留空语义 + 前缀/精确改写示例 -->
-              <FieldHelpIcon content="留空=原样转发；填写后改写转发路径。前缀匹配 /api + /v1 → /api/users 变 /v1/users（剥匹配前缀后前置）；精确匹配则转发路径整体替换为该值" />
+              <FieldHelpIcon :content="t('common.app.rules.paths.upstreamPathHint')" />
             </span>
             <div class="rule-field-control">
               <el-input
                 v-model="rule.upstream_path"
                 size="small"
-                :aria-label="`路径规则 ${index + 1} 的上游路径`"
-                placeholder="留空=原样转发"
+                :aria-label="t('common.app.rules.paths.ruleUpstreamPath', { ruleIndex: index + 1 })"
+                :placeholder="t('common.app.rules.paths.upstreamPathLeaveEmpty')"
                 :class="{ 'is-error': rowDiagnostics[index]?.upstreamError }"
               />
               <span v-if="rowDiagnostics[index]?.upstreamError" class="path-field-error">{{ rowDiagnostics[index]?.upstreamError }}</span>
@@ -74,39 +74,39 @@
 
         <!-- 响应方式行（2026-10-10 用户裁定）：转发上游（默认）/直接返回/301 跳转 -->
         <div class="rule-field path-rule-mode-row">
-          <span class="rule-field-label">响应方式</span>
-          <el-select v-model="rule.response_mode" size="small" style="width: 160px;" aria-label="响应方式" @change="applyResponseMode(rule)">
+          <span class="rule-field-label">{{ t('common.app.rules.paths.responseMode') }}</span>
+          <el-select v-model="rule.response_mode" size="small" style="width: 160px;" :aria-label="t('common.app.rules.paths.responseMode')" @change="applyResponseMode(rule)">
             <!-- forward 为 UI 哨兵（el-select 空串选项不显示标签）——提交归一 '' -->
-            <el-option label="转发上游（默认）" value="forward" />
-            <el-option label="直接返回" value="static" />
-            <el-option label="301 跳转" value="redirect" />
+            <el-option :label="t('common.app.rules.wizard.forwardUpstreamDefault')" value="forward" />
+            <el-option :label="t('common.app.rules.paths.staticReturn')" value="static" />
+            <el-option :label="t('common.app.rules.paths.redirect301')" value="redirect" />
           </el-select>
-          <span class="form-tip-inline" v-if="isForwardResponseMode(rule)">按路径转发到上游</span>
-          <span class="form-tip-inline" v-else-if="rule.response_mode === 'static'">不访问上游，直接返回指定状态码与内容（该路径不经安全链：信任/IP 访问控制/限流/WAF 不生效）</span>
-          <span class="form-tip-inline" v-else>不访问上游，301 永久跳转到目标地址（该路径不经安全链：信任/IP 访问控制/限流/WAF 不生效）</span>
+          <span class="form-tip-inline" v-if="isForwardResponseMode(rule)">{{ t('common.app.rules.paths.forwardHint') }}</span>
+          <span class="form-tip-inline" v-else-if="rule.response_mode === 'static'">{{ t('common.app.rules.paths.staticReturnHint') }}</span>
+          <span class="form-tip-inline" v-else>{{ t('common.app.rules.paths.redirect301Hint') }}</span>
         </div>
 
         <!-- 直接返回字段行 -->
         <div v-if="rule.response_mode === 'static'" class="path-rule-response-row">
           <label class="rule-field">
-            <span class="rule-field-label">状态码</span>
+            <span class="rule-field-label">{{ t('common.app.rules.paths.statusCode') }}</span>
             <!-- 标准全称显示（2026-10-10 用户裁定）：值仍为数字状态码 -->
-            <el-select v-model="rule.response_status" size="small" style="width: 210px;" aria-label="状态码">
+            <el-select v-model="rule.response_status" size="small" style="width: 210px;" :aria-label="t('common.app.rules.paths.statusCode')">
               <el-option v-for="code in STATIC_RESPONSE_STATUSES" :key="code" :label="`${code} ${STATIC_RESPONSE_STATUS_REASONS[code]}`" :value="code" />
             </el-select>
           </label>
           <label class="rule-field">
-            <span class="rule-field-label">格式</span>
-            <el-select v-model="rule.response_content_type" size="small" style="width: 130px;" aria-label="响应格式">
-              <el-option label="纯文本" value="text/plain" />
+            <span class="rule-field-label">{{ t('common.app.rules.paths.formatLabel') }}</span>
+            <el-select v-model="rule.response_content_type" size="small" style="width: 130px;" :aria-label="t('common.app.rules.paths.responseFormat')">
+              <el-option :label="t('common.app.rules.paths.plainText')" value="text/plain" />
               <el-option label="JSON" value="application/json" />
               <el-option label="HTML" value="text/html" />
             </el-select>
           </label>
           <label class="rule-field" style="flex: 1;">
-            <span class="rule-field-label">内容</span>
+            <span class="rule-field-label">{{ t('common.app.rules.paths.contentLabel') }}</span>
             <div class="rule-field-control">
-              <el-input v-model="rule.response_body" size="small" maxlength="64" show-word-limit placeholder="不超过 64 个字符，可留空" :aria-label="`路径规则 ${index + 1} 的响应内容`" />
+              <el-input v-model="rule.response_body" size="small" maxlength="64" show-word-limit :placeholder="t('common.app.rules.paths.bodyMaxHint')" :aria-label="t('common.app.rules.paths.ruleResponseContent', { ruleIndex: index + 1 })" />
             </div>
           </label>
         </div>
@@ -114,56 +114,56 @@
         <!-- 301 跳转字段行 -->
         <div v-if="rule.response_mode === 'redirect'" class="path-rule-response-row">
           <label class="rule-field" style="flex: 1;">
-            <span class="rule-field-label">跳转地址</span>
+            <span class="rule-field-label">{{ t('common.app.rules.paths.redirectTargetLabel') }}</span>
             <div class="rule-field-control">
-              <el-input v-model="rule.redirect_to" size="small" placeholder="https://example.com/new 或 /new/" :aria-label="`路径规则 ${index + 1} 的跳转地址`" :class="{ 'is-error': rowDiagnostics[index]?.responseError }" />
+              <el-input v-model="rule.redirect_to" size="small" :placeholder="t('common.app.rules.paths.redirectPlaceholder')" :aria-label="t('common.app.rules.paths.ruleRedirectUrl', { ruleIndex: index + 1 })" :class="{ 'is-error': rowDiagnostics[index]?.responseError }" />
               <span v-if="rowDiagnostics[index]?.responseError" class="path-field-error">{{ rowDiagnostics[index]?.responseError }}</span>
             </div>
           </label>
         </div>
 
         <div v-if="isForwardResponseMode(rule)" class="custom-upstream-toggle">
-          <span class="custom-upstream-title">使用自定义上游</span>
+          <span class="custom-upstream-title">{{ t('common.app.rules.paths.useCustomUpstream') }}</span>
           <el-switch :model-value="rule.upstreams !== null" @change="toggleCustomUpstreams(rule, $event)" />
-          <span class="form-tip-inline">关闭时使用规则的默认上游服务器</span>
+          <span class="form-tip-inline">{{ t('common.app.rules.paths.customUpstreamOffHint') }}</span>
         </div>
 
         <div v-if="rule.upstreams !== null" class="custom-upstream-editor dialog-panel">
           <div class="upstream-grid upstream-grid-header" aria-hidden="true">
-            <span>协议</span>
-            <span>地址</span>
-            <span>端口</span>
-            <span>权重 %</span>
-            <span>操作</span>
+            <span>{{ t('common.app.rules.common.protocol') }}</span>
+            <span>{{ t('common.app.rules.paths.address') }}</span>
+            <span>{{ t('common.app.rules.common.port') }}</span>
+            <span>{{ t('common.app.rules.paths.weightPercent') }}</span>
+            <span>{{ t('common.app.rules.common.actions') }}</span>
           </div>
           <div v-for="(upstream, upstreamIndex) in rule.upstreams" :key="upstreamIndex" class="upstream-grid upstream-row">
             <label class="upstream-field">
-              <span class="mobile-field-label">协议</span>
-              <el-select v-model="upstream.protocol" size="small" aria-label="协议">
+              <span class="mobile-field-label">{{ t('common.app.rules.common.protocol') }}</span>
+              <el-select v-model="upstream.protocol" size="small" :aria-label="t('common.app.rules.common.protocol')">
                 <el-option value="http" label="HTTP" />
                 <el-option value="https" label="HTTPS" />
               </el-select>
             </label>
             <label class="upstream-field">
-              <span class="mobile-field-label">地址</span>
-              <el-input v-model="upstream.address" size="small" :aria-label="`路径规则 ${index + 1} 自定义上游 ${upstreamIndex + 1} 地址`" placeholder="IP 或域名" />
+              <span class="mobile-field-label">{{ t('common.app.rules.paths.address') }}</span>
+              <el-input v-model="upstream.address" size="small" :aria-label="t('common.app.rules.paths.ruleUpstreamAddr', { ruleIndex: index + 1, upstreamIndex: upstreamIndex + 1 })" :placeholder="t('common.app.rules.common.ipOrDomain')" />
             </label>
             <label class="upstream-field">
-              <span class="mobile-field-label">端口</span>
-              <el-input-number v-model="upstream.port" size="small" :min="1" :max="65535" aria-label="端口" controls-position="right" />
+              <span class="mobile-field-label">{{ t('common.app.rules.common.port') }}</span>
+              <el-input-number v-model="upstream.port" size="small" :min="1" :max="65535" :aria-label="t('common.app.rules.common.port')" controls-position="right" />
             </label>
             <label class="upstream-field">
-              <span class="mobile-field-label">权重</span>
-              <el-input v-model.number="upstream.weight" size="small" type="number" :min="1" :max="100" aria-label="权重百分比" @change="onWeightChange(rule, upstreamIndex)">
+              <span class="mobile-field-label">{{ t('common.app.rules.common.weight') }}</span>
+              <el-input v-model.number="upstream.weight" size="small" type="number" :min="1" :max="100" :aria-label="t('common.app.rules.paths.weightPercentage')" @change="onWeightChange(rule, upstreamIndex)">
                 <template #suffix>%</template>
               </el-input>
             </label>
-            <el-button :icon="Delete" type="danger" link aria-label="删除自定义上游" @click="removeUpstream(rule, upstreamIndex)" />
+            <el-button :icon="Delete" type="danger" link :aria-label="t('common.app.rules.paths.deleteCustomUpstream')" @click="removeUpstream(rule, upstreamIndex)" />
           </div>
           <div class="add-upstream-actions">
-            <el-button class="add-upstream-button" size="small" plain :icon="Plus" :disabled="rule.upstreams.length >= MAX_UPSTREAM_ROWS" @click="addUpstream(rule)">添加上游</el-button>
-            <el-text v-if="rule.upstreams.length > MAX_UPSTREAM_ROWS" type="warning" size="small">已有 {{ rule.upstreams.length }} 个上游（超过编辑器 {{ MAX_UPSTREAM_ROWS }} 行上限）：权重仍可调整且不再被清零，保存前请删至 {{ MAX_UPSTREAM_ROWS }} 个以内，或通过 API 维护</el-text>
-            <el-text v-else-if="rule.upstreams.length >= MAX_UPSTREAM_ROWS" type="info" size="small">最多添加 {{ MAX_UPSTREAM_ROWS }} 个上游</el-text>
+            <el-button class="add-upstream-button" size="small" plain :icon="Plus" :disabled="rule.upstreams.length >= MAX_UPSTREAM_ROWS" @click="addUpstream(rule)">{{ t('common.app.rules.paths.addUpstream') }}</el-button>
+            <el-text v-if="rule.upstreams.length > MAX_UPSTREAM_ROWS" type="warning" size="small">{{ t('common.app.rules.paths.overUpstreamLimit', { n: rule.upstreams.length, max: MAX_UPSTREAM_ROWS }) }}</el-text>
+            <el-text v-else-if="rule.upstreams.length >= MAX_UPSTREAM_ROWS" type="info" size="small">{{ t('common.app.rules.paths.maxUpstreamsNote', { n: MAX_UPSTREAM_ROWS }) }}</el-text>
           </div>
         </div>
       </el-card>
@@ -186,6 +186,9 @@ import {
   pathRuleRowError,
   pathRuleShadowWarning,
 } from '@/utils/pathRulesEditor'
+import { useI18n } from 'vue-i18n'
+
+const { t } = useI18n()
 
 const pathRules = defineModel<PathRule[]>({ required: true })
 

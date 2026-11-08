@@ -2,8 +2,8 @@
   <el-alert v-if="jobsPollingError.errorMessage.value" type="error" :closable="false" show-icon class="polling-error-alert error-banner">
     <template #title>
       <div class="polling-error-title">
-        <span>证书任务加载失败：{{ jobsPollingError.errorMessage.value }}</span>
-        <el-button link type="danger" :loading="loading" @click="retryJobsPolling">立即重试</el-button>
+        <span>{{ t('app.settings.certJobs.certLoadFailPrefix') }}{{ jobsPollingError.errorMessage.value }}</span>
+        <el-button link type="danger" :loading="loading" @click="retryJobsPolling">{{ t('app.settings.certJobs.retryNowBtn') }}</el-button>
       </div>
     </template>
     <div class="polling-error-meta">{{ jobsPollingErrorDescription }}</div>
@@ -14,15 +14,15 @@
   <el-alert v-if="manualBannerRows.length > 0" type="warning" show-icon class="manual-banner" @close="dismissManualBanner">
     <template #title>
       <div class="polling-error-title">
-        <span>本页 {{ manualBannerRows.length }} 条证书任务自动重试已达上限，需人工处理</span>
-        <el-button link type="warning" @click="showManualOnly">查看</el-button>
+        <span>{{ t('app.settings.certJobs.manualBanner', { count: manualBannerRows.length }) }}</span>
+        <el-button link type="warning" @click="showManualOnly">{{ t('app.settings.certJobs.viewBtn') }}</el-button>
       </div>
     </template>
   </el-alert>
   <!-- 查看后的筛选态：仅显示本页命中的需人工行（服务端分页不动），可清除 -->
   <div v-if="manualFilterActive" class="info-note-bar">
-    <span class="info-note-desc">已筛选：需人工任务（本页 {{ manualRows.length }} 条，自动重试已达上限）</span>
-    <el-button link type="primary" @click="manualFilterActive = false">清除筛选</el-button>
+    <span class="info-note-desc">{{ t('app.settings.certJobs.filteredNote', { count: manualRows.length }) }}</span>
+    <el-button link type="primary" @click="manualFilterActive = false">{{ t('app.settings.certJobs.clearFilterBtn') }}</el-button>
   </div>
   <!-- 宽度观测容器：容器变窄时按优先级隐藏低价值列（见 utils/certJobColumns）。
        收敛下限 619px（不可让位列合计）；更窄时切 overflow-x:auto——「日志/重签」
@@ -37,8 +37,8 @@
     class="cert-jobs-table"
     :fit="true"
   >
-    <el-table-column v-if="visibleColumns.has('rule_id')" prop="rule_id" label="规则 ID" min-width="116" show-overflow-tooltip />
-    <el-table-column prop="domain" label="域名" min-width="210">
+    <el-table-column v-if="visibleColumns.has('rule_id')" prop="rule_id" :label="t('app.settings.certJobs.colRuleId')" min-width="116" show-overflow-tooltip />
+    <el-table-column prop="domain" :label="t('app.settings.certJobs.colDomain')" min-width="210">
       <template #default="{ row }">
         <!-- 多域名规则可能超长：单元格内尽量显示，hover 看完整域名。
              规则 ID 列让位后并入副行，信息不丢失 -->
@@ -48,7 +48,7 @@
         <span v-if="!visibleColumns.has('rule_id')" class="cell-sub">#{{ row.rule_id }}</span>
       </template>
     </el-table-column>
-    <el-table-column prop="status" label="状态" width="84" align="center">
+    <el-table-column prop="status" :label="t('app.settings.certJobs.colStatus')" width="84" align="center">
       <template #default="{ row }">
         <!-- hover=派生口径（2026-10-30 裁定：旧证书/失败次数/下次重试，实现单源
              utils/certJobStatus）；CA 原文（message）只在「日志」对话框呈现，
@@ -58,12 +58,12 @@
         </el-tooltip>
       </template>
     </el-table-column>
-    <el-table-column v-if="visibleColumns.has('issuer')" label="颁发者" min-width="84" show-overflow-tooltip>
+    <el-table-column v-if="visibleColumns.has('issuer')" :label="t('app.settings.certJobs.colIssuer')" min-width="84" show-overflow-tooltip>
       <template #default="{ row }">
         <span :class="row.issuer ? 'cell-text' : 'cell-empty'">{{ row.issuer || '-' }}</span>
       </template>
     </el-table-column>
-    <el-table-column label="证书有效期" min-width="155">
+    <el-table-column :label="t('app.settings.certJobs.colValidity')" min-width="155">
       <template #default="{ row }">
         <!-- 过期时间与剩余天数合并一列：列内只留日期，精确时间（配置时区）进 tooltip。
              过期证书不渲染裸负数——色弱/黑白场景下「-1 天」无文字语义。
@@ -71,12 +71,12 @@
              expires_at 会让导入/集群回插的 NULL 有效期行显示「-」，而规则页
              同一证书显示「剩 N 天」。 -->
         <el-tooltip v-if="row.status === 'issued' && effectiveNotAfter(row as CertJobListItem)" :content="formatDate(effectiveNotAfter(row as CertJobListItem))">
-          <span :class="['cert-days', row.certificate_status]">{{ formatDateShort(effectiveNotAfter(row as CertJobListItem)) }} · {{ row.certificate_status === 'expired' ? `已过期 ${Math.abs(row.days_remaining)} 天` : `剩 ${row.days_remaining} 天` }}</span>
+          <span :class="['cert-days', row.certificate_status]">{{ formatDateShort(effectiveNotAfter(row as CertJobListItem)) }} · {{ row.certificate_status === 'expired' ? t('app.settings.certJobs.expiredDays', { days: Math.abs(row.days_remaining) }) : t('app.settings.certJobs.remainDays', { days: row.days_remaining }) }}</span>
         </el-tooltip>
         <span v-else class="cell-empty">-</span>
       </template>
     </el-table-column>
-    <el-table-column v-if="visibleColumns.has('renewal')" label="自动重签时间" min-width="150">
+    <el-table-column v-if="visibleColumns.has('renewal')" :label="t('app.settings.certJobs.colRenewal')" min-width="150">
       <template #default="{ row }">
         <!-- 收敛提示：配置窗口超出寿命可执行区间时按「到期前 7 天」续签，
              列值不能被读成「配置的 88 天」 -->
@@ -86,13 +86,13 @@
         </el-tooltip>
       </template>
     </el-table-column>
-    <el-table-column v-if="visibleColumns.has('updated')" label="更新时间" min-width="150">
+    <el-table-column v-if="visibleColumns.has('updated')" :label="t('app.settings.certJobs.colUpdated')" min-width="150">
       <template #default="{ row }">
         <span v-if="formatDate(row.updated_at)" class="cell-text">{{ formatDate(row.updated_at) }}</span>
         <span v-else class="cell-empty">-</span>
       </template>
     </el-table-column>
-    <el-table-column label="重试次数" width="80" align="center">
+    <el-table-column :label="t('app.settings.certJobs.colRetries')" width="80" align="center">
       <template #default="{ row }">
         <!-- 仅终态失败显示 N（= renewal_attempts，上限=续签重试次数配置）；
              在途/成功/禁用显示 -。冷却列让位时，等待 CA 的冷却值并入本格 tooltip -->
@@ -102,7 +102,7 @@
         </el-tooltip>
       </template>
     </el-table-column>
-    <el-table-column v-if="visibleColumns.has('cooling')" label="冷却时间" min-width="90" show-overflow-tooltip>
+    <el-table-column v-if="visibleColumns.has('cooling')" :label="t('app.settings.certJobs.colCooling')" min-width="90" show-overflow-tooltip>
       <template #default="{ row }">
         <!-- waiting_ca=剩余倒计时；终态失败=「档位 · 时刻」（computeBackoff 同规则
              推导，429 实际间隔更短时显示实际间隔，单源 certJobCooldownCell） -->
@@ -110,12 +110,12 @@
         <span v-else class="cell-empty">-</span>
       </template>
     </el-table-column>
-    <el-table-column label="操作" width="90" align="center">
+    <el-table-column :label="t('app.settings.certJobs.colActions')" width="90" align="center">
       <template #default="{ row }">
-        <el-button link type="primary" size="small" @click="viewLogs(row as CertJobListItem)">日志</el-button>
+        <el-button link type="primary" size="small" @click="viewLogs(row as CertJobListItem)">{{ t('app.settings.certJobs.logBtn') }}</el-button>
         <el-tooltip :disabled="!retryDisabledReason(row as CertJobListItem)" :content="retryDisabledReason(row as CertJobListItem)">
           <span>
-            <el-button link type="primary" size="small" :loading="retryingJobIds.has(row.id)" :disabled="isReadOnly || !canRetry(row as CertJobListItem) || retryingJobIds.has(row.id)" @click="retryJob(row as CertJobListItem)">重签</el-button>
+            <el-button link type="primary" size="small" :loading="retryingJobIds.has(row.id)" :disabled="isReadOnly || !canRetry(row as CertJobListItem) || retryingJobIds.has(row.id)" @click="retryJob(row as CertJobListItem)">{{ t('app.settings.certJobs.renewBtn') }}</el-button>
           </span>
         </el-tooltip>
       </template>
@@ -124,7 +124,7 @@
   </div>
   <!-- 首拉失败且无数据时改「加载失败」，与顶部错误横幅口径一致，避免误
        导作「暂无签发任务」（有数据时保留最后列表，此空态不渲染）。-->
-  <el-empty v-if="!loading && jobs.length === 0" :description="jobsPollingError.errorMessage.value ? '加载失败' : '暂无签发任务'" :image-size="60" />
+  <el-empty v-if="!loading && jobs.length === 0" :description="jobsPollingError.errorMessage.value ? t('app.settings.certJobs.emptyFail') : t('app.settings.certJobs.emptyNone')" :image-size="60" />
   <div v-if="jobs.length > 0 || currentPage > 1" class="cert-jobs-pagination">
     <el-pagination
       v-model:current-page="currentPage"
@@ -147,21 +147,21 @@
     @closed="onLogDialogClosed"
   >
     <template #header>
-      <DialogHeader :icon="Timer" :title="`证书日志 - ${currentJob?.domain || ''}`" subtitle="ACME 签发任务实时日志" />
+      <DialogHeader :icon="Timer" :title="t('app.settings.certJobs.logDialogTitle', { domain: currentJob?.domain || '' })" :subtitle="t('app.settings.certJobs.logDialogSubtitle')" />
     </template>
     <div ref="logContainerRef" class="dialog-panel log-container">
       <pre v-if="logHtml" class="log-content" v-html="logHtml" />
-      <el-empty v-else description="暂无日志" :image-size="60" />
+      <el-empty v-else :description="t('app.settings.certJobs.emptyLogs')" :image-size="60" />
     </div>
     <template #footer>
       <div style="display: flex; align-items: center; gap: 10px;">
         <LogStorageBar v-if="currentJob" :key="currentJob.rule_id" log-key="certjob" :caddy-id="String(currentJob.rule_id)" style="margin-right: auto" />
-        <div class="log-auto-refresh" title="关闭后停止自动拉取，可使用「刷新」按钮手动更新">
-          <span>自动刷新</span>
+        <div class="log-auto-refresh" :title="t('app.settings.certJobs.autoRefreshStopTip')">
+          <span>{{ t('app.settings.certJobs.autoRefresh') }}</span>
           <el-switch v-model="logAutoRefresh" size="small" />
         </div>
-        <el-button @click="logDialogVisible = false">关闭</el-button>
-        <el-button type="primary" :loading="logLoading" @click="refreshLogs">刷新</el-button>
+        <el-button @click="logDialogVisible = false">{{ t('app.settings.certJobs.closeBtn') }}</el-button>
+        <el-button type="primary" :loading="logLoading" @click="refreshLogs">{{ t('app.settings.certJobs.refreshBtn') }}</el-button>
       </div>
     </template>
   </el-dialog>
@@ -169,6 +169,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { Timer } from '@element-plus/icons-vue'
 import DialogHeader from '@/components/DialogHeader.vue'
 import { request, mfaAwareSuccess } from '@/utils/api'
@@ -182,6 +183,8 @@ import { useAuthStore } from '@/stores/auth'
 import type { APIResponse, CertJobsPage, CertJobListItem } from '@/types'
 import { certJobStatusTone, certJobManualNeeded, certJobRowStatusLabel, certJobStatusHover, certJobCooldownCell, certManualBannerFingerprint, loadCertManualBannerDismissed, saveCertManualBannerDismissed, CERT_JOB_RENEWAL_ATTEMPTS_FALLBACK } from '@/utils/certJobStatus'
 import type { CertJobStatus } from '@/utils/certJobStatus'
+
+const { t } = useI18n()
 import { certJobEffectiveNotAfter, certJobRenewalAt, certRenewalWindowConverged, certRenewalWindowDays } from '@/utils/certJobExpiry'
 import { usePollingTask } from '@/composables/usePollingTask'
 import { usePollingErrorState } from '@/composables/usePollingErrorState'
@@ -207,7 +210,7 @@ let tableWrapObserver: ResizeObserver | null = null
 
 const coolingHint = (row: CertJob): string => {
   if (row.status !== 'waiting_ca' || !row.ca_available_after) return ''
-  return `冷却：${formatCoolingTime(row.ca_available_after)}`
+  return t('app.settings.certJobs.coolingPrefix', { time: formatCoolingTime(row.ca_available_after) })
 }
 
 // ── 续签语境派生口径（2026-10-30 裁定，单源 utils/certJobStatus）─────────
@@ -320,7 +323,7 @@ const logTail = useLogTailPolling({
     const now = Date.now()
     if (now - lastLogErrorToastAt > 30_000) {
       lastLogErrorToastAt = now
-      ElMessage.error('获取日志失败')
+      ElMessage.error(t('app.settings.certJobs.fetchLogsFail'))
     }
   },
 })
@@ -335,7 +338,7 @@ const canRetry = (row: CertJob): boolean => row.status !== 'disabled'
 
 const retryDisabledReason = (row: CertJob): string => {
   if (isReadOnly.value) return authStore.readOnlyMessage
-  if (row.status === 'disabled') return '已禁用的任务无法重签'
+  if (row.status === 'disabled') return t('app.settings.certJobs.disabledNoRenew')
   return ''
 }
 
@@ -352,19 +355,19 @@ const renewalAt = (row: CertJob): string => certJobRenewalAt(row, certRenewalDay
 // 必须与设置页说明、扫描实际行为同口径，收敛事实显性提示而非静默改写。
 const renewalConverged = computed(() => certRenewalWindowConverged(certRenewalDays.value))
 const renewalConvergedNote = computed(() =>
-  `配置的自动续签天数（${certRenewalDays.value} 天）超出证书寿命可执行窗口，实际按到期前 ${certRenewalWindowDays(certRenewalDays.value)} 天续签`)
+  t('app.settings.certJobs.renewalWindowAdjusted', { days: certRenewalDays.value, window: certRenewalWindowDays(certRenewalDays.value) }))
 
 const formatCoolingTime = (iso: string): string => {
   // 畸形/缺失时间返回空串（与 utils/certJobExpiry 同族口径）：不做防御会渲染
   // 「NaN小时NaN分钟后」。后端 ca_available_after 为 RFC3339 或 null，正常链路
   // 不触发，此处仅防御带外/旧版响应。
-  const t = Date.parse(iso)
-  if (!Number.isFinite(t)) return ''
-  const diff = t - Date.now()
-  if (diff <= 0) return '可重试'
+  const ts = Date.parse(iso)
+  if (!Number.isFinite(ts)) return ''
+  const diff = ts - Date.now()
+  if (diff <= 0) return t('app.settings.certJobs.retryReady')
   const hours = Math.floor(diff / (1000 * 60 * 60))
   const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60))
-  return `${hours}小时${minutes}分钟后`
+  return t('app.settings.certJobs.retryIn', { hours, minutes })
 }
 
 const fetchJobs = async (roundSignal?: AbortSignal) => {
@@ -377,7 +380,7 @@ const fetchJobs = async (roundSignal?: AbortSignal) => {
       silent: true,
     })
     if (disposed) return
-    if (!jobsRes.data) throw new TypeError('证书任务分页响应缺少 data')
+    if (!jobsRes.data) throw new TypeError(t('app.settings.certJobs.pagedRespMissingData'))
     jobs.value = [...jobsRes.data.list]
     total.value = jobsRes.data.total
     const lastPage = Math.max(1, Math.ceil(total.value / pageSize.value))
@@ -400,14 +403,14 @@ const retryJob = async (row: CertJob) => {
   const isWaitingCA = row.status === 'waiting_ca'
   const cooling = (row.retry_cooldown_seconds ?? 0) > 0
   const message = isWaitingCA
-    ? '任务当前处于"等待 CA"状态（可能仍在频率冷却中）。确定要立即重新签发吗？如果使用同一 CA 且冷却未到，可能再次被拒绝。'
+    ? t('app.settings.certJobs.confirmWaitingCA')
     : cooling
-      ? `确定要对域名 ${row.domain} 重新签发证书吗？当前处于重试冷却期，重签将立即尝试并消耗 CA 配额（连续失败可能触发 CA 侧限流）。`
-      : `确定要对域名 ${row.domain} 重新签发证书吗？`
+      ? t('app.settings.certJobs.confirmCooldown', { domain: row.domain })
+      : t('app.settings.certJobs.confirmPlain', { domain: row.domain })
   retryingJobIds.value = new Set(retryingJobIds.value).add(row.id)
   try {
     try {
-      await ElMessageBox.confirm(message, '重签确认', { type: isWaitingCA ? 'warning' : 'info' })
+      await ElMessageBox.confirm(message, t('app.settings.certJobs.confirmTitle'), { type: isWaitingCA ? 'warning' : 'info' })
     } catch {
       return
     }
@@ -416,7 +419,7 @@ const retryJob = async (row: CertJob) => {
     // 的 CA 冷却门（未确认的直接调用会被 429 拒绝并提示剩余冷却时长）。
     await request.post(`/certificates/jobs/${row.id}/retry?force=true`, undefined, { signal: jobsPolling.signal })
     if (disposed) return
-    mfaAwareSuccess('重新签发已触发')
+    mfaAwareSuccess(t('app.settings.certJobs.renewTriggered'))
     // run() 恰逢在途轮询时只把 pending 合并进当前 drain——若撞上 drain 已退出
     // 而 inFlight 未清的微任务窗口，pending 会搁浅到下一个 5s 定时 tick，「已触发」toast
     // 后列表迟迟不更新。第一次 await 等在途排空（drainPromise 的 finally 先于本 continuation
@@ -473,8 +476,8 @@ const jobsPollingErrorDescription = computed(() => {
   const lastError = formatDate(jobsPollingError.lastErrorAt.value)
   const retryAt = formatDate(jobsPollingError.retryAt.value)
   return retryAt
-    ? `最后错误：${lastError}；契约响应异常，自动重试已退避至 ${retryAt}`
-    : `最后错误：${lastError}`
+    ? t('app.settings.certJobs.lastErrorWithBackoff', { lastError, retryAt })
+    : t('app.settings.certJobs.lastError', { lastError })
 })
 const jobsPolling = usePollingTask(async (task) => {
   if (!jobsPollingError.canRun()) return

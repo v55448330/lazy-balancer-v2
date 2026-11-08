@@ -11,61 +11,65 @@
     @closed="resetForm"
   >
     <template #header>
-      <DialogHeader :icon="Setting" title="节点配置" subtitle="访问地址与威胁大屏本站信标位置由主节点统一配置" />
+      <DialogHeader :icon="Setting" :title="t('common.app.views.cluster.nodeConfigTitle')" :subtitle="t('common.app.views.cluster.nodeConfigSubtitle')" />
     </template>
     <el-form ref="formRef" :model="form" :rules="rules" label-position="top" @submit.prevent="save">
-      <el-form-item label="访问地址" prop="access_url">
+      <el-form-item :label="t('common.app.views.cluster.accessUrlLabel')" prop="access_url">
         <el-input
           ref="inputRef"
           v-model="form.access_url"
-          placeholder="例如：https://127.0.0.1:8001"
+          :placeholder="t('common.app.views.cluster.accessUrlPlaceholder')"
           clearable
           :disabled="saving"
           @keyup.enter="save"
         />
         <div class="form-tip-line">
-          {{ form.access_url.trim() ? '请输入可从浏览器访问的 HTTP 或 HTTPS 地址' : '留空将回退使用注册地址' }}
+          {{ form.access_url.trim() ? t('common.app.views.cluster.accessUrlTip') : t('common.app.views.cluster.accessUrlFallbackTip') }}
         </div>
       </el-form-item>
-      <el-form-item label="站点坐标">
+      <el-form-item :label="t('common.app.views.cluster.siteCoordsLabel')">
         <div class="site-location-row">
           <el-select
             v-model="form.siteLocationKey"
             filterable
             clearable
-            placeholder="选择省份或国家"
+            :placeholder="t('common.app.views.cluster.siteCoordsPlaceholder')"
             class="site-location-select"
             :disabled="saving"
             @change="applySiteLocation"
           >
-            <el-option-group label="中国省份">
+            <el-option-group :label="t('common.app.views.cluster.groupChinaProvinces')">
               <el-option v-for="item in CHINA_SITE_CHOICES" :key="item.key" :label="item.label" :value="item.key" />
             </el-option-group>
-            <el-option-group label="海外国家">
+            <el-option-group :label="t('common.app.views.cluster.groupIntlCountries')">
               <el-option v-for="item in COUNTRY_SITE_CHOICES" :key="item.key" :label="item.label" :value="item.key" />
             </el-option-group>
           </el-select>
           <span class="form-tip-inline">{{ coordSummary }}</span>
-          <el-tag v-if="node?.site_inherited" type="info" size="small" effect="plain">主节点默认</el-tag>
+          <el-tag v-if="node?.site_inherited" type="info" size="small" effect="plain">{{ t('common.app.views.cluster.masterDefault') }}</el-tag>
         </div>
-        <div class="form-tip-line">保存后下一同步周期下发到该从节点；清空并保存 = 跟随主节点默认坐标（主节点也未配置时显示未配置）。各节点坐标互不影响。</div>
+        <div class="form-tip-line">{{ t('common.app.views.cluster.siteCoordsTip') }}</div>
       </el-form-item>
     </el-form>
     <template #footer>
-      <el-button :disabled="saving" @click="close">取消</el-button>
-      <el-button type="primary" :loading="saving" @click="save">保存</el-button>
+      <el-button :disabled="saving" @click="close">{{ t('common.app.views.cluster.cancel') }}</el-button>
+      <el-button type="primary" :loading="saving" @click="save">{{ t('common.app.views.cluster.save') }}</el-button>
     </template>
   </el-dialog>
 </template>
 
 <script setup lang="ts">
 import { computed, nextTick, reactive, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import type { FormInstance, FormRules, InputInstance } from 'element-plus'
 import { Setting } from '@element-plus/icons-vue'
 import DialogHeader from '@/components/DialogHeader.vue'
 import { validateClusterUrl } from '@/utils/clusterUrl'
 import { CHINA_SITE_CHOICES, COUNTRY_SITE_CHOICES, coordsForSiteLocation, initialNodeSiteForm, nearestSiteLocation, nodeSiteCoordsChanged } from '@/utils/siteLocation'
 import type { ClusterNode } from '@/types'
+
+// 弹框文案走 i18n(批次 D cluster 域,common.app.views.cluster.*)。
+const { t } = useI18n()
 
 interface NodeConfigForm {
   access_url: string
@@ -103,7 +107,7 @@ let loadedNodeId: number | null = null
 
 // 与主节点地址共用 utils/clusterUrl（后端 ValidateClusterAccessURL 同规则）
 const validateAccessUrl = (_rule: unknown, value: string, callback: (error?: Error) => void): void => {
-  const error = validateClusterUrl(value, { label: '访问地址' })
+  const error = validateClusterUrl(value, { label: t('common.app.views.cluster.accessUrlLabel') })
   if (error) {
     callback(new Error(error))
     return
@@ -142,8 +146,8 @@ watch(
 )
 
 const coordSummary = computed(() => {
-  if (form.lat === 0 && form.lon === 0) return '跟随主节点默认坐标'
-  return `纬度 ${form.lat.toFixed(4)} · 经度 ${form.lon.toFixed(4)}`
+  if (form.lat === 0 && form.lon === 0) return t('common.app.views.cluster.followMasterCoords')
+  return t('common.app.views.cluster.latLon', { lat: form.lat.toFixed(4), lon: form.lon.toFixed(4) })
 })
 
 const applySiteLocation = (key: string): void => {

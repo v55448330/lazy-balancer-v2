@@ -4,13 +4,13 @@
       <div class="header-left">
         <h2 class="page-title">
           <el-icon class="title-icon"><Lock /></el-icon>
-          安全策略
+          {{ t('app.security.policies.page.title') }}
         </h2>
-        <p class="page-desc">管理 WAF 防火墙、IP 访问控制和限流策略</p>
+        <p class="page-desc">{{ t('app.security.policies.page.desc') }}</p>
       </div>
       <el-button v-if="!isReadOnly" type="primary" :disabled="loading" @click="openDialog()">
         <el-icon><Plus /></el-icon>
-        新建策略
+        {{ t('app.security.policies.page.create') }}
       </el-button>
     </div>
 
@@ -19,8 +19,8 @@
     <el-alert v-if="policiesLoadError" type="error" :closable="false" show-icon class="polling-error-alert error-banner">
       <template #title>
         <div class="polling-error-title">
-          <span>安全策略加载失败：列表为空/停留旧值不代表策略被清空</span>
-          <el-button link type="danger" :loading="loading" @click="fetchData">立即重试</el-button>
+          <span>{{ t('app.security.policies.list.loadFailedBanner') }}</span>
+          <el-button link type="danger" :loading="loading" @click="fetchData">{{ t('app.security.policies.common.retryNow') }}</el-button>
         </div>
       </template>
     </el-alert>
@@ -29,30 +29,30 @@
     <el-alert v-if="auxLoadFailures.length > 0" type="warning" :closable="false" show-icon class="polling-error-alert">
       <template #title>
         <div class="polling-error-title">
-          <span>部分辅助数据加载失败（{{ auxLoadFailures.join('、') }}）：策略计数与冲突告警可能不完整</span>
-          <el-button link type="warning" :loading="loading" @click="fetchData">重新加载</el-button>
+          <span>{{ t('app.security.policies.list.auxFailBanner', { items: auxLoadFailures.join(t('app.security.policies.common.sep')) }) }}</span>
+          <el-button link type="warning" :loading="loading" @click="fetchData">{{ t('app.security.policies.common.reload') }}</el-button>
         </div>
       </template>
     </el-alert>
 
     <el-card class="list-card">
       <el-tabs v-model="activeTypeTab" class="policy-type-tabs">
-        <el-tab-pane v-for="tab in policyTypeTabs" :key="tab.type" :label="`${tab.label}（${tab.count}）`" :name="tab.type" />
+        <el-tab-pane v-for="tab in policyTypeTabs" :key="tab.type" :label="t('app.security.policies.list.tabLabel', { label: tab.label, count: tab.count })" :name="tab.type" />
       </el-tabs>
       <div class="table-toolbar">
-        <el-input v-model="policySearch" placeholder="搜索策略名称" clearable :prefix-icon="Search" style="width: 240px" />
+        <el-input v-model="policySearch" :placeholder="t('app.security.policies.list.searchPlaceholder')" clearable :prefix-icon="Search" style="width: 240px" />
       </div>
       <el-table :data="pagedPolicies" v-loading="loading" stripe :header-cell-style="{ background: '#f9fafb' }" empty-text="">
         <template #empty>
-          <el-empty v-if="!policiesLoadError" description="暂无安全策略" :image-size="60" />
-          <span v-else class="text-secondary">加载失败，请点击上方「立即重试」</span>
+          <el-empty v-if="!policiesLoadError" :description="t('app.security.policies.list.empty')" :image-size="60" />
+          <span v-else class="text-secondary">{{ t('app.security.policies.list.loadFailedHint') }}</span>
         </template>
-        <el-table-column prop="name" label="策略名称" min-width="200">
+        <el-table-column prop="name" :label="t('app.security.policies.table.name')" min-width="200">
           <template #default="{ row }">
             <AccessibleLink type="primary" @click="openDialog(row as PolicySummary)">{{ row.name }}</AccessibleLink>
           </template>
         </el-table-column>
-        <el-table-column label="关联规则" width="100" align="center">
+        <el-table-column :label="t('app.security.policies.table.relatedRules')" width="100" align="center">
           <template #default="{ row }">
             <!-- 关联规则 drill-down 必须键盘可达：hover-only tooltip 里的 div 既开不了
                  也点不到，而 role="button" 的 span 没有任何激活行为=假按钮。改用
@@ -66,7 +66,7 @@
               :popper-options="popperViewportSafe"
               @command="openRuleInNewTab"
             >
-              <button type="button" class="policy-rule-count" :aria-label="`关联规则 ${row.rule_count} 条，查看并跳转规则`">{{ row.rule_count }}</button>
+              <button type="button" class="policy-rule-count" :aria-label="t('app.security.policies.table.relatedRulesAria', { n: row.rule_count })">{{ row.rule_count }}</button>
               <template #dropdown>
                 <el-dropdown-menu>
                   <el-dropdown-item v-for="rule in policyBoundRules(row.id)" :key="rule.caddy_id" :command="rule.caddy_id">
@@ -79,7 +79,7 @@
           </template>
         </el-table-column>
         <!-- 内容摘要列（按类型一行摘要） -->
-        <el-table-column label="内容摘要" min-width="324">
+        <el-table-column :label="t('app.security.policies.table.summary')" min-width="324">
           <template #default="{ row }">
             <div class="policy-summary-cell">
               <span class="policy-summary-text" :title="policySummaryLine(row as PolicySummary)">{{ policySummaryLine(row as PolicySummary) }}</span>
@@ -91,29 +91,29 @@
              历史（用户反馈）92→108（大数字标签留白不足），差额从内容摘要 min-width 340→324 划出。
              disable-transitions：el-tag 内置 <Transition name="el-zoom-in-center" appear>，切阶段 tab 时
              行重建会重播缩放淡入，居中缩放令标签左缘从中心外起步再回位（视觉上「数字先右偏再归位」）。 -->
-        <el-table-column label="24h 触发" width="108" align="center">
+        <el-table-column :label="t('app.security.policies.table.trigger24h')" width="108" align="center">
           <template #default="{ row }">
             <el-tag v-if="(row.trigger_24h ?? 0) > 0" disable-transitions size="small" type="danger" effect="plain" class="policy-trigger-tag">{{ row.trigger_24h }}</el-tag>
             <el-tag v-else disable-transitions size="small" type="info" effect="plain" class="policy-trigger-tag">0</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="状态" width="90" align="center">
+        <el-table-column :label="t('app.security.policies.table.status')" width="90" align="center">
           <template #default="{ row }">
-            <el-tag :type="row.enabled ? 'success' : 'info'" disable-transitions size="small" effect="light">{{ row.enabled ? '启用' : '禁用' }}</el-tag>
+            <el-tag :type="row.enabled ? 'success' : 'info'" disable-transitions size="small" effect="light">{{ row.enabled ? t('app.security.policies.status.enabled') : t('app.security.policies.status.disabled') }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="更新时间" width="170" align="center">
+        <el-table-column :label="t('app.security.policies.table.updatedAt')" width="170" align="center">
           <template #default="{ row }">{{ formatDate(row.updated_at) || '-' }}</template>
         </el-table-column>
-        <el-table-column label="更新者" width="100" align="center">
+        <el-table-column :label="t('app.security.policies.table.updatedBy')" width="100" align="center">
           <template #default="{ row }">{{ getUpdaterName(row.updated_by) }}</template>
         </el-table-column>
-        <el-table-column v-if="!isReadOnly" label="操作" width="168" fixed="right">
+        <el-table-column v-if="!isReadOnly" :label="t('app.security.policies.table.actions')" width="168" fixed="right">
           <template #default="{ row }">
-            <el-button size="small" link type="primary" @click="openDialog(row as PolicySummary)">{{ policyTypeOf(row as PolicySummary) === 'mixed' ? '查看' : '编辑' }}</el-button>
-            <el-button v-if="policyTypeOf(row as PolicySummary) !== 'mixed'" size="small" link type="primary" :disabled="securityBindingsLoading || securityBindingsFailed || bindRulesOpening" :title="securityBindingsLoading ? '规则绑定数据加载中' : securityBindingsFailed ? '规则绑定数据加载失败，请先重新加载' : ''" @click="openBindRulesDialog(row as PolicySummary)">绑定规则</el-button>
-            <el-button v-if="policyTypeOf(row as PolicySummary) === 'mixed'" size="small" link type="warning" @click="openMigrateDialog(row as PolicySummary)">更新迁移</el-button>
-            <el-button size="small" link type="danger" @click="handleDelete(row as PolicySummary)">删除</el-button>
+            <el-button size="small" link type="primary" @click="openDialog(row as PolicySummary)">{{ policyTypeOf(row as PolicySummary) === 'mixed' ? t('app.security.policies.action.view') : t('app.security.policies.action.edit') }}</el-button>
+            <el-button v-if="policyTypeOf(row as PolicySummary) !== 'mixed'" size="small" link type="primary" :disabled="securityBindingsLoading || securityBindingsFailed || bindRulesOpening" :title="securityBindingsLoading ? t('app.security.policies.bind.loadingTitle') : securityBindingsFailed ? t('app.security.policies.bind.failedTitle') : ''" @click="openBindRulesDialog(row as PolicySummary)">{{ t('app.security.policies.action.bindRules') }}</el-button>
+            <el-button v-if="policyTypeOf(row as PolicySummary) === 'mixed'" size="small" link type="warning" @click="openMigrateDialog(row as PolicySummary)">{{ t('app.security.policies.action.migrate') }}</el-button>
+            <el-button size="small" link type="danger" @click="handleDelete(row as PolicySummary)">{{ t('app.security.policies.common.delete') }}</el-button>
           </template>
         </el-table-column>
 
@@ -133,42 +133,42 @@
     <!-- 混合策略更新迁移预演：确认前展示将创建的子策略/重映射范围/上限风险 -->
     <el-dialog v-model="migrateVisible" class="dialog-body-inset" width="min(560px, 94vw)" top="10vh" :close-on-click-modal="false" :close-on-press-escape="!migrateSaving" :show-close="!migrateSaving">
       <template #header>
-        <DialogHeader :icon="WarningFilled" title="更新迁移预演"
-          :subtitle="`混合策略「${migratePolicy?.name}」将按阶段迁移为单职子策略（兼容组不再支持新建）`" />
+        <DialogHeader :icon="WarningFilled" :title="t('app.security.policies.migrate.title')"
+          :subtitle="t('app.security.policies.migrate.subtitle', { name: migratePolicy?.name })" />
       </template>
       <div v-if="migratePolicy" class="migrate-preview">
         <div class="migrate-preview-section">
-          <DialogSectionHeader :title="`将创建 ${migrateChildTypes.length} 条子策略`" tone="warning" />
+          <DialogSectionHeader :title="t('app.security.policies.migrate.willCreate', { n: migrateChildTypes.length })" tone="warning" />
           <div class="dialog-panel">
             <div class="migrate-preview-tags">
               <!-- 四阶段恒出（2026-09-21 用户裁定：与查看弹框/流程弹框同口径）——
                    空阶段灰态标注「未启用 · 不生成」，不再整段缺席 -->
               <el-tag v-for="type in (['stage0', 'stage1', 'stage2', 'stage3'] as const)" :key="type" size="small" effect="plain" :type="migrateChildTypes.includes(type) ? 'primary' : 'info'">
-                {{ migrateChildTypes.includes(type) ? `${migratePolicy.name}（${POLICY_TYPE_SHORT_LABELS[type]}）` : `${POLICY_TYPE_SHORT_LABELS[type]} · 未启用（不生成）` }}
+                {{ migrateChildTypes.includes(type) ? t('app.security.policies.migrate.childWithType', { name: migratePolicy.name, type: POLICY_TYPE_SHORT_LABELS[type] }) : t('app.security.policies.migrate.childDisabled', { type: POLICY_TYPE_SHORT_LABELS[type] }) }}
               </el-tag>
             </div>
           </div>
         </div>
         <div class="migrate-preview-section">
-          <DialogSectionHeader title="将重映射绑定" description="原策略的绑定整体改挂到子策略" tone="warning" />
+          <DialogSectionHeader :title="t('app.security.policies.migrate.remapTitle')" :description="t('app.security.policies.migrate.remapDesc')" tone="warning" />
           <div class="dialog-panel">
             <template v-if="migrateBoundRules.length > 0">
               <div v-for="rule in migrateBoundRules" :key="rule.caddy_id" class="migrate-preview-rule">
                 <span class="migrate-preview-rule-name">{{ rule.name }}</span>
                 <span class="migrate-preview-rule-meta">{{ rule.domain || '-' }}:{{ rule.listen_port }}</span>
-                <el-tag v-if="migrateStage2SkipRisk.some((r) => r.caddy_id === rule.caddy_id)" size="small" type="warning" effect="plain">将跳过（已有 stage2）</el-tag>
+                <el-tag v-if="migrateStage2SkipRisk.some((r) => r.caddy_id === rule.caddy_id)" size="small" type="warning" effect="plain">{{ t('app.security.policies.migrate.willSkip') }}</el-tag>
               </div>
             </template>
-            <div v-else class="migrate-preview-empty">当前无规则绑定本策略</div>
+            <div v-else class="migrate-preview-empty">{{ t('app.security.policies.migrate.noBindings') }}</div>
           </div>
         </div>
-        <div v-if="migrateStage2SkipRisk.length > 0" class="info-note-bar"><span class="info-note-desc">限流唯一风险：{{ migrateStage2SkipRisk.map((r) => r.name).join('、') }} 已绑定其他限流策略——拆分将产出阶段 2 子策略，这些规则会跳过重映射（每条规则最多一条限流策略），保持原绑定</span></div>
-        <div v-if="migrateCapRisk.length > 0" class="info-note-bar"><span class="info-note-desc">上限风险：{{ migrateCapRisk.map((r) => r.name).join('、') }} 迁移后将超过每条规则 {{ MAX_POLICIES_PER_RULE }} 条绑定上限——这些规则保持原绑定并进入跳过清单</span></div>
-        <div class="info-note-bar"><span class="info-note-desc">全部规则重映射成功后原策略将被删除；存在被跳过的规则时原策略保留（因仍在使用）</span></div>
+        <div v-if="migrateStage2SkipRisk.length > 0" class="info-note-bar"><span class="info-note-desc">{{ t('app.security.policies.migrate.rateLimitRisk', { names: migrateStage2SkipRisk.map((r) => r.name).join(t('app.security.policies.common.sep')) }) }}</span></div>
+        <div v-if="migrateCapRisk.length > 0" class="info-note-bar"><span class="info-note-desc">{{ t('app.security.policies.migrate.capRisk', { names: migrateCapRisk.map((r) => r.name).join(t('app.security.policies.common.sep')), max: MAX_POLICIES_PER_RULE }) }}</span></div>
+        <div class="info-note-bar"><span class="info-note-desc">{{ t('app.security.policies.migrate.deleteNote') }}</span></div>
       </div>
       <template #footer>
-        <el-button :disabled="migrateSaving" @click="cancelMigrate">取消</el-button>
-        <el-button type="warning" :loading="migrateSaving" :disabled="migrateSaving" @click="submitMigrate">确认更新迁移</el-button>
+        <el-button :disabled="migrateSaving" @click="cancelMigrate">{{ t('app.security.policies.common.cancel') }}</el-button>
+        <el-button type="warning" :loading="migrateSaving" :disabled="migrateSaving" @click="submitMigrate">{{ t('app.security.policies.migrate.confirm') }}</el-button>
       </template>
     </el-dialog>
 
@@ -176,7 +176,7 @@
     <el-dialog v-model="viewPolicyVisible" width="min(760px, 94vw)" top="6vh">
       <template #header>
         <DialogHeader :icon="Lock" :title="viewPolicyDetail?.name || viewPolicyRow?.name || ''"
-          subtitle="混合策略（兼容旧版）· 只读查看——经「更新迁移」拆分为单职策略后可编辑" />
+          :subtitle="t('app.security.policies.view.subtitle')" />
       </template>
       <div v-loading="viewPolicyLoading" class="view-policy-body">
         <template v-if="viewPolicyDetail">
@@ -190,7 +190,7 @@
             </div>
           </div>
           <div class="view-policy-section">
-            <DialogSectionHeader :title="`关联规则（${viewPolicyBoundRuleRows.length}）`" />
+            <DialogSectionHeader :title="t('app.security.policies.view.relatedRulesTitle', { n: viewPolicyBoundRuleRows.length })" />
             <div class="dialog-panel">
               <template v-if="viewPolicyBoundRuleRows.length > 0">
                 <div v-for="rule in viewPolicyBoundRuleRows" :key="rule.caddyId" class="view-policy-row">
@@ -198,19 +198,19 @@
                   <span class="view-policy-value">{{ rule.domain || '-' }}:{{ rule.listenPort }}</span>
                 </div>
               </template>
-              <div v-else class="view-policy-empty">未关联规则</div>
+              <div v-else class="view-policy-empty">{{ t('app.security.policies.view.noRules') }}</div>
             </div>
           </div>
         </template>
       </div>
       <template #footer>
-        <el-button @click="viewPolicyVisible = false">关闭</el-button>
-        <el-button v-if="!isReadOnly" type="warning" @click="openMigrateFromView">更新迁移</el-button>
+        <el-button @click="viewPolicyVisible = false">{{ t('app.security.policies.common.close') }}</el-button>
+        <el-button v-if="!isReadOnly" type="warning" @click="openMigrateFromView">{{ t('app.security.policies.action.migrate') }}</el-button>
       </template>
     </el-dialog>
     <el-dialog v-model="dialogVisible" class="dialog-body-inset policy-wizard-dialog" width="min(950px, 94vw)" top="5vh" :close-on-click-modal="false" :before-close="beforeWizardClose" @close="resetWizard">
       <template #header>
-        <DialogHeader :icon="Lock" :title="editingId ? (isReadOnly ? '查看策略' : '编辑策略') : '新建策略'"
+        <DialogHeader :icon="Lock" :title="editingId ? (isReadOnly ? t('app.security.policies.editor.titleView') : t('app.security.policies.editor.titleEdit')) : t('app.security.policies.editor.titleCreate')"
           :subtitle="EDITOR_SUBTITLES[editorPolicyType]" tone="primary" />
       </template>
       <el-steps :active="visualStepIndex" finish-status="success" align-center class="wizard-steps" :class="{ 'is-clickable': stepsClickable && !saving }">
@@ -231,8 +231,8 @@
                  与 el-form-item label 完全同构（用户裁定）；radio 不用 el-radio-group
                  包组——组容器 DIV 会被 EP 注册为表单输入 id 触发 Firefox label-for 告警，
                  改为同 model-value 的独立 radio 纵向列表（首行与输入框基线对齐） -->
-            <el-form-item v-if="editingId === null" label="策略类型" required>
-              <div class="policy-type-radio-list" role="radiogroup" aria-label="策略类型">
+            <el-form-item v-if="editingId === null" :label="t('app.security.policies.editor.typeLabel')" required>
+              <div class="policy-type-radio-list" role="radiogroup" :aria-label="t('app.security.policies.editor.typeLabel')">
                 <el-radio
                   v-for="opt in POLICY_TYPE_CREATE_OPTIONS"
                   :key="opt.value"
@@ -242,51 +242,51 @@
                 >{{ opt.label }}</el-radio>
               </div>
             </el-form-item>
-            <el-form-item v-else label="策略类型" for="policy-type-static">
+            <el-form-item v-else :label="t('app.security.policies.editor.typeLabel')" for="policy-type-static">
               <input type="text" id="policy-type-static" aria-hidden="true" tabindex="-1" autocomplete="off" style="display:none">
               <el-tag :type="editorPolicyType === 'mixed' ? 'warning' : 'primary'" effect="plain">{{ POLICY_TYPE_LABELS[editorPolicyType] }}</el-tag>
             </el-form-item>
-            <el-form-item label="名称" required>
-              <el-input v-model="form.name" placeholder="策略名称" :maxlength="SECURITY_NAME_MAX_RUNES" show-word-limit />
+            <el-form-item :label="t('app.security.policies.editor.nameLabel')" required>
+              <el-input v-model="form.name" :placeholder="t('app.security.policies.editor.namePlaceholder')" :maxlength="SECURITY_NAME_MAX_RUNES" show-word-limit />
             </el-form-item>
-            <el-form-item label="描述">
-              <el-input v-model="form.description" placeholder="策略描述" :maxlength="SECURITY_DESCRIPTION_MAX_RUNES" show-word-limit />
+            <el-form-item :label="t('app.security.policies.editor.descLabel')">
+              <el-input v-model="form.description" :placeholder="t('app.security.policies.editor.descPlaceholder')" :maxlength="SECURITY_DESCRIPTION_MAX_RUNES" show-word-limit />
             </el-form-item>
-            <el-form-item label="启用状态">
+            <el-form-item :label="t('app.security.policies.editor.enabledLabel')">
               <el-switch v-model="form.enabled" />
-              <span class="form-tip-inline">禁用后该策略对所有关联规则停止生效</span>
+              <span class="form-tip-inline">{{ t('app.security.policies.editor.enabledTip') }}</span>
             </el-form-item>
           </el-form>
         </div>
         <!-- Step: 阶段 0 · 信任名单（stage0 编辑器表单：信任名单内联+引用 + 保留检测记录开关） -->
         <div v-show="currentStep === WIZARD_STEP.TRUST" class="step-content">
           <div class="stage-projection-bar">
-            <span class="stage-projection-desc">本策略将在关联规则的信任名单阶段生效——「类型=信任名单（stage0）」策略命中后跳过全部后续安全阶段（直通=零安全事件；保留检测=仅由独立轻量检测事务记录，动作=检测）；mixed 等其他类型策略信任命中为引擎内检测降级（仅记录不拦截、不跳段）</span>
+            <span class="stage-projection-desc">{{ t('app.security.policies.stage0.projection') }}</span>
             <div class="stage-projection-rules">
-              <span v-if="boundRules.length === 0" class="stage-projection-empty">尚未关联规则</span>
-              <span v-else class="stage-projection-empty">将应用于 {{ boundRules.length }} 条已关联规则</span>
+              <span v-if="boundRules.length === 0" class="stage-projection-empty">{{ t('app.security.policies.bind.none') }}</span>
+              <span v-else class="stage-projection-empty">{{ t('app.security.policies.bind.appliesTo', { n: boundRules.length }) }}</span>
             </div>
           </div>
           <el-form :model="form" label-width="100px" :disabled="formFrozen">
-            <el-form-item label="信任 IP">
+            <el-form-item :label="t('app.security.policies.stage0.trustIpLabel')">
               <div class="acl-inline-row">
-                <el-select v-model="ipWhitelist" multiple filterable allow-create default-first-option placeholder="输入 IP/CIDR 后回车" class="acl-inline-select" />
-                <el-button v-if="!isReadOnly" link type="primary" class="acl-extract-btn" :disabled="ipWhitelist.length === 0" @click="openExtractDialog('trust')">提取为列表</el-button>
+                <el-select v-model="ipWhitelist" multiple filterable allow-create default-first-option :placeholder="t('app.security.policies.common.ipEntryPlaceholder')" class="acl-inline-select" />
+                <el-button v-if="!isReadOnly" link type="primary" class="acl-extract-btn" :disabled="ipWhitelist.length === 0" @click="openExtractDialog('trust')">{{ t('app.security.policies.common.extractAsList') }}</el-button>
               </div>
-              <div class="form-tip-line">「类型=信任名单（stage0）」策略：名单内 IP 命中后跳过全部后续安全阶段（IP 访问控制 / 限流 / WAF；直通=零安全事件，保留检测=仅由独立轻量检测事务记录，动作=检测）；mixed 等其他类型策略信任命中为引擎内检测降级（仅记录不拦截、不跳段）；内联与引用列表合并生效</div>
+              <div class="form-tip-line">{{ t('app.security.policies.stage0.trustTip') }}</div>
             </el-form-item>
-            <el-form-item label="引用地址列表">
-              <el-select v-model="ipWhitelistRefs" multiple filterable placeholder="选择要引用的 IP 地址列表" style="width: 100%">
+            <el-form-item :label="t('app.security.policies.common.refListLabel')">
+              <el-select v-model="ipWhitelistRefs" multiple filterable :placeholder="t('app.security.policies.common.refListPlaceholder')" style="width: 100%">
                 <!-- 内置威胁名单仅可用于 IP ACL 黑名单（2026-09-24 用户裁定），信任名单不可引用 -->
-                <el-option-group v-if="customIpLists.length > 0" label="自定义列表">
-                  <el-option v-for="l in customIpLists" :key="l.id" :label="`${l.name}（${l.entry_count} 条）`" :value="l.id" />
+                <el-option-group v-if="customIpLists.length > 0" :label="t('app.security.policies.common.groupCustom')">
+                  <el-option v-for="l in customIpLists" :key="l.id" :label="t('app.security.policies.common.listWithNameCount', { name: l.name, count: l.entry_count })" :value="l.id" />
                 </el-option-group>
               </el-select>
               <div v-if="showWhitelistRefHint" class="form-tip-line">{{ whitelistRefHint }}</div>
             </el-form-item>
-            <el-form-item label="保留检测记录">
+            <el-form-item :label="t('app.security.policies.stage0.keepDetectLabel')">
               <el-switch v-model="form.trust_detection" />
-              <span class="form-tip-inline">{{ form.trust_detection ? '开启：信任 IP 跳过全部安全阶段，仅由独立轻量检测事务记录（事件动作=检测）、不拦截（限「类型=信任名单（stage0）」策略；mixed 等其他类型信任命中为引擎内检测降级）' : '关闭（默认）：信任 IP 直通上游，不产生任何安全事件' }}</span>
+              <span class="form-tip-inline">{{ form.trust_detection ? t('app.security.policies.stage0.detectOn') : t('app.security.policies.stage0.detectOff') }}</span>
             </el-form-item>
             <!-- 信任名单区地址级冲突实时警告（本区条目：信任 IP × 他策略黑名单）：
                  el-form 直接子级（2026-10-03 模板归一），缩进由
@@ -302,43 +302,43 @@
                清单在关联规则多时撑破弹框：右段 flex:0 0 auto 按 max-content 定尺挤压左段
                成单字竖排，见 SecurityPolicies 弹框实测）；逐规则绑定与执行序在「关联规则」步骤 -->
           <div class="stage-projection-bar">
-            <span class="stage-projection-desc">本策略将在关联规则的 WAF 阶段生效</span>
+            <span class="stage-projection-desc">{{ t('app.security.policies.waf.projection') }}</span>
             <div class="stage-projection-rules">
-              <span v-if="boundRules.length === 0" class="stage-projection-empty">尚未关联规则</span>
-              <span v-else class="stage-projection-empty">将应用于 {{ boundRules.length }} 条已关联规则</span>
+              <span v-if="boundRules.length === 0" class="stage-projection-empty">{{ t('app.security.policies.bind.none') }}</span>
+              <span v-else class="stage-projection-empty">{{ t('app.security.policies.bind.appliesTo', { n: boundRules.length }) }}</span>
             </div>
           </div>
           <el-form :model="form" label-width="100px" :disabled="formFrozen">
             <!-- 原生表单行（2026-10-11 用户裁定：对齐统一走 el-form-item；Firefox
                  label-for 控制台告警为 EP 上游已知形态，非用户可见） -->
-            <el-form-item label="WAF 模式" for="radio-waf--10">
+            <el-form-item :label="t('app.security.policies.waf.modeLabel')" for="radio-waf--10">
               <input type="text" id="radio-waf--10" aria-hidden="true" tabindex="-1" autocomplete="off" style="display:none">
-              <el-radio-group v-model="form.mode" class="mode-radio-group" aria-label="WAF 模式">
+              <el-radio-group v-model="form.mode" class="mode-radio-group" :aria-label="t('app.security.policies.waf.modeLabel')">
                 <!-- 2026-09-09 四态化:off=CRS 与自定义均不生效;custom_only=仅自定义生效;
                      detection=CRS 只记录;blocking=CRS 阻断。每项标签+描述单行不换行。 -->
-                <el-radio value="off">关闭（全不生效）</el-radio>
-                <el-radio value="custom_only">仅自定义规则（CRS 不生效）</el-radio>
-                <el-radio value="detection">检测（CRS 只记录）</el-radio>
-                <el-radio value="blocking">拦截（CRS 阻断）</el-radio>
+                <el-radio value="off">{{ t('app.security.policies.waf.modeOff') }}</el-radio>
+                <el-radio value="custom_only">{{ t('app.security.policies.waf.modeCustomOnly') }}</el-radio>
+                <el-radio value="detection">{{ t('app.security.policies.waf.modeDetection') }}</el-radio>
+                <el-radio value="blocking">{{ t('app.security.policies.waf.modeBlocking') }}</el-radio>
               </el-radio-group>
-              <div class="form-tip-line">关闭 = CRS 与自定义规则均不生效；IP 访问控制与地域拦截按各自开关独立生效。</div>
-              <div class="form-tip-line">自定义规则在检测/拦截/仅自定义模式下按规则内动作执行；计分动作在 CRS 开启时由异常阈值统一裁决（检测计分、拦截按阈值）。</div>
+              <div class="form-tip-line">{{ t('app.security.policies.waf.offTip') }}</div>
+              <div class="form-tip-line">{{ t('app.security.policies.waf.customTip') }}</div>
             </el-form-item>
-            <div v-if="form.mode === 'off'" class="waf-off-hint">当前 WAF 已关闭：CRS 与自定义规则均不生效，以下 CRS 配置不可用</div>
-            <div v-else-if="form.mode === 'custom_only'" class="waf-off-hint">仅自定义模式：CRS 不生效，以下 CRS 配置不可用</div>
-            <el-form-item label="异常阈值">
+            <div v-if="form.mode === 'off'" class="waf-off-hint">{{ t('app.security.policies.waf.offHint') }}</div>
+            <div v-else-if="form.mode === 'custom_only'" class="waf-off-hint">{{ t('app.security.policies.waf.customOnlyHint') }}</div>
+            <el-form-item :label="t('app.security.policies.waf.thresholdLabel')">
               <el-select v-model="form.anomaly_threshold" :disabled="crsFieldsOff || isReadOnly" style="width: 140px">
-                <el-option v-if="[1, 3].includes(form.anomaly_threshold)" :value="1" label="严格（阈值 1 · 存量档）" disabled />
-                <el-option v-if="form.anomaly_threshold === 3" :value="3" label="严格（阈值 3 · 存量档）" disabled />
-                <el-option :value="5" label="标准（阈值 5）" />
-                <el-option :value="10" label="宽松（阈值 10）" />
-                <el-option :value="15" label="很宽松（阈值 15）" />
-                <el-option :value="20" label="极宽松（阈值 20）" />
+                <el-option v-if="[1, 3].includes(form.anomaly_threshold)" :value="1" :label="t('app.security.policies.waf.thStrict', { n: 1 })" disabled />
+                <el-option v-if="form.anomaly_threshold === 3" :value="3" :label="t('app.security.policies.waf.thStrict', { n: 3 })" disabled />
+                <el-option :value="5" :label="t('app.security.policies.waf.thStandard', { n: 5 })" />
+                <el-option :value="10" :label="t('app.security.policies.waf.thLoose', { n: 10 })" />
+                <el-option :value="15" :label="t('app.security.policies.waf.thVeryLoose', { n: 15 })" />
+                <el-option :value="20" :label="t('app.security.policies.waf.thUltraLoose', { n: 20 })" />
               </el-select>
-              <div class="form-tip-line">阈值以异常分为单位：CRS 严重规则每条 +5（错误 +4、警告 +3），自定义「计分」规则按其分值累加。</div>
-              <div class="form-tip-line">累计达到阈值拦截；低于阈值的命中不拦截，但记录为检测事件（计入安全总览「今日检测」）。</div>
+              <div class="form-tip-line">{{ t('app.security.policies.waf.thresholdTip') }}</div>
+              <div class="form-tip-line">{{ t('app.security.policies.waf.thresholdTip2') }}</div>
             </el-form-item>
-            <el-form-item label="CRS 规则组">
+            <el-form-item :label="t('app.security.policies.waf.crsGroupsLabel')">
               <!-- 懒加载级联多选：一级规则组节点（剔 01/49/59），展开组时才生成该组
                    规则叶（剔 901/949/959，label「ID — 描述」+ 副行「文件 · 分类」仿
                    旧版两行样式）；checkStrictly 允许组 + 单规则混选，值↔路径由
@@ -356,7 +356,7 @@
                 collapse-tags-tooltip
                 :show-all-levels="false"
                 popper-class="crs-rule-popper"
-                placeholder="留空加载全部 CRS 规则"
+                :placeholder="t('app.security.policies.waf.crsPlaceholder')"
                 style="width: 100%"
               >
                 <template #default="{ data }">
@@ -382,28 +382,28 @@
                   @close="removeCrsGroupValue(opt.value)"
                 >{{ opt.label }}</el-tag>
               </div>
-              <div class="form-tip-line">选择后仅加载所选规则组，留空加载全部 CRS 规则</div>
-              <div class="form-tip-line">初始化（901）与拦截评估（949/959）为系统基础规则，随策略自动加载；通用误报豁免（999）在选择全部规则时自动包含</div>
+              <div class="form-tip-line">{{ t('app.security.policies.waf.crsTip') }}</div>
+              <div class="form-tip-line">{{ t('app.security.policies.waf.crsTip2') }}</div>
             </el-form-item>
             <!-- 跨策略 CRS 规则组重复实时警告（随当前选择重算）：el-form 直接子级
                  提示条在表单项内自然对齐控件列（EP label-width 布局，零 CSS 覆盖） -->
             <el-form-item v-if="wafStepCrsAlert"><div class="info-note-bar"><span class="info-note-desc">{{ wafStepCrsAlert }}</span></div>
             </el-form-item>
-            <el-form-item v-if="hasResponsePhaseGroupWithoutCheck"><div class="info-note-bar"><span class="info-note-desc">已选含响应阶段的规则组（955 Webshell 等），但未开启「检查响应体」——这些组不会加载生效，请开启「检查响应体」或移除响应阶段组</span></div>
+            <el-form-item v-if="hasResponsePhaseGroupWithoutCheck"><div class="info-note-bar"><span class="info-note-desc">{{ t('app.security.policies.waf.responsePhaseWarn') }}</span></div>
             </el-form-item>
-            <el-form-item label="检查响应体">
+            <el-form-item :label="t('app.security.policies.waf.checkResponseBody')">
               <el-switch v-model="form.waf_check_response" :disabled="crsFieldsOff || isReadOnly" />
-              <div class="form-tip-line">开启后 WAF 读取并检查上游响应内容（响应泄露类规则需要）；关闭可显著降低内存与 CPU 开销，大多数部署只需检查请求</div>
+              <div class="form-tip-line">{{ t('app.security.policies.waf.checkResponseBodyTip') }}</div>
             </el-form-item>
-            <el-form-item label="记录请求体">
+            <el-form-item :label="t('app.security.policies.waf.logRequestBody')">
               <el-switch v-model="form.log_request_body" :disabled="isReadOnly || form.mode === 'off'" />
-              <div class="form-tip-line">仅 CRS/自定义规则命中事件记录请求体；当前模式关闭时不记录</div>
+              <div class="form-tip-line">{{ t('app.security.policies.waf.logRequestBodyTip') }}</div>
               <!-- 警示条挂在带标签表单项内（EP 无标签项内容从行首渲染，会贴弹框左缘
                    且比控件列宽 ~100px——2026-11-03 用户验收反馈）；撑满走 form-item-note-bar，
                    盒模型样式主体走全局 info-note-bar 规范（padding 8px 12px），零局部覆写 -->
-              <div v-if="form.log_request_body" class="info-note-bar form-item-note-bar"><span class="info-note-desc">开启后命中规则事件的请求体将明文记录到事件库（单条上限 64KB），可能包含密码等敏感信息，请仅在排障期间开启</span></div>
+              <div v-if="form.log_request_body" class="info-note-bar form-item-note-bar"><span class="info-note-desc">{{ t('app.security.policies.waf.logRequestBodyWarn') }}</span></div>
             </el-form-item>
-            <el-form-item label="排除规则" for="radio---11">
+            <el-form-item :label="t('app.security.policies.waf.exclusionLabel')" for="radio---11">
               <input type="text" id="radio---11" aria-hidden="true" tabindex="-1" autocomplete="off" style="display:none">
               <div class="exclusion-body">
 
@@ -423,8 +423,8 @@
               <!-- 2026-09-19 用户裁定:空态按钮在首行(与「排除规则」标题同一
                    水平线、内容列左对齐),描述文字居其下 -->
               <div v-if="crsExcludedRows.length === 0" class="exclusion-empty">
-                <el-button size="small" type="primary" plain :disabled="crsFieldsOff || isReadOnly" @click="addExcludedRule">添加排除规则</el-button>
-                <span class="exclusion-empty-tip">未添加排除规则——排除的目标规则/规则组不会被检测或拦截；作用域限定排除仅对所选来源 IP/地址列表/路径生效</span>
+                <el-button size="small" type="primary" plain :disabled="crsFieldsOff || isReadOnly" @click="addExcludedRule">{{ t('app.security.policies.waf.addExclusion') }}</el-button>
+                <span class="exclusion-empty-tip">{{ t('app.security.policies.waf.exclusionEmptyTip') }}</span>
               </div>
               <template v-else>
                 <el-table :data="crsExcludedRows" size="small" class="exclusion-table" :max-height="260">
@@ -436,7 +436,7 @@
                        radios 位置恒定不抖动），行高 ~32-40px；1080px 弹框全宽下
                        不换行，窄于该宽度时 flex-wrap 优雅折行且首行对齐不乱；ghost /
                        冲突图标出现只挤压目标输入宽度，不改行结构 -->
-                  <el-table-column label="目标规则 × 作用域 × 条件" min-width="560">
+                  <el-table-column :label="t('app.security.policies.waf.exclusionColTarget')" min-width="560">
                     <template #default="{ row }">
                       <div class="exclusion-row-cell">
                         <!-- 目标自动补全（数据源 = 既有 rule-index 索引单例，WAF 步骤
@@ -454,13 +454,13 @@
                           clearable
                           :disabled="crsFieldsOff || isReadOnly"
                           popper-class="crs-rule-popper"
-                          placeholder="搜索规则 ID/描述，或输入组号、文件名"
+                          :placeholder="t('app.security.policies.waf.exclusionSearchPlaceholder')"
                           class="exclusion-target-select"
                         >
                           <template #default="{ item }">
                             <div class="crs-rule-suggestion" :title="`${item.value} — ${item.fullMsg}`">
                               <span class="crs-rule-suggestion-id">{{ item.value }}</span>
-                              <span class="crs-rule-suggestion-desc">{{ item.label }}（{{ item.file }}）</span>
+                              <span class="crs-rule-suggestion-desc">{{ t('app.security.policies.waf.suggestionDesc', { label: item.label, file: item.file }) }}</span>
                             </div>
                           </template>
                         </el-autocomplete>
@@ -487,10 +487,10 @@
                           <el-icon class="exclusion-conflict-icon"><WarningFilled /></el-icon>
                         </el-tooltip>
                         <el-radio-group v-model="row.scope" size="small" class="exclusion-scope-radios" :disabled="crsFieldsOff || isReadOnly" @change="onScopeChange(row as CrsExcludedRow)">
-                          <el-radio value="all">全部 IP</el-radio>
-                          <el-radio value="ip">指定 IP</el-radio>
-                          <el-radio value="list">地址列表</el-radio>
-                          <el-radio value="path">路径 URI</el-radio>
+                          <el-radio value="all">{{ t('app.security.policies.waf.scopeAll') }}</el-radio>
+                          <el-radio value="ip">{{ t('app.security.policies.waf.scopeIp') }}</el-radio>
+                          <el-radio value="list">{{ t('app.security.policies.waf.scopeList') }}</el-radio>
+                          <el-radio value="path">{{ t('app.security.policies.waf.scopePath') }}</el-radio>
                         </el-radio-group>
                         <!-- 条件控件内联于 radios 之后：all → 灰字短提示（自然宽、不预留
                              布局空间）/ ip → 标签输入 / list → 列表多选（紧凑宽）/
@@ -505,7 +505,7 @@
                           allow-create
                           default-first-option
                           :disabled="crsFieldsOff || isReadOnly"
-                          placeholder="输入 IP/CIDR 后回车"
+                          :placeholder="t('app.security.policies.common.ipEntryPlaceholder')"
                           class="exclusion-scope-control-ip"
                           @change="(value: string[]) => onExclusionIpsChange(row as CrsExcludedRow, value)"
                         />
@@ -516,11 +516,11 @@
                           multiple
                           filterable
                           :disabled="crsFieldsOff || isReadOnly"
-                          placeholder="选择 IP 地址列表"
+                          :placeholder="t('app.security.policies.waf.ipListSelectPlaceholder')"
                           class="exclusion-scope-control-list"
                         >
-                          <el-option-group v-if="customIpLists.length > 0" label="自定义列表">
-                  <el-option v-for="l in customIpLists" :key="l.id" :label="`${l.name}（${l.entry_count} 条）`" :value="l.id" />
+                          <el-option-group v-if="customIpLists.length > 0" :label="t('app.security.policies.common.groupCustom')">
+                  <el-option v-for="l in customIpLists" :key="l.id" :label="t('app.security.policies.common.listWithNameCount', { name: l.name, count: l.entry_count })" :value="l.id" />
                 </el-option-group>
                         </el-select>
                         <el-input
@@ -529,79 +529,79 @@
                           size="small"
                           :disabled="crsFieldsOff || isReadOnly"
                           maxlength="256"
-                          placeholder="如 /api/upload（前缀匹配）"
+                          :placeholder="t('app.security.policies.waf.pathPlaceholder')"
                           class="exclusion-scope-control-path"
                         />
-                        <span v-else class="exclusion-scope-all">对所有 IP 生效</span>
+                        <span v-else class="exclusion-scope-all">{{ t('app.security.policies.waf.scopeAllHint') }}</span>
                       </div>
                     </template>
                   </el-table-column>
                   <el-table-column label="" width="60" align="center">
                     <template #default="{ $index }">
-                      <el-button link type="danger" size="small" :disabled="crsFieldsOff || isReadOnly" @click="removeExcludedRule($index)">删除</el-button>
+                      <el-button link type="danger" size="small" :disabled="crsFieldsOff || isReadOnly" @click="removeExcludedRule($index)">{{ t('app.security.policies.common.delete') }}</el-button>
                     </template>
                   </el-table-column>
                 </el-table>
                 <div class="exclusion-toolbar">
-                  <el-button size="small" type="primary" plain :disabled="crsFieldsOff || isReadOnly || crsExcludedRows.length >= CRS_EXCLUDED_MAX_ROWS" @click="addExcludedRule">添加排除规则</el-button>
+                  <el-button size="small" type="primary" plain :disabled="crsFieldsOff || isReadOnly || crsExcludedRows.length >= CRS_EXCLUDED_MAX_ROWS" @click="addExcludedRule">{{ t('app.security.policies.waf.addExclusion') }}</el-button>
                   <el-tag size="small" type="info" effect="plain" class="exclusion-count">{{ crsExcludedRows.length }}/{{ CRS_EXCLUDED_MAX_ROWS }}</el-tag>
                 </div>
-                <div class="form-tip-line">排除的目标规则/规则组不会被检测或拦截；作用域限定排除仅对所选来源 IP/地址列表/路径生效</div>
+                <div class="form-tip-line">{{ t('app.security.policies.waf.exclusionTableTip') }}</div>
               </template>
             
               </div></el-form-item>
-            <el-form-item v-if="blockingEvalExclusionAlert"><div class="info-note-bar"><span class="info-note-desc">排除评估规则（949/959）将使拦截模式的评分阈值拦截失效</span></div>
+            <el-form-item v-if="blockingEvalExclusionAlert"><div class="info-note-bar"><span class="info-note-desc">{{ t('app.security.policies.waf.blockingEvalWarn') }}</span></div>
             </el-form-item>
-            <el-form-item label="自定义规则">
-              <el-select v-model="selectedCustomRules" :disabled="form.mode === 'off'" multiple filterable placeholder="选择要包含的自定义规则" style="width: 100%">
+            <el-form-item :label="t('app.security.policies.waf.customRulesLabel')">
+              <el-select v-model="selectedCustomRules" :disabled="form.mode === 'off'" multiple filterable :placeholder="t('app.security.policies.waf.customRulesPlaceholder')" style="width: 100%">
                 <el-option v-for="rule in allCustomRules" :key="rule.id" :label="rule.name" :value="rule.id" />
               </el-select>
-              <div class="form-tip-line">自定义规则在"规则集"页面创建，<AccessibleLink type="primary" @click="goToCustomRulesPage">去创建/编辑</AccessibleLink></div>
+              <div class="form-tip-line">{{ t('app.security.policies.waf.customRulesTip') }}<AccessibleLink type="primary" @click="goToCustomRulesPage">{{ t('app.security.policies.common.goCreateEdit') }}</AccessibleLink></div>
             </el-form-item>
           </el-form>
         </div>
         <!-- Step 2: IP 访问控制 -->
         <div v-show="currentStep === WIZARD_STEP.IP_ACL" class="step-content">
           <div class="stage-projection-bar">
-            <span class="stage-projection-desc">本策略将在关联规则的 IP 访问控制/地域拦截阶段生效</span>
+            <span class="stage-projection-desc">{{ t('app.security.policies.acl.projection') }}</span>
             <div class="stage-projection-rules">
-              <span v-if="boundRules.length === 0" class="stage-projection-empty">尚未关联规则</span>
-              <span v-else class="stage-projection-empty">将应用于 {{ boundRules.length }} 条已关联规则</span>
+              <span v-if="boundRules.length === 0" class="stage-projection-empty">{{ t('app.security.policies.bind.none') }}</span>
+              <span v-else class="stage-projection-empty">{{ t('app.security.policies.bind.appliesTo', { n: boundRules.length }) }}</span>
             </div>
           </div>
-          <el-divider content-position="left" class="acl-divider">访问控制</el-divider>
+          <el-divider content-position="left" class="acl-divider">{{ t('app.security.policies.acl.divider') }}</el-divider>
           <el-form :model="form" label-width="100px" :disabled="formFrozen">
-            <el-form-item label="启用">
+            <el-form-item :label="t('app.security.policies.common.enableLabel')">
               <el-switch v-model="form.ip_acl_enabled" />
             </el-form-item>
             <template v-if="form.ip_acl_enabled">
-              <el-form-item label="控制模式" for="radio---12">
+              <el-form-item :label="t('app.security.policies.common.modeLabel')" for="radio---12">
                 <input type="text" id="radio---12" aria-hidden="true" tabindex="-1" autocomplete="off" style="display:none">
-                <el-radio-group v-model="form.ip_acl_mode" aria-label="IP 访问控制模式">
-                  <el-radio value="deny">黑名单（拒绝列表中的 IP，其他正常检测）</el-radio>
-                  <el-radio value="allow">白名单（仅允许列表中的 IP，其他一律拒绝）</el-radio>
+                <el-radio-group v-model="form.ip_acl_mode" :aria-label="t('app.security.policies.acl.modeAria')">
+                  <el-radio value="deny">{{ t('app.security.policies.acl.modeDeny') }}</el-radio>
+                  <el-radio value="allow">{{ t('app.security.policies.acl.modeAllow') }}</el-radio>
                   <!-- 历史 绕过 策略仅作展示，不再提供新选 -->
-                  <el-radio v-if="form.ip_acl_mode === '绕过'" value="绕过">免检测（列表中的 IP 跳过全部安全检测）</el-radio>
+                  <el-radio v-if="form.ip_acl_mode === '绕过'" value="绕过">{{ t('app.security.policies.acl.modeBypass') }}</el-radio>
                 </el-radio-group>
               </el-form-item>
               <el-form-item :label="aclListLabel">
                 <div class="acl-inline-row">
-                  <el-select v-model="ipACLList" multiple filterable allow-create default-first-option placeholder="输入 IP/CIDR 后回车" class="acl-inline-select" />
-                  <el-button v-if="!isReadOnly" link type="primary" class="acl-extract-btn" :disabled="ipACLList.length === 0" @click="openExtractDialog('acl')">提取为列表</el-button>
+                  <el-select v-model="ipACLList" multiple filterable allow-create default-first-option :placeholder="t('app.security.policies.common.ipEntryPlaceholder')" class="acl-inline-select" />
+                  <el-button v-if="!isReadOnly" link type="primary" class="acl-extract-btn" :disabled="ipACLList.length === 0" @click="openExtractDialog('acl')">{{ t('app.security.policies.common.extractAsList') }}</el-button>
                 </div>
                 <div class="form-tip-line">{{ aclListTip }}</div>
               </el-form-item>
-              <el-form-item label="引用地址列表">
-                <el-select v-model="ipACLListRefs" multiple filterable placeholder="选择要引用的 IP 地址列表" style="width: 100%">
-                  <el-option-group v-if="form.ip_acl_mode === 'deny' && builtinIpLists.length > 0" label="内置威胁名单">
-                  <el-option v-for="l in builtinIpLists" :key="l.id" :label="`${l.name}（${l.entry_count} 条）`" :value="l.id" />
+              <el-form-item :label="t('app.security.policies.common.refListLabel')">
+                <el-select v-model="ipACLListRefs" multiple filterable :placeholder="t('app.security.policies.common.refListPlaceholder')" style="width: 100%">
+                  <el-option-group v-if="form.ip_acl_mode === 'deny' && builtinIpLists.length > 0" :label="t('app.security.policies.common.groupBuiltin')">
+                  <el-option v-for="l in builtinIpLists" :key="l.id" :label="t('app.security.policies.common.listWithNameCount', { name: l.name, count: l.entry_count })" :value="l.id" />
                 </el-option-group>
-                <el-option-group v-if="customIpLists.length > 0" label="自定义列表">
-                  <el-option v-for="l in customIpLists" :key="l.id" :label="`${l.name}（${l.entry_count} 条）`" :value="l.id" />
+                <el-option-group v-if="customIpLists.length > 0" :label="t('app.security.policies.common.groupCustom')">
+                  <el-option v-for="l in customIpLists" :key="l.id" :label="t('app.security.policies.common.listWithNameCount', { name: l.name, count: l.entry_count })" :value="l.id" />
                 </el-option-group>
                 </el-select>
                 <div v-if="showAclRefHint" class="form-tip-line">{{ aclRefHint }}</div>
-                <div class="form-tip-line">引用「规则集 → IP 地址列表」中的可复用列表，条目与上方内联名单合并生效</div>
+                <div class="form-tip-line">{{ t('app.security.policies.acl.refTip') }}</div>
               </el-form-item>
               <!-- 访问控制区地址级冲突实时警告（本区条目：ACL 列表 + 黑名单）：
                    el-form 直接子级（2026-10-03 模板归一），缩进由
@@ -610,9 +610,9 @@
               </el-form-item>
             </template>
           </el-form>
-          <el-divider content-position="left" class="acl-divider">区域控制</el-divider>
+          <el-divider content-position="left" class="acl-divider">{{ t('app.security.policies.geo.divider') }}</el-divider>
           <el-form :model="form" label-width="100px" :disabled="formFrozen">
-            <el-form-item label="启用">
+            <el-form-item :label="t('app.security.policies.common.enableLabel')">
               <!-- 开关即生效状态：关闭提交 geoip_mode='off'（后端零发射），名单
                    保留不清单（重开即复用）；从 off 重开时控制模式回落 deny。 -->
               <el-switch v-model="form.geoip_enabled" @change="onGeoipEnabledChange" />
@@ -620,16 +620,16 @@
             <template v-if="form.geoip_enabled">
               <!-- （裁决）：披露 IPv6/不可解析客户端语义——
                    fail-closed 设计下它们按「海外」处理。 -->
-              <el-form-item><div class="info-note-bar"><span class="info-note-desc">地域规则仅对 IPv4 生效：IPv6 与不可解析客户端按「海外」处理（拦截模式勾选海外时将被拦截；仅允许模式只勾选省份时将被拦截）。IP 库未安装时地域规则不可启用。</span></div>
+              <el-form-item><div class="info-note-bar"><span class="info-note-desc">{{ t('app.security.policies.geo.ipv4Note') }}</span></div>
               </el-form-item>
-              <el-form-item label="控制模式" for="radio---13">
+              <el-form-item :label="t('app.security.policies.common.modeLabel')" for="radio---13">
                 <input type="text" id="radio---13" aria-hidden="true" tabindex="-1" autocomplete="off" style="display:none">
-                <el-radio-group v-model="form.geoip_mode" aria-label="地域控制模式">
-                  <el-radio value="deny">拦截所选区域（其他放行）</el-radio>
-                  <el-radio value="allow">仅允许所选区域（其他拦截）</el-radio>
+                <el-radio-group v-model="form.geoip_mode" :aria-label="t('app.security.policies.geo.modeAria')">
+                  <el-radio value="deny">{{ t('app.security.policies.geo.modeDeny') }}</el-radio>
+                  <el-radio value="allow">{{ t('app.security.policies.geo.modeAllow') }}</el-radio>
                 </el-radio-group>
               </el-form-item>
-              <el-form-item label="区域选择">
+              <el-form-item :label="t('app.security.policies.geo.regionLabel')">
                 <!-- （用户裁决）：区域精确到市——省级联选择；只选省 =
                      整省生效（存量语义），展开选市 = 省+市联合匹配（省/市 形态）。
                      v2.3.7 修正：独立「海外」一级叶子取消——「海外国家」父节点
@@ -641,29 +641,29 @@
                   :props="{ multiple: true, checkStrictly: true, emitPath: false }"
                   filterable
                   clearable
-                  placeholder="选择区域（省 / 省-市 / 海外国家）"
+                  :placeholder="t('app.security.policies.geo.regionPlaceholder')"
                   style="width: 100%"
                 />
-                <div class="form-tip-line">基于 IP2Region 离线库判断访客所在区域，与 CIDR 规则同时生效；只选省份 = 整省生效</div>
+                <div class="form-tip-line">{{ t('app.security.policies.geo.regionTip') }}</div>
                 <!-- 加载失败显性化+重试；已保存的地域值保留不清空-->
                 <div v-if="regionsError" class="form-tip-line">
-                  <el-text type="danger" size="small">地域数据加载失败，已保存的地域配置仍保留。</el-text>
-                  <AccessibleLink type="primary" size="small" @click="fetchRegions">重试</AccessibleLink>
+                  <el-text type="danger" size="small">{{ t('app.security.policies.geo.loadFailed') }}</el-text>
+                  <AccessibleLink type="primary" size="small" @click="fetchRegions">{{ t('app.security.policies.common.retry') }}</AccessibleLink>
                 </div>
               </el-form-item>
               <!-- v2.3.8 爬虫豁免（方案 B）：已验证搜索引擎/AI 爬虫跳过地域拦截。
                    验证=UA+PTR 双跳（360=官方 IP 段），伪装 UA 独立记「爬虫伪装」事件。 -->
-              <el-form-item label="爬虫豁免">
+              <el-form-item :label="t('app.security.policies.geo.crawlerLabel')">
                 <el-switch v-model="form.geoip_crawler_exempt" />
                 <template v-if="form.geoip_crawler_exempt">
                   <el-checkbox-group v-model="form.geoip_crawler_engines" style="margin-left: 12px">
                     <el-checkbox v-for="e in crawlerEngineOptions" :key="e.id" :value="e.id">{{ e.name }}</el-checkbox>
                   </el-checkbox-group>
-                  <div class="form-tip-line">勾选的引擎经反向 DNS/官方 IP 段验证为真实爬虫后豁免地域拦截（IP 名单/WAF/限流仍全量生效）；伪装爬虫 UA 的请求会被拒绝并记录攻击事件。360 无反查支持按官方 IP 段验证；标注「观察级」的引擎按厂商域名验证</div>
+                  <div class="form-tip-line">{{ t('app.security.policies.geo.crawlerTip') }}</div>
                   <!-- 空选=全部引擎（后端空集语义），必须显性说明——否则
                        用户以为「全不选=不豁免」，实际是全豁免 -->
                   <div v-if="form.geoip_crawler_engines.length === 0" class="form-tip-line">
-                    <el-text type="warning" size="small">未勾选任何引擎：等于豁免全部引擎（此形态不可保存，请至少勾选一个或关闭爬虫豁免）</el-text>
+                    <el-text type="warning" size="small">{{ t('app.security.policies.geo.crawlerNoneWarn') }}</el-text>
                   </div>
                 </template>
               </el-form-item>
@@ -673,22 +673,22 @@
         <!-- Step 3: 限流 -->
         <div v-show="currentStep === WIZARD_STEP.RATE_LIMIT" class="step-content">
           <div class="stage-projection-bar">
-            <span class="stage-projection-desc">本策略将在关联规则的限流阶段生效——限流拦截恒为 429（便于指标单独计量）；拦截页在下一步配置，缺省时跟随同规则其他策略的页面</span>
+            <span class="stage-projection-desc">{{ t('app.security.policies.rate.projection') }}</span>
             <div class="stage-projection-rules">
-              <span class="stage-projection-empty">{{ boundRules.length > 0 ? `将应用于 ${boundRules.length} 条已关联规则` : '尚未关联规则' }}</span>
+              <span class="stage-projection-empty">{{ boundRules.length > 0 ? t('app.security.policies.bind.appliesTo', { n: boundRules.length }) : t('app.security.policies.bind.none') }}</span>
             </div>
           </div>
           <el-form :model="form" label-width="100px" :disabled="formFrozen">
-            <el-form-item label="启用">
+            <el-form-item :label="t('app.security.policies.common.enableLabel')">
               <el-switch v-model="form.rate_limit_enabled" />
             </el-form-item>
             <template v-if="form.rate_limit_enabled">
-              <el-form-item label="速率上限">
+              <el-form-item :label="t('app.security.policies.rate.limitLabel')">
                 <el-input-number v-model="form.rate_limit_rps" :min="1" :max="1_000_000_000" style="width: 120px" />
               </el-form-item>
-              <el-form-item label="突发余量">
+              <el-form-item :label="t('app.security.policies.rate.burstLabel')">
                 <el-input-number v-model="form.rate_limit_burst" :min="0" :max="1_000_000_000" style="width: 120px" />
-                <span class="form-tip-inline">次，短时允许超出速率上限的额外请求数</span>
+                <span class="form-tip-inline">{{ t('app.security.policies.rate.burstTip') }}</span>
               </el-form-item>
             </template>
           </el-form>
@@ -697,14 +697,14 @@
         <!-- Step 4: 关联规则 -->
         <div v-show="currentStep === WIZARD_STEP.BINDINGS" class="step-content">
           <el-form :model="form" label-width="100px" :disabled="formFrozen">
-            <el-form-item label="已关联">
+            <el-form-item :label="t('app.security.policies.bind.boundLabel')">
               <div class="rule-bind-field">
                 <div class="rule-picker-trigger" role="button" tabindex="0" :class="{ 'is-locked': isReadOnly }" @click="!isReadOnly && openRulePicker()" @keydown.enter.prevent="activateOnce($event, () => !isReadOnly && openRulePicker())" @keydown.space.prevent="activateOnce($event, () => !isReadOnly && openRulePicker())">
-                  <span :class="{ 'rule-picker-placeholder': boundRules.length === 0 }">{{ boundRules.length > 0 ? `已选 ${boundRules.length} 条` : '选择要关联的负载均衡规则' }}</span>
+                  <span :class="{ 'rule-picker-placeholder': boundRules.length === 0 }">{{ boundRules.length > 0 ? t('app.security.policies.common.selectedCount', { n: boundRules.length }) : t('app.security.policies.bind.pickPlaceholder') }}</span>
                   <el-icon class="rule-picker-arrow"><ArrowDown /></el-icon>
                 </div>
-                <div v-if="boundRuleWarnPerf" class="info-note-bar"><span class="info-note-desc">已关联规则存在绑定 3 条以上策略：处理链逐层叠加，可能影响转发性能</span></div>
-                <div v-if="hasTcpBoundRule" class="info-note-bar"><span class="info-note-desc">TCP 规则拦截=断连（无拦截页）；CDN 回源需开启 PROXY protocol</span></div>
+                <div v-if="boundRuleWarnPerf" class="info-note-bar"><span class="info-note-desc">{{ t('app.security.policies.bind.perfWarn') }}</span></div>
+                <div v-if="hasTcpBoundRule" class="info-note-bar"><span class="info-note-desc">{{ t('app.security.policies.bind.tcpWarn') }}</span></div>
                 <div v-if="boundRuleRows.length > 0" class="bound-rule-list">
                   <div v-for="row in boundRuleRows" :key="row.caddyId" class="bound-rule-row">
                     <div class="bound-rule-head">
@@ -716,11 +716,11 @@
                            位置，只暂存（bindingOrderEdits），随「保存」按新序整链提交；
                            与页面显示无关（拦截页按触发策略归因，见拦截页步骤注记）。 -->
                       <span class="bound-rule-order">
-                        <el-tag v-if="bindingOrderPending(row.caddyId)" type="primary" size="small" effect="plain" disable-transitions class="bound-rule-order-tag">顺序待保存</el-tag>
-                        <el-button v-if="!isReadOnly" size="small" link :disabled="saving || !canMoveSelf(row.caddyId, -1)" @click="moveSelfInChain(row.caddyId, -1)">上移</el-button>
-                        <el-button v-if="!isReadOnly" size="small" link :disabled="saving || !canMoveSelf(row.caddyId, 1)" @click="moveSelfInChain(row.caddyId, 1)">下移</el-button>
+                        <el-tag v-if="bindingOrderPending(row.caddyId)" type="primary" size="small" effect="plain" disable-transitions class="bound-rule-order-tag">{{ t('app.security.policies.bind.orderPending') }}</el-tag>
+                        <el-button v-if="!isReadOnly" size="small" link :disabled="saving || !canMoveSelf(row.caddyId, -1)" @click="moveSelfInChain(row.caddyId, -1)">{{ t('app.security.policies.common.moveUp') }}</el-button>
+                        <el-button v-if="!isReadOnly" size="small" link :disabled="saving || !canMoveSelf(row.caddyId, 1)" @click="moveSelfInChain(row.caddyId, 1)">{{ t('app.security.policies.common.moveDown') }}</el-button>
                       </span>
-                      <el-button v-if="!isReadOnly" size="small" link type="danger" class="bound-rule-remove" @click="removeBoundRule(row.caddyId)">移除</el-button>
+                      <el-button v-if="!isReadOnly" size="small" link type="danger" class="bound-rule-remove" @click="removeBoundRule(row.caddyId)">{{ t('app.security.policies.common.remove') }}</el-button>
                     </div>
                     <!-- 完整绑定链（执行序，1-based 序号）+ 本策略落点：顺序即保存后的执行序
                          （阶段 0 信任恒先于拦截判定，固定在前）。每条规则的拦截页生效状态
@@ -737,7 +737,7 @@
                 </div>
                 <!-- 标准提示框（用户验收裁定：禁裸文本长说明）+ 归属汇总行（单源派生：
                      逐条整句收敛为一条汇总） -->
-                <div class="info-note-bar"><span class="info-note-desc">策略按绑定顺序依次触发，先触发的先拦截；顺序调整仅改变触发先后，不影响拦截页归属</span></div>
+                <div class="info-note-bar"><span class="info-note-desc">{{ t('app.security.policies.bind.orderNote') }}</span></div>
                 <div class="info-note-bar"><span class="info-note-desc">{{ bindingsSummaryLine }}</span></div>
               </div>
             </el-form-item>
@@ -747,19 +747,19 @@
         <!-- Step: 拦截页（阶段 1/2/3 策略可配；阶段 2 状态码恒 429——步内隐藏状态码项） -->
         <div v-show="currentStep === WIZARD_STEP.BLOCK_PAGE" class="step-content">
           <div class="stage-projection-bar">
-            <span class="stage-projection-desc">触发本策略拦截时，向客户端返回下方选择的拦截页</span>
+            <span class="stage-projection-desc">{{ t('app.security.policies.bp.projection') }}</span>
             <div class="stage-projection-rules">
-              <span v-if="boundRules.length > 0" class="stage-projection-empty">已关联 {{ boundRules.length }} 条规则</span>
+              <span v-if="boundRules.length > 0" class="stage-projection-empty">{{ t('app.security.policies.bind.relatedCount', { n: boundRules.length }) }}</span>
             </div>
           </div>
           <el-form :model="form" label-width="100px" :disabled="formFrozen">
-            <el-form-item label="拦截页面">
-              <el-select v-model="form.block_page_id" placeholder="选择拦截页面" style="width: 100%">
-                <el-option :value="0" :label="editorPolicyType === 'stage2' ? '不使用自定义页面（429 空响应体）' : '不使用自定义页面（Caddy 默认 403）'" />
+            <el-form-item :label="t('app.security.policies.bp.pageLabel')">
+              <el-select v-model="form.block_page_id" :placeholder="t('app.security.policies.bp.pagePlaceholder')" style="width: 100%">
+                <el-option :value="0" :label="editorPolicyType === 'stage2' ? t('app.security.policies.bp.noPageStage2') : t('app.security.policies.bp.noPageDefault')" />
                 <el-option v-for="p in blockPages" :key="p.id" :label="p.name" :value="p.id" />
               </el-select>
-              <div v-if="form.block_page_id === 0" class="form-tip-line">{{ editorPolicyType === 'stage2' ? '不配置拦截页：429 返回空响应体（可选内置「限流拦截页面」）' : '不配置拦截页：本策略触发拦截时兜底显示绑定链首个有页策略的页面；全链无页时返回 Caddy 默认 403' }}</div>
-              <div v-else class="form-tip-line">拦截时返回给客户端的自定义页面，在"拦截页面"页面管理，<AccessibleLink type="primary" @click="goToBlockPagesPage">去创建/编辑</AccessibleLink></div>
+              <div v-if="form.block_page_id === 0" class="form-tip-line">{{ editorPolicyType === 'stage2' ? t('app.security.policies.bp.noPageTipStage2') : t('app.security.policies.bp.noPageTipDefault') }}</div>
+              <div v-else class="form-tip-line">{{ t('app.security.policies.bp.manageTip') }}<AccessibleLink type="primary" @click="goToBlockPagesPage">{{ t('app.security.policies.common.goCreateEdit') }}</AccessibleLink></div>
               <!-- 归属汇总卡（用户验收裁定）：逐条重复提示收敛为单源汇总——主行 +
                    例外分面（限流/TCP/兜底差异，仅存在才渲染）+ 能力门行；
                    数据源复用绑定列表与 capableAttributions 单源，不平行实现。 -->
@@ -774,16 +774,16 @@
                 </div>
               </div>
             </el-form-item>
-            <el-form-item v-if="editorPolicyType !== 'stage2'" label="返回状态码">
+            <el-form-item v-if="editorPolicyType !== 'stage2'" :label="t('app.security.policies.bp.statusLabel')">
               <el-select v-model="form.block_status_code" style="width: 200px" :disabled="form.block_page_id === 0">
                 <el-option v-for="opt in STAGE_BLOCK_STATUS_OPTIONS" :key="opt.value" :value="opt.value" :label="opt.label" />
               </el-select>
-              <span class="form-tip-inline">{{ form.block_page_id === 0 ? '未选择自定义页面时状态码不生效，拦截固定返回 Caddy 默认 403；请先选择页面' : 'WAF、IP ACL 拦截使用此状态码；限流拦截恒为 429（便于指标单独计量）' }}</span>
+              <span class="form-tip-inline">{{ form.block_page_id === 0 ? t('app.security.policies.bp.statusTipNoPage') : t('app.security.policies.bp.statusTipDefault') }}</span>
             </el-form-item>
-            <el-form-item v-else label="返回状态码" for="stage2-block-status-static">
+            <el-form-item v-else :label="t('app.security.policies.bp.statusLabel')" for="stage2-block-status-static">
               <input type="text" id="stage2-block-status-static" aria-hidden="true" tabindex="-1" autocomplete="off" style="display:none">
               <el-tag type="warning" size="small" effect="plain">429 Too Many Requests</el-tag>
-              <span class="form-tip-inline">限流拦截恒为 429（便于指标单独计量），不可修改</span>
+              <span class="form-tip-inline">{{ t('app.security.policies.bp.statusTipStage2') }}</span>
             </el-form-item>
           </el-form>
         </div>
@@ -793,7 +793,7 @@
           <div class="preview-meta">
             <span class="preview-meta-name">{{ form.name || '-' }}</span>
             <el-tag :type="editorPolicyType === 'mixed' ? 'warning' : 'primary'" size="small" effect="plain">{{ POLICY_TYPE_LABELS[editorPolicyType] }}</el-tag>
-            <el-tag :type="form.enabled ? 'success' : 'info'" size="small" effect="light">{{ form.enabled ? '启用' : '禁用' }}</el-tag>
+            <el-tag :type="form.enabled ? 'success' : 'info'" size="small" effect="light">{{ form.enabled ? t('app.security.policies.status.enabled') : t('app.security.policies.status.disabled') }}</el-tag>
             <span v-if="form.description" class="preview-meta-desc" :title="form.description">{{ form.description }}</span>
           </div>
           <div class="preview-pipeline">
@@ -805,7 +805,7 @@
             >
               <DialogSectionHeader :title="stage.title" />
               <div class="dialog-panel">
-                <div v-if="!stage.enabled" class="preview-stage-empty">未启用</div>
+                <div v-if="!stage.enabled" class="preview-stage-empty">{{ t('app.security.policies.common.notEnabled') }}</div>
                 <template v-if="stage.enabled">
                   <div v-for="group in stage.groups" :key="group.key" class="preview-policy-rows">
                     <div v-for="row in group.rows" :key="row.label" class="preview-row">
@@ -820,16 +820,16 @@
           </div>
           <!-- 影响范围与执行序：与上方阶段卡片同构（标题 + 键值行 + 脚注）。 -->
           <section class="preview-stage-card preview-bindings-card">
-            <DialogSectionHeader title="适用规则" :description="boundRules.length > 0 ? `${boundRules.length} 条已关联` : '未关联'" />
+            <DialogSectionHeader :title="t('app.security.policies.preview.rulesTitle')" :description="boundRules.length > 0 ? t('app.security.policies.preview.rulesCount', { n: boundRules.length }) : t('app.security.policies.preview.rulesNone')" />
             <div class="dialog-panel">
               <div class="preview-policy-rows">
                 <div class="preview-row">
-                  <span class="preview-row-label">生效范围</span>
-                  <span class="preview-row-detail">{{ boundRules.length > 0 ? `本策略将应用于 ${boundRules.length} 条已关联规则` : '保存后可在「关联规则」步骤绑定，或在规则行点「安全」绑定' }}</span>
+                  <span class="preview-row-label">{{ t('app.security.policies.preview.scopeLabel') }}</span>
+                  <span class="preview-row-detail">{{ boundRules.length > 0 ? t('app.security.policies.preview.scopeBound', { n: boundRules.length }) : t('app.security.policies.preview.scopeUnbound') }}</span>
                 </div>
                 <div v-if="orderEditedRules.length > 0" class="preview-row">
-                  <span class="preview-row-label">本次保存</span>
-                  <span class="preview-row-detail">按新执行序更新 {{ orderEditedRules.length }} 条规则的绑定顺序</span>
+                  <span class="preview-row-label">{{ t('app.security.policies.preview.saveLabel') }}</span>
+                  <span class="preview-row-detail">{{ t('app.security.policies.preview.orderUpdate', { n: orderEditedRules.length }) }}</span>
                 </div>
               </div>
             </div>
@@ -840,13 +840,13 @@
       <template #footer>
         <div class="wizard-footer">
           <el-button v-if="hasPreviousStep" :disabled="saving" @click="prevStep">
-            <el-icon><ArrowLeft /></el-icon>上一步
+            <el-icon><ArrowLeft /></el-icon>{{ t('app.security.policies.common.prevStep') }}
           </el-button>
           <el-button v-if="hasNextStep" type="primary" :disabled="saving" @click="nextStep">
-            下一步<el-icon><ArrowRight /></el-icon>
+            {{ t('app.security.policies.common.nextStep') }}<el-icon><ArrowRight /></el-icon>
           </el-button>
           <el-button v-if="currentStep === WIZARD_STEP.PREVIEW" type="primary" :disabled="isReadOnly" :loading="saving" @click="handleSave">
-            <span>保存策略</span><el-icon style="margin-left: 6px;"><Check /></el-icon>
+            <span>{{ t('app.security.policies.common.savePolicy') }}</span><el-icon style="margin-left: 6px;"><Check /></el-icon>
           </el-button>
         </div>
       </template>
@@ -855,18 +855,18 @@
     <!-- 关联规则选择器 -->
     <el-dialog v-model="rulePickerVisible" class="dialog-body-inset" width="min(640px, 90vw)" append-to-body>
       <template #header>
-        <DialogHeader :icon="Connection" title="选择关联规则" />
+        <DialogHeader :icon="Connection" :title="t('app.security.policies.picker.title')" />
       </template>
       <div class="rule-picker-toolbar">
-        <el-input v-model="pickerSearch" placeholder="搜索规则名 / 域名 / 规则 ID" clearable :prefix-icon="Search" class="rule-picker-search" />
+        <el-input v-model="pickerSearch" :placeholder="t('app.security.policies.picker.searchPlaceholder')" clearable :prefix-icon="Search" class="rule-picker-search" />
         <!-- 协议筛选（默认 HTTP）：TCP（阶段 0/1）放开后候选混排，默认档保持既有 HTTP 选择视野 -->
-        <el-select v-model="pickerProtoFilter" class="rule-picker-proto-filter" aria-label="按协议筛选规则">
-          <el-option label="全部" value="all" />
+        <el-select v-model="pickerProtoFilter" class="rule-picker-proto-filter" :aria-label="t('app.security.policies.picker.protoAria')">
+          <el-option :label="t('app.security.policies.common.all')" value="all" />
           <el-option label="HTTP" value="http" />
           <el-option label="TCP" value="tcp" />
         </el-select>
       </div>
-      <DialogSectionHeader title="可选规则" />
+      <DialogSectionHeader :title="t('app.security.policies.picker.availableTitle')" />
       <div class="dialog-panel">
         <div class="rule-picker-header">
           <el-checkbox
@@ -874,8 +874,8 @@
             :indeterminate="pickerSelectAllIndeterminate"
             :disabled="pickerSelectableRules.length === 0"
             @change="handlePickerSelectAll"
-          >全选</el-checkbox>
-          <span class="rule-picker-header-meta">筛选 {{ pickerFilteredRules.length }} 条</span>
+          >{{ t('app.security.policies.common.selectAll') }}</el-checkbox>
+          <span class="rule-picker-header-meta">{{ t('app.security.policies.picker.filteredCount', { n: pickerFilteredRules.length }) }}</span>
         </div>
         <div class="rule-picker-list">
           <el-checkbox-group v-model="pickerSelected">
@@ -900,12 +900,12 @@
                     :class="{ 'is-self': entry.isSelf, 'is-disabled': !entry.enabled, 'is-trust': isStage0ChainEntry(entry) }"
                   >{{ chainChipText(entry, idx) }}</span>
                   <!-- 阶段 0 排位语义：信任 IP 在任何策略判定前直达上游/进入检测，与绑定顺序无关 -->
-                  <span v-if="editorPolicyType !== 'stage0'" class="rule-binding-landing">本策略排第 {{ pickerMeta(rule).selfPos }} 位</span>
+                  <span v-if="editorPolicyType !== 'stage0'" class="rule-binding-landing">{{ t('app.security.policies.picker.selfPos', { n: pickerMeta(rule).selfPos }) }}</span>
                 </template>
               </div>
             </div>
           </el-checkbox-group>
-          <el-empty v-if="pickerPagedRules.length === 0" description="没有匹配的规则" :image-size="60" />
+          <el-empty v-if="pickerPagedRules.length === 0" :description="t('app.security.policies.picker.noMatch')" :image-size="60" />
         </div>
       </div>
       <el-pagination
@@ -918,11 +918,11 @@
       />
       <template #footer>
         <div class="picker-footer">
-          <span class="picker-count">已选 {{ pickerSelected.length }} 条</span>
+          <span class="picker-count">{{ t('app.security.policies.common.selectedCount', { n: pickerSelected.length }) }}</span>
           <div class="picker-footer-buttons">
-            <el-button :disabled="pickerSelected.length === 0" @click="pickerSelected = []">清空</el-button>
-            <el-button @click="rulePickerVisible = false">取消</el-button>
-            <el-button type="primary" @click="confirmRulePicker">确定</el-button>
+            <el-button :disabled="pickerSelected.length === 0" @click="pickerSelected = []">{{ t('app.security.policies.common.clear') }}</el-button>
+            <el-button @click="rulePickerVisible = false">{{ t('app.security.policies.common.cancel') }}</el-button>
+            <el-button type="primary" @click="confirmRulePicker">{{ t('app.security.policies.common.confirm') }}</el-button>
           </div>
         </div>
       </template>
@@ -930,26 +930,26 @@
 
     <el-dialog v-model="extractDialogVisible" class="dialog-body-inset" width="min(480px, 92vw)" append-to-body :close-on-click-modal="false" :close-on-press-escape="!extracting" :show-close="!extracting">
       <template #header>
-        <DialogHeader :icon="Document" title="提取为地址列表" subtitle="将内联 IP 转为可复用名单并关联到当前策略" />
+        <DialogHeader :icon="Document" :title="t('app.security.policies.extract.title')" :subtitle="t('app.security.policies.extract.subtitle')" />
       </template>
-      <div class="info-note-bar"><span class="info-note-desc">将创建列表并清空内联条目，引用后语义不变</span></div>
+      <div class="info-note-bar"><span class="info-note-desc">{{ t('app.security.policies.extract.note') }}</span></div>
       <el-form label-width="80px" @submit.prevent>
-        <el-form-item label="来源" for="extract-source-static">
+        <el-form-item :label="t('app.security.policies.extract.sourceLabel')" for="extract-source-static">
           <input type="text" id="extract-source-static" aria-hidden="true" tabindex="-1" autocomplete="off" style="display:none">
-          <span class="extract-source">{{ extractSide === 'acl' ? aclListLabel : '信任 IP' }}（内联 {{ extractSourceEntries.length }} 条）</span>
+          <span class="extract-source">{{ extractSide === 'acl' ? aclListLabel : t('app.security.policies.stage0.trustIpLabel') }}{{ t('app.security.policies.extract.inlineCount', { n: extractSourceEntries.length }) }}</span>
         </el-form-item>
-        <el-form-item label="列表名称" required>
-          <el-input v-model="extractForm.name" placeholder="列表名称" maxlength="50" show-word-limit />
+        <el-form-item :label="t('app.security.policies.extract.nameLabel')" required>
+          <el-input v-model="extractForm.name" :placeholder="t('app.security.policies.extract.namePlaceholder')" maxlength="50" show-word-limit />
         </el-form-item>
-        <el-form-item label="分类">
-          <el-select v-model="extractForm.category" allow-create filterable default-first-option placeholder="选择或输入分类" style="width: 100%">
+        <el-form-item :label="t('app.security.policies.extract.categoryLabel')">
+          <el-select v-model="extractForm.category" allow-create filterable default-first-option :placeholder="t('app.security.policies.extract.categoryPlaceholder')" style="width: 100%">
             <el-option v-for="c in IP_LIST_CATEGORIES" :key="c" :label="c" :value="c" />
           </el-select>
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="extractDialogVisible = false" :disabled="extracting">取消</el-button>
-        <el-button type="primary" :loading="extracting" @click="confirmExtract">创建并引用</el-button>
+        <el-button @click="extractDialogVisible = false" :disabled="extracting">{{ t('app.security.policies.common.cancel') }}</el-button>
+        <el-button type="primary" :loading="extracting" @click="confirmExtract">{{ t('app.security.policies.extract.confirm') }}</el-button>
       </template>
     </el-dialog>
 
@@ -969,6 +969,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { Plus, Lock, InfoFilled, CircleCheckFilled, Connection, Odometer, Link, Check, ArrowLeft, ArrowRight, ArrowDown, Search, WarningFilled, Document } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { CascaderOption, CascaderProps, LazyLoad } from 'element-plus'
@@ -997,6 +998,8 @@ import { CRS_HIDDEN_GROUP_CODES, CRS_INFRA_GROUP_CODES, isInfraRuleId, normalize
 import { DEEP_LINK_PARAMS, pageUrl } from '@/utils/deepLink'
 import { buildPolicyPayload, crawlerExemptionNeedsEngines, trustEnabledForPolicyType } from '@/utils/policyPayload'
 import { activateOnce } from '@/utils/keyboardActivate'
+
+const { t } = useI18n()
 
 interface PolicyDetail { id: number; name: string; description: string; mode: string; anomaly_threshold: number; ip_acl_mode: string; ip_acl_list: string; ip_acl_enabled: boolean; ip_whitelist: string; ip_whitelist_enabled?: boolean; ip_blacklist?: string; ip_acl_list_refs?: string; ip_whitelist_refs?: string; rate_limit_enabled: boolean; rate_limit_rps: number; rate_limit_burst: number; crs_rule_groups: string; crs_excluded_rules: string; custom_rules: string; block_page_id: number; block_status_code: number; enabled: boolean; updated_at: string; geoip_mode?: string; geoip_countries?: string; geoip_crawler_exempt?: boolean; geoip_crawler_engines?: string; waf_check_response?: boolean; log_request_body?: boolean; trust_detection?: boolean }
 // 规则行消费面（关联规则行内执行序/投影数据源；协议与域名等展示字段）
@@ -1056,7 +1059,7 @@ const regionCascaderOptions = computed(() => {
     const zhNames = regionTree.value.country_names_cn || {}
     options.push({
       value: '海外',
-      label: '海外国家',
+      label: t('app.security.policies.geo.overseasGroup'),
       children:
         overseas.length > 0
           ? // X5：按展示标签（中文简称，未命中回退英文）排序——
@@ -1188,18 +1191,18 @@ const isStage0ChainEntry = (entry: ChainEntry): boolean => {
 // 只读详情分段、触发详情策略行、流程投影四处同词（此前文件内两份 + 跨文件一份
 // 措辞互斥：拦截/阻断、仅自定义/仅自定义规则）。
 const chainChipText = (entry: ChainEntry, index: number): string => {
-  const name = entry.isSelf ? '本策略' : entry.name
-  if (isStage0ChainEntry(entry)) return `${name} · 阶段 0·拦截判定前优先生效`
+  const name = entry.isSelf ? t('app.security.policies.common.selfPolicy') : entry.name
+  if (isStage0ChainEntry(entry)) return t('app.security.policies.summary.stage0Precedence', { name })
   return `${index + 1}.${name}`
 }
 const policySummaryLine = (row: PolicySummary): string => {
   const type = policyTypeOf(row)
   if (type === 'stage0') {
     const count = mergeIpEntryCount(ipLists.value, parseIPList(row.ip_whitelist), parseRefIds(row.ip_whitelist_refs))
-    return `信任 ${count} 条 · ${trustHitMode(row.policy_type, row.trust_detection) === 'detection' ? '保留检测记录' : '直通上游'}`
+    return t('app.security.policies.summary.trustSummary', { n: count, mode: trustHitMode(row.policy_type, row.trust_detection) === 'detection' ? t('app.security.policies.stage0.modeDetection') : t('app.security.policies.stage0.modePass') })
   }
   if (type === 'stage2') {
-    return row.has_rate_limit ? `${row.rate_limit_rps} 次/秒 · 突发 ${row.rate_limit_burst}` : '未启用'
+    return row.has_rate_limit ? t('app.security.policies.summary.rateSummary', { rps: row.rate_limit_rps, burst: row.rate_limit_burst }) : t('app.security.policies.common.notEnabled')
   }
   if (type === 'stage3') {
     // 组数口径与编辑器写回同源（normalizeCrsGroups）：历史文件名前缀、重复值、
@@ -1208,9 +1211,9 @@ const policySummaryLine = (row: PolicySummary): string => {
     const crsCount = normalizeCrsGroups(parseUnknownStrings(row.crs_rule_groups)).length
     // WAF 全关=CRS 与自定义规则均不生效（共享 buildStage3Rows 同门）——不得把
     // 保留的自定义条数说成生效中。
-    if (row.mode === 'off') return 'WAF 关闭'
-    const parts = [`WAF ${wafModeLabel(row.mode)}`, `自定义 ${row.custom_rules_count} 条`]
-    if (row.mode === 'blocking' || row.mode === 'detection') parts.push(crsCount > 0 ? `CRS 组 ${crsCount}` : 'CRS 全部')
+    if (row.mode === 'off') return t('app.security.policies.summary.wafOff')
+    const parts = [t('app.security.policies.summary.wafMode', { mode: wafModeLabel(row.mode) }), t('app.security.policies.summary.customCount', { n: row.custom_rules_count })]
+    if (row.mode === 'blocking' || row.mode === 'detection') parts.push(crsCount > 0 ? t('app.security.policies.summary.crsGroups', { n: crsCount }) : t('app.security.policies.summary.crsAll'))
     return parts.join(' · ')
   }
   if (type === 'stage1') {
@@ -1221,13 +1224,13 @@ const policySummaryLine = (row: PolicySummary): string => {
     // 内容门 hasIPACLControl 只决定「是否有渲染产物」，
     // 列表摘要展示必须与后端 SecurityPolicyHasIPControl（ip_acl_enabled 开启即
     // true）对齐——显式开启 ACL 但名单为空时显示模式与 0 条，而不是「未启用」。
-    const aclPart = row.ip_acl_enabled === true || hasIPACLControl(row) ? formatAclModeDetail(ipLists.value, row) : '未启用 ACL'
+    const aclPart = row.ip_acl_enabled === true || hasIPACLControl(row) ? formatAclModeDetail(ipLists.value, row) : t('app.security.policies.summary.aclOff')
     const geoPart = hasGeoIPControl(row)
-      ? `GeoIP ${geoCount} 区域`
-      : geoCount > 0 ? `GeoIP 已关闭（保留 ${geoCount} 区域）` : 'GeoIP 未启用'
+      ? t('app.security.policies.summary.geoRegions', { n: geoCount })
+      : geoCount > 0 ? t('app.security.policies.summary.geoClosedKeep', { n: geoCount }) : t('app.security.policies.summary.geoOff')
     return `${aclPart} · ${geoPart}`
   }
-  return '混合 · 阶段 1/2/3 组合'
+  return t('app.security.policies.summary.mixedCombo')
 }
 
 // ── 绑定执行序编辑（用户裁定：策略顺序=执行序）：关联规则行内上移/下移只暂存
@@ -1282,7 +1285,7 @@ const moveSelfInChain = (caddyId: string, direction: -1 | 1): void => {
   // 阶段 0 置顶归一还原（触发顺序不变）——保留现状行为（不硬禁用、暂存照常
   // 写入），给 info 反馈代替零反馈的无效点击。
   if (JSON.stringify(normalizeOrder(next)) === JSON.stringify(normalizeOrder(order))) {
-    ElMessage.info('相邻为信任名单策略（阶段 0 恒置顶），交换不改变触发顺序')
+    ElMessage.info(t('app.security.policies.msg.swapNoop'))
   }
   bindingOrderEdits.value = { ...bindingOrderEdits.value, [caddyId]: next }
 }
@@ -1363,15 +1366,15 @@ const submitMigrate = async (): Promise<void> => {
     if (sessionSeq !== migrateSessionSeq) return
     const data = res.data
     const parts: string[] = []
-    if (data && data.created.length > 0) parts.push(`已创建 ${data.created.length} 条子策略（${data.created.map((c) => c.name).join('、')}）`)
-    if (data && data.remapped > 0) parts.push(`重映射 ${data.remapped} 条规则绑定`)
-    if (data && !data.deleted_original) parts.push('原策略因仍在使用未删除')
-    mfaAwareSuccess(parts.length > 0 ? parts.join('；') : '更新迁移完成')
+    if (data && data.created.length > 0) parts.push(t('app.security.policies.msg.migrateCreated', { n: data.created.length, names: data.created.map((c) => c.name).join(t('app.security.policies.common.sep')) }))
+    if (data && data.remapped > 0) parts.push(t('app.security.policies.msg.migrateRemapped', { n: data.remapped }))
+    if (data && !data.deleted_original) parts.push(t('app.security.policies.msg.migrateKeepOriginal'))
+    mfaAwareSuccess(parts.length > 0 ? parts.join(t('app.security.policies.common.sepSemi')) : t('app.security.policies.msg.migrateDone'))
     // 退化 200+后缀（Caddy 应用失败但 DB 已提交）须持续警告可见——
     // 有后缀才弹，无后缀不重复 toast（同下方保存主链路 FE1 口径）
     if (res.message?.includes(CADDY_APPLY_FAILED_MARKER)) showSaveResult(res, '')
     if (data && data.skipped.length > 0) {
-      ElMessage.warning(`${data.skipped.length} 条规则跳过：${data.skipped.map((s) => s.reason).join('；')}`)
+      ElMessage.warning(t('app.security.policies.msg.migrateSkipped', { n: data.skipped.length, reasons: data.skipped.map((s) => s.reason).join(t('app.security.policies.common.sepSemi')) }))
     }
     migrateVisible.value = false
     await fetchData()
@@ -1432,67 +1435,67 @@ const viewPolicySections = computed<ViewPolicySection[]>(() => {
   // 否则与旧行为一致仅出计数
   const excludedPaths = [...new Set(excludedEntries.filter((e) => e.scope === 'path' && e.path !== '').map((e) => e.path))]
   const customCount = parseCustomRuleIds(d.custom_rules).length
-  const stage3Rows: Array<{ label: string; value: string }> = [{ label: 'WAF 模式', value: wafModeLabel(d.mode) }]
+  const stage3Rows: Array<{ label: string; value: string }> = [{ label: t('app.security.policies.waf.modeLabel'), value: wafModeLabel(d.mode) }]
   if (d.mode === 'blocking' || d.mode === 'detection') {
-    stage3Rows.push({ label: '异常阈值', value: String(d.anomaly_threshold) })
-    stage3Rows.push({ label: 'CRS 规则组', value: crsGroupCount === 0 ? '全部（默认）' : `${crsGroupCount} 组` })
-    stage3Rows.push({ label: '排除规则', value: excludedPaths.length > 0 ? `${excludedCount} 条（路径 ${excludedPaths.slice(0, 3).join('、')}${excludedPaths.length > 3 ? ` 等 ${excludedPaths.length} 条` : ''}）` : `${excludedCount} 条` })
+    stage3Rows.push({ label: t('app.security.policies.waf.thresholdLabel'), value: String(d.anomaly_threshold) })
+    stage3Rows.push({ label: t('app.security.policies.waf.crsGroupsLabel'), value: crsGroupCount === 0 ? t('app.security.policies.view.crsAllDefault') : t('app.security.policies.common.groupsCount', { n: crsGroupCount }) })
+    stage3Rows.push({ label: t('app.security.policies.waf.exclusionLabel'), value: excludedPaths.length > 0 ? t('app.security.policies.view.excludedWithPath', { n: excludedCount, paths: excludedPaths.slice(0, 3).join(t('app.security.policies.common.sep')) + (excludedPaths.length > 3 ? t('app.security.policies.view.pathMore', { n: excludedPaths.length }) : '') }) : t('app.security.policies.common.countItems', { n: excludedCount }) })
   }
   if (d.mode !== 'off') {
-    stage3Rows.push({ label: '自定义规则', value: `${customCount} 条` })
-    stage3Rows.push({ label: '检查响应体', value: d.waf_check_response ? '启用' : '关闭' })
-    stage3Rows.push({ label: '记录请求体', value: d.log_request_body ? '启用' : '关闭' })
+    stage3Rows.push({ label: t('app.security.policies.waf.customRulesLabel'), value: t('app.security.policies.common.countItems', { n: customCount }) })
+    stage3Rows.push({ label: t('app.security.policies.waf.checkResponseBody'), value: d.waf_check_response ? t('app.security.policies.status.enabled') : t('app.security.policies.status.off') })
+    stage3Rows.push({ label: t('app.security.policies.waf.logRequestBody'), value: d.log_request_body ? t('app.security.policies.status.enabled') : t('app.security.policies.status.off') })
   }
   const page = d.block_page_id > 0 ? blockPages.value.find((p) => p.id === d.block_page_id) : undefined
   // 地域模式词表键（off 已在上游分支排除；未知/空模式显性说明，不得代填 deny）
   const geoipMode = d.geoip_mode ?? 'off'
   return [
     {
-      title: '基础信息',
+      title: t('app.security.policies.step.basic'),
       rows: [
-        { label: '名称', value: d.name },
-        { label: '描述', value: d.description || '-' },
-        { label: '类型', value: POLICY_TYPE_LABELS.mixed },
-        { label: '启用状态', value: d.enabled ? '启用' : '禁用' },
+        { label: t('app.security.policies.editor.nameLabel'), value: d.name },
+        { label: t('app.security.policies.editor.descLabel'), value: d.description || '-' },
+        { label: t('app.security.policies.view.typeLabel'), value: POLICY_TYPE_LABELS.mixed },
+        { label: t('app.security.policies.editor.enabledLabel'), value: d.enabled ? t('app.security.policies.status.enabled') : t('app.security.policies.status.disabled') },
       ],
     },
     // 阶段 0 段恒出（与流程弹框同口径 2026-09-21：无信任名单也显「未启用」，
     // 缺环节比灰态更误导）；有名单时显条目数与模式，开关关闭标注（未启用）
     {
-      title: '阶段 0 · 信任名单',
+      title: t('app.security.policies.step.stage0'),
       rows: trustCount === 0
-        ? [{ label: '信任名单', value: '未启用' }]
+        ? [{ label: t('app.security.policies.stage0.trustListLabel'), value: t('app.security.policies.common.notEnabled') }]
         : [
-            { label: '信任名单', value: `${trustCount} 条${d.ip_whitelist_enabled === false ? '（未启用）' : ''}` },
-            { label: '模式', value: trustHitMode('mixed', d.trust_detection) === 'detection' ? '保留检测记录（事件动作=检测）' : '直通上游（不产生安全事件）' },
+            { label: t('app.security.policies.stage0.trustListLabel'), value: t('app.security.policies.view.trustCount', { n: trustCount, off: d.ip_whitelist_enabled === false ? t('app.security.policies.common.disabledSuffix') : '' }) },
+            { label: t('app.security.policies.view.modeLabel'), value: trustHitMode('mixed', d.trust_detection) === 'detection' ? t('app.security.policies.stage0.detectDetail') : t('app.security.policies.stage0.passDetail') },
           ],
     },
     {
-      title: '阶段 1 · IP 访问控制',
+      title: t('app.security.policies.step.stage1'),
       rows: [
         // 与列表摘要同口径——ip_acl_enabled 开启即展示模式（即使名单为空），
         // 内容门只用于阶段能力/类型推断
-        { label: '访问控制', value: d.ip_acl_enabled === true || hasIPACLControl(d) ? formatAclModeDetail(ipLists.value, d) : '未启用' },
+        { label: t('app.security.policies.acl.divider'), value: d.ip_acl_enabled === true || hasIPACLControl(d) ? formatAclModeDetail(ipLists.value, d) : t('app.security.policies.common.notEnabled') },
         // 信任名单只归阶段 0 段（2026-09-21 用户裁定：独立阶段 0，阶段 1 不再重复展示）
-        { label: '地域拦截', value: (d.geoip_mode ?? 'off') !== 'off'
-          ? `${hasOwn(GEOIP_MODE_LABELS, geoipMode) ? GEOIP_MODE_LABELS[geoipMode] : geoipMode || '未配置模式'} · ${geoCount} 区域`
-          : (geoCount > 0 ? `已关闭（保留 ${geoCount} 区域）` : '未启用') },
+        { label: t('app.security.policies.geo.geoBlockLabel'), value: (d.geoip_mode ?? 'off') !== 'off'
+          ? t('app.security.policies.view.geoModeRegions', { mode: hasOwn(GEOIP_MODE_LABELS, geoipMode) ? GEOIP_MODE_LABELS[geoipMode] : geoipMode || t('app.security.policies.view.geoModeUnset'), n: geoCount })
+          : (geoCount > 0 ? t('app.security.policies.summary.geoClosedKeep', { n: geoCount }) : t('app.security.policies.common.notEnabled')) },
       ],
     },
     {
-      title: '阶段 2 · 限流',
-      rows: [{ label: '速率限制', value: d.rate_limit_enabled ? `${d.rate_limit_rps} 次/秒 · 突发 ${d.rate_limit_burst} 次 · 拦截恒 429` : '未启用' }],
+      title: t('app.security.policies.step.stage2'),
+      rows: [{ label: t('app.security.policies.view.rateLimitLabel'), value: d.rate_limit_enabled ? t('app.security.policies.view.rateDetail', { rps: d.rate_limit_rps, burst: d.rate_limit_burst }) : t('app.security.policies.common.notEnabled') }],
     },
-    { title: '阶段 3 · WAF', rows: stage3Rows },
+    { title: t('app.security.policies.step.stage3'), rows: stage3Rows },
     {
-      title: '拦截页',
+      title: t('app.security.policies.step.blockPage'),
       rows: [
-        { label: '拦截页面', value: d.block_page_id > 0
-          ? `${page?.name ?? `页面 #${d.block_page_id}`}（状态码 ${d.block_status_code || 403}）`
+        { label: t('app.security.policies.bp.pageLabel'), value: d.block_page_id > 0
+          ? t('app.security.policies.view.pageWithStatus', { name: page?.name ?? t('app.security.policies.common.pageNum', { n: d.block_page_id }), code: d.block_status_code || 403 })
           : d.rate_limit_enabled
-            ? '不使用自定义页面：限流 429 返回空响应体（阶段 1/3 拦截回落 Caddy 默认 403）'
-            : '不使用自定义页面（Caddy 默认 403）' },
-        { label: '归因口径', value: '阶段 3 按触发策略显示；阶段 1 预检合并拦截与阶段 2 限流 429 由绑定链首位有页策略显示；规则级阶段 1/3 覆盖优先' },
+            ? t('app.security.policies.view.noPageRateLimit')
+            : t('app.security.policies.bp.noPageDefault') },
+        { label: t('app.security.policies.view.attributionLabel'), value: t('app.security.policies.view.attributionValue') },
       ],
     },
   ]
@@ -1536,14 +1539,14 @@ const refreshBindingsSnapshot = async (): Promise<boolean> => {
 
 const openBindRulesDialog = async (row: PolicySummary): Promise<void> => {
   if (securityBindingsLoading.value || securityBindingsFailed.value || bindRulesOpening.value) {
-    ElMessage.warning(securityBindingsLoading.value ? '规则绑定数据加载中，请稍后再试' : '规则绑定数据加载失败，请先点击上方「重新加载」')
+    ElMessage.warning(securityBindingsLoading.value ? t('app.security.policies.msg.bindingsLoading') : t('app.security.policies.msg.bindingsFailedReload'))
     return
   }
   bindRulesOpening.value = true
   try {
     // 打开前重取一次快照（保存是全量替换，旧快照的 delta 不等于当前真实绑定集）
     if (!(await refreshBindingsSnapshot())) {
-      ElMessage.error('规则绑定数据刷新失败，已取消打开；请稍后重试')
+      ElMessage.error(t('app.security.policies.msg.bindingsRefreshFailed'))
       return
     }
     bindRulesPolicy.value = row
@@ -1619,11 +1622,11 @@ const aclMergedCount = computed(() => mergeIpEntries(ipACLList.value, ipACLListR
 // 保存校验用纯计数口径（不依赖按步惰性拉取的条目值——编辑态跳步
 // 直达预览时 mergeIpEntries 会漏未加载列表致假性「名单为空」阻断保存）
 const aclSaveCount = computed(() => mergeIpEntryCount(ipLists.value, ipACLList.value, ipACLListRefs.value))
-const aclRefHint = computed(() => `内联 ${ipACLList.value.length} 条 + 引用列表 ${selectedRefEntryCount(ipACLListRefs.value)} 条（合计 ${aclMergedCount.value} 条）`)
+const aclRefHint = computed(() => t('app.security.policies.hint.refCombo', { inline: ipACLList.value.length, refs: selectedRefEntryCount(ipACLListRefs.value), total: aclMergedCount.value }))
 const showAclRefHint = computed(() => ipACLList.value.length > 0 || ipACLListRefs.value.length > 0)
 const whitelistMergedCount = computed(() => mergeIpEntries(ipWhitelist.value, ipWhitelistRefs.value).length)
 const whitelistSaveCount = computed(() => mergeIpEntryCount(ipLists.value, ipWhitelist.value, ipWhitelistRefs.value))
-const whitelistRefHint = computed(() => `内联 ${ipWhitelist.value.length} 条 + 引用列表 ${selectedRefEntryCount(ipWhitelistRefs.value)} 条（合计 ${whitelistMergedCount.value} 条）`)
+const whitelistRefHint = computed(() => t('app.security.policies.hint.refCombo', { inline: ipWhitelist.value.length, refs: selectedRefEntryCount(ipWhitelistRefs.value), total: whitelistMergedCount.value }))
 const showWhitelistRefHint = computed(() => ipWhitelist.value.length > 0 || ipWhitelistRefs.value.length > 0)
 // 本策略既有 ip_blacklist（仅用于跨策略冲突比较；本对话框不编辑该字段，
 // 保存时由后端指针语义自动保留原值）
@@ -1663,14 +1666,14 @@ const WIZARD_STEP = {
 } as const
 type WizardStep = (typeof WIZARD_STEP)[keyof typeof WIZARD_STEP]
 const WIZARD_STEP_META: Record<WizardStep, { title: string; icon: typeof InfoFilled }> = {
-  [WIZARD_STEP.BASIC]: { title: '基础信息', icon: InfoFilled },
-  [WIZARD_STEP.TRUST]: { title: '阶段 0 · 信任名单', icon: Connection },
-  [WIZARD_STEP.IP_ACL]: { title: '阶段 1 · IP 访问控制', icon: Connection },
-  [WIZARD_STEP.RATE_LIMIT]: { title: '阶段 2 · 限流', icon: Odometer },
-  [WIZARD_STEP.WAF_RULES]: { title: '阶段 3 · WAF 规则', icon: Lock },
-  [WIZARD_STEP.BLOCK_PAGE]: { title: '拦截页', icon: Document },
-  [WIZARD_STEP.BINDINGS]: { title: '关联规则', icon: Link },
-  [WIZARD_STEP.PREVIEW]: { title: '配置预览', icon: Check },
+  [WIZARD_STEP.BASIC]: { title: t('app.security.policies.step.basic'), icon: InfoFilled },
+  [WIZARD_STEP.TRUST]: { title: t('app.security.policies.step.stage0'), icon: Connection },
+  [WIZARD_STEP.IP_ACL]: { title: t('app.security.policies.step.stage1'), icon: Connection },
+  [WIZARD_STEP.RATE_LIMIT]: { title: t('app.security.policies.step.stage2'), icon: Odometer },
+  [WIZARD_STEP.WAF_RULES]: { title: t('app.security.policies.step.stage3Waf'), icon: Lock },
+  [WIZARD_STEP.BLOCK_PAGE]: { title: t('app.security.policies.step.blockPage'), icon: Document },
+  [WIZARD_STEP.BINDINGS]: { title: t('app.security.policies.step.bindings'), icon: Link },
+  [WIZARD_STEP.PREVIEW]: { title: t('app.security.policies.step.preview'), icon: Check },
 }
 const currentStep = ref<WizardStep>(WIZARD_STEP.BASIC)
 // 条目值惰性拉取：进入 IP/信任编辑、拦截页、关联规则或配置预览时补齐缺失
@@ -1699,10 +1702,10 @@ watch([currentStep, ipACLList, ipWhitelist, ipACLListRefs, ipWhitelistRefs], ([s
 
 // 新建类型纵向列表选项（任务 C：与 el-form-item 同构的独立 radio 列表）
 const POLICY_TYPE_CREATE_OPTIONS: ReadonlyArray<{ value: 'stage0' | 'stage1' | 'stage2' | 'stage3'; label: string }> = [
-  { value: 'stage0', label: '阶段 0 · 信任名单（信任名单直接转发上游；可选保留检测记录）' },
-  { value: 'stage1', label: '阶段 1 · IP 访问控制（IP 名单 / 地域拦截 / 拦截页）' },
-  { value: 'stage2', label: '阶段 2 · 限流（速率上限，拦截恒 429）' },
-  { value: 'stage3', label: '阶段 3 · WAF（模式 / CRS / 自定义规则 / 拦截页）' },
+  { value: 'stage0', label: t('app.security.policies.type.stage0') },
+  { value: 'stage1', label: t('app.security.policies.type.stage1') },
+  { value: 'stage2', label: t('app.security.policies.type.stage2') },
+  { value: 'stage3', label: t('app.security.policies.type.stage3') },
 ]
 // ── 策略类型（实体单职化）：新建先选类型；编辑态类型由行推断/后端 policy_type 携带 ──
 const createPolicyType = ref<'stage0' | 'stage1' | 'stage2' | 'stage3'>('stage0')
@@ -1717,11 +1720,11 @@ const trustEnabledInEditor = computed(() => trustEnabledForPolicyType(editorPoli
 
 // 弹框副标题按策略类型描述；mixed/缺省保持兼容组总述文案
 const EDITOR_SUBTITLES: Record<SecurityPolicyType, string> = {
-  stage0: '配置信任名单条目与直通/保留检测模式',
-  stage1: '配置 IP 访问控制、地域拦截与拦截页',
-  stage2: '配置速率限制（恒 429）',
-  stage3: '配置 WAF 模式、CRS 规则组、自定义规则与拦截页',
-  mixed: '配置 WAF 检测规则、IP 访问控制、限流与规则关联',
+  stage0: t('app.security.policies.editor.subStage0'),
+  stage1: t('app.security.policies.editor.subStage1'),
+  stage2: t('app.security.policies.editor.subStage2'),
+  stage3: t('app.security.policies.editor.subStage3'),
+  mixed: t('app.security.policies.editor.subMixed'),
 }
 
 const typeAllowsStage = (stage: 0 | 1 | 2 | 3): boolean =>
@@ -1765,19 +1768,19 @@ const form = ref(defaultForm())
 const crawlerEngineOptions = [
   { id: 'googlebot', name: 'Google' },
   { id: 'bingbot', name: 'Bing' },
-  { id: 'baiduspider', name: '百度' },
-  { id: 'sogouspider', name: '搜狗' },
+  { id: 'baiduspider', name: t('app.security.policies.crawler.baidu') },
+  { id: 'sogouspider', name: t('app.security.policies.crawler.sogou') },
   { id: 'so360spider', name: '360' },
-  { id: 'yisouspider', name: '神马' },
-  { id: 'petalbot', name: '华为 PetalBot（观察级）' },
+  { id: 'yisouspider', name: t('app.security.policies.crawler.yisou') },
+  { id: 'petalbot', name: t('app.security.policies.crawler.petal') },
   { id: 'duckduckbot', name: 'DuckDuckGo' },
   { id: 'yandexbot', name: 'Yandex' },
-  { id: 'gptbot', name: 'OpenAI（GPTBot 等）' },
-  { id: 'deepseekbot', name: 'DeepSeek（观察级）' },
+  { id: 'gptbot', name: t('app.security.policies.crawler.gpt') },
+  { id: 'deepseekbot', name: t('app.security.policies.crawler.deepseek') },
   { id: 'claudebot', name: 'Anthropic Claude' },
   { id: 'perplexitybot', name: 'Perplexity' },
-  { id: 'kimisearchbot', name: 'Kimi（观察级）' },
-  { id: 'bytespider', name: '字节 Bytespider' },
+  { id: 'kimisearchbot', name: t('app.security.policies.crawler.kimi') },
+  { id: 'bytespider', name: t('app.security.policies.crawler.bytespider') },
 ]
 const selectedCustomRules = ref<number[]>([])
 // action/enabled/conditions 供冲突检测与按 Coraza 相位判定真实拦截能力
@@ -1815,21 +1818,21 @@ const fetchData = async (): Promise<boolean> => {
     policiesLoadError.value = false
     const failures: string[] = []
     if (ruleRes.status === 'fulfilled') allRules.value = ruleRes.value.data || []
-    else failures.push('规则列表')
+    else failures.push(t('app.security.policies.aux.rules'))
     if (crsRes.status === 'fulfilled') crsRuleOptions.value = crsRes.value || []
-    else failures.push('CRS 规则选项')
+    else failures.push(t('app.security.policies.aux.crsOptions'))
     if (bpRes.status === 'fulfilled') { blockPages.value = bpRes.value.data || []; blockPagesLoaded.value = true }
-    else failures.push('拦截页面')
+    else failures.push(t('app.security.policies.aux.blockPages'))
     if (crRes.status === 'fulfilled') allCustomRules.value = crRes.value.data || []
-    else failures.push('自定义规则')
+    else failures.push(t('app.security.policies.aux.customRules'))
     if (bindRes.status === 'fulfilled') { securityBindings.value = bindRes.value.data || {}; securityBindingsFailed.value = false }
-    else { failures.push('规则绑定'); securityBindingsFailed.value = true }
+    else { failures.push(t('app.security.policies.aux.bindings')); securityBindingsFailed.value = true }
     if (userRes.status === 'fulfilled') users.value = userRes.value.data || []
-    else failures.push('用户列表')
+    else failures.push(t('app.security.policies.aux.users'))
     if (ipListRes.status === 'fulfilled') ipLists.value = ipListRes.value.data || []
-    else failures.push('IP 地址列表')
+    else failures.push(t('app.security.policies.aux.ipLists'))
     auxLoadFailures.value = failures
-    if (failures.length > 0) console.warn('部分辅助数据加载失败：', failures.join('、'))
+    if (failures.length > 0) console.warn(t('app.security.policies.list.auxFailBanner', { items: failures.join(t('app.security.policies.common.sep')) }))
     return true
   } catch (error: unknown) {
     console.error('Failed to load policies data:', error)
@@ -1866,7 +1869,7 @@ const crsOptionCode = (filename: string): string => {
 // 必须区分阶段，否则「942 · SQL 注入」与「955 · Webshell」无法看出分别作用
 // 于请求还是响应。命名取 CRS 官方 phase 术语的最简中文：请求 / 响应
 //（REQUEST 规则查的不只是请求体，叫「请求体」不准确）。
-const crsOptionPhase = (filename: string): string => parseCrsFilename(filename)?.phase ?? '请求'
+const crsOptionPhase = (filename: string): string => parseCrsFilename(filename)?.phase ?? t('app.security.policies.waf.phaseRequest')
 
 // 规则组/排除目标级联的已知值全集（两位组号 ∪ 索引规则 ID）——命中即无需 ghost 兜底
 const crsKnownTargetValues = computed<Set<string>>(() =>
@@ -1882,24 +1885,24 @@ const crsGhostOptionFor = (value: string): CrsGhostOption | null => {
   if (parseCrsFilename(v)) {
     const fileRule = crsRuleOptions.value.find((r) => r.filename === v)
     const label = fileRule
-      ? `文件 · ${crsOptionPhase(v)} · ${crsOptionCode(v)} · ${fileRule.category}`
-      : `文件 · ${crsOptionPhase(v)} · ${crsOptionCode(v)}`
+      ? t('app.security.policies.waf.fileMetaCat', { phase: crsOptionPhase(v), code: crsOptionCode(v), category: fileRule.category })
+      : t('app.security.policies.waf.fileMeta', { phase: crsOptionPhase(v), code: crsOptionCode(v) })
     return { value: v, label, title: v }
   }
   if (/^\d{6}$/.test(v)) {
     // 陈旧判定仅在索引成功加载后生效——加载失败/在途时不得把规则 ID 误标为已移除
     if (!crsIndexLoaded.value) return null
-    return { value: v, label: `${v} —（当前 CRS 已无此规则）`, title: v }
+    return { value: v, label: t('app.security.policies.waf.ghostRule', { v }), title: v }
   }
   if (/^\d{2}$/.test(v)) {
     // 两数字组码组：旧版 CRS 遗留的失效组码（如 10/12，当前 CRS 4.x 已无对应文件）。
     // 守卫：规则文件列表未加载/失败（该列表恒 27 组，空=未就绪）时不标记，防误报。
     if (crsRuleOptions.value.length === 0) return null
     if (CRS_HIDDEN_GROUP_CODES.includes(v)) {
-      const label = `${v} · 通用误报豁免（选择全部规则时自动包含）`
+      const label = t('app.security.policies.waf.ghost99', { v })
       return { value: v, label, title: label }
     }
-    const label = `${v} —（当前 CRS 已无此规则组，可删除）`
+    const label = t('app.security.policies.waf.ghostGroup', { v })
     return { value: v, label, title: label }
   }
   return { value: v, label: v, title: v }
@@ -2088,7 +2091,7 @@ const removeExcludedRule = (idx: number): void => {
 const onExclusionIpsChange = (row: CrsExcludedRow, value: string[]): void => {
   const invalid = value.find((entry) => !isValidCidr(entry))
   if (invalid !== undefined) {
-    ElMessage.error(`IP/CIDR 条目格式不正确：${invalid}`)
+    ElMessage.error(t('app.security.policies.msg.invalidCidr', { items: invalid }))
     row.ips = value.filter((entry) => isValidCidr(entry))
     return
   }
@@ -2103,7 +2106,7 @@ const exclusionRowConflict = (row: CrsExcludedRow): string => {
   const target = row.target.trim()
   if (target === '' || form.value.mode !== 'blocking' && form.value.mode !== 'detection') return ''
   if (!crsRuleGroups.value.includes(target)) return ''
-  return /^\d{2}$/.test(target) ? '冗余：排除优先生效' : '与规则组选择矛盾（排除优先）'
+  return /^\d{2}$/.test(target) ? t('app.security.policies.conflict.redundant') : t('app.security.policies.conflict.contradicts')
 }
 
 // 提交口径：全空行（无目标且无条件）静默丢弃，其余按 target+scope+ips+listRefs+path 去重
@@ -2152,32 +2155,32 @@ const validateExcludedRules = (): boolean => {
     const row = crsExcludedRows.value[i]
     if (!row || !isFilledExclusionRow(row)) continue
     if (row.target.trim() === '') {
-      ElMessage.error(`第 ${i + 1} 条排除规则未选择目标`)
+      ElMessage.error(t('app.security.policies.msg.exclusionNoTarget', { n: i + 1 }))
       return false
     }
     if (row.scope === 'ip' && row.ips.length === 0) {
-      ElMessage.error(`第 ${i + 1} 条排除规则（指定 IP）未填写 IP`)
+      ElMessage.error(t('app.security.policies.msg.exclusionNoIp', { n: i + 1 }))
       return false
     }
     if (row.scope === 'list' && row.listRefs.length === 0) {
-      ElMessage.error(`第 ${i + 1} 条排除规则（地址列表）未选择列表`)
+      ElMessage.error(t('app.security.policies.msg.exclusionNoList', { n: i + 1 }))
       return false
     }
     if (row.scope === 'path') {
       const p = row.path.trim()
       if (p === '') {
-        ElMessage.error(`第 ${i + 1} 条排除规则（路径 URI）未填写路径`)
+        ElMessage.error(t('app.security.policies.msg.exclusionNoPath', { n: i + 1 }))
         return false
       }
       // 与后端 400 规则同口径前置拦截（后端 400 为最终裁决，此处避免保存卡死）：
       // 必须以 / 开头；≤256 字符（输入框 maxlength 已限，此处兜底）；
       // 无空白/控制字符/双引号/反斜杠（渲染为 @beginsWith 字面量，含引号会破配置）
       if (!p.startsWith('/')) {
-        ElMessage.error(`第 ${i + 1} 条排除规则（路径 URI）必须以 / 开头（如 /api/upload）`)
+        ElMessage.error(t('app.security.policies.msg.exclusionPathSlash', { n: i + 1 }))
         return false
       }
       if (p.length > 256 || /[\s"'\\]/.test(p) || /[\u0000-\u0008\u000e-\u001f\u007f]/.test(p)) {
-        ElMessage.error(`第 ${i + 1} 条排除规则（路径 URI）含非法字符（空白/控制字符/引号/反斜杠）或超过 256 字符`)
+        ElMessage.error(t('app.security.policies.msg.exclusionPathChars', { n: i + 1 }))
         return false
       }
     }
@@ -2188,10 +2191,10 @@ const validateExcludedRules = (): boolean => {
 // 预览目标 label：两位组号 → 组选项 label；6 位 ID → 索引「ID — 描述」（截断版）；
 // 旧文件名/未知值 → 解析化文件形态或原值
 const exclusionTargetLabel = (target: string): string => {
-  if (/^\d{2}$/.test(target)) return crsGroupOptions.value.find((o) => o.value === target)?.label ?? `规则组 ${target}`
+  if (/^\d{2}$/.test(target)) return crsGroupOptions.value.find((o) => o.value === target)?.label ?? t('app.security.policies.waf.groupLabel', { target })
   const entry = crsIndexById.value.get(target)
   if (entry) return `${target} — ${crsRuleLabelView(entry).label}`
-  if (parseCrsFilename(target)) return `文件 · ${crsOptionPhase(target)} · ${crsOptionCode(target)}`
+  if (parseCrsFilename(target)) return t('app.security.policies.waf.fileMeta', { phase: crsOptionPhase(target), code: crsOptionCode(target) })
   return target
 }
 
@@ -2215,7 +2218,7 @@ const exclusionRowGhostTitle = (target: string): string => {
   const v = target.trim()
   if (v === '' || crsValueToPath(v, 'exclusion') !== null) return ''
   if (CRS_RANGE_TARGET_RE.test(v)) {
-    return '区间遗留形态：按字面保存并按字面下发（SecRuleRemoveById 区间），不展开为规则组内全部规则 ID；作用域仅支持全部 IP'
+    return t('app.security.policies.waf.rangeGhostTitle')
   }
   return v
 }
@@ -2235,27 +2238,27 @@ watch(() => form.value.ip_acl_mode, (mode) => {
   const kept = ipACLListRefs.value.filter((id) => !builtinIds.has(id))
   if (kept.length !== ipACLListRefs.value.length) {
     ipACLListRefs.value = kept
-    ElMessage.warning('内置威胁名单仅可用于黑名单模式，已从引用中移除')
+    ElMessage.warning(t('app.security.policies.msg.builtinDenyOnly'))
   }
 })
 
-const ACL_LIST_LABELS: Record<string, string> = { deny: '拒绝 IP', allow: '允许 IP', 绕过: '免检测 IP' }
+const ACL_LIST_LABELS: Record<string, string> = { deny: t('app.security.policies.acl.labelDeny'), allow: t('app.security.policies.acl.labelAllow'), 绕过: t('app.security.policies.acl.labelBypass') }
 // 词表查表统一过 hasOwn：库值可能命中原型键（constructor/toString/__proto__，
 // 只能由带外改库产生），裸下标会把 Object.prototype 上的函数当标签渲染。
 const aclListLabel = computed(() => (hasOwn(ACL_LIST_LABELS, form.value.ip_acl_mode)
   ? ACL_LIST_LABELS[form.value.ip_acl_mode]
-  : 'IP 列表'))
+  : t('app.security.policies.acl.listFallback')))
 
-const GEOIP_MODE_LABELS: Record<string, string> = { deny: '拦截所选区域', allow: '仅允许所选区域' }
+const GEOIP_MODE_LABELS: Record<string, string> = { deny: t('app.security.policies.geo.modeDeny'), allow: t('app.security.policies.geo.modeAllow') }
 // 从 off 态重开开关时控制模式回落 deny（off 只是关闭哨兵，radio 无此项）。
 const onGeoipEnabledChange = (enabled: string | number | boolean) => {
   if (enabled && form.value.geoip_mode === 'off') form.value.geoip_mode = 'deny'
 }
 
 const ACL_MODE_TIPS: Record<string, string> = {
-  deny: '列表中的 IP 将被拒绝访问，其他 IP 正常进行安全检测',
-  allow: '仅列表中的 IP 可以访问，其他 IP 一律拒绝',
-  绕过: '列表中的 IP 将跳过全部安全检测',
+  deny: t('app.security.policies.acl.hintDeny'),
+  allow: t('app.security.policies.acl.hintAllow'),
+  绕过: t('app.security.policies.acl.hintBypass'),
 }
 const aclListTip = computed(() => (hasOwn(ACL_MODE_TIPS, form.value.ip_acl_mode)
   ? ACL_MODE_TIPS[form.value.ip_acl_mode]
@@ -2309,19 +2312,19 @@ const validateIpAclList = (): boolean => {
   if (form.value.ip_acl_enabled) {
     const invalidEntry = ipACLList.value.find((entry) => !isValidCidr(entry))
     if (invalidEntry) {
-      ElMessage.error(`IP/CIDR 条目格式不正确：${invalidEntry}`)
+      ElMessage.error(t('app.security.policies.msg.invalidCidr', { items: invalidEntry }))
       return false
     }
   }
   if (ipWhitelistEnabled.value) {
     const invalidTrustEntry = ipWhitelist.value.find((entry) => !isValidCidr(entry))
     if (invalidTrustEntry) {
-      ElMessage.error(`信任名单中的 IP/CIDR 条目格式不正确：${invalidTrustEntry}`)
+      ElMessage.error(t('app.security.policies.msg.invalidTrustCidr', { items: invalidTrustEntry }))
       return false
     }
   }
   if (form.value.geoip_enabled && geoipCountries.value.length === 0) {
-    ElMessage.error('区域控制启用后必须选择至少一个区域（引用即生效）')
+    ElMessage.error(t('app.security.policies.msg.regionRequired'))
     return false
   }
   return true
@@ -2330,7 +2333,7 @@ const validateIpAclList = (): boolean => {
 const nextStep = (): void => {
   if (currentStep.value === WIZARD_STEP.BASIC) {
     if (!form.value.name.trim()) {
-      ElMessage.warning('请输入策略名称')
+      ElMessage.warning(t('app.security.policies.msg.nameRequired'))
       return
     }
     moveToAdjacentWizardStep(1)
@@ -2505,7 +2508,7 @@ const buildDisplayChain = (caddyId: string): ChainEntry[] => {
     }
   }
   if (editingId.value !== null) {
-    byId.set(editingId.value, { policyId: editingId.value, name: form.value.name || '本策略', enabled: form.value.enabled, isSelf: true, blockPageId: form.value.block_page_id, blockStatusCode: form.value.block_status_code })
+    byId.set(editingId.value, { policyId: editingId.value, name: form.value.name || t('app.security.policies.common.selfPolicy'), enabled: form.value.enabled, isSelf: true, blockPageId: form.value.block_page_id, blockStatusCode: form.value.block_status_code })
   }
   return orderedChainPolicyIds(caddyId)
     .map((id) => byId.get(id))
@@ -2530,9 +2533,9 @@ const pickerMeta = (rule: Rule): { chain: ChainEntry[]; selfPos: number; blockRe
       blockReason = TCP_BIND_UNSUPPORTED_REASON
     } else if (editorPolicyType.value === 'stage2'
       && hasOtherStage2Binding(existing, editingId.value, (id) => policyTypeById.value.get(id))) {
-      blockReason = '该规则已绑定其它限流策略（每规则仅一条），需先解绑'
+      blockReason = t('app.security.policies.picker.blockStage2')
     } else if (existing.length >= MAX_POLICIES_PER_RULE) {
-      blockReason = `已达 ${MAX_POLICIES_PER_RULE} 条绑定上限，无法继续绑定`
+      blockReason = t('app.security.policies.picker.blockCap', { max: MAX_POLICIES_PER_RULE })
     }
   }
   return { chain, selfPos: chain.findIndex((e) => e.isSelf) + 1, blockReason }
@@ -2592,7 +2595,7 @@ const buildConflictChain = (caddyId: string): ConflictPolicyView[] => {
   const selfSides = selfIpAclSides.value
   const self: ConflictPolicyView = {
     id: editingId.value,
-    name: form.value.name || '本策略',
+    name: form.value.name || t('app.security.policies.common.selfPolicy'),
     enabled: form.value.enabled,
     mode: form.value.mode,
     ipAclEnabled: form.value.ip_acl_enabled,
@@ -2627,13 +2630,13 @@ const computeBindingConflicts = (chain: ConflictPolicyView[]): string[] => {
       const b = wafActive[j]
       if (!a || !b) continue
       let overlap: string[]
-      if (a.crsGroups.length === 0 && b.crsGroups.length === 0) overlap = ['全部规则组']
+      if (a.crsGroups.length === 0 && b.crsGroups.length === 0) overlap = [t('app.security.policies.conflict.allGroups')]
       else if (a.crsGroups.length === 0) overlap = b.crsGroups
       else if (b.crsGroups.length === 0) overlap = a.crsGroups
       else overlap = a.crsGroups.filter((g) => b.crsGroups.includes(g))
       if (overlap.length > 0) {
-        const shown = overlap.slice(0, 3).join('、')
-        hints.push(`「${a.name}」与「${b.name}」加载了相同的 CRS 规则组（${shown}${overlap.length > 3 ? ' 等' : ''}），同一请求将被重复检测，建议只保留一个`)
+        const shown = overlap.slice(0, 3).join(t('app.security.policies.common.sep'))
+        hints.push(t('app.security.policies.conflict.crsOverlap', { a: a.name, b: b.name, groups: shown + (overlap.length > 3 ? t('app.security.policies.common.etcSuffix') : '') }))
       }
     }
   }
@@ -2647,7 +2650,7 @@ const computeBindingConflicts = (chain: ConflictPolicyView[]): string[] => {
     const hasBlockingBefore = active.slice(0, i).some(isBlocking)
     const hasBlockingAfter = active.slice(i + 1).some(isBlocking)
     if (hasBlockingBefore && hasBlockingAfter) {
-      hints.push(`「${p.name}」为${p.ipAclMode === '绕过' ? '免检测' : '白名单'}模式且夹在拦截策略中间：免检测/白名单仅作用于自身引擎，不会为前后策略放行流量，各策略引擎独立判定、位置不影响拦截效果；如需对特定来源整体放行，请使用免检测名单`)
+      hints.push(t('app.security.policies.conflict.bypassMiddle', { name: p.name, mode: p.ipAclMode === '绕过' ? t('app.security.policies.acl.bypassShort') : t('app.security.policies.acl.allowShort') }))
     }
   })
 
@@ -2662,7 +2665,7 @@ const computeBindingConflicts = (chain: ConflictPolicyView[]): string[] => {
     for (let j = i + 1; j < active.length; j++) {
       const later = active[j]
       if (!later || !hasDenyRule(later)) continue
-      hints.push(`「${earlier.name}」的放行型自定义规则仅在本策略引擎内跳过匹配、不阻断请求，「${later.name}」的拦截型规则仍会独立执行；需注意前位拦截策略一旦命中将中断整条链，后位策略只处理前位放行的流量`)
+      hints.push(t('app.security.policies.conflict.passBlock', { earlier: earlier.name, later: later.name }))
       break
     }
   }
@@ -2682,7 +2685,7 @@ const computeBindingConflicts = (chain: ConflictPolicyView[]): string[] => {
   idOwners.forEach((owners, ruleId) => {
     if (owners.length <= 1) return
     const ruleName = allCustomRules.value.find((r) => r.id === ruleId)?.name || `#${ruleId}`
-    hints.push(`自定义规则「${ruleName}」被 ${owners.map((n) => `「${n}」`).join('、')} 重复引用，同一请求会被重复计分/处理，建议只保留一个`)
+    hints.push(t('app.security.policies.conflict.duplicateRule', { rule: ruleName, owners: owners.map((n) => t('app.security.policies.common.nameQuoted', { name: n })).join(t('app.security.policies.common.sep')) }))
   })
 
   // (5) 地址级允许×拒绝提示：ACL/存量信任只豁免所属策略；阶段 0 信任
@@ -2698,13 +2701,13 @@ const computeBindingConflicts = (chain: ConflictPolicyView[]): string[] => {
       if (!allowSide || !denySide) continue
       const aclOverlap = entriesIntersect(allowSide.ipAclAllowEntries, denySets[j] ?? new Set())
       if (aclOverlap.length > 0) {
-        const shown = aclOverlap.slice(0, 2).join('、')
-        hints.push(`地址 ${shown}${aclOverlap.length > 2 ? ' 等' : ''} 在「${allowSide.name}」的访问控制名单中、同时在「${denySide.name}」的黑名单中——${addressAllowDenyConflictText({ kind: 'acl', denyPolicyName: denySide.name })}`)
+        const shown = aclOverlap.slice(0, 2).join(t('app.security.policies.common.sep'))
+        hints.push(t('app.security.policies.conflict.addrAclDeny', { addr: shown + (aclOverlap.length > 2 ? t('app.security.policies.common.etcSuffix') : ''), allow: allowSide.name, deny: denySide.name, detail: addressAllowDenyConflictText({ kind: 'acl', denyPolicyName: denySide.name }) }))
       }
       const trustOverlap = entriesIntersect(allowSide.ipTrustEntries, denySets[j] ?? new Set())
       if (trustOverlap.length > 0) {
-        const shown = trustOverlap.slice(0, 2).join('、')
-        hints.push(`地址 ${shown}${trustOverlap.length > 2 ? ' 等' : ''} 在「${allowSide.name}」的信任名单中、同时在「${denySide.name}」的黑名单中——${addressAllowDenyConflictText({ kind: 'trust', policyType: allowSide.policyType, trustDetection: allowSide.trustDetection, denyPolicyName: denySide.name })}`)
+        const shown = trustOverlap.slice(0, 2).join(t('app.security.policies.common.sep'))
+        hints.push(t('app.security.policies.conflict.addrTrustDeny', { addr: shown + (trustOverlap.length > 2 ? t('app.security.policies.common.etcSuffix') : ''), allow: allowSide.name, deny: denySide.name, detail: addressAllowDenyConflictText({ kind: 'trust', policyType: allowSide.policyType, trustDetection: allowSide.trustDetection, denyPolicyName: denySide.name }) }))
       }
     }
   }
@@ -2776,20 +2779,20 @@ const wafStepCrsAlert = computed<string>(() => {
   for (const peer of peers) {
     if (peer.mode !== 'blocking' && peer.mode !== 'detection') continue
     let overlap: string[]
-    if (selfGroups.length === 0 && peer.crsGroups.length === 0) overlap = ['全部规则组']
+    if (selfGroups.length === 0 && peer.crsGroups.length === 0) overlap = [t('app.security.policies.conflict.allGroups')]
     else if (selfGroups.length === 0) overlap = peer.crsGroups
     else if (peer.crsGroups.length === 0) overlap = selfGroups
     else overlap = selfGroups.filter((g) => peer.crsGroups.includes(g))
     if (overlap.length > 0) dups.push({ name: peer.name, overlap })
   }
   if (dups.length === 0) return ''
-  const names = dups.slice(0, 2).map((d) => `「${d.name}」`).join('、') + (dups.length > 2 ? ` 等 ${dups.length} 条` : '')
+  const names = dups.slice(0, 2).map((d) => t('app.security.policies.common.nameQuoted', { name: d.name })).join(t('app.security.policies.common.sep')) + (dups.length > 2 ? t('app.security.policies.common.etcCountSuffix', { n: dups.length }) : '')
   let overlapUnion = [...new Set(dups.flatMap((d) => d.overlap))]
-  if (overlapUnion.includes('全部规则组')) overlapUnion = ['全部规则组']
-  const overlapShown = overlapUnion.slice(0, 3).join('、') + (overlapUnion.length > 3 ? ' 等' : '')
+  if (overlapUnion.includes(t('app.security.policies.conflict.allGroups'))) overlapUnion = [t('app.security.policies.conflict.allGroups')]
+  const overlapShown = overlapUnion.slice(0, 3).join(t('app.security.policies.common.sep')) + (overlapUnion.length > 3 ? t('app.security.policies.common.etcSuffix') : '')
   return coBound
-    ? `${names}已选择相同的 CRS 规则组（${overlapShown}），绑定到同一规则时将被重复检测，建议只保留一个`
-    : `${names}也选择了相同的 CRS 规则组（${overlapShown}），若二者绑定同一规则将重复检测`
+    ? t('app.security.policies.conflict.crsOverlapNow', { names, groups: overlapShown })
+    : t('app.security.policies.conflict.crsOverlapIfCoBound', { names, groups: overlapShown })
 })
 
 // IP 步骤：允许/信任名单 × 黑名单的地址级提示按真实生效范围分流——
@@ -2813,8 +2816,8 @@ const entrySourceSuffix = (entry: string, inline: string[], refs: number[]): str
   if (inline.includes(entry)) return ''
   const names = refs
     .filter((id) => (ipListEntries.value[id] || []).some((e) => e.trim() === entry))
-    .map((id) => `「${ipLists.value.find((l) => l.id === id)?.name ?? `#${id}`}」`)
-  return names.length > 0 ? `（来自引用列表${names.join('、')}）` : ''
+    .map((id) => t('app.security.policies.common.nameQuoted', { name: ipLists.value.find((l) => l.id === id)?.name ?? `#${id}` }))
+  return names.length > 0 ? t('app.security.policies.conflict.fromRefLists', { names: names.join(t('app.security.policies.common.sep')) }) : ''
 }
 
 const aclSectionAlert = computed<string>(() => {
@@ -2830,27 +2833,27 @@ const aclSectionAlert = computed<string>(() => {
   if (aclAllow.length === 0 && aclDeny.length === 0 && blacklist.length === 0) return ''
   // 与 CRS 告警同口径：共绑 = 确定性冲突（当下就拦截）；非共绑 = 假设性提示
   //（仅当未来绑定同一规则才成立）
-  const suffix = coBound ? '' : '（若两策略绑定同一规则）'
+  const suffix = coBound ? '' : t('app.security.policies.conflict.ifCoBoundSuffix')
   const items: string[] = []
   for (const peer of peers) {
     for (const entry of entriesIntersect(aclAllow, peer.denySet)) {
-      items.push(`地址 ${entry} 在「本策略」的访问控制名单中、同时在「${peer.name}」的黑名单中——${addressAllowDenyConflictText({ kind: 'acl', denyPolicyName: peer.name })}${suffix}`)
+      items.push(t('app.security.policies.conflict.selfAclDeny', { addr: entry, peer: peer.name, detail: addressAllowDenyConflictText({ kind: 'acl', denyPolicyName: peer.name }), suffix }))
     }
     for (const entry of entriesIntersect(aclDeny, peer.aclAllowSet)) {
-      items.push(`地址 ${entry} 在「本策略」的访问控制名单中${entrySourceSuffix(entry, ipACLList.value, ipACLListRefs.value)}、同时在「${peer.name}」的访问控制允许名单中——${addressAllowDenyConflictText({ kind: 'acl', denyPolicyName: '本策略' })}${suffix}`)
+      items.push(t('app.security.policies.conflict.selfAclAllow', { addr: entry, src: entrySourceSuffix(entry, ipACLList.value, ipACLListRefs.value), peer: peer.name, detail: addressAllowDenyConflictText({ kind: 'acl', denyPolicyName: t('app.security.policies.common.selfPolicy') }), suffix }))
     }
     for (const entry of entriesIntersect(aclDeny, peer.trustSet)) {
-      items.push(`地址 ${entry} 在「本策略」的访问控制名单中${entrySourceSuffix(entry, ipACLList.value, ipACLListRefs.value)}、同时在「${peer.name}」的信任名单中——${addressAllowDenyConflictText({ kind: 'trust', policyType: peer.policyType, trustDetection: peer.trustDetection, denyPolicyName: '本策略' })}${suffix}`)
+      items.push(t('app.security.policies.conflict.selfAclTrust', { addr: entry, src: entrySourceSuffix(entry, ipACLList.value, ipACLListRefs.value), peer: peer.name, detail: addressAllowDenyConflictText({ kind: 'trust', policyType: peer.policyType, trustDetection: peer.trustDetection, denyPolicyName: t('app.security.policies.common.selfPolicy') }), suffix }))
     }
     for (const entry of entriesIntersect(blacklist, peer.aclAllowSet)) {
-      items.push(`地址 ${entry} 在「本策略」的黑名单中、同时在「${peer.name}」的访问控制允许名单中——${addressAllowDenyConflictText({ kind: 'acl', denyPolicyName: '本策略' })}${suffix}`)
+      items.push(t('app.security.policies.conflict.selfDenyAllow', { addr: entry, peer: peer.name, detail: addressAllowDenyConflictText({ kind: 'acl', denyPolicyName: t('app.security.policies.common.selfPolicy') }), suffix }))
     }
     for (const entry of entriesIntersect(blacklist, peer.trustSet)) {
-      items.push(`地址 ${entry} 在「本策略」的黑名单中、同时在「${peer.name}」的信任名单中——${addressAllowDenyConflictText({ kind: 'trust', policyType: peer.policyType, trustDetection: peer.trustDetection, denyPolicyName: '本策略' })}${suffix}`)
+      items.push(t('app.security.policies.conflict.selfDenyTrust', { addr: entry, peer: peer.name, detail: addressAllowDenyConflictText({ kind: 'trust', policyType: peer.policyType, trustDetection: peer.trustDetection, denyPolicyName: t('app.security.policies.common.selfPolicy') }), suffix }))
     }
   }
   if (items.length === 0) return ''
-  return items.slice(0, 2).join('；') + (items.length > 2 ? `；共 ${items.length} 条类似冲突` : '')
+  return items.slice(0, 2).join(t('app.security.policies.common.sepSemi')) + (items.length > 2 ? t('app.security.policies.conflict.moreSuffix', { n: items.length }) : '')
 })
 
 const whitelistSectionAlert = computed<string>(() => {
@@ -2860,15 +2863,15 @@ const whitelistSectionAlert = computed<string>(() => {
   // 阶段 0 恒启用（与保存载荷 trustEnabledForPolicyType 同源）
   const trust = trustEnabledInEditor.value ? mergeIpEntries(ipWhitelist.value, ipWhitelistRefs.value) : []
   if (trust.length === 0) return ''
-  const suffix = coBound ? '' : '（若两策略绑定同一规则）'
+  const suffix = coBound ? '' : t('app.security.policies.conflict.ifCoBoundSuffix')
   const items: string[] = []
   for (const peer of peers) {
     for (const entry of entriesIntersect(trust, peer.denySet)) {
-      items.push(`地址 ${entry} 在「本策略」的信任名单中${entrySourceSuffix(entry, ipWhitelist.value, ipWhitelistRefs.value)}、同时在「${peer.name}」的黑名单中——${addressAllowDenyConflictText({ kind: 'trust', policyType: editorPolicyType.value, trustDetection: form.value.trust_detection, denyPolicyName: peer.name })}${suffix}`)
+      items.push(t('app.security.policies.conflict.selfTrustDeny', { addr: entry, src: entrySourceSuffix(entry, ipWhitelist.value, ipWhitelistRefs.value), peer: peer.name, detail: addressAllowDenyConflictText({ kind: 'trust', policyType: editorPolicyType.value, trustDetection: form.value.trust_detection, denyPolicyName: peer.name }), suffix }))
     }
   }
   if (items.length === 0) return ''
-  return items.slice(0, 2).join('；') + (items.length > 2 ? `；共 ${items.length} 条类似冲突` : '')
+  return items.slice(0, 2).join(t('app.security.policies.common.sepSemi')) + (items.length > 2 ? t('app.security.policies.conflict.moreSuffix', { n: items.length }) : '')
 })
 
 // 拦截页归因（哪条策略触发的拦截就显示哪条策略的拦截页）的两类可静态检测提示：
@@ -2883,7 +2886,7 @@ const blockPageBroken = (e: ChainEntry): boolean =>
 // （与 caddy.go 触发归因口径逐条对齐：阶段 1 deny 链/阶段 3 逐策略合成码，
 // 阶段 2 429 恒走兜底路由）。旧实现 `enabled && block_page_id>0` 恒渲染绿色
 // 「生效中」，多策略绑定下是假绿。
-const BLOCK_PAGE_STAGE_LABEL: Record<BlockPageStage, string> = { 1: '阶段 1', 2: '阶段 2', 3: '阶段 3' }
+const BLOCK_PAGE_STAGE_LABEL: Record<BlockPageStage, string> = { 1: t('app.security.policies.stageName.s1'), 2: t('app.security.policies.stageName.s2'), 3: t('app.security.policies.stageName.s3') }
 const pageHasContent = (id: number): boolean =>
   blockPagesLoaded.value && id > 0 && !blockPageMissing(id, blockPages.value, blockPagesLoaded.value)
 const editorBlockPageStages = (): BlockPageStage[] => {
@@ -2951,8 +2954,8 @@ const bindingsSummaryLine = computed<string>(() => {
       if (r.effective === 'peer' && r.winnerName) winners.add(r.winnerName)
     }
   }
-  const winnerPart = winners.size === 1 ? `「${[...winners][0] ?? ''}」` : ''
-  return `已关联 ${total} 条规则：触发各策略拦截时，分别显示该策略自己配置的拦截页；未配置拦截页的策略触发时，显示兜底页（首个启用拦截页的策略${winnerPart}）`
+  const winnerPart = winners.size === 1 ? t('app.security.policies.common.nameQuoted', { name: [...winners][0] ?? '' }) : ''
+  return t('app.security.policies.bp.bindingsAttribution', { n: total, winner: winnerPart })
 })
 
 // 拦截页步骤归属汇总卡（用户验收裁定：逐条重复提示收敛为主行 + 例外分面 +
@@ -2964,28 +2967,28 @@ const blockPageSummary = computed<{ lines: Array<{ text: string; tone: 'active' 
   if (editorStages.length === 0) return null
   const total = boundRuleRows.value.length
   const lines: Array<{ text: string; tone: 'active' | 'info' | 'warning' }> = []
-  if (total === 0) return { lines: [{ text: '尚未关联规则', tone: 'info' }] }
+  if (total === 0) return { lines: [{ text: t('app.security.policies.bind.none'), tone: 'info' }] }
   const pageId = form.value.block_page_id
   const page = pageId > 0 ? blockPages.value.find((p) => p.id === pageId) : undefined
-  const pageName = page?.name ?? `页面 #${pageId}`
+  const pageName = page?.name ?? t('app.security.policies.common.pageNum', { n: pageId })
   const pageInvalid = pageId > 0 && blockPagesLoaded.value && blockPageMissing(pageId, blockPages.value, blockPagesLoaded.value)
   // 主行（触发归因总述；未落地不做生效判定）
   if (!blockPagesLoaded.value) {
-    lines.push({ text: '拦截页列表未加载成功，无法判定本策略页面是否实际生效', tone: 'info' })
+    lines.push({ text: t('app.security.policies.bp.listUnavailable'), tone: 'info' })
   } else if (pageId <= 0) {
     lines.push({ text: editorPolicyType.value === 'stage2'
-      ? `已关联 ${total} 条规则：本策略未配置拦截页——限流拦截返回空响应体 429`
-      : `已关联 ${total} 条规则：本策略未配置拦截页——触发拦截时显示兜底页（绑定链首个启用且有页的策略）`, tone: 'info' })
+      ? t('app.security.policies.bp.stage2NoPage', { n: total })
+      : t('app.security.policies.bp.noPageFallback', { n: total }), tone: 'info' })
   } else if (pageInvalid) {
-    lines.push({ text: `已关联 ${total} 条规则：本拦截页已失效（页面已删除或内容为空），保存前请重新选择`, tone: 'warning' })
-    lines.push({ text: '触发拦截时将显示兜底页（绑定链首个启用且有页的策略）', tone: 'info' })
+    lines.push({ text: t('app.security.policies.bp.pageInvalid', { n: total }), tone: 'warning' })
+    lines.push({ text: t('app.security.policies.bp.fallbackNote'), tone: 'info' })
   } else {
-    lines.push({ text: `已关联 ${total} 条规则：触发本策略拦截时，均显示本拦截页「${pageName}」`, tone: 'active' })
+    lines.push({ text: t('app.security.policies.bp.pageActive', { n: total, page: pageName }), tone: 'active' })
   }
   // 能力门行：页面配置了但当前配置不会产生该阶段拦截 → 页面不会被使用
   const capableStages = new Set(editorStages.filter((stage) => stageCapableOf(stage)))
   for (const stage of editorStages.filter((s) => !capableStages.has(s))) {
-    lines.push({ text: `${BLOCK_PAGE_STAGE_LABEL[stage]}：当前配置不会产生该阶段拦截，页面不会被使用`, tone: 'info' })
+    lines.push({ text: t('app.security.policies.bp.stageIneffective', { stage: BLOCK_PAGE_STAGE_LABEL[stage] }), tone: 'info' })
   }
   // 例外分面（按规则归类，仅存在才渲染）：TCP > 限流 > 兜底差异
   let tcpCount = 0
@@ -2999,9 +3002,9 @@ const blockPageSummary = computed<{ lines: Array<{ text: string; tone: 'active' 
     if (rateLimitInPlay) { rateLimitCount++; continue }
     if (!pageInvalid && pageId > 0 && capableAttributions(row.chain).some((r) => r.effective === 'peer')) fallbackCount++
   }
-  if (rateLimitCount > 0) lines.push({ text: `${rateLimitCount} 条限流规则：限流拦截状态码恒为 429（限流页按绑定链首个有页策略显示，不随触发策略变化）`, tone: 'info' })
-  if (tcpCount > 0) lines.push({ text: `${tcpCount} 条 TCP 规则：拦截为断连，不经过拦截页`, tone: 'info' })
-  if (fallbackCount > 0) lines.push({ text: `${fallbackCount} 条规则：其他未配页策略触发时，显示兜底页（首个启用拦截页的策略）`, tone: 'info' })
+  if (rateLimitCount > 0) lines.push({ text: t('app.security.policies.bp.rateLimitFacet', { n: rateLimitCount }), tone: 'info' })
+  if (tcpCount > 0) lines.push({ text: t('app.security.policies.bp.tcpFacet', { n: tcpCount }), tone: 'info' })
+  if (fallbackCount > 0) lines.push({ text: t('app.security.policies.bp.fallbackFacet', { n: fallbackCount }), tone: 'info' })
   return { lines }
 })
 
@@ -3014,7 +3017,7 @@ const boundRuleRows = computed<BoundRuleRow[]>(() => boundRules.value.map((caddy
   // 绑定链首个有页策略的页面（触发归因，见 resolveBlockPageAttribution）。
   const emptyPageHints = enabledEntries
     .filter((e) => blockPageBroken(e))
-    .map((e) => `策略「${e.name}」配置的拦截页面已删除或内容为空，该策略触发时将显示兜底策略的拦截页`)
+    .map((e) => t('app.security.policies.bind.deadPageHint', { name: e.name }))
   // ① 配置不一致提示（info 级）：启用策略间 (拦截页, 状态码) 组合不一致——
   // 非错误，声明触发归因语义（触发策略显示自己的页；未配置的策略触发时兜底）
   const combos = new Set(enabledEntries.map((e) => `${e.blockPageId ?? 0}:${e.blockStatusCode || 403}`))
@@ -3022,10 +3025,10 @@ const boundRuleRows = computed<BoundRuleRow[]>(() => boundRules.value.map((caddy
   if (rule?.protocol === 'tcp') {
     // TCP（L4）规则能力注记：拒绝动作=断连（无 HTTP 拦截页/状态码面）；
     // CDN 回源真实客户端 IP 依赖上游连接的 PROXY protocol（回源对端是 CDN 时必须开启）
-    infoHints.push('拦截=断连，无拦截页；CDN 回源需开启 PROXY protocol')
+    infoHints.push(t('app.security.policies.bind.tcpHint'))
   }
   if (enabledEntries.length > 1 && combos.size > 1) {
-    infoHints.push('这些策略的拦截页/状态码不同——各策略触发时显示各自的拦截页，未配置的策略触发时兜底显示绑定链首个有页策略的页')
+    infoHints.push(t('app.security.policies.bind.mixedPagesHint'))
   }
   return {
     caddyId,
@@ -3056,7 +3059,7 @@ const hasTcpBoundRule = computed(() => boundRuleRows.value.some((r) => r.protoco
 const previewModel = computed<RuleStageModel>(() => {
   const previewPolicy: SecurityStagePolicy = {
     id: editingId.value ?? 0,
-    name: form.value.name || '本策略',
+    name: form.value.name || t('app.security.policies.common.selfPolicy'),
     // 类型随投影下发：信任模式/阶段能力判定按类型区分（非阶段 0 恒保留检测）
     policy_type: editorPolicyType.value,
     mode: typeAllowsStage(3) ? form.value.mode : 'off',
@@ -3153,14 +3156,14 @@ const openExtractDialog = (side: 'acl' | 'trust'): void => {
 const confirmExtract = async (): Promise<void> => {
   if (extracting.value) return
   const name = extractForm.value.name.trim()
-  if (!name) { ElMessage.warning('请输入列表名称'); return }
-  if (name.length > 50) { ElMessage.warning('列表名称不能超过 50 字符'); return }
-  if (extractForm.value.category.length > 32) { ElMessage.warning('分类不能超过 32 字符'); return }
+  if (!name) { ElMessage.warning(t('app.security.policies.msg.listNameRequired')); return }
+  if (name.length > 50) { ElMessage.warning(t('app.security.policies.msg.listNameTooLong')); return }
+  if (extractForm.value.category.length > 32) { ElMessage.warning(t('app.security.policies.msg.categoryTooLong')); return }
   const sourceEntries = extractSourceEntries.value.map((value) => value.trim()).filter((value) => value !== '')
-  if (sourceEntries.length === 0) { ElMessage.warning('内联名单为空，无需提取'); return }
-  if (sourceEntries.length > 2000) { ElMessage.warning('每个列表最多 2000 条条目'); return }
+  if (sourceEntries.length === 0) { ElMessage.warning(t('app.security.policies.msg.extractEmpty')); return }
+  if (sourceEntries.length > 2000) { ElMessage.warning(t('app.security.policies.msg.extractMax')); return }
   try {
-    await ElMessageBox.confirm(`确定创建列表「${name}」（${sourceEntries.length} 条）并转为引用？内联条目将清空，拦截语义不变。`, '确认', { type: 'warning' })
+    await ElMessageBox.confirm(t('app.security.policies.msg.extractConfirm', { name, n: sourceEntries.length }), t('app.security.policies.common.confirmTitle'), { type: 'warning' })
   } catch { return }
   // 捕获对话框会话——在途 POST 落地时若用户已关窗并打开另一策略，
   // 续体不得把 A 的列表 id 写进 B 的表单（持久化损坏）。
@@ -3172,10 +3175,10 @@ const confirmExtract = async (): Promise<void> => {
       description: '',
       category: extractForm.value.category.trim(),
       // entries 与其余名单字段同口径：JSON 数组文本（后端 Entries 为 string）
-      entries: JSON.stringify(sourceEntries.map((value) => ({ value, remark: '从策略提取' }))),
+      entries: JSON.stringify(sourceEntries.map((value) => ({ value, remark: t('app.security.policies.extract.remark') }))),
     })
     const newId = res.data?.id
-    if (!newId) throw new Error('创建列表响应缺少 id')
+    if (!newId) throw new Error(t('app.security.policies.msg.createdListNoId'))
     // 会话已切换（关窗重开另一策略）时丢弃续体——refs/内联写入
     // 属于表单会话状态，落到新会话即持久化损坏。
     if (openSeq !== policyDialogOpenSeq) return
@@ -3191,7 +3194,7 @@ const confirmExtract = async (): Promise<void> => {
     extractDialogVisible.value = false
     // 刷新引用列表缓存：选择器选项与「合计 N 条」提示立即反映新列表
     await fetchIpLists(openSeq)
-    showSaveResult(res as unknown as { message?: string }, `已创建列表「${name}」并转为引用，内联条目已清空（引用后语义不变），保存策略后生效`)
+    showSaveResult(res as unknown as { message?: string }, t('app.security.policies.msg.extractDone', { name }))
   } catch (error: unknown) {
     // 409 重名 / 400 条目非法已由全局拦截器 toast，这里仅记录避免 unhandled rejection
     console.error('Failed to extract IP list:', error)
@@ -3238,7 +3241,7 @@ async function openDialog(row?: PolicySummary) {
       ])
       if (openSeq !== policyDialogOpenSeq) return
       const d = res.data?.policy
-      if (!d) throw new Error('策略详情响应缺少数据')
+      if (!d) throw new Error(t('app.security.policies.msg.detailNoData'))
       form.value = {
         name: d.name,
         description: d.description,
@@ -3285,10 +3288,10 @@ async function openDialog(row?: PolicySummary) {
       if (form.value.block_page_id > 0 && blockPagesFresh) {
         if (!blockPages.value.some((p) => p.id === form.value.block_page_id)) {
           form.value.block_page_id = blockPages.value.find((p) => p.id === 1)?.id ?? blockPages.value[0]?.id ?? 0
-          ElMessage.warning('原拦截页面已删除，已回退默认页面')
+          ElMessage.warning(t('app.security.policies.msg.pageResetDefault'))
         }
       } else if (form.value.block_page_id > 0 && !blockPagesFresh) {
-        ElMessage.warning('拦截页列表刷新失败，未能核对所选拦截页；保存前请刷新页面重试')
+        ElMessage.warning(t('app.security.policies.msg.pageRefreshFailed'))
       }
     } catch (error: unknown) {
       // catch 路径也要先比对序列号——GET 失败的过期请求会清空
@@ -3367,22 +3370,22 @@ const beforeWizardClose = (done: () => void): void => {
     done()
     return
   }
-  void ElMessageBox.confirm('有未保存的修改，关闭将丢弃本次编辑。是否继续？', '放弃修改', {
-    type: 'warning', confirmButtonText: '放弃修改', cancelButtonText: '继续编辑',
+  void ElMessageBox.confirm(t('app.security.policies.msg.unsavedConfirm'), t('app.security.policies.msg.discard'), {
+    type: 'warning', confirmButtonText: t('app.security.policies.msg.discard'), cancelButtonText: t('app.security.policies.msg.keepEditing'),
   }).then(() => done()).catch(() => { /* 继续编辑：保留当前弹框与全部暂存 */ })
 }
 
 const handleSave = async () => {
   if (saving.value) return
   if (!form.value.name.trim()) {
-    ElMessage.warning('请输入策略名称')
+    ElMessage.warning(t('app.security.policies.msg.nameRequired'))
     currentStep.value = WIZARD_STEP.BASIC
     return
   }
   // 类型裁剪后的阶段不参与校验（步骤已被裁剪，校验跳转目标不存在）
   // 阶段 0 信任名单策略：名单（内联∪引用合并口径）必须非空
   if (typeAllowsStage(0) && whitelistSaveCount.value === 0) {
-    ElMessage.error('阶段 0 · 信任名单策略必须配置至少一个信任 IP（内联或引用列表）')
+    ElMessage.error(t('app.security.policies.msg.stage0NeedsIp'))
     currentStep.value = WIZARD_STEP.TRUST
     return
   }
@@ -3391,7 +3394,7 @@ const handleSave = async () => {
   if (typeAllowsStage(0)) {
     const bad = ipWhitelist.value.find((v) => !isValidCidr(v))
     if (bad !== undefined) {
-      ElMessage.error(`信任名单条目「${bad}」不是合法的 IP/CIDR`)
+      ElMessage.error(t('app.security.policies.msg.invalidTrustEntry', { entry: bad }))
       currentStep.value = WIZARD_STEP.TRUST
       return
     }
@@ -3408,7 +3411,7 @@ const handleSave = async () => {
   // （crawlerEngineSelected: len==0 → true，为兼容存量不允许改），而 UI 复选框
   // 「全不选」的直觉语义是「不豁免任何引擎」——两者相反，必须阻止静默放宽。
   if (typeAllowsStage(1) && crawlerExemptionNeedsEngines({ geoipEnabled: form.value.geoip_enabled, crawlerExempt: form.value.geoip_crawler_exempt, engines: form.value.geoip_crawler_engines })) {
-    ElMessage.error('已开启爬虫豁免但未勾选任何引擎：空选等于豁免「全部引擎」。请至少勾选一个引擎，或关闭爬虫豁免')
+    ElMessage.error(t('app.security.policies.msg.crawlerNoneSelected'))
     currentStep.value = WIZARD_STEP.IP_ACL
     return
   }
@@ -3417,12 +3420,12 @@ const handleSave = async () => {
   // 不变，确认文案与渲染事实一致。
   if (typeAllowsStage(1) && form.value.ip_acl_enabled && form.value.ip_acl_mode === 'allow' && aclSaveCount.value === 0) {
     try {
-      await ElMessageBox.confirm('该策略关联的规则将拒绝所有请求，确定继续？', '空白名单确认', { type: 'warning', confirmButtonText: '继续保存', cancelButtonText: '取消' })
+      await ElMessageBox.confirm(t('app.security.policies.msg.emptyAllowConfirm'), t('app.security.policies.msg.emptyAllowTitle'), { type: 'warning', confirmButtonText: t('app.security.policies.common.continueSave'), cancelButtonText: t('app.security.policies.common.cancel') })
     } catch { return }
   }
   // 保存确认（与提取为列表/删除确认同款 warning 弹窗）：取消静默返回，不进入提交
   try {
-    await ElMessageBox.confirm(`确定保存安全策略「${form.value.name.trim()}」？将立即重新加载 Caddy 配置。`, '确认', { type: 'warning' })
+    await ElMessageBox.confirm(t('app.security.policies.msg.saveConfirm', { name: form.value.name.trim() }), t('app.security.policies.common.confirmTitle'), { type: 'warning' })
   } catch { return }
   saving.value = true
   try {
@@ -3440,8 +3443,8 @@ const handleSave = async () => {
       return siblings.length >= MAX_POLICIES_PER_RULE
     })
     if (overLimit.length > 0) {
-      const names = overLimit.map((id) => allRules.value.find((r) => r.caddy_id === id)?.name || id).join('、')
-      ElMessage.error(`以下规则已达 ${MAX_POLICIES_PER_RULE} 条绑定上限，无法继续关联：${names}`)
+      const names = overLimit.map((id) => allRules.value.find((r) => r.caddy_id === id)?.name || id).join(t('app.security.policies.common.sep'))
+      ElMessage.error(t('app.security.policies.msg.capReached', { max: MAX_POLICIES_PER_RULE, names }))
       currentStep.value = WIZARD_STEP.BINDINGS
       return
     }
@@ -3455,8 +3458,8 @@ const handleSave = async () => {
       ))
       : []
     if (stage2Conflict.length > 0) {
-      const names = stage2Conflict.map((id) => allRules.value.find((r) => r.caddy_id === id)?.name || id).join('、')
-      ElMessage.error(`以下规则已绑定其它限流策略（每规则仅一条），请先解绑后再关联：${names}`)
+      const names = stage2Conflict.map((id) => allRules.value.find((r) => r.caddy_id === id)?.name || id).join(t('app.security.policies.common.sep'))
+      ElMessage.error(t('app.security.policies.msg.stage2Conflict', { names }))
       currentStep.value = WIZARD_STEP.BINDINGS
       return
     }
@@ -3507,7 +3510,7 @@ const handleSave = async () => {
     } else {
       saveRes = await request.post<APIResponse<{ id: number }>>('/security/policies', payload)
       const createdId = saveRes.data?.id
-      if (!createdId) throw new Error('创建策略响应缺少 id')
+      if (!createdId) throw new Error(t('app.security.policies.msg.createdPolicyNoId'))
       editingId.value = createdId
       // 新建落库即转入已保存实体（后续 bind/执行序提交用新 id）——同步锁定
       // 编辑器类型为用户所选类型：否则 editingPolicyType 仍为 null，editorPolicyType
@@ -3545,8 +3548,8 @@ const handleSave = async () => {
       // 原样重试必然再失败，不能承诺「可重试」；其余（网络/5xx）幂等重试安全。
       console.error('Failed to sync policy bindings:', error)
       ElMessage.warning(error instanceof ApiRequestError && error.status === 400
-        ? '策略已保存，但规则绑定被服务端拒绝：请按提示解绑冲突策略或调整关联规则后重试（原样重试不会成功）'
-        : '策略已保存，但部分规则绑定同步失败；对话框保持打开，重新点击保存可重试绑定（幂等）')
+        ? t('app.security.policies.msg.bindRejected')
+        : t('app.security.policies.msg.bindPartialFail'))
       return
     }
     // 绑定执行序应用（用户裁定：策略顺序=执行序）：随批量端点 orders 字段单事务
@@ -3586,7 +3589,7 @@ const handleSave = async () => {
           if (skippedIds.has(caddyId)) {
             for (const item of skippedItems) {
               if (item.rule_id === caddyId) {
-                skippedOrderNotes.push(`${allRules.value.find((rule) => rule.caddy_id === caddyId)?.name || caddyId}（${item.reason}）`)
+                skippedOrderNotes.push(t('app.security.policies.msg.orderSkipNote', { name: allRules.value.find((rule) => rule.caddy_id === caddyId)?.name || caddyId, reason: item.reason }))
               }
             }
           } else {
@@ -3599,18 +3602,18 @@ const handleSave = async () => {
         // 处理：结构性 400 不承诺可重试，其余幂等重试安全）。
         console.error('apply binding order failed', error)
         ElMessage.warning(error instanceof ApiRequestError && error.status === 400
-          ? '策略已保存，但绑定顺序被服务端拒绝：请检查该批规则的绑定状态后重试（原样重试不会成功）'
-          : '策略已保存，但部分规则的绑定顺序同步失败；对话框保持打开，重新点击保存可重试（幂等）')
+          ? t('app.security.policies.msg.orderRejected')
+          : t('app.security.policies.msg.orderPartialFail'))
         return
       }
     }
     if (skippedOrderNotes.length > 0) {
-      ElMessage.warning(`部分规则未应用绑定顺序：${skippedOrderNotes.join('；')}；这些规则保持「顺序待保存」，重新点击保存可重试`)
+      ElMessage.warning(t('app.security.policies.msg.orderSkipped', { notes: skippedOrderNotes.join(t('app.security.policies.common.sepSemi')) }))
     }
     // 保存结果单条呈现：服务端 message 与 Caddy 退化后缀原样保留。
     showSaveResult(
-      { message: saveRes?.message || '保存成功' },
-      '保存成功',
+      { message: saveRes?.message || t('app.security.policies.common.saveSuccess') },
+      t('app.security.policies.common.saveSuccess'),
     )
     // 2026-09-08 审计 FE1：bind/执行序的退化 200+后缀也需可见（有后缀才弹，
     // 无后缀不重复 toast）；汇总全部分片而非末片。
@@ -3629,7 +3632,7 @@ const handleSave = async () => {
     // (本地 throw)在此提示。
   } catch (error) {
     if (!(error instanceof ApiRequestError)) {
-      ElMessage.error(error instanceof Error ? error.message : '保存失败')
+      ElMessage.error(error instanceof Error ? error.message : t('app.security.policies.msg.saveFailed'))
     }
   } finally { saving.value = false }
 }
@@ -3640,10 +3643,10 @@ function handleDelete(row: PolicySummary) {
   // 取消与失败分离(原空 catch 同时吞掉网络失败,行滞留至下轮)。
   if (deletingPolicyId.value !== null) return
   deletingPolicyId.value = row.id
-  ElMessageBox.confirm(`将删除策略「${row.name}」。删除后无法恢复，规则上原有的其它策略不受影响。`, '删除安全策略', { type: 'warning', confirmButtonText: '确认删除', cancelButtonText: '取消' })
+  ElMessageBox.confirm(t('app.security.policies.msg.deleteConfirm', { name: row.name }), t('app.security.policies.msg.deleteTitle'), { type: 'warning', confirmButtonText: t('app.security.policies.msg.deleteConfirmBtn'), cancelButtonText: t('app.security.policies.common.cancel') })
     .then(async () => {
       const del = await request.delete(`/security/policies/${row.id}`)
-      showSaveResult(del, '已删除')
+      showSaveResult(del, t('app.security.policies.common.deleted'))
       fetchData()
     })
     .catch(() => { /* 用户取消:不动列表;HTTP 失败已由全局拦截器 toast */ })
@@ -3672,7 +3675,7 @@ const fetchRegions = async () => {
     regionsError.value = false
   } catch {
     regionsError.value = true
-    ElMessage.error('地域数据加载失败，策略编辑中的地域选择暂不可用，可在编辑弹框内重试')
+    ElMessage.error(t('app.security.policies.msg.regionLoadFailed'))
   }
 }
 
@@ -3699,7 +3702,7 @@ onMounted(async () => {
     // toast，这里不再叠加误导性的「已被删除」提示。
     const row = policies.value.find((p) => p.id === focusId)
     if (row) openDialog(row)
-    else ElMessage.warning(`策略 #${focusId} 已被删除，事件中显示的是事件发生时的名称`)
+    else ElMessage.warning(t('app.security.policies.msg.policyDeleted', { id: focusId }))
   }
   fetchRegions()
 })

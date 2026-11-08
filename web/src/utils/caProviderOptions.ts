@@ -7,6 +7,7 @@
 // :disabled 不允许新选）。后端写侧仍以 enabled=1 为准（rule_features.go
 // validateRuleACMEReferences），回显的禁用项保存会被 400 明确拒绝——比下拉
 // 里查无此项、到保存才拿到泛化错误更可诊断。
+import { tSafe as t } from '../i18n/tSafe.ts'
 
 interface ReferencedOptionSource {
   readonly id: number
@@ -21,4 +22,4 @@ export const selectableReferencedOptions = <T extends ReferencedOptionSource>(
 
 /** 选项展示名：已禁用的回显项标注「（已禁用）」，避免被读成可用项。 */
 export const referencedOptionLabel = (o: ReferencedOptionSource & { readonly name: string }): string =>
-  o.enabled ? o.name : `${o.name}（已禁用）`
+  o.enabled ? o.name : t('common.app.views.misc.disabledOptionSuffix', { name: o.name })

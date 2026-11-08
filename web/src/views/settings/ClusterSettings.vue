@@ -3,8 +3,8 @@
     <el-alert v-if="clusterPollingError.errorMessage.value" type="error" :closable="false" show-icon class="polling-error-alert error-banner">
       <template #title>
         <div class="polling-error-title">
-          <span>集群状态加载失败：{{ clusterPollingError.errorMessage.value }}</span>
-          <el-button link type="danger" :loading="clusterRetrying" @click="retryClusterPolling">立即重试</el-button>
+          <span>{{ t('app.settings.cluster.statusLoadFailPrefix') }}{{ clusterPollingError.errorMessage.value }}</span>
+          <el-button link type="danger" :loading="clusterRetrying" @click="retryClusterPolling">{{ t('app.settings.cluster.retryNowBtn') }}</el-button>
         </div>
       </template>
       <div class="polling-error-meta">{{ clusterPollingErrorDescription }}</div>
@@ -91,16 +91,16 @@
 
     <el-dialog v-model="tokenDialogVisible" width="min(560px, 92vw)" :close-on-click-modal="false" :before-close="closeTokenDialog" @closed="registerToken = null" class="register-token-dialog">
       <template #header>
-        <DialogHeader :icon="Key" title="一次性注册令牌" subtitle="仅展示一次，请立即复制并妥善保存" tone="warning" />
+        <DialogHeader :icon="Key" :title="t('app.settings.cluster.token.title')" :subtitle="t('app.settings.cluster.token.subtitle')" tone="warning" />
       </template>
       <div class="dialog-panel token-box">
         <code>{{ registerToken?.token }}</code>
         <el-button type="primary" @click="copyRegisterToken">
-          <el-icon><CopyDocument /></el-icon>复制令牌
+          <el-icon><CopyDocument /></el-icon>{{ t('app.settings.cluster.token.copyBtn') }}
         </el-button>
       </div>
-      <div class="form-tip-line token-expiry">有效期至：{{ formatDate(registerToken?.expires_at ?? '') || '-' }}</div>
-      <template #footer><el-button type="primary" @click="tokenDialogVisible = false">我已保存</el-button></template>
+      <div class="form-tip-line token-expiry">{{ t('app.settings.cluster.token.validUntil') }}{{ formatDate(registerToken?.expires_at ?? '') || '-' }}</div>
+      <template #footer><el-button type="primary" @click="tokenDialogVisible = false">{{ t('app.settings.cluster.token.savedBtn') }}</el-button></template>
     </el-dialog>
 
     <el-dialog v-model="serviceControlDialogVisible" class="service-control-dialog dialog-body-inset" width="min(520px, 92vw)" :close-on-click-modal="false" :close-on-press-escape="!serviceControlLoading" :show-close="!serviceControlLoading">
@@ -108,14 +108,14 @@
         <div class="service-control-header">
           <DialogHeader
             :icon="Monitor"
-            title="服务控制"
+            :title="t('app.settings.cluster.actions.title')"
             :subtitle="serviceControlNodeLive ? `${serviceControlNodeLive.name} · ${serviceControlNodeLive.access_url || `${serviceControlNodeLive.ip_address}:${serviceControlNodeLive.port}`}` : undefined"
           />
-          <el-tag v-if="serviceControlNodeLive" class="service-control-status" :type="serviceControlNodeLive.status === 'online' ? 'success' : 'info'" size="small">{{ serviceControlNodeLive.status === 'online' ? '在线' : '离线' }}</el-tag>
+          <el-tag v-if="serviceControlNodeLive" class="service-control-status" :type="serviceControlNodeLive.status === 'online' ? 'success' : 'info'" size="small">{{ serviceControlNodeLive.status === 'online' ? t('app.settings.cluster.statusOnline') : t('app.settings.cluster.statusOffline') }}</el-tag>
         </div>
       </template>
 
-      <div class="service-control-grid" role="radiogroup" aria-label="服务控制操作">
+      <div class="service-control-grid" role="radiogroup" :aria-label="t('app.settings.cluster.actions.ariaLabel')">
         <div
           v-for="item in serviceControlOptions"
           :key="item.value"
@@ -151,21 +151,21 @@
            forget-pins 补救对称）；确认后调用 POST /cluster/nodes/:id/forget-pin。 -->
       <transition name="el-fade-in">
         <div v-if="serviceControlPinMismatch" class="info-note-bar service-control-warning">
-          <span class="info-note-desc">从节点证书指纹不匹配</span>
-          <span class="info-note-sub">该节点管理面板证书可能已更换。清除本节点对其的证书指纹钉后，下次服务控制将按其当前证书重新验证。</span>
-          <span class="info-note-sub"><el-button type="danger" plain size="small" :loading="nodePinForgetting" :disabled="nodePinForgetting" @click="forgetNodePin">清除该节点证书指纹</el-button></span>
+          <span class="info-note-desc">{{ t('app.settings.cluster.pin.mismatchTitle') }}</span>
+          <span class="info-note-sub">{{ t('app.settings.cluster.pin.mismatchDesc') }}</span>
+          <span class="info-note-sub"><el-button type="danger" plain size="small" :loading="nodePinForgetting" :disabled="nodePinForgetting" @click="forgetNodePin">{{ t('app.settings.cluster.pin.forgetBtn') }}</el-button></span>
         </div>
       </transition>
 
       <template #footer>
-        <el-button :disabled="serviceControlLoading" @click="serviceControlDialogVisible = false">取消</el-button>
+        <el-button :disabled="serviceControlLoading" @click="serviceControlDialogVisible = false">{{ t('app.settings.cluster.actions.cancel') }}</el-button>
         <el-button
           :type="serviceControlAction === 'stop_caddy' || serviceControlAction === 'restart_app' ? 'danger' : 'primary'"
           :loading="serviceControlLoading"
           :disabled="!serviceControlAction"
           @click="executeServiceControl"
         >
-          {{ serviceControlLoading ? '正在执行…' : '执行操作' }}
+          {{ serviceControlLoading ? t('app.settings.cluster.actions.running') : t('app.settings.cluster.actions.run') }}
         </el-button>
       </template>
     </el-dialog>
@@ -174,6 +174,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { CopyDocument, Key, Monitor, RefreshRight, Select, VideoPause, VideoPlay } from '@element-plus/icons-vue'
 import DialogHeader from '@/components/DialogHeader.vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -201,6 +202,8 @@ import ClusterSlavePanel from './cluster/ClusterSlavePanel.vue'
 import ClusterStatusCard from './cluster/ClusterStatusCard.vue'
 import { usePollingTask } from '@/composables/usePollingTask'
 import { usePollingErrorState } from '@/composables/usePollingErrorState'
+
+const { t } = useI18n()
 import { activateOnce } from '@/utils/keyboardActivate'
 import { hasOwn } from '@/utils/hasOwn'
 import { nextRadioValue, rovingTabindex } from '@/utils/rovingRadio'
@@ -266,17 +269,17 @@ const serviceControlNodeLive = computed<ClusterNode | null>(() => {
   return live ?? serviceControlNode.value
 })
 
-const serviceControlOptions = [
-  { value: 'start_caddy', label: '启动 Caddy', description: '启动负载均衡引擎并应用当前配置', icon: VideoPlay, tone: 'success' },
-  { value: 'stop_caddy', label: '停止 Caddy', description: '停止负载均衡引擎，流量将中断', icon: VideoPause, tone: 'danger' },
-  { value: 'restart_caddy', label: '重启 Caddy', description: '重启负载均衡引擎并重放权威配置', icon: RefreshRight, tone: 'warning' },
-  { value: 'restart_app', label: '重启应用', description: '重启 Lazy Balancer 服务进程（约数秒）', icon: Monitor, tone: 'danger' },
-] as const
+const serviceControlOptions = computed(() => [
+  { value: 'start_caddy', label: t('app.settings.cluster.actions.startCaddy'), description: t('app.settings.cluster.actions.startCaddyDesc'), icon: VideoPlay, tone: 'success' },
+  { value: 'stop_caddy', label: t('app.settings.cluster.actions.stopCaddy'), description: t('app.settings.cluster.actions.stopCaddyDesc'), icon: VideoPause, tone: 'danger' },
+  { value: 'restart_caddy', label: t('app.settings.cluster.actions.restartCaddy'), description: t('app.settings.cluster.actions.restartCaddyDesc'), icon: RefreshRight, tone: 'warning' },
+  { value: 'restart_app', label: t('app.settings.cluster.actions.restartApp'), description: t('app.settings.cluster.actions.restartAppDesc'), icon: Monitor, tone: 'danger' },
+])
 
-const serviceControlWarnings: Record<string, string> = {
-  stop_caddy: '停止后该节点的负载均衡服务将不可用，请及时启动',
-  restart_app: '重启应用将短暂中断该节点的全部服务（约数秒）',
-}
+const serviceControlWarnings = computed<Record<string, string>>(() => ({
+  stop_caddy: t('app.settings.cluster.actions.warnStopCaddy'),
+  restart_app: t('app.settings.cluster.actions.warnRestartApp'),
+}))
 
 // 服务控制卡片是自定义单选组（role=radiogroup + role=radio）：整组只有一个
 // tab stop（roving tabindex），方向键移动并切换——原生 radio 组/APG 语义，
@@ -287,14 +290,14 @@ const setServiceCardRef = (value: string, el: unknown): void => {
   else serviceCardRefs.delete(value)
 }
 const serviceControlTabindex = (value: string): number =>
-  rovingTabindex(serviceControlOptions.map((item) => item.value), serviceControlAction.value, () => false, value)
+  rovingTabindex(serviceControlOptions.value.map((item) => item.value), serviceControlAction.value, () => false, value)
 const selectServiceAction = (value: string): void => {
   if (serviceControlLoading.value) return // 指令在途时冻结选择，避免与已下发动作错位
   serviceControlAction.value = value
 }
 const onServiceCardKeydown = (event: KeyboardEvent): void => {
   if (event.repeat) return
-  const next = nextRadioValue(serviceControlOptions.map((item) => item.value), serviceControlAction.value, () => false, event.key)
+  const next = nextRadioValue(serviceControlOptions.value.map((item) => item.value), serviceControlAction.value, () => false, event.key)
   if (next === null) return
   event.preventDefault()
   selectServiceAction(next)
@@ -313,24 +316,24 @@ const executeServiceControl = async (): Promise<void> => {
   if (!serviceControlNode.value || !serviceControlAction.value) return
   // 占位先于确认——双击「执行操作」不再叠加两个确认框/重复下发。
   if (serviceControlLoading.value) {
-    ElMessage.warning('服务控制请求正在执行，请稍候')
+    ElMessage.warning(t('app.settings.cluster.actions.busy'))
     return
   }
   serviceControlLoading.value = true
   try {
     // 2026-09-20 用户裁定:执行服务控制前必须二次确认(停止 Caddy/重启应用
     // 会中断从节点服务),复用本文件 confirmAction(与清除指纹钉同格)。
-    const option = serviceControlOptions.find((o) => o.value === serviceControlAction.value)
+    const option = serviceControlOptions.value.find((o) => o.value === serviceControlAction.value)
     const nodeName = serviceControlNodeLive.value?.name ?? `#${serviceControlNode.value.id}`
     const confirmed = await confirmAction(
-      `确定对节点“${nodeName}”执行「${option?.label ?? serviceControlAction.value}」吗？${option?.description ?? ''}`,
-      '服务控制确认',
+      t('app.settings.cluster.actions.confirmRun', { node: nodeName, action: option?.label ?? serviceControlAction.value, desc: option?.description ?? '' }),
+      t('app.settings.cluster.actions.confirmRunTitle'),
     )
     if (!confirmed) return
     await request.post(`/cluster/nodes/${serviceControlNode.value.id}/service`, { action: serviceControlAction.value })
     serviceControlDialogVisible.value = false
     serviceControlPinMismatch.value = false
-    mfaAwareSuccess('服务控制指令已下发')
+    mfaAwareSuccess(t('app.settings.cluster.actions.dispatched'))
   } catch (error: unknown) {
     // 全局拦截器已弹 toast；428 MFA 重试也由全局处理。
     // 指纹不匹配（后端 502 专属文案）在弹框内提供按节点重钉通道。
@@ -352,12 +355,12 @@ const forgetNodePin = async (): Promise<void> => {
   nodePinForgetting.value = true
   try {
     const confirmed = await confirmAction(
-      `确定清除对节点“${node.name}”的证书指纹钉吗？下次服务控制将按该节点当前证书重新验证并钉扎。`,
-      '清除节点证书指纹',
+      t('app.settings.cluster.pin.forgetConfirm', { node: node.name }),
+      t('app.settings.cluster.pin.forgetTitle'),
     )
     if (!confirmed) return
     const response = await request.post<ActionResponse>(`/cluster/nodes/${node.id}/forget-pin`)
-    mfaAwareSuccess(response.message || '已清除该节点的证书指纹，下次服务控制将按其当前证书重新钉扎')
+    mfaAwareSuccess(response.message || t('app.settings.cluster.pin.forgotDone'))
     serviceControlPinMismatch.value = false
     await fetchNodes().catch((error: unknown) => console.error('Failed to refresh cluster nodes:', error))
   } catch (error: unknown) {
@@ -371,8 +374,8 @@ const registerToken = ref<ClusterRegisterToken | null>(null)
 /** 注册令牌仅此一次下发：ESC / 右上角 X 不得静默关闭（与 API 密钥明文、
  *  MFA 恢复码同一守卫单源）。确认后才关闭，@closed 清空内存里的令牌。 */
 const closeTokenDialog = createOneTimeSecretCloseGuard({
-  message: '注册令牌仅此一次显示，关闭后将无法再次查看。已复制并妥善保存？',
-  title: '保存注册令牌',
+  message: t('app.settings.cluster.token.closeGuardMessage'),
+  title: t('app.settings.cluster.token.closeGuardTitle'),
 })
 
 // 同一设置页跨账号复用时，一次性凭据不得留给下一位登录用户；
@@ -395,7 +398,7 @@ const fetchStatus = async (roundSignal?: AbortSignal): Promise<ClusterStatus> =>
   const response = await request.get<APIResponse<ClusterStatus>>('/cluster/status', { signal: roundSignal ?? clusterPolling.signal, silent: true })
   const data = response.data
   // 协议违例用 TypeError（Error 保留给业务失败）。
-  if (!data) throw new TypeError('集群状态响应缺少数据')
+  if (!data) throw new TypeError(t('app.settings.cluster.statusRespMissingData'))
   if (!disposed && requestSeq === requestSequence) {
     status.value = data
     authStore.setNodeMode(data.node_mode)
@@ -429,8 +432,8 @@ const refreshCluster = async (roundSignal?: AbortSignal): Promise<void> => {
 const confirmAction = async (message: string, title: string): Promise<boolean> => {
   try {
     await ElMessageBox.confirm(message, title, {
-      confirmButtonText: '确认',
-      cancelButtonText: '取消',
+      confirmButtonText: t('app.settings.cluster.actions.confirm'),
+      cancelButtonText: t('app.settings.cluster.actions.cancel'),
       type: 'warning',
     })
     return true
@@ -448,10 +451,10 @@ const registerAsSlave = async (input: ClusterRegistrationInput): Promise<void> =
   if (isReadOnlyProp.value || clusterModeChanging.value) return
   modeLoading.value = true
   try {
-    const confirmed = await confirmAction('切换后本地数据将被主节点全覆盖，是否继续？', '确认切换为从节点')
+    const confirmed = await confirmAction(t('app.settings.cluster.mode.switchToSlaveConfirm'), t('app.settings.cluster.mode.switchToSlaveTitle'))
     if (!confirmed) return
     await request.post<APIResponse<ClusterModeResult>>('/cluster/mode', { mode: 'slave', ...input })
-    mfaAwareSuccess('注册请求已提交，等待主节点审批')
+    mfaAwareSuccess(t('app.settings.cluster.mode.registrationSubmitted'))
     registrationSucceeded.value += 1
     await clusterPolling.run()
   } catch (error: unknown) {
@@ -466,12 +469,12 @@ const promoteToMaster = async (): Promise<void> => {
   if (isReadOnlyProp.value || clusterModeChanging.value) return
   promoting.value = true
   try {
-    const confirmed = await confirmAction('将脱离集群，当前数据成为权威数据', '确认提升为主节点')
+    const confirmed = await confirmAction(t('app.settings.cluster.mode.promoteConfirm'), t('app.settings.cluster.mode.promoteTitle'))
     if (!confirmed) return
     // Promote 在途同步排空(含 apply+Caddy 重载)可超默认 30s——
     // 放大至 120s,防前端超时误报失败诱导重复点击(后端随后实际成功)。
     await request.post<ActionResponse>('/cluster/promote', undefined, { timeout: 120000 })
-    mfaAwareSuccess('已提升为主节点')
+    mfaAwareSuccess(t('app.settings.cluster.mode.promoted'))
     await clusterPolling.run()
   } catch (error: unknown) {
     // 全局拦截器已弹 toast，这里仅记录避免 unhandled rejection
@@ -485,20 +488,20 @@ const syncNow = async (): Promise<void> => {
   if (isReadOnlyProp.value) return
   // 占位先于确认——双击「立即同步」不再叠加确认框或重复拉取。
   if (syncing.value) {
-    ElMessage.warning('同步请求正在执行，请稍候')
+    ElMessage.warning(t('app.settings.cluster.sync.busy'))
     return
   }
   if (clusterModeChanging.value) return
   syncing.value = true
   try {
-    const ok = await confirmAction('立即从主节点拉取并应用最新配置？', '手动同步')
+    const ok = await confirmAction(t('app.settings.cluster.sync.manualConfirm'), t('app.settings.cluster.sync.manualTitle'))
     if (!ok) return
     // /cluster/sync/pull 同样含「拉快照 → 应用 → Caddy 重载」，与
     // Promote 同口径放大到 120s——沿用全局 30s 会在后端成功时先超时误报失败，
     // 诱导用户重复点击（后端可能仍在应用）。
     const response = await request.post<APIResponse<ClusterSyncResult>>('/cluster/sync/pull', undefined, { timeout: 120000 })
     const result = response.data
-    if (result) mfaAwareSuccess(result.changed ? `同步完成，已应用版本 ${result.applied_version}` : '当前已是最新配置')
+    if (result) mfaAwareSuccess(result.changed ? t('app.settings.cluster.sync.doneVersion', { version: result.applied_version }) : t('app.settings.cluster.sync.upToDate'))
     // fetchStatus 为 silent 请求，失败仅记录日志，避免逃逸为未处理的 rejection
     await fetchStatus().catch((error: unknown) => console.error('Failed to refresh cluster status:', error))
   } catch (error: unknown) {
@@ -517,17 +520,17 @@ const forgetPins = async (): Promise<void> => {
   if (isReadOnlyProp.value) return
   // 占位先于确认（原确认后才置位——双击叠加确认框/重复请求）
   if (forgettingPins.value) {
-    ElMessage.warning('清除指纹请求正在执行，请稍候')
+    ElMessage.warning(t('app.settings.cluster.pin.clearBusy'))
     return
   }
   forgettingPins.value = true
   try {
     if (!(await confirmAction(
-      '将清除本节点保存的全部主节点 TLS 证书指纹钉（TOFU），下一同步周期将按主节点当前证书重新验证并钉扎。是否继续？',
-      '清除证书指纹',
+      t('app.settings.cluster.pin.clearAllConfirm'),
+      t('app.settings.cluster.pin.clearAllTitle'),
     ))) return
     await request.post<ActionResponse>('/cluster/forget-pins')
-    mfaAwareSuccess('已清除全部主节点证书指纹，下次同步将按当前证书重新钉扎')
+    mfaAwareSuccess(t('app.settings.cluster.pin.clearAllDone'))
     // 刷新状态：last_sync_error 的 pin_mismatch 将随下一同步周期成功而自清
     await clusterPolling.run()
   } catch (error: unknown) {
@@ -564,9 +567,9 @@ const copyRegisterToken = async (): Promise<void> => {
   // 复用 utils/copy 的 copyText（降级路径/类型收口与全站一致）。
   const ok = await copyText(token)
   if (ok) {
-    mfaAwareSuccess('注册令牌已复制')
+    mfaAwareSuccess(t('app.settings.cluster.token.copied'))
   } else {
-    ElMessage.error('复制失败，请手动复制注册令牌')
+    ElMessage.error(t('app.settings.cluster.token.copyFail'))
   }
 }
 
@@ -581,23 +584,23 @@ const updateSyncField = async (field: string, value: boolean): Promise<void> => 
   // 占位先于确认（双击开关不再叠加确认框/重复 PUT）；取消路径回读状态
   // 复位开关显示。
   if (clusterSettingsSaving.value) {
-    ElMessage.warning('同步设置正在保存，请稍候')
+    ElMessage.warning(t('app.settings.cluster.sync.savingBusy'))
     return
   }
   const label = hasOwn(syncSwitchLabels, field) ? syncSwitchLabels[field] : field
-  const action = value ? '开启' : '关闭'
+  const action = value ? t('app.settings.cluster.sync.on') : t('app.settings.cluster.sync.off')
   clusterSettingsSaving.value = true
   try {
     const confirmed = await confirmAction(
-      `确定要${action}「${label}」的集群同步吗？${value ? '开启后主节点该类变更将同步到所有从节点。' : '关闭后从节点将保留本地数据，不再接收主节点该类变更。'}`,
-      '同步设置确认',
+      t('app.settings.cluster.sync.switchConfirm', { action, label, note: value ? t('app.settings.cluster.sync.switchOnNote') : t('app.settings.cluster.sync.switchOffNote') }),
+      t('app.settings.cluster.sync.switchConfirmTitle'),
     )
     if (!confirmed) {
       await fetchStatus().catch((error: unknown) => console.error('Failed to refresh cluster status:', error))
       return
     }
     await request.put<ActionResponse>('/cluster/settings', { [field]: value })
-    mfaAwareSuccess('同步设置已更新')
+    mfaAwareSuccess(t('app.settings.cluster.sync.switchUpdated'))
     await fetchStatus().catch((error: unknown) => console.error('Failed to refresh cluster status:', error))
   } catch (error: unknown) {
     // 全局拦截器已弹 toast，这里仅记录避免 unhandled rejection
@@ -613,18 +616,18 @@ const updateSyncInterval = async (value: number | null | undefined): Promise<voi
   // 空值不得直发：后端把缺失的 sync_interval 当成「未提供」（保持现值）并回
   // 200——界面会提示「同步间隔已更新」而实际未改。写侧与卡片提交门同口径拒绝。
   if (typeof value !== 'number' || !Number.isFinite(value)) {
-    ElMessage.warning('请输入 10–86400 之间的同步间隔')
+    ElMessage.warning(t('app.settings.cluster.sync.intervalRange'))
     return
   }
   // 与开关保存共用同一写通道门（并发落库会互相覆盖 sync_interval/开关字段）
   if (clusterSettingsSaving.value) {
-    ElMessage.warning('同步设置正在保存，请稍候')
+    ElMessage.warning(t('app.settings.cluster.sync.savingBusy'))
     return
   }
   clusterSettingsSaving.value = true
   try {
     await request.put<ActionResponse>('/cluster/settings', { sync_interval: value })
-    mfaAwareSuccess('同步间隔已更新')
+    mfaAwareSuccess(t('app.settings.cluster.sync.intervalUpdated'))
     await fetchStatus().catch((error: unknown) => console.error('Failed to refresh cluster status:', error))
   } catch (error: unknown) {
     // 全局拦截器已弹 toast，这里仅记录避免 unhandled rejection
@@ -643,13 +646,13 @@ const runNodeAction = async (node: ClusterNode, action: 'approve' | 'reject' | '
   try {
     if (action === 'approve') {
       await request.post<ActionResponse>(`/cluster/nodes/${node.id}/approve`)
-      mfaAwareSuccess('节点已确认')
+      mfaAwareSuccess(t('app.settings.cluster.nodes.approved'))
     } else if (action === 'reject') {
       await request.post<ActionResponse>(`/cluster/nodes/${node.id}/reject`)
-      mfaAwareSuccess('节点已拒绝')
+      mfaAwareSuccess(t('app.settings.cluster.nodes.rejected'))
     } else {
       await request.delete<ActionResponse>(`/cluster/nodes/${node.id}`)
-      mfaAwareSuccess('节点已删除')
+      mfaAwareSuccess(t('app.settings.cluster.nodes.deleted'))
     }
     await clusterPolling.run()
   } catch (error: unknown) {
@@ -668,7 +671,7 @@ const confirmAndRunNodeAction = async (
 ): Promise<void> => {
   if (isReadOnlyProp.value) return
   if (pendingNodeId.value !== null) {
-    ElMessage.warning('节点操作正在进行，请稍候')
+    ElMessage.warning(t('app.settings.cluster.nodes.busy'))
     return
   }
   pendingNodeId.value = node.id
@@ -683,7 +686,7 @@ const confirmAndRunNodeAction = async (
 // 审批是三个节点操作中安全面最大的「信任授予」动作（确认后外部节点
 // 入集群并开始同步），与拒绝/删除对称补二次确认，防 pending 列表误点。
 const approveNode = (node: ClusterNode): Promise<void> =>
-  confirmAndRunNodeAction(node, 'approve', `确定确认节点“${node.name}”加入集群吗？确认后该节点将开始同步。`, '审批确认')
+  confirmAndRunNodeAction(node, 'approve', t('app.settings.cluster.nodes.approveConfirm', { node: node.name }), t('app.settings.cluster.nodes.approveTitle'))
 
 const requestRegistration = (): void => {
   if (isReadOnlyProp.value) return
@@ -691,10 +694,10 @@ const requestRegistration = (): void => {
 }
 
 const rejectNode = (node: ClusterNode): Promise<void> =>
-  confirmAndRunNodeAction(node, 'reject', `确定拒绝节点“${node.name}”吗？`, '拒绝确认')
+  confirmAndRunNodeAction(node, 'reject', t('app.settings.cluster.nodes.rejectConfirm', { node: node.name }), t('app.settings.cluster.nodes.rejectTitle'))
 
 const removeNode = (node: ClusterNode): Promise<void> =>
-  confirmAndRunNodeAction(node, 'remove', `确定删除节点“${node.name}”吗？删除后该节点将无法继续同步。`, '删除确认')
+  confirmAndRunNodeAction(node, 'remove', t('app.settings.cluster.nodes.removeConfirm', { node: node.name }), t('app.settings.cluster.nodes.removeTitle'))
 
 const loginNode = async (node: ClusterNode): Promise<void> => {
   if (isReadOnlyProp.value || node.status !== 'online' || loginNodeId.value !== null) return
@@ -702,7 +705,7 @@ const loginNode = async (node: ClusterNode): Promise<void> => {
   // v2.3.0:OIDC 会话豁免(与后端 cluster_ticket 两道门同口径)——二因子
   // 由 IdP 承担,本地 MFA 概念不适用。
   if (!authStore.user?.mfa_enabled && authStore.user?.auth_provider !== 'oidc') {
-    ElMessage.warning('登录从节点需先启用 MFA（在「系统设置 → 用户管理」中对自己的账号绑定）')
+    ElMessage.warning(t('app.settings.cluster.nodes.mfaRequired'))
     return
   }
   loginNodeId.value = node.id
@@ -718,15 +721,15 @@ const loginNode = async (node: ClusterNode): Promise<void> => {
     target.hash = `login_ticket=${encodeURIComponent(response.ticket)}`
     const loginWindow = window.open(target.toString(), '_blank')
     if (!loginWindow) {
-      ElMessage.warning('浏览器阻止了新窗口，请允许弹出窗口后重试')
+      ElMessage.warning(t('app.settings.cluster.nodes.popupBlocked'))
       return
     }
     loginWindow.opener = null
   } catch (error: unknown) {
     // 取消弹码的场景已由全局拦截器统一提示「已取消 MFA 验证，操作未执行」，
     // 这里只处理其余错误（网络/节点不可达等）。
-    if (!(error instanceof Error && (error.message.includes('MFA') || error.message.includes('取消')))) {
-      ElMessage.error(error instanceof Error ? error.message : '登录从节点失败')
+    if (!(error instanceof Error && (error.message.includes('MFA') || error.message.includes(t('app.settings.cluster.actions.cancel'))))) {
+      ElMessage.error(error instanceof Error ? error.message : t('app.settings.cluster.nodes.loginFail'))
     }
   } finally {
     loginNodeId.value = null
@@ -763,11 +766,11 @@ const updateNodeConfig = async (payload: { accessUrl: string; lat: number; lon: 
       })
     }
     if (accessChanged && payload.siteChanged) {
-      mfaAwareSuccess('节点配置已更新，站点坐标下一同步周期生效')
+      mfaAwareSuccess(t('app.settings.cluster.nodes.configUpdated'))
     } else if (accessChanged) {
-      mfaAwareSuccess('访问地址已更新')
+      mfaAwareSuccess(t('app.settings.cluster.nodes.accessUpdated'))
     } else {
-      mfaAwareSuccess('节点站点坐标已保存，下一同步周期生效')
+      mfaAwareSuccess(t('app.settings.cluster.nodes.coordsSaved'))
     }
     nodeConfigDialogVisible.value = false
     editingNodeConfig.value = null
@@ -785,8 +788,8 @@ const clusterPollingErrorDescription = computed(() => {
   const lastError = formatDate(clusterPollingError.lastErrorAt.value)
   const retryAt = formatDate(clusterPollingError.retryAt.value)
   return retryAt
-    ? `最后错误：${lastError}；契约响应异常，自动重试已退避至 ${retryAt}`
-    : `最后错误：${lastError}`
+    ? t('app.settings.cluster.nodes.lastErrorWithBackoff', { lastError, retryAt })
+    : t('app.settings.cluster.nodes.lastError', { lastError })
 })
 const clusterRetrying = ref(false)
 const clusterPolling = usePollingTask(async (task) => {

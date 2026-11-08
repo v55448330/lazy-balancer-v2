@@ -24,6 +24,7 @@ import type { Centroid } from '@/utils/countryCentroids'
 import { loadAdmin1Tables } from '@/utils/admin1Loader'
 import { FLOW_ATTACK_COLOR as ATTACK_COLOR, FLOW_NORMAL_COLOR as NORMAL_COLOR, FLOW_FLIGHT_MS, FLOW_HOVER_TIP_COLOR, FLOW_RIPPLE_SECONDS, FLOW_RIPPLE_START_RADIUS, FLOW_RIPPLE_GROWTH_RADIUS, FLOW_RIPPLE_LINE_WIDTH, FLOW_RIPPLE_ALPHA, easeOutCubic, flowArcLabel, flowArcTierWidth, type FlowArcTier } from '@/utils/threatTheme'
 import { planTrafficArcs } from '@/utils/threatFlowRules'
+import { tSafe as t } from '../i18n/tSafe.ts'
 
 // 威胁大屏 2D 平面地图引擎（v16 终版：Canvas 2D，参考 Radware/Check Point 平面风格）。
 //
@@ -947,7 +948,7 @@ export function createThreatScene(container: HTMLElement, opts?: ThreatSceneOpti
     ctx.font = '11px "Noto Sans SC", "PingFang SC", sans-serif'
     ctx.fillStyle = '#8ea7d6'
     ctx.textBaseline = 'middle'
-    ctx.fillText('本站', serverPos.x + 14, serverPos.y)
+    ctx.fillText(t('common.app.views.threat.siteLabel'), serverPos.x + 14, serverPos.y)
     // 顶部光点
     ctx.beginPath()
     ctx.arc(serverPos.x, serverPos.y - 11, 2.4, 0, Math.PI * 2)
@@ -1106,7 +1107,7 @@ export function createThreatScene(container: HTMLElement, opts?: ThreatSceneOpti
             // 取省）；海外下钻不得把「无数据源」渲染成「该省 0 次攻击」。
             hoverTip.textContent = hasProvinceStats(drillLayerCountry)
               ? `${short} ${provinceCounts.get(short) ?? provinceCounts.get(pv.name) ?? 0}`
-              : `${short} 无省级统计`
+              : t('common.app.views.threat.noProvinceStats', { name: short })
             break
           }
         }

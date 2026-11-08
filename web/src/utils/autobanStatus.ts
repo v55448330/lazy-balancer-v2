@@ -2,6 +2,10 @@
 // ban_effective 为生效面单一判据（名单非空且被启用 + deny 的策略引用）；
 // list_referenced（四面引用集，含仅被白名单/受信代理引用的误判面）仅保留为
 // 后端内部字段，不得驱动 UI。
+
+// 展示文案走 i18n（批次 D autoban 域）：键形与 zh 母本原文由 autobanStatus.spec 双钉。
+import { tSafe as t } from '../i18n/tSafe.ts'
+
 interface AutobanEffectivenessView {
   readonly enabled: boolean
   readonly ban_effective?: boolean
@@ -23,9 +27,9 @@ export const autobanStatValue = (error: boolean, value: string | number, unit = 
 
 /** 状态标签文案：读取失败=「状态未知」，不得沿用「未启用」这一确定结论。 */
 export const autobanStateLabel = (error: boolean, enabled: boolean, dryRun: boolean): string => {
-  if (error) return '状态未知'
-  if (!enabled) return '未启用'
-  return dryRun ? '观察模式' : '运行中'
+  if (error) return t('common.app.views.autoban.stateUnknown')
+  if (!enabled) return t('common.app.views.autoban.stateNotEnabled')
+  return dryRun ? t('common.app.views.autoban.stateDryRun') : t('common.app.views.autoban.stateRunning')
 }
 
 /**

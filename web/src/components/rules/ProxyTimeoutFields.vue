@@ -14,9 +14,7 @@
         <TakeoverBadge v-if="fieldOverrides[field.key]!.badge" :label="fieldOverrides[field.key]!.badge" />
         {{ fieldOverrides[field.key]!.note }}
       </span>
-      <span v-else class="form-tip-inline">
-        秒，0 = {{ inheritLabel }}<template v-if="showSuggested && field.suggest">；非流式建议 {{ field.suggest }}</template><template v-if="field.desc">；{{ field.desc }}</template>
-      </span>
+      <span v-else class="form-tip-inline">{{ fieldTip(field) }}</span>
     </el-form-item>
   </div>
 </template>
@@ -25,8 +23,11 @@
 import TakeoverBadge from '@/components/common/TakeoverBadge.vue'
 import type { ProxyTimeoutConfig } from '@/types'
 import { PROXY_TIMEOUT_FIELDS } from '@/utils/proxyTimeouts.ts'
+import { useI18n } from 'vue-i18n'
 
-withDefaults(defineProps<{
+const { t } = useI18n()
+
+const props = withDefaults(defineProps<{
   readonly value: ProxyTimeoutConfig
   readonly inheritLabel: string
   readonly disabled?: boolean
@@ -48,6 +49,15 @@ type TimeoutField = (typeof PROXY_TIMEOUT_FIELDS)[number]
 
 // 字段定义（标签/下限/说明/建议值）与向导预览摘要同源，见 utils/proxyTimeouts.ts。
 const fields: readonly TimeoutField[] = PROXY_TIMEOUT_FIELDS
+
+// 提示行三段式（0=继承 + 建议值 + 说明）整行走词条：i18n 抽词后由词条给出
+// 各段分隔符（zh「；」/en「;」），模板不再拼字面片段。
+const fieldTip = (field: TimeoutField): string => {
+  let tip = t('common.app.views.proxyTimeout.tipZeroInherit', { inherit: props.inheritLabel })
+  if (props.showSuggested && field.suggest !== undefined) tip += t('common.app.views.proxyTimeout.tipSuggest', { suggest: field.suggest })
+  if (field.desc) tip += t('common.app.views.proxyTimeout.tipDesc', { desc: field.desc })
+  return tip
+}
 
 const update = (field: keyof ProxyTimeoutConfig, value: number | undefined): void => {
   emit('update', field, value ?? 0)

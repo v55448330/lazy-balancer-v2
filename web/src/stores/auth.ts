@@ -7,6 +7,8 @@ import { isPageId, type PageId } from '@/utils/pageIds'
 import { readHashQuery } from '@/utils/hashQuery'
 import { DEFAULT_CERT_RENEWAL_DAYS } from '@/utils/configValues'
 import { advanceSessionGeneration, currentSessionGeneration, isSameTokenIdentity } from '@/utils/sessionIdentity'
+// 展示串经 tSafe 词条安全 t():签名/判定不动,仅文案进 common.app.views.auth 词条
+import { tSafe as t } from '../i18n/tSafe.ts'
 
 const queryPage = new URLSearchParams(location.search).get('page')
 const queryPageValid: PageId | null = queryPage && isPageId(queryPage) ? queryPage : null
@@ -76,9 +78,9 @@ export const useAuthStore = defineStore('auth', () => {
     return isLoggedIn.value ? 'unknown' : null
   })
   const readOnlyMessage = computed(() => {
-    if (readOnlyReason.value === 'slave') return '从节点只读，请在主节点操作'
-    if (readOnlyReason.value === 'non-admin') return '非管理员用户只读'
-    if (readOnlyReason.value === 'unknown') return '信息加载中，暂以只读模式呈现'
+    if (readOnlyReason.value === 'slave') return t('common.app.views.auth.slaveReadOnly')
+    if (readOnlyReason.value === 'non-admin') return t('common.app.views.auth.nonAdminReadOnly')
+    if (readOnlyReason.value === 'unknown') return t('common.app.views.auth.unknownReadOnly')
     return ''
   })
   // 从节点判定单一事实源——Keys/Users/SecurityRules 曾各自
@@ -319,7 +321,7 @@ interface LoginResult {
     // 把 undefined 写进 token ref 与 localStorage（存成字符串 "undefined"）——
     // 表现为「点了登录却没登录」且无任何提示，脏值留到下次登录。与 200 无 data
     // 必报错的口径一致（ProfileDialog / MfaBindingWizard 同款）。
-    if (!res.token) throw new ApiRequestError('响应异常，请重试', undefined, res)
+    if (!res.token) throw new ApiRequestError(t('common.app.views.auth.responseAbnormal'), undefined, res)
     // 登录/票据登录换会话；MFA step-up 仅刷新同账号令牌，必须保持请求身份代际。
     if (!preserveSession) advanceSessionGeneration()
     intentionalLogout.value = false
@@ -378,7 +380,7 @@ interface LoginResult {
     try {
       if (token.value) await request.post('/auth/logout')
     } catch (caught: unknown) {
-      console.warn('服务端注销失败，已执行本地退出', caught)
+      console.warn(t('common.app.views.auth.serverLogoutFailed'), caught)
     } finally {
       clearUserRetryTimer()
       clearConfigRetryTimer()

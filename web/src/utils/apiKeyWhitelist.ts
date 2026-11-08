@@ -4,6 +4,7 @@
 // 归一规则：单个地址补全前缀（IPv4 → /32，IPv6 → /128），已带前缀原样保留。
 // 校验：逐行 isValidCidr（与安全策略同一实现）；空行忽略；报错带原始行号。
 import { isValidCidr } from './ipAddress.ts'
+import { tSafe as t } from '../i18n/tSafe.ts'
 
 export const normalizeCidr = (rawValue: string): string => {
   const value = rawValue.trim()
@@ -24,6 +25,6 @@ export const serializeWhitelist = (rawText: string): SerializedWhitelist => {
     .map((cidr, originalIndex) => ({ cidr: normalizeCidr(cidr), originalIndex }))
     .filter((row) => row.cidr !== '')
   const invalidRow = rows.find((row) => !isValidCidr(row.cidr))
-  if (invalidRow) return { value: [], error: `第 ${invalidRow.originalIndex + 1} 行 IP 或 CIDR 格式不正确` }
+  if (invalidRow) return { value: [], error: t('common.app.apiKeyWhitelist.rowInvalid', { row: invalidRow.originalIndex + 1 }) }
   return { value: rows.map((row) => row.cidr), error: '' }
 }

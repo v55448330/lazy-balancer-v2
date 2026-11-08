@@ -2,6 +2,7 @@ import { useAuthStore } from '@/stores/auth'
 // 与后端 COALESCE 默认一致的兜底时区与格式化器单源：抽到无依赖
 // 模块供 node 行为测试直测 h23 口径；本文件保留缓存/回退策略。
 import { DEFAULT_TZ, createTzFormatter, formatDateParts, normalizeDbWallClock, parseDbDateMs } from '@/utils/timeZoneFormat'
+import { tSafe as t } from '../i18n/tSafe.ts'
 
 let warnedInvalidTz = false
 
@@ -40,7 +41,7 @@ const tzFormatter = (withTime: boolean): Intl.DateTimeFormat => {
   } catch {
     if (!warnedInvalidTz) {
       warnedInvalidTz = true
-      console.warn(`[date] 无效的配置时区「${tz}」，已回退为「${DEFAULT_TZ}」`)
+      console.warn(t('common.app.views.misc.invalidTzWarn', { tz, fallback: DEFAULT_TZ }))
     }
     // 回退后同样走缓存：避免每次调用都重建 DEFAULT_TZ 实例
     const fallbackKey = `${DEFAULT_TZ}|${withTime}`
