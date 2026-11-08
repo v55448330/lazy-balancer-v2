@@ -102,6 +102,7 @@
       </el-menu>
 
       <div class="aside-footer">
+        <LanguageSwitcher v-if="!effectiveCollapsed" style="width:100%;justify-content:center;display:inline-flex" />
         <el-dropdown trigger="click" @command="handleCommand">
           <div class="user-info" :class="{ 'is-collapsed': effectiveCollapsed }" :aria-label="accountTriggerLabel(menuDisplayName)" :title="accountTriggerLabel(menuDisplayName)">
             <!-- 折叠态必须有可见标识与无障碍名称：此前只剩 24px 无内容条带，
@@ -213,6 +214,7 @@
 </template>
 
 <script setup lang="ts">
+import LanguageSwitcher from '@/components/LanguageSwitcher.vue'
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useMediaQuery } from '@vueuse/core'
 import { useAuthStore } from '@/stores/auth'

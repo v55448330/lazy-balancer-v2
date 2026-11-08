@@ -1,6 +1,7 @@
 import { createApp } from 'vue'
 import { createPinia } from 'pinia'
 import App from './App.vue'
+import { i18n } from './i18n/index'
 import { loadBranding } from './utils/branding'
 import 'element-plus/es/components/message/style/css'
 import 'element-plus/es/components/message-box/style/css'
@@ -19,6 +20,7 @@ app.config.errorHandler = (err, _instance, info) => reportGlobalError('render', 
 window.addEventListener('unhandledrejection', (event) => reportGlobalError('unhandledrejection', event.reason))
 
 app.use(pinia)
+app.use(i18n)
 // 首屏优先：branding 是装饰性请求（含 30s 全局超时），
 // 原 `void loadBranding().finally(() => app.mount('#app'))` 让后端抖动/超时
 // 时白屏最长 30s。现先挂载（品牌名/版本到达后由响应式状态自然刷新）。

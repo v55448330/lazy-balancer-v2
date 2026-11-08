@@ -51,7 +51,7 @@ test('App.vue 页面分支与 PAGE_IDS 机械对表（漏分支不得静默空�
   assert.ok(ids.some((id) => id.startsWith('settings-')), 'PAGE_IDS 必须包含设置分页键')
   assert.match(layout, /<Settings v-else-if="settingsTabOfPage\(currentPage\) !== null" \/>/, '设置分页由派生分支统一覆盖')
   // 兜底分支：分支漏写（新增页面键未接线）时至少给出可见提示，而不是白屏
-  assert.match(layout, /<el-empty v-else description="页面不存在" \/>/, 'AppLayout 末尾必须有未知页面的兜底提示')
+  assert.match(layout, /<el-empty v-else :description="t\('common\.app\.pageNotFound'\)" \/>/, 'AppLayout 末尾必须有未知页面的兜底提示')
   // 反向：模板里的页面键字面量必须都在 PAGE_IDS 内（拼错/改名残留同样静默空白）
   for (const match of app.matchAll(/currentPage === '([^']+)'/g)) {
     assert.ok(ids.includes(match[1] as string), `模板分支 ${match[1]} 不在 PAGE_IDS（拼错或改名残留）`)

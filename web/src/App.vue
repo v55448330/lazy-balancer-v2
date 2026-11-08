@@ -1,9 +1,9 @@
 <template>
-  <el-config-provider :locale="zhCn">
+  <el-config-provider :locale="elLocale">
     <div v-if="loading" class="app-loading" role="status" aria-live="polite">
       <div class="app-loading__inner">
         <div class="app-loading__spinner" aria-hidden="true"></div>
-        <div class="app-loading__text">加载中...</div>
+        <div class="app-loading__text">{{ t('common.app.loading') }}</div>
       </div>
     </div>
 
@@ -23,7 +23,7 @@
       <Users v-else-if="currentPage === 'users'" />
       <AuditLog v-else-if="currentPage === 'audit-log'" />
       <!-- 兜底：PAGE_IDS 新增键但漏接线（或深链带旧键）时给出可见提示，不留白屏 -->
-      <el-empty v-else description="页面不存在" />
+      <el-empty v-else :description="t('common.app.pageNotFound')" />
     </AppLayout>
   </el-config-provider>
 </template>
@@ -39,6 +39,13 @@ import { OIDC_APP_NONCE_KEY, OIDC_REJECTION_TEXT, oidcErrorMessage, splitOidcRet
 import { readHashQuery, stripHashParams } from '@/utils/hashQuery'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import zhCn from 'element-plus/es/locale/lang/zh-cn'
+import enLocale from 'element-plus/es/locale/lang/en'
+import { useI18n } from 'vue-i18n'
+import { i18n } from '@/i18n'
+import LanguageSwitcher from '@/components/LanguageSwitcher.vue'
+
+const { t } = useI18n()
+const elLocale = computed(() => (i18n.global.locale.value === 'en' ? enLocale : zhCn))
 import AppLayout from '@/components/layout/AppLayout.vue'
 import Login from '@/views/Login.vue'
 import AsyncPageError from '@/views/AsyncPageError.vue'

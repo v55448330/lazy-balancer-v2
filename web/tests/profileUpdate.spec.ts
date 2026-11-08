@@ -12,7 +12,9 @@ test('「当前密码错误」与后端 auth.go 逐字对齐（跨栈钉）', ()
   // 分类唯一判据是后端字面量——后端改文案即静默失配（真会话过期被误豁免/
   // 密码错误被误判会话失效）。
   const go = repoCode('internal/handlers/auth.go')
-  assert.ok(go.includes('Message: "当前密码错误"'), 'auth.go 不再产生「当前密码错误」401——前端豁免失配')
+  const catalog = repoCode('internal/i18n/catalog_gen.go')
+  assert.ok(catalog.includes('Register("k_9561dfdb", "当前密码错误"'), 'catalog 母本漂移:「当前密码错误」')
+  assert.ok(go.includes('MessageKey: "k_9561dfdb"'), 'auth.go 不再产生「当前密码错误」键——前端豁免失配')
 })
 
 test('同端点的会话过期 401 不得误判为当前密码错误', () => {

@@ -28,7 +28,8 @@
     "qrcode": "^1.5.4",
     "three": "^0.186.1",
     "vue": "^3.5.41",
-    "vue-echarts": "^8.1.0"
+    "vue-echarts": "^8.1.0",
+    "vue-i18n": "^9.14.5"
   },
   "devDependencies": {
     "@types/node": "^22.18.0",
