@@ -145,7 +145,11 @@ let sessionExpiredDetected = false
 // 当前界面语言(i18n 惰性引入避免模块装载哨兵拉起 vue-i18n 全家桶;main.ts
 // 已 app.use(i18n),运行期恒有实例)。
 function currentLocale(): string {
-  return localStorage.getItem('lb_locale') === 'en' ? 'en' : 'zh-CN'
+  try {
+    return localStorage.getItem('lb_locale') === 'en' ? 'en' : 'zh-CN'
+  } catch {
+    return 'zh-CN' // 非 DOM 环境(测试进程)安全回落
+  }
 }
 
 // 从错误响应体解出 message_key(i18n 稳定键);无键返回 undefined。
