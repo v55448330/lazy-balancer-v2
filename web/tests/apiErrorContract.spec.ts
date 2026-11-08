@@ -211,7 +211,7 @@ const pairConsistent = (pair: Envelope): boolean | undefined => {
 test('前端业务码失败分支携带 HTTP status（api.ts 契约）', () => {
   const api = code('src/utils/api.ts')
   const branch = section(api, 'if (res.code !== undefined && res.code !== 0 && res.code !== 200) {', 'return res')
-  assert.match(branch, /new ApiRequestError\(res\.message \|\| '请求失败', response\.status(?:, res)?\)/, '必须携带 response.status')
+  assert.match(branch, /new ApiRequestError\(res\.message \|\| t\('common\.app\.api\.requestFailed'\), response\.status(?:, res)?\)/, '必须携带 response.status')
   assert.doesNotMatch(branch, /new ApiRequestError\([^)]*,\s*res\.code\)/, '不得改携带业务码（调用方按 status 分类）')
   // 两类失败（HTTP 非 2xx / HTTP 2xx + code≠0）的错误对象必须同形：第三参数
   // 携带**响应体信封**，否则消费方（importFailureReport 读 data.data.warnings）
@@ -219,7 +219,7 @@ test('前端业务码失败分支携带 HTTP status（api.ts 契约）', () => {
   // 传 res.data 会落成载荷（少一层信封）——两分支就此不同形。
   assert.match(
     branch,
-    /new ApiRequestError\(res\.message \|\| '请求失败', response\.status, res\)/,
+    /new ApiRequestError\(res\.message \|\| t\('common\.app\.api\.requestFailed'\), response\.status, res\)/,
     '业务码失败必须携带完整响应体信封（与 HTTP 失败分支同形）',
   )
   assert.doesNotMatch(branch, /new ApiRequestError\(res\.message \|\| '请求失败', response\.status, res\.data\)/, '不得只传载荷（信封少一层）')

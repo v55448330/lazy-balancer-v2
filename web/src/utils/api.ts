@@ -1,3 +1,5 @@
+import { i18n } from '@/i18n/index'
+const t = i18n.global.t
 import axios from 'axios'
 import type { AxiosInstance, AxiosRequestConfig } from 'axios'
 import { h, nextTick, ref } from 'vue'
@@ -60,7 +62,7 @@ const mfaGrace = createMfaGraceTracker()
 // MFA step-up，直接 ElMessage.success 即可——该豁免是契约的一部分。
 export const mfaAwareSuccess = (message: string): void => {
   if (mfaGrace.consumeGraceForSuccess(Date.now())) {
-    ElMessage.success(`MFA 在验证窗口期，本次操作免验证，${message}`)
+    ElMessage.success(t('common.app.api.mfaGracePrefix', { msg: message }))
     return
   }
   ElMessage.success(message)
@@ -95,17 +97,17 @@ const showMfaPrompt = (): Promise<string | null> =>
     const otpCode = ref('')
     const otpRef = ref<InputOtpInstance>()
     ElMessageBox({
-      title: 'MFA 验证',
+      title: t('common.app.api.mfaDialogTitle'),
       type: 'warning',
       // 自定义类：OTP 内容块加高正文区，全局 CSS 把 warning 图标从垂直居中改为
       // 与首行文本顶对齐（EP 2.14 容器 align-items:center 会让图标悬在空中部）
       customClass: 'mfa-stepup-message-box',
       showCancelButton: true,
-      confirmButtonText: '验证',
-      cancelButtonText: '取消',
+      confirmButtonText: t('common.app.api.verify'),
+      cancelButtonText: t('common.app.api.cancel'),
       message: ({ confirm }) =>
         h('div', { style: 'display: flex; flex-direction: column; gap: 14px; padding-top: 2px;' }, [
-          h('div', null, '请输入 6 位动态验证码（此操作不支持恢复代码）'),
+          h('div', null, t('common.app.api.mfaPrompt')),
           h(ElInputOtp, {
             ref: otpRef,
             modelValue: otpCode.value,
@@ -119,7 +121,7 @@ const showMfaPrompt = (): Promise<string | null> =>
         ]),
       beforeClose: (action, _instance, done) => {
         if (action === 'confirm' && !validateTotpInput(otpCode.value)) {
-          ElMessage.error('请输入 6 位数字验证码')
+          ElMessage.error(t('common.app.api.mfaInvalid'))
           return
         }
         done()
@@ -188,7 +190,7 @@ export class ApiRequestError extends Error {
 // 会话过期止损的请求拦截拒绝（未出站、无响应体）：打标供响应拦截器识别并
 // 原样透传——否则会被下方兜底逻辑映射成「网络连接失败」toast。
 const sessionHaltedRequestError = (): ApiRequestError => {
-  const error = new ApiRequestError('登录已过期', 401)
+  const error = new ApiRequestError(t('common.app.api.sessionExpired'), 401)
   ;(error as ApiRequestError & { sessionExpiredHalted?: boolean }).sessionExpiredHalted = true
   return error
 }
@@ -233,12 +235,12 @@ service.interceptors.response.use(
       mfaGrace.onGraceResponse(
         !!response.config?.silent,
         Date.now(),
-        () => ElMessage.info('MFA 在验证窗口期，本次操作免验证'),
+        () => ElMessage.info(t('common.app.api.mfaGraceInfo')),
       )
     }
     if (res.code !== undefined && res.code !== 0 && res.code !== 200) {
       if (!response.config.silent) {
-        ElMessage.error(res.message || '请求失败')
+        ElMessage.error(res.message || t('common.app.api.requestFailed'))
       }
       // 业务码失败与 HTTP 失败统一错误类型：调用方按
       // instanceof ApiRequestError 判别（如 409/业务码分支）时不再漏判。
@@ -255,7 +257,7 @@ service.interceptors.response.use(
       // 消费方（importFailureReport 读 data.data）静默丢失 warnings。
       // 此处 `res` 本身就是 response.data（拦截器已解包），故必须传 res 而不是
       // res.data——后者是载荷，比 HTTP 分支少一层信封。
-      return Promise.reject(new ApiRequestError(res.message || '请求失败', response.status, res))
+      return Promise.reject(new ApiRequestError(res.message || t('common.app.api.requestFailed'), response.status, res))
     }
     return res
   },
@@ -274,17 +276,17 @@ service.interceptors.response.use(
     // 中文提示；后端 message 与 Blob 导出错误路径保持最高优先级。
     let fallback = ''
     if (!error.response) {
-      fallback = /timeout/i.test(String(error.message)) ? '请求超时，请稍后重试' : '网络连接失败，请检查网络连接'
+      fallback = /timeout/i.test(String(error.message)) ? t('common.app.api.timeout') : t('common.app.api.network')
     } else if (!backendMsg) {
       if (status === 502 || status === 503 || status === 504) {
-        fallback = '服务暂时不可用，请稍后重试'
+        fallback = t('common.app.api.unavailable')
       } else if (status === 500) {
-        fallback = '服务器内部错误'
+        fallback = t('common.app.api.serverError')
       } else {
         fallback = error.message
       }
     }
-    const message = backendMsg || fallback || '网络错误'
+    const message = backendMsg || fallback || t('common.app.api.networkError')
     const isLoginRequest = error.config?.url?.includes('/auth/login') || error.config?.url?.includes('/auth/ticket-login')
     const kind = classifyAuthFailure({
       status,
@@ -323,8 +325,8 @@ service.interceptors.response.use(
         sessionExpiredDetected = true
         // D-新1：confirm 的取消分支与确定行为完全相同，「取消」形同虚设且误导
         // ——改单按钮 alert（会话已死，任何请求都会 401，刷新是唯一合理结局）。
-        ElMessageBox.alert(backendMsg || '登录已过期，请重新登录', '会话失效', {
-          confirmButtonText: '重新登录',
+        ElMessageBox.alert(backendMsg || t('common.app.api.sessionExpiredAlert'), t('common.app.api.sessionLost'), {
+          confirmButtonText: t('common.app.api.relogin'),
           type: 'warning',
         }).finally(() => {
           localStorage.removeItem('token')
@@ -359,12 +361,12 @@ service.interceptors.response.use(
         }
         // 取消弹码（共享 Promise resolve null 即用户真取消）：温和提示，不暴露 428 英文常量。
         if (!error.config?.silent) {
-          ElMessage.warning('已取消 MFA 验证，操作未执行')
+          ElMessage.warning(t('common.app.api.mfaCancelled'))
         }
-        return Promise.reject(new ApiRequestError('已取消 MFA 验证，操作未执行', status))
+        return Promise.reject(new ApiRequestError(t('common.app.api.mfaCancelled'), status))
       } catch (stepError: unknown) {
         // verify-step 失败给出可见反馈；下游 catch 可据标记跳过二次弹窗。
-        ElMessage.error(stepError instanceof Error ? stepError.message : 'MFA 验证未完成')
+        ElMessage.error(stepError instanceof Error ? stepError.message : t('common.app.api.mfaIncomplete'))
         if (stepError instanceof Error) {
           ;(stepError as Error & { mfaSurfaced?: boolean }).mfaSurfaced = true
         }
