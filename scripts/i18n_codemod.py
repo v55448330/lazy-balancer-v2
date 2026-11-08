@@ -13,7 +13,7 @@ import re
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-ZH = re.compile(r'Message: ("[^"]*[一-龥][^"]*")')
+ZH = re.compile(r'Message: ("(?:[^"\\]|\\.)*[一-龥](?:[^"\\]|\\.)*")')
 ERR = re.compile(r'Message: (\w+)\.Error\(\)')
 FUNC = re.compile(r'func [^{]*?\((\w+) \*gin\.Context\)')
 DONE = re.compile(r'apimsg\.(T|ErrMsg)\(')
