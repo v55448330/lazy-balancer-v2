@@ -97,10 +97,10 @@ func (l *httpsRedirectListener) Accept() (net.Conn, error) {
 		if err != nil {
 			return nil, err
 		}
-		// 首字节显式消费+重放：bufio.ReadByte 会把字节从底层连接吞掉
-		// （缓冲空时直读），TLS 握手首字节丢失——直接读 1 字节并由
-		// peekedConn/oneBytePrefixReader 重放。读前设死线（静默客户端防饿死
-		// 整端口），读到后清死线再分发。
+		// 首字节显式消费+重放：直接读 1 字节（消费）并由 peekedConn 重放。
+		// 读前设死线（静默客户端防饿死整端口），读到后清死线再分发：TLS
+		// 握手节奏交还 caddy（Go http 默认不设/不清握手死线——包装器遗留
+		// 死线会成为握手唯一上界）。
 		_ = conn.SetReadDeadline(time.Now().Add(acceptSniffDeadline))
 		var firstBuf [1]byte
 		nread, rerr := conn.Read(firstBuf[:])
@@ -108,7 +108,7 @@ func (l *httpsRedirectListener) Accept() (net.Conn, error) {
 			_ = conn.Close()
 			continue
 		}
-		_ = conn.SetReadDeadline(time.Now().Add(acceptSniffDeadline))
+		_ = conn.SetReadDeadline(time.Time{})
 		first := firstBuf[0]
 		pc := &peekedConn{Conn: conn, first: first}
 		if first == 0x16 {

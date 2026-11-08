@@ -121,10 +121,10 @@ V_BI="$(docker exec lb-finalize sh -c 'grep -o "\"commit\": \"[^\"]*\"" /app/ui/
 # ── 汇总 ──
 echo ""
 if [[ ${#FAILURES[@]} -eq 0 ]]; then
-  echo "FINALIZE: 全部通过（$TAG，channel=$CHANNEL）"
+  echo "FINALIZE: 全部通过（${TAG:-<empty>}，channel=${CHANNEL:-<empty>}）"
   exit 0
 else
   echo "FINALIZE: ${#FAILURES[@]} 项失败"
-  for f in "${FAILURES[@]}"; do echo "  ✗ $f"; done
+  for f in ${FAILURES[@]+"${FAILURES[@]}"}; do echo "  ✗ $f"; done
   exit 1
 fi
