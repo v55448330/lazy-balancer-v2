@@ -379,7 +379,7 @@
             </ul>
             <!-- 空分类选择不再拼出「将仅覆盖所选分类：，」残句
                  （0 选择的文案已由下方 v-else 分支承担，本块恒有 ≥1 分类） -->
-            <div v-if="importValidation.type !== 'v1'" class="info-note-bar import-alert"><span class="info-note-desc">{{ importSections.length === BACKUP_SECTIONS.length ? t('app.settings.basic.import.coverAll') : t('app.settings.basic.import.coverSelected', { list: importSections.map((k) => BACKUP_SECTIONS.find((s) => s.key === k)?.label || k).join('、') }) }}</span></div>
+            <div v-if="importValidation.type !== 'v1'" class="info-note-bar import-alert"><span class="info-note-desc">{{ importSections.length === BACKUP_SECTIONS.length ? t('app.settings.basic.import.coverAll') : t('app.settings.basic.import.coverSelected', { list: listJoin(importSections.map((k) => BACKUP_SECTIONS.find((s) => s.key === k)?.label || k)) }) }}</span></div>
             <div v-else class="info-note-bar" style="margin-top: 4px"><span class="info-note-desc">{{ t('app.settings.basic.import.v1Scope') }}</span></div>
           </template>
           <div v-else-if="!importPreviewSelected" class="info-note-bar import-alert"><span class="info-note-desc">{{ t('app.settings.basic.import.noneSelected') }}</span></div>
@@ -538,7 +538,7 @@
     <div class="mfa-scope-list">
       <div v-for="group in MFA_SCOPE_GROUPS" :key="group.title" class="dialog-panel mfa-scope-row">
         <DialogSectionHeader :title="group.title" />
-        <div class="mfa-scope-items">{{ group.items.join('、') }}</div>
+        <div class="mfa-scope-items">{{ listJoin(group.items) }}</div>
       </div>
     </div>
   </el-dialog>
@@ -575,7 +575,9 @@ import AccessibleLink from '@/components/common/AccessibleLink.vue'
 import { useUpdateCheck } from '@/composables/useUpdateCheck'
 import type { SystemInfo } from '@/types'
 
-const { t } = useI18n()
+const { t, locale } = useI18n()
+// 列表拼接分隔符随语言(en 逗号/zh 顿号)
+const listJoin = (arr: string[]): string => arr.join(locale.value === 'en' ? ', ' : '、')
 
 const authStore = useAuthStore()
 const isReadOnly = computed(() => authStore.readOnlyReason !== null)
@@ -949,7 +951,7 @@ const autoBackupScopeText = (row: AutoBackupRow): string => {
   // 分类的备份」而放弃一次内容完整的还原（还原按包内 sections 走，不读该列）。
   if (row.sections_error) return t('app.settings.basic.autoBackup.scopeBroken')
   const labels = normalizeBackupSectionKeys(row.sections || []).map((k) => BACKUP_SECTIONS.find((s) => s.key === k)?.label || k)
-  return labels.length > 0 ? labels.join('、') : '-'
+  return labels.length > 0 ? listJoin(labels) : '-'
 }
 const autoBackupDetailTip = (row: AutoBackupRow): string => {
   const trigger = row.trigger_type === 'manual' ? t('app.settings.basic.autoBackup.triggerManual') : t('app.settings.basic.autoBackup.triggerScheduled')

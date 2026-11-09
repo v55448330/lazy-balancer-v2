@@ -110,7 +110,7 @@
         <span v-else class="cell-empty">-</span>
       </template>
     </el-table-column>
-    <el-table-column :label="t('app.settings.certJobs.colActions')" width="90" align="center">
+    <el-table-column :label="t('app.settings.certJobs.colActions')" width="130" align="center">
       <template #default="{ row }">
         <el-button link type="primary" size="small" @click="viewLogs(row as CertJobListItem)">{{ t('app.settings.certJobs.logBtn') }}</el-button>
         <el-tooltip :disabled="!retryDisabledReason(row as CertJobListItem)" :content="retryDisabledReason(row as CertJobListItem)">

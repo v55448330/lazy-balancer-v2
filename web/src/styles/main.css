@@ -477,6 +477,11 @@ html[data-locale='en'] .el-table .cell .el-button.is-link { white-space: normal;
 
 /* 英文模式表单 label 自适应(中文保持设计固定宽):
    data-locale 由 i18n/index 写入;覆盖 EP 内联 label 宽,内容列自动扩展 */
+/* en 表单整体切换 label-top 布局(英文 label 长,同行布局必然挤压):
+   label 上方左对齐,控件独占整行——弹框/卡片统一观感,彻底消除偏右与错位 */
+html[data-locale='en'] .el-form .el-form-item { flex-direction: column; align-items: flex-start; }
 html[data-locale='en'] .el-form-item__label,
-html[data-locale='en'] .el-form-item__label-wrap { width: auto !important; }
-html[data-locale='en'] .el-form-item__label { white-space: nowrap; min-width: 180px; }
+html[data-locale='en'] .el-form-item__label-wrap { width: auto !important; min-width: 0 !important; max-width: 100%; }
+html[data-locale='en'] .el-form-item__label { justify-content: flex-start; text-align: left; white-space: nowrap; }
+/* en 行内短 tip 升级为块级(控件下方整行,长文案不再挤压换行错乱) */
+html[data-locale='en'] .form-tip-inline { display: block; margin: 4px 0 0; line-height: 1.5; white-space: normal; vertical-align: top; }

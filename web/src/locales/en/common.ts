@@ -33,6 +33,7 @@ export default {
   },
   cadence: {
     everyNMinutes: 'Every {n} minutes',
+    everyNMinutesSingle: 'Every minute',
     every15Minutes: 'Every 15 minutes',
     dailyAt: 'Daily at {time}',
   },

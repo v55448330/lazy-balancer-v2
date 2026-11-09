@@ -32,7 +32,8 @@ export default {
     acmeIssuePrefix: 'ACME 签发',
   },
   cadence: {
-    everyNMinutes: 'Every {n} minutes',
+    everyNMinutes: '每 {n} 分钟',
+    everyNMinutesSingle: '每 1 分钟',
     every15Minutes: 'Every 15 minutes',
     dailyAt: 'Daily at {time}',
   },

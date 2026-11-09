@@ -36,7 +36,7 @@ export const CERT_JOB_COLUMN_WIDTHS: Record<CertJobColumnId, number> = {
   updated: 150,
   attempts: 80,
   cooling: 90,
-  actions: 90,
+  actions: 130,
 }
 
 export const CERT_JOB_COLUMNS: readonly CertJobColumnId[] = [
