@@ -33,7 +33,7 @@
           </el-form-item>
           <el-form-item :label="t('app.settings.basic.log.auditRetention')">
             <el-input-number v-model="settings.audit_retention_months" :disabled="formFrozen" :min="1" :max="12" controls-position="right" style="width: 120px;" />
-            <span class="form-tip-inline">{{ t('app.settings.basic.log.auditRetentionHint') }}</span>
+            <div class="form-tip-line">{{ t('app.settings.basic.log.auditRetentionHint') }}</div>
           </el-form-item>
           <el-form-item :label="t('app.settings.basic.log.secEventRetention')">
             <el-input-number v-model="seRetentionDays" :disabled="formFrozen" :min="1" :max="3650" :step="30" controls-position="right" style="width: 120px;" />
@@ -130,7 +130,7 @@
               <el-text type="danger" size="small" style="margin-left: 8px">{{ t('app.settings.basic.tls.readFailUnavailable') }}</el-text>
               <AccessibleLink type="primary" underline="never" size="small" style="margin-left: 6px" @click="retryLoadAdminTls">{{ t('app.settings.basic.actions.retry') }}</AccessibleLink>
             </template>
-            <span v-else class="form-tip-inline">{{ t('app.settings.basic.tls.forceHint') }}</span>
+            <div v-else class="form-tip-line">{{ t('app.settings.basic.tls.forceHint') }}</div>
             <!-- 库内证书不可读（fail-visible）：后端以 cert_info_error 显式申报，
                  页面必须消费——否则损坏证书与「未配置证书」在界面上无法区分。 -->
             <div v-if="adminTlsCertBroken" class="info-note-bar">
