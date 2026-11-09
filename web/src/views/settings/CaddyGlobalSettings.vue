@@ -386,6 +386,14 @@ watch(trustedRanges, (list) => { settings.value.trusted_proxy_ranges = JSON.stri
 watch(trustedHeaders, (list) => { settings.value.trusted_proxy_headers = JSON.stringify(list) })
 watch(trustedRangeRefs, (ids) => { settings.value.trusted_proxy_range_refs = JSON.stringify(ids) })
 
+// Custom format 开关联动 Log format 内容（2026-11 用户需求）：开启即填充
+// 默认日志格式（Caddy JSON 变体单源 caddyDefaults），关闭即清空——开关语义
+// 就是「是否携带自定义格式」，不留隐藏残留值（双语一致：格式为 JSON 模板）。
+watch(() => settings.value.access_log_json, (on) => {
+  if (formFrozen.value) return
+  settings.value.access_log_format = on ? DEFAULT_ACCESS_LOG_FORMAT : ''
+})
+
 const onTrustedHeadersEdit = (values: string[]): void => {
   trustedPresetKey.value = ''
   trustedHeaders.value = values
