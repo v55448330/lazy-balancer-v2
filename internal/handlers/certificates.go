@@ -1543,7 +1543,7 @@ func (h *Handlers) IssueCertificate(c *gin.Context) {
 			}
 			skipNote = withForceNote(skipNote)
 			auditFailure("skipped", skipNote)
-			c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "未创建任何签发任务：" + skipNote, Data: gin.H{
+			c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: apimsg.Tf(c, "k_9d0c9689", skipNote), Data: gin.H{
 				"queued":             0,
 				"failed":             len(failed),
 				"skipped_cooldown":   skippedCooldown,

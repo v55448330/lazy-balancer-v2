@@ -295,7 +295,7 @@ func (h *Handlers) InspectAdminTLSCert(c *gin.Context) {
 		return
 	}
 	if _, err := tls.X509KeyPair([]byte(certPEM), []byte(keyPEM)); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "证书与私钥不匹配: " + err.Error()})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "k_93c4e2cf", apimsg.ErrMsg(c, err))})
 		return
 	}
 	if err := validateAdminTLSCertPeriod(certPEM, time.Now()); err != nil {
@@ -304,7 +304,7 @@ func (h *Handlers) InspectAdminTLSCert(c *gin.Context) {
 	}
 	info, err := parseAdminTLSCertInfo(certPEM)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "证书解析失败: " + err.Error()})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "k_acd47359", apimsg.ErrMsg(c, err))})
 		return
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: info})
@@ -431,7 +431,7 @@ func (h *Handlers) UpdateAdminTLS(c *gin.Context) {
 	current, err := services.LoadAdminTLSConfigE()
 	if err != nil {
 		auditAdminTLSFailure(c, "读取当前 HTTPS 配置失败: "+err.Error())
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取当前 HTTPS 配置失败，已中止保存: " + err.Error()})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.Tf(c, "k_2f3e2d97", apimsg.ErrMsg(c, err))})
 		return
 	}
 	enabled := current.Enabled
@@ -451,7 +451,7 @@ func (h *Handlers) UpdateAdminTLS(c *gin.Context) {
 			modeText = "未设置"
 		}
 		auditAdminTLSFailure(c, "证书材料来源与 mode 不一致（当前 mode："+modeText+"）")
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "提交了证书材料但证书来源不是 upload（当前：" + modeText + "）；如需上传证书请同时提交 mode=upload，否则请移除 cert_file/key_file 后重试"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "k_06d40994", modeText)})
 		return
 	}
 	cert, key := current.Cert, current.Key
@@ -484,7 +484,7 @@ func (h *Handlers) UpdateAdminTLS(c *gin.Context) {
 	if err := validateAdminTLSConfigValues(services.AdminTLSConfig{Enabled: enabled, Mode: mode, Cert: cert, Key: key}); err != nil {
 		if unchanged {
 			auditAdminTLSFailure(c, "存量配置无效（本次值未变更）: "+err.Error())
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "当前已保存的管理面板 HTTPS 配置无效（" + err.Error() + "），本次提交未做修改；请重新选择证书来源或上传证书后保存以修复"})
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "k_e01ccc8c", err.Error())})
 			return
 		}
 		auditAdminTLSFailure(c, "配置校验失败: "+err.Error())
@@ -501,7 +501,7 @@ func (h *Handlers) UpdateAdminTLS(c *gin.Context) {
 		probe := services.AdminTLSConfig{Enabled: true, Mode: mode, Cert: cert, Key: key}
 		if _, err := probe.ResolveCertificate(h.cfg.DataDir); err != nil {
 			auditAdminTLSFailure(c, "证书不可用: "+err.Error())
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "证书不可用: " + err.Error()})
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "k_6f0fe2bd", apimsg.ErrMsg(c, err))})
 			return
 		}
 	}
@@ -523,7 +523,7 @@ func (h *Handlers) UpdateAdminTLS(c *gin.Context) {
 		enabled, mode, cert, key)
 	if err != nil {
 		auditAdminTLSFailure(c, "写入 HTTPS 配置失败: "+err.Error())
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "保存 HTTPS 配置失败: " + err.Error()})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.Tf(c, "k_fdfd248a", apimsg.ErrMsg(c, err))})
 		return
 	}
 	if n, rowsErr := res.RowsAffected(); rowsErr != nil || n != 1 {

@@ -1,18 +1,18 @@
 // i18n 入口:locale 持久化(localStorage)+ 首访跟随浏览器;仅 zh-CN/en。
 // 词条按域拆分于 src/locales/{zh,en}/*.ts,经本文件归一聚合。
 import { createI18n } from 'vue-i18n'
-import zhCommon from '@/locales/zh/common'
-import enCommon from '@/locales/en/common'
-import zhRules from '@/locales/zh/rules'
-import enRules from '@/locales/en/rules'
-import zhSecurity from '@/locales/zh/security'
-import enSecurity from '@/locales/en/security'
-import zhMisc from '@/locales/zh/misc'
-import enMisc from '@/locales/en/misc'
-import zhSettings from '@/locales/zh/settings'
-import enSettings from '@/locales/en/settings'
-import zhViews from '@/locales/zh/views'
-import enViews from '@/locales/en/views'
+import zhCommon from '../locales/zh/common.ts'
+import enCommon from '../locales/en/common.ts'
+import zhRules from '../locales/zh/rules.ts'
+import enRules from '../locales/en/rules.ts'
+import zhSecurity from '../locales/zh/security.ts'
+import enSecurity from '../locales/en/security.ts'
+import zhMisc from '../locales/zh/misc.ts'
+import enMisc from '../locales/en/misc.ts'
+import zhSettings from '../locales/zh/settings.ts'
+import enSettings from '../locales/en/settings.ts'
+import zhViews from '../locales/zh/views.ts'
+import enViews from '../locales/en/views.ts'
 
 type Tree = Record<string, unknown>
 

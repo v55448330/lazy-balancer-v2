@@ -78,14 +78,14 @@ func triggerAuditContext(c *gin.Context, family, name string) services.TriggerAu
 // 审计由触发服务/调用方按既有单记口径处理，本 helper 只写响应。
 func respondTaskTriggerAdmissionError(c *gin.Context, err error) {
 	if errors.Is(err, taskengine.ErrNotMaster) {
-		c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: "任务当前不可触发: " + err.Error()})
+		c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: apimsg.Tf(c, "k_e48d88b3", apimsg.ErrMsg(c, err))})
 		return
 	}
 	if errors.Is(err, taskengine.ErrAlreadyRunning) || errors.Is(err, taskengine.ErrSchedulingPaused) || errors.Is(err, taskengine.ErrEngineStopped) {
-		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "任务当前不可触发: " + err.Error()})
+		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: apimsg.Tf(c, "k_e48d88b3", apimsg.ErrMsg(c, err))})
 		return
 	}
-	c.JSON(http.StatusServiceUnavailable, models.APIResponse{Code: 503, Message: "任务触发失败: " + err.Error()})
+	c.JSON(http.StatusServiceUnavailable, models.APIResponse{Code: 503, Message: apimsg.Tf(c, "k_cbf39b14", apimsg.ErrMsg(c, err))})
 }
 
 // respondTaskEngineUnavailable 任务引擎未装配的统一响应。引擎缺失属「服务
@@ -213,7 +213,7 @@ func (h *Handlers) ToggleSystemTask(c *gin.Context) {
 			// 500——此前先切换再吞 WARN，响应仍 200 且偏好零行，重启后按
 			// 默认清单复活与用户意图相反。
 			if err := services.RecordTaskLoopPref(id, *req.Enabled); err != nil {
-				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "任务调度偏好保存失败，调度状态未改变：" + err.Error()})
+				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.Tf(c, "k_4c0dd93d", apimsg.ErrMsg(c, err))})
 				return
 			}
 			if *req.Enabled {
@@ -223,10 +223,10 @@ func (h *Handlers) ToggleSystemTask(c *gin.Context) {
 			}
 			if *req.Enabled {
 				recordAudit(c, "恢复", "任务监控", m.Name+" 调度")
-				c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "已恢复 " + m.Name + " 调度"})
+				c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.Tf(c, "k_bf082546", m.Name)})
 			} else {
 				recordAudit(c, "停止", "任务监控", m.Name+" 调度")
-				c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "已停止 " + m.Name + " 调度"})
+				c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.Tf(c, "k_cc16b9ca", m.Name)})
 			}
 			return
 		}
@@ -325,7 +325,7 @@ func (h *Handlers) ControlSystemTask(c *gin.Context) {
 	// 先持久化再动作——写失败即 500 且内存态不动（否则「已重启」是假信号，
 	// 重启后偏好仍是旧值）。
 	if err := services.RecordTaskLoopPref(id, req.Action != "stop"); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "任务调度偏好保存失败，调度状态未改变：" + err.Error()})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.Tf(c, "k_4c0dd93d", apimsg.ErrMsg(c, err))})
 		return
 	}
 	switch req.Action {
@@ -340,13 +340,13 @@ func (h *Handlers) ControlSystemTask(c *gin.Context) {
 	switch req.Action {
 	case "start":
 		recordAudit(c, "启动", "任务监控", "常驻任务 "+id+" 启动")
-		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "已启动任务 " + id})
+		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.Tf(c, "k_e86a82e6", id)})
 	case "stop":
 		recordAudit(c, "停止", "任务监控", "常驻任务 "+id+" 停止")
-		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "已停止任务 " + id})
+		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.Tf(c, "k_60bfa15e", id)})
 	default:
 		recordAudit(c, "重启", "任务监控", "常驻任务 "+id+" 重启")
-		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "已重启任务 " + id})
+		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.Tf(c, "k_42ea59c6", id)})
 	}
 }
 

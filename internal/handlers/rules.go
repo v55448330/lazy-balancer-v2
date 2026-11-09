@@ -814,7 +814,7 @@ func (h *Handlers) respondRuleApplyError(c *gin.Context, applyErr, runtimeErr, s
 		recordAudit(c, "禁用失败", "负载规则", failureDetail)
 	}
 	if services.IsConfigRejected(applyErr) {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Caddy 配置应用失败，规则未" + verb + ": " + allErr.Error()})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "k_436a9162", verb, allErr.Error())})
 		return
 	}
 	writeInternalError(c, http.StatusInternalServerError, "Caddy 配置应用失败，规则未"+verb, nil)
@@ -1503,7 +1503,7 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 			return
 		}
 		if err := validateTLSCertificate(req.TLSCert, req.TLSKey); err != nil {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "TLS 证书校验失败: " + err.Error()})
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "k_86a8849a", apimsg.ErrMsg(c, err))})
 			return
 		}
 		// 链完整性/域名覆盖质量警告(不阻断)——配对合法性仍由上方
@@ -2212,7 +2212,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 			return
 		}
 		services.Logf("error", "UpdateRule bind error for caddy_id=%s: %v", caddyID, err)
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "无效的请求: " + err.Error()})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "k_7a6a47c9", apimsg.ErrMsg(c, err))})
 		return
 	}
 	// 省略 weight 的上游行落默认 1（显式 0 由写侧校验 400）；
@@ -2952,7 +2952,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		}
 		if tlsCert != "" && tlsKey != "" {
 			if err := validateTLSCertificate(tlsCert, tlsKey); err != nil {
-				c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "TLS 证书校验失败: " + err.Error()})
+				c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "k_86a8849a", apimsg.ErrMsg(c, err))})
 				return
 			}
 			// 链完整性/域名覆盖质量警告(不阻断)——与 CreateRule/导入侧同格,
@@ -4759,18 +4759,18 @@ func (h *Handlers) EnableRule(c *gin.Context) {
 	// 2026-09-07 裁定：启用路径与保存路径同口径（叠加本进程真实管理口的
 	// 层——包级校验只覆盖默认口 8000/2019）。
 	if err := h.validateRuleListenPortForSave(ruleProtocol, rulePort); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "端口冲突，无法启用: " + err.Error()})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "k_098c0ba1", apimsg.ErrMsg(c, err))})
 		return
 	}
 	// 同端口 TLS/明文混布拦截(启用方向)。
 	if ruleProtocol == "http" {
 		if err := checkPortTLSMix(caddyID, rulePort, enableTLS); err != nil {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "端口冲突，无法启用: " + err.Error()})
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "k_098c0ba1", apimsg.ErrMsg(c, err))})
 			return
 		}
 	}
 	if err := h.validatePortFromDB(ruleProtocol, rulePort, caddyID); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "端口冲突，无法启用: " + err.Error()})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "k_098c0ba1", apimsg.ErrMsg(c, err))})
 		return
 	}
 	if ruleProtocol == "http" && ruleDomain != "" {

@@ -302,7 +302,8 @@ test('登录 200 缺 token：显性报错，且不写脏令牌/不推进身份�
   const original = host.__authPost
   host.__authPost = async () => ({ node_mode: 'master' })
   try {
-    await assert.rejects(() => store.login('alice', 'pw'), /响应异常/, '缺 token 必须显性失败而不是静默半登录')
+    // i18n 后错误文案随测试进程 navigator 语言(zh/en 双形态均可)
+    await assert.rejects(() => store.login('alice', 'pw'), /响应异常|Unexpected response/, '缺 token 必须显性失败而不是静默半登录')
     assert.equal(storage.get('token'), 'tok-keep', 'localStorage 不得被写成 "undefined"')
     assert.equal(store.token, 'tok-keep', '内存令牌不得被覆写')
   } finally {

@@ -253,6 +253,26 @@ func collect5xxErrorTextLeaksInScope(fset *token.FileSet, scope ast.Node, params
 		return ok && dynamicStatusNames[ident.Name]
 	}
 	hasErrorText := func(expr ast.Expr) bool {
+		// i18n 后错误明细经 apimsg.ErrMsg 注入(译文形态)——披露语义等价,同政策
+		insp := func(n ast.Node) bool {
+			if sel, ok := n.(*ast.SelectorExpr); ok && sel.Sel.Name == "ErrMsg" {
+				if id, ok := sel.X.(*ast.Ident); ok && id.Name == "apimsg" {
+					return true
+				}
+			}
+			return false
+		}
+		errDetail := false
+		ast.Inspect(expr, func(n ast.Node) bool {
+			if insp(n) {
+				errDetail = true
+				return false
+			}
+			return true
+		})
+		if errDetail {
+			return true
+		}
 		if mentionsErrorText(fset, expr) {
 			return true
 		}

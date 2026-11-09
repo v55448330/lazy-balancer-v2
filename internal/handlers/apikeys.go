@@ -293,7 +293,7 @@ func createAPIKeyForUser(c *gin.Context, userID int) {
 	}
 	whitelist, err := services.NormalizeCIDRs(req.MCPIPWhitelist)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "MCP IP 白名单无效: " + err.Error()})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "k_411bbeb0", apimsg.ErrMsg(c, err))})
 		return
 	}
 	whitelistJSON, err := encodeMCPIPWhitelist(whitelist)
@@ -433,7 +433,7 @@ func updateAPIKeyStatus(c *gin.Context, currentUserOnly bool) {
 		}
 		whitelist, err := services.NormalizeCIDRs(*req.MCPIPWhitelist)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "MCP IP 白名单无效: " + err.Error()})
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "k_411bbeb0", apimsg.ErrMsg(c, err))})
 			return
 		}
 		whitelistCount = len(whitelist)

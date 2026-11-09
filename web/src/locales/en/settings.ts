@@ -633,6 +633,7 @@ export default {
         }
       },
       "basic": {
+          "siteCoord": "Lat {lat} · Lng {lng}",
         "title": "Basic settings",
         "log": {
           "appLogLevel": "Log level",
@@ -808,6 +809,12 @@ export default {
           "done": "Configuration backup exported"
         },
         "autoBackup": {
+          "title": "Auto Backup",
+          "mon": "Mon",
+          "tue": "Tue",
+          "wed": "Wed",
+          "thu": "Thu",
+          "fri": "Fri",
           "subtitle": "Back up configuration to the server's backup directory on a schedule (master only)",
           "enable": "Enabled",
           "enableHint": "The scheduler runs on the master only; after a master/standby switch it starts automatically — no process restart",

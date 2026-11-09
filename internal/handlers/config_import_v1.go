@@ -620,7 +620,7 @@ func (h *Handlers) ValidateConfigImport(c *gin.Context) {
 		return
 	}
 	if err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "备份文件读取失败: " + err.Error()})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "k_a8188910", apimsg.ErrMsg(c, err))})
 		return
 	}
 	// BOM 剥离必须先于 lbbak 魔数检测（与导入核心同序）——带 BOM 的
@@ -915,7 +915,7 @@ func (h *Handlers) ImportV1Config(c *gin.Context) {
 		caddyID, err := services.GenerateCaddyID()
 		if err != nil {
 			err = failImportAbort(c, session, "导入", "生成规则编号", err)
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "生成规则编号失败: " + err.Error()})
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.Tf(c, "k_77226237", apimsg.ErrMsg(c, err))})
 			return
 		}
 		affectedRuleIDs = append(affectedRuleIDs, caddyID)

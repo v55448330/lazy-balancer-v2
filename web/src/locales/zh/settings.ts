@@ -633,6 +633,7 @@ export default {
         }
       },
       "basic": {
+          "siteCoord": "纬度 {lat} · 经度 {lng}",
         "title": "基础设置",
         "log": {
           "appLogLevel": "日志级别",
@@ -808,6 +809,12 @@ export default {
           "done": "配置备份已导出"
         },
         "autoBackup": {
+          "title": "自动备份",
+          "mon": "周一",
+          "tue": "周二",
+          "wed": "周三",
+          "thu": "周四",
+          "fri": "周五",
           "subtitle": "定时将配置备份到服务器 backup 目录（仅主节点）",
           "enable": "启用",
           "enableHint": "调度器仅主节点运行；主从切换后自动开始，无需重启进程",

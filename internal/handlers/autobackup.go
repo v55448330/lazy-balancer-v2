@@ -648,7 +648,7 @@ func (h *Handlers) AutoBackupSettings(c *gin.Context) {
 		(SELECT created_at FROM auto_backups WHERE status='success' ORDER BY created_at DESC, id DESC LIMIT 1)
 		FROM global_config WHERE id=1`).
 		Scan(&enabled, &freq, &hhmm, &day, &keep, &sectionsRaw, &lastRun, &lastSuccessRaw); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取自动备份设置失败: " + err.Error()})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.Tf(c, "k_72c86f5e", apimsg.ErrMsg(c, err))})
 		return
 	}
 	// 读侧守卫(2026-09-19 追加裁定):升级前保存的 31-100 存量值回退 7,
@@ -665,7 +665,7 @@ func (h *Handlers) AutoBackupSettings(c *gin.Context) {
 	// 扫描的原始值，避免额外一次 DB 读（读侧语义单源在解码 helper）。
 	storedSections, sectionsErr := decodeAutoBackupSectionsRaw(sectionsRaw)
 	if sectionsErr != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取备份范围失败: " + sectionsErr.Error()})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.Tf(c, "k_f9e4bc2d", apimsg.ErrMsg(c, sectionsErr))})
 		return
 	}
 	sections := storedSections
@@ -677,14 +677,14 @@ func (h *Handlers) AutoBackupSettings(c *gin.Context) {
 	// 额外 COUNT 查询。
 	rows, err := db.DB.QueryContext(c.Request.Context(), `SELECT `+autoBackupRowColumns+` FROM auto_backups ORDER BY created_at DESC, id DESC LIMIT ?`, autoBackupListLimit+1)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取备份列表失败: " + err.Error()})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.Tf(c, "k_fce26d81", apimsg.ErrMsg(c, err))})
 		return
 	}
 	defer rows.Close()
 	for rows.Next() {
 		view, err := scanAutoBackupRowView(rows)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取备份列表失败: " + err.Error()})
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.Tf(c, "k_fce26d81", apimsg.ErrMsg(c, err))})
 			return
 		}
 		backups = append(backups, view)
@@ -692,7 +692,7 @@ func (h *Handlers) AutoBackupSettings(c *gin.Context) {
 	// ⑫：迭代失败显式 500——
 	// 部分列表 + 200 会掩盖存储故障。
 	if err := rows.Err(); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取备份列表失败: " + err.Error()})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.Tf(c, "k_fce26d81", apimsg.ErrMsg(c, err))})
 		return
 	}
 	backupsTruncated := false
@@ -808,7 +808,7 @@ func (h *Handlers) UpdateAutoBackupSettings(c *gin.Context) {
 	}
 	sectionsJSON, err := json.Marshal(req.Sections)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "序列化备份范围失败: " + err.Error()})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.Tf(c, "k_1a634018", apimsg.ErrMsg(c, err))})
 		return
 	}
 	// 四列设置与业务开关同事务——修复前设置先落库、开关后写，
@@ -818,7 +818,7 @@ func (h *Handlers) UpdateAutoBackupSettings(c *gin.Context) {
 	//（保存形态全有或全无，未提交事务由下方 defer 回滚兜住）。
 	tx, err := db.DB.BeginTx(c.Request.Context(), nil)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "保存自动备份设置失败: " + err.Error()})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.Tf(c, "k_4c68d678", apimsg.ErrMsg(c, err))})
 		return
 	}
 	committed := false
@@ -829,15 +829,15 @@ func (h *Handlers) UpdateAutoBackupSettings(c *gin.Context) {
 	}()
 	if _, err := tx.Exec(`UPDATE global_config SET auto_backup_frequency=?, auto_backup_time=?, auto_backup_day=?, auto_backup_keep=?, auto_backup_sections=?, auto_backup_sections_version=1 WHERE id=1`,
 		*req.Frequency, *req.Time, *req.Day, *req.Keep, string(sectionsJSON)); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "保存自动备份设置失败: " + err.Error()})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.Tf(c, "k_4c68d678", apimsg.ErrMsg(c, err))})
 		return
 	}
 	if err := services.SetAutoBackupEnabledTx(tx, *req.Enabled); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "保存自动备份开关失败: " + err.Error()})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.Tf(c, "k_185bbb6c", apimsg.ErrMsg(c, err))})
 		return
 	}
 	if err := commitTx(tx); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "保存自动备份设置失败: " + err.Error()})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.Tf(c, "k_4c68d678", apimsg.ErrMsg(c, err))})
 		return
 	}
 	committed = true
@@ -936,7 +936,7 @@ func (h *Handlers) RunAutoBackupNow(c *gin.Context) {
 			c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: apimsg.ErrMsg(c, err)})
 		default:
 			services.Logf("error", "手动备份触发失败: %v", err)
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "触发备份失败: " + err.Error()})
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.Tf(c, "k_f6dbbbd2", apimsg.ErrMsg(c, err))})
 		}
 		return
 	}

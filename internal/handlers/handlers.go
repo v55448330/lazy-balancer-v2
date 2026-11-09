@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"lazy-balancer-v2/internal/apimsg"
 	"net"
 	"net/http"
 	"net/netip"
@@ -567,7 +568,7 @@ func (h *Handlers) finishTxApply(c *gin.Context, tx *sql.Tx, f txApplyFinish) {
 		// 内容落盘——tx 回滚的同时把磁盘回退到已提交态（零 /load）。
 		h.caddyService.RollbackIPListProjectionsToCommittedInLock()
 		recordAudit(c, f.AuditAction+"失败", f.Resource, caddyFailureAuditDetail("Caddy 校验未通过", applyErr))
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Caddy 配置校验未通过，" + f.Resource + "未保存: " + applyErr.Error()})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "k_f425c043", f.Resource, applyErr.Error())})
 		return
 	}
 	// 乱填保障（2026-09-06 补充裁定）：CLI 不可用 + 应用传输失败 = 未经任何

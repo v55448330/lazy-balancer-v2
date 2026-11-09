@@ -1226,7 +1226,7 @@ func (h *Handlers) AddIPToList(c *gin.Context) {
 	h.caddyOpMu.Lock()
 	defer h.caddyOpMu.Unlock()
 	if !validIPOrCIDR(req.Value) {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "无效的 IP/CIDR：" + req.Value})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "k_3b0d5527", req.Value)})
 		return
 	}
 	tx, err := beginCaddyWriteTx(c)
@@ -1359,7 +1359,7 @@ func (h *Handlers) RemoveIPFromList(c *gin.Context) {
 	h.caddyOpMu.Lock()
 	defer h.caddyOpMu.Unlock()
 	if !validIPOrCIDR(req.Value) {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "无效的 IP/CIDR：" + req.Value})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "k_3b0d5527", req.Value)})
 		return
 	}
 	tx, err := beginCaddyWriteTx(c)
@@ -1531,7 +1531,7 @@ func (h *Handlers) tryIPListHotPathApply(c *gin.Context, tx *sql.Tx, listID int6
 				// PEM，物化无需撤销；见 RollbackIPListProjectionsToCommittedInLock 披露）。
 				h.caddyService.RollbackIPListProjectionsToCommittedInLock()
 				recordAudit(c, f.AuditAction+"失败", f.Resource, caddyFailureAuditDetail("Caddy 校验未通过", applyErr))
-				c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Caddy 配置校验未通过，" + f.Resource + "未保存: " + applyErr.Error()})
+				c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "k_f425c043", f.Resource, applyErr.Error())})
 				return true
 			}
 			// 传输/系统失败 → 退化语义（与 finishTxApply 同口径）：提交 + 业务审计 + 重载失败审计

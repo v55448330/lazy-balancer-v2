@@ -318,7 +318,7 @@ func rejectWriteDuringImport(c *gin.Context, action string) bool {
 		return false
 	}
 	action = strings.ReplaceAll(action, "（配置导入进行中）", "")
-	c.JSON(http.StatusConflict, models.APIResponse{Code: http.StatusConflict, Message: "配置导入进行中，暂不能" + action})
+	c.JSON(http.StatusConflict, models.APIResponse{Code: http.StatusConflict, Message: apimsg.Tf(c, "k_9118ba7d", action)})
 	return true
 }
 

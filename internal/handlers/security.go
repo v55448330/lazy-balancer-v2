@@ -2955,7 +2955,7 @@ func (h *Handlers) BulkUpdatePolicyBindings(c *gin.Context) {
 	}
 	for _, id := range bindIDs {
 		if _, clash := unbindSet[id]; clash {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "同一规则不能同时出现在 bind 与 unbind: " + id})
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "k_054750eb", id)})
 			return
 		}
 	}
@@ -2972,12 +2972,12 @@ func (h *Handlers) BulkUpdatePolicyBindings(c *gin.Context) {
 			continue
 		}
 		if _, clash := unbindSet[rule]; clash {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "同一规则不能同时出现在 unbind 与 orders: " + rule})
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "k_be9e8663", rule)})
 			return
 		}
 		for _, id := range bindIDs {
 			if id == rule {
-				c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "同一规则不能同时出现在 bind 与 orders: " + rule})
+				c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "k_4562b816", rule)})
 				return
 			}
 		}
@@ -3768,14 +3768,14 @@ func (h *Handlers) SplitSecurityPolicy(c *gin.Context) {
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
 			return
 		} else if msg != "" {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "拆分迁移中止：原策略" + msg + "，请先修正原策略的引用后重试"})
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "k_830554ed", msg)})
 			return
 		}
 		if msg, err := validateBuiltinThreatListRefs(tx, childACLRefs, childWLRefs, crsExcludedListRefs(childCRSExcluded), childACLMode); err != nil {
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
 			return
 		} else if msg != "" {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "拆分迁移中止：原策略" + msg + "，请先修正原策略的引用后重试"})
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "k_830554ed", msg)})
 			return
 		}
 	}
@@ -5456,7 +5456,7 @@ func (h *Handlers) UpdateCRSAutoUpdate(c *gin.Context) {
 	// 同口径 409 fast-fail（见 libAutoUpdate，先于 body 解析）。
 	autoUpdate, ok := h.libAutoUpdate(c, libAutoUpdateSpec{
 		ImportAction:   "修改规则库自动更新设置（配置导入进行中）",
-		InvalidMessage: "请求参数无效",
+		InvalidMessage: "k_868de64b",
 	}, services.SetCRSAutoUpdate)
 	if !ok {
 		return
@@ -5537,7 +5537,7 @@ func (h *Handlers) libAutoUpdate(c *gin.Context, spec libAutoUpdateSpec, save fu
 		return false, false
 	}
 	if err := c.ShouldBindJSON(&req); err != nil || req.AutoUpdate == nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: spec.InvalidMessage})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, spec.InvalidMessage)})
 		return false, false
 	}
 	// 与 Start*Update 同口径主节点门——从节点版本行/源行在同步段内，
@@ -5755,7 +5755,7 @@ func (h *Handlers) SetIP2RegionV6Enabled(c *gin.Context) {
 	}
 	enabled := *req.Enabled
 	if err := services.SetIP2RegionV6Enabled(enabled); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "保存 IPv6 开关失败: " + err.Error()})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.Tf(c, "k_7ac35ccf", apimsg.ErrMsg(c, err))})
 		return
 	}
 	// 开关变化改变 v4+v6 并集树（v6 段并入/移出选项树与校验 known 集）。
@@ -5806,7 +5806,7 @@ func (h *Handlers) UpdateIP2RegionAutoUpdate(c *gin.Context) {
 	// 自动更新，或反之）或撞写锁 30s 后 500——与 CRS/威胁库同族 409 fast-fail。
 	autoUpdate, ok := h.libAutoUpdate(c, libAutoUpdateSpec{
 		ImportAction:   "修改 IP 地址库自动更新设置",
-		InvalidMessage: "请求参数无效",
+		InvalidMessage: "k_868de64b",
 	}, services.SetIP2RegionAutoUpdate)
 	if !ok {
 		return
@@ -6456,7 +6456,7 @@ func (h *Handlers) ListCRSRules(c *gin.Context) {
 			// 静默跳过会把残缺列表以 200 返回（与同域「列表故障必须显式
 			// 500」口径冲突）。
 			services.Logf("error", "CRS 规则文件 stat 失败 %q: %v", entry.Name(), err)
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "CRS 规则文件读取失败: " + entry.Name()})
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.Tf(c, "k_51ae2fbd", entry.Name())})
 			return
 		}
 		cat := services.CategorizeCRSFile(entry.Name())

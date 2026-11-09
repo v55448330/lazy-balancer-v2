@@ -1068,9 +1068,9 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 			recordAudit(c, "更新失败", "全局配置", caddyFailureAuditDetail("Caddy 配置应用失败", applyErr))
 			// 2026-09-07：与规则域统一——配置拒绝→400，传输/系统→500。
 			if rejected {
-				c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Caddy 配置校验未通过，配置未保存: " + applyErr.Error()})
+				c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "k_d4a12434", apimsg.ErrMsg(c, applyErr))})
 			} else {
-				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Caddy 配置应用失败，配置未保存: " + applyErr.Error()})
+				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.Tf(c, "k_a76cfec8", apimsg.ErrMsg(c, applyErr))})
 			}
 			return
 		}
@@ -1094,7 +1094,7 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 		// 非渲染变更没有 Caddy 交互：提交失败只回滚事务、不触碰运行配置与
 		// LKG（本次保存从未下发任何内容）。
 		recordAudit(c, "更新失败", "全局配置", services.FormatAuditDetail("提交配置失败", err.Error(), services.AuditResultPart("failure")))
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "提交配置失败：" + err.Error()})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.Tf(c, "k_43011181", apimsg.ErrMsg(c, err))})
 		return
 	}
 	committed = true
@@ -1196,7 +1196,7 @@ func (h *Handlers) ValidateConfig(c *gin.Context) {
 		h.recordCaddyApplyFailure(joined, restoreErr)
 		recordAudit(c, "校验失败", "Caddy配置", caddyFailureAuditDetail(
 			"校验回退加载后恢复权威配置失败，运行配置可能停留为校验载荷", joined))
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "配置校验后恢复运行配置失败: " + joined.Error()})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.Tf(c, "k_6dc83d3c", apimsg.ErrMsg(c, joined))})
 		return
 	}
 	if validateErr != nil {
@@ -1207,7 +1207,7 @@ func (h *Handlers) ValidateConfig(c *gin.Context) {
 		}
 		// 传输/超时等系统故障不得伪装成「配置无效」——候选是否被拒未知，
 		// 但运行配置已回弹权威值。
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "配置校验请求失败（运行配置已恢复）: " + validateErr.Error()})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.Tf(c, "k_820e6d89", apimsg.ErrMsg(c, validateErr))})
 		return
 	}
 
@@ -1226,7 +1226,7 @@ func (h *Handlers) ReloadCaddy(c *gin.Context) {
 		// 操作者归因 + 错误详情（recordCaddyApplyResult 的系统级「应用失败」
 		// 不带用户身份，不能替代本条）。
 		recordAudit(c, "重载失败", "Caddy服务", caddyFailureAuditDetail("手动重载 Caddy 配置", err))
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Caddy 配置重载失败: " + err.Error()})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.Tf(c, "k_a753fb8f", apimsg.ErrMsg(c, err))})
 		return
 	}
 	// 手动重载成功同样需要留痕（69d809b4 曾误删本行）。
@@ -1309,7 +1309,7 @@ func (h *Handlers) GetCaddyConfig(c *gin.Context) {
 	if err != nil {
 		// admin 不可达=上游/网关级故障（与 GetRuleCaddyConfig、GetUpstreamHealth
 		// 同口径的 502）；500 留给「读到的字节解析失败/超限」这类面板侧失败。
-		c.JSON(http.StatusBadGateway, models.APIResponse{Code: 502, Message: "连接 Caddy 失败: " + err.Error()})
+		c.JSON(http.StatusBadGateway, models.APIResponse{Code: 502, Message: apimsg.Tf(c, "k_9891788f", apimsg.ErrMsg(c, err))})
 		return
 	}
 	defer resp.Body.Close()
@@ -1317,12 +1317,12 @@ func (h *Handlers) GetCaddyConfig(c *gin.Context) {
 	// 静默截断会把「超限」误报为下游「解析失败」，排障误导）。
 	body, err := services.ReadAdminConfigBody(resp)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "读取 Caddy 配置失败: " + err.Error()})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.Tf(c, "k_429a85da", apimsg.ErrMsg(c, err))})
 		return
 	}
 	var configData interface{}
 	if err := json.Unmarshal(body, &configData); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "解析 Caddy 配置失败: " + err.Error()})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.Tf(c, "k_97273f0c", apimsg.ErrMsg(c, err))})
 		return
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: configData})
@@ -1657,7 +1657,7 @@ func (h *Handlers) PutCaddyConfig(c *gin.Context) {
 	if err := h.caddyService.ValidateJSONViaCLI([]byte(req.Content)); err != nil {
 		if !errors.Is(err, services.ErrCLIValidatorUnavailable) {
 			recordAudit(c, "更新失败", "Caddy配置", services.FormatAuditDetail("Caddy 配置校验未通过", err.Error(), services.AuditResultPart("failure")))
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Caddy 配置校验未通过: " + err.Error()})
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "k_98f6b7f2", apimsg.ErrMsg(c, err))})
 			return
 		}
 		services.Logf("error", "caddy CLI 校验器不可用，跳过逃生口预检（应用拒绝仍回滚）: %v", err)
@@ -1666,13 +1666,13 @@ func (h *Handlers) PutCaddyConfig(c *gin.Context) {
 	runtimeSnapshot, err := h.snapshotImportRuntime(nil)
 	if err != nil {
 		recordAudit(c, "更新失败", "Caddy配置", caddyFailureAuditDetail("备份当前 Caddy 配置失败", err))
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "备份当前 Caddy 配置失败: " + err.Error()})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.Tf(c, "k_f56aab74", apimsg.ErrMsg(c, err))})
 		return
 	}
 	tx, err := beginCaddyWriteTx(c)
 	if err != nil {
 		recordAudit(c, "更新失败", "Caddy配置", services.FormatAuditDetail("开启 Caddy 配置事务失败", err.Error(), services.AuditResultPart("failure")))
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "开启 Caddy 配置事务失败: " + err.Error()})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.Tf(c, "k_3f27d4d0", apimsg.ErrMsg(c, err))})
 		return
 	}
 	committed := false
@@ -1686,7 +1686,7 @@ func (h *Handlers) PutCaddyConfig(c *gin.Context) {
 	result, err := tx.ExecContext(caddyWriteCtx(c), "UPDATE global_config SET caddy_config=?, updated_at=datetime('now') WHERE id=1", req.Content)
 	if err != nil {
 		recordAudit(c, "更新失败", "Caddy配置", services.FormatAuditDetail("保存 Caddy 配置失败", err.Error(), services.AuditResultPart("failure")))
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "保存 Caddy 配置失败: " + err.Error()})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.Tf(c, "k_b6fa6f68", apimsg.ErrMsg(c, err))})
 		return
 	}
 	rowsAffected, err := result.RowsAffected()
@@ -1719,9 +1719,9 @@ func (h *Handlers) PutCaddyConfig(c *gin.Context) {
 		recordAudit(c, "更新失败", "Caddy配置", caddyFailureAuditDetail("Caddy 配置应用失败", err))
 		// 2026-09-07：与统一——配置拒绝→400，传输/系统→500。
 		if rejected {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Caddy 拒绝配置: " + err.Error()})
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "k_e39daedf", apimsg.ErrMsg(c, err))})
 		} else {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Caddy 配置应用失败，配置未保存: " + err.Error()})
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.Tf(c, "k_a76cfec8", apimsg.ErrMsg(c, err))})
 		}
 		return
 	}

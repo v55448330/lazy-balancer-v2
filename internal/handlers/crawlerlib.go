@@ -121,7 +121,7 @@ func (h *Handlers) UpdateCrawlerAutoUpdate(c *gin.Context) {
 	// 门序先于 body 解析）。
 	autoUpdate, ok := h.libAutoUpdate(c, libAutoUpdateSpec{
 		ImportAction:   "修改爬虫地址库设置（配置导入进行中）",
-		InvalidMessage: "请求无效",
+		InvalidMessage: "k_ef2be2f6",
 	}, services.SetCrawlerAutoUpdate)
 	if !ok {
 		return

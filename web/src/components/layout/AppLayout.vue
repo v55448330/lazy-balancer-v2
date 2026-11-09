@@ -102,7 +102,6 @@
       </el-menu>
 
       <div class="aside-footer">
-        <LanguageSwitcher v-if="!effectiveCollapsed" style="width:100%;justify-content:center;display:inline-flex" />
         <el-dropdown trigger="click" @command="handleCommand">
           <div class="user-info" :class="{ 'is-collapsed': effectiveCollapsed }" :aria-label="accountTriggerLabel(menuDisplayName)" :title="accountTriggerLabel(menuDisplayName)">
             <!-- 折叠态必须有可见标识与无障碍名称：此前只剩 24px 无内容条带，
@@ -142,6 +141,7 @@
           <el-tooltip v-if="authStore.readOnlyReason" :content="authStore.readOnlyMessage" placement="bottom">
             <el-tag type="warning" size="small" effect="plain" class="readonly-tag">{{ t('common.app.views.layout.readOnlyTag') }}</el-tag>
           </el-tooltip>
+          <LanguageSwitcher />
           <div class="node-tag" :class="authStore.nodeMode">
             <el-icon><Connection /></el-icon>
             <span>{{ authStore.nodeMode === 'master' ? t('common.app.views.layout.nodeMaster') : authStore.nodeMode === 'slave' ? t('common.app.views.layout.nodeSlave') : t('common.app.views.layout.nodeLoading') }}</span>

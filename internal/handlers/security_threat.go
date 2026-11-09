@@ -107,7 +107,7 @@ func (h *Handlers) UpdateThreatAutoUpdate(c *gin.Context) {
 	// 同口径 409 fast-fail（见 libAutoUpdate，先于 body 解析）。
 	autoUpdate, ok := h.libAutoUpdate(c, libAutoUpdateSpec{
 		ImportAction:   "修改威胁情报库设置（配置导入进行中）",
-		InvalidMessage: "请求无效",
+		InvalidMessage: "k_ef2be2f6",
 	}, services.SetThreatAutoUpdate)
 	if !ok {
 		return

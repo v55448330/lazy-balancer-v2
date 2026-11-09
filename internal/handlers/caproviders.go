@@ -276,11 +276,11 @@ func (h *Handlers) TestCAProvider(c *gin.Context) {
 			case "config":
 				result = "invalid_config"
 				auditCAProviderTestResult(c, id, providerName, result)
-				c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "CA 提供商配置无效: " + terr.Error()})
+				c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "k_d68aa436", apimsg.ErrMsg(c, terr))})
 			case "register":
 				result = "register_failed"
 				auditCAProviderTestResult(c, id, providerName, result)
-				c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "ACME 账户注册失败，请检查 CA 配置或网络: " + terr.Error()})
+				c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "k_5e9d767d", apimsg.ErrMsg(c, terr))})
 			default:
 				auditCAProviderTestResult(c, id, providerName, result)
 				services.Logf("error", "CA provider test failed for provider %d: %v", id, err)
