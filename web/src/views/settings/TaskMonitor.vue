@@ -119,7 +119,7 @@
           <div class="tm-filter-group">
             <el-select v-model="categoryFilter" size="small" clearable :placeholder="t('app.settings.taskMonitor.table.allCategories')" class="tm-category-filter" @change="page = 1">
               <el-option :label="t('app.settings.taskMonitor.table.allCategories')" value="all" />
-              <el-option v-for="c in categoryOptions" :key="c" :label="c" :value="c" />
+              <el-option v-for="c in categoryOptions" :key="c" :label="categoryLabel(c)" :value="c" />
             </el-select>
             <el-radio-group v-model="kindFilter" size="small">
               <el-radio-button value="all">{{ t('app.settings.taskMonitor.triggerFamily.all') }}</el-radio-button>
@@ -146,10 +146,10 @@
         </el-table-column>
         <el-table-column :label="t('app.settings.taskMonitor.col.category')" width="92">
           <template #default="{ row }">
-            <el-tag size="small" effect="plain" :type="categoryTagType(row.category)">{{ row.category }}</el-tag>
+            <el-tag size="small" effect="plain" :type="categoryTagType(row.category)">{{ categoryLabel(row.category) }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column :label="t('app.settings.taskMonitor.col.kind')" width="72">
+        <el-table-column :label="t('app.settings.taskMonitor.col.kind')" width="92">
           <template #default="{ row }">
             <el-tag size="small" :type="kindTag(row.kind)" effect="plain" :class="kindTagClass(row.kind)">{{ kindLabel(row.kind) }}</el-tag>
           </template>
@@ -216,7 +216,7 @@
             <span v-else class="tm-dim">—</span>
           </template>
         </el-table-column>
-        <el-table-column width="104">
+        <el-table-column width="140">
           <template #header>
             <el-tooltip :content="t('app.settings.taskMonitor.col.successFailTip')" placement="top" :show-arrow="false">
               <span>{{ t('app.settings.taskMonitor.col.successFail') }}</span>
@@ -271,16 +271,16 @@
     <el-dialog v-model="detailVisible" width="min(720px, 92vw)" top="8vh">
       <template #header>
         <DialogHeader
-          :icon="detailIcon" :title="detailTask?.name || ''"
-          :subtitle="detailTask ? `${detailTask.category} · ${kindLabel(detailTask.kind)} · ${statusLabel(detailTask.status)}` : ''"
+          :icon="detailIcon" :title="detailTask ? taskDisplayName(detailTask.name) : ''"
+          :subtitle="detailTask ? `${categoryLabel(detailTask.category)} · ${kindLabel(detailTask.kind)} · ${statusLabel(detailTask.status)}` : ''"
           :tone="detailTone"
         />
       </template>
       <div v-if="detailTask" class="tm-detail">
         <section class="dialog-panel">
-          <DialogSectionHeader :title="t('app.settings.taskMonitor.detail.infoTitle')" :description="detailTask.description" />
+          <DialogSectionHeader :title="t('app.settings.taskMonitor.detail.infoTitle')" :description="taskDesc(detailTask)" />
         <el-descriptions :column="2" border size="small" class="tm-detail-descs">
-          <el-descriptions-item :label="t('app.settings.taskMonitor.detail.cadence')">{{ detailTask.cadence || '—' }}</el-descriptions-item>
+          <el-descriptions-item :label="t('app.settings.taskMonitor.detail.cadence')">{{ cadenceText(detailTask.cadence) }}</el-descriptions-item>
           <el-descriptions-item :label="t('app.settings.taskMonitor.detail.roleApplicability')">
             <el-tag v-if="detailTask.role_applicable === false" size="small" type="info" effect="plain">{{ t('app.settings.taskMonitor.detail.masterOnlyRun') }}</el-tag>
             <el-tag v-else size="small" type="success" effect="plain">{{ t('app.settings.taskMonitor.detail.nodeRunnable') }}</el-tag>
@@ -646,6 +646,28 @@ const TASK_NAME_KEYS: Record<string, string> = {
   '安全事件保留清理': 'secEventRetention',
   '系统配置载入': 'configLoad',
 }
+
+// 任务族描述词条映射(后端 description zh;未登记任务族回落原文)
+const taskDesc = (task: { name: string; description?: string }): string => {
+  const k = TASK_NAME_KEYS[task.name]
+  if (k) {
+    const key = `common.app.taskDesc.${k}`
+    const v = t(key)
+    if (v !== key) return v
+  }
+  return task.description || ''
+}
+// Cadence 显示:后端拼装 zh(如"每 1 分钟");登记周期形态→词条,未命中原样
+const cadenceText = (cadence?: string): string => {
+  if (!cadence) return '—'
+  const m = cadence.match(/^每 (\d+) 分钟$/)
+  if (m) return m[1] === '1' ? t('common.app.cadence.everyNMinutesSingle') : t('common.app.cadence.everyNMinutes', { n: m[1] })
+  if (cadence === '每 15 分钟') return t('common.app.cadence.every15Minutes')
+  const h = cadence.match(/^每天 (\d{2}:\d{2})$/)
+  if (h) return t('common.app.cadence.dailyAt', { time: h[1] })
+  return cadence
+}
+
 const taskDisplayName = (name: string): string => {
   const k = TASK_NAME_KEYS[name]
   if (k) return t(`common.app.taskNames.${k}`)
@@ -964,6 +986,13 @@ const scheduleStoppedTip = (row: TaskInfo) => {
     ? t('app.settings.taskMonitor.stopTip.businessDriven', { head })
     : t('app.settings.taskMonitor.stopTip.genericFix', { head })
 }
+
+// 分类显示名映射(后端 category 为 zh 码;徽标/下拉经此翻译)
+const categoryLabel = (c: string): string => {
+  const keys: Record<string, string> = { '安全防护': 'security', '证书': 'certs', '备份': 'backup', '集群': 'cluster', '系统': 'system' }
+  return keys[c] ? t(`app.settings.taskMonitor.categories.${keys[c]}`) : c
+}
+
 const categoryOrder: Record<string, number> = { '安全防护': 0, '证书': 1, '备份': 2, '集群': 3, '系统': 4 }
 const categoryTagType = (c: string): 'primary' | 'success' | 'warning' | 'info' =>
   c === '安全防护' ? 'primary' : c === '证书' ? 'success' : c === '备份' ? 'warning' : 'info'

@@ -459,6 +459,14 @@ export default {
         }
       },
       "taskMonitor": {
+      "categories": {
+        "security": "Security",
+        "certs": "Certificates",
+        "backup": "Backup",
+        "cluster": "Cluster",
+        "system": "System",
+      },
+      "allCategories": "All categories",
         "loadFailPrefix": "Failed to load task monitor: ",
         "retryNowBtn": "Retry now",
         "cadencePrefix": "Cadence: ",

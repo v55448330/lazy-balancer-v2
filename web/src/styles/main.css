@@ -468,8 +468,10 @@ body .rule-lock-popper :is(.lock-stage, .lock-policy-group) { border-radius: 0; 
 /* i18n 英文防溢出守卫（全局）：英文较中文长 30-80%，以下规则消除常见挤压形态 */
 /* 表格列头：不允许断词（Upstr eam 形态），整词换行 */
 .el-table th.el-table__cell > .cell { word-break: keep-all; overflow-wrap: normal; }
-/* 表格操作列链接组允许换行，禁止撑破 */
-.el-table .cell .el-button.is-link { white-space: normal; }
+/* 表格操作列链接组:英文允许整词换行(链接长),中文保持单行 */
+html[data-locale='en'] .el-table .cell .el-button.is-link { white-space: normal; }
+/* descriptions 预览表 label 列不换行(整词单行,列宽自动让位) */
+.el-descriptions__label { white-space: nowrap; }
 /* 表单 label 自适应兜底（未显式 label-width 的表单） */
 .el-form--label-right .el-form-item__label { word-break: keep-all; }
 
@@ -477,4 +479,4 @@ body .rule-lock-popper :is(.lock-stage, .lock-policy-group) { border-radius: 0; 
    data-locale 由 i18n/index 写入;覆盖 EP 内联 label 宽,内容列自动扩展 */
 html[data-locale='en'] .el-form-item__label,
 html[data-locale='en'] .el-form-item__label-wrap { width: auto !important; }
-html[data-locale='en'] .el-form-item__label { white-space: nowrap; }
+html[data-locale='en'] .el-form-item__label { white-space: nowrap; min-width: 180px; }
