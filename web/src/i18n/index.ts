@@ -75,9 +75,10 @@ export const i18n = createI18n({
   legacy: false,
   locale: detectLocale(),
   fallbackLocale: 'zh-CN',
+  // app 与 common.app 同一棵合并树(双前缀形态并存;appShell 等根级散键入 common.app)
   messages: {
-    'zh-CN': { common: { app: zhCommonApp }, app: zhTree },
-    en: { common: { app: enCommonApp }, app: enTree },
+    'zh-CN': { common: { app: zhCommonApp }, app: zhCommonApp },
+    en: { common: { app: enCommonApp }, app: enCommonApp },
   },
   missingWarn: false,
   fallbackWarn: false,
