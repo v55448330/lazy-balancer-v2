@@ -641,6 +641,17 @@ export default {
         }
       },
       "basic": {
+        "restoreResult": {
+          "title": "配置还原完成",
+          "importTitle": "配置导入完成",
+          "doneClean": "全部数据已按备份内容还原",
+          "doneWithIssues": "还原已完成，但有需要留意的事项",
+          "statsTitle": "恢复统计",
+          "noticesTitle": "重要提示",
+          "ruleWarningsTitle": "规则警告（{count} 条）",
+          "reloginBtn": "重新登录并刷新页面",
+          "sessionRevokeMark": "会话已吊销"
+        },
           "siteCoord": "纬度 {lat} · 经度 {lng}",
         "title": "基础设置",
         "log": {

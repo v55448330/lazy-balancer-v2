@@ -544,6 +544,17 @@
       </div>
     </div>
   </el-dialog>
+
+  <RestoreResultDialog
+    :visible="restoreResult.visible"
+    :kind="restoreResult.kind"
+    :message="restoreResult.message"
+    :warnings="restoreResult.warnings"
+    :conflicts-summary="restoreResult.conflictsSummary"
+    :conflicts="restoreResult.conflicts"
+    :button-text="restoreResult.buttonText"
+    @close="onRestoreResultClose"
+  />
 </template>
 
 <script setup lang="ts">
@@ -551,7 +562,7 @@ import { computed, h, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAuthStore } from '@/stores/auth'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { request, mfaAwareSuccess } from '@/utils/api'
+import { request, mfaAwareSuccess, suspendSessionExpiredHandling } from '@/utils/api'
 import { formatBytes } from '@/utils/formatBytes'
 import LogStorageBar from '@/components/LogStorageBar.vue'
 import { useLogTailPolling } from '@/composables/useLogTailPolling'
@@ -564,6 +575,7 @@ import { shouldToastQuietPollError } from '@/utils/pollErrorToast'
 import { displaySecurityEventsRetentionDays, displaySecurityEventsRowCap, displayThreatScreenMode, securityEventsWritePayload, threatScreenWritePayload } from '@/utils/configValues'
 import { CHINA_SITE_CHOICES, COUNTRY_SITE_CHOICES, coordsForSiteLocation, nearestSiteLocation } from '@/utils/siteLocation'
 import { useCountryNamesCn } from '@/composables/useCountryNamesCn'
+import RestoreResultDialog from '@/components/settings/RestoreResultDialog.vue'
 import { hasOwn } from '@/utils/hasOwn'
 import { BACKUP_SECTIONS, importConfirmMessage, normalizeBackupSectionKeys } from '@/utils/backupSections'
 import { createImportPreviewSession, importPreviewFingerprint, invalidateImportPreviews, type ImportPreviewSession } from '@/utils/importPreview'
@@ -703,7 +715,12 @@ const exportBackup = async (): Promise<void> => {
       responseType: 'blob', timeout: 0,
       params: { sections: exportSections.value.join(',') },
     })
-    saveBlob(blob, `lazy-balancer-backup-${formatDateShort(new Date())}.lbbak`)
+    // 文件名带时分秒(2026-11 用户反馈默认名异常:原只到日期,同日多次导出重名
+    // 覆盖;与后端 Content-Disposition currentTimeFilename 同口径
+    // YYYYMMDD-HHMMSS)。日期/时间均走配置时区(formatDate 系),守卫契约同款。
+    const stampDate = formatDateShort(new Date())
+    const stampTime = formatDate(new Date()).slice(11, 19).replace(/:/g, '')
+    saveBlob(blob, `lazy-balancer-backup-${stampDate.replace(/-/g, '')}-${stampTime}.lbbak`)
     exportDialogVisible.value = false
     mfaAwareSuccess(t('app.settings.basic.export.done'))
   } catch {
@@ -995,24 +1012,22 @@ const restoreAutoBackup = async (row: AutoBackupRow): Promise<void> => {
       autoBackupVisible.value = false
       const warnings = res.data?.warnings ?? []
       const disabledConflicts = res.data?.disabled_conflicts ?? []
-      const resultLines = [
-        res.message || t('app.settings.basic.restore.success'),
-        ...warnings,
-        ...(disabledConflicts.length > 0 ? [t('app.settings.basic.conflictsDisabled', { count: disabledConflicts.length })] : []),
-        ...disabledConflicts.map((conflict) => formatImportConflict(conflict, true)),
-      ]
-      await ElMessageBox.alert(
-        h('div', resultLines.map((line) => h('div', line))),
-        t('app.settings.basic.restore.done'),
-        {
-          confirmButtonText: t('app.settings.basic.actions.reloadPage'),
-          type: warnings.length > 0 || disabledConflicts.length > 0 ? 'warning' : 'success',
-          showClose: false,
-          closeOnClickModal: false,
-          closeOnPressEscape: false,
-        },
-      )
-      window.location.reload()
+      // 完成统计走结构化弹框(2026-11 用户需求):统计徽章网格+全局提示+规则警告
+      // 滚动区,替代轻量 alert(内容多时不可读)。会话吊销按钮文案=重新登录。
+      // 会话吊销已发生(系统数据还原):挂起 401 处置,统计弹框不被过期框遮挡、
+      // 不在用户读到结果前被踢回登录;弹框按钮 reload 后挂起态随整页重载消亡
+      suspendSessionExpiredHandling()
+      restoreResult.value = {
+        visible: true,
+        kind: 'restore',
+        message: res.message || t('app.settings.basic.restore.success'),
+        warnings,
+        conflictsSummary: disabledConflicts.length > 0 ? t('app.settings.basic.conflictsDisabled', { count: disabledConflicts.length }) : '',
+        conflicts: disabledConflicts.map((conflict) => formatImportConflict(conflict, true)),
+        buttonText: (warnings.some((w) => w.includes(t('app.settings.basic.restoreResult.sessionRevokeMark'))))
+          ? t('app.settings.basic.restoreResult.reloginBtn')
+          : t('app.settings.basic.actions.reloadPage'),
+      }
     } catch (error: unknown) {
       // 全局拦截器已弹 message toast；失败响应携带的文件面判决（回退失败=文件与
       // 版本记录可能分裂 / 提交结果不确定=需人工核对）必须展示——回滚只覆盖库侧，
@@ -1335,25 +1350,16 @@ const confirmImport = async (): Promise<void> => {
     // 后端 data.warnings(操作账户替换/会话吊销/ACME 悬挂/规则库元数据
     // 跳过)此前被丢弃——与冲突同级展示,非空时结果至少 warning 级
     const warnings = res.data?.warnings ?? []
-    const resultLines = [
-      res.message || t('app.settings.basic.import.success'),
-      ...warnings,
-      // 无冲突时不占位——「冲突置为禁用：0 条」恒显属噪音行
-      ...(disabledConflicts.length > 0 ? [t('app.settings.basic.conflictsDisabled', { count: disabledConflicts.length })] : []),
-      ...disabledConflicts.map((conflict) => formatImportConflict(conflict)),
-    ]
-    await ElMessageBox.alert(
-      h('div', resultLines.map((line) => h('div', line))),
-      t('app.settings.basic.import.done'),
-      {
-        confirmButtonText: t('app.settings.basic.actions.reloadPage'),
-        type: disabledConflicts.length > 0 || warnings.length > 0 ? 'warning' : 'success',
-        showClose: false,
-        closeOnClickModal: false,
-        closeOnPressEscape: false,
-      },
-    )
-    window.location.reload()
+    // 完成统计走结构化弹框(与还原同款,2026-11 用户需求)
+    restoreResult.value = {
+      visible: true,
+      kind: 'import',
+      message: res.message || t('app.settings.basic.import.success'),
+      warnings,
+      conflictsSummary: disabledConflicts.length > 0 ? t('app.settings.basic.conflictsDisabled', { count: disabledConflicts.length }) : '',
+      conflicts: disabledConflicts.map((conflict) => formatImportConflict(conflict)),
+      buttonText: t('app.settings.basic.actions.reloadPage'),
+    }
   } catch (error: unknown) {
     // 全局拦截器只弹 message toast；失败响应的 data.warnings（规则库文件面
     // 三态判决/提交不确定的人工核对指引/软跳过清单）与冲突明细必须同框展示，
@@ -1528,6 +1534,17 @@ const formFrozen = computed(() => isReadOnly.value || saving.value)
 // 大屏本站坐标：地点选择（中国城市/海外国家）→ 经纬度；替代按公网 IP
 // 归属地自动检测（常落到省会/国家质心，无法精确到城市）。
 const siteLocationKey = ref('')
+
+// 还原完成结构化结果弹框状态(组件 RestoreResultDialog)
+const onRestoreResultClose = (): void => {
+  restoreResult.value.visible = false
+  // 会话已吊销(还原含系统数据)或导入/还原成功后配置已变——关闭即刷新取新状态
+  window.location.reload()
+}
+
+const restoreResult = ref<{ visible: boolean; kind: 'restore' | 'import'; message: string; warnings: string[]; conflictsSummary: string; conflicts: string[]; buttonText: string }>({
+  visible: false, kind: 'restore', message: '', warnings: [], conflictsSummary: '', conflicts: [], buttonText: '',
+})
 
 // 站点位置下拉选项按 locale 映射(2026-11 用户需求):en 下中国省名走 provinces
 // 词条(裸键 fallback 原名);国家名源表 COUNTRY_CENTROIDS 键为中文国名,en 下经

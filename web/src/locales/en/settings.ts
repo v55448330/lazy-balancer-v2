@@ -641,6 +641,17 @@ export default {
         }
       },
       "basic": {
+        "restoreResult": {
+          "title": "Restore completed",
+          "importTitle": "Import completed",
+          "doneClean": "All data has been restored from the backup",
+          "doneWithIssues": "Restore finished, but some items need attention",
+          "statsTitle": "Restored items",
+          "noticesTitle": "Important notices",
+          "ruleWarningsTitle": "Rule warnings ({count})",
+          "reloginBtn": "Re-login and refresh",
+          "sessionRevokeMark": "session revoked"
+        },
           "siteCoord": "Lat {lat} · Lng {lng}",
         "title": "Basic settings",
         "log": {

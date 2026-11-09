@@ -141,6 +141,14 @@ let sessionExpiredDialogOpen = false
 // 各自周期出站请求，每个再吃一个 401，后端认证拒绝审计被刷屏。置位后下方请求
 // 拦截器直接拒绝、不再出站任何请求；标志随确认后的 location.reload() 一并消亡。
 let sessionExpiredDetected = false
+// 会话吊销型还原的统计弹框保护(2026-11 用户需求):还原含系统数据时后端已吊销
+// 全部会话,紧随其后的后台轮询会吃 401——默认处置(过期弹窗+确认后跳登录)会遮挡
+// 还原统计弹框并把用户在看到结果前踢回登录。还原成功置位挂起后,401 静默拒绝,
+// 统计弹框安全展示;弹框确认按钮自带 reload,整页重载使本模块态消亡、恢复正常处置。
+let suspendSessionExpiredGuard = false
+export const suspendSessionExpiredHandling = (): void => {
+  suspendSessionExpiredGuard = true
+}
 
 // 当前界面语言(i18n 惰性引入避免模块装载哨兵拉起 vue-i18n 全家桶;main.ts
 // 已 app.use(i18n),运行期恒有实例)。
@@ -321,6 +329,10 @@ service.interceptors.response.use(
       const authStore = useAuthStore()
       if (authStore.intentionalLogout || !authStore.token || !localStorage.getItem('token')) {
         return Promise.reject(new Error(message))
+      }
+      // 会话吊销型还原挂起窗口:静默拒绝,不弹过期框、不置位止损、不跳登录
+      if (suspendSessionExpiredGuard) {
+        return Promise.reject(new ApiRequestError(message, status, error.response?.data))
       }
       if (!sessionExpiredDialogOpen) {
         sessionExpiredDialogOpen = true
