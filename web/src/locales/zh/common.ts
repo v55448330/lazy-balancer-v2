@@ -1,6 +1,17 @@
 // 由 i18n 迁移生成;新词条进这里(域内嵌套键)
 export default {
   "app": {
+  ipListCategory: {
+    crawler: 'Search engine crawler',
+    cdn: 'CDN node',
+    cloud: 'Cloud provider',
+    office: 'Office network',
+    dc: 'Data center',
+    trust: 'Trusted address',
+    malicious: 'Malicious IP',
+    other: 'Other',
+    autoban: '自动封禁',
+  },
   taskDesc: {
     autoban: '按固定窗口统计 WAF 安全事件（口径可配：拦截/检测/全部），同一 IP 计数达阈值即写入「自动封禁名单」并在到期后自动解封；默认观察模式仅记录建议不封禁。计数数据源=安全事件采集提交点（仅主节点）',
     crawlerUpdate: '定期抓取爬虫地址列表并更新本地名单，供搜索引擎识别与流量分类使用',

@@ -96,7 +96,7 @@
             <template #empty><el-empty :description="rulesLoadError ? t('common.app.views.secRules.rulesTab.loadFailRetry') : t('common.app.views.secRules.rulesTab.emptyRules')" :image-size="60" /></template>
             <el-table-column prop="filename" :label="t('common.app.views.secRules.rulesTab.colFilename')" min-width="320" show-overflow-tooltip />
             <el-table-column prop="category" :label="t('common.app.views.secRules.common.category')" width="160">
-              <template #default="{ row }"><el-tag size="small" effect="plain" type="info">{{ row.category }}</el-tag></template>
+              <template #default="{ row }"><el-tag size="small" effect="plain" type="info">{{ ipListCategoryLabel(row.category) }}</el-tag></template>
             </el-table-column>
             <el-table-column :label="t('common.app.views.secRules.rulesTab.colSize')" width="100" align="right">
               <template #default="{ row }">{{ formatSize(row.size) }}</template>
@@ -209,7 +209,7 @@
             </el-table-column>
             <el-table-column :label="t('common.app.views.secRules.common.category')" width="120" align="center">
               <template #default="{ row }">
-                <el-tag v-if="row.category" size="small" effect="plain" type="info">{{ row.category }}</el-tag>
+                <el-tag v-if="row.category" size="small" effect="plain" type="info">{{ ipListCategoryLabel(row.category) }}</el-tag>
                 <template v-else>—</template>
               </template>
             </el-table-column>
@@ -412,7 +412,7 @@
         </el-form-item>
         <el-form-item :label="t('common.app.views.secRules.common.category')">
           <el-select v-model="ipListForm.category" allow-create filterable default-first-option :placeholder="t('common.app.views.secRules.ipDialog.categoryPlaceholder')" style="width: 100%" :disabled="ipListDialogReadOnly || editingIpListPreset || savingIpList">
-            <el-option v-for="c in IP_LIST_CATEGORIES" :key="c" :label="c" :value="c" />
+            <el-option v-for="c in IP_LIST_CATEGORIES" :key="c" :label="ipListCategoryLabel(c)" :value="c" />
           </el-select>
           <div class="form-tip-line">{{ t('common.app.views.secRules.ipDialog.categoryTip') }}</div>
         </el-form-item>
@@ -781,6 +781,25 @@ import LogStorageBar from '@/components/LogStorageBar.vue'
 import { formatDate } from '@/utils/date'
 import { autobanEntryExpired, autobanEntryRemaining } from '@/utils/autobanEntry'
 import { IP_LIST_CATEGORIES, invalidateSharedEntriesCache } from '@/utils/securityStages'
+
+// 名单分类显示映射:后端/存储为 zh 分类码(有限集合),en 用户经词条显示;
+// 未登记值(自定义名)回落原文。筛选/表单 value 保持 zh 原样不传译值。
+const IP_LIST_CATEGORY_KEYS: Record<string, string> = {
+  '搜索引擎爬虫': 'crawler',
+  'CDN 节点': 'cdn',
+  '云服务商': 'cloud',
+  '办公网络': 'office',
+  '数据中心': 'dc',
+  '可信地址': 'trust',
+  '恶意 IP': 'malicious',
+  '自动封禁': 'autoban',
+  '其他': 'other',
+}
+const ipListCategoryLabel = (raw?: string): string => {
+  if (!raw) return raw || ''
+  const k = IP_LIST_CATEGORY_KEYS[raw]
+  return k ? t(`common.app.ipListCategory.${k}`) : raw
+}
 import { crsRuleCountLabel, libraryHealthTag, librarySourceHealthTag, libraryStatusLabel, libraryStatusTagType, summarizeLibrarySources } from '@/utils/securityLibraries'
 import { updaterName } from '@/utils/updaterName'
 import { hasOwn } from '@/utils/hasOwn'

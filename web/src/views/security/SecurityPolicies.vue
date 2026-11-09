@@ -943,7 +943,7 @@
         </el-form-item>
         <el-form-item :label="t('app.security.policies.extract.categoryLabel')">
           <el-select v-model="extractForm.category" allow-create filterable default-first-option :placeholder="t('app.security.policies.extract.categoryPlaceholder')" style="width: 100%">
-            <el-option v-for="c in IP_LIST_CATEGORIES" :key="c" :label="c" :value="c" />
+            <el-option v-for="c in IP_LIST_CATEGORIES" :key="c" :label="ipListCategoryLabel(c)" :value="c" />
           </el-select>
         </el-form-item>
       </el-form>
@@ -1112,6 +1112,25 @@ const policySearch = ref('')
 // ── 列表按类型分组（阶段 1/2/3 + 混合兼容组）：policy_type 缺省时按内容推断（inferPolicyType
 // 与后端兜底同形状） ──
 const activeTypeTab = ref<SecurityPolicyType>('stage1')
+
+// 名单分类显示映射(后端/存储 zh 分类码;下拉 label 翻译,筛选 value 保持 zh)
+const IP_LIST_CATEGORY_KEYS: Record<string, string> = {
+  '搜索引擎爬虫': 'crawler',
+  'CDN 节点': 'cdn',
+  '云服务商': 'cloud',
+  '办公网络': 'office',
+  '数据中心': 'dc',
+  '可信地址': 'trust',
+  '恶意 IP': 'malicious',
+  '自动封禁': 'autoban',
+  '其他': 'other',
+}
+const ipListCategoryLabel = (raw?: string): string => {
+  if (!raw) return raw || ''
+  const k = IP_LIST_CATEGORY_KEYS[raw]
+  return k ? t(`common.app.ipListCategory.${k}`) : raw
+}
+
 const policyTypeOf = (row: PolicySummary): SecurityPolicyType => inferPolicyType(row)
 // 策略 id → 阶段类型（绑定选择器/提交门的 stage2 唯一性判据用）：与列表分组同一
 // 推断口径（inferPolicyType 优先 policy_type 列，缺省按内容推断）。
@@ -4001,6 +4020,10 @@ html[data-locale='en'] .wizard-steps :deep(.el-step__title) { font-size: 12px; }
 /* reference 是真按钮（原为无激活行为的 span）：清掉 UA 按钮外观，保留文本外观
    与焦点环；键盘激活交给 el-dropdown 的 click 触发 */
 .policy-rule-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 24px;
   padding: 0 2px;
   border: 0;
   background: transparent;
