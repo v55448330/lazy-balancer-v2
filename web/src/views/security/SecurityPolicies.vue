@@ -969,6 +969,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
+import { cityEnName } from '@/utils/cityEnNames'
 import { useI18n } from 'vue-i18n'
 import { CRS_CATEGORY_KEYS } from '@/utils/crsCategories.ts'
 import { Plus, Lock, InfoFilled, CircleCheckFilled, Connection, Odometer, Link, Check, ArrowLeft, ArrowRight, ArrowDown, Search, WarningFilled, Document } from '@element-plus/icons-vue'
@@ -1061,7 +1062,7 @@ const regionCascaderOptions = computed(() => {
     options.push({
       value: prov,
       label: provLabel,
-      children: cities.map((city) => ({ value: `${prov}/${city}`, label: city })),
+      children: cities.map((city) => ({ value: `${prov}/${city}`, label: locale.value === 'en' ? cityEnName(city) : city })),
     })
   }
   const overseas = regionTree.value.countries || []

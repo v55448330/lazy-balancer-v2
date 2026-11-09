@@ -11,6 +11,12 @@
         <div class="readout">CAM <b>{{ camReadout }}</b></div>
         <div class="readout">TGT <b>{{ tgtReadout }}</b></div>
         <div class="readout">FLOW <b>{{ flowSampleLabel }}</b></div>
+        <div class="readout clock-hud" role="group" :aria-label="t('app.security.threat.timeWindowAria')">
+          <time class="clock-time">{{ clockText }}</time><span class="clock-date">{{ clockDate }}</span>
+        </div>
+        <div class="window-switch hud-window" role="group" :aria-label="t('app.security.threat.timeWindowAria')">
+          <button v-for="opt in windowOptions" :key="opt.value" type="button" class="window-btn" :aria-pressed="windowHours === opt.value" @click="setWindow(opt.value)">{{ opt.label }}</button>
+        </div>
       </div>
       <div class="hud-tr" :aria-label="t('app.security.threat.legendAria')">
         <div class="row">{{ t('app.security.threat.legendNormalRequests') }} <span class="legend-arc normal"></span></div>
@@ -129,7 +135,7 @@
         </div>
         <div>
           <h1 class="glitch" :data-text="t('app.security.threat.screenTitle')">{{ t('app.security.threat.screenTitle') }}</h1>
-          <p>{{ t('app.security.threat.subtitleRealtime', { window: frameTerms.windowLabel }) }} <time>{{ clockText }}</time><span class="clock-date">{{ clockDate }}</span><em v-if="staleFrameLabel" class="ov-switch-hint" role="status">{{ staleFrameLabel }}</em></p>
+          <p>{{ t('app.security.threat.subtitleRealtime', { window: frameTerms.windowLabel }) }}<em v-if="staleFrameLabel" class="ov-switch-hint" role="status">{{ staleFrameLabel }}</em></p>
         </div>
       </div>
 
@@ -141,9 +147,6 @@
       </div>
 
       <div class="actions">
-        <div class="window-switch" role="group" :aria-label="t('app.security.threat.timeWindowAria')">
-          <button v-for="opt in windowOptions" :key="opt.value" type="button" class="window-btn" :aria-pressed="windowHours === opt.value" @click="setWindow(opt.value)">{{ opt.label }}</button>
-        </div>
         <button type="button" class="btn" :title="t('app.security.threat.resetView')" @click="resetView">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/></svg>
           <span class="btn-text">{{ t('app.security.threat.resetView') }}</span>
@@ -1525,6 +1528,12 @@ onBeforeUnmount(() => {
 .hud-tl .title i { width: 22px; height: 1px; background: #3ad1ff; box-shadow: 0 0 6px #3ad1ff; }
 .hud-tl .readout { font-family: 'Share Tech Mono', ui-monospace, monospace; font-size: 11px; color: #56709f; letter-spacing: 0.06em; }
 .hud-tl .readout b { color: #8ea7d6; font-weight: 400; }
+
+.clock-hud { display: flex; gap: 8px; align-items: baseline; white-space: nowrap; }
+.clock-hud .clock-time { font: 12px/1 'Share Tech Mono', ui-monospace, monospace; color: #9fc6ef; font-variant-numeric: tabular-nums; letter-spacing: 0.04em; }
+.clock-hud .clock-date { color: #7d93b8; font-size: 11px; font-variant-numeric: tabular-nums; }
+.hud-window { display: inline-flex; border: 1px solid rgba(58, 209, 255, 0.25); border-radius: 4px; overflow: hidden; margin-left: 6px; }
+.hud-window .window-btn { padding: 4px 8px; }
 .hud-tr { position: absolute; top: 14px; right: 16px; z-index: 2; pointer-events: none; display: grid; gap: 7px; justify-items: end; font-size: 11px; color: #8ea7d6; }
 .hud-tr .row { display: flex; align-items: center; gap: 8px; }
 /* 国家命中热力图例：渐变背景由 threatShared.heatRampGradientCss 单源注入

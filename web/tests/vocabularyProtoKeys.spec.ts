@@ -46,6 +46,8 @@ const NON_VOCABULARY_RECORD_TABLES = [
   'src/utils/admin1Provinces.ts#COUNTRY_ALIAS',
   // 国家质心数据表：数据读取，主要读取点已过 hasOwn（另有字面量常量键 '中国'）
   'src/utils/countryCentroids.ts#COUNTRY_CENTROIDS',
+  // 市级 en 译名数据表：键=本文件字面量（非库值/后端枚举），读取自建归一循环
+  'src/utils/cityEnNames.ts#RAW',
   // 策略图标：键来自本地策略卡片白名单常量（utils/strategyLabels 的
   // STRATEGY_CARD_OPTIONS，非库值/后端枚举），读取点入参只有 card.value，
   // 无需 hasOwn（「自带 ?? 兜底」不构成豁免理由，见上）
