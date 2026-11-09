@@ -478,12 +478,6 @@ html[data-locale='en'] .el-form-item__label-wrap { width: auto !important; min-w
 html[data-locale='en'] .el-form-item__label { white-space: nowrap; }
 html[data-locale='en'] .form-tip-inline { overflow-wrap: anywhere; }
 
-/* 弹框内表单 label-top(用户裁定:弹框=简单键值对,label-top 消除偏右且观感好;
-   页面表单含嵌套控件组,保持同行布局——作用域切分) */
-html[data-locale='en'] .el-dialog .el-form .el-form-item { flex-direction: column; align-items: flex-start; }
-html[data-locale='en'] .el-dialog .el-form-item__label { text-align: left; }
-/* 弹框 tip 折到控件下方(弹框窄,top 同行必挤压) */
-html[data-locale='en'] .el-dialog .form-tip-inline { display: block; flex-basis: 100%; margin: 4px 0 0; line-height: 1.5; }
 /* descriptions 预览表 label 列不换行(整词单行,列宽自动让位) */
 .el-descriptions__label { white-space: nowrap; }
 /* 表单 label 自适应兜底（未显式 label-width 的表单） */
