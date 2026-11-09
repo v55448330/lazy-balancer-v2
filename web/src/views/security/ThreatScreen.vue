@@ -13,7 +13,7 @@
         <div class="readout">FLOW <b>{{ flowSampleLabel }}</b></div>
       </div>
       <!-- 主时钟:左下角大号 HUD,大屏视觉锚点 -->
-      <div class="main-clock hud" role="status">
+      <div class="main-clock" role="status">
         <time class="main-clock-time">{{ clockText }}</time>
         <span class="main-clock-date">{{ clockDate }}</span>
       </div>
@@ -1536,7 +1536,7 @@ onBeforeUnmount(() => {
 /* 主时钟:左下角大号(时间是大屏视觉锚点,audit136 用户裁定"更明显");
    pointer-events:auto(可选中/无拖拽吞没);无底板——HUD 文字直接呈现。 */
 .main-clock {
-  position: absolute; z-index: 3; left: 16px; bottom: 14px;
+  position: absolute; z-index: 3; left: 16px; bottom: 44px;
   pointer-events: auto;
   display: flex; gap: 12px; align-items: baseline; white-space: nowrap;
 }
@@ -1549,7 +1549,7 @@ onBeforeUnmount(() => {
 /* 时间窗选择:右下角紧凑按钮组(窗口控件惯例位,提示行上方);
    宽度自适应内容(无强制面板宽=无空白),pointer-events:auto 可点。 */
 .window-dock {
-  position: absolute; z-index: 3; right: 16px; bottom: 76px;
+  position: absolute; z-index: 3; right: 16px; bottom: 44px;
   pointer-events: auto;
   display: inline-flex;
   background: rgba(10, 25, 47, 0.72); border: 1px solid rgba(58, 209, 255, 0.25);
@@ -1569,7 +1569,7 @@ onBeforeUnmount(() => {
 .legend-arc.normal { background: linear-gradient(90deg, transparent, #38bdf8, #e0f7ff); box-shadow: 0 0 6px #38bdf8; }
 
 .back-btn { position: absolute; z-index: 4; bottom: 52px; left: 50%; transform: translateX(-50%); }
-.hint { position: absolute; z-index: 2; right: 16px; bottom: 44px; font-size: 11px; color: #56709f; pointer-events: none; }
+.hint { position: absolute; z-index: 2; right: 156px; bottom: 48px; font-size: 11px; color: #56709f; pointer-events: none; }
 
 .toasts { position: absolute; z-index: 7; top: 14px; left: 50%; transform: translateX(-50%); display: grid; gap: 6px; justify-items: center; pointer-events: none; width: min(460px, calc(100% - 32px)); }
 .toast {
