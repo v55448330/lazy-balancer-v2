@@ -32,6 +32,8 @@ const NON_VOCABULARY_RECORD_TABLES = [
   'src/views/Rules.vue#lockPopovers',
   // 任务族显示名映射:键=后端注册 zh 名(查表即返回,无外部键源)
   'src/views/settings/TaskMonitor.vue#TASK_NAME_KEYS',
+  // 触发类型显示映射:键=后端 zh 码(查表即译,无外部键源)
+  'src/views/security/SecurityEvents.vue#TRIGGER_TYPE_KEYS',
   'src/components/layout/AppLayout.vue#navLabels',
   // 省界数据表：键为归一化省名，写入循环的别名来自 Object.entries(COUNTRY_ALIAS)
   'src/utils/admin1Provinces.ts#ADMIN1_PROVINCES',
