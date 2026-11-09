@@ -1151,7 +1151,7 @@ export default {
     'cancelBtn': 'Cancel',
     'confirmDefaultBtn': 'Restart',
     'restartSlowWarning': 'The service is taking long to restart; refresh manually in a while',
-    'syncLbRules': 'LB rules',
+    'syncLbRules': 'Load balancer rules',
     'syncLbRulesTip': 'Rules, upstreams, path rules, certificate jobs',
     'syncReasonSuffix': ': {reason}',
     'syncReloadFailed': 'Config synced but the Caddy reload failed; the system will retry automatically',

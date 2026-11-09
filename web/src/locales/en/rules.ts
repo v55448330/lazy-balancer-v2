@@ -385,7 +385,7 @@ export default {
         advancedOptions: 'Advanced options',
         authGatewayAddrHint: 'http(s)://host:port; identity headers are injected automatically after authentication when forwarding to the backend.',
         authGatewayGetItem: 'All requests are verified by the auth gateway first (GET subrequests)',
-        authGatewayHint: 'All requests are verified by the external auth gateway first; unauthenticated requests get the gateway\'s response (usually a login redirect).',
+        authGatewayHint: 'Requests are verified by the external auth gateway; unauthenticated requests get its response (usually a login redirect).',
         authGatewayNtlmItem: 'When enabled together with NTLM compatibility, double authentication occurs: unauthenticated traffic is blocked by the gateway first, and NTLM negotiation only applies to traffic already verified by the gateway',
         authGatewayOnSubtitle: 'All requests are verified by the external auth gateway first.',
         authGatewayPathExclusiveItem: 'Mutually exclusive with direct-return/301 redirect path rules (validated on save)',

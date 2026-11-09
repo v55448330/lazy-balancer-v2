@@ -288,10 +288,11 @@ const onWeightChange = (rule: PathRule, index: number): void => {
 .custom-upstream-toggle { display: flex; align-items: center; gap: 8px; min-height: 24px; }
 .custom-upstream-title { color: var(--el-text-color-regular); font-size: 13px; }
 .custom-upstream-editor { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
-.upstream-grid { display: grid; grid-template-columns: minmax(0, 0.45fr) minmax(0, 1fr) minmax(0, 0.4fr) minmax(0, 0.4fr) auto; align-items: center; gap: 8px; }
+.upstream-grid { display: grid; grid-template-columns: minmax(0, 0.45fr) minmax(0, 1fr) minmax(0, 0.4fr) minmax(0, 0.4fr) 48px; align-items: center; gap: 8px; }
 .upstream-grid-header { color: var(--text-secondary); font-size: 12px; font-weight: 500; }
 .upstream-field { display: flex; min-width: 0; flex-direction: column; gap: 4px; }
 .upstream-field :deep(.el-input-number) { width: 100%; }
+.upstream-field :deep(.el-select) { width: 100%; }
 .mobile-field-label { display: none; color: var(--text-regular); font-size: 13px; font-weight: 500; }
 .add-upstream-button { align-self: flex-start; }
 .add-upstream-actions { display: flex; align-items: center; gap: 8px; }
