@@ -60,6 +60,9 @@ const isRecord = (value: unknown): value is Record<string, unknown> => typeof va
 
 const parseDateValue = (date: unknown): Date | null => {
   if (!date) return null
+  // Date 实例原生支持(2026-11 实证:防御分支曾把 Date 当未知对象返回 null,
+  // formatX(new Date()) 恒空串→导出文件名 lazy-balancer-backup--.lbbak)。
+  if (date instanceof Date) return isNaN(date.getTime()) ? null : date
   // 后端契约统一为 *string / JSONNullTime（RFC3339 字符串或 null），无 sql.Null* 包装对象；
   // 对未知对象形状保持宽容防御，一律按空处理
   if (isRecord(date) || typeof date !== 'string') return null

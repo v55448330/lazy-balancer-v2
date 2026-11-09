@@ -718,6 +718,9 @@ const exportBackup = async (): Promise<void> => {
     // 文件名带时分秒(2026-11 用户反馈默认名异常:原只到日期,同日多次导出重名
     // 覆盖;与后端 Content-Disposition currentTimeFilename 同口径
     // YYYYMMDD-HHMMSS)。日期/时间均走配置时区(formatDate 系),守卫契约同款。
+    // 文件名带时分秒(同日多次导出不再重名;配置时区口径与后端
+    // Content-Disposition currentTimeFilename 同构 YYYYMMDD-HHMMSS)。
+    // parseDateValue 现原生支持 Date 实例(曾防御性返回 null→backup--.lbbak)。
     const stampDate = formatDateShort(new Date())
     const stampTime = formatDate(new Date()).slice(11, 19).replace(/:/g, '')
     saveBlob(blob, `lazy-balancer-backup-${stampDate.replace(/-/g, '')}-${stampTime}.lbbak`)
@@ -1350,7 +1353,9 @@ const confirmImport = async (): Promise<void> => {
     // 后端 data.warnings(操作账户替换/会话吊销/ACME 悬挂/规则库元数据
     // 跳过)此前被丢弃——与冲突同级展示,非空时结果至少 warning 级
     const warnings = res.data?.warnings ?? []
-    // 完成统计走结构化弹框(与还原同款,2026-11 用户需求)
+    // 完成统计走结构化弹框(与还原同款,2026-11 用户需求);导入含系统数据分类
+    // 同样吊销全部会话——同还原挂起 401 处置,统计弹框不被过期框遮挡/踢回登录
+    suspendSessionExpiredHandling()
     restoreResult.value = {
       visible: true,
       kind: 'import',
