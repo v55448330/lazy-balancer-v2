@@ -475,6 +475,8 @@ html[data-locale='en'] .el-table .cell .el-button.is-link { white-space: normal;
    不翻转布局/不强制折行——中文布局零影响;右对齐行间微差为可接受取舍 */
 /* en 与 zh 同一套布局规则(固定 label 宽+整词换行规整化)——样式一致性由机制保证 */
 html[data-locale='en'] .el-form-item__label { word-break: keep-all; overflow-wrap: break-word; }
+/* en 与 zh 同构:label 两行整词换行规整化(行距 1.4,不裁剪不断词) */
+html[data-locale='en'] .el-form-item__label { white-space: normal; line-height: 1.4; }
 /* en tip:行内样式为默认(放得下单行紧贴控件);tip-nowrap 解除(长文案自然折行对齐) */
 html[data-locale='en'] .form-tip-inline,
 html[data-locale='en'] .tip-nowrap { white-space: normal; line-height: 1.5; }
@@ -489,8 +491,13 @@ html[data-locale='en'] .form-tip-inline { margin: 4px 0 4px 8px; }
    data-locale 由 i18n/index 写入;覆盖 EP 内联 label 宽,内容列自动扩展 */
 
 
-/* 表单 label 防断词(全语言):只禁断词,行高/对齐回归组件库原生(与中文一致) */
+/* 表单 label 防断词+可收缩换行(全语言):EP label 为 flex 容器,item 默认
+   min-width:auto 不收缩→长文案溢出单行;min-width:0 允许收缩到设计宽内,
+   文字整词换行(keep-all 禁词内断) */
 .el-form-item__label {
+  display: flex;
+  align-items: center;
+  min-width: 0;
   word-break: keep-all;
   overflow-wrap: break-word;
 }
