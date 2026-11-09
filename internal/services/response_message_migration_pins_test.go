@@ -50,3 +50,22 @@ func TestIP2RegionV6ProbeMissMessageDistinguishesFromCorruption(t *testing.T) {
 		t.Fatalf("v6 探针未命中文案缺少「非结构损坏」区分——与结构损坏同文案会误导排障方向")
 	}
 }
+
+// B1-P2：threat_screen rollup keep 分支必须判别「裁剪」vs「口径变更」——
+// 口径代际 bump（新口径计数更少）且原始行完整在场时，总览两表必须整写
+// （rewriteOverviewRollups 清除旧口径遗留行），不得只并迟到差量造成旧口径
+// 行滞留。行为钉测需 rollup 测试基建，先以结构断言防判别分支被移除。
+func TestThreatScreenKeepBranchDistinguishesTrimFromRecatalog(t *testing.T) {
+	raw, err := os.ReadFile("../handlers/security_threat_screen.go")
+	if err != nil {
+		t.Fatalf("读取 security_threat_screen.go: %v", err)
+	}
+	src := string(raw)
+	if !strings.Contains(src, "rawCount >= oldTotal") {
+		t.Fatalf("keep 分支缺少原始行数判别——口径 bump 与裁剪形态被混同处理会造成总览旧口径行滞留")
+	}
+	// 判别为口径变更时必须置 overviewFullRewrite（整写清除旧口径遗留行）
+	if !strings.Contains(src, "overviewFullRewrite = true") {
+		t.Fatalf("口径变更形态缺少 overview 整写开关")
+	}
+}

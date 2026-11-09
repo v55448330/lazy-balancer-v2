@@ -1554,7 +1554,7 @@ func (h *Handlers) OIDCSettingsUpdate(c *gin.Context) {
 		c.JSON(http.StatusConflict, models.APIResponse{
 			Code:    409,
 			Message: apimsg.Tf(c, "k_1b2637fe", len(migration.conflicts)), MessageKey: "k_1b2637fe",
-			Data:    gin.H{"conflicts": migration.conflicts},
+			Data: gin.H{"conflicts": migration.conflicts},
 		})
 		return
 	}

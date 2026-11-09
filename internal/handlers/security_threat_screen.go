@@ -1555,36 +1555,57 @@ func threatFixMinuteWithMode(tx *sql.Tx, m time.Time, fullRebuild bool) error {
 			}
 		}
 		if newTotal-lateTotal < oldTotal {
-			// 原始事件已被保留期/行帽裁剪：保留旧行（读入时已按当前
-			// 攻击口径过滤）并只叠加高水位（或回退留底的迟到基线）之后
-			// 的事件。无基线时无法区分迟到与已计入，不做增量叠加。
-			oldAgg, oldTarget, lerr := loadExistingRollup(tx, minuteStr)
-			if lerr != nil {
-				return lerr
+			// audit136-B1-P2:先判别「裁剪」vs「口径变更」——newTotal<oldTotal
+			// 有两种成因:(a)原始行被保留期/行帽裁剪(保留旧行正确);(b)口径
+			// 代际变更后新口径计数更少(原始行完整在场)。旧逻辑不区分,成因(b)
+			// 时主表按当前口径重读过滤已正确,但总览两表只并迟到差量→旧口径
+			// 行滞留(趋势/Top IP/攻击族对历史分钟按旧口径多计,直至保留期
+			// 裁剪才收敛)。判据:无谓词原始行数完整(>=oldTotal)即成因(b),
+			// 总览两表改走整写(rewriteOverviewRollups 清除旧口径遗留行,
+			// ovIP/ovRule 即上方 aggregateOverviewEvents 全量聚合),主表
+			// agg 亦为当前口径重读聚合——fall through 到整写路径即可。
+			var rawCount int
+			// 高水位(previousMaxID 增量基线)之后为迟到行(本轮差量已计),
+			// 判别「裁剪 vs 口径变更」必须剔除——否则「裁剪 N 行+迟到 N 行
+			// 恰好补回」会被误判为口径变更。
+			if rerr := tx.QueryRow(`SELECT COUNT(*) FROM security_events WHERE event_time >= ? AND event_time < ? AND id <= ?`,
+				m.Format("2006-01-02 15:04:05"), next.Format("2006-01-02 15:04:05"), previousMaxID).Scan(&rawCount); rerr != nil {
+				return rerr
 			}
-			kept := 0
-			for _, count := range oldAgg {
-				kept += count
-			}
-			for k, count := range lateAgg {
-				oldAgg[k] += count
-			}
-			for id, count := range lateTarget {
-				oldTarget[id] += count
-			}
-			agg, targetAgg = oldAgg, oldTarget
-			// 总览两表与主 rollup 同策略：保留旧值只并迟到差量。
-			overviewFullRewrite = false
-			if ovLateTotal > 0 {
-				if err := upsertOverviewIPRollup(tx, minuteStr, ovIPLate); err != nil {
-					return err
+			if rawCount >= oldTotal {
+				overviewFullRewrite = true
+			} else {
+				// 原始事件已被保留期/行帽裁剪：保留旧行（读入时已按当前
+				// 攻击口径过滤）并只叠加高水位（或回退留底的迟到基线）之后
+				// 的事件。无基线时无法区分迟到与已计入，不做增量叠加。
+				oldAgg, oldTarget, lerr := loadExistingRollup(tx, minuteStr)
+				if lerr != nil {
+					return lerr
 				}
-				if err := upsertOverviewRuleRollup(tx, minuteStr, ovRuleLate); err != nil {
-					return err
+				kept := 0
+				for _, count := range oldAgg {
+					kept += count
 				}
-			}
-			if lateTotal == 0 && ovLateTotal == 0 && kept == oldTotal {
-				return saveThreatRollupEventHighwater(tx, minuteStr, highwater)
+				for k, count := range lateAgg {
+					oldAgg[k] += count
+				}
+				for id, count := range lateTarget {
+					oldTarget[id] += count
+				}
+				agg, targetAgg = oldAgg, oldTarget
+				// 总览两表与主 rollup 同策略：保留旧值只并迟到差量。
+				overviewFullRewrite = false
+				if ovLateTotal > 0 {
+					if err := upsertOverviewIPRollup(tx, minuteStr, ovIPLate); err != nil {
+						return err
+					}
+					if err := upsertOverviewRuleRollup(tx, minuteStr, ovRuleLate); err != nil {
+						return err
+					}
+				}
+				if lateTotal == 0 && ovLateTotal == 0 && kept == oldTotal {
+					return saveThreatRollupEventHighwater(tx, minuteStr, highwater)
+				}
 			}
 		} else if newTotal == 0 && oldTotal == 0 {
 			return saveThreatRollupEventHighwater(tx, minuteStr, highwater)
