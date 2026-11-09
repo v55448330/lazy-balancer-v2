@@ -305,10 +305,10 @@
               <el-table-column :label="t('common.app.rules.common.protocol')" width="70" align="center">
                 <template #default="{ row }"><el-tag size="small" effect="plain" :type="row.protocol === 'https' || row.protocol === 'tls' ? 'warning' : 'primary'">{{ (row.protocol || 'http').toUpperCase() }}</el-tag></template>
               </el-table-column>
-              <el-table-column :label="t('common.app.rules.paths.weightPercent')" width="70" align="center">
+              <el-table-column :label="t('common.app.rules.paths.weightPercent')" width="86" align="center">
                 <template #default="{ row }">{{ weightPercent(target.upstreams ?? [], row) }}</template>
               </el-table-column>
-              <el-table-column prop="max_connections" :label="isTcp ? t('common.app.rules.wizard.maxConnections') : t('common.app.rules.wizard.maxRequests')" width="90" align="center">
+              <el-table-column prop="max_connections" :label="isTcp ? t('common.app.rules.wizard.maxConnections') : t('common.app.rules.wizard.maxRequests')" width="118" align="center">
                 <template #default="{ row }">{{ row.max_connections > 0 ? row.max_connections : t('common.app.rules.flow.unlimited') }}</template>
               </el-table-column>
               <el-table-column :label="t('common.app.rules.common.status')" width="110" align="center">

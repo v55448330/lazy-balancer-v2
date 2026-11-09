@@ -464,3 +464,11 @@ body .rule-lock-popper :is(.lock-stage, .lock-policy-group) { border-radius: 0; 
   background: #ecfeff;
   border-color: #a5f3fc;
 }
+
+/* i18n 英文防溢出守卫（全局）：英文较中文长 30-80%，以下规则消除常见挤压形态 */
+/* 表格列头：不允许断词（Upstr eam 形态），整词换行 */
+.el-table th.el-table__cell > .cell { word-break: keep-all; overflow-wrap: normal; }
+/* 表格操作列链接组允许换行，禁止撑破 */
+.el-table .cell .el-button.is-link { white-space: normal; }
+/* 表单 label 自适应兜底（未显式 label-width 的表单） */
+.el-form--label-right .el-form-item__label { word-break: keep-all; }
