@@ -470,6 +470,13 @@ body .rule-lock-popper :is(.lock-stage, .lock-policy-group) { border-radius: 0; 
 .el-table th.el-table__cell > .cell { word-break: keep-all; overflow-wrap: normal; }
 /* 表格操作列链接组:英文允许整词换行(链接长),中文保持单行 */
 html[data-locale='en'] .el-table .cell .el-button.is-link { white-space: normal; }
+
+/* en 表单 label 最小干预:收缩到内容宽(释放最大空间给控件列),
+   不翻转布局/不强制折行——中文布局零影响;右对齐行间微差为可接受取舍 */
+html[data-locale='en'] .el-form-item__label,
+html[data-locale='en'] .el-form-item__label-wrap { width: auto !important; min-width: 0 !important; max-width: 100%; }
+html[data-locale='en'] .el-form-item__label { white-space: nowrap; }
+html[data-locale='en'] .form-tip-inline { overflow-wrap: anywhere; }
 /* descriptions 预览表 label 列不换行(整词单行,列宽自动让位) */
 .el-descriptions__label { white-space: nowrap; }
 /* 表单 label 自适应兜底（未显式 label-width 的表单） */
@@ -477,20 +484,4 @@ html[data-locale='en'] .el-table .cell .el-button.is-link { white-space: normal;
 
 /* 英文模式表单 label 自适应(中文保持设计固定宽):
    data-locale 由 i18n/index 写入;覆盖 EP 内联 label 宽,内容列自动扩展 */
-/* en 表单整体切换 label-top 布局(英文 label 长,同行布局必然挤压):
-   label 上方左对齐,控件独占整行——弹框/卡片统一观感,彻底消除偏右与错位 */
-html[data-locale='en'] .el-form .el-form-item { flex-direction: column; align-items: flex-start; }
-html[data-locale='en'] .el-form-item__label,
-html[data-locale='en'] .el-form-item__label-wrap { width: auto !important; min-width: 0 !important; max-width: 100%; }
-html[data-locale='en'] .el-form-item__label { justify-content: flex-start; text-align: left; white-space: nowrap; }
-/* en 行内短 tip 升级为块级:强制折出新行(flex-basis 100%——tip 是
-   .el-form-item__content flex 容器的 item,仅 display:block 仍会横排在控件
-   右侧并被容器裁切),长文案整行换行不再溢出 */
-html[data-locale='en'] .form-tip-inline {
-  display: block;
-  flex-basis: 100%;
-  margin: 4px 0 0;
-  line-height: 1.5;
-  white-space: normal;
-  vertical-align: top;
-}
+
