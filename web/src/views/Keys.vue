@@ -266,7 +266,7 @@
       <template #header>
         <DialogHeader :icon="Key" :title="t('common.app.views.keys.createKeyTitle')" :subtitle="t('common.app.views.keys.createKeySubtitle')" tone="warning" />
       </template>
-      <el-form label-width="auto" :disabled="creating">
+      <el-form label-width="110px" :disabled="creating">
         <el-form-item :label="t('common.app.views.keys.keyName')" :error="createNameError">
           <el-input v-model="createForm.name" maxlength="100" show-word-limit :placeholder="t('common.app.views.keys.enterKeyName')" @input="createNameError = ''" />
         </el-form-item>
@@ -326,7 +326,7 @@
       <template #header>
         <DialogHeader :icon="Setting" :title="t('common.app.views.keys.featureConfig')" :subtitle="t('common.app.views.keys.featureTargetSubtitle', { name: featureTarget?.name || '' })" />
       </template>
-      <el-form label-width="auto" :disabled="featureSaving">
+      <el-form label-width="110px" :disabled="featureSaving">
         <el-divider content-position="left" class="section-divider">{{ t('common.app.views.keys.permSection') }}</el-divider>
         <el-form-item :label="t('common.app.views.keys.mcpFeature')">
           <el-switch v-model="featureForm.mcp_enabled" />

@@ -108,7 +108,7 @@
         <el-table-column :label="t('app.security.policies.table.updatedBy')" width="110" align="center">
           <template #default="{ row }">{{ getUpdaterName(row.updated_by) }}</template>
         </el-table-column>
-        <el-table-column v-if="!isReadOnly" :label="t('app.security.policies.table.actions')" width="168" fixed="right">
+        <el-table-column v-if="!isReadOnly" :label="t('app.security.policies.table.actions')" min-width="230" fixed="right">
           <template #default="{ row }">
             <el-button size="small" link type="primary" @click="openDialog(row as PolicySummary)">{{ policyTypeOf(row as PolicySummary) === 'mixed' ? t('app.security.policies.action.view') : t('app.security.policies.action.edit') }}</el-button>
             <el-button v-if="policyTypeOf(row as PolicySummary) !== 'mixed'" size="small" link type="primary" :disabled="securityBindingsLoading || securityBindingsFailed || bindRulesOpening" :title="securityBindingsLoading ? t('app.security.policies.bind.loadingTitle') : securityBindingsFailed ? t('app.security.policies.bind.failedTitle') : ''" @click="openBindRulesDialog(row as PolicySummary)">{{ t('app.security.policies.action.bindRules') }}</el-button>
@@ -226,7 +226,7 @@
       <div class="wizard-content">
         <!-- Step 0: 基础信息 -->
         <div v-show="currentStep === WIZARD_STEP.BASIC" class="step-content">
-          <el-form :model="form" label-width="auto" :disabled="formFrozen">
+          <el-form :model="form" label-width="100px" :disabled="formFrozen">
             <!-- 策略类型：新建时选择（决定步骤条与表单裁剪）；编辑时固定展示。
                  与 el-form-item label 完全同构（用户裁定）；radio 不用 el-radio-group
                  包组——组容器 DIV 会被 EP 注册为表单输入 id 触发 Firefox label-for 告警，
@@ -267,7 +267,7 @@
               <span v-else class="stage-projection-empty">{{ t('app.security.policies.bind.appliesTo', { n: boundRules.length }) }}</span>
             </div>
           </div>
-          <el-form :model="form" label-width="auto" :disabled="formFrozen">
+          <el-form :model="form" label-width="100px" :disabled="formFrozen">
             <el-form-item :label="t('app.security.policies.stage0.trustIpLabel')">
               <div class="acl-inline-row">
                 <el-select v-model="ipWhitelist" multiple filterable allow-create default-first-option :placeholder="t('app.security.policies.common.ipEntryPlaceholder')" class="acl-inline-select" />
@@ -308,7 +308,7 @@
               <span v-else class="stage-projection-empty">{{ t('app.security.policies.bind.appliesTo', { n: boundRules.length }) }}</span>
             </div>
           </div>
-          <el-form :model="form" label-width="auto" :disabled="formFrozen">
+          <el-form :model="form" label-width="100px" :disabled="formFrozen">
             <!-- 原生表单行（2026-10-11 用户裁定：对齐统一走 el-form-item；Firefox
                  label-for 控制台告警为 EP 上游已知形态，非用户可见） -->
             <el-form-item :label="t('app.security.policies.waf.modeLabel')" for="radio-waf--10">
@@ -570,7 +570,7 @@
             </div>
           </div>
           <el-divider content-position="left" class="acl-divider">{{ t('app.security.policies.acl.divider') }}</el-divider>
-          <el-form :model="form" label-width="auto" :disabled="formFrozen">
+          <el-form :model="form" label-width="100px" :disabled="formFrozen">
             <el-form-item :label="t('app.security.policies.common.enableLabel')">
               <el-switch v-model="form.ip_acl_enabled" />
             </el-form-item>
@@ -611,7 +611,7 @@
             </template>
           </el-form>
           <el-divider content-position="left" class="acl-divider">{{ t('app.security.policies.geo.divider') }}</el-divider>
-          <el-form :model="form" label-width="auto" :disabled="formFrozen">
+          <el-form :model="form" label-width="100px" :disabled="formFrozen">
             <el-form-item :label="t('app.security.policies.common.enableLabel')">
               <!-- 开关即生效状态：关闭提交 geoip_mode='off'（后端零发射），名单
                    保留不清单（重开即复用）；从 off 重开时控制模式回落 deny。 -->
@@ -678,7 +678,7 @@
               <span class="stage-projection-empty">{{ boundRules.length > 0 ? t('app.security.policies.bind.appliesTo', { n: boundRules.length }) : t('app.security.policies.bind.none') }}</span>
             </div>
           </div>
-          <el-form :model="form" label-width="auto" :disabled="formFrozen">
+          <el-form :model="form" label-width="100px" :disabled="formFrozen">
             <el-form-item :label="t('app.security.policies.common.enableLabel')">
               <el-switch v-model="form.rate_limit_enabled" />
             </el-form-item>
@@ -696,7 +696,7 @@
 
         <!-- Step 4: 关联规则 -->
         <div v-show="currentStep === WIZARD_STEP.BINDINGS" class="step-content">
-          <el-form :model="form" label-width="auto" :disabled="formFrozen">
+          <el-form :model="form" label-width="100px" :disabled="formFrozen">
             <el-form-item :label="t('app.security.policies.bind.boundLabel')">
               <div class="rule-bind-field">
                 <div class="rule-picker-trigger" role="button" tabindex="0" :class="{ 'is-locked': isReadOnly }" @click="!isReadOnly && openRulePicker()" @keydown.enter.prevent="activateOnce($event, () => !isReadOnly && openRulePicker())" @keydown.space.prevent="activateOnce($event, () => !isReadOnly && openRulePicker())">
@@ -752,7 +752,7 @@
               <span v-if="boundRules.length > 0" class="stage-projection-empty">{{ t('app.security.policies.bind.relatedCount', { n: boundRules.length }) }}</span>
             </div>
           </div>
-          <el-form :model="form" label-width="auto" :disabled="formFrozen">
+          <el-form :model="form" label-width="100px" :disabled="formFrozen">
             <el-form-item :label="t('app.security.policies.bp.pageLabel')">
               <el-select v-model="form.block_page_id" :placeholder="t('app.security.policies.bp.pagePlaceholder')" style="width: 100%">
                 <el-option :value="0" :label="editorPolicyType === 'stage2' ? t('app.security.policies.bp.noPageStage2') : t('app.security.policies.bp.noPageDefault')" />
@@ -933,7 +933,7 @@
         <DialogHeader :icon="Document" :title="t('app.security.policies.extract.title')" :subtitle="t('app.security.policies.extract.subtitle')" />
       </template>
       <div class="info-note-bar"><span class="info-note-desc">{{ t('app.security.policies.extract.note') }}</span></div>
-      <el-form label-width="auto" @submit.prevent>
+      <el-form label-width="80px" @submit.prevent>
         <el-form-item :label="t('app.security.policies.extract.sourceLabel')" for="extract-source-static">
           <input type="text" id="extract-source-static" aria-hidden="true" tabindex="-1" autocomplete="off" style="display:none">
           <span class="extract-source">{{ extractSide === 'acl' ? aclListLabel : t('app.security.policies.stage0.trustIpLabel') }}{{ t('app.security.policies.extract.inlineCount', { n: extractSourceEntries.length }) }}</span>
@@ -3723,6 +3723,8 @@ onMounted(async () => {
 }
 
 .wizard-steps { margin-bottom: 24px; }
+.wizard-steps :deep(.el-step__title) { white-space: nowrap; font-size: 13px; }
+html[data-locale='en'] .wizard-steps :deep(.el-step__title) { font-size: 12px; }
 .wizard-steps.is-clickable :deep(.el-step) { cursor: pointer; }
 
 .acl-divider { margin: 4px 0 16px; }

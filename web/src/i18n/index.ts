@@ -57,7 +57,7 @@ const STORAGE_KEY = 'lb_locale'
 export function detectLocale(): Locale {
   try {
     const saved = localStorage.getItem(STORAGE_KEY)
-    if (saved === 'zh-CN' || saved === 'en') return saved
+    if (saved === 'zh-CN' || saved === 'zh' || saved === 'en') return saved === 'zh' ? 'zh-CN' : saved
   } catch {
     return 'zh-CN' // 非 DOM 环境(测试进程)安全回落
   }
@@ -69,6 +69,11 @@ export function detectLocale(): Locale {
 export function setLocale(l: Locale): void {
   localStorage.setItem(STORAGE_KEY, l)
   window.location.reload()
+}
+
+// 语言标记到 html(供 CSS 按语言覆盖布局:英文 label auto、中文固定宽)
+if (typeof document !== 'undefined' && document.documentElement) {
+  document.documentElement.dataset.locale = detectLocale()
 }
 
 export const i18n = createI18n({

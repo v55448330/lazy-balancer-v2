@@ -472,3 +472,9 @@ body .rule-lock-popper :is(.lock-stage, .lock-policy-group) { border-radius: 0; 
 .el-table .cell .el-button.is-link { white-space: normal; }
 /* 表单 label 自适应兜底（未显式 label-width 的表单） */
 .el-form--label-right .el-form-item__label { word-break: keep-all; }
+
+/* 英文模式表单 label 自适应(中文保持设计固定宽):
+   data-locale 由 i18n/index 写入;覆盖 EP 内联 label 宽,内容列自动扩展 */
+html[data-locale='en'] .el-form-item__label,
+html[data-locale='en'] .el-form-item__label-wrap { width: auto !important; }
+html[data-locale='en'] .el-form-item__label { white-space: nowrap; }

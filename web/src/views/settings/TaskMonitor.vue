@@ -136,11 +136,11 @@
           <template #default="{ row }">
             <el-tooltip :disabled="!row.description" placement="top" :offset="8" :show-after="150" :show-arrow="false" popper-class="tm-name-tip">
               <template #content>
-                <div class="tm-tip-title">{{ row.name }}</div>
+                <div class="tm-tip-title">{{ taskDisplayName(row.name) }}</div>
                 <div v-if="row.cadence" class="tm-tip-cadence">{{ t('app.settings.taskMonitor.cadencePrefix') }}{{ row.cadence }}</div>
                 <div class="tm-tip-desc">{{ row.description }}</div>
               </template>
-              <div class="tm-task-name">{{ row.name }}</div>
+              <div class="tm-task-name">{{ taskDisplayName(row.name) }}</div>
             </el-tooltip>
           </template>
         </el-table-column>
@@ -614,6 +614,46 @@ const fetchCertQueue = async (signal?: AbortSignal): Promise<CertQueueRead> => {
 // ===== 概览统计 =====
 // 任务族只数引擎族：cert-job 动态行是逐张证书的签发工作项（上限 100），
 // 计入会让计数随签发记录在 ~30 → ~130 之间漂移（同排 24h 计数已排除它们）。
+
+// i18n:任务族显示名映射(固定任务族集合;动态命名如"ACME 签发 · 域名"保留原文,
+// 其中"ACME 签发"前缀经词条翻译)。zh 名=后端注册名(映射键)。
+const TASK_NAME_KEYS: Record<string, string> = {
+  '自动封禁': 'autoban',
+  '爬虫地址更新': 'crawlerUpdate',
+  'CRS 规则库更新': 'crsUpdate',
+  'IP2Region 地理库更新': 'ip2regionUpdate',
+  '威胁情报库更新': 'threatDbUpdate',
+  '威胁大屏 rollup 预热': 'rollupWarmup',
+  '证书签发': 'certIssue',
+  '手动证书到期巡检': 'manualCertSweep',
+  '证书状态对账': 'certReconcile',
+  '证书续期扫描': 'certRenewScan',
+  'CA 等待补扫': 'caRescan',
+  '自动备份': 'autoBackup',
+  '集群同步': 'clusterSync',
+  'API Key 使用时间落库': 'apiKeyUsagePersist',
+  '审计日志保留清理': 'auditRetention',
+  'Caddy 重启自愈监听': 'caddyWatch',
+  '配置漂移看门狗': 'driftWatchdog',
+  '日志清理与轮转': 'logRotate',
+  '指标采集': 'metricsCollect',
+  '指标历史清理': 'metricsRetention',
+  '孤儿规则指标清理': 'orphanMetrics',
+  '限流桶清扫': 'rateLimitSweep',
+  '运行日志阈值刷新': 'logThresholdRefresh',
+  '时区刷新': 'tzRefresh',
+  '安全事件采集': 'secEventCollect',
+  '安全事件保留清理': 'secEventRetention',
+  '系统配置载入': 'configLoad',
+}
+const taskDisplayName = (name: string): string => {
+  const k = TASK_NAME_KEYS[name]
+  if (k) return t(`common.app.taskNames.${k}`)
+  const m = name.match(/^ACME 签发 · (.+)$/)
+  if (m) return `${t('common.app.taskNames.acmeIssuePrefix')} · ${m[1]}`
+  return name
+}
+
 const taskFamilyCount = computed(() => tasks.value.filter(t => !isCertJobRow(t.id)).length)
 // 运行中=当前在途工作项：cert-job 的 queued/pending/waiting_ca 也是在途工作
 // （后端将非终态一律映射 running），与引擎族同列可比，故不排除。

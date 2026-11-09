@@ -266,7 +266,7 @@
         <DialogHeader :icon="Filter" :title="editingRuleId ? (isReadOnly ? t('common.app.views.secRules.ruleDialog.viewCustomRule') : t('common.app.views.secRules.ruleDialog.editCustomRule')) : t('common.app.views.secRules.ruleDialog.newCustomRule')"
           :subtitle="t('common.app.views.secRules.ruleDialog.subtitle')" tone="danger" />
       </template>
-      <el-form :model="ruleForm" label-width="auto" label-position="right" :disabled="isReadOnly || savingRule">
+      <el-form :model="ruleForm" label-width="80px" label-position="right" :disabled="isReadOnly || savingRule">
         <!-- 值与后端写侧门同源（internal/handlers/security.go：名称 ≤100 rune、
              描述 ≤500 rune）——超长只能等 400 的旧形态没有字段级定位 -->
         <el-form-item :label="t('common.app.views.secRules.common.name')" required>
@@ -404,7 +404,7 @@
         <span class="info-note-desc">{{ t('common.app.views.secRules.ipDialog.entriesLoadFailBanner') }}</span>
         <el-button size="small" type="primary" plain @click="reloadIpListDetail">{{ t('common.app.views.secRules.common.reload') }}</el-button>
       </div>
-      <el-form :model="ipListForm" label-width="auto" label-position="right" v-loading="loadingIpListDetail" :disabled="savingIpList">
+      <el-form :model="ipListForm" label-width="80px" label-position="right" v-loading="loadingIpListDetail" :disabled="savingIpList">
         <!-- 自动封禁预置名单名称/分类/描述为内置字段（后端 400 守卫同口径），
              前端直接禁用灰态——禁止修改的字段不可输入，而非提交后报 400 -->
         <el-form-item :label="t('common.app.views.secRules.common.name')" required>

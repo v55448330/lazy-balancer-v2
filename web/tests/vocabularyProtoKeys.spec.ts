@@ -30,6 +30,8 @@ const NON_VOCABULARY_RECORD_TABLES = [
   'src/utils/escape.ts#escapeHtmlTable',
   // 表格锁弹框登记表：键为规则 caddy_id，值是组件实例，不用于标签展示
   'src/views/Rules.vue#lockPopovers',
+  // 任务族显示名映射:键=后端注册 zh 名(查表即返回,无外部键源)
+  'src/views/settings/TaskMonitor.vue#TASK_NAME_KEYS',
   'src/components/layout/AppLayout.vue#navLabels',
   // 省界数据表：键为归一化省名，写入循环的别名来自 Object.entries(COUNTRY_ALIAS)
   'src/utils/admin1Provinces.ts#ADMIN1_PROVINCES',

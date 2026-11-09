@@ -79,7 +79,7 @@
         <el-input v-model="searchQuery" :placeholder="t('common.app.rules.list.searchPlaceholder')" clearable :prefix-icon="Search" class="search-input" />
       </div>
       <el-table :data="pagedRules" row-key="caddy_id" v-loading="loading" stripe class="rules-table" :header-cell-style="{ background: '#f9fafb' }" empty-text="">
-        <el-table-column prop="name" :label="t('common.app.rules.common.ruleName')" min-width="140">
+        <el-table-column prop="name" :label="t('common.app.rules.common.ruleName')" min-width="130">
           <template #default="{ row }">
             <div class="rule-name-cell">
               <!-- 锁 hover 摘要（鼠标悬停）：按阶段 0/1/2/3 分组的紧凑摘要；
@@ -158,7 +158,7 @@
             </div>
           </template>
         </el-table-column>
-        <el-table-column prop="domain" :label="t('common.app.rules.common.domain')" min-width="210" show-overflow-tooltip>
+        <el-table-column prop="domain" :label="t('common.app.rules.common.domain')" min-width="148" show-overflow-tooltip>
           <template #default="{ row }">
             <span class="domain">{{ row.domain || '-' }}</span>
           </template>
@@ -170,7 +170,7 @@
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column :label="t('common.app.rules.common.lbPolicy')" min-width="101" align="center" show-overflow-tooltip>
+        <el-table-column :label="t('common.app.rules.common.lbPolicy')" :width="isEn ? 101 : 101" align="center" show-overflow-tooltip>
           <template #default="{ row }">
             <span>{{ getStrategyLabel(row.strategy) }}</span>
           </template>
@@ -180,7 +180,7 @@
             <span class="port">{{ row.listen_port }}</span>
           </template>
         </el-table-column>
-        <el-table-column :label="t('common.app.rules.common.upstream')" width="92" align="center">
+        <el-table-column :label="t('common.app.rules.common.upstream')" min-width="88" align="center">
           <template #default="{ row }">
             <el-tag :type="row.dynamic_dns ? 'primary' : 'success'" size="small" effect="plain">
               {{ row.dynamic_dns ? t('common.app.rules.list.dnsDynamic') : t('common.app.rules.list.dnsStatic') }}
@@ -248,7 +248,7 @@
             <span v-else class="text-secondary">-</span>
           </template>
         </el-table-column>
-        <el-table-column :label="t('common.app.rules.common.health')" width="86" align="center">
+        <el-table-column :label="t('common.app.rules.common.health')" :width="isEn ? 86 : 64" align="center">
           <template #default="{ row }">
             <!-- 零启用上游的启用态规则：渲染层跳过（不发路由/不注册 logger），
                  与「已禁用」的「-」同形会让用户无法从列表区分「未发布」。 -->
@@ -318,7 +318,7 @@
             <span v-else class="text-secondary">-</span>
           </template>
         </el-table-column>
-        <el-table-column :label="t('common.app.rules.list.updatedBy')" width="104" align="center" show-overflow-tooltip>
+        <el-table-column :label="t('common.app.rules.list.updatedBy')" :width="isEn ? 104 : 66" align="center" show-overflow-tooltip>
           <template #default="{ row }">
             <span class="updater-name">{{ getUpdaterName(row.updated_by || row.created_by) }}</span>
           </template>
@@ -328,7 +328,7 @@
             <span class="updated-time">{{ formatUpdatedTime(row.updated_at) }}</span>
           </template>
         </el-table-column>
-        <el-table-column :label="t('common.app.rules.common.status')" width="110" align="center">
+        <el-table-column :label="t('common.app.rules.common.status')" :width="isEn ? 110 : 64" align="center">
           <template #default="{ row }">
             <el-tooltip
               :disabled="!isReadOnly && !isCertJobActive(certJobMap[row.caddy_id]?.status) && !ruleTogglePending[row.caddy_id]"
@@ -347,7 +347,7 @@
             </el-tooltip>
           </template>
         </el-table-column>
-        <el-table-column :label="t('common.app.rules.common.actions')" width="250" fixed="right" align="center">
+        <el-table-column :label="t('common.app.rules.common.actions')" :width="isEn ? 250 : 172" fixed="right" align="center">
           <template #default="{ row }">
             <div class="operation-buttons">
               <!-- 只读态（从节点/非管理员）全部渲染但禁用，tooltip 显示原因（authStore.readOnlyMessage 同构） -->
@@ -428,7 +428,7 @@
       <div class="wizard-content">
         <!-- Step 0: 基本配置 -->
         <div v-show="currentStep === WIZARD_STEP.BASIC" class="step-content">
-          <el-form :model="wizardForm" label-width="auto" :disabled="saving">
+          <el-form :model="wizardForm" label-width="100px" :disabled="saving">
             <el-form-item :label="t('common.app.rules.common.ruleName')" required>
               <el-input v-model="wizardForm.name" :placeholder="t('common.app.rules.wizard.nameExample')" maxlength="100" show-word-limit />
             </el-form-item>
@@ -484,7 +484,7 @@
             <span class="info-note-desc">{{ t('common.app.rules.wizard.certDetailManualBlockNote') }}</span>
             <el-button size="small" type="primary" plain :loading="tlsDetailLoading" @click="retryTlsDetail">{{ t('common.app.rules.cfg.reload') }}</el-button>
           </div>
-          <el-form :model="wizardForm" label-width="auto" v-if="wizardForm.enable_tls && wizardForm.protocol === 'http'" :disabled="saving">
+          <el-form :model="wizardForm" label-width="100px" v-if="wizardForm.enable_tls && wizardForm.protocol === 'http'" :disabled="saving">
             <el-form-item :label="t('common.app.rules.wizard.certSource')" for="radio---1">
               <input type="text" id="radio---1" aria-hidden="true" tabindex="-1" autocomplete="off" style="display:none">
               <el-radio-group v-model="wizardForm.tls_source" :disabled="isCurrentRuleLocked" :aria-label="t('common.app.rules.wizard.certSource')">
@@ -568,7 +568,7 @@
 
         <!-- Step 2: 上游服务器 -->
         <div v-show="currentStep === WIZARD_STEP.UPSTREAMS" class="step-content">
-          <el-form :model="wizardForm" label-width="auto" :disabled="saving">
+          <el-form :model="wizardForm" label-width="100px" :disabled="saving">
             <div class="upstream-header">
               <span class="section-title">{{ t('common.app.rules.wizard.upstreamListTitle') }}</span>
               <el-button size="small" type="primary" @click="addUpstream" :disabled="wizardForm.upstreams.length >= MAX_UPSTREAM_ROWS || (wizardForm.dynamic_dns && wizardForm.upstreams.length >= 1)">
@@ -862,7 +862,7 @@
 
         <!-- Step 4: 高级选项 -->
         <div v-show="currentStep === WIZARD_STEP.ADVANCED" class="step-content">
-          <el-form :model="wizardForm" label-width="auto" :disabled="saving">
+          <el-form :model="wizardForm" label-width="100px" :disabled="saving">
             <template v-if="wizardForm.protocol === 'http'">
               <el-divider content-position="left" class="compact-divider">{{ t('common.app.rules.wizard.dnsServers') }}</el-divider>
 
@@ -1428,7 +1428,8 @@ import { useClampedPagination } from '@/composables/useClampedPagination'
 import { usePollingErrorState } from '@/composables/usePollingErrorState'
 import { useI18n } from 'vue-i18n'
 
-const { t } = useI18n()
+const { t, locale } = useI18n()
+const isEn = computed(() => locale.value === 'en')
 
 interface RuleForm extends Omit<CreateRuleRequest, 'dns_family' | 'upstreams' | 'acme_config_id' | 'ca_provider_id' | 'compress_types' | 'host_header'> {
   dns_family: string[]
