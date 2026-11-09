@@ -563,6 +563,7 @@ import { normalizeTrafficSampleN } from '@/utils/threatFlowRules'
 import { shouldToastQuietPollError } from '@/utils/pollErrorToast'
 import { displaySecurityEventsRetentionDays, displaySecurityEventsRowCap, displayThreatScreenMode, securityEventsWritePayload, threatScreenWritePayload } from '@/utils/configValues'
 import { CHINA_SITE_CHOICES, COUNTRY_SITE_CHOICES, coordsForSiteLocation, nearestSiteLocation } from '@/utils/siteLocation'
+import { useCountryNamesCn } from '@/composables/useCountryNamesCn'
 import { BACKUP_SECTIONS, importConfirmMessage, normalizeBackupSectionKeys } from '@/utils/backupSections'
 import { createImportPreviewSession, importPreviewFingerprint, invalidateImportPreviews, type ImportPreviewSession } from '@/utils/importPreview'
 import { createLatestReadSession } from '@/utils/viewAsyncState'
@@ -1528,12 +1529,24 @@ const formFrozen = computed(() => isReadOnly.value || saving.value)
 const siteLocationKey = ref('')
 
 // 站点位置下拉选项按 locale 映射(2026-11 用户需求):en 下中国省名走 provinces
-// 词条(裸键 fallback 原名,IP 库采样条目已含广州/武汉等),国家名本身英文直用;
+// 词条(裸键 fallback 原名);国家名源表 COUNTRY_CENTROIDS 键为中文国名,en 下经
+// country_names_cn 反查英文名(未收录回退原样);zh 下中文键原样展示。
 // value 保持 item.key 不变,提交语义零改动。
+const zhCountryNames = useCountryNamesCn()
+const cnToEnCountry = computed<Record<string, string>>(() => {
+  const inv: Record<string, string> = {}
+  for (const [en, cn] of Object.entries(zhCountryNames.value)) {
+    if (!(cn in inv)) inv[cn] = en
+  }
+  return inv
+})
 const siteChoiceLabel = (item: { key: string; label: string }): string => {
-  if (locale.value !== 'en' || !item.key.startsWith('cn:')) return item.label
-  const mapped = t(`app.security.policies.geo.provinces.${item.label}`)
-  return mapped.includes('app.security.policies') ? item.label : mapped
+  if (locale.value !== 'en') return item.label
+  if (item.key.startsWith('cn:')) {
+    const mapped = t(`app.security.policies.geo.provinces.${item.label}`)
+    return mapped.includes('app.security.policies') ? item.label : mapped
+  }
+  return cnToEnCountry.value[item.label] || item.label
 }
 const applySiteLocation = (key: string): void => {
   if (!key) {
