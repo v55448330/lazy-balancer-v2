@@ -52,7 +52,7 @@
             <AccessibleLink type="primary" @click="openDialog(row as PolicySummary)">{{ row.name }}</AccessibleLink>
           </template>
         </el-table-column>
-        <el-table-column :label="t('app.security.policies.table.relatedRules')" width="100" align="center">
+        <el-table-column :label="t('app.security.policies.table.relatedRules')" width="112" align="center">
           <template #default="{ row }">
             <!-- 关联规则 drill-down 必须键盘可达：hover-only tooltip 里的 div 既开不了
                  也点不到，而 role="button" 的 span 没有任何激活行为=假按钮。改用

@@ -111,7 +111,7 @@
       <el-table-column v-if="showLastSeenColumn" :label="t('common.app.views.cluster.colLastSeen')" min-width="130">
         <template #default="{ row }">{{ formatDate(row.last_seen) || '-' }}</template>
       </el-table-column>
-      <el-table-column :label="t('common.app.views.cluster.colActions')" width="240" :fixed="operationColumnFixed" align="center">
+      <el-table-column :label="t('common.app.views.cluster.colActions')" width="300" :fixed="operationColumnFixed" align="center">
         <template #default="{ row }">
           <template v-if="row.status === 'pending' || !row.is_approved">
             <el-button link type="primary" size="small" :loading="pendingNodeId === row.id" :disabled="readOnly || pendingNodeId !== null" @click="$emit('approve', row as ClusterNodeWithSyncError)">{{ t('common.app.views.cluster.approve') }}</el-button>

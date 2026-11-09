@@ -48,7 +48,7 @@
           </template>
         </el-table-column>
         <el-table-column prop="description" :label="t('app.security.blockPages.table.description')" min-width="180" show-overflow-tooltip />
-        <el-table-column :label="t('app.security.blockPages.table.ruleRefs')" width="90" align="center">
+        <el-table-column :label="t('app.security.blockPages.table.ruleRefs')" width="120" align="center">
           <template #default="{ row }">
             <el-tooltip :disabled="!row.rule_ref_count" :content="t('app.security.blockPages.table.ruleRefsTip')" placement="top">
               <span>{{ row.rule_ref_count ?? 0 }}</span>

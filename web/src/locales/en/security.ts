@@ -214,7 +214,7 @@ export default {
     "bodyAnomaly": "Request body anomaly",
     "bodyAnomalyHint": "Request body parse failure (id 11)",
     "wafCrsHint": "Full OWASP CRS rule set (9xxxxx)",
-    "wafCustom": "WAF · Custom",
+    "wafCustom": "WAF·Custom",
     "wafCustomHint": "Custom rule library (including AND chains, OR branches, and legacy composite rules)",
     "policyPlaceholder": "Policy",
     "ipPlaceholder": "IP address",

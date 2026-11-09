@@ -473,13 +473,10 @@ html[data-locale='en'] .el-table .cell .el-button.is-link { white-space: normal;
 
 /* en 表单 label 最小干预:收缩到内容宽(释放最大空间给控件列),
    不翻转布局/不强制折行——中文布局零影响;右对齐行间微差为可接受取舍 */
-html[data-locale='en'] .el-form-item__label,
-html[data-locale='en'] .el-form-item__label-wrap { width: auto !important; min-width: 0 !important; max-width: 100%; }
-/* en label:过长时整词换行到第二行(规整,不断词不裁剪) */
+/* en 与 zh 同一套布局规则(固定 label 宽+整词换行规整化)——样式一致性由机制保证 */
 html[data-locale='en'] .el-form-item__label { white-space: normal; word-break: keep-all; overflow-wrap: break-word; line-height: 1.4; }
-/* en tip:行内放不下自然折行(flex-wrap),折行后与控件列对齐,行高规整 */
-html[data-locale='en'] .form-tip-inline { margin: 0 0 0 8px; line-height: 1.5; overflow-wrap: anywhere; white-space: normal; }
-/* 折行形态统一:tip 独占 flex 行时左缘与控件对齐(去 margin-left 偏移) */
+/* en tip 折行间距(贴控件→8px) */
+html[data-locale='en'] .form-tip-inline { margin: 8px 0 0 8px; line-height: 1.5; overflow-wrap: anywhere; white-space: normal; }
 html[data-locale='en'] .form-tip-inline:not(:first-child) { margin-left: 0; }
 
 /* descriptions 预览表 label 列不换行(整词单行,列宽自动让位) */
