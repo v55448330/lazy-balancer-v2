@@ -17,8 +17,7 @@
           :loading="settingsLoading"
           @change="(v: string | number | boolean) => handleSwitchChange(item.key, v)"
         />
-        <span class="form-tip-inline switch-tip-nowrap" :title="item.tip">{{ item.tip }}</span>
-        <FieldHelpIcon :content="syncSwitchFreezeHint" />
+        <span class="sync-tip-row"><span class="form-tip-inline switch-tip-nowrap" :title="item.tip">{{ item.tip }}</span><FieldHelpIcon :content="syncSwitchFreezeHint" /></span>
       </el-form-item>
     </el-form>
   </el-card>
@@ -276,6 +275,7 @@ const versionIncompatibilityError = (node: ClusterNodeWithSyncError): string => 
 /* i18n:zh 短文案的设计 nowrap 在 en 长文案下全部裁切——统一解除,恢复自然折行(对齐控件列) */
 .settings-form :deep(.el-form-item__label) { white-space: normal; word-break: keep-all; overflow-wrap: break-word; }
 .settings-form :deep(.el-form-item__content) { flex-wrap: wrap; }
+.settings-form .sync-tip-row { display: inline; }
 .settings-form .switch-tip-nowrap { white-space: normal; overflow-wrap: anywhere; }
 .card-title { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; color: var(--text-primary); }
 .mono-value { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
