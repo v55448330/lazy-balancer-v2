@@ -1990,7 +1990,7 @@ const crsGroupOptions = computed(() => {
     // 系统基础组（01/49/59）不提供选择——后端强制加载；99 通用误报豁免非检测
     // 组（全部规则时自动包含），同样不提供选项（v2.3.x 用户裁定）
     if (!code || seen.has(code) || CRS_INFRA_GROUP_CODES.includes(code) || CRS_HIDDEN_GROUP_CODES.includes(code)) continue
-    seen.set(code, `${crsOptionPhase(rule.filename)} · 9${code} · ${rule.category}`)
+    seen.set(code, `${crsOptionPhase(rule.filename)} · 9${code} · ${crsCategoryLabel(rule.category)}`)
   }
   return [...seen.entries()].map(([value, label]) => ({ value, label }))
 })
@@ -2004,7 +2004,7 @@ const crsExclusionGroupOptions = computed(() => {
     const info = parseCrsFilename(rule.filename)
     const code = info?.code
     if (!code || seen.has(code) || code === '01' || CRS_HIDDEN_GROUP_CODES.includes(code)) continue
-    seen.set(code, `${crsOptionPhase(rule.filename)} · 9${code} · ${rule.category}`)
+    seen.set(code, `${crsOptionPhase(rule.filename)} · 9${code} · ${crsCategoryLabel(rule.category)}`)
   }
   return [...seen.entries()].map(([value, label]) => ({ value, label }))
 })
