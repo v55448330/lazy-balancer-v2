@@ -564,6 +564,7 @@ import { shouldToastQuietPollError } from '@/utils/pollErrorToast'
 import { displaySecurityEventsRetentionDays, displaySecurityEventsRowCap, displayThreatScreenMode, securityEventsWritePayload, threatScreenWritePayload } from '@/utils/configValues'
 import { CHINA_SITE_CHOICES, COUNTRY_SITE_CHOICES, coordsForSiteLocation, nearestSiteLocation } from '@/utils/siteLocation'
 import { useCountryNamesCn } from '@/composables/useCountryNamesCn'
+import { hasOwn } from '@/utils/hasOwn'
 import { BACKUP_SECTIONS, importConfirmMessage, normalizeBackupSectionKeys } from '@/utils/backupSections'
 import { createImportPreviewSession, importPreviewFingerprint, invalidateImportPreviews, type ImportPreviewSession } from '@/utils/importPreview'
 import { createLatestReadSession } from '@/utils/viewAsyncState'
@@ -1533,7 +1534,9 @@ const siteLocationKey = ref('')
 // country_names_cn 反查英文名(未收录回退原样);zh 下中文键原样展示。
 // value 保持 item.key 不变,提交语义零改动。
 const zhCountryNames = useCountryNamesCn()
-const cnToEnCountry = computed<Record<string, string>>(() => {
+// 反转表=派生缓存(每次映射源变化重建),非展示词表——不进 vocabularyProtoKeys
+// 扫描面(该守卫面向静态展示词表);读取仍按原型键契约走 hasOwn。
+const cnToEnCountry = computed(() => {
   const inv: Record<string, string> = {}
   for (const [en, cn] of Object.entries(zhCountryNames.value)) {
     if (!(cn in inv)) inv[cn] = en
@@ -1546,7 +1549,8 @@ const siteChoiceLabel = (item: { key: string; label: string }): string => {
     const mapped = t(`app.security.policies.geo.provinces.${item.label}`)
     return mapped.includes('app.security.policies') ? item.label : mapped
   }
-  return cnToEnCountry.value[item.label] || item.label
+  const table = cnToEnCountry.value
+  return hasOwn(table, item.label) ? table[item.label] : item.label
 }
 const applySiteLocation = (key: string): void => {
   if (!key) {
