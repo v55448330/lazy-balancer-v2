@@ -475,8 +475,12 @@ html[data-locale='en'] .el-table .cell .el-button.is-link { white-space: normal;
    不翻转布局/不强制折行——中文布局零影响;右对齐行间微差为可接受取舍 */
 html[data-locale='en'] .el-form-item__label,
 html[data-locale='en'] .el-form-item__label-wrap { width: auto !important; min-width: 0 !important; max-width: 100%; }
-html[data-locale='en'] .el-form-item__label { white-space: nowrap; }
-html[data-locale='en'] .form-tip-inline { overflow-wrap: anywhere; }
+/* en label:过长时整词换行到第二行(规整,不断词不裁剪) */
+html[data-locale='en'] .el-form-item__label { white-space: normal; word-break: keep-all; overflow-wrap: break-word; line-height: 1.4; }
+/* en tip:行内放不下自然折行(flex-wrap),折行后与控件列对齐,行高规整 */
+html[data-locale='en'] .form-tip-inline { margin: 0 0 0 8px; line-height: 1.5; overflow-wrap: anywhere; white-space: normal; }
+/* 折行形态统一:tip 独占 flex 行时左缘与控件对齐(去 margin-left 偏移) */
+html[data-locale='en'] .form-tip-inline:not(:first-child) { margin-left: 0; }
 
 /* descriptions 预览表 label 列不换行(整词单行,列宽自动让位) */
 .el-descriptions__label { white-space: nowrap; }
@@ -486,3 +490,13 @@ html[data-locale='en'] .form-tip-inline { overflow-wrap: anywhere; }
 /* 英文模式表单 label 自适应(中文保持设计固定宽):
    data-locale 由 i18n/index 写入;覆盖 EP 内联 label 宽,内容列自动扩展 */
 
+
+/* 表单 label 规整换行(全语言):过长 label 整词换行第二行,行高自动撑开不裁剪 */
+.el-form-item__label {
+  word-break: keep-all;
+  overflow-wrap: break-word;
+  line-height: 1.4;
+  white-space: normal;
+}
+/* en 表格列头字号收紧(英文列头较中文长,缩字号减少断行/省略) */
+html[data-locale='en'] .el-table th.el-table__cell .cell { font-size: 12px; }

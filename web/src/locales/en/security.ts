@@ -157,6 +157,13 @@ export default {
     }
    },
    "events": {
+      triggerType: {
+        "ipAcl": "IP access control",
+        "geoBlock": "GeoIP block",
+        "trustList": "Trust list",
+        "crawlerExempt": "Crawler exempt",
+        "manualBlacklist": "Manual blacklist",
+      },
     "title": "Event log",
     "desc": "View security block and detection event records",
     "refresh": "Refresh",

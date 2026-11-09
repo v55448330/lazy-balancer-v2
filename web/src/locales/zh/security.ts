@@ -157,6 +157,13 @@ export default {
     }
    },
    "events": {
+      triggerType: {
+        "ipAcl": "IP 访问控制",
+        "geoBlock": "地域拦截",
+        "trustList": "信任名单",
+        "crawlerExempt": "爬虫豁免",
+        "manualBlacklist": "手动黑名单",
+      },
     "title": "事件日志",
     "desc": "查看安全拦截与检测事件记录",
     "refresh": "刷新",

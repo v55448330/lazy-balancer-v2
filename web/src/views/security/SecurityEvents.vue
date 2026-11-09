@@ -211,7 +211,7 @@
             <span v-else>—</span>
           </template>
         </el-table-column>
-        <el-table-column :label="t('app.security.events.colStage')" min-width="100" class-name="col-nowrap">
+        <el-table-column :label="t('app.security.events.colStage')" min-width="140" class-name="col-nowrap">
           <template #default="{ row }">
             <!-- 触发阶段展示：信任名单 / IP 访问控制（黑白名单+地域+威胁库，点击看触发详情）/
                  WAF（CRS=详情+快捷排除弹框；自定义=规则详情弹框）/ 请求体异常（纯文本） -->
@@ -223,9 +223,9 @@
             <span v-else>{{ stageLabel(row as SecurityEvent) }}</span>
           </template>
         </el-table-column>
-        <el-table-column :label="t('app.security.events.colTriggerType')" min-width="100" class-name="col-nowrap">
+        <el-table-column :label="t('app.security.events.colTriggerType')" min-width="130" class-name="col-nowrap">
           <template #default="{ row }">
-            <span>{{ row.trigger_type || '—' }}</span>
+            <span>{{ triggerTypeLabel(row.trigger_type) }}</span>
           </template>
         </el-table-column>
         <el-table-column :label="t('app.security.events.colPolicy')" min-width="150">
@@ -726,6 +726,22 @@ const stageCategory = (row: SecurityEvent): 'trust' | 'acl' | 'crawler' | 'waf' 
     default: return 'other'
   }
 }
+
+// 触发类型显示映射:后端 trigger_type 为 zh 码(en 用户经此译;zh 用户命中 zh 词条同文)。
+// 未登记值回落原文(新触发类型不因缺词条而丢失)。
+const TRIGGER_TYPE_KEYS: Record<string, string> = {
+  'IP 访问控制': 'ipAcl',
+  '地域拦截': 'geoBlock',
+  '信任名单': 'trustList',
+  '爬虫豁免': 'crawlerExempt',
+  '手动黑名单': 'manualBlacklist',
+}
+const triggerTypeLabel = (raw?: string): string => {
+  if (!raw) return '—'
+  const k = TRIGGER_TYPE_KEYS[raw]
+  return k ? t(`app.security.events.triggerType.${k}`) : raw
+}
+
 const stageLabel = (row: SecurityEvent): string => {
   // 存量 id '8' 中和文案（勿改分类——triggerStageFamily 对 8 归 ipAcl 是已钉住
   // 的历史共享 id 口径例外）：后端 trigger_type 显示「地域拦截」，阶段列沿用
