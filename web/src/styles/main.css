@@ -483,5 +483,14 @@ html[data-locale='en'] .el-form .el-form-item { flex-direction: column; align-it
 html[data-locale='en'] .el-form-item__label,
 html[data-locale='en'] .el-form-item__label-wrap { width: auto !important; min-width: 0 !important; max-width: 100%; }
 html[data-locale='en'] .el-form-item__label { justify-content: flex-start; text-align: left; white-space: nowrap; }
-/* en 行内短 tip 升级为块级(控件下方整行,长文案不再挤压换行错乱) */
-html[data-locale='en'] .form-tip-inline { display: block; margin: 4px 0 0; line-height: 1.5; white-space: normal; vertical-align: top; }
+/* en 行内短 tip 升级为块级:强制折出新行(flex-basis 100%——tip 是
+   .el-form-item__content flex 容器的 item,仅 display:block 仍会横排在控件
+   右侧并被容器裁切),长文案整行换行不再溢出 */
+html[data-locale='en'] .form-tip-inline {
+  display: block;
+  flex-basis: 100%;
+  margin: 4px 0 0;
+  line-height: 1.5;
+  white-space: normal;
+  vertical-align: top;
+}
