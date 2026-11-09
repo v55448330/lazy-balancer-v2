@@ -9,7 +9,7 @@
       </div>
     </template>
 
-    <el-form :model="form" label-width="120px" class="settings-form" :disabled="readOnly">
+    <el-form :model="form" label-width="auto" class="settings-form" :disabled="readOnly">
       <!-- 原生表单行（2026-10-11 用户裁定：对齐统一走 el-form-item，弃自管标签行；
            Firefox label-for 控制台告警为 EP 上游已知形态，非用户可见） -->
       <el-form-item :label="t('common.app.views.cluster.modeLabel')" for="radio---6">
@@ -58,7 +58,7 @@
           {{ t('common.app.views.cluster.registerWarnPlainHttp') }}
         </el-alert>
       </div>
-      <el-form ref="dialogFormRef" :model="form" :rules="rules" label-width="100px" :disabled="readOnly" style="margin-top: 16px">
+      <el-form ref="dialogFormRef" :model="form" :rules="rules" label-width="auto" :disabled="readOnly" style="margin-top: 16px">
         <el-form-item :label="t('common.app.views.cluster.masterUrlLabel')" prop="master_url">
           <el-input v-model="form.master_url" placeholder="https://master.example.com:8000" />
           <div class="form-tip-line">{{ t('common.app.views.cluster.masterUrlTip') }}</div>

@@ -22,7 +22,7 @@ const at = (text: string, needle: string, what: string): number => {
 test('基础设置卡：整卡 formFrozen，卡内不残留只读门', () => {
   const page = code('src/views/settings/BasicSettings.vue')
   assert.match(page, /const formFrozen = computed\(\(\) => isReadOnly\.value \|\| saving\.value\)/)
-  assert.match(page, /<el-form :model="settings" label-width="120px" class="settings-form" :disabled="formFrozen">/)
+  assert.match(page, /<el-form :model="settings" label-width="auto" class="settings-form" :disabled="formFrozen">/)
   const card = section(page, '<el-form :model="settings"', '</el-form>')
   assert.doesNotMatch(card, /:disabled="isReadOnly"/, '内层只读门会遮掉表单级冻结（EP: props.disabled ?? form.disabled）')
 })
@@ -30,19 +30,19 @@ test('基础设置卡：整卡 formFrozen，卡内不残留只读门', () => {
 test('Caddy 全局配置卡：整卡 formFrozen（Caddy 应用可达数秒）', () => {
   const page = code('src/views/settings/CaddyGlobalSettings.vue')
   assert.match(page, /const formFrozen = computed\(\(\) => isReadOnly\.value \|\| saving\.value\)/)
-  assert.match(page, /<el-form :model="settings" label-width="140px" class="caddy-form" :disabled="formFrozen">/)
+  assert.match(page, /<el-form :model="settings" label-width="auto" class="caddy-form" :disabled="formFrozen">/)
   assert.match(page, /<ProxyTimeoutFields[^>]*:disabled="formFrozen"/)
-  const card = section(page, '<el-form :model="settings" label-width="140px"', '</el-form>')
+  const card = section(page, '<el-form :model="settings" label-width="auto"', '</el-form>')
   assert.doesNotMatch(card, /:disabled="isReadOnly"/)
   // 存为地址列表弹框同样在保存中冻结
-  assert.match(page, /<el-form label-width="80px" @submit\.prevent :disabled="savingList">/)
+  assert.match(page, /<el-form label-width="auto" @submit\.prevent :disabled="savingList">/)
 })
 
 test('免费证书：ACME 卡与 DNS 配置弹框在保存中冻结', () => {
   const page = code('src/views/settings/FreeCertificates.vue')
-  assert.match(page, /<el-form :model="global" label-width="140px" :disabled="isReadOnly \|\| savingGlobal">/)
+  assert.match(page, /<el-form :model="global" label-width="auto" :disabled="isReadOnly \|\| savingGlobal">/)
   // 140px：最长官方标签「AccessKey Secret」单行不折行（弹框宽 640px 配套）
-  assert.match(page, /<el-form :model="form" label-width="140px" class="lb-form" :disabled="savingConfig">/)
+  assert.match(page, /<el-form :model="form" label-width="auto" class="lb-form" :disabled="savingConfig">/)
 })
 
 test('OIDC 弹框：整表单 formFrozen + 保存中不可 ESC/X 关闭', () => {
@@ -54,14 +54,14 @@ test('OIDC 弹框：整表单 formFrozen + 保存中不可 ESC/X 关闭', () => 
 
 test('拦截页编辑器：保存中冻结（含 CodeEditor readonly）', () => {
   const page = code('src/views/security/SecurityBlockPages.vue')
-  assert.match(page, /<el-form :model="form" label-width="80px" label-position="right" class="block-page-form" :disabled="saving">/)
+  assert.match(page, /<el-form :model="form" label-width="auto" label-position="right" class="block-page-form" :disabled="saving">/)
   assert.match(page, /<CodeEditor[^>]*:readonly="saving"/)
   assert.match(page, /show-word-limit :readonly="isReadOnly \|\| currentPage\?\.is_default \|\| currentPage\?\.is_builtin \|\| saving"/)
 })
 
 test('安全规则页：自定义规则与 IP 名单表单保存中冻结', () => {
   const page = code('src/views/security/SecurityRules.vue')
-  assert.match(page, /<el-form :model="ruleForm" label-width="80px" label-position="right" :disabled="isReadOnly \|\| savingRule">/)
+  assert.match(page, /<el-form :model="ruleForm" label-width="auto" label-position="right" :disabled="isReadOnly \|\| savingRule">/)
   assert.ok(openTags(page, 'el-form').some((tag) => tag.includes('v-loading="loadingIpListDetail"') && tag.includes(':disabled="savingIpList"')))
   assert.ok(page.includes(':disabled="ipListDialogReadOnly || editingIpListPreset || savingIpList"'), '名称/分类/描述字段必须统一冻结表达式')
 })

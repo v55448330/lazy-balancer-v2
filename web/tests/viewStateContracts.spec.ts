@@ -437,7 +437,7 @@ test('大屏切窗期间标题/KPI/趋势用「已渲染帧」口径（不得用
 test('策略向导保存中冻结表单与步骤导航（payload 组装窗口内的编辑不得被静默丢弃）', () => {
   const policies = code('src/views/security/SecurityPolicies.vue')
   assert.match(policies, /const formFrozen = computed\(\(\) => isReadOnly\.value \|\| saving\.value\)/)
-  const forms = [...policies.matchAll(/<el-form :model="form" label-width="100px" :disabled="([^"]+)">/g)].map((m) => m[1])
+  const forms = [...policies.matchAll(/<el-form :model="form" label-width="auto" :disabled="([^"]+)">/g)].map((m) => m[1])
   assert.ok(forms.length >= 5, `向导表单解析失败（${forms.length}）`)
   assert.deepEqual([...new Set(forms)], ['formFrozen'], '所有步骤表单必须同门（漏一处即可在途编辑）')
   assert.match(policies, /:class="\{ 'is-clickable': stepsClickable && !saving \}"/)

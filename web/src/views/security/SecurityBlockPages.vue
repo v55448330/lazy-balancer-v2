@@ -88,7 +88,7 @@
         <DialogHeader :icon="Document" :title="dialogTitle" tone="warning"
           :subtitle="t('app.security.blockPages.dialog.subtitle')" />
       </template>
-      <el-form :model="form" label-width="80px" label-position="right" class="block-page-form" :disabled="saving">
+      <el-form :model="form" label-width="auto" label-position="right" class="block-page-form" :disabled="saving">
         <el-form-item :label="t('app.security.blockPages.dialog.labelName')" required>
           <el-input v-model="form.name" :placeholder="t('app.security.blockPages.dialog.placeholderName')" :maxlength="SECURITY_NAME_MAX_RUNES" show-word-limit :readonly="isReadOnly || currentPage?.is_default || currentPage?.is_builtin || saving" />
         </el-form-item>

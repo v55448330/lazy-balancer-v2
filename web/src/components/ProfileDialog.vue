@@ -12,7 +12,7 @@
       <DialogHeader :icon="User" :title="t('common.app.views.profile.title')" :subtitle="isOIDCUser ? t('common.app.views.profile.oidcSubtitle') : t('common.app.views.profile.localSubtitle')" />
     </template>
     <div v-if="isReadOnly" class="info-note-bar profile-readonly-note"><span class="info-note-desc">{{ authStore.readOnlyMessage }}</span></div>
-    <el-form :model="profileForm" label-width="96px" class="profile-form" :disabled="saving">
+    <el-form :model="profileForm" label-width="auto" class="profile-form" :disabled="saving">
       <el-form-item :label="t('common.app.views.profile.usernameLabel')">
         <el-input v-model="profileForm.username" disabled />
       </el-form-item>

@@ -933,7 +933,7 @@
         <DialogHeader :icon="Document" :title="t('app.security.policies.extract.title')" :subtitle="t('app.security.policies.extract.subtitle')" />
       </template>
       <div class="info-note-bar"><span class="info-note-desc">{{ t('app.security.policies.extract.note') }}</span></div>
-      <el-form label-width="80px" @submit.prevent>
+      <el-form label-width="auto" @submit.prevent>
         <el-form-item :label="t('app.security.policies.extract.sourceLabel')" for="extract-source-static">
           <input type="text" id="extract-source-static" aria-hidden="true" tabindex="-1" autocomplete="off" style="display:none">
           <span class="extract-source">{{ extractSide === 'acl' ? aclListLabel : t('app.security.policies.stage0.trustIpLabel') }}{{ t('app.security.policies.extract.inlineCount', { n: extractSourceEntries.length }) }}</span>

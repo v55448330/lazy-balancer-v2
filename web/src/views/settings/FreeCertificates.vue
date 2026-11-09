@@ -196,7 +196,7 @@
       <template #header>
         <DialogHeader :icon="Postcard" :title="t('app.settings.freeCerts.ca.editTitle')" :subtitle="t('app.settings.freeCerts.ca.editSubtitle')" tone="warning" />
       </template>
-      <el-form :model="caForm" label-width="120px" :disabled="savingCA" class="lb-form">
+      <el-form :model="caForm" label-width="auto" :disabled="savingCA" class="lb-form">
         <el-form-item :label="t('app.settings.freeCerts.ca.colName')">
           <el-input v-model="caForm.name" disabled />
         </el-form-item>
@@ -246,7 +246,7 @@
       <template #header>
         <DialogHeader :icon="Connection" :title="t('app.settings.freeCerts.dns.verifyCredentialsBtn')" :subtitle="dnsVerifySubtitle" tone="warning" />
       </template>
-      <el-form label-width="90px" @submit.prevent="confirmDnsVerify">
+      <el-form label-width="auto" @submit.prevent="confirmDnsVerify">
         <el-form-item :label="t('app.settings.freeCerts.dns.manageDomainsBtn')" :error="dnsVerifyError">
           <el-input v-model="dnsVerifyDomain" placeholder="example.com" autofocus clearable @keyup.enter="confirmDnsVerify" />
         </el-form-item>
