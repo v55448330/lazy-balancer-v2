@@ -475,7 +475,7 @@
           <el-table-column :label="t('app.settings.basic.autoBackup.time')" width="170">
             <template #default="{ row }">{{ formatDate(row.created_at) }}</template>
           </el-table-column>
-          <el-table-column :label="t('app.settings.basic.autoBackup.colVersion')" width="110">
+          <el-table-column :label="t('app.settings.basic.autoBackup.colVersion')" width="90">
             <template #default="{ row }">{{ row.app_version || '—' }}</template>
           </el-table-column>
           <el-table-column :label="t('app.settings.basic.autoBackup.colStatus')" width="70">
@@ -496,7 +496,7 @@
           <el-table-column :label="t('app.settings.basic.autoBackup.colSize')" width="90">
             <template #default="{ row }">{{ formatBackupSize(row.size_bytes) }}</template>
           </el-table-column>
-          <el-table-column :label="t('app.settings.basic.autoBackup.colActions')" width="150" align="right">
+          <el-table-column :label="t('app.settings.basic.autoBackup.colActions')" width="180" align="center">
             <template #default="{ row }">
               <el-button v-if="row.status === 'success'" link type="primary" size="small" :disabled="autoBackupActionBusy" @click="downloadAutoBackup(row as AutoBackupRow)">{{ t('app.settings.basic.autoBackup.download') }}</el-button>
               <el-button v-if="row.status === 'success'" link type="warning" size="small" :loading="restoringBackupId === row.id" :disabled="autoBackupActionBusy || backupDisabled" @click="restoreAutoBackup(row as AutoBackupRow)">{{ t('app.settings.basic.autoBackup.restore') }}</el-button>

@@ -3749,7 +3749,7 @@ onMounted(async () => {
 
 .wizard-steps { margin-bottom: 24px; }
 .wizard-steps :deep(.el-step__title) { white-space: nowrap; font-size: 13px; }
-html[data-locale='en'] .wizard-steps :deep(.el-step__title) { font-size: 12px; }
+html[data-locale='en'] .wizard-steps :deep(.el-step__title) { font-size: 14px; }
 .wizard-steps.is-clickable :deep(.el-step) { cursor: pointer; }
 
 .acl-divider { margin: 4px 0 16px; }
