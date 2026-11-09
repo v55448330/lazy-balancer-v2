@@ -287,7 +287,7 @@ export default {
           "renewalTime": "Auto-renewal time",
           "renewalTimeTitle": "Choosing 84-88 days (past certificate lifetime − 7) collapses the window to 7 days before expiry based on the actual lifetime, with an hourly alert about it (the stored value is kept). 0 = default 30 days, reachable only via direct API writes/backup import; this control's minimum is 1.",
           "renewalTimeHint": "Days before expiry to start auto-renewal; 60 or less recommended (max {max} days); renewal always happens within 7 days of expiry.",
-          "renewalAttempts": "Renewal retry attempts",
+          "renewalAttempts": "Renewal retries",
           "renewalAttemptsHint": "Maximum automatic retries after a failed renewal (including CA rate limits)",
           "caProvider": "CA provider",
           "caProviderPlaceholder": "Select a CA provider",

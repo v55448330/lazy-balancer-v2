@@ -662,7 +662,7 @@ export default {
     'readDesc': 'Interval between reads from upstream; streaming must exceed the silence window',
     'readTimeout': 'Read timeout',
     'responseHeaderDesc': 'Waiting for upstream response headers',
-    'responseHeaderTimeout': 'Response header timeout',
+    'responseHeaderTimeout': 'Resp. header timeout',
     'streamCloseDelay': 'Stream close delay',
     'streamDesc': 'Total streaming session duration; for SSE/LLM',
     'streamTimeout': 'Streaming timeout',

@@ -765,7 +765,7 @@ onUnmounted(() => logTail.stop())
 .trusted-ranges-error { color: var(--el-color-danger, #f56c6c); }
 .trusted-toggle { display: flex; flex-direction: column; align-items: flex-start; }
 /* 单行描述(2026-09-19 图片报障):只加 nowrap,不做溢出裁切(窄屏容忍伸出) */
-.tip-nowrap { white-space: nowrap; }
+.tip-nowrap { white-space: normal; overflow-wrap: anywhere; }
 .format-field { width: 100%; min-width: 0; }
 /* tip-inline/tip-block 旧式 el-text 已全量归一全局 form-tip-inline/
    form-tip-line（main.css 唯一事实源，scoped 重复定义删除）；format-tip 仅保留
