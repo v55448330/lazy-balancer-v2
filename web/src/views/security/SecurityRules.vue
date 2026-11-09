@@ -95,7 +95,7 @@
           <el-table :data="rules" v-loading="loadingRules" stripe :header-cell-style="{ background: '#f9fafb' }" empty-text="" @row-click="openRuleContent" style="cursor: pointer">
             <template #empty><el-empty :description="rulesLoadError ? t('common.app.views.secRules.rulesTab.loadFailRetry') : t('common.app.views.secRules.rulesTab.emptyRules')" :image-size="60" /></template>
             <el-table-column prop="filename" :label="t('common.app.views.secRules.rulesTab.colFilename')" min-width="320" show-overflow-tooltip />
-            <el-table-column prop="category" :label="t('common.app.views.secRules.common.category')" width="160">
+            <el-table-column prop="category" :label="t('common.app.views.secRules.common.category')" min-width="210">
               <template #default="{ row }"><el-tag size="small" effect="plain" type="info">{{ ipListCategoryLabel(row.category) }}</el-tag></template>
             </el-table-column>
             <el-table-column :label="t('common.app.views.secRules.rulesTab.colSize')" width="100" align="right">
@@ -207,7 +207,7 @@
                 <el-tag v-else-if="row.system" size="small" type="warning" effect="plain" style="margin-left: 6px;">{{ t('common.app.views.secRules.ipTab.builtinTag') }}</el-tag>
               </template>
             </el-table-column>
-            <el-table-column :label="t('common.app.views.secRules.common.category')" width="120" align="center">
+            <el-table-column :label="t('common.app.views.secRules.common.category')" width="150">
               <template #default="{ row }">
                 <el-tag v-if="row.category" size="small" effect="plain" type="info">{{ ipListCategoryLabel(row.category) }}</el-tag>
                 <template v-else>—</template>

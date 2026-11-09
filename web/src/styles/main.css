@@ -478,7 +478,7 @@ html[data-locale='en'] .el-form-item__label { white-space: normal; word-break: k
 /* en tip:行内样式为默认(放得下单行紧贴控件);tip-nowrap 解除(长文案自然折行对齐) */
 html[data-locale='en'] .form-tip-inline,
 html[data-locale='en'] .tip-nowrap { white-space: normal; line-height: 1.5; }
-html[data-locale='en'] .form-tip-inline:not(:first-child) { margin-left: 0; }
+html[data-locale='en'] .form-tip-inline { margin: 4px 0 4px 8px; }
 
 /* descriptions 预览表 label 列不换行(整词单行,列宽自动让位) */
 .el-descriptions__label { white-space: nowrap; }
@@ -501,4 +501,4 @@ html[data-locale='en'] .el-table th.el-table__cell .cell { font-size: 12px; }
 
 /* 表单行垂直居中:多行 label、控件、tip 三者统一垂直居中对齐
    (排除 label-top 表单——column 布局的 align-items 是水平轴) */
-.el-form:not(.el-form--label-top) .el-form-item { align-items: flex-start; }
+.el-form:not(.el-form--label-top) .el-form-item { align-items: center; }
