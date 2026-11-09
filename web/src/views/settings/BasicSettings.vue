@@ -417,7 +417,7 @@
       </template>
     </el-dialog>
 
-    <el-dialog v-model="autoBackupVisible" width="min(880px, 96vw)" :close-on-click-modal="false" class="backup-dialog dialog-body-inset" destroy-on-close @opened="onAutoBackupOpened" @close="onAutoBackupClosed">
+    <el-dialog v-model="autoBackupVisible" width="min(1020px, 96vw)" :close-on-click-modal="false" class="backup-dialog dialog-body-inset" destroy-on-close @opened="onAutoBackupOpened" @close="onAutoBackupClosed">
       <template #header>
         <DialogHeader :icon="Timer" :title="t('app.settings.basic.autoBackup.title')" :subtitle="t('app.settings.basic.autoBackup.subtitle')" />
       </template>
