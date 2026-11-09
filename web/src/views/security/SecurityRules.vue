@@ -101,7 +101,7 @@
             <el-table-column :label="t('common.app.views.secRules.rulesTab.colSize')" width="100" align="right">
               <template #default="{ row }">{{ formatSize(row.size) }}</template>
             </el-table-column>
-            <el-table-column :label="t('common.app.views.secRules.common.updateTime')" width="170" align="center">
+            <el-table-column :label="t('common.app.views.secRules.common.updateTime')" width="170">
               <template #default="{ row }">{{ formatDate(row.updated_at) || '-' }}</template>
             </el-table-column>
             <el-table-column label="" width="80" align="center">
@@ -165,10 +165,10 @@
                 <el-tag :type="row.enabled ? 'success' : 'info'" size="small" effect="light">{{ row.enabled ? t('common.app.views.secRules.common.enabled') : t('common.app.views.secRules.common.disabled') }}</el-tag>
               </template>
             </el-table-column>
-            <el-table-column :label="t('common.app.views.secRules.common.updateTime')" width="170" align="center">
+            <el-table-column :label="t('common.app.views.secRules.common.updateTime')" width="170">
               <template #default="{ row }">{{ formatDate(row.updated_at) || '-' }}</template>
             </el-table-column>
-            <el-table-column :label="t('common.app.views.secRules.common.updater')" width="100" align="center">
+            <el-table-column :label="t('common.app.views.secRules.common.updater')" width="110">
               <template #default="{ row }">{{ getUpdaterName(row.updated_by) }}</template>
             </el-table-column>
             <el-table-column :label="t('common.app.views.secRules.common.actions')" width="140" fixed="right">
@@ -207,13 +207,13 @@
                 <el-tag v-else-if="row.system" size="small" type="warning" effect="plain" style="margin-left: 6px;">{{ t('common.app.views.secRules.ipTab.builtinTag') }}</el-tag>
               </template>
             </el-table-column>
-            <el-table-column :label="t('common.app.views.secRules.common.category')" width="150">
+            <el-table-column :label="t('common.app.views.secRules.common.category')" min-width="150">
               <template #default="{ row }">
                 <el-tag v-if="row.category" size="small" effect="plain" type="info">{{ ipListCategoryLabel(row.category) }}</el-tag>
                 <template v-else>—</template>
               </template>
             </el-table-column>
-            <el-table-column :label="t('common.app.views.secRules.common.entryCount')" width="100" align="center">
+            <el-table-column :label="t('common.app.views.secRules.common.entryCount')" width="100">
               <template #default="{ row }">
                 {{ row.entry_count }}
                 <el-tooltip v-if="row.preset_autoban" :content="t('common.app.views.secRules.ipTab.presetExpiryTip')" placement="top">
@@ -221,7 +221,7 @@
                 </el-tooltip>
               </template>
             </el-table-column>
-            <el-table-column :label="t('common.app.views.secRules.ipTab.colRef')" width="90" align="center">
+            <el-table-column :label="t('common.app.views.secRules.ipTab.colRef')" width="140">
               <template #default="{ row }">
                 <el-tooltip v-if="row.ref_policies.length > 0 || row.trusted_proxy_referenced" placement="top" popper-class="ip-list-refs-popper" :popper-options="popperViewportSafe">
                   <template #content>
@@ -233,10 +233,10 @@
                 <template v-else>{{ row.ref_count }}</template>
               </template>
             </el-table-column>
-            <el-table-column :label="t('common.app.views.secRules.common.updateTime')" width="170" align="center">
+            <el-table-column :label="t('common.app.views.secRules.common.updateTime')" width="170">
               <template #default="{ row }">{{ formatDate(row.updated_at) || '-' }}</template>
             </el-table-column>
-            <el-table-column :label="t('common.app.views.secRules.common.updater')" width="100" align="center">
+            <el-table-column :label="t('common.app.views.secRules.common.updater')" width="110">
               <template #default="{ row }">{{ getUpdaterName(row.updated_by) }}</template>
             </el-table-column>
             <el-table-column :label="t('common.app.views.secRules.common.actions')" width="140" fixed="right">
