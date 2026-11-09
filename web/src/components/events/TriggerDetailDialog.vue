@@ -102,7 +102,7 @@
           <div class="trg-kv">
             <span class="k">{{ t('common.app.views.trigDetail.fileCategory') }}</span>
             <span v-if="crsIndexLoading">{{ t('common.app.views.trigDetail.loading') }}</span>
-            <template v-else-if="crsEntry">{{ crsEntry.file }} · {{ crsEntry.category }}</template>
+            <template v-else-if="crsEntry">{{ crsEntry.file }} · {{ crsCategoryLabel(crsEntry.category) }}</template>
             <template v-else>—</template>
           </div>
           <div class="trg-kv"><span class="k">{{ t('common.app.views.trigDetail.ruleMessage') }}</span><span>{{ row?.rule_msg || '—' }}</span></div>
@@ -184,6 +184,7 @@ import { issueCrsIndexSession, useCrsRuleIndex } from '@/composables/useCrsRuleI
 import { activateOnce } from '@/utils/keyboardActivate'
 import { useCountryNamesCn, countryLabel } from '@/composables/useCountryNamesCn'
 import type { APIResponse } from '@/types'
+import { crsCategoryLabel } from '@/utils/crsCategories.ts'
 
 // 历史（用户裁定）：统一触发详情弹框——全部触发类型（IP 黑白名单/地域/威胁
 // 情报库/信任/WAF·CRS/WAF·自定义/请求体异常）共用同一风格与交互；信息优先，

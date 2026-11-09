@@ -32,6 +32,8 @@ const NON_VOCABULARY_RECORD_TABLES = [
   'src/views/Rules.vue#lockPopovers',
   // 任务族显示名映射:键=后端注册 zh 名(查表即返回,无外部键源)
   'src/views/settings/TaskMonitor.vue#TASK_NAME_KEYS',
+  // CRS 分类显示映射:键=后端 zh 分类码(查表即译,无外部键源)
+  'src/utils/crsCategories.ts#CRS_CATEGORY_KEYS',
   // IP 名单分类显示映射:键=后端 zh 分类码(查表即译,无外部键源)
   'src/views/security/SecurityPolicies.vue#IP_LIST_CATEGORY_KEYS',
   'src/views/security/SecurityRules.vue#IP_LIST_CATEGORY_KEYS',
