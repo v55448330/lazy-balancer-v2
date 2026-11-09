@@ -57,10 +57,10 @@
           <el-form-item :label="t('app.settings.basic.map.siteLocation')">
             <el-select v-model="siteLocationKey" :disabled="formFrozen" filterable clearable :placeholder="t('app.settings.basic.map.siteLocationPlaceholder')" style="width: 260px" @change="applySiteLocation">
               <el-option-group :label="t('app.settings.basic.map.chinaProvincesGroup')">
-                <el-option v-for="item in CHINA_SITE_CHOICES" :key="item.key" :label="item.label" :value="item.key" />
+                <el-option v-for="item in CHINA_SITE_CHOICES" :key="item.key" :label="siteChoiceLabel(item)" :value="item.key" />
               </el-option-group>
               <el-option-group :label="t('app.settings.basic.map.overseasGroup')">
-                <el-option v-for="item in COUNTRY_SITE_CHOICES" :key="item.key" :label="item.label" :value="item.key" />
+                <el-option v-for="item in COUNTRY_SITE_CHOICES" :key="item.key" :label="siteChoiceLabel(item)" :value="item.key" />
               </el-option-group>
             </el-select>
             <span class="form-tip-inline">{{ t('app.settings.basic.siteCoord', { lat: (settings.server_map_lat ?? 0).toFixed(4), lng: (settings.server_map_lon ?? 0).toFixed(4) }) }}</span>
@@ -1526,6 +1526,15 @@ const formFrozen = computed(() => isReadOnly.value || saving.value)
 // 大屏本站坐标：地点选择（中国城市/海外国家）→ 经纬度；替代按公网 IP
 // 归属地自动检测（常落到省会/国家质心，无法精确到城市）。
 const siteLocationKey = ref('')
+
+// 站点位置下拉选项按 locale 映射(2026-11 用户需求):en 下中国省名走 provinces
+// 词条(裸键 fallback 原名,IP 库采样条目已含广州/武汉等),国家名本身英文直用;
+// value 保持 item.key 不变,提交语义零改动。
+const siteChoiceLabel = (item: { key: string; label: string }): string => {
+  if (locale.value !== 'en' || !item.key.startsWith('cn:')) return item.label
+  const mapped = t(`app.security.policies.geo.provinces.${item.label}`)
+  return mapped.includes('app.security.policies') ? item.label : mapped
+}
 const applySiteLocation = (key: string): void => {
   if (!key) {
     settings.value.server_map_lat = 0
