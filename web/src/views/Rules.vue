@@ -687,6 +687,7 @@
                 </template>
                 <div class="ntlm-switch-control">
                   <el-switch :model-value="ntlmOn" @change="onNtlmToggle" />
+                  <span class="form-tip-inline">{{ t('common.app.rules.wizard.ntlmHint') }}</span>
                 </div>
               </el-form-item>
 
@@ -705,6 +706,7 @@
                 </template>
                 <div class="ntlm-switch-control">
                   <el-switch :model-value="forwardAuthOn" @change="onForwardAuthToggle" />
+                  <span class="form-tip-inline">{{ t('common.app.rules.wizard.authGatewayHint') }}</span>
                 </div>
               </el-form-item>
 
