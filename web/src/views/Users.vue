@@ -36,7 +36,7 @@
           </div>
         </div>
       </template>
-      <el-form :model="form" label-width="90px" :disabled="isReadOnly || submitting">
+      <el-form :model="form" :label-width="$flw('90px')" :disabled="isReadOnly || submitting">
         <!-- 2026-09-19 用户裁定布局:左列 用户名/显示名称/角色;右列 密码组
              (编辑=新密码+确认新密码,创建=密码+确认密码);OIDC 用户右列示数据来源 -->
         <el-row :gutter="16">

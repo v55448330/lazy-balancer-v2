@@ -9,7 +9,7 @@
         <el-button type="primary" size="small" :loading="tokenLoading" :disabled="readOnly" @click="$emit('generate-token')">{{ t('common.app.views.cluster.generateToken') }}</el-button>
       </div>
     </template>
-    <el-form label-width="120px" class="settings-form" :disabled="readOnly">
+    <el-form :label-width="$flw('120px')" class="settings-form" :disabled="readOnly">
       <el-form-item v-for="item in syncSwitchItems" :key="item.key" :label="item.label">
         <el-switch
           :model-value="item.locked ? true : status[item.key]"

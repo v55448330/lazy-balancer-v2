@@ -18,7 +18,7 @@
           </div>
         </div>
       </template>
-      <el-form :model="global" label-width="140px" :disabled="isReadOnly || savingGlobal">
+      <el-form :model="global" :label-width="$flw('140px')" :disabled="isReadOnly || savingGlobal">
         <el-form-item :label="t('app.settings.freeCerts.acme.email')" required>
           <el-input v-model="global.acme_email" placeholder="your@email.com" style="width: 240px;" />
           <span class="form-tip-inline">{{ t('app.settings.freeCerts.acme.emailHint') }}</span>
@@ -142,7 +142,7 @@
           :subtitle="t('app.settings.freeCerts.dns.formHint')" />
       </template>
       <!-- label-width 140px：最长官方标签「AccessKey Secret」单行不折行（弹框随宽度增至 640px，输入列不受挤压） -->
-      <el-form :model="form" label-width="140px" class="lb-form" :disabled="savingConfig">
+      <el-form :model="form" :label-width="$flw('140px')" class="lb-form" :disabled="savingConfig">
         <el-form-item :label="t('app.settings.freeCerts.dns.name')" required>
           <el-input v-model="form.name" :placeholder="t('app.settings.freeCerts.dns.namePlaceholder')" maxlength="100" />
         </el-form-item>
@@ -196,7 +196,7 @@
       <template #header>
         <DialogHeader :icon="Postcard" :title="t('app.settings.freeCerts.ca.editTitle')" :subtitle="t('app.settings.freeCerts.ca.editSubtitle')" tone="warning" />
       </template>
-      <el-form :model="caForm" label-width="120px" :disabled="savingCA" class="lb-form">
+      <el-form :model="caForm" :label-width="$flw('120px')" :disabled="savingCA" class="lb-form">
         <el-form-item :label="t('app.settings.freeCerts.ca.colName')">
           <el-input v-model="caForm.name" disabled />
         </el-form-item>
@@ -246,7 +246,7 @@
       <template #header>
         <DialogHeader :icon="Connection" :title="t('app.settings.freeCerts.dns.verifyCredentialsBtn')" :subtitle="dnsVerifySubtitle" tone="warning" />
       </template>
-      <el-form label-width="90px" @submit.prevent="confirmDnsVerify">
+      <el-form :label-width="$flw('90px')" @submit.prevent="confirmDnsVerify">
         <el-form-item :label="t('app.settings.freeCerts.dns.manageDomainsBtn')" :error="dnsVerifyError">
           <el-input v-model="dnsVerifyDomain" placeholder="example.com" autofocus clearable @keyup.enter="confirmDnsVerify" />
         </el-form-item>

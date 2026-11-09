@@ -300,7 +300,7 @@
              用户按文案校准阈值必须与真实喂入一致，否则阈值永不达标且无告警 -->
         <DialogHeader :icon="Lock" :title="t('app.security.events.dialogTitle')" :subtitle="t('app.security.events.dialogSubtitle')" />
       </template>
-      <el-form :model="autobanForm" label-width="96px" label-position="right" :disabled="autobanSaving">
+      <el-form :model="autobanForm" :label-width="$flw('96px')" label-position="right" :disabled="autobanSaving">
         <el-form-item :label="t('app.security.events.dryRunLabel')">
           <el-switch v-model="autobanForm.dry_run" />
           <div class="form-tip-line">{{ t('app.security.events.dryRunHint') }}</div>

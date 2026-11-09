@@ -21,6 +21,10 @@ window.addEventListener('unhandledrejection', (event) => reportGlobalError('unha
 
 app.use(pinia)
 app.use(i18n)
+// 表单 label 宽度语言感知:en='auto'(EP 卡内取最长 label 统一对齐,单行不折),
+// zh=设计固定宽。模板统一 `:label-width="$flw('NNNpx')"`。
+app.config.globalProperties.$flw = (zhWidth: string): string =>
+  localStorage.getItem('lb_locale') === 'en' ? 'auto' : zhWidth
 // 首屏优先：branding 是装饰性请求（含 30s 全局超时），
 // 原 `void loadBranding().finally(() => app.mount('#app'))` 让后端抖动/超时
 // 时白屏最长 30s。现先挂载（品牌名/版本到达后由响应式状态自然刷新）。

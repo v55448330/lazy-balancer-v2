@@ -428,7 +428,7 @@
       <div class="wizard-content">
         <!-- Step 0: 基本配置 -->
         <div v-show="currentStep === WIZARD_STEP.BASIC" class="step-content">
-          <el-form :model="wizardForm" label-width="100px" :disabled="saving">
+          <el-form :model="wizardForm" :label-width="$flw('100px')" :disabled="saving">
             <el-form-item :label="t('common.app.rules.common.ruleName')" required>
               <el-input v-model="wizardForm.name" :placeholder="t('common.app.rules.wizard.nameExample')" maxlength="100" show-word-limit />
             </el-form-item>
@@ -484,7 +484,7 @@
             <span class="info-note-desc">{{ t('common.app.rules.wizard.certDetailManualBlockNote') }}</span>
             <el-button size="small" type="primary" plain :loading="tlsDetailLoading" @click="retryTlsDetail">{{ t('common.app.rules.cfg.reload') }}</el-button>
           </div>
-          <el-form :model="wizardForm" label-width="100px" v-if="wizardForm.enable_tls && wizardForm.protocol === 'http'" :disabled="saving">
+          <el-form :model="wizardForm" :label-width="$flw('100px')" v-if="wizardForm.enable_tls && wizardForm.protocol === 'http'" :disabled="saving">
             <el-form-item :label="t('common.app.rules.wizard.certSource')" for="radio---1">
               <input type="text" id="radio---1" aria-hidden="true" tabindex="-1" autocomplete="off" style="display:none">
               <el-radio-group v-model="wizardForm.tls_source" :disabled="isCurrentRuleLocked" :aria-label="t('common.app.rules.wizard.certSource')">
@@ -568,7 +568,7 @@
 
         <!-- Step 2: 上游服务器 -->
         <div v-show="currentStep === WIZARD_STEP.UPSTREAMS" class="step-content">
-          <el-form :model="wizardForm" label-width="100px" :disabled="saving">
+          <el-form :model="wizardForm" :label-width="$flw('100px')" :disabled="saving">
             <div class="upstream-header">
               <span class="section-title">{{ t('common.app.rules.wizard.upstreamListTitle') }}</span>
               <el-button size="small" type="primary" @click="addUpstream" :disabled="wizardForm.upstreams.length >= MAX_UPSTREAM_ROWS || (wizardForm.dynamic_dns && wizardForm.upstreams.length >= 1)">
@@ -862,7 +862,7 @@
 
         <!-- Step 4: 高级选项 -->
         <div v-show="currentStep === WIZARD_STEP.ADVANCED" class="step-content">
-          <el-form :model="wizardForm" label-width="100px" :disabled="saving">
+          <el-form :model="wizardForm" :label-width="$flw('100px')" :disabled="saving">
             <template v-if="wizardForm.protocol === 'http'">
               <el-divider content-position="left" class="compact-divider">{{ t('common.app.rules.wizard.dnsServers') }}</el-divider>
 
