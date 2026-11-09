@@ -1047,7 +1047,13 @@ const regionCascaderOptions = computed(() => {
     if (prov === '海外') continue
     const cities = regionTree.value.cities[prov] || []
     // en:省级名词条映射(value 保持 zh 供后端匹配);市级无 en 数据源,回落原名
-    const provLabel = locale.value === 'en' ? t(`app.security.policies.geo.provinces.${prov}`) : prov
+    // 裸键兜底:IP 库采样可能引入词条未覆盖的区域名(如广州/武汉这类库内置市级
+    // 条目混入省列),t() 返回裸键时回落原名,任何数据变化都不出现 app.security.*
+    let provLabel = prov
+    if (locale.value === 'en') {
+      const mapped = t(`app.security.policies.geo.provinces.${prov}`)
+      if (!mapped.includes('app.security.policies')) provLabel = mapped
+    }
     if (cities.length === 0) {
       options.push({ value: prov, label: provLabel })
       continue
