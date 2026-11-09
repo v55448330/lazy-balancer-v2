@@ -474,7 +474,7 @@ html[data-locale='en'] .el-table .cell .el-button.is-link { white-space: normal;
 /* en 表单 label 最小干预:收缩到内容宽(释放最大空间给控件列),
    不翻转布局/不强制折行——中文布局零影响;右对齐行间微差为可接受取舍 */
 /* en 与 zh 同一套布局规则(固定 label 宽+整词换行规整化)——样式一致性由机制保证 */
-html[data-locale='en'] .el-form-item__label { white-space: normal; word-break: keep-all; overflow-wrap: break-word; line-height: 1.4; }
+html[data-locale='en'] .el-form-item__label { word-break: keep-all; overflow-wrap: break-word; }
 /* en tip:行内样式为默认(放得下单行紧贴控件);tip-nowrap 解除(长文案自然折行对齐) */
 html[data-locale='en'] .form-tip-inline,
 html[data-locale='en'] .tip-nowrap { white-space: normal; line-height: 1.5; }
@@ -489,16 +489,11 @@ html[data-locale='en'] .form-tip-inline { margin: 4px 0 4px 8px; }
    data-locale 由 i18n/index 写入;覆盖 EP 内联 label 宽,内容列自动扩展 */
 
 
-/* 表单 label 规整换行(全语言):过长 label 整词换行第二行,行高自动撑开不裁剪 */
+/* 表单 label 防断词(全语言):只禁断词,行高/对齐回归组件库原生(与中文一致) */
 .el-form-item__label {
   word-break: keep-all;
   overflow-wrap: break-word;
-  line-height: 1.4;
-  white-space: normal;
 }
 /* en 表格列头字号收紧(英文列头较中文长,缩字号减少断行/省略) */
 html[data-locale='en'] .el-table th.el-table__cell .cell { font-size: 12px; }
 
-/* 表单行垂直居中:多行 label、控件、tip 三者统一垂直居中对齐
-   (排除 label-top 表单——column 布局的 align-items 是水平轴) */
-.el-form:not(.el-form--label-top) .el-form-item { align-items: center; }
