@@ -417,7 +417,7 @@
       </template>
     </el-dialog>
 
-    <el-dialog v-model="autoBackupVisible" width="min(1020px, 96vw)" :close-on-click-modal="false" class="backup-dialog dialog-body-inset" destroy-on-close @opened="onAutoBackupOpened" @close="onAutoBackupClosed">
+    <el-dialog v-model="autoBackupVisible" width="min(720px, 96vw)" :close-on-click-modal="false" class="backup-dialog dialog-body-inset" destroy-on-close @opened="onAutoBackupOpened" @close="onAutoBackupClosed">
       <template #header>
         <DialogHeader :icon="Timer" :title="t('app.settings.basic.autoBackup.title')" :subtitle="t('app.settings.basic.autoBackup.subtitle')" />
       </template>
@@ -2000,7 +2000,7 @@ const handleSave = async () => {
 .import-v1-hint { margin-top: 6px; display: inline-block; }
 /* 全选/全不选与告警条之间留出间距;chips 单行不换行(弹框 720px) */
 .backup-dialog-actions { display: flex; justify-content: flex-end; gap: 4px; margin-top: 8px; margin-bottom: 14px; }
-.backup-dialog .section-chips, .import-sections .section-chips { flex-wrap: nowrap; }
+.backup-dialog .section-chips, .import-sections .section-chips { flex-wrap: wrap; }
 .import-sections { border: 1px solid var(--el-border-color-lighter); border-radius: 8px; padding: 10px 12px; margin-bottom: 12px; }
 .import-sections-label { font-size: 13px; font-weight: 600; margin-bottom: 6px; }
 

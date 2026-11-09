@@ -4,6 +4,7 @@ import { isInitRuleId } from '@/utils/crsGroups'
 import { normalizeStringEntries } from '@/utils/securityStages'
 import { createSessionSingleFlight } from '@/utils/sessionSingleFlight'
 import { tSafe as t } from '../i18n/tSafe.ts'
+import { crsCategoryLabel } from '@/utils/crsCategories.ts'
 import type { APIResponse } from '@/types'
 
 /** CRS 规则索引条目（GET /security/crs/rule-index）——rules 由后端按 id 升序返回 */
@@ -40,7 +41,9 @@ interface CrsRuleLabelView {
  */
 export const crsRuleLabelView = (entry: Pick<CrsRuleIndexEntry, 'msg' | 'category'>): CrsRuleLabelView => {
   const fromMsg = cleanCrsMsg(entry.msg)
-  const base = fromMsg !== '' ? fromMsg : cleanCrsMsg(entry.category)
+  // msg 为空时 fallback 到分类:接 crsCategoryLabel 映射(en 显示英文分类;
+  // 911 系列等无 msg 规则此前裸用 zh 分类,排除目标下拉 en 下出现「方法限制」)
+  const base = fromMsg !== '' ? fromMsg : cleanCrsMsg(crsCategoryLabel(entry.category))
   const fullLabel = base !== '' ? base : t('common.app.views.crsIndex.noDescription')
   return {
     label: fullLabel.length > CRS_RULE_LABEL_MAX_CHARS ? `${fullLabel.slice(0, CRS_RULE_LABEL_MAX_CHARS)}…` : fullLabel,

@@ -685,10 +685,8 @@
                     </template>
                   </FieldHelpIcon></span>
                 </template>
-                <div class="ntlm-switch-control">
-                  <el-switch :model-value="ntlmOn" @change="onNtlmToggle" />
-                  <span class="form-tip-inline">{{ t('common.app.rules.wizard.ntlmHint') }}</span>
-                </div>
+                <el-switch :model-value="ntlmOn" @change="onNtlmToggle" />
+                <span class="form-tip-inline">{{ t('common.app.rules.wizard.ntlmHint') }}</span>
               </el-form-item>
 
               <!-- 认证网关（forward_auth，NTLM 同款开关形态）：开启后全部请求
@@ -704,10 +702,8 @@
                     </template>
                   </FieldHelpIcon></span>
                 </template>
-                <div class="ntlm-switch-control">
-                  <el-switch :model-value="forwardAuthOn" @change="onForwardAuthToggle" />
-                  <span class="form-tip-inline">{{ t('common.app.rules.wizard.authGatewayHint') }}</span>
-                </div>
+                <el-switch :model-value="forwardAuthOn" @change="onForwardAuthToggle" />
+                <span class="form-tip-inline">{{ t('common.app.rules.wizard.authGatewayHint') }}</span>
               </el-form-item>
 
               <template v-if="forwardAuthOn">
