@@ -33,7 +33,9 @@
           </el-form-item>
           <el-form-item :label="t('app.settings.basic.log.auditRetention')">
             <el-input-number v-model="settings.audit_retention_months" :disabled="formFrozen" :min="1" :max="12" controls-position="right" style="width: 120px;" />
-            <div class="form-tip-line">{{ t('app.settings.basic.log.auditRetentionHint') }}</div>
+            <!-- en 文案长独立折行(tip-line);zh 文案短行内贴控件(tip-inline)——2026-11 用户裁定 -->
+            <span v-if="locale.startsWith('zh')" class="form-tip-inline">{{ t('app.settings.basic.log.auditRetentionHint') }}</span>
+            <div v-else class="form-tip-line">{{ t('app.settings.basic.log.auditRetentionHint') }}</div>
           </el-form-item>
           <el-form-item :label="t('app.settings.basic.log.secEventRetention')">
             <el-input-number v-model="seRetentionDays" :disabled="formFrozen" :min="1" :max="3650" :step="30" controls-position="right" style="width: 120px;" />

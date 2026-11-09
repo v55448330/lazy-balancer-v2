@@ -14,7 +14,7 @@
         <TakeoverBadge v-if="fieldOverrides[field.key]!.badge" :label="fieldOverrides[field.key]!.badge" />
         {{ fieldOverrides[field.key]!.note }}
       </span>
-      <span v-else class="form-tip-inline" :title="fieldTip(field)">{{ fieldTip(field, false) }}</span>
+      <span v-else class="form-tip-inline" :title="fieldFullTip(field)">{{ field.desc }}</span>
     </el-form-item>
   </div>
 </template>
@@ -50,15 +50,18 @@ type TimeoutField = (typeof PROXY_TIMEOUT_FIELDS)[number]
 // 字段定义（标签/下限/说明/建议值）与向导预览摘要同源，见 utils/proxyTimeouts.ts。
 const fields: readonly TimeoutField[] = PROXY_TIMEOUT_FIELDS
 
-// 提示行三段式（0=继承 + 建议值 + 说明）：基础设置右栏等窄容器下三段拼接
-// 必折行（2026-11 用户反馈）——行内只留「0=继承 + 建议值」保单行，说明全文
-// 移 :title 悬浮展示（信息零丢失）。整行走词条：i18n 抽词后由词条给出各段
-// 分隔符（zh「；」/en「;」），模板不拼字面片段。
-const fieldTip = (field: TimeoutField, withDesc = true): string => {
+// 提示行语义分层（2026-11 用户裁定）：行内=通俗功能描述（这个超时控制什么），
+// 「0=继承 + 建议值」是占位符语义属次要信息，连同说明全文移 :title 悬浮——
+// 窄容器（基础设置右栏）下三段拼接必折行且占位文案无信息量。整行走词条：
+// i18n 抽词后由词条给出各段分隔符，模板不拼字面片段。
+const fieldInheritTip = (field: TimeoutField): string => {
   let tip = t('common.app.views.proxyTimeout.tipZeroInherit', { inherit: props.inheritLabel })
   if (props.showSuggested && field.suggest !== undefined) tip += t('common.app.views.proxyTimeout.tipSuggest', { suggest: field.suggest })
-  if (withDesc && field.desc) tip += t('common.app.views.proxyTimeout.tipDesc', { desc: field.desc })
   return tip
+}
+const fieldFullTip = (field: TimeoutField): string => {
+  const inherit = fieldInheritTip(field)
+  return field.desc ? (inherit ? inherit + t('common.app.views.proxyTimeout.tipDesc', { desc: field.desc }) : field.desc) : inherit
 }
 
 const update = (field: keyof ProxyTimeoutConfig, value: number | undefined): void => {
