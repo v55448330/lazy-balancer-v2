@@ -1980,6 +1980,10 @@ const WIZARD_STEP = {
 } as const
 type WizardStep = (typeof WIZARD_STEP)[keyof typeof WIZARD_STEP]
 const currentStep = ref<WizardStep>(WIZARD_STEP.BASIC)
+// EP label-width auto 已知缺陷:弹框/步骤切换后不重算 label 宽度→Custom routes
+// 等误折。步骤切换/弹框开启后触发 resize 驱动 EP 重算。
+watch(currentStep, () => window.dispatchEvent(new Event('resize')))
+watch(wizardVisible, (v) => { if (v) setTimeout(() => window.dispatchEvent(new Event('resize')), 80) })
 const upstreamTouched = ref<boolean[]>([])
 let nextTemporaryPathRuleId = -1
 const certConfigs = ref<CertificateConfig[]>([])

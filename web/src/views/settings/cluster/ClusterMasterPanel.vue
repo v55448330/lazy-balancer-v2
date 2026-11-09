@@ -273,10 +273,10 @@ const versionIncompatibilityError = (node: ClusterNodeWithSyncError): string => 
 .card-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 :deep(.el-card__body), .el-card { height: 100%; }
 .card-tip { font-size: 12px; color: #9ca3af; white-space: nowrap; flex-shrink: 0; }
-.settings-form :deep(.el-form-item__label) { white-space: nowrap; }
-.settings-form :deep(.el-form-item__content) { flex-wrap: nowrap; }
-/* 不换行截断由本页专用修饰类承载——全局 .form-tip-inline 不得在 scoped 中重定义。 */
-.settings-form .switch-tip-nowrap { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+/* i18n:zh 短文案的设计 nowrap 在 en 长文案下全部裁切——统一解除,恢复自然折行(对齐控件列) */
+.settings-form :deep(.el-form-item__label) { white-space: normal; word-break: keep-all; overflow-wrap: break-word; }
+.settings-form :deep(.el-form-item__content) { flex-wrap: wrap; }
+.settings-form .switch-tip-nowrap { white-space: normal; overflow-wrap: anywhere; }
 .card-title { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; color: var(--text-primary); }
 .mono-value { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
 .version-cell { display: flex; align-items: center; gap: 6px; flex-wrap: nowrap; min-width: 0; }
