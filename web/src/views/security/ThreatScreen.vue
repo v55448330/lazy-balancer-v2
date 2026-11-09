@@ -11,13 +11,17 @@
         <div class="readout">CAM <b>{{ camReadout }}</b></div>
         <div class="readout">TGT <b>{{ tgtReadout }}</b></div>
         <div class="readout">FLOW <b>{{ flowSampleLabel }}</b></div>
-        <div class="readout clock-hud" role="group" :aria-label="t('app.security.threat.timeWindowAria')">
-          <time class="clock-time">{{ clockText }}</time><span class="clock-date">{{ clockDate }}</span>
+      </div>
+      <div class="map-ctl hud" role="group" :aria-label="t('app.security.threat.timeWindowAria')">
+        <div class="map-ctl-clock">
+          <time class="map-ctl-time">{{ clockText }}</time>
+          <span class="map-ctl-date">{{ clockDate }}</span>
         </div>
-        <div class="window-switch hud-window" role="group" :aria-label="t('app.security.threat.timeWindowAria')">
+        <div class="map-ctl-window">
           <button v-for="opt in windowOptions" :key="opt.value" type="button" class="window-btn" :aria-pressed="windowHours === opt.value" @click="setWindow(opt.value)">{{ opt.label }}</button>
         </div>
       </div>
+
       <div class="hud-tr" :aria-label="t('app.security.threat.legendAria')">
         <div class="row">{{ t('app.security.threat.legendNormalRequests') }} <span class="legend-arc normal"></span></div>
         <div class="row">{{ t('app.security.threat.legendAttackFlows') }} <span class="legend-arc"></span></div>
@@ -1529,11 +1533,21 @@ onBeforeUnmount(() => {
 .hud-tl .readout { font-family: 'Share Tech Mono', ui-monospace, monospace; font-size: 11px; color: #56709f; letter-spacing: 0.06em; }
 .hud-tl .readout b { color: #8ea7d6; font-weight: 400; }
 
-.clock-hud { display: flex; gap: 8px; align-items: baseline; white-space: nowrap; }
-.clock-hud .clock-time { font: 12px/1 'Share Tech Mono', ui-monospace, monospace; color: #9fc6ef; font-variant-numeric: tabular-nums; letter-spacing: 0.04em; }
-.clock-hud .clock-date { color: #7d93b8; font-size: 11px; font-variant-numeric: tabular-nums; }
-.hud-window { display: inline-flex; border: 1px solid rgba(58, 209, 255, 0.25); border-radius: 4px; overflow: hidden; margin-left: 6px; }
-.hud-window .window-btn { padding: 4px 8px; }
+/* audit136-C4:时钟/日期+时间窗选择面板——主地图区域右下角(提示行上方)。
+   pointer-events:auto 使按钮可点(hud-tl/tr 覆盖层为 none 供地图拖拽穿透,
+   面板必须显式 auto);底板半透明深 HUD 风与图例/CAM 行协调。zh/en 同位同构。 */
+.map-ctl {
+  position: absolute; z-index: 3; right: 16px; bottom: 76px;
+  pointer-events: auto;
+  display: flex; flex-direction: column; gap: 6px; align-items: stretch;
+  background: rgba(10, 25, 47, 0.72); border: 1px solid rgba(58, 209, 255, 0.22);
+  border-radius: 6px; padding: 8px 10px;
+}
+.map-ctl-clock { display: flex; gap: 8px; align-items: baseline; justify-content: center; white-space: nowrap; }
+.map-ctl-time { font: 13px/1 'Share Tech Mono', ui-monospace, monospace; color: #9fc6ef; font-variant-numeric: tabular-nums; letter-spacing: 0.05em; }
+.map-ctl-date { color: #7d93b8; font-size: 11px; font-variant-numeric: tabular-nums; }
+.map-ctl-window { display: flex; border: 1px solid rgba(58, 209, 255, 0.25); border-radius: 4px; overflow: hidden; }
+.map-ctl-window .window-btn { padding: 5px 10px; font-size: 11px; }
 .hud-tr { position: absolute; top: 14px; right: 16px; z-index: 2; pointer-events: none; display: grid; gap: 7px; justify-items: end; font-size: 11px; color: #8ea7d6; }
 .hud-tr .row { display: flex; align-items: center; gap: 8px; }
 /* 国家命中热力图例：渐变背景由 threatShared.heatRampGradientCss 单源注入
