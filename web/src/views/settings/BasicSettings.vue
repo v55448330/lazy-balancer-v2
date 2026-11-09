@@ -496,7 +496,7 @@
           <el-table-column :label="t('app.settings.basic.autoBackup.colSize')" width="90">
             <template #default="{ row }">{{ formatBackupSize(row.size_bytes) }}</template>
           </el-table-column>
-          <el-table-column :label="t('app.settings.basic.autoBackup.colActions')" width="240" align="center">
+          <el-table-column :label="t('app.settings.basic.autoBackup.colActions')" width="205" align="center">
             <template #default="{ row }">
               <el-button v-if="row.status === 'success'" link type="primary" size="small" :disabled="autoBackupActionBusy" @click="downloadAutoBackup(row as AutoBackupRow)">{{ t('app.settings.basic.autoBackup.download') }}</el-button>
               <el-button v-if="row.status === 'success'" link type="warning" size="small" :loading="restoringBackupId === row.id" :disabled="autoBackupActionBusy || backupDisabled" @click="restoreAutoBackup(row as AutoBackupRow)">{{ t('app.settings.basic.autoBackup.restore') }}</el-button>

@@ -1001,7 +1001,7 @@ import { DEEP_LINK_PARAMS, pageUrl } from '@/utils/deepLink'
 import { buildPolicyPayload, crawlerExemptionNeedsEngines, trustEnabledForPolicyType } from '@/utils/policyPayload'
 import { activateOnce } from '@/utils/keyboardActivate'
 
-const { t } = useI18n()
+const { t, locale } = useI18n()
 
 interface PolicyDetail { id: number; name: string; description: string; mode: string; anomaly_threshold: number; ip_acl_mode: string; ip_acl_list: string; ip_acl_enabled: boolean; ip_whitelist: string; ip_whitelist_enabled?: boolean; ip_blacklist?: string; ip_acl_list_refs?: string; ip_whitelist_refs?: string; rate_limit_enabled: boolean; rate_limit_rps: number; rate_limit_burst: number; crs_rule_groups: string; crs_excluded_rules: string; custom_rules: string; block_page_id: number; block_status_code: number; enabled: boolean; updated_at: string; geoip_mode?: string; geoip_countries?: string; geoip_crawler_exempt?: boolean; geoip_crawler_engines?: string; waf_check_response?: boolean; log_request_body?: boolean; trust_detection?: boolean }
 // 规则行消费面（关联规则行内执行序/投影数据源；协议与域名等展示字段）
@@ -1046,13 +1046,15 @@ const regionCascaderOptions = computed(() => {
     // 「海外」哨兵不再作独立一级叶子——提交值由「海外国家」父节点承载
     if (prov === '海外') continue
     const cities = regionTree.value.cities[prov] || []
+    // en:省级名词条映射(value 保持 zh 供后端匹配);市级无 en 数据源,回落原名
+    const provLabel = locale.value === 'en' ? t(`app.security.policies.geo.provinces.${prov}`) : prov
     if (cities.length === 0) {
-      options.push({ value: prov, label: prov })
+      options.push({ value: prov, label: provLabel })
       continue
     }
     options.push({
       value: prov,
-      label: prov,
+      label: provLabel,
       children: cities.map((city) => ({ value: `${prov}/${city}`, label: city })),
     })
   }
@@ -1067,7 +1069,10 @@ const regionCascaderOptions = computed(() => {
           ? // X5：按展示标签（中文简称，未命中回退英文）排序——
             // 后端 Countries 为英文字典序，中文标签直显时乱序；提交值不变。
             overseas
-              .map((country) => ({ value: country, label: zhNames[country] || country }))
+              .map((country) => ({
+                value: country,
+                label: locale.value === 'en' ? country : zhNames[country] || country,
+              }))
               .sort((a, b) => a.label.localeCompare(b.label, 'zh-Hans-CN'))
           : undefined,
     })
