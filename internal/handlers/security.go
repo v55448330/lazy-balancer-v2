@@ -69,7 +69,7 @@ func (h *Handlers) ListSecurityCustomRules(c *gin.Context) {
 		// 以 200 返回」）——零值形态混入 200 会让该行在 UI 呈现「无条件规则」且
 		// 不可编辑保存，发射端又整条跳过，等于一条规则被静默停用。
 		if err := json.Unmarshal([]byte(conditionsJSON), &r.Conditions); err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: fmt.Sprintf("自定义规则 %d 的条件解析失败: %v", r.ID, err)})
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.Tf(c, "k_410be8bf", r.ID, err), MessageKey: "k_410be8bf"})
 			return
 		}
 		rules = append(rules, r)
@@ -243,7 +243,7 @@ func (h *Handlers) CreateSecurityCustomRule(c *gin.Context) {
 		return
 	}
 	if ruleCount >= securityCustomRuleMaxGlobalCount {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: fmt.Sprintf("自定义规则总数已达上限（%d 条），请先清理不再使用的规则", securityCustomRuleMaxGlobalCount)})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "k_38761125", securityCustomRuleMaxGlobalCount), MessageKey: "k_38761125"})
 		return
 	}
 	result, err := tx.Exec(`INSERT INTO security_custom_rules (name, description, conditions, condition_logic, action, score, enabled, updated_by) VALUES (?,?,?,?,?,?,?,?)`,
@@ -426,7 +426,7 @@ func (h *Handlers) DeleteSecurityCustomRule(c *gin.Context) {
 		return
 	}
 	if referenced > 0 {
-		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: fmt.Sprintf("该自定义规则正被 %d 个启用的安全策略使用，请先解除绑定", referenced)})
+		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: apimsg.Tf(c, "k_bc35d3f5", referenced), MessageKey: "k_bc35d3f5"})
 		return
 	}
 	result, err := tx.ExecContext(caddyWriteCtx(c), "DELETE FROM security_custom_rules WHERE id=?", listID)
@@ -535,7 +535,7 @@ func (h *Handlers) CreateSecurityBlockPage(c *gin.Context) {
 		return
 	}
 	if pageCount >= securityBlockPageMaxGlobalCount {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: fmt.Sprintf("拦截页面总数已达上限（%d 个），请先清理不再使用的页面", securityBlockPageMaxGlobalCount)})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "k_a78e2696", securityBlockPageMaxGlobalCount), MessageKey: "k_a78e2696"})
 		return
 	}
 	result, err := tx.Exec(`INSERT INTO security_block_pages (name, description, content, content_type, is_default, created_by, updated_by) VALUES (?,?,?,?,?,?,?)`,
@@ -693,7 +693,7 @@ func (h *Handlers) DeleteSecurityBlockPage(c *gin.Context) {
 		return
 	}
 	if referenced > 0 {
-		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: fmt.Sprintf("该拦截页面正被 %d 个启用的安全策略使用，请先解除绑定", referenced)})
+		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: apimsg.Tf(c, "k_fc6a2790", referenced), MessageKey: "k_fc6a2790"})
 		return
 	}
 	// 规则级阶段拦截页引用：lb_rules 的 block_page_stage1_id /
@@ -706,7 +706,7 @@ func (h *Handlers) DeleteSecurityBlockPage(c *gin.Context) {
 		return
 	}
 	if ruleReferenced > 0 {
-		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: fmt.Sprintf("该拦截页面正被 %d 条规则的阶段拦截页引用，请先解除", ruleReferenced)})
+		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: apimsg.Tf(c, "k_de6fb0ef", ruleReferenced), MessageKey: "k_de6fb0ef"})
 		return
 	}
 	result, err := tx.ExecContext(caddyWriteCtx(c), "DELETE FROM security_block_pages WHERE id=?", id)
@@ -1271,7 +1271,7 @@ func (h *Handlers) CreateSecurityPolicy(c *gin.Context) {
 		return
 	}
 	if policyCount >= securityPolicyMaxGlobalCount {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: fmt.Sprintf("安全策略总数已达上限（%d 条），请先清理不再使用的策略", securityPolicyMaxGlobalCount)})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "k_8b31b031", securityPolicyMaxGlobalCount), MessageKey: "k_8b31b031"})
 		return
 	}
 	// 引用存在性单源门（拦截页 + 自定义规则 + IP 名单 refs + CRS 排除作用域
@@ -1735,7 +1735,7 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_c13fb1ee"), MessageKey: "k_c13fb1ee"})
 			return
 		default:
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: fmt.Sprintf("无效的策略类型：%s（可选 stage1/stage2/stage3）", *req.PolicyType)})
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "k_d8bc419b", *req.PolicyType), MessageKey: "k_d8bc419b"})
 			return
 		}
 	}
@@ -1773,7 +1773,7 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 		{"ip_acl_mode", req.IPACLMode},
 	} {
 		if f.val != nil && strings.TrimSpace(*f.val) == "" {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: fmt.Sprintf("不修改请省略该字段，%s 不能为空串", f.name)})
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "k_f33cc0ff", f.name), MessageKey: "k_f33cc0ff"})
 			return
 		}
 	}
@@ -2106,7 +2106,7 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 				(effType == models.PolicyTypeStage2 && fs.G2) ||
 				(effType == models.PolicyTypeStage3 && fs.G3)
 			if ownStageFeature {
-				c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: fmt.Sprintf("阶段 %s 策略不支持启用 IP 访问控制，请创建阶段 1 策略或走更新迁移", strings.TrimPrefix(effType, "stage"))})
+				c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "k_ff87f96c", strings.TrimPrefix(effType, "stage")), MessageKey: "k_ff87f96c"})
 				return
 			}
 		}
@@ -2582,7 +2582,7 @@ func (h *Handlers) BindRuleToPolicy(c *gin.Context) {
 			return
 		}
 		if siblingCount >= maxBindingsPerRule {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: fmt.Sprintf("最多绑定 %d 条策略", maxBindingsPerRule)})
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "k_334394ee", maxBindingsPerRule), MessageKey: "k_334394ee"})
 			return
 		}
 	}
@@ -2945,7 +2945,7 @@ func (h *Handlers) BulkUpdatePolicyBindings(c *gin.Context) {
 	// （冲突检测、计数、规则级门）都用归一后集合；先按原始长度判定会让 101 个
 	// 重复/空白项（归一后仅 1 条规则）被误拒。
 	if len(bindIDs)+len(unbindIDs) > maxBulkBindings {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: fmt.Sprintf("单次最多提交 %d 条规则", maxBulkBindings)})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "k_2112aa23", maxBulkBindings), MessageKey: "k_2112aa23"})
 		return
 	}
 	// 禁止同一规则同时出现在 bind 与 unbind（语义冲突）。
@@ -2983,17 +2983,17 @@ func (h *Handlers) BulkUpdatePolicyBindings(c *gin.Context) {
 		}
 		ids := normalizePolicyIDs(req.Orders[rule])
 		if len(ids) == 0 {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "orders[" + rule + "] 为空（需携带该规则的全量有序 policy_id 列表）"})
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "k_3717c01c", rule), MessageKey: "k_3717c01c"})
 			return
 		}
 		if len(ids) > maxBindingsPerRule {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: fmt.Sprintf("orders[%s] 超过每规则 %d 条上限", rule, maxBindingsPerRule)})
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "k_d3b82997", rule, maxBindingsPerRule), MessageKey: "k_d3b82997"})
 			return
 		}
 		normalizedOrders[rule] = ids
 	}
 	if len(bindIDs)+len(unbindIDs)+len(normalizedOrders) > maxBulkBindings {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: fmt.Sprintf("单次最多提交 %d 条规则", maxBulkBindings)})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "k_2112aa23", maxBulkBindings), MessageKey: "k_2112aa23"})
 		return
 	}
 	tx, err := beginCaddyWriteTx(c)
@@ -3306,13 +3306,13 @@ func (h *Handlers) BatchBindSecurityPolicies(c *gin.Context) {
 	// 单次规则数上限与兄弟批量端点同口径（归一后计数）
 	// ——无上限时数万条 rule_ids 会在写锁内逐规则查询/写入，阻塞全部主库配置写。
 	if len(req.RuleIDs) > maxBatchBindRules {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: fmt.Sprintf("单次最多提交 %d 条规则（去重后计数）", maxBatchBindRules)})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "k_eb42284e", maxBatchBindRules), MessageKey: "k_eb42284e"})
 		return
 	}
 	// 去重后上限判定（同 SetRuleSecurityPolicies 的口径）
 	uniqueIDs := normalizePolicyIDs(req.PolicyIDs)
 	if len(uniqueIDs) > maxBindingsPerRule {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: fmt.Sprintf("每条规则最多绑定 %d 条策略", maxBindingsPerRule)})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "k_09a77f51", maxBindingsPerRule), MessageKey: "k_09a77f51"})
 		return
 	}
 	tx, err := beginCaddyWriteTx(c)
@@ -3852,7 +3852,7 @@ func (h *Handlers) SplitSecurityPolicy(c *gin.Context) {
 		existingID, err := resolveSplitChild(caddyWriteCtx(c), tx, &p, spec)
 		if err != nil {
 			if errors.Is(err, errSplitChildConflict) {
-				c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: fmt.Sprintf("拆分迁移中止：已存在同名同阶段但配置不同的策略「%s」，请先处理该策略后再拆分", spec.name)})
+				c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: apimsg.Tf(c, "k_4fb92a52", spec.name), MessageKey: "k_4fb92a52"})
 				return
 			}
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
@@ -3874,7 +3874,7 @@ func (h *Handlers) SplitSecurityPolicy(c *gin.Context) {
 			return
 		}
 		if policyCount+pendingInsert > securityPolicyMaxGlobalCount {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: fmt.Sprintf("安全策略总数上限为 %d 条，本次拆分将新增 %d 条子策略（当前 %d 条），请先清理不再使用的策略", securityPolicyMaxGlobalCount, pendingInsert, policyCount)})
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "k_555a1d88", securityPolicyMaxGlobalCount, pendingInsert, policyCount), MessageKey: "k_555a1d88"})
 			return
 		}
 	}
@@ -5586,7 +5586,7 @@ func (h *Handlers) startLibUpdate(c *gin.Context, taskID, family, displayName st
 // 差异只体现在投影函数，端点壳、nil 门与响应包装单源。
 func libUpdateStatus[S any](c *gin.Context, serviceLabel string, mgr *S, project func(*S) any) {
 	if mgr == nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serviceLabel + " 更新服务未初始化"})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.Tf(c, "k_685b83ab", serviceLabel), MessageKey: "k_685b83ab"})
 		return
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: project(mgr)})

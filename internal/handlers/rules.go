@@ -1346,7 +1346,7 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 		// 一律不落日志。
 		services.Logf("error", "CreateRule bind error: %v, body_length: %d, content_type: %s（请求体正文不记录，避免证书/密钥泄漏）",
 			err, len(rawBody), c.GetHeader("Content-Type"))
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: fmt.Sprintf("Invalid request: %v", err)})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "k_7a6a47c9", apimsg.ErrMsg(c, err)), MessageKey: "k_7a6a47c9"})
 		return
 	}
 
@@ -1469,9 +1469,9 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 		}
 		if shadowRule != "" {
 			if req.ListenPort == 80 {
-				c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: fmt.Sprintf("域名 %s 已被规则 %s 的 HTTPS 跳转占用（跳转在 80 端口优先生效，保存后本规则将不可达）", shadowDomain, shadowRule)})
+				c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "k_592011de", shadowDomain, shadowRule), MessageKey: "k_592011de"})
 			} else {
-				c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: fmt.Sprintf("域名 %s 已有规则 %s 直接监听 80 端口，开启 HTTP 转 HTTPS 跳转会使其不可达，请先调整该规则", shadowDomain, shadowRule)})
+				c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "k_9f497352", shadowDomain, shadowRule), MessageKey: "k_9f497352"})
 			}
 			return
 		}
@@ -2818,9 +2818,9 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 			}
 			if shadowRule != "" {
 				if req.ListenPort == 80 {
-					c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: fmt.Sprintf("域名 %s 已被规则 %s 的 HTTPS 跳转占用（跳转在 80 端口优先生效，保存后本规则将不可达）", shadowDomain, shadowRule)})
+					c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "k_592011de", shadowDomain, shadowRule), MessageKey: "k_592011de"})
 				} else {
-					c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: fmt.Sprintf("域名 %s 已有规则 %s 直接监听 80 端口，开启 HTTP 转 HTTPS 跳转会使其不可达，请先调整该规则", shadowDomain, shadowRule)})
+					c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "k_9f497352", shadowDomain, shadowRule), MessageKey: "k_9f497352"})
 				}
 				return
 			}
@@ -4623,7 +4623,7 @@ func (h *Handlers) BatchRuleBlockPages(c *gin.Context) {
 	// 请求体只受全局 128MB 上限约束，认证管理员可长时间占用 caddyOpMu。
 	const maxBatchRuleBlockPages = 500
 	if len(req.RuleIDs) > maxBatchRuleBlockPages {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: fmt.Sprintf("单次批量设置最多 %d 条规则（当前 %d 条）", maxBatchRuleBlockPages, len(req.RuleIDs))})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "k_4b4c5c53", maxBatchRuleBlockPages, len(req.RuleIDs)), MessageKey: "k_4b4c5c53"})
 		return
 	}
 	// 请求体读取/绑定已完成后再取全局写锁：慢速上传不得阻塞全部配置写
@@ -4782,7 +4782,7 @@ func (h *Handlers) EnableRule(c *gin.Context) {
 			return
 		}
 		if conflict {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: fmt.Sprintf("域名 %s 已被其他启用中的规则使用，无法启用", ruleDomain)})
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "k_a31aadca", ruleDomain), MessageKey: "k_a31aadca"})
 			return
 		}
 		shadowRule, shadowDomain, err := queryRedirectShadowConflict(ruleDomain, rulePort, enableTLS, tlsHTTPRedirect, caddyID)
@@ -4794,9 +4794,9 @@ func (h *Handlers) EnableRule(c *gin.Context) {
 		}
 		if shadowRule != "" {
 			if rulePort == 80 {
-				c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: fmt.Sprintf("域名 %s 已被规则 %s 的 HTTPS 跳转占用（跳转在 80 端口优先生效，启用后本规则将不可达），无法启用", shadowDomain, shadowRule)})
+				c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "k_151294e0", shadowDomain, shadowRule), MessageKey: "k_151294e0"})
 			} else {
-				c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: fmt.Sprintf("域名 %s 已有规则 %s 直接监听 80 端口，启用 HTTP 转 HTTPS 跳转会使其不可达，请先调整该规则", shadowDomain, shadowRule)})
+				c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "k_24a90572", shadowDomain, shadowRule), MessageKey: "k_24a90572"})
 			}
 			return
 		}

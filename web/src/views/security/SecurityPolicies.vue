@@ -3689,11 +3689,11 @@ function handleDelete(row: PolicySummary) {
     .finally(() => { deletingPolicyId.value = null })
 }
 
-const goToCustomRulesPage = () => { window.open(pageUrl('security-rules', { [DEEP_LINK_PARAMS.securityRulesTab]: 'custom' }), '_blank') }
-const goToBlockPagesPage = () => { window.open(pageUrl('security-block-pages'), '_blank') }
+const goToCustomRulesPage = () => { window.open(pageUrl('security-rules', { [DEEP_LINK_PARAMS.securityRulesTab]: 'custom' }), '_blank', 'noopener') }
+const goToBlockPagesPage = () => { window.open(pageUrl('security-block-pages'), '_blank', 'noopener') }
 const openRuleInNewTab = (caddyId: string): void => {
   // 交接改走 URL query（rs 参数），Rules.vue onMounted 消费后清除。
-  window.open(pageUrl('rules', { [DEEP_LINK_PARAMS.ruleSearch]: caddyId }), '_blank')
+  window.open(pageUrl('rules', { [DEEP_LINK_PARAMS.ruleSearch]: caddyId }), '_blank', 'noopener')
 }
 
 // 地域树加载失败显性化——不再静默清空（保留已加载/已选值可见可

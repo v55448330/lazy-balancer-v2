@@ -1170,13 +1170,13 @@ const controlCaddy = async (action: 'start' | 'stop' | 'restart') => {
     await request.post(`/caddy/${action}`, undefined, { signal: dashboardPolling.signal })
     if (disposed) return
     
-    // After start or restart, reload config from database
+    // 启动/重启后从数据库重载配置
     if (action === 'start' || action === 'restart') {
       await request.post('/config/reload', undefined, { signal: dashboardPolling.signal })
       if (disposed) return
     }
     
-    // Optimistic update - show the expected status immediately
+    // 乐观更新——立即呈现预期状态
     if (action === 'stop') {
       caddyStatus.value = 'stopped'
     } else if (action === 'start' || action === 'restart') {
@@ -1186,7 +1186,7 @@ const controlCaddy = async (action: 'start' | 'stop' | 'restart') => {
     const actionDone = { start: t('common.app.dashboard.actionStarted'), stop: t('common.app.dashboard.actionStopped'), restart: t('common.app.dashboard.actionRestarted') }[action]
     mfaAwareSuccess(t('common.app.dashboard.caddyActionSuccess', { action: actionDone }))
     
-    // Also fetch actual status to confirm
+    // 另拉实际状态二次确认
     if (statusRefreshTimer) clearTimeout(statusRefreshTimer)
     if (statusConfirmTimer) clearTimeout(statusConfirmTimer)
     statusRefreshTimer = window.setTimeout(() => {
@@ -1198,7 +1198,7 @@ const controlCaddy = async (action: 'start' | 'stop' | 'restart') => {
   } catch (error: unknown) {
     if (disposed) return
     if (error === 'cancel' || error === 'close') return
-    // Error toast is already shown by the global axios interceptor.
+    // 错误 toast 已由全局 axios 拦截器弹出。
     console.error('Failed to control Caddy:', error)
   } finally {
     if (!disposed) caddyLoading.value = false

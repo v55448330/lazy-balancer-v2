@@ -1045,7 +1045,7 @@ func (h *Handlers) IssueCertificate(c *gin.Context) {
 		// 无上限时一次请求可让全部规则写/Caddy 应用线性排队。
 		if len(batchTargets) > maxBatchIssueTargets {
 			auditFailure("failed", fmt.Sprintf("批量目标数 %d 超过单次上限 %d", len(batchTargets), maxBatchIssueTargets))
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: fmt.Sprintf("单次批量签发最多 %d 个规则（本次匹配 %d 个），请分批执行", maxBatchIssueTargets, len(batchTargets))})
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "k_272b4463", maxBatchIssueTargets, len(batchTargets)), MessageKey: "k_272b4463"})
 			return
 		}
 	}
@@ -1602,7 +1602,7 @@ func (h *Handlers) IssueCertificate(c *gin.Context) {
 	}
 	recordAudit(c, "触发签发", "证书", services.FormatAuditDetail(scope, fmt.Sprintf("入队 %d 个任务%s", queued, forceNote), services.AuditResultPart("requested")))
 	// 入队后渲染输入零变化——签发完成由 worker 链路自行应用，去掉强制重载
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: fmt.Sprintf("已创建 %d 个签发任务", queued), Data: gin.H{"queued": queued, "skipped_cooldown": skippedCooldown}})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.Tf(c, "k_e4a8ee55", queued), MessageKey: "k_e4a8ee55", Data: gin.H{"queued": queued, "skipped_cooldown": skippedCooldown}})
 }
 
 func (h *Handlers) ParseCertificate(c *gin.Context) {

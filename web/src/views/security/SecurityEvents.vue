@@ -953,14 +953,14 @@ const resetFilters = () => {
 
 const handleSizeChange = () => { page.value = 1; fetchEvents() }
 
-const goToRule = (row: SecurityEvent) => { window.open(pageUrl('rules', { [DEEP_LINK_PARAMS.ruleSearch]: row.rule_caddy_id }), '_blank') }
+const goToRule = (row: SecurityEvent) => { window.open(pageUrl('rules', { [DEEP_LINK_PARAMS.ruleSearch]: row.rule_caddy_id }), '_blank', 'noopener') }
 const goToPolicy = (row: SecurityEvent) => {
   // 交接改走 URL query（sp / sp-search 参数，同 goToRule 的 rs 形态），
   // SecurityPolicies.vue onMounted 消费后 replaceState 清除。
   if (row.policy_id > 0) {
-    window.open(pageUrl('security-policies', { [DEEP_LINK_PARAMS.policyId]: row.policy_id }), '_blank')
+    window.open(pageUrl('security-policies', { [DEEP_LINK_PARAMS.policyId]: row.policy_id }), '_blank', 'noopener')
   } else if (row.policy_name) {
-    window.open(pageUrl('security-policies', { [DEEP_LINK_PARAMS.policySearch]: row.policy_name }), '_blank')
+    window.open(pageUrl('security-policies', { [DEEP_LINK_PARAMS.policySearch]: row.policy_name }), '_blank', 'noopener')
   }
 }
 

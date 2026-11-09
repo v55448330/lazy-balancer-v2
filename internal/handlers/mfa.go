@@ -135,7 +135,7 @@ func (h *Handlers) MFAVerifyLogin(c *gin.Context) {
 	}
 	if locked {
 		services.RecordAuditLog(user.Username, "登录失败", "用户认证", services.FormatAuditDetail(services.AuditUserPart(userID, user.Username), "账户已锁定"), c.ClientIP())
-		c.JSON(http.StatusTooManyRequests, models.APIResponse{Code: 429, Message: fmt.Sprintf("账户已锁定，请 %d 分钟后重试", loginLockRemainingMinutes(loginLockedUntil, time.Now().UTC()))})
+		c.JSON(http.StatusTooManyRequests, models.APIResponse{Code: 429, Message: apimsg.Tf(c, "k_be499438", loginLockRemainingMinutes(loginLockedUntil, time.Now().UTC())), MessageKey: "k_be499438"})
 		return
 	}
 

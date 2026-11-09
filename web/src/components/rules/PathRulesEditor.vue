@@ -8,7 +8,7 @@
     <div class="path-rules-list">
       <el-card
         v-for="(rule, index) in pathRules"
-        :key="rule.id ?? `new-${index}`"
+        :key="rule.id"
         shadow="never"
         class="path-rule-card dialog-panel dialog-panel--flush"
       >
@@ -214,8 +214,12 @@ const rowDiagnostics = computed(() => pathRules.value.map((_, index) => ({
   responseError: pathRuleResponseError(pathRules.value[index]),
 })))
 
+// audit136-F4:负数临时 id 单源(镜像 Rules.vue nextTemporaryPathRuleId)——
+// :key 原按索引回退,moveRule/removeRule 后 key 随索引重排,焦点/输入法组合态
+// 可能落到另一行;负 id 与后端正数 id 空间不相交,提交前由保存链剔除。
+let nextTemporaryPathRuleId = -1
 const addRule = (): void => {
-  pathRules.value.push({ match_type: 'prefix', path: '/', upstream_path: '', sort_order: pathRules.value.length, upstreams: null, response_mode: 'forward', response_status: 200, response_body: '', response_content_type: '', redirect_to: '' })
+  pathRules.value.push({ id: nextTemporaryPathRuleId--, match_type: 'prefix', path: '/', upstream_path: '', sort_order: pathRules.value.length, upstreams: null, response_mode: 'forward', response_status: 200, response_body: '', response_content_type: '', redirect_to: '' })
 }
 
 const removeRule = (index: number): void => {

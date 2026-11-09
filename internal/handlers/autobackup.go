@@ -789,12 +789,12 @@ func (h *Handlers) UpdateAutoBackupSettings(c *gin.Context) {
 		return
 	}
 	if !autoBackupKeepValid(*req.Keep) {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: fmt.Sprintf("保留份数必须在 %d-%d 之间", autoBackupKeepMin, autoBackupKeepMax)})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "k_ad3a8921", autoBackupKeepMin, autoBackupKeepMax), MessageKey: "k_ad3a8921"})
 		return
 	}
 	dayHigh := autoBackupDayHigh(*req.Frequency)
 	if *req.Day < 1 || *req.Day > dayHigh {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: fmt.Sprintf("备份日期必须在 1-%d 之间", dayHigh)})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "k_b0ab26a2", dayHigh), MessageKey: "k_b0ab26a2"})
 		return
 	}
 	if len(req.Sections) == 0 {

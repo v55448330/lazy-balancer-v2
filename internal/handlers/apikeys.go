@@ -288,7 +288,7 @@ func createAPIKeyForUser(c *gin.Context, userID int) {
 		}
 	}
 	if len(req.MCPIPWhitelist) > apiKeyMaxWhitelistEntries {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: fmt.Sprintf("MCP IP 白名单最多 %d 条", apiKeyMaxWhitelistEntries)})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "k_640c6b1a", apiKeyMaxWhitelistEntries), MessageKey: "k_640c6b1a"})
 		return
 	}
 	whitelist, err := services.NormalizeCIDRs(req.MCPIPWhitelist)
@@ -331,7 +331,7 @@ func createAPIKeyForUser(c *gin.Context, userID int) {
 		return
 	}
 	if inserted == 0 {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: fmt.Sprintf("API Key 数量已达上限（每用户 %d 个），请先删除不再使用的密钥", apiKeyMaxPerUser)})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "k_ee8b2d1d", apiKeyMaxPerUser), MessageKey: "k_ee8b2d1d"})
 		return
 	}
 	id, err := result.LastInsertId()
@@ -428,7 +428,7 @@ func updateAPIKeyStatus(c *gin.Context, currentUserOnly bool) {
 	whitelistCount := 0
 	if req.MCPIPWhitelist != nil {
 		if len(*req.MCPIPWhitelist) > apiKeyMaxWhitelistEntries {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: fmt.Sprintf("MCP IP 白名单最多 %d 条", apiKeyMaxWhitelistEntries)})
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "k_640c6b1a", apiKeyMaxWhitelistEntries), MessageKey: "k_640c6b1a"})
 			return
 		}
 		whitelist, err := services.NormalizeCIDRs(*req.MCPIPWhitelist)

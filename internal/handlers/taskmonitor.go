@@ -186,6 +186,10 @@ func (h *Handlers) ToggleSystemTask(c *gin.Context) {
 	var req struct {
 		Enabled *bool `json:"enabled"`
 	}
+	// audit136-F3:族性补守卫(taskmonitor 全文件 JSON 端点此前均无 body 上限)
+	if !guardConfiguredJSONBody(c) {
+		return
+	}
 	if err := c.ShouldBindJSON(&req); err != nil || req.Enabled == nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_e1092d80"), MessageKey: "k_e1092d80"})
 		return
@@ -296,6 +300,9 @@ func (h *Handlers) ControlSystemTask(c *gin.Context) {
 	}
 	var req struct {
 		Action string `json:"action"`
+	}
+	if !guardConfiguredJSONBody(c) {
+		return
 	}
 	if err := c.ShouldBindJSON(&req); err != nil || (req.Action != "start" && req.Action != "stop" && req.Action != "restart") {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_e6fdc41c"), MessageKey: "k_e6fdc41c"})

@@ -446,7 +446,7 @@ const fetchBlockedEvents = async () => {
   }
 }
 
-const goToEvents = () => { window.open(pageUrl('security-events'), '_blank') }
+const goToEvents = () => { window.open(pageUrl('security-events'), '_blank', 'noopener') }
 
 const rateLimitBlocks = ref<RateLimitBlocks>({ total: 0, hosts: [] })
 const rateLimitError = ref(false)

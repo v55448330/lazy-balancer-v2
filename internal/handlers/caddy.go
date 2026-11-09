@@ -1010,7 +1010,7 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 	}
 	if rows != 1 {
 		recordAudit(c, "更新失败", "全局配置", services.FormatAuditDetail("配置写入数据库失败", fmt.Sprintf("影响记录数为 %d", rows), services.AuditResultPart("failure")))
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: fmt.Sprintf("配置写入数据库失败: 影响记录数为 %d", rows)})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.Tf(c, "k_ca8cdd79", rows), MessageKey: "k_ca8cdd79"})
 		return
 	}
 	// 主节点坐标是未单独配置坐标的从节点的默认值：变化时必须 bump 集群版本，
@@ -1359,7 +1359,7 @@ func (h *Handlers) GetCaddyLogs(c *gin.Context) {
 		// fail-visible：未知类型此前静默回落到 runtime 日志，
 		// 排障者会误读错误文件（不同日志族内容完全不同）。
 		c.JSON(http.StatusBadRequest, models.APIResponse{
-			Code: 400, Message: fmt.Sprintf("未知日志类型 %q，可选值：%s", logType, strings.Join(caddyLogTypes(), "、")),
+			Code: 400, Message: apimsg.Tf(c, "k_a9176a1a", logType, strings.Join(caddyLogTypes(), "、")), MessageKey: "k_a9176a1a",
 		})
 		return
 	}

@@ -758,7 +758,7 @@ func (h *Handlers) GetIPList(c *gin.Context) {
 	} else {
 		var entries []models.IPListEntry
 		if err := json.Unmarshal([]byte(entriesJSON), &entries); err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: fmt.Sprintf("IP 列表 %s 的条目解析失败: %v", id, err)})
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.Tf(c, "k_c542aa92", id, err), MessageKey: "k_c542aa92"})
 			return
 		}
 		row.Entries = json.RawMessage(entriesJSON)
@@ -827,7 +827,7 @@ func (h *Handlers) CreateIPList(c *gin.Context) {
 		// 与内置威胁名单重名给出专属提示（2026-09-24 用户裁定：用户名单
 		// 不允许与内置名单重名——选择器分组依赖名字区分归属）
 		if sysDup {
-			c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: fmt.Sprintf("该名称为%s保留，请换一个名称", builtinIPListLabel(dupName))})
+			c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: apimsg.Tf(c, "k_6d907e84", builtinIPListLabel(dupName)), MessageKey: "k_6d907e84"})
 			return
 		}
 		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: apimsg.T(c, "k_58751208"), MessageKey: "k_58751208"})
@@ -843,7 +843,7 @@ func (h *Handlers) CreateIPList(c *gin.Context) {
 		return
 	}
 	if total >= ipListMaxGlobalCount {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: fmt.Sprintf("IP 地址列表（用户创建）数量已达上限（%d 个）", ipListMaxGlobalCount)})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "k_8c3bc75b", ipListMaxGlobalCount), MessageKey: "k_8c3bc75b"})
 		return
 	}
 	result, err := tx.ExecContext(caddyWriteCtx(c), `INSERT INTO security_ip_lists (name, description, category, entries, created_by, created_at, updated_by, updated_at) VALUES (?,?,?,?,?,datetime('now'),?,datetime('now'))`,
@@ -1003,7 +1003,7 @@ func (h *Handlers) UpdateIPList(c *gin.Context) {
 	if dup {
 		// 改名撞内置名单同 Create 口径给专属提示。
 		if sysDup {
-			c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: fmt.Sprintf("该名称为%s保留，请换一个名称", builtinIPListLabel(dupName))})
+			c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: apimsg.Tf(c, "k_6d907e84", builtinIPListLabel(dupName)), MessageKey: "k_6d907e84"})
 			return
 		}
 		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: apimsg.T(c, "k_58751208"), MessageKey: "k_58751208"})
@@ -1149,7 +1149,7 @@ func (h *Handlers) DeleteIPList(c *gin.Context) {
 		return
 	}
 	if len(referencingPolicyIDs) > 0 {
-		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: fmt.Sprintf("该 IP 列表正被 %d 个启用的安全策略引用，请先解除引用", len(referencingPolicyIDs))})
+		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: apimsg.Tf(c, "k_d7e8755b", len(referencingPolicyIDs)), MessageKey: "k_d7e8755b"})
 		return
 	}
 	// 受信代理引用面守卫（2026-10-12，参照 crs_excluded 引用面守卫）：
@@ -1293,7 +1293,7 @@ func (h *Handlers) AddIPToList(c *gin.Context) {
 		// 自动封禁关闭期间滞留的已到期条目不占名额（清理只在启用收尾/任务
 		// merge 时发生，按原始长度计会把生效远未达上限的手动封禁 400 挡下）。
 		if len(services.AutobanActiveEntries(entries)) >= ipListMaxEntries {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: fmt.Sprintf("生效条目数量不能超过 %d 条", ipListMaxEntries)})
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "k_66ac459b", ipListMaxEntries), MessageKey: "k_66ac459b"})
 			return
 		}
 		entries = append(entries, models.IPListEntry{Value: req.Value, Remark: newEntryRemark})
@@ -1559,7 +1559,7 @@ func (h *Handlers) tryIPListHotPathApply(c *gin.Context, tx *sql.Tx, listID int6
 			if status == 0 {
 				status = http.StatusOK
 			}
-			c.JSON(status, models.APIResponse{Code: 0, Message: f.SuccessMsg + "；但 Caddy 配置应用失败：" + services.RedactCaddyAdminEndpoint(applyErr.Error()), Data: f.Data})
+			c.JSON(status, models.APIResponse{Code: 0, Message: apimsg.Tf(c, "k_de8cc6aa", f.SuccessMsg, services.RedactCaddyAdminEndpoint(applyErr.Error())), MessageKey: "k_de8cc6aa", Data: f.Data})
 			return true
 		}
 		if err := commitIPListTx(tx); err != nil {

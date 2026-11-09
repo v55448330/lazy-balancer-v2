@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"lazy-balancer-v2/internal/apimsg"
 	"math"
 	"net"
 	"net/http"
@@ -7049,7 +7050,7 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: importPartialSuccessMessage(action, queueRecoveryErr), Data: gin.H{"summary": counts, "disabled_conflicts": disabledConflicts, "warnings": responseWarnings, "partial": true}})
 		return
 	}
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: fmt.Sprintf("配置"+action+"成功：%s", strings.ReplaceAll(counts, "；", "、")), Data: gin.H{"summary": counts, "disabled_conflicts": disabledConflicts, "warnings": responseWarnings}})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.Tf(c, "k_2499ff15", action, strings.ReplaceAll(counts, "；", "、")), MessageKey: "k_2499ff15", Data: gin.H{"summary": counts, "disabled_conflicts": disabledConflicts, "warnings": responseWarnings}})
 }
 
 // importPartialSuccessMessage 是「部分成功」（数据库已提交、证书任务恢复失败）

@@ -1460,7 +1460,7 @@ func (h *Handlers) OIDCSettingsUpdate(c *gin.Context) {
 			continue
 		}
 		if trimmed := strings.TrimSpace(*field.value); truncateRunes(trimmed, field.max) != trimmed {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: fmt.Sprintf("%s 过长（最多 %d 字符）", field.name, field.max)})
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "k_69d65efd", field.name, field.max), MessageKey: "k_69d65efd"})
 			return
 		}
 	}
@@ -1553,7 +1553,7 @@ func (h *Handlers) OIDCSettingsUpdate(c *gin.Context) {
 			"服务地址归一与既有身份行冲突", "subject："+strings.Join(migration.conflicts, "、"), services.AuditResultPart("failure")))
 		c.JSON(http.StatusConflict, models.APIResponse{
 			Code:    409,
-			Message: fmt.Sprintf("服务地址归一后与既有身份记录冲突（%d 个 subject 已存在归一值身份行），请先人工合并重复账号再保存", len(migration.conflicts)),
+			Message: apimsg.Tf(c, "k_1b2637fe", len(migration.conflicts)), MessageKey: "k_1b2637fe",
 			Data:    gin.H{"conflicts": migration.conflicts},
 		})
 		return

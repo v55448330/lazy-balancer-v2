@@ -1031,6 +1031,9 @@ func (h *Handlers) ImportV1Config(c *gin.Context) {
 	if len(validationSkips) > 0 {
 		skipSuffix = fmt.Sprintf("、跳过 %d 条", len(validationSkips))
 	}
+	// audit136-A5 豁免:还原/导入统计长拼接为结构化弹框(RestoreResultDialog)的
+	// 解析消费面——徽章网格按 zh 母本「键 数量」形态解析,en 改模板会破坏解析。
+	// 数据文本双语归后端双语工程(A5 后续/Tier 2 残余),此处登记豁免不迁移。
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: fmt.Sprintf("配置导入成功：规则 %d 条、上游 %d 个%s%s", imported, upstreamCount, tlsSuffix, skipSuffix), Data: gin.H{"imported": imported, "disabled_conflicts": disabledConflicts, "warnings": allWarnings}})
 }
 

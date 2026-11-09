@@ -806,7 +806,13 @@ func (h *Handlers) GetLogStats(c *gin.Context) {
 		var taskRows []services.TaskInfo
 		// 清单截断位由 /system/tasks 端点负责披露（任务监控页消费）；本端点
 		// 不重复携带无人消费的同名字段（契约噪声与「采集白付」同源）。
-		taskRows, _ = services.CollectSystemTasks()
+		// audit136-F1:截断留痕——certJobsTruncated=true 表示证书任务行被
+		// 截断,静默丢弃信号会让前端把「部分缺失」误读为「完整零占用」
+		// (对齐同文件 resolve 失败的 Logf("warn") 取向)。
+		taskRows, certJobsTruncated := services.CollectSystemTasks()
+		if certJobsTruncated {
+			services.Logf("warn", "logstats: cert job rows truncated in storage section, omitted silently before")
+		}
 		for _, task := range taskRows {
 			key := "task:" + task.ID
 			if !want(key) {

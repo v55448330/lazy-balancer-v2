@@ -550,10 +550,10 @@ const trustedProxyDisabledStaleError = computed(() =>
 
 // —— 存为列表：内联网段一键建名单并转为引用（镜像策略侧「提取为列表」） ——
 const saveListDialogVisible = ref(false)
-const saveListForm = ref({ name: '受信代理网段', category: 'CDN 节点' })
+const saveListForm = ref({ name: t('app.settings.basic.map.saveAsListDefaultName'), category: t('app.settings.basic.map.saveAsListDefaultCategory') })
 const savingList = ref(false)
 const openSaveListDialog = (): void => {
-  saveListForm.value = { name: '受信代理网段', category: 'CDN 节点' }
+  saveListForm.value = { name: t('app.settings.basic.map.saveAsListDefaultName'), category: t('app.settings.basic.map.saveAsListDefaultCategory') }
   saveListDialogVisible.value = true
 }
 const confirmSaveAsList = async (): Promise<void> => {
@@ -572,7 +572,7 @@ const confirmSaveAsList = async (): Promise<void> => {
       description: '',
       category: saveListForm.value.category.trim(),
       // entries 与其余名单字段同口径：JSON 数组文本（后端 Entries 为 string）
-      entries: JSON.stringify(sourceEntries.map((value) => ({ value, remark: '受信代理网段' }))),
+      entries: JSON.stringify(sourceEntries.map((value) => ({ value, remark: t('app.settings.basic.map.saveAsListDefaultName') }))),
     })
     const newId = res.data?.id
     if (!newId) throw new Error(t('app.settings.caddy.list.createMissingId'))

@@ -2,7 +2,10 @@
 // 用法(codemod 生成):models.APIResponse{Code: x, Message: apimsg.T(c, "k_x"), MessageKey: "k_x"}
 package apimsg
 
-import "strings"
+import (
+	"fmt"
+	"strings"
+)
 
 import (
 	"lazy-balancer-v2/internal/i18n"
@@ -12,14 +15,17 @@ import (
 func T(c i18n.Ctx, key string) string { return i18n.T(i18n.FromCtx(c), key) }
 
 // Tf 模板插值:词条含 %s 占位(与 i18n 错误模板同约定),按序填充。
-func Tf(c i18n.Ctx, key string, args ...string) string {
+// audit136-A5:参数放宽 any(int 常量等直传,内部 fmt.Sprint 字符串化)——
+// 迁移管线把 fmt.Sprintf("%d", intConst) 调用点转 Tf 时参数类型混合。
+func Tf(c i18n.Ctx, key string, args ...any) string {
 	tpl := i18n.T(i18n.FromCtx(c), key)
 	if len(args) == 0 {
 		return tpl
 	}
-	// 简单顺序填充(词条为受控 codemod 产物,不引入 fmt 语义)
+	// 简单顺序填充(词条为受控 codemod 产物,不引入 fmt 动词语义——%d 视同 %s)
 	for _, a := range args {
-		tpl = replaceFirst(tpl, "%s", a)
+		tpl = replaceFirst(tpl, "%s", fmt.Sprint(a))
+		tpl = replaceFirst(tpl, "%d", fmt.Sprint(a))
 	}
 	return tpl
 }

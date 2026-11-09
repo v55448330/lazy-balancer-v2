@@ -375,5 +375,5 @@ func (h *Handlers) clusterNodeAction(c *gin.Context, action string, operation fu
 		return
 	}
 	recordAudit(c, action, "集群节点", services.FormatAuditDetail(fmt.Sprintf("节点 %d", id), services.AuditResultPart("success")))
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: action + "节点成功"})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.Tf(c, "k_6139d1f3", action), MessageKey: "k_6139d1f3"})
 }

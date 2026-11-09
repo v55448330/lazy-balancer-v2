@@ -719,7 +719,7 @@ const loginNode = async (node: ClusterNode): Promise<void> => {
     const response = await request.post<LoginTicketResponse>(`/cluster/nodes/${node.id}/login-ticket`, undefined, { silent: true })
     const target = new URL(response.url)
     target.hash = `login_ticket=${encodeURIComponent(response.ticket)}`
-    const loginWindow = window.open(target.toString(), '_blank')
+    const loginWindow = window.open(target.toString(), '_blank', 'noopener')
     if (!loginWindow) {
       ElMessage.warning(t('app.settings.cluster.nodes.popupBlocked'))
       return
