@@ -781,6 +781,7 @@ import LogStorageBar from '@/components/LogStorageBar.vue'
 import { formatDate } from '@/utils/date'
 import { autobanEntryExpired, autobanEntryRemaining } from '@/utils/autobanEntry'
 import { IP_LIST_CATEGORIES, invalidateSharedEntriesCache } from '@/utils/securityStages'
+import { CRS_CATEGORY_KEYS } from '@/utils/crsCategories.ts'
 
 // 名单分类显示映射:后端/存储为 zh 分类码(有限集合),en 用户经词条显示;
 // 未登记值(自定义名)回落原文。筛选/表单 value 保持 zh 原样不传译值。
@@ -798,7 +799,11 @@ const IP_LIST_CATEGORY_KEYS: Record<string, string> = {
 const ipListCategoryLabel = (raw?: string): string => {
   if (!raw) return raw || ''
   const k = IP_LIST_CATEGORY_KEYS[raw]
-  return k ? t(`common.app.ipListCategory.${k}`) : raw
+  if (k) return t(`common.app.ipListCategory.${k}`)
+  // CRS 规则分类走独立词表(与 IP 名单分类不同码表)
+  const ck = CRS_CATEGORY_KEYS[raw]
+  if (ck) return t(`common.app.crsCategory.${ck}`)
+  return raw
 }
 import { crsRuleCountLabel, libraryHealthTag, librarySourceHealthTag, libraryStatusLabel, libraryStatusTagType, summarizeLibrarySources } from '@/utils/securityLibraries'
 import { updaterName } from '@/utils/updaterName'

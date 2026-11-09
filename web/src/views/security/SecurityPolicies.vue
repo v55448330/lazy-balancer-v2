@@ -970,6 +970,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { CRS_CATEGORY_KEYS } from '@/utils/crsCategories.ts'
 import { Plus, Lock, InfoFilled, CircleCheckFilled, Connection, Odometer, Link, Check, ArrowLeft, ArrowRight, ArrowDown, Search, WarningFilled, Document } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { CascaderOption, CascaderProps, LazyLoad } from 'element-plus'
@@ -1129,7 +1130,11 @@ const IP_LIST_CATEGORY_KEYS: Record<string, string> = {
 const ipListCategoryLabel = (raw?: string): string => {
   if (!raw) return raw || ''
   const k = IP_LIST_CATEGORY_KEYS[raw]
-  return k ? t(`common.app.ipListCategory.${k}`) : raw
+  if (k) return t(`common.app.ipListCategory.${k}`)
+  // CRS 规则分类走独立词表(与 IP 名单分类不同码表)
+  const ck = CRS_CATEGORY_KEYS[raw]
+  if (ck) return t(`common.app.crsCategory.${ck}`)
+  return raw
 }
 
 const policyTypeOf = (row: PolicySummary): SecurityPolicyType => inferPolicyType(row)

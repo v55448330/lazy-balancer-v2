@@ -1,6 +1,6 @@
 // CRS 规则分类显示映射:后端 CategorizeCRSFile 产出的 zh 分类码为有限集合,
 // en 用户经词条显示;未登记值回落原文。键=后端 zh 分类码原文。
-const CRS_CATEGORY_KEYS: Record<string, string> = {
+export const CRS_CATEGORY_KEYS: Record<string, string> = {
   '初始化': 'init',
   '初始化/排除': 'initExclusions',
   '通用异常': 'genericAnomalies',
