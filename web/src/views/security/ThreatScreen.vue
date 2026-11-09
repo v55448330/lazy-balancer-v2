@@ -305,6 +305,7 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { safeSessionStorageGet, safeSessionStorageSet } from '@/utils/safeWebStorage'
 import { useI18n } from 'vue-i18n'
 import { ElMessage } from 'element-plus'
 import { request } from '@/utils/api'
@@ -415,10 +416,10 @@ const authStore = useAuthStore()
 const stats = ref<ThreatScreenStats | null>(null)
 
 // 回填/汇总延迟为系统自愈态：会话内关闭即可（sessionStorage，刷新后允许再次提示）
-const backfillDismissed = ref(sessionStorage.getItem("backfill-banner-dismissed") === "1")
-const dismissBackfill = () => { sessionStorage.setItem("backfill-banner-dismissed", "1"); backfillDismissed.value = true }
-const rollupStaleDismissed = ref(sessionStorage.getItem("rollup-stale-dismissed") === "1")
-const dismissRollupStale = () => { sessionStorage.setItem("rollup-stale-dismissed", "1"); rollupStaleDismissed.value = true }
+const backfillDismissed = ref(safeSessionStorageGet("backfill-banner-dismissed") === "1")
+const dismissBackfill = () => { safeSessionStorageSet("backfill-banner-dismissed", "1"); backfillDismissed.value = true }
+const rollupStaleDismissed = ref(safeSessionStorageGet("rollup-stale-dismissed") === "1")
+const dismissRollupStale = () => { safeSessionStorageSet("rollup-stale-dismissed", "1"); rollupStaleDismissed.value = true }
 const statsError = ref(false)
 const ingestionWarning = computed(() => ingestionWarningMessage(stats.value?.ingestion))
 const feedItems = ref<FeedEvent[]>([])

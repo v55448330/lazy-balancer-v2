@@ -1,4 +1,5 @@
 import { defineStore } from 'pinia'
+import { safeLocalStorageGet, safeLocalStorageSet, safeLocalStorageRemove } from '@/utils/safeWebStorage'
 import { ref, computed } from 'vue'
 import type { APIResponse, ClusterNodeMode, CurrentUser, GlobalConfigData } from '@/types'
 import { isTokenExpired, request, ApiRequestError } from '@/utils/api'
@@ -17,14 +18,14 @@ const queryPageValid: PageId | null = queryPage && isPageId(queryPage) ? queryPa
 // 查询串的深链不再把「rules?x=1」整段当键（解析口径与 App 首屏一致）。
 const hashPath = readHashQuery().path.replace(/^\//, '')
 const hashPage = hashPath || null
-const storedCurrentPage = localStorage.getItem('currentPage')
+const storedCurrentPage = safeLocalStorageGet('currentPage')
 const initialCurrentPage: PageId =
   queryPageValid ??
   (hashPage && isPageId(hashPage) ? hashPage :
    storedCurrentPage && isPageId(storedCurrentPage) ? storedCurrentPage : 'dashboard')
 // 深链?page= 仅作首屏入口——消费后立即剥离并同步 localStorage，
 // 否则参数永久留在 URL 上遮蔽 hash 导航（深链标签页导航后刷新被拉回原页）。
-if (storedCurrentPage !== initialCurrentPage) localStorage.setItem('currentPage', initialCurrentPage)
+if (storedCurrentPage !== initialCurrentPage) safeLocalStorageSet('currentPage', initialCurrentPage)
 if (queryPageValid) {
   const url = new URL(window.location.href)
   url.searchParams.delete('page')
@@ -39,7 +40,7 @@ interface AuthResponse {
 
 export const useAuthStore = defineStore('auth', () => {
   const user = ref<CurrentUser | null>(null)
-  const token = ref<string | null>(localStorage.getItem('token'))
+  const token = ref<string | null>(safeLocalStorageGet('token'))
   // 节点模式三态化——null=未知（/config 未成功拉取），
   // 不再默认 'master'：从节点刷新+瞬时失败窗口曾按主节点 fail-open 渲染写控件。
   const nodeMode = ref<ClusterNodeMode | null>(null)
@@ -96,7 +97,7 @@ export const useAuthStore = defineStore('auth', () => {
   const onStorageChange = (event: StorageEvent): void => {
     // key === null = 另一标签页执行了 localStorage.clear()（会话同样失效）
     if (event.key !== null && event.key !== 'token') return
-    const stored = localStorage.getItem('token')
+    const stored = safeLocalStorageGet('token')
     if (stored === token.value) return
     // 换账号推进代际；同账号 MFA 刷新保持代际，但仍在下方换令牌并重拉投影。
     if (!isSameTokenIdentity(token.value, stored)) advanceSessionGeneration()
@@ -329,7 +330,7 @@ interface LoginResult {
     clearConfigRetryTimer()
     token.value = res.token
     nodeMode.value = res.node_mode
-    localStorage.setItem('token', res.token)
+    safeLocalStorageSet('token', res.token)
     if (res.user) {
       user.value = {
         id: res.user.id,
@@ -356,7 +357,7 @@ interface LoginResult {
     user.value = null
     nodeMode.value = null
     token.value = rawToken
-    localStorage.setItem('token', rawToken)
+    safeLocalStorageSet('token', rawToken)
   }
 
   async function loginWithTicket(ticket: string): Promise<{ skipped: boolean }> {
@@ -387,7 +388,7 @@ interface LoginResult {
       user.value = null
       token.value = null
       nodeMode.value = null
-      localStorage.removeItem('token')
+      safeLocalStorageRemove('token')
     }
   }
 
@@ -404,7 +405,7 @@ interface LoginResult {
     user.value = null
     token.value = null
     nodeMode.value = null
-    localStorage.removeItem('token')
+    safeLocalStorageRemove('token')
   }
 
   function showToast(type: 'success' | 'error' | 'info' | 'warning', message: string) {
@@ -418,7 +419,7 @@ interface LoginResult {
   function setCurrentPage(page: PageId) {
     if (!isPageId(page)) return
     currentPage.value = page
-    localStorage.setItem('currentPage', page)
+    safeLocalStorageSet('currentPage', page)
     if (window.location.hash !== `#/${page}`) {
       window.history.replaceState(null, '', `#/${page}`)
     }

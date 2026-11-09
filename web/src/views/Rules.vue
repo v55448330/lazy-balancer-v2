@@ -17,7 +17,7 @@
     <el-alert v-if="certPollingError.errorMessage.value" type="error" :closable="false" show-icon class="polling-error-alert error-banner">
       <template #title>
         <div class="polling-error-title">
-          <span>{{ t('common.app.rules.list.certLoadFailPrefix') }}{{ certPollingError.errorMessage.value }}{{ certPollingError.errorMessage.value }}</span>
+          <span>{{ t('common.app.rules.list.certLoadFailPrefix') }}{{ certPollingError.errorMessage.value }}</span>
           <el-button link type="danger" :loading="certRetryLoading" @click="retryCertPolling">{{ t('common.app.rules.list.retryNow') }}</el-button>
         </div>
       </template>
@@ -36,7 +36,7 @@
     <el-alert v-if="healthPollingError.errorMessage.value" type="error" :closable="false" show-icon class="polling-error-alert error-banner">
       <template #title>
         <div class="polling-error-title">
-          <span>{{ t('common.app.rules.list.healthLoadFailPrefix') }}{{ healthPollingError.errorMessage.value }}{{ healthPollingError.errorMessage.value }}</span>
+          <span>{{ t('common.app.rules.list.healthLoadFailPrefix') }}{{ healthPollingError.errorMessage.value }}</span>
           <el-button link type="danger" :loading="healthRetryLoading" @click="retryHealthPolling">{{ t('common.app.rules.list.retryNow') }}</el-button>
         </div>
       </template>

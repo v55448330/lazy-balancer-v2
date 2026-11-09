@@ -226,7 +226,7 @@ RUN crs_version=v4.28.0; \
     crs_sha256=d8acc96f25ad07c8e3a595a23c797324f6d77e59ddf9e26e90dd95ebd2e676ce; \
     xdb_sha256=6307a9696f5711f84bcb8b25f07894de68a64a0ed4a1cc7e990562dd3084f210; \
     xdb_v6_sha256=5b93da35ac28bc316dccc54a758381f7a874ae0461dd51ff5df5e34815586f11; \
-    n=0; until apk add --no-cache --repository http://dl-cdn.alpinelinux.org/alpine/edge/main zlib=1.4-r0 curl; do \
+    n=0; until apk add --no-cache --repository https://dl-cdn.alpinelinux.org/alpine/edge/main zlib=1.4-r0 curl; do \
       n=$((n+1)); \
       if [ "$n" -ge 3 ]; then echo ">>> apk add curl 3 次失败" >&2; exit 1; fi; \
       echo ">>> apk add curl 第 ${n}/3 次失败，10s 后重试" >&2; sleep 10; \

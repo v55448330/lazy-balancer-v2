@@ -182,16 +182,19 @@ const zhResources = zhCommon.app.auditResources as unknown as Record<string, str
 const enActions = enCommon.app.auditActions as unknown as Record<string, string>
 const enResources = enCommon.app.auditResources as unknown as Record<string, string>
 
-test('词条正钉：表内每个后缀双语齐备，zh 值=库值（zh 原样）', () => {
+test('词条正钉：表内每个后缀双语齐备', () => {
+  // audit136-I18n 契约升级(用户裁定「通俗直观」):auditActions 维持 zh=库值原样
+  // (动作枚举库值本身即中文);auditResources 改 zh=本地化中文标签(原 family id
+  // 直出如 backup/cert-job 不直观,与 en Task · X 同构)。筛选 value 仍库值原样。
   for (const [raw, key] of Object.entries(AUDIT_ACTION_KEYS)) {
     assert.ok(zhActions[key] !== undefined, `zh auditActions 缺 ${key}（库值 ${raw}）`)
     assert.equal(zhActions[key], raw, `zh auditActions.${key} 必须=库值原样（zh 原样契约）`)
     assert.ok(enActions[key] !== undefined && enActions[key] !== '', `en auditActions 缺 ${key}`)
   }
   for (const [raw, key] of Object.entries(AUDIT_RESOURCE_KEYS)) {
-    assert.ok(zhResources[key] !== undefined, `zh auditResources 缺 ${key}（库值 ${raw}）`)
-    assert.equal(zhResources[key], raw, `zh auditResources.${key} 必须=库值原样`)
+    assert.ok(zhResources[key] !== undefined && zhResources[key] !== '', `zh auditResources 缺 ${key}（库值 ${raw}）`)
     assert.ok(enResources[key] !== undefined && enResources[key] !== '', `en auditResources 缺 ${key}`)
+    assert.notEqual(zhResources[key], enResources[key], `zh auditResources.${key} 与 en 同值=漏译`)
   }
 })
 

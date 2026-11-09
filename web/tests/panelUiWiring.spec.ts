@@ -160,7 +160,8 @@ test('大屏显性披露回填未完成与汇总陈旧', () => {
   const backfillBlock = text.slice(text.indexOf('v-if="stats?.backfill_incomplete'), text.indexOf('rollup_stale-dismissed'))
   const rollupBlock = text.slice(text.indexOf('v-if="stats?.rollup_stale'), text.indexOf('rollup-stale-dismissed') + 40)
   assert.match(backfillBlock, /info-note-dismiss/, '回填横幅必须带可关闭入口')
-  assert.match(backfillBlock, /sessionStorage/, '回填横幅关闭记忆用 sessionStorage（会话内不重复弹出）')
+  // audit136-W1:storage 禁用环境白屏根治——读写统一走 safeSessionStorage*(同语义安全版)
+  assert.match(backfillBlock, /sessionStorage|safeSessionStorage/, '回填横幅关闭记忆用 sessionStorage（会话内不重复弹出）')
   assert.match(rollupBlock, /info-note-dismiss/, '汇总延迟横幅必须带可关闭入口')
   assert.match(rollupBlock, /rollup-stale-dismissed/, '汇总延迟横幅关闭记忆用 sessionStorage')
   // 关闭入口样式契约：全局样式必须可见（描边+主题色）且横幅对齐（:has flex）

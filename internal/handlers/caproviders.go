@@ -33,7 +33,7 @@ func (h *Handlers) GetCAProvider(c *gin.Context) {
 	p, err := h.caProviderService.GetCAProvider(id)
 	if err != nil {
 		if errors.Is(err, services.ErrCAProviderNotFound) {
-			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "CA provider not found"})
+			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: apimsg.T(c, "k_4c8b8a15"), MessageKey: "k_4c8b8a15"})
 			return
 		}
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_a747ff69"), MessageKey: "k_a747ff69"})
@@ -113,7 +113,10 @@ func (h *Handlers) UpdateCAProvider(c *gin.Context) {
 			c.JSON(http.StatusRequestEntityTooLarge, models.APIResponse{Code: 413, Message: apimsg.T(c, "k_45aadcca"), MessageKey: "k_45aadcca"})
 			return
 		}
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "Invalid request: " + err.Error()})
+		// audit136-U2a-1:binding 错误细节(含 Go 结构体/字段名)只进日志,
+		// 客户端回固定双语文案(与 certinfo 同包自述口径一致)
+		services.Logf("error", "CA provider update binding failed: %v", err)
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_868de64b"), MessageKey: "k_868de64b"})
 		return
 	}
 	// CA 提供商的「守卫 + 提交」必须与规则/默认 CA 的「校验 + 提交」互斥：
@@ -126,7 +129,7 @@ func (h *Handlers) UpdateCAProvider(c *gin.Context) {
 	if err != nil {
 		if errors.Is(err, services.ErrCAProviderNotFound) {
 			recordCAProviderUpdateFailure(c, id, "提供商不存在")
-			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: "CA provider not found"})
+			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: apimsg.T(c, "k_4c8b8a15"), MessageKey: "k_4c8b8a15"})
 			return
 		}
 		if errors.Is(err, services.ErrCAProviderLastEnabled) {

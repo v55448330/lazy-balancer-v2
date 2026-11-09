@@ -1,4 +1,5 @@
 import { createApp } from 'vue'
+import { safeLocalStorageGet } from '@/utils/safeWebStorage'
 import { createPinia } from 'pinia'
 import App from './App.vue'
 import { i18n } from './i18n/index'
@@ -25,7 +26,7 @@ app.config.globalProperties.$flw = (zhWidth: string): string => {
   // 表单 label 宽度语言感知:zh=设计固定宽;en=设计宽×1.3(下限 120px)——
   // 英文文案较中文长 30-80%,适度加宽消除临界误折(Custom routes 等),
   // 超长 label 仍按裁定整词换行两行(非单行化/非 auto 拉宽)。
-  if (localStorage.getItem('lb_locale') !== 'en') return zhWidth
+  if (safeLocalStorageGet('lb_locale') !== 'en') return zhWidth
   const n = parseInt(zhWidth)
   return `${Math.max(Math.round(n * 1.3), 120)}px`
 }
