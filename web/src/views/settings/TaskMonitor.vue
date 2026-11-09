@@ -897,15 +897,16 @@ onUnmounted(closeLogs)
 // 三态（cert-job 动态行同口径：退役/终态成功归 idle，证书业务生命周期态
 // 由业务文本承载，不进状态列）。
 // stopped/disabled 已从引擎族状态产出退役（调度语义归开关列 loop_on&&enabled）。
-const statusLabels = computed<Record<string, string>>(() => ({
+// setLocale 走整页重载:模块级词条表在加载期求值即随 locale,无响应式需求
+const statusLabels: Record<string, string> = {
   running: t('app.settings.taskMonitor.status.running'), idle: t('app.settings.taskMonitor.status.idle'), failed: t('app.settings.taskMonitor.status.failed'),
-}))
+}
 // 状态列兜底只回显原值——禁止把 cert_jobs 业务生命周期态（issued/waiting_ca…）
 // 经证书标签兜底渲染进状态列（2026-10-22 用户裁定三态词表）。
-const statusLabel = (s: string) => hasOwn(statusLabels.value, s) ? statusLabels.value[s] : s
+const statusLabel = (s: string) => hasOwn(statusLabels, s) ? statusLabels[s] : s
 // v2.0 四类型：定时(蓝)/常驻(绿)/循环(青)/触发(橙)
-const kindLabels = computed<Record<string, string>>(() => ({ scheduled: t('app.settings.taskMonitor.kind.scheduled'), daemon: t('app.settings.taskMonitor.kind.daemon'), periodic: t('app.settings.taskMonitor.kind.periodic'), oneshot: t('app.settings.taskMonitor.kind.oneshot') }))
-const kindLabel = (k: string) => hasOwn(kindLabels.value, k) ? kindLabels.value[k] : k
+const kindLabels: Record<string, string> = { scheduled: t('app.settings.taskMonitor.kind.scheduled'), daemon: t('app.settings.taskMonitor.kind.daemon'), periodic: t('app.settings.taskMonitor.kind.periodic'), oneshot: t('app.settings.taskMonitor.kind.oneshot') }
+const kindLabel = (k: string) => hasOwn(kindLabels, k) ? kindLabels[k] : k
 const kindTag = (k: string): 'primary' | 'success' | 'info' | 'warning' =>
   k === 'scheduled' ? 'primary' : k === 'daemon' ? 'success' : k === 'periodic' ? 'info' : 'warning'
 const kindTagClass = (k: string) => (k === 'periodic' ? 'tm-tag-periodic' : '')
@@ -928,16 +929,16 @@ const categoryTagType = (c: string): 'primary' | 'success' | 'warning' | 'info' 
   c === '安全防护' ? 'primary' : c === '证书' ? 'success' : c === '备份' ? 'warning' : 'info'
 // caddy-restart（Caddy 崩溃自愈 watcher 通道）此前裸显
 // 英文 token——补中文标签，未列触发值仍回退原文。
-const triggerLabels = computed<Record<string, string>>(() => ({ manual: t('app.settings.taskMonitor.trigger.manual'), auto: t('app.settings.taskMonitor.trigger.auto'), schedule: t('app.settings.taskMonitor.trigger.schedule'), queue: t('app.settings.taskMonitor.trigger.queue'), startup: t('app.settings.taskMonitor.trigger.startup'), 'caddy-restart': t('app.settings.taskMonitor.trigger.caddyRestart') }))
-const triggerLabel = (key: string) => (hasOwn(triggerLabels.value, key) ? triggerLabels.value[key] : key) || '—'
+const triggerLabels: Record<string, string> = { manual: t('app.settings.taskMonitor.trigger.manual'), auto: t('app.settings.taskMonitor.trigger.auto'), schedule: t('app.settings.taskMonitor.trigger.schedule'), queue: t('app.settings.taskMonitor.trigger.queue'), startup: t('app.settings.taskMonitor.trigger.startup'), 'caddy-restart': t('app.settings.taskMonitor.trigger.caddyRestart') }
+const triggerLabel = (key: string) => (hasOwn(triggerLabels, key) ? triggerLabels[key] : key) || '—'
 // 结果词表=引擎 task_runs 结果域自有映射（running/success/failed/cancelled/
 // skipped/interrupted，与 GET /system/tasks/:id/history 的 status 枚举同源）；
 // 未知值显性回显「未知」——不借用 cert_jobs 状态机词表（issued/waiting_ca 等
 // 属证书业务域，进了结果列只会域错位误导；cert-job 动态行的业务状态由任务
 // 名称/详情的业务文本承载）。
-const resultLabels = computed<Record<string, string>>(() => ({ success: t('app.settings.taskMonitor.result.success'), failed: t('app.settings.taskMonitor.result.failed'), cancelled: t('app.settings.taskMonitor.result.cancelled'), interrupted: t('app.settings.taskMonitor.result.interrupted'), running: t('app.settings.taskMonitor.result.running'), skipped: t('app.settings.taskMonitor.result.skipped') }))
+const resultLabels: Record<string, string> = { success: t('app.settings.taskMonitor.result.success'), failed: t('app.settings.taskMonitor.result.failed'), cancelled: t('app.settings.taskMonitor.result.cancelled'), interrupted: t('app.settings.taskMonitor.result.interrupted'), running: t('app.settings.taskMonitor.result.running'), skipped: t('app.settings.taskMonitor.result.skipped') }
 const statusResultLabel = (r: string): string =>
-  hasOwn(resultLabels.value, r) ? resultLabels.value[r]! : t('app.settings.taskMonitor.status.unknown')
+  hasOwn(resultLabels, r) ? resultLabels[r]! : t('app.settings.taskMonitor.status.unknown')
 const resultTagType = (r: string): 'success' | 'danger' | 'info' | 'warning' =>
   r === 'success' ? 'success' : r === 'failed' ? 'danger' : r === 'cancelled' ? 'warning' : 'info'
 

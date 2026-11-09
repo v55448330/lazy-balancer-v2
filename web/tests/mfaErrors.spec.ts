@@ -55,10 +55,16 @@ test('同端点的会话过期 401 不得被豁免（428→verify-step 窗口）
 // 误加一条真实会话文案会让过期令牌被判成「验证码错误」，用户卡在弹码循环。
 test('jwtAuth 会话 401 文案一律不豁免（真实过期/吊销/改密/凭证无效）', () => {
   const jwtAuth = section(repoCode('internal/middleware/middleware.go'), 'func jwtAuth(', 'func apiKeyAuth(')
-  const messages = [
-    ...new Set([...jwtAuth.matchAll(/StatusUnauthorized, gin\.H\{[^}]*"message": "([^"]+)"/g)]
-      .map((match) => match[1])),
+  const catalog = repoCode('internal/i18n/catalog_gen.go')
+  // i18n 后:middleware 消息=apimsg.T 调用点,扫描 message_key 键集,catalog 映射回 zh 母本对表
+  const keySet = [
+    ...new Set([...jwtAuth.matchAll(/"message_key": "(k_[a-f0-9]+)"/g)].map((m) => m[1])),
   ]
+  const zhOf = (key: string): string => {
+    const mm = catalog.match(new RegExp('Register\\("' + key + '", "((?:[^"\\\\]|\\\\.)*)"'))
+    return mm ? mm[1] : ''
+  }
+  const messages = keySet.map(zhOf)
   // 扫描器鉴别力：派生为空或缺分支时本用例会恒绿，先钉住真实文案集。
   for (const expected of [
     '缺少认证信息',

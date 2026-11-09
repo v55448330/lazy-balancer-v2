@@ -60,7 +60,7 @@ import { request } from '@/utils/api'
 import { DEFAULT_ACCESS_LOG_FORMAT } from '@/utils/caddyDefaults'
 import { normalizeTrafficSampleN } from '@/utils/threatFlowRules'
 import { displaySecurityEventsRetentionDays, displaySecurityEventsRowCap, displayThreatScreenMode } from '@/utils/configValues'
-import { SETTINGS_TAB_DESCS, SETTINGS_TAB_TITLES, settingsTabConsumesConfig, settingsTabOfPage, type SettingsTabId } from '@/utils/settingsPages'
+import { settingsTabConsumesConfig, settingsTabDesc, settingsTabOfPage, settingsTabTitle, type SettingsTabId } from '@/utils/settingsPages'
 import { useAuthStore } from '@/stores/auth'
 import { Setting } from '@element-plus/icons-vue'
 import BasicSettings from './settings/BasicSettings.vue'
@@ -142,8 +142,8 @@ const global = ref<CertificateConfig>({
 })
 
 // 标题/描述/页键映射单源见 utils/settingsPages（AppLayout 面包屑共用同一份）
-const pageTitle = computed(() => SETTINGS_TAB_TITLES[activeTab.value])
-const pageDesc = computed(() => SETTINGS_TAB_DESCS[activeTab.value])
+const pageTitle = computed(() => settingsTabTitle(activeTab.value))
+const pageDesc = computed(() => settingsTabDesc(activeTab.value))
 // 服务端最近一次确认的大屏展示字段：基础卡据此判断用户是否真的编辑过，
 // 并在切页重挂后仍能识别未保存编辑（本地 ref 会随卸载丢失）。
 const savedThreatScreenMode = ref<'map' | 'globe'>('map')

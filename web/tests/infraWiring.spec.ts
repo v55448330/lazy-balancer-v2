@@ -60,7 +60,8 @@ test('App.vue 页面分支与 PAGE_IDS 机械对表（漏分支不得静默空�
 
 test('侧栏菜单文案与面包屑同源：模板取 NAV_LABELS，pageTitle 由 NAV_ITEMS 派生', () => {
   const layout = code('src/components/layout/AppLayout.vue')
-  const nav = section(layout, 'const NAV_ITEMS', 'const settingsPageTitles')
+  // i18n computed 化后:切片到 navLabels 定义(NAV_ITEMS 内仍须含全部页面 id)
+  const nav = section(layout, 'const NAV_ITEMS', 'const navLabels')
   for (const id of [
     'dashboard',
     'rules',

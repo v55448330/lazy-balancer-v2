@@ -68,7 +68,7 @@
         <el-sub-menu index="settings">
           <template #title>
             <el-icon><Setting /></el-icon>
-            <span>{{ SETTINGS_BREADCRUMB_PARENT }}</span>
+            <span>{{ settingsBreadcrumbParent() }}</span>
           </template>
           <el-menu-item index="settings-basic" @click="goPage('settings-basic')">
             <el-icon><Setting /></el-icon>
@@ -227,7 +227,7 @@ import AppLogo from '@/components/AppLogo.vue'
 import { appName, footerHtml } from '@/utils/branding'
 import { restartServiceWithFeedback } from '@/utils/restart'
 import { createVisibilityIntervals } from '@/composables/useVisibilityIntervals'
-import { SETTINGS_BREADCRUMB_PARENT, SETTINGS_TAB_IDS, SETTINGS_TAB_TITLES } from '@/utils/settingsPages'
+import { SETTINGS_TAB_IDS, settingsBreadcrumbParent, settingsTabTitle } from '@/utils/settingsPages'
 import { activateOnce } from '@/utils/keyboardActivate'
 import { hasOwn } from '@/utils/hasOwn'
 import { useI18n } from 'vue-i18n'
@@ -277,7 +277,9 @@ const hasCustomDisplayName = computed(() => {
 // 面包屑不一致）；现在模板与面包屑都从本表取值，settings 段继续复用
 // utils/settingsPages 的标题单源。
 const SECURITY_PARENT = t('common.app.views.layout.securityParent')
-const NAV_ITEMS: ReadonlyArray<{ id: string; label: string; parent?: string }> = [
+// i18n:词条随 locale 响应式重算——模块/setup 顶层 t() 会固化切换前语言
+// (英文界面出中文导航的事故根因),必须 computed 化,模板消费自动解包。
+const NAV_ITEMS = computed<ReadonlyArray<{ id: string; label: string; parent?: string }>>(() => [
   { id: 'dashboard', label: t('common.app.views.layout.navDashboard') },
   { id: 'rules', label: t('common.app.views.layout.navRules') },
   { id: 'security-overview', label: t('common.app.views.layout.navSecurityOverview'), parent: SECURITY_PARENT },
@@ -286,25 +288,23 @@ const NAV_ITEMS: ReadonlyArray<{ id: string; label: string; parent?: string }> =
   { id: 'security-block-pages', label: t('common.app.views.layout.navSecurityBlockPages'), parent: SECURITY_PARENT },
   { id: 'security-events', label: t('common.app.views.layout.navSecurityEvents'), parent: SECURITY_PARENT },
   { id: 'caddy', label: t('common.app.views.layout.navCaddy') },
-  { id: 'users', label: t('common.app.views.layout.navUsers'), parent: SETTINGS_BREADCRUMB_PARENT },
+  { id: 'users', label: t('common.app.views.layout.navUsers'), parent: settingsBreadcrumbParent() },
   { id: 'audit-log', label: t('common.app.views.layout.navAuditLog') },
-]
+])
 
 // 系统设置五个分页标题与 Settings.vue 页头同源（utils/settingsPages）——原两处
 // 各持一份同构映射，改名必然漏改其一。
-const settingsPageTitles: Record<string, string> = Object.fromEntries(
-  SETTINGS_TAB_IDS.map((tab) => [`settings-${tab}`, `${SETTINGS_BREADCRUMB_PARENT} / ${SETTINGS_TAB_TITLES[tab]}`]),
-)
-
-const NAV_LABELS: Record<string, string> = {
-  ...Object.fromEntries(NAV_ITEMS.map((item) => [item.id, item.label])),
-  ...Object.fromEntries(SETTINGS_TAB_IDS.map((tab) => [`settings-${tab}`, SETTINGS_TAB_TITLES[tab]])),
-}
-
-const pageTitle: Record<string, string> = {
-  ...Object.fromEntries(NAV_ITEMS.map((item) => [item.id, item.parent ? `${item.parent} / ${item.label}` : item.label])),
-  ...settingsPageTitles,
-}
+// settings 分页标题经 settingsPageTitle(tab) 取 i18n 词条(utils/settingsPages
+// 供键表),与页面头同源。
+const navLabels = computed<Record<string, string>>(() => ({
+  ...Object.fromEntries(NAV_ITEMS.value.map((item) => [item.id, item.label])),
+  ...Object.fromEntries(SETTINGS_TAB_IDS.map((tab) => [`settings-${tab}`, settingsTabTitle(tab)])),
+}))
+const NAV_LABELS = navLabels
+const pageTitle = computed<Record<string, string>>(() => ({
+  ...Object.fromEntries(NAV_ITEMS.value.map((item) => [item.id, item.parent ? `${item.parent} / ${item.label}` : item.label])),
+  ...Object.fromEntries(SETTINGS_TAB_IDS.map((tab) => [`settings-${tab}`, `${t('common.app.views.layout.settingsBreadcrumbParent')} / ${settingsTabTitle(tab)}`])),
+}))
 
 const goPage = (page: PageId) => {
   authStore.setCurrentPage(page)

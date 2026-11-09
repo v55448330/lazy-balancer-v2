@@ -7,21 +7,15 @@
 export const SETTINGS_TAB_IDS = ['basic', 'cluster', 'certificates', 'apikeys', 'tasks'] as const
 export type SettingsTabId = (typeof SETTINGS_TAB_IDS)[number]
 
-export const SETTINGS_TAB_TITLES: Record<SettingsTabId, string> = {
-  basic: '基础设置',
-  cluster: '集群管理',
-  certificates: '免费证书',
-  apikeys: 'API 密钥',
-  tasks: '任务监控',
-}
+// i18n:标题/描述经 tSafe 取词条(键=common.app.views.layout.settingsTab/Desc.*),
+// zh 母本钉 locales/{zh,en}/views.ts(契约钉见 tests/settingsPages.spec.ts)。
+import { tSafe } from '../i18n/tSafe.ts'
 
-export const SETTINGS_TAB_DESCS: Record<SettingsTabId, string> = {
-  basic: '配置系统日志、访问日志和基础行为',
-  cluster: '配置主从节点模式和同步策略',
-  certificates: '配置 ACME 邮箱、DNS 提供商和证书签发任务',
-  apikeys: '管理 API 访问密钥',
-  tasks: '全部定时与后台任务的运行监控、手动触发与取消',
-}
+export const settingsTabTitle = (tab: SettingsTabId): string =>
+  tSafe(`common.app.views.layout.settingsTab.${tab}`)
+
+export const settingsTabDesc = (tab: SettingsTabId): string =>
+  tSafe(`common.app.views.layout.settingsDesc.${tab}`)
 
 /**
  * 分页是否消费 `/config`：基础设置（日志/大屏/安全事件/GitHub）与免费证书
@@ -43,5 +37,5 @@ export const settingsTabOfPage = (page: string): SettingsTabId | null => {
   return (SETTINGS_TAB_IDS as readonly string[]).includes(tab) ? (tab as SettingsTabId) : null
 }
 
-/** 面包屑文本（AppLayout 用）：`系统设置 / <分页标题>` 与页头标题同源拼接 */
-export const SETTINGS_BREADCRUMB_PARENT = '系统设置'
+/** 面包屑父级(AppLayout 用):词条化 */
+export const settingsBreadcrumbParent = (): string => tSafe('common.app.views.layout.settingsBreadcrumbParent')

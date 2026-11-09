@@ -26,12 +26,11 @@ import { code, webFiles } from './_helpers.ts'
 const NON_VOCABULARY_RECORD_TABLES = [
   // 导航标题：只以字面量页面键读取（页面键集合由 utils/pageIds 单源）
   // 设置页标题投影：仅展开进 pageTitle，不直接以下标消费
-  'src/components/layout/AppLayout.vue#settingsPageTitles',
-  // HTML 转义表：固定正则字符集键，不是库值/后端枚举
+    // HTML 转义表：固定正则字符集键，不是库值/后端枚举
   'src/utils/escape.ts#escapeHtmlTable',
   // 表格锁弹框登记表：键为规则 caddy_id，值是组件实例，不用于标签展示
   'src/views/Rules.vue#lockPopovers',
-  'src/components/layout/AppLayout.vue#NAV_LABELS',
+  'src/components/layout/AppLayout.vue#navLabels',
   // 省界数据表：键为归一化省名，写入循环的别名来自 Object.entries(COUNTRY_ALIAS)
   'src/utils/admin1Provinces.ts#ADMIN1_PROVINCES',
   // 国别名表：只经 Object.entries 消费（自有可枚举键）
@@ -123,7 +122,8 @@ test('全仓 Record<string, …> 表：展示词表读取全部过 hasOwn（目�
   assert.ok(files.length >= 150, `扫描面过小（${files.length} 个文件）——目录枚举失效`)
   const tables: Array<{ key: string; file: string; name: string }> = []
   for (const file of files) {
-    for (const match of code(file).matchAll(/^(?:export )?const ([A-Za-z_$][\w$]*): Record<string, /gm)) {
+    // i18n computed 化的词表同样入扫描面(computed<Record<string,…>>)
+    for (const match of code(file).matchAll(/^(?:export )?const ([A-Za-z_$][\w$]*)(?:: Record<string, | = computed<Record<string, string>)/gm)) {
       tables.push({ key: `${file}#${match[1]}`, file, name: match[1]! })
     }
   }

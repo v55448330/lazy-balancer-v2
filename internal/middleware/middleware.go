@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"lazy-balancer-v2/internal/apimsg"
 	"lazy-balancer-v2/internal/models"
 	"net"
 	"net/http"
@@ -551,7 +552,7 @@ func mcpAPIKeyRateLimit() gin.HandlerFunc {
 
 func abortMCPRateLimit(c *gin.Context, retryAfter int) {
 	c.Header("Retry-After", strconv.Itoa(retryAfter))
-	c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{"code": http.StatusTooManyRequests, "message": "MCP 请求过于频繁，请稍后再试"})
+	c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{"code": http.StatusTooManyRequests, "message": apimsg.T(c, "k_656b34a1"), "message_key": "k_656b34a1"})
 }
 
 // noStoreResponse 让响应不可被任何缓存留存（浏览器回退缓存、中间反代）。
@@ -675,7 +676,7 @@ func releaseRateLimitReservation(bucket *loginRateBucket, generation uint64, fai
 
 func abortClusterMachineRateLimit(c *gin.Context, retryAfter int) {
 	c.Header("Retry-After", strconv.Itoa(retryAfter))
-	c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{"code": http.StatusTooManyRequests, "message": "集群机器接口请求过于频繁，请稍后再试"})
+	c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{"code": http.StatusTooManyRequests, "message": apimsg.T(c, "k_783deafa"), "message_key": "k_783deafa"})
 }
 
 // SweepRateLimitBuckets 删除已过窗（until 早于 now）的限流桶，返回删除
@@ -839,10 +840,10 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 			if err != nil {
 				var maxBytesError *http.MaxBytesError
 				if errors.As(err, &maxBytesError) {
-					c.AbortWithStatusJSON(http.StatusRequestEntityTooLarge, gin.H{"code": http.StatusRequestEntityTooLarge, "message": "请求体过大"})
+					c.AbortWithStatusJSON(http.StatusRequestEntityTooLarge, gin.H{"code": http.StatusRequestEntityTooLarge, "message": apimsg.T(c, "k_45aadcca"), "message_key": "k_45aadcca"})
 					return
 				}
-				c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": "请求体无效"})
+				c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": apimsg.T(c, "k_f3f449a6"), "message_key": "k_f3f449a6"})
 				return
 			}
 			c.Request.Body = io.NopCloser(bytes.NewReader(body))
@@ -1329,7 +1330,7 @@ func jwtAuth(database *sql.DB, cfg *config.Config) gin.HandlerFunc {
 		authHeader := c.GetHeader("Authorization")
 		if authHeader == "" {
 			recordAuthenticationRejection(c, "jwt_missing")
-			c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "缺少认证信息"})
+			c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": apimsg.T(c, "k_c48a488c"), "message_key": "k_c48a488c"})
 			c.Abort()
 			return
 		}
@@ -1339,7 +1340,7 @@ func jwtAuth(database *sql.DB, cfg *config.Config) gin.HandlerFunc {
 		tokenString := bearerToken(authHeader)
 		if tokenString == "" {
 			recordAuthenticationRejection(c, "jwt_format_invalid")
-			c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "认证格式无效"})
+			c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": apimsg.T(c, "k_f6b0bb1b"), "message_key": "k_f6b0bb1b"})
 			c.Abort()
 			return
 		}
@@ -1354,10 +1355,10 @@ func jwtAuth(database *sql.DB, cfg *config.Config) gin.HandlerFunc {
 			// 凭证误导成「重新登录就能好」。401 状态码不变，仅消息分语义。
 			if errors.Is(err, jwt.ErrTokenExpired) {
 				recordAuthenticationRejection(c, "jwt_expired")
-				c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "登录状态已过期，请重新登录"})
+				c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": apimsg.T(c, "k_a3e751a6"), "message_key": "k_a3e751a6"})
 			} else {
 				recordAuthenticationRejection(c, "jwt_invalid")
-				c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "登录凭证无效"})
+				c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": apimsg.T(c, "k_b120c74e"), "message_key": "k_b120c74e"})
 			}
 			c.Abort()
 			return
@@ -1366,7 +1367,7 @@ func jwtAuth(database *sql.DB, cfg *config.Config) gin.HandlerFunc {
 		claims, ok := token.Claims.(jwt.MapClaims)
 		if !ok {
 			recordAuthenticationRejection(c, "jwt_claims_invalid")
-			c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "登录凭证无效"})
+			c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": apimsg.T(c, "k_b120c74e"), "message_key": "k_b120c74e"})
 			c.Abort()
 			return
 		}
@@ -1388,7 +1389,7 @@ func jwtAuth(database *sql.DB, cfg *config.Config) gin.HandlerFunc {
 		userIDFloat, ok := claims["user_id"].(float64)
 		if !ok {
 			recordAuthenticationRejection(c, "jwt_subject_invalid")
-			c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "登录凭证无效"})
+			c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": apimsg.T(c, "k_b120c74e"), "message_key": "k_b120c74e"})
 			c.Abort()
 			return
 		}
@@ -1403,7 +1404,7 @@ func jwtAuth(database *sql.DB, cfg *config.Config) gin.HandlerFunc {
 		FROM auth_state LEFT JOIN users u ON u.id=?`, encodedRevocationHash, models.FormatRevokedTokenTime(now), int64(userIDFloat)).Scan(&revoked, &dbUsername, &dbRole, &dbEnabled, &passwordVersion)
 		if queryErr == nil && revoked {
 			recordAuthenticationRejection(c, "jwt_revoked")
-			c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "登录状态已失效，请重新登录"})
+			c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": apimsg.T(c, "k_a2a03314"), "message_key": "k_a2a03314"})
 			c.Abort()
 			return
 		}
@@ -1413,20 +1414,20 @@ func jwtAuth(database *sql.DB, cfg *config.Config) gin.HandlerFunc {
 		// （与 readOnlyGuard/clusterTokenAuth 口径一致）。
 		if queryErr != nil {
 			services.Logf("error", "jwt auth state query failed: %v", queryErr)
-			c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "认证状态查询失败"})
+			c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": apimsg.T(c, "k_85c5a095"), "message_key": "k_85c5a095"})
 			c.Abort()
 			return
 		}
 		if !dbUsername.Valid || !dbRole.Valid || !dbEnabled.Valid || !dbEnabled.Bool || !passwordVersion.Valid {
 			recordAuthenticationRejection(c, "jwt_user_unavailable")
-			c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "用户不存在或已禁用"})
+			c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": apimsg.T(c, "k_620981d6"), "message_key": "k_620981d6"})
 			c.Abort()
 			return
 		}
 		claimUsername, valid := claims["username"].(string)
 		if !valid || claimUsername != dbUsername.String {
 			recordAuthenticationRejection(c, "jwt_identity_mismatch")
-			c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "登录凭证无效"})
+			c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": apimsg.T(c, "k_b120c74e"), "message_key": "k_b120c74e"})
 			c.Abort()
 			return
 		}
@@ -1434,13 +1435,13 @@ func jwtAuth(database *sql.DB, cfg *config.Config) gin.HandlerFunc {
 			claimVersion, valid := claim.(float64)
 			if !valid || claimVersion != float64(passwordVersion.Int64) {
 				recordAuthenticationRejection(c, "jwt_password_changed")
-				c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "密码已修改，请重新登录"})
+				c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": apimsg.T(c, "k_f3ac77e5"), "message_key": "k_f3ac77e5"})
 				c.Abort()
 				return
 			}
 		} else if passwordVersion.Int64 != 0 {
 			recordAuthenticationRejection(c, "jwt_password_changed")
-			c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "密码已修改，请重新登录"})
+			c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": apimsg.T(c, "k_f3ac77e5"), "message_key": "k_f3ac77e5"})
 			c.Abort()
 			return
 		}

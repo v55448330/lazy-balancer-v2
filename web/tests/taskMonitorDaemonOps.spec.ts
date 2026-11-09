@@ -42,7 +42,7 @@ test('结果标签=引擎结果域自有映射；未知值显「未知」，不�
   }
     assert.match(vueCode, /t\('app\.settings\.taskMonitor\.status\.running'\)/, '引擎结果词表缺 status.running(运行中)')
   const statusResultLabel = code('src/views/settings/TaskMonitor.vue')
-  assert.match(statusResultLabel, /hasOwn\(resultLabels\.value, r\) \? resultLabels\.value\[r\]! : t\('app\.settings\.taskMonitor\.status\.unknown'\)/, '未知值回显「未知」键，不做证书词表兜底')
+  assert.match(statusResultLabel, /hasOwn\(resultLabels, r\) \? resultLabels\[r\]! : t\('app\.settings\.taskMonitor\.status\.unknown'\)/, '未知值回显「未知」键，不做证书词表兜底')
   const resultTagType = member(code('src/views/settings/TaskMonitor.vue'), 'const resultTagType')
   assert.doesNotMatch(resultTagType, /issued/, '结果色调不得保留证书业务态分支')
 })
