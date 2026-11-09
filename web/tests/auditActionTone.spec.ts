@@ -90,7 +90,7 @@ import { existsSync } from 'node:fs'
 const view = (key: string, params?: Record<string, unknown>): string =>
   tSafe(`common.app.views.audit.${key}`, params)
 
-test('审计页文案走 i18n 键(调用点钉键),动作词匹配键不词条化', () => {
+test('审计页文案走 i18n 键(调用点钉键),动作词色调键不词条化、展示词条化', () => {
   const page = code('src/views/AuditLog.vue')
   for (const key of ['title', 'subtitle', 'loadFailedBanner', 'retryNow', 'rangeSeparator', 'rangeStartPlaceholder', 'rangeEndPlaceholder', 'operator', 'action', 'resource', 'keywordPlaceholder', 'filter', 'reset', 'optionsIncomplete', 'retry', 'listLoadFailed', 'emptyLogs', 'colTime', 'colDetail', 'totalStaleHint']) {
     assert.ok(page.includes(`common.app.views.audit.${key}`), `AuditLog 调用点必须含 audit.${key} 词条键`)
@@ -99,9 +99,11 @@ test('审计页文案走 i18n 键(调用点钉键),动作词匹配键不词条�
   const selects = page.slice(page.indexOf('<div class="filter-bar">'), page.indexOf('<el-table'))
   assert.equal((selects.match(/optionsIncomplete \?/g) ?? []).length, 3, '三个下拉的 placeholder 都要显性化')
   // 动作词是后端审计词表的匹配键/数据原文,不是 UI 文案:actionTagType(row.action)
-  // 与 el-tag 内插值保持原文,不得词条化。
+  // 色调派生保持原文;el-tag 展示内插值经枚举词条函数(en 翻译/zh 原样,表外值
+  // 回落原文——audit-i18n 方案 C 第 1 步,枚举钉见 auditVocabularyPairs.spec.ts)。
   assert.match(page, /:type="actionTagType\(row\.action\)"/)
-  assert.match(page, /\{\{ row\.action \}\}/)
+  assert.match(page, /\{\{ auditActionLabel\(row\.action\) \}\}/)
+  assert.doesNotMatch(page, /\{\{ row\.action \}\}/, '动作展示不得回退渲染库值原样')
 })
 
 test('审计页 zh 母本钉(integrator 词条接线后逐字)', () => {

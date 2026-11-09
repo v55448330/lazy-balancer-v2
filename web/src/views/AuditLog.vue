@@ -39,10 +39,10 @@
           <el-option v-for="o in usernameOptions" :key="o" :label="o" :value="o" />
         </el-select>
         <el-select v-model="filters.action" :placeholder="optionsIncomplete ? t('common.app.views.audit.actionOptionsFailed') : t('common.app.views.audit.action')" clearable filterable style="width: 120px">
-          <el-option v-for="o in actionOptions" :key="o" :label="o" :value="o" />
+          <el-option v-for="o in actionOptions" :key="o" :label="auditActionLabel(o)" :value="o" />
         </el-select>
         <el-select v-model="filters.resource" :placeholder="optionsIncomplete ? t('common.app.views.audit.resourceOptionsFailed') : t('common.app.views.audit.resource')" clearable filterable allow-create style="width: 150px">
-          <el-option v-for="o in resourceOptions" :key="o" :label="o" :value="o" />
+          <el-option v-for="o in resourceOptions" :key="o" :label="auditResourceLabel(o)" :value="o" />
         </el-select>
         <el-input v-model="filters.ip" placeholder="IP" clearable style="width: 120px" @keyup.enter="applyFilters" />
         <el-input v-model="filters.keyword" :placeholder="t('common.app.views.audit.keywordPlaceholder')" clearable style="width: 160px" @keyup.enter="applyFilters" />
@@ -70,12 +70,15 @@
             <span v-else class="operator-cell">{{ row.username || '-' }}</span>
           </template>
         </el-table-column>
-        <el-table-column prop="action" :label="t('common.app.views.audit.action')" width="90">
+        <el-table-column prop="action" :label="t('common.app.views.audit.action')" :width="isEn ? 170 : 90">
           <template #default="{ row }">
-            <el-tag :type="actionTagType(row.action)" size="small">{{ row.action }}</el-tag>
+            <el-tag :type="actionTagType(row.action)" size="small">{{ auditActionLabel(row.action) }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="resource" :label="t('common.app.views.audit.resource')" width="160" />
+        <!-- 对象枚举词条化（en 翻译/zh 原样）；en 最长 'Certificate fingerprint' 需 190 -->
+        <el-table-column prop="resource" :label="t('common.app.views.audit.resource')" :width="isEn ? 190 : 160">
+          <template #default="{ row }">{{ auditResourceLabel(row.resource) }}</template>
+        </el-table-column>
         <el-table-column prop="detail" :label="t('common.app.views.audit.colDetail')" show-overflow-tooltip />
         <el-table-column prop="ip_address" label="IP" width="160" show-overflow-tooltip />
       </el-table>
@@ -111,9 +114,15 @@ import LogStorageBar from '@/components/LogStorageBar.vue'
 
 import { buildAuditLogParams } from '@/utils/auditLogFilters'
 import { actionTagType } from '@/utils/auditActionTone'
+// 动作/对象枚举词条（audit-i18n 方案 C 第 1 步）：en 词条渲染、zh 原样；
+// 表外值回落库值原文。枚举钉 tests/auditVocabularyPairs.spec.ts。
+import { auditActionLabel, auditResourceLabel } from '@/utils/auditVocabulary'
 
 // 页面文案走 i18n（批次 D audit 域，common.app.views.audit.*）。
-const { t } = useI18n()
+const { t, locale } = useI18n()
+// 列宽语言策略（zh 固定设计宽/en 加宽防断词，同 Rules 表 isEn 口径）：
+// 动作标签 zh ≤4 字 90 足够；en 最长 'Startup migration'/'Compensation failed' 需 170。
+const isEn = computed(() => locale.value === 'en')
 
 interface AuditLogEntry {
   id: number
