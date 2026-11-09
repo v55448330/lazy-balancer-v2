@@ -18,7 +18,7 @@
           </div>
         </div>
       </template>
-      <el-form :model="global" label-width="140px" :disabled="isReadOnly || savingGlobal">
+      <el-form :model="global" label-width="auto" :disabled="isReadOnly || savingGlobal">
         <el-form-item :label="t('app.settings.freeCerts.acme.email')" required>
           <el-input v-model="global.acme_email" placeholder="your@email.com" style="width: 240px;" />
           <span class="form-tip-inline">{{ t('app.settings.freeCerts.acme.emailHint') }}</span>
@@ -142,7 +142,7 @@
           :subtitle="t('app.settings.freeCerts.dns.formHint')" />
       </template>
       <!-- label-width 140px：最长官方标签「AccessKey Secret」单行不折行（弹框随宽度增至 640px，输入列不受挤压） -->
-      <el-form :model="form" label-width="140px" class="lb-form" :disabled="savingConfig">
+      <el-form :model="form" label-width="auto" class="lb-form" :disabled="savingConfig">
         <el-form-item :label="t('app.settings.freeCerts.dns.name')" required>
           <el-input v-model="form.name" :placeholder="t('app.settings.freeCerts.dns.namePlaceholder')" maxlength="100" />
         </el-form-item>

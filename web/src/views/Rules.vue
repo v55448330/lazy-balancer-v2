@@ -328,7 +328,7 @@
             <span class="updated-time">{{ formatUpdatedTime(row.updated_at) }}</span>
           </template>
         </el-table-column>
-        <el-table-column :label="t('common.app.rules.common.status')" width="94" align="center">
+        <el-table-column :label="t('common.app.rules.common.status')" width="110" align="center">
           <template #default="{ row }">
             <el-tooltip
               :disabled="!isReadOnly && !isCertJobActive(certJobMap[row.caddy_id]?.status) && !ruleTogglePending[row.caddy_id]"

@@ -9,7 +9,7 @@
           </div>
         </div>
       </template>
-        <el-form :model="settings" label-width="120px" class="settings-form" :disabled="formFrozen">
+        <el-form :model="settings" label-width="auto" class="settings-form" :disabled="formFrozen">
           <el-form-item :label="t('app.settings.basic.log.appLogLevel')">
             <el-select v-model="settings.log_level" :disabled="formFrozen" style="width: 140px">
               <el-option label="Debug" value="debug" />
@@ -201,7 +201,7 @@
         <DialogHeader :icon="Lock" :title="t('app.settings.basic.tls.title')"
           :subtitle="t('app.settings.basic.tls.subtitle')" />
       </template>
-      <el-form label-width="110px">
+      <el-form label-width="auto">
         <el-form-item :label="t('app.settings.basic.tls.source')" for="radio---4">
           <input type="text" id="radio---4" aria-hidden="true" tabindex="-1" autocomplete="off" style="display:none">
           <el-radio-group v-model="adminTlsForm.mode" :aria-label="t('app.settings.basic.tls.source')">
@@ -421,7 +421,7 @@
       <template #header>
         <DialogHeader :icon="Timer" :title="t('app.settings.basic.autoBackup.title')" :subtitle="t('app.settings.basic.autoBackup.subtitle')" />
       </template>
-      <el-form label-width="110px" class="auto-backup-form">
+      <el-form label-width="auto" class="auto-backup-form">
         <el-form-item :label="t('app.settings.basic.autoBackup.enable')">
           <el-switch v-model="autoBackupForm.enabled" />
           <span class="form-tip-inline">{{ t('app.settings.basic.autoBackup.enableHint') }}</span>

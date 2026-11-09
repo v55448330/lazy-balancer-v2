@@ -9,7 +9,7 @@
       </div>
     </template>
 
-    <el-form :model="settings" label-width="140px" class="caddy-form" :disabled="formFrozen">
+    <el-form :model="settings" label-width="auto" class="caddy-form" :disabled="formFrozen">
       <el-divider content-position="left">{{ t('app.settings.caddy.log.title') }}</el-divider>
       <el-form-item :label="t('app.settings.caddy.log.level')">
         <el-select v-model="settings.caddy_log_level" :disabled="formFrozen" style="width: 140px">
@@ -240,7 +240,7 @@
     <template #header>
       <DialogHeader :icon="Tickets" :title="t('app.settings.caddy.list.title')" :subtitle="t('app.settings.caddy.list.subtitle')" />
     </template>
-    <el-form label-width="80px" @submit.prevent :disabled="savingList">
+    <el-form label-width="auto" @submit.prevent :disabled="savingList">
       <el-form-item :label="t('app.settings.caddy.list.source')" for="caddy-trusted-source-static">
         <input type="text" id="caddy-trusted-source-static" aria-hidden="true" tabindex="-1" autocomplete="off" style="display:none">
         <span>{{ t('app.settings.caddy.trust.currentInlineRanges', { count: trustedRanges.length }) }}</span>
