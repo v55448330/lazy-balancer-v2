@@ -1581,7 +1581,7 @@ func (h *Handlers) tryIPListHotPathApply(c *gin.Context, tx *sql.Tx, listID int6
 		if status == 0 {
 			status = http.StatusOK
 		}
-		c.JSON(status, models.APIResponse{Code: 0, Message: f.SuccessMsg, Data: f.Data})
+		c.JSON(status, models.APIResponse{Code: 0, Message: f.SuccessMsg, MessageKey: f.MessageKey, Data: f.Data})
 		return true
 	}
 	// 热路径收尾：镜像 finishTxApply 成功分支，但零 /load（无重载审计）。
@@ -1605,7 +1605,7 @@ func (h *Handlers) tryIPListHotPathApply(c *gin.Context, tx *sql.Tx, listID int6
 	if status == 0 {
 		status = http.StatusOK
 	}
-	c.JSON(status, models.APIResponse{Code: 0, Message: f.SuccessMsg, Data: f.Data})
+	c.JSON(status, models.APIResponse{Code: 0, Message: f.SuccessMsg, MessageKey: f.MessageKey, Data: f.Data})
 	return true
 }
 

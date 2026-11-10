@@ -43,8 +43,14 @@ func TestHandlersResponseMessagesAreI18nKeys(t *testing.T) {
 			if strings.HasPrefix(strings.TrimSpace(line), "//") {
 				continue // 注释行（含「调用点」等中文说明不属响应面）
 			}
+			// audit139-F2 修复:含 MessageKey 行**不整体豁免**——Message 段
+			// 仍须直写正则核验(迁移管线不应产生「中文直写+键」混合行,出现
+			// 即为异常形态, offender 上报)。
 			if strings.Contains(line, "MessageKey") {
-				continue // 已迁移行（Message 与 MessageKey 同行）
+				if direct.MatchString(line) {
+					offenders = append(offenders, f+":"+strings.TrimSpace(line))
+				}
+				continue
 			}
 			// 豁免窗口:语句行及其前 3 行(注释块)任一含登记标记即豁免
 			exempt := strings.Contains(line, "audit136-A5 豁免")

@@ -48,14 +48,6 @@ func Tf(c i18n.Ctx, key string, args ...any) string {
 	return out.String()
 }
 
-func replaceFirst(s, old, new string) string {
-	i := strings.Index(s, old)
-	if i < 0 {
-		return s
-	}
-	return s[:i] + new + s[i+len(old):]
-}
-
 // ErrMsg 服务层错误串按请求语言翻译(模板匹配,未命中原样)。
 func ErrMsg(c i18n.Ctx, err error) string {
 	if err == nil {
