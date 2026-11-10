@@ -27,7 +27,7 @@ func TestEntrypointTZFallbackParity(t *testing.T) {
 			m[1], db.DefaultTimezone)
 	}
 	// fallback 分支（sqlite3 不可用/库缺失）同样必须与库默认一致
-	fb := regexp.MustCompile(`echo "([^"]+)"`).FindAllStringSubmatch(strings.ReplaceAll(string(raw), "\n", "\n"), -1)
+	fb := regexp.MustCompile(`echo "([^"]+)"`).FindAllStringSubmatch(string(raw), -1)
 	hit := false
 	for _, f := range fb {
 		if f[1] == db.DefaultTimezone {

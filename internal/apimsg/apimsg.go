@@ -14,20 +14,38 @@ import (
 // T 按请求语言取词条文案。
 func T(c i18n.Ctx, key string) string { return i18n.T(i18n.FromCtx(c), key) }
 
-// Tf 模板插值:词条含 %s 占位(与 i18n 错误模板同约定),按序填充。
-// audit136-A5:参数放宽 any(int 常量等直传,内部 fmt.Sprint 字符串化)——
-// 迁移管线把 fmt.Sprintf("%d", intConst) 调用点转 Tf 时参数类型混合。
+// Tf 模板插值:词条含占位符(与 i18n 错误模板同约定),按序填充。
+// audit136-A5:参数放宽 any(int 常量等直传,内部 fmt.Sprint 字符串化)。
+// audit137-P2-1 槽队列化:旧实现每 arg 先 %s 后 %d 双 replaceFirst——混用
+// 模板(%s...%d)一参双填错乱("%s 过长(最多 %d 字符)"→"最多 issuer 字符"),
+// %q/%v 永不填充泄漏字面占位。现依序消费:%s/%d/%v/%q 各占一槽,每 arg
+// 恰好消费一个槽;%q 槽输出带引号(诊断形态)。
 func Tf(c i18n.Ctx, key string, args ...any) string {
 	tpl := i18n.T(i18n.FromCtx(c), key)
 	if len(args) == 0 {
 		return tpl
 	}
-	// 简单顺序填充(词条为受控 codemod 产物,不引入 fmt 动词语义——%d 视同 %s)
-	for _, a := range args {
-		tpl = replaceFirst(tpl, "%s", fmt.Sprint(a))
-		tpl = replaceFirst(tpl, "%d", fmt.Sprint(a))
+	var out strings.Builder
+	argIdx := 0
+	for i := 0; i < len(tpl); {
+		if i+2 <= len(tpl) && (tpl[i:i+2] == "%s" || tpl[i:i+2] == "%d" || tpl[i:i+2] == "%v" || tpl[i:i+2] == "%q") {
+			if argIdx < len(args) {
+				v := fmt.Sprint(args[argIdx])
+				if tpl[i:i+2] == "%q" {
+					v = `"` + v + `"`
+				}
+				out.WriteString(v)
+				argIdx++
+			} else {
+				out.WriteString(tpl[i : i+2])
+			}
+			i += 2
+			continue
+		}
+		out.WriteByte(tpl[i])
+		i++
 	}
-	return tpl
+	return out.String()
 }
 
 func replaceFirst(s, old, new string) string {

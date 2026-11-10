@@ -71,18 +71,3 @@ func TestHandlersResponseMessagesAreI18nKeys(t *testing.T) {
 			len(offenders), strings.Join(offenders, "\n"))
 	}
 }
-
-func fmtLine(line string) string {
-	l := strings.TrimSpace(line)
-	if len(l) > 60 {
-		l = l[:60]
-	}
-	return l
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}

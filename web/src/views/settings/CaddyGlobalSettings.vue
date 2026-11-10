@@ -250,7 +250,7 @@
       </el-form-item>
       <el-form-item :label="t('app.settings.caddy.list.category')">
         <el-select v-model="saveListForm.category" allow-create filterable default-first-option :placeholder="t('app.settings.caddy.list.categoryPlaceholder')" style="width: 100%">
-          <el-option v-for="c in IP_LIST_CATEGORIES" :key="c" :label="c" :value="c" />
+          <el-option v-for="c in IP_LIST_CATEGORIES" :key="c" :label="ipListCategoryLocalized(c)" :value="c" />
         </el-select>
       </el-form-item>
     </el-form>
@@ -281,7 +281,7 @@ import { IP_LIST_CATEGORIES, parseIPList, parseRefIds } from '@/utils/securitySt
 import type { APIResponse, ProxyTimeoutConfig } from '@/types'
 import ProxyTimeoutFields from '@/components/rules/ProxyTimeoutFields.vue'
 
-const { t } = useI18n()
+const { t, locale } = useI18n()
 
 type CaddySettingsConfig = ProxyTimeoutConfig & {
   caddy_log_level: string
@@ -550,10 +550,19 @@ const trustedProxyDisabledStaleError = computed(() =>
 
 // —— 存为列表：内联网段一键建名单并转为引用（镜像策略侧「提取为列表」） ——
 const saveListDialogVisible = ref(false)
-const saveListForm = ref({ name: t('app.settings.basic.map.saveAsListDefaultName'), category: t('app.settings.basic.map.saveAsListDefaultCategory') })
+// audit137-P2-3:category 默认取库值 zh 码(IP_LIST_CATEGORIES[1])——存储契约
+  // =zh 分类码,en 下 t() 译文入库会破坏策略侧分类匹配;name 为自由文本保持 t()。
+  const saveListForm = ref({ name: t('app.settings.basic.map.saveAsListDefaultName'), category: IP_LIST_CATEGORIES[1] })
+// 分类 en 本地化:复用 common.app.ipListCategory 词条(与策略侧 ipListCategoryLabel 同词表)
+const ipListCategoryLocalized = (c: string): string => {
+  if (locale.value !== 'en') return c
+  const KEY_MAP: Record<string, string> = { '搜索引擎爬虫': 'crawler', 'CDN 节点': 'cdn', '云服务商': 'cloud', '办公网络': 'office', '数据中心': 'dc', '可信地址': 'trust', '恶意 IP': 'malicious', '其他': 'other' }
+  const k = KEY_MAP[c]
+  return k ? t(`common.app.ipListCategory.${k}`) : c
+}
 const savingList = ref(false)
 const openSaveListDialog = (): void => {
-  saveListForm.value = { name: t('app.settings.basic.map.saveAsListDefaultName'), category: t('app.settings.basic.map.saveAsListDefaultCategory') }
+  saveListForm.value = { name: t('app.settings.basic.map.saveAsListDefaultName'), category: IP_LIST_CATEGORIES[1] }
   saveListDialogVisible.value = true
 }
 const confirmSaveAsList = async (): Promise<void> => {

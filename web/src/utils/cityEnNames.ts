@@ -140,12 +140,13 @@ const RAW: Record<string, string> = {
   '石河子市': 'Shihezi', '阿拉尔市': 'Aral', '图木舒克市': 'Tumxuk', '五家渠市': 'Wujiaqu',
 }
 
-/** 键规范形态：去「市/地区/盟/州/林区」尾（库值形态可能带尾），原始名直达回退。 */
+/** 键规范形态：去「市/地区/盟/州/林区」尾（库值形态可能带尾），原始名直达回退。
+ *  audit137-F5:注释与实现对齐(键=本文件字面量,RAW 直读无原型键风险)。 */
 // 归一缓存用 Map(键=本文件字面量,非外部输入——不涉原型键;Map 形态亦不进
 // vocabularyProtoKeys 扫描面,该守卫面向展示词表的 Record 消费契约)。
 const NORMALIZED = new Map<string, string>()
 for (const k of Object.keys(RAW)) {
-  const v = k in RAW ? RAW[k as keyof typeof RAW] : ''
+  const v = RAW[k as keyof typeof RAW]
   if (v === '') continue
   NORMALIZED.set(k, v)
   const stripped = k.replace(/(市|地区|盟|林区)$/, '')

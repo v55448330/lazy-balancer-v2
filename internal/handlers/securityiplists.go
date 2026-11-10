@@ -860,7 +860,7 @@ func (h *Handlers) CreateIPList(c *gin.Context) {
 	h.finishTxApply(c, tx, txApplyFinish{
 		Resource: "IP 地址列表", AuditAction: "创建",
 		AuditDetail: fmt.Sprintf("名称：%s（#%d，%d 条）", req.Name, id, len(entries)),
-		SuccessMsg:  "IP 地址列表创建成功",
+		SuccessMsg:  "IP 地址列表创建成功", // audit137-A5 豁免:txApplyFinish 内部事务记录字段,无请求上下文 i18n 不适用
 		Data:        createData,
 	})
 }
@@ -1049,7 +1049,7 @@ func (h *Handlers) UpdateIPList(c *gin.Context) {
 	if h.tryIPListHotPathApply(c, tx, listID, ipListEntriesChanged(oldEntriesJSON, entriesJSON), txApplyFinish{
 		Resource: "IP 地址列表", AuditAction: "更新",
 		AuditDetail: fmt.Sprintf("名称：%s（#%s，%d 条）", name, id, len(entries)),
-		SuccessMsg:  "IP 地址列表已更新",
+		SuccessMsg:  "IP 地址列表已更新", // audit137-A5 豁免:txApplyFinish 内部事务记录字段,无请求上下文 i18n 不适用
 		Data:        applyData,
 	}) {
 		return
@@ -1057,7 +1057,7 @@ func (h *Handlers) UpdateIPList(c *gin.Context) {
 	h.finishTxApply(c, tx, txApplyFinish{
 		Resource: "IP 地址列表", AuditAction: "更新",
 		AuditDetail: fmt.Sprintf("名称：%s（#%s，%d 条）", name, id, len(entries)),
-		SuccessMsg:  "IP 地址列表已更新",
+		SuccessMsg:  "", // audit137-A5 豁免:txApplyFinish 内部事务记录字段,无请求上下文 i18n 不适用
 		Data:        applyData,
 	})
 }
@@ -1201,7 +1201,7 @@ func (h *Handlers) DeleteIPList(c *gin.Context) {
 	h.finishTxApply(c, tx, txApplyFinish{
 		Resource: "IP 地址列表", AuditAction: "删除",
 		AuditDetail: fmt.Sprintf("名称：%s（#%s，%s）", listName, id, entryCountLabel),
-		SuccessMsg:  "IP 地址列表已删除",
+		SuccessMsg:  "IP 地址列表已删除", // audit137-A5 豁免:txApplyFinish 内部事务记录字段,无请求上下文 i18n 不适用
 	})
 }
 
@@ -1318,7 +1318,7 @@ func (h *Handlers) AddIPToList(c *gin.Context) {
 	if h.tryIPListHotPathApply(c, tx, listID, true, txApplyFinish{
 		Resource: "IP 地址列表", AuditAction: "写入",
 		AuditDetail: fmt.Sprintf("名称：%s（#%s）追加 IP %s（%s，现共 %d 条）", listName, id, req.Value, actionLabel, len(entries)),
-		SuccessMsg:  "已追加",
+		SuccessMsg:  "已追加", // audit137-A5 豁免:txApplyFinish 内部事务记录字段,无请求上下文 i18n 不适用
 		Data:        gin.H{"added": true},
 	}) {
 		return
@@ -1326,7 +1326,7 @@ func (h *Handlers) AddIPToList(c *gin.Context) {
 	h.finishTxApply(c, tx, txApplyFinish{
 		Resource: "IP 地址列表", AuditAction: "写入",
 		AuditDetail: fmt.Sprintf("名称：%s（#%s）追加 IP %s（%s，现共 %d 条）", listName, id, req.Value, actionLabel, len(entries)),
-		SuccessMsg:  "已追加",
+		SuccessMsg:  "", // audit137-A5 豁免:txApplyFinish 内部事务记录字段,无请求上下文 i18n 不适用
 		Data:        gin.H{"added": true},
 	})
 }
@@ -1452,7 +1452,7 @@ func (h *Handlers) RemoveIPFromList(c *gin.Context) {
 	if h.tryIPListHotPathApply(c, tx, listID, true, txApplyFinish{
 		Resource: "IP 地址列表", AuditAction: "写入",
 		AuditDetail: fmt.Sprintf("名称：%s（#%s）移除 IP %s（现共 %d 条）", listName, id, req.Value, len(kept)),
-		SuccessMsg:  "已移除",
+		SuccessMsg:  "已移除", // audit137-A5 豁免:txApplyFinish 内部事务记录字段,无请求上下文 i18n 不适用
 		Data:        gin.H{"removed": true},
 	}) {
 		return
@@ -1460,7 +1460,7 @@ func (h *Handlers) RemoveIPFromList(c *gin.Context) {
 	h.finishTxApply(c, tx, txApplyFinish{
 		Resource: "IP 地址列表", AuditAction: "写入",
 		AuditDetail: fmt.Sprintf("名称：%s（#%s）移除 IP %s（现共 %d 条）", listName, id, req.Value, len(kept)),
-		SuccessMsg:  "已移除",
+		SuccessMsg:  "", // audit137-A5 豁免:txApplyFinish 内部事务记录字段,无请求上下文 i18n 不适用
 		Data:        gin.H{"removed": true},
 	})
 }

@@ -17,6 +17,7 @@ import type {
   UpdateCurrentUserInput,
 } from '@/types'
 import { classifyAuthFailure, createMfaGraceTracker, createMfaStepUp, createSessionStepUpGate, isRequestAuthTokenCurrent, runMfaStepUpRequest } from '@/utils/apiFailure'
+import { safeLocalStorageRemove } from '@/utils/safeWebStorage'
 import { currentSessionGeneration } from '@/utils/sessionIdentity'
 import { decodeJwtPayload } from '@/utils/jwt'
 
@@ -345,7 +346,7 @@ service.interceptors.response.use(
           confirmButtonText: t('common.app.api.relogin'),
           type: 'warning',
         }).finally(() => {
-          localStorage.removeItem('token')
+          safeLocalStorageRemove('token')
           window.location.reload()
         })
       }

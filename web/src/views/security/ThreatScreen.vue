@@ -1409,7 +1409,6 @@ onBeforeUnmount(() => {
 }
 .brand p { font-size: 11px; color: #8ea7d6; letter-spacing: 0.06em; display: flex; gap: 10px; align-items: center; white-space: nowrap; margin-top: 2px; }
 .brand p time { color: #3ad1ff; font-size: 13px; }
-.clock-date { color: #7d93b8; font-size: 13px; font-variant-numeric: tabular-nums; }
 
 .kpis { flex: 1; display: flex; justify-content: center; min-width: 0; }
 .kpi { position: relative; flex: none; display: flex; flex-direction: column; gap: 3px; padding: 2px 26px; }
@@ -1426,7 +1425,6 @@ onBeforeUnmount(() => {
 .kpi-label { font-size: 11px; color: #8ea7d6; letter-spacing: 0.04em; white-space: nowrap; }
 
 .actions { display: flex; gap: 8px; flex: none; align-items: center; }
-.window-switch { display: inline-flex; border: 1px solid rgba(58, 209, 255, 0.22); border-radius: 6px; overflow: hidden; }
 .window-btn { appearance: none; border: 0; background: transparent; color: #7d93b8; font: 11px/1 mono, monospace; padding: 7px 9px; cursor: pointer; }
 .window-btn + .window-btn { border-left: 1px solid rgba(58, 209, 255, 0.18); }
 .window-btn[aria-pressed='true'] { color: #03101f; background: #3ad1ff; }
