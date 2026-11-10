@@ -514,6 +514,9 @@ type txApplyFinish struct {
 	AuditAction      string
 	AuditDetail      string
 	SuccessMsg       string
+	// MessageKey 为 SuccessMsg 的 i18n 键(audit137-A5 双语键化配套):非空时
+	// 响应透传 MessageKey 供前端分类与本地词表回落;空=zh 原样(内部记录)。
+	MessageKey       string
 	SuccessStatus    int
 	Data             any
 	ReloadDetail     string
@@ -559,7 +562,11 @@ func (h *Handlers) finishTxApply(c *gin.Context, tx *sql.Tx, f txApplyFinish) {
 		// 此处 reloadNote 内又清一次 = 同请求重复 UPDATE global_config；
 		// 同字节短路形态也由 note 覆盖）。
 		reloadNote.finalize()
-		c.JSON(status, models.APIResponse{Code: 0, Message: f.SuccessMsg, Data: f.Data})
+		msg := models.APIResponse{Code: 0, Message: f.SuccessMsg, Data: f.Data}
+		if f.MessageKey != "" {
+			msg.MessageKey = f.MessageKey
+		}
+		c.JSON(status, msg)
 		return
 	}
 	if services.IsConfigRejected(applyErr) {

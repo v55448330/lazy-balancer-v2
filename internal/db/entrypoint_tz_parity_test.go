@@ -3,7 +3,6 @@ package db_test
 import (
 	"os"
 	"regexp"
-	"strings"
 	"testing"
 
 	"lazy-balancer-v2/internal/db"
