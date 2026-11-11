@@ -28,7 +28,7 @@ test('请求拦截器记录发起令牌，401 分支先复核再进入会话失�
   )
   assert.match(
     sessionBranch,
-    /error\.config\s*&&\s*!isRequestAuthTokenCurrent\(error\.config\._authToken, localStorage\.getItem\('token'\)\)/,
+    /error\.config\s*&&\s*!isRequestAuthTokenCurrent\(error\.config\._authToken, safeLocalStorageGet\('token'\)\)/,
   )
   assert.ok(
     sessionBranch.indexOf('isRequestAuthTokenCurrent(') < sessionBranch.indexOf("await import('@/stores/auth')"),

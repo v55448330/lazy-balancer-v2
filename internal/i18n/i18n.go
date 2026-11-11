@@ -120,6 +120,18 @@ func Register(key, zh, en string) {
 	catalog[key] = [2]string{zh, en}
 }
 
+// CatalogKeysForTest 供测试断言 catalog 键唯一性(audit140-XM140-2 唯一性守卫):
+// 重复 Register 为 map 覆盖语义,单边编辑副本会静默分叉——测试侧机械断言防回归。
+func CatalogKeysForTest() []string {
+	mu.RLock()
+	defer mu.RUnlock()
+	keys := make([]string, 0, len(catalog))
+	for k := range catalog {
+		keys = append(keys, k)
+	}
+	return keys
+}
+
 // T 查词条;缺译/未知键回落 key 本身(调用方通常已把消息原文存为 key 场景外)。
 func T(lang, key string) string {
 	mu.RLock()

@@ -17,7 +17,7 @@ import type {
   UpdateCurrentUserInput,
 } from '@/types'
 import { classifyAuthFailure, createMfaGraceTracker, createMfaStepUp, createSessionStepUpGate, isRequestAuthTokenCurrent, runMfaStepUpRequest } from '@/utils/apiFailure'
-import { safeLocalStorageRemove } from '@/utils/safeWebStorage'
+import { safeLocalStorageGet, safeLocalStorageRemove } from '@/utils/safeWebStorage'
 import { currentSessionGeneration } from '@/utils/sessionIdentity'
 import { decodeJwtPayload } from '@/utils/jwt'
 
@@ -155,7 +155,7 @@ export const suspendSessionExpiredHandling = (): void => {
 // 已 app.use(i18n),运行期恒有实例)。
 function currentLocale(): string {
   try {
-    return localStorage.getItem('lb_locale') === 'en' ? 'en' : 'zh-CN'
+    return safeLocalStorageGet('lb_locale') === 'en' ? 'en' : 'zh-CN'
   } catch {
     return 'zh-CN' // 非 DOM 环境(测试进程)安全回落
   }
@@ -218,7 +218,7 @@ service.interceptors.request.use(
     // 会话过期全站止损（用户指令，见 sessionExpiredDetected 注释）：弹窗等待
     // 确认期间不再出站任何请求。
     if (sessionExpiredDetected) throw sessionHaltedRequestError()
-    const token = localStorage.getItem('token')
+    const token = safeLocalStorageGet('token')
     const authToken = token && token !== 'null' && token !== 'undefined' ? token : undefined
     config._authToken = authToken
     config._sessionGeneration = currentSessionGeneration()
@@ -323,12 +323,12 @@ service.interceptors.response.use(
     }
     if (kind === 'session-expired') {
       // 登出 A、登录 B 后，A 的在途请求才返回 401：它只属于 A，不得弹框或止损 B。
-      if (error.config && !isRequestAuthTokenCurrent(error.config._authToken, localStorage.getItem('token'))) {
+      if (error.config && !isRequestAuthTokenCurrent(error.config._authToken, safeLocalStorageGet('token'))) {
         return Promise.reject(new ApiRequestError(message, status, error.response?.data))
       }
       const { useAuthStore } = await import('@/stores/auth')
       const authStore = useAuthStore()
-      if (authStore.intentionalLogout || !authStore.token || !localStorage.getItem('token')) {
+      if (authStore.intentionalLogout || !authStore.token || !safeLocalStorageGet('token')) {
         return Promise.reject(new Error(message))
       }
       // 会话吊销型还原挂起窗口:静默拒绝,不弹过期框、不置位止损、不跳登录

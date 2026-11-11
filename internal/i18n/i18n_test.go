@@ -50,3 +50,20 @@ func TestErrTemplate(t *testing.T) {
 		t.Errorf("zh 原样=%q", got)
 	}
 }
+
+// audit140-XM140-2:catalog 唯一性守卫——重复 Register(同键)为 map 覆盖语义,
+// 单边编辑副本会静默分叉;唯一性被破坏即红(audit137-P3-2 去重被恢复脚本回归实录)。
+func TestCatalogKeysUnique(t *testing.T) {
+	seen := map[string]bool{}
+	dups := 0
+	for _, k := range CatalogKeysForTest() {
+		if seen[k] {
+			dups++
+			continue
+		}
+		seen[k] = true
+	}
+	if dups != 0 {
+		t.Fatalf("catalog 存在 %d 个重复 Register 键——单边编辑副本将静默分叉", dups)
+	}
+}
