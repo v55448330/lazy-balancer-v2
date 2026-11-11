@@ -149,7 +149,9 @@ var mcpUncoveredRoutes = map[string]string{
 	"GET /api/v1/mcp/tools":        "MCP 自身镜像端点：OpenAPI 形态的工具清单，供外部集成方发现工具",
 	"GET /api/v1/mcp/ops-playbook": "MCP 自身镜像端点：注入 MCP system prompt 的运维手册文本",
 
-	"PUT /api/v1/security/ip2region/v6-enabled": "IP 地理库 IPv6 开关为面板 UI 专用运维操作（数据源配置态，非告警/巡检场景；Agent 无消费场景）"}
+	"PUT /api/v1/security/ip2region/v6-enabled": "IP 地理库 IPv6 开关为面板 UI 专用运维操作（数据源配置态，非告警/巡检面板 UI）",
+	"GET /api/v1/metrics/connections/list":      "连接明细（活跃/待关闭/已关闭四分类+归属地+WAF 叠加，面板连接监控弹框数据源；audit140）",
+}
 
 func TestMCPUncoveredRoutes_areExplicitlyExempted(t *testing.T) {
 	router := newAPIDocTestRouter(t)

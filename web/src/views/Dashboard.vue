@@ -66,6 +66,14 @@
                 >
                   {{ caddyStatus === 'running' ? (caddyPid !== '0' && caddyPid !== '' ? t('common.app.dashboard.runningPid', { pid: caddyPid }) : t('common.app.dashboard.running')) : caddyStatus === 'stopped' ? t('common.app.dashboard.stopped') : t('common.app.dashboard.unknown') }}
                 </el-tag>
+                <el-button
+                  size="small"
+                  type="primary"
+                  plain
+                  class="conn-entry-btn"
+                  :icon="Connection"
+                  @click="connectionsDialogVisible = true"
+                >{{ t('common.app.dashboard.connEntryBtn') }}</el-button>
                 <!-- 审计项：从节点不执行独立的配置一致性检查（配置由主节点快照
                      下发），此前沿用主节点口径显示「配置正常」= 从未执行过的检查。
                      从节点改为「主节点权威」声明，主节点保持一致性横幅。
@@ -463,11 +471,14 @@
         </template>
       </template>
     </el-dialog>
+  <ConnectionsDialog :visible="connectionsDialogVisible" @close="connectionsDialogVisible = false" />
+
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue'
+import ConnectionsDialog from '@/components/ConnectionsDialog.vue'
 import { formatDate, formatChartTimeInConfigTz, formatEpochStatLabel } from '@/utils/date'
 import { getStrategyLabel } from '@/utils/strategyLabels'
 import { hostPortKey } from '@/utils/upstreamKeys'
@@ -479,7 +490,7 @@ import { request, mfaAwareSuccess } from '@/utils/api'
 import { formatBytes } from '@/utils/formatBytes'
 import { formatInt } from '@/utils/formatInt'
 import { ElMessageBox } from 'element-plus'
-import { Monitor, Cpu, Document, Loading, CircleCheck, Odometer, TrendCharts, DataLine, List } from '@element-plus/icons-vue'
+import { Monitor, Cpu, Document, Loading, CircleCheck, Odometer, TrendCharts, DataLine, List , Connection} from '@element-plus/icons-vue'
 import type { APIResponse, SystemInfo, SystemMetrics, CaddyMetrics, Rule, RuleMetrics, HostMetrics, MetricsOverview } from '@/types'
 import DialogHeader from '@/components/DialogHeader.vue'
 import DialogSectionHeader from '@/components/DialogSectionHeader.vue'
@@ -512,6 +523,7 @@ const formatChartTime = (ms: number): string => formatChartTimeInConfigTz(ms)
 
 const systemInfo = ref<SystemInfo | null>(null)
 const systemInfoUnavailable = ref(false)
+const connectionsDialogVisible = ref(false)
 const systemMetrics = ref<SystemMetrics | null>(null)
 const caddyMetrics = ref<CaddyMetrics | null>(null)
 // ruleMetricsEpochSeconds 规则指标统计起点（/metrics/dashboard 透传，Unix 秒；

@@ -352,6 +352,7 @@ func init() {
 	Register("k_bf479693", "密码加密失败", "Failed to encrypt the password")
 	Register("k_bf64e658", "已发出取消信号，任务将在当前阶段中断", "Cancellation signal sent; the task will be interrupted at its current phase")
 	Register("k_bf74244d", "自动封禁名单为预置名单，分类不可修改", "The auto-ban list is a preset list; its category cannot be modified")
+	Register("k_c0d1164e", "读取连接明细失败", "Failed to read connection list")
 	Register("k_c13fb1ee", "混合策略为存量兼容形态，不可显式设置", "Hybrid policies are a legacy compatibility form and cannot be set explicitly")
 	Register("k_c1c65ead", "检查域名冲突失败", "Failed to check domain conflicts")
 	Register("k_c2d6391f", "更新用户状态失败", "Failed to update the user status")

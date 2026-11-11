@@ -1195,6 +1195,7 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 				business.GET("/metrics/history", h.GetMetricsHistory)
 				business.GET("/metrics/realtime", h.GetRealtimeTraffic)
 				business.GET("/metrics/connections", h.GetConnectionStats)
+				business.GET("/metrics/connections/list", h.GetConnectionsList)
 
 				// System
 				business.GET("/system/info", h.GetSystemInfo)

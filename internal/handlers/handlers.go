@@ -510,10 +510,10 @@ func rollbackTx(tx *sql.Tx) error {
 // RulesWrittenInTx：事务是否写过 lb_rules（ACME 谓词 miss 补查门控，默认 false
 // ——安全策略/名单等路径不触碰 lb_rules；规则写路径必须显式置 true）。
 type txApplyFinish struct {
-	Resource         string
-	AuditAction      string
-	AuditDetail      string
-	SuccessMsg       string
+	Resource    string
+	AuditAction string
+	AuditDetail string
+	SuccessMsg  string
 	// MessageKey 为 SuccessMsg 的 i18n 键(audit137-A5 双语键化配套):非空时
 	// 响应透传 MessageKey 供前端分类与本地词表回落;空=zh 原样(内部记录)。
 	MessageKey       string
