@@ -335,7 +335,6 @@ export default {
       "connUpdatedAt": "Updated {time}",
       "connCatAll": "All",
       "connEntryBtn": "Connections",
-      "connCatAll": "All",
       "connCatEstablished": "Active",
       "connCatTimeWait": "Closing",
       "connCatClosed": "Closed",
