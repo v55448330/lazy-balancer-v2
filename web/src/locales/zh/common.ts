@@ -334,6 +334,8 @@ export default {
       "connRefreshNow": "立即刷新",
       "connUpdatedAt": "更新于 {time}",
       "connCatAll": "全部",
+      "connEntryBtn": "连接",
+      "connCatAll": "全部",
       "connCatEstablished": "活跃",
       "connCatTimeWait": "待关闭",
       "connCatClosed": "已关闭",
