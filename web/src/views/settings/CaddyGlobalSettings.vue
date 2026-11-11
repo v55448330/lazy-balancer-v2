@@ -263,6 +263,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { ipListCategoryLabel } from '@/utils/ipListCategoryLabel'
 import { useI18n } from 'vue-i18n'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { RefreshRight, Setting, Tickets, View } from '@element-plus/icons-vue'
@@ -553,12 +554,10 @@ const saveListDialogVisible = ref(false)
 // audit137-P2-3:category 默认取库值 zh 码(IP_LIST_CATEGORIES[1])——存储契约
   // =zh 分类码,en 下 t() 译文入库会破坏策略侧分类匹配;name 为自由文本保持 t()。
   const saveListForm = ref({ name: t('app.settings.basic.map.saveAsListDefaultName'), category: IP_LIST_CATEGORIES[1] })
-// 分类 en 本地化:复用 common.app.ipListCategory 词条(与策略侧 ipListCategoryLabel 同词表)
+// 分类 en 本地化:单源 utils/ipListCategoryLabel(audit140-U2-F4 三份同构收敛)
 const ipListCategoryLocalized = (c: string): string => {
   if (locale.value !== 'en') return c
-  const KEY_MAP: Record<string, string> = { '搜索引擎爬虫': 'crawler', 'CDN 节点': 'cdn', '云服务商': 'cloud', '办公网络': 'office', '数据中心': 'dc', '可信地址': 'trust', '恶意 IP': 'malicious', '其他': 'other' }
-  const k = KEY_MAP[c]
-  return k ? t(`common.app.ipListCategory.${k}`) : c
+  return ipListCategoryLabel(c)
 }
 const savingList = ref(false)
 const openSaveListDialog = (): void => {

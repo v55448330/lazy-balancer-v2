@@ -46,7 +46,6 @@ export default {
           "rangesPlaceholder": "Paste the CDN's origin ranges (CIDR), per its official published list",
           "saveAsListBtn": "Save as list",
           "saveAsListDefaultName": "Trusted proxy ranges",
-          "saveAsListDefaultCategory": "CDN node",
           "listLoadWarn": "Failed to load IP lists: an empty \"referenced lists\" dropdown ≠ unconfigured, and the \"total N\" below also excludes entries from referenced lists",
           "reloadBtn": "Reload",
           "referencedList": "Referenced lists",

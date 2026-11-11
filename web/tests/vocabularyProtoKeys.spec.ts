@@ -35,8 +35,8 @@ const NON_VOCABULARY_RECORD_TABLES = [
   // CRS 分类显示映射:键=后端 zh 分类码(查表即译,无外部键源)
   'src/utils/crsCategories.ts#CRS_CATEGORY_KEYS',
   // IP 名单分类显示映射:键=后端 zh 分类码(查表即译,无外部键源)
-  'src/views/security/SecurityPolicies.vue#IP_LIST_CATEGORY_KEYS',
-  'src/views/security/SecurityRules.vue#IP_LIST_CATEGORY_KEYS',
+
+
   // 触发类型显示映射:键=后端 zh 码(查表即译,无外部键源)
   'src/views/security/SecurityEvents.vue#TRIGGER_TYPE_KEYS',
   'src/components/layout/AppLayout.vue#navLabels',

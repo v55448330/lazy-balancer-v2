@@ -969,9 +969,9 @@
 
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
+import { ipListCategoryLabel } from '@/utils/ipListCategoryLabel'
 import { cityEnName } from '@/utils/cityEnNames'
 import { useI18n } from 'vue-i18n'
-import { CRS_CATEGORY_KEYS } from '@/utils/crsCategories.ts'
 import { Plus, Lock, InfoFilled, CircleCheckFilled, Connection, Odometer, Link, Check, ArrowLeft, ArrowRight, ArrowDown, Search, WarningFilled, Document } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { CascaderOption, CascaderProps, LazyLoad } from 'element-plus'
@@ -1128,26 +1128,7 @@ const policySearch = ref('')
 const activeTypeTab = ref<SecurityPolicyType>('stage1')
 
 // 名单分类显示映射(后端/存储 zh 分类码;下拉 label 翻译,筛选 value 保持 zh)
-const IP_LIST_CATEGORY_KEYS: Record<string, string> = {
-  '搜索引擎爬虫': 'crawler',
-  'CDN 节点': 'cdn',
-  '云服务商': 'cloud',
-  '办公网络': 'office',
-  '数据中心': 'dc',
-  '可信地址': 'trust',
-  '恶意 IP': 'malicious',
-  '自动封禁': 'autoban',
-  '其他': 'other',
-}
-const ipListCategoryLabel = (raw?: string): string => {
-  if (!raw) return raw || ''
-  const k = IP_LIST_CATEGORY_KEYS[raw]
-  if (k) return t(`common.app.ipListCategory.${k}`)
-  // CRS 规则分类走独立词表(与 IP 名单分类不同码表)
-  const ck = CRS_CATEGORY_KEYS[raw]
-  if (ck) return t(`common.app.crsCategory.${ck}`)
-  return raw
-}
+// ipListCategoryLabel 迁移至 utils/ipListCategoryLabel.ts 单源(audit140-U2-F4 三份同构收敛)
 
 const policyTypeOf = (row: PolicySummary): SecurityPolicyType => inferPolicyType(row)
 // 策略 id → 阶段类型（绑定选择器/提交门的 stage2 唯一性判据用）：与列表分组同一

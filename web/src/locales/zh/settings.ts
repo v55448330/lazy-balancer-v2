@@ -46,7 +46,6 @@ export default {
           "rangesPlaceholder": "粘贴该 CDN 回源网段（CIDR），以官方公布为准",
           "saveAsListBtn": "存为列表",
           "saveAsListDefaultName": "受信代理网段",
-          "saveAsListDefaultCategory": "CDN 节点",
           "listLoadWarn": "IP 地址列表加载失败：「引用地址列表」下拉为空≠未配置，下方「合计 N 条」也未计入已引用列表的条目",
           "reloadBtn": "重新加载",
           "referencedList": "引用地址列表",

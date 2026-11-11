@@ -33,9 +33,10 @@ export const CRS_CATEGORY_KEYS: Record<string, string> = {
 }
 
 import { tSafe } from '../i18n/tSafe.ts'
+import { hasOwn } from './hasOwn'
 
 export const crsCategoryLabel = (raw?: string): string => {
   if (!raw) return raw || ''
-  const k = CRS_CATEGORY_KEYS[raw]
+  const k = hasOwn(CRS_CATEGORY_KEYS, raw) ? CRS_CATEGORY_KEYS[raw] : undefined
   return k ? tSafe(`common.app.crsCategory.${k}`) : raw
 }

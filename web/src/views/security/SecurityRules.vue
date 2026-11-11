@@ -775,36 +775,17 @@
 
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
+import { ipListCategoryLabel } from '@/utils/ipListCategoryLabel'
 import { useI18n } from 'vue-i18n'
 import { Aim, Filter, List, Location, Lock, Search, Notebook, Plus, WarningFilled, Link, InfoFilled } from '@element-plus/icons-vue'
 import LogStorageBar from '@/components/LogStorageBar.vue'
 import { formatDate } from '@/utils/date'
 import { autobanEntryExpired, autobanEntryRemaining } from '@/utils/autobanEntry'
 import { IP_LIST_CATEGORIES, invalidateSharedEntriesCache } from '@/utils/securityStages'
-import { CRS_CATEGORY_KEYS } from '@/utils/crsCategories.ts'
 
 // 名单分类显示映射:后端/存储为 zh 分类码(有限集合),en 用户经词条显示;
 // 未登记值(自定义名)回落原文。筛选/表单 value 保持 zh 原样不传译值。
-const IP_LIST_CATEGORY_KEYS: Record<string, string> = {
-  '搜索引擎爬虫': 'crawler',
-  'CDN 节点': 'cdn',
-  '云服务商': 'cloud',
-  '办公网络': 'office',
-  '数据中心': 'dc',
-  '可信地址': 'trust',
-  '恶意 IP': 'malicious',
-  '自动封禁': 'autoban',
-  '其他': 'other',
-}
-const ipListCategoryLabel = (raw?: string): string => {
-  if (!raw) return raw || ''
-  const k = IP_LIST_CATEGORY_KEYS[raw]
-  if (k) return t(`common.app.ipListCategory.${k}`)
-  // CRS 规则分类走独立词表(与 IP 名单分类不同码表)
-  const ck = CRS_CATEGORY_KEYS[raw]
-  if (ck) return t(`common.app.crsCategory.${ck}`)
-  return raw
-}
+// ipListCategoryLabel 迁移至 utils/ipListCategoryLabel.ts 单源(audit140-U2-F4)
 import { crsRuleCountLabel, libraryHealthTag, librarySourceHealthTag, libraryStatusLabel, libraryStatusTagType, summarizeLibrarySources } from '@/utils/securityLibraries'
 import { updaterName } from '@/utils/updaterName'
 import { hasOwn } from '@/utils/hasOwn'
