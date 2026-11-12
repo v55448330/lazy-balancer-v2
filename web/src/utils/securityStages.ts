@@ -706,9 +706,12 @@ export const buildStageModel = (
     const s1rows = buildStage1Rows(policy, ipLists, blockPages, isTcp)
     if (s1rows.length > 0) stage1Groups.push({ ...base, rows: s1rows })
 
-    // 阶段 2 · CC 防护（2026-11-12 用户裁定）：配额限流与异常触发/人机挑战
-    // 同属一个阶段与一条策略——执行序固定「配额(429) → 挑战」。
-    {
+    // 阶段 2 · CC 防护（2026-11-12 用户裁定）：只有阶段 2 策略（或携带 CC/人机
+    // 能力的混合策略）进入本组；阶段 3 策略即便配了拦截页也不得串场。
+    const humanOn = !!policy?.human_verify_mode && policy.human_verify_mode !== 'off'
+    const s2Capable = !!policy
+      && (inferPolicyType(policy) === 'stage2' || humanOn || policy.cc_detect_enabled === true)
+    if (s2Capable) {
       const s2rows: StageRow[] = []
       if (policy?.human_verify_mode && policy.human_verify_mode !== 'off') {
         s2rows.push({ label: t('common.app.views.stages.humanModeLabel'), detail: t('common.app.views.stages.humanMode_' + policy.human_verify_mode) })

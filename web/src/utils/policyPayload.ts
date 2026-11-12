@@ -152,8 +152,8 @@ export const buildPolicyPayload = (input: PolicyPayloadInput): PolicyPayload => 
     trust_detection: input.trustDetection,
     // mixed 不允许显式提交（省略=后端按内容推断）
     policy_type: input.policyType === 'mixed' ? undefined : input.policyType,
-    // 阶段 3 人机验证：仅 stage3 类型承载；其余类型按后端「非本阶段能力归零」
-    // 同口径强制 off/0/关，避免类型切换后残留配置在别的阶段误发射。
+    // 阶段 2/3 人机验证：stage2（CC 防护）与 stage3 承载；其余类型按后端
+    // 「非本阶段能力归零」同口径强制 off/0/关，避免类型切换后残留配置误发射。
     human_verify_mode: isHumanStage(input.policyType) ? input.humanVerifyMode : 'off',
     human_verify_type: input.humanVerifyType,
     human_verify_ttl: input.humanVerifyTtl,
@@ -168,8 +168,8 @@ export const buildPolicyPayload = (input: PolicyPayloadInput): PolicyPayload => 
   }
 }
 
-/** 阶段 3（人机验证）能力域；mixed 可能含 WAF 但不含人机验证阶段（后端同口径归零） */
-const isHumanStage = (policyType: string): boolean => policyType === 'stage3'
+/** 阶段 2/3（人机验证/CC）能力域；mixed 可能含 WAF 但不含人机验证阶段（后端同口径归零） */
+const isHumanStage = (policyType: string): boolean => policyType === 'stage2' || policyType === 'stage3'
 
 /**
  * 爬虫豁免「空引擎」守卫。

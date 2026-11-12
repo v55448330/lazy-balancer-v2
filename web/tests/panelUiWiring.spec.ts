@@ -547,6 +547,9 @@ test('阶段 2 复用拦截页步骤：挑战/封禁共用页面选择与页面�
   assert.match(text, /<div class="form-tip-line">\{\{ t\('app\.security\.policies\.human\.ccEnabledTip'\) \}\}<\/div>/, 'CC 说明使用换行描述样式')
   assert.doesNotMatch(code('src/locales/zh/security.ts'), /\{\{human_verify_widget\}\}/, 'i18n 文案不得内嵌双花括号：vue-i18n 渲染会抛错并吞掉页面选择器')
   assert.match(text, /v-text="'\{\{human_verify_widget\}\}'"/, '占位符用 v-text 原样展示')
+  assert.match(text, /v-if="!\(editorPolicyType === 'stage2' && form\.cc_response !== 'ban'\)"/, '挑战模式不再合成「使用内置人机验证页」选项')
+  assert.match(text, /challengePageMissingWidget/, '选择页面后必须校验滑块组件占位符')
+  assert.match(text, /challengePageNeedsWidget/, '缺占位符必须有明确提示并阻断保存')
   assert.match(code('src/views/security/SecurityBlockPages.vue'), /insertHumanWidget/, '拦截页编辑器保留插入滑块验证组件')
 })
 

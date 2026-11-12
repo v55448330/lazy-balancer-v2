@@ -141,7 +141,11 @@ test('geoip 三态归一：关闭 → off；开启但模式 off → deny；爬�
   assert.equal(buildPolicyPayload(base({ geoipEnabled: true, geoipCrawlerExempt: true })).geoip_crawler_exempt, true)
 })
 
-test('阶段 3 人机验证载荷：stage3 承载全字段；其余类型归零（与后端阶段能力矩阵同口径）', () => {
+test('阶段 2/3 人机验证载荷：stage2/stage3 承载全字段；其余类型归零（与后端阶段能力矩阵同口径）', () => {
+  const s2 = buildPolicyPayload(base({ policyType: 'stage2' }))
+  assert.equal(s2.human_verify_mode, 'auto')
+  assert.equal(s2.human_verify_type, 'slider')
+  assert.equal(s2.cc_detect_enabled, true)
   const s3 = buildPolicyPayload(base({ policyType: 'stage3' }))
   assert.equal(s3.human_verify_mode, 'auto')
   assert.equal(s3.human_verify_type, 'slider')

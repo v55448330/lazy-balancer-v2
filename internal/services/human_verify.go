@@ -150,16 +150,17 @@ func humanPolicyMerged(policies []*models.SecurityPolicy) (mode, typ string, ttl
 // builtinHumanVerifyPageID 内置人机验证页（9005）：CC 挑战模式的默认拦截页。
 const builtinHumanVerifyPageID = 9005
 
-// ccVerifyEnabled 判断策略链是否启用 CC 检测且挑战模式（非直接封禁）。
-func ccVerifyEnabled(policies []*models.SecurityPolicy) bool {
-	cfg := loadCCConfig(policies)
-	return cfg.Enabled && cfg.Response == "verify"
+// humanChallengeEnabled 判断策略链是否启用人机挑战（force/auto 任一，CC 检测
+// 开关不是门：始终验证同样需要拦截页）。
+func humanChallengeEnabled(policies []*models.SecurityPolicy) bool {
+	mode, _, _, _ := humanPolicyMerged(policies)
+	return mode != "off"
 }
 
-// ccChallengeFallbackPage 返回 CC 挑战模式的默认内置人机验证页内容；
-// 非 CC 挑战或页面缺失时返回空（调用方回退 lbhuman 生成页）。
-func ccChallengeFallbackPage(ctx *securityPolicyContext, policies []*models.SecurityPolicy) (string, string) {
-	if ctx == nil || !ccVerifyEnabled(policies) {
+// humanChallengeFallbackPage 返回人机挑战的默认内置人机验证页内容；
+// 非挑战或页面缺失时返回空（调用方回退 lbhuman 生成页）。
+func humanChallengeFallbackPage(ctx *securityPolicyContext, policies []*models.SecurityPolicy) (string, string) {
+	if ctx == nil || !humanChallengeEnabled(policies) {
 		return "", ""
 	}
 	return ctx.blockPageByID[builtinHumanVerifyPageID], ctx.blockPageTypeByID[builtinHumanVerifyPageID]

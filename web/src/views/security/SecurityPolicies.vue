@@ -797,11 +797,14 @@
           <el-form :model="form" :label-width="$flw('100px')" :disabled="formFrozen">
             <el-form-item :label="t('app.security.policies.bp.pageLabel')">
               <el-select v-model="form.block_page_id" :placeholder="t('app.security.policies.bp.pagePlaceholder')" style="width: 100%">
-                <el-option :value="0" :label="editorPolicyType === 'stage2' && form.cc_response !== 'ban' ? t('app.security.policies.human.challengePageLabelBuiltin') : t('app.security.policies.bp.noPageDefault')" />
+                <el-option v-if="!(editorPolicyType === 'stage2' && form.cc_response !== 'ban')" :value="0" :label="t('app.security.policies.bp.noPageDefault')" />
                 <el-option v-for="p in blockPages" :key="p.id" :label="pageLabel(p)" :value="p.id" />
               </el-select>
               <div v-if="editorPolicyType === 'stage2' && form.cc_response !== 'ban'" class="form-tip-line">
                 {{ t('app.security.policies.human.challengePageTip') }} <code class="placeholder-code" v-text="'{{human_verify_widget}}'" />
+              </div>
+              <div v-if="challengePageMissingWidget" class="form-tip-line is-error">
+                {{ t('app.security.policies.human.challengePageNeedsWidget') }}
               </div>
               <div v-else-if="form.block_page_id === 0" class="form-tip-line">{{ t('app.security.policies.bp.noPageTipDefault') }}</div>
               <div v-else class="form-tip-line">{{ t('app.security.policies.bp.manageTip') }}<AccessibleLink type="primary" @click="goToBlockPagesPage">{{ t('app.security.policies.common.goCreateEdit') }}</AccessibleLink></div>
@@ -3406,7 +3409,7 @@ async function openDialog(row?: PolicySummary) {
         cc_4xx_ratio: d.cc_4xx_ratio ?? 70,
         cc_session_anomaly: d.cc_session_anomaly ?? false,
         cc_session_ua_threshold: d.cc_session_ua_threshold ?? 5,
-        cc_response: d.cc_response ?? 'verify',
+        cc_response: d.cc_response === 'ban' ? 'ban' : 'verify',
     }
     ipACLList.value = parseIPList(d.ip_acl_list)
     ipWhitelist.value = parseIPList(d.ip_whitelist)
@@ -3516,11 +3519,23 @@ const beforeWizardClose = (done: () => void): void => {
   }).then(() => done()).catch(() => { /* 继续编辑：保留当前弹框与全部暂存 */ })
 }
 
+const challengePageMissingWidget = computed<boolean>(() => {
+  if (editorPolicyType.value !== 'stage2' || form.value.cc_response === 'ban') return false
+  if (form.value.block_page_id <= 0) return true
+  const page = blockPages.value.find((p) => p.id === form.value.block_page_id)
+  return !page || !(page.content ?? '').includes('{{human_verify_widget}}')
+})
+
 const handleSave = async () => {
   if (saving.value) return
   if (!form.value.name.trim()) {
     ElMessage.warning(t('app.security.policies.msg.nameRequired'))
     currentStep.value = WIZARD_STEP.BASIC
+    return
+  }
+  if (editorPolicyType.value === 'stage2' && form.value.cc_response !== 'ban' && challengePageMissingWidget.value) {
+    ElMessage.error(t('app.security.policies.human.challengePageNeedsWidget'))
+    currentStep.value = WIZARD_STEP.BLOCK_PAGE
     return
   }
   // 类型裁剪后的阶段不参与校验（步骤已被裁剪，校验跳转目标不存在）
@@ -4186,4 +4201,5 @@ html[data-locale='en'] .wizard-steps :deep(.el-step__title) { font-size: 14px; }
 
 <style scoped>
 .placeholder-code { padding: 0 4px; border-radius: 4px; background: var(--el-fill-color-light); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.form-tip-line.is-error { color: var(--el-color-danger); }
 </style>

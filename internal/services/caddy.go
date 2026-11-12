@@ -1759,7 +1759,7 @@ func loadSecurityPolicyContext(store caddyConfigStore) (*securityPolicyContext, 
 	var referencedPage bool
 	for _, policies := range ctx.policyByRule {
 		for _, policy := range policies {
-			if policy.BlockPageID > 0 || (policy.CCDetectEnabled && !strings.EqualFold(strings.TrimSpace(policy.CCResponse), "ban")) {
+			if policy.BlockPageID > 0 || policy.HumanVerifyMode != "off" {
 				referencedPage = true
 				break
 			}
@@ -4623,7 +4623,7 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig, sec
 			banContent, banType := "", ""
 			if ctx != nil {
 				for _, policy := range policies {
-					if policy != nil && policy.CCDetectEnabled && policy.BlockPageID > 0 {
+					if policy != nil && policy.BlockPageID > 0 && policy.HumanVerifyMode != "off" {
 						banContent = ctx.blockPageByID[policy.BlockPageID]
 						banType = ctx.blockPageTypeByID[policy.BlockPageID]
 						break
@@ -4632,7 +4632,7 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig, sec
 				// CC 挑战模式的默认拦截页=内置人机验证页（9005）；策略未显式配页
 				// 时不再走 lbhuman 生成的通用挑战页。9005 缺失才回退生成页。
 				if banContent == "" {
-					banContent, banType = ccChallengeFallbackPage(ctx, policies)
+					banContent, banType = humanChallengeFallbackPage(ctx, policies)
 				}
 			}
 			if humanHandler := buildHumanHandler(rule.CaddyID, policies, banContent, banType); humanHandler != nil {

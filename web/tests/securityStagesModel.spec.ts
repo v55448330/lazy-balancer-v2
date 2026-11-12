@@ -89,6 +89,13 @@ test('阶段 2：拦截页已删/内容空时显性给出失效回落（不再�
   assert.equal(unset.some((row) => row.label === '拦截页（策略页）'), false)
 })
 
+test('阶段 3 策略配了拦截页也不得串入阶段 2 分组', () => {
+  const s3 = policyOf({ policy_type: 'stage3', mode: 'blocking', block_page_id: 1, human_verify_mode: 'off' })
+  const model = buildStageModel([bindingOf()], [s3], [], [{ id: 1, name: '默认拦截页', content: '<p>x</p>' }])
+  assert.equal(model.stages[2].groups.length, 0, '阶段 3 策略不得出现在阶段 2')
+  assert.ok(model.stages[3].groups.length > 0, '阶段 3 自身仍应显示')
+})
+
 test('ACL 内容门：启用但名单空不记账为阶段 1 能力（摘要展示另走 has_ip_control）', () => {
   // 启用 ∧ 空名单：内容门 false（deny/绕过零拦截；allow 的 fail-closed 带外边角说明见下）
   const enabledEmpty = policyOf({ has_ip_control: true, ip_acl_enabled: true, ip_acl_list: '[]', ip_acl_list_refs: '[]', ip_blacklist: '[]' })

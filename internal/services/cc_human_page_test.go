@@ -11,10 +11,14 @@ func TestCCChallengeFallbackUsesBuiltinHumanPage(t *testing.T) {
 		blockPageByID:     map[int]string{builtinHumanVerifyPageID: "<html>{{human_verify_widget}}</html>"},
 		blockPageTypeByID: map[int]string{builtinHumanVerifyPageID: "text/html; charset=utf-8"},
 	}
-	policies := []*models.SecurityPolicy{{CCDetectEnabled: true, CCResponse: "verify"}}
-	html, ctype := ccChallengeFallbackPage(ctx, policies)
-	if html != "<html>{{human_verify_widget}}</html>" || ctype != "text/html; charset=utf-8" {
-		t.Fatalf("CC verify 未回退内置人机验证页: html=%q ctype=%q", html, ctype)
+	for name, policies := range map[string][]*models.SecurityPolicy{
+		"cc-verify": {{CCDetectEnabled: true, CCResponse: "verify", HumanVerifyMode: "force"}},
+		"force":     {{HumanVerifyMode: "force"}},
+	} {
+		html, ctype := humanChallengeFallbackPage(ctx, policies)
+		if html != "<html>{{human_verify_widget}}</html>" || ctype != "text/html; charset=utf-8" {
+			t.Fatalf("%s 未回退内置人机验证页: html=%q ctype=%q", name, html, ctype)
+		}
 	}
 }
 
@@ -28,11 +32,11 @@ func TestCCChallengeFallbackSkipsBanAndNonCC(t *testing.T) {
 		"nonCC": {{CCDetectEnabled: false, CCResponse: "verify"}},
 		"empty": nil,
 	} {
-		if html, ctype := ccChallengeFallbackPage(ctx, policies); html != "" || ctype != "" {
+		if html, ctype := humanChallengeFallbackPage(ctx, policies); html != "" || ctype != "" {
 			t.Fatalf("%s 不应回退内置人机验证页: html=%q ctype=%q", name, html, ctype)
 		}
 	}
-	if html, _ := ccChallengeFallbackPage(nil, []*models.SecurityPolicy{{CCDetectEnabled: true, CCResponse: "verify"}}); html != "" {
+	if html, _ := humanChallengeFallbackPage(nil, []*models.SecurityPolicy{{CCDetectEnabled: true, CCResponse: "verify"}}); html != "" {
 		t.Fatalf("nil ctx 不应回退: %q", html)
 	}
 }
