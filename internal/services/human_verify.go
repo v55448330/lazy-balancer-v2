@@ -147,6 +147,24 @@ func humanPolicyMerged(policies []*models.SecurityPolicy) (mode, typ string, ttl
 	return
 }
 
+// builtinHumanVerifyPageID 内置人机验证页（9005）：CC 挑战模式的默认拦截页。
+const builtinHumanVerifyPageID = 9005
+
+// ccVerifyEnabled 判断策略链是否启用 CC 检测且挑战模式（非直接封禁）。
+func ccVerifyEnabled(policies []*models.SecurityPolicy) bool {
+	cfg := loadCCConfig(policies)
+	return cfg.Enabled && cfg.Response == "verify"
+}
+
+// ccChallengeFallbackPage 返回 CC 挑战模式的默认内置人机验证页内容；
+// 非 CC 挑战或页面缺失时返回空（调用方回退 lbhuman 生成页）。
+func ccChallengeFallbackPage(ctx *securityPolicyContext, policies []*models.SecurityPolicy) (string, string) {
+	if ctx == nil || !ccVerifyEnabled(policies) {
+		return "", ""
+	}
+	return ctx.blockPageByID[builtinHumanVerifyPageID], ctx.blockPageTypeByID[builtinHumanVerifyPageID]
+}
+
 // buildHumanHandler 阶段 3 人机验证 handler 渲染：有任一策略启用人机验证
 // （mode != off）即注入；CC 检测阈值随配置下发（auto 模式插件内判定）。
 func buildHumanHandler(ruleCaddyID string, policies []*models.SecurityPolicy, banPage ...string) map[string]interface{} {

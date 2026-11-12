@@ -521,7 +521,9 @@ test('CC 卡片维持同行等高，内容纵向填充不改变卡片尺寸', ()
   assert.match(overview, /\.events-row \.el-card \{ height: 100%; \}/, '同行卡片必须继续等高')
   assert.match(overview, /class="cc-card"/, 'CC 卡片使用独立弹性布局类')
   assert.match(overview, /\.cc-card :deep\(\.el-card__body\) \{ flex: 1;/, '内容区纵向撑满等高卡片')
-  assert.match(overview, /\.cc-donut \{ position: relative; width: 118px; height: 118px;/, '图表放大填充空间')
+  assert.match(overview, /\.cc-donut \{ position: relative; width: 136px; height: 136px;/, '图表放大填充空间')
+  assert.doesNotMatch(overview, /cc-kpi/, '通过/失败不再同时出现在指标格与图例（去重）')
+  assert.match(overview, /class="cc-dist-head"/, '结果区有标题与总数，填充底部空间')
 })
 
 test('阶段 2 复用拦截页步骤：挑战/封禁共用页面选择与页面内滑块组件', () => {

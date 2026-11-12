@@ -414,6 +414,8 @@ export default {
      "failed": "失败",
      "pending": "未完成",
      "stackTip": "今日挑战结果分布：通过 / 失败 / 未完成",
+     "resultTitle": "今日结果",
+     "total": "共 {n} 次",
      "note": "统计来自人机验证挑战页与会话校验；封禁为 CC 防护直接拒绝的请求数。"
     },
 
@@ -885,9 +887,9 @@ export default {
      "ccResponseBan": "直接封禁（403）",
      "ccResponseTip": "直接封禁立即返回 403；自动封禁管线可另行累计封禁（需在事件页开启挑战失败计入）。",
      "challengePageLabel": "验证页面",
-     "challengePageLabelBuiltin": "使用内置挑战页",
+     "challengePageLabelBuiltin": "使用内置人机验证页",
      "challengePageBuiltin": "系统内置挑战页（lb_human 渲染）",
-     "challengePageTip": "选择拦截页作为挑战页时，页面必须包含占位符（拦截页编辑器「插入滑块验证组件」）；留空使用内置挑战页。",
+     "challengePageTip": "选择拦截页作为挑战页时，页面必须包含占位符（拦截页编辑器「插入滑块验证组件」）；留空使用内置人机验证页。",
      "ccEnabledTip": "仅在人机验证开启时生效：同一来源短时突刺/4xx 激增/多 UA 会话 → 升级为挑战或封禁（区别于阶段 2 限流的全局速率上限，这里判定的是挑战页上的攻击性行为）",
       "ccRpsLabel": "突刺阈值",
       "ccRpsPer": "次 /",
