@@ -47,22 +47,34 @@ func (p *humanEventPoster) initClient() {
 	}
 }
 
+// shouldReport 挑战发放每 IP 每分钟最多一条（防事件风暴）；通过/失败
+// 是验证结果审计，必须每次记录，不能被发放限流吞掉。
+func (p *humanEventPoster) shouldReport(ip, kind string, now time.Time) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if kind == "challenge" {
+		if last, ok := p.lastBy[ip]; ok && now.Sub(last) < time.Minute {
+			return false
+		}
+		p.lastBy[ip] = now
+	}
+	// 清理过期限流条目（防 map 无限增长）
+	for k, v := range p.lastBy {
+		if now.Sub(v) > 10*time.Minute {
+			delete(p.lastBy, k)
+		}
+	}
+	return true
+}
+
 // report 异步上报（非阻塞：投递到 channel，独立 goroutine 发送）。
 func reportHumanEvent(ruleID, ip, method, uri, ua, kind string) {
 	go func() {
 		defer func() { _ = recover() }()
-		poster.mu.Lock()
-		if last, ok := poster.lastBy[ip]; ok && time.Since(last) < time.Minute {
-			poster.mu.Unlock()
+		if !poster.shouldReport(ip, kind, time.Now()) {
 			return
 		}
-		poster.lastBy[ip] = time.Now()
-		// 清理过期限流条目（防 map 无限增长）
-		for k, v := range poster.lastBy {
-			if time.Since(v) > 10*time.Minute {
-				delete(poster.lastBy, k)
-			}
-		}
+		poster.mu.Lock()
 		poster.initClient()
 		client := poster.client
 		poster.mu.Unlock()

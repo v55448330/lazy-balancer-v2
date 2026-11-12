@@ -17,9 +17,9 @@ import (
 // 轨迹合理性校验 + 签名 cookie。挑战页零外部资源、内联 JS/CSS。
 
 const (
-	sliderWidth       = 320 // 拼图区宽度 px
-	sliderHeight      = 180
-	sliderPieceSize   = 44 // 拼图片块边长
+	sliderWidth       = 240 // 拼图区宽度 px
+	sliderHeight      = 134
+	sliderPieceSize   = 34 // 拼图片块边长
 	sliderTolerance   = 5  // x 偏移容差 px
 	sliderPuzzleTTL   = 2 * time.Minute
 	sliderMaxAttempts = 3 // 失败 3 次强制换图（防爆破）
@@ -66,13 +66,13 @@ func puzzleSVG(gapX int) string {
 	return fmt.Sprintf(`<svg width="%d" height="%d" xmlns="http://www.w3.org/2000/svg">
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0%%" stop-color="#3b5bdb"/><stop offset="1" stop-color="#6741d9"/>
+      <stop offset="0%%" stop-color="#2563eb"/><stop offset="1" stop-color="#3b82f6"/>
     </linearGradient>
   </defs>
   <rect width="%d" height="%d" fill="url(#bg)" rx="4"/>
-  <circle cx="60" cy="50" r="28" fill="#ffffff" opacity="0.12"/>
-  <circle cx="240" cy="120" r="40" fill="#ffffff" opacity="0.10"/>
-  <path d="M 30 140 Q 90 100 160 130 T 290 110" stroke="#ffffff" stroke-width="2" fill="none" opacity="0.25"/>
+  <circle cx="44" cy="38" r="22" fill="#ffffff" opacity="0.13"/>
+  <circle cx="182" cy="94" r="28" fill="#ffffff" opacity="0.10"/>
+  <path d="M 22 104 Q 66 76 120 96 T 218 82" stroke="#ffffff" stroke-width="2" fill="none" opacity="0.25"/>
   <path d="M %d %d h %d v %d h -%d z M %d %d a 6 6 0 0 1 12 0 v 6 h -12 z"
         fill="#1e293b" opacity="0.42"/>
 </svg>`,
@@ -83,10 +83,11 @@ func puzzleSVG(gapX int) string {
 
 // pieceSVG 拼图片块（同轮廓，亮色描边）。
 func pieceSVG() string {
-	return fmt.Sprintf(`<svg width="%d" height="%d" xmlns="http://www.w3.org/2000/svg">
+	return fmt.Sprintf(`<svg width="%d" height="%d" viewBox="0 -6 %d %d" xmlns="http://www.w3.org/2000/svg">
+  <defs><filter id="lbHvShadow" x="-30%%" y="-30%%" width="160%%" height="160%%"><feDropShadow dx="0" dy="2" stdDeviation="2" flood-color="#0f172a" flood-opacity=".25"/></filter></defs>
   <path d="M 0 0 h %d v %d h -%d z M %d -6 a 6 6 0 0 1 12 0 v 6 h -12 z"
-        fill="#ffffff" fill-opacity="0.88" stroke="#ffffff" stroke-width="1.5"/>
-</svg>`, sliderPieceSize, sliderPieceSize+6, sliderPieceSize, sliderPieceSize+6, sliderPieceSize, sliderPieceSize/2-6)
+        fill="#ffffff" fill-opacity="0.96" stroke="#ffffff" stroke-width="1.5" filter="url(#lbHvShadow)"/>
+</svg>`, sliderPieceSize, sliderPieceSize+6, sliderPieceSize, sliderPieceSize+6, sliderPieceSize, sliderPieceSize+6, sliderPieceSize, sliderPieceSize/2-6)
 }
 
 // humanSliderVerifyPath 滑块校验端点路径。
@@ -149,7 +150,7 @@ func (h *HumanHandler) serveSliderChallenge(w http.ResponseWriter, r *http.Reque
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusOK)
-	pieceTop := (sliderHeight-sliderPieceSize)/2 + 10 - 6
+	pieceTop := (sliderHeight-sliderPieceSize)/2 + 10
 	redirect := html.EscapeString(r.URL.RequestURI())
 	widget := fmt.Sprintf(sliderWidgetHTML, puzzleSVG(p.gapX), pieceSVG(), p.id, redirect)
 	if h.ChallengePageHTML != "" && strings.Contains(h.ChallengePageHTML, "{{human_verify_widget}}") {
@@ -157,7 +158,7 @@ func (h *HumanHandler) serveSliderChallenge(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	_, _ = fmt.Fprintf(w, sliderChallengePage,
-		sliderWidth, pieceTop, puzzleSVG(p.gapX), pieceSVG(), p.id, redirect)
+		sliderWidth, sliderHeight, pieceTop, puzzleSVG(p.gapX), pieceSVG(), p.id, redirect)
 }
 
 // serveSliderVerify 滑块校验端点。
@@ -207,26 +208,26 @@ func atoiSafe(s string) int {
 
 // sliderWidgetHTML 自定义挑战页的滑块组件（{{human_verify_widget}} 替换目标）。
 // 与内置页同一拼图/轨道/校验逻辑；内联样式隔离（类名前缀 lb-hv- 防污染）。
-const sliderWidgetHTML = `<div class="lb-hv-widget" style="width:320px;max-width:100%%;margin:0 auto;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif">
+const sliderWidgetHTML = `<div class="lb-hv-widget" style="width:240px;max-width:100%%;margin:0 auto;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif">
 <style>
 .lb-hv-widget *{box-sizing:border-box}
-.lb-hv-widget .lb-hv-puzzle{position:relative;width:320px;height:180px;margin:0 auto 16px}
-.lb-hv-widget .lb-hv-puzzle>svg{display:block;width:320px;height:180px;border-radius:4px}
-.lb-hv-widget .lb-hv-piece{position:absolute;top:72px;left:0;cursor:grab;line-height:0}
+.lb-hv-widget .lb-hv-puzzle{position:relative;width:240px;height:134px;margin:0 auto 14px}
+.lb-hv-widget .lb-hv-puzzle>svg{display:block;width:240px;height:134px;border-radius:4px}
+.lb-hv-widget .lb-hv-piece{position:absolute;top:60px;left:0;cursor:grab;line-height:0}
 .lb-hv-widget .lb-hv-piece:active{cursor:grabbing}
-.lb-hv-widget .lb-hv-track{position:relative;width:320px;height:44px;background:#eef2f7;border:1px solid #dbe4f0;border-radius:4px;user-select:none;touch-action:none;overflow:hidden}
+.lb-hv-widget .lb-hv-track{position:relative;width:240px;height:34px;background:#eef2f7;border:1px solid #dbe4f0;border-radius:4px;user-select:none;touch-action:none;overflow:hidden}
 .lb-hv-widget .lb-hv-fill{position:absolute;left:0;top:0;bottom:0;background:#2563eb;opacity:.16;width:0}
-.lb-hv-widget .lb-hv-handle{position:absolute;top:3px;left:0;width:44px;height:36px;background:#2563eb;color:#fff;border-radius:3px;display:flex;align-items:center;justify-content:center;font-size:18px;cursor:grab;box-shadow:0 2px 6px rgba(37,99,235,.25)}
+.lb-hv-widget .lb-hv-handle{position:absolute;top:3px;left:0;width:34px;height:28px;background:#2563eb;color:#fff;border-radius:3px;display:flex;align-items:center;justify-content:center;font-size:18px;cursor:grab;box-shadow:0 2px 6px rgba(37,99,235,.25)}
 .lb-hv-widget .lb-hv-handle:active{cursor:grabbing}
 .lb-hv-widget .lb-hv-status{text-align:center;font-size:13px;min-height:20px;margin-top:10px;color:#64748b}
 .lb-hv-widget .lb-hv-ok{color:#15803d}.lb-hv-widget .lb-hv-fail{color:#dc2626}
 </style>
-<div class="lb-hv-puzzle">%s<div class="lb-hv-piece" id="lbHvPiece" style="top:72px;left:0">%s</div></div>
+<div class="lb-hv-puzzle">%s<div class="lb-hv-piece" id="lbHvPiece" style="top:60px;left:0">%s</div></div>
 <div class="lb-hv-track" id="lbHvTrack"><div class="lb-hv-fill" id="lbHvFill"></div><div class="lb-hv-handle" id="lbHvHandle">⇥</div></div>
 <div class="lb-hv-status" id="lbHvStatus"></div>
 <script>
 (function(){
-var pid="%s",redirect="%s",h=document.getElementById("lbHvHandle"),pc=document.getElementById("lbHvPiece"),fl=document.getElementById("lbHvFill"),tr=document.getElementById("lbHvTrack"),st=document.getElementById("lbHvStatus"),drag=false,sx=0,t0=0,pos=[],cx=0,mx=tr.clientWidth-44;
+var pid="%s",redirect="%s",h=document.getElementById("lbHvHandle"),pc=document.getElementById("lbHvPiece"),fl=document.getElementById("lbHvFill"),tr=document.getElementById("lbHvTrack"),st=document.getElementById("lbHvStatus"),drag=false,sx=0,t0=0,pos=[],cx=0,mx=tr.clientWidth-(h.offsetWidth||34);
 function dn(e){drag=true;sx=(e.touches?e.touches[0].clientX:e.clientX);t0=Date.now();pos=[];cx=0;e.preventDefault()}
 function mv(e){if(!drag)return;var x=(e.touches?e.touches[0].clientX:e.clientX);cx=Math.max(0,Math.min(mx,x-sx));h.style.left=cx+"px";pc.style.left=cx+"px";fl.style.width=cx+"px";pos.push(cx)}
 function up(){if(!drag)return;drag=false;var dur=Date.now()-t0;
@@ -252,13 +253,13 @@ const sliderChallengePage = `<!DOCTYPE html>
   .shield { font-size: 40px; margin-bottom: 8px; }
   h1 { font-size: 18px; color: #1a202c; }
   .sub { font-size: 12px; color: #718096; margin-top: 6px; }
-  .puzzle { position: relative; margin: 0 auto 18px; width: %dpx; }
+  .puzzle { position: relative; margin: 0 auto 18px; width: %dpx; height: %dpx; }
   .puzzle svg { display: block; }
   .piece { position: absolute; top: %dpx; left: 0; transition: none; cursor: grab; }
   .piece:active { cursor: grabbing; }
   .track { position: relative; height: 40px; background: #e2e8f0; border-radius: 4px; user-select: none; }
   .track-fill { position: absolute; left: 0; top: 0; bottom: 0; background: #4299e1; border-radius: 4px; opacity: .25; width: 0; }
-  .handle { position: absolute; top: 2px; left: 0; width: 44px; height: 36px; background: #4299e1; color: #fff; border-radius: 4px; display: flex; align-items: center; justify-content: center; font-size: 18px; cursor: grab; }
+  .handle { position: absolute; top: 3px; left: 0; width: 34px; height: 28px; background: #4299e1; color: #fff; border-radius: 4px; display: flex; align-items: center; justify-content: center; font-size: 18px; cursor: grab; }
   .handle:active { cursor: grabbing; }
   .hint { text-align: center; font-size: 12px; color: #718096; margin-top: 12px; }
   .status { text-align: center; font-size: 13px; min-height: 20px; margin-top: 10px; }
@@ -294,7 +295,7 @@ const sliderChallengePage = `<!DOCTYPE html>
   var trackEl = document.getElementById("track");
   var statusEl = document.getElementById("status");
   var dragging = false, startX = 0, startTime = 0, positions = [], currentX = 0;
-  var maxX = trackEl.clientWidth - 44;
+  var maxX = trackEl.clientWidth - (handle.offsetWidth || 34);
 
   function down(e) {
     dragging = true; startX = (e.touches ? e.touches[0].clientX : e.clientX);
