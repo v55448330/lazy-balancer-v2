@@ -43,8 +43,8 @@
         <div class="trg-hero-meta">
           <span>{{ t('common.app.views.trigDetail.sourceIp', { ip: row?.client_ip }) }}</span>
           <span v-if="(row?.duration_us ?? 0) > 0"><template v-if="isWafFamily">{{ t('common.app.views.trigDetail.wafDuration', { total: formatDurationUs((row?.duration_us ?? 0) + (row?.precheck_us ?? 0)) }) }}<template v-if="(row?.precheck_us ?? 0) > 0">{{ t('common.app.views.trigDetail.wafDurationSplit', { precheck: formatDurationUs(row?.precheck_us), waf: formatDurationUs(row?.duration_us) }) }}</template></template><template v-else>{{ t('common.app.views.trigDetail.precheckDuration', { total: formatDurationUs(row?.duration_us ?? 0) }) }}</template></span>
-          <el-tag size="small" :type="eventActionTone(row?.action)" effect="plain">
-            {{ eventActionFull(row?.action) }}
+          <el-tag size="small" :type="eventActionTone(row?.action, row?.rule_triggered)" effect="plain">
+            {{ eventActionFull(row?.action, row?.rule_triggered) }}
           </el-tag>
           <span v-if="detectionNote">{{ detectionNote }}</span>
         </div>
@@ -86,7 +86,7 @@
 
         <!-- 阶段 2 · CC 防护（人机挑战）：本次结果 + 策略配置（只读） -->
         <template v-else-if="kind === 'human'">
-          <div class="trg-kv"><span class="k">{{ t('common.app.views.trigDetail.ccResult') }}</span><span>{{ ccResultText }}</span></div>
+          <div class="trg-kv"><span class="k">{{ t('common.app.views.trigDetail.ccResult') }}</span><el-tag size="small" :type="ccResultTone" effect="light">{{ ccResultText }}</el-tag></div>
           <div class="trg-kv"><span class="k">{{ t('common.app.views.trigDetail.ccMode') }}</span><span>{{ ccModeText }}</span></div>
           <div class="trg-kv"><span class="k">{{ t('common.app.views.trigDetail.ccType') }}</span><span>{{ ccTypeText }}</span></div>
           <div class="trg-kv"><span class="k">{{ t('common.app.views.trigDetail.ccTtl') }}</span><span>{{ policy?.human_verify_ttl ? t('common.app.views.trigDetail.ccTtlValue', { ttl: policy.human_verify_ttl }) : '—' }}</span></div>
@@ -458,6 +458,12 @@ const ccResultText = computed(() => {
   if (rule === 'human_pass') return t('common.app.views.trigDetail.ccResultPass')
   if (rule === 'human_failed') return t('common.app.views.trigDetail.ccResultFail')
   return t('common.app.views.trigDetail.ccResultChallenge')
+})
+const ccResultTone = computed<'info' | 'success' | 'danger'>(() => {
+  const rule = props.row?.rule_triggered ?? ''
+  if (rule === 'human_pass') return 'success'
+  if (rule === 'human_failed') return 'danger'
+  return 'info'
 })
 const ccModeText = computed(() => {
   const mode = policy.value?.human_verify_mode ?? 'off'

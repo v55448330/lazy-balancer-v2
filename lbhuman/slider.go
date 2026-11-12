@@ -74,7 +74,7 @@ func puzzleSVG(gapX int) string {
   <circle cx="240" cy="120" r="40" fill="#ffffff" opacity="0.10"/>
   <path d="M 30 140 Q 90 100 160 130 T 290 110" stroke="#ffffff" stroke-width="2" fill="none" opacity="0.25"/>
   <path d="M %d %d h %d v %d h -%d z M %d %d a 6 6 0 0 1 12 0 v 6 h -12 z"
-        fill="#1a202c" opacity="0.55"/>
+        fill="#1e293b" opacity="0.42"/>
 </svg>`,
 		sliderWidth, sliderHeight, sliderWidth, sliderHeight,
 		gapX, gapY, sliderPieceSize, sliderPieceSize, sliderPieceSize,
@@ -85,7 +85,7 @@ func puzzleSVG(gapX int) string {
 func pieceSVG() string {
 	return fmt.Sprintf(`<svg width="%d" height="%d" xmlns="http://www.w3.org/2000/svg">
   <path d="M 0 0 h %d v %d h -%d z M %d -6 a 6 6 0 0 1 12 0 v 6 h -12 z"
-        fill="#f8f9fa" stroke="#dee2e6" stroke-width="1.5"/>
+        fill="#ffffff" fill-opacity="0.88" stroke="#ffffff" stroke-width="1.5"/>
 </svg>`, sliderPieceSize, sliderPieceSize+6, sliderPieceSize, sliderPieceSize+6, sliderPieceSize, sliderPieceSize/2-6)
 }
 
@@ -207,17 +207,21 @@ func atoiSafe(s string) int {
 
 // sliderWidgetHTML 自定义挑战页的滑块组件（{{human_verify_widget}} 替换目标）。
 // 与内置页同一拼图/轨道/校验逻辑；内联样式隔离（类名前缀 lb-hv- 防污染）。
-const sliderWidgetHTML = `<div class="lb-hv-widget" style="max-width:360px;margin:0 auto">
+const sliderWidgetHTML = `<div class="lb-hv-widget" style="width:320px;max-width:100%%;margin:0 auto;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif">
 <style>
-.lb-hv-widget .lb-hv-puzzle{position:relative;margin-bottom:16px}
-.lb-hv-widget .lb-hv-piece{position:absolute;cursor:grab}
-.lb-hv-widget .lb-hv-track{position:relative;height:40px;background:#e2e8f0;border-radius:4px;user-select:none}
-.lb-hv-widget .lb-hv-fill{position:absolute;left:0;top:0;bottom:0;background:#4299e1;opacity:.25;border-radius:4px;width:0}
-.lb-hv-widget .lb-hv-handle{position:absolute;top:2px;left:0;width:44px;height:36px;background:#4299e1;color:#fff;border-radius:4px;display:flex;align-items:center;justify-content:center;font-size:18px;cursor:grab}
-.lb-hv-widget .lb-hv-status{text-align:center;font-size:13px;min-height:20px;margin-top:10px}
-.lb-hv-widget .lb-hv-ok{color:#38a169}.lb-hv-widget .lb-hv-fail{color:#e53e3e}
+.lb-hv-widget *{box-sizing:border-box}
+.lb-hv-widget .lb-hv-puzzle{position:relative;width:320px;height:180px;margin:0 auto 16px}
+.lb-hv-widget .lb-hv-puzzle>svg{display:block;width:320px;height:180px;border-radius:4px}
+.lb-hv-widget .lb-hv-piece{position:absolute;top:72px;left:0;cursor:grab;line-height:0}
+.lb-hv-widget .lb-hv-piece:active{cursor:grabbing}
+.lb-hv-widget .lb-hv-track{position:relative;width:320px;height:44px;background:#eef2f7;border:1px solid #dbe4f0;border-radius:4px;user-select:none;touch-action:none;overflow:hidden}
+.lb-hv-widget .lb-hv-fill{position:absolute;left:0;top:0;bottom:0;background:#2563eb;opacity:.16;width:0}
+.lb-hv-widget .lb-hv-handle{position:absolute;top:3px;left:0;width:44px;height:36px;background:#2563eb;color:#fff;border-radius:3px;display:flex;align-items:center;justify-content:center;font-size:18px;cursor:grab;box-shadow:0 2px 6px rgba(37,99,235,.25)}
+.lb-hv-widget .lb-hv-handle:active{cursor:grabbing}
+.lb-hv-widget .lb-hv-status{text-align:center;font-size:13px;min-height:20px;margin-top:10px;color:#64748b}
+.lb-hv-widget .lb-hv-ok{color:#15803d}.lb-hv-widget .lb-hv-fail{color:#dc2626}
 </style>
-<div class="lb-hv-puzzle">%s<div class="lb-hv-piece" id="lbHvPiece" style="top:66px;left:0">%s</div></div>
+<div class="lb-hv-puzzle">%s<div class="lb-hv-piece" id="lbHvPiece" style="top:72px;left:0">%s</div></div>
 <div class="lb-hv-track" id="lbHvTrack"><div class="lb-hv-fill" id="lbHvFill"></div><div class="lb-hv-handle" id="lbHvHandle">⇥</div></div>
 <div class="lb-hv-status" id="lbHvStatus"></div>
 <script>

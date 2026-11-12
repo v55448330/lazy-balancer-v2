@@ -219,7 +219,11 @@ export default {
     'trustShort': 'Trust',
     'trustFull': 'Trusted',
     'challengedShort': 'Challenge',
+    'challengedPassShort': 'Challenge passed',
+    'challengedFailShort': 'Challenge failed',
     'challengedFull': 'Challenged',
+    'challengedPassFull': 'Challenge passed',
+    'challengedFailFull': 'Challenge failed',
   },
   'impexp': {
     'bulkDegradedMore': '{message} ({count} more shards failed to apply the same way)',

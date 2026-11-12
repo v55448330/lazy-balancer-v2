@@ -1,6 +1,7 @@
 package lbhuman
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -30,5 +31,19 @@ func TestServeSliderChallenge_customTemplateWidget(t *testing.T) {
 	h.serveSliderChallenge(recorder, request, "203.0.113.9")
 	if !strings.Contains(recorder.Body.String(), "安全验证") {
 		t.Fatalf("缺占位符必须回退内置挑战页: %s", recorder.Body.String()[:min(200, len(recorder.Body.String()))])
+	}
+}
+
+func TestSliderWidgetFixedGeometryMatchesPuzzle(t *testing.T) {
+	rendered := fmt.Sprintf(sliderWidgetHTML, "", "", "", "")
+	for _, want := range []string{
+		"width:320px;max-width:100%;margin:0 auto",
+		".lb-hv-puzzle{position:relative;width:320px;height:180px",
+		`id="lbHvPiece" style="top:72px;left:0"`,
+		".lb-hv-track{position:relative;width:320px",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("滑块组件几何缺失: %q", want)
+		}
 	}
 }

@@ -23,6 +23,17 @@ test('动作文案：两值枚举的短/全长标签与色调', () => {
   assert.equal(eventActionTone('logged'), 'warning')
 })
 
+test('挑战三态用不同标签与色调（发放/通过/失败）', () => {
+  assert.equal(eventActionTone('challenged', 'human_challenge'), 'info')
+  assert.equal(eventActionTone('challenged', 'human_pass'), 'success')
+  assert.equal(eventActionTone('challenged', 'human_failed'), 'danger')
+  assert.equal(eventActionShort('challenged'), t('common.app.views.eventAction.challengedShort'))
+  assert.equal(eventActionShort('challenged', 'human_pass'), t('common.app.views.eventAction.challengedPassShort'))
+  assert.equal(eventActionShort('challenged', 'human_failed'), t('common.app.views.eventAction.challengedFailShort'))
+  assert.equal(eventActionFull('challenged', 'human_pass'), t('common.app.views.eventAction.challengedPassFull'))
+  assert.equal(eventActionFull('challenged', 'human_failed'), t('common.app.views.eventAction.challengedFailFull'))
+})
+
 test('未知动作 fail-visible：原样回显，不回落到「检测」', () => {
   assert.equal(eventActionShort('throttled'), 'throttled')
   assert.equal(eventActionFull('throttled'), 'throttled')
@@ -40,12 +51,14 @@ test('四个视图共用单源映射，本地副本已删除', () => {
 
   const events = code('src/views/security/SecurityEvents.vue')
   assert.match(events, /from '@\/utils\/eventAction'/)
-  assert.match(events, /eventActionShort\(row\.action\)/)
-  assert.match(events, /eventActionFull\(ctxEvent\.action\)/)
+  assert.match(events, /eventActionShort\(row\.action, row\.rule_triggered\)/)
+  assert.match(events, /eventActionFull\(ctxEvent\.action, ctxEvent\.rule_triggered\)/)
   assert.doesNotMatch(events, /row\.action === 'blocked' \? '拦截' : '检测'/, '列表本地三元必须退役')
 
   const trigger = code('src/components/events/TriggerDetailDialog.vue')
   assert.match(trigger, /from '@\/utils\/eventAction'/)
-  assert.match(trigger, /eventActionFull\(row\?\.action\)/)
+  assert.match(trigger, /eventActionFull\(row\?\.action, row\?\.rule_triggered\)/)
+  assert.match(trigger, /:type="ccResultTone"/, '触发详情挑战结果必须用三态色标签')
+  assert.match(trigger, /const ccResultTone = computed<'info' \| 'success' \| 'danger'>/, 'CC 结果色单源')
   assert.doesNotMatch(trigger, /已记录（检测）/, '第四份措辞必须退役')
 })

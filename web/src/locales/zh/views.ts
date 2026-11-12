@@ -219,7 +219,11 @@ export default {
     'trustShort': '信任',
     'trustFull': '信任放行',
     'challengedShort': '挑战',
+    'challengedPassShort': '挑战通过',
+    'challengedFailShort': '挑战失败',
     'challengedFull': '挑战',
+    'challengedPassFull': '挑战通过',
+    'challengedFailFull': '挑战失败',
   },
   'impexp': {
     'bulkDegradedMore': '{message}（另有 {count} 个分片同样应用失败）',

@@ -14,32 +14,56 @@ import { tSafe as t } from '../i18n/tSafe.ts'
 type EventActionTone = 'danger' | 'warning' | 'info' | 'success'
 
 
-/** 短标签（列表/筛选等紧凑位）：拦截 / 检测。 */
-export const eventActionShort = (action: string | undefined | null): string => {
+// 挑战结果由 rule_triggered 区分（human_challenge/pass/failed）：动作列与
+// 触发详情共用同一分派，避免三态共用「挑战」同色标签无法区分。
+const challengeKind = (ruleTriggered: string | undefined | null): 'issued' | 'pass' | 'fail' | null => {
+  if (ruleTriggered === 'human_pass') return 'pass'
+  if (ruleTriggered === 'human_failed') return 'fail'
+  if (ruleTriggered === 'human_challenge') return 'issued'
+  return null
+}
+
+/** 短标签（列表/筛选等紧凑位）：拦截 / 检测 / 挑战结果。 */
+export const eventActionShort = (action: string | undefined | null, ruleTriggered?: string | null): string => {
   if (!action) return '—'
   if (action === 'blocked') return t('common.app.views.eventAction.blockedShort') || action
   if (action === 'logged') return t('common.app.views.eventAction.loggedShort') || action
   if (action === 'trust') return t('common.app.views.eventAction.trustShort') || action
-  if (action === 'challenged') return t('common.app.views.eventAction.challengedShort') || action
+  if (action === 'challenged') {
+    const kind = challengeKind(ruleTriggered)
+    if (kind === 'pass') return t('common.app.views.eventAction.challengedPassShort') || action
+    if (kind === 'fail') return t('common.app.views.eventAction.challengedFailShort') || action
+    return t('common.app.views.eventAction.challengedShort') || action
+  }
   return action
 }
 
-/** 完整标签（详情/告警等叙述位）：已拦截 / 已记录。 */
-export const eventActionFull = (action: string | undefined | null): string => {
+/** 完整标签（详情/告警等叙述位）：已拦截 / 已记录 / 挑战结果。 */
+export const eventActionFull = (action: string | undefined | null, ruleTriggered?: string | null): string => {
   if (!action) return '—'
   if (action === 'blocked') return t('common.app.views.eventAction.blockedFull') || action
   if (action === 'logged') return t('common.app.views.eventAction.loggedFull') || action
   if (action === 'trust') return t('common.app.views.eventAction.trustFull') || action
-  if (action === 'challenged') return t('common.app.views.eventAction.challengedFull') || action
+  if (action === 'challenged') {
+    const kind = challengeKind(ruleTriggered)
+    if (kind === 'pass') return t('common.app.views.eventAction.challengedPassFull') || action
+    if (kind === 'fail') return t('common.app.views.eventAction.challengedFailFull') || action
+    return t('common.app.views.eventAction.challengedFull') || action
+  }
   return action
 }
 
-/** el-tag 色调：拦截 danger、检测 warning；未知动作按检测色（未拦截语义）。 */
-export const eventActionTone = (action: string | undefined | null): EventActionTone => {
+/** el-tag 色调：拦截 danger、检测 warning；挑战三态 info/success/danger。 */
+export const eventActionTone = (action: string | undefined | null, ruleTriggered?: string | null): EventActionTone => {
   // 字面量分派(audit136-U5B-1):表读点曾裸下标,后端外部字符串命中原型键
   // (constructor 等)返回函数被当色调——词表读取契约要求 hasOwn/分派。
   if (action === 'blocked') return 'danger'
   if (action === 'trust') return 'success'
-  if (action === 'challenged') return 'info'
+  if (action === 'challenged') {
+    const kind = challengeKind(ruleTriggered)
+    if (kind === 'pass') return 'success'
+    if (kind === 'fail') return 'danger'
+    return 'info'
+  }
   return 'warning'
 }
