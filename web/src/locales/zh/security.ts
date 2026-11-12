@@ -887,7 +887,7 @@ export default {
      "challengePageLabel": "验证页面",
      "challengePageLabelBuiltin": "使用内置挑战页",
      "challengePageBuiltin": "系统内置挑战页（lb_human 渲染）",
-     "challengePageTip": "选择拦截页作为挑战页时，页面必须包含 {{human_verify_widget}} 占位符（拦截页编辑器「插入滑块验证组件」）；留空使用内置挑战页。",
+     "challengePageTip": "选择拦截页作为挑战页时，页面必须包含占位符（拦截页编辑器「插入滑块验证组件」）；留空使用内置挑战页。",
      "ccEnabledTip": "仅在人机验证开启时生效：同一来源短时突刺/4xx 激增/多 UA 会话 → 升级为挑战或封禁（区别于阶段 2 限流的全局速率上限，这里判定的是挑战页上的攻击性行为）",
       "ccRpsLabel": "突刺阈值",
       "ccRpsPer": "次 /",

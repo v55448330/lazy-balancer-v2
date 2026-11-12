@@ -204,7 +204,7 @@
         </el-card>
       </el-col>
       <el-col :xs="24" :md="8">
-        <el-card shadow="always">
+        <el-card shadow="always" class="cc-card">
           <template #header>
             <div class="card-header">
               <div class="card-title">
@@ -220,7 +220,7 @@
             <div class="cc-donut" role="img" :aria-label="t('app.security.overview.cc.passRate')">
               <svg viewBox="0 0 42 42" aria-hidden="true">
                 <circle class="cc-donut-track" cx="21" cy="21" r="15.915" />
-                <circle class="cc-donut-value" cx="21" cy="21" r="15.915" :stroke-dasharray="`${ccPassRatePct ?? 0} 100`" />
+                <circle v-if="ccPassRatePct && ccPassRatePct > 0" class="cc-donut-value" cx="21" cy="21" r="15.915" :stroke-dasharray="`${ccPassRatePct} 100`" />
               </svg>
               <span class="cc-donut-center">{{ humanPassRate }}</span>
             </div>
@@ -650,17 +650,19 @@ onMounted(() => { void reloadAll() })
    （同行等高后，卡头高度差会把两卡内容区顶得参差）。 */
 .header-checkbox { height: 20px; margin-left: 12px; }
 .events-row .el-card { height: 100%; }
-.cc-overview { display: flex; align-items: center; gap: 18px; padding: 2px 4px 10px; }
-.cc-donut { position: relative; width: 96px; height: 96px; flex: none; }
+.cc-card { display: flex; flex-direction: column; }
+.cc-card :deep(.el-card__body) { flex: 1; display: flex; flex-direction: column; }
+.cc-overview { display: flex; align-items: center; gap: 22px; padding: 8px 4px; flex: 1; }
+.cc-donut { position: relative; width: 118px; height: 118px; flex: none; }
 .cc-donut svg { width: 100%; height: 100%; transform: rotate(-90deg); }
 .cc-donut-track { fill: none; stroke: #eef2f7; stroke-width: 3.4; }
 .cc-donut-value { fill: none; stroke: #409eff; stroke-width: 3.4; stroke-linecap: round; transition: stroke-dasharray .4s ease; }
-.cc-donut-center { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 18px; font-weight: 700; color: #303133; }
-.cc-stats { display: grid; grid-template-columns: 1fr; gap: 6px; min-width: 0; flex: 1; }
+.cc-donut-center { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 20px; font-weight: 700; color: #303133; }
+.cc-stats { display: grid; grid-template-columns: 1fr; gap: 12px; min-width: 0; flex: 1; }
 .cc-stat { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
 .cc-stat .stat-label { font-size: 12px; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .cc-stat .stat-value { font-size: 16px; font-weight: 600; }
-.cc-stack { display: flex; height: 8px; border-radius: 999px; overflow: hidden; background: #eef2f7; margin: 2px 4px 8px; }
+.cc-stack { display: flex; height: 8px; border-radius: 999px; overflow: hidden; background: #eef2f7; margin: 0 4px 10px; }
 .cc-stack span { display: block; height: 100%; transition: width .4s ease; }
 .cc-stack-pass { background: #67c23a; }
 .cc-stack-fail { background: #f56c6c; }

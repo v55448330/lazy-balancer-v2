@@ -516,6 +516,14 @@ test('辅助端点部分失败必须有可见横幅', () => {
   }
 })
 
+test('CC 卡片维持同行等高，内容纵向填充不改变卡片尺寸', () => {
+  const overview = code('src/views/security/SecurityOverview.vue')
+  assert.match(overview, /\.events-row \.el-card \{ height: 100%; \}/, '同行卡片必须继续等高')
+  assert.match(overview, /class="cc-card"/, 'CC 卡片使用独立弹性布局类')
+  assert.match(overview, /\.cc-card :deep\(\.el-card__body\) \{ flex: 1;/, '内容区纵向撑满等高卡片')
+  assert.match(overview, /\.cc-donut \{ position: relative; width: 118px; height: 118px;/, '图表放大填充空间')
+})
+
 test('阶段 2 复用拦截页步骤：挑战/封禁共用页面选择与页面内滑块组件', () => {
   const text = code('src/views/security/SecurityPolicies.vue')
   assert.doesNotMatch(text, /noPageStage2|noPageRateLimit|rateLimitFacet/)
@@ -523,6 +531,12 @@ test('阶段 2 复用拦截页步骤：挑战/封禁共用页面选择与页面�
   assert.match(text, /v-model="form\.cc_response"/, 'CC 响应选择在拦截页步骤')
   assert.match(text, /challengePageTip/, '挑战页需说明 {{human_verify_widget}} 占位符')
   assert.match(text, /<el-form-item :label="t\('app\.security\.policies\.bp\.pageLabel'\)">/, '挑战/封禁共用页面选择器')
+  const pageIdx = text.indexOf("t('app.security.policies.bp.pageLabel')")
+  const ccIdx = text.indexOf("t('app.security.policies.human.ccResponseLabel')")
+  assert.ok(pageIdx >= 0 && ccIdx > pageIdx, '页面选择器必须独立于 CC 响应方式，挑战模式也可选页')
+  assert.match(text, /<div class="form-tip-line">\{\{ t\('app\.security\.policies\.human\.ccEnabledTip'\) \}\}<\/div>/, 'CC 说明使用换行描述样式')
+  assert.doesNotMatch(code('src/locales/zh/security.ts'), /\{\{human_verify_widget\}\}/, 'i18n 文案不得内嵌双花括号：vue-i18n 渲染会抛错并吞掉页面选择器')
+  assert.match(text, /v-text="'\{\{human_verify_widget\}\}'"/, '占位符用 v-text 原样展示')
   assert.match(code('src/views/security/SecurityBlockPages.vue'), /insertHumanWidget/, '拦截页编辑器保留插入滑块验证组件')
 })
 

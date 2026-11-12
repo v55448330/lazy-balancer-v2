@@ -710,7 +710,7 @@
               <el-divider>{{ t('app.security.policies.human.ccSection') }}</el-divider>
               <el-form-item :label="t('app.security.policies.human.ccEnabledLabel')">
                 <el-switch v-model="form.cc_detect_enabled" />
-                <span class="form-tip-inline">{{ t('app.security.policies.human.ccEnabledTip') }}</span>
+                <div class="form-tip-line">{{ t('app.security.policies.human.ccEnabledTip') }}</div>
               </el-form-item>
               <template v-if="form.cc_detect_enabled">
 
@@ -796,20 +796,14 @@
             </div>
           </div>
           <el-form :model="form" :label-width="$flw('100px')" :disabled="formFrozen">
-            <el-form-item v-if="editorPolicyType === 'stage2'" :label="t('app.security.policies.human.ccResponseLabel')">
-              <el-radio-group v-model="form.cc_response">
-                <el-radio-button value="verify">{{ t('app.security.policies.human.ccResponseVerify') }}</el-radio-button>
-                <el-radio-button value="ban">{{ t('app.security.policies.human.ccResponseBan') }}</el-radio-button>
-              </el-radio-group>
-              <div class="form-tip-line">{{ t('app.security.policies.human.ccResponseTip') }}</div>
-            </el-form-item>
-
             <el-form-item :label="t('app.security.policies.bp.pageLabel')">
               <el-select v-model="form.block_page_id" :placeholder="t('app.security.policies.bp.pagePlaceholder')" style="width: 100%">
                 <el-option :value="0" :label="editorPolicyType === 'stage2' && form.cc_response !== 'ban' ? t('app.security.policies.human.challengePageLabelBuiltin') : t('app.security.policies.bp.noPageDefault')" />
                 <el-option v-for="p in blockPages" :key="p.id" :label="pageLabel(p)" :value="p.id" />
               </el-select>
-              <div v-if="editorPolicyType === 'stage2' && form.cc_response !== 'ban'" class="form-tip-line">{{ t('app.security.policies.human.challengePageTip') }}</div>
+              <div v-if="editorPolicyType === 'stage2' && form.cc_response !== 'ban'" class="form-tip-line">
+                {{ t('app.security.policies.human.challengePageTip') }} <code class="placeholder-code" v-text="'{{human_verify_widget}}'" />
+              </div>
               <div v-else-if="form.block_page_id === 0" class="form-tip-line">{{ t('app.security.policies.bp.noPageTipDefault') }}</div>
               <div v-else class="form-tip-line">{{ t('app.security.policies.bp.manageTip') }}<AccessibleLink type="primary" @click="goToBlockPagesPage">{{ t('app.security.policies.common.goCreateEdit') }}</AccessibleLink></div>
               <!-- 归属汇总卡（用户验收裁定）：逐条重复提示收敛为单源汇总——主行 +
@@ -826,6 +820,15 @@
                 </div>
               </div>
             </el-form-item>
+
+            <el-form-item v-if="editorPolicyType === 'stage2'" :label="t('app.security.policies.human.ccResponseLabel')">
+              <el-radio-group v-model="form.cc_response">
+                <el-radio-button value="verify">{{ t('app.security.policies.human.ccResponseVerify') }}</el-radio-button>
+                <el-radio-button value="ban">{{ t('app.security.policies.human.ccResponseBan') }}</el-radio-button>
+              </el-radio-group>
+              <div class="form-tip-line">{{ t('app.security.policies.human.ccResponseTip') }}</div>
+            </el-form-item>
+
             <el-form-item v-if="editorPolicyType !== 'stage2' || form.cc_response === 'ban'" :label="t('app.security.policies.bp.statusLabel')">
               <el-select v-model="form.block_status_code" style="width: 200px" :disabled="form.block_page_id === 0">
                 <el-option v-for="opt in STAGE_BLOCK_STATUS_OPTIONS" :key="opt.value" :value="opt.value" :label="opt.label" />
@@ -4178,4 +4181,8 @@ html[data-locale='en'] .wizard-steps :deep(.el-step__title) { font-size: 14px; }
 .crs-rule-option { display: flex; flex-direction: column; line-height: 1.4; padding: 4px 0 5px; }
 .crs-rule-option-label { font-size: 13px; }
 .crs-rule-option-meta { font-size: 12px; color: #9ca3af; }
+</style>
+
+<style scoped>
+.placeholder-code { padding: 0 4px; border-radius: 4px; background: var(--el-fill-color-light); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
 </style>
