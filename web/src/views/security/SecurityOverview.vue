@@ -216,38 +216,47 @@
               </el-tooltip>
             </div>
           </template>
-          <div class="cc-overview">
+          <div class="cc-hero">
             <div class="cc-donut" role="img" :aria-label="t('app.security.overview.cc.passRate')">
               <svg viewBox="0 0 42 42" aria-hidden="true">
                 <circle class="cc-donut-track" cx="21" cy="21" r="15.915" />
                 <circle v-if="ccPassRatePct && ccPassRatePct > 0" class="cc-donut-value" cx="21" cy="21" r="15.915" :stroke-dasharray="`${ccPassRatePct} 100`" />
               </svg>
-              <span class="cc-donut-center">{{ humanPassRate }}</span>
+              <div class="cc-donut-center">
+                <span class="cc-rate-value">{{ humanPassRate }}</span>
+                <span class="cc-rate-label">{{ t('app.security.overview.cc.passRate') }}</span>
+              </div>
             </div>
-            <div class="cc-stats">
-              <div class="cc-stat">
-                <span class="stat-label">{{ t('app.security.overview.cc.challengedToday') }}</span>
-                <span class="stat-value" style="color: #409eff">{{ fmtStatNum(overview.today_challenged) }}</span>
+            <div class="cc-kpis">
+              <div class="cc-kpi">
+                <span class="cc-kpi-label">{{ t('app.security.overview.cc.challengedToday') }}</span>
+                <span class="cc-kpi-value is-primary">{{ fmtStatNum(overview.today_challenged) }}</span>
               </div>
-              <div class="cc-stat">
-                <span class="stat-label">{{ t('app.security.overview.cc.passFail') }}</span>
-                <span class="stat-value">{{ fmtStatNum(ccPassCount) }} / {{ fmtStatNum(ccFailCount) }}</span>
+              <div class="cc-kpi">
+                <span class="cc-kpi-label">{{ t('app.security.overview.cc.passed') }}</span>
+                <span class="cc-kpi-value is-pass">{{ fmtStatNum(ccPassCount) }}</span>
               </div>
-              <div class="cc-stat">
-                <span class="stat-label">{{ t('app.security.overview.cc.bans') }}</span>
-                <span class="stat-value" style="color: #f56c6c">{{ fmtStatNum(humanStats.bans) }}</span>
+              <div class="cc-kpi">
+                <span class="cc-kpi-label">{{ t('app.security.overview.cc.failed') }}</span>
+                <span class="cc-kpi-value is-fail">{{ fmtStatNum(ccFailCount) }}</span>
+              </div>
+              <div class="cc-kpi">
+                <span class="cc-kpi-label">{{ t('app.security.overview.cc.bans') }}</span>
+                <span class="cc-kpi-value is-ban">{{ fmtStatNum(humanStats.bans) }}</span>
               </div>
             </div>
           </div>
-          <div class="cc-stack" :title="t('app.security.overview.cc.stackTip')">
-            <span class="cc-stack-pass" :style="{ width: ccPct(ccPassCount) + '%' }" />
-            <span class="cc-stack-fail" :style="{ width: ccPct(ccFailCount) + '%' }" />
-            <span class="cc-stack-pending" :style="{ width: ccPct(ccPendingCount) + '%' }" />
-          </div>
-          <div class="cc-legend">
-            <span class="cc-legend-item"><i class="is-pass" />{{ t('app.security.overview.cc.passed') }} {{ fmtStatNum(ccPassCount) }}</span>
-            <span class="cc-legend-item"><i class="is-fail" />{{ t('app.security.overview.cc.failed') }} {{ fmtStatNum(ccFailCount) }}</span>
-            <span class="cc-legend-item"><i class="is-pending" />{{ t('app.security.overview.cc.pending') }} {{ fmtStatNum(ccPendingCount) }}</span>
+          <div class="cc-dist">
+            <div class="cc-stack" :title="t('app.security.overview.cc.stackTip')">
+              <span class="cc-stack-pass" :style="{ width: ccPct(ccPassCount) + '%' }" />
+              <span class="cc-stack-fail" :style="{ width: ccPct(ccFailCount) + '%' }" />
+              <span class="cc-stack-pending" :style="{ width: ccPct(ccPendingCount) + '%' }" />
+            </div>
+            <div class="cc-legend">
+              <span class="cc-legend-item"><i class="is-pass" />{{ t('app.security.overview.cc.passed') }} {{ fmtStatNum(ccPassCount) }}</span>
+              <span class="cc-legend-item"><i class="is-fail" />{{ t('app.security.overview.cc.failed') }} {{ fmtStatNum(ccFailCount) }}</span>
+              <span class="cc-legend-item"><i class="is-pending" />{{ t('app.security.overview.cc.pending') }} {{ fmtStatNum(ccPendingCount) }}</span>
+            </div>
           </div>
         </el-card>
       </el-col>
@@ -652,17 +661,23 @@ onMounted(() => { void reloadAll() })
 .events-row .el-card { height: 100%; }
 .cc-card { display: flex; flex-direction: column; }
 .cc-card :deep(.el-card__body) { flex: 1; display: flex; flex-direction: column; }
-.cc-overview { display: flex; align-items: center; gap: 22px; padding: 8px 4px; flex: 1; }
+.cc-hero { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 2px 4px 8px; }
 .cc-donut { position: relative; width: 118px; height: 118px; flex: none; }
 .cc-donut svg { width: 100%; height: 100%; transform: rotate(-90deg); }
 .cc-donut-track { fill: none; stroke: #eef2f7; stroke-width: 3.4; }
 .cc-donut-value { fill: none; stroke: #409eff; stroke-width: 3.4; stroke-linecap: round; transition: stroke-dasharray .4s ease; }
-.cc-donut-center { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 20px; font-weight: 700; color: #303133; }
-.cc-stats { display: grid; grid-template-columns: 1fr; gap: 12px; min-width: 0; flex: 1; }
-.cc-stat { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
-.cc-stat .stat-label { font-size: 12px; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.cc-stat .stat-value { font-size: 16px; font-weight: 600; }
-.cc-stack { display: flex; height: 8px; border-radius: 999px; overflow: hidden; background: #eef2f7; margin: 0 4px 10px; }
+.cc-donut-center { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px; color: #303133; }
+.cc-rate-value { font-size: 22px; font-weight: 700; line-height: 1; }
+.cc-rate-label { font-size: 10px; color: var(--text-secondary); line-height: 1.4; }
+.cc-kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; width: 100%; }
+.cc-kpi { display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 7px 4px; border-radius: 8px; background: #f7f9fc; min-width: 0; }
+.cc-kpi-label { font-size: 11px; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.cc-kpi-value { font-size: 18px; font-weight: 700; line-height: 1.15; font-variant-numeric: tabular-nums; }
+.cc-kpi-value.is-primary { color: #409eff; }
+.cc-kpi-value.is-pass { color: #67c23a; }
+.cc-kpi-value.is-fail, .cc-kpi-value.is-ban { color: #f56c6c; }
+.cc-dist { margin-top: auto; }
+.cc-stack { display: flex; height: 10px; border-radius: 999px; overflow: hidden; background: #eef2f7; margin: 0 4px 8px; }
 .cc-stack span { display: block; height: 100%; transition: width .4s ease; }
 .cc-stack-pass { background: #67c23a; }
 .cc-stack-fail { background: #f56c6c; }
