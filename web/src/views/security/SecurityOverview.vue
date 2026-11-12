@@ -201,6 +201,12 @@
               <strong>{{ formatLiveRemaining((row as ChallengeEvent).remaining_ms) }}</strong>
               <span>{{ t('app.security.overview.cc.liveExpiresAt', { time: formatLiveClock((row as ChallengeEvent).expires_at_ms) }) }}</span>
             </div>
+            <!-- 已通过：显示放行剩余（cookie 真实到期，策略通过有效期），
+                 不是挑战材料 TTL；到期后按已失效呈现。 -->
+            <div v-else-if="(row as ChallengeEvent).status === 'passed' && (row as ChallengeEvent).pass_expires_at_ms > 0" class="challenge-live-countdown is-pass">
+              <strong>{{ (row as ChallengeEvent).pass_remaining_ms > 0 ? formatLiveRemaining((row as ChallengeEvent).pass_remaining_ms) : t('app.security.overview.cc.livePassExpired') }}</strong>
+              <span>{{ t('app.security.overview.cc.livePassExpiresAt', { time: formatLiveClock((row as ChallengeEvent).pass_expires_at_ms) }) }}</span>
+            </div>
             <div v-else class="challenge-live-countdown">
               <span>{{ t('app.security.overview.cc.liveIssuedAt', { time: formatLiveClock((row as ChallengeEvent).issued_at_ms) }) }}</span>
             </div>
@@ -285,7 +291,10 @@
             <div class="cc-donut" role="img" :aria-label="t('app.security.overview.cc.passRate')">
               <svg viewBox="0 0 42 42" aria-hidden="true">
                 <circle class="cc-donut-track" cx="21" cy="21" r="15.915" />
+                <!-- 通过段（绿）+ 失败段（红）：与下方分布条/图例同色同口径。
+                     只画通过会让环上缺口被读成「未知」；直角口径用 butt 描边。 -->
                 <circle v-if="ccPassRatePct && ccPassRatePct > 0" class="cc-donut-value" cx="21" cy="21" r="15.915" :stroke-dasharray="`${ccPassRatePct} 100`" />
+                <circle v-if="ccFailRatePct && ccFailRatePct > 0" class="cc-donut-fail" cx="21" cy="21" r="15.915" :stroke-dasharray="`${ccFailRatePct} 100`" :stroke-dashoffset="-(ccPassRatePct ?? 0)" />
               </svg>
               <div class="cc-donut-center">
                 <span class="cc-rate-value">{{ humanPassRate }}</span>
@@ -467,7 +476,7 @@ interface Overview {
   ingestion?: IngestionHealth
 }
 interface SecurityEvent { id: number; event_time: string; client_ip: string; rule_caddy_id: string; rule_name: string; policy_name: string; ip_location?: string; event_type?: string }
-interface ChallengeEvent { id: string; kind: 'slider' | 'js'; status: 'waiting' | 'passed' | 'failed' | 'expired'; last_result: '' | 'pass' | 'fail'; rule_id: string; rule_name: string; policy_name: string; client_ip: string; method: string; uri: string; user_agent: string; issued_at_ms: number; expires_at_ms: number; remaining_ms: number; attempts: number; max_attempts: number }
+interface ChallengeEvent { id: string; kind: 'slider' | 'js'; status: 'waiting' | 'passed' | 'failed' | 'expired'; last_result: '' | 'pass' | 'fail'; rule_id: string; rule_name: string; policy_name: string; client_ip: string; method: string; uri: string; user_agent: string; issued_at_ms: number; expires_at_ms: number; remaining_ms: number; attempts: number; max_attempts: number; pass_expires_at_ms: number; pass_remaining_ms: number }
 
 const attackByStage = ref(true)
 
@@ -654,6 +663,11 @@ const ccTotalCount = computed(() => ccPassCount.value + ccFailCount.value + ccPe
 const ccPassRatePct = computed<number | null>(() => {
   const total = ccPassCount.value + ccFailCount.value
   return total > 0 ? Math.round((ccPassCount.value / total) * 1000) / 10 : null
+})
+// 失败段占比（与通过段同源同分母：通过+失败）——圆环双色分布，缺口不再被读成未知。
+const ccFailRatePct = computed<number | null>(() => {
+  const total = ccPassCount.value + ccFailCount.value
+  return total > 0 ? Math.round((ccFailCount.value / total) * 1000) / 10 : null
 })
 const ccPct = (n: number): number => {
   const total = ccTotalCount.value
@@ -912,12 +926,14 @@ onMounted(() => { void reloadAll() })
 .challenge-live-updated { font-size: 12px; color: var(--text-secondary); }
 .challenge-live-auto-label { font-size: 12px; color: var(--text-secondary); }
 .challenge-live-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
-.challenge-live-counter { display: inline-flex; align-items: baseline; gap: 8px; padding: 6px 12px; border-radius: 6px; background: #f5f7fa; color: var(--text-secondary); font-size: 12px; }
+.challenge-live-counter { display: inline-flex; align-items: baseline; gap: 8px; padding: 6px 12px; border-radius: 0; background: #f5f7fa; color: var(--text-secondary); font-size: 12px; }
 .challenge-live-counter strong { font-size: 20px; line-height: 1; font-variant-numeric: tabular-nums; color: #606266; }
 .challenge-live-counter.is-active strong { color: #409eff; }
 .challenge-live-countdown { display: flex; flex-direction: column; line-height: 1.25; font-variant-numeric: tabular-nums; }
 .challenge-live-countdown strong { color: #409eff; font-weight: 700; }
 .challenge-live-countdown span { font-size: 11px; color: var(--text-secondary); }
+/* 已通过行的放行倒计时用绿色（与通过图例/圆环通过段同色），区别于等待验证的蓝色。 */
+.challenge-live-countdown.is-pass strong { color: #15803d; }
 .challenge-live-status { display: flex; flex-direction: column; align-items: center; gap: 3px; }
 .challenge-live-attempts { font-size: 11px; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
 .challenge-live-muted { color: var(--text-secondary); }
@@ -929,12 +945,13 @@ onMounted(() => { void reloadAll() })
 .cc-donut { position: relative; width: 136px; height: 136px; flex: none; }
 .cc-donut svg { width: 100%; height: 100%; transform: rotate(-90deg); }
 .cc-donut-track { fill: none; stroke: #eef2f7; stroke-width: 3.4; }
-.cc-donut-value { fill: none; stroke: #67c23a; stroke-width: 3.4; stroke-linecap: round; transition: stroke-dasharray .4s ease; }
+.cc-donut-value { fill: none; stroke: #67c23a; stroke-width: 3.4; stroke-linecap: butt; transition: stroke-dasharray .4s ease; }
+.cc-donut-fail { fill: none; stroke: #f56c6c; stroke-width: 3.4; stroke-linecap: butt; transition: stroke-dasharray .4s ease, stroke-dashoffset .4s ease; }
 .cc-donut-center { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px; color: #303133; }
 .cc-rate-value { font-size: 22px; font-weight: 700; line-height: 1; }
 .cc-rate-label { font-size: 10px; color: var(--text-secondary); line-height: 1.4; }
 .cc-meta { display: flex; flex-direction: column; gap: 10px; min-width: 0; flex: 1; }
-.cc-meta-row { display: flex; align-items: baseline; justify-content: space-between; gap: 14px; padding: 9px 12px; border-radius: 8px; background: #f7f9fc; }
+.cc-meta-row { display: flex; align-items: baseline; justify-content: space-between; gap: 14px; padding: 9px 12px; border-radius: 0; background: #f7f9fc; }
 .cc-meta-label { font-size: 12px; color: var(--text-secondary); white-space: nowrap; }
 .cc-meta-value { font-size: 22px; font-weight: 700; line-height: 1.1; font-variant-numeric: tabular-nums; }
 .cc-meta-value.is-primary { color: #409eff; }
@@ -943,21 +960,21 @@ onMounted(() => { void reloadAll() })
 .cc-dist { margin-top: 8px; }
 .cc-dist-head { display: flex; align-items: baseline; justify-content: space-between; padding: 0 4px 6px; font-size: 12px; color: var(--text-secondary); }
 .cc-dist-head > span:first-child { font-weight: 600; color: #303133; }
-.cc-stack { display: flex; height: 10px; border-radius: 999px; overflow: hidden; background: #eef2f7; margin: 0 4px 8px; }
+.cc-stack { display: flex; height: 10px; border-radius: 0; overflow: hidden; background: #eef2f7; margin: 0 4px 8px; }
 .cc-stack span { display: block; height: 100%; transition: width .4s ease; }
 .cc-stack-pass { background: #67c23a; }
 .cc-stack-fail { background: #f56c6c; }
 .cc-stack-pending { background: #cbd5e1; }
 .cc-legend { display: flex; flex-wrap: wrap; gap: 10px 14px; padding: 0 4px; font-size: 12px; color: var(--text-secondary); }
 .cc-legend-item { display: inline-flex; align-items: center; gap: 5px; }
-.cc-legend-item i { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+.cc-legend-item i { width: 8px; height: 8px; border-radius: 0; display: inline-block; }
 .cc-legend-item i.is-pass { background: #67c23a; }
 .cc-legend-item i.is-fail { background: #f56c6c; }
 .cc-legend-item i.is-pending { background: #cbd5e1; }
 /* 自动封禁卡：左侧统计+配置摘要，右侧观察建议 Top5；窄屏堆叠。 */
 .autoban-body { display: flex; gap: 24px; align-items: stretch; }
 .autoban-stats { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
-.autoban-stat { display: flex; flex-direction: column; gap: 4px; padding: 10px 16px; border-radius: 8px; background: #f7f9fc; min-width: 110px; }
+.autoban-stat { display: flex; flex-direction: column; gap: 4px; padding: 10px 16px; border-radius: 0; background: #f7f9fc; min-width: 110px; }
 .autoban-stat-label { font-size: 12px; color: var(--text-secondary); }
 .autoban-stat-value { font-size: 24px; font-weight: 700; line-height: 1.1; font-variant-numeric: tabular-nums; color: #303133; }
 .autoban-stat-value.is-ban { color: #f56c6c; }

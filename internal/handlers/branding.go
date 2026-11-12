@@ -560,6 +560,10 @@ func renderBuiltinBlockPage(cfg brandingConfig, variant string) string {
 		// 滑块挑战组件占位符：lb_human 在挑战时替换为真实组件（token/拼图/校验）。
 		page = strings.Replace(page, `<div class="divider">`, `{{human_verify_widget}}<div class="divider">`, 1)
 	}
+	if variant == "human_js" {
+		// JS 挑战组件占位符（与滑块并列、互不干扰）：lb_human 替换为 PoW 组件。
+		page = strings.Replace(page, `<div class="divider">`, `{{human_js_widget}}<div class="divider">`, 1)
+	}
 	return page
 }
 
@@ -582,14 +586,22 @@ type blockPageSpec struct {
 }
 
 var blockPageSpecs = map[string]blockPageSpec{
-	// 人机验证挑战页变体（2026-11-12）：阶段 3 挑战页由 lb_human 插件渲染，
-	// 此 spec 供内置模板占位/预览使用；内容含 {{human_verify_widget}} 占位符。
+	// 人机验证挑战页变体（2026-11-13 用户裁定：滑块/JS 各一内置页，命名统一）：
+	// 真实挑战组件由 lb_human 按策略验证方式替换占位符——human=滑块
+	// （{{human_verify_widget}}）、human_js=JS（{{human_js_widget}}）。
 	"human": {
 		accent: "#2563eb", accentSoft: "#60a5fa", ringFrom: "#eff6ff", ringTo: "#dbeafe",
 		ringBorder: "#bfdbfe", haloBorder: "#bfdbfe", chipText: "#1d4ed8", chipBorder: "#bfdbfe",
 		iconSVG: `<svg viewBox="0 0 24 24" fill="none" stroke="#2563eb" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5c0 4.4-3 8.4-7 10-4-1.6-7-5.6-7-10V6l7-3z"/><path d="M9 12l2 2 4-4"/></svg>`,
 		chip:    "Human Verification", title: "Security Check",
-		line1: `Please complete the human verification to continue.`, line2: `You will be redirected automatically once verified.`,
+		line1: `Please complete the slider puzzle to continue.`, line2: `You will be redirected automatically once verified.`,
+	},
+	"human_js": {
+		accent: "#2563eb", accentSoft: "#60a5fa", ringFrom: "#eff6ff", ringTo: "#dbeafe",
+		ringBorder: "#bfdbfe", haloBorder: "#bfdbfe", chipText: "#1d4ed8", chipBorder: "#bfdbfe",
+		iconSVG: `<svg viewBox="0 0 24 24" fill="none" stroke="#2563eb" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5c0 4.4-3 8.4-7 10-4-1.6-7-5.6-7-10V6l7-3z"/><path d="M9 12l2 2 4-4"/></svg>`,
+		chip:    "Human Verification", title: "Security Check",
+		line1: `Please wait while your browser is verified.`, line2: `You will be redirected automatically once verified.`,
 	},
 	"default": {
 		accent: "#ef4444", accentSoft: "#f87171", ringFrom: "#fef2f2", ringTo: "#fee2e2",
@@ -697,8 +709,11 @@ type builtinBlockPageIdentity struct {
 }
 
 var builtinBlockPageIdentities = []builtinBlockPageIdentity{
-	// 人机验证页面（阶段 3 挑战页，2026-11-12）：id 9005，与 9001/9002 同族。
-	{9005, "人机验证页面", "系统内置滑块验证挑战页（{{human_verify_widget}} 占位符由 lb_human 替换为滑块组件；策略选择本页后生效）", "human"},
+	// 人机验证挑战页（2026-11-13 用户裁定：命名统一为「<方式>人机验证页面」）：
+	// 9005=滑块（{{human_verify_widget}}）、9006=JS（{{human_js_widget}}）；
+	// 占位符由 lb_human 按策略验证方式替换为真实组件，策略选本页后生效。
+	{9005, "滑块人机验证页面", "系统内置滑块人机验证挑战页（{{human_verify_widget}} 占位符由 lb_human 替换为滑块组件；策略选择本页后生效）", "human"},
+	{9006, "JS 人机验证页面", "系统内置 JS 人机验证挑战页（{{human_js_widget}} 占位符由 lb_human 替换为 JS 验证组件；策略选择本页后生效）", "human_js"},
 	{9001, "限流拦截页面", "系统内置 429 限流拦截页面（备选，手动选用后生效）", "ratelimit"},
 	{9002, "系统维护页面", "系统内置维护页面（备选，手动选用后生效）", "maintenance"},
 }

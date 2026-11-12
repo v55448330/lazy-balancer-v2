@@ -94,6 +94,19 @@ test('每列同构：标签 / 今日主数值 / 昨日对比 / 协议拆分 / �
   assert.match(page, /t\('app\.security\.overview\.cc\.failed'\)/)
   assert.doesNotMatch(page, /cc\.bans/, 'CC 封禁数字已退役（封禁由自动封禁管线承载）')
   assert.match(page, /\.cc-donut-value \{ fill: none; stroke: #67c23a/, '通过率圆环用绿色（与通过图例一致）')
+  // 2026-11-13 用户裁定：圆环必须含失败段（只画通过会让缺口被读成「未知」），
+  // 且两个图表与全站直角铁律一致——不得圆角/圆点/圆头描边。
+  assert.match(page, /ccFailRatePct/, '圆环必须有失败段占比计算')
+  assert.match(page, /class="cc-donut-fail"/, '圆环必须渲染失败段')
+  assert.match(page, /\.cc-donut-fail \{ fill: none; stroke: #f56c6c/, '失败段用红色（与失败图例一致）')
+  for (const cls of ['.cc-donut-value', '.cc-donut-fail']) {
+    assert.equal(cssDeclarations(page, cls).get('stroke-linecap'), 'butt', `${cls} 必须直角描边（不得圆头）`)
+  }
+  assert.equal(cssDeclarations(page, '.cc-stack').get('border-radius'), '0', '分布条必须直角')
+  assert.equal(cssDeclarations(page, '.cc-legend-item i').get('border-radius'), '0', '图例标记必须方块（不得圆点）')
+  assert.equal(cssDeclarations(page, '.cc-meta-row').get('border-radius'), '0', '统计行必须直角')
+  assert.equal(cssDeclarations(page, '.autoban-stat').get('border-radius'), '0', '自动封禁统计块必须直角')
+  assert.equal(cssDeclarations(page, '.challenge-live-counter').get('border-radius'), '0', '实时弹框计数块必须直角')
   assert.doesNotMatch(page, /rateLimitBlocks|fetchRateLimitBlocks|rate-limit-blocks/, '限流卡片与取数必须整体移除')
   assert.equal(cssDeclarations(page, '.strip-value.is-info').get('color'), '#409eff')
 })
@@ -163,4 +176,10 @@ test('CC 卡实时挑战入口：运行态会话而非事件日志回放', () =>
   assert.match(page, /status === 'passed'\) return 'success'/, '通过=绿色')
   assert.match(page, /status === 'failed'\) return 'danger'/, '失败=红色')
   assert.match(page, /status === 'expired'\) return 'info'/, '过期=灰色')
+  // 2026-11-13 用户裁定：已通过行必须显示放行剩余/到期（cookie 真实 exp），
+  // 不是挑战材料 TTL；且不得为此新增列（弹框禁止水平滚动）。
+  assert.match(page, /pass_remaining_ms/, '已通过行必须显示放行剩余倒计时')
+  assert.match(page, /pass_expires_at_ms/, '已通过行必须显示放行到期时刻')
+  assert.match(page, /livePassExpiresAt/, '放行到期文案键')
+  assert.match(page, /challenge-live-countdown is-pass/, '放行倒计时用通过色区分等待验证')
 })

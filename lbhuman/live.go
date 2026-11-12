@@ -12,7 +12,10 @@ import (
 // 校验/过期推进状态；已结束会话短保留供面板查看最近结果，不落库。
 const (
 	challengeSessionRetention = 5 * time.Minute
-	challengeSessionCap       = 200
+	// 会话上限（2026-11-13 用户裁定提高：内存不是瓶颈，但热路径必须有界）。
+	// 登记/清理只在挑战发放与校验路径触发，不在转发/WAF 热路径；上限内
+	// O(n) 遍历仅在超限时发生，2000 条量级为微秒级。
+	challengeSessionCap = 2000
 )
 
 const (
@@ -37,6 +40,9 @@ type challengeSession struct {
 	MaxAttempts int
 	Status      string
 	LastResult  string // pass | fail | ""
+	// PassExpiresAtMS 放行到期时刻（签发 cookie 的真实 exp，策略 human_verify_ttl）。
+	// 仅通过后登记；0=未通过。与挑战材料 ExpiresAtMS 语义不同，不可混用。
+	PassExpiresAtMS int64
 }
 
 var (
@@ -82,17 +88,25 @@ func registerChallengeSession(id, kind, ruleID, clientIP, method, uri, ua string
 }
 
 // pruneChallengeSessionsLocked 清理过期超过保留窗的会话（调用方持锁）。
+// 已通过会话按**放行到期**保留（用户裁定 2026-11-13：放行有效期内必须仍能看到
+// 倒计时，否则挑战材料 TTL 一到该行就消失）；其余按挑战材料到期保留。
 func pruneChallengeSessionsLocked(now time.Time) {
 	retentionMS := challengeSessionRetention.Milliseconds()
+	nowMS := now.UnixMilli()
 	for id, s := range challengeSessions {
-		if now.UnixMilli()-s.ExpiresAtMS > retentionMS {
+		deadline := s.ExpiresAtMS
+		if s.Status == challengeStatusPassed && s.PassExpiresAtMS > deadline {
+			deadline = s.PassExpiresAtMS
+		}
+		if nowMS-deadline > retentionMS {
 			delete(challengeSessions, id)
 		}
 	}
 }
 
 // markChallengeAttempt 记录一次校验尝试；非终态失败（滑块可重试）保持 waiting。
-func markChallengeAttempt(id string, pass, final bool) {
+// passExpiresAt=通过时签发 cookie 的真实到期时刻（仅 pass=true 时有意义）。
+func markChallengeAttempt(id string, pass, final bool, passExpiresAt time.Time) {
 	challengeSessionsMu.Lock()
 	defer challengeSessionsMu.Unlock()
 	s, ok := challengeSessions[id]
@@ -104,6 +118,7 @@ func markChallengeAttempt(id string, pass, final bool) {
 	if pass {
 		s.LastResult = "pass"
 		s.Status = challengeStatusPassed
+		s.PassExpiresAtMS = passExpiresAt.UnixMilli()
 		return
 	}
 	s.LastResult = "fail"
@@ -145,6 +160,9 @@ type challengeSessionJSON struct {
 	RemainingMS int64  `json:"remaining_ms"`
 	Attempts    int    `json:"attempts"`
 	MaxAttempts int    `json:"max_attempts"`
+	// 放行到期（仅已通过行非零）：面板据此显示「放行剩余 / 到期时刻」。
+	PassExpiresAtMS int64 `json:"pass_expires_at_ms"`
+	PassRemainingMS int64 `json:"pass_remaining_ms"`
 }
 
 type challengeLiveJSON struct {
@@ -167,9 +185,17 @@ func snapshotChallengeSessions(scope string) challengeLiveJSON {
 			RuleID: s.RuleID, ClientIP: s.ClientIP, Method: s.Method, URI: s.URI,
 			UserAgent: s.UserAgent, IssuedAtMS: s.IssuedAtMS, ExpiresAtMS: s.ExpiresAtMS,
 			RemainingMS: s.ExpiresAtMS - nowMS, Attempts: s.Attempts, MaxAttempts: s.MaxAttempts,
+			PassExpiresAtMS: s.PassExpiresAtMS,
 		}
 		if row.RemainingMS < 0 {
 			row.RemainingMS = 0
+		}
+		// 放行剩余只对已通过行计算（未通过行恒 0，前端不得显示放行倒计时）。
+		if s.PassExpiresAtMS > 0 {
+			row.PassRemainingMS = s.PassExpiresAtMS - nowMS
+			if row.PassRemainingMS < 0 {
+				row.PassRemainingMS = 0
+			}
 		}
 		if s.Status == challengeStatusWaiting {
 			if row.RemainingMS > 0 {

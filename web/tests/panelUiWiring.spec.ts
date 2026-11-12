@@ -538,20 +538,23 @@ test('CC 卡片维持同行等高，内容纵向填充不改变卡片尺寸', ()
   assert.match(overview, /class="cc-dist-head"/, '结果区有标题与总数，填充底部空间')
 })
 
-test('阶段 2 复用拦截页步骤：挑战页选择与页面内滑块组件（CC 封禁响应已退役）', () => {
+test('阶段 2 复用拦截页步骤：挑战页选择与页面内滑块/JS 组件（CC 封禁响应已退役）', () => {
   const text = code('src/views/security/SecurityPolicies.vue')
   assert.doesNotMatch(text, /noPageStage2|noPageRateLimit|rateLimitFacet/)
   assert.match(text, /steps\.push\(WIZARD_STEP\.BLOCK_PAGE\)/, '阶段 2 必须包含拦截页步骤')
   assert.doesNotMatch(text, /v-model="form\.cc_response"/, 'CC 响应方式单选已退役（封禁由自动封禁管线承载）')
   assert.doesNotMatch(text, /ccResponseLabel/, '响应方式标签已退役')
-  assert.match(text, /challengePageTip/, '挑战页需说明 {{human_verify_widget}} 占位符')
+  assert.match(text, /challengePageTip/, '挑战页需说明验证组件占位符')
   assert.match(text, /<el-form-item :label="t\('app\.security\.policies\.bp\.pageLabel'\)">/, '挑战页选择器')
   assert.match(text, /<div class="form-tip-line">\{\{ t\('app\.security\.policies\.human\.ccEnabledTip'\) \}\}<\/div>/, 'CC 说明使用换行描述样式')
   assert.doesNotMatch(code('src/locales/zh/security.ts'), /\{\{human_verify_widget\}\}/, 'i18n 文案不得内嵌双花括号：vue-i18n 渲染会抛错并吞掉页面选择器')
-  assert.match(text, /v-text="'\{\{human_verify_widget\}\}'"/, '占位符用 v-text 原样展示')
-  assert.match(text, /challengePageMissingWidget/, '选择页面后必须校验滑块组件占位符')
+  assert.match(text, /v-text="challengePagePlaceholder"/, '占位符用 v-text 原样展示（单源 computed）')
+  assert.match(text, /human_verify_type === 'js' \? '\{\{human_js_widget\}\}' : '\{\{human_verify_widget\}\}'/, '占位符按验证方式分流：JS→{{human_js_widget}}，滑块→{{human_verify_widget}}')
+  assert.match(text, /challengePageMissingWidget/, '选择页面后必须校验当前验证方式的组件占位符')
   assert.match(text, /challengePageNeedsWidget/, '缺占位符必须有明确提示并阻断保存')
-  assert.match(code('src/views/security/SecurityBlockPages.vue'), /insertHumanWidget/, '拦截页编辑器保留插入滑块验证组件')
+  const editor = code('src/views/security/SecurityBlockPages.vue')
+  assert.match(editor, /insertHumanWidget/, '拦截页编辑器保留插入滑块验证组件')
+  assert.match(editor, /insertJsWidget/, '拦截页编辑器提供插入 JS 验证组件')
 })
 
 test('安全规则预设项可键盘操作（折叠头 button + 标签/模板键盘语义）', () => {

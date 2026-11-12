@@ -14,7 +14,7 @@ import assert from 'node:assert/strict'
 import { code, section, member, registerModuleHooks, drainMicrotasks } from './_helpers.ts'
 import { installStubHost, STUB_API } from './_stubs.ts'
 
-registerModuleHooks({ '@/utils/api': STUB_API })
+registerModuleHooks({ '@/utils/api': STUB_API }, { resolveRelativeExtensionless: true })
 
 interface CrsDirectoryEntry { id: string; msg: string; file: string; category?: string }
 interface CrsDirectorySuggestion { value: string; label: string; file: string; fullMsg: string }

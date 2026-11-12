@@ -141,8 +141,12 @@ func humanPolicyMerged(policies []*models.SecurityPolicy) (mode, typ string, ttl
 	return
 }
 
-// builtinHumanVerifyPageID 内置人机验证页（9005）：CC 挑战模式的默认拦截页。
-const builtinHumanVerifyPageID = 9005
+// 内置人机验证页 id（2026-11-13 用户裁定：滑块/JS 各一页，命名统一）：
+// 策略未显式配挑战页时，按验证方式选对应内置页——JS 用 JS 页，否则用滑块页。
+const (
+	builtinHumanVerifyPageID   = 9005 // 滑块人机验证页面
+	builtinHumanJSVerifyPageID = 9006 // JS 人机验证页面
+)
 
 // humanChallengeEnabled 判断策略链是否启用人机挑战（force/auto 任一，CC 检测
 // 开关不是门：始终验证同样需要拦截页）。
@@ -151,13 +155,18 @@ func humanChallengeEnabled(policies []*models.SecurityPolicy) bool {
 	return mode != "off"
 }
 
-// humanChallengeFallbackPage 返回人机挑战的默认内置人机验证页内容；
-// 非挑战或页面缺失时返回空（调用方回退 lbhuman 生成页）。
+// humanChallengeFallbackPage 返回人机挑战的默认内置页内容（按验证方式选页）；
+// 非挑战或页面缺失时返回空（调用方回退 lbhuman 内置生成页）。
 func humanChallengeFallbackPage(ctx *securityPolicyContext, policies []*models.SecurityPolicy) (string, string) {
 	if ctx == nil || !humanChallengeEnabled(policies) {
 		return "", ""
 	}
-	return ctx.blockPageByID[builtinHumanVerifyPageID], ctx.blockPageTypeByID[builtinHumanVerifyPageID]
+	_, typ, _, _ := humanPolicyMerged(policies)
+	pageID := builtinHumanVerifyPageID
+	if typ == "js" {
+		pageID = builtinHumanJSVerifyPageID
+	}
+	return ctx.blockPageByID[pageID], ctx.blockPageTypeByID[pageID]
 }
 
 // buildHumanHandler 阶段 3 人机验证 handler 渲染：有任一策略启用人机验证

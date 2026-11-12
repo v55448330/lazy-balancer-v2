@@ -35,6 +35,9 @@ type humanLiveChallengeSession struct {
 	RemainingMS int64  `json:"remaining_ms"`
 	Attempts    int    `json:"attempts"`
 	MaxAttempts int    `json:"max_attempts"`
+	// 放行到期（仅已通过行非零）：cookie 真实 exp，面板显示放行剩余/到期时刻。
+	PassExpiresAtMS int64 `json:"pass_expires_at_ms"`
+	PassRemainingMS int64 `json:"pass_remaining_ms"`
 }
 
 type humanLiveChallengePayload struct {

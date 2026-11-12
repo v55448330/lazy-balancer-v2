@@ -328,13 +328,27 @@ func blockPageSpecsDefaultConfig() brandingConfig {
 	}
 }
 
-// 内置人机验证页必须携带滑块组件占位符，供 lb_human 挑战时替换。
+// 内置人机验证页必须携带对应组件占位符，供 lb_human 挑战时替换；
+// 滑块/JS 两变体互不串位（各含各的占位符，不含对方的）。
 func TestRenderBuiltinBlockPage_humanCarriesWidgetPlaceholder(t *testing.T) {
-	page := renderBuiltinBlockPage(brandingConfig{AppName: "LB"}, "human")
-	if page == "" {
-		t.Fatal("内置人机验证页渲染为空")
+	slider := renderBuiltinBlockPage(blockPageSpecsDefaultConfig(), "human")
+	if slider == "" {
+		t.Fatal("内置滑块人机验证页渲染为空")
 	}
-	if !strings.Contains(page, "{{human_verify_widget}}") {
-		t.Fatalf("内置人机验证页缺少滑块组件占位符: %s", page[:min(200, len(page))])
+	if !strings.Contains(slider, "{{human_verify_widget}}") {
+		t.Fatalf("内置滑块人机验证页缺少滑块组件占位符: %s", slider[:min(200, len(slider))])
+	}
+	if strings.Contains(slider, "{{human_js_widget}}") {
+		t.Fatal("内置滑块人机验证页不得携带 JS 占位符（按验证方式分流）")
+	}
+	js := renderBuiltinBlockPage(blockPageSpecsDefaultConfig(), "human_js")
+	if js == "" {
+		t.Fatal("内置 JS 人机验证页渲染为空")
+	}
+	if !strings.Contains(js, "{{human_js_widget}}") {
+		t.Fatalf("内置 JS 人机验证页缺少 JS 组件占位符: %s", js[:min(200, len(js))])
+	}
+	if strings.Contains(js, "{{human_verify_widget}}") {
+		t.Fatal("内置 JS 人机验证页不得携带滑块占位符（按验证方式分流）")
 	}
 }

@@ -801,7 +801,7 @@
                 <el-option v-for="p in blockPages" :key="p.id" :label="pageLabel(p)" :value="p.id" />
               </el-select>
               <div v-if="editorPolicyType === 'stage2'" class="form-tip-line">
-                {{ t('app.security.policies.human.challengePageTip') }} <code class="placeholder-code" v-text="'{{human_verify_widget}}'" />
+                {{ t('app.security.policies.human.challengePageTip') }} <code class="placeholder-code" v-text="challengePagePlaceholder" />
               </div>
               <div v-if="challengePageMissingWidget" class="form-tip-line is-error">
                 {{ t('app.security.policies.human.challengePageNeedsWidget') }}
@@ -3510,11 +3510,17 @@ const beforeWizardClose = (done: () => void): void => {
   }).then(() => done()).catch(() => { /* 继续编辑：保留当前弹框与全部暂存 */ })
 }
 
+// 挑战页组件占位符按验证方式分流：JS 用 {{human_js_widget}}，滑块用
+// {{human_verify_widget}}——内置页/自定义页校验与提示共用此单源。
+const challengePagePlaceholder = computed<string>(() =>
+  form.value.human_verify_type === 'js' ? '{{human_js_widget}}' : '{{human_verify_widget}}',
+)
+
 const challengePageMissingWidget = computed<boolean>(() => {
   if (editorPolicyType.value !== 'stage2') return false
   if (form.value.block_page_id <= 0) return true
   const page = blockPages.value.find((p) => p.id === form.value.block_page_id)
-  return !page || !(page.content ?? '').includes('{{human_verify_widget}}')
+  return !page || !(page.content ?? '').includes(challengePagePlaceholder.value)
 })
 
 const handleSave = async () => {

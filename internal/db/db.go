@@ -1515,9 +1515,9 @@ func runMigrations() error {
 		return err
 	}
 	_, _ = DB.Exec(`DELETE FROM security_block_pages WHERE id=4 AND is_builtin=1 AND name='Human Verification Page'`)
-	// 自定义挑战页退役（2026-11-12 用户裁定：拦截页已覆盖挑战页场景）：9005
-	// 占位页无任何消费方，内置行一并清理（自定义页不触碰）。
-	_, _ = DB.Exec(`DELETE FROM security_block_pages WHERE id=9005 AND is_builtin=1`)
+	// 内置人机页 9005/9006 是策略可选挑战页载体（2026-11-13 用户裁定推翻
+	// 11-12 退役裁定）：迁移不再删除 9005——空占位/旧名/漂移行统一由
+	// SeedDefaultBlockPage 播种自愈归位（身份守卫=is_builtin 或库存名）。
 	if _, err := dropColumnIfExists("global_config", "access_log_enabled"); err != nil {
 		return err
 	}

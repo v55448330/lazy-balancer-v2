@@ -103,7 +103,9 @@
             <el-tab-pane :label="t('app.security.blockPages.dialog.tabHtml')" name="html">
               <div v-if="!isReadOnly && !currentPage?.is_default && !currentPage?.is_builtin" class="block-widget-bar">
                 <el-button size="small" :disabled="saving" @click="insertHumanWidget">{{ t('app.security.blockPages.dialog.insertHumanWidget') }}</el-button>
+                <el-button size="small" :disabled="saving" @click="insertJsWidget">{{ t('app.security.blockPages.dialog.insertJsWidget') }}</el-button>
                 <span class="form-tip-inline">{{ t('app.security.blockPages.dialog.humanWidgetTip') }}</span>
+                <span class="form-tip-inline">{{ t('app.security.blockPages.dialog.jsWidgetTip') }}</span>
               </div>
               <div class="block-content-editor" style="width: 100%">
                 <SyntaxHighlight v-if="isReadOnly || currentPage?.is_default || currentPage?.is_builtin" :content="form.content" language="markup" height="320px" />
@@ -173,10 +175,15 @@ import DialogSectionHeader from '@/components/DialogSectionHeader.vue'
 import AccessibleLink from '@/components/common/AccessibleLink.vue'
 import type { APIResponse, UserListItem } from '@/types'
 
-// 滑块组件占位符插入（重复插入检测——同页只一个组件实例）
+// 验证组件占位符插入（重复插入检测——同页只一个组件实例；滑块/JS 各自独立检测）
 const insertHumanWidget = (): void => {
   if (form.value.content.includes('{{human_verify_widget}}')) return
   form.value.content = form.value.content.trimEnd() + '\n{{human_verify_widget}}\n'
+}
+
+const insertJsWidget = (): void => {
+  if (form.value.content.includes('{{human_js_widget}}')) return
+  form.value.content = form.value.content.trimEnd() + '\n{{human_js_widget}}\n'
 }
 
 const { t } = useI18n()

@@ -1,18 +1,21 @@
 /**
- * 内置拦截页的显示名/描述多语言单源（2026-11-12 用户裁定）：
+ * 内置拦截页的显示名/描述多语言单源（2026-11-12 用户裁定，2026-11-13 扩充）：
  * 内置页在库内以固定 id 播种、名称/描述存中文库存名（身份判据=播种与自愈按
  * 库存名归位）。展示层按 id 翻译，词条缺失时回退库内原文——切语言不改写库，
  * 也不动身份判据。
  *
- * id 1=默认拦截页（is_default）；9001=限流；9002=维护；9005=人机验证占位页
- * （阶段 3 真实挑战页由 lb_human 插件渲染，本页仅展示/占位）。
+ * id 1=默认拦截页（is_default）；9001=限流；9002=维护；
+ * 9005=滑块人机验证页面（{{human_verify_widget}}）；9006=JS 人机验证页面
+ * （{{human_js_widget}}）——两个内置人机页是策略可选的真实挑战页载体，
+ * 占位符由 lb_human 按验证方式替换为真实组件。
  * 自定义页（无对应词条）恒显示用户填写的名称与描述。
  */
-const BUILTIN_BLOCK_PAGE_KEYS: Record<number, 'default' | 'ratelimit' | 'maintenance' | 'human'> = {
+const BUILTIN_BLOCK_PAGE_KEYS: Record<number, 'default' | 'ratelimit' | 'maintenance' | 'human' | 'humanJs'> = {
   1: 'default',
   9001: 'ratelimit',
   9002: 'maintenance',
   9005: 'human',
+  9006: 'humanJs',
 }
 
 export interface BlockPageLike {

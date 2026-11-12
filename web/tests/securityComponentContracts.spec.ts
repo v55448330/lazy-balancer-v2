@@ -104,11 +104,14 @@ test('安全策略可选拦截响应方式（auto/html/json）', () => {
   assert.match(payload, /block_response_mode: input\.blockResponseMode/)
 })
 
-test('内置人机验证页（9005）名称/描述支持中英切换', () => {
+test('内置人机验证页（9005 滑块 / 9006 JS）名称/描述支持中英切换', () => {
   const util = code('src/utils/builtinBlockPages.ts')
   assert.match(util, /9005:\s*'human'/, '9005 必须映射到 human 词条，否则英文界面回退中文库存名')
+  assert.match(util, /9006:\s*'humanJs'/, '9006 必须映射到 humanJs 词条，否则英文界面回退中文库存名')
   const zh = code('src/locales/zh/security.ts')
   const en = code('src/locales/en/security.ts')
-  assert.match(zh, /"human": \{ "name": "人机验证页面"/)
-  assert.match(en, /"human": \{ "name": "Human Verification Page"/)
+  assert.match(zh, /"human": \{ "name": "滑块人机验证页面"/)
+  assert.match(zh, /"humanJs": \{ "name": "JS 人机验证页面"/)
+  assert.match(en, /"human": \{ "name": "Slider Human Verification Page"/)
+  assert.match(en, /"humanJs": \{ "name": "JS Human Verification Page"/)
 })

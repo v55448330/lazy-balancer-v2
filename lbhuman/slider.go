@@ -185,10 +185,17 @@ func (h *HumanHandler) serveSliderVerify(w http.ResponseWriter, r *http.Request,
 	}
 	p := consumeSliderPuzzle(puzzleID)
 	sliderOK := sliderVerify(p, x, track, duration)
+	// 通过时先签 cookie，再把**真实 exp** 登记进运行态会话（面板据此显示放行
+	// 剩余/到期）；失败路径不签 cookie，传零时刻。
+	var cookieValue string
+	var exp time.Time
+	if sliderOK {
+		cookieValue, exp = signCookie([]byte(h.Secret), ip, r.UserAgent(), time.Duration(h.TTLMinutes)*time.Minute)
+	}
 	if p == nil {
 		markChallengeInvalid(puzzleID)
 	} else {
-		markChallengeAttempt(puzzleID, sliderOK, sliderOK)
+		markChallengeAttempt(puzzleID, sliderOK, sliderOK, exp)
 	}
 	if !sliderOK {
 		humanStats.Fails.Add(1)
@@ -217,7 +224,7 @@ func (h *HumanHandler) serveSliderVerify(w http.ResponseWriter, r *http.Request,
 	sliderPuzzlesMu.Lock()
 	delete(sliderPuzzles, puzzleID)
 	sliderPuzzlesMu.Unlock()
-	cookieValue, exp := signCookie([]byte(h.Secret), ip, r.UserAgent(), time.Duration(h.TTLMinutes)*time.Minute)
+	// cookie 已在上方签发（exp 已登记进运行态会话），此处只写出响应头。
 	secure := ""
 	if r.TLS != nil {
 		secure = "; Secure"

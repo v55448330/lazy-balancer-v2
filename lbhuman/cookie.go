@@ -64,7 +64,7 @@ func uaHash(ua string) string {
 }
 
 // signCookie 签名 cookie：base64url(exp|nonce) + "." + HMAC-SHA256(secret,
-// ip|uaHash|exp|nonce)。IP/UA 绑定，exp 滑动过期，nonce 一次性。
+// ip|uaHash|exp|nonce)。IP/UA 绑定，exp 固定到期（校验不重签、不续期），nonce 一次性。
 func signCookie(secret []byte, ip, ua string, ttl time.Duration) (value string, expiresAt time.Time) {
 	expiresAt = time.Now().Add(ttl)
 	nonce := make([]byte, 8)

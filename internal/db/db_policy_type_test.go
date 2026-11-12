@@ -64,11 +64,12 @@ func TestRunMigrations_policyTypeColumnAndBackfill(t *testing.T) {
 	}
 }
 
-// 阶段 3 退役面（2026-11-12 用户裁定）：
+// 阶段 3 退役面（2026-11-12 用户裁定；2026-11-13 修订人机页条款）：
 //   - human_exempt_ips / human_challenge_page_id 两列不得再存在于 security_policies
 //     （IP 级放行唯一入口=阶段 0 信任名单；挑战页由 lb_human 内置渲染）；
-//   - 内置占位页 9005（自定义挑战页载体）随功能退役，存量内置行由启动清理删除，
-//     自定义页不受影响。
+//   - 内置人机页 9005/9006 是策略可选的真实挑战页载体（2026-11-13 推翻
+//     「9005 退役」裁定）：迁移不得删除 9005——旧名空占位行由
+//     SeedDefaultBlockPage 播种自愈归位；自定义页不受影响。
 func TestRunMigrations_retiresHumanExemptIPsAndChallengePage(t *testing.T) {
 	database := openMigrationTestDB(t)
 	if err := createTables(); err != nil {
@@ -77,7 +78,7 @@ func TestRunMigrations_retiresHumanExemptIPsAndChallengePage(t *testing.T) {
 	if _, err := database.Exec("INSERT INTO global_config (id,caddy_config) VALUES (1,'{}')"); err != nil {
 		t.Fatalf("seed global config: %v", err)
 	}
-	// 旧库形态：两列存在，且 9005 占位页已播种。
+	// 旧库形态：两列存在，9005 以旧名空占位行存在，自定义页并存。
 	for _, col := range []string{"human_exempt_ips", "human_challenge_page_id"} {
 		if _, err := database.Exec("ALTER TABLE security_policies ADD COLUMN " + col + " TEXT NOT NULL DEFAULT ''"); err != nil {
 			t.Fatalf("seed legacy column %s: %v", col, err)
@@ -103,18 +104,20 @@ func TestRunMigrations_retiresHumanExemptIPsAndChallengePage(t *testing.T) {
 			t.Fatalf("退役列 %s 仍存在（应按 deadColumnDrops 删除）", col)
 		}
 	}
+	// 9005（含旧名空占位行）+自定义页都保留：占位行归位交给播种自愈，
+	// 迁移层不得删内置人机页（否则内置页每次启动先删后播，中间态不可选）。
 	var retained int
 	if err := database.QueryRow(`SELECT COUNT(*) FROM security_block_pages WHERE id IN (9005,9100)`).Scan(&retained); err != nil {
 		t.Fatal(err)
 	}
-	if retained != 1 {
-		t.Fatalf("清理后应只保留自定义页 9100：retained=%d", retained)
+	if retained != 2 {
+		t.Fatalf("迁移后 9005 与自定义页 9100 均应保留：retained=%d", retained)
 	}
 	var custom int
 	if err := database.QueryRow(`SELECT COUNT(*) FROM security_block_pages WHERE id=9100`).Scan(&custom); err != nil {
 		t.Fatal(err)
 	}
 	if custom != 1 {
-		t.Fatal("自定义页 9100 不得被内置页清理误删")
+		t.Fatal("自定义页 9100 不得被迁移误删")
 	}
 }

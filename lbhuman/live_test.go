@@ -158,7 +158,7 @@ func TestHumanLiveEndpoint_marksJSFailureAndExpiry(t *testing.T) {
 	req.Header.Set("User-Agent", "JSLiveAgent/1.0")
 	rec := httptest.NewRecorder()
 	h.serveJSChallenge(rec, req, "203.0.113.21")
-	match := regexp.MustCompile(`var token = "([0-9a-f]+)"`).FindStringSubmatch(rec.Body.String())
+	match := regexp.MustCompile(`var token ?= ?"([0-9a-f]+)"`).FindStringSubmatch(rec.Body.String())
 	if len(match) != 2 {
 		t.Fatal("JS challenge page missing token")
 	}
@@ -179,7 +179,7 @@ func TestHumanLiveEndpoint_marksJSFailureAndExpiry(t *testing.T) {
 
 	rec2 := httptest.NewRecorder()
 	h.serveJSChallenge(rec2, req, "203.0.113.22")
-	match = regexp.MustCompile(`var token = "([0-9a-f]+)"`).FindStringSubmatch(rec2.Body.String())
+	match = regexp.MustCompile(`var token ?= ?"([0-9a-f]+)"`).FindStringSubmatch(rec2.Body.String())
 	if len(match) != 2 {
 		t.Fatal("second JS challenge page missing token")
 	}

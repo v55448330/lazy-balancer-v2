@@ -947,7 +947,10 @@ const srcRoot = new URL('../src/', import.meta.url)
 // 无条件拼接会把 `@/views/X.vue` 解析成 `X.vue.ts` 而失败。钩子是进程级、
 // 只能累积（registerHooks 无注销面）：单个 spec 文件只注册一次、不支持 .vue
 // 装载（模板级行为测试需另行方案，见 viewsCore 的静态 import 自检守卫）。
-export const registerModuleHooks = (replacements: Record<string, string | (() => string)> = {}): void => {
+export const registerModuleHooks = (
+  replacements: Record<string, string | (() => string)> = {},
+  options: { resolveRelativeExtensionless?: boolean } = {},
+): void => {
   registerHooks({
     resolve(specifier, context, nextResolve) {
       const replacement = replacements[specifier]
@@ -956,6 +959,12 @@ export const registerModuleHooks = (replacements: Record<string, string | (() =>
         const target = specifier.slice(2)
         const withExtension = /\.[a-z0-9]+$/i.test(target) ? target : `${target}.ts`
         return nextResolve(new URL(withExtension, srcRoot).href, context)
+      }
+      // src 内相对导入按 TS 源码习惯常省略扩展名（如 './hasOwn'），node ESM
+      // 严格解析会拒载。默认不开：装载哨兵自带同名回退，双 hook 叠加会把
+      // 失败探测路径补成 '.ts.ts'；仅真实装载 src 模块的手动钉测 opt-in。
+      if (options.resolveRelativeExtensionless && specifier.startsWith('.') && !/\.[a-z0-9]+$/i.test(specifier)) {
+        return nextResolve(`${specifier}.ts`, context)
       }
       return nextResolve(specifier, context)
     },

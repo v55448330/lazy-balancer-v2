@@ -4629,8 +4629,9 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig, sec
 						break
 					}
 				}
-				// CC 挑战模式的默认拦截页=内置人机验证页（9005）；策略未显式配页
-				// 时不再走 lbhuman 生成的通用挑战页。9005 缺失才回退生成页。
+				// CC 挑战模式的默认拦截页=内置人机验证页（按验证方式选页：
+				// js→9006 JS 人机验证页面，其余→9005 滑块）；策略未显式配页时
+				// 不再走 lbhuman 生成的通用挑战页。内置页缺失才回退生成页。
 				if banContent == "" {
 					banContent, banType = humanChallengeFallbackPage(ctx, policies)
 				}

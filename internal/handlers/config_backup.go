@@ -3604,7 +3604,7 @@ func validateV2BackupSecurityPoliciesWithQuerier(ctx context.Context, tables map
 				}
 			}
 			if !validIdentity {
-				return fmt.Errorf("拦截页面 #%d（%s）：is_builtin 仅允许系统内置页面 9001/9002/9005 及其库存名称", index+1, name)
+				return fmt.Errorf("拦截页面 #%d（%s）：is_builtin 仅允许系统内置页面及其库存名称", index+1, name)
 			}
 		}
 	}
