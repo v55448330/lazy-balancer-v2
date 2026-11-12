@@ -38,6 +38,8 @@ export interface PolicyPayloadInput {
   customRuleIds: readonly number[]
   blockPageId: number
   blockStatusCode: number
+  /** 拦截响应方式：auto=按请求头自动，html=仅 HTML，json=仅 JSON */
+  blockResponseMode: string
   geoipCountries: readonly string[]
   geoipEnabled: boolean
   /** geoip_enabled 为真时提交的生效模式（deny/allow；'off' 归一为 deny） */
@@ -88,6 +90,7 @@ interface PolicyPayload {
   custom_rules: string
   block_page_id: number
   block_status_code: number
+  block_response_mode: string
   geoip_countries: string
   geoip_mode: string
   geoip_crawler_exempt: boolean
@@ -144,6 +147,7 @@ export const buildPolicyPayload = (input: PolicyPayloadInput): PolicyPayload => 
     custom_rules: JSON.stringify(input.customRuleIds),
     block_page_id: input.blockPageId,
     block_status_code: input.blockStatusCode,
+    block_response_mode: input.blockResponseMode,
     geoip_countries: JSON.stringify(input.geoipCountries),
     // geoip_enabled=false → 'off'（后端零发射）；开启但模式为 off 的中间态归一为 deny
     geoip_mode: input.geoipEnabled ? (input.geoipMode === 'off' ? 'deny' : input.geoipMode) : 'off',

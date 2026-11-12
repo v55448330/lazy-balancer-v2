@@ -1,6 +1,7 @@
 package lbhuman
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/netip"
@@ -123,6 +124,50 @@ func (h *HumanHandler) isExempt(ip, path string) bool {
 	return false
 }
 
+// wantsJSONRequest 判定 API/XHR 客户端（Accept: application/json、
+// X-Requested-With，或 Sec-Fetch-Mode=cors）：这类请求不能拿 HTML 挑战页。
+func wantsJSONRequest(r *http.Request) bool {
+	if v := r.Header.Get("X-Requested-With"); v != "" {
+		return true
+	}
+	if strings.EqualFold(r.Header.Get("Sec-Fetch-Mode"), "cors") {
+		return true
+	}
+	return strings.Contains(strings.ToLower(r.Header.Get("Accept")), "application/json")
+}
+
+// isIdempotentMethod 只对 GET/HEAD 走浏览器挑战页；其余方法返回 403 JSON，
+// 避免重定向把请求体静默丢掉（表单提交变 GET 是数据丢失事故）。
+func isIdempotentMethod(method string) bool {
+	return method == http.MethodGet || method == http.MethodHead
+}
+
+// serveChallengeForRequest 按请求类型分流挑战响应：
+//   - 文档导航（幂等 + 非 JSON）→ 挑战页（HTML）；
+//   - API/XHR 或非幂等请求 → JSON（401/403 + X-Human-Challenge 头）。
+func (h *HumanHandler) serveChallengeForRequest(w http.ResponseWriter, r *http.Request, ip string) {
+	if isIdempotentMethod(r.Method) && !wantsJSONRequest(r) {
+		h.serveChallengeByType(w, r, ip)
+		return
+	}
+	humanStats.Challenges.Add(1)
+	reportHumanEvent(h.RuleID, ip, r.Method, r.URL.RequestURI(), r.UserAgent(), "challenge")
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("X-Human-Challenge", "1")
+	status := http.StatusUnauthorized
+	if !isIdempotentMethod(r.Method) {
+		status = http.StatusForbidden
+	}
+	w.WriteHeader(status)
+	payload, _ := json.Marshal(map[string]string{
+		"code":       "human_challenge",
+		"message":    "human verification required; open the URL in a browser to complete the challenge",
+		"verify_url": r.URL.RequestURI(),
+	})
+	_, _ = w.Write(payload)
+}
+
 // ServeHTTP 人机验证主流程：
 //
 //	有效 cookie → 直通
@@ -155,7 +200,7 @@ func (h *HumanHandler) ServeHTTP(w http.ResponseWriter, r *http.Request, next ca
 
 	// force 模式：未验证一律挑战（方式按策略配置：slider=滑块，js=PoW）
 	if h.Mode == "force" {
-		h.serveChallengeByType(w, r, ip)
+		h.serveChallengeForRequest(w, r, ip)
 		return nil
 	}
 
@@ -168,7 +213,7 @@ func (h *HumanHandler) ServeHTTP(w http.ResponseWriter, r *http.Request, next ca
 		current := ccPeek(key, h.CCWindowSec)
 		trig := evalCC(current, h.CCRPSLimit, h.CCWindowSec, h.CC4xxRatio, h.CCSessionUA, h.CCSession)
 		if trig.Triggered {
-			h.serveChallengeByType(w, r, ip)
+			h.serveChallengeForRequest(w, r, ip)
 			return nil
 		}
 	}

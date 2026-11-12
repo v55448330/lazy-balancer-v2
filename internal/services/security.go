@@ -44,7 +44,8 @@ const securityPolicyRowColumns = `id, name, COALESCE(description,''), COALESCE(m
 		COALESCE(human_verify_mode,'off'), COALESCE(human_verify_type,'slider'), COALESCE(human_verify_ttl,30),
 		COALESCE(human_exempt_paths,'[]'),
 		COALESCE(cc_detect_enabled,0), COALESCE(cc_rps_limit,40), COALESCE(cc_rps_window,10),
-		COALESCE(cc_4xx_ratio,70), COALESCE(cc_session_anomaly,0), COALESCE(cc_session_ua_threshold,5)`
+		COALESCE(cc_4xx_ratio,70), COALESCE(cc_session_anomaly,0), COALESCE(cc_session_ua_threshold,5),
+		COALESCE(block_response_mode,'auto')`
 
 // securityPolicyRowScanner 策略行扫描目标：*sql.Row 与 *sql.Rows 同时满足
 // （单查与批量预载走同一段 Scan）。
@@ -70,7 +71,8 @@ func scanSecurityPolicyRow(scanner securityPolicyRowScanner) (*models.SecurityPo
 		&p.IPACLListRefs, &p.IPWhitelistRefs, &p.PolicyType, &p.TrustDetection,
 		&p.HumanVerifyMode, &p.HumanVerifyType, &p.HumanVerifyTTL,
 		&humanExemptPaths,
-		&p.CCDetectEnabled, &p.CCRPSLimit, &p.CCRPSWindow, &p.CC4xxRatio, &p.CCSessionAnomaly, &p.CCSessionUAThreshold); err != nil {
+		&p.CCDetectEnabled, &p.CCRPSLimit, &p.CCRPSWindow, &p.CC4xxRatio, &p.CCSessionAnomaly, &p.CCSessionUAThreshold,
+		&p.BlockResponseMode); err != nil {
 		return nil, err
 	}
 	p.IPWhitelist = json.RawMessage(ipWhitelist)

@@ -129,8 +129,12 @@ export default {
      "labelName": "Name",
      "placeholderName": "Page name",
      "placeholderDesc": "Page description",
-     "contentTypeTip": "Content-Type of the block response (all UTF-8)",
      "labelContent": "Content",
+     "labelJson": "API body (JSON)",
+     "tabHtml": "Browser · HTML",
+     "jsonPlaceholder": "Leave empty, or paste a valid JSON object (e.g. with code and message fields)",
+     "jsonAutoPlaceholder": "(empty: minimal JSON generated from status code)",
+     "jsonTip": "Leave empty to derive a default JSON message from the page title; no status code inside (HTTP status expresses it). The policy\'s Block response setting decides whether HTML or JSON is actually returned.",
      "editorAria": "Block page content",
            "insertHumanWidget": "Insert slider widget",
       "humanWidgetTip": "Placeholder {'{'}human_verify_widget{'}'} — replaced by slider widget during human-verification challenge (effective when policy uses a custom challenge page)",
@@ -141,6 +145,8 @@ export default {
      "save": "Save"
     },
     "preview": {
+     "tabHtml": "Browser · HTML",
+     "tabJson": "API · JSON",
      "title": "Block page preview",
      "subtitle": "Preview the response content the client receives in an isolated sandbox",
      "effectTitle": "Rendered page",
@@ -151,6 +157,8 @@ export default {
      "plainText": "Plain text (text/plain)"
     },
     "messages": {
+     "jsonInvalid": "API body is not valid JSON — fix it before saving",
+     "jsonTooLarge": "API body exceeds 64KB (currently {size})",
      "nameRequired": "Enter a page name",
      "contentRequired": "Enter page content",
      "contentTooLarge": "Page content ({size}) exceeds the 64 KB limit — trim it before saving",
@@ -811,6 +819,11 @@ export default {
      "statusLabel": "Status Code",
      "statusTipDefault": "WAF and IP ACL blocking use this status code; rate-limit blocking always returns 429 (for separate metric accounting)",
      "statusTipNoPage": "Without a custom page the status code has no effect — blocking returns Caddy's default 403; select a page first",
+     "responseLabel": "Block response",
+     "responseAuto": "Auto (by request)",
+     "responseHtml": "Always HTML",
+     "responseJson": "Always JSON",
+     "responseTip": "Auto: browsers/document navigation get HTML; API / XHR requests (Accept: application/json, X-Requested-With, Sec-Fetch-Mode: cors) get JSON.",
      "statusTipStage2": "Rate-limit blocking always returns 429 (for separate metric accounting); not editable",
      "bindingsAttribution": "{n} rule(s) bound: when any policy blocks, its own configured page shows; policies without a page fall back to the first page-enabled policy{winner}",
      "fallbackFacet": "{n} rule(s): when other page-less policies trigger, the fallback page shows (first page-enabled policy)",
@@ -960,7 +973,6 @@ export default {
      "rateSummary": "{rps} rps · burst {burst}",
      "ccChallenge": "Challenge: {mode}",
      "ccSpike": "Spike trigger {n} req/{sec}s",
-     "stage0Precedence": "{name} · stage 0 · effective before blocking decisions",
      "trustSummary": "Trust {n} · {mode}",
      "wafMode": "WAF {mode}",
      "wafOff": "WAF off"

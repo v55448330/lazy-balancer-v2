@@ -110,6 +110,9 @@ func validateBlockPagePayload(page *models.SecurityBlockPage) error {
 	if len(page.Content) > 64<<10 {
 		return fmt.Errorf("拦截页面内容不能超过 64KB")
 	}
+	if len(page.JSONContent) > 64<<10 {
+		return fmt.Errorf("拦截页面 JSON 内容不能超过 64KB")
+	}
 	if page.ContentType == "" {
 		page.ContentType = models.DefaultBlockPageContentType
 	}
@@ -454,7 +457,7 @@ func (h *Handlers) ListSecurityBlockPages(c *gin.Context) {
 	// 取舍已裁定保留）：策略侧仅计启用（禁用策略的配页是休眠配置，删除后
 	// 运行期 JOIN 容忍悬挂）；规则侧阶段页引用全量计（禁用规则重新启用即
 	// 生效，静默丢失引用伤害更大）——两侧口径不同但与删除门逐一对应。
-	rows, err := db.DB.Query(`SELECT bp.id, bp.name, COALESCE(bp.description,''), COALESCE(bp.content,''), COALESCE(bp.content_type,'text/html; charset=utf-8'), COALESCE(bp.is_default,0), COALESCE(bp.is_builtin,0), COALESCE(bp.created_by,0), COALESCE(bp.created_at,''), COALESCE(bp.updated_by,0), COALESCE(bp.updated_at,''),
+	rows, err := db.DB.Query(`SELECT bp.id, bp.name, COALESCE(bp.description,''), COALESCE(bp.content,''), COALESCE(bp.json_content,''), COALESCE(bp.content_type,'text/html; charset=utf-8'), COALESCE(bp.is_default,0), COALESCE(bp.is_builtin,0), COALESCE(bp.created_by,0), COALESCE(bp.created_at,''), COALESCE(bp.updated_by,0), COALESCE(bp.updated_at,''),
 		(SELECT COUNT(*) FROM (
 			SELECT b.rule_caddy_id FROM security_policy_bindings b JOIN security_policies p ON p.id=b.policy_id WHERE p.block_page_id=bp.id AND p.enabled=1
 			UNION SELECT r.caddy_id FROM lb_rules r WHERE r.block_page_stage1_id=bp.id OR r.block_page_stage3_id=bp.id
@@ -468,7 +471,7 @@ func (h *Handlers) ListSecurityBlockPages(c *gin.Context) {
 	var pages []models.SecurityBlockPage
 	for rows.Next() {
 		var p models.SecurityBlockPage
-		if err := rows.Scan(&p.ID, &p.Name, &p.Description, &p.Content, &p.ContentType, &p.IsDefault, &p.IsBuiltin, &p.CreatedBy, &p.CreatedAt, &p.UpdatedBy, &p.UpdatedAt, &p.RuleRefCount); err != nil {
+		if err := rows.Scan(&p.ID, &p.Name, &p.Description, &p.Content, &p.JSONContent, &p.ContentType, &p.IsDefault, &p.IsBuiltin, &p.CreatedBy, &p.CreatedAt, &p.UpdatedBy, &p.UpdatedAt, &p.RuleRefCount); err != nil {
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
 			return
 		}
@@ -538,8 +541,8 @@ func (h *Handlers) CreateSecurityBlockPage(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "k_a78e2696", securityBlockPageMaxGlobalCount), MessageKey: "k_a78e2696"})
 		return
 	}
-	result, err := tx.Exec(`INSERT INTO security_block_pages (name, description, content, content_type, is_default, created_by, updated_by) VALUES (?,?,?,?,?,?,?)`,
-		req.Name, req.Description, req.Content, req.ContentType, false, int(contextUserID(c)), int(contextUserID(c)))
+	result, err := tx.Exec(`INSERT INTO security_block_pages (name, description, content, json_content, content_type, is_default, created_by, updated_by) VALUES (?,?,?,?,?,?,?,?)`,
+		req.Name, req.Description, req.Content, req.JSONContent, req.ContentType, false, int(contextUserID(c)), int(contextUserID(c)))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
 		return
@@ -569,6 +572,7 @@ func (h *Handlers) UpdateSecurityBlockPage(c *gin.Context) {
 		Name        *string `json:"name"`
 		Description *string `json:"description"`
 		Content     *string `json:"content"`
+		JSONContent *string `json:"json_content"`
 		ContentType *string `json:"content_type"`
 	}
 	if !guardConfiguredJSONBody(c) {
@@ -591,8 +595,8 @@ func (h *Handlers) UpdateSecurityBlockPage(c *gin.Context) {
 	}
 	defer tx.Rollback()
 	var page models.SecurityBlockPage
-	if err := tx.QueryRowContext(caddyWriteCtx(c), `SELECT COALESCE(is_default,0), COALESCE(is_builtin,0), name, COALESCE(description,''), COALESCE(content,''), COALESCE(content_type,'') FROM security_block_pages WHERE id=?`, id).
-		Scan(&isDefault, &isBuiltin, &page.Name, &page.Description, &page.Content, &page.ContentType); err != nil {
+	if err := tx.QueryRowContext(caddyWriteCtx(c), `SELECT COALESCE(is_default,0), COALESCE(is_builtin,0), name, COALESCE(description,''), COALESCE(content,''), COALESCE(json_content,''), COALESCE(content_type,'') FROM security_block_pages WHERE id=?`, id).
+		Scan(&isDefault, &isBuiltin, &page.Name, &page.Description, &page.Content, &page.JSONContent, &page.ContentType); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: apimsg.T(c, "k_2cfe04cf"), MessageKey: "k_2cfe04cf"})
 		} else {
@@ -612,6 +616,9 @@ func (h *Handlers) UpdateSecurityBlockPage(c *gin.Context) {
 	if req.Content != nil {
 		page.Content = *req.Content
 	}
+	if req.JSONContent != nil {
+		page.JSONContent = *req.JSONContent
+	}
 	if req.ContentType != nil {
 		page.ContentType = *req.ContentType
 	}
@@ -628,8 +635,8 @@ func (h *Handlers) UpdateSecurityBlockPage(c *gin.Context) {
 		c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: apimsg.T(c, "k_43628b87"), MessageKey: "k_43628b87"})
 		return
 	}
-	result, err := tx.ExecContext(caddyWriteCtx(c), `UPDATE security_block_pages SET name=?, description=?, content=?, content_type=?, updated_by=?, updated_at=datetime('now') WHERE id=?`,
-		page.Name, page.Description, page.Content, page.ContentType, int(contextUserID(c)), id)
+	result, err := tx.ExecContext(caddyWriteCtx(c), `UPDATE security_block_pages SET name=?, description=?, content=?, json_content=?, content_type=?, updated_by=?, updated_at=datetime('now') WHERE id=?`,
+		page.Name, page.Description, page.Content, page.JSONContent, page.ContentType, int(contextUserID(c)), id)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
 		return
@@ -744,7 +751,7 @@ const securityPolicySelectColumns = `id, name, COALESCE(description,''), COALESC
 	COALESCE(rate_limit_enabled,0), COALESCE(rate_limit_rps,0), COALESCE(rate_limit_burst,0), COALESCE(crs_rule_groups,'[]'), COALESCE(crs_excluded_rules,'[]'), COALESCE(custom_rules,'[]'), COALESCE(block_page_id,0), COALESCE(block_status_code,0), COALESCE(enabled,1), COALESCE(updated_by,0), COALESCE(created_at,''), COALESCE(updated_at,''), COALESCE(geoip_countries,'[]'), COALESCE(geoip_mode,'off'), COALESCE(geoip_crawler_exempt,0), COALESCE(geoip_crawler_engines,'[]'), COALESCE(waf_check_response,0), COALESCE(log_request_body,0), COALESCE(ip_acl_list_refs,'[]'), COALESCE(ip_whitelist_refs,'[]'), COALESCE(policy_type,''), COALESCE(trust_detection,0),
 	COALESCE(human_verify_mode,'off'), COALESCE(human_verify_type,'slider'), COALESCE(human_verify_ttl,30), COALESCE(human_exempt_paths,'[]'),
 	COALESCE(cc_detect_enabled,0), COALESCE(cc_rps_limit,40), COALESCE(cc_rps_window,10), COALESCE(cc_4xx_ratio,70),
-	COALESCE(cc_session_anomaly,0), COALESCE(cc_session_ua_threshold,5)`
+	COALESCE(cc_session_anomaly,0), COALESCE(cc_session_ua_threshold,5), COALESCE(block_response_mode,'auto')`
 
 func (h *Handlers) ListSecurityPolicies(c *gin.Context) {
 	// 过滤条件按「主查询列名」与「绑定计数查询的限定列名」成对给出：绑定计数
@@ -1308,14 +1315,14 @@ func (h *Handlers) CreateSecurityPolicy(c *gin.Context) {
 	}
 	result, err := tx.ExecContext(caddyWriteCtx(c), `INSERT INTO security_policies (name, description, mode, anomaly_threshold, ip_acl_mode, ip_acl_list, ip_acl_enabled, ip_whitelist, ip_whitelist_enabled, ip_blacklist,
 		rate_limit_enabled, rate_limit_rps, rate_limit_burst, crs_rule_groups, crs_excluded_rules, custom_rules, block_page_id, block_status_code, enabled, geoip_countries, geoip_mode, geoip_crawler_exempt, geoip_crawler_engines, waf_check_response, log_request_body, ip_acl_list_refs, ip_whitelist_refs, updated_by, policy_type, trust_detection, human_verify_mode, human_verify_type, human_verify_ttl, human_exempt_paths,
-		cc_detect_enabled, cc_rps_limit, cc_rps_window, cc_4xx_ratio, cc_session_anomaly, cc_session_ua_threshold)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		cc_detect_enabled, cc_rps_limit, cc_rps_window, cc_4xx_ratio, cc_session_anomaly, cc_session_ua_threshold, block_response_mode)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		req.Name, req.Description, req.Mode, max1(req.AnomalyThreshold, 5), req.IPACLMode, req.IPACLList, req.IPACLEnabled, req.IPWhitelist, policyWhitelistDefault(req.IPWhitelistEnabled), req.IPBlacklist,
 		req.RateLimitEnabled, req.RateLimitRPS, req.RateLimitBurst, req.CRSRuleGroups, req.CRSExcludedRules, req.CustomRules, req.BlockPageID, req.BlockStatusCode, enabled, req.GeoIPCountries, req.GeoIPMode, crawlerExemptBool(req.GeoIPCrawlerExempt, geoIPActive(req.GeoIPMode)), crawlerEnginesJSON(req.GeoIPCrawlerEngines), req.WAFCheckResponse, req.LogRequestBody, req.IPACLListRefs, req.IPWhitelistRefs, int(contextUserID(c)), policyType, req.TrustDetection,
 		humanModeOrDefault(req.HumanVerifyMode), humanTypeOrDefault(req.HumanVerifyType), humanTTLOrDefault(req.HumanVerifyTTL),
 		humanJSONOrDefault(req.HumanExemptPaths),
 		req.CCDetectEnabled, ccIntOrDefault(req.CCRPSLimit, 40), ccIntOrDefault(req.CCRPSWindow, 10),
-		ccIntOrDefault(req.CC4xxRatio, 70), req.CCSessionAnomaly, ccIntOrDefault(req.CCSessionUAThreshold, 5))
+		ccIntOrDefault(req.CC4xxRatio, 70), req.CCSessionAnomaly, ccIntOrDefault(req.CCSessionUAThreshold, 5), normalizeBlockResponseMode(req.BlockResponseMode))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
 		return
@@ -2194,6 +2201,10 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 		query += ", block_status_code=?"
 		args = append(args, *req.BlockStatusCode)
 	}
+	if req.BlockResponseMode != nil {
+		query += ", block_response_mode=?"
+		args = append(args, normalizeBlockResponseMode(*req.BlockResponseMode))
+	}
 	// 缺省类型提交按存量类型归一——存量 stage1/2/3 策略
 	// 显式携带 trust_detection=true 时强制写 0（跨阶段漂移不落库；nil 缺省
 	// 不强制写，保留现值语义不变）。mixed 与 ''（待推断存量态，mixed 语义）
@@ -2446,6 +2457,11 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 		changedFields = append(changedFields, fmt.Sprintf("拦截页：%s→%s", blockPageName(stored.BlockPageID), blockPageName(*req.BlockPageID)))
 	}
 	deltaInt("拦截状态码", req.BlockStatusCode, stored.BlockStatusCode)
+	if req.BlockResponseMode != nil {
+		if *req.BlockResponseMode != stored.BlockResponseMode {
+			changedFields = append(changedFields, fmt.Sprintf("拦截响应：%s→%s", stored.BlockResponseMode, normalizeBlockResponseMode(*req.BlockResponseMode)))
+		}
+	}
 	deltaBool("启用", req.Enabled, stored.Enabled)
 	if len(changedFields) > 0 {
 		auditDetail += "；" + strings.Join(changedFields, "；")
@@ -5975,7 +5991,8 @@ func scanSecurityPolicyInto(scan func(dest ...any) error, p *models.SecurityPoli
 	if err := scan(&p.ID, &p.Name, &p.Description, &p.Mode, &p.AnomalyThreshold, &p.IPACLMode, &p.IPACLList, &p.IPACLEnabled, &p.IPWhitelistEnabled, &ipWhitelist, &ipBlacklist,
 		&p.RateLimitEnabled, &p.RateLimitRPS, &p.RateLimitBurst, &crsRuleGroups, &crsExcludedRules, &customRules, &p.BlockPageID, &p.BlockStatusCode, &p.Enabled, &p.UpdatedBy, &p.CreatedAt, &p.UpdatedAt, &geoipCountries, &p.GeoIPMode, &p.GeoIPCrawlerExempt, &crawlerEnginesJSON, &p.WAFCheckResponse, &p.LogRequestBody, &p.IPACLListRefs, &p.IPWhitelistRefs, &p.PolicyType, &p.TrustDetection,
 		&p.HumanVerifyMode, &p.HumanVerifyType, &p.HumanVerifyTTL, &humanExemptPaths,
-		&p.CCDetectEnabled, &p.CCRPSLimit, &p.CCRPSWindow, &p.CC4xxRatio, &p.CCSessionAnomaly, &p.CCSessionUAThreshold); err != nil {
+		&p.CCDetectEnabled, &p.CCRPSLimit, &p.CCRPSWindow, &p.CC4xxRatio, &p.CCSessionAnomaly, &p.CCSessionUAThreshold,
+		&p.BlockResponseMode); err != nil {
 		return err
 	}
 	p.IPWhitelist = json.RawMessage(ipWhitelist)
@@ -6031,6 +6048,7 @@ type securityPolicyDetail struct {
 	CustomRules        string `json:"custom_rules"`
 	BlockPageID        int    `json:"block_page_id"`
 	BlockStatusCode    int    `json:"block_status_code"`
+	BlockResponseMode  string `json:"block_response_mode"`
 	Enabled            bool   `json:"enabled"`
 	CreatedAt          string `json:"created_at"`
 	UpdatedAt          string `json:"updated_at"`
@@ -6079,6 +6097,7 @@ func newSecurityPolicyDetail(p *models.SecurityPolicy) securityPolicyDetail {
 		CustomRules:         rawJSONString(p.CustomRules),
 		BlockPageID:         p.BlockPageID,
 		BlockStatusCode:     p.BlockStatusCode,
+		BlockResponseMode:   normalizeBlockResponseMode(p.BlockResponseMode),
 		Enabled:             p.Enabled,
 		CreatedAt:           p.CreatedAt,
 		UpdatedAt:           p.UpdatedAt,
@@ -6258,6 +6277,20 @@ func outOfStageZeroFamilies(policyType string) []stageZeroFamily {
 // 状态码只在「非 stage2 ∧ 已绑定自定义拦截页」时被渲染消费——stage2 限流拦截
 // 恒 429（状态码列无意义），无页策略的 deny 恒 403（blockStatusForPolicy 仅对
 // 有有效页的策略分配合成码）。其余形态落零，避免详情/列表宣称一个不生效的值。
+// normalizeBlockResponseMode 把策略级拦截响应方式归一到
+// auto|html|json 三值：auto=按请求头自动选择（浏览器 HTML / API JSON）。
+// 空值与非法值一律 auto（fail-safe：保持历史自动行为）。
+func normalizeBlockResponseMode(mode string) string {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "html":
+		return "html"
+	case "json":
+		return "json"
+	default:
+		return "auto"
+	}
+}
+
 func normalizeBlockStatusCode(statusCode int, policyType string, blockPageID int) int {
 	if policyType == models.PolicyTypeStage2 || blockPageID == 0 {
 		return 0
@@ -6304,7 +6337,7 @@ func applyStageZerosToCreate(req *models.CreateSecurityPolicyRequest, policyType
 		case stageZeroGeoIPCrawler:
 			req.GeoIPCrawlerExempt, req.GeoIPCrawlerEngines = false, "[]"
 		case stageZeroBlockPageAll:
-			req.BlockPageID, req.BlockStatusCode = 0, 0
+			req.BlockPageID, req.BlockStatusCode, req.BlockResponseMode = 0, 0, ""
 		case stageZeroBlockStatusCode:
 			req.BlockStatusCode = 0
 		case stageZeroTrustDetection:
@@ -6349,7 +6382,7 @@ func applyStageZerosToUpdate(req *models.UpdateSecurityPolicyRequest, policyType
 		case stageZeroGeoIPCrawler:
 			req.GeoIPCrawlerExempt, req.GeoIPCrawlerEngines = new(false), new("[]")
 		case stageZeroBlockPageAll:
-			req.BlockPageID, req.BlockStatusCode = new(0), new(0)
+			req.BlockPageID, req.BlockStatusCode, req.BlockResponseMode = new(0), new(0), new("")
 		case stageZeroBlockStatusCode:
 			req.BlockStatusCode = new(0)
 		case stageZeroTrustDetection:

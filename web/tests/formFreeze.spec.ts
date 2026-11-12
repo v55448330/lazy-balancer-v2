@@ -54,7 +54,7 @@ test('OIDC 弹框：整表单 formFrozen + 保存中不可 ESC/X 关闭', () => 
 
 test('拦截页编辑器：保存中冻结（含 CodeEditor readonly）', () => {
   const page = code('src/views/security/SecurityBlockPages.vue')
-  assert.match(page, /<el-form :model="form" [^>]*class="block-page-form"[^>]*:disabled="saving"/)
+  assert.match(page, /<el-form :model="form" [^>]*class="block-page-form[^"]*"[^>]*:disabled="saving"/)
   assert.match(page, /<CodeEditor[^>]*:readonly="saving"/)
   assert.match(page, /show-word-limit :readonly="isReadOnly \|\| currentPage\?\.is_default \|\| currentPage\?\.is_builtin \|\| saving"/)
 })

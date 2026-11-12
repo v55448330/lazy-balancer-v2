@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"io"
 	"maps"
 	"math/big"
@@ -17,6 +18,7 @@ import (
 	"os"
 	"os/exec"
 	"reflect"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -1552,6 +1554,8 @@ type caddyConfigStore interface {
 type securityPolicyContext struct {
 	policyByRule  map[string][]*models.SecurityPolicy
 	blockPageByID map[int]string
+	// blockPageJSONByID 页 id → API 变体响应体（HTML/JSON 双档；空=引擎生成最小 JSON）
+	blockPageJSONByID map[int]string
 	// blockPageTypeByID 页 id → （2026-09-25 用户裁定可配置）；
 	// 缺失/空值在渲染处回退 text/html; charset=utf-8。
 	blockPageTypeByID map[int]string
@@ -1665,6 +1669,7 @@ func loadSecurityPolicyContext(store caddyConfigStore) (*securityPolicyContext, 
 	ctx := &securityPolicyContext{
 		policyByRule:      make(map[string][]*models.SecurityPolicy),
 		blockPageByID:     make(map[int]string),
+		blockPageJSONByID: make(map[int]string),
 		blockPageTypeByID: make(map[int]string),
 		policySynthetic:   make(map[int]int),
 		store:             store,
@@ -1770,18 +1775,19 @@ func loadSecurityPolicyContext(store caddyConfigStore) (*securityPolicyContext, 
 	if !referencedPage {
 		return ctx, nil
 	}
-	pageRows, err := store.Query(`SELECT id, COALESCE(content,''), COALESCE(content_type,'') FROM security_block_pages`)
+	pageRows, err := store.Query(`SELECT id, COALESCE(content,''), COALESCE(json_content,''), COALESCE(content_type,'') FROM security_block_pages`)
 	if err != nil {
 		return nil, err
 	}
 	for pageRows.Next() {
 		var id int
-		var content, contentType string
-		if err := pageRows.Scan(&id, &content, &contentType); err != nil {
+		var content, jsonContent, contentType string
+		if err := pageRows.Scan(&id, &content, &jsonContent, &contentType); err != nil {
 			_ = pageRows.Close()
 			return nil, err
 		}
 		ctx.blockPageByID[id] = content
+		ctx.blockPageJSONByID[id] = jsonContent
 		ctx.blockPageTypeByID[id] = contentType
 	}
 	if err := pageRows.Err(); err != nil {
@@ -2753,11 +2759,11 @@ func generateCaddyConfigWithCertSource(store, certSource caddyConfigStore, rules
 			if securityCtx == nil {
 				continue
 			}
-			if errorRoute := buildBlockPageErrorRoute(r.CaddyID, splitAndTrim(r.Domain), securityCtx); errorRoute != nil {
-				errorRoutes = append(errorRoutes, errorRoute)
+			for _, route := range buildBlockPageErrorRoute(r.CaddyID, splitAndTrim(r.Domain), securityCtx) {
+				errorRoutes = append(errorRoutes, route)
 			}
-			if errorRoute := buildRateLimitErrorRoute(r.CaddyID, splitAndTrim(r.Domain), securityCtx); errorRoute != nil {
-				errorRoutes = append(errorRoutes, errorRoute)
+			for _, route := range buildRateLimitErrorRoute(r.CaddyID, splitAndTrim(r.Domain), securityCtx) {
+				errorRoutes = append(errorRoutes, route)
 			}
 			// 阶段 1/阶段 3 的 deny 中断按策略身份归因：逐策略合成码（483+）
 			// 路由无 host 键（合成码只可能由绑定该策略的规则段产生，同 server
@@ -2775,7 +2781,9 @@ func generateCaddyConfigWithCertSource(store, certSource caddyConfigStore, rules
 					continue
 				}
 				emittedSynthetic[key] = struct{}{}
-				errorRoutes = append(errorRoutes, buildBlockPageAttributionRoute(code, nil, securityCtx.blockPageByID[policy.BlockPageID], policy.BlockStatusCode, securityCtx.blockPageTypeByID[policy.BlockPageID]))
+				for _, route := range buildBlockPageAttributionRoute(code, nil, securityCtx.blockPageByID[policy.BlockPageID], securityCtx.blockPageJSONByID[policy.BlockPageID], policy.BlockStatusCode, securityCtx.blockPageTypeByID[policy.BlockPageID], policy.BlockResponseMode) {
+					errorRoutes = append(errorRoutes, route)
+				}
 			}
 		}
 		if len(errorRoutes) > 0 {
@@ -4107,11 +4115,113 @@ func blockPageContentType(contentType string) string {
 	return contentType
 }
 
+// jsonRequestMatchers 判定「API/XHR 客户端」：Accept 含 application/json、
+// 带 X-Requested-With，或 Sec-Fetch-Mode=cors。用 header matcher 而非 CEL：
+// `{http.request.header.*}` 在 CEL 中被推断为 any，comprehension（exists）无法
+// range（实测报错：expression of type 'any' cannot be range of a comprehension）。
+// 多个 matcher 在 Caddy match 数组里是 OR 语义，因此每个条件一条 JSON 路由。
+func jsonRequestMatchers(baseMatcher map[string]interface{}) []map[string]interface{} {
+	headerCases := []map[string][]string{
+		{"Accept": {"*application/json*"}},
+		{"X-Requested-With": {"*"}},
+		{"Sec-Fetch-Mode": {"cors"}},
+	}
+	out := make([]map[string]interface{}, 0, len(headerCases))
+	for _, headers := range headerCases {
+		matcher := map[string]interface{}{}
+		for k, v := range baseMatcher {
+			matcher[k] = v
+		}
+		matcher["header"] = headers
+		out = append(out, matcher)
+	}
+	return out
+}
+
+// htmlTitlePattern 提取拦截页标题，作为未自定义 JSON 时的人类可读消息源。
+var htmlTitlePattern = regexp.MustCompile(`(?is)<title[^>]*>(.*?)</title>`)
+
+// defaultBlockPageJSONMessage 从 HTML 页面内容派生 JSON 默认消息：
+// 取 <title> 文本（去标签/反转义/截断 200 字符），无标题时回退通用文案。
+// 不再携带状态码——HTTP status 已是标准语义，JSON 体只保留消息。
+func defaultBlockPageJSONMessage(content string) string {
+	msg := ""
+	if match := htmlTitlePattern.FindStringSubmatch(content); len(match) > 1 {
+		msg = strings.TrimSpace(html.UnescapeString(regexp.MustCompile(`(?s)<[^>]*>`).ReplaceAllString(match[1], "")))
+	}
+	if msg == "" {
+		msg = "Request blocked"
+	}
+	if utf8.RuneCountInString(msg) > 200 {
+		msg = string([]rune(msg)[:200])
+	}
+	encoded, err := json.Marshal(msg)
+	if err != nil {
+		return `{"message":"Request blocked"}`
+	}
+	return `{"message":` + string(encoded) + `}`
+}
+
+// blockPageJSONBody 返回 API 变体响应体：页面自定义优先；空则从页面 HTML
+// 内容派生（见 defaultBlockPageJSONMessage），保证 API 客户端永远不会收到
+// HTML，且默认文案与页面语义一致。
+func blockPageJSONBody(content, custom string) string {
+	if strings.TrimSpace(custom) != "" {
+		return custom
+	}
+	return defaultBlockPageJSONMessage(content)
+}
+
+// buildDualBlockPageRoutes 生成「HTML + JSON 双档」错误路由（JSON 优先，
+// terminal）：页面主档为 HTML 时，API 客户端命中 JSON 变体，其余走 HTML；
+// 非 HTML 主档（json/xml/plain）保持单档原样（内容本身就是机器可读）。
+// 返回顺序即匹配顺序——调用方按序追加，JSON 路由必须在前。
+// responseMode 是策略级响应选择（auto|html|json）：auto=按请求头自动分流，
+// html=只发 HTML 主档，json=只发 JSON 变体（API 客户端可强制拿到 JSON）。
+func buildDualBlockPageRoutes(baseMatcher map[string]interface{}, content, jsonContent, contentType string, statusCode int, extraHeaders map[string][]string, responseMode string) []map[string]interface{} {
+	newRoute := func(matcher map[string]interface{}, body, ct string, headers map[string][]string) map[string]interface{} {
+		h := map[string]interface{}{"Content-Type": []string{ct}}
+		for k, v := range headers {
+			h[k] = v
+		}
+		return map[string]interface{}{
+			"match": []interface{}{matcher},
+			"handle": []interface{}{
+				map[string]interface{}{
+					"handler":     "static_response",
+					"body":        body,
+					"status_code": statusCode,
+					"headers":     h,
+				},
+			},
+			"terminal": true,
+		}
+	}
+	pageType := blockPageContentType(contentType)
+	mode := strings.ToLower(strings.TrimSpace(responseMode))
+	if mode == "json" {
+		return []map[string]interface{}{newRoute(baseMatcher, blockPageJSONBody(content, jsonContent), "application/json; charset=utf-8", extraHeaders)}
+	}
+	if mode == "html" {
+		return []map[string]interface{}{newRoute(baseMatcher, content, "text/html; charset=utf-8", extraHeaders)}
+	}
+	if pageType != "text/html; charset=utf-8" {
+		return []map[string]interface{}{newRoute(baseMatcher, content, pageType, extraHeaders)}
+	}
+	routes := make([]map[string]interface{}, 0, 4)
+	for _, matcher := range jsonRequestMatchers(baseMatcher) {
+		routes = append(routes,
+			newRoute(matcher, blockPageJSONBody(content, jsonContent), "application/json; charset=utf-8", extraHeaders))
+	}
+	routes = append(routes, newRoute(baseMatcher, content, pageType, extraHeaders))
+	return routes
+}
+
 // buildBlockPageAttributionRoute 返回一条按策略/规则归因的错误路由：matcher
 // 为合成中断码 + interruption 消息，hosts 非空时追加 host 限定（规则级 481/482
 // 必须按规则域名隔离；逐策略 483+ 传 nil，保持全局唯一）。static_response
 // 渲染对应拦截页内容与配置状态码（0 归一 403）。
-func buildBlockPageAttributionRoute(synthetic int, hosts []string, content string, statusCode int, contentType string) map[string]interface{} {
+func buildBlockPageAttributionRoute(synthetic int, hosts []string, content, jsonContent string, statusCode int, contentType, responseMode string) []map[string]interface{} {
 	if statusCode == 0 {
 		statusCode = 403
 	}
@@ -4121,20 +4231,7 @@ func buildBlockPageAttributionRoute(synthetic int, hosts []string, content strin
 	if len(hosts) > 0 {
 		matcher["host"] = hosts
 	}
-	return map[string]interface{}{
-		"match": []interface{}{matcher},
-		"handle": []interface{}{
-			map[string]interface{}{
-				"handler":     "static_response",
-				"body":        content,
-				"status_code": statusCode,
-				"headers": map[string]interface{}{
-					"Content-Type": []string{blockPageContentType(contentType)},
-				},
-			},
-		},
-		"terminal": true,
-	}
+	return buildDualBlockPageRoutes(matcher, content, jsonContent, contentType, statusCode, nil, responseMode)
 }
 
 func decodePathUpstreams(raw string) ([]UpstreamConfig, error) {
@@ -4183,7 +4280,7 @@ func firstPolicyWithBlockPage(policies []*models.SecurityPolicy, pages map[int]s
 // buildBlockPageAttributionRoute 的逐策略路由承接。无绑定启用策略配置
 // 拦截页或页内容为空时返回 nil。策略与页内容来自批量预载 securityCtx，
 // 事务内生成可见未提交的策略变更。
-func buildBlockPageErrorRoute(ruleCaddyID string, domainHosts []string, securityCtx *securityPolicyContext) map[string]interface{} {
+func buildBlockPageErrorRoute(ruleCaddyID string, domainHosts []string, securityCtx *securityPolicyContext) []map[string]interface{} {
 	policies := policiesForRule(securityCtx, ruleCaddyID)
 	pagePolicy, content := firstPolicyWithBlockPage(policies, securityCtx.blockPageByID)
 	if pagePolicy == nil {
@@ -4198,25 +4295,10 @@ func buildBlockPageErrorRoute(ruleCaddyID string, domainHosts []string, security
 	// 渲染（v2.2.0 GeoIP 改走 coraza 后不再有独立的 "GeoIP blocked" 中断形态，
 	// 逐策略 geoip 状态码并集子句随之移除）。
 	expression := "({http.error.status_code} == 403 && {http.error.message} == 'interruption triggered')"
-	return map[string]interface{}{
-		"match": []interface{}{
-			map[string]interface{}{
-				"host":       domainHosts,
-				"expression": expression,
-			},
-		},
-		"handle": []interface{}{
-			map[string]interface{}{
-				"handler":     "static_response",
-				"body":        content,
-				"status_code": statusCode,
-				"headers": map[string]interface{}{
-					"Content-Type": []string{blockPageContentType(securityCtx.blockPageTypeByID[pagePolicy.BlockPageID])},
-				},
-			},
-		},
-		"terminal": true,
-	}
+	return buildDualBlockPageRoutes(map[string]interface{}{
+		"host":       domainHosts,
+		"expression": expression,
+	}, content, securityCtx.blockPageJSONByID[pagePolicy.BlockPageID], securityCtx.blockPageTypeByID[pagePolicy.BlockPageID], statusCode, nil, pagePolicy.BlockResponseMode)
 }
 
 // buildRateLimitErrorRoute returns a server-level error route rendering the
@@ -4224,7 +4306,7 @@ func buildBlockPageErrorRoute(ruleCaddyID string, domainHosts []string, security
 // rate-limited (429) requests, or nil when no bound enabled policy enables
 // rate limiting or none has a block page.
 // caddy-ratelimit rejects via caddyhttp.Error(429), so handle_errors fires.
-func buildRateLimitErrorRoute(ruleCaddyID string, domainHosts []string, securityCtx *securityPolicyContext) map[string]interface{} {
+func buildRateLimitErrorRoute(ruleCaddyID string, domainHosts []string, securityCtx *securityPolicyContext) []map[string]interface{} {
 	policies := policiesForRule(securityCtx, ruleCaddyID)
 	rateLimited := false
 	for _, policy := range policies {
@@ -4242,26 +4324,10 @@ func buildRateLimitErrorRoute(ruleCaddyID string, domainHosts []string, security
 	// 计量——Wave 6 状态统一后 403 与 WAF 拦截在指标中同形不可区分（实测：
 	// 错误路由响应继承主路由 handler 标签，无任何其他区分维度）。拦截页正文
 	// 不变（客户端体验一致），按限流 1s 窗口给出重试契约。
-	return map[string]interface{}{
-		"match": []interface{}{
-			map[string]interface{}{
-				"host":       domainHosts,
-				"expression": "{http.error.status_code} == 429",
-			},
-		},
-		"handle": []interface{}{
-			map[string]interface{}{
-				"handler":     "static_response",
-				"body":        content,
-				"status_code": 429,
-				"headers": map[string]interface{}{
-					"Content-Type": []string{blockPageContentType(securityCtx.blockPageTypeByID[pagePolicy.BlockPageID])},
-					"Retry-After":  []string{"1"},
-				},
-			},
-		},
-		"terminal": true,
-	}
+	return buildDualBlockPageRoutes(map[string]interface{}{
+		"host":       domainHosts,
+		"expression": "{http.error.status_code} == 429",
+	}, content, securityCtx.blockPageJSONByID[pagePolicy.BlockPageID], securityCtx.blockPageTypeByID[pagePolicy.BlockPageID], 429, map[string][]string{"Retry-After": {"1"}}, pagePolicy.BlockResponseMode)
 }
 
 // buildRateLimitHandler returns the rate_limit handler for one bound policy of

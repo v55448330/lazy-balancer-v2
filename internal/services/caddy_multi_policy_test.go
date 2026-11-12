@@ -414,8 +414,8 @@ func TestMultiPolicy_ErrorRoutes_FirstBoundBlockPageAndUnionMatcher(t *testing.T
 		t.Fatalf("generation failed: %s", message)
 	}
 	errorRoutes, _ := serverErrorRoutes(t, generated, "http_8080")
-	if len(errorRoutes) != 4 {
-		t.Fatalf("want 4 error routes (fallback + 2 attribution + rate limit), got %#v", errorRoutes)
+	if len(errorRoutes) != 16 {
+		t.Fatalf("want 16 error routes (3 JSON 变体 + HTML × [fallback + 2 attribution + rate limit]), got %#v", errorRoutes)
 	}
 	var blockPageRoute, rateLimitRoute map[string]interface{}
 	bySynthetic := make(map[string]map[string]interface{}, 2)
@@ -829,5 +829,58 @@ func TestCCStage_chainOrder_quotaThenChallengeThenWAF(t *testing.T) {
 	}
 	if !(rate < human && human < waf) {
 		t.Fatalf("阶段 2 固定序应为 配额(%d) → 挑战(%d) → 内容防护(%d)，实际 chain=%v", rate, human, waf, names)
+	}
+}
+
+// 响应模板双档（2026-11-12 用户裁定）：HTML 主档 + JSON 变体——API/XHR 请求
+// 必须拿 JSON（解析失败/静默掉错），文档导航仍拿 HTML。JSON 路由必须排在
+// HTML 之前（terminal 语义下顺序即优先级）。
+func TestBlockPageDualRoutes_jsonFirstForAPIRequests(t *testing.T) {
+	base := map[string]interface{}{"host": []string{"a.example.test"}, "expression": "{http.error.status_code} == 403"}
+	routes := buildDualBlockPageRoutes(base, "<html>denied</html>", `{"code":403,"error":"custom"}`, "", 403, nil, "auto")
+	// 3 条 JSON 变体（Accept / X-Requested-With / Sec-Fetch-Mode）+ 1 条 HTML 兜底。
+	if len(routes) != 4 {
+		t.Fatalf("HTML 页面必须出 3 JSON + 1 HTML 路由，实际 %d", len(routes))
+	}
+	headerKeys := map[string]bool{}
+	for _, r := range routes[:3] {
+		matcher := r["match"].([]interface{})[0].(map[string]interface{})
+		expr, _ := matcher["expression"].(string)
+		if strings.Contains(expr, "exists(") {
+			t.Fatalf("JSON 变体不得使用 CEL comprehension（header 占位符是 any）：%s", expr)
+		}
+		for k := range matcher["header"].(map[string][]string) {
+			headerKeys[k] = true
+		}
+	}
+	for _, want := range []string{"Accept", "X-Requested-With", "Sec-Fetch-Mode"} {
+		if !headerKeys[want] {
+			t.Fatalf("缺少 %s header matcher：%v", want, headerKeys)
+		}
+	}
+	body := routes[0]["handle"].([]interface{})[0].(map[string]interface{})["body"].(string)
+	if body != `{"code":403,"error":"custom"}` {
+		t.Fatalf("JSON 档必须用页面自定义内容：%s", body)
+	}
+	ct := routes[0]["handle"].([]interface{})[0].(map[string]interface{})["headers"].(map[string]interface{})["Content-Type"].([]string)[0]
+	if ct != "application/json; charset=utf-8" {
+		t.Fatalf("JSON 路由 Content-Type=%q", ct)
+	}
+	htmlBody := routes[3]["handle"].([]interface{})[0].(map[string]interface{})["body"].(string)
+	if htmlBody != "<html>denied</html>" {
+		t.Fatalf("第二条必须是 HTML 主档：%s", htmlBody)
+	}
+
+	// JSON 内容为空 → 引擎生成最小 JSON（API 客户端永不收 HTML）
+	plain := buildDualBlockPageRoutes(base, "<html>x</html>", "", "", 429, map[string][]string{"Retry-After": {"1"}}, "auto")
+	gen := plain[0]["handle"].([]interface{})[0].(map[string]interface{})["body"].(string)
+	if got, want := strings.TrimSpace(gen), `{"message":"Request blocked"}`; got != want {
+		t.Fatalf("空 JSON 档必须从页面派生消息且不含状态码：got %s, want %s", got, want)
+	}
+
+	// 非 HTML 主档保持单条（内容本身机器可读）
+	single := buildDualBlockPageRoutes(base, `{"x":1}`, "ignored", "application/json; charset=utf-8", 403, nil, "auto")
+	if len(single) != 1 {
+		t.Fatalf("JSON 主档页面不应再加 HTML 分支，实际 %d 条", len(single))
 	}
 }

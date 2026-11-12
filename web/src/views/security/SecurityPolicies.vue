@@ -790,7 +790,7 @@
                         v-for="(entry, idx) in row.chain"
                         :key="entry.policyId ?? 'self'"
                         class="binding-order-chip"
-                        :class="{ 'is-self': entry.isSelf, 'is-disabled': !entry.enabled, 'is-trust': isStage0ChainEntry(entry) }"
+                        :class="['stage-' + chainEntryStageKey(entry), { 'is-self': entry.isSelf, 'is-disabled': !entry.enabled }]"
                       >{{ chainChipText(entry, idx) }}</span>
                     </div>
                   </div>
@@ -844,6 +844,15 @@
               <input type="text" id="stage2-block-status-static" aria-hidden="true" tabindex="-1" autocomplete="off" style="display:none">
               <el-tag type="warning" size="small" effect="plain">429 Too Many Requests</el-tag>
               <span class="form-tip-inline">{{ t('app.security.policies.bp.statusTipStage2') }}</span>
+            </el-form-item>
+            <!-- 策略级响应方式：拦截页设置恒为双档（HTML + JSON），具体返回哪种在这里选。 -->
+            <el-form-item :label="t('app.security.policies.bp.responseLabel')">
+              <el-radio-group v-model="form.block_response_mode" :disabled="form.block_page_id === 0">
+                <el-radio-button value="auto">{{ t('app.security.policies.bp.responseAuto') }}</el-radio-button>
+                <el-radio-button value="html">{{ t('app.security.policies.bp.responseHtml') }}</el-radio-button>
+                <el-radio-button value="json">{{ t('app.security.policies.bp.responseJson') }}</el-radio-button>
+              </el-radio-group>
+              <div class="form-tip-line">{{ t('app.security.policies.bp.responseTip') }}</div>
             </el-form-item>
           </el-form>
         </div>
@@ -957,7 +966,7 @@
                     v-for="(entry, idx) in pickerMeta(rule).chain"
                     :key="entry.policyId ?? 'self'"
                     class="binding-order-chip"
-                    :class="{ 'is-self': entry.isSelf, 'is-disabled': !entry.enabled, 'is-trust': isStage0ChainEntry(entry) }"
+                    :class="['stage-' + chainEntryStageKey(entry), { 'is-self': entry.isSelf, 'is-disabled': !entry.enabled }]"
                   >{{ chainChipText(entry, idx) }}</span>
                   <!-- 阶段 0 排位语义：信任 IP 在任何策略判定前直达上游/进入检测，与绑定顺序无关 -->
                   <span v-if="editorPolicyType !== 'stage0'" class="rule-binding-landing">{{ t('app.security.policies.picker.selfPos', { n: pickerMeta(rule).selfPos }) }}</span>
@@ -1065,7 +1074,7 @@ import { activateOnce } from '@/utils/keyboardActivate'
 
 const { t, locale } = useI18n()
 
-interface PolicyDetail { id: number; name: string; description: string; mode: string; anomaly_threshold: number; ip_acl_mode: string; ip_acl_list: string; ip_acl_enabled: boolean; ip_whitelist: string; ip_whitelist_enabled?: boolean; ip_blacklist?: string; ip_acl_list_refs?: string; ip_whitelist_refs?: string; rate_limit_enabled: boolean; rate_limit_rps: number; rate_limit_burst: number; crs_rule_groups: string; crs_excluded_rules: string; custom_rules: string; block_page_id: number; block_status_code: number; enabled: boolean; updated_at: string; geoip_mode?: string; geoip_countries?: string; geoip_crawler_exempt?: boolean; geoip_crawler_engines?: string; waf_check_response?: boolean; log_request_body?: boolean; trust_detection?: boolean; human_verify_mode?: string; human_verify_type?: string; human_verify_ttl?: number; human_exempt_paths?: string[]; cc_detect_enabled?: boolean; cc_rps_limit?: number; cc_rps_window?: number; cc_4xx_ratio?: number; cc_session_anomaly?: boolean; cc_session_ua_threshold?: number }
+interface PolicyDetail { id: number; name: string; description: string; mode: string; anomaly_threshold: number; ip_acl_mode: string; ip_acl_list: string; ip_acl_enabled: boolean; ip_whitelist: string; ip_whitelist_enabled?: boolean; ip_blacklist?: string; ip_acl_list_refs?: string; ip_whitelist_refs?: string; rate_limit_enabled: boolean; rate_limit_rps: number; rate_limit_burst: number; crs_rule_groups: string; crs_excluded_rules: string; custom_rules: string; block_page_id: number; block_status_code: number; block_response_mode?: string; enabled: boolean; updated_at: string; geoip_mode?: string; geoip_countries?: string; geoip_crawler_exempt?: boolean; geoip_crawler_engines?: string; waf_check_response?: boolean; log_request_body?: boolean; trust_detection?: boolean; human_verify_mode?: string; human_verify_type?: string; human_verify_ttl?: number; human_exempt_paths?: string[]; cc_detect_enabled?: boolean; cc_rps_limit?: number; cc_rps_window?: number; cc_4xx_ratio?: number; cc_session_anomaly?: boolean; cc_session_ua_threshold?: number }
 // 规则行消费面（关联规则行内执行序/投影数据源；协议与域名等展示字段）
 interface Rule { caddy_id: string; name: string; domain: string; listen_port: number; protocol: string }
 // v2.2.0 多策略绑定：/security/bindings 的值从单 BindingInfo 改为数组（rank 序=执行序；
@@ -1268,20 +1277,23 @@ const stage3ChipOn = (row: PolicySummary): boolean => {
 // 内容摘要列（按类型一行摘要）：stage0=信任条数+模式、stage1=模式+ACL+GeoIP、
 // stage2=限流值、stage3=WAF 模式+自定义+CRS 组、mixed=混合（任务 2）
 
-// 阶段 0 排位语义（浏览器实证修正）：阶段 0 不在评估链内，绑定链上的 stage0 条目
-// 不显示序数——本策略/其他 stage0 策略统一标注「阶段 0·拦截判定前优先生效」；
-// stage1/2/3/mixed 保持「N.名称」序数（评估序=绑定链 rank 序）
-const isStage0ChainEntry = (entry: ChainEntry): boolean => {
-  if (entry.isSelf) return editorPolicyType.value === 'stage0'
-  const policy = policies.value.find((p) => p.id === entry.policyId)
-  return policy ? policyTypeOf(policy) === 'stage0' : false
+// 关联规则链条目：一律按绑定链顺序显示「N.名称」（2026-11-12 用户裁定：
+// 不再为阶段 0 使用特殊措辞；阶段语义由颜色区分，本策略加粗）。
+const chainEntryStageKey = (entry: ChainEntry): string => {
+  const raw = entry.isSelf
+    ? normalizePolicyType(editorPolicyType.value)
+    : (() => {
+        const policy = policies.value.find((p) => p.id === entry.policyId)
+        return policy ? normalizePolicyType(policyTypeOf(policy)) : 'mixed'
+      })()
+  // CSS 选择器用 stage-0…stage-3 / stage-mixed（raw 形如 stage0）。
+  return raw.startsWith('stage') ? raw.slice('stage'.length) : raw
 }
 // WAF 模式展示词单源已上移 utils/securityStages（wafModeLabel/WAF_MODE_TEXT）——列表摘要、
 // 只读详情分段、触发详情策略行、流程投影四处同词（此前文件内两份 + 跨文件一份
 // 措辞互斥：拦截/阻断、仅自定义/仅自定义规则）。
 const chainChipText = (entry: ChainEntry, index: number): string => {
   const name = entry.isSelf ? t('app.security.policies.common.selfPolicy') : entry.name
-  if (isStage0ChainEntry(entry)) return t('app.security.policies.summary.stage0Precedence', { name })
   return `${index + 1}.${name}`
 }
 const policySummaryLine = (row: PolicySummary): string => {
@@ -1603,6 +1615,7 @@ const viewPolicySections = computed<ViewPolicySection[]>(() => {
       rows: [
         { label: t('app.security.policies.bp.pageLabel'), value: d.block_page_id > 0
           ? t('app.security.policies.view.pageWithStatus', { name: page?.name ?? t('app.security.policies.common.pageNum', { n: d.block_page_id }), code: d.block_status_code || 403 })
+            + ' · ' + t(`app.security.policies.bp.response${d.block_response_mode === 'html' ? 'Html' : d.block_response_mode === 'json' ? 'Json' : 'Auto'}`)
           : d.rate_limit_enabled
             ? t('app.security.policies.view.noPageRateLimit')
             : t('app.security.policies.bp.noPageDefault') },
@@ -1883,7 +1896,7 @@ const pickerProtoFilter = ref<'all' | 'http' | 'tcp'>('http')
 const pickerPage = ref(1)
 const pickerSelected = ref<string[]>([])
 const PICKER_PAGE_SIZE = 20
-const defaultForm = () => ({ name: '', description: '', enabled: true, mode: 'off', anomaly_threshold: 5, ip_acl_enabled: false, ip_acl_mode: 'allow', rate_limit_enabled: false, rate_limit_rps: 100, rate_limit_burst: 50, block_page_id: 1, block_status_code: 403, geoip_enabled: false, geoip_mode: 'deny', geoip_crawler_exempt: false, geoip_crawler_engines: ['googlebot', 'bingbot', 'baiduspider'], waf_check_response: false, log_request_body: false, trust_detection: false, human_verify_mode: 'off', human_verify_type: 'slider', human_verify_ttl: 30, human_exempt_paths: [] as string[], cc_detect_enabled: false, cc_rps_limit: 40, cc_rps_window: 10, cc_4xx_ratio: 70, cc_session_anomaly: false, cc_session_ua_threshold: 5 })
+const defaultForm = () => ({ name: '', description: '', enabled: true, mode: 'off', anomaly_threshold: 5, ip_acl_enabled: false, ip_acl_mode: 'allow', rate_limit_enabled: false, rate_limit_rps: 100, rate_limit_burst: 50, block_page_id: 1, block_status_code: 403, block_response_mode: 'auto', geoip_enabled: false, geoip_mode: 'deny', geoip_crawler_exempt: false, geoip_crawler_engines: ['googlebot', 'bingbot', 'baiduspider'], waf_check_response: false, log_request_body: false, trust_detection: false, human_verify_mode: 'off', human_verify_type: 'slider', human_verify_ttl: 30, human_exempt_paths: [] as string[], cc_detect_enabled: false, cc_rps_limit: 40, cc_rps_window: 10, cc_4xx_ratio: 70, cc_session_anomaly: false, cc_session_ua_threshold: 5 })
 
 const form = ref(defaultForm())
 // v2.3.8 爬虫豁免引擎注册表（geoipnames 单源镜像；ID 稳定——后端白名单校验）
@@ -3393,6 +3406,7 @@ async function openDialog(row?: PolicySummary) {
         rate_limit_burst: d.rate_limit_burst,
         block_page_id: d.block_page_id,
         block_status_code: d.block_status_code || 403,
+        block_response_mode: d.block_response_mode || 'auto',
         geoip_enabled: false,
         geoip_mode: d.geoip_mode ?? 'off',
         geoip_crawler_exempt: d.geoip_crawler_exempt === true,
@@ -3642,6 +3656,7 @@ const handleSave = async () => {
       customRuleIds: selectedCustomRules.value,
       blockPageId: form.value.block_page_id,
       blockStatusCode: form.value.block_status_code,
+      blockResponseMode: form.value.block_response_mode,
       geoipCountries: geoipCountries.value,
       geoipEnabled: form.value.geoip_enabled,
       geoipMode: form.value.geoip_mode,
@@ -4006,9 +4021,14 @@ html[data-locale='en'] .wizard-steps :deep(.el-step__title) { font-size: 14px; }
    单条缩进规则（宽度随容器自适应，无第二种弹框样式）。 */
 
 .binding-order-chip { font-size: 12px; padding: 0 6px; border-radius: 10px; background: #f3f4f6; color: #4b5563; border: 1px solid #e5e7eb; display: inline-flex; align-items: center; line-height: 18px; vertical-align: middle; }
-.binding-order-chip.is-self { background: #eff6ff; color: #1d4ed8; border-color: #bfdbfe; font-weight: 500; }
+.binding-order-chip.is-self { font-weight: 700; box-shadow: inset 0 0 0 1px currentColor; }
 .binding-order-chip.is-disabled { opacity: 0.55; text-decoration: line-through; }
-.binding-order-chip.is-trust { background: #ecfdf5; color: #047857; border-color: #a7f3d0; font-weight: 500; }
+/* 同阶段同色（阶段语义靠颜色区分，文案只保留序号）。 */
+.binding-order-chip.stage-0 { background: #ecfdf5; color: #047857; border-color: #a7f3d0; }
+.binding-order-chip.stage-1 { background: #eff6ff; color: #1d4ed8; border-color: #bfdbfe; }
+.binding-order-chip.stage-2 { background: #f5f3ff; color: #6d28d9; border-color: #ddd6fe; }
+.binding-order-chip.stage-3 { background: #ecfeff; color: #0e7490; border-color: #a5f3fc; }
+.binding-order-chip.stage-mixed { background: #f3f4f6; color: #4b5563; border-color: #e5e7eb; }
 
 /* 拦截页归属汇总卡（用户验收裁定：逐条重复提示收敛为主行+例外分面；
    info-note 全局规范 + tone 修饰，禁局部 hack） */

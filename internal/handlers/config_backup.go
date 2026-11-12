@@ -522,7 +522,7 @@ var backupTableNullDefaults = map[string]map[string]any{
 		"ip_whitelist": "[]", "ip_whitelist_enabled": int64(1), "ip_blacklist": "[]",
 		"rate_limit_enabled": int64(0), "rate_limit_rps": int64(0), "rate_limit_burst": int64(0),
 		"crs_rule_groups": "[]", "crs_excluded_rules": "[]", "custom_rules": "[]",
-		"block_page_id": int64(0), "block_status_code": int64(0), "enabled": int64(0),
+		"block_page_id": int64(0), "block_status_code": int64(0), "block_response_mode": "auto", "enabled": int64(0),
 		"updated_by": int64(0), "created_at": "", "updated_at": "",
 		"geoip_countries": "[]", "geoip_mode": "deny", "waf_check_response": int64(0), "policy_type": "", "trust_detection": int64(0),
 		"log_request_body": int64(0), "geoip_crawler_exempt": int64(0), "geoip_crawler_engines": "[]",
@@ -537,7 +537,7 @@ var backupTableNullDefaults = map[string]map[string]any{
 		"enabled": int64(1), "updated_by": int64(0), "created_at": "", "updated_at": "",
 	},
 	"security_block_pages": {
-		"description": "", "content": "", "content_type": "text/html; charset=utf-8", "is_default": int64(0),
+		"description": "", "content": "", "json_content": "", "content_type": "text/html; charset=utf-8", "is_default": int64(0),
 		"created_by": int64(0), "created_at": "", "updated_by": int64(0), "updated_at": "",
 	},
 	// v2.3.0 security_ip_lists：默认值与集群 dump 侧 COALESCE 口径逐列对齐

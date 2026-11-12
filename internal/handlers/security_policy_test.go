@@ -1539,3 +1539,49 @@ func TestUpdateSecurityPolicy_zeroesHumanFieldsOutsideStage3(t *testing.T) {
 		t.Fatalf("切回 stage2(CC) 后人机模式=%q，应 auto", mode)
 	}
 }
+
+// 策略级拦截响应方式（auto|html|json）：创建落库、非法值归一、更新可改。
+// 拦截页恒为双档（HTML+JSON），实际返回由本字段决定——字段静默丢弃会让
+// 用户在策略里选的 JSON 永不生效。
+func TestSecurityPolicy_blockResponseModeRoundTrip(t *testing.T) {
+	setupSecurityPolicyTestDB(t)
+	router := newSecurityRouter(t)
+
+	id := createTestPolicy(t, router, map[string]any{
+		"name":                "响应方式-json",
+		"policy_type":         "stage1",
+		"block_page_id":       1,
+		"block_response_mode": "json",
+	})
+	var mode string
+	if err := db.DB.QueryRow("SELECT block_response_mode FROM security_policies WHERE id=?", id).Scan(&mode); err != nil {
+		t.Fatalf("read back block_response_mode: %v", err)
+	}
+	if mode != "json" {
+		t.Fatalf("block_response_mode=%q, want json", mode)
+	}
+
+	invalidID := createTestPolicy(t, router, map[string]any{
+		"name":                "响应方式-非法",
+		"policy_type":         "stage1",
+		"block_page_id":       1,
+		"block_response_mode": "xml",
+	})
+	if err := db.DB.QueryRow("SELECT block_response_mode FROM security_policies WHERE id=?", invalidID).Scan(&mode); err != nil {
+		t.Fatalf("read back invalid mode: %v", err)
+	}
+	if mode != "auto" {
+		t.Fatalf("非法响应方式应归一 auto，got %q", mode)
+	}
+
+	recorder := putJSON(t, router, fmt.Sprintf("/security/policies/%d", id), map[string]any{"block_response_mode": "html"})
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("update mode status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if err := db.DB.QueryRow("SELECT block_response_mode FROM security_policies WHERE id=?", id).Scan(&mode); err != nil {
+		t.Fatalf("read back updated mode: %v", err)
+	}
+	if mode != "html" {
+		t.Fatalf("更新后 block_response_mode=%q, want html", mode)
+	}
+}

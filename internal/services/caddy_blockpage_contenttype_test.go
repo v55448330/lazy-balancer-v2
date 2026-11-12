@@ -28,7 +28,8 @@ func errorRouteContentType(t *testing.T, route map[string]interface{}) string {
 }
 
 func TestBuildBlockPageErrorRoute_usesPageContentType(t *testing.T) {
-	route := buildBlockPageErrorRoute("lb_ct", []string{"ct.example.test"}, blockPageTestCtx())
+	routes := buildBlockPageErrorRoute("lb_ct", []string{"ct.example.test"}, blockPageTestCtx())
+	route := routes[len(routes)-1]
 	if route == nil {
 		t.Fatal("兜底路由未生成")
 	}
@@ -38,7 +39,8 @@ func TestBuildBlockPageErrorRoute_usesPageContentType(t *testing.T) {
 }
 
 func TestBuildRateLimitErrorRoute_usesPageContentType(t *testing.T) {
-	route := buildRateLimitErrorRoute("lb_ct", []string{"ct.example.test"}, blockPageTestCtx())
+	routes := buildRateLimitErrorRoute("lb_ct", []string{"ct.example.test"}, blockPageTestCtx())
+	route := routes[len(routes)-1]
 	if route == nil {
 		t.Fatal("429 路由未生成")
 	}
@@ -48,7 +50,8 @@ func TestBuildRateLimitErrorRoute_usesPageContentType(t *testing.T) {
 }
 
 func TestBuildBlockPageAttributionRoute_usesPageContentType(t *testing.T) {
-	route := buildBlockPageAttributionRoute(483, nil, "{\"error\":\"blocked\"}", 403, "text/plain; charset=utf-8")
+	routes := buildBlockPageAttributionRoute(483, nil, "{\"error\":\"blocked\"}", "", 403, "text/plain; charset=utf-8", "auto")
+	route := routes[len(routes)-1]
 	if got := errorRouteContentType(t, route); got != "text/plain; charset=utf-8" {
 		t.Fatalf("Content-Type=%q, want text/plain; charset=utf-8", got)
 	}
@@ -57,7 +60,8 @@ func TestBuildBlockPageAttributionRoute_usesPageContentType(t *testing.T) {
 func TestBuildBlockPageErrorRoute_emptyTypeFallsBackHTML(t *testing.T) {
 	ctx := blockPageTestCtx()
 	ctx.blockPageTypeByID = map[int]string{}
-	route := buildBlockPageErrorRoute("lb_ct", []string{"ct.example.test"}, ctx)
+	routes := buildBlockPageErrorRoute("lb_ct", []string{"ct.example.test"}, ctx)
+	route := routes[len(routes)-1]
 	if got := errorRouteContentType(t, route); got != "text/html; charset=utf-8" {
 		t.Fatalf("Content-Type=%q, want 空类型回退 text/html; charset=utf-8", got)
 	}

@@ -1705,8 +1705,8 @@ func TestGenerateCaddyConfig_rendersBlockPageErrorRoute_whenBoundPolicyHasBlockP
 	}
 	errorRoutes, _ := serverErrorRoutes(t, generated, "http_8080")
 	// 拦截页归因后：403 兜底（host 限定）+ 483 归因（该策略合成码，无 host）
-	if len(errorRoutes) != 2 {
-		t.Fatalf("want 2 error routes (403 fallback + 483 attribution), got %#v", errorRoutes)
+	if len(errorRoutes) != 8 {
+		t.Fatalf("want 8 error routes (3 JSON 变体 + HTML × [403 fallback + 483 attribution]), got %#v", errorRoutes)
 	}
 	var route, attrRoute map[string]interface{}
 	for _, routeValue := range errorRoutes {
@@ -1766,8 +1766,8 @@ func TestGenerateCaddyConfig_rendersOneErrorRoutePerRule_whenServerHasMultipleBl
 	}
 	errorRoutes, _ := serverErrorRoutes(t, generated, "http_8080")
 	// 每规则 1 条 403 兜底（host 限定）+ 每策略 1 条归因（483/484，无 host）
-	if len(errorRoutes) != 4 {
-		t.Fatalf("want 4 error routes (2 fallback + 2 attribution), got %#v", errorRoutes)
+	if len(errorRoutes) != 16 {
+		t.Fatalf("want 16 error routes (3 JSON 变体 + HTML × [2 fallback + 2 attribution]), got %#v", errorRoutes)
 	}
 	byHost := make(map[string]map[string]interface{}, len(errorRoutes))
 	bySynthetic := make(map[string]map[string]interface{}, 2)
@@ -1863,8 +1863,8 @@ func TestGenerateCaddyConfig_blockPageErrorRoute_usesFirstBoundPolicy(t *testing
 	}
 	errorRoutes, _ := serverErrorRoutes(t, generated, "http_8080")
 	// 1 条 403 兜底（首绑定=older）+ 2 条归因（483=older, 484=newer）
-	if len(errorRoutes) != 3 {
-		t.Fatalf("want 3 error routes (fallback + 2 attribution), got %#v", errorRoutes)
+	if len(errorRoutes) != 12 {
+		t.Fatalf("want 12 error routes (3 JSON 变体 + HTML × [fallback + 2 attribution]), got %#v", errorRoutes)
 	}
 	var fallback map[string]interface{}
 	bySynthetic := make(map[string]map[string]interface{}, 2)
@@ -1972,8 +1972,12 @@ func findRateLimitErrorRoute(t *testing.T, generated map[string]interface{}) map
 	errorRoutes, _ := serverErrorRoutes(t, generated, "http_8080")
 	for _, routeValue := range errorRoutes {
 		route := mustMap(t, routeValue, "error route")
-		if expr, ok := routeMatcher(t, route)["expression"].(string); ok && expr == "{http.error.status_code} == 429" {
-			return route
+		matcher := routeMatcher(t, route)
+		// 双档：JSON 变体带 header matcher；HTML 主档是最后一条（无 header）。
+		if expr, ok := matcher["expression"].(string); ok && expr == "{http.error.status_code} == 429" {
+			if _, hasHeader := matcher["header"]; !hasHeader {
+				return route
+			}
 		}
 	}
 	t.Fatalf("rate-limit error route (matcher == 429) not found: %#v", errorRoutes)

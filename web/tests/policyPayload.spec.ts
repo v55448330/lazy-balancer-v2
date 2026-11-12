@@ -43,6 +43,7 @@ const base = (over: Partial<PolicyPayloadInput> = {}): PolicyPayloadInput => ({
   crsExcludedRules: [],
   customRuleIds: [],
   blockPageId: 0,
+  blockResponseMode: 'auto',
   blockStatusCode: 403,
   geoipCountries: [],
   geoipEnabled: false,

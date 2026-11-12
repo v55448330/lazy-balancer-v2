@@ -1,6 +1,7 @@
 package lbhuman
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"sync/atomic"
@@ -26,7 +27,8 @@ func (h *HumanHandler) serveJSChallenge(w http.ResponseWriter, r *http.Request, 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusOK) // 挑战页=200（不是错误），与拦截页（4xx）语义区分
-	_, _ = fmt.Fprintf(w, jsChallengePage, token, r.URL.RequestURI())
+	redirectJSON, _ := json.Marshal(r.URL.RequestURI())
+	_, _ = fmt.Fprintf(w, jsChallengePage, token, string(redirectJSON))
 }
 
 // serveJSVerify 校验 PoW 答案 → 通过发签名 cookie → 前端跳转原 URL。
@@ -100,7 +102,7 @@ const jsChallengePage = `<!DOCTYPE html>
 <script>
 (function () {
   var token = "%s";
-  var redirect = "%s";
+  var redirect = %s;
   var statusEl = document.getElementById("status");
   var spinner = document.getElementById("spinner");
   var difficulty = 4;

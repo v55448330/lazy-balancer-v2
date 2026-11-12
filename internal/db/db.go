@@ -889,6 +889,7 @@ func createTables() error {
 	custom_rules TEXT DEFAULT '[]',
 	block_page_id INTEGER DEFAULT 0,
 	block_status_code INTEGER DEFAULT 0,
+	block_response_mode TEXT DEFAULT 'auto',
 	enabled BOOLEAN DEFAULT TRUE,
 		updated_by INTEGER DEFAULT 0,
 		created_at DATETIME DEFAULT (datetime('now')),
@@ -1181,6 +1182,7 @@ var newColumnsRegistry = map[string]string{
 	// 统一任务引擎：手动触发操作者归因列——runNow/Trigger 落
 	// 操作者，auto/startup/legacy 落空串。存量库幂等补列（ensureNewColumns）。
 	"task_runs.operator":                    "TEXT NOT NULL DEFAULT ''",
+	"security_block_pages.json_content":     "TEXT NOT NULL DEFAULT ''",
 	"security_custom_rules.updated_by":      "INTEGER DEFAULT 0",
 	"security_custom_rules.condition_logic": "TEXT NOT NULL DEFAULT 'and'",
 	"security_policies.policy_type":         "TEXT NOT NULL DEFAULT ''",
@@ -1429,6 +1431,7 @@ var newColumnsRegistry = map[string]string{
 	"security_policies.geoip_crawler_engines": "TEXT NOT NULL DEFAULT '[]'",
 	"security_policies.waf_check_response":    "INTEGER DEFAULT 0",
 	"security_policies.block_status_code":     "INTEGER DEFAULT 0",
+	"security_policies.block_response_mode":   "TEXT DEFAULT 'auto'",
 	// 策略级「记录请求体」开关（v2.2.3）：开启后该策略 handler 的审计 parts
 	// 加 C，事件落 request_body（64KB 截断）。同口径刻意可空，读路径
 	// COALESCE(...,0) 归一。
@@ -4431,6 +4434,7 @@ func migrateSecurityPoliciesNullable() error {
 			custom_rules TEXT DEFAULT '[]',
 			block_page_id INTEGER DEFAULT 0,
 			block_status_code INTEGER DEFAULT 0,
+			block_response_mode TEXT DEFAULT 'auto',
 			enabled BOOLEAN DEFAULT TRUE,
 			updated_by INTEGER DEFAULT 0,
 			created_at DATETIME DEFAULT (datetime('now')),

@@ -2,6 +2,10 @@ package lbhuman
 
 import (
 	"github.com/caddyserver/caddy/v2"
+	"github.com/caddyserver/caddy/v2/modules/caddyhttp"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -132,5 +136,59 @@ func TestExemptPaths(t *testing.T) {
 	}
 	if h.isExempt("1.2.3.4", "/admin") {
 		t.Fatal("non-exempt path must not match")
+	}
+}
+
+// 挑战请求类型分流（2026-11-12 用户裁定）：API/XHR 与非幂等请求不得拿 HTML
+// 挑战页——前者解析失败，后者重定向会丢请求体。
+func TestChallengeResponseSplitsByRequestType(t *testing.T) {
+	h := &HumanHandler{HumanConfig: HumanConfig{
+		Mode: "force", Type: "js", TTLMinutes: 30, RuleID: "lb-rt",
+		Secret: "test-secret", CCEnabled: true,
+	}}
+	next := caddyhttp.HandlerFunc(func(w http.ResponseWriter, r *http.Request) error {
+		w.WriteHeader(http.StatusOK)
+		return nil
+	})
+
+	cases := []struct {
+		name       string
+		method     string
+		headers    map[string]string
+		wantStatus int
+		wantJSON   bool
+	}{
+		{"browser navigation", http.MethodGet, map[string]string{"Accept": "text/html,application/xhtml+xml"}, http.StatusOK, false},
+		{"api accept json", http.MethodGet, map[string]string{"Accept": "application/json"}, http.StatusUnauthorized, true},
+		{"xhr header", http.MethodGet, map[string]string{"X-Requested-With": "XMLHttpRequest"}, http.StatusUnauthorized, true},
+		{"fetch cors", http.MethodGet, map[string]string{"Sec-Fetch-Mode": "cors"}, http.StatusUnauthorized, true},
+		{"post no body loss", http.MethodPost, map[string]string{"Accept": "text/html"}, http.StatusForbidden, true},
+	}
+	for _, tc := range cases {
+		req := httptest.NewRequest(tc.method, "https://example.test/path?q=1", nil)
+		for k, v := range tc.headers {
+			req.Header.Set(k, v)
+		}
+		rec := httptest.NewRecorder()
+		if err := h.ServeHTTP(rec, req, next); err != nil {
+			t.Fatalf("%s: serve: %v", tc.name, err)
+		}
+		if rec.Code != tc.wantStatus {
+			t.Fatalf("%s: status=%d, want %d (body=%s)", tc.name, rec.Code, tc.wantStatus, rec.Body.String())
+		}
+		ct := rec.Header().Get("Content-Type")
+		if tc.wantJSON {
+			if !strings.Contains(ct, "application/json") {
+				t.Fatalf("%s: content-type=%q, want JSON", tc.name, ct)
+			}
+			if rec.Header().Get("X-Human-Challenge") != "1" {
+				t.Fatalf("%s: 缺少 X-Human-Challenge 头", tc.name)
+			}
+			if !strings.Contains(rec.Body.String(), "human_challenge") {
+				t.Fatalf("%s: body=%s, want human_challenge code", tc.name, rec.Body.String())
+			}
+		} else if !strings.Contains(ct, "text/html") {
+			t.Fatalf("%s: content-type=%q, want HTML challenge page", tc.name, ct)
+		}
 	}
 }

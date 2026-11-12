@@ -355,8 +355,8 @@ func TestMultiPolicy_AttributionRoutes_PerPolicySyntheticCode(t *testing.T) {
 	}
 	errorRoutes, _ := serverErrorRoutes(t, generated, "http_8080")
 	// 2 条兜底（每规则）+ 2 条归因（483/484 各一，483 被两规则共用仍一条）
-	if len(errorRoutes) != 4 {
-		t.Fatalf("want 4 error routes (2 fallback + 2 attribution), got %d: %#v", len(errorRoutes), errorRoutes)
+	if len(errorRoutes) != 16 {
+		t.Fatalf("want 16 error routes (3 JSON 变体 + HTML × [2 fallback + 2 attribution]), got %d: %#v", len(errorRoutes), errorRoutes)
 	}
 	var fallbackHosts, attributionCodes []string
 	attributionByCode := map[string]map[string]interface{}{}
@@ -383,11 +383,12 @@ func TestMultiPolicy_AttributionRoutes_PerPolicySyntheticCode(t *testing.T) {
 			}
 		}
 	}
-	if len(fallbackHosts) != 2 {
-		t.Fatalf("want 2 host-scoped fallback routes, got %v", fallbackHosts)
+	// HTML+JSON 双档：每条逻辑路由出现两次（同 host / 同合成码）。
+	if len(fallbackHosts) != 8 {
+		t.Fatalf("want 8 host-scoped fallback routes (3 JSON + HTML × 2 hosts), got %v", fallbackHosts)
 	}
-	if len(attributionCodes) != 2 || attributionByCode["483"] == nil || attributionByCode["484"] == nil {
-		t.Fatalf("want exactly one 483 and one 484 attribution route, got %v", attributionCodes)
+	if len(attributionCodes) != 8 || attributionByCode["483"] == nil || attributionByCode["484"] == nil {
+		t.Fatalf("want 483/484 attribution routes (3 JSON + HTML), got %v", attributionCodes)
 	}
 	// 483 → p1 的页与状态码；484 → p2 的页与状态码；matcher 表达式含 interruption 消息子句
 	h483 := firstHandler(t, attributionByCode["483"])
@@ -458,7 +459,7 @@ func TestMultiPolicy_AttributionRoutes_NoPagePolicyNotLifted(t *testing.T) {
 	// 仅 1 条 403 兜底 + 1 条 483 归因（有页策略 p1）
 	generated := generateCaddyConfigFromStore(database)
 	errorRoutes, _ := serverErrorRoutes(t, generated, "http_8080")
-	if len(errorRoutes) != 2 {
-		t.Fatalf("want 2 error routes (fallback + 483 attribution), got %d: %#v", len(errorRoutes), errorRoutes)
+	if len(errorRoutes) != 8 {
+		t.Fatalf("want 8 error routes (3 JSON 变体 + HTML × [fallback + 483 attribution]), got %d: %#v", len(errorRoutes), errorRoutes)
 	}
 }

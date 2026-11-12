@@ -145,11 +145,13 @@ func TestBlockPageSelectionSkipsEmptyPagePolicy(t *testing.T) {
 		blockPageByID:     map[int]string{20: "later-page"},
 		blockPageTypeByID: map[int]string{},
 	}
-	assertPage := func(t *testing.T, route map[string]interface{}, wantStatus interface{}) {
+	assertPage := func(t *testing.T, routes []map[string]interface{}, wantStatus interface{}) {
 		t.Helper()
-		if route == nil {
+		if len(routes) == 0 {
 			t.Fatal("兜底路由未生成")
 		}
+		// 双档：HTML 主档是最后一条（JSON 变体在前）。
+		route := routes[len(routes)-1]
 		handle := route["handle"].([]interface{})[0].(map[string]interface{})
 		if handle["body"] != "later-page" {
 			t.Fatalf("body=%v, want later-page（空内容页不得遮蔽后续有效页）", handle["body"])

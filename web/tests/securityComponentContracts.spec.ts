@@ -76,3 +76,30 @@ test('安全总览今日计数 tooltip 仅拦截列保留（同一计算文案�
   assert.equal((page.match(/t\('app\.security\.overview\.status\.tipReserved'\)/g) ?? []).length, 1, '完整口径文案只能保留一份')
   assert.ok(code('src/locales/zh/security.ts').includes('总量含私网/保留地址事件'), '完整口径原文必须在 zh 母本词条中')
 })
+
+test('拦截页恒为双档：无响应模式单选，JSON 页签常驻且可高亮编辑', () => {
+  const page = code('src/views/security/SecurityBlockPages.vue')
+  assert.doesNotMatch(page, /bodyMode|singleContentType|modeSingle|dualModeTip/, '旧单档/响应模式选择必须移除')
+  assert.match(page, /<el-tab-pane :label="t\('app.security.blockPages.dialog.labelJson'\)" name="json">/, 'JSON 页签不得再受单/双档条件控制')
+  assert.match(page, /<CodeEditor[^>]*v-model="form\.json_content"[^>]*language="json"/, 'JSON 输入必须使用 json 高亮编辑器')
+  assert.match(page, /resolvedJson\(row\.json_content \|\| '', content\)/, '预览回退必须从页面 HTML 派生，不得写死文案')
+})
+
+test('关联规则链条目：统一序号+阶段色类，不再出现阶段 0 特判文案', () => {
+  const page = code('src/views/security/SecurityPolicies.vue')
+  assert.doesNotMatch(page, /stage0Precedence|isStage0ChainEntry/, '阶段 0 特殊措辞/判定必须移除')
+  assert.match(page, /return `\$\{index \+ 1\}\.\$\{name\}`/, '链条目必须统一按序号展示')
+  assert.match(page, /\['stage-' \+ chainEntryStageKey\(entry\)/, '每条目必须带阶段色类')
+  for (const cls of ['stage-0', 'stage-1', 'stage-2', 'stage-3']) {
+    assert.ok(page.includes(`.binding-order-chip.${cls} {`), `${cls} 必须定义独立颜色`)
+  }
+  assert.match(page, /\.binding-order-chip\.is-self \{ font-weight: 700;/, '本策略必须加粗')
+})
+
+test('安全策略可选拦截响应方式（auto/html/json）', () => {
+  const page = code('src/views/security/SecurityPolicies.vue')
+  assert.match(page, /v-model="form\.block_response_mode"/)
+  assert.match(page, /value="auto"[\s\S]*value="html"[\s\S]*value="json"/)
+  const payload = code('src/utils/policyPayload.ts')
+  assert.match(payload, /block_response_mode: input\.blockResponseMode/)
+})

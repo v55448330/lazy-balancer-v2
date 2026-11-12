@@ -247,3 +247,72 @@ func TestValidateBlockPagePayload_sharedContract(t *testing.T) {
 		})
 	}
 }
+
+// 响应模板双档（2026-11-12 用户裁定）：拦截页支持 HTML + JSON 两档——
+// 创建/列表/更新全链路必须保留 json_content（编辑器唯一数据源；丢失即
+// 「查看→保存」把 API 响应体写掉）。
+func TestSecurityBlockPage_jsonContentRoundTrip(t *testing.T) {
+	setupSecurityPolicyTestDB(t)
+	router := newBlockPageContentTypeRouter(t)
+	create := map[string]any{
+		"name": "双档页", "content": "<html>denied</html>",
+		"json_content": `{"error":"denied-by-page"}`,
+	}
+	rec := postJSON(t, router, "/security/block-pages", create)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("create status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var created struct {
+		Data struct {
+			ID int `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	id := created.Data.ID
+
+	var embedded string
+	if err := db.DB.QueryRow(`SELECT COALESCE(json_content,'') FROM security_block_pages WHERE id=?`, id).Scan(&embedded); err != nil {
+		t.Fatal(err)
+	}
+	if embedded != `{"error":"denied-by-page"}` {
+		t.Fatalf("落库 json_content=%q", embedded)
+	}
+
+	// 列表回传（列表是编辑器唯一数据源）
+	listRec := getRequest(t, router, "/security/block-pages")
+	var listResp struct {
+		Data []struct {
+			ID          int    `json:"id"`
+			JSONContent string `json:"json_content"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(listRec.Body.Bytes(), &listResp); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, p := range listResp.Data {
+		if p.ID == id {
+			found = true
+			if p.JSONContent != `{"error":"denied-by-page"}` {
+				t.Fatalf("列表 json_content=%q", p.JSONContent)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("列表未返回新建页面")
+	}
+
+	// 更新可清空 JSON 档（指针合并语义：显式空串才清空）
+	putRec := putJSON(t, router, fmt.Sprintf("/security/block-pages/%d", id), map[string]any{"json_content": ""})
+	if putRec.Code != http.StatusOK {
+		t.Fatalf("update status=%d body=%s", putRec.Code, putRec.Body.String())
+	}
+	if err := db.DB.QueryRow(`SELECT COALESCE(json_content,'') FROM security_block_pages WHERE id=?`, id).Scan(&embedded); err != nil {
+		t.Fatal(err)
+	}
+	if embedded != "" {
+		t.Fatalf("清空后 json_content=%q", embedded)
+	}
+}

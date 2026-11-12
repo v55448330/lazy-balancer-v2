@@ -360,8 +360,8 @@ func TestGenerateCaddyConfig_geoip_blockPageServesConfiguredStatus(t *testing.T)
 		t.Fatalf("generation failed: %s", message)
 	}
 	errorRoutes, _ := serverErrorRoutes(t, generated, "http_8080")
-	if len(errorRoutes) != 2 {
-		t.Fatalf("want 2 error routes (403 fallback + 483 attribution), got %#v", errorRoutes)
+	if len(errorRoutes) != 8 {
+		t.Fatalf("want 8 error routes (3 JSON 变体 + HTML × [403 fallback + 483 attribution]), got %#v", errorRoutes)
 	}
 	var fallback, attribution map[string]interface{}
 	for _, routeValue := range errorRoutes {

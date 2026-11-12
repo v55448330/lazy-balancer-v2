@@ -80,6 +80,7 @@ var antiFallbackScanTargets = map[string][]string{
 		"buildTCPServer",
 		"buildRateLimitHandler",
 		"buildBlockPageAttributionRoute",
+		"defaultBlockPageJSONMessage",
 		"buildBlockPageErrorRoute",
 		"buildStaticResponseHandler",
 		// 生产读路径（规则 TLS 就绪/策略投影）与发射面（日志 encoder、受信代理
@@ -114,6 +115,9 @@ var antiFallbackScanTargets = map[string][]string{
 // antiFallbackAllowlist 允许列表：函数名 → 赋值形态 → Ruling。
 // 类型②省略型/范围外字段的现行兜底，逐条披露于批 1+2/批 3 Ruling 报告。
 var antiFallbackAllowlist = map[string]map[string]string{
+	"defaultBlockPageJSONMessage": {
+		`msg = "Request blocked"`: "页面 HTML 无 <title> 时的 JSON 默认消息（非 DB 列兜底；页面正文唯一的可读消息源缺失）——Ruling 2026-11-12",
+	},
 	"getHumanSecret": {
 		`return ""`: "cookie 签名密钥缺失（DB 不可达/生成失败）→ 空串，buildHumanHandler 据此跳过 lb_human 渲染（fail-visible，见 services 日志）——Ruling 2026-11-12",
 	},

@@ -179,6 +179,8 @@ func TestApplySnapshot_securityPoliciesEverySchemaColumnRoundTrip(t *testing.T) 
 			expected[column] = "2026-01-02 03:04:05"
 		case column == "block_status_code":
 			expected[column] = 403
+		case column == "block_response_mode":
+			expected[column] = "json"
 		case column == "enabled" || column == "ip_whitelist_enabled":
 			expected[column] = 0
 		case jsonColumns[column]:

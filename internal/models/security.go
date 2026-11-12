@@ -167,6 +167,7 @@ type SecurityPolicy struct {
 	CustomRules         json.RawMessage     `json:"custom_rules"`
 	BlockPageID         int                 `json:"block_page_id"`
 	BlockStatusCode     int                 `json:"block_status_code"`
+	BlockResponseMode   string              `json:"block_response_mode"`
 	Enabled             bool                `json:"enabled"`
 	UpdatedBy           int                 `json:"updated_by"`
 	CreatedAt           string              `json:"created_at"`
@@ -306,6 +307,7 @@ type CreateSecurityPolicyRequest struct {
 	CustomRules         string `json:"custom_rules"`
 	BlockPageID         int    `json:"block_page_id"`
 	BlockStatusCode     int    `json:"block_status_code"`
+	BlockResponseMode   string `json:"block_response_mode"`
 	Enabled             *bool  `json:"enabled"`
 	GeoIPCountries      string `json:"geoip_countries"`
 	GeoIPMode           string `json:"geoip_mode"`
@@ -353,6 +355,7 @@ type UpdateSecurityPolicyRequest struct {
 	CustomRules         *string `json:"custom_rules"`
 	BlockPageID         *int    `json:"block_page_id"`
 	BlockStatusCode     *int    `json:"block_status_code"`
+	BlockResponseMode   *string `json:"block_response_mode"`
 	Enabled             *bool   `json:"enabled"`
 	GeoIPCountries      *string `json:"geoip_countries"`
 	GeoIPMode           *string `json:"geoip_mode"`
@@ -672,6 +675,10 @@ type SecurityBlockPage struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
 	Content     string `json:"content"`
+	// JSONContent 是同一页面的 API 变体响应体（2026-11-12 用户裁定：
+	// 拦截页支持 HTML + JSON 双档——文档导航返回 HTML，API/XHR 返回 JSON）。
+	// 空串 = 引擎按状态码生成最小 JSON（{code,message}），不阻断 API 客户端。
+	JSONContent string `json:"json_content"`
 	// ContentType 拦截响应的内容类型，可配置（2026-09-25 用户裁定）；
 	// 白名单见 BlockPageContentTypeWhitelist，空值按 DefaultBlockPageContentType 归一。
 	ContentType string `json:"content_type"`

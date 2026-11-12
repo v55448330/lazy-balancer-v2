@@ -52,6 +52,7 @@ var stageZeroMatrixFields = []string{
 	"geoip_crawler_engines",
 	"block_page_id",
 	"block_status_code",
+	"block_response_mode",
 	"trust_detection",
 }
 
@@ -257,6 +258,7 @@ func TestStageZeroMatrix_keepsInStageFields(t *testing.T) {
 	}{
 		{models.PolicyTypeStage0, "trust_detection", false},
 		{models.PolicyTypeStage0, "block_page_id", true},
+		{models.PolicyTypeStage0, "block_response_mode", true},
 		{models.PolicyTypeStage1, "ip_acl_list", false},
 		{models.PolicyTypeStage1, "geoip_countries", false},
 		{models.PolicyTypeStage1, "geoip_crawler_engines", false},

@@ -129,8 +129,12 @@ export default {
      "labelName": "名称",
      "placeholderName": "页面名称",
      "placeholderDesc": "页面描述",
-     "contentTypeTip": "拦截响应的 Content-Type（均 UTF-8 编码）",
      "labelContent": "内容",
+     "labelJson": "API 响应体（JSON）",
+     "tabHtml": "浏览器 · HTML",
+     "jsonPlaceholder": "留空，或粘贴一个合法的 JSON 对象（例如包含 code 与 message 字段）",
+     "jsonAutoPlaceholder": "（留空：按状态码自动生成最小 JSON）",
+     "jsonTip": "留空时按页面标题自动生成默认 JSON；不再包含状态码（由 HTTP status 表达）。实际返回 HTML 还是 JSON 由安全策略的「拦截响应」决定。",
      "editorAria": "拦截页面内容",
            "insertHumanWidget": "插入滑块验证组件",
       "humanWidgetTip": "占位符 {'{'}human_verify_widget{'}'}——人机验证挑战时替换为滑块组件（策略配置自定义挑战页后生效）",
@@ -141,6 +145,8 @@ export default {
      "save": "保存"
     },
     "preview": {
+     "tabHtml": "浏览器 · HTML",
+     "tabJson": "API · JSON",
      "title": "拦截页面预览",
      "subtitle": "在隔离沙箱中预览客户端接收的响应内容",
      "effectTitle": "页面效果",
@@ -151,6 +157,8 @@ export default {
      "plainText": "纯文本（text/plain）"
     },
     "messages": {
+     "jsonInvalid": "API 响应体不是合法 JSON，请修正后再保存",
+     "jsonTooLarge": "API 响应体超过 64KB（当前 {size}）",
      "nameRequired": "请输入页面名称",
      "contentRequired": "请输入页面内容",
      "contentTooLarge": "页面内容 {size} 超出 64KB 上限，请精简后保存",
@@ -809,6 +817,11 @@ export default {
      "statusLabel": "返回状态码",
      "statusTipDefault": "WAF、IP ACL 拦截使用此状态码；限流拦截恒为 429（便于指标单独计量）",
      "statusTipNoPage": "未选择自定义页面时状态码不生效，拦截固定返回 Caddy 默认 403；请先选择页面",
+     "responseLabel": "拦截响应",
+     "responseAuto": "自动（按请求类型）",
+     "responseHtml": "始终 HTML",
+     "responseJson": "始终 JSON",
+     "responseTip": "自动：浏览器/文档导航返回 HTML，API / XHR 请求（Accept: application/json、X-Requested-With、Sec-Fetch-Mode: cors）返回 JSON。",
      "statusTipStage2": "限流拦截恒为 429（便于指标单独计量），不可修改",
      "bindingsAttribution": "已关联 {n} 条规则：触发各策略拦截时，分别显示该策略自己配置的拦截页；未配置拦截页的策略触发时，显示兜底页（首个启用拦截页的策略{winner}）",
      "fallbackFacet": "{n} 条规则：其他未配页策略触发时，显示兜底页（首个启用拦截页的策略）",
@@ -958,8 +971,6 @@ export default {
      "rateSummary": "{rps} 次/秒 · 突发 {burst}",
      "ccChallenge": "挑战 {mode}",
      "ccSpike": "突刺 {n} 次/{sec} 秒触发",
-
-     "stage0Precedence": "{name} · 阶段 0·拦截判定前优先生效",
      "trustSummary": "信任 {n} 条 · {mode}",
      "wafMode": "WAF {mode}",
      "wafOff": "WAF 关闭"

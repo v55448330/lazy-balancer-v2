@@ -85,37 +85,42 @@
       </div>
     </el-card>
 
-    <el-dialog v-model="dialogVisible" width="min(960px, 94vw)" top="3vh" class="dialog-body-inset" :close-on-click-modal="false" :close-on-press-escape="!saving" :show-close="!saving">
+    <el-dialog v-model="dialogVisible" width="min(1080px, 96vw)" top="2vh" class="dialog-body-inset block-page-dialog" :close-on-click-modal="false" :close-on-press-escape="!saving" :show-close="!saving">
       <template #header>
         <DialogHeader :icon="Document" :title="dialogTitle" tone="warning"
           :subtitle="t('app.security.blockPages.dialog.subtitle')" />
       </template>
-      <el-form :model="form" :label-width="$flw('80px')" label-position="right" class="block-page-form" :disabled="saving">
+      <el-form :model="form" :label-width="$flw('80px')" label-position="right" class="block-page-form block-page-form--scroll" :disabled="saving">
         <el-form-item :label="t('app.security.blockPages.dialog.labelName')" required>
           <el-input v-model="form.name" :placeholder="t('app.security.blockPages.dialog.placeholderName')" :maxlength="SECURITY_NAME_MAX_RUNES" show-word-limit :readonly="isReadOnly || currentPage?.is_default || currentPage?.is_builtin || saving" />
         </el-form-item>
         <el-form-item :label="t('app.security.blockPages.table.description')">
           <el-input v-model="form.description" :placeholder="t('app.security.blockPages.dialog.placeholderDesc')" :maxlength="SECURITY_DESCRIPTION_MAX_RUNES" show-word-limit :readonly="isReadOnly || currentPage?.is_default || currentPage?.is_builtin || saving" />
         </el-form-item>
-        <el-form-item :label="t('app.security.blockPages.table.contentType')">
-          <el-select v-model="form.content_type" style="width: 320px" :disabled="isReadOnly || currentPage?.is_default || currentPage?.is_builtin || saving">
-            <el-option v-for="opt in contentTypeOptions" :key="opt.value" :value="opt.value" :label="opt.label" />
-          </el-select>
-          <span class="form-tip-inline">{{ t('app.security.blockPages.dialog.contentTypeTip') }}</span>
-        </el-form-item>
         <el-form-item :label="t('app.security.blockPages.dialog.labelContent')" class="content-form-item" for="block-content-static">
           <input type="text" id="block-content-static" aria-hidden="true" tabindex="-1" autocomplete="off" style="display:none">
-          <div v-if="!isReadOnly && !currentPage?.is_default && !currentPage?.is_builtin" class="block-widget-bar">
-            <el-button size="small" :disabled="saving" @click="insertHumanWidget">{{ t('app.security.blockPages.dialog.insertHumanWidget') }}</el-button>
-            <span class="form-tip-inline">{{ t('app.security.blockPages.dialog.humanWidgetTip') }}</span>
-          </div>
-          <div class="block-content-editor" style="width: 100%">
-            <SyntaxHighlight v-if="isReadOnly || currentPage?.is_default || currentPage?.is_builtin" :content="form.content" language="markup" height="520px" />
-            <CodeEditor v-else v-model="form.content" language="markup" height="520px" :aria-label="t('app.security.blockPages.dialog.editorAria')" :placeholder="t('app.security.blockPages.dialog.placeholderContent')" :readonly="saving" />
-          </div>
-          <div class="form-tip-line">
-            {{ (currentPage?.is_default || currentPage?.is_builtin) ? t('app.security.blockPages.dialog.contentTipReadonly') : t('app.security.blockPages.dialog.contentTipEditable') }}
-          </div>
+          <el-tabs v-model="bodyTab" class="block-page-body-tabs">
+            <el-tab-pane :label="t('app.security.blockPages.dialog.tabHtml')" name="html">
+              <div v-if="!isReadOnly && !currentPage?.is_default && !currentPage?.is_builtin" class="block-widget-bar">
+                <el-button size="small" :disabled="saving" @click="insertHumanWidget">{{ t('app.security.blockPages.dialog.insertHumanWidget') }}</el-button>
+                <span class="form-tip-inline">{{ t('app.security.blockPages.dialog.humanWidgetTip') }}</span>
+              </div>
+              <div class="block-content-editor" style="width: 100%">
+                <SyntaxHighlight v-if="isReadOnly || currentPage?.is_default || currentPage?.is_builtin" :content="form.content" language="markup" height="320px" />
+                <CodeEditor v-else v-model="form.content" language="markup" height="320px" :aria-label="t('app.security.blockPages.dialog.editorAria')" :placeholder="t('app.security.blockPages.dialog.placeholderContent')" :readonly="saving" />
+              </div>
+              <div class="form-tip-line">
+                {{ (currentPage?.is_default || currentPage?.is_builtin) ? t('app.security.blockPages.dialog.contentTipReadonly') : t('app.security.blockPages.dialog.contentTipEditable') }}
+              </div>
+            </el-tab-pane>
+            <el-tab-pane :label="t('app.security.blockPages.dialog.labelJson')" name="json">
+              <div class="block-content-editor" style="width: 100%">
+                <SyntaxHighlight v-if="isReadOnly || currentPage?.is_default || currentPage?.is_builtin" :content="resolvedJson(form.json_content, form.content)" language="json" height="220px" />
+                <CodeEditor v-else v-model="form.json_content" language="json" height="220px" :aria-label="t('app.security.blockPages.dialog.labelJson')" :placeholder="resolvedJson('', form.content)" :readonly="saving" />
+              </div>
+              <div class="form-tip-line">{{ t('app.security.blockPages.dialog.jsonTip') }}</div>
+            </el-tab-pane>
+          </el-tabs>
         </el-form-item>
 
       </el-form>
@@ -130,9 +135,18 @@
         <DialogHeader :icon="Document" :title="t('app.security.blockPages.preview.title')" :subtitle="t('app.security.blockPages.preview.subtitle')" />
       </template>
       <DialogSectionHeader :title="t('app.security.blockPages.preview.effectTitle')" />
-      <div class="dialog-panel dialog-panel--flush">
-        <iframe v-if="previewVisible && previewContent" :srcdoc="previewContent" sandbox="" :key="previewKey" style="width: 100%; aspect-ratio: 16/9; border: 0; background: #fff; display: block" />
-      </div>
+      <el-tabs v-model="previewTab" class="block-page-preview-tabs">
+        <el-tab-pane :label="t('app.security.blockPages.preview.tabHtml')" name="html">
+          <div class="dialog-panel dialog-panel--flush">
+            <iframe v-if="previewVisible && previewContent" :srcdoc="previewContent" sandbox="" :key="previewKey" style="width: 100%; aspect-ratio: 16/9; border: 0; background: #fff; display: block" />
+          </div>
+        </el-tab-pane>
+        <el-tab-pane :label="t('app.security.blockPages.preview.tabJson')" name="json">
+          <div class="dialog-panel dialog-panel--flush">
+            <SyntaxHighlight :content="previewJson" language="json" height="220px" />
+          </div>
+        </el-tab-pane>
+      </el-tabs>
     </el-dialog>
   </div>
 </template>
@@ -170,7 +184,7 @@ const { t } = useI18n()
 // 内置页名称/描述按 id 多语言显示（自定义页回退库内原文）
 const pageName = (page: BlockPage | BlockPageLike): string => builtinBlockPageLabel(page, 'name', t)
 const pageDesc = (page: BlockPage | BlockPageLike): string => builtinBlockPageLabel(page, 'desc', t)
-interface BlockPage { id: number; name: string; description: string; content: string; content_type?: string; rule_ref_count?: number; is_default: boolean; is_builtin?: boolean; updated_at: string; updated_by: number }
+interface BlockPage { id: number; name: string; description: string; content: string; json_content?: string; content_type?: string; rule_ref_count?: number; is_default: boolean; is_builtin?: boolean; updated_at: string; updated_by: number }
 
 const authStore = useAuthStore()
 const isReadOnly = computed(() => authStore.readOnlyReason !== null)
@@ -191,6 +205,8 @@ const { pagedItems: pagedPages } = useClampedPagination(pages, page, pageSize)
 const dialogVisible = ref(false)
 const previewVisible = ref(false)
 const previewContent = ref('')
+const previewJson = ref('')
+const previewTab = ref<'html' | 'json'>('html')
 const previewKey = ref(0)
 const editingId = ref<number | null>(null)
 const currentPage = ref<BlockPage | null>(null)
@@ -208,18 +224,16 @@ const contentSizes = computed(() => {
   const encoder = new TextEncoder()
   return new Map(pages.value.map((page) => [page.id, formatBytes(encoder.encode(page.content).byteLength)]))
 })
-const form = ref({ name: '', description: '', content: '', content_type: 'text/html; charset=utf-8' })
+const form = ref({ name: '', description: '', content: '', json_content: '', content_type: 'text/html; charset=utf-8' })
+// 响应模式：dual=HTML+JSON 双档（推荐）；single=兼容旧版单一内容类型。
+const bodyTab = ref<'html' | 'json'>('html')
 
 // 后端 validateBlockPagePayload 的内容上限（64<<10 字节），前端仅做同源前置门。
 const BLOCK_PAGE_CONTENT_MAX_BYTES = 64 << 10
 
 // 可选内容类型（与后端 models.BlockPageContentTypeWhitelist 白名单同口径）
-const contentTypeOptions = computed(() => [
-  { value: 'text/html; charset=utf-8', label: t('app.security.blockPages.contentTypeOptions.html') },
-  { value: 'application/json; charset=utf-8', label: 'JSON（application/json）' },
-  { value: 'application/xml; charset=utf-8', label: 'XML（application/xml）' },
-  { value: 'text/plain; charset=utf-8', label: t('app.security.blockPages.contentTypeOptions.plainText') },
-])
+
+// 单档模式只列机器可读的旧版类型（HTML 走双档，不在单档内重复出现）。
 const contentTypeLabel = (ct?: string): string => {
   if (!ct) return 'HTML'
   if (ct.includes('json')) return 'JSON'
@@ -263,11 +277,11 @@ const getUpdaterName = (userId?: number) => updaterName(users.value, userId)
 const openDialog = (row?: BlockPage) => {
   editingId.value = row?.id ?? null
   currentPage.value = row ?? null
-  if (row) {
-      form.value = { name: row.name, description: row.description, content: row.content, content_type: row.content_type || 'text/html; charset=utf-8' }
-  } else {
-      form.value = { name: '', description: '', content: '', content_type: 'text/html; charset=utf-8' }
-  }
+  form.value = row
+    ? { name: row.name, description: row.description, content: row.content, json_content: row.json_content ?? '', content_type: 'text/html; charset=utf-8' }
+    : { name: '', description: '', content: '', json_content: '', content_type: 'text/html; charset=utf-8' }
+  // 拦截页恒为双档（HTML + JSON）；实际返回哪种由安全策略的「拦截响应」决定。
+  bodyTab.value = 'html'
   dialogVisible.value = true
 }
 const handleSave = async () => {
@@ -280,11 +294,30 @@ const handleSave = async () => {
     ElMessage.warning(t('app.security.blockPages.messages.contentTooLarge', { size: formatBytes(contentBytes) }))
     return
   }
+  // API 变体（json_content）：非空必须是合法 JSON 且 ≤64KB——非法 JSON 会在
+  // 运行时直接发给 API 客户端（解析失败/静默掉错），必须在保存前拦住。
+  if (form.value.json_content.trim()) {
+    const jsonBytes = new TextEncoder().encode(form.value.json_content).byteLength
+    if (jsonBytes > BLOCK_PAGE_CONTENT_MAX_BYTES) {
+      ElMessage.warning(t('app.security.blockPages.messages.jsonTooLarge', { size: formatBytes(jsonBytes) }))
+      return
+    }
+    try { JSON.parse(form.value.json_content) } catch {
+      ElMessage.warning(t('app.security.blockPages.messages.jsonInvalid'))
+      return
+    }
+  }
+  // 提交口径：页面恒为双档，content_type 固定 text/html（JSON 走 json_content）；
+  // 旧版单档类型不再写回（用户裁定：兼容旧版单一内容不需要）。
+  const payload = {
+    ...form.value,
+    content_type: 'text/html; charset=utf-8',
+  }
   saving.value = true
   try {
     const res = editingId.value
-      ? await request.put(`/security/block-pages/${editingId.value}`, form.value)
-      : await request.post('/security/block-pages', form.value)
+      ? await request.put(`/security/block-pages/${editingId.value}`, payload)
+      : await request.post('/security/block-pages', payload)
     showSaveResult(res, t('app.security.blockPages.messages.saved'))
     dialogVisible.value = false
     await fetchData()
@@ -303,6 +336,16 @@ const handleDelete = (row: BlockPage) => {
     .finally(() => { deletingId.value = null })
 }
 
+// 未配置 JSON 时的默认响应体：从 HTML <title> 派生消息（与后端
+// defaultBlockPageJSONMessage 同口径），且不含 code——状态码由 HTTP status 表达。
+const resolvedJson = (json: string, html: string): string => {
+  const trimmed = (json || '').trim()
+  if (trimmed) return trimmed
+  const match = (html || '').match(/<title[^>]*>([\s\S]*?)<\/title>/i)
+  const title = (match?.[1] || '').replace(/<[^>]*>/g, '').trim()
+  return JSON.stringify({ message: title || 'Request blocked' }, null, 2)
+}
+
 const previewPage = (row: BlockPage) => {
   // 非 HTML 类型按源码展示——srcdoc 恒按 text/html 解析，
   // JSON/XML/纯文本直接塞入会被吞标签/压成无格式文本流，与真实响应不一致
@@ -313,6 +356,9 @@ const previewPage = (row: BlockPage) => {
     : isHtml
       ? content
       : `<pre style="white-space: pre-wrap; word-break: break-all; margin: 0; padding: 12px; font: 13px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace">${escapeHtml(content)}</pre>`
+  // API 变体预览：页面未配置时展示引擎将生成的最小 JSON（与真实回退一致）。
+  previewJson.value = resolvedJson(row.json_content || '', content)
+  previewTab.value = 'html'
   previewKey.value++
   previewVisible.value = true
 }
@@ -322,6 +368,12 @@ onMounted(fetchData)
 
 <style scoped>
 .block-content-editor { border: 1px solid #e4e7ed; overflow: hidden; }
+
+/* 弹框高度约束（2026-11-12 用户反馈：原弹框超出屏幕）：
+   表单区内滚，编辑器随标签页切换按需占用高度；弹框自身不超出视口。 */
+.block-page-form--scroll { max-height: calc(90vh - 150px); overflow-y: auto; padding-right: 6px; }
+.block-page-body-tabs { width: 100%; }
+.block-page-dialog :deep(.el-dialog__body) { max-height: calc(96vh - 120px); overflow: hidden; }
 
 /* .rules-pagination 已收敛 styles/main.css（四处逐字重复单源化） */
 

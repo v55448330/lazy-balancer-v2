@@ -461,13 +461,15 @@ func TestRenderDBTruth_RateLimitEnabledZeroRPSFailVisible(t *testing.T) {
 func TestRenderDBTruth_BlockStatusCodeZeroFollowsDefault403(t *testing.T) {
 	// 类型②省略型回归钉：0=未设置，跟随默认 403（static_response 必须显式
 	// 状态码，省略以默认值替换实现——反兜底白名单 Ruling 披露）。
-	route := buildBlockPageAttributionRoute(483, nil, "<html>bp</html>", 0, "")
+	routes := buildBlockPageAttributionRoute(483, nil, "<html>bp</html>", "", 0, "", "auto")
+	route := routes[len(routes)-1]
 	resp := route["handle"].([]interface{})[0].(map[string]interface{})
 	if resp["status_code"] != 403 {
 		t.Fatalf("block_status_code=0 must render 403 (跟随默认), got %v", resp["status_code"])
 	}
 	// 非零哨兵贯通（503=写侧白名单合法值）。
-	route = buildBlockPageAttributionRoute(483, nil, "<html>bp</html>", 503, "")
+	routes = buildBlockPageAttributionRoute(483, nil, "<html>bp</html>", "", 503, "", "auto")
+	route = routes[len(routes)-1]
 	resp = route["handle"].([]interface{})[0].(map[string]interface{})
 	if resp["status_code"] != 503 {
 		t.Fatalf("block_status_code=503 must pass through, got %v", resp["status_code"])
