@@ -40,9 +40,9 @@ func TestSliderWidgetFixedGeometryMatchesPuzzle(t *testing.T) {
 	for _, want := range []string{
 		"width:240px;max-width:100%;margin:0 auto",
 		".lb-hv-puzzle{position:relative;width:240px;height:134px",
-		`id="lbHvPiece" style="top:60px;left:0"`,
+		`id="lbHvPiece" style="top:60px;left:6px"`,
 		".lb-hv-track{position:relative;width:240px",
-		"<rect width=\"34\" height=\"34\"",
+		"<rect x=\"1\" y=\"1\" width=\"32\" height=\"32\"",
 	} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("滑块组件几何缺失: %q", want)
@@ -72,12 +72,26 @@ func TestSliderPolishInsetToleranceAndEnglishFailure(t *testing.T) {
 		t.Fatalf("滑块容差过大: %d", sliderTolerance)
 	}
 	rendered := fmt.Sprintf(sliderWidgetHTML, "", pieceSVG(), "", "")
-	for _, want := range []string{"left:2px;width:34px", "Verification failed"} {
+	for _, want := range []string{"left:2px;transform:translateY(-50%);width:34px", "Verification failed"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("滑块样式/文案缺失: %q", want)
 		}
 	}
 	if strings.Contains(rendered, "验证失败") {
 		t.Fatal("失败提示必须只保留英文")
+	}
+}
+
+func TestSliderPieceInsetAndVerticalCenter(t *testing.T) {
+	rendered := fmt.Sprintf(sliderWidgetHTML, "", pieceSVG(), "", "")
+	for _, want := range []string{
+		"top:60px;left:6px",
+		"top:50%;left:2px;transform:translateY(-50%)",
+		`pc.style.left=(cx+6)+"px"`,
+		`"&x="+(cx+6)`,
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("滑块居中/留边缺失: %q", want)
+		}
 	}
 }

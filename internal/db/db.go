@@ -411,6 +411,9 @@ func Initialize(dataDir string) (err error) {
 	if err := runMigrations(); err != nil {
 		return fmt.Errorf("failed to run migrations: %w", err)
 	}
+	if err := backfillHumanEventPolicyAttribution(); err != nil {
+		return fmt.Errorf("failed to backfill human event policy attribution: %w", err)
+	}
 	if err := migrateSyncSwitches(); err != nil {
 		return fmt.Errorf("failed to migrate sync switches: %w", err)
 	}
@@ -5888,6 +5891,85 @@ func retireRateLimitQuota() error {
 		if _, err := dropColumnIfExists("security_policies", column); err != nil {
 			return fmt.Errorf("failed to drop retired security_policies.%s: %w", column, err)
 		}
+	}
+	return nil
+}
+
+// backfillHumanEventPolicyAttribution 一次性回填历史人机挑战事件的规则/策略归属。
+// 早期 ingest-human 未写 policy_id/rule_name/policy_name，触发详情会把合法 CC
+// 挑战显示成“本次事件无策略归属”；按 rule_caddy_id 回填当时绑定的阶段 2
+// 策略。metrics_meta 标记保证只跑一次。
+func backfillHumanEventPolicyAttribution() error {
+	if MetricsDB == nil || DB == nil {
+		return nil
+	}
+	const marker = "human_event_attribution_backfill_v1"
+	var exists string
+	err := MetricsDB.QueryRow(`SELECT value FROM metrics_meta WHERE key=?`, marker).Scan(&exists)
+	if err == nil {
+		return nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	rows, err := MetricsDB.Query(`SELECT id, COALESCE(rule_caddy_id,'') FROM security_events WHERE event_type='human' AND COALESCE(policy_id,0)<=0`)
+	if err != nil {
+		return err
+	}
+	type pending struct {
+		id     int64
+		ruleID string
+	}
+	var items []pending
+	for rows.Next() {
+		var p pending
+		if err := rows.Scan(&p.id, &p.ruleID); err != nil {
+			rows.Close()
+			return err
+		}
+		items = append(items, p)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	type attribution struct {
+		policyID   int
+		ruleName   string
+		policyName string
+	}
+	cache := map[string]attribution{}
+	updated := 0
+	for _, item := range items {
+		attr, ok := cache[item.ruleID]
+		if !ok {
+			attr = attribution{}
+			if item.ruleID != "" {
+				_ = DB.QueryRow(`SELECT COALESCE(r.name,''), COALESCE(b.policy_id,0), COALESCE(p.name,'')
+					FROM lb_rules r
+					LEFT JOIN security_policy_bindings b ON b.rule_caddy_id=r.caddy_id
+					LEFT JOIN security_policies p ON p.id=b.policy_id AND p.policy_type='stage2'
+					WHERE r.caddy_id=?
+					ORDER BY CASE WHEN p.policy_type='stage2' THEN 0 ELSE 1 END, b.rank, b.policy_id
+					LIMIT 1`, item.ruleID).Scan(&attr.ruleName, &attr.policyID, &attr.policyName)
+			}
+			cache[item.ruleID] = attr
+		}
+		ruleName := attr.ruleName
+		if ruleName == "" {
+			ruleName = "人机验证"
+		}
+		if _, err := MetricsDB.Exec(`UPDATE security_events SET policy_id=?, rule_name=?, policy_name=? WHERE id=?`, attr.policyID, ruleName, attr.policyName, item.id); err != nil {
+			return err
+		}
+		updated++
+	}
+	if _, err := MetricsDB.Exec(`INSERT OR REPLACE INTO metrics_meta (key,value) VALUES (?,?)`, marker, strconv.Itoa(updated)); err != nil {
+		return err
+	}
+	if updated > 0 {
+		log.Printf("回填人机挑战事件策略归属: %d 条", updated)
 	}
 	return nil
 }

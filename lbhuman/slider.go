@@ -72,7 +72,6 @@ func puzzleSVG(gapX int) string {
   </defs>
   <rect width="%d" height="%d" fill="url(#bg)"/>
   <path d="M 0 34 H 240 M 0 96 H 240 M 58 0 V 134 M 176 0 V 134" stroke="#ffffff" opacity="0.07"/>
-  <path d="M 0 0 H 96 L 0 64 Z" fill="#ffffff" opacity="0.06"/>
   <rect x="%d" y="%d" width="%d" height="%d" fill="#0b1220" opacity="0.58" stroke="#ffffff" stroke-opacity="0.55" stroke-width="1.5" stroke-dasharray="4 3"/>
 </svg>`,
 		sliderWidth, sliderHeight, sliderWidth, sliderHeight,
@@ -82,9 +81,9 @@ func puzzleSVG(gapX int) string {
 // pieceSVG 拼图片块（同轮廓，亮色描边）。
 func pieceSVG() string {
 	return fmt.Sprintf(`<svg width="%d" height="%d" xmlns="http://www.w3.org/2000/svg">
-  <defs><filter id="lbHvShadow" x="-30%%" y="-30%%" width="160%%" height="160%%"><feDropShadow dx="0" dy="2" stdDeviation="2" flood-color="#0f172a" flood-opacity=".25"/></filter></defs>
-  <rect width="%d" height="%d" fill="#ffffff" fill-opacity="0.95" filter="url(#lbHvShadow)"/>
-</svg>`, sliderPieceSize, sliderPieceSize, sliderPieceSize, sliderPieceSize)
+  <rect x="1" y="1" width="%d" height="%d" fill="#f8fafc" stroke="#1d4ed8" stroke-width="2"/>
+  <rect x="6" y="6" width="%d" height="%d" fill="none" stroke="#93c5fd" stroke-width="1"/>
+</svg>`, sliderPieceSize, sliderPieceSize, sliderPieceSize-2, sliderPieceSize-2, sliderPieceSize-12, sliderPieceSize-12)
 }
 
 // humanSliderVerifyPath 滑块校验端点路径。
@@ -144,6 +143,7 @@ func (h *HumanHandler) serveSliderChallenge(w http.ResponseWriter, r *http.Reque
 	humanStats.Challenges.Add(1)
 	reportHumanEvent(h.RuleID, ip, r.Method, r.URL.RequestURI(), r.UserAgent(), "challenge")
 	p := newSliderPuzzle()
+	registerChallengeSession(p.id, "slider", h.RuleID, ip, r.Method, r.URL.RequestURI(), r.UserAgent(), sliderPuzzleTTL, sliderMaxAttempts)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusOK)
@@ -179,7 +179,13 @@ func (h *HumanHandler) serveSliderVerify(w http.ResponseWriter, r *http.Request,
 		}
 	}
 	p := consumeSliderPuzzle(puzzleID)
-	if !sliderVerify(p, x, track, duration) {
+	sliderOK := sliderVerify(p, x, track, duration)
+	if p == nil {
+		markChallengeInvalid(puzzleID)
+	} else {
+		markChallengeAttempt(puzzleID, sliderOK, sliderOK)
+	}
+	if !sliderOK {
 		humanStats.Fails.Add(1)
 		reportHumanEvent(h.RuleID, ip, r.Method, r.URL.RequestURI(), r.UserAgent(), "fail")
 		w.WriteHeader(http.StatusBadRequest)
@@ -210,25 +216,25 @@ const sliderWidgetHTML = `<div class="lb-hv-widget" style="width:240px;max-width
 .lb-hv-widget *{box-sizing:border-box}
 .lb-hv-widget .lb-hv-puzzle{position:relative;width:240px;height:134px;margin:0 auto 14px}
 .lb-hv-widget .lb-hv-puzzle>svg{display:block;width:240px;height:134px;border-radius:0}
-.lb-hv-widget .lb-hv-piece{position:absolute;top:60px;left:0;cursor:grab;line-height:0}
+.lb-hv-widget .lb-hv-piece{position:absolute;top:60px;left:6px;cursor:grab;line-height:0}
 .lb-hv-widget .lb-hv-piece:active{cursor:grabbing}
 .lb-hv-widget .lb-hv-track{position:relative;width:240px;height:34px;background:#eef2f7;border:1px solid #dbe4f0;border-radius:0;user-select:none;touch-action:none;overflow:hidden}
 .lb-hv-widget .lb-hv-fill{position:absolute;left:0;top:0;bottom:0;background:#2563eb;opacity:.16;width:0}
-.lb-hv-widget .lb-hv-handle{position:absolute;top:3px;left:2px;width:34px;height:28px;background:#2563eb;color:#fff;border-radius:0;display:flex;align-items:center;justify-content:center;font-size:18px;cursor:grab;box-shadow:0 2px 6px rgba(37,99,235,.25)}
+.lb-hv-widget .lb-hv-handle{position:absolute;top:50%%;left:2px;transform:translateY(-50%%);width:34px;height:28px;background:#2563eb;color:#fff;border-radius:0;display:flex;align-items:center;justify-content:center;font-size:18px;cursor:grab;box-shadow:0 2px 6px rgba(37,99,235,.25)}
 .lb-hv-widget .lb-hv-handle:active{cursor:grabbing}
 .lb-hv-widget .lb-hv-status{text-align:center;font-size:13px;min-height:20px;margin-top:10px;color:#64748b}
 .lb-hv-widget .lb-hv-ok{color:#15803d}.lb-hv-widget .lb-hv-fail{color:#dc2626}
 </style>
-<div class="lb-hv-puzzle">%s<div class="lb-hv-piece" id="lbHvPiece" style="top:60px;left:0">%s</div></div>
+<div class="lb-hv-puzzle">%s<div class="lb-hv-piece" id="lbHvPiece" style="top:60px;left:6px">%s</div></div>
 <div class="lb-hv-track" id="lbHvTrack"><div class="lb-hv-fill" id="lbHvFill"></div><div class="lb-hv-handle" id="lbHvHandle">⇥</div></div>
 <div class="lb-hv-status" id="lbHvStatus"></div>
 <script>
 (function(){
 var pid="%s",redirect="%s",h=document.getElementById("lbHvHandle"),pc=document.getElementById("lbHvPiece"),fl=document.getElementById("lbHvFill"),tr=document.getElementById("lbHvTrack"),st=document.getElementById("lbHvStatus"),drag=false,sx=0,t0=0,pos=[],cx=0,mx=tr.clientWidth-(h.offsetWidth||34)-4;
 function dn(e){drag=true;sx=(e.touches?e.touches[0].clientX:e.clientX);t0=Date.now();pos=[];cx=0;e.preventDefault()}
-function mv(e){if(!drag)return;var x=(e.touches?e.touches[0].clientX:e.clientX);cx=Math.max(0,Math.min(mx,x-sx));h.style.left=(cx+2)+"px";pc.style.left=cx+"px";fl.style.width=(cx+2)+"px";pos.push(cx)}
+function mv(e){if(!drag)return;var x=(e.touches?e.touches[0].clientX:e.clientX);cx=Math.max(0,Math.min(mx,x-sx));h.style.left=(cx+2)+"px";pc.style.left=(cx+6)+"px";fl.style.width=(cx+2)+"px";pos.push(cx)}
 function up(){if(!drag)return;drag=false;var dur=Date.now()-t0;
-fetch("/__lb/human/slider-verify",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},credentials:"same-origin",body:"puzzle_id="+encodeURIComponent(pid)+"&x="+cx+"&track="+pos.join(",")+"&duration_ms="+dur}).then(function(res){
+fetch("/__lb/human/slider-verify",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},credentials:"same-origin",body:"puzzle_id="+encodeURIComponent(pid)+"&x="+(cx+6)+"&track="+pos.join(",")+"&duration_ms="+dur}).then(function(res){
 if(res.ok){st.textContent="Verified";st.className="lb-hv-status lb-hv-ok";setTimeout(function(){window.location.href=redirect},400)}else{st.textContent="Verification failed";st.className="lb-hv-status lb-hv-fail";setTimeout(function(){window.location.reload()},900)}}).catch(function(){st.textContent="Network error";st.className="lb-hv-status lb-hv-fail"})}
 h.addEventListener("mousedown",dn);h.addEventListener("touchstart",dn,{passive:false});
 document.addEventListener("mousemove",mv);document.addEventListener("touchmove",mv,{passive:false});
@@ -252,11 +258,11 @@ const sliderChallengePage = `<!DOCTYPE html>
   .sub { font-size: 12px; color: #718096; margin-top: 6px; }
   .puzzle { position: relative; margin: 0 auto 18px; width: %dpx; height: %dpx; }
   .puzzle svg { display: block; }
-  .piece { position: absolute; top: %dpx; left: 0; transition: none; cursor: grab; }
+  .piece { position: absolute; top: %dpx; left: 6px; transition: none; cursor: grab; }
   .piece:active { cursor: grabbing; }
   .track { position: relative; height: 34px; background: #e2e8f0; border-radius: 0; user-select: none; }
   .track-fill { position: absolute; left: 0; top: 0; bottom: 0; background: #4299e1; border-radius: 0; opacity: .25; width: 0; }
-  .handle { position: absolute; top: 3px; left: 2px; width: 34px; height: 28px; background: #4299e1; color: #fff; border-radius: 0; display: flex; align-items: center; justify-content: center; font-size: 18px; cursor: grab; }
+  .handle { position: absolute; top: 50%%; left: 2px; transform: translateY(-50%%); width: 34px; height: 28px; background: #4299e1; color: #fff; border-radius: 0; display: flex; align-items: center; justify-content: center; font-size: 18px; cursor: grab; }
   .handle:active { cursor: grabbing; }
   .hint { text-align: center; font-size: 12px; color: #718096; margin-top: 12px; }
   .status { text-align: center; font-size: 13px; min-height: 20px; margin-top: 10px; }
@@ -304,7 +310,7 @@ const sliderChallengePage = `<!DOCTYPE html>
     var cx = (e.touches ? e.touches[0].clientX : e.clientX);
     currentX = Math.max(0, Math.min(maxX, cx - startX));
     handle.style.left = (currentX + 2) + "px";
-    piece.style.left = currentX + "px";
+    piece.style.left = (currentX + 6) + "px";
     fill.style.width = (currentX + 2) + "px";
     positions.push(currentX);
   }
@@ -316,7 +322,7 @@ const sliderChallengePage = `<!DOCTYPE html>
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       credentials: "same-origin",
-      body: "puzzle_id=" + encodeURIComponent(puzzleID) + "&x=" + currentX +
+      body: "puzzle_id=" + encodeURIComponent(puzzleID) + "&x=" + (currentX + 6) +
         "&track=" + positions.join(",") + "&duration_ms=" + duration
     }).then(function (res) {
       if (res.ok) {

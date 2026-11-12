@@ -1179,6 +1179,7 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 				business.GET("/security/autoban", h.GetAutobanConfig)
 				business.GET("/security/autoban/status", h.GetAutobanStatus)
 				business.GET("/security/human/stats", h.GetHumanVerifyStats)
+				business.GET("/security/human/live", h.GetHumanLiveChallenges)
 				business.GET("/security/crs/rules", h.ListCRSRules)
 				business.GET("/security/crs/rule-index", h.GetCRSRuleIndex)
 				business.GET("/security/crs/rules/:filename", h.GetCRSRuleContent)

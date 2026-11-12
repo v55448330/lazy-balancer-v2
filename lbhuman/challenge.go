@@ -24,6 +24,7 @@ func (h *HumanHandler) serveJSChallenge(w http.ResponseWriter, r *http.Request, 
 	humanStats.Challenges.Add(1)
 	reportHumanEvent(h.RuleID, ip, r.Method, r.URL.RequestURI(), r.UserAgent(), "challenge")
 	token := issueChallengeToken()
+	registerChallengeSession(token, "js", h.RuleID, ip, r.Method, r.URL.RequestURI(), r.UserAgent(), challengeTokenTTL, 1)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusOK) // 挑战页=200（不是错误），与拦截页（4xx）语义区分
@@ -41,7 +42,14 @@ func (h *HumanHandler) serveJSVerify(w http.ResponseWriter, r *http.Request, ip 
 	}
 	token := r.FormValue("token")
 	nonce := r.FormValue("nonce")
-	if token == "" || nonce == "" || !consumeChallengeToken(token) || !powValid(token, nonce) {
+	tokenOK := token != "" && nonce != "" && consumeChallengeToken(token)
+	powOK := tokenOK && powValid(token, nonce)
+	if tokenOK {
+		markChallengeAttempt(token, powOK, true)
+	} else {
+		markChallengeInvalid(token)
+	}
+	if !tokenOK || !powOK {
 		humanStats.Fails.Add(1)
 		reportHumanEvent(h.RuleID, ip, r.Method, r.URL.RequestURI(), r.UserAgent(), "fail")
 		w.WriteHeader(http.StatusBadRequest)

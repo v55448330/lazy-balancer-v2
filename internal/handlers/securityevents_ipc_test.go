@@ -278,3 +278,36 @@ func TestGetLogStats_securityEventsRow_reportsSpoolCache(t *testing.T) {
 		t.Fatalf("cache_limit_bytes=%v, want 65536", row.CacheLimitBytes)
 	}
 }
+
+// 人机事件必须携带实际负载规则与阶段 2 策略归属：policy_id=0 会让触发详情
+// 把合法 CC 挑战显示成“本次事件无策略归属”。
+func TestSecurityEventsIPCHandler_humanEventCarriesRuleAndPolicyAttribution(t *testing.T) {
+	setupSecurityPolicyTestDB(t)
+	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enabled) VALUES ('lb-human-attr','归属规则','http','attr.test',8443,1)`); err != nil {
+		t.Fatal(err)
+	}
+	res, err := db.DB.Exec(`INSERT INTO security_policies (name,policy_type,human_verify_mode,human_verify_type,enabled) VALUES ('归属CC策略','stage2','force','slider',1)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pid, _ := res.LastInsertId()
+	if _, err := db.DB.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id,policy_id,rank) VALUES ('lb-human-attr',?,1)`, pid); err != nil {
+		t.Fatal(err)
+	}
+	h := &SecurityEventsIPCServer{}
+	body := `[{"ts":1786447300123,"rule_id":"lb-human-attr","client_ip":"203.0.113.77","method":"GET","uri":"/x","ua":"test","kind":"challenge"}]`
+	req := httptest.NewRequest(http.MethodPost, services.SecurityEventsIPCIngestHumanPath, strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	http.HandlerFunc(h.ingestRouter).ServeHTTP(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var gotPID int
+	var ruleName, policyName string
+	if err := db.MetricsDB.QueryRow(`SELECT COALESCE(policy_id,0),COALESCE(rule_name,''),COALESCE(policy_name,'') FROM security_events WHERE rule_caddy_id='lb-human-attr'`).Scan(&gotPID, &ruleName, &policyName); err != nil {
+		t.Fatal(err)
+	}
+	if gotPID != int(pid) || ruleName != "归属规则" || policyName != "归属CC策略" {
+		t.Fatalf("attribution=(%d,%q,%q), want (%d,归属规则,归属CC策略)", gotPID, ruleName, policyName, pid)
+	}
+}

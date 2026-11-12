@@ -26,6 +26,10 @@ func (HumanStatsAdmin) Routes() []caddy.AdminRoute {
 			Pattern: "/lb/human/stats",
 			Handler: caddy.AdminHandlerFunc(serveHumanStats),
 		},
+		{
+			Pattern: "/lb/human/live",
+			Handler: caddy.AdminHandlerFunc(serveHumanLive),
+		},
 	}
 }
 

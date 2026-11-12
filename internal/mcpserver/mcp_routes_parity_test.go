@@ -88,6 +88,7 @@ var mcpUncoveredRoutes = map[string]string{
 	// —— OIDC 认证集成(v2.3.0):浏览器跳转/回调链路,Agent 无消费场景;
 	// 配置管理属低频管理面板操作(测试连接为发现探测,面板专用) ——
 	"GET /api/v1/security/human/stats": "总览卡人机验证统计（挑战发放/通过/失败/封禁计数）：admin 代理的瞬时遥测计数，无持久化语义、无写操作；Agent 判断拦截效果时消费 get_security_overview（WAF/事件口径）即可",
+	"GET /api/v1/security/human/live":  "总览卡实时挑战运行态（lbhuman 内存会话：等待/通过/失败/过期 + TTL 倒计时）：2s 轮询的面板可视化遥测，无持久化语义、无写操作；Agent 判断拦截效果消费 get_security_overview 即可",
 	"GET /api/v1/auth/oidc/status":     "登录页按钮显隐(浏览器会话探测),无 Agent 场景",
 	"GET /api/v1/auth/oidc/login":      "浏览器 302 跳转 IdP 授权页(交互式登录链路)",
 	"GET /api/v1/auth/oidc/callback":   "IdP 授权码回调(浏览器重定向链路)",

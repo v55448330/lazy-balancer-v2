@@ -92,6 +92,7 @@ func init() {
 	Register("k_3cea5ee2", "无效的文件名", "Invalid file name")
 	Register("k_3d2721ca", "任务引擎已停止，调度操作未生效", "The task engine has stopped; the scheduling operation did not take effect")
 	Register("k_3d497a6c", "流量采集控制响应读取失败", "Failed to read the traffic capture control response")
+	Register("k_3d85d047", "scope 必须是 active 或 recent", "scope must be active or recent")
 	Register("k_3e18a460", "拆分后的子策略名称将超过 100 字符，请先缩短原策略名称", "The split child policy names would exceed 100 characters; please shorten the original policy name first")
 	Register("k_3e5e1c3c", "删除自定义路径失败", "Failed to delete the custom path")
 	Register("k_3ef4b456", "确认 API 密钥删除结果失败", "Failed to confirm the API key deletion result")

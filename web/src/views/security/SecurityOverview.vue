@@ -160,6 +160,77 @@
       </el-col>
     </el-row>
 
+    <el-dialog :model-value="challengeLiveVisible" width="min(1120px, 96vw)" top="5vh" class="challenge-live-dialog" @update:model-value="onChallengeVisibleChange">
+      <template #header>
+        <div class="card-header">
+          <div class="card-title">
+            <el-icon class="title-icon"><Odometer /></el-icon>
+            <span>{{ t('app.security.overview.cc.liveTitle') }}</span>
+          </div>
+          <div class="challenge-live-tools">
+            <span v-if="challengeLiveUpdated" class="challenge-live-updated">{{ t('app.security.overview.cc.liveUpdated', { time: challengeLiveUpdated }) }}</span>
+            <el-switch v-model="challengeAutoRefresh" size="small" @change="syncChallengeTimer" />
+            <span class="challenge-live-auto-label">{{ t('app.security.overview.cc.liveAuto') }}</span>
+            <el-button size="small" link :loading="challengeLiveLoading" @click="fetchChallengeLive">{{ t('app.security.overview.page.retryNow') }}</el-button>
+          </div>
+        </div>
+      </template>
+      <el-alert v-if="challengeLiveError" type="error" show-icon :closable="false" class="mb-3" :title="t('app.security.overview.events.loadFailed')" />
+      <div class="challenge-live-toolbar">
+        <div class="challenge-live-counter" :class="{ 'is-active': challengeLiveActiveCount > 0 }">
+          <span>{{ t('app.security.overview.cc.liveActiveCount') }}</span>
+          <strong>{{ challengeLiveActiveCount }}</strong>
+        </div>
+        <el-radio-group v-model="challengeLiveScope" size="small" @change="fetchChallengeLive">
+          <el-radio-button value="active">{{ t('app.security.overview.cc.liveScopeActive') }}</el-radio-button>
+          <el-radio-button value="recent">{{ t('app.security.overview.cc.liveScopeRecent') }}</el-radio-button>
+        </el-radio-group>
+      </div>
+      <el-table :data="challengeEvents" v-loading="challengeLiveLoading" size="small" height="430" row-key="id" :empty-text="challengeLiveScope === 'active' ? t('app.security.overview.cc.liveEmptyActive') : t('app.security.overview.cc.liveEmptyRecent')">
+        <el-table-column :label="t('app.security.overview.cc.liveColStatus')" width="104" align="center">
+          <template #default="{ row }">
+            <el-tag size="small" :type="challengeStatusTone(row as ChallengeEvent)" effect="light">{{ challengeStatusText(row as ChallengeEvent) }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column :label="t('app.security.overview.cc.liveColExpires')" width="148">
+          <template #default="{ row }">
+            <div v-if="(row as ChallengeEvent).status === 'waiting'" class="challenge-live-countdown">
+              <strong>{{ formatLiveRemaining((row as ChallengeEvent).remaining_ms) }}</strong>
+              <span>{{ formatLiveClock((row as ChallengeEvent).expires_at_ms) }}</span>
+            </div>
+            <span v-else class="challenge-live-muted">—</span>
+          </template>
+        </el-table-column>
+        <el-table-column :label="t('app.security.overview.cc.liveColType')" width="82" align="center">
+          <template #default="{ row }">{{ challengeKindText(row as ChallengeEvent) }}</template>
+        </el-table-column>
+        <el-table-column :label="t('app.security.overview.cc.liveColClient')" min-width="145" show-overflow-tooltip>
+          <template #default="{ row }">{{ row.client_ip || '—' }}</template>
+        </el-table-column>
+        <el-table-column :label="t('app.security.overview.cc.liveColRule')" min-width="205" show-overflow-tooltip>
+          <template #default="{ row }">
+            <div class="challenge-live-attribution">
+              <span>{{ row.rule_name || row.rule_id || '—' }}</span>
+              <span v-if="row.policy_name">{{ row.policy_name }}</span>
+            </div>
+          </template>
+        </el-table-column>
+        <el-table-column :label="t('app.security.overview.cc.liveColRequest')" min-width="230" show-overflow-tooltip>
+          <template #default="{ row }"><span class="challenge-live-method">{{ row.method }}</span> {{ row.uri }}</template>
+        </el-table-column>
+        <el-table-column :label="t('app.security.overview.cc.liveColUA')" min-width="190" show-overflow-tooltip>
+          <template #default="{ row }">{{ row.user_agent || '—' }}</template>
+        </el-table-column>
+        <el-table-column :label="t('app.security.overview.cc.liveColIssued')" width="168">
+          <template #default="{ row }">{{ formatLiveClock((row as ChallengeEvent).issued_at_ms) }}</template>
+        </el-table-column>
+        <el-table-column :label="t('app.security.overview.cc.liveColAttempts')" width="82" align="center">
+          <template #default="{ row }">{{ formatLiveAttempts(row as ChallengeEvent) }}</template>
+        </el-table-column>
+      </el-table>
+      <div class="challenge-live-footer">{{ t('app.security.overview.cc.liveRetention') }}</div>
+    </el-dialog>
+
     <el-row :gutter="20" class="mb-5 events-row">
       <el-col :xs="24" :md="16">
         <el-card shadow="always">
@@ -211,9 +282,7 @@
                 <el-icon class="title-icon"><Odometer /></el-icon>
                 <span>{{ t('app.security.overview.cc.title') }}</span>
               </div>
-              <el-tooltip placement="top" :content="t('app.security.overview.cc.tip')">
-                <el-tag type="info" size="small" effect="plain">{{ t('app.security.overview.cc.tag') }}</el-tag>
-              </el-tooltip>
+              <el-button size="small" text type="primary" class="cc-live-button" @click="openChallengeLive">{{ t('app.security.overview.cc.liveButton') }}</el-button>
             </div>
           </template>
           <div class="cc-hero">
@@ -301,7 +370,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, onBeforeUnmount, computed } from 'vue'
 import { DataAnalysis, TrendCharts, PieChart, Location, Warning, Odometer, Monitor, InfoFilled, Stopwatch } from '@element-plus/icons-vue'
 import { useI18n } from 'vue-i18n'
 import { request } from '@/utils/api'
@@ -347,6 +416,7 @@ interface Overview {
   ingestion?: IngestionHealth
 }
 interface SecurityEvent { id: number; event_time: string; client_ip: string; rule_caddy_id: string; rule_name: string; policy_name: string; ip_location?: string; event_type?: string }
+interface ChallengeEvent { id: string; kind: 'slider' | 'js'; status: 'waiting' | 'passed' | 'failed' | 'expired'; last_result: '' | 'pass' | 'fail'; rule_id: string; rule_name: string; policy_name: string; client_ip: string; method: string; uri: string; user_agent: string; issued_at_ms: number; expires_at_ms: number; remaining_ms: number; attempts: number; max_attempts: number }
 
 const attackByStage = ref(true)
 
@@ -435,6 +505,85 @@ const attackChartOption = computed(() => ({
 
 // 人机验证统计（lb_human admin 端点；端点缺失=旧二进制，全零不报错）
 const humanStats = ref({ challenges: 0, passes: 0, fails: 0, bans: 0 })
+
+// 实时挑战运行态（CC 卡入口）：数据源为 lbhuman 内存会话注册表，
+// active=仍在 TTL 内等待验证；recent=最近通过/失败/过期。不是事件日志回放。
+const challengeLiveVisible = ref(false)
+const challengeLiveScope = ref<'active' | 'recent'>('active')
+const challengeEvents = ref<ChallengeEvent[]>([])
+const challengeLiveActiveCount = ref(0)
+const challengeLiveLoading = ref(false)
+const challengeLiveError = ref(false)
+const challengeLiveUpdated = ref('')
+const challengeAutoRefresh = ref(true)
+let challengeLiveTimer: ReturnType<typeof setInterval> | undefined
+
+const challengeStatusTone = (row: ChallengeEvent): 'primary' | 'success' | 'danger' | 'info' => {
+  if (row.status === 'passed') return 'success'
+  if (row.status === 'failed') return 'danger'
+  if (row.status === 'expired') return 'info'
+  return 'primary'
+}
+const challengeStatusText = (row: ChallengeEvent): string => {
+  if (row.status === 'passed') return t('app.security.overview.cc.liveStatusPassed')
+  if (row.status === 'failed') return t('app.security.overview.cc.liveStatusFailed')
+  if (row.status === 'expired') return t('app.security.overview.cc.liveStatusExpired')
+  return t('app.security.overview.cc.liveStatusWaiting')
+}
+const challengeKindText = (row: ChallengeEvent): string => row.kind === 'slider'
+  ? t('app.security.overview.cc.liveKindSlider')
+  : t('app.security.overview.cc.liveKindJS')
+const formatLiveRemaining = (ms: number): string => {
+  const total = Math.max(0, Math.ceil(ms / 1000))
+  const minutes = Math.floor(total / 60)
+  const seconds = total % 60
+  return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
+}
+const formatLiveClock = (ms: number): string => ms > 0 ? new Date(ms).toLocaleTimeString() : '—'
+const formatLiveAttempts = (row: ChallengeEvent): string => row.max_attempts > 1
+  ? `${row.attempts}/${row.max_attempts}`
+  : String(row.attempts)
+const fetchChallengeLive = async (): Promise<void> => {
+  if (challengeLiveLoading.value) return
+  challengeLiveLoading.value = true
+  try {
+    const res = await request.get<APIResponse<{ now_ms: number; active_count: number; sessions: ChallengeEvent[] }>>('/security/human/live', {
+      params: { scope: challengeLiveScope.value },
+      silent: true,
+    })
+    challengeEvents.value = res.data?.sessions || []
+    challengeLiveActiveCount.value = res.data?.active_count || 0
+    challengeLiveUpdated.value = new Date().toLocaleTimeString()
+    challengeLiveError.value = false
+  } catch {
+    challengeLiveError.value = true
+  } finally {
+    challengeLiveLoading.value = false
+  }
+}
+const stopChallengeTimer = () => {
+  if (challengeLiveTimer !== undefined) {
+    clearInterval(challengeLiveTimer)
+    challengeLiveTimer = undefined
+  }
+}
+const syncChallengeTimer = () => {
+  stopChallengeTimer()
+  if (challengeLiveVisible.value && challengeAutoRefresh.value) {
+    challengeLiveTimer = setInterval(() => { void fetchChallengeLive() }, 2000)
+  }
+}
+const openChallengeLive = () => {
+  challengeLiveVisible.value = true
+  void fetchChallengeLive()
+  syncChallengeTimer()
+}
+const onChallengeVisibleChange = (visible: boolean) => {
+  challengeLiveVisible.value = visible
+  if (visible) void fetchChallengeLive()
+  syncChallengeTimer()
+}
+
 // 通过率口径（2026-11-12）：今日事件（human_pass / human_failed）优先——
 // 与"挑战发放"同源可对账；零样本显性 —。admin 端点值仅作兜底。
 const humanPassRate = computed(() => {
@@ -577,6 +726,7 @@ const reloadAll = async (): Promise<void> => {
   }
 }
 
+onBeforeUnmount(stopChallengeTimer)
 onMounted(() => { void reloadAll() })
 </script>
 
@@ -658,6 +808,22 @@ onMounted(() => { void reloadAll() })
 .events-row .el-card { height: 100%; }
 .cc-card { display: flex; flex-direction: column; }
 .cc-card :deep(.el-card__body) { flex: 1; display: flex; flex-direction: column; }
+.cc-live-button { padding: 0; }
+.challenge-live-tools { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+.challenge-live-updated { font-size: 12px; color: var(--text-secondary); }
+.challenge-live-auto-label { font-size: 12px; color: var(--text-secondary); }
+.challenge-live-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
+.challenge-live-counter { display: inline-flex; align-items: baseline; gap: 8px; padding: 6px 12px; border-radius: 6px; background: #f5f7fa; color: var(--text-secondary); font-size: 12px; }
+.challenge-live-counter strong { font-size: 20px; line-height: 1; font-variant-numeric: tabular-nums; color: #606266; }
+.challenge-live-counter.is-active strong { color: #409eff; }
+.challenge-live-countdown { display: flex; flex-direction: column; line-height: 1.25; font-variant-numeric: tabular-nums; }
+.challenge-live-countdown strong { color: #409eff; font-weight: 700; }
+.challenge-live-countdown span { font-size: 11px; color: var(--text-secondary); }
+.challenge-live-muted { color: var(--text-secondary); }
+.challenge-live-attribution { display: flex; flex-direction: column; line-height: 1.3; }
+.challenge-live-attribution span:last-child { font-size: 11px; color: var(--text-secondary); }
+.challenge-live-method { display: inline-block; min-width: 38px; font-weight: 600; color: var(--text-secondary); }
+.challenge-live-footer { margin-top: 8px; text-align: right; font-size: 12px; color: var(--text-secondary); }
 .cc-hero { flex: 1; display: flex; flex-direction: row; align-items: center; justify-content: center; gap: 24px; padding: 4px 4px 6px; }
 .cc-donut { position: relative; width: 136px; height: 136px; flex: none; }
 .cc-donut svg { width: 100%; height: 100%; transform: rotate(-90deg); }

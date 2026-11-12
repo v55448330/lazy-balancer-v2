@@ -90,6 +90,33 @@ func securityEventsIngestErrorRetryable(err error) bool {
 	return false
 }
 
+// humanEventAttribution 人机事件归属（rule/policy 快照）。挑战事件由
+// lb_human 按规则发放；入库时回填实际负载规则与阶段 2 策略，触发详情才不会
+// 把合法的 CC 挑战事件误标成“无策略归属”。
+type humanEventAttribution struct {
+	policyID   int
+	ruleName   string
+	policyName string
+}
+
+func lookupHumanEventAttribution(ruleID string) humanEventAttribution {
+	if db.DB == nil || strings.TrimSpace(ruleID) == "" {
+		return humanEventAttribution{}
+	}
+	var a humanEventAttribution
+	err := db.DB.QueryRow(`SELECT COALESCE(r.name,''), COALESCE(b.policy_id,0), COALESCE(p.name,'')
+		FROM lb_rules r
+		LEFT JOIN security_policy_bindings b ON b.rule_caddy_id=r.caddy_id
+		LEFT JOIN security_policies p ON p.id=b.policy_id AND p.policy_type='stage2'
+		WHERE r.caddy_id=?
+		ORDER BY CASE WHEN p.policy_type='stage2' THEN 0 ELSE 1 END, b.rank, b.policy_id
+		LIMIT 1`, ruleID).Scan(&a.ruleName, &a.policyID, &a.policyName)
+	if err != nil {
+		return humanEventAttribution{}
+	}
+	return a
+}
+
 // handleIngestHuman 人机验证事件摄入（POST /security-events/ingest-human）：
 // 紧凑 JSON 行（ts/rule_id/client_ip/method/uri/ua/kind），直写 security_events
 // （event_type=human；challenge/fail=blocked、pass=logged）。独立于 coraza 审计
@@ -129,6 +156,12 @@ func (s *SecurityEventsIPCServer) handleIngestHuman(w http.ResponseWriter, r *ht
 		return
 	}
 	defer tx.Rollback()
+	attributions := map[string]humanEventAttribution{}
+	for _, row := range rows {
+		if _, ok := attributions[row.RuleID]; !ok {
+			attributions[row.RuleID] = lookupHumanEventAttribution(row.RuleID)
+		}
+	}
 	for _, row := range rows {
 		// 结果语义（2026-11-12 用户裁定）：挑战发放/通过/失败都是"挑战"结果——
 		// action=challenged，不计入拦截/检测/攻击面；通过率由 rule id 区分
@@ -141,10 +174,15 @@ func (s *SecurityEventsIPCServer) handleIngestHuman(w http.ResponseWriter, r *ht
 		case "fail":
 			rule = "human_failed"
 		}
+		attr := attributions[row.RuleID]
+		ruleName := attr.ruleName
+		if ruleName == "" {
+			ruleName = "人机验证"
+		}
 		ts := time.UnixMilli(row.Ts).UTC()
-		if _, err := tx.ExecContext(ctx, `INSERT INTO security_events (event_time, rule_caddy_id, client_ip, method, uri, event_type, rule_triggered, rule_msg, action, rule_name)
-			VALUES (?,?,?,?,?,?,?,?,?,?)`,
-			ts, row.RuleID, row.ClientIP, row.Method, row.URI, "human", rule, "人机验证 "+row.Kind, action, "人机验证"); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO security_events (event_time, rule_caddy_id, policy_id, client_ip, method, uri, event_type, rule_triggered, rule_msg, action, rule_name, policy_name)
+			VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+			ts, row.RuleID, attr.policyID, row.ClientIP, row.Method, row.URI, "human", rule, "人机验证 "+row.Kind, action, ruleName, attr.policyName); err != nil {
 			http.Error(w, "human event insert: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
