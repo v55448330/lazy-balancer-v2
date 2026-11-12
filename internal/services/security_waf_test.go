@@ -545,39 +545,6 @@ func TestBuildCorazaDirectives_emitsCustomRuleWithNullColumns(t *testing.T) {
 	}
 }
 
-func TestBuildRateLimitHandler_sweepIntervalAtHandlerLevel(t *testing.T) {
-	// sweep_interval 必须在 handler 层而非 zone 级——Caddy v2.11.4
-	// 对模块载荷 DisallowUnknownFields，zone 级未知字段使整个配置加载 400
-	// （开启限流即配置停摆，README 核心功能不可用）。
-	policy := &models.SecurityPolicy{RateLimitEnabled: true, RateLimitRPS: 5, RateLimitBurst: 10}
-	handler, err := buildRateLimitHandler("lb_test", policy)
-	if err != nil {
-		t.Fatalf("buildRateLimitHandler: %v", err)
-	}
-	if handler["sweep_interval"] != "10m" {
-		t.Fatalf("sweep_interval must live at handler level, got %v", handler["sweep_interval"])
-	}
-	zones := handler["rate_limits"].(map[string]interface{})
-	for name, zone := range zones {
-		zm, ok := zone.(map[string]interface{})
-		if !ok {
-			t.Fatalf("zone %s not a map", name)
-		}
-		for _, key := range []string{"sweep_interval"} {
-			if _, exists := zm[key]; exists {
-				t.Fatalf("zone %s must not carry %q (Caddy strict unmarshal rejects unknown zone fields)", name, key)
-			}
-		}
-		if _, exists := zm["key"]; !exists {
-			t.Fatalf("zone %s missing key", name)
-		}
-	}
-	// burst 形态 sec+min 双 zone；非 burst 形态单 zone。
-	if len(zones) != 2 {
-		t.Fatalf("burst form should emit sec+min zones, got %d", len(zones))
-	}
-}
-
 func TestBuildCorazaDirectives_crsPoolFingerprint(t *testing.T) {
 	// Given：CRS 目录指向临时目录（无 zz-user-overrides.conf）
 	dir := t.TempDir()

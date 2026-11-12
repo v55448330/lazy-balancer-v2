@@ -38,17 +38,6 @@ func TestBuildBlockPageErrorRoute_usesPageContentType(t *testing.T) {
 	}
 }
 
-func TestBuildRateLimitErrorRoute_usesPageContentType(t *testing.T) {
-	routes := buildRateLimitErrorRoute("lb_ct", []string{"ct.example.test"}, blockPageTestCtx())
-	route := routes[len(routes)-1]
-	if route == nil {
-		t.Fatal("429 路由未生成")
-	}
-	if got := errorRouteContentType(t, route); got != "application/json; charset=utf-8" {
-		t.Fatalf("Content-Type=%q, want application/json; charset=utf-8", got)
-	}
-}
-
 func TestBuildBlockPageAttributionRoute_usesPageContentType(t *testing.T) {
 	routes := buildBlockPageAttributionRoute(483, nil, "{\"error\":\"blocked\"}", "", 403, "text/plain; charset=utf-8", "auto")
 	route := routes[len(routes)-1]

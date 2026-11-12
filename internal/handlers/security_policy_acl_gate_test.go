@@ -27,7 +27,7 @@ func TestUpdateSecurityPolicy_rejectsACLEnableOnTypedPolicy(t *testing.T) {
 			create      map[string]any
 			wantSegment string
 		}{
-			{"stage2", map[string]any{"name": "rl-policy", "policy_type": "stage2", "rate_limit_enabled": true, "rate_limit_rps": 100, "rate_limit_burst": 50}, "阶段 2"},
+			{"stage2", map[string]any{"name": "rl-policy", "policy_type": "stage2", "human_verify_mode": "force", "human_verify_type": "slider"}, "阶段 2"},
 			{"stage3", map[string]any{"name": "waf-policy", "policy_type": "stage3", "mode": "blocking"}, "阶段 3"},
 			{"stage0", map[string]any{"name": "trust-policy", "policy_type": "stage0", "ip_whitelist_enabled": true, "ip_whitelist": `["10.0.0.1"]`}, "阶段 0"},
 		}
@@ -91,7 +91,7 @@ func TestUpdateSecurityPolicy_rejectsACLEnableOnTypedPolicy(t *testing.T) {
 		// Given：显式 stage2 限流策略
 		setupSecurityPolicyTestDB(t)
 		router := newSecurityRouter(t)
-		id := createTestPolicy(t, router, map[string]any{"name": "rl-to-acl", "policy_type": "stage2", "rate_limit_enabled": true, "rate_limit_rps": 100, "rate_limit_burst": 50})
+		id := createTestPolicy(t, router, map[string]any{"name": "rl-to-acl", "policy_type": "stage2", "human_verify_mode": "force", "human_verify_type": "slider"})
 
 		// When：PUT 显式 policy_type=stage1 + ACL 启用三件套（一步类型切换——
 		// 阶段外字段由归零矩阵落零，不产生 mixed 漂移）
@@ -126,7 +126,7 @@ func TestUpdateSecurityPolicy_rejectsACLEnableOnTypedPolicy(t *testing.T) {
 			t.Run(tc.name, func(t *testing.T) {
 				setupSecurityPolicyTestDB(t)
 				router := newSecurityRouter(t)
-				id := createTestPolicy(t, router, map[string]any{"name": "rl-policy", "policy_type": "stage2", "rate_limit_enabled": true, "rate_limit_rps": 100, "rate_limit_burst": 50})
+				id := createTestPolicy(t, router, map[string]any{"name": "rl-policy", "policy_type": "stage2", "human_verify_mode": "force", "human_verify_type": "slider"})
 
 				rec := putJSON(t, router, fmt.Sprintf("/security/policies/%d", id), tc.body)
 
@@ -157,7 +157,7 @@ func TestUpdateSecurityPolicy_rejectsACLEnableOnTypedPolicy(t *testing.T) {
 			// 为幂等操作，不拦（门只拦「从禁用→启用」的并存翻转）。终态类型由
 			// 既有缺省重推断收敛为 mixed（该行本就 G1+G2 并存不一致，基线钉：
 			// 存量残留态收敛语义非本门管辖，保持现状）。
-			{"stage2 存量 ACL 已启用", `INSERT INTO security_policies (name,mode,rate_limit_enabled,rate_limit_rps,ip_acl_enabled,ip_acl_mode,ip_acl_list,policy_type) VALUES ('legacy-rl','off',1,100,1,'deny','["198.51.100.0/24"]','stage2')`, "mixed", 1},
+			{"stage2 存量 ACL 已启用", `INSERT INTO security_policies (name,mode,human_verify_mode,human_verify_type,ip_acl_enabled,ip_acl_mode,ip_acl_list,policy_type) VALUES ('legacy-rl','off','force','slider',1,'deny','["198.51.100.0/24"]','stage2')`, "mixed", 1},
 		}
 		for _, tc := range cases {
 			t.Run(tc.name, func(t *testing.T) {

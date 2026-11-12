@@ -46,8 +46,8 @@ func TestGenerateCaddyConfig_missingSecurityLibs_disablesSecurityChain(t *testin
 		VALUES ('lb-libs','127.0.0.1',8080,1,1,'http')`); err != nil {
 		t.Fatal(err)
 	}
-	res, err := database.Exec(`INSERT INTO security_policies (name,mode,enabled,policy_type,ip_acl_enabled,ip_acl_mode,ip_acl_list,rate_limit_enabled,rate_limit_rps)
-		VALUES ('libs-acl','blocking',1,'stage1',1,'deny','["10.99.0.1/32"]',1,10)`)
+	res, err := database.Exec(`INSERT INTO security_policies (name,mode,enabled,policy_type,ip_acl_enabled,ip_acl_mode,ip_acl_list)
+		VALUES ('libs-acl','blocking',1,'stage1',1,'deny','["10.99.0.1/32"]')`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +78,6 @@ func TestGenerateCaddyConfig_missingSecurityLibs_disablesSecurityChain(t *testin
 		t.Helper()
 		for _, artifact := range []struct{ name, needle string }{
 			{"WAF", `"handler":"waf"`},
-			{"rate limit", `"handler":"rate_limit"`},
 			{"blocked counter", `"handler":"lb_security_blocked_counter"`},
 			{"timing pre", `"handler":"lb_security_timing_pre"`},
 			{"timing end", `"handler":"lb_security_timing_end"`},

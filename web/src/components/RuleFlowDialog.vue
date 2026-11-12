@@ -254,10 +254,6 @@
                             <el-tag v-for="region in group.details.geoipRegions" :key="region" size="small" effect="plain" class="flow-detail-chip">{{ countryLabel(countryZh, region) }}</el-tag>
                           </div>
                         </template>
-                        <template v-if="group.details.rateLimit">
-                          <div class="flow-detail-block-title">{{ t('common.app.rules.flow.rateLimitWindowBasis') }}</div>
-                          <div class="flow-detail-line">{{ group.details.rateLimit.caption }}</div>
-                        </template>
                         <template v-if="group.details.customRules">
                           <div class="flow-detail-block-title">{{ t('common.app.rules.flow.customRuleTitle', { n: group.details.customRules.length }) }}</div>
                           <div v-for="rule in group.details.customRules" :key="rule.id" class="flow-detail-entry" :class="{ 'is-disabled': !rule.enabled }">
@@ -534,7 +530,7 @@ const stageZeroSubtitle = computed(() => {
 })
 
 const policyTypeOf = (policyId: number) =>
-  inferPolicyType(props.policies.find((p) => p.id === policyId) ?? { has_ip_control: false, has_rate_limit: false, has_custom_rules: false })
+  inferPolicyType(props.policies.find((p) => p.id === policyId) ?? { has_ip_control: false, has_custom_rules: false })
 
 const groupHasDetails = (group: StagePolicyGroup): boolean => {
   const d = group.details
@@ -543,7 +539,6 @@ const groupHasDetails = (group: StagePolicyGroup): boolean => {
     || (d.blacklistEntries?.length ?? 0) > 0
     || (d.trustEntries?.length ?? 0) > 0
     || (d.geoipRegions?.length ?? 0) > 0
-    || d.rateLimit !== undefined
     || (d.customRules?.length ?? 0) > 0
     || (d.crsGroups?.length ?? 0) > 0
 }

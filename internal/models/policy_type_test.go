@@ -28,11 +28,8 @@ func TestInferPolicyType(t *testing.T) {
 		{"acl + geoip same stage", SecurityPolicy{Mode: "off", IPACLEnabled: true, IPACLMode: "deny", IPACLList: `["10.0.0.0/8"]`, GeoIPMode: "deny", GeoIPCountries: json.RawMessage(`["海外"]`)}, PolicyTypeStage1},
 		{"trust only is stage0", SecurityPolicy{Mode: "off", IPWhitelistEnabled: true, IPWhitelist: json.RawMessage(`["10.0.0.1"]`)}, PolicyTypeStage0},
 		{"trust refs only is stage0", SecurityPolicy{Mode: "off", IPWhitelistEnabled: true, IPWhitelistRefs: `[2]`}, PolicyTypeStage0},
-		{"rate limit", SecurityPolicy{Mode: "off", RateLimitEnabled: true, RateLimitRPS: 100}, PolicyTypeStage2},
-		{"rate limit enabled but zero rps", SecurityPolicy{Mode: "off", RateLimitEnabled: true, RateLimitRPS: 0}, PolicyTypeStage3},
 		{"trust + acl is mixed", SecurityPolicy{Mode: "off", IPWhitelistEnabled: true, IPWhitelist: json.RawMessage(`["10.0.0.1"]`), IPACLEnabled: true, IPACLMode: "deny", IPACLList: `["203.0.113.0/24"]`}, PolicyTypeMixed},
 		{"trust + waf is mixed", SecurityPolicy{Mode: "blocking", IPWhitelistEnabled: true, IPWhitelist: json.RawMessage(`["10.0.0.1"]`)}, PolicyTypeMixed},
-		{"blocking + rate limit", SecurityPolicy{Mode: "blocking", RateLimitEnabled: true, RateLimitRPS: 100}, PolicyTypeMixed},
 		{"detection + geoip", SecurityPolicy{Mode: "detection", GeoIPMode: "deny", GeoIPCountries: json.RawMessage(`["海外"]`)}, PolicyTypeMixed},
 		{"empty policy", SecurityPolicy{Mode: "off"}, PolicyTypeStage3},
 		{"acl disabled with retained list", SecurityPolicy{Mode: "off", IPACLEnabled: false, IPACLList: `["10.0.0.0/8"]`}, PolicyTypeStage3},
@@ -41,7 +38,6 @@ func TestInferPolicyType(t *testing.T) {
 		{"human verify only is CC stage2", SecurityPolicy{Mode: "off", HumanVerifyMode: "auto"}, PolicyTypeStage2},
 		{"human verify off is not CC stage", SecurityPolicy{Mode: "off", HumanVerifyMode: "off"}, PolicyTypeStage3},
 		{"human verify + waf is mixed", SecurityPolicy{Mode: "blocking", HumanVerifyMode: "force"}, PolicyTypeMixed},
-		{"human verify + rate is CC stage", SecurityPolicy{Mode: "off", HumanVerifyMode: "auto", RateLimitEnabled: true, RateLimitRPS: 50}, PolicyTypeStage2},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

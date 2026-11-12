@@ -2013,8 +2013,6 @@ func threatScreenZeroPayload(hours int, now time.Time, loc *time.Location) gin.H
 		"blocked_events":       0,
 		"logged_events":        0,
 		"block_rate":           0.0,
-		"ratelimit_blocks":     0.0,
-		"ratelimit_available":  false,
 		"active_sources":       0,
 		"countries":            map[string]int{},
 		"china_provinces":      map[string]int{},
@@ -2030,13 +2028,10 @@ func threatScreenZeroPayload(hours int, now time.Time, loc *time.Location) gin.H
 }
 
 // GetSecurityThreatScreen GET /security/overview/threat-screen?hours=24
-// 返回大屏聚合：窗口总量/拦截率/logged 数/限流拦截数（Caddy metrics 429，
-// 重载口径）/活跃攻击源（近 10min 去重）/国家计数 map（ip_location 首段，
-// 空归属跳过）/Top3 攻击国家、攻击类型与被攻击目标（top_targets，
-// rule_caddy_id 分组 + lb_rules 名域）。任一安全库查询失败显式 500
-// Caddy metrics 抓取失败降级
-// 200——ratelimit_blocks=0 + ratelimit_available=false，其余维度照常
-// （大屏 30s 轮询容忍指标瞬时不可达，可用性位披露）。
+// 返回大屏聚合：窗口总量/拦截率/logged 数/活跃攻击源（近 10min 去重）/
+// 国家计数 map（ip_location 首段，空归属跳过）/Top3 攻击国家、攻击类型与
+// 被攻击目标（top_targets，rule_caddy_id 分组 + lb_rules 名域）。
+// 任一安全库查询失败显式 500。
 func (h *Handlers) GetSecurityThreatScreen(c *gin.Context) {
 	hours := 24
 	if raw := c.Query("hours"); raw != "" {
@@ -2164,21 +2159,6 @@ func (h *Handlers) GetSecurityThreatScreen(c *gin.Context) {
 		return
 	}
 
-	// 限流拦截：Caddy /metrics 429 总计（与 GetSecurityRateLimitBlocks 同源）。
-	// 抓取失败不再整卡 500——ratelimit_blocks=0 + ratelimit_available=false
-	// 降级，其余维度照常 200（大屏轮询容忍指标瞬时不可达，可用性位披露）。
-	blocks, err := services.ScrapeRateLimitBlocks(h.cfg.CaddyMetricsURL)
-	ratelimitAvailable := true
-	var ratelimit float64
-	if err != nil {
-		services.Logf("warn", "threat-screen scrape rate-limit blocks failed: %v", err)
-		ratelimitAvailable = false
-	} else {
-		for _, block := range blocks {
-			ratelimit += block.Count
-		}
-	}
-
 	blockRate := 0.0
 	if total > 0 {
 		blockRate = float64(blocked) / float64(total) * 100
@@ -2240,8 +2220,6 @@ func (h *Handlers) GetSecurityThreatScreen(c *gin.Context) {
 		"blocked_events":       blocked,
 		"logged_events":        logged,
 		"block_rate":           blockRate,
-		"ratelimit_blocks":     ratelimit,
-		"ratelimit_available":  ratelimitAvailable,
 		"active_sources":       activeSources,
 		"countries":            countries,
 		"china_provinces":      chinaProvinces,

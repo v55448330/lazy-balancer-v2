@@ -35,9 +35,9 @@ func splitRouter(t *testing.T) *gin.Engine {
 
 func seedSplitFixture(t *testing.T) (mixedID int) {
 	t.Helper()
-	// mixed：blocking + ACL + 限流（三阶段全特征）
-	res, err := db.DB.Exec(`INSERT INTO security_policies (name,mode,ip_acl_enabled,ip_acl_mode,ip_acl_list,rate_limit_enabled,rate_limit_rps,rate_limit_burst,block_page_id,block_status_code,policy_type,enabled)
-		VALUES ('legacy-mix','blocking',1,'deny','["203.0.113.0/24"]',1,100,50,0,403,'mixed',1)`)
+	// mixed：blocking + ACL + CC 挑战（三阶段全特征）
+	res, err := db.DB.Exec(`INSERT INTO security_policies (name,mode,ip_acl_enabled,ip_acl_mode,ip_acl_list,human_verify_mode,human_verify_type,block_page_id,block_status_code,policy_type,enabled)
+		VALUES ('legacy-mix','blocking',1,'deny','["203.0.113.0/24"]','force','slider',0,403,'mixed',1)`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,19 +97,18 @@ func TestSplitSecurityPolicy_threeChildrenAndRemap(t *testing.T) {
 	for _, child := range payload.Data.Created {
 		byType[child.PolicyType] = child.ID
 	}
-	var mode, aclList string
-	var rlRPS int
+	var mode, aclList, humanMode string
 	if err := db.DB.QueryRow(`SELECT COALESCE(mode,''), COALESCE(ip_acl_list,'[]') FROM security_policies WHERE id=?`, byType["stage1"]).Scan(&mode, &aclList); err != nil {
 		t.Fatal(err)
 	}
 	if mode != "off" || aclList != `["203.0.113.0/24"]` {
 		t.Fatalf("stage1 child mode=%q acl=%q, want off + ACL preserved", mode, aclList)
 	}
-	if err := db.DB.QueryRow(`SELECT COALESCE(mode,''), COALESCE(rate_limit_rps,0) FROM security_policies WHERE id=?`, byType["stage2"]).Scan(&mode, &rlRPS); err != nil {
+	if err := db.DB.QueryRow(`SELECT COALESCE(mode,''), COALESCE(human_verify_mode,'off') FROM security_policies WHERE id=?`, byType["stage2"]).Scan(&mode, &humanMode); err != nil {
 		t.Fatal(err)
 	}
-	if mode != "off" || rlRPS != 100 {
-		t.Fatalf("stage2 child mode=%q rps=%d, want off + 100", mode, rlRPS)
+	if mode != "off" || humanMode != "force" {
+		t.Fatalf("stage2 child mode=%q human=%q, want off + force", mode, humanMode)
 	}
 	if err := db.DB.QueryRow(`SELECT COALESCE(mode,'') FROM security_policies WHERE id=?`, byType["stage3"]).Scan(&mode); err != nil {
 		t.Fatal(err)
@@ -476,8 +475,8 @@ func TestSplitSecurityPolicy_skipsRuleWithExistingStage2(t *testing.T) {
 	router := splitRouter(t)
 	// Given：mixed 仅限流特征——拆分产出单个 stage2 子策略；
 	// 两条规则已并存绑定 [mixed, stage2]，一条规则仅绑 mixed
-	res, err := db.DB.Exec(`INSERT INTO security_policies (name,mode,rate_limit_enabled,rate_limit_rps,rate_limit_burst,policy_type,enabled)
-		VALUES ('legacy-rl','off',1,100,50,'mixed',1)`)
+	res, err := db.DB.Exec(`INSERT INTO security_policies (name,mode,human_verify_mode,human_verify_type,policy_type,enabled)
+		VALUES ('legacy-rl','off','force','slider','mixed',1)`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -485,8 +484,8 @@ func TestSplitSecurityPolicy_skipsRuleWithExistingStage2(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	res, err = db.DB.Exec(`INSERT INTO security_policies (name,mode,rate_limit_enabled,rate_limit_rps,rate_limit_burst,policy_type,enabled)
-		VALUES ('rl-live','off',1,200,100,'stage2',1)`)
+	res, err = db.DB.Exec(`INSERT INTO security_policies (name,mode,human_verify_mode,human_verify_type,policy_type,enabled)
+		VALUES ('rl-live','off','force','slider','stage2',1)`)
 	if err != nil {
 		t.Fatal(err)
 	}

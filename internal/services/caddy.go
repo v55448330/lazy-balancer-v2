@@ -489,7 +489,6 @@ func (s *CaddyService) applyConfigWithOptions(config map[string]interface{}, opt
 	Logf("info", "Caddy config applied successfully")
 	// 重载重建 registry：限流 429 计数归零，/metrics 抓取缓存与上游健康聚合
 	// 必须同步失效（否则安全总览/健康面板在 ≤5s 内仍显示重载前集合与累计值）。
-	InvalidateOverviewMetricsCache()
 	s.invalidateUpstreamHealthCache()
 	if opts.persistLastGood {
 		s.persistLastGoodLocked(data)
@@ -625,7 +624,6 @@ func (s *CaddyService) ApplyLastKnownGood() error {
 	}
 	// 启动兜底同样是一次真实 /load：registry 已重建，缓存口径必须失效
 	// （与 apply 成功分支同口径——/metrics 抓取缓存与上游健康聚合一并失效）。
-	InvalidateOverviewMetricsCache()
 	s.invalidateUpstreamHealthCache()
 	return nil
 }
@@ -2762,9 +2760,6 @@ func generateCaddyConfigWithCertSource(store, certSource caddyConfigStore, rules
 			for _, route := range buildBlockPageErrorRoute(r.CaddyID, splitAndTrim(r.Domain), securityCtx) {
 				errorRoutes = append(errorRoutes, route)
 			}
-			for _, route := range buildRateLimitErrorRoute(r.CaddyID, splitAndTrim(r.Domain), securityCtx) {
-				errorRoutes = append(errorRoutes, route)
-			}
 			// 阶段 1/阶段 3 的 deny 中断按策略身份归因：逐策略合成码（483+）
 			// 路由无 host 键（合成码只可能由绑定该策略的规则段产生，同 server
 			// 其他规则不会发出该码）。发射门=该策略在本规则绑定链中获码
@@ -4301,88 +4296,6 @@ func buildBlockPageErrorRoute(ruleCaddyID string, domainHosts []string, security
 	}, content, securityCtx.blockPageJSONByID[pagePolicy.BlockPageID], securityCtx.blockPageTypeByID[pagePolicy.BlockPageID], statusCode, nil, pagePolicy.BlockResponseMode)
 }
 
-// buildRateLimitErrorRoute returns a server-level error route rendering the
-// block page of the rule's first-bound enabled policy that configures one for
-// rate-limited (429) requests, or nil when no bound enabled policy enables
-// rate limiting or none has a block page.
-// caddy-ratelimit rejects via caddyhttp.Error(429), so handle_errors fires.
-func buildRateLimitErrorRoute(ruleCaddyID string, domainHosts []string, securityCtx *securityPolicyContext) []map[string]interface{} {
-	policies := policiesForRule(securityCtx, ruleCaddyID)
-	rateLimited := false
-	for _, policy := range policies {
-		if policy.RateLimitEnabled {
-			rateLimited = true
-			break
-		}
-	}
-	pagePolicy, content := firstPolicyWithBlockPage(policies, securityCtx.blockPageByID)
-	if !rateLimited || pagePolicy == nil {
-		return nil
-	}
-	// 限流拦截恒 429（不再取策略 BlockStatusCode）：429 Too Many Requests 是
-	// 限流的语义正确状态码，且使 caddy_http_requests_total{code="429"} 可单独
-	// 计量——Wave 6 状态统一后 403 与 WAF 拦截在指标中同形不可区分（实测：
-	// 错误路由响应继承主路由 handler 标签，无任何其他区分维度）。拦截页正文
-	// 不变（客户端体验一致），按限流 1s 窗口给出重试契约。
-	return buildDualBlockPageRoutes(map[string]interface{}{
-		"host":       domainHosts,
-		"expression": "{http.error.status_code} == 429",
-	}, content, securityCtx.blockPageJSONByID[pagePolicy.BlockPageID], securityCtx.blockPageTypeByID[pagePolicy.BlockPageID], 429, map[string][]string{"Retry-After": {"1"}}, pagePolicy.BlockResponseMode)
-}
-
-// buildRateLimitHandler returns the rate_limit handler for one bound policy of
-// a rule, or nil when that policy does not enable rate limiting. Zones are
-// logical AND: with burst > 0 a per-second zone caps instantaneous rate at
-// rps+burst while a per-minute zone caps sustained rate at rps; without burst a
-// single per-second zone caps at rps.
-// zone 键必须嵌入 policy_id：caddy-ratelimit 的 UsagePool 按 zone 名进程级共享
-// 计数器，同规则多策略（v2.2.0）若共用 {ruleID} 前缀会静默合并计数。
-// 库值唯一真相（批 3）：rate_limit_rps 类型①值型列（条件消费——rate_limit_
-// enabled 独立开关）写侧 400（rps>=1，validateRateLimitShape）+ 导入门 400
-// 保证 enabled 行恒有效；enabled=1 且 rps<=0（带外/旧数据）显性报错，废除原
-// 「rps<=0 静默 return nil」的 fail-open——UI 宣称限流启用而实际零强制。
-func buildRateLimitHandler(ruleCaddyID string, policy *models.SecurityPolicy) (map[string]interface{}, error) {
-	if policy == nil || !policy.RateLimitEnabled {
-		return nil, nil
-	}
-	if policy.RateLimitRPS <= 0 {
-		return nil, fmt.Errorf("规则 %s 绑定策略 %q 限流已启用但 rate_limit_rps 无效（%d <=0）：该列为类型①值型列（写侧 rps>=1 校验+导入门 400 拒收+启动归一关停 enabled=1&rps<1 的历史脏行），疑似带外直写或旧备份绕过导入门", ruleCaddyID, policy.Name, policy.RateLimitRPS)
-	}
-	// sweep_interval 是 caddy-ratelimit Handler 层字段（默认 1m），
-	// 不是 zone 字段——Caddy v2.11.4 对模块载荷 StrictUnmarshalJSON+
-	// DisallowUnknownFields，zone 级未知字段会使整个配置加载 400（开启限流
-	// 即配置停摆）。移到 handler 层（合法字段，10m 扫描周期语义保留）。
-	zonePrefix := fmt.Sprintf("%s-p%d", ruleCaddyID, policy.ID)
-	rateLimits := map[string]interface{}{
-		zonePrefix: map[string]interface{}{
-			// v2.3.x：{http.vars.client_ip}（受信代理启用时=真实 IP，未启用=socket IP，行为不变）。
-			"key":        "{http.vars.client_ip}",
-			"window":     "1s",
-			"max_events": policy.RateLimitRPS,
-		},
-	}
-	if policy.RateLimitBurst > 0 {
-		rateLimits = map[string]interface{}{
-			// v2.3.x：key 同为 {http.vars.client_ip}（与单 zone 分支同口径）。
-			zonePrefix + "-sec": map[string]interface{}{
-				"key":        "{http.vars.client_ip}",
-				"window":     "1s",
-				"max_events": policy.RateLimitRPS + policy.RateLimitBurst,
-			},
-			zonePrefix + "-min": map[string]interface{}{
-				"key":        "{http.vars.client_ip}",
-				"window":     "60s",
-				"max_events": policy.RateLimitRPS * 60,
-			},
-		}
-	}
-	return map[string]interface{}{
-		"handler":        "rate_limit",
-		"rate_limits":    rateLimits,
-		"sweep_interval": "10m",
-	}, nil
-}
-
 // buildGeoipHandler returns the geoip2region handler, or nil when geoip is disabled.
 // buildGeoipHandler 渲染 geoip2region handler；crawlerExempt 为规则级门控
 // （任一绑定策略 GeoIPCrawlerExempt）——caddygeoip 在 false 时只剥
@@ -4705,18 +4618,8 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig, sec
 		return chainFingerprint
 	}
 	if securityLibsOK {
-		// 阶段 2 = CC 防护（2026-11-12 用户裁定）：同一阶段内固定序——
-		// 先配额（429，便宜且与是否人类无关），再人机挑战（贵），最后才是阶段 3
-		// 内容防护（WAF）。挑战页挡住的脚本不消耗 WAF 评估资源。
-		for _, policy := range policies {
-			rateLimitHandler, rateLimitErr := buildRateLimitHandler(rule.CaddyID, policy)
-			if rateLimitErr != nil {
-				return nil, rateLimitErr
-			}
-			if rateLimitHandler != nil {
-				securityChain = append(securityChain, rateLimitHandler)
-			}
-		}
+		// 阶段 2 = CC 防护（2026-11-12 用户裁定；配额限流已下线）：
+		// 仅人机挑战，挑战页挡住的脚本不消耗阶段 3 WAF 评估资源。
 		if rule.Protocol == "http" && len(policies) > 0 {
 			if humanHandler := buildHumanHandler(rule.CaddyID, policies); humanHandler != nil {
 				securityChain = append(securityChain, humanHandler)

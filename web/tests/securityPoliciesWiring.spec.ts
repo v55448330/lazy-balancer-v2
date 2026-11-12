@@ -82,16 +82,16 @@ test('引用名单取数走跨组件共享缓存（self + 共绑 peer，不再�
   assert.match(page, /onUnmounted\(unregisterIpListEntries\)/, '订阅必须随组件卸载摘除')
 })
 
-test('迁移预演补「已有其他限流策略 → 将跳过」风险组', () => {
+test('迁移预演补「已有其他阶段 2 策略 → 将跳过」风险组', () => {
   const risk = section(page, 'const migrateStage2SkipRisk', '\n})\n')
   assert.match(risk, /migrateChildTypes\.value\.includes\('stage2'\)/, '未产出 stage2 子策略时无该风险')
   assert.match(risk, /type === 'stage2'/)
-  assert.match(risk, /b\.rate_limit_enabled/, '摘要缺类型时按 binding 能力回退')
+  assert.doesNotMatch(risk, /rate_limit_enabled/, '限流字段已下线，风险判定只按策略类型')
   // 模板：两处呈现（逐行标注 + 汇总横幅）。i18n 后双钉:调用点钉键,zh 母本钉原文(任一漂移必红)
   assert.match(page, /t\('app\.security\.policies\.migrate\.willSkip'\)/)
   assert.match(page, /t\('app\.security\.policies\.migrate\.rateLimitRisk'/)
   assert.ok(code('src/locales/zh/security.ts').includes('将跳过（已有 stage2）'), '逐行标注原文必须在 zh 母本词条中')
-  assert.ok(code('src/locales/zh/security.ts').includes('限流唯一风险'), '汇总横幅原文必须在 zh 母本词条中')
+  assert.ok(code('src/locales/zh/security.ts').includes('阶段 2 唯一风险'), '汇总横幅原文必须在 zh 母本词条中')
 })
 
 test('策略级拦截页状态码选项由共享清单派生（规则级覆盖选择器已退役）', () => {

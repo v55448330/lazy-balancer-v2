@@ -89,6 +89,7 @@ export default {
       "default": { "name": "Default Block Page", "desc": "Built-in default 403 block page" },
       "ratelimit": { "name": "Rate-limit Block Page", "desc": "Built-in 429 rate-limit block page (optional; takes effect when selected)" },
       "maintenance": { "name": "Maintenance Page", "desc": "Built-in maintenance page (optional; takes effect when selected)" },
+      "human": { "name": "Human Verification Page", "desc": "Built-in human verification placeholder page (stage 3 renders the real challenge via lb_human; this page is display-only)" },
     },
     "page": {
      "title": "Block pages",
@@ -399,16 +400,17 @@ export default {
      "colRule": "Rule",
      "colPolicy": "Policy"
     },
-    "rateLimit": {
-     "title": "Rate-limit blocks",
-     "tip": "Counted by 429 responses (incl. upstream-returned 429s); accumulated since the last config reload",
-     "tag": "429 count · since last reload",
-     "loadFailed": "Rate-limit block data failed to load",
-     "total": "Total blocked",
-     "colDomain": "Domain",
-     "colCount": "Blocks",
-     "empty": "No rate-limit blocks"
+    "cc": {
+     "title": "CC Protection",
+     "tag": "Challenge / Ban",
+     "tip": "Triggered in stage 2: short bursts, 4xx spikes, or multi-UA sessions from one source → human challenge or CC ban",
+     "challengedToday": "Challenges today",
+     "passRate": "Pass rate",
+     "passFail": "Passed / failed",
+     "bans": "CC bans",
+     "note": "Counts come from the human challenge page and session verification; bans are requests rejected by CC protection."
     },
+
     "topIps": {
      "title": "Top 10 source IPs (last 7 days)",
      "empty": "No data",
@@ -489,8 +491,6 @@ export default {
     "tabRules": "Matched rules",
     "noTargetData": "No target data",
     "noData": "No data",
-    "ratelimitTip": "Cumulative since the last Caddy config reload / process start; includes upstream self-returned 429s; unaffected by window switching",
-    "ratelimitTotal": "Rate-limit total · since reload",
     "windowIndependent": "Not affected by window",
     "trendTitle": "{window} event trend",
     "totalLabel": "Total",
@@ -621,7 +621,7 @@ export default {
      "confirm": "Confirm Migration",
      "deleteNote": "The original policy is deleted once all rules remap successfully; if any rule is skipped it is kept (still in use)",
      "noBindings": "No rules are bound to this policy",
-     "rateLimitRisk": "Rate-limit uniqueness risk: {names} already bind another rate-limit policy — the split produces stage 2 sub-policies, so these rules skip remapping (at most one rate-limit policy per rule) and keep their original bindings",
+     "rateLimitRisk": "Stage 2 uniqueness risk: {names} already bind another CC protection policy — the split produces stage 2 sub-policies, so these rules skip remapping (at most one stage 2 policy per rule) and keep their original bindings",
      "remapDesc": "All bindings of the original policy move to its sub-policies",
      "remapTitle": "Bindings Will Be Remapped",
      "subtitle": "Mixed policy \"{name}\" will be migrated by stage into single-purpose sub-policies (the legacy combined type is no longer available for new policies)",
@@ -639,11 +639,8 @@ export default {
      "excludedWithPath": "{n} (paths {paths})",
      "geoModeRegions": "{mode} · {n} regions",
      "geoModeUnset": "mode not configured",
-     "noPageRateLimit": "No custom page: rate-limit 429 returns an empty body (stage 1/3 blocking falls back to Caddy default 403)",
      "pageWithStatus": "{name} (status {code})",
      "pathMore": " … {n} more",
-     "rateDetail": "{rps} rps · burst {burst} · blocking always 429",
-     "rateLimitLabel": "Rate Limit",
      "trustCount": "{n}{off}",
      "typeLabel": "Type",
      "modeLabel": "Mode"
@@ -810,14 +807,13 @@ export default {
     "bp": {
      "manageTip": "Custom pages returned to clients on blocking are managed on the \"Block Pages\" page. ",
      "noPageDefault": "No custom page (Caddy default 403)",
-     "noPageStage2": "No custom page (empty 429 body)",
      "noPageTipDefault": "No block page: when this policy blocks, the page of the first policy with one in the binding chain is shown as fallback; if none has a page, Caddy's default 403 is returned",
      "noPageTipStage2": "No block page: 429 returns an empty body (built-in \"rate-limit block page\" optional)",
      "pageLabel": "Block Page",
      "pagePlaceholder": "Select block page",
      "projection": "When this policy blocks, the block page selected below is returned to the client",
      "statusLabel": "Status Code",
-     "statusTipDefault": "WAF and IP ACL blocking use this status code; rate-limit blocking always returns 429 (for separate metric accounting)",
+     "statusTipDefault": "WAF and IP ACL blocks use this status code",
      "statusTipNoPage": "Without a custom page the status code has no effect — blocking returns Caddy's default 403; select a page first",
      "responseLabel": "Block response",
      "responseAuto": "Auto (by request)",
@@ -832,7 +828,6 @@ export default {
      "noPageFallback": "{n} rule(s) bound: this policy has no block page — blocking shows the fallback page (first enabled page-capable policy in the chain)",
      "pageActive": "{n} rule(s) bound: whenever this policy blocks, this page shows: \"{page}\"",
      "pageInvalid": "{n} rule(s) bound: this block page is no longer valid (deleted or empty); reselect before saving",
-     "rateLimitFacet": "{n} rate-limit rule(s): rate-limit blocking status is always 429 (the rate-limit page follows the first page-capable policy in the chain, independent of the triggering policy)",
      "stage2NoPage": "{n} rule(s) bound: this policy has no block page — rate-limit blocking returns an empty-body 429",
      "stageIneffective": "{stage}: the current configuration cannot produce a block at this stage, so the page will never be used",
      "tcpFacet": "{n} TCP rule(s): blocking resets the connection and never reaches a block page"
@@ -970,7 +965,6 @@ export default {
      "geoOff": "GeoIP not enabled",
      "geoRegions": "GeoIP {n} regions",
      "mixedCombo": "Mixed · cross-stage combination (legacy)",
-     "rateSummary": "{rps} rps · burst {burst}",
      "ccChallenge": "Challenge: {mode}",
      "ccSpike": "Spike trigger {n} req/{sec}s",
      "trustSummary": "Trust {n} · {mode}",

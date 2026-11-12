@@ -19,15 +19,15 @@ func TestSplitSecurityPolicy_stage2ChildInheritsBlockPage(t *testing.T) {
 	setupSecurityPolicyTestDB(t)
 	router := splitRouter(t)
 
-	// Given：内置页种子 + mixed 策略（仅信任条目 + 限流特征）配拦截页
+	// Given：内置页种子 + mixed 策略（仅信任条目 + CC 挑战特征）配拦截页
 	pageRes, err := db.DB.Exec(`INSERT INTO security_block_pages (name, content, content_type, is_default) VALUES ('拆分测试页', '<p>x</p>', 'text/html; charset=utf-8', 0)`)
 	if err != nil {
 		t.Fatal(err)
 	}
 	pageID, _ := pageRes.LastInsertId()
 	res, err := db.DB.Exec(`INSERT INTO security_policies (name, mode, enabled, policy_type, trust_detection,
-		ip_whitelist, ip_whitelist_enabled, rate_limit_enabled, rate_limit_rps, block_page_id)
-		VALUES ('拆分母策略', 'off', 1, 'mixed', 1, '["1.1.1.1"]', 1, 1, 100, ?)`, pageID)
+		ip_whitelist, ip_whitelist_enabled, human_verify_mode, human_verify_type, block_page_id)
+		VALUES ('拆分母策略', 'off', 1, 'mixed', 1, '["1.1.1.1"]', 1, 'force', 'slider', ?)`, pageID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,7 +43,7 @@ func TestSplitSecurityPolicy_stage2ChildInheritsBlockPage(t *testing.T) {
 		t.Fatalf("split status=%d body=%s, want 200", split.Code, split.Body.String())
 	}
 
-	// Then：stage2 子策略继承拦截页；stage0 子策略不携带
+	// Then：配额限流下线后 stage2 子策略不再配置拦截页；stage0 亦不携带
 	var stage2Page, stage0Page int
 	if err := db.DB.QueryRow(`SELECT COALESCE(block_page_id,0) FROM security_policies WHERE name='拆分母策略（阶段 2）'`).Scan(&stage2Page); err != nil {
 		t.Fatalf("stage2 子策略未创建: %v", err)
@@ -51,8 +51,8 @@ func TestSplitSecurityPolicy_stage2ChildInheritsBlockPage(t *testing.T) {
 	if err := db.DB.QueryRow(`SELECT COALESCE(block_page_id,0) FROM security_policies WHERE name='拆分母策略（阶段 0）'`).Scan(&stage0Page); err != nil {
 		t.Fatalf("stage0 子策略未创建: %v", err)
 	}
-	if stage2Page != int(pageID) {
-		t.Fatalf("stage2 子策略 block_page_id=%d, want %d（拆分不得丢限流页）", stage2Page, pageID)
+	if stage2Page != 0 {
+		t.Fatalf("stage2 子策略 block_page_id=%d, want 0（阶段 2 不再消费拦截页）", stage2Page)
 	}
 	if stage0Page != 0 {
 		t.Fatalf("stage0 子策略 block_page_id=%d, want 0（阶段 0 无拦截页概念）", stage0Page)

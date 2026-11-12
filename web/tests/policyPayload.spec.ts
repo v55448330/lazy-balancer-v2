@@ -36,9 +36,6 @@ const base = (over: Partial<PolicyPayloadInput> = {}): PolicyPayloadInput => ({
   ipWhitelist: [],
   ipWhitelistRefs: [],
   ipWhitelistEnabled: false,
-  rateLimitEnabled: false,
-  rateLimitRps: 100,
-  rateLimitBurst: 50,
   crsRuleGroups: [],
   crsExcludedRules: [],
   customRuleIds: [],
@@ -176,12 +173,14 @@ test('mixed 不显式提交类型（省略=后端按内容推断）', () => {
   assert.equal(buildPolicyPayload(base({ policyType: 'stage1' })).policy_type, 'stage1')
 })
 
-test('几何开关与限流参数原样透传（不做裁剪）', () => {
-  const payload = buildPolicyPayload(base({ rateLimitEnabled: true, rateLimitRps: 33, rateLimitBurst: 7, anomalyThreshold: 9, blockStatusCode: 503, blockPageId: 4 }))
-  assert.deepEqual(
-    [payload.rate_limit_enabled, payload.rate_limit_rps, payload.rate_limit_burst, payload.anomaly_threshold, payload.block_status_code, payload.block_page_id],
-    [true, 33, 7, 9, 503, 4],
-  )
+test('配额限流字段已下线：载荷不得再提交 rate_limit_*', () => {
+  const payload = buildPolicyPayload(base({ anomalyThreshold: 9, blockStatusCode: 503, blockPageId: 4 }))
+  assert.equal('rate_limit_enabled' in payload, false)
+  assert.equal('rate_limit_rps' in payload, false)
+  assert.equal('rate_limit_burst' in payload, false)
+  assert.equal(payload.anomaly_threshold, 9)
+  assert.equal(payload.block_status_code, 503)
+  assert.equal(payload.block_page_id, 4)
 })
 
 test('豁免开启 + 空引擎 = 不可保存（后端空集=全部引擎）', () => {

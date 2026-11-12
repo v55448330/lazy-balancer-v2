@@ -1495,6 +1495,11 @@ func runMigrations() error {
 	if err := migratePolicyStagesV1(); err != nil {
 		return err
 	}
+	// 配额限流下线（2026-11-12 用户裁定）：阶段 2 仅保留 CC 人机挑战。
+	// 存量 rate_limit_* 归零（列保留用于旧备份/混版本快照兼容，不再被渲染消费）。
+	if err := retireRateLimitQuota(); err != nil {
+		return err
+	}
 	_, _ = DB.Exec(`DELETE FROM security_block_pages WHERE id=4 AND is_builtin=1 AND name='Human Verification Page'`)
 	// 自定义挑战页退役（2026-11-12 用户裁定：拦截页已覆盖挑战页场景）：9005
 	// 占位页无任何消费方，内置行一并清理（自定义页不触碰）。
@@ -5879,6 +5884,39 @@ func migrateRuleTLSModeResidue() error {
 // 合并进目标、删除该规则上的人机绑定；若人机策略仍绑定其他规则则保留行并改型
 // 为 stage2（无绑定且已被合并的行删除）。一次性门置位后重跑零改写——否则
 // WAF(stage3) 会被当成人机再次合并。
+// retireRateLimitQuota 幂等归零已下线的配额限流配置（列保留、行为不再消费）。
+// UPDATE 命中 rate_limit_* 的 cluster_version 触发器，从端随下轮快照收敛。
+func retireRateLimitQuota() error {
+	result, err := execMigrationWriteIfNeeded(updateWhere("security_policies",
+		"rate_limit_enabled=0, rate_limit_rps=0, rate_limit_burst=0",
+		"COALESCE(rate_limit_enabled,0)<>0 OR COALESCE(rate_limit_rps,0)<>0 OR COALESCE(rate_limit_burst,0)<>0"))
+	if err != nil {
+		return fmt.Errorf("failed to retire rate-limit quota: %w", err)
+	}
+	if result != nil {
+		if n, _ := result.RowsAffected(); n > 0 {
+			detail := fmt.Sprintf("启动迁移：配额限流已下线，归零 %d 条策略的 rate_limit_* 配置", n)
+			log.Print(detail)
+			recordSystemAudit("启动迁移", "安全策略", detail)
+		}
+	}
+	// 阶段 2 不再消费拦截页/状态码（CC ban 为插件固定 403）。
+	// 窗口期旧库可能尚未补 policy_type 列，跳过该段（后续启动收敛）。
+	var hasPolicyType int
+	if err := DB.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('security_policies') WHERE name='policy_type'`).Scan(&hasPolicyType); err != nil {
+		return fmt.Errorf("probe security_policies.policy_type: %w", err)
+	}
+	if hasPolicyType == 0 {
+		return nil
+	}
+	if _, err := execMigrationWriteIfNeeded(updateWhere("security_policies",
+		"block_page_id=0, block_status_code=0",
+		"policy_type='stage2' AND (COALESCE(block_page_id,0)<>0 OR COALESCE(block_status_code,0)<>0)")); err != nil {
+		return fmt.Errorf("failed to retire stage2 block page: %w", err)
+	}
+	return nil
+}
+
 func migratePolicyStagesV1() error {
 	if err := ensureNewColumns(map[string]string{"global_config.policy_stage_merge_v1": "BOOLEAN DEFAULT 0"}, nil); err != nil {
 		return err

@@ -78,7 +78,6 @@ var antiFallbackScanTargets = map[string][]string{
 		"buildHTTPHandleChain",
 		"buildTCPProxyHandler",
 		"buildTCPServer",
-		"buildRateLimitHandler",
 		"buildBlockPageAttributionRoute",
 		"defaultBlockPageJSONMessage",
 		"buildBlockPageErrorRoute",

@@ -63,10 +63,12 @@ func TestSecurityPolicyDetailCoversEveryModelColumn(t *testing.T) {
 	model := securityPolicyModelJSONFields()
 	detail := jsonFieldSet(securityPolicyDetail{})
 	const documentedDetailGap = "updated_by"
+	// 配额限流已下线：三列保留兼容旧备份/混版本快照，但不再对外投影。
+	deprecatedDetailGaps := map[string]bool{"rate_limit_enabled": true, "rate_limit_rps": true, "rate_limit_burst": true}
 
 	var missing []string
 	for name := range model {
-		if name == documentedDetailGap {
+		if name == documentedDetailGap || deprecatedDetailGaps[name] {
 			continue
 		}
 		if _, ok := detail[name]; !ok {
@@ -93,7 +95,6 @@ func TestSecurityPolicySummaryCarriesEditorRoundTripFields(t *testing.T) {
 		"ip_whitelist_enabled", "ip_acl_enabled", "ip_acl_mode", "ip_blacklist",
 		"geoip_countries", "geoip_mode", "geoip_crawler_exempt", "geoip_crawler_engines",
 		"crs_rule_groups", "crs_excluded_count", "custom_rules_count",
-		"rate_limit_rps", "rate_limit_burst",
 		"waf_check_response", "log_request_body", "policy_type", "trust_detection",
 	}
 	var missing []string
@@ -116,7 +117,6 @@ func TestSecurityPolicyDetailProjectionCarriesSentinels(t *testing.T) {
 	res, err := db.DB.Exec(`INSERT INTO security_policies (
 		name, description, mode, anomaly_threshold, ip_acl_mode, ip_acl_list, ip_acl_enabled,
 		ip_whitelist, ip_whitelist_enabled, ip_blacklist,
-		rate_limit_enabled, rate_limit_rps, rate_limit_burst,
 		crs_rule_groups, crs_excluded_rules, custom_rules, block_page_id, block_status_code, block_response_mode, enabled,
 		created_at, updated_at, geoip_countries, geoip_mode, geoip_crawler_exempt, geoip_crawler_engines,
 		waf_check_response, log_request_body, ip_acl_list_refs, ip_whitelist_refs, updated_by, policy_type, trust_detection,
@@ -124,7 +124,6 @@ func TestSecurityPolicyDetailProjectionCarriesSentinels(t *testing.T) {
 		cc_detect_enabled, cc_rps_limit, cc_rps_window, cc_4xx_ratio, cc_session_anomaly, cc_session_ua_threshold)
 		VALUES ('哨兵策略', '哨兵描述', 'custom_only', 15, 'deny', '["203.0.113.0/24"]', 1,
 		        '["198.51.100.7"]', 1, '["192.0.2.9"]',
-		        1, 321, 77,
 		        '["942"]', '["942100"]', '[]', 0, 503, 'html', 1,
 		        '2026-10-01 01:02:03', '2026-10-02 04:05:06', '["CN"]', 'deny', 1, '["googlebot"]',
 		        1, 1, '[3]', '[4]', 7, 'mixed', 1,
@@ -154,7 +153,6 @@ func TestSecurityPolicyDetailProjectionCarriesSentinels(t *testing.T) {
 		ID: int(id), Name: "哨兵策略", Description: "哨兵描述", Mode: "custom_only",
 		AnomalyThreshold: 15, IPACLMode: "deny", IPACLList: `["203.0.113.0/24"]`, IPACLEnabled: true,
 		IPWhitelistEnabled: true, IPWhitelist: `["198.51.100.7"]`, IPBlacklist: `["192.0.2.9"]`,
-		RateLimitEnabled: true, RateLimitRPS: 321, RateLimitBurst: 77,
 		CRSRuleGroups: `["942"]`, CRSExcludedRules: `["942100"]`, CustomRules: `[]`,
 		BlockPageID: 0, BlockStatusCode: 503, BlockResponseMode: "html", Enabled: true,
 		CreatedAt: "2026-10-01 01:02:03", UpdatedAt: "2026-10-02 04:05:06",

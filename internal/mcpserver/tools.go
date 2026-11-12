@@ -125,7 +125,6 @@ var toolUsage = map[string]string{
 	"get_ip2region_regions":        "获取可选的区域列表（中国省份+海外）",
 	"get_ip2region_update_status":  "查看 IP2Region 正在进行的更新进度",
 	"get_ip2region_update_logs":    "查看 IP2Region 最近一次更新的详细日志",
-	"get_rate_limit_blocks":        "查看限流拦截统计（按 host 汇总 429 计数，含上游自返 429；自最近一次 Caddy 配置重载以来累计，重载或进程重启归零，无时段维度）",
 	"get_rule_stage_stats":         "查看单规则三阶段安全统计（IP 访问控制+地域拦截 / WAF 近 24h 拦截数，限流自最近重载累计）",
 	"create_security_policy":       "创建安全策略：配置 WAF 模式/异常阈值/CRS 规则组/IP ACL/GeoIP 区域控制/限流/拦截页面；custom_rules 为 JSON 数组字符串；policy_type 取值 stage0/1/2/3（缺省按内容自动推断；显式提交 mixed 会被 400 拒绝，跨阶段内容推断为 mixed 同样 400，请按阶段类型分别创建）；trust_detection 仅 stage0 信任策略消费（其余阶段写入无效）",
 	"update_security_policy":       "更新策略任意字段（如调整 WAF 模式、增减区域、修改阈值）；policy_type 缺省=按内容重推断（显式 mixed 拒绝——存量混合策略请用 POST /security/policies/:id/split 拆分迁移）；trust_detection 仅 stage0 策略消费",

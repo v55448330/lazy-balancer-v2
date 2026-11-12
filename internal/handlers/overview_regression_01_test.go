@@ -19,7 +19,7 @@ func TestGetSecurityOverview_activePoliciesCountsFeatureBearingStages(t *testing
 	setupSecurityPolicyTestDB(t)
 	router := newSecurityEventsRouter(t)
 
-	// Given：三条启用策略——stage1 纯 ACL、stage2 纯限流、stage3 WAF、
+	// Given：三条启用策略——stage1 纯 ACL、stage2 纯 CC、stage3 WAF、
 	// 另有一条无任何特征的 off 空策略（不应计入）
 	seed := func(name string, acl int, aclList string, rl int, rps int, mode string, custom string) {
 		if _, err := db.DB.Exec(`INSERT INTO security_policies (name, mode, enabled, ip_acl_enabled, ip_acl_list, rate_limit_enabled, rate_limit_rps, custom_rules, policy_type)
@@ -29,7 +29,10 @@ func TestGetSecurityOverview_activePoliciesCountsFeatureBearingStages(t *testing
 		}
 	}
 	seed("s1-纯ACL", 1, `["1.1.1.1"]`, 0, 0, "off", "[]")
-	seed("s2-纯限流", 0, "[]", 1, 100, "off", "[]")
+	seed("s2-纯CC", 0, "[]", 0, 0, "off", "[]")
+	if _, err := db.DB.Exec(`UPDATE security_policies SET human_verify_mode='force' WHERE name='s2-纯CC'`); err != nil {
+		t.Fatal(err)
+	}
 	seed("s3-纯WAF", 0, "[]", 0, 0, "blocking", "[]")
 	if _, err := db.DB.Exec(`INSERT INTO security_policies (name, mode, enabled, policy_type) VALUES ('空策略', 'off', 1, 'stage3')`); err != nil {
 		t.Fatal(err)

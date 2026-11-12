@@ -178,7 +178,7 @@ test('ThreatScreen 接线：每个 KPI 均经 useCountUp', () => {
   const screen = code('src/views/security/ThreatScreen.vue')
   assert.match(screen, /import \{ useCountUp \} from '@\/composables\/useCountUp'/)
   const lines = screen.split('\n').filter((line) => line.includes('useCountUp('))
-  for (const field of ['total_events', 'ratelimit_blocks', 'active_sources', 'recent_rate']) {
+  for (const field of ['total_events', 'active_sources', 'recent_rate']) {
     assert.ok(
       lines.some((line) => line.includes(field)),
       `KPI ${field} 必须经 useCountUp 滚动（当前调用行：${lines.length}）`,

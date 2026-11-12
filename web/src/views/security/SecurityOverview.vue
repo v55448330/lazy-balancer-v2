@@ -72,16 +72,6 @@
               <span class="proto-split-item"><i class="proto-dot proto-dot--http"></i><span class="proto-split-label">HTTP</span><span class="strip-sub-num">{{ fmtStatNum(todayDetectedSplit.http) }}</span></span><span class="proto-split-item proto-split-item--tcp"><i class="proto-dot proto-dot--tcp"></i><span class="proto-split-label">TCP</span><span class="strip-sub-num">{{ fmtStatNum(todayDetectedSplit.tcp) }}</span></span>
             </div>
           </div>
-          <div class="strip-divider"></div>
-          <div class="guard-item">
-            <div class="strip-label">{{ t('app.security.overview.status.challenged') }}
-              <el-tooltip :content="t('app.security.overview.status.challengedTip')" placement="top">
-                <el-icon><InfoFilled /></el-icon>
-              </el-tooltip>
-            </div>
-            <div class="strip-value is-info">{{ fmtStatNum(overview.today_challenged) }}</div>
-            <div class="strip-sub"><span class="strip-sub-label">{{ t('app.security.overview.status.humanPassRate') }}</span> {{ humanPassRate }}</div>
-          </div>
         <div class="strip-divider"></div>
           <div class="guard-item">
             <div class="strip-label">{{ t('app.security.overview.status.normal') }}
@@ -219,34 +209,32 @@
             <div class="card-header">
               <div class="card-title">
                 <el-icon class="title-icon"><Odometer /></el-icon>
-                <span>{{ t('app.security.overview.rateLimit.title') }}</span>
+                <span>{{ t('app.security.overview.cc.title') }}</span>
               </div>
-            <el-tooltip placement="top" :content="t('app.security.overview.rateLimit.tip')">
-              <el-tag type="info" size="small" effect="plain" class="rate-limit-hint">{{ t('app.security.overview.rateLimit.tag') }}</el-tag>
-            </el-tooltip>
+              <el-tooltip placement="top" :content="t('app.security.overview.cc.tip')">
+                <el-tag type="info" size="small" effect="plain">{{ t('app.security.overview.cc.tag') }}</el-tag>
+              </el-tooltip>
             </div>
           </template>
-          <el-alert v-if="rateLimitError" type="error" show-icon :closable="false" class="error-banner">
-            <template #title>
-              <div class="polling-error-title">
-                <span>{{ t('app.security.overview.rateLimit.loadFailed') }}</span>
-                <el-button link type="danger" :loading="reloading" @click="reloadAll">{{ t('app.security.overview.page.retryNow') }}</el-button>
-              </div>
-            </template>
-          </el-alert>
-          <template v-else>
-            <div class="rate-limit-total">
-              <span class="stat-label">{{ t('app.security.overview.rateLimit.total') }}</span>
-              <span class="stat-value" style="color: #f56c6c">{{ rateLimitBlocks.total }}</span>
+          <div class="cc-stats">
+            <div class="cc-stat">
+              <span class="stat-label">{{ t('app.security.overview.cc.challengedToday') }}</span>
+              <span class="stat-value" style="color: #409eff">{{ fmtStatNum(overview.today_challenged) }}</span>
             </div>
-            <el-table v-if="rateLimitBlocks.hosts.length > 0" :data="rateLimitBlocks.hosts" stripe size="small" :header-cell-style="{ background: '#f9fafb' }" empty-text="">
-              <el-table-column prop="host" :label="t('app.security.overview.rateLimit.colDomain')" min-width="120" show-overflow-tooltip />
-              <el-table-column prop="count" :label="t('app.security.overview.rateLimit.colCount')" width="90" align="center">
-                <template #default="{ row }"><el-tag type="danger" size="small" effect="plain">{{ row.count }}</el-tag></template>
-              </el-table-column>
-            </el-table>
-            <el-empty v-else :description="t('app.security.overview.rateLimit.empty')" :image-size="60" />
-          </template>
+            <div class="cc-stat">
+              <span class="stat-label">{{ t('app.security.overview.cc.passRate') }}</span>
+              <span class="stat-value">{{ humanPassRate }}</span>
+            </div>
+            <div class="cc-stat">
+              <span class="stat-label">{{ t('app.security.overview.cc.passFail') }}</span>
+              <span class="stat-value">{{ fmtStatNum(overview.today_human_pass ?? 0) }} / {{ fmtStatNum(overview.today_human_fail ?? 0) }}</span>
+            </div>
+            <div class="cc-stat">
+              <span class="stat-label">{{ t('app.security.overview.cc.bans') }}</span>
+              <span class="stat-value" style="color: #f56c6c">{{ fmtStatNum(humanStats.bans) }}</span>
+            </div>
+          </div>
+          <div class="form-tip-line">{{ t('app.security.overview.cc.note') }}</div>
         </el-card>
       </el-col>
     </el-row>
@@ -308,7 +296,6 @@ import '@/utils/echarts' // 统一注册（副作用，全站单点）
 import VChart from 'vue-echarts'
 import type { APIResponse } from '@/types'
 import { securityActionColors } from '@/utils/chartTheme'
-import { normalizeRateLimitBlocks, type RateLimitBlocks } from '@/utils/rateLimitBlocks'
 import { ingestionWarningMessage, type IngestionHealth } from '@/utils/ingestionHealth'
 
 const { t } = useI18n()
@@ -479,21 +466,10 @@ const fetchBlockedEvents = async () => {
 
 const goToEvents = () => { window.open(pageUrl('security-events'), '_blank', 'noopener') }
 
-const rateLimitBlocks = ref<RateLimitBlocks>({ total: 0, hosts: [] })
-const rateLimitError = ref(false)
 const ip2regionVersion = ref('—')
 const ip2regionStatus = ref('')
 const ip2regionError = ref(false)
 
-const fetchRateLimitBlocks = async () => {
-  try {
-    const res = await request.get<APIResponse<unknown>>('/security/rate-limit-blocks')
-    rateLimitBlocks.value = normalizeRateLimitBlocks(res.data)
-    rateLimitError.value = false
-  } catch {
-    rateLimitError.value = true
-  }
-}
 
 const fetchIP2RegionInfo = async () => {
   try {
@@ -560,7 +536,6 @@ const reloadAll = async (): Promise<void> => {
     await Promise.all([
       fetchData(),
       fetchBlockedEvents(),
-      fetchRateLimitBlocks(),
       fetchIP2RegionInfo(),
       fetchThreatLib(),
       fetchCrawlerLib(),
@@ -649,7 +624,8 @@ onMounted(() => { void reloadAll() })
    （同行等高后，卡头高度差会把两卡内容区顶得参差）。 */
 .header-checkbox { height: 20px; margin-left: 12px; }
 .events-row .el-card { height: 100%; }
-.rate-limit-total { display: flex; align-items: baseline; justify-content: space-between; padding: 0 4px 10px; }
-.rate-limit-total .stat-label { font-size: 13px; color: var(--text-secondary); margin-bottom: 0; }
-.rate-limit-total .stat-value { font-size: 20px; font-weight: 600; }
+.cc-stats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; padding: 0 4px 10px; }
+.cc-stat { display: flex; flex-direction: column; gap: 2px; }
+.cc-stat .stat-label { font-size: 13px; color: var(--text-secondary); }
+.cc-stat .stat-value { font-size: 20px; font-weight: 600; }
 </style>

@@ -20,7 +20,6 @@ export interface RuleStageCounts {
   stage1_blocked_24h: number
   stage3_blocked_24h: number
   stage_unattributed_24h: number
-  ratelimit_blocks_reload: number
   // 分段平均处理耗时（µs）：预检段=信任+IP ACL+GeoIP（同一 coraza handler
   // 不可分）；WAF 段=隔离预检后的评估成本（含限流，纳秒级可忽略）。
   precheck_avg_us?: number
@@ -70,7 +69,7 @@ export const stageCountChip = (
   if (view.failed) return { chip: t('common.app.views.stageStats.countUnavailable') }
   if (!counts) return { chip: '—' }
   if (stage === 1) return { chip: t('common.app.views.stageStats.chipStage24h', { count: counts.stage1_blocked_24h }) }
-  if (stage === 2) return { chip: t('common.app.views.stageStats.chip429', { count: counts.ratelimit_blocks_reload }), caption: t('common.app.views.stageStats.chip429Caption') }
+  if (stage === 2) return {} // CC 挑战统计为全局端点，规则级无分桶
   if (stage === 3) return {} // 阶段 3 人机验证：挑战计数由 lb_human 统计端点（总览卡）承担，规则级无分桶
   return { chip: t('common.app.views.stageStats.chipStage24h', { count: counts.stage3_blocked_24h }) } // 阶段 4 WAF
 }
@@ -86,7 +85,7 @@ export const stageCountSummary = (
 ): string => {
   if (stage === 0 || !view.settled || view.failed || !counts) return ''
   if (stage === 1) return t('common.app.views.stageStats.summaryStage24h', { count: counts.stage1_blocked_24h }) + timingDetailText(1, counts) + unattributedCountText(counts)
-  if (stage === 2) return t('common.app.views.stageStats.summary429', { count: counts.ratelimit_blocks_reload })
+  if (stage === 2) return '' // CC 挑战统计为全局端点，规则级无分桶
   // 阶段 3 人机验证：规则级无分桶（挑战计数在 /security/human/stats），不得回落 WAF 桶冒充本阶段统计
   if (stage === 3) return ''
   return t('common.app.views.stageStats.summaryStage24h', { count: counts.stage3_blocked_24h }) + timingDetailText(4, counts) + unattributedCountText(counts)

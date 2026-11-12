@@ -140,12 +140,12 @@ func TestUpdateSecurityPolicy_rejectsExplicitOutOfStageFields(t *testing.T) {
 			want: "阶段 1",
 		},
 		{
-			name:     "stage3 显式启用限流",
+			name:     "stage3 显式启用地域控制",
 			createAs: map[string]any{"name": "conflict-rl", "policy_type": "stage4", "mode": "blocking"},
 			payload: map[string]any{
-				"policy_type": "stage4", "rate_limit_enabled": true, "rate_limit_rps": 50,
+				"policy_type": "stage4", "geoip_mode": "deny", "geoip_countries": `["CN"]`,
 			},
-			want: "阶段 2",
+			want: "阶段 1",
 		},
 		{
 			name:     "stage1 显式设置 WAF 模式",
@@ -180,8 +180,8 @@ func TestUpdateSecurityPolicy_rejectsExplicitOutOfStageFields(t *testing.T) {
 	}
 }
 
-// 回归：编辑器对「该阶段不呈现」的字段仍会回传默认值（限流 rps/burst 默认
-// 100/50、爬虫引擎默认三项、拦截页 1/状态码 403、名单保留但开关关闭）——
+// 回归：编辑器对「该阶段不呈现」的字段仍会回传默认值（爬虫引擎默认三项、
+// 拦截页 1/状态码 403、名单保留但开关关闭）——
 // 这些值在该阶段不产生任何行为面，不得被矛盾载荷门误拒。
 func TestUpdateSecurityPolicy_allowsInertOutOfStageDefaults(t *testing.T) {
 	setupSecurityPolicyTestDB(t)
@@ -190,7 +190,6 @@ func TestUpdateSecurityPolicy_allowsInertOutOfStageDefaults(t *testing.T) {
 	recorder := putJSON(t, router, "/security/policies/"+strconv.Itoa(id), map[string]any{
 		"policy_type": "stage4", "mode": "blocking",
 		"ip_acl_enabled": false, "ip_acl_list": "[]", "ip_acl_list_refs": "[]",
-		"rate_limit_enabled": false, "rate_limit_rps": 100, "rate_limit_burst": 50,
 		"geoip_mode": "off", "geoip_countries": "[]", "geoip_crawler_exempt": false,
 		"geoip_crawler_engines": `["googlebot","bingbot","baiduspider"]`,
 		"waf_check_response":    false, "log_request_body": false, "trust_detection": false,

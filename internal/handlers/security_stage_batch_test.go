@@ -369,79 +369,20 @@ caddy_http_request_duration_seconds_count{code="200",handler="rate_limit",host="
 	var payload struct {
 		Code int `json:"code"`
 		Data struct {
-			Stage1    int     `json:"stage1_blocked_24h"`
-			Stage3    int     `json:"stage3_blocked_24h"`
-			Ratelimit float64 `json:"ratelimit_blocks_reload"`
+			Stage1 int `json:"stage1_blocked_24h"`
+			Stage3 int `json:"stage3_blocked_24h"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
 		t.Fatalf("decode stage-stats: %v (body=%s)", err, response.Body.String())
 	}
-	if payload.Data.Stage1 != 4 || payload.Data.Stage3 != 3 || payload.Data.Ratelimit != 9 {
-		t.Fatalf("stage-stats=(%d,%d,%v), want (4,3,9)", payload.Data.Stage1, payload.Data.Stage3, payload.Data.Ratelimit)
+	if payload.Data.Stage1 != 4 || payload.Data.Stage3 != 3 {
+		t.Fatalf("stage-stats=(%d,%d), want (4,3)", payload.Data.Stage1, payload.Data.Stage3)
 	}
 }
 
 // 同域多端口：两条规则各自只认自己监听端口的 429 计数（按 host 求和会让每条
 // chip 变成两条之和）；泛域名规则匹配子域 host（此前恒 0）。
-func TestGetRuleStageStats_rateLimitCountsPerListenPort(t *testing.T) {
-	handler, _ := newStageBatchTestHandlers(t)
-	for _, rule := range []struct {
-		id, domain string
-		port       int
-	}{
-		{"lb_port80", "shared.example.test", 80},
-		{"lb_port443", "shared.example.test", 443},
-		{"lb_wild", "*.wild.example.test", 8080},
-	} {
-		if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,strategy,enabled) VALUES (?,?,?,?,?,'weighted_round_robin',1)`,
-			rule.id, rule.id, "http", rule.domain, rule.port); err != nil {
-			t.Fatal(err)
-		}
-	}
-	resetCaddyMetricsSnapshotCacheForTest()
-	t.Cleanup(resetCaddyMetricsSnapshotCacheForTest)
-	metrics := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`caddy_http_request_duration_seconds_count{code="429",handler="rate_limit",host="shared.example.test",method="GET",server="http_80"} 3
-caddy_http_request_duration_seconds_count{code="429",handler="rate_limit",host="shared.example.test",method="GET",server="http_443"} 4
-caddy_http_request_duration_seconds_count{code="429",handler="rate_limit",host="a.wild.example.test",method="GET",server="http_8080"} 5
-caddy_http_request_duration_seconds_count{code="429",handler="rate_limit",host="wild.example.test",method="GET",server="http_8080"} 6
-`))
-	}))
-	t.Cleanup(metrics.Close)
-	handler.cfg.CaddyMetricsURL = metrics.URL
-	router := stageBatchRouter(handler)
-
-	readRatelimit := func(t *testing.T, ruleID string) float64 {
-		t.Helper()
-		response := httptest.NewRecorder()
-		router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/security/rules/"+ruleID+"/stage-stats", nil))
-		if response.Code != http.StatusOK {
-			t.Fatalf("%s status=%d body=%s", ruleID, response.Code, response.Body.String())
-		}
-		var payload struct {
-			Data struct {
-				Ratelimit float64 `json:"ratelimit_blocks_reload"`
-			} `json:"data"`
-		}
-		if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
-			t.Fatalf("decode %s: %v", ruleID, err)
-		}
-		return payload.Data.Ratelimit
-	}
-
-	if got := readRatelimit(t, "lb_port80"); got != 3 {
-		t.Errorf("lb_port80 ratelimit=%v, want 3（不得累加 443 端口）", got)
-	}
-	if got := readRatelimit(t, "lb_port443"); got != 4 {
-		t.Errorf("lb_port443 ratelimit=%v, want 4（不得累加 80 端口）", got)
-	}
-	// 泛域名只匹配子域：a.wild... = 5，裸域 6 不计（Caddy 通配域不含裸域）。
-	if got := readRatelimit(t, "lb_wild"); got != 5 {
-		t.Errorf("lb_wild ratelimit=%v, want 5（通配匹配子域、不含裸域）", got)
-	}
-}
-
 func TestGetRuleStageStats_timingUsesConsistentSegmentsAndPositiveSamples(t *testing.T) {
 	// Given：WAF 事件携带预检快照、3/5/12 防御性预检 ID、升级前 precheck_us=0
 	// 的存量预检行，以及非数字触发 ID 和 24h 界外行。
@@ -521,7 +462,7 @@ func TestGetRuleStageStats_nilMetricsDBReturnsFullZeroShape(t *testing.T) {
 		t.Fatal(err)
 	}
 	// 键存在 + 值为零：只查键存在会让零值面板漂移成任意占位值仍绿。
-	for _, key := range []string{"stage1_blocked_24h", "stage3_blocked_24h", "stage_unattributed_24h", "ratelimit_blocks_reload", "precheck_avg_us", "precheck_samples", "waf_avg_us", "waf_samples"} {
+	for _, key := range []string{"stage1_blocked_24h", "stage3_blocked_24h", "stage_unattributed_24h", "precheck_avg_us", "precheck_samples", "waf_avg_us", "waf_samples"} {
 		raw, ok := payload.Data[key]
 		if !ok {
 			t.Fatalf("nil MetricsDB fallback missing key %q: %s", key, response.Body.String())

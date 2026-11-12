@@ -57,8 +57,8 @@ func TestRunMigrations_mergesHumanIntoCCAndRenumbersWAF(t *testing.T) {
 		Scan(&typ, &humanMode, &rps, &ccLimit); err != nil {
 		t.Fatal(err)
 	}
-	if typ != "stage2" || humanMode != "force" || rps != 200 || ccLimit != 99 {
-		t.Fatalf("合并结果 type=%s human=%s rps=%d cc=%d，want stage2/force/200/99", typ, humanMode, rps, ccLimit)
+	if typ != "stage2" || humanMode != "force" || rps != 0 || ccLimit != 99 {
+		t.Fatalf("合并结果 type=%s human=%s rps=%d cc=%d，want stage2/force/0/99（配额限流已下线，迁移归零）", typ, humanMode, rps, ccLimit)
 	}
 	// 人机行 11 已被合并删除；仅人机 12 改型为 stage2 且保留其阈值
 	var remaining int

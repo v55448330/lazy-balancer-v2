@@ -84,7 +84,6 @@ func TestGetMCPTools_returns_complete_public_registry(t *testing.T) {
 		"get_ip2region_regions",
 		"get_ip2region_update_status",
 		"get_ip2region_update_logs",
-		"get_rate_limit_blocks",
 		"get_rule_stage_stats",
 		"create_security_policy",
 		"update_security_policy",

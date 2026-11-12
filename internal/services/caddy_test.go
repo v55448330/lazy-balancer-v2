@@ -1503,75 +1503,6 @@ func seedBoundSecurityPolicyWithRateLimit(t *testing.T, database *sql.DB, ruleCa
 	return int(policyID)
 }
 
-func TestGenerateRouteObject_placesRateLimitBeforeWaf_whenPolicyEnablesRateLimit(t *testing.T) {
-	stubSecurityLibsAvailable(t) // 缺库降级：安全链渲染断言前先桩库可用
-	// Given
-	_, database := newClusterTestService(t)
-	seedWafRuleRow(t, database, "rule-http", "http")
-	policyID := seedBoundSecurityPolicyWithRateLimit(t, database, "rule-http", "blocking", 100, 50)
-	rule := baseHTTPRule()
-
-	// When
-	routes, _, err := generateHTTPRouteObjects(rule)
-
-	// Then
-	if err != nil {
-		t.Fatalf("generate routes: %v", err)
-	}
-	names := handlerChainNames(t, routes[0])
-	rateLimitIndex := indexOfHandler(names, "rate_limit")
-	wafIndex := indexOfHandler(names, "waf")
-	proxyIndex := indexOfHandler(names, "reverse_proxy")
-	if rateLimitIndex < 0 {
-		t.Fatalf("rate_limit handler missing from chain %v", names)
-	}
-	if wafIndex < 0 {
-		t.Fatalf("waf handler missing from chain %v", names)
-	}
-	if !(rateLimitIndex < wafIndex && wafIndex < proxyIndex) {
-		t.Fatalf("want rate_limit < waf < reverse_proxy, got chain %v", names)
-	}
-	rateLimit := findChainHandler(t, routes[0], "rate_limit")
-	zones := mustMap(t, rateLimit["rate_limits"], "rate_limits")
-	if len(zones) != 2 {
-		t.Fatalf("want exactly two rate limit zones (sec/min) when burst > 0, got %v", zones)
-	}
-	secZone := mustMap(t, zones[fmt.Sprintf("rule-http-p%d-sec", policyID)], "sec rate limit zone")
-	assertEqual(t, secZone["key"], "{http.vars.client_ip}")
-	assertEqual(t, secZone["window"], "1s")
-	assertEqual(t, secZone["max_events"], 150)
-	minZone := mustMap(t, zones[fmt.Sprintf("rule-http-p%d-min", policyID)], "min rate limit zone")
-	assertEqual(t, minZone["key"], "{http.vars.client_ip}")
-	assertEqual(t, minZone["window"], "60s")
-	assertEqual(t, minZone["max_events"], 6000)
-}
-
-func TestGenerateRouteObject_rendersSingleRateLimitZone_whenBurstZero(t *testing.T) {
-	stubSecurityLibsAvailable(t) // 缺库降级：安全链渲染断言前先桩库可用
-	// Given
-	_, database := newClusterTestService(t)
-	seedWafRuleRow(t, database, "rule-http", "http")
-	policyID := seedBoundSecurityPolicyWithRateLimit(t, database, "rule-http", "blocking", 20, 0)
-	rule := baseHTTPRule()
-
-	// When
-	routes, _, err := generateHTTPRouteObjects(rule)
-
-	// Then
-	if err != nil {
-		t.Fatalf("generate routes: %v", err)
-	}
-	rateLimit := findChainHandler(t, routes[0], "rate_limit")
-	zones := mustMap(t, rateLimit["rate_limits"], "rate_limits")
-	if len(zones) != 1 {
-		t.Fatalf("want exactly one rate limit zone when burst is zero, got %v", zones)
-	}
-	zone := mustMap(t, zones[fmt.Sprintf("rule-http-p%d", policyID)], "rate limit zone")
-	assertEqual(t, zone["key"], "{http.vars.client_ip}")
-	assertEqual(t, zone["window"], "1s")
-	assertEqual(t, zone["max_events"], 20)
-}
-
 func TestGenerateRouteObject_omitsRateLimitHandler_whenPolicyRateLimitDisabled(t *testing.T) {
 	stubSecurityLibsAvailable(t) // 缺库降级：安全链渲染断言前先桩库可用
 	// Given
@@ -1594,34 +1525,6 @@ func TestGenerateRouteObject_omitsRateLimitHandler_whenPolicyRateLimitDisabled(t
 	if indexOfHandler(names, "waf") < 0 {
 		t.Fatalf("waf handler missing from chain %v", names)
 	}
-}
-
-func TestGenerateRouteObject_rendersRateLimitWithoutWaf_whenPolicyModeOff(t *testing.T) {
-	stubSecurityLibsAvailable(t) // 缺库降级：安全链渲染断言前先桩库可用
-	// Given
-	_, database := newClusterTestService(t)
-	seedWafRuleRow(t, database, "rule-http", "http")
-	policyID := seedBoundSecurityPolicyWithRateLimit(t, database, "rule-http", "off", 20, 0)
-	rule := baseHTTPRule()
-
-	// When
-	routes, _, err := generateHTTPRouteObjects(rule)
-
-	// Then
-	if err != nil {
-		t.Fatalf("generate routes: %v", err)
-	}
-	names := handlerChainNames(t, routes[0])
-	rateLimitIndex := indexOfHandler(names, "rate_limit")
-	if rateLimitIndex < 0 {
-		t.Fatalf("rate_limit handler missing for mode-off policy with rate limiting: chain %v", names)
-	}
-	if indexOfHandler(names, "waf") >= 0 {
-		t.Fatalf("waf handler present for mode-off policy: chain %v", names)
-	}
-	rateLimit := findChainHandler(t, routes[0], "rate_limit")
-	zone := mustMap(t, mustMap(t, rateLimit["rate_limits"], "rate_limits")[fmt.Sprintf("rule-http-p%d", policyID)], "rate limit zone")
-	assertEqual(t, zone["max_events"], 20)
 }
 
 func seedHTTPRuleForGeneration(t *testing.T, database *sql.DB, caddyID, domain string, listenPort int) {
@@ -1899,74 +1802,6 @@ func TestGenerateCaddyConfig_blockPageErrorRoute_usesFirstBoundPolicy(t *testing
 // TestGenerateCaddyConfig_rateLimitErrorRoute_usesFirstBoundPolicy verifies the
 // rate-limit error route also renders the first-bound enabled policy's page
 // (lowest policy_id with BlockPageID > 0).
-func TestGenerateCaddyConfig_rateLimitErrorRoute_usesFirstBoundPolicy(t *testing.T) {
-	// Given
-	useTemporaryCertDir(t)
-	_, database := newClusterTestService(t)
-	seedHTTPRuleForGeneration(t, database, "lb_rl_multi", "rl-multi.example.test", 8080)
-	seedSecurityBlockPage(t, database, 7, "<html>older-rl-block</html>")
-	seedSecurityBlockPage(t, database, 8, "<html>newer-rl-block</html>")
-	// 同一规则绑定两条限流策略（policy_id 递增），须取首绑定（policy_id 最小者）。
-	seedBoundSecurityPolicyWithRateLimitAndBlockPage(t, database, "lb_rl_multi", 7, 451, 100, 50)
-	seedBoundSecurityPolicyWithRateLimitAndBlockPage(t, database, "lb_rl_multi", 8, 503, 100, 50)
-
-	// When
-	generated := generateCaddyConfigFromStore(database)
-
-	// Then
-	if message, failed := generated[caddyConfigGenerationErrorKey].(string); failed {
-		t.Fatalf("generation failed: %s", message)
-	}
-	route := findRateLimitErrorRoute(t, generated)
-	handler := firstHandler(t, route)
-	assertEqual(t, handler["body"], "<html>older-rl-block</html>")
-	// 限流错误路由状态码恒 429（v2.2.3 起不再取策略 BlockStatusCode）
-	assertEqual(t, handler["status_code"], 429)
-}
-
-func TestGenerateCaddyConfig_rendersRateLimitErrorRoute_defaultsTo429(t *testing.T) {
-	// Given
-	useTemporaryCertDir(t)
-	_, database := newClusterTestService(t)
-	seedHTTPRuleForGeneration(t, database, "lb_rl", "rl.example.test", 8080)
-	seedSecurityBlockPage(t, database, 9, "<html>ratelimit-block</html>")
-	seedBoundSecurityPolicyWithRateLimitAndBlockPage(t, database, "lb_rl", 9, 0, 100, 50)
-
-	// When
-	generated := generateCaddyConfigFromStore(database)
-
-	// Then
-	if message, failed := generated[caddyConfigGenerationErrorKey].(string); failed {
-		t.Fatalf("generation failed: %s", message)
-	}
-	route := findRateLimitErrorRoute(t, generated)
-	handler := firstHandler(t, route)
-	assertEqual(t, handler["handler"], "static_response")
-	assertEqual(t, handler["body"], "<html>ratelimit-block</html>")
-	assertEqual(t, handler["status_code"], 429)
-}
-
-func TestGenerateCaddyConfig_rendersRateLimitErrorRoute_always429RegardlessOfBlockStatusCode(t *testing.T) {
-	// Given：策略显式配置了 BlockStatusCode=451——限流错误路由状态码仍恒 429
-	//（语义正确 + 使 caddy_http_requests_total{code="429"} 可单独计量；
-	// Wave 6 状态统一后 403 与 WAF 拦截在指标中同形不可区分）
-	useTemporaryCertDir(t)
-	_, database := newClusterTestService(t)
-	seedHTTPRuleForGeneration(t, database, "lb_rl", "rl.example.test", 8080)
-	seedSecurityBlockPage(t, database, 9, "<html>ratelimit-block</html>")
-	seedBoundSecurityPolicyWithRateLimitAndBlockPage(t, database, "lb_rl", 9, 451, 100, 50)
-
-	// When
-	generated := generateCaddyConfigFromStore(database)
-
-	// Then
-	if message, failed := generated[caddyConfigGenerationErrorKey].(string); failed {
-		t.Fatalf("generation failed: %s", message)
-	}
-	route := findRateLimitErrorRoute(t, generated)
-	assertEqual(t, firstHandler(t, route)["status_code"], 429)
-}
-
 func findRateLimitErrorRoute(t *testing.T, generated map[string]interface{}) map[string]interface{} {
 	t.Helper()
 	errorRoutes, _ := serverErrorRoutes(t, generated, "http_8080")

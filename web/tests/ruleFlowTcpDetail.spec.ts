@@ -38,7 +38,6 @@ const binding = (): SecurityStageBinding => ({
   name: '策略 A',
   mode: 'off',
   enabled: true,
-  rate_limit_enabled: false,
 })
 
 const aclPolicy = (): SecurityStagePolicy =>

@@ -29,9 +29,6 @@ export interface PolicyPayloadInput {
   ipWhitelistRefs: readonly number[]
   /** 编辑器三态开关（stage0 恒启用——见 policyType 分支） */
   ipWhitelistEnabled: boolean
-  rateLimitEnabled: boolean
-  rateLimitRps: number
-  rateLimitBurst: number
   crsRuleGroups: readonly string[]
   /** 已归一（去空行/去重/按 scope 剥离残留）的排除规则对象数组 */
   crsExcludedRules: readonly unknown[]
@@ -82,9 +79,6 @@ interface PolicyPayload {
   ip_whitelist_enabled: boolean
   ip_acl_list_refs: string
   ip_whitelist_refs: string
-  rate_limit_enabled: boolean
-  rate_limit_rps: number
-  rate_limit_burst: number
   crs_rule_groups: string
   crs_excluded_rules: string
   custom_rules: string
@@ -139,9 +133,6 @@ export const buildPolicyPayload = (input: PolicyPayloadInput): PolicyPayload => 
     // 唯一释放路径=用户在引用选择器里显式清空（此时入参已是空数组）。
     ip_acl_list_refs: JSON.stringify(input.ipAclListRefs),
     ip_whitelist_refs: JSON.stringify(input.ipWhitelistRefs),
-    rate_limit_enabled: input.rateLimitEnabled,
-    rate_limit_rps: input.rateLimitRps,
-    rate_limit_burst: input.rateLimitBurst,
     crs_rule_groups: JSON.stringify(input.crsRuleGroups),
     crs_excluded_rules: JSON.stringify(input.crsExcludedRules),
     custom_rules: JSON.stringify(input.customRuleIds),

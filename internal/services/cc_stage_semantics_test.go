@@ -59,8 +59,7 @@ func TestInferPolicyType_fourStage(t *testing.T) {
 		want string
 	}{
 		{"human only", models.SecurityPolicy{HumanVerifyMode: "auto"}, models.PolicyTypeStage2},
-		{"rate only", models.SecurityPolicy{RateLimitEnabled: true, RateLimitRPS: 100}, models.PolicyTypeStage2},
-		{"human + rate", models.SecurityPolicy{HumanVerifyMode: "force", RateLimitEnabled: true, RateLimitRPS: 100}, models.PolicyTypeStage2},
+		{"cc detect only", models.SecurityPolicy{CCDetectEnabled: true}, models.PolicyTypeStage2},
 		{"waf only", models.SecurityPolicy{Mode: "blocking"}, models.PolicyTypeStage3},
 		{"empty", models.SecurityPolicy{Mode: "off"}, models.PolicyTypeStage3},
 		{"trust only", models.SecurityPolicy{IPWhitelistEnabled: true, IPWhitelist: []byte(`["10.0.0.1"]`)}, models.PolicyTypeStage0},

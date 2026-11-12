@@ -20,20 +20,21 @@ func TestUpdateSecurityPolicy_auditRecordsOnlyChangedFields(t *testing.T) {
 	}
 	router := newSecurityRouter(t)
 
-	// Given：一条存量 stage2 策略（rps=100/burst=50/enabled/block_page_id=0；
+	// Given：一条存量 stage2 CC 策略（human force/slider/ttl 30、CC 阈值默认；
 	// geoip_mode/ip_whitelist_enabled 按 stage2 归一后形态播种——与 API 创建
 	// 的真实存量一致，避免归一化对齐产生的真实列变更被误判为假 delta）
-	res, err := db.DB.Exec(`INSERT INTO security_policies (name, mode, rate_limit_enabled, rate_limit_rps, rate_limit_burst, enabled, block_page_id, block_status_code, policy_type, geoip_mode, ip_whitelist_enabled)
-		VALUES ('审计策略', 'off', 1, 100, 50, 1, 0, 0, 'stage2', 'off', 0)`)
+	res, err := db.DB.Exec(`INSERT INTO security_policies (name, mode, human_verify_mode, human_verify_type, human_verify_ttl, cc_rps_limit, enabled, block_page_id, block_status_code, policy_type, geoip_mode, ip_whitelist_enabled)
+		VALUES ('审计策略', 'off', 'force', 'slider', 30, 40, 1, 0, 0, 'stage2', 'off', 0)`)
 	if err != nil {
 		t.Fatal(err)
 	}
 	policyID, _ := res.LastInsertId()
 	path := fmt.Sprintf("/security/policies/%d", policyID)
-	fullPayload := func(rps, burst int) map[string]any {
+	fullPayload := func(ttl, ccRPS int) map[string]any {
 		return map[string]any{
 			"name": "审计策略", "enabled": true, "policy_type": "stage2",
-			"rate_limit_enabled": true, "rate_limit_rps": rps, "rate_limit_burst": burst,
+			"human_verify_mode": "force", "human_verify_type": "slider", "human_verify_ttl": ttl,
+			"cc_rps_limit":  ccRPS,
 			"block_page_id": 0, "block_status_code": 0, "mode": "off",
 		}
 	}
@@ -46,7 +47,7 @@ func TestUpdateSecurityPolicy_auditRecordsOnlyChangedFields(t *testing.T) {
 	}
 
 	// When：同值全量提交（编辑页未改任何项点保存的形态）
-	if r := putJSON(t, router, path, fullPayload(100, 50)); r.Code != http.StatusOK {
+	if r := putJSON(t, router, path, fullPayload(30, 40)); r.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s, want 200", r.Code, r.Body.String())
 	}
 
@@ -55,20 +56,20 @@ func TestUpdateSecurityPolicy_auditRecordsOnlyChangedFields(t *testing.T) {
 	if !strings.Contains(d, "无字段变化") {
 		t.Fatalf("detail=%q, want 含（无字段变化）", d)
 	}
-	for _, notWant := range []string{"限流 RPS", "限流突发", "拦截页", "启用→"} {
+	for _, notWant := range []string{"人机验证有效期", "CC 突刺阈值", "拦截页", "启用→"} {
 		if strings.Contains(d, notWant) {
 			t.Fatalf("同值提交 detail 不应含 %q: %q", notWant, d)
 		}
 	}
 
-	// When：全量提交但其中两个字段真变（rps 100→200、burst 50→80）
-	if r := putJSON(t, router, path, fullPayload(200, 80)); r.Code != http.StatusOK {
+	// When：全量提交但其中两个字段真变（ttl 30→45、CC rps 40→60）
+	if r := putJSON(t, router, path, fullPayload(45, 60)); r.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s, want 200", r.Code, r.Body.String())
 	}
 
 	// Then：详情只含这两个字段，且为「旧值→新值」格式
 	d = readDetail()
-	for _, want := range []string{"限流 RPS：100→200", "限流突发：50→80"} {
+	for _, want := range []string{"人机验证有效期：30→45", "CC 突刺阈值：40→60"} {
 		if !strings.Contains(d, want) {
 			t.Fatalf("detail 缺 %q: %q", want, d)
 		}

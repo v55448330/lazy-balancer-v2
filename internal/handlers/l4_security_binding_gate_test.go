@@ -26,17 +26,16 @@ func l4GateSeedPolicy(t *testing.T, name string, g0, g1, g2, g3 bool) int {
 	if g3 {
 		mode = "blocking"
 	}
-	rps := 0
+	humanMode := "off"
 	if g2 {
-		rps = 100
+		humanMode = "force"
 	}
 	policyType := l4GatePolicyType(g0, g1, g2, g3)
 	res, err := db.DB.Exec(`INSERT INTO security_policies
-		(name, policy_type, mode, enabled, ip_whitelist, ip_whitelist_enabled, ip_acl_enabled, ip_acl_mode, ip_acl_list, rate_limit_enabled, rate_limit_rps)
-		VALUES (?, ?, ?, 1, ?, 1, ?, ?, ?, ?, ?)`,
+		(name, policy_type, mode, enabled, ip_whitelist, ip_whitelist_enabled, ip_acl_enabled, ip_acl_mode, ip_acl_list, human_verify_mode)
+		VALUES (?, ?, ?, 1, ?, 1, ?, ?, ?, ?)`,
 		name, policyType, mode,
-		l4GateListJSON(g0), l4GateInt(g1), l4GatePick(g1, "deny", ""), l4GateListJSON(g1),
-		l4GateInt(g2), rps)
+		l4GateListJSON(g0), l4GateInt(g1), l4GatePick(g1, "deny", ""), l4GateListJSON(g1), humanMode)
 	if err != nil {
 		t.Fatalf("seed policy %s: %v", name, err)
 	}

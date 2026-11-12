@@ -3,7 +3,6 @@ package services
 import (
 	"context"
 	"errors"
-	"fmt"
 	"testing"
 )
 
@@ -25,28 +24,22 @@ func TestGenerateCaddyConfigFromStore_readsUncommittedPolicyThroughTx(t *testing
 	if err := database.QueryRow(`SELECT policy_id FROM security_policy_bindings WHERE rule_caddy_id='lb_tx_policy'`).Scan(&policyID); err != nil {
 		t.Fatalf("read binding: %v", err)
 	}
-	if _, err := tx.Exec(`UPDATE security_policies SET rate_limit_enabled=1, rate_limit_rps=5, rate_limit_burst=0 WHERE id=?`, policyID); err != nil {
+	if _, err := tx.Exec(`UPDATE security_policies SET policy_type='stage2', human_verify_mode='force', human_verify_type='slider' WHERE id=?`, policyID); err != nil {
 		t.Fatalf("update policy in tx: %v", err)
 	}
 
 	// When 事务内生成（ApplyConfigFromTx 同通道）
 	generated := generateCaddyConfigFromStore(tx)
 
-	// Then 读到未提交的限流策略
+	// Then 读到未提交的 CC 策略
 	if message, failed := generated[caddyConfigGenerationErrorKey].(string); failed {
 		t.Fatalf("generate config: %s", message)
 	}
 	routes := httpRoutesFromServer(t, generated, "http_8080")
 	route := findRouteByID(t, routes, "lb_tx_policy")
-	rateLimit := findChainHandler(t, route, "rate_limit")
-	if rateLimit == nil {
-		t.Fatalf("事务内生成必须读到未提交的限流策略: %#v", route)
+	if findChainHandler(t, route, "lb_human") == nil {
+		t.Fatalf("事务内生成必须读到未提交的 CC 挑战策略: %#v", route)
 	}
-	zones := mustMap(t, rateLimit["rate_limits"], "rate_limits")
-	// v2.2.0：zone 键嵌入 policy_id（UsagePool 按 zone 名进程级共享计数器，
-	// 同规则多策略共用 {ruleID} 前缀会静默合并计数）；burst=0 → 单秒级 zone。
-	zone := mustMap(t, zones[fmt.Sprintf("lb_tx_policy-p%d", policyID)], "rate limit zone")
-	assertEqual(t, zone["max_events"], 5)
 
 	// 负向对照：回滚后经全局 db.DB 生成看不到该变更
 	if err := tx.Rollback(); err != nil {
@@ -58,7 +51,7 @@ func TestGenerateCaddyConfigFromStore_readsUncommittedPolicyThroughTx(t *testing
 	}
 	routesAfter := httpRoutesFromServer(t, after, "http_8080")
 	routeAfter := findRouteByID(t, routesAfter, "lb_tx_policy")
-	if findChainHandler(t, routeAfter, "rate_limit") != nil {
+	if findChainHandler(t, routeAfter, "lb_human") != nil {
 		t.Fatalf("回滚后经 db.DB 生成不应读到未提交策略: %#v", routeAfter)
 	}
 }

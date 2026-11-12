@@ -219,7 +219,6 @@ test('零外部消费的符号不得再导出（导出面 = 消费面）', () =>
     ['src/utils/lazyOnce.ts', 'LazyLoader'],
     ['src/utils/logStatCap.ts', 'LogStatBucket'],
     ['src/utils/policyPayload.ts', 'PolicyPayload'],
-    ['src/utils/rateLimitBlocks.ts', 'RateLimitBlockHost'],
     ['src/utils/restart.ts', 'reloadAfterRestart'],
     ['src/utils/restart.ts', 'RestartServiceOptions'],
     ['src/utils/securityLibraries.ts', 'LibraryTagType'],

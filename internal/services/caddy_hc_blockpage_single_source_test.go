@@ -161,5 +161,4 @@ func TestBlockPageSelectionSkipsEmptyPagePolicy(t *testing.T) {
 		}
 	}
 	assertPage(t, buildBlockPageErrorRoute("lb_skip", []string{"skip.test"}, ctx), 418)
-	assertPage(t, buildRateLimitErrorRoute("lb_skip", []string{"skip.test"}, ctx), 429)
 }

@@ -1152,7 +1152,6 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 				business.GET("/security/overview/threat-screen/attack-flow", h.GetThreatScreenAttackFlow)
 				business.GET("/security/events/feed", h.GetSecurityEventFeed)
 				business.GET("/security/events/toast-summary", h.GetSecurityEventToastSummary)
-				business.GET("/security/rate-limit-blocks", h.GetSecurityRateLimitBlocks)
 				business.GET("/security/events", h.ListSecurityEvents)
 				business.GET("/security/events/count", h.GetIPEventCount)
 				business.GET("/security/crs", h.GetCRSInfo)

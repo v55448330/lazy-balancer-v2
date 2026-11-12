@@ -134,7 +134,7 @@ func TestTrustedDetection_wrapsChainAndRendersMinimalTrustEngine(t *testing.T) {
 	for _, hv := range wrapHandle {
 		wrapNames[mustMap(t, hv, "wrap handler")["handler"].(string)] = true
 	}
-	for _, want := range []string{"waf", "rate_limit", "lb_security_timing_pre", "lb_security_timing_end", "request_body"} {
+	for _, want := range []string{"waf", "lb_security_timing_pre", "lb_security_timing_end", "request_body"} {
 		if !wrapNames[want] {
 			t.Fatalf("安全链包裹内必须保留 %s（非信任路径零漂移）: %v", want, wrapNames)
 		}

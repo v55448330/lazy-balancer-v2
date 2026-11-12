@@ -188,15 +188,15 @@ func TestMultiPolicy_RouteComposition_OrderAndHandlerGroups(t *testing.T) {
 
 	// 主路由处理器链（阶段化模型）：headers(X-LB-Rule-ID 注入） →
 	// lb_rule_metrics → lb_security_blocked_counter → 阶段 1 预检 waf（p1/p3
-	// GeoIP 链）→ request_body → 阶段 2 rate_limit(p2) → 阶段 3 waf(p2
+	// GeoIP 链）→ request_body → 阶段 2 人机挑战（段内）→ 阶段 3 waf(p2
 	// blocking) → waf(p3 detection，不含 GeoIP) → lb_security_timing_end
 	// (放行事件耗时收点,v2.3.3 双点计时) → reverse_proxy。
 	// （耗时双头的剥离走 proxyRequestHeaders 删除清单，与 X-LB-Rule-ID
 	// 同机制，不额外占位。）
 	names := handlerNames(t, mainRoute)
 	// lb_reqmon（连接详情内存观测）置于 counter 之后、预检之前（索引 3）。
-	if len(names) != 12 || names[0] != "headers" || names[1] != "lb_rule_metrics" || names[2] != "lb_security_blocked_counter" || names[3] != "lb_reqmon" || names[4] != "waf" || names[5] != "lb_security_timing_pre" || names[6] != "request_body" || names[7] != "rate_limit" || names[8] != "waf" || names[9] != "waf" || names[10] != "lb_security_timing_end" {
-		t.Fatalf("main chain=%v, want [headers, lb_rule_metrics, lb_security_blocked_counter, waf(precheck), lb_security_timing_pre, request_body, rate_limit(p2), waf(p2), waf(p3), lb_security_timing_end, reverse_proxy]", names)
+	if len(names) != 11 || names[0] != "headers" || names[1] != "lb_rule_metrics" || names[2] != "lb_security_blocked_counter" || names[3] != "lb_reqmon" || names[4] != "waf" || names[5] != "lb_security_timing_pre" || names[6] != "request_body" || names[7] != "waf" || names[8] != "waf" || names[9] != "lb_security_timing_end" {
+		t.Fatalf("main chain=%v, want [headers, lb_rule_metrics, lb_security_blocked_counter, waf(precheck), lb_security_timing_pre, request_body, waf(p2), waf(p3), lb_security_timing_end, reverse_proxy]", names)
 	}
 	if names[len(names)-1] != "reverse_proxy" {
 		t.Fatalf("main chain last handler=%v, want reverse_proxy", names)
@@ -241,99 +241,10 @@ func TestMultiPolicy_RouteComposition_OrderAndHandlerGroups(t *testing.T) {
 
 // 两条策略同时开启限流 → 2 个 rate_limit 处理器，zone 键互不相同且
 // 嵌入 policy_id（{ruleID}-p{policyID}-sec / -min；burst=0 时 {ruleID}-p{policyID}）。
-func TestMultiPolicy_RateLimitZoneKeys_EmbedPolicyID(t *testing.T) {
-	stubSecurityLibsAvailable(t) // 缺库降级：安全链渲染断言前先桩库可用
-	// Given
-	_, database := newClusterTestService(t)
-	seedHTTPRuleForGeneration(t, database, "lb_gen2", "gen2.example.test", 8080)
-	pA := mpGenBindPolicy(t, database, "lb_gen2", "gen2-pA", mpGenPolicySpec{
-		mode: "off", enabled: true, rateLimit: true, rps: 100, burst: 50,
-	})
-	pB := mpGenBindPolicy(t, database, "lb_gen2", "gen2-pB", mpGenPolicySpec{
-		mode: "off", enabled: true, rateLimit: true, rps: 20, burst: 0,
-	})
-
-	// When
-	_, mainRoute := mpGenRoutes(t, database, mpGenHTTPRule("lb_gen2", "gen2.example.test"))
-
-	// Then 两个 rate_limit 处理器（策略 ASC 顺序）
-	handlers, _ := mainRoute["handle"].([]interface{})
-	var rateLimits []map[string]interface{}
-	for _, handlerValue := range handlers {
-		handler := mustMap(t, handlerValue, "handler")
-		if handler["handler"] == "rate_limit" {
-			rateLimits = append(rateLimits, handler)
-		}
-	}
-	if len(rateLimits) != 2 {
-		t.Fatalf("want 2 rate_limit handlers (one per policy), got %d", len(rateLimits))
-	}
-	zonesA := mustMap(t, rateLimits[0]["rate_limits"], "policy A zones")
-	wantSecA := fmt.Sprintf("lb_gen2-p%d-sec", pA)
-	wantMinA := fmt.Sprintf("lb_gen2-p%d-min", pA)
-	if len(zonesA) != 2 || zonesA[wantSecA] == nil || zonesA[wantMinA] == nil {
-		t.Fatalf("policy A zone keys=%v, want [%s %s]", mapKeys(zonesA), wantSecA, wantMinA)
-	}
-	zonesB := mustMap(t, rateLimits[1]["rate_limits"], "policy B zones")
-	wantB := fmt.Sprintf("lb_gen2-p%d", pB)
-	if len(zonesB) != 1 || zonesB[wantB] == nil {
-		t.Fatalf("policy B zone keys=%v, want [%s]", mapKeys(zonesB), wantB)
-	}
-	// 两个处理器的 zone 键集合必须互不相交（否则 UsagePool 按名共享计数器）
-	for key := range zonesA {
-		if zonesB[key] != nil {
-			t.Fatalf("zone key %q shared between policies — counters would silently merge", key)
-		}
-	}
-	// 限流额度仍来自各自策略
-	secZone := mustMap(t, zonesA[wantSecA], "policy A sec zone")
-	assertEqual(t, secZone["max_events"], 150)
-	zoneB := mustMap(t, zonesB[wantB], "policy B zone")
-	assertEqual(t, zoneB["max_events"], 20)
-}
-
 // 阶段化执行模型——阶段 2（限流）集中在全部 WAF 引擎（阶段 3）
 // 之前：双策略各开限流时主路由 handle 链中两个 rate_limit 的索引均小于全部
 // 策略 waf 的索引（单/多策略链形状同构：阶段 1 预检 → 阶段 2 限流 → 阶段 3
 // WAF；限流恒 429，被前位 WAF 拦的请求也消耗后位策略配额为已裁定口径）。
-func TestMultiPolicy_RateLimitStagePrecedesAllWafEngines(t *testing.T) {
-	stubSecurityLibsAvailable(t) // 缺库降级：安全链渲染断言前先桩库可用
-	// Given 一条规则绑定两条 blocking+限流策略（无 IP 控制/GeoIP → 无预检段）：
-	_, database := newClusterTestService(t)
-	seedHTTPRuleForGeneration(t, database, "lb_stage", "stage.example.test", 8080)
-	mpGenBindPolicy(t, database, "lb_stage", "stage-p1", mpGenPolicySpec{
-		mode: "blocking", enabled: true, rateLimit: true, rps: 100, burst: 50,
-	})
-	mpGenBindPolicy(t, database, "lb_stage", "stage-p2", mpGenPolicySpec{
-		mode: "blocking", enabled: true, rateLimit: true, rps: 20, burst: 0,
-	})
-
-	// When
-	_, mainRoute := mpGenRoutes(t, database, mpGenHTTPRule("lb_stage", "stage.example.test"))
-
-	// Then 两个 rate_limit 索引均小于全部策略 waf 索引（阶段 2 先于阶段 3）
-	names := handlerNames(t, mainRoute)
-	var rateLimitIdx, wafIdx []int
-	for i, name := range names {
-		switch name {
-		case "rate_limit":
-			rateLimitIdx = append(rateLimitIdx, i)
-		case "waf":
-			wafIdx = append(wafIdx, i)
-		}
-	}
-	if len(rateLimitIdx) != 2 || len(wafIdx) != 2 {
-		t.Fatalf("chain=%v, want 2 rate_limit + 2 policy waf handlers", names)
-	}
-	for _, rl := range rateLimitIdx {
-		for _, wf := range wafIdx {
-			if rl > wf {
-				t.Fatalf("stage order violated: rate_limit idx %d after waf idx %d, chain=%v", rl, wf, names)
-			}
-		}
-	}
-}
-
 func mapKeys(m map[string]interface{}) []string {
 	keys := make([]string, 0, len(m))
 	for key := range m {
@@ -388,7 +299,7 @@ func TestMultiPolicy_GeoipPassRoute_ExistsIffAnyEnabledPolicyHasGeoIP(t *testing
 
 // 错误路由 = 每规则 403 兜底（host 限定，首绑定策略页，承接预检
 // 合并中断与无页策略中断）+ 每有页策略 1 条合成码归因路由（无 host，渲染
-// 各自拦截页与状态码）+ 限流 429（首绑定策略页，恒 429）。
+// 各自拦截页与状态码）；配额限流 429 路由已随功能下线移除。
 func TestMultiPolicy_ErrorRoutes_FirstBoundBlockPageAndUnionMatcher(t *testing.T) {
 	// Given p1(geoip 451+page7) < p2(geoip 503+page8+限流)
 	useTemporaryCertDir(t)
@@ -414,17 +325,15 @@ func TestMultiPolicy_ErrorRoutes_FirstBoundBlockPageAndUnionMatcher(t *testing.T
 		t.Fatalf("generation failed: %s", message)
 	}
 	errorRoutes, _ := serverErrorRoutes(t, generated, "http_8080")
-	if len(errorRoutes) != 16 {
-		t.Fatalf("want 16 error routes (3 JSON 变体 + HTML × [fallback + 2 attribution + rate limit]), got %#v", errorRoutes)
+	if len(errorRoutes) != 12 {
+		t.Fatalf("want 12 error routes (3 JSON 变体 + HTML × [fallback + 2 attribution]), got %#v", errorRoutes)
 	}
-	var blockPageRoute, rateLimitRoute map[string]interface{}
+	var blockPageRoute map[string]interface{}
 	bySynthetic := make(map[string]map[string]interface{}, 2)
 	for _, routeValue := range errorRoutes {
 		route := mustMap(t, routeValue, "error route")
 		expr, _ := routeMatcher(t, route)["expression"].(string)
 		switch {
-		case expr == "{http.error.status_code} == 429":
-			rateLimitRoute = route
 		case strings.Contains(expr, "== 403"):
 			blockPageRoute = route
 		case strings.Contains(expr, "== 483 &&"):
@@ -433,9 +342,14 @@ func TestMultiPolicy_ErrorRoutes_FirstBoundBlockPageAndUnionMatcher(t *testing.T
 			bySynthetic["484"] = route
 		}
 	}
-	if blockPageRoute == nil || rateLimitRoute == nil || bySynthetic["483"] == nil || bySynthetic["484"] == nil {
-		t.Fatalf("missing error route kind: fallback=%v rateLimit=%v attr483=%v attr484=%v",
-			blockPageRoute != nil, rateLimitRoute != nil, bySynthetic["483"] != nil, bySynthetic["484"] != nil)
+	if blockPageRoute == nil || bySynthetic["483"] == nil || bySynthetic["484"] == nil {
+		t.Fatalf("missing error route kind: fallback=%v attr483=%v attr484=%v",
+			blockPageRoute != nil, bySynthetic["483"] != nil, bySynthetic["484"] != nil)
+	}
+	for _, routeValue := range errorRoutes {
+		if expr, _ := routeMatcher(t, mustMap(t, routeValue, "error route"))["expression"].(string); expr == "{http.error.status_code} == 429" {
+			t.Fatal("配额限流已下线，不得再生成 429 错误路由")
+		}
 	}
 	// 兜底路由：host 限定，首绑定策略（p1）的页面与状态码，统一 403 interruption
 	// 子句（"GeoIP blocked" 子句已消亡——预检合并中断与无页策略中断走此）
@@ -454,12 +368,6 @@ func TestMultiPolicy_ErrorRoutes_FirstBoundBlockPageAndUnionMatcher(t *testing.T
 		assertEqual(t, h["body"], wantBodyStatus[0])
 		assertEqual(t, h["status_code"], wantBodyStatus[1])
 	}
-	// 限流错误路由同样使用首绑定策略的拦截页，但状态码恒 429（语义正确+
-	// 使 code=429 指标可计量），不再取策略 BlockStatusCode
-	rlHandler := firstHandler(t, rateLimitRoute)
-	assertEqual(t, rlHandler["body"], "<html>first-block</html>")
-	assertEqual(t, rlHandler["status_code"], 429)
-	assertEqual(t, rlHandler["headers"].(map[string]interface{})["Retry-After"], []string{"1"})
 }
 
 // disabled 策略在生成中零贡献（无处理器/路由/错误路由），同规则的
@@ -823,12 +731,15 @@ func TestCCStage_chainOrder_quotaThenChallengeThenWAF(t *testing.T) {
 		}
 		return -1
 	}
-	rate, human, waf := idx("rate_limit"), idx("lb_human"), idx("waf")
-	if rate < 0 || human < 0 || waf < 0 {
-		t.Fatalf("chain=%v，必须同时含 rate_limit / lb_human / waf", names)
+	human, waf := idx("lb_human"), idx("waf")
+	if human < 0 || waf < 0 {
+		t.Fatalf("chain=%v，必须同时含 lb_human / waf", names)
 	}
-	if !(rate < human && human < waf) {
-		t.Fatalf("阶段 2 固定序应为 配额(%d) → 挑战(%d) → 内容防护(%d)，实际 chain=%v", rate, human, waf, names)
+	if idx("rate_limit") >= 0 {
+		t.Fatalf("配额限流已下线，链中不得出现 rate_limit: %v", names)
+	}
+	if human > waf {
+		t.Fatalf("阶段 2 挑战(%d) 必须在内容防护(%d) 之前，实际 chain=%v", human, waf, names)
 	}
 }
 

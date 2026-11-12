@@ -89,6 +89,7 @@ export default {
       "default": { "name": "默认拦截页面", "desc": "系统默认 403 拦截页面" },
       "ratelimit": { "name": "限流拦截页面", "desc": "系统内置 429 限流拦截页面（备选，手动选用后生效）" },
       "maintenance": { "name": "系统维护页面", "desc": "系统内置维护页面（备选，手动选用后生效）" },
+      "human": { "name": "人机验证页面", "desc": "系统内置人机验证占位页（阶段 3 真实挑战由 lb_human 插件渲染；本页仅作展示模板）" },
     },
     "page": {
      "title": "拦截页面",
@@ -399,16 +400,17 @@ export default {
      "colRule": "规则",
      "colPolicy": "策略"
     },
-    "rateLimit": {
-     "title": "限流拦截",
-     "tip": "按 429 响应计（含上游自返 429）；自最近一次配置重载以来累计",
-     "tag": "429 计数 · 重载后累计",
-     "loadFailed": "限流拦截数据加载失败",
-     "total": "累计拦截",
-     "colDomain": "域名",
-     "colCount": "拦截次数",
-     "empty": "暂无限流拦截"
+    "cc": {
+     "title": "CC 防护",
+     "tag": "挑战 / 封禁",
+     "tip": "阶段 2 触发：同一来源短时突刺、4xx 激增或多 UA 会话 → 人机挑战或 CC 封禁",
+     "challengedToday": "今日挑战",
+     "passRate": "挑战通过率",
+     "passFail": "通过 / 失败",
+     "bans": "CC 封禁",
+     "note": "统计来自人机验证挑战页与会话校验；封禁为 CC 防护直接拒绝的请求数。"
     },
+
     "topIps": {
      "title": "Top 10 源 IP（近 7 天）",
      "empty": "暂无数据",
@@ -489,8 +491,6 @@ export default {
     "tabRules": "命中规则",
     "noTargetData": "暂无目标数据",
     "noData": "暂无数据",
-    "ratelimitTip": "自最近一次 Caddy 配置重载/进程启动以来累计；含上游自返 429；不受窗口切换影响",
-    "ratelimitTotal": "限流累计 · 自重载",
     "windowIndependent": "不受窗口影响",
     "trendTitle": "{window}事件趋势",
     "totalLabel": "合计",
@@ -621,7 +621,7 @@ export default {
      "confirm": "确认更新迁移",
      "deleteNote": "全部规则重映射成功后原策略将被删除；存在被跳过的规则时原策略保留（因仍在使用）",
      "noBindings": "当前无规则绑定本策略",
-     "rateLimitRisk": "限流唯一风险：{names} 已绑定其他限流策略——拆分将产出阶段 2 子策略，这些规则会跳过重映射（每条规则最多一条限流策略），保持原绑定",
+     "rateLimitRisk": "阶段 2 唯一风险：{names} 已绑定其他 CC 防护策略——拆分将产出阶段 2 子策略，这些规则会跳过重映射（每条规则最多一条阶段 2 策略），保持原绑定",
      "remapDesc": "原策略的绑定整体改挂到子策略",
      "remapTitle": "将重映射绑定",
      "subtitle": "混合策略「{name}」将按阶段迁移为单职子策略（兼容组不再支持新建）",
@@ -639,11 +639,8 @@ export default {
      "excludedWithPath": "{n} 条（路径 {paths}）",
      "geoModeRegions": "{mode} · {n} 区域",
      "geoModeUnset": "未配置模式",
-     "noPageRateLimit": "不使用自定义页面：限流 429 返回空响应体（阶段 1/3 拦截回落 Caddy 默认 403）",
      "pageWithStatus": "{name}（状态码 {code}）",
      "pathMore": " 等 {n} 条",
-     "rateDetail": "{rps} 次/秒 · 突发 {burst} 次 · 拦截恒 429",
-     "rateLimitLabel": "速率限制",
      "trustCount": "{n} 条{off}",
      "typeLabel": "类型",
      "modeLabel": "模式"
@@ -808,14 +805,12 @@ export default {
     "bp": {
      "manageTip": "拦截时返回给客户端的自定义页面，在\"拦截页面\"页面管理，",
      "noPageDefault": "不使用自定义页面（Caddy 默认 403）",
-     "noPageStage2": "不使用自定义页面（429 空响应体）",
      "noPageTipDefault": "不配置拦截页：本策略触发拦截时兜底显示绑定链首个有页策略的页面；全链无页时返回 Caddy 默认 403",
-     "noPageTipStage2": "不配置拦截页：429 返回空响应体（可选内置「限流拦截页面」）",
      "pageLabel": "拦截页面",
      "pagePlaceholder": "选择拦截页面",
      "projection": "触发本策略拦截时，向客户端返回下方选择的拦截页",
      "statusLabel": "返回状态码",
-     "statusTipDefault": "WAF、IP ACL 拦截使用此状态码；限流拦截恒为 429（便于指标单独计量）",
+     "statusTipDefault": "WAF、IP ACL 拦截使用此状态码",
      "statusTipNoPage": "未选择自定义页面时状态码不生效，拦截固定返回 Caddy 默认 403；请先选择页面",
      "responseLabel": "拦截响应",
      "responseAuto": "自动（按请求类型）",
@@ -830,7 +825,6 @@ export default {
      "noPageFallback": "已关联 {n} 条规则：本策略未配置拦截页——触发拦截时显示兜底页（绑定链首个启用且有页的策略）",
      "pageActive": "已关联 {n} 条规则：触发本策略拦截时，均显示本拦截页「{page}」",
      "pageInvalid": "已关联 {n} 条规则：本拦截页已失效（页面已删除或内容为空），保存前请重新选择",
-     "rateLimitFacet": "{n} 条限流规则：限流拦截状态码恒为 429（限流页按绑定链首个有页策略显示，不随触发策略变化）",
      "stage2NoPage": "已关联 {n} 条规则：本策略未配置拦截页——限流拦截返回空响应体 429",
      "stageIneffective": "{stage}：当前配置不会产生该阶段拦截，页面不会被使用",
      "tcpFacet": "{n} 条 TCP 规则：拦截为断连，不经过拦截页"
@@ -968,7 +962,6 @@ export default {
      "geoOff": "GeoIP 未启用",
      "geoRegions": "GeoIP {n} 区域",
      "mixedCombo": "混合 · 跨阶段能力组合（存量兼容）",
-     "rateSummary": "{rps} 次/秒 · 突发 {burst}",
      "ccChallenge": "挑战 {mode}",
      "ccSpike": "突刺 {n} 次/{sec} 秒触发",
      "trustSummary": "信任 {n} 条 · {mode}",
@@ -996,7 +989,7 @@ export default {
      "stage3": "阶段 3 · 内容防护（WAF：模式 / CRS / 自定义规则 / 拦截页）",
      "stage0": "阶段 0 · 信任名单（信任名单直接转发上游；可选保留检测记录）",
      "stage1": "阶段 1 · IP 访问控制（IP 名单 / 地域拦截 / 拦截页）",
-     "stage2": "阶段 2 · CC 防护（配额限速 + 人机挑战）",
+     "stage2": "阶段 2 · CC 防护（人机挑战）",
      "stage4": "阶段 3 · 内容防护（旧编号兼容）"
     },
     "aux": {

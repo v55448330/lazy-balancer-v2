@@ -260,11 +260,6 @@
           </div>
         </div>
       </div>
-      <div class="panel-footer" :title="t('app.security.threat.ratelimitTip')">
-        <span>{{ t('app.security.threat.ratelimitTotal') }}</span>
-        <b>{{ ratelimitAvailable ? displayRatelimit : '—' }}</b>
-        <em>{{ t('app.security.threat.windowIndependent') }}</em>
-      </div>
     </aside>
 
     <!-- 底部双图：24h 趋势 + 实时 QPS -->
@@ -347,8 +342,6 @@ interface ThreatScreenStats {
   blocked_events: number
   logged_events?: number
   block_rate: number
-  ratelimit_blocks: number
-  ratelimit_available?: boolean
   active_sources: number
   countries: Record<string, number>
   china_provinces: Record<string, number>
@@ -438,7 +431,6 @@ let threatMap: ThreatScene | null = null
 let disposed = false
 
 const displayTotal = useCountUp(computed(() => stats.value?.total_events ?? 0))
-const displayRatelimit = useCountUp(computed(() => Math.floor(stats.value?.ratelimit_blocks ?? 0)))
 const displayActive = useCountUp(computed(() => stats.value?.active_sources ?? 0))
 const loggedEvents = computed(() => stats.value?.logged_events ?? Math.max(0, (stats.value?.total_events ?? 0) - (stats.value?.blocked_events ?? 0)))
 const blockRateText = computed(() => {
@@ -446,7 +438,6 @@ const blockRateText = computed(() => {
   if (total <= 0) return '—'
   return `${(stats.value?.block_rate ?? 0).toFixed(1)}%`
 })
-const ratelimitAvailable = computed(() => stats.value?.ratelimit_available !== false)
 const topCountries = computed(() => stats.value?.top_countries ?? [])
 const topRules = computed(() => stats.value?.top_rules ?? [])
 const topTargets = computed(() => stats.value?.top_targets ?? [])

@@ -38,7 +38,7 @@ func newThreatMetricsServer(t *testing.T) *httptest.Server {
 	resetCaddyMetricsSnapshotCacheForTest()
 	t.Cleanup(resetCaddyMetricsSnapshotCacheForTest)
 	metrics := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(rateLimitBlocksMetricsFixture))
+		_, _ = w.Write([]byte(""))
 	}))
 	t.Cleanup(metrics.Close)
 	return metrics
@@ -74,7 +74,6 @@ type threatScreenPayload struct {
 		TotalEvents        int                         `json:"total_events"`
 		BlockedEvents      int                         `json:"blocked_events"`
 		BlockRate          float64                     `json:"block_rate"`
-		RatelimitBlocks    float64                     `json:"ratelimit_blocks"`
 		ActiveSources      int                         `json:"active_sources"`
 		Countries          map[string]int              `json:"countries"`
 		ChinaProvinces     map[string]int              `json:"china_provinces"`
@@ -86,9 +85,8 @@ type threatScreenPayload struct {
 		RecentRate         float64                     `json:"recent_rate"`
 		// v2.4.x 大屏加固：logged=total-blocked（夹 >=0）、限流可用性位、
 		// 被攻击目标 Top3（name/domain/value）
-		LoggedEvents       int  `json:"logged_events"`
-		RatelimitAvailable bool `json:"ratelimit_available"`
-		TopTargets         []struct {
+		LoggedEvents int `json:"logged_events"`
+		TopTargets   []struct {
 			Name   string `json:"name"`
 			Domain string `json:"domain"`
 			Value  int    `json:"value"`
@@ -304,14 +302,6 @@ func TestGetSecurityThreatScreen_aggregateShape(t *testing.T) {
 	if payload.Data.BlockRate < 83.3 || payload.Data.BlockRate > 83.4 {
 		t.Errorf("block_rate=%v, want 83.3", payload.Data.BlockRate)
 	}
-	// Caddy metrics fixture 总计 = 12
-	if payload.Data.RatelimitBlocks != 12 {
-		t.Errorf("ratelimit_blocks=%v, want 12 (Caddy metrics 429 total)", payload.Data.RatelimitBlocks)
-	}
-	// 限流可用性位：metrics 正常抓取 → true
-	if !payload.Data.RatelimitAvailable {
-		t.Errorf("ratelimit_available=false, want true（metrics 可达）")
-	}
 	// logged_events = total - blocked = 6-5 = 1
 	if payload.Data.LoggedEvents != 1 {
 		t.Errorf("logged_events=%d, want 1（total 6 - blocked 5）", payload.Data.LoggedEvents)
@@ -388,30 +378,6 @@ func TestGetSecurityThreatScreen_hoursParam(t *testing.T) {
 	}
 }
 
-func TestGetSecurityThreatScreen_metricsScrapeFailureDegrades(t *testing.T) {
-	// Given: Caddy metrics 不可达 + 窗口内 1 条事件
-	setupSecurityPolicyTestDB(t)
-	router := newThreatScreenRouter(t, "http://127.0.0.1:1/metrics")
-	seedThreatScreenEvent(t, utcStringAgo(time.Hour), "93.184.216.7", "942100", "SQL Injection", "blocked")
-
-	// When/Then: 不再整卡 500——ratelimit_blocks=0、ratelimit_available=false，
-	// 其余维度照常 200（大屏 30s 轮询容忍限流指标瞬时不可达，可用性位披露）
-	recorder := getRequest(t, router, "/security/overview/threat-screen")
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("status=%d body=%s, want 200 降级", recorder.Code, recorder.Body.String())
-	}
-	var payload threatScreenPayload
-	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
-		t.Fatal(err)
-	}
-	if payload.Data.RatelimitAvailable || payload.Data.RatelimitBlocks != 0 {
-		t.Fatalf("ratelimit_available=%v ratelimit_blocks=%v, want false/0", payload.Data.RatelimitAvailable, payload.Data.RatelimitBlocks)
-	}
-	if payload.Data.TotalEvents != 1 || payload.Data.BlockedEvents != 1 {
-		t.Fatalf("total=%d blocked=%d, want 1/1（其余维度照常）", payload.Data.TotalEvents, payload.Data.BlockedEvents)
-	}
-}
-
 func TestGetSecurityThreatScreen_metricsDBNilReturnsZeroShape(t *testing.T) {
 	// Given: MetricsDB 未装配
 	setupSecurityPolicyTestDB(t)
@@ -438,7 +404,7 @@ func TestGetSecurityThreatScreen_metricsDBNilReturnsZeroShape(t *testing.T) {
 	if err := json.Unmarshal(recorder.Body.Bytes(), &raw); err != nil {
 		t.Fatal(err)
 	}
-	for _, key := range []string{"rollup_stale", "rollup_last_success", "rollup_coverage_from", "backfill_incomplete", "logged_events", "ratelimit_available", "top_rules", "top_targets", "hourly_hist", "attack_type_share", "recent_rate"} {
+	for _, key := range []string{"rollup_stale", "rollup_last_success", "rollup_coverage_from", "backfill_incomplete", "logged_events", "top_rules", "top_targets", "hourly_hist", "attack_type_share", "recent_rate"} {
 		if _, ok := raw.Data[key]; !ok {
 			t.Fatalf("zero response missing key %q: %s", key, recorder.Body.String())
 		}

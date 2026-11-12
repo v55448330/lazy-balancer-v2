@@ -145,34 +145,6 @@ func TestStage0MatcherIsClientIP(t *testing.T) {
 
 // 限流 zone key 改用 {http.vars.client_ip}（受信代理启用时=真实 IP，
 // 未启用=socket IP，行为不变）——单 zone 与 burst 双 zone 分支同口径。
-func TestRateLimitKeyIsClientIP(t *testing.T) {
-	stubSecurityLibsAvailable(t) // 缺库降级：安全链渲染断言前先桩库可用
-	// Given：burst=0 单 zone + burst>0 双 zone 各一规则
-	_, database := newClusterTestService(t)
-	seedHTTPRuleForGeneration(t, database, "lb_rl_single", "rl-single.example.test", 8080)
-	seedBoundSecurityPolicyWithRateLimit(t, database, "lb_rl_single", "blocking", 100, 0)
-	seedHTTPRuleForGeneration(t, database, "lb_rl_burst", "rl-burst.example.test", 8081)
-	seedBoundSecurityPolicyWithRateLimit(t, database, "lb_rl_burst", "blocking", 100, 50)
-
-	// When
-	generated := generateCaddyConfigFromStore(database)
-	if message, failed := generated[caddyConfigGenerationErrorKey].(string); failed {
-		t.Fatalf("generation failed: %s", message)
-	}
-	wire, err := json.Marshal(generated)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// Then：单 zone 1 处 + burst 双 zone 2 处 = 3 处 client_ip key；旧 socket key 归零
-	if got := strings.Count(string(wire), `"key":"{http.vars.client_ip}"`); got != 3 {
-		t.Fatalf("client_ip zone keys=%d, want 3:\n%s", got, wire)
-	}
-	if strings.Contains(string(wire), `{http.request.remote.host}`) {
-		t.Fatalf("rate limit must not key on socket IP:\n%s", wire)
-	}
-}
-
 // 启用但零有效网段（内联全非法/过宽、引用名单为空或全悬空）：渲染形态不变
 // （空投影文件 + lb_file 源，与既有行为逐字节一致），但必须随配置图携带降级
 // 说明——否则面板「已启用 CDN 真实 IP」与实际零网段信任不可区分（client_ip

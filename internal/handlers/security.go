@@ -880,7 +880,7 @@ func (h *Handlers) ListSecurityPolicies(c *gin.Context) {
 		hasGeoIP := services.PolicyHasGeoIP(&p)
 		policies = append(policies, models.SecurityPolicySummary{
 			ID: p.ID, Name: p.Name, Mode: p.Mode, Enabled: p.Enabled, RuleCount: bindingCounts[p.ID],
-			HasWAF: p.Mode == "blocking" || p.Mode == "detection", HasIPControl: services.SecurityPolicyHasIPControl(&p), HasRateLimit: p.RateLimitEnabled && p.RateLimitRPS > 0,
+			HasWAF: p.Mode == "blocking" || p.Mode == "detection", HasIPControl: services.SecurityPolicyHasIPControl(&p),
 			HasGeoIP: hasGeoIP, HasCustomRules: p.Mode != "off" && customRulesCount > 0,
 			AnomalyThreshold: p.AnomalyThreshold,
 			IPACLMode:        p.IPACLMode,
@@ -896,8 +896,6 @@ func (h *Handlers) ListSecurityPolicies(c *gin.Context) {
 			IPACLList:          p.IPACLList,
 			IPWhitelist:        rawJSONString(p.IPWhitelist),
 			IPBlacklist:        rawJSONString(p.IPBlacklist),
-			RateLimitRPS:       p.RateLimitRPS,
-			RateLimitBurst:     p.RateLimitBurst,
 			CRSExcludedCount:   loadedPolicies[i].crsExcludedCount,
 			CRSRuleGroups:      p.CRSRuleGroups,
 			CRSStaleSelections: services.CRSStaleGroupSelections(p.CRSRuleGroups, crsIndex),
@@ -1237,10 +1235,8 @@ func (h *Handlers) CreateSecurityPolicy(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.ErrMsg(c, err)})
 		return
 	}
-	if err := validateRateLimitShape(req.Name, req.RateLimitEnabled, req.RateLimitRPS, req.RateLimitBurst); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.ErrMsg(c, err)})
-		return
-	}
+	// 配额限流已下线（2026-11-12 用户裁定）：阶段 2 仅 CC 人机挑战；
+	// rate_limit_* 列保留为零值兼容旧备份/混版本快照，创建恒写零。
 	// allow 模式 + 空生效名单：渲染端把空 allow 集照常并入交集，交集为空即
 	// 发射「@rx .* 恒拒」——空名单的运行时语义是**拒绝全部（fail-closed）**，
 	// 不是放行。写入侧 400（与 UI 守卫同口径）是防「一次保存锁死全站」的
@@ -1318,7 +1314,7 @@ func (h *Handlers) CreateSecurityPolicy(c *gin.Context) {
 		cc_detect_enabled, cc_rps_limit, cc_rps_window, cc_4xx_ratio, cc_session_anomaly, cc_session_ua_threshold, block_response_mode)
 		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		req.Name, req.Description, req.Mode, max1(req.AnomalyThreshold, 5), req.IPACLMode, req.IPACLList, req.IPACLEnabled, req.IPWhitelist, policyWhitelistDefault(req.IPWhitelistEnabled), req.IPBlacklist,
-		req.RateLimitEnabled, req.RateLimitRPS, req.RateLimitBurst, req.CRSRuleGroups, req.CRSExcludedRules, req.CustomRules, req.BlockPageID, req.BlockStatusCode, enabled, req.GeoIPCountries, req.GeoIPMode, crawlerExemptBool(req.GeoIPCrawlerExempt, geoIPActive(req.GeoIPMode)), crawlerEnginesJSON(req.GeoIPCrawlerEngines), req.WAFCheckResponse, req.LogRequestBody, req.IPACLListRefs, req.IPWhitelistRefs, int(contextUserID(c)), policyType, req.TrustDetection,
+		false, 0, 0, req.CRSRuleGroups, req.CRSExcludedRules, req.CustomRules, req.BlockPageID, req.BlockStatusCode, enabled, req.GeoIPCountries, req.GeoIPMode, crawlerExemptBool(req.GeoIPCrawlerExempt, geoIPActive(req.GeoIPMode)), crawlerEnginesJSON(req.GeoIPCrawlerEngines), req.WAFCheckResponse, req.LogRequestBody, req.IPACLListRefs, req.IPWhitelistRefs, int(contextUserID(c)), policyType, req.TrustDetection,
 		humanModeOrDefault(req.HumanVerifyMode), humanTypeOrDefault(req.HumanVerifyType), humanTTLOrDefault(req.HumanVerifyTTL),
 		humanJSONOrDefault(req.HumanExemptPaths),
 		req.CCDetectEnabled, ccIntOrDefault(req.CCRPSLimit, 40), ccIntOrDefault(req.CCRPSWindow, 10),
@@ -1852,22 +1848,6 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 	}
 	// 限流门改用有效值(请求缺失回落存量),与门同口径
 	// ——此前 deref 裸值使部分重启用误报 400/rps=0 落库为宣称启用实际零强制。
-	{
-		effRLEnabled, effRPS, effBurst := stored.RateLimitEnabled, stored.RateLimitRPS, stored.RateLimitBurst
-		if req.RateLimitEnabled != nil {
-			effRLEnabled = *req.RateLimitEnabled
-		}
-		if req.RateLimitRPS != nil {
-			effRPS = *req.RateLimitRPS
-		}
-		if req.RateLimitBurst != nil {
-			effBurst = *req.RateLimitBurst
-		}
-		if err := validateRateLimitShape(fmt.Sprintf("id=%s", id), effRLEnabled, effRPS, effBurst); err != nil {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.ErrMsg(c, err)})
-			return
-		}
-	}
 	// 空白名单保存已放开（2026-11 用户裁定，同 Create）：allow 模式空生效
 	// 集合允许保存——运行时渲染层仍恒拒（fail-closed），本门取消后不再做
 	// 事务内非空校验。
@@ -2111,17 +2091,17 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 			if req.GeoIPCountries != nil {
 				merged.GeoIPCountries = json.RawMessage(*req.GeoIPCountries)
 			}
-			if req.RateLimitEnabled != nil {
-				merged.RateLimitEnabled = *req.RateLimitEnabled
-			}
-			if req.RateLimitRPS != nil {
-				merged.RateLimitRPS = *req.RateLimitRPS
-			}
 			if req.Mode != nil {
 				merged.Mode = *req.Mode
 			}
 			if req.CustomRules != nil {
 				merged.CustomRules = json.RawMessage(*req.CustomRules)
+			}
+			if req.HumanVerifyMode != nil {
+				merged.HumanVerifyMode = *req.HumanVerifyMode
+			}
+			if req.CCDetectEnabled != nil {
+				merged.CCDetectEnabled = *req.CCDetectEnabled
 			}
 			fs := models.PolicyTypeFeatures(&merged)
 			ownStageFeature := (effType == models.PolicyTypeStage0 && fs.G0) ||
@@ -2166,9 +2146,7 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 	addStr("ip_whitelist", req.IPWhitelist)
 	addStr("ip_blacklist", req.IPBlacklist)
 
-	addBool("rate_limit_enabled", req.RateLimitEnabled)
-	addInt("rate_limit_rps", req.RateLimitRPS)
-	addInt("rate_limit_burst", req.RateLimitBurst)
+	// 配额限流已下线：不写 rate_limit_*（旧值由启动迁移归零）。
 	addStr("crs_rule_groups", req.CRSRuleGroups)
 	addStr("crs_excluded_rules", req.CRSExcludedRules)
 	addStr("custom_rules", req.CustomRules)
@@ -2440,9 +2418,6 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 	deltaStr("旧版黑名单", req.IPBlacklist, string(stored.IPBlacklist))
 	deltaRefs("ACL 列表引用", "security_ip_lists", req.IPACLListRefs, stored.IPACLListRefs)
 	deltaRefs("信任名单列表引用", "security_ip_lists", req.IPWhitelistRefs, stored.IPWhitelistRefs)
-	deltaBool("限流启用", req.RateLimitEnabled, stored.RateLimitEnabled)
-	deltaInt("限流 RPS", req.RateLimitRPS, stored.RateLimitRPS)
-	deltaInt("限流突发", req.RateLimitBurst, stored.RateLimitBurst)
 	deltaStr("CRS 规则组", req.CRSRuleGroups, string(stored.CRSRuleGroups))
 	deltaStr("CRS 排除", req.CRSExcludedRules, string(stored.CRSExcludedRules))
 	deltaRefs("自定义规则", "security_custom_rules", req.CustomRules, string(stored.CustomRules))
@@ -2459,7 +2434,9 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 	deltaInt("拦截状态码", req.BlockStatusCode, stored.BlockStatusCode)
 	if req.BlockResponseMode != nil {
 		if *req.BlockResponseMode != stored.BlockResponseMode {
-			changedFields = append(changedFields, fmt.Sprintf("拦截响应：%s→%s", stored.BlockResponseMode, normalizeBlockResponseMode(*req.BlockResponseMode)))
+			if normalizeBlockResponseMode(*req.BlockResponseMode) != normalizeBlockResponseMode(stored.BlockResponseMode) {
+				changedFields = append(changedFields, fmt.Sprintf("拦截响应：%s→%s", normalizeBlockResponseMode(stored.BlockResponseMode), normalizeBlockResponseMode(*req.BlockResponseMode)))
+			}
 		}
 	}
 	deltaBool("启用", req.Enabled, stored.Enabled)
@@ -3896,9 +3873,9 @@ func (h *Handlers) SplitSecurityPolicy(c *gin.Context) {
 			policyType: models.PolicyTypeStage2, name: p.Name + stageSuffix[models.PolicyTypeStage2],
 			mode: "off", aclMode: "deny", aclList: "[]",
 			whitelist: json.RawMessage("[]"), blacklist: json.RawMessage("[]"),
-			rlEnabled: p.RateLimitEnabled, rlRPS: p.RateLimitRPS, rlBurst: p.RateLimitBurst,
+			rlEnabled: false, rlRPS: 0, rlBurst: 0,
 			crsGroups: "[]", crsExcluded: "[]", customRules: "[]",
-			blockPageID:  p.BlockPageID,
+			blockPageID:  0,
 			geoCountries: json.RawMessage("[]"), geoMode: "off",
 			aclRefs: "[]", wlRefs: "[]",
 		}))
@@ -6040,9 +6017,6 @@ type securityPolicyDetail struct {
 	IPWhitelistEnabled bool   `json:"ip_whitelist_enabled"`
 	IPWhitelist        string `json:"ip_whitelist"`
 	IPBlacklist        string `json:"ip_blacklist"`
-	RateLimitEnabled   bool   `json:"rate_limit_enabled"`
-	RateLimitRPS       int    `json:"rate_limit_rps"`
-	RateLimitBurst     int    `json:"rate_limit_burst"`
 	CRSRuleGroups      string `json:"crs_rule_groups"`
 	CRSExcludedRules   string `json:"crs_excluded_rules"`
 	CustomRules        string `json:"custom_rules"`
@@ -6089,9 +6063,6 @@ func newSecurityPolicyDetail(p *models.SecurityPolicy) securityPolicyDetail {
 		IPWhitelistEnabled:  p.IPWhitelistEnabled,
 		IPWhitelist:         rawJSONString(p.IPWhitelist),
 		IPBlacklist:         rawJSONString(p.IPBlacklist),
-		RateLimitEnabled:    p.RateLimitEnabled,
-		RateLimitRPS:        p.RateLimitRPS,
-		RateLimitBurst:      p.RateLimitBurst,
 		CRSRuleGroups:       rawJSONString(p.CRSRuleGroups),
 		CRSExcludedRules:    rawJSONString(p.CRSExcludedRules),
 		CustomRules:         rawJSONString(p.CustomRules),
@@ -6194,8 +6165,7 @@ func resolveCreatePolicyType(req *models.CreateSecurityPolicyRequest) (string, e
 			Mode: req.Mode, AnomalyThreshold: req.AnomalyThreshold,
 			IPACLMode: req.IPACLMode, IPACLList: req.IPACLList, IPACLEnabled: req.IPACLEnabled,
 			IPWhitelistEnabled: policyWhitelistDefault(req.IPWhitelistEnabled), IPWhitelist: json.RawMessage(req.IPWhitelist),
-			IPBlacklist:      json.RawMessage(req.IPBlacklist),
-			RateLimitEnabled: req.RateLimitEnabled, RateLimitRPS: req.RateLimitRPS, RateLimitBurst: req.RateLimitBurst,
+			IPBlacklist: json.RawMessage(req.IPBlacklist),
 			CustomRules: json.RawMessage(req.CustomRules),
 			GeoIPMode:   req.GeoIPMode, GeoIPCountries: json.RawMessage(req.GeoIPCountries),
 			IPACLListRefs: req.IPACLListRefs, IPWhitelistRefs: req.IPWhitelistRefs,
@@ -6232,7 +6202,6 @@ type stageZeroFamily int
 const (
 	stageZeroModeOff         stageZeroFamily = iota // mode → off（阶段 0/1/2 无 WAF 引擎面）
 	stageZeroCRSText                                // crs_rule_groups / crs_excluded_rules / custom_rules
-	stageZeroRateLimit                              // rate_limit_enabled / rps / burst
 	stageZeroWAFFlags                               // waf_check_response / log_request_body
 	stageZeroIPACL                                  // ip_acl_enabled / list / list_refs
 	stageZeroIPWhitelist                            // ip_whitelist_enabled / list / refs
@@ -6258,17 +6227,17 @@ func outOfStageZeroFamilies(policyType string) []stageZeroFamily {
 	policyType = models.NormalizePolicyType(policyType)
 	switch policyType {
 	case models.PolicyTypeStage0:
-		return []stageZeroFamily{stageZeroModeOff, stageZeroCRSText, stageZeroRateLimit, stageZeroWAFFlags, stageZeroIPACL, stageZeroIPBlacklist, stageZeroGeoIP, stageZeroGeoIPCrawler, stageZeroBlockPageAll, stageZeroHuman}
+		return []stageZeroFamily{stageZeroModeOff, stageZeroCRSText, stageZeroWAFFlags, stageZeroIPACL, stageZeroIPBlacklist, stageZeroGeoIP, stageZeroGeoIPCrawler, stageZeroBlockPageAll, stageZeroHuman}
 	case models.PolicyTypeStage1:
-		return []stageZeroFamily{stageZeroModeOff, stageZeroCRSText, stageZeroRateLimit, stageZeroWAFFlags, stageZeroIPWhitelist, stageZeroTrustDetection, stageZeroHuman}
+		return []stageZeroFamily{stageZeroModeOff, stageZeroCRSText, stageZeroWAFFlags, stageZeroIPWhitelist, stageZeroTrustDetection, stageZeroHuman}
 	case models.PolicyTypeStage2:
-		// CC 防护：限流配额、突刺/4xx/多UA 阈值、人机挑战与豁免全部保留；
-		// WAF/名单/地域/信任检测归零；状态码恒 429（拦截页保留）。
-		return []stageZeroFamily{stageZeroModeOff, stageZeroCRSText, stageZeroWAFFlags, stageZeroIPACL, stageZeroIPWhitelist, stageZeroIPBlacklist, stageZeroGeoIP, stageZeroGeoIPCrawler, stageZeroBlockStatusCode, stageZeroTrustDetection}
+		// CC 防护：突刺/4xx/多UA 阈值、人机挑战与豁免保留；配额限流已下线，
+		// 拦截页/状态码随 429 一起失效（CC ban 为插件固定 403），一并归零。
+		return []stageZeroFamily{stageZeroModeOff, stageZeroCRSText, stageZeroWAFFlags, stageZeroIPACL, stageZeroIPWhitelist, stageZeroIPBlacklist, stageZeroGeoIP, stageZeroGeoIPCrawler, stageZeroBlockPageAll, stageZeroTrustDetection}
 	case models.PolicyTypeStage3:
 		// 内容防护（WAF）：保留 mode/CRS/自定义规则/拦截页；人机、CC、限流、
 		// 名单、地域、信任检测全部归零。
-		return []stageZeroFamily{stageZeroIPACL, stageZeroIPWhitelist, stageZeroIPBlacklist, stageZeroGeoIP, stageZeroGeoIPCrawler, stageZeroRateLimit, stageZeroTrustDetection, stageZeroHuman}
+		return []stageZeroFamily{stageZeroIPACL, stageZeroIPWhitelist, stageZeroIPBlacklist, stageZeroGeoIP, stageZeroGeoIPCrawler, stageZeroTrustDetection, stageZeroHuman}
 	}
 	return nil
 }
@@ -6316,8 +6285,6 @@ func applyStageZerosToCreate(req *models.CreateSecurityPolicyRequest, policyType
 			req.Mode = "off"
 		case stageZeroCRSText:
 			req.CRSRuleGroups, req.CRSExcludedRules, req.CustomRules = "[]", "[]", "[]"
-		case stageZeroRateLimit:
-			req.RateLimitEnabled, req.RateLimitRPS, req.RateLimitBurst = false, 0, 0
 		case stageZeroWAFFlags:
 			req.WAFCheckResponse, req.LogRequestBody = false, false
 		case stageZeroIPACL:
@@ -6361,8 +6328,6 @@ func applyStageZerosToUpdate(req *models.UpdateSecurityPolicyRequest, policyType
 			req.Mode = new("off")
 		case stageZeroCRSText:
 			req.CRSRuleGroups, req.CRSExcludedRules, req.CustomRules = new("[]"), new("[]"), new("[]")
-		case stageZeroRateLimit:
-			req.RateLimitEnabled, req.RateLimitRPS, req.RateLimitBurst = new(false), new(0), new(0)
 		case stageZeroWAFFlags:
 			req.WAFCheckResponse, req.LogRequestBody = new(false), new(false)
 		case stageZeroIPACL:
@@ -6398,8 +6363,6 @@ func stageZeroFamilyConflictHint(f stageZeroFamily) string {
 		return "WAF 模式（mode）"
 	case stageZeroCRSText:
 		return "CRS 规则组/排除规则/自定义规则"
-	case stageZeroRateLimit:
-		return "限流（rate_limit_enabled）"
 	case stageZeroWAFFlags:
 		return "WAF 响应检查/请求体记录"
 	case stageZeroIPACL:
@@ -6414,6 +6377,8 @@ func stageZeroFamilyConflictHint(f stageZeroFamily) string {
 		return "爬虫豁免（geoip_crawler_exempt）"
 	case stageZeroTrustDetection:
 		return "保留检测记录（trust_detection）"
+	case stageZeroHuman:
+		return "人机验证/CC 防护（human_verify_*/cc_*）"
 	}
 	return ""
 }
@@ -6421,12 +6386,12 @@ func stageZeroFamilyConflictHint(f stageZeroFamily) string {
 // stageZeroFamilyOwnerStage 返回该字段族所属策略阶段（提示「请改用阶段 N 策略」）。
 func stageZeroFamilyOwnerStage(f stageZeroFamily) string {
 	switch f {
-	case stageZeroRateLimit:
-		return "2"
 	case stageZeroIPACL, stageZeroIPBlacklist, stageZeroGeoIP, stageZeroGeoIPCrawler:
 		return "1"
 	case stageZeroIPWhitelist, stageZeroTrustDetection:
 		return "0"
+	case stageZeroHuman:
+		return "2"
 	}
 	return "4" // WAF 族（mode/CRS/WAF flags）归属阶段 4
 }
@@ -6473,8 +6438,6 @@ func updateOutOfStageConflict(req *models.UpdateSecurityPolicyRequest, policyTyp
 			return req.Mode != nil && *req.Mode != "" && *req.Mode != "off"
 		case stageZeroCRSText:
 			return strNonEmpty(req.CRSRuleGroups) || strNonEmpty(req.CRSExcludedRules) || strNonEmpty(req.CustomRules)
-		case stageZeroRateLimit:
-			return req.RateLimitEnabled != nil && *req.RateLimitEnabled
 		case stageZeroWAFFlags:
 			return (req.WAFCheckResponse != nil && *req.WAFCheckResponse) || (req.LogRequestBody != nil && *req.LogRequestBody)
 		case stageZeroIPACL:

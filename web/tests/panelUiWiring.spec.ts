@@ -516,22 +516,11 @@ test('辅助端点部分失败必须有可见横幅', () => {
   }
 })
 
-test('阶段 2 拦截页文案按 429 语义分支', () => {
+test('阶段 2 不再展示拦截页/429 文案（配额限流下线）', () => {
   const text = code('src/views/security/SecurityPolicies.vue')
-  // i18n 后双钉:调用点钉键,zh 母本钉原文(任一漂移必红)
-  assert.match(text, /editorPolicyType === 'stage2' \? t\('app\.security\.policies\.bp\.noPageStage2'\)/)
-  assert.ok(code('src/locales/zh/security.ts').includes('不使用自定义页面（429 空响应体）'), '429 空响应体口径原文必须在 zh 母本词条中')
-  // 断言挂在三元臂上（条件 → 臂内词条键），条件侧带否定边界：窗口型写法在这里
-  // 恒真——把条件取反（`!d.rate_limit_enabled`）后两段文字距离照样成立。
-  const blockPageRow = section(text, "{ label: t('app.security.policies.bp.pageLabel'), value: d.block_page_id > 0", "{ label: t('app.security.policies.view.attributionLabel')")
-  assert.match(
-    blockPageRow,
-    /(?<![!.\w])d\.rate_limit_enabled\s*\?\s*t\('app\.security\.policies\.view\.noPageRateLimit'\)/,
-    '限流启用且无自定义页面时必须说明 429 空响应体（不得落进其他分支或被取反）',
-  )
-  assert.ok(code('src/locales/zh/security.ts').includes('不使用自定义页面：限流 429 返回空响应体'), '限流 429 口径原文必须在 zh 母本词条中')
-  assert.match(blockPageRow, /:\s*t\('app\.security\.policies\.bp\.noPageDefault'\)/, '限流关闭时仍是 Caddy 默认 403')
-  assert.ok(code('src/locales/zh/security.ts').includes('不使用自定义页面（Caddy 默认 403）'), 'Caddy 默认 403 原文必须在 zh 母本词条中')
+  assert.doesNotMatch(text, /noPageStage2|noPageRateLimit|rateLimitFacet/)
+  assert.match(text, /editorPolicyType\.value !== 'stage0' && editorPolicyType\.value !== 'stage2'/, '阶段 2 步骤不包含拦截页')
+  assert.doesNotMatch(code('src/locales/zh/security.ts'), /429 空响应体/, '阶段 2 429 专属文案必须移除')
 })
 
 test('安全规则预设项可键盘操作（折叠头 button + 标签/模板键盘语义）', () => {

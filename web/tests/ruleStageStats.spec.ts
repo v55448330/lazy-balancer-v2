@@ -14,7 +14,6 @@ const counts = (patch: Partial<RuleStageCounts> = {}): RuleStageCounts => ({
   stage1_blocked_24h: 0,
   stage3_blocked_24h: 0,
   stage_unattributed_24h: 0,
-  ratelimit_blocks_reload: 0,
   ...patch,
 })
 
@@ -34,9 +33,9 @@ test('计数 chip：成功但载荷为空仍为 —（契约违约，不得冒�
 })
 
 test('计数 chip：成功且有计数时各阶段取自己的桶（阶段 3 人机验证无规则级分桶）', () => {
-  const data = counts({ stage1_blocked_24h: 4, stage3_blocked_24h: 7, ratelimit_blocks_reload: 2 })
+  const data = counts({ stage1_blocked_24h: 4, stage3_blocked_24h: 7 })
   assert.deepEqual(stageCountChip(1, data, { settled: true, failed: false }), { chip: '24h 拦截 4' })
-  assert.deepEqual(stageCountChip(2, data, { settled: true, failed: false }), { chip: '429 拦截 2', caption: '自最近重载 · 本端口' })
+  assert.deepEqual(stageCountChip(2, data, { settled: true, failed: false }), {})
   // 阶段 3 = 人机验证：挑战/通过计数由 /security/human/stats 承担，规则级 stage3 节点不出 chip
   assert.deepEqual(stageCountChip(3, data, { settled: true, failed: false }), {})
   // 阶段 4 = WAF：沿用后端 stage3_blocked_24h 字段（历史字段名，不随阶段号迁移）
@@ -81,14 +80,14 @@ test('stage-stats 键集：前端类型与后端响应体逐键一致', () => {
   assert.ok(start >= 0, '后端响应体必须含 stage1_blocked_24h')
   const block = go.slice(start, go.indexOf('}})', start))
   const backendKeys = [...block.matchAll(/"([a-z0-9_]+)":/g)].map((m) => m[1]!)
-  assert.ok(backendKeys.length >= 8, `后端键集解析异常（${backendKeys.length} 个）`)
+  assert.ok(backendKeys.length >= 7, `后端键集解析异常（${backendKeys.length} 个）`)
 
   const front = code('src/utils/ruleStageStats.ts')
   const ifaceStart = front.indexOf('export interface RuleStageCounts {')
   assert.ok(ifaceStart >= 0, '前端类型必须存在')
   const iface = front.slice(ifaceStart, front.indexOf('\n}', ifaceStart))
   const frontendKeys = [...iface.matchAll(/^\s{2}([a-z0-9_]+)(?:\?)?:/gm)].map((m) => m[1]!)
-  assert.ok(frontendKeys.length >= 8, `前端键集解析异常（${frontendKeys.length} 个）`)
+  assert.ok(frontendKeys.length >= 7, `前端键集解析异常（${frontendKeys.length} 个）`)
 
   assert.deepEqual([...frontendKeys].sort(), [...backendKeys].sort(), '前端 type 键集与后端 stage-stats 响应键集不一致')
   assert.ok(frontendKeys.includes('stage_unattributed_24h'), '未归因桶必须在前端类型中')

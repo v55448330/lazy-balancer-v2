@@ -30,7 +30,6 @@ export interface SecurityStagePolicy {
   mode: string
   enabled: boolean
   has_ip_control: boolean
-  has_rate_limit: boolean
   has_geoip: boolean
   has_custom_rules: boolean
   geoip_countries: string
@@ -38,8 +37,6 @@ export interface SecurityStagePolicy {
   ip_acl_mode: string
   ip_acl_list: string
   ip_whitelist: string
-  rate_limit_rps: number
-  rate_limit_burst: number
   ip_blacklist?: string
   ip_acl_list_refs?: string
   ip_whitelist_refs?: string
@@ -78,7 +75,6 @@ export interface SecurityStageBinding {
   name: string
   mode: string
   enabled: boolean
-  rate_limit_enabled: boolean
   block_page_id?: number
   block_status_code?: number
 }
@@ -120,12 +116,6 @@ interface StageCustomRuleDetail {
   enabled: boolean
 }
 
-interface StageRateLimitDetail {
-  rps: number
-  burst: number
-  caption: string
-}
-
 interface StagePolicyDetails {
   // aclLists=引用名单汇总（名称+条数，entry_count 口径，不拉条目值）；
   // aclInlineCount=内联去重条数。两者替代原逐条 aclEntries。
@@ -136,7 +126,6 @@ interface StagePolicyDetails {
   blacklistEntries?: string[]
   trustEntries?: StageDetailEntry[]
   geoipRegions?: string[]
-  rateLimit?: StageRateLimitDetail
   customRules?: StageCustomRuleDetail[]
   crsGroups?: string[]
 }
@@ -721,9 +710,6 @@ export const buildStageModel = (
     // 同属一个阶段与一条策略——执行序固定「配额(429) → 挑战」。
     {
       const s2rows: StageRow[] = []
-      if (policy?.has_rate_limit) {
-        s2rows.push({ label: t('common.app.views.stages.rateLimitRowLabel'), detail: t('common.app.views.stages.rateLimitSummary', { rps: policy.rate_limit_rps, burst: policy.rate_limit_burst }) })
-      }
       if (policy?.human_verify_mode && policy.human_verify_mode !== 'off') {
         s2rows.push({ label: t('common.app.views.stages.humanModeLabel'), detail: t('common.app.views.stages.humanMode_' + policy.human_verify_mode) })
         if (policy.human_verify_type) {
@@ -828,13 +814,6 @@ const crsGroupLabel = (groupCode: string, crsFiles: readonly CrsRuleFileOption[]
   return t('common.app.views.stages.crsGroupTag', { phase: info?.phase ?? t('common.app.views.stages.crsPhaseRequest'), code: groupCode, category: file.category })
 }
 
-// 限流口径文案（与后端 buildRateLimitHandler 双 zone 语义一致）：
-// burst > 0 → 1s 窗口封顶 rps+burst（瞬时），60s 窗口封顶 rps×60（持续）；burst=0 → 单 1s 窗口
-const rateLimitDetailCaption = (rps: number, burst: number): string =>
-  burst > 0
-    ? t('common.app.views.stages.rateLimitCaptionDual', { burstCap: rps + burst, minuteCap: rps * 60, rps })
-    : t('common.app.views.stages.rateLimitCaptionSingle', { rps })
-
 // 原生 JSON（/security/rules/:id/policy 的 RawMessage 字段）→ 数字 id 数组
 //（兼容对象形态 [{id:…}]；自此导出为单源——SecurityPolicies 的
 // custom_rules 文本解析 JSON.parse 后同样走本守卫，不再各持一份同构实现）
@@ -893,10 +872,7 @@ const buildGroupDetails = (
     if (policy.has_geoip || regions.length > 0) details.geoipRegions = regions
     return details
   }
-  if (stage === 2) {
-    if (!policy.has_rate_limit) return undefined
-    return { rateLimit: { rps: policy.rate_limit_rps, burst: policy.rate_limit_burst, caption: rateLimitDetailCaption(policy.rate_limit_rps, policy.rate_limit_burst) } }
-  }
+  if (stage === 2) return undefined
   // 阶段 3：自定义规则逐条（按策略 custom_rules id 引用 join 自定义规则库）+ CRS 组 chips
   const details: StagePolicyDetails = {}
   const full = sources?.fullPolicies?.get(policy.id)
@@ -980,7 +956,7 @@ export interface SecurityPolicyTypeInput {
   human_verify_mode?: string
   has_ip_control: boolean
   has_geoip?: boolean
-  has_rate_limit: boolean
+  cc_detect_enabled?: boolean
   has_waf?: boolean
   has_custom_rules: boolean
   mode?: string
@@ -1002,7 +978,7 @@ export interface SecurityPolicyTypeInput {
   custom_rules_count?: number
 }
 
-// 推断形状：阶段 0 = 信任名单非空；阶段 1 = IP 访问控制或地域拦截；阶段 2 = 限流；
+// 推断形状：阶段 0 = 信任名单非空；阶段 1 = IP 访问控制或地域拦截；阶段 2 = CC 挑战；
 // 阶段 3 = WAF 或自定义规则。恰好一个阶段 → 该类型；跨阶段 → mixed（存量混合兼容组）；
 // 零能力 → stage3（存量空策略的 mode 字段定义其为 WAF 策略关闭态）。
 export const inferPolicyType = (p: SecurityPolicyTypeInput): SecurityPolicyType => {
@@ -1016,9 +992,10 @@ export const inferPolicyType = (p: SecurityPolicyTypeInput): SecurityPolicyType 
   if (humanOn) {
     const s0h = p.ip_whitelist_enabled === undefined ? hasTrustEntries(p) : p.ip_whitelist_enabled && hasTrustEntries(p)
     const s1h = hasIPACLControl(p) || hasGeoIPControl(p)
-    const s3h = p.mode === 'blocking' || p.mode === 'detection' || p.mode === 'custom_only' || (p.custom_rules_count ?? 0) > 0
+    const customOn = p.custom_rules_count !== undefined ? p.custom_rules_count > 0 : p.has_custom_rules
+    const s3h = p.mode === 'blocking' || p.mode === 'detection' || p.mode === 'custom_only' || customOn
     // 限流与人机同属阶段 2（CC 防护），不再视为混合。
-    if (!s0h && !s1h && !s3h) return 'stage2'
+    if (!s0h && !s1h && !s3h && humanOn) return 'stage2'
     return 'mixed'
   }
   // 兜底推断与后端 models.PolicyTypeFeatures 逐条同形（收敛，
@@ -1032,7 +1009,7 @@ export const inferPolicyType = (p: SecurityPolicyTypeInput): SecurityPolicyType 
   // s1 用内容门：与后端 PolicyTypeFeatures/ 同形；摘要标志
   // has_ip_control 开启即 true 且含信任，直接消费会把空 ACL 策略误归阶段 1。
   const s1 = hasIPACLControl(p) || hasGeoIPControl(p)
-  const s2 = p.has_rate_limit
+  const s2 = (p.human_verify_mode !== undefined && p.human_verify_mode !== 'off') || p.cc_detect_enabled === true
   const s3 =
     p.mode === 'blocking' || p.mode === 'detection' || p.mode === 'custom_only'
       ? true
@@ -1394,7 +1371,6 @@ export const policySupportsTcp = (type: SecurityPolicyType | undefined): boolean
  *  （谓词本身由规则侧编辑器与策略向导两处导入）。 */
 interface PolicyBindingRef {
   policy_id: number
-  rate_limit_enabled?: boolean
 }
 
 /**
@@ -1410,7 +1386,7 @@ export const hasOtherStage2Binding = (
   typeOf: (policyId: number) => SecurityPolicyType | undefined,
 ): boolean => bindings.some((binding) =>
   binding.policy_id !== selfPolicyId
-  && (typeOf(binding.policy_id) ?? (binding.rate_limit_enabled ? 'stage2' : 'stage3')) === 'stage2')
+  && (typeOf(binding.policy_id) ?? 'stage3') === 'stage2')
 
 /** 按单次上限切分待提交项（顺序保持；空数组→空切分）。 */
 export function chunkForBulk<T>(items: readonly T[], limit: number): T[][] {
@@ -1699,8 +1675,6 @@ export interface BlockPageChainPolicy {
   blockPageId?: number
   /** 该页是否存在且内容非空（后端 blockPageByID 非空才算有效页） */
   pageHasContent?: boolean
-  /** 仅阶段 2 使用：该策略是否启用限流（429 才能产生） */
-  rateLimitEnabled?: boolean
   /**
    * 仅 isSelf 消费：本策略在阶段 1 是否发射可触发拦截的 deny 链
    * （deny 模式 ACL 有条目 ∪ 独立黑名单非空 ∪ GeoIP 启用且有区域）。
@@ -1813,8 +1787,8 @@ export const resolveBlockPageAttribution = (
   chain: readonly BlockPageChainPolicy[],
 ): BlockPageAttribution => {
   const enabled = chain.filter((p) => p.enabled)
-  // 阶段 2：无启用限流策略 → 不产生 429，页面永不显示
-  if (stage === 2 && !enabled.some((p) => p.rateLimitEnabled === true)) return { stage, effective: 'none' }
+  // 阶段 2：配额限流已下线，CC 挑战/封禁不走拦截页 → 阶段 2 页面永不显示
+  if (stage === 2) return { stage, effective: 'none' }
   // 触发归因（阶段 1 deny 链 / 阶段 3 WAF 段逐策略合成码）：命中策略有有效页
   // → 显示该策略页。阶段 1 的 allow 交集外恒拒与阶段 2 的 429 无归属语义，
   // 直接落兜底。

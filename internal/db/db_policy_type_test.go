@@ -34,7 +34,7 @@ func TestRunMigrations_policyTypeColumnAndBackfill(t *testing.T) {
 	want := map[string]string{
 		"legacy-waf":   "stage3",
 		"legacy-acl":   "stage1",
-		"legacy-rl":    "stage2",
+		"legacy-rl":    "stage3", // 仅限流的存量策略在配额下线后无阶段能力
 		"legacy-mixed": "mixed",
 		"legacy-empty": "stage3",
 	}

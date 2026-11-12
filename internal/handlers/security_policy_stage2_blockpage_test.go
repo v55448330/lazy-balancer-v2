@@ -26,16 +26,16 @@ func TestStage2Policy_blockPageIDRoundTrip(t *testing.T) {
 		t.Fatalf("create status=%d body=%s, want 200", create.Code, create.Body.String())
 	}
 
-	// Then：block_page_id 落库保留（不归一清零）；block_status_code 归一 0（恒 429 语义）
+	// Then：阶段 2 拦截页/状态码随配额限流下线一并归零（CC ban 为插件固定 403）
 	var pageID, statusCode int
 	if err := db.DB.QueryRow(`SELECT COALESCE(block_page_id,0), COALESCE(block_status_code,0) FROM security_policies WHERE name='限流带页策略'`).Scan(&pageID, &statusCode); err != nil {
 		t.Fatal(err)
 	}
-	if pageID != 9001 {
-		t.Fatalf("block_page_id=%d, want 9001（stage2 允许配置拦截页）", pageID)
+	if pageID != 0 {
+		t.Fatalf("block_page_id=%d, want 0（阶段 2 不再消费拦截页）", pageID)
 	}
 	if statusCode != 0 {
-		t.Fatalf("block_status_code=%d, want 0（限流恒 429）", statusCode)
+		t.Fatalf("block_status_code=%d, want 0", statusCode)
 	}
 
 	// When：更新该策略改选维护页 9002

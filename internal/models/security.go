@@ -25,8 +25,9 @@ const (
 )
 
 // PolicyFeatureSet 策略内容的阶段特征组：G0=信任名单（启用且内联/引用非空），
-// G1=IP ACL（启用且内联/引用非空）/黑名单非空/GeoIP 生效，G2=限流（启用且
-// rps>0），=WAF（mode∈blocking/detection/custom_only 或自定义规则引用非空）。
+// G1=IP ACL（启用且内联/引用非空）/黑名单非空/GeoIP 生效，G2=已下线配额限流
+// （恒 false，配额限流 2026-11-12 下线，仅保留 CC 人机挑战），=WAF（mode∈blocking/
+// detection/custom_only 或自定义规则引用非空）。
 // 推断（InferPolicyType）与拆分迁移（split 按组生成子策略）共用同一份分组
 // 判定，禁止第二份实现。阶段 0（2026-09-20 用户裁定）：信任名单独立成策略
 // 类型——默认直通上游（trust_detection=0，不过后续任何流程），保留检测记录
@@ -55,7 +56,9 @@ func PolicyTypeFeatures(p *SecurityPolicy) PolicyFeatureSet {
 	fs.G1 = (p.IPACLEnabled && (jsonListNonEmpty([]byte(p.IPACLList)) || jsonListNonEmpty([]byte(p.IPACLListRefs)))) ||
 		jsonListNonEmpty(p.IPBlacklist) ||
 		(p.GeoIPMode != "" && p.GeoIPMode != "off" && jsonListNonEmpty(p.GeoIPCountries))
-	fs.G2 = p.RateLimitEnabled && p.RateLimitRPS > 0
+	// G2 = 阶段 2 能力（CC 防护）：人机验证开启或 CC 检测启用。配额限流已下线，
+	// 存量 rate_limit_* 列保留为零值兼容备份/混版本快照，不参与类型推断。
+	fs.G2 = (p.HumanVerifyMode != "" && p.HumanVerifyMode != "off") || p.CCDetectEnabled
 	fs.G3 = p.Mode == "blocking" || p.Mode == "detection" || p.Mode == "custom_only" || CustomRulesRefCount(p.CustomRules) > 0
 	return fs
 }
@@ -81,7 +84,7 @@ func InferPolicyType(p *SecurityPolicy) string {
 	humanOn := p.HumanVerifyMode != "" && p.HumanVerifyMode != "off"
 	// 四阶段（2026-11-12）：阶段 2 = CC 防护（配额限流 + 人机挑战，二者可并存），
 	// 阶段 3 = 内容防护（WAF）。跨阶段能力组合仍是 mixed（存量兼容形态）。
-	ccStage := humanOn || fs.G2
+	ccStage := humanOn || p.CCDetectEnabled
 	switch {
 	case fs.G0 && (fs.G1 || ccStage || fs.G3):
 		return PolicyTypeMixed
@@ -243,7 +246,6 @@ type SecurityPolicySummary struct {
 	RuleCount            int    `json:"rule_count"`
 	HasWAF               bool   `json:"has_waf"`
 	HasIPControl         bool   `json:"has_ip_control"`
-	HasRateLimit         bool   `json:"has_rate_limit"`
 	AnomalyThreshold     int    `json:"anomaly_threshold"`
 	IPACLMode            string `json:"ip_acl_mode"`
 	IPACLEnabled         bool   `json:"ip_acl_enabled"`
@@ -251,8 +253,6 @@ type SecurityPolicySummary struct {
 	IPWhitelist          string `json:"ip_whitelist"`
 	IPWhitelistEnabled   bool   `json:"ip_whitelist_enabled"`
 	IPBlacklist          string `json:"ip_blacklist"`
-	RateLimitRPS         int    `json:"rate_limit_rps"`
-	RateLimitBurst       int    `json:"rate_limit_burst"`
 	CRSExcludedCount     int    `json:"crs_excluded_count"`
 	// 摘要携带 CRS 规则组原始 JSON——前端向导跨策略重复告警直接消费摘要，
 	// 不再对每条启用策略 N+1 拉取详情。
@@ -299,9 +299,6 @@ type CreateSecurityPolicyRequest struct {
 	IPWhitelist         string `json:"ip_whitelist"`
 	IPWhitelistEnabled  *bool  `json:"ip_whitelist_enabled"`
 	IPBlacklist         string `json:"ip_blacklist"`
-	RateLimitEnabled    bool   `json:"rate_limit_enabled"`
-	RateLimitRPS        int    `json:"rate_limit_rps"`
-	RateLimitBurst      int    `json:"rate_limit_burst"`
 	CRSRuleGroups       string `json:"crs_rule_groups"`
 	CRSExcludedRules    string `json:"crs_excluded_rules"`
 	CustomRules         string `json:"custom_rules"`
@@ -347,9 +344,6 @@ type UpdateSecurityPolicyRequest struct {
 	IPWhitelist         *string `json:"ip_whitelist"`
 	IPWhitelistEnabled  *bool   `json:"ip_whitelist_enabled"`
 	IPBlacklist         *string `json:"ip_blacklist"`
-	RateLimitEnabled    *bool   `json:"rate_limit_enabled"`
-	RateLimitRPS        *int    `json:"rate_limit_rps"`
-	RateLimitBurst      *int    `json:"rate_limit_burst"`
 	CRSRuleGroups       *string `json:"crs_rule_groups"`
 	CRSExcludedRules    *string `json:"crs_excluded_rules"`
 	CustomRules         *string `json:"custom_rules"`

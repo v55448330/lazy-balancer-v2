@@ -471,8 +471,6 @@ func TestSecurityPolicyList_summaryCarriesExtendedFields(t *testing.T) {
 			IPACLList        string `json:"ip_acl_list"`
 			IPWhitelist      string `json:"ip_whitelist"`
 			IPBlacklist      string `json:"ip_blacklist"`
-			RateLimitRPS     int    `json:"rate_limit_rps"`
-			RateLimitBurst   int    `json:"rate_limit_burst"`
 			CRSExcludedCount int    `json:"crs_excluded_count"`
 			CustomRulesCount int    `json:"custom_rules_count"`
 			HasIPControl     bool   `json:"has_ip_control"`
@@ -485,7 +483,7 @@ func TestSecurityPolicyList_summaryCarriesExtendedFields(t *testing.T) {
 		t.Fatalf("list len = %d, want 1: %s", len(resp.Data), recorder.Body.String())
 	}
 	got := resp.Data[0]
-	if got.AnomalyThreshold != 5 || got.IPACLMode != "deny" || got.RateLimitRPS != 50 || got.RateLimitBurst != 10 {
+	if got.AnomalyThreshold != 5 || got.IPACLMode != "deny" {
 		t.Fatalf("summary scalars = %+v", got)
 	}
 	if got.IPACLList != `["203.0.113.0/24","2001:db8::/32"]` || got.IPWhitelist != `["192.0.2.1"]` || got.IPBlacklist != `["198.51.100.0/24","203.0.113.5"]` {
@@ -1210,36 +1208,6 @@ func TestSecurityPolicySummary_offModeHasCustomRulesFalse(t *testing.T) {
 // ——存量 rps=10 的策略发 {rate_limit_enabled:true}(部分重启用)时,
 // derefInt(req.RateLimitRPS)=0 → 400 误报「rps 必须 ≥1」;显式 {rate_limit_rps:0}
 // 时门短路 → 落库 enabled=1+rps=0 → UI 宣称限流启用实际零强制。
-func TestUpdateSecurityPolicy_rateLimitGateUsesEffectiveValues(t *testing.T) {
-	setupSecurityPolicyTestDB(t)
-	router := newSecurityRouter(t)
-	// Given:存量 enabled=1, rps=10, burst=5
-	id := createTestPolicy(t, router, map[string]any{"name": "限流策略", "policy_type": "stage2", "mode": "blocking", "rate_limit_enabled": true, "rate_limit_rps": 10, "rate_limit_burst": 5})
-
-	// When:只发 enabled=true(重启用,不带 rps——存量 rps=10 应回落)
-	recorder := putJSON(t, router, fmt.Sprintf("/security/policies/%d", id), map[string]any{"rate_limit_enabled": true})
-	// Then:必须精确 200——只排 400 会让退化成 500 的回归隐身
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("部分重启用必须 200, got %d: %s", recorder.Code, recorder.Body.String())
-	}
-
-	// When:显式 rps=0(存量 enabled=1)
-	recorder = putJSON(t, router, fmt.Sprintf("/security/policies/%d", id), map[string]any{"rate_limit_rps": 0})
-	// Then:精确 400（校验门拒绝），500 意味着校验缺失/内部错误
-	if recorder.Code != http.StatusBadRequest {
-		t.Fatalf("显式 rps=0 重启用必须 400, got %d: %s", recorder.Code, recorder.Body.String())
-	}
-	// 且不得落库 enabled=1+rps=0 形态
-	var rps int
-	var enabled bool
-	if err := db.DB.QueryRow("SELECT COALESCE(rate_limit_rps,0), COALESCE(rate_limit_enabled,0) FROM security_policies WHERE id=?", id).Scan(&rps, &enabled); err != nil {
-		t.Fatalf("read back rate limit columns: %v", err)
-	}
-	if enabled && rps == 0 {
-		t.Fatalf("落库 enabled=true+rps=0: UI 宣称限流启用实际零强制")
-	}
-}
-
 // 详情/列表 DTO 必须携带爬虫豁免两列。修复前两处均缺席 → 前端
 // 编辑策略时读不到（按 false/默认三引擎渲染），保存时恒回写 false，任何
 // 「重命名/改描述」都会静默关闭爬虫豁免（安全行为变更）。

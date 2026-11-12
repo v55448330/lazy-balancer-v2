@@ -253,12 +253,12 @@ test('关联规则 drill-down 与触发明细 tooltip 键盘可达', () => {
 })
 
 // ── 安全总览：失败态可重试 + 卡片不再伪装成功 ────────────────
-test('安全总览六路数据失败后提供「立即重试」，且并发门防重复点击', () => {
+test('安全总览五路数据失败后提供「立即重试」，且并发门防重复点击', () => {
   const page = code('src/views/security/SecurityOverview.vue')
   assert.match(page, /const reloadAll = async \(\): Promise<void> => \{/)
-  assert.match(page, /if \(reloading\.value\) return/, '重复点击不得叠发六组请求')
+  assert.match(page, /if \(reloading\.value\) return/, '重复点击不得叠发五组请求')
   // i18n 后双钉:调用点钉键,zh 母本钉原文(任一漂移必红)
-  assert.equal([...page.matchAll(/@click="reloadAll">\{\{ t\('app\.security\.overview\.page\.retryNow'\) \}\}<\/el-button>/g)].length, 3, '总览/最近拦截/限流三处失败态都要有重试入口')
+  assert.equal([...page.matchAll(/@click="reloadAll">\{\{ t\('app\.security\.overview\.page\.retryNow'\) \}\}<\/el-button>/g)].length, 2, '总览/最近拦截两处失败态都要有重试入口（限流卡已下线）')
   assert.ok(code('src/locales/zh/security.ts').includes('立即重试'), '立即重试原文必须在 zh 母本词条中')
   assert.match(page, /onMounted\(\(\) => \{ void reloadAll\(\) \}\)/)
 })

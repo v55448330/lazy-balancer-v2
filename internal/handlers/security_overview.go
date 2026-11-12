@@ -22,46 +22,6 @@ import (
 	"lazy-balancer-v2/internal/services"
 )
 
-// GetSecurityRateLimitBlocks 返回各站点被限流（HTTP 429）拦截的累计次数，数据
-// 来自 Caddy admin /metrics。注意口径：仅按 code=429 过滤、含上游自返 429；
-// 计数自最近一次 Caddy 配置重载以来累计（实证：/load
-// 重建 metrics registry 即归零；进程重启同），非进程启动口径（前端按"累计拦截"标注）。
-// 抓取失败返回 500：降级为空列表会让「Caddy 指标不可达」与「暂无限流拦截」
-// 不可区分，面板错误态需可达。
-func (h *Handlers) GetSecurityRateLimitBlocks(c *gin.Context) {
-	blocks, err := services.ScrapeRateLimitBlocks(h.cfg.CaddyMetricsURL)
-	if err != nil {
-		services.Logf("error", "Scrape rate-limit blocks failed: %v", err)
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_ee05fc23"), MessageKey: "k_ee05fc23"})
-		return
-	}
-	var total float64
-	for _, block := range blocks {
-		total += block.Count
-	}
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{
-		"total": total,
-		"hosts": blocks,
-	}})
-}
-
-// securityRuleHostMatches 判断指标 host 是否属于规则域名：精确匹配，或规则为
-// *.example.com 通配时匹配其**一级**子域（Caddy 通配域不覆盖裸域，与渲染语义
-// 一致；不展开通配会让泛域名规则的限流 chip 恒 0）。
-//
-// 单段语义以 Caddy host matcher 为准（modules/caddyhttp/matchers.go
-// MatchHost.MatchWithError：通配模式按 "." 切分后要求 len(patternParts) ==
-// len(incomingParts)，即 *.example.com 不匹配 a.b.example.com）。复用
-// tlsWildcardMatch 保持单一实现——此前用 HasSuffix 会把多级子域的 429 计数
-// 并入通配规则（chip 偏高，展示口径失真）。
-func securityRuleHostMatches(ruleHost, metricHost string) bool {
-	if ruleHost == "" || metricHost == "" {
-		return false
-	}
-	// host matcher 比较大小写不敏感；metrics 标签恒小写，规则域按输入保留。
-	return tlsWildcardMatch(strings.ToLower(ruleHost), strings.ToLower(metricHost))
-}
-
 // GetRuleStageStats 返回单规则的三阶段计数（流程抽屉计数 chip）：
 //   - stage1_blocked_24h / stage3_blocked_24h：近 24h 该规则 blocked 安全事件
 //     按 rule_triggered id 形状分桶——阶段 1（IP 访问控制+威胁情报库+地域拦截预检）=
@@ -79,9 +39,7 @@ func (h *Handlers) GetRuleStageStats(c *gin.Context) {
 	ruleCaddyID := c.Param("caddy_id")
 	// 规则存在性判定先于 MetricsDB 分支——零值面板与成功路径同口径
 	// （未知规则一律 404，不得因 metrics 未装配而对任意 caddy_id 返回 200）。
-	var domain string
-	var listenPort int
-	if err := db.DB.QueryRow(`SELECT COALESCE(domain,''), COALESCE(listen_port,0) FROM lb_rules WHERE caddy_id=?`, ruleCaddyID).Scan(&domain, &listenPort); err != nil {
+	if err := db.DB.QueryRow(`SELECT 1 FROM lb_rules WHERE caddy_id=?`, ruleCaddyID).Scan(new(int)); err != nil {
 		// ErrNoRows（规则不存在）与真实 DB 故障分判——前者归 404
 		// not_found，后者保持 500 且 message 归位查询失败（不再借「规则不存在」
 		// 文案）。前端对非 200 一律 stats=null，404 化不改变前端表现。
@@ -96,14 +54,13 @@ func (h *Handlers) GetRuleStageStats(c *gin.Context) {
 	if db.MetricsDB == nil {
 		// MetricsDB 未装配：与成功路径同键的零统计而非 panic。
 		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{
-			"stage1_blocked_24h":      0,
-			"stage3_blocked_24h":      0,
-			"stage_unattributed_24h":  0,
-			"ratelimit_blocks_reload": 0.0,
-			"precheck_avg_us":         0.0,
-			"precheck_samples":        0,
-			"waf_avg_us":              0.0,
-			"waf_samples":             0,
+			"stage1_blocked_24h":     0,
+			"stage3_blocked_24h":     0,
+			"stage_unattributed_24h": 0,
+			"precheck_avg_us":        0.0,
+			"precheck_samples":       0,
+			"waf_avg_us":             0.0,
+			"waf_samples":            0,
 		}})
 		return
 	}
@@ -117,46 +74,14 @@ func (h *Handlers) GetRuleStageStats(c *gin.Context) {
 		return
 	}
 
-	var ratelimit float64
-	if domain != "" {
-		// 端口维度：规则只认自己监听端口的 server 分组（http_<listen_port>）。
-		// 同域多端口部署下按 host 求和会把 80/443 两条规则的计数累加到每条
-		// 规则上（chip 被放大成两条之和）。
-		blocks, err := services.ScrapeRateLimitBlocksByHostServer(h.cfg.CaddyMetricsURL)
-		if err != nil {
-			services.Logf("error", "stage-stats scrape rate-limit blocks failed: %v", err)
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_ee05fc23"), MessageKey: "k_ee05fc23"})
-			return
-		}
-		serverName := fmt.Sprintf("http_%d", listenPort)
-		ruleHosts := make([]string, 0, 2)
-		for _, host := range strings.Split(domain, ",") {
-			if trimmed := services.NormalizeMetricsHost(host); trimmed != "" {
-				ruleHosts = append(ruleHosts, trimmed)
-			}
-		}
-		for _, block := range blocks {
-			if block.Server != serverName {
-				continue
-			}
-			host := services.NormalizeMetricsHost(block.Host)
-			for _, ruleHost := range ruleHosts {
-				if securityRuleHostMatches(ruleHost, host) {
-					ratelimit += block.Count
-					break
-				}
-			}
-		}
-	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{
-		"stage1_blocked_24h":      stats.stage1,
-		"stage3_blocked_24h":      stats.stage3,
-		"stage_unattributed_24h":  stats.unattributed,
-		"ratelimit_blocks_reload": ratelimit,
-		"precheck_avg_us":         stats.preAvg,
-		"precheck_samples":        stats.preCnt,
-		"waf_avg_us":              stats.wafAvg,
-		"waf_samples":             stats.wafCnt,
+		"stage1_blocked_24h":     stats.stage1,
+		"stage3_blocked_24h":     stats.stage3,
+		"stage_unattributed_24h": stats.unattributed,
+		"precheck_avg_us":        stats.preAvg,
+		"precheck_samples":       stats.preCnt,
+		"waf_avg_us":             stats.wafAvg,
+		"waf_samples":            stats.wafCnt,
 	}})
 }
 

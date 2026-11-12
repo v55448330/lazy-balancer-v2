@@ -670,31 +670,7 @@
             </template>
           </el-form>
         </div>
-        <!-- Step 3: 限流 -->
-        <div v-show="currentStep === WIZARD_STEP.RATE_LIMIT" class="step-content">
-          <div class="stage-projection-bar">
-            <span class="stage-projection-desc">{{ t('app.security.policies.rate.projection') }}</span>
-            <div class="stage-projection-rules">
-              <span class="stage-projection-empty">{{ boundRules.length > 0 ? t('app.security.policies.bind.appliesTo', { n: boundRules.length }) : t('app.security.policies.bind.none') }}</span>
-            </div>
-          </div>
-          <el-form :model="form" :label-width="$flw('100px')" :disabled="formFrozen">
-            <el-form-item :label="t('app.security.policies.common.enableLabel')">
-              <el-switch v-model="form.rate_limit_enabled" />
-            </el-form-item>
-            <template v-if="form.rate_limit_enabled">
-              <el-form-item :label="t('app.security.policies.rate.limitLabel')">
-                <el-input-number v-model="form.rate_limit_rps" :min="1" :max="1_000_000_000" style="width: 120px" />
-              </el-form-item>
-              <el-form-item :label="t('app.security.policies.rate.burstLabel')">
-                <el-input-number v-model="form.rate_limit_burst" :min="0" :max="1_000_000_000" style="width: 120px" />
-                <span class="form-tip-inline">{{ t('app.security.policies.rate.burstTip') }}</span>
-              </el-form-item>
-            </template>
-          </el-form>
-        </div>
-
-        <!-- 阶段 2 · CC 防护（续）：异常检测阈值与挑战、豁免（与配额同属一张策略） -->
+        <!-- 阶段 2 · CC 防护：突刺/4xx/多UA 触发、人机挑战与豁免（配额限流已下线） -->
         <div v-show="currentStep === WIZARD_STEP.RATE_LIMIT && typeAllowsCC" class="step-content">
           <div class="stage-projection-bar">
             <span class="stage-projection-desc">{{ t('app.security.policies.human.projection') }}</span>
@@ -815,7 +791,7 @@
           <el-form :model="form" :label-width="$flw('100px')" :disabled="formFrozen">
             <el-form-item :label="t('app.security.policies.bp.pageLabel')">
               <el-select v-model="form.block_page_id" :placeholder="t('app.security.policies.bp.pagePlaceholder')" style="width: 100%">
-                <el-option :value="0" :label="editorPolicyType === 'stage2' ? t('app.security.policies.bp.noPageStage2') : t('app.security.policies.bp.noPageDefault')" />
+                <el-option :value="0" :label="t('app.security.policies.bp.noPageDefault')" />
                 <el-option v-for="p in blockPages" :key="p.id" :label="pageLabel(p)" :value="p.id" />
               </el-select>
               <div v-if="form.block_page_id === 0" class="form-tip-line">{{ editorPolicyType === 'stage2' ? t('app.security.policies.bp.noPageTipStage2') : t('app.security.policies.bp.noPageTipDefault') }}</div>
@@ -1074,12 +1050,12 @@ import { activateOnce } from '@/utils/keyboardActivate'
 
 const { t, locale } = useI18n()
 
-interface PolicyDetail { id: number; name: string; description: string; mode: string; anomaly_threshold: number; ip_acl_mode: string; ip_acl_list: string; ip_acl_enabled: boolean; ip_whitelist: string; ip_whitelist_enabled?: boolean; ip_blacklist?: string; ip_acl_list_refs?: string; ip_whitelist_refs?: string; rate_limit_enabled: boolean; rate_limit_rps: number; rate_limit_burst: number; crs_rule_groups: string; crs_excluded_rules: string; custom_rules: string; block_page_id: number; block_status_code: number; block_response_mode?: string; enabled: boolean; updated_at: string; geoip_mode?: string; geoip_countries?: string; geoip_crawler_exempt?: boolean; geoip_crawler_engines?: string; waf_check_response?: boolean; log_request_body?: boolean; trust_detection?: boolean; human_verify_mode?: string; human_verify_type?: string; human_verify_ttl?: number; human_exempt_paths?: string[]; cc_detect_enabled?: boolean; cc_rps_limit?: number; cc_rps_window?: number; cc_4xx_ratio?: number; cc_session_anomaly?: boolean; cc_session_ua_threshold?: number }
+interface PolicyDetail { id: number; name: string; description: string; mode: string; anomaly_threshold: number; ip_acl_mode: string; ip_acl_list: string; ip_acl_enabled: boolean; ip_whitelist: string; ip_whitelist_enabled?: boolean; ip_blacklist?: string; ip_acl_list_refs?: string; ip_whitelist_refs?: string; crs_rule_groups: string; crs_excluded_rules: string; custom_rules: string; block_page_id: number; block_status_code: number; block_response_mode?: string; enabled: boolean; updated_at: string; geoip_mode?: string; geoip_countries?: string; geoip_crawler_exempt?: boolean; geoip_crawler_engines?: string; waf_check_response?: boolean; log_request_body?: boolean; trust_detection?: boolean; human_verify_mode?: string; human_verify_type?: string; human_verify_ttl?: number; human_exempt_paths?: string[]; cc_detect_enabled?: boolean; cc_rps_limit?: number; cc_rps_window?: number; cc_4xx_ratio?: number; cc_session_anomaly?: boolean; cc_session_ua_threshold?: number }
 // 规则行消费面（关联规则行内执行序/投影数据源；协议与域名等展示字段）
 interface Rule { caddy_id: string; name: string; domain: string; listen_port: number; protocol: string }
 // v2.2.0 多策略绑定：/security/bindings 的值从单 BindingInfo 改为数组（rank 序=执行序；
 // policy_id 仅作遗留 rank=0 行的并列兜底）
-interface BindingInfo { policy_id: number; name: string; mode: string; enabled: boolean; rate_limit_enabled: boolean; block_page_id?: number; block_status_code?: number }
+interface BindingInfo { policy_id: number; name: string; mode: string; enabled: boolean; block_page_id?: number; block_status_code?: number }
 // GET /security/rules/:caddy_id/policy 直接序列化 models.SecurityPolicy——json.RawMessage
 // 字段以原生 JSON（数组）出现，与策略详情接口的字符串形态不同，按 unknown 接收再解析。
 interface RuleBoundPolicy { id: number; name: string; mode: string; enabled: boolean; ip_acl_enabled: boolean; ip_acl_mode: string; crs_rule_groups: unknown; custom_rules: unknown; block_page_id: number }
@@ -1090,7 +1066,7 @@ interface BlockPage { id: number; name: string; content?: string }
 
 const blockPages = ref<BlockPage[]>([])
 
-interface PolicySummary { id: number; name: string; mode: string; enabled: boolean; rule_count: number; has_waf: boolean; has_ip_control: boolean; has_rate_limit: boolean; has_custom_rules: boolean; anomaly_threshold: number; ip_acl_mode: string; ip_acl_list: string; ip_whitelist: string; ip_whitelist_enabled?: boolean; ip_blacklist: string; ip_acl_list_refs?: string; ip_whitelist_refs?: string; rate_limit_rps: number; rate_limit_burst: number; crs_excluded_count: number; custom_rules_count: number; custom_rules_ref_count?: number; ip_acl_enabled: boolean; updated_by: number; updated_at: string; crs_rule_groups?: string | string[]; has_geoip?: boolean; geoip_countries?: string; geoip_mode?: string; policy_type?: string; trust_detection?: boolean; trigger_24h?: number; human_verify_mode?: string; human_verify_type?: string; cc_detect_enabled?: boolean; cc_rps_limit?: number; cc_rps_window?: number }
+interface PolicySummary { id: number; name: string; mode: string; enabled: boolean; rule_count: number; has_waf: boolean; has_ip_control: boolean; has_custom_rules: boolean; anomaly_threshold: number; ip_acl_mode: string; ip_acl_list: string; ip_whitelist: string; ip_whitelist_enabled?: boolean; ip_blacklist: string; ip_acl_list_refs?: string; ip_whitelist_refs?: string; crs_excluded_count: number; custom_rules_count: number; custom_rules_ref_count?: number; ip_acl_enabled: boolean; updated_by: number; updated_at: string; crs_rule_groups?: string | string[]; has_geoip?: boolean; geoip_countries?: string; geoip_mode?: string; policy_type?: string; trust_detection?: boolean; trigger_24h?: number; human_verify_mode?: string; human_verify_type?: string; cc_detect_enabled?: boolean; cc_rps_limit?: number; cc_rps_window?: number }
 
 
 
@@ -1305,7 +1281,6 @@ const policySummaryLine = (row: PolicySummary): string => {
   if (type === 'stage2') {
     // 阶段 2 · CC 防护（2026-11-12 用户裁定）：配额限流与挑战同属一条策略。
     const parts: string[] = []
-    if (row.has_rate_limit) parts.push(t('app.security.policies.summary.rateSummary', { rps: row.rate_limit_rps, burst: row.rate_limit_burst }))
     if (row.human_verify_mode && row.human_verify_mode !== 'off') {
       const modeLabel = row.human_verify_mode === 'force'
         ? t('app.security.policies.human.modeForce')
@@ -1439,7 +1414,7 @@ const migrateChildTypes = computed<SecurityPolicyType[]>(() => {
   // 要求内联条目非空且 migrate 路径不拉条目值，仅靠引用列表的混合策略预演
   // 会漏报阶段 1。
   if (hasIPACLControl(p) || hasGeoIPControl(p)) types.push('stage1')
-  if (p.has_rate_limit) types.push('stage2')
+  if (p.policy_type === 'stage2' || p.human_verify_mode && p.human_verify_mode !== 'off' || p.cc_detect_enabled) types.push('stage2')
   if (stage3ChipOn(p)) types.push('stage3')
   return types
 })
@@ -1459,7 +1434,7 @@ const migrateStage2SkipRisk = computed(() => {
   if (policyId === undefined || !migrateChildTypes.value.includes('stage2')) return []
   const boundIsOtherStage2 = (b: BindingInfo): boolean => {
     const type = policies.value.find((p) => p.id === b.policy_id)?.policy_type
-    return type ? type === 'stage2' : b.rate_limit_enabled
+    return type ? type === 'stage2' : false
   }
   return migrateBoundRules.value.filter((rule) =>
     (securityBindings.value[rule.caddy_id] || []).some((b) => b.policy_id !== policyId && boundIsOtherStage2(b)))
@@ -1607,7 +1582,10 @@ const viewPolicySections = computed<ViewPolicySection[]>(() => {
     },
     {
       title: t('app.security.policies.step.stage2'),
-      rows: [{ label: t('app.security.policies.view.rateLimitLabel'), value: d.rate_limit_enabled ? t('app.security.policies.view.rateDetail', { rps: d.rate_limit_rps, burst: d.rate_limit_burst }) : t('app.security.policies.common.notEnabled') }],
+      rows: [
+        { label: t('common.app.views.stages.humanModeLabel'), value: (d.human_verify_mode ?? 'off') !== 'off' ? t('common.app.views.stages.humanMode_' + d.human_verify_mode) : t('app.security.policies.common.notEnabled') },
+        { label: t('common.app.views.stages.humanTypeLabel'), value: (d.human_verify_mode ?? 'off') !== 'off' ? t('common.app.views.stages.humanType_' + (d.human_verify_type ?? 'slider')) : '—' },
+      ],
     },
     { title: t('app.security.policies.step.stage3'), rows: stage3Rows },
     {
@@ -1616,9 +1594,7 @@ const viewPolicySections = computed<ViewPolicySection[]>(() => {
         { label: t('app.security.policies.bp.pageLabel'), value: d.block_page_id > 0
           ? t('app.security.policies.view.pageWithStatus', { name: page?.name ?? t('app.security.policies.common.pageNum', { n: d.block_page_id }), code: d.block_status_code || 403 })
             + ' · ' + t(`app.security.policies.bp.response${d.block_response_mode === 'html' ? 'Html' : d.block_response_mode === 'json' ? 'Json' : 'Auto'}`)
-          : d.rate_limit_enabled
-            ? t('app.security.policies.view.noPageRateLimit')
-            : t('app.security.policies.bp.noPageDefault') },
+          : t('app.security.policies.bp.noPageDefault') },
         { label: t('app.security.policies.view.attributionLabel'), value: t('app.security.policies.view.attributionValue') },
       ],
     },
@@ -1873,7 +1849,7 @@ const visibleSteps = computed<readonly WizardStep[]>(() => {
   if (typeAllowsStage(3)) steps.push(WIZARD_STEP.WAF_RULES)
   // 阶段 0（直通/记录不拦截）无拦截页步骤；阶段 2 可配页（2026-09-25 用户裁定，
   // 状态码恒 429 不可改——步内状态码项按类型隐藏）
-  if (editorPolicyType.value !== 'stage0') steps.push(WIZARD_STEP.BLOCK_PAGE)
+  if (editorPolicyType.value !== 'stage0' && editorPolicyType.value !== 'stage2') steps.push(WIZARD_STEP.BLOCK_PAGE)
   steps.push(WIZARD_STEP.BINDINGS, WIZARD_STEP.PREVIEW)
   return steps
 })
@@ -1896,7 +1872,7 @@ const pickerProtoFilter = ref<'all' | 'http' | 'tcp'>('http')
 const pickerPage = ref(1)
 const pickerSelected = ref<string[]>([])
 const PICKER_PAGE_SIZE = 20
-const defaultForm = () => ({ name: '', description: '', enabled: true, mode: 'off', anomaly_threshold: 5, ip_acl_enabled: false, ip_acl_mode: 'allow', rate_limit_enabled: false, rate_limit_rps: 100, rate_limit_burst: 50, block_page_id: 1, block_status_code: 403, block_response_mode: 'auto', geoip_enabled: false, geoip_mode: 'deny', geoip_crawler_exempt: false, geoip_crawler_engines: ['googlebot', 'bingbot', 'baiduspider'], waf_check_response: false, log_request_body: false, trust_detection: false, human_verify_mode: 'off', human_verify_type: 'slider', human_verify_ttl: 30, human_exempt_paths: [] as string[], cc_detect_enabled: false, cc_rps_limit: 40, cc_rps_window: 10, cc_4xx_ratio: 70, cc_session_anomaly: false, cc_session_ua_threshold: 5 })
+const defaultForm = () => ({ name: '', description: '', enabled: true, mode: 'off', anomaly_threshold: 5, ip_acl_enabled: false, ip_acl_mode: 'allow', block_page_id: 1, block_status_code: 403, block_response_mode: 'auto', geoip_enabled: false, geoip_mode: 'deny', geoip_crawler_exempt: false, geoip_crawler_engines: ['googlebot', 'bingbot', 'baiduspider'], waf_check_response: false, log_request_body: false, trust_detection: false, human_verify_mode: 'off', human_verify_type: 'slider', human_verify_ttl: 30, human_exempt_paths: [] as string[], cc_detect_enabled: false, cc_rps_limit: 40, cc_rps_window: 10, cc_4xx_ratio: 70, cc_session_anomaly: false, cc_session_ua_threshold: 5 })
 
 const form = ref(defaultForm())
 // v2.3.8 爬虫豁免引擎注册表（geoipnames 单源镜像；ID 稳定——后端白名单校验）
@@ -3057,9 +3033,6 @@ const attributionInput = (chain: ChainEntry[]): BlockPageChainPolicy[] => chain.
   pageHasContent: pageHasContent(e.blockPageId ?? 0),
   // 列表摘要无 rate_limit_enabled 原始字段——has_rate_limit 即「启用且 rps>0」
   // （后端同一判定），用于阶段 2 是否可能产生 429 的门。
-  rateLimitEnabled: e.isSelf
-    ? form.value.rate_limit_enabled
-    : (policies.value.find((p) => p.id === e.policyId)?.has_rate_limit ?? false),
   stage1DenyContributor: e.isSelf ? selfDenyContributor.value : undefined,
 }))
 
@@ -3133,17 +3106,11 @@ const blockPageSummary = computed<{ lines: Array<{ text: string; tone: 'active' 
   }
   // 例外分面（按规则归类，仅存在才渲染）：TCP > 限流 > 兜底差异
   let tcpCount = 0
-  let rateLimitCount = 0
   let fallbackCount = 0
   for (const row of boundRuleRows.value) {
     if (row.protocol === 'tcp') { tcpCount++; continue }
-    // 限流例外仅多阶段编辑器出（纯阶段 2 编辑器的 429 恒定已由状态码区呈现）
-    const rateLimitInPlay = editorStages.length > 1
-      && attributionInput(row.chain).some((p) => p.rateLimitEnabled === true)
-    if (rateLimitInPlay) { rateLimitCount++; continue }
     if (!pageInvalid && pageId > 0 && capableAttributions(row.chain).some((r) => r.effective === 'peer')) fallbackCount++
   }
-  if (rateLimitCount > 0) lines.push({ text: t('app.security.policies.bp.rateLimitFacet', { n: rateLimitCount }), tone: 'info' })
   if (tcpCount > 0) lines.push({ text: t('app.security.policies.bp.tcpFacet', { n: tcpCount }), tone: 'info' })
   if (fallbackCount > 0) lines.push({ text: t('app.security.policies.bp.fallbackFacet', { n: fallbackCount }), tone: 'info' })
   return { lines }
@@ -3216,7 +3183,6 @@ const previewModel = computed<RuleStageModel>(() => {
     block_page_id: typeAllowsStage(1) ? form.value.block_page_id : 0,
     block_status_code: form.value.block_status_code,
     has_ip_control: typeAllowsStage(1) && ((form.value.ip_acl_enabled && aclMergedCount.value > 0) || ipBlacklistSelf.value.length > 0),
-    has_rate_limit: typeAllowsStage(2) && form.value.rate_limit_enabled && form.value.rate_limit_rps > 0,
     has_geoip: typeAllowsStage(1) && form.value.geoip_enabled && geoipCountries.value.length > 0,
     has_custom_rules: typeAllowsStage(3) && selectedCustomRules.value.length > 0,
     geoip_countries: JSON.stringify(typeAllowsStage(1) ? geoipCountries.value : []),
@@ -3234,8 +3200,6 @@ const previewModel = computed<RuleStageModel>(() => {
     cc_4xx_ratio: form.value.cc_4xx_ratio,
     cc_session_anomaly: form.value.cc_session_anomaly,
     cc_session_ua_threshold: form.value.cc_session_ua_threshold,
-    rate_limit_rps: form.value.rate_limit_rps,
-    rate_limit_burst: form.value.rate_limit_burst,
     ip_blacklist: JSON.stringify(ipBlacklistSelf.value),
     ip_acl_list_refs: JSON.stringify(ipACLListRefs.value),
     ip_whitelist_refs: JSON.stringify(ipWhitelistRefs.value),
@@ -3252,7 +3216,6 @@ const previewModel = computed<RuleStageModel>(() => {
       name: previewPolicy.name,
       mode: previewPolicy.mode,
       enabled: form.value.enabled,
-      rate_limit_enabled: previewPolicy.has_rate_limit,
       block_page_id: showBlockPage ? form.value.block_page_id : 0,
       block_status_code: form.value.block_status_code,
     }],
@@ -3401,9 +3364,6 @@ async function openDialog(row?: PolicySummary) {
         anomaly_threshold: d.anomaly_threshold,
         ip_acl_enabled: d.ip_acl_enabled,
         ip_acl_mode: d.ip_acl_mode ?? '',
-        rate_limit_enabled: d.rate_limit_enabled,
-        rate_limit_rps: d.rate_limit_rps,
-        rate_limit_burst: d.rate_limit_burst,
         block_page_id: d.block_page_id,
         block_status_code: d.block_status_code || 403,
         block_response_mode: d.block_response_mode || 'auto',
@@ -3648,9 +3608,6 @@ const handleSave = async () => {
       ipWhitelist: ipWhitelist.value,
       ipWhitelistRefs: ipWhitelistRefs.value,
       ipWhitelistEnabled: ipWhitelistEnabled.value,
-      rateLimitEnabled: form.value.rate_limit_enabled,
-      rateLimitRps: form.value.rate_limit_rps,
-      rateLimitBurst: form.value.rate_limit_burst,
       crsRuleGroups: crsRuleGroups.value,
       crsExcludedRules: serializedExcludedRules.value,
       customRuleIds: selectedCustomRules.value,

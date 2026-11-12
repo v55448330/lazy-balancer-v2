@@ -47,14 +47,13 @@ import { stagePolicy } from './fixtures/stagePolicy.ts'
 // 夹具单源：字段清单在 fixtures/stagePolicy.ts 维护；本文件只保留与单源的
 // 差异默认值（name/mode/限流值），各用例再按需覆盖。
 const policyOf = (overrides: Partial<SecurityStagePolicy> = {}): SecurityStagePolicy =>
-  stagePolicy({ name: '策略 A', mode: 'off', rate_limit_rps: 10, rate_limit_burst: 20, ...overrides })
+  stagePolicy({ name: '策略 A', mode: 'off', ...overrides })
 
 const bindingOf = (overrides: Partial<SecurityStageBinding> = {}): SecurityStageBinding => ({
   policy_id: 1,
   name: '策略 A',
   mode: 'off',
   enabled: true,
-  rate_limit_enabled: true,
   ...overrides,
 })
 
@@ -66,7 +65,7 @@ const stageRows = (
 ): Array<{ label: string; detail: string }> => buildStageModel([binding], [policy], [], blockPages).stages[stageIndex].groups[0]?.rows ?? []
 
 test('阶段 2：拦截页已删/内容空时显性给出失效回落（不再静默省略该行）', () => {
-  const policy = policyOf({ has_rate_limit: true, block_page_id: 0 })
+  const policy = policyOf({ human_verify_mode: 'force', block_page_id: 0 })
   // 页已删：binding/策略仍指向 #9，但页面列表里没有它
   const deleted = stageRows(bindingOf({ block_page_id: 9 }), policy, [], 2)
   assert.deepEqual(deleted.find((row) => row.label === '拦截页（策略页）'), {
@@ -126,12 +125,12 @@ test('文档钉：allow 空名单按 fail-closed 说明 + 保存走确认式放�
 // 策略列表变空」，故按判别表逐分支钉，而不是只钉「全空回落」这一条兜底。
 test('策略类型推断：显式类型透传 + 四能力分支 + 多能力归 mixed 的判别表', () => {
   const stageOf = (patch: Partial<SecurityPolicyTypeInput>): string =>
-    inferPolicyType({ has_ip_control: false, has_rate_limit: false, has_custom_rules: false, ...patch })
+    inferPolicyType({ has_ip_control: false, has_custom_rules: false, ...patch })
 
   // ① 显式 policy_type 五种一律透传：即使同时带着别的能力也不重新推断
   for (const type of ['stage0', 'stage1', 'stage2', 'stage3', 'mixed']) {
     assert.equal(
-      stageOf({ policy_type: type, ip_whitelist_enabled: true, ip_whitelist: '["203.0.113.7"]', has_rate_limit: true }),
+      stageOf({ policy_type: type, ip_whitelist_enabled: true, ip_whitelist: '["203.0.113.7"]', human_verify_mode: 'force' }),
       type,
       `显式 policy_type=${type} 必须原样透传`,
     )
@@ -144,7 +143,8 @@ test('策略类型推断：显式类型透传 + 四能力分支 + 多能力归 m
   assert.equal(stageOf({ ip_whitelist_enabled: true, ip_whitelist: '["203.0.113.7"]' }), 'stage0', '信任名单启用且非空 → stage0')
   assert.equal(stageOf({ ip_acl_enabled: true, ip_acl_list: '["10.0.0.0/8"]' }), 'stage1', 'ACL 内容门 → stage1')
   assert.equal(stageOf({ geoip_mode: 'block', geoip_countries: '["CN"]' }), 'stage1', '仅地域拦截 → stage1')
-  assert.equal(stageOf({ has_rate_limit: true }), 'stage2', '仅限流 → stage2')
+  assert.equal(stageOf({ cc_detect_enabled: true }), 'stage2', '仅 CC 检测 → stage2')
+  assert.equal(stageOf({ human_verify_mode: 'force' }), 'stage2', '仅人机挑战 → stage2')
   assert.equal(stageOf({ mode: 'custom_only' }), 'stage3', 'WAF 三态的 custom_only → stage3')
 
   // ① 的补充：同一阶段的两个来源（ACL + GeoIP）只算一个能力，不得归 mixed
@@ -165,23 +165,23 @@ test('策略类型推断：显式类型透传 + 四能力分支 + 多能力归 m
   // ⑤ 自定义规则计数的三态：引用计数优先于 has_custom_rules 摘要回退
   assert.equal(stageOf({ custom_rules_count: 2 }), 'stage3', '启用可发射计数 > 0 → stage3')
   assert.equal(
-    stageOf({ custom_rules_count: 0, has_custom_rules: true, has_rate_limit: true }),
+    stageOf({ custom_rules_count: 0, has_custom_rules: true, human_verify_mode: 'force' }),
     'stage2',
     '计数为 0 时不得回退 has_custom_rules（那会把「规则全部禁用」算成阶段 3 并归 mixed）',
   )
   assert.equal(stageOf({ has_custom_rules: true }), 'stage3', '计数缺省（精简载荷）时回退摘要标志')
 
   // ⑥ 跨能力 → mixed（计数 > 1）
-  assert.equal(stageOf({ ip_whitelist_enabled: true, ip_whitelist: '["203.0.113.7"]', has_rate_limit: true }), 'mixed')
-  assert.equal(stageOf({ mode: 'detection', has_rate_limit: true }), 'mixed')
-  assert.equal(stageOf({ has_custom_rules: true, has_rate_limit: true }), 'mixed')
+  assert.equal(stageOf({ ip_whitelist_enabled: true, ip_whitelist: '["203.0.113.7"]', human_verify_mode: 'force' }), 'mixed')
+  assert.equal(stageOf({ mode: 'detection', human_verify_mode: 'force' }), 'mixed')
+  assert.equal(stageOf({ has_custom_rules: true, human_verify_mode: 'force' }), 'mixed')
   assert.equal(
     stageOf({
       ip_whitelist_enabled: true,
       ip_whitelist: '["203.0.113.7"]',
       ip_acl_enabled: true,
       ip_acl_list: '["10.0.0.0/8"]',
-      has_rate_limit: true,
+      human_verify_mode: 'force',
       mode: 'blocking',
     }),
     'mixed',
@@ -206,24 +206,21 @@ test('阶段 3 口径：前端按启用计数、后端 G3 按引用计数——�
 // 每规则最多一条限流策略由后端整批 400 兜底，前端三处入口（策略向导、
 // 规则绑定编辑器、提交门）都靠本谓词置灰/拦截。四条同源正则只证明「被调用」，
 // 谓词内部反转（删自身排除 / 回退项写死 / 恒 false）在那些断言下全绿。
-test('限流唯一门：排除自身、摘要缺失按 rate_limit_enabled 回退、向导新建态 self=null', () => {
+test('阶段 2 唯一门：排除自身、仅按策略类型判定、向导新建态 self=null', () => {
   const table = (map: Record<number, SecurityPolicyType>) => (id: number) => map[id]
 
-  // 排除自身：编辑「已绑定本策略」的规则时，本策略不得算成「其它限流策略」
-  assert.equal(hasOtherStage2Binding([{ policy_id: 1 }, { policy_id: 2 }], 1, table({ 2: 'stage2' })), true, '别的限流策略必须命中')
+  // 排除自身：编辑「已绑定本策略」的规则时，本策略不得算成「其它阶段 2 策略」
+  assert.equal(hasOtherStage2Binding([{ policy_id: 1 }, { policy_id: 2 }], 1, table({ 2: 'stage2' })), true, '别的阶段 2 策略必须命中')
   assert.equal(hasOtherStage2Binding([{ policy_id: 1 }, { policy_id: 2 }], 2, table({ 2: 'stage2' })), false, '本策略自身不得计入')
 
-  // 摘要缺失（精简绑定载荷没有策略类型）→ 回退绑定的 rate_limit_enabled
-  assert.equal(hasOtherStage2Binding([{ policy_id: 9, rate_limit_enabled: true }], 5, table({})), true, '摘要缺失时限流标志必须被采用')
-  assert.equal(hasOtherStage2Binding([{ policy_id: 9, rate_limit_enabled: false }], 5, table({})), false, '摘要缺失且非限流不得误报')
-  // 摘要命中时以类型表为准（标志只作回退，不得反向覆盖）
-  assert.equal(hasOtherStage2Binding([{ policy_id: 9, rate_limit_enabled: true }], 5, table({ 9: 'stage3' })), false, '类型表判定优先于回退标志')
-  assert.equal(hasOtherStage2Binding([{ policy_id: 9, rate_limit_enabled: false }], 5, table({ 9: 'stage2' })), true, '类型表判定优先于回退标志')
+  // 类型表是唯一判据（限流字段已下线，不再有 binding 回退）
+  assert.equal(hasOtherStage2Binding([{ policy_id: 9 }], 5, table({ 9: 'stage3' })), false, '非 stage2 不得误报')
+  assert.equal(hasOtherStage2Binding([{ policy_id: 9 }], 5, table({ 9: 'stage2' })), true, 'stage2 必须命中')
 
   // 空绑定与向导新建态（尚未有 self）
   assert.equal(hasOtherStage2Binding([], null, table({})), false, '无绑定不得冲突')
-  assert.equal(hasOtherStage2Binding([{ policy_id: 3 }], null, table({ 3: 'stage2' })), true, '新建态任何限流绑定都是冲突')
-  assert.equal(hasOtherStage2Binding([{ policy_id: 3 }], null, table({ 3: 'stage1' })), false, '非限流绑定不算冲突')
+  assert.equal(hasOtherStage2Binding([{ policy_id: 3 }], null, table({ 3: 'stage2' })), true, '新建态任何阶段 2 绑定都是冲突')
+  assert.equal(hasOtherStage2Binding([{ policy_id: 3 }], null, table({ 3: 'stage1' })), false, '非阶段 2 绑定不算冲突')
 })
 
 test('IPv6 CIDR：前缀位匹配生效且只作用于同族', () => {
@@ -786,16 +783,9 @@ test('明细 · 阶段 1 爬虫豁免行：开关与引擎集合均可见', () =
   assert.equal(stageRows(bindingOf({ policy_id: 22 }), disabled, [], 1).find((row) => row.label === '爬虫豁免')?.detail, '未启用')
 })
 
-test('明细 · 阶段 2 限流口径：限流双 zone 口径随 burst 切换', () => {
-  const burst = policyOf({ id: 31, has_rate_limit: true, rate_limit_rps: 10, rate_limit_burst: 20 })
-  assert.deepEqual(detailsAt(2, burst)?.rateLimit, {
-    rps: 10,
-    burst: 20,
-    caption: '1s 窗口上限 30 次（含突发）· 60s 窗口上限 600 次（持续 10 次/秒）',
-  })
-  // burst=0：后端只发射单 1s 窗口，文案不得再承诺 60s 窗口
-  const noBurst = policyOf({ id: 31, has_rate_limit: true, rate_limit_rps: 10, rate_limit_burst: 0 })
-  assert.deepEqual(detailsAt(2, noBurst)?.rateLimit, { rps: 10, burst: 0, caption: '1s 窗口上限 10 次' })
+test('明细 · 阶段 2：配额限流下线后不再产出 rateLimit 明细', () => {
+  const policy = policyOf({ id: 31, human_verify_mode: 'force' })
+  assert.equal(detailsAt(2, policy), undefined)
 })
 
 test('明细 · 阶段 3 自定义规则与 CRS 组：自定义规则按 id join 规则库、CRS 组标签可回退裸码', () => {

@@ -20,17 +20,17 @@ import (
 )
 
 // ACL 启用门判据必须是「合并后终态是否仍含自身阶段特征」而非存量行：
-// 存量 stage2（限流开）策略在同一请求内关停限流并启用 ACL——合并终态只有
+// 存量 stage2（CC 开启）策略在同一请求内关停 CC 并启用 ACL——合并终态只有
 // G1 特征、重推断为 stage1，不构成 mixed 漂移，不得按存量 G2 误拒。
 func TestUpdateSecurityPolicy_aclGateUsesMergedTerminalFeatures(t *testing.T) {
 	t.Run("stage2 同请求关停限流并启用 ACL 放行", func(t *testing.T) {
 		setupSecurityPolicyTestDB(t)
 		router := newSecurityRouter(t)
-		id := createTestPolicy(t, router, map[string]any{"name": "rl-to-acl-nil", "policy_type": "stage2", "rate_limit_enabled": true, "rate_limit_rps": 100, "rate_limit_burst": 50})
+		id := createTestPolicy(t, router, map[string]any{"name": "rl-to-acl-nil", "policy_type": "stage2", "human_verify_mode": "force", "human_verify_type": "slider"})
 
 		rec := putJSON(t, router, fmt.Sprintf("/security/policies/%d", id), map[string]any{
 			"ip_acl_enabled": true, "ip_acl_mode": "deny", "ip_acl_list": `["203.0.113.0/24"]`,
-			"rate_limit_enabled": false, "rate_limit_rps": 0,
+			"human_verify_mode": "off",
 		})
 		if rec.Code != http.StatusOK {
 			t.Fatalf("PUT status=%d body=%s, want 200（合并终态仅 G1，重推断 stage1）", rec.Code, rec.Body.String())
@@ -69,7 +69,7 @@ func TestUpdateSecurityPolicy_aclGateUsesMergedTerminalFeatures(t *testing.T) {
 	t.Run("自身阶段特征仍存时维持拒绝", func(t *testing.T) {
 		setupSecurityPolicyTestDB(t)
 		router := newSecurityRouter(t)
-		id := createTestPolicy(t, router, map[string]any{"name": "rl-keep", "policy_type": "stage2", "rate_limit_enabled": true, "rate_limit_rps": 100, "rate_limit_burst": 50})
+		id := createTestPolicy(t, router, map[string]any{"name": "rl-keep", "policy_type": "stage2", "human_verify_mode": "force", "human_verify_type": "slider"})
 
 		// 只启用 ACL 不动限流——合并终态 G1∪G2 → mixed 漂移，必须 400
 		rec := putJSON(t, router, fmt.Sprintf("/security/policies/%d", id), map[string]any{

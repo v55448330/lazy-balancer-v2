@@ -4,14 +4,15 @@
  * 库存名归位）。展示层按 id 翻译，词条缺失时回退库内原文——切语言不改写库，
  * 也不动身份判据。
  *
- * id 1=默认拦截页（is_default）；9001=限流；9002=维护。（9005 人机验证占位页已于
- * 2026-11-12 随自定义挑战页退役——挑战页由 lb_human 插件内置渲染。）
+ * id 1=默认拦截页（is_default）；9001=限流；9002=维护；9005=人机验证占位页
+ * （阶段 3 真实挑战页由 lb_human 插件渲染，本页仅展示/占位）。
  * 自定义页（无对应词条）恒显示用户填写的名称与描述。
  */
-const BUILTIN_BLOCK_PAGE_KEYS: Record<number, 'default' | 'ratelimit' | 'maintenance'> = {
+const BUILTIN_BLOCK_PAGE_KEYS: Record<number, 'default' | 'ratelimit' | 'maintenance' | 'human'> = {
   1: 'default',
   9001: 'ratelimit',
   9002: 'maintenance',
+  9005: 'human',
 }
 
 export interface BlockPageLike {

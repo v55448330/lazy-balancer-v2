@@ -18,8 +18,6 @@ import (
 	"log"
 	"strings"
 	"testing"
-
-	"lazy-balancer-v2/internal/models"
 )
 
 // truthRule 构造健康检查族全哨兵值的 HTTP 规则（interval=37/timeout=13/
@@ -393,66 +391,6 @@ func TestRenderDBTruth_SecurityAnomalyThresholdInvalidFailVisible(t *testing.T) 
 			}
 			if !strings.Contains(message, "异常阈值") {
 				t.Fatalf("generation error %q missing hint 异常阈值", message)
-			}
-		})
-	}
-}
-
-func TestRenderDBTruth_RateLimitRPSSentinelPassThrough(t *testing.T) {
-	// 哨兵 777/55 全程偏离默认——任何写死替换都会被识破。
-	handler, err := buildRateLimitHandler("lb-truth-rl", &models.SecurityPolicy{ID: 9, RateLimitEnabled: true, RateLimitRPS: 777, RateLimitBurst: 55})
-	if err != nil {
-		t.Fatalf("buildRateLimitHandler: %v", err)
-	}
-	zones, _ := handler["rate_limits"].(map[string]interface{})
-	sec, _ := zones["lb-truth-rl-p9-sec"].(map[string]interface{})
-	if sec == nil || sec["max_events"] != 777+55 {
-		t.Fatalf("sec zone max_events=%v, want 832 (rps 777 + burst 55 库值贯通)", sec["max_events"])
-	}
-	minz, _ := zones["lb-truth-rl-p9-min"].(map[string]interface{})
-	if minz == nil || minz["max_events"] != 777*60 {
-		t.Fatalf("min zone max_events=%v, want 46620 (rps 777 库值贯通)", minz["max_events"])
-	}
-}
-
-func TestRenderDBTruth_RateLimitBurstZeroOmissionSemantics(t *testing.T) {
-	// 类型②省略型回归钉：burst=0 → 单窗口（无 -min zone），max_events=rps 原值。
-	handler, err := buildRateLimitHandler("lb-truth-rl0", &models.SecurityPolicy{ID: 3, RateLimitEnabled: true, RateLimitRPS: 777})
-	if err != nil {
-		t.Fatalf("buildRateLimitHandler: %v", err)
-	}
-	zones, _ := handler["rate_limits"].(map[string]interface{})
-	if len(zones) != 1 {
-		t.Fatalf("burst=0 must emit exactly one zone (省略语义), got %v", zones)
-	}
-	zone, _ := zones["lb-truth-rl0-p3"].(map[string]interface{})
-	if zone == nil || zone["max_events"] != 777 {
-		t.Fatalf("single zone max_events=%v, want 777", zone["max_events"])
-	}
-}
-
-func TestRenderDBTruth_RateLimitEnabledZeroRPSFailVisible(t *testing.T) {
-	stubSecurityLibsAvailable(t)
-	for name, rps := range map[string]int{"zero": 0, "negative": -5} {
-		t.Run(name, func(t *testing.T) {
-			_, database := newClusterTestService(t)
-			seedGenerationRule(t, database, "lb-truth-rlv", false)
-			result, err := database.Exec(`INSERT INTO security_policies (name,mode,rate_limit_enabled,rate_limit_rps,enabled) VALUES ('truth-rl','off',1,?,1)`, rps)
-			if err != nil {
-				t.Fatalf("seed policy: %v", err)
-			}
-			policyID, _ := result.LastInsertId()
-			if _, err := database.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id,policy_id) VALUES ('lb-truth-rlv',?)`, policyID); err != nil {
-				t.Fatalf("bind policy: %v", err)
-			}
-
-			generated := generateCaddyConfigFromStore(database)
-			message, ok := generated[caddyConfigGenerationErrorKey].(string)
-			if !ok {
-				t.Fatalf("enabled=1 + rate_limit_rps=%d must fail generation (fail-visible, 根除静默不限流), got config keys %v", rps, configKeys(generated))
-			}
-			if !strings.Contains(message, "限流") || !strings.Contains(message, "rate_limit_rps") {
-				t.Fatalf("generation error %q missing hints 限流/rate_limit_rps", message)
 			}
 		})
 	}

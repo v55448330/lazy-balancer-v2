@@ -345,7 +345,7 @@ func TestWriteToolSchemasDeclareBodyFields(t *testing.T) {
 		required   []string
 		properties []string
 	}{
-		{"create_security_policy", []string{"name"}, []string{"name", "mode", "policy_type", "anomaly_threshold", "ip_acl_enabled", "rate_limit_enabled", "geoip_mode", "crs_rule_groups", "custom_rules", "block_page_id", "enabled"}},
+		{"create_security_policy", []string{"name"}, []string{"name", "mode", "policy_type", "anomaly_threshold", "ip_acl_enabled", "geoip_mode", "crs_rule_groups", "custom_rules", "block_page_id", "enabled"}},
 		{"update_security_policy", []string{"id"}, []string{"id", "name", "mode", "policy_type", "enabled"}},
 		{"create_custom_rule", []string{"name", "conditions", "action", "score"}, []string{"name", "conditions", "condition_logic", "action", "score", "enabled"}},
 		{"update_custom_rule", []string{"id"}, []string{"id", "name", "conditions", "condition_logic", "action", "score", "enabled"}},
@@ -549,7 +549,7 @@ func TestSecurityPolicySchemaDeclaresWhitelistRefs(t *testing.T) {
 }
 
 // usage 文案不得宣称实现不存在的能力（静默失效型契约漂移）：
-// 目录 URL 不可经 update_ca_provider 修改；限流统计无时段维度。
+// 目录 URL 不可经 update_ca_provider 修改。
 func TestToolUsageMatchesImplementationCapabilities(t *testing.T) {
 	caUsage := toolUsage["update_ca_provider"]
 	if strings.Contains(caUsage, "目录 URL/") || strings.HasPrefix(caUsage, "更新 CA 提供商配置（目录 URL") {
@@ -557,13 +557,6 @@ func TestToolUsageMatchesImplementationCapabilities(t *testing.T) {
 	}
 	if !strings.Contains(caUsage, "不可") && !strings.Contains(caUsage, "不在本工具契约内") {
 		t.Errorf("update_ca_provider usage 须明示目录 URL 不可修改: %q", caUsage)
-	}
-	rateUsage := toolUsage["get_rate_limit_blocks"]
-	if strings.Contains(rateUsage, "时段聚合") || strings.Contains(rateUsage, "按规则/时段") {
-		t.Errorf("get_rate_limit_blocks usage 宣称时段聚合（实现按 host 累计）: %q", rateUsage)
-	}
-	if !strings.Contains(rateUsage, "重载") {
-		t.Errorf("get_rate_limit_blocks usage 须说明重载累计口径: %q", rateUsage)
 	}
 }
 

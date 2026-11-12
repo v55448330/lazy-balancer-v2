@@ -12,7 +12,6 @@ export const stagePolicy = (overrides: Partial<SecurityStagePolicy> = {}): Secur
   mode: 'blocking',
   enabled: true,
   has_ip_control: false,
-  has_rate_limit: false,
   has_geoip: false,
   has_custom_rules: false,
   geoip_countries: '[]',
@@ -20,7 +19,5 @@ export const stagePolicy = (overrides: Partial<SecurityStagePolicy> = {}): Secur
   ip_acl_mode: 'deny',
   ip_acl_list: '[]',
   ip_whitelist: '[]',
-  rate_limit_rps: 100,
-  rate_limit_burst: 50,
   ...overrides,
 })
