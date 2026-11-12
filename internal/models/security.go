@@ -57,7 +57,6 @@ func PolicyTypeFeatures(p *SecurityPolicy) PolicyFeatureSet {
 		jsonListNonEmpty(p.IPBlacklist) ||
 		(p.GeoIPMode != "" && p.GeoIPMode != "off" && jsonListNonEmpty(p.GeoIPCountries))
 	// G2 = 阶段 2 能力（CC 防护）：人机验证开启或 CC 检测启用。配额限流已下线，
-	// 存量 rate_limit_* 列保留为零值兼容备份/混版本快照，不参与类型推断。
 	fs.G2 = (p.HumanVerifyMode != "" && p.HumanVerifyMode != "off") || p.CCDetectEnabled
 	fs.G3 = p.Mode == "blocking" || p.Mode == "detection" || p.Mode == "custom_only" || CustomRulesRefCount(p.CustomRules) > 0
 	return fs
@@ -162,9 +161,6 @@ type SecurityPolicy struct {
 	CustomRuleIDsParsed bool                `json:"-"`
 	CustomRuleIDsOK     bool                `json:"-"`
 	IPBlacklist         json.RawMessage     `json:"ip_blacklist"`
-	RateLimitEnabled    bool                `json:"rate_limit_enabled"`
-	RateLimitRPS        int                 `json:"rate_limit_rps"`
-	RateLimitBurst      int                 `json:"rate_limit_burst"`
 	CRSRuleGroups       json.RawMessage     `json:"crs_rule_groups"`
 	CRSExcludedRules    json.RawMessage     `json:"crs_excluded_rules"`
 	CustomRules         json.RawMessage     `json:"custom_rules"`
@@ -198,6 +194,7 @@ type SecurityPolicy struct {
 	CC4xxRatio           int    `json:"cc_4xx_ratio"`
 	CCSessionAnomaly     bool   `json:"cc_session_anomaly"`
 	CCSessionUAThreshold int    `json:"cc_session_ua_threshold"`
+	CCResponse           string `json:"cc_response"`
 	IPACLListRefs        string `json:"ip_acl_list_refs"`
 	IPWhitelistRefs      string `json:"ip_whitelist_refs"`
 	// MergedACLList / MergedWhitelist 是生成期由策略加载路径附加的「inline ∪ 引用
@@ -239,6 +236,7 @@ type SecurityPolicySummary struct {
 	CC4xxRatio           int    `json:"cc_4xx_ratio"`
 	CCSessionAnomaly     bool   `json:"cc_session_anomaly"`
 	CCSessionUAThreshold int    `json:"cc_session_ua_threshold"`
+	CCResponse           string `json:"cc_response"`
 	ID                   int    `json:"id"`
 	Name                 string `json:"name"`
 	Mode                 string `json:"mode"`
@@ -262,7 +260,7 @@ type SecurityPolicySummary struct {
 	// skip+WARN）。列表给出可观测标记，供 UI 标注「选择已失效」。
 	CRSStaleSelections bool `json:"crs_stale_selections"`
 	// 追加（多策略绑定根因 1）：ruleProtections 的 GeoIP/自定义
-	// 规则行此前永远没有数据（接口只给 has_ip_control/has_rate_limit）。
+	// 规则行此前永远没有数据（接口只给 has_ip_control）。
 	HasGeoIP         bool `json:"has_geoip"`
 	HasCustomRules   bool `json:"has_custom_rules"`
 	CustomRulesCount int  `json:"custom_rules_count"`
@@ -329,6 +327,7 @@ type CreateSecurityPolicyRequest struct {
 	CC4xxRatio           int    `json:"cc_4xx_ratio"`
 	CCSessionAnomaly     bool   `json:"cc_session_anomaly"`
 	CCSessionUAThreshold int    `json:"cc_session_ua_threshold"`
+	CCResponse           string `json:"cc_response"`
 	IPACLListRefs        string `json:"ip_acl_list_refs"`
 	IPWhitelistRefs      string `json:"ip_whitelist_refs"`
 }
@@ -375,6 +374,7 @@ type UpdateSecurityPolicyRequest struct {
 	CC4xxRatio           *int    `json:"cc_4xx_ratio"`
 	CCSessionAnomaly     *bool   `json:"cc_session_anomaly"`
 	CCSessionUAThreshold *int    `json:"cc_session_ua_threshold"`
+	CCResponse           *string `json:"cc_response"`
 }
 
 // SecurityEventFeedItem 威胁大屏增量事件流条目（GET /security/events/feed）：

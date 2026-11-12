@@ -64,6 +64,7 @@ export interface PolicyPayloadInput {
   cc4xxRatio: number
   ccSessionAnomaly: boolean
   ccSessionUaThreshold: number
+  ccResponse: string
 }
 
 interface PolicyPayload {
@@ -103,6 +104,7 @@ interface PolicyPayload {
   cc_4xx_ratio: number
   cc_session_anomaly: boolean
   cc_session_ua_threshold: number
+  cc_response: string
 }
 
 /**
@@ -162,6 +164,7 @@ export const buildPolicyPayload = (input: PolicyPayloadInput): PolicyPayload => 
     cc_4xx_ratio: input.cc4xxRatio,
     cc_session_anomaly: isHumanStage(input.policyType) && input.ccSessionAnomaly,
     cc_session_ua_threshold: input.ccSessionUaThreshold,
+    cc_response: input.ccResponse,
   }
 }
 

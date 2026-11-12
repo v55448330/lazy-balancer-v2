@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"strings"
 	"sync"
 
 	"lazy-balancer-v2/internal/db"
@@ -41,6 +42,11 @@ func loadCCConfig(policies []*models.SecurityPolicy) CCConfig {
 		cfg.Ratio4xx = p.CC4xxRatio
 		cfg.SessionAnomaly = p.CCSessionAnomaly
 		cfg.SessionUAThresh = p.CCSessionUAThreshold
+		if strings.EqualFold(strings.TrimSpace(p.CCResponse), "ban") {
+			cfg.Response = "ban"
+		} else {
+			cfg.Response = "verify"
+		}
 		return cfg
 	}
 	return cfg

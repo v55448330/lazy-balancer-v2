@@ -87,12 +87,6 @@ var legacySecurityEnumBackfills = []string{
 	// 403/404/503，0=未设置跟随默认 403 为类型②省略型合法值）——旧备份/带外
 	// 脏值（如 418）随启动归一，渲染层不再消费枚举外状态码。
 	fmt.Sprintf("UPDATE security_policies SET block_status_code=%d WHERE block_status_code IS NOT NULL AND block_status_code NOT IN (%s)", db.DefaultBlockStatusCode, securityBlockStatusCodeSQLList()),
-	// rate_limit_rps 历史脏行（enabled=1 &
-	// rps<1，修复前 Update 缺陷可落库）绑定启用规则时整份配置生成失败
-	// （渲染层 fail-visible）。启动归一关停业务开关——rps 库值保持原样
-	//（不造假默认值），INFO 摘要行披露归一计数；写侧 validateRateLimitShape
-	// 现行校验 rps>=1，本条仅兜历史形态。
-	"UPDATE security_policies SET rate_limit_enabled=0 WHERE rate_limit_enabled=1 AND COALESCE(rate_limit_rps,0)<1",
 }
 
 // ValidBlockStatusCode 报告 v 是否为拦截状态码合法值：写侧
@@ -109,10 +103,6 @@ func ValidBlockStatusCode(v int) bool {
 }
 
 // securityEnumRow 是归一前后对比所需的枚举列快照（含策略标识）。
-// rate_limit_enabled 为归一目标：rps 非法行会被关停（保护面收窄），与
-// mode→off 同型，必须能逐策略留痕（只报总条数无法定位「哪条策略的限流被关」）。
-// rate_limit_rps 自身不被任何回填语句改写（只作为关停判据），故不取快照列
-// ——同一事务内的前后比较恒相等，属不可达比较项。
 // anomaly_threshold/block_status_code 同属「归一改写了库值」的字段：旧备份/
 // 带外脏值留下的 0 阈值或枚举外状态码会在启动时被改写，必须能回答「哪条策略、
 // 哪个字段、从什么值改成什么值」——只报总条数无法定位。
@@ -120,7 +110,6 @@ type securityEnumRow struct {
 	id                         int64
 	name                       string
 	ipACLMode, mode, geoIPMode string
-	rateLimitEnabled           int
 	anomalyThreshold           int
 	blockStatusCode            int
 }
@@ -133,7 +122,7 @@ type securityEnumRow struct {
 // 「哪条策略、哪个字段、从什么值变成什么值」，故在变更前后各取一次快照。
 func securityEnumDirtyRows(ctx context.Context, tx *sql.Tx) ([]securityEnumRow, error) {
 	const dirtyPredicate = `SELECT id, COALESCE(name,''), COALESCE(ip_acl_mode,''), COALESCE(mode,''), COALESCE(geoip_mode,''),
-			COALESCE(rate_limit_enabled,0), COALESCE(anomaly_threshold,0), COALESCE(block_status_code,0)
+			COALESCE(anomaly_threshold,0), COALESCE(block_status_code,0)
 		FROM security_policies
 		WHERE (ip_acl_mode IS NOT NULL AND ip_acl_mode<>TRIM(ip_acl_mode))
 		   OR (mode IS NOT NULL AND mode<>TRIM(mode))
@@ -141,7 +130,6 @@ func securityEnumDirtyRows(ctx context.Context, tx *sql.Tx) ([]securityEnumRow, 
 		   OR COALESCE(TRIM(ip_acl_mode),'') NOT IN (%s)
 		   OR COALESCE(TRIM(mode),'') NOT IN (%s)
 		   OR COALESCE(TRIM(geoip_mode),'') NOT IN (%s)
-		   OR (COALESCE(rate_limit_enabled,0)=1 AND COALESCE(rate_limit_rps,0)<1)
 		   OR COALESCE(anomaly_threshold,0)<=0
 		   OR COALESCE(block_status_code,0) NOT IN (%s)`
 	rows, err := tx.QueryContext(ctx, fmt.Sprintf(dirtyPredicate,
@@ -156,8 +144,7 @@ func securityEnumDirtyRows(ctx context.Context, tx *sql.Tx) ([]securityEnumRow, 
 	var out []securityEnumRow
 	for rows.Next() {
 		var r securityEnumRow
-		if err := rows.Scan(&r.id, &r.name, &r.ipACLMode, &r.mode, &r.geoIPMode, &r.rateLimitEnabled,
-			&r.anomalyThreshold, &r.blockStatusCode); err != nil {
+		if err := rows.Scan(&r.id, &r.name, &r.ipACLMode, &r.mode, &r.geoIPMode, &r.anomalyThreshold, &r.blockStatusCode); err != nil {
 			return nil, err
 		}
 		out = append(out, r)
@@ -178,11 +165,11 @@ func securityEnumNormalizedChanges(ctx context.Context, tx *sql.Tx, before []sec
 	var out []securityEnumChange
 	for _, b := range before {
 		var ipACLMode, mode, geoIPMode string
-		var rateLimitEnabled, anomalyThreshold, blockStatusCode int
+		var anomalyThreshold, blockStatusCode int
 		if err := tx.QueryRowContext(ctx, `SELECT COALESCE(ip_acl_mode,''), COALESCE(mode,''), COALESCE(geoip_mode,''),
-				COALESCE(rate_limit_enabled,0), COALESCE(anomaly_threshold,0), COALESCE(block_status_code,0)
+				COALESCE(anomaly_threshold,0), COALESCE(block_status_code,0)
 				FROM security_policies WHERE id=?`, b.id).
-			Scan(&ipACLMode, &mode, &geoIPMode, &rateLimitEnabled, &anomalyThreshold, &blockStatusCode); err != nil {
+			Scan(&ipACLMode, &mode, &geoIPMode, &anomalyThreshold, &blockStatusCode); err != nil {
 			if err == sql.ErrNoRows {
 				continue
 			}
@@ -194,7 +181,6 @@ func securityEnumNormalizedChanges(ctx context.Context, tx *sql.Tx, before []sec
 			{"ip_acl_mode", b.ipACLMode, ipACLMode},
 			{"mode", b.mode, mode},
 			{"geoip_mode", b.geoIPMode, geoIPMode},
-			{"rate_limit_enabled", strconv.Itoa(b.rateLimitEnabled), strconv.Itoa(rateLimitEnabled)},
 			{"anomaly_threshold", strconv.Itoa(b.anomalyThreshold), strconv.Itoa(anomalyThreshold)},
 			{"block_status_code", strconv.Itoa(b.blockStatusCode), strconv.Itoa(blockStatusCode)},
 		} {
@@ -209,9 +195,7 @@ func securityEnumNormalizedChanges(ctx context.Context, tx *sql.Tx, before []sec
 
 // securityEnumReportNormalized 把逐字段变更写进日志，并对「保护语义收窄」
 // 的方向额外落一条系统审计——mode 非 off → off（该策略的 CRS 与自定义规则
-// 全部停止发射）与 rate_limit_enabled 1 → 0（rps 非法被关停，该策略不再
-// 限流）同属保护面收窄，处置口径必须一致（此前限流关停只有 INFO 计数，
-// 审计中心无法回答「哪条策略被关了」）。归一本身不改变（对齐 Create 默认值族、
+// 全部停止发射）同属保护面收窄，处置口径必须一致。归一本身不改变（对齐 Create 默认值族、
 // 避免整份配置生成失败）。
 func securityEnumReportNormalized(changes []securityEnumChange) {
 	for _, ch := range changes {
@@ -220,9 +204,6 @@ func securityEnumReportNormalized(changes []securityEnumChange) {
 		case ch.field == "mode" && ch.to == "off" && ch.from != "off":
 			RecordAuditLog("system", "修改状态", "安全策略",
 				FormatAuditDetail(fmt.Sprintf("策略 %q（#%d）mode 由 %q 归一为 off（该策略规则停止发射）", ch.name, ch.id, ch.from), AuditResultPart("success")), "")
-		case ch.field == "rate_limit_enabled" && ch.from == "1" && ch.to == "0":
-			RecordAuditLog("system", "修改状态", "安全策略",
-				FormatAuditDetail(fmt.Sprintf("策略 %q（#%d）限流被启动归一关停（rate_limit_rps 非法 <1，该策略不再限流）", ch.name, ch.id), AuditResultPart("success")), "")
 		}
 	}
 }

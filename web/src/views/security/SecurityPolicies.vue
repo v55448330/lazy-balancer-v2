@@ -686,6 +686,9 @@
                 <el-radio-button value="force">{{ t('app.security.policies.human.modeForce') }}</el-radio-button>
               </el-radio-group>
               <div class="form-tip-line">{{ t('app.security.policies.human.modeTip') }}</div>
+              <div v-if="form.human_verify_mode === 'auto' && !form.cc_detect_enabled" class="form-tip-line">
+                <el-text type="warning" size="small">{{ t('app.security.policies.human.autoNeedsCc') }}</el-text>
+              </div>
             </el-form-item>
             <template v-if="form.human_verify_mode !== 'off'">
               <el-form-item :label="t('app.security.policies.human.typeLabel')">
@@ -703,12 +706,20 @@
                 <el-select v-model="form.human_exempt_paths" multiple filterable allow-create default-first-option :placeholder="t('app.security.policies.human.exemptPathsTip')" style="width: 100%" />
                 <div class="form-tip-line">{{ t('app.security.policies.human.exemptIpGuide') }}</div>
               </el-form-item>
+              <template v-if="form.human_verify_mode !== 'force'">
               <el-divider>{{ t('app.security.policies.human.ccSection') }}</el-divider>
               <el-form-item :label="t('app.security.policies.human.ccEnabledLabel')">
                 <el-switch v-model="form.cc_detect_enabled" />
                 <span class="form-tip-inline">{{ t('app.security.policies.human.ccEnabledTip') }}</span>
               </el-form-item>
               <template v-if="form.cc_detect_enabled">
+                <el-form-item :label="t('app.security.policies.human.ccResponseLabel')">
+                  <el-radio-group v-model="form.cc_response">
+                    <el-radio-button value="verify">{{ t('app.security.policies.human.ccResponseVerify') }}</el-radio-button>
+                    <el-radio-button value="ban">{{ t('app.security.policies.human.ccResponseBan') }}</el-radio-button>
+                  </el-radio-group>
+                  <div class="form-tip-line">{{ t('app.security.policies.human.ccResponseTip') }}</div>
+                </el-form-item>
                 <el-form-item :label="t('app.security.policies.human.ccRpsLabel')">
                   <el-input-number v-model="form.cc_rps_limit" :min="1" :max="100000" style="width: 120px" />
                   <span class="form-tip-inline">{{ t('app.security.policies.human.ccRpsPer') }}</span>
@@ -726,6 +737,8 @@
                   <span v-if="form.cc_session_anomaly" class="form-tip-inline">{{ t('app.security.policies.human.ccSessionTip') }}</span>
                 </el-form-item>
               </template>
+              </template>
+              <div v-else class="form-tip-line">{{ t('app.security.policies.human.forceIgnoresCc') }}</div>
             </template>
           </el-form>
         </div>
@@ -1050,7 +1063,7 @@ import { activateOnce } from '@/utils/keyboardActivate'
 
 const { t, locale } = useI18n()
 
-interface PolicyDetail { id: number; name: string; description: string; mode: string; anomaly_threshold: number; ip_acl_mode: string; ip_acl_list: string; ip_acl_enabled: boolean; ip_whitelist: string; ip_whitelist_enabled?: boolean; ip_blacklist?: string; ip_acl_list_refs?: string; ip_whitelist_refs?: string; crs_rule_groups: string; crs_excluded_rules: string; custom_rules: string; block_page_id: number; block_status_code: number; block_response_mode?: string; enabled: boolean; updated_at: string; geoip_mode?: string; geoip_countries?: string; geoip_crawler_exempt?: boolean; geoip_crawler_engines?: string; waf_check_response?: boolean; log_request_body?: boolean; trust_detection?: boolean; human_verify_mode?: string; human_verify_type?: string; human_verify_ttl?: number; human_exempt_paths?: string[]; cc_detect_enabled?: boolean; cc_rps_limit?: number; cc_rps_window?: number; cc_4xx_ratio?: number; cc_session_anomaly?: boolean; cc_session_ua_threshold?: number }
+interface PolicyDetail { id: number; name: string; description: string; mode: string; anomaly_threshold: number; ip_acl_mode: string; ip_acl_list: string; ip_acl_enabled: boolean; ip_whitelist: string; ip_whitelist_enabled?: boolean; ip_blacklist?: string; ip_acl_list_refs?: string; ip_whitelist_refs?: string; crs_rule_groups: string; crs_excluded_rules: string; custom_rules: string; block_page_id: number; block_status_code: number; block_response_mode?: string; enabled: boolean; updated_at: string; geoip_mode?: string; geoip_countries?: string; geoip_crawler_exempt?: boolean; geoip_crawler_engines?: string; waf_check_response?: boolean; log_request_body?: boolean; trust_detection?: boolean; human_verify_mode?: string; human_verify_type?: string; human_verify_ttl?: number; human_exempt_paths?: string[]; cc_detect_enabled?: boolean; cc_rps_limit?: number; cc_rps_window?: number; cc_4xx_ratio?: number; cc_session_anomaly?: boolean; cc_session_ua_threshold?: number; cc_response?: string }
 // 规则行消费面（关联规则行内执行序/投影数据源；协议与域名等展示字段）
 interface Rule { caddy_id: string; name: string; domain: string; listen_port: number; protocol: string }
 // v2.2.0 多策略绑定：/security/bindings 的值从单 BindingInfo 改为数组（rank 序=执行序；
@@ -1585,6 +1598,7 @@ const viewPolicySections = computed<ViewPolicySection[]>(() => {
       rows: [
         { label: t('common.app.views.stages.humanModeLabel'), value: (d.human_verify_mode ?? 'off') !== 'off' ? t('common.app.views.stages.humanMode_' + d.human_verify_mode) : t('app.security.policies.common.notEnabled') },
         { label: t('common.app.views.stages.humanTypeLabel'), value: (d.human_verify_mode ?? 'off') !== 'off' ? t('common.app.views.stages.humanType_' + (d.human_verify_type ?? 'slider')) : '—' },
+        { label: t('app.security.policies.human.ccResponseLabel'), value: d.cc_detect_enabled ? t('app.security.policies.human.ccResponse' + (d.cc_response === 'ban' ? 'Ban' : 'Verify')) : t('app.security.policies.common.notEnabled') },
       ],
     },
     { title: t('app.security.policies.step.stage3'), rows: stage3Rows },
@@ -1872,7 +1886,7 @@ const pickerProtoFilter = ref<'all' | 'http' | 'tcp'>('http')
 const pickerPage = ref(1)
 const pickerSelected = ref<string[]>([])
 const PICKER_PAGE_SIZE = 20
-const defaultForm = () => ({ name: '', description: '', enabled: true, mode: 'off', anomaly_threshold: 5, ip_acl_enabled: false, ip_acl_mode: 'allow', block_page_id: 1, block_status_code: 403, block_response_mode: 'auto', geoip_enabled: false, geoip_mode: 'deny', geoip_crawler_exempt: false, geoip_crawler_engines: ['googlebot', 'bingbot', 'baiduspider'], waf_check_response: false, log_request_body: false, trust_detection: false, human_verify_mode: 'off', human_verify_type: 'slider', human_verify_ttl: 30, human_exempt_paths: [] as string[], cc_detect_enabled: false, cc_rps_limit: 40, cc_rps_window: 10, cc_4xx_ratio: 70, cc_session_anomaly: false, cc_session_ua_threshold: 5 })
+const defaultForm = () => ({ name: '', description: '', enabled: true, mode: 'off', anomaly_threshold: 5, ip_acl_enabled: false, ip_acl_mode: 'allow', block_page_id: 1, block_status_code: 403, block_response_mode: 'auto', geoip_enabled: false, geoip_mode: 'deny', geoip_crawler_exempt: false, geoip_crawler_engines: ['googlebot', 'bingbot', 'baiduspider'], waf_check_response: false, log_request_body: false, trust_detection: false, human_verify_mode: 'off', human_verify_type: 'slider', human_verify_ttl: 30, human_exempt_paths: [] as string[], cc_detect_enabled: false, cc_rps_limit: 40, cc_rps_window: 10, cc_4xx_ratio: 70, cc_session_anomaly: false, cc_session_ua_threshold: 5, cc_response: 'verify' })
 
 const form = ref(defaultForm())
 // v2.3.8 爬虫豁免引擎注册表（geoipnames 单源镜像；ID 稳定——后端白名单校验）
@@ -3388,6 +3402,7 @@ async function openDialog(row?: PolicySummary) {
         cc_4xx_ratio: d.cc_4xx_ratio ?? 70,
         cc_session_anomaly: d.cc_session_anomaly ?? false,
         cc_session_ua_threshold: d.cc_session_ua_threshold ?? 5,
+        cc_response: d.cc_response ?? 'verify',
     }
     ipACLList.value = parseIPList(d.ip_acl_list)
     ipWhitelist.value = parseIPList(d.ip_whitelist)
@@ -3633,6 +3648,7 @@ const handleSave = async () => {
       cc4xxRatio: form.value.cc_4xx_ratio,
       ccSessionAnomaly: form.value.cc_session_anomaly,
       ccSessionUaThreshold: form.value.cc_session_ua_threshold,
+      ccResponse: form.value.cc_response,
     })
     let saveRes: APIResponse<{ id: number }> | undefined
     if (editingId.value) {

@@ -772,7 +772,7 @@ var freshOriginalColumns = map[string][]string{
 	"security_custom_rules":      {"id", "name", "description", "conditions", "action", "score", "enabled", "created_at", "updated_at"},
 	"security_ip2region_version": {"id", "version", "updated_at", "auto_update"},
 	"security_ip_lists":          {"id", "name", "description", "category", "entries", "created_by", "created_at", "updated_by", "updated_at"},
-	"security_policies":          {"id", "name", "description", "mode", "anomaly_threshold", "ip_whitelist", "ip_blacklist", "rate_limit_enabled", "rate_limit_rps", "rate_limit_burst", "crs_rule_groups", "custom_rules", "enabled", "created_at", "updated_at"},
+	"security_policies":          {"id", "name", "description", "mode", "anomaly_threshold", "ip_whitelist", "ip_blacklist", "crs_rule_groups", "custom_rules", "enabled", "created_at", "updated_at"},
 	"security_policy_bindings":   {"rule_caddy_id", "policy_id", "rank"},
 	"security_threat_sources":    {"id", "name", "display_name", "url", "format", "update_enabled", "apply_enabled", "entry_count", "version", "update_status", "message", "last_checked", "next_update", "trigger", "started_at", "finished_at", "consecutive_failures", "created_at", "updated_at"},
 	"task_loop_prefs":            {"task_id", "enabled", "updated_at"},

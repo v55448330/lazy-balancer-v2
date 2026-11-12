@@ -4490,7 +4490,7 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig, sec
 		})
 	}
 	// 阶段 1（IP 访问控制+地域拦截）：合并预检 coraza 置于链首（先于全部
-	// rate_limit/waf）——被拒 IP/区域在任何策略的 CRS/自定义规则评估前即中断，
+	// 安全检查）——被拒 IP/区域在任何策略的 CRS/自定义规则评估前即中断，
 	// 不再产生前置策略的检测事件。阶段化模型（2026-09-20）：单策略同构走预检
 	// （GeoIP 已迁入预检 800000+ 段；ACL 并集与策略引擎 id:2/4 幂等重复无害——
 	// 预检先拦，引擎内不再命中；信任 IP 在预检 DetectionOnly 后到策略引擎按
@@ -4596,9 +4596,8 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig, sec
 		"handler":  "request_body",
 		"max_size": int64(effectiveRequestBodyMaxSizeMB) * 1024 * 1024,
 	})
-	// 阶段 2（限流）→ 阶段 3（WAF）：全部绑定启用策略（rank ASC=绑定执行序）的
-	// rate_limit 集中在所有 WAF 引擎之前（限流恒 429；被前位 WAF 拦的请求也
-	// 消耗后位策略配额为已裁定口径），随后每策略独立 coraza 引擎（自定义规则
+	// 阶段 2（CC 挑战）→ 阶段 3（WAF）：挑战集中在所有 WAF 引擎之前
+	//（挑战页挡住的脚本不消耗 WAF 评估资源），随后每策略独立 coraza 引擎（自定义规则
 	// 审计 +：CRS 池指纹按渲染批次缓存——批量预载上下文在场时一次求值
 	// 全批透传（同轮内 CRS 文件不会变，正确性零变化；R 条有策略规则从
 	// R 次 SELECT+stat 收敛到 1 次）；无上下文路径（单规则预检等）退化为

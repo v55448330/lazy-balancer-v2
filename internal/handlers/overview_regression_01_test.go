@@ -22,9 +22,9 @@ func TestGetSecurityOverview_activePoliciesCountsFeatureBearingStages(t *testing
 	// Given：三条启用策略——stage1 纯 ACL、stage2 纯 CC、stage3 WAF、
 	// 另有一条无任何特征的 off 空策略（不应计入）
 	seed := func(name string, acl int, aclList string, rl int, rps int, mode string, custom string) {
-		if _, err := db.DB.Exec(`INSERT INTO security_policies (name, mode, enabled, ip_acl_enabled, ip_acl_list, rate_limit_enabled, rate_limit_rps, custom_rules, policy_type)
-			VALUES (?, ?, 1, ?, ?, ?, ?, ?, '')`,
-			name, mode, acl, aclList, rl, rps, custom); err != nil {
+		if _, err := db.DB.Exec(`INSERT INTO security_policies (name, mode, enabled, ip_acl_enabled, ip_acl_list, custom_rules, policy_type)
+			VALUES (?, ?, 1, ?, ?, ?, '')`,
+			name, mode, acl, aclList, custom); err != nil {
 			t.Fatal(err)
 		}
 	}

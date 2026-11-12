@@ -67,8 +67,8 @@ func TestClusterSnapshot_securityPoliciesIncludeFullColumnSet(t *testing.T) {
 	if _, err := database.Exec(`INSERT INTO security_block_pages (id,name,content) VALUES (9,'snapshot page','<html>blocked</html>')`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := database.Exec(`INSERT INTO security_policies (id,name,description,mode,anomaly_threshold,ip_acl_mode,ip_acl_list,ip_acl_enabled,ip_whitelist,ip_blacklist,rate_limit_enabled,rate_limit_rps,rate_limit_burst,crs_rule_groups,crs_excluded_rules,custom_rules,block_page_id,block_status_code,enabled)
-		VALUES (5,'full policy','desc','blocking',7,'deny','["10.0.0.0/8"]',1,'["1.1.1.1"]','["2.2.2.2"]',1,100,200,'["900","901"]','["942100"]','[]',9,403,1)`); err != nil {
+	if _, err := database.Exec(`INSERT INTO security_policies (id,name,description,mode,anomaly_threshold,ip_acl_mode,ip_acl_list,ip_acl_enabled,ip_whitelist,ip_blacklist,crs_rule_groups,crs_excluded_rules,custom_rules,block_page_id,block_status_code,enabled)
+		VALUES (5,'full policy','desc','blocking',7,'deny','["10.0.0.0/8"]',1,'["1.1.1.1"]','["2.2.2.2"]','["900","901"]','["942100"]','[]',9,403,1)`); err != nil {
 		t.Fatal(err)
 	}
 
@@ -181,6 +181,8 @@ func TestApplySnapshot_securityPoliciesEverySchemaColumnRoundTrip(t *testing.T) 
 			expected[column] = 403
 		case column == "block_response_mode":
 			expected[column] = "json"
+		case column == "cc_response":
+			expected[column] = "ban"
 		case column == "enabled" || column == "ip_whitelist_enabled":
 			expected[column] = 0
 		case jsonColumns[column]:
@@ -736,25 +738,23 @@ func TestClusterSnapshot_securityBindingsFullyOrdered(t *testing.T) {
 }
 
 // 库值唯一真相（批 3）：集群 apply 门值列归一——旧主快照/带外脏值不得在从
-// 节点复制静默漂移：anomaly_threshold<=0/nil→5、rate_limit_burst<0→0、
-// block_status_code 枚举外→403。rate_limit_rps 有意不归一（无默认可归，
-// 镜像语义下主从渲染同报错 fail-visible）。
+// 节点复制静默漂移：anomaly_threshold<=0/nil→5、block_status_code 枚举外→403。
 func TestApplySnapshot_normalizesPolicyValueColumns(t *testing.T) {
 	_, database := newClusterTestService(t)
 	snapshot := models.ClusterSnapshot{SecurityPolicies: json.RawMessage(`[
-		{"id":7,"name":"dirty","mode":"blocking","anomaly_threshold":0,"rate_limit_burst":-5,"block_status_code":418,"enabled":true},
+		{"id":7,"name":"dirty","mode":"blocking","anomaly_threshold":0,"block_status_code":418,"enabled":true},
 		{"id":8,"name":"nil-anomaly","mode":"off","anomaly_threshold":null,"enabled":true}
 	]`)}
 	if err := replaceSnapshotDB(context.Background(), database, snapshot); err != nil {
 		t.Fatalf("apply snapshot: %v", err)
 	}
 
-	var anomaly, burst, block int
-	if err := database.QueryRow(`SELECT anomaly_threshold, rate_limit_burst, block_status_code FROM security_policies WHERE id=7`).Scan(&anomaly, &burst, &block); err != nil {
+	var anomaly, block int
+	if err := database.QueryRow(`SELECT anomaly_threshold, block_status_code FROM security_policies WHERE id=7`).Scan(&anomaly, &block); err != nil {
 		t.Fatalf("read dirty policy: %v", err)
 	}
-	if anomaly != 5 || burst != 0 || block != 403 {
-		t.Fatalf("dirty policy value columns=(%d,%d,%d), want (5,0,403)", anomaly, burst, block)
+	if anomaly != 5 || block != 403 {
+		t.Fatalf("dirty policy value columns=(%d,%d), want (5,403)", anomaly, block)
 	}
 	if err := database.QueryRow(`SELECT anomaly_threshold FROM security_policies WHERE id=8`).Scan(&anomaly); err != nil {
 		t.Fatalf("read nil-anomaly policy: %v", err)

@@ -423,7 +423,7 @@ func TestBuildTCPServer_tcpG23FeaturesIgnoredInRender(t *testing.T) {
 	t.Cleanup(ResetIPListProjectionStateForTest)
 
 	policies := []*models.SecurityPolicy{
-		{ID: 21, Name: "l4-rate", PolicyType: "stage2", RateLimitEnabled: true, RateLimitRPS: 100},
+		{ID: 21, Name: "l4-cc", PolicyType: "stage2", HumanVerifyMode: "force"},
 		{ID: 22, Name: "l4-waf", PolicyType: "stage3", Mode: "blocking"},
 	}
 	server, err := buildTCPServer(l4SecTestRule("lb_l4sec_g23"), &tcpSecurityRenderInput{policies: policies})

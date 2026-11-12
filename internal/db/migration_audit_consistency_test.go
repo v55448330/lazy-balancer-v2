@@ -333,6 +333,11 @@ func seedTCPBindingMigrationDB(t *testing.T) *sql.DB {
 	if err := createTables(); err != nil {
 		t.Fatalf("create tables: %v", err)
 	}
+	for _, column := range []string{"human_verify_mode TEXT DEFAULT 'off'", "cc_detect_enabled BOOLEAN DEFAULT FALSE"} {
+		if _, err := database.Exec("ALTER TABLE security_policies ADD COLUMN " + column); err != nil {
+			t.Fatalf("add test column %s: %v", column, err)
+		}
+	}
 	if _, err := database.Exec(`INSERT INTO global_config (id,caddy_config,cluster_version) VALUES (1,'{}',0);
 		INSERT INTO lb_rules (caddy_id,name,protocol,listen_port,compress_types) VALUES
 		('lb_audit_http','http-rule','http',8080,'gzip'),

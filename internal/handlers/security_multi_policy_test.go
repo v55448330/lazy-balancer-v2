@@ -885,10 +885,9 @@ func TestGetAllSecurityBindings_toleratesNullBlockPageID(t *testing.T) {
 // queryBindingEntries 请求 GET /security/bindings 并返回指定规则的绑定行；
 // 200 以外的状态码直接失败（绑定行不得因 NULL 列静默消失，也不得拖垮接口）。
 func queryBindingEntries(t *testing.T, router *gin.Engine, caddyID string) []struct {
-	PolicyID  int    `json:"policy_id"`
-	Mode      string `json:"mode"`
-	Enabled   bool   `json:"enabled"`
-	RateLimit bool   `json:"rate_limit_enabled"`
+	PolicyID int    `json:"policy_id"`
+	Mode     string `json:"mode"`
+	Enabled  bool   `json:"enabled"`
 } {
 	t.Helper()
 	recorder := httptest.NewRecorder()
@@ -900,10 +899,9 @@ func queryBindingEntries(t *testing.T, router *gin.Engine, caddyID string) []str
 	var resp struct {
 		Code int `json:"code"`
 		Data map[string][]struct {
-			PolicyID  int    `json:"policy_id"`
-			Mode      string `json:"mode"`
-			Enabled   bool   `json:"enabled"`
-			RateLimit bool   `json:"rate_limit_enabled"`
+			PolicyID int    `json:"policy_id"`
+			Mode     string `json:"mode"`
+			Enabled  bool   `json:"enabled"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(recorder.Body.Bytes(), &resp); err != nil {
@@ -952,34 +950,6 @@ func TestGetAllSecurityBindings_toleratesNullMode(t *testing.T) {
 
 // 硬化（GetAllSecurityBindings）：p.rate_limit_enabled 可空——NULL 同样
 // 不得丢绑定，归一化为 false（与生成投影 COALESCE(rate_limit_enabled,0) 一致）。
-func TestGetAllSecurityBindings_toleratesNullRateLimitEnabled(t *testing.T) {
-	// Given 一条绑定到 rate_limit_enabled 为 NULL 策略的规则
-	setupSecurityPolicyTestDB(t)
-	router := newMultiPolicyRouter(t)
-	seedHTTPRule(t, "lb_null_rl")
-	result, err := db.DB.Exec(`INSERT INTO security_policies (name, mode, enabled, rate_limit_enabled)
-		VALUES ('null-rl', 'blocking', 1, NULL)`)
-	if err != nil {
-		t.Fatalf("seed null-rate-limit policy: %v", err)
-	}
-	policyID, err := result.LastInsertId()
-	if err != nil {
-		t.Fatalf("read policy id: %v", err)
-	}
-	bindPolicyToRule(t, "lb_null_rl", policyID)
-
-	// When GET /security/bindings
-	entries := queryBindingEntries(t, router, "lb_null_rl")
-
-	// Then 绑定照常返回，rate_limit_enabled 归一化为 false
-	if len(entries) != 1 {
-		t.Fatalf("NULL rate_limit_enabled 不得静默丢绑定: bindings=%+v, want 1 entry", entries)
-	}
-	if entries[0].PolicyID != int(policyID) || entries[0].RateLimit {
-		t.Fatalf("entries[0]=%+v, want policy_id=%d rate_limit_enabled=false", entries[0], policyID)
-	}
-}
-
 // 硬化（GetAllSecurityBindings）：p.enabled 可空——生成路径以
 // WHERE enabled=1 把 NULL 当禁用，UI 标签必须与后端行为一致：
 // COALESCE(p.enabled,0) 呈现禁用态，绑定行本身仍可见。

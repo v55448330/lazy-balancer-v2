@@ -19,8 +19,8 @@ func TestSecuritySectionHash_matchesSlaveRebuildAfterApply(t *testing.T) {
 
 	// 主端携带「待归一」形态：写侧校验拦截后的带外值 + 旧库缺省策略类型。
 	if _, err := database.Exec(`INSERT INTO security_policies
-		(id,name,mode,anomaly_threshold,rate_limit_enabled,rate_limit_rps,rate_limit_burst,block_status_code,enabled,geoip_mode,policy_type,trust_detection)
-		VALUES (7,'anomalous','blocking',0,1,50,-3,999,1,'deny','',1)`); err != nil {
+		(id,name,mode,anomaly_threshold,block_status_code,enabled,geoip_mode,policy_type,trust_detection)
+		VALUES (7,'anomalous','blocking',0,999,1,'deny','',1)`); err != nil {
 		t.Fatal(err)
 	}
 	// 源表活动态：从端不执行该任务，apply 归为 failed。

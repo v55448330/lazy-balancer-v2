@@ -447,10 +447,10 @@ func TestSecurityPolicyList_summaryCarriesExtendedFields(t *testing.T) {
 	router := newSecurityRouter(t)
 	if _, err := db.DB.Exec(`INSERT INTO security_policies
 		(name, mode, anomaly_threshold, ip_acl_mode, ip_acl_list, ip_acl_enabled,
-		 ip_whitelist, ip_blacklist, rate_limit_enabled, rate_limit_rps, rate_limit_burst,
+		 ip_whitelist, ip_blacklist,
 		 crs_excluded_rules, custom_rules, enabled, policy_type)
 		VALUES ('汇总策略','blocking',5,'deny','["203.0.113.0/24","2001:db8::/32"]',1,
-		 '["192.0.2.1"]','["198.51.100.0/24","203.0.113.5"]',1,50,10,
+		 '["192.0.2.1"]','["198.51.100.0/24","203.0.113.5"]',
 		 '["942100","942110"]','[{"id":1,"name":"r1","enabled":true,"conditions":[{"target":"uri","operator":"contains","pattern":"/x"}]}]',1,'mixed')`); err != nil {
 		t.Fatal(err)
 	}

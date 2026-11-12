@@ -273,8 +273,8 @@ func TestGetAllSecurityBindings_scanFailureSkipsZeroValueBinding(t *testing.T) {
 	router.GET("/security/bindings", (&Handlers{}).GetAllSecurityBindings)
 	fakeDB(t, map[string]driver.Rows{
 		"FROM security_policy_bindings b JOIN": &fakeQueryRows{values: [][]driver.Value{
-			{"lb_bad", []byte("bad"), "坏策略", "blocking", int64(1), int64(1), int64(0), int64(403)},
-			{"lb_ok", int64(7), "好策略", "blocking", int64(1), int64(0), int64(3), int64(451)},
+			{"lb_bad", []byte("bad"), "坏策略", "blocking", int64(1), int64(0), int64(403)},
+			{"lb_ok", int64(7), "好策略", "blocking", int64(1), int64(3), int64(451)},
 		}},
 	})
 

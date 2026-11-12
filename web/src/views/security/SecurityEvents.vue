@@ -309,6 +309,10 @@
           <el-switch v-model="autobanForm.dry_run" />
           <div class="form-tip-line">{{ t('app.security.events.dryRunHint') }}</div>
         </el-form-item>
+        <el-form-item :label="t('app.security.events.countHumanFailedLabel')">
+          <el-switch v-model="autobanForm.count_human_failed" />
+          <div class="form-tip-line">{{ t('app.security.events.countHumanFailedHint') }}</div>
+        </el-form-item>
         <el-form-item :label="t('app.security.events.scopeLabel')" for="radio---9">
           <input type="text" id="radio---9" aria-hidden="true" tabindex="-1" autocomplete="off" style="display:none">
           <el-radio-group v-model="autobanForm.scope">
@@ -466,7 +470,7 @@ interface SecurityEvent { id: number; event_time: string; rule_caddy_id: string;
 
 interface AutobanSuggestion { ip: string; count: number; ip_location?: string; window_start?: string; last_seen?: string }
 interface AutobanStatus {
-  enabled: boolean; dry_run: boolean; threshold: number; window_minutes: number
+  enabled: boolean; dry_run: boolean; count_human_failed: boolean; threshold: number; window_minutes: number
   cc_detect_enabled?: boolean; cc_rps_limit?: number; cc_rps_window?: number
   cc_4xx_ratio?: number; cc_session_anomaly?: boolean; cc_session_ua_threshold?: number; cc_response?: string
   duration: string; scope: string; banned_today: number; list_entries: number
@@ -509,7 +513,7 @@ const autobanScopeLabel = (value: string): string => {
 }
 
 const autobanStatus = ref<AutobanStatus>({
-  enabled: false, dry_run: true, threshold: 100, window_minutes: 5, duration: '1h', scope: 'all',
+  enabled: false, dry_run: true, count_human_failed: false, threshold: 100, window_minutes: 5, duration: '1h', scope: 'all',
   banned_today: 0, list_entries: 0, ban_effective: true, suggestions: [],
   // 成功响应前不得假定喂入源健康（默认 false：无额外黄条）
   feed_degraded: false, feed_degraded_reason: '',
@@ -591,13 +595,14 @@ const fetchAutobanStatus = async (): Promise<void> => {
 // 配置弹框（七项=六项配置+口径变更提示）
 const autobanDialogVisible = ref(false)
 const autobanSaving = ref(false)
-const autobanForm = ref({ dry_run: true, threshold: 100, window_minutes: 5, duration: '1h', scope: 'all' })
+const autobanForm = ref({ dry_run: true, count_human_failed: false, threshold: 100, window_minutes: 5, duration: '1h', scope: 'all' })
 const openAutobanConfig = (): void => {
   // 卡片主体/编辑/启用共用门：只读、从节点、状态加载中或加载失败均不打开
   // 配置弹框；表单从 autobanStatus 回填，错误态默认值保存会覆盖真实配置。
   if (!autobanWritable.value) return
   autobanForm.value = {
     dry_run: autobanStatus.value.dry_run,
+    count_human_failed: autobanStatus.value.count_human_failed,
     threshold: autobanStatus.value.threshold, window_minutes: autobanStatus.value.window_minutes,
     duration: autobanStatus.value.duration, scope: autobanStatus.value.scope,
   }
@@ -690,6 +695,7 @@ const toggleAutobanEnabled = async (): Promise<void> => {
     await request.put('/security/autoban', {
       enabled: false,
       dry_run: autobanStatus.value.dry_run,
+      count_human_failed: autobanStatus.value.count_human_failed,
       threshold: autobanStatus.value.threshold,
       window_minutes: autobanStatus.value.window_minutes,
       duration: autobanStatus.value.duration,

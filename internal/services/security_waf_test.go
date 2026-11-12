@@ -209,8 +209,8 @@ func TestGetSecurityPolicyForRule_roundTripsIPWhitelistAndBlacklist(t *testing.T
 	// Given a bound policy persisted with trust list, blacklist, and ACL fields
 	_, database := newClusterTestService(t)
 	result, err := database.Exec(`INSERT INTO security_policies (name,description,mode,anomaly_threshold,ip_acl_mode,ip_acl_list,ip_acl_enabled,ip_whitelist,ip_blacklist,
-		rate_limit_enabled,rate_limit_rps,rate_limit_burst,block_status_code,crs_rule_groups,crs_excluded_rules,custom_rules,block_page_id,enabled)
-		VALUES ('roundtrip','desc','blocking',5,'allow','["203.0.113.0/24"]',1,'["192.0.2.0/24","2001:db8::1"]','["203.0.113.5"]',1,100,50,'429','[]','[]','[]',0,1)`)
+		block_status_code,crs_rule_groups,crs_excluded_rules,custom_rules,block_page_id,enabled)
+		VALUES ('roundtrip','desc','blocking',5,'allow','["203.0.113.0/24"]',1,'["192.0.2.0/24","2001:db8::1"]','["203.0.113.5"]','403','[]','[]','[]',0,1)`)
 	if err != nil {
 		t.Fatalf("seed policy: %v", err)
 	}
@@ -251,8 +251,8 @@ func TestBuildCorazaDirectives_trimsLegacyCRSGroupWhitespace(t *testing.T) {
 	useCRSDirectivesDir(t, t.TempDir())
 	_, database := newClusterTestService(t)
 	result, err := database.Exec(`INSERT INTO security_policies (name,description,mode,anomaly_threshold,ip_acl_mode,ip_acl_list,ip_acl_enabled,ip_whitelist,ip_blacklist,
-		rate_limit_enabled,rate_limit_rps,rate_limit_burst,block_status_code,crs_rule_groups,crs_excluded_rules,custom_rules,block_page_id,enabled,waf_check_response)
-		VALUES ('legacy','desc','blocking',5,'deny','[]',0,'[]','[]',0,0,0,'403','[" 42 "]','[]','[]',0,1,1)`)
+		block_status_code,crs_rule_groups,crs_excluded_rules,custom_rules,block_page_id,enabled,waf_check_response)
+		VALUES ('legacy','desc','blocking',5,'deny','[]',0,'[]','[]','403','[" 42 "]','[]','[]',0,1,1)`)
 	if err != nil {
 		t.Fatalf("seed legacy policy: %v", err)
 	}

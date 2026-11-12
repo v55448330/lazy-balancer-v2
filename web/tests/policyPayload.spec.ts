@@ -61,6 +61,7 @@ const base = (over: Partial<PolicyPayloadInput> = {}): PolicyPayloadInput => ({
   cc4xxRatio: 70,
   ccSessionAnomaly: false,
   ccSessionUaThreshold: 5,
+  ccResponse: 'verify',
   ...over,
 })
 

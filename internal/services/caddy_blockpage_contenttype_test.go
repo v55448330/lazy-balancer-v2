@@ -12,7 +12,7 @@ import (
 func blockPageTestCtx() *securityPolicyContext {
 	return &securityPolicyContext{
 		policyByRule: map[string][]*models.SecurityPolicy{
-			"lb_ct": {{ID: 7, BlockPageID: 42, BlockStatusCode: 403, RateLimitEnabled: true}},
+			"lb_ct": {{ID: 7, BlockPageID: 42, BlockStatusCode: 403}},
 		},
 		blockPageByID:     map[int]string{42: "{\"error\":\"blocked\"}"},
 		blockPageTypeByID: map[int]string{42: "application/json; charset=utf-8"},

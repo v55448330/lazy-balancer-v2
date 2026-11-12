@@ -116,8 +116,8 @@ func TestRuleToolSchemasCoverRequestStructFields(t *testing.T) {
 	}{
 		{tool: "create_rule", schema: createRuleSchema, request: models.CreateRuleRequest{}, required: 40},
 		{tool: "update_rule", schema: updateRuleSchema, request: models.UpdateRuleRequest{}, required: 50},
-		{tool: "create_security_policy", schema: createSecurityPolicySchema, request: models.CreateSecurityPolicyRequest{}, required: 29},
-		{tool: "update_security_policy", schema: updateSecurityPolicySchema, request: models.UpdateSecurityPolicyRequest{}, required: 29},
+		{tool: "create_security_policy", schema: createSecurityPolicySchema, request: models.CreateSecurityPolicyRequest{}, required: 30},
+		{tool: "update_security_policy", schema: updateSecurityPolicySchema, request: models.UpdateSecurityPolicyRequest{}, required: 30},
 		{tool: "create_custom_rule", schema: createCustomRuleSchema, request: models.CreateCustomRuleRequest{}, required: 7},
 		{tool: "update_custom_rule", schema: updateCustomRuleSchema, request: models.UpdateCustomRuleRequest{}, required: 7},
 		{tool: "create_block_page", schema: createBlockPageSchema, request: models.SecurityBlockPage{}, required: 12},

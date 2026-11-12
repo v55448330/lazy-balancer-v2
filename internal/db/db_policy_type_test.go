@@ -14,12 +14,12 @@ func TestRunMigrations_policyTypeColumnAndBackfill(t *testing.T) {
 	if _, err := database.Exec("INSERT INTO global_config (id,caddy_config) VALUES (1,'{}')"); err != nil {
 		t.Fatalf("seed global config: %v", err)
 	}
-	if _, err := database.Exec(`INSERT INTO security_policies (name,mode,ip_acl_enabled,ip_acl_mode,ip_acl_list,rate_limit_enabled,rate_limit_rps,enabled) VALUES
-		('legacy-waf','blocking',0,'','[]',0,0,1),
-		('legacy-acl','off',1,'deny','["10.0.0.0/8"]',0,0,1),
-		('legacy-rl','off',0,'','[]',1,100,1),
-		('legacy-mixed','blocking',1,'deny','["10.0.0.0/8"]',0,0,1),
-		('legacy-empty','off',0,'','[]',0,0,1)`); err != nil {
+	if _, err := database.Exec(`INSERT INTO security_policies (name,mode,ip_acl_enabled,ip_acl_mode,ip_acl_list,enabled) VALUES
+		('legacy-waf','blocking',0,'','[]',1),
+		('legacy-acl','off',1,'deny','["10.0.0.0/8"]',1),
+		('legacy-rl','off',0,'','[]',1),
+		('legacy-mixed','blocking',1,'deny','["10.0.0.0/8"]',1),
+		('legacy-empty','off',0,'','[]',1)`); err != nil {
 		t.Fatalf("seed legacy policies: %v", err)
 	}
 

@@ -22,15 +22,15 @@ func TestRunMigrations_mergesHumanIntoCCAndRenumbersWAF(t *testing.T) {
 	if err := ensureNewColumns(newColumnsRegistry, nil); err != nil {
 		t.Fatalf("ensure new columns: %v", err)
 	}
-	// 规则 a：限流策略 10 + 人机策略 11；规则 b：仅人机 12；策略 13/14：旧 WAF
+	// 规则 a：CC 策略 10 + 人机策略 11；规则 b：仅人机 12；策略 13/14：旧 WAF
 	if _, err := database.Exec(`INSERT INTO security_policies
-		(id,name,mode,rate_limit_enabled,rate_limit_rps,rate_limit_burst,policy_type,human_verify_mode,cc_detect_enabled,cc_rps_limit,enabled)
+		(id,name,mode,policy_type,human_verify_mode,cc_detect_enabled,cc_rps_limit,enabled)
 		VALUES
-		(10,'限流A','off',1,200,100,'stage2','off',0,40,1),
-		(11,'人机A','off',0,0,0,'stage3','force',1,99,1),
-		(12,'仅人机B','off',0,0,0,'stage3','auto',1,55,1),
-		(13,'WAF-C','blocking',0,0,0,'stage4','off',0,40,1),
-		(14,'WAF-D','detection',0,0,0,'stage4','off',0,40,1)`); err != nil {
+		(10,'CC-A','off','stage2','off',0,40,1),
+		(11,'人机A','off','stage3','force',1,99,1),
+		(12,'仅人机B','off','stage3','auto',1,55,1),
+		(13,'WAF-C','blocking','stage4','off',0,40,1),
+		(14,'WAF-D','detection','stage4','off',0,40,1)`); err != nil {
 		t.Fatalf("seed policies: %v", err)
 	}
 	if _, err := database.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id,policy_id,rank) VALUES
@@ -51,14 +51,14 @@ func TestRunMigrations_mergesHumanIntoCCAndRenumbersWAF(t *testing.T) {
 		t.Fatalf("rule-a 绑定应去重为 1 条，实际 %d", n)
 	}
 	var typ, humanMode string
-	var rps, ccLimit int
-	if err := database.QueryRow(`SELECT p.policy_type, p.human_verify_mode, p.rate_limit_rps, p.cc_rps_limit
+	var ccLimit int
+	if err := database.QueryRow(`SELECT p.policy_type, p.human_verify_mode, p.cc_rps_limit
 		FROM security_policies p JOIN security_policy_bindings b ON b.policy_id=p.id WHERE b.rule_caddy_id='rule-a'`).
-		Scan(&typ, &humanMode, &rps, &ccLimit); err != nil {
+		Scan(&typ, &humanMode, &ccLimit); err != nil {
 		t.Fatal(err)
 	}
-	if typ != "stage2" || humanMode != "force" || rps != 0 || ccLimit != 99 {
-		t.Fatalf("合并结果 type=%s human=%s rps=%d cc=%d，want stage2/force/0/99（配额限流已下线，迁移归零）", typ, humanMode, rps, ccLimit)
+	if typ != "stage2" || humanMode != "force" || ccLimit != 99 {
+		t.Fatalf("合并结果 type=%s human=%s cc=%d，want stage2/force/99", typ, humanMode, ccLimit)
 	}
 	// 人机行 11 已被合并删除；仅人机 12 改型为 stage2 且保留其阈值
 	var remaining int

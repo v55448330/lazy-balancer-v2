@@ -138,7 +138,7 @@ func TestBlockPageSelectionSkipsEmptyPagePolicy(t *testing.T) {
 	ctx := &securityPolicyContext{
 		policyByRule: map[string][]*models.SecurityPolicy{
 			"lb_skip": {
-				{ID: 1, BlockPageID: 10, BlockStatusCode: 451, RateLimitEnabled: true},
+				{ID: 1, BlockPageID: 10, BlockStatusCode: 451},
 				{ID: 2, BlockPageID: 20, BlockStatusCode: 418},
 			},
 		},

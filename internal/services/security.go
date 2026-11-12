@@ -35,7 +35,6 @@ var crsDirectivesDir = defaultCRSLiveDir
 const securityPolicyRowColumns = `id, name, COALESCE(description,''), COALESCE(mode,'off'), COALESCE(anomaly_threshold,0),
 		COALESCE(ip_acl_mode,''), COALESCE(ip_acl_list,'[]'), COALESCE(ip_acl_enabled,0),
 		COALESCE(ip_whitelist_enabled,1), COALESCE(ip_whitelist,'[]'), COALESCE(ip_blacklist,'[]'),
-		COALESCE(rate_limit_enabled,0), COALESCE(rate_limit_rps,0), COALESCE(rate_limit_burst,0),
 		COALESCE(crs_rule_groups,'[]'), COALESCE(crs_excluded_rules,'[]'), COALESCE(custom_rules,'[]'),
 		COALESCE(block_page_id,0), COALESCE(block_status_code,0), enabled, COALESCE(created_at,''), COALESCE(updated_at,''),
 		COALESCE(geoip_countries,'[]'), COALESCE(geoip_mode,'off'), COALESCE(geoip_crawler_exempt,0), COALESCE(geoip_crawler_engines,'[]'),
@@ -44,7 +43,7 @@ const securityPolicyRowColumns = `id, name, COALESCE(description,''), COALESCE(m
 		COALESCE(human_verify_mode,'off'), COALESCE(human_verify_type,'slider'), COALESCE(human_verify_ttl,30),
 		COALESCE(human_exempt_paths,'[]'),
 		COALESCE(cc_detect_enabled,0), COALESCE(cc_rps_limit,40), COALESCE(cc_rps_window,10),
-		COALESCE(cc_4xx_ratio,70), COALESCE(cc_session_anomaly,0), COALESCE(cc_session_ua_threshold,5),
+		COALESCE(cc_4xx_ratio,70), COALESCE(cc_session_anomaly,0), COALESCE(cc_session_ua_threshold,5), COALESCE(cc_response,'verify'),
 		COALESCE(block_response_mode,'auto')`
 
 // securityPolicyRowScanner 策略行扫描目标：*sql.Row 与 *sql.Rows 同时满足
@@ -63,7 +62,6 @@ func scanSecurityPolicyRow(scanner securityPolicyRowScanner) (*models.SecurityPo
 	if err := scanner.Scan(&p.ID, &p.Name, &p.Description, &p.Mode, &p.AnomalyThreshold,
 		&p.IPACLMode, &p.IPACLList, &p.IPACLEnabled,
 		&p.IPWhitelistEnabled, &ipWhitelist, &ipBlacklist,
-		&p.RateLimitEnabled, &p.RateLimitRPS, &p.RateLimitBurst,
 		&crsRuleGroups, &crsExcludedRules, &customRules,
 		&p.BlockPageID, &p.BlockStatusCode, &p.Enabled, &p.CreatedAt, &p.UpdatedAt,
 		&geoipCountries, &p.GeoIPMode, &p.GeoIPCrawlerExempt, &crawlerEnginesRaw,
@@ -71,7 +69,7 @@ func scanSecurityPolicyRow(scanner securityPolicyRowScanner) (*models.SecurityPo
 		&p.IPACLListRefs, &p.IPWhitelistRefs, &p.PolicyType, &p.TrustDetection,
 		&p.HumanVerifyMode, &p.HumanVerifyType, &p.HumanVerifyTTL,
 		&humanExemptPaths,
-		&p.CCDetectEnabled, &p.CCRPSLimit, &p.CCRPSWindow, &p.CC4xxRatio, &p.CCSessionAnomaly, &p.CCSessionUAThreshold,
+		&p.CCDetectEnabled, &p.CCRPSLimit, &p.CCRPSWindow, &p.CC4xxRatio, &p.CCSessionAnomaly, &p.CCSessionUAThreshold, &p.CCResponse,
 		&p.BlockResponseMode); err != nil {
 		return nil, err
 	}
@@ -567,7 +565,7 @@ func buildCorazaDirectivesWithIndex(p *models.SecurityPolicy, store caddyConfigS
 
 	// GeoIP 区域拦截已迁出策略引擎（阶段化执行模型）：阶段 1 合并预检
 	// （buildIPPrecheckDirectives，id=800000+policyID 精确归因段）在全部
-	// rate_limit/waf 之前统一评估——单/多策略链形状同构，事件归因从共享
+	// 安全检查 之前统一评估——单/多策略链形状同构，事件归因从共享
 	// id:8（「首个 geoip 启用策略」）精确化为直接解码属主策略。caddygeoip
 	// pass route 门不变（PolicyHasGeoIP 保留），X-LB-GeoIP-Loc 头由 pass route
 	// 设置、预检 phase:1 读取。
@@ -2063,7 +2061,7 @@ func validateAllowGeoIPEmpty(policies []*models.SecurityPolicy) error {
 // 链（1500000+policyID）、逐策略黑名单链（1510000+policyID）、allow 交集外
 // 拒绝（id:7）、allow 命中全豁免（id:13）、逐策略 GeoIP 链（800000+policyID）
 // 与逐策略爬虫豁免/伪装（810000+/850000+）为一个极简 coraza 配置。预检查器
-// 置于处理器链最前（先于全部 rate_limit/waf）：被拒 IP/区域在任何策略的
+// 置于处理器链最前（先于全部 安全检查）：被拒 IP/区域在任何策略的
 // CRS/自定义规则评估前即中断——修复 `[coraza_, coraza_]` 链中 CRS 先评估产生
 // 检测事件、IP ACL 才拦截的双重检测问题（IP ACL 最高优先级）。预检仍是
 // coraza 拒绝：audit log 留痕供安全事件管线归因。

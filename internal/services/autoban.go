@@ -149,12 +149,13 @@ func AutobanDurationLabel(s string) string {
 
 // AutobanConfig 六项配置（GET/PUT /security/autoban 载荷与任务/计数器共用形态）。
 type AutobanConfig struct {
-	Enabled       bool   `json:"enabled"`
-	Threshold     int    `json:"threshold"`
-	WindowMinutes int    `json:"window_minutes"`
-	Duration      string `json:"duration"`
-	Scope         string `json:"scope"`
-	DryRun        bool   `json:"dry_run"`
+	Enabled          bool   `json:"enabled"`
+	Threshold        int    `json:"threshold"`
+	WindowMinutes    int    `json:"window_minutes"`
+	Duration         string `json:"duration"`
+	Scope            string `json:"scope"`
+	DryRun           bool   `json:"dry_run"`
+	CountHumanFailed bool   `json:"count_human_failed"`
 }
 
 // autobanNow 时钟缝（测试注入时间轴）。
@@ -212,23 +213,24 @@ type AutobanConfigQuerier interface {
 // NULL；读失败显性返回错误）。GetAutobanConfig 与导入侧共用本单源——
 // 两份手写 SELECT 的列/COALESCE 默认值漂移会让导入侧比对出假的「配置变化」。
 func ReadAutobanConfigFrom(ctx context.Context, q AutobanConfigQuerier) (AutobanConfig, error) {
-	var en, threshold, window, dry int
+	var en, threshold, window, dry, countHuman int
 	var duration, scope string
 	err := q.QueryRowContext(ctx, `SELECT COALESCE(autoban_enabled,?), COALESCE(autoban_threshold,?),
-		COALESCE(autoban_window_minutes,?), COALESCE(autoban_duration,?), COALESCE(autoban_scope,?), COALESCE(autoban_dry_run,?)
+		COALESCE(autoban_window_minutes,?), COALESCE(autoban_duration,?), COALESCE(autoban_scope,?), COALESCE(autoban_dry_run,?), COALESCE(autoban_count_human_failed,0)
 		FROM global_config WHERE id=1`,
 		db.DefaultAutobanEnabled, db.DefaultAutobanThreshold, db.DefaultAutobanWindowMinutes,
-		db.DefaultAutobanDuration, db.DefaultAutobanScope, db.DefaultAutobanDryRun).Scan(&en, &threshold, &window, &duration, &scope, &dry)
+		db.DefaultAutobanDuration, db.DefaultAutobanScope, db.DefaultAutobanDryRun).Scan(&en, &threshold, &window, &duration, &scope, &dry, &countHuman)
 	if err != nil {
 		return AutobanConfig{}, err
 	}
 	return AutobanConfig{
-		Enabled:       en == 1,
-		Threshold:     threshold,
-		WindowMinutes: window,
-		Duration:      duration,
-		Scope:         scope,
-		DryRun:        dry == 1,
+		Enabled:          en == 1,
+		Threshold:        threshold,
+		WindowMinutes:    window,
+		Duration:         duration,
+		Scope:            scope,
+		DryRun:           dry == 1,
+		CountHumanFailed: countHuman == 1,
 	}, nil
 }
 
@@ -301,8 +303,8 @@ func SetAutobanConfig(cfg AutobanConfig) error {
 	if cfg.DryRun {
 		dry = 1
 	}
-	if _, err := db.DB.Exec(`UPDATE global_config SET autoban_enabled=?, autoban_threshold=?, autoban_window_minutes=?, autoban_duration=?, autoban_scope=?, autoban_dry_run=? WHERE id=1`,
-		en, cfg.Threshold, cfg.WindowMinutes, cfg.Duration, cfg.Scope, dry); err != nil {
+	if _, err := db.DB.Exec(`UPDATE global_config SET autoban_enabled=?, autoban_threshold=?, autoban_window_minutes=?, autoban_duration=?, autoban_scope=?, autoban_dry_run=?, autoban_count_human_failed=? WHERE id=1`,
+		en, cfg.Threshold, cfg.WindowMinutes, cfg.Duration, cfg.Scope, dry, boolToInt(cfg.CountHumanFailed)); err != nil {
 		return err
 	}
 	// 运行期收敛（清桶/重算 Reached/禁用收尾/调度联动）与备份导入提交后
@@ -550,6 +552,20 @@ func autobanActionMatches(scope, action string) bool {
 	}
 }
 
+// ObserveHumanChallengeFailure 供人机事件 IPC 提交后喂入挑战失败证据：
+// 仅主节点 + 自动封禁启用 + 策略开关（默认关）时计入。失败事件为
+// action=challenged / rule_triggered=human_failed。
+func ObserveHumanChallengeFailure(ip, ruleTriggered string, at time.Time) {
+	if !autobanIsMaster() {
+		return
+	}
+	cfg, err := GetAutobanConfig()
+	if err != nil || !cfg.Enabled || !cfg.CountHumanFailed {
+		return
+	}
+	autobanObserveEventScopedAt(cfg, ip, "challenged", "human_failed", at)
+}
+
 // autobanObserveBatch 摄取提交点喂入（每批 Commit 后调用）。五重门：主节点 +
 // 启用 + WAF 事件（rule_triggered 非空）+ 口径 + 阶段 3 族。任一门不过整批
 // 跳过；批内逐条按口径过滤。阶段 3 族门与逐事件门收敛在
@@ -597,11 +613,17 @@ func autobanSourceEligible(ruleTriggered string) bool {
 }
 
 func autobanObserveEventScopedAt(cfg AutobanConfig, ip, action, ruleTriggered string, at time.Time) {
-	// 窗口无效（<=0，消费侧护栏）跳过计数——不落写死兜底（旧 5 分钟
-	// 兜底已删，-③）。
 	window := time.Duration(cfg.WindowMinutes) * time.Minute
-	if ip == "" || ruleTriggered == "" || window <= 0 || !autobanActionMatches(cfg.Scope, action) ||
-		!autobanStage3Eligible(ruleTriggered) || !autobanSourceEligible(ruleTriggered) {
+	humanFailure := action == "challenged" && ruleTriggered == "human_failed"
+	if humanFailure {
+		// 挑战失败：仅由开关控制，计入 blocked/all 口径（挑战通过/发放不计）。
+		if !cfg.CountHumanFailed || cfg.Scope == "logged" {
+			return
+		}
+	} else if !autobanActionMatches(cfg.Scope, action) || !autobanStage3Eligible(ruleTriggered) || !autobanSourceEligible(ruleTriggered) {
+		return
+	}
+	if ip == "" || ruleTriggered == "" || window <= 0 {
 		return
 	}
 	now := autobanNow()

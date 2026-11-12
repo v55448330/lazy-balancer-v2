@@ -36,12 +36,12 @@ func TestUpdateSecurityPolicy_aclGateUsesMergedTerminalFeatures(t *testing.T) {
 			t.Fatalf("PUT status=%d body=%s, want 200（合并终态仅 G1，重推断 stage1）", rec.Code, rec.Body.String())
 		}
 		var ptype string
-		var aclEnabled, rlEnabled int
-		if err := db.DB.QueryRow(`SELECT COALESCE(policy_type,''), COALESCE(ip_acl_enabled,0), COALESCE(rate_limit_enabled,0) FROM security_policies WHERE id=?`, id).Scan(&ptype, &aclEnabled, &rlEnabled); err != nil {
+		var aclEnabled int
+		if err := db.DB.QueryRow(`SELECT COALESCE(policy_type,''), COALESCE(ip_acl_enabled,0) FROM security_policies WHERE id=?`, id).Scan(&ptype, &aclEnabled); err != nil {
 			t.Fatal(err)
 		}
-		if ptype != "stage1" || aclEnabled != 1 || rlEnabled != 0 {
-			t.Fatalf("final=(%s,acl=%d,rl=%d), want (stage1,1,0)", ptype, aclEnabled, rlEnabled)
+		if ptype != "stage1" || aclEnabled != 1 {
+			t.Fatalf("final=(%s,acl=%d), want (stage1,1)", ptype, aclEnabled)
 		}
 	})
 
@@ -88,8 +88,8 @@ func TestSplitSecurityPolicy_rejectsDanglingReferences(t *testing.T) {
 	t.Run("悬空拦截页", func(t *testing.T) {
 		setupSecurityPolicyTestDB(t)
 		router := splitRouter(t)
-		res, err := db.DB.Exec(`INSERT INTO security_policies (name,mode,ip_acl_enabled,ip_acl_mode,ip_acl_list,rate_limit_enabled,rate_limit_rps,block_page_id,block_status_code,policy_type,enabled)
-			VALUES ('mix-dangling-page','blocking',1,'deny','["203.0.113.0/24"]',0,0,4242,403,'mixed',0)`)
+		res, err := db.DB.Exec(`INSERT INTO security_policies (name,mode,ip_acl_enabled,ip_acl_mode,ip_acl_list,block_page_id,block_status_code,policy_type,enabled)
+			VALUES ('mix-dangling-page','blocking',1,'deny','["203.0.113.0/24"]',4242,403,'mixed',0)`)
 		if err != nil {
 			t.Fatal(err)
 		}

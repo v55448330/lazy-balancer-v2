@@ -205,9 +205,9 @@ func TestLoadSecurityPolicyContext_toleratesNullCoreColumns(t *testing.T) {
 // toleratesNullGeoIPColumns / toleratesNullCoreColumns 只覆盖 7 列——对批量
 // SELECT 中其余任一可空列的定向 PARTIAL 回退（如 created_at / description /
 // rate_limit_rps）当前全部测试不感知。本测试把 security_policies 的全部
-// 22 个可空列一次性置 NULL（description, mode, anomaly_threshold,
+// 19 个可空列一次性置 NULL（description, mode, anomaly_threshold,
 // ip_acl_mode, ip_acl_list, ip_acl_enabled, ip_whitelist, ip_blacklist,
-// rate_limit_enabled, rate_limit_rps, rate_limit_burst, crs_rule_groups,
+// crs_rule_groups,
 // crs_excluded_rules, custom_rules, block_page_id, block_status_code,
 // updated_by, created_at, updated_at, geoip_countries, geoip_mode,
 // waf_check_response），任一列的 COALESCE 缺失 → NULL 直接 scan 进非指针
@@ -222,13 +222,11 @@ func TestLoadSecurityPolicyContext_toleratesAllNullColumns(t *testing.T) {
 	result, err := database.Exec(`INSERT INTO security_policies
 		(name, enabled, description, mode, anomaly_threshold,
 		 ip_acl_mode, ip_acl_list, ip_acl_enabled, ip_whitelist, ip_blacklist,
-		 rate_limit_enabled, rate_limit_rps, rate_limit_burst,
 		 crs_rule_groups, crs_excluded_rules, custom_rules,
 		 block_page_id, block_status_code, updated_by, created_at, updated_at,
 		 geoip_countries, geoip_mode, waf_check_response)
 		VALUES ('all-null', 1, NULL, NULL, NULL,
 		 NULL, NULL, NULL, NULL, NULL,
-		 NULL, NULL, NULL,
 		 NULL, NULL, NULL,
 		 NULL, NULL, NULL, NULL, NULL,
 		 NULL, NULL, NULL)`)

@@ -31,11 +31,11 @@ func TestPruneTCPUnsupportedBindings_keepsStage01DropsG23(t *testing.T) {
 	if _, err := db.DB.Exec(`INSERT INTO security_policies (id,name,mode) VALUES
 		(1,'prune-blocking','blocking'),
 		(2,'prune-stage0','off'),
-		(3,'prune-ratelimit','off')`); err != nil {
+		(3,'prune-cc','off')`); err != nil {
 		t.Fatalf("seed policies: %v", err)
 	}
 	if _, err := db.DB.Exec(`UPDATE security_policies SET ip_whitelist='["10.9.9.9/32"]' WHERE id=2;
-		UPDATE security_policies SET rate_limit_enabled=1, rate_limit_rps=50 WHERE id=3`); err != nil {
+		UPDATE security_policies SET human_verify_mode='force', human_verify_type='slider' WHERE id=3`); err != nil {
 		t.Fatalf("seed policy features: %v", err)
 	}
 	if _, err := db.DB.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id,policy_id) VALUES

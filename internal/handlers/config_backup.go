@@ -360,7 +360,7 @@ var backupBooleanTableColumns = map[string][]string{
 	"api_keys":              {"is_enabled", "mcp_enabled", "read_only"},
 	"ca_providers":          {"enabled"},
 	"certificate_configs":   {"enabled"},
-	"security_policies":     {"ip_acl_enabled", "ip_whitelist_enabled", "rate_limit_enabled", "enabled", "waf_check_response", "log_request_body", "trust_detection", "geoip_crawler_exempt", "cc_detect_enabled", "cc_session_anomaly"},
+	"security_policies":     {"ip_acl_enabled", "ip_whitelist_enabled", "enabled", "waf_check_response", "log_request_body", "trust_detection", "geoip_crawler_exempt", "cc_detect_enabled", "cc_session_anomaly"},
 	"security_custom_rules": {"enabled"},
 	// is_builtin（INTEGER DEFAULT 0）为内置页语义布尔列。
 	"security_block_pages":       {"is_default", "is_builtin"},
@@ -520,7 +520,6 @@ var backupTableNullDefaults = map[string]map[string]any{
 		"description": "", "mode": "off", "anomaly_threshold": int64(db.DefaultAnomalyThreshold),
 		"ip_acl_mode": "", "ip_acl_list": "[]", "ip_acl_enabled": int64(0),
 		"ip_whitelist": "[]", "ip_whitelist_enabled": int64(1), "ip_blacklist": "[]",
-		"rate_limit_enabled": int64(0), "rate_limit_rps": int64(0), "rate_limit_burst": int64(0),
 		"crs_rule_groups": "[]", "crs_excluded_rules": "[]", "custom_rules": "[]",
 		"block_page_id": int64(0), "block_status_code": int64(0), "block_response_mode": "auto", "enabled": int64(0),
 		"updated_by": int64(0), "created_at": "", "updated_at": "",
@@ -530,7 +529,7 @@ var backupTableNullDefaults = map[string]map[string]any{
 		"human_verify_mode": "off", "human_verify_type": db.DefaultHumanVerifyType, "human_verify_ttl": int64(db.DefaultHumanVerifyTTL),
 		"human_exempt_paths": "[]",
 		"cc_detect_enabled":  int64(0), "cc_rps_limit": int64(db.DefaultCCRPSLimit), "cc_rps_window": int64(db.DefaultCCRPSWindow),
-		"cc_4xx_ratio": int64(db.DefaultCC4xxRatio), "cc_session_anomaly": int64(0), "cc_session_ua_threshold": int64(db.DefaultCCSessionUAThreshold),
+		"cc_4xx_ratio": int64(db.DefaultCC4xxRatio), "cc_session_anomaly": int64(0), "cc_session_ua_threshold": int64(db.DefaultCCSessionUAThreshold), "cc_response": "verify",
 	},
 	"security_custom_rules": {
 		"description": "", "conditions": "[]", "condition_logic": "and", "action": "block", "score": int64(5),
@@ -602,7 +601,7 @@ var backupBooleanConfigKeys = []string{
 	"sync_switches_migrated", "waf_mode4_migrated", "policy_stage_merge_v1", // 迁移门列：备份比对按布尔处理
 	"mfa_write_guard", "mfa_lockout_enabled",
 	"trusted_proxy_enabled", "trusted_proxy_strict", // v2.3.x 受信代理
-	"autoban_enabled", "autoban_dry_run", // D2:自动封禁布尔两键——非布尔形态经 v2 类型门整包 400 点名
+	"autoban_enabled", "autoban_dry_run", "autoban_count_human_failed", // D2:自动封禁布尔两键——非布尔形态经 v2 类型门整包 400 点名
 	"cc_detect_enabled", "cc_session_anomaly", // CC 检测布尔两键（同 D2 口径）
 	// 自动备份开关为 INTEGER 0/1 语义列，补入配置键枚举。
 	"auto_backup_enabled",
@@ -3378,6 +3377,16 @@ func validateV2BackupSecurityPoliciesWithQuerier(ctx context.Context, tables map
 		rows.Close()
 	}
 	for index, policy := range tables["security_policies"] {
+		// 配额限流列已物理删除：旧备份携带的 rate_limit_* 在导入前裁剪，
+		// 避免 INSERT 引用不存在列（旧备份兼容，不报未知字段）。
+		delete(policy, "rate_limit_enabled")
+		delete(policy, "rate_limit_rps")
+		delete(policy, "rate_limit_burst")
+		if raw, exists := policy["cc_response"]; exists {
+			if text, ok := raw.(string); !ok || (text != "verify" && text != "ban") {
+				policy["cc_response"] = "verify"
+			}
+		}
 		name := backupString(policy["name"])
 		if utf8.RuneCountInString(name) > securityNameMaxRunes {
 			return fmt.Errorf("安全策略 #%d：策略名称不能超过 %d 字符", index+1, securityNameMaxRunes)
@@ -3430,20 +3439,14 @@ func validateV2BackupSecurityPoliciesWithQuerier(ctx context.Context, tables map
 		// 导入侧归一为 403,与同格(导入不宽于保存侧),修复前时代
 		// 的合法备份不因新白名单硬拒。
 		// 库值唯一真相（批 3）：值列导入门归一——旧备份可携带治理前形态
-		//（anomaly_threshold=0/NULL/非整数、burst 负值、block_status_code 枚举
+		//（anomaly_threshold=0/NULL/非整数、block_status_code 枚举
 		// 外如 429/418），在导入门写回归一值后 restoreTable 直写，库恒有效
 		//（渲染层已零兜底/fail-visible）；缺失键由 backupTableNullDefaults 的
 		// NULL→默认通道承担（anomaly→5、block→0 省略型）。429 归一为既有
-		// 口径的枚举外全集特例。rate_limit_rps 不在此归一：enabled=1 时 rps<1
-		// 交由下方既有检查 400 拒绝（写侧同口径，导入不宽于保存侧）。
+		// 口径的枚举外全集特例。
 		if raw, exists := policy["anomaly_threshold"]; exists {
 			if n, ok := backupInteger(raw); !ok || n <= 0 {
 				policy["anomaly_threshold"] = int64(db.DefaultAnomalyThreshold)
-			}
-		}
-		if raw, exists := policy["rate_limit_burst"]; exists {
-			if n, ok := backupInteger(raw); !ok || n < 0 {
-				policy["rate_limit_burst"] = int64(0)
 			}
 		}
 		if raw, exists := policy["block_status_code"]; exists {
@@ -3512,17 +3515,6 @@ func validateV2BackupSecurityPoliciesWithQuerier(ctx context.Context, tables map
 		// 同口径——enabled=true 而 rps<=0 时发射分支直接跳过限流 handler，而
 		// 汇总/绑定宣称已启用；旧备份（保存侧校验前导出）可携带该形状经导入
 		// 复活。与三枚举同哲学：只做拒绝（数值语义无安全默认值可归一）。
-		if backupBooleanEnabled(policy["rate_limit_enabled"]) {
-			rps, rpsOK := backupInteger(policy["rate_limit_rps"])
-			burst, burstOK := backupInteger(policy["rate_limit_burst"])
-			if (rpsOK && rps < 1) || (burstOK && burst < 0) || !rpsOK {
-				return fmt.Errorf("安全策略 #%d（%s）：启用限流时 rate_limit_rps 必须 ≥1、rate_limit_burst 不能为负", index+1, name)
-			}
-			// 上界与保存侧同口径——渲染侧 rps*60/rps+burst 的 int64 溢出防线。
-			if rps > 1_000_000_000 || burst > 1_000_000_000 {
-				return fmt.Errorf("安全策略 #%d（%s）：rate_limit_rps/burst 过大（上限 1000000000）", index+1, name)
-			}
-		}
 		// geoip_countries 形状按保存侧 ValidateGeoIPCountries 同口径
 		// （空串/缺省放行——与三枚举的「无值归一」一致；有值则必须是合法 JSON
 		// 数组文本且省份可判）。引用块（block_page_id）在备份缺 security_block_pages
@@ -7167,7 +7159,7 @@ func readImportOldAutoBackupEnabled(ctx context.Context, q importRowQuerier) (in
 // 的列清单同步——否则导入侧比对到「无变化」而运行期实际已换配置。
 var configBackupAutobanColumns = []string{
 	"autoban_enabled", "autoban_threshold", "autoban_window_minutes",
-	"autoban_duration", "autoban_scope", "autoban_dry_run",
+	"autoban_duration", "autoban_scope", "autoban_dry_run", "autoban_count_human_failed",
 	"cc_rps_limit", "cc_rps_window", "cc_4xx_ratio", "cc_session_ua_threshold", "cc_response", "human_secret",
 }
 

@@ -12,8 +12,8 @@ import (
 func TestClusterSnapshot_policyTypeRoundTrip(t *testing.T) {
 	// Given：主端两条类型策略
 	cluster, database := newClusterTestService(t)
-	if _, err := database.Exec(`INSERT INTO security_policies (id,name,mode,policy_type,rate_limit_enabled,rate_limit_rps,enabled) VALUES
-		(5,'sync-waf','blocking','stage3',0,0,1),(6,'sync-rl','off','stage2',1,100,1)`); err != nil {
+	if _, err := database.Exec(`INSERT INTO security_policies (id,name,mode,policy_type,human_verify_mode,enabled) VALUES
+		(5,'sync-waf','blocking','stage3','off',1),(6,'sync-cc','off','stage2','force',1)`); err != nil {
 		t.Fatal(err)
 	}
 
@@ -32,7 +32,7 @@ func TestClusterSnapshot_policyTypeRoundTrip(t *testing.T) {
 	for _, p := range policies {
 		got[p["name"].(string)] = p["policy_type"].(string)
 	}
-	if got["sync-waf"] != "stage3" || got["sync-rl"] != "stage2" {
+	if got["sync-waf"] != "stage3" || got["sync-cc"] != "stage2" {
 		t.Fatalf("snapshot policy_type=%v, want stage3/stage2", got)
 	}
 
@@ -45,7 +45,7 @@ func TestClusterSnapshot_policyTypeRoundTrip(t *testing.T) {
 	}
 
 	// Then：逐值存活
-	for name, want := range map[string]string{"sync-waf": "stage3", "sync-rl": "stage2"} {
+	for name, want := range map[string]string{"sync-waf": "stage3", "sync-cc": "stage2"} {
 		var gotType string
 		if err := database.QueryRow(`SELECT policy_type FROM security_policies WHERE name=?`, name).Scan(&gotType); err != nil {
 			t.Fatal(err)

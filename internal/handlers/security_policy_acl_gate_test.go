@@ -106,12 +106,12 @@ func TestUpdateSecurityPolicy_rejectsACLEnableOnTypedPolicy(t *testing.T) {
 			t.Fatalf("PUT status=%d body=%s, want 200（显式 stage1 切换+启用 ACL 不得误拒）", rec.Code, rec.Body.String())
 		}
 		var ptype string
-		var aclEnabled, rlEnabled int
-		if err := db.DB.QueryRow(`SELECT COALESCE(policy_type,''), COALESCE(ip_acl_enabled,0), COALESCE(rate_limit_enabled,0) FROM security_policies WHERE id=?`, id).Scan(&ptype, &aclEnabled, &rlEnabled); err != nil {
+		var aclEnabled int
+		if err := db.DB.QueryRow(`SELECT COALESCE(policy_type,''), COALESCE(ip_acl_enabled,0) FROM security_policies WHERE id=?`, id).Scan(&ptype, &aclEnabled); err != nil {
 			t.Fatal(err)
 		}
-		if ptype != "stage1" || aclEnabled != 1 || rlEnabled != 0 {
-			t.Fatalf("final=(%s,acl=%d,rl=%d), want (stage1,1,0)", ptype, aclEnabled, rlEnabled)
+		if ptype != "stage1" || aclEnabled != 1 {
+			t.Fatalf("final=(%s,acl=%d), want (stage1,1)", ptype, aclEnabled)
 		}
 	})
 

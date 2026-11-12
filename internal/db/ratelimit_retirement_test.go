@@ -2,9 +2,9 @@ package db
 
 import "testing"
 
-// 配额限流下线迁移：存量 rate_limit_* 必须归零且幂等；列保留用于旧备份/
-// 混版本快照兼容，但不再被渲染消费。
-func TestRetireRateLimitQuota_zeroesLegacyPolicies(t *testing.T) {
+// 配额限流下线迁移：legacy 库的 rate_limit_* 列必须被物理删除且幂等；
+// 阶段 2 拦截页/状态码归零（CC ban 为插件固定 403）。
+func TestRetireRateLimitQuota_dropsLegacyColumns(t *testing.T) {
 	database := openMigrationTestDB(t)
 	if err := createTables(); err != nil {
 		t.Fatalf("create tables: %v", err)
@@ -12,23 +12,41 @@ func TestRetireRateLimitQuota_zeroesLegacyPolicies(t *testing.T) {
 	if _, err := database.Exec("INSERT INTO global_config (id,caddy_config) VALUES (1,'{}')"); err != nil {
 		t.Fatalf("seed global config: %v", err)
 	}
-	if _, err := database.Exec(`INSERT INTO security_policies (name,mode,rate_limit_enabled,rate_limit_rps,rate_limit_burst,enabled) VALUES ('legacy-rl','off',1,120,40,1)`); err != nil {
-		t.Fatalf("seed legacy rate-limit policy: %v", err)
-	}
-
 	if err := runMigrations(); err != nil {
 		t.Fatalf("run migrations: %v", err)
 	}
-	var enabled int
-	var rps, burst int
-	if err := database.QueryRow("SELECT rate_limit_enabled, rate_limit_rps, rate_limit_burst FROM security_policies WHERE name='legacy-rl'").Scan(&enabled, &rps, &burst); err != nil {
-		t.Fatalf("read retired columns: %v", err)
+	for _, column := range []string{
+		"rate_limit_enabled BOOLEAN DEFAULT FALSE",
+		"rate_limit_rps INTEGER DEFAULT 0",
+		"rate_limit_burst INTEGER DEFAULT 0",
+	} {
+		if _, err := database.Exec("ALTER TABLE security_policies ADD COLUMN " + column); err != nil {
+			t.Fatalf("seed legacy column %s: %v", column, err)
+		}
 	}
-	if enabled != 0 || rps != 0 || burst != 0 {
-		t.Fatalf("rate_limit_* 未归零: enabled=%d rps=%d burst=%d", enabled, rps, burst)
+	if _, err := database.Exec(`INSERT INTO security_policies (name,policy_type,human_verify_mode,block_page_id,block_status_code,enabled)
+		VALUES ('legacy-cc','stage2','force',9001,429,1)`); err != nil {
+		t.Fatalf("seed legacy CC policy: %v", err)
 	}
 
-	// 幂等：再次启动迁移不得报错，也不得复活旧值。
+	if err := retireRateLimitQuota(); err != nil {
+		t.Fatalf("retire rate-limit quota: %v", err)
+	}
+	var remaining int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('security_policies') WHERE name IN ('rate_limit_enabled','rate_limit_rps','rate_limit_burst')`).Scan(&remaining); err != nil {
+		t.Fatal(err)
+	}
+	if remaining != 0 {
+		t.Fatalf("rate_limit_* 列仍存在 %d 个，want 0", remaining)
+	}
+	var pageID, status int
+	if err := database.QueryRow(`SELECT block_page_id, block_status_code FROM security_policies WHERE name='legacy-cc'`).Scan(&pageID, &status); err != nil {
+		t.Fatal(err)
+	}
+	if pageID != 0 || status != 0 {
+		t.Fatalf("阶段 2 拦截页/状态码未归零: page=%d status=%d", pageID, status)
+	}
+	// 幂等：列已不存在时再次执行不报错。
 	if err := retireRateLimitQuota(); err != nil {
 		t.Fatalf("second retire run: %v", err)
 	}

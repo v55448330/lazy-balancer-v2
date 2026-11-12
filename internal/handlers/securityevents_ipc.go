@@ -153,6 +153,13 @@ func (s *SecurityEventsIPCServer) handleIngestHuman(w http.ResponseWriter, r *ht
 		http.Error(w, "human event commit: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
+	// 挑战失败计入自动封禁（开关默认关）：提交成功后喂入，窗口/阈值与
+	// WAF 事件共用；主节点/启用/开关门在 services 内收敛。
+	for _, row := range rows {
+		if row.Kind == "fail" {
+			services.ObserveHumanChallengeFailure(row.ClientIP, row.RuleID, time.UnixMilli(row.Ts).UTC())
+		}
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 

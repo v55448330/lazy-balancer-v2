@@ -11,7 +11,7 @@ func TestStage2PolicyDoesNotEmitRetiredRateLimitHandler(t *testing.T) {
 	stubSecurityLibsAvailable(t)
 	_, database := newClusterTestService(t)
 	seedWafRuleRow(t, database, "rule-http", "http")
-	if _, err := database.Exec(`INSERT INTO security_policies (name,mode,rate_limit_enabled,rate_limit_rps,rate_limit_burst,enabled) VALUES ('legacy-rl','blocking',1,100,50,1)`); err != nil {
+	if _, err := database.Exec(`INSERT INTO security_policies (name,mode,policy_type,human_verify_mode,enabled) VALUES ('legacy-cc','blocking','stage2','force',1)`); err != nil {
 		t.Fatalf("seed legacy rate-limit policy: %v", err)
 	}
 	if _, err := database.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id,policy_id) SELECT 'rule-http', id FROM security_policies WHERE name='legacy-rl'`); err != nil {

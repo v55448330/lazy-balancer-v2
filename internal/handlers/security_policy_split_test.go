@@ -331,8 +331,8 @@ func TestSplitSecurityPolicy_capBoundaryAndStage2GateCoexist(t *testing.T) {
 	router := splitRouter(t)
 	mixedID := seedSplitFixture(t)
 	// stage2 存量策略（与 lb_s2 并存绑定，触发限流唯一门）
-	res, err := db.DB.Exec(`INSERT INTO security_policies (name,mode,rate_limit_enabled,rate_limit_rps,rate_limit_burst,policy_type,enabled)
-		VALUES ('cap-rl-live','off',1,200,100,'stage2',1)`)
+	res, err := db.DB.Exec(`INSERT INTO security_policies (name,mode,human_verify_mode,human_verify_type,policy_type,enabled)
+		VALUES ('cap-cc-live','off','force','slider','stage2',1)`)
 	if err != nil {
 		t.Fatal(err)
 	}

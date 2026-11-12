@@ -748,10 +748,10 @@ func (h *Handlers) DeleteSecurityBlockPage(c *gin.Context) {
 //     在渲染层 fail-visible（BuildCorazaDirectives 显性报错），展示层不做
 //     行为消费，无需同口径。
 const securityPolicySelectColumns = `id, name, COALESCE(description,''), COALESCE(mode,'off'), COALESCE(anomaly_threshold,5), COALESCE(ip_acl_mode,''), COALESCE(ip_acl_list,'[]'), COALESCE(ip_acl_enabled,0), COALESCE(ip_whitelist_enabled,1), COALESCE(ip_whitelist,'[]'), COALESCE(ip_blacklist,'[]'),
-	COALESCE(rate_limit_enabled,0), COALESCE(rate_limit_rps,0), COALESCE(rate_limit_burst,0), COALESCE(crs_rule_groups,'[]'), COALESCE(crs_excluded_rules,'[]'), COALESCE(custom_rules,'[]'), COALESCE(block_page_id,0), COALESCE(block_status_code,0), COALESCE(enabled,1), COALESCE(updated_by,0), COALESCE(created_at,''), COALESCE(updated_at,''), COALESCE(geoip_countries,'[]'), COALESCE(geoip_mode,'off'), COALESCE(geoip_crawler_exempt,0), COALESCE(geoip_crawler_engines,'[]'), COALESCE(waf_check_response,0), COALESCE(log_request_body,0), COALESCE(ip_acl_list_refs,'[]'), COALESCE(ip_whitelist_refs,'[]'), COALESCE(policy_type,''), COALESCE(trust_detection,0),
+	COALESCE(crs_rule_groups,'[]'), COALESCE(crs_excluded_rules,'[]'), COALESCE(custom_rules,'[]'), COALESCE(block_page_id,0), COALESCE(block_status_code,0), COALESCE(enabled,1), COALESCE(updated_by,0), COALESCE(created_at,''), COALESCE(updated_at,''), COALESCE(geoip_countries,'[]'), COALESCE(geoip_mode,'off'), COALESCE(geoip_crawler_exempt,0), COALESCE(geoip_crawler_engines,'[]'), COALESCE(waf_check_response,0), COALESCE(log_request_body,0), COALESCE(ip_acl_list_refs,'[]'), COALESCE(ip_whitelist_refs,'[]'), COALESCE(policy_type,''), COALESCE(trust_detection,0),
 	COALESCE(human_verify_mode,'off'), COALESCE(human_verify_type,'slider'), COALESCE(human_verify_ttl,30), COALESCE(human_exempt_paths,'[]'),
 	COALESCE(cc_detect_enabled,0), COALESCE(cc_rps_limit,40), COALESCE(cc_rps_window,10), COALESCE(cc_4xx_ratio,70),
-	COALESCE(cc_session_anomaly,0), COALESCE(cc_session_ua_threshold,5), COALESCE(block_response_mode,'auto')`
+	COALESCE(cc_session_anomaly,0), COALESCE(cc_session_ua_threshold,5), COALESCE(cc_response,'verify'), COALESCE(block_response_mode,'auto')`
 
 func (h *Handlers) ListSecurityPolicies(c *gin.Context) {
 	// 过滤条件按「主查询列名」与「绑定计数查询的限定列名」成对给出：绑定计数
@@ -889,7 +889,7 @@ func (h *Handlers) ListSecurityPolicies(c *gin.Context) {
 			HumanVerifyMode:  p.HumanVerifyMode, HumanVerifyType: p.HumanVerifyType,
 			HumanVerifyTTL: p.HumanVerifyTTL, HumanExemptPaths: string(p.HumanExemptPaths),
 			CCDetectEnabled: p.CCDetectEnabled, CCRPSLimit: p.CCRPSLimit, CCRPSWindow: p.CCRPSWindow,
-			CC4xxRatio: p.CC4xxRatio, CCSessionAnomaly: p.CCSessionAnomaly, CCSessionUAThreshold: p.CCSessionUAThreshold,
+			CC4xxRatio: p.CC4xxRatio, CCSessionAnomaly: p.CCSessionAnomaly, CCSessionUAThreshold: p.CCSessionUAThreshold, CCResponse: normalizeCCResponse(p.CCResponse),
 			Blocked24h:         blockedCounts[p.ID],
 			Trigger24h:         triggerCounts[p.ID],
 			IPWhitelistEnabled: p.IPWhitelistEnabled,
@@ -1236,7 +1236,6 @@ func (h *Handlers) CreateSecurityPolicy(c *gin.Context) {
 		return
 	}
 	// 配额限流已下线（2026-11-12 用户裁定）：阶段 2 仅 CC 人机挑战；
-	// rate_limit_* 列保留为零值兼容旧备份/混版本快照，创建恒写零。
 	// allow 模式 + 空生效名单：渲染端把空 allow 集照常并入交集，交集为空即
 	// 发射「@rx .* 恒拒」——空名单的运行时语义是**拒绝全部（fail-closed）**，
 	// 不是放行。写入侧 400（与 UI 守卫同口径）是防「一次保存锁死全站」的
@@ -1310,15 +1309,15 @@ func (h *Handlers) CreateSecurityPolicy(c *gin.Context) {
 		enabled = *req.Enabled
 	}
 	result, err := tx.ExecContext(caddyWriteCtx(c), `INSERT INTO security_policies (name, description, mode, anomaly_threshold, ip_acl_mode, ip_acl_list, ip_acl_enabled, ip_whitelist, ip_whitelist_enabled, ip_blacklist,
-		rate_limit_enabled, rate_limit_rps, rate_limit_burst, crs_rule_groups, crs_excluded_rules, custom_rules, block_page_id, block_status_code, enabled, geoip_countries, geoip_mode, geoip_crawler_exempt, geoip_crawler_engines, waf_check_response, log_request_body, ip_acl_list_refs, ip_whitelist_refs, updated_by, policy_type, trust_detection, human_verify_mode, human_verify_type, human_verify_ttl, human_exempt_paths,
-		cc_detect_enabled, cc_rps_limit, cc_rps_window, cc_4xx_ratio, cc_session_anomaly, cc_session_ua_threshold, block_response_mode)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		crs_rule_groups, crs_excluded_rules, custom_rules, block_page_id, block_status_code, enabled, geoip_countries, geoip_mode, geoip_crawler_exempt, geoip_crawler_engines, waf_check_response, log_request_body, ip_acl_list_refs, ip_whitelist_refs, updated_by, policy_type, trust_detection, human_verify_mode, human_verify_type, human_verify_ttl, human_exempt_paths,
+		cc_detect_enabled, cc_rps_limit, cc_rps_window, cc_4xx_ratio, cc_session_anomaly, cc_session_ua_threshold, cc_response, block_response_mode)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		req.Name, req.Description, req.Mode, max1(req.AnomalyThreshold, 5), req.IPACLMode, req.IPACLList, req.IPACLEnabled, req.IPWhitelist, policyWhitelistDefault(req.IPWhitelistEnabled), req.IPBlacklist,
-		false, 0, 0, req.CRSRuleGroups, req.CRSExcludedRules, req.CustomRules, req.BlockPageID, req.BlockStatusCode, enabled, req.GeoIPCountries, req.GeoIPMode, crawlerExemptBool(req.GeoIPCrawlerExempt, geoIPActive(req.GeoIPMode)), crawlerEnginesJSON(req.GeoIPCrawlerEngines), req.WAFCheckResponse, req.LogRequestBody, req.IPACLListRefs, req.IPWhitelistRefs, int(contextUserID(c)), policyType, req.TrustDetection,
+		req.CRSRuleGroups, req.CRSExcludedRules, req.CustomRules, req.BlockPageID, req.BlockStatusCode, enabled, req.GeoIPCountries, req.GeoIPMode, crawlerExemptBool(req.GeoIPCrawlerExempt, geoIPActive(req.GeoIPMode)), crawlerEnginesJSON(req.GeoIPCrawlerEngines), req.WAFCheckResponse, req.LogRequestBody, req.IPACLListRefs, req.IPWhitelistRefs, int(contextUserID(c)), policyType, req.TrustDetection,
 		humanModeOrDefault(req.HumanVerifyMode), humanTypeOrDefault(req.HumanVerifyType), humanTTLOrDefault(req.HumanVerifyTTL),
 		humanJSONOrDefault(req.HumanExemptPaths),
 		req.CCDetectEnabled, ccIntOrDefault(req.CCRPSLimit, 40), ccIntOrDefault(req.CCRPSWindow, 10),
-		ccIntOrDefault(req.CC4xxRatio, 70), req.CCSessionAnomaly, ccIntOrDefault(req.CCSessionUAThreshold, 5), normalizeBlockResponseMode(req.BlockResponseMode))
+		ccIntOrDefault(req.CC4xxRatio, 70), req.CCSessionAnomaly, ccIntOrDefault(req.CCSessionUAThreshold, 5), normalizeCCResponse(req.CCResponse), normalizeBlockResponseMode(req.BlockResponseMode))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
 		return
@@ -2146,7 +2145,6 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 	addStr("ip_whitelist", req.IPWhitelist)
 	addStr("ip_blacklist", req.IPBlacklist)
 
-	// 配额限流已下线：不写 rate_limit_*（旧值由启动迁移归零）。
 	addStr("crs_rule_groups", req.CRSRuleGroups)
 	addStr("crs_excluded_rules", req.CRSExcludedRules)
 	addStr("custom_rules", req.CustomRules)
@@ -2170,6 +2168,7 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 	addInt("cc_4xx_ratio", req.CC4xxRatio)
 	addBool("cc_session_anomaly", req.CCSessionAnomaly)
 	addInt("cc_session_ua_threshold", req.CCSessionUAThreshold)
+	addStr("cc_response", req.CCResponse)
 
 	if req.BlockPageID != nil {
 		query += ", block_page_id=?"
@@ -2414,6 +2413,7 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 	deltaInt("CC 4xx 比例", req.CC4xxRatio, stored.CC4xxRatio)
 	deltaBool("CC 会话异常", req.CCSessionAnomaly, stored.CCSessionAnomaly)
 	deltaInt("CC 会话 UA 阈值", req.CCSessionUAThreshold, stored.CCSessionUAThreshold)
+	deltaStr("CC 响应方式", req.CCResponse, stored.CCResponse)
 	deltaStr("信任名单", req.IPWhitelist, string(stored.IPWhitelist))
 	deltaStr("旧版黑名单", req.IPBlacklist, string(stored.IPBlacklist))
 	deltaRefs("ACL 列表引用", "security_ip_lists", req.IPACLListRefs, stored.IPACLListRefs)
@@ -3551,9 +3551,6 @@ type splitChildSpec struct {
 	whitelist      json.RawMessage
 	wlEnabled      bool
 	blacklist      json.RawMessage
-	rlEnabled      bool
-	rlRPS          int
-	rlBurst        int
 	crsGroups      string
 	crsExcluded    string
 	customRules    string
@@ -3585,9 +3582,6 @@ type splitChildIdentity struct {
 	whitelist      string
 	wlEnabled      bool
 	blacklist      string
-	rlEnabled      bool
-	rlRPS          int
-	rlBurst        int
 	crsGroups      string
 	crsExcluded    string
 	customRules    string
@@ -3615,7 +3609,6 @@ func splitChildIdentityOfSpec(p *models.SecurityPolicy, spec splitChildSpec) spl
 		description: p.Description, mode: spec.mode, anomalyThr: p.AnomalyThreshold,
 		aclMode: spec.aclMode, aclList: spec.aclList, aclEnabled: spec.aclEnabled,
 		whitelist: string(spec.whitelist), wlEnabled: spec.wlEnabled, blacklist: string(spec.blacklist),
-		rlEnabled: spec.rlEnabled, rlRPS: spec.rlRPS, rlBurst: spec.rlBurst,
 		crsGroups: spec.crsGroups, crsExcluded: spec.crsExcluded, customRules: spec.customRules,
 		blockPageID: spec.blockPageID, blockStatus: spec.blockStatus, enabled: p.Enabled,
 		geoCountries: string(spec.geoCountries), geoMode: spec.geoMode,
@@ -3631,7 +3624,6 @@ func splitChildIdentityOfPolicy(stored *models.SecurityPolicy) splitChildIdentit
 		description: stored.Description, mode: stored.Mode, anomalyThr: stored.AnomalyThreshold,
 		aclMode: stored.IPACLMode, aclList: stored.IPACLList, aclEnabled: stored.IPACLEnabled,
 		whitelist: string(stored.IPWhitelist), wlEnabled: stored.IPWhitelistEnabled, blacklist: string(stored.IPBlacklist),
-		rlEnabled: stored.RateLimitEnabled, rlRPS: stored.RateLimitRPS, rlBurst: stored.RateLimitBurst,
 		crsGroups: string(stored.CRSRuleGroups), crsExcluded: string(stored.CRSExcludedRules), customRules: string(stored.CustomRules),
 		blockPageID: stored.BlockPageID, blockStatus: stored.BlockStatusCode, enabled: stored.Enabled,
 		geoCountries: string(stored.GeoIPCountries), geoMode: stored.GeoIPMode,
@@ -3746,11 +3738,11 @@ func (h *Handlers) SplitSecurityPolicy(c *gin.Context) {
 			ccEnabled, ccRPS, ccWindow, cc4xx, ccSessionAnomaly, ccUASession = p.CCDetectEnabled, p.CCRPSLimit, p.CCRPSWindow, p.CC4xxRatio, p.CCSessionAnomaly, p.CCSessionUAThreshold
 		}
 		result, err := tx.ExecContext(caddyWriteCtx(c), `INSERT INTO security_policies (name, description, mode, anomaly_threshold, ip_acl_mode, ip_acl_list, ip_acl_enabled, ip_whitelist, ip_whitelist_enabled, ip_blacklist,
-			rate_limit_enabled, rate_limit_rps, rate_limit_burst, crs_rule_groups, crs_excluded_rules, custom_rules, block_page_id, block_status_code, enabled, geoip_countries, geoip_mode, geoip_crawler_exempt, geoip_crawler_engines, waf_check_response, log_request_body, ip_acl_list_refs, ip_whitelist_refs, updated_by, policy_type, trust_detection,
+			crs_rule_groups, crs_excluded_rules, custom_rules, block_page_id, block_status_code, enabled, geoip_countries, geoip_mode, geoip_crawler_exempt, geoip_crawler_engines, waf_check_response, log_request_body, ip_acl_list_refs, ip_whitelist_refs, updated_by, policy_type, trust_detection,
 			human_verify_mode, human_verify_type, human_verify_ttl, human_exempt_paths, cc_detect_enabled, cc_rps_limit, cc_rps_window, cc_4xx_ratio, cc_session_anomaly, cc_session_ua_threshold)
-			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 			spec.name, p.Description, spec.mode, p.AnomalyThreshold, spec.aclMode, spec.aclList, spec.aclEnabled, spec.whitelist, spec.wlEnabled, spec.blacklist,
-			spec.rlEnabled, spec.rlRPS, spec.rlBurst, spec.crsGroups, spec.crsExcluded, spec.customRules, spec.blockPageID, spec.blockStatus, p.Enabled, spec.geoCountries, spec.geoMode, spec.crawlerExempt, spec.crawlerEngines, spec.wafResp, spec.logBody, spec.aclRefs, spec.wlRefs, operator, spec.policyType, spec.trustDetection,
+			spec.crsGroups, spec.crsExcluded, spec.customRules, spec.blockPageID, spec.blockStatus, p.Enabled, spec.geoCountries, spec.geoMode, spec.crawlerExempt, spec.crawlerEngines, spec.wafResp, spec.logBody, spec.aclRefs, spec.wlRefs, operator, spec.policyType, spec.trustDetection,
 			humanMode, humanType, humanTTL, humanPaths, ccEnabled, ccRPS, ccWindow, cc4xx, ccSessionAnomaly, ccUASession)
 		if err != nil {
 			return 0, err
@@ -3873,7 +3865,6 @@ func (h *Handlers) SplitSecurityPolicy(c *gin.Context) {
 			policyType: models.PolicyTypeStage2, name: p.Name + stageSuffix[models.PolicyTypeStage2],
 			mode: "off", aclMode: "deny", aclList: "[]",
 			whitelist: json.RawMessage("[]"), blacklist: json.RawMessage("[]"),
-			rlEnabled: false, rlRPS: 0, rlBurst: 0,
 			crsGroups: "[]", crsExcluded: "[]", customRules: "[]",
 			blockPageID:  0,
 			geoCountries: json.RawMessage("[]"), geoMode: "off",
@@ -5915,11 +5906,11 @@ func (h *Handlers) GetIP2RegionUpdateLogs(c *gin.Context) {
 // 每规则的绑定按执行序（rank ASC，请求序承载；rank=0 遗留行由 policy_id 次序键
 // 兜底）排序；取代旧的 map[string]BindingInfo 单值覆盖形态。
 func (h *Handlers) GetAllSecurityBindings(c *gin.Context) {
-	// mode/enabled/rate_limit_enabled 与生成投影同默认值 COALESCE：NULL 列
+	// mode/enabled 与生成投影同默认值 COALESCE：NULL 列
 	// 修复前触发 Scan 报错静默丢绑定，而生成路径照常应用该策略。enabled 归一为 0
 	// 而非 schema 默认 1——生成路径以 WHERE enabled=1 把 NULL 当禁用，UI 标签须
 	// 与后端行为一致（区别于 List 详情的 COALESCE(enabled,1)：那里无 WHERE 过滤）。
-	rows, err := db.DB.Query(`SELECT b.rule_caddy_id, p.id, p.name, COALESCE(p.mode,'off'), COALESCE(p.enabled,0), COALESCE(p.rate_limit_enabled,0), COALESCE(p.block_page_id, 0), CASE WHEN p.block_status_code > 0 THEN p.block_status_code ELSE 403 END
+	rows, err := db.DB.Query(`SELECT b.rule_caddy_id, p.id, p.name, COALESCE(p.mode,'off'), COALESCE(p.enabled,0), COALESCE(p.block_page_id, 0), CASE WHEN p.block_status_code > 0 THEN p.block_status_code ELSE 403 END
 		FROM security_policy_bindings b JOIN security_policies p ON b.policy_id = p.id
 		ORDER BY b.rule_caddy_id ASC, b.rank ASC, b.policy_id ASC`)
 	if err != nil {
@@ -5937,7 +5928,6 @@ func (h *Handlers) GetAllSecurityBindings(c *gin.Context) {
 		Name            string `json:"name"`
 		Mode            string `json:"mode"`
 		Enabled         bool   `json:"enabled"`
-		RateLimit       bool   `json:"rate_limit_enabled"`
 		BlockPageID     int    `json:"block_page_id"`
 		BlockStatusCode int    `json:"block_status_code"`
 	}
@@ -5945,7 +5935,7 @@ func (h *Handlers) GetAllSecurityBindings(c *gin.Context) {
 	for rows.Next() {
 		var ruleCaddyID string
 		var b BindingInfo
-		if err := rows.Scan(&ruleCaddyID, &b.PolicyID, &b.Name, &b.Mode, &b.Enabled, &b.RateLimit, &b.BlockPageID, &b.BlockStatusCode); err != nil {
+		if err := rows.Scan(&ruleCaddyID, &b.PolicyID, &b.Name, &b.Mode, &b.Enabled, &b.BlockPageID, &b.BlockStatusCode); err != nil {
 			// 单行扫描失败跳过：不写入零值绑定（policy_id=0/mode="" 会把该规则
 			// 错误呈现为「已绑定到空策略」）；迭代错误由下方 rows.Err() 兜底。
 			services.Logf("warn", "security bindings: 跳过扫描失败行（规则绑定可能缺失）: %v", err)
@@ -5966,9 +5956,9 @@ func scanSecurityPolicyInto(scan func(dest ...any) error, p *models.SecurityPoli
 	var ipWhitelist, ipBlacklist, crsRuleGroups, crsExcludedRules, customRules, geoipCountries, crawlerEnginesJSON string
 	var humanExemptPaths string
 	if err := scan(&p.ID, &p.Name, &p.Description, &p.Mode, &p.AnomalyThreshold, &p.IPACLMode, &p.IPACLList, &p.IPACLEnabled, &p.IPWhitelistEnabled, &ipWhitelist, &ipBlacklist,
-		&p.RateLimitEnabled, &p.RateLimitRPS, &p.RateLimitBurst, &crsRuleGroups, &crsExcludedRules, &customRules, &p.BlockPageID, &p.BlockStatusCode, &p.Enabled, &p.UpdatedBy, &p.CreatedAt, &p.UpdatedAt, &geoipCountries, &p.GeoIPMode, &p.GeoIPCrawlerExempt, &crawlerEnginesJSON, &p.WAFCheckResponse, &p.LogRequestBody, &p.IPACLListRefs, &p.IPWhitelistRefs, &p.PolicyType, &p.TrustDetection,
+		&crsRuleGroups, &crsExcludedRules, &customRules, &p.BlockPageID, &p.BlockStatusCode, &p.Enabled, &p.UpdatedBy, &p.CreatedAt, &p.UpdatedAt, &geoipCountries, &p.GeoIPMode, &p.GeoIPCrawlerExempt, &crawlerEnginesJSON, &p.WAFCheckResponse, &p.LogRequestBody, &p.IPACLListRefs, &p.IPWhitelistRefs, &p.PolicyType, &p.TrustDetection,
 		&p.HumanVerifyMode, &p.HumanVerifyType, &p.HumanVerifyTTL, &humanExemptPaths,
-		&p.CCDetectEnabled, &p.CCRPSLimit, &p.CCRPSWindow, &p.CC4xxRatio, &p.CCSessionAnomaly, &p.CCSessionUAThreshold,
+		&p.CCDetectEnabled, &p.CCRPSLimit, &p.CCRPSWindow, &p.CC4xxRatio, &p.CCSessionAnomaly, &p.CCSessionUAThreshold, &p.CCResponse,
 		&p.BlockResponseMode); err != nil {
 		return err
 	}
@@ -6048,6 +6038,7 @@ type securityPolicyDetail struct {
 	CC4xxRatio           int    `json:"cc_4xx_ratio"`
 	CCSessionAnomaly     bool   `json:"cc_session_anomaly"`
 	CCSessionUAThreshold int    `json:"cc_session_ua_threshold"`
+	CCResponse           string `json:"cc_response"`
 }
 
 func newSecurityPolicyDetail(p *models.SecurityPolicy) securityPolicyDetail {
@@ -6095,28 +6086,6 @@ func newSecurityPolicyDetail(p *models.SecurityPolicy) securityPolicyDetail {
 // rps<=0 时 caddy.go 发射分支直接跳过限流 handler，但汇总/绑定仍宣称已启用
 // 与 ip_acl_mode / 三枚举的「UI 宣称启用、实际零强制」同型漂移，
 // 在写入侧拒绝。
-func validateRateLimitShape(name string, enabled bool, rps, burst int) error {
-	if !enabled {
-		return nil
-	}
-	if rps < 1 {
-		return fmt.Errorf("策略 %q：启用限流时 rate_limit_rps 必须 ≥1（当前 %d）", name, rps)
-	}
-	if burst < 0 {
-		return fmt.Errorf("策略 %q：启用限流时 rate_limit_burst 不能为负（当前 %d）", name, burst)
-	}
-	// 渲染侧 buildRateLimitHandler 的用 rps*60、用
-	// rps+burst（int64 运算）——与 request_body_max_size_mb 钳制同型的
-	// 溢出防线：上界 1e9 使任何算术组合远离 int64 回绕。
-	if rps > 1_000_000_000 {
-		return fmt.Errorf("策略 %q：rate_limit_rps 过大（当前 %d，上限 1000000000）", name, rps)
-	}
-	if burst > 1_000_000_000 {
-		return fmt.Errorf("策略 %q：rate_limit_burst 过大（当前 %d，上限 1000000000）", name, burst)
-	}
-	return nil
-}
-
 func validateSecurityPolicyEnums(mode, ipACLMode, geoIPMode string, blockStatusCode, anomalyThreshold int) error {
 	// 429 剔除——拦截语义 429 保留给限流(overviewmetrics.go
 	// 限流卡片按 code=429 计数),WAF 拦截页 429 会混入限流指标口径;存量 429
@@ -6249,6 +6218,15 @@ func outOfStageZeroFamilies(policyType string) []stageZeroFamily {
 // normalizeBlockResponseMode 把策略级拦截响应方式归一到
 // auto|html|json 三值：auto=按请求头自动选择（浏览器 HTML / API JSON）。
 // 空值与非法值一律 auto（fail-safe：保持历史自动行为）。
+func normalizeCCResponse(mode string) string {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "ban":
+		return "ban"
+	default:
+		return "verify"
+	}
+}
+
 func normalizeBlockResponseMode(mode string) string {
 	switch strings.ToLower(strings.TrimSpace(mode)) {
 	case "html":

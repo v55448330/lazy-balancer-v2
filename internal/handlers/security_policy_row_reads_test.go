@@ -66,21 +66,21 @@ func TestUpdateSecurityPolicy_readsStoredRowOnce(t *testing.T) {
 func TestUpdateSecurityPolicy_partialUpdateKeepsUnsubmittedColumns(t *testing.T) {
 	countingMainDB(t)
 	router := newSecurityRouter(t)
-	if _, err := db.DB.Exec(`INSERT INTO security_policies (id, name, mode, enabled, rate_limit_enabled, rate_limit_rps, rate_limit_burst, ip_acl_mode, ip_acl_enabled) VALUES (7, '保留列策略', 'blocking', 1, 1, 33, 9, 'deny', 0)`); err != nil {
+	if _, err := db.DB.Exec(`INSERT INTO security_policies (id, name, mode, enabled, ip_acl_mode, ip_acl_enabled, ip_acl_list) VALUES (7, '保留列策略', 'blocking', 1, 'deny', 0, '["10.0.0.0/8"]')`); err != nil {
 		t.Fatalf("seed policy: %v", err)
 	}
 	response := putJSON(t, router, "/security/policies/7", map[string]any{"description": "改描述"})
 	if response.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s, want 200", response.Code, response.Body.String())
 	}
-	var rateEnabled, rps, burst, aclEnabled int
-	var aclMode string
-	if err := db.DB.QueryRow(`SELECT COALESCE(rate_limit_enabled,0), COALESCE(rate_limit_rps,0), COALESCE(rate_limit_burst,0), COALESCE(ip_acl_enabled,0), COALESCE(ip_acl_mode,'') FROM security_policies WHERE id=7`).
-		Scan(&rateEnabled, &rps, &burst, &aclEnabled, &aclMode); err != nil {
+	var aclEnabled int
+	var aclMode, aclList string
+	if err := db.DB.QueryRow(`SELECT COALESCE(ip_acl_enabled,0), COALESCE(ip_acl_mode,''), COALESCE(ip_acl_list,'[]') FROM security_policies WHERE id=7`).
+		Scan(&aclEnabled, &aclMode, &aclList); err != nil {
 		t.Fatal(err)
 	}
-	if rateEnabled != 1 || rps != 33 || burst != 9 || aclEnabled != 0 || aclMode != "deny" {
-		payload, _ := json.Marshal(map[string]any{"rate_limit_enabled": rateEnabled, "rps": rps, "burst": burst, "ip_acl_enabled": aclEnabled, "ip_acl_mode": aclMode})
-		t.Fatalf("未被提交的列被改写: %s, want 限流(1,33,9) ACL(0,deny)", payload)
+	if aclEnabled != 0 || aclMode != "deny" || aclList != `["10.0.0.0/8"]` {
+		payload, _ := json.Marshal(map[string]any{"ip_acl_enabled": aclEnabled, "ip_acl_mode": aclMode, "ip_acl_list": aclList})
+		t.Fatalf("未被提交的列被改写: %s, want ACL(0,deny,list)", payload)
 	}
 }

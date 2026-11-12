@@ -270,8 +270,8 @@ func TestBatchBindSecurityPolicies_existingIterationFailureReturns500(t *testing
 // features/trustEntriesNonEmpty，与绑定行无关）。
 func TestSplitSecurityPolicy_emptyFeaturesRejectsBeforeAnyQuery(t *testing.T) {
 	setupSecurityPolicyTestDB(t)
-	res, err := db.DB.Exec(`INSERT INTO security_policies (name,mode,ip_acl_enabled,rate_limit_enabled,block_page_id,block_status_code,policy_type,enabled)
-		VALUES ('empty-mix','off',0,0,0,403,'mixed',1)`)
+	res, err := db.DB.Exec(`INSERT INTO security_policies (name,mode,ip_acl_enabled,block_page_id,block_status_code,policy_type,enabled)
+		VALUES ('empty-mix','off',0,0,403,'mixed',1)`)
 	if err != nil {
 		t.Fatal(err)
 	}

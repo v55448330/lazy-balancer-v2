@@ -44,10 +44,6 @@ func mpGenBindPolicy(t *testing.T, database *sql.DB, ruleCaddyID, name string, s
 	if spec.enabled {
 		enabled = 1
 	}
-	rateLimit := 0
-	if spec.rateLimit {
-		rateLimit = 1
-	}
 	countries := spec.geoCountries
 	if countries == "" {
 		countries = "[]"
@@ -68,11 +64,15 @@ func mpGenBindPolicy(t *testing.T, database *sql.DB, ruleCaddyID, name string, s
 	if ipBlacklist == "" {
 		ipBlacklist = "[]"
 	}
+	humanMode, humanType := "off", "slider"
+	if spec.rateLimit {
+		humanMode, humanType = "force", "slider"
+	}
 	result, err := database.Exec(`INSERT INTO security_policies
-		(name, mode, enabled, rate_limit_enabled, rate_limit_rps, rate_limit_burst, geoip_countries, geoip_mode, block_page_id, block_status_code,
+		(name, mode, enabled, human_verify_mode, human_verify_type, geoip_countries, geoip_mode, block_page_id, block_status_code,
 		 ip_acl_enabled, ip_acl_mode, ip_acl_list, ip_blacklist)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		name, mode, enabled, rateLimit, spec.rps, spec.burst, countries, geoMode, spec.blockPageID, spec.blockStatusCode,
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		name, mode, enabled, humanMode, humanType, countries, geoMode, spec.blockPageID, spec.blockStatusCode,
 		ipACLEnabled, spec.ipACLMode, ipACLList, ipBlacklist)
 	if err != nil {
 		t.Fatalf("seed policy %s: %v", name, err)
@@ -195,8 +195,8 @@ func TestMultiPolicy_RouteComposition_OrderAndHandlerGroups(t *testing.T) {
 	// 同机制，不额外占位。）
 	names := handlerNames(t, mainRoute)
 	// lb_reqmon（连接详情内存观测）置于 counter 之后、预检之前（索引 3）。
-	if len(names) != 11 || names[0] != "headers" || names[1] != "lb_rule_metrics" || names[2] != "lb_security_blocked_counter" || names[3] != "lb_reqmon" || names[4] != "waf" || names[5] != "lb_security_timing_pre" || names[6] != "request_body" || names[7] != "waf" || names[8] != "waf" || names[9] != "lb_security_timing_end" {
-		t.Fatalf("main chain=%v, want [headers, lb_rule_metrics, lb_security_blocked_counter, waf(precheck), lb_security_timing_pre, request_body, waf(p2), waf(p3), lb_security_timing_end, reverse_proxy]", names)
+	if len(names) != 12 || names[0] != "headers" || names[1] != "lb_rule_metrics" || names[2] != "lb_security_blocked_counter" || names[3] != "lb_reqmon" || names[4] != "waf" || names[5] != "lb_security_timing_pre" || names[6] != "request_body" || names[7] != "lb_human" || names[8] != "waf" || names[9] != "waf" || names[10] != "lb_security_timing_end" {
+		t.Fatalf("main chain=%v, want [headers, lb_rule_metrics, lb_security_blocked_counter, waf(precheck), lb_security_timing_pre, request_body, lb_human(p2), waf(p2), waf(p3), lb_security_timing_end, reverse_proxy]", names)
 	}
 	if names[len(names)-1] != "reverse_proxy" {
 		t.Fatalf("main chain last handler=%v, want reverse_proxy", names)

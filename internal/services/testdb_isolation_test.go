@@ -97,7 +97,6 @@ func TestSecurityDBFixtures_restoreEveryGlobalHandle(t *testing.T) {
 		{name: "retention helper", run: setupSecurityEventsRetentionTestDB},
 		{name: "stall helper", run: func(t *testing.T) { stallSetup(t) }},
 		{name: "library sentinel direct init", run: func(t *testing.T) { TestArmSecurityLibraryFirstSlots_healsImportSentinelRow(t) }},
-		{name: "rate limit direct init", run: func(t *testing.T) { TestSecurityEnumNormalizedChanges_reportsRateLimitShutdown(t) }},
 		{name: "commit recovery direct init", run: func(t *testing.T) { TestSecurityEventsIngestion_commitFailureReleasesLeakedTransaction(t) }},
 	}
 	for _, fixture := range fixtures {

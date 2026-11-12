@@ -1487,22 +1487,6 @@ func findHandlerRecursive(value interface{}, name string) map[string]interface{}
 	return nil
 }
 
-func seedBoundSecurityPolicyWithRateLimit(t *testing.T, database *sql.DB, ruleCaddyID, mode string, rps, burst int) int {
-	t.Helper()
-	result, err := database.Exec(`INSERT INTO security_policies (name,mode,rate_limit_enabled,rate_limit_rps,rate_limit_burst,enabled) VALUES (?,?,1,?,?,1)`, "policy-rl-"+ruleCaddyID, mode, rps, burst)
-	if err != nil {
-		t.Fatalf("seed rate-limit policy: %v", err)
-	}
-	policyID, err := result.LastInsertId()
-	if err != nil {
-		t.Fatalf("read rate-limit policy id: %v", err)
-	}
-	if _, err := database.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id,policy_id) VALUES (?,?)`, ruleCaddyID, policyID); err != nil {
-		t.Fatalf("bind rate-limit policy: %v", err)
-	}
-	return int(policyID)
-}
-
 func TestGenerateRouteObject_omitsRateLimitHandler_whenPolicyRateLimitDisabled(t *testing.T) {
 	stubSecurityLibsAvailable(t) // 缺库降级：安全链渲染断言前先桩库可用
 	// Given
@@ -1556,21 +1540,6 @@ func seedSecurityBlockPage(t *testing.T, database *sql.DB, id int, content strin
 	t.Helper()
 	if _, err := database.Exec(`INSERT INTO security_block_pages (id,name,content) VALUES (?,?,?)`, id, "page", content); err != nil {
 		t.Fatalf("seed block page: %v", err)
-	}
-}
-
-func seedBoundSecurityPolicyWithRateLimitAndBlockPage(t *testing.T, database *sql.DB, ruleCaddyID string, blockPageID, blockStatusCode, rps, burst int) {
-	t.Helper()
-	result, err := database.Exec(`INSERT INTO security_policies (name,mode,block_page_id,block_status_code,rate_limit_enabled,rate_limit_rps,rate_limit_burst,enabled) VALUES (?,'blocking',?,?,1,?,?,1)`, "policy-rlbp-"+ruleCaddyID, blockPageID, blockStatusCode, rps, burst)
-	if err != nil {
-		t.Fatalf("seed rate-limit block-page policy: %v", err)
-	}
-	policyID, err := result.LastInsertId()
-	if err != nil {
-		t.Fatalf("read rate-limit block-page policy id: %v", err)
-	}
-	if _, err := database.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id,policy_id) VALUES (?,?)`, ruleCaddyID, policyID); err != nil {
-		t.Fatalf("bind rate-limit block-page policy: %v", err)
 	}
 }
 

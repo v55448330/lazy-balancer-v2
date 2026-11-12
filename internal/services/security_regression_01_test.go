@@ -161,36 +161,6 @@ func TestNormalizeLegacySecurityPolicyEnums_trimsWhitespaceDirtyValues(t *testin
 // （enabled=1 & rps<1，修复前 Update 缺陷可落库）绑定启用规则时整份配置
 // 生成失败（render fail-visible）。启动归一关停业务开关（enabled=0，rps 库值
 // 保持原样不造假），与其他遗留行同事务归一+bump。
-func TestNormalizeLegacySecurityPolicyEnums_disablesRateLimitWithInvalidRPS(t *testing.T) {
-	setupSecurityEnumTestDB(t)
-	if _, err := db.DB.Exec(`INSERT INTO security_policies (name, mode, rate_limit_enabled, rate_limit_rps) VALUES
-		('dirty-rps', 'off', 1, 0), ('dirty-null-rps', 'off', 1, NULL), ('dirty-neg-rps', 'off', 1, -5), ('valid-rps', 'off', 1, 100), ('off-clean', 'off', 0, 0)`); err != nil {
-		t.Fatalf("seed rows: %v", err)
-	}
-	before := clusterVersion(t)
-
-	NormalizeLegacySecurityPolicyEnums(context.Background())
-
-	var dirty, dirtyNull, dirtyNeg, valid, offClean int
-	for _, tc := range []struct {
-		name string
-		dest *int
-	}{{"dirty-rps", &dirty}, {"dirty-null-rps", &dirtyNull}, {"dirty-neg-rps", &dirtyNeg}, {"valid-rps", &valid}, {"off-clean", &offClean}} {
-		if err := db.DB.QueryRow("SELECT rate_limit_enabled FROM security_policies WHERE name=?", tc.name).Scan(tc.dest); err != nil {
-			t.Fatalf("read %s: %v", tc.name, err)
-		}
-	}
-	if dirty != 0 || dirtyNull != 0 || dirtyNeg != 0 {
-		t.Fatalf("脏行必须启动归一关停（enabled=0）: rps0=%d null=%d neg=%d", dirty, dirtyNull, dirtyNeg)
-	}
-	if valid != 1 || offClean != 0 {
-		t.Fatalf("合法行不受影响: valid=%d offClean=%d", valid, offClean)
-	}
-	if v := clusterVersion(t); v != before+1 {
-		t.Fatalf("cluster_version=%d, want +1（归一随既有机制 bump）", v)
-	}
-}
-
 // TestNormalizeLegacySecurityPolicyEnums_noBump_whenNoLegacyRows 验证无遗留
 // 行时归一是纯 no-op：不 bump 集群版本（避免每次启动版本空转）。
 func TestNormalizeLegacySecurityPolicyEnums_noBump_whenNoLegacyRows(t *testing.T) {
@@ -344,12 +314,6 @@ func TestNormalizeLegacySecurityPolicyEnums_leavesPerPolicyTrace(t *testing.T) {
 	setupSecurityEnumTestDB(t)
 	insertLegacyPolicyRow(t, "legacy-blocking-typo", "BLOCKING", "deny", "deny")
 	insertLegacyPolicyRow(t, "legacy-acl-empty", "blocking", "", "deny")
-	insertLegacyPolicyRow(t, "legacy-rate-limit", "off", "deny", "deny")
-	insertLegacyPolicyRow(t, "valid-rate-limit", "off", "deny", "deny")
-	if _, err := db.DB.Exec(`UPDATE security_policies SET rate_limit_enabled=1, rate_limit_rps=CASE name
-		WHEN 'legacy-rate-limit' THEN 0 ELSE 100 END WHERE name IN ('legacy-rate-limit','valid-rate-limit')`); err != nil {
-		t.Fatalf("seed rate limit rows: %v", err)
-	}
 	buf := captureLogf(t)
 
 	NormalizeLegacySecurityPolicyEnums(context.Background())
@@ -369,37 +333,5 @@ func TestNormalizeLegacySecurityPolicyEnums_leavesPerPolicyTrace(t *testing.T) {
 	if auditCount != 1 {
 		t.Fatalf("mode 收窄审计行=%d, want 1", auditCount)
 	}
-	// 限流 1→0 同样逐策略留审计；全表按关停短语取证，合法行多写/脏行漏写
-	// 都会改变精确行集。
-	rows, err := db.AuditDB.Query(`SELECT detail FROM audit_log WHERE action='修改状态' AND detail LIKE '%限流被启动归一关停%' ORDER BY id`)
-	if err != nil {
-		t.Fatalf("query rate limit audit: %v", err)
-	}
-	var rateLimitAudits []string
-	for rows.Next() {
-		var detail string
-		if err := rows.Scan(&detail); err != nil {
-			rows.Close()
-			t.Fatalf("scan rate limit audit: %v", err)
-		}
-		rateLimitAudits = append(rateLimitAudits, detail)
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		t.Fatalf("iterate rate limit audit: %v", err)
-	}
-	if err := rows.Close(); err != nil {
-		t.Fatalf("close rate limit audit rows: %v", err)
-	}
-	if len(rateLimitAudits) != 1 || !strings.Contains(rateLimitAudits[0], "legacy-rate-limit") {
-		t.Fatalf("限流关停审计=%v, want 仅 legacy-rate-limit 一行", rateLimitAudits)
-	}
-	// ip_acl_mode 的归一方向是「开始拦截」而非停发规则，不写 mode 收窄审计。
-	var aclAudit int
-	if err := db.AuditDB.QueryRow(`SELECT COUNT(*) FROM audit_log WHERE action='修改状态' AND detail LIKE '%legacy-acl-empty%'`).Scan(&aclAudit); err != nil {
-		t.Fatalf("query audit: %v", err)
-	}
-	if aclAudit != 0 {
-		t.Fatalf("ip_acl_mode 归一不应写 mode 收窄审计: %d", aclAudit)
-	}
+
 }

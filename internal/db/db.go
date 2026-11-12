@@ -881,9 +881,6 @@ func createTables() error {
 		ip_whitelist TEXT DEFAULT '[]',
 		ip_whitelist_enabled INTEGER DEFAULT 1,
 		ip_blacklist TEXT DEFAULT '[]',
-		rate_limit_enabled BOOLEAN DEFAULT FALSE,
-		rate_limit_rps INTEGER DEFAULT 0,
-		rate_limit_burst INTEGER DEFAULT 0,
 		crs_rule_groups TEXT DEFAULT '[]',
 		crs_excluded_rules TEXT DEFAULT '[]',
 	custom_rules TEXT DEFAULT '[]',
@@ -1200,6 +1197,7 @@ var newColumnsRegistry = map[string]string{
 	"security_policies.cc_4xx_ratio":            "INTEGER NOT NULL DEFAULT 70",
 	"security_policies.cc_session_anomaly":      "INTEGER NOT NULL DEFAULT 0",
 	"security_policies.cc_session_ua_threshold": "INTEGER NOT NULL DEFAULT 5",
+	"security_policies.cc_response":             "TEXT NOT NULL DEFAULT 'verify'",
 	"global_config.cc_detect_enabled":           "INTEGER NOT NULL DEFAULT 0",
 	"global_config.cc_rps_limit":                "INTEGER NOT NULL DEFAULT 40",
 	"global_config.cc_rps_window":               "INTEGER NOT NULL DEFAULT 10",
@@ -1457,14 +1455,15 @@ var newColumnsRegistry = map[string]string{
 	// '10m','30m','1h','6h','12h','24h','permanent'）/统计口径（'blocked',
 	// 'logged','all'）/观察模式（1=默认 dry-run，仅记录建议不落名单）。
 	// 全部 NOT NULL——语义零值即合法值（关/100/5/'1h'/'all'/观察），无 NULL 分支。
-	"global_config.autoban_enabled":        "INTEGER NOT NULL DEFAULT " + fmt.Sprint(DefaultAutobanEnabled),
-	"global_config.autoban_threshold":      "INTEGER NOT NULL DEFAULT " + fmt.Sprint(DefaultAutobanThreshold),
-	"global_config.autoban_window_minutes": "INTEGER NOT NULL DEFAULT " + fmt.Sprint(DefaultAutobanWindowMinutes),
-	"global_config.autoban_duration":       "TEXT NOT NULL DEFAULT '" + DefaultAutobanDuration + "'",
-	"global_config.autoban_scope":          "TEXT NOT NULL DEFAULT '" + DefaultAutobanScope + "'",
-	"global_config.autoban_dry_run":        "INTEGER NOT NULL DEFAULT " + fmt.Sprint(DefaultAutobanDryRun),
-	"nodes.server_map_lat":                 "REAL NOT NULL DEFAULT 0",
-	"nodes.server_map_lon":                 "REAL NOT NULL DEFAULT 0",
+	"global_config.autoban_enabled":            "INTEGER NOT NULL DEFAULT " + fmt.Sprint(DefaultAutobanEnabled),
+	"global_config.autoban_threshold":          "INTEGER NOT NULL DEFAULT " + fmt.Sprint(DefaultAutobanThreshold),
+	"global_config.autoban_window_minutes":     "INTEGER NOT NULL DEFAULT " + fmt.Sprint(DefaultAutobanWindowMinutes),
+	"global_config.autoban_duration":           "TEXT NOT NULL DEFAULT '" + DefaultAutobanDuration + "'",
+	"global_config.autoban_scope":              "TEXT NOT NULL DEFAULT '" + DefaultAutobanScope + "'",
+	"global_config.autoban_dry_run":            "INTEGER NOT NULL DEFAULT " + fmt.Sprint(DefaultAutobanDryRun),
+	"global_config.autoban_count_human_failed": "BOOLEAN NOT NULL DEFAULT FALSE",
+	"nodes.server_map_lat":                     "REAL NOT NULL DEFAULT 0",
+	"nodes.server_map_lon":                     "REAL NOT NULL DEFAULT 0",
 }
 
 func runMigrations() error {
@@ -1496,7 +1495,7 @@ func runMigrations() error {
 		return err
 	}
 	// 配额限流下线（2026-11-12 用户裁定）：阶段 2 仅保留 CC 人机挑战。
-	// 存量 rate_limit_* 归零（列保留用于旧备份/混版本快照兼容，不再被渲染消费）。
+	// 物理删除 rate_limit_* 列；旧备份/快照字段由导入/同步侧裁剪。
 	if err := retireRateLimitQuota(); err != nil {
 		return err
 	}
@@ -2002,7 +2001,7 @@ func runMigrations() error {
 	{
 		rows, err := DB.Query(`SELECT id, COALESCE(mode,'off'), COALESCE(ip_acl_enabled,0), COALESCE(ip_acl_list,'[]'), COALESCE(ip_acl_list_refs,'[]'),
 			COALESCE(ip_blacklist,'[]'), COALESCE(ip_whitelist_enabled,1), COALESCE(ip_whitelist,'[]'), COALESCE(ip_whitelist_refs,'[]'),
-			COALESCE(rate_limit_enabled,0), COALESCE(rate_limit_rps,0), COALESCE(custom_rules,'[]'), COALESCE(geoip_mode,'off'), COALESCE(geoip_countries,'[]')
+			COALESCE(human_verify_mode,'off'), COALESCE(cc_detect_enabled,0), COALESCE(custom_rules,'[]'), COALESCE(geoip_mode,'off'), COALESCE(geoip_countries,'[]')
 			FROM security_policies WHERE policy_type=''`)
 		if err != nil {
 			return fmt.Errorf("failed to list untyped security policies: %w", err)
@@ -2013,17 +2012,17 @@ func runMigrations() error {
 		}
 		var pending []typedPolicy
 		for rows.Next() {
-			var id, rlRPS int
-			var mode, aclList, aclRefs, blacklist, whitelist, wlRefs, customRules, geoipMode, geoipCountries string
-			var aclEnabled, rlEnabled, wlEnabled bool
-			if err := rows.Scan(&id, &mode, &aclEnabled, &aclList, &aclRefs, &blacklist, &wlEnabled, &whitelist, &wlRefs, &rlEnabled, &rlRPS, &customRules, &geoipMode, &geoipCountries); err != nil {
+			var id int
+			var mode, aclList, aclRefs, blacklist, whitelist, wlRefs, humanMode, customRules, geoipMode, geoipCountries string
+			var aclEnabled, ccDetect, wlEnabled bool
+			if err := rows.Scan(&id, &mode, &aclEnabled, &aclList, &aclRefs, &blacklist, &wlEnabled, &whitelist, &wlRefs, &humanMode, &ccDetect, &customRules, &geoipMode, &geoipCountries); err != nil {
 				rows.Close()
 				return fmt.Errorf("failed to scan untyped security policy: %w", err)
 			}
 			pending = append(pending, typedPolicy{id, models.InferPolicyType(&models.SecurityPolicy{
 				Mode: mode, IPACLEnabled: aclEnabled, IPACLList: aclList, IPACLListRefs: aclRefs,
 				IPBlacklist: json.RawMessage(blacklist), IPWhitelistEnabled: wlEnabled, IPWhitelist: json.RawMessage(whitelist), IPWhitelistRefs: wlRefs,
-				RateLimitEnabled: rlEnabled, RateLimitRPS: rlRPS, CustomRules: json.RawMessage(customRules),
+				HumanVerifyMode: humanMode, CCDetectEnabled: ccDetect, CustomRules: json.RawMessage(customRules),
 				GeoIPMode: geoipMode, GeoIPCountries: json.RawMessage(geoipCountries),
 			})})
 		}
@@ -4431,9 +4430,6 @@ func migrateSecurityPoliciesNullable() error {
 			ip_acl_enabled BOOLEAN DEFAULT FALSE,
 			ip_whitelist TEXT DEFAULT '[]',
 			ip_blacklist TEXT DEFAULT '[]',
-			rate_limit_enabled BOOLEAN DEFAULT FALSE,
-			rate_limit_rps INTEGER DEFAULT 0,
-			rate_limit_burst INTEGER DEFAULT 0,
 			crs_rule_groups TEXT DEFAULT '[]',
 			crs_excluded_rules TEXT DEFAULT '[]',
 			custom_rules TEXT DEFAULT '[]',
@@ -4457,11 +4453,11 @@ func migrateSecurityPoliciesNullable() error {
 			geoip_crawler_engines TEXT NOT NULL DEFAULT '[]'
 		);
 		INSERT INTO security_policies_new (id,name,description,mode,anomaly_threshold,ip_acl_mode,ip_acl_list,ip_acl_enabled,
-			ip_whitelist,ip_blacklist,rate_limit_enabled,rate_limit_rps,rate_limit_burst,crs_rule_groups,crs_excluded_rules,
+			ip_whitelist,ip_blacklist,crs_rule_groups,crs_excluded_rules,
 			custom_rules,block_page_id,block_status_code,enabled,updated_by,created_at,updated_at,ip_whitelist_enabled,geoip_countries,geoip_mode,waf_check_response,
 			log_request_body,ip_acl_list_refs,ip_whitelist_refs,policy_type,trust_detection,geoip_crawler_exempt,geoip_crawler_engines)
 		SELECT id,name,description,mode,anomaly_threshold,ip_acl_mode,ip_acl_list,ip_acl_enabled,
-			ip_whitelist,ip_blacklist,rate_limit_enabled,rate_limit_rps,rate_limit_burst,crs_rule_groups,crs_excluded_rules,
+			ip_whitelist,ip_blacklist,crs_rule_groups,crs_excluded_rules,
 			custom_rules,block_page_id,block_status_code,enabled,updated_by,created_at,updated_at,COALESCE(ip_whitelist_enabled,1),geoip_countries,geoip_mode,waf_check_response,
 			COALESCE(log_request_body,0),COALESCE(ip_acl_list_refs,'[]'),COALESCE(ip_whitelist_refs,'[]'),policy_type,COALESCE(trust_detection,0),COALESCE(geoip_crawler_exempt,0),COALESCE(geoip_crawler_engines,'[]')
 		FROM security_policies;
@@ -5537,7 +5533,7 @@ func migrateTCPRuleSecurityPolicyBindings() error {
 	if err := DB.QueryRow(`SELECT COUNT(*) FROM security_policy_bindings b
 		JOIN lb_rules r ON r.caddy_id=b.rule_caddy_id AND r.protocol='tcp'
 		JOIN security_policies p ON p.id=b.policy_id
-		WHERE (COALESCE(p.rate_limit_enabled,0)=1 AND COALESCE(p.rate_limit_rps,0)>0)
+		WHERE (COALESCE(p.human_verify_mode,'off') NOT IN ('','off') OR COALESCE(p.cc_detect_enabled,0)=1)
 			OR COALESCE(p.mode,'off') IN ('blocking','detection','custom_only')
 			OR CASE WHEN json_valid(COALESCE(p.custom_rules,'[]')) AND json_type(COALESCE(p.custom_rules,'[]'))='array'
 				THEN json_array_length(COALESCE(p.custom_rules,'[]')) ELSE 0 END > 0`).Scan(&stale); err != nil {
@@ -5586,7 +5582,7 @@ func migrateTCPRuleSecurityPolicyBindings() error {
 // TCPRuleUnsupportedBindingPruneSQL 是「TCP 规则上 L4 不支持的策略绑定」清理
 // 语句单一事实源（L4 阶段 0/1 语义）：TCP 规则可绑定 stage0/stage1 特征策略
 // （信任/IP ACL/黑名单/GeoIP，渲染链 buildTCPSecurityRoutes 消费），仅当绑定
-// 的策略携带 G2（限流：rate_limit_enabled=1 且 rps>0）或 G3（WAF：mode∈
+// 的策略携带 G2（CC：human_verify_mode≠off 或 cc_detect_enabled=1）或 G3（WAF：mode∈
 // blocking/detection/custom_only 或自定义规则引用数组非空）特征时清理。
 // 特征判定与 models.PolicyTypeFeatures 同语义（G2/G3 字面量口径）；
 // custom_rules 仅认 JSON 数组形态（对象旧形态与 models.CustomRulesRefCount
@@ -5602,7 +5598,7 @@ const TCPRuleUnsupportedBindingPruneSQL = `DELETE FROM security_policy_bindings
 		SELECT 1 FROM lb_rules r
 		JOIN security_policies p ON p.id = security_policy_bindings.policy_id
 		WHERE r.caddy_id = security_policy_bindings.rule_caddy_id AND r.protocol='tcp'
-			AND ((COALESCE(p.rate_limit_enabled,0)=1 AND COALESCE(p.rate_limit_rps,0)>0)
+			AND ((COALESCE(p.human_verify_mode,'off') NOT IN ('','off') OR COALESCE(p.cc_detect_enabled,0)=1)
 				OR COALESCE(p.mode,'off') IN ('blocking','detection','custom_only')
 				OR CASE WHEN json_valid(COALESCE(p.custom_rules,'[]')) AND json_type(COALESCE(p.custom_rules,'[]'))='array'
 					THEN json_array_length(COALESCE(p.custom_rules,'[]')) ELSE 0 END > 0))`
@@ -5884,24 +5880,15 @@ func migrateRuleTLSModeResidue() error {
 // 合并进目标、删除该规则上的人机绑定；若人机策略仍绑定其他规则则保留行并改型
 // 为 stage2（无绑定且已被合并的行删除）。一次性门置位后重跑零改写——否则
 // WAF(stage3) 会被当成人机再次合并。
-// retireRateLimitQuota 幂等归零已下线的配额限流配置（列保留、行为不再消费）。
-// UPDATE 命中 rate_limit_* 的 cluster_version 触发器，从端随下轮快照收敛。
+// retireRateLimitQuota 彻底删除已下线的配额限流列，并归零阶段 2 拦截页/状态码
+// （CC ban 为插件固定 403）。列删除后旧备份/旧快照的 rate_limit_* 由导入/
+// 同步侧裁剪（不进入 INSERT），旧规则绑定不受影响。
 func retireRateLimitQuota() error {
-	result, err := execMigrationWriteIfNeeded(updateWhere("security_policies",
-		"rate_limit_enabled=0, rate_limit_rps=0, rate_limit_burst=0",
-		"COALESCE(rate_limit_enabled,0)<>0 OR COALESCE(rate_limit_rps,0)<>0 OR COALESCE(rate_limit_burst,0)<>0"))
-	if err != nil {
-		return fmt.Errorf("failed to retire rate-limit quota: %w", err)
-	}
-	if result != nil {
-		if n, _ := result.RowsAffected(); n > 0 {
-			detail := fmt.Sprintf("启动迁移：配额限流已下线，归零 %d 条策略的 rate_limit_* 配置", n)
-			log.Print(detail)
-			recordSystemAudit("启动迁移", "安全策略", detail)
+	for _, column := range []string{"rate_limit_enabled", "rate_limit_rps", "rate_limit_burst"} {
+		if _, err := dropColumnIfExists("security_policies", column); err != nil {
+			return fmt.Errorf("failed to drop retired security_policies.%s: %w", column, err)
 		}
 	}
-	// 阶段 2 不再消费拦截页/状态码（CC ban 为插件固定 403）。
-	// 窗口期旧库可能尚未补 policy_type 列，跳过该段（后续启动收敛）。
 	var hasPolicyType int
 	if err := DB.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('security_policies') WHERE name='policy_type'`).Scan(&hasPolicyType); err != nil {
 		return fmt.Errorf("probe security_policies.policy_type: %w", err)

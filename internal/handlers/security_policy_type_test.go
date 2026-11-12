@@ -49,15 +49,14 @@ func TestCreateSecurityPolicy_explicitTypeNormalizesOutOfStageFields(t *testing.
 		t.Fatalf("decode: %v", err)
 	}
 	var mode, policyType, crsGroups, customRules string
-	var rlEnabled bool
 	var aclList string
-	if err := db.DB.QueryRow(`SELECT COALESCE(mode,''), COALESCE(policy_type,''), COALESCE(crs_rule_groups,'[]'), COALESCE(custom_rules,'[]'), COALESCE(rate_limit_enabled,0), COALESCE(ip_acl_list,'[]') FROM security_policies WHERE id=?`, payload.Data.ID).
-		Scan(&mode, &policyType, &crsGroups, &customRules, &rlEnabled, &aclList); err != nil {
+	if err := db.DB.QueryRow(`SELECT COALESCE(mode,''), COALESCE(policy_type,''), COALESCE(crs_rule_groups,'[]'), COALESCE(custom_rules,'[]'), COALESCE(ip_acl_list,'[]') FROM security_policies WHERE id=?`, payload.Data.ID).
+		Scan(&mode, &policyType, &crsGroups, &customRules, &aclList); err != nil {
 		t.Fatal(err)
 	}
-	if policyType != "stage1" || mode != "off" || crsGroups != "[]" || customRules != "[]" || rlEnabled || aclList != `["203.0.113.0/24"]` {
-		t.Fatalf("stored=(type %s, mode %s, crs %s, custom %s, rl %v, acl %s), want stage1 with out-of-stage fields zeroed",
-			policyType, mode, crsGroups, customRules, rlEnabled, aclList)
+	if policyType != "stage1" || mode != "off" || crsGroups != "[]" || customRules != "[]" || aclList != `["203.0.113.0/24"]` {
+		t.Fatalf("stored=(type %s, mode %s, crs %s, custom %s, acl %s), want stage1 with out-of-stage fields zeroed",
+			policyType, mode, crsGroups, customRules, aclList)
 	}
 }
 
@@ -227,10 +226,10 @@ func TestUpdateSecurityPolicy_nilTypeReinfersAfterContentChange(t *testing.T) {
 }
 
 func TestUpdateSecurityPolicy_explicitTypeSwitchNormalizes(t *testing.T) {
-	// Given：存量混合策略（blocking+限流）
+	// Given：存量混合策略（blocking+CC）
 	setupSecurityPolicyTestDB(t)
 	router := newSecurityRouter(t)
-	if _, err := db.DB.Exec(`INSERT INTO security_policies (name,mode,rate_limit_enabled,rate_limit_rps,rate_limit_burst,policy_type,enabled) VALUES ('switch-p','blocking',1,100,50,'mixed',1)`); err != nil {
+	if _, err := db.DB.Exec(`INSERT INTO security_policies (name,mode,human_verify_mode,human_verify_type,policy_type,enabled) VALUES ('switch-p','blocking','force','slider','mixed',1)`); err != nil {
 		t.Fatal(err)
 	}
 	var id int
@@ -244,17 +243,17 @@ func TestUpdateSecurityPolicy_explicitTypeSwitchNormalizes(t *testing.T) {
 	response := httptest.NewRecorder()
 	router.ServeHTTP(response, request)
 
-	// Then：mode 归 off、type=stage2、限流字段保留
+	// Then：mode 归 off、type=stage2、CC 配置保留
 	if response.Code != http.StatusOK {
 		t.Fatalf("update status=%d body=%s, want 200", response.Code, response.Body.String())
 	}
 	var mode, policyType string
-	var rps int
-	if err := db.DB.QueryRow(`SELECT COALESCE(mode,''), COALESCE(policy_type,''), COALESCE(rate_limit_rps,0) FROM security_policies WHERE id=?`, id).Scan(&mode, &policyType, &rps); err != nil {
+	var humanMode string
+	if err := db.DB.QueryRow(`SELECT COALESCE(mode,''), COALESCE(policy_type,''), COALESCE(human_verify_mode,'off') FROM security_policies WHERE id=?`, id).Scan(&mode, &policyType, &humanMode); err != nil {
 		t.Fatal(err)
 	}
-	if policyType != "stage2" || mode != "off" || rps != 100 {
-		t.Fatalf("stored=(type %s, mode %s, rps %d), want (stage2, off, 100)", policyType, mode, rps)
+	if policyType != "stage2" || mode != "off" || humanMode != "force" {
+		t.Fatalf("stored=(type %s, mode %s, human %s), want (stage2, off, force)", policyType, mode, humanMode)
 	}
 }
 
@@ -393,14 +392,14 @@ func TestCreateSecurityPolicy_stage0KeepsTrustAndDetection(t *testing.T) {
 		t.Fatalf("create stage0 status=%d body=%s, want 200", response.Code, response.Body.String())
 	}
 	var policyType, mode, whitelist string
-	var trustDetection, rlEnabled bool
-	if err := db.DB.QueryRow(`SELECT COALESCE(policy_type,''), COALESCE(mode,''), COALESCE(ip_whitelist,'[]'), COALESCE(trust_detection,0), COALESCE(rate_limit_enabled,0) FROM security_policies WHERE name='trust-vip'`).
-		Scan(&policyType, &mode, &whitelist, &trustDetection, &rlEnabled); err != nil {
+	var trustDetection bool
+	if err := db.DB.QueryRow(`SELECT COALESCE(policy_type,''), COALESCE(mode,''), COALESCE(ip_whitelist,'[]'), COALESCE(trust_detection,0) FROM security_policies WHERE name='trust-vip'`).
+		Scan(&policyType, &mode, &whitelist, &trustDetection); err != nil {
 		t.Fatal(err)
 	}
-	if policyType != "stage0" || mode != "off" || whitelist != `["10.0.0.9"]` || !trustDetection || rlEnabled {
-		t.Fatalf("stage0 stored=(type %s, mode %s, wl %s, detection %v, rl %v), want stage0 with trust+detection kept, rest zeroed",
-			policyType, mode, whitelist, trustDetection, rlEnabled)
+	if policyType != "stage0" || mode != "off" || whitelist != `["10.0.0.9"]` || !trustDetection {
+		t.Fatalf("stage0 stored=(type %s, mode %s, wl %s, detection %v), want stage0 with trust+detection kept, rest zeroed",
+			policyType, mode, whitelist, trustDetection)
 	}
 }
 
@@ -610,8 +609,8 @@ func TestBindWritePaths_rateLimitUniqueness(t *testing.T) {
 	router.POST("/security/policies/:id/bind", h.BindRuleToPolicy)
 	router.PUT("/security/rules/:caddy_id/policies", h.SetRuleSecurityPolicies)
 	router.POST("/security/policies/batch-bind", h.BatchBindSecurityPolicies)
-	if _, err := db.DB.Exec(`INSERT INTO security_policies (id,name,mode,policy_type,rate_limit_enabled,rate_limit_rps,enabled) VALUES
-		(1,'rl-a','off','stage2',1,100,1),(2,'rl-b','off','stage2',1,50,1),(3,'waf-a','blocking','stage3',0,0,1)`); err != nil {
+	if _, err := db.DB.Exec(`INSERT INTO security_policies (id,name,mode,policy_type,human_verify_mode,enabled) VALUES
+		(1,'cc-a','off','stage2','force',1),(2,'cc-b','off','stage2','force',1),(3,'waf-a','blocking','stage3','off',1)`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enabled) VALUES ('lb_rl','rl','http','rl.test',8080,1)`); err != nil {
