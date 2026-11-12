@@ -516,6 +516,14 @@ test('辅助端点部分失败必须有可见横幅', () => {
   }
 })
 
+test('策略顺序区域规则名独占宽度：域名不占行，超长省略且悬浮显示完整名+域名', () => {
+  const page = code('src/views/security/SecurityPolicies.vue')
+  assert.doesNotMatch(page, /bound-rule-meta/, '绑定行不得再展示域名占宽')
+  assert.match(page, /class="bound-rule-name" :title="boundRuleTitle\(row\)"/, '规则名悬浮必须带完整信息')
+  assert.match(page, /const boundRuleTitle = \(row: BoundRuleRow\): string =>[\s\S]{0,120}row\.name[\s\S]{0,80}row\.domain/, '悬浮内容包含规则名与域名')
+  assert.match(page, /\.bound-rule-name \{[^}]*flex: 1;[^}]*text-overflow: ellipsis;/, '规则名让宽并省略')
+})
+
 test('CC 卡片维持同行等高，内容纵向填充不改变卡片尺寸', () => {
   const overview = code('src/views/security/SecurityOverview.vue')
   assert.match(overview, /\.events-row \.el-card \{ height: 100%; \}/, '同行卡片必须继续等高')

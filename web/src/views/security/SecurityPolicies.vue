@@ -753,8 +753,7 @@
                     <div class="bound-rule-head">
                       <el-tag v-if="row.protocol === 'tcp'" size="small" effect="plain" class="proto-tcp-tag rule-proto-badge">TCP</el-tag>
                       <el-tag v-else size="small" type="primary" effect="plain" class="rule-proto-badge">HTTP</el-tag>
-                      <span class="bound-rule-name">{{ row.name }}</span>
-                      <span class="bound-rule-meta">{{ row.domain || '-' }}:{{ row.listenPort }}</span>
+                      <span class="bound-rule-name" :title="boundRuleTitle(row)">{{ row.name }}</span>
                       <!-- 策略顺序=执行序（用户裁定）：上移/下移调整本策略在该规则绑定链中的
                            位置，只暂存（bindingOrderEdits），随「保存」按新序整链提交；
                            与页面显示无关（拦截页按触发策略归因，见拦截页步骤注记）。 -->
@@ -1287,6 +1286,9 @@ const chainChipText = (entry: ChainEntry, index: number): string => {
   const name = entry.isSelf ? t('app.security.policies.common.selfPolicy') : entry.name
   return `${index + 1}.${name}`
 }
+const boundRuleTitle = (row: BoundRuleRow): string =>
+  `${row.name} · ${row.domain || '-'}:${row.listenPort}`
+
 const policySummaryLine = (row: PolicySummary): string => {
   const type = policyTypeOf(row)
   if (type === 'stage0') {
@@ -3985,8 +3987,7 @@ html[data-locale='en'] .wizard-steps :deep(.el-step__title) { font-size: 14px; }
 .policy-wizard-dialog .bound-rule-list { max-height: 40vh; min-height: 200px; overflow-y: auto; padding-right: 4px; }
 .bound-rule-row { border: 1px solid #ebeef5; padding: 12px; }
 .bound-rule-head { display: flex; align-items: center; gap: 8px; }
-.bound-rule-name { font-weight: 500; color: #1f2937; font-size: 13px; }
-.bound-rule-meta { font-size: 12px; color: #9ca3af; font-family: monospace; }
+.bound-rule-name { font-weight: 500; color: #1f2937; font-size: 13px; flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .bound-rule-remove { margin-left: 6px; }
 .bound-rule-chain { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 6px; }
 
