@@ -66,3 +66,18 @@ func TestHumanEventThrottleDoesNotDropPassFail(t *testing.T) {
 		t.Fatal("挑战失败不得被发放限流吞掉")
 	}
 }
+
+func TestSliderPolishInsetToleranceAndEnglishFailure(t *testing.T) {
+	if sliderTolerance > 3 {
+		t.Fatalf("滑块容差过大: %d", sliderTolerance)
+	}
+	rendered := fmt.Sprintf(sliderWidgetHTML, "", pieceSVG(), "", "")
+	for _, want := range []string{"left:2px;width:34px", "Verification failed"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("滑块样式/文案缺失: %q", want)
+		}
+	}
+	if strings.Contains(rendered, "验证失败") {
+		t.Fatal("失败提示必须只保留英文")
+	}
+}

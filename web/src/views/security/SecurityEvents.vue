@@ -202,7 +202,7 @@
       <el-table :data="events" v-loading="loading" stripe :header-cell-style="{ background: '#f9fafb' }" empty-text="">
         <template #empty><el-empty :description="t('app.security.events.empty')" :image-size="60" /></template>
         <el-table-column prop="event_time" :label="t('app.security.events.colTime')" width="190" :formatter="(row: SecurityEvent) => formatDate(row.event_time)" />
-        <el-table-column :label="t('app.security.events.colAction')" width="80" align="center">
+        <el-table-column :label="t('app.security.events.colAction')" width="85" align="center">
           <template #default="{ row }">
             <el-tag :type="eventActionTone(row.action, row.rule_triggered)" size="small" effect="light">{{ eventActionShort(row.action, row.rule_triggered) }}</el-tag>
           </template>

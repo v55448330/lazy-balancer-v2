@@ -20,7 +20,7 @@ const (
 	sliderWidth       = 240 // 拼图区宽度 px
 	sliderHeight      = 134
 	sliderPieceSize   = 34 // 拼图片块边长
-	sliderTolerance   = 5  // x 偏移容差 px
+	sliderTolerance   = 3  // x 偏移容差 px（收紧：视觉偏差不再轻易通过）
 	sliderPuzzleTTL   = 2 * time.Minute
 	sliderMaxAttempts = 3 // 失败 3 次强制换图（防爆破）
 )
@@ -43,9 +43,10 @@ func newSliderPuzzle() *sliderPuzzle {
 	_, _ = rand.Read(raw)
 	id := hex.EncodeToString(raw)
 	// 缺口 x ∈ [40%, 85%] 区段（避开左端起始与右端终点）
-	usable := float64(sliderWidth - sliderPieceSize)
-	minX := int(usable * 0.40)
-	maxX := int(usable * 0.85)
+	margin := 12 // 缺口不贴拼图左右边缘
+	usable := float64(sliderWidth - sliderPieceSize - margin*2)
+	minX := margin + int(usable*0.25)
+	maxX := margin + int(usable*0.75)
 	gapX := minX + int(raw[0])%(maxX-minX+1)
 	p := &sliderPuzzle{id: id, gapX: gapX, createdAt: time.Now()}
 	sliderPuzzlesMu.Lock()
@@ -72,7 +73,7 @@ func puzzleSVG(gapX int) string {
   <rect width="%d" height="%d" fill="url(#bg)"/>
   <path d="M 0 34 H 240 M 0 96 H 240 M 58 0 V 134 M 176 0 V 134" stroke="#ffffff" opacity="0.07"/>
   <path d="M 0 0 H 96 L 0 64 Z" fill="#ffffff" opacity="0.06"/>
-  <rect x="%d" y="%d" width="%d" height="%d" fill="#0f172a" opacity="0.42"/>
+  <rect x="%d" y="%d" width="%d" height="%d" fill="#0b1220" opacity="0.58" stroke="#ffffff" stroke-opacity="0.55" stroke-width="1.5" stroke-dasharray="4 3"/>
 </svg>`,
 		sliderWidth, sliderHeight, sliderWidth, sliderHeight,
 		gapX, gapY, sliderPieceSize, sliderPieceSize)
@@ -213,7 +214,7 @@ const sliderWidgetHTML = `<div class="lb-hv-widget" style="width:240px;max-width
 .lb-hv-widget .lb-hv-piece:active{cursor:grabbing}
 .lb-hv-widget .lb-hv-track{position:relative;width:240px;height:34px;background:#eef2f7;border:1px solid #dbe4f0;border-radius:0;user-select:none;touch-action:none;overflow:hidden}
 .lb-hv-widget .lb-hv-fill{position:absolute;left:0;top:0;bottom:0;background:#2563eb;opacity:.16;width:0}
-.lb-hv-widget .lb-hv-handle{position:absolute;top:3px;left:0;width:34px;height:28px;background:#2563eb;color:#fff;border-radius:0;display:flex;align-items:center;justify-content:center;font-size:18px;cursor:grab;box-shadow:0 2px 6px rgba(37,99,235,.25)}
+.lb-hv-widget .lb-hv-handle{position:absolute;top:3px;left:2px;width:34px;height:28px;background:#2563eb;color:#fff;border-radius:0;display:flex;align-items:center;justify-content:center;font-size:18px;cursor:grab;box-shadow:0 2px 6px rgba(37,99,235,.25)}
 .lb-hv-widget .lb-hv-handle:active{cursor:grabbing}
 .lb-hv-widget .lb-hv-status{text-align:center;font-size:13px;min-height:20px;margin-top:10px;color:#64748b}
 .lb-hv-widget .lb-hv-ok{color:#15803d}.lb-hv-widget .lb-hv-fail{color:#dc2626}
@@ -223,12 +224,12 @@ const sliderWidgetHTML = `<div class="lb-hv-widget" style="width:240px;max-width
 <div class="lb-hv-status" id="lbHvStatus"></div>
 <script>
 (function(){
-var pid="%s",redirect="%s",h=document.getElementById("lbHvHandle"),pc=document.getElementById("lbHvPiece"),fl=document.getElementById("lbHvFill"),tr=document.getElementById("lbHvTrack"),st=document.getElementById("lbHvStatus"),drag=false,sx=0,t0=0,pos=[],cx=0,mx=tr.clientWidth-(h.offsetWidth||34);
+var pid="%s",redirect="%s",h=document.getElementById("lbHvHandle"),pc=document.getElementById("lbHvPiece"),fl=document.getElementById("lbHvFill"),tr=document.getElementById("lbHvTrack"),st=document.getElementById("lbHvStatus"),drag=false,sx=0,t0=0,pos=[],cx=0,mx=tr.clientWidth-(h.offsetWidth||34)-4;
 function dn(e){drag=true;sx=(e.touches?e.touches[0].clientX:e.clientX);t0=Date.now();pos=[];cx=0;e.preventDefault()}
-function mv(e){if(!drag)return;var x=(e.touches?e.touches[0].clientX:e.clientX);cx=Math.max(0,Math.min(mx,x-sx));h.style.left=cx+"px";pc.style.left=cx+"px";fl.style.width=cx+"px";pos.push(cx)}
+function mv(e){if(!drag)return;var x=(e.touches?e.touches[0].clientX:e.clientX);cx=Math.max(0,Math.min(mx,x-sx));h.style.left=(cx+2)+"px";pc.style.left=cx+"px";fl.style.width=(cx+2)+"px";pos.push(cx)}
 function up(){if(!drag)return;drag=false;var dur=Date.now()-t0;
 fetch("/__lb/human/slider-verify",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},credentials:"same-origin",body:"puzzle_id="+encodeURIComponent(pid)+"&x="+cx+"&track="+pos.join(",")+"&duration_ms="+dur}).then(function(res){
-if(res.ok){st.textContent="验证通过 · Verified";st.className="lb-hv-status lb-hv-ok";setTimeout(function(){window.location.href=redirect},400)}else{st.textContent="验证失败 · Failed";st.className="lb-hv-status lb-hv-fail";setTimeout(function(){window.location.reload()},900)}}).catch(function(){st.textContent="网络错误 · Network error";st.className="lb-hv-status lb-hv-fail"})}
+if(res.ok){st.textContent="Verified";st.className="lb-hv-status lb-hv-ok";setTimeout(function(){window.location.href=redirect},400)}else{st.textContent="Verification failed";st.className="lb-hv-status lb-hv-fail";setTimeout(function(){window.location.reload()},900)}}).catch(function(){st.textContent="Network error";st.className="lb-hv-status lb-hv-fail"})}
 h.addEventListener("mousedown",dn);h.addEventListener("touchstart",dn,{passive:false});
 document.addEventListener("mousemove",mv);document.addEventListener("touchmove",mv,{passive:false});
 document.addEventListener("mouseup",up);document.addEventListener("touchend",up)})();
@@ -255,7 +256,7 @@ const sliderChallengePage = `<!DOCTYPE html>
   .piece:active { cursor: grabbing; }
   .track { position: relative; height: 34px; background: #e2e8f0; border-radius: 0; user-select: none; }
   .track-fill { position: absolute; left: 0; top: 0; bottom: 0; background: #4299e1; border-radius: 0; opacity: .25; width: 0; }
-  .handle { position: absolute; top: 3px; left: 0; width: 34px; height: 28px; background: #4299e1; color: #fff; border-radius: 0; display: flex; align-items: center; justify-content: center; font-size: 18px; cursor: grab; }
+  .handle { position: absolute; top: 3px; left: 2px; width: 34px; height: 28px; background: #4299e1; color: #fff; border-radius: 0; display: flex; align-items: center; justify-content: center; font-size: 18px; cursor: grab; }
   .handle:active { cursor: grabbing; }
   .hint { text-align: center; font-size: 12px; color: #718096; margin-top: 12px; }
   .status { text-align: center; font-size: 13px; min-height: 20px; margin-top: 10px; }
@@ -291,7 +292,7 @@ const sliderChallengePage = `<!DOCTYPE html>
   var trackEl = document.getElementById("track");
   var statusEl = document.getElementById("status");
   var dragging = false, startX = 0, startTime = 0, positions = [], currentX = 0;
-  var maxX = trackEl.clientWidth - (handle.offsetWidth || 34);
+  var maxX = trackEl.clientWidth - (handle.offsetWidth || 34) - 4;
 
   function down(e) {
     dragging = true; startX = (e.touches ? e.touches[0].clientX : e.clientX);
@@ -302,9 +303,9 @@ const sliderChallengePage = `<!DOCTYPE html>
     if (!dragging) return;
     var cx = (e.touches ? e.touches[0].clientX : e.clientX);
     currentX = Math.max(0, Math.min(maxX, cx - startX));
-    handle.style.left = currentX + "px";
+    handle.style.left = (currentX + 2) + "px";
     piece.style.left = currentX + "px";
-    fill.style.width = currentX + "px";
+    fill.style.width = (currentX + 2) + "px";
     positions.push(currentX);
   }
   function up() {
@@ -319,16 +320,16 @@ const sliderChallengePage = `<!DOCTYPE html>
         "&track=" + positions.join(",") + "&duration_ms=" + duration
     }).then(function (res) {
       if (res.ok) {
-        statusEl.textContent = "验证通过，正在跳转… Verified, redirecting…";
+        statusEl.textContent = "Verified, redirecting…";
         statusEl.className = "status ok";
         setTimeout(function () { window.location.href = redirect; }, 400);
       } else {
-        statusEl.textContent = "验证失败，请重试 · Failed, please retry";
+        statusEl.textContent = "Verification failed, please retry";
         statusEl.className = "status fail";
         setTimeout(function () { window.location.reload(); }, 900);
       }
     }).catch(function () {
-      statusEl.textContent = "网络错误，请重试 · Network error";
+      statusEl.textContent = "Network error";
       statusEl.className = "status fail";
     });
   }

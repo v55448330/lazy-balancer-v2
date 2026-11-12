@@ -60,5 +60,6 @@ test('四个视图共用单源映射，本地副本已删除', () => {
   assert.match(trigger, /eventActionFull\(row\?\.action, row\?\.rule_triggered\)/)
   assert.match(trigger, /:type="ccResultTone"/, '触发详情挑战结果必须用三态色标签')
   assert.match(trigger, /const ccResultTone = computed<'info' \| 'success' \| 'danger'>/, 'CC 结果色单源')
+  assert.match(events, /colAction'\)" width="85"/, '英文 Challenge 需要 5px 余量')
   assert.doesNotMatch(trigger, /已记录（检测）/, '第四份措辞必须退役')
 })
