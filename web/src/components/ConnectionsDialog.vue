@@ -64,8 +64,10 @@
           </template>
         </el-table-column>
         <el-table-column prop="method" :label="t('app.dashboard.connColMethod')" width="65" />
-        <el-table-column prop="host" :label="t('app.dashboard.connColHost')" min-width="120" />
-        <el-table-column prop="uri" :label="t('app.dashboard.connColUri')" min-width="150" show-overflow-tooltip>
+        <el-table-column :label="t('app.dashboard.connColHost')" min-width="170" show-overflow-tooltip>
+          <template #default="{ row }"><span class="conn-mono conn-host" :title="row.host">{{ row.host }}</span></template>
+        </el-table-column>
+        <el-table-column prop="uri" :label="t('app.dashboard.connColUri')" min-width="110" show-overflow-tooltip>
           <template #default="{ row }"><span class="conn-mono">{{ row.uri }}</span></template>
         </el-table-column>
         <el-table-column :label="t('app.dashboard.connColStatus')" width="70">
@@ -346,6 +348,8 @@ defineExpose({ fetchOnce })
 .conn-filter-btn.is-active { background: var(--el-color-primary); border-color: var(--el-color-primary); color: #fff; }
 
 .conn-table { width: 100%; }
+.conn-table :deep(.cell) { white-space: nowrap; }
+.conn-host { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .conn-mono { font-family: var(--el-font-family-mono, monospace); font-size: 12px; }
 .conn-country { margin-left: 6px; font-size: 11px; color: var(--text-secondary); }
 .conn-ip { white-space: nowrap; }

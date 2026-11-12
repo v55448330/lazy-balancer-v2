@@ -555,7 +555,12 @@ func renderBuiltinBlockPage(cfg brandingConfig, variant string) string {
 	if !ok {
 		return ""
 	}
-	return renderBlockPageShell(cfg, spec)
+	page := renderBlockPageShell(cfg, spec)
+	if variant == "human" {
+		// 滑块挑战组件占位符：lb_human 在挑战时替换为真实组件（token/拼图/校验）。
+		page = strings.Replace(page, `<div class="divider">`, `{{human_verify_widget}}<div class="divider">`, 1)
+	}
+	return page
 }
 
 // blockPageSpec 是内置拦截页的视觉/文案规格：三页共用同一浅色 v3 壳
@@ -693,7 +698,7 @@ type builtinBlockPageIdentity struct {
 
 var builtinBlockPageIdentities = []builtinBlockPageIdentity{
 	// 人机验证页面（阶段 3 挑战页，2026-11-12）：id 9005，与 9001/9002 同族。
-	{9005, "人机验证页面", "系统内置人机验证挑战页（阶段 3 由 lb_human 插件渲染 JS 挑战/滑块；本页为占位模板）", "human"},
+	{9005, "人机验证页面", "系统内置滑块验证挑战页（{{human_verify_widget}} 占位符由 lb_human 替换为滑块组件；策略选择本页后生效）", "human"},
 	{9001, "限流拦截页面", "系统内置 429 限流拦截页面（备选，手动选用后生效）", "ratelimit"},
 	{9002, "系统维护页面", "系统内置维护页面（备选，手动选用后生效）", "maintenance"},
 }

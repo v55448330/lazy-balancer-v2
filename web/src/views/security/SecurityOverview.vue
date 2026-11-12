@@ -216,25 +216,39 @@
               </el-tooltip>
             </div>
           </template>
-          <div class="cc-stats">
-            <div class="cc-stat">
-              <span class="stat-label">{{ t('app.security.overview.cc.challengedToday') }}</span>
-              <span class="stat-value" style="color: #409eff">{{ fmtStatNum(overview.today_challenged) }}</span>
+          <div class="cc-overview">
+            <div class="cc-donut" role="img" :aria-label="t('app.security.overview.cc.passRate')">
+              <svg viewBox="0 0 42 42" aria-hidden="true">
+                <circle class="cc-donut-track" cx="21" cy="21" r="15.915" />
+                <circle class="cc-donut-value" cx="21" cy="21" r="15.915" :stroke-dasharray="`${ccPassRatePct ?? 0} 100`" />
+              </svg>
+              <span class="cc-donut-center">{{ humanPassRate }}</span>
             </div>
-            <div class="cc-stat">
-              <span class="stat-label">{{ t('app.security.overview.cc.passRate') }}</span>
-              <span class="stat-value">{{ humanPassRate }}</span>
-            </div>
-            <div class="cc-stat">
-              <span class="stat-label">{{ t('app.security.overview.cc.passFail') }}</span>
-              <span class="stat-value">{{ fmtStatNum(overview.today_human_pass ?? 0) }} / {{ fmtStatNum(overview.today_human_fail ?? 0) }}</span>
-            </div>
-            <div class="cc-stat">
-              <span class="stat-label">{{ t('app.security.overview.cc.bans') }}</span>
-              <span class="stat-value" style="color: #f56c6c">{{ fmtStatNum(humanStats.bans) }}</span>
+            <div class="cc-stats">
+              <div class="cc-stat">
+                <span class="stat-label">{{ t('app.security.overview.cc.challengedToday') }}</span>
+                <span class="stat-value" style="color: #409eff">{{ fmtStatNum(overview.today_challenged) }}</span>
+              </div>
+              <div class="cc-stat">
+                <span class="stat-label">{{ t('app.security.overview.cc.passFail') }}</span>
+                <span class="stat-value">{{ fmtStatNum(ccPassCount) }} / {{ fmtStatNum(ccFailCount) }}</span>
+              </div>
+              <div class="cc-stat">
+                <span class="stat-label">{{ t('app.security.overview.cc.bans') }}</span>
+                <span class="stat-value" style="color: #f56c6c">{{ fmtStatNum(humanStats.bans) }}</span>
+              </div>
             </div>
           </div>
-          <div class="form-tip-line">{{ t('app.security.overview.cc.note') }}</div>
+          <div class="cc-stack" :title="t('app.security.overview.cc.stackTip')">
+            <span class="cc-stack-pass" :style="{ width: ccPct(ccPassCount) + '%' }" />
+            <span class="cc-stack-fail" :style="{ width: ccPct(ccFailCount) + '%' }" />
+            <span class="cc-stack-pending" :style="{ width: ccPct(ccPendingCount) + '%' }" />
+          </div>
+          <div class="cc-legend">
+            <span class="cc-legend-item"><i class="is-pass" />{{ t('app.security.overview.cc.passed') }} {{ fmtStatNum(ccPassCount) }}</span>
+            <span class="cc-legend-item"><i class="is-fail" />{{ t('app.security.overview.cc.failed') }} {{ fmtStatNum(ccFailCount) }}</span>
+            <span class="cc-legend-item"><i class="is-pending" />{{ t('app.security.overview.cc.pending') }} {{ fmtStatNum(ccPendingCount) }}</span>
+          </div>
         </el-card>
       </el-col>
     </el-row>
@@ -426,6 +440,18 @@ const humanPassRate = computed(() => {
   const fallback = humanStats.value.passes + humanStats.value.fails
   return fallback > 0 ? `${Math.round((humanStats.value.passes / fallback) * 100)}%` : '—'
 })
+
+const ccPassCount = computed(() => overview.value.today_human_pass ?? humanStats.value.passes)
+const ccFailCount = computed(() => overview.value.today_human_fail ?? humanStats.value.fails)
+const ccPendingCount = computed(() => Math.max((overview.value.today_challenged ?? 0) - ccPassCount.value - ccFailCount.value, 0))
+const ccPassRatePct = computed<number | null>(() => {
+  const total = ccPassCount.value + ccFailCount.value
+  return total > 0 ? Math.round((ccPassCount.value / total) * 1000) / 10 : null
+})
+const ccPct = (n: number): number => {
+  const total = ccPassCount.value + ccFailCount.value + ccPendingCount.value
+  return total > 0 ? (n / total) * 100 : 0
+}
 const fetchHumanStats = async (): Promise<void> => {
   try {
     const res = await request.get<APIResponse<{ challenges: number; passes: number; fails: number; bans: number }>>('/security/human/stats', { silent: true })
@@ -624,8 +650,25 @@ onMounted(() => { void reloadAll() })
    （同行等高后，卡头高度差会把两卡内容区顶得参差）。 */
 .header-checkbox { height: 20px; margin-left: 12px; }
 .events-row .el-card { height: 100%; }
-.cc-stats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; padding: 0 4px 10px; }
-.cc-stat { display: flex; flex-direction: column; gap: 2px; }
-.cc-stat .stat-label { font-size: 13px; color: var(--text-secondary); }
-.cc-stat .stat-value { font-size: 20px; font-weight: 600; }
+.cc-overview { display: flex; align-items: center; gap: 18px; padding: 2px 4px 10px; }
+.cc-donut { position: relative; width: 96px; height: 96px; flex: none; }
+.cc-donut svg { width: 100%; height: 100%; transform: rotate(-90deg); }
+.cc-donut-track { fill: none; stroke: #eef2f7; stroke-width: 3.4; }
+.cc-donut-value { fill: none; stroke: #409eff; stroke-width: 3.4; stroke-linecap: round; transition: stroke-dasharray .4s ease; }
+.cc-donut-center { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 18px; font-weight: 700; color: #303133; }
+.cc-stats { display: grid; grid-template-columns: 1fr; gap: 6px; min-width: 0; flex: 1; }
+.cc-stat { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.cc-stat .stat-label { font-size: 12px; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cc-stat .stat-value { font-size: 16px; font-weight: 600; }
+.cc-stack { display: flex; height: 8px; border-radius: 999px; overflow: hidden; background: #eef2f7; margin: 2px 4px 8px; }
+.cc-stack span { display: block; height: 100%; transition: width .4s ease; }
+.cc-stack-pass { background: #67c23a; }
+.cc-stack-fail { background: #f56c6c; }
+.cc-stack-pending { background: #cbd5e1; }
+.cc-legend { display: flex; flex-wrap: wrap; gap: 10px 14px; padding: 0 4px; font-size: 12px; color: var(--text-secondary); }
+.cc-legend-item { display: inline-flex; align-items: center; gap: 5px; }
+.cc-legend-item i { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+.cc-legend-item i.is-pass { background: #67c23a; }
+.cc-legend-item i.is-fail { background: #f56c6c; }
+.cc-legend-item i.is-pending { background: #cbd5e1; }
 </style>

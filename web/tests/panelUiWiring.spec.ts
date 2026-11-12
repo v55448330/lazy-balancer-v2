@@ -516,14 +516,14 @@ test('辅助端点部分失败必须有可见横幅', () => {
   }
 })
 
-test('阶段 2 复用拦截页步骤：直接封禁页面/状态码，挑战页只读说明', () => {
+test('阶段 2 复用拦截页步骤：挑战/封禁共用页面选择与页面内滑块组件', () => {
   const text = code('src/views/security/SecurityPolicies.vue')
   assert.doesNotMatch(text, /noPageStage2|noPageRateLimit|rateLimitFacet/)
-  assert.match(text, /steps\.push\(WIZARD_STEP\.BLOCK_PAGE\)/, '阶段 2 必须重新包含拦截页步骤')
+  assert.match(text, /steps\.push\(WIZARD_STEP\.BLOCK_PAGE\)/, '阶段 2 必须包含拦截页步骤')
   assert.match(text, /v-model="form\.cc_response"/, 'CC 响应选择在拦截页步骤')
-  assert.match(text, /challengePageBuiltin/, '挑战页在内置插件渲染，只读说明')
-  assert.doesNotMatch(code('src/locales/zh/security.ts'), /429 空响应体/, '阶段 2 429 专属文案必须移除')
-  assert.match(code('src/locales/zh/security.ts'), /系统内置挑战页（lb_human 渲染）/)
+  assert.match(text, /challengePageTip/, '挑战页需说明 {{human_verify_widget}} 占位符')
+  assert.match(text, /<el-form-item :label="t\('app\.security\.policies\.bp\.pageLabel'\)">/, '挑战/封禁共用页面选择器')
+  assert.match(code('src/views/security/SecurityBlockPages.vue'), /insertHumanWidget/, '拦截页编辑器保留插入滑块验证组件')
 })
 
 test('安全规则预设项可键盘操作（折叠头 button + 标签/模板键盘语义）', () => {

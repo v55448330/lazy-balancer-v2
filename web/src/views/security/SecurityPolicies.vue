@@ -803,16 +803,14 @@
               </el-radio-group>
               <div class="form-tip-line">{{ t('app.security.policies.human.ccResponseTip') }}</div>
             </el-form-item>
-            <el-form-item v-if="editorPolicyType === 'stage2' && form.cc_response !== 'ban'" :label="t('app.security.policies.human.challengePageLabel')">
-              <el-tag type="info" size="small" effect="plain">{{ t('app.security.policies.human.challengePageBuiltin') }}</el-tag>
-              <div class="form-tip-line">{{ t('app.security.policies.human.challengePageTip') }}</div>
-            </el-form-item>
-            <el-form-item v-if="editorPolicyType !== 'stage2' || form.cc_response === 'ban'" :label="t('app.security.policies.bp.pageLabel')">
+
+            <el-form-item :label="t('app.security.policies.bp.pageLabel')">
               <el-select v-model="form.block_page_id" :placeholder="t('app.security.policies.bp.pagePlaceholder')" style="width: 100%">
-                <el-option :value="0" :label="t('app.security.policies.bp.noPageDefault')" />
+                <el-option :value="0" :label="editorPolicyType === 'stage2' && form.cc_response !== 'ban' ? t('app.security.policies.human.challengePageLabelBuiltin') : t('app.security.policies.bp.noPageDefault')" />
                 <el-option v-for="p in blockPages" :key="p.id" :label="pageLabel(p)" :value="p.id" />
               </el-select>
-              <div v-if="form.block_page_id === 0" class="form-tip-line">{{ t('app.security.policies.bp.noPageTipDefault') }}</div>
+              <div v-if="editorPolicyType === 'stage2' && form.cc_response !== 'ban'" class="form-tip-line">{{ t('app.security.policies.human.challengePageTip') }}</div>
+              <div v-else-if="form.block_page_id === 0" class="form-tip-line">{{ t('app.security.policies.bp.noPageTipDefault') }}</div>
               <div v-else class="form-tip-line">{{ t('app.security.policies.bp.manageTip') }}<AccessibleLink type="primary" @click="goToBlockPagesPage">{{ t('app.security.policies.common.goCreateEdit') }}</AccessibleLink></div>
               <!-- 归属汇总卡（用户验收裁定）：逐条重复提示收敛为单源汇总——主行 +
                    例外分面（限流/TCP/兜底差异，仅存在才渲染）+ 能力门行；

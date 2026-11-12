@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"html"
+	"io"
 	"math"
 	"net/http"
 	"strings"
@@ -149,8 +150,14 @@ func (h *HumanHandler) serveSliderChallenge(w http.ResponseWriter, r *http.Reque
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusOK)
 	pieceTop := (sliderHeight-sliderPieceSize)/2 + 10 - 6
+	redirect := html.EscapeString(r.URL.RequestURI())
+	widget := fmt.Sprintf(sliderWidgetHTML, puzzleSVG(p.gapX), pieceSVG(), p.id, redirect)
+	if h.ChallengePageHTML != "" && strings.Contains(h.ChallengePageHTML, "{{human_verify_widget}}") {
+		_, _ = io.WriteString(w, strings.Replace(h.ChallengePageHTML, "{{human_verify_widget}}", widget, 1))
+		return
+	}
 	_, _ = fmt.Fprintf(w, sliderChallengePage,
-		sliderWidth, pieceTop, puzzleSVG(p.gapX), pieceSVG(), p.id, html.EscapeString(r.URL.RequestURI()))
+		sliderWidth, pieceTop, puzzleSVG(p.gapX), pieceSVG(), p.id, redirect)
 }
 
 // serveSliderVerify 滑块校验端点。

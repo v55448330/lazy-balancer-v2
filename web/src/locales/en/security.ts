@@ -410,6 +410,10 @@ export default {
      "passRate": "Pass rate",
      "passFail": "Passed / failed",
      "bans": "CC bans",
+     "passed": "Passed",
+     "failed": "Failed",
+     "pending": "Pending",
+     "stackTip": "Today's challenge outcomes: passed / failed / pending",
      "note": "Counts come from the human challenge page and session verification; bans are requests rejected by CC protection."
     },
 
@@ -884,8 +888,9 @@ export default {
      "ccResponseBan": "Block immediately (403)",
      "ccResponseTip": "Immediate 403; the auto-ban pipeline can separately accumulate bans (enable count challenge failures on the events page).",
      "challengePageLabel": "Verification page",
+     "challengePageLabelBuiltin": "Use built-in challenge page",
      "challengePageBuiltin": "Built-in challenge page (rendered by lb_human)",
-     "challengePageTip": "The human challenge is rendered by the lb_human plugin (slider/PoW); block page templates are only used for immediate bans below.",
+     "challengePageTip": "When using a block page as the challenge page, it must contain the {{human_verify_widget}} placeholder (insert the slider widget in the block page editor); leave empty to use the built-in challenge page.",
      "ccEnabledTip": "Effective only while human verification is on: request spikes / 4xx bursts / multi-UA sessions from one client escalate to a challenge or ban (differs from Stage 2 rate limiting, which caps global request rate)",
       "ccRpsLabel": "Spike threshold",
       "ccRpsPer": "requests /",

@@ -168,29 +168,32 @@ func buildHumanHandler(ruleCaddyID string, policies []*models.SecurityPolicy, ba
 		}
 	}
 	banHTML, banType := "", ""
+	challengeHTML := ""
 	if len(banPage) > 0 {
-		banHTML = banPage[0]
+		challengeHTML = banPage[0]
+		banHTML = strings.ReplaceAll(banPage[0], "{{human_verify_widget}}", "")
 	}
 	if len(banPage) > 1 {
 		banType = banPage[1]
 	}
 	return map[string]interface{}{
-		"handler":         "lb_human",
-		"mode":            mode,
-		"type":            typ,
-		"ttl":             ttl,
-		"secret":          getHumanSecret(),
-		"cc_enabled":      cc.Enabled,
-		"cc_rps_limit":    cc.RPSLimit,
-		"cc_window_sec":   cc.WindowSec,
-		"cc_4xx_ratio":    cc.Ratio4xx,
-		"cc_session":      cc.SessionAnomaly,
-		"cc_session_ua":   cc.SessionUAThresh,
-		"cc_response":     cc.Response,
-		"ban_status_code": banStatus,
-		"ban_page_html":   banHTML,
-		"ban_page_type":   banType,
-		"exempt_paths":    exemptPaths,
-		"rule_id":         ruleCaddyID,
+		"handler":             "lb_human",
+		"mode":                mode,
+		"type":                typ,
+		"ttl":                 ttl,
+		"secret":              getHumanSecret(),
+		"cc_enabled":          cc.Enabled,
+		"cc_rps_limit":        cc.RPSLimit,
+		"cc_window_sec":       cc.WindowSec,
+		"cc_4xx_ratio":        cc.Ratio4xx,
+		"cc_session":          cc.SessionAnomaly,
+		"cc_session_ua":       cc.SessionUAThresh,
+		"cc_response":         cc.Response,
+		"ban_status_code":     banStatus,
+		"ban_page_html":       banHTML,
+		"ban_page_type":       banType,
+		"challenge_page_html": challengeHTML,
+		"exempt_paths":        exemptPaths,
+		"rule_id":             ruleCaddyID,
 	}
 }

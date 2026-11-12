@@ -327,3 +327,14 @@ func blockPageSpecsDefaultConfig() brandingConfig {
 		FooterText: "Powered by Lazy Balancer · Copyright 2026 XiaoBao",
 	}
 }
+
+// 内置人机验证页必须携带滑块组件占位符，供 lb_human 挑战时替换。
+func TestRenderBuiltinBlockPage_humanCarriesWidgetPlaceholder(t *testing.T) {
+	page := renderBuiltinBlockPage(brandingConfig{AppName: "LB"}, "human")
+	if page == "" {
+		t.Fatal("内置人机验证页渲染为空")
+	}
+	if !strings.Contains(page, "{{human_verify_widget}}") {
+		t.Fatalf("内置人机验证页缺少滑块组件占位符: %s", page[:min(200, len(page))])
+	}
+}
