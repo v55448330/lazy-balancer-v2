@@ -884,7 +884,7 @@ export default {
      "forceIgnoresCc": "「始终验证」对所有首次访问直接挑战，突刺/4xx/多UA 阈值不参与判定。",
      "ccResponseLabel": "CC 触发后",
      "ccResponseVerify": "人机挑战",
-     "ccResponseBan": "直接封禁（403）",
+     "ccResponseBan": "直接封禁",
      "ccResponseTip": "直接封禁立即返回 403；自动封禁管线可另行累计封禁（需在事件页开启挑战失败计入）。",
      "challengePageLabel": "验证页面",
      "challengePageLabelBuiltin": "使用内置人机验证页",

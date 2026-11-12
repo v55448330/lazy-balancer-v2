@@ -887,7 +887,7 @@ export default {
      "forceIgnoresCc": "Always verify challenges every first visit; burst/4xx/multi-UA thresholds are not used.",
      "ccResponseLabel": "On CC trigger",
      "ccResponseVerify": "Human challenge",
-     "ccResponseBan": "Block immediately (403)",
+     "ccResponseBan": "Block immediately",
      "ccResponseTip": "Immediate 403; the auto-ban pipeline can separately accumulate bans (enable count challenge failures on the events page).",
      "challengePageLabel": "Verification page",
      "challengePageLabelBuiltin": "Use built-in human verification page",
