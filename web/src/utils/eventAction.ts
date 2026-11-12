@@ -24,32 +24,22 @@ const challengeKind = (ruleTriggered: string | undefined | null): 'issued' | 'pa
 }
 
 /** 短标签（列表/筛选等紧凑位）：拦截 / 检测 / 挑战结果。 */
-export const eventActionShort = (action: string | undefined | null, ruleTriggered?: string | null): string => {
+export const eventActionShort = (action: string | undefined | null, _ruleTriggered?: string | null): string => {
   if (!action) return '—'
   if (action === 'blocked') return t('common.app.views.eventAction.blockedShort') || action
   if (action === 'logged') return t('common.app.views.eventAction.loggedShort') || action
   if (action === 'trust') return t('common.app.views.eventAction.trustShort') || action
-  if (action === 'challenged') {
-    const kind = challengeKind(ruleTriggered)
-    if (kind === 'pass') return t('common.app.views.eventAction.challengedPassShort') || action
-    if (kind === 'fail') return t('common.app.views.eventAction.challengedFailShort') || action
-    return t('common.app.views.eventAction.challengedShort') || action
-  }
+  if (action === 'challenged') return t('common.app.views.eventAction.challengedShort') || action
   return action
 }
 
 /** 完整标签（详情/告警等叙述位）：已拦截 / 已记录 / 挑战结果。 */
-export const eventActionFull = (action: string | undefined | null, ruleTriggered?: string | null): string => {
+export const eventActionFull = (action: string | undefined | null, _ruleTriggered?: string | null): string => {
   if (!action) return '—'
   if (action === 'blocked') return t('common.app.views.eventAction.blockedFull') || action
   if (action === 'logged') return t('common.app.views.eventAction.loggedFull') || action
   if (action === 'trust') return t('common.app.views.eventAction.trustFull') || action
-  if (action === 'challenged') {
-    const kind = challengeKind(ruleTriggered)
-    if (kind === 'pass') return t('common.app.views.eventAction.challengedPassFull') || action
-    if (kind === 'fail') return t('common.app.views.eventAction.challengedFailFull') || action
-    return t('common.app.views.eventAction.challengedFull') || action
-  }
+  if (action === 'challenged') return t('common.app.views.eventAction.challengedFull') || action
   return action
 }
 

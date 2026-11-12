@@ -28,10 +28,10 @@ test('挑战三态用不同标签与色调（发放/通过/失败）', () => {
   assert.equal(eventActionTone('challenged', 'human_pass'), 'success')
   assert.equal(eventActionTone('challenged', 'human_failed'), 'danger')
   assert.equal(eventActionShort('challenged'), t('common.app.views.eventAction.challengedShort'))
-  assert.equal(eventActionShort('challenged', 'human_pass'), t('common.app.views.eventAction.challengedPassShort'))
-  assert.equal(eventActionShort('challenged', 'human_failed'), t('common.app.views.eventAction.challengedFailShort'))
-  assert.equal(eventActionFull('challenged', 'human_pass'), t('common.app.views.eventAction.challengedPassFull'))
-  assert.equal(eventActionFull('challenged', 'human_failed'), t('common.app.views.eventAction.challengedFailFull'))
+  assert.equal(eventActionShort('challenged', 'human_pass'), t('common.app.views.eventAction.challengedShort'))
+  assert.equal(eventActionShort('challenged', 'human_failed'), t('common.app.views.eventAction.challengedShort'))
+  assert.equal(eventActionFull('challenged', 'human_pass'), t('common.app.views.eventAction.challengedFull'))
+  assert.equal(eventActionFull('challenged', 'human_failed'), t('common.app.views.eventAction.challengedFull'))
 })
 
 test('未知动作 fail-visible：原样回显，不回落到「检测」', () => {

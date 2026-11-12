@@ -36,12 +36,13 @@ func TestServeSliderChallenge_customTemplateWidget(t *testing.T) {
 }
 
 func TestSliderWidgetFixedGeometryMatchesPuzzle(t *testing.T) {
-	rendered := fmt.Sprintf(sliderWidgetHTML, "", "", "", "")
+	rendered := fmt.Sprintf(sliderWidgetHTML, "", pieceSVG(), "", "")
 	for _, want := range []string{
 		"width:240px;max-width:100%;margin:0 auto",
 		".lb-hv-puzzle{position:relative;width:240px;height:134px",
 		`id="lbHvPiece" style="top:60px;left:0"`,
 		".lb-hv-track{position:relative;width:240px",
+		"<rect width=\"34\" height=\"34\"",
 	} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("滑块组件几何缺失: %q", want)

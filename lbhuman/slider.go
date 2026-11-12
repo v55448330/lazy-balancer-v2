@@ -69,25 +69,21 @@ func puzzleSVG(gapX int) string {
       <stop offset="0%%" stop-color="#2563eb"/><stop offset="1" stop-color="#3b82f6"/>
     </linearGradient>
   </defs>
-  <rect width="%d" height="%d" fill="url(#bg)" rx="4"/>
-  <circle cx="44" cy="38" r="22" fill="#ffffff" opacity="0.13"/>
-  <circle cx="182" cy="94" r="28" fill="#ffffff" opacity="0.10"/>
-  <path d="M 22 104 Q 66 76 120 96 T 218 82" stroke="#ffffff" stroke-width="2" fill="none" opacity="0.25"/>
-  <path d="M %d %d h %d v %d h -%d z M %d %d a 6 6 0 0 1 12 0 v 6 h -12 z"
-        fill="#1e293b" opacity="0.42"/>
+  <rect width="%d" height="%d" fill="url(#bg)"/>
+  <path d="M 0 34 H 240 M 0 96 H 240 M 58 0 V 134 M 176 0 V 134" stroke="#ffffff" opacity="0.07"/>
+  <path d="M 0 0 H 96 L 0 64 Z" fill="#ffffff" opacity="0.06"/>
+  <rect x="%d" y="%d" width="%d" height="%d" fill="#0f172a" opacity="0.42"/>
 </svg>`,
 		sliderWidth, sliderHeight, sliderWidth, sliderHeight,
-		gapX, gapY, sliderPieceSize, sliderPieceSize, sliderPieceSize,
-		gapX+sliderPieceSize/2-6, gapY-6)
+		gapX, gapY, sliderPieceSize, sliderPieceSize)
 }
 
 // pieceSVG 拼图片块（同轮廓，亮色描边）。
 func pieceSVG() string {
-	return fmt.Sprintf(`<svg width="%d" height="%d" viewBox="0 -6 %d %d" xmlns="http://www.w3.org/2000/svg">
+	return fmt.Sprintf(`<svg width="%d" height="%d" xmlns="http://www.w3.org/2000/svg">
   <defs><filter id="lbHvShadow" x="-30%%" y="-30%%" width="160%%" height="160%%"><feDropShadow dx="0" dy="2" stdDeviation="2" flood-color="#0f172a" flood-opacity=".25"/></filter></defs>
-  <path d="M 0 0 h %d v %d h -%d z M %d -6 a 6 6 0 0 1 12 0 v 6 h -12 z"
-        fill="#ffffff" fill-opacity="0.96" stroke="#ffffff" stroke-width="1.5" filter="url(#lbHvShadow)"/>
-</svg>`, sliderPieceSize, sliderPieceSize+6, sliderPieceSize, sliderPieceSize+6, sliderPieceSize, sliderPieceSize+6, sliderPieceSize, sliderPieceSize/2-6)
+  <rect width="%d" height="%d" fill="#ffffff" fill-opacity="0.95" filter="url(#lbHvShadow)"/>
+</svg>`, sliderPieceSize, sliderPieceSize, sliderPieceSize, sliderPieceSize)
 }
 
 // humanSliderVerifyPath 滑块校验端点路径。
@@ -212,12 +208,12 @@ const sliderWidgetHTML = `<div class="lb-hv-widget" style="width:240px;max-width
 <style>
 .lb-hv-widget *{box-sizing:border-box}
 .lb-hv-widget .lb-hv-puzzle{position:relative;width:240px;height:134px;margin:0 auto 14px}
-.lb-hv-widget .lb-hv-puzzle>svg{display:block;width:240px;height:134px;border-radius:4px}
+.lb-hv-widget .lb-hv-puzzle>svg{display:block;width:240px;height:134px;border-radius:0}
 .lb-hv-widget .lb-hv-piece{position:absolute;top:60px;left:0;cursor:grab;line-height:0}
 .lb-hv-widget .lb-hv-piece:active{cursor:grabbing}
-.lb-hv-widget .lb-hv-track{position:relative;width:240px;height:34px;background:#eef2f7;border:1px solid #dbe4f0;border-radius:4px;user-select:none;touch-action:none;overflow:hidden}
+.lb-hv-widget .lb-hv-track{position:relative;width:240px;height:34px;background:#eef2f7;border:1px solid #dbe4f0;border-radius:0;user-select:none;touch-action:none;overflow:hidden}
 .lb-hv-widget .lb-hv-fill{position:absolute;left:0;top:0;bottom:0;background:#2563eb;opacity:.16;width:0}
-.lb-hv-widget .lb-hv-handle{position:absolute;top:3px;left:0;width:34px;height:28px;background:#2563eb;color:#fff;border-radius:3px;display:flex;align-items:center;justify-content:center;font-size:18px;cursor:grab;box-shadow:0 2px 6px rgba(37,99,235,.25)}
+.lb-hv-widget .lb-hv-handle{position:absolute;top:3px;left:0;width:34px;height:28px;background:#2563eb;color:#fff;border-radius:0;display:flex;align-items:center;justify-content:center;font-size:18px;cursor:grab;box-shadow:0 2px 6px rgba(37,99,235,.25)}
 .lb-hv-widget .lb-hv-handle:active{cursor:grabbing}
 .lb-hv-widget .lb-hv-status{text-align:center;font-size:13px;min-height:20px;margin-top:10px;color:#64748b}
 .lb-hv-widget .lb-hv-ok{color:#15803d}.lb-hv-widget .lb-hv-fail{color:#dc2626}
@@ -257,9 +253,9 @@ const sliderChallengePage = `<!DOCTYPE html>
   .puzzle svg { display: block; }
   .piece { position: absolute; top: %dpx; left: 0; transition: none; cursor: grab; }
   .piece:active { cursor: grabbing; }
-  .track { position: relative; height: 40px; background: #e2e8f0; border-radius: 4px; user-select: none; }
-  .track-fill { position: absolute; left: 0; top: 0; bottom: 0; background: #4299e1; border-radius: 4px; opacity: .25; width: 0; }
-  .handle { position: absolute; top: 3px; left: 0; width: 34px; height: 28px; background: #4299e1; color: #fff; border-radius: 4px; display: flex; align-items: center; justify-content: center; font-size: 18px; cursor: grab; }
+  .track { position: relative; height: 34px; background: #e2e8f0; border-radius: 0; user-select: none; }
+  .track-fill { position: absolute; left: 0; top: 0; bottom: 0; background: #4299e1; border-radius: 0; opacity: .25; width: 0; }
+  .handle { position: absolute; top: 3px; left: 0; width: 34px; height: 28px; background: #4299e1; color: #fff; border-radius: 0; display: flex; align-items: center; justify-content: center; font-size: 18px; cursor: grab; }
   .handle:active { cursor: grabbing; }
   .hint { text-align: center; font-size: 12px; color: #718096; margin-top: 12px; }
   .status { text-align: center; font-size: 13px; min-height: 20px; margin-top: 10px; }
