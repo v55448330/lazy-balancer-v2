@@ -192,3 +192,24 @@ func TestChallengeResponseSplitsByRequestType(t *testing.T) {
 		}
 	}
 }
+
+// 直接封禁沿用拦截页/状态码：banResponse 必须输出配置的页面与状态码。
+func TestBanResponse_usesConfiguredPageAndStatus(t *testing.T) {
+	h := &HumanHandler{HumanConfig: HumanConfig{
+		BanStatusCode: 451,
+		BanPageHTML:   "<html><body>custom ban</body></html>",
+		BanPageType:   "text/html; charset=utf-8",
+	}}
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/", nil)
+	h.banResponse(recorder, request, "203.0.113.9", "test")
+	if recorder.Code != 451 {
+		t.Fatalf("status=%d, want 451", recorder.Code)
+	}
+	if got := recorder.Header().Get("Content-Type"); got != "text/html; charset=utf-8" {
+		t.Fatalf("Content-Type=%q", got)
+	}
+	if !strings.Contains(recorder.Body.String(), "custom ban") {
+		t.Fatalf("body=%q, want configured page", recorder.Body.String())
+	}
+}

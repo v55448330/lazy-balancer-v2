@@ -149,7 +149,7 @@ func humanPolicyMerged(policies []*models.SecurityPolicy) (mode, typ string, ttl
 
 // buildHumanHandler 阶段 3 人机验证 handler 渲染：有任一策略启用人机验证
 // （mode != off）即注入；CC 检测阈值随配置下发（auto 模式插件内判定）。
-func buildHumanHandler(ruleCaddyID string, policies []*models.SecurityPolicy) map[string]interface{} {
+func buildHumanHandler(ruleCaddyID string, policies []*models.SecurityPolicy, banPage ...string) map[string]interface{} {
 	mode, typ, ttl, exemptPaths := humanPolicyMerged(policies)
 	if mode == "off" {
 		return nil
@@ -160,20 +160,37 @@ func buildHumanHandler(ruleCaddyID string, policies []*models.SecurityPolicy) ma
 		return nil
 	}
 	cc := loadCCConfig(policies)
+	banStatus := 0
+	for _, p := range policies {
+		if p != nil && p.CCDetectEnabled && p.BlockStatusCode > 0 {
+			banStatus = p.BlockStatusCode
+			break
+		}
+	}
+	banHTML, banType := "", ""
+	if len(banPage) > 0 {
+		banHTML = banPage[0]
+	}
+	if len(banPage) > 1 {
+		banType = banPage[1]
+	}
 	return map[string]interface{}{
-		"handler":       "lb_human",
-		"mode":          mode,
-		"type":          typ,
-		"ttl":           ttl,
-		"secret":        getHumanSecret(),
-		"cc_enabled":    cc.Enabled,
-		"cc_rps_limit":  cc.RPSLimit,
-		"cc_window_sec": cc.WindowSec,
-		"cc_4xx_ratio":  cc.Ratio4xx,
-		"cc_session":    cc.SessionAnomaly,
-		"cc_session_ua": cc.SessionUAThresh,
-		"cc_response":   cc.Response,
-		"exempt_paths":  exemptPaths,
-		"rule_id":       ruleCaddyID,
+		"handler":         "lb_human",
+		"mode":            mode,
+		"type":            typ,
+		"ttl":             ttl,
+		"secret":          getHumanSecret(),
+		"cc_enabled":      cc.Enabled,
+		"cc_rps_limit":    cc.RPSLimit,
+		"cc_window_sec":   cc.WindowSec,
+		"cc_4xx_ratio":    cc.Ratio4xx,
+		"cc_session":      cc.SessionAnomaly,
+		"cc_session_ua":   cc.SessionUAThresh,
+		"cc_response":     cc.Response,
+		"ban_status_code": banStatus,
+		"ban_page_html":   banHTML,
+		"ban_page_type":   banType,
+		"exempt_paths":    exemptPaths,
+		"rule_id":         ruleCaddyID,
 	}
 }

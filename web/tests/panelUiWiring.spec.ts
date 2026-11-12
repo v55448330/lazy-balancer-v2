@@ -516,11 +516,14 @@ test('辅助端点部分失败必须有可见横幅', () => {
   }
 })
 
-test('阶段 2 不再展示拦截页/429 文案（配额限流下线）', () => {
+test('阶段 2 复用拦截页步骤：直接封禁页面/状态码，挑战页只读说明', () => {
   const text = code('src/views/security/SecurityPolicies.vue')
   assert.doesNotMatch(text, /noPageStage2|noPageRateLimit|rateLimitFacet/)
-  assert.match(text, /editorPolicyType\.value !== 'stage0' && editorPolicyType\.value !== 'stage2'/, '阶段 2 步骤不包含拦截页')
+  assert.match(text, /steps\.push\(WIZARD_STEP\.BLOCK_PAGE\)/, '阶段 2 必须重新包含拦截页步骤')
+  assert.match(text, /v-model="form\.cc_response"/, 'CC 响应选择在拦截页步骤')
+  assert.match(text, /challengePageBuiltin/, '挑战页在内置插件渲染，只读说明')
   assert.doesNotMatch(code('src/locales/zh/security.ts'), /429 空响应体/, '阶段 2 429 专属文案必须移除')
+  assert.match(code('src/locales/zh/security.ts'), /系统内置挑战页（lb_human 渲染）/)
 })
 
 test('安全规则预设项可键盘操作（折叠头 button + 标签/模板键盘语义）', () => {

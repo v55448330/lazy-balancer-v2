@@ -26,13 +26,13 @@ func TestStage2Policy_blockPageIDRoundTrip(t *testing.T) {
 		t.Fatalf("create status=%d body=%s, want 200", create.Code, create.Body.String())
 	}
 
-	// Then：阶段 2 拦截页/状态码随配额限流下线一并归零（CC ban 为插件固定 403）
+	// Then：阶段 2 保留拦截页（直接封禁时消费）；未设置状态码保持 0（默认 403）
 	var pageID, statusCode int
 	if err := db.DB.QueryRow(`SELECT COALESCE(block_page_id,0), COALESCE(block_status_code,0) FROM security_policies WHERE name='限流带页策略'`).Scan(&pageID, &statusCode); err != nil {
 		t.Fatal(err)
 	}
-	if pageID != 0 {
-		t.Fatalf("block_page_id=%d, want 0（阶段 2 不再消费拦截页）", pageID)
+	if pageID != 9001 {
+		t.Fatalf("block_page_id=%d, want 9001（阶段 2 直接封禁沿用拦截页）", pageID)
 	}
 	if statusCode != 0 {
 		t.Fatalf("block_status_code=%d, want 0", statusCode)
@@ -102,10 +102,14 @@ func TestUpdateSecurityPolicy_blockStatusCodeNormalization(t *testing.T) {
 		}
 	})
 
-	t.Run("stage2 限流恒 429（状态码归零）", func(t *testing.T) {
+	t.Run("stage2 直接封禁沿用页面状态码", func(t *testing.T) {
 		setupSecurityPolicyTestDB(t)
 		router := newSecurityRouter(t)
-		id := createTestPolicy(t, router, map[string]any{"name": "rl-page", "policy_type": "stage2", "rate_limit_enabled": true, "rate_limit_rps": 100, "rate_limit_burst": 50, "block_page_id": 9001})
+		id := createTestPolicy(t, router, map[string]any{
+			"name": "cc-ban-page", "policy_type": "stage2",
+			"human_verify_mode": "force", "cc_detect_enabled": true,
+			"cc_response": "ban", "block_page_id": 9001,
+		})
 
 		rec := putJSON(t, router, fmt.Sprintf("/security/policies/%d", id), map[string]any{"block_status_code": 404})
 		if rec.Code != http.StatusOK {
@@ -116,8 +120,8 @@ func TestUpdateSecurityPolicy_blockStatusCodeNormalization(t *testing.T) {
 		if err := db.DB.QueryRow(`SELECT COALESCE(block_status_code,0) FROM security_policies WHERE id=?`, id).Scan(&status); err != nil {
 			t.Fatal(err)
 		}
-		if status != 0 {
-			t.Fatalf("stage2 block_status_code=%d, want 0（限流拦截恒 429）", status)
+		if status != 404 {
+			t.Fatalf("stage2 ban block_status_code=%d, want 404（沿用拦截页状态码）", status)
 		}
 	})
 }

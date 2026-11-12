@@ -5889,18 +5889,6 @@ func retireRateLimitQuota() error {
 			return fmt.Errorf("failed to drop retired security_policies.%s: %w", column, err)
 		}
 	}
-	var hasPolicyType int
-	if err := DB.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('security_policies') WHERE name='policy_type'`).Scan(&hasPolicyType); err != nil {
-		return fmt.Errorf("probe security_policies.policy_type: %w", err)
-	}
-	if hasPolicyType == 0 {
-		return nil
-	}
-	if _, err := execMigrationWriteIfNeeded(updateWhere("security_policies",
-		"block_page_id=0, block_status_code=0",
-		"policy_type='stage2' AND (COALESCE(block_page_id,0)<>0 OR COALESCE(block_status_code,0)<>0)")); err != nil {
-		return fmt.Errorf("failed to retire stage2 block page: %w", err)
-	}
 	return nil
 }
 

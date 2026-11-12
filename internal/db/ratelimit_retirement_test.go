@@ -3,7 +3,7 @@ package db
 import "testing"
 
 // 配额限流下线迁移：legacy 库的 rate_limit_* 列必须被物理删除且幂等；
-// 阶段 2 拦截页/状态码归零（CC ban 为插件固定 403）。
+// 阶段 2 拦截页/状态码保留（直接封禁沿用）。
 func TestRetireRateLimitQuota_dropsLegacyColumns(t *testing.T) {
 	database := openMigrationTestDB(t)
 	if err := createTables(); err != nil {
@@ -43,8 +43,8 @@ func TestRetireRateLimitQuota_dropsLegacyColumns(t *testing.T) {
 	if err := database.QueryRow(`SELECT block_page_id, block_status_code FROM security_policies WHERE name='legacy-cc'`).Scan(&pageID, &status); err != nil {
 		t.Fatal(err)
 	}
-	if pageID != 0 || status != 0 {
-		t.Fatalf("阶段 2 拦截页/状态码未归零: page=%d status=%d", pageID, status)
+	if pageID != 9001 || status != 429 {
+		t.Fatalf("限流下线不得改写阶段 2 拦截页/状态码: page=%d status=%d", pageID, status)
 	}
 	// 幂等：列已不存在时再次执行不报错。
 	if err := retireRateLimitQuota(); err != nil {

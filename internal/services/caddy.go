@@ -4620,7 +4620,17 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig, sec
 		// 阶段 2 = CC 防护（2026-11-12 用户裁定；配额限流已下线）：
 		// 仅人机挑战，挑战页挡住的脚本不消耗阶段 3 WAF 评估资源。
 		if rule.Protocol == "http" && len(policies) > 0 {
-			if humanHandler := buildHumanHandler(rule.CaddyID, policies); humanHandler != nil {
+			banContent, banType := "", ""
+			if ctx != nil {
+				for _, policy := range policies {
+					if policy != nil && policy.CCDetectEnabled && policy.BlockPageID > 0 {
+						banContent = ctx.blockPageByID[policy.BlockPageID]
+						banType = ctx.blockPageTypeByID[policy.BlockPageID]
+						break
+					}
+				}
+			}
+			if humanHandler := buildHumanHandler(rule.CaddyID, policies, banContent, banType); humanHandler != nil {
 				securityChain = append(securityChain, humanHandler)
 			}
 		}

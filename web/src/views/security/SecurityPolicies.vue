@@ -713,13 +713,7 @@
                 <span class="form-tip-inline">{{ t('app.security.policies.human.ccEnabledTip') }}</span>
               </el-form-item>
               <template v-if="form.cc_detect_enabled">
-                <el-form-item :label="t('app.security.policies.human.ccResponseLabel')">
-                  <el-radio-group v-model="form.cc_response">
-                    <el-radio-button value="verify">{{ t('app.security.policies.human.ccResponseVerify') }}</el-radio-button>
-                    <el-radio-button value="ban">{{ t('app.security.policies.human.ccResponseBan') }}</el-radio-button>
-                  </el-radio-group>
-                  <div class="form-tip-line">{{ t('app.security.policies.human.ccResponseTip') }}</div>
-                </el-form-item>
+
                 <el-form-item :label="t('app.security.policies.human.ccRpsLabel')">
                   <el-input-number v-model="form.cc_rps_limit" :min="1" :max="100000" style="width: 120px" />
                   <span class="form-tip-inline">{{ t('app.security.policies.human.ccRpsPer') }}</span>
@@ -802,17 +796,28 @@
             </div>
           </div>
           <el-form :model="form" :label-width="$flw('100px')" :disabled="formFrozen">
-            <el-form-item :label="t('app.security.policies.bp.pageLabel')">
+            <el-form-item v-if="editorPolicyType === 'stage2'" :label="t('app.security.policies.human.ccResponseLabel')">
+              <el-radio-group v-model="form.cc_response">
+                <el-radio-button value="verify">{{ t('app.security.policies.human.ccResponseVerify') }}</el-radio-button>
+                <el-radio-button value="ban">{{ t('app.security.policies.human.ccResponseBan') }}</el-radio-button>
+              </el-radio-group>
+              <div class="form-tip-line">{{ t('app.security.policies.human.ccResponseTip') }}</div>
+            </el-form-item>
+            <el-form-item v-if="editorPolicyType === 'stage2' && form.cc_response !== 'ban'" :label="t('app.security.policies.human.challengePageLabel')">
+              <el-tag type="info" size="small" effect="plain">{{ t('app.security.policies.human.challengePageBuiltin') }}</el-tag>
+              <div class="form-tip-line">{{ t('app.security.policies.human.challengePageTip') }}</div>
+            </el-form-item>
+            <el-form-item v-if="editorPolicyType !== 'stage2' || form.cc_response === 'ban'" :label="t('app.security.policies.bp.pageLabel')">
               <el-select v-model="form.block_page_id" :placeholder="t('app.security.policies.bp.pagePlaceholder')" style="width: 100%">
                 <el-option :value="0" :label="t('app.security.policies.bp.noPageDefault')" />
                 <el-option v-for="p in blockPages" :key="p.id" :label="pageLabel(p)" :value="p.id" />
               </el-select>
-              <div v-if="form.block_page_id === 0" class="form-tip-line">{{ editorPolicyType === 'stage2' ? t('app.security.policies.bp.noPageTipStage2') : t('app.security.policies.bp.noPageTipDefault') }}</div>
+              <div v-if="form.block_page_id === 0" class="form-tip-line">{{ t('app.security.policies.bp.noPageTipDefault') }}</div>
               <div v-else class="form-tip-line">{{ t('app.security.policies.bp.manageTip') }}<AccessibleLink type="primary" @click="goToBlockPagesPage">{{ t('app.security.policies.common.goCreateEdit') }}</AccessibleLink></div>
               <!-- 归属汇总卡（用户验收裁定）：逐条重复提示收敛为单源汇总——主行 +
                    例外分面（限流/TCP/兜底差异，仅存在才渲染）+ 能力门行；
                    数据源复用绑定列表与 capableAttributions 单源，不平行实现。 -->
-              <div v-if="blockPageSummary" class="block-page-summary">
+              <div v-if="blockPageSummary && (editorPolicyType !== 'stage2' || form.cc_response === 'ban')" class="block-page-summary">
                 <div v-for="line in blockPageSummary.lines" :key="line.text" class="info-note-bar block-page-summary-line" :class="`is-${line.tone}`">
                   <el-icon class="block-page-summary-icon" :size="14">
                     <CircleCheckFilled v-if="line.tone === 'active'" />
@@ -823,19 +828,15 @@
                 </div>
               </div>
             </el-form-item>
-            <el-form-item v-if="editorPolicyType !== 'stage2'" :label="t('app.security.policies.bp.statusLabel')">
+            <el-form-item v-if="editorPolicyType !== 'stage2' || form.cc_response === 'ban'" :label="t('app.security.policies.bp.statusLabel')">
               <el-select v-model="form.block_status_code" style="width: 200px" :disabled="form.block_page_id === 0">
                 <el-option v-for="opt in STAGE_BLOCK_STATUS_OPTIONS" :key="opt.value" :value="opt.value" :label="opt.label" />
               </el-select>
               <span class="form-tip-inline">{{ form.block_page_id === 0 ? t('app.security.policies.bp.statusTipNoPage') : t('app.security.policies.bp.statusTipDefault') }}</span>
             </el-form-item>
-            <el-form-item v-else :label="t('app.security.policies.bp.statusLabel')" for="stage2-block-status-static">
-              <input type="text" id="stage2-block-status-static" aria-hidden="true" tabindex="-1" autocomplete="off" style="display:none">
-              <el-tag type="warning" size="small" effect="plain">429 Too Many Requests</el-tag>
-              <span class="form-tip-inline">{{ t('app.security.policies.bp.statusTipStage2') }}</span>
-            </el-form-item>
+
             <!-- 策略级响应方式：拦截页设置恒为双档（HTML + JSON），具体返回哪种在这里选。 -->
-            <el-form-item :label="t('app.security.policies.bp.responseLabel')">
+            <el-form-item v-if="editorPolicyType !== 'stage2' || form.cc_response === 'ban'" :label="t('app.security.policies.bp.responseLabel')">
               <el-radio-group v-model="form.block_response_mode" :disabled="form.block_page_id === 0">
                 <el-radio-button value="auto">{{ t('app.security.policies.bp.responseAuto') }}</el-radio-button>
                 <el-radio-button value="html">{{ t('app.security.policies.bp.responseHtml') }}</el-radio-button>
@@ -1863,7 +1864,7 @@ const visibleSteps = computed<readonly WizardStep[]>(() => {
   if (typeAllowsStage(3)) steps.push(WIZARD_STEP.WAF_RULES)
   // 阶段 0（直通/记录不拦截）无拦截页步骤；阶段 2 可配页（2026-09-25 用户裁定，
   // 状态码恒 429 不可改——步内状态码项按类型隐藏）
-  if (editorPolicyType.value !== 'stage0' && editorPolicyType.value !== 'stage2') steps.push(WIZARD_STEP.BLOCK_PAGE)
+  if (editorPolicyType.value !== 'stage0') steps.push(WIZARD_STEP.BLOCK_PAGE)
   steps.push(WIZARD_STEP.BINDINGS, WIZARD_STEP.PREVIEW)
   return steps
 })

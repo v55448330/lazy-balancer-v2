@@ -6200,9 +6200,9 @@ func outOfStageZeroFamilies(policyType string) []stageZeroFamily {
 	case models.PolicyTypeStage1:
 		return []stageZeroFamily{stageZeroModeOff, stageZeroCRSText, stageZeroWAFFlags, stageZeroIPWhitelist, stageZeroTrustDetection, stageZeroHuman}
 	case models.PolicyTypeStage2:
-		// CC 防护：突刺/4xx/多UA 阈值、人机挑战与豁免保留；配额限流已下线，
-		// 拦截页/状态码随 429 一起失效（CC ban 为插件固定 403），一并归零。
-		return []stageZeroFamily{stageZeroModeOff, stageZeroCRSText, stageZeroWAFFlags, stageZeroIPACL, stageZeroIPWhitelist, stageZeroIPBlacklist, stageZeroGeoIP, stageZeroGeoIPCrawler, stageZeroBlockPageAll, stageZeroTrustDetection}
+		// CC 防护：突刺/4xx/多UA 阈值、人机挑战与豁免保留；直接封禁沿用
+		// 拦截页步骤的页面/状态码（cc_response=ban 时消费）。
+		return []stageZeroFamily{stageZeroModeOff, stageZeroCRSText, stageZeroWAFFlags, stageZeroIPACL, stageZeroIPWhitelist, stageZeroIPBlacklist, stageZeroGeoIP, stageZeroGeoIPCrawler, stageZeroTrustDetection}
 	case models.PolicyTypeStage3:
 		// 内容防护（WAF）：保留 mode/CRS/自定义规则/拦截页；人机、CC、限流、
 		// 名单、地域、信任检测全部归零。
@@ -6239,7 +6239,7 @@ func normalizeBlockResponseMode(mode string) string {
 }
 
 func normalizeBlockStatusCode(statusCode int, policyType string, blockPageID int) int {
-	if policyType == models.PolicyTypeStage2 || blockPageID == 0 {
+	if blockPageID == 0 {
 		return 0
 	}
 	return statusCode
