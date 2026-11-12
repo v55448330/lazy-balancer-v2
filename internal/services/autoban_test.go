@@ -142,7 +142,7 @@ func entryValues(entries []models.IPListEntry) map[string]models.IPListEntry {
 // Then 计数从新窗口起算（固定桶重置），不与旧窗口累计。
 func TestAutobanCounter_fixedWindowResets(t *testing.T) {
 	f := installAutobanFixture(t, "2026-10-14 10:00:00")
-	setAutobanConfigRaw(t, true, 3, 5, "1h", "all", true)
+	setAutobanConfigRaw(t, true, 3, 5, "1h", "blocked,logged", true)
 
 	autobanObserveEvent("203.0.113.7", "blocked", "942100")
 	autobanObserveEvent("203.0.113.7", "blocked", "942100")
@@ -162,7 +162,7 @@ func TestAutobanCounter_fixedWindowResets(t *testing.T) {
 // Then 新键丢弃并告警一次；既有键不受影响继续累计。
 func TestAutobanCounter_capProtection(t *testing.T) {
 	installAutobanFixture(t, "2026-10-14 10:00:00")
-	setAutobanConfigRaw(t, true, 1, 5, "1h", "all", true)
+	setAutobanConfigRaw(t, true, 1, 5, "1h", "blocked,logged", true)
 	oldCap := autobanMaxTrackedIPs
 	autobanMaxTrackedIPs = 3
 	t.Cleanup(func() { autobanMaxTrackedIPs = oldCap })
@@ -211,7 +211,7 @@ func TestResetAutobanCounters_rearmsCapWarning(t *testing.T) {
 func TestAutobanObserve_gates(t *testing.T) {
 	t.Run("非主节点不喂", func(t *testing.T) {
 		installAutobanFixture(t, "2026-10-14 10:00:00")
-		setAutobanConfigRaw(t, true, 1, 5, "1h", "all", true)
+		setAutobanConfigRaw(t, true, 1, 5, "1h", "blocked,logged", true)
 		oldMaster := autobanIsMaster
 		autobanIsMaster = func() bool { return false }
 		t.Cleanup(func() { autobanIsMaster = oldMaster })
@@ -225,7 +225,7 @@ func TestAutobanObserve_gates(t *testing.T) {
 	})
 	t.Run("未启用不喂", func(t *testing.T) {
 		installAutobanFixture(t, "2026-10-14 10:00:00")
-		setAutobanConfigRaw(t, false, 1, 5, "1h", "all", true)
+		setAutobanConfigRaw(t, false, 1, 5, "1h", "blocked,logged", true)
 		autobanObserveEvent("203.0.113.1", "blocked", "942100")
 		autobanMu.Lock()
 		n := len(autobanWindows)
@@ -236,7 +236,7 @@ func TestAutobanObserve_gates(t *testing.T) {
 	})
 	t.Run("非WAF事件不喂", func(t *testing.T) {
 		installAutobanFixture(t, "2026-10-14 10:00:00")
-		setAutobanConfigRaw(t, true, 1, 5, "1h", "all", true)
+		setAutobanConfigRaw(t, true, 1, 5, "1h", "blocked,logged", true)
 		autobanObserveEvent("203.0.113.1", "blocked", "")
 		autobanMu.Lock()
 		n := len(autobanWindows)
@@ -282,7 +282,7 @@ func TestAutobanObserve_gates(t *testing.T) {
 // 仅 WAF 族（CRS/自定义规则）计数。
 func TestAutobanObserve_stage1PrecheckFamilyExcluded(t *testing.T) {
 	installAutobanFixture(t, "2026-10-14 10:00:00")
-	setAutobanConfigRaw(t, true, 1, 5, "1h", "all", true)
+	setAutobanConfigRaw(t, true, 1, 5, "1h", "blocked,logged", true)
 
 	autobanObserveBatch([]autobanFeedItem{
 		{IP: "203.0.113.10", Action: "logged", RuleTriggered: "810016"},
@@ -372,7 +372,7 @@ func TestAutobanStage3Eligible(t *testing.T) {
 // 改判三条路径统一经 autobanObserveBatch 咽喉点过滤）。
 func TestAutobanObserveBatch_stage1DoesNotCount(t *testing.T) {
 	installAutobanFixture(t, "2026-10-14 10:00:00")
-	setAutobanConfigRaw(t, true, 3, 5, "1h", "all", true)
+	setAutobanConfigRaw(t, true, 3, 5, "1h", "blocked,logged", true)
 
 	autobanObserveBatch([]autobanFeedItem{
 		{IP: "203.0.113.40", Action: "blocked", RuleTriggered: "2"},
@@ -394,7 +394,7 @@ func TestAutobanObserveBatch_stage1DoesNotCount(t *testing.T) {
 // 非豁免事件照常计数。
 func TestAutobanObserveBatch_trustExemptEventsDoNotCount(t *testing.T) {
 	installAutobanFixture(t, "2026-10-14 10:00:00")
-	setAutobanConfigRaw(t, true, 2, 5, "1h", "all", true)
+	setAutobanConfigRaw(t, true, 2, 5, "1h", "blocked,logged", true)
 
 	autobanObserveBatch([]autobanFeedItem{
 		{IP: "203.0.113.20", Action: "logged", RuleTriggered: "942100", TrustExempt: true},
@@ -417,7 +417,7 @@ func TestAutobanObserveBatch_trustExemptEventsDoNotCount(t *testing.T) {
 // 计数——否则数小时前的积压一次性到达即瞬时达标、批量误封。
 func TestAutobanObserveBatch_backlogOutsideWindowDoesNotCount(t *testing.T) {
 	installAutobanFixture(t, "2026-10-14 10:00:00")
-	setAutobanConfigRaw(t, true, 2, 5, "1h", "all", true)
+	setAutobanConfigRaw(t, true, 2, 5, "1h", "blocked,logged", true)
 	now := autobanNow()
 
 	autobanObserveBatch([]autobanFeedItem{
@@ -450,12 +450,12 @@ func TestAutobanConfig_validation(t *testing.T) {
 			t.Errorf("ValidAutobanDuration(%q)=true, want false", d)
 		}
 	}
-	for _, s := range []string{"blocked", "logged", "all"} {
+	for _, s := range []string{"blocked", "logged", "challenge_issued", "challenge_failed", "blocked,logged", "blocked,logged,challenge_issued,challenge_failed"} {
 		if !ValidAutobanScope(s) {
 			t.Errorf("ValidAutobanScope(%q)=false, want true", s)
 		}
 	}
-	for _, s := range []string{"", "deny", "BLOCKED"} {
+	for _, s := range []string{"", "all", "deny", "BLOCKED", "blocked,bogus", "blocked,blocked"} {
 		if ValidAutobanScope(s) {
 			t.Errorf("ValidAutobanScope(%q)=true, want false", s)
 		}
@@ -467,11 +467,11 @@ func TestAutobanConfig_validation(t *testing.T) {
 // Then 计数器清空（口径/窗口变更重置语义）；仅改其他字段不清空。
 func TestAutobanSetConfig_resetsCountersOnWindowOrScopeChange(t *testing.T) {
 	installAutobanFixture(t, "2026-10-14 10:00:00")
-	setAutobanConfigRaw(t, true, 100, 5, "1h", "all", true)
+	setAutobanConfigRaw(t, true, 100, 5, "1h", "blocked,logged", true)
 	autobanObserveEvent("203.0.113.1", "blocked", "942100")
 
 	// 同值写（仅改阈值）→ 不清空
-	if err := SetAutobanConfig(AutobanConfig{Enabled: true, Threshold: 50, WindowMinutes: 5, Duration: "1h", Scope: "all", DryRun: true}); err != nil {
+	if err := SetAutobanConfig(AutobanConfig{Enabled: true, Threshold: 50, WindowMinutes: 5, Duration: "1h", Scope: "blocked,logged", DryRun: true}); err != nil {
 		t.Fatalf("SetAutobanConfig: %v", err)
 	}
 	autobanMu.Lock()
@@ -482,7 +482,7 @@ func TestAutobanSetConfig_resetsCountersOnWindowOrScopeChange(t *testing.T) {
 	}
 
 	// 变更窗口 → 清空
-	if err := SetAutobanConfig(AutobanConfig{Enabled: true, Threshold: 50, WindowMinutes: 10, Duration: "1h", Scope: "all", DryRun: true}); err != nil {
+	if err := SetAutobanConfig(AutobanConfig{Enabled: true, Threshold: 50, WindowMinutes: 10, Duration: "1h", Scope: "blocked,logged", DryRun: true}); err != nil {
 		t.Fatalf("SetAutobanConfig window: %v", err)
 	}
 	autobanMu.Lock()
@@ -510,7 +510,7 @@ func TestAutobanSetConfig_resetsCountersOnWindowOrScopeChange(t *testing.T) {
 // 误以为调低无效）。
 func TestAutobanSetConfig_recomputesReachedOnThresholdChange(t *testing.T) {
 	installAutobanFixture(t, "2026-10-14 10:00:00")
-	setAutobanConfigRaw(t, true, 5, 5, "1h", "all", true)
+	setAutobanConfigRaw(t, true, 5, 5, "1h", "blocked,logged", true)
 	for range 3 {
 		autobanObserveEvent("203.0.113.9", "blocked", "942100")
 	}
@@ -518,14 +518,14 @@ func TestAutobanSetConfig_recomputesReachedOnThresholdChange(t *testing.T) {
 		t.Fatalf("reached=%d, want 0（3 次 < 阈值 5）", got)
 	}
 	// 调低阈值到 2：既有计数桶不丢，Reached 立即按新阈值成立
-	if err := SetAutobanConfig(AutobanConfig{Enabled: true, Threshold: 2, WindowMinutes: 5, Duration: "1h", Scope: "all", DryRun: true}); err != nil {
+	if err := SetAutobanConfig(AutobanConfig{Enabled: true, Threshold: 2, WindowMinutes: 5, Duration: "1h", Scope: "blocked,logged", DryRun: true}); err != nil {
 		t.Fatalf("SetAutobanConfig: %v", err)
 	}
 	if got := autobanReachedCount(); got != 1 {
 		t.Fatalf("reached=%d, want 1（调低阈值后已达标 IP 必须立即计入）", got)
 	}
 	// 调高阈值到 10：同一计数桶回落到未达标
-	if err := SetAutobanConfig(AutobanConfig{Enabled: true, Threshold: 10, WindowMinutes: 5, Duration: "1h", Scope: "all", DryRun: true}); err != nil {
+	if err := SetAutobanConfig(AutobanConfig{Enabled: true, Threshold: 10, WindowMinutes: 5, Duration: "1h", Scope: "blocked,logged", DryRun: true}); err != nil {
 		t.Fatalf("SetAutobanConfig raise: %v", err)
 	}
 	if got := autobanReachedCount(); got != 0 {
@@ -536,7 +536,7 @@ func TestAutobanSetConfig_recomputesReachedOnThresholdChange(t *testing.T) {
 func TestAutobanSetConfig_syncsEngineLoop(t *testing.T) {
 	// Given：autoban 业务关闭、调度关闭。
 	te := newWireTestEngine(t)
-	setAutobanConfigRaw(t, false, 1, 5, "1h", "all", true)
+	setAutobanConfigRaw(t, false, 1, 5, "1h", "blocked,logged", true)
 	te.StopLoop(AutobanTaskID)
 	loopOn := func() bool {
 		meta, ok := te.Lookup(AutobanTaskID)
@@ -550,14 +550,14 @@ func TestAutobanSetConfig_syncsEngineLoop(t *testing.T) {
 	}
 
 	// When/Then：服务写侧启用立即开调度。
-	if err := SetAutobanConfig(AutobanConfig{Enabled: true, Threshold: 1, WindowMinutes: 5, Duration: "1h", Scope: "all", DryRun: true}); err != nil {
+	if err := SetAutobanConfig(AutobanConfig{Enabled: true, Threshold: 1, WindowMinutes: 5, Duration: "1h", Scope: "blocked,logged", DryRun: true}); err != nil {
 		t.Fatal(err)
 	}
 	if !loopOn() {
 		t.Error("SetAutobanConfig 启用后 LoopOn=false，业务与调度分叉")
 	}
 	// And：服务写侧禁用立即停调度。
-	if err := SetAutobanConfig(AutobanConfig{Enabled: false, Threshold: 1, WindowMinutes: 5, Duration: "1h", Scope: "all", DryRun: true}); err != nil {
+	if err := SetAutobanConfig(AutobanConfig{Enabled: false, Threshold: 1, WindowMinutes: 5, Duration: "1h", Scope: "blocked,logged", DryRun: true}); err != nil {
 		t.Fatal(err)
 	}
 	if loopOn() {
@@ -568,11 +568,11 @@ func TestAutobanSetConfig_syncsEngineLoop(t *testing.T) {
 func TestAutobanSetConfig_rejectsOutOfRange(t *testing.T) {
 	installAutobanFixture(t, "2026-10-14 10:00:00")
 	cases := []AutobanConfig{
-		{Enabled: true, Threshold: 0, WindowMinutes: 5, Duration: "1h", Scope: "all", DryRun: true},
-		{Enabled: true, Threshold: 10001, WindowMinutes: 5, Duration: "1h", Scope: "all", DryRun: true},
-		{Enabled: true, Threshold: 100, WindowMinutes: 0, Duration: "1h", Scope: "all", DryRun: true},
-		{Enabled: true, Threshold: 100, WindowMinutes: 61, Duration: "1h", Scope: "all", DryRun: true},
-		{Enabled: true, Threshold: 100, WindowMinutes: 5, Duration: "2h", Scope: "all", DryRun: true},
+		{Enabled: true, Threshold: 0, WindowMinutes: 5, Duration: "1h", Scope: "blocked,logged", DryRun: true},
+		{Enabled: true, Threshold: 10001, WindowMinutes: 5, Duration: "1h", Scope: "blocked,logged", DryRun: true},
+		{Enabled: true, Threshold: 100, WindowMinutes: 0, Duration: "1h", Scope: "blocked,logged", DryRun: true},
+		{Enabled: true, Threshold: 100, WindowMinutes: 61, Duration: "1h", Scope: "blocked,logged", DryRun: true},
+		{Enabled: true, Threshold: 100, WindowMinutes: 5, Duration: "2h", Scope: "blocked,logged", DryRun: true},
 		{Enabled: true, Threshold: 100, WindowMinutes: 5, Duration: "1h", Scope: "deny", DryRun: true},
 	}
 	for i, cfg := range cases {
@@ -586,11 +586,11 @@ func TestAutobanSetConfig_rejectsOutOfRange(t *testing.T) {
 
 func TestAutobanEnabledFn(t *testing.T) {
 	installAutobanFixture(t, "2026-10-14 10:00:00")
-	setAutobanConfigRaw(t, false, 100, 5, "1h", "all", true)
+	setAutobanConfigRaw(t, false, 100, 5, "1h", "blocked,logged", true)
 	if AutobanEnabled() {
 		t.Fatal("autoban_enabled=0 时 AutobanEnabled() 应为 false")
 	}
-	setAutobanConfigRaw(t, true, 100, 5, "1h", "all", true)
+	setAutobanConfigRaw(t, true, 100, 5, "1h", "blocked,logged", true)
 	if !AutobanEnabled() {
 		t.Fatal("autoban_enabled=1 时 AutobanEnabled() 应为 true")
 	}
@@ -619,14 +619,14 @@ func seedPresetEntries(t *testing.T, entries []models.IPListEntry) {
 // Then 到期条目清除、手动条目保留、已在名单 IP 不重复追加、新 IP 带到期时间追加。
 func TestAutobanMerge_expiryManualAndNewEntries(t *testing.T) {
 	f := installAutobanFixture(t, "2026-10-14 10:00:00")
-	setAutobanConfigRaw(t, true, 1, 5, "1h", "all", false)
+	setAutobanConfigRaw(t, true, 1, 5, "1h", "blocked,logged", false)
 	seedPresetEntries(t, []models.IPListEntry{
 		{Value: "198.51.100.1", Remark: autobanEntryRemark, CreatedAt: "2026-10-13 10:00:00", ExpiresAt: "2026-10-14 09:00:00"}, // 已到期
 		{Value: "198.51.100.2", Remark: "事件处置", CreatedAt: "2026-10-13 10:00:00"},                                               // 手动条目
 		{Value: "198.51.100.3", Remark: autobanEntryRemark, CreatedAt: "2026-10-14 09:30:00", ExpiresAt: "2026-10-14 10:30:00"}, // 未到期
 	})
 
-	out, err := autobanMergeEntries(AutobanConfig{Enabled: true, Threshold: 1, WindowMinutes: 5, Duration: "1h", Scope: "all", DryRun: false},
+	out, err := autobanMergeEntries(AutobanConfig{Enabled: true, Threshold: 1, WindowMinutes: 5, Duration: "1h", Scope: "blocked,logged", DryRun: false},
 		[]AutobanSuggestion{
 			{IP: "198.51.100.3", Count: 10},  // 已在名单→跳过
 			{IP: "203.0.113.10", Count: 120}, // 新封
@@ -678,8 +678,8 @@ func TestAutobanMerge_expiryManualAndNewEntries(t *testing.T) {
 // Then merge 重新封禁该 IP（带新 created_at/expires_at）。
 func TestAutobanMerge_reQualifiesAfterManualDelete(t *testing.T) {
 	installAutobanFixture(t, "2026-10-14 10:00:00")
-	setAutobanConfigRaw(t, true, 1, 5, "1h", "all", false)
-	cfg := AutobanConfig{Enabled: true, Threshold: 1, WindowMinutes: 5, Duration: "1h", Scope: "all", DryRun: false}
+	setAutobanConfigRaw(t, true, 1, 5, "1h", "blocked,logged", false)
+	cfg := AutobanConfig{Enabled: true, Threshold: 1, WindowMinutes: 5, Duration: "1h", Scope: "blocked,logged", DryRun: false}
 	candidates := []AutobanSuggestion{{IP: "203.0.113.9", Count: 10}}
 
 	// 封禁中：已在名单 → 不重复追加
@@ -717,7 +717,7 @@ func TestAutobanMerge_reQualifiesAfterManualDelete(t *testing.T) {
 // 挤永久条目。
 func TestAutobanMerge_evictsEarliestExpiringAutobanEntries(t *testing.T) {
 	installAutobanFixture(t, "2026-10-14 10:00:00")
-	setAutobanConfigRaw(t, true, 1, 5, "1h", "all", false)
+	setAutobanConfigRaw(t, true, 1, 5, "1h", "blocked,logged", false)
 	oldCap := AutobanListEntryCap
 	t.Cleanup(func() { AutobanListEntryCap = oldCap })
 
@@ -729,7 +729,7 @@ func TestAutobanMerge_evictsEarliestExpiringAutobanEntries(t *testing.T) {
 			{Value: "198.51.100.4", Remark: autobanEntryRemark, ExpiresAt: "2026-10-14 11:00:00"}, // 自动，最早到期
 			{Value: "198.51.100.6", Remark: autobanEntryRemark, CreatedAt: "2026-10-13 10:00:00"}, // 自动，永久
 		})
-		out, err := autobanMergeEntries(AutobanConfig{Enabled: true, Threshold: 1, WindowMinutes: 5, Duration: "1h", Scope: "all", DryRun: false},
+		out, err := autobanMergeEntries(AutobanConfig{Enabled: true, Threshold: 1, WindowMinutes: 5, Duration: "1h", Scope: "blocked,logged", DryRun: false},
 			[]AutobanSuggestion{{IP: "203.0.113.10", Count: 120}})
 		if err != nil {
 			t.Fatalf("merge: %v", err)
@@ -758,7 +758,7 @@ func TestAutobanMerge_evictsEarliestExpiringAutobanEntries(t *testing.T) {
 			{Value: "198.51.100.2", Remark: "事件处置"},                                               // 手动
 			{Value: "198.51.100.7", Remark: autobanEntryRemark, CreatedAt: "2026-10-13 08:00:00"}, // 自动，永久
 		})
-		out, err := autobanMergeEntries(AutobanConfig{Enabled: true, Threshold: 1, WindowMinutes: 5, Duration: "permanent", Scope: "all", DryRun: false},
+		out, err := autobanMergeEntries(AutobanConfig{Enabled: true, Threshold: 1, WindowMinutes: 5, Duration: "permanent", Scope: "blocked,logged", DryRun: false},
 			[]AutobanSuggestion{{IP: "203.0.113.10", Count: 120}})
 		if err != nil {
 			t.Fatalf("merge: %v", err)
@@ -794,7 +794,7 @@ func TestAutobanMerge_reportsEvictedIPs(t *testing.T) {
 		{Value: "198.51.100.3", Remark: autobanEntryRemark, ExpiresAt: "2026-10-14 12:00:00"}, // 晚到期
 		{Value: "198.51.100.4", Remark: autobanEntryRemark, ExpiresAt: "2026-10-14 11:00:00"}, // 最早到期→被挤
 	})
-	out, err := autobanMergeEntries(AutobanConfig{Enabled: true, Threshold: 1, WindowMinutes: 5, Duration: "1h", Scope: "all", DryRun: false},
+	out, err := autobanMergeEntries(AutobanConfig{Enabled: true, Threshold: 1, WindowMinutes: 5, Duration: "1h", Scope: "blocked,logged", DryRun: false},
 		[]AutobanSuggestion{{IP: "203.0.113.10", Count: 120}})
 	if err != nil {
 		t.Fatalf("merge: %v", err)
@@ -814,7 +814,7 @@ func TestAutobanMerge_reportsEvictedIPs(t *testing.T) {
 // 「挤出→重封→再挤出」轮转，本钉测必红）。
 func TestAutobanRunCycle_evictedIPBucketClearedNoRotation(t *testing.T) {
 	f := installAutobanFixture(t, "2026-10-14 10:00:00")
-	setAutobanConfigRaw(t, true, 3, 60, "1h", "all", false)
+	setAutobanConfigRaw(t, true, 3, 60, "1h", "blocked,logged", false)
 	oldCap := AutobanListEntryCap
 	AutobanListEntryCap = 1
 	t.Cleanup(func() { AutobanListEntryCap = oldCap })
@@ -867,7 +867,7 @@ func TestAutobanRunCycle_evictedIPBucketClearedNoRotation(t *testing.T) {
 // +「等 N 个」（N=总数），第 11/12 个不逐一点名。
 func TestAutobanRunCycle_capacityConvergenceListsEvictedIdentities(t *testing.T) {
 	installAutobanFixture(t, "2026-10-14 10:00:00")
-	setAutobanConfigRaw(t, true, 1, 5, "1h", "all", false)
+	setAutobanConfigRaw(t, true, 1, 5, "1h", "blocked,logged", false)
 	oldCap := AutobanListEntryCap
 	AutobanListEntryCap = 1
 	t.Cleanup(func() { AutobanListEntryCap = oldCap })
@@ -1018,7 +1018,7 @@ func TestAutobanReloadNote_triState(t *testing.T) {
 
 func TestAutobanRunCycle_dryRunStoresSuggestionsOnly(t *testing.T) {
 	installAutobanFixture(t, "2026-10-14 10:00:00")
-	setAutobanConfigRaw(t, true, 2, 5, "1h", "all", true)
+	setAutobanConfigRaw(t, true, 2, 5, "1h", "blocked,logged", true)
 	autobanObserveEvent("203.0.113.1", "blocked", "942100")
 	autobanObserveEvent("203.0.113.1", "blocked", "942100")
 	autobanObserveEvent("203.0.113.1", "blocked", "942100")
@@ -1038,7 +1038,7 @@ func TestAutobanRunCycle_dryRunStoresSuggestionsOnly(t *testing.T) {
 
 func TestAutobanRunCycle_bansAndReloads(t *testing.T) {
 	installAutobanFixture(t, "2026-10-14 10:00:00")
-	setAutobanConfigRaw(t, true, 2, 5, "1h", "all", false)
+	setAutobanConfigRaw(t, true, 2, 5, "1h", "blocked,logged", false)
 	seedAutobanListReferencedByPolicy(t)
 	reloads := 0
 	oldFn := autobanReloader
@@ -1061,7 +1061,7 @@ func TestAutobanRunCycle_bansAndReloads(t *testing.T) {
 
 func TestAutobanRunCycle_permanentBanHasNoExpiry(t *testing.T) {
 	installAutobanFixture(t, "2026-10-14 10:00:00")
-	setAutobanConfigRaw(t, true, 1, 5, "permanent", "all", false)
+	setAutobanConfigRaw(t, true, 1, 5, "permanent", "blocked,logged", false)
 	autobanObserveEvent("203.0.113.1", "blocked", "942100")
 	if err := RunAutobanCycle(taskengine.RunContext{Trigger: "auto"}); err != nil {
 		t.Fatalf("RunAutobanCycle: %v", err)
@@ -1095,7 +1095,7 @@ func TestIPListProjection_filtersExpiredEntries(t *testing.T) {
 
 func TestAutobanObserveBatch_commitPointFeed(t *testing.T) {
 	installAutobanFixture(t, "2026-10-14 10:00:00")
-	setAutobanConfigRaw(t, true, 2, 5, "1h", "all", true)
+	setAutobanConfigRaw(t, true, 2, 5, "1h", "blocked,logged", true)
 	autobanObserveBatch([]autobanFeedItem{
 		{IP: "203.0.113.1", Action: "blocked", RuleTriggered: "942100"},
 		{IP: "203.0.113.1", Action: "logged", RuleTriggered: "942100"},
@@ -1119,7 +1119,7 @@ func TestAutobanObserveBatch_commitPointFeed(t *testing.T) {
 // 的过期桶必须产生候选（正向钉在 TestAutobanRunCycle_expiredBucketStillBans）。
 func TestAutobanCandidates_pruneStaleBuckets(t *testing.T) {
 	f := installAutobanFixture(t, "2026-10-14 10:00:00")
-	setAutobanConfigRaw(t, true, 2, 5, "1h", "all", true)
+	setAutobanConfigRaw(t, true, 2, 5, "1h", "blocked,logged", true)
 	autobanObserveEvent("203.0.113.1", "blocked", "942100") // 1 次 < 阈值 2
 	f.Advance(6 * time.Minute)
 	cands := autobanCandidates(2, 5*time.Minute)
@@ -1144,8 +1144,8 @@ func TestAutobanCandidates_pruneStaleBuckets(t *testing.T) {
 // 「桶仍在」敏感——旧实现（无清桶）下删除 IP 与对照同形态，本钉测必红）。
 func TestAutobanForgetIPs_deleteThenNoNewEventsNoReban(t *testing.T) {
 	f := installAutobanFixture(t, "2026-10-14 10:00:00")
-	setAutobanConfigRaw(t, true, 3, 60, "permanent", "all", false)
-	cfg := AutobanConfig{Enabled: true, Threshold: 3, WindowMinutes: 60, Duration: "permanent", Scope: "all", DryRun: false}
+	setAutobanConfigRaw(t, true, 3, 60, "permanent", "blocked,logged", false)
+	cfg := AutobanConfig{Enabled: true, Threshold: 3, WindowMinutes: 60, Duration: "permanent", Scope: "blocked,logged", DryRun: false}
 
 	// 封禁：两 IP 各 3 次真实计数达标 → 候选 → merge 落名单。
 	for range 3 {
@@ -1229,7 +1229,7 @@ func TestAutobanSuggestions_displayTruncatedToTop50(t *testing.T) {
 // 记录），候选/建议携带供前端展示「窗口内首末时间」。
 func TestAutobanSuggestions_carryWindowFirstAndLastSeen(t *testing.T) {
 	f := installAutobanFixture(t, "2026-10-14 10:00:00")
-	setAutobanConfigRaw(t, true, 2, 5, "1h", "all", false)
+	setAutobanConfigRaw(t, true, 2, 5, "1h", "blocked,logged", false)
 	autobanObserveEvent("203.0.113.7", "blocked", "941100")
 	f.Advance(2 * time.Minute)
 	autobanObserveEvent("203.0.113.7", "blocked", "941100")
@@ -1463,7 +1463,7 @@ func TestAutobanListEntryCap_raisedTo2000(t *testing.T) {
 // 把整批新封全丢弃；丢弃数入 DroppedNew（可观测）。
 func TestAutobanMerge_trimsNewBansWhenCapExceeded(t *testing.T) {
 	installAutobanFixture(t, "2026-10-14 10:00:00")
-	setAutobanConfigRaw(t, true, 1, 5, "1h", "all", false)
+	setAutobanConfigRaw(t, true, 1, 5, "1h", "blocked,logged", false)
 	oldCap := AutobanListEntryCap
 	AutobanListEntryCap = 200
 	t.Cleanup(func() { AutobanListEntryCap = oldCap })
@@ -1472,7 +1472,7 @@ func TestAutobanMerge_trimsNewBansWhenCapExceeded(t *testing.T) {
 	for i := 1; i <= 201; i++ {
 		candidates = append(candidates, AutobanSuggestion{IP: fmt.Sprintf("198.51.100.%d", i), Count: 1000 - i})
 	}
-	out, err := autobanMergeEntries(AutobanConfig{Enabled: true, Threshold: 1, WindowMinutes: 5, Duration: "1h", Scope: "all", DryRun: false}, candidates)
+	out, err := autobanMergeEntries(AutobanConfig{Enabled: true, Threshold: 1, WindowMinutes: 5, Duration: "1h", Scope: "blocked,logged", DryRun: false}, candidates)
 	if err != nil {
 		t.Fatalf("merge: %v", err)
 	}
@@ -1503,7 +1503,7 @@ func TestAutobanMerge_trimsNewBansWhenCapExceeded(t *testing.T) {
 // action=容量收敛、username=system 的操作记录。
 func TestAutobanRunCycle_capacityConvergenceObservable(t *testing.T) {
 	installAutobanFixture(t, "2026-10-14 10:00:00")
-	setAutobanConfigRaw(t, true, 1, 5, "1h", "all", false)
+	setAutobanConfigRaw(t, true, 1, 5, "1h", "blocked,logged", false)
 	oldCap := AutobanListEntryCap
 	AutobanListEntryCap = 2
 	t.Cleanup(func() { AutobanListEntryCap = oldCap })
@@ -1546,7 +1546,7 @@ func TestAutobanRunCycle_capacityConvergenceObservable(t *testing.T) {
 // 丢弃」（否则攻击流量未被封禁且无告警）。
 func TestAutobanRunCycle_capacityDropOnManualOnlyListIsVisible(t *testing.T) {
 	installAutobanFixture(t, "2026-10-14 10:00:00")
-	setAutobanConfigRaw(t, true, 1, 5, "1h", "all", false)
+	setAutobanConfigRaw(t, true, 1, 5, "1h", "blocked,logged", false)
 	oldCap := AutobanListEntryCap
 	AutobanListEntryCap = 3
 	t.Cleanup(func() { AutobanListEntryCap = oldCap })
@@ -1613,7 +1613,7 @@ func autobanLogNow(t *testing.T) string {
 
 func TestAutobanCounter_tieredLogging(t *testing.T) {
 	f := installAutobanFixture(t, "2026-10-14 10:00:00")
-	setAutobanConfigRaw(t, true, 3, 5, "1h", "all", true)
+	setAutobanConfigRaw(t, true, 3, 5, "1h", "blocked,logged", true)
 
 	// 未达标 IP 零日志（2 次 < 阈值 3）
 	autobanObserveEvent("203.0.113.8", "blocked", "942100")
@@ -1720,7 +1720,7 @@ func TestAutobanRequestReloadLocked_missingReloaderLeavesWarn(t *testing.T) {
 // 本轮新封值（不丢更新）；以终态和收敛次数为判据，不用静默等待窗冒充互斥证明。
 func TestAutobanRunCycle_mergeSerializesWithListWriterUnderCaddyOpLock(t *testing.T) {
 	installAutobanFixture(t, "2026-10-14 10:00:00")
-	setAutobanConfigRaw(t, true, 1, 5, "1h", "all", false)
+	setAutobanConfigRaw(t, true, 1, 5, "1h", "blocked,logged", false)
 	seedAutobanListReferencedByPolicy(t)
 	reloads := 0
 	oldFn := autobanReloader
@@ -1773,8 +1773,8 @@ func TestAutobanRunCycle_mergeSerializesWithListWriterUnderCaddyOpLock(t *testin
 // 5 分钟兜底。
 func TestAutobanObserveBatch_scopeAndWindowPassedDown(t *testing.T) {
 	f := installAutobanFixture(t, "2026-10-14 10:00:00")
-	setAutobanConfigRaw(t, true, 100, 1, "1h", "all", true)
-	oneMin := AutobanConfig{Enabled: true, Threshold: 100, WindowMinutes: 1, Duration: "1h", Scope: "all", DryRun: true}
+	setAutobanConfigRaw(t, true, 100, 1, "1h", "blocked,logged", true)
+	oneMin := AutobanConfig{Enabled: true, Threshold: 100, WindowMinutes: 1, Duration: "1h", Scope: "blocked,logged", DryRun: true}
 
 	autobanObserveEventScoped(oneMin, "203.0.113.1", "blocked", "942100")
 	autobanObserveEventScoped(oneMin, "203.0.113.1", "blocked", "942100")
@@ -1794,7 +1794,7 @@ func TestAutobanObserveBatch_scopeAndWindowPassedDown(t *testing.T) {
 		t.Fatalf("越过下传窗口后应重置计数（不得落 5 分钟写死兜底）, 得到 %+v", w)
 	}
 
-	autobanObserveEventScoped(AutobanConfig{Enabled: true, Threshold: 100, WindowMinutes: 0, Duration: "1h", Scope: "all", DryRun: true}, "203.0.113.2", "blocked", "942100")
+	autobanObserveEventScoped(AutobanConfig{Enabled: true, Threshold: 100, WindowMinutes: 0, Duration: "1h", Scope: "blocked,logged", DryRun: true}, "203.0.113.2", "blocked", "942100")
 	autobanMu.Lock()
 	_, invalidWindowFed := autobanWindows["203.0.113.2"]
 	autobanMu.Unlock()
@@ -1812,7 +1812,7 @@ func TestAutobanObserveBatch_scopeAndWindowPassedDown(t *testing.T) {
 // 未到期/手动条目保留；暂存标记清除。
 func TestAutobanDisableFlush_expiresOnceAndForceFlushes(t *testing.T) {
 	installAutobanFixture(t, "2026-10-14 10:00:00")
-	setAutobanConfigRaw(t, true, 1, 5, "1h", "all", false)
+	setAutobanConfigRaw(t, true, 1, 5, "1h", "blocked,logged", false)
 	seedPresetEntries(t, []models.IPListEntry{
 		{Value: "198.51.100.1", Remark: autobanEntryRemark, CreatedAt: "2026-10-13 10:00:00", ExpiresAt: "2026-10-14 09:00:00"}, // 已到期
 		{Value: "198.51.100.2", Remark: autobanEntryRemark, CreatedAt: "2026-10-14 09:30:00", ExpiresAt: "2026-10-14 11:00:00"}, // 未到期
@@ -1870,7 +1870,7 @@ func TestAutobanDisableFlush_evictedIPBucketCleared(t *testing.T) {
 	oldCap := AutobanListEntryCap
 	AutobanListEntryCap = 1
 	t.Cleanup(func() { AutobanListEntryCap = oldCap })
-	setAutobanConfigRaw(t, true, 1, 5, "permanent", "all", false)
+	setAutobanConfigRaw(t, true, 1, 5, "permanent", "blocked,logged", false)
 
 	// 带外写入致 kept 超限（candidates=nil 时仍会挤出）；早创建的先被挤。
 	seedPresetEntries(t, []models.IPListEntry{
@@ -1908,7 +1908,7 @@ func TestAutobanDisableFlush_evictedIPBucketCleared(t *testing.T) {
 // 从「此刻」重算——共享 NAT/已重新分配的 IP 会被长期封死。
 func TestSetAutobanConfig_disableClearsStaleCounters(t *testing.T) {
 	clock := installAutobanFixture(t, "2026-10-14 10:00:00")
-	cfg := AutobanConfig{Enabled: true, Threshold: 3, WindowMinutes: 5, Duration: "1h", Scope: "all", DryRun: false}
+	cfg := AutobanConfig{Enabled: true, Threshold: 3, WindowMinutes: 5, Duration: "1h", Scope: "blocked,logged", DryRun: false}
 	if err := SetAutobanConfig(cfg); err != nil {
 		t.Fatalf("enable: %v", err)
 	}
@@ -1944,7 +1944,7 @@ func TestSetAutobanConfig_disableClearsStaleCounters(t *testing.T) {
 
 func TestAutobanDisableFlush_mergeFailureIsVisible(t *testing.T) {
 	installAutobanFixture(t, "2026-10-14 10:00:00")
-	setAutobanConfigRaw(t, false, 1, 5, "1h", "all", false)
+	setAutobanConfigRaw(t, false, 1, 5, "1h", "blocked,logged", false)
 	if _, err := db.DB.Exec(`DROP TABLE security_ip_lists`); err != nil {
 		t.Fatal(err)
 	}
@@ -1971,8 +1971,8 @@ func TestAutobanDisableFlush_mergeFailureIsVisible(t *testing.T) {
 
 func TestAutobanFormalMerge_beyondSuggestionCap(t *testing.T) {
 	installAutobanFixture(t, "2026-10-14 10:00:00")
-	setAutobanConfigRaw(t, true, 2, 60, "1h", "all", false)
-	cfg := AutobanConfig{Enabled: true, Threshold: 2, WindowMinutes: 60, Duration: "1h", Scope: "all"}
+	setAutobanConfigRaw(t, true, 2, 60, "1h", "blocked,logged", false)
+	cfg := AutobanConfig{Enabled: true, Threshold: 2, WindowMinutes: 60, Duration: "1h", Scope: "blocked,logged"}
 
 	total := autobanSuggestionCap + 1
 	// 前 200 个 IP 预置为「已在名单」的手动条目：正式 merge 应把它们过滤掉，
@@ -2020,7 +2020,7 @@ func TestAutobanFormalMerge_beyondSuggestionCap(t *testing.T) {
 		autobanObserveEventScoped(cfg, ip, "blocked", "942100")
 		autobanObserveEventScoped(cfg, ip, "blocked", "942100")
 	}
-	setAutobanConfigRaw(t, true, 2, 60, "1h", "all", true)
+	setAutobanConfigRaw(t, true, 2, 60, "1h", "blocked,logged", true)
 	// 名单里的 200 个 IP 不再影响候选（候选只看计数）。
 	if err := RunAutobanCycle(taskengine.RunContext{Trigger: "auto"}); err != nil {
 		t.Fatalf("dry-run cycle: %v", err)
@@ -2038,7 +2038,7 @@ func TestAutobanFormalMerge_beyondSuggestionCap(t *testing.T) {
 // 实际封禁被延长到约 window+duration，并产生成对的自动解封/自动封禁审计。
 func TestAutobanMerge_expiredEntryNotRebannedSameRound(t *testing.T) {
 	f := installAutobanFixture(t, "2026-10-14 10:00:00")
-	cfg := AutobanConfig{Enabled: true, Threshold: 3, WindowMinutes: 60, Duration: "10m", Scope: "all", DryRun: false}
+	cfg := AutobanConfig{Enabled: true, Threshold: 3, WindowMinutes: 60, Duration: "10m", Scope: "blocked,logged", DryRun: false}
 	const ip = "203.0.113.55"
 
 	// Given 3 次真实计数达阈值 → 封禁 10 分钟
@@ -2162,7 +2162,7 @@ func TestAutobanFeedHealth_reportsStoppedIngestion(t *testing.T) {
 // WARN 转换行 + 每轮摘要停摆注记；恢复后记一次恢复行且摘要不再带注记。
 func TestRunAutobanCycle_surfacesFeedDegraded(t *testing.T) {
 	installAutobanFixture(t, "2026-10-14 10:00:00")
-	setAutobanConfigRaw(t, true, 100, 5, "24h", "all", true)
+	setAutobanConfigRaw(t, true, 100, 5, "24h", "blocked,logged", true)
 	te := installFeedHealthTestEngine(t)
 
 	if err := RunAutobanCycle(taskengine.RunContext{Trigger: "auto"}); err != nil {
@@ -2209,7 +2209,7 @@ func TestRunAutobanCycle_surfacesFeedDegraded(t *testing.T) {
 // 未到期条目的桶不得清（仅到期解封同步清桶）。
 func TestAutobanDisableFlush_forgetsExpiredCounters(t *testing.T) {
 	clock := installAutobanFixture(t, "2026-10-14 10:00:00")
-	setAutobanConfigRaw(t, true, 1, 5, "1h", "all", false)
+	setAutobanConfigRaw(t, true, 1, 5, "1h", "blocked,logged", false)
 	seedPresetEntries(t, []models.IPListEntry{
 		{Value: "198.51.100.1", Remark: autobanEntryRemark, CreatedAt: "2026-10-13 10:00:00", ExpiresAt: "2026-10-14 09:00:00"}, // 已到期
 		{Value: "198.51.100.2", Remark: autobanEntryRemark, CreatedAt: "2026-10-14 09:30:00", ExpiresAt: "2026-10-14 11:00:00"}, // 未到期

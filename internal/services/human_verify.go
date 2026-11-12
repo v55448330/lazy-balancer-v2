@@ -4,7 +4,6 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
-	"strings"
 	"sync"
 
 	"lazy-balancer-v2/internal/db"
@@ -16,22 +15,22 @@ import (
 //   - CC 检测阈值：global_config（自动封禁同族），渲染期一次读取
 //   - cookie 签名密钥：global_config.human_secret 惰性生成（32 字节 hex）
 
-// CCConfig 自动封禁 CC 检测配置（global_config 同族）。
+// CCConfig 自动封禁 CC 检测配置（global_config 同族）。CC「封禁」响应退役
+// （2026-11-13）：CC 统一走挑战页，封禁由自动封禁管线承载。
 type CCConfig struct {
-	Enabled         bool   `json:"enabled"`
-	RPSLimit        int    `json:"rps_limit"`
-	WindowSec       int    `json:"window_sec"`
-	Ratio4xx        int    `json:"ratio_4xx"`
-	SessionAnomaly  bool   `json:"session_anomaly"`
-	SessionUAThresh int    `json:"session_ua_threshold"`
-	Response        string `json:"response"` // verify | ban
+	Enabled         bool `json:"enabled"`
+	RPSLimit        int  `json:"rps_limit"`
+	WindowSec       int  `json:"window_sec"`
+	Ratio4xx        int  `json:"ratio_4xx"`
+	SessionAnomaly  bool `json:"session_anomaly"`
+	SessionUAThresh int  `json:"session_ua_threshold"`
 }
 
 // loadCCConfig CC 检测配置=策略合并（2026-11-12 用户裁定：阈值在策略配置，
 // 自动封禁引用策略——全局不再持有阈值，消除双份配置）。取首个启用 CC 检测的
 // 策略的阈值（多条启用策略时按绑定序首条；与 humanPolicyMerged 同优先级）。
 func loadCCConfig(policies []*models.SecurityPolicy) CCConfig {
-	cfg := CCConfig{RPSLimit: 40, WindowSec: 10, Ratio4xx: 70, SessionUAThresh: 5, Response: "verify"}
+	cfg := CCConfig{RPSLimit: 40, WindowSec: 10, Ratio4xx: 70, SessionUAThresh: 5}
 	for _, p := range policies {
 		if p == nil || !p.CCDetectEnabled {
 			continue
@@ -42,11 +41,6 @@ func loadCCConfig(policies []*models.SecurityPolicy) CCConfig {
 		cfg.Ratio4xx = p.CC4xxRatio
 		cfg.SessionAnomaly = p.CCSessionAnomaly
 		cfg.SessionUAThresh = p.CCSessionUAThreshold
-		if strings.EqualFold(strings.TrimSpace(p.CCResponse), "ban") {
-			cfg.Response = "ban"
-		} else {
-			cfg.Response = "verify"
-		}
 		return cfg
 	}
 	return cfg
@@ -168,7 +162,9 @@ func humanChallengeFallbackPage(ctx *securityPolicyContext, policies []*models.S
 
 // buildHumanHandler 阶段 3 人机验证 handler 渲染：有任一策略启用人机验证
 // （mode != off）即注入；CC 检测阈值随配置下发（auto 模式插件内判定）。
-func buildHumanHandler(ruleCaddyID string, policies []*models.SecurityPolicy, banPage ...string) map[string]interface{} {
+// CC「封禁」响应退役（2026-11-13）：不再下发 cc_response/ban_*，挑战页内容
+// 经 challengePage 传入（可变参数兼容既有调用方）。
+func buildHumanHandler(ruleCaddyID string, policies []*models.SecurityPolicy, challengePage ...string) map[string]interface{} {
 	mode, typ, ttl, exemptPaths := humanPolicyMerged(policies)
 	if mode == "off" {
 		return nil
@@ -179,21 +175,9 @@ func buildHumanHandler(ruleCaddyID string, policies []*models.SecurityPolicy, ba
 		return nil
 	}
 	cc := loadCCConfig(policies)
-	banStatus := 0
-	for _, p := range policies {
-		if p != nil && p.CCDetectEnabled && p.BlockStatusCode > 0 {
-			banStatus = p.BlockStatusCode
-			break
-		}
-	}
-	banHTML, banType := "", ""
 	challengeHTML := ""
-	if len(banPage) > 0 {
-		challengeHTML = banPage[0]
-		banHTML = strings.ReplaceAll(banPage[0], "{{human_verify_widget}}", "")
-	}
-	if len(banPage) > 1 {
-		banType = banPage[1]
+	if len(challengePage) > 0 {
+		challengeHTML = challengePage[0]
 	}
 	return map[string]interface{}{
 		"handler":             "lb_human",
@@ -207,10 +191,6 @@ func buildHumanHandler(ruleCaddyID string, policies []*models.SecurityPolicy, ba
 		"cc_4xx_ratio":        cc.Ratio4xx,
 		"cc_session":          cc.SessionAnomaly,
 		"cc_session_ua":       cc.SessionUAThresh,
-		"cc_response":         cc.Response,
-		"ban_status_code":     banStatus,
-		"ban_page_html":       banHTML,
-		"ban_page_type":       banType,
 		"challenge_page_html": challengeHTML,
 		"exempt_paths":        exemptPaths,
 		"rule_id":             ruleCaddyID,

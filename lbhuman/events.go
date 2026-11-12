@@ -23,11 +23,10 @@ const (
 
 type humanEventPoster struct {
 	mu     sync.Mutex
-	lastBy map[string]time.Time // IP → 上次上报时刻（限流）
 	client *http.Client
 }
 
-var poster = &humanEventPoster{lastBy: map[string]time.Time{}}
+var poster = &humanEventPoster{}
 
 func (p *humanEventPoster) initClient() {
 	if p.client != nil {
@@ -47,23 +46,10 @@ func (p *humanEventPoster) initClient() {
 	}
 }
 
-// shouldReport 挑战发放每 IP 每分钟最多一条（防事件风暴）；通过/失败
-// 是验证结果审计，必须每次记录，不能被发放限流吞掉。
+// shouldReport 挑战发放/通过/失败全部逐请求上报（2026-11-13 用户裁定：
+// 限流日志≠限流请求，发放限流无实际防护意义，取消后事件日志与实时运行态
+// 口径一致）。真正的拦截交给自动封禁（挑战发放/失败可计入统计口径）。
 func (p *humanEventPoster) shouldReport(ip, kind string, now time.Time) bool {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if kind == "challenge" {
-		if last, ok := p.lastBy[ip]; ok && now.Sub(last) < time.Minute {
-			return false
-		}
-		p.lastBy[ip] = now
-	}
-	// 清理过期限流条目（防 map 无限增长）
-	for k, v := range p.lastBy {
-		if now.Sub(v) > 10*time.Minute {
-			delete(p.lastBy, k)
-		}
-	}
 	return true
 }
 

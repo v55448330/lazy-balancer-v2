@@ -11,7 +11,7 @@ import (
 )
 
 func TestAutobanConfigReplaceEffectNote_mapsEffectsToUserText(t *testing.T) {
-	base := AutobanConfig{Enabled: true, Threshold: 100, WindowMinutes: 5, Duration: "1h", Scope: "all", DryRun: false}
+	base := AutobanConfig{Enabled: true, Threshold: 100, WindowMinutes: 5, Duration: "1h", Scope: "blocked,logged", DryRun: false}
 	disabled := base
 	disabled.Enabled = false
 	withWindow1 := base
@@ -85,7 +85,7 @@ func TestReconcileAutobanRuntimeAfterConfigReplace_thresholdOnlyKeepsBuckets(t *
 		t.Fatalf("前置达标数=%d, want 0（60 < 阈值 100）", got)
 	}
 
-	old := AutobanConfig{Enabled: true, Threshold: 100, WindowMinutes: 5, Duration: "1h", Scope: "all"}
+	old := AutobanConfig{Enabled: true, Threshold: 100, WindowMinutes: 5, Duration: "1h", Scope: "blocked,logged"}
 	lowered := old
 	lowered.Threshold = 50
 	ReconcileAutobanRuntimeAfterConfigReplace(old, lowered)

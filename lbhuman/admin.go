@@ -34,11 +34,11 @@ func (HumanStatsAdmin) Routes() []caddy.AdminRoute {
 }
 
 // humanStatsPayload 统计响应（总览卡数据源；差分语义由 LB 侧聚合）。
+// CC「封禁」响应退役（2026-11-13）：封禁由自动封禁管线承载，此处不再有 bans。
 type humanStatsPayload struct {
 	Challenges int64 `json:"challenges"`
 	Passes     int64 `json:"passes"`
 	Fails      int64 `json:"fails"`
-	Bans       int64 `json:"bans"`
 }
 
 func serveHumanStats(w http.ResponseWriter, r *http.Request) error {
@@ -48,7 +48,6 @@ func serveHumanStats(w http.ResponseWriter, r *http.Request) error {
 		Challenges: humanStats.Challenges.Load(),
 		Passes:     humanStats.Passes.Load(),
 		Fails:      humanStats.Fails.Load(),
-		Bans:       humanStats.Bans.Load(),
 	})
 	if err != nil {
 		raw = []byte(`{}`)

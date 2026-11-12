@@ -123,7 +123,76 @@ var autobanDurations = map[string]time.Duration{
 }
 
 func ValidAutobanDuration(s string) bool { _, ok := autobanDurations[s]; return ok }
-func ValidAutobanScope(s string) bool    { return s == "blocked" || s == "logged" || s == "all" }
+
+// 自动封禁统计口径四维度（2026-11-13 用户裁定：单选改多选）。scope 存逗号
+// 分隔集合；挑战发放/失败拆为独立维度（证据强度不同），count_human_failed
+// 开关退役（语义并入 challenge_failed）。
+const (
+	AutobanScopeBlocked         = "blocked"
+	AutobanScopeLogged          = "logged"
+	AutobanScopeChallengeIssued = "challenge_issued"
+	AutobanScopeChallengeFailed = "challenge_failed"
+)
+
+var autobanScopeDimensions = map[string]bool{
+	AutobanScopeBlocked:         true,
+	AutobanScopeLogged:          true,
+	AutobanScopeChallengeIssued: true,
+	AutobanScopeChallengeFailed: true,
+}
+
+// AutobanScopeSet 解析逗号分隔口径集合为成员表（去空白；非法/重复成员由
+// ValidAutobanScope 在写侧拒绝，本函数只做解析）。
+func AutobanScopeSet(scope string) map[string]bool {
+	set := make(map[string]bool)
+	for _, part := range strings.Split(scope, ",") {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			set[part] = true
+		}
+	}
+	return set
+}
+
+// ValidAutobanScope 口径集合校验：非空、成员均为四维度之一、无重复。
+func ValidAutobanScope(s string) bool {
+	parts := strings.Split(s, ",")
+	seen := make(map[string]bool, len(parts))
+	count := 0
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" || !autobanScopeDimensions[part] || seen[part] {
+			return false
+		}
+		seen[part] = true
+		count++
+	}
+	return count > 0
+}
+
+// MigrateLegacyAutobanScope 把旧单值口径（blocked/logged/all）+ count_human_failed
+// 开关映射为新四维集合（2026-11-13 用户裁定）。已是新集合形态原样返回；
+// 非法值（非旧单值也非新集合）原样返回，交由写侧/导入校验响亮拒绝——
+// 迁移不得把损坏值伪装成合法默认。映射：blocked→blocked；logged→logged；
+// all→blocked,logged（开关开再追加 challenge_failed）。供 db 启动迁移与备份导入共用单源。
+func MigrateLegacyAutobanScope(scope string, countHumanFailed bool) string {
+	if ValidAutobanScope(scope) {
+		return scope
+	}
+	switch strings.TrimSpace(scope) {
+	case "blocked":
+		return AutobanScopeBlocked
+	case "logged":
+		return AutobanScopeLogged
+	case "all":
+		if countHumanFailed {
+			return AutobanScopeBlocked + "," + AutobanScopeLogged + "," + AutobanScopeChallengeFailed
+		}
+		return AutobanScopeBlocked + "," + AutobanScopeLogged
+	default:
+		return scope // 非法值原样返回，校验拒绝
+	}
+}
 
 // AutobanDurationLabel 时长枚举的展示文案（前端配置弹框同款语义）。
 func AutobanDurationLabel(s string) string {
@@ -148,14 +217,15 @@ func AutobanDurationLabel(s string) string {
 }
 
 // AutobanConfig 六项配置（GET/PUT /security/autoban 载荷与任务/计数器共用形态）。
+// Scope 为逗号分隔口径集合（blocked/logged/challenge_issued/challenge_failed，
+// 2026-11-13 用户裁定多选）；count_human_failed 开关退役，语义并入 challenge_failed。
 type AutobanConfig struct {
-	Enabled          bool   `json:"enabled"`
-	Threshold        int    `json:"threshold"`
-	WindowMinutes    int    `json:"window_minutes"`
-	Duration         string `json:"duration"`
-	Scope            string `json:"scope"`
-	DryRun           bool   `json:"dry_run"`
-	CountHumanFailed bool   `json:"count_human_failed"`
+	Enabled       bool   `json:"enabled"`
+	Threshold     int    `json:"threshold"`
+	WindowMinutes int    `json:"window_minutes"`
+	Duration      string `json:"duration"`
+	Scope         string `json:"scope"`
+	DryRun        bool   `json:"dry_run"`
 }
 
 // autobanNow 时钟缝（测试注入时间轴）。
@@ -213,24 +283,23 @@ type AutobanConfigQuerier interface {
 // NULL；读失败显性返回错误）。GetAutobanConfig 与导入侧共用本单源——
 // 两份手写 SELECT 的列/COALESCE 默认值漂移会让导入侧比对出假的「配置变化」。
 func ReadAutobanConfigFrom(ctx context.Context, q AutobanConfigQuerier) (AutobanConfig, error) {
-	var en, threshold, window, dry, countHuman int
+	var en, threshold, window, dry int
 	var duration, scope string
 	err := q.QueryRowContext(ctx, `SELECT COALESCE(autoban_enabled,?), COALESCE(autoban_threshold,?),
-		COALESCE(autoban_window_minutes,?), COALESCE(autoban_duration,?), COALESCE(autoban_scope,?), COALESCE(autoban_dry_run,?), COALESCE(autoban_count_human_failed,0)
+		COALESCE(autoban_window_minutes,?), COALESCE(autoban_duration,?), COALESCE(autoban_scope,?), COALESCE(autoban_dry_run,?)
 		FROM global_config WHERE id=1`,
 		db.DefaultAutobanEnabled, db.DefaultAutobanThreshold, db.DefaultAutobanWindowMinutes,
-		db.DefaultAutobanDuration, db.DefaultAutobanScope, db.DefaultAutobanDryRun).Scan(&en, &threshold, &window, &duration, &scope, &dry, &countHuman)
+		db.DefaultAutobanDuration, db.DefaultAutobanScope, db.DefaultAutobanDryRun).Scan(&en, &threshold, &window, &duration, &scope, &dry)
 	if err != nil {
 		return AutobanConfig{}, err
 	}
 	return AutobanConfig{
-		Enabled:          en == 1,
-		Threshold:        threshold,
-		WindowMinutes:    window,
-		Duration:         duration,
-		Scope:            scope,
-		DryRun:           dry == 1,
-		CountHumanFailed: countHuman == 1,
+		Enabled:       en == 1,
+		Threshold:     threshold,
+		WindowMinutes: window,
+		Duration:      duration,
+		Scope:         scope,
+		DryRun:        dry == 1,
 	}, nil
 }
 
@@ -303,8 +372,8 @@ func SetAutobanConfig(cfg AutobanConfig) error {
 	if cfg.DryRun {
 		dry = 1
 	}
-	if _, err := db.DB.Exec(`UPDATE global_config SET autoban_enabled=?, autoban_threshold=?, autoban_window_minutes=?, autoban_duration=?, autoban_scope=?, autoban_dry_run=?, autoban_count_human_failed=? WHERE id=1`,
-		en, cfg.Threshold, cfg.WindowMinutes, cfg.Duration, cfg.Scope, dry, boolToInt(cfg.CountHumanFailed)); err != nil {
+	if _, err := db.DB.Exec(`UPDATE global_config SET autoban_enabled=?, autoban_threshold=?, autoban_window_minutes=?, autoban_duration=?, autoban_scope=?, autoban_dry_run=? WHERE id=1`,
+		en, cfg.Threshold, cfg.WindowMinutes, cfg.Duration, cfg.Scope, dry); err != nil {
 		return err
 	}
 	// 运行期收敛（清桶/重算 Reached/禁用收尾/调度联动）与备份导入提交后
@@ -539,31 +608,30 @@ func ResetAutobanCounters() {
 	autobanCapWarned = false
 }
 
-// autobanActionMatches 口径过滤：scope=blocked 只统计拦截，logged 只统计检测，
-// all 全统计。
+// autobanActionMatches WAF 事件口径过滤：action（blocked/logged）须在口径集合内。
 func autobanActionMatches(scope, action string) bool {
-	switch scope {
-	case "blocked":
-		return action == "blocked"
-	case "logged":
-		return action == "logged"
-	default:
-		return action == "blocked" || action == "logged"
-	}
+	return AutobanScopeSet(scope)[action]
 }
 
-// ObserveHumanChallengeFailure 供人机事件 IPC 提交后喂入挑战失败证据：
-// 仅主节点 + 自动封禁启用 + 策略开关（默认关）时计入。失败事件为
-// action=challenged / rule_triggered=human_failed。
-func ObserveHumanChallengeFailure(ip, ruleTriggered string, at time.Time) {
+// ObserveHumanEvent 供人机事件 IPC 提交后喂入挑战证据（2026-11-13 用户裁定：
+// 发放/失败按各自维度成员资格计数，通过永不计）。kind=challenge|fail|pass；
+// 仅主节点 + 自动封禁启用时计入。挑战事件不受 WAF 阶段 3 族门约束。
+func ObserveHumanEvent(ip, kind string, at time.Time) {
 	if !autobanIsMaster() {
 		return
 	}
 	cfg, err := GetAutobanConfig()
-	if err != nil || !cfg.Enabled || !cfg.CountHumanFailed {
+	if err != nil || !cfg.Enabled {
 		return
 	}
-	autobanObserveEventScopedAt(cfg, ip, "challenged", "human_failed", at)
+	ruleTriggered := "human_challenge"
+	switch kind {
+	case "fail":
+		ruleTriggered = "human_failed"
+	case "pass":
+		ruleTriggered = "human_pass"
+	}
+	autobanObserveEventScopedAt(cfg, ip, "challenged", ruleTriggered, at)
 }
 
 // autobanObserveBatch 摄取提交点喂入（每批 Commit 后调用）。五重门：主节点 +
@@ -614,10 +682,17 @@ func autobanSourceEligible(ruleTriggered string) bool {
 
 func autobanObserveEventScopedAt(cfg AutobanConfig, ip, action, ruleTriggered string, at time.Time) {
 	window := time.Duration(cfg.WindowMinutes) * time.Minute
-	humanFailure := action == "challenged" && ruleTriggered == "human_failed"
-	if humanFailure {
-		// 挑战失败：仅由开关控制，计入 blocked/all 口径（挑战通过/发放不计）。
-		if !cfg.CountHumanFailed || cfg.Scope == "logged" {
+	scopeSet := AutobanScopeSet(cfg.Scope)
+	if action == "challenged" {
+		// 人机事件：发放/失败按各自维度成员资格计数；通过永不计。
+		dim := ""
+		switch ruleTriggered {
+		case "human_challenge":
+			dim = AutobanScopeChallengeIssued
+		case "human_failed":
+			dim = AutobanScopeChallengeFailed
+		}
+		if dim == "" || !scopeSet[dim] {
 			return
 		}
 	} else if !autobanActionMatches(cfg.Scope, action) || !autobanStage3Eligible(ruleTriggered) || !autobanSourceEligible(ruleTriggered) {
@@ -1376,7 +1451,7 @@ func RunAutobanCycle(rc taskengine.RunContext) error {
 		}
 		autobanSetSuggestions(candidates)
 		TaskLogf(AutobanTaskID, "cycle", "观察模式：计数 %d IP / 活跃 %d 个 IP / 达阈值 %d（阈值 %d 次/%d 分钟，口径 %s）%s",
-			autobanTrackedCount(), autobanReachedCount(), len(candidates), cfg.Threshold, cfg.WindowMinutes, autobanScopeLabel(cfg.Scope), feedNote)
+			autobanTrackedCount(), autobanReachedCount(), len(candidates), cfg.Threshold, cfg.WindowMinutes, AutobanScopeLabel(cfg.Scope), feedNote)
 		return nil
 	}
 
@@ -1581,15 +1656,26 @@ func reloadNote(changed bool, state autobanReloadState) string {
 	}
 }
 
-func autobanScopeLabel(scope string) string {
-	switch scope {
-	case "blocked":
-		return "仅拦截"
-	case "logged":
-		return "仅检测"
-	default:
-		return "全部"
+// AutobanScopeLabel 口径集合的用户可读标签（任务日志/审计/前端状态卡共用单源）。
+func AutobanScopeLabel(scope string) string {
+	labels := map[string]string{
+		AutobanScopeBlocked:         "拦截",
+		AutobanScopeLogged:          "检测",
+		AutobanScopeChallengeIssued: "挑战发放",
+		AutobanScopeChallengeFailed: "挑战失败",
 	}
+	order := []string{AutobanScopeBlocked, AutobanScopeLogged, AutobanScopeChallengeIssued, AutobanScopeChallengeFailed}
+	set := AutobanScopeSet(scope)
+	var parts []string
+	for _, dim := range order {
+		if set[dim] {
+			parts = append(parts, labels[dim])
+		}
+	}
+	if len(parts) == 0 {
+		return "无"
+	}
+	return strings.Join(parts, "+")
 }
 
 func autobanTrackedCount() int {

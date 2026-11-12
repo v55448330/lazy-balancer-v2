@@ -188,15 +188,15 @@ type SecurityPolicy struct {
 	HumanVerifyTTL   int             `json:"human_verify_ttl"`   // 分钟
 	HumanExemptPaths json.RawMessage `json:"human_exempt_paths"` // 路径前缀数组
 	// CC 检测阈值（阶段 3 触发源，2026-11-12 用户裁定：在策略配置，自动封禁引用）
-	CCDetectEnabled      bool   `json:"cc_detect_enabled"`
-	CCRPSLimit           int    `json:"cc_rps_limit"`
-	CCRPSWindow          int    `json:"cc_rps_window"`
-	CC4xxRatio           int    `json:"cc_4xx_ratio"`
-	CCSessionAnomaly     bool   `json:"cc_session_anomaly"`
-	CCSessionUAThreshold int    `json:"cc_session_ua_threshold"`
-	CCResponse           string `json:"cc_response"`
-	IPACLListRefs        string `json:"ip_acl_list_refs"`
-	IPWhitelistRefs      string `json:"ip_whitelist_refs"`
+	CCDetectEnabled      bool `json:"cc_detect_enabled"`
+	CCRPSLimit           int  `json:"cc_rps_limit"`
+	CCRPSWindow          int  `json:"cc_rps_window"`
+	CC4xxRatio           int  `json:"cc_4xx_ratio"`
+	CCSessionAnomaly     bool `json:"cc_session_anomaly"`
+	CCSessionUAThreshold int  `json:"cc_session_ua_threshold"`
+
+	IPACLListRefs   string `json:"ip_acl_list_refs"`
+	IPWhitelistRefs string `json:"ip_whitelist_refs"`
 	// MergedACLList / MergedWhitelist 是生成期由策略加载路径附加的「inline ∪ 引用
 	// IP 列表条目」合并集（去重、inline 优先）；nil 表示该策略未经引用解析
 	//（无引用或非生成路径加载），发射端回退 inline-only。不参与 JSON 序列化。
@@ -236,7 +236,6 @@ type SecurityPolicySummary struct {
 	CC4xxRatio           int    `json:"cc_4xx_ratio"`
 	CCSessionAnomaly     bool   `json:"cc_session_anomaly"`
 	CCSessionUAThreshold int    `json:"cc_session_ua_threshold"`
-	CCResponse           string `json:"cc_response"`
 	ID                   int    `json:"id"`
 	Name                 string `json:"name"`
 	Mode                 string `json:"mode"`
@@ -327,7 +326,6 @@ type CreateSecurityPolicyRequest struct {
 	CC4xxRatio           int    `json:"cc_4xx_ratio"`
 	CCSessionAnomaly     bool   `json:"cc_session_anomaly"`
 	CCSessionUAThreshold int    `json:"cc_session_ua_threshold"`
-	CCResponse           string `json:"cc_response"`
 	IPACLListRefs        string `json:"ip_acl_list_refs"`
 	IPWhitelistRefs      string `json:"ip_whitelist_refs"`
 }
@@ -374,7 +372,6 @@ type UpdateSecurityPolicyRequest struct {
 	CC4xxRatio           *int    `json:"cc_4xx_ratio"`
 	CCSessionAnomaly     *bool   `json:"cc_session_anomaly"`
 	CCSessionUAThreshold *int    `json:"cc_session_ua_threshold"`
-	CCResponse           *string `json:"cc_response"`
 }
 
 // SecurityEventFeedItem 威胁大屏增量事件流条目（GET /security/events/feed）：
@@ -443,9 +440,9 @@ type SecurityOverview struct {
 	// rule_triggered='human_challenge'）：挑战是独立结果，不计拦截/检测；
 	// 原始表直算（人机事件按 IP 每分钟至多 1 条，量级可控）。
 	TodayChallenged int `json:"today_challenged"`
-	// TodayHumanPass/TodayHumanFail 今日挑战通过/失败数（动作同为 challenged，
-	// 以规则 id 区分）。通过率 = pass/(pass+fail)，零样本时前端显性给出 —。
-	TodayHumanPass int `json:"today_human_pass"`
+	// TodayHumanFail 今日挑战失败数（action='challenged'，rule_triggered='human_failed'）。
+	// 挑战成功（human_pass）自 2026-11-13 用户裁定起不计入安全事件，故本响应不再
+	// 提供今日通过数——通过率/通过数由 /security/human/stats（进程累计）承载。
 	TodayHumanFail int `json:"today_human_fail"`
 	// TodayBlockedTCP 是今日拦截的 TCP 协议拆分（event_type='tcp'，原始表
 	// 直算——rollup 表无 event_type 维度；TCP 为新增事件族，行帽裁剪对历史

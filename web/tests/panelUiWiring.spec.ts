@@ -238,16 +238,20 @@ test('主列表失败可辨识（错误态 + 横幅重试 + 空态文案切换�
   assert.match(text.slice(okPath, reset), /localeCompare/, '同阶段必须按名称稳定排序')
 })
 
-test('自动封禁口径文案与后端喂入门同口径（WAF·CRS+自定义两族，其余事件显式声明不计数）', () => {
+test('自动封禁口径文案与后端喂入门同口径（四维多选，WAF 两族+挑战发放/失败，其余事件显式声明不计数）', () => {
   const events = code('src/views/security/SecurityEvents.vue')
   // 后端 autobanStage3Eligible 只收 CRS+自定义两族（爬虫豁免独立排除）——
   // 文案必须与真实喂入一致：既不得自缩为「WAF 事件」，也不得宣称 ACL/地域/
   // 威胁情报计数（用户按文案校准阈值必须可达）。
   assert.doesNotMatch(events, /WAF 事件固定窗口计数/)
-  // i18n 后双钉:调用点钉键,zh 母本钉两句口径原文(喂入口径漂移仍必红)
+  // i18n 后双钉:调用点钉键,zh 母本钉口径原文(喂入口径漂移仍必红)
   assert.match(events, /:subtitle="t\('app\.security\.events\.dialogSubtitle'\)"/)
-  assert.ok(code('src/locales/zh/security.ts').includes('WAF 拦截（CRS 规则与自定义规则命中，已验证爬虫豁免除外）固定窗口计数'), '计数口径句必须在 zh 母本词条中')
+  assert.ok(code('src/locales/zh/security.ts').includes('WAF 命中按拦截/检测计数（已验证爬虫豁免除外）'), 'WAF 计数口径句必须在 zh 母本词条中')
+  assert.ok(code('src/locales/zh/security.ts').includes('人机挑战按发放/失败计数（挑战通过不计）'), '挑战计数口径句必须在 zh 母本词条中')
   assert.ok(code('src/locales/zh/security.ts').includes('IP 访问控制、地域拦截与威胁情报事件不参与计数'), '排除口径句必须在 zh 母本词条中')
+  // 四维多选 checkbox（单选 radio 已退役）+ 空集校验。
+  assert.match(events, /<el-checkbox-group v-model="autobanForm\.scope">/, '口径必须为多选 checkbox 组')
+  assert.match(events, /autobanForm\.value\.scope\.length === 0/, '空集必须拦截保存')
   // 跨栈对表（repoCode 剥注释后钉函数体谓词）：后端族门任一谓词改动即红——
   // 文案↔裁定漂移（喂入口径扩/缩而文案不动）不再无声复发。
   const autoban = repoCode('internal/services/autoban.go')
@@ -534,20 +538,17 @@ test('CC 卡片维持同行等高，内容纵向填充不改变卡片尺寸', ()
   assert.match(overview, /class="cc-dist-head"/, '结果区有标题与总数，填充底部空间')
 })
 
-test('阶段 2 复用拦截页步骤：挑战/封禁共用页面选择与页面内滑块组件', () => {
+test('阶段 2 复用拦截页步骤：挑战页选择与页面内滑块组件（CC 封禁响应已退役）', () => {
   const text = code('src/views/security/SecurityPolicies.vue')
   assert.doesNotMatch(text, /noPageStage2|noPageRateLimit|rateLimitFacet/)
   assert.match(text, /steps\.push\(WIZARD_STEP\.BLOCK_PAGE\)/, '阶段 2 必须包含拦截页步骤')
-  assert.match(text, /v-model="form\.cc_response"/, 'CC 响应选择在拦截页步骤')
+  assert.doesNotMatch(text, /v-model="form\.cc_response"/, 'CC 响应方式单选已退役（封禁由自动封禁管线承载）')
+  assert.doesNotMatch(text, /ccResponseLabel/, '响应方式标签已退役')
   assert.match(text, /challengePageTip/, '挑战页需说明 {{human_verify_widget}} 占位符')
-  assert.match(text, /<el-form-item :label="t\('app\.security\.policies\.bp\.pageLabel'\)">/, '挑战/封禁共用页面选择器')
-  const pageIdx = text.indexOf("t('app.security.policies.bp.pageLabel')")
-  const ccIdx = text.indexOf("t('app.security.policies.human.ccResponseLabel')")
-  assert.ok(pageIdx >= 0 && ccIdx > pageIdx, '页面选择器必须独立于 CC 响应方式，挑战模式也可选页')
+  assert.match(text, /<el-form-item :label="t\('app\.security\.policies\.bp\.pageLabel'\)">/, '挑战页选择器')
   assert.match(text, /<div class="form-tip-line">\{\{ t\('app\.security\.policies\.human\.ccEnabledTip'\) \}\}<\/div>/, 'CC 说明使用换行描述样式')
   assert.doesNotMatch(code('src/locales/zh/security.ts'), /\{\{human_verify_widget\}\}/, 'i18n 文案不得内嵌双花括号：vue-i18n 渲染会抛错并吞掉页面选择器')
   assert.match(text, /v-text="'\{\{human_verify_widget\}\}'"/, '占位符用 v-text 原样展示')
-  assert.match(text, /v-if="!\(editorPolicyType === 'stage2' && form\.cc_response !== 'ban'\)"/, '挑战模式不再合成「使用内置人机验证页」选项')
   assert.match(text, /challengePageMissingWidget/, '选择页面后必须校验滑块组件占位符')
   assert.match(text, /challengePageNeedsWidget/, '缺占位符必须有明确提示并阻断保存')
   assert.match(code('src/views/security/SecurityBlockPages.vue'), /insertHumanWidget/, '拦截页编辑器保留插入滑块验证组件')

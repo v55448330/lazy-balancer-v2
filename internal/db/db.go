@@ -209,7 +209,7 @@ const (
 	DefaultAutobanThreshold     = 100
 	DefaultAutobanWindowMinutes = 5
 	DefaultAutobanDuration      = "1h"
-	DefaultAutobanScope         = "all"
+	DefaultAutobanScope         = "blocked,logged,challenge_issued,challenge_failed"
 	DefaultAutobanDryRun        = 1
 )
 
@@ -411,8 +411,14 @@ func Initialize(dataDir string) (err error) {
 	if err := runMigrations(); err != nil {
 		return fmt.Errorf("failed to run migrations: %w", err)
 	}
+	if err := migrateAutobanScopeMultiselect(); err != nil {
+		return fmt.Errorf("failed to migrate autoban scope multiselect: %w", err)
+	}
 	if err := backfillHumanEventPolicyAttribution(); err != nil {
 		return fmt.Errorf("failed to backfill human event policy attribution: %w", err)
+	}
+	if err := cleanupHumanPassEvents(); err != nil {
+		return fmt.Errorf("failed to cleanup human pass events: %w", err)
 	}
 	if err := migrateSyncSwitches(); err != nil {
 		return fmt.Errorf("failed to migrate sync switches: %w", err)
@@ -1200,7 +1206,6 @@ var newColumnsRegistry = map[string]string{
 	"security_policies.cc_4xx_ratio":            "INTEGER NOT NULL DEFAULT 70",
 	"security_policies.cc_session_anomaly":      "INTEGER NOT NULL DEFAULT 0",
 	"security_policies.cc_session_ua_threshold": "INTEGER NOT NULL DEFAULT 5",
-	"security_policies.cc_response":             "TEXT NOT NULL DEFAULT 'verify'",
 	"global_config.cc_detect_enabled":           "INTEGER NOT NULL DEFAULT 0",
 	"global_config.cc_rps_limit":                "INTEGER NOT NULL DEFAULT 40",
 	"global_config.cc_rps_window":               "INTEGER NOT NULL DEFAULT 10",
@@ -1455,18 +1460,20 @@ var newColumnsRegistry = map[string]string{
 	"global_config.applied_waf_ref_hash":    "TEXT DEFAULT ''",
 	"global_config.applied_waf_ref_version": "INTEGER DEFAULT 0",
 	// 自动封禁六项配置列：启用/阈值/窗口分钟/封禁时长（枚举
-	// '10m','30m','1h','6h','12h','24h','permanent'）/统计口径（'blocked',
-	// 'logged','all'）/观察模式（1=默认 dry-run，仅记录建议不落名单）。
-	// 全部 NOT NULL——语义零值即合法值（关/100/5/'1h'/'all'/观察），无 NULL 分支。
-	"global_config.autoban_enabled":            "INTEGER NOT NULL DEFAULT " + fmt.Sprint(DefaultAutobanEnabled),
-	"global_config.autoban_threshold":          "INTEGER NOT NULL DEFAULT " + fmt.Sprint(DefaultAutobanThreshold),
-	"global_config.autoban_window_minutes":     "INTEGER NOT NULL DEFAULT " + fmt.Sprint(DefaultAutobanWindowMinutes),
-	"global_config.autoban_duration":           "TEXT NOT NULL DEFAULT '" + DefaultAutobanDuration + "'",
-	"global_config.autoban_scope":              "TEXT NOT NULL DEFAULT '" + DefaultAutobanScope + "'",
-	"global_config.autoban_dry_run":            "INTEGER NOT NULL DEFAULT " + fmt.Sprint(DefaultAutobanDryRun),
-	"global_config.autoban_count_human_failed": "BOOLEAN NOT NULL DEFAULT FALSE",
-	"nodes.server_map_lat":                     "REAL NOT NULL DEFAULT 0",
-	"nodes.server_map_lon":                     "REAL NOT NULL DEFAULT 0",
+	// '10m','30m','1h','6h','12h','24h','permanent'）/统计口径（四维多选集合
+	// 'blocked,logged,challenge_issued,challenge_failed'，2026-11-13 用户裁定）/
+	// 观察模式（1=默认 dry-run，仅记录建议不落名单）。
+	// 全部 NOT NULL——语义零值即合法值（关/100/5/'1h'/四维全选/观察），无 NULL 分支。
+	"global_config.autoban_enabled":        "INTEGER NOT NULL DEFAULT " + fmt.Sprint(DefaultAutobanEnabled),
+	"global_config.autoban_threshold":      "INTEGER NOT NULL DEFAULT " + fmt.Sprint(DefaultAutobanThreshold),
+	"global_config.autoban_window_minutes": "INTEGER NOT NULL DEFAULT " + fmt.Sprint(DefaultAutobanWindowMinutes),
+	"global_config.autoban_duration":       "TEXT NOT NULL DEFAULT '" + DefaultAutobanDuration + "'",
+	"global_config.autoban_scope":          "TEXT NOT NULL DEFAULT '" + DefaultAutobanScope + "'",
+	"global_config.autoban_dry_run":        "INTEGER NOT NULL DEFAULT " + fmt.Sprint(DefaultAutobanDryRun),
+	// 口径单选→多选一次性迁移门（旧 scope+count_human_failed → 四维集合）。
+	"global_config.autoban_scope_multiselect_v1": "BOOLEAN DEFAULT 0",
+	"nodes.server_map_lat":                       "REAL NOT NULL DEFAULT 0",
+	"nodes.server_map_lon":                       "REAL NOT NULL DEFAULT 0",
 }
 
 func runMigrations() error {
@@ -1500,6 +1507,11 @@ func runMigrations() error {
 	// 配额限流下线（2026-11-12 用户裁定）：阶段 2 仅保留 CC 人机挑战。
 	// 物理删除 rate_limit_* 列；旧备份/快照字段由导入/同步侧裁剪。
 	if err := retireRateLimitQuota(); err != nil {
+		return err
+	}
+	// CC「封禁」响应退役（2026-11-13 用户裁定）：物理删除 cc_response 列；
+	// 旧备份/快照字段由导入/同步侧裁剪。
+	if err := retireCCResponse(); err != nil {
 		return err
 	}
 	_, _ = DB.Exec(`DELETE FROM security_block_pages WHERE id=4 AND is_builtin=1 AND name='Human Verification Page'`)
@@ -1738,7 +1750,17 @@ func runMigrations() error {
 		updateWhere("global_config", fmt.Sprintf("autoban_threshold=%d", DefaultAutobanThreshold), "autoban_threshold IS NULL OR autoban_threshold<1 OR autoban_threshold>10000"),
 		updateWhere("global_config", fmt.Sprintf("autoban_window_minutes=%d", DefaultAutobanWindowMinutes), "autoban_window_minutes IS NULL OR autoban_window_minutes<1 OR autoban_window_minutes>60"),
 		updateWhere("global_config", fmt.Sprintf("autoban_duration='%s'", DefaultAutobanDuration), "autoban_duration IS NULL OR autoban_duration NOT IN ('10m','30m','1h','6h','12h','24h','permanent')"),
-		updateWhere("global_config", fmt.Sprintf("autoban_scope='%s'", DefaultAutobanScope), "autoban_scope IS NULL OR autoban_scope NOT IN ('blocked','logged','all')"),
+		// 口径多选集合收敛（镜像 services.ValidAutobanScope：非空、逐成员属四维、
+		// 无重复）：NULL/空串/含非法成员/重复成员的脏行复位默认全选。合法集合恒不触碰。
+		updateWhere("global_config", fmt.Sprintf("autoban_scope='%s'", DefaultAutobanScope),
+			`autoban_scope IS NULL OR TRIM(autoban_scope)='' OR EXISTS (
+				SELECT 1 FROM json_each('["' || REPLACE(autoban_scope, ',', '","') || '"]')
+				WHERE TRIM(value) NOT IN ('blocked','logged','challenge_issued','challenge_failed')
+			) OR (
+				SELECT COUNT(*) FROM json_each('["' || REPLACE(autoban_scope, ',', '","') || '"]')
+			) <> (
+				SELECT COUNT(DISTINCT TRIM(value)) FROM json_each('["' || REPLACE(autoban_scope, ',', '","') || '"]')
+			)`),
 		updateWhere("global_config", fmt.Sprintf("autoban_dry_run=%d", DefaultAutobanDryRun), "autoban_dry_run IS NULL OR autoban_dry_run NOT IN (0,1)"),
 		// 安全事件保留两列的**上界**每启动收敛（与写入侧/导入钳制/从端 apply
 		// 同一上界常量）。下界（<=0）由一次性 marker 迁移处理——marker 置位后
@@ -5895,6 +5917,16 @@ func retireRateLimitQuota() error {
 	return nil
 }
 
+// retireCCResponse 删除已退役的 CC「封禁」响应列（2026-11-13 用户裁定：CC 统一
+// 走挑战页，封禁由自动封禁管线承载）。列删除后旧备份/旧快照的 cc_response 由
+// 导入/同步侧裁剪（不进入 INSERT）。幂等：列不存在时零操作。
+func retireCCResponse() error {
+	if _, err := dropColumnIfExists("security_policies", "cc_response"); err != nil {
+		return fmt.Errorf("failed to drop retired security_policies.cc_response: %w", err)
+	}
+	return nil
+}
+
 // backfillHumanEventPolicyAttribution 一次性回填历史人机挑战事件的规则/策略归属。
 // 早期 ingest-human 未写 policy_id/rule_name/policy_name，触发详情会把合法 CC
 // 挑战显示成“本次事件无策略归属”；按 rule_caddy_id 回填当时绑定的阶段 2
@@ -5946,7 +5978,7 @@ func backfillHumanEventPolicyAttribution() error {
 		if !ok {
 			attr = attribution{}
 			if item.ruleID != "" {
-				_ = DB.QueryRow(`SELECT COALESCE(r.name,''), COALESCE(b.policy_id,0), COALESCE(p.name,'')
+				_ = DB.QueryRow(`SELECT COALESCE(r.name,''), CASE WHEN p.id IS NOT NULL THEN b.policy_id ELSE 0 END, CASE WHEN p.id IS NOT NULL THEN p.name ELSE '' END
 					FROM lb_rules r
 					LEFT JOIN security_policy_bindings b ON b.rule_caddy_id=r.caddy_id
 					LEFT JOIN security_policies p ON p.id=b.policy_id AND p.policy_type='stage2'
@@ -5972,6 +6004,123 @@ func backfillHumanEventPolicyAttribution() error {
 		log.Printf("回填人机挑战事件策略归属: %d 条", updated)
 	}
 	return nil
+}
+
+// cleanupHumanPassEvents 一次性清理存量 human_pass 事件（2026-11-13 用户裁定：
+// 挑战成功是放行结果，不是安全事件）。新事件已在摄取侧跳过落库；此处清理历史
+// 行，metrics_meta 标记保证只跑一次。
+func cleanupHumanPassEvents() error {
+	if MetricsDB == nil {
+		return nil
+	}
+	const marker = "human_pass_events_cleanup_v1"
+	var exists string
+	err := MetricsDB.QueryRow(`SELECT value FROM metrics_meta WHERE key=?`, marker).Scan(&exists)
+	if err == nil {
+		return nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	res, err := MetricsDB.Exec(`DELETE FROM security_events WHERE event_type='human' AND rule_triggered='human_pass'`)
+	if err != nil {
+		return err
+	}
+	deleted, _ := res.RowsAffected()
+	if _, err := MetricsDB.Exec(`INSERT OR REPLACE INTO metrics_meta (key,value) VALUES (?,?)`, marker, strconv.FormatInt(deleted, 10)); err != nil {
+		return err
+	}
+	if deleted > 0 {
+		log.Printf("清理存量挑战成功事件（human_pass，非安全事件）: %d 条", deleted)
+	}
+	return nil
+}
+
+// migrateAutobanScopeMultiselect 一次性把旧单值口径（blocked/logged/all）+
+// count_human_failed 开关迁移为四维多选集合（2026-11-13 用户裁定），随后删除
+// 退役的 count_human_failed 列。marker 置位后不再触碰运行期写值。
+// 映射语义与 services.MigrateLegacyAutobanScope 单源同口径（db 包不反向依赖
+// services，此处内联镜像；改一处必须同步另一处，db_autoban_scope_migration_test 钉测对齐）。
+func migrateAutobanScopeMultiselect() error {
+	if err := ensureNewColumns(map[string]string{"global_config.autoban_scope_multiselect_v1": "BOOLEAN DEFAULT 0"}, nil); err != nil {
+		return err
+	}
+	var done bool
+	if err := DB.QueryRow("SELECT COALESCE(autoban_scope_multiselect_v1,0) FROM global_config WHERE id=1").Scan(&done); err != nil && err != sql.ErrNoRows {
+		return err
+	}
+	if done {
+		return nil
+	}
+	// 旧列可能已被前次迁移删除（marker 未置位的中间态）：列缺席按默认口径处理。
+	var hasCountCol int
+	if err := DB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('global_config') WHERE name='autoban_count_human_failed'").Scan(&hasCountCol); err != nil {
+		return err
+	}
+	countHuman := false
+	if hasCountCol == 1 {
+		if err := DB.QueryRow("SELECT COALESCE(autoban_count_human_failed,0) FROM global_config WHERE id=1").Scan(&countHuman); err != nil && err != sql.ErrNoRows {
+			return err
+		}
+	}
+	var scope string
+	if err := DB.QueryRow("SELECT COALESCE(autoban_scope,'') FROM global_config WHERE id=1").Scan(&scope); err != nil && err != sql.ErrNoRows {
+		return err
+	}
+	migrated := legacyAutobanScopeToSet(scope, countHuman)
+	if _, err := DB.Exec("UPDATE global_config SET autoban_scope=? WHERE id=1", migrated); err != nil {
+		return err
+	}
+	if hasCountCol == 1 {
+		if _, err := dropColumnIfExists("global_config", "autoban_count_human_failed"); err != nil {
+			return err
+		}
+	}
+	if _, err := DB.Exec("UPDATE global_config SET autoban_scope_multiselect_v1=1 WHERE id=1"); err != nil {
+		return err
+	}
+	log.Printf("自动封禁口径迁移：单选 %q → 多选集合 %q（count_human_failed 列退役）", scope, migrated)
+	return nil
+}
+
+// legacyAutobanScopeToSet 镜像 services.MigrateLegacyAutobanScope（见上注释）：
+// 合法新集合原样保留；旧单值 blocked/logged/all 映射；非法值原样返回（交启动
+// 回填收敛到默认，迁移不得把损坏值伪装成合法默认）。
+func legacyAutobanScopeToSet(scope string, countHumanFailed bool) string {
+	if validAutobanScopeSet(scope) {
+		return scope
+	}
+	switch strings.TrimSpace(scope) {
+	case "blocked":
+		return "blocked"
+	case "logged":
+		return "logged"
+	case "all":
+		if countHumanFailed {
+			return "blocked,logged,challenge_failed"
+		}
+		return "blocked,logged"
+	default:
+		return scope
+	}
+}
+
+// validAutobanScopeSet 镜像 services.ValidAutobanScope（db 不反向依赖 services）：
+// 非空、逐成员属四维、无重复。
+func validAutobanScopeSet(scope string) bool {
+	dims := map[string]bool{"blocked": true, "logged": true, "challenge_issued": true, "challenge_failed": true}
+	parts := strings.Split(scope, ",")
+	seen := make(map[string]bool, len(parts))
+	count := 0
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" || !dims[part] || seen[part] {
+			return false
+		}
+		seen[part] = true
+		count++
+	}
+	return count > 0
 }
 
 func migratePolicyStagesV1() error {

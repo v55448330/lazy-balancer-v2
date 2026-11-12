@@ -36,7 +36,6 @@ var stageZeroMatrixFields = []string{
 	"cc_4xx_ratio",
 	"cc_session_anomaly",
 	"cc_session_ua_threshold",
-	"cc_response",
 	"ip_acl_enabled",
 	"ip_acl_list",
 	"ip_acl_list_refs",
@@ -318,7 +317,6 @@ func pollutedCreateRequest() models.CreateSecurityPolicyRequest {
 		CC4xxRatio:           70,
 		CCSessionAnomaly:     true,
 		CCSessionUAThreshold: 5,
-		CCResponse:           "ban",
 	}
 }
 
@@ -358,7 +356,6 @@ func pollutedUpdateRequest() models.UpdateSecurityPolicyRequest {
 		CC4xxRatio:           &c.CC4xxRatio,
 		CCSessionAnomaly:     &c.CCSessionAnomaly,
 		CCSessionUAThreshold: &c.CCSessionUAThreshold,
-		CCResponse:           &c.CCResponse,
 	}
 }
 

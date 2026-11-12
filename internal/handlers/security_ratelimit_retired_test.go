@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 	"testing"
@@ -58,34 +59,33 @@ func TestSecurityPolicy_ignoresRetiredRateLimitFields(t *testing.T) {
 	}
 }
 
-// cc_response（verify|ban）策略级贯通：创建/详情回读一致，非法值归一 verify。
-func TestSecurityPolicy_ccResponseRoundTrip(t *testing.T) {
+// cc_response 退役（2026-11-13 用户裁定：CC 统一走挑战页，封禁由自动封禁管线
+// 承载）：列已物理删除，详情不暴露该字段，提交携带时被忽略（不报错、不落库）。
+func TestSecurityPolicy_ccResponseRetired(t *testing.T) {
 	setupSecurityPolicyTestDB(t)
 	router := newSecurityRouter(t)
 	id := createTestPolicy(t, router, map[string]any{
-		"name": "CC封禁", "policy_type": "stage2",
+		"name": "CC挑战", "policy_type": "stage2",
 		"human_verify_mode": "force", "human_verify_type": "slider",
 		"cc_detect_enabled": true, "cc_response": "ban",
 	})
-	assertMode := func(want string) {
-		var got string
-		if err := db.DB.QueryRow(`SELECT COALESCE(cc_response,'') FROM security_policies WHERE id=?`, id).Scan(&got); err != nil {
-			t.Fatal(err)
-		}
-		if got != want {
-			t.Fatalf("cc_response=%q, want %q", got, want)
-		}
-	}
-	assertMode("ban")
-	invalidID := createTestPolicy(t, router, map[string]any{
-		"name": "CC非法响应", "policy_type": "stage2", "human_verify_mode": "force",
-		"cc_response": "block",
-	})
-	var got string
-	if err := db.DB.QueryRow(`SELECT cc_response FROM security_policies WHERE id=?`, invalidID).Scan(&got); err != nil {
+	var colCount int
+	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('security_policies') WHERE name='cc_response'`).Scan(&colCount); err != nil {
 		t.Fatal(err)
 	}
-	if got != "verify" {
-		t.Fatalf("非法 cc_response 应归一 verify，got %q", got)
+	if colCount != 0 {
+		t.Fatal("cc_response 列必须已物理删除")
+	}
+	detail := getRequest(t, router, fmt.Sprintf("/security/policies/%d", id))
+	var payload struct {
+		Data struct {
+			Policy map[string]any `json:"policy"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(detail.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := payload.Data.Policy["cc_response"]; exists {
+		t.Fatalf("详情不得再暴露已删除字段 cc_response: %s", detail.Body.String())
 	}
 }

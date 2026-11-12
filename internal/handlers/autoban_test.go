@@ -106,7 +106,7 @@ func TestAutobanConfig_getDefaults(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &cfg); err != nil {
 		t.Fatalf("decode: %v body=%s", err, rec.Body.String())
 	}
-	if cfg.Enabled || !cfg.DryRun || cfg.Threshold != 100 || cfg.WindowMinutes != 5 || cfg.Duration != "1h" || cfg.Scope != "all" {
+	if cfg.Enabled || !cfg.DryRun || cfg.Threshold != 100 || cfg.WindowMinutes != 5 || cfg.Duration != "1h" || cfg.Scope != "blocked,logged,challenge_issued,challenge_failed" {
 		t.Fatalf("默认配置失真: %+v", cfg)
 	}
 }
@@ -148,7 +148,7 @@ func TestAutobanConfig_putValidRoundtrip(t *testing.T) {
 	if err := db.AuditDB.QueryRow(`SELECT detail FROM audit_log WHERE action='更新' AND resource='自动封禁' ORDER BY id DESC LIMIT 1`).Scan(&detail); err != nil {
 		t.Fatalf("read audit detail: %v", err)
 	}
-	wantDetail := "启用：开（调度随之启停）；阈值：50 次/10 分钟；时长：6 小时；口径：仅拦截；模式：正式"
+	wantDetail := "启用：开（调度随之启停）；阈值：50 次/10 分钟；时长：6 小时；口径：拦截；模式：正式"
 	if detail != wantDetail {
 		t.Fatalf("审计详情=%q, want %q（启用与调度同义，只产出一个状态位）", detail, wantDetail)
 	}
@@ -163,7 +163,7 @@ func TestAutobanConfig_putRejectsInvalid(t *testing.T) {
 	// 合法基线：每个非法用例只破坏一个字段，其余字段齐全，确保被测校验真正
 	// 被求值（而非被更早的规则短路）。
 	valid := func() map[string]any {
-		return map[string]any{"enabled": false, "threshold": 100, "window_minutes": 5, "duration": "1h", "scope": "all", "dry_run": true}
+		return map[string]any{"enabled": false, "threshold": 100, "window_minutes": 5, "duration": "1h", "scope": "blocked,logged", "dry_run": true}
 	}
 
 	cases := []struct {
@@ -172,7 +172,7 @@ func TestAutobanConfig_putRejectsInvalid(t *testing.T) {
 		message string
 	}{
 		// 缺字段：threshold 零值先短路（这是绑定结构的既有语义，单独钉住）。
-		{name: "缺 threshold 停在首条校验", body: map[string]any{"window_minutes": 5, "duration": "1h", "scope": "all"}, message: "阈值须在 1-10000 之间"},
+		{name: "缺 threshold 停在首条校验", body: map[string]any{"window_minutes": 5, "duration": "1h", "scope": "blocked,logged"}, message: "阈值须在 1-10000 之间"},
 		{name: "threshold 下界", body: map[string]any{"threshold": 0}, message: "阈值须在 1-10000 之间"},
 		{name: "threshold 上界", body: map[string]any{"threshold": 10001}, message: "阈值须在 1-10000 之间"},
 	}
@@ -216,7 +216,7 @@ func TestAutobanConfig_putRejectsInvalid(t *testing.T) {
 	if err := json.Unmarshal(getRequest(t, router, "/security/autoban").Body.Bytes(), &got); err != nil {
 		t.Fatal(err)
 	}
-	if got.Threshold != 100 || got.WindowMinutes != 5 || got.Duration != "1h" || got.Scope != "all" {
+	if got.Threshold != 100 || got.WindowMinutes != 5 || got.Duration != "1h" || got.Scope != "blocked,logged,challenge_issued,challenge_failed" {
 		t.Fatalf("非法配置写入了库: %+v", got)
 	}
 }
@@ -236,7 +236,7 @@ func TestAutobanConfig_putTogglesLoopScheduling(t *testing.T) {
 	// 自动备份执行器）都会拿到死引擎，门禁随测试顺序变红。
 	t.Cleanup(services.StopTaskEngine)
 
-	base := map[string]any{"threshold": 100, "window_minutes": 5, "duration": "1h", "scope": "all", "dry_run": true}
+	base := map[string]any{"threshold": 100, "window_minutes": 5, "duration": "1h", "scope": "blocked,logged", "dry_run": true}
 	body := func(enabled bool) map[string]any {
 		m := map[string]any{}
 		for k, v := range base {
@@ -652,7 +652,7 @@ func TestAutobanConfig_putDisableFlushesExpiredEntries(t *testing.T) {
 	services.SetAutobanReloader(func() error { reloads++; return nil })
 	t.Cleanup(func() { services.SetAutobanReloader(nil) })
 
-	body := map[string]any{"enabled": false, "threshold": 100, "window_minutes": 5, "duration": "1h", "scope": "all", "dry_run": true}
+	body := map[string]any{"enabled": false, "threshold": 100, "window_minutes": 5, "duration": "1h", "scope": "blocked,logged", "dry_run": true}
 	if rec := putJSON(t, router, "/security/autoban", body); rec.Code != http.StatusOK {
 		t.Fatalf("禁用保存 status=%d body=%s", rec.Code, rec.Body.String())
 	}
@@ -844,7 +844,7 @@ func TestAutobanConfig_putDBFailureMapsTo500(t *testing.T) {
 	if _, err := db.DB.Exec(`CREATE TRIGGER test_fail_autoban_update BEFORE UPDATE ON global_config BEGIN SELECT RAISE(ABORT, 'simulated io failure'); END`); err != nil {
 		t.Fatalf("install failure trigger: %v", err)
 	}
-	body := map[string]any{"threshold": 100, "window_minutes": 5, "duration": "1h", "scope": "all", "dry_run": true}
+	body := map[string]any{"threshold": 100, "window_minutes": 5, "duration": "1h", "scope": "blocked,logged", "dry_run": true}
 	rec := putJSON(t, router, "/security/autoban", body)
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("DB 写失败须 500，status=%d body=%s", rec.Code, rec.Body.String())

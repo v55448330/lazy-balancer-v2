@@ -104,7 +104,7 @@ func lookupHumanEventAttribution(ruleID string) humanEventAttribution {
 		return humanEventAttribution{}
 	}
 	var a humanEventAttribution
-	err := db.DB.QueryRow(`SELECT COALESCE(r.name,''), COALESCE(b.policy_id,0), COALESCE(p.name,'')
+	err := db.DB.QueryRow(`SELECT COALESCE(r.name,''), CASE WHEN p.id IS NOT NULL THEN b.policy_id ELSE 0 END, CASE WHEN p.id IS NOT NULL THEN p.name ELSE '' END
 		FROM lb_rules r
 		LEFT JOIN security_policy_bindings b ON b.rule_caddy_id=r.caddy_id
 		LEFT JOIN security_policies p ON p.id=b.policy_id AND p.policy_type='stage2'
@@ -163,15 +163,15 @@ func (s *SecurityEventsIPCServer) handleIngestHuman(w http.ResponseWriter, r *ht
 		}
 	}
 	for _, row := range rows {
-		// 结果语义（2026-11-12 用户裁定）：挑战发放/通过/失败都是"挑战"结果——
-		// action=challenged，不计入拦截/检测/攻击面；通过率由 rule id 区分
-		// （human_pass / human_failed），挑战发放数=human_challenge。
+		// 结果语义（2026-11-13 用户裁定）：挑战成功（pass）是放行结果，不是安全
+		// 事件——不落库（避免污染事件日志/统计）；发放/失败逐请求落库，action=
+		// challenged，不计入拦截/检测/攻击面。通过率由 admin 计数承载。
+		if row.Kind == "pass" {
+			continue
+		}
 		action := "challenged"
 		rule := "human_challenge"
-		switch row.Kind {
-		case "pass":
-			rule = "human_pass"
-		case "fail":
+		if row.Kind == "fail" {
 			rule = "human_failed"
 		}
 		attr := attributions[row.RuleID]
@@ -191,11 +191,12 @@ func (s *SecurityEventsIPCServer) handleIngestHuman(w http.ResponseWriter, r *ht
 		http.Error(w, "human event commit: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	// 挑战失败计入自动封禁（开关默认关）：提交成功后喂入，窗口/阈值与
-	// WAF 事件共用；主节点/启用/开关门在 services 内收敛。
+	// 挑战发放/失败计入自动封禁（按口径维度成员资格，2026-11-13 用户裁定）：
+	// 提交成功后喂入，窗口/阈值与 WAF 事件共用；主节点/启用/口径门在 services
+	// 内收敛。挑战通过永不计。
 	for _, row := range rows {
-		if row.Kind == "fail" {
-			services.ObserveHumanChallengeFailure(row.ClientIP, row.RuleID, time.UnixMilli(row.Ts).UTC())
+		if row.Kind == "challenge" || row.Kind == "fail" {
+			services.ObserveHumanEvent(row.ClientIP, row.Kind, time.UnixMilli(row.Ts).UTC())
 		}
 	}
 	w.WriteHeader(http.StatusNoContent)

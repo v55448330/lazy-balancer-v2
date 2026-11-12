@@ -149,8 +149,8 @@ func TestImportConfigBackup_autobanEnumGate(t *testing.T) {
 		{"duration 合法保持 24h", map[string]any{"autoban_duration": "24h"}, func(t *testing.T) {
 			assertImportedAutobanText(t, "autoban_duration", "24h")
 		}},
-		{"scope 空串归一 all", map[string]any{"autoban_scope": ""}, func(t *testing.T) {
-			assertImportedAutobanText(t, "autoban_scope", "all")
+		{"scope 空串归一默认全选", map[string]any{"autoban_scope": ""}, func(t *testing.T) {
+			assertImportedAutobanText(t, "autoban_scope", "blocked,logged,challenge_issued,challenge_failed")
 		}},
 		{"scope 合法保持 logged", map[string]any{"autoban_scope": "logged"}, func(t *testing.T) {
 			assertImportedAutobanText(t, "autoban_scope", "logged")

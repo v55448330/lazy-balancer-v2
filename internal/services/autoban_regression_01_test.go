@@ -47,7 +47,7 @@ func installAutobanEngineFixture(t *testing.T) *taskengine.Engine {
 // 不再出现。
 func TestAutobanRunGate_recheckPreservesConcurrentlyEnabledLoop(t *testing.T) {
 	te := installAutobanEngineFixture(t)
-	setAutobanConfigRaw(t, false, 1, 5, "1h", "all", true)
+	setAutobanConfigRaw(t, false, 1, 5, "1h", "blocked,logged", true)
 
 	// 交错窗：首读 false 之后、复查之前的「PUT enabled=1 + StartLoop」。
 	oldRecheck := autobanRecheckEnabled
@@ -72,7 +72,7 @@ func TestAutobanRunGate_recheckPreservesConcurrentlyEnabledLoop(t *testing.T) {
 // 复查均 false（真未启用）照旧停环——复查不得放松业务门。
 func TestAutobanRunGate_stopsLoopWhenStillDisabledAfterRecheck(t *testing.T) {
 	te := installAutobanEngineFixture(t)
-	setAutobanConfigRaw(t, false, 1, 5, "1h", "all", true)
+	setAutobanConfigRaw(t, false, 1, 5, "1h", "blocked,logged", true)
 	te.StartLoop(AutobanTaskID)
 
 	if err := RunAutobanCycle(taskengine.RunContext{Trigger: "manual"}); err == nil {
@@ -90,7 +90,7 @@ func TestAutobanRunGate_stopsLoopWhenStillDisabledAfterRecheck(t *testing.T) {
 // StartLoop）或重启（启动回填收敛后按启用对齐拉起）。
 func TestAutobanRunCycle_invalidConfigStopsLoop(t *testing.T) {
 	te := installAutobanEngineFixture(t)
-	setAutobanConfigRaw(t, true, 0, 5, "1h", "all", false)
+	setAutobanConfigRaw(t, true, 0, 5, "1h", "blocked,logged", false)
 	te.StartLoop(AutobanTaskID)
 	if m, _ := te.Lookup(AutobanTaskID); !m.LoopOn {
 		t.Fatal("前置：调度应已开启")
@@ -109,7 +109,7 @@ func TestAutobanRunCycle_invalidConfigStopsLoop(t *testing.T) {
 // 合法配置照常执行且不停调度。
 func TestAutobanRunCycle_validConfigKeepsLoopOn(t *testing.T) {
 	te := installAutobanEngineFixture(t)
-	setAutobanConfigRaw(t, true, 1, 5, "24h", "all", true)
+	setAutobanConfigRaw(t, true, 1, 5, "24h", "blocked,logged", true)
 	te.StartLoop(AutobanTaskID)
 
 	if err := RunAutobanCycle(taskengine.RunContext{Trigger: "auto"}); err != nil {
@@ -175,7 +175,7 @@ func TestAutobanIsMaster_exportsSchedulerRole(t *testing.T) {
 // 任务永久停调度（启用状态不可判定 ≠ 未启用）；DB 恢复后下一轮照常执行。
 func TestAutobanRunGate_enabledReadFailureKeepsLoopOn(t *testing.T) {
 	te := installAutobanEngineFixture(t)
-	setAutobanConfigRaw(t, true, 1, 5, "1h", "all", true)
+	setAutobanConfigRaw(t, true, 1, 5, "1h", "blocked,logged", true)
 	te.StartLoop(AutobanTaskID)
 	if m, _ := te.Lookup(AutobanTaskID); !m.LoopOn {
 		t.Fatal("前置：调度应已开启")

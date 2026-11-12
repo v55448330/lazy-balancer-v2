@@ -85,14 +85,7 @@ func boolOnOff(b bool) string {
 }
 
 func autobanScopeText(scope string) string {
-	switch scope {
-	case "blocked":
-		return "仅拦截"
-	case "logged":
-		return "仅检测"
-	default:
-		return "全部"
-	}
+	return services.AutobanScopeLabel(scope)
 }
 
 // GetAutobanStatus GET /security/autoban/status：状态卡数据源（business 组全员

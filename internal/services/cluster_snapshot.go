@@ -804,14 +804,14 @@ func (s *ClusterService) loadSnapshotGlobalSettings(ctx context.Context, store s
 	// 自动封禁六项配置随 users 节同步（镜像
 	// 指针装载+COALESCE 兜底恒携带，升主即按主端配置生效）。局部名 abn* 与上方
 	// 自动备份组 ab* 区分（同一函数作用域）。
-	var abnEnabled, abnDryRun, abnCountHuman bool
+	var abnEnabled, abnDryRun bool
 	var abnThreshold, abnWindow int
 	var abnDuration, abnScope string
 	if err := store.QueryRowContext(ctx, `SELECT COALESCE(autoban_enabled,?), COALESCE(autoban_threshold,?),
-		COALESCE(autoban_window_minutes,?), COALESCE(autoban_duration,?), COALESCE(autoban_scope,?), COALESCE(autoban_dry_run,?), COALESCE(autoban_count_human_failed,?)
+		COALESCE(autoban_window_minutes,?), COALESCE(autoban_duration,?), COALESCE(autoban_scope,?), COALESCE(autoban_dry_run,?)
 		FROM global_config WHERE id=1`,
 		db.DefaultAutobanEnabled, db.DefaultAutobanThreshold, db.DefaultAutobanWindowMinutes,
-		db.DefaultAutobanDuration, db.DefaultAutobanScope, db.DefaultAutobanDryRun, false).Scan(&abnEnabled, &abnThreshold, &abnWindow, &abnDuration, &abnScope, &abnDryRun, &abnCountHuman); err != nil {
+		db.DefaultAutobanDuration, db.DefaultAutobanScope, db.DefaultAutobanDryRun).Scan(&abnEnabled, &abnThreshold, &abnWindow, &abnDuration, &abnScope, &abnDryRun); err != nil {
 		return fmt.Errorf("读取自动封禁设置: %w", err)
 	}
 	snapshot.BasicSettings.AutobanEnabled = &abnEnabled
@@ -820,7 +820,6 @@ func (s *ClusterService) loadSnapshotGlobalSettings(ctx context.Context, store s
 	snapshot.BasicSettings.AutobanDuration = &abnDuration
 	snapshot.BasicSettings.AutobanScope = &abnScope
 	snapshot.BasicSettings.AutobanDryRun = &abnDryRun
-	snapshot.BasicSettings.AutobanCountHumanFailed = &abnCountHuman
 	return nil
 }
 
@@ -919,7 +918,7 @@ func (s *ClusterService) snapshotSecurityPolicies(ctx context.Context, store sna
 	// 'off' 而非 schema 默认 'deny' 即为此——主节点读路径把 NULL 当 'off'；
 	// enabled 归一化为 0 而非 schema 默认 1 同理——读路径 WHERE enabled=1 把
 	// NULL 当禁用，落 1 会让从节点执行主节点未启用的策略）。
-	return s.dumpTableAsJSON(ctx, store, "security_policies", "id,name,COALESCE(description,'') AS description,COALESCE(mode,'off') AS mode,COALESCE(anomaly_threshold,0) AS anomaly_threshold,COALESCE(ip_acl_mode,'') AS ip_acl_mode,COALESCE(ip_acl_list,'[]') AS ip_acl_list,COALESCE(ip_acl_enabled,0) AS ip_acl_enabled,COALESCE(ip_whitelist,'[]') AS ip_whitelist, COALESCE(ip_whitelist_enabled,1) AS ip_whitelist_enabled,COALESCE(ip_blacklist,'[]') AS ip_blacklist,COALESCE(crs_rule_groups,'[]') AS crs_rule_groups,COALESCE(crs_excluded_rules,'[]') AS crs_excluded_rules,COALESCE(custom_rules,'[]') AS custom_rules,COALESCE(block_page_id,0) AS block_page_id,COALESCE(block_status_code,0) AS block_status_code,COALESCE(enabled,0) AS enabled,COALESCE(updated_by,0) AS updated_by,COALESCE(created_at,'') AS created_at,COALESCE(updated_at,'') AS updated_at,COALESCE(geoip_countries,'[]') AS geoip_countries,COALESCE(geoip_mode,'off') AS geoip_mode,COALESCE(geoip_crawler_exempt,0) AS geoip_crawler_exempt,COALESCE(geoip_crawler_engines,'[]') AS geoip_crawler_engines,COALESCE(waf_check_response,0) AS waf_check_response,COALESCE(log_request_body,0) AS log_request_body,COALESCE(ip_acl_list_refs,'[]') AS ip_acl_list_refs,COALESCE(ip_whitelist_refs,'[]') AS ip_whitelist_refs,COALESCE(policy_type,'') AS policy_type,COALESCE(trust_detection,0) AS trust_detection,COALESCE(human_verify_mode,'off') AS human_verify_mode,COALESCE(human_verify_type,'slider') AS human_verify_type,COALESCE(human_verify_ttl,30) AS human_verify_ttl,COALESCE(human_exempt_paths,'[]') AS human_exempt_paths,COALESCE(cc_detect_enabled,0) AS cc_detect_enabled,COALESCE(cc_rps_limit,40) AS cc_rps_limit,COALESCE(cc_rps_window,10) AS cc_rps_window,COALESCE(cc_4xx_ratio,70) AS cc_4xx_ratio,COALESCE(cc_session_anomaly,0) AS cc_session_anomaly,COALESCE(cc_session_ua_threshold,5) AS cc_session_ua_threshold,COALESCE(cc_response,'verify') AS cc_response,COALESCE(block_response_mode,'auto') AS block_response_mode", "id")
+	return s.dumpTableAsJSON(ctx, store, "security_policies", "id,name,COALESCE(description,'') AS description,COALESCE(mode,'off') AS mode,COALESCE(anomaly_threshold,0) AS anomaly_threshold,COALESCE(ip_acl_mode,'') AS ip_acl_mode,COALESCE(ip_acl_list,'[]') AS ip_acl_list,COALESCE(ip_acl_enabled,0) AS ip_acl_enabled,COALESCE(ip_whitelist,'[]') AS ip_whitelist, COALESCE(ip_whitelist_enabled,1) AS ip_whitelist_enabled,COALESCE(ip_blacklist,'[]') AS ip_blacklist,COALESCE(crs_rule_groups,'[]') AS crs_rule_groups,COALESCE(crs_excluded_rules,'[]') AS crs_excluded_rules,COALESCE(custom_rules,'[]') AS custom_rules,COALESCE(block_page_id,0) AS block_page_id,COALESCE(block_status_code,0) AS block_status_code,COALESCE(enabled,0) AS enabled,COALESCE(updated_by,0) AS updated_by,COALESCE(created_at,'') AS created_at,COALESCE(updated_at,'') AS updated_at,COALESCE(geoip_countries,'[]') AS geoip_countries,COALESCE(geoip_mode,'off') AS geoip_mode,COALESCE(geoip_crawler_exempt,0) AS geoip_crawler_exempt,COALESCE(geoip_crawler_engines,'[]') AS geoip_crawler_engines,COALESCE(waf_check_response,0) AS waf_check_response,COALESCE(log_request_body,0) AS log_request_body,COALESCE(ip_acl_list_refs,'[]') AS ip_acl_list_refs,COALESCE(ip_whitelist_refs,'[]') AS ip_whitelist_refs,COALESCE(policy_type,'') AS policy_type,COALESCE(trust_detection,0) AS trust_detection,COALESCE(human_verify_mode,'off') AS human_verify_mode,COALESCE(human_verify_type,'slider') AS human_verify_type,COALESCE(human_verify_ttl,30) AS human_verify_ttl,COALESCE(human_exempt_paths,'[]') AS human_exempt_paths,COALESCE(cc_detect_enabled,0) AS cc_detect_enabled,COALESCE(cc_rps_limit,40) AS cc_rps_limit,COALESCE(cc_rps_window,10) AS cc_rps_window,COALESCE(cc_4xx_ratio,70) AS cc_4xx_ratio,COALESCE(cc_session_anomaly,0) AS cc_session_anomaly,COALESCE(cc_session_ua_threshold,5) AS cc_session_ua_threshold,COALESCE(block_response_mode,'auto') AS block_response_mode", "id")
 }
 
 // snapshotSecurityIPLists（v2.3.0）dump 可复用 IP 地址列表：策略 refs 引用

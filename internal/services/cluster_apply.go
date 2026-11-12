@@ -1157,15 +1157,6 @@ func snapshotTrustDetection(p map[string]interface{}) interface{} {
 // 节点快照、旧备份导入的缺列行）按内容推断（models.InferPolicyType 单一事实
 // 源）——从节点/导入侧落库后类型不得滞留 ”（策略页分组与阶段外字段归一的
 // 判定依赖）。
-func snapshotCCResponse(p map[string]interface{}) string {
-	if v, ok := p["cc_response"].(string); ok {
-		if v == "ban" {
-			return "ban"
-		}
-	}
-	return "verify"
-}
-
 func InferSnapshotPolicyType(p map[string]interface{}) interface{} {
 	if t, ok := p["policy_type"].(string); ok && t != "" {
 		return t
@@ -1372,7 +1363,7 @@ func applySecurityTables(ctx context.Context, tx *sql.Tx, snapshot models.Cluste
 			}
 			policyJSON[column] = text
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO security_policies (id,name,description,mode,anomaly_threshold,ip_acl_mode,ip_acl_list,ip_acl_enabled,ip_whitelist,ip_whitelist_enabled,ip_blacklist,crs_rule_groups,crs_excluded_rules,custom_rules,block_page_id,block_status_code,enabled,updated_by,created_at,updated_at,geoip_countries,geoip_mode,geoip_crawler_exempt,geoip_crawler_engines,waf_check_response,log_request_body,ip_acl_list_refs,ip_whitelist_refs,policy_type,trust_detection,human_verify_mode,human_verify_type,human_verify_ttl,human_exempt_paths,cc_detect_enabled,cc_rps_limit,cc_rps_window,cc_4xx_ratio,cc_session_anomaly,cc_session_ua_threshold,cc_response,block_response_mode) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		if _, err := tx.ExecContext(ctx, `INSERT INTO security_policies (id,name,description,mode,anomaly_threshold,ip_acl_mode,ip_acl_list,ip_acl_enabled,ip_whitelist,ip_whitelist_enabled,ip_blacklist,crs_rule_groups,crs_excluded_rules,custom_rules,block_page_id,block_status_code,enabled,updated_by,created_at,updated_at,geoip_countries,geoip_mode,geoip_crawler_exempt,geoip_crawler_engines,waf_check_response,log_request_body,ip_acl_list_refs,ip_whitelist_refs,policy_type,trust_detection,human_verify_mode,human_verify_type,human_verify_ttl,human_exempt_paths,cc_detect_enabled,cc_rps_limit,cc_rps_window,cc_4xx_ratio,cc_session_anomaly,cc_session_ua_threshold,block_response_mode) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 			p["id"], p["name"], p["description"], p["mode"], p["anomaly_threshold"],
 			p["ip_acl_mode"], policyJSON["ip_acl_list"], p["ip_acl_enabled"],
 			policyJSON["ip_whitelist"], policyWhitelistEnabled(p), policyJSON["ip_blacklist"],
@@ -1381,7 +1372,7 @@ func applySecurityTables(ctx context.Context, tx *sql.Tx, snapshot models.Cluste
 			policyJSON["geoip_countries"], p["geoip_mode"], p["geoip_crawler_exempt"], policyJSON["geoip_crawler_engines"], p["waf_check_response"], p["log_request_body"],
 			policyJSON["ip_acl_list_refs"], policyJSON["ip_whitelist_refs"], InferSnapshotPolicyType(p), snapshotTrustDetection(p),
 			p["human_verify_mode"], p["human_verify_type"], p["human_verify_ttl"], policyJSON["human_exempt_paths"],
-			p["cc_detect_enabled"], p["cc_rps_limit"], p["cc_rps_window"], p["cc_4xx_ratio"], p["cc_session_anomaly"], p["cc_session_ua_threshold"], snapshotCCResponse(p), p["block_response_mode"]); err != nil {
+			p["cc_detect_enabled"], p["cc_rps_limit"], p["cc_rps_window"], p["cc_4xx_ratio"], p["cc_session_anomaly"], p["cc_session_ua_threshold"], p["block_response_mode"]); err != nil {
 			return fmt.Errorf("写入 security_policy: %w", err)
 		}
 	}
@@ -2312,10 +2303,7 @@ func updateSnapshotSettings(ctx context.Context, tx *sql.Tx, snapshot models.Clu
 		settingClauses = append(settingClauses, "autoban_dry_run=?")
 		settingArgs = append(settingArgs, *settings.AutobanDryRun)
 	}
-	if settings.AutobanCountHumanFailed != nil {
-		settingClauses = append(settingClauses, "autoban_count_human_failed=?")
-		settingArgs = append(settingArgs, *settings.AutobanCountHumanFailed)
-	}
+
 	if len(settingClauses) > 0 {
 		if _, err := tx.ExecContext(ctx, `UPDATE global_config SET `+strings.Join(settingClauses, ",")+` WHERE id=1`, settingArgs...); err != nil {
 			return fmt.Errorf("写入快照扩展设置: %w", err)

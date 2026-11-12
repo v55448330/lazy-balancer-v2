@@ -40,9 +40,9 @@ func TestRunAutobanCycle_invalidConfigRefusesExecution(t *testing.T) {
 		scope      string
 		wantSubstr string
 	}{
-		{"threshold=0 拒绝执行", 0, 5, "1h", "all", "阈值须在 1-10000 之间"},
-		{"window=0 拒绝执行", 100, 0, "1h", "all", "统计窗口须在 1-60 分钟之间"},
-		{"duration 非法拒绝执行（不得落永久封禁）", 1, 5, "bogus", "all", "封禁时长取值无效"},
+		{"threshold=0 拒绝执行", 0, 5, "1h", "blocked,logged", "阈值须在 1-10000 之间"},
+		{"window=0 拒绝执行", 100, 0, "1h", "blocked,logged", "统计窗口须在 1-60 分钟之间"},
+		{"duration 非法拒绝执行（不得落永久封禁）", 1, 5, "bogus", "blocked,logged", "封禁时长取值无效"},
 		{"scope 非法拒绝执行", 1, 5, "1h", "bogus", "统计口径取值无效"},
 	}
 	for _, tt := range tests {
@@ -68,7 +68,7 @@ func TestRunAutobanCycle_invalidConfigRefusesExecution(t *testing.T) {
 
 // 回归形状：合法配置照常执行（护栏不得误伤正常轮）。
 func TestRunAutobanCycle_validConfigStillExecutes(t *testing.T) {
-	if err := feedAndRun(t, 1, 5, "24h", "all", false); err != nil {
+	if err := feedAndRun(t, 1, 5, "24h", "blocked,logged", false); err != nil {
 		t.Fatalf("合法配置不得被护栏拦截: %v", err)
 	}
 	entries, _, err := AutobanListEntries()

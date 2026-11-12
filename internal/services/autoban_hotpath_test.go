@@ -59,7 +59,7 @@ func autobanReloadAuditRows(t *testing.T) int {
 // （审计真实性——配置未重载不得宣称重载）；摘要尾注不宣称「已重载」。
 func TestAutobanConverge_gateHitHotPathZeroReload(t *testing.T) {
 	installAutobanFixture(t, "2026-10-14 10:00:00")
-	setAutobanConfigRaw(t, true, 2, 5, "1h", "all", false)
+	setAutobanConfigRaw(t, true, 2, 5, "1h", "blocked,logged", false)
 	seedAutobanListReferencedByPolicy(t)
 	spy := installAutobanConvergeSpy(t, func() (IPListProjectionOutcome, error) { return ProjectionConverged, nil })
 
@@ -87,7 +87,7 @@ func TestAutobanConverge_gateHitHotPathZeroReload(t *testing.T) {
 // 不需要任何收敛重载；热路径刷新器与全量重载都不得调用。
 func TestAutobanConverge_unreferencedSkipsReload(t *testing.T) {
 	installAutobanFixture(t, "2026-10-14 10:00:00")
-	setAutobanConfigRaw(t, true, 2, 5, "1h", "all", false)
+	setAutobanConfigRaw(t, true, 2, 5, "1h", "blocked,logged", false)
 	spy := installAutobanConvergeSpy(t, func() (IPListProjectionOutcome, error) { return ProjectionConverged, nil })
 
 	autobanObserveEvent("203.0.113.1", "blocked", "942100")
@@ -110,7 +110,7 @@ func TestAutobanConverge_unreferencedSkipsReload(t *testing.T) {
 // 重载，不欠引用方渲染收敛）。
 func TestAutobanConverge_refresherMissingFallsBack(t *testing.T) {
 	installAutobanFixture(t, "2026-10-14 10:00:00")
-	setAutobanConfigRaw(t, true, 1, 5, "1h", "all", false)
+	setAutobanConfigRaw(t, true, 1, 5, "1h", "blocked,logged", false)
 	seedAutobanListReferencedByPolicy(t)
 	spy := installAutobanConvergeSpy(t, nil)
 
@@ -127,7 +127,7 @@ func TestAutobanConverge_refresherMissingFallsBack(t *testing.T) {
 // ——失败回退语义保留。
 func TestAutobanConverge_hotNotConfirmedFallsBack(t *testing.T) {
 	installAutobanFixture(t, "2026-10-14 10:00:00")
-	setAutobanConfigRaw(t, true, 1, 5, "1h", "all", false)
+	setAutobanConfigRaw(t, true, 1, 5, "1h", "blocked,logged", false)
 	seedAutobanListReferencedByPolicy(t)
 	spy := installAutobanConvergeSpy(t, func() (IPListProjectionOutcome, error) { return ProjectionFallback, nil })
 
@@ -145,7 +145,7 @@ func TestAutobanConverge_hotNotConfirmedFallsBack(t *testing.T) {
 // 引用面变化经投影重写零重载收敛。
 func TestAutobanConverge_trustedProxyRefHotPath(t *testing.T) {
 	installAutobanFixture(t, "2026-10-14 10:00:00")
-	setAutobanConfigRaw(t, true, 1, 5, "1h", "all", false)
+	setAutobanConfigRaw(t, true, 1, 5, "1h", "blocked,logged", false)
 	// 只挂受信代理引用、不挂启用策略绑定：资格门的 tp 维度必须独立成立
 	// （同时挂策略会让本用例在 tp 维度失效时仍然绿——无鉴别力）。
 	listID := presetListID(t)
@@ -168,7 +168,7 @@ func TestAutobanConverge_trustedProxyRefHotPath(t *testing.T) {
 // 命中收敛仍即时执行，不得被 60s 节流窗口压成暂存（节流对象恒为全量重载）。
 func TestAutobanConverge_hotPathFreeOfThrottle(t *testing.T) {
 	installAutobanFixture(t, "2026-10-14 10:00:00")
-	setAutobanConfigRaw(t, true, 1, 5, "1h", "all", false)
+	setAutobanConfigRaw(t, true, 1, 5, "1h", "blocked,logged", false)
 	listID := presetListID(t)
 	seedHotPathPolicy(t, listID)
 	spy := installAutobanConvergeSpy(t, func() (IPListProjectionOutcome, error) { return ProjectionConverged, nil })
@@ -195,7 +195,7 @@ func TestAutobanConverge_hotPathFreeOfThrottle(t *testing.T) {
 // 禁用收尾的到期清理在资格门命中时同样走热路径（零 /load）；暂存不得残留。
 func TestAutobanDisableFlush_hotPathWhenEligible(t *testing.T) {
 	installAutobanFixture(t, "2026-10-14 10:00:00")
-	setAutobanConfigRaw(t, true, 1, 5, "1h", "all", false)
+	setAutobanConfigRaw(t, true, 1, 5, "1h", "blocked,logged", false)
 	seedAutobanListReferencedByPolicy(t)
 	seedPresetEntries(t, []models.IPListEntry{
 		{Value: "198.51.100.1", Remark: autobanEntryRemark, CreatedAt: "2026-10-13 10:00:00", ExpiresAt: "2026-10-14 09:00:00"}, // 已到期
@@ -269,7 +269,7 @@ func installAutobanHotPathIntegration(t *testing.T) (*CaddyService, *hotPathTest
 
 func autobanRunBanCycle(t *testing.T, ip string) {
 	t.Helper()
-	setAutobanConfigRaw(t, true, 2, 5, "1h", "all", false)
+	setAutobanConfigRaw(t, true, 2, 5, "1h", "blocked,logged", false)
 	autobanObserveEvent(ip, "blocked", "942100")
 	autobanObserveEvent(ip, "blocked", "942100")
 	if err := RunAutobanCycle(taskengine.RunContext{Trigger: "auto"}); err != nil {

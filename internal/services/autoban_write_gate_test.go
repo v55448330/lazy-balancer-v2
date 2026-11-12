@@ -41,7 +41,7 @@ func seedAutobanCandidate(t *testing.T) {
 // Then 返回 ErrTaskSkipped、名单零写入（从节点零写）。
 func TestRunAutobanCycle_demoteBeforeMerge_zeroWrite(t *testing.T) {
 	installAutobanFixture(t, "2026-10-14 10:00:00")
-	setAutobanConfigRaw(t, true, 1, 5, "1h", "all", false)
+	setAutobanConfigRaw(t, true, 1, 5, "1h", "blocked,logged", false)
 	seedAutobanCandidate(t)
 	armPendingReloadHook(t, func() {
 		if _, err := db.DB.Exec(`UPDATE global_config SET is_master=0 WHERE id=1`); err != nil {
@@ -64,7 +64,7 @@ func TestRunAutobanCycle_demoteBeforeMerge_zeroWrite(t *testing.T) {
 // Then 返回普通错误（非跳过哨兵——不可判定≠降级）、名单零写入。
 func TestRunAutobanCycle_roleUndecidableBeforeMerge_failsLoudly(t *testing.T) {
 	installAutobanFixture(t, "2026-10-14 10:00:00")
-	setAutobanConfigRaw(t, true, 1, 5, "1h", "all", false)
+	setAutobanConfigRaw(t, true, 1, 5, "1h", "blocked,logged", false)
 	seedAutobanCandidate(t)
 	armPendingReloadHook(t, func() {
 		if _, err := db.DB.Exec(`DELETE FROM global_config WHERE id=1`); err != nil {
@@ -87,7 +87,7 @@ func TestRunAutobanCycle_roleUndecidableBeforeMerge_failsLoudly(t *testing.T) {
 // 静默发生（被挤者无处核对、无法判定是否需手动加白/调容量）。
 func TestAutobanDisableFlush_capacityEvictionLeavesWarnAndAudit(t *testing.T) {
 	installAutobanFixture(t, "2026-10-14 10:00:00")
-	setAutobanConfigRaw(t, false, 1, 5, "1h", "all", false)
+	setAutobanConfigRaw(t, false, 1, 5, "1h", "blocked,logged", false)
 	oldCap := AutobanListEntryCap
 	AutobanListEntryCap = 2
 	t.Cleanup(func() { AutobanListEntryCap = oldCap })

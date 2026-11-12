@@ -130,7 +130,7 @@ func TestCertMaterialChangeForcesReloadOnListConverge(t *testing.T) {
 	// installAutobanFixture 会重初始化临时库——必须在全部播种之前（既有
 	// autoban 钉测同序）。
 	installAutobanFixture(t, "2026-10-15 10:00:00")
-	setAutobanConfigRaw(t, true, 2, 5, "1h", "all", false)
+	setAutobanConfigRaw(t, true, 2, 5, "1h", "blocked,logged", false)
 
 	// autoban merge 写的是预置名单——资格门查的是预置名单 id 的引用面，
 	// 夹具须把预置名单绑进启用策略（seedAutobanListReferencedByPolicy 同源）。

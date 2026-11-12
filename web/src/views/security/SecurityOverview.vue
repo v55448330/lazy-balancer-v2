@@ -187,45 +187,41 @@
         </el-radio-group>
       </div>
       <el-table :data="challengeEvents" v-loading="challengeLiveLoading" size="small" height="430" row-key="id" :empty-text="challengeLiveScope === 'active' ? t('app.security.overview.cc.liveEmptyActive') : t('app.security.overview.cc.liveEmptyRecent')">
-        <el-table-column :label="t('app.security.overview.cc.liveColStatus')" width="104" align="center">
+        <el-table-column :label="t('app.security.overview.cc.liveColStatus')" width="112" align="center">
           <template #default="{ row }">
-            <el-tag size="small" :type="challengeStatusTone(row as ChallengeEvent)" effect="light">{{ challengeStatusText(row as ChallengeEvent) }}</el-tag>
+            <div class="challenge-live-status">
+              <el-tag size="small" :type="challengeStatusTone(row as ChallengeEvent)" effect="light">{{ challengeStatusText(row as ChallengeEvent) }}</el-tag>
+              <span class="challenge-live-attempts">{{ formatLiveAttempts(row as ChallengeEvent) }}</span>
+            </div>
           </template>
         </el-table-column>
-        <el-table-column :label="t('app.security.overview.cc.liveColExpires')" width="148">
+        <el-table-column :label="t('app.security.overview.cc.liveColExpires')" width="128">
           <template #default="{ row }">
             <div v-if="(row as ChallengeEvent).status === 'waiting'" class="challenge-live-countdown">
               <strong>{{ formatLiveRemaining((row as ChallengeEvent).remaining_ms) }}</strong>
-              <span>{{ formatLiveClock((row as ChallengeEvent).expires_at_ms) }}</span>
+              <span>{{ t('app.security.overview.cc.liveExpiresAt', { time: formatLiveClock((row as ChallengeEvent).expires_at_ms) }) }}</span>
             </div>
-            <span v-else class="challenge-live-muted">—</span>
+            <div v-else class="challenge-live-countdown">
+              <span>{{ t('app.security.overview.cc.liveIssuedAt', { time: formatLiveClock((row as ChallengeEvent).issued_at_ms) }) }}</span>
+            </div>
           </template>
         </el-table-column>
-        <el-table-column :label="t('app.security.overview.cc.liveColType')" width="82" align="center">
-          <template #default="{ row }">{{ challengeKindText(row as ChallengeEvent) }}</template>
-        </el-table-column>
-        <el-table-column :label="t('app.security.overview.cc.liveColClient')" min-width="145" show-overflow-tooltip>
+        <el-table-column :label="t('app.security.overview.cc.liveColClient')" min-width="128" show-overflow-tooltip>
           <template #default="{ row }">{{ row.client_ip || '—' }}</template>
         </el-table-column>
-        <el-table-column :label="t('app.security.overview.cc.liveColRule')" min-width="205" show-overflow-tooltip>
+        <el-table-column :label="t('app.security.overview.cc.liveColRule')" min-width="168" show-overflow-tooltip>
           <template #default="{ row }">
             <div class="challenge-live-attribution">
               <span>{{ row.rule_name || row.rule_id || '—' }}</span>
-              <span v-if="row.policy_name">{{ row.policy_name }}</span>
+              <span>{{ [challengeKindText(row as ChallengeEvent), row.policy_name].filter(Boolean).join(' · ') }}</span>
             </div>
           </template>
         </el-table-column>
-        <el-table-column :label="t('app.security.overview.cc.liveColRequest')" min-width="230" show-overflow-tooltip>
+        <el-table-column :label="t('app.security.overview.cc.liveColRequest')" min-width="180" show-overflow-tooltip>
           <template #default="{ row }"><span class="challenge-live-method">{{ row.method }}</span> {{ row.uri }}</template>
         </el-table-column>
-        <el-table-column :label="t('app.security.overview.cc.liveColUA')" min-width="190" show-overflow-tooltip>
+        <el-table-column :label="t('app.security.overview.cc.liveColUA')" min-width="150" show-overflow-tooltip>
           <template #default="{ row }">{{ row.user_agent || '—' }}</template>
-        </el-table-column>
-        <el-table-column :label="t('app.security.overview.cc.liveColIssued')" width="168">
-          <template #default="{ row }">{{ formatLiveClock((row as ChallengeEvent).issued_at_ms) }}</template>
-        </el-table-column>
-        <el-table-column :label="t('app.security.overview.cc.liveColAttempts')" width="82" align="center">
-          <template #default="{ row }">{{ formatLiveAttempts(row as ChallengeEvent) }}</template>
         </el-table-column>
       </el-table>
       <div class="challenge-live-footer">{{ t('app.security.overview.cc.liveRetention') }}</div>
@@ -302,8 +298,12 @@
                 <span class="cc-meta-value is-primary">{{ fmtStatNum(overview.today_challenged) }}</span>
               </div>
               <div class="cc-meta-row">
-                <span class="cc-meta-label">{{ t('app.security.overview.cc.bans') }}</span>
-                <span class="cc-meta-value is-ban">{{ fmtStatNum(humanStats.bans) }}</span>
+                <span class="cc-meta-label">{{ t('app.security.overview.cc.passedTotal') }}</span>
+                <span class="cc-meta-value is-pass">{{ fmtStatNum(ccPassCount) }}</span>
+              </div>
+              <div class="cc-meta-row">
+                <span class="cc-meta-label">{{ t('app.security.overview.cc.failedTotal') }}</span>
+                <span class="cc-meta-value is-fail">{{ fmtStatNum(ccFailCount) }}</span>
               </div>
             </div>
           </div>
@@ -326,6 +326,56 @@
         </el-card>
       </el-col>
     </el-row>
+
+    <!-- 自动封禁卡（独立整行）：状态 + 今日封禁/生效名单/监控 IP + 阈值口径摘要 +
+         观察建议 Top5（dry-run 候选）；未生效黄条与事件页状态卡同源。 -->
+    <el-card shadow="always" class="mb-5 autoban-card">
+      <template #header>
+        <div class="card-header">
+          <div class="card-title">
+            <el-icon class="title-icon"><Lock /></el-icon>
+            <span>{{ t('app.security.overview.autoban.title') }}</span>
+            <el-tag :type="autobanStateTone" size="small" effect="light" disable-transitions>{{ autobanStateText }}</el-tag>
+          </div>
+          <el-button size="small" text type="primary" @click="goToAutobanConfig">{{ t('app.security.overview.autoban.config') }}</el-button>
+        </div>
+      </template>
+      <el-alert v-if="autobanIneffective" type="warning" show-icon :closable="false" class="mb-3" :title="t('app.security.overview.autoban.ineffective')" />
+      <el-alert v-if="autobanStatus?.enabled && autobanStatus?.feed_degraded" type="warning" show-icon :closable="false" class="mb-3" :title="autobanStatus?.feed_degraded_reason || t('app.security.overview.autoban.feedDegraded')" />
+      <div class="autoban-body">
+        <div class="autoban-stats">
+          <div class="autoban-stat">
+            <div class="autoban-stat-label">{{ t('app.security.overview.autoban.bannedToday') }}</div>
+            <div class="autoban-stat-value is-ban">{{ autobanStatValue(autobanError, autobanStatus?.banned_today ?? 0) }}</div>
+          </div>
+          <div class="autoban-stat">
+            <div class="autoban-stat-label">{{ t('app.security.overview.autoban.listEntries') }}</div>
+            <div class="autoban-stat-value">{{ autobanStatValue(autobanError, autobanStatus?.list_entries ?? 0) }}</div>
+          </div>
+          <div class="autoban-stat">
+            <div class="autoban-stat-label">{{ t('app.security.overview.autoban.trackedIps') }}</div>
+            <div class="autoban-stat-value">{{ autobanStatValue(autobanError, autobanStatus?.tracked_ips ?? 0) }}</div>
+          </div>
+          <div class="autoban-config-summary">
+            <div class="autoban-config-line">{{ t('app.security.overview.autoban.threshold') }}：{{ autobanStatValue(autobanError, autobanStatus?.threshold ?? 0) }} {{ t('app.security.overview.autoban.timesPer') }} {{ autobanStatValue(autobanError, autobanStatus?.window_minutes ?? 0) }} {{ t('app.security.overview.autoban.minutes') }}</div>
+            <div class="autoban-config-line">{{ t('app.security.overview.autoban.duration') }}：{{ autobanStatValue(autobanError, autobanStatus?.duration ?? '—') }}</div>
+            <div class="autoban-config-line">{{ t('app.security.overview.autoban.scope') }}：{{ autobanError ? '—' : autobanScopeText }}</div>
+          </div>
+        </div>
+        <div class="autoban-suggestions">
+          <div class="autoban-suggestions-title">{{ t('app.security.overview.autoban.suggestionsTitle') }}</div>
+          <el-table v-if="autobanSuggestions.length > 0" :data="autobanSuggestions" size="small" :show-header="false">
+            <el-table-column min-width="160">
+              <template #default="{ row }"><IPLocationAction :ip="row.ip" :location="row.ip_location" /></template>
+            </el-table-column>
+            <el-table-column width="110" align="right">
+              <template #default="{ row }"><el-tag :type="autobanSuggestionTone(row.count)" size="small" effect="light">{{ row.count }} {{ t('app.security.overview.autoban.times') }}</el-tag></template>
+            </el-table-column>
+          </el-table>
+          <div v-else class="autoban-suggestions-empty">{{ t('app.security.overview.autoban.suggestionsEmpty') }}</div>
+        </div>
+      </div>
+    </el-card>
 
     <el-card shadow="always">
       <template #header>
@@ -371,7 +421,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted, onBeforeUnmount, computed } from 'vue'
-import { DataAnalysis, TrendCharts, PieChart, Location, Warning, Odometer, Monitor, InfoFilled, Stopwatch } from '@element-plus/icons-vue'
+import { DataAnalysis, TrendCharts, PieChart, Location, Warning, Odometer, Monitor, InfoFilled, Stopwatch, Lock } from '@element-plus/icons-vue'
 import { useI18n } from 'vue-i18n'
 import { request } from '@/utils/api'
 import { useAuthStore } from '@/stores/auth'
@@ -385,6 +435,7 @@ import VChart from 'vue-echarts'
 import type { APIResponse } from '@/types'
 import { securityActionColors } from '@/utils/chartTheme'
 import { ingestionWarningMessage, type IngestionHealth } from '@/utils/ingestionHealth'
+import { autobanStateLabel, autobanStatValue, isAutobanIneffective, suggestionBand } from '@/utils/autobanStatus'
 
 const { t } = useI18n()
 
@@ -403,7 +454,7 @@ interface Overview {
   yesterday_detected?: number; yesterday_detected_tcp?: number
   normal_today?: number; normal_today_http?: number; normal_today_tcp?: number
   normal_yesterday?: number; normal_yesterday_http?: number; normal_yesterday_tcp?: number
-  today_challenged?: number; today_human_pass?: number; today_human_fail?: number
+  today_challenged?: number; today_human_fail?: number
   // 今日拦截的 TCP（L4 断连）份额：旧后端缺失 → 协议拆分行整行隐藏（防御式）。
   // 原始表直算（不走 rollup——rollup 无 event_type 维度），极端量级下行帽裁剪可能少计。
   today_blocked_tcp?: number
@@ -504,7 +555,7 @@ const attackChartOption = computed(() => ({
 }))
 
 // 人机验证统计（lb_human admin 端点；端点缺失=旧二进制，全零不报错）
-const humanStats = ref({ challenges: 0, passes: 0, fails: 0, bans: 0 })
+const humanStats = ref({ challenges: 0, passes: 0, fails: 0 })
 
 // 实时挑战运行态（CC 卡入口）：数据源为 lbhuman 内存会话注册表，
 // active=仍在 TTL 内等待验证；recent=最近通过/失败/过期。不是事件日志回放。
@@ -584,32 +635,33 @@ const onChallengeVisibleChange = (visible: boolean) => {
   syncChallengeTimer()
 }
 
-// 通过率口径（2026-11-12）：今日事件（human_pass / human_failed）优先——
-// 与"挑战发放"同源可对账；零样本显性 —。admin 端点值仅作兜底。
+// 通过率口径（2026-11-13 用户裁定）：挑战成功（human_pass）不再计入安全事件，
+// 通过/失败计数以 admin 端点（humanStats，进程累计）为权威源；事件表仅承载
+// 发放/失败。零样本显性 —。
 const humanPassRate = computed(() => {
-  const passes = overview.value.today_human_pass ?? 0
-  const fails = overview.value.today_human_fail ?? 0
+  const passes = humanStats.value.passes
+  const fails = humanStats.value.fails
   const total = passes + fails
-  if (total > 0) return `${Math.round((passes / total) * 100)}%`
-  const fallback = humanStats.value.passes + humanStats.value.fails
-  return fallback > 0 ? `${Math.round((humanStats.value.passes / fallback) * 100)}%` : '—'
+  return total > 0 ? `${Math.round((passes / total) * 100)}%` : '—'
 })
 
-const ccPassCount = computed(() => overview.value.today_human_pass ?? humanStats.value.passes)
-const ccFailCount = computed(() => overview.value.today_human_fail ?? humanStats.value.fails)
-const ccPendingCount = computed(() => Math.max((overview.value.today_challenged ?? 0) - ccPassCount.value - ccFailCount.value, 0))
+const ccPassCount = computed(() => humanStats.value.passes)
+const ccFailCount = computed(() => humanStats.value.fails)
+// 未完成 = 累计发放 − 通过 − 失败（同源 humanStats，禁止与今日发放跨口径相减：
+// 今日/累计混算会产出负值钳零的假「未完成」）。
+const ccPendingCount = computed(() => Math.max(humanStats.value.challenges - ccPassCount.value - ccFailCount.value, 0))
 const ccTotalCount = computed(() => ccPassCount.value + ccFailCount.value + ccPendingCount.value)
 const ccPassRatePct = computed<number | null>(() => {
   const total = ccPassCount.value + ccFailCount.value
   return total > 0 ? Math.round((ccPassCount.value / total) * 1000) / 10 : null
 })
 const ccPct = (n: number): number => {
-  const total = ccPassCount.value + ccFailCount.value + ccPendingCount.value
+  const total = ccTotalCount.value
   return total > 0 ? (n / total) * 100 : 0
 }
 const fetchHumanStats = async (): Promise<void> => {
   try {
-    const res = await request.get<APIResponse<{ challenges: number; passes: number; fails: number; bans: number }>>('/security/human/stats', { silent: true })
+    const res = await request.get<APIResponse<{ challenges: number; passes: number; fails: number }>>('/security/human/stats', { silent: true })
     if (res.data) humanStats.value = res.data
   } catch { /* 静默：总览卡不阻塞 */ }
 }
@@ -646,6 +698,52 @@ const fetchBlockedEvents = async () => {
 }
 
 const goToEvents = () => { window.open(pageUrl('security-events'), '_blank', 'noopener') }
+
+// 自动封禁卡（独立整行）：数据源 /security/autoban/status，与事件页状态卡同源。
+// 摘要统计 + 观察建议 Top5（dry-run 候选）；未生效黄条复用 isAutobanIneffective 单源。
+interface AutobanSuggestion { ip: string; count: number; ip_location?: string; window_start?: string; last_seen?: string }
+interface AutobanStatus {
+  enabled: boolean; dry_run: boolean; threshold: number; window_minutes: number
+  duration: string; scope: string; banned_today: number; list_entries: number
+  ban_effective: boolean; tracked_ips: number; suggestions: AutobanSuggestion[]
+  is_master: boolean; feed_degraded: boolean; feed_degraded_reason: string
+}
+const autobanStatus = ref<AutobanStatus | null>(null)
+const autobanError = ref(false)
+const fetchAutobanStatus = async (): Promise<void> => {
+  try {
+    const res = await request.get<APIResponse<AutobanStatus>>('/security/autoban/status', { silent: true })
+    if (res.data) {
+      autobanStatus.value = res.data
+      autobanError.value = false
+    }
+  } catch {
+    autobanError.value = true
+  }
+}
+const autobanStateText = computed(() => autobanStateLabel(autobanError.value, autobanStatus.value?.enabled ?? false, autobanStatus.value?.dry_run ?? false))
+const autobanStateTone = computed<'success' | 'warning' | 'info' | 'danger'>(() => {
+  if (autobanError.value) return 'danger'
+  if (!autobanStatus.value?.enabled) return 'info'
+  return autobanStatus.value.dry_run ? 'warning' : 'success'
+})
+const autobanIneffective = computed(() => autobanStatus.value !== null && isAutobanIneffective(autobanStatus.value))
+const autobanScopeText = computed(() => {
+  const labels: Record<string, string> = {
+    blocked: t('app.security.overview.autoban.scopeBlocked'),
+    logged: t('app.security.overview.autoban.scopeLogged'),
+    challenge_issued: t('app.security.overview.autoban.scopeChallengeIssued'),
+    challenge_failed: t('app.security.overview.autoban.scopeChallengeFailed'),
+  }
+  const parts = (autobanStatus.value?.scope || '').split(',').map(s => s.trim()).filter(s => labels[s])
+  return parts.length > 0 ? parts.map(s => labels[s]).join(' + ') : '—'
+})
+const autobanSuggestions = computed(() => (autobanStatus.value?.suggestions || []).slice(0, 5))
+const autobanSuggestionTone = (count: number): 'danger' | 'warning' | 'info' => {
+  const band = suggestionBand(count, autobanStatus.value?.threshold ?? 1)
+  return band === 'high' ? 'danger' : band === 'mid' ? 'warning' : 'info'
+}
+const goToAutobanConfig = () => { window.open(pageUrl('security-events'), '_blank', 'noopener') }
 
 const ip2regionVersion = ref('—')
 const ip2regionStatus = ref('')
@@ -717,6 +815,7 @@ const reloadAll = async (): Promise<void> => {
     await Promise.all([
       fetchData(),
       fetchBlockedEvents(),
+      fetchAutobanStatus(),
       fetchIP2RegionInfo(),
       fetchThreatLib(),
       fetchCrawlerLib(),
@@ -819,6 +918,8 @@ onMounted(() => { void reloadAll() })
 .challenge-live-countdown { display: flex; flex-direction: column; line-height: 1.25; font-variant-numeric: tabular-nums; }
 .challenge-live-countdown strong { color: #409eff; font-weight: 700; }
 .challenge-live-countdown span { font-size: 11px; color: var(--text-secondary); }
+.challenge-live-status { display: flex; flex-direction: column; align-items: center; gap: 3px; }
+.challenge-live-attempts { font-size: 11px; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
 .challenge-live-muted { color: var(--text-secondary); }
 .challenge-live-attribution { display: flex; flex-direction: column; line-height: 1.3; }
 .challenge-live-attribution span:last-child { font-size: 11px; color: var(--text-secondary); }
@@ -828,7 +929,7 @@ onMounted(() => { void reloadAll() })
 .cc-donut { position: relative; width: 136px; height: 136px; flex: none; }
 .cc-donut svg { width: 100%; height: 100%; transform: rotate(-90deg); }
 .cc-donut-track { fill: none; stroke: #eef2f7; stroke-width: 3.4; }
-.cc-donut-value { fill: none; stroke: #409eff; stroke-width: 3.4; stroke-linecap: round; transition: stroke-dasharray .4s ease; }
+.cc-donut-value { fill: none; stroke: #67c23a; stroke-width: 3.4; stroke-linecap: round; transition: stroke-dasharray .4s ease; }
 .cc-donut-center { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px; color: #303133; }
 .cc-rate-value { font-size: 22px; font-weight: 700; line-height: 1; }
 .cc-rate-label { font-size: 10px; color: var(--text-secondary); line-height: 1.4; }
@@ -837,7 +938,8 @@ onMounted(() => { void reloadAll() })
 .cc-meta-label { font-size: 12px; color: var(--text-secondary); white-space: nowrap; }
 .cc-meta-value { font-size: 22px; font-weight: 700; line-height: 1.1; font-variant-numeric: tabular-nums; }
 .cc-meta-value.is-primary { color: #409eff; }
-.cc-meta-value.is-ban { color: #f56c6c; }
+.cc-meta-value.is-pass { color: #67c23a; }
+.cc-meta-value.is-fail { color: #f56c6c; }
 .cc-dist { margin-top: 8px; }
 .cc-dist-head { display: flex; align-items: baseline; justify-content: space-between; padding: 0 4px 6px; font-size: 12px; color: var(--text-secondary); }
 .cc-dist-head > span:first-child { font-weight: 600; color: #303133; }
@@ -852,4 +954,20 @@ onMounted(() => { void reloadAll() })
 .cc-legend-item i.is-pass { background: #67c23a; }
 .cc-legend-item i.is-fail { background: #f56c6c; }
 .cc-legend-item i.is-pending { background: #cbd5e1; }
+/* 自动封禁卡：左侧统计+配置摘要，右侧观察建议 Top5；窄屏堆叠。 */
+.autoban-body { display: flex; gap: 24px; align-items: stretch; }
+.autoban-stats { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+.autoban-stat { display: flex; flex-direction: column; gap: 4px; padding: 10px 16px; border-radius: 8px; background: #f7f9fc; min-width: 110px; }
+.autoban-stat-label { font-size: 12px; color: var(--text-secondary); }
+.autoban-stat-value { font-size: 24px; font-weight: 700; line-height: 1.1; font-variant-numeric: tabular-nums; color: #303133; }
+.autoban-stat-value.is-ban { color: #f56c6c; }
+.autoban-config-summary { display: flex; flex-direction: column; gap: 4px; padding: 4px 8px; font-size: 12px; color: var(--text-secondary); }
+.autoban-config-line { white-space: nowrap; }
+.autoban-suggestions { flex: 1; min-width: 280px; border-left: 1px solid var(--el-border-color-lighter); padding-left: 20px; }
+.autoban-suggestions-title { font-size: 13px; font-weight: 600; color: #303133; margin-bottom: 8px; }
+.autoban-suggestions-empty { font-size: 12px; color: var(--text-secondary); padding: 12px 0; }
+@media (max-width: 992px) {
+  .autoban-body { flex-direction: column; }
+  .autoban-suggestions { border-left: none; padding-left: 0; border-top: 1px solid var(--el-border-color-lighter); padding-top: 12px; }
+}
 </style>

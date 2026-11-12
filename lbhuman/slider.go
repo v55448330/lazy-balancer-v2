@@ -3,8 +3,8 @@ package lbhuman
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
-	"html"
 	"io"
 	"math"
 	"net/http"
@@ -61,7 +61,8 @@ func newSliderPuzzle() *sliderPuzzle {
 	return p
 }
 
-// puzzleSVG 拼图 SVG：背景（抽象渐变+几何形）+ 缺口（暗色拼图轮廓）。
+// puzzleSVG 拼图 SVG：背景（渐变+低透明度几何层次）+ 缺口（socket 语义）。
+// 缺口 rect 携带 data-lb-gap（客户端接近高亮用；gap 答案本就视觉可见，不泄露新信息）。
 func puzzleSVG(gapX int) string {
 	gapY := (sliderHeight-sliderPieceSize)/2 + 10
 	return fmt.Sprintf(`<svg width="%d" height="%d" xmlns="http://www.w3.org/2000/svg">
@@ -72,18 +73,21 @@ func puzzleSVG(gapX int) string {
   </defs>
   <rect width="%d" height="%d" fill="url(#bg)"/>
   <path d="M 0 34 H 240 M 0 96 H 240 M 58 0 V 134 M 176 0 V 134" stroke="#ffffff" opacity="0.07"/>
-  <rect x="%d" y="%d" width="%d" height="%d" fill="#0b1220" opacity="0.58" stroke="#ffffff" stroke-opacity="0.55" stroke-width="1.5" stroke-dasharray="4 3"/>
+  <circle cx="196" cy="26" r="30" fill="#ffffff" opacity="0.06"/>
+  <path d="M 0 134 L 70 70 L 130 134 Z" fill="#1e40af" opacity="0.10"/>
+  <rect x="%d" y="%d" width="%d" height="%d" fill="#0b1220" opacity="0.58" stroke="#ffffff" stroke-opacity="0.65" stroke-width="1.5" data-lb-gap="%d"/>
 </svg>`,
 		sliderWidth, sliderHeight, sliderWidth, sliderHeight,
-		gapX, gapY, sliderPieceSize, sliderPieceSize)
+		gapX, gapY, sliderPieceSize, sliderPieceSize, gapX)
 }
 
-// pieceSVG 拼图片块（同轮廓，亮色描边）。
+// pieceSVG 拼图片块（亮色主体+单内描边+预烘焙偏移阴影，直角方形）。
 func pieceSVG() string {
 	return fmt.Sprintf(`<svg width="%d" height="%d" xmlns="http://www.w3.org/2000/svg">
+  <rect x="2" y="2" width="%d" height="%d" fill="#0b1220" opacity="0.18"/>
   <rect x="1" y="1" width="%d" height="%d" fill="#f8fafc" stroke="#1d4ed8" stroke-width="2"/>
   <rect x="6" y="6" width="%d" height="%d" fill="none" stroke="#93c5fd" stroke-width="1"/>
-</svg>`, sliderPieceSize, sliderPieceSize, sliderPieceSize-2, sliderPieceSize-2, sliderPieceSize-12, sliderPieceSize-12)
+</svg>`, sliderPieceSize, sliderPieceSize, sliderPieceSize-2, sliderPieceSize-2, sliderPieceSize-2, sliderPieceSize-2, sliderPieceSize-12, sliderPieceSize-12)
 }
 
 // humanSliderVerifyPath 滑块校验端点路径。
@@ -122,7 +126,7 @@ func sliderVerify(p *sliderPuzzle, x int, track []int, durationMs int) bool {
 	return variance > 0.5 // 有非匀速性
 }
 
-// consumeSliderPuzzle 消费拼图（一次性；attempts 超上限强制失效换新）。
+// consumeSliderPuzzle 消费拼图（一次性；失败达上限后下一次强制失效换新）。
 func consumeSliderPuzzle(id string) *sliderPuzzle {
 	sliderPuzzlesMu.Lock()
 	defer sliderPuzzlesMu.Unlock()
@@ -131,7 +135,7 @@ func consumeSliderPuzzle(id string) *sliderPuzzle {
 		return nil
 	}
 	p.attempts++
-	if p.attempts >= sliderMaxAttempts {
+	if p.attempts > sliderMaxAttempts {
 		delete(sliderPuzzles, id)
 		return nil
 	}
@@ -147,15 +151,16 @@ func (h *HumanHandler) serveSliderChallenge(w http.ResponseWriter, r *http.Reque
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusOK)
-	pieceTop := (sliderHeight-sliderPieceSize)/2 + 10
-	redirect := html.EscapeString(r.URL.RequestURI())
+	// redirect 注入 JS 字符串：用 json.Marshal（与 challenge.go 同口径），
+	// 不得用 html.EscapeString——HTML 实体在 <script> 内是字面文本，& 会被错误编码。
+	redirectJSON, _ := json.Marshal(r.URL.RequestURI())
+	redirect := string(redirectJSON)
 	widget := fmt.Sprintf(sliderWidgetHTML, puzzleSVG(p.gapX), pieceSVG(), p.id, redirect)
 	if h.ChallengePageHTML != "" && strings.Contains(h.ChallengePageHTML, "{{human_verify_widget}}") {
 		_, _ = io.WriteString(w, strings.Replace(h.ChallengePageHTML, "{{human_verify_widget}}", widget, 1))
 		return
 	}
-	_, _ = fmt.Fprintf(w, sliderChallengePage,
-		sliderWidth, sliderHeight, pieceTop, puzzleSVG(p.gapX), pieceSVG(), p.id, redirect)
+	_, _ = io.WriteString(w, fmt.Sprintf(sliderChallengePage, widget))
 }
 
 // serveSliderVerify 滑块校验端点。
@@ -188,10 +193,30 @@ func (h *HumanHandler) serveSliderVerify(w http.ResponseWriter, r *http.Request,
 	if !sliderOK {
 		humanStats.Fails.Add(1)
 		reportHumanEvent(h.RuleID, ip, r.Method, r.URL.RequestURI(), r.UserAgent(), "fail")
+		// 区分「可重试」与「拼图失效」：attempts_left>0 表示拼图仍在，客户端可
+		// 原地重试；耗尽（left=0）即删拼图（与「失败 3 次强制换图」一致），
+		// retryable=false，客户端 reload 换新图。attempts_left 服务端权威。
+		attemptsLeft := 0
+		if p != nil {
+			attemptsLeft = sliderMaxAttempts - p.attempts
+			if attemptsLeft < 0 {
+				attemptsLeft = 0
+			}
+			if attemptsLeft == 0 {
+				sliderPuzzlesMu.Lock()
+				delete(sliderPuzzles, puzzleID)
+				sliderPuzzlesMu.Unlock()
+			}
+		}
+		retryable := attemptsLeft > 0
 		w.WriteHeader(http.StatusBadRequest)
-		_, _ = w.Write([]byte(`{"ok":false}`))
+		_, _ = fmt.Fprintf(w, `{"ok":false,"retryable":%t,"attempts_left":%d}`, retryable, attemptsLeft)
 		return
 	}
+	// 成功一次性消费：删除拼图，杜绝 TTL 内重放同一 id 再发 cookie。
+	sliderPuzzlesMu.Lock()
+	delete(sliderPuzzles, puzzleID)
+	sliderPuzzlesMu.Unlock()
 	cookieValue, exp := signCookie([]byte(h.Secret), ip, r.UserAgent(), time.Duration(h.TTLMinutes)*time.Minute)
 	secure := ""
 	if r.TLS != nil {
@@ -210,142 +235,98 @@ func atoiSafe(s string) int {
 }
 
 // sliderWidgetHTML 自定义挑战页的滑块组件（{{human_verify_widget}} 替换目标）。
-// 与内置页同一拼图/轨道/校验逻辑；内联样式隔离（类名前缀 lb-hv- 防污染）。
-const sliderWidgetHTML = `<div class="lb-hv-widget" style="width:240px;max-width:100%%;margin:0 auto;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif">
+// 与内置页共用同一组件（消除两套视觉/交互）；内联样式隔离（类名前缀 lb-hv-）。
+// 交互（2026-11-13 用户裁定）：Pointer Events + setPointerCapture（鼠标/触摸统一，
+// 移出窗口仍跟踪）、pointercancel/blur 重置、键盘可达（方向键/Enter）、失败原地
+// 重试（服务端 retryable/attempts_left 权威）、接近缺口高亮（不泄露精确答案、不吸附）、
+// 窄宿主缩放（坐标除以 scale，提交逻辑 px 不变）。安全口径不变：TTL/3 次上限/
+// ±3px 容差/轨迹校验全在服务端。
+const sliderWidgetHTML = `<div class="lb-hv-widget" style="width:240px;max-width:100%%;margin:18px auto 0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif">
 <style>
 .lb-hv-widget *{box-sizing:border-box}
-.lb-hv-widget .lb-hv-puzzle{position:relative;width:240px;height:134px;margin:0 auto 14px}
+.lb-hv-widget .lb-hv-puzzle{position:relative;width:240px;height:134px;margin:0 auto 14px;overflow:hidden}
 .lb-hv-widget .lb-hv-puzzle>svg{display:block;width:240px;height:134px;border-radius:0}
-.lb-hv-widget .lb-hv-piece{position:absolute;top:60px;left:6px;cursor:grab;line-height:0}
+.lb-hv-widget .lb-hv-piece{position:absolute;top:60px;left:6px;cursor:grab;line-height:0;touch-action:none}
 .lb-hv-widget .lb-hv-piece:active{cursor:grabbing}
 .lb-hv-widget .lb-hv-track{position:relative;width:240px;height:34px;background:#eef2f7;border:1px solid #dbe4f0;border-radius:0;user-select:none;touch-action:none;overflow:hidden}
-.lb-hv-widget .lb-hv-fill{position:absolute;left:0;top:0;bottom:0;background:#2563eb;opacity:.16;width:0}
-.lb-hv-widget .lb-hv-handle{position:absolute;top:50%%;left:2px;transform:translateY(-50%%);width:34px;height:28px;background:#2563eb;color:#fff;border-radius:0;display:flex;align-items:center;justify-content:center;font-size:18px;cursor:grab;box-shadow:0 2px 6px rgba(37,99,235,.25)}
-.lb-hv-widget .lb-hv-handle:active{cursor:grabbing}
-.lb-hv-widget .lb-hv-status{text-align:center;font-size:13px;min-height:20px;margin-top:10px;color:#64748b}
+.lb-hv-widget .lb-hv-fill{position:absolute;left:0;top:0;bottom:0;background:rgba(37,99,235,.16);width:0;transition:background .15s}
+.lb-hv-widget .lb-hv-hint{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:12px;color:#94a3b8;pointer-events:none;transition:opacity .2s}
+.lb-hv-widget .lb-hv-handle{position:absolute;top:50%%;left:2px;transform:translateY(-50%%);width:34px;height:28px;background:#2563eb;color:#fff;border-radius:0;display:flex;align-items:center;justify-content:center;cursor:grab;box-shadow:0 2px 6px rgba(37,99,235,.25);transition:background .15s,opacity .15s;touch-action:none}
+.lb-hv-widget .lb-hv-handle:hover{background:#1d4ed8}
+.lb-hv-widget .lb-hv-handle:active{cursor:grabbing;background:#1e40af}
+.lb-hv-widget .lb-hv-handle:focus-visible{outline:2px solid #1d4ed8;outline-offset:2px}
+.lb-hv-widget .lb-hv-handle svg{width:16px;height:16px}
+.lb-hv-widget.lb-hv-near .lb-hv-handle{background:#1d4ed8}
+.lb-hv-widget.lb-hv-near .lb-hv-fill{background:rgba(37,99,235,.30)}
+.lb-hv-widget.lb-hv-busy .lb-hv-handle{opacity:.6;pointer-events:none}
+.lb-hv-widget.lb-hv-ok .lb-hv-fill{background:rgba(21,128,61,.18)}
+.lb-hv-widget.lb-hv-ok .lb-hv-handle{background:#15803d}
+.lb-hv-widget.lb-hv-fail .lb-hv-handle{background:#dc2626}
+.lb-hv-widget .lb-hv-status{text-align:center;font-size:13px;min-height:20px;margin-top:10px;color:#64748b;transition:color .15s}
 .lb-hv-widget .lb-hv-ok{color:#15803d}.lb-hv-widget .lb-hv-fail{color:#dc2626}
 </style>
 <div class="lb-hv-puzzle">%s<div class="lb-hv-piece" id="lbHvPiece" style="top:60px;left:6px">%s</div></div>
-<div class="lb-hv-track" id="lbHvTrack"><div class="lb-hv-fill" id="lbHvFill"></div><div class="lb-hv-handle" id="lbHvHandle">⇥</div></div>
-<div class="lb-hv-status" id="lbHvStatus"></div>
+<div class="lb-hv-track" id="lbHvTrack"><div class="lb-hv-fill" id="lbHvFill"></div><div class="lb-hv-hint" id="lbHvHint">Drag the slider to complete the puzzle</div><div class="lb-hv-handle" id="lbHvHandle" role="slider" tabindex="0" aria-label="Slider verification" aria-valuemin="0" aria-valuemax="200" aria-valuenow="0"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 5l7 7-7 7"/><path d="M13 5l7 7-7 7"/></svg></div></div>
+<div class="lb-hv-status" id="lbHvStatus" aria-live="polite"></div>
+<noscript><div style="text-align:center;font-size:13px;color:#dc2626;margin-top:10px">JavaScript is required to complete verification.</div></noscript>
 <script>
 (function(){
-var pid="%s",redirect="%s",h=document.getElementById("lbHvHandle"),pc=document.getElementById("lbHvPiece"),fl=document.getElementById("lbHvFill"),tr=document.getElementById("lbHvTrack"),st=document.getElementById("lbHvStatus"),drag=false,sx=0,t0=0,pos=[],cx=0,mx=tr.clientWidth-(h.offsetWidth||34)-4;
-function dn(e){drag=true;sx=(e.touches?e.touches[0].clientX:e.clientX);t0=Date.now();pos=[];cx=0;e.preventDefault()}
-function mv(e){if(!drag)return;var x=(e.touches?e.touches[0].clientX:e.clientX);cx=Math.max(0,Math.min(mx,x-sx));h.style.left=(cx+2)+"px";pc.style.left=(cx+6)+"px";fl.style.width=(cx+2)+"px";pos.push(cx)}
-function up(){if(!drag)return;drag=false;var dur=Date.now()-t0;
-fetch("/__lb/human/slider-verify",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},credentials:"same-origin",body:"puzzle_id="+encodeURIComponent(pid)+"&x="+(cx+6)+"&track="+pos.join(",")+"&duration_ms="+dur}).then(function(res){
-if(res.ok){st.textContent="Verified";st.className="lb-hv-status lb-hv-ok";setTimeout(function(){window.location.href=redirect},400)}else{st.textContent="Verification failed";st.className="lb-hv-status lb-hv-fail";setTimeout(function(){window.location.reload()},900)}}).catch(function(){st.textContent="Network error";st.className="lb-hv-status lb-hv-fail"})}
-h.addEventListener("mousedown",dn);h.addEventListener("touchstart",dn,{passive:false});
-document.addEventListener("mousemove",mv);document.addEventListener("touchmove",mv,{passive:false});
-document.addEventListener("mouseup",up);document.addEventListener("touchend",up)})();
+var pid="%s",redirect=%s,root=document.currentScript.parentNode,h=document.getElementById("lbHvHandle"),pc=document.getElementById("lbHvPiece"),fl=document.getElementById("lbHvFill"),tr=document.getElementById("lbHvTrack"),hint=document.getElementById("lbHvHint"),st=document.getElementById("lbHvStatus");
+var gapEl=tr.parentNode.querySelector("[data-lb-gap]"),gapX=gapEl?parseInt(gapEl.getAttribute("data-lb-gap"),10):null;
+var drag=false,busy=false,sx=0,t0=0,pos=[],cx=0,mx=200,scale=1,raf=0,attempts=0,issuedAt=Date.now(),kbStart=0;
+function measure(){var avail=root.clientWidth||240;scale=avail<240?avail/240:1;root.style.transform=scale<1?"scale("+scale+")":"";root.style.transformOrigin="top center";mx=Math.min(tr.clientWidth-(h.offsetWidth||34)-4,200)}
+measure();window.addEventListener("resize",measure);
+function paint(){raf=0;h.style.left=(cx+2)+"px";pc.style.left=(cx+6)+"px";fl.style.width=(cx+36)+"px";h.setAttribute("aria-valuenow",String(Math.round(cx)));if(hint)hint.style.opacity=cx>4?"0":"1";var near=gapX!==null&&Math.abs((cx+6)-gapX)<=6;root.classList.toggle("lb-hv-near",near&&drag)}
+function sched(){if(!raf)raf=requestAnimationFrame(paint)}
+function setX(v){cx=Math.max(0,Math.min(mx,v));sched()}
+function reset(){drag=false;cx=0;pos=[];root.classList.remove("lb-hv-near","lb-hv-fail");paint()}
+function down(e){if(busy)return;drag=true;sx=e.clientX;t0=Date.now();pos=[];cx=0;root.classList.remove("lb-hv-fail");if(h.setPointerCapture&&e.pointerId!==undefined){try{h.setPointerCapture(e.pointerId)}catch(_){}}e.preventDefault()}
+function move(e){if(!drag||busy)return;var dx=(e.clientX-sx)/scale;setX(dx);pos.push(Math.round(cx));if(e.cancelable)e.preventDefault()}
+function springBack(){var from=cx,start=Date.now();function step(){var p=Math.min(1,(Date.now()-start)/150);setX(from*(1-p)*(1-p));if(p<1)requestAnimationFrame(step);else{cx=0;paint()}}requestAnimationFrame(step)}
+function submit(){if(busy)return;var dur=Date.now()-t0;
+if(cx<4||dur<300){springBack();return}
+busy=true;root.classList.add("lb-hv-busy");
+fetch("/__lb/human/slider-verify",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},credentials:"same-origin",body:"puzzle_id="+encodeURIComponent(pid)+"&x="+(cx+6)+"&track="+pos.join(",")+"&duration_ms="+dur}).then(function(res){return res.json().catch(function(){return{ok:res.ok}})}).then(function(d){busy=false;root.classList.remove("lb-hv-busy");
+if(d.ok){root.classList.add("lb-hv-ok");st.textContent="Verified";st.className="lb-hv-status lb-hv-ok";setTimeout(function(){window.location.href=redirect},400);return}
+attempts++;
+if(d.retryable&&attempts<3&&Date.now()-issuedAt<110000){root.classList.add("lb-hv-fail");st.textContent="Verification failed — "+(d.attempts_left!=null?d.attempts_left:Math.max(0,3-attempts))+" tries left";st.className="lb-hv-status lb-hv-fail";springBack();return}
+st.textContent="Verification failed";st.className="lb-hv-status lb-hv-fail";setTimeout(function(){window.location.reload()},900)}).catch(function(){busy=false;root.classList.remove("lb-hv-busy");st.textContent="Network error";st.className="lb-hv-status lb-hv-fail"})}
+function up(){if(!drag)return;drag=false;submit()}
+function cancel(){if(!drag)return;drag=false;springBack()}
+if(window.PointerEvent){h.addEventListener("pointerdown",down);h.addEventListener("pointermove",move);h.addEventListener("pointerup",up);h.addEventListener("pointercancel",cancel);h.addEventListener("lostpointercapture",cancel)}
+else{h.addEventListener("mousedown",down);document.addEventListener("mousemove",move);document.addEventListener("mouseup",up);h.addEventListener("touchstart",function(e){down(e.touches[0])},{passive:false});document.addEventListener("touchmove",function(e){move(e.touches[0])},{passive:false});document.addEventListener("touchend",up);document.addEventListener("touchcancel",cancel)}
+window.addEventListener("blur",cancel);
+h.addEventListener("keydown",function(e){if(busy)return;var step=e.shiftKey?8:2,k=e.key;
+if(k==="ArrowRight"||k==="ArrowLeft"||k==="Home"||k==="End"){if(!kbStart){kbStart=Date.now();t0=kbStart;pos=[]}if(k==="ArrowRight")setX(cx+step);else if(k==="ArrowLeft")setX(cx-step);else if(k==="Home")setX(0);else setX(mx);pos.push(Math.round(cx));e.preventDefault();return}
+if(k==="Enter"||k===" "){if(kbStart){t0=kbStart;submit()}e.preventDefault();return}
+if(k==="Escape"){kbStart=0;reset();e.preventDefault()}});
+paint()})();
 </script></div>`
 
-// sliderChallengePage 滑块挑战页模板（中英双语、深色友好、直角口径）。
+// sliderChallengePage 滑块挑战内置回退页（英文、直角方形，与内置拦截页壳同族）。
+// 复用 sliderWidgetHTML 组件（消除两套视觉/交互）；仅在策略未配挑战页时命中。
 const sliderChallengePage = `<!DOCTYPE html>
-<html lang="zh">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>安全验证 · Security Check</title>
+<title>Security Check</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { min-height: 100vh; display: flex; align-items: center; justify-content: center; background: #f0f2f5; font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; }
-  .card { background: #fff; border-radius: 8px; box-shadow: 0 4px 24px rgba(0,0,0,.1); padding: 32px 28px; max-width: 400px; width: 92%%; }
-  .head { text-align: center; margin-bottom: 20px; }
-  .shield { font-size: 40px; margin-bottom: 8px; }
-  h1 { font-size: 18px; color: #1a202c; }
-  .sub { font-size: 12px; color: #718096; margin-top: 6px; }
-  .puzzle { position: relative; margin: 0 auto 18px; width: %dpx; height: %dpx; }
-  .puzzle svg { display: block; }
-  .piece { position: absolute; top: %dpx; left: 6px; transition: none; cursor: grab; }
-  .piece:active { cursor: grabbing; }
-  .track { position: relative; height: 34px; background: #e2e8f0; border-radius: 0; user-select: none; }
-  .track-fill { position: absolute; left: 0; top: 0; bottom: 0; background: #4299e1; border-radius: 0; opacity: .25; width: 0; }
-  .handle { position: absolute; top: 50%%; left: 2px; transform: translateY(-50%%); width: 34px; height: 28px; background: #4299e1; color: #fff; border-radius: 0; display: flex; align-items: center; justify-content: center; font-size: 18px; cursor: grab; }
-  .handle:active { cursor: grabbing; }
-  .hint { text-align: center; font-size: 12px; color: #718096; margin-top: 12px; }
-  .status { text-align: center; font-size: 13px; min-height: 20px; margin-top: 10px; }
-  .ok { color: #38a169; }
-  .fail { color: #e53e3e; }
+  body { min-height: 100vh; display: flex; align-items: center; justify-content: center; background: linear-gradient(165deg, #f8fafc 0%%, #f1f5f9 45%%, #eef2f7 100%%); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; }
+  .card { background: #fff; border-radius: 0; box-shadow: 0 1px 2px rgba(16,24,40,.05), 0 12px 32px -8px rgba(16,24,40,.12); padding: 40px 32px 28px; max-width: 400px; width: 92%%; text-align: center; }
+  .shield { width: 56px; height: 56px; margin: 0 auto 16px; display: flex; align-items: center; justify-content: center; background: linear-gradient(145deg, #eff6ff, #dbeafe); border: 1px solid #bfdbfe; }
+  .shield svg { width: 30px; height: 30px; }
+  h1 { font-size: 20px; font-weight: 700; color: #0f172a; margin-bottom: 8px; }
+  .sub { font-size: 13px; color: #64748b; line-height: 1.6; }
 </style>
 </head>
 <body>
 <div class="card">
-  <div class="head">
-    <div class="shield">🛡</div>
-    <h1>安全验证 · Security Check</h1>
-    <div class="sub">按住滑块，拖动完成拼图 · Drag the slider to complete the puzzle</div>
-  </div>
-  <div class="puzzle" id="puzzle">
-    %s
-    <div class="piece" id="piece">%s</div>
-  </div>
-  <div class="track" id="track">
-    <div class="track-fill" id="fill"></div>
-    <div class="handle" id="handle">⇥</div>
-  </div>
-  <div class="hint">将拼图片块拖入缺口 · Drag the piece into the gap</div>
-  <div class="status" id="status"></div>
+  <div class="shield"><svg viewBox="0 0 24 24" fill="none" stroke="#2563eb" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5c0 4.4-3 8.4-7 10-4-1.6-7-5.6-7-10V6l7-3z"/><path d="M9 12l2 2 4-4"/></svg></div>
+  <h1>Security Check</h1>
+  <div class="sub">Please complete the human verification to continue.</div>
+  %s
 </div>
-<script>
-(function () {
-  var puzzleID = "%s";
-  var redirect = "%s";
-  var handle = document.getElementById("handle");
-  var piece = document.getElementById("piece");
-  var fill = document.getElementById("fill");
-  var trackEl = document.getElementById("track");
-  var statusEl = document.getElementById("status");
-  var dragging = false, startX = 0, startTime = 0, positions = [], currentX = 0;
-  var maxX = trackEl.clientWidth - (handle.offsetWidth || 34) - 4;
-
-  function down(e) {
-    dragging = true; startX = (e.touches ? e.touches[0].clientX : e.clientX);
-    startTime = Date.now(); positions = []; currentX = 0;
-    e.preventDefault();
-  }
-  function move(e) {
-    if (!dragging) return;
-    var cx = (e.touches ? e.touches[0].clientX : e.clientX);
-    currentX = Math.max(0, Math.min(maxX, cx - startX));
-    handle.style.left = (currentX + 2) + "px";
-    piece.style.left = (currentX + 6) + "px";
-    fill.style.width = (currentX + 2) + "px";
-    positions.push(currentX);
-  }
-  function up() {
-    if (!dragging) return;
-    dragging = false;
-    var duration = Date.now() - startTime;
-    fetch("/__lb/human/slider-verify", {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      credentials: "same-origin",
-      body: "puzzle_id=" + encodeURIComponent(puzzleID) + "&x=" + (currentX + 6) +
-        "&track=" + positions.join(",") + "&duration_ms=" + duration
-    }).then(function (res) {
-      if (res.ok) {
-        statusEl.textContent = "Verified, redirecting…";
-        statusEl.className = "status ok";
-        setTimeout(function () { window.location.href = redirect; }, 400);
-      } else {
-        statusEl.textContent = "Verification failed, please retry";
-        statusEl.className = "status fail";
-        setTimeout(function () { window.location.reload(); }, 900);
-      }
-    }).catch(function () {
-      statusEl.textContent = "Network error";
-      statusEl.className = "status fail";
-    });
-  }
-  handle.addEventListener("mousedown", down);
-  handle.addEventListener("touchstart", down, { passive: false });
-  document.addEventListener("mousemove", move);
-  document.addEventListener("touchmove", move, { passive: false });
-  document.addEventListener("mouseup", up);
-  document.addEventListener("touchend", up);
-})();
-</script>
 </body>
 </html>`

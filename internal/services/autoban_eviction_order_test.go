@@ -59,7 +59,7 @@ func TestAutobanMerge_evictionPrecomputedOrderAndParseBound(t *testing.T) {
 
 	baseParses := autobanEntryTimeParses.Load()
 	out, err := autobanMergeEntries(AutobanConfig{
-		Enabled: true, Threshold: 1, WindowMinutes: 5, Duration: "1h", Scope: "all", DryRun: false,
+		Enabled: true, Threshold: 1, WindowMinutes: 5, Duration: "1h", Scope: "blocked,logged", DryRun: false,
 	}, candidates)
 	if err != nil {
 		t.Fatalf("merge: %v", err)
@@ -141,7 +141,7 @@ func TestAutobanMerge_evictionOrderMalformedTimestamps(t *testing.T) {
 	seedPresetEntries(t, seeded)
 
 	out, err := autobanMergeEntries(AutobanConfig{
-		Enabled: true, Threshold: 1, WindowMinutes: 5, Duration: "1h", Scope: "all", DryRun: false,
+		Enabled: true, Threshold: 1, WindowMinutes: 5, Duration: "1h", Scope: "blocked,logged", DryRun: false,
 	}, []AutobanSuggestion{{IP: "10.10.0.1", Count: 9}})
 	if err != nil {
 		t.Fatalf("merge: %v", err)

@@ -41,7 +41,6 @@
         <div class="trg-hero-hit">{{ heroHitSource }}</div>
         <div v-if="row?.event_time" class="trg-hero-time">{{ t('common.app.views.trigDetail.eventTime', { time: formatTriggerTime(row.event_time) }) }}</div>
         <div class="trg-hero-meta">
-          <span>{{ t('common.app.views.trigDetail.sourceIp', { ip: row?.client_ip }) }}</span>
           <span v-if="(row?.duration_us ?? 0) > 0"><template v-if="isWafFamily">{{ t('common.app.views.trigDetail.wafDuration', { total: formatDurationUs((row?.duration_us ?? 0) + (row?.precheck_us ?? 0)) }) }}<template v-if="(row?.precheck_us ?? 0) > 0">{{ t('common.app.views.trigDetail.wafDurationSplit', { precheck: formatDurationUs(row?.precheck_us), waf: formatDurationUs(row?.duration_us) }) }}</template></template><template v-else>{{ t('common.app.views.trigDetail.precheckDuration', { total: formatDurationUs(row?.duration_us ?? 0) }) }}</template></span>
           <el-tag size="small" :type="eventActionTone(row?.action, row?.rule_triggered)" effect="plain">
             {{ eventActionFull(row?.action, row?.rule_triggered) }}
@@ -84,9 +83,8 @@
           <div class="info-note-bar"><span class="info-note-desc">{{ t('common.app.views.trigDetail.crawlerVerifyNote') }}</span></div>
         </template>
 
-        <!-- 阶段 2 · CC 防护（人机挑战）：本次结果 + 策略配置（只读） -->
+        <!-- 阶段 2 · CC 防护（人机挑战）：策略配置（只读）；本次结果由 hero 动作标签唯一展示 -->
         <template v-else-if="kind === 'human'">
-          <div class="trg-kv"><span class="k">{{ t('common.app.views.trigDetail.ccResult') }}</span><el-tag size="small" :type="ccResultTone" effect="light">{{ ccResultText }}</el-tag></div>
           <div class="trg-kv"><span class="k">{{ t('common.app.views.trigDetail.ccMode') }}</span><span>{{ ccModeText }}</span></div>
           <div class="trg-kv"><span class="k">{{ t('common.app.views.trigDetail.ccType') }}</span><span>{{ ccTypeText }}</span></div>
           <div class="trg-kv"><span class="k">{{ t('common.app.views.trigDetail.ccTtl') }}</span><span>{{ policy?.human_verify_ttl ? t('common.app.views.trigDetail.ccTtlValue', { ttl: policy.human_verify_ttl }) : '—' }}</span></div>
@@ -269,8 +267,14 @@ const categoryLabel = computed(() => {
     case 'waf-crs': return t('common.app.views.trigDetail.categoryWafCrs')
     case 'waf-custom': return t('common.app.views.trigDetail.categoryWafCustom')
     case 'body': return t('common.app.views.trigDetail.categoryBody')
-    // 人机挑战属阶段 2 · CC 防护（2026-11-12 四阶段）
-    case 'human': return t('common.app.views.trigDetail.stageHuman')
+    // 人机挑战（2026-11-13 用户裁定）：彩色标签显示验证模式（智能触发/始终验证），
+    // 与右侧 heroStage「阶段 2 · CC 防护」去重；模式未知/未加载回落「人机挑战」。
+    case 'human': {
+      const mode = policy.value?.human_verify_mode
+      if (mode === 'force') return t('common.app.views.stages.humanMode_force')
+      if (mode === 'auto') return t('common.app.views.stages.humanMode_auto')
+      return t('common.app.views.trigDetail.dimHuman')
+    }
     default: return t('common.app.views.trigDetail.categoryAcl')
   }
 })
@@ -336,6 +340,7 @@ const relevantSummary = computed(() => {
     case 'crawler': return crawlerSummary.value
     case 'threat': return t('common.app.views.trigDetail.threatRefSummary', { summary: aclSummary.value })
     case 'waf-crs': case 'waf-custom': return wafSummary.value
+    case 'human': return t('common.app.views.trigDetail.humanSummary', { mode: ccModeText.value, type: ccTypeText.value })
     case 'body': return '—'
     default: return aclSummary.value
   }
@@ -347,9 +352,9 @@ const heroHitSource = computed(() => {
   if (!ev) return '—'
   switch (kind.value) {
     case 'human':
-      // 挑战是独立结果：命中源直接给出本次结果，避免「id:human_challenge」
-      // 这类内部标识出现在读者面前。
-      return t('common.app.views.trigDetail.heroHumanHit', { result: ccResultText.value })
+      // 挑战是独立结果：命中源给出规则名（结果由 hero 动作标签唯一展示，
+      // 避免「人机验证 · 挑战发放」与动作标签/明细 ccResult 三处重复）。
+      return ev.rule_name ? t('common.app.views.trigDetail.heroHumanRule', { name: ev.rule_name }) : t('common.app.views.trigDetail.heroHumanHit', { result: ccResultText.value })
     case 'acl': {
       if (isAllowOutside.value) return t('common.app.views.trigDetail.allowOutsideNote')
       if (inlineAclHit.value) {
@@ -458,12 +463,6 @@ const ccResultText = computed(() => {
   if (rule === 'human_pass') return t('common.app.views.trigDetail.ccResultPass')
   if (rule === 'human_failed') return t('common.app.views.trigDetail.ccResultFail')
   return t('common.app.views.trigDetail.ccResultChallenge')
-})
-const ccResultTone = computed<'info' | 'success' | 'danger'>(() => {
-  const rule = props.row?.rule_triggered ?? ''
-  if (rule === 'human_pass') return 'success'
-  if (rule === 'human_failed') return 'danger'
-  return 'info'
 })
 const ccModeText = computed(() => {
   const mode = policy.value?.human_verify_mode ?? 'off'

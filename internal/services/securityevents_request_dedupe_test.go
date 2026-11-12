@@ -292,7 +292,7 @@ func TestSecurityEventsTick_crossPassUpgradeFeedsAutobanUnderBlockedScope(t *tes
 func TestSecurityEventsTick_crossPassUpgradeDoesNotDoubleCountUnderAllScope(t *testing.T) {
 	logPath, offsetPath := seedSecurityEventsDedupeDB(t)
 	installDedupeAutobanFixture(t)
-	setAutobanConfigRaw(t, true, 1, 60, "1h", "all", false)
+	setAutobanConfigRaw(t, true, 1, 60, "1h", "blocked,logged", false)
 
 	writeSecurityEventsDedupeLog(t, logPath,
 		securityEventsDedupeNowFixture("tx-all-a", "0022aabbccddeeff", "/split", "logged", 942100))
@@ -315,7 +315,7 @@ func TestSecurityEventsTick_crossPassUpgradeDoesNotDoubleCountUnderAllScope(t *t
 func TestSecurityEventsTick_crossPassUpgradeFeedsAutobanAfterStageFilteredLogged(t *testing.T) {
 	logPath, offsetPath := seedSecurityEventsDedupeDB(t)
 	installDedupeAutobanFixture(t)
-	setAutobanConfigRaw(t, true, 1, 60, "1h", "all", false)
+	setAutobanConfigRaw(t, true, 1, 60, "1h", "blocked,logged", false)
 
 	// 800123 属 GeoIP 预检段（阶段 1）：logged 随批喂入但被阶段门剔除。
 	writeSecurityEventsDedupeLog(t, logPath,
@@ -336,7 +336,7 @@ func TestSecurityEventsTick_crossPassUpgradeFeedsAutobanAfterStageFilteredLogged
 // 同批形态与跨批一致：阶段 1 logged 与 WAF blocked 落在同一批时同样恰好计 1
 // （两条喂入路径的口径不得分叉）。
 func TestSecurityEventsTick_samePassUpgradeFeedsAutobanAfterStageFilteredLogged(t *testing.T) {
-	for _, scope := range []string{"all", "blocked"} {
+	for _, scope := range []string{"blocked,logged", "blocked"} {
 		t.Run(scope, func(t *testing.T) {
 			logPath, offsetPath := seedSecurityEventsDedupeDB(t)
 			installDedupeAutobanFixture(t)
@@ -357,7 +357,7 @@ func TestSecurityEventsTick_samePassUpgradeFeedsAutobanAfterStageFilteredLogged(
 func TestSecurityEventsTick_crossPassUpgradeFeedsBlockedAfterTrustExemptLogged(t *testing.T) {
 	logPath, offsetPath := seedSecurityEventsDedupeDB(t)
 	installDedupeAutobanFixture(t)
-	setAutobanConfigRaw(t, true, 1, 60, "1h", "all", false)
+	setAutobanConfigRaw(t, true, 1, 60, "1h", "blocked,logged", false)
 	if _, err := db.DB.Exec(`UPDATE security_policies SET ip_whitelist_enabled=1, ip_whitelist='["45.33.32.9"]' WHERE id=7`); err != nil {
 		t.Fatal(err)
 	}
@@ -432,7 +432,7 @@ func TestSecurityEventsTick_crossPassUpgradeAppendsAttackFlow(t *testing.T) {
 }
 
 func TestSecurityEventsTick_samePassUpgradeFeedsAutobanOnce(t *testing.T) {
-	for _, scope := range []string{"all", "blocked"} {
+	for _, scope := range []string{"blocked,logged", "blocked"} {
 		t.Run(scope, func(t *testing.T) {
 			logPath, offsetPath := seedSecurityEventsDedupeDB(t)
 			installDedupeAutobanFixture(t)

@@ -145,7 +145,7 @@ func TestClusterSync_autobanColumnsPropagate(t *testing.T) {
 		t.Fatalf("snapshot: %v", err)
 	}
 	if _, err := database.Exec(`UPDATE global_config SET autoban_enabled=0, autoban_threshold=100, autoban_window_minutes=5,
-		autoban_duration='1h', autoban_scope='all', autoban_dry_run=1 WHERE id=1`); err != nil {
+		autoban_duration='1h', autoban_scope='blocked,logged', autoban_dry_run=1 WHERE id=1`); err != nil {
 		t.Fatal(err)
 	}
 	if err := syncService.applySnapshot(ctx, snap); err != nil {

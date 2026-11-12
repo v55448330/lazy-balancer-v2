@@ -529,7 +529,7 @@ var backupTableNullDefaults = map[string]map[string]any{
 		"human_verify_mode": "off", "human_verify_type": db.DefaultHumanVerifyType, "human_verify_ttl": int64(db.DefaultHumanVerifyTTL),
 		"human_exempt_paths": "[]",
 		"cc_detect_enabled":  int64(0), "cc_rps_limit": int64(db.DefaultCCRPSLimit), "cc_rps_window": int64(db.DefaultCCRPSWindow),
-		"cc_4xx_ratio": int64(db.DefaultCC4xxRatio), "cc_session_anomaly": int64(0), "cc_session_ua_threshold": int64(db.DefaultCCSessionUAThreshold), "cc_response": "verify",
+		"cc_4xx_ratio": int64(db.DefaultCC4xxRatio), "cc_session_anomaly": int64(0), "cc_session_ua_threshold": int64(db.DefaultCCSessionUAThreshold),
 	},
 	"security_custom_rules": {
 		"description": "", "conditions": "[]", "condition_logic": "and", "action": "block", "score": int64(5),
@@ -598,10 +598,10 @@ var backupTableNullDefaults = map[string]map[string]any{
 var backupBooleanConfigKeys = []string{
 	"server_tokens_hidden", "access_log_json", "admin_tls_enabled",
 	"sync_global_config", "sync_users", "sync_rules", "sync_waf_files", "sync_security",
-	"sync_switches_migrated", "waf_mode4_migrated", "policy_stage_merge_v1", // 迁移门列：备份比对按布尔处理
+	"sync_switches_migrated", "waf_mode4_migrated", "policy_stage_merge_v1", "autoban_scope_multiselect_v1", // 迁移门列：备份比对按布尔处理
 	"mfa_write_guard", "mfa_lockout_enabled",
 	"trusted_proxy_enabled", "trusted_proxy_strict", // v2.3.x 受信代理
-	"autoban_enabled", "autoban_dry_run", "autoban_count_human_failed", // D2:自动封禁布尔两键——非布尔形态经 v2 类型门整包 400 点名
+	"autoban_enabled", "autoban_dry_run", // D2:自动封禁布尔键——非布尔形态经 v2 类型门整包 400 点名（count_human_failed 已退役）
 	"cc_detect_enabled", "cc_session_anomaly", // CC 检测布尔两键（同 D2 口径）
 	// 自动备份开关为 INTEGER 0/1 语义列，补入配置键枚举。
 	"auto_backup_enabled",
@@ -3382,11 +3382,9 @@ func validateV2BackupSecurityPoliciesWithQuerier(ctx context.Context, tables map
 		delete(policy, "rate_limit_enabled")
 		delete(policy, "rate_limit_rps")
 		delete(policy, "rate_limit_burst")
-		if raw, exists := policy["cc_response"]; exists {
-			if text, ok := raw.(string); !ok || (text != "verify" && text != "ban") {
-				policy["cc_response"] = "verify"
-			}
-		}
+		// CC「封禁」响应列已物理删除（2026-11-13）：旧备份携带的 cc_response
+		// 在导入前裁剪，避免 INSERT 引用不存在列。
+		delete(policy, "cc_response")
 		name := backupString(policy["name"])
 		if utf8.RuneCountInString(name) > securityNameMaxRunes {
 			return fmt.Errorf("安全策略 #%d：策略名称不能超过 %d 字符", index+1, securityNameMaxRunes)
@@ -3837,6 +3835,28 @@ func validateV2BackupAutobanConfig(config map[string]any) ([]string, error) {
 			notes = append(notes, "autoban_window_minutes 非整数形态，已归一为 5")
 		}
 	}
+	// 旧备份兼容（2026-11-13 口径多选改造）：单值 scope（blocked/logged/all）
+	// + count_human_failed 开关 → 新四维集合；开关字段退役，迁移后删除。
+	if raw, exists := config["autoban_scope"]; exists && raw != nil {
+		if value, ok := raw.(string); ok {
+			if strings.TrimSpace(value) == "" {
+				// 空串=未设置，归一为新默认全选（不走旧值映射）。
+				config["autoban_scope"] = db.DefaultAutobanScope
+				notes = append(notes, "autoban_scope 空值，已归一为默认全选")
+			} else {
+				countHuman := false
+				if ch, ok := config["autoban_count_human_failed"]; ok {
+					countHuman, _ = ch.(bool)
+				}
+				migrated := services.MigrateLegacyAutobanScope(value, countHuman)
+				if migrated != value {
+					config["autoban_scope"] = migrated
+					notes = append(notes, fmt.Sprintf("autoban_scope 旧单值口径（%s）已迁移为多选集合（%s）", value, migrated))
+				}
+			}
+		}
+	}
+	delete(config, "autoban_count_human_failed")
 	for _, field := range []struct {
 		key     string
 		def     string
@@ -3844,7 +3864,7 @@ func validateV2BackupAutobanConfig(config map[string]any) ([]string, error) {
 		choices string
 	}{
 		{"autoban_duration", "1h", func(s string) bool { return !services.ValidAutobanDuration(s) }, "10m/30m/1h/6h/12h/24h/permanent"},
-		{"autoban_scope", "all", func(s string) bool { return !services.ValidAutobanScope(s) }, "blocked/logged/all"},
+		{"autoban_scope", db.DefaultAutobanScope, func(s string) bool { return !services.ValidAutobanScope(s) }, "blocked/logged/challenge_issued/challenge_failed 的非空组合"},
 	} {
 		raw, exists := config[field.key]
 		if !exists || raw == nil {
@@ -3862,7 +3882,7 @@ func validateV2BackupAutobanConfig(config map[string]any) ([]string, error) {
 			continue
 		}
 		if field.invalid(value) {
-			return nil, fmt.Errorf("备份校验失败：全局配置 %s 取值无效（%s），须为 %s 之一", field.key, value, field.choices)
+			return nil, fmt.Errorf("备份校验失败：全局配置 %s 取值无效（%s），须为 %s", field.key, value, field.choices)
 		}
 	}
 	return notes, nil
@@ -7159,8 +7179,8 @@ func readImportOldAutoBackupEnabled(ctx context.Context, q importRowQuerier) (in
 // 的列清单同步——否则导入侧比对到「无变化」而运行期实际已换配置。
 var configBackupAutobanColumns = []string{
 	"autoban_enabled", "autoban_threshold", "autoban_window_minutes",
-	"autoban_duration", "autoban_scope", "autoban_dry_run", "autoban_count_human_failed",
-	"cc_rps_limit", "cc_rps_window", "cc_4xx_ratio", "cc_session_ua_threshold", "cc_response", "human_secret",
+	"autoban_duration", "autoban_scope", "autoban_dry_run",
+	"cc_rps_limit", "cc_rps_window", "cc_4xx_ratio", "cc_session_ua_threshold", "human_secret",
 }
 
 // configCarriesAutobanColumns 报告备份全局配置区是否携带自动封禁六列之一

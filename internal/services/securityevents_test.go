@@ -3954,7 +3954,7 @@ func installSecurityEventsAutobanFixture(t *testing.T) {
 	if err := db.InitializeMetricsDB(dataDir); err != nil {
 		t.Fatal(err)
 	}
-	setAutobanConfigRaw(t, true, 5, 60, "1h", "all", false)
+	setAutobanConfigRaw(t, true, 5, 60, "1h", "blocked,logged", false)
 	oldMaster := autobanIsMaster
 	autobanIsMaster = func() bool { return true }
 	t.Cleanup(func() { autobanIsMaster = oldMaster })
@@ -3988,7 +3988,7 @@ func securityEventsLoggedRuleFixture(txID, ip, ruleCaddyID string) string {
 // Then 仅该规则绑定的信任 IP 被排除；其他规则、未保留检测策略与 blocked 事件照常计数。
 func TestSecurityEventsAutoban_excludesRuleTrustLoggedEvents(t *testing.T) {
 	installSecurityEventsAutobanFixture(t)
-	setAutobanConfigRaw(t, true, 1, 60, "1h", "all", false)
+	setAutobanConfigRaw(t, true, 1, 60, "1h", "blocked,logged", false)
 	listID := seedIPList(t, "信任引用", `[{"value":"203.0.113.78"}]`)
 
 	for _, rule := range []struct{ caddyID, domain string }{

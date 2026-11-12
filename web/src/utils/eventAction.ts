@@ -11,7 +11,7 @@
 // 误当作跨模块稳定契约而在视图里直接构造动作色）。
 import { tSafe as t } from '../i18n/tSafe.ts'
 
-type EventActionTone = 'danger' | 'warning' | 'info' | 'success'
+type EventActionTone = 'danger' | 'warning' | 'info' | 'success' | 'primary'
 
 
 // 挑战结果由 rule_triggered 区分（human_challenge/pass/failed）：动作列与
@@ -43,7 +43,7 @@ export const eventActionFull = (action: string | undefined | null, _ruleTriggere
   return action
 }
 
-/** el-tag 色调：拦截 danger、检测 warning；挑战三态 info/success/danger。 */
+/** el-tag 色调：拦截 danger、检测 warning；挑战三态 primary(发放)/success(通过)/danger(失败)。 */
 export const eventActionTone = (action: string | undefined | null, ruleTriggered?: string | null): EventActionTone => {
   // 字面量分派(audit136-U5B-1):表读点曾裸下标,后端外部字符串命中原型键
   // (constructor 等)返回函数被当色调——词表读取契约要求 hasOwn/分派。
@@ -53,7 +53,7 @@ export const eventActionTone = (action: string | undefined | null, ruleTriggered
     const kind = challengeKind(ruleTriggered)
     if (kind === 'pass') return 'success'
     if (kind === 'fail') return 'danger'
-    return 'info'
+    return 'primary'
   }
   return 'warning'
 }

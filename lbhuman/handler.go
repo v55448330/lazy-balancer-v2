@@ -3,7 +3,6 @@ package lbhuman
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/netip"
 	"sort"
@@ -16,21 +15,17 @@ import (
 
 // HumanConfig lb_human 渲染配置（LB 按规则注入；字段与 DB/模型同源）。
 type HumanConfig struct {
-	Mode              string   `json:"mode"`                    // off | auto | force（off 时不渲染）
-	Type              string   `json:"type"`                    // js（M1）| slider（M2）
-	TTLMinutes        int      `json:"ttl"`                     // 验证通过有效期（分钟）
-	Secret            string   `json:"secret"`                  // cookie 签名密钥（hex，LB 注入）
-	CCRPSLimit        int      `json:"cc_rps_limit"`            // CC 突刺阈值（次/窗口）
-	CCWindowSec       int      `json:"cc_window_sec"`           // CC 窗口秒数
-	CC4xxRatio        int      `json:"cc_4xx_ratio"`            // 4xx 比例触发阈值（%）
-	CCSession         bool     `json:"cc_session"`              // 会话异常检测开关
-	CCSessionUA       int      `json:"cc_session_ua"`           // 会话异常 UA 数阈值
-	CCResponse        string   `json:"cc_response"`             // verify | ban
-	BanStatusCode     int      `json:"ban_status_code"`         // direct ban HTTP status (default 403)
-	BanPageHTML       string   `json:"ban_page_html,omitempty"` // optional block page body for direct ban
-	BanPageType       string   `json:"ban_page_type,omitempty"`
+	Mode              string   `json:"mode"`          // off | auto | force（off 时不渲染）
+	Type              string   `json:"type"`          // js（M1）| slider（M2）
+	TTLMinutes        int      `json:"ttl"`           // 验证通过有效期（分钟）
+	Secret            string   `json:"secret"`        // cookie 签名密钥（hex，LB 注入）
+	CCRPSLimit        int      `json:"cc_rps_limit"`  // CC 突刺阈值（次/窗口）
+	CCWindowSec       int      `json:"cc_window_sec"` // CC 窗口秒数
+	CC4xxRatio        int      `json:"cc_4xx_ratio"`  // 4xx 比例触发阈值（%）
+	CCSession         bool     `json:"cc_session"`    // 会话异常检测开关
+	CCSessionUA       int      `json:"cc_session_ua"` // 会话异常 UA 数阈值
+	CCEnabled         bool     `json:"cc_enabled"`    // 突刺/4xx/多UA 触发开关（关闭时仅 force 模式挑战）
 	ChallengePageHTML string   `json:"challenge_page_html,omitempty"`
-	CCEnabled         bool     `json:"cc_enabled"`   // 突刺/4xx/多UA 触发开关（关闭时仅 force 模式挑战）
 	ExemptPaths       []string `json:"exempt_paths"` // 豁免路径前缀
 	ExemptIPs         []string `json:"exempt_ips"`   // 豁免 IP/CIDR 列表
 	RuleID            string   `json:"rule_id"`      // 规则 caddy_id（计数器 key 前缀）
@@ -258,27 +253,4 @@ func (w *statusCapture) Write(b []byte) (int, error) {
 		w.status = http.StatusOK
 	}
 	return w.ResponseWriter.Write(b)
-}
-
-// banResponse CC 触发且响应=ban：直接 403（封禁由 LB 自动封禁管线另行处理，
-// 插件侧立即拦截当次请求）。
-func (h *HumanHandler) banResponse(w http.ResponseWriter, r *http.Request, ip, reason string) {
-	humanStats.Bans.Add(1)
-	status := h.BanStatusCode
-	if status < 100 || status > 599 {
-		status = http.StatusForbidden
-	}
-	if h.BanPageHTML != "" {
-		contentType := h.BanPageType
-		if contentType == "" {
-			contentType = "text/html; charset=utf-8"
-		}
-		w.Header().Set("Content-Type", contentType)
-		w.WriteHeader(status)
-		_, _ = io.WriteString(w, h.BanPageHTML)
-		return
-	}
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	w.WriteHeader(status)
-	_, _ = fmt.Fprintf(w, "请求已被 CC 防护拦截（%s）\nRequest blocked by CC protection (%s)\n", reason, reason)
 }

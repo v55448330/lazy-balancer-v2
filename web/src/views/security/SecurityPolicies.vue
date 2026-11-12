@@ -797,10 +797,10 @@
           <el-form :model="form" :label-width="$flw('100px')" :disabled="formFrozen">
             <el-form-item :label="t('app.security.policies.bp.pageLabel')">
               <el-select v-model="form.block_page_id" :placeholder="t('app.security.policies.bp.pagePlaceholder')" style="width: 100%">
-                <el-option v-if="!(editorPolicyType === 'stage2' && form.cc_response !== 'ban')" :value="0" :label="t('app.security.policies.bp.noPageDefault')" />
+                <el-option :value="0" :label="t('app.security.policies.bp.noPageDefault')" />
                 <el-option v-for="p in blockPages" :key="p.id" :label="pageLabel(p)" :value="p.id" />
               </el-select>
-              <div v-if="editorPolicyType === 'stage2' && form.cc_response !== 'ban'" class="form-tip-line">
+              <div v-if="editorPolicyType === 'stage2'" class="form-tip-line">
                 {{ t('app.security.policies.human.challengePageTip') }} <code class="placeholder-code" v-text="'{{human_verify_widget}}'" />
               </div>
               <div v-if="challengePageMissingWidget" class="form-tip-line is-error">
@@ -811,7 +811,7 @@
               <!-- 归属汇总卡（用户验收裁定）：逐条重复提示收敛为单源汇总——主行 +
                    例外分面（限流/TCP/兜底差异，仅存在才渲染）+ 能力门行；
                    数据源复用绑定列表与 capableAttributions 单源，不平行实现。 -->
-              <div v-if="blockPageSummary && (editorPolicyType !== 'stage2' || form.cc_response === 'ban')" class="block-page-summary">
+              <div v-if="blockPageSummary && editorPolicyType !== 'stage2'" class="block-page-summary">
                 <div v-for="line in blockPageSummary.lines" :key="line.text" class="info-note-bar block-page-summary-line" :class="`is-${line.tone}`">
                   <el-icon class="block-page-summary-icon" :size="14">
                     <CircleCheckFilled v-if="line.tone === 'active'" />
@@ -823,15 +823,8 @@
               </div>
             </el-form-item>
 
-            <el-form-item v-if="editorPolicyType === 'stage2'" :label="t('app.security.policies.human.ccResponseLabel')">
-              <el-radio-group v-model="form.cc_response">
-                <el-radio-button value="verify">{{ t('app.security.policies.human.ccResponseVerify') }}</el-radio-button>
-                <el-radio-button value="ban">{{ t('app.security.policies.human.ccResponseBan') }}</el-radio-button>
-              </el-radio-group>
-              <div class="form-tip-line">{{ t('app.security.policies.human.ccResponseTip') }}</div>
-            </el-form-item>
 
-            <el-form-item v-if="editorPolicyType !== 'stage2' || form.cc_response === 'ban'" :label="t('app.security.policies.bp.statusLabel')">
+            <el-form-item v-if="editorPolicyType !== 'stage2'" :label="t('app.security.policies.bp.statusLabel')">
               <el-select v-model="form.block_status_code" style="width: 200px" :disabled="form.block_page_id === 0">
                 <el-option v-for="opt in STAGE_BLOCK_STATUS_OPTIONS" :key="opt.value" :value="opt.value" :label="opt.label" />
               </el-select>
@@ -839,7 +832,7 @@
             </el-form-item>
 
             <!-- 策略级响应方式：拦截页设置恒为双档（HTML + JSON），具体返回哪种在这里选。 -->
-            <el-form-item v-if="editorPolicyType !== 'stage2' || form.cc_response === 'ban'" :label="t('app.security.policies.bp.responseLabel')">
+            <el-form-item v-if="editorPolicyType !== 'stage2'" :label="t('app.security.policies.bp.responseLabel')">
               <el-radio-group v-model="form.block_response_mode" :disabled="form.block_page_id === 0">
                 <el-radio-button value="auto">{{ t('app.security.policies.bp.responseAuto') }}</el-radio-button>
                 <el-radio-button value="html">{{ t('app.security.policies.bp.responseHtml') }}</el-radio-button>
@@ -1067,7 +1060,7 @@ import { activateOnce } from '@/utils/keyboardActivate'
 
 const { t, locale } = useI18n()
 
-interface PolicyDetail { id: number; name: string; description: string; mode: string; anomaly_threshold: number; ip_acl_mode: string; ip_acl_list: string; ip_acl_enabled: boolean; ip_whitelist: string; ip_whitelist_enabled?: boolean; ip_blacklist?: string; ip_acl_list_refs?: string; ip_whitelist_refs?: string; crs_rule_groups: string; crs_excluded_rules: string; custom_rules: string; block_page_id: number; block_status_code: number; block_response_mode?: string; enabled: boolean; updated_at: string; geoip_mode?: string; geoip_countries?: string; geoip_crawler_exempt?: boolean; geoip_crawler_engines?: string; waf_check_response?: boolean; log_request_body?: boolean; trust_detection?: boolean; human_verify_mode?: string; human_verify_type?: string; human_verify_ttl?: number; human_exempt_paths?: string[]; cc_detect_enabled?: boolean; cc_rps_limit?: number; cc_rps_window?: number; cc_4xx_ratio?: number; cc_session_anomaly?: boolean; cc_session_ua_threshold?: number; cc_response?: string }
+interface PolicyDetail { id: number; name: string; description: string; mode: string; anomaly_threshold: number; ip_acl_mode: string; ip_acl_list: string; ip_acl_enabled: boolean; ip_whitelist: string; ip_whitelist_enabled?: boolean; ip_blacklist?: string; ip_acl_list_refs?: string; ip_whitelist_refs?: string; crs_rule_groups: string; crs_excluded_rules: string; custom_rules: string; block_page_id: number; block_status_code: number; block_response_mode?: string; enabled: boolean; updated_at: string; geoip_mode?: string; geoip_countries?: string; geoip_crawler_exempt?: boolean; geoip_crawler_engines?: string; waf_check_response?: boolean; log_request_body?: boolean; trust_detection?: boolean; human_verify_mode?: string; human_verify_type?: string; human_verify_ttl?: number; human_exempt_paths?: string[]; cc_detect_enabled?: boolean; cc_rps_limit?: number; cc_rps_window?: number; cc_4xx_ratio?: number; cc_session_anomaly?: boolean; cc_session_ua_threshold?: number; }
 // 规则行消费面（关联规则行内执行序/投影数据源；协议与域名等展示字段）
 interface Rule { caddy_id: string; name: string; domain: string; listen_port: number; protocol: string }
 // v2.2.0 多策略绑定：/security/bindings 的值从单 BindingInfo 改为数组（rank 序=执行序；
@@ -1605,7 +1598,6 @@ const viewPolicySections = computed<ViewPolicySection[]>(() => {
       rows: [
         { label: t('common.app.views.stages.humanModeLabel'), value: (d.human_verify_mode ?? 'off') !== 'off' ? t('common.app.views.stages.humanMode_' + d.human_verify_mode) : t('app.security.policies.common.notEnabled') },
         { label: t('common.app.views.stages.humanTypeLabel'), value: (d.human_verify_mode ?? 'off') !== 'off' ? t('common.app.views.stages.humanType_' + (d.human_verify_type ?? 'slider')) : '—' },
-        { label: t('app.security.policies.human.ccResponseLabel'), value: d.cc_detect_enabled ? t('app.security.policies.human.ccResponse' + (d.cc_response === 'ban' ? 'Ban' : 'Verify')) : t('app.security.policies.common.notEnabled') },
       ],
     },
     { title: t('app.security.policies.step.stage3'), rows: stage3Rows },
@@ -1893,7 +1885,7 @@ const pickerProtoFilter = ref<'all' | 'http' | 'tcp'>('http')
 const pickerPage = ref(1)
 const pickerSelected = ref<string[]>([])
 const PICKER_PAGE_SIZE = 20
-const defaultForm = () => ({ name: '', description: '', enabled: true, mode: 'off', anomaly_threshold: 5, ip_acl_enabled: false, ip_acl_mode: 'allow', block_page_id: 1, block_status_code: 403, block_response_mode: 'auto', geoip_enabled: false, geoip_mode: 'deny', geoip_crawler_exempt: false, geoip_crawler_engines: ['googlebot', 'bingbot', 'baiduspider'], waf_check_response: false, log_request_body: false, trust_detection: false, human_verify_mode: 'off', human_verify_type: 'slider', human_verify_ttl: 30, human_exempt_paths: [] as string[], cc_detect_enabled: false, cc_rps_limit: 40, cc_rps_window: 10, cc_4xx_ratio: 70, cc_session_anomaly: false, cc_session_ua_threshold: 5, cc_response: 'verify' })
+const defaultForm = () => ({ name: '', description: '', enabled: true, mode: 'off', anomaly_threshold: 5, ip_acl_enabled: false, ip_acl_mode: 'allow', block_page_id: 1, block_status_code: 403, block_response_mode: 'auto', geoip_enabled: false, geoip_mode: 'deny', geoip_crawler_exempt: false, geoip_crawler_engines: ['googlebot', 'bingbot', 'baiduspider'], waf_check_response: false, log_request_body: false, trust_detection: false, human_verify_mode: 'off', human_verify_type: 'slider', human_verify_ttl: 30, human_exempt_paths: [] as string[], cc_detect_enabled: false, cc_rps_limit: 40, cc_rps_window: 10, cc_4xx_ratio: 70, cc_session_anomaly: false, cc_session_ua_threshold: 5 })
 
 const form = ref(defaultForm())
 // v2.3.8 爬虫豁免引擎注册表（geoipnames 单源镜像；ID 稳定——后端白名单校验）
@@ -3409,7 +3401,6 @@ async function openDialog(row?: PolicySummary) {
         cc_4xx_ratio: d.cc_4xx_ratio ?? 70,
         cc_session_anomaly: d.cc_session_anomaly ?? false,
         cc_session_ua_threshold: d.cc_session_ua_threshold ?? 5,
-        cc_response: d.cc_response === 'ban' ? 'ban' : 'verify',
     }
     ipACLList.value = parseIPList(d.ip_acl_list)
     ipWhitelist.value = parseIPList(d.ip_whitelist)
@@ -3520,7 +3511,7 @@ const beforeWizardClose = (done: () => void): void => {
 }
 
 const challengePageMissingWidget = computed<boolean>(() => {
-  if (editorPolicyType.value !== 'stage2' || form.value.cc_response === 'ban') return false
+  if (editorPolicyType.value !== 'stage2') return false
   if (form.value.block_page_id <= 0) return true
   const page = blockPages.value.find((p) => p.id === form.value.block_page_id)
   return !page || !(page.content ?? '').includes('{{human_verify_widget}}')
@@ -3533,7 +3524,7 @@ const handleSave = async () => {
     currentStep.value = WIZARD_STEP.BASIC
     return
   }
-  if (editorPolicyType.value === 'stage2' && form.value.cc_response !== 'ban' && challengePageMissingWidget.value) {
+  if (editorPolicyType.value === 'stage2' && challengePageMissingWidget.value) {
     ElMessage.error(t('app.security.policies.human.challengePageNeedsWidget'))
     currentStep.value = WIZARD_STEP.BLOCK_PAGE
     return
@@ -3667,7 +3658,6 @@ const handleSave = async () => {
       cc4xxRatio: form.value.cc_4xx_ratio,
       ccSessionAnomaly: form.value.cc_session_anomaly,
       ccSessionUaThreshold: form.value.cc_session_ua_threshold,
-      ccResponse: form.value.cc_response,
     })
     let saveRes: APIResponse<{ id: number }> | undefined
     if (editingId.value) {

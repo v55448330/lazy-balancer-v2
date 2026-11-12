@@ -66,7 +66,7 @@ func TestImportConfigBackup_resetsAutobanCountersOnConfigChange(t *testing.T) {
 
 	backup := autobanRuntimeImportBackup(t, map[string]struct{}{"security_ip_lists": {}}, map[string]any{
 		"autoban_enabled": true, "autoban_threshold": 1, "autoban_window_minutes": 1,
-		"autoban_duration": "1h", "autoban_scope": "all", "autoban_dry_run": false,
+		"autoban_duration": "1h", "autoban_scope": "blocked,logged", "autoban_dry_run": false,
 	})
 	response := postBackupImport(t, h, backup)
 	if response.Code != http.StatusOK {
@@ -97,7 +97,7 @@ func TestImportConfigBackup_keepsAutobanCountersWhenConfigUnchanged(t *testing.T
 
 	backup := autobanRuntimeImportBackup(t, map[string]struct{}{"security_ip_lists": {}}, map[string]any{
 		"autoban_enabled": true, "autoban_threshold": 1, "autoban_window_minutes": 5,
-		"autoban_duration": "1h", "autoban_scope": "all", "autoban_dry_run": false,
+		"autoban_duration": "1h", "autoban_scope": "blocked,logged", "autoban_dry_run": false,
 	})
 	response := postBackupImport(t, h, backup)
 	if response.Code != http.StatusOK {
@@ -141,7 +141,7 @@ func TestImportConfigBackup_disableThroughImportRunsDisableFlush(t *testing.T) {
 
 	backup := autobanRuntimeImportBackup(t, map[string]struct{}{"security_ip_lists": {}}, map[string]any{
 		"autoban_enabled": false, "autoban_threshold": 1, "autoban_window_minutes": 5,
-		"autoban_duration": "1h", "autoban_scope": "all", "autoban_dry_run": false,
+		"autoban_duration": "1h", "autoban_scope": "blocked,logged", "autoban_dry_run": false,
 	})
 	response := postBackupImport(t, h, backup)
 	if response.Code != http.StatusOK {

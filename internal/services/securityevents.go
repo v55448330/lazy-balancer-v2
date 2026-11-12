@@ -2510,11 +2510,11 @@ func (t *securityEventsTailer) securityEventsProcessPass(ctx context.Context, f 
 	// crossPassUpgradeNeedsBlockedFeed 判定跨 pass 改判是否需要补喂 blocked
 	// （本批缓冲里没有该请求的条目=上一 pass 已提交）。不变量「一请求只计
 	// 一次」：已喂 blocked 不再补；被信任豁免与被阶段门预筛剔除的 logged
-	// 从未计数必须补；其余 logged 只在 scope=blocked 下未计（scope=all 已计
-	// 1，补则双计）。口径每 pass 只读一次库（升级是罕见形态，仍避免逐事件
-	// SELECT）。
+	// 从未计数必须补；其余 logged 仅在「口径含 blocked 但不含 logged」时未计
+	// （含 logged 的口径已计 1，补则双计）。口径每 pass 只读一次库（升级是
+	// 罕见形态，仍避免逐事件 SELECT）。
 	crossPassAutobanScopeLoaded := false
-	crossPassAutobanScope := ""
+	crossPassAutobanScopeSet := map[string]bool{}
 	crossPassUpgradeNeedsBlockedFeed := func(prevAction string) bool {
 		switch prevAction {
 		case "blocked":
@@ -2525,11 +2525,11 @@ func (t *securityEventsTailer) securityEventsProcessPass(ctx context.Context, f 
 		if !crossPassAutobanScopeLoaded {
 			cfg, err := GetAutobanConfig()
 			if err == nil && cfg.Enabled {
-				crossPassAutobanScope = cfg.Scope
+				crossPassAutobanScopeSet = AutobanScopeSet(cfg.Scope)
 			}
 			crossPassAutobanScopeLoaded = true
 		}
-		return crossPassAutobanScope == "blocked"
+		return crossPassAutobanScopeSet[AutobanScopeBlocked] && !crossPassAutobanScopeSet[AutobanScopeLogged]
 	}
 	// 攻击流光流批次：与日志事务提交点对齐，回滚路径不喂。
 	var attackFlowBatch []threatScreenAttackFlowItem

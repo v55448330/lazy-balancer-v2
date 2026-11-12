@@ -2798,9 +2798,9 @@ func TestAPIDocs_connectionStatsExampleKeysMatchImplementation(t *testing.T) {
 	assertStructKeysDocumented(t, "GET /metrics/connections", mapKeysOf(docResponseExample(t, "GET /metrics/connections")), models.ConnectionStats{})
 }
 
-// 触发阶段筛选（rule_triggered）文档对表：固定预置八类是用户裁定口径，单源=
-// 前端 web/src/utils/triggeredFilter.ts 的 TRIGGERED_CATEGORIES（与后端
-// ruleTriggeredFamilyPrefixes 家族表同语义）。REST queryParameters 与 MCP
+// 触发阶段筛选（rule_triggered）文档对表：固定预置九类是用户裁定口径（2026-11-13
+// 新增 CC 防护），单源=前端 web/src/utils/triggeredFilter.ts 的 TRIGGERED_CATEGORIES
+// （与后端 ruleTriggeredFamilyPrefixes 家族表同语义）。REST queryParameters 与 MCP
 // securityEventsSchema 两份文案必须逐类覆盖该单源，任一侧漏类/私增类即红。
 func TestAPIDocsAndMCPSchemaTriggeredCategoriesMatchFrontendSingleSource(t *testing.T) {
 	feSource, err := os.ReadFile(filepath.Join("..", "..", "web", "src", "utils", "triggeredFilter.ts"))
@@ -2815,7 +2815,7 @@ func TestAPIDocsAndMCPSchemaTriggeredCategoriesMatchFrontendSingleSource(t *test
 	if len(blocks) != 2 {
 		t.Fatal("前端单源缺 TRIGGERED_CATEGORIES 定义")
 	}
-	categories := make([]string, 0, 8)
+	categories := make([]string, 0, 9)
 	for _, item := range regexp.MustCompile(`'([^']+)'|([A-Za-z_][A-Za-z0-9_]*)`).FindAllStringSubmatch(blocks[1], -1) {
 		switch {
 		case item[1] != "":
@@ -2826,8 +2826,8 @@ func TestAPIDocsAndMCPSchemaTriggeredCategoriesMatchFrontendSingleSource(t *test
 			t.Fatalf("前端 TRIGGERED_CATEGORIES 出现未解析项 %q（需同步扩充本钉的标识符解析）", item[2])
 		}
 	}
-	if len(categories) != 8 {
-		t.Fatalf("前端触发阶段预置类数=%d，固定预置八类契约被改动", len(categories))
+	if len(categories) != 9 {
+		t.Fatalf("前端触发阶段预置类数=%d，固定预置九类契约被改动", len(categories))
 	}
 
 	var restDescription string

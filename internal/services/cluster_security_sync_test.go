@@ -181,8 +181,6 @@ func TestApplySnapshot_securityPoliciesEverySchemaColumnRoundTrip(t *testing.T) 
 			expected[column] = 403
 		case column == "block_response_mode":
 			expected[column] = "json"
-		case column == "cc_response":
-			expected[column] = "ban"
 		case column == "enabled" || column == "ip_whitelist_enabled":
 			expected[column] = 0
 		case jsonColumns[column]:

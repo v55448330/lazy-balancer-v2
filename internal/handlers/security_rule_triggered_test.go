@@ -406,3 +406,83 @@ func TestRuleTriggeredFilterSQL_legacyTrustBypassIdFive(t *testing.T) {
 		}
 	}
 }
+
+// CC 防护（人机挑战）筛选族（2026-11-13 用户裁定新增）：rule_triggered 为非数字
+// human_*（human_challenge/human_failed，历史含 human_pass）——GLOB 'human_*' 整族
+// 命中，与数字规则 id 族互斥；「CC 防护」标签精确与前缀两路径同口径。
+func TestRuleTriggeredFilterSQL_ccProtectionFamily(t *testing.T) {
+	setupSecurityPolicyTestDB(t)
+	if _, err := db.DB.Exec(`CREATE TABLE rule_triggered_cc_probe (rule_triggered TEXT, rule_msg TEXT)`); err != nil {
+		t.Fatal(err)
+	}
+	probes := []string{
+		"human_challenge", // 挑战发放
+		"human_failed",    // 挑战失败
+		"human_pass",      // 历史存量（新事件已不落库，GLOB 仍兼容）
+		"942100",          // CRS
+		"800123",          // GeoIP 预检
+		"2",               // IP ACL
+		"80012",           // 5 位自定义
+	}
+	for _, id := range probes {
+		if _, err := db.DB.Exec(`INSERT INTO rule_triggered_cc_probe (rule_triggered) VALUES (?)`, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	matchSet := func(t *testing.T, family string) map[string]bool {
+		t.Helper()
+		var args []any
+		cond := ruleTriggeredFilterSQL(family, &args)
+		matched := map[string]bool{}
+		rows, err := db.DB.Query(`SELECT rule_triggered FROM rule_triggered_cc_probe WHERE `+cond, args...)
+		if err != nil {
+			t.Fatalf("query %q family filter: %v", family, err)
+		}
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				t.Fatal(err)
+			}
+			matched[id] = true
+		}
+		rows.Close()
+		return matched
+	}
+	cc := matchSet(t, "CC 防护")
+	for _, id := range []string{"human_challenge", "human_failed", "human_pass"} {
+		if !cc[id] {
+			t.Errorf("CC 防护 family 必须命中 %q: %v", id, cc)
+		}
+	}
+	for _, id := range []string{"942100", "800123", "2", "80012"} {
+		if cc[id] {
+			t.Errorf("CC 防护 family 不得命中数字规则 id %q: %v", id, cc)
+		}
+	}
+	// 前缀路径（部分输入「CC」）与精确路径同口径。
+	prefix := matchSet(t, "CC")
+	for _, id := range []string{"human_challenge", "human_failed", "human_pass"} {
+		if !prefix[id] {
+			t.Errorf("CC 前缀路径必须命中 %q: %v", id, prefix)
+		}
+	}
+	// 多值 OR：CC 防护与 CRS 并集。
+	var args []any
+	cond := ruleTriggeredMultiFilterSQL("CC 防护,WAF·CRS", &args)
+	rows, err := db.DB.Query(`SELECT rule_triggered FROM rule_triggered_cc_probe WHERE `+cond, args...)
+	if err != nil {
+		t.Fatalf("multi filter: %v", err)
+	}
+	union := map[string]bool{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		union[id] = true
+	}
+	rows.Close()
+	if !union["human_challenge"] || !union["942100"] || union["2"] {
+		t.Errorf("CC 防护,WAF·CRS 并集失真: %v", union)
+	}
+}

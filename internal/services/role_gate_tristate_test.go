@@ -151,7 +151,7 @@ func TestCrawlerRunUpdate_roleReadFailureAtStartFailsLoudly(t *testing.T) {
 // unknown（DB 故障）按失败返回。
 func TestAutobanRunCycle_roleGateThreeForms(t *testing.T) {
 	installAutobanEngineFixture(t)
-	setAutobanConfigRaw(t, false, 1, 5, "1h", "all", true)
+	setAutobanConfigRaw(t, false, 1, 5, "1h", "blocked,logged", true)
 
 	// slave：确认从节点 → skipped 语义不变。
 	if _, err := db.DB.Exec(`UPDATE global_config SET is_master=0 WHERE id=1`); err != nil {

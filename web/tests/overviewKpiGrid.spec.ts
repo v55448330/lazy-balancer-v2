@@ -86,13 +86,14 @@ test('每列同构：标签 / 今日主数值 / 昨日对比 / 协议拆分 / �
   assert.equal(label.get('font-weight'), '600')
   assert.doesNotMatch(page, /strip-label-dot/, '色点样式已整体移除')
   assert.equal(cssDeclarations(page, '.strip-sub-label').get('font-weight'), '700')
-  // CC 卡片：原限流卡片替换为 CC 防护统计（今日挑战/通过率/通过失败/封禁）
+  // CC 卡片：今日挑战/通过率/通过/失败三行统计（CC 封禁数字已退役——封禁由自动封禁卡承载）
   assert.match(page, /t\('app\.security\.overview\.cc\.title'\)/)
   assert.match(page, /t\('app\.security\.overview\.cc\.challengedToday'\)/)
   assert.match(page, /t\('app\.security\.overview\.cc\.passRate'\)/)
   assert.match(page, /t\('app\.security\.overview\.cc\.passed'\)/)
   assert.match(page, /t\('app\.security\.overview\.cc\.failed'\)/)
-  assert.match(page, /t\('app\.security\.overview\.cc\.bans'\)/)
+  assert.doesNotMatch(page, /cc\.bans/, 'CC 封禁数字已退役（封禁由自动封禁管线承载）')
+  assert.match(page, /\.cc-donut-value \{ fill: none; stroke: #67c23a/, '通过率圆环用绿色（与通过图例一致）')
   assert.doesNotMatch(page, /rateLimitBlocks|fetchRateLimitBlocks|rate-limit-blocks/, '限流卡片与取数必须整体移除')
   assert.equal(cssDeclarations(page, '.strip-value.is-info').get('color'), '#409eff')
 })

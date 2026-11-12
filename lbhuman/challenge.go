@@ -11,12 +11,12 @@ import (
 // humanVerifyPath JS 挑战校验端点路径（保留路径前缀，业务路径冲突时豁免配置兜底）。
 const humanVerifyPath = "/__lb/human/verify"
 
-// humanStats 全局挑战统计（总览卡数据源）。
+// humanStats 全局挑战统计（总览卡数据源）。CC「封禁」响应退役（2026-11-13）：
+// 封禁由自动封禁管线承载，此处只计挑战发放/通过/失败。
 var humanStats struct {
 	Challenges atomic.Int64 // 挑战页发放数
 	Passes     atomic.Int64 // 验证通过数
 	Fails      atomic.Int64 // 验证失败数
-	Bans       atomic.Int64 // CC ban 响应数
 }
 
 // serveJSChallenge 发放 JS 挑战页（PoW 工作量证明，浏览器执行，脚本无法）。

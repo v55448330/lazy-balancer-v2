@@ -8,8 +8,10 @@
 // 参数按英文逗号逐段解析，段间 OR；段可以是 family 键、前缀式 token 或纯数字规则 ID；
 // 含逗号的消息关键词会整串回退为消息搜索（前端只管连接，不判断语义）。
 
-// 触发阶段筛选为固定预置八类（用户裁定：固定预置值，不接受任意值）。
+// 触发阶段筛选为固定预置九类（用户裁定：固定预置值，不接受任意值）。
 // 限流（429）无 sec_events 数据源，不再作为筛选项/分类。
+// CC 防护（2026-11-13 用户裁定新增）：人机挑战事件族（human_*），后端
+// humanFamilyCondition 承载。
 
 // crawler 族展示词单源：后端 family 键/trigger_type 权威词为「爬虫Bot」
 //（internal/handlers/security_threat_screen.go triggerTypeForRule）。
@@ -17,7 +19,7 @@
 // 同页筛选/触发类型列显示「爬虫Bot」，用户需自行判断两词同族。
 export const CRAWLER_FAMILY_LABEL = '爬虫Bot'
 
-export const TRIGGERED_CATEGORIES = [CRAWLER_FAMILY_LABEL, '地域拦截', 'IP 访问控制', '信任名单', '威胁情报库', '请求体异常', 'WAF·CRS', 'WAF·自定义'] as const
+export const TRIGGERED_CATEGORIES = [CRAWLER_FAMILY_LABEL, '地域拦截', 'IP 访问控制', '信任名单', '威胁情报库', '请求体异常', 'WAF·CRS', 'WAF·自定义', 'CC 防护'] as const
 type TriggeredCategory = typeof TRIGGERED_CATEGORIES[number]
 
 // 每类对应的 ruleTriggeredFamilyPrefixes 映射键（值=后端 family 键，与新
@@ -33,6 +35,7 @@ export const TRIGGERED_FAMILY_SEGMENTS: Record<TriggeredCategory, string[]> = {
   // 后端两个 token 落到同一 customRuleFamilyCondition（SQL 等价重复 OR）；
   // 保留双段是历史契约（后端任一侧改名都不至于让筛选失效），勿"优化"成单段。
   'WAF·自定义': ['WAF·自定义', '自定义规则'],
+  'CC 防护': ['CC 防护'],
 }
 
 const isTriggeredCategory = (value: string): value is TriggeredCategory =>

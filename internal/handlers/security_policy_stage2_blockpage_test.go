@@ -102,13 +102,13 @@ func TestUpdateSecurityPolicy_blockStatusCodeNormalization(t *testing.T) {
 		}
 	})
 
-	t.Run("stage2 直接封禁沿用页面状态码", func(t *testing.T) {
+	t.Run("stage2 有拦截页时保留状态码", func(t *testing.T) {
 		setupSecurityPolicyTestDB(t)
 		router := newSecurityRouter(t)
 		id := createTestPolicy(t, router, map[string]any{
-			"name": "cc-ban-page", "policy_type": "stage2",
+			"name": "cc-challenge-page", "policy_type": "stage2",
 			"human_verify_mode": "force", "cc_detect_enabled": true,
-			"cc_response": "ban", "block_page_id": 9001,
+			"block_page_id": 9001,
 		})
 
 		rec := putJSON(t, router, fmt.Sprintf("/security/policies/%d", id), map[string]any{"block_status_code": 404})
@@ -121,7 +121,7 @@ func TestUpdateSecurityPolicy_blockStatusCodeNormalization(t *testing.T) {
 			t.Fatal(err)
 		}
 		if status != 404 {
-			t.Fatalf("stage2 ban block_status_code=%d, want 404（沿用拦截页状态码）", status)
+			t.Fatalf("stage2 block_status_code=%d, want 404（有拦截页时保留状态码）", status)
 		}
 	})
 }

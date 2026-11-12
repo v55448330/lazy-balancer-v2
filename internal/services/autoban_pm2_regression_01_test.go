@@ -25,7 +25,7 @@ import (
 
 func TestAutobanRunCycle_candidatesEvaluatedInsideCaddyOpLock(t *testing.T) {
 	clock := installAutobanFixture(t, "2026-10-14 10:00:00")
-	setAutobanConfigRaw(t, true, 1, 5, "1h", "all", false)
+	setAutobanConfigRaw(t, true, 1, 5, "1h", "blocked,logged", false)
 
 	// 候选 IP：达阈值且窗口已过期（桶先评估再删——形态，兼作 barrier）
 	autobanObserveEvent("198.51.100.7", "blocked", "949110")

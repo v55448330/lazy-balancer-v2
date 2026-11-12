@@ -54,7 +54,7 @@ func TestCaddyPayload_stripsAllInternalKeys(t *testing.T) {
 // 并落「自动封禁」审计（旧行为先修剪后评估会把整桶丢弃，永不封禁）。
 func TestAutobanRunCycle_expiredBucketStillBans(t *testing.T) {
 	f := installAutobanFixture(t, "2026-10-14 10:00:00")
-	setAutobanConfigRaw(t, true, 2, 5, "1h", "all", false)
+	setAutobanConfigRaw(t, true, 2, 5, "1h", "blocked,logged", false)
 	reloads := 0
 	oldFn := autobanReloader
 	autobanReloader = func() error { reloads++; return nil }

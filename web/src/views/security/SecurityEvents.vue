@@ -146,11 +146,11 @@
              服务端筛选（rule_name/rule_triggered/policy_name LIKE）。 -->
         <el-input v-model="filters.rule_name" :placeholder="t('app.security.events.rulePlaceholder')" clearable style="width: 100px" @keyup.enter="applyFilters" />
         <!-- 触发规则筛选：多选 + 头部全选（勾的就是看的，统一正向心智）。
-             全选（八类全中且无自定义 tag）或空选 = 不过滤，不发送参数；子集或含
+             全选（九类全中且无自定义 tag）或空选 = 不过滤，不发送参数；子集或含
              自定义 tag 时全部选中值英文逗号连接发送 rule_triggered（后端逐段按
              family/前缀/纯数字 ID 解析，OR 连接）。filterable + allow-create：可直接
              输入 CRS 规则 ID（如 942100）等自定义 tag 混入同一参数；自定义 tag 不参与
-             全选判定（只看 8 个类别是否全中）。 -->
+             全选判定（只看 9 个类别是否全中）。 -->
         <el-select
           v-model="filters.rule_triggered"
           multiple
@@ -180,6 +180,10 @@
           <el-option :label="t('app.security.events.bodyAnomaly')" value="请求体异常" :title="t('app.security.events.bodyAnomalyHint')" />
           <el-option label="WAF·CRS" value="WAF·CRS" :title="t('app.security.events.wafCrsHint')" />
           <el-option :label="t('app.security.events.wafCustom')" value="WAF·自定义" :title="t('app.security.events.wafCustomHint')" />
+          <!-- CC 防护（2026-11-13 用户裁定新增）：value=后端族键「CC 防护」，
+               形态条件 humanFamilyCondition（human_* 整族），与前端单源
+               TRIGGERED_CATEGORIES 同名同序。 -->
+          <el-option :label="t('app.security.events.stageHuman')" value="CC 防护" :title="t('app.security.events.ccProtectionHint')" />
         </el-select>
         <el-input v-model="filters.policy_name" :placeholder="t('app.security.events.policyPlaceholder')" clearable style="width: 90px" @keyup.enter="applyFilters" />
         <el-input v-model="filters.ip" :placeholder="t('app.security.events.ipPlaceholder')" clearable style="width: 115px" @keyup.enter="applyFilters" />
@@ -309,15 +313,11 @@
           <el-switch v-model="autobanForm.dry_run" />
           <div class="form-tip-line">{{ t('app.security.events.dryRunHint') }}</div>
         </el-form-item>
-        <el-form-item :label="t('app.security.events.countHumanFailedLabel')">
-          <el-switch v-model="autobanForm.count_human_failed" />
-          <div class="form-tip-line">{{ t('app.security.events.countHumanFailedHint') }}</div>
-        </el-form-item>
-        <el-form-item :label="t('app.security.events.scopeLabel')" for="radio---9">
-          <input type="text" id="radio---9" aria-hidden="true" tabindex="-1" autocomplete="off" style="display:none">
-          <el-radio-group v-model="autobanForm.scope">
-            <el-radio v-for="s in AUTOBAN_SCOPES" :key="s" :value="s">{{ autobanScopeLabel(s) }}</el-radio>
-          </el-radio-group>
+        <el-form-item :label="t('app.security.events.scopeLabel')">
+          <el-checkbox-group v-model="autobanForm.scope">
+            <el-checkbox v-for="s in AUTOBAN_SCOPES" :key="s" :value="s">{{ autobanScopeLabel(s) }}</el-checkbox>
+          </el-checkbox-group>
+          <div class="form-tip-line">{{ t('app.security.events.scopeHint') }}</div>
         </el-form-item>
         <el-form-item :label="t('app.security.events.windowLabel')">
           <el-input-number v-model="autobanForm.window_minutes" :min="1" :max="60" :step="5" controls-position="right" style="width: 140px" />
@@ -470,9 +470,9 @@ interface SecurityEvent { id: number; event_time: string; rule_caddy_id: string;
 
 interface AutobanSuggestion { ip: string; count: number; ip_location?: string; window_start?: string; last_seen?: string }
 interface AutobanStatus {
-  enabled: boolean; dry_run: boolean; count_human_failed: boolean; threshold: number; window_minutes: number
+  enabled: boolean; dry_run: boolean; threshold: number; window_minutes: number
   cc_detect_enabled?: boolean; cc_rps_limit?: number; cc_rps_window?: number
-  cc_4xx_ratio?: number; cc_session_anomaly?: boolean; cc_session_ua_threshold?: number; cc_response?: string
+  cc_4xx_ratio?: number; cc_session_anomaly?: boolean; cc_session_ua_threshold?: number
   duration: string; scope: string; banned_today: number; list_entries: number
   // 黄条判据 = 封禁是否真正生效（名单非空 ∧ 被启用+IP ACL 启用+deny 的
   // 策略在 ip_acl_list_refs 引用）。后端 list_referenced 为热路径资格门的四面
@@ -490,7 +490,8 @@ interface AutobanStatus {
   is_master: boolean
 }
 const AUTOBAN_DURATIONS = ['10m', '30m', '1h', '6h', '12h', '24h', 'permanent']
-const AUTOBAN_SCOPES = ['all', 'blocked', 'logged']
+const AUTOBAN_SCOPES = ['blocked', 'logged', 'challenge_issued', 'challenge_failed']
+const AUTOBAN_SCOPE_DEFAULT = ['blocked', 'logged', 'challenge_issued', 'challenge_failed']
 const autobanDurationLabel = (value: string): string => {
   switch (value) {
     case '10m': return t('app.security.events.duration10m')
@@ -505,15 +506,22 @@ const autobanDurationLabel = (value: string): string => {
 }
 const autobanScopeLabel = (value: string): string => {
   switch (value) {
-    case 'all': return t('app.security.events.scopeAll')
-    case 'blocked': return t('app.security.events.scopeBlockedOnly')
-    case 'logged': return t('app.security.events.scopeLoggedOnly')
+    case 'blocked': return t('app.security.events.scopeBlocked')
+    case 'logged': return t('app.security.events.scopeLogged')
+    case 'challenge_issued': return t('app.security.events.scopeChallengeIssued')
+    case 'challenge_failed': return t('app.security.events.scopeChallengeFailed')
     default: return value
   }
 }
+// 集合字符串 ↔ 数组互转（过滤非法成员；空集回退默认全选）。
+const parseAutobanScope = (scope: string): string[] => {
+  const parts = (scope || '').split(',').map(s => s.trim()).filter(s => AUTOBAN_SCOPES.includes(s))
+  return parts.length > 0 ? parts : [...AUTOBAN_SCOPE_DEFAULT]
+}
+const autobanScopeTextOf = (scope: string): string => parseAutobanScope(scope).map(autobanScopeLabel).join(' + ')
 
 const autobanStatus = ref<AutobanStatus>({
-  enabled: false, dry_run: true, count_human_failed: false, threshold: 100, window_minutes: 5, duration: '1h', scope: 'all',
+  enabled: false, dry_run: true, threshold: 100, window_minutes: 5, duration: '1h', scope: 'blocked,logged,challenge_issued,challenge_failed',
   banned_today: 0, list_entries: 0, ban_effective: true, suggestions: [],
   // 成功响应前不得假定喂入源健康（默认 false：无额外黄条）
   feed_degraded: false, feed_degraded_reason: '',
@@ -542,7 +550,7 @@ const autobanConfigTooltip = computed(() => {
   if (autobanStatusError.value) return t('app.security.events.blockedReasonLoadFail')
   return autobanBlockedReason.value
 })
-const autobanScopeText = computed(() => autobanScopeLabel(autobanStatus.value.scope))
+const autobanScopeText = computed(() => autobanScopeTextOf(autobanStatus.value.scope))
 const autobanDurationText = computed(() => autobanDurationLabel(autobanStatus.value.duration))
 
 // 命中次数色深（命中越多越深）：档位判据单源 utils/autobanStatus 的 suggestionBand，
@@ -595,16 +603,15 @@ const fetchAutobanStatus = async (): Promise<void> => {
 // 配置弹框（七项=六项配置+口径变更提示）
 const autobanDialogVisible = ref(false)
 const autobanSaving = ref(false)
-const autobanForm = ref({ dry_run: true, count_human_failed: false, threshold: 100, window_minutes: 5, duration: '1h', scope: 'all' })
+const autobanForm = ref({ dry_run: true, threshold: 100, window_minutes: 5, duration: '1h', scope: [...AUTOBAN_SCOPE_DEFAULT] as string[] })
 const openAutobanConfig = (): void => {
   // 卡片主体/编辑/启用共用门：只读、从节点、状态加载中或加载失败均不打开
   // 配置弹框；表单从 autobanStatus 回填，错误态默认值保存会覆盖真实配置。
   if (!autobanWritable.value) return
   autobanForm.value = {
     dry_run: autobanStatus.value.dry_run,
-    count_human_failed: autobanStatus.value.count_human_failed,
     threshold: autobanStatus.value.threshold, window_minutes: autobanStatus.value.window_minutes,
-    duration: autobanStatus.value.duration, scope: autobanStatus.value.scope,
+    duration: autobanStatus.value.duration, scope: parseAutobanScope(autobanStatus.value.scope),
   }
   autobanDialogVisible.value = true
 }
@@ -616,6 +623,9 @@ const saveAutobanConfig = async (): Promise<void> => {
   }
   if (autobanForm.value.window_minutes < 1 || autobanForm.value.window_minutes > 60) {
     ElMessage.warning(t('app.security.events.windowRange')); return
+  }
+  if (autobanForm.value.scope.length === 0) {
+    ElMessage.warning(t('app.security.events.scopeEmpty')); return
   }
   // 保存二次确认（用户裁定 2026-10-14）：启用入口=完整须知+建议框（按钮「确认启用」）；
   // 已启用的编辑入口=简化确认（按钮「确认保存」，不带启用描述警告）。
@@ -629,7 +639,7 @@ const saveAutobanConfig = async (): Promise<void> => {
   } else if (!(await confirmAutobanApply())) return
   autobanSaving.value = true
   try {
-    await request.put('/security/autoban', { ...autobanForm.value, enabled: true })
+    await request.put('/security/autoban', { ...autobanForm.value, scope: autobanForm.value.scope.join(','), enabled: true })
     mfaAwareSuccess(t('app.security.events.configUpdated'))
     autobanDialogVisible.value = false
     fetchAutobanStatus()
@@ -695,7 +705,7 @@ const toggleAutobanEnabled = async (): Promise<void> => {
     await request.put('/security/autoban', {
       enabled: false,
       dry_run: autobanStatus.value.dry_run,
-      count_human_failed: autobanStatus.value.count_human_failed,
+
       threshold: autobanStatus.value.threshold,
       window_minutes: autobanStatus.value.window_minutes,
       duration: autobanStatus.value.duration,

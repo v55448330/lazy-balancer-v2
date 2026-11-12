@@ -30,15 +30,15 @@ func TestServeSliderChallenge_customTemplateWidget(t *testing.T) {
 	h.ChallengePageHTML = "<html><body>no-widget</body></html>"
 	recorder = httptest.NewRecorder()
 	h.serveSliderChallenge(recorder, request, "203.0.113.9")
-	if !strings.Contains(recorder.Body.String(), "安全验证") {
-		t.Fatalf("缺占位符必须回退内置挑战页: %s", recorder.Body.String()[:min(200, len(recorder.Body.String()))])
+	if !strings.Contains(recorder.Body.String(), "Security Check") {
+		t.Fatalf("缺占位符必须回退内置挑战页（英文）: %s", recorder.Body.String()[:min(200, len(recorder.Body.String()))])
 	}
 }
 
 func TestSliderWidgetFixedGeometryMatchesPuzzle(t *testing.T) {
 	rendered := fmt.Sprintf(sliderWidgetHTML, "", pieceSVG(), "", "")
 	for _, want := range []string{
-		"width:240px;max-width:100%;margin:0 auto",
+		"width:240px;max-width:100%;margin:18px auto 0",
 		".lb-hv-puzzle{position:relative;width:240px;height:134px",
 		`id="lbHvPiece" style="top:60px;left:6px"`,
 		".lb-hv-track{position:relative;width:240px",
@@ -50,20 +50,21 @@ func TestSliderWidgetFixedGeometryMatchesPuzzle(t *testing.T) {
 	}
 }
 
-func TestHumanEventThrottleDoesNotDropPassFail(t *testing.T) {
-	p := &humanEventPoster{lastBy: map[string]time.Time{}}
+// 用户裁定（2026-11-13）：限流日志≠限流请求，发放限流无实际防护意义——
+// 挑战发放/通过/失败全部逐请求上报，事件日志与实时运行态口径一致。
+func TestHumanEventReportsEveryRequest(t *testing.T) {
+	p := &humanEventPoster{}
 	now := time.Now()
-	if !p.shouldReport("203.0.113.9", "challenge", now) {
-		t.Fatal("首次挑战发放应上报")
+	for i := range 5 {
+		if !p.shouldReport("203.0.113.9", "challenge", now.Add(time.Duration(i)*time.Second)) {
+			t.Fatalf("第 %d 次挑战发放必须逐条上报（发放限流已取消）", i+1)
+		}
 	}
-	if p.shouldReport("203.0.113.9", "challenge", now.Add(10*time.Second)) {
-		t.Fatal("挑战发放分钟级限流失效")
+	if !p.shouldReport("203.0.113.9", "pass", now) {
+		t.Fatal("挑战通过必须逐条上报")
 	}
-	if !p.shouldReport("203.0.113.9", "pass", now.Add(11*time.Second)) {
-		t.Fatal("挑战通过不得被发放限流吞掉")
-	}
-	if !p.shouldReport("203.0.113.9", "fail", now.Add(12*time.Second)) {
-		t.Fatal("挑战失败不得被发放限流吞掉")
+	if !p.shouldReport("203.0.113.9", "fail", now) {
+		t.Fatal("挑战失败必须逐条上报")
 	}
 }
 

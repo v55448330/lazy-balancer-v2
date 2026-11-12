@@ -44,10 +44,19 @@ func TestInitialize_backfillsAutobanColumns(t *testing.T) {
 			assertAutobanText(t, "autoban_duration", "24h")
 		}},
 		{"scope-bogus", `UPDATE global_config SET autoban_scope='bogus' WHERE id=1`, func(t *testing.T) {
-			assertAutobanText(t, "autoban_scope", "all")
+			assertAutobanText(t, "autoban_scope", DefaultAutobanScope)
+		}},
+		{"scope-empty", `UPDATE global_config SET autoban_scope='' WHERE id=1`, func(t *testing.T) {
+			assertAutobanText(t, "autoban_scope", DefaultAutobanScope)
+		}},
+		{"scope-duplicate-member", `UPDATE global_config SET autoban_scope='blocked,blocked' WHERE id=1`, func(t *testing.T) {
+			assertAutobanText(t, "autoban_scope", DefaultAutobanScope)
 		}},
 		{"scope-valid-untouched", `UPDATE global_config SET autoban_scope='blocked' WHERE id=1`, func(t *testing.T) {
 			assertAutobanText(t, "autoban_scope", "blocked")
+		}},
+		{"scope-valid-set-untouched", `UPDATE global_config SET autoban_scope='logged,challenge_failed' WHERE id=1`, func(t *testing.T) {
+			assertAutobanText(t, "autoban_scope", "logged,challenge_failed")
 		}},
 		{"enabled-out-of-bool-domain", `UPDATE global_config SET autoban_enabled=2 WHERE id=1`, func(t *testing.T) {
 			assertAutobanInt(t, "autoban_enabled", 0)

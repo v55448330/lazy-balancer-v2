@@ -19,7 +19,7 @@ test('空选 = 不过滤（不发 rule_triggered）', () => {
   assert.equal(serializeTriggeredFilter([]), null)
 })
 
-test('八类全中且无自定义 tag = 全选，不发参数', () => {
+test('九类全中且无自定义 tag = 全选，不发参数', () => {
   assert.equal(serializeTriggeredFilter([...TRIGGERED_CATEGORIES]), null)
   // 重复选中不应破坏全选判定
   assert.equal(serializeTriggeredFilter([...TRIGGERED_CATEGORIES, 'WAF·CRS']), null)
@@ -32,14 +32,14 @@ test('类别子集按族段展开（段序 = 选中顺序）', () => {
   assert.equal(serializeTriggeredFilter(['WAF·自定义']), 'WAF·自定义,自定义规则')
 })
 
-test('七类子集（缺一类）视为过滤而非全选', () => {
+test('八类子集（缺一类）视为过滤而非全选', () => {
   const missingOne = TRIGGERED_CATEGORIES.filter((c) => c !== '请求体异常')
-  assert.equal(serializeTriggeredFilter(missingOne), '爬虫Bot,地域拦截,IP 访问控制,信任名单,威胁情报库,WAF·CRS,WAF·自定义,自定义规则')
+  assert.equal(serializeTriggeredFilter(missingOne), '爬虫Bot,地域拦截,IP 访问控制,信任名单,威胁情报库,WAF·CRS,WAF·自定义,自定义规则,CC 防护')
 })
 
 test('自定义 tag 原样并入末尾（CRS 规则 ID / 消息关键词）', () => {
   assert.equal(serializeTriggeredFilter(['WAF·CRS', '942100']), 'WAF·CRS,942100')
-  // 八类全中 + 自定义 tag = 仍需发送（只发自定义 tag，类别段全展开）
+  // 九类全中 + 自定义 tag = 仍需发送（只发自定义 tag，类别段全展开）
   const allPlusCustom = serializeTriggeredFilter([...TRIGGERED_CATEGORIES, '942100'])
   assert.ok(allPlusCustom !== null)
   assert.ok(allPlusCustom.endsWith(',942100'))
@@ -80,7 +80,7 @@ test('族段跨栈对表：前端段必须是后端 ruleTriggeredFamilyPrefixes 
       `前端族段「${segment}」在后端 family 键中不存在——筛选会退化为消息关键词匹配`,
     )
   }
-  // 反向：后端删除前端依赖的键也必须红（八类除 WAF·CRS 外每个键都在表中）
+  // 反向：后端删除前端依赖的键也必须红（九类除 WAF·CRS 外每个键都在表中）
   for (const category of TRIGGERED_CATEGORIES) {
     if (category === 'WAF·CRS') continue
     for (const segment of TRIGGERED_FAMILY_SEGMENTS[category]) {
@@ -89,9 +89,25 @@ test('族段跨栈对表：前端段必须是后端 ruleTriggeredFamilyPrefixes 
   }
 })
 
+test('事件页筛选下拉必须逐类渲染 TRIGGERED_CATEGORIES（数组改了但选项漏改必红）', () => {
+  // 真实缺口实录（2026-11-13 新增 CC 防护）：只扩了 TRIGGERED_CATEGORIES 与后端
+  // 族表，模板里 el-option 是逐条硬编码的——UI 仍无该选项，用户点不到，而
+  // 数组/后端对表全绿。故按「单源类别 → 模板 value」逐类正向钉。
+  const page = code('src/views/security/SecurityEvents.vue')
+  const select = section(page, 'v-model="filters.rule_triggered"', '</el-select>')
+  const optionValues = [...select.matchAll(/<el-option\b[^>]*\svalue="([^"]+)"/g)].map((m) => m[1])
+  for (const category of TRIGGERED_CATEGORIES) {
+    assert.ok(optionValues.includes(category), `筛选下拉缺类别「${category}」的 el-option（数组有、UI 无=用户点不到）`)
+  }
+  // 反向：下拉私增类别同样红（未在单源登记的值不会被全选覆盖，语义漂移）
+  for (const value of optionValues) {
+    assert.ok((TRIGGERED_CATEGORIES as readonly string[]).includes(value), `筛选下拉出现未登记类别「${value}」`)
+  }
+})
+
 test('事件页「全选」是并集语义：保留自定义规则 ID（不得静默丢弃用户输入）', () => {
   // 该控件 allow-create，用户可输入 CRS 规则 ID（如 942100）。头部「全选」若用
-  // 替换语义（checked ? [...八类] : []），半选态点「全选」会把自定义 tag 丢掉，
+  // 替换语义（checked ? [...九类] : []），半选态点「全选」会把自定义 tag 丢掉，
   // 筛选结果集被改写而界面只表现为「勾上了全选」。
   const page = code('src/views/security/SecurityEvents.vue')
   // allow-create 必须落在绑定 `filters.rule_triggered` 的**同一个** el-select 上：
@@ -103,14 +119,14 @@ test('事件页「全选」是并集语义：保留自定义规则 ID（不得�
   assert.match(
     toggle,
     /filter\(\(v\) => !\(TRIGGERED_CATEGORIES as readonly string\[\]\)\.includes\(v\)\)/,
-    '必须先摘出自定义 tag（非八类值）',
+    '必须先摘出自定义 tag（非九类值）',
   )
   assert.match(
     toggle,
     /checked \? \[\.\.\.TRIGGERED_CATEGORIES, \.\.\.custom\] : custom/,
-    '全选=八类并入当前选择、取消=只摘八类（替换语义会静默丢弃自定义 tag）',
+    '全选=九类并入当前选择、取消=只摘九类（替换语义会静默丢弃自定义 tag）',
   )
-  // 保留后的选择必须真的落到查询参数：八类全中 + 自定义 tag ≠ 全选，参数含该 ID
+  // 保留后的选择必须真的落到查询参数：九类全中 + 自定义 tag ≠ 全选，参数含该 ID
   const afterSelectAll = [...TRIGGERED_CATEGORIES, '942100']
   assert.match(serializeTriggeredFilter(afterSelectAll) ?? '', /942100/, '保留的自定义 tag 必须进入 rule_triggered')
 })

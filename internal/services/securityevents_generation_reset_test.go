@@ -93,7 +93,7 @@ func useSecurityEventsPollFiles(t *testing.T, logPath, offsetPath string) {
 func TestSecurityEventsGenerationGuard_resetsAutobanCountersOnReplay(t *testing.T) {
 	logPath, offsetPath := stallSetup(t)
 	useSecurityEventsPollFiles(t, logPath, offsetPath)
-	setAutobanConfigRaw(t, true, 5, 60, "1h", "all", false)
+	setAutobanConfigRaw(t, true, 5, 60, "1h", "blocked,logged", false)
 	oldMaster := autobanIsMaster
 	autobanIsMaster = func() bool { return true }
 	t.Cleanup(func() { autobanIsMaster = oldMaster })

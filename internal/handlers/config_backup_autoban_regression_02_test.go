@@ -56,7 +56,7 @@ func completeBackupJSONOmit(t *testing.T, omit map[string]struct{}, tables map[s
 
 func enableAutobanFormalMode(t *testing.T) {
 	t.Helper()
-	if err := services.SetAutobanConfig(services.AutobanConfig{Enabled: true, Threshold: 1, WindowMinutes: 5, Duration: "1h", Scope: "all", DryRun: false}); err != nil {
+	if err := services.SetAutobanConfig(services.AutobanConfig{Enabled: true, Threshold: 1, WindowMinutes: 5, Duration: "1h", Scope: "blocked,logged", DryRun: false}); err != nil {
 		t.Fatalf("enable autoban: %v", err)
 	}
 }
