@@ -295,6 +295,11 @@ func securityEventsParseTransaction(raw json.RawMessage) (*securityEventRecord, 
 	if tx.IsInterrupted {
 		rec.Action = "blocked"
 	}
+	// 信任名单"保留检测记录"（独立最小信任检测引擎 id:12）：动作从 logged 升为
+	// trust，使其在事件列表/统计中可辨识为"信任放行"，且不进攻击面。
+	if rec.Action == SecurityEventActionLogged && len(doc.Messages) > 0 && doc.Messages[0].Data.ID.String() == trustDetectRuleIDString {
+		rec.Action = SecurityEventActionTrust
+	}
 	if rec.Host == "" {
 		rec.Host = securityEventsHostWithoutPort(securityEventsFirstHeader(tx.Request.Headers, "host"))
 	}
@@ -2182,10 +2187,12 @@ func securityEventsRequestDedupeKey(rec *securityEventRecord) (uint64, bool) {
 func securityEventsActionRank(action string) uint8 {
 	switch action {
 	case "blocked":
+		return 3
+	case "challenged":
 		return 2
 	case "logged":
 		return 1
-	default:
+	default: // trust/未知
 		return 0
 	}
 }
@@ -4015,8 +4022,14 @@ func securityEventsIsCrawlerSpoofRule(id string) bool {
 const (
 	// SecurityEventActionBlocked 事件被拦截（coraza 事务 is_interrupted）。
 	SecurityEventActionBlocked = "blocked"
-	// SecurityEventActionLogged 事件仅记录（检测/信任/爬虫放行）。
+	// SecurityEventActionLogged 事件仅记录（检测/爬虫放行）。
 	SecurityEventActionLogged = "logged"
+	// SecurityEventActionTrust 信任名单命中记录（阶段 0「保留检测记录」）：
+	// 可见性记录，不计拦截/检测/攻击面。
+	SecurityEventActionTrust = "trust"
+	// SecurityEventActionChallenged 人机挑战生命周期（发放/通过/失败）：
+	// 独立结果，不计拦截/检测/攻击面。
+	SecurityEventActionChallenged = "challenged"
 )
 
 // IsCrawlerExemptRuleID 报告 rule_triggered 是否为「已验证爬虫放行」规则 id
@@ -4053,6 +4066,11 @@ func IsCrawlerExemptRuleID(id string) bool {
 // 族/保留检测事件仍然计入，不隐藏真实拦截。id 匹配取精确形态（不 trim），
 // 与 SQL 谓词的等值比较同口径（"12 "/前导零变体照常计入）。
 func SecurityEventCountsAsAttack(action, ruleTriggered string) bool {
+	// 信任记录与人机挑战都不是攻击证据（2026-11-12 用户裁定）：前者是
+	// 自己人放行的可见性记录，后者是"待验证流量"的交互过程。
+	if action == SecurityEventActionTrust || action == SecurityEventActionChallenged {
+		return false
+	}
 	if action != SecurityEventActionLogged {
 		return true
 	}
@@ -4079,6 +4097,9 @@ func CrawlerExemptRuleIDSQLPredicate(col string) string {
 // SecurityEventCountsAsAttack 同集合）：非「logged 且（爬虫放行族 ∪ 保留
 // 检测 id:12）」。等值比较不 trim——宽松形态照常计入，与 Go 判据同口径。
 func AttackEventSQLPredicate(ruleCol, actionCol string) string {
-	return fmt.Sprintf(`NOT (COALESCE(%s,'') = '%s' AND (%s OR COALESCE(%s,'') = '%s'))`,
+	// 与 SecurityEventCountsAsAttack 同集合：信任/挑战结果整类排除；logged 中
+	// 爬虫放行族与保留检测 id:12 排除（放行不是攻击证据）。
+	return fmt.Sprintf(`COALESCE(%s,'') NOT IN ('%s','%s') AND NOT (COALESCE(%s,'') = '%s' AND (%s OR COALESCE(%s,'') = '%s'))`,
+		actionCol, SecurityEventActionTrust, SecurityEventActionChallenged,
 		actionCol, SecurityEventActionLogged, CrawlerExemptRuleIDSQLPredicate(ruleCol), ruleCol, trustDetectRuleIDString)
 }

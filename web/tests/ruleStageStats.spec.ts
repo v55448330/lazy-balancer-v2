@@ -33,11 +33,14 @@ test('计数 chip：成功但载荷为空仍为 —（契约违约，不得冒�
   assert.deepEqual(stageCountChip(3, null, { settled: true, failed: false }), { chip: '—' })
 })
 
-test('计数 chip：成功且有计数时三个阶段各取自己的桶', () => {
+test('计数 chip：成功且有计数时各阶段取自己的桶（阶段 3 人机验证无规则级分桶）', () => {
   const data = counts({ stage1_blocked_24h: 4, stage3_blocked_24h: 7, ratelimit_blocks_reload: 2 })
   assert.deepEqual(stageCountChip(1, data, { settled: true, failed: false }), { chip: '24h 拦截 4' })
   assert.deepEqual(stageCountChip(2, data, { settled: true, failed: false }), { chip: '429 拦截 2', caption: '自最近重载 · 本端口' })
-  assert.deepEqual(stageCountChip(3, data, { settled: true, failed: false }), { chip: '24h 拦截 7' })
+  // 阶段 3 = 人机验证：挑战/通过计数由 /security/human/stats 承担，规则级 stage3 节点不出 chip
+  assert.deepEqual(stageCountChip(3, data, { settled: true, failed: false }), {})
+  // 阶段 4 = WAF：沿用后端 stage3_blocked_24h 字段（历史字段名，不随阶段号迁移）
+  assert.deepEqual(stageCountChip(4, data, { settled: true, failed: false }), { chip: '24h 拦截 7' })
 })
 
 test('面板统计行：成功且为零要说出「0 次」，失败与在途都不占行', () => {
@@ -45,13 +48,16 @@ test('面板统计行：成功且为零要说出「0 次」，失败与在途都
   assert.equal(stageCountSummary(1, counts(), { settled: true, failed: true }), '', '失败由面板失败行承载，不得压成空行冒充成功')
   assert.equal(stageCountSummary(1, null, { settled: false, failed: false }), '')
   assert.equal(stageCountSummary(0, counts(), { settled: true, failed: false }), '', '阶段 0 无计数概念')
+  // 阶段 3 人机验证：不得回落 WAF 桶（stage3_blocked_24h）冒充本阶段统计
+  assert.equal(stageCountSummary(3, counts({ stage3_blocked_24h: 5 }), { settled: true, failed: false }), '', '阶段 3 人机验证无规则级统计行')
+  assert.match(stageCountSummary(4, counts({ stage3_blocked_24h: 5 }), { settled: true, failed: false }), /本阶段拦截 5 次/, '阶段 4 WAF 取 stage3_blocked_24h')
 })
 
 test('未归因桶：有值时披露，无值时不打扰', () => {
   assert.equal(unattributedCountText(counts()), '')
   assert.equal(unattributedCountText(null), '')
   assert.match(unattributedCountText(counts({ stage_unattributed_24h: 3 })), /另有 3 次未能归因阶段/)
-  const summary = stageCountSummary(3, counts({ stage3_blocked_24h: 0, stage_unattributed_24h: 12 }), { settled: true, failed: false })
+  const summary = stageCountSummary(4, counts({ stage3_blocked_24h: 0, stage_unattributed_24h: 12 }), { settled: true, failed: false })
   assert.match(summary, /本阶段拦截 0 次/)
   assert.match(summary, /另有 12 次未能归因阶段/, '未归因拦截不得被读成「零拦截」')
 })
@@ -60,9 +66,9 @@ test('耗时：无采样不出角标，有采样按格式给出', () => {
   assert.equal(stageTimingChip(1, counts()), '')
   assert.equal(stageTimingChip(1, null), '')
   assert.equal(stageTimingChip(1, counts({ precheck_avg_us: 2500, precheck_samples: 8 })), '平均耗时 2.5ms')
-  assert.equal(stageTimingChip(3, counts({ waf_avg_us: 400 })), '平均耗时 0.400ms')
+  assert.equal(stageTimingChip(4, counts({ waf_avg_us: 400 })), '平均耗时 0.400ms')
   assert.equal(stageAvgDurationUs(1, null), 0)
-  assert.equal(stageAvgDurationUs(3, counts({ waf_avg_us: 400 })), 400)
+  assert.equal(stageAvgDurationUs(4, counts({ waf_avg_us: 400 })), 400)
   assert.match(stageCountSummary(1, counts({ precheck_avg_us: 2500, precheck_samples: 8 }), { settled: true, failed: false }), /近 24 小时 8 次采样/)
 })
 

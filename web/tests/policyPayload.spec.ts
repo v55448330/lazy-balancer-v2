@@ -20,7 +20,7 @@ const goRequest = section(
   'type UpdateSecurityPolicyRequest struct',
   '\n}\n',
 )
-const GO_FIELD_TAGS = [...goRequest.matchAll(/json:"([a-z_]+)(?:,[^"]*)?"/g)].map((match) => match[1])
+const GO_FIELD_TAGS = [...goRequest.matchAll(/json:"([a-z0-9_]+)(?:,[^"]*)?"/g)].map((match) => match[1])
 assert.equal(GO_FIELD_TAGS.length, (goRequest.match(/json:"/g) ?? []).length, '每个 json 标签都必须被解析')
 
 const base = (over: Partial<PolicyPayloadInput> = {}): PolicyPayloadInput => ({
@@ -53,6 +53,16 @@ const base = (over: Partial<PolicyPayloadInput> = {}): PolicyPayloadInput => ({
   logRequestBody: false,
   trustDetection: false,
   policyType: 'stage3',
+  humanVerifyMode: 'auto',
+  humanVerifyType: 'slider',
+  humanVerifyTtl: 30,
+  humanExemptPaths: ['/static/'],
+  ccDetectEnabled: true,
+  ccRpsLimit: 40,
+  ccRpsWindow: 10,
+  cc4xxRatio: 70,
+  ccSessionAnomaly: false,
+  ccSessionUaThreshold: 5,
   ...over,
 })
 
@@ -61,7 +71,7 @@ test('Create 与 Update 请求结构字段集一致（同一载荷双路径消�
   // （如只在 Update 增字段）时，创建路径会静默丢弃该字段。
   const go = repoCode('internal/models/security.go')
   const createRequest = section(go, 'type CreateSecurityPolicyRequest struct', '\n}\n')
-  const createTags = [...createRequest.matchAll(/json:"([a-z_]+)(?:,[^"]*)?"/g)].map((match) => match[1])
+  const createTags = [...createRequest.matchAll(/json:"([a-z0-9_]+)(?:,[^"]*)?"/g)].map((match) => match[1])
   assert.ok(createTags.length >= 28, `Create 字段解析不足: ${createTags.length}`)
   assert.deepEqual([...createTags].sort(), [...GO_FIELD_TAGS].sort(), 'Create 与 Update 字段集漂移')
 })
@@ -130,6 +140,32 @@ test('geoip 三态归一：关闭 → off；开启但模式 off → deny；爬�
   assert.equal(buildPolicyPayload(base({ geoipEnabled: true, geoipMode: 'off' })).geoip_mode, 'deny')
   assert.equal(buildPolicyPayload(base({ geoipEnabled: true, geoipMode: 'allow' })).geoip_mode, 'allow')
   assert.equal(buildPolicyPayload(base({ geoipEnabled: true, geoipCrawlerExempt: true })).geoip_crawler_exempt, true)
+})
+
+test('阶段 3 人机验证载荷：stage3 承载全字段；其余类型归零（与后端阶段能力矩阵同口径）', () => {
+  const s3 = buildPolicyPayload(base({ policyType: 'stage3' }))
+  assert.equal(s3.human_verify_mode, 'auto')
+  assert.equal(s3.human_verify_type, 'slider')
+  assert.equal(s3.human_verify_ttl, 30)
+  assert.equal(s3.human_exempt_paths, '["/static/"]')
+  // IP 级放行与挑战页已退役（2026-11-12 用户裁定）：载荷不得再出现该两键
+  assert.equal('human_exempt_ips' in s3, false, '豁免 IP 已退役（阶段 0 信任名单为唯一入口）')
+  assert.equal('human_challenge_page_id' in s3, false, '自定义挑战页已退役（拦截页覆盖）')
+  assert.equal(s3.cc_detect_enabled, true)
+  assert.equal(s3.cc_rps_limit, 40)
+  assert.equal(s3.cc_rps_window, 10)
+  assert.equal(s3.cc_4xx_ratio, 70)
+  assert.equal(s3.cc_session_anomaly, false)
+  assert.equal(s3.cc_session_ua_threshold, 5)
+  // 非阶段 3：能力域归零（后端 applyStageZeros 同口径），但数值字段保留（后端按需归一）
+  const waf = buildPolicyPayload(base({ policyType: 'stage4', humanVerifyMode: 'force', humanExemptPaths: ['/x/'], ccDetectEnabled: true }))
+  assert.equal(waf.human_verify_mode, 'off', '非人机验证阶段不得提交非 off 模式')
+  assert.equal(waf.human_exempt_paths, '[]')
+  assert.equal(waf.cc_detect_enabled, false)
+  // mixed 不提交 policy_type，人机验证同样归零（混合策略不含阶段 3 能力）
+  const mixed = buildPolicyPayload(base({ policyType: 'mixed' }))
+  assert.equal(mixed.policy_type, undefined)
+  assert.equal(mixed.human_verify_mode, 'off')
 })
 
 test('mixed 不显式提交类型（省略=后端按内容推断）', () => {

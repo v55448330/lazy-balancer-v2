@@ -1664,3 +1664,35 @@ func cloneSecurityOverviewAggregates(in securityOverviewAggregates) securityOver
 	}
 	return out
 }
+
+// securityOverviewTodayHumanCounts 今日人机挑战三态计数（原始表直算）：
+// 挑战是独立结果（action=challenged），不计入拦截/检测；规则 id 区分通过/失败。
+// 人机事件在插件侧按 IP 每分钟至多 1 条，量级可控，不参与 rollup。
+func securityOverviewTodayHumanCounts(database *sql.DB, todayStart time.Time) (challenged, passed, failed int, err error) {
+	rows, qerr := database.Query(`SELECT rule_triggered, COUNT(*) FROM security_events
+		WHERE action='challenged' AND event_time >= ? AND rule_triggered IN ('human_challenge','human_pass','human_failed')
+		GROUP BY rule_triggered`, todayStart.UTC().Format("2006-01-02 15:04:05"))
+	if qerr != nil {
+		return 0, 0, 0, qerr
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var rule string
+		var n int
+		if err := rows.Scan(&rule, &n); err != nil {
+			return 0, 0, 0, err
+		}
+		switch rule {
+		case "human_challenge":
+			challenged = n
+		case "human_pass":
+			passed = n
+		case "human_failed":
+			failed = n
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return 0, 0, 0, err
+	}
+	return challenged, passed, failed, nil
+}

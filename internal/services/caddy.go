@@ -4500,6 +4500,16 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig, sec
 			"rule":    rule.CaddyID,
 		})
 	}
+	// 连接详情逐请求观测（2026-11-11 用户裁定）：lb_reqmon 内存环形缓冲
+	// 捕获（零磁盘 I/O，不读访问日志），面板打开时经 admin
+	// /lb/reqmon/snapshot 拉取。置于安全拦截计数之后（counter 有条件在场时
+	// 保持主链前缀 [headers, metrics, counter] 契约锚不动——
+	// security_chain_wrap_contract_test），观测在策略 waf 之前、包装全流量。
+	if rule.Protocol == "http" {
+		handleChain = append(handleChain, map[string]interface{}{
+			"handler": "lb_reqmon",
+		})
+	}
 	// 阶段 1（IP 访问控制+地域拦截）：合并预检 coraza 置于链首（先于全部
 	// rate_limit/waf）——被拒 IP/区域在任何策略的 CRS/自定义规则评估前即中断，
 	// 不再产生前置策略的检测事件。阶段化模型（2026-09-20）：单策略同构走预检
@@ -4629,6 +4639,9 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig, sec
 		return chainFingerprint
 	}
 	if securityLibsOK {
+		// 阶段 2 = CC 防护（2026-11-12 用户裁定）：同一阶段内固定序——
+		// 先配额（429，便宜且与是否人类无关），再人机挑战（贵），最后才是阶段 3
+		// 内容防护（WAF）。挑战页挡住的脚本不消耗 WAF 评估资源。
 		for _, policy := range policies {
 			rateLimitHandler, rateLimitErr := buildRateLimitHandler(rule.CaddyID, policy)
 			if rateLimitErr != nil {
@@ -4636,6 +4649,11 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig, sec
 			}
 			if rateLimitHandler != nil {
 				securityChain = append(securityChain, rateLimitHandler)
+			}
+		}
+		if rule.Protocol == "http" && len(policies) > 0 {
+			if humanHandler := buildHumanHandler(rule.CaddyID, policies); humanHandler != nil {
+				securityChain = append(securityChain, humanHandler)
 			}
 		}
 	}

@@ -83,7 +83,7 @@ test('协议缺省（旧调用形状）：按 HTTP 口径不回退', () => {
 test('锁摘要与流程弹框共用模型：TCP 行为钉在单源（buildStageModel）上', () => {
   // Rules.vue 两处 buildStageModel 直接传规则行（含 protocol）——协议无需调用方额外传参
   const rules = code('src/views/Rules.vue')
-  assert.match(rules, /securityBindings\.value\[rule\.caddy_id\] \|\| \[\],\n\s*securityPolicies\.value,\n\s*ipLists\.value,\n\s*blockPages\.value,\n\s*rule,/, '锁摘要模型以规则行为 stagePages（协议随行携带）')
+  assert.match(rules, /securityBindings\.value\[rule\.caddy_id\] \|\| \[\],\n\s*securityPolicies\.value,\n\s*ipLists\.value,\n\s*blockPagesLocalized\.value,\n\s*rule,/, '锁摘要模型以规则行为 stagePages（协议随行携带；页面名多语言化入模）')
 })
 
 // ── 阶段 0 信任检测的 TCP 口径（与 HTTP 行为一致性裁定）──

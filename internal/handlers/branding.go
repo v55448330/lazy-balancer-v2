@@ -577,6 +577,15 @@ type blockPageSpec struct {
 }
 
 var blockPageSpecs = map[string]blockPageSpec{
+	// 人机验证挑战页变体（2026-11-12）：阶段 3 挑战页由 lb_human 插件渲染，
+	// 此 spec 供内置模板占位/预览使用；内容含 {{human_verify_widget}} 占位符。
+	"human": {
+		accent: "#2563eb", accentSoft: "#60a5fa", ringFrom: "#eff6ff", ringTo: "#dbeafe",
+		ringBorder: "#bfdbfe", haloBorder: "#bfdbfe", chipText: "#1d4ed8", chipBorder: "#bfdbfe",
+		iconSVG: `<svg viewBox="0 0 24 24" fill="none" stroke="#2563eb" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5c0 4.4-3 8.4-7 10-4-1.6-7-5.6-7-10V6l7-3z"/><path d="M9 12l2 2 4-4"/></svg>`,
+		chip:    "Human Verification", title: "Security Check",
+		line1: `Please complete the human verification to continue.`, line2: `You will be redirected automatically once verified.`,
+	},
 	"default": {
 		accent: "#ef4444", accentSoft: "#f87171", ringFrom: "#fef2f2", ringTo: "#fee2e2",
 		ringBorder: "#fecaca", haloBorder: "#fecdd3", chipText: "#b91c1c", chipBorder: "#fecaca",
@@ -615,7 +624,7 @@ func renderBlockPageShell(cfg brandingConfig, spec blockPageSpec) string {
 		footer += "<br>" + html.EscapeString(defaultFooterText) + ` · <a href="https://github.com/v55448330/lazy-balancer-v2" target="_blank" rel="noopener noreferrer">GitHub</a>`
 	}
 	return fmt.Sprintf(`<!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="en">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>%s — %s</title>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -683,6 +692,8 @@ type builtinBlockPageIdentity struct {
 }
 
 var builtinBlockPageIdentities = []builtinBlockPageIdentity{
+	// 人机验证页面（阶段 3 挑战页，2026-11-12）：id 9005，与 9001/9002 同族。
+	{9005, "人机验证页面", "系统内置人机验证挑战页（阶段 3 由 lb_human 插件渲染 JS 挑战/滑块；本页为占位模板）", "human"},
 	{9001, "限流拦截页面", "系统内置 429 限流拦截页面（备选，手动选用后生效）", "ratelimit"},
 	{9002, "系统维护页面", "系统内置维护页面（备选，手动选用后生效）", "maintenance"},
 }

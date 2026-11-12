@@ -1370,7 +1370,7 @@ func applySecurityTables(ctx context.Context, tx *sql.Tx, snapshot models.Cluste
 			}
 			policyJSON[column] = text
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO security_policies (id,name,description,mode,anomaly_threshold,ip_acl_mode,ip_acl_list,ip_acl_enabled,ip_whitelist,ip_whitelist_enabled,ip_blacklist,rate_limit_enabled,rate_limit_rps,rate_limit_burst,crs_rule_groups,crs_excluded_rules,custom_rules,block_page_id,block_status_code,enabled,updated_by,created_at,updated_at,geoip_countries,geoip_mode,geoip_crawler_exempt,geoip_crawler_engines,waf_check_response,log_request_body,ip_acl_list_refs,ip_whitelist_refs,policy_type,trust_detection) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		if _, err := tx.ExecContext(ctx, `INSERT INTO security_policies (id,name,description,mode,anomaly_threshold,ip_acl_mode,ip_acl_list,ip_acl_enabled,ip_whitelist,ip_whitelist_enabled,ip_blacklist,rate_limit_enabled,rate_limit_rps,rate_limit_burst,crs_rule_groups,crs_excluded_rules,custom_rules,block_page_id,block_status_code,enabled,updated_by,created_at,updated_at,geoip_countries,geoip_mode,geoip_crawler_exempt,geoip_crawler_engines,waf_check_response,log_request_body,ip_acl_list_refs,ip_whitelist_refs,policy_type,trust_detection,human_verify_mode,human_verify_type,human_verify_ttl,human_exempt_paths,cc_detect_enabled,cc_rps_limit,cc_rps_window,cc_4xx_ratio,cc_session_anomaly,cc_session_ua_threshold) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 			p["id"], p["name"], p["description"], p["mode"], p["anomaly_threshold"],
 			p["ip_acl_mode"], policyJSON["ip_acl_list"], p["ip_acl_enabled"],
 			policyJSON["ip_whitelist"], policyWhitelistEnabled(p), policyJSON["ip_blacklist"],
@@ -1378,7 +1378,9 @@ func applySecurityTables(ctx context.Context, tx *sql.Tx, snapshot models.Cluste
 			policyJSON["crs_rule_groups"], policyJSON["crs_excluded_rules"], policyJSON["custom_rules"],
 			p["block_page_id"], p["block_status_code"], p["enabled"], p["updated_by"], p["created_at"], p["updated_at"],
 			policyJSON["geoip_countries"], p["geoip_mode"], p["geoip_crawler_exempt"], policyJSON["geoip_crawler_engines"], p["waf_check_response"], p["log_request_body"],
-			policyJSON["ip_acl_list_refs"], policyJSON["ip_whitelist_refs"], InferSnapshotPolicyType(p), snapshotTrustDetection(p)); err != nil {
+			policyJSON["ip_acl_list_refs"], policyJSON["ip_whitelist_refs"], InferSnapshotPolicyType(p), snapshotTrustDetection(p),
+			p["human_verify_mode"], p["human_verify_type"], p["human_verify_ttl"], policyJSON["human_exempt_paths"],
+			p["cc_detect_enabled"], p["cc_rps_limit"], p["cc_rps_window"], p["cc_4xx_ratio"], p["cc_session_anomaly"], p["cc_session_ua_threshold"]); err != nil {
 			return fmt.Errorf("写入 security_policy: %w", err)
 		}
 	}
@@ -1564,6 +1566,7 @@ func canonicalSnapshotPolicyContent(row map[string]interface{}) (string, error) 
 // dumpTableAsJSON 已为 JSON 字符串，落库前仍需按列序列化并在失败时中止）。
 var snapshotPolicyJSONColumns = []string{
 	"ip_acl_list",
+	"human_exempt_paths",
 	"ip_whitelist",
 	"ip_blacklist",
 	"crs_rule_groups",
@@ -1734,6 +1737,26 @@ func normalizeSnapshotPolicyRow(p map[string]interface{}) {
 	}
 	if p["geoip_crawler_engines"] == nil {
 		p["geoip_crawler_engines"] = "[]"
+	}
+	if p["human_verify_mode"] == nil {
+		p["human_verify_mode"] = "off"
+	}
+	if p["human_verify_type"] == nil {
+		p["human_verify_type"] = db.DefaultHumanVerifyType
+	}
+	if p["human_verify_ttl"] == nil {
+		p["human_verify_ttl"] = int64(db.DefaultHumanVerifyTTL)
+	}
+	if p["human_exempt_paths"] == nil {
+		p["human_exempt_paths"] = "[]"
+	}
+	for col, def := range map[string]interface{}{
+		"cc_detect_enabled": int64(0), "cc_rps_limit": int64(db.DefaultCCRPSLimit), "cc_rps_window": int64(db.DefaultCCRPSWindow),
+		"cc_4xx_ratio": int64(db.DefaultCC4xxRatio), "cc_session_anomaly": int64(0), "cc_session_ua_threshold": int64(db.DefaultCCSessionUAThreshold),
+	} {
+		if p[col] == nil {
+			p[col] = def
+		}
 	}
 	p["policy_type"] = InferSnapshotPolicyType(p)
 	p["trust_detection"] = boolToSnapshotInteger(snapshotTrustDetection(p))
@@ -2260,6 +2283,14 @@ func updateSnapshotSettings(ctx context.Context, tx *sql.Tx, snapshot models.Clu
 		}
 		settingClauses = append(settingClauses, "threat_screen_mode=?")
 		settingArgs = append(settingArgs, mode)
+	}
+	// 人机验证 cookie 签名密钥：多节点必须同值（A 节点签发的挑战凭证在 B 节点
+	// 校验）；空串不落库（保留从端本地值，避免把从端已生成的密钥清空）。
+	if settings.HumanSecret != nil && *settings.HumanSecret != "" {
+		settingClauses = append(settingClauses, "human_secret=?")
+		settingArgs = append(settingArgs, *settings.HumanSecret)
+		// 从端内存缓存的是旧密钥：置空强制下次渲染重新读取并重建 Caddy 配置。
+		resetHumanSecretCache()
 	}
 	if settings.AutobanEnabled != nil {
 		settingClauses = append(settingClauses, "autoban_enabled=?")

@@ -278,9 +278,9 @@ test('拦截页回落文案：失效策略页不得断言「回落默认 403」�
     label: '拦截页',
     detail: '已失效（回落绑定链首个有效页）',
   })
-  // 阶段 3 同口径：逐策略合成码，页失效时回落同为绑定链首个有效页
-  const stage3 = stageRows(bindingOf({ block_page_id: 9 }), policyOf({ mode: 'blocking' }), [], 3)
-  assert.equal(stage3.find((row) => row.label === '拦截页')?.detail, '已失效（回落绑定链首个有效页）')
+  // 阶段 4（WAF）同口径：逐策略合成码，页失效时回落同为绑定链首个有效页
+  const stage4 = stageRows(bindingOf({ block_page_id: 9 }), policyOf({ mode: 'blocking' }), [], 3)
+  assert.equal(stage4.find((row) => row.label === '拦截页')?.detail, '已失效（回落绑定链首个有效页）')
   // 未配置：跟随绑定链首个有效页，无则默认 403
   const unset = stageRows(bindingOf({ block_page_id: 0 }), policyOf({ mode: 'blocking' }), [], 3)
   assert.equal(unset.find((row) => row.label === '拦截页')?.detail, '未配置（跟随绑定链首个有效页，无则默认 403）')
@@ -561,7 +561,7 @@ test('CRS 源码片段按 ID 边界定位（短 ID 不命中更长的 ID 行）'
 
 // 禁用规则的锁摘要/流程必须显式降级：enabled=0 时控制面不渲染任何路由，
 // 安全链不进入运行配置——阶段模型必须携带 ruleDisabled，消费方据此灰锁 +
-// 顶部禁用横幅（否则巡检得到「四阶段在位」的高估结论）。
+// 顶部禁用横幅（否则巡检得到「五阶段在位」的高估结论）。
 test('禁用规则：阶段模型携带 ruleDisabled 且不影响阶段内容', () => {
   const policy = policyOf({ policy_type: 'stage1', has_ip_control: true, ip_acl_enabled: true, ip_acl_list: '["10.0.0.0/8"]' })
   const binding = bindingOf()
@@ -573,7 +573,7 @@ test('禁用规则：阶段模型携带 ruleDisabled 且不影响阶段内容', 
   // 期望必须是绝对锚：两侧都取自 buildStageModel，整体退化（阶段/组全空）时
   // 恒等成立——「禁用不影响内容」就变成了「两边都为空」的自证。
   assert.equal(disabledModel.hasAnyPolicy, true)
-  assert.equal(disabledModel.stages.length, 4, '四阶段模型不得退化')
+  assert.equal(disabledModel.stages.length, 4, '四阶段模型（0 信任/1 ACL/2 CC 防护/3 内容防护）不得退化')
   assert.deepEqual(disabledModel.stages.map((stage) => stage.groups.length), [0, 1, 0, 0], '阶段 1 的 ACL 组必须在禁用态保留')
   assert.deepEqual(enabledModel.stages.map((stage) => stage.groups.length), [0, 1, 0, 0])
   assert.deepEqual(disabledModel.stages[1].groups[0]?.rows.map((row) => [row.label, row.detail]), [

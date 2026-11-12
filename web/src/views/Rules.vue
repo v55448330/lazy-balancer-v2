@@ -1363,6 +1363,7 @@ import { useAuthStore } from '@/stores/auth'
 import { request, mfaAwareSuccess, ApiRequestError } from '@/utils/api'
 import { Plus, Operation, Delete, InfoFilled, Lock, Connection, Guide, Check, ArrowLeft, ArrowRight, Document, CircleCheckFilled, CircleCloseFilled, Setting, RefreshRight, Search, WarningFilled, Location, Link, Tickets } from '@element-plus/icons-vue'
 import DialogHeader from '@/components/DialogHeader.vue'
+import { generalizeUA } from '@/utils/uaGeneralize'
 import DialogSectionHeader from '@/components/DialogSectionHeader.vue'
 import AccessibleLink from '@/components/common/AccessibleLink.vue'
 import FieldHelpIcon from '@/components/common/FieldHelpIcon.vue'
@@ -1377,6 +1378,7 @@ import { formatDate, parseDbTimeMs } from '@/utils/date'
 import LogStorageBar from '@/components/LogStorageBar.vue'
 import RuleFlowDialog from '@/components/RuleFlowDialog.vue'
 import SecurityBindingEditor from '@/components/SecurityBindingEditor.vue'
+import { builtinBlockPageLabel } from '@/utils/builtinBlockPages'
 import { buildStageModel } from '@/utils/securityStages'
 import type {
   RuleFlowTarget,
@@ -1614,6 +1616,8 @@ const securityBindings = ref<Record<string, SecurityStageBinding[]>>({})
 const securityPolicies = ref<SecurityStagePolicy[]>([])
 const ipLists = ref<SecurityStageIPList[]>([])
 const blockPages = ref<SecurityStageBlockPage[]>([])
+// 内置页名称多语言（自定义页回退库内原文）
+const blockPagesLocalized = computed(() => blockPages.value.map((p) => ({ ...p, name: builtinBlockPageLabel(p, 'name', t) })))
 
 const rulesLoadError = ref(false)
 const securityBindingsError = ref(false)
@@ -1664,7 +1668,7 @@ const openFlowFromLock = (rule: Rule): void => {
 }
 
 const ruleStageModel = (rule: Rule): RuleStageModel =>
-  ruleStageModelMap.value.get(rule.caddy_id) ?? buildStageModel([], securityPolicies.value, ipLists.value, blockPages.value, rule, rule.enabled)
+  ruleStageModelMap.value.get(rule.caddy_id) ?? buildStageModel([], securityPolicies.value, ipLists.value, blockPagesLocalized.value, rule, rule.enabled)
 
 const searchQuery = ref('')
 const currentPage = ref(1)
@@ -1707,7 +1711,7 @@ const ruleStageModelMap = computed<Map<string, RuleStageModel>>(() => {
       securityBindings.value[rule.caddy_id] || [],
       securityPolicies.value,
       ipLists.value,
-      blockPages.value,
+      blockPagesLocalized.value,
       rule,
       rule.enabled,
     ))
@@ -3990,36 +3994,6 @@ interface LogStatMaps extends LogStatBuckets {
 const logStatsMaps = ref<LogStatMaps | null>(null)
 const logStatsInFlight = ref(false)
 const LOG_STAT_CHUNK_SIZE = 200
-
-const generalizeUA = (ua: string): string => {
-  if (!ua) return '-'
-  let client = ''
-  let version = ''
-  const pick = (marker: string) => {
-    const i = ua.indexOf(marker)
-    if (i < 0) return ''
-    const rest = ua.slice(i + marker.length)
-    const m = rest.match(/^[\d.]+/)
-    return m ? m[0].split('.')[0] : ''
-  }
-  if (ua.includes('Edg/')) { client = 'Edge'; version = pick('Edg/') }
-  else if (ua.includes('Chrome/')) { client = 'Chrome'; version = pick('Chrome/') }
-  else if (ua.includes('Firefox/')) { client = 'Firefox'; version = pick('Firefox/') }
-  else if (ua.includes('Version/') && ua.includes('Safari/')) { client = 'Safari'; version = pick('Version/') }
-  else if (ua.includes('curl/')) { client = 'curl'; version = pick('curl/') }
-  else if (ua.includes('PostmanRuntime')) client = 'Postman'
-  else if (ua.includes('python-requests')) client = 'Python Requests'
-  else if (ua.includes('Go-http-client')) client = 'Go Client'
-  if (!client) return ua
-  let osName = ''
-  if (ua.includes('Windows NT')) osName = 'Windows'
-  else if (ua.includes('Mac OS X')) osName = 'macOS'
-  else if (ua.includes('iPhone') || ua.includes('iPad')) osName = 'iOS'
-  else if (ua.includes('Android')) osName = 'Android'
-  else if (ua.includes('Linux')) osName = 'Linux'
-  const ver = version ? ` ${version}` : ''
-  return osName ? `${client}${ver} / ${osName}` : `${client}${ver}`
-}
 
 const consumeLogLine = (maps: LogStatBuckets, line: string) => {
   let entry: CaddyLogEntry

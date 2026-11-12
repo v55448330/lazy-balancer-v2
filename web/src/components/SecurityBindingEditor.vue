@@ -239,9 +239,11 @@ const bindStage0 = ref<number[]>([])
 const bindStage1 = ref<number[]>([])
 const bindStage2 = ref<number[]>([])
 const bindStage3 = ref<number[]>([])
+const bindHuman = ref<number[]>([])
+const bindStage4 = ref<number[]>([])
 
 const policiesByType = computed<Record<SecurityPolicyType, BindingEditorPolicy[]>>(() => {
-  const grouped: Record<SecurityPolicyType, BindingEditorPolicy[]> = { stage0: [], stage1: [], stage2: [], stage3: [], mixed: [] }
+  const grouped: Record<SecurityPolicyType, BindingEditorPolicy[]> = { stage0: [], stage1: [], stage2: [], stage3: [], stage4: [], mixed: [] }
   for (const policy of props.policies) grouped[inferPolicyType(policy)].push(policy)
   return grouped
 })
@@ -255,7 +257,8 @@ const stageSections = computed<StageSection[]>(() => [
   { type: 'stage0' as const, title: t('common.app.views.secBinding.stage0Title'), options: policiesByType.value.stage0, selection: bindStage0 },
   { type: 'stage1' as const, title: t('common.app.views.secBinding.stage1Title'), options: policiesByType.value.stage1, selection: bindStage1 },
   { type: 'stage2' as const, title: t('common.app.views.secBinding.stage2Title'), options: policiesByType.value.stage2, selection: bindStage2, single: true as const, tcpLocked: isTcpRule.value },
-  { type: 'stage3' as const, title: t('common.app.views.secBinding.stage3Title'), options: policiesByType.value.stage3, selection: bindStage3, tcpLocked: isTcpRule.value },
+  { type: 'stage3' as const, title: t('common.app.views.secBinding.humanTitle'), options: policiesByType.value.stage3, selection: bindHuman, tcpLocked: isTcpRule.value },
+  { type: 'stage4' as const, title: t('common.app.views.secBinding.stage4Title'), options: policiesByType.value.stage4, selection: bindStage4, tcpLocked: isTcpRule.value },
 ])
 
 // 当前规则已绑定的 mixed 策略（只读 tag，不可增减）
@@ -265,7 +268,7 @@ const boundMixedPolicies = computed(() => {
   return props.policies.filter((p) => boundIds.has(p.id) && inferPolicyType(p) === 'mixed')
 })
 
-const ruleModeTotal = computed(() => bindStage0.value.length + bindStage1.value.length + Math.min(1, bindStage2.value.length) + bindStage3.value.length)
+const ruleModeTotal = computed(() => bindStage0.value.length + bindStage1.value.length + Math.min(1, bindStage2.value.length) + bindHuman.value.length + bindStage4.value.length)
 
 // ── 策略模式：规则选择器（搜索 + 协议筛选 + 全选筛选 + 分页 + 行内绑定集合/覆盖徽标） ──
 const pickerSearch = ref('')
@@ -400,11 +403,11 @@ const onOpen = (): void => {
     //（不可选状态下的预选值会被「保存」全量替换语义静默清掉——与后端同门清理一致）
     const tcpLocked = props.rule?.protocol === 'tcp'
     const boundIdSet = new Set((props.rule ? props.bindings[props.rule.caddy_id] : null)?.map((b) => b.policy_id) ?? [])
-    const buckets: Record<'stage0' | 'stage1' | 'stage2' | 'stage3', typeof bindStage0> = { stage0: bindStage0, stage1: bindStage1, stage2: bindStage2, stage3: bindStage3 }
+    const buckets: Record<'stage0' | 'stage1' | 'stage2' | 'stage3' | 'stage4', typeof bindStage0> = { stage0: bindStage0, stage1: bindStage1, stage2: bindStage2, stage3: bindHuman, stage4: bindStage4 }
     for (const policy of props.policies) {
       const type = inferPolicyType(policy)
       if (type === 'mixed') continue
-      if (tcpLocked && (type === 'stage2' || type === 'stage3')) continue
+      if (tcpLocked && (type === 'stage2' || type === 'stage4' || type === 'stage3')) continue
       if (boundIdSet.has(policy.id)) buckets[type].value.push(policy.id)
     }
     return

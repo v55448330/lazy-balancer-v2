@@ -40,7 +40,11 @@ const securityPolicyRowColumns = `id, name, COALESCE(description,''), COALESCE(m
 		COALESCE(block_page_id,0), COALESCE(block_status_code,0), enabled, COALESCE(created_at,''), COALESCE(updated_at,''),
 		COALESCE(geoip_countries,'[]'), COALESCE(geoip_mode,'off'), COALESCE(geoip_crawler_exempt,0), COALESCE(geoip_crawler_engines,'[]'),
 		COALESCE(waf_check_response,0), COALESCE(log_request_body,0),
-		COALESCE(ip_acl_list_refs,'[]'), COALESCE(ip_whitelist_refs,'[]'), COALESCE(policy_type,''), COALESCE(trust_detection,0)`
+		COALESCE(ip_acl_list_refs,'[]'), COALESCE(ip_whitelist_refs,'[]'), COALESCE(policy_type,''), COALESCE(trust_detection,0),
+		COALESCE(human_verify_mode,'off'), COALESCE(human_verify_type,'slider'), COALESCE(human_verify_ttl,30),
+		COALESCE(human_exempt_paths,'[]'),
+		COALESCE(cc_detect_enabled,0), COALESCE(cc_rps_limit,40), COALESCE(cc_rps_window,10),
+		COALESCE(cc_4xx_ratio,70), COALESCE(cc_session_anomaly,0), COALESCE(cc_session_ua_threshold,5)`
 
 // securityPolicyRowScanner 策略行扫描目标：*sql.Row 与 *sql.Rows 同时满足
 // （单查与批量预载走同一段 Scan）。
@@ -54,6 +58,7 @@ type securityPolicyRowScanner interface {
 func scanSecurityPolicyRow(scanner securityPolicyRowScanner) (*models.SecurityPolicy, error) {
 	var p models.SecurityPolicy
 	var ipWhitelist, ipBlacklist, crsRuleGroups, crsExcludedRules, customRules, geoipCountries, crawlerEnginesRaw string
+	var humanExemptPaths string
 	if err := scanner.Scan(&p.ID, &p.Name, &p.Description, &p.Mode, &p.AnomalyThreshold,
 		&p.IPACLMode, &p.IPACLList, &p.IPACLEnabled,
 		&p.IPWhitelistEnabled, &ipWhitelist, &ipBlacklist,
@@ -62,7 +67,10 @@ func scanSecurityPolicyRow(scanner securityPolicyRowScanner) (*models.SecurityPo
 		&p.BlockPageID, &p.BlockStatusCode, &p.Enabled, &p.CreatedAt, &p.UpdatedAt,
 		&geoipCountries, &p.GeoIPMode, &p.GeoIPCrawlerExempt, &crawlerEnginesRaw,
 		&p.WAFCheckResponse, &p.LogRequestBody,
-		&p.IPACLListRefs, &p.IPWhitelistRefs, &p.PolicyType, &p.TrustDetection); err != nil {
+		&p.IPACLListRefs, &p.IPWhitelistRefs, &p.PolicyType, &p.TrustDetection,
+		&p.HumanVerifyMode, &p.HumanVerifyType, &p.HumanVerifyTTL,
+		&humanExemptPaths,
+		&p.CCDetectEnabled, &p.CCRPSLimit, &p.CCRPSWindow, &p.CC4xxRatio, &p.CCSessionAnomaly, &p.CCSessionUAThreshold); err != nil {
 		return nil, err
 	}
 	p.IPWhitelist = json.RawMessage(ipWhitelist)
@@ -72,6 +80,7 @@ func scanSecurityPolicyRow(scanner securityPolicyRowScanner) (*models.SecurityPo
 	p.CustomRules = json.RawMessage(customRules)
 	p.GeoIPCountries = json.RawMessage(geoipCountries)
 	p.GeoIPCrawlerEngines = json.RawMessage(crawlerEnginesRaw)
+	p.HumanExemptPaths = json.RawMessage(humanExemptPaths)
 	return &p, nil
 }
 

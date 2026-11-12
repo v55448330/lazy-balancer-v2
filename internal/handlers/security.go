@@ -741,7 +741,10 @@ func (h *Handlers) DeleteSecurityBlockPage(c *gin.Context) {
 //     在渲染层 fail-visible（BuildCorazaDirectives 显性报错），展示层不做
 //     行为消费，无需同口径。
 const securityPolicySelectColumns = `id, name, COALESCE(description,''), COALESCE(mode,'off'), COALESCE(anomaly_threshold,5), COALESCE(ip_acl_mode,''), COALESCE(ip_acl_list,'[]'), COALESCE(ip_acl_enabled,0), COALESCE(ip_whitelist_enabled,1), COALESCE(ip_whitelist,'[]'), COALESCE(ip_blacklist,'[]'),
-	COALESCE(rate_limit_enabled,0), COALESCE(rate_limit_rps,0), COALESCE(rate_limit_burst,0), COALESCE(crs_rule_groups,'[]'), COALESCE(crs_excluded_rules,'[]'), COALESCE(custom_rules,'[]'), COALESCE(block_page_id,0), COALESCE(block_status_code,0), COALESCE(enabled,1), COALESCE(updated_by,0), COALESCE(created_at,''), COALESCE(updated_at,''), COALESCE(geoip_countries,'[]'), COALESCE(geoip_mode,'off'), COALESCE(geoip_crawler_exempt,0), COALESCE(geoip_crawler_engines,'[]'), COALESCE(waf_check_response,0), COALESCE(log_request_body,0), COALESCE(ip_acl_list_refs,'[]'), COALESCE(ip_whitelist_refs,'[]'), COALESCE(policy_type,''), COALESCE(trust_detection,0)`
+	COALESCE(rate_limit_enabled,0), COALESCE(rate_limit_rps,0), COALESCE(rate_limit_burst,0), COALESCE(crs_rule_groups,'[]'), COALESCE(crs_excluded_rules,'[]'), COALESCE(custom_rules,'[]'), COALESCE(block_page_id,0), COALESCE(block_status_code,0), COALESCE(enabled,1), COALESCE(updated_by,0), COALESCE(created_at,''), COALESCE(updated_at,''), COALESCE(geoip_countries,'[]'), COALESCE(geoip_mode,'off'), COALESCE(geoip_crawler_exempt,0), COALESCE(geoip_crawler_engines,'[]'), COALESCE(waf_check_response,0), COALESCE(log_request_body,0), COALESCE(ip_acl_list_refs,'[]'), COALESCE(ip_whitelist_refs,'[]'), COALESCE(policy_type,''), COALESCE(trust_detection,0),
+	COALESCE(human_verify_mode,'off'), COALESCE(human_verify_type,'slider'), COALESCE(human_verify_ttl,30), COALESCE(human_exempt_paths,'[]'),
+	COALESCE(cc_detect_enabled,0), COALESCE(cc_rps_limit,40), COALESCE(cc_rps_window,10), COALESCE(cc_4xx_ratio,70),
+	COALESCE(cc_session_anomaly,0), COALESCE(cc_session_ua_threshold,5)`
 
 func (h *Handlers) ListSecurityPolicies(c *gin.Context) {
 	// 过滤条件按「主查询列名」与「绑定计数查询的限定列名」成对给出：绑定计数
@@ -872,10 +875,14 @@ func (h *Handlers) ListSecurityPolicies(c *gin.Context) {
 			ID: p.ID, Name: p.Name, Mode: p.Mode, Enabled: p.Enabled, RuleCount: bindingCounts[p.ID],
 			HasWAF: p.Mode == "blocking" || p.Mode == "detection", HasIPControl: services.SecurityPolicyHasIPControl(&p), HasRateLimit: p.RateLimitEnabled && p.RateLimitRPS > 0,
 			HasGeoIP: hasGeoIP, HasCustomRules: p.Mode != "off" && customRulesCount > 0,
-			AnomalyThreshold:   p.AnomalyThreshold,
-			IPACLMode:          p.IPACLMode,
-			IPACLEnabled:       p.IPACLEnabled,
-			TrustDetection:     p.TrustDetection,
+			AnomalyThreshold: p.AnomalyThreshold,
+			IPACLMode:        p.IPACLMode,
+			IPACLEnabled:     p.IPACLEnabled,
+			TrustDetection:   p.TrustDetection,
+			HumanVerifyMode:  p.HumanVerifyMode, HumanVerifyType: p.HumanVerifyType,
+			HumanVerifyTTL: p.HumanVerifyTTL, HumanExemptPaths: string(p.HumanExemptPaths),
+			CCDetectEnabled: p.CCDetectEnabled, CCRPSLimit: p.CCRPSLimit, CCRPSWindow: p.CCRPSWindow,
+			CC4xxRatio: p.CC4xxRatio, CCSessionAnomaly: p.CCSessionAnomaly, CCSessionUAThreshold: p.CCSessionUAThreshold,
 			Blocked24h:         blockedCounts[p.ID],
 			Trigger24h:         triggerCounts[p.ID],
 			IPWhitelistEnabled: p.IPWhitelistEnabled,
@@ -902,7 +909,7 @@ func (h *Handlers) ListSecurityPolicies(c *gin.Context) {
 			LogRequestBody:      p.LogRequestBody,
 			IPACLListRefs:       p.IPACLListRefs,
 			IPWhitelistRefs:     p.IPWhitelistRefs,
-			PolicyType:          p.PolicyType,
+			PolicyType:          models.NormalizePolicyType(p.PolicyType),
 		})
 	}
 	if policies == nil {
@@ -1300,10 +1307,15 @@ func (h *Handlers) CreateSecurityPolicy(c *gin.Context) {
 		enabled = *req.Enabled
 	}
 	result, err := tx.ExecContext(caddyWriteCtx(c), `INSERT INTO security_policies (name, description, mode, anomaly_threshold, ip_acl_mode, ip_acl_list, ip_acl_enabled, ip_whitelist, ip_whitelist_enabled, ip_blacklist,
-		rate_limit_enabled, rate_limit_rps, rate_limit_burst, crs_rule_groups, crs_excluded_rules, custom_rules, block_page_id, block_status_code, enabled, geoip_countries, geoip_mode, geoip_crawler_exempt, geoip_crawler_engines, waf_check_response, log_request_body, ip_acl_list_refs, ip_whitelist_refs, updated_by, policy_type, trust_detection)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		rate_limit_enabled, rate_limit_rps, rate_limit_burst, crs_rule_groups, crs_excluded_rules, custom_rules, block_page_id, block_status_code, enabled, geoip_countries, geoip_mode, geoip_crawler_exempt, geoip_crawler_engines, waf_check_response, log_request_body, ip_acl_list_refs, ip_whitelist_refs, updated_by, policy_type, trust_detection, human_verify_mode, human_verify_type, human_verify_ttl, human_exempt_paths,
+		cc_detect_enabled, cc_rps_limit, cc_rps_window, cc_4xx_ratio, cc_session_anomaly, cc_session_ua_threshold)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		req.Name, req.Description, req.Mode, max1(req.AnomalyThreshold, 5), req.IPACLMode, req.IPACLList, req.IPACLEnabled, req.IPWhitelist, policyWhitelistDefault(req.IPWhitelistEnabled), req.IPBlacklist,
-		req.RateLimitEnabled, req.RateLimitRPS, req.RateLimitBurst, req.CRSRuleGroups, req.CRSExcludedRules, req.CustomRules, req.BlockPageID, req.BlockStatusCode, enabled, req.GeoIPCountries, req.GeoIPMode, crawlerExemptBool(req.GeoIPCrawlerExempt, geoIPActive(req.GeoIPMode)), crawlerEnginesJSON(req.GeoIPCrawlerEngines), req.WAFCheckResponse, req.LogRequestBody, req.IPACLListRefs, req.IPWhitelistRefs, int(contextUserID(c)), policyType, req.TrustDetection)
+		req.RateLimitEnabled, req.RateLimitRPS, req.RateLimitBurst, req.CRSRuleGroups, req.CRSExcludedRules, req.CustomRules, req.BlockPageID, req.BlockStatusCode, enabled, req.GeoIPCountries, req.GeoIPMode, crawlerExemptBool(req.GeoIPCrawlerExempt, geoIPActive(req.GeoIPMode)), crawlerEnginesJSON(req.GeoIPCrawlerEngines), req.WAFCheckResponse, req.LogRequestBody, req.IPACLListRefs, req.IPWhitelistRefs, int(contextUserID(c)), policyType, req.TrustDetection,
+		humanModeOrDefault(req.HumanVerifyMode), humanTypeOrDefault(req.HumanVerifyType), humanTTLOrDefault(req.HumanVerifyTTL),
+		humanJSONOrDefault(req.HumanExemptPaths),
+		req.CCDetectEnabled, ccIntOrDefault(req.CCRPSLimit, 40), ccIntOrDefault(req.CCRPSWindow, 10),
+		ccIntOrDefault(req.CC4xxRatio, 70), req.CCSessionAnomaly, ccIntOrDefault(req.CCSessionUAThreshold, 5))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
 		return
@@ -1714,6 +1726,9 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 	// 字段指针强制设为类型零值（UPDATE 随之落零）；显式 mixed 拒绝；非法值
 	// 拒绝。nil=按合并后内容重推断（Exec 后读合并行回写）。
 	if req.PolicyType != nil {
+		// 旧编号兼容：stage4（旧 WAF）写入归一为四阶段体系的 stage3。
+		normalized := models.NormalizePolicyType(*req.PolicyType)
+		req.PolicyType = &normalized
 		switch *req.PolicyType {
 		case "":
 			// 空串等价「未提供」：GET 详情对 '' 存量行（导入/旧快照遗留）回传
@@ -1721,7 +1736,7 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 			// 置 nil 后走下方「按合并后内容重推断」路径，与 Create 的
 			// case "" 同口径（面板编辑器总提交显式类型，不受影响）。
 			req.PolicyType = nil
-		case models.PolicyTypeStage0, models.PolicyTypeStage1, models.PolicyTypeStage2, models.PolicyTypeStage3:
+		case models.PolicyTypeStage0, models.PolicyTypeStage1, models.PolicyTypeStage2, models.PolicyTypeStage4, models.PolicyTypeStage3:
 			// 矛盾载荷显式拒绝，先于归零（与 Create 同口径）：静默归零后 200
 			// 会让调用方以为阶段外字段已生效。
 			if msg := updateOutOfStageConflict(&req, *req.PolicyType); msg != "" {
@@ -2160,6 +2175,16 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 	addStr("ip_acl_list_refs", req.IPACLListRefs)
 	addStr("ip_whitelist_refs", req.IPWhitelistRefs)
 	addStr("policy_type", req.PolicyType)
+	addStr("human_verify_mode", req.HumanVerifyMode)
+	addStr("human_verify_type", req.HumanVerifyType)
+	addInt("human_verify_ttl", req.HumanVerifyTTL)
+	addStr("human_exempt_paths", req.HumanExemptPaths)
+	addBool("cc_detect_enabled", req.CCDetectEnabled)
+	addInt("cc_rps_limit", req.CCRPSLimit)
+	addInt("cc_rps_window", req.CCRPSWindow)
+	addInt("cc_4xx_ratio", req.CC4xxRatio)
+	addBool("cc_session_anomaly", req.CCSessionAnomaly)
+	addInt("cc_session_ua_threshold", req.CCSessionUAThreshold)
 
 	if req.BlockPageID != nil {
 		query += ", block_page_id=?"
@@ -2373,6 +2398,33 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 	deltaBool("信任名单启用", req.IPWhitelistEnabled, stored.IPWhitelistEnabled)
 	deltaStr("策略类型", req.PolicyType, stored.PolicyType)
 	deltaBool("信任检测", req.TrustDetection, stored.TrustDetection)
+	// 人机验证（阶段 3）：UPDATE 列 ↔ delta 覆盖同步（守卫测试锁定）。
+	// 存量行空值就地归一为 schema 默认（off/slider/30/"[]"）——否则阶段归零
+	// 写入的显式默认值 vs 存量空串产生「→off」幽灵 delta（审计误报变更）。
+	// 归一直接落在 stored 字段上（守卫以 stored.<Field> 选择器锚定 delta 覆盖，
+	// 用局部变量会脱离静态对账面）。
+	if stored.HumanVerifyMode == "" {
+		stored.HumanVerifyMode = "off"
+	}
+	if stored.HumanVerifyType == "" {
+		stored.HumanVerifyType = "slider"
+	}
+	if stored.HumanVerifyTTL == 0 {
+		stored.HumanVerifyTTL = 30
+	}
+	if len(stored.HumanExemptPaths) == 0 {
+		stored.HumanExemptPaths = json.RawMessage("[]")
+	}
+	deltaStr("人机验证模式", req.HumanVerifyMode, stored.HumanVerifyMode)
+	deltaStr("人机验证方式", req.HumanVerifyType, stored.HumanVerifyType)
+	deltaInt("人机验证有效期", req.HumanVerifyTTL, stored.HumanVerifyTTL)
+	deltaStr("人机验证豁免路径", req.HumanExemptPaths, string(stored.HumanExemptPaths))
+	deltaBool("CC 检测启用", req.CCDetectEnabled, stored.CCDetectEnabled)
+	deltaInt("CC 突刺阈值", req.CCRPSLimit, stored.CCRPSLimit)
+	deltaInt("CC 窗口秒数", req.CCRPSWindow, stored.CCRPSWindow)
+	deltaInt("CC 4xx 比例", req.CC4xxRatio, stored.CC4xxRatio)
+	deltaBool("CC 会话异常", req.CCSessionAnomaly, stored.CCSessionAnomaly)
+	deltaInt("CC 会话 UA 阈值", req.CCSessionUAThreshold, stored.CCSessionUAThreshold)
 	deltaStr("信任名单", req.IPWhitelist, string(stored.IPWhitelist))
 	deltaStr("旧版黑名单", req.IPBlacklist, string(stored.IPBlacklist))
 	deltaRefs("ACL 列表引用", "security_ip_lists", req.IPACLListRefs, stored.IPACLListRefs)
@@ -2525,7 +2577,7 @@ func (h *Handlers) BindRuleToPolicy(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: *msg})
 		return
 	}
-	// 限流策略唯一绑定（2026-09-20 用户裁定）：该规则已绑定其他 stage2 策略时
+	// 限流策略唯一绑定（2026-09-20 用户裁定）：该规则已绑定其他 CC 防护（阶段 2）策略时
 	// 拒绝第二条（幂等重绑同一条放行）。
 	if policyType == models.PolicyTypeStage2 {
 		var otherStage2 int
@@ -2865,7 +2917,7 @@ func setRulePoliciesInTx(ctx context.Context, tx *sql.Tx, ruleCaddyID string, po
 			return "", err
 		}
 		if stage2Count > 1 {
-			return "每条规则最多绑定一条限流策略，请从提交集中移除多余的限流策略", nil
+			return "每条规则最多绑定一条 CC 防护策略，请从提交集中移除多余的 CC 防护策略", nil
 		}
 	}
 	if _, err := tx.ExecContext(ctx, "DELETE FROM security_policy_bindings WHERE rule_caddy_id=?", ruleCaddyID); err != nil {
@@ -3124,7 +3176,7 @@ func (h *Handlers) BulkUpdatePolicyBindings(c *gin.Context) {
 			}
 			if policyType == models.PolicyTypeStage2 {
 				if _, has := otherStage2Rules[ruleCaddyID]; has {
-					return ruleCaddyID + ": 每条规则最多绑定一条限流策略，请先解绑现有限流策略", nil
+					return ruleCaddyID + ": 每条规则最多绑定一条 CC 防护策略，请先解绑现有 CC 防护策略", nil
 				}
 			}
 			// bulk 绑定追加到链末（与单条 bind 同口径）。
@@ -3445,7 +3497,7 @@ func (h *Handlers) BatchBindSecurityPolicies(c *gin.Context) {
 				return
 			}
 			if stage2Count > 1 {
-				skipped = append(skipped, skippedRule{ruleCaddyID, "每条规则最多绑定一条限流策略"})
+				skipped = append(skipped, skippedRule{ruleCaddyID, "每条规则最多绑定一条 CC 防护策略"})
 				continue
 			}
 		}
@@ -3692,11 +3744,21 @@ func (h *Handlers) SplitSecurityPolicy(c *gin.Context) {
 		return spec
 	}
 	insertChild := func(spec splitChildSpec) (int, error) {
+		// CC(stage2) 子策略携带人机/CC 配置；其他阶段子策略一律落零值（与
+		// applyStageZerosToCreate 的跨阶段归零同口径，避免拆分产物带死配置）。
+		humanMode, humanType, humanTTL, humanPaths := "off", "slider", 30, "[]"
+		ccEnabled, ccRPS, ccWindow, cc4xx, ccSessionAnomaly, ccUASession := false, 40, 10, 70, false, 5
+		if models.NormalizePolicyType(spec.policyType) == models.PolicyTypeStage2 {
+			humanMode, humanType, humanTTL, humanPaths = p.HumanVerifyMode, p.HumanVerifyType, p.HumanVerifyTTL, string(p.HumanExemptPaths)
+			ccEnabled, ccRPS, ccWindow, cc4xx, ccSessionAnomaly, ccUASession = p.CCDetectEnabled, p.CCRPSLimit, p.CCRPSWindow, p.CC4xxRatio, p.CCSessionAnomaly, p.CCSessionUAThreshold
+		}
 		result, err := tx.ExecContext(caddyWriteCtx(c), `INSERT INTO security_policies (name, description, mode, anomaly_threshold, ip_acl_mode, ip_acl_list, ip_acl_enabled, ip_whitelist, ip_whitelist_enabled, ip_blacklist,
-			rate_limit_enabled, rate_limit_rps, rate_limit_burst, crs_rule_groups, crs_excluded_rules, custom_rules, block_page_id, block_status_code, enabled, geoip_countries, geoip_mode, geoip_crawler_exempt, geoip_crawler_engines, waf_check_response, log_request_body, ip_acl_list_refs, ip_whitelist_refs, updated_by, policy_type, trust_detection)
-			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			rate_limit_enabled, rate_limit_rps, rate_limit_burst, crs_rule_groups, crs_excluded_rules, custom_rules, block_page_id, block_status_code, enabled, geoip_countries, geoip_mode, geoip_crawler_exempt, geoip_crawler_engines, waf_check_response, log_request_body, ip_acl_list_refs, ip_whitelist_refs, updated_by, policy_type, trust_detection,
+			human_verify_mode, human_verify_type, human_verify_ttl, human_exempt_paths, cc_detect_enabled, cc_rps_limit, cc_rps_window, cc_4xx_ratio, cc_session_anomaly, cc_session_ua_threshold)
+			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 			spec.name, p.Description, spec.mode, p.AnomalyThreshold, spec.aclMode, spec.aclList, spec.aclEnabled, spec.whitelist, spec.wlEnabled, spec.blacklist,
-			spec.rlEnabled, spec.rlRPS, spec.rlBurst, spec.crsGroups, spec.crsExcluded, spec.customRules, spec.blockPageID, spec.blockStatus, p.Enabled, spec.geoCountries, spec.geoMode, spec.crawlerExempt, spec.crawlerEngines, spec.wafResp, spec.logBody, spec.aclRefs, spec.wlRefs, operator, spec.policyType, spec.trustDetection)
+			spec.rlEnabled, spec.rlRPS, spec.rlBurst, spec.crsGroups, spec.crsExcluded, spec.customRules, spec.blockPageID, spec.blockStatus, p.Enabled, spec.geoCountries, spec.geoMode, spec.crawlerExempt, spec.crawlerEngines, spec.wafResp, spec.logBody, spec.aclRefs, spec.wlRefs, operator, spec.policyType, spec.trustDetection,
+			humanMode, humanType, humanTTL, humanPaths, ccEnabled, ccRPS, ccWindow, cc4xx, ccSessionAnomaly, ccUASession)
 		if err != nil {
 			return 0, err
 		}
@@ -3809,7 +3871,8 @@ func (h *Handlers) SplitSecurityPolicy(c *gin.Context) {
 			aclRefs: p.IPACLListRefs, wlRefs: "[]",
 		}))
 	}
-	if features.G2 {
+	humanOn := p.HumanVerifyMode != "" && p.HumanVerifyMode != "off"
+	if features.G2 || humanOn {
 		// stage2 子策略继承原策略拦截页（用户裁定：2026-09-25
 		// 起 stage2 可配拦截页，拆分不得丢页）；block_status_code 保持归一 0
 		//（阶段 2 恒 429 自动语义，与 applyStageZerosToCreate 同口径）。
@@ -3839,7 +3902,7 @@ func (h *Handlers) SplitSecurityPolicy(c *gin.Context) {
 	// 「无可拆特征组」400 判定紧随 specs 构造（此前位于子策略插入与绑定规则
 	// 查询之后——空特征策略会先空转一次绑定查询，且阅读顺序暗示判定依赖
 	// 那些查询结果，实际只依赖 features/trustEntriesNonEmpty）。
-	if !trustEntriesNonEmpty && !features.G1 && !features.G2 && !features.G3 {
+	if !trustEntriesNonEmpty && !features.G1 && !features.G2 && !features.G3 && !humanOn {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_6acb6795"), MessageKey: "k_6acb6795"})
 		return
 	}
@@ -3974,7 +4037,7 @@ func (h *Handlers) SplitSecurityPolicy(c *gin.Context) {
 				return
 			}
 			if otherStage2 > 0 {
-				skipped = append(skipped, skippedRule{ruleID, "已有绑定的限流策略（每条规则最多一条限流策略）"})
+				skipped = append(skipped, skippedRule{ruleID, "已有绑定的 CC 防护策略（每条规则最多一条 CC 防护策略）"})
 				continue
 			}
 		}
@@ -4961,7 +5024,7 @@ var legacyRuleFamilies = map[int]legacyRuleFamily{
 	11:  {key: "请求体异常", class: attackFamilyBodyAnomaly},
 	12:  {key: "信任名单", class: attackFamilyTrust},
 	14:  {key: "威胁情报库", class: attackFamilyThreatIntel},
-	429: {key: "限流", class: attackFamilyRateLimit},
+	429: {key: "CC防护", class: attackFamilyRateLimit},
 }
 
 // legacyRuleFamilyOf 返回固定 id 的族归属（表外 id 得零值：key ""、
@@ -5132,7 +5195,7 @@ func categorizeAttack(ruleTriggered, ruleMsg string) string {
 	// fall-through 同口径——历史脏数据 msg 命中 IP 黑白名单仍归 IP 访问控制）。
 	switch attackFamilyClassOf(ruleTriggered, ruleMsg) {
 	case attackFamilyRateLimit:
-		return "限流"
+		return "CC防护"
 	case attackFamilyCustomRule:
 		return "自定义规则"
 	case attackFamilyBodyAnomaly:
@@ -5177,7 +5240,7 @@ func stageCategorizeAttack(ruleTriggered, ruleMsg string) string {
 	}
 	switch class {
 	case attackFamilyRateLimit:
-		return "限流"
+		return "CC防护"
 	case attackFamilyBodyAnomaly:
 		return "请求体异常"
 	case attackFamilyThreatIntel, attackFamilyGeoIP, attackFamilyCrawler, attackFamilyIPACL:
@@ -5255,6 +5318,9 @@ func (h *Handlers) GetSecurityOverview(c *gin.Context) {
 		blocked, detected, fromRollup, err := securityOverviewTodayCounts(db.MetricsDB, todayStart, now)
 		trackErr(err)
 		overview.TodayBlocked, overview.TodayDetected, todayFromRollup = blocked, detected, fromRollup
+		challenged, passed, failed, err := securityOverviewTodayHumanCounts(db.MetricsDB, todayStart)
+		trackErr(err)
+		overview.TodayChallenged, overview.TodayHumanPass, overview.TodayHumanFail = challenged, passed, failed
 		coverageFrom, err := threatRawCoverageStart(db.MetricsDB)
 		trackErr(err)
 		rawCoverageFrom = coverageFrom
@@ -5905,8 +5971,11 @@ func (h *Handlers) GetAllSecurityBindings(c *gin.Context) {
 // 此前双份拷贝,加列疏漏成为静默错位扫描而非编译错误)。
 func scanSecurityPolicyInto(scan func(dest ...any) error, p *models.SecurityPolicy) error {
 	var ipWhitelist, ipBlacklist, crsRuleGroups, crsExcludedRules, customRules, geoipCountries, crawlerEnginesJSON string
+	var humanExemptPaths string
 	if err := scan(&p.ID, &p.Name, &p.Description, &p.Mode, &p.AnomalyThreshold, &p.IPACLMode, &p.IPACLList, &p.IPACLEnabled, &p.IPWhitelistEnabled, &ipWhitelist, &ipBlacklist,
-		&p.RateLimitEnabled, &p.RateLimitRPS, &p.RateLimitBurst, &crsRuleGroups, &crsExcludedRules, &customRules, &p.BlockPageID, &p.BlockStatusCode, &p.Enabled, &p.UpdatedBy, &p.CreatedAt, &p.UpdatedAt, &geoipCountries, &p.GeoIPMode, &p.GeoIPCrawlerExempt, &crawlerEnginesJSON, &p.WAFCheckResponse, &p.LogRequestBody, &p.IPACLListRefs, &p.IPWhitelistRefs, &p.PolicyType, &p.TrustDetection); err != nil {
+		&p.RateLimitEnabled, &p.RateLimitRPS, &p.RateLimitBurst, &crsRuleGroups, &crsExcludedRules, &customRules, &p.BlockPageID, &p.BlockStatusCode, &p.Enabled, &p.UpdatedBy, &p.CreatedAt, &p.UpdatedAt, &geoipCountries, &p.GeoIPMode, &p.GeoIPCrawlerExempt, &crawlerEnginesJSON, &p.WAFCheckResponse, &p.LogRequestBody, &p.IPACLListRefs, &p.IPWhitelistRefs, &p.PolicyType, &p.TrustDetection,
+		&p.HumanVerifyMode, &p.HumanVerifyType, &p.HumanVerifyTTL, &humanExemptPaths,
+		&p.CCDetectEnabled, &p.CCRPSLimit, &p.CCRPSWindow, &p.CC4xxRatio, &p.CCSessionAnomaly, &p.CCSessionUAThreshold); err != nil {
 		return err
 	}
 	p.IPWhitelist = json.RawMessage(ipWhitelist)
@@ -5916,6 +5985,7 @@ func scanSecurityPolicyInto(scan func(dest ...any) error, p *models.SecurityPoli
 	p.CustomRules = json.RawMessage(customRules)
 	p.GeoIPCountries = json.RawMessage(geoipCountries)
 	p.GeoIPCrawlerEngines = json.RawMessage(crawlerEnginesJSON)
+	p.HumanExemptPaths = json.RawMessage(humanExemptPaths)
 	return nil
 }
 
@@ -5968,14 +6038,24 @@ type securityPolicyDetail struct {
 	GeoIPMode          string `json:"geoip_mode"`
 	// 爬虫豁免两列必须出现在详情 DTO——前端编辑策略时读取并按此
 	// 回写；缺席会恒回写 false/默认三引擎，静默关闭豁免。
-	GeoIPCrawlerExempt  bool   `json:"geoip_crawler_exempt"`
-	GeoIPCrawlerEngines string `json:"geoip_crawler_engines"`
-	WAFCheckResponse    bool   `json:"waf_check_response"`
-	LogRequestBody      bool   `json:"log_request_body"`
-	IPACLListRefs       string `json:"ip_acl_list_refs"`
-	IPWhitelistRefs     string `json:"ip_whitelist_refs"`
-	PolicyType          string `json:"policy_type"`
-	TrustDetection      bool   `json:"trust_detection"`
+	GeoIPCrawlerExempt   bool   `json:"geoip_crawler_exempt"`
+	GeoIPCrawlerEngines  string `json:"geoip_crawler_engines"`
+	WAFCheckResponse     bool   `json:"waf_check_response"`
+	LogRequestBody       bool   `json:"log_request_body"`
+	IPACLListRefs        string `json:"ip_acl_list_refs"`
+	IPWhitelistRefs      string `json:"ip_whitelist_refs"`
+	PolicyType           string `json:"policy_type"`
+	TrustDetection       bool   `json:"trust_detection"`
+	HumanVerifyMode      string `json:"human_verify_mode"`
+	HumanVerifyType      string `json:"human_verify_type"`
+	HumanVerifyTTL       int    `json:"human_verify_ttl"`
+	HumanExemptPaths     string `json:"human_exempt_paths"`
+	CCDetectEnabled      bool   `json:"cc_detect_enabled"`
+	CCRPSLimit           int    `json:"cc_rps_limit"`
+	CCRPSWindow          int    `json:"cc_rps_window"`
+	CC4xxRatio           int    `json:"cc_4xx_ratio"`
+	CCSessionAnomaly     bool   `json:"cc_session_anomaly"`
+	CCSessionUAThreshold int    `json:"cc_session_ua_threshold"`
 }
 
 func newSecurityPolicyDetail(p *models.SecurityPolicy) securityPolicyDetail {
@@ -6010,8 +6090,14 @@ func newSecurityPolicyDetail(p *models.SecurityPolicy) securityPolicyDetail {
 		LogRequestBody:      p.LogRequestBody,
 		IPACLListRefs:       p.IPACLListRefs,
 		IPWhitelistRefs:     p.IPWhitelistRefs,
-		PolicyType:          p.PolicyType,
+		PolicyType:          models.NormalizePolicyType(p.PolicyType),
 		TrustDetection:      p.TrustDetection,
+		HumanVerifyMode:     p.HumanVerifyMode,
+		HumanVerifyType:     p.HumanVerifyType,
+		HumanVerifyTTL:      p.HumanVerifyTTL,
+		HumanExemptPaths:    string(p.HumanExemptPaths),
+		CCDetectEnabled:     p.CCDetectEnabled, CCRPSLimit: p.CCRPSLimit, CCRPSWindow: p.CCRPSWindow,
+		CC4xxRatio: p.CC4xxRatio, CCSessionAnomaly: p.CCSessionAnomaly, CCSessionUAThreshold: p.CCSessionUAThreshold,
 	}
 }
 
@@ -6104,7 +6190,7 @@ func resolveCreatePolicyType(req *models.CreateSecurityPolicyRequest) (string, e
 		// policy_type 即可落 404）。
 		req.BlockStatusCode = normalizeBlockStatusCode(req.BlockStatusCode, policyType, req.BlockPageID)
 		return policyType, nil
-	case models.PolicyTypeStage0, models.PolicyTypeStage1, models.PolicyTypeStage2, models.PolicyTypeStage3:
+	case models.PolicyTypeStage0, models.PolicyTypeStage1, models.PolicyTypeStage2, models.PolicyTypeStage4, models.PolicyTypeStage3:
 		// 创建路径的显式类型 = 「按该阶段类型落库」的全量归一契约（编辑器提交
 		// 完整表单、单测按全字段建策略均依赖它）；矛盾载荷的显式拒绝只落在
 		// 更新路径（那里部分更新 + 显式类型才会出现「保留旧值 vs 静默丢弃」的
@@ -6134,26 +6220,36 @@ const (
 	stageZeroIPBlacklist                            // ip_blacklist
 	stageZeroGeoIP                                  // geoip_mode / geoip_countries
 	stageZeroGeoIPCrawler                           // geoip_crawler_exempt / geoip_crawler_engines
+	stageZeroHuman                                  // human_verify_* 五列（人机验证属阶段 3）
 	stageZeroBlockPageAll                           // block_page_id + block_status_code
 	stageZeroBlockStatusCode                        // 仅 block_status_code（stage2 限流恒 429）
 	stageZeroTrustDetection                         // trust_detection（stage0 专属）
 )
 
-// outOfStageZeroFamilies 返回该阶段必须归零的字段族——矩阵唯一出处：
-// stage0 仅保留信任名单 + trust_detection（直通/保留检测，无拦截页）；
-// stage1 保留 IP ACL/黑名单/GeoIP/爬虫豁免/拦截页（信任已归属阶段 0）；
-// stage2 仅保留限流 + 拦截页（2026-09-25 用户裁定：页面可配、状态码恒 429）；
-// stage3 保留 WAF + 拦截页。
+// outOfStageZeroFamilies 返回该阶段必须归零的字段族——矩阵唯一出处
+// （四阶段，2026-11-12 用户裁定）：
+//   - stage0 仅保留信任名单 + trust_detection（直通/保留检测，无拦截页）；
+//   - stage1 保留 IP ACL/黑名单/GeoIP/爬虫豁免/拦截页；
+//   - stage2 = CC 防护：保留限流配额 + 人机挑战 + cc_* 阈值 + 拦截页
+//     （状态码恒 429，故状态码归零）；
+//   - stage3 = 内容防护(WAF)：保留 mode/CRS/自定义规则/拦截页，人机/CC/
+//     限流/名单/地域全部归零；
+//   - stage4 为旧编号，按 stage3 处理（读兼容）。
 func outOfStageZeroFamilies(policyType string) []stageZeroFamily {
+	policyType = models.NormalizePolicyType(policyType)
 	switch policyType {
 	case models.PolicyTypeStage0:
-		return []stageZeroFamily{stageZeroModeOff, stageZeroCRSText, stageZeroRateLimit, stageZeroWAFFlags, stageZeroIPACL, stageZeroIPBlacklist, stageZeroGeoIP, stageZeroGeoIPCrawler, stageZeroBlockPageAll}
+		return []stageZeroFamily{stageZeroModeOff, stageZeroCRSText, stageZeroRateLimit, stageZeroWAFFlags, stageZeroIPACL, stageZeroIPBlacklist, stageZeroGeoIP, stageZeroGeoIPCrawler, stageZeroBlockPageAll, stageZeroHuman}
 	case models.PolicyTypeStage1:
-		return []stageZeroFamily{stageZeroModeOff, stageZeroCRSText, stageZeroRateLimit, stageZeroWAFFlags, stageZeroIPWhitelist, stageZeroTrustDetection}
+		return []stageZeroFamily{stageZeroModeOff, stageZeroCRSText, stageZeroRateLimit, stageZeroWAFFlags, stageZeroIPWhitelist, stageZeroTrustDetection, stageZeroHuman}
 	case models.PolicyTypeStage2:
+		// CC 防护：限流配额、突刺/4xx/多UA 阈值、人机挑战与豁免全部保留；
+		// WAF/名单/地域/信任检测归零；状态码恒 429（拦截页保留）。
 		return []stageZeroFamily{stageZeroModeOff, stageZeroCRSText, stageZeroWAFFlags, stageZeroIPACL, stageZeroIPWhitelist, stageZeroIPBlacklist, stageZeroGeoIP, stageZeroGeoIPCrawler, stageZeroBlockStatusCode, stageZeroTrustDetection}
 	case models.PolicyTypeStage3:
-		return []stageZeroFamily{stageZeroIPACL, stageZeroIPWhitelist, stageZeroIPBlacklist, stageZeroGeoIP, stageZeroGeoIPCrawler, stageZeroRateLimit, stageZeroTrustDetection}
+		// 内容防护（WAF）：保留 mode/CRS/自定义规则/拦截页；人机、CC、限流、
+		// 名单、地域、信任检测全部归零。
+		return []stageZeroFamily{stageZeroIPACL, stageZeroIPWhitelist, stageZeroIPBlacklist, stageZeroGeoIP, stageZeroGeoIPCrawler, stageZeroRateLimit, stageZeroTrustDetection, stageZeroHuman}
 	}
 	return nil
 }
@@ -6197,6 +6293,10 @@ func applyStageZerosToCreate(req *models.CreateSecurityPolicyRequest, policyType
 		case stageZeroIPWhitelist:
 			req.IPWhitelistEnabled = &falseVal
 			req.IPWhitelist, req.IPWhitelistRefs = "[]", "[]"
+		case stageZeroHuman:
+			req.HumanVerifyMode, req.HumanVerifyType = "off", "slider"
+			req.HumanVerifyTTL = 30
+			req.HumanExemptPaths = "[]"
 		case stageZeroIPBlacklist:
 			req.IPBlacklist = "[]"
 		case stageZeroGeoIP:
@@ -6238,6 +6338,10 @@ func applyStageZerosToUpdate(req *models.UpdateSecurityPolicyRequest, policyType
 		case stageZeroIPWhitelist:
 			req.IPWhitelistEnabled = new(false)
 			req.IPWhitelist, req.IPWhitelistRefs = new("[]"), new("[]")
+		case stageZeroHuman:
+			req.HumanVerifyMode, req.HumanVerifyType = new("off"), new("slider")
+			req.HumanVerifyTTL = new(30)
+			req.HumanExemptPaths = new("[]")
 		case stageZeroIPBlacklist:
 			req.IPBlacklist = new("[]")
 		case stageZeroGeoIP:
@@ -6291,7 +6395,7 @@ func stageZeroFamilyOwnerStage(f stageZeroFamily) string {
 	case stageZeroIPWhitelist, stageZeroTrustDetection:
 		return "0"
 	}
-	return "3"
+	return "4" // WAF 族（mode/CRS/WAF flags）归属阶段 4
 }
 
 // outOfStageConflictMessage 按「阶段外字段显式生效」矩阵生成 400 文案。
@@ -6636,4 +6740,43 @@ func validatePolicyCrawlerExemption(exempt bool, engines string, geoipMode strin
 		}
 	}
 	return nil
+}
+
+// 人机验证字段写侧归一（默认=关闭/slider/30min；空 JSON→"[]"）。
+func humanModeOrDefault(v string) string {
+	switch v {
+	case "auto", "force":
+		return v
+	default:
+		return "off"
+	}
+}
+
+func humanTypeOrDefault(v string) string {
+	if v == "js" {
+		return "js"
+	}
+	return "slider"
+}
+
+func humanTTLOrDefault(v int) int {
+	if v < 1 || v > 1440 {
+		return 30
+	}
+	return v
+}
+
+func humanJSONOrDefault(v string) string {
+	if v == "" {
+		return "[]"
+	}
+	return v
+}
+
+// ccIntOrDefault CC 阈值默认值（0/负=schema 默认）。
+func ccIntOrDefault(v, def int) int {
+	if v <= 0 {
+		return def
+	}
+	return v
 }

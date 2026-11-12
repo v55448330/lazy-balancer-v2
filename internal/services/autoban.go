@@ -267,6 +267,7 @@ func GetAutobanConfig() (AutobanConfig, error) {
 // 三通道边界单源：本函数与 ValidAutobanDuration/ValidAutobanScope（db 包
 // 不反向依赖，SQL 字面量与迁移 DDL DEFAULT 同款双锚）。
 func ValidateAutobanConfig(cfg AutobanConfig) error {
+
 	if cfg.Threshold < 1 || cfg.Threshold > 10000 {
 		return errors.New("阈值须在 1-10000 之间")
 	}

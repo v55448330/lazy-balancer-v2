@@ -360,7 +360,7 @@ var backupBooleanTableColumns = map[string][]string{
 	"api_keys":              {"is_enabled", "mcp_enabled", "read_only"},
 	"ca_providers":          {"enabled"},
 	"certificate_configs":   {"enabled"},
-	"security_policies":     {"ip_acl_enabled", "ip_whitelist_enabled", "rate_limit_enabled", "enabled", "waf_check_response", "log_request_body", "trust_detection", "geoip_crawler_exempt"},
+	"security_policies":     {"ip_acl_enabled", "ip_whitelist_enabled", "rate_limit_enabled", "enabled", "waf_check_response", "log_request_body", "trust_detection", "geoip_crawler_exempt", "cc_detect_enabled", "cc_session_anomaly"},
 	"security_custom_rules": {"enabled"},
 	// is_builtin（INTEGER DEFAULT 0）为内置页语义布尔列。
 	"security_block_pages":       {"is_default", "is_builtin"},
@@ -527,6 +527,10 @@ var backupTableNullDefaults = map[string]map[string]any{
 		"geoip_countries": "[]", "geoip_mode": "deny", "waf_check_response": int64(0), "policy_type": "", "trust_detection": int64(0),
 		"log_request_body": int64(0), "geoip_crawler_exempt": int64(0), "geoip_crawler_engines": "[]",
 		"ip_acl_list_refs": "[]", "ip_whitelist_refs": "[]",
+		"human_verify_mode": "off", "human_verify_type": db.DefaultHumanVerifyType, "human_verify_ttl": int64(db.DefaultHumanVerifyTTL),
+		"human_exempt_paths": "[]",
+		"cc_detect_enabled":  int64(0), "cc_rps_limit": int64(db.DefaultCCRPSLimit), "cc_rps_window": int64(db.DefaultCCRPSWindow),
+		"cc_4xx_ratio": int64(db.DefaultCC4xxRatio), "cc_session_anomaly": int64(0), "cc_session_ua_threshold": int64(db.DefaultCCSessionUAThreshold),
 	},
 	"security_custom_rules": {
 		"description": "", "conditions": "[]", "condition_logic": "and", "action": "block", "score": int64(5),
@@ -595,10 +599,11 @@ var backupTableNullDefaults = map[string]map[string]any{
 var backupBooleanConfigKeys = []string{
 	"server_tokens_hidden", "access_log_json", "admin_tls_enabled",
 	"sync_global_config", "sync_users", "sync_rules", "sync_waf_files", "sync_security",
-	"sync_switches_migrated", "waf_mode4_migrated", // waf_mode4_migrated 补入
+	"sync_switches_migrated", "waf_mode4_migrated", "policy_stage_merge_v1", // 迁移门列：备份比对按布尔处理
 	"mfa_write_guard", "mfa_lockout_enabled",
 	"trusted_proxy_enabled", "trusted_proxy_strict", // v2.3.x 受信代理
 	"autoban_enabled", "autoban_dry_run", // D2:自动封禁布尔两键——非布尔形态经 v2 类型门整包 400 点名
+	"cc_detect_enabled", "cc_session_anomaly", // CC 检测布尔两键（同 D2 口径）
 	// 自动备份开关为 INTEGER 0/1 语义列，补入配置键枚举。
 	"auto_backup_enabled",
 	// 威胁库/爬虫库任务总闸同为 INTEGER 0/1 语义列——
@@ -3498,9 +3503,9 @@ func validateV2BackupSecurityPoliciesWithQuerier(ctx context.Context, tables map
 				return fmt.Errorf("安全策略 #%d（%s）：policy_type 需为字符串，实际类型 %T", index+1, name, rawType)
 			}
 			switch typeStr {
-			case "", models.PolicyTypeStage0, models.PolicyTypeStage1, models.PolicyTypeStage2, models.PolicyTypeStage3, models.PolicyTypeMixed:
+			case "", models.PolicyTypeStage0, models.PolicyTypeStage1, models.PolicyTypeStage2, models.PolicyTypeStage3, models.PolicyTypeStage4, models.PolicyTypeMixed:
 			default:
-				return fmt.Errorf("安全策略 #%d（%s）：policy_type 需为 stage0/stage1/stage2/stage3/mixed 之一，实际 %q", index+1, name, typeStr)
+				return fmt.Errorf("安全策略 #%d（%s）：policy_type 需为 stage0/stage1/stage2/stage3/stage4/mixed 之一，实际 %q", index+1, name, typeStr)
 			}
 		}
 		// 导入侧限流形状与保存侧 validateRateLimitShape
@@ -3609,7 +3614,7 @@ func validateV2BackupSecurityPoliciesWithQuerier(ctx context.Context, tables map
 				}
 			}
 			if !validIdentity {
-				return fmt.Errorf("拦截页面 #%d（%s）：is_builtin 仅允许系统内置页面 9001/9002 及其库存名称", index+1, name)
+				return fmt.Errorf("拦截页面 #%d（%s）：is_builtin 仅允许系统内置页面 9001/9002/9005 及其库存名称", index+1, name)
 			}
 		}
 	}
@@ -7163,6 +7168,7 @@ func readImportOldAutoBackupEnabled(ctx context.Context, q importRowQuerier) (in
 var configBackupAutobanColumns = []string{
 	"autoban_enabled", "autoban_threshold", "autoban_window_minutes",
 	"autoban_duration", "autoban_scope", "autoban_dry_run",
+	"cc_rps_limit", "cc_rps_window", "cc_4xx_ratio", "cc_session_ua_threshold", "cc_response", "human_secret",
 }
 
 // configCarriesAutobanColumns 报告备份全局配置区是否携带自动封禁六列之一

@@ -113,6 +113,16 @@ const (
 	// 归一（cluster_apply.go）——必须绑定本常量，否则调整默认拦截状态码时
 	// 三者静默分叉。
 	DefaultBlockStatusCode = 403
+	// 阶段 3 人机验证与挑战页 CC 触发的默认值（2026-11-12）：DDL DEFAULT
+	// （newColumns 的 security_policies.* / global_config.*）、v2 备份导入归一
+	// （config_backup.go）与集群 apply 快照归一（cluster_apply.go）三处单源——
+	// 与 DefaultAnomalyThreshold 同族，调整默认值只改这里。
+	DefaultHumanVerifyType      = "slider"
+	DefaultHumanVerifyTTL       = 30
+	DefaultCCRPSLimit           = 40
+	DefaultCCRPSWindow          = 10
+	DefaultCC4xxRatio           = 70
+	DefaultCCSessionUAThreshold = 5
 	// 安全事件保留 / 威胁大屏口径默认值
 	// 此前 90 天 / 100 万行 / 采样 -1 / 模式 'map' 在 DDL（newColumns）、启动
 	// 迁移、读侧 COALESCE、导入归一四处各写一份字面量，改默认值需同步 4+ 处
@@ -836,8 +846,7 @@ func createTables() error {
 	INSERT OR IGNORE INTO security_block_pages (id, name, description, content, is_default, created_at, updated_at)
 		VALUES (1, '默认拦截页面', '系统默认 403 拦截页面',
 			'<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Access Denied</title><style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;min-height:100vh;display:flex;align-items:center;justify-content:center;background:linear-gradient(165deg,#f8fafc 0%,#f1f5f9 45%,#eef2f7 100%);position:relative;overflow:hidden}.blob{position:absolute;border-radius:50%;filter:blur(70px)}.blob-a{width:380px;height:380px;background:rgba(59,130,246,.10);top:-120px;right:-80px}.blob-b{width:320px;height:320px;background:rgba(244,63,94,.08);bottom:-110px;left:-70px}.card{position:relative;background:#fff;border-radius:0;padding:52px 48px 34px;text-align:center;width:min(560px,calc(100vw - 40px));box-shadow:0 1px 2px rgba(16,24,40,.05),0 12px 32px -8px rgba(16,24,40,.12),0 32px 64px -16px rgba(16,24,40,.10)}.card::before{content:"";position:absolute;top:0;left:24px;right:24px;height:3px;border-radius:0;background:linear-gradient(90deg,transparent,#f87171 18%,#ef4444 50%,#f87171 82%,transparent)}.badge{position:relative;width:84px;height:84px;margin:0 auto 20px}.badge-ring{position:absolute;inset:0;border-radius:0;background:linear-gradient(145deg,#fef2f2,#fee2e2);border:1px solid #fecaca;box-shadow:0 4px 12px -2px rgba(239,68,68,.18)}.badge-halo{position:absolute;inset:-12px;border-radius:0;border:1px dashed #fecdd3}.badge svg{position:absolute;inset:0;margin:auto;width:38px;height:38px}.chip{display:inline-flex;align-items:center;gap:7px;font-size:12px;font-weight:600;letter-spacing:.6px;color:#b91c1c;background:#fef2f2;border:1px solid #fecaca;border-radius:0;padding:5px 14px;margin-bottom:16px}.chip::before{content:"";width:6px;height:6px;border-radius:50%;background:#ef4444}h1{font-size:28px;font-weight:700;color:#0f172a;letter-spacing:.2px;margin-bottom:14px}p{font-size:14px;color:#64748b;line-height:1.75;margin-bottom:6px}p strong{color:#334155;font-weight:600}.divider{margin:26px auto 0;padding-top:18px;width:75%;border-top:1px solid #f1f5f9;font-size:12px;color:#94a3b8}.divider .name{font-weight:600;color:#475569}</style></head><body><div class="blob blob-a"></div><div class="blob blob-b"></div><div class="card"><div class="badge"><div class="badge-halo"></div><div class="badge-ring"></div><svg viewBox="0 0 24 24" fill="none" stroke="#dc2626" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5c0 4.4-3 8.4-7 10-4-1.6-7-5.6-7-10V6l7-3z"/><line x1="9.5" y1="9.5" x2="14.5" y2="14.5"/><line x1="14.5" y1="9.5" x2="9.5" y2="14.5"/></svg></div><div class="chip">403 Forbidden</div><h1>Access Denied</h1><p>Your request has been blocked by the <strong>security policy</strong>.</p><p>If you believe this is an error, please contact the administrator.</p><div class="divider">Powered by <span class="name">Lazy Balancer</span></div></div></body></html>',
-			TRUE, datetime('now'), datetime('now'));
-
+			TRUE, datetime('now'), datetime('now')); 
 
 	-- 可复用 IP 地址列表（v2.3.0）：条目为 {value, remark} 对象数组；策略经
 	-- ip_acl_list_refs / ip_whitelist_refs 以 ID 数组引用，生成期展开为
@@ -1177,8 +1186,25 @@ var newColumnsRegistry = map[string]string{
 	"security_policies.policy_type":         "TEXT NOT NULL DEFAULT ''",
 	// 绑定顺序列（2026-11 用户裁定）：每规则内执行序，1..N；0=未排序遗留行
 	// （读路径 (rank ASC, policy_id ASC) 兜底为旧 policy_id 序）。
-	"security_policy_bindings.rank":                   "INTEGER NOT NULL DEFAULT 0",
-	"security_policies.trust_detection":               "BOOLEAN NOT NULL DEFAULT 0",
+	"security_policy_bindings.rank":             "INTEGER NOT NULL DEFAULT 0",
+	"security_policies.trust_detection":         "BOOLEAN NOT NULL DEFAULT 0",
+	"security_policies.human_verify_mode":       "TEXT NOT NULL DEFAULT 'off'",
+	"security_policies.human_verify_type":       "TEXT NOT NULL DEFAULT 'slider'",
+	"security_policies.human_verify_ttl":        "INTEGER NOT NULL DEFAULT 30",
+	"security_policies.human_exempt_paths":      "TEXT NOT NULL DEFAULT '[]'",
+	"security_policies.cc_detect_enabled":       "INTEGER NOT NULL DEFAULT 0",
+	"security_policies.cc_rps_limit":            "INTEGER NOT NULL DEFAULT 40",
+	"security_policies.cc_rps_window":           "INTEGER NOT NULL DEFAULT 10",
+	"security_policies.cc_4xx_ratio":            "INTEGER NOT NULL DEFAULT 70",
+	"security_policies.cc_session_anomaly":      "INTEGER NOT NULL DEFAULT 0",
+	"security_policies.cc_session_ua_threshold": "INTEGER NOT NULL DEFAULT 5",
+	"global_config.cc_detect_enabled":           "INTEGER NOT NULL DEFAULT 0",
+	"global_config.cc_rps_limit":                "INTEGER NOT NULL DEFAULT 40",
+	"global_config.cc_rps_window":               "INTEGER NOT NULL DEFAULT 10",
+	"global_config.cc_4xx_ratio":                "INTEGER NOT NULL DEFAULT 70",
+	"global_config.cc_session_anomaly":          "INTEGER NOT NULL DEFAULT 0",
+
+	"global_config.human_secret":                      "TEXT NOT NULL DEFAULT ''",
 	"security_crs_version.update_status":              "TEXT DEFAULT 'idle'",
 	"security_crs_version.message":                    "TEXT DEFAULT ''",
 	"security_crs_version.last_checked":               "DATETIME",
@@ -1203,7 +1229,9 @@ var newColumnsRegistry = map[string]string{
 	"global_config.threat_auto_update": "INTEGER NOT NULL DEFAULT 1",
 	// 一次性迁移旗标列：迁移函数只读/置位，列创建统一走本登记点
 	// （幂等 ensureNewColumns），不再各自 pragma 探测 + ALTER。
-	"global_config.waf_mode4_migrated":     "BOOLEAN DEFAULT 0",
+	"global_config.waf_mode4_migrated": "BOOLEAN DEFAULT 0",
+	// 阶段合并一次性门（2026-11-12 用户裁定）：人机 stage3 → CC stage2，旧 WAF stage4 → stage3。
+	"global_config.policy_stage_merge_v1":  "BOOLEAN DEFAULT 0",
 	"global_config.sync_switches_migrated": "BOOLEAN DEFAULT 0",
 	// 存量自定义规则清理的一次性指纹 marker（迁移定义版本；''=未跑）。
 	// 该迁移的判据在 JSON 内容里，无法用索引探测，只能整表读+解析——marker
@@ -1460,6 +1488,14 @@ func runMigrations() error {
 	if _, err := DB.Exec("DROP TABLE IF EXISTS config_versions"); err != nil {
 		return fmt.Errorf("failed to drop config_versions: %w", err)
 	}
+	// 阶段合并（一次）：人机 stage3 并入 CC stage2；旧 WAF stage4 重编号为 stage3。
+	if err := migratePolicyStagesV1(); err != nil {
+		return err
+	}
+	_, _ = DB.Exec(`DELETE FROM security_block_pages WHERE id=4 AND is_builtin=1 AND name='Human Verification Page'`)
+	// 自定义挑战页退役（2026-11-12 用户裁定：拦截页已覆盖挑战页场景）：9005
+	// 占位页无任何消费方，内置行一并清理（自定义页不触碰）。
+	_, _ = DB.Exec(`DELETE FROM security_block_pages WHERE id=9005 AND is_builtin=1`)
 	if _, err := dropColumnIfExists("global_config", "access_log_enabled"); err != nil {
 		return err
 	}
@@ -2076,6 +2112,12 @@ func runMigrations() error {
 		{"global_config", "dns_credentials"}, // 全局 DNS 凭证退役列（凭证源=certificate_configs）
 		{"lb_rules", "ip_acl_mode"},
 		{"lb_rules", "ip_acl_list"},
+		// 人机验证豁免 IP 退役（2026-11-12 用户裁定）：IP 级放行唯一入口=阶段 0
+		// 信任名单（命中跳过整条安全链），单列一种"只跳挑战"的放行面只会制造歧义。
+		{"security_policies", "human_exempt_ips"},
+		// 自定义挑战页退役（同上）：挑战页由 lb_human 插件内置渲染，拦截页已覆盖
+		// 页面定制场景；challenge_page_id 无消费方。
+		{"security_policies", "human_challenge_page_id"},
 	}
 	for _, drop := range deadColumnDrops {
 		dropped, err := dropColumnIfExists(drop.table, drop.column)
@@ -5820,5 +5862,134 @@ func migrateRuleTLSModeResidue() error {
 	detail := fmt.Sprintf("存量规则跨模式 TLS 残留已清零：%d 处（按实际变更计数；非 manual 源不保留证书材料、非 acme_dns 源不保留 CA 引用、manual 源不保留 ACME 配置引用）", changed)
 	log.Print(detail)
 	recordSystemAudit("启动迁移", "系统配置", detail)
+	return nil
+}
+
+// migratePolicyStagesV1 阶段合并（2026-11-12 用户裁定，一次性）：
+//
+//	CC 防护 = 阶段 2（配额 + 人机挑战）——旧人机策略(stage3)并入同规则的 CC
+//	策略(stage2)：保留配额，吸收人机模式/方式/有效期/豁免与 cc_* 阈值；
+//	内容防护(WAF) = 阶段 3——旧 stage4 重编号。
+//
+// 同规则同时存在两条策略时：选定最小 id 的 stage2 为目标，逐条人机策略把配置
+// 合并进目标、删除该规则上的人机绑定；若人机策略仍绑定其他规则则保留行并改型
+// 为 stage2（无绑定且已被合并的行删除）。一次性门置位后重跑零改写——否则
+// WAF(stage3) 会被当成人机再次合并。
+func migratePolicyStagesV1() error {
+	if err := ensureNewColumns(map[string]string{"global_config.policy_stage_merge_v1": "BOOLEAN DEFAULT 0"}, nil); err != nil {
+		return err
+	}
+	var done bool
+	if err := DB.QueryRow("SELECT COALESCE(policy_stage_merge_v1,0) FROM global_config WHERE id=1").Scan(&done); err != nil && err != sql.ErrNoRows {
+		return err
+	}
+	if done {
+		return nil
+	}
+	// 合并只在同规则内进行：先把 (rule, target, human) 三元组取全。
+	type rulePair struct {
+		rule   string
+		target int64
+		human  int64
+	}
+	var pairs []rulePair
+	rows, err := DB.Query(`SELECT b2.rule_caddy_id, MIN(b2.policy_id), b3.policy_id
+		FROM security_policy_bindings b2
+		JOIN security_policies p2 ON p2.id=b2.policy_id AND p2.policy_type='stage2'
+		JOIN security_policy_bindings b3 ON b3.rule_caddy_id=b2.rule_caddy_id
+		JOIN security_policies p3 ON p3.id=b3.policy_id AND p3.policy_type='stage3'
+		GROUP BY b2.rule_caddy_id, b3.policy_id
+		ORDER BY b2.rule_caddy_id, b3.policy_id`)
+	if err != nil {
+		return fmt.Errorf("列出阶段合并候选: %w", err)
+	}
+	for rows.Next() {
+		var rp rulePair
+		if err := rows.Scan(&rp.rule, &rp.target, &rp.human); err != nil {
+			rows.Close()
+			return fmt.Errorf("读取阶段合并候选: %w", err)
+		}
+		pairs = append(pairs, rp)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fmt.Errorf("遍历阶段合并候选: %w", err)
+	}
+	rows.Close()
+
+	mergedHumans := map[int64]struct{}{}
+	var changed int64
+	if err := withWriteTx("policy stage merge v1", func(tx *sql.Tx) error {
+		for _, rp := range pairs {
+			// 人机配置快照（以人机行为准：模式/方式/有效期/豁免；cc_* 仅在启用了
+			// CC 检测时覆盖目标的默认阈值）。
+			var humanMode, humanType, humanPaths string
+			var humanTTL int
+			var ccEnabled bool
+			var ccRPS, ccWindow, cc4xx, ccUASession int
+			var ccSessionAnomaly bool
+			if err := tx.QueryRow(`SELECT COALESCE(human_verify_mode,'off'), COALESCE(human_verify_type,'slider'),
+				COALESCE(human_verify_ttl,30), COALESCE(human_exempt_paths,'[]'),
+				COALESCE(cc_detect_enabled,0), COALESCE(cc_rps_limit,40), COALESCE(cc_rps_window,10),
+				COALESCE(cc_4xx_ratio,70), COALESCE(cc_session_anomaly,0), COALESCE(cc_session_ua_threshold,5)
+				FROM security_policies WHERE id=?`, rp.human).
+				Scan(&humanMode, &humanType, &humanTTL, &humanPaths, &ccEnabled, &ccRPS, &ccWindow, &cc4xx, &ccSessionAnomaly, &ccUASession); err != nil {
+				return fmt.Errorf("读取人机策略 %d: %w", rp.human, err)
+			}
+			if _, err := tx.Exec(`UPDATE security_policies SET
+				human_verify_mode=?, human_verify_type=?, human_verify_ttl=?, human_exempt_paths=?,
+				cc_detect_enabled=?, cc_rps_limit=?, cc_rps_window=?, cc_4xx_ratio=?, cc_session_anomaly=?, cc_session_ua_threshold=?
+				WHERE id=?`,
+				humanMode, humanType, humanTTL, humanPaths,
+				ccEnabled, ccRPS, ccWindow, cc4xx, ccSessionAnomaly, ccUASession, rp.target); err != nil {
+				return fmt.Errorf("合并人机策略 %d → %d: %w", rp.human, rp.target, err)
+			}
+			// 该规则上的人机绑定由目标承接（目标 rank 优先；重复绑定忽略）。
+			if _, err := tx.Exec(`DELETE FROM security_policy_bindings WHERE rule_caddy_id=? AND policy_id=?`, rp.rule, rp.human); err != nil {
+				return fmt.Errorf("移除重复绑定 %s/%d: %w", rp.rule, rp.human, err)
+			}
+			mergedHumans[rp.human] = struct{}{}
+			changed++
+		}
+		// 已被合并且不再绑定任何规则的人机行删除（配置已落在目标策略里）。
+		for id := range mergedHumans {
+			var bound int
+			if err := tx.QueryRow(`SELECT COUNT(*) FROM security_policy_bindings WHERE policy_id=?`, id).Scan(&bound); err != nil {
+				return fmt.Errorf("统计人机策略 %d 绑定: %w", id, err)
+			}
+			if bound == 0 {
+				if _, err := tx.Exec(`DELETE FROM security_policies WHERE id=? AND policy_type='stage3'`, id); err != nil {
+					return fmt.Errorf("删除已合并人机策略 %d: %w", id, err)
+				}
+			}
+		}
+		// 剩余人机策略改型为 CC 阶段。
+		res, err := tx.Exec(`UPDATE security_policies SET policy_type='stage2' WHERE policy_type='stage3'`)
+		if err != nil {
+			return fmt.Errorf("人机策略改型为 stage2: %w", err)
+		}
+		if n, _ := res.RowsAffected(); n > 0 {
+			changed += n
+		}
+		// 旧 WAF 阶段重编号。
+		res, err = tx.Exec(`UPDATE security_policies SET policy_type='stage3' WHERE policy_type='stage4'`)
+		if err != nil {
+			return fmt.Errorf("WAF 策略重编号为 stage3: %w", err)
+		}
+		if n, _ := res.RowsAffected(); n > 0 {
+			changed += n
+		}
+		if _, err := tx.Exec(`UPDATE global_config SET policy_stage_merge_v1=1 WHERE id=1`); err != nil {
+			return fmt.Errorf("置位阶段合并门: %w", err)
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	if changed > 0 {
+		detail := fmt.Sprintf("启动迁移：阶段合并（人机并入 CC、WAF 重编号）共改写 %d 条", changed)
+		log.Print(detail)
+		recordSystemAudit("启动迁移", "安全策略", detail)
+	}
 	return nil
 }

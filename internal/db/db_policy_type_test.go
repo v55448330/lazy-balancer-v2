@@ -29,6 +29,8 @@ func TestRunMigrations_policyTypeColumnAndBackfill(t *testing.T) {
 	}
 
 	// Then：列存在且逐行推断落值
+	// 五阶段模型（2026-11-12）：WAF=stage4（人机验证占 stage3）；无特征存量行
+	// 同样归 stage4（InferPolicyType default 分支）。
 	want := map[string]string{
 		"legacy-waf":   "stage3",
 		"legacy-acl":   "stage1",
@@ -59,5 +61,60 @@ func TestRunMigrations_policyTypeColumnAndBackfill(t *testing.T) {
 	}
 	if got != "stage1" {
 		t.Fatalf("explicit policy_type overwritten by re-run: got %q, want stage1", got)
+	}
+}
+
+// 阶段 3 退役面（2026-11-12 用户裁定）：
+//   - human_exempt_ips / human_challenge_page_id 两列不得再存在于 security_policies
+//     （IP 级放行唯一入口=阶段 0 信任名单；挑战页由 lb_human 内置渲染）；
+//   - 内置占位页 9005（自定义挑战页载体）随功能退役，存量内置行由启动清理删除，
+//     自定义页不受影响。
+func TestRunMigrations_retiresHumanExemptIPsAndChallengePage(t *testing.T) {
+	database := openMigrationTestDB(t)
+	if err := createTables(); err != nil {
+		t.Fatalf("create tables: %v", err)
+	}
+	if _, err := database.Exec("INSERT INTO global_config (id,caddy_config) VALUES (1,'{}')"); err != nil {
+		t.Fatalf("seed global config: %v", err)
+	}
+	// 旧库形态：两列存在，且 9005 占位页已播种。
+	for _, col := range []string{"human_exempt_ips", "human_challenge_page_id"} {
+		if _, err := database.Exec("ALTER TABLE security_policies ADD COLUMN " + col + " TEXT NOT NULL DEFAULT ''"); err != nil {
+			t.Fatalf("seed legacy column %s: %v", col, err)
+		}
+	}
+	if _, err := database.Exec(`INSERT INTO security_block_pages (id,name,description,content,is_default,is_builtin) VALUES (9005,'人机验证页面','','',0,1)`); err != nil {
+		t.Fatalf("seed builtin page 9005: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO security_block_pages (id,name,description,content,is_default,is_builtin) VALUES (9100,'自定义页','','',0,0)`); err != nil {
+		t.Fatalf("seed custom page: %v", err)
+	}
+
+	if err := runMigrations(); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	for _, col := range []string{"human_exempt_ips", "human_challenge_page_id"} {
+		var n int
+		if err := database.QueryRow("SELECT COUNT(*) FROM pragma_table_info('security_policies') WHERE name=?", col).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		if n != 0 {
+			t.Fatalf("退役列 %s 仍存在（应按 deadColumnDrops 删除）", col)
+		}
+	}
+	var retained int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM security_block_pages WHERE id IN (9005,9100)`).Scan(&retained); err != nil {
+		t.Fatal(err)
+	}
+	if retained != 1 {
+		t.Fatalf("清理后应只保留自定义页 9100：retained=%d", retained)
+	}
+	var custom int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM security_block_pages WHERE id=9100`).Scan(&custom); err != nil {
+		t.Fatal(err)
+	}
+	if custom != 1 {
+		t.Fatal("自定义页 9100 不得被内置页清理误删")
 	}
 }

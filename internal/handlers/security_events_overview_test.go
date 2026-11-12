@@ -396,7 +396,7 @@ func TestCategorizeAttack_familyMapping(t *testing.T) {
 		{"crawler segment lower bound", "810016", "", "爬虫Bot"},
 		{"crawler segment upper bound", "899999", "", "爬虫Bot"},
 		// 限流：429 精确（与事件列表「限流」族/筛选同源）
-		{"ratelimit 429", "429", "", "限流"},
+		{"ratelimit 429", "429", "", "CC防护"},
 		{"empty input", "", "", "其他"},
 		{"custom rule six-digit id", "123456", "something else", "自定义规则"},
 		// 收敛前语义钉：未列名 3 位前缀的 9xxxxx（CRS 保留段
@@ -997,7 +997,7 @@ func TestListSecurityEvents_triggerTypePopulated(t *testing.T) {
 		"800001":  "地域拦截",
 		"810016":  "爬虫Bot",
 		"850003":  "爬虫Bot",
-		"429":     "限流",
+		"429":     "CC防护",
 		"942100":  "WAF·CRS",
 		"10000":   "WAF·自定义",
 		"1000001": "WAF·自定义",

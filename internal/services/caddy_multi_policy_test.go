@@ -194,7 +194,8 @@ func TestMultiPolicy_RouteComposition_OrderAndHandlerGroups(t *testing.T) {
 	// （耗时双头的剥离走 proxyRequestHeaders 删除清单，与 X-LB-Rule-ID
 	// 同机制，不额外占位。）
 	names := handlerNames(t, mainRoute)
-	if len(names) != 11 || names[0] != "headers" || names[1] != "lb_rule_metrics" || names[2] != "lb_security_blocked_counter" || names[3] != "waf" || names[4] != "lb_security_timing_pre" || names[5] != "request_body" || names[6] != "rate_limit" || names[7] != "waf" || names[8] != "waf" || names[9] != "lb_security_timing_end" {
+	// lb_reqmon（连接详情内存观测）置于 counter 之后、预检之前（索引 3）。
+	if len(names) != 12 || names[0] != "headers" || names[1] != "lb_rule_metrics" || names[2] != "lb_security_blocked_counter" || names[3] != "lb_reqmon" || names[4] != "waf" || names[5] != "lb_security_timing_pre" || names[6] != "request_body" || names[7] != "rate_limit" || names[8] != "waf" || names[9] != "waf" || names[10] != "lb_security_timing_end" {
 		t.Fatalf("main chain=%v, want [headers, lb_rule_metrics, lb_security_blocked_counter, waf(precheck), lb_security_timing_pre, request_body, rate_limit(p2), waf(p2), waf(p3), lb_security_timing_end, reverse_proxy]", names)
 	}
 	if names[len(names)-1] != "reverse_proxy" {
@@ -536,7 +537,8 @@ func TestMultiPolicy_IPPrecheckHandlerPrecedesAllSecurityHandlers(t *testing.T) 
 	// +全部策略 waf(IP 预检的 IP ACL/GeoIP 中断也计入)。
 	// request_body 恒发射,位于 precheck waf 之后、策略 waf 之前。
 	// (v2.3.3 分段计时:waf(precheck) 之后是 lb_security_timing_pre 收点)
-	if names[0] != "headers" || names[1] != "lb_rule_metrics" || names[2] != "lb_security_blocked_counter" || names[3] != "waf" || names[4] != "lb_security_timing_pre" || names[5] != "request_body" || names[6] != "waf" || names[7] != "waf" {
+	// lb_reqmon（连接详情内存观测）置于 counter 之后、预检之前（索引 3）。
+	if names[0] != "headers" || names[1] != "lb_rule_metrics" || names[2] != "lb_security_blocked_counter" || names[3] != "lb_reqmon" || names[4] != "waf" || names[5] != "lb_security_timing_pre" || names[6] != "request_body" || names[7] != "waf" || names[8] != "waf" {
 		t.Fatalf("main chain=%v, want [headers(X-LB-Rule-ID), lb_security_blocked_counter, waf(precheck), lb_security_timing_pre, request_body, waf, waf, ...]", names)
 	}
 	// 注入头值=规则 caddy id 且覆盖客户端伪造
@@ -783,5 +785,49 @@ func TestMultiPolicy_PrecheckTrustDetectionOnly(t *testing.T) {
 	// 信任不再并入 allow intersection(并入会使信任 IP 不触发规则=无检测事件)
 	if got := readRenderedIPList(t, precheck, "u-allow"); strings.Contains(got, "198.51.100.9") {
 		t.Fatalf("trust must NOT be merged into allow intersection (merge = no detection event): %q", got)
+	}
+}
+
+// 阶段 2 · CC 防护的链内固定序（2026-11-12 用户裁定）：先配额（rate_limit，429，
+// 便宜且与是否人类无关）→ 再人机挑战（lb_human）→ 最后阶段 3 内容防护（WAF）。
+// 历史缺陷：human handler 曾插在 rate_limit 之前，与界面「阶段 2 限流→阶段 3
+// 人机」的执行序相反。
+func TestCCStage_chainOrder_quotaThenChallengeThenWAF(t *testing.T) {
+	stubSecurityLibsAvailable(t)
+	_, database := newClusterTestService(t)
+	seedHTTPRuleForGeneration(t, database, "lb_cc1", "cc1.example.test", 8080)
+	policyID := mpGenBindPolicy(t, database, "lb_cc1", "cc-p1", mpGenPolicySpec{
+		mode: "off", enabled: true, rateLimit: true, rps: 100, burst: 50,
+	})
+	// CC 策略 = 阶段 2：配额 + 始终挑战 + 异常触发开关。
+	if _, err := database.Exec(`UPDATE security_policies SET policy_type='stage2',
+		human_verify_mode='force', human_verify_type='slider', human_verify_ttl=30,
+		human_exempt_paths='[]', cc_detect_enabled=1, cc_rps_limit=40, cc_rps_window=10
+		WHERE id=?`, policyID); err != nil {
+		t.Fatalf("mark policy as CC: %v", err)
+	}
+	// 另加一条内容防护策略，验证挑战在 WAF 之前。
+	wafID := mpGenBindPolicy(t, database, "lb_cc1", "cc-p2", mpGenPolicySpec{mode: "blocking", enabled: true})
+	if _, err := database.Exec(`UPDATE security_policies SET policy_type='stage3' WHERE id=?`, wafID); err != nil {
+		t.Fatalf("mark policy as WAF: %v", err)
+	}
+	rule := mpGenHTTPRule("lb_cc1", "cc1.example.test")
+
+	_, mainRoute := mpGenRoutes(t, database, rule)
+	names := handlerNames(t, mainRoute)
+	idx := func(name string) int {
+		for i, n := range names {
+			if n == name {
+				return i
+			}
+		}
+		return -1
+	}
+	rate, human, waf := idx("rate_limit"), idx("lb_human"), idx("waf")
+	if rate < 0 || human < 0 || waf < 0 {
+		t.Fatalf("chain=%v，必须同时含 rate_limit / lb_human / waf", names)
+	}
+	if !(rate < human && human < waf) {
+		t.Fatalf("阶段 2 固定序应为 配额(%d) → 挑战(%d) → 内容防护(%d)，实际 chain=%v", rate, human, waf, names)
 	}
 }

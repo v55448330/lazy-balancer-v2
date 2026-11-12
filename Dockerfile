@@ -37,6 +37,8 @@ COPY caddydeps/ caddydeps/
 COPY wafiplist/ wafiplist/
 COPY geoipnames/ geoipnames/
 COPY caddyl4sec/ caddyl4sec/
+COPY lbreqmon/ lbreqmon/
+COPY lbhuman/ lbhuman/
 # 双缓存挂载（模块+编译缓存）按 builder 持久（lazy-builder GC 48h）：
 # 根治冷缓存全量重编 42 分钟——命中缓存后增量编译只需数分钟。
 # 3 次重试兜底镜像源偶发供应与 sum.golang.org 校验不符的比特
@@ -67,7 +69,9 @@ RUN --mount=type=cache,target=/go/pkg/mod \
       --with lazy-balancer-v2/caddydeps=./caddydeps \
       --with lazy-balancer-v2/wafiplist=./wafiplist \
       --with lazy-balancer-v2/geoipnames=./geoipnames \
-      --with lazy-balancer-v2/caddyl4sec=./caddyl4sec; then \
+      --with lazy-balancer-v2/caddyl4sec=./caddyl4sec \
+      --with lazy-balancer-v2/lbreqmon=./lbreqmon \
+      --with lazy-balancer-v2/lbhuman=./lbhuman; then \
       built=1; break; \
     fi; \
     echo ">>> xcaddy build 第 ${attempt}/3 次失败，10s 后重试" >&2; \
@@ -281,7 +285,7 @@ COPY geoipnames/crawler-ip-lists.seed.json /app/waf.dist/crawler-ip-lists.seed.j
 # 位置约束：ARG/ENV 必须停在上方 CRS/xdb 下载层之后。VERSION 每次发版必变，
 # 提前注入会让 apk 与三条外网下载全部缓存失效（见上方层序说明）——移动前
 # 先确认没有更早的层消费它（当前仅 ENV 自身与运行期二进制消费）。
-ARG VERSION=v2.4.3
+ARG VERSION=v2.4.4
 ENV APP_VERSION=${VERSION}
 
 # 以下各层只随各自产物变化：CRS/xdb 层已在上方固化，不受影响。

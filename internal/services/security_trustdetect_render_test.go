@@ -408,7 +408,7 @@ func TestEngineBehavior_trustDetectOnlyEmitsID12Audit(t *testing.T) {
 
 // TestEngineBehavior_trustDetectAuditRowIngestsAsLoggedID12 审计行 → 事件契约：
 // 真实引擎产出的审计 JSON 经摄取解析（securityEventsParseTransaction）必须
-// 得到 RuleTriggered=12、action=logged、归因头透传（x-lb-rule-id）。
+// 得到 RuleTriggered=12、action=trust（信任记录，2026-11-12 四结果语义）、归因头透传（x-lb-rule-id）。
 func TestEngineBehavior_trustDetectAuditRowIngestsAsLoggedID12(t *testing.T) {
 	directives, err := buildTrustDetectDirectives("lb_td", []string{"203.0.113.9"})
 	if err != nil {
@@ -427,8 +427,8 @@ func TestEngineBehavior_trustDetectAuditRowIngestsAsLoggedID12(t *testing.T) {
 	if perr != nil {
 		t.Fatalf("摄取解析失败: %v\n%s", perr, data)
 	}
-	if rec.RuleTriggered != "12" || rec.Action != "logged" {
-		t.Fatalf("事件=(rule=%s action=%s), want (12,logged)", rec.RuleTriggered, rec.Action)
+	if rec.RuleTriggered != "12" || rec.Action != "trust" {
+		t.Fatalf("事件=(rule=%s action=%s), want (12,trust)", rec.RuleTriggered, rec.Action)
 	}
 	if rec.ClientIP != "203.0.113.9" {
 		t.Fatalf("client_ip=%q, want 203.0.113.9", rec.ClientIP)
@@ -805,8 +805,8 @@ func TestEngineBehavior_overlapIPRouteGateYieldsZeroID12Audit(t *testing.T) {
 	if perr != nil {
 		t.Fatalf("摄取解析失败: %v\n%s", perr, data)
 	}
-	if rec.RuleTriggered != "12" || rec.Action != "logged" {
-		t.Fatalf("事件=(rule=%s action=%s), want (12,logged)", rec.RuleTriggered, rec.Action)
+	if rec.RuleTriggered != "12" || rec.Action != "trust" {
+		t.Fatalf("事件=(rule=%s action=%s), want (12,trust)", rec.RuleTriggered, rec.Action)
 	}
 	if rec.ClientIP != "203.0.113.9" || rec.AttributionRuleID != "lb_tdgate" {
 		t.Fatalf("事件归因=(ip %q rule %q), want (203.0.113.9, lb_tdgate)", rec.ClientIP, rec.AttributionRuleID)

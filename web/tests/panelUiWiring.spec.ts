@@ -229,7 +229,13 @@ test('主列表失败可辨识（错误态 + 横幅重试 + 空态文案切换�
   const rejected = text.indexOf("if (polRes.status === 'rejected')")
   const setErr = text.indexOf('policiesLoadError.value = true', rejected)
   assert.ok(rejected > 0 && setErr > rejected, 'rejected 分支必须置错误态')
-  assert.match(text, /policies\.value = polRes\.value\.data \|\| \[\]\s*\n\s*policiesLoadError\.value = false/)
+  // 成功路径：主列表按严格阶段序落值（stage0→stage4，mixed 垫底），并复位错误态
+  const okPath = text.indexOf('policies.value = (polRes.value.data || [])')
+  assert.ok(okPath > 0, '成功路径必须给主列表赋值')
+  const reset = text.indexOf('policiesLoadError.value = false', okPath)
+  assert.ok(reset > okPath, '成功路径必须复位错误态')
+  assert.match(text.slice(okPath, reset), /stage4: 4/, '阶段序排序必须含阶段 4（五阶段模型）')
+  assert.match(text.slice(okPath, reset), /localeCompare/, '同阶段必须按名称稳定排序')
 })
 
 test('自动封禁口径文案与后端喂入门同口径（WAF·CRS+自定义两族，其余事件显式声明不计数）', () => {

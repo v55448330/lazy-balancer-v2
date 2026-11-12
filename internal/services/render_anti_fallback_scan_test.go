@@ -44,6 +44,14 @@ import (
 // antiFallbackScanTargets 渲染层函数清单（写死兜底禁区），按源文件分组。
 // 批 3 起扫描面扩展到 security.go 渲染函数与 caddy.go 安全渲染消费函数。
 var antiFallbackScanTargets = map[string][]string{
+	// 人机验证（阶段 3，2026-11-12）：策略字段省略型默认值（DB DEFAULT 单源，
+	// 渲染层承担省略替换——与 geoip/rate_limit 同模式），Ruling 见 allowlist。
+	"human_verify.go": {
+		"humanPolicyMerged",
+		"loadCCConfig",
+		"getHumanSecret",
+		"buildHumanHandler",
+	},
 	// TCP 拦截提示（2026-11-06 用户裁定）：无 DB 字段，全局固定文案——
 	// 品牌段取 branding 内存快照，空值回退默认品牌（非「库值被静默替值」
 	// 形态：本函数治理范围外，Ruling 见 antiFallbackAllowlist）。
@@ -106,6 +114,15 @@ var antiFallbackScanTargets = map[string][]string{
 // antiFallbackAllowlist 允许列表：函数名 → 赋值形态 → Ruling。
 // 类型②省略型/范围外字段的现行兜底，逐条披露于批 1+2/批 3 Ruling 报告。
 var antiFallbackAllowlist = map[string]map[string]string{
+	"getHumanSecret": {
+		`return ""`: "cookie 签名密钥缺失（DB 不可达/生成失败）→ 空串，buildHumanHandler 据此跳过 lb_human 渲染（fail-visible，见 services 日志）——Ruling 2026-11-12",
+	},
+	// 人机验证默认值（2026-11-12 用户裁定）：类型②省略型——human_verify_type/
+	// ttl 空值=未配置，DB DEFAULT（slider/30）为单源，渲染层承担省略替换。
+	"humanPolicyMerged": {
+		`typ = "slider"`: "human_verify_type 空=未配置→slider：类型②省略型（DB DEFAULT 单源）——Ruling 2026-11-12",
+		"ttl = 30":       "human_verify_ttl<=0→30 分钟：类型②省略型（DB DEFAULT 单源）——Ruling 2026-11-12",
+	},
 	// TCP 拦截提示品牌回退（2026-11-06 用户裁定）：该功能无 DB 字段——
 	// 文案 = "Connection blocked by " + branding app_name；app_name 空/未
 	// 注入回退默认品牌是产品语义（默认文案形态），不是「库值静默替值」：

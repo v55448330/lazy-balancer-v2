@@ -66,14 +66,8 @@
                 >
                   {{ caddyStatus === 'running' ? (caddyPid !== '0' && caddyPid !== '' ? t('common.app.dashboard.runningPid', { pid: caddyPid }) : t('common.app.dashboard.running')) : caddyStatus === 'stopped' ? t('common.app.dashboard.stopped') : t('common.app.dashboard.unknown') }}
                 </el-tag>
-                <el-button
-                  size="small"
-                  type="primary"
-                  plain
-                  class="conn-entry-btn"
-                  :icon="Connection"
-                  @click="connectionsDialogVisible = true"
-                >{{ t('common.app.dashboard.connEntryBtn') }}</el-button>
+                <!-- 连接详情入口已移至连接统计卡片标题右侧（用户裁定：
+                     状态行按钮位置不合理） -->
                 <!-- 审计项：从节点不执行独立的配置一致性检查（配置由主节点快照
                      下发），此前沿用主节点口径显示「配置正常」= 从未执行过的检查。
                      从节点改为「主节点权威」声明，主节点保持一致性横幅。
@@ -293,6 +287,13 @@
                 <el-icon class="title-icon chart-icon"><DataLine /></el-icon>
                 <span>{{ t('common.app.dashboard.connections') }}</span>
               </div>
+              <el-button
+                size="small"
+                type="primary"
+                plain
+                :icon="Connection"
+                @click="connectionsDialogVisible = true"
+              >{{ t('common.app.dashboard.connDetailBtn') }}</el-button>
             </div>
           </template>
           <el-skeleton v-if="initialLoading" :rows="4" animated class="chart-skeleton" />

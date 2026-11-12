@@ -2640,6 +2640,10 @@ func (h *Handlers) GetSecurityEventFeed(c *gin.Context) {
 func triggerTypeForRule(ruleTriggered string) string {
 	// 预检段家族判定经 services.PrecheckRuleFamilyOf 单一事实源（段界
 	// 字面量禁止复写——段基址调整时 handlers 不得静默分叉）。
+	// 人机挑战/通过/失败属阶段 2（CC 防护）家族：非数字规则 id，单列归类。
+	if strings.HasPrefix(ruleTriggered, "human_") {
+		return "CC防护"
+	}
 	n, err := strconv.Atoi(ruleTriggered)
 	if err != nil {
 		return "其他"

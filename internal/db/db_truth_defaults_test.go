@@ -917,7 +917,12 @@ func TestGovernedDefaultLiteralsBoundInConsumers(t *testing.T) {
 			file:                    "../handlers/config_backup.go",
 			forbidden:               []string{`"anomaly_threshold": int64(5)`, `policy["anomaly_threshold"] = int64(5)`},
 			forbiddenIntConversions: []string{"int64(403)"},
-			required:                []string{"db.DefaultAnomalyThreshold", "db.DefaultBlockStatusCode"},
+			required: []string{
+				"db.DefaultAnomalyThreshold", "db.DefaultBlockStatusCode",
+				"db.DefaultHumanVerifyType", "db.DefaultHumanVerifyTTL",
+				"db.DefaultCCRPSLimit", "db.DefaultCCRPSWindow",
+				"db.DefaultCC4xxRatio", "db.DefaultCCSessionUAThreshold",
+			},
 		},
 		{
 			// 快照策略行归一（apply 写侧与 security 节哈希输入共用）是治理
@@ -925,7 +930,13 @@ func TestGovernedDefaultLiteralsBoundInConsumers(t *testing.T) {
 			// 创建侧默认与从端归一静默分叉。
 			file:                    "../services/cluster_apply.go",
 			forbiddenIntConversions: []string{"int64(5)", "int64(403)"},
-			required:                []string{"db.DefaultAnomalyThreshold", "db.DefaultBlockStatusCode"},
+			required: []string{
+				"db.DefaultAnomalyThreshold", "db.DefaultBlockStatusCode",
+				// 五阶段模型（2026-11-12）：阶段 3 人机验证 / CC 触发的快照归一默认值同族
+				"db.DefaultHumanVerifyType", "db.DefaultHumanVerifyTTL",
+				"db.DefaultCCRPSLimit", "db.DefaultCCRPSWindow",
+				"db.DefaultCC4xxRatio", "db.DefaultCCSessionUAThreshold",
+			},
 		},
 		{
 			// 启动归一 SQL 的 block_status_code 回退值同样绑定常量。

@@ -17,6 +17,7 @@ package handlers
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -28,6 +29,7 @@ import (
 	"strings"
 	"time"
 
+	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/services"
 )
 
@@ -88,6 +90,72 @@ func securityEventsIngestErrorRetryable(err error) bool {
 	return false
 }
 
+// handleIngestHuman 人机验证事件摄入（POST /security-events/ingest-human）：
+// 紧凑 JSON 行（ts/rule_id/client_ip/method/uri/ua/kind），直写 security_events
+// （event_type=human；challenge/fail=blocked、pass=logged）。独立于 coraza 审计
+// tailer——人机事件非 coraza 形态，不经攻击归因管线。
+func (s *SecurityEventsIPCServer) handleIngestHuman(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	type humanEventRow struct {
+		Ts       int64  `json:"ts"`
+		RuleID   string `json:"rule_id"`
+		ClientIP string `json:"client_ip"`
+		Method   string `json:"method"`
+		URI      string `json:"uri"`
+		UA       string `json:"ua"`
+		Kind     string `json:"kind"` // challenge | pass | fail
+	}
+	var rows []humanEventRow
+	if err := json.NewDecoder(r.Body).Decode(&rows); err != nil {
+		http.Error(w, "bad human event batch: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if len(rows) == 0 {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if db.MetricsDB == nil {
+		http.Error(w, "metrics unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	ctx := context.WithoutCancel(r.Context())
+	tx, err := db.MetricsDB.BeginTx(ctx, nil)
+	if err != nil {
+		http.Error(w, "human event tx: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer tx.Rollback()
+	for _, row := range rows {
+		// 结果语义（2026-11-12 用户裁定）：挑战发放/通过/失败都是"挑战"结果——
+		// action=challenged，不计入拦截/检测/攻击面；通过率由 rule id 区分
+		// （human_pass / human_failed），挑战发放数=human_challenge。
+		action := "challenged"
+		rule := "human_challenge"
+		switch row.Kind {
+		case "pass":
+			rule = "human_pass"
+		case "fail":
+			rule = "human_failed"
+		}
+		ts := time.UnixMilli(row.Ts).UTC()
+		if _, err := tx.ExecContext(ctx, `INSERT INTO security_events (event_time, rule_caddy_id, client_ip, method, uri, event_type, rule_triggered, rule_msg, action, rule_name)
+			VALUES (?,?,?,?,?,?,?,?,?,?)`,
+			ts, row.RuleID, row.ClientIP, row.Method, row.URI, "human", rule, "人机验证 "+row.Kind, action, "人机验证"); err != nil {
+			http.Error(w, "human event insert: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		http.Error(w, "human event commit: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // StartSecurityEventsIPCServer 在契约 socket 上启动入库服务端：目录缺失时
 // 创建（0700）、陈旧 socket 清理、socket 权限 0600。返回的 *Server 由调用方
 // 在关停时 Stop（移除 socket 文件）。
@@ -138,11 +206,14 @@ func StartSecurityEventsIPCServer() (*SecurityEventsIPCServer, error) {
 
 // ingestRouter 只接受契约端点（其余 404）：最小暴露面。
 func (s *SecurityEventsIPCServer) ingestRouter(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != services.SecurityEventsIPCIngestPath {
+	switch r.URL.Path {
+	case services.SecurityEventsIPCIngestPath:
+		s.handleIngest(w, r)
+	case services.SecurityEventsIPCIngestHumanPath:
+		s.handleIngestHuman(w, r)
+	default:
 		http.NotFound(w, r)
-		return
 	}
-	s.handleIngest(w, r)
 }
 
 // Stop 关闭服务端并移除 socket 文件（关停预算由调用方给）。

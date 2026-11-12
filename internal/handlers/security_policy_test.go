@@ -585,7 +585,7 @@ func TestGetSecurityPolicy_detailCarriesWAFCheckResponse(t *testing.T) {
 	router := newSecurityRouter(t)
 	id := createTestPolicy(t, router, map[string]any{
 		"name":               "响应体策略",
-		"policy_type":        "stage3",
+		"policy_type":        "stage4",
 		"waf_check_response": true,
 	})
 
@@ -618,7 +618,7 @@ func TestListSecurityPolicies_summaryCarriesWAFCheckResponse(t *testing.T) {
 	router := newSecurityRouter(t)
 	createTestPolicy(t, router, map[string]any{
 		"name":               "汇总响应体策略",
-		"policy_type":        "stage3",
+		"policy_type":        "stage4",
 		"waf_check_response": true,
 	})
 
@@ -855,7 +855,7 @@ func TestListSecurityPolicies_customRulesCountExcludesDisabled(t *testing.T) {
 	}
 }
 
-// 阶段 3 判定口径：摘要必须同时给出「引用条目数」（含禁用）——前端 chips 与
+// 阶段 4 判定口径：摘要必须同时给出「引用条目数」（含禁用）——前端 chips 与
 // 后端 PolicyTypeFeatures.G3 逐字对齐的唯一依据。只给启用计数时，
 // 「mode=off 且引用规则全部禁用」的边界策略在预演里少一条子策略。
 func TestListSecurityPolicies_customRulesRefCountIncludesDisabled(t *testing.T) {
@@ -897,7 +897,7 @@ func TestListSecurityPolicies_customRulesRefCountIncludesDisabled(t *testing.T) 
 	if row.CustomRulesRefCount != 1 {
 		t.Fatalf("custom_rules_ref_count = %d, want 1（引用非空必须披露，含禁用条目）: %s", row.CustomRulesRefCount, recorder.Body.String())
 	}
-	// 与后端 G3 同一门：mode=off + 引用非空 → 阶段 3 成立。
+	// 与后端 G3 同一门：mode=off + 引用非空 → 阶段 4 成立。
 	policy := &models.SecurityPolicy{Mode: row.Mode, CustomRules: []byte(fmt.Sprintf("[%d]", id))}
 	if !models.PolicyTypeFeatures(policy).G3 {
 		t.Fatalf("G3 必须为真（引用非空），摘要 ref_count=%d", row.CustomRulesRefCount)
@@ -1430,5 +1430,112 @@ func TestSecurityPolicy_normalizeBeforeValidateParity(t *testing.T) {
 	})
 	if updateBlank.Code != http.StatusOK {
 		t.Fatalf("update 空白 ip_acl_list status=%d body=%s, want 200（归一先于校验）", updateBlank.Code, updateBlank.Body.String())
+	}
+}
+
+// 阶段 2 CC 防护（2026-11-12）：详情 DTO 必须逐列回传 human_*/cc_*——前端编辑
+// 依赖该响应回填；缺席会让「保存」把存量配置覆写为默认值（静默丢配置）。
+func TestGetSecurityPolicy_returnsHumanVerifyAndCCFields(t *testing.T) {
+	setupSecurityPolicyTestDB(t)
+	useCRSRuleIndexFixture(t)
+	router := newSecurityRouter(t)
+	create := map[string]any{
+		"name": "人机验证策略", "mode": "off", "policy_type": "stage2",
+		"human_verify_mode": "auto", "human_verify_type": "js", "human_verify_ttl": 45,
+		"human_exempt_paths": `["/health/"]`,
+		"cc_detect_enabled":  true, "cc_rps_limit": 55, "cc_rps_window": 15,
+		"cc_4xx_ratio": 65, "cc_session_anomaly": true, "cc_session_ua_threshold": 7,
+	}
+	id := createTestPolicy(t, router, create)
+
+	recorder := getRequest(t, router, fmt.Sprintf("/security/policies/%d", id))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("detail status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var resp struct {
+		Data struct {
+			Policy map[string]json.RawMessage `json:"policy"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("parse detail: %v", err)
+	}
+	strWant := map[string]string{
+		"human_verify_mode":  "auto",
+		"human_verify_type":  "js",
+		"human_exempt_paths": `["/health/"]`,
+	}
+	for field, expected := range strWant {
+		var got string
+		if err := json.Unmarshal(resp.Data.Policy[field], &got); err != nil {
+			t.Fatalf("policy.%s = %s, want string: %v", field, resp.Data.Policy[field], err)
+		}
+		if got != expected {
+			t.Fatalf("policy.%s = %q, want %q", field, got, expected)
+		}
+	}
+	intWant := map[string]int{
+		"human_verify_ttl": 45, "cc_rps_limit": 55,
+		"cc_rps_window": 15, "cc_4xx_ratio": 65, "cc_session_ua_threshold": 7,
+	}
+	for field, expected := range intWant {
+		var got int
+		if err := json.Unmarshal(resp.Data.Policy[field], &got); err != nil {
+			t.Fatalf("policy.%s = %s, want int: %v", field, resp.Data.Policy[field], err)
+		}
+		if got != expected {
+			t.Fatalf("policy.%s = %d, want %d", field, got, expected)
+		}
+	}
+	for field, expected := range map[string]bool{"cc_detect_enabled": true, "cc_session_anomaly": true} {
+		var got bool
+		if err := json.Unmarshal(resp.Data.Policy[field], &got); err != nil {
+			t.Fatalf("policy.%s = %s, want bool: %v", field, resp.Data.Policy[field], err)
+		}
+		if got != expected {
+			t.Fatalf("policy.%s = %v, want %v", field, got, expected)
+		}
+	}
+}
+
+// 阶段外能力归零（五阶段矩阵）：非 stage3 类型必须把人机验证/CC 字段清零，
+// 否则类型切换后旧配置残留在别的阶段里（列表/预览宣称存在但永不发射）。
+func TestUpdateSecurityPolicy_zeroesHumanFieldsOutsideStage3(t *testing.T) {
+	setupSecurityPolicyTestDB(t)
+	useCRSRuleIndexFixture(t)
+	router := newSecurityRouter(t)
+	id := createTestPolicy(t, router, map[string]any{
+		"name": "人机→WAF", "mode": "off", "policy_type": "stage2",
+		"human_verify_mode": "force", "human_exempt_paths": `["/keep/"]`,
+	})
+
+	recorder := putJSON(t, router, fmt.Sprintf("/security/policies/%d", id), map[string]any{
+		"name": "人机→WAF", "mode": "blocking", "policy_type": "stage3",
+		"human_verify_mode": "force",
+	})
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("update status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var mode, paths string
+	var cc bool
+	if err := db.DB.QueryRow(`SELECT COALESCE(human_verify_mode,''), COALESCE(human_exempt_paths,''), COALESCE(cc_detect_enabled,0) FROM security_policies WHERE id=?`, id).Scan(&mode, &paths, &cc); err != nil {
+		t.Fatal(err)
+	}
+	if mode != "off" || paths != "[]" || cc {
+		t.Fatalf("stage3(WAF) 残留人机字段：mode=%q paths=%q cc=%v（应 off/[]/false）", mode, paths, cc)
+	}
+
+	// 双向：从 stage4 切回 stage3 后人机字段可正常写入
+	recorder = putJSON(t, router, fmt.Sprintf("/security/policies/%d", id), map[string]any{
+		"name": "人机→WAF", "mode": "off", "policy_type": "stage2", "human_verify_mode": "auto",
+	})
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("update back status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if err := db.DB.QueryRow(`SELECT COALESCE(human_verify_mode,'') FROM security_policies WHERE id=?`, id).Scan(&mode); err != nil {
+		t.Fatal(err)
+	}
+	if mode != "auto" {
+		t.Fatalf("切回 stage2(CC) 后人机模式=%q，应 auto", mode)
 	}
 }

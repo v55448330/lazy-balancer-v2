@@ -934,7 +934,7 @@ func TestThreatScreenRollup_fixationIdempotentAndEquivalent(t *testing.T) {
 
 func TestTriggerTypeForRule_fullTaxonomy(t *testing.T) {
 	cases := map[string]string{
-		"429":     "限流",
+		"429":     "CC防护",
 		"2":       "IP 访问控制",
 		"3":       "信任名单",
 		"4":       "IP 访问控制",

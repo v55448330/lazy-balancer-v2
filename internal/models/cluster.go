@@ -382,7 +382,10 @@ type ClusterBasicSettings struct {
 	// 必须由主节点经快照下发，否则从端永远停留在默认视觉。指针+omitempty
 	// 用于旧主端快照缺席时保留从端本地值；apply 侧按 models 枚举归一
 	// （非法值回默认，与写侧 400 白名单同源）。
-	ThreatScreenMode           *string `json:"threat_screen_mode,omitempty"`
+	ThreatScreenMode *string `json:"threat_screen_mode,omitempty"`
+	// HumanSecret 人机验证 cookie 签名密钥（随 users 节同步）：多节点必须共用，
+	// 否则 A 节点签发的凭证在 B 节点恒不通过 → 用户反复被挑战。
+	HumanSecret                *string `json:"human_secret,omitempty"`
 	JWTExpireMinutes           *int    `json:"jwt_expire_minutes,omitempty"`
 	Timezone                   *string `json:"timezone,omitempty"`
 	ACMEEmail                  *string `json:"acme_email,omitempty"`

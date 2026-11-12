@@ -87,13 +87,14 @@ var mcpUncoveredRoutes = map[string]string{
 	"POST /api/v1/security/policies/:id/split":         "UI 批量便利端点：混合策略一键拆分迁移（复合操作）；原语已被 create_security_policy / set_rule_security_policies / delete_security_policy 覆盖，Agent 可逐步完成同等迁移",
 	// —— OIDC 认证集成(v2.3.0):浏览器跳转/回调链路,Agent 无消费场景;
 	// 配置管理属低频管理面板操作(测试连接为发现探测,面板专用) ——
-	"GET /api/v1/auth/oidc/status":    "登录页按钮显隐(浏览器会话探测),无 Agent 场景",
-	"GET /api/v1/auth/oidc/login":     "浏览器 302 跳转 IdP 授权页(交互式登录链路)",
-	"GET /api/v1/auth/oidc/callback":  "IdP 授权码回调(浏览器重定向链路)",
-	"GET /api/v1/settings/oidc":       "OIDC 配置管理(低频管理面板操作)",
-	"PUT /api/v1/settings/oidc":       "OIDC 配置管理(低频管理面板操作)",
-	"POST /api/v1/settings/oidc/test": "OIDC 发现探测(配置向导专用,面板交互)",
-	"DELETE /api/v1/settings/oidc":    "OIDC 配置管理(低频管理面板操作)",
+	"GET /api/v1/security/human/stats": "总览卡人机验证统计（挑战发放/通过/失败/封禁计数）：admin 代理的瞬时遥测计数，无持久化语义、无写操作；Agent 判断拦截效果时消费 get_security_overview（WAF/事件口径）即可",
+	"GET /api/v1/auth/oidc/status":     "登录页按钮显隐(浏览器会话探测),无 Agent 场景",
+	"GET /api/v1/auth/oidc/login":      "浏览器 302 跳转 IdP 授权页(交互式登录链路)",
+	"GET /api/v1/auth/oidc/callback":   "IdP 授权码回调(浏览器重定向链路)",
+	"GET /api/v1/settings/oidc":        "OIDC 配置管理(低频管理面板操作)",
+	"PUT /api/v1/settings/oidc":        "OIDC 配置管理(低频管理面板操作)",
+	"POST /api/v1/settings/oidc/test":  "OIDC 发现探测(配置向导专用,面板交互)",
+	"DELETE /api/v1/settings/oidc":     "OIDC 配置管理(低频管理面板操作)",
 	// —— 自动备份(v2.3.x):备份/还原链路为低频管理面板操作,且备份文件含
 	//    私钥与凭证明文(下载为二进制流,MCP 通道不支持);还原覆盖全量配置,
 	//    面板有二次确认交互 ——

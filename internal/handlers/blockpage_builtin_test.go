@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -270,4 +271,59 @@ func countBlockPages(t *testing.T) int {
 		t.Fatalf("count block pages: %v", err)
 	}
 	return n
+}
+
+// 内置页文案语言口径（2026-11-12 用户裁定）：内置拦截页内容面向终端访客，
+// 一律英文（与 default/ratelimit/maintenance 三页一致）；曾有 human 变体混用
+// 中文副标题（「请完成人机验证后继续访问」），英文站点出现中文残留。
+func TestBuiltinBlockPageSpecs_areEnglishOnly(t *testing.T) {
+	cjk := regexp.MustCompile(`[\p{Han}]`)
+	for variant, spec := range blockPageSpecs {
+		for field, text := range map[string]string{
+			"chip": spec.chip, "title": spec.title, "line1": spec.line1, "line2": spec.line2,
+		} {
+			if cjk.MatchString(text) {
+				t.Fatalf("内置页 %s 的 %s 含中文（终端访客页面必须英文）：%q", variant, field, text)
+			}
+		}
+		html := renderBuiltinBlockPage(blockPageSpecsDefaultConfig(), variant)
+		if cjk.MatchString(html) {
+			t.Fatalf("内置页 %s 渲染结果含中文：%s", variant, firstHanLine(html, cjk))
+		}
+		if !strings.Contains(html, `<html lang="en">`) {
+			t.Fatalf("内置页 %s 文档语言必须为 en（英文内容配 lang=zh-CN 会误导读屏与翻译器）", variant)
+		}
+	}
+}
+
+// 内置页身份名与库内播种同口径（2026-11-12）：三页统一中文库存名——名称/描述
+// 的多语言由前端按 id 翻译，库里保留身份判据（播种/自愈按库存名归位）。
+func TestBuiltinBlockPageIdentities_useChineseStockNames(t *testing.T) {
+	cjk := regexp.MustCompile(`[\p{Han}]`)
+	if len(builtinBlockPageIdentities) < 3 {
+		t.Fatalf("内置页身份清单数量异常: %d", len(builtinBlockPageIdentities))
+	}
+	for _, bp := range builtinBlockPageIdentities {
+		if !cjk.MatchString(bp.name) || !cjk.MatchString(bp.desc) {
+			t.Fatalf("内置页 %d 的名称/描述必须与 9001/9002 同族（中文库存名）：name=%q desc=%q", bp.id, bp.name, bp.desc)
+		}
+	}
+}
+
+// firstHanLine 返回首个含中文的行（失败信息可读性）。
+func firstHanLine(s string, cjk *regexp.Regexp) string {
+	for _, line := range strings.Split(s, "\n") {
+		if cjk.MatchString(line) {
+			return strings.TrimSpace(line)
+		}
+	}
+	return s
+}
+
+// blockPageSpecsDefaultConfig 渲染内置页所需的最小品牌配置（与播种默认一致）。
+func blockPageSpecsDefaultConfig() brandingConfig {
+	return brandingConfig{
+		AppName:    "Lazy Balancer",
+		FooterText: "Powered by Lazy Balancer · Copyright 2026 XiaoBao",
+	}
 }

@@ -245,9 +245,9 @@ func TestThreatTopTargets_ghostRulesDoNotCrowdOutExisting(t *testing.T) {
 // LIKE '429___'，永不命中。
 func TestRuleTriggeredFilterSQL_rateLimitFamilyExact(t *testing.T) {
 	var args []any
-	cond := ruleTriggeredFilterSQL("限流", &args)
+	cond := ruleTriggeredFilterSQL("CC防护", &args)
 	if len(args) != 1 || args[0] != "429" {
-		t.Fatalf("args=%v, want [429]（限流族=429 精确匹配）", args)
+		t.Fatalf("args=%v, want [429]（CC 防护族=429 精确匹配）", args)
 	}
 	if cond != "(rule_triggered = ?)" {
 		t.Fatalf("cond=%q, want 精确匹配条件", cond)

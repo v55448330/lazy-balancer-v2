@@ -325,10 +325,14 @@ func fieldToColumn(field string) string {
 	field = strings.ReplaceAll(field, "CIDR", "Cidr")
 	field = strings.ReplaceAll(field, "CRS", "Crs")
 	field = strings.ReplaceAll(field, "RPS", "Rps")
+	field = strings.ReplaceAll(field, "TTL", "Ttl")
+	field = strings.ReplaceAll(field, "CC", "Cc")
+	field = strings.ReplaceAll(field, "Cc4xx", "Cc_4xx") // 数字段边界（cc_4xx_ratio）
 	field = strings.ReplaceAll(field, "ACL", "Acl")
 	field = strings.ReplaceAll(field, "WAF", "Waf")
 	field = strings.ReplaceAll(field, "ID", "Id")
 	field = strings.ReplaceAll(field, "IP", "Ip")
+	field = strings.ReplaceAll(field, "UA", "Ua")
 	var b strings.Builder
 	for i, r := range field {
 		if r >= 'A' && r <= 'Z' {

@@ -2,40 +2,40 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { code, cssDeclarations, member, openTags, section } from './_helpers.ts'
 
-// 安全总览状态条重设计（用户裁定）：活跃策略退役，三 KPI（拦截/检测/正常请求）
-// 等分栅格 + 每列四行同构（标签/今日/昨日/协议拆分），契约字段防御式消费，
+// 安全总览状态条重设计（用户裁定）：活跃策略退役，四 KPI（拦截/检测/正常请求/
+// 人机验证）等分栅格 + 每列同构（标签/今日/昨日/协议拆分），契约字段防御式消费，
 // 趋势与攻击类型分布同行等高。源码钉 spec：断言落在剥注释视图上。
 
-/** 状态条防护区（status-guard）按竖分隔线切成三列切片。 */
-const guardCols = (): [string, string, string] => {
+/** 状态条防护区（status-guard）按竖分隔线切成四列切片。 */
+const guardCols = (): [string, string, string, string] => {
   const guard = section(code('src/views/security/SecurityOverview.vue'), '<div class="status-guard">', '<div class="status-lib">')
   const cols = guard.split('<div class="strip-divider"></div>')
-  assert.equal(cols.length, 3, `前置：防护区必须恰好三列（两条竖分隔线），实际 ${cols.length}`)
-  return cols as [string, string, string]
+  assert.equal(cols.length, 4, `前置：防护区必须恰好四列（三条竖分隔线），实际 ${cols.length}`)
+  return cols as [string, string, string, string]
 }
 
-test('三 KPI 等分栅格：拦截/检测/正常请求 同构三列，活跃策略退役', () => {
+test('四 KPI 等分栅格：拦截/检测/正常请求/人机验证 同构四列，活跃策略退役', () => {
   const page = code('src/views/security/SecurityOverview.vue')
   const guard = section(page, '<div class="status-guard">', '<div class="status-lib">')
   assert.equal(
     openTags(guard, 'div').filter((t) => t.includes('class="guard-item"')).length,
-    3,
-    '必须恰好三个 guard-item 列',
+    4,
+    '必须恰好四个 guard-item 列',
   )
-  assert.equal(guard.split('<div class="strip-divider"></div>').length - 1, 2, '列间必须两条竖分隔线')
+  assert.equal(guard.split('<div class="strip-divider"></div>').length - 1, 3, '列间必须三条竖分隔线')
   assert.doesNotMatch(page, /活跃策略/, '活跃策略指标必须退役')
   assert.doesNotMatch(guard, /active_policies/, '防护区不得再渲染 active_policies')
   // 等分与分隔形态（flex 等宽栅格，不引新组件）
   const item = cssDeclarations(page, '.guard-item')
-  assert.equal(item.get('flex'), '1 1 0', '三列必须 flex:1 1 0 等宽')
+  assert.equal(item.get('flex'), '1 1 0', '四列必须 flex:1 1 0 等宽')
   assert.equal(item.get('flex-direction'), 'column', '列内四行纵向排布')
   const divider = cssDeclarations(page, '.strip-divider')
   assert.equal(divider.get('width'), '1px', '竖分隔线宽 1px')
 })
 
-test('每列四行同构：标签 / 今日主数值 / 昨日对比 / 协议拆分', () => {
+test('每列同构：标签 / 今日主数值 / 昨日对比 / 协议拆分 / 通过率', () => {
   const page = code('src/views/security/SecurityOverview.vue')
-  const [blocked, detected, normal] = guardCols()
+  const [blocked, detected, human, normal] = guardCols()
   const card = section(page, '<el-card shadow="always" class="overview-card status-strip-card">', '<div class="status-strip">')
   assert.match(card, /<template #header>/, '状态条卡必须有卡头（与其他卡片一致）')
   assert.match(card, /class="title-icon"><Stopwatch \/><\/el-icon>/, '卡头图标 Stopwatch')
@@ -86,6 +86,16 @@ test('每列四行同构：标签 / 今日主数值 / 昨日对比 / 协议拆�
   assert.equal(label.get('font-weight'), '600')
   assert.doesNotMatch(page, /strip-label-dot/, '色点样式已整体移除')
   assert.equal(cssDeclarations(page, '.strip-sub-label').get('font-weight'), '700')
+  // 列 4 挑战（阶段 2 · CC 防护）：今日 challenge 发放数为主数值（is-info），
+  // 副行=通过率（今日事件 passes/(passes+fails)，无样本显性 —）
+  assert.match(human, /class="strip-label">\{\{ t\('app\.security\.overview\.status\.challenged'\) \}\}/)
+  assert.match(human, /class="strip-value is-info">\{\{ fmtStatNum\(overview\.today_challenged\) \}\}/)
+  assert.match(human, /class="strip-sub"><span class="strip-sub-label">\{\{ t\('app\.security\.overview\.status\.humanPassRate'\) \}\}<\/span> \{\{ humanPassRate \}\}/)
+  const rate = section(page, 'const humanPassRate = computed(', 'const fetchHumanStats')
+  assert.match(rate, /today_human_pass/, '通过率优先使用今日事件口径（与挑战发放同源可对账）')
+  assert.match(rate, /'—'/, '零样本必须显性给出 —，不得 0% 或 NaN%')
+  assert.match(page, /request\.get<APIResponse<\{ challenges: number; passes: number; fails: number; bans: number \}>>\('\/security\/human\/stats'/, '人机统计走独立端点（兜底）')
+  assert.equal(cssDeclarations(page, '.strip-value.is-info').get('color'), '#409eff')
 })
 
 test('防御式消费：契约字段缺失（旧后端）对应行隐藏', () => {

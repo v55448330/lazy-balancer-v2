@@ -133,6 +133,8 @@
         <el-select v-model="filters.action" :placeholder="t('app.security.events.filterAction')" clearable style="width: 90px">
           <el-option :label="t('app.security.events.actionBlocked')" value="blocked" />
           <el-option :label="t('app.security.events.actionLogged')" value="logged" />
+          <el-option :label="t('app.security.events.actionTrust')" value="trust" />
+          <el-option :label="t('app.security.events.actionChallenged')" value="challenged" />
         </el-select>
         <!-- 协议类型筛选：TCP（L4 断连事件）/HTTP（waf 口径，含带外 NULL 归并）；
              值原样透传 event_type 查询参数（后端精确匹配） -->
@@ -216,7 +218,7 @@
             <!-- 触发阶段展示：信任名单 / IP 访问控制（黑白名单+地域+威胁库，点击看触发详情）/
                  WAF（CRS=详情+快捷排除弹框；自定义=规则详情弹框）/ 请求体异常（纯文本） -->
             <AccessibleLink v-if="stageCategory(row as SecurityEvent) === 'waf'" type="primary" @click="openTriggerDetail(row as SecurityEvent)">WAF</AccessibleLink>
-            <AccessibleLink v-else-if="['acl', 'crawler', 'trust'].includes(stageCategory(row as SecurityEvent))" type="primary" @click="openTriggerDetail(row as SecurityEvent)">{{ stageLabel(row as SecurityEvent) }}</AccessibleLink>
+            <AccessibleLink v-else-if="['acl', 'crawler', 'trust', 'human'].includes(stageCategory(row as SecurityEvent))" type="primary" @click="openTriggerDetail(row as SecurityEvent)">{{ stageLabel(row as SecurityEvent) }}</AccessibleLink>
             <el-tooltip v-else-if="showTriggeredMsg(row as SecurityEvent)" :content="row.rule_msg" placement="top" :show-after="200" :trigger="['hover', 'focus']">
               <span class="cell-tip" tabindex="0" :aria-label="row.rule_msg">{{ stageLabel(row as SecurityEvent) }}</span>
             </el-tooltip>
@@ -292,7 +294,7 @@
     <TriggerDetailDialog v-model="triggerDetailVisible" :row="triggerDetailRow" />
 
     <!-- 自动封禁配置弹框：六项配置+口径/窗口变更重置提示-->
-    <el-dialog v-model="autobanDialogVisible" width="min(600px, 94vw)" top="8vh" append-to-body class="dialog-body-inset" :close-on-click-modal="false" :close-on-press-escape="!autobanSaving" :show-close="!autobanSaving">
+    <el-dialog v-model="autobanDialogVisible" width="min(680px, 94vw)" top="6vh" append-to-body class="dialog-body-inset" :close-on-click-modal="false" :close-on-press-escape="!autobanSaving" :show-close="!autobanSaving">
       <template #header>
         <!-- 喂入门=阶段门（WAF·CRS 与 WAF·自定义两族命中计数）+爬虫豁免排除。
              IP 访问控制/地域/威胁情报/请求体异常等事件不进入计数（10-30 裁定
@@ -300,6 +302,8 @@
              用户按文案校准阈值必须与真实喂入一致，否则阈值永不达标且无告警 -->
         <DialogHeader :icon="Lock" :title="t('app.security.events.dialogTitle')" :subtitle="t('app.security.events.dialogSubtitle')" />
       </template>
+      <div class="autoban-section-title">{{ t('app.security.events.sectionBanTitle') }}</div>
+      <div class="autoban-section-desc">{{ t('app.security.events.sectionBanDesc') }}</div>
       <el-form :model="autobanForm" :label-width="$flw('96px')" label-position="right" :disabled="autobanSaving">
         <el-form-item :label="t('app.security.events.dryRunLabel')">
           <el-switch v-model="autobanForm.dry_run" />
@@ -326,6 +330,8 @@
           <div class="form-tip-line">{{ t('app.security.events.durationHint') }}</div>
         </el-form-item>
       </el-form>
+      <!-- CC 检测规则（阶段 3 人机验证触发源，2026-11-12 用户裁定：
+           检测与响应统一在自动封禁配置；策略只配模式/方式/豁免） -->
       <div class="info-note-bar"><span class="info-note-desc">{{ t('app.security.events.counterResetNotice') }}</span></div>
       <template #footer>
         <el-button :disabled="autobanSaving" @click="autobanDialogVisible = false">{{ t('app.security.events.cancel') }}</el-button>
@@ -461,6 +467,8 @@ interface SecurityEvent { id: number; event_time: string; rule_caddy_id: string;
 interface AutobanSuggestion { ip: string; count: number; ip_location?: string; window_start?: string; last_seen?: string }
 interface AutobanStatus {
   enabled: boolean; dry_run: boolean; threshold: number; window_minutes: number
+  cc_detect_enabled?: boolean; cc_rps_limit?: number; cc_rps_window?: number
+  cc_4xx_ratio?: number; cc_session_anomaly?: boolean; cc_session_ua_threshold?: number; cc_response?: string
   duration: string; scope: string; banned_today: number; list_entries: number
   // 黄条判据 = 封禁是否真正生效（名单非空 ∧ 被启用+IP ACL 启用+deny 的
   // 策略在 ip_acl_list_refs 引用）。后端 list_referenced 为热路径资格门的四面
@@ -714,7 +722,7 @@ const ctxWafFamily = computed(() => isWafDurationFamily(triggerStageFamily(ctxEv
 // 阶段列展示词与筛选类别/触发类型列同源（crawler 族统一为后端权威词
 // CRAWLER_FAMILY_LABEL「爬虫Bot」——原此处渲染「爬虫校验」，同页三称谓并存）。
 // 点击进入同一触发详情弹框。
-const stageCategory = (row: SecurityEvent): 'trust' | 'acl' | 'crawler' | 'waf' | 'body' | 'other' => {
+const stageCategory = (row: SecurityEvent): 'trust' | 'acl' | 'crawler' | 'waf' | 'body' | 'human' | 'other' => {
   const trig = row.rule_triggered
   if (!trig) return 'other'
   switch (triggerStageFamily(trig)) {
@@ -723,6 +731,7 @@ const stageCategory = (row: SecurityEvent): 'trust' | 'acl' | 'crawler' | 'waf' 
     case 'ipAcl': case 'geoip': case 'threat': return 'acl'
     case 'wafCrs': case 'wafCustom': return 'waf'
     case 'body': return 'body'
+    case 'human': return 'human'
     default: return 'other'
   }
 }
@@ -735,6 +744,7 @@ const TRIGGER_TYPE_KEYS: Record<string, string> = {
   '信任名单': 'trustList',
   '爬虫豁免': 'crawlerExempt',
   '手动黑名单': 'manualBlacklist',
+  'CC防护': 'ccProtection',
 }
 const triggerTypeLabel = (raw?: string): string => {
   if (!raw) return '—'
@@ -753,6 +763,7 @@ const stageLabel = (row: SecurityEvent): string => {
     case 'acl': return t('app.security.events.ipAcl')
     case 'waf': return 'WAF'
     case 'body': return t('app.security.events.bodyAnomaly')
+    case 'human': return t('app.security.events.stageHuman')
     default: return row.rule_triggered || '—'
   }
 }
@@ -1015,6 +1026,9 @@ const refreshPage = (): void => {
 </script>
 
 <style scoped>
+.autoban-section-title { font-size: 14px; font-weight: 600; color: var(--text-primary); margin: 4px 0 4px; }
+.autoban-section-cc { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--el-border-color-lighter); }
+.autoban-section-desc { font-size: 12px; color: var(--text-secondary); line-height: 1.5; margin-bottom: 12px; }
 /* 自动封禁状态卡——*/
 .autoban-card { margin-bottom: 16px; }
 .autoban-bar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }

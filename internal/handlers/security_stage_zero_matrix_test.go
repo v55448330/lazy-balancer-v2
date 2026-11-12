@@ -29,6 +29,16 @@ var stageZeroMatrixFields = []string{
 	"rate_limit_burst",
 	"waf_check_response",
 	"log_request_body",
+	"human_verify_mode",
+	"human_verify_type",
+	"human_verify_ttl",
+	"human_exempt_paths",
+	"cc_detect_enabled",
+	"cc_rps_limit",
+	"cc_rps_window",
+	"cc_4xx_ratio",
+	"cc_session_anomaly",
+	"cc_session_ua_threshold",
 	"ip_acl_enabled",
 	"ip_acl_list",
 	"ip_acl_list_refs",
@@ -162,7 +172,7 @@ func stageZeroManagedFields(tt reflect.Type) []reflect.StructField {
 func TestStageZeroMatrix_createUpdateParity(t *testing.T) {
 	stages := []string{
 		models.PolicyTypeStage0, models.PolicyTypeStage1,
-		models.PolicyTypeStage2, models.PolicyTypeStage3,
+		models.PolicyTypeStage2, models.PolicyTypeStage4,
 	}
 	for _, stage := range stages {
 		t.Run(stage, func(t *testing.T) {
@@ -205,7 +215,7 @@ func TestStageZeroMatrix_createUpdateParity(t *testing.T) {
 func TestStageZeroMatrix_zeroPointersAreDistinct(t *testing.T) {
 	stages := []string{
 		models.PolicyTypeStage0, models.PolicyTypeStage1,
-		models.PolicyTypeStage2, models.PolicyTypeStage3,
+		models.PolicyTypeStage2, models.PolicyTypeStage4,
 	}
 	for _, stage := range stages {
 		t.Run(stage, func(t *testing.T) {
@@ -222,7 +232,13 @@ func TestStageZeroMatrix_zeroPointersAreDistinct(t *testing.T) {
 				if ptr == nil {
 					continue
 				}
-				addr := reflect.ValueOf(ptr).Pointer()
+				rv := reflect.ValueOf(ptr)
+				// typed-nil（*string(nil) 装进 any 后 != nil）：反射层再判——
+				// 否则未污染/未归零的指针字段 Pointer()=0 撞地址产生假阳性。
+				if rv.Kind() == reflect.Ptr && rv.IsNil() {
+					continue
+				}
+				addr := rv.Pointer()
 				if prev, dup := seen[addr]; dup {
 					t.Fatalf("%s 与 %s 共享同一指针地址（归零矩阵别名，写入会互相覆盖）", name, prev)
 				}
@@ -249,9 +265,9 @@ func TestStageZeroMatrix_keepsInStageFields(t *testing.T) {
 		{models.PolicyTypeStage2, "block_page_id", false},
 		{models.PolicyTypeStage2, "block_status_code", true},
 		{models.PolicyTypeStage2, "geoip_crawler_engines", true},
-		{models.PolicyTypeStage3, "crs_rule_groups", false},
-		{models.PolicyTypeStage3, "rate_limit_rps", true},
-		{models.PolicyTypeStage3, "ip_acl_enabled", true},
+		{models.PolicyTypeStage4, "crs_rule_groups", false},
+		{models.PolicyTypeStage4, "rate_limit_rps", true},
+		{models.PolicyTypeStage4, "ip_acl_enabled", true},
 	}
 	for _, tc := range cases {
 		createReq := pollutedCreateRequest()

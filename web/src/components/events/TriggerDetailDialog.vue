@@ -84,6 +84,16 @@
           <div class="info-note-bar"><span class="info-note-desc">{{ t('common.app.views.trigDetail.crawlerVerifyNote') }}</span></div>
         </template>
 
+        <!-- 阶段 2 · CC 防护（人机挑战）：本次结果 + 策略配置（只读） -->
+        <template v-else-if="kind === 'human'">
+          <div class="trg-kv"><span class="k">{{ t('common.app.views.trigDetail.ccResult') }}</span><span>{{ ccResultText }}</span></div>
+          <div class="trg-kv"><span class="k">{{ t('common.app.views.trigDetail.ccMode') }}</span><span>{{ ccModeText }}</span></div>
+          <div class="trg-kv"><span class="k">{{ t('common.app.views.trigDetail.ccType') }}</span><span>{{ ccTypeText }}</span></div>
+          <div class="trg-kv"><span class="k">{{ t('common.app.views.trigDetail.ccTtl') }}</span><span>{{ policy?.human_verify_ttl ? t('common.app.views.trigDetail.ccTtlValue', { ttl: policy.human_verify_ttl }) : '—' }}</span></div>
+          <div v-if="policy?.cc_detect_enabled" class="trg-kv"><span class="k">{{ t('common.app.views.trigDetail.ccSpike') }}</span><span>{{ t('common.app.views.trigDetail.ccSpikeValue', { n: policy.cc_rps_limit ?? 0, sec: policy.cc_rps_window ?? 0 }) }}</span></div>
+          <div class="info-note-bar"><span class="info-note-desc">{{ t('common.app.views.trigDetail.ccNote') }}</span></div>
+        </template>
+
         <!-- 信任名单：直通/保留检测语义说明 -->
         <template v-else-if="kind === 'trust'">
           <div class="trg-kv"><span class="k">{{ t('common.app.views.trigDetail.hitListName') }}</span><span>{{ trustHitListsText || t('common.app.views.trigDetail.trustInlineFallback') }}</span></div>
@@ -216,7 +226,7 @@ const emit = defineEmits<{ (e: 'update:modelValue', v: boolean): void }>()
 // 词条键 common.app.views.trigDetail.*（母本由批次 D 集成落 locales views.ts）
 const { t } = useI18n()
 
-type Kind = 'acl' | 'geo' | 'crawler' | 'threat' | 'trust' | 'waf-crs' | 'waf-custom' | 'body' | 'other'
+type Kind = 'acl' | 'geo' | 'crawler' | 'threat' | 'trust' | 'waf-crs' | 'waf-custom' | 'body' | 'human' | 'other'
 
 // kind 改由共享 triggerStageFamily 投影（securityStages 唯一实现，原
 // 双实现并存欠账）——细粒度族映射到本弹框展示 Kind（geoip→geo、
@@ -238,6 +248,7 @@ const kind = computed<Kind>(() => {
     case 'wafCrs': return 'waf-crs'
     case 'wafCustom': return 'waf-custom'
     case 'body': return 'body'
+    case 'human': return 'human'
     default: return 'acl'
   }
 })
@@ -258,6 +269,8 @@ const categoryLabel = computed(() => {
     case 'waf-crs': return t('common.app.views.trigDetail.categoryWafCrs')
     case 'waf-custom': return t('common.app.views.trigDetail.categoryWafCustom')
     case 'body': return t('common.app.views.trigDetail.categoryBody')
+    // 人机挑战属阶段 2 · CC 防护（2026-11-12 四阶段）
+    case 'human': return t('common.app.views.trigDetail.stageHuman')
     default: return t('common.app.views.trigDetail.categoryAcl')
   }
 })
@@ -295,6 +308,8 @@ const heroStage = computed(() => {
     case 'crawler': return t('common.app.views.trigDetail.stageCrawler')
     case 'threat': return t('common.app.views.trigDetail.stageThreat')
     case 'waf-crs': case 'waf-custom': return t('common.app.views.trigDetail.stageWaf')
+    // 人机挑战属阶段 2 · CC 防护（2026-11-12 四阶段）
+    case 'human': return t('common.app.views.trigDetail.stageHuman')
     case 'body': return t('common.app.views.trigDetail.stageBody')
     default: return t('common.app.views.trigDetail.stageDefault')
   }
@@ -308,6 +323,7 @@ const dimensionTitle = computed(() => {
     case 'crawler': return t('common.app.views.trigDetail.dimCrawler')
     case 'threat': return t('common.app.views.trigDetail.categoryThreat')
     case 'waf-crs': case 'waf-custom': return t('common.app.views.trigDetail.dimWaf')
+    case 'human': return t('common.app.views.trigDetail.dimHuman')
     case 'body': return t('common.app.views.trigDetail.dimBody')
     default: return t('common.app.views.trigDetail.categoryAcl')
   }
@@ -330,6 +346,10 @@ const heroHitSource = computed(() => {
   const ev = props.row
   if (!ev) return '—'
   switch (kind.value) {
+    case 'human':
+      // 挑战是独立结果：命中源直接给出本次结果，避免「id:human_challenge」
+      // 这类内部标识出现在读者面前。
+      return t('common.app.views.trigDetail.heroHumanHit', { result: ccResultText.value })
     case 'acl': {
       if (isAllowOutside.value) return t('common.app.views.trigDetail.allowOutsideNote')
       if (inlineAclHit.value) {
@@ -424,8 +444,30 @@ interface PolicyRow {
   trust_detection?: boolean
   geoip_crawler_exempt?: boolean
   geoip_crawler_engines?: string
+  human_verify_mode?: string
+  human_verify_type?: string
+  human_verify_ttl?: number
+  cc_detect_enabled?: boolean
+  cc_rps_limit?: number
+  cc_rps_window?: number
 }
 const policy = ref<PolicyRow | null>(null)
+// CC 防护（人机挑战）明细：结果由规则 id 区分（human_challenge/pass/failed）。
+const ccResultText = computed(() => {
+  const rule = props.row?.rule_triggered ?? ''
+  if (rule === 'human_pass') return t('common.app.views.trigDetail.ccResultPass')
+  if (rule === 'human_failed') return t('common.app.views.trigDetail.ccResultFail')
+  return t('common.app.views.trigDetail.ccResultChallenge')
+})
+const ccModeText = computed(() => {
+  const mode = policy.value?.human_verify_mode ?? 'off'
+  if (mode === 'force') return t('common.app.views.trigDetail.ccModeForce')
+  if (mode === 'auto') return t('common.app.views.trigDetail.ccModeAuto')
+  return t('common.app.views.trigDetail.ccModeOff')
+})
+const ccTypeText = computed(() => (policy.value?.human_verify_type === 'js'
+  ? t('common.app.views.trigDetail.ccTypeJs')
+  : t('common.app.views.trigDetail.ccTypeSlider')))
 // 全部启用策略（追加修复：跨策略信任豁免判定——预检 DetectionOnly
 // 为事务级全局，命中策略与豁免信任策略可以是两条不同策略）
 const enabledPolicies = ref<PolicyRow[]>([])

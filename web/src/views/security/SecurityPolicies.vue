@@ -694,6 +694,66 @@
           </el-form>
         </div>
 
+        <!-- 阶段 2 · CC 防护（续）：异常检测阈值与挑战、豁免（与配额同属一张策略） -->
+        <div v-show="currentStep === WIZARD_STEP.RATE_LIMIT && typeAllowsCC" class="step-content">
+          <div class="stage-projection-bar">
+            <span class="stage-projection-desc">{{ t('app.security.policies.human.projection') }}</span>
+            <div class="stage-projection-rules">
+              <span class="stage-projection-empty">{{ boundRules.length > 0 ? t('app.security.policies.bind.appliesTo', { n: boundRules.length }) : t('app.security.policies.bind.none') }}</span>
+            </div>
+          </div>
+          <el-form :model="form" :label-width="$flw('100px')" :disabled="formFrozen">
+            <el-form-item :label="t('app.security.policies.human.modeLabel')">
+              <el-radio-group v-model="form.human_verify_mode">
+                <el-radio-button value="off">{{ t('app.security.policies.human.modeOff') }}</el-radio-button>
+                <el-radio-button value="auto">{{ t('app.security.policies.human.modeAuto') }}</el-radio-button>
+                <el-radio-button value="force">{{ t('app.security.policies.human.modeForce') }}</el-radio-button>
+              </el-radio-group>
+              <div class="form-tip-line">{{ t('app.security.policies.human.modeTip') }}</div>
+            </el-form-item>
+            <template v-if="form.human_verify_mode !== 'off'">
+              <el-form-item :label="t('app.security.policies.human.typeLabel')">
+                <el-radio-group v-model="form.human_verify_type">
+                  <el-radio-button value="slider">{{ t('app.security.policies.human.typeSlider') }}</el-radio-button>
+                  <el-radio-button value="js">{{ t('app.security.policies.human.typeJs') }}</el-radio-button>
+                </el-radio-group>
+                <div class="form-tip-line">{{ t('app.security.policies.human.typeTip') }}</div>
+              </el-form-item>
+              <el-form-item :label="t('app.security.policies.human.ttlLabel')">
+                <el-input-number v-model="form.human_verify_ttl" :min="1" :max="1440" style="width: 120px" />
+                <span class="form-tip-inline">{{ t('app.security.policies.human.ttlTip') }}</span>
+              </el-form-item>
+              <el-form-item :label="t('app.security.policies.human.exemptPathsLabel')">
+                <el-select v-model="form.human_exempt_paths" multiple filterable allow-create default-first-option :placeholder="t('app.security.policies.human.exemptPathsTip')" style="width: 100%" />
+                <div class="form-tip-line">{{ t('app.security.policies.human.exemptIpGuide') }}</div>
+              </el-form-item>
+              <el-divider>{{ t('app.security.policies.human.ccSection') }}</el-divider>
+              <el-form-item :label="t('app.security.policies.human.ccEnabledLabel')">
+                <el-switch v-model="form.cc_detect_enabled" />
+                <span class="form-tip-inline">{{ t('app.security.policies.human.ccEnabledTip') }}</span>
+              </el-form-item>
+              <template v-if="form.cc_detect_enabled">
+                <el-form-item :label="t('app.security.policies.human.ccRpsLabel')">
+                  <el-input-number v-model="form.cc_rps_limit" :min="1" :max="100000" style="width: 120px" />
+                  <span class="form-tip-inline">{{ t('app.security.policies.human.ccRpsPer') }}</span>
+                  <el-input-number v-model="form.cc_rps_window" :min="1" :max="3600" style="width: 100px; margin-left: 6px" />
+                  <span class="form-tip-inline">{{ t('app.security.policies.human.ccRpsSec') }}</span>
+                </el-form-item>
+                <el-form-item :label="t('app.security.policies.human.cc4xxLabel')">
+                  <el-input-number v-model="form.cc_4xx_ratio" :min="0" :max="100" style="width: 110px" />
+                  <span class="form-tip-inline">%</span>
+                  <span class="form-tip-inline">{{ t('app.security.policies.human.cc4xxTip') }}</span>
+                </el-form-item>
+                <el-form-item :label="t('app.security.policies.human.ccSessionLabel')">
+                  <el-switch v-model="form.cc_session_anomaly" />
+                  <el-input-number v-if="form.cc_session_anomaly" v-model="form.cc_session_ua_threshold" :min="1" :max="100" style="width: 100px; margin-left: 10px" />
+                  <span v-if="form.cc_session_anomaly" class="form-tip-inline">{{ t('app.security.policies.human.ccSessionTip') }}</span>
+                </el-form-item>
+              </template>
+            </template>
+          </el-form>
+        </div>
+
         <!-- Step 4: 关联规则 -->
         <div v-show="currentStep === WIZARD_STEP.BINDINGS" class="step-content">
           <el-form :model="form" :label-width="$flw('100px')" :disabled="formFrozen">
@@ -756,7 +816,7 @@
             <el-form-item :label="t('app.security.policies.bp.pageLabel')">
               <el-select v-model="form.block_page_id" :placeholder="t('app.security.policies.bp.pagePlaceholder')" style="width: 100%">
                 <el-option :value="0" :label="editorPolicyType === 'stage2' ? t('app.security.policies.bp.noPageStage2') : t('app.security.policies.bp.noPageDefault')" />
-                <el-option v-for="p in blockPages" :key="p.id" :label="p.name" :value="p.id" />
+                <el-option v-for="p in blockPages" :key="p.id" :label="pageLabel(p)" :value="p.id" />
               </el-select>
               <div v-if="form.block_page_id === 0" class="form-tip-line">{{ editorPolicyType === 'stage2' ? t('app.security.policies.bp.noPageTipStage2') : t('app.security.policies.bp.noPageTipDefault') }}</div>
               <div v-else class="form-tip-line">{{ t('app.security.policies.bp.manageTip') }}<AccessibleLink type="primary" @click="goToBlockPagesPage">{{ t('app.security.policies.common.goCreateEdit') }}</AccessibleLink></div>
@@ -972,7 +1032,7 @@ import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
 import { ipListCategoryLabel } from '@/utils/ipListCategoryLabel'
 import { cityEnName } from '@/utils/cityEnNames'
 import { useI18n } from 'vue-i18n'
-import { Plus, Lock, InfoFilled, CircleCheckFilled, Connection, Odometer, Link, Check, ArrowLeft, ArrowRight, ArrowDown, Search, WarningFilled, Document } from '@element-plus/icons-vue'
+import { Plus, Lock, InfoFilled, CircleCheckFilled, Connection, Odometer, Link, Check, ArrowLeft, ArrowRight, ArrowDown, Search, WarningFilled, Document, View } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { CascaderOption, CascaderProps, LazyLoad } from 'element-plus'
 import { request, ApiRequestError, mfaAwareSuccess } from '@/utils/api'
@@ -991,7 +1051,8 @@ import DialogHeader from '@/components/DialogHeader.vue'
 import DialogSectionHeader from '@/components/DialogSectionHeader.vue'
 import AccessibleLink from '@/components/common/AccessibleLink.vue'
 import { crsCategoryLabel } from '@/utils/crsCategories.ts'
-import { POLICY_TYPE_LABELS, POLICY_TYPE_SHORT_LABELS, STAGE_BLOCK_STATUS_OPTIONS, addressAllowDenyConflictText, blockPageMissing, blockPageStageCanIntercept, buildStageModel, chunkForBulk, customRuleCanBlockInMode, entriesIntersect, ensureSharedEntries, formatAclModeDetail, hasGeoIPControl, hasIPACLControl, hasOtherStage2Binding, hasStage3Features, hasTrustEntries, inferPolicyType, mergeChainOrder, mergeIpEntryCount, mergeIpEntryValues, normalizePolicyChainOrder, parseCrsFilename, parseIPList, parseRefIds, parseUnknownIds, parseUnknownStrings, pickDefaultPolicyTab, sharedEntriesCache, subscribeSharedEntriesCache, trustHitMode, wafModeLabel, IP_LIST_CATEGORIES, MAX_POLICIES_PER_RULE, policySupportsTcp, TCP_BIND_UNSUPPORTED_REASON, SECURITY_BULK_LIMITS, resolveBlockPageAttribution, type BlockPageAttribution, type BlockPageChainPolicy, type BlockPageStage } from '@/utils/securityStages'
+import { builtinBlockPageLabel, type BlockPageLike } from '@/utils/builtinBlockPages'
+import { POLICY_TYPE_LABELS, POLICY_TYPE_SHORT_LABELS, STAGE_BLOCK_STATUS_OPTIONS, addressAllowDenyConflictText, blockPageMissing, blockPageStageCanIntercept, buildStageModel, chunkForBulk, customRuleCanBlockInMode, entriesIntersect, ensureSharedEntries, formatAclModeDetail, hasGeoIPControl, hasIPACLControl, hasOtherStage2Binding, hasStage3Features, hasTrustEntries, inferPolicyType, normalizePolicyType, mergeChainOrder, mergeIpEntryCount, mergeIpEntryValues, normalizePolicyChainOrder, parseCrsFilename, parseIPList, parseRefIds, parseUnknownIds, parseUnknownStrings, pickDefaultPolicyTab, sharedEntriesCache, subscribeSharedEntriesCache, trustHitMode, wafModeLabel, IP_LIST_CATEGORIES, MAX_POLICIES_PER_RULE, policySupportsTcp, TCP_BIND_UNSUPPORTED_REASON, SECURITY_BULK_LIMITS, resolveBlockPageAttribution, type BlockPageAttribution, type BlockPageChainPolicy, type BlockPageStage } from '@/utils/securityStages'
 import type { RuleStageModel, SecurityPolicyType, SecurityStagePolicy, SecurityStageCustomRule, CrsRuleFileOption } from '@/utils/securityStages'
 import { fetchAllCrsRuleFiles } from '@/utils/crsRuleFiles'
 import { updaterName } from '@/utils/updaterName'
@@ -1004,7 +1065,7 @@ import { activateOnce } from '@/utils/keyboardActivate'
 
 const { t, locale } = useI18n()
 
-interface PolicyDetail { id: number; name: string; description: string; mode: string; anomaly_threshold: number; ip_acl_mode: string; ip_acl_list: string; ip_acl_enabled: boolean; ip_whitelist: string; ip_whitelist_enabled?: boolean; ip_blacklist?: string; ip_acl_list_refs?: string; ip_whitelist_refs?: string; rate_limit_enabled: boolean; rate_limit_rps: number; rate_limit_burst: number; crs_rule_groups: string; crs_excluded_rules: string; custom_rules: string; block_page_id: number; block_status_code: number; enabled: boolean; updated_at: string; geoip_mode?: string; geoip_countries?: string; geoip_crawler_exempt?: boolean; geoip_crawler_engines?: string; waf_check_response?: boolean; log_request_body?: boolean; trust_detection?: boolean }
+interface PolicyDetail { id: number; name: string; description: string; mode: string; anomaly_threshold: number; ip_acl_mode: string; ip_acl_list: string; ip_acl_enabled: boolean; ip_whitelist: string; ip_whitelist_enabled?: boolean; ip_blacklist?: string; ip_acl_list_refs?: string; ip_whitelist_refs?: string; rate_limit_enabled: boolean; rate_limit_rps: number; rate_limit_burst: number; crs_rule_groups: string; crs_excluded_rules: string; custom_rules: string; block_page_id: number; block_status_code: number; enabled: boolean; updated_at: string; geoip_mode?: string; geoip_countries?: string; geoip_crawler_exempt?: boolean; geoip_crawler_engines?: string; waf_check_response?: boolean; log_request_body?: boolean; trust_detection?: boolean; human_verify_mode?: string; human_verify_type?: string; human_verify_ttl?: number; human_exempt_paths?: string[]; cc_detect_enabled?: boolean; cc_rps_limit?: number; cc_rps_window?: number; cc_4xx_ratio?: number; cc_session_anomaly?: boolean; cc_session_ua_threshold?: number }
 // 规则行消费面（关联规则行内执行序/投影数据源；协议与域名等展示字段）
 interface Rule { caddy_id: string; name: string; domain: string; listen_port: number; protocol: string }
 // v2.2.0 多策略绑定：/security/bindings 的值从单 BindingInfo 改为数组（rank 序=执行序；
@@ -1020,7 +1081,7 @@ interface BlockPage { id: number; name: string; content?: string }
 
 const blockPages = ref<BlockPage[]>([])
 
-interface PolicySummary { id: number; name: string; mode: string; enabled: boolean; rule_count: number; has_waf: boolean; has_ip_control: boolean; has_rate_limit: boolean; has_custom_rules: boolean; anomaly_threshold: number; ip_acl_mode: string; ip_acl_list: string; ip_whitelist: string; ip_whitelist_enabled?: boolean; ip_blacklist: string; ip_acl_list_refs?: string; ip_whitelist_refs?: string; rate_limit_rps: number; rate_limit_burst: number; crs_excluded_count: number; custom_rules_count: number; custom_rules_ref_count?: number; ip_acl_enabled: boolean; updated_by: number; updated_at: string; crs_rule_groups?: string | string[]; has_geoip?: boolean; geoip_countries?: string; geoip_mode?: string; policy_type?: string; trust_detection?: boolean; trigger_24h?: number }
+interface PolicySummary { id: number; name: string; mode: string; enabled: boolean; rule_count: number; has_waf: boolean; has_ip_control: boolean; has_rate_limit: boolean; has_custom_rules: boolean; anomaly_threshold: number; ip_acl_mode: string; ip_acl_list: string; ip_whitelist: string; ip_whitelist_enabled?: boolean; ip_blacklist: string; ip_acl_list_refs?: string; ip_whitelist_refs?: string; rate_limit_rps: number; rate_limit_burst: number; crs_excluded_count: number; custom_rules_count: number; custom_rules_ref_count?: number; ip_acl_enabled: boolean; updated_by: number; updated_at: string; crs_rule_groups?: string | string[]; has_geoip?: boolean; geoip_countries?: string; geoip_mode?: string; policy_type?: string; trust_detection?: boolean; trigger_24h?: number; human_verify_mode?: string; human_verify_type?: string; cc_detect_enabled?: boolean; cc_rps_limit?: number; cc_rps_window?: number }
 
 
 
@@ -1121,6 +1182,10 @@ const auxLoadFailures = ref<string[]>([])
 // 拦截页列表是否至少成功落地过一次——未落地时不得做「页面已删除/
 // 内容为空」的空页预告（bpRes 部分失败会让所有启用策略显示假警告）。
 const blockPagesLoaded = ref(false)
+// 内置页名称/描述多语言（自定义页回退库内原文）：选择器/摘要/阶段行统一走本组。
+const pageLabel = (page: BlockPage | BlockPageLike): string => builtinBlockPageLabel(page, 'name', t)
+// 阶段模型（流程/预览行）按显示名入模——行文案里的页面名随界面语言切换。
+const blockPagesLocalized = computed(() => blockPages.value.map((p) => ({ ...p, name: pageLabel(p) })))
 const policySearch = ref('')
 
 // ── 列表按类型分组（阶段 1/2/3 + 混合兼容组）：policy_type 缺省时按内容推断（inferPolicyType
@@ -1130,7 +1195,8 @@ const activeTypeTab = ref<SecurityPolicyType>('stage1')
 // 名单分类显示映射(后端/存储 zh 分类码;下拉 label 翻译,筛选 value 保持 zh)
 // ipListCategoryLabel 迁移至 utils/ipListCategoryLabel.ts 单源(audit140-U2-F4 三份同构收敛)
 
-const policyTypeOf = (row: PolicySummary): SecurityPolicyType => inferPolicyType(row)
+const policyTypeOf = (row: PolicySummary): SecurityPolicyType =>
+  normalizePolicyType(inferPolicyType(row)) as SecurityPolicyType
 // 策略 id → 阶段类型（绑定选择器/提交门的 stage2 唯一性判据用）：与列表分组同一
 // 推断口径（inferPolicyType 优先 policy_type 列，缺省按内容推断）。
 const policyTypeById = computed<ReadonlyMap<number, SecurityPolicyType>>(() => {
@@ -1140,8 +1206,13 @@ const policyTypeById = computed<ReadonlyMap<number, SecurityPolicyType>>(() => {
 })
 // 各类型条数（tab 标签 + 默认/回落 tab 选择共用一个计数源）
 const policyTypeCounts = computed<Record<SecurityPolicyType, number>>(() => {
-  const counts: Record<SecurityPolicyType, number> = { stage0: 0, stage1: 0, stage2: 0, stage3: 0, mixed: 0 }
-  for (const p of policies.value) counts[policyTypeOf(p)]++
+  const counts: Record<SecurityPolicyType, number> = { stage0: 0, stage1: 0, stage2: 0, stage3: 0, stage4: 0, mixed: 0 }
+  for (const p of policies.value) {
+    const t = normalizePolicyType(policyTypeOf(p)) as SecurityPolicyType
+    counts[t]++
+  }
+  // 旧编号 stage4 已并入 stage3（normalizePolicyType），不再单独成 tab
+  // （计数表本身仍保留该键，仅 tab 列表不消费它）。
   return counts
 })
 // 「混合策略（兼容旧版）」tab 条件可见：仅当存在 mixed 策略（导入或存量）时显示；
@@ -1220,7 +1291,19 @@ const policySummaryLine = (row: PolicySummary): string => {
     return t('app.security.policies.summary.trustSummary', { n: count, mode: trustHitMode(row.policy_type, row.trust_detection) === 'detection' ? t('app.security.policies.stage0.modeDetection') : t('app.security.policies.stage0.modePass') })
   }
   if (type === 'stage2') {
-    return row.has_rate_limit ? t('app.security.policies.summary.rateSummary', { rps: row.rate_limit_rps, burst: row.rate_limit_burst }) : t('app.security.policies.common.notEnabled')
+    // 阶段 2 · CC 防护（2026-11-12 用户裁定）：配额限流与挑战同属一条策略。
+    const parts: string[] = []
+    if (row.has_rate_limit) parts.push(t('app.security.policies.summary.rateSummary', { rps: row.rate_limit_rps, burst: row.rate_limit_burst }))
+    if (row.human_verify_mode && row.human_verify_mode !== 'off') {
+      const modeLabel = row.human_verify_mode === 'force'
+        ? t('app.security.policies.human.modeForce')
+        : t('app.security.policies.human.modeAuto')
+      parts.push(t('app.security.policies.summary.ccChallenge', { mode: modeLabel }))
+    }
+    if (row.cc_detect_enabled && row.human_verify_mode && row.human_verify_mode !== 'off') {
+      parts.push(t('app.security.policies.summary.ccSpike', { n: row.cc_rps_limit ?? 0, sec: row.cc_rps_window ?? 0 }))
+    }
+    return parts.length > 0 ? parts.join(' · ') : t('app.security.policies.common.notEnabled')
   }
   if (type === 'stage3') {
     // 组数口径与编辑器写回同源（normalizeCrsGroups）：历史文件名前缀、重复值、
@@ -1283,14 +1366,24 @@ const bindingOrderPending = (caddyId: string): boolean => {
 }
 const orderEditedRules = computed<string[]>(() => boundRules.value.filter((caddyId) => bindingOrderPending(caddyId)))
 
+// 同阶段排序约束（用户裁定 2026-11-12）：策略顺序=执行序，但只允许在同阶段
+// 内调整——跨阶段排序违反「阶段1 预检→阶段2 限流→阶段3 人机验证→阶段4 WAF」
+// 原则。阶段 0（信任）恒置顶不参与交换；其余阶段各自成组。
+const chainStageGroupOf = (id: number): string => policyTypeById.value.get(id) ?? 'stage3'
+
 const canMoveSelf = (caddyId: string, direction: -1 | 1): boolean => {
   const order = orderedChainPolicyIds(caddyId)
   const pos = order.indexOf(editingId.value ?? Number.NaN)
   if (pos < 0) return false
   const target = pos + direction
-  return target >= 0 && target < order.length
+  if (target < 0 || target >= order.length) return false
+  // 同阶段门：目标位置策略与本策略必须同阶段组（stage0 永不参与）
+  const selfStage = chainStageGroupOf(editingId.value ?? Number.NaN)
+  if (selfStage === 'stage0') return false
+  return chainStageGroupOf(order[target]) === selfStage
 }
 const moveSelfInChain = (caddyId: string, direction: -1 | 1): void => {
+  if (!canMoveSelf(caddyId, direction)) return // 同阶段门（与按钮禁用同源）
   const order = orderedChainPolicyIds(caddyId)
   const pos = order.indexOf(editingId.value ?? Number.NaN)
   const target = pos + direction
@@ -1677,18 +1770,20 @@ const WIZARD_STEP = {
   TRUST: 1,
   IP_ACL: 2,
   RATE_LIMIT: 3,
-  WAF_RULES: 4,
-  BLOCK_PAGE: 5,
-  BINDINGS: 6,
-  PREVIEW: 7,
+  HUMAN: 4,
+  WAF_RULES: 5,
+  BLOCK_PAGE: 6,
+  BINDINGS: 7,
+  PREVIEW: 8,
 } as const
 type WizardStep = (typeof WIZARD_STEP)[keyof typeof WIZARD_STEP]
 const WIZARD_STEP_META: Record<WizardStep, { title: string; icon: typeof InfoFilled }> = {
   [WIZARD_STEP.BASIC]: { title: t('app.security.policies.step.basic'), icon: InfoFilled },
   [WIZARD_STEP.TRUST]: { title: t('app.security.policies.step.stage0'), icon: Connection },
   [WIZARD_STEP.IP_ACL]: { title: t('app.security.policies.step.stage1'), icon: Connection },
-  [WIZARD_STEP.RATE_LIMIT]: { title: t('app.security.policies.step.stage2'), icon: Odometer },
-  [WIZARD_STEP.WAF_RULES]: { title: t('app.security.policies.step.stage3Waf'), icon: Lock },
+  [WIZARD_STEP.RATE_LIMIT]: { title: t('app.security.policies.step.stage2cc'), icon: Odometer },
+  [WIZARD_STEP.HUMAN]: { title: t('app.security.policies.step.stage3Human'), icon: View },
+  [WIZARD_STEP.WAF_RULES]: { title: t('app.security.policies.step.stage3waf'), icon: Lock },
   [WIZARD_STEP.BLOCK_PAGE]: { title: t('app.security.policies.step.blockPage'), icon: Document },
   [WIZARD_STEP.BINDINGS]: { title: t('app.security.policies.step.bindings'), icon: Link },
   [WIZARD_STEP.PREVIEW]: { title: t('app.security.policies.step.preview'), icon: Check },
@@ -1727,6 +1822,10 @@ const POLICY_TYPE_CREATE_OPTIONS: ReadonlyArray<{ value: 'stage0' | 'stage1' | '
 ]
 // ── 策略类型（实体单职化）：新建先选类型；编辑态类型由行推断/后端 policy_type 携带 ──
 const createPolicyType = ref<'stage0' | 'stage1' | 'stage2' | 'stage3'>('stage0')
+watch(createPolicyType, (t) => {
+  // 新建人机验证策略：默认智能触发（off 会让该类型不产生任何渲染面）
+  if (t === 'stage2' && form.value.human_verify_mode === 'off') form.value.human_verify_mode = 'auto'
+})
 const editingPolicyType = ref<SecurityPolicyType | null>(null)
 const editorPolicyType = computed<SecurityPolicyType>(() =>
   editingId.value === null ? createPolicyType.value : (editingPolicyType.value ?? 'mixed'))
@@ -1738,15 +1837,20 @@ const trustEnabledInEditor = computed(() => trustEnabledForPolicyType(editorPoli
 
 // 弹框副标题按策略类型描述；mixed/缺省保持兼容组总述文案
 const EDITOR_SUBTITLES: Record<SecurityPolicyType, string> = {
+  stage3: t('app.security.policies.editor.subHuman'),
   stage0: t('app.security.policies.editor.subStage0'),
   stage1: t('app.security.policies.editor.subStage1'),
   stage2: t('app.security.policies.editor.subStage2'),
-  stage3: t('app.security.policies.editor.subStage3'),
+  stage4: t('app.security.policies.editor.subStage4'),
   mixed: t('app.security.policies.editor.subMixed'),
 }
 
-const typeAllowsStage = (stage: 0 | 1 | 2 | 3): boolean =>
+// 单职化（2026-11-12 用户裁定）：一条策略只含一个阶段——stage3=人机验证、
+// stage4=WAF，互斥不共存；mixed 兼容组例外。
+const typeAllowsStage = (stage: 0 | 1 | 2 | 3 | 4): boolean =>
   editorPolicyType.value === 'mixed' || editorPolicyType.value === `stage${stage}`
+// 挑战/CC 检测阈值属阶段 2（CC 防护）。旧编号 stage4 由 normalizePolicyType 归一。
+const typeAllowsCC = computed(() => normalizePolicyType(editorPolicyType.value) === 'stage2' || editorPolicyType.value === 'mixed')
 
 const visibleSteps = computed<readonly WizardStep[]>(() => {
   const steps: WizardStep[] = [WIZARD_STEP.BASIC]
@@ -1779,7 +1883,7 @@ const pickerProtoFilter = ref<'all' | 'http' | 'tcp'>('http')
 const pickerPage = ref(1)
 const pickerSelected = ref<string[]>([])
 const PICKER_PAGE_SIZE = 20
-const defaultForm = () => ({ name: '', description: '', enabled: true, mode: 'off', anomaly_threshold: 5, ip_acl_enabled: false, ip_acl_mode: 'allow', rate_limit_enabled: false, rate_limit_rps: 100, rate_limit_burst: 50, block_page_id: 1, block_status_code: 403, geoip_enabled: false, geoip_mode: 'deny', geoip_crawler_exempt: false, geoip_crawler_engines: ['googlebot', 'bingbot', 'baiduspider'], waf_check_response: false, log_request_body: false, trust_detection: false })
+const defaultForm = () => ({ name: '', description: '', enabled: true, mode: 'off', anomaly_threshold: 5, ip_acl_enabled: false, ip_acl_mode: 'allow', rate_limit_enabled: false, rate_limit_rps: 100, rate_limit_burst: 50, block_page_id: 1, block_status_code: 403, geoip_enabled: false, geoip_mode: 'deny', geoip_crawler_exempt: false, geoip_crawler_engines: ['googlebot', 'bingbot', 'baiduspider'], waf_check_response: false, log_request_body: false, trust_detection: false, human_verify_mode: 'off', human_verify_type: 'slider', human_verify_ttl: 30, human_exempt_paths: [] as string[], cc_detect_enabled: false, cc_rps_limit: 40, cc_rps_window: 10, cc_4xx_ratio: 70, cc_session_anomaly: false, cc_session_ua_threshold: 5 })
 
 const form = ref(defaultForm())
 // v2.3.8 爬虫豁免引擎注册表（geoipnames 单源镜像；ID 稳定——后端白名单校验）
@@ -1832,7 +1936,13 @@ const fetchData = async (): Promise<boolean> => {
       auxLoadFailures.value = []
       return false
     }
-    policies.value = polRes.value.data || []
+    // 阶段序严格排序（2026-11-12 用户裁定）：stage0→stage4，mixed 垫底。
+    // 同阶段按名称 localeCompare 稳定——阶段 4 不得排在阶段 2/3 之前。
+    policies.value = (polRes.value.data || []).slice().sort((a, b) => {
+      const order = { stage0: 0, stage1: 1, stage2: 2, stage3: 3, stage4: 4, mixed: 5 }
+      const oa = order[policyTypeOf(a)] ?? 5, ob = order[policyTypeOf(b)] ?? 5
+      return oa !== ob ? oa - ob : a.name.localeCompare(b.name)
+    })
     policiesLoadError.value = false
     const failures: string[] = []
     if (ruleRes.status === 'fulfilled') allRules.value = ruleRes.value.data || []
@@ -2908,7 +3018,7 @@ const BLOCK_PAGE_STAGE_LABEL: Record<BlockPageStage, string> = { 1: t('app.secur
 const pageHasContent = (id: number): boolean =>
   blockPagesLoaded.value && id > 0 && !blockPageMissing(id, blockPages.value, blockPagesLoaded.value)
 const editorBlockPageStages = (): BlockPageStage[] => {
-  const type = editorPolicyType.value
+  const type = normalizePolicyType(editorPolicyType.value)
   if (type === 'stage1') return [1]
   if (type === 'stage2') return [2]
   if (type === 'stage3') return [3]
@@ -2988,7 +3098,7 @@ const blockPageSummary = computed<{ lines: Array<{ text: string; tone: 'active' 
   if (total === 0) return { lines: [{ text: t('app.security.policies.bind.none'), tone: 'info' }] }
   const pageId = form.value.block_page_id
   const page = pageId > 0 ? blockPages.value.find((p) => p.id === pageId) : undefined
-  const pageName = page?.name ?? t('app.security.policies.common.pageNum', { n: pageId })
+  const pageName = page ? pageLabel(page) : t('app.security.policies.common.pageNum', { n: pageId })
   const pageInvalid = pageId > 0 && blockPagesLoaded.value && blockPageMissing(pageId, blockPages.value, blockPagesLoaded.value)
   // 主行（触发归因总述；未落地不做生效判定）
   if (!blockPagesLoaded.value) {
@@ -3101,6 +3211,16 @@ const previewModel = computed<RuleStageModel>(() => {
     ip_acl_mode: form.value.ip_acl_mode,
     ip_acl_list: JSON.stringify(ipACLList.value),
     ip_whitelist: JSON.stringify(ipWhitelist.value),
+    human_verify_mode: form.value.human_verify_mode,
+    human_verify_type: form.value.human_verify_type,
+    human_verify_ttl: form.value.human_verify_ttl,
+    human_exempt_paths: form.value.human_exempt_paths,
+    cc_detect_enabled: form.value.cc_detect_enabled,
+    cc_rps_limit: form.value.cc_rps_limit,
+    cc_rps_window: form.value.cc_rps_window,
+    cc_4xx_ratio: form.value.cc_4xx_ratio,
+    cc_session_anomaly: form.value.cc_session_anomaly,
+    cc_session_ua_threshold: form.value.cc_session_ua_threshold,
     rate_limit_rps: form.value.rate_limit_rps,
     rate_limit_burst: form.value.rate_limit_burst,
     ip_blacklist: JSON.stringify(ipBlacklistSelf.value),
@@ -3125,7 +3245,7 @@ const previewModel = computed<RuleStageModel>(() => {
     }],
     [previewPolicy],
     ipLists.value,
-    blockPages.value,
+    blockPagesLocalized.value,
     null,
   )
 })
@@ -3284,6 +3404,16 @@ async function openDialog(row?: PolicySummary) {
         waf_check_response: d.waf_check_response ?? false,
         log_request_body: d.log_request_body ?? false,
         trust_detection: d.trust_detection === true,
+        human_verify_mode: d.human_verify_mode ?? 'off',
+        human_verify_type: d.human_verify_type ?? 'slider',
+        human_verify_ttl: d.human_verify_ttl ?? 30,
+        human_exempt_paths: Array.isArray(d.human_exempt_paths) ? d.human_exempt_paths : parseIPList(d.human_exempt_paths as unknown as string),
+        cc_detect_enabled: d.cc_detect_enabled ?? false,
+        cc_rps_limit: d.cc_rps_limit ?? 40,
+        cc_rps_window: d.cc_rps_window ?? 10,
+        cc_4xx_ratio: d.cc_4xx_ratio ?? 70,
+        cc_session_anomaly: d.cc_session_anomaly ?? false,
+        cc_session_ua_threshold: d.cc_session_ua_threshold ?? 5,
     }
     ipACLList.value = parseIPList(d.ip_acl_list)
     ipWhitelist.value = parseIPList(d.ip_whitelist)
@@ -3521,6 +3651,16 @@ const handleSave = async () => {
       logRequestBody: form.value.log_request_body,
       trustDetection: form.value.trust_detection,
       policyType: editorPolicyType.value,
+      humanVerifyMode: form.value.human_verify_mode,
+      humanVerifyType: form.value.human_verify_type,
+      humanVerifyTtl: form.value.human_verify_ttl,
+      humanExemptPaths: form.value.human_exempt_paths,
+      ccDetectEnabled: form.value.cc_detect_enabled,
+      ccRpsLimit: form.value.cc_rps_limit,
+      ccRpsWindow: form.value.cc_rps_window,
+      cc4xxRatio: form.value.cc_4xx_ratio,
+      ccSessionAnomaly: form.value.cc_session_anomaly,
+      ccSessionUaThreshold: form.value.cc_session_ua_threshold,
     })
     let saveRes: APIResponse<{ id: number }> | undefined
     if (editingId.value) {

@@ -153,6 +153,7 @@ func TestApplySnapshot_securityPoliciesEverySchemaColumnRoundTrip(t *testing.T) 
 	booleanColumns := map[string]bool{
 		"ip_acl_enabled": true, "ip_whitelist_enabled": true, "rate_limit_enabled": true,
 		"enabled": true, "geoip_crawler_exempt": true, "waf_check_response": true,
+		"cc_detect_enabled": true, "cc_session_anomaly": true,
 		"log_request_body": true, "trust_detection": true,
 	}
 	expected := make(map[string]interface{}, len(columns))
@@ -170,6 +171,10 @@ func TestApplySnapshot_securityPoliciesEverySchemaColumnRoundTrip(t *testing.T) 
 			expected[column] = "off"
 		case column == "policy_type":
 			expected[column] = "stage0"
+		case column == "human_verify_mode":
+			expected[column] = "auto"
+		case column == "human_verify_type":
+			expected[column] = "slider"
 		case column == "created_at" || column == "updated_at":
 			expected[column] = "2026-01-02 03:04:05"
 		case column == "block_status_code":

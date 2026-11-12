@@ -5,13 +5,13 @@ import (
 	"testing"
 )
 
-// 策略实体单职化（2026-09-20 用户裁定）：security_policies.policy_type ∈
-// stage0（信任名单独立策略类型）/ stage1（IP 访问控制+地域拦截）/ stage2（限流）/
-// stage3（WAF）/ mixed（存量混合兼容）。InferPolicyType 按内容特征推断，是
-// backfill、写侧缺省提交、旧快照/旧备份导入的共同单一事实源。特征分组：
-// g0=信任名单（启用且非空），g1=IP ACL/黑白名单/GeoIP，g2=限流，
-// g3=WAF（mode≠off 或自定义规则引用非空）；恰好一组→对应类型，多组→mixed，
-// 零组→stage3（WAF 是安全策略的默认心智，空策略归此）。
+// 策略实体单职化（2026-09-20 用户裁定；2026-11-12 五阶段模型）：
+// policy_type ∈ stage0（信任名单）/ stage1（IP 访问控制+地域拦截）/ stage2（限流）/
+// stage3（人机验证）/ stage4（WAF）/ mixed（存量混合兼容）。InferPolicyType 按内容
+// 特征推断，是 backfill、写侧缺省提交、旧快照/旧备份导入的共同单一事实源。特征分组：
+// g0=信任名单（启用且非空），g1=IP ACL/黑白名单/GeoIP，g2=限流，g3=WAF（mode≠off
+// 或自定义规则引用非空）；人机验证单独成组（human_verify_mode≠off）——
+// 恰好一组→对应类型，多组→mixed，零组→stage4（WAF 是安全策略的默认心智，空策略归此）。
 func TestInferPolicyType(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -38,6 +38,10 @@ func TestInferPolicyType(t *testing.T) {
 		{"acl disabled with retained list", SecurityPolicy{Mode: "off", IPACLEnabled: false, IPACLList: `["10.0.0.0/8"]`}, PolicyTypeStage3},
 		{"geoip off with retained countries", SecurityPolicy{Mode: "off", GeoIPMode: "off", GeoIPCountries: json.RawMessage(`["海外"]`)}, PolicyTypeStage3},
 		{"trust disabled with retained list is not stage0", SecurityPolicy{Mode: "off", IPWhitelistEnabled: false, IPWhitelist: json.RawMessage(`["10.0.0.1"]`)}, PolicyTypeStage3},
+		{"human verify only is CC stage2", SecurityPolicy{Mode: "off", HumanVerifyMode: "auto"}, PolicyTypeStage2},
+		{"human verify off is not CC stage", SecurityPolicy{Mode: "off", HumanVerifyMode: "off"}, PolicyTypeStage3},
+		{"human verify + waf is mixed", SecurityPolicy{Mode: "blocking", HumanVerifyMode: "force"}, PolicyTypeMixed},
+		{"human verify + rate is CC stage", SecurityPolicy{Mode: "off", HumanVerifyMode: "auto", RateLimitEnabled: true, RateLimitRPS: 50}, PolicyTypeStage2},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

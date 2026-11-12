@@ -131,10 +131,11 @@ test('链序展平 空基线：全新绑定按阶段桶序展平', () => {
 
 test('orders 合并 staged 重排 + 并发新增 C：orders 含 C 不丢榜，无同阶段锚点尾插', () => {
   // 钉测：基线 [A(s3), B(s3)]，staged 对 A/B 重排为 [B, A]，并发新增 C(s1)
-  // → C 必须出现在载荷中（整链重建语义下不再被静默剔除），staged 相对序保持
+  // → C 必须出现在载荷中（整链重建语义下不再被静默剔除），staged 相对序保持；
+  // 最终经严格阶段序归一（C 属阶段 1，必须排在阶段 3 之前）
   const merged = mergeChainOrder([32, 31], [31, 32, 12], stageOf)
   assert.ok(merged.includes(12), '并发新增成员必须保留在 orders 载荷中')
-  assert.deepEqual(merged, [32, 31, 12])
+  assert.deepEqual(merged, [12, 32, 31])
 })
 
 test('orders 合并 staged 未涉及新成员锚定最近同阶段成员之后', () => {
@@ -162,8 +163,11 @@ test('orders 合并 未知类型（死引用）成员尾插不炸路径', () => 
   assert.deepEqual(mergeChainOrder([31], [31, 88], stageOf), [31, 88])
 })
 
-test('orders 合并 normalizePolicyChainOrder：阶段 0 稳定置顶，其余相对序不动', () => {
-  // 41 置顶；31/12 相对序保持；42（未知类型/死引用）留在 rest 组原位
-  assert.deepEqual(normalizePolicyChainOrder([31, 41, 12, 42], stageOf), [41, 31, 12, 42])
+test('orders 合并 normalizePolicyChainOrder：严格阶段序（0→3，mixed 垫底），同阶段相对序不动', () => {
+  // 41(s0) 置顶 → 12(s1) → 31/32(s3 相对序保持) → 42（未知类型垫底；mixed 同档）
+  assert.deepEqual(normalizePolicyChainOrder([31, 41, 12, 42], stageOf), [41, 12, 31, 42])
   assert.deepEqual(normalizePolicyChainOrder([12, 31], stageOf), [12, 31])
+  // 四阶段：stage2(CC) 在 stage3(内容防护) 之前；旧编号 stage4 与 stage3 同档（稳定序）
+  const wide = (id: number): SecurityPolicyType | undefined => (id === 61 ? 'stage4' : id === 33 ? 'stage3' : id === 21 ? 'stage2' : undefined)
+  assert.deepEqual(normalizePolicyChainOrder([61, 33, 21], wide), [21, 61, 33])
 })

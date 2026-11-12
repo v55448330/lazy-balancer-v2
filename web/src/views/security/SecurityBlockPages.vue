@@ -31,7 +31,7 @@
         </template>
         <el-table-column prop="name" :label="t('app.security.blockPages.table.colName')" min-width="180">
           <template #default="{ row }">
-            <AccessibleLink type="primary" @click="previewPage(row as BlockPage)">{{ row.name }}</AccessibleLink>
+            <AccessibleLink type="primary" @click="previewPage(row as BlockPage)">{{ pageName(row as BlockPage) }}</AccessibleLink>
             <el-tag v-if="row.is_default || row.is_builtin" size="small" type="info" effect="plain" style="margin-left: 8px">{{ t('app.security.blockPages.table.builtin') }}</el-tag>
           </template>
         </el-table-column>
@@ -47,7 +47,9 @@
             </el-tooltip>
           </template>
         </el-table-column>
-        <el-table-column prop="description" :label="t('app.security.blockPages.table.description')" min-width="180" show-overflow-tooltip />
+        <el-table-column :label="t('app.security.blockPages.table.description')" min-width="180" show-overflow-tooltip>
+          <template #default="{ row }">{{ pageDesc(row as BlockPage) }}</template>
+        </el-table-column>
         <el-table-column :label="t('app.security.blockPages.table.ruleRefs')" width="120" align="center">
           <template #default="{ row }">
             <el-tooltip :disabled="!row.rule_ref_count" :content="t('app.security.blockPages.table.ruleRefsTip')" placement="top">
@@ -103,6 +105,10 @@
         </el-form-item>
         <el-form-item :label="t('app.security.blockPages.dialog.labelContent')" class="content-form-item" for="block-content-static">
           <input type="text" id="block-content-static" aria-hidden="true" tabindex="-1" autocomplete="off" style="display:none">
+          <div v-if="!isReadOnly && !currentPage?.is_default && !currentPage?.is_builtin" class="block-widget-bar">
+            <el-button size="small" :disabled="saving" @click="insertHumanWidget">{{ t('app.security.blockPages.dialog.insertHumanWidget') }}</el-button>
+            <span class="form-tip-inline">{{ t('app.security.blockPages.dialog.humanWidgetTip') }}</span>
+          </div>
           <div class="block-content-editor" style="width: 100%">
             <SyntaxHighlight v-if="isReadOnly || currentPage?.is_default || currentPage?.is_builtin" :content="form.content" language="markup" height="520px" />
             <CodeEditor v-else v-model="form.content" language="markup" height="520px" :aria-label="t('app.security.blockPages.dialog.editorAria')" :placeholder="t('app.security.blockPages.dialog.placeholderContent')" :readonly="saving" />
@@ -111,6 +117,7 @@
             {{ (currentPage?.is_default || currentPage?.is_builtin) ? t('app.security.blockPages.dialog.contentTipReadonly') : t('app.security.blockPages.dialog.contentTipEditable') }}
           </div>
         </el-form-item>
+
       </el-form>
       <template #footer>
         <el-button :disabled="saving" @click="dialogVisible = false">{{ t('app.security.blockPages.dialog.cancel') }}</el-button>
@@ -142,6 +149,7 @@ import { showSaveResult } from '@/utils/saveResult'
 import { escapeHtml } from '@/utils/escape'
 import { useAuthStore } from '@/stores/auth'
 import { formatDate } from '@/utils/date'
+import { builtinBlockPageLabel, type BlockPageLike } from '@/utils/builtinBlockPages'
 import { updaterName } from '@/utils/updaterName'
 import { SECURITY_DESCRIPTION_MAX_RUNES, SECURITY_NAME_MAX_RUNES } from '@/utils/securityLimits'
 import SyntaxHighlight from '@/components/SyntaxHighlight.vue'
@@ -151,7 +159,17 @@ import DialogSectionHeader from '@/components/DialogSectionHeader.vue'
 import AccessibleLink from '@/components/common/AccessibleLink.vue'
 import type { APIResponse, UserListItem } from '@/types'
 
+// 滑块组件占位符插入（重复插入检测——同页只一个组件实例）
+const insertHumanWidget = (): void => {
+  if (form.value.content.includes('{{human_verify_widget}}')) return
+  form.value.content = form.value.content.trimEnd() + '\n{{human_verify_widget}}\n'
+}
+
 const { t } = useI18n()
+
+// 内置页名称/描述按 id 多语言显示（自定义页回退库内原文）
+const pageName = (page: BlockPage | BlockPageLike): string => builtinBlockPageLabel(page, 'name', t)
+const pageDesc = (page: BlockPage | BlockPageLike): string => builtinBlockPageLabel(page, 'desc', t)
 interface BlockPage { id: number; name: string; description: string; content: string; content_type?: string; rule_ref_count?: number; is_default: boolean; is_builtin?: boolean; updated_at: string; updated_by: number }
 
 const authStore = useAuthStore()

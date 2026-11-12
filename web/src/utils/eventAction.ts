@@ -11,7 +11,7 @@
 // 误当作跨模块稳定契约而在视图里直接构造动作色）。
 import { tSafe as t } from '../i18n/tSafe.ts'
 
-type EventActionTone = 'danger' | 'warning'
+type EventActionTone = 'danger' | 'warning' | 'info' | 'success'
 
 
 /** 短标签（列表/筛选等紧凑位）：拦截 / 检测。 */
@@ -19,6 +19,8 @@ export const eventActionShort = (action: string | undefined | null): string => {
   if (!action) return '—'
   if (action === 'blocked') return t('common.app.views.eventAction.blockedShort') || action
   if (action === 'logged') return t('common.app.views.eventAction.loggedShort') || action
+  if (action === 'trust') return t('common.app.views.eventAction.trustShort') || action
+  if (action === 'challenged') return t('common.app.views.eventAction.challengedShort') || action
   return action
 }
 
@@ -27,11 +29,17 @@ export const eventActionFull = (action: string | undefined | null): string => {
   if (!action) return '—'
   if (action === 'blocked') return t('common.app.views.eventAction.blockedFull') || action
   if (action === 'logged') return t('common.app.views.eventAction.loggedFull') || action
+  if (action === 'trust') return t('common.app.views.eventAction.trustFull') || action
+  if (action === 'challenged') return t('common.app.views.eventAction.challengedFull') || action
   return action
 }
 
 /** el-tag 色调：拦截 danger、检测 warning；未知动作按检测色（未拦截语义）。 */
-export const eventActionTone = (action: string | undefined | null): EventActionTone =>
+export const eventActionTone = (action: string | undefined | null): EventActionTone => {
   // 字面量分派(audit136-U5B-1):表读点曾裸下标,后端外部字符串命中原型键
   // (constructor 等)返回函数被当色调——词表读取契约要求 hasOwn/分派。
-  action === 'blocked' ? 'danger' : 'warning'
+  if (action === 'blocked') return 'danger'
+  if (action === 'trust') return 'success'
+  if (action === 'challenged') return 'info'
+  return 'warning'
+}

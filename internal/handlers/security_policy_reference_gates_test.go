@@ -133,17 +133,17 @@ func TestUpdateSecurityPolicy_rejectsExplicitOutOfStageFields(t *testing.T) {
 	}{
 		{
 			name:     "stage3 显式启用 ACL",
-			createAs: map[string]any{"name": "conflict-acl", "policy_type": "stage3", "mode": "blocking"},
+			createAs: map[string]any{"name": "conflict-acl", "policy_type": "stage4", "mode": "blocking"},
 			payload: map[string]any{
-				"policy_type": "stage3", "ip_acl_enabled": true, "ip_acl_mode": "deny", "ip_acl_list": `["203.0.113.0/24"]`,
+				"policy_type": "stage4", "ip_acl_enabled": true, "ip_acl_mode": "deny", "ip_acl_list": `["203.0.113.0/24"]`,
 			},
 			want: "阶段 1",
 		},
 		{
 			name:     "stage3 显式启用限流",
-			createAs: map[string]any{"name": "conflict-rl", "policy_type": "stage3", "mode": "blocking"},
+			createAs: map[string]any{"name": "conflict-rl", "policy_type": "stage4", "mode": "blocking"},
 			payload: map[string]any{
-				"policy_type": "stage3", "rate_limit_enabled": true, "rate_limit_rps": 50,
+				"policy_type": "stage4", "rate_limit_enabled": true, "rate_limit_rps": 50,
 			},
 			want: "阶段 2",
 		},
@@ -153,7 +153,7 @@ func TestUpdateSecurityPolicy_rejectsExplicitOutOfStageFields(t *testing.T) {
 			payload: map[string]any{
 				"policy_type": "stage1", "mode": "blocking",
 			},
-			want: "阶段 3",
+			want: "阶段 4",
 		},
 		{
 			name:     "stage0 显式设置地域控制",
@@ -186,9 +186,9 @@ func TestUpdateSecurityPolicy_rejectsExplicitOutOfStageFields(t *testing.T) {
 func TestUpdateSecurityPolicy_allowsInertOutOfStageDefaults(t *testing.T) {
 	setupSecurityPolicyTestDB(t)
 	router := newSecurityRouter(t)
-	id := createTestPolicy(t, router, map[string]any{"name": "inert-defaults", "policy_type": "stage3", "mode": "blocking"})
+	id := createTestPolicy(t, router, map[string]any{"name": "inert-defaults", "policy_type": "stage4", "mode": "blocking"})
 	recorder := putJSON(t, router, "/security/policies/"+strconv.Itoa(id), map[string]any{
-		"policy_type": "stage3", "mode": "blocking",
+		"policy_type": "stage4", "mode": "blocking",
 		"ip_acl_enabled": false, "ip_acl_list": "[]", "ip_acl_list_refs": "[]",
 		"rate_limit_enabled": false, "rate_limit_rps": 100, "rate_limit_burst": 50,
 		"geoip_mode": "off", "geoip_countries": "[]", "geoip_crawler_exempt": false,

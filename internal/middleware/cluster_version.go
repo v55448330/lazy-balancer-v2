@@ -150,7 +150,7 @@ var globalConfigSyncedColumns = []string{
 	"proxy_read_timeout", "proxy_write_timeout", "proxy_stream_timeout",
 	"proxy_flush_interval", "proxy_stream_close_delay",
 	"server_tokens_hidden", "oidc_config",
-	"mfa_write_guard", "mfa_lockout_enabled", "github_proxy_url",
+	"mfa_write_guard", "mfa_lockout_enabled", "github_proxy_url", "human_secret",
 	"auto_backup_enabled", "auto_backup_frequency", "auto_backup_time",
 	"auto_backup_day", "auto_backup_keep", "auto_backup_sections",
 	"trusted_proxy_enabled", "trusted_proxy_ranges", "trusted_proxy_range_refs",
@@ -278,7 +278,7 @@ var clusterSyncedTables = []clusterSyncedTable{
 	{name: "ca_providers", snapshotColumns: "id,name,provider,directory_url,credentials,max_concurrent,min_interval_ms,enabled,created_at,updated_at"},
 	{name: "certificate_configs", snapshotColumns: "id,name,dns_provider,dns_credentials,enabled,created_at,updated_at"},
 	{name: "cert_jobs", snapshotColumns: "rule_id,domain,status,cert_pem,key_pem,expires_at,ca_provider_id,renewal_attempts,ca_available_after,last_error_code,created_at,updated_at"},
-	{name: "security_policies", snapshotColumns: "id,name,description,mode,anomaly_threshold,ip_acl_mode,ip_acl_list,ip_acl_enabled,ip_whitelist,ip_whitelist_enabled,ip_blacklist,rate_limit_enabled,rate_limit_rps,rate_limit_burst,crs_rule_groups,crs_excluded_rules,custom_rules,block_page_id,block_status_code,enabled,updated_by,created_at,updated_at,geoip_countries,geoip_mode,geoip_crawler_exempt,geoip_crawler_engines,waf_check_response,log_request_body,ip_acl_list_refs,ip_whitelist_refs,policy_type,trust_detection"},
+	{name: "security_policies", snapshotColumns: "id,name,description,mode,anomaly_threshold,ip_acl_mode,ip_acl_list,ip_acl_enabled,ip_whitelist,ip_whitelist_enabled,ip_blacklist,rate_limit_enabled,rate_limit_rps,rate_limit_burst,crs_rule_groups,crs_excluded_rules,custom_rules,block_page_id,block_status_code,enabled,updated_by,created_at,updated_at,geoip_countries,geoip_mode,geoip_crawler_exempt,geoip_crawler_engines,waf_check_response,log_request_body,ip_acl_list_refs,ip_whitelist_refs,policy_type,trust_detection,human_verify_mode,human_verify_type,human_verify_ttl,human_exempt_paths,cc_detect_enabled,cc_rps_limit,cc_rps_window,cc_4xx_ratio,cc_session_anomaly,cc_session_ua_threshold"},
 	// rank 入列：绑定顺序是同步语义（执行序/事件归因序/首绑定兜底页选择均
 	// 消费），rank 变更必须 bump cluster_version 才能传播。混版本窗口（旧从
 	// 节点未迁移 rank 列）：旧端按 2 列载荷重建的节哈希与新主端 3 列载荷结构性

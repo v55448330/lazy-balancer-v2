@@ -74,6 +74,16 @@
           </div>
           <div class="strip-divider"></div>
           <div class="guard-item">
+            <div class="strip-label">{{ t('app.security.overview.status.challenged') }}
+              <el-tooltip :content="t('app.security.overview.status.challengedTip')" placement="top">
+                <el-icon><InfoFilled /></el-icon>
+              </el-tooltip>
+            </div>
+            <div class="strip-value is-info">{{ fmtStatNum(overview.today_challenged) }}</div>
+            <div class="strip-sub"><span class="strip-sub-label">{{ t('app.security.overview.status.humanPassRate') }}</span> {{ humanPassRate }}</div>
+          </div>
+        <div class="strip-divider"></div>
+          <div class="guard-item">
             <div class="strip-label">{{ t('app.security.overview.status.normal') }}
               <el-tooltip :content="t('app.security.overview.status.normalTip')" placement="top">
                 <el-icon><InfoFilled /></el-icon>
@@ -86,7 +96,7 @@
               <span class="proto-split-item"><i class="proto-dot proto-dot--http"></i><span class="proto-split-label">HTTP</span><span class="strip-sub-num">{{ fmtStatNum(normalTodaySplit.http) }}</span></span><span class="proto-split-item proto-split-item--tcp"><i class="proto-dot proto-dot--tcp"></i><span class="proto-split-label">TCP</span><span class="strip-sub-num">{{ fmtStatNum(normalTodaySplit.tcp) }}</span></span>
             </div>
           </div>
-        </div>
+          </div>
         <div class="status-lib">
           <div class="lib-row">
             <i class="status-dot" :class="overview.crs_available === false ? 'is-down' : 'is-up'"></i>
@@ -318,6 +328,7 @@ interface Overview {
   yesterday_detected?: number; yesterday_detected_tcp?: number
   normal_today?: number; normal_today_http?: number; normal_today_tcp?: number
   normal_yesterday?: number; normal_yesterday_http?: number; normal_yesterday_tcp?: number
+  today_challenged?: number; today_human_pass?: number; today_human_fail?: number
   // 今日拦截的 TCP（L4 断连）份额：旧后端缺失 → 协议拆分行整行隐藏（防御式）。
   // 原始表直算（不走 rollup——rollup 无 event_type 维度），极端量级下行帽裁剪可能少计。
   today_blocked_tcp?: number
@@ -416,7 +427,27 @@ const attackChartOption = computed(() => ({
   }],
 }))
 
+// 人机验证统计（lb_human admin 端点；端点缺失=旧二进制，全零不报错）
+const humanStats = ref({ challenges: 0, passes: 0, fails: 0, bans: 0 })
+// 通过率口径（2026-11-12）：今日事件（human_pass / human_failed）优先——
+// 与"挑战发放"同源可对账；零样本显性 —。admin 端点值仅作兜底。
+const humanPassRate = computed(() => {
+  const passes = overview.value.today_human_pass ?? 0
+  const fails = overview.value.today_human_fail ?? 0
+  const total = passes + fails
+  if (total > 0) return `${Math.round((passes / total) * 100)}%`
+  const fallback = humanStats.value.passes + humanStats.value.fails
+  return fallback > 0 ? `${Math.round((humanStats.value.passes / fallback) * 100)}%` : '—'
+})
+const fetchHumanStats = async (): Promise<void> => {
+  try {
+    const res = await request.get<APIResponse<{ challenges: number; passes: number; fails: number; bans: number }>>('/security/human/stats', { silent: true })
+    if (res.data) humanStats.value = res.data
+  } catch { /* 静默：总览卡不阻塞 */ }
+}
+
 const fetchData = async () => {
+  void fetchHumanStats()
   try {
     const res = await request.get<APIResponse<Overview>>('/security/overview')
     if (res.data) {
@@ -579,6 +610,7 @@ onMounted(() => { void reloadAll() })
 }
 .strip-value.is-danger { color: #f56c6c; }
 .strip-value.is-warning { color: #e6a23c; }
+.strip-value.is-info { color: #409eff; }
 .strip-sub { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-secondary); white-space: nowrap; font-variant-numeric: tabular-nums; }
 .strip-sub .proto-split-item--tcp { margin-left: 10px; }
 .strip-sub-num { color: var(--text-secondary); }

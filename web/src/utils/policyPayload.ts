@@ -49,6 +49,22 @@ export interface PolicyPayloadInput {
   trustDetection: boolean
   /** 编辑器类型（mixed 不显式提交） */
   policyType: string
+  // —— 阶段 3 人机验证（2026-11-12）——
+  /** off/auto/force；仅 stage3 类型提交非 off 值，其余类型强制 off */
+  humanVerifyMode: string
+  /** slider/js */
+  humanVerifyType: string
+  /** 通过有效期（分钟） */
+  humanVerifyTtl: number
+  /** 豁免路径（前缀/通配），JSON 数组文本下发。IP 级放行唯一入口=阶段 0 信任名单 */
+  humanExemptPaths: readonly string[]
+  // —— 挑战页 CC 触发（同一阶段 3 节点）——
+  ccDetectEnabled: boolean
+  ccRpsLimit: number
+  ccRpsWindow: number
+  cc4xxRatio: number
+  ccSessionAnomaly: boolean
+  ccSessionUaThreshold: number
 }
 
 interface PolicyPayload {
@@ -80,6 +96,16 @@ interface PolicyPayload {
   log_request_body: boolean
   trust_detection: boolean
   policy_type?: string
+  human_verify_mode: string
+  human_verify_type: string
+  human_verify_ttl: number
+  human_exempt_paths: string
+  cc_detect_enabled: boolean
+  cc_rps_limit: number
+  cc_rps_window: number
+  cc_4xx_ratio: number
+  cc_session_anomaly: boolean
+  cc_session_ua_threshold: number
 }
 
 /**
@@ -129,8 +155,23 @@ export const buildPolicyPayload = (input: PolicyPayloadInput): PolicyPayload => 
     trust_detection: input.trustDetection,
     // mixed 不允许显式提交（省略=后端按内容推断）
     policy_type: input.policyType === 'mixed' ? undefined : input.policyType,
+    // 阶段 3 人机验证：仅 stage3 类型承载；其余类型按后端「非本阶段能力归零」
+    // 同口径强制 off/0/关，避免类型切换后残留配置在别的阶段误发射。
+    human_verify_mode: isHumanStage(input.policyType) ? input.humanVerifyMode : 'off',
+    human_verify_type: input.humanVerifyType,
+    human_verify_ttl: input.humanVerifyTtl,
+    human_exempt_paths: JSON.stringify(isHumanStage(input.policyType) ? input.humanExemptPaths : []),
+    cc_detect_enabled: isHumanStage(input.policyType) && input.ccDetectEnabled,
+    cc_rps_limit: input.ccRpsLimit,
+    cc_rps_window: input.ccRpsWindow,
+    cc_4xx_ratio: input.cc4xxRatio,
+    cc_session_anomaly: isHumanStage(input.policyType) && input.ccSessionAnomaly,
+    cc_session_ua_threshold: input.ccSessionUaThreshold,
   }
 }
+
+/** 阶段 3（人机验证）能力域；mixed 可能含 WAF 但不含人机验证阶段（后端同口径归零） */
+const isHumanStage = (policyType: string): boolean => policyType === 'stage3'
 
 /**
  * 爬虫豁免「空引擎」守卫。

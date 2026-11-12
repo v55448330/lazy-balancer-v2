@@ -58,6 +58,18 @@ export interface SecurityStagePolicy {
   // 策略级拦截页（2026-09-25 裁定 stage1/stage2 均可配；投影面此前未呈现）
   block_page_id?: number
   block_status_code?: number
+  // 人机验证（阶段 3，2026-11-12）
+  human_verify_mode?: string
+  human_verify_type?: string
+  human_verify_ttl?: number
+  human_exempt_paths?: string[] | string
+  human_exempt_ips?: string[] | string
+  cc_detect_enabled?: boolean
+  cc_rps_limit?: number
+  cc_rps_window?: number
+  cc_4xx_ratio?: number
+  cc_session_anomaly?: boolean
+  cc_session_ua_threshold?: number
 }
 
 // 规则-策略绑定（GET /security/bindings 值数组元素）
@@ -191,7 +203,7 @@ export interface StageDetailSources {
 }
 
 export interface StageGroup {
-  stage: 0 | 1 | 2 | 3
+  stage: 0 | 1 | 2 | 3 | 4
   title: string
   enabled: boolean
   groups: StagePolicyGroup[]
@@ -239,14 +251,20 @@ export interface RuleFlowTarget {
   pathRules?: RuleFlowPathRule[]
 }
 
-// 阶段编号体系：阶段 0 · 信任名单 → 阶段 1 · IP 访问控制 → 阶段 2 · 限流 → 阶段 3 · WAF
-// （STAGE_SHORT_TITLES 与本常量曾逐字同值双源，已合并为单一份）
+// 阶段编号体系（四阶段，2026-11-12 用户裁定）：
+//   阶段 0 · 信任名单 → 阶段 1 · IP 访问控制 → 阶段 2 · CC 防护（配额 + 人机挑战）
+//   → 阶段 3 · 内容防护（WAF）。
+// 人机验证不再是独立阶段：挑战是 CC 防护的动作之一；旧 stage4（WAF）读入时由
+// normalizePolicyType 归一为 stage3。
 export const STAGE_TITLES: Record<0 | 1 | 2 | 3, string> = {
   0: t('common.app.views.stages.title0'),
   1: t('common.app.views.stages.title1'),
   2: t('common.app.views.stages.title2'),
-  3: t('common.app.views.stages.title3'),
+  3: t('common.app.views.stages.title3waf'),
 }
+
+/** 旧编号归一（stage4 → stage3）；其余原样返回。 */
+export const normalizePolicyType = (t: string): string => (t === 'stage4' ? 'stage3' : t)
 
 // 阶段副标题（流程弹框节点）与阶段 1 脚注：渲染链语义的唯一文案源。
 // 阶段 1 副标题/脚注此前漏列 v2.3.8 爬虫校验（豁免 id 810000-849999 /
@@ -699,25 +717,40 @@ export const buildStageModel = (
     const s1rows = buildStage1Rows(policy, ipLists, blockPages, isTcp)
     if (s1rows.length > 0) stage1Groups.push({ ...base, rows: s1rows })
 
-    // 阶段 2：限流（全部策略的限流集中在 WAF 之前，拦截恒 429）
-    if (policy?.has_rate_limit) {
-      const s2rows = [{ label: t('common.app.views.stages.rateLimitRowLabel'), detail: t('common.app.views.stages.rateLimitSummary', { rps: policy.rate_limit_rps, burst: policy.rate_limit_burst }) }]
-      // 策略级拦截页（stage2 可配策略页，429 时渲染；未配不虚增行）
+    // 阶段 2 · CC 防护（2026-11-12 用户裁定）：配额限流与异常触发/人机挑战
+    // 同属一个阶段与一条策略——执行序固定「配额(429) → 挑战」。
+    {
+      const s2rows: StageRow[] = []
+      if (policy?.has_rate_limit) {
+        s2rows.push({ label: t('common.app.views.stages.rateLimitRowLabel'), detail: t('common.app.views.stages.rateLimitSummary', { rps: policy.rate_limit_rps, burst: policy.rate_limit_burst }) })
+      }
+      if (policy?.human_verify_mode && policy.human_verify_mode !== 'off') {
+        s2rows.push({ label: t('common.app.views.stages.humanModeLabel'), detail: t('common.app.views.stages.humanMode_' + policy.human_verify_mode) })
+        if (policy.human_verify_type) {
+          s2rows.push({ label: t('common.app.views.stages.humanTypeLabel'), detail: t('common.app.views.stages.humanType_' + policy.human_verify_type) })
+        }
+        if (policy.human_verify_ttl) {
+          s2rows.push({ label: t('common.app.views.stages.humanTtlLabel'), detail: t('common.app.views.stages.humanTtlValue', { ttl: policy.human_verify_ttl }) })
+        }
+      }
+      // 异常触发（突刺/4xx/多UA）只在启用 CC 检测且挑战开启时可观测。
+      if (policy?.cc_detect_enabled && policy?.human_verify_mode && policy.human_verify_mode !== 'off') {
+        s2rows.push({ label: t('common.app.views.stages.ccSpikeRowLabel'), detail: t('common.app.views.stages.ccSpikeSummary', { n: policy.cc_rps_limit ?? 0, sec: policy.cc_rps_window ?? 0 }) })
+      }
+      // 策略级拦截页（阶段 2：429 页与挑战失败页共用响应模板；未配不虚增行）
       const s2PageId = binding.block_page_id ?? policy?.block_page_id ?? 0
       if (s2PageId > 0) {
         const page = blockPages.find((p) => p.id === s2PageId)
-        // 与阶段 1/3 同口径——页已删/内容空不得静默省略，须显示
-        // 失效文案（BLOCK_PAGE_BROKEN_429），否则用户看不到回落目标（与同抽屉
-        // 其余阶段分裂）。
         const broken = !page || (page.content ?? '') === ''
         s2rows.push({
           label: t('common.app.views.stages.stage2PageLabel'),
           detail: broken ? BLOCK_PAGE_BROKEN_429 : t('common.app.views.stages.pageOn429', { name: page.name }),
         })
       }
-      stage2Groups.push({ ...base, rows: s2rows })
+      if (s2rows.length > 0) stage2Groups.push({ ...base, rows: s2rows })
     }
 
+    // 阶段 3 · 内容防护（WAF）
     const s3rows = buildStage3Rows(binding, policy, blockPages)
     if (s3rows.length > 0) stage3Groups.push({ ...base, rows: s3rows })
   })
@@ -827,7 +860,7 @@ export const parseUnknownStrings = (raw: unknown): string[] => {
 
 const buildGroupDetails = (
   policy: SecurityStagePolicy | undefined,
-  stage: 0 | 1 | 2 | 3,
+  stage: 0 | 1 | 2 | 3 | 4,
   ipLists: readonly SecurityStageIPList[],
   sources: StageDetailSources | undefined,
 ): StagePolicyDetails | undefined => {
@@ -907,15 +940,16 @@ export const attachStageDetails = (
 
 // ── 策略类型（实体单职化：policy_type 列由后端携带；缺省时按内容推断兜底，前后端同一份逻辑形状） ──
 
-export type SecurityPolicyType = 'stage0' | 'stage1' | 'stage2' | 'stage3' | 'mixed'
+export type SecurityPolicyType = 'stage0' | 'stage1' | 'stage2' | 'stage3' | 'stage4' | 'mixed'
 
-// 追加：阶段文案单一事实源=STAGE_TITLES——合并后
-// 的遗留双源消除，阶段措辞微调不再需双处同步
+// 阶段文案单一事实源=STAGE_TITLES。stage4 是旧编号（存量/旧备份），展示与
+// stage3 同义（内容防护），写路径不再产出。
 export const POLICY_TYPE_LABELS: Record<SecurityPolicyType, string> = {
   stage0: STAGE_TITLES[0],
   stage1: STAGE_TITLES[1],
-  stage2: STAGE_TITLES[2],
-  stage3: STAGE_TITLES[3],
+  stage2: STAGE_TITLES[2], // 阶段 2 · CC 防护
+  stage3: STAGE_TITLES[3], // 阶段 3 · 内容防护
+  stage4: STAGE_TITLES[3], // 旧编号：同义 WAF
   mixed: t('common.app.views.stages.mixedPolicyLabel'),
 }
 
@@ -924,6 +958,7 @@ export const POLICY_TYPE_SHORT_LABELS: Record<SecurityPolicyType, string> = {
   stage1: t('common.app.views.stages.shortStage1'),
   stage2: t('common.app.views.stages.shortStage2'),
   stage3: t('common.app.views.stages.shortStage3'),
+  stage4: t('common.app.views.stages.shortStage3'),
   mixed: t('common.app.views.stages.shortMixed'),
 }
 
@@ -941,6 +976,8 @@ export const pickDefaultPolicyTab = (counts: Readonly<Partial<Record<SecurityPol
 // 推断输入形状（策略类型组件/列表/抽屉共用；SecurityStagePolicy 与策略页 PolicySummary 均结构满足）
 export interface SecurityPolicyTypeInput {
   policy_type?: string
+  // 人机验证（阶段 3）：off 之外=启用人机验证特征
+  human_verify_mode?: string
   has_ip_control: boolean
   has_geoip?: boolean
   has_rate_limit: boolean
@@ -969,8 +1006,20 @@ export interface SecurityPolicyTypeInput {
 // 阶段 3 = WAF 或自定义规则。恰好一个阶段 → 该类型；跨阶段 → mixed（存量混合兼容组）；
 // 零能力 → stage3（存量空策略的 mode 字段定义其为 WAF 策略关闭态）。
 export const inferPolicyType = (p: SecurityPolicyTypeInput): SecurityPolicyType => {
-  if (p.policy_type === 'stage0' || p.policy_type === 'stage1' || p.policy_type === 'stage2' || p.policy_type === 'stage3' || p.policy_type === 'mixed') {
-    return p.policy_type
+  const declared = normalizePolicyType(p.policy_type ?? '')
+  if (declared === 'stage0' || declared === 'stage1' || declared === 'stage2' || declared === 'stage3' || declared === 'mixed') {
+    return declared
+  }
+  // 人机验证策略（human_verify_mode != off）：无其他阶段特征时归 human；
+  // 与其他阶段特征并存 → mixed（与后端 InferPolicyType 同口径）
+  const humanOn = p.human_verify_mode !== undefined && p.human_verify_mode !== '' && p.human_verify_mode !== 'off'
+  if (humanOn) {
+    const s0h = p.ip_whitelist_enabled === undefined ? hasTrustEntries(p) : p.ip_whitelist_enabled && hasTrustEntries(p)
+    const s1h = hasIPACLControl(p) || hasGeoIPControl(p)
+    const s3h = p.mode === 'blocking' || p.mode === 'detection' || p.mode === 'custom_only' || (p.custom_rules_count ?? 0) > 0
+    // 限流与人机同属阶段 2（CC 防护），不再视为混合。
+    if (!s0h && !s1h && !s3h) return 'stage2'
+    return 'mixed'
   }
   // 兜底推断与后端 models.PolicyTypeFeatures 逐条同形（收敛，
   // 原两处口径差异已消除）：=信任名单启用且内联∪引用非空；=IP ACL 启用且
@@ -995,6 +1044,7 @@ export const inferPolicyType = (p: SecurityPolicyTypeInput): SecurityPolicyType 
   if (s0) return 'stage0'
   if (s1) return 'stage1'
   if (s2) return 'stage2'
+  // 零能力：内容防护（WAF）关闭态——与后端 InferPolicyType 默认一致。
   return 'stage3'
 }
 
@@ -1423,16 +1473,20 @@ export const flattenBindingOrder = (
 }
 
 /**
- * 阶段 0 置顶归一单源（与既有组件内 normalizeOrder 同形状）：信任名单（阶段 0）
- * 恒先于拦截判定，展示与提交序统一置顶；其余成员相对序保持不动。
+ * 严格阶段序归一（stage0→stage4，mixed 垫底）：同阶段保留原 rank 相对序。
  */
+// 严格阶段序归一（2026-11-12 四阶段）：stage0→stage3，mixed 垫底；
+// 同阶段保留原 rank 相对序（旧编号 stage4 与 stage3 同义，同档）。
 export const normalizePolicyChainOrder = (
   ids: readonly number[],
   stageOf: (id: number) => SecurityPolicyType | undefined,
-): number[] => [
-  ...ids.filter((id) => stageOf(id) === 'stage0'),
-  ...ids.filter((id) => stageOf(id) !== 'stage0'),
-]
+): number[] => {
+  const order: Record<string, number> = { stage0: 0, stage1: 1, stage2: 2, stage3: 3, stage4: 3, mixed: 5 }
+  return ids.slice().sort((a, b) => {
+    const oa = order[stageOf(a) ?? 'mixed'] ?? 5, ob = order[stageOf(b) ?? 'mixed'] ?? 5
+    return oa - ob // 同阶段保持原相对序（sort 稳定性由调用方数组序保证）
+  })
+}
 
 /**
  * 向导顺序保存 orders 载荷合并：把 staged 对「打开时基线」的相对重排
@@ -1530,7 +1584,7 @@ export const IP_LIST_CATEGORIES = ['搜索引擎爬虫', 'CDN 节点', '云服�
 // （attackFamilyClassOf）把 8 归 GeoIP。这是 历史共享 id 口径，现代引擎
 // 地域事件已改发 800xxx、不再走 id 8，无现实影响；triggerFamily.spec.ts 与
 // TriggerDetailDialog 注释已显式钉住该例外，不得按「与后端同步」改回 geoip。
-export type TriggerStageFamily = 'trust' | 'ipAcl' | 'geoip' | 'crawler' | 'threat' | 'wafCustom' | 'wafCrs' | 'body' | 'other'
+export type TriggerStageFamily = 'trust' | 'ipAcl' | 'geoip' | 'crawler' | 'threat' | 'wafCustom' | 'wafCrs' | 'body' | 'human' | 'other'
 
 const CUSTOM_RULE_OR_CONDITION_ID_BASE = 3000000
 const CUSTOM_RULE_MAX_CONDITIONS = 64
@@ -1550,6 +1604,10 @@ export const customRuleEventDbID = (ruleTriggered: string): number => {
 export const triggerStageFamily = (ruleTriggered: string): TriggerStageFamily => {
   const t = (ruleTriggered ?? '').trim()
   if (!t) return 'other'
+  // 阶段 3 人机验证（2026-11-12）：ingest-human 写入 human_challenge/human_pass/
+  // human_failed（非数字规则 id）——先于数字解析，避免归 other 后详情弹框按
+  // default 误归 ACL。
+  if (t.startsWith('human_')) return 'human'
   if (t === '11') return 'body'
   const n = Number(t)
   if (!Number.isFinite(n)) return 'other'
@@ -1691,7 +1749,10 @@ interface BlockPageStageCapability {
 }
 
 export const blockPageStageCanIntercept = (input: BlockPageStageCapability): boolean => {
+  // 阶段 2 · CC 防护：配额超限恒 429（拦截页生效）→ 可拦截。
   if (input.stage === 2) return true
+  // 阶段 3 · 内容防护（WAF）：仅拦截模式或有可阻断自定义规则时真的产生拒绝；
+  // 注意调用方传 order=3 与 4 时同义（旧编号兼容由 stageOf 归一）。
   if (input.stage === 3) {
     const mode = input.mode ?? 'off'
     if (mode === 'off') return false

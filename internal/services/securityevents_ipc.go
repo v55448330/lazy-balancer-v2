@@ -67,6 +67,8 @@ const (
 
 	// SecurityEventsIPCIngestPath 是 IPC 入库端点路径（写侧硬编码同一路径）。
 	SecurityEventsIPCIngestPath = "/security-events/ingest"
+	// SecurityEventsIPCIngestHumanPath 人机验证事件摄入路径（同 UDS，独立端点）。
+	SecurityEventsIPCIngestHumanPath = "/security-events/ingest-human"
 	// securityEventsIPCMaxBodyBytes 是单次 IPC 请求体上限（写侧批上限 100 行 /
 	// 1MiB，本值留足余量；超出以 413 拒绝——写侧对 4xx 不 spool，避免毒批重试）。
 	securityEventsIPCMaxBodyBytes = 8 << 20

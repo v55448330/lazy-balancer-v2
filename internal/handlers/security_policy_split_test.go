@@ -383,8 +383,8 @@ func TestSplitSecurityPolicy_capBoundaryAndStage2GateCoexist(t *testing.T) {
 	if !strings.Contains(reasons["lb_s1"], "合并后超过 8 条策略上限") {
 		t.Fatalf("lb_s1 reason=%q, want containing 合并后超过 8 条策略上限", reasons["lb_s1"])
 	}
-	if !strings.Contains(reasons["lb_s2"], "限流") {
-		t.Fatalf("lb_s2 reason=%q, want 限流 uniqueness message", reasons["lb_s2"])
+	if !strings.Contains(reasons["lb_s2"], "CC 防护") {
+		t.Fatalf("lb_s2 reason=%q, want CC 防护 uniqueness message", reasons["lb_s2"])
 	}
 	// lb_s3 重映射后恰 8 条绑定（5 其他+3 子策略），原混合绑定消失
 	var count int
@@ -529,8 +529,8 @@ func TestSplitSecurityPolicy_skipsRuleWithExistingStage2(t *testing.T) {
 	skippedIDs := map[string]bool{}
 	for _, s := range payload.Data.Skipped {
 		skippedIDs[s["rule_id"].(string)] = true
-		if reason, _ := s["reason"].(string); !strings.Contains(reason, "限流") {
-			t.Fatalf("skip reason=%q, want 限流 uniqueness message", reason)
+		if reason, _ := s["reason"].(string); !strings.Contains(reason, "CC 防护") {
+			t.Fatalf("skip reason=%q, want CC 防护 uniqueness message", reason)
 		}
 	}
 	if !skippedIDs["lb_dual"] || !skippedIDs["lb_dual2"] {

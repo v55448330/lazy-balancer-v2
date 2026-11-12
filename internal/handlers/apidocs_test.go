@@ -2897,7 +2897,7 @@ func TestAPIDocsBindingEndpointsMatchTCPGateShape(t *testing.T) {
 	if strings.Contains(batchBind.Response, "不经过安全链") {
 		t.Errorf("batch-bind skipped 示例仍断言 TCP 旧行为: %s", batchBind.Response)
 	}
-	if !strings.Contains(batchBind.Response, "含 TCP 不支持的能力（限流/WAF）") {
+	if !strings.Contains(batchBind.Response, "含 TCP 不支持的能力（CC 防护/WAF）") {
 		t.Errorf("batch-bind skipped 示例未呈现能力门文案: %s", batchBind.Response)
 	}
 	if !strings.Contains(batchBind.Description, "能力门") {
@@ -2905,7 +2905,7 @@ func TestAPIDocsBindingEndpointsMatchTCPGateShape(t *testing.T) {
 	}
 
 	bind := routesEntry(t, "POST /security/policies/:id/bind")
-	for _, marker := range []string{"混合策略", "限流", "TCP"} {
+	for _, marker := range []string{"混合策略", "CC 防护", "TCP"} {
 		found := false
 		for _, entry := range bind.Errors {
 			if strings.HasPrefix(entry, "400") && strings.Contains(entry, marker) {

@@ -14,7 +14,13 @@ const (
 	PolicyTypeStage0 = "stage0"
 	PolicyTypeStage1 = "stage1"
 	PolicyTypeStage2 = "stage2"
-	PolicyTypeStage3 = "stage3"
+	// 统一 stage0-4 命名（2026-11-12 用户裁定）：stage3=人机验证、stage4=WAF。
+	// 存量 stage3（WAF）行由 db 迁移改写为 stage4。
+	// 五→四阶段（2026-11-12 用户裁定）：阶段 3 = 内容防护(WAF)；CC 防护（配额+
+	// 人机挑战）统一在阶段 2。PolicyTypeStage4 仅作旧编号兼容（读/导入），
+	// 写路径经 NormalizePolicyType 归一到 stage3。
+	PolicyTypeStage3 = "stage3" // 内容防护（WAF）
+	PolicyTypeStage4 = "stage4" // 旧 WAF 编号（仅存量兼容）
 	PolicyTypeMixed  = "mixed"
 )
 
@@ -72,24 +78,38 @@ func CustomRulesRefCount(raw json.RawMessage) int {
 // 零组→stage3（WAF 是安全策略默认心智，空策略归此）。
 func InferPolicyType(p *SecurityPolicy) string {
 	fs := PolicyTypeFeatures(p)
-	count := 0
-	for _, g := range []bool{fs.G0, fs.G1, fs.G2, fs.G3} {
-		if g {
-			count++
-		}
-	}
+	humanOn := p.HumanVerifyMode != "" && p.HumanVerifyMode != "off"
+	// 四阶段（2026-11-12）：阶段 2 = CC 防护（配额限流 + 人机挑战，二者可并存），
+	// 阶段 3 = 内容防护（WAF）。跨阶段能力组合仍是 mixed（存量兼容形态）。
+	ccStage := humanOn || fs.G2
 	switch {
-	case count > 1:
+	case fs.G0 && (fs.G1 || ccStage || fs.G3):
+		return PolicyTypeMixed
+	case fs.G1 && (ccStage || fs.G3):
+		return PolicyTypeMixed
+	case ccStage && fs.G3:
 		return PolicyTypeMixed
 	case fs.G0:
 		return PolicyTypeStage0
 	case fs.G1:
 		return PolicyTypeStage1
-	case fs.G2:
+	case ccStage:
 		return PolicyTypeStage2
+	case fs.G3:
+		return PolicyTypeStage3
 	default:
+		// 零能力：内容防护（WAF）关闭态——与后端历史默认一致，不再回落到已退役的人机阶段。
 		return PolicyTypeStage3
 	}
+}
+
+// NormalizePolicyType 把旧编号归一到四阶段体系（stage4 → stage3）。创建/更新
+// 写路径必须经此归一，避免新数据继续携带退役编号。
+func NormalizePolicyType(t string) string {
+	if t == PolicyTypeStage4 {
+		return PolicyTypeStage3
+	}
+	return t
 }
 
 // SecurityPolicyIPListIndex 是事件归因成员判定的名单解析快照（内部字段，
@@ -161,8 +181,21 @@ type SecurityPolicy struct {
 	LogRequestBody      bool            `json:"log_request_body"`
 	// IPACLListRefs / IPWhitelistRefs：引用的 security_ip_lists id 数组（JSON 文本，
 	// 与 IPACLList 同为原始 string 列、同扫描机制）。生成期与 inline 条目取并集。
-	IPACLListRefs   string `json:"ip_acl_list_refs"`
-	IPWhitelistRefs string `json:"ip_whitelist_refs"`
+	// 人机验证（阶段 3，2026-11-12）：模式/方式/有效期/豁免——CC 检测阈值
+	// 不在策略（在 global_config 自动封禁同族）。
+	HumanVerifyMode  string          `json:"human_verify_mode"`  // off | auto | force
+	HumanVerifyType  string          `json:"human_verify_type"`  // slider | js
+	HumanVerifyTTL   int             `json:"human_verify_ttl"`   // 分钟
+	HumanExemptPaths json.RawMessage `json:"human_exempt_paths"` // 路径前缀数组
+	// CC 检测阈值（阶段 3 触发源，2026-11-12 用户裁定：在策略配置，自动封禁引用）
+	CCDetectEnabled      bool   `json:"cc_detect_enabled"`
+	CCRPSLimit           int    `json:"cc_rps_limit"`
+	CCRPSWindow          int    `json:"cc_rps_window"`
+	CC4xxRatio           int    `json:"cc_4xx_ratio"`
+	CCSessionAnomaly     bool   `json:"cc_session_anomaly"`
+	CCSessionUAThreshold int    `json:"cc_session_ua_threshold"`
+	IPACLListRefs        string `json:"ip_acl_list_refs"`
+	IPWhitelistRefs      string `json:"ip_whitelist_refs"`
 	// MergedACLList / MergedWhitelist 是生成期由策略加载路径附加的「inline ∪ 引用
 	// IP 列表条目」合并集（去重、inline 优先）；nil 表示该策略未经引用解析
 	//（无引用或非生成路径加载），发射端回退 inline-only。不参与 JSON 序列化。
@@ -192,24 +225,34 @@ type SecurityPolicy struct {
 }
 
 type SecurityPolicySummary struct {
-	ID                 int    `json:"id"`
-	Name               string `json:"name"`
-	Mode               string `json:"mode"`
-	Enabled            bool   `json:"enabled"`
-	RuleCount          int    `json:"rule_count"`
-	HasWAF             bool   `json:"has_waf"`
-	HasIPControl       bool   `json:"has_ip_control"`
-	HasRateLimit       bool   `json:"has_rate_limit"`
-	AnomalyThreshold   int    `json:"anomaly_threshold"`
-	IPACLMode          string `json:"ip_acl_mode"`
-	IPACLEnabled       bool   `json:"ip_acl_enabled"`
-	IPACLList          string `json:"ip_acl_list"`
-	IPWhitelist        string `json:"ip_whitelist"`
-	IPWhitelistEnabled bool   `json:"ip_whitelist_enabled"`
-	IPBlacklist        string `json:"ip_blacklist"`
-	RateLimitRPS       int    `json:"rate_limit_rps"`
-	RateLimitBurst     int    `json:"rate_limit_burst"`
-	CRSExcludedCount   int    `json:"crs_excluded_count"`
+	HumanVerifyMode      string `json:"human_verify_mode"`
+	HumanVerifyType      string `json:"human_verify_type"`
+	HumanVerifyTTL       int    `json:"human_verify_ttl"`
+	HumanExemptPaths     string `json:"human_exempt_paths"`
+	CCDetectEnabled      bool   `json:"cc_detect_enabled"`
+	CCRPSLimit           int    `json:"cc_rps_limit"`
+	CCRPSWindow          int    `json:"cc_rps_window"`
+	CC4xxRatio           int    `json:"cc_4xx_ratio"`
+	CCSessionAnomaly     bool   `json:"cc_session_anomaly"`
+	CCSessionUAThreshold int    `json:"cc_session_ua_threshold"`
+	ID                   int    `json:"id"`
+	Name                 string `json:"name"`
+	Mode                 string `json:"mode"`
+	Enabled              bool   `json:"enabled"`
+	RuleCount            int    `json:"rule_count"`
+	HasWAF               bool   `json:"has_waf"`
+	HasIPControl         bool   `json:"has_ip_control"`
+	HasRateLimit         bool   `json:"has_rate_limit"`
+	AnomalyThreshold     int    `json:"anomaly_threshold"`
+	IPACLMode            string `json:"ip_acl_mode"`
+	IPACLEnabled         bool   `json:"ip_acl_enabled"`
+	IPACLList            string `json:"ip_acl_list"`
+	IPWhitelist          string `json:"ip_whitelist"`
+	IPWhitelistEnabled   bool   `json:"ip_whitelist_enabled"`
+	IPBlacklist          string `json:"ip_blacklist"`
+	RateLimitRPS         int    `json:"rate_limit_rps"`
+	RateLimitBurst       int    `json:"rate_limit_burst"`
+	CRSExcludedCount     int    `json:"crs_excluded_count"`
 	// 摘要携带 CRS 规则组原始 JSON——前端向导跨策略重复告警直接消费摘要，
 	// 不再对每条启用策略 N+1 拉取详情。
 	CRSRuleGroups json.RawMessage `json:"crs_rule_groups"`
@@ -274,9 +317,21 @@ type CreateSecurityPolicyRequest struct {
 	// 显式提交时阶段外字段归一零值；显式 mixed 拒绝（兼容组不可新建）。
 	PolicyType string `json:"policy_type"`
 	// TrustDetection：阶段 0「保留检测记录」开关（默认 false=直通上游）。
-	TrustDetection  bool   `json:"trust_detection"`
-	IPACLListRefs   string `json:"ip_acl_list_refs"`
-	IPWhitelistRefs string `json:"ip_whitelist_refs"`
+	TrustDetection bool `json:"trust_detection"`
+	// 人机验证（阶段 3，2026-11-12）：模式/方式/有效期/豁免——CC 检测阈值
+	// 不在策略（在 global_config 自动封禁同族）。
+	HumanVerifyMode      string `json:"human_verify_mode"`  // off | auto | force
+	HumanVerifyType      string `json:"human_verify_type"`  // slider | js
+	HumanVerifyTTL       int    `json:"human_verify_ttl"`   // 分钟
+	HumanExemptPaths     string `json:"human_exempt_paths"` // 路径前缀数组 JSON 文本
+	CCDetectEnabled      bool   `json:"cc_detect_enabled"`
+	CCRPSLimit           int    `json:"cc_rps_limit"`
+	CCRPSWindow          int    `json:"cc_rps_window"`
+	CC4xxRatio           int    `json:"cc_4xx_ratio"`
+	CCSessionAnomaly     bool   `json:"cc_session_anomaly"`
+	CCSessionUAThreshold int    `json:"cc_session_ua_threshold"`
+	IPACLListRefs        string `json:"ip_acl_list_refs"`
+	IPWhitelistRefs      string `json:"ip_whitelist_refs"`
 }
 
 type UpdateSecurityPolicyRequest struct {
@@ -312,6 +367,17 @@ type UpdateSecurityPolicyRequest struct {
 	PolicyType *string `json:"policy_type"`
 	// TrustDetection：阶段 0「保留检测记录」开关；nil=保留现值。
 	TrustDetection *bool `json:"trust_detection"`
+	// 人机验证（阶段 3）：指针语义（nil=保持现值）
+	HumanVerifyMode      *string `json:"human_verify_mode"`
+	HumanVerifyType      *string `json:"human_verify_type"`
+	HumanVerifyTTL       *int    `json:"human_verify_ttl"`
+	HumanExemptPaths     *string `json:"human_exempt_paths"`
+	CCDetectEnabled      *bool   `json:"cc_detect_enabled"`
+	CCRPSLimit           *int    `json:"cc_rps_limit"`
+	CCRPSWindow          *int    `json:"cc_rps_window"`
+	CC4xxRatio           *int    `json:"cc_4xx_ratio"`
+	CCSessionAnomaly     *bool   `json:"cc_session_anomaly"`
+	CCSessionUAThreshold *int    `json:"cc_session_ua_threshold"`
 }
 
 // SecurityEventFeedItem 威胁大屏增量事件流条目（GET /security/events/feed）：
@@ -376,6 +442,14 @@ type SecurityOverview struct {
 	// 检测 id:12——信任名单命中是可见性记录而非攻击，2026-11-04 裁定；可见
 	// 性由 TCP 检测拆分列与事件列表承载）。
 	TodayDetected int `json:"today_detected"`
+	// TodayChallenged 今日人机挑战发放数（action='challenged' 且
+	// rule_triggered='human_challenge'）：挑战是独立结果，不计拦截/检测；
+	// 原始表直算（人机事件按 IP 每分钟至多 1 条，量级可控）。
+	TodayChallenged int `json:"today_challenged"`
+	// TodayHumanPass/TodayHumanFail 今日挑战通过/失败数（动作同为 challenged，
+	// 以规则 id 区分）。通过率 = pass/(pass+fail)，零样本时前端显性给出 —。
+	TodayHumanPass int `json:"today_human_pass"`
+	TodayHumanFail int `json:"today_human_fail"`
 	// TodayBlockedTCP 是今日拦截的 TCP 协议拆分（event_type='tcp'，原始表
 	// 直算——rollup 表无 event_type 维度；TCP 为新增事件族，行帽裁剪对历史
 	// 无影响）。HTTP 拆分由消费方按 合计−TCP 计算（契约 C5）。

@@ -78,7 +78,7 @@ func TestCreateSecurityPolicy_typeInferredAndMixedRejected(t *testing.T) {
 		t.Fatal(err)
 	}
 	if policyType != "stage3" {
-		t.Fatalf("inferred type=%q, want stage3", policyType)
+		t.Fatalf("inferred type=%q, want stage3（内容防护）", policyType)
 	}
 
 	// 显式 mixed / 非法值 → 400
@@ -105,7 +105,7 @@ func TestCreateSecurityPolicy_typeInferredAndMixedRejected(t *testing.T) {
 }
 
 func TestCreateSecurityPolicy_explicitTypeNormalizesCrawlerExemption(t *testing.T) {
-	for _, policyType := range []string{models.PolicyTypeStage0, models.PolicyTypeStage2, models.PolicyTypeStage3} {
+	for _, policyType := range []string{models.PolicyTypeStage0, models.PolicyTypeStage2, models.PolicyTypeStage4} {
 		t.Run(policyType, func(t *testing.T) {
 			setupSecurityPolicyTestDB(t)
 			router := newSecurityRouter(t)
@@ -207,7 +207,7 @@ func TestUpdateSecurityPolicy_nilTypeReinfersAfterContentChange(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// When：仅更新内容（关闭 ACL 并清空名单），不提供 policy_type → 按合并内容重推断为 stage3
+	// When：仅更新内容（关闭 ACL 并清空名单），不提供 policy_type → 按合并内容重推断为 stage3（内容防护）
 	request := httptest.NewRequest(http.MethodPut, "/security/policies/"+strconv.Itoa(id), strings.NewReader(`{"ip_acl_enabled":false,"ip_acl_list":"[]"}`))
 	request.Header.Set("Content-Type", "application/json")
 	response := httptest.NewRecorder()
@@ -222,7 +222,7 @@ func TestUpdateSecurityPolicy_nilTypeReinfersAfterContentChange(t *testing.T) {
 		t.Fatal(err)
 	}
 	if policyType != "stage3" {
-		t.Fatalf("re-inferred type=%q, want stage3", policyType)
+		t.Fatalf("re-inferred type=%q, want stage3（内容防护）", policyType)
 	}
 }
 
@@ -261,7 +261,7 @@ func TestUpdateSecurityPolicy_explicitTypeSwitchNormalizes(t *testing.T) {
 func TestListAndGetSecurityPolicy_carryPolicyType(t *testing.T) {
 	setupSecurityPolicyTestDB(t)
 	router := newSecurityRouter(t)
-	if _, err := db.DB.Exec(`INSERT INTO security_policies (name,mode,policy_type,enabled) VALUES ('typed-list','blocking','stage3',1)`); err != nil {
+	if _, err := db.DB.Exec(`INSERT INTO security_policies (name,mode,policy_type,enabled) VALUES ('typed-list','blocking','stage4',1)`); err != nil {
 		t.Fatal(err)
 	}
 	var id int
@@ -857,7 +857,7 @@ func TestUpdateSecurityPolicy_emptyPolicyTypeTreatedAsOmitted(t *testing.T) {
 		t.Fatal(err)
 	}
 	if stored != models.PolicyTypeStage3 {
-		t.Fatalf("stored policy_type=%q, want %q（按合并内容重推断）", stored, models.PolicyTypeStage3)
+		t.Fatalf("stored policy_type=%q, want %q（按合并内容重推断：内容防护）", stored, models.PolicyTypeStage3)
 	}
 }
 

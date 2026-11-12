@@ -141,9 +141,9 @@ const GO_KEY_TO_FAMILY: Readonly<Record<string, TriggerStageFamily>> = {
   '地域拦截': 'geoip',
   '威胁情报库': 'threat',
   '请求体异常': 'body',
-  // 限流（429）：后端有族键，但无 sec_events 数据源、列表层不设类别与阶段桶
-  // （见 triggeredFilter 的固定八类），本函数的阶段族归 other。
-  '限流': 'other',
+  // CC 防护（429）：后端族键已由「限流」更名为「CC防护」；无 sec_events 数据源、
+  // 列表层不设类别与阶段桶（见 triggeredFilter 的固定八类），阶段族归 other。
+  'CC防护': 'other',
 }
 
 // 前端有意的阶段族例外（必须显式登记；除下列 id 外一律按后端表取值）：
