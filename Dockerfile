@@ -148,7 +148,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 # 内容，整目录复制会让任意一处非 Go 变更 bust 本层与随后的 Go 编译层。
 # go.mod/go.sum 已在上方下载层复制（本阶段内，同在清单范围），此处不再重复。
 # 清单必须覆盖 go list 派生到的全部顶层 Go 目录（cmd/internal/caddygeoip/
-# caddydeps/wafiplist/geoipnames/caddyl4sec）——scripts/check-dockerfile-copy-manifest.sh
+# caddydeps/wafiplist/geoipnames/caddyl4sec/lbhuman/lbreqmon）——scripts/check-dockerfile-copy-manifest.sh
 # 按 backend 阶段切块，比对清单与受控 + 未跟踪（未被 .gitignore 忽略）的顶层
 # Go 目录，与 test-all 同口径；新增顶层 Go 目录必须同步本行。
 COPY cmd/ ./cmd/
@@ -158,6 +158,8 @@ COPY caddydeps/ ./caddydeps/
 COPY wafiplist/ ./wafiplist/
 COPY geoipnames/ ./geoipnames/
 COPY caddyl4sec/ ./caddyl4sec/
+COPY lbhuman/ ./lbhuman/
+COPY lbreqmon/ ./lbreqmon/
 COPY config/ ./config/
 WORKDIR /app/cmd/server
 # 双缓存挂载（模块+编译缓存，lazy-builder GC 48h）：增量编译只重编改动包；

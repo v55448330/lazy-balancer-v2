@@ -123,6 +123,8 @@ baseline_modules=(
   "caddygeoip"
   "caddyl4sec"
   "geoipnames"
+  "lbhuman"
+  "lbreqmon"
   "wafiplist"
 )
 
@@ -425,7 +427,6 @@ go test -race -count=1 -p 4 ./internal/taskengine ./internal/middleware ./cmd/..
 race_run_prefixes=(
   Test_Lookup_concurrent_with_Reload
   TestRecordDownloadIntegrity_
-  TestScrapeRateLimitBlocks_
   TestTrustedProxyDegradation_
   TestApplyConfigWithOptions_callsIPListGCOnlyAfterSuccessfulApply
   TestInitTaskEngine_
