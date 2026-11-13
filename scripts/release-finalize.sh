@@ -54,7 +54,7 @@ validate_release_channel() {
     beta)
       [[ "$tag" != *-beta ]] && { echo "通道冲突：--push-channel beta 但 tag=$tag 无 -beta 后缀" >&2; return 1; }
       ;;
-    *) echo "未知通道：$channel（仅 beta|stable）" >&2; return 1;;
+    *) echo "未知通道：${channel}（仅 beta|stable）" >&2; return 1;;
   esac
   return 0
 }
@@ -155,7 +155,7 @@ else
   TAG_ARGS=""
   for t in $IMAGE_TAGS; do TAG_ARGS="$TAG_ARGS -t \"$t\""; done
   ( eval "$PROXY_ARGS docker buildx build --builder lazy-builder --platform linux/amd64,linux/arm64 --provenance=false --sbom=false --build-arg VERSION=\"${TAG%%-*}\" $TAG_ARGS --push . > /tmp/finalize-push.log 2>&1" ) \
-    && pass "buildx 推送成功（$IMAGE_TAGS）" || fail "buildx 推送失败（见 /tmp/finalize-push.log）"
+    && pass "buildx 推送成功（${IMAGE_TAGS}）" || fail "buildx 推送失败（见 /tmp/finalize-push.log）"
   # 推送后强拉对账（daemon 缓存可能 stale）；拉取失败不终止——⑥ 一次性容器
   # 终验才是权威判据（无代理环境 pull 走直连可能失败）。
   ( $PROXY_ARGS docker pull -q "v55448330/lazy-balancer-v2:$TAG" > /dev/null 2>&1 ) || fail "强拉对账失败（不影响已推送镜像；⑥ 终验以本地 tag 为准）"
