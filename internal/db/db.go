@@ -1239,7 +1239,10 @@ var newColumnsRegistry = map[string]string{
 	// （幂等 ensureNewColumns），不再各自 pragma 探测 + ALTER。
 	"global_config.waf_mode4_migrated": "BOOLEAN DEFAULT 0",
 	// 阶段合并一次性门（2026-11-12 用户裁定）：人机 stage3 → CC stage2，旧 WAF stage4 → stage3。
-	"global_config.policy_stage_merge_v1":  "BOOLEAN DEFAULT 0",
+	"global_config.policy_stage_merge_v1": "BOOLEAN DEFAULT 0",
+	// 阶段合并修复门（2026-11-13）：v1 旧判据把 v2.4.3 存量 WAF(stage3) 误改型
+	// stage2，本门一次性把「stage2 ∧ 无 CC 特征 ∧ 有 WAF 特征」的行还原 stage3。
+	"global_config.policy_stage_merge_v2":  "BOOLEAN DEFAULT 0",
 	"global_config.sync_switches_migrated": "BOOLEAN DEFAULT 0",
 	// 存量自定义规则清理的一次性指纹 marker（迁移定义版本；''=未跑）。
 	// 该迁移的判据在 JSON 内容里，无法用索引探测，只能整表读+解析——marker
@@ -1502,6 +1505,10 @@ func runMigrations() error {
 	}
 	// 阶段合并（一次）：人机 stage3 并入 CC stage2；旧 WAF stage4 重编号为 stage3。
 	if err := migratePolicyStagesV1(); err != nil {
+		return err
+	}
+	// 阶段合并修复（一次）：还原被 v1 旧判据误改型为 stage2 的存量 WAF 策略。
+	if err := repairPolicyStageMergeV2(); err != nil {
 		return err
 	}
 	// 配额限流下线（2026-11-12 用户裁定）：阶段 2 仅保留 CC 人机挑战。
@@ -6123,8 +6130,17 @@ func validAutobanScopeSet(scope string) bool {
 	return count > 0
 }
 
+// migratePolicyStagesV1 一次性阶段合并：把五阶段中间态（stage3=人机、stage4=WAF，
+// 仅 dev 库可达）收敛为四阶段——人机并入 CC(stage2)、旧 WAF(stage4) 重编号 stage3。
+// 人机候选与改型都带特征甄别（human_verify_mode!='off' 或 cc_detect_enabled=1）：
+// v2.4.3 及更早正式库 stage3=WAF，无甄别会把 WAF 当人机删除/改型（2026-11-13
+// 用户报障根因）。已受损库由 repairPolicyStageMergeV2 还原。幂等：门置位后重跑零改写。
 func migratePolicyStagesV1() error {
-	if err := ensureNewColumns(map[string]string{"global_config.policy_stage_merge_v1": "BOOLEAN DEFAULT 0"}, nil); err != nil {
+	if err := ensureNewColumns(map[string]string{
+		"global_config.policy_stage_merge_v1": "BOOLEAN DEFAULT 0",
+		"security_policies.human_verify_mode": "TEXT NOT NULL DEFAULT 'off'",
+		"security_policies.cc_detect_enabled": "INTEGER NOT NULL DEFAULT 0",
+	}, nil); err != nil {
 		return err
 	}
 	var done bool
@@ -6135,6 +6151,10 @@ func migratePolicyStagesV1() error {
 		return nil
 	}
 	// 合并只在同规则内进行：先把 (rule, target, human) 三元组取全。
+	// 人机候选必须带人机特征（human_verify_mode!='off' 或 cc_detect_enabled=1，
+	// 与 models.PolicyTypeFeatures 的 G2 同口径）：v2.4.3 及更早正式库里
+	// stage3=WAF（五阶段 stage4 中间态从未发布），无特征甄别的旧判据会把
+	// WAF 策略当人机合并删除/改型——2026-11-13 用户报障「升级后 WAF 丢失」根因。
 	type rulePair struct {
 		rule   string
 		target int64
@@ -6146,6 +6166,7 @@ func migratePolicyStagesV1() error {
 		JOIN security_policies p2 ON p2.id=b2.policy_id AND p2.policy_type='stage2'
 		JOIN security_policy_bindings b3 ON b3.rule_caddy_id=b2.rule_caddy_id
 		JOIN security_policies p3 ON p3.id=b3.policy_id AND p3.policy_type='stage3'
+			AND (COALESCE(p3.human_verify_mode,'off') != 'off' OR COALESCE(p3.cc_detect_enabled,0)=1)
 		GROUP BY b2.rule_caddy_id, b3.policy_id
 		ORDER BY b2.rule_caddy_id, b3.policy_id`)
 	if err != nil {
@@ -6211,8 +6232,11 @@ func migratePolicyStagesV1() error {
 				}
 			}
 		}
-		// 剩余人机策略改型为 CC 阶段。
-		res, err := tx.Exec(`UPDATE security_policies SET policy_type='stage2' WHERE policy_type='stage3'`)
+		// 剩余人机策略改型为 CC 阶段——同样只认带人机特征的行：
+		// v2.4.3 存量 stage3=WAF，无特征行保持 stage3（内容防护）。
+		res, err := tx.Exec(`UPDATE security_policies SET policy_type='stage2'
+			WHERE policy_type='stage3'
+			AND (COALESCE(human_verify_mode,'off') != 'off' OR COALESCE(cc_detect_enabled,0)=1)`)
 		if err != nil {
 			return fmt.Errorf("人机策略改型为 stage2: %w", err)
 		}
@@ -6236,6 +6260,91 @@ func migratePolicyStagesV1() error {
 	}
 	if changed > 0 {
 		detail := fmt.Sprintf("启动迁移：阶段合并（人机并入 CC、WAF 重编号）共改写 %d 条", changed)
+		log.Print(detail)
+		recordSystemAudit("启动迁移", "安全策略", detail)
+	}
+	return nil
+}
+
+// repairPolicyStageMergeV2 一次性还原被 v1 旧判据误改型的存量 WAF 策略。
+//
+// 背景（2026-11-13 用户报障「升级后 WAF 安全策略丢失」）：v1 迁移假设升级前
+// 库里 stage3=人机、stage4=WAF（五阶段中间态），但五阶段从未发布——v2.4.3 及
+// 更早正式库里 stage3=WAF。v1 无特征甄别地把全部 stage3 当人机：配对合并删
+// WAF 绑定/行、剩余整体改型 stage2。本迁移把「stage2 ∧ 无 CC 特征 ∧ 有 WAF
+// 特征」的行还原 stage3（字段未被动过，可无损还原）。
+//
+// 边界：
+//   - 已被 v1 物理删除、或改型后又被保存归零（mode=off 且 CRS/自定义清空）的行
+//     无 WAF 特征可认，代码不可恢复——只能走升级前备份，报告单独披露。
+//   - WAF+human 混合行（有 CC 特征）不还原：属 mixed 语义，留人工拆分，
+//     避免把真 CC 策略误判回 WAF。
+//   - 特征谓词与 models.PolicyTypeFeatures 的 G2/G3 同口径（custom_rules 仅认
+//     JSON 数组，畸形经 json_valid 门按 0 计，与 TCPRuleUnsupportedBindingPruneSQL
+//     同源），不反向依赖 handlers。
+//
+// 幂等：policy_stage_merge_v2 门置位后重跑零改写。首装库 v1 已修正判据、无
+// 误改型行，本迁移零命中零审计。
+func repairPolicyStageMergeV2() error {
+	if err := ensureNewColumns(map[string]string{
+		"global_config.policy_stage_merge_v2": "BOOLEAN DEFAULT 0",
+		"security_policies.human_verify_mode": "TEXT NOT NULL DEFAULT 'off'",
+		"security_policies.cc_detect_enabled": "INTEGER NOT NULL DEFAULT 0",
+	}, nil); err != nil {
+		return err
+	}
+	var done bool
+	if err := DB.QueryRow("SELECT COALESCE(policy_stage_merge_v2,0) FROM global_config WHERE id=1").Scan(&done); err != nil && err != sql.ErrNoRows {
+		return err
+	}
+	if done {
+		return nil
+	}
+	// 候选：stage2 ∧ 无 CC 特征（G2 假）∧ 有 WAF 特征（G3 真）。
+	const wafFeatureSQL = `(COALESCE(mode,'off') IN ('blocking','detection','custom_only')
+		OR CASE WHEN json_valid(COALESCE(custom_rules,'[]')) AND json_type(COALESCE(custom_rules,'[]'))='array'
+			THEN json_array_length(COALESCE(custom_rules,'[]')) ELSE 0 END > 0)`
+	const ccFeatureSQL = `(COALESCE(human_verify_mode,'off') NOT IN ('','off') OR COALESCE(cc_detect_enabled,0)=1)`
+	type victim struct {
+		id   int64
+		name string
+	}
+	var victims []victim
+	rows, err := DB.Query(`SELECT id, name FROM security_policies
+		WHERE policy_type='stage2' AND NOT ` + ccFeatureSQL + ` AND ` + wafFeatureSQL + ` ORDER BY id`)
+	if err != nil {
+		return fmt.Errorf("列出阶段合并修复候选: %w", err)
+	}
+	for rows.Next() {
+		var v victim
+		if err := rows.Scan(&v.id, &v.name); err != nil {
+			rows.Close()
+			return fmt.Errorf("读取阶段合并修复候选: %w", err)
+		}
+		victims = append(victims, v)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fmt.Errorf("遍历阶段合并修复候选: %w", err)
+	}
+	rows.Close()
+
+	if err := withWriteTx("policy stage merge repair v2", func(tx *sql.Tx) error {
+		for _, v := range victims {
+			if _, err := tx.Exec(`UPDATE security_policies SET policy_type='stage3' WHERE id=? AND policy_type='stage2'`, v.id); err != nil {
+				return fmt.Errorf("还原 WAF 策略 %d: %w", v.id, err)
+			}
+		}
+		if _, err := tx.Exec(`UPDATE global_config SET policy_stage_merge_v2=1 WHERE id=1`); err != nil {
+			return fmt.Errorf("置位阶段合并修复门: %w", err)
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	// 逐条留痕（v1 只留聚合计数，被删/改型行无法对账——本次补上逐条审计）。
+	for _, v := range victims {
+		detail := fmt.Sprintf("启动迁移：阶段合并修复——策略「%s」(#%d) 由 stage2 还原为 stage3（v1 误把存量 WAF 当人机改型；字段未改写）", v.name, v.id)
 		log.Print(detail)
 		recordSystemAudit("启动迁移", "安全策略", detail)
 	}

@@ -598,7 +598,7 @@ var backupTableNullDefaults = map[string]map[string]any{
 var backupBooleanConfigKeys = []string{
 	"server_tokens_hidden", "access_log_json", "admin_tls_enabled",
 	"sync_global_config", "sync_users", "sync_rules", "sync_waf_files", "sync_security",
-	"sync_switches_migrated", "waf_mode4_migrated", "policy_stage_merge_v1", "autoban_scope_multiselect_v1", // 迁移门列：备份比对按布尔处理
+	"sync_switches_migrated", "waf_mode4_migrated", "policy_stage_merge_v1", "policy_stage_merge_v2", "autoban_scope_multiselect_v1", // 迁移门列：备份比对按布尔处理
 	"mfa_write_guard", "mfa_lockout_enabled",
 	"trusted_proxy_enabled", "trusted_proxy_strict", // v2.3.x 受信代理
 	"autoban_enabled", "autoban_dry_run", // D2:自动封禁布尔键——非布尔形态经 v2 类型门整包 400 点名（count_human_failed 已退役）
