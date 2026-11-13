@@ -223,7 +223,7 @@ test('阶段标题/策略类型标签/名单类别：文案与键集即契约', 
     3: '阶段 3 · 内容防护',
   })
 
-  const policyTypes: SecurityPolicyType[] = ['stage0', 'stage1', 'stage2', 'stage3', 'stage4', 'mixed']
+  const policyTypes: SecurityPolicyType[] = ['stage0', 'stage1', 'stage2', 'stage3', 'mixed']
   assert.deepEqual(Object.keys(POLICY_TYPE_LABELS).sort(), [...policyTypes].sort(), 'POLICY_TYPE_LABELS 键集必须等于 SecurityPolicyType 全枚举')
   assert.deepEqual(Object.keys(POLICY_TYPE_SHORT_LABELS).sort(), [...policyTypes].sort(), '短标签键集同样必须覆盖全枚举')
   for (const type of policyTypes) {
@@ -235,7 +235,6 @@ test('阶段标题/策略类型标签/名单类别：文案与键集即契约', 
   // 阶段类型标签与 STAGE_TITLES 单源（措辞微调不需双处同步）
   assert.equal(POLICY_TYPE_LABELS.stage1, STAGE_TITLES[1])
   assert.equal(POLICY_TYPE_SHORT_LABELS.stage3, '内容防护')
-  assert.equal(POLICY_TYPE_SHORT_LABELS.stage4, '内容防护')
   assert.equal(POLICY_TYPE_LABELS.mixed, '混合策略（兼容旧版）')
 
   // 名单类别是写入值（落库 category）与筛选口径：值与顺序都钉住。

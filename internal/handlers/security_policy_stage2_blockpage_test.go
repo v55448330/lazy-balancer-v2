@@ -1,8 +1,8 @@
 package handlers
 
-// stage2 限流策略拦截页（2026-09-25 用户裁定开放）：创建/更新可携带
-// block_page_id（不再归一清零）；block_status_code 仍归一 0——限流拦截
-// 恒 429（渲染 buildRateLimitErrorRoute 硬编码，指标单独计量）。
+// stage2（CC 防护）策略拦截页（2026-09-25 用户裁定开放）：创建/更新可携带
+// block_page_id（不再归一清零）；block_status_code 仍归一 0——挑战与封禁的
+// 响应码由 lb_human 插件决定（封禁固定 403），策略侧配码无处生效。
 
 import (
 	"fmt"

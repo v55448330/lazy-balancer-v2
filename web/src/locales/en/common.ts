@@ -434,7 +434,7 @@ export default {
       "title3xx": "Redirects: {n}",
       "title4xx": "Client errors: {n}",
       "title5xx": "Server errors: {n}",
-      "titleBlocked": "Blocked (WAF/GeoIP/IP ACL/rate limit): {n}",
+      "titleBlocked": "Blocked (WAF/GeoIP/IP ACL/CC protection): {n}",
       "history": "History",
       "historyRange": "History time range",
       "last1h": "Last hour",

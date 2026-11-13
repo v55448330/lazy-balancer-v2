@@ -1310,7 +1310,7 @@ func normalizeRuleRowsForTransport(ctx context.Context, tx *sql.Tx) (int64, erro
 		return 0, fmt.Errorf("规则跨模式 CA 提供商引用归一失败: %w", err)
 	}
 	// TCP 规则的安全策略绑定收口按 L4 阶段 0/1 语义（契约 C4）：只清理
-	// 「含 G2（限流）/G3（WAF）特征」的绑定——阶段 0/1 绑定由 TCP 渲染链
+	// 「含 G2（CC 防护）/G3（WAF）特征」的绑定——阶段 0/1 绑定由 TCP 渲染链
 	//（buildTCPSecurityRoutes）消费，为合法状态；违规绑定会在策略页
 	// rule_count/绑定视图中显示生效而运行态零强制。谓词单源=
 	// db.TCPRuleUnsupportedBindingPruneSQL（与启动迁移/终态收口共用）。
@@ -1506,7 +1506,7 @@ func validateBackupRuleReferences(tables map[string][]map[string]any) error {
 	}
 	// security_policy_bindings 无外键约束，悬挂引用可原样落库——绑定指向
 	// 不存在的策略时，loadSecurityPolicyContext 查不到策略即按无策略渲染，该规则
-	// WAF/限流/GeoIP 全部静默失效（与同类的静默 weakening）。保存侧绑定
+	// WAF/CC 防护/GeoIP 全部静默失效（与同类的静默 weakening）。保存侧绑定
 	// 要求策略与规则均存在，导入校验须同严。
 	policyRows, policiesCarried := tables["security_policies"]
 	if !policiesCarried && db.DB != nil && len(tables["security_policy_bindings"]) > 0 {
@@ -3509,10 +3509,8 @@ func validateV2BackupSecurityPoliciesWithQuerier(ctx context.Context, tables map
 				return fmt.Errorf("安全策略 #%d（%s）：policy_type 需为 stage0/stage1/stage2/stage3/stage4/mixed 之一，实际 %q", index+1, name, typeStr)
 			}
 		}
-		// 导入侧限流形状与保存侧 validateRateLimitShape
-		// 同口径——enabled=true 而 rps<=0 时发射分支直接跳过限流 handler，而
-		// 汇总/绑定宣称已启用；旧备份（保存侧校验前导出）可携带该形状经导入
-		// 复活。与三枚举同哲学：只做拒绝（数值语义无安全默认值可归一）。
+		// 配额限流已下线：rate_limit_* 三列在上方直接裁掉（旧备份可携带），
+		// 不再做形状校验——列不存在，任何取值都无处生效。
 		// geoip_countries 形状按保存侧 ValidateGeoIPCountries 同口径
 		// （空串/缺省放行——与三枚举的「无值归一」一致；有值则必须是合法 JSON
 		// 数组文本且省份可判）。引用块（block_page_id）在备份缺 security_block_pages
@@ -4225,7 +4223,7 @@ func revalidateImportLiveDependencies(ctx context.Context, tx *sql.Tx, backup *c
 	}
 	// 绑定表的策略轴：初检在策略表缺席时按 live 策略视图放行；窗口内删除被
 	// 引用策略会让绑定落库而 loadSecurityPolicyContext 查不到策略——该规则
-	// WAF/限流/GeoIP 全部静默失效（UI 仍显示已绑定）。锁内按事务视图重验。
+	// WAF/CC 防护/GeoIP 全部静默失效（UI 仍显示已绑定）。锁内按事务视图重验。
 	if len(bindingRows) > 0 && !policiesCarried {
 		livePolicyIDs := make(map[int64]struct{})
 		rows, err := tx.QueryContext(ctx, `SELECT id FROM security_policies`)
@@ -5001,7 +4999,7 @@ func skipEmptyDomainHTTPRules(tables map[string][]map[string]any) []string {
 // skipEmptyBlockPages 移除 content 为空/纯空白（含缺省与 NULL）的
 // security_block_pages 行，返回跳过警告（与
 // skipEmptyDomainHTTPRules 同款软跳过口径）：手造备份 content:"" 原样
-// 落库后，引用该页的 WAF/GeoIP/限流拦截渲染空响应体，静默退化为 Caddy
+// 落库后，引用该页的 WAF/GeoIP/CC 防护拦截渲染空响应体，静默退化为 Caddy
 // 原生 403。被跳过页面的悬挂 block_page_id 引用沿用口径
 // （运行时 JOIN 语义，悬挂不产出规则）；全表跳空时默认页由导入事务内
 // 重播种 + SeedDefaultBlockPage 渲染兜底。

@@ -49,10 +49,10 @@ type MetricsService struct {
 }
 
 // caddyMetricsScrapeTimeout 是 Caddy admin /metrics 的唯一抓取预算单源。
-// 采集链（30s 周期）与仪表盘「限流拦截」卡片抓取的是同一地址、同一 16MB
-// 正文上限，预算分叉会让同一瞬间出现「首页指标正常、限流卡片超时不可用」。
-// 统一取 5s：卡片是同步用户请求且带 5s 缓存窗口，等待预算必须与之一致；
-// 采集链超时只丢一个样本、下一周期自愈，而卡片超时直接表现为数据不可用。
+// 采集链（30s 周期）与 handlers 的实时指标解析抓取的是同一地址、同一 16MB
+// 正文上限，预算分叉会让同一瞬间出现「首页指标正常、实时解析超时不可用」。
+// 统一取 5s：实时解析是同步用户请求，等待预算必须与采集链一致；
+// 采集链超时只丢一个样本、下一周期自愈，而实时解析超时直接表现为数据不可用。
 // 同容器环回下 16MB/5s ≈ 3.2MB/s，正常响应远低于此。
 const caddyMetricsScrapeTimeout = 5 * time.Second
 
@@ -184,12 +184,12 @@ const (
 // 序列片段——该路由无 reverse_proxy，其序列不含任何上游语义。透传路由与
 // 主/路径路由会为同一请求各注入一次指标，任何消费 /metrics 正文的解析器都
 // 必须在行分派前跳过命中该片段的整行，否则同一请求被记两次（请求数/字节量/
-// 状态码分布/限流 429 计数翻倍）。字面量只在本文件出现一次，三个消费点统一
+// 状态码分布计数翻倍）。字面量只在本文件出现一次，两个消费点统一
 // 走 IsGeoIPPassSeries——不要把标记片段复制到消费侧自行匹配。
 const geoIPPassSeriesMarker = `handler="http.handlers.geoip2region"`
 
-// IsGeoIPPassSeries 报告该行是否为 geoip 透传路由注入的序列；采集聚合、实时
-// 指标解析（handlers）与限流卡片 429 解析共用本判据。
+// IsGeoIPPassSeries 报告该行是否为 geoip 透传路由注入的序列；采集聚合与
+// 实时指标解析（handlers）共用本判据。
 // 只有 Caddy 的 caddy_http_* 指标族携带 handler 标签；本插件自注册的
 // lazybalancer_* 族标签集只有 rule/class/direction（见 caddygeoip/rule_metrics.go），
 // 且透传路由不挂规则计量处理器——前缀判定如实表达这一事实，也免去在其他族上
@@ -228,8 +228,7 @@ func (m *MetricsService) collect() {
 		Logf("info", "metrics endpoint recovered")
 	}
 
-	// 读取上限对齐 overviewmetrics 的 16MB 探测模式
-	//规则数×状态码×host 序列的基数爆炸在 30s 采集周期里
+	// 读取上限 16MB：规则数×状态码×host 序列的基数爆炸在 30s 采集周期里
 	// 可分配大块内存，超限按解析失败跳过本样本。
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 16<<20+1))
 	if err != nil {

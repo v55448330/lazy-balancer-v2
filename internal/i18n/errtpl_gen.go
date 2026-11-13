@@ -365,7 +365,7 @@ func init() {
 	RegisterErrTpl("扫描节点列表: %s", "scan node list: %s")
 	RegisterErrTpl("扫描节点站点坐标: %s", "scan node site coordinates: %s")
 	RegisterErrTpl("批准节点: %s", "approve node: %s")
-	RegisterErrTpl("抓取限流指标 panic: %s", "rate-limit metrics collection panicked: %s")
+
 	RegisterErrTpl("拉取主节点快照: %s", "pull master node snapshot: %s")
 	RegisterErrTpl("拉取安全数据: %s", "pull security data: %s")
 	RegisterErrTpl("拉取安全数据失败(%s): %s", "failed to pull security data (%s): %s")
@@ -533,7 +533,7 @@ func init() {
 	RegisterErrTpl("规则 %s 健康检查恢复阈值无效（health_check_healthy_threshold=%s <=0）", "invalid healthy threshold for health checks of rule %s (health_check_healthy_threshold=%s <= 0)")
 	RegisterErrTpl("规则 %s 健康检查超时无效（health_check_timeout=%s <=0）", "invalid health check timeout for rule %s (health_check_timeout=%s <= 0)")
 	RegisterErrTpl("规则 %s 健康检查间隔无效（health_check_interval=%s <=0）", "invalid health check interval for rule %s (health_check_interval=%s <= 0)")
-	RegisterErrTpl("规则 %s 绑定策略 %s 限流已启用但 rate_limit_rps 无效（%s <=0）：该列为类型①值型列（写侧 rps>=1 校验+导入门 400 拒收+启动归一关停 enabled=1&rps<1 的历史脏行），疑似带外直写或旧备份绕过导入门", "rule %s bound policy %s has rate limiting enabled but an invalid rate_limit_rps (%s <= 0): this column is a type-① value column (write-side rps>=1 validation + import gate 400 rejection + startup normalization disabling legacy dirty rows with enabled=1&rps<1); out-of-band direct write or an old backup bypassing the import gate suspected")
+
 	RegisterErrTpl("规则 %s 认证网关身份头 %s 含非法字符", "rule %s: auth gateway identity header %s contains illegal characters")
 	RegisterErrTpl("规则 %s 认证网关身份头清单为空", "rule %s: auth gateway identity header list is empty")
 	RegisterErrTpl("规则 %s 认证网关配置无效: %s", "invalid auth gateway configuration for rule %s: %s")
@@ -731,7 +731,7 @@ func init() {
 	RegisterErrTpl("配置一致性检查 panic: %s", "config consistency check panicked: %s")
 	RegisterErrTpl("配置一致性检查未完成: %s", "config consistency check did not complete: %s")
 	RegisterErrTpl("配置降级中，本轮跳过: %s", "configuration is being downgraded; skipping this round: %s")
-	RegisterErrTpl("采集 Caddy 限流指标失败: %s", "failed to collect Caddy rate-limit metrics: %s")
+
 	RegisterErrTpl("重建证书文件 %s: %s", "rebuild certificate files %s: %s")
 	RegisterErrTpl("重排 CA 冷却任务 %s（规则 %s）: %s", "reschedule CA cooldown task %s (rule %s): %s")
 	RegisterErrTpl("重排滞留任务 %s（规则 %s）: %s", "reschedule stranded task %s (rule %s): %s")

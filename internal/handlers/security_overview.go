@@ -26,15 +26,11 @@ import (
 //   - stage1_blocked_24h / stage3_blocked_24h：近 24h 该规则 blocked 安全事件
 //     按 rule_triggered id 形状分桶——阶段 1（IP 访问控制+威胁情报库+地域拦截预检）=
 //     {2,4,7,8,14} ∪ [800000,900000) ∪ [1500000,1520000)（逐策略 ACL/黑名单预检段，
-//     IsStage1PrecheckID 单一事实源），其余（CRS 9xxxxx/自定义/合成 id）归阶段 3；
-//   - ratelimit_blocks_reload：Caddy /metrics 429 计数（重载口径，自最近一次
-//     配置重载以来累计）按规则 domain + 监听端口映射回规则求和。端口维度不可
-//     省：同域多端口部署下按 host 求和会把各端口规则的计数累加到每条规则上。
-//     域名匹配支持 *.example.com 通配（匹配其子域）；CNAME 等不可见的 host
-//     映射仍显示 0 而非报错（已声明口径，不新造时序）。
+//     IsStage1PrecheckID 单一事实源），其余（CRS 9xxxxx/自定义/合成 id）归阶段 3。
 //
-// 429 抓取失败返回 500（与 GetSecurityRateLimitBlocks 同口径：指标不可达与
-// 暂无限流拦截必须可区分，前端 chip 显示「暂无计数」）。
+// 配额限流退役后不再发射 ratelimit_blocks_reload：阶段 2（CC 防护）的挑战与封禁
+// 统计由 lb_human 插件的 /lb/human/stats 与 /lb/human/live 供给，不经 429 指标。
+// 聚合查询失败显式返回 500——指标不可达与「暂无拦截」必须可区分。
 func (h *Handlers) GetRuleStageStats(c *gin.Context) {
 	ruleCaddyID := c.Param("caddy_id")
 	// 规则存在性判定先于 MetricsDB 分支——零值面板与成功路径同口径
@@ -107,8 +103,7 @@ var ruleStageStatsCache = newTTLCache[ruleStageStatsCacheKey, ruleStageStatsSnap
 
 // loadRuleStageStats 返回单规则近 24h 的阶段分桶计数与分段耗时（命中缓存时
 // 零查询）。分桶口径：阶段 1={2,4,7,8,14}∪[800000,900000)∪[1500000,1520000)
-// 预检段（IsStage1PrecheckID 单一事实源），429 由 ratelimit_blocks_reload 单独供给
-// 阶段 2 chip（不计入阶段 3），非数字 triggered 归「未归因」独立桶（与
+// 预检段（IsStage1PrecheckID 单一事实源），非数字 triggered 归「未归因」独立桶（与
 // categorizeAttack 的「其他/未归因」口径一致），其余归阶段 3。
 // 分桶查询失败显式上抛（不缓存）；耗时为增强信息——失败留 warn 按零值并入
 // 快照（响应仍返回其余已取数据，与缓存前口径一致）。

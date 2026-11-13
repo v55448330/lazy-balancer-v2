@@ -434,7 +434,7 @@ export default {
       "title3xx": "重定向 {n}",
       "title4xx": "客户端错误 {n}",
       "title5xx": "服务器错误 {n}",
-      "titleBlocked": "安全拦截(WAF/GeoIP/IP ACL/限流) {n}",
+      "titleBlocked": "安全拦截(WAF/GeoIP/IP ACL/CC 防护) {n}",
       "history": "历史统计",
       "historyRange": "历史统计时间范围",
       "last1h": "近 1 小时",

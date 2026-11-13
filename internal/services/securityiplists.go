@@ -65,7 +65,7 @@ func parseIPListRefsChecked(raw string) ([]int64, error) {
 
 // parseIPListRefsLogged 渲染路径解析入口：非空畸形 refs 留痕后按
 // 空集处理——行为与旧实现一致（仅保留 inline，不升级 IPRefMissing：该标记会
-// 让整条策略含 WAF/限流一并跳过渲染，缺失面反而放大）。
+// 让整条策略含 WAF/CC 防护一并跳过渲染，缺失面反而放大）。
 func parseIPListRefsLogged(policyID int, field, raw string) []int64 {
 	ids, err := parseIPListRefsChecked(raw)
 	if err != nil {

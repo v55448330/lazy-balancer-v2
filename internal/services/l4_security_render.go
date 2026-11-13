@@ -17,7 +17,7 @@ package services
 // 规则身份或更粗的全局名）。配置字节只含文件路径 → 名单变化零 /load。
 // 缺库降级门与 HTTP 链 securityLibsOK 同款（crs/ip2region 缺失 → 安全段整体
 // 不渲染 + 告警日志，负载均衡不被拖死）。
-// G2（限流）/G3（WAF）特征在渲染层零贡献：绑定写侧 400 拒绝 + 残留自愈
+// G2（CC 防护）/G3（WAF）特征在渲染层零贡献：绑定写侧 400 拒绝 + 残留自愈
 // （db.TCPRuleUnsupportedBindingPruneSQL 族）收敛，渲染侧对带外存量静默忽略
 // （fail-visible 会整份配置拒绝，波及全部规则，方向更差）。
 

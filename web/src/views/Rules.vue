@@ -122,7 +122,7 @@
                   <template v-for="stage in ruleStageModel(row as Rule).stages" :key="stage.stage">
                     <div class="lock-stage">
                       <div class="lock-stage-head" :class="`lock-stage-head--s${stage.stage}`">{{ stage.title }}</div>
-                      <!-- TCP 规则阶段 2/3 恒灰态「不适用」（L4 无限流/WAF 引擎面，绑定侧已门）——
+                      <!-- TCP 规则阶段 2/3 恒灰态「不适用」（L4 无 CC 防护/WAF 引擎面，绑定侧已门）——
                            组有无均不落「未启用」（未启用=可绑未绑，语义不同） -->
                       <div v-if="row.protocol === 'tcp' && stage.stage >= 2" class="lock-stage-line lock-stage-empty">{{ t('common.app.rules.list.stageNotApplicable') }}</div>
                       <!-- 四阶段恒出（2026-09-21 用户裁定：与流程弹框同口径）——空阶段灰态「未启用」不再整段缺席 -->

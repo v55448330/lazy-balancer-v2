@@ -1662,7 +1662,7 @@ func crsExcludedListRefs(payload string) []int64 {
 func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 	// 导入窗口 fast-fail：security_policies 在导入全量替换清单内，且 Update
 	// 取 caddyOpMu 只串行不 fast-fail——排队到导入提交后会按陈旧 id 把刚恢复
-	// 的策略覆盖成本请求的旧表单（CRS 组/排除规则/限流/名单引用被静默弱化）。
+	// 的策略覆盖成本请求的旧表单（CRS 组/排除规则/CC 防护/名单引用被静默弱化）。
 	if rejectWriteDuringImport(c, "执行安全策略写操作") {
 		return
 	}
@@ -1819,7 +1819,7 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.ErrMsg(c, err)})
 		return
 	}
-	// 下方三处门控读(限流/ allow/GeoIP)原以裸连接
+	// 下方三处门控读(CC 防护/ allow/GeoIP)原以裸连接
 	// db.DB 读取,位于 BeginTx 之前——与同函数事务内读的标准漂移;
 	// ImportConfigBackup 不持 caddyOpMu,构成并发写者, 窗口可落
 	// allow+启用+空名单。三读移入 BEGIN IMMEDIATE 事务内,
@@ -1830,7 +1830,7 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 		return
 	}
 	defer tx.Rollback()
-	// 存量行单次读取：本端点在写锁内要拿同一策略行的六组字段（限流 / ACL /
+	// 存量行单次读取：本端点在写锁内要拿同一策略行的六组字段（CC 防护 / ACL /
 	// GeoIP / 引用 / 类型 / 审计 delta 基准），此前按门逐列各读一遍——同一行
 	// 读 10 次（含 3 次全列扫描），整段都在 BEGIN IMMEDIATE 写锁内。收敛为
 	// 事务开头一次 33 列投影，写后只保留必需的终态读（重推断 / 状态码归一 /
@@ -1845,8 +1845,8 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 		}
 		return
 	}
-	// 限流门改用有效值(请求缺失回落存量),与门同口径
-	// ——此前 deref 裸值使部分重启用误报 400/rps=0 落库为宣称启用实际零强制。
+	// 各门改用有效值(请求缺失回落存量),与门同口径
+	// ——此前 deref 裸值使部分更新误报 400,或把零值落库成宣称启用实际零强制。
 	// 空白名单保存已放开（2026-11 用户裁定，同 Create）：allow 模式空生效
 	// 集合允许保存——运行时渲染层仍恒拒（fail-closed），本门取消后不再做
 	// 事务内非空校验。
@@ -2043,7 +2043,7 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 		}
 	}
 	// 阶段外 ACL 启用门：显式 stage0/2/3 策略且自身阶段特征在位
-	// （信任/限流/WAF 内容非空）时，PUT {ip_acl_enabled:true} 会使与原
+	// （信任/CC 防护/WAF 内容非空）时，PUT {ip_acl_enabled:true} 会使与原
 	// 阶段特征并存→重推断把类型改写 mixed（类型与内容漂移）——UPDATE 前
 	// 拒绝。空壳单职策略（无任何阶段特征，落推断零组桶 stage3）首次启用
 	// ACL 走既有重推断路径（单组→stage1 或维持零组桶），不拦；stage1 是
@@ -2053,12 +2053,12 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 		if !stored.IPACLEnabled {
 			// 门条件按有效类型（effType=显式 policy_type ?? 存量类型）+「合并后
 			// 终态特征」判定：特征集必须取「存量行叠加本请求」的合并模型——
-			// 同一请求内关停自身阶段特征（如 stage2 限流 enabled:false/rps:0、
+			// 同一请求内关停自身阶段特征（如 stage2 human_verify_mode:off +
 			// stage3 mode:off）再启用 ACL 时，合并终态只剩 G1，重推断落
 			// stage1 不产生 mixed 漂移，按存量特征误拒会把一步合法转换卡死。
 			// 显式切换 stage1 时阶段外字段已由归零矩阵落零（req 指针即零值，
 			// 叠加后合并模型自然反映），一步「类型切换+启用 ACL」不误拒；
-			// 自身阶段特征在合并后仍在位（缺省类型不动限流/WAF）才拦——
+			// 自身阶段特征在合并后仍在位（缺省类型不动 CC 防护/WAF）才拦——
 			// 该形态 UPDATE 后会重推断成 mixed（类型与内容漂移）。
 			effType := stored.PolicyType
 			if req.PolicyType != nil {
@@ -2215,7 +2215,7 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 		var merged models.SecurityPolicy
 		if err := scanSecurityPolicyRow(tx.QueryRowContext(caddyWriteCtx(c), `SELECT `+securityPolicySelectColumns+` FROM security_policies WHERE id=?`, id), &merged); err == nil {
 			inferred := models.InferPolicyType(&merged)
-			// 单职策略的「顺手加别的阶段」部分更新（如给 stage1 再开限流/
+			// 单职策略的「顺手加别的阶段」部分更新（如给 stage1 再开 CC 防护/
 			// WAF）会把类型静默升格为 mixed，随即锁死「可绑定新规则」资格
 			// （mixed 仅支持更新迁移）——与 Create 侧同口径在落库前拒绝，
 			// 而不是先写后改。mixed 与 ''（待推断存量态，mixed 语义）不拦：
@@ -2568,7 +2568,7 @@ func (h *Handlers) BindRuleToPolicy(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: *msg})
 		return
 	}
-	// 限流策略唯一绑定（2026-09-20 用户裁定）：该规则已绑定其他 CC 防护（阶段 2）策略时
+	// CC 防护策略唯一绑定（2026-09-20 用户裁定）：该规则已绑定其他 CC 防护（阶段 2）策略时
 	// 拒绝第二条（幂等重绑同一条放行）。
 	if policyType == models.PolicyTypeStage2 {
 		var otherStage2 int
@@ -2586,7 +2586,7 @@ func (h *Handlers) BindRuleToPolicy(c *gin.Context) {
 	// 并污染 GetAllSecurityBindings 消费方。与策略校验同口径先判
 	// err 再判存在性：DB 瞬时故障（锁/IO）时不得把故障误报为「规则不存在」400，
 	// 客户端无法区分重试与真 400。protocol 同行判定——TCP 规则可绑阶段 0/1
-	// 特征策略，含 G2（限流）/G3（WAF）特征的策略由 tcpSecurityBindingGate
+	// 特征策略，含 G2（CC 防护）/G3（WAF）特征的策略由 tcpSecurityBindingGate
 	// 能力门拒绝（契约 C4，见下方调用）。
 	target, err := loadRuleBindingTarget(caddyWriteCtx(c), tx, req.RuleCaddyID)
 	if err != nil {
@@ -2599,7 +2599,7 @@ func (h *Handlers) BindRuleToPolicy(c *gin.Context) {
 	}
 	if !target.http {
 		// L4 阶段 0/1（契约 C4）：TCP 规则可绑定 stage0/stage1 特征策略；
-		// 含 G2（限流）/G3（WAF）特征的策略仍拒绝（能力门单源）。
+		// 含 G2（CC 防护）/G3（WAF）特征的策略仍拒绝（能力门单源）。
 		if msg, gateErr := tcpSecurityBindingGate(caddyWriteCtx(c), tx, []int{policyIDInt}); gateErr != nil {
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", gateErr)})
 			return
@@ -2720,7 +2720,7 @@ func normalizePolicyIDs(ids []int) []int {
 type ruleBindingTarget struct {
 	exists   bool
 	protocol string
-	http     bool // protocol == "http"：安全链（WAF/ACL/限流）只挂在 HTTP 路由上
+	http     bool // protocol == "http"：安全链（WAF/ACL/CC 防护）只挂在 HTTP 路由上
 }
 
 // loadRuleBindingTarget 读取规则绑定目标的存在性与协议（lb_rules 单行）：
@@ -2738,8 +2738,8 @@ func loadRuleBindingTarget(ctx context.Context, tx *sql.Tx, ruleCaddyID string) 
 
 // tcpSecurityBindingGate 是 TCP 规则绑定的能力门单源（契约 C4）：TCP 渲染链
 // 只消费阶段 0/1 特征（信任/IP ACL/黑名单/GeoIP，buildTCPSecurityRoutes），
-// 含 G2（限流）/G3（WAF）特征的策略绑定 TCP 即「UI 宣称受保护、运行态零强制」
-// ——整族 400 拒绝，文案「该策略含 TCP 不支持的能力（限流/WAF）」。在调用方
+// 含 G2（CC 防护）/G3（WAF）特征的策略绑定 TCP 即「UI 宣称受保护、运行态零强制」
+// ——整族 400 拒绝，文案「该策略含 TCP 不支持的能力（CC 防护/WAF）」。在调用方
 // 事务视图内整行装载（securityPolicySelectColumns + scanSecurityPolicy 单源）
 // 并按 models.PolicyTypeFeatures 判组。返回 ""=放行；非空=面向用户的 400
 // 文案（取首个违规策略，确定性=id 升序）；err=数据库错误（调用方映射 500）。
@@ -2775,7 +2775,7 @@ func tcpSecurityBindingGate(ctx context.Context, tx *sql.Tx, policyIDs []int) (s
 			fs := models.PolicyTypeFeatures(&p)
 			if fs.G2 || fs.G3 {
 				rows.Close()
-				return fmt.Sprintf("策略 %q（#%d）含 TCP 不支持的能力（限流/WAF），仅阶段 0/1 特征策略可绑定 TCP 规则", p.Name, p.ID), nil
+				return fmt.Sprintf("策略 %q（#%d）含 TCP 不支持的能力（CC 防护/WAF），仅阶段 0/1 特征策略可绑定 TCP 规则", p.Name, p.ID), nil
 			}
 		}
 		if err := rows.Err(); err != nil {
@@ -2900,7 +2900,7 @@ func setRulePoliciesInTx(ctx context.Context, tx *sql.Tx, ruleCaddyID string, po
 	} else if msg != nil {
 		return *msg, nil
 	}
-	// 限流策略唯一绑定：提交集含 ≥2 条 stage2 即拒绝（存量多限流绑定不受影响，
+	// CC 防护策略唯一绑定：提交集含 ≥2 条 stage2 即拒绝（存量多条绑定不受影响，
 	// 收敛后提交即可）。
 	if len(uniqueIDs) > 0 {
 		stage2Count, err := countStage2Policies(tx, ctx, uniqueIDs)
@@ -3212,7 +3212,7 @@ func (h *Handlers) BulkUpdatePolicyBindings(c *gin.Context) {
 		}
 	}
 	// orders：按提交序整体重建各规则绑定（与 PUT /security/rules/:id/policies
-	// 同语义同门：存在性/HTTP 能力门/上限/限流唯一，setRulePoliciesInTx 单源）。
+	// 同语义同门：存在性/HTTP 能力门/上限/CC 防护唯一，setRulePoliciesInTx 单源）。
 	// 顺序与现状一致 → unchanged（零写入，不推 cluster_version）；单规则校验
 	// 失败进 skipped 不整体拒绝（FE 策略保存批量移动场景，坏规则不拖垮好规则）。
 	orderedChanged, orderedUnchanged := 0, 0
@@ -3308,7 +3308,7 @@ func (h *Handlers) BulkUpdatePolicyBindings(c *gin.Context) {
 // BatchBindSecurityPolicies 批量绑定安全策略（规则列表多选浮动操作条）：
 // {rule_ids:[], policy_ids:[], mode:"merge"|"replace"}。单事务：策略存在性
 // 一次校验；逐规则存在（否则进 skipped+reason；TCP 规则走绑定能力门，
-// 含限流/WAF 特征的策略进 skipped）；merge=现有
+// 含 CC 防护/WAF 特征的策略进 skipped）；merge=现有
 // ∪请求去重后不超 maxBindingsPerRule（超限进 skipped）、replace=直接采用请求集
 // （同上限）；逐规则
 // DELETE（replace 或绑定变化时）+INSERT OR IGNORE；全程一次 finishTxApply
@@ -3391,7 +3391,7 @@ func (h *Handlers) BatchBindSecurityPolicies(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: *msg})
 		return
 	}
-	// 限流策略唯一绑定：提交集含 ≥2 条 stage2 即 400（存量多限流绑定不受影响，
+	// CC 防护策略唯一绑定：提交集含 ≥2 条 stage2 即 400（存量多条绑定不受影响，
 	// 收敛后提交即可）。
 	if len(uniqueIDs) > 0 {
 		stage2Count, err := countStage2Policies(tx, caddyWriteCtx(c), uniqueIDs)
@@ -3479,7 +3479,7 @@ func (h *Handlers) BatchBindSecurityPolicies(c *gin.Context) {
 			}
 			final = merged
 		}
-		// 限流策略唯一绑定（merge 路径）：合并后单规则含 ≥2 条 stage2 → 该规则
+		// CC 防护策略唯一绑定（merge 路径）：合并后单规则含 ≥2 条 stage2 → 该规则
 		// 进 skipped（保持原绑定不动，与绑定上限同口径；replace 已由提交集门拦截）。
 		if req.Mode == "merge" {
 			stage2Count, err := countStage2Policies(tx, caddyWriteCtx(c), final)
@@ -3772,7 +3772,7 @@ func (h *Handlers) SplitSecurityPolicy(c *gin.Context) {
 	// 拆分的校验面（与 Create 共享的三门，非「完全同门」）：①按本次将落库的
 	// 子策略字段并集做引用存在性校验（拦截页/自定义规则/IP 名单 refs/CRS 排除
 	// 作用域名单）；②内置威胁名单禁令；③全局策略数量上限。Create 的语义校验
-	// （枚举、GeoIP 条目、限流形状、CIDR 列表、自定义规则 JSON、爬虫豁免、
+	// （枚举、GeoIP 条目、CIDR 列表、自定义规则 JSON、爬虫豁免、
 	// CRS 字段）在此不重复执行：子策略是原策略列值的原样复制，这些列在原始
 	// 写入路径（Create/Update 写侧校验）已过同款门；历史/带外写入的脏值由
 	// 渲染层 fail-visible 兜底。对复制值再跑一遍只会把这些存量脏值从
@@ -3973,7 +3973,7 @@ func (h *Handlers) SplitSecurityPolicy(c *gin.Context) {
 	for _, ruleID := range boundRules {
 		// 协议门（与四个绑定写路径同一单源判定 loadRuleBindingTarget）：TCP
 		// 渲染链只消费阶段 0/1 特征（buildTCPSecurityRoutes：信任/IP ACL/
-		// 黑名单/GeoIP）——拆分产出含 G2（限流）/G3（WAF）特征的子策略复制
+		// 黑名单/GeoIP）——拆分产出含 G2（CC 防护）/G3（WAF）特征的子策略复制
 		// 绑定到 TCP 规则即「UI 宣称受保护、运行态零强制」+ 挤占
 		// maxBindingsPerRule 额度——进 skipped 保留原绑定（与上限/stage2 门
 		// 同口径）。带外形态：正常写路径已有协议门，非 HTTP 绑定行只能来自
@@ -3993,7 +3993,7 @@ func (h *Handlers) SplitSecurityPolicy(c *gin.Context) {
 			// 拆分产出含 G2/G3 特征子策略（=源策略 features.G2/G3）时进
 			// skipped 保留原绑定（能力门单源，与四个绑定写路径同口径）。
 			if features.G2 || features.G3 {
-				skipped = append(skipped, skippedRule{ruleID, "该策略含 TCP 不支持的能力（限流/WAF），仅阶段 0/1 特征策略可绑定 TCP 规则"})
+				skipped = append(skipped, skippedRule{ruleID, "该策略含 TCP 不支持的能力（CC 防护/WAF），仅阶段 0/1 特征策略可绑定 TCP 规则"})
 				continue
 			}
 		}
@@ -4006,10 +4006,10 @@ func (h *Handlers) SplitSecurityPolicy(c *gin.Context) {
 			skipped = append(skipped, skippedRule{ruleID, fmt.Sprintf("合并后超过 %d 条策略上限（%d+%d）", maxBindingsPerRule, existingCount, len(newIDs))})
 			continue
 		}
-		// 限流策略唯一门：拆分产出 stage2 子策略（features.G2）时，
+		// CC 防护策略唯一门：拆分产出 stage2 子策略（features.G2）时，
 		// 该规则现存的其他绑定若已含 stage2（mixed 存量 [mixed,stage2] 并存
 		// 形态合法——BindRuleToPolicy 唯一门不追溯存量），直接重映射会出现
-		// 单规则双限流——进 skipped 保留原绑定（与绑定上限同口径），解除现有
+		// 单规则双 CC 防护——进 skipped 保留原绑定（与绑定上限同口径），解除现有
 		// stage2 绑定后可重新拆分。
 		if features.G2 {
 			var otherStage2 int
@@ -4221,7 +4221,7 @@ var ruleTriggeredFamilyPrefixes = buildRuleTriggeredFamilyPrefixes()
 
 func buildRuleTriggeredFamilyPrefixes() map[string][]string {
 	// 形态条件族与多字符 CRS 前缀族保持手写；单 ID 族（信任名单/IP 访问
-	// 控制/地域拦截/威胁情报库/请求体异常/限流）由 id→家族表派生。
+	// 控制/地域拦截/威胁情报库/请求体异常/CC 防护 429 存量）由 id→家族表派生。
 	families := map[string][]string{
 		// v2.3.8 触发类型扩展：爬虫Bot（810000-899999 全段）形态条件由
 		// crawlerFamilyCondition 承载（互斥 6 位 GLOB）。旧两位前缀
@@ -4260,7 +4260,7 @@ func buildRuleTriggeredFamilyPrefixes() map[string][]string {
 func appendFamilyPrefixCondition(ors *[]string, args *[]any, prefix string) {
 	// 单数字族（2/3/4/5/7/8）与两位完整 id 族（14=威胁情报库）为精确匹配——
 	// LIKE 前缀会让自定义规则 5 位 ID（24567/14xxxx 等）交叉命中 IP/威胁族。
-	// 3 字符前缀不全是 CRS 族——「限流」是 429 精确 ID，
+	// 3 字符前缀不全是 CRS 族——CC 防护的 429 存量是精确 ID，
 	// 旧实现无条件 prefix+"___" 生成 LIKE '429___'，永不命中。CRS 六位 ID
 	// 恒以 9 开头（920/921/949/959 族），据此区分：9 开头仍长度锚定，其余
 	// 3 字符按精确匹配。
@@ -4993,7 +4993,7 @@ const (
 	attackFamilyCrawler                       // 6 位 8[1-9]xxxx（爬虫豁免/伪装）
 	attackFamilyIPACL                         // msg「IP 黑/白名单/访问控制」/ id 2/4/7
 	attackFamilyTrust                         // id 3/5/12 信任名单
-	attackFamilyRateLimit                     // id 429 限流（状态码精确匹配，防御性分支）
+	attackFamilyRateLimit                     // id 429：退役配额限流的存量事件（归 CC 防护展示）
 )
 
 // legacyRuleFamily 阶段化模型之前的固定 SecRule id 的族归属。
@@ -5069,8 +5069,8 @@ func attackFamilyClassOf(ruleTriggered, ruleMsg string) attackFamilyClass {
 		// triggeredLabel 须与本分支保持一致。
 		return attackFamilyCustomRule
 	case legacyFamily.class == attackFamilyRateLimit:
-		// 429 精确命中（限流由 caddy-ratelimit 直接返回、无审计行，见
-		// categorizeAttack 的生产者声明）。
+		// 429 精确命中（退役配额限流的存量事件；新 CC 防护事件为 human_*，
+		// 可达性实证见 categorizeAttack 的生产者声明）。
 		return attackFamilyRateLimit
 	case legacyFamily.class == attackFamilyBodyAnomaly:
 		return attackFamilyBodyAnomaly
@@ -5169,15 +5169,14 @@ func crsAttackLabel(ruleTriggered string) string {
 }
 
 func categorizeAttack(ruleTriggered, ruleMsg string) string {
-	// 限流拦截（rule_triggered=429）与事件列表「限流」族/筛选同口径：此前
-	// 429 落 attackFamilyOther（「其他」），纯限流站点于是显示「拦截很多但
-	// 攻击类型几乎全是其他」。429 是精确 ID，无前缀歧义。
+	// 429（退役配额限流的存量事件）归 CC 防护族：此前落 attackFamilyOther
+	// （「其他」），纯限流站点于是显示「拦截很多但攻击类型几乎全是其他」。
+	// 429 是精确 ID，无前缀歧义。
 	//
-	// 生产者声明（防御性分支）：caddy-ratelimit 直接返回 caddyhttp.Error(429)，
-	// 不经 coraza 事务 → security_events 里没有 rule_triggered=429 的行，本
-	// 分支当前不可达（前端筛选项已同步移除「限流」）。保留它是因为限流计数走
-	// Prometheus 指标，一旦将来把 429 也落审计行，此处即为正确归类点；
-	// 改动本函数会改变 rollup 固化口径——必须同步递增
+	// 可达性（实证）：阶段 2 配额限流退役后不再产生新的 429 行——CC 防护改由
+	// lb_human 插件响应，事件 id 为 human_*；但退役前的存量 429 行仍在库中
+	// （本地库实测 72 行，2026-10-15~10-16），本分支对这些行仍然生效，不是死码。
+	// 分类口径变更会改变 rollup 固化结果——必须同步递增
 	// threatRollupClassifierVersion（见 security_threat_screen.go 代际注释）。
 	// 5 位 ID 恒为自定义规则——先于 3 位前缀判定,crID≥82000
 	// 发射 92000-99999 时不再被 9 前缀遮蔽误标。
@@ -5216,7 +5215,7 @@ func categorizeAttack(ruleTriggered, ruleMsg string) string {
 //
 //	信任名单（id 3/12）/ IP 访问控制（黑白名单 2/4/5/7 + 地域 8/8xxxxx +
 //	威胁库 14/msg）/ WAF（CRS 9xxxxx + 自定义 5 位与 1 开头 ≥7 位合成）/
-//	请求体异常（id 11）/ 限流（429 精确）/ 其他。
+//	请求体异常（id 11）/ CC 防护（429 存量精确 + human_* 由摄取侧归类）/ 其他。
 //
 // ID 形态判定收敛至 attackFamilyClassOf 单一事实源，
 // 本函数只做类→桶映射。与概览视图的唯一有意分叉：9 开头 CRS 段整段归 WAF
@@ -5224,10 +5223,9 @@ func categorizeAttack(ruleTriggered, ruleMsg string) string {
 // msg/id 门。与 family 筛选表（ruleTriggeredFamilyPrefixes/
 // customRuleFamilyCondition/geoipFamilyCondition）SQL 侧口径同步义务不变。
 func stageCategorizeAttack(ruleTriggered, ruleMsg string) string {
-	// 限流（429）独立成桶：与事件列表「限流」族、429 筛选及限流卡片同口径，
-	// 此前落「其他」——同一事件在列表与总览口径分叉。
-	// 生产者声明同 categorizeAttack：当前无 429 审计行（限流不经 coraza），
-	// 属防御性分支；分类口径变更须递增 threatRollupClassifierVersion。
+	// 429 存量独立成桶：与事件列表的 CC 防护归类同口径，此前落「其他」——
+	// 同一事件在列表与总览口径分叉。退役后新事件为 human_*（不经本函数的
+	// 数字 id 形态判定）；分类口径变更须递增 threatRollupClassifierVersion。
 	class := attackFamilyClassOf(ruleTriggered, ruleMsg)
 	// WAF=自定义规则类+CRS 9 前缀段（categorizeAttack 的 crsAttackLabel 细分段
 	// 此处整段归一）。msg 门命中的 9 开头形态同样归 WAF（不 fall-through）。
@@ -6093,14 +6091,13 @@ func newSecurityPolicyDetail(p *models.SecurityPolicy) securityPolicyDetail {
 	}
 }
 
-// validateRateLimitShape 限流字段与发射端同口径：enabled=true 而
-// rps<=0 时 caddy.go 发射分支直接跳过限流 handler，但汇总/绑定仍宣称已启用
-// 与 ip_acl_mode / 三枚举的「UI 宣称启用、实际零强制」同型漂移，
-// 在写入侧拒绝。
+// validateSecurityPolicyEnums 写入侧枚举白名单：mode / ip_acl_mode / geoip_mode
+// 与拦截状态码、异常阈值必须落在发射端支持的取值内——「UI 宣称启用、实际零
+// 强制」的同型漂移在此拒绝（配额限流已下线，其 rps/burst 形状校验随之退役）。
+// 拦截状态码不含 429：429 是 HTTP 请求频次保护（登录/MFA/集群/MCP 端点）的
+// 语义，安全链拦截页若用 429 会与之混淆；存量 429 行由 services 侧
+// legacySecurityEnumBackfills 归一为 403。
 func validateSecurityPolicyEnums(mode, ipACLMode, geoIPMode string, blockStatusCode, anomalyThreshold int) error {
-	// 429 剔除——拦截语义 429 保留给限流(overviewmetrics.go
-	// 限流卡片按 code=429 计数),WAF 拦截页 429 会混入限流指标口径;存量 429
-	// 行由 services 侧 legacySecurityEnumBackfills 归一为 403。
 	validBlockStatus := map[int]bool{400: true, 401: true, 403: true, 404: true, 503: true}
 	if blockStatusCode != 0 && !validBlockStatus[blockStatusCode] {
 		return fmt.Errorf("拦截状态码必须为 400/401/403/404/503 之一，当前值 %d", blockStatusCode)
@@ -6151,12 +6148,11 @@ func resolveCreatePolicyType(req *models.CreateSecurityPolicyRequest) (string, e
 			IPACLListRefs: req.IPACLListRefs, IPWhitelistRefs: req.IPWhitelistRefs,
 		})
 		if policyType == models.PolicyTypeMixed {
-			return "", fmt.Errorf("策略内容跨多个阶段，请显式按阶段类型（信任名单/IP 访问控制/限流/WAF）分别创建")
+			return "", fmt.Errorf("策略内容跨多个阶段，请显式按阶段类型（信任名单/IP 访问控制/CC 防护/WAF）分别创建")
 		}
 		// 缺省类型推断路径与显式类型路径同口径归一拦截状态码：无页策略的
-		// deny 恒 403、stage2 限流恒 429，落库非零值会让详情/列表宣称一个
-		// 不生效的状态码（旧实现只对显式类型调用归一，API/MCP 省略
-		// policy_type 即可落 404）。
+		// deny 恒 403，落库非零值会让详情/列表宣称一个不生效的状态码
+		// （旧实现只对显式类型调用归一，API/MCP 省略 policy_type 即可落 404）。
 		req.BlockStatusCode = normalizeBlockStatusCode(req.BlockStatusCode, policyType, req.BlockPageID)
 		return policyType, nil
 	case models.PolicyTypeStage0, models.PolicyTypeStage1, models.PolicyTypeStage2, models.PolicyTypeStage4, models.PolicyTypeStage3:
@@ -6167,7 +6163,7 @@ func resolveCreatePolicyType(req *models.CreateSecurityPolicyRequest) (string, e
 		applyStageZerosToCreate(req, req.PolicyType)
 		return req.PolicyType, nil
 	case models.PolicyTypeMixed:
-		return "", fmt.Errorf("混合策略为存量兼容形态，请按阶段类型（信任名单/IP 访问控制/限流/WAF）创建")
+		return "", fmt.Errorf("混合策略为存量兼容形态，请按阶段类型（信任名单/IP 访问控制/CC 防护/WAF）创建")
 	default:
 		return "", fmt.Errorf("无效的策略类型：%s（可选 stage0/stage1/stage2/stage3）", req.PolicyType)
 	}
@@ -6188,9 +6184,9 @@ const (
 	stageZeroIPBlacklist                            // ip_blacklist
 	stageZeroGeoIP                                  // geoip_mode / geoip_countries
 	stageZeroGeoIPCrawler                           // geoip_crawler_exempt / geoip_crawler_engines
-	stageZeroHuman                                  // human_verify_* 五列（人机验证属阶段 3）
+	stageZeroHuman                                  // human_verify_* 五列 + cc_*（阶段 2 CC 防护专属）
 	stageZeroBlockPageAll                           // block_page_id + block_status_code
-	stageZeroBlockStatusCode                        // 仅 block_status_code（stage2 限流恒 429）
+	stageZeroBlockStatusCode                        // 仅 block_status_code（无页策略的 deny 恒 403）
 	stageZeroTrustDetection                         // trust_detection（stage0 专属）
 )
 
@@ -6198,10 +6194,9 @@ const (
 // （四阶段，2026-11-12 用户裁定）：
 //   - stage0 仅保留信任名单 + trust_detection（直通/保留检测，无拦截页）；
 //   - stage1 保留 IP ACL/黑名单/GeoIP/爬虫豁免/拦截页；
-//   - stage2 = CC 防护：保留限流配额 + 人机挑战 + cc_* 阈值 + 拦截页
-//     （状态码恒 429，故状态码归零）；
+//   - stage2 = CC 防护：保留人机挑战 + cc_* 阈值 + 挑战页（配额限流已下线）；
 //   - stage3 = 内容防护(WAF)：保留 mode/CRS/自定义规则/拦截页，人机/CC/
-//     限流/名单/地域全部归零；
+//     名单/地域全部归零；
 //   - stage4 为旧编号，按 stage3 处理（读兼容）。
 func outOfStageZeroFamilies(policyType string) []stageZeroFamily {
 	policyType = models.NormalizePolicyType(policyType)
@@ -6211,11 +6206,11 @@ func outOfStageZeroFamilies(policyType string) []stageZeroFamily {
 	case models.PolicyTypeStage1:
 		return []stageZeroFamily{stageZeroModeOff, stageZeroCRSText, stageZeroWAFFlags, stageZeroIPWhitelist, stageZeroTrustDetection, stageZeroHuman}
 	case models.PolicyTypeStage2:
-		// CC 防护：突刺/4xx/多UA 阈值、人机挑战与豁免保留。CC「封禁」响应退役
-		// （2026-11-13）：封禁由自动封禁管线承载，拦截页/状态码归零。
+		// CC 防护：突刺/4xx/多UA 阈值、人机挑战与豁免保留；挑战页沿用策略
+		// block_page_id（2026-09-25 用户裁定可配），故拦截页/状态码不归零。
 		return []stageZeroFamily{stageZeroModeOff, stageZeroCRSText, stageZeroWAFFlags, stageZeroIPACL, stageZeroIPWhitelist, stageZeroIPBlacklist, stageZeroGeoIP, stageZeroGeoIPCrawler, stageZeroTrustDetection}
 	case models.PolicyTypeStage3:
-		// 内容防护（WAF）：保留 mode/CRS/自定义规则/拦截页；人机、CC、限流、
+		// 内容防护（WAF）：保留 mode/CRS/自定义规则/拦截页；人机、CC、
 		// 名单、地域、信任检测全部归零。
 		return []stageZeroFamily{stageZeroIPACL, stageZeroIPWhitelist, stageZeroIPBlacklist, stageZeroGeoIP, stageZeroGeoIPCrawler, stageZeroTrustDetection, stageZeroHuman}
 	}
@@ -6223,9 +6218,9 @@ func outOfStageZeroFamilies(policyType string) []stageZeroFamily {
 }
 
 // normalizeBlockStatusCode 写侧拦截状态码归一口径（Create/Update 单一事实源）：
-// 状态码只在「非 stage2 ∧ 已绑定自定义拦截页」时被渲染消费——stage2 限流拦截
-// 恒 429（状态码列无意义），无页策略的 deny 恒 403（blockStatusForPolicy 仅对
-// 有有效页的策略分配合成码）。其余形态落零，避免详情/列表宣称一个不生效的值。
+// 状态码只在「已绑定自定义拦截页」时被渲染消费——无页策略的 deny 恒 403
+// （blockStatusForPolicy 仅对有有效页的策略分配合成码）。无页形态落零，
+// 避免详情/列表宣称一个不生效的值。
 // normalizeBlockResponseMode 把策略级拦截响应方式归一到
 // auto|html|json 三值：auto=按请求头自动选择（浏览器 HTML / API JSON）。
 // 空值与非法值一律 auto（fail-safe：保持历史自动行为）。
@@ -6252,7 +6247,7 @@ func normalizeBlockStatusCode(statusCode int, policyType string, blockPageID int
 // 内容不漂移；归一先于内容校验，归一后的空内容天然通过各形状校验）。
 // stage0 仅保留信任名单+trust_detection（直通/保留检测二选一，无拦截页）；
 // stage1 保留 IP ACL/黑名单/GeoIP+拦截页（信任已归属阶段 0，一律清除）；
-// stage2 仅保留限流（恒 429、拦截页保留——2026-09-25 用户裁定可配）；
+// stage2 保留 CC 防护（人机挑战 + cc_* 阈值 + 挑战页——2026-09-25 用户裁定可配）；
 // stage3 保留 WAF+拦截页。
 // mode 归 off（阶段 0/1/2 策略无 WAF 引擎面）。
 //
@@ -6374,7 +6369,7 @@ func stageZeroFamilyOwnerStage(f stageZeroFamily) string {
 	case stageZeroHuman:
 		return "2"
 	}
-	return "4" // WAF 族（mode/CRS/WAF flags）归属阶段 4
+	return "3" // WAF 族（mode/CRS/WAF flags）归属阶段 3（内容防护）
 }
 
 // outOfStageConflictMessage 按「阶段外字段显式生效」矩阵生成 400 文案。
@@ -6383,10 +6378,10 @@ func stageZeroFamilyOwnerStage(f stageZeroFamily) string {
 // 调用方无法从 200 区分「已生效」与「被忽略」，审计 delta 也不含该字段——
 // 与缺省类型路径（校验门给出的 400）形成同一意图两种结果。显式生效即 400。
 //
-// 惰性默认值不算冲突：编辑器对不呈现的字段仍回传默认值（限流 rps/burst
-// 100/50、爬虫引擎清单、关闭开关下保留的名单），它们在该阶段不产生行为面。
-// 拦截页/状态码两族不参与判定：阶段 0 的页面字段是纯展示残留，阶段 2 的页面
-// 本就保留（状态码恒 429）——归零不改变可观测行为。
+// 惰性默认值不算冲突：编辑器对不呈现的字段仍回传默认值（CC 阈值、爬虫引擎
+// 清单、关闭开关下保留的名单），它们在该阶段不产生行为面。
+// 拦截页/状态码两族不参与判定：阶段 0 的页面字段是纯展示残留，阶段 2 的挑战页
+// 本就保留——归零不改变可观测行为。
 func outOfStageConflictMessage(policyType string, active func(stageZeroFamily) bool) string {
 	for _, family := range outOfStageZeroFamilies(policyType) {
 		if !active(family) {
@@ -6438,9 +6433,9 @@ func updateOutOfStageConflict(req *models.UpdateSecurityPolicyRequest, policyTyp
 	})
 }
 
-// countStage2Policies 统计给定策略 id 集合中 stage2（限流）策略的数量——限流
-// 策略唯一绑定（2026-09-20 用户裁定：一条规则最多绑定一条限流策略，多限流
-// 叠加无意义且配置面误导；存量多限流绑定保持可运行，写路径收敛到一条）。
+// countStage2Policies 统计给定策略 id 集合中 stage2（CC 防护）策略的数量——CC 防护
+// 策略唯一绑定（2026-09-20 用户裁定：一条规则最多绑定一条 CC 防护策略，多条
+// 叠加无意义且配置面误导；存量多条绑定保持可运行，写路径收敛到一条）。
 func countStage2Policies(tx *sql.Tx, ctx context.Context, ids []int) (int, error) {
 	if len(ids) == 0 {
 		return 0, nil

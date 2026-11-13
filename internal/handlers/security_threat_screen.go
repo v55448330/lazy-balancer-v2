@@ -50,7 +50,7 @@ var threatRuleNamePointQueriesForTest atomic.Int64
 // ——nil 键表示该 id 在 security_custom_rules 中不存在（回退
 // 「自定义规则（#id）」）。大屏直接展示本标签：事件里的 rule_triggered 是
 // coraza SecRule id，裸数字对用户无意义（阶段 1 预检为合成 id、CRS 为 9xxxxx、
-// 自定义规则为 DB id+10000 或可回解的 OR 分支、限流固定 429）。解析失败时回退「可读类别 + 原始
+// 自定义规则为 DB id+10000 或可回解的 OR 分支、CC 防护历史事件固定 429）。解析失败时回退「可读类别 + 原始
 // id」，绝不静默丢 id——排障需要 id 才能对回规则文件。
 func describeThreatRuleNameWithNames(key string, customNames map[int]string) string {
 	if key == "" {
@@ -69,7 +69,7 @@ func describeThreatRuleNameWithNames(key string, customNames map[int]string) str
 	case 7:
 		return "IP 白名单拒绝（#7）"
 	case 429:
-		return "限流触发（#429）"
+		return "CC 防护触发（#429）"
 	}
 	// 其余固定 id 的族标签由 legacyRuleFamilies 派生（与 triggerTypeForRule/
 	// attackFamilyClassOf/筛选表同源）：id:5 是「绕过模式占位」的信任名单

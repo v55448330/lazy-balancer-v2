@@ -117,7 +117,7 @@ test('策略向导阶段 0 提示：跳段话术限 stage0，mixed 信任命中�
   assert.match(policies, /t\('app\.security\.policies\.stage0\.projection'\)/, '投影条按类型限定跳段')
   assert.ok(zhLexicon.includes('「类型=信任名单（stage0）」策略命中后跳过全部后续安全阶段（直通=零安全事件；保留检测=仅由独立轻量检测事务记录，动作=检测）'), '投影条原文必须在 zh 母本词条中')
   assert.match(policies, /t\('app\.security\.policies\.stage0\.trustTip'\)/, '提示线按类型限定跳段')
-  assert.ok(zhLexicon.includes('「类型=信任名单（stage0）」策略：名单内 IP 命中后跳过全部后续安全阶段（IP 访问控制 / 限流 / WAF'), '提示线原文必须在 zh 母本词条中')
+  assert.ok(zhLexicon.includes('「类型=信任名单（stage0）」策略：名单内 IP 命中后跳过全部后续安全阶段（IP 访问控制 / CC 防护 / WAF'), '提示线原文必须在 zh 母本词条中')
   assert.ok(zhLexicon.includes('mixed 等其他类型策略信任命中为引擎内检测降级'), 'mixed 场景如实呈现引擎内降级')
   assert.doesNotMatch(policies, /保留检测模式仅记录检测、不拦截/, '旧「仅记录检测」话术退场')
 })

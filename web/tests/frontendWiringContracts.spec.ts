@@ -141,7 +141,7 @@ test('fs96-03 拦截页汇总类型门先于 block_page_id 判定（阶段 0 无
   assert.ok(typeGate < unsetGate, '阶段 0（stages 为空）必须先返回，否则永远命中「未选择自定义页面」')
   // i18n 后双钉:调用点钉键,zh 母本钉原文(任一漂移必红)
   assert.match(summary, /t\('app\.security\.policies\.bp\.stage2NoPage', \{ n: total \}\)/, '阶段 2 专属文案不得丢')
-  assert.ok(code('src/locales/zh/security.ts').includes('限流拦截返回空响应体 429'), '阶段 2 专属文案必须在 zh 母本词条中')
+  assert.ok(code('src/locales/zh/security.ts').includes('挑战与封禁按内置页返回'), '阶段 2 专属文案必须在 zh 母本词条中')
 })
 
 test('fs96-05 策略列表默认/保存/迁移后 tab 跟随实际类型', () => {

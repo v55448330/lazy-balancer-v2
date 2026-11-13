@@ -3245,8 +3245,8 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		return
 	}
 	// TCP 终态收口（不只协议切换）——按 L4 阶段 0/1 语义（契约 C4）只清理
-	// 「含 G2（限流）/G3（WAF）特征」的绑定：这类绑定在 TCP 渲染链零效果
-	//（预检 coraza/限流/WAF 均为 HTTP 链专属），只会虚增策略 rule_count/
+	// 「含 G2（CC 防护）/G3（WAF）特征」的绑定：这类绑定在 TCP 渲染链零效果
+	//（预检 coraza/CC 防护/WAF 均为 HTTP 链专属），只会虚增策略 rule_count/
 	// 绑定视图。stage0/stage1 特征绑定是合法状态，保留（渲染由
 	// buildTCPSecurityRoutes 消费）。存量/带外改库写入的违规绑定同样在此
 	// 收口（启用端点/导入/启动迁移共用 db.TCPRuleUnsupportedBindingPruneSQL

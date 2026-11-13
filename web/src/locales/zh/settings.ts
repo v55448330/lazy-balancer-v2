@@ -41,7 +41,7 @@ export default {
         },
         "trust": {
           "title": "受信代理",
-          "desc": "CDN/前置代理回源时开启，按真实客户端 IP 判定名单/地域/限流",
+          "desc": "CDN/前置代理回源时开启，按真实客户端 IP 判定名单/地域/CC 防护",
           "ranges": "受信网段",
           "rangesPlaceholder": "粘贴该 CDN 回源网段（CIDR），以官方公布为准",
           "saveAsListBtn": "存为列表",

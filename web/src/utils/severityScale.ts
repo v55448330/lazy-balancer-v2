@@ -36,9 +36,12 @@ export const overlayDetectionGrade = (base: AnomalySeverity, action: string): An
  * - 爬虫伪装 `[850000,900000)`（+policyID）=12 → 与 12 分族同档。
  *
  * 检测模式只把高危族降为中危（存量行是粗粒度定性，不做中→低的二次下调，
- * 与评分分支的整档下移不同）。限流 429 不产生安全事件行（caddy-ratelimit 直接
- * 返回、无审计行），故不参与本回退。481-484 是渲染器发射的 HTTP 阻断状态码，
+ * 与评分分支的整档下移不同）。481-484 是渲染器发射的 HTTP 阻断状态码，
  * 不是 rule_triggered 值，落入兜底分支。
+ *
+ * 阶段 2 配额限流退役后不再产生新的 429 事件行（CC 防护改由 lb_human 插件
+ * 响应，事件 id 为 human_*）；退役前的 429 存量行仍带引擎评分，走 anomalySeverity
+ * 分档，不落本回退（本回退只处理 anomaly_score=0 的历史行）。
  */
 export const GEOIP_CRAWLER_EXEMPT_BASE = 810000
 export const GEOIP_CRAWLER_SPOOF_BASE = 850000

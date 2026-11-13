@@ -3,7 +3,7 @@
 //     放开后选择器混排 HTTP/TCP，默认只看 HTTP 保持既有选择视野；
 //   ②列表行显著标注协议类型：TCP 青色徽标走全局 .proto-tcp-tag 单源
 //     （原 warning 口径废弃），HTTP 行补蓝徽标——混排后逐行可辨识；
-//   ③TCP 行能力门置灰逻辑保持：含限流/WAF 特征的策略对 TCP 不可选，
+//   ③TCP 行能力门置灰逻辑保持：含 CC 防护/WAF 特征的策略对 TCP 不可选，
 //     筛选只收窄候选列表，不改判据。
 //
 // 运行：cd web && npm test
@@ -81,7 +81,7 @@ test('绑定规则弹框（策略侧规则选择器）：行协议徽标复用�
   assert.doesNotMatch(editor, /type="warning"[^>]*picker-proto-tag/)
 })
 
-test('绑定规则弹框：TCP 规则 × 含限流/WAF 特征策略的置灰门保持', () => {
+test('绑定规则弹框：TCP 规则 × 含 CC 防护/WAF 特征策略的置灰门保持', () => {
   const reason = member(editor, 'const pickerBlockReason = ')
   assert.match(reason, /rule\.protocol === 'tcp' && !policySupportsTcp\(currentPolicyType\.value \?\? undefined\)/)
   assert.match(reason, /TCP_BIND_UNSUPPORTED_REASON/)

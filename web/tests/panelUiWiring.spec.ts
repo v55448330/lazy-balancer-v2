@@ -229,12 +229,13 @@ test('主列表失败可辨识（错误态 + 横幅重试 + 空态文案切换�
   const rejected = text.indexOf("if (polRes.status === 'rejected')")
   const setErr = text.indexOf('policiesLoadError.value = true', rejected)
   assert.ok(rejected > 0 && setErr > rejected, 'rejected 分支必须置错误态')
-  // 成功路径：主列表按严格阶段序落值（stage0→stage4，mixed 垫底），并复位错误态
+  // 成功路径：主列表按严格阶段序落值（stage0→stage3，mixed 垫底），并复位错误态
   const okPath = text.indexOf('policies.value = (polRes.value.data || [])')
   assert.ok(okPath > 0, '成功路径必须给主列表赋值')
   const reset = text.indexOf('policiesLoadError.value = false', okPath)
   assert.ok(reset > okPath, '成功路径必须复位错误态')
-  assert.match(text.slice(okPath, reset), /stage4: 4/, '阶段序排序必须含阶段 4（五阶段模型）')
+  assert.match(text.slice(okPath, reset), /stage3: 3, mixed: 5/, '阶段序排序必须是四阶段模型（stage0→stage3 + mixed 垫底）')
+  assert.doesNotMatch(text.slice(okPath, reset), /stage4/, '旧编号 stage4 已在读入侧归一，排序表不得再留该档')
   assert.match(text.slice(okPath, reset), /localeCompare/, '同阶段必须按名称稳定排序')
 })
 
@@ -427,10 +428,10 @@ test('拦截页汇总必须过阶段能力门（stage3 off / stage1 无能力不
   const summary = member(text, 'const blockPageSummary = computed')
   assert.match(summary, /stageCapableOf\(/)
   assert.match(summary, /t\('app\.security\.policies\.bp\.stageIneffective'/)
-  // 限流例外行：429 状态码恒定的口径必须保留
-  // i18n 后双钉:调用点钉键,zh 母本钉 429 口径原文(任一漂移必红)
+  // 阶段 2 例外行：挑战与封禁的内置页口径必须保留（配额限流已下线，不再宣称 429）
+  // i18n 后双钉:调用点钉键,zh 母本钉原文(任一漂移必红)
   assert.match(summary, /t\('app\.security\.policies\.bp\.stage2NoPage'/)
-  assert.ok(code('src/locales/zh/security.ts').includes('限流拦截返回空响应体 429'), '限流 429 恒定口径原文必须在 zh 母本词条中')
+  assert.ok(code('src/locales/zh/security.ts').includes('挑战与封禁按内置页返回'), '阶段 2 内置页口径原文必须在 zh 母本词条中')
   assert.doesNotMatch(summary, /规则已配置阶段页覆盖/)
 })
 
@@ -802,7 +803,7 @@ test('TCP 绑定门谓词与文案单源（securityStages）', () => {
   assert.match(stages, /export const policySupportsTcp = /)
   // i18n 后双钉:调用点钉键,zh 母本钉原文(任一漂移必红)
   assert.match(stages, /export const TCP_BIND_UNSUPPORTED_REASON = t\('common\.app\.views\.stages\.tcpUnsupportedReason'\)/)
-  assert.ok(code('src/locales/zh/views.ts').includes('该策略含 TCP 不支持的能力（限流/WAF）'), 'TCP 绑定门文案原文必须在 zh 母本词条中')
+  assert.ok(code('src/locales/zh/views.ts').includes('该策略含 TCP 不支持的能力（CC 防护/WAF）'), 'TCP 绑定门文案原文必须在 zh 母本词条中')
   // 两个绑定入口共用谓词，不得各写第二份
   assert.match(code('src/components/SecurityBindingEditor.vue'), /policySupportsTcp/)
   assert.match(code('src/views/security/SecurityPolicies.vue'), /policySupportsTcp/)

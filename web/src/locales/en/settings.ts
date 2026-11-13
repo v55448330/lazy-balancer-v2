@@ -41,7 +41,7 @@ export default {
         },
         "trust": {
           "title": "Trusted proxies",
-          "desc": "Enable when a CDN or front proxy is in front; lists, geo and rate limits judge by the real client IP",
+          "desc": "Enable when a CDN or front proxy is in front; lists, geo and CC protection judge by the real client IP",
           "ranges": "Trusted ranges",
           "rangesPlaceholder": "Paste the CDN's origin ranges (CIDR), per its official published list",
           "saveAsListBtn": "Save as list",

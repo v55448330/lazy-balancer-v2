@@ -94,7 +94,7 @@ export default {
     },
     "page": {
      "title": "拦截页面",
-     "desc": "管理各阶段拦截（IP 访问控制 / 限流 / WAF）返回给客户端的自定义页面",
+     "desc": "管理各阶段拦截（IP 访问控制 / CC 防护 / WAF）返回给客户端的自定义页面",
      "newPage": "新建页面"
     },
     "alert": {
@@ -650,7 +650,7 @@ export default {
     },
     "page": {
      "create": "新建策略",
-     "desc": "管理 WAF 防火墙、IP 访问控制和限流策略",
+     "desc": "管理 WAF 防火墙、IP 访问控制和 CC 防护策略",
      "title": "安全策略"
     },
     "status": {
@@ -676,7 +676,7 @@ export default {
      "confirm": "确认更新迁移",
      "deleteNote": "全部规则重映射成功后原策略将被删除；存在被跳过的规则时原策略保留（因仍在使用）",
      "noBindings": "当前无规则绑定本策略",
-     "rateLimitRisk": "阶段 2 唯一风险：{names} 已绑定其他 CC 防护策略——拆分将产出阶段 2 子策略，这些规则会跳过重映射（每条规则最多一条阶段 2 策略），保持原绑定",
+     "ccPolicyRisk": "阶段 2 唯一风险：{names} 已绑定其他 CC 防护策略——拆分将产出阶段 2 子策略，这些规则会跳过重映射（每条规则最多一条阶段 2 策略），保持原绑定",
      "remapDesc": "原策略的绑定整体改挂到子策略",
      "remapTitle": "将重映射绑定",
      "subtitle": "混合策略「{name}」将按阶段迁移为单职子策略（兼容组不再支持新建）",
@@ -689,7 +689,7 @@ export default {
      "relatedRulesTitle": "关联规则（{n}）",
      "subtitle": "混合策略（兼容旧版）· 只读查看——经「更新迁移」拆分为单职策略后可编辑",
      "attributionLabel": "归因口径",
-     "attributionValue": "阶段 3 按触发策略显示；阶段 1 预检合并拦截与阶段 2 限流 429 由绑定链首位有页策略显示；规则级阶段 1/3 覆盖优先",
+     "attributionValue": "阶段 3 按触发策略显示；阶段 1 预检合并拦截由绑定链首位有页策略兜底；阶段 2 CC 防护挑战页取策略自身配置（未配回退内置验证页）",
      "crsAllDefault": "全部（默认）",
      "excludedWithPath": "{n} 条（路径 {paths}）",
      "geoModeRegions": "{mode} · {n} 区域",
@@ -711,12 +711,11 @@ export default {
      "titleEdit": "编辑策略",
      "titleView": "查看策略",
      "typeLabel": "策略类型",
-           "subHuman": "人机验证策略：配置挑战模式/方式/有效期与豁免，检测阈值在自动封禁的 CC 检测规则",
-      "subMixed": "配置 WAF 检测规则、IP 访问控制、限流与规则关联",
+      "subMixed": "配置内容防护规则、IP 访问控制、CC 防护与规则关联",
      "subStage0": "配置信任名单条目与直通/保留检测模式",
      "subStage1": "配置 IP 访问控制、地域拦截与拦截页",
-     "subStage2": "配置速率限制（恒 429）",
-     "subStage4": "WAF 策略：模式 / CRS 规则 / 自定义规则 / 拦截页配置","subStage3": "配置 WAF 模式、CRS 规则组、自定义规则与拦截页"
+     "subStage2": "配置人机验证挑战与 CC 异常检测",
+     "subStage3": "配置 WAF 模式、CRS 规则组、自定义规则与拦截页",
     },
     "stage0": {
      "detectOff": "关闭（默认）：信任 IP 直通上游，不产生任何安全事件",
@@ -724,7 +723,7 @@ export default {
      "keepDetectLabel": "保留检测记录",
      "projection": "本策略将在关联规则的信任名单阶段生效——「类型=信任名单（stage0）」策略命中后跳过全部后续安全阶段（直通=零安全事件；保留检测=仅由独立轻量检测事务记录，动作=检测）；mixed 等其他类型策略信任命中为引擎内检测降级（仅记录不拦截、不跳段）",
      "trustIpLabel": "信任 IP",
-     "trustTip": "「类型=信任名单（stage0）」策略：名单内 IP 命中后跳过全部后续安全阶段（IP 访问控制 / 限流 / WAF；直通=零安全事件，保留检测=仅由独立轻量检测事务记录，动作=检测）；mixed 等其他类型策略信任命中为引擎内检测降级（仅记录不拦截、不跳段）；内联与引用列表合并生效",
+     "trustTip": "「类型=信任名单（stage0）」策略：名单内 IP 命中后跳过全部后续安全阶段（IP 访问控制 / CC 防护 / WAF；直通=零安全事件，保留检测=仅由独立轻量检测事务记录，动作=检测）；mixed 等其他类型策略信任命中为引擎内检测降级（仅记录不拦截、不跳段）；内联与引用列表合并生效",
      "modeDetection": "保留检测记录",
      "modePass": "直通上游",
      "detectDetail": "保留检测记录（事件动作=检测）",
@@ -844,7 +843,7 @@ export default {
     },
      "crawlerLabel": "爬虫豁免",
      "crawlerNoneWarn": "未勾选任何引擎：等于豁免全部引擎（此形态不可保存，请至少勾选一个或关闭爬虫豁免）",
-     "crawlerTip": "勾选的引擎经反向 DNS/官方 IP 段验证为真实爬虫后豁免地域拦截（IP 名单/WAF/限流仍全量生效）；伪装爬虫 UA 的请求会被拒绝并记录攻击事件。360 无反查支持按官方 IP 段验证；标注「观察级」的引擎按厂商域名验证",
+     "crawlerTip": "勾选的引擎经反向 DNS/官方 IP 段验证为真实爬虫后豁免地域拦截（IP 名单/WAF/CC 防护仍全量生效）；伪装爬虫 UA 的请求会被拒绝并记录攻击事件。360 无反查支持按官方 IP 段验证；标注「观察级」的引擎按厂商域名验证",
      "divider": "区域控制",
      "ipv4Note": "地域规则仅对 IPv4 生效：IPv6 与不可解析客户端按「海外」处理（拦截模式勾选海外时将被拦截；仅允许模式只勾选省份时将被拦截）。IP 库未安装时地域规则不可启用。",
      "loadFailed": "地域数据加载失败，已保存的地域配置仍保留。",
@@ -872,7 +871,6 @@ export default {
      "responseHtml": "始终 HTML",
      "responseJson": "始终 JSON",
      "responseTip": "自动：浏览器/文档导航返回 HTML，API / XHR 请求（Accept: application/json、X-Requested-With、Sec-Fetch-Mode: cors）返回 JSON。",
-     "statusTipStage2": "限流拦截恒为 429（便于指标单独计量），不可修改",
      "bindingsAttribution": "已关联 {n} 条规则：触发各策略拦截时，分别显示该策略自己配置的拦截页；未配置拦截页的策略触发时，显示兜底页（首个启用拦截页的策略{winner}）",
      "fallbackFacet": "{n} 条规则：其他未配页策略触发时，显示兜底页（首个启用拦截页的策略）",
      "fallbackNote": "触发拦截时将显示兜底页（绑定链首个启用且有页的策略）",
@@ -880,15 +878,9 @@ export default {
      "noPageFallback": "已关联 {n} 条规则：本策略未配置拦截页——触发拦截时显示兜底页（绑定链首个启用且有页的策略）",
      "pageActive": "已关联 {n} 条规则：触发本策略拦截时，均显示本拦截页「{page}」",
      "pageInvalid": "已关联 {n} 条规则：本拦截页已失效（页面已删除或内容为空），保存前请重新选择",
-     "stage2NoPage": "已关联 {n} 条规则：本策略未配置拦截页——限流拦截返回空响应体 429",
+     "stage2NoPage": "已关联 {n} 条规则：本策略未配置拦截页——挑战与封禁按内置页返回",
      "stageIneffective": "{stage}：当前配置不会产生该阶段拦截，页面不会被使用",
      "tcpFacet": "{n} 条 TCP 规则：拦截为断连，不经过拦截页"
-    },
-    "rate": {
-     "burstLabel": "突发余量",
-     "burstTip": "次，短时允许超出速率上限的额外请求数",
-     "limitLabel": "速率上限",
-     "projection": "本策略将在关联规则的限流阶段生效——限流拦截恒为 429（便于指标单独计量）；拦截页在下一步配置，缺省时跟随同规则其他策略的页面"
     },
     "extract": {
      "categoryLabel": "分类",
@@ -912,7 +904,7 @@ export default {
      "selfPos": "本策略排第 {n} 位",
      "title": "选择关联规则",
      "blockCap": "已达 {max} 条绑定上限，无法继续绑定",
-     "blockStage2": "该规则已绑定其它限流策略（每规则仅一条），需先解绑"
+     "blockStage2": "该规则已绑定其它 CC 防护策略（每规则仅一条），需先解绑"
     },
     "preview": {
      "orderUpdate": "按新执行序更新 {n} 条规则的绑定顺序",
@@ -934,7 +926,7 @@ export default {
      "challengePageBuiltin": "系统内置挑战页（按当前验证方式自动选用滑块 / JS 内置页）",
      "challengePageTip": "挑战页必须包含当前验证方式的验证组件占位符；内置验证页已包含，自定义页请在拦截页编辑器插入对应组件。",
      "challengePageNeedsWidget": "所选拦截页未包含当前验证方式的验证组件；请先在拦截页编辑器插入对应组件。",
-     "ccEnabledTip": "仅在人机验证开启时生效：同一来源短时突刺/4xx 激增/多 UA 会话 → 升级为挑战或封禁（区别于阶段 2 限流的全局速率上限，这里判定的是挑战页上的攻击性行为）",
+     "ccEnabledTip": "仅在人机验证开启时生效：同一来源短时突刺/4xx 激增/多 UA 会话 → 升级为挑战（判定的是挑战页上的攻击性行为；封禁由自动封禁管线按统计口径承载）",
       "ccRpsLabel": "突刺阈值",
       "ccRpsPer": "次 /",
       "ccRpsSec": "秒",
@@ -1012,7 +1004,7 @@ export default {
      "saveConfirm": "确定保存安全策略「{name}」？将立即重新加载 Caddy 配置。",
      "saveFailed": "保存失败",
      "stage0NeedsIp": "阶段 0 · 信任名单策略必须配置至少一个信任 IP（内联或引用列表）",
-     "stage2Conflict": "以下规则已绑定其它限流策略（每规则仅一条），请先解绑后再关联：{names}",
+     "stage2Conflict": "以下规则已绑定其它 CC 防护策略（每规则仅一条），请先解绑后再关联：{names}",
      "unsavedConfirm": "有未保存的修改，关闭将丢弃本次编辑。是否继续？"
     },
     "summary": {
@@ -1036,13 +1028,9 @@ export default {
      "stage0": "阶段 0 · 信任名单",
      "stage1": "阶段 1 · IP 访问控制",
      "stage2": "阶段 2 · CC 防护",
-     "stage2cc": "阶段 2 · CC 防护",
-     "stage3waf": "阶段 3 · 内容防护",
+     "stage3": "阶段 3 · 内容防护",
      "bindings": "关联规则",
-     "preview": "配置预览",
-           "stage3Human": "阶段 2 · CC 防护",
-      "stage4Waf": "阶段 3 · 内容防护",
-      "stage3Waf": "阶段 3 · 内容防护"
+     "preview": "配置预览"
     },
     "hint": {
      "refCombo": "内联 {inline} 条 + 引用列表 {refs} 条（合计 {total} 条）"
@@ -1051,8 +1039,7 @@ export default {
      "stage3": "阶段 3 · 内容防护（WAF：模式 / CRS / 自定义规则 / 拦截页）",
      "stage0": "阶段 0 · 信任名单（信任名单直接转发上游；可选保留检测记录）",
      "stage1": "阶段 1 · IP 访问控制（IP 名单 / 地域拦截 / 拦截页）",
-     "stage2": "阶段 2 · CC 防护（人机挑战）",
-     "stage4": "阶段 3 · 内容防护（旧编号兼容）"
+     "stage2": "阶段 2 · CC 防护（人机挑战 / CC 异常检测）"
     },
     "aux": {
      "bindings": "规则绑定",

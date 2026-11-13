@@ -5,7 +5,7 @@ package services
 // 先经网关校验——2xx 把网关响应头逐个拷进原请求后继续本规则处理链（未认证
 // 请求到此为止，不进指标/安全链）；非 2xx 无匹配 handle_response 条目，
 // 网关响应（通常跳登录页的 302/401）原样回拷客户端。认证子请求是独立
-// reverse_proxy 实例，不经过本规则的 WAF/审计/限流处理链。
+// reverse_proxy 实例，不经过本规则的 WAF/审计/CC 防护处理链。
 
 import (
 	"fmt"

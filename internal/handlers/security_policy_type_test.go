@@ -748,6 +748,29 @@ func TestUpdateSecurityPolicy_rejectsTrustDetectionForExplicitStage1(t *testing.
 	}
 }
 
+// 阶段 2 配额限流退役后的阶段号回归（2026-11-13）：WAF 已是阶段 3，
+// 阶段外字段冲突的 400 指引不得再说「请改用阶段 4 策略」——那是不存在的类型，
+// 调用方按提示提交 stage4 只会被归一，无法完成迁移。
+func TestUpdateSecurityPolicy_wafConflictPointsToStage3(t *testing.T) {
+	setupSecurityPolicyTestDB(t)
+	router := newSecurityRouter(t)
+	id := createTestPolicy(t, router, map[string]any{"name": "WAF 归属指引"})
+
+	recorder := putJSON(t, router, fmt.Sprintf("/security/policies/%d", id), map[string]any{
+		"policy_type": "stage1", "mode": "blocking",
+	})
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("update status=%d body=%s, want 400（stage1 显式开 WAF）", recorder.Code, recorder.Body.String())
+	}
+	body := recorder.Body.String()
+	if !strings.Contains(body, "阶段 3") {
+		t.Fatalf("WAF 族冲突指引=%s, want 指向阶段 3（内容防护）", body)
+	}
+	if strings.Contains(body, "阶段 4") {
+		t.Fatalf("WAF 族冲突仍指引已退役的阶段 4: %s", body)
+	}
+}
+
 // 存量 stage1 策略缺省类型提交（nil policy_type）显式携带
 // trust_detection=true 同样归零。
 func TestUpdateSecurityPolicy_zeroesTrustDetectionForStoredStage1(t *testing.T) {

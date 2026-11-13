@@ -162,7 +162,7 @@
             <div v-else class="migrate-preview-empty">{{ t('app.security.policies.migrate.noBindings') }}</div>
           </div>
         </div>
-        <div v-if="migrateStage2SkipRisk.length > 0" class="info-note-bar"><span class="info-note-desc">{{ t('app.security.policies.migrate.rateLimitRisk', { names: migrateStage2SkipRisk.map((r) => r.name).join(t('app.security.policies.common.sep')) }) }}</span></div>
+        <div v-if="migrateStage2SkipRisk.length > 0" class="info-note-bar"><span class="info-note-desc">{{ t('app.security.policies.migrate.ccPolicyRisk', { names: migrateStage2SkipRisk.map((r) => r.name).join(t('app.security.policies.common.sep')) }) }}</span></div>
         <div v-if="migrateCapRisk.length > 0" class="info-note-bar"><span class="info-note-desc">{{ t('app.security.policies.migrate.capRisk', { names: migrateCapRisk.map((r) => r.name).join(t('app.security.policies.common.sep')), max: MAX_POLICIES_PER_RULE }) }}</span></div>
         <div class="info-note-bar"><span class="info-note-desc">{{ t('app.security.policies.migrate.deleteNote') }}</span></div>
       </div>
@@ -671,7 +671,7 @@
           </el-form>
         </div>
         <!-- 阶段 2 · CC 防护：突刺/4xx/多UA 触发、人机挑战与豁免（配额限流已下线） -->
-        <div v-show="currentStep === WIZARD_STEP.RATE_LIMIT && typeAllowsCC" class="step-content">
+        <div v-show="currentStep === WIZARD_STEP.CC && typeAllowsCC" class="step-content">
           <div class="stage-projection-bar">
             <span class="stage-projection-desc">{{ t('app.security.policies.human.projection') }}</span>
             <div class="stage-projection-rules">
@@ -809,7 +809,7 @@
               <div v-else-if="form.block_page_id === 0" class="form-tip-line">{{ t('app.security.policies.bp.noPageTipDefault') }}</div>
               <div v-else class="form-tip-line">{{ t('app.security.policies.bp.manageTip') }}<AccessibleLink type="primary" @click="goToBlockPagesPage">{{ t('app.security.policies.common.goCreateEdit') }}</AccessibleLink></div>
               <!-- 归属汇总卡（用户验收裁定）：逐条重复提示收敛为单源汇总——主行 +
-                   例外分面（限流/TCP/兜底差异，仅存在才渲染）+ 能力门行；
+                   例外分面（TCP/兜底差异，仅存在才渲染）+ 能力门行；
                    数据源复用绑定列表与 capableAttributions 单源，不平行实现。 -->
               <div v-if="blockPageSummary && editorPolicyType !== 'stage2'" class="block-page-summary">
                 <div v-for="line in blockPageSummary.lines" :key="line.text" class="info-note-bar block-page-summary-line" :class="`is-${line.tone}`">
@@ -943,7 +943,7 @@
                 <span class="rule-picker-meta">{{ rule.domain || '-' }}:{{ rule.listen_port }}</span>
               </el-checkbox>
               <!-- 每条候选规则展示当前绑定链（rank 序=执行序，1-based）与本策略落点；
-                   后端必然拒绝的形态（绑定条数上限 / 阶段 2 限流唯一门）在选择阶段
+                   后端必然拒绝的形态（绑定条数上限 / 阶段 2 CC 防护唯一门）在选择阶段
                    禁用并逐条说明原因——冲突在整批提交时会让本片全部失败。 -->
               <div class="rule-binding-preview">
                 <span v-if="pickerMeta(rule).blockReason" class="rule-binding-limit">{{ pickerMeta(rule).blockReason }}</span>
@@ -1027,7 +1027,7 @@ import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
 import { ipListCategoryLabel } from '@/utils/ipListCategoryLabel'
 import { cityEnName } from '@/utils/cityEnNames'
 import { useI18n } from 'vue-i18n'
-import { Plus, Lock, InfoFilled, CircleCheckFilled, Connection, Odometer, Link, Check, ArrowLeft, ArrowRight, ArrowDown, Search, WarningFilled, Document, View } from '@element-plus/icons-vue'
+import { Plus, Lock, InfoFilled, CircleCheckFilled, Connection, Odometer, Link, Check, ArrowLeft, ArrowRight, ArrowDown, Search, WarningFilled, Document } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { CascaderOption, CascaderProps, LazyLoad } from 'element-plus'
 import { request, ApiRequestError, mfaAwareSuccess } from '@/utils/api'
@@ -1201,13 +1201,12 @@ const policyTypeById = computed<ReadonlyMap<number, SecurityPolicyType>>(() => {
 })
 // 各类型条数（tab 标签 + 默认/回落 tab 选择共用一个计数源）
 const policyTypeCounts = computed<Record<SecurityPolicyType, number>>(() => {
-  const counts: Record<SecurityPolicyType, number> = { stage0: 0, stage1: 0, stage2: 0, stage3: 0, stage4: 0, mixed: 0 }
+  const counts: Record<SecurityPolicyType, number> = { stage0: 0, stage1: 0, stage2: 0, stage3: 0, mixed: 0 }
   for (const p of policies.value) {
     const t = normalizePolicyType(policyTypeOf(p)) as SecurityPolicyType
     counts[t]++
   }
-  // 旧编号 stage4 已并入 stage3（normalizePolicyType），不再单独成 tab
-  // （计数表本身仍保留该键，仅 tab 列表不消费它）。
+  // 旧编号 stage4 由 normalizePolicyType 在读入侧并入 stage3，类型域已无该键。
   return counts
 })
 // 「混合策略（兼容旧版）」tab 条件可见：仅当存在 mixed 策略（导入或存量）时显示；
@@ -1247,7 +1246,7 @@ watch([activeTypeTab, policySearch], () => { policyPage.value = 1 })
 // 内副作用赋值反模式）
 const { pagedItems: pagedPolicies } = useClampedPagination(filteredPolicies, policyPage, policyPageSize)
 
-// 三阶段启用 chips 谓词：阶段 1=IP 访问控制||地域拦截、阶段 2=限流、
+// 三阶段启用 chips 谓词：阶段 1=IP 访问控制||地域拦截、阶段 2=CC 防护、
 // 阶段 3=与后端 models.PolicyTypeFeatures 的 G3 逐字对齐（mode 三态 ∪ custom_rules
 // 引用非空，见 utils/securityStages.hasStage3Features）。判定必须用引用数
 // （custom_rules_ref_count，含禁用条目）；custom_rules_count 只数启用规则，
@@ -1261,7 +1260,7 @@ const stage3ChipOn = (row: PolicySummary): boolean => {
 // 逐规则绑定链、执行序（上移/下移）与归属提示在「关联规则」步骤 ──
 
 // 内容摘要列（按类型一行摘要）：stage0=信任条数+模式、stage1=模式+ACL+GeoIP、
-// stage2=限流值、stage3=WAF 模式+自定义+CRS 组、mixed=混合（任务 2）
+// stage2=CC 防护（挑战模式/方式 + CC 检测）、stage3=WAF 模式+自定义+CRS 组、mixed=混合（任务 2）
 
 // 关联规则链条目：一律按绑定链顺序显示「N.名称」（2026-11-12 用户裁定：
 // 不再为阶段 0 使用特殊措辞；阶段语义由颜色区分，本策略加粗）。
@@ -1292,7 +1291,7 @@ const policySummaryLine = (row: PolicySummary): string => {
     return t('app.security.policies.summary.trustSummary', { n: count, mode: trustHitMode(row.policy_type, row.trust_detection) === 'detection' ? t('app.security.policies.stage0.modeDetection') : t('app.security.policies.stage0.modePass') })
   }
   if (type === 'stage2') {
-    // 阶段 2 · CC 防护（2026-11-12 用户裁定）：配额限流与挑战同属一条策略。
+    // 阶段 2 · CC 防护（2026-11-12 用户裁定）：人机挑战与 CC 异常检测同属一条策略。
     const parts: string[] = []
     if (row.human_verify_mode && row.human_verify_mode !== 'off') {
       const modeLabel = row.human_verify_mode === 'force'
@@ -1367,7 +1366,7 @@ const bindingOrderPending = (caddyId: string): boolean => {
 const orderEditedRules = computed<string[]>(() => boundRules.value.filter((caddyId) => bindingOrderPending(caddyId)))
 
 // 同阶段排序约束（用户裁定 2026-11-12）：策略顺序=执行序，但只允许在同阶段
-// 内调整——跨阶段排序违反「阶段1 预检→阶段2 限流→阶段3 人机验证→阶段4 WAF」
+// 内调整——跨阶段排序违反「阶段1 预检→阶段2 CC 防护→阶段3 内容防护(WAF)」
 // 原则。阶段 0（信任）恒置顶不参与交换；其余阶段各自成组。
 const chainStageGroupOf = (id: number): string => policyTypeById.value.get(id) ?? 'stage3'
 
@@ -1439,9 +1438,9 @@ const migrateCapRisk = computed(() =>
   migrateBoundRules.value.filter((rule) =>
     (securityBindings.value[rule.caddy_id] || []).length - 1 + migrateChildTypes.value.length > MAX_POLICIES_PER_RULE))
 
-// 限流唯一门风险：拆分产出 stage2 子策略时，规则现存的其他绑定若已含 stage2
-// → 后端逐条 skipped（每条规则最多一条限流策略；与 SplitSecurityPolicy 的
-// otherStage2 门同口径）。摘要缺该策略类型时回退 binding 的 rate_limit_enabled。
+// CC 防护唯一门风险：拆分产出 stage2 子策略时，规则现存的其他绑定若已含 stage2
+// → 后端逐条 skipped（每条规则最多一条 CC 防护策略；与 SplitSecurityPolicy 的
+// otherStage2 门同口径）。摘要缺该策略类型时按未命中处理。
 const migrateStage2SkipRisk = computed(() => {
   const policyId = migratePolicy.value?.id
   if (policyId === undefined || !migrateChildTypes.value.includes('stage2')) return []
@@ -1771,21 +1770,19 @@ const WIZARD_STEP = {
   BASIC: 0,
   TRUST: 1,
   IP_ACL: 2,
-  RATE_LIMIT: 3,
-  HUMAN: 4,
-  WAF_RULES: 5,
-  BLOCK_PAGE: 6,
-  BINDINGS: 7,
-  PREVIEW: 8,
+  CC: 3,
+  WAF_RULES: 4,
+  BLOCK_PAGE: 5,
+  BINDINGS: 6,
+  PREVIEW: 7,
 } as const
 type WizardStep = (typeof WIZARD_STEP)[keyof typeof WIZARD_STEP]
 const WIZARD_STEP_META: Record<WizardStep, { title: string; icon: typeof InfoFilled }> = {
   [WIZARD_STEP.BASIC]: { title: t('app.security.policies.step.basic'), icon: InfoFilled },
   [WIZARD_STEP.TRUST]: { title: t('app.security.policies.step.stage0'), icon: Connection },
   [WIZARD_STEP.IP_ACL]: { title: t('app.security.policies.step.stage1'), icon: Connection },
-  [WIZARD_STEP.RATE_LIMIT]: { title: t('app.security.policies.step.stage2cc'), icon: Odometer },
-  [WIZARD_STEP.HUMAN]: { title: t('app.security.policies.step.stage3Human'), icon: View },
-  [WIZARD_STEP.WAF_RULES]: { title: t('app.security.policies.step.stage3waf'), icon: Lock },
+  [WIZARD_STEP.CC]: { title: t('app.security.policies.step.stage2'), icon: Odometer },
+  [WIZARD_STEP.WAF_RULES]: { title: t('app.security.policies.step.stage3'), icon: Lock },
   [WIZARD_STEP.BLOCK_PAGE]: { title: t('app.security.policies.step.blockPage'), icon: Document },
   [WIZARD_STEP.BINDINGS]: { title: t('app.security.policies.step.bindings'), icon: Link },
   [WIZARD_STEP.PREVIEW]: { title: t('app.security.policies.step.preview'), icon: Check },
@@ -1839,17 +1836,17 @@ const trustEnabledInEditor = computed(() => trustEnabledForPolicyType(editorPoli
 
 // 弹框副标题按策略类型描述；mixed/缺省保持兼容组总述文案
 const EDITOR_SUBTITLES: Record<SecurityPolicyType, string> = {
-  stage3: t('app.security.policies.editor.subHuman'),
   stage0: t('app.security.policies.editor.subStage0'),
   stage1: t('app.security.policies.editor.subStage1'),
   stage2: t('app.security.policies.editor.subStage2'),
-  stage4: t('app.security.policies.editor.subStage4'),
+  stage3: t('app.security.policies.editor.subStage3'),
   mixed: t('app.security.policies.editor.subMixed'),
 }
 
-// 单职化（2026-11-12 用户裁定）：一条策略只含一个阶段——stage3=人机验证、
-// stage4=WAF，互斥不共存；mixed 兼容组例外。
-const typeAllowsStage = (stage: 0 | 1 | 2 | 3 | 4): boolean =>
+// 单职化（2026-11-12 用户裁定，四阶段）：一条策略只含一个阶段——
+// stage2=CC 防护（人机挑战是它的动作）、stage3=内容防护（WAF），互斥不共存；
+// mixed 兼容组例外。旧编号 stage4 已在读入侧归一，不再参与谓词。
+const typeAllowsStage = (stage: 0 | 1 | 2 | 3): boolean =>
   editorPolicyType.value === 'mixed' || editorPolicyType.value === `stage${stage}`
 // 挑战/CC 检测阈值属阶段 2（CC 防护）。旧编号 stage4 由 normalizePolicyType 归一。
 const typeAllowsCC = computed(() => normalizePolicyType(editorPolicyType.value) === 'stage2' || editorPolicyType.value === 'mixed')
@@ -1858,10 +1855,9 @@ const visibleSteps = computed<readonly WizardStep[]>(() => {
   const steps: WizardStep[] = [WIZARD_STEP.BASIC]
   if (typeAllowsStage(0)) steps.push(WIZARD_STEP.TRUST)
   if (typeAllowsStage(1)) steps.push(WIZARD_STEP.IP_ACL)
-  if (typeAllowsStage(2)) steps.push(WIZARD_STEP.RATE_LIMIT)
+  if (typeAllowsStage(2)) steps.push(WIZARD_STEP.CC)
   if (typeAllowsStage(3)) steps.push(WIZARD_STEP.WAF_RULES)
-  // 阶段 0（直通/记录不拦截）无拦截页步骤；阶段 2 可配页（2026-09-25 用户裁定，
-  // 状态码恒 429 不可改——步内状态码项按类型隐藏）
+  // 阶段 0（直通/记录不拦截）无拦截页步骤；阶段 2 可配挑战页（2026-09-25 用户裁定）
   if (editorPolicyType.value !== 'stage0') steps.push(WIZARD_STEP.BLOCK_PAGE)
   steps.push(WIZARD_STEP.BINDINGS, WIZARD_STEP.PREVIEW)
   return steps
@@ -1938,10 +1934,10 @@ const fetchData = async (): Promise<boolean> => {
       auxLoadFailures.value = []
       return false
     }
-    // 阶段序严格排序（2026-11-12 用户裁定）：stage0→stage4，mixed 垫底。
-    // 同阶段按名称 localeCompare 稳定——阶段 4 不得排在阶段 2/3 之前。
+    // 阶段序严格排序（2026-11-12 用户裁定，四阶段）：stage0→stage3，mixed 垫底。
+    // 同阶段按名称 localeCompare 稳定；policyTypeOf 已归一旧编号，无 stage4 档。
     policies.value = (polRes.value.data || []).slice().sort((a, b) => {
-      const order = { stage0: 0, stage1: 1, stage2: 2, stage3: 3, stage4: 4, mixed: 5 }
+      const order = { stage0: 0, stage1: 1, stage2: 2, stage3: 3, mixed: 5 }
       const oa = order[policyTypeOf(a)] ?? 5, ob = order[policyTypeOf(b)] ?? 5
       return oa !== ob ? oa - ob : a.name.localeCompare(b.name)
     })
@@ -2487,7 +2483,7 @@ const prevStep = (): void => {
 }
 
 const pickerFilteredRules = computed(() => {
-  // 阶段 0/1 放开后 TCP 规则可绑定；含限流/WAF 特征的策略对 TCP 不可绑——
+  // 阶段 0/1 放开后 TCP 规则可绑定；含 CC 防护/WAF 特征的策略对 TCP 不可绑——
   // 该形态在选择侧由 pickerMeta 置灰并给行内原因（不再只列 HTTP）。
   // 协议筛选先收窄候选（默认 HTTP），搜索再在档内匹配。
   const proto = pickerProtoFilter.value
@@ -2517,7 +2513,7 @@ watch(pickerProtoFilter, () => {
   pickerPage.value = 1
 })
 
-// 全选作用于当前搜索筛选出且可选择的全部规则（跨分页；已达绑定上限/限流冲突的
+// 全选作用于当前搜索筛选出且可选择的全部规则（跨分页；已达绑定上限/CC 防护冲突的
 // 规则不可选，不参与全选），selection 存于 pickerSelected 与分页无关
 const pickerSelectableRules = computed(() => pickerFilteredRules.value.filter((rule) => pickerMeta(rule).blockReason === ''))
 const pickerFilteredSelectedCount = computed(() => {
@@ -2647,9 +2643,9 @@ const buildDisplayChain = (caddyId: string): ChainEntry[] => {
 
 // 选择器单条规则元信息：绑定链、本策略落点（1-based）、不可选原因（空串=可选）。
 // 判据与后端 bulk 校验同源（冲突整批 400，故必须在选择阶段就置灰）：
-// ①TCP 规则 × 含限流/WAF 特征策略（阶段 2/3/混合）→ TCP_BIND_UNSUPPORTED_REASON
+// ①TCP 规则 × 含 CC 防护/WAF 特征策略（阶段 2/3/混合）→ TCP_BIND_UNSUPPORTED_REASON
 // （与 SecurityBindingEditor.pickerBlockReason 同谓词同文案）；
-// ②阶段 2（限流）策略 → 该规则已绑定其它限流策略（每规则仅一条，与
+// ②阶段 2（CC 防护）策略 → 该规则已绑定其它 CC 防护策略（每规则仅一条，与
 // SecurityBindingEditor.pickerBlockReason 同源谓词）；③每规则绑定条数上限。
 // 本策略已在绑定中的规则重选不新增绑定，恒可选。
 const pickerMeta = (rule: Rule): { chain: ChainEntry[]; selfPos: number; blockReason: string } => {
@@ -3044,8 +3040,6 @@ const attributionInput = (chain: ChainEntry[]): BlockPageChainPolicy[] => chain.
   isSelf: e.isSelf,
   blockPageId: e.blockPageId ?? 0,
   pageHasContent: pageHasContent(e.blockPageId ?? 0),
-  // 列表摘要无 rate_limit_enabled 原始字段——has_rate_limit 即「启用且 rps>0」
-  // （后端同一判定），用于阶段 2 是否可能产生 429 的门。
   stage1DenyContributor: e.isSelf ? selfDenyContributor.value : undefined,
 }))
 
@@ -3117,7 +3111,7 @@ const blockPageSummary = computed<{ lines: Array<{ text: string; tone: 'active' 
   for (const stage of editorStages.filter((s) => !capableStages.has(s))) {
     lines.push({ text: t('app.security.policies.bp.stageIneffective', { stage: BLOCK_PAGE_STAGE_LABEL[stage] }), tone: 'info' })
   }
-  // 例外分面（按规则归类，仅存在才渲染）：TCP > 限流 > 兜底差异
+  // 例外分面（按规则归类，仅存在才渲染）：TCP > 兜底差异
   let tcpCount = 0
   let fallbackCount = 0
   for (const row of boundRuleRows.value) {
@@ -3601,7 +3595,7 @@ const handleSave = async () => {
       currentStep.value = WIZARD_STEP.BINDINGS
       return
     }
-    // 阶段 2 唯一门（与选择器置灰同一谓词）：每条规则仅一条限流策略，后端 bulk
+    // 阶段 2 唯一门（与选择器置灰同一谓词）：每条规则仅一条 CC 防护策略，后端 bulk
     // 对冲突整片 400——不在此拦截会先落库策略、再同步失败，重试永不成功。
     const stage2Conflict = editorPolicyType.value === 'stage2'
       ? added.filter((caddyId) => hasOtherStage2Binding(
@@ -3705,7 +3699,7 @@ const handleSave = async () => {
       }
     } catch (error: unknown) {
       // 失败的绑定请求已由全局拦截器 toast，这里仅记录并中止收尾。
-      // 业务校验失败（400：绑定上限/限流唯一门/规则不存在等）是结构性拒绝——
+      // 业务校验失败（400：绑定上限/CC 防护唯一门/规则不存在等）是结构性拒绝——
       // 原样重试必然再失败，不能承诺「可重试」；其余（网络/5xx）幂等重试安全。
       console.error('Failed to sync policy bindings:', error)
       ElMessage.warning(error instanceof ApiRequestError && error.status === 400

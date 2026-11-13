@@ -20,7 +20,7 @@
           <DialogSectionHeader :title="section.title" />
           <span class="bind-stage-head-meta">
             <span class="bind-stage-count">{{ t('common.app.views.secBinding.selectedCount', { count: section.selection.value.length }) }}</span>
-            <!-- 存量多限流绑定（裁定：运行兼容 + 保存即引导清理）：单选控件
+            <!-- 存量多条 CC 防护绑定（裁定：运行兼容 + 保存即引导清理）：单选控件
                  仅展示首条，徽标使显示与 ruleModeTotal 计数口径一致-->
             <el-tag
               v-if="section.single && section.selection.value.length > 1"
@@ -28,7 +28,7 @@
               size="small"
               effect="plain"
             >
-              {{ t('common.app.views.secBinding.multiRateLimitBadge', { count: section.selection.value.length }) }}
+              {{ t('common.app.views.secBinding.multiCcPolicyBadge', { count: section.selection.value.length }) }}
             </el-tag>
           </span>
         </div>
@@ -46,9 +46,9 @@
             <el-tag size="small" effect="plain" :type="policy.enabled ? 'success' : 'info'" class="bind-state-tag">{{ policy.enabled ? t('common.app.views.secBinding.enabledTag') : t('common.app.views.secBinding.disabledTag') }}</el-tag>
           </el-option>
         </el-select>
-        <!-- TCP 规则的阶段 2/3 分区置灰 + 行内原因（L4 无 429/WAF 引擎面，后端同门 400） -->
+        <!-- TCP 规则的阶段 2/3 分区置灰 + 行内原因（L4 无 CC/WAF 引擎面，后端同门 400） -->
         <div v-if="section.tcpLocked === true" class="form-tip-line">{{ TCP_BIND_UNSUPPORTED_REASON }}</div>
-        <div v-if="section.single" class="form-tip-line">{{ t('common.app.views.secBinding.singleRateLimitTip') }}</div>
+        <div v-if="section.single" class="form-tip-line">{{ t('common.app.views.secBinding.singleCcPolicyTip') }}</div>
         <div v-if="section.options.length === 0" class="form-tip-line">{{ t('common.app.views.secBinding.noPoliciesHint') }}</div>
       </div>
       <!-- 混合策略（兼容旧版）：可选策略中过滤 mixed；当前已绑定的只读展示，不可增减选择。
@@ -239,17 +239,15 @@ const bindStage0 = ref<number[]>([])
 const bindStage1 = ref<number[]>([])
 const bindStage2 = ref<number[]>([])
 const bindStage3 = ref<number[]>([])
-const bindHuman = ref<number[]>([])
-const bindStage4 = ref<number[]>([])
 
 const policiesByType = computed<Record<SecurityPolicyType, BindingEditorPolicy[]>>(() => {
-  const grouped: Record<SecurityPolicyType, BindingEditorPolicy[]> = { stage0: [], stage1: [], stage2: [], stage3: [], stage4: [], mixed: [] }
+  const grouped: Record<SecurityPolicyType, BindingEditorPolicy[]> = { stage0: [], stage1: [], stage2: [], stage3: [], mixed: [] }
   for (const policy of props.policies) grouped[inferPolicyType(policy)].push(policy)
   return grouped
 })
 
 // 可选策略过滤 mixed：混合组不出现在可选区（已绑定的 mixed 由只读区展示）
-// TCP 规则（阶段 0/1 放开）：阶段 2/3 分区整体置灰（tcpLocked）——限流/WAF
+// TCP 规则（阶段 0/1 放开）：阶段 2/3 分区整体置灰（tcpLocked）——CC 防护/WAF
 // 在 L4 无引擎面，后端同门 400；行内原因 = TCP_BIND_UNSUPPORTED_REASON 单源。
 const isTcpRule = computed(() => props.rule?.protocol === 'tcp')
 interface StageSection { type: SecurityPolicyType; title: string; options: BindingEditorPolicy[]; selection: typeof bindStage0; single?: boolean; tcpLocked?: boolean }
@@ -257,8 +255,7 @@ const stageSections = computed<StageSection[]>(() => [
   { type: 'stage0' as const, title: t('common.app.views.secBinding.stage0Title'), options: policiesByType.value.stage0, selection: bindStage0 },
   { type: 'stage1' as const, title: t('common.app.views.secBinding.stage1Title'), options: policiesByType.value.stage1, selection: bindStage1 },
   { type: 'stage2' as const, title: t('common.app.views.secBinding.stage2Title'), options: policiesByType.value.stage2, selection: bindStage2, single: true as const, tcpLocked: isTcpRule.value },
-  { type: 'stage3' as const, title: t('common.app.views.secBinding.humanTitle'), options: policiesByType.value.stage3, selection: bindHuman, tcpLocked: isTcpRule.value },
-  { type: 'stage4' as const, title: t('common.app.views.secBinding.stage4Title'), options: policiesByType.value.stage4, selection: bindStage4, tcpLocked: isTcpRule.value },
+  { type: 'stage3' as const, title: t('common.app.views.secBinding.stage3Title'), options: policiesByType.value.stage3, selection: bindStage3, tcpLocked: isTcpRule.value },
 ])
 
 // 当前规则已绑定的 mixed 策略（只读 tag，不可增减）
@@ -268,7 +265,7 @@ const boundMixedPolicies = computed(() => {
   return props.policies.filter((p) => boundIds.has(p.id) && inferPolicyType(p) === 'mixed')
 })
 
-const ruleModeTotal = computed(() => bindStage0.value.length + bindStage1.value.length + Math.min(1, bindStage2.value.length) + bindHuman.value.length + bindStage4.value.length)
+const ruleModeTotal = computed(() => bindStage0.value.length + bindStage1.value.length + Math.min(1, bindStage2.value.length) + bindStage3.value.length)
 
 // ── 策略模式：规则选择器（搜索 + 协议筛选 + 全选筛选 + 分页 + 行内绑定集合/覆盖徽标） ──
 const pickerSearch = ref('')
@@ -278,7 +275,7 @@ const pickerProtoFilter = ref<'all' | 'http' | 'tcp'>('http')
 const pickerPage = ref(1)
 const pickerSelected = ref<string[]>([])
 
-// 阶段 0/1 放开后 TCP 规则可绑定；含限流/WAF 特征的策略（stage2/3/混合）对 TCP
+// 阶段 0/1 放开后 TCP 规则可绑定；含 CC 防护/WAF 特征的策略（stage2/3/混合）对 TCP
 // 不可绑——选择器混列 HTTP/TCP，TCP 形态在 pickerBlockReason 置灰并给行内原因
 const pickerCandidateRules = computed(() => props.rules)
 const pickerFilteredRules = computed(() => {
@@ -310,7 +307,7 @@ watch(pickerProtoFilter, () => {
   pickerPage.value = 1
 })
 
-// 当前策略的阶段类型（策略侧批量绑定的后端判据需要它：阶段 2 限流每规则仅一条）
+// 当前策略的阶段类型（策略侧批量绑定的后端判据需要它：阶段 2 CC 防护每规则仅一条）
 const currentPolicyType = computed<SecurityPolicyType | null>(() => {
   if (props.policyId == null) return null
   return policyTypeById.value.get(props.policyId) ?? null
@@ -318,9 +315,9 @@ const currentPolicyType = computed<SecurityPolicyType | null>(() => {
 
 // 规则不可选原因（空串=可选）。判据与后端 bulk 校验同源：批量提交整批拒绝，
 // 故凡后端必然拒绝的形态都在选择阶段置灰，避免「全选→保存→整片不生效」。
-// ①TCP 规则 × 含限流/WAF 特征策略（stage2/3/混合）→ TCP_BIND_UNSUPPORTED_REASON
+// ①TCP 规则 × 含 CC 防护/WAF 特征策略（stage2/3/混合）→ TCP_BIND_UNSUPPORTED_REASON
 // （与 SecurityPolicies.pickerMeta 同谓词同文案）；
-// ②阶段 2（限流）策略：该规则已绑定其它限流策略；③每规则策略总数已达上限。
+// ②阶段 2（CC 防护）策略：该规则已绑定其它 CC 防护策略；③每规则策略总数已达上限。
 const pickerBlockReason = (rule: BindingEditorRule): string => {
   if (props.mode !== 'policy' || props.policyId == null) return ''
   const current = props.bindings[rule.caddy_id] || []
@@ -331,7 +328,7 @@ const pickerBlockReason = (rule: BindingEditorRule): string => {
   }
   if (currentPolicyType.value === 'stage2'
     && hasOtherStage2Binding(current, props.policyId, (id) => policyTypeById.value.get(id))) {
-    return t('common.app.views.secBinding.otherRateLimitBlock')
+    return t('common.app.views.secBinding.otherCcPolicyBlock')
   }
   if (current.length >= MAX_POLICIES_PER_RULE) {
     return t('common.app.views.secBinding.policyCapBlock', { max: MAX_POLICIES_PER_RULE })
@@ -403,11 +400,13 @@ const onOpen = (): void => {
     //（不可选状态下的预选值会被「保存」全量替换语义静默清掉——与后端同门清理一致）
     const tcpLocked = props.rule?.protocol === 'tcp'
     const boundIdSet = new Set((props.rule ? props.bindings[props.rule.caddy_id] : null)?.map((b) => b.policy_id) ?? [])
-    const buckets: Record<'stage0' | 'stage1' | 'stage2' | 'stage3' | 'stage4', typeof bindStage0> = { stage0: bindStage0, stage1: bindStage1, stage2: bindStage2, stage3: bindHuman, stage4: bindStage4 }
+    // 分桶键 = 分区键 = 提交键，三者必须同一个 ref：原实现回填写 bindHuman、
+    // 提交读 bindStage3（恒空），保存会静默解绑全部内容防护策略。
+    const buckets: Record<'stage0' | 'stage1' | 'stage2' | 'stage3', typeof bindStage0> = { stage0: bindStage0, stage1: bindStage1, stage2: bindStage2, stage3: bindStage3 }
     for (const policy of props.policies) {
       const type = inferPolicyType(policy)
       if (type === 'mixed') continue
-      if (tcpLocked && (type === 'stage2' || type === 'stage4' || type === 'stage3')) continue
+      if (tcpLocked && (type === 'stage2' || type === 'stage3')) continue
       if (boundIdSet.has(policy.id)) buckets[type].value.push(policy.id)
     }
     return

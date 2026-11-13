@@ -698,7 +698,7 @@ const normalPoints = computed((): string => sparkPoints(normalWindow.value))
 const attackPoints = computed((): string => sparkPoints(attackWindow.value))
 const normalFillPoints = computed((): string => (normalPoints.value ? `0,40 ${normalPoints.value} 100,40` : ''))
 
-// ============ 事件等级筛选（高危=拦截 高危族 / 中危=限流 / 低危=检测） ============
+// ============ 事件等级筛选（高危=拦截高危族 / 中危=GeoIP 与 429 存量 / 低危=检测） ============
 type Sev = AnomalySeverity
 /** 危险等级（v2.3.8 评分优先，用户裁定 2026-10-17）：评分>0 时由评分分档 +
  * 检测模式降级得级；仅 0 分回落阶段定性映射。两段语义都在

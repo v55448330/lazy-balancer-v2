@@ -1705,8 +1705,7 @@ func snapshotActiveUpdateStatus(status string) bool {
 //   - anomaly_threshold<=0/nil→db.DefaultAnomalyThreshold（Create 侧默认，与
 //     主节点启动回填同口径）；
 //   - block_status_code 枚举外→db.DefaultBlockStatusCode（默认拦截状态码，与
-//     启动归一/导入门同口径）。
-//     （fail-visible，buildRateLimitHandler）；
+//     启动归一/导入门同口径）；
 //   - geoip_crawler_exempt/engines 缺列补 schema 默认（旧主节点/手工快照），
 //     NOT NULL 新列不得把兼容载荷变成整条 apply 失败；
 //   - 派生列 policy_type/trust_detection/ip_whitelist_enabled 按落库形态

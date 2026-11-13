@@ -89,7 +89,7 @@ test('迁移预演补「已有其他阶段 2 策略 → 将跳过」风险组', 
   assert.doesNotMatch(risk, /rate_limit_enabled/, '限流字段已下线，风险判定只按策略类型')
   // 模板：两处呈现（逐行标注 + 汇总横幅）。i18n 后双钉:调用点钉键,zh 母本钉原文(任一漂移必红)
   assert.match(page, /t\('app\.security\.policies\.migrate\.willSkip'\)/)
-  assert.match(page, /t\('app\.security\.policies\.migrate\.rateLimitRisk'/)
+  assert.match(page, /t\('app\.security\.policies\.migrate\.ccPolicyRisk'/)
   assert.ok(code('src/locales/zh/security.ts').includes('将跳过（已有 stage2）'), '逐行标注原文必须在 zh 母本词条中')
   assert.ok(code('src/locales/zh/security.ts').includes('阶段 2 唯一风险'), '汇总横幅原文必须在 zh 母本词条中')
 })
@@ -164,18 +164,18 @@ test('绑定执行序：暂存上移/下移，保存收尾随批量端点 orders
   assert.match(orderBar, /bindingOrderPending\(row\.caddyId\)/)
 })
 
-test('限流唯一门：选择器与提交门共用同一谓词，业务 400 不再承诺可重试', () => {
+test('CC 防护唯一门：选择器与提交门共用同一谓词，业务 400 不再承诺可重试', () => {
   const editor = code('src/components/SecurityBindingEditor.vue')
   // 同源谓词：规则侧编辑器与策略向导都走 securityStages.hasOtherStage2Binding
   assert.match(editor, /hasOtherStage2Binding\(current, props\.policyId/)
   assert.match(page, /hasOtherStage2Binding,/)
 
   const meta = section(page, 'const pickerMeta = (rule: Rule)', 'return { chain, selfPos:')
-  assert.match(meta, /editorPolicyType\.value === 'stage2'/, '仅阶段 2 策略触发限流唯一门')
+  assert.match(meta, /editorPolicyType\.value === 'stage2'/, '仅阶段 2（CC 防护）策略触发唯一门')
   assert.match(meta, /hasOtherStage2Binding\(existing, editingId\.value/)
   // i18n 后双钉:调用点钉键,zh 母本钉原文(任一漂移必红)
   assert.match(meta, /t\('app\.security\.policies\.picker\.blockStage2'\)/)
-  assert.ok(code('src/locales/zh/security.ts').includes('该规则已绑定其它限流策略（每规则仅一条），需先解绑'), '限流唯一门文案原文必须在 zh 母本词条中')
+  assert.ok(code('src/locales/zh/security.ts').includes('该规则已绑定其它 CC 防护策略（每规则仅一条），需先解绑'), '唯一门文案原文必须在 zh 母本词条中')
 
   // 选择器渲染/全选集合必须按 blockReason 判据（原 wouldExceed 只剩条数上限）
   assert.match(page, /:disabled="pickerMeta\(rule\)\.blockReason !== ''"/)

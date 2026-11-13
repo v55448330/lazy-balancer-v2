@@ -153,7 +153,7 @@ func TestUpdateSecurityPolicy_rejectsExplicitOutOfStageFields(t *testing.T) {
 			payload: map[string]any{
 				"policy_type": "stage1", "mode": "blocking",
 			},
-			want: "阶段 4",
+			want: "阶段 3",
 		},
 		{
 			name:     "stage0 显式设置地域控制",

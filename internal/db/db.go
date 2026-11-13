@@ -1321,7 +1321,7 @@ var newColumnsRegistry = map[string]string{
 	"global_config.mfa_lockout_enabled": "BOOLEAN DEFAULT 0",
 	// v2.3.x 真实 IP 支持：受信代理（CDN 回源）四列——启用开关、回源网段
 	// （CIDR JSON 数组）、请求头名（有序 JSON 数组）、严格模式。渲染层
-	// （servers.trusted_proxies）与 caddygeoip/限流/阶段 0 取值共用。
+	// （servers.trusted_proxies）与 caddygeoip/CC 防护/阶段 0 取值共用。
 	"global_config.trusted_proxy_enabled": "INTEGER NOT NULL DEFAULT 0",
 	"global_config.trusted_proxy_ranges":  "TEXT NOT NULL DEFAULT '[]'",
 	// 受信网段引用名单（2026-10-12）：JSON 数组文本，存 security_ip_lists 的
@@ -5548,8 +5548,8 @@ func ensureClusterAppliedSections() error {
 
 func migrateTCPRuleSecurityPolicyBindings() error {
 	// L4 阶段 0/1 语义：TCP 规则可绑定 stage0/stage1 特征策略（渲染链消费），
-	// 仅清理指向「含 G2（限流）/G3（WAF）特征」策略的绑定——这类绑定在 TCP
-	// 渲染链零效果（预检 coraza/限流/WAF 都是 HTTP 链专属），只会虚增策略
+	// 仅清理指向「含 G2（CC 防护）/G3（WAF）特征」策略的绑定——这类绑定在 TCP
+	// 渲染链零效果（预检 coraza/CC 防护/WAF 都是 HTTP 链专属），只会虚增策略
 	// rule_count/绑定视图。stage0/stage1 绑定为合法状态，保留。
 	// 删除改变同步表 security_policy_bindings：在同一事务内沿用现有
 	// cluster_version bump 表达式，让从端按既有版本门于下一轮收敛。
@@ -5589,7 +5589,7 @@ func migrateTCPRuleSecurityPolicyBindings() error {
 	if removed > 0 {
 		// 用户策略绑定被删除须留痕（与 TCP 死字段/跨模式 TLS 残留等姊妹迁移
 		// 同口径：聚合一行 + 事务内实际变更计数）。
-		detail := fmt.Sprintf("存量 TCP 规则上 L4 不支持的策略绑定（限流/WAF 特征）已清理：%d 条（阶段 0/1 绑定保留；删除后同事务推进 cluster_version 让从端收敛）", removed)
+		detail := fmt.Sprintf("存量 TCP 规则上 L4 不支持的策略绑定（CC 防护/WAF 特征）已清理：%d 条（阶段 0/1 绑定保留；删除后同事务推进 cluster_version 让从端收敛）", removed)
 		log.Print(detail)
 		recordSystemAudit("启动迁移", "安全策略", detail)
 	}
@@ -5905,9 +5905,9 @@ func migrateRuleTLSModeResidue() error {
 // 合并进目标、删除该规则上的人机绑定；若人机策略仍绑定其他规则则保留行并改型
 // 为 stage2（无绑定且已被合并的行删除）。一次性门置位后重跑零改写——否则
 // WAF(stage3) 会被当成人机再次合并。
-// retireRateLimitQuota 彻底删除已下线的配额限流列，并归零阶段 2 拦截页/状态码
-// （CC ban 为插件固定 403）。列删除后旧备份/旧快照的 rate_limit_* 由导入/
-// 同步侧裁剪（不进入 INSERT），旧规则绑定不受影响。
+// retireRateLimitQuota 彻底删除已下线的配额限流三列（rate_limit_enabled/rps/burst）。
+// 列删除后旧备份/旧快照的 rate_limit_* 由导入/同步侧裁剪（不进入 INSERT），
+// 旧规则绑定不受影响。幂等：列不存在时零操作。
 func retireRateLimitQuota() error {
 	for _, column := range []string{"rate_limit_enabled", "rate_limit_rps", "rate_limit_burst"} {
 		if _, err := dropColumnIfExists("security_policies", column); err != nil {

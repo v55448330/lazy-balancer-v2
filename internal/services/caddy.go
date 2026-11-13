@@ -487,7 +487,7 @@ func (s *CaddyService) applyConfigWithOptions(config map[string]interface{}, opt
 	}
 
 	Logf("info", "Caddy config applied successfully")
-	// 重载重建 registry：限流 429 计数归零，/metrics 抓取缓存与上游健康聚合
+	// 重载重建 registry：429 计数归零，/metrics 抓取缓存与上游健康聚合
 	// 必须同步失效（否则安全总览/健康面板在 ≤5s 内仍显示重载前集合与累计值）。
 	s.invalidateUpstreamHealthCache()
 	if opts.persistLastGood {
@@ -1916,12 +1916,12 @@ func trustedProxyServerFields(store caddyConfigStore) (map[string]interface{}, s
 	if len(merged) == 0 {
 		// 启用但零有效网段：渲染形态不变（空投影文件 + lb_file 源），但必须给
 		// 用户可见信号——面板显示「已启用 CDN 真实 IP」而实际零网段被信任，
-		// client_ip 仍是回源（CDN）IP，依赖真实 IP 的 IP ACL/限流 zone/GeoIP
+		// client_ip 仍是回源（CDN）IP，依赖真实 IP 的 IP ACL/CC 防护/GeoIP
 		// 全部按 CDN 地址判定，现象与「策略配错」不可区分。写侧只做形状/上限
 		// 门（可保存 enabled=1 + 空集合），降级通道此前只覆盖读库/解析/投影
 		// 写失败三类。
 		Logf("warn", "受信代理已启用但没有任何有效网段（面板启用态与实际生效分叉）")
-		degraded = "受信代理已启用但没有任何有效网段（内联条目全部非法/过宽，或引用名单为空/全部悬空）：真实 IP 还原未生效，依赖真实 IP 的 IP 访问控制/限流/GeoIP 均按回源地址判定"
+		degraded = "受信代理已启用但没有任何有效网段（内联条目全部非法/过宽，或引用名单为空/全部悬空）：真实 IP 还原未生效，依赖真实 IP 的 IP 访问控制/CC 防护/GeoIP 均按回源地址判定"
 	}
 	return fields, degraded
 }
@@ -3960,7 +3960,7 @@ func pathPrefixRoot(path string) string {
 //   - 精确匹配：单一 rewrite uri 整体替换——/old?a=b → /new?a=b（引擎保留
 //     query；strip+前置形态会产生多余尾斜杠，实证后弃用）；
 //
-// 两个 rewrite 均插在 reverse_proxy 之前：安全段（预检/压缩/限流/WAF）与
+// 两个 rewrite 均插在 reverse_proxy 之前：安全段（预检/压缩/CC 防护/WAF）与
 // 指标计数仍检原始 URI。空 upstream_path 零插入（链与现状逐字节一致）。
 func insertUpstreamPathRewrites(handle []interface{}, pathRule PathRuleConfig) []interface{} {
 	rewrites := upstreamPathRewriteHandlers(pathRule)
@@ -4254,7 +4254,7 @@ func decodePathUpstreams(raw string) ([]UpstreamConfig, error) {
 
 // firstPolicyWithBlockPage 按绑定序返回首个「拦截页内容非空」的策略与其页内容
 // （无则 nil/""）。页面行已删除（内容为空）的策略不得遮蔽后续仍有效页的策略
-// ——403 兜底与 429 限流兜底共用本选择（两处曾逐字重复同一扫描）。
+// ——403 兜底路由消费本选择（429 限流兜底已随配额限流退役，扫描单源保留）。
 func firstPolicyWithBlockPage(policies []*models.SecurityPolicy, pages map[int]string) (*models.SecurityPolicy, string) {
 	for _, policy := range policies {
 		if policy.BlockPageID <= 0 {
@@ -4413,7 +4413,7 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig, sec
 	}
 	var handleChain []interface{}
 	// 认证网关（forward_auth）链首：全部请求先经网关校验，未认证请求在
-	// 指标/安全链之前被网关响应终止（认证子请求不进本规则 WAF/审计/限流）。
+	// 指标/安全链之前被网关响应终止（认证子请求不进本规则 WAF/审计/CC 防护）。
 	// 仅 HTTP 语义；enabled=1 而 upstream 缺失的带外行由启动迁移归零，渲染
 	// 层对残余畸形显性失败（buildForwardAuthHandler 零兜底）。
 	if rule.Protocol == "http" && rule.ForwardAuthEnabled == 1 {
@@ -4440,7 +4440,7 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig, sec
 		})
 	}
 	// 规则级全量流量指标(2026-09-15 用户裁定):lb_rule_metrics 置于链首
-	// (headers 之后,blocked counter/预检/压缩/限流/全部策略 waf 之前)——
+	// (headers 之后,blocked counter/预检/压缩/CC 防护/全部策略 waf 之前)——
 	// 包装链全流量,caddy_id 直接作 label(替代域名/host 匹配,通配符/
 	// 大小写/IDNA/多域名/空域名全部天然正确);全 HTTP 规则覆盖(不限策略)。
 	if rule.Protocol == "http" {
@@ -4450,10 +4450,10 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig, sec
 		})
 	}
 	// 安全拦截计数(2026-09-15 用户裁定,方案 B):lb_security_blocked_counter
-	// 置于链首(headers 之后,IP 预检/压缩/限流/全部策略 waf 之前)——包装
+	// 置于链首(headers 之后,IP 预检/压缩/CC 防护/全部策略 waf 之前)——包装
 	// 全部 coraza handler(IP 预检的 IP ACL/GeoIP 中断也在内),检测 coraza
-	// 中断(HandlerError 携 ID+4xx)按规则计数;限流 429 经 status==429
-	// 分支计入(424a400e 后;非 coraza tx.ID 但 caddyhttp.Error 生成 ID)。
+	// 中断(HandlerError 携 ID+4xx)按规则计数;429 经 status==429 分支计入
+	// (非 coraza tx.ID 但 caddyhttp.Error 生成 ID)——退役配额限流的回放配置仍可产生 429。
 	// 可用性与缺失描述必须复用同一次探测：SecurityLibraryStatus 含 rules 树
 	// WalkDir + xdb stat，此前无条件先探一次（批量路径随即用 ctx 结论覆盖，
 	// 白跑 N 次；单规则路径再经缺失描述重探 1~2 次）。
@@ -4499,7 +4499,7 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig, sec
 	// blockPageSyntheticBase；481/482 已退役），否则 403 → errors 路由 → 拦截页。
 	// 阶段 0 信任名单（2026-11-04 用户裁定，推翻 2026-09-20 原语义）：信任 IP
 	// 不再进入任何安全阶段。两种形态统一为「安全段（预检/压缩/请求体限额/
-	// 限流/全部 WAF 引擎）整体包进 not-client_ip subroute」：
+	// CC 防护/全部 WAF 引擎）整体包进 not-client_ip subroute」：
 	//   直通（trust_detection=0）：跳过并集=直通并集，零安全事件（不产生任何
 	//     coraza 事务）——行为与原语义零变化；
 	//   保留检测（trust_detection=1）：跳过并集=保留检测∪直通并集（信任 IP
@@ -4511,7 +4511,7 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig, sec
 	//     主链引擎/预检内的 id:12（nolog）自此永不匹配，保留为防御性发射
 	//     （autoban TrustExempt stage0 分支同款退化保留，字节零变化）。
 	// 缺库降级（2026-09-24 用户裁定）：CRS/IP2Region 库缺失时全部安全规则不
-	// 渲染（预检/ACL/限流/WAF/GeoIP 一并缺席），告警日志提示补库——coraza
+	// 渲染（预检/ACL/CC 防护/WAF/GeoIP 一并缺席），告警日志提示补库——coraza
 	// Include 缺失文件会使整份配置被 caddy validate 拒绝，负载均衡也被拖死。
 	var detectionTrust []string
 	var passthroughUnion []string
@@ -4550,7 +4550,7 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig, sec
 		if precheckHandler != nil {
 			securityChain = append(securityChain, precheckHandler)
 		}
-		// 预检段耗时收点(2026-09-27 分段计时):预检之后、body/限流/WAF 之前——
+		// 预检段耗时收点(2026-09-27 分段计时):预检之后、body/CC 防护/WAF 之前——
 		// 摄取管道预检段事件取 :pre,WAF 段取 :end-:pre(隔离 WAF 评估成本)。
 		// 外层门已含 rule.Protocol=="http"，原嵌套同条件恒真已删；
 		// 未来若新增非 http 链，由外层门统一守卫。

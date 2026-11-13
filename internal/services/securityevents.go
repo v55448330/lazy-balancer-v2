@@ -318,10 +318,11 @@ func securityEventsParseTransaction(raw json.RawMessage) (*securityEventRecord, 
 	// 「解析后的记录」自身属性，插入与改判 UPDATE 两条写路径共享。
 	rec.URI = securityEventsClipTextField(rec.URI, securityEventsURICap)
 	rec.AnomalyScore = securityEventsExtractAnomalyScore(doc.Messages)
-	// v2.3.8（用户裁定 2026-10-17）：阶段 1/2 事件（IP 名单/预检/GeoIP/限流）
-	// 审计消息不含 coraza 评分段——入库时补固定语义分，全管线统一评分驱动
+	// v2.3.8（用户裁定 2026-10-17）：阶段 1 事件（IP 名单/预检/GeoIP）审计消息
+	// 不含 coraza 评分段——入库时补固定语义分，全管线统一评分驱动
 	// （事件日志评分列与威胁大屏危险等级同源）：IP 名单/预检=12（高危），
-	// GeoIP/限流=6（中危）；WAF 事件不受影响。
+	// GeoIP=6（中危）；WAF 事件不受影响。429 是退役配额限流的存量事件，
+	// 同样无评分段，按中危 6 补齐（新 CC 防护事件为 human_*，自带评分）。
 	// 爬虫两族必须先判（否则普通 GeoIP 的 8xxxxx 被当
 	// 爬虫豁免得 0 分）；普通 GeoIP（id 8 / 8xxxxx 非爬虫族）的 6 分必须先于
 	// 通用预检 12 分判定；429 不在预检谓词内，保持 6。分支内不重复 2/3 字面量

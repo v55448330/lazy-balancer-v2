@@ -6,27 +6,26 @@ import (
 )
 
 // 策略实体单职化（2026-09-20 用户裁定「实体拆分」）：policy_type ∈
-// stage1（IP 访问控制策略：ACL/信任/黑名单/GeoIP+拦截页）/ stage2（限流策略：
-// 恒 429、可选拦截页——2026-09-25 用户裁定）/ stage3（WAF 策略：模式/阈值/CRS/自定义+拦截页）/
+// stage0（信任名单策略）/ stage1（IP 访问控制策略：ACL/黑名单/GeoIP+拦截页）/
+// stage2（CC 防护策略：人机挑战 + CC 异常检测，可选拦截页——2026-09-25 用户裁定）/
+// stage3（内容防护/WAF 策略：模式/阈值/CRS/自定义+拦截页）/
 // mixed（存量混合策略兼容组——可编辑不可新建）。类型是编辑约束与分组元数据；
 // 渲染侧仍按功能字段发射（行为零变化）。
 const (
 	PolicyTypeStage0 = "stage0"
 	PolicyTypeStage1 = "stage1"
 	PolicyTypeStage2 = "stage2"
-	// 统一 stage0-4 命名（2026-11-12 用户裁定）：stage3=人机验证、stage4=WAF。
-	// 存量 stage3（WAF）行由 db 迁移改写为 stage4。
-	// 五→四阶段（2026-11-12 用户裁定）：阶段 3 = 内容防护(WAF)；CC 防护（配额+
-	// 人机挑战）统一在阶段 2。PolicyTypeStage4 仅作旧编号兼容（读/导入），
-	// 写路径经 NormalizePolicyType 归一到 stage3。
+	// 四阶段（2026-11-12 用户裁定）：阶段 2 = CC 防护（人机挑战 + CC 异常检测；
+	// 配额限流已下线），阶段 3 = 内容防护（WAF）。PolicyTypeStage4 是 WAF 的旧
+	// 编号，仅作存量兼容（读/导入），写路径经 NormalizePolicyType 归一到 stage3。
 	PolicyTypeStage3 = "stage3" // 内容防护（WAF）
 	PolicyTypeStage4 = "stage4" // 旧 WAF 编号（仅存量兼容）
 	PolicyTypeMixed  = "mixed"
 )
 
 // PolicyFeatureSet 策略内容的阶段特征组：G0=信任名单（启用且内联/引用非空），
-// G1=IP ACL（启用且内联/引用非空）/黑名单非空/GeoIP 生效，G2=已下线配额限流
-// （恒 false，配额限流 2026-11-12 下线，仅保留 CC 人机挑战），=WAF（mode∈blocking/
+// G1=IP ACL（启用且内联/引用非空）/黑名单非空/GeoIP 生效，G2=CC 防护（人机验证
+// 开启或 CC 检测启用；配额限流 2026-11-12 已下线），G3=WAF（mode∈blocking/
 // detection/custom_only 或自定义规则引用非空）。
 // 推断（InferPolicyType）与拆分迁移（split 按组生成子策略）共用同一份分组
 // 判定，禁止第二份实现。阶段 0（2026-09-20 用户裁定）：信任名单独立成策略
@@ -56,7 +55,7 @@ func PolicyTypeFeatures(p *SecurityPolicy) PolicyFeatureSet {
 	fs.G1 = (p.IPACLEnabled && (jsonListNonEmpty([]byte(p.IPACLList)) || jsonListNonEmpty([]byte(p.IPACLListRefs)))) ||
 		jsonListNonEmpty(p.IPBlacklist) ||
 		(p.GeoIPMode != "" && p.GeoIPMode != "off" && jsonListNonEmpty(p.GeoIPCountries))
-	// G2 = 阶段 2 能力（CC 防护）：人机验证开启或 CC 检测启用。配额限流已下线，
+	// G2 = 阶段 2 能力（CC 防护）：人机验证开启或 CC 检测启用（配额限流已下线）。
 	fs.G2 = (p.HumanVerifyMode != "" && p.HumanVerifyMode != "off") || p.CCDetectEnabled
 	fs.G3 = p.Mode == "blocking" || p.Mode == "detection" || p.Mode == "custom_only" || CustomRulesRefCount(p.CustomRules) > 0
 	return fs
@@ -81,7 +80,7 @@ func CustomRulesRefCount(raw json.RawMessage) int {
 func InferPolicyType(p *SecurityPolicy) string {
 	fs := PolicyTypeFeatures(p)
 	humanOn := p.HumanVerifyMode != "" && p.HumanVerifyMode != "off"
-	// 四阶段（2026-11-12）：阶段 2 = CC 防护（配额限流 + 人机挑战，二者可并存），
+	// 四阶段（2026-11-12）：阶段 2 = CC 防护（人机挑战 + CC 异常检测），
 	// 阶段 3 = 内容防护（WAF）。跨阶段能力组合仍是 mixed（存量兼容形态）。
 	ccStage := humanOn || p.CCDetectEnabled
 	switch {
@@ -391,7 +390,7 @@ type SecurityEventFeedItem struct {
 	DurationUs    int64  `json:"duration_us"`
 	AnomalyScore  int    `json:"anomaly_score"`
 	RuleTriggered string `json:"rule_triggered"`
-	// TriggerType 触发类型显示语义（爬虫Bot/地域拦截/限流/IP 访问控制/WAF/请求体异常）
+	// TriggerType 触发类型显示语义（爬虫Bot/地域拦截/CC 防护/IP 访问控制/WAF/请求体异常）
 	TriggerType string `json:"trigger_type"`
 }
 
@@ -426,7 +425,7 @@ type SecurityEvent struct {
 	// base64 并带标记前缀）。敏感头掩码是前端展示层姿态，库内为原文。
 	RequestHeaders string `json:"request_headers"`
 	RequestBody    string `json:"request_body"`
-	// TriggerType 触发类型显示语义（爬虫Bot/地域拦截/限流/IP 访问控制/WAF/请求体异常）
+	// TriggerType 触发类型显示语义（爬虫Bot/地域拦截/CC 防护/IP 访问控制/WAF/请求体异常）
 	TriggerType string `json:"trigger_type"`
 }
 

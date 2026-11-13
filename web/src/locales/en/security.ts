@@ -94,7 +94,7 @@ export default {
     },
     "page": {
      "title": "Block pages",
-     "desc": "Manage the custom pages returned to clients when blocked at any stage (IP access control / rate limiting / WAF)",
+     "desc": "Manage the custom pages returned to clients when blocked at any stage (IP access control / CC protection / WAF)",
      "newPage": "New page"
     },
     "alert": {
@@ -650,7 +650,7 @@ export default {
     },
     "page": {
      "create": "New Policy",
-     "desc": "Manage WAF firewall, IP access control and rate-limiting policies",
+     "desc": "Manage WAF firewall, IP access control and CC protection policies",
      "title": "Security Policies"
     },
     "status": {
@@ -676,7 +676,7 @@ export default {
      "confirm": "Confirm Migration",
      "deleteNote": "The original policy is deleted once all rules remap successfully; if any rule is skipped it is kept (still in use)",
      "noBindings": "No rules are bound to this policy",
-     "rateLimitRisk": "Stage 2 uniqueness risk: {names} already bind another CC protection policy — the split produces stage 2 sub-policies, so these rules skip remapping (at most one stage 2 policy per rule) and keep their original bindings",
+     "ccPolicyRisk": "Stage 2 uniqueness risk: {names} already bind another CC protection policy — the split produces stage 2 sub-policies, so these rules skip remapping (at most one stage 2 policy per rule) and keep their original bindings",
      "remapDesc": "All bindings of the original policy move to its sub-policies",
      "remapTitle": "Bindings Will Be Remapped",
      "subtitle": "Mixed policy \"{name}\" will be migrated by stage into single-purpose sub-policies (the legacy combined type is no longer available for new policies)",
@@ -689,7 +689,7 @@ export default {
      "relatedRulesTitle": "Related rules ({n})",
      "subtitle": "Mixed policy (legacy) · read-only view — editable after splitting via \"Migrate\" into single-purpose policies",
      "attributionLabel": "Attribution",
-     "attributionValue": "Stage 3 shows by triggering policy; stage 1 precheck-merged blocking and stage 2 rate-limit 429 show by the first policy with a page in the binding chain; rule-level stage 1/3 overrides win",
+     "attributionValue": "Stage 3 shows by triggering policy; stage 1 precheck-merged blocking falls back to the first policy with a page in the binding chain; stage 2 CC protection uses the policy's own challenge page (built-in verification page when unset)",
      "crsAllDefault": "All (default)",
      "excludedWithPath": "{n} (paths {paths})",
      "geoModeRegions": "{mode} · {n} regions",
@@ -711,12 +711,11 @@ export default {
      "titleEdit": "Edit Policy",
      "titleView": "View Policy",
      "typeLabel": "Policy Type",
-           "subHuman": "Human verification policy: challenge mode/method/TTL/exemptions; detection thresholds in autoban CC rules",
-      "subMixed": "Configure WAF detection rules, IP access control, rate limiting and rule bindings",
+      "subMixed": "Configure content-protection rules, IP access control, CC protection and rule bindings",
      "subStage0": "Configure trust list entries and pass-through / keep-detection mode",
      "subStage1": "Configure IP access control, geo blocking and block page",
-     "subStage2": "Configure rate limiting (always 429)",
-     "subStage4": "WAF policy: mode / CRS rules / custom rules / block page","subStage3": "Configure WAF mode, CRS rule groups, custom rules and block page"
+     "subStage2": "Configure human-verification challenges and CC anomaly detection",
+     "subStage3": "Configure WAF mode, CRS rule groups, custom rules and block page",
     },
     "stage0": {
      "detectOff": "Off (default): trusted IPs pass through to upstream with no security events",
@@ -724,7 +723,7 @@ export default {
      "keepDetectLabel": "Keep detection records",
      "projection": "This policy takes effect at the trust-list stage of bound rules — \"trust list (stage 0)\" policy hits skip all later security stages (pass-through = zero security events; keep-detection = recorded only by a separate lightweight detection transaction with action=detected); for mixed and other policy types a trust hit degrades to in-engine detection (log only, no blocking, no stage skip)",
      "trustIpLabel": "Trusted IPs",
-     "trustTip": "\"Trust list (stage 0)\" policy: trusted IPs skip all later security stages (IP ACL / rate limit / WAF; pass-through = zero security events, keep-detection = recorded only by a separate lightweight detection transaction with action=detected); for mixed and other types a trust hit degrades to in-engine detection (log only, no blocking, no stage skip); inline and referenced lists take effect merged",
+     "trustTip": "\"Trust list (stage 0)\" policy: trusted IPs skip all later security stages (IP ACL / CC protection / WAF; pass-through = zero security events, keep-detection = recorded only by a separate lightweight detection transaction with action=detected); for mixed and other types a trust hit degrades to in-engine detection (log only, no blocking, no stage skip); inline and referenced lists take effect merged",
      "modeDetection": "keep-detection",
      "modePass": "pass-through",
      "detectDetail": "keep-detection (event action=detected)",
@@ -846,7 +845,7 @@ export default {
     },
      "crawlerLabel": "Crawler Exemption",
      "crawlerNoneWarn": "No engine selected: this exempts all engines (this state cannot be saved — select at least one engine or turn off crawler exemption)",
-     "crawlerTip": "Selected engines, once verified as genuine crawlers via reverse DNS/official IP ranges, are exempt from geo blocking (IP lists/WAF/rate limiting still apply in full); requests faking crawler UAs are rejected and logged as attack events. 360 lacks reverse-DNS support and is verified via official IP ranges; engines marked \"provisional\" are verified by vendor domains",
+     "crawlerTip": "Selected engines, once verified as genuine crawlers via reverse DNS/official IP ranges, are exempt from geo blocking (IP lists/WAF/CC protection still apply in full); requests faking crawler UAs are rejected and logged as attack events. 360 lacks reverse-DNS support and is verified via official IP ranges; engines marked \"provisional\" are verified by vendor domains",
      "divider": "Region Control",
      "ipv4Note": "Geo rules apply to IPv4 only: IPv6 and unresolvable clients are treated as \"overseas\" (blocked in deny mode when overseas is selected; blocked in allow-only mode when only provinces are selected). Geo rules cannot be enabled until the IP library is installed.",
      "loadFailed": "Failed to load geo data; your saved geo configuration is kept.",
@@ -863,7 +862,6 @@ export default {
      "manageTip": "Custom pages returned to clients on blocking are managed on the \"Block Pages\" page. ",
      "noPageDefault": "No custom page (Caddy default 403)",
      "noPageTipDefault": "No block page: when this policy blocks, the page of the first policy with one in the binding chain is shown as fallback; if none has a page, Caddy's default 403 is returned",
-     "noPageTipStage2": "No block page: 429 returns an empty body (built-in \"rate-limit block page\" optional)",
      "pageLabel": "Block Page",
      "pagePlaceholder": "Select block page",
      "projection": "When this policy blocks, the block page selected below is returned to the client",
@@ -875,7 +873,6 @@ export default {
      "responseHtml": "Always HTML",
      "responseJson": "Always JSON",
      "responseTip": "Auto: browsers/document navigation get HTML; API / XHR requests (Accept: application/json, X-Requested-With, Sec-Fetch-Mode: cors) get JSON.",
-     "statusTipStage2": "Rate-limit blocking always returns 429 (for separate metric accounting); not editable",
      "bindingsAttribution": "{n} rule(s) bound: when any policy blocks, its own configured page shows; policies without a page fall back to the first page-enabled policy{winner}",
      "fallbackFacet": "{n} rule(s): when other page-less policies trigger, the fallback page shows (first page-enabled policy)",
      "fallbackNote": "When blocking triggers, the fallback page shows (first enabled page-capable policy in the chain)",
@@ -883,15 +880,9 @@ export default {
      "noPageFallback": "{n} rule(s) bound: this policy has no block page — blocking shows the fallback page (first enabled page-capable policy in the chain)",
      "pageActive": "{n} rule(s) bound: whenever this policy blocks, this page shows: \"{page}\"",
      "pageInvalid": "{n} rule(s) bound: this block page is no longer valid (deleted or empty); reselect before saving",
-     "stage2NoPage": "{n} rule(s) bound: this policy has no block page — rate-limit blocking returns an empty-body 429",
+     "stage2NoPage": "{n} rule(s) bound: this policy has no block page — challenges and bans return the built-in page",
      "stageIneffective": "{stage}: the current configuration cannot produce a block at this stage, so the page will never be used",
      "tcpFacet": "{n} TCP rule(s): blocking resets the connection and never reaches a block page"
-    },
-    "rate": {
-     "burstLabel": "Burst Allowance",
-     "burstTip": "requests — extra requests briefly allowed above the rate limit",
-     "limitLabel": "Rate Limit",
-     "projection": "This policy takes effect at the rate-limit stage of bound rules — rate-limit blocking always returns 429 (for separate metric accounting); the block page is configured in the next step and defaults to another policy's page on the same rule"
     },
     "extract": {
      "categoryLabel": "Category",
@@ -915,7 +906,7 @@ export default {
      "selfPos": "This policy ranks #{n}",
      "title": "Select Rules",
      "blockCap": "Reached the {max}-binding limit; cannot bind more",
-     "blockStage2": "This rule already binds another rate-limit policy (one per rule); unbind it first"
+     "blockStage2": "This rule already binds another CC protection policy (one per rule); unbind it first"
     },
     "preview": {
      "orderUpdate": "Updates binding order of {n} rule(s) to the new execution order",
@@ -937,7 +928,7 @@ export default {
      "challengePageBuiltin": "Built-in challenge page (slider / JS page chosen by verification type)",
      "challengePageTip": "The challenge page must contain the widget placeholder for the selected verification type; the built-in page already includes it. For a custom page, insert the matching widget in the block page editor.",
      "challengePageNeedsWidget": "The selected block page does not contain the widget placeholder for the selected verification type; insert the matching widget in the block page editor first.",
-     "ccEnabledTip": "Effective only while human verification is on: request spikes / 4xx bursts / multi-UA sessions from one client escalate to a challenge or ban (differs from Stage 2 rate limiting, which caps global request rate)",
+     "ccEnabledTip": "Effective only while human verification is on: request spikes / 4xx bursts / multi-UA sessions from one client escalate to a challenge (this judges attack-like behaviour on the challenge page; bans are carried by the auto-ban pipeline per its counting scopes)",
       "ccRpsLabel": "Spike threshold",
       "ccRpsPer": "requests /",
       "ccRpsSec": "sec",
@@ -1015,7 +1006,7 @@ export default {
      "saveConfirm": "Save security policy \"{name}\"? This reloads the Caddy configuration immediately.",
      "saveFailed": "Save failed",
      "stage0NeedsIp": "A stage 0 · trust-list policy requires at least one trusted IP (inline or referenced list)",
-     "stage2Conflict": "These rules already bind another rate-limit policy (one per rule); unbind before binding: {names}",
+     "stage2Conflict": "These rules already bind another CC protection policy (one per rule); unbind before binding: {names}",
      "unsavedConfirm": "There are unsaved changes; closing will discard them. Continue?"
     },
     "summary": {
@@ -1039,13 +1030,9 @@ export default {
      "stage0": "Stage 0 · Trust List",
      "stage1": "Stage 1 · IP Access Control",
      "stage2": "Stage 2 · CC protection",
-     "stage2cc": "Stage 2 · CC protection",
-     "stage3waf": "Stage 3 · Content protection",
+     "stage3": "Stage 3 · Content protection",
      "bindings": "Rules",
-     "preview": "Preview",
-           "stage3Human": "Stage 2 · CC protection",
-      "stage4Waf": "Stage 3 · Content protection",
-      "stage3Waf": "Stage 3 · Content protection"
+     "preview": "Preview"
     },
     "hint": {
      "refCombo": "{inline} inline + {refs} from referenced lists ({total} total)"
@@ -1054,8 +1041,7 @@ export default {
      "stage3": "Stage 3 · Content protection (WAF: mode / CRS / custom rules / block page)",
      "stage0": "Stage 0 · Trust list (trusted IPs go straight upstream; optionally keep detection records)",
      "stage1": "Stage 1 · IP access control (IP lists / geo blocking / block page)",
-     "stage2": "Stage 2 · CC protection (quota rate limit + human challenge)",
-     "stage4": "Stage 3 · Content protection (legacy numbering alias)"
+     "stage2": "Stage 2 · CC protection (human challenge / CC anomaly detection)"
     },
     "aux": {
      "bindings": "rule bindings",

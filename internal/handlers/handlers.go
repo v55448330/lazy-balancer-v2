@@ -585,7 +585,7 @@ func (h *Handlers) finishTxApply(c *gin.Context, tx *sql.Tx, f txApplyFinish) {
 		h.caddyService.RollbackIPListProjectionsToCommittedInLock()
 		// 传输错误可能发生在 Caddy 已应用候选之后（请求断连/
 		// 超时）——只回滚 DB/投影会让运行配置停滞候选态，而看门狗只比对路由
-		// id（纯策略/限流变化不触发漂移横幅）。复用提交失败的统一恢复：
+		// id（纯策略/CC 防护变化不触发漂移横幅）。复用提交失败的统一恢复：
 		// 回滚事务 + 以已提交视图重渲染 /load + 回退 LKG/投影/证书副作用。
 		recovery := h.recoverCommittedViewAfterCommitFailure(tx)
 		// 两通道分开陈述：库态（未提交事务回滚失败）与运行配置恢复是两件事，

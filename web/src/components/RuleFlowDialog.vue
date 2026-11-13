@@ -617,7 +617,7 @@ const ensureDetails = async (force = false): Promise<void> => {
   }
 }
 
-const togglePolicyDetail = (stage: 0 | 1 | 2 | 3 | 4, policyId: number): void => {
+const togglePolicyDetail = (stage: 0 | 1 | 2 | 3, policyId: number): void => {
   const key = `${stage}:${policyId}`
   expandedPolicyKey.value = expandedPolicyKey.value === key ? '' : key
 }
@@ -666,18 +666,18 @@ const pathMatchLabel = (matchType: string): string => (matchType === 'exact' ? t
 // 披露均在那里实现并有行为测试）；此处只负责「本弹框是否具备取数前提」。
 const countsView = (): { settled: boolean; failed: boolean } => ({ settled: statsSettled.value, failed: statsFailed.value })
 
-const stageChip = (stage: 1 | 2 | 3 | 4): { chip?: string; caption?: string } => {
+const stageChip = (stage: 1 | 2 | 3): { chip?: string; caption?: string } => {
   if (!props.target?.caddyId || isTcp.value) return {}
   return stageCountChip(stage, stats.value, countsView())
 }
 
-const stageStatsText = (stage: 0 | 1 | 2 | 3 | 4): string => {
+const stageStatsText = (stage: 0 | 1 | 2 | 3): string => {
   if (!props.target?.caddyId || isTcp.value) return ''
   return stageCountSummary(stage, stats.value, countsView())
 }
 
 // 时间线耗时角标：取数失败时同样不出（不把失败说成「无采样」）。
-const stageTimingLabel = (stage: 1 | 4): string => {
+const stageTimingLabel = (stage: 1 | 3): string => {
   if (isTcp.value || statsFailed.value) return ''
   return stageTimingChip(stage, stats.value)
 }
@@ -701,7 +701,7 @@ const flowNodes = computed<FlowNode[]>(() => {
   const upstream: FlowNode = { key: 'upstream', title: t('common.app.rules.common.upstream'), subtitle: target.upstreamSummary, tone: 'primary', icon: TopRight }
   if (isTcp.value) {
     // TCP（L4）阶段 0/1 放开：节点与 HTTP 同构（同图标/色阶/灰态语义）；
-    // 阶段 2/3 恒出但灰态「不适用」——L4 无 429/WAF 引擎面（绑定侧已拒绝此类策略）。
+    // 阶段 2/3 恒出但灰态「不适用」——L4 无 CC 防护/WAF 引擎面（绑定侧已拒绝此类策略）。
     const s1 = typedStagePanels.value.find((s) => s.stage === 1)
     return [
       access,
@@ -736,8 +736,8 @@ const flowNodes = computed<FlowNode[]>(() => {
       chip,
       chipCaption: caption,
       // 平均处理耗时 chip:阶段 1=预检段(信任+IP ACL 共用),阶段 3=内容防护(WAF)段;
-      // 阶段 2（CC 防护）不挂（限流纳秒级/挑战无采样）;无样本或取数失败不挂——不误导。
-      timing: (stageNo === 1 ? stageTimingLabel(1) : stageNo === 3 ? stageTimingLabel(4) : '') || undefined,
+      // 阶段 2（CC 防护）不挂（挑战由 lb_human 独立响应，无本段采样）;无样本或取数失败不挂——不误导。
+      timing: (stageNo === 1 ? stageTimingLabel(1) : stageNo === 3 ? stageTimingLabel(3) : '') || undefined,
     })
   }
   nodes.push(upstream)

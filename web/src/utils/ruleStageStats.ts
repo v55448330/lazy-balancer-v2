@@ -21,7 +21,7 @@ export interface RuleStageCounts {
   stage3_blocked_24h: number
   stage_unattributed_24h: number
   // 分段平均处理耗时（µs）：预检段=信任+IP ACL+GeoIP（同一 coraza handler
-  // 不可分）；WAF 段=隔离预检后的评估成本（含限流，纳秒级可忽略）。
+  // 不可分）；WAF 段=隔离预检后的评估成本（阶段 2 CC 防护由 lb_human 独立响应，不计入）。
   precheck_avg_us?: number
   precheck_samples?: number
   waf_avg_us?: number
@@ -35,18 +35,18 @@ interface RuleStageCountsView {
 }
 
 /** 阶段平均耗时（µs）；无数据返回 0（不渲染耗时块） */
-export const stageAvgDurationUs = (stage: 1 | 4, counts: RuleStageCounts | null): number => {
+export const stageAvgDurationUs = (stage: 1 | 3, counts: RuleStageCounts | null): number => {
   if (!counts) return 0
   return stage === 1 ? (counts.precheck_avg_us ?? 0) : (counts.waf_avg_us ?? 0)
 }
 
 /** 时间线卡片上的「平均耗时」角标；无采样返回空串（不占位） */
-export const stageTimingChip = (stage: 1 | 4, counts: RuleStageCounts | null): string => {
+export const stageTimingChip = (stage: 1 | 3, counts: RuleStageCounts | null): string => {
   const us = stageAvgDurationUs(stage, counts)
   return us > 0 ? t('common.app.views.stageStats.avgDurationChip', { duration: formatDurationUs(us) }) : ''
 }
 
-const timingDetailText = (stage: 1 | 4, counts: RuleStageCounts): string => {
+const timingDetailText = (stage: 1 | 3, counts: RuleStageCounts): string => {
   const us = stageAvgDurationUs(stage, counts)
   if (us <= 0) return ''
   const samples = stage === 1 ? (counts.precheck_samples ?? 0) : (counts.waf_samples ?? 0)
@@ -61,7 +61,7 @@ export const unattributedCountText = (counts: RuleStageCounts | null): string =>
 
 /** 阶段节点 chip：未到数不出 chip；失败=「计数不可用」；空载荷='—' */
 export const stageCountChip = (
-  stage: 1 | 2 | 3 | 4,
+  stage: 1 | 2 | 3,
   counts: RuleStageCounts | null,
   view: RuleStageCountsView,
 ): { chip?: string; caption?: string } => {
@@ -69,9 +69,9 @@ export const stageCountChip = (
   if (view.failed) return { chip: t('common.app.views.stageStats.countUnavailable') }
   if (!counts) return { chip: '—' }
   if (stage === 1) return { chip: t('common.app.views.stageStats.chipStage24h', { count: counts.stage1_blocked_24h }) }
-  if (stage === 2) return {} // CC 挑战统计为全局端点，规则级无分桶
-  if (stage === 3) return {} // 阶段 3 人机验证：挑战计数由 lb_human 统计端点（总览卡）承担，规则级无分桶
-  return { chip: t('common.app.views.stageStats.chipStage24h', { count: counts.stage3_blocked_24h }) } // 阶段 4 WAF
+  if (stage === 2) return {} // 阶段 2 CC 防护：挑战统计为全局端点（/security/human/stats），规则级无分桶
+  // 阶段 3 = 内容防护（WAF）：后端字段名 stage3_blocked_24h 与阶段号同值。
+  return { chip: t('common.app.views.stageStats.chipStage24h', { count: counts.stage3_blocked_24h }) }
 }
 
 /**
@@ -79,14 +79,13 @@ export const stageCountChip = (
  * 压成空串让读者以为没有内容）。阶段 0 无计数概念，恒空串。
  */
 export const stageCountSummary = (
-  stage: 0 | 1 | 2 | 3 | 4,
+  stage: 0 | 1 | 2 | 3,
   counts: RuleStageCounts | null,
   view: RuleStageCountsView,
 ): string => {
   if (stage === 0 || !view.settled || view.failed || !counts) return ''
   if (stage === 1) return t('common.app.views.stageStats.summaryStage24h', { count: counts.stage1_blocked_24h }) + timingDetailText(1, counts) + unattributedCountText(counts)
-  if (stage === 2) return '' // CC 挑战统计为全局端点，规则级无分桶
-  // 阶段 3 人机验证：规则级无分桶（挑战计数在 /security/human/stats），不得回落 WAF 桶冒充本阶段统计
-  if (stage === 3) return ''
-  return t('common.app.views.stageStats.summaryStage24h', { count: counts.stage3_blocked_24h }) + timingDetailText(4, counts) + unattributedCountText(counts)
+  if (stage === 2) return '' // 阶段 2 CC 防护：挑战统计在全局端点，不得回落 WAF 桶冒充本阶段统计
+  // 阶段 3 = 内容防护（WAF）：本阶段拦截数 + WAF 段耗时 + 未归因桶披露。
+  return t('common.app.views.stageStats.summaryStage24h', { count: counts.stage3_blocked_24h }) + timingDetailText(3, counts) + unattributedCountText(counts)
 }

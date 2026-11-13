@@ -70,19 +70,19 @@ test('阶段 2：拦截页已删/内容空时显性给出失效回落（不再�
   const deleted = stageRows(bindingOf({ block_page_id: 9 }), policy, [], 2)
   assert.deepEqual(deleted.find((row) => row.label === '拦截页（策略页）'), {
     label: '拦截页（策略页）',
-    detail: '已失效（回落绑定链首个有效页，无则默认 429）',
+    detail: '已失效（回落绑定链首个有效页，无则默认 403）',
   })
   // 内容为空：同样视为失效
-  const empty = stageRows(bindingOf({ block_page_id: 9 }), policy, [{ id: 9, name: '限流页', content: '' }], 2)
+  const empty = stageRows(bindingOf({ block_page_id: 9 }), policy, [{ id: 9, name: '挑战页', content: '' }], 2)
   assert.deepEqual(empty.find((row) => row.label === '拦截页（策略页）'), {
     label: '拦截页（策略页）',
-    detail: '已失效（回落绑定链首个有效页，无则默认 429）',
+    detail: '已失效（回落绑定链首个有效页，无则默认 403）',
   })
-  // 有效页：保留页名 + 429 语义
-  const valid = stageRows(bindingOf({ block_page_id: 9 }), policy, [{ id: 9, name: '限流页', content: '<p>x</p>' }], 2)
+  // 有效页：保留页名 + 挑战/封禁语义（配额限流已下线，不再宣称 429）
+  const valid = stageRows(bindingOf({ block_page_id: 9 }), policy, [{ id: 9, name: '挑战页', content: '<p>x</p>' }], 2)
   assert.deepEqual(valid.find((row) => row.label === '拦截页（策略页）'), {
     label: '拦截页（策略页）',
-    detail: '限流页（429 时渲染）',
+    detail: '挑战页（挑战与封禁时渲染）',
   })
   // 未配置（0）：不虚增行（与阶段 1/3 的「未配置」口径一致——阶段 2 只呈现已配置）
   const unset = stageRows(bindingOf({ block_page_id: 0 }), policy, [], 2)
@@ -210,7 +210,7 @@ test('阶段 3 口径：前端按启用计数、后端 G3 按引用计数——�
   assert.doesNotMatch(infer, /CustomRulesRefCount|custom_rules_ref_count/, '前端若改用引用计数，必须同时改后端 G3 与本钉')
 })
 
-// 每规则最多一条限流策略由后端整批 400 兜底，前端三处入口（策略向导、
+// 每规则最多一条 CC 防护策略由后端整批 400 兜底，前端三处入口（策略向导、
 // 规则绑定编辑器、提交门）都靠本谓词置灰/拦截。四条同源正则只证明「被调用」，
 // 谓词内部反转（删自身排除 / 回退项写死 / 恒 false）在那些断言下全绿。
 test('阶段 2 唯一门：排除自身、仅按策略类型判定、向导新建态 self=null', () => {
@@ -896,7 +896,7 @@ test('明细 · 条目合并与 ACL 名单计数：内联优先去重、引用�
   assert.deepEqual(closedDetails?.blacklistEntries, ['7.7.7.7'])
 })
 
-// ---- TCP（L4）绑定阶段门：仅阶段 0/1 单职策略可绑；限流/WAF/混合含不支持能力 ----
+// ---- TCP（L4）绑定阶段门：仅阶段 0/1 单职策略可绑；CC 防护/WAF/混合含不支持能力 ----
 
 test('TCP 绑定门：stage0/stage1 放开，stage2/stage3/mixed/未知类型一律拒绝', () => {
   assert.equal(policySupportsTcp('stage0'), true)
@@ -907,5 +907,5 @@ test('TCP 绑定门：stage0/stage1 放开，stage2/stage3/mixed/未知类型一
   // 精简载荷缺类型 → fail-closed（不可绑）
   assert.equal(policySupportsTcp(undefined), false)
   // 拒绝原因文案与后端 400 同款（编辑器/向导选择器单源引用）
-  assert.equal(TCP_BIND_UNSUPPORTED_REASON, '该策略含 TCP 不支持的能力（限流/WAF）')
+  assert.equal(TCP_BIND_UNSUPPORTED_REASON, '该策略含 TCP 不支持的能力（CC 防护/WAF）')
 })

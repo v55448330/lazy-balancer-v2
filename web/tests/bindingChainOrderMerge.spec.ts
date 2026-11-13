@@ -167,7 +167,8 @@ test('orders 合并 normalizePolicyChainOrder：严格阶段序（0→3，mixed 
   // 41(s0) 置顶 → 12(s1) → 31/32(s3 相对序保持) → 42（未知类型垫底；mixed 同档）
   assert.deepEqual(normalizePolicyChainOrder([31, 41, 12, 42], stageOf), [41, 12, 31, 42])
   assert.deepEqual(normalizePolicyChainOrder([12, 31], stageOf), [12, 31])
-  // 四阶段：stage2(CC) 在 stage3(内容防护) 之前；旧编号 stage4 与 stage3 同档（稳定序）
-  const wide = (id: number): SecurityPolicyType | undefined => (id === 61 ? 'stage4' : id === 33 ? 'stage3' : id === 21 ? 'stage2' : undefined)
-  assert.deepEqual(normalizePolicyChainOrder([61, 33, 21], wide), [21, 61, 33])
+  // 四阶段：stage2(CC 防护) 在 stage3(内容防护) 之前，同阶段稳定序；
+  // 旧编号 stage4 已在读入侧由 normalizePolicyType 归一，不再进入类型域。
+  const wide = (id: number): SecurityPolicyType | undefined => (id === 61 ? 'stage0' : id === 33 ? 'stage3' : id === 21 ? 'stage2' : undefined)
+  assert.deepEqual(normalizePolicyChainOrder([33, 21, 61], wide), [61, 21, 33])
 })

@@ -1,8 +1,9 @@
 // 阶段化安全流水线共享投影（v2.3.1 阶段化重构）。
 // 锁弹框 / 流程抽屉 / 策略向导预览 / SecurityBindingEditor 四处消费同一分组模型，避免第二数据源。
-// 阶段词汇：阶段 1 = IP 访问控制 + 地域拦截（预检）；阶段 2 = 限流（恒 429）；
-// 阶段 3 = WAF（自定义 + CRS）。规则可为阶段 1/3 配拦截页覆盖（0 = 跟随策略，
-// 即 v2.3.1 逐策略归因默认层）。
+// 阶段词汇（四阶段，2026-11-12 用户裁定）：阶段 0 = 信任名单；阶段 1 = IP 访问
+// 控制 + 地域拦截（预检）；阶段 2 = CC 防护（人机挑战 + CC 异常检测）；
+// 阶段 3 = 内容防护（WAF：自定义 + CRS）。拦截页按策略配置逐策略归因；
+// 规则级阶段页覆盖（481/482）已退役。
 import type { RuleFlowPathRule } from '@/types/rules'
 import { hasOwn } from './hasOwn.ts'
 import { conditionTargetLabel } from './customRuleLimits.ts'
@@ -192,7 +193,7 @@ export interface StageDetailSources {
 }
 
 export interface StageGroup {
-  stage: 0 | 1 | 2 | 3 | 4
+  stage: 0 | 1 | 2 | 3
   title: string
   enabled: boolean
   groups: StagePolicyGroup[]
@@ -483,9 +484,9 @@ const buildStage0Rows = (policy: SecurityStagePolicy | undefined, ipLists: reado
 // 门——ACL 已关闭（保留名单）时名单不生效（渲染 buildIPPrecheckDirectives
 // security.go:996 同门）；②独立黑名单无模式/开关门（security.go:1004-1006，
 // 既有有意裁定）——allow/绕过 模式下摘要不得隐去它仍在拦截的事实。
-// 全仓零外部消费——以下六个仅模块内使用的实现去掉 export
+// 全仓零外部消费——以下五个仅模块内使用的实现去掉 export
 // （parseGeoipCountryCount/aclEffectiveCounts/mergeIpEntryDetails/crsGroupLabel/
-// rateLimitDetailCaption/ipInCidr），消费面复核记录在修复报告
+// ipInCidr），消费面复核记录在修复报告
 const aclEffectiveCounts = (
   ipLists: readonly SecurityStageIPList[],
   policy: { ip_acl_enabled?: boolean; ip_acl_mode?: string; ip_acl_list?: string; ip_acl_list_refs?: string; ip_blacklist?: string },
@@ -542,14 +543,14 @@ export const formatAclModeDetail = (
 //   · deny 策略上点「放行」→ 条目进入黑名单，变成拦截。
 // 动作集合按当前模式收窄：deny→仅拦截；allow→仅放行；绕过/空/未知→不给动作
 // （绕过 条目语义是免检测，空模式 ACL 不发射任何拒绝规则）。
-// 拦截页回落文案（i18n 单源）：渲染侧的真实回落不是「默认 403」——403/429 错误
+// 拦截页回落文案（i18n 单源）：渲染侧的真实回落不是「默认 403」——403 错误
 // 路由取**绑定链中首个「启用且有非空页」的策略**（internal/services/caddy.go
-// buildBlockPageErrorRoute / buildRateLimitErrorRoute），可能正是同链其他策略；
+// buildBlockPageErrorRoute），可能正是同链其他策略；
 // 逐策略归因由 resolveBlockPageAttribution 单源计算。行文案不得断言「回落默认」，
 // 否则多策略绑定下会显示错误目标（排障时误判用户看到哪张拦截页）。
 const BLOCK_PAGE_UNSET_403 = t('common.app.views.stages.blockPageUnset403')
 const BLOCK_PAGE_BROKEN_403 = t('common.app.views.stages.blockPageBroken403')
-const BLOCK_PAGE_BROKEN_429 = t('common.app.views.stages.blockPageBroken429')
+const BLOCK_PAGE_BROKEN_STAGE2 = t('common.app.views.stages.blockPageBrokenStage2')
 const buildStage1Rows = (
   policy: SecurityStagePolicy | undefined,
   ipLists: readonly SecurityStageIPList[],
@@ -578,7 +579,7 @@ const buildStage1Rows = (
       : t('common.app.views.stages.crawlerOff')
     rows.push({ label: t('common.app.views.stages.crawlerRowLabel'), detail })
   }
-  // 拦截页行（策略级页，触发归因口径）：HTTP 渲染面（403/429 错误路由与逐策略归因）。
+  // 拦截页行（策略级页，触发归因口径）：HTTP 渲染面（403 错误路由与逐策略归因）。
   // TCP（L4）拒绝=断连，拦截页整族不参与——统一「不支持」，不得用
   // 「未配置（跟随绑定链首个有效页…）」这类 HTTP 语义误导排障（2026-10-31 用户裁定）。
   if (isTcp) {
@@ -726,14 +727,14 @@ export const buildStageModel = (
       if (policy?.cc_detect_enabled && policy?.human_verify_mode && policy.human_verify_mode !== 'off') {
         s2rows.push({ label: t('common.app.views.stages.ccSpikeRowLabel'), detail: t('common.app.views.stages.ccSpikeSummary', { n: policy.cc_rps_limit ?? 0, sec: policy.cc_rps_window ?? 0 }) })
       }
-      // 策略级拦截页（阶段 2：429 页与挑战失败页共用响应模板；未配不虚增行）
+      // 策略级拦截页（阶段 2：挑战页与封禁响应共用模板；未配不虚增行）
       const s2PageId = binding.block_page_id ?? policy?.block_page_id ?? 0
       if (s2PageId > 0) {
         const page = blockPages.find((p) => p.id === s2PageId)
         const broken = !page || (page.content ?? '') === ''
         s2rows.push({
           label: t('common.app.views.stages.stage2PageLabel'),
-          detail: broken ? BLOCK_PAGE_BROKEN_429 : t('common.app.views.stages.pageOn429', { name: page.name }),
+          detail: broken ? BLOCK_PAGE_BROKEN_STAGE2 : t('common.app.views.stages.pageOnStage2', { name: page.name }),
         })
       }
       if (s2rows.length > 0) stage2Groups.push({ ...base, rows: s2rows })
@@ -842,7 +843,7 @@ export const parseUnknownStrings = (raw: unknown): string[] => {
 
 const buildGroupDetails = (
   policy: SecurityStagePolicy | undefined,
-  stage: 0 | 1 | 2 | 3 | 4,
+  stage: 0 | 1 | 2 | 3,
   ipLists: readonly SecurityStageIPList[],
   sources: StageDetailSources | undefined,
 ): StagePolicyDetails | undefined => {
@@ -919,16 +920,17 @@ export const attachStageDetails = (
 
 // ── 策略类型（实体单职化：policy_type 列由后端携带；缺省时按内容推断兜底，前后端同一份逻辑形状） ──
 
-export type SecurityPolicyType = 'stage0' | 'stage1' | 'stage2' | 'stage3' | 'stage4' | 'mixed'
+// 四阶段（2026-11-12 用户裁定）。旧编号 stage4 只在读入侧由 normalizePolicyType
+// 归一为 stage3，不再进入类型域——留在类型里会让 Record 强制要求一个恒空的
+// 第 5 桶（绑定编辑器据此长出「阶段 4 · WAF」死分区）。
+export type SecurityPolicyType = 'stage0' | 'stage1' | 'stage2' | 'stage3' | 'mixed'
 
-// 阶段文案单一事实源=STAGE_TITLES。stage4 是旧编号（存量/旧备份），展示与
-// stage3 同义（内容防护），写路径不再产出。
+// 阶段文案单一事实源=STAGE_TITLES。
 export const POLICY_TYPE_LABELS: Record<SecurityPolicyType, string> = {
   stage0: STAGE_TITLES[0],
   stage1: STAGE_TITLES[1],
   stage2: STAGE_TITLES[2], // 阶段 2 · CC 防护
   stage3: STAGE_TITLES[3], // 阶段 3 · 内容防护
-  stage4: STAGE_TITLES[3], // 旧编号：同义 WAF
   mixed: t('common.app.views.stages.mixedPolicyLabel'),
 }
 
@@ -937,7 +939,6 @@ export const POLICY_TYPE_SHORT_LABELS: Record<SecurityPolicyType, string> = {
   stage1: t('common.app.views.stages.shortStage1'),
   stage2: t('common.app.views.stages.shortStage2'),
   stage3: t('common.app.views.stages.shortStage3'),
-  stage4: t('common.app.views.stages.shortStage3'),
   mixed: t('common.app.views.stages.shortMixed'),
 }
 
@@ -997,13 +998,13 @@ export const inferPolicyType = (p: SecurityPolicyTypeInput): SecurityPolicyType 
     const s1h = hasIPACLControl(p) || hasGeoIPControl(p)
     const customOn = p.custom_rules_count !== undefined ? p.custom_rules_count > 0 : p.has_custom_rules
     const s3h = p.mode === 'blocking' || p.mode === 'detection' || p.mode === 'custom_only' || customOn
-    // 限流与人机同属阶段 2（CC 防护），不再视为混合。
+    // 人机挑战与 CC 检测同属阶段 2（CC 防护），不再视为混合。
     if (!s0h && !s1h && !s3h && humanOn) return 'stage2'
     return 'mixed'
   }
   // 兜底推断与后端 models.PolicyTypeFeatures 逐条同形（收敛，
   // 原两处口径差异已消除）：=信任名单启用且内联∪引用非空；=IP ACL 启用且
-  // 非空 / 黑名单非空 / 地域拦截生效；=限流启用且 rps>0；=mode∈三态或
+  // 非空 / 黑名单非空 / 地域拦截生效；=人机验证开启或 CC 检测启用；=mode∈三态或
   // 自定义规则非空。原始字段齐备时按定义判定，缺失（如精简绑定载荷）回退摘要
   // 标志：不可直接用 has_waf（仅 blocking|detection，漏 custom_only），自定义
   // 规则不可直接用 has_custom_rules（含 off=全关口径，比窄）。
@@ -1361,15 +1362,15 @@ export const MAX_POLICIES_PER_RULE = 8
 
 // ── TCP（L4）绑定阶段门（阶段 0/1 放开） ──
 // TCP 规则仅可绑定阶段 0（信任名单）/阶段 1（IP 访问控制/地域拦截）单职策略；
-// 限流（stage2）/WAF（stage3）/混合（mixed）含 TCP 不支持的能力（L4 无请求语义，
-// 无 429/WAF 引擎面）。与后端绑定校验同源（400 文案同款），拒绝动作=断连。
+// CC 防护（stage2）/WAF（stage3）/混合（mixed）含 TCP 不支持的能力（L4 无请求语义，
+// 无 CC 防护/WAF 引擎面）。与后端绑定校验同源（400 文案同款），拒绝动作=断连。
 // SecurityBindingEditor（规则侧分区置灰 + 策略侧选择器）与 SecurityPolicies
 // （向导关联规则选择器）共用本谓词，禁止第二份类型清单。
 export const TCP_BIND_UNSUPPORTED_REASON = t('common.app.views.stages.tcpUnsupportedReason')
 export const policySupportsTcp = (type: SecurityPolicyType | undefined): boolean =>
   type === 'stage0' || type === 'stage1'
 
-/** 绑定行的最小形状（策略类型由策略摘要推断，精简载荷缺摘要时回退限流标志）。
+/** 绑定行的最小形状（策略类型由策略摘要推断，精简载荷缺摘要时按 stage3 处理）。
  *  仅作本文件 hasOtherStage2Binding 的入参约束——形状不外泄，故不导出
  *  （谓词本身由规则侧编辑器与策略向导两处导入）。 */
 interface PolicyBindingRef {
@@ -1377,11 +1378,11 @@ interface PolicyBindingRef {
 }
 
 /**
- * 每条规则最多绑定一条限流策略——后端 bulk 端点对冲突整批 400（不是逐条跳过），
- * 故所有选择/提交入口都必须在发送前用本谓词置灰或拦截。
- * 返回该规则是否已绑定「本策略之外」的限流策略；`typeOf` 由调用方用
- * inferPolicyType 建表（与后端 policy_type 列同口径），摘要缺失时回退绑定的
- * rate_limit_enabled 标志。
+ * 每条规则最多绑定一条阶段 2（CC 防护）策略——后端 bulk 端点对冲突整批 400
+ * （不是逐条跳过），故所有选择/提交入口都必须在发送前用本谓词置灰或拦截。
+ * 返回该规则是否已绑定「本策略之外」的阶段 2 策略；`typeOf` 由调用方用
+ * inferPolicyType 建表（与后端 policy_type 列同口径），摘要缺该类型时按 stage3
+ * 处理（不误判为阶段 2）。
  */
 export const hasOtherStage2Binding = (
   bindings: readonly PolicyBindingRef[],
@@ -1452,15 +1453,15 @@ export const flattenBindingOrder = (
 }
 
 /**
- * 严格阶段序归一（stage0→stage4，mixed 垫底）：同阶段保留原 rank 相对序。
+ * 严格阶段序归一（2026-11-12 四阶段）：stage0→stage3，mixed 垫底；
+ * 同阶段保留原 rank 相对序。旧编号 stage4 由 normalizePolicyType 在读入侧
+ * 归一为 stage3，本表不再保留其别名。
  */
-// 严格阶段序归一（2026-11-12 四阶段）：stage0→stage3，mixed 垫底；
-// 同阶段保留原 rank 相对序（旧编号 stage4 与 stage3 同义，同档）。
 export const normalizePolicyChainOrder = (
   ids: readonly number[],
   stageOf: (id: number) => SecurityPolicyType | undefined,
 ): number[] => {
-  const order: Record<string, number> = { stage0: 0, stage1: 1, stage2: 2, stage3: 3, stage4: 3, mixed: 5 }
+  const order: Record<string, number> = { stage0: 0, stage1: 1, stage2: 2, stage3: 3, mixed: 5 }
   return ids.slice().sort((a, b) => {
     const oa = order[stageOf(a) ?? 'mixed'] ?? 5, ob = order[stageOf(b) ?? 'mixed'] ?? 5
     return oa - ob // 同阶段保持原相对序（sort 稳定性由调用方数组序保证）
@@ -1545,7 +1546,7 @@ export const IP_LIST_CATEGORIES = ['搜索引擎爬虫', 'CDN 节点', '云服�
 //      爬虫事件详情显示「地域拦截规则（区域：…）」。
 //   ③ 固定 SecRule id 的族归属单一事实源 = handlers 的 legacyRuleFamilies 表
 //      （id:2/4/7 IP 访问控制、3/5/12 信任名单、8 地域拦截、11 请求体异常、
-//      14 威胁情报库、429 限流）。id:5 是「IP ACL 绕过模式占用 id:3 时的信任
+//      14 威胁情报库、429 CC 防护存量）。id:5 是「IP ACL 绕过模式占用 id:3 时的信任
 //      名单并集」（services/security.go trustID 分支，pass,nolog）——归信任族；
 //      曾按白名单外拒绝记账，与本表及发射侧语义分叉。
 // 返回（细粒度，消费方各自投影）:
@@ -1557,8 +1558,8 @@ export const IP_LIST_CATEGORIES = ['搜索引擎爬虫', 'CDN 节点', '云服�
 //   合成自定义 id 上界段 [900000,1000000)（DB 规则 id
 //   ≥90000 → 触发 id ≥910000，会与 9\d{5} CRS 段重叠）——自定义规则 id 达 9 万
 //   不现实（不可达），边界不修，仅登记留痕。
-//   限流 id 429 后端归「限流」族，但该族无 sec_events 数据源、列表层不设筛选/
-//   阶段桶（见 triggeredFilter 的类别清单）——本函数归 other。
+//   429 存量后端归「CC防护」族，但列表层筛选项是 human_* 整族（见 triggeredFilter
+//   的类别清单），429 存量不在其内——本函数归 other。
 // （有意设计，勿"统一"）：id '8' 例外——本函数归 ipAcl，而后端权威分类
 // （attackFamilyClassOf）把 8 归 GeoIP。这是 历史共享 id 口径，现代引擎
 // 地域事件已改发 800xxx、不再走 id 8，无现实影响；triggerFamily.spec.ts 与
@@ -1660,9 +1661,10 @@ export const isTrustExemptionCandidate = (p: {
 //    （触发策略有页 → 逐策略合成码显示该策略页）；allow 白名单交集外恒拒走
 //    兜底路由（无归属语义）。
 //  - 阶段 3：WAF 段逐策略合成码 483+（policySynthetic），页面归属=触发策略自身。
-//  - 阶段 2：429 错误路由恒走兜底（且至少一条启用策略开启限流才产生 429）。
-//  - 阶段 1/2/3 兜底统一：buildBlockPageErrorRoute / buildRateLimitErrorRoute
-//    取绑定链（执行序）首个「有非空页」策略；全链无页 → Caddy 默认响应。
+//  - 阶段 2：CC 防护的挑战与封禁由 lb_human 插件直接响应（挑战页取策略配置的
+//    拦截页，未配则按验证方式回退内置人机验证页），不经本兜底错误路由。
+//  - 阶段 1/3 兜底统一：buildBlockPageErrorRoute 取绑定链（执行序）首个
+//    「有非空页」策略；全链无页 → Caddy 默认响应。
 //  - 规则级阶段页覆盖（481/482）已退役：无规则级覆盖层。
 // 本函数把上述口径收敛为单源判定（前端只消费结果，不得另写第三份归因）。
 export type BlockPageStage = 1 | 2 | 3
@@ -1705,8 +1707,8 @@ const chainHasValidPage = (p: BlockPageChainPolicy): boolean => (p.blockPageId ?
  * 「WAF 关闭」「未启用 ACL」的摘要自相矛盾。
  *
  * 引擎口径：
- *  - 阶段 2：429 由绑定链任一启用限流策略产生（本谓词不承担限流门，
- *    归因侧 rateLimitEnabled 已门控），恒 true。
+ *  - 阶段 2：CC 防护的挑战与封禁由 lb_human 插件产生（挑战失败/超限即响应），
+ *    不依赖 WAF 模式或 ACL 条目，恒 true。
  *  - 阶段 3：mode=off 无 deny；detection/custom_only 只有自定义规则动作为
  *    block 时才阻断（CRS 在检测模式仅记录）。
  *  - 阶段 1：ACL（非绕过且有条目）/独立黑名单/地域任一成立才发射预检 deny。
@@ -1726,7 +1728,7 @@ interface BlockPageStageCapability {
 }
 
 export const blockPageStageCanIntercept = (input: BlockPageStageCapability): boolean => {
-  // 阶段 2 · CC 防护：配额超限恒 429（拦截页生效）→ 可拦截。
+  // 阶段 2 · CC 防护：挑战与封禁由 lb_human 插件响应（拦截页生效）→ 可拦截。
   if (input.stage === 2) return true
   // 阶段 3 · 内容防护（WAF）：仅拦截模式或有可阻断自定义规则时真的产生拒绝；
   // 注意调用方传 order=3 与 4 时同义（旧编号兼容由 stageOf 归一）。
@@ -1790,11 +1792,11 @@ export const resolveBlockPageAttribution = (
   chain: readonly BlockPageChainPolicy[],
 ): BlockPageAttribution => {
   const enabled = chain.filter((p) => p.enabled)
-  // 阶段 2：配额限流已下线，CC 挑战/封禁不走拦截页 → 阶段 2 页面永不显示
+  // 阶段 2：CC 挑战页由 lb_human 插件直接渲染（取策略自身 block_page_id），
+  // 不经错误路由归因 → 本函数恒 none（页面仍生效，只是不走本归因链）。
   if (stage === 2) return { stage, effective: 'none' }
   // 触发归因（阶段 1 deny 链 / 阶段 3 WAF 段逐策略合成码）：命中策略有有效页
-  // → 显示该策略页。阶段 1 的 allow 交集外恒拒与阶段 2 的 429 无归属语义，
-  // 直接落兜底。
+  // → 显示该策略页。阶段 1 的 allow 交集外恒拒无归属语义，直接落兜底。
   const self = chain.find((p) => p.isSelf)
   const selfOwnsTrigger = !!self && self.enabled && (stage === 3 || self.stage1DenyContributor === true)
   if (selfOwnsTrigger && chainHasValidPage(self)) return { stage, effective: 'self' }

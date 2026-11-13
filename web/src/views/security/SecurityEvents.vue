@@ -172,8 +172,9 @@
           </template>
           <el-option :label="t('app.security.events.crawlerBot')" value="爬虫Bot" :title="t('app.security.events.crawlerBotHint')" />
           <el-option :label="t('app.security.events.geoBlock')" value="地域拦截" :title="t('app.security.events.geoBlockHint')" />
-          <!-- 限流（429）不进安全事件表（caddy-ratelimit 直接返回、无审计行）：
-               筛选选项移除，限流数据看安全总览「限流拦截」卡片。 -->
+          <!-- 阶段 2 配额限流退役：旧「限流」筛选项移除，CC 防护事件由下方
+               「CC 防护」项承载（human_* 整族）。退役前的 429 存量行仍在列表中
+               显示（归类「CC防护」），但不属 human_* 族筛选范围。 -->
           <el-option :label="t('app.security.events.ipAcl')" value="IP 访问控制" :title="t('app.security.events.ipAclHint')" />
           <el-option :label="t('app.security.events.trustList')" value="信任名单" :title="t('app.security.events.trustListHint')" />
           <el-option :label="t('app.security.events.threatIntel')" value="威胁情报库" :title="t('app.security.events.threatIntelHint')" />

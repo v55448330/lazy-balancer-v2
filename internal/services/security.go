@@ -1631,7 +1631,7 @@ const ipPrecheckAllowRuleID = 7
 //   - 本规则之后的一切预检规则对白名单成员不再评估：逐策略 GeoIP 链（区域
 //     拦截）、爬虫伪装 deny（850000+policyID，含它策略的伪装族）、以及预检
 //     段内后续任何新增规则。即「白名单=该客户端被人工信任」的全豁免口径。
-//   - 预检段之外的处理面不受影响：限流、WAF/CRS、自定义规则等独立处理器
+//   - 预检段之外的处理面不受影响：CC 防护、WAF/CRS、自定义规则等独立处理器
 //     照常评估（skipAfter 只跳到本段的 SECURITY_RULES_END 标记）。
 //
 // nolog：豁免本身不产生安全事件。无 allow 名单时不发射（避免恒真跳过）。
@@ -2076,7 +2076,7 @@ func validateAllowGeoIPEmpty(policies []*models.SecurityPolicy) error {
 // 2026-09-15 用户裁定:信任最高优先——预检信任 ctl:ruleEngine=
 // DetectionOnly 先行(id:3,取代「deny 优先于信任」与「并入 allow 放行集」),
 // 信任 IP 经 DetectionOnly 后 deny/黑名单/GeoIP 全评估不拦但全记录;跨策略
-// 边界=信任仅豁免所属策略(其他策略引用同一信任地址列表即可);限流仍生效。
+// 边界=信任仅豁免所属策略(其他策略引用同一信任地址列表即可);CC 防护仍生效。
 // 无 deny 侧控制且无 GeoIP 策略时返回空串（不发射）。
 //
 // ruleCaddyID：本函数逐规则渲染（policiesForRule——每条规则
@@ -2503,9 +2503,9 @@ func buildIPPrecheckHandler(policies []*models.SecurityPolicy, ruleCaddyID strin
 
 // buildTrustDetectDirectives 渲染信任保留检测路径（trust_detection=1，
 // 2026-11-04 用户裁定）的独立最小 coraza 引擎指令。语义：信任 IP 不再进入
-// 预检/IP ACL/限流/WAF 的任何阶段（安全链整体包进 not-client_ip subroute），
+// 预检/IP ACL/CC 防护/WAF 的任何阶段（安全链整体包进 not-client_ip subroute），
 // 本引擎是该流量的唯一安全事务——仅含 id:12 检测规则，命中即 pass 直通
-// 上游（无 CRS/自定义/ACL/GeoIP/限流，SecRequestBodyAccess Off 不读体）。
+// 上游（无 CRS/自定义/ACL/GeoIP/CC 防护，SecRequestBodyAccess Off 不读体）。
 // id:12 用 nolog,auditlog：coraza v3 中 auditlog 置事务 audit 标记，RelevantOnly
 // 下命中即落审计行（与上游响应状态无关——信任请求多为 200，不能依赖
 // 状态门），且不写 coraza 错误日志；审计经同一 auditLogPath（lbfile 写插件

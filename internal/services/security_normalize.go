@@ -77,9 +77,8 @@ var legacySecurityEnumBackfills = []string{
 	// 渲染侧对回填后仍无效的值 fail-visible（BuildCorazaDirectives）。
 	// 字面量 5 改绑定 db.DefaultAnomalyThreshold 单源。
 	fmt.Sprintf("UPDATE security_policies SET anomaly_threshold=%d WHERE COALESCE(anomaly_threshold,0)<=0", db.DefaultAnomalyThreshold),
-	// 429 已剔除出拦截状态码白名单（限流专用语义，
-	// overviewmetrics.go 限流卡片按 code=429 计数，WAF 拦截页 429 会混入
-	// 限流指标口径）——存量 429 行归一为默认拦截状态码 403。
+	// 429 已剔除出拦截状态码白名单：429 属请求频次保护（登录/MFA/集群/MCP 端点）
+	// 语义，安全链拦截页用 429 会与之混淆——存量 429 行归一为默认拦截状态码 403。
 	// security_block_pages 无 status_code 列（建表见 db.go 的
 	// security_block_pages CREATE TABLE；遗留列由 runMigrations 的
 	// dropColumnIfExists 清单清除），429 仅可能存于 security_policies。
