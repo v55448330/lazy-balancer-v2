@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"sort"
 	"sync"
 
 	"lazy-balancer-v2/internal/db"
@@ -86,27 +87,34 @@ func getHumanSecret() string {
 	return secret
 }
 
-// humanPolicyMerged 合并策略人机验证配置：force > auto 优先级（任一 force 策略
-// 即 force）；方式/有效期/豁免取最高优先级策略的值，豁免路径/IP 取并集。
-func humanPolicyMerged(policies []*models.SecurityPolicy) (mode, typ string, ttl int, exemptPaths []string) {
-	mode = "off"
+// humanTopPolicy 选取最高优先级的人机验证策略：force > auto（首个 force
+// 优先；无 force 时首个 auto）。merged 配置与挑战页选取共用本判定——
+// 绑定序在前的 auto 策略不得遮蔽 force 策略（页与 mode 分叉）。
+// 无任何 force/auto 策略时返回 nil。
+func humanTopPolicy(policies []*models.SecurityPolicy) *models.SecurityPolicy {
 	var top *models.SecurityPolicy
 	for _, p := range policies {
 		if p == nil {
 			continue
 		}
 		if p.HumanVerifyMode == "force" {
-			if mode != "force" {
+			if top == nil || top.HumanVerifyMode != "force" {
 				top = p
 			}
-			mode = "force"
-		} else if p.HumanVerifyMode == "auto" && mode == "off" {
-			mode = "auto"
+		} else if p.HumanVerifyMode == "auto" && top == nil {
 			top = p
 		}
-		if top == nil && p.HumanVerifyMode != "off" {
-			top = p
-		}
+	}
+	return top
+}
+
+// humanPolicyMerged 合并策略人机验证配置：force > auto 优先级（任一 force 策略
+// 即 force）；方式/有效期/豁免取最高优先级策略的值，豁免路径/IP 取并集。
+func humanPolicyMerged(policies []*models.SecurityPolicy) (mode, typ string, ttl int, exemptPaths []string) {
+	mode = "off"
+	top := humanTopPolicy(policies)
+	if top != nil {
+		mode = top.HumanVerifyMode
 	}
 	if top == nil {
 		return
@@ -138,6 +146,9 @@ func humanPolicyMerged(policies []*models.SecurityPolicy) (mode, typ string, ttl
 	for v := range pathSet {
 		exemptPaths = append(exemptPaths, v)
 	}
+	// map 迭代序不确定 → 渲染字节漂移会让 errSameConfig 同字节短路失效，
+	// autoban 投影热路径回退全量重载；排序后同配置渲染恒同字节。
+	sort.Strings(exemptPaths)
 	return
 }
 

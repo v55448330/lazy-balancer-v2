@@ -183,3 +183,40 @@ export const crawlerExemptionNeedsEngines = (state: {
   crawlerExempt: boolean
   engines: readonly string[]
 }): boolean => state.geoipEnabled && state.crawlerExempt && state.engines.length === 0
+
+/**
+ * CC 检测开启但人机验证关闭 → 非阻断保存警告谓词。
+ *
+ * CC 异常检测（突刺/4xx/多UA）只在挑战页上判定攻击性行为：人机验证关闭时
+ * 永不发起挑战，CC 阈值形同虚设（与 ccEnabledTip「仅在人机验证开启时生效」
+ * 同口径）。保存照常放行（警告不阻断），由调用方就近提示用户。
+ *
+ * 入参 ccDetectEnabled 取**载荷侧**值（buildPolicyPayload 已按类型裁剪：
+ * 非 stage2/stage3 恒 false）——故 stage0/1/mixed 即便表单残留 CC 开关也不误报。
+ */
+export const ccDetectWithoutHumanWarning = (state: {
+  policyType: string
+  ccDetectEnabled: boolean
+  humanVerifyMode: string
+}): boolean => isHumanStage(state.policyType) && state.ccDetectEnabled && state.humanVerifyMode === 'off'
+
+/**
+ * 阶段 2 挑战页组件占位符校验（保存门与提示线共用单源）。
+ *
+ * 后端 block_page_id=0 = 内置挑战页（一等路径，lbhuman 按验证方式自动选用
+ * 滑块/JS 内置页）——不判缺占位符，放行保存。仅对 >0 的真实页校验：页面必须
+ * 含当前验证方式的组件占位符（JS={{human_js_widget}}，滑块={{human_verify_widget}}），
+ * 缺失或页面已删除 → true（阻断保存并提示插入组件）。非阶段 2 策略恒 false。
+ */
+export const challengePageMissingWidget = (state: {
+  policyType: string
+  blockPageId: number
+  blockPages: ReadonlyArray<{ id: number; content?: string }>
+  humanVerifyType: string
+}): boolean => {
+  if (state.policyType !== 'stage2') return false
+  if (state.blockPageId <= 0) return false
+  const placeholder = state.humanVerifyType === 'js' ? '{{human_js_widget}}' : '{{human_verify_widget}}'
+  const page = state.blockPages.find((p) => p.id === state.blockPageId)
+  return !page || !(page.content ?? '').includes(placeholder)
+}

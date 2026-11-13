@@ -121,22 +121,21 @@ func TestCCWindowAndTrigger(t *testing.T) {
 func TestExemptPaths(t *testing.T) {
 	h := &HumanHandler{HumanConfig: HumanConfig{
 		ExemptPaths: []string{"/api/", "/static/"},
-		ExemptIPs:   []string{"10.0.0.1", "192.168.0.0/16"},
 	}}
 	if err := h.Provision(caddy.Context{}); err != nil {
 		t.Fatal(err)
 	}
-	if !h.isExempt("10.0.0.1", "/") {
-		t.Fatal("exact IP exempt")
-	}
-	if !h.isExempt("192.168.1.5", "/") {
-		t.Fatal("CIDR exempt")
-	}
-	if !h.isExempt("1.2.3.4", "/api/users") {
+	if !h.isExempt("/api/users") {
 		t.Fatal("path prefix exempt")
 	}
-	if h.isExempt("1.2.3.4", "/admin") {
+	if !h.isExempt("/static/app.js") {
+		t.Fatal("second path prefix exempt")
+	}
+	if h.isExempt("/admin") {
 		t.Fatal("non-exempt path must not match")
+	}
+	if h.isExempt("") {
+		t.Fatal("empty path must not match")
 	}
 }
 

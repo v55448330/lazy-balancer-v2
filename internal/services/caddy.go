@@ -4622,12 +4622,13 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig, sec
 		if rule.Protocol == "http" && len(policies) > 0 {
 			banContent, banType := "", ""
 			if ctx != nil {
-				for _, policy := range policies {
-					if policy != nil && policy.BlockPageID > 0 && policy.HumanVerifyMode != "off" {
-						banContent = ctx.blockPageByID[policy.BlockPageID]
-						banType = ctx.blockPageTypeByID[policy.BlockPageID]
-						break
-					}
+				// 挑战页与 merged 配置同优先序（force > auto，humanTopPolicy
+				// 单源）：绑定序在前的 auto 策略不得遮蔽 force 策略的页——
+				// merged mode=force 配 auto 页即分叉。top 策略未配页/页内容
+				// 为空时回落内置页（humanChallengeFallbackPage）。
+				if top := humanTopPolicy(policies); top != nil && top.BlockPageID > 0 {
+					banContent = ctx.blockPageByID[top.BlockPageID]
+					banType = ctx.blockPageTypeByID[top.BlockPageID]
 				}
 				// CC 挑战模式的默认拦截页=内置人机验证页（按验证方式选页：
 				// js→9006 JS 人机验证页面，其余→9005 滑块）；策略未显式配页时

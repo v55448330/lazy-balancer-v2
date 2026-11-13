@@ -113,6 +113,14 @@ func TestConfiguredRequestBodyBytes_outOfRangeFallbackIsLogged(t *testing.T) {
 	const stateKey = "request-body-max-size-out-of-range"
 	services.ResetLogStateTransitionForTest(stateKey)
 	t.Cleanup(func() { services.ResetLogStateTransitionForTest(stateKey) })
+	// 隔离全局日志级别：本用例断言「已恢复」info 级留痕，前置用例若把级别
+	// 调到 warn/error 且未恢复，info 会被 shouldLog 过滤导致假红（shuffle 排列
+	// 敏感）。钉 info 级并在退出时恢复，与 ResetLogStateTransitionForTest 同构。
+	previousLevel := services.CurrentLogLevel()
+	if err := services.ConfigureLogLevel("info"); err != nil {
+		t.Fatalf("set log level: %v", err)
+	}
+	t.Cleanup(func() { _ = services.ConfigureLogLevel(previousLevel) })
 	if _, err := db.DB.Exec(`CREATE TABLE global_config (id INTEGER PRIMARY KEY, request_body_max_size_mb INTEGER); INSERT INTO global_config VALUES (1, 99999)`); err != nil {
 		t.Fatalf("create global config: %v", err)
 	}

@@ -10,7 +10,8 @@ import (
 	"time"
 )
 
-// humanVerifyPath JS 挑战校验端点路径（保留路径前缀，业务路径冲突时豁免配置兜底）。
+// humanVerifyPath JS 挑战校验端点路径（保留路径，业务避让；豁免不覆盖校验端点——
+// 端点判定先于豁免，路径冲突时由业务侧避让该前缀）。
 const humanVerifyPath = "/__lb/human/verify"
 
 // humanStats 全局挑战统计（总览卡数据源）。CC「封禁」响应退役（2026-11-13）：
@@ -75,8 +76,10 @@ func (h *HumanHandler) serveJSVerify(w http.ResponseWriter, r *http.Request, ip 
 		return
 	}
 	// cookie 已在上方签发（exp 已登记进运行态会话），此处只写出响应头。
+	// 代理 TLS 终止场景 r.TLS=nil：XFP=https 只增 Secure 不减（伪造方向
+	// 无害——最坏让 cookie 仅在 HTTPS 发送，不削弱任何安全属性）。
 	secure := ""
-	if r.TLS != nil {
+	if r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https" {
 		secure = "; Secure"
 	}
 	w.Header().Set("Set-Cookie", fmt.Sprintf("%s=%s; Path=/; HttpOnly; SameSite=Lax; Expires=%s%s", cookieName, cookieValue, exp.UTC().Format(http.TimeFormat), secure))

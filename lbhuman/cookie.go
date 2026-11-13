@@ -19,9 +19,13 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net"
+	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/caddyserver/caddy/v2/modules/caddyhttp"
 )
 
 // cookieName 验证通过 cookie 名（下划线前缀=用户自定义 header 不可伪造）。
@@ -40,21 +44,22 @@ func normalizeIP(ip string) string {
 	return parsed.Mask(net.CIDRMask(64, 128)).String()
 }
 
-// clientIPFrom XFF 首值优先（Caddy 反代链自动追加），直连回落 RemoteAddr。
-func clientIPFrom(remoteAddr, xff string) string {
-	if xff != "" {
-		if idx := strings.IndexByte(xff, ','); idx >= 0 {
-			xff = xff[:idx]
-		}
-		if v := strings.TrimSpace(xff); v != "" {
-			return v
-		}
+// clientIPFrom 取真实客户端 IP：优先 Caddy client_ip 变量——trusted_proxies
+// 启用时它经「回源网段 + 有序请求头」校验，伪造头不改变判定；变量缺席
+// （非 Caddy 上下文/未启用受信代理）回落 RemoteAddr host。绝不采信裸
+// X-Forwarded-For（直连客户端可任意伪造，与 caddygeoip.realClientIP 同口径）。
+func clientIPFrom(r *http.Request) string {
+	if ip, ok := caddyhttp.GetVar(r.Context(), caddyhttp.ClientIPVarKey).(string); ok && ip != "" {
+		return ip
 	}
-	host := remoteAddr
-	if idx := strings.LastIndexByte(host, ':'); idx >= 0 {
-		host = host[:idx]
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		if net.ParseIP(r.RemoteAddr) != nil {
+			return r.RemoteAddr
+		}
+		return ""
 	}
-	return strings.Trim(host, "[]")
+	return host
 }
 
 // uaHash UA 指纹短哈希（cookie 绑定 UA 防转借，不存原文）。
@@ -111,10 +116,14 @@ func verifyCookie(secret []byte, cookieValue, ip, ua string, now time.Time) bool
 const (
 	challengeTokenTTL   = 5 * time.Minute
 	challengeDifficulty = 4 // 前 4 位十六进制零（<1s 浏览器可算）
+	// challengeMaterialCap 挑战材料表硬上限（与实时会话 challengeSessionCap
+	// 同值）：匿名发放端点可被刷量，TTL 顺带清扫不构成容量保证；超限淘汰
+	// 最旧条目，热路径内存有界。
+	challengeMaterialCap = 2000
 )
 
 type challengeToken struct {
-	value     string
+	issuedAt  time.Time
 	expiresAt time.Time
 	used      bool
 }
@@ -129,17 +138,39 @@ func issueChallengeToken() string {
 	raw := make([]byte, 16)
 	_, _ = rand.Read(raw)
 	token := hex.EncodeToString(raw)
-	challengeTokensMu.Lock()
-	challengeTokens[token] = challengeToken{value: token, expiresAt: time.Now().Add(challengeTokenTTL)}
-	// 顺手清理过期 token（低频写路径顺带，无独立 janitor）
 	now := time.Now()
+	challengeTokensMu.Lock()
+	challengeTokens[token] = challengeToken{issuedAt: now, expiresAt: now.Add(challengeTokenTTL)}
+	// 顺手清理过期 token（低频写路径顺带，无独立 janitor）
 	for k, v := range challengeTokens {
 		if now.After(v.expiresAt) || v.used {
 			delete(challengeTokens, k)
 		}
 	}
+	evictOldestTokensLocked(challengeMaterialCap)
 	challengeTokensMu.Unlock()
 	return token
+}
+
+// evictOldestTokensLocked 超硬上限时按签发时刻淘汰最旧条目（调用方持锁）。
+func evictOldestTokensLocked(limit int) {
+	if len(challengeTokens) <= limit {
+		return
+	}
+	keys := make([]string, 0, len(challengeTokens))
+	for k := range challengeTokens {
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		a, b := challengeTokens[keys[i]], challengeTokens[keys[j]]
+		if !a.issuedAt.Equal(b.issuedAt) {
+			return a.issuedAt.Before(b.issuedAt)
+		}
+		return keys[i] < keys[j]
+	})
+	for _, k := range keys[:len(challengeTokens)-limit] {
+		delete(challengeTokens, k)
+	}
 }
 
 // consumeChallengeToken 校验并消费（一次性）。
@@ -150,7 +181,7 @@ func consumeChallengeToken(token string) bool {
 	if !ok || t.used || time.Now().After(t.expiresAt) {
 		return false
 	}
-	challengeTokens[token] = challengeToken{value: t.value, expiresAt: t.expiresAt, used: true}
+	challengeTokens[token] = challengeToken{issuedAt: t.issuedAt, expiresAt: t.expiresAt, used: true}
 	return true
 }
 

@@ -11,17 +11,32 @@ import (
 
 const ccShards = 16
 
-// CCWindowStats 单 (rule, IP) 滑窗统计。
+// CCWindowStats 单 (rule, IP) 滑窗统计快照（值拷贝，不携带共享 map——
+// UASetSize 在分片锁内取 len(UASet)，锁外读快照无数据竞争）。
 type CCWindowStats struct {
-	WindowStart int64          // 窗口起点（unix 秒）
-	Count       int            // 窗口内请求数
-	Status4xx   int            // 窗口内 4xx 数
-	UASet       map[string]int // 窗口内 UA 指纹→次数（会话异常检测）
+	WindowStart int64 // 窗口起点（unix 秒）
+	Count       int   // 窗口内请求数
+	Status4xx   int   // 窗口内 4xx 数
+	UASetSize   int   // 窗口内不同 UA 指纹数（会话异常检测）
+	WindowSec   int   // 本计数器登记的窗口秒数（janitor 按窗口保留）
+}
+
+// ccEntry 分片内活计数器（UASet 仅在分片锁内读写；对外只发值快照）。
+type ccEntry struct {
+	WindowStart int64
+	Count       int
+	Status4xx   int
+	UASet       map[string]int
+	WindowSec   int
+}
+
+func (e *ccEntry) snapshot() CCWindowStats {
+	return CCWindowStats{WindowStart: e.WindowStart, Count: e.Count, Status4xx: e.Status4xx, UASetSize: len(e.UASet), WindowSec: e.WindowSec}
 }
 
 type ccShard struct {
 	mu sync.Mutex
-	m  map[string]*CCWindowStats // key = rule|ip
+	m  map[string]*ccEntry // key = rule|ip
 }
 
 var (
@@ -32,7 +47,7 @@ var (
 func ccInit() {
 	ccOnce.Do(func() {
 		for i := range ccCounters {
-			ccCounters[i].m = map[string]*CCWindowStats{}
+			ccCounters[i].m = map[string]*ccEntry{}
 		}
 	})
 }
@@ -56,7 +71,7 @@ func ccRecord(key string, windowSec int, is4xx bool, uaFp string) CCWindowStats 
 	now := time.Now().Unix()
 	st, ok := shard.m[key]
 	if !ok {
-		st = &CCWindowStats{UASet: map[string]int{}}
+		st = &ccEntry{UASet: map[string]int{}, WindowSec: windowSec}
 		shard.m[key] = st
 	}
 	if now-st.WindowStart >= int64(windowSec) {
@@ -66,6 +81,7 @@ func ccRecord(key string, windowSec int, is4xx bool, uaFp string) CCWindowStats 
 		st.Status4xx = 0
 		st.UASet = map[string]int{}
 	}
+	st.WindowSec = windowSec
 	st.Count++
 	if is4xx {
 		st.Status4xx++
@@ -73,18 +89,24 @@ func ccRecord(key string, windowSec int, is4xx bool, uaFp string) CCWindowStats 
 	if uaFp != "" {
 		st.UASet[uaFp]++
 	}
-	return CCWindowStats{WindowStart: st.WindowStart, Count: st.Count, Status4xx: st.Status4xx, UASet: st.UASet}
+	return st.snapshot()
 }
 
-// ccJanitor 定期清理空闲条目（无窗口活动超过 5 分钟即删）。
+// ccJanitor 定期清理空闲条目：无活动超过 max(300s, 窗口长度) 即删。
+// 短窗口（≤300s）保持 5 分钟清理语义；长窗口活计数器保留至窗口到期，
+// 不被固定 cutoff 误删。
 func ccJanitor() {
 	ccInit()
+	now := time.Now().Unix()
 	for i := range ccCounters {
 		shard := &ccCounters[i]
 		shard.mu.Lock()
-		cutoff := time.Now().Unix() - 300
 		for k, st := range shard.m {
-			if st.WindowStart < cutoff {
+			retain := int64(300)
+			if int64(st.WindowSec) > retain {
+				retain = int64(st.WindowSec)
+			}
+			if now-st.WindowStart >= retain {
 				delete(shard.m, k)
 			}
 		}
@@ -118,7 +140,7 @@ func evalCC(stats CCWindowStats, rpsLimit, windowSec, ratio4xx, sessionUACount i
 	}
 	// 会话异常：UA 数超阈+请求量下限（>=20）——独立于 RPS 阈值，
 	// 避免被 rps_spike 优先级遮蔽而无法单独观测该触发类型。
-	if sessionAnomaly && sessionUACount > 0 && len(stats.UASet) > sessionUACount && stats.Count >= 20 {
+	if sessionAnomaly && sessionUACount > 0 && stats.UASetSize > sessionUACount && stats.Count >= 20 {
 		return CCTriggerResult{Triggered: true, Reason: "session_anomaly"}
 	}
 	return CCTriggerResult{}

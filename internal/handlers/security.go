@@ -1316,8 +1316,8 @@ func (h *Handlers) CreateSecurityPolicy(c *gin.Context) {
 		req.CRSRuleGroups, req.CRSExcludedRules, req.CustomRules, req.BlockPageID, req.BlockStatusCode, enabled, req.GeoIPCountries, req.GeoIPMode, crawlerExemptBool(req.GeoIPCrawlerExempt, geoIPActive(req.GeoIPMode)), crawlerEnginesJSON(req.GeoIPCrawlerEngines), req.WAFCheckResponse, req.LogRequestBody, req.IPACLListRefs, req.IPWhitelistRefs, int(contextUserID(c)), policyType, req.TrustDetection,
 		humanModeOrDefault(req.HumanVerifyMode), humanTypeOrDefault(req.HumanVerifyType), humanTTLOrDefault(req.HumanVerifyTTL),
 		humanJSONOrDefault(req.HumanExemptPaths),
-		req.CCDetectEnabled, ccIntOrDefault(req.CCRPSLimit, 40), ccIntOrDefault(req.CCRPSWindow, 10),
-		ccIntOrDefault(req.CC4xxRatio, 70), req.CCSessionAnomaly, ccIntOrDefault(req.CCSessionUAThreshold, 5), normalizeBlockResponseMode(req.BlockResponseMode))
+		req.CCDetectEnabled, ccIntOrDefault(req.CCRPSLimit, 40), ccWindowOrDefault(req.CCRPSWindow),
+		cc4xxRatioOrDefault(derefIntPtr(req.CC4xxRatio, db.DefaultCC4xxRatio)), req.CCSessionAnomaly, ccIntOrDefault(req.CCSessionUAThreshold, 5), normalizeBlockResponseMode(req.BlockResponseMode))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
 		return
@@ -2158,16 +2158,16 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 	addStr("ip_acl_list_refs", req.IPACLListRefs)
 	addStr("ip_whitelist_refs", req.IPWhitelistRefs)
 	addStr("policy_type", req.PolicyType)
-	addStr("human_verify_mode", req.HumanVerifyMode)
-	addStr("human_verify_type", req.HumanVerifyType)
-	addInt("human_verify_ttl", req.HumanVerifyTTL)
-	addStr("human_exempt_paths", req.HumanExemptPaths)
+	addStr("human_verify_mode", mapStrPtr(req.HumanVerifyMode, humanModeOrDefault))
+	addStr("human_verify_type", mapStrPtr(req.HumanVerifyType, humanTypeOrDefault))
+	addInt("human_verify_ttl", mapIntPtr(req.HumanVerifyTTL, humanTTLOrDefault))
+	addStr("human_exempt_paths", mapStrPtr(req.HumanExemptPaths, humanJSONOrDefault))
 	addBool("cc_detect_enabled", req.CCDetectEnabled)
-	addInt("cc_rps_limit", req.CCRPSLimit)
-	addInt("cc_rps_window", req.CCRPSWindow)
-	addInt("cc_4xx_ratio", req.CC4xxRatio)
+	addInt("cc_rps_limit", mapIntPtr(req.CCRPSLimit, func(v int) int { return ccIntOrDefault(v, 40) }))
+	addInt("cc_rps_window", mapIntPtr(req.CCRPSWindow, ccWindowOrDefault))
+	addInt("cc_4xx_ratio", mapIntPtr(req.CC4xxRatio, cc4xxRatioOrDefault))
 	addBool("cc_session_anomaly", req.CCSessionAnomaly)
-	addInt("cc_session_ua_threshold", req.CCSessionUAThreshold)
+	addInt("cc_session_ua_threshold", mapIntPtr(req.CCSessionUAThreshold, func(v int) int { return ccIntOrDefault(v, 5) }))
 
 	if req.BlockPageID != nil {
 		query += ", block_page_id=?"
@@ -6146,6 +6146,7 @@ func resolveCreatePolicyType(req *models.CreateSecurityPolicyRequest) (string, e
 			CustomRules: json.RawMessage(req.CustomRules),
 			GeoIPMode:   req.GeoIPMode, GeoIPCountries: json.RawMessage(req.GeoIPCountries),
 			IPACLListRefs: req.IPACLListRefs, IPWhitelistRefs: req.IPWhitelistRefs,
+			HumanVerifyMode: req.HumanVerifyMode, CCDetectEnabled: req.CCDetectEnabled,
 		})
 		if policyType == models.PolicyTypeMixed {
 			return "", fmt.Errorf("策略内容跨多个阶段，请显式按阶段类型（信任名单/IP 访问控制/CC 防护/WAF）分别创建")
@@ -6273,6 +6274,12 @@ func applyStageZerosToCreate(req *models.CreateSecurityPolicyRequest, policyType
 			req.HumanVerifyMode, req.HumanVerifyType = "off", "slider"
 			req.HumanVerifyTTL = 30
 			req.HumanExemptPaths = "[]"
+			req.CCDetectEnabled = false
+			req.CCRPSLimit = db.DefaultCCRPSLimit
+			req.CCRPSWindow = db.DefaultCCRPSWindow
+			req.CC4xxRatio = new(db.DefaultCC4xxRatio)
+			req.CCSessionAnomaly = false
+			req.CCSessionUAThreshold = db.DefaultCCSessionUAThreshold
 		case stageZeroIPBlacklist:
 			req.IPBlacklist = "[]"
 		case stageZeroGeoIP:
@@ -6316,6 +6323,12 @@ func applyStageZerosToUpdate(req *models.UpdateSecurityPolicyRequest, policyType
 			req.HumanVerifyMode, req.HumanVerifyType = new("off"), new("slider")
 			req.HumanVerifyTTL = new(30)
 			req.HumanExemptPaths = new("[]")
+			req.CCDetectEnabled = new(false)
+			req.CCRPSLimit = new(db.DefaultCCRPSLimit)
+			req.CCRPSWindow = new(db.DefaultCCRPSWindow)
+			req.CC4xxRatio = new(db.DefaultCC4xxRatio)
+			req.CCSessionAnomaly = new(false)
+			req.CCSessionUAThreshold = new(db.DefaultCCSessionUAThreshold)
 		case stageZeroIPBlacklist:
 			req.IPBlacklist = new("[]")
 		case stageZeroGeoIP:
@@ -6428,6 +6441,23 @@ func updateOutOfStageConflict(req *models.UpdateSecurityPolicyRequest, policyTyp
 			return req.GeoIPCrawlerExempt != nil && *req.GeoIPCrawlerExempt
 		case stageZeroTrustDetection:
 			return req.TrustDetection != nil && *req.TrustDetection
+		case stageZeroHuman:
+			// 人机/CC 族「显式生效」= 任一字段偏离阶段零值（off/slider/30/[] 与
+			// false/40/10/70/false/5）。编辑器对不呈现字段回传的惰性默认值不算
+			// 冲突（与其余族同口径）；nil=未提供不修改，不参与判定。
+			activeStr := func(p *string, zero string) bool { return p != nil && *p != zero }
+			activeInt := func(p *int, zero int) bool { return p != nil && *p != zero }
+			activeBool := func(p *bool) bool { return p != nil && *p }
+			return activeStr(req.HumanVerifyMode, "off") ||
+				activeStr(req.HumanVerifyType, "slider") ||
+				activeInt(req.HumanVerifyTTL, 30) ||
+				(req.HumanExemptPaths != nil && jsonListPayloadNonEmpty(*req.HumanExemptPaths)) ||
+				activeBool(req.CCDetectEnabled) ||
+				activeInt(req.CCRPSLimit, db.DefaultCCRPSLimit) ||
+				activeInt(req.CCRPSWindow, db.DefaultCCRPSWindow) ||
+				activeInt(req.CC4xxRatio, db.DefaultCC4xxRatio) ||
+				activeBool(req.CCSessionAnomaly) ||
+				activeInt(req.CCSessionUAThreshold, db.DefaultCCSessionUAThreshold)
 		}
 		return false
 	})
@@ -6751,4 +6781,60 @@ func ccIntOrDefault(v, def int) int {
 		return def
 	}
 	return v
+}
+
+// cc4xxRatioOrDefault cc_4xx_ratio 专用归一（Create/Update 单源）：0=关（保留 0），
+// 合法域 [0,100]，负值回落缺省 70，超上限钳到 100。与 ccIntOrDefault 的「0/负=缺省」
+// 不同——0 在本字段是「关闭 4xx 触发」的合法语义，不得吞成缺省。
+func cc4xxRatioOrDefault(v int) int {
+	if v < 0 {
+		return db.DefaultCC4xxRatio
+	}
+	if v > 100 {
+		return 100
+	}
+	return v
+}
+
+// ccWindowOrDefault cc_rps_window 专用归一（Create/Update 单源）：合法域 [1,3600]，
+// 低于下限（含 0/负/缺省零值）回落缺省 10，超上限钳到 3600。
+func ccWindowOrDefault(v int) int {
+	if v < 1 {
+		return db.DefaultCCRPSWindow
+	}
+	if v > 3600 {
+		return 3600
+	}
+	return v
+}
+
+// derefIntPtr 解引用 int 指针，nil（请求省略该字段）回落缺省值。Create 的
+// cc_4xx_ratio 经此区分「省略→缺省 70」与「显式 0=关闭」——裸 int 无法表达
+// 该差异（0 既是零值又是合法关闭语义），故 Create 请求该字段用 *int（与 Update 同口径）。
+func derefIntPtr(p *int, def int) int {
+	if p == nil {
+		return def
+	}
+	return *p
+}
+
+// mapIntPtr 对显式提供的 int 指针套用值级归一 helper（nil=未提供，保持现值）。
+// Update 的人机/CC 字段经此路由到与 Create 完全相同的归一 helper（单源），
+// 避免「Create 归一、Update 直写」的两套口径。每字段独立分配，不共享地址。
+func mapIntPtr(p *int, normalize func(int) int) *int {
+	if p == nil {
+		return nil
+	}
+	v := normalize(*p)
+	return &v
+}
+
+// mapStrPtr 对显式提供的 string 指针套用值级归一 helper（nil=未提供，保持现值）。
+// 与 mapIntPtr 同口径：Update 经此路由到与 Create 完全相同的归一 helper（单源）。
+func mapStrPtr(p *string, normalize func(string) string) *string {
+	if p == nil {
+		return nil
+	}
+	v := normalize(*p)
+	return &v
 }

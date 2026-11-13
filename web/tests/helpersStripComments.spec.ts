@@ -242,6 +242,9 @@ test('脚本存在性断言文件禁止裸 source()/repoSource() 回流', () => 
     'templateTypeGate.spec.ts',
     // 注释文案钉：断言 allow 空名单的 fail-closed 说明，剥注释后无法判定。
     'securityStagesModel.spec.ts',
+    // 注释文案钉：自动封禁配置弹框「喂入门」注释口径（断言对象是注释本身，
+    // 剥注释后无法判定）；其余代码存在性断言走 code()。
+    'ccProtectionContracts.spec.ts',
   ])
   // 本文件自身含判据的合成样本字符串（非真实导入），排除自扫描。
   const offenders = specFiles.filter((name) => name !== 'helpersStripComments.spec.ts' && rawImport.test(readSpec(name)) && !allowedRaw.has(name))

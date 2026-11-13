@@ -4,8 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"net/netip"
-	"sort"
 	"strings"
 	"time"
 
@@ -27,14 +25,12 @@ type HumanConfig struct {
 	CCEnabled         bool     `json:"cc_enabled"`    // 突刺/4xx/多UA 触发开关（关闭时仅 force 模式挑战）
 	ChallengePageHTML string   `json:"challenge_page_html,omitempty"`
 	ExemptPaths       []string `json:"exempt_paths"` // 豁免路径前缀
-	ExemptIPs         []string `json:"exempt_ips"`   // 豁免 IP/CIDR 列表
 	RuleID            string   `json:"rule_id"`      // 规则 caddy_id（计数器 key 前缀）
 }
 
 // HumanHandler lb_human 主处理器（无实例状态，配置即全部）。
 type HumanHandler struct {
 	HumanConfig
-	exemptPrefixes []netip.Prefix // Provision 时预编译+排序（二分匹配）
 }
 
 // CaddyModule returns the Caddy module information.
@@ -46,42 +42,7 @@ func (HumanHandler) CaddyModule() caddy.ModuleInfo {
 }
 
 // Provision implements caddy.Provisioner.
-func (h *HumanHandler) Provision(caddy.Context) error {
-	// 豁免 IP 聚合前缀集（排序+二分，与 IP 预检 wafiplist.AggregateParsedPrefixes
-	// 同算法）：内联 IP/CIDR + 名单展开项统一为 netip.Prefix，匹配 O(log n)。
-	h.exemptPrefixes = nil
-	seen := map[string]struct{}{}
-	for _, entry := range h.ExemptIPs {
-		entry = strings.TrimSpace(entry)
-		if entry == "" {
-			continue
-		}
-		var prefix netip.Prefix
-		if strings.Contains(entry, "/") {
-			p, err := netip.ParsePrefix(entry)
-			if err != nil {
-				continue
-			}
-			prefix = p.Masked()
-		} else if ip, err := netip.ParseAddr(entry); err == nil {
-			bits := 32
-			if ip.Is6() {
-				bits = 128
-			}
-			prefix = netip.PrefixFrom(ip, bits)
-		} else {
-			continue
-		}
-		key := prefix.String()
-		if _, dup := seen[key]; dup {
-			continue
-		}
-		seen[key] = struct{}{}
-		h.exemptPrefixes = append(h.exemptPrefixes, prefix)
-	}
-	sort.Slice(h.exemptPrefixes, func(a, b int) bool { return h.exemptPrefixes[a].Addr().Less(h.exemptPrefixes[b].Addr()) })
-	return nil
-}
+func (h *HumanHandler) Provision(caddy.Context) error { return nil }
 
 // Validate implements caddy.Validator.
 func (h *HumanHandler) Validate() error {
@@ -100,24 +61,11 @@ func (h *HumanHandler) Validate() error {
 	return nil
 }
 
-// isExempt 豁免判定：路径前缀+IP（精确/CIDR）。
-func (h *HumanHandler) isExempt(ip, path string) bool {
+// isExempt 豁免判定：路径前缀（IP 级放行唯一入口=阶段 0 信任名单，
+// human_exempt_ips 已退役，此处不再提供第二套放行口径）。
+func (h *HumanHandler) isExempt(path string) bool {
 	for _, p := range h.ExemptPaths {
 		if p != "" && strings.HasPrefix(path, p) {
-			return true
-		}
-	}
-	// 前缀二分匹配（O(log n)）
-	addr, err := netip.ParseAddr(ip)
-	if err != nil {
-		return false
-	}
-	idx := sort.Search(len(h.exemptPrefixes), func(i int) bool {
-		return !h.exemptPrefixes[i].Addr().Less(addr)
-	})
-	// 命中=该地址落在排序后首个不小于它的前缀内，或前一前缀（前缀跨度覆盖）
-	for _, i := range []int{idx, idx - 1} {
-		if i >= 0 && i < len(h.exemptPrefixes) && h.exemptPrefixes[i].Contains(addr) {
 			return true
 		}
 	}
@@ -175,7 +123,7 @@ func (h *HumanHandler) serveChallengeForRequest(w http.ResponseWriter, r *http.R
 //	force / CC 触发 → 挑战页（JS 挑战）
 //	否则直通并记录计数
 func (h *HumanHandler) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyhttp.Handler) error {
-	ip := clientIPFrom(r.RemoteAddr, r.Header.Get("X-Forwarded-For"))
+	ip := clientIPFrom(r)
 	path := r.URL.Path
 
 	// 挑战校验端点（优先处理，不经过豁免/cookie 判定）
@@ -189,7 +137,7 @@ func (h *HumanHandler) ServeHTTP(w http.ResponseWriter, r *http.Request, next ca
 	}
 
 	// 豁免优先
-	if h.isExempt(ip, path) {
+	if h.isExempt(path) {
 		return next.ServeHTTP(w, r)
 	}
 
@@ -254,3 +202,7 @@ func (w *statusCapture) Write(b []byte) (int, error) {
 	}
 	return w.ResponseWriter.Write(b)
 }
+
+// Unwrap 暴露底层 ResponseWriter：http.ResponseController 依赖 Unwrap 链
+// 找到 Hijacker/Flusher（缺此方法则全站 WebSocket 升级报 not supported）。
+func (w *statusCapture) Unwrap() http.ResponseWriter { return w.ResponseWriter }

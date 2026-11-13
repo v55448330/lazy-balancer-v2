@@ -1466,8 +1466,10 @@ func TestGetSecurityPolicy_returnsHumanVerifyAndCCFields(t *testing.T) {
 	}
 }
 
-// 阶段外能力归零（五阶段矩阵）：非 stage3 类型必须把人机验证/CC 字段清零，
+// 阶段外能力归零（四阶段矩阵）：非 stage2 类型必须把人机验证/CC 字段清零，
 // 否则类型切换后旧配置残留在别的阶段里（列表/预览宣称存在但永不发射）。
+// 显式类型 + 阶段外「生效中」人机/CC 字段 = 矛盾载荷 400（与其余阶段外族同口径）；
+// 不携带阶段外字段的纯类型切换则静默归零。
 func TestUpdateSecurityPolicy_zeroesHumanFieldsOutsideStage3(t *testing.T) {
 	setupSecurityPolicyTestDB(t)
 	useCRSRuleIndexFixture(t)
@@ -1477,15 +1479,30 @@ func TestUpdateSecurityPolicy_zeroesHumanFieldsOutsideStage3(t *testing.T) {
 		"human_verify_mode": "force", "human_exempt_paths": `["/keep/"]`,
 	})
 
-	recorder := putJSON(t, router, fmt.Sprintf("/security/policies/%d", id), map[string]any{
+	// 显式 stage3 + 生效中人机字段 = 矛盾载荷：400 拒绝，存量不被改写。
+	conflict := putJSON(t, router, fmt.Sprintf("/security/policies/%d", id), map[string]any{
 		"name": "人机→WAF", "mode": "blocking", "policy_type": "stage3",
 		"human_verify_mode": "force",
+	})
+	if conflict.Code != http.StatusBadRequest {
+		t.Fatalf("conflict update status=%d body=%s, want 400（阶段外人机显式生效）", conflict.Code, conflict.Body.String())
+	}
+	var mode, paths string
+	var cc bool
+	if err := db.DB.QueryRow(`SELECT COALESCE(human_verify_mode,''), COALESCE(human_exempt_paths,''), COALESCE(cc_detect_enabled,0) FROM security_policies WHERE id=?`, id).Scan(&mode, &paths, &cc); err != nil {
+		t.Fatal(err)
+	}
+	if mode != "force" || paths != `["/keep/"]` || cc {
+		t.Fatalf("被拒绝的更新不得落库：mode=%q paths=%q cc=%v", mode, paths, cc)
+	}
+
+	// 纯类型切换（不携带阶段外人机/CC 字段）：静默归零人机/CC。
+	recorder := putJSON(t, router, fmt.Sprintf("/security/policies/%d", id), map[string]any{
+		"name": "人机→WAF", "mode": "blocking", "policy_type": "stage3",
 	})
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("update status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
-	var mode, paths string
-	var cc bool
 	if err := db.DB.QueryRow(`SELECT COALESCE(human_verify_mode,''), COALESCE(human_exempt_paths,''), COALESCE(cc_detect_enabled,0) FROM security_policies WHERE id=?`, id).Scan(&mode, &paths, &cc); err != nil {
 		t.Fatal(err)
 	}
@@ -1493,7 +1510,7 @@ func TestUpdateSecurityPolicy_zeroesHumanFieldsOutsideStage3(t *testing.T) {
 		t.Fatalf("stage3(WAF) 残留人机字段：mode=%q paths=%q cc=%v（应 off/[]/false）", mode, paths, cc)
 	}
 
-	// 双向：从 stage4 切回 stage3 后人机字段可正常写入
+	// 双向：切回 stage2 后人机字段可正常写入。
 	recorder = putJSON(t, router, fmt.Sprintf("/security/policies/%d", id), map[string]any{
 		"name": "人机→WAF", "mode": "off", "policy_type": "stage2", "human_verify_mode": "auto",
 	})

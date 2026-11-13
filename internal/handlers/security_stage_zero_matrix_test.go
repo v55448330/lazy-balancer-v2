@@ -314,7 +314,7 @@ func pollutedCreateRequest() models.CreateSecurityPolicyRequest {
 		CCDetectEnabled:      true,
 		CCRPSLimit:           40,
 		CCRPSWindow:          10,
-		CC4xxRatio:           70,
+		CC4xxRatio:           new(70),
 		CCSessionAnomaly:     true,
 		CCSessionUAThreshold: 5,
 	}
@@ -353,7 +353,7 @@ func pollutedUpdateRequest() models.UpdateSecurityPolicyRequest {
 		CCDetectEnabled:      &c.CCDetectEnabled,
 		CCRPSLimit:           &c.CCRPSLimit,
 		CCRPSWindow:          &c.CCRPSWindow,
-		CC4xxRatio:           &c.CC4xxRatio,
+		CC4xxRatio:           c.CC4xxRatio,
 		CCSessionAnomaly:     &c.CCSessionAnomaly,
 		CCSessionUAThreshold: &c.CCSessionUAThreshold,
 	}

@@ -431,7 +431,7 @@ test('拦截页汇总必须过阶段能力门（stage3 off / stage1 无能力不
   // 阶段 2 例外行：挑战与封禁的内置页口径必须保留（配额限流已下线，不再宣称 429）
   // i18n 后双钉:调用点钉键,zh 母本钉原文(任一漂移必红)
   assert.match(summary, /t\('app\.security\.policies\.bp\.stage2NoPage'/)
-  assert.ok(code('src/locales/zh/security.ts').includes('挑战与封禁按内置页返回'), '阶段 2 内置页口径原文必须在 zh 母本词条中')
+  assert.ok(code('src/locales/zh/security.ts').includes('挑战按内置挑战页返回'), '阶段 2 内置页口径原文必须在 zh 母本词条中')
   assert.doesNotMatch(summary, /规则已配置阶段页覆盖/)
 })
 

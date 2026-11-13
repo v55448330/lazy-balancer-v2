@@ -36,14 +36,16 @@ func TestAutobanScopeSet_parsesCanonical(t *testing.T) {
 	}
 }
 
-// 挑战发放/失败按各自维度成员资格计数；挑战通过永不计数。
-func TestObserveHumanEvent_countsByScopeDimension(t *testing.T) {
+// 挑战发放/失败按各自维度成员资格计数；挑战通过永不计数（批喂入口径）。
+func TestObserveHumanEvents_countsByScopeDimension(t *testing.T) {
 	installAutobanFixture(t, "2026-11-13 10:00:00")
 	setAutobanConfigRaw(t, true, 100, 5, "1h", "challenge_issued,challenge_failed", false)
 
-	ObserveHumanEvent("203.0.113.70", "challenge", autobanNow())
-	ObserveHumanEvent("203.0.113.70", "fail", autobanNow())
-	ObserveHumanEvent("203.0.113.70", "pass", autobanNow()) // 通过不计
+	ObserveHumanEvents([]HumanObserveItem{
+		{IP: "203.0.113.70", Kind: "challenge", At: autobanNow()},
+		{IP: "203.0.113.70", Kind: "fail", At: autobanNow()},
+		{IP: "203.0.113.70", Kind: "pass", At: autobanNow()}, // 通过不计
+	})
 	autobanMu.Lock()
 	w := autobanWindows["203.0.113.70"]
 	autobanMu.Unlock()
@@ -54,14 +56,14 @@ func TestObserveHumanEvent_countsByScopeDimension(t *testing.T) {
 	// 仅勾选挑战失败：发放不计。
 	resetAutobanStateForTest()
 	setAutobanConfigRaw(t, true, 100, 5, "1h", "challenge_failed", false)
-	ObserveHumanEvent("203.0.113.71", "challenge", autobanNow())
+	ObserveHumanEvents([]HumanObserveItem{{IP: "203.0.113.71", Kind: "challenge", At: autobanNow()}})
 	autobanMu.Lock()
 	_, issuedCounted := autobanWindows["203.0.113.71"]
 	autobanMu.Unlock()
 	if issuedCounted {
 		t.Fatal("仅勾选挑战失败时，挑战发放不得计数")
 	}
-	ObserveHumanEvent("203.0.113.71", "fail", autobanNow())
+	ObserveHumanEvents([]HumanObserveItem{{IP: "203.0.113.71", Kind: "fail", At: autobanNow()}})
 	autobanMu.Lock()
 	w = autobanWindows["203.0.113.71"]
 	autobanMu.Unlock()

@@ -322,7 +322,7 @@ type CreateSecurityPolicyRequest struct {
 	CCDetectEnabled      bool   `json:"cc_detect_enabled"`
 	CCRPSLimit           int    `json:"cc_rps_limit"`
 	CCRPSWindow          int    `json:"cc_rps_window"`
-	CC4xxRatio           int    `json:"cc_4xx_ratio"`
+	CC4xxRatio           *int   `json:"cc_4xx_ratio"` // 指针：nil=省略→缺省 70，显式 0=关闭（与 Update 同口径）
 	CCSessionAnomaly     bool   `json:"cc_session_anomaly"`
 	CCSessionUAThreshold int    `json:"cc_session_ua_threshold"`
 	IPACLListRefs        string `json:"ip_acl_list_refs"`

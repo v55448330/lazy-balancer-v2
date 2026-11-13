@@ -301,10 +301,12 @@
     <!-- 自动封禁配置弹框：六项配置+口径/窗口变更重置提示-->
     <el-dialog v-model="autobanDialogVisible" width="min(680px, 94vw)" top="6vh" append-to-body class="dialog-body-inset" :close-on-click-modal="false" :close-on-press-escape="!autobanSaving" :show-close="!autobanSaving">
       <template #header>
-        <!-- 喂入门=阶段门（WAF·CRS 与 WAF·自定义两族命中计数）+爬虫豁免排除。
-             IP 访问控制/地域/威胁情报/请求体异常等事件不进入计数（10-30 裁定
-             自动封禁只吃阶段 3 命中），文案与后端 autobanStage3Eligible 同口径——
-             用户按文案校准阈值必须与真实喂入一致，否则阈值永不达标且无告警 -->
+        <!-- 喂入门=四维统计口径（2026-11-13 多选裁定）：WAF 命中按 blocked/logged
+             计数（CRS 与自定义两族，阶段门 autobanStage3Eligible，已验证爬虫豁免
+             autobanSourceEligible 独立排除）；人机挑战发放/失败按 challenge_issued/
+             challenge_failed 维度计数（挑战通过永不计）。IP 访问控制/地域/威胁情报/
+             请求体异常等事件不进入计数。文案与后端喂入门同口径——用户按文案校准
+             阈值必须与真实喂入一致，否则阈值永不达标且无告警 -->
         <DialogHeader :icon="Lock" :title="t('app.security.events.dialogTitle')" :subtitle="t('app.security.events.dialogSubtitle')" />
       </template>
       <div class="autoban-section-title">{{ t('app.security.events.sectionBanTitle') }}</div>
@@ -472,8 +474,6 @@ interface SecurityEvent { id: number; event_time: string; rule_caddy_id: string;
 interface AutobanSuggestion { ip: string; count: number; ip_location?: string; window_start?: string; last_seen?: string }
 interface AutobanStatus {
   enabled: boolean; dry_run: boolean; threshold: number; window_minutes: number
-  cc_detect_enabled?: boolean; cc_rps_limit?: number; cc_rps_window?: number
-  cc_4xx_ratio?: number; cc_session_anomaly?: boolean; cc_session_ua_threshold?: number
   duration: string; scope: string; banned_today: number; list_entries: number
   // 黄条判据 = 封禁是否真正生效（名单非空 ∧ 被启用+IP ACL 启用+deny 的
   // 策略在 ip_acl_list_refs 引用）。后端 list_referenced 为热路径资格门的四面

@@ -8,6 +8,7 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -23,6 +24,12 @@ const (
 	sliderTolerance   = 3  // x 偏移容差 px（收紧：视觉偏差不再轻易通过）
 	sliderPuzzleTTL   = 2 * time.Minute
 	sliderMaxAttempts = 3 // 失败 3 次强制换图（防爆破）
+	// sliderVerifyMaxBody 匿名校验端点请求体硬上限（64KiB，远超合法提交：
+	// track 点数帽 4096 × 每点 ≤8 字符 + 表单开销）。
+	sliderVerifyMaxBody = 64 << 10
+	// sliderTrackMaxPoints 轨迹采样点数帽（10s 时长上限内合法拖动远低于此值；
+	// 超限直接 400，不做无界 Split）。
+	sliderTrackMaxPoints = 4096
 )
 
 type sliderPuzzle struct {
@@ -57,8 +64,31 @@ func newSliderPuzzle() *sliderPuzzle {
 			delete(sliderPuzzles, k)
 		}
 	}
+	evictOldestPuzzlesLocked(challengeMaterialCap)
 	sliderPuzzlesMu.Unlock()
 	return p
+}
+
+// evictOldestPuzzlesLocked 超硬上限时按创建时刻淘汰最旧拼图（调用方持锁；
+// 与 challengeTokens 同款有界热路径）。
+func evictOldestPuzzlesLocked(limit int) {
+	if len(sliderPuzzles) <= limit {
+		return
+	}
+	ids := make([]string, 0, len(sliderPuzzles))
+	for k := range sliderPuzzles {
+		ids = append(ids, k)
+	}
+	sort.Slice(ids, func(i, j int) bool {
+		a, b := sliderPuzzles[ids[i]], sliderPuzzles[ids[j]]
+		if !a.createdAt.Equal(b.createdAt) {
+			return a.createdAt.Before(b.createdAt)
+		}
+		return ids[i] < ids[j]
+	})
+	for _, k := range ids[:len(sliderPuzzles)-limit] {
+		delete(sliderPuzzles, k)
+	}
 }
 
 // puzzleSVG 拼图 SVG：背景（渐变+低透明度几何层次）+ 缺口（socket 语义）。
@@ -126,12 +156,17 @@ func sliderVerify(p *sliderPuzzle, x int, track []int, durationMs int) bool {
 	return variance > 0.5 // 有非匀速性
 }
 
-// consumeSliderPuzzle 消费拼图（一次性；失败达上限后下一次强制失效换新）。
+// consumeSliderPuzzle 消费拼图（一次性；失败达上限后下一次强制失效换新；
+// TTL 过期即删返回 nil——过期提交走 retryable=false 换新图路径）。
 func consumeSliderPuzzle(id string) *sliderPuzzle {
 	sliderPuzzlesMu.Lock()
 	defer sliderPuzzlesMu.Unlock()
 	p, ok := sliderPuzzles[id]
 	if !ok {
+		return nil
+	}
+	if time.Since(p.createdAt) > sliderPuzzleTTL {
+		delete(sliderPuzzles, id)
 		return nil
 	}
 	p.attempts++
@@ -171,14 +206,27 @@ func (h *HumanHandler) serveSliderVerify(w http.ResponseWriter, r *http.Request,
 		_, _ = w.Write([]byte(`{"ok":false}`))
 		return
 	}
+	// 匿名端点请求体硬上限：超限读取报错 → 400（不得全量读入无界 body）。
+	r.Body = http.MaxBytesReader(w, r.Body, sliderVerifyMaxBody)
+	if err := r.ParseForm(); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"ok":false}`))
+		return
+	}
 	puzzleID := r.FormValue("puzzle_id")
 	xStr := r.FormValue("x")
 	trackStr := r.FormValue("track") // 逗号分隔的位移序列
 	durationStr := r.FormValue("duration_ms")
 	x := atoiSafe(xStr)
 	duration := atoiSafe(durationStr)
+	parts := strings.Split(trackStr, ",")
+	if len(parts) > sliderTrackMaxPoints {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"ok":false}`))
+		return
+	}
 	var track []int
-	for _, part := range strings.Split(trackStr, ",") {
+	for _, part := range parts {
 		if v := atoiSafe(strings.TrimSpace(part)); v >= 0 {
 			track = append(track, v)
 		}
@@ -225,8 +273,10 @@ func (h *HumanHandler) serveSliderVerify(w http.ResponseWriter, r *http.Request,
 	delete(sliderPuzzles, puzzleID)
 	sliderPuzzlesMu.Unlock()
 	// cookie 已在上方签发（exp 已登记进运行态会话），此处只写出响应头。
+	// 代理 TLS 终止场景 r.TLS=nil：XFP=https 只增 Secure 不减（伪造方向
+	// 无害——最坏让 cookie 仅在 HTTPS 发送，不削弱任何安全属性）。
 	secure := ""
-	if r.TLS != nil {
+	if r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https" {
 		secure = "; Secure"
 	}
 	w.Header().Set("Set-Cookie", fmt.Sprintf("%s=%s; Path=/; HttpOnly; SameSite=Lax; Expires=%s%s", cookieName, cookieValue, exp.UTC().Format(http.TimeFormat), secure))

@@ -8,7 +8,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { buildPolicyPayload, crawlerExemptionNeedsEngines, type PolicyPayloadInput } from '../src/utils/policyPayload.ts'
+import { buildPolicyPayload, ccDetectWithoutHumanWarning, challengePageMissingWidget, crawlerExemptionNeedsEngines, type PolicyPayloadInput } from '../src/utils/policyPayload.ts'
 import { repoCode, section } from './_helpers.ts'
 
 // 后端请求结构的 json 标签是字段名的唯一权威（UpdateSecurityPolicyRequest）。
@@ -194,4 +194,36 @@ test('豁免开启 + 空引擎 = 不可保存（后端空集=全部引擎）', (
   // 地域关闭或豁免关闭 = 引擎选择不参与（不阻断保存）
   assert.equal(crawlerExemptionNeedsEngines({ geoipEnabled: false, crawlerExempt: true, engines: [] }), false)
   assert.equal(crawlerExemptionNeedsEngines({ geoipEnabled: true, crawlerExempt: false, engines: [] }), false)
+})
+
+// ── CC 防护保存门：纯函数行为验收（向导 handleSave 消费同一谓词） ──
+
+test('CC 检测开启但人机验证关闭：保存警告谓词全形态（警告不阻断）', () => {
+  // 目标形态：CC 开 + 人机 off → 警告（CC 仅在挑战页生效，此时永不发起挑战）
+  assert.equal(ccDetectWithoutHumanWarning({ policyType: 'stage2', ccDetectEnabled: true, humanVerifyMode: 'off' }), true)
+  // 人机开启（auto/force）→ CC 生效，无警告
+  assert.equal(ccDetectWithoutHumanWarning({ policyType: 'stage2', ccDetectEnabled: true, humanVerifyMode: 'auto' }), false)
+  assert.equal(ccDetectWithoutHumanWarning({ policyType: 'stage2', ccDetectEnabled: true, humanVerifyMode: 'force' }), false)
+  // CC 关闭 → 无警告（人机 off 是合法关闭态）
+  assert.equal(ccDetectWithoutHumanWarning({ policyType: 'stage2', ccDetectEnabled: false, humanVerifyMode: 'off' }), false)
+  // 载荷侧 cc_detect_enabled 已被类型裁剪（stage0/1/mixed 恒 false）→ 不警告
+  assert.equal(ccDetectWithoutHumanWarning({ policyType: 'stage1', ccDetectEnabled: true, humanVerifyMode: 'off' }), false)
+  assert.equal(ccDetectWithoutHumanWarning({ policyType: 'mixed', ccDetectEnabled: true, humanVerifyMode: 'off' }), false)
+})
+
+test('阶段 2 未配挑战页（0）= 内置挑战页一等路径：不判缺占位符（放行保存）', () => {
+  const pages = [{ id: 9, name: '挑战页', content: '<div>{{human_verify_widget}}</div>' }]
+  // 0 = 内置挑战页（后端一等路径）：不报缺组件，保存放行
+  assert.equal(challengePageMissingWidget({ policyType: 'stage2', blockPageId: 0, blockPages: pages, humanVerifyType: 'slider' }), false)
+  // 真实页（>0）含当前验证方式占位符 → 通过
+  assert.equal(challengePageMissingWidget({ policyType: 'stage2', blockPageId: 9, blockPages: pages, humanVerifyType: 'slider' }), false)
+  // 真实页缺占位符 → 阻断（保存门与提示线共用）
+  assert.equal(challengePageMissingWidget({ policyType: 'stage2', blockPageId: 9, blockPages: [{ id: 9, content: '<p>x</p>' }], humanVerifyType: 'slider' }), true)
+  // 真实页已删除（列表无此 id）→ 阻断
+  assert.equal(challengePageMissingWidget({ policyType: 'stage2', blockPageId: 9, blockPages: [], humanVerifyType: 'slider' }), true)
+  // JS 验证方式用 {{human_js_widget}}：滑块占位符不满足
+  assert.equal(challengePageMissingWidget({ policyType: 'stage2', blockPageId: 9, blockPages: pages, humanVerifyType: 'js' }), true)
+  assert.equal(challengePageMissingWidget({ policyType: 'stage2', blockPageId: 9, blockPages: [{ id: 9, content: '{{human_js_widget}}' }], humanVerifyType: 'js' }), false)
+  // 非阶段 2 策略：拦截页无挑战组件概念，恒不判
+  assert.equal(challengePageMissingWidget({ policyType: 'stage3', blockPageId: 9, blockPages: [], humanVerifyType: 'slider' }), false)
 })

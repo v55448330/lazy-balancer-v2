@@ -16,11 +16,13 @@
 package lbreqmon
 
 import (
+	"net"
 	"net/http"
 	"sort"
-	"strings"
 	"sync"
 	"sync/atomic"
+
+	"github.com/caddyserver/caddy/v2/modules/caddyhttp"
 )
 
 // RingCapacity 环形缓冲容量（编译期常量，用户裁定不做设置项）。
@@ -119,22 +121,22 @@ func sortByTsDesc(recs []RequestRecord) {
 	sort.SliceStable(recs, func(i, j int) bool { return recs[i].Ts > recs[j].Ts })
 }
 
-// clientIP 客户端 IP 判定：X-Forwarded-For 首值（Caddy 反代链自动追加）
-// 优先，直连回落 RemoteAddr host。
+// clientIP 客户端 IP 判定：优先 Caddy client_ip 变量——trusted_proxies 启用
+// 时它经「回源网段 + 有序请求头」校验，伪造头不改变判定；变量缺席回落
+// RemoteAddr host。绝不采信裸 X-Forwarded-For（直连客户端可任意伪造，
+// 与 caddygeoip.realClientIP 同口径）。
 func clientIP(r *http.Request) string {
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		if idx := strings.IndexByte(xff, ','); idx >= 0 {
-			xff = xff[:idx]
-		}
-		if v := strings.TrimSpace(xff); v != "" {
-			return v
-		}
+	if ip, ok := caddyhttp.GetVar(r.Context(), caddyhttp.ClientIPVarKey).(string); ok && ip != "" {
+		return ip
 	}
-	host := r.RemoteAddr
-	if idx := strings.LastIndexByte(host, ':'); idx >= 0 {
-		host = host[:idx]
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		if net.ParseIP(r.RemoteAddr) != nil {
+			return r.RemoteAddr
+		}
+		return ""
 	}
-	return strings.Trim(host, "[]")
+	return host
 }
 
 // statusWriter 最小响应捕获包装（嵌入原接口，只覆写计数点）。
@@ -159,3 +161,8 @@ func (w *statusWriter) Write(b []byte) (int, error) {
 	w.bytes += int64(n)
 	return n, err
 }
+
+// Unwrap 暴露底层 ResponseWriter：http.ResponseController 依赖 Unwrap 链
+// 找到 Hijacker/Flusher（缺此方法则全站 WebSocket 升级报 not supported；
+// reqmon 挂全部 HTTP 规则，断链影响面=全站）。
+func (w *statusWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }

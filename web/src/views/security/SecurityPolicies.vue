@@ -689,6 +689,9 @@
               <div v-if="form.human_verify_mode === 'auto' && !form.cc_detect_enabled" class="form-tip-line">
                 <el-text type="warning" size="small">{{ t('app.security.policies.human.autoNeedsCc') }}</el-text>
               </div>
+              <div v-if="form.cc_detect_enabled && form.human_verify_mode === 'off'" class="form-tip-line">
+                <el-text type="warning" size="small">{{ t('app.security.policies.human.ccNeedsHuman') }}</el-text>
+              </div>
             </el-form-item>
             <template v-if="form.human_verify_mode !== 'off'">
               <el-form-item :label="t('app.security.policies.human.typeLabel')">
@@ -797,7 +800,7 @@
           <el-form :model="form" :label-width="$flw('100px')" :disabled="formFrozen">
             <el-form-item :label="t('app.security.policies.bp.pageLabel')">
               <el-select v-model="form.block_page_id" :placeholder="t('app.security.policies.bp.pagePlaceholder')" style="width: 100%">
-                <el-option :value="0" :label="t('app.security.policies.bp.noPageDefault')" />
+                <el-option :value="0" :label="t(editorPolicyType === 'stage2' ? 'app.security.policies.bp.stage2NoPageDefault' : 'app.security.policies.bp.noPageDefault')" />
                 <el-option v-for="p in blockPages" :key="p.id" :label="pageLabel(p)" :value="p.id" />
               </el-select>
               <div v-if="editorPolicyType === 'stage2'" class="form-tip-line">
@@ -806,7 +809,7 @@
               <div v-if="challengePageMissingWidget" class="form-tip-line is-error">
                 {{ t('app.security.policies.human.challengePageNeedsWidget') }}
               </div>
-              <div v-else-if="form.block_page_id === 0" class="form-tip-line">{{ t('app.security.policies.bp.noPageTipDefault') }}</div>
+              <div v-else-if="form.block_page_id === 0" class="form-tip-line">{{ t(editorPolicyType === 'stage2' ? 'app.security.policies.bp.stage2NoPageTip' : 'app.security.policies.bp.noPageTipDefault') }}</div>
               <div v-else class="form-tip-line">{{ t('app.security.policies.bp.manageTip') }}<AccessibleLink type="primary" @click="goToBlockPagesPage">{{ t('app.security.policies.common.goCreateEdit') }}</AccessibleLink></div>
               <!-- 归属汇总卡（用户验收裁定）：逐条重复提示收敛为单源汇总——主行 +
                    例外分面（TCP/兜底差异，仅存在才渲染）+ 能力门行；
@@ -1055,7 +1058,7 @@ import { hasOwn } from '@/utils/hasOwn'
 import { SECURITY_DESCRIPTION_MAX_RUNES, SECURITY_NAME_MAX_RUNES } from '@/utils/securityLimits'
 import { CRS_HIDDEN_GROUP_CODES, CRS_INFRA_GROUP_CODES, isInfraRuleId, normalizeCrsGroups } from '@/utils/crsGroups'
 import { DEEP_LINK_PARAMS, pageUrl } from '@/utils/deepLink'
-import { buildPolicyPayload, crawlerExemptionNeedsEngines, trustEnabledForPolicyType } from '@/utils/policyPayload'
+import { buildPolicyPayload, ccDetectWithoutHumanWarning, challengePageMissingWidget as challengePageNeedsWidgetCheck, crawlerExemptionNeedsEngines, trustEnabledForPolicyType } from '@/utils/policyPayload'
 import { activateOnce } from '@/utils/keyboardActivate'
 
 const { t, locale } = useI18n()
@@ -1606,7 +1609,7 @@ const viewPolicySections = computed<ViewPolicySection[]>(() => {
         { label: t('app.security.policies.bp.pageLabel'), value: d.block_page_id > 0
           ? t('app.security.policies.view.pageWithStatus', { name: page?.name ?? t('app.security.policies.common.pageNum', { n: d.block_page_id }), code: d.block_status_code || 403 })
             + ' · ' + t(`app.security.policies.bp.response${d.block_response_mode === 'html' ? 'Html' : d.block_response_mode === 'json' ? 'Json' : 'Auto'}`)
-          : t('app.security.policies.bp.noPageDefault') },
+          : t((d.human_verify_mode && d.human_verify_mode !== 'off') || d.cc_detect_enabled ? 'app.security.policies.bp.stage2NoPageDefault' : 'app.security.policies.bp.noPageDefault') },
         { label: t('app.security.policies.view.attributionLabel'), value: t('app.security.policies.view.attributionValue') },
       ],
     },
@@ -3510,12 +3513,14 @@ const challengePagePlaceholder = computed<string>(() =>
   form.value.human_verify_type === 'js' ? '{{human_js_widget}}' : '{{human_verify_widget}}',
 )
 
-const challengePageMissingWidget = computed<boolean>(() => {
-  if (editorPolicyType.value !== 'stage2') return false
-  if (form.value.block_page_id <= 0) return true
-  const page = blockPages.value.find((p) => p.id === form.value.block_page_id)
-  return !page || !(page.content ?? '').includes(challengePagePlaceholder.value)
-})
+// 占位符校验单源（utils/policyPayload）：0=内置挑战页一等路径放行，仅 >0 真实页
+// 校验当前验证方式组件；保存门与提示线共用，不内联第二份判定。
+const challengePageMissingWidget = computed<boolean>(() => challengePageNeedsWidgetCheck({
+  policyType: editorPolicyType.value,
+  blockPageId: form.value.block_page_id,
+  blockPages: blockPages.value,
+  humanVerifyType: form.value.human_verify_type,
+}))
 
 const handleSave = async () => {
   if (saving.value) return
@@ -3528,6 +3533,11 @@ const handleSave = async () => {
     ElMessage.error(t('app.security.policies.human.challengePageNeedsWidget'))
     currentStep.value = WIZARD_STEP.BLOCK_PAGE
     return
+  }
+  // CC-only 警告（非阻断）：CC 检测开启但人机验证关闭 → CC 阈值永不
+  // 生效（仅挑战页判定攻击性行为）。就近 warning 提示后照常保存，不 return。
+  if (ccDetectWithoutHumanWarning({ policyType: editorPolicyType.value, ccDetectEnabled: form.value.cc_detect_enabled, humanVerifyMode: form.value.human_verify_mode })) {
+    ElMessage.warning(t('app.security.policies.human.ccNeedsHuman'))
   }
   // 类型裁剪后的阶段不参与校验（步骤已被裁剪，校验跳转目标不存在）
   // 阶段 0 信任名单策略：名单（内联∪引用合并口径）必须非空

@@ -119,8 +119,8 @@ func lookupHumanEventAttribution(ruleID string) humanEventAttribution {
 
 // handleIngestHuman 人机验证事件摄入（POST /security-events/ingest-human）：
 // 紧凑 JSON 行（ts/rule_id/client_ip/method/uri/ua/kind），直写 security_events
-// （event_type=human；challenge/fail=blocked、pass=logged）。独立于 coraza 审计
-// tailer——人机事件非 coraza 形态，不经攻击归因管线。
+// （event_type=human；challenge/fail 落库 action=challenged、pass 跳过不落库）。
+// 独立于 coraza 审计 tailer——人机事件非 coraza 形态，不经攻击归因管线。
 func (s *SecurityEventsIPCServer) handleIngestHuman(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -192,13 +192,15 @@ func (s *SecurityEventsIPCServer) handleIngestHuman(w http.ResponseWriter, r *ht
 		return
 	}
 	// 挑战发放/失败计入自动封禁（按口径维度成员资格，2026-11-13 用户裁定）：
-	// 提交成功后喂入，窗口/阈值与 WAF 事件共用；主节点/启用/口径门在 services
-	// 内收敛。挑战通过永不计。
+	// 提交成功后按批喂入（配置每批只读一次，与 WAF 批路径同构），窗口/阈值
+	// 与 WAF 事件共用；主节点/启用/口径门在 services 内收敛。挑战通过永不计。
+	feed := make([]services.HumanObserveItem, 0, len(rows))
 	for _, row := range rows {
 		if row.Kind == "challenge" || row.Kind == "fail" {
-			services.ObserveHumanEvent(row.ClientIP, row.Kind, time.UnixMilli(row.Ts).UTC())
+			feed = append(feed, services.HumanObserveItem{IP: row.ClientIP, Kind: row.Kind, At: time.UnixMilli(row.Ts).UTC()})
 		}
 	}
+	services.ObserveHumanEvents(feed)
 	w.WriteHeader(http.StatusNoContent)
 }
 

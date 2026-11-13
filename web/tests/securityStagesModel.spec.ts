@@ -1,5 +1,5 @@
 // 阶段投影与 CIDR 匹配行为验收
-//   阶段 2 拦截页失效必须显性（回落默认 429），不得静默省略
+//   阶段 2 拦截页失效必须显性（回退内置挑战页），不得静默省略
 //   ACL 内容门口径（与后端摘要 has_ip_control 分层，禁止统一）
 //   IPv6 CIDR 命中（命中定位 / 残余信任判定）
 //
@@ -70,19 +70,19 @@ test('阶段 2：拦截页已删/内容空时显性给出失效回落（不再�
   const deleted = stageRows(bindingOf({ block_page_id: 9 }), policy, [], 2)
   assert.deepEqual(deleted.find((row) => row.label === '拦截页（策略页）'), {
     label: '拦截页（策略页）',
-    detail: '已失效（回落绑定链首个有效页，无则默认 403）',
+    detail: '已失效（回退内置挑战页）',
   })
   // 内容为空：同样视为失效
   const empty = stageRows(bindingOf({ block_page_id: 9 }), policy, [{ id: 9, name: '挑战页', content: '' }], 2)
   assert.deepEqual(empty.find((row) => row.label === '拦截页（策略页）'), {
     label: '拦截页（策略页）',
-    detail: '已失效（回落绑定链首个有效页，无则默认 403）',
+    detail: '已失效（回退内置挑战页）',
   })
   // 有效页：保留页名 + 挑战/封禁语义（配额限流已下线，不再宣称 429）
   const valid = stageRows(bindingOf({ block_page_id: 9 }), policy, [{ id: 9, name: '挑战页', content: '<p>x</p>' }], 2)
   assert.deepEqual(valid.find((row) => row.label === '拦截页（策略页）'), {
     label: '拦截页（策略页）',
-    detail: '挑战页（挑战与封禁时渲染）',
+    detail: '挑战页（发起挑战时渲染）',
   })
   // 未配置（0）：不虚增行（与阶段 1/3 的「未配置」口径一致——阶段 2 只呈现已配置）
   const unset = stageRows(bindingOf({ block_page_id: 0 }), policy, [], 2)

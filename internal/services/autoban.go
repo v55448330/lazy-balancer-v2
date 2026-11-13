@@ -613,25 +613,37 @@ func autobanActionMatches(scope, action string) bool {
 	return AutobanScopeSet(scope)[action]
 }
 
-// ObserveHumanEvent 供人机事件 IPC 提交后喂入挑战证据（2026-11-13 用户裁定：
-// 发放/失败按各自维度成员资格计数，通过永不计）。kind=challenge|fail|pass；
-// 仅主节点 + 自动封禁启用时计入。挑战事件不受 WAF 阶段 3 族门约束。
-func ObserveHumanEvent(ip, kind string, at time.Time) {
-	if !autobanIsMaster() {
+// HumanObserveItem 人机事件批量喂入的最小形态（IPC 提交点按批提交）。
+// Kind=challenge|fail|pass。
+type HumanObserveItem struct {
+	IP   string
+	Kind string
+	At   time.Time
+}
+
+// ObserveHumanEvents 供人机事件 IPC 提交后按批喂入挑战证据（2026-11-13
+// 用户裁定：发放/失败按各自维度成员资格计数，通过永不计）。仅主节点 +
+// 自动封禁启用时计入；配置每批只读一次（与 autobanObserveBatch 同构——
+// 逐事件 SELECT 是热路径 O(事件) 库查询）。挑战事件不受 WAF 阶段 3 族门
+// 约束；pass 的维度为空，由 autobanObserveEventScopedAt 自然跳过。
+func ObserveHumanEvents(items []HumanObserveItem) {
+	if len(items) == 0 || !autobanIsMaster() {
 		return
 	}
 	cfg, err := GetAutobanConfig()
 	if err != nil || !cfg.Enabled {
 		return
 	}
-	ruleTriggered := "human_challenge"
-	switch kind {
-	case "fail":
-		ruleTriggered = "human_failed"
-	case "pass":
-		ruleTriggered = "human_pass"
+	for _, it := range items {
+		ruleTriggered := "human_challenge"
+		switch it.Kind {
+		case "fail":
+			ruleTriggered = "human_failed"
+		case "pass":
+			ruleTriggered = "human_pass"
+		}
+		autobanObserveEventScopedAt(cfg, it.IP, "challenged", ruleTriggered, it.At)
 	}
-	autobanObserveEventScopedAt(cfg, ip, "challenged", ruleTriggered, at)
 }
 
 // autobanObserveBatch 摄取提交点喂入（每批 Commit 后调用）。五重门：主节点 +
