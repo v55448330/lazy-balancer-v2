@@ -27,6 +27,7 @@ func newProcessControlTestHandlers(t *testing.T) (*Handlers, *int32, *int32) {
 	t.Helper()
 	var runs, stops int32
 	origPause, origPid, origWait := caddyPauseFile, caddySupervisorPidFile, caddySupervisorWaitTimeout
+	origRun, origStop := caddyRunCommand, caddyStopCommand
 	tempDir := t.TempDir()
 	caddyRunCommand = func() *exec.Cmd {
 		atomic.AddInt32(&runs, 1)
@@ -49,6 +50,7 @@ func newProcessControlTestHandlers(t *testing.T) (*Handlers, *int32, *int32) {
 	t.Cleanup(adminStub.Close)
 	t.Cleanup(func() {
 		caddyPauseFile, caddySupervisorPidFile, caddySupervisorWaitTimeout = origPause, origPid, origWait
+		caddyRunCommand, caddyStopCommand = origRun, origStop
 	})
 	return &Handlers{cfg: &config.Config{CaddyAdminURL: adminStub.URL}}, &runs, &stops
 }
