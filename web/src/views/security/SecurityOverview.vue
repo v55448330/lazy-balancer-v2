@@ -242,7 +242,9 @@
                 <el-icon class="title-icon"><Warning /></el-icon>
                 <span>{{ t('app.security.overview.events.title') }}</span>
               </div>
-              <AccessibleLink type="primary" @click="goToEvents">{{ t('app.security.overview.events.viewAll') }}</AccessibleLink>
+              <!-- 卡片头部动作按钮统一风格（与仪表盘「连接监控」同款）：
+                   size=small + type=primary + plain + 语义图标。 -->
+              <el-button size="small" type="primary" plain :icon="Tickets" @click="goToEvents">{{ t('app.security.overview.events.viewAll') }}</el-button>
             </div>
           </template>
           <el-alert v-if="blockedEventsError" type="error" show-icon :closable="false" class="error-banner">
@@ -284,7 +286,7 @@
                 <el-icon class="title-icon"><Odometer /></el-icon>
                 <span>{{ t('app.security.overview.cc.title') }}</span>
               </div>
-              <el-button size="small" text type="primary" class="cc-live-button" @click="openChallengeLive">{{ t('app.security.overview.cc.liveButton') }}</el-button>
+              <el-button size="small" type="primary" plain :icon="Monitor" @click="openChallengeLive">{{ t('app.security.overview.cc.liveButton') }}</el-button>
             </div>
           </template>
           <div class="cc-hero">
@@ -346,7 +348,7 @@
             <span>{{ t('app.security.overview.autoban.title') }}</span>
             <el-tag :type="autobanStateTone" size="small" effect="light" disable-transitions>{{ autobanStateText }}</el-tag>
           </div>
-          <el-button size="small" text type="primary" @click="goToAutobanConfig">{{ t('app.security.overview.autoban.config') }}</el-button>
+          <el-button size="small" type="primary" plain :icon="Setting" @click="goToAutobanConfig">{{ t('app.security.overview.autoban.config') }}</el-button>
         </div>
       </template>
       <el-alert v-if="autobanIneffective" type="warning" show-icon :closable="false" class="mb-3" :title="t('app.security.overview.autoban.ineffective')" />
@@ -430,12 +432,11 @@
 
 <script setup lang="ts">
 import { ref, onMounted, onBeforeUnmount, computed } from 'vue'
-import { DataAnalysis, TrendCharts, PieChart, Location, Warning, Odometer, Monitor, InfoFilled, Stopwatch, Lock } from '@element-plus/icons-vue'
+import { DataAnalysis, TrendCharts, PieChart, Location, Warning, Odometer, Monitor, InfoFilled, Stopwatch, Lock, Tickets, Setting } from '@element-plus/icons-vue'
 import { useI18n } from 'vue-i18n'
 import { request } from '@/utils/api'
 import { useAuthStore } from '@/stores/auth'
 import IPLocationAction from '@/views/security/IPLocationAction.vue'
-import AccessibleLink from '@/components/common/AccessibleLink.vue'
 import { formatDate } from '@/utils/date'
 import { pageUrl } from '@/utils/deepLink'
 import { libraryStatusLabel, libraryStatusTagType, summarizeLibrarySources, type LibrarySourceRow } from '@/utils/securityLibraries'
@@ -921,7 +922,6 @@ onMounted(() => { void reloadAll() })
 .events-row .el-card { height: 100%; }
 .cc-card { display: flex; flex-direction: column; }
 .cc-card :deep(.el-card__body) { flex: 1; display: flex; flex-direction: column; }
-.cc-live-button { padding: 0; }
 .challenge-live-tools { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
 .challenge-live-updated { font-size: 12px; color: var(--text-secondary); }
 .challenge-live-auto-label { font-size: 12px; color: var(--text-secondary); }
