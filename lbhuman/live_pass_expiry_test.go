@@ -110,7 +110,7 @@ func TestJSPass_recordsCredentialExpiry(t *testing.T) {
 	}
 	token := tokenMatch[1]
 	nonce := ""
-	for i := range 200000 {
+	for i := range 2000000 {
 		candidate := strconv.Itoa(i)
 		if powValid(token, candidate) {
 			nonce = candidate

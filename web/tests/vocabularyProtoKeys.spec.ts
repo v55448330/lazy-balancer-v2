@@ -134,7 +134,7 @@ test('全仓 Record<string, …> 表：展示词表读取全部过 hasOwn（目�
   const tables: Array<{ key: string; file: string; name: string }> = []
   for (const file of files) {
     // i18n computed 化的词表同样入扫描面(computed<Record<string,…>>)
-    // audit136-U5B-2:补 Readonly<Record<…>> 形状——三张该形状表(eventAction 等)
+    // 补 Readonly<Record<…>> 形状——三张该形状表(eventAction 等)
     // 曾全部逃出扫描,其中一张裸下标读未被发现。
     for (const match of code(file).matchAll(/^(?:export )?const ([A-Za-z_$][\w$]*)(?:: (?:Readonly<)?Record<string, | = computed<Record<string, string>)/gm)) {
       tables.push({ key: `${file}#${match[1]}`, file, name: match[1]! })

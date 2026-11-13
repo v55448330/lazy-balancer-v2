@@ -1555,7 +1555,7 @@ func threatFixMinuteWithMode(tx *sql.Tx, m time.Time, fullRebuild bool) error {
 			}
 		}
 		if newTotal-lateTotal < oldTotal {
-			// audit136-B1-P2:先判别「裁剪」vs「口径变更」——newTotal<oldTotal
+			// 先判别「裁剪」vs「口径变更」——newTotal<oldTotal
 			// 有两种成因:(a)原始行被保留期/行帽裁剪(保留旧行正确);(b)口径
 			// 代际变更后新口径计数更少(原始行完整在场)。旧逻辑不区分,成因(b)
 			// 时主表按当前口径重读过滤已正确,但总览两表只并迟到差量→旧口径

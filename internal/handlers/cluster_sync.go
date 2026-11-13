@@ -24,7 +24,7 @@ func (h *Handlers) GetClusterSnapshot(c *gin.Context) {
 	if rejectWriteDuringImport(c, "下发集群快照（含节点令牌交付）") {
 		return
 	}
-	// audit136-F4 备案:非数字回退 0=拉全量快照,方向安全(宁全勿缺);垃圾参数
+	// 备案:非数字回退 0=拉全量快照,方向安全(宁全勿缺);垃圾参数
 	// 放大响应体在集群鉴权内量级有限,有意不改行为。
 	sinceVersion, _ := strconv.Atoi(c.Query("since_version"))
 	snapshot, changed, err := h.clusterService.Snapshot(c.Request.Context(), sinceVersion, c.Query("fingerprint"), authenticatedClusterToken(c))

@@ -675,7 +675,7 @@ func crawlerSlotAdvanceAssign(trigger string) (string, []any) {
 		return crawlerNextSlotStrict(time.Now().UTC())
 	})
 	if err != nil {
-		// audit136-D3-2:排程不可读的吞错口径对齐(CRS/IP2Region 同族失败均
+		// 排程不可读的吞错口径对齐(CRS/IP2Region 同族失败均
 		// Logf 上抛)——noop 兜底行为不变(任务失败→引擎重投),但双零信号
 		// (无日志+无排程)会掩盖排程层故障。
 		Logf("error", "crawler: slot advance assign failed, falling back to noop slot: %v", err)

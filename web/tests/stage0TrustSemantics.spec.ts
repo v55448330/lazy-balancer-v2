@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
-// audit136-I18n A8①：stage0 信任命中释义在 5 处词条近乎逐字重复（单条最长
+// stage0 信任命中释义在 5 处词条近乎逐字重复（单条最长
 // 121 字，跨 rules.ts/security.ts/views.ts 三文件）。i18n 词条架构下强行合一
 // 会破坏各处语境（trustTip 含内联/引用尾注、footnote1 嵌 {base} 占位、
 // detectOn 带前缀）——降级为**跨文件语义片段一致钉测**：核心语义短语必须

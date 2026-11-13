@@ -67,7 +67,7 @@ export function detectLocale(): Locale {
 }
 
 export function setLocale(l: Locale): void {
-  // audit137-U2-F3:storage 禁用环境(嵌入式 webview)裸 setItem 抛错会跳过
+  // storage 禁用环境(嵌入式 webview)裸 setItem 抛错会跳过
   // reload——用户困在旧语言页面。静默降级(偏好不持久化,本次会话仍生效)。
   try {
     localStorage.setItem(STORAGE_KEY, l)

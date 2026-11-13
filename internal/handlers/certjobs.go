@@ -673,7 +673,7 @@ type certJobDeploymentRetryTarget struct {
 func markDownloadedCertJobDeploymentPending(id int, ruleID, domain string) (bool, error) {
 	reversedDomain := reversedCertJobDomain(domain)
 	rowsAffected, err := services.PushCertJobDeploymentWindow(db.DB, id, services.CertJobDeploymentWindowPush{
-		Message: "等待重新部署", // audit136-A5 豁免:内部部署窗口记录字段,无请求上下文,i18n 不适用
+		Message: "等待重新部署", // 直写豁免:内部部署窗口记录字段,无请求上下文,i18n 不适用
 		Where: `status IN (` + services.DeploymentLifecycleJobStatusSQL + `)
 		  AND ` + services.CertJobMaterialPredicateSQL("") + `
 		  AND EXISTS (
@@ -1021,7 +1021,7 @@ func (h *Handlers) DeleteCertJob(c *gin.Context) {
 			// 内被并发移离 disabled 时不得覆写其新状态；命中 0 行并入 deleteErr。
 			if n, restoreErr := services.PushCertJobDeploymentWindow(db.DB, id, services.CertJobDeploymentWindowPush{
 				Status:  "downloaded",
-				Message: "删除失败，等待恢复部署", // audit136-A5 豁免:同上,内部记录字段
+				Message: "删除失败，等待恢复部署", // 直写豁免:同上,内部记录字段
 				Where:   "status='disabled'",
 			}); restoreErr != nil {
 				deleteErr = errors.Join(deleteErr, restoreErr)

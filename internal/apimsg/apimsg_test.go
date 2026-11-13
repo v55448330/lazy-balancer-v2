@@ -17,7 +17,7 @@ func (c tfCtx) Get(key any) (any, bool) {
 
 func zhCtx() tfCtx { return tfCtx{i18n.CtxLangKey: i18n.ZH} }
 
-// audit137-P2-1:Tf 槽队列化——混用模板一参双填回归钉+多槽依序消费钉。
+// Tf 槽队列化——混用模板一参双填回归钉+多槽依序消费钉。
 func TestTfSlotQueue(t *testing.T) {
 	c := zhCtx()
 	// 混用模板(%s+%d)两参依序——旧实现一参双填

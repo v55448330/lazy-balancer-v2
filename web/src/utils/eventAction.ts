@@ -45,7 +45,7 @@ export const eventActionFull = (action: string | undefined | null, _ruleTriggere
 
 /** el-tag 色调：拦截 danger、检测 warning；挑战三态 primary(发放)/success(通过)/danger(失败)。 */
 export const eventActionTone = (action: string | undefined | null, ruleTriggered?: string | null): EventActionTone => {
-  // 字面量分派(audit136-U5B-1):表读点曾裸下标,后端外部字符串命中原型键
+  // 字面量分派:表读点曾裸下标,后端外部字符串命中原型键
   // (constructor 等)返回函数被当色调——词表读取契约要求 hasOwn/分派。
   if (action === 'blocked') return 'danger'
   if (action === 'trust') return 'success'

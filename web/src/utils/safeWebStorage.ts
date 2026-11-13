@@ -1,7 +1,7 @@
 /**
  * storage 禁用环境（隐私模式极端配置/嵌入式 webview 禁存储）安全读写。
  *
- * audit136-W1：module import 顶层裸 `localStorage.getItem` 在 storage 抛
+ * module import 顶层裸 `localStorage.getItem` 在 storage 抛
  * SecurityError 时直接 boot 白屏——全仓既有 5+ 处调用点各自 try/catch 防护，
  * 唯 boot 首屏执行点裸奔。本 helper 为读/写的单一收口：任何 storage 异常
  * 静默降级（读=null/写=忽略），业务语义与「无存储」一致（token 空=未登录、

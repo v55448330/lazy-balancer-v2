@@ -551,10 +551,10 @@ const trustedProxyDisabledStaleError = computed(() =>
 
 // —— 存为列表：内联网段一键建名单并转为引用（镜像策略侧「提取为列表」） ——
 const saveListDialogVisible = ref(false)
-// audit137-P2-3:category 默认取库值 zh 码(IP_LIST_CATEGORIES[1])——存储契约
+// category 默认取库值 zh 码(IP_LIST_CATEGORIES[1])——存储契约
   // =zh 分类码,en 下 t() 译文入库会破坏策略侧分类匹配;name 为自由文本保持 t()。
   const saveListForm = ref({ name: t('app.settings.basic.map.saveAsListDefaultName'), category: IP_LIST_CATEGORIES[1] })
-// 分类 en 本地化:单源 utils/ipListCategoryLabel(audit140-U2-F4 三份同构收敛)
+// 分类 en 本地化:单源 utils/ipListCategoryLabel(三份同构收敛)
 const ipListCategoryLocalized = (c: string): string => {
   if (locale.value !== 'en') return c
   return ipListCategoryLabel(c)

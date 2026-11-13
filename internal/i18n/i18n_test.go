@@ -51,8 +51,8 @@ func TestErrTemplate(t *testing.T) {
 	}
 }
 
-// audit140-XM140-2:catalog 唯一性守卫——重复 Register(同键)为 map 覆盖语义,
-// 单边编辑副本会静默分叉;唯一性被破坏即红(audit137-P3-2 去重被恢复脚本回归实录)。
+// catalog 唯一性守卫——重复 Register(同键)为 map 覆盖语义,
+// 单边编辑副本会静默分叉;唯一性被破坏即红(去重被恢复脚本回归实录)。
 func TestCatalogKeysUnique(t *testing.T) {
 	seen := map[string]bool{}
 	dups := 0

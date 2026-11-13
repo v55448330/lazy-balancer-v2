@@ -685,7 +685,7 @@ func validateIP2RegionV6XDB(path string) (err error) {
 	}
 	defer searcher.Close()
 	if _, serr := searcher.Search(ip2RegionV6ProbeIP); serr != nil {
-		// audit136-D3-3:探针未命中与结构损坏文案区分——上游库重组缺失探针
+		// 探针未命中与结构损坏文案区分——上游库重组缺失探针
 		// 段时一切合法 v6 库被判「损坏」不可区分;未命中是库内容覆盖面问题
 		// (可更新探针或放宽),损坏是文件完整性问题(必须拒绝装载)。
 		return fmt.Errorf("v6 探针地址未命中(库内容未覆盖 %s,非结构损坏): %w", ip2RegionV6ProbeIP, serr)

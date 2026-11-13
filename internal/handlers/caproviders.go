@@ -113,7 +113,7 @@ func (h *Handlers) UpdateCAProvider(c *gin.Context) {
 			c.JSON(http.StatusRequestEntityTooLarge, models.APIResponse{Code: 413, Message: apimsg.T(c, "k_45aadcca"), MessageKey: "k_45aadcca"})
 			return
 		}
-		// audit136-U2a-1:binding 错误细节(含 Go 结构体/字段名)只进日志,
+		// binding 错误细节(含 Go 结构体/字段名)只进日志,
 		// 客户端回固定双语文案(与 certinfo 同包自述口径一致)
 		services.Logf("error", "CA provider update binding failed: %v", err)
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_868de64b"), MessageKey: "k_868de64b"})

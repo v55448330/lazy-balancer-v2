@@ -65,9 +65,10 @@ func TestChallengeTokenOneTime(t *testing.T) {
 }
 
 func TestPoWValidity(t *testing.T) {
-	// 找一个合法 nonce（难度 4 前导零）
+	// 找一个合法 nonce（难度 4 前导零，命中概率 1/65536）——上限取 2000000
+	// 使期望命中 ~30 次，消除小上限（200k）的概率性 flaky。
 	token := "test-token"
-	for i := 0; i < 200000; i++ {
+	for i := 0; i < 2000000; i++ {
 		nonce := string(rune(i))
 		if powValid(token, nonce) {
 			if !powValid(token, nonce) {
@@ -76,7 +77,7 @@ func TestPoWValidity(t *testing.T) {
 			return
 		}
 	}
-	t.Fatal("no valid nonce found within 200k iterations")
+	t.Fatal("no valid nonce found within 2M iterations")
 }
 
 func TestCCWindowAndTrigger(t *testing.T) {

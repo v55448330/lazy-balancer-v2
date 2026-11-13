@@ -1125,7 +1125,7 @@ func moveTree(src, dst string) error {
 		}
 		return err
 	}
-	// audit136-D3-1:dst 已就位后 src 清理失败不得当整体失败——上层回滚会搬回
+	// dst 已就位后 src 清理失败不得当整体失败——上层回滚会搬回
 	// 旧树,而 VERSION/版本行已按新树落库(契约保留新版本),形成「旧树+新版本」
 	// 跨代且 liveV==dbV 使对账判 None 静默无自愈。降级 warn+成功,残留 tmp 由
 	// 下轮安装的 staging 清理兜底。

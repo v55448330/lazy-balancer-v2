@@ -436,7 +436,7 @@ func (s *ClusterService) RegisterNode(ctx context.Context, req models.ClusterReg
 		return models.ClusterRegistration{}, fmt.Errorf("使用注册令牌: %w", err)
 	}
 	used, err := result.RowsAffected()
-	// audit136-U2B-1:DB 错误与令牌无效分流——内部存储故障以「令牌无效」口径
+	// DB 错误与令牌无效分流——内部存储故障以「令牌无效」口径
 	// 呈现会误导排障(同函数 ExecContext 错误本就独立包装,此处对齐)。
 	if err != nil {
 		return models.ClusterRegistration{}, fmt.Errorf("查询注册结果受影响行数: %w", err)

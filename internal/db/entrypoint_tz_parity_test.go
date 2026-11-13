@@ -8,7 +8,7 @@ import (
 	"lazy-balancer-v2/internal/db"
 )
 
-// audit136-U4-2：容器侧 docker-entrypoint.sh 的 TZ 默认值字面量与
+// 容器侧 docker-entrypoint.sh 的 TZ 默认值字面量与
 // db.DefaultTimezone 双写，无机械对账——一侧改动另一侧静默漂移（进程 TZ 与
 // 面板时区分叉）。本钉测把两侧锁死：字面量改动必须同步两处才可过门禁。
 func TestEntrypointTZFallbackParity(t *testing.T) {

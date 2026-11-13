@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-// audit136-A5：handlers 响应面「中文直写 Message」机械断言。
+// handlers 响应面「中文直写 Message」机械断言。
 //
 // 背景：i18n 统一标准（Message: apimsg.T/Tf(c, "k_x") + MessageKey）确立后，
 // 历史迁移曾声明「响应面 0 残留」，实际漏网 49 处（扫描口径未覆盖
@@ -16,7 +16,7 @@ import (
 // 「直写=0」做成机械断言（扫描覆盖字面量与 fmt.Sprintf 两种形态），
 // 漏网活不过 CI，杜绝第三轮盲区。
 //
-// 豁免：行内含 `audit136-A5 豁免` 注释（内部记录字段无请求上下文/i18n
+// 豁免：行内含 `直写豁免` 注释（内部记录字段无请求上下文/i18n
 // 不适用，或结构化弹框解析消费面）——豁免必须逐行注释理由。
 func TestHandlersResponseMessagesAreI18nKeys(t *testing.T) {
 	zhRe := regexp.MustCompile(`[\p{Han}]`)
@@ -43,7 +43,7 @@ func TestHandlersResponseMessagesAreI18nKeys(t *testing.T) {
 			if strings.HasPrefix(strings.TrimSpace(line), "//") {
 				continue // 注释行（含「调用点」等中文说明不属响应面）
 			}
-			// audit139-F2 修复:含 MessageKey 行**不整体豁免**——Message 段
+			// 含 MessageKey 行**不整体豁免**——Message 段
 			// 仍须直写正则核验(迁移管线不应产生「中文直写+键」混合行,出现
 			// 即为异常形态, offender 上报)。
 			if strings.Contains(line, "MessageKey") {
@@ -53,9 +53,9 @@ func TestHandlersResponseMessagesAreI18nKeys(t *testing.T) {
 				continue
 			}
 			// 豁免窗口:语句行及其前 3 行(注释块)任一含登记标记即豁免
-			exempt := strings.Contains(line, "audit136-A5 豁免")
+			exempt := strings.Contains(line, "直写豁免")
 			for w := 1; w <= 3 && !exempt && i-w >= 0; w++ {
-				if strings.Contains(lines[i-w], "audit136-A5 豁免") {
+				if strings.Contains(lines[i-w], "直写豁免") {
 					exempt = true
 				}
 			}

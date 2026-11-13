@@ -514,7 +514,7 @@ type txApplyFinish struct {
 	AuditAction string
 	AuditDetail string
 	SuccessMsg  string
-	// MessageKey 为 SuccessMsg 的 i18n 键(audit137-A5 双语键化配套):非空时
+	// MessageKey 为 SuccessMsg 的 i18n 键(双语键化配套):非空时
 	// 响应透传 MessageKey 供前端分类与本地词表回落;空=zh 原样(内部记录)。
 	MessageKey       string
 	SuccessStatus    int

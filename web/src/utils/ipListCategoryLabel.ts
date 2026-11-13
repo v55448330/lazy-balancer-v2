@@ -1,5 +1,5 @@
 /**
- * IP 名单分类 label 单源（audit140-U2-F4：三份同构映射收敛）。
+ * IP 名单分类 label 单源（三份同构映射收敛）。
  * 词表=common.app.ipListCategory（zh/en 词条）；CRS 规则分类走独立词表回退；
  * 未命中回退原名。消费点：SecurityPolicies / SecurityRules / CaddyGlobalSettings。
  */

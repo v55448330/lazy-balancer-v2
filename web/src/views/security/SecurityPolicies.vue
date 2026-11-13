@@ -1188,7 +1188,7 @@ const policySearch = ref('')
 const activeTypeTab = ref<SecurityPolicyType>('stage1')
 
 // 名单分类显示映射(后端/存储 zh 分类码;下拉 label 翻译,筛选 value 保持 zh)
-// ipListCategoryLabel 迁移至 utils/ipListCategoryLabel.ts 单源(audit140-U2-F4 三份同构收敛)
+// ipListCategoryLabel 迁移至 utils/ipListCategoryLabel.ts 单源(三份同构收敛)
 
 const policyTypeOf = (row: PolicySummary): SecurityPolicyType =>
   normalizePolicyType(inferPolicyType(row)) as SecurityPolicyType

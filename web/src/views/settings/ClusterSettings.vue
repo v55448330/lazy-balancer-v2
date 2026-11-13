@@ -719,7 +719,7 @@ const loginNode = async (node: ClusterNode): Promise<void> => {
     const response = await request.post<LoginTicketResponse>(`/cluster/nodes/${node.id}/login-ticket`, undefined, { silent: true })
     const target = new URL(response.url)
     target.hash = `login_ticket=${encodeURIComponent(response.ticket)}`
-    // audit137-P2-2:'noopener' 特征使部分浏览器 window.open 恒返回 null——
+    // 'noopener' 特征使部分浏览器 window.open 恒返回 null——
     // 「弹窗被拦截」警告每次必现;回归为无 features 形态(opener 断链由
     // target 页面自身 Cross-Origin-Opener-Policy 兜底,登录票据一次性)。
     const loginWindow = window.open(target.toString(), '_blank')

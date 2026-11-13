@@ -7,10 +7,10 @@ import (
 )
 
 // 2026-11 响应消息迁移批的行为钉（源码级断言——三条修复的运行时模拟成本高：
-// D3-1 需叠加三方 I/O 故障、D3-2/D3-3 为日志与文案口径，源码断言即能防回退；
+// src 清理软失败需叠加三方 I/O 故障、排程吞错与探针文案为日志与文案口径，源码断言即能防回退；
 // 若后续改造为可注入形态，应升级为行为钉）。
 
-// D3-1：moveTree 在 dst 就位后 src 清理失败必须降级 warn+成功——不得把清理
+// moveTree 在 dst 就位后 src 清理失败必须降级 warn+成功——不得把清理
 // 失败当整体失败（上层回滚会搬回旧树，而版本行已按新树落库=跨代静默）。
 func TestCrsInstallMoveTreeSrcCleanupIsSoftFail(t *testing.T) {
 	raw, err := os.ReadFile("crsinstall.go")
@@ -27,7 +27,7 @@ func TestCrsInstallMoveTreeSrcCleanupIsSoftFail(t *testing.T) {
 	}
 }
 
-// D3-2：crawler 排程不可读必须 Logf 可见化（noop 兜底行为不变，但不得双零信号）。
+// crawler 排程不可读必须 Logf 可见化（noop 兜底行为不变，但不得双零信号）。
 func TestCrawlerSlotAdvanceAssignFailureIsLogged(t *testing.T) {
 	raw, err := os.ReadFile("crawler_update.go")
 	if err != nil {
@@ -38,7 +38,7 @@ func TestCrawlerSlotAdvanceAssignFailureIsLogged(t *testing.T) {
 	}
 }
 
-// D3-3：v6 探针未命中的文案必须与「结构损坏」区分（上游库重组缺探针段时
+// v6 探针未命中的文案必须与「结构损坏」区分（上游库重组缺探针段时
 // 合法库被误判损坏且不可排障）。
 func TestIP2RegionV6ProbeMissMessageDistinguishesFromCorruption(t *testing.T) {
 	raw, err := os.ReadFile("ip2region.go")
@@ -51,7 +51,7 @@ func TestIP2RegionV6ProbeMissMessageDistinguishesFromCorruption(t *testing.T) {
 	}
 }
 
-// B1-P2：threat_screen rollup keep 分支必须判别「裁剪」vs「口径变更」——
+// threat_screen rollup keep 分支必须判别「裁剪」vs「口径变更」——
 // 口径代际 bump（新口径计数更少）且原始行完整在场时，总览两表必须整写
 // （rewriteOverviewRollups 清除旧口径遗留行），不得只并迟到差量造成旧口径
 // 行滞留。行为钉测需 rollup 测试基建，先以结构断言防判别分支被移除。

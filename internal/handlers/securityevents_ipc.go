@@ -4,7 +4,7 @@ package handlers
 // 原始 audit JSON 行经 Unix socket 投递给本服务端，由面板入库（Caddy 永不
 // 直连数据库）。socket 路径/端点/命名契约与写侧逐字镜像——caddygeoip 为
 // 独立 module 不可 import services，契约常量为双包逐字镜像而非「单一真源」
-// （audit137-U3-F-2 如实描述），双侧钉测锁定一致
+// （如实描述），双侧钉测锁定一致
 // （SecurityEventsIPCSocketPath / SecurityEventsIPCIngestPath）。
 //
 // 语义要点：

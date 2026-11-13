@@ -785,7 +785,7 @@ import { IP_LIST_CATEGORIES, invalidateSharedEntriesCache } from '@/utils/securi
 
 // 名单分类显示映射:后端/存储为 zh 分类码(有限集合),en 用户经词条显示;
 // 未登记值(自定义名)回落原文。筛选/表单 value 保持 zh 原样不传译值。
-// ipListCategoryLabel 迁移至 utils/ipListCategoryLabel.ts 单源(audit140-U2-F4)
+// ipListCategoryLabel 迁移至 utils/ipListCategoryLabel.ts 单源
 import { crsRuleCountLabel, libraryHealthTag, librarySourceHealthTag, libraryStatusLabel, libraryStatusTagType, summarizeLibrarySources } from '@/utils/securityLibraries'
 import { updaterName } from '@/utils/updaterName'
 import { hasOwn } from '@/utils/hasOwn'

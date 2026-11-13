@@ -183,7 +183,7 @@ const enActions = enCommon.app.auditActions as unknown as Record<string, string>
 const enResources = enCommon.app.auditResources as unknown as Record<string, string>
 
 test('词条正钉：表内每个后缀双语齐备', () => {
-  // audit136-I18n 契约升级(用户裁定「通俗直观」):auditActions 维持 zh=库值原样
+  // 契约升级(用户裁定「通俗直观」):auditActions 维持 zh=库值原样
   // (动作枚举库值本身即中文);auditResources 改 zh=本地化中文标签(原 family id
   // 直出如 backup/cert-job 不直观,与 en Task · X 同构)。筛选 value 仍库值原样。
   for (const [raw, key] of Object.entries(AUDIT_ACTION_KEYS)) {

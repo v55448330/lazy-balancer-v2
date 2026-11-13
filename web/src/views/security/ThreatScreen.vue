@@ -1522,7 +1522,7 @@ onBeforeUnmount(() => {
 .hud-tl .readout { font-family: 'Share Tech Mono', ui-monospace, monospace; font-size: 11px; color: #56709f; letter-spacing: 0.06em; }
 .hud-tl .readout b { color: #8ea7d6; font-weight: 400; }
 
-/* 主时钟:左下角大号(时间是大屏视觉锚点,audit136 用户裁定"更明显");
+/* 主时钟:左下角大号(时间是大屏视觉锚点,用户裁定"更明显");
    pointer-events:auto(可选中/无拖拽吞没);无底板——HUD 文字直接呈现。 */
 .main-clock {
   position: absolute; z-index: 3; left: 16px; bottom: 44px;

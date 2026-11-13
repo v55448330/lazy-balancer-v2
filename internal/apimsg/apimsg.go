@@ -15,8 +15,8 @@ import (
 func T(c i18n.Ctx, key string) string { return i18n.T(i18n.FromCtx(c), key) }
 
 // Tf 模板插值:词条含占位符(与 i18n 错误模板同约定),按序填充。
-// audit136-A5:参数放宽 any(int 常量等直传,内部 fmt.Sprint 字符串化)。
-// audit137-P2-1 槽队列化:旧实现每 arg 先 %s 后 %d 双 replaceFirst——混用
+// 参数放宽 any(int 常量等直传,内部 fmt.Sprint 字符串化)。
+// 槽队列化:旧实现每 arg 先 %s 后 %d 双 replaceFirst——混用
 // 模板(%s...%d)一参双填错乱("%s 过长(最多 %d 字符)"→"最多 issuer 字符"),
 // %q/%v 永不填充泄漏字面占位。现依序消费:%s/%d/%v/%q 各占一槽,每 arg
 // 恰好消费一个槽;%q 槽输出带引号(诊断形态)。

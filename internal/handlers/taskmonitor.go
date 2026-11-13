@@ -186,7 +186,7 @@ func (h *Handlers) ToggleSystemTask(c *gin.Context) {
 	var req struct {
 		Enabled *bool `json:"enabled"`
 	}
-	// audit136-F3:族性补守卫(taskmonitor 全文件 JSON 端点此前均无 body 上限)
+	// 族性补守卫(taskmonitor 全文件 JSON 端点此前均无 body 上限)
 	if !guardConfiguredJSONBody(c) {
 		return
 	}

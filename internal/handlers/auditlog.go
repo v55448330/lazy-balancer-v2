@@ -335,7 +335,7 @@ func buildAuditLogFilters(c *gin.Context, loc *time.Location) (string, []interfa
 	if endT, ok2, abort2 := parseBoundary(c.Query("end_time"), "23:59:59"); abort2 {
 		return "", nil, true
 	} else if ok2 {
-		// audit136-U2a-2:排他 < 次日 0 点——date-only 补 23:59:59 的 <= 会漏
+		// 排他 < 次日 0 点——date-only 补 23:59:59 的 <= 会漏
 		// 末日亚秒行(created_at 为文本比较,23:59:59.5 > 23:59:59)。
 		conds = append(conds, " AND created_at < datetime(?)")
 		args = append(args, endT.Add(time.Second).Format("2006-01-02 15:04:05"))
