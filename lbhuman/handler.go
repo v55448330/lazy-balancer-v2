@@ -24,9 +24,8 @@ type HumanConfig struct {
 	CCSessionUA       int      `json:"cc_session_ua"` // 会话异常 UA 数阈值
 	CCEnabled         bool     `json:"cc_enabled"`    // 突刺/4xx/多UA 触发开关（关闭时仅 force 模式挑战）
 	ChallengePageHTML string   `json:"challenge_page_html,omitempty"`
-	ExemptPaths       []string `json:"exempt_paths"`               // 豁免路径前缀
-	RuleID            string   `json:"rule_id"`                    // 规则 caddy_id（计数器 key 前缀）
-	SessionBanFile    string   `json:"session_ban_file,omitempty"` // 会话封禁交换文件路径（面板按 data_dir 派生下发；空=容器默认）
+	ExemptPaths       []string `json:"exempt_paths"` // 豁免路径前缀
+	RuleID            string   `json:"rule_id"`      // 规则 caddy_id（计数器 key 前缀）
 }
 
 // HumanHandler lb_human 主处理器（无实例状态，配置即全部）。
@@ -44,7 +43,6 @@ func (HumanHandler) CaddyModule() caddy.ModuleInfo {
 
 // Provision implements caddy.Provisioner.
 func (h *HumanHandler) Provision(caddy.Context) error {
-	setSessionBanFilePath(h.SessionBanFile)
 	return nil
 }
 
@@ -103,7 +101,7 @@ func (h *HumanHandler) serveChallengeForRequest(w http.ResponseWriter, r *http.R
 		return
 	}
 	humanStats.Challenges.Add(1)
-	reportHumanEvent(h.RuleID, ip, r.Method, r.URL.RequestURI(), r.UserAgent(), "challenge", requestSessionFingerprint(r))
+	reportHumanEvent(h.RuleID, ip, r.Method, r.URL.RequestURI(), r.UserAgent(), "challenge")
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Human-Challenge", "1")
@@ -122,7 +120,6 @@ func (h *HumanHandler) serveChallengeForRequest(w http.ResponseWriter, r *http.R
 
 // ServeHTTP 人机验证主流程：
 //
-//	会话封禁命中 → 403 拒绝（不发挑战，优先于 cookie）
 //	有效 cookie → 直通
 //	豁免 → 直通
 //	force / CC 触发 → 挑战页（JS 挑战）
@@ -145,20 +142,12 @@ func (h *HumanHandler) ServeHTTP(w http.ResponseWriter, r *http.Request, next ca
 	if h.isExempt(path) {
 		return next.ServeHTTP(w, r)
 	}
-	// 会话级封禁执法（自动封禁 NAT 态会话通道的执法点）：命中直接 403
-	// 拒绝——不发挑战、不放行，优先于 cookie 直通（封禁不是「未验证」）。
-	// 未命中/无指纹/交换文件缺席走现有挑战链；L4 无会话概念不受影响。
-	if sessionBanLookup(ip, requestSessionFingerprint(r)) {
-		serveSessionBanned(w, r)
-		return nil
-	}
 
 	// 有效 cookie 直通
 	if c, err := r.Cookie(cookieName); err == nil && verifyCookie([]byte(h.Secret), c.Value, ip, r.UserAgent(), timeNow()) {
 		return next.ServeHTTP(w, r)
 	}
 
-	// force 模式：未验证一律挑战（方式按策略配置：slider=滑块，js=PoW）
 	if h.Mode == "force" {
 		h.serveChallengeForRequest(w, r, ip)
 		return nil

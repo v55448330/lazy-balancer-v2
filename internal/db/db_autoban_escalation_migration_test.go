@@ -131,3 +131,47 @@ func TestRunMigrations_addsEscalationAndRecidivismToLegacyDB(t *testing.T) {
 		t.Fatalf("escalation 列重复/缺失: n=%d err=%v", n, err)
 	}
 }
+
+// NAT 两列退役钉（deadColumnDrops 通道，与 count_human_failed 同惯例）：
+// 存量库携带 autoban_nat_detection/autoban_nat_fingerprint_threshold 时启动
+// 迁移删列；fresh 库不再补列；重复迁移幂等。
+func TestRunMigrations_dropsRetiredAutobanNatColumns(t *testing.T) {
+	dir := t.TempDir()
+	preserveDatabaseHandles(t)
+	if err := Initialize(dir); err != nil {
+		t.Fatalf("initialize database: %v", err)
+	}
+	// fresh 库：两列不得存在（newColumns 已摘除登记）。
+	for _, column := range []string{"autoban_nat_detection", "autoban_nat_fingerprint_threshold"} {
+		var n int
+		if err := DB.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('global_config') WHERE name=?`, column).Scan(&n); err != nil || n != 0 {
+			t.Fatalf("fresh 库不得携带退役列 %s: n=%d err=%v", column, n, err)
+		}
+	}
+	// 存量形态：带外补回两列（旧版本库形态），启动迁移必须删除。
+	if _, err := DB.Exec(`ALTER TABLE global_config ADD COLUMN autoban_nat_detection INTEGER NOT NULL DEFAULT 0`); err != nil {
+		t.Fatalf("re-add nat_detection: %v", err)
+	}
+	if _, err := DB.Exec(`ALTER TABLE global_config ADD COLUMN autoban_nat_fingerprint_threshold INTEGER NOT NULL DEFAULT 3`); err != nil {
+		t.Fatalf("re-add nat_fingerprint_threshold: %v", err)
+	}
+	if err := runMigrations(); err != nil {
+		t.Fatalf("migrate legacy nat shape: %v", err)
+	}
+	for _, column := range []string{"autoban_nat_detection", "autoban_nat_fingerprint_threshold"} {
+		var n int
+		if err := DB.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('global_config') WHERE name=?`, column).Scan(&n); err != nil || n != 0 {
+			t.Fatalf("退役列 %s 必须被启动迁移删除: n=%d err=%v", column, n, err)
+		}
+	}
+	// 幂等：二次迁移不报错、不复活。
+	if err := runMigrations(); err != nil {
+		t.Fatalf("second migrate: %v", err)
+	}
+	for _, column := range []string{"autoban_nat_detection", "autoban_nat_fingerprint_threshold"} {
+		var n int
+		if err := DB.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('global_config') WHERE name=?`, column).Scan(&n); err != nil || n != 0 {
+			t.Fatalf("二次迁移后退役列 %s 不得复活: n=%d err=%v", column, n, err)
+		}
+	}
+}

@@ -128,14 +128,13 @@ func (s *SecurityEventsIPCServer) handleIngestHuman(w http.ResponseWriter, r *ht
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	type humanEventRow struct {
-		Ts        int64  `json:"ts"`
-		RuleID    string `json:"rule_id"`
-		ClientIP  string `json:"client_ip"`
-		Method    string `json:"method"`
-		URI       string `json:"uri"`
-		UA        string `json:"ua"`
-		Kind      string `json:"kind"`       // challenge | pass | fail
-		SessionFP string `json:"session_fp"` // 会话指纹（lbhuman 采集；旧版写侧缺席=空）
+		Ts       int64  `json:"ts"`
+		RuleID   string `json:"rule_id"`
+		ClientIP string `json:"client_ip"`
+		Method   string `json:"method"`
+		URI      string `json:"uri"`
+		UA       string `json:"ua"`
+		Kind     string `json:"kind"` // challenge | pass | fail
 	}
 	var rows []humanEventRow
 	if err := json.NewDecoder(r.Body).Decode(&rows); err != nil {
@@ -211,7 +210,7 @@ func (s *SecurityEventsIPCServer) handleIngestHuman(w http.ResponseWriter, r *ht
 	feed := make([]services.HumanObserveItem, 0, len(rows))
 	for _, row := range rows {
 		if row.Kind == "challenge" || row.Kind == "fail" {
-			feed = append(feed, services.HumanObserveItem{IP: row.ClientIP, Kind: row.Kind, At: time.UnixMilli(row.Ts).UTC(), Fingerprint: row.SessionFP})
+			feed = append(feed, services.HumanObserveItem{IP: row.ClientIP, Kind: row.Kind, At: time.UnixMilli(row.Ts).UTC()})
 		}
 	}
 	services.ObserveHumanEvents(feed)

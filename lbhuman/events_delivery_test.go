@@ -45,7 +45,7 @@ func TestHumanEventDelivery_failureCountedAndObservable(t *testing.T) {
 	srv.Close() // 真实失败机制：端口不再监听 → 连接拒绝
 	resetHumanEventPosterForTest(t, url)
 
-	reportHumanEvent("lb-fail", "203.0.113.60", http.MethodGet, "/", "ua", "challenge", "")
+	reportHumanEvent("lb-fail", "203.0.113.60", http.MethodGet, "/", "ua", "challenge")
 	if !drainHumanEventsForTest(10 * time.Second) {
 		t.Fatal("queue must drain")
 	}
@@ -68,7 +68,7 @@ func TestHumanEventDelivery_non204CountedAsFailure(t *testing.T) {
 	defer srv.Close()
 	resetHumanEventPosterForTest(t, srv.URL)
 
-	reportHumanEvent("lb-503", "203.0.113.61", http.MethodGet, "/", "ua", "fail", "")
+	reportHumanEvent("lb-503", "203.0.113.61", http.MethodGet, "/", "ua", "fail")
 	if !drainHumanEventsForTest(10 * time.Second) {
 		t.Fatal("queue must drain")
 	}
@@ -85,7 +85,7 @@ func TestHumanEventDelivery_successNotCounted(t *testing.T) {
 	defer srv.Close()
 	resetHumanEventPosterForTest(t, srv.URL)
 
-	reportHumanEvent("lb-ok", "203.0.113.62", http.MethodGet, "/", "ua", "pass", "")
+	reportHumanEvent("lb-ok", "203.0.113.62", http.MethodGet, "/", "ua", "pass")
 	if !drainHumanEventsForTest(10 * time.Second) {
 		t.Fatal("queue must drain")
 	}
@@ -122,14 +122,14 @@ func TestHumanEvent_tsIsEnqueueTimeNotDeliveryTime(t *testing.T) {
 	resetHumanEventPosterForTest(t, srv.URL)
 
 	// 首条占住 worker；第二条在已知时刻入队。
-	reportHumanEvent("lb-ts", "203.0.113.63", http.MethodGet, "/first", "ua", "challenge", "")
+	reportHumanEvent("lb-ts", "203.0.113.63", http.MethodGet, "/first", "ua", "challenge")
 	select {
 	case <-started:
 	case <-time.After(10 * time.Second):
 		t.Fatal("first event must reach the server")
 	}
 	enqueueBefore := time.Now().UnixMilli()
-	reportHumanEvent("lb-ts", "203.0.113.63", http.MethodGet, "/second", "ua", "challenge", "")
+	reportHumanEvent("lb-ts", "203.0.113.63", http.MethodGet, "/second", "ua", "challenge")
 	enqueueAfter := time.Now().UnixMilli()
 
 	time.Sleep(150 * time.Millisecond) // 投递时刻必然晚于入队窗口

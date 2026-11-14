@@ -159,10 +159,10 @@ var globalConfigSyncedColumns = []string{
 	"crawler_auto_update", "crawler_schedule_days", "crawler_schedule_time",
 	"autoban_enabled", "autoban_threshold", "autoban_window_minutes",
 	"autoban_duration", "autoban_scope", "autoban_dry_run",
-	// 累犯升级第七列与 NAT 两列随 users 节同步（models.ClusterBasicSettings）——
-	// 与六列同族：仅写这三列的端点/直改 SQL 也须 bump，否则稳态变更经 304 门
-	// 滞留主节点（SetAutobanConfig 九列同语句写被旧六列掩盖，单独写即暴露）。
-	"autoban_escalation", "autoban_nat_detection", "autoban_nat_fingerprint_threshold",
+	// 累犯升级第七列随 users 节同步（models.ClusterBasicSettings）——
+	// 与六列同族：仅写该列的端点/直改 SQL 也须 bump，否则稳态变更经 304 门
+	// 滞留主节点（SetAutobanConfig 七列同语句写被旧六列掩盖，单独写即暴露）。
+	"autoban_escalation",
 	// v2.3.8：安全事件保留两列与大屏采样口径随 users 节同步并物化到从端
 	// （models.ClusterBasicSettings / services/cluster_apply.go）——
 	// 补列：此前仅靠「同语句 UPDATE 含其他 OF 列」偶然触发 bump，仅写这三列

@@ -236,6 +236,7 @@ export default {
     system: 'System',
     systemConfig: 'System config',
     autoBan: 'Auto-ban',
+    autoBanRecidivism: 'Auto-ban recidivism records',
     customRule: 'Custom rule',
     nodeServices: 'Node services',
     ruleStore: 'Rule store',

@@ -58,3 +58,38 @@ func TestValidateV2BackupAutobanConfig_legacyCountHumanNumericForms(t *testing.T
 		t.Fatalf("迁移必须留痕, notes=%v", notes)
 	}
 }
+
+// NAT 会话精修退役的旧备份兼容：携带 nat_detection/nat_fingerprint_threshold
+// 键的备份导入不拒绝——两键在导入门删除（列已随启动迁移退役，通用写入面
+// 按列存在性跳过；显式删除保证预览/比对面无死键），其余键照常校验。
+func TestValidateV2BackupAutobanConfig_legacyNatKeysIgnored(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		nat  any
+		fp   any
+	}{
+		{"json-forms", true, float64(3)},
+		{"out-of-range", float64(1), float64(999)},
+		{"non-integer", "bogus", "bogus"},
+		{"null-forms", nil, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			config := map[string]any{
+				"autoban_scope":                     "blocked,logged",
+				"autoban_nat_detection":             tc.nat,
+				"autoban_nat_fingerprint_threshold": tc.fp,
+			}
+			if _, err := validateV2BackupAutobanConfig(config); err != nil {
+				t.Fatalf("携带退役 NAT 键的备份不得被拒绝: %v", err)
+			}
+			for _, key := range []string{"autoban_nat_detection", "autoban_nat_fingerprint_threshold"} {
+				if _, exists := config[key]; exists {
+					t.Fatalf("退役 NAT 键 %s 必须在导入门删除", key)
+				}
+			}
+			if got := config["autoban_scope"]; got != "blocked,logged" {
+				t.Fatalf("其余键不得受影响, autoban_scope=%v", got)
+			}
+		})
+	}
+}

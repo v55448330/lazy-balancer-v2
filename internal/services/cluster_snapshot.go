@@ -804,19 +804,17 @@ func (s *ClusterService) loadSnapshotGlobalSettings(ctx context.Context, store s
 		snapshot.BasicSettings.HumanSecret = &humanSecret
 	}
 
-	// 自动封禁九项配置随 users 节同步（镜像
+	// 自动封禁七项配置随 users 节同步（镜像
 	// 指针装载+COALESCE 兜底恒携带，升主即按主端配置生效）。局部名 abn* 与上方
 	// 自动备份组 ab* 区分（同一函数作用域）。
-	var abnEnabled, abnDryRun, abnNat bool
-	var abnThreshold, abnWindow, abnNatThreshold int
+	var abnEnabled, abnDryRun bool
+	var abnThreshold, abnWindow int
 	var abnDuration, abnScope, abnEscalation string
 	if err := store.QueryRowContext(ctx, `SELECT COALESCE(autoban_enabled,?), COALESCE(autoban_threshold,?),
-		COALESCE(autoban_window_minutes,?), COALESCE(autoban_duration,?), COALESCE(autoban_scope,?), COALESCE(autoban_dry_run,?), COALESCE(autoban_escalation,?),
-		COALESCE(autoban_nat_detection,?), COALESCE(autoban_nat_fingerprint_threshold,?)
+		COALESCE(autoban_window_minutes,?), COALESCE(autoban_duration,?), COALESCE(autoban_scope,?), COALESCE(autoban_dry_run,?), COALESCE(autoban_escalation,?)
 		FROM global_config WHERE id=1`,
 		db.DefaultAutobanEnabled, db.DefaultAutobanThreshold, db.DefaultAutobanWindowMinutes,
-		db.DefaultAutobanDuration, db.DefaultAutobanScope, db.DefaultAutobanDryRun, db.DefaultAutobanEscalation,
-		db.DefaultAutobanNatDetection, db.DefaultAutobanNatFingerprintThreshold).Scan(&abnEnabled, &abnThreshold, &abnWindow, &abnDuration, &abnScope, &abnDryRun, &abnEscalation, &abnNat, &abnNatThreshold); err != nil {
+		db.DefaultAutobanDuration, db.DefaultAutobanScope, db.DefaultAutobanDryRun, db.DefaultAutobanEscalation).Scan(&abnEnabled, &abnThreshold, &abnWindow, &abnDuration, &abnScope, &abnDryRun, &abnEscalation); err != nil {
 		return fmt.Errorf("读取自动封禁设置: %w", err)
 	}
 	snapshot.BasicSettings.AutobanEnabled = &abnEnabled
@@ -826,8 +824,6 @@ func (s *ClusterService) loadSnapshotGlobalSettings(ctx context.Context, store s
 	snapshot.BasicSettings.AutobanScope = &abnScope
 	snapshot.BasicSettings.AutobanDryRun = &abnDryRun
 	snapshot.BasicSettings.AutobanEscalation = &abnEscalation
-	snapshot.BasicSettings.AutobanNatDetection = &abnNat
-	snapshot.BasicSettings.AutobanNatFingerprintThreshold = &abnNatThreshold
 	return nil
 }
 

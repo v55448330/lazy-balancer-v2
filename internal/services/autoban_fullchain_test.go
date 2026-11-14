@@ -1,20 +1,16 @@
 package services
 
-// A+C 自动封禁全链端到端钉测（阶段 5 集成）：
+// 自动封禁全链端到端钉测（阶段 5 集成）：
 //
-//	事件喂入 → IPv6 /64 归一 → NAT 检测 → 复合键会话封禁（本地态）
-//	→ IP 级执法（名单 + 累犯记账）→ 到期解封 → 累犯渐进升级
+//	事件喂入 → IPv6 /64 归一 → IP 级执法（名单 + 累犯记账）
+//	→ 到期解封 → 累犯渐进升级
 //	→ 集群快照携带累犯表 → 从端 apply 收敛（整表替换 + 节哈希奇偶）。
-//
-// 会话封禁经交换文件契约执法（lbhuman 侧消费钉测在 lbhuman 包，跨模块
-// 不引入其依赖树）；本测试钉面板侧全链与集群传播面。
 
 import (
 	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
 
@@ -31,19 +27,22 @@ func chainRunCycle(t *testing.T) {
 	}
 }
 
-// Given NAT 精修 + standard 升级启用；同 /64 隐私扩展轮换地址喂入攻击指纹
-// 与两个无辜指纹，另有一裸 IPv4 无指纹攻击源与一保留地址。
+// chainFeed 经生产喂入门计一条 blocked 事件。
+func chainFeed(cfg AutobanConfig, ip string) {
+	autobanObserveEventScopedAt(cfg, ip, "blocked", "942100", autobanNow())
+}
+
+// Given standard 升级启用；同 /64 隐私扩展轮换地址喂入攻击事件，另有一裸
+// IPv4 攻击源与一保留地址。
 // When 逐轮 RunAutobanCycle（封禁→到期→再犯）并做集群快照/从端 apply。
-// Then 全链各段契约同时成立（归一/NAT/复合键/会话本地态/IP 执法/累犯升级/
-// 集群收敛）。
+// Then 全链各段契约同时成立（归一/IP 执法/累犯升级/集群收敛）。
 func TestAutobanFullChain_endToEndWithClusterSync(t *testing.T) {
 	clock := installAutobanFixture(t, "2026-11-15 10:00:00")
-	sessionPath := sessionBanTestFile(t)
 	database := db.GetDB()
 
 	cfg := AutobanConfig{
 		Enabled: true, Threshold: 3, WindowMinutes: 5, Duration: "1h", Scope: "blocked",
-		Escalation: AutobanEscalationStandard, NatDetection: true, NatFingerprintThreshold: 3,
+		Escalation: AutobanEscalationStandard,
 	}
 	if err := SetAutobanConfig(cfg); err != nil {
 		t.Fatalf("set config: %v", err)
@@ -59,64 +58,49 @@ func TestAutobanFullChain_endToEndWithClusterSync(t *testing.T) {
 	syncService := NewSyncService(database, &config.Config{CaddyAdminURL: caddyStub.URL}, NewCaddyService(caddyStub.URL))
 	ctx := context.Background()
 
-	// ---- 段 1：喂入 → /64 归一 → NAT 检测 → 复合键 ----
-	// 同 /64 三个隐私扩展地址轮换：攻击指纹 c:evil 集中，两个无辜指纹各 1。
+	// ---- 段 1：喂入 → /64 归一 ----
+	// 同 /64 三个隐私扩展地址轮换：逐地址计数 2 次不达标，/64 聚合达标。
 	addrs := []string{
 		"2606:4700:abcd:1234:1111:2222:3333:4444",
 		"2606:4700:abcd:1234:aaaa:bbbb:cccc:dddd",
 		"2606:4700:abcd:1234::9",
 	}
-	for range 4 {
-		natFeed(cfg, addrs[0], "c:evil")
+	for _, ip := range addrs {
+		for range 2 {
+			chainFeed(cfg, ip)
+		}
 	}
-	natFeed(cfg, addrs[1], "c:innocent1")
-	natFeed(cfg, addrs[2], "c:innocent2")
-	if !natIsNAT(t, "2606:4700:abcd:1234::") {
-		t.Fatal("段1：同 /64 轮换地址必须锚定单 NAT 剖面并触发 NAT 态")
-	}
-	// NAT 态后攻击指纹独立复合桶达标（阈值 3）。
-	for range 3 {
-		natFeed(cfg, addrs[1], "c:evil")
-	}
-	compositeKey := autobanIdentityKey("2606:4700:abcd:1234::", "c:evil")
-	if keys := natWindowKeys(t); keys[compositeKey] != 3 {
-		t.Fatalf("段1：攻击复合桶计数=%d, want 3（/64×指纹独立计数）", keys[compositeKey])
+	autobanMu.Lock()
+	w := autobanWindows["2606:4700:abcd:1234::"]
+	autobanMu.Unlock()
+	if w == nil || w.Count != 6 {
+		t.Fatalf("段1：同 /64 轮换必须聚合单桶计数 6, got %+v", w)
 	}
 
-	// 裸 IPv4 无指纹攻击源（IP 级通道）+ 保留地址（硬排除）。
+	// 裸 IPv4 攻击源（IP 级通道）+ 保留地址（硬排除）。
 	plainIP := "45.33.32.200"
 	for range 3 {
-		natFeed(cfg, plainIP, "")
+		chainFeed(cfg, plainIP)
 	}
 	for _, reserved := range []string{"127.0.0.1", "10.1.2.3", "192.168.1.10", "::1", "fe80::1"} {
 		for range 3 {
-			natFeed(cfg, reserved, "")
+			chainFeed(cfg, reserved)
 		}
 	}
 
-	// ---- 段 2：Run 轮 → 会话封禁（本地态）+ IP 级执法 + 累犯首次记账 ----
+	// ---- 段 2：Run 轮 → IP 级执法 + 累犯首次记账 ----
 	chainRunCycle(t)
 
-	// 会话封禁：复合键进交换文件（短 TTL），不落 IP 名单。
-	sessionSnap := sessionBanTestSnapshot(t, sessionPath)
-	if len(sessionSnap.Bans) != 1 || sessionSnap.Bans[0].Key != compositeKey {
-		t.Fatalf("段2：会话封禁交换=%+v, want 单条 %s", sessionSnap, compositeKey)
-	}
-	if n := AutobanActiveSessionBanCount(); n != 1 {
-		t.Fatalf("段2：会话封禁生效数=%d, want 1", n)
-	}
-	// IP 名单：仅裸 IPv4（复合键零落名单）；保留地址零计入。
+	// IP 名单：/64 CIDR + 裸 IPv4；保留地址零计入。
 	entries := entryValues(presetEntries(t))
 	if _, ok := entries[plainIP]; !ok {
 		t.Fatalf("段2：IP 级候选必须落名单, entries=%v", entries)
 	}
-	for value := range entries {
-		if strings.Contains(value, "|") {
-			t.Fatalf("段2：复合键不得落 IP 名单: %s", value)
-		}
+	if _, ok := entries["2606:4700:abcd:1234::/64"]; !ok {
+		t.Fatalf("段2：/64 聚合候选必须落 CIDR 条目, entries=%v", entries)
 	}
-	if len(entries) != 1 {
-		t.Fatalf("段2：保留地址不得计入（名单应仅 1 条）, entries=%v", entries)
+	if len(entries) != 2 {
+		t.Fatalf("段2：保留地址不得计入（名单应仅 2 条）, entries=%v", entries)
 	}
 	// 累犯首次记账：standard 首档=配置时长 1h。
 	if count, _, escalated := readRecidivismRow(t, plainIP); count != 1 || escalated != "1h" {
@@ -126,7 +110,7 @@ func TestAutobanFullChain_endToEndWithClusterSync(t *testing.T) {
 		t.Fatalf("段2：首次封禁到期=%q, want 配置时长 1h", entry.ExpiresAt)
 	}
 
-	// ---- 段 3：集群快照携带累犯表 + 会话封禁本地态不进快照 ----
+	// ---- 段 3：集群快照携带累犯表 ----
 	if _, err := database.Exec("UPDATE global_config SET cluster_version=100 WHERE id=1"); err != nil {
 		t.Fatal(err)
 	}
@@ -138,15 +122,8 @@ func TestAutobanFullChain_endToEndWithClusterSync(t *testing.T) {
 	if err := json.Unmarshal(snap.AutobanRecidivism, &carried); err != nil {
 		t.Fatalf("段3：解析累犯载荷: %v", err)
 	}
-	if len(carried) != 1 || carried[0].Identity != plainIP || carried[0].Offenses != 1 || carried[0].Escalated != "1h" {
-		t.Fatalf("段3：累犯载荷=%+v, want 单行 %s/1/1h", carried, plainIP)
-	}
-	wire, err := json.Marshal(snap)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(wire), "c:evil") || strings.Contains(string(wire), "session_ban") {
-		t.Fatal("段3：会话封禁本地态不得进集群快照")
+	if len(carried) != 2 {
+		t.Fatalf("段3：累犯载荷=%+v, want 两行（IPv4 + /64 身份）", carried)
 	}
 
 	// ---- 段 4：从端 apply 收敛（整表替换 + 节哈希奇偶）----
@@ -161,8 +138,13 @@ func TestAutobanFullChain_endToEndWithClusterSync(t *testing.T) {
 		t.Fatalf("段4：apply: %v", err)
 	}
 	got := readRecidivismRows(t, database)
-	if len(got) != 1 || got[0].Identity != plainIP || got[0].Offenses != 1 || got[0].Escalated != "1h" {
-		t.Fatalf("段4：apply 后累犯表=%+v, want 单行 %s/1/1h（整表替换收敛）", got, plainIP)
+	if len(got) != 2 {
+		t.Fatalf("段4：apply 后累犯表=%+v, want 两行（整表替换收敛）", got)
+	}
+	for _, row := range got {
+		if row.Identity == plainIP && (row.Offenses != 1 || row.Escalated != "1h") {
+			t.Fatalf("段4：apply 后 %s 行=%+v, want 1/1h", plainIP, row)
+		}
 	}
 	localHashes, err := cluster.driftGuardSectionHashes(ctx)
 	if err != nil {
@@ -185,7 +167,7 @@ func TestAutobanFullChain_endToEndWithClusterSync(t *testing.T) {
 	}
 	clock.Advance(time.Hour) // 距上次封禁约 2h（衰减窗口内）
 	for range 3 {
-		natFeed(cfg, plainIP, "")
+		chainFeed(cfg, plainIP)
 	}
 	chainRunCycle(t)
 	if count, _, escalated := readRecidivismRow(t, plainIP); count != 2 || escalated != "24h" {
@@ -204,7 +186,13 @@ func TestAutobanFullChain_endToEndWithClusterSync(t *testing.T) {
 		t.Fatalf("段6：apply: %v", err)
 	}
 	got2 := readRecidivismRows(t, database)
-	if len(got2) != 1 || got2[0].Offenses != 2 || got2[0].Escalated != "24h" {
+	var escalatedRow *recidivismRow
+	for i := range got2 {
+		if got2[i].Identity == plainIP {
+			escalatedRow = &got2[i]
+		}
+	}
+	if escalatedRow == nil || escalatedRow.Offenses != 2 || escalatedRow.Escalated != "24h" {
 		t.Fatalf("段6：升级累犯行必须随快照收敛, got %+v", got2)
 	}
 }

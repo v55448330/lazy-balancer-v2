@@ -10,7 +10,9 @@ import (
 //   - 无 exempt_ips：IP 级放行唯一入口=阶段 0 信任名单（命中跳过整条安全链），
 //     不留"只跳挑战"的第二套放行口径；
 //   - 无 challenge_html：自定义挑战页退役（拦截页已覆盖页面定制场景），挑战页
-//     恒由 lb_human 插件内置渲染。
+//     恒由 lb_human 插件内置渲染；
+//   - 无 session_ban_file：NAT 会话精修退役（封禁最终都以封禁 IP 为主），
+//     会话封禁交换文件通道整体移除。
 func TestBuildHumanHandlerConfig_hasNoRetiredKeys(t *testing.T) {
 	setupGeoipConfigTestDB(t)
 	// cookie 签名密钥来自 global_config.human_secret；DB 初始化后惰性生成即可，
@@ -27,7 +29,7 @@ func TestBuildHumanHandlerConfig_hasNoRetiredKeys(t *testing.T) {
 	if cfg == nil {
 		t.Fatal("启用人机验证的规则必须渲染 lb_human handler")
 	}
-	for _, dead := range []string{"exempt_ips", "challenge_html"} {
+	for _, dead := range []string{"exempt_ips", "challenge_html", "session_ban_file"} {
 		if _, ok := cfg[dead]; ok {
 			t.Fatalf("handler 配置不得再含退役键 %q：%v", dead, cfg)
 		}

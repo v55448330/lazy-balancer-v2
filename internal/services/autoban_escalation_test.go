@@ -32,7 +32,7 @@ func TestAutobanIdentityKey_reusesNormalizeIP(t *testing.T) {
 		"not-an-ip",
 		"",
 	} {
-		if got, want := autobanIdentityKey(ip, ""), autobanNormalizeIP(ip); got != want {
+		if got, want := autobanIdentityKey(ip), autobanNormalizeIP(ip); got != want {
 			t.Fatalf("autobanIdentityKey(%q)=%q, want autobanNormalizeIP=%q", ip, got, want)
 		}
 	}
@@ -46,7 +46,7 @@ func TestAutobanIdentityKey_counterMergeRecidivismShareNormalizedKey(t *testing.
 	setAutobanConfigRaw(t, true, 2, 5, "1h", "blocked", false)
 	cfg := AutobanConfig{Enabled: true, Threshold: 2, WindowMinutes: 5, Duration: "1h", Scope: "blocked", Escalation: "standard"}
 	for _, ip := range []string{"2606:4700:abcd:1234::1", "2606:4700:abcd:1234::2"} {
-		autobanObserveEventScopedAt(cfg, ip, "blocked", "942100", "", autobanNow())
+		autobanObserveEventScopedAt(cfg, ip, "blocked", "942100", autobanNow())
 	}
 
 	out, err := autobanMergeEntries(cfg, autobanCandidates(2, 5*time.Minute))
@@ -411,7 +411,7 @@ func TestAutobanEscalation_inListDoesNotDoubleCount(t *testing.T) {
 // ---- 写侧配置校验 ----
 
 func TestAutobanConfig_escalationValidation(t *testing.T) {
-	base := AutobanConfig{Enabled: true, Threshold: 10, WindowMinutes: 5, Duration: "1h", Scope: "blocked", NatFingerprintThreshold: DefaultAutobanNatFingerprintThreshold}
+	base := AutobanConfig{Enabled: true, Threshold: 10, WindowMinutes: 5, Duration: "1h", Scope: "blocked"}
 	for _, e := range []string{"off", "standard", "aggressive"} {
 		cfg := base
 		cfg.Escalation = e

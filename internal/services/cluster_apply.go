@@ -2326,14 +2326,6 @@ func updateSnapshotSettings(ctx context.Context, tx *sql.Tx, snapshot models.Clu
 		settingClauses = append(settingClauses, "autoban_escalation=?")
 		settingArgs = append(settingArgs, *settings.AutobanEscalation)
 	}
-	if settings.AutobanNatDetection != nil {
-		settingClauses = append(settingClauses, "autoban_nat_detection=?")
-		settingArgs = append(settingArgs, *settings.AutobanNatDetection)
-	}
-	if settings.AutobanNatFingerprintThreshold != nil {
-		settingClauses = append(settingClauses, "autoban_nat_fingerprint_threshold=?")
-		settingArgs = append(settingArgs, *settings.AutobanNatFingerprintThreshold)
-	}
 
 	if len(settingClauses) > 0 {
 		if _, err := tx.ExecContext(ctx, `UPDATE global_config SET `+strings.Join(settingClauses, ",")+` WHERE id=1`, settingArgs...); err != nil {

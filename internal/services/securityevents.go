@@ -76,10 +76,6 @@ type securityEventRecord struct {
 	// （同一请求的全部引擎事务共享）。为空（旧版本审计行/注入失败）表示该行
 	// 没有请求级自然键，按原样逐条入库、不参与归并。不落库，仅用于摄取期去重。
 	requestKey string
-	// sessionFingerprint 会话指纹（lbhuman 采集口径的面板侧镜像）：cookie
-	// 签名段优先、UA+Accept-Language 兜底。不落库，仅用于摄取提交点喂入
-	// 自动封禁 NAT 检测（autobanObserveBatch 的 Fingerprint 字段）。
-	sessionFingerprint string
 }
 
 // rowBytes 是单行大文本字段的保留字节合计——批次字节门（batchByteCap）与
@@ -294,12 +290,6 @@ func securityEventsParseTransaction(raw json.RawMessage) (*securityEventRecord, 
 	// 请求级去重键：链首（lb_security_blocked_counter）为每个请求注入，
 	// 预检与全部绑定策略的引擎事务都携带同一值（见 securityEventsRequestDeduper）。
 	rec.requestKey = securityEventsFirstHeader(tx.Request.Headers, "x-lb-security-timing-id")
-	// 会话指纹：从审计请求头提取 __lb_human cookie/UA/Accept-Language，
-	// 与 lbhuman 事件上报同口径（autobanSessionFingerprint 镜像单源）。
-	rec.sessionFingerprint = autobanSessionFingerprint(
-		autobanHumanCookieFromHeader(securityEventsFirstHeader(tx.Request.Headers, "cookie")),
-		securityEventsFirstHeader(tx.Request.Headers, "user-agent"),
-		securityEventsFirstHeader(tx.Request.Headers, "accept-language"))
 	rec.RequestHeaders = securityEventsSerializeHeaders(tx.Request.Headers)
 	rec.RequestBody = securityEventsRecordBody(tx.Request.Body, tx.Request.BodyTruncated)
 	if tx.IsInterrupted {
@@ -2825,7 +2815,6 @@ func (t *securityEventsTailer) securityEventsProcessPass(ctx context.Context, f 
 							RuleTriggered: rec.RuleTriggered,
 							At:            time.Unix(prev.atSec, 0).UTC(),
 							TrustExempt:   false,
-							Fingerprint:   rec.sessionFingerprint,
 						})
 					}
 					// 同批光流条目同步改判：大屏光流按 action 着色/计拦截，
@@ -2908,7 +2897,6 @@ func (t *securityEventsTailer) securityEventsProcessPass(ctx context.Context, f 
 							RuleTriggered: rec.RuleTriggered,
 							At:            eventAt,
 							TrustExempt:   trustExempt,
-							Fingerprint:   rec.sessionFingerprint,
 						})
 						entryAutobanAction = rec.Action
 						if trustExempt {

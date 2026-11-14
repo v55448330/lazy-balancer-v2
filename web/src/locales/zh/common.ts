@@ -236,6 +236,7 @@ export default {
     system: '系统',
     systemConfig: '系统配置',
     autoBan: '自动封禁',
+    autoBanRecidivism: '累犯记录',
     customRule: '自定义规则',
     nodeServices: '节点服务',
     ruleStore: '规则库',

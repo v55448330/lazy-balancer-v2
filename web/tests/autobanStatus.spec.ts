@@ -7,7 +7,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
 import { autobanStateLabel, autobanStatValue, isAutobanIneffective, suggestionBand } from '../src/utils/autobanStatus.ts'
-import { code, elementSlice, section } from './_helpers.ts'
+import { code, elementSlice, repoCode, section } from './_helpers.ts'
 
 test('启用且 ban_effective === false 时展示黄条', () => {
   assert.equal(isAutobanIneffective({ enabled: true, ban_effective: false }), true)
@@ -157,53 +157,11 @@ test('autoban 词条 zh 母本钉(逐字)', () => {
   }
 })
 
-// ── A+C 双通道：分通道黄条判据 / NAT 徽标 / 身份拆解 / 执法层 / 累犯档 ──
+// ── IP 单通道：黄条判据 / 建议时长 / 累犯档（NAT 会话通道已退役）──
 
 import {
-  isAutobanIpIneffective, isAutobanSessionIneffective, isAutobanNatActive,
-  splitAutobanIdentity, autobanEnforcementLayer, autobanEscalationShortKey,
-  autobanSuggestedDurationKey,
+  autobanEscalationShortKey, autobanSuggestedDurationKey,
 } from '../src/utils/autobanStatus.ts'
-
-test('IP 通道黄条：仅 enabled ∧ ban_effective_ip===false（缺键 fail-closed 不提示）', () => {
-  assert.equal(isAutobanIpIneffective({ enabled: true, ban_effective_ip: false }), true)
-  assert.equal(isAutobanIpIneffective({ enabled: true, ban_effective_ip: true }), false)
-  assert.equal(isAutobanIpIneffective({ enabled: false, ban_effective_ip: false }), false)
-  assert.equal(isAutobanIpIneffective({ enabled: true }), false, '旧后端缺分通道键不得误报')
-})
-
-test('会话通道黄条：仅 NAT 态 ∧ 有会话封禁 ∧ ban_effective_session===false', () => {
-  const base = { enabled: true, nat_detection: true, session_bans: 2 }
-  assert.equal(isAutobanSessionIneffective({ ...base, ban_effective_session: false }), true)
-  assert.equal(isAutobanSessionIneffective({ ...base, ban_effective_session: true }), false)
-  assert.equal(isAutobanSessionIneffective({ ...base, session_bans: 0, ban_effective_session: false }), false, '无会话封禁不提示')
-  assert.equal(isAutobanSessionIneffective({ enabled: true, session_bans: 2, ban_effective_session: false }), false, '非 NAT 态不提示')
-  assert.equal(isAutobanSessionIneffective({ enabled: false, nat_detection: true, session_bans: 2, ban_effective_session: false }), false)
-})
-
-test('NAT 徽标判据：enabled ∧ nat_detection ∧ 会话封禁非空', () => {
-  assert.equal(isAutobanNatActive({ enabled: true, nat_detection: true, session_bans: 1 }), true)
-  assert.equal(isAutobanNatActive({ enabled: true, nat_detection: true, session_bans: 0 }), false)
-  assert.equal(isAutobanNatActive({ enabled: true, nat_detection: false, session_bans: 3 }), false)
-  assert.equal(isAutobanNatActive({ enabled: false, nat_detection: true, session_bans: 3 }), false)
-  assert.equal(isAutobanNatActive({ enabled: true }), false, '旧后端缺键不渲染徽标')
-})
-
-test('身份键拆解与后端 autobanCompositeKeyParts 同形（首个 | 为边界）', () => {
-  assert.deepEqual(splitAutobanIdentity('203.0.113.7'), { ip: '203.0.113.7', fingerprint: '', composite: false })
-  assert.deepEqual(splitAutobanIdentity('2001:db8::'), { ip: '2001:db8::', fingerprint: '', composite: false })
-  assert.deepEqual(splitAutobanIdentity('2001:db8::|c:abcdef0123456789'), { ip: '2001:db8::', fingerprint: 'c:abcdef0123456789', composite: true })
-  // 边界形态与后端一致：| 在首位/末位不构成复合键
-  assert.equal(splitAutobanIdentity('|abc').composite, false)
-  assert.equal(splitAutobanIdentity('2001:db8::|').composite, false)
-  // 指纹内含 | 时只按首个 | 拆（后端 IndexByte 同口径）
-  assert.deepEqual(splitAutobanIdentity('2001:db8::|a|b'), { ip: '2001:db8::', fingerprint: 'a|b', composite: true })
-})
-
-test('执法层判据：复合身份=会话挑战，IP 身份=IP 封禁', () => {
-  assert.equal(autobanEnforcementLayer('203.0.113.7'), 'ip')
-  assert.equal(autobanEnforcementLayer('2001:db8::|c:abcdef0123456789'), 'session')
-})
 
 test('累犯档短键：状态级配置口径（不虚构逐行档位），非法/缺省按 off', () => {
   assert.equal(autobanEscalationShortKey('off'), 'app.security.overview.autoban.escalationOffShort')
@@ -213,70 +171,117 @@ test('累犯档短键：状态级配置口径（不虚构逐行档位），非�
   assert.equal(autobanEscalationShortKey('bogus'), 'app.security.overview.autoban.escalationOffShort')
 })
 
-test('建议时长键：会话身份=会话短时长词条；IP 身份=配置时长词条', () => {
-  assert.equal(autobanSuggestedDurationKey('2001:db8::|c:abc', '1h'), 'app.security.overview.autoban.durationSession')
-  assert.equal(autobanSuggestedDurationKey('203.0.113.7', '1h'), 'app.security.events.duration1h')
-  assert.equal(autobanSuggestedDurationKey('203.0.113.7', 'permanent'), 'app.security.events.durationPermanent')
-  assert.equal(autobanSuggestedDurationKey('203.0.113.7', 'weird'), 'app.security.events.weird', '未知时长原样回显（与事件页同口径）')
+test('建议时长键：一律按配置时长词条（未知值原样回显，与事件页同口径）', () => {
+  assert.equal(autobanSuggestedDurationKey('1h'), 'app.security.events.duration1h')
+  assert.equal(autobanSuggestedDurationKey('permanent'), 'app.security.events.durationPermanent')
+  assert.equal(autobanSuggestedDurationKey('weird'), 'app.security.events.weird')
 })
 
-// 消费侧接线：总览卡分通道黄条/NAT 徽标/统计分列/建议增列必须真实绑定。
-test('总览卡：分通道黄条 + NAT 徽标 + IP/会话分列 + 建议增列接线', () => {
+// 消费侧接线：总览卡四统计卡一行/单黄条/建议表/累犯下钻必须真实绑定，
+// NAT 会话形态不得残留（徽标/分列/身份拆解/执法层）。
+test('总览卡：四统计卡一行 + 单黄条 + IP 建议表 + 累犯下钻接线', () => {
   const page = code('src/views/security/SecurityOverview.vue')
   assert.match(page, /const autobanIneffective = computed\(\(\) => autobanStatus\.value !== null && isAutobanIneffective\(autobanStatus\.value\)\)/)
-  assert.match(page, /v-if="autobanIpIneffective"/, 'IP 通道黄条必须绑定')
-  assert.match(page, /v-if="autobanSessionIneffective"/, '会话通道黄条必须绑定')
-  assert.match(page, /v-if="autobanNatActive"/, 'NAT 徽标必须绑定判据')
-  assert.match(page, /autobanStatus\?\.session_bans/, '会话封禁数必须消费 session_bans 键')
+  assert.match(page, /v-if="autobanIneffective"/, '单黄条必须绑定判据')
   assert.match(page, /autobanStatus\?\.escalated_count/, '累犯升级数必须消费 escalated_count 键')
-  assert.match(page, /autobanStatus\?\.banned_today/, '今日 IP 封禁必须消费 banned_today 键')
-  assert.match(page, /autobanEnforcementLayer\(row\.ip\)/, '执法层列必须按身份键派生')
+  assert.match(page, /autobanStatus\?\.banned_today/, '今日封禁必须消费 banned_today 键')
   assert.match(page, /autobanEscalationShortKey\(autobanStatus\?\.escalation\)/, '累犯档列必须消费状态级 escalation')
-  // 复合身份不得整键传入 IP 处置组件（限自动封禁卡切片——Top10 表的 row.ip
-  // 是纯 IP，属合法消费，不在本判据范围）
+  // 四统计卡一行（grid 4 列）+ 移动端堆叠
+  assert.match(page, /\.autoban-stats \{[^}]*grid-template-columns: repeat\(4, minmax\(0, 1fr\)\)/, '四统计卡必须 grid 4 列一行')
+  assert.match(page, /@media \(max-width: 768px\) \{[\s\S]*?\.autoban-body \{ flex-direction: column; \}/, '移动端必须堆叠')
+  // 建议区自适应剩余宽度：标题 ellipsis+tooltip，无水平滚动
+  assert.match(page, /\.autoban-suggestions-title \{[^}]*text-overflow: ellipsis/, '建议标题必须 ellipsis 不换行')
+  assert.match(page, /\.autoban-suggestions \{[^}]*min-width: 0/, '建议区必须可收缩（不撑破卡体）')
   const card = section(page, 'class="mb-5 autoban-card"', '</el-card>')
-  assert.match(card, /:ip="autobanIdentityIp\(row\.ip\)"/, '建议行 IP 处置必须只传身份键的 IP 部分')
-  assert.doesNotMatch(card, /:ip="row\.ip"/, '不得把复合身份键当 IP 传入处置组件')
+  assert.match(card, /:ip="row\.ip"/, '建议行 IP 处置直接消费 IP（单通道无复合身份）')
+  // NAT 形态退役：徽标/会话分列/身份拆解/执法层/配置按钮不得残留
+  for (const gone of ['natActiveBadge', 'session_bans', 'autobanIdentityIp', 'autobanEnforcementLayer', 'autobanChannelSplit', 'goToAutobanConfig', 'autoban-stat-split']) {
+    assert.ok(!page.includes(gone), `NAT/旧形态残留：${gone}`)
+  }
+  // 累犯下钻：统计值可点击 → 弹框列表 + 重置（确认框）
+  assert.match(page, /@click="openRecidivismDialog"/, '累犯升级统计必须可点击下钻')
+  assert.match(page, /request\.get<APIResponse<\{ records: RecidivismRecord\[\] \}>>\('\/security\/autoban\/recidivism'/, '弹框数据源必须是 GET /security/autoban/recidivism')
+  assert.match(page, /await request\.delete\('\/security\/autoban\/recidivism'\)/, '重置必须走 DELETE 同端点')
+  assert.match(page, /ElMessageBox\.confirm\(\s*t\('app\.security\.overview\.autoban\.recidivismResetConfirm'\)/, '重置必须二次确认')
+  for (const col of ['recidivismColIdentity', 'recidivismColOffenses', 'recidivismColLastBan', 'recidivismColDuration']) {
+    assert.ok(page.includes(col), `弹框缺列键 ${col}`)
+  }
 })
 
-test('事件页：分通道黄条 + NAT 徽标 + 建议增列 + 九项配置弹框接线', () => {
+test('事件页：单黄条 + IP 建议表 + 七项配置弹框接线', () => {
   const page = code('src/views/security/SecurityEvents.vue')
-  assert.match(page, /v-if="autobanIpIneffective"/)
-  assert.match(page, /v-if="autobanSessionIneffective"/)
-  assert.match(page, /autobanNatActive/, 'NAT 徽标判据必须在场')
-  assert.match(page, /autobanEnforcementLayer\(row\.ip\)/)
-  assert.match(page, /autobanSuggestedDurationKey\(row\.ip, autobanStatus\.duration\)/, '建议时长按身份/配置派生')
-  assert.match(page, /:ip="autobanIdentityIp\(row\.ip\)"/)
-  assert.doesNotMatch(page, /:ip="row\.ip"/)
-  // 配置弹框三新项
+  assert.match(page, /v-if="autobanIneffective"/)
+  assert.match(page, /autobanSuggestedDurationKey\(autobanStatus\.duration\)/, '建议时长按配置派生')
+  assert.match(page, /:ip="row\.ip"/, '建议行 IP 处置直接消费 IP')
+  // 配置弹框七项（六基础 + 累犯升级）；NAT 段整体退役
   assert.match(page, /v-model="autobanForm\.escalation"/, '累犯升级选择必须绑定')
-  assert.match(page, /v-model="autobanForm\.nat_detection"/, 'NAT 检测开关必须绑定')
-  assert.match(page, /v-model="autobanForm\.nat_fingerprint_threshold"/, '指纹阈值输入必须绑定')
-  assert.match(page, /t\('app\.security\.events\.natPrivacyNotice'\)/, '隐私告知必须在弹框内披露')
-  assert.match(page, /autobanForm\.value\.nat_fingerprint_threshold < 2 \|\| autobanForm\.value\.nat_fingerprint_threshold > 100/, '指纹阈值保存校验 2-100')
-  // 保存/禁用直切必须携带新三项（PUT 全量九项）
+  for (const gone of ['nat_detection', 'nat_fingerprint_threshold', 'natPrivacyNotice', 'autobanNatActive', 'autobanChannelSplit', 'autobanEnforcementLayer', 'autobanIdentityIp', 'session_bans', 'ban_effective_session']) {
+    assert.ok(!page.includes(gone), `NAT 残留：${gone}`)
+  }
+  // 保存/禁用直切必须携带 escalation（PUT 全量七项）
   const save = section(page, 'const saveAutobanConfig', 'const autobanEnableConfirmHtml')
-  assert.match(save, /\.\.\.autobanForm\.value/, '保存必须展开完整表单（含新三项）')
+  assert.match(save, /\.\.\.autobanForm\.value/, '保存必须展开完整表单')
   const toggle = section(page, 'const toggleAutobanEnabled', '\nconst ')
   assert.match(toggle, /escalation: autobanStatus\.value\.escalation/, '禁用直切必须回填 escalation')
-  assert.match(toggle, /nat_detection: autobanStatus\.value\.nat_detection/, '禁用直切必须回填 nat_detection')
-  assert.match(toggle, /nat_fingerprint_threshold: autobanStatus\.value\.nat_fingerprint_threshold/, '禁用直切必须回填指纹阈值')
 })
 
-// 双语 parity：本次新增/改动键 zh/en 齐备（security 域整树比对由
-// ccProtectionContracts 承担；此处钉新增键的 zh 原文与 en 存在性）。
-test('A+C 新词条 zh 母本钉 + en 侧齐备', () => {
+// 双语 parity：保留/新增键 zh/en 齐备（security 域整树比对由
+// ccProtectionContracts 承担；此处钉关键键的 zh 原文与 en 存在性）。
+test('autoban 词条 zh 母本钉 + en 侧齐备（NAT 键退役）', () => {
   const zhSec = code('src/locales/zh/security.ts')
   const enSec = code('src/locales/en/security.ts')
   const zhTexts = [
-    '"natActiveBadge": "NAT 会话精修"',
-    '"ineffectiveIp":', '"ineffectiveSession":',
-    '"escalationLabel": "累犯升级"', '"natDetectionLabel": "NAT 检测"',
-    '"natThresholdLabel": "指纹阈值"', '"natPrivacyNotice":',
-    '"durationSession": "会话 10 分钟"',
-    '"colIdentity": "身份类型"', '"colEnforcement": "执法层"', '"colEscalation": "累犯档"',
+    '"escalationLabel": "累犯升级"',
+    '"colIdentity": "IP 地址"', '"colEscalation": "累犯档"',
+    '"recidivismDialogTitle": "累犯升级记录"',
+    '"recidivismReset": "重置累犯记录"',
+    '"bannedTodayTip": "今日写入自动封禁名单的 IP 数"',
   ]
   for (const text of zhTexts) assert.ok(zhSec.includes(text), `zh 母本缺「${text}」`)
-  const enKeys = ['natActiveBadge', 'ineffectiveIp', 'ineffectiveSession', 'escalationLabel', 'natDetectionLabel', 'natThresholdLabel', 'natPrivacyNotice', 'durationSession', 'colIdentity', 'colEnforcement', 'colEscalation']
+  const enKeys = ['escalationLabel', 'colIdentity', 'colEscalation', 'recidivismDialogTitle', 'recidivismDialogSubtitle', 'recidivismColIdentity', 'recidivismColOffenses', 'recidivismColLastBan', 'recidivismColDuration', 'recidivismEmpty', 'recidivismLoadFailed', 'recidivismRetry', 'recidivismReset', 'recidivismResetTitle', 'recidivismResetConfirm', 'recidivismResetConfirmBtn', 'recidivismResetDone', 'recidivismClose', 'bannedTodayTip']
   for (const key of enKeys) assert.ok(enSec.includes(`"${key}"`), `en 侧缺键 ${key}`)
+  // NAT 键双语同步退役（漏删一侧 = 键集漂移）
+  for (const gone of ['natDetectionLabel', 'natThresholdLabel', 'natPrivacyNotice', 'natActiveBadge', 'ineffectiveSession', 'ineffectiveIp', 'durationSession', 'identitySession', 'enforcementSession', 'bannedTodaySession', 'listEntriesSession']) {
+    assert.ok(!zhSec.includes(`"${gone}"`), `zh 侧 NAT 键残留 ${gone}`)
+    assert.ok(!enSec.includes(`"${gone}"`), `en 侧 NAT 键残留 ${gone}`)
+  }
+})
+
+// ── 首封时长语义收窄（累犯升级开启时标签/tooltip/状态卡摘要同口径）──
+
+test('首封时长：弹框标签随 escalation 切换 + 阶梯 tooltip 角标接线', () => {
+  const page = code('src/views/security/SecurityEvents.vue')
+  const durationItem = elementSlice(page, page.indexOf('<el-form-item>\n          <template #label><span>{{ t(autobanFormEscalationOn'), 'el-form-item')
+  assert.match(durationItem, /t\(autobanFormEscalationOn \? 'app\.security\.events\.firstBanDuration' : 'app\.security\.events\.durationLabel'\)/, '时长标签必须按 escalation 档位切换')
+  assert.match(durationItem, /v-model="autobanForm\.duration"/, '切片必须是时长配置项本体')
+  assert.match(durationItem, /<FieldHelpIcon v-if="autobanFormEscalationOn" :content="autobanFormEscalationTip" \/>/, 'off 不渲染角标；开启时 tooltip 披露阶梯')
+  // 判据单源：状态卡与弹框各自消费实态/表单的 escalation，仅 standard/aggressive 算开启
+  assert.match(page, /const autobanStatusEscalationOn = computed\(\(\) =>\s*autobanStatus\.value\.escalation === 'standard' \|\| autobanStatus\.value\.escalation === 'aggressive'\)/)
+  assert.match(page, /const autobanFormEscalationOn = computed\(\(\) =>\s*autobanForm\.value\.escalation === 'standard' \|\| autobanForm\.value\.escalation === 'aggressive'\)/)
+  assert.match(page, /const autobanFormEscalationTip = computed\(\(\) =>\s*autobanForm\.value\.escalation === 'aggressive'\s*\? t\('app\.security\.events\.escalationAggressiveTip'\)\s*: t\('app\.security\.events\.escalationStandardTip'\)/)
+  // 状态卡摘要同口径：escalation≠off 时时长行标「首封时长」
+  assert.match(page, /t\(autobanStatusEscalationOn \? 'app\.security\.events\.firstBanDuration' : 'app\.security\.events\.statDuration'\)/, '状态卡时长行必须随档位切换标签')
+  // 总览卡配置摘要同口径（时长行随档位切换）
+  const overview = code('src/views/security/SecurityOverview.vue')
+  assert.match(overview, /t\(autobanStatusEscalationOn \? 'app\.security\.events\.firstBanDuration' : 'app\.security\.overview\.autoban\.duration'\)/, '总览卡时长行必须随档位切换标签')
+})
+
+test('首封时长词条：zh 母本钉原文 + en 侧齐备 + 阶梯口径与后端档位映射一致', () => {
+  const zhSec = code('src/locales/zh/security.ts')
+  const enSec = code('src/locales/en/security.ts')
+  const zhTexts = [
+    '"firstBanDuration": "首封时长"',
+    '"escalationStandardTip": "累犯升级（标准档）：首封用配置时长，二次 24h，三次起永久"',
+    '"escalationAggressiveTip": "累犯升级（激进档）：首封用配置时长，二次起永久"',
+  ]
+  for (const text of zhTexts) assert.ok(zhSec.includes(text), `zh 母本缺「${text}」`)
+  for (const key of ['firstBanDuration', 'escalationStandardTip', 'escalationAggressiveTip']) {
+    assert.ok(enSec.includes(`"${key}"`), `en 侧缺键 ${key}`)
+  }
+  // 阶梯口径跨栈对表：后端 autobanEscalatedDuration 档位映射漂移即红
+  const backend = repoCode('internal/services/autoban.go')
+  const tiers = section(backend, 'func autobanEscalatedDuration', 'func ')
+  assert.match(tiers, /case offense <= 1:\s*d = autobanDurations\[cfg\.Duration\]/, '首封=配置时长')
+  assert.match(tiers, /case offense == 2:\s*d = 24 \* time\.Hour/, 'standard 二次=24h')
+  assert.match(tiers, /case AutobanEscalationAggressive:\s*if offense <= 1 \{\s*d = autobanDurations\[cfg\.Duration\]\s*\} else \{\s*d = 0\s*\}/, 'aggressive 二次起=永久')
 })

@@ -1054,8 +1054,8 @@ func TestGovernedDefaultLiteralsBoundInConsumers(t *testing.T) {
 			},
 		},
 		{
-			// 自动封禁读侧九列 COALESCE 与无库默认结构体必须同源：调整
-			// 窗口/阈值/封禁时长/升级档位/NAT 参数时，运行期读取与迁移回填不得分叉。
+			// 自动封禁读侧七列 COALESCE 与无库默认结构体必须同源：调整
+			// 窗口/阈值/封禁时长/升级档位时，运行期读取与迁移回填不得分叉。
 			file: "../services/autoban.go",
 			forbidden: []string{
 				"COALESCE(autoban_threshold,100)",
@@ -1064,15 +1064,12 @@ func TestGovernedDefaultLiteralsBoundInConsumers(t *testing.T) {
 				"COALESCE(autoban_scope,'all')",
 				"COALESCE(autoban_dry_run,1)",
 				"COALESCE(autoban_escalation,'off')",
-				"COALESCE(autoban_nat_detection,0)",
-				"COALESCE(autoban_nat_fingerprint_threshold,3)",
 			},
 			required: []string{
 				"db.DefaultAutobanEnabled", "db.DefaultAutobanThreshold",
 				"db.DefaultAutobanWindowMinutes", "db.DefaultAutobanDuration",
 				"db.DefaultAutobanScope", "db.DefaultAutobanDryRun",
 				"db.DefaultAutobanEscalation",
-				"db.DefaultAutobanNatDetection", "db.DefaultAutobanNatFingerprintThreshold",
 			},
 		},
 		{
@@ -1087,7 +1084,6 @@ func TestGovernedDefaultLiteralsBoundInConsumers(t *testing.T) {
 				"COALESCE(autoban_window_minutes,5)", "COALESCE(autoban_duration,'1h')",
 				"COALESCE(autoban_scope,'all')", "COALESCE(autoban_dry_run,1)",
 				"COALESCE(autoban_escalation,'off')",
-				"COALESCE(autoban_nat_detection,0)", "COALESCE(autoban_nat_fingerprint_threshold,3)",
 			},
 			required: []string{
 				"db.DefaultAutoBackupEnabled", "db.DefaultAutoBackupFrequency", "db.DefaultAutoBackupTime",
@@ -1095,7 +1091,6 @@ func TestGovernedDefaultLiteralsBoundInConsumers(t *testing.T) {
 				"db.DefaultAutobanEnabled", "db.DefaultAutobanThreshold", "db.DefaultAutobanWindowMinutes",
 				"db.DefaultAutobanDuration", "db.DefaultAutobanScope", "db.DefaultAutobanDryRun",
 				"db.DefaultAutobanEscalation",
-				"db.DefaultAutobanNatDetection", "db.DefaultAutobanNatFingerprintThreshold",
 			},
 		},
 		{

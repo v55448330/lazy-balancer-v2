@@ -1,6 +1,6 @@
 package handlers
 
-// 自动封禁端面：配置读写（六项+校验；保存联动调度启停）、
+// 自动封禁端面：配置读写（七项+校验；保存联动调度启停）、
 // 运行状态（状态卡数据源：运行态/今日封禁/名单条数/引用状态/观察建议）。
 // 预置名单的条目管理例外（删 400/条目可改）在 securityiplists.go。
 // 「立即执行」端点已废除（2026-10-14 裁定：调度唯一前提=业务启用）。
@@ -17,7 +17,7 @@ import (
 	"lazy-balancer-v2/internal/services"
 )
 
-// GetAutobanConfig GET /security/autoban：九项配置（全员可读，business 组）。
+// GetAutobanConfig GET /security/autoban：七项配置（全员可读，business 组）。
 func (h *Handlers) GetAutobanConfig(c *gin.Context) {
 	cfg, err := services.GetAutobanConfig()
 	if err != nil {
@@ -27,8 +27,8 @@ func (h *Handlers) GetAutobanConfig(c *gin.Context) {
 	c.JSON(http.StatusOK, cfg)
 }
 
-// UpdateAutobanConfig PUT /security/autoban：九项配置写侧（校验：阈值 1-10000、
-// 窗口 1-60 分钟、时长/口径/升级枚举、NAT 指纹阈值 2-100）。窗口/口径/NAT 参数变更由 services 层重置计数器
+// UpdateAutobanConfig PUT /security/autoban：七项配置写侧（校验：阈值 1-10000、
+// 窗口 1-60 分钟、时长/口径/升级枚举）。窗口/口径变更由 services 层重置计数器
 // （口径语义变化后旧计数不可混算）。保存联动调度启停（2026-10-14 裁定：
 // 本任务调度唯一前提=业务启用——enabled=true 开 autoban 循环调度、false 停；
 // 任务列表手动开调度未启用时由 Run 体业务门拦停）。配置只影响本节点调度与
@@ -49,9 +49,6 @@ func (h *Handlers) UpdateAutobanConfig(c *gin.Context) {
 	}
 	// Escalation 缺省（旧客户端未携带）归一 off，与 SetAutobanConfig 同单源。
 	req.Escalation = services.AutobanEscalationOrOff(req.Escalation)
-	// NatFingerprintThreshold 缺省（旧客户端未携带=0）归一默认 3，与
-	// SetAutobanConfig 同单源（校验先于持久化，缺省不得被当非法值 400）。
-	req.NatFingerprintThreshold = services.AutobanNatFingerprintThresholdOrDefault(req.NatFingerprintThreshold)
 	if !requireMasterNode(c) {
 		return
 	}
@@ -120,38 +117,31 @@ func (h *Handlers) GetAutobanStatus(c *gin.Context) {
 		// 拦截、无 xdb 降级空串、永不报错）。
 		suggestions[i].Location = enrichIPLocation(suggestions[i].IP)
 	}
-	// 双通道生效判定（ban_effective=析取；分通道披露供状态卡区分执法面）。
+	// 封禁生效判定（ban_effective=IP 名单引用通道）。
 	ipEffective := h.autobanBanEffectiveIP(preset)
-	sessionBanCount := services.AutobanActiveSessionBanCount()
-	sessionEffective := sessionBanCount > 0 && h.autobanSessionChainAssembled()
 	resp := gin.H{
-		"enabled":                   cfg.Enabled,
-		"dry_run":                   cfg.DryRun,
-		"threshold":                 cfg.Threshold,
-		"window_minutes":            cfg.WindowMinutes,
-		"duration":                  cfg.Duration,
-		"scope":                     cfg.Scope,
-		"escalation":                cfg.Escalation,
-		"nat_detection":             cfg.NatDetection,
-		"nat_fingerprint_threshold": cfg.NatFingerprintThreshold,
-		"escalated_count":           services.AutobanEscalatedCount(),
-		"banned_today":              services.AutobanBannedToday(),
-		"list_entries":              preset.activeCount,
-		"list_referenced":           h.autobanListReferenced(preset),
-		// 黄条真正需要的是「封禁是否生效」——双通道析取：IP 级=名单被
-		// deny + IP 访问控制启用的策略引用且名单非空；会话级=挑战链装配
-		//（lb_human 渲染面存在）∧ 会话封禁非空（NAT 态会话执法不经 IP 名单）。
-		// list_referenced 复用热路径资格门的四面引用集（含白名单/受信代理/
-		// CRS 排除），不能区分「引用」与「拦截生效」，曾抑制唯一的不生效告警。
-		"ban_effective":         ipEffective || sessionEffective,
-		"ban_effective_ip":      ipEffective,
-		"ban_effective_session": sessionEffective,
-		"session_bans":          sessionBanCount,
-		"tracked_ips":           services.AutobanTrackedIPs(),
-		"suggestions":           suggestions,
-		"is_master":             isMaster,
-		"role":                  map[bool]string{true: "master", false: "slave"}[isMaster],
-		"running":               false,
+		"enabled":         cfg.Enabled,
+		"dry_run":         cfg.DryRun,
+		"threshold":       cfg.Threshold,
+		"window_minutes":  cfg.WindowMinutes,
+		"duration":        cfg.Duration,
+		"scope":           cfg.Scope,
+		"escalation":      cfg.Escalation,
+		"escalated_count": services.AutobanEscalatedCount(),
+		"banned_today":    services.AutobanBannedToday(),
+		"list_entries":    preset.activeCount,
+		"list_referenced": h.autobanListReferenced(preset),
+		// 黄条真正需要的是「封禁是否生效」——IP 级=名单被 deny + IP 访问
+		// 控制启用的策略引用且名单非空。list_referenced 复用热路径资格门的
+		// 四面引用集（含白名单/受信代理/CRS 排除），不能区分「引用」与
+		// 「拦截生效」，曾抑制唯一的不生效告警。
+		"ban_effective":    ipEffective,
+		"ban_effective_ip": ipEffective,
+		"tracked_ips":      services.AutobanTrackedIPs(),
+		"suggestions":      suggestions,
+		"is_master":        isMaster,
+		"role":             map[bool]string{true: "master", false: "slave"}[isMaster],
+		"running":          false,
 		// loop_on 预置 false：响应键集不随任务引擎装配状态漂移（引擎未装配/
 		// Lookup 未命中时此前整键缺失，apidocs 示例与前端类型按恒有键消费）。
 		"loop_on":     false,
@@ -177,10 +167,43 @@ func (h *Handlers) GetAutobanStatus(c *gin.Context) {
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: resp})
 }
 
+// GetAutobanRecidivism GET /security/autoban/recidivism：累犯历史全量
+// （business 组全员可读）——面板「累犯升级」统计的下钻弹框数据源。
+// offense_count 降序、identity 升序；空表 records=[]（数组契约）。
+func (h *Handlers) GetAutobanRecidivism(c *gin.Context) {
+	records, err := services.ListAutobanRecidivism()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("读取自动封禁累犯记录失败", err)})
+		return
+	}
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"records": records}})
+}
+
+// ResetAutobanRecidivism DELETE /security/autoban/recidivism：重置全部累犯
+// 历史（清空 autoban_recidivism，下次达阈值按首次档起算）。无条件清空、
+// 幂等（重复调用保持空表并返回成功，与 unbind 同族）；只清历史记账，
+// 已生效封禁条目保持至到期。主节点门（从端写会被快照覆盖，与
+// UpdateAutobanConfig 同口径）；导入窗口拒绝写（累犯表在 security 节
+// 全量替换清单内）。
+func (h *Handlers) ResetAutobanRecidivism(c *gin.Context) {
+	if rejectWriteDuringImport(c, "重置自动封禁累犯记录（配置导入进行中）") {
+		return
+	}
+	if !requireMasterNode(c) {
+		return
+	}
+	if err := services.ResetAutobanRecidivism(); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("重置自动封禁累犯记录失败", err)})
+		return
+	}
+	recordAudit(c, "重置", "累犯记录", "清空全部自动封禁累犯升级历史（下次达阈值按首次档起算；已生效封禁条目不受影响）")
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0})
+}
+
 // autobanPresetListState 是一次请求内预置名单的单一读取结果：id 与生效条目
-// 计数一并传入两个黄条判据，避免重复查行与重复过滤/分配。
+// 计数一并传入黄条判据，避免重复查行与重复过滤/分配。
 // GetAutobanStatus 已 500 返回（见上方 AutobanListEntries 错误分支），故本结构
-// 不携带 err；id<=0 仅为构造不变量的 fail-closed 兜底（两判据均按 true）。
+// 不携带 err；id<=0 仅为构造不变量的 fail-closed 兜底（判据按 true）。
 type autobanPresetListState struct {
 	id          int64
 	activeCount int
@@ -206,7 +229,7 @@ func (h *Handlers) autobanListReferenced(preset autobanPresetListState) bool {
 // HTTP 规则（渲染层对零启用上游的规则整条跳过——见
 // services/caddy.go 全量渲染的 enabledUpstreamCount 门——此前判据只看到规则
 // 启用，名单实际不拦截却抑制黄条）。白名单/受信代理/CRS 排除引用不构成拦截
-// 生效。L4 与 IP ACL 消费本通道（会话级执法不影响）。
+// 生效。L4 与 IP ACL 消费本通道。
 // 已知边界：TLS 规则在证书待签发窗口同样被渲染层整条跳过（availableCerts
 // 门），本判据不覆盖该窗口——证书可用集在渲染器内部计算（含 ACME 签发态与
 // 文件就绪探测），在此复制判据会形成第二份实现；签发起步通常以分钟计，且
@@ -230,26 +253,6 @@ func (h *Handlers) autobanBanEffectiveIP(preset autobanPresetListState) bool {
 		                AND EXISTS (SELECT 1 FROM upstreams u
 		                            WHERE u.rule_id=r.caddy_id AND `+services.UpstreamEnabledSQLPredicate+`))`,
 		preset.id).Scan(&count); err != nil {
-		return true
-	}
-	return count > 0
-}
-
-// autobanSessionChainAssembled 会话级通道的挑战链装配判定：存在至少一个
-// 「启用 + 人机验证 mode!=off」的策略绑定到「启用 + 至少一个启用上游」的
-// HTTP 规则——即 lb_human 渲染面存在（buildHumanHandler 的 mode!=off 门 +
-// 渲染层规则/上游门同口径）。会话封禁经 lbhuman ServeHTTP 执法，挑战链未
-// 装配时无执法点，封禁不产生拦截。查询失败 fail-closed（按已装配处理，
-// 不弹误导性黄条——与 IP 通道同口径）。
-func (h *Handlers) autobanSessionChainAssembled() bool {
-	var count int
-	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM security_policies p
-		WHERE COALESCE(p.enabled,0)=1 AND COALESCE(p.human_verify_mode,'off') NOT IN ('','off')
-		  AND EXISTS (SELECT 1 FROM security_policy_bindings b
-		              JOIN lb_rules r ON r.caddy_id=b.rule_caddy_id
-		              WHERE b.policy_id=p.id AND r.protocol='http' AND COALESCE(r.enabled,0)=1
-		                AND EXISTS (SELECT 1 FROM upstreams u
-		                            WHERE u.rule_id=r.caddy_id AND ` + services.UpstreamEnabledSQLPredicate + `))`).Scan(&count); err != nil {
 		return true
 	}
 	return count > 0

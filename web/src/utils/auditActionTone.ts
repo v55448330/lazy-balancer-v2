@@ -27,7 +27,6 @@ const ACTION_TONE_EXCEPTIONS: Record<string, AuditActionTone> = {
   '配置漂移': 'danger',
   // 自动封禁：封禁=阻断（danger），到期自动解封=恢复（success）。
   '自动封禁': 'danger',
-  '会话封禁': 'danger',
   // 「渲染跳过」含「跳过」会派生 warning——跳过渲染是配置错误信号，保持 danger。
   '渲染跳过': 'danger',
   // ── warning（无关键词可派生）──

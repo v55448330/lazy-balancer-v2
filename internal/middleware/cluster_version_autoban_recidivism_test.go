@@ -1,11 +1,10 @@
 package middleware
 
-// 自动封禁累犯表与第七列/NAT 两列的集群版本触发器钉测——
+// 自动封禁累犯表与第七列的集群版本触发器钉测——
 //   - autoban_recidivism 随 security 节同步：INSERT/UPDATE/DELETE 必须 bump
 //     cluster_version（引擎周期写无中间件兜底，触发器是唯一版本传播通道）；
 //   - 从端写不 bump（WHEN is_master 守卫——快照 apply 形态）；
-//   - autoban_escalation/autoban_nat_detection/autoban_nat_fingerprint_threshold
-//     三列各自独立 UPDATE 必须 bump（阶段 1/2 补列遗漏 OF 清单的回归钉）。
+//   - autoban_escalation 独立 UPDATE 必须 bump（补列遗漏 OF 清单的回归钉）。
 
 import "testing"
 
@@ -45,10 +44,10 @@ func TestClusterVersionTrigger_recidivismWritesBump(t *testing.T) {
 }
 
 // Given 触发器已装配、主节点形态。
-// When 仅写第七列/NAT 两列之一（col=col 同值写，OF 按 SET 列出现即触发）。
-// Then 每列独立 bump cluster_version（漏列时稳态变更经 304 门滞留主节点）。
-func TestClusterVersionTrigger_autobanEscalationNatColumnsBump(t *testing.T) {
-	for _, column := range []string{"autoban_escalation", "autoban_nat_detection", "autoban_nat_fingerprint_threshold"} {
+// When 仅写第七列（col=col 同值写，OF 按 SET 列出现即触发）。
+// Then 该列独立 bump cluster_version（漏列时稳态变更经 304 门滞留主节点）。
+func TestClusterVersionTrigger_autobanEscalationColumnBump(t *testing.T) {
+	for _, column := range []string{"autoban_escalation"} {
 		t.Run(column, func(t *testing.T) {
 			database := newClusterVersionTestDB(t)
 			if err := InstallClusterVersionTriggers(database); err != nil {

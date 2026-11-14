@@ -1,12 +1,11 @@
 package services
 
-// 累犯表（autoban_recidivism）集群同步钉测——A+C 阶段 5：
+// 累犯表（autoban_recidivism）集群同步钉测——
 //   - 主端快照恒携带累犯表（空表 []，非空逐行四列）；
 //   - 累犯行变化必须翻转 security 节哈希（全量与漂移守卫轻量重建同口径）；
 //   - 从端 apply 整表替换：本地漂移行收敛到主端；缺席=保留本地、空 []=清空；
 //   - apply 后从端重建 security 节哈希与主端一致（哈希奇偶不变式）；
 //   - 二次 apply 哈希一致跳过，累犯行不被重复改写；
-//   - 会话封禁本地态：不进快照、不进 security 节哈希（阶段 3 契约固化）。
 
 import (
 	"context"
@@ -14,9 +13,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
-	"time"
 
-	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
 )
 
@@ -50,7 +47,7 @@ func readRecidivismRows(t *testing.T, database *sql.DB) []recidivismRow {
 	return out
 }
 
-// seedRecidivismRows 播种主端累犯行（含 /64 归一身份与复合键之外的裸 IPv4）。
+// seedRecidivismRows 播种主端累犯行（/64 归一身份 + 裸 IPv4）。
 func seedRecidivismRows(t *testing.T, database *sql.DB) {
 	t.Helper()
 	if _, err := database.Exec(`INSERT INTO autoban_recidivism (identity, offense_count, last_ban_at, escalated_duration) VALUES
@@ -304,48 +301,5 @@ func TestClusterSync_recidivismSecondApplySkipsUnchanged(t *testing.T) {
 	}
 	if got := readRecidivismRows(t, database); len(got) != 2 {
 		t.Fatalf("跳过重放后累犯行必须保持, got %+v", got)
-	}
-}
-
-// Given 会话封禁在役（复合键）+ 累犯表一行。
-// When 构建全量快照。
-// Then 快照不携带会话封禁（本地短 TTL 态），且会话封禁写入/到期不翻转
-// security 节哈希（本地态不得引发集群重放）；累犯表照常携带。
-func TestClusterSnapshot_sessionBanLocalStateNotSynced(t *testing.T) {
-	installAutobanFixture(t, "2026-11-15 10:00:00")
-	sessionBanTestFile(t)
-	seedRecidivismRows(t, db.GetDB())
-	cluster, database := newClusterTestService(t)
-	ctx := context.Background()
-
-	key := autobanIdentityKey("45.33.32.113", "c:evil")
-	autobanBanSession(key)
-
-	snapshot, err := cluster.buildFullSnapshot(ctx, database)
-	if err != nil {
-		t.Fatalf("snapshot: %v", err)
-	}
-	raw, err := json.Marshal(snapshot)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(raw), "c:evil") || strings.Contains(string(raw), "session_ban") {
-		t.Fatal("集群快照不得携带会话封禁（本地态不跨节点同步）")
-	}
-	if snapshot.AutobanRecidivism == nil {
-		t.Fatal("会话封禁本地态不得影响累犯表携带")
-	}
-
-	// 会话封禁到期清扫后会话态消失——security 节哈希必须不变。
-	hashBefore := snapshot.SectionHashes["security"]
-	autobanMu.Lock()
-	autobanSweepSessionBansLocked(autobanNow().Add(2 * time.Hour))
-	autobanMu.Unlock()
-	after, err := cluster.buildFullSnapshot(ctx, database)
-	if err != nil {
-		t.Fatalf("snapshot after sweep: %v", err)
-	}
-	if after.SectionHashes["security"] != hashBefore {
-		t.Fatal("会话封禁是本地态：其变化不得翻转 security 节哈希（否则每会话封禁引发全集群重放）")
 	}
 }

@@ -176,6 +176,8 @@ var auditRoutePolicies = map[string]AuditPolicy{
 	"POST /api/v1/security/ip-lists/:id/remove-ip": AuditPolicyExplicit,
 	// 自动封禁：配置写 handler 显式留痕（「更新」，含调度联动）。
 	"PUT /api/v1/security/autoban": AuditPolicyExplicit,
+	// 累犯历史重置：handler 显式留痕（「重置」，清空升级历史）。
+	"DELETE /api/v1/security/autoban/recidivism": AuditPolicyExplicit,
 	// 威胁情报库（v2.3.x）：handler 显式记录（开关/手动更新/导出）。
 	"PUT /api/v1/security/threat-lib/auto-update": AuditPolicyExplicit,
 	"PUT /api/v1/security/threat-lib/schedule":    AuditPolicyExplicit,

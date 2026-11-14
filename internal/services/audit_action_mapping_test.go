@@ -358,10 +358,9 @@ func loadFrontendAuditTone(t *testing.T) *frontendAuditTone {
 		t.Fatalf("read %s: %v", frontendAuditToneSource, err)
 	}
 	tone := parseFrontendAuditTone(t, data, frontendAuditToneSource)
-	// 当前单源登记 71 条（新增「会话封禁」：A+C NAT 会话级执法独立审计动作，
-	// 与「自动封禁」同族 danger 阻断呈现）；
+	// 当前单源登记 70 条（「会话封禁」随 NAT 会话精修退役移除）；
 	// 等值门同时拦截整表漏解析与未经审查的新增/删除。
-	const registeredExceptionCount = 71
+	const registeredExceptionCount = 70
 	if len(tone.exceptions) != registeredExceptionCount {
 		t.Fatalf("%s 解析漂移：例外表解析到 %d 条（登记值 %d）——请同步审查映射并更新解析", frontendAuditToneSource, len(tone.exceptions), registeredExceptionCount)
 	}
@@ -630,7 +629,7 @@ func TestAuditPolicyListsEqual(t *testing.T) {
 	// 冻结的独立期望（按类计数）：只遍历策略表再断言自身派生结果属自指——
 	// 路由被降级/新增时计数两侧同步变化，测试仍绿。策略表变更必须同步本清单。
 	const (
-		wantExplicit = 104
+		wantExplicit = 105
 		wantGeneric  = 5
 		wantSkip     = 16
 	)
