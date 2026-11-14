@@ -81,6 +81,8 @@ func resetAutobanStateForTest() {
 	autobanMu.Lock()
 	defer autobanMu.Unlock()
 	autobanWindows = make(map[string]*autobanCounter)
+	autobanNATProfiles = make(map[string]*autobanNATProfile)
+	autobanSessionBans = make(map[string]time.Time)
 	autobanSuggestions = nil
 	autobanReloadPending = false
 	autobanLastReload = time.Time{}

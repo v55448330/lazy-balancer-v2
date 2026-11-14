@@ -98,6 +98,7 @@ func sectionPayloadFor(key string, s *models.ClusterSnapshot) interface{} {
 			IPLists        json.RawMessage             `json:"ip_lists"`
 			ThreatSources  json.RawMessage             `json:"threat_sources"`
 			CrawlerSources json.RawMessage             `json:"crawler_sources"`
+			Recidivism     json.RawMessage             `json:"recidivism"`
 		}{
 			// 值归一单源（见 normalizeSnapshotPolicyRow/normalizeSnapshotSourceRow/
 			// normalizeSnapshotBlockPagesForHash）：apply 侧的落库归一不改变主端
@@ -112,6 +113,7 @@ func sectionPayloadFor(key string, s *models.ClusterSnapshot) interface{} {
 			s.SecurityIPLists,
 			canonicalizeSnapshotSourceRows(s.SecurityThreatSources),
 			canonicalizeSnapshotSourceRows(s.SecurityCrawlerSources),
+			s.AutobanRecidivism,
 		}
 	case "waf_files":
 		// 文件态哈希保持纯 ref 语义(2026-09-11 修正:版本行不进节哈希——

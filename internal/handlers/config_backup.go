@@ -602,7 +602,7 @@ var backupBooleanConfigKeys = []string{
 	"sync_switches_migrated", "waf_mode4_migrated", "policy_stage_merge_v1", "policy_stage_merge_v2", "autoban_scope_multiselect_v1", // 迁移门列：备份比对按布尔处理
 	"mfa_write_guard", "mfa_lockout_enabled",
 	"trusted_proxy_enabled", "trusted_proxy_strict", // v2.3.x 受信代理
-	"autoban_enabled", "autoban_dry_run", // D2:自动封禁布尔键——非布尔形态经 v2 类型门整包 400 点名（count_human_failed 已退役）
+	"autoban_enabled", "autoban_dry_run", "autoban_nat_detection", // D2:自动封禁布尔键——非布尔形态经 v2 类型门整包 400 点名（count_human_failed 已退役）
 	"cc_detect_enabled", "cc_session_anomaly", // CC 检测布尔两键（同 D2 口径）
 	// 自动备份开关为 INTEGER 0/1 语义列，补入配置键枚举。
 	"auto_backup_enabled",
@@ -3823,8 +3823,8 @@ func validateV2BackupAdminTLS(config map[string]any) error {
 	return nil
 }
 
-// validateV2BackupAutobanConfig 自动封禁六列导入门（导入/
-// 预览双路径同序调用，镜像 validateV2BackupAdminTLS 位次）：布尔两键的类型门
+// validateV2BackupAutobanConfig 自动封禁九列导入门（导入/
+// 预览双路径同序调用，镜像 validateV2BackupAdminTLS 位次）：布尔键的类型门
 // 已由 backupBooleanConfigKeys 枚举（validateV2BackupBooleanTypes）承担；此处
 // 承担数值钳制与枚举校验——写侧（services.ValidateAutobanConfig）同口径，导入
 // 不宽于保存侧。越界数值钳到写侧同边界（镜像 backupConfigClampRules
@@ -3875,6 +3875,24 @@ func validateV2BackupAutobanConfig(config map[string]any) ([]string, error) {
 			notes = append(notes, fmt.Sprintf("autoban_window_minutes 非整数形态，已归一为 %d", db.DefaultAutobanWindowMinutes))
 		}
 	}
+	if raw, exists := config["autoban_nat_fingerprint_threshold"]; exists && raw != nil {
+		if n, ok := backupInteger(raw); ok {
+			if n < 2 || n > 100 {
+				clamped := n
+				if n < 2 {
+					clamped = 2
+				}
+				if n > 100 {
+					clamped = 100
+				}
+				config["autoban_nat_fingerprint_threshold"] = clamped
+				notes = append(notes, fmt.Sprintf("autoban_nat_fingerprint_threshold 越界（%d），已钳位为 %d", n, clamped))
+			}
+		} else {
+			config["autoban_nat_fingerprint_threshold"] = db.DefaultAutobanNatFingerprintThreshold
+			notes = append(notes, fmt.Sprintf("autoban_nat_fingerprint_threshold 非整数形态，已归一为 %d", db.DefaultAutobanNatFingerprintThreshold))
+		}
+	}
 	// 旧备份兼容（2026-11-13 口径多选改造）：单值 scope（blocked/logged/all）
 	// + count_human_failed 开关 → 新四维集合；开关字段退役，迁移后删除。
 	if raw, exists := config["autoban_scope"]; exists && raw != nil {
@@ -3907,6 +3925,7 @@ func validateV2BackupAutobanConfig(config map[string]any) ([]string, error) {
 	}{
 		{"autoban_duration", db.DefaultAutobanDuration, func(s string) bool { return !services.ValidAutobanDuration(s) }, "10m/30m/1h/6h/12h/24h/permanent"},
 		{"autoban_scope", db.DefaultAutobanScope, func(s string) bool { return !services.ValidAutobanScope(s) }, "blocked/logged/challenge_issued/challenge_failed 的非空组合"},
+		{"autoban_escalation", db.DefaultAutobanEscalation, func(s string) bool { return !services.ValidAutobanEscalation(s) }, "off/standard/aggressive"},
 	} {
 		raw, exists := config[field.key]
 		if !exists || raw == nil {
@@ -7266,7 +7285,7 @@ func readImportOldAutoBackupEnabled(ctx context.Context, q importRowQuerier) (in
 	return enabled, nil
 }
 
-// configBackupAutobanColumns 是自动封禁六列（与 services.ReadAutobanConfigFrom
+// configBackupAutobanColumns 是自动封禁九列（与 services.ReadAutobanConfigFrom
 // 的 SELECT 列清单一一对应）：通用 `UPDATE global_config` 的写入面，也是
 // 运行期收敛（清桶/重算达标/禁用收尾/调度联动）判定的输入面。新增/改名时
 // 必须与读侧同步——否则导入侧比对到「无变化」而运行期实际已换配置。
@@ -7275,18 +7294,19 @@ func readImportOldAutoBackupEnabled(ctx context.Context, q importRowQuerier) (in
 // 遗留列，不参与自动封禁收敛判定。
 var configBackupAutobanColumns = []string{
 	"autoban_enabled", "autoban_threshold", "autoban_window_minutes",
-	"autoban_duration", "autoban_scope", "autoban_dry_run",
+	"autoban_duration", "autoban_scope", "autoban_dry_run", "autoban_escalation",
+	"autoban_nat_detection", "autoban_nat_fingerprint_threshold",
 }
 
 // configBackupHumanSecretColumn 人机验证 cookie 签名密钥列：不属于自动封禁
-// 六列（ReadAutobanConfigFrom 不读取），但同经通用 `UPDATE global_config`
+// 九列（ReadAutobanConfigFrom 不读取），但同经通用 `UPDATE global_config`
 // 写入，提交后需要独立的缓存失效收敛（services.ResetHumanSecretCache），
-// 故单列登记而不混入六列清单。
+// 故单列登记而不混入九列清单。
 const configBackupHumanSecretColumn = "human_secret"
 
 // configCarriesAutobanRuntimeColumns 报告备份全局配置区是否携带自动封禁
-// 六列或 human_secret 之一（携带即可能改写运行值/缓存前提，需要在提交后
-// 比对并收敛；human_secret 触发的是密钥缓存失效而非六列比对）。
+// 九列或 human_secret 之一（携带即可能改写运行值/缓存前提，需要在提交后
+// 比对并收敛；human_secret 触发的是密钥缓存失效而非九列比对）。
 func configCarriesAutobanRuntimeColumns(config map[string]any) bool {
 	for _, column := range configBackupAutobanColumns {
 		if _, carried := config[column]; carried {

@@ -19,7 +19,8 @@ func TestConfigBackupAutobanColumns_matchReadAutobanConfigFrom(t *testing.T) {
 	// 列序以读侧 SQL 为准——此处按读侧语义序断言集合与顺序）。
 	want := []string{
 		"autoban_enabled", "autoban_threshold", "autoban_window_minutes",
-		"autoban_duration", "autoban_scope", "autoban_dry_run",
+		"autoban_duration", "autoban_scope", "autoban_dry_run", "autoban_escalation",
+		"autoban_nat_detection", "autoban_nat_fingerprint_threshold",
 	}
 	if !reflect.DeepEqual(configBackupAutobanColumns, want) {
 		t.Fatalf("configBackupAutobanColumns=%v, want 与 ReadAutobanConfigFrom 同集同序 %v", configBackupAutobanColumns, want)
@@ -54,7 +55,7 @@ func TestConfigCarriesAutobanRuntimeColumns_humanSecretTriggersConvergence(t *te
 			t.Fatal("human_secret 不属于自动封禁六列（ReadAutobanConfigFrom 不读取）")
 		}
 	}
-	// 六列任一携带同样触发；无关键不触发。
+	// 七列任一携带同样触发；无关键不触发。
 	if !configCarriesAutobanRuntimeColumns(map[string]any{"autoban_threshold": 5}) {
 		t.Fatal("携带六列之一必须触发收敛判定")
 	}

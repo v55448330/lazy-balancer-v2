@@ -17,7 +17,7 @@ import (
 	"lazy-balancer-v2/internal/services"
 )
 
-// GetAutobanConfig GET /security/autoban：六项配置（全员可读，business 组）。
+// GetAutobanConfig GET /security/autoban：九项配置（全员可读，business 组）。
 func (h *Handlers) GetAutobanConfig(c *gin.Context) {
 	cfg, err := services.GetAutobanConfig()
 	if err != nil {
@@ -27,8 +27,8 @@ func (h *Handlers) GetAutobanConfig(c *gin.Context) {
 	c.JSON(http.StatusOK, cfg)
 }
 
-// UpdateAutobanConfig PUT /security/autoban：六项配置写侧（校验：阈值 1-10000、
-// 窗口 1-60 分钟、时长/口径枚举）。窗口/口径变更由 services 层重置计数器
+// UpdateAutobanConfig PUT /security/autoban：九项配置写侧（校验：阈值 1-10000、
+// 窗口 1-60 分钟、时长/口径/升级枚举、NAT 指纹阈值 2-100）。窗口/口径/NAT 参数变更由 services 层重置计数器
 // （口径语义变化后旧计数不可混算）。保存联动调度启停（2026-10-14 裁定：
 // 本任务调度唯一前提=业务启用——enabled=true 开 autoban 循环调度、false 停；
 // 任务列表手动开调度未启用时由 Run 体业务门拦停）。配置只影响本节点调度与
@@ -47,6 +47,11 @@ func (h *Handlers) UpdateAutobanConfig(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_868de64b"), MessageKey: "k_868de64b"})
 		return
 	}
+	// Escalation 缺省（旧客户端未携带）归一 off，与 SetAutobanConfig 同单源。
+	req.Escalation = services.AutobanEscalationOrOff(req.Escalation)
+	// NatFingerprintThreshold 缺省（旧客户端未携带=0）归一默认 3，与
+	// SetAutobanConfig 同单源（校验先于持久化，缺省不得被当非法值 400）。
+	req.NatFingerprintThreshold = services.AutobanNatFingerprintThresholdOrDefault(req.NatFingerprintThreshold)
 	if !requireMasterNode(c) {
 		return
 	}
@@ -115,26 +120,38 @@ func (h *Handlers) GetAutobanStatus(c *gin.Context) {
 		// 拦截、无 xdb 降级空串、永不报错）。
 		suggestions[i].Location = enrichIPLocation(suggestions[i].IP)
 	}
+	// 双通道生效判定（ban_effective=析取；分通道披露供状态卡区分执法面）。
+	ipEffective := h.autobanBanEffectiveIP(preset)
+	sessionBanCount := services.AutobanActiveSessionBanCount()
+	sessionEffective := sessionBanCount > 0 && h.autobanSessionChainAssembled()
 	resp := gin.H{
-		"enabled":         cfg.Enabled,
-		"dry_run":         cfg.DryRun,
-		"threshold":       cfg.Threshold,
-		"window_minutes":  cfg.WindowMinutes,
-		"duration":        cfg.Duration,
-		"scope":           cfg.Scope,
-		"banned_today":    services.AutobanBannedToday(),
-		"list_entries":    preset.activeCount,
-		"list_referenced": h.autobanListReferenced(preset),
-		// 黄条真正需要的是「封禁是否生效」——名单被 deny + IP 访问
-		// 控制启用的策略引用且名单非空才生效；list_referenced 复用热路径资格门
-		// 的四面引用集（含白名单/受信代理/CRS 排除），不能区分「引用」与「拦截
-		// 生效」，曾抑制唯一的不生效告警。
-		"ban_effective": h.autobanBanEffective(preset),
-		"tracked_ips":   services.AutobanTrackedIPs(),
-		"suggestions":   suggestions,
-		"is_master":     isMaster,
-		"role":          map[bool]string{true: "master", false: "slave"}[isMaster],
-		"running":       false,
+		"enabled":                   cfg.Enabled,
+		"dry_run":                   cfg.DryRun,
+		"threshold":                 cfg.Threshold,
+		"window_minutes":            cfg.WindowMinutes,
+		"duration":                  cfg.Duration,
+		"scope":                     cfg.Scope,
+		"escalation":                cfg.Escalation,
+		"nat_detection":             cfg.NatDetection,
+		"nat_fingerprint_threshold": cfg.NatFingerprintThreshold,
+		"escalated_count":           services.AutobanEscalatedCount(),
+		"banned_today":              services.AutobanBannedToday(),
+		"list_entries":              preset.activeCount,
+		"list_referenced":           h.autobanListReferenced(preset),
+		// 黄条真正需要的是「封禁是否生效」——双通道析取：IP 级=名单被
+		// deny + IP 访问控制启用的策略引用且名单非空；会话级=挑战链装配
+		//（lb_human 渲染面存在）∧ 会话封禁非空（NAT 态会话执法不经 IP 名单）。
+		// list_referenced 复用热路径资格门的四面引用集（含白名单/受信代理/
+		// CRS 排除），不能区分「引用」与「拦截生效」，曾抑制唯一的不生效告警。
+		"ban_effective":         ipEffective || sessionEffective,
+		"ban_effective_ip":      ipEffective,
+		"ban_effective_session": sessionEffective,
+		"session_bans":          sessionBanCount,
+		"tracked_ips":           services.AutobanTrackedIPs(),
+		"suggestions":           suggestions,
+		"is_master":             isMaster,
+		"role":                  map[bool]string{true: "master", false: "slave"}[isMaster],
+		"running":               false,
 		// loop_on 预置 false：响应键集不随任务引擎装配状态漂移（引擎未装配/
 		// Lookup 未命中时此前整键缺失，apidocs 示例与前端类型按恒有键消费）。
 		"loop_on":     false,
@@ -183,19 +200,19 @@ func (h *Handlers) autobanListReferenced(preset autobanPresetListState) bool {
 	return services.IPListsReferencedByEnabledPolicy([]int{int(preset.id)})
 }
 
-// autobanBanEffective 封禁是否真正生效：预置名单存在且
+// autobanBanEffectiveIP IP 级通道封禁是否真正生效：预置名单存在且
 // 含未到期条目，并被至少一个「启用 + IP 访问控制启用 + deny 模式」的策略在
 // ip_acl_list_refs 中引用，且该策略已绑定到「启用 + 至少一个启用上游」的
 // HTTP 规则（渲染层对零启用上游的规则整条跳过——见
 // services/caddy.go 全量渲染的 enabledUpstreamCount 门——此前判据只看到规则
 // 启用，名单实际不拦截却抑制黄条）。白名单/受信代理/CRS 排除引用不构成拦截
-// 生效。
+// 生效。L4 与 IP ACL 消费本通道（会话级执法不影响）。
 // 已知边界：TLS 规则在证书待签发窗口同样被渲染层整条跳过（availableCerts
 // 门），本判据不覆盖该窗口——证书可用集在渲染器内部计算（含 ACME 签发态与
 // 文件就绪探测），在此复制判据会形成第二份实现；签发起步通常以分钟计，且
 // 证书就绪后自动重载，黄条在窗口内可能短暂假阴性。
 // 查询失败 fail-closed（返回 true，不弹误导性黄条——与 list_referenced 同口径）。
-func (h *Handlers) autobanBanEffective(preset autobanPresetListState) bool {
+func (h *Handlers) autobanBanEffectiveIP(preset autobanPresetListState) bool {
 	if preset.id <= 0 {
 		return true
 	}
@@ -213,6 +230,26 @@ func (h *Handlers) autobanBanEffective(preset autobanPresetListState) bool {
 		                AND EXISTS (SELECT 1 FROM upstreams u
 		                            WHERE u.rule_id=r.caddy_id AND `+services.UpstreamEnabledSQLPredicate+`))`,
 		preset.id).Scan(&count); err != nil {
+		return true
+	}
+	return count > 0
+}
+
+// autobanSessionChainAssembled 会话级通道的挑战链装配判定：存在至少一个
+// 「启用 + 人机验证 mode!=off」的策略绑定到「启用 + 至少一个启用上游」的
+// HTTP 规则——即 lb_human 渲染面存在（buildHumanHandler 的 mode!=off 门 +
+// 渲染层规则/上游门同口径）。会话封禁经 lbhuman ServeHTTP 执法，挑战链未
+// 装配时无执法点，封禁不产生拦截。查询失败 fail-closed（按已装配处理，
+// 不弹误导性黄条——与 IP 通道同口径）。
+func (h *Handlers) autobanSessionChainAssembled() bool {
+	var count int
+	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM security_policies p
+		WHERE COALESCE(p.enabled,0)=1 AND COALESCE(p.human_verify_mode,'off') NOT IN ('','off')
+		  AND EXISTS (SELECT 1 FROM security_policy_bindings b
+		              JOIN lb_rules r ON r.caddy_id=b.rule_caddy_id
+		              WHERE b.policy_id=p.id AND r.protocol='http' AND COALESCE(r.enabled,0)=1
+		                AND EXISTS (SELECT 1 FROM upstreams u
+		                            WHERE u.rule_id=r.caddy_id AND ` + services.UpstreamEnabledSQLPredicate + `))`).Scan(&count); err != nil {
 		return true
 	}
 	return count > 0

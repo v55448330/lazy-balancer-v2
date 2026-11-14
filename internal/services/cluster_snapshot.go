@@ -392,6 +392,9 @@ func (s *ClusterService) loadSectionHashInputs(ctx context.Context, store snapsh
 	if snapshot.SecurityCrawlerSources, err = s.snapshotSecurityCrawlerSources(ctx, store); err != nil {
 		return err
 	}
+	if snapshot.AutobanRecidivism, err = s.snapshotAutobanRecidivism(ctx, store); err != nil {
+		return err
+	}
 	// CRS/IP2Region 版本行装载已删——版本行移出全部
 	// 守卫节 payload(766f4c81 差分门控裁定)后此处为死装载,每 304 白扫
 	// 2 表且引入无谓失败面。
@@ -801,17 +804,19 @@ func (s *ClusterService) loadSnapshotGlobalSettings(ctx context.Context, store s
 		snapshot.BasicSettings.HumanSecret = &humanSecret
 	}
 
-	// 自动封禁六项配置随 users 节同步（镜像
+	// 自动封禁九项配置随 users 节同步（镜像
 	// 指针装载+COALESCE 兜底恒携带，升主即按主端配置生效）。局部名 abn* 与上方
 	// 自动备份组 ab* 区分（同一函数作用域）。
-	var abnEnabled, abnDryRun bool
-	var abnThreshold, abnWindow int
-	var abnDuration, abnScope string
+	var abnEnabled, abnDryRun, abnNat bool
+	var abnThreshold, abnWindow, abnNatThreshold int
+	var abnDuration, abnScope, abnEscalation string
 	if err := store.QueryRowContext(ctx, `SELECT COALESCE(autoban_enabled,?), COALESCE(autoban_threshold,?),
-		COALESCE(autoban_window_minutes,?), COALESCE(autoban_duration,?), COALESCE(autoban_scope,?), COALESCE(autoban_dry_run,?)
+		COALESCE(autoban_window_minutes,?), COALESCE(autoban_duration,?), COALESCE(autoban_scope,?), COALESCE(autoban_dry_run,?), COALESCE(autoban_escalation,?),
+		COALESCE(autoban_nat_detection,?), COALESCE(autoban_nat_fingerprint_threshold,?)
 		FROM global_config WHERE id=1`,
 		db.DefaultAutobanEnabled, db.DefaultAutobanThreshold, db.DefaultAutobanWindowMinutes,
-		db.DefaultAutobanDuration, db.DefaultAutobanScope, db.DefaultAutobanDryRun).Scan(&abnEnabled, &abnThreshold, &abnWindow, &abnDuration, &abnScope, &abnDryRun); err != nil {
+		db.DefaultAutobanDuration, db.DefaultAutobanScope, db.DefaultAutobanDryRun, db.DefaultAutobanEscalation,
+		db.DefaultAutobanNatDetection, db.DefaultAutobanNatFingerprintThreshold).Scan(&abnEnabled, &abnThreshold, &abnWindow, &abnDuration, &abnScope, &abnDryRun, &abnEscalation, &abnNat, &abnNatThreshold); err != nil {
 		return fmt.Errorf("读取自动封禁设置: %w", err)
 	}
 	snapshot.BasicSettings.AutobanEnabled = &abnEnabled
@@ -820,6 +825,9 @@ func (s *ClusterService) loadSnapshotGlobalSettings(ctx context.Context, store s
 	snapshot.BasicSettings.AutobanDuration = &abnDuration
 	snapshot.BasicSettings.AutobanScope = &abnScope
 	snapshot.BasicSettings.AutobanDryRun = &abnDryRun
+	snapshot.BasicSettings.AutobanEscalation = &abnEscalation
+	snapshot.BasicSettings.AutobanNatDetection = &abnNat
+	snapshot.BasicSettings.AutobanNatFingerprintThreshold = &abnNatThreshold
 	return nil
 }
 
@@ -875,6 +883,9 @@ func (s *ClusterService) buildSnapshot(ctx context.Context, store snapshotStore)
 		return models.ClusterSnapshot{}, err
 	}
 	if snapshot.SecurityCrawlerSources, err = s.snapshotSecurityCrawlerSources(ctx, store); err != nil {
+		return models.ClusterSnapshot{}, err
+	}
+	if snapshot.AutobanRecidivism, err = s.snapshotAutobanRecidivism(ctx, store); err != nil {
 		return models.ClusterSnapshot{}, err
 	}
 	return snapshot, nil
@@ -948,6 +959,14 @@ func (s *ClusterService) snapshotSecurityThreatSources(ctx context.Context, stor
 func (s *ClusterService) snapshotSecurityCrawlerSources(ctx context.Context, store snapshotStore) (json.RawMessage, error) {
 	return s.dumpTableAsJSON(ctx, store, "security_crawler_sources",
 		"id,name,COALESCE(display_name,'') AS display_name,COALESCE(url,'') AS url,COALESCE(format,'plain') AS format,COALESCE(update_enabled,1) AS update_enabled,COALESCE(entry_count,0) AS entry_count,COALESCE(version,'') AS version,COALESCE(update_status,'idle') AS update_status,COALESCE(message,'') AS message,COALESCE(last_checked,'') AS last_checked,COALESCE(next_update,'') AS next_update,COALESCE(trigger,'') AS trigger,COALESCE(started_at,'') AS started_at,COALESCE(finished_at,'') AS finished_at,COALESCE(consecutive_failures,0) AS consecutive_failures,COALESCE(created_at,'') AS created_at,COALESCE(updated_at,'') AS updated_at", "id")
+}
+
+// snapshotAutobanRecidivism dump 自动封禁累犯表（渐进升级持久记账）：
+// 四列全 NOT NULL，无需 COALESCE 归一；identity 是封禁身份键（/64 归一/
+// IPv4 裸地址），与计数键同形。主只写（引擎周期），从端整表替换。
+func (s *ClusterService) snapshotAutobanRecidivism(ctx context.Context, store snapshotStore) (json.RawMessage, error) {
+	return s.dumpTableAsJSON(ctx, store, "autoban_recidivism",
+		"identity,offense_count,last_ban_at,escalated_duration", "identity")
 }
 
 func (s *ClusterService) snapshotSecurityBindings(ctx context.Context, store snapshotStore) (json.RawMessage, error) {

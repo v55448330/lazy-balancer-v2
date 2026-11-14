@@ -211,7 +211,7 @@ func buildHumanHandler(ruleCaddyID string, policies []*models.SecurityPolicy, ch
 	if len(challengePage) > 0 {
 		challengeHTML = challengePage[0]
 	}
-	return map[string]interface{}{
+	cfg := map[string]interface{}{
 		"handler":             "lb_human",
 		"mode":                mode,
 		"type":                typ,
@@ -227,4 +227,10 @@ func buildHumanHandler(ruleCaddyID string, policies []*models.SecurityPolicy, ch
 		"exempt_paths":        exemptPaths,
 		"rule_id":             ruleCaddyID,
 	}
+	// 会话封禁交换文件路径：仅非默认 data_dir 派生值时发射（插件侧兜底
+	// 默认与容器形态逐字节一致；与 crawler_ip_list_file 同族契约）。
+	if autobanSessionBanFile != defaultAutobanSessionBanFile {
+		cfg["session_ban_file"] = autobanSessionBanFile
+	}
+	return cfg
 }

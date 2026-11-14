@@ -358,10 +358,10 @@ func loadFrontendAuditTone(t *testing.T) *frontendAuditTone {
 		t.Fatalf("read %s: %v", frontendAuditToneSource, err)
 	}
 	tone := parseFrontendAuditTone(t, data, frontendAuditToneSource)
-	// 当前单源登记 70 条（新增「导入归一」：备份携带的 waiting_ca 存量在导入
-	// 提交后保窗归一为 failed，与「启动迁移」同族告警性呈现）；
+	// 当前单源登记 71 条（新增「会话封禁」：A+C NAT 会话级执法独立审计动作，
+	// 与「自动封禁」同族 danger 阻断呈现）；
 	// 等值门同时拦截整表漏解析与未经审查的新增/删除。
-	const registeredExceptionCount = 70
+	const registeredExceptionCount = 71
 	if len(tone.exceptions) != registeredExceptionCount {
 		t.Fatalf("%s 解析漂移：例外表解析到 %d 条（登记值 %d）——请同步审查映射并更新解析", frontendAuditToneSource, len(tone.exceptions), registeredExceptionCount)
 	}

@@ -1297,6 +1297,26 @@ func applySecurityTables(ctx context.Context, tx *sql.Tx, snapshot models.Cluste
 			}
 		}
 	}
+	// 累犯表（自动封禁渐进升级记账）：载荷缺席=保留本地（旧主端快照），
+	// 携带即全量替换（与威胁源/爬虫源同语义）。主只写——从端本地不产生
+	// 累犯行（引擎周期仅主节点运行），整表替换不会丢失从端权威数据。
+	if snapshot.AutobanRecidivism != nil {
+		if _, err := tx.ExecContext(ctx, "DELETE FROM autoban_recidivism"); err != nil {
+			return fmt.Errorf("清理累犯表: %w", err)
+		}
+		var recidivism []map[string]interface{}
+		if len(snapshot.AutobanRecidivism) > 0 {
+			if err := json.Unmarshal(snapshot.AutobanRecidivism, &recidivism); err != nil {
+				return fmt.Errorf("解析 autoban_recidivism: %w", err)
+			}
+		}
+		for _, row := range recidivism {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO autoban_recidivism (identity, offense_count, last_ban_at, escalated_duration) VALUES (?,?,?,?)`,
+				row["identity"], row["offense_count"], row["last_ban_at"], row["escalated_duration"]); err != nil {
+				return fmt.Errorf("写入累犯行: %w", err)
+			}
+		}
+	}
 	var policies []map[string]interface{}
 	if len(snapshot.SecurityPolicies) > 0 {
 		if err := json.Unmarshal(snapshot.SecurityPolicies, &policies); err != nil {
@@ -2301,6 +2321,18 @@ func updateSnapshotSettings(ctx context.Context, tx *sql.Tx, snapshot models.Clu
 	if settings.AutobanDryRun != nil {
 		settingClauses = append(settingClauses, "autoban_dry_run=?")
 		settingArgs = append(settingArgs, *settings.AutobanDryRun)
+	}
+	if settings.AutobanEscalation != nil {
+		settingClauses = append(settingClauses, "autoban_escalation=?")
+		settingArgs = append(settingArgs, *settings.AutobanEscalation)
+	}
+	if settings.AutobanNatDetection != nil {
+		settingClauses = append(settingClauses, "autoban_nat_detection=?")
+		settingArgs = append(settingArgs, *settings.AutobanNatDetection)
+	}
+	if settings.AutobanNatFingerprintThreshold != nil {
+		settingClauses = append(settingClauses, "autoban_nat_fingerprint_threshold=?")
+		settingArgs = append(settingArgs, *settings.AutobanNatFingerprintThreshold)
 	}
 
 	if len(settingClauses) > 0 {

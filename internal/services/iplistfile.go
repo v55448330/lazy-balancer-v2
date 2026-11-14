@@ -85,6 +85,10 @@ func ConfigureWafDirs(dataDir string) {
 	// 爬虫运行快照（root 写、插件读的交换文件）同属数据卷
 	// 派生面——默认 /app/data/crawler-ip-lists.json 与容器形态逐字节一致。
 	crawlerIPListFile = filepath.Join(dataDir, "crawler-ip-lists.json")
+	// 会话封禁交换文件（面板写、lbhuman 读）同属数据卷派生面——默认
+	// /app/data/autoban-session-bans.json 与容器形态逐字节一致；自定义
+	// data_dir 经渲染配置键 session_ban_file 下发插件侧。
+	autobanSessionBanFile = filepath.Join(dataDir, "autoban-session-bans.json")
 	// 下载 TOFU 完整性基线同属数据卷派生面（与 ip2region.xdb、
 	// security_events.offset 同域）。此前硬编码 /app/data：自定义 data_dir
 	// 的非容器部署下基线持久化恒失败，且失败只降级为错误日志——每次下载都被

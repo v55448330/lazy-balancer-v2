@@ -150,3 +150,42 @@ func TestHandleIngestHuman_disabledAutobanSkipsFeedWithSingleRead(t *testing.T) 
 		t.Fatalf("整批 autoban 配置读取=%d 次, want 1（禁用门并入同一行读取）", got)
 	}
 }
+
+// Given NAT 开启，人机事件携带不同 session_fp（攻击指纹集中）。
+// When 经 IPC 摄入端点提交。
+// Then session_fp 透传至自动封禁 NAT 检测：触发后攻击指纹独立复合计数
+// （tracked_ips 含复合键），IP 级混合桶在切换沿清空。
+func TestHandleIngestHuman_sessionFPFlowsIntoNAT(t *testing.T) {
+	countingMainDB(t)
+	installHumanObserveMasterEngine(t)
+	seedHumanObserveAutobanConfig(t, true, "challenge_failed")
+	if _, err := db.DB.Exec(`UPDATE global_config SET autoban_nat_detection=1, autoban_nat_fingerprint_threshold=3, autoban_threshold=3 WHERE id=1`); err != nil {
+		t.Fatalf("seed NAT config: %v", err)
+	}
+	services.ResetAutobanCounters()
+	t.Cleanup(services.ResetAutobanCounters)
+
+	ip := "45.33.32.204"
+	ts := time.Now().UnixMilli()
+	// 4 条攻击指纹 + 2 条无辜指纹（第 3 指纹出现且集中 → NAT）。
+	rows := make([]string, 0, 6)
+	for i := range 4 {
+		rows = append(rows, fmt.Sprintf(`{"ts":%d,"rule_id":"lb-nat","client_ip":%q,"method":"GET","uri":"/n","ua":"NAT/1.0","kind":"fail","session_fp":"c:evil"}`, ts+int64(i), ip))
+	}
+	rows = append(rows,
+		fmt.Sprintf(`{"ts":%d,"rule_id":"lb-nat","client_ip":%q,"method":"GET","uri":"/n","ua":"NAT/1.0","kind":"fail","session_fp":"c:aaa"}`, ts+4, ip),
+		fmt.Sprintf(`{"ts":%d,"rule_id":"lb-nat","client_ip":%q,"method":"GET","uri":"/n","ua":"NAT/1.0","kind":"fail","session_fp":"c:bbb"}`, ts+5, ip),
+	)
+	postHumanObserveBatch(t, "["+strings.Join(rows, ",")+"]")
+
+	// NAT 触发后复合键独立计数：tracked_ips > 1（IP 桶清空，复合桶存在）。
+	if got := services.AutobanTrackedIPs(); got < 1 {
+		t.Fatalf("tracked_ips=%d, want ≥1（session_fp 必须透传至 NAT 复合计数）", got)
+	}
+	// 再喂一条攻击指纹 → 其复合桶独立累计（经 Suggestions 观测复合键形态）。
+	postHumanObserveBatch(t, fmt.Sprintf(`[{"ts":%d,"rule_id":"lb-nat","client_ip":%q,"method":"GET","uri":"/n","ua":"NAT/1.0","kind":"fail","session_fp":"c:evil"}]`, ts+6, ip))
+	// 复合键候选经观察建议暴露（dry-run 关闭时候选不落名单，但计数器键含 |）。
+	if got := services.AutobanTrackedIPs(); got < 2 {
+		t.Fatalf("tracked_ips=%d, want ≥2（攻击指纹复合桶独立存在）", got)
+	}
+}

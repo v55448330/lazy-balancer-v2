@@ -368,7 +368,7 @@ func TestHumanEventDelivery_boundedQueueDrains(t *testing.T) {
 
 	const total = 200
 	for range total {
-		reportHumanEvent("lb-evt", "203.0.113.9", http.MethodGet, "/", "ua", "challenge")
+		reportHumanEvent("lb-evt", "203.0.113.9", http.MethodGet, "/", "ua", "challenge", "")
 	}
 	// 宽限 30s：并行测试负载下 200 次本地投递可能远超常态耗时，
 	// 等待语义以排空探针为准而非固定短截止。

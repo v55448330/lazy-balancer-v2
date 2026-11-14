@@ -33,6 +33,7 @@ type humanEvent struct {
 	uri    string
 	ua     string
 	kind   string
+	fp     string        // 会话指纹（cookie 签名段优先/UA+语言兜底；NAT 检测证据）
 	ts     int64         // 发生（入队）时刻 unix 毫秒——投递时刻会随队列积压漂移
 	done   chan struct{} // 非 nil=排空探针：worker 处理到该事件即关闭
 }
@@ -92,10 +93,11 @@ func (p *humanEventPoster) shouldReport(ip, kind string, now time.Time) bool {
 // reportHumanEvent 异步上报（非阻塞：投递到缓冲 channel，单 worker 串行发送；
 // 队列满即丢弃计数，投递失败计数——监控事件不阻塞请求路径）。
 // ts 在入队时刻定格：事件时间戳=发生时刻，不随队列积压/投递阻塞漂移。
-func reportHumanEvent(ruleID, ip, method, uri, ua, kind string) {
+// fp=会话指纹（requestSessionFingerprint 采集），随事件喂入自动封禁 NAT 检测。
+func reportHumanEvent(ruleID, ip, method, uri, ua, kind, fp string) {
 	humanEventWorker.Do(func() { go humanEventWorkerLoop() })
 	select {
-	case humanEventQueue <- humanEvent{ruleID: ruleID, ip: ip, method: method, uri: uri, ua: ua, kind: kind, ts: time.Now().UnixMilli()}:
+	case humanEventQueue <- humanEvent{ruleID: ruleID, ip: ip, method: method, uri: uri, ua: ua, kind: kind, fp: fp, ts: time.Now().UnixMilli()}:
 	default:
 		humanEventDropped.Add(1)
 	}
@@ -128,6 +130,7 @@ func (p *humanEventPoster) deliver(ev humanEvent) {
 	payload := []map[string]any{{
 		"ts": ev.ts, "rule_id": ev.ruleID, "client_ip": ev.ip,
 		"method": ev.method, "uri": ev.uri, "ua": ev.ua, "kind": ev.kind,
+		"session_fp": ev.fp,
 	}}
 	raw, err := json.Marshal(payload)
 	if err != nil {

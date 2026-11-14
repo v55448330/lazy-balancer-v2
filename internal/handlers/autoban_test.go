@@ -404,7 +404,7 @@ func TestAutobanStatus_banEffectiveTruthTable(t *testing.T) {
 	})
 }
 
-// autobanListReferenced / autobanBanEffective 的 fail-closed 构造不变量：
+// autobanListReferenced / autobanBanEffectiveIP 的 fail-closed 构造不变量：
 // 未携带名单 id 的状态（构造缺失）必须按「已引用/已生效」处理，不弹误导性
 // 黄条。读取故障在 GetAutobanStatus 更早的 AutobanListEntries 已 500 返回，
 // 且单源引用判定自身的库故障语义由其内部契约负责，此处只钉构造不变量。
@@ -415,7 +415,7 @@ func TestAutobanStatus_listReferencedFailClosed(t *testing.T) {
 	if !h.autobanListReferenced(unset) {
 		t.Fatal("id 缺失必须 fail-closed 返回 true（不弹黄条）")
 	}
-	if !h.autobanBanEffective(unset) {
+	if !h.autobanBanEffectiveIP(unset) {
 		t.Fatal("id 缺失必须 fail-closed 返回 true（不弹黄条）")
 	}
 }

@@ -44,7 +44,7 @@ func TestAutobanObserve_ipv6PrivacyRotationAggregatesPer64(t *testing.T) {
 	for _, ip := range addrs {
 		for range 2 { // 每地址 2 次 < 阈值 3：逐地址键永不达标
 			autobanObserveEventScopedAt(AutobanConfig{Enabled: true, Threshold: 3, WindowMinutes: 5, Duration: "1h", Scope: "blocked"},
-				ip, "blocked", "942100", autobanNow())
+				ip, "blocked", "942100", "", autobanNow())
 		}
 	}
 
@@ -84,8 +84,8 @@ func TestAutobanObserve_ipv6PrivacyRotationAggregatesPer64(t *testing.T) {
 func TestAutobanObserve_ipv6Different64StaySeparate(t *testing.T) {
 	installAutobanFixture(t, "2026-11-15 10:00:00")
 	cfg := AutobanConfig{Enabled: true, Threshold: 100, WindowMinutes: 5, Duration: "1h", Scope: "blocked"}
-	autobanObserveEventScopedAt(cfg, "2606:4700:abcd:1234::1", "blocked", "942100", autobanNow())
-	autobanObserveEventScopedAt(cfg, "2606:4700:abcd:1235::1", "blocked", "942100", autobanNow())
+	autobanObserveEventScopedAt(cfg, "2606:4700:abcd:1234::1", "blocked", "942100", "", autobanNow())
+	autobanObserveEventScopedAt(cfg, "2606:4700:abcd:1235::1", "blocked", "942100", "", autobanNow())
 	autobanMu.Lock()
 	defer autobanMu.Unlock()
 	if len(autobanWindows) != 2 {
@@ -102,7 +102,7 @@ func TestAutobanObserve_ipv4GranularityUnchanged(t *testing.T) {
 	setAutobanConfigRaw(t, true, 2, 5, "1h", "blocked", false)
 	for range 2 {
 		autobanObserveEventScopedAt(AutobanConfig{Enabled: true, Threshold: 2, WindowMinutes: 5, Duration: "1h", Scope: "blocked"},
-			"45.33.32.9", "blocked", "942100", autobanNow())
+			"45.33.32.9", "blocked", "942100", "", autobanNow())
 	}
 	autobanMu.Lock()
 	w := autobanWindows["45.33.32.9"]
@@ -186,7 +186,7 @@ func TestAutobanMergeEntries_ipv6CIDRIdentityDedupAndExpiry(t *testing.T) {
 func TestAutobanForgetIPs_cidrValueClearsNormalizedCounter(t *testing.T) {
 	installAutobanFixture(t, "2026-11-15 10:00:00")
 	cfg := AutobanConfig{Enabled: true, Threshold: 100, WindowMinutes: 5, Duration: "1h", Scope: "blocked"}
-	autobanObserveEventScopedAt(cfg, "2606:4700:abcd:1234::7", "blocked", "942100", autobanNow())
+	autobanObserveEventScopedAt(cfg, "2606:4700:abcd:1234::7", "blocked", "942100", "", autobanNow())
 	AutobanSetSuggestionsForTest([]AutobanSuggestion{{IP: "2606:4700:abcd:1234::", Count: 1}})
 
 	AutobanForgetIPs([]string{"2606:4700:abcd:1234::/64"})
@@ -212,8 +212,8 @@ func TestAutobanObserve_reservedClientIPsExcluded(t *testing.T) {
 		"::1", "fe80::1", "fc00::1", "2001:db8::1",
 	}
 	for _, ip := range reserved {
-		autobanObserveEventScopedAt(cfg, ip, "blocked", "942100", autobanNow())
-		autobanObserveEventScopedAt(cfg, ip, "challenged", "human_failed", autobanNow())
+		autobanObserveEventScopedAt(cfg, ip, "blocked", "942100", "", autobanNow())
+		autobanObserveEventScopedAt(cfg, ip, "challenged", "human_failed", "", autobanNow())
 	}
 	autobanMu.Lock()
 	n := len(autobanWindows)
@@ -223,7 +223,7 @@ func TestAutobanObserve_reservedClientIPsExcluded(t *testing.T) {
 	}
 
 	// 对照：公网地址照常计数（排除门不得误伤）。
-	autobanObserveEventScopedAt(cfg, "45.33.32.9", "blocked", "942100", autobanNow())
+	autobanObserveEventScopedAt(cfg, "45.33.32.9", "blocked", "942100", "", autobanNow())
 	autobanMu.Lock()
 	w := autobanWindows["45.33.32.9"]
 	autobanMu.Unlock()

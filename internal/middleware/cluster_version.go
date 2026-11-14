@@ -159,6 +159,10 @@ var globalConfigSyncedColumns = []string{
 	"crawler_auto_update", "crawler_schedule_days", "crawler_schedule_time",
 	"autoban_enabled", "autoban_threshold", "autoban_window_minutes",
 	"autoban_duration", "autoban_scope", "autoban_dry_run",
+	// 累犯升级第七列与 NAT 两列随 users 节同步（models.ClusterBasicSettings）——
+	// 与六列同族：仅写这三列的端点/直改 SQL 也须 bump，否则稳态变更经 304 门
+	// 滞留主节点（SetAutobanConfig 九列同语句写被旧六列掩盖，单独写即暴露）。
+	"autoban_escalation", "autoban_nat_detection", "autoban_nat_fingerprint_threshold",
 	// v2.3.8：安全事件保留两列与大屏采样口径随 users 节同步并物化到从端
 	// （models.ClusterBasicSettings / services/cluster_apply.go）——
 	// 补列：此前仅靠「同语句 UPDATE 含其他 OF 列」偶然触发 bump，仅写这三列
@@ -176,7 +180,7 @@ type clusterSyncedTable struct {
 	snapshotColumns string
 }
 
-// clusterSyncedTables 全部随集群快照同步的表（17 张）。增删表/列必须同时
+// clusterSyncedTables 全部随集群快照同步的表（18 张）。增删表/列必须同时
 // 更新本清单与 clusterSyncedColumnExclusions（有意不同步的列携理由）——
 // 漏登记列时仅写该列的 UPDATE 不 bump cluster_version，从节点经 304 门永久
 // 滞留旧值（钉测见 cluster_synced_columns_test.go 的逐表 schema 对账）。
@@ -302,6 +306,9 @@ var clusterSyncedTables = []clusterSyncedTable{
 	// 爬虫地址库独立源表：无 apply_enabled；last_checked/consecutive_failures
 	// 与威胁源同口径排除运行态读路径写。
 	{name: "security_crawler_sources", snapshotColumns: "id,name,display_name,url,format,update_enabled,entry_count,version,update_status,message,last_checked,next_update,trigger,started_at,finished_at,consecutive_failures"},
+	// 自动封禁累犯表（渐进升级持久记账）：随 security 节同步，主只写
+	// （引擎周期仅主节点运行）；四列全语义（无运行态/簿记列），写即 bump。
+	{name: "autoban_recidivism", snapshotColumns: "identity,offense_count,last_ban_at,escalated_duration"},
 }
 
 // columnSet 构造列名集合（只读查找表，避免调用方按字符串比较）。

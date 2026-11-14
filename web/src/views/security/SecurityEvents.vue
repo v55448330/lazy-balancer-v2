@@ -45,6 +45,11 @@
               <!-- 调度仅主节点执行——从端徽章标示+写按钮禁用。加载/读取失败均不渲染：
                    初值 is_master=false 会在未知态谎称「仅主节点调度」，且徽章闪现会把参数区推向右侧 -->
               <el-tag v-if="!autobanStatusLoading && !autobanStatusError && !autobanStatus.is_master" type="info" size="small" effect="plain">{{ t('app.security.events.masterOnlyBadge') }}</el-tag>
+              <!-- NAT 精修运行态徽标：与总览卡同判据（nat_detection 启用且存在
+                   生效会话封禁）；加载中/错误态不渲染（同主节点徽章口径） -->
+              <el-tooltip v-if="!autobanStatusLoading && !autobanStatusError && autobanNatActive" :content="t('app.security.overview.autoban.natActiveBadgeTip')" placement="top">
+                <el-tag type="primary" size="small" effect="dark" disable-transitions>{{ t('app.security.overview.autoban.natActiveBadge') }}</el-tag>
+              </el-tooltip>
             </div>
             <div class="autoban-stats">
               <span class="autoban-stat">{{ t('app.security.events.statScope') }} <b>{{ autobanStatValue(autobanStatusError, autobanScopeText) }}</b></span>
@@ -69,11 +74,21 @@
           <el-button v-else size="small" type="success" plain :disabled="!autobanWritable" @click="openAutobanConfigForEnable">{{ t('app.security.events.actionEnable') }}</el-button>
         </div>
       </div>
-      <!-- 未生效黄条：判据=ban_effective（名单非空且被启用+deny 的策略引用），
-           不再用 list_referenced（四面引用集会把「仅被白名单/受信代理引用」误当生效） -->
-      <div v-if="autobanIneffective" class="info-note-bar autoban-warn-bar">
-        <span class="info-note-desc">{{ t('app.security.events.ineffectiveNotice') }}</span>
-      </div>
+      <!-- 未生效黄条：总判据=ban_effective（双通道析取），分通道键齐备时按
+           通道分裂披露（IP 名单未引用 / 会话通道未装配）；旧后端缺键回落总条 -->
+      <template v-if="autobanIneffective">
+        <template v-if="autobanChannelSplit">
+          <div v-if="autobanIpIneffective" class="info-note-bar autoban-warn-bar">
+            <span class="info-note-desc">{{ t('app.security.events.ineffectiveIpNotice') }}</span>
+          </div>
+          <div v-if="autobanSessionIneffective" class="info-note-bar autoban-warn-bar">
+            <span class="info-note-desc">{{ t('app.security.events.ineffectiveSessionNotice') }}</span>
+          </div>
+        </template>
+        <div v-else class="info-note-bar autoban-warn-bar">
+          <span class="info-note-desc">{{ t('app.security.events.ineffectiveNotice') }}</span>
+        </div>
+      </template>
       <!-- 喂入源降级：补采/轮转停摆或写侧持续失败时披露原因。实时 IPC 入库仍在
            运行并继续喂入计数器——兜底文案不得声称「计数不会增长」 -->
       <div v-if="autobanFeedDegraded" class="info-note-bar autoban-warn-bar">
@@ -85,10 +100,21 @@
           <span class="info-note-desc">{{ t('app.security.events.suggestionSummary', { minutes: autobanStatus.window_minutes, times: autobanStatus.threshold }) }}</span>
         </div>
         <el-table :data="autobanStatus.suggestions" size="small" max-height="320" :header-cell-style="{ background: '#f9fafb' }">
-          <el-table-column label="IP" min-width="230">
+          <el-table-column :label="t('app.security.overview.autoban.colIdentity')" min-width="230">
             <template #default="{ row }">
-              <!-- 快捷处置弹框与事件表同款（无规则上下文：组件回退全量启用策略，SecurityOverview top_ips 同形态） -->
-              <IPLocationAction :ip="row.ip" :location="row.ip_location || ''" />
+              <!-- 复合身份（归一 IP|指纹）只展示 IP 部分：快捷处置弹框按 IP 维度
+                   工作，不得把复合键当 IP 传入（与总览卡同口径） -->
+              <div class="autoban-identity-cell">
+                <IPLocationAction :ip="autobanIdentityIp(row.ip)" :location="row.ip_location || ''" />
+                <el-tag v-if="autobanEnforcementLayer(row.ip) === 'session'" type="primary" size="small" effect="plain">{{ t('app.security.overview.autoban.identitySession') }}</el-tag>
+              </div>
+            </template>
+          </el-table-column>
+          <el-table-column :label="t('app.security.overview.autoban.colEnforcement')" width="110" align="center">
+            <template #default="{ row }">
+              <el-tag :type="autobanEnforcementLayer(row.ip) === 'session' ? 'primary' : 'danger'" size="small" effect="plain">
+                {{ t(autobanEnforcementLayer(row.ip) === 'session' ? 'app.security.overview.autoban.enforcementSession' : 'app.security.overview.autoban.enforcementIp') }}
+              </el-tag>
             </template>
           </el-table-column>
           <el-table-column :label="t('app.security.events.colHitCount')" width="110" align="center" sortable :sort-by="'count'" :sort-orders="['descending']">
@@ -103,9 +129,13 @@
           <el-table-column :label="t('app.security.events.colWindowSpan')" min-width="190">
             <template #default="{ row }"><span class="text-secondary">{{ suggestionWindowSpan(row as AutobanSuggestion) }}</span></template>
           </el-table-column>
-          <el-table-column :label="t('app.security.events.colSuggestedDuration')" width="100" align="center">
-            <template #default>
-              <el-tag size="small" effect="plain" type="warning">{{ autobanDurationText }}</el-tag>
+          <el-table-column :label="t('app.security.events.colSuggestedDuration')" width="130" align="center">
+            <template #default="{ row }">
+              <!-- 会话身份=会话通道固定短时长；IP 身份=配置时长（升级档开启时
+                   tooltip 披露「按累犯档升档」，dry-run 候选无逐行累犯记账） -->
+              <el-tooltip :content="autobanEnforcementLayer(row.ip) === 'session' ? t('app.security.overview.autoban.durationSessionTip') : (autobanStatus.escalation === 'standard' || autobanStatus.escalation === 'aggressive' ? t('app.security.overview.autoban.durationEscalatesTip') : '')" :disabled="autobanEnforcementLayer(row.ip) === 'ip' && autobanStatus.escalation !== 'standard' && autobanStatus.escalation !== 'aggressive'" placement="top">
+                <el-tag size="small" effect="plain" :type="autobanEnforcementLayer(row.ip) === 'session' ? 'primary' : 'warning'">{{ t(autobanSuggestedDurationKey(row.ip, autobanStatus.duration)) }}</el-tag>
+              </el-tooltip>
             </template>
           </el-table-column>
         </el-table>
@@ -298,7 +328,8 @@
          信息优先展示，IP 处置动作收敛到 IP 快捷弹框（列表中点击 IP） -->
     <TriggerDetailDialog v-model="triggerDetailVisible" :row="triggerDetailRow" />
 
-    <!-- 自动封禁配置弹框：六项配置+口径/窗口变更重置提示-->
+    <!-- 自动封禁配置弹框：九项配置（六项基础 + 累犯升级 + NAT 检测/指纹阈值）
+         + 口径/窗口/NAT 参数变更重置提示；NAT 启用附隐私告知 -->
     <el-dialog v-model="autobanDialogVisible" width="min(680px, 94vw)" top="6vh" append-to-body class="dialog-body-inset" :close-on-click-modal="false" :close-on-press-escape="!autobanSaving" :show-close="!autobanSaving">
       <template #header>
         <!-- 喂入门=四维统计口径（2026-11-13 多选裁定）：WAF 命中按 blocked/logged
@@ -335,6 +366,23 @@
             <el-option v-for="d in AUTOBAN_DURATIONS" :key="d" :label="autobanDurationLabel(d)" :value="d" />
           </el-select>
           <div class="form-tip-line">{{ t('app.security.events.durationHint') }}</div>
+        </el-form-item>
+        <el-form-item :label="t('app.security.events.escalationLabel')">
+          <el-select v-model="autobanForm.escalation" style="width: 280px">
+            <el-option v-for="e in AUTOBAN_ESCALATIONS" :key="e" :label="autobanEscalationLabel(e)" :value="e" />
+          </el-select>
+          <div class="form-tip-line">{{ t('app.security.events.escalationHint') }}</div>
+        </el-form-item>
+        <el-form-item :label="t('app.security.events.natDetectionLabel')">
+          <el-switch v-model="autobanForm.nat_detection" />
+          <div class="form-tip-line">{{ t('app.security.events.natDetectionHint') }}</div>
+          <!-- 隐私告知：指纹采集属个人信息处理，启用 NAT 精修必须告知（常驻
+               披露，不随开关隐藏——读者在启用前即可见采集范围与用途） -->
+          <div class="form-tip-line autoban-privacy-note">{{ t('app.security.events.natPrivacyNotice') }}</div>
+        </el-form-item>
+        <el-form-item :label="t('app.security.events.natThresholdLabel')">
+          <el-input-number v-model="autobanForm.nat_fingerprint_threshold" :min="2" :max="100" :step="1" controls-position="right" style="width: 140px" :disabled="!autobanForm.nat_detection" />
+          <div class="form-tip-line">{{ t('app.security.events.natThresholdHint') }}</div>
         </el-form-item>
       </el-form>
       <!-- CC 检测规则（阶段 3 人机验证触发源，2026-11-12 用户裁定：
@@ -456,7 +504,7 @@ import { formatDurationUs, isWafDurationFamily, triggerStageFamily } from '@/uti
 import { TRIGGERED_CATEGORIES, serializeTriggeredFilter, CRAWLER_FAMILY_LABEL } from '@/utils/triggeredFilter'
 import { ANOMALY_SCORE_HIGH, ANOMALY_SCORE_MID } from '@/utils/severityScale'
 import { DEEP_LINK_PARAMS, pageUrl } from '@/utils/deepLink'
-import { autobanStateLabel, autobanStatValue, isAutobanIneffective, suggestionBand, type SuggestionBand } from '@/utils/autobanStatus'
+import { autobanStateLabel, autobanStatValue, isAutobanIneffective, isAutobanIpIneffective, isAutobanSessionIneffective, isAutobanNatActive, splitAutobanIdentity, autobanEnforcementLayer, autobanSuggestedDurationKey, suggestionBand, type SuggestionBand } from '@/utils/autobanStatus'
 import { requestBodyEmptyNotice, viewerCanReadRequestBody } from '@/utils/requestBodyAccess'
 import { activateOnce } from '@/utils/keyboardActivate'
 import IPLocationAction from '@/views/security/IPLocationAction.vue'
@@ -475,11 +523,14 @@ interface AutobanSuggestion { ip: string; count: number; ip_location?: string; w
 interface AutobanStatus {
   enabled: boolean; dry_run: boolean; threshold: number; window_minutes: number
   duration: string; scope: string; banned_today: number; list_entries: number
-  // 黄条判据 = 封禁是否真正生效（名单非空 ∧ 被启用+IP ACL 启用+deny 的
-  // 策略在 ip_acl_list_refs 引用）。后端 list_referenced 为热路径资格门的四面
-  // 引用集（含白名单/受信代理/CRS 排除），不能区分「引用」与「拦截生效」——
-  // 纯后端内部字段，本卡不声明不消费。
+  // 黄条判据 = 封禁是否真正生效（双通道析取：IP 名单通道 ∨ 会话通道）。
+  // 后端 list_referenced 为热路径资格门的四面引用集（含白名单/受信代理/CRS
+  // 排除），不能区分「引用」与「拦截生效」——纯后端内部字段，本卡不声明不消费。
   ban_effective: boolean
+  // 分通道生效判定与 NAT/累犯披露键（旧后端缺省 → 黄条回落总条、徽标不渲染）。
+  ban_effective_ip?: boolean; ban_effective_session?: boolean
+  session_bans?: number; nat_detection?: boolean; nat_fingerprint_threshold?: number
+  escalation?: string; escalated_count?: number
   // 喂入源（安全事件补采/日志轮转）健康：补采停摆或写侧持续失败时计数可能
   // 偏少，状态卡据此就近提示降级原因并说明实时 IPC 入库仍在运行（不自动
   // 拉起用户显式停止的采集任务）。
@@ -490,9 +541,23 @@ interface AutobanStatus {
   // 本卡零消费，不再声明。
   is_master: boolean
 }
+// 配置弹框回填/保存用的九项配置形态（GET/PUT /security/autoban 契约）。
+interface AutobanConfig {
+  enabled: boolean; dry_run: boolean; threshold: number; window_minutes: number
+  duration: string; scope: string
+  escalation: string; nat_detection: boolean; nat_fingerprint_threshold: number
+}
 const AUTOBAN_DURATIONS = ['10m', '30m', '1h', '6h', '12h', '24h', 'permanent']
 const AUTOBAN_SCOPES = ['blocked', 'logged', 'challenge_issued', 'challenge_failed']
 const AUTOBAN_SCOPE_DEFAULT = ['blocked', 'logged', 'challenge_issued', 'challenge_failed']
+const AUTOBAN_ESCALATIONS = ['off', 'standard', 'aggressive']
+const autobanEscalationLabel = (value: string): string => {
+  switch (value) {
+    case 'standard': return t('app.security.events.escalationStandard')
+    case 'aggressive': return t('app.security.events.escalationAggressive')
+    default: return t('app.security.events.escalationOff')
+  }
+}
 const autobanDurationLabel = (value: string): string => {
   switch (value) {
     case '10m': return t('app.security.events.duration10m')
@@ -533,8 +598,15 @@ const autobanStatusLoading = ref(true)
 const autobanToggling = ref(false)
 // 状态读取失败：错误态不得按「确定状态」展示——写入口一律禁用
 const autobanStatusError = ref(false)
-// 黄条判据单源（utils/autobanStatus，行为钉测）：仅 enabled ∧ ban_effective===false
+// 黄条判据单源（utils/autobanStatus，行为钉测）：仅 enabled ∧ ban_effective===false；
+// 分通道键齐备时按通道分裂披露，旧后端缺键回落总条。
 const autobanIneffective = computed(() => isAutobanIneffective(autobanStatus.value))
+const autobanChannelSplit = computed(() => typeof autobanStatus.value.ban_effective_ip === 'boolean' &&
+  typeof autobanStatus.value.ban_effective_session === 'boolean')
+const autobanIpIneffective = computed(() => isAutobanIpIneffective(autobanStatus.value))
+const autobanSessionIneffective = computed(() => isAutobanSessionIneffective(autobanStatus.value))
+const autobanNatActive = computed(() => isAutobanNatActive(autobanStatus.value))
+const autobanIdentityIp = (identity: string): string => splitAutobanIdentity(identity).ip
 // 喂入源降级：仅在启用时提示（未启用时「不计数」无需解释）
 const autobanFeedDegraded = computed(() => autobanStatus.value.enabled && autobanStatus.value.feed_degraded === true)
 const authStore = useAuthStore()
@@ -601,18 +673,32 @@ const fetchAutobanStatus = async (): Promise<void> => {
   finally { if (requestSeq === autobanStatusSeq) autobanStatusLoading.value = false }
 }
 
-// 配置弹框（七项=六项配置+口径变更提示）
+// 配置弹框（九项配置 + 口径/窗口/NAT 参数变更重置提示 + NAT 隐私告知）
 const autobanDialogVisible = ref(false)
 const autobanSaving = ref(false)
-const autobanForm = ref({ dry_run: true, threshold: 100, window_minutes: 5, duration: '1h', scope: [...AUTOBAN_SCOPE_DEFAULT] as string[] })
+const autobanForm = ref({ dry_run: true, threshold: 100, window_minutes: 5, duration: '1h', scope: [...AUTOBAN_SCOPE_DEFAULT] as string[], escalation: 'off', nat_detection: false, nat_fingerprint_threshold: 3 })
+// 九项配置实态缓存（GET /security/autoban）：/status 不携带全部配置项时
+// 弹框回填与禁用直切的兜底源；null=未成功拉取（回填退 /status 已知键）。
+const autobanConfigCache = ref<AutobanConfig | null>(null)
+const fetchAutobanConfig = async (): Promise<void> => {
+  try {
+    const res = await request.get<APIResponse<AutobanConfig>>('/security/autoban', { silent: true })
+    if (res.data) autobanConfigCache.value = res.data
+  } catch { /* 静默：回填退 /status 已知键，不阻塞弹框 */ }
+}
 const openAutobanConfig = (): void => {
   // 卡片主体/编辑/启用共用门：只读、从节点、状态加载中或加载失败均不打开
-  // 配置弹框；表单从 autobanStatus 回填，错误态默认值保存会覆盖真实配置。
+  // 配置弹框；表单从 autobanStatus（新键）/配置缓存回填，错误态默认值保存
+  // 会覆盖真实配置。
   if (!autobanWritable.value) return
+  const cfg = autobanConfigCache.value
   autobanForm.value = {
     dry_run: autobanStatus.value.dry_run,
     threshold: autobanStatus.value.threshold, window_minutes: autobanStatus.value.window_minutes,
     duration: autobanStatus.value.duration, scope: parseAutobanScope(autobanStatus.value.scope),
+    escalation: autobanStatus.value.escalation ?? cfg?.escalation ?? 'off',
+    nat_detection: autobanStatus.value.nat_detection ?? cfg?.nat_detection ?? false,
+    nat_fingerprint_threshold: autobanStatus.value.nat_fingerprint_threshold ?? cfg?.nat_fingerprint_threshold ?? 3,
   }
   autobanDialogVisible.value = true
 }
@@ -627,6 +713,9 @@ const saveAutobanConfig = async (): Promise<void> => {
   }
   if (autobanForm.value.scope.length === 0) {
     ElMessage.warning(t('app.security.events.scopeEmpty')); return
+  }
+  if (autobanForm.value.nat_fingerprint_threshold < 2 || autobanForm.value.nat_fingerprint_threshold > 100) {
+    ElMessage.warning(t('app.security.events.natThresholdRange')); return
   }
   // 保存二次确认（用户裁定 2026-10-14）：启用入口=完整须知+建议框（按钮「确认启用」）；
   // 已启用的编辑入口=简化确认（按钮「确认保存」，不带启用描述警告）。
@@ -644,6 +733,7 @@ const saveAutobanConfig = async (): Promise<void> => {
     mfaAwareSuccess(t('app.security.events.configUpdated'))
     autobanDialogVisible.value = false
     fetchAutobanStatus()
+    void fetchAutobanConfig()
   } catch { /* 错误已由全局拦截器 toast */ }
   finally { autobanSaving.value = false }
 }
@@ -685,7 +775,7 @@ const confirmAutobanApply = async (): Promise<boolean> => {
 }
 
 // 启用/禁用直切业务开关（2026-10-14 裁定）：保存即联动调度——enabled=true
-// 开 autoban 循环调度、false 停。PUT 需全量六项配置，从状态卡实态回填。
+// 开 autoban 循环调度、false 停。PUT 需全量九项配置，从状态卡实态回填。
 // 启用入口（用户裁定 2026-10-14）：先弹配置框（表单预置开启），在配置框内
 // 保存/启用时才弹启用确认框——卡片按钮不直接确认启用。
 const openAutobanConfigForEnable = (): void => {
@@ -706,11 +796,14 @@ const toggleAutobanEnabled = async (): Promise<void> => {
     await request.put('/security/autoban', {
       enabled: false,
       dry_run: autobanStatus.value.dry_run,
-
       threshold: autobanStatus.value.threshold,
       window_minutes: autobanStatus.value.window_minutes,
       duration: autobanStatus.value.duration,
       scope: autobanStatus.value.scope,
+      // 新三项从 /status 实态回填（旧后端缺键退配置缓存/缺省，与弹框回填同口径）
+      escalation: autobanStatus.value.escalation ?? autobanConfigCache.value?.escalation ?? 'off',
+      nat_detection: autobanStatus.value.nat_detection ?? autobanConfigCache.value?.nat_detection ?? false,
+      nat_fingerprint_threshold: autobanStatus.value.nat_fingerprint_threshold ?? autobanConfigCache.value?.nat_fingerprint_threshold ?? 3,
     })
     mfaAwareSuccess(t('app.security.events.disabledNotice'))
     fetchAutobanStatus()
@@ -1041,6 +1134,7 @@ const fetchEvents = async () => {
 onMounted(() => {
   fetchEvents()
   fetchAutobanStatus()
+  void fetchAutobanConfig()
 })
 
 // 页面刷新同时拉自动封禁状态（调度在后台持续运行，dry-run 建议
@@ -1048,12 +1142,17 @@ onMounted(() => {
 const refreshPage = (): void => {
   void fetchEvents()
   void fetchAutobanStatus()
+  void fetchAutobanConfig()
 }
 </script>
 
 <style scoped>
 .autoban-section-title { font-size: 14px; font-weight: 600; color: var(--text-primary); margin: 4px 0 4px; }
 .autoban-section-desc { font-size: 12px; color: var(--text-secondary); line-height: 1.5; margin-bottom: 12px; }
+/* NAT 隐私告知：个人信息处理披露，琥珀色左边线区别于普通操作提示 */
+.autoban-privacy-note { border-left: 2px solid var(--el-color-warning, #e6a23c); padding-left: 8px; color: var(--text-secondary); }
+.autoban-identity-cell { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.autoban-identity-cell .el-tag { flex-shrink: 0; }
 /* 自动封禁状态卡——*/
 .autoban-card { margin-bottom: 16px; }
 .autoban-bar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }

@@ -339,8 +339,10 @@
       </el-col>
     </el-row>
 
-    <!-- 自动封禁卡（独立整行）：状态 + 今日封禁/生效名单/监控 IP + 阈值口径摘要 +
-         观察建议 Top5（dry-run 候选）；未生效黄条与事件页状态卡同源。 -->
+    <!-- 自动封禁卡（独立整行）：单名单双通道——系统内置「自动封禁名单」的
+         生效构成（IP 条目走名单通道 / 会话条目走挑战链）+ 执法分层披露；
+         统计区今日封禁 IP/会话分列、监控身份、累犯升级数；NAT 精修徽标；
+         观察建议 Top5 增列身份类型/执法层/累犯档；黄条按通道分裂。 -->
     <el-card shadow="always" class="mb-5 autoban-card">
       <template #header>
         <div class="card-header">
@@ -348,39 +350,91 @@
             <el-icon class="title-icon"><Lock /></el-icon>
             <span>{{ t('app.security.overview.autoban.title') }}</span>
             <el-tag :type="autobanStateTone" size="small" effect="light" disable-transitions>{{ autobanStateText }}</el-tag>
+            <el-tooltip v-if="autobanNatActive" :content="t('app.security.overview.autoban.natActiveBadgeTip')" placement="top">
+              <el-tag type="primary" size="small" effect="dark" disable-transitions>{{ t('app.security.overview.autoban.natActiveBadge') }}</el-tag>
+            </el-tooltip>
           </div>
           <el-button size="small" type="primary" plain :icon="Setting" @click="goToAutobanConfig">{{ t('app.security.overview.autoban.config') }}</el-button>
         </div>
       </template>
-      <el-alert v-if="autobanIneffective" type="warning" show-icon :closable="false" class="mb-3" :title="t('app.security.overview.autoban.ineffective')" />
+      <!-- 未生效黄条按通道分裂：总判据（ban_effective 析取）为假时两通道各自
+           披露原因；分通道键缺失（旧后端）回落总黄条，判据单源在 utils。 -->
+      <template v-if="autobanIneffective">
+        <template v-if="autobanChannelSplit">
+          <el-alert v-if="autobanIpIneffective" type="warning" show-icon :closable="false" class="mb-3" :title="t('app.security.overview.autoban.ineffectiveIp')" />
+          <el-alert v-if="autobanSessionIneffective" type="warning" show-icon :closable="false" class="mb-3" :title="t('app.security.overview.autoban.ineffectiveSession')" />
+        </template>
+        <el-alert v-else type="warning" show-icon :closable="false" class="mb-3" :title="t('app.security.overview.autoban.ineffective')" />
+      </template>
       <el-alert v-if="autobanStatus?.enabled && autobanStatus?.feed_degraded" type="warning" show-icon :closable="false" class="mb-3" :title="autobanStatus?.feed_degraded_reason || t('app.security.overview.autoban.feedDegraded')" />
       <div class="autoban-body">
         <div class="autoban-stats">
-          <div class="autoban-stat">
+          <div class="autoban-stat autoban-stat-wide">
             <div class="autoban-stat-label">{{ t('app.security.overview.autoban.bannedToday') }}</div>
-            <div class="autoban-stat-value is-ban">{{ autobanStatValue(autobanError, autobanStatus?.banned_today ?? 0) }}</div>
+            <div class="autoban-stat-split">
+              <el-tooltip :content="t('app.security.overview.autoban.bannedTodayIpTip')" placement="top">
+                <span class="autoban-split-item"><span class="autoban-split-num is-ban">{{ autobanStatValue(autobanError, autobanStatus?.banned_today ?? 0) }}</span><span class="autoban-split-label">{{ t('app.security.overview.autoban.bannedTodayIp') }}</span></span>
+              </el-tooltip>
+              <el-tooltip :content="t('app.security.overview.autoban.bannedTodaySessionTip')" placement="top">
+                <span class="autoban-split-item"><span class="autoban-split-num">{{ autobanStatValue(autobanError, autobanStatus?.session_bans ?? 0) }}</span><span class="autoban-split-label">{{ t('app.security.overview.autoban.bannedTodaySession') }}</span></span>
+              </el-tooltip>
+            </div>
           </div>
-          <div class="autoban-stat">
+          <div class="autoban-stat autoban-stat-wide">
             <div class="autoban-stat-label">{{ t('app.security.overview.autoban.listEntries') }}</div>
-            <div class="autoban-stat-value">{{ autobanStatValue(autobanError, autobanStatus?.list_entries ?? 0) }}</div>
+            <div class="autoban-stat-split">
+              <el-tooltip :content="t('app.security.overview.autoban.listEntriesTip')" placement="top">
+                <span class="autoban-split-item"><span class="autoban-split-num">{{ autobanStatValue(autobanError, autobanStatus?.list_entries ?? 0) }}</span><span class="autoban-split-label">{{ t('app.security.overview.autoban.listEntriesIp') }}</span></span>
+              </el-tooltip>
+              <span class="autoban-split-item"><span class="autoban-split-num">{{ autobanStatValue(autobanError, autobanStatus?.session_bans ?? 0) }}</span><span class="autoban-split-label">{{ t('app.security.overview.autoban.listEntriesSession') }}</span></span>
+            </div>
           </div>
           <div class="autoban-stat">
-            <div class="autoban-stat-label">{{ t('app.security.overview.autoban.trackedIps') }}</div>
+            <el-tooltip :content="t('app.security.overview.autoban.trackedIpsTip')" placement="top">
+              <div class="autoban-stat-label">{{ t('app.security.overview.autoban.trackedIps') }}</div>
+            </el-tooltip>
             <div class="autoban-stat-value">{{ autobanStatValue(autobanError, autobanStatus?.tracked_ips ?? 0) }}</div>
+          </div>
+          <div class="autoban-stat">
+            <el-tooltip :content="t('app.security.overview.autoban.escalatedCountTip')" placement="top">
+              <div class="autoban-stat-label">{{ t('app.security.overview.autoban.escalatedCount') }}</div>
+            </el-tooltip>
+            <div class="autoban-stat-value">{{ autobanStatValue(autobanError, autobanStatus?.escalated_count ?? 0) }}</div>
           </div>
           <div class="autoban-config-summary">
             <div class="autoban-config-line">{{ t('app.security.overview.autoban.threshold') }}：{{ autobanStatValue(autobanError, autobanStatus?.threshold ?? 0) }} {{ t('app.security.overview.autoban.timesPer') }} {{ autobanStatValue(autobanError, autobanStatus?.window_minutes ?? 0) }} {{ t('app.security.overview.autoban.minutes') }}</div>
-            <div class="autoban-config-line">{{ t('app.security.overview.autoban.duration') }}：{{ autobanStatValue(autobanError, autobanStatus?.duration ?? '—') }}</div>
+            <div class="autoban-config-line">{{ t('app.security.overview.autoban.duration') }}：{{ autobanError ? '—' : autobanDurationText }}</div>
             <div class="autoban-config-line">{{ t('app.security.overview.autoban.scope') }}：{{ autobanError ? '—' : autobanScopeText }}</div>
           </div>
         </div>
         <div class="autoban-suggestions">
           <div class="autoban-suggestions-title">{{ t('app.security.overview.autoban.suggestionsTitle') }}</div>
-          <el-table v-if="autobanSuggestions.length > 0" :data="autobanSuggestions" size="small" :show-header="false">
-            <el-table-column min-width="160">
-              <template #default="{ row }"><IPLocationAction :ip="row.ip" :location="row.ip_location" /></template>
+          <el-table v-if="autobanSuggestions.length > 0" :data="autobanSuggestions" size="small">
+            <el-table-column :label="t('app.security.overview.autoban.colIdentity')" min-width="190">
+              <template #default="{ row }">
+                <!-- 复合身份（归一 IP|指纹）只展示 IP 部分：指纹是会话标识，
+                     快捷处置弹框按 IP 维度工作，不得把复合键当 IP 传入 -->
+                <div class="autoban-identity-cell">
+                  <IPLocationAction :ip="autobanIdentityIp(row.ip)" :location="row.ip_location" />
+                  <el-tag v-if="autobanEnforcementLayer(row.ip) === 'session'" type="primary" size="small" effect="plain">{{ t('app.security.overview.autoban.identitySession') }}</el-tag>
+                </div>
+              </template>
             </el-table-column>
-            <el-table-column width="110" align="right">
+            <el-table-column :label="t('app.security.overview.autoban.colEnforcement')" width="100" align="center">
+              <template #default="{ row }">
+                <el-tag :type="autobanEnforcementLayer(row.ip) === 'session' ? 'primary' : 'danger'" size="small" effect="plain">
+                  {{ t(autobanEnforcementLayer(row.ip) === 'session' ? 'app.security.overview.autoban.enforcementSession' : 'app.security.overview.autoban.enforcementIp') }}
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column :label="t('app.security.overview.autoban.colEscalation')" width="96" align="center">
+              <template #default>
+                <!-- 状态级累犯档（配置口径）：/status 建议行不携带逐身份
+                     offense_count，逐行档位不得虚构 -->
+                <span class="autoban-escalation-tier">{{ t(autobanEscalationShortKey(autobanStatus?.escalation)) }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column width="92" align="right">
               <template #default="{ row }"><el-tag :type="autobanSuggestionTone(row.count)" size="small" effect="light">{{ row.count }} {{ t('app.security.overview.autoban.times') }}</el-tag></template>
             </el-table-column>
           </el-table>
@@ -446,7 +500,7 @@ import VChart from 'vue-echarts'
 import type { APIResponse } from '@/types'
 import { securityActionColors } from '@/utils/chartTheme'
 import { ingestionWarningMessage, type IngestionHealth } from '@/utils/ingestionHealth'
-import { autobanStateLabel, autobanStatValue, isAutobanIneffective, suggestionBand } from '@/utils/autobanStatus'
+import { autobanStateLabel, autobanStatValue, isAutobanIneffective, isAutobanIpIneffective, isAutobanSessionIneffective, isAutobanNatActive, splitAutobanIdentity, autobanEnforcementLayer, autobanEscalationShortKey, suggestionBand } from '@/utils/autobanStatus'
 import { hasOwn } from '@/utils/hasOwn'
 
 const { t } = useI18n()
@@ -720,13 +774,19 @@ const fetchBlockedEvents = async () => {
 const goToEvents = () => { window.open(pageUrl('security-events'), '_blank', 'noopener') }
 
 // 自动封禁卡（独立整行）：数据源 /security/autoban/status，与事件页状态卡同源。
-// 摘要统计 + 观察建议 Top5（dry-run 候选）；未生效黄条复用 isAutobanIneffective 单源。
+// 单名单双通道：生效构成（IP/会话）+ 执法分层 + NAT 精修徽标 + 累犯升级数；
+// 黄条总判据复用 isAutobanIneffective 单源，分通道判据同 utils 单源。
 interface AutobanSuggestion { ip: string; count: number; ip_location?: string; window_start?: string; last_seen?: string }
 interface AutobanStatus {
   enabled: boolean; dry_run: boolean; threshold: number; window_minutes: number
   duration: string; scope: string; banned_today: number; list_entries: number
   ban_effective: boolean; tracked_ips: number; suggestions: AutobanSuggestion[]
   is_master: boolean; feed_degraded: boolean; feed_degraded_reason: string
+  // 双通道生效判定（ban_effective=析取）与 NAT/累犯披露键；旧后端缺省 →
+  // 分通道黄条回落总黄条、NAT 徽标不渲染、累犯数按 0（防御式消费）。
+  ban_effective_ip?: boolean; ban_effective_session?: boolean
+  session_bans?: number; nat_detection?: boolean; nat_fingerprint_threshold?: number
+  escalation?: string; escalated_count?: number
 }
 const autobanStatus = ref<AutobanStatus | null>(null)
 const autobanError = ref(false)
@@ -748,6 +808,22 @@ const autobanStateTone = computed<'success' | 'warning' | 'info' | 'danger'>(() 
   return autobanStatus.value.dry_run ? 'warning' : 'success'
 })
 const autobanIneffective = computed(() => autobanStatus.value !== null && isAutobanIneffective(autobanStatus.value))
+// 分通道黄条分裂：仅当后端显式下发分通道键时才分裂（旧后端缺键 → 总黄条）。
+const autobanChannelSplit = computed(() => autobanStatus.value !== null &&
+  typeof autobanStatus.value.ban_effective_ip === 'boolean' &&
+  typeof autobanStatus.value.ban_effective_session === 'boolean')
+const autobanIpIneffective = computed(() => autobanStatus.value !== null && isAutobanIpIneffective(autobanStatus.value))
+const autobanSessionIneffective = computed(() => autobanStatus.value !== null && isAutobanSessionIneffective(autobanStatus.value))
+const autobanNatActive = computed(() => autobanStatus.value !== null && isAutobanNatActive(autobanStatus.value))
+const autobanIdentityIp = (identity: string): string => splitAutobanIdentity(identity).ip
+const autobanDurationText = computed(() => {
+  const d = autobanStatus.value?.duration || ''
+  const keys: Record<string, string> = {
+    '10m': 'duration10m', '30m': 'duration30m', '1h': 'duration1h', '6h': 'duration6h',
+    '12h': 'duration12h', '24h': 'duration24h', permanent: 'durationPermanent',
+  }
+  return hasOwn(keys, d) ? t(`app.security.events.${keys[d]}`) : (d || '—')
+})
 const autobanScopeText = computed(() => {
   const labels: Record<string, string> = {
     blocked: t('app.security.overview.autoban.scopeBlocked'),
@@ -976,20 +1052,33 @@ onMounted(() => { void reloadAll() })
 .cc-legend-item i.is-pass { background: #67c23a; }
 .cc-legend-item i.is-fail { background: #f56c6c; }
 .cc-legend-item i.is-pending { background: #cbd5e1; }
-/* 自动封禁卡：左侧统计+配置摘要，右侧观察建议 Top5；窄屏堆叠。 */
+/* 自动封禁卡：左侧统计（今日封禁/生效条目 IP·会话分列 + 监控身份 + 累犯升级）
+   与配置摘要，右侧观察建议 Top5（身份/执法层/累犯档增列）；窄屏堆叠。 */
 .autoban-body { display: flex; gap: 24px; align-items: stretch; }
-.autoban-stats { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+.autoban-stats { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; gap: 12px; align-items: stretch; align-content: flex-start; }
 .autoban-stat { display: flex; flex-direction: column; gap: 4px; padding: 10px 16px; border-radius: 0; background: #f7f9fc; min-width: 110px; }
+.autoban-stat-wide { min-width: 190px; }
 .autoban-stat-label { font-size: 12px; color: var(--text-secondary); }
 .autoban-stat-value { font-size: 24px; font-weight: 700; line-height: 1.1; font-variant-numeric: tabular-nums; color: #303133; }
 .autoban-stat-value.is-ban { color: #f56c6c; }
-.autoban-config-summary { display: flex; flex-direction: column; gap: 4px; padding: 4px 8px; font-size: 12px; color: var(--text-secondary); }
+/* 分列数值：主数值 + 通道小标签纵向堆叠，两列并排（IP 红 / 会话常规色） */
+.autoban-stat-split { display: flex; gap: 18px; }
+.autoban-split-item { display: flex; flex-direction: column; gap: 2px; }
+.autoban-split-num { font-size: 24px; font-weight: 700; line-height: 1.1; font-variant-numeric: tabular-nums; color: #303133; }
+.autoban-split-num.is-ban { color: #f56c6c; }
+.autoban-split-label { font-size: 11px; color: var(--text-secondary); white-space: nowrap; }
+.autoban-config-summary { display: flex; flex-direction: column; gap: 4px; padding: 4px 8px; font-size: 12px; color: var(--text-secondary); justify-content: center; }
 .autoban-config-line { white-space: nowrap; }
 .autoban-suggestions { flex: 1; min-width: 280px; border-left: 1px solid var(--el-border-color-lighter); padding-left: 20px; }
 .autoban-suggestions-title { font-size: 13px; font-weight: 600; color: #303133; margin-bottom: 8px; }
 .autoban-suggestions-empty { font-size: 12px; color: var(--text-secondary); padding: 12px 0; }
+.autoban-escalation-tier { font-size: 12px; color: var(--text-secondary); white-space: nowrap; }
+.autoban-identity-cell { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.autoban-identity-cell .el-tag { flex-shrink: 0; }
 @media (max-width: 992px) {
   .autoban-body { flex-direction: column; }
-  .autoban-suggestions { border-left: none; padding-left: 0; border-top: 1px solid var(--el-border-color-lighter); padding-top: 12px; }
+  /* 堆叠后建议区占满整行：min-width 280 在窄视口（卡片内宽 <280）会撑破
+     卡体——降为 0，表格自身横向滚动（el-table--scrollable-x）承担窄屏 */
+  .autoban-suggestions { border-left: none; padding-left: 0; border-top: 1px solid var(--el-border-color-lighter); padding-top: 12px; min-width: 0; }
 }
 </style>

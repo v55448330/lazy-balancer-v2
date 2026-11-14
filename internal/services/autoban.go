@@ -28,7 +28,10 @@ package services
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -126,6 +129,55 @@ var autobanDurations = map[string]time.Duration{
 
 func ValidAutobanDuration(s string) bool { _, ok := autobanDurations[s]; return ok }
 
+// AutobanEscalation* 累犯渐进升级档位：off=固定时长（现行行为，默认）；
+// standard=首次配置时长→二次 24h→三次+永久；aggressive=首次配置时长→
+// 二次+永久。累犯按封禁身份键（autobanIdentityKey）记账于 autoban_recidivism。
+const (
+	AutobanEscalationOff        = "off"
+	AutobanEscalationStandard   = "standard"
+	AutobanEscalationAggressive = "aggressive"
+)
+
+var autobanEscalations = map[string]bool{
+	AutobanEscalationOff:        true,
+	AutobanEscalationStandard:   true,
+	AutobanEscalationAggressive: true,
+}
+
+// ValidAutobanEscalation 升级档位枚举校验（写侧/导入/消费侧三通道同口径单源）。
+func ValidAutobanEscalation(s string) bool { return autobanEscalations[s] }
+
+// AutobanEscalationOrOff 把缺省形态（空串=旧客户端/旧调用方未携带该字段）
+// 归一为 off；显式值原样返回（非法值交由 ValidateAutobanConfig 拒绝）。
+// 写侧入口（PUT 绑定/SetAutobanConfig）共用本单源，保证「缺省=off」口径
+// 不在两处漂移。
+func AutobanEscalationOrOff(s string) string {
+	if s == "" {
+		return AutobanEscalationOff
+	}
+	return s
+}
+
+// NatFingerprintThreshold 缺省与边界（写侧/导入/消费侧三通道同口径单源）：
+// 同 /64 窗口内不同会话指纹数达到该值且事件集中少数指纹 → 判 NAT。
+// 下限 2：单指纹不构成 NAT 证据；上限 100：防带外污染把检测阈值推到不可达。
+const (
+	DefaultAutobanNatFingerprintThreshold = 3
+	autobanNatFingerprintThresholdMin     = 2
+	autobanNatFingerprintThresholdMax     = 100
+)
+
+// AutobanNatFingerprintThresholdOrDefault 把缺省形态（0=旧客户端/旧调用方
+// 未携带该字段）归一为默认 3；显式值原样返回（非法值交由
+// ValidateAutobanConfig 拒绝）。写侧入口（PUT 绑定/SetAutobanConfig）共用
+// 本单源，保证「缺省=3」口径不在两处漂移。
+func AutobanNatFingerprintThresholdOrDefault(n int) int {
+	if n == 0 {
+		return DefaultAutobanNatFingerprintThreshold
+	}
+	return n
+}
+
 // 自动封禁统计口径四维度（2026-11-13 用户裁定：单选改多选）。scope 存逗号
 // 分隔集合；挑战发放/失败拆为独立维度（证据强度不同），count_human_failed
 // 开关退役（语义并入 challenge_failed）。
@@ -218,16 +270,23 @@ func AutobanDurationLabel(s string) string {
 	}
 }
 
-// AutobanConfig 六项配置（GET/PUT /security/autoban 载荷与任务/计数器共用形态）。
+// AutobanConfig 九项配置（GET/PUT /security/autoban 载荷与任务/计数器共用形态）。
 // Scope 为逗号分隔口径集合（blocked/logged/challenge_issued/challenge_failed，
 // 2026-11-13 用户裁定多选）；count_human_failed 开关退役，语义并入 challenge_failed。
+// Escalation 为累犯渐进升级档位（off/standard/aggressive，默认 off）。
+// NatDetection 为 NAT 检测开关（默认 off=现行 IP 级）：开启后同 /64 窗口内
+// ≥NatFingerprintThreshold 个不同会话指纹且事件集中少数指纹时切 NAT 态，
+// 身份键升级为「归一 IP×指纹」复合键独立计数（会话级执法不污染 IP 累犯）。
 type AutobanConfig struct {
-	Enabled       bool   `json:"enabled"`
-	Threshold     int    `json:"threshold"`
-	WindowMinutes int    `json:"window_minutes"`
-	Duration      string `json:"duration"`
-	Scope         string `json:"scope"`
-	DryRun        bool   `json:"dry_run"`
+	Enabled                 bool   `json:"enabled"`
+	Threshold               int    `json:"threshold"`
+	WindowMinutes           int    `json:"window_minutes"`
+	Duration                string `json:"duration"`
+	Scope                   string `json:"scope"`
+	DryRun                  bool   `json:"dry_run"`
+	Escalation              string `json:"escalation"`
+	NatDetection            bool   `json:"nat_detection"`
+	NatFingerprintThreshold int    `json:"nat_fingerprint_threshold"`
 }
 
 // autobanNow 时钟缝（测试注入时间轴）。
@@ -274,45 +333,54 @@ func SetAutobanProjectionRefresher(fn func() (IPListProjectionOutcome, error)) {
 
 // ---- 配置读写 ----
 
-// AutobanConfigQuerier 是六列读取的最小依赖面（库句柄或已开启的事务）。
+// AutobanConfigQuerier 是九列读取的最小依赖面（库句柄或已开启的事务）。
 // 事务形态是备份导入的必需用法：导入在写事务内比对「导入前」运行值，
 // 事务外读 live 会与已开启的写事务争同一连接（单连接池下自锁）。
 type AutobanConfigQuerier interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }
 
-// ReadAutobanConfigFrom 在调用方给定的视图上读六列（COALESCE 仅归一存量
+// ReadAutobanConfigFrom 在调用方给定的视图上读九列（COALESCE 仅归一存量
 // NULL；读失败显性返回错误）。GetAutobanConfig 与导入侧共用本单源——
 // 两份手写 SELECT 的列/COALESCE 默认值漂移会让导入侧比对出假的「配置变化」。
 func ReadAutobanConfigFrom(ctx context.Context, q AutobanConfigQuerier) (AutobanConfig, error) {
-	var en, threshold, window, dry int
-	var duration, scope string
+	var en, threshold, window, dry, nat int
+	var duration, scope, escalation string
+	var natThreshold int
 	err := q.QueryRowContext(ctx, `SELECT COALESCE(autoban_enabled,?), COALESCE(autoban_threshold,?),
-		COALESCE(autoban_window_minutes,?), COALESCE(autoban_duration,?), COALESCE(autoban_scope,?), COALESCE(autoban_dry_run,?)
+		COALESCE(autoban_window_minutes,?), COALESCE(autoban_duration,?), COALESCE(autoban_scope,?), COALESCE(autoban_dry_run,?), COALESCE(autoban_escalation,?),
+		COALESCE(autoban_nat_detection,?), COALESCE(autoban_nat_fingerprint_threshold,?)
 		FROM global_config WHERE id=1`,
 		db.DefaultAutobanEnabled, db.DefaultAutobanThreshold, db.DefaultAutobanWindowMinutes,
-		db.DefaultAutobanDuration, db.DefaultAutobanScope, db.DefaultAutobanDryRun).Scan(&en, &threshold, &window, &duration, &scope, &dry)
+		db.DefaultAutobanDuration, db.DefaultAutobanScope, db.DefaultAutobanDryRun, db.DefaultAutobanEscalation,
+		db.DefaultAutobanNatDetection, db.DefaultAutobanNatFingerprintThreshold).Scan(&en, &threshold, &window, &duration, &scope, &dry, &escalation, &nat, &natThreshold)
 	if err != nil {
 		return AutobanConfig{}, err
 	}
 	return AutobanConfig{
-		Enabled:       en == 1,
-		Threshold:     threshold,
-		WindowMinutes: window,
-		Duration:      duration,
-		Scope:         scope,
-		DryRun:        dry == 1,
+		Enabled:                 en == 1,
+		Threshold:               threshold,
+		WindowMinutes:           window,
+		Duration:                duration,
+		Scope:                   scope,
+		DryRun:                  dry == 1,
+		Escalation:              escalation,
+		NatDetection:            nat == 1,
+		NatFingerprintThreshold: natThreshold,
 	}, nil
 }
 
-// GetAutobanConfig 读六项配置（COALESCE 仅归一存量 NULL；读失败显性返回错误）。
+// GetAutobanConfig 读九项配置（COALESCE 仅归一存量 NULL；读失败显性返回错误）。
 func GetAutobanConfig() (AutobanConfig, error) {
 	cfg := AutobanConfig{
-		Threshold:     db.DefaultAutobanThreshold,
-		WindowMinutes: db.DefaultAutobanWindowMinutes,
-		Duration:      db.DefaultAutobanDuration,
-		Scope:         db.DefaultAutobanScope,
-		DryRun:        db.DefaultAutobanDryRun == 1,
+		Threshold:               db.DefaultAutobanThreshold,
+		WindowMinutes:           db.DefaultAutobanWindowMinutes,
+		Duration:                db.DefaultAutobanDuration,
+		Scope:                   db.DefaultAutobanScope,
+		DryRun:                  db.DefaultAutobanDryRun == 1,
+		Escalation:              db.DefaultAutobanEscalation,
+		NatDetection:            db.DefaultAutobanNatDetection == 1,
+		NatFingerprintThreshold: db.DefaultAutobanNatFingerprintThreshold,
 	}
 	if db.DB == nil {
 		return cfg, errors.New("自动封禁配置数据库未装配")
@@ -324,9 +392,10 @@ func GetAutobanConfig() (AutobanConfig, error) {
 	return read, nil
 }
 
-// ValidateAutobanConfig 写侧校验：阈值 1-10000、窗口 1-60 分钟、时长/口径枚举。
+// ValidateAutobanConfig 写侧校验：阈值 1-10000、窗口 1-60 分钟、时长/口径/升级枚举、
+// NAT 指纹阈值 2-100。
 //
-// 历史设计评审（显式声明）：六列配置的三条归一通道语义
+// 历史设计评审（显式声明）：九列配置的三条归一通道语义
 // **有意分歧**，各自贴合通道处境，不做统一——
 //   - 保存侧（本函数，PUT /security/autoban）：**拒绝**——面板表单是用户
 //     直接意图，非法值响亮 400 让用户改输入；
@@ -337,8 +406,9 @@ func GetAutobanConfig() (AutobanConfig, error) {
 //     无用户在场，启动时静默收敛到治理默认（双锚钉测对齐），运行期窗口内
 //     由消费侧护栏（RunAutobanCycle）拒绝执行兜底。
 //
-// 三通道边界单源：本函数与 ValidAutobanDuration/ValidAutobanScope（db 包
-// 不反向依赖，SQL 字面量与迁移 DDL DEFAULT 同款双锚）。
+// 三通道边界单源：本函数与 ValidAutobanDuration/ValidAutobanScope/
+// ValidAutobanEscalation/autobanNatFingerprintThresholdMin/Max（db 包不反向
+// 依赖，SQL 字面量与迁移 DDL DEFAULT 同款双锚）。
 func ValidateAutobanConfig(cfg AutobanConfig) error {
 
 	if cfg.Threshold < 1 || cfg.Threshold > 10000 {
@@ -353,13 +423,24 @@ func ValidateAutobanConfig(cfg AutobanConfig) error {
 	if !ValidAutobanScope(cfg.Scope) {
 		return errors.New("统计口径取值无效")
 	}
+	if !ValidAutobanEscalation(cfg.Escalation) {
+		return errors.New("累犯升级取值无效")
+	}
+	if cfg.NatFingerprintThreshold < autobanNatFingerprintThresholdMin || cfg.NatFingerprintThreshold > autobanNatFingerprintThresholdMax {
+		return fmt.Errorf("NAT 指纹阈值须在 %d-%d 之间", autobanNatFingerprintThresholdMin, autobanNatFingerprintThresholdMax)
+	}
 	return nil
 }
 
-// SetAutobanConfig 写六项配置；窗口/口径变更时重置计数器（口径语义变了，
-// 旧计数不可与新口径混算）。禁用（enabled=false）同样清空计数桶与观察建议
-// ——停用期无喂入，陈旧计数不得在重新启用后立即封禁（见下方调用点注释）。
+// SetAutobanConfig 写九项配置；窗口/口径/NAT 参数变更时重置计数器（口径语义
+// 变了，旧计数不可与新口径混算）。禁用（enabled=false）同样清空计数桶与观察
+// 建议——停用期无喂入，陈旧计数不得在重新启用后立即封禁（见下方调用点注释）。
+// Escalation 缺省（空串=旧客户端/旧调用方未携带该字段）归一为 off——保持
+// 固定时长现行行为；NatFingerprintThreshold 缺省（0）归一为默认 3；显式非法值
+// 仍由 ValidateAutobanConfig 响亮拒绝。
 func SetAutobanConfig(cfg AutobanConfig) error {
+	cfg.Escalation = AutobanEscalationOrOff(cfg.Escalation)
+	cfg.NatFingerprintThreshold = AutobanNatFingerprintThresholdOrDefault(cfg.NatFingerprintThreshold)
 	if err := ValidateAutobanConfig(cfg); err != nil {
 		return err
 	}
@@ -367,30 +448,33 @@ func SetAutobanConfig(cfg AutobanConfig) error {
 	if err != nil {
 		return fmt.Errorf("读取自动封禁配置失败: %w", err)
 	}
-	en, dry := 0, 0
+	en, dry, nat := 0, 0, 0
 	if cfg.Enabled {
 		en = 1
 	}
 	if cfg.DryRun {
 		dry = 1
 	}
-	if _, err := db.DB.Exec(`UPDATE global_config SET autoban_enabled=?, autoban_threshold=?, autoban_window_minutes=?, autoban_duration=?, autoban_scope=?, autoban_dry_run=? WHERE id=1`,
-		en, cfg.Threshold, cfg.WindowMinutes, cfg.Duration, cfg.Scope, dry); err != nil {
+	if cfg.NatDetection {
+		nat = 1
+	}
+	if _, err := db.DB.Exec(`UPDATE global_config SET autoban_enabled=?, autoban_threshold=?, autoban_window_minutes=?, autoban_duration=?, autoban_scope=?, autoban_dry_run=?, autoban_escalation=?, autoban_nat_detection=?, autoban_nat_fingerprint_threshold=? WHERE id=1`,
+		en, cfg.Threshold, cfg.WindowMinutes, cfg.Duration, cfg.Scope, dry, cfg.Escalation, nat, cfg.NatFingerprintThreshold); err != nil {
 		return err
 	}
 	// 运行期收敛（清桶/重算 Reached/禁用收尾/调度联动）与备份导入提交后
-	// 共用同一单源——六列有第二条写入路径（导入/还原的通用
+	// 共用同一单源——七列有第二条写入路径（导入/还原的通用
 	// `UPDATE global_config`），各自内联判断会让不变量在导入面静默失效。
 	ReconcileAutobanRuntimeAfterConfigReplace(prev, cfg)
 	return nil
 }
 
-// autobanConfigReplaceEffects 是「六列配置已被替换」后的运行期收敛判定。
+// autobanConfigReplaceEffects 是「九列配置已被替换」后的运行期收敛判定。
 // 单源：ReconcileAutobanRuntimeAfterConfigReplace 的动作与
 // AutobanConfigReplaceEffectNote 的文案共用本判定（判定与文案漂移会让
 // 「响应说清了桶」与「实际清桶」分叉）。
 type autobanConfigReplaceEffects struct {
-	// resetCounters：口径/窗口变更 → 旧计数不可与新口径混算。
+	// resetCounters：口径/窗口/NAT 参数变更 → 旧计数不可与新口径混算。
 	resetCounters bool
 	// recomputeReached：阈值变更 → 重算「已达阈值」读口径。
 	recomputeReached bool
@@ -410,7 +494,7 @@ type autobanConfigReplaceEffects struct {
 
 func autobanConfigReplaceEffectsOf(old, new AutobanConfig) autobanConfigReplaceEffects {
 	effect := autobanConfigReplaceEffects{
-		resetCounters:          old.WindowMinutes != new.WindowMinutes || old.Scope != new.Scope,
+		resetCounters:          old.WindowMinutes != new.WindowMinutes || old.Scope != new.Scope || old.NatDetection != new.NatDetection || old.NatFingerprintThreshold != new.NatFingerprintThreshold,
 		recomputeReached:       old.Threshold != new.Threshold,
 		disableFlush:           !new.Enabled,
 		disableFlushTransition: old.Enabled && !new.Enabled,
@@ -419,7 +503,7 @@ func autobanConfigReplaceEffectsOf(old, new AutobanConfig) autobanConfigReplaceE
 	return effect
 }
 
-// ReconcileAutobanRuntimeAfterConfigReplace 在「六列自动封禁配置已被替换」之后
+// ReconcileAutobanRuntimeAfterConfigReplace 在「九列自动封禁配置已被替换」之后
 // 收敛运行期状态（单源：PUT 保存 / 备份导入-还原提交后）。old/new 分别为
 // 替换前后的运行值；调用方只需保证替换已完成（本函数不写库）。
 //
@@ -427,8 +511,8 @@ func autobanConfigReplaceEffectsOf(old, new AutobanConfig) autobanConfigReplaceE
 // Caddy 临界区内调用必须在释放锁之后再调本函数）。
 //
 // 动作语义：
-//   - 口径（scope）/统计窗口变更 → 清空固定窗口计数桶与观察建议：旧计数按
-//     新口径不可混算（口径过滤集合变了、桶长也变了）；
+//   - 口径（scope）/统计窗口/NAT 参数变更 → 清空固定窗口计数桶与观察建议：
+//     旧计数按新口径不可混算（口径过滤集合变了、桶长也变了、身份键形也变了）；
 //   - 仅阈值变更 → 保留计数桶（窗口内证据不丢），只重算 Reached：该标记是
 //     按「feed 当时阈值」单向置真的读口径，不重算会让 /status「达阈值 M 个」
 //     与过期摘要滞后到下一个窗口（调低阈值后已达标 IP 仍不计入，调高短期
@@ -452,15 +536,19 @@ func ReconcileAutobanRuntimeAfterConfigReplace(old, new AutobanConfig) {
 	applyBusinessTaskLoop(AutobanTaskID, new.Enabled)
 }
 
-// AutobanConfigReplaceEffectNote 返回「替换六列后运行期收敛动作」的用户可读
-// 说明（导入/还原响应的 warnings 与成功审计单源）；无收敛动作（六列相同，
+// AutobanConfigReplaceEffectNote 返回「替换九列后运行期收敛动作」的用户可读
+// 说明（导入/还原响应的 warnings 与成功审计单源）；无收敛动作（九列相同，
 // 或仅时长/观察模式变化）时返回空串。
 func AutobanConfigReplaceEffectNote(old, new AutobanConfig) string {
 	effect := autobanConfigReplaceEffectsOf(old, new)
 	parts := []string{}
 	if effect.resetCounters {
-		parts = append(parts, fmt.Sprintf("统计窗口/口径由 %d 分钟/%s 改为 %d 分钟/%s，已清空自动封禁统计计数（旧计数不适用于新口径）",
-			old.WindowMinutes, old.Scope, new.WindowMinutes, new.Scope))
+		if old.WindowMinutes != new.WindowMinutes || old.Scope != new.Scope {
+			parts = append(parts, fmt.Sprintf("统计窗口/口径由 %d 分钟/%s 改为 %d 分钟/%s，已清空自动封禁统计计数（旧计数不适用于新口径）",
+				old.WindowMinutes, old.Scope, new.WindowMinutes, new.Scope))
+		} else {
+			parts = append(parts, "NAT 检测参数变更，已清空自动封禁统计计数（身份键口径变化，旧计数不可混算）")
+		}
 	} else if effect.recomputeReached {
 		parts = append(parts, fmt.Sprintf("封禁阈值由 %d 改为 %d，已按新阈值重算统计达标标记", old.Threshold, new.Threshold))
 	}
@@ -528,12 +616,33 @@ type autobanFeedItem struct {
 	// TrustExempt 表示该 logged 事件来自规则绑定的信任 IP（含 stage0 保留
 	// 检测）。生产喂入侧按规则信任并集计算；direct test seam 恒 false。
 	TrustExempt bool
+	// Fingerprint 会话指纹（lbhuman 采集，cookie 签名段优先/UA+语言兜底）。
+	// NAT 检测开启时参与同 /64 剖面统计与复合键；空=无会话标识（计 IP 级）。
+	Fingerprint string
 }
 
 var autobanMu sync.Mutex
 
 // autobanWindows 固定桶计数器（ip → 窗口计数/窗口起点）。
 var autobanWindows = make(map[string]*autobanCounter)
+
+// autobanNATProfile 是单个归一 IP（IPv6 /64 锚）的 NAT 检测剖面：窗口内
+// 会话指纹分布 + NAT 态标记。与计数桶同窗口语义（固定桶，跨界重置）。
+// 指纹数上限 autobanMaxProfileFingerprints：攻击者轮换伪造指纹时剖面内存
+// 有界（超限丢新指纹——已有分布足以判定集中度，不追求全量枚举）。
+type autobanNATProfile struct {
+	WindowStart  time.Time
+	Fingerprints map[string]int
+	Total        int
+	NAT          bool
+}
+
+// autobanNATProfiles NAT 检测剖面表（归一 IP → 剖面）。autobanMu 保护。
+var autobanNATProfiles = make(map[string]*autobanNATProfile)
+
+// autobanMaxProfileFingerprints 单剖面指纹键上限（超限丢新指纹并沿用既有
+// 分布判集中度；与 autobanMaxTrackedIPs 同族内存有界裁定）。
+const autobanMaxProfileFingerprints = 1024
 
 // autobanSuggestions 上一轮观察建议（dry-run；/status 建议列表数据源）。
 var autobanSuggestions []AutobanSuggestion
@@ -600,23 +709,26 @@ func autobanReportFeedHealth(degraded bool, reason string) {
 	}
 }
 
-// ResetAutobanCounters 清空计数器（口径/窗口变更/测试用）：计数桶+上一轮观察
-// 建议一并清空——建议是同一窗口口径下的观察输出，口径变更/名单全量替换后旧
-// 建议对现状失真（同款 ≤1 tick 展示残留，历史定性并入）。
+// ResetAutobanCounters 清空计数器（口径/窗口/NAT 参数变更/测试用）：计数桶+
+// NAT 剖面+上一轮观察建议一并清空——建议是同一窗口口径下的观察输出，口径
+// 变更/名单全量替换后旧建议对现状失真（同款 ≤1 tick 展示残留，历史定性并入）。
 func ResetAutobanCounters() {
 	autobanMu.Lock()
 	defer autobanMu.Unlock()
 	autobanWindows = make(map[string]*autobanCounter)
+	autobanNATProfiles = make(map[string]*autobanNATProfile)
+	autobanSessionBans = make(map[string]time.Time)
 	autobanSuggestions = nil
 	autobanCapWarned = false
 }
 
 // HumanObserveItem 人机事件批量喂入的最小形态（IPC 提交点按批提交）。
-// Kind=challenge|fail|pass。
+// Kind=challenge|fail|pass。Fingerprint=lbhuman 采集的会话指纹（可空）。
 type HumanObserveItem struct {
-	IP   string
-	Kind string
-	At   time.Time
+	IP          string
+	Kind        string
+	At          time.Time
+	Fingerprint string
 }
 
 // ObserveHumanEvents 供人机事件 IPC 提交后按批喂入挑战证据（2026-11-13
@@ -640,7 +752,7 @@ func ObserveHumanEvents(items []HumanObserveItem) {
 		case "pass":
 			ruleTriggered = "human_pass"
 		}
-		autobanObserveEventScopedAt(cfg, it.IP, "challenged", ruleTriggered, it.At)
+		autobanObserveEventScopedAt(cfg, it.IP, "challenged", ruleTriggered, it.Fingerprint, it.At)
 	}
 }
 
@@ -666,7 +778,7 @@ func autobanObserveBatch(items []autobanFeedItem) {
 		if it.TrustExempt {
 			continue
 		}
-		autobanObserveEventScopedAt(cfg, it.IP, it.Action, it.RuleTriggered, it.At)
+		autobanObserveEventScopedAt(cfg, it.IP, it.Action, it.RuleTriggered, it.Fingerprint, it.At)
 	}
 }
 
@@ -690,7 +802,7 @@ func autobanSourceEligible(ruleTriggered string) bool {
 	return !securityEventsIsCrawlerExemptRule(ruleTriggered)
 }
 
-func autobanObserveEventScopedAt(cfg AutobanConfig, ip, action, ruleTriggered string, at time.Time) {
+func autobanObserveEventScopedAt(cfg AutobanConfig, ip, action, ruleTriggered, fingerprint string, at time.Time) {
 	// 廉价门控前置：身份/窗口不合法的事件直接丢弃，不做口径解析与族判定。
 	if ip == "" || ruleTriggered == "" {
 		return
@@ -705,8 +817,9 @@ func autobanObserveEventScopedAt(cfg AutobanConfig, ip, action, ruleTriggered st
 	// IPv6 按 /64 归一计数（隐私扩展地址在 /64 内轮换，逐地址建键永不达
 	// 阈值且耗尽键上限）；封禁条目随之落 /64 CIDR——与 CC/cookie 检测粒度
 	// 对齐。/64 波及整个用户前缀（同 /64 无辜主机连带），为 IPv6 标准封禁
-	// 粒度，启用须知已披露。
-	ip = autobanNormalizeIP(ip)
+	// 粒度，启用须知已披露。NAT 态下身份键升级为「归一 IP×指纹」复合键
+	//（在 autobanMu 临界区内判定，见下方）。
+	normalized := autobanNormalizeIP(ip)
 	window := time.Duration(cfg.WindowMinutes) * time.Minute
 	if window <= 0 {
 		return
@@ -737,14 +850,22 @@ func autobanObserveEventScopedAt(cfg AutobanConfig, ip, action, ruleTriggered st
 	}
 	var capWarn bool
 	autobanMu.Lock()
-	w, exists := autobanWindows[ip]
+	key := normalized
+	if cfg.NatDetection {
+		// NAT 检测与复合键判定同处一把锁：剖面更新→NAT 态→身份键选择
+		// 全序一致，喂入并发下不产生「剖面已切态而键仍 IP 级」的分裂计数。
+		if autobanNATObserveLocked(normalized, fingerprint, cfg.NatFingerprintThreshold, window, now) && fingerprint != "" {
+			key = autobanIdentityKey(normalized, fingerprint)
+		}
+	}
+	w, exists := autobanWindows[key]
 	if !exists {
 		if len(autobanWindows) >= autobanMaxTrackedIPs {
 			capWarn = !autobanCapWarned
 			autobanCapWarned = true
 		} else {
 			w = &autobanCounter{}
-			autobanWindows[ip] = w
+			autobanWindows[key] = w
 		}
 	}
 	if w != nil {
@@ -782,9 +903,153 @@ func autobanNormalizeIP(ip string) string {
 	return parsed.Mask(net.CIDRMask(64, 128)).String()
 }
 
+// autobanIdentityKey 是自动封禁的身份键单源：计数桶键、merge 名单身份、
+// 解封清桶与累犯表（autoban_recidivism.identity）恒经此函数归一，禁止旁路
+// 第二份归一实现。常态（fingerprint 空）=autobanNormalizeIP（IPv6 /64 归一，
+// IPv4/不可解析串原样）；NAT 态（fingerprint 非空）=「归一 IP×指纹」复合键
+// （分隔符 | 不出现在 IP 字面量中）——会话级执法独立计数，不污染 IP 级累犯
+// 记账（复合候选不落 IP 名单，见 autobanMergeEntries）。
+func autobanIdentityKey(ip, fingerprint string) string {
+	normalized := autobanNormalizeIP(ip)
+	if fingerprint == "" {
+		return normalized
+	}
+	return normalized + "|" + fingerprint
+}
+
+// autobanCompositeKeyParts 拆解复合键为（归一 IP, 指纹）；非复合键 ok=false。
+// 复合键分隔符 | 不出现在 IP 字面量中，首个 | 即键形边界。
+func autobanCompositeKeyParts(key string) (ip, fingerprint string, ok bool) {
+	i := strings.IndexByte(key, '|')
+	if i <= 0 || i == len(key)-1 {
+		return "", "", false
+	}
+	return key[:i], key[i+1:], true
+}
+
+// autobanNATObserveLocked 更新归一 IP 的 NAT 剖面并返回当前是否 NAT 态
+// （调用方持 autobanMu）。窗口语义与计数桶同构（固定桶跨界重置）；无指纹
+// 事件不建剖面（无法归属会话，计 IP 级）。NAT 判定双条件：窗口内不同指纹
+// 数 ≥ 阈值 ∧ 事件集中少数指纹（最大单指纹占比 ≥ 半数）——完全均匀的多会话
+// （如出口代理下多用户各发一事件，无任何指纹占多数）不判 NAT，避免把正常
+// 共享出口误切会话执法。触发事件本身计入剖面（其指纹即集中证据的一部分）。
+func autobanNATObserveLocked(normalized, fingerprint string, threshold int, window time.Duration, now time.Time) bool {
+	if fingerprint == "" {
+		// 无会话标识：不更新剖面、不建复合键（调用方按 IP 级计数）。
+		return false
+	}
+	p := autobanNATProfiles[normalized]
+	if p == nil {
+		if len(autobanNATProfiles) >= autobanMaxTrackedIPs {
+			return false // 剖面上限与计数桶同族内存有界裁定
+		}
+		p = &autobanNATProfile{Fingerprints: make(map[string]int)}
+		autobanNATProfiles[normalized] = p
+	}
+	if p.WindowStart.IsZero() || now.Sub(p.WindowStart) >= window {
+		p.WindowStart = now
+		p.Fingerprints = make(map[string]int)
+		p.Total = 0
+		p.NAT = false
+	}
+	if _, seen := p.Fingerprints[fingerprint]; seen || len(p.Fingerprints) < autobanMaxProfileFingerprints {
+		p.Fingerprints[fingerprint]++
+		p.Total++
+	}
+	if !p.NAT && threshold > 0 && len(p.Fingerprints) >= threshold {
+		maxCount := 0
+		for _, c := range p.Fingerprints {
+			if c > maxCount {
+				maxCount = c
+			}
+		}
+		if maxCount*2 >= p.Total {
+			p.NAT = true
+			// NAT 态切换沿：清空 IP 级桶——切换前的计数是「攻击+无辜」混合
+			// 证据，NAT 判定后执法降为会话级，混合计数不得再产生 IP 级封禁
+			//（否则 NAT 检测反而把整个共享出口按混合证据封掉，违背检测初衷）。
+			// 此后带指纹事件计复合桶；无指纹事件仍计 IP 级（重新起算）。
+			delete(autobanWindows, normalized)
+		}
+	}
+	return p.NAT
+}
+
+// autobanCookieName 与 lbhuman.cookieName 同字面值（跨模块契约双锚：
+// lbhuman 是依赖 Caddy 的独立插件模块，面板主模块不引入其依赖树）。
+const autobanCookieName = "__lb_human"
+
+// autobanCookieValue 从 Cookie 头提取指定 cookie 值（精确名匹配，分号分隔，
+// 首尾空白修剪）；缺席返空串。
+func autobanCookieValue(header, name string) string {
+	for _, part := range strings.Split(header, ";") {
+		part = strings.TrimSpace(part)
+		eq := strings.IndexByte(part, '=')
+		if eq <= 0 {
+			continue
+		}
+		if part[:eq] == name {
+			return part[eq+1:]
+		}
+	}
+	return ""
+}
+
+// autobanHumanCookieFromHeader 从审计请求头的 Cookie 值提取 __lb_human cookie。
+// 兼容两种形态：完整 Cookie 头（"a=1; __lb_human=v; b=2"，精确名匹配）与
+// 裸值形态（审计写插件按单头快照，值即 cookie 本体，无 name= 前缀）——
+// 裸值须自身通过签名形态门（base64url.64hex）才采信，否则返空（回落 UA 兜底，
+// 不把无关 cookie 误当会话凭证）。
+func autobanHumanCookieFromHeader(header string) string {
+	if v := autobanCookieValue(header, autobanCookieName); v != "" {
+		return v
+	}
+	trimmed := strings.TrimSpace(header)
+	if strings.Contains(trimmed, "=") || strings.Contains(trimmed, ";") {
+		return "" // 含其它 cookie 的完整头但无 __lb_human：不得误采裸值
+	}
+	parts := strings.SplitN(trimmed, ".", 2)
+	if len(parts) == 2 && len(parts[1]) == 64 {
+		if _, err := base64.RawURLEncoding.DecodeString(parts[0]); err == nil {
+			if _, err := hex.DecodeString(parts[1]); err == nil {
+				return trimmed
+			}
+		}
+	}
+	return ""
+}
+
+// autobanSessionFingerprint 会话指纹采集（面板侧镜像，与 lbhuman.sessionFingerprint
+// 同算法——改一处必须同步另一处，跨模块对拍钉测兜底）：
+//   - cookie 签名段优先：__lb_human 形如 base64url(exp|nonce).HMAC-hex，
+//     取签名段前 16 位 hex（c: 前缀）。签名由 human_secret 密钥绑定（IP/UA/
+//     payload 全参与 HMAC），无密钥不可伪造新签名段；同会话 cookie 不变 →
+//     指纹稳定。此处只做形态门（payload 可解码+签名段 64 位 hex），密钥校验
+//     由 lbhuman.verifyCookie 承担——指纹是计数身份不是放行凭证。
+//   - 无有效 cookie → UA+Accept-Language 组合 sha256 前 16 位 hex（u: 前缀）：
+//     可伪造但稳定，作 NAT 检测的弱证据兜底（与 cookie 强证据前缀隔离）。
+//   - UA 与语言均空 → 空串（无会话标识，计 IP 级）。
+func autobanSessionFingerprint(cookieValue, ua, acceptLanguage string) string {
+	if cookieValue != "" {
+		parts := strings.SplitN(cookieValue, ".", 2)
+		if len(parts) == 2 && len(parts[1]) == 64 {
+			if _, err := base64.RawURLEncoding.DecodeString(parts[0]); err == nil {
+				if _, err := hex.DecodeString(parts[1]); err == nil {
+					return "c:" + parts[1][:16]
+				}
+			}
+		}
+	}
+	if ua == "" && acceptLanguage == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(ua + "\x00" + acceptLanguage))
+	return "u:" + hex.EncodeToString(sum[:8])
+}
+
 // autobanBanValue 把计数身份转成名单条目值：IPv6 /64 网络地址落 CIDR
 // （名单/匹配器按前缀封禁整段），IPv4 与其余形态保持裸地址。候选 IP 恒经
-// autobanNormalizeIP 归一，此处只判「是否 /64 网络地址」，不再二次掩码。
+// autobanIdentityKey 归一，此处只判「是否 /64 网络地址」，不再二次掩码。
 func autobanBanValue(ip string) string {
 	parsed := net.ParseIP(ip)
 	if parsed == nil || parsed.To4() != nil {
@@ -797,14 +1062,14 @@ func autobanBanValue(ip string) string {
 }
 
 // autobanEntryIdentity 把名单条目值归一为计数键身份：CIDR 取网络地址
-// （/64 自动封禁条目 → 与喂入归一键同形），裸 IPv6 同样按 /64 归一，IPv4
-// 与不可解析串原样。merge 的「已在名单/刚到期」判定与解封清桶共用本函数，
+// （/64 自动封禁条目 → 与喂入归一键同形），裸地址经 autobanIdentityKey
+// 单源归一。merge 的「已在名单/刚到期」判定与解封清桶共用本函数，
 // 保证条目值形态（裸地址/CIDR）不影响身份匹配。
 func autobanEntryIdentity(value string) string {
 	if prefix, err := netip.ParsePrefix(value); err == nil {
-		return autobanNormalizeIP(prefix.Masked().Addr().String())
+		return autobanIdentityKey(prefix.Masked().Addr().String(), "")
 	}
-	return autobanNormalizeIP(value)
+	return autobanIdentityKey(value, "")
 }
 
 // AutobanSuggestion 观察建议/候选形态。
@@ -840,6 +1105,13 @@ func autobanCandidates(threshold int, window time.Duration) []AutobanSuggestion 
 				expiredReached = append(expiredReached, ip)
 			}
 			delete(autobanWindows, ip)
+		}
+	}
+	// NAT 剖面同窗口修剪：过期剖面删除（NAT 态随窗口终结；下一事件重新
+	// 起算检测）。与计数桶修剪同锁同节拍，不另设清理点。
+	for ip, p := range autobanNATProfiles {
+		if !p.WindowStart.IsZero() && now.Sub(p.WindowStart) >= window {
+			delete(autobanNATProfiles, ip)
 		}
 	}
 	var out []AutobanSuggestion
@@ -920,11 +1192,28 @@ func AutobanForgetIPs(ips []string) {
 	defer autobanMu.Unlock()
 	// 解封值可能是 CIDR（IPv6 /64 自动条目）或裸地址：计数键恒为归一身份，
 	// 两侧经 autobanEntryIdentity 同键删除，否则删 /64 条目不清桶 → 下一轮
-	// 零新流量立即重封（「删除即解封」被撤销）。
+	// 零新流量立即重封（「删除即解封」被撤销）。NAT 态复合子桶（归一 IP|指纹）
+	// 随母身份一并清除——否则解封后旧复合计数仍达标，会话执法在 ≤1 tick 内
+	// 撤销解封；NAT 剖面同步删除（重新检测）。
 	for _, ip := range ips {
-		if ip != "" {
-			delete(autobanWindows, autobanEntryIdentity(ip))
+		if ip == "" {
+			continue
 		}
+		identity := autobanEntryIdentity(ip)
+		delete(autobanWindows, identity)
+		delete(autobanNATProfiles, identity)
+		// 会话封禁随母身份清除（删除即解封不被旧会话封禁撤销）；
+		// 交换文件同步收敛（插件 stat 热感知）。
+		autobanForgetSessionBansLocked(identity)
+		prefix := identity + "|"
+		for key := range autobanWindows {
+			if strings.HasPrefix(key, prefix) {
+				delete(autobanWindows, key)
+			}
+		}
+	}
+	if len(ips) > 0 {
+		autobanExchangeSessionBansLocked(autobanNow())
 	}
 	// 同步清 autobanSuggestions 对应 IP——建议列表是上一轮
 	// 观察快照，解封后仍展示该 IP 是 ≤1 tick 的展示残留（下一轮 Run 才重算
@@ -938,7 +1227,14 @@ func AutobanForgetIPs(ips []string) {
 		}
 		kept := autobanSuggestions[:0]
 		for _, s := range autobanSuggestions {
-			if _, drop := gone[autobanEntryIdentity(s.IP)]; !drop {
+			sid := autobanEntryIdentity(s.IP)
+			drop := false
+			if _, ok := gone[sid]; ok {
+				drop = true
+			} else if base, _, composite := autobanCompositeKeyParts(sid); composite {
+				_, drop = gone[base]
+			}
+			if !drop {
 				kept = append(kept, s)
 			}
 		}
@@ -1045,6 +1341,11 @@ func autobanMergeEntries(cfg AutobanConfig, candidates []AutobanSuggestion) (aut
 	if db.DB == nil {
 		return out, errors.New("数据库未初始化")
 	}
+	// 零值/未知升级形态按 off 消费（与写侧枚举校验同口径）：配置结构体
+	// 零值不携带 Escalation 的调用方保持固定时长现行行为，不产生累犯记账。
+	if !ValidAutobanEscalation(cfg.Escalation) {
+		cfg.Escalation = AutobanEscalationOff
+	}
 	now := autobanNow()
 	nowStr := now.Format(autobanTimeLayout)
 	id, err := ensureAutobanPresetListID()
@@ -1093,8 +1394,20 @@ func autobanMergeEntries(cfg AutobanConfig, candidates []AutobanSuggestion) (aut
 	// 清空，新流量重新计数/达标仍会再封（与手动解封同语义）。
 	duration := autobanDurations[cfg.Duration]
 	var toAdd []models.IPListEntry
+	// bannedDurations/bannedOffenses 与 toAdd 平行：逐新封的实际执法时长与
+	// 衰减后的本次累计次数（升级后可能不同于配置时长/原记账），落库后累犯
+	// 记账用（容量丢弃的新封不记账）。
+	var bannedDurations []time.Duration
+	var bannedOffenses []int
 	for _, c := range candidates {
 		if c.IP == "" {
+			continue
+		}
+		// NAT 态复合候选（归一 IP×指纹）不落 IP 名单：会话级执法走独立通道
+		//（RunAutobanCycle 临界区内 autobanBanSession 写会话封禁，经挑战链
+		// 执法），IP 名单/匹配器只认 IP 身份；复合键写入会污染名单语义与
+		// IP 累犯记账。此处显式跳过——计数/候选/观察建议仍完整保留会话级证据。
+		if _, _, composite := autobanCompositeKeyParts(c.IP); composite {
 			continue
 		}
 		// 名单身份与计数身份同键：条目值可能是 CIDR（IPv6 /64 自动封禁），
@@ -1107,11 +1420,24 @@ func autobanMergeEntries(cfg AutobanConfig, candidates []AutobanSuggestion) (aut
 		if _, exists := inList[identity]; exists {
 			continue
 		}
+		// 累犯渐进升级：off=固定配置时长；standard/aggressive 按累犯次数
+		// 升档（读在事务内，记账在落库后同事务——名单与累犯原子一致）。
+		banDuration := duration
+		offense := 0
+		if cfg.Escalation != AutobanEscalationOff {
+			d, n, err := autobanEscalatedDuration(tx, cfg, identity, now)
+			if err != nil {
+				return out, err
+			}
+			banDuration, offense = d, n
+		}
 		entry := models.IPListEntry{Value: autobanBanValue(c.IP), Remark: autobanEntryRemark, CreatedAt: nowStr}
-		if duration > 0 {
-			entry.ExpiresAt = now.Add(duration).Format(autobanTimeLayout)
+		if banDuration > 0 {
+			entry.ExpiresAt = now.Add(banDuration).Format(autobanTimeLayout)
 		}
 		toAdd = append(toAdd, entry)
+		bannedDurations = append(bannedDurations, banDuration)
+		bannedOffenses = append(bannedOffenses, offense)
 		inList[identity] = struct{}{}
 	}
 
@@ -1232,10 +1558,89 @@ func autobanMergeEntries(cfg AutobanConfig, candidates []AutobanSuggestion) (aut
 	if affected != 1 {
 		return out, fmt.Errorf("预置名单行已被并发替换（rows=%d），本轮封禁未落库", affected)
 	}
+	// 累犯记账与名单落库同事务：只计真实新封（容量丢弃的不记）。
+	// offense_count 直存「衰减后的本次累计次数」——衰减必须随再犯落库，
+	// 否则每次读都重新衰减、永不收敛（防永久标签失效）。
+	if cfg.Escalation != AutobanEscalationOff {
+		for i, e := range toAdd {
+			label := autobanEscalationDurationLabel(bannedDurations[i])
+			if _, err := tx.Exec(`INSERT INTO autoban_recidivism (identity, offense_count, last_ban_at, escalated_duration)
+				VALUES (?, ?, ?, ?)
+				ON CONFLICT(identity) DO UPDATE SET
+					offense_count=excluded.offense_count, last_ban_at=excluded.last_ban_at, escalated_duration=excluded.escalated_duration`,
+				autobanEntryIdentity(e.Value), bannedOffenses[i], nowStr, label); err != nil {
+				return out, err
+			}
+		}
+	}
 	if err := tx.Commit(); err != nil {
 		return out, err
 	}
 	return out, nil
+}
+
+// ---- 累犯渐进升级 ----
+
+// autobanRecidivismDecay 累犯衰减窗口：距上次封禁超过该时长无再犯，
+// offense_count 降一级（防永久标签——改过自新的身份不被历史永久钉死）。
+// 默认 30 天；测试缝可覆写（生产可配点）。
+var autobanRecidivismDecay = 30 * 24 * time.Hour
+
+// autobanEscalationDurationLabel 执法时长的枚举标签（累犯表 escalated_duration
+// 留痕用，与 autobanDurations 键同形）；0=永久。
+func autobanEscalationDurationLabel(d time.Duration) string {
+	if d <= 0 {
+		return "permanent"
+	}
+	for label, dur := range autobanDurations {
+		if dur == d {
+			return label
+		}
+	}
+	return d.String()
+}
+
+// autobanEscalatedDuration 按累犯历史计算本次执法时长与累计次数（读在调用方
+// 事务视图内）：先衰减——last_ban_at 距今超过 autobanRecidivismDecay 无再犯
+// 则历史清零（防永久标签：守法满一个窗口的身份按首次档重新开始；若只降一级
+// 再 +1，净计数不变，档位永不回落，衰减形同虚设）；窗口内再犯则历史累加。
+// 再按档位映射——standard：1 次=配置时长、2 次=24h、3 次+=永久；aggressive：
+// 1 次=配置时长、2 次+=永久。返回的 offense=本次累计次数（衰减后），由调用方
+// 在名单落库后同事务直存；本函数只读不写。
+func autobanEscalatedDuration(tx *sql.Tx, cfg AutobanConfig, identity string, now time.Time) (time.Duration, int, error) {
+	var count int
+	var lastBan string
+	err := tx.QueryRow(`SELECT offense_count, last_ban_at FROM autoban_recidivism WHERE identity=?`, identity).Scan(&count, &lastBan)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return 0, 0, err
+	}
+	if err == nil && autobanRecidivismDecay > 0 {
+		if last := parseAutobanEntryTime(lastBan); !last.IsZero() && now.Sub(last) > autobanRecidivismDecay {
+			count = 0
+		}
+	}
+	offense := count + 1
+	var d time.Duration
+	switch cfg.Escalation {
+	case AutobanEscalationStandard:
+		switch {
+		case offense <= 1:
+			d = autobanDurations[cfg.Duration]
+		case offense == 2:
+			d = 24 * time.Hour
+		default:
+			d = 0
+		}
+	case AutobanEscalationAggressive:
+		if offense <= 1 {
+			d = autobanDurations[cfg.Duration]
+		} else {
+			d = 0
+		}
+	default:
+		d = autobanDurations[cfg.Duration]
+	}
+	return d, offense, nil
 }
 
 // ---- 重载节流 ----
@@ -1425,6 +1830,12 @@ func AutobanDisableFlush() {
 	}
 	CaddyOpLock.Unlock()
 	autobanFlushPendingReload(true)
+	// 会话级执法通道关闭：全清会话封禁并交换空载荷（禁用期无执法点消费，
+	// 与计数桶清空同语义——重新启用后旧会话封禁不得跨停用期服役）。
+	autobanMu.Lock()
+	autobanClearSessionBansLocked()
+	autobanExchangeSessionBansLocked(autobanNow())
+	autobanMu.Unlock()
 }
 
 // ---- Run 循环 ----
@@ -1561,6 +1972,21 @@ func RunAutobanCycle(rc taskengine.RunContext) error {
 		CaddyOpLock.Lock()
 		defer CaddyOpLock.Unlock()
 		candidates = autobanCandidates(cfg.Threshold, window)
+		// 会话级执法：复合候选达阈即写会话封禁（内存 map + 交换文件，
+		// 短 TTL 本地态）——不落 IP 名单、不写 IP 累犯（autobanMergeEntries
+		// 显式跳过复合键）。与 merge 同临界区：解封清桶/清会话封禁与本轮
+		// 执法在锁上全序，刚解封的会话不被本轮旧计数立即重封。
+		for _, c := range candidates {
+			if _, _, composite := autobanCompositeKeyParts(c.IP); composite {
+				autobanBanSession(c.IP)
+			}
+		}
+		// 会话封禁到期清扫 + 交换收敛（读时过滤已保证执法正确，此处收敛
+		// 内存与交换文件体积；纯会话轮无 IP 名单变化也交换）。
+		autobanMu.Lock()
+		autobanSweepSessionBansLocked(autobanNow())
+		autobanExchangeSessionBansLocked(autobanNow())
+		autobanMu.Unlock()
 		o, err := autobanMergeEntries(cfg, candidates)
 		if err != nil {
 			return err
@@ -1574,14 +2000,22 @@ func RunAutobanCycle(rc taskengine.RunContext) error {
 		return err
 	}
 	autobanSetSuggestions(nil)
+	// 本轮会话执法数（复合候选达阈写入；降级窗口内仍计数——执法已发生，
+	// 审计从简但摘要如实）。
+	sessionBanned := 0
+	for _, c := range candidates {
+		if _, _, composite := autobanCompositeKeyParts(c.IP); composite {
+			sessionBanned++
+		}
+	}
 	// 容量收敛留痕不在 Changed 门内、也不在审计写门后：满容量丢弃新封时名单
 	// 内容不变（Changed=false），丢弃仍是真实发生的安全事件，必须留痕；降级
 	// 窗口内同样留（说明丢弃已发生，避免排障时把「未达标」误当「无异常」）。
 	autobanReportCapacityOutcome("", out)
-	if out.Changed {
+	if out.Changed || sessionBanned > 0 {
 		// 审计写面前复核：merge/收敛已落定（名单变化是事实，终态仍按本轮
-		// 成功计）——但降级/取消窗口内不再写逐 IP 审计（审计归因会失真为
-		// 主节点作为），留 WARN 说明审计从简。
+		// 成功计）——但降级/取消窗口内不再写逐 IP/逐会话审计（审计归因会
+		// 失真为主节点作为），留 WARN 说明审计从简。
 		if gerr := updateRunWriteGate(rc.Ctx); gerr != nil {
 			TaskLogfWarn(AutobanTaskID, "audit", "节点降级/取消窗口：本轮名单已收敛，逐 IP 审计从简（名单内容为准，审计缺口见此行）")
 			return nil
@@ -1589,9 +2023,12 @@ func RunAutobanCycle(rc taskengine.RunContext) error {
 		// 审计逐 IP「自动封禁」+ 每批「到期解封」汇总（系统操作者）。
 		autobanAuditBanned(cfg, out.Banned)
 		autobanAuditExpiredUnban(out.Expired, out.ExpiredManual)
+		// 会话封禁独立动作留痕（不混入 IP「自动封禁」——今日封禁统计保持
+		// IP 口径；会话执法可追溯性与 IP 通道对齐）。
+		autobanAuditSessionBanned(cfg, candidates)
 	}
-	TaskLogf(AutobanTaskID, "cycle", "本轮：计数 %d IP / 活跃 %d 个 IP / 候选 %d / 新封 %d / 到期解封 %d / 名单 %d 条%s%s",
-		autobanTrackedCount(), autobanReachedCount(), len(candidates), len(out.Banned), len(out.Expired), out.Total, reloadNote(out.Changed, reloadState), feedNote)
+	TaskLogf(AutobanTaskID, "cycle", "本轮：计数 %d IP / 活跃 %d 个 IP / 候选 %d / 新封 %d / 会话封禁 %d / 到期解封 %d / 名单 %d 条%s%s",
+		autobanTrackedCount(), autobanReachedCount(), len(candidates), len(out.Banned), sessionBanned, len(out.Expired), out.Total, reloadNote(out.Changed, reloadState), feedNote)
 	return nil
 }
 
@@ -1869,6 +2306,20 @@ func AutobanBannedToday() int {
 		FROM audit_log WHERE action=? AND created_at >= ?`,
 		prefixRunes, autobanAuditSummaryPrefix, prefixRunes+1, AutobanAuditAction, dayStart).Scan(&n)
 	if err != nil {
+		return 0
+	}
+	return n
+}
+
+// AutobanEscalatedCount 当前处于升级档（offense_count≥2）的累犯身份数。
+// 状态卡「累犯升级」统计源；读失败保守 0（与 AutobanBannedToday 同口径）。
+func AutobanEscalatedCount() int {
+	d := db.GetDB()
+	if d == nil {
+		return 0
+	}
+	var n int
+	if err := d.QueryRow(`SELECT COUNT(*) FROM autoban_recidivism WHERE offense_count >= 2`).Scan(&n); err != nil {
 		return 0
 	}
 	return n

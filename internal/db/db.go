@@ -204,14 +204,17 @@ const (
 	DefaultAutoBackupTime      = "03:00"
 	DefaultAutoBackupDay       = 1
 	DefaultAutoBackupKeep      = 7
-	// 自动封禁六列治理默认：DDL、启动回填、services 读侧 COALESCE 与
+	// 自动封禁九列治理默认：DDL、启动回填、services 读侧 COALESCE 与
 	// 无库默认结构体共用。枚举/边界仍由 services 校验持有，db 不反向依赖。
-	DefaultAutobanEnabled       = 0
-	DefaultAutobanThreshold     = 100
-	DefaultAutobanWindowMinutes = 5
-	DefaultAutobanDuration      = "1h"
-	DefaultAutobanScope         = "blocked,logged,challenge_issued,challenge_failed"
-	DefaultAutobanDryRun        = 1
+	DefaultAutobanEnabled                 = 0
+	DefaultAutobanThreshold               = 100
+	DefaultAutobanWindowMinutes           = 5
+	DefaultAutobanDuration                = "1h"
+	DefaultAutobanScope                   = "blocked,logged,challenge_issued,challenge_failed"
+	DefaultAutobanDryRun                  = 1
+	DefaultAutobanEscalation              = "off"
+	DefaultAutobanNatDetection            = 0
+	DefaultAutobanNatFingerprintThreshold = 3
 )
 
 // defaultAutoBackupSectionList 返回 DefaultAutoBackupSections 的切片形态，供
@@ -1490,17 +1493,22 @@ var newColumnsRegistry = map[string]string{
 	// 的 304 兜底与标签自愈依赖;哈希域=纯 ref 含版本标签)。
 	"global_config.applied_waf_ref_hash":    "TEXT DEFAULT ''",
 	"global_config.applied_waf_ref_version": "INTEGER DEFAULT 0",
-	// 自动封禁六项配置列：启用/阈值/窗口分钟/封禁时长（枚举
+	// 自动封禁九项配置列：启用/阈值/窗口分钟/封禁时长（枚举
 	// '10m','30m','1h','6h','12h','24h','permanent'）/统计口径（四维多选集合
 	// 'blocked,logged,challenge_issued,challenge_failed'，2026-11-13 用户裁定）/
-	// 观察模式（1=默认 dry-run，仅记录建议不落名单）。
-	// 全部 NOT NULL——语义零值即合法值（关/100/5/'1h'/四维全选/观察），无 NULL 分支。
-	"global_config.autoban_enabled":        "INTEGER NOT NULL DEFAULT " + fmt.Sprint(DefaultAutobanEnabled),
-	"global_config.autoban_threshold":      "INTEGER NOT NULL DEFAULT " + fmt.Sprint(DefaultAutobanThreshold),
-	"global_config.autoban_window_minutes": "INTEGER NOT NULL DEFAULT " + fmt.Sprint(DefaultAutobanWindowMinutes),
-	"global_config.autoban_duration":       "TEXT NOT NULL DEFAULT '" + DefaultAutobanDuration + "'",
-	"global_config.autoban_scope":          "TEXT NOT NULL DEFAULT '" + DefaultAutobanScope + "'",
-	"global_config.autoban_dry_run":        "INTEGER NOT NULL DEFAULT " + fmt.Sprint(DefaultAutobanDryRun),
+	// 观察模式（1=默认 dry-run，仅记录建议不落名单）/累犯渐进升级
+	// （off/standard/aggressive，默认 off 保持固定时长现行行为）/
+	// NAT 检测（默认关=现行 IP 级）与指纹阈值（默认 3，边界 2-100 由 services 校验）。
+	// 全部 NOT NULL——语义零值即合法值（关/100/5/'1h'/四维全选/观察/off/关/3），无 NULL 分支。
+	"global_config.autoban_enabled":                   "INTEGER NOT NULL DEFAULT " + fmt.Sprint(DefaultAutobanEnabled),
+	"global_config.autoban_threshold":                 "INTEGER NOT NULL DEFAULT " + fmt.Sprint(DefaultAutobanThreshold),
+	"global_config.autoban_window_minutes":            "INTEGER NOT NULL DEFAULT " + fmt.Sprint(DefaultAutobanWindowMinutes),
+	"global_config.autoban_duration":                  "TEXT NOT NULL DEFAULT '" + DefaultAutobanDuration + "'",
+	"global_config.autoban_scope":                     "TEXT NOT NULL DEFAULT '" + DefaultAutobanScope + "'",
+	"global_config.autoban_dry_run":                   "INTEGER NOT NULL DEFAULT " + fmt.Sprint(DefaultAutobanDryRun),
+	"global_config.autoban_escalation":                "TEXT NOT NULL DEFAULT '" + DefaultAutobanEscalation + "'",
+	"global_config.autoban_nat_detection":             "INTEGER NOT NULL DEFAULT " + fmt.Sprint(DefaultAutobanNatDetection),
+	"global_config.autoban_nat_fingerprint_threshold": "INTEGER NOT NULL DEFAULT " + fmt.Sprint(DefaultAutobanNatFingerprintThreshold),
 	// 口径单选→多选一次性迁移门（旧 scope+count_human_failed → 四维集合）。
 	"global_config.autoban_scope_multiselect_v1": "BOOLEAN DEFAULT 0",
 	"nodes.server_map_lat":                       "REAL NOT NULL DEFAULT 0",
@@ -1744,6 +1752,19 @@ func runMigrations() error {
 	if err := migrateAutobanScopeMultiselect(); err != nil {
 		return fmt.Errorf("failed to migrate autoban scope multiselect: %w", err)
 	}
+	// 累犯表（自动封禁渐进升级的持久记账）：identity=封禁身份键（常态
+	// IPv6 /64 归一/IPv4 裸地址，与计数键同形），offense_count=衰减后的
+	// 累计封禁次数，last_ban_at=最近封禁墙钟（UTC），escalated_duration=
+	// 最近一次执法时长（留痕/排障）。启动幂等建表，不播种不回填——
+	// 空表=全体身份首次档。
+	if _, err := DB.Exec(`CREATE TABLE IF NOT EXISTS autoban_recidivism (
+		identity TEXT PRIMARY KEY,
+		offense_count INTEGER NOT NULL DEFAULT 0,
+		last_ban_at TEXT NOT NULL DEFAULT '',
+		escalated_duration TEXT NOT NULL DEFAULT ''
+	)`); err != nil {
+		return fmt.Errorf("failed to create autoban_recidivism: %w", err)
+	}
 	// Normalize legacy/global default values that are invalid regardless of version
 	// 移除原第 3 条「追加 UA rename 行」的 UPDATE——该行每次启动都被下方
 	// 清理循环无条件剔除（死代码），且引发每启动一次无谓写放大。
@@ -1784,7 +1805,7 @@ func runMigrations() error {
 		// 静默吞掉，无任何留痕）。读侧 GetCertRenewalDays/Attempts 直读零兜底。
 		updateWhere("global_config", fmt.Sprintf("cert_renewal_days=%d", DefaultCertRenewalDays), "cert_renewal_days IS NULL OR cert_renewal_days<=0"),
 		updateWhere("global_config", fmt.Sprintf("cert_renewal_attempts=%d", DefaultCertRenewalAttempts), "cert_renewal_attempts IS NULL OR cert_renewal_attempts<=0"),
-		// 自动封禁六列每启动幂等回填（同上铁律的最后防线
+		// 自动封禁九列每启动幂等回填（同上铁律的最后防线
 		// 形态）——带外直写/畸形备份导入的脏行（0-1 外布尔、枚举外文本、写侧
 		// 边界外数值）在下次启动收敛到治理默认；运行期窗口内的无效值由消费侧
 		// 护栏（RunAutobanCycle 执行前校验，拒绝执行+显性报错）承担，不静默兜底。
@@ -1807,6 +1828,9 @@ func runMigrations() error {
 				SELECT COUNT(DISTINCT TRIM(value)) FROM json_each('["' || REPLACE(autoban_scope, ',', '","') || '"]')
 			)`),
 		updateWhere("global_config", fmt.Sprintf("autoban_dry_run=%d", DefaultAutobanDryRun), "autoban_dry_run IS NULL OR autoban_dry_run NOT IN (0,1)"),
+		updateWhere("global_config", fmt.Sprintf("autoban_escalation='%s'", DefaultAutobanEscalation), "autoban_escalation IS NULL OR autoban_escalation NOT IN ('off','standard','aggressive')"),
+		updateWhere("global_config", fmt.Sprintf("autoban_nat_detection=%d", DefaultAutobanNatDetection), "autoban_nat_detection IS NULL OR autoban_nat_detection NOT IN (0,1)"),
+		updateWhere("global_config", fmt.Sprintf("autoban_nat_fingerprint_threshold=%d", DefaultAutobanNatFingerprintThreshold), "autoban_nat_fingerprint_threshold IS NULL OR autoban_nat_fingerprint_threshold<2 OR autoban_nat_fingerprint_threshold>100"),
 		// 安全事件保留两列的**上界**每启动收敛（与写入侧/导入钳制/从端 apply
 		// 同一上界常量）。下界（<=0）由一次性 marker 迁移处理——marker 置位后
 		// 运行期显式 0 不得被重启改写（既有裁定），故此处只判越上界：带外直写

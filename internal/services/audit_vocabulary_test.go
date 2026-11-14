@@ -84,6 +84,9 @@ var auditVocabDynamicAllowlist = map[string]map[int][]string{
 	// autobanAuditBanned：动作传 AutobanAuditAction 包级常量（字面值「自动封禁」
 	// 单源）；逐 IP 行与超限汇总行共用。
 	"services/autoban.go": {1: {"autobanAuditBanned"}},
+	// autobanAuditSessionBanned：动作传 AutobanSessionAuditAction 包级常量
+	// （字面值「会话封禁」单源）；逐会话行与超限汇总行共用。
+	"services/autoban_session_ban.go": {1: {"autobanAuditSessionBanned"}},
 	// updateLibSourceFlags：事件对象来自 libSourceFlagsSpec.Family，取值仅
 	// 爬虫名单/威胁库两族（包内常量装配），词数均在标准内。
 	"handlers/lib_source_flags.go": {2: {"updateLibSourceFlags"}},

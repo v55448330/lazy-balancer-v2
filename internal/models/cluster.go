@@ -452,17 +452,20 @@ type ClusterBasicSettings struct {
 	CrawlerAutoUpdate   *bool   `json:"crawler_auto_update,omitempty"`
 	CrawlerScheduleDays *string `json:"crawler_schedule_days,omitempty"`
 	CrawlerScheduleTime *string `json:"crawler_schedule_time,omitempty"`
-	// 自动封禁六项配置随 users 节同步——从节点提升为主节点
+	// 自动封禁九项配置随 users 节同步——从节点提升为主节点
 	// 后调度按主端配置直接生效（镜像自动备份组/ 威胁排程组）。
 	// 指针+omitempty 缺席语义：旧主端快照缺该组时从端 apply 跳过写入、保留本地
 	// 设置，不清零；新主端装载恒非 nil（COALESCE 兜底），快照恒携带。此前六列
 	// 不入快照：从端恒默认值（名单传播而配置不传播），升主后按陈旧配置静默运行。
-	AutobanEnabled       *bool   `json:"autoban_enabled,omitempty"`
-	AutobanThreshold     *int    `json:"autoban_threshold,omitempty"`
-	AutobanWindowMinutes *int    `json:"autoban_window_minutes,omitempty"`
-	AutobanDuration      *string `json:"autoban_duration,omitempty"`
-	AutobanScope         *string `json:"autoban_scope,omitempty"`
-	AutobanDryRun        *bool   `json:"autoban_dry_run,omitempty"`
+	AutobanEnabled                 *bool   `json:"autoban_enabled,omitempty"`
+	AutobanThreshold               *int    `json:"autoban_threshold,omitempty"`
+	AutobanWindowMinutes           *int    `json:"autoban_window_minutes,omitempty"`
+	AutobanDuration                *string `json:"autoban_duration,omitempty"`
+	AutobanScope                   *string `json:"autoban_scope,omitempty"`
+	AutobanDryRun                  *bool   `json:"autoban_dry_run,omitempty"`
+	AutobanEscalation              *string `json:"autoban_escalation,omitempty"`
+	AutobanNatDetection            *bool   `json:"autoban_nat_detection,omitempty"`
+	AutobanNatFingerprintThreshold *int    `json:"autoban_nat_fingerprint_threshold,omitempty"`
 }
 
 type ClusterUser struct {
@@ -582,8 +585,12 @@ type ClusterSnapshot struct {
 	// 开关/计数/版本全量镜像）。
 	SecurityThreatSources json.RawMessage `json:"security_threat_sources,omitempty"`
 	// 爬虫地址库独立源行（v2.3.8）：随 security 节同步，不再借威胁源表通道。
-	SecurityCrawlerSources json.RawMessage   `json:"security_crawler_sources,omitempty"`
-	SectionHashes          map[string]string `json:"section_hashes,omitempty"`
+	SecurityCrawlerSources json.RawMessage `json:"security_crawler_sources,omitempty"`
+	// AutobanRecidivism 累犯表（自动封禁渐进升级持久记账）：随 security 节
+	// 同步（主只写，从端整表替换）。缺席=旧主端未携带，从端保留本地；
+	// 携带空数组 [] = 显式清空；携带即全量替换（与威胁源/爬虫源同口径）。
+	AutobanRecidivism json.RawMessage   `json:"autoban_recidivism,omitempty"`
+	SectionHashes     map[string]string `json:"section_hashes,omitempty"`
 	// MasterSyncSwitches 为主节点三类同步开关（users/rules/security，2026-09-19
 	// 三分类归一；修正「五类」陈旧注释），随快照下发；从节点跳过判定
 	// 以此为准（从节点本地开关列不参与，避免永远默认全开导致开关失效）。
