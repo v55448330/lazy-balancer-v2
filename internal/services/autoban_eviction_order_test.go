@@ -28,13 +28,13 @@ func TestAutobanMerge_evictionPrecomputedOrderAndParseBound(t *testing.T) {
 	var wantPermanentOrder []string
 	for i := range manualCount {
 		seeded = append(seeded, models.IPListEntry{
-			Value: fmt.Sprintf("192.0.2.%d", i+1), Remark: "事件处置",
+			Value: fmt.Sprintf("45.33.32.%d", i+1), Remark: "事件处置",
 		})
 	}
 	// 到期时间倒序写入（最早到期排在名单末尾）：挤出序必须按到期升序，
 	// 而非名单顺序。
 	for i := range expiring {
-		value := fmt.Sprintf("198.51.100.%d", i+1)
+		value := fmt.Sprintf("45.33.32.%d", i+1)
 		expires := fmt.Sprintf("2026-10-14 11:%02d:00", expiring-1-i)
 		seeded = append(seeded, models.IPListEntry{
 			Value: value, Remark: autobanEntryRemark, ExpiresAt: expires,
@@ -43,7 +43,7 @@ func TestAutobanMerge_evictionPrecomputedOrderAndParseBound(t *testing.T) {
 	}
 	// 永久条目：created_at 升序者先挤（created_at 递减写入，期望顺序即反向）。
 	for i := range permanent {
-		value := fmt.Sprintf("203.0.113.%d", i+1)
+		value := fmt.Sprintf("45.33.32.%d", i+1)
 		seeded = append(seeded, models.IPListEntry{
 			Value: value, Remark: autobanEntryRemark,
 			CreatedAt: fmt.Sprintf("2026-10-10 00:00:%02d", permanent-i),
@@ -89,7 +89,7 @@ func TestAutobanMerge_evictionPrecomputedOrderAndParseBound(t *testing.T) {
 		t.Fatalf("条目数=%d, want %d", len(final), AutobanListEntryCap)
 	}
 	for i := range manualCount {
-		wantValue := fmt.Sprintf("192.0.2.%d", i+1)
+		wantValue := fmt.Sprintf("45.33.32.%d", i+1)
 		if final[i].Value != wantValue || final[i].Remark != "事件处置" {
 			t.Fatalf("第 %d 条=%+v, want 手动条目 %s", i, final[i], wantValue)
 		}

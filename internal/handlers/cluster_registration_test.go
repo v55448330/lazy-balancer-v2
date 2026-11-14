@@ -21,6 +21,9 @@ func TestRegisterAuditField_truncates_and_strips_control_chars(t *testing.T) {
 		{name: "newline stripped", input: "node\nEVIL", want: "nodeEVIL"},
 		{name: "control char stripped", input: "node\x01x", want: "nodex"},
 		{name: "DEL stripped", input: "node\x7f", want: "node"},
+		{name: "C1 stripped", input: "node\u0085EVIL", want: "nodeEVIL"},
+		{name: "C1 upper bound stripped", input: "a\u009fb", want: "ab"},
+		{name: "C1 NEL multibyte stripped", input: "a\u0085b", want: "ab"},
 		{name: "long truncated", input: strings.Repeat("x", 300), want: strings.Repeat("x", 128)},
 		{name: "long multibyte valid utf8", input: strings.Repeat("中", 100), want: strings.Repeat("中", 42)},
 	}

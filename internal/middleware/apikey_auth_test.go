@@ -20,19 +20,8 @@ import (
 )
 
 func TestAPIKeyAuthBindsOwningUser(t *testing.T) {
-	oldDB := db.DB
-	database, err := sql.Open("sqlite", t.TempDir()+"/test.db")
-	if err != nil {
-		t.Fatal(err)
-	}
-	db.DB = database
-	db.SetDB(database)
-	t.Cleanup(func() {
-		db.DB = oldDB
-		db.SetDB(oldDB)
-		database.Close()
-	})
-	_, err = database.Exec(`CREATE TABLE users (
+	database := newIsolatedTestDB(t)
+	_, err := database.Exec(`CREATE TABLE users (
 		id INTEGER PRIMARY KEY, username VARCHAR(50), role VARCHAR(20), is_enabled BOOLEAN DEFAULT TRUE
 	);
 	CREATE TABLE api_keys (
@@ -119,18 +108,7 @@ func TestAPIKeyAuthBindsOwningUser(t *testing.T) {
 
 func TestJWTAuthQueriesAuthenticationStateOnce(t *testing.T) {
 	// Given
-	oldDB := db.DB
-	database, err := sql.Open("sqlite", t.TempDir()+"/test.db")
-	if err != nil {
-		t.Fatal(err)
-	}
-	db.DB = database
-	db.SetDB(database)
-	t.Cleanup(func() {
-		db.DB = oldDB
-		db.SetDB(oldDB)
-		_ = database.Close()
-	})
+	database := newIsolatedTestDB(t)
 	if _, err := database.Exec(`CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT, role TEXT, is_enabled BOOLEAN, password_version INTEGER NOT NULL DEFAULT 0);
 		CREATE TABLE revoked_jti (jti_hash TEXT PRIMARY KEY, expires_at DATETIME NOT NULL);
 		INSERT INTO users VALUES (7,'alice','user',1,0);`); err != nil {
@@ -171,18 +149,7 @@ func TestJWTAuthQueriesAuthenticationStateOnce(t *testing.T) {
 
 func TestJWTAuthReportsRevokedBeforeMissingUser(t *testing.T) {
 	// Given
-	oldDB := db.DB
-	database, err := sql.Open("sqlite", t.TempDir()+"/test.db")
-	if err != nil {
-		t.Fatal(err)
-	}
-	db.DB = database
-	db.SetDB(database)
-	t.Cleanup(func() {
-		db.DB = oldDB
-		db.SetDB(oldDB)
-		_ = database.Close()
-	})
+	database := newIsolatedTestDB(t)
 	if _, err := database.Exec(`CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT, role TEXT, is_enabled BOOLEAN, password_version INTEGER NOT NULL DEFAULT 0);
 		CREATE TABLE revoked_jti (jti_hash TEXT PRIMARY KEY, expires_at DATETIME NOT NULL);`); err != nil {
 		t.Fatal(err)
@@ -246,18 +213,7 @@ func TestAuthenticationSecurityAuditRateLimitsSameReasonPathAndIP(t *testing.T) 
 }
 
 func TestAPIKeyAuthAppliesIPWhitelistToRESTRequests(t *testing.T) {
-	oldDB := db.DB
-	database, err := sql.Open("sqlite", t.TempDir()+"/test.db")
-	if err != nil {
-		t.Fatal(err)
-	}
-	db.DB = database
-	db.SetDB(database)
-	t.Cleanup(func() {
-		db.DB = oldDB
-		db.SetDB(oldDB)
-		database.Close()
-	})
+	database := newIsolatedTestDB(t)
 	if _, err := database.Exec(`CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT, role TEXT, is_enabled BOOLEAN);
 		CREATE TABLE api_keys (id INTEGER PRIMARY KEY, name TEXT, key_hash TEXT, key_prefix TEXT, created_by INTEGER, last_used DATETIME, expires_at DATETIME, is_enabled BOOLEAN, mcp_enabled BOOLEAN, read_only BOOLEAN, mcp_ip_whitelist TEXT);
 		INSERT INTO users VALUES (1,'rest-user','user',1);`); err != nil {
@@ -289,18 +245,7 @@ func TestAPIKeyAuthAppliesIPWhitelistToRESTRequests(t *testing.T) {
 }
 
 func TestJWTAuthAllowsValidJWTWithInvalidAPIKeyHeader(t *testing.T) {
-	oldDB := db.DB
-	database, err := sql.Open("sqlite", t.TempDir()+"/test.db")
-	if err != nil {
-		t.Fatal(err)
-	}
-	db.DB = database
-	db.SetDB(database)
-	t.Cleanup(func() {
-		db.DB = oldDB
-		db.SetDB(oldDB)
-		database.Close()
-	})
+	database := newIsolatedTestDB(t)
 	if _, err := database.Exec(`CREATE TABLE users (
 		id INTEGER PRIMARY KEY, username VARCHAR(50), role VARCHAR(20), is_enabled BOOLEAN DEFAULT TRUE,
 		password_version INTEGER NOT NULL DEFAULT 0
@@ -339,19 +284,8 @@ func TestJWTAuthAllowsValidJWTWithInvalidAPIKeyHeader(t *testing.T) {
 }
 
 func TestAPIKeyAuthRejectsDisabledKey(t *testing.T) {
-	oldDB := db.DB
-	database, err := sql.Open("sqlite", t.TempDir()+"/test.db")
-	if err != nil {
-		t.Fatal(err)
-	}
-	db.DB = database
-	db.SetDB(database)
-	t.Cleanup(func() {
-		db.DB = oldDB
-		db.SetDB(oldDB)
-		database.Close()
-	})
-	_, err = database.Exec(`CREATE TABLE users (id INTEGER PRIMARY KEY, username VARCHAR(50), role VARCHAR(20), is_enabled BOOLEAN DEFAULT TRUE);
+	database := newIsolatedTestDB(t)
+	_, err := database.Exec(`CREATE TABLE users (id INTEGER PRIMARY KEY, username VARCHAR(50), role VARCHAR(20), is_enabled BOOLEAN DEFAULT TRUE);
 	CREATE TABLE api_keys (id INTEGER PRIMARY KEY, name VARCHAR(100), key_hash VARCHAR(255), key_prefix VARCHAR(20), created_by INTEGER, last_used DATETIME, expires_at DATETIME, is_enabled BOOLEAN DEFAULT TRUE, mcp_enabled INTEGER DEFAULT 0, read_only INTEGER DEFAULT 0, mcp_ip_whitelist TEXT DEFAULT '', created_at DATETIME DEFAULT CURRENT_TIMESTAMP);
 	INSERT INTO users VALUES (7, 'alice', 'user', 1);`)
 	if err != nil {

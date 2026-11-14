@@ -8,8 +8,14 @@ import { isPageId, type PageId } from '@/utils/pageIds'
 import { readHashQuery } from '@/utils/hashQuery'
 import { DEFAULT_CERT_RENEWAL_DAYS } from '@/utils/configValues'
 import { advanceSessionGeneration, currentSessionGeneration, isSameTokenIdentity } from '@/utils/sessionIdentity'
+
 // 展示串经 tSafe 词条安全 t():签名/判定不动,仅文案进 common.app.views.auth 词条
 import { tSafe as t } from '../i18n/tSafe.ts'
+// node_mode 契约三态白名单：登录/票据/step-up 响应与集群状态的该字段都是
+// 外部输入——信封改包/截断/异常值不得直写 store，未知形态归一 'unknown'，
+// 由 readOnlyReason 的 fail-closed 只读态兜底。归一单源，两处写入共用。
+const normalizeNodeMode = (value: unknown): ClusterNodeMode =>
+  value === 'master' || value === 'slave' || value === 'unknown' ? value : 'unknown'
 
 const queryPage = new URLSearchParams(location.search).get('page')
 const queryPageValid: PageId | null = queryPage && isPageId(queryPage) ? queryPage : null
@@ -34,7 +40,8 @@ if (queryPageValid) {
 
 interface AuthResponse {
   readonly token: string
-  readonly node_mode: ClusterNodeMode
+  // 线形按不可信 string 接收，写入 store 前经 normalizeNodeMode 白名单归一。
+  readonly node_mode?: string
   readonly user?: CurrentUser
 }
 
@@ -111,6 +118,8 @@ export const useAuthStore = defineStore('auth', () => {
       user.value = null
       token.value = null
       nodeMode.value = null
+      // 会话结束即清在途门：旧 /config 未落地前新会话首拉不得被吞。
+      configFetchInFlight = false
       return
     }
     // 另一标签页建立了新会话（登录 / 切换账号 / MFA step-up 刷新令牌）：跟随
@@ -118,6 +127,9 @@ export const useAuthStore = defineStore('auth', () => {
     intentionalLogout.value = false
     user.value = null
     nodeMode.value = null
+    // 换令牌同口径清在途门（同账号 MFA 刷新不推进代际，旧请求 finally 的
+    // 令牌比对会跳过复位——入口不清零则标志永久滞留，后续 fetchConfig 全被吞）。
+    configFetchInFlight = false
     token.value = stored
     void init()
   }
@@ -246,11 +258,16 @@ export const useAuthStore = defineStore('auth', () => {
 
   async function fetchConfig(silent = false) {
     if (!token.value || configFetchInFlight) return
+    // 发起时的会话身份：与 fetchUser 同口径，await 之后代际或令牌任一变化
+    // 即表示已换会话（登录他人/登出/跨标签同步），响应与失败都不得写回或排重试。
+    const issuedGeneration = currentSessionGeneration()
+    const issuedToken = token.value
     configFetchInFlight = true
     try {
       // 投影复用 GlobalConfigData 声明（该接口为 GET /config 响应单一事实源）；
       // is_master 是集群专属字段、不在 GlobalConfigData 面内，store 侧并集补充。
       const res = await request.get<APIResponse<ConfigProjection>>('/config', { silent })
+      if (currentSessionGeneration() !== issuedGeneration || token.value !== issuedToken) return
       if (res.data) {
         nodeMode.value = res.data.is_master ? 'master' : 'slave'
         if (res.data.timezone) timezone.value = res.data.timezone
@@ -262,10 +279,15 @@ export const useAuthStore = defineStore('auth', () => {
         scheduleConfigRetry()
       }
     } catch (e) {
+      // 换会话后旧请求的失败同样丢弃：否则会为新会话排一条本不该有的重试链。
+      if (currentSessionGeneration() !== issuedGeneration || token.value !== issuedToken) return
       // 瞬时失败保留最近一次已知模式，未知态由重试循环收敛（401 走全局拦截器）
       if (!(e instanceof ApiRequestError && e.status === 401)) scheduleConfigRetry()
       console.error(e)
     } finally {
+      // 无条件复位：换会话时新会话入口已清零并可能重新置位，旧请求落地至多
+      // 放行一轮额外 /config（代际守卫保证不写回）；条件复位反而会在
+      // 「跨标签换令牌（代际不变）」时永久滞留标志，吞掉后续全部拉取。
       configFetchInFlight = false
     }
   }
@@ -328,8 +350,11 @@ interface LoginResult {
     intentionalLogout.value = false
     clearUserRetryTimer()
     clearConfigRetryTimer()
+    // 换会话即重置 /config 在途门：旧会话在飞请求的响应已被代际守卫丢弃，
+    // 标志若残留 true 会吞掉新会话的首次 fetchConfig（nodeMode 停在 null）。
+    if (!preserveSession) configFetchInFlight = false
     token.value = res.token
-    nodeMode.value = res.node_mode
+    nodeMode.value = normalizeNodeMode(res.node_mode)
     safeLocalStorageSet('token', res.token)
     if (res.user) {
       user.value = {
@@ -354,6 +379,8 @@ interface LoginResult {
     intentionalLogout.value = false
     clearUserRetryTimer()
     clearConfigRetryTimer()
+    // 换令牌即换会话：在途门与登录/登出入口同口径清零。
+    configFetchInFlight = false
     user.value = null
     nodeMode.value = null
     token.value = rawToken
@@ -385,6 +412,7 @@ interface LoginResult {
     } finally {
       clearUserRetryTimer()
       clearConfigRetryTimer()
+      configFetchInFlight = false
       user.value = null
       token.value = null
       nodeMode.value = null
@@ -402,6 +430,7 @@ interface LoginResult {
     intentionalLogout.value = true
     clearUserRetryTimer()
     clearConfigRetryTimer()
+    configFetchInFlight = false
     user.value = null
     token.value = null
     nodeMode.value = null
@@ -426,7 +455,8 @@ interface LoginResult {
   }
 
   function setNodeMode(mode: ClusterNodeMode) {
-    nodeMode.value = mode
+    // 集群状态响应同为外部输入：与登录响应同一白名单归一（fail-closed）。
+    nodeMode.value = normalizeNodeMode(mode)
   }
 
   async function init() {

@@ -102,7 +102,7 @@ func TestSecurityEventsGenerationGuard_resetsAutobanCountersOnReplay(t *testing.
 
 	// Given：一条窗口内真实事件和上一代遗留计数；首轮先把遗留 4 推进到 5，
 	// 证明夹具确实喂入自动封禁，而不是靠禁用/过期得到零计数。
-	const ip = "198.51.100.77"
+	const ip = "45.33.32.77"
 	fixture := securityEventsLoggedRuleFixture("tx-generation-autoban", ip, "")
 	if err := os.WriteFile(logPath, []byte(fixture+"\n"), 0o644); err != nil {
 		t.Fatal(err)

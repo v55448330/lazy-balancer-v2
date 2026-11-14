@@ -391,6 +391,8 @@ type enumeratedRecord struct {
 func (p *Provider) listChallengeRecords(ctx context.Context, zone, subDomain string) ([]enumeratedRecord, error) {
 	var collected []enumeratedRecord
 	var offset uint64
+	var fetchedTotal uint64
+	seen := make(map[uint64]bool)
 	for range challengeListPageLimit {
 		req := dnspod.NewDescribeRecordListRequest()
 		req.Domain = common.StringPtr(zone)
@@ -414,6 +416,7 @@ func (p *Provider) listChallengeRecords(ctx context.Context, zone, subDomain str
 		if resp.Response == nil {
 			return collected, nil
 		}
+		repeatedPage := true
 		for _, item := range resp.Response.RecordList {
 			if item == nil || item.RecordId == nil {
 				continue
@@ -432,6 +435,11 @@ func (p *Provider) listChallengeRecords(ctx context.Context, zone, subDomain str
 			if item.Value != nil {
 				value = *item.Value
 			}
+			if seen[*item.RecordId] {
+				continue
+			}
+			repeatedPage = false
+			seen[*item.RecordId] = true
 			collected = append(collected, enumeratedRecord{recordID: *item.RecordId, value: value})
 		}
 		var total uint64
@@ -441,9 +449,24 @@ func (p *Provider) listChallengeRecords(ctx context.Context, zone, subDomain str
 		fetched := uint64(len(resp.Response.RecordList))
 		// 服务端可能按更小的页容量返回：按实际返回条数推进 offset（绝对
 		// 偏移语义，与 dnspod 侧同口径），短页不重不漏，无需按 Limit 整数倍
-		// 对齐（钉测见 tencent_pagination_test.go）。
+		// 对齐（钉测见 tencent_pagination_test.go）。翻页终止与 cloudflare
+		// 侧统一（total 优先、短页兜底、按实际取到条数推进游标）：fetched==0
+		// 即终止；total>0 时按累计取到数 ≥ total 终止——中途短页（页间漂移/
+		// 服务端单页容量波动）继续翻页不漏扫；total 缺失时退回「短页即终止」。
+		// total 失真偏大且服务端重复下发同页（无进展）时同样终止——否则
+		// 空转到页数上限并重复收集（钉测见 stopsWhenPagesRepeatWithInflatedTotal）。
 		offset += fetched
-		if fetched == 0 || (total > 0 && offset >= total) {
+		fetchedTotal += fetched
+		if fetched == 0 || repeatedPage {
+			return collected, nil
+		}
+		if total > 0 {
+			if fetchedTotal >= total {
+				return collected, nil
+			}
+			continue
+		}
+		if fetched < challengeListPageSize {
 			return collected, nil
 		}
 	}
@@ -507,17 +530,18 @@ func (p *Provider) sanitizeSDKError(err error) error {
 }
 
 // isRecordNotFound 识别 TencentCloud DeleteRecord 的记录不存在信号：
-// ResourceNotFound.NoDataOfRecord，或记录 ID 失效类错误码。
+// ResourceNotFound.NoDataOfRecord，或记录 ID 失效类错误码。只认记录级精确
+// 码——ResourceNotFound 前缀下的域名级子码（如 ResourceNotFound.DomainNotFound，
+// 域名移出账户/删除后厂商返回）不是「记录已删除」：误判会让清理把域名级故障
+// 当删除成功，账本条目被移除而 TXT 可能仍残留。认不全的代价是幂等重试持续
+// 报错（fail-safe 方向），不会误删——宁缺勿滥（与 aliyun 侧同口径）。
 func isRecordNotFound(err error) bool {
 	var sdkErr *tcerr.TencentCloudSDKError
 	if !errors.As(err, &sdkErr) {
 		return false
 	}
-	if strings.HasPrefix(sdkErr.Code, "ResourceNotFound") {
-		return true
-	}
 	switch sdkErr.Code {
-	case "InvalidParameter.RecordIdInvalid", "InvalidRecord.Id":
+	case "ResourceNotFound.NoDataOfRecord", "InvalidParameter.RecordIdInvalid", "InvalidRecord.Id":
 		return true
 	}
 	return false

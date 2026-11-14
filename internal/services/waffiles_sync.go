@@ -1238,6 +1238,12 @@ const maxWafSyncExtractDirs = 2 * maxWafSyncExtractFiles
 // 恰好用尽的边界包，生产路径不修改。
 var maxWafSyncExtractBytes int64 = 256 << 20
 
+// wafSyncExtractSync 是解包逐文件落盘同步的测试缝（生产恒为 (*os.File).Sync）：
+// Sync 失败分支是掉电持久性门，无法用真实文件注入（只能靠磁盘故障），经缝
+// 覆盖「同步失败不得把未 fsync 的 staging 树当成功」——与 ip2RegionDownloadSync
+// 同款缝约定。
+var wafSyncExtractSync = func(f *os.File) error { return f.Sync() }
+
 // untarGzTo extracts data into destDir atomically. When expectSum is
 // non-empty, the re-archived staging tree must hash to it, or the sync is
 // rejected before anything touches the live tree.
@@ -1376,10 +1382,22 @@ func untarGzTo(data []byte, destDir string, expectSum string) error {
 			if err != nil {
 				return err
 			}
-			written, err := io.Copy(f, tr)
+			written, copyErr := io.Copy(f, tr)
+			// 落盘耐久性与 extractCRSTarball/writeFileAtomicSynced 同口径：
+			// staging 树随后被换入 live，掉电/容器强杀窗口内未 fsync 的页可能
+			// 留下 0 字节或截断规则文件——完整性门只查探针/哈希，残缺树会被
+			// 装载并静默削弱 WAF。逐文件 Sync 后再 Close，错误按 copy→sync→close
+			// 序上抛（与 CRS 解包同一失败语义）。
+			syncErr := error(nil)
+			if copyErr == nil {
+				syncErr = wafSyncExtractSync(f)
+			}
 			closeErr := f.Close()
-			if err != nil {
-				return err
+			if copyErr != nil {
+				return copyErr
+			}
+			if syncErr != nil {
+				return fmt.Errorf("同步规则集文件 %s 落盘同步失败: %w", rel, syncErr)
 			}
 			if closeErr != nil {
 				return closeErr

@@ -1,4 +1,4 @@
-import { entryMatchesIp, parseIPList, parseRefIds } from './securityStages.ts'
+import { createIpMatcher, parseIPList, parseRefIds } from './securityStages.ts'
 import { tSafe as t } from '../i18n/tSafe.ts'
 
 export type IpQuickSide = 'deny' | 'allow' | 'trust'
@@ -79,6 +79,10 @@ export const buildIpQuickModel = (
   entries: Record<number, string[]>,
 ): Record<IpQuickSide, { sources: IpQuickSource[]; targets: IpQuickTarget[] }> => {
   const ip = ipRaw.trim()
+  // 探针 IP 只解析一次（createIpMatcher 预解析 + CIDR 解析缓存单源）：弹框
+  // 输入每次击键都重建整表模型，逐条 entryMatchesIp 会把同一 IP 重复解析
+  // N 条名单 × 3 侧（内置威胁名单数万条时是主线程卡顿源）。
+  const matchesIp = createIpMatcher(ip)
   const listById = new Map(lists.map((list) => [list.id, list]))
   const result: Record<IpQuickSide, { sources: IpQuickSource[]; targets: IpQuickTarget[] }> = {
     deny: { sources: [], targets: [] },
@@ -93,7 +97,7 @@ export const buildIpQuickModel = (
       if (!policySupportsSide(policy, side)) continue
       const inline = inlineOf(policy, side)
       const refs = refsOf(policy, side)
-      const inlineHit = inline.find((entry) => entryMatchesIp(entry, ip))
+      const inlineHit = inline.find(matchesIp)
       if (inlineHit) {
         sourceMap.set(`inline:${policy.id}`, {
           key: `inline:${policy.id}`,
@@ -114,7 +118,7 @@ export const buildIpQuickModel = (
         if (!list || list.system) continue
         writableRefCount += 1
         const listEntries = entries[listId] ?? []
-        const matchedEntry = listEntries.find((entry) => entryMatchesIp(entry, ip))
+        const matchedEntry = listEntries.find(matchesIp)
         if (matchedEntry) {
           sideHit = true
           const key = `list:${listId}`

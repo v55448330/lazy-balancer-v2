@@ -611,8 +611,9 @@ func TestAutoBackupEnabled_logsReadFailureOnceAndRecovers(t *testing.T) {
 		t.Fatalf("threat 总闸读失败日志次数=%d, want 1: %s", count, logs.String())
 	}
 
-	// When：库恢复。Then：恢复分支留一条 info，稳定期零噪音。
+	// When：库恢复（读侧走原子句柄，双句柄同恢复）。Then：恢复分支留一条 info，稳定期零噪音。
 	db.DB = healthy
+	db.SetDB(healthy)
 	AutoBackupEnabledState()
 	globalTaskAutoUpdateEnabled("threat")
 	AutoBackupEnabledState()
@@ -626,6 +627,7 @@ func TestAutoBackupEnabled_logsReadFailureOnceAndRecovers(t *testing.T) {
 
 	// When：恢复后再次失败。Then：去重状态机复位，必须重新首报一次。
 	db.DB = broken
+	db.SetDB(broken)
 	AutoBackupEnabledState()
 	if count := strings.Count(logs.String(), "读取配置失败（schedule-read-auto-backup-enabled）"); count != 2 {
 		t.Fatalf("再次失败后告警次数=%d, want 2（恢复后必须重新首报）: %s", count, logs.String())

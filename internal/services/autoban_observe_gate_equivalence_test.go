@@ -23,15 +23,15 @@ func TestAutobanObserveEventScopedAt_gateEquivalence(t *testing.T) {
 		windowMinutes int
 		wantFed       bool
 	}{
-		{"目标形态", "203.0.113.1", "blocked", "942100", 5, true},
+		{"目标形态", "45.33.32.1", "blocked", "942100", 5, true},
 		{"空ip先判丢弃", "", "blocked", "942100", 5, false},
-		{"空token先判丢弃", "203.0.113.2", "blocked", "", 5, false},
-		{"零窗口先判丢弃", "203.0.113.3", "blocked", "942100", 0, false},
-		{"负窗口先判丢弃", "203.0.113.4", "blocked", "942100", -1, false},
-		{"口径外action", "203.0.113.5", "challenged", "942100", 5, false},
-		{"阶段1族不计", "203.0.113.6", "blocked", "850001", 5, false},
-		{"非数值token不计", "203.0.113.7", "blocked", "not-a-rule", 5, false},
-		{"logged维度照常", "203.0.113.8", "logged", "942100", 5, true},
+		{"空token先判丢弃", "45.33.32.2", "blocked", "", 5, false},
+		{"零窗口先判丢弃", "45.33.32.3", "blocked", "942100", 0, false},
+		{"负窗口先判丢弃", "45.33.32.4", "blocked", "942100", -1, false},
+		{"口径外action", "45.33.32.5", "challenged", "942100", 5, false},
+		{"阶段1族不计", "45.33.32.6", "blocked", "850001", 5, false},
+		{"非数值token不计", "45.33.32.7", "blocked", "not-a-rule", 5, false},
+		{"logged维度照常", "45.33.32.8", "logged", "942100", 5, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -57,19 +57,19 @@ func TestAutobanObserveEventScopedAt_scopeSetSharedAcrossDimensions(t *testing.T
 	installAutobanFixture(t, "2026-11-13 10:00:00")
 	cfg := AutobanConfig{Enabled: true, Threshold: 100, WindowMinutes: 5, Duration: "1h",
 		Scope: " blocked , logged ,challenge_issued, challenge_failed ,blocked"}
-	autobanObserveEventScopedAt(cfg, "203.0.113.10", "blocked", "942100", time.Time{})
-	autobanObserveEventScopedAt(cfg, "203.0.113.11", "logged", "942100", time.Time{})
-	autobanObserveEventScopedAt(cfg, "203.0.113.12", "challenged", "human_challenge", time.Time{})
-	autobanObserveEventScopedAt(cfg, "203.0.113.13", "challenged", "human_failed", time.Time{})
-	autobanObserveEventScopedAt(cfg, "203.0.113.14", "challenged", "human_pass", time.Time{})
+	autobanObserveEventScopedAt(cfg, "45.33.32.10", "blocked", "942100", time.Time{})
+	autobanObserveEventScopedAt(cfg, "45.33.32.11", "logged", "942100", time.Time{})
+	autobanObserveEventScopedAt(cfg, "45.33.32.12", "challenged", "human_challenge", time.Time{})
+	autobanObserveEventScopedAt(cfg, "45.33.32.13", "challenged", "human_failed", time.Time{})
+	autobanObserveEventScopedAt(cfg, "45.33.32.14", "challenged", "human_pass", time.Time{})
 	autobanMu.Lock()
 	defer autobanMu.Unlock()
-	for _, ip := range []string{"203.0.113.10", "203.0.113.11", "203.0.113.12", "203.0.113.13"} {
+	for _, ip := range []string{"45.33.32.10", "45.33.32.11", "45.33.32.12", "45.33.32.13"} {
 		if w := autobanWindows[ip]; w == nil || w.Count != 1 {
 			t.Fatalf("%s 应计数 1, got %+v", ip, w)
 		}
 	}
-	if w := autobanWindows["203.0.113.14"]; w != nil {
+	if w := autobanWindows["45.33.32.14"]; w != nil {
 		t.Fatalf("human_pass 永不计数, got %+v", w)
 	}
 }

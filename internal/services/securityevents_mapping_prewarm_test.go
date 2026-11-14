@@ -1,12 +1,19 @@
 package services
 
-import "testing"
+import (
+	"reflect"
+	"strings"
+	"testing"
+
+	"lazy-balancer-v2/internal/models"
+)
 
 // 共享映射（IPC 批摄取与 live 尾读命中同一份只读快照）发布前必须完成全部
 // 策略级懒解析：两个通道的锁互不相交，若把解析留到发布后由各通道「首次
 // 命中」再做，读者可能看见「已标记解析 / 值未填」的中间态——事件被算到
-// 另一条策略或没有策略。本用例把「发布点之前预热全部懒解析字段」钉在
-// loader 上：删掉预热循环（或新增懒解析字段却漏预热）即红。
+// 另一条策略或没有策略。本用例把「发布点之前预热当前已知懒解析字段」钉在
+// loader 上：删掉预热循环即红。新增懒字段的漏预热由下方反射守卫结构性拦截
+// （注释承诺不再依赖维护者自觉）。
 func TestSecurityEventsLoadMappings_prewarmsPolicyAnalysisBeforePublish(t *testing.T) {
 	_, database := newClusterTestService(t)
 	resetSecurityEventsMappingsCacheForTest()
@@ -44,5 +51,35 @@ func TestSecurityEventsLoadMappings_prewarmsPolicyAnalysisBeforePublish(t *testi
 	if !p.IPBlacklistIPIndex.Built || !p.IPBlacklistIPIndex.OK || p.IPBlacklistIPIndex.Entries == 0 {
 		t.Fatalf("IPBlacklistIPIndex built/ok/entries=%v/%v/%d, want true/true/>0 —— 黑名单快照必须早于映射发布",
 			p.IPBlacklistIPIndex.Built, p.IPBlacklistIPIndex.OK, p.IPBlacklistIPIndex.Entries)
+	}
+}
+
+// 反射守卫：models.SecurityPolicy 的懒解析标记字段全集必须与本清单逐字
+// 相等——新增懒字段（*Parsed/*Cached 布尔或 *IPIndex 快照）而不同步预热
+// 与本清单即红。与上方行为钉互补：行为钉证明「已知字段已预热」，本守卫
+// 证明「没有未知的漏网字段」。
+func TestSecurityEventsLoadMappings_lazyFieldInventoryMatchesPrewarmSurface(t *testing.T) {
+	want := map[string]bool{
+		"CRSRuleGroupsParsed": true,
+		"CustomRulesCached":   true,
+		"CustomRuleIDsParsed": true,
+		"ACLIPIndex":          true,
+		"IPBlacklistIPIndex":  true,
+	}
+	got := map[string]bool{}
+	typ := reflect.TypeOf(models.SecurityPolicy{})
+	for i := range typ.NumField() {
+		name := typ.Field(i).Name
+		if strings.HasSuffix(name, "Parsed") || strings.HasSuffix(name, "Cached") || strings.HasSuffix(name, "IPIndex") {
+			got[name] = true
+		}
+	}
+	if len(got) != len(want) {
+		t.Fatalf("懒解析字段清单漂移: got=%v want=%v —— 新增懒字段必须同步 loader 预热循环与本清单", got, want)
+	}
+	for name := range want {
+		if !got[name] {
+			t.Fatalf("懒解析字段 %s 消失/改名: got=%v —— 预热面与守卫清单必须同步", name, got)
+		}
 	}
 }

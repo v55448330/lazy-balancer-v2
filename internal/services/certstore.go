@@ -281,10 +281,16 @@ func writeCertPairFiles(certPath, keyPath, certPEM, keyPEM string) (bool, error)
 	return true, nil
 }
 
+// writeSyncedFile 写入并 fsync。mode 必须显式 Chmod：O_CREATE 的 mode 只在
+// 新建时生效，崩溃遗留/外部预置的同名 tmp 会保留旧权限——私钥 tmp 不强制
+// 收敛可短暂以 0644 全局可读（与 atomicfile.Stage 的显式 chmod 同口径）。
 func writeSyncedFile(path string, data []byte, mode os.FileMode) error {
 	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, mode)
 	if err != nil {
 		return err
+	}
+	if err := file.Chmod(mode); err != nil {
+		return errors.Join(err, file.Close())
 	}
 	if _, err := file.Write(data); err != nil {
 		return errors.Join(err, file.Close())
@@ -544,7 +550,7 @@ func MaterializeAllCertsFromDB() {
 	// 每规则取「最新且域名适用」的一行（同 rule_id 多 cert_jobs 行）——选择与
 	// 6h 文件对账同源（latestApplicableACMECertMaterials）：物化内容不取决于
 	// 扫描顺序，也不会重建旧域证书。
-	materials, _, selectErr := latestApplicableACMECertMaterials(context.Background(), db.DB, "certstore")
+	materials, scanFailures, selectErr := latestApplicableACMECertMaterials(context.Background(), db.DB, "certstore")
 	if selectErr != nil {
 		Logf("error", "certstore: query ACME certs failed: %v", selectErr)
 		RecordAuditLog("system", "恢复失败", "证书文件", FormatAuditDetail(AuditSourcePart("startup_materialization"), "类型：ACME证书", AuditResultPart("query_failed")), "")
@@ -562,7 +568,13 @@ func MaterializeAllCertsFromDB() {
 	if manualRecovered > 0 || acmeRecovered > 0 {
 		RecordAuditLog("system", "恢复", "证书文件", FormatAuditDetail(AuditSourcePart("startup_materialization"), fmt.Sprintf("手动证书 %d 个", manualRecovered), fmt.Sprintf("ACME证书 %d 个", acmeRecovered)), "")
 	}
-	TaskLogf("startup:config-load", "certs", "证书物化完成：手动证书 %d 个、ACME 证书 %d 个落盘", manualRecovered, acmeRecovered)
+	// 逐行读失败（选择器已逐行 error 留痕）必须进摘要：被跳过的行本轮未物化，
+	// 无条件报「完成」会让运维看不出残缺轮（与对账侧失败聚合同形）。
+	skippedNote := ""
+	if scanFailures > 0 {
+		skippedNote = fmt.Sprintf("（另 %d 行读取失败已跳过）", scanFailures)
+	}
+	TaskLogf("startup:config-load", "certs", "证书物化完成：手动证书 %d 个、ACME 证书 %d 个落盘%s", manualRecovered, acmeRecovered, skippedNote)
 }
 
 // materializeCertPair 把库内证书对物化到磁盘，返回是否真正发生了写入。

@@ -1910,7 +1910,7 @@ func recordJobFailure(jobID int, fromSet []string, message, errorCode string, re
 		// 库内写规范 UTC（available），日志/审计展示跟随部署时区
 		//（global_config.timezone，tz.go 周期刷新）——旧硬编码 UTC+8 在配置
 		// 非 Asia/Shanghai 的部署里展示时间漂移。
-		fields["ca_available_after"] = time.Now().Add(window).UTC().Format("2006-01-02 15:04:05")
+		fields["ca_available_after"] = CanonicalDatetimeValue(time.Now().Add(window))
 	} else {
 		fields["ca_available_after"] = nil
 	}

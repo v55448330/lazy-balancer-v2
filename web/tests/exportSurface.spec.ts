@@ -23,7 +23,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { code, webFiles } from './_helpers.ts'
+import { REGEX_PRECEDING_CHARS, REGEX_PRECEDING_KEYWORDS, code, webFiles } from './_helpers.ts'
 
 const DEFINITION_DIRS = ['src/utils', 'src/composables', 'src/stores', 'src/types'] as const
 const SOURCE_EXTENSIONS = ['.ts', '.vue'] as const
@@ -51,28 +51,9 @@ const exportedNames = (text: string): string[] => {
   return names
 }
 
-/** 正则字面量可能出现的上一个有效字符（表达式位置的运算符/开括号/逗号等）。
- * 刻意不含 `<`/`>`：Vue 模板的闭合标签（`</el-option>`）会让 `<` 后的正斜杠被
- * 误判成正则起点，一路吞到下一个 `/` —— 整段模板与脚本的标识符消失（假绿）。 */
-const REGEX_PRECEDER_CHARS = '([{,;:=!&|?+-*%^'
-/** 关键字之后的正斜杠是正则字面量起点而不是除号。 */
-const REGEX_KEYWORDS: Record<string, true> = {
-  return: true,
-  typeof: true,
-  instanceof: true,
-  in: true,
-  of: true,
-  new: true,
-  delete: true,
-  void: true,
-  case: true,
-  do: true,
-  else: true,
-  yield: true,
-  await: true,
-  throw: true,
-}
-
+// 正则起点判据与 _helpers.commentSpans 同源（单源表）：收尾记号后的 `/` 是除号，
+// `=>` 后的 `/` 是正则。Vue 模板闭合标签（`</el-option>`）的 `<`/`>` 不在前驱表内，
+// 不会把模板吞成正则（整段标识符消失=假绿）。
 /**
  * 扫过一段代码，收集「不在字符串/模板/正则字面量里」的标识符。
  * `stopAtBrace` 供模板 `${ … }` 插值递归使用（返回时 next 指向 `}` 之后）。
@@ -86,6 +67,8 @@ const scanIdentifiers = (text: string, from: number, stopAtBrace: boolean): { to
   let i = from
   let lastSignificant = ''
   let lastWord = ''
+  // 箭头函数体（`=> /re/`）：`>` 本身不是正则起点，但紧跟 `=` 的 `>` 是。
+  let lastIsArrow = false
   while (i < text.length) {
     const ch = text[i]
     if (stopAtBrace && ch === '}') return { tokens, next: i + 1 }
@@ -95,6 +78,7 @@ const scanIdentifiers = (text: string, from: number, stopAtBrace: boolean): { to
       lastWord = text.slice(start, i)
       tokens.push(lastWord)
       lastSignificant = 'a' // 标识符/数字收尾：后续 `/` 是除号
+      lastIsArrow = false
       continue
     }
     if (ch === '"' || ch === "'" || ch === '`') {
@@ -103,15 +87,18 @@ const scanIdentifiers = (text: string, from: number, stopAtBrace: boolean): { to
       i = literal.next
       lastSignificant = 'v'
       lastWord = ''
+      lastIsArrow = false
       continue
     }
-    if (ch === '/' && (lastSignificant === '' || REGEX_PRECEDER_CHARS.includes(lastSignificant) || REGEX_KEYWORDS[lastWord] === true)) {
+    if (ch === '/' && (lastSignificant === '' || lastIsArrow || REGEX_PRECEDING_CHARS[lastSignificant] === true || REGEX_PRECEDING_KEYWORDS[lastWord] === true)) {
       i = skipRegex(text, i)
       lastSignificant = 'v'
       lastWord = ''
+      lastIsArrow = false
       continue
     }
     if (!/\s/.test(ch)) {
+      lastIsArrow = ch === '>' && lastSignificant === '='
       lastSignificant = ch
       lastWord = ''
     }
@@ -273,6 +260,26 @@ test('测试内字符串/正则 marker 不算消费方（按名切片不得给�
   assert.deepEqual(findUnusedExports(definitions, indexSources(consumerSources)), {
     checked: 3,
     unused: ['src/utils/restart.ts → reloadAfterRestart', 'src/utils/restart.ts → RestartServiceOptions'],
+  })
+})
+
+test('箭头函数后的正则字面量不算消费方（缺箭头态会把正则体当代码）', () => {
+  const consumerSources = new Map([
+    // `=> /…/` 的正则体不是标识符引用：缺箭头态时正则体被当代码扫描，
+    // 正则里复述的导出名会给死导出续命（假绿）。
+    ['tests/viewsWiringGuards.spec.ts', 'const f = () => /deadArrowSymbol/\n'],
+    // 真实消费：箭头函数体里的标识符仍是代码。
+    ['tests/realConsumer.spec.ts', 'const g = () => liveArrowSymbol\n'],
+  ])
+  const definitions = new Map([
+    ['src/utils/arrow.ts', [
+      'export const deadArrowSymbol = 1',
+      'export const liveArrowSymbol = 2',
+    ].join('\n')],
+  ])
+  assert.deepEqual(findUnusedExports(definitions, indexSources(consumerSources)), {
+    checked: 2,
+    unused: ['src/utils/arrow.ts → deadArrowSymbol'],
   })
 })
 

@@ -94,11 +94,16 @@ func getTaskLogSizeBytes(ctx context.Context) int64 {
 			// 失败不缓存：回退值只对本轮生效，下一轮重试。
 			return 0, err
 		}
-		if lvl := logStateTransition("task-log-size-refresh", false); lvl != "" {
-			Logf(lvl, "读取任务日志大小配置已恢复")
-		}
 		if sizeMB <= 0 {
+			// 库值 <=0（带外改库/半迁移形态）与读失败同口径 fail-visible：
+			// 回退默认当轮生效，但必须含库值留痕——静默回落让「面板配置形同
+			// 虚设」零信号（与审计侧 getAuditLogSizeBytesContext 同源）。
+			if lvl := logStateTransition("task-log-size-refresh", true); lvl != "" {
+				Logf(lvl, "任务日志大小配置库值 %d 不可用（≤0），回退默认 %dMB（本轮生效）", sizeMB, db.DefaultTaskLogSizeMB)
+			}
 			sizeMB = db.DefaultTaskLogSizeMB
+		} else if lvl := logStateTransition("task-log-size-refresh", false); lvl != "" {
+			Logf(lvl, "读取任务日志大小配置已恢复")
 		}
 		return int64(sizeMB) * 1024 * 1024, nil
 	}, defaultBytes)

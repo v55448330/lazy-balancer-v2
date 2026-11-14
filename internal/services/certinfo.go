@@ -167,8 +167,8 @@ func GetCertRenewalDays() int {
 	// 读侧上界与写侧（handlers.UpdateConfig 0-CertRenewalDaysMax）/导入钳制
 	// 对齐——带外直写 365 会让 90 天证书整年处于续签窗口，每 6h 触发一次签发
 	// 风暴耗尽 CA 配额。与 <=0 同形态：error 级留痕后降级治理默认。
-	if days > 90 {
-		Logf("error", "GetCertRenewalDays: cert_renewal_days 库值超上界（%d >90）——写侧校验/导入钳制之外，疑似带外直写/旧备份恢复（续签风暴风险）；本轮降级默认 %d 留痕", days, db.DefaultCertRenewalDays)
+	if days > CertRenewalLifetimeDays {
+		Logf("error", "GetCertRenewalDays: cert_renewal_days 库值超上界（%d >%d）——写侧校验/导入钳制之外，疑似带外直写/旧备份恢复（续签风暴风险）；本轮降级默认 %d 留痕", days, CertRenewalLifetimeDays, db.DefaultCertRenewalDays)
 		return db.DefaultCertRenewalDays
 	}
 	// 存量/旧备份遗留的 89/90 仍在旧契约内，但已超过安全上限（窗口接近寿命时

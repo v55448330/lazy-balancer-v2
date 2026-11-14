@@ -250,7 +250,10 @@ export const cidrContains = (cidr: string, ip: string): boolean => {
     for (const g of groups) num = (num << 16n) | BigInt(g)
     return { num, bits: 128, is4: false }
   }
-  const [cidrAddr, cidrPrefixText] = cidr.trim().split('/')
+  const cidrParts = cidr.trim().split('/')
+  // 多斜杠形态非法（与 isValidCidr 同判据）：不得把首段当地址静默命中。
+  if (cidrParts.length > 2) return false
+  const [cidrAddr, cidrPrefixText] = cidrParts
   const entry = toNum(cidrAddr ?? '')
   const probe = toNum(ip.trim())
   if (!entry || !probe) return false
@@ -261,8 +264,12 @@ export const cidrContains = (cidr: string, ip: string): boolean => {
     // 裸 IP（含 mapped 裸 IP，已折算为 32 位）= 精确主机匹配
     prefix = entry.bits
   } else {
+    // 前缀过 isValidCidr 同一白名单（纯数字/拒前导零/上界按族）：空前缀
+    // Number('') === 0 曾按 /0 命中全族；上界由下方 prefix > entry.bits 复核
+    // （mapped 折算后的 32 位口径）。
+    if (!/^\d+$/.test(cidrPrefixText)) return false
+    if (cidrPrefixText.length > 1 && cidrPrefixText[0] === '0') return false
     prefix = Number(cidrPrefixText)
-    if (!Number.isInteger(prefix) || prefix < 0) return false
     // mapped v6 前缀折算：/120 ≡ v4 /24；前缀不足 96 的 mapped 形态无法折算
     if (entry.mappedPrefix === 96) {
       prefix -= entry.mappedPrefix

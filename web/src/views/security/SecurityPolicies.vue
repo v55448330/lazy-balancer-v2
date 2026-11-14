@@ -618,9 +618,10 @@
               <el-switch v-model="form.geoip_enabled" @change="onGeoipEnabledChange" />
             </el-form-item>
             <template v-if="form.geoip_enabled">
-              <!-- （裁决）：披露 IPv6/不可解析客户端语义——
-                   fail-closed 设计下它们按「海外」处理。 -->
-              <el-form-item><div class="info-note-bar"><span class="info-note-desc">{{ t('app.security.policies.geo.ipv4Note') }}</span></div>
+              <!-- （裁决）：按 IPv6 地理库开关两态披露——v6 关闭时 IPv6 与
+                   不可解析客户端按「海外」fail-closed；开启且健康时 v6 与 v4
+                   同语义解析（文案不得无条件宣称「仅 IPv4 生效」）。 -->
+              <el-form-item><div class="info-note-bar"><span class="info-note-desc">{{ t(geoV6Enabled ? 'app.security.policies.geo.ipv6Note' : 'app.security.policies.geo.ipv4Note') }}</span></div>
               </el-form-item>
               <el-form-item :label="t('app.security.policies.common.modeLabel')" for="radio---13">
                 <input type="text" id="radio---13" aria-hidden="true" tabindex="-1" autocomplete="off" style="display:none">
@@ -3346,6 +3347,9 @@ async function openDialog(row?: PolicySummary) {
   // 详情 GET 在途期间用户再点"新建策略"或另一行"编辑"，首个返回会覆盖
   // editingId/表单，把保存语义错位成 PUT 到错误策略。
   const openSeq = ++policyDialogOpenSeq
+  // 地域说明两态词条依赖 v6 开关快照：开关在规则页可切换，每次打开弹框补拉
+  // （静默、不阻塞表单加载；失败保持保守「仅 IPv4」文案）。
+  void fetchGeoV6Enabled()
   // 引用名单条目不再按会话清空：取数走跨组件共享缓存（IP 地址列表的写入口
   // 已统一调用 invalidateSharedEntriesCache 使条目失效重拉），此处清空只会
   // 让向导重复下载同一批大名单。
@@ -3842,6 +3846,17 @@ const fetchRegions = async () => {
     regionsError.value = true
     ElMessage.error(t('app.security.policies.msg.regionLoadFailed'))
   }
+}
+
+// IPv6 地理库开关快照（GET /security/ip2region 的 v6_enabled）：地域说明按
+// 两态切换词条。读取失败/未落地保持 false——按「仅 IPv4」保守文案披露，
+// 不虚构 v6 已启用；开关在规则页切换，本页每次打开弹框补拉一次。
+const geoV6Enabled = ref(false)
+const fetchGeoV6Enabled = async () => {
+  try {
+    const res = await request.get<APIResponse<{ v6_enabled?: boolean }>>('/security/ip2region', { silent: true })
+    geoV6Enabled.value = res.data?.v6_enabled === true
+  } catch { /* 保持保守默认（仅 IPv4 文案） */ }
 }
 
 onMounted(async () => {

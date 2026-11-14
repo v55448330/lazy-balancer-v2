@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
 import { existsSync } from 'node:fs'
-import { code, repoCode, section } from './_helpers.ts'
+import { code, repoCode, repoSource, section } from './_helpers.ts'
 
 // 审计列表 total 走后端 5 秒进程缓存并以 total_stale 披露来源；面板必须消费
 // 该字段并在陈旧时给出可见提示——否则「列表条数与总数短暂不一致」对用户
@@ -25,7 +25,7 @@ test('后端响应与文档示例都登记 total_stale', () => {
   const backend = repoCode('internal/handlers/auditlog.go')
   assert.match(backend, /"total_stale": totalStale/)
   // 文档钉（断言对象是 API 文档示例与注释文字，故用 raw 视图）
-  const docs = repoCode('internal/handlers/apidocs.go')
+  const docs = repoSource('internal/handlers/apidocs.go')
   assert.match(docs, /"total_stale":false/)
   assert.match(docs, /total_stale=true 表示本次计数来自缓存/)
 })

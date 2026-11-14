@@ -340,14 +340,15 @@ func TestGenerateSingleRuleCaddyConfig_geoip_previewIncludesPassRoute(t *testing
 }
 
 // TestGenerateCaddyConfig_geoip_blockPageServesConfiguredStatus：拦截页归因后，
-// geoip 策略分得合成中断码 483（阶段码 481/482 固定后按策略平移）——本用例
-// 断言的 483 归因路由在 geoip-only（mode=off、无自定义规则/ACL/黑名单）形态
-// 下**不可达**：策略引擎段不发射（BuildCorazaDirectives 返回空串），阶段 1
-// 预检只产出 481。用户可见行为由 403 兜底路由承接（同页同码）；483 路由的
-// 真实可达性由 security_block_status_test.go 的
-// TestEngineTransaction_customOnlyBlockRuleLiftsInterruptionTo483 覆盖。
-// 403 兜底路由（host 限定）继续承接无法归因的中断（预检 GeoIP/IP ACL 合并段
-// 与无页策略），同页同码。
+// geoip 策略分得合成中断码 483（规则级阶段码 481/482 退役后逐策略自 483 起）。
+// geoip-only（mode=off、无自定义规则/ACL/黑名单）形态下策略引擎段不发射
+// （BuildCorazaDirectives 返回空串），但阶段 1 预检 GeoIP 逐策略链
+// （800000+policyID）链首显式抬码 483——483 归因路由真实可达（引擎实证：
+// blockpage_policy_attribution_test.go 的 TestEngineBehavior_precheckAttributionMatrix
+// 「geoip deny with page lifts synthetic」）；策略引擎段 deny 抬码的同形实证见
+// security_block_status_test.go 的 TestEngineTransaction_customOnlyBlockRuleLiftsInterruptionTo483。
+// 403 兜底路由（host 限定）继续承接无法归因的中断（无页策略与白名单交集外
+// 拒绝），同页同码。
 func TestGenerateCaddyConfig_geoip_blockPageServesConfiguredStatus(t *testing.T) {
 	useTemporaryCertDir(t)
 	_, database := newClusterTestService(t)
@@ -382,8 +383,8 @@ func TestGenerateCaddyConfig_geoip_blockPageServesConfiguredStatus(t *testing.T)
 	fallbackHandler := firstHandler(t, fallback)
 	assertEqual(t, fallbackHandler["status_code"], 451)
 	assertEqual(t, fallbackHandler["body"], "<html>geoip-block</html>")
-	// 归因：483 子句、无 host 键——路由形状在此形态下不可达（无引擎段抬码，
-	// 见上方用例注释），此处只钉路由存在性与渲染内容。
+	// 归因：483 子句、无 host 键——预检 GeoIP 链首抬码使其可达（见上方用例
+	// 注释），此处钉路由形状与渲染内容。
 	if _, hasHost := routeMatcher(t, attribution)["host"]; hasHost {
 		t.Fatalf("attribution route must not carry host matcher: %#v", routeMatcher(t, attribution))
 	}

@@ -93,7 +93,7 @@ const securityEventsFixtureBlockedMulti = `{
     "timestamp": "2026/08/11 19:16:57",
     "unix_timestamp": 1786447017841320,
     "id": "tx-blocked-2",
-    "client_ip": "203.0.113.50",
+    "client_ip": "45.33.32.50",
     "server_id": "go029.com",
     "request": { "method": "GET", "uri": "/search", "headers": { "host": ["go029.com"] } },
     "is_interrupted": true
@@ -109,7 +109,7 @@ const securityEventsFixtureClean = `{
     "timestamp": "2026/08/11 19:16:58",
     "unix_timestamp": 1786447018,
     "id": "tx-clean-1",
-    "client_ip": "203.0.113.9",
+    "client_ip": "45.33.32.9",
     "server_id": "",
     "request": { "method": "POST", "uri": "/upload", "headers": { "host": ["Example.COM:8443"] } },
     "response": { "status": 200 },
@@ -123,7 +123,7 @@ const securityEventsFixtureUnknownHost = `{
     "timestamp": "2026/08/11 19:16:59",
     "unix_timestamp": 1786447019000000000,
     "id": "tx-unknown-1",
-    "client_ip": "198.51.100.7",
+    "client_ip": "45.33.32.7",
     "server_id": "unknown.example.com",
     "request": { "method": "GET", "uri": "/BlockedPath", "headers": { "host": ["unknown.example.com"] } },
     "is_interrupted": true
@@ -194,7 +194,7 @@ func TestSecurityEventsParseTransaction_TotalScoreBeatsSetvarSum(t *testing.T) {
 	// total (7) alongside a custom rule setvar (+5) — the evaluated total is
 	// authoritative because it already includes every contribution
 	raw := `{
-  "transaction": { "unix_timestamp": 1786447017, "id": "tx-max-1", "client_ip": "203.0.113.60",
+  "transaction": { "unix_timestamp": 1786447017, "id": "tx-max-1", "client_ip": "45.33.32.60",
     "server_id": "go029.com", "request": { "method": "GET", "uri": "/x", "headers": {} },
     "is_interrupted": true },
   "messages": [
@@ -300,7 +300,7 @@ func TestSecurityEventsMapHost_MatchesCanonicalAndReportsUnknown(t *testing.T) {
 		t.Errorf("attributePolicy(empty)=(%d,%q), want (0,\"\")", pid, pname)
 	}
 	// When/Then: bare IPs never match a domain rule
-	if rule := securityEventsMapHost("203.0.113.9", rules); rule.caddyID != "" {
+	if rule := securityEventsMapHost("45.33.32.9", rules); rule.caddyID != "" {
 		t.Errorf("mapHost(ip)=%q, want empty", rule.caddyID)
 	}
 }
@@ -346,7 +346,7 @@ func TestSecurityEventsMigration_NameColumnsExistWithDefaults(t *testing.T) {
 	}
 	// And: a legacy INSERT that omits the snapshot columns stores ''
 	if _, err := db.MetricsDB.Exec(`INSERT INTO security_events (event_time, rule_caddy_id, policy_id, client_ip, method, uri, event_type, rule_triggered, rule_msg, action)
-		VALUES ('2026-08-12 10:00:00', 'lb_legacy', 1, '192.0.2.9', 'GET', '/a', 'waf', '942100', 'SQL Injection', 'blocked')`); err != nil {
+		VALUES ('2026-08-12 10:00:00', 'lb_legacy', 1, '45.33.32.9', 'GET', '/a', 'waf', '942100', 'SQL Injection', 'blocked')`); err != nil {
 		t.Fatalf("legacy insert: %v", err)
 	}
 	var ruleName, policyName string
@@ -572,7 +572,7 @@ func TestSecurityEventsTickIngestsFixtureLog(t *testing.T) {
 	if got[0] != want0 {
 		t.Errorf("row0=%+v\nwant %+v", got[0], want0)
 	}
-	want1 := row{ruleID: "", policyID: 0, action: "blocked", score: 5, triggered: "949110", msg: "Inbound Anomaly Score Exceeded (Total Score: 5)", ip: "198.51.100.7", method: "GET", uri: "/BlockedPath", eventTime: "2026-08-11 11:16:59"}
+	want1 := row{ruleID: "", policyID: 0, action: "blocked", score: 5, triggered: "949110", msg: "Inbound Anomaly Score Exceeded (Total Score: 5)", ip: "45.33.32.7", method: "GET", uri: "/BlockedPath", eventTime: "2026-08-11 11:16:59"}
 	if got[1] != want1 {
 		t.Errorf("row1=%+v\nwant %+v", got[1], want1)
 	}
@@ -1696,7 +1696,7 @@ func TestRotateAuditLog_backscanFindsStraddleDocStartBeyond8MB(t *testing.T) {
     "timestamp": "2026/08/11 19:16:57",
     "unix_timestamp": 1786447017841320426,
     "id": "tx-huge-straddle",
-    "client_ip": "198.51.100.8",
+    "client_ip": "45.33.32.8",
     "server_id": "go029.com",
     "request": { "method": "GET", "uri": "/huge/` + strings.Repeat("a", 9<<20) + `", "headers": { "host": ["go029.com"] } },
     "is_interrupted": true
@@ -1942,7 +1942,7 @@ func securityEventsFixtureForRule(ruleID string) string {
     "timestamp": "2026/08/12 10:00:00",
     "unix_timestamp": 1786447017841320426,
     "id": "tx-attr-` + ruleID + `",
-    "client_ip": "198.51.100.9",
+    "client_ip": "45.33.32.9",
     "server_id": "go029.com",
     "request": { "method": "GET", "uri": "/attr", "headers": { "host": ["go029.com"] } },
     "is_interrupted": true
@@ -3059,7 +3059,7 @@ func TestSecurityEventsAttribution_FallbackModeFeasibilityGate(t *testing.T) {
 		{"F2 custom_only CRS blocked rejected", "lb_r2", "913100", "blocked", 0},
 		// detection 不得认领 CRS blocked(id:6 切换先于 CRS 评估,DetectionOnly 零中断)
 		{"detection CRS blocked rejected", "lb_r3", "913100", "blocked", 0},
-		// ── 误拒三族(修正目标,当前被门错误拒绝) ──
+		// ── 误拒三族(修正目标,修复前曾被门错误拒绝) ──
 		// off+IP 控制 blocked 可产(IP 控制与模式无关独立发射,security.go:179-181)
 		{"off id:2 blocked allowed", "lb_r4", "2", "blocked", 4},
 		{"off id:4 blocked allowed", "lb_r4", "4", "blocked", 4},
@@ -3147,7 +3147,7 @@ func TestSecurityEventsAttribution_geoipPrecheckExactSegment(t *testing.T) {
 // 全部落空走 fallback——旧门只核 mode/动作,无任何 IP 发射面的 42 作为首候选
 // 直接胜出,id:2 事件错挂「观察模式」。能力首选层修后期望:logged(检测)语义下
 // 信任名单策略(真实 IP 控制发射面,SecurityPolicyHasIPControl 同源字段)优先于
-// 无能力策略。RED:当前代码返回首候选 42。
+// 无能力策略。修复前 RED 形态:旧门返回首候选 42(能力首选层修复后不再复现)。
 func TestSecurityEventsAttribution_IPFamilyFallbackPrefersIPCapablePolicy(t *testing.T) {
 	dataDir := t.TempDir()
 	if err := initSecurityEventsTestDB(t, dataDir); err != nil {
@@ -3187,7 +3187,7 @@ func TestSecurityEventsAttribution_IPACLMemberOwnerWinsOverNonMemberDeny(t *test
 		t.Fatal(err)
 	}
 	if _, err := db.DB.Exec(`INSERT INTO security_policies (id,name,enabled,mode,custom_rules,crs_rule_groups,ip_acl_enabled,ip_acl_mode,ip_acl_list,ip_blacklist) VALUES
-		(1,'p-deny-other',1,'blocking','[]','[]',1,'deny','["203.0.113.5"]','[]'),
+		(1,'p-deny-other',1,'blocking','[]','[]',1,'deny','["45.33.32.5"]','[]'),
 		(2,'p-deny-owner',1,'blocking','[]','[]',1,'deny','["2001:db8::/32"]','["10.0.0.0/8"]')`); err != nil {
 		t.Fatal(err)
 	}
@@ -3208,7 +3208,7 @@ func TestSecurityEventsAttribution_IPACLMemberOwnerWinsOverNonMemberDeny(t *test
 	}{
 		{"member owner wins (CIDR hit)", "lb_member", "2001:db8::5", 2},
 		{"id:4 blacklist member wins", "lb_member", "10.0.0.7", 2},
-		{"ip in no list (drift) -> first capable deny, never zero", "lb_member", "198.51.100.7", 1},
+		{"ip in no list (drift) -> first capable deny, never zero", "lb_member", "45.33.32.7", 1},
 		{"empty clientIP keeps legacy non-empty-owner semantics", "lb_member", "", 1},
 	}
 	for _, tc := range cases {
@@ -3279,7 +3279,7 @@ func TestSecurityEventsAttribution_IncapableOnlyStillAttributed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load mappings: %v", err)
 	}
-	for _, clientIP := range []string{"", "::1", "198.51.100.7"} {
+	for _, clientIP := range []string{"", "::1", "45.33.32.7"} {
 		pid, pname := securityEventsAttributePolicy("lb_orphan", "2", "blocked", clientIP, policyByID, bindings)
 		if pid != 1 || pname != "p-detection-noacl" {
 			t.Fatalf("attributePolicy(clientIP=%q)=(%d,%q), want (1,p-detection-noacl) — 无能力策略唯一存在必须回退首绑定,禁止归零", clientIP, pid, pname)
@@ -3315,7 +3315,7 @@ func TestSecurityEventsAttribution_IPFamilyCapabilityTruthTable(t *testing.T) {
 	// refs-only deny 的能力口径是**被引用名单实际解析出条目**（渲染侧 refs 合并
 	// 集非空才发射 id:2）。夹具必须种入真实名单，悬空引用解析为空集时该策略
 	// 物理上零发射面、不构成能力——那正是 empty-resolved 用例钉住的形状。
-	if _, err := db.DB.Exec(`INSERT INTO security_ip_lists (id,name,entries) VALUES (9,'refs-only-deny','[{"value":"203.0.113.0/24"}]')`); err != nil {
+	if _, err := db.DB.Exec(`INSERT INTO security_ip_lists (id,name,entries) VALUES (9,'refs-only-deny','[{"value":"45.33.32.0/24"}]')`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.DB.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id,policy_id) VALUES
@@ -3340,11 +3340,11 @@ func TestSecurityEventsAttribution_IPFamilyCapabilityTruthTable(t *testing.T) {
 	}{
 		// off+deny-ACL blocked：clientIP 不在名单（漂移形状）排空 contains 后，
 		// 能力首选层照旧首选
-		{"off deny-ACL blocked tier1", "lb_off", "2", "blocked", "198.51.100.7", 2},
+		{"off deny-ACL blocked tier1", "lb_off", "2", "blocked", "45.33.32.7", 2},
 		// off+deny-ACL blocked + 事件源在名单：contains 成员命中直达属主（合同形状）
 		{"off deny-ACL member contains hit", "lb_off", "2", "blocked", "::1", 2},
 		// refs-only deny（inline 空仅引用）计能力：logged 语义下优先于无能力 detection
-		{"refs-only deny logged tier1", "lb_refs", "2", "logged", "198.51.100.7", 3},
+		{"refs-only deny logged tier1", "lb_refs", "2", "logged", "45.33.32.7", 3},
 		// 信任名单仅 logged 计能力：logged 下信任策略优先于无能力 detection
 		{"trust wl logged tier1", "lb_trust", "2", "logged", "", 4},
 		// blocked 下信任名单不计能力：无能力 detection 依模式门归属（不归零）
@@ -3682,8 +3682,8 @@ func TestSecurityEventsAttribution_Stage0PassthroughTrustDoesNotOwnLoggedIPEvent
 	// 改为其他 IP → contains 成员判定落空，但能力面（deny + 名单非空）仍成立）。
 	if _, err := db.DB.Exec(`INSERT INTO security_policies
 		(id,name,enabled,mode,custom_rules,crs_rule_groups,ip_whitelist_enabled,ip_whitelist,policy_type,trust_detection,ip_acl_enabled,ip_acl_mode,ip_acl_list) VALUES
-		(1,'p-stage0-passthrough',1,'off','[]','[]',1,'["203.0.113.9"]','stage0',0,0,'','[]'),
-		(2,'p-deny-owner-drift',1,'blocking','[]','[]',0,'[]','stage3',0,1,'deny','["198.51.100.7"]')`); err != nil {
+		(1,'p-stage0-passthrough',1,'off','[]','[]',1,'["45.33.32.9"]','stage0',0,0,'','[]'),
+		(2,'p-deny-owner-drift',1,'blocking','[]','[]',0,'[]','stage3',0,1,'deny','["45.33.32.7"]')`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.DB.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id,policy_id) VALUES
@@ -3814,11 +3814,11 @@ func TestSecurityEventsCRSExclusionMatcher_shapes(t *testing.T) {
 		ip      string
 		removed bool
 	}{
-		{name: "ip scope hit", set: build(`[{"target":"942100","scope":"ip","ips":"198.51.100.9"}]`, nil), rule: "942100", ip: "198.51.100.9", removed: true},
-		{name: "ip scope miss", set: build(`[{"target":"942100","scope":"ip","ips":"198.51.100.9"}]`, nil), rule: "942100", ip: "198.51.100.10"},
-		{name: "list scope hit", set: build(`[{"target":"942100","scope":"list","listRefs":[7]}]`, map[int64][]string{7: {"203.0.113.0/24"}}), rule: "942100", ip: "203.0.113.7", removed: true},
-		{name: "list scope miss", set: build(`[{"target":"942100","scope":"list","listRefs":[7]}]`, map[int64][]string{7: {"203.0.113.0/24"}}), rule: "942100", ip: "198.51.100.7"},
-		{name: "scoped file target ignored", set: build(`[{"target":"REQUEST-942-APPLICATION-ATTACK-SQLI.conf","scope":"ip","ips":"198.51.100.9"}]`, nil), rule: "942100", ip: "198.51.100.9"},
+		{name: "ip scope hit", set: build(`[{"target":"942100","scope":"ip","ips":"45.33.32.9"}]`, nil), rule: "942100", ip: "45.33.32.9", removed: true},
+		{name: "ip scope miss", set: build(`[{"target":"942100","scope":"ip","ips":"45.33.32.9"}]`, nil), rule: "942100", ip: "45.33.33.10"},
+		{name: "list scope hit", set: build(`[{"target":"942100","scope":"list","listRefs":[7]}]`, map[int64][]string{7: {"45.33.32.0/24"}}), rule: "942100", ip: "45.33.32.7", removed: true},
+		{name: "list scope miss", set: build(`[{"target":"942100","scope":"list","listRefs":[7]}]`, map[int64][]string{7: {"45.33.32.0/24"}}), rule: "942100", ip: "45.33.33.7"},
+		{name: "scoped file target ignored", set: build(`[{"target":"REQUEST-942-APPLICATION-ATTACK-SQLI.conf","scope":"ip","ips":"45.33.32.9"}]`, nil), rule: "942100", ip: "45.33.32.9"},
 		{name: "group", set: build(`[{"target":"42","scope":"all"}]`, nil), rule: "942100", removed: true},
 		{name: "filename range", set: build(`["REQUEST-942-APPLICATION-ATTACK-SQLI.conf"]`, nil), rule: "942100", removed: true},
 		{name: "numeric range", set: build(`["941000-941999"]`, nil), rule: "941100", removed: true},
@@ -3829,7 +3829,7 @@ func TestSecurityEventsCRSExclusionMatcher_shapes(t *testing.T) {
 		{name: "901 init skipped", set: build(`["901100"]`, nil), rule: "901100"},
 		{name: "949 exact skipped", set: build(`["949110"]`, nil), rule: "949110"},
 		{name: "949 group skipped", set: build(`[{"target":"49","scope":"all"}]`, nil), rule: "949110"},
-		{name: "949 scoped skipped", set: build(`[{"target":"949110","scope":"ip","ips":"198.51.100.9"}]`, nil), rule: "949110", ip: "198.51.100.9"},
+		{name: "949 scoped skipped", set: build(`[{"target":"949110","scope":"ip","ips":"45.33.32.9"}]`, nil), rule: "949110", ip: "45.33.32.9"},
 		{name: "959 exact skipped", set: build(`["959100"]`, nil), rule: "959100"},
 		{name: "invalid target", set: build(`["999999999"]`, nil), rule: "942100"},
 		{name: "unknown scope not claimed", set: build(`[{"target":"942100","scope":"bogus"}]`, nil), rule: "942100"},
@@ -3846,18 +3846,18 @@ func TestSecurityEventsCRSExclusionMatcher_shapes(t *testing.T) {
 
 func TestSecurityEventsCRSExclusionMatcher_ipScopeLoadsListRefs(t *testing.T) {
 	initServicesDB(t)
-	if _, err := db.DB.Exec(`INSERT INTO security_ip_lists (id,name,entries) VALUES (7,'ref-source','[{"value":"198.51.100.0/24"}]')`); err != nil {
+	if _, err := db.DB.Exec(`INSERT INTO security_ip_lists (id,name,entries) VALUES (7,'ref-source','[{"value":"45.33.32.0/24"}]')`); err != nil {
 		t.Fatal(err)
 	}
 	policies := map[int]*models.SecurityPolicy{
-		1: {ID: 1, CRSExcludedRules: json.RawMessage(`[{"target":"942100","scope":"ip","ips":"203.0.113.8","listRefs":[7]}]`)},
+		1: {ID: 1, CRSExcludedRules: json.RawMessage(`[{"target":"942100","scope":"ip","ips":"45.33.32.8","listRefs":[7]}]`)},
 		2: {ID: 2, CRSExcludedRules: json.RawMessage(`[{"target":"942100","scope":"all","listRefs":[7]}]`)},
 	}
 	matcher := securityEventsBuildCRSExclusionMatcher(policies)
-	if !securityEventsCRSExclusionRemovesRule(matcher[1], "942100", "198.51.100.9") {
+	if !securityEventsCRSExclusionRemovesRule(matcher[1], "942100", "45.33.32.9") {
 		t.Fatal("scope=ip must include addresses loaded through listRefs")
 	}
-	if securityEventsCRSExclusionRemovesRule(matcher[1], "942100", "192.0.2.9") {
+	if securityEventsCRSExclusionRemovesRule(matcher[1], "942100", "45.33.33.7") {
 		t.Fatal("unrelated address must not match the scoped exclusion")
 	}
 	allOnly := securityEventsBuildCRSExclusionMatcher(map[int]*models.SecurityPolicy{2: policies[2]})
@@ -3880,17 +3880,17 @@ func TestSecurityEventsPolicyContainsRule_responseChecksGateEveryResponseFamily(
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			policy := &models.SecurityPolicy{Mode: "blocking", CRSRuleGroups: json.RawMessage(tc.groups)}
-			if securityEventsPolicyContainsRuleWithExclusions(policy, tc.rule, "198.51.100.9", securityEventsPolicyCRSExclusions{}) {
+			if securityEventsPolicyContainsRuleWithExclusions(policy, tc.rule, "45.33.32.9", securityEventsPolicyCRSExclusions{}) {
 				t.Fatalf("response rule %s was claimed with response checks disabled", tc.rule)
 			}
 			policy.WAFCheckResponse = true
-			if !securityEventsPolicyContainsRuleWithExclusions(policy, tc.rule, "198.51.100.9", securityEventsPolicyCRSExclusions{}) {
+			if !securityEventsPolicyContainsRuleWithExclusions(policy, tc.rule, "45.33.32.9", securityEventsPolicyCRSExclusions{}) {
 				t.Fatalf("response rule %s was not claimed with response checks enabled", tc.rule)
 			}
 		})
 	}
 	inbound := &models.SecurityPolicy{Mode: "blocking", CRSRuleGroups: json.RawMessage(`[]`)}
-	if !securityEventsPolicyContainsRuleWithExclusions(inbound, "949110", "198.51.100.9", securityEventsPolicyCRSExclusions{}) {
+	if !securityEventsPolicyContainsRuleWithExclusions(inbound, "949110", "45.33.32.9", securityEventsPolicyCRSExclusions{}) {
 		t.Fatal("inbound evaluation must remain independent of the response check switch")
 	}
 }
@@ -3906,19 +3906,19 @@ func TestSecurityEventsPolicyContainsRule_leadingZeroRuleIDGroupDecode(t *testin
 	// ID "0942100"（数值 942100，真实组号 21，[1:3] 错位切片恰得 "94"）
 	policy := &models.SecurityPolicy{AnomalyThreshold: 5, Mode: "blocking", CRSRuleGroups: json.RawMessage(`["94"]`)}
 	// When
-	claimed := securityEventsPolicyContainsRule(policy, "0942100", "198.51.100.9")
+	claimed := securityEventsPolicyContainsRule(policy, "0942100", "45.33.32.9")
 	// Then：不得被错位解码的 "94" 组误认领
 	if claimed {
 		t.Fatal("leading-zero rule id 0942100（真实组号 21）不得被错位切片解码出的 \"94\" 组认领")
 	}
 	// 回归形状：规范 6 位形态组号解码不受影响（组 42 策略认领 942100）
 	regPolicy := &models.SecurityPolicy{AnomalyThreshold: 5, Mode: "blocking", CRSRuleGroups: json.RawMessage(`["42"]`)}
-	if !securityEventsPolicyContainsRule(regPolicy, "942100", "198.51.100.9") {
+	if !securityEventsPolicyContainsRule(regPolicy, "942100", "45.33.32.9") {
 		t.Fatal("规范 6 位形态 942100 必须按组 42 正常认领（回归形状）")
 	}
 	// 畸形形状：前导零串同样不得被真实组 21 策略按错位解码误配/误拒 panic
 	g21Policy := &models.SecurityPolicy{AnomalyThreshold: 5, Mode: "blocking", CRSRuleGroups: json.RawMessage(`["21"]`)}
-	_ = securityEventsPolicyContainsRule(g21Policy, "0942100", "198.51.100.9") // 断言不 panic
+	_ = securityEventsPolicyContainsRule(g21Policy, "0942100", "45.33.32.9") // 断言不 panic
 }
 
 // ---- 摄取事务夹具（自动封禁喂入与归因回归共用）----
@@ -3989,7 +3989,7 @@ func securityEventsLoggedRuleFixture(txID, ip, ruleCaddyID string) string {
 func TestSecurityEventsAutoban_excludesRuleTrustLoggedEvents(t *testing.T) {
 	installSecurityEventsAutobanFixture(t)
 	setAutobanConfigRaw(t, true, 1, 60, "1h", "blocked,logged", false)
-	listID := seedIPList(t, "信任引用", `[{"value":"203.0.113.78"}]`)
+	listID := seedIPList(t, "信任引用", `[{"value":"45.33.32.78"}]`)
 
 	for _, rule := range []struct{ caddyID, domain string }{
 		{"lb_trust", "trust.example.com"},
@@ -4003,10 +4003,10 @@ func TestSecurityEventsAutoban_excludesRuleTrustLoggedEvents(t *testing.T) {
 	}
 	if _, err := db.DB.Exec(`INSERT INTO security_policies
 		(id,name,enabled,mode,ip_whitelist_enabled,ip_whitelist,policy_type,trust_detection)
-		VALUES (1,'p-inline',1,'off',1,'["203.0.113.77"]','stage0',1),
+		VALUES (1,'p-inline',1,'off',1,'["45.33.32.77"]','stage0',1),
 		       (2,'p-other',1,'blocking',0,'[]','stage3',0),
 		       (3,'p-ref',1,'blocking',1,'[]','mixed',0),
-		       (4,'p-passthrough',1,'off',1,'["203.0.113.79"]','stage0',0)`); err != nil {
+		       (4,'p-passthrough',1,'off',1,'["45.33.32.79"]','stage0',0)`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.DB.Exec(`UPDATE security_policies SET ip_whitelist_refs=? WHERE id=3`, fmt.Sprintf(`[%d]`, listID)); err != nil {
@@ -4021,14 +4021,14 @@ func TestSecurityEventsAutoban_excludesRuleTrustLoggedEvents(t *testing.T) {
 	logPath := filepath.Join(dir, "audit.log")
 	offsetPath := filepath.Join(dir, "security_events.offset")
 	docs := []string{
-		securityEventsLoggedRuleFixture("tx-trust-inline", "203.0.113.77", "lb_trust"),
-		securityEventsLoggedRuleFixture("tx-trust-ref", "203.0.113.78", "lb_trust_ref"),
-		securityEventsLoggedRuleFixture("tx-trust-off", "203.0.113.79", "lb_trust_off"),
-		securityEventsLoggedRuleFixture("tx-untrusted", "203.0.113.80", "lb_trust"),
-		securityEventsLoggedRuleFixture("tx-other-rule", "203.0.113.77", "lb_other"),
-		strings.Replace(securityEventsLoggedRuleFixture("tx-trust-blocked", "203.0.113.77", "lb_trust"), `"is_interrupted": false`, `"is_interrupted": true`, 1),
-		securityEventsLoggedRuleFixture("tx-trust-deleted-rule", "203.0.113.77", "lb_deleted"),
-		securityEventsLoggedRuleFixture("tx-untrusted-deleted-rule", "203.0.113.81", "lb_deleted"),
+		securityEventsLoggedRuleFixture("tx-trust-inline", "45.33.32.77", "lb_trust"),
+		securityEventsLoggedRuleFixture("tx-trust-ref", "45.33.32.78", "lb_trust_ref"),
+		securityEventsLoggedRuleFixture("tx-trust-off", "45.33.32.79", "lb_trust_off"),
+		securityEventsLoggedRuleFixture("tx-untrusted", "45.33.32.80", "lb_trust"),
+		securityEventsLoggedRuleFixture("tx-other-rule", "45.33.32.77", "lb_other"),
+		strings.Replace(securityEventsLoggedRuleFixture("tx-trust-blocked", "45.33.32.77", "lb_trust"), `"is_interrupted": false`, `"is_interrupted": true`, 1),
+		securityEventsLoggedRuleFixture("tx-trust-deleted-rule", "45.33.32.77", "lb_deleted"),
+		securityEventsLoggedRuleFixture("tx-untrusted-deleted-rule", "45.33.32.81", "lb_deleted"),
 	}
 	if err := os.WriteFile(logPath, []byte(strings.Join(docs, "\n")+"\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -4037,19 +4037,19 @@ func TestSecurityEventsAutoban_excludesRuleTrustLoggedEvents(t *testing.T) {
 		t.Fatalf("tick: %v", err)
 	}
 
-	if got := autobanCountForTest("203.0.113.77"); got != 2 {
+	if got := autobanCountForTest("45.33.32.77"); got != 2 {
 		t.Fatalf("inline trust IP count=%d, want 2（其他规则 logged + 本规则 blocked）", got)
 	}
-	if got := autobanCountForTest("203.0.113.78"); got != 0 {
+	if got := autobanCountForTest("45.33.32.78"); got != 0 {
 		t.Fatalf("引用信任 IP count=%d, want 0（引用名单并集必须生效）", got)
 	}
-	if got := autobanCountForTest("203.0.113.79"); got != 1 {
+	if got := autobanCountForTest("45.33.32.79"); got != 1 {
 		t.Fatalf("直通策略 drift logged count=%d, want 1（无保留检测不发射信任事件）", got)
 	}
-	if got := autobanCountForTest("203.0.113.80"); got != 1 {
+	if got := autobanCountForTest("45.33.32.80"); got != 1 {
 		t.Fatalf("未信任 IP count=%d, want 1", got)
 	}
-	if got := autobanCountForTest("203.0.113.81"); got != 1 {
+	if got := autobanCountForTest("45.33.32.81"); got != 1 {
 		t.Fatalf("未信任 IP（已删除规则）count=%d, want 1", got)
 	}
 }
@@ -4064,9 +4064,9 @@ func TestSecurityEventsIngest_duplicateTransactionNotFedToAutoban(t *testing.T) 
 		fixture := strings.Replace(securityEvents历史Fixture(txID, ip, uri), "2026/08/11 19:16:57", nowStamp, 1)
 		return strings.Replace(fixture, "1786447017841320426", fmt.Sprintf("%d", time.Now().UnixNano()), 1)
 	}
-	dup := atNow("tx-dup-1", "203.0.113.77", "/dup")
+	dup := atNow("tx-dup-1", "45.33.32.77", "/dup")
 	// 形状 1：同一事务在日志中出现两次（轮转/并发可见的重复形态）。
-	content := dup + "\n" + dup + "\n" + atNow("tx-dup-2", "203.0.113.78", "/other") + "\n"
+	content := dup + "\n" + dup + "\n" + atNow("tx-dup-2", "45.33.32.78", "/other") + "\n"
 	if err := os.WriteFile(logPath, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -4075,10 +4075,10 @@ func TestSecurityEventsIngest_duplicateTransactionNotFedToAutoban(t *testing.T) 
 	if err := tailer.securityEventsTick(); err != nil {
 		t.Fatalf("first tick: %v", err)
 	}
-	if got := autobanCountForTest("203.0.113.77"); got != 1 {
+	if got := autobanCountForTest("45.33.32.77"); got != 1 {
 		t.Fatalf("duplicate transaction fed %d times to autoban, want 1", got)
 	}
-	if got := autobanCountForTest("203.0.113.78"); got != 1 {
+	if got := autobanCountForTest("45.33.32.78"); got != 1 {
 		t.Fatalf("unique transaction fed %d times, want 1", got)
 	}
 
@@ -4091,7 +4091,7 @@ func TestSecurityEventsIngest_duplicateTransactionNotFedToAutoban(t *testing.T) 
 	if err := replay.securityEventsTick(); err != nil {
 		t.Fatalf("replay tick: %v", err)
 	}
-	if got := autobanCountForTest("203.0.113.77"); got != 1 {
+	if got := autobanCountForTest("45.33.32.77"); got != 1 {
 		t.Fatalf("offset replay fed duplicate to autoban (count=%d), want 1", got)
 	}
 
@@ -4101,7 +4101,7 @@ func TestSecurityEventsIngest_duplicateTransactionNotFedToAutoban(t *testing.T) 
 	}
 	// 与上方成功正对照使用同一当前时间夹具：若失败批次被错误喂入，
 	// 事件处于统计窗内，计数会立即变为 1，不再被时间窗过滤成假绿。
-	failing := atNow("tx-fail-1", "203.0.113.99", "/fail")
+	failing := atNow("tx-fail-1", "45.33.32.99", "/fail")
 	if err := os.WriteFile(logPath, []byte(content+failing+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -4112,7 +4112,7 @@ func TestSecurityEventsIngest_duplicateTransactionNotFedToAutoban(t *testing.T) 
 	if err := failingTailer.securityEventsTick(); err == nil {
 		t.Fatal("injected insert failure must surface as tick error")
 	}
-	if got := autobanCountForTest("203.0.113.99"); got != 0 {
+	if got := autobanCountForTest("45.33.32.99"); got != 0 {
 		t.Fatalf("failed insert fed %d items to autoban, want 0", got)
 	}
 }
@@ -4204,7 +4204,7 @@ func TestSecurityEventsIngest_insertedCountExcludesIgnoredRows(t *testing.T) {
 				if tc.dup && i == 1 {
 					id = "tx-0" // 与首条同 transaction_id：INSERT OR IGNORE 忽略
 				}
-				sb.WriteString(securityEvents历史Fixture(id, "198.51.100.10", fmt.Sprintf("/p/%d", i)))
+				sb.WriteString(securityEvents历史Fixture(id, "45.33.32.10", fmt.Sprintf("/p/%d", i)))
 				sb.WriteString("\n")
 			}
 			if err := os.WriteFile(logPath, []byte(sb.String()), 0o644); err != nil {
@@ -4262,7 +4262,7 @@ func TestSecurityEventsAttributePolicy_emptyAllowOwnsFailClosedSurface(t *testin
 		ID: 1, Name: "empty-allow", IPACLEnabled: true, IPACLMode: "allow", IPACLList: "[]",
 	}
 	denyOwner := &models.SecurityPolicy{
-		ID: 2, Name: "deny-owner", IPACLEnabled: true, IPACLMode: "deny", IPACLList: `["203.0.113.0/24"]`,
+		ID: 2, Name: "deny-owner", IPACLEnabled: true, IPACLMode: "deny", IPACLList: `["45.33.32.0/24"]`,
 	}
 	threatRef := &models.SecurityPolicy{
 		ID: 3, Name: "threat-ref", IPACLEnabled: true, IPACLMode: "deny", IPACLList: "[]", IPACLListRefs: "[7]",
@@ -4270,7 +4270,7 @@ func TestSecurityEventsAttributePolicy_emptyAllowOwnsFailClosedSurface(t *testin
 	policyByID := map[int]*models.SecurityPolicy{1: emptyAllow, 2: denyOwner, 3: threatRef}
 	bindings := map[string][]int{"lb_x": {1, 2}}
 
-	if pid, _ := securityEventsAttributePolicy("lb_x", "2", "blocked", "198.51.100.9", policyByID, bindings); pid != 1 {
+	if pid, _ := securityEventsAttributePolicy("lb_x", "2", "blocked", "45.33.32.9", policyByID, bindings); pid != 1 {
 		t.Fatalf("empty allow id:2 attribution=%d, want 1 (fail-closed surface belongs to the empty allow policy)", pid)
 	}
 	if !securityEventsPolicyContainsRule(emptyAllow, "7", "") {
@@ -4279,7 +4279,7 @@ func TestSecurityEventsAttributePolicy_emptyAllowOwnsFailClosedSurface(t *testin
 	if !securityEventsPolicyContainsRule(threatRef, "14", "") {
 		t.Fatal("policy with ACL refs must own historical threat-list id:14")
 	}
-	if securityEventsPolicyContainsRule(&models.SecurityPolicy{ID: 4, IPACLEnabled: true, IPACLMode: "allow", IPACLList: `["10.0.0.0/8"]`}, "2", "198.51.100.9") {
+	if securityEventsPolicyContainsRule(&models.SecurityPolicy{ID: 4, IPACLEnabled: true, IPACLMode: "allow", IPACLList: `["10.0.0.0/8"]`}, "2", "45.33.32.9") {
 		t.Fatal("non-empty allow mode must keep the documented id:2 fallback semantics")
 	}
 }
@@ -4437,7 +4437,7 @@ func TestSecurityEventsTick_memoizesHostMappingWithinPass(t *testing.T) {
 	line := func(id string) string {
 		// host 来自 server_id（parse 优先）；大写形态精确键不命中，强制走
 		// CanonicalDomains 规范化路径（规则域名库存为小写 memo.example.com）。
-		return `{"transaction":{"id":"` + id + `","unix_timestamp":1789740000,"client_ip":"203.0.113.9","server_id":"MEMO.EXAMPLE.COM","request":{"method":"GET","uri":"/a","headers":{"host":["MEMO.EXAMPLE.COM"]}},"response":{"status":200},"is_interrupted":false},"messages":[]}`
+		return `{"transaction":{"id":"` + id + `","unix_timestamp":1789740000,"client_ip":"45.33.32.9","server_id":"MEMO.EXAMPLE.COM","request":{"method":"GET","uri":"/a","headers":{"host":["MEMO.EXAMPLE.COM"]}},"response":{"status":200},"is_interrupted":false},"messages":[]}`
 	}
 	content := line("tx-memo-1") + "\n" + line("tx-memo-2") + "\n" + line("tx-memo-3") + "\n"
 	if err := os.WriteFile(logPath, []byte(content), 0o644); err != nil {

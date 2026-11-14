@@ -17,6 +17,7 @@ import (
 // 该锁是进程级单写锁，锁内做 DB 写会让审计库慢写时全部 branding 读者
 // （公开 GET /branding、/system/info、拦截页播种）排队。
 func TestLoadBrandingConfig_reloadAuditRunsOutsideStoreLock(t *testing.T) {
+	withIsolatedGlobal(t)
 	resetBrandingStore()
 	t.Cleanup(resetBrandingStore)
 	oldAudit := db.AuditDB

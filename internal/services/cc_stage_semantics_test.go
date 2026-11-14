@@ -1,6 +1,7 @@
 package services
 
 import (
+	"strings"
 	"testing"
 
 	"lazy-balancer-v2/internal/models"
@@ -29,25 +30,9 @@ func TestSecurityEventCountsAsAttack_excludesTrustAndChallenged(t *testing.T) {
 		}
 	}
 	sql := AttackEventSQLPredicate("rule_triggered", "action")
-	if !containsAllSubs(sql, "'trust'", "'challenged'") {
+	if !strings.Contains(sql, "'trust'") || !strings.Contains(sql, "'challenged'") {
 		t.Fatalf("SQL 攻击谓词必须整类排除 trust/challenged：%s", sql)
 	}
-}
-
-func containsAllSubs(s string, subs ...string) bool {
-	for _, sub := range subs {
-		ok := false
-		for i := 0; i+len(sub) <= len(s); i++ {
-			if s[i:i+len(sub)] == sub {
-				ok = true
-				break
-			}
-		}
-		if !ok {
-			return false
-		}
-	}
-	return true
 }
 
 // 四阶段推断（2026-11-12）：人机/CC 检测 → CC(stage2)；WAF → stage3；

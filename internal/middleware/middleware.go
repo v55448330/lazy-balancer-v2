@@ -241,12 +241,14 @@ const apiKeyWhitelistCacheMaxEntries = 1024
 
 // apiKeyWhitelistCIDRCache 提供与 sync.Map 相同的本域所需操作，并强制全局
 // 条目上限。Range 使用快照，允许回调内 Delete（按 keyID/全量清扫）。
+// 键恒为 string（keyID+"|"+白名单原串）；值保持 any——解析结果 []*net.IPNet
+// 与异构写入形态由 Load 侧 comma-ok 断言守卫。
 type apiKeyWhitelistCIDRCache struct {
 	mu      sync.RWMutex
-	entries map[any]any
+	entries map[string]any
 }
 
-func (c *apiKeyWhitelistCIDRCache) Store(key, value any) {
+func (c *apiKeyWhitelistCIDRCache) Store(key string, value any) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if _, exists := c.entries[key]; !exists && len(c.entries) >= apiKeyWhitelistCacheMaxEntries {
@@ -255,22 +257,22 @@ func (c *apiKeyWhitelistCIDRCache) Store(key, value any) {
 	c.entries[key] = value
 }
 
-func (c *apiKeyWhitelistCIDRCache) Load(key any) (any, bool) {
+func (c *apiKeyWhitelistCIDRCache) Load(key string) (any, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	value, ok := c.entries[key]
 	return value, ok
 }
 
-func (c *apiKeyWhitelistCIDRCache) Delete(key any) {
+func (c *apiKeyWhitelistCIDRCache) Delete(key string) {
 	c.mu.Lock()
 	delete(c.entries, key)
 	c.mu.Unlock()
 }
 
-func (c *apiKeyWhitelistCIDRCache) Range(fn func(key, value any) bool) {
+func (c *apiKeyWhitelistCIDRCache) Range(fn func(key string, value any) bool) {
 	c.mu.RLock()
-	snapshot := make(map[any]any, len(c.entries))
+	snapshot := make(map[string]any, len(c.entries))
 	for key, value := range c.entries {
 		snapshot[key] = value
 	}
@@ -284,7 +286,7 @@ func (c *apiKeyWhitelistCIDRCache) Range(fn func(key, value any) bool) {
 
 // apiKeyWhitelistCache：API Key IP 白名单的 CIDR 解析结果缓存。
 // 键 = keyID + "|" + 白名单原串；解析失败不缓存，保持配置无效→500 语义。
-var apiKeyWhitelistCache = apiKeyWhitelistCIDRCache{entries: make(map[any]any)}
+var apiKeyWhitelistCache = apiKeyWhitelistCIDRCache{entries: make(map[string]any)}
 
 // PurgeAPIKeyWhitelistCache 按 keyID 前缀清扫白名单 CIDR 解析缓存
 // 删除/禁用 Key 后其历史白名单版本条目永不再命中却永久
@@ -293,9 +295,9 @@ var apiKeyWhitelistCache = apiKeyWhitelistCIDRCache{entries: make(map[any]any)}
 // 注入的钩子调用（middleware 导入 handlers，反向会成环，故钩子倒置装配）。
 func PurgeAPIKeyWhitelistCache(keyID int) {
 	prefix := strconv.Itoa(keyID) + "|"
-	apiKeyWhitelistCache.Range(func(key, _ any) bool {
-		if cacheKey, ok := key.(string); ok && strings.HasPrefix(cacheKey, prefix) {
-			apiKeyWhitelistCache.Delete(cacheKey)
+	apiKeyWhitelistCache.Range(func(key string, _ any) bool {
+		if strings.HasPrefix(key, prefix) {
+			apiKeyWhitelistCache.Delete(key)
 		}
 		return true
 	})
@@ -304,7 +306,7 @@ func PurgeAPIKeyWhitelistCache(keyID int) {
 // PurgeAllAPIKeyWhitelistCache 清空全部白名单 CIDR 解析缓存：配置备份导入与集群快照应用都整体替换 api_keys 表——键含 keyID
 // 前缀无法枚举存活 Key，逐 Key 清扫不可行，必须全清（解析缓存重建廉价）。
 func PurgeAllAPIKeyWhitelistCache() {
-	apiKeyWhitelistCache.Range(func(key, _ any) bool {
+	apiKeyWhitelistCache.Range(func(key string, _ any) bool {
 		apiKeyWhitelistCache.Delete(key)
 		return true
 	})
@@ -495,17 +497,14 @@ func clusterRateLimit(scope string, limit int, message string) gin.HandlerFunc {
 		}
 		bucket.count++
 		exceeded := bucket.count > limit
-		retryAfterSeconds := 0
+		retryAfter := 0
 		if exceeded {
-			retryAfterSeconds = int((bucket.until.Sub(now) + time.Second - time.Nanosecond) / time.Second)
-			if retryAfterSeconds < 1 {
-				retryAfterSeconds = 1
-			}
+			retryAfter = retryAfterSeconds(bucket.until, now)
 		}
 		bucket.mu.Unlock()
 
 		if exceeded {
-			c.Header("Retry-After", strconv.Itoa(retryAfterSeconds))
+			c.Header("Retry-After", strconv.Itoa(retryAfter))
 			c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{"code": http.StatusTooManyRequests, "message": message})
 			return
 		}
@@ -652,14 +651,23 @@ func reserveRateLimitBucket(ip, scope string, now time.Time, limit int) (*loginR
 		bucket.generation++
 	}
 	if bucket.count >= limit {
-		retryAfter := int((bucket.until.Sub(now) + time.Second - time.Nanosecond) / time.Second)
-		if retryAfter < 1 {
-			retryAfter = 1
-		}
+		retryAfter := retryAfterSeconds(bucket.until, now)
 		return bucket, bucket.generation, false, retryAfter
 	}
 	bucket.count++
 	return bucket, bucket.generation, true, 0
+}
+
+// retryAfterSeconds 把分钟窗剩余时长换算为 Retry-After 整秒数：向上取整
+// （亚秒余量也须等满下一秒），下限 1——窗口即将重置时不得给出 0 秒让客户端
+// 立即重试。clusterRateLimit 超限分支与 reserveRateLimitBucket 拒绝分支共用
+// 本实现（两处逐字手抄会漂移）。
+func retryAfterSeconds(until, now time.Time) int {
+	seconds := int((until.Sub(now) + time.Second - time.Nanosecond) / time.Second)
+	if seconds < 1 {
+		seconds = 1
+	}
+	return seconds
 }
 
 func releaseRateLimitReservation(bucket *loginRateBucket, generation uint64, failed bool) {

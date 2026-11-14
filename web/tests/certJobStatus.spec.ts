@@ -16,7 +16,7 @@ import {
   CERT_JOB_RENEWAL_ATTEMPTS_FALLBACK,
   type CertJobStatus,
 } from '../src/utils/certJobStatus.ts'
-import { code, installBrowserHost, member, repoCode, section } from './_helpers.ts'
+import { code, goConstInt, installBrowserHost, member, repoCode, section } from './_helpers.ts'
 
 test('证书任务页与任务监控页冷却展示同源（冷却不再禁用，仅信息提示）', () => {
   const certJobs = code('src/views/settings/CertJobs.vue')
@@ -94,7 +94,7 @@ test('重签松绑：冷却中可点且确认弹框含配额警示；就绪判�
 // ── 续签语境状态口径（2026-10-30 裁定）：failed 按续签语境细分（失败/续签失败/
 // 需人工），全部标签 ≤4 字；hover 为派生口径，CA 原文只在「日志」对话框。 ──
 
-const CAP = 5
+const CAP = goConstInt('internal/db/db.go', 'DefaultCertRenewalAttempts')
 
 test('状态列标签全部 ≤4 字（26 态全表 + 细分标签）', () => {
   const go = repoCode('internal/db/db.go')
@@ -114,7 +114,7 @@ test('需人工判据：failed 且无 CA 冷却且失败次数达上限（后端
   assert.equal(certJobManualNeeded({ status: 'failed', renewal_attempts: 4 }, CAP), false, '未达上限≠需人工')
   assert.equal(certJobManualNeeded({ status: 'failed' }, CAP), false, '缺 attempts 字段（omitempty）不算需人工')
   assert.equal(certJobManualNeeded({ status: 'waiting_ca', renewal_attempts: 5 }, CAP), false, '非终态失败不进需人工')
-  assert.equal(CERT_JOB_RENEWAL_ATTEMPTS_FALLBACK, 5, '兜底上限=db.DefaultCertRenewalAttempts 同值')
+  assert.equal(CERT_JOB_RENEWAL_ATTEMPTS_FALLBACK, goConstInt('internal/db/db.go', 'DefaultCertRenewalAttempts'), '兜底上限=db.DefaultCertRenewalAttempts 同值（跨栈对表）')
 })
 
 test('状态列标签细分：failed → 需人工/续签失败/失败（旧证书在场判据=到期派生非空）', () => {

@@ -33,7 +33,7 @@ func seedAutobanCandidate(t *testing.T) {
 		t.Fatalf("seed preset list: %v", err)
 	}
 	// 2026-10-30 阶段 3 口径后非数值 token 不再计数，候选前置喂 CRS 形态 id。
-	autobanObserveEvent("203.0.113.5", "blocked", "942100")
+	autobanObserveEvent("45.33.32.5", "blocked", "942100")
 }
 
 // Given 达标候选在册，merge 前节点已降级（暂存重载钩子里置 is_master=0）。
@@ -95,9 +95,9 @@ func TestAutobanDisableFlush_capacityEvictionLeavesWarnAndAudit(t *testing.T) {
 	// 带外超限形态：3 条自动条目（容量=2）→ 禁用收尾 merge 挤出 1 条。
 	expires := "2026-10-14 11:00:00"
 	seeded := []models.IPListEntry{
-		{Value: "198.51.100.1", Remark: autobanEntryRemark, CreatedAt: "2026-10-14 09:00:00", ExpiresAt: expires},
-		{Value: "198.51.100.2", Remark: autobanEntryRemark, CreatedAt: "2026-10-14 09:01:00", ExpiresAt: expires},
-		{Value: "198.51.100.3", Remark: autobanEntryRemark, CreatedAt: "2026-10-14 09:02:00", ExpiresAt: expires},
+		{Value: "45.33.32.1", Remark: autobanEntryRemark, CreatedAt: "2026-10-14 09:00:00", ExpiresAt: expires},
+		{Value: "45.33.32.2", Remark: autobanEntryRemark, CreatedAt: "2026-10-14 09:01:00", ExpiresAt: expires},
+		{Value: "45.33.32.3", Remark: autobanEntryRemark, CreatedAt: "2026-10-14 09:02:00", ExpiresAt: expires},
 	}
 	raw, err := json.Marshal(seeded)
 	if err != nil {
@@ -121,10 +121,10 @@ func TestAutobanDisableFlush_capacityEvictionLeavesWarnAndAudit(t *testing.T) {
 	}
 	// 挤出身份后缀（被挤者点名）：三条候选同前缀 .1/.2/.3，只有 .1（最早
 	// 创建、稳定序首个）被挤——点名断言必须区分具体条值，否则前缀命中即绿。
-	if !strings.Contains(logText, "挤出 IP 198.51.100.1") {
-		t.Fatalf("WARN 行必须点名被挤条目 198.51.100.1（最早创建者）:\n%s", logText)
+	if !strings.Contains(logText, "挤出 IP 45.33.32.1") {
+		t.Fatalf("WARN 行必须点名被挤条目 45.33.32.1（最早创建者）:\n%s", logText)
 	}
-	if strings.Contains(logText, "198.51.100.2") || strings.Contains(logText, "198.51.100.3") {
+	if strings.Contains(logText, "45.33.32.2") || strings.Contains(logText, "45.33.32.3") {
 		t.Fatalf("未挤出条目不得出现在容量收敛身份后缀:\n%s", logText)
 	}
 	var auditCount int

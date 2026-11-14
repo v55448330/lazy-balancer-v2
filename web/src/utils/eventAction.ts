@@ -23,7 +23,9 @@ const challengeKind = (ruleTriggered: string | undefined | null): 'issued' | 'pa
   return null
 }
 
-/** 短标签（列表/筛选等紧凑位）：拦截 / 检测 / 挑战结果。 */
+/** 短标签（列表/筛选等紧凑位）：拦截 / 检测 / 挑战结果。
+ *  ruleTriggered 形参零消费：挑战三态标签同词（区分只由 eventActionTone 承载），
+ *  保留形参使调用方与 tone 同一传参形态——删参会让三处调用点分叉。 */
 export const eventActionShort = (action: string | undefined | null, _ruleTriggered?: string | null): string => {
   if (!action) return '—'
   if (action === 'blocked') return t('common.app.views.eventAction.blockedShort') || action
@@ -33,7 +35,8 @@ export const eventActionShort = (action: string | undefined | null, _ruleTrigger
   return action
 }
 
-/** 完整标签（详情/告警等叙述位）：已拦截 / 已记录 / 挑战结果。 */
+/** 完整标签（详情/告警等叙述位）：已拦截 / 已记录 / 挑战结果。
+ *  ruleTriggered 形参零消费，口径同 eventActionShort（见其注释）。 */
 export const eventActionFull = (action: string | undefined | null, _ruleTriggered?: string | null): string => {
   if (!action) return '—'
   if (action === 'blocked') return t('common.app.views.eventAction.blockedFull') || action

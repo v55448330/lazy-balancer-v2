@@ -222,9 +222,11 @@ func insertAutoBackupRow(ctx context.Context, filename, status string, sizeBytes
 }
 
 // pruneAutoBackupStatus 裁剪单一状态：按 created_at/id 倒序保留 keep 个，
-// 多余者文件+行同删；文件删除失败保留行供下轮重试。
+// 多余者文件+行同删；文件删除失败保留行供下轮重试。只读取待删窗口
+// （LIMIT -1 OFFSET keep），不全量读行——历史备份行无界增长时全量读
+// 会把整表搬进内存。
 func pruneAutoBackupStatus(ctx context.Context, dir, status string, keep int) int {
-	rows, err := db.DB.QueryContext(ctx, `SELECT id, filename FROM auto_backups WHERE status=? ORDER BY created_at DESC, id DESC`, status)
+	rows, err := db.DB.QueryContext(ctx, `SELECT id, filename FROM auto_backups WHERE status=? ORDER BY created_at DESC, id DESC LIMIT -1 OFFSET ?`, status, keep)
 	if err != nil {
 		services.Logf("warn", "自动备份裁剪：读取 %s 行失败: %v", status, err)
 		return 0
@@ -234,14 +236,14 @@ func pruneAutoBackupStatus(ctx context.Context, dir, status string, keep int) in
 		id       int64
 		filename string
 	}
-	var all []pruneRow
+	var excess []pruneRow
 	for rows.Next() {
 		var r pruneRow
 		if err := rows.Scan(&r.id, &r.filename); err != nil {
 			services.Logf("warn", "自动备份裁剪：扫描 %s 行失败: %v", status, err)
 			continue
 		}
-		all = append(all, r)
+		excess = append(excess, r)
 	}
 	if err := rows.Err(); err != nil {
 		// 半途失败时清单不完整：放弃本轮裁剪，避免漏删/误删且无痕。
@@ -251,11 +253,7 @@ func pruneAutoBackupStatus(ctx context.Context, dir, status string, keep int) in
 	}
 	rows.Close()
 	removed := 0
-	for idx := range all {
-		if idx < keep {
-			continue
-		}
-		r := all[idx]
+	for _, r := range excess {
 		if err := ctx.Err(); err != nil {
 			return removed
 		}

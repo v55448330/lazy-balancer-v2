@@ -51,20 +51,17 @@ func l4secRendererSource(t *testing.T) string {
 func TestL4SecContract_moduleRegistrationsMatchRender(t *testing.T) {
 	src := l4secModuleSource(t)
 	// 模块注册 ID（契约 C2 固定，两侧不得改名）。lb_ipfile 是仓内模块
-	// （绕开 caddy-l4 v0.1.2 上游 remote_ip_list 的 Cleanup 死锁——主审裁定，
-	// A2 交付中）：其注册落地前为软钉（PENDING 日志），落地即硬化。
+	// （绕开 caddy-l4 v0.1.2 上游 remote_ip_list 的 Cleanup 死锁——主审裁定）：
+	// 注册已落地，与其余 ID 同列无条件断言。
 	for _, literal := range []string{
 		"layer4.handlers.lb_l4_sec",
 		"layer4.handlers.lb_l4_pp",
 		"layer4.matchers.lb_geoip",
+		"layer4.matchers.lb_ipfile",
 	} {
 		if !strings.Contains(src, literal) {
 			t.Errorf("caddyl4sec 模块源码缺注册 ID %q（渲染侧与模块侧契约断裂）", literal)
 		}
-	}
-	ipfileLanded := strings.Contains(src, "layer4.matchers.lb_ipfile")
-	if !ipfileLanded {
-		t.Logf("PENDING A2: layer4.matchers.lb_ipfile 注册未落地，其形状对账待落地后硬化（渲染侧已切换 lb_ipfile 形状）")
 	}
 	// 事件上报/采样 handler 的 JSON 字段键（渲染侧字段名，模块侧解码用）。
 	for _, field := range []string{"rule_caddy_id", "reason", "policy_id", "allow_sample"} {
@@ -72,12 +69,11 @@ func TestL4SecContract_moduleRegistrationsMatchRender(t *testing.T) {
 			t.Errorf("caddyl4sec 模块源码缺字段 %q（lb_l4_sec 载荷契约断裂）", field)
 		}
 	}
-	// 地域拦截 matcher 的名单字段键；名单文件 matcher 的单文件键仅在其
-	// 注册落地后硬化（PENDING 期间渲染侧形状由结构钉测覆盖）。
+	// 地域拦截 matcher 的名单字段键与名单文件 matcher 的单文件键。
 	if !strings.Contains(src, "countries") {
 		t.Errorf("caddyl4sec 模块源码缺 lb_geoip countries 字段")
 	}
-	if ipfileLanded && !strings.Contains(src, "\"file\"") {
+	if !strings.Contains(src, "\"file\"") {
 		t.Errorf("caddyl4sec 模块源码缺 lb_ipfile file 字段（matcher 载荷契约断裂）")
 	}
 	// 载荷字段键契约两侧成对钉死（任一侧删键/改名即红）：模块侧钉解码

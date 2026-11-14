@@ -11,7 +11,7 @@ import (
 
 // GetSecurityOverview 在 MetricsDB==nil 时必须返回
 // 空面板 200 而非 nil 解引用 panic——对齐家族口径
-// （ListSecurityEvents:3088 / GetIPEventCount:2977 / GetRuleStageStats）。
+// （ListSecurityEvents / GetIPEventCount / GetRuleStageStats 同口径）。
 func TestGetSecurityOverview_metricsDBNilReturnsEmptyPanel(t *testing.T) {
 	setupSecurityPolicyTestDB(t)
 	router := newSecurityEventsRouter(t)

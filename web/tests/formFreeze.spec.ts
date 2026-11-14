@@ -11,7 +11,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { code, openTags, section } from './_helpers.ts'
+import { code, member, openTags, section } from './_helpers.ts'
 
 const at = (text: string, needle: string, what: string): number => {
   const index = text.indexOf(needle)
@@ -128,26 +128,29 @@ test('规则向导：保存中各步表单冻结、步骤条与前进/后退锁�
 
 test('仪表盘 Caddy 控制：占位先于确认（连点不叠第二次重启/停止）', () => {
   const page = code('src/views/Dashboard.vue')
-  const pendingAt = at(page, 'caddyLoading.value = true', 'caddyLoading 置位')
-  const confirmAt = at(page, 'await ElMessageBox.confirm(actionDesc', 'Caddy 确认框')
+  const control = member(page, 'const controlCaddy = ')
+  const pendingAt = at(control, 'caddyLoading.value = true', 'caddyLoading 置位')
+  const confirmAt = at(control, 'await ElMessageBox.confirm(actionDesc', 'Caddy 确认框')
   assert.ok(pendingAt < confirmAt, '占位必须早于确认框')
-  assert.match(page, /if \(caddyLoading\.value\) return/)
-  assert.match(page, /if \(!disposed\) caddyLoading\.value = false/)
+  assert.match(control, /if \(caddyLoading\.value\) return/)
+  assert.match(control, /if \(!disposed\) caddyLoading\.value = false/)
 })
 
 test('API 密钥启用/禁用：占位先于确认，finally 释放', () => {
   const page = code('src/views/Keys.vue')
-  const pendingAt = at(page, 'togglePendingId.value = key.id', '密钥占位')
-  const confirmAt = at(page, 'common.app.views.keys.disableConfirmMsg', '密钥禁用确认')
+  const toggle = member(page, 'const toggleKey = ')
+  const pendingAt = at(toggle, 'togglePendingId.value = key.id', '密钥占位')
+  const confirmAt = at(toggle, 'common.app.views.keys.disableConfirmMsg', '密钥禁用确认')
   assert.ok(pendingAt < confirmAt, '占位必须早于确认框')
   assert.ok(code('src/locales/zh/views.ts').includes('确定要禁用 API 密钥'), '禁用确认原文必须在 zh 母本词条中')
-  assert.match(page, /finally \{\s*togglePendingId\.value = null\s*\}/)
+  assert.match(toggle, /finally \{\s*togglePendingId\.value = null\s*\}/)
 })
 
 test('用户启用/禁用：占位先于确认，取消回滚乐观开关后仍释放占位', () => {
   const page = code('src/views/Users.vue')
-  const pendingAt = at(page, 'switchingIds.value.add(id)', '用户占位')
-  const confirmAt = at(page, 'if (!isEnabled)', '用户禁用确认分支')
-  assert.ok(confirmAt > pendingAt && page.indexOf('ElMessageBox.confirm', confirmAt) > confirmAt, '禁用分支必须先弹确认')
-  assert.match(page, /finally \{\s*switchingIds\.value\.delete\(id\)\s*\}/)
+  const toggle = member(page, 'const handleToggleStatus = ')
+  const pendingAt = at(toggle, 'switchingIds.value.add(id)', '用户占位')
+  const confirmAt = at(toggle, 'if (!isEnabled)', '用户禁用确认分支')
+  assert.ok(confirmAt > pendingAt && toggle.indexOf('ElMessageBox.confirm', confirmAt) > confirmAt, '禁用分支必须先弹确认')
+  assert.match(toggle, /finally \{\s*switchingIds\.value\.delete\(id\)\s*\}/)
 })

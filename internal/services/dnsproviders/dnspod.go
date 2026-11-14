@@ -3,6 +3,7 @@ package dnsproviders
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 
 	"lazy-balancer-v2/internal/dnsprovider"
@@ -67,6 +68,9 @@ func (d *DNSPod) CredentialFieldOptions(field string) []string {
 // 两侧曾各写一份推断，导致同一份库内 JSON 在「测试」与「签发」上结论相反。
 // 同时接受 UI 形态（auth_mode + 表单字段，存储形态）与 canonical 形态
 // （mode + api_token / mode + secret 对，本函数产物）——产出可回喂。
+// DNSPod 是双族提供商（dnspod token / tencent secret 对）；他族凭据
+// （aliyun/cloudflare）显性拒绝，与 Aliyun/Cloudflare 的族守卫同口径：
+// 静默存储他族凭据会让「provider 元数据」与「凭据真相」分裂（fail-visible）。
 func (d *DNSPod) buildCredentials(creds map[string]string) (map[string]string, error) {
 	canonical, err := (dnsprovider.CredentialEnvelope{
 		Mode:            creds["mode"],
@@ -81,6 +85,9 @@ func (d *DNSPod) buildCredentials(creds map[string]string) (map[string]string, e
 	}).Canonical()
 	if err != nil {
 		return nil, err
+	}
+	if canonical.Mode != "dnspod" && canonical.Mode != "tencent" {
+		return nil, fmt.Errorf("DNSPod (腾讯云) 凭证需要 api_token 或 secret_id+secret_key（阿里云/Cloudflare 凭据请配置在对应提供商下）")
 	}
 	if canonical.Mode == "dnspod" {
 		return map[string]string{"mode": "dnspod", "api_token": canonical.APIToken}, nil

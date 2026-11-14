@@ -315,3 +315,33 @@ func TestCaddyService_GetUpstreamHealthDetailed_doesNotCacheErrors(t *testing.T)
 		t.Fatalf("config hits=%d, want failure retry then success cache", got)
 	}
 }
+
+// Prometheus 文本行带尾部时间戳/畸形值时的解析契约：值字段=第一个空白
+// 分隔字段（时间戳不得被当作健康值）；解析失败的行不写健康表（缺观测走
+// Unknown 口径，不得静默判不健康）。
+func TestCaddyService_getUpstreamHealthFromMetrics_valueFieldAndMalformedLines(t *testing.T) {
+	// Given 四行：带时间戳的健康行 / 带时间戳的不健康行 / 垃圾值行 / 缺值行
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w,
+			`caddy_reverse_proxy_upstreams_healthy{upstream="10.0.0.1:80"} 1 1700000000000`+"\n"+
+				`caddy_reverse_proxy_upstreams_healthy{upstream="10.0.0.2:80"} 0 1700000000000`+"\n"+
+				`caddy_reverse_proxy_upstreams_healthy{upstream="10.0.0.3:80"} garbage`+"\n"+
+				`caddy_reverse_proxy_upstreams_healthy{upstream="10.0.0.4:80"}`+"\n")
+	}))
+	t.Cleanup(server.Close)
+	service := NewCaddyService(server.URL)
+
+	// When
+	health := service.getUpstreamHealthFromMetrics(context.Background())
+
+	// Then 时间戳行按值字段解析；畸形/缺值行缺席（不得误判不健康）
+	if len(health) != 2 || !health["10.0.0.1:80"] || health["10.0.0.2:80"] {
+		t.Fatalf("health=%v, want 10.0.0.1:80=true/10.0.0.2:80=false（时间戳不得当健康值）", health)
+	}
+	if _, ok := health["10.0.0.3:80"]; ok {
+		t.Fatal("垃圾值行不得写入健康表（应走 Unknown 口径）")
+	}
+	if _, ok := health["10.0.0.4:80"]; ok {
+		t.Fatal("缺值行不得写入健康表（应走 Unknown 口径）")
+	}
+}

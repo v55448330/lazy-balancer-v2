@@ -124,6 +124,7 @@ func TestSecurityEventsIngestion_commitFailureReleasesLeakedTransaction(t *testi
 	noID := strings.Replace(securityEventsFixtureBlocked, `"id": "tx-blocked-1",`, `"id": "",`, 1)
 	withDropped := strings.TrimSuffix(securityEventsFixtureBlocked, "}") + `,"messages_dropped":4}`
 	if err := os.WriteFile(logPath, []byte(noID+"\n"+withDropped+"\n"), 0o644); err != nil {
+		t.Fatalf("write audit fixture: %v", err)
 	}
 	oldAuditLog, oldAuditOffset := auditLogPath, securityEventsOffsetPath
 	auditLogPath, securityEventsOffsetPath = logPath, offsetPath

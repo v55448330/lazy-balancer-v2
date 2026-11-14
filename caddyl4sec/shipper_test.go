@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -656,5 +657,60 @@ func TestL4SpoolBudgetExhaustedRefreshesDespiteWindow(t *testing.T) {
 	}
 	if scans != 2 {
 		t.Fatalf("扫描次数 = %d, want 2（基线刷新+临界强制刷新——耗尽路径不受节流约束）", scans)
+	}
+}
+
+// TestFlushQuiesced_waitsForInFlightSubmit 收尾判据必须覆盖「已出队、尚未
+// submit 完成」的在途行：ring.pop 与 shipper.submit 之间存在窗口，只等环空
+// 会在末行进入批次前就冲刷残留批——末行被遗留给下一次周期刷新，收尾方拿到
+// 的计数/投递终态缺行。用 submit 落点缝制造确定性在途形态：首行卡在 submit
+// 内（环已空），flushQuiesced 必须等它提交完成后再冲刷。
+func TestFlushQuiesced_waitsForInFlightSubmit(t *testing.T) {
+	socket, bodies := startUnixIngestServer(t, http.StatusNoContent)
+	t.Setenv("LB_SECURITY_EVENTS_IPC_SOCKET", socket)
+	setSpoolDirForTest(t, filepath.Join(t.TempDir(), "spool"))
+	p := acquirePipelineForTest()
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	p.setSubmitSinkForTest(func(line []byte) {
+		close(entered)
+		<-release
+		p.shipper.submit(line)
+	})
+	// 收尾必须先放掉在途 submit 再停 drain（defer LIFO：本 defer 后注册、先执行）；
+	// 断言失败路径同样经此放流，否则 resetForTest 等 done 卡死拖满超时。
+	var releaseOnce sync.Once
+	releaseSubmit := func() { releaseOnce.Do(func() { close(release) }) }
+	defer func() {
+		releaseSubmit()
+		p.resetForTest()
+	}()
+	p.enqueueEvent(buildL4EventLine(11, "IP 黑名单拒绝", "rq", "203.0.113.11", time.Unix(11, 111), [4]byte{11, 11, 11, 11}, true))
+	<-entered // drain 已弹出该行（环空），submit 尚未完成——在途窗口成立。
+
+	quiesced := make(chan struct{})
+	go func() {
+		p.flushQuiesced(2 * time.Second)
+		close(quiesced)
+	}()
+	select {
+	case <-quiesced:
+		t.Fatal("flushQuiesced 在末行 submit 完成前返回（只等环空，未覆盖在途行）")
+	case <-time.After(150 * time.Millisecond):
+	}
+	releaseSubmit()
+	select {
+	case <-quiesced:
+	case <-time.After(2 * time.Second):
+		t.Fatal("flushQuiesced 未在 submit 完成后返回")
+	}
+
+	sent, failed, spooled, spoolErrs := p.shipperCounters()
+	if sent != 1 || failed != 0 || spooled != 0 || spoolErrs != 0 {
+		t.Fatalf("收尾后计数 sent/failed/spooled/spoolErrs = %d/%d/%d/%d, want 1/0/0/0（末行必须已投递）", sent, failed, spooled, spoolErrs)
+	}
+	if got := bodies(); len(got) != 1 {
+		t.Fatalf("收尾后 ingest 请求数 = %d, want 1（末行必须已送达面板）", len(got))
 	}
 }

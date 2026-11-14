@@ -1,7 +1,7 @@
 import { i18n } from '@/i18n/index'
 const t = i18n.global.t
 import axios from 'axios'
-import type { AxiosInstance, AxiosRequestConfig } from 'axios'
+import type { AxiosError, AxiosInstance, AxiosRequestConfig } from 'axios'
 import { h, nextTick, ref } from 'vue'
 import { ElInputOtp, ElMessage, ElMessageBox } from 'element-plus'
 import type { InputOtpInstance } from 'element-plus'
@@ -29,6 +29,8 @@ declare module 'axios' {
     _authToken?: string
     /** 发起请求时的身份代际；428 在弹码、刷新与重放前复核。 */
     _sessionGeneration?: number
+    /** 428 弹码重试标记：重放请求携带，分类器据此不再二次弹码（防重放循环）。 */
+    _mfaRetried?: boolean
   }
 }
 
@@ -168,6 +170,20 @@ function messageKeyOf(responseData: unknown): string | undefined {
   return typeof key === 'string' && key ? key : undefined
 }
 
+// 错误响应信封窄化：axios 的 response.data 声明为 {}（无类型载荷），直接下标
+// 取 message/code 无编译保护——与 messageKeyOf 同口径先判对象再按键取类型。
+function errorEnvelopeMessage(responseData: unknown): string | undefined {
+  if (typeof responseData !== 'object' || responseData === null || !('message' in responseData)) return undefined
+  const { message } = responseData
+  return typeof message === 'string' ? message : undefined
+}
+
+function errorEnvelopeCode(responseData: unknown): number | undefined {
+  if (typeof responseData !== 'object' || responseData === null || !('code' in responseData)) return undefined
+  const { code } = responseData
+  return typeof code === 'number' ? code : undefined
+}
+
 // Blob 下载（配置导出、MCP 手册）失败时，错误响应体是 Blob 而非 JSON，
 // 需读出文本后解析后端 message，否则只能展示 axios 的英文兜底文案。
 async function blobErrorMessage(responseData: unknown): Promise<string | undefined> {
@@ -281,7 +297,7 @@ service.interceptors.response.use(
     }
     return res
   },
-  async (error) => {
+  async (error: AxiosError) => {
     // 止损拦截的拒绝：请求未出站，不 toast、不走 401 会话失效弹窗（弹窗已在
     // 展示中），原样透传给调用方。
     if ((error as { sessionExpiredHalted?: boolean }).sessionExpiredHalted) {
@@ -289,7 +305,7 @@ service.interceptors.response.use(
     }
     if (axios.isCancel(error)) return Promise.reject(error)
     const status = error.response?.status
-    const backendMsg = error.response?.data?.message ?? (await blobErrorMessage(error.response?.data))
+    const backendMsg = errorEnvelopeMessage(error.response?.data) ?? (await blobErrorMessage(error.response?.data))
     // 网络层失败（断网/DNS/CORS）没有任何响应体，502/504 网关错误返回的是 HTML
     // 而非后端 JSON，两者都会把 axios 英文原文（"Network Error" /
     // "Request failed with status code 502"）直接抛给用户，这里统一映射为
@@ -307,10 +323,10 @@ service.interceptors.response.use(
       }
     }
     const message = backendMsg || fallback || t('common.app.api.networkError')
-    const isLoginRequest = error.config?.url?.includes('/auth/login') || error.config?.url?.includes('/auth/ticket-login')
+    const isLoginRequest = !!(error.config?.url?.includes('/auth/login') || error.config?.url?.includes('/auth/ticket-login'))
     const kind = classifyAuthFailure({
       status,
-      dataCode: error.response?.data?.code,
+      dataCode: errorEnvelopeCode(error.response?.data),
       method: error.config?.method,
       url: error.config?.url,
       message,
@@ -374,8 +390,12 @@ service.interceptors.response.use(
           prompt: mfaStepUp.prompt,
           refresh: (code) => mfaStepUp.ensureRefresh(code, (confirmationCode) => authStore.refreshMfaStep(confirmationCode)),
           replay: () => {
-            error.config._mfaRetried = true
-            return service.request(error.config)
+            // 428 必携带请求配置（classifyAuthFailure 的 hasConfig 门已拦无配置
+            // 形态）；此处窄化兜底，缺配置时以原始错误拒绝而非裸下标崩溃。
+            const config = error.config
+            if (!config) return Promise.reject(error)
+            config._mfaRetried = true
+            return service.request(config)
           },
           onVerified: () => { mfaGrace.markVerifiedJustNow(Date.now()) },
         })

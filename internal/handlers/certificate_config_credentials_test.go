@@ -200,6 +200,9 @@ func TestUpdateCertificateConfig_prunesLegacyBareTokenRowOnFamilySwitch(t *testi
 func TestUpdateCertificateConfig_prunesOtherFamilyOnCloudflareSwitch(t *testing.T) {
 	h := newBackupTestHandlers(t)
 	id := seedCertificateConfigRow(t, "to-cloudflare", `{"auth_mode":"dnspod","app_id":"old-id","app_token":"old-tok"}`)
+	if _, err := db.DB.Exec(`UPDATE certificate_configs SET dns_provider='cloudflare' WHERE id=?`, id); err != nil {
+		t.Fatalf("set cloudflare provider: %v", err)
+	}
 
 	response := putCertificateConfig(t, h, id,
 		`{"dns_credentials":{"auth_mode":"cloudflare","api_token":"cf-new"}}`)

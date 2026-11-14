@@ -281,7 +281,13 @@ func normalizeInterruptedUpdateStatuses() {
 			continue
 		}
 		row, ok, err := versionTableStatusRowOf(family.table)
-		if err != nil || !ok || !family.active(row.status) {
+		if err != nil {
+			// 读失败不得静默跳过：版本表不可读时残留活动态无人归一，
+			// 规则库页/任务视图恒显「更新中」且排障零信号（与下方写失败同形）。
+			Logf("warn", "任务状态归一：%s 版本表读取失败（本轮跳过归一）: %v", family.taskID, err)
+			continue
+		}
+		if !ok || !family.active(row.status) {
 			continue
 		}
 		res, err := db.DB.Exec(`UPDATE `+family.table+

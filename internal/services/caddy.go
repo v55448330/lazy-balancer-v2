@@ -1504,14 +1504,23 @@ func (s *CaddyService) getUpstreamHealthFromMetrics(ctx context.Context) map[str
 		if bytes.HasPrefix(rawLine, caddyReverseProxyHealthyMetricPrefix) || bytes.HasPrefix(rawLine, caddyLayer4ProxyHealthyMetricPrefix) {
 			line := string(rawLine)
 			upstream := ExtractMetricLabel(line, "upstream")
-			spaceIdx := strings.LastIndex(line, " ")
-			var isHealthy float64
-			if spaceIdx > 0 {
-				fmt.Sscanf(line[spaceIdx+1:], "%f", &isHealthy)
+			if upstream == "" {
+				continue
 			}
-			if upstream != "" {
-				result[upstream] = isHealthy == 1
+			// Prometheus 文本行=指标名{labels} 值 [时间戳]：按空白切分取
+			// 值字段并严格解析。解析失败不写健康表——旧实现忽略 Sscanf
+			// 错误且按最后空格取值（尾部时间戳/垃圾值被当作健康值，
+			// 0 值静默判不健康），消费方会把畸形观测误报为上游不健康；
+			// 缺观测应走 Unknown 口径（upstreamDetailFor）。
+			fields := strings.Fields(line)
+			if len(fields) < 2 {
+				continue
 			}
+			isHealthy, err := strconv.ParseFloat(fields[1], 64)
+			if err != nil {
+				continue
+			}
+			result[upstream] = isHealthy == 1
 		}
 	}
 
@@ -4150,13 +4159,17 @@ func jsonRequestMatchers(baseMatcher map[string]interface{}) []map[string]interf
 // htmlTitlePattern 提取拦截页标题，作为未自定义 JSON 时的人类可读消息源。
 var htmlTitlePattern = regexp.MustCompile(`(?is)<title[^>]*>(.*?)</title>`)
 
+// htmlTagStripPattern 去除标题内残留标签（与 htmlTitlePattern 同为包级
+// 编译单源——defaultBlockPageJSONMessage 每次调用重新编译是热路径浪费）。
+var htmlTagStripPattern = regexp.MustCompile(`(?s)<[^>]*>`)
+
 // defaultBlockPageJSONMessage 从 HTML 页面内容派生 JSON 默认消息：
 // 取 <title> 文本（去标签/反转义/截断 200 字符），无标题时回退通用文案。
 // 不再携带状态码——HTTP status 已是标准语义，JSON 体只保留消息。
 func defaultBlockPageJSONMessage(content string) string {
 	msg := ""
 	if match := htmlTitlePattern.FindStringSubmatch(content); len(match) > 1 {
-		msg = strings.TrimSpace(html.UnescapeString(regexp.MustCompile(`(?s)<[^>]*>`).ReplaceAllString(match[1], "")))
+		msg = strings.TrimSpace(html.UnescapeString(htmlTagStripPattern.ReplaceAllString(match[1], "")))
 	}
 	if msg == "" {
 		msg = "Request blocked"

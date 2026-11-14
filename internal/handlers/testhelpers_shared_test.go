@@ -19,14 +19,21 @@ import (
 	"lazy-balancer-v2/internal/services"
 )
 
-func newSecurityR26Router(t *testing.T) *gin.Engine {
+// newFakeCaddyHandlers 装配恒 200 假 Caddy admin 的 Handlers（测试模式）：
+// 安全域路由夹具的共用样板——假服务随用例 Cleanup 关闭，调用方只挂路由。
+func newFakeCaddyHandlers(t *testing.T) *Handlers {
 	t.Helper()
-	fakeCaddy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	fakeCaddy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	t.Cleanup(fakeCaddy.Close)
 	gin.SetMode(gin.TestMode)
-	h := &Handlers{caddyService: services.NewCaddyService(fakeCaddy.URL)}
+	return &Handlers{caddyService: services.NewCaddyService(fakeCaddy.URL)}
+}
+
+func newSecurityR26Router(t *testing.T) *gin.Engine {
+	t.Helper()
+	h := newFakeCaddyHandlers(t)
 	router := gin.New()
 	router.DELETE("/security/policies/:id", h.DeleteSecurityPolicy)
 	router.DELETE("/security/block-pages/:id", h.DeleteSecurityBlockPage)

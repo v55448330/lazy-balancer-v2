@@ -10,8 +10,8 @@ package dnsprovider
 //
 // 本守卫把骨架的结构标记做成有序清单，所有实现必须两两同现同序；旁路的能力
 // （dnspod 的 domain-id 自愈、tencent/aliyun 的记录 ID 解析）作为 provider
-// 专属标记只在各自一侧断言，不进入共同清单。provider 侧残余排空自
-// 修复起三侧同构（aliyun 先行、dnspod/tencent 对齐），属共同清单。
+// 专属标记只在各自一侧断言，不进入共同清单。provider 侧残余排空为四家
+// （aliyun/dnspod/tencent/cloudflare）同构共有能力，属共同清单。
 
 import (
 	"go/ast"

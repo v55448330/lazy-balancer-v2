@@ -14,8 +14,8 @@ import (
 // 任一侧算法/模数漂移即两侧向量表同时红，跨栈口径永不静默分叉。
 //
 // 扫描入队判定（expires_at − 窗口 − jitter ≤ now）落在 certificates.go 的
-// CheckExpiration/scanRenewalCandidates——该文件本轮归并行批次的 ACME 失败语义
-// 代理（Main 协调），抖动门与对应扫描用例在其收尾后挂回；本文件只覆盖纯函数。
+// CheckExpiration/scanRenewalCandidates；本文件覆盖纯函数向量/值域与扫描侧
+// 抖动闸门（TestCheckExpiration_renewalJitterGatesEnqueue）。
 func TestCertRenewalJitterSeconds_vectors(t *testing.T) {
 	cases := []struct {
 		ruleID string
@@ -59,7 +59,7 @@ func seedJitterGateJob(t *testing.T, database interface {
 		t.Fatalf("seed rule: %v", err)
 	}
 	if _, err := database.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,expires_at) VALUES (?, ?, 'issued', ?)`,
-		ruleID, domain, expiresAt.UTC().Format("2006-01-02 15:04:05")); err != nil {
+		ruleID, domain, CanonicalDatetimeValue(expiresAt)); err != nil {
 		t.Fatalf("seed job: %v", err)
 	}
 }

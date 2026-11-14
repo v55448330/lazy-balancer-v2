@@ -1,10 +1,8 @@
 package services
 
 import (
-	"bytes"
 	"context"
 	"database/sql"
-	"log"
 	"strings"
 	"testing"
 )
@@ -86,10 +84,8 @@ func TestReportSecurityLibraryVersions_nilDatabaseYieldsEmpty(t *testing.T) {
 // 持续读失败不得每 60s 一条 warn（与同函数 cert-expiry 口径读取同族）。
 func TestLatestLibraryVersionOrEmpty_warnThrottledAcrossRepeatedFailures(t *testing.T) {
 	fake := sql.OpenDB(&fakeIterErrConnector{failNeedle: "FROM security_threat_sources"})
-	var logs bytes.Buffer
-	originalWriter := log.Writer()
-	log.SetOutput(&logs)
-	t.Cleanup(func() { log.SetOutput(originalWriter) })
+	ResetLogStateTransitionForTest("cluster-report-library-version-security_threat_sources")
+	logs := captureLogf(t)
 
 	// When：同一失败形态连续三轮
 	for range 3 {

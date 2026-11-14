@@ -86,13 +86,17 @@ func TestRefreshBrandingMirror_bumpsVersionOnFileChange(t *testing.T) {
 	}
 
 	// 写自定义内容 → 镜像 + 版本 bump
-	os.WriteFile(filepath.Join(dir, "branding.json"), []byte(`{"app_name":"X","landing_text":"欢迎"}`), 0644)
+	if err := os.WriteFile(filepath.Join(dir, "branding.json"), []byte(`{"app_name":"X","landing_text":"欢迎"}`), 0644); err != nil {
+		t.Fatalf("write branding file: %v", err)
+	}
 	changed, err := RefreshBrandingMirror(dir)
 	if err != nil || !changed {
 		t.Fatalf("mirror on change: changed=%v err=%v", changed, err)
 	}
 	var mirrored string
-	database.QueryRow(`SELECT COALESCE(branding_json,'') FROM global_config WHERE id=1`).Scan(&mirrored)
+	if err := database.QueryRow(`SELECT COALESCE(branding_json,'') FROM global_config WHERE id=1`).Scan(&mirrored); err != nil {
+		t.Fatalf("read mirror: %v", err)
+	}
 	if mirrored != `{"app_name":"X","landing_text":"欢迎"}` {
 		t.Errorf("mirror content=%q", mirrored)
 	}
@@ -114,13 +118,17 @@ func TestRefreshBrandingMirror_emptyFileKeepsPreviousMirror(t *testing.T) {
 	dir := t.TempDir()
 
 	valid := `{"app_name":"X","landing_text":"欢迎"}`
-	os.WriteFile(filepath.Join(dir, "branding.json"), []byte(valid), 0644)
+	if err := os.WriteFile(filepath.Join(dir, "branding.json"), []byte(valid), 0644); err != nil {
+		t.Fatalf("write valid branding: %v", err)
+	}
 	if changed, err := RefreshBrandingMirrorDB(database, dir); err != nil || !changed {
 		t.Fatalf("seed valid mirror: changed=%v err=%v", changed, err)
 	}
 
 	// 半截写窗口：文件存在、可读，但内容被截为 0 字节。
-	os.WriteFile(filepath.Join(dir, "branding.json"), nil, 0644)
+	if err := os.WriteFile(filepath.Join(dir, "branding.json"), nil, 0644); err != nil {
+		t.Fatalf("truncate branding file: %v", err)
+	}
 	changed, err := RefreshBrandingMirrorDB(database, dir)
 	if err != nil {
 		t.Fatalf("mirror on empty file: err=%v", err)
@@ -141,7 +149,9 @@ func TestRefreshBrandingMirror_emptyFileKeepsPreviousMirror(t *testing.T) {
 // 不再受开关裁剪。
 func TestBuildSnapshot_alwaysCarriesBranding(t *testing.T) {
 	svc, database := newClusterTestService(t)
-	database.Exec(`UPDATE global_config SET branding_json='{"app_name":"Y"}' WHERE id=1`)
+	if _, err := database.Exec(`UPDATE global_config SET branding_json='{"app_name":"Y"}' WHERE id=1`); err != nil {
+		t.Fatalf("seed branding mirror: %v", err)
+	}
 
 	snap, err := svc.clusterSnapshotBypassingCache(context.Background())
 	if err != nil {
@@ -383,15 +393,25 @@ func TestInjectLandingFromBranding_unicodeEscape(t *testing.T) {
 func TestRefreshBrandingMirror_skipsInvalidJSON(t *testing.T) {
 	_, database := newClusterTestService(t)
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "branding.json"), []byte(`{"app_name":"好"}`), 0644)
+	if err := os.WriteFile(filepath.Join(dir, "branding.json"), []byte(`{"app_name":"好"}`), 0644); err != nil {
+		t.Fatalf("write valid branding: %v", err)
+	}
 	if changed, err := RefreshBrandingMirror(dir); err != nil || !changed {
 		t.Fatalf("initial mirror: changed=%v err=%v", changed, err)
 	}
 	// 半截写(内容变化但非法)
-	st, _ := os.Stat(filepath.Join(dir, "branding.json"))
-	os.WriteFile(filepath.Join(dir, "branding.json"), []byte(`{"app_name":"坏`), 0644)
+	st, err := os.Stat(filepath.Join(dir, "branding.json"))
+	if err != nil {
+		t.Fatalf("stat branding file: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "branding.json"), []byte(`{"app_name":"坏`), 0644); err != nil {
+		t.Fatalf("write invalid branding: %v", err)
+	}
 	for i := 0; i < 20; i++ {
-		st2, _ := os.Stat(filepath.Join(dir, "branding.json"))
+		st2, err := os.Stat(filepath.Join(dir, "branding.json"))
+		if err != nil {
+			t.Fatalf("stat branding file: %v", err)
+		}
 		if st2.ModTime().After(st.ModTime()) {
 			break
 		}
@@ -403,13 +423,15 @@ func TestRefreshBrandingMirror_skipsInvalidJSON(t *testing.T) {
 		t.Error("invalid JSON must not be mirrored")
 	}
 	var mirrored string
-	database.QueryRow(`SELECT COALESCE(branding_json,'') FROM global_config WHERE id=1`).Scan(&mirrored)
+	if err := database.QueryRow(`SELECT COALESCE(branding_json,'') FROM global_config WHERE id=1`).Scan(&mirrored); err != nil {
+		t.Fatalf("read mirror: %v", err)
+	}
 	if mirrored != `{"app_name":"好"}` {
 		t.Errorf("mirror polluted by partial write: %q", mirrored)
 	}
 }
 
-// 无白名单 Key 快照同步——主端 ” → 从端必须落 ”
+// 无白名单 Key 快照同步——主端空串 → 从端必须落空串
 // 而非 json.Marshal(nil) 的字面量 "null"(中间件把非空当白名单配置,
 // Unmarshal null 成功但 0 CIDR → 全来源 403)。
 func TestApplySnapshot_emptyWhitelistLandsEmptyString(t *testing.T) {
@@ -590,21 +612,7 @@ func TestMaterializeBranding_reportsChanged(t *testing.T) {
 // 品牌同步审计只针对真实变更：users/basic_settings 节任意变更（branding_json
 // 未变）不得在从端产生「品牌配置已同步生效」的误导审计。
 func TestApplySnapshotBranding_auditsOnlyWhenContentChanges(t *testing.T) {
-	oldDB, oldMetricsDB, oldAuditDB := db.DB, db.MetricsDB, db.AuditDB
-	if err := db.Initialize(t.TempDir()); err != nil {
-		t.Fatalf("initialize test database: %v", err)
-	}
-	t.Cleanup(func() {
-		_ = db.Close()
-		db.DB, db.MetricsDB, db.AuditDB = oldDB, oldMetricsDB, oldAuditDB
-		// db.Close() 会把原子句柄 SetDB(nil)——只还原三个包级变量会让
-		// db.GetDB() 与 db.DB 分叉，后续用例（尤其 -shuffle 顺序）读到
-		// 已关闭/临时目录已删的库。恢复协议必须成对执行并自证。
-		db.SetDB(oldDB)
-		if got := db.GetDB(); got != oldDB {
-			t.Errorf("清理后 db.GetDB()=%p, want 原句柄 %p（原子句柄未随包级变量一同恢复）", got, oldDB)
-		}
-	})
+	setupIsolatedDB(t)
 	defer SetDefaultLandingBody(DefaultLandingText)
 
 	dir := t.TempDir()
@@ -634,8 +642,7 @@ func TestApplySnapshotBranding_auditsOnlyWhenContentChanges(t *testing.T) {
 // 从端 applySnapshot/自愈三入口都经本函数落盘，「文件内容一致」短路分支
 // 此前零品牌注入——文件已写入但内存品牌滞留旧值时永不收敛。品牌与 landing
 // 注入值变化都必须并入 changed 返回：提示文案与 landing 渲染期烘焙进
-// Caddy 配置，集群链路
-// 的重载触发（brandingWritten→mustReload）依赖 changed=true。
+// Caddy 配置，集群链路的重载触发（brandingWritten→mustReload）依赖 changed=true。
 func TestMaterializeBranding_tcpNoticeBrandInjection(t *testing.T) {
 	t.Cleanup(func() { SetTCPBlockNoticeBrand("") })
 	defer SetDefaultLandingBody(DefaultLandingText)

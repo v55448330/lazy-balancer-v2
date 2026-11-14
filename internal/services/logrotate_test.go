@@ -631,6 +631,11 @@ func TestTaskLogsHousekeeping_countsMetadataFailures(t *testing.T) {
 	logs := captureLogf(t)
 	dir := t.TempDir()
 	logFile := filepath.Join(dir, "app.log")
+	// certjobs 清理面与写入侧同源（CertJobLogDir ← taskengine.LogDir）：注入隔离
+	// 目录，否则兄弟用例残留的 certjobs 文件被注入 seam 计数，InfoFailed 失真。
+	oldTaskLogDir := taskengine.LogDir()
+	taskengine.SetLogDir(filepath.Join(dir, "tasks"))
+	t.Cleanup(func() { taskengine.SetLogDir(oldTaskLogDir) })
 	tasksDir := filepath.Join(dir, "tasks")
 	if err := os.MkdirAll(tasksDir, 0o755); err != nil {
 		t.Fatal(err)

@@ -23,7 +23,7 @@ test('成功拉取配置后排下一轮全站角色刷新', () => {
   assert.match(authSrc, /if \(configRetryTimer !== null \|\| !token\.value\)\s+return/)
   assert.match(fetchBody, /\} else \{\s*scheduleConfigRetry\(\)/)
   assert.match(fetchBody, /!\(e instanceof ApiRequestError && e\.status === 401\)\)\s+scheduleConfigRetry\(\)/)
-  assert.match(authSrc, /function localLogout[\s\S]*?clearConfigRetryTimer\(\)/)
+  assert.match(member(authSrc, 'function localLogout'), /clearConfigRetryTimer\(\)/, '登出清表必须在 localLogout 函数体内（不得被远处同名调用满足）')
 })
 
 test('配置补查在途门：fetchConfig 一轮在飞时新触发直接跳过', () => {

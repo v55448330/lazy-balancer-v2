@@ -38,8 +38,9 @@ func TestStageBlockPages_legacyColumnsHaveNoRenderEffect(t *testing.T) {
 	if strings.Contains(joined, "status:481") || strings.Contains(joined, "status:482") {
 		t.Fatalf("stage codes 481/482 must never be emitted (feature removed):\n%s", joined)
 	}
-	// 逐策略归因码由预检链 / 策略引擎段各自携带（有页策略 = 483）：规则级
-	// 单规则渲染路径（mpGenRoutes）无批量上下文不获码，故断言全量生成配置。
+	// 逐策略归因码由预检链 / 策略引擎段各自携带（有页策略 = 483）；mpGenRoutes
+	// 经 loadSecurityPolicyContext 走批量预载上下文（同样获码），此处另断言
+	// 全量生成配置的错误路由形状。
 	generatedJSON, marshalErr := json.Marshal(generated)
 	if marshalErr != nil {
 		t.Fatalf("marshal generated config: %v", marshalErr)

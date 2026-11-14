@@ -52,7 +52,7 @@ test('每列同构：标签 / 今日主数值 / 昨日对比 / 协议拆分 / �
   assert.match(blocked, /proto-split-label">HTTP<\/span><span class="strip-sub-num">\{\{ fmtStatNum\(todayBlockedSplit\.http\) \}\}/)
   assert.match(blocked, /proto-split-label">TCP<\/span><span class="strip-sub-num">\{\{ fmtStatNum\(todayBlockedSplit\.tcp\) \}\}/)
   // 列 2 检测：橙主题 + 昨日门 + HTTP/TCP 双胶囊拆分（TCP 检测来自信任检测
-  // logged——可能产生数据就如实显示；HTTP=合计−TCP）
+  // logged——可能产生数据就如实显示；HTTP=today_detected 自身，trust 不在攻击口径合计）
   assert.match(detected, /class="strip-label">\{\{ t\('app\.security\.overview\.status\.detected'\) \}\}/)
   assert.doesNotMatch(detected, /el-tooltip/, '重设计后仅拦截列带 tooltip')
   assert.doesNotMatch(detected, /strip-label-dot/, '标签色点已按用户裁定撤回')

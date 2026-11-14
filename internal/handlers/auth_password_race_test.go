@@ -19,6 +19,7 @@ import (
 // 归零，残余竞态恰在此间隙；事务内再注入会撞 immediate 写锁 busy 等待）。
 
 func TestUpdateCurrentUser_passwordConcurrentChangeRejected(t *testing.T) {
+	withIsolatedGlobal(t)
 	database := setupAuthTestDB(t)
 	hash, err := bcrypt.GenerateFromPassword([]byte("first-password"), bcrypt.MinCost)
 	if err != nil {

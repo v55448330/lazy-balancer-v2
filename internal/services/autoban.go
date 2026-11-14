@@ -32,6 +32,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
+	"net/netip"
 	"sort"
 	"strconv"
 	"strings"
@@ -491,11 +493,12 @@ func AutobanEnabled() bool {
 // 状态转换同口径）：此前静默 fail-closed 让「库故障」与「用户关闭」在调度面
 // 完全同形（零执行、零失败行、零日志）。
 func autobanEnabledState() (enabled, known bool) {
-	if db.DB == nil {
+	d := db.GetDB()
+	if d == nil {
 		return false, false
 	}
 	var en int
-	if err := db.DB.QueryRow(`SELECT COALESCE(autoban_enabled,0) FROM global_config WHERE id=1`).Scan(&en); err != nil {
+	if err := d.QueryRow(`SELECT COALESCE(autoban_enabled,0) FROM global_config WHERE id=1`).Scan(&en); err != nil {
 		logScheduleReadFailure("schedule-read-autoban-enabled", err)
 		return false, false
 	}
@@ -692,6 +695,18 @@ func autobanObserveEventScopedAt(cfg AutobanConfig, ip, action, ruleTriggered st
 	if ip == "" || ruleTriggered == "" {
 		return
 	}
+	// 保留地址硬排除（与攻击光流环入环门同一判据 IsReservedClientIP）：
+	// 内网扫描器/监控源命中 CRS/自定义规则不是外网攻击证据，计入会把内网
+	// 服务自动封禁（断内网访问）。三条喂入路径（WAF 首喂/改判补喂、人机
+	// 批喂）统一经此门，判据单点维护。
+	if IsReservedClientIP(ip) {
+		return
+	}
+	// IPv6 按 /64 归一计数（隐私扩展地址在 /64 内轮换，逐地址建键永不达
+	// 阈值且耗尽键上限）；封禁条目随之落 /64 CIDR——与 CC/cookie 检测粒度
+	// 对齐。/64 波及整个用户前缀（同 /64 无辜主机连带），为 IPv6 标准封禁
+	// 粒度，启用须知已披露。
+	ip = autobanNormalizeIP(ip)
 	window := time.Duration(cfg.WindowMinutes) * time.Minute
 	if window <= 0 {
 		return
@@ -748,6 +763,48 @@ func autobanObserveEventScopedAt(cfg AutobanConfig, ip, action, ruleTriggered st
 	if capWarn {
 		Logf("warn", "自动封禁计数器达 %d 键上限，新 IP 不再计数（既有键不受影响）", autobanMaxTrackedIPs)
 	}
+}
+
+// autobanNormalizeIP 是自动封禁的计数身份归一：IPv6 取 /64 前缀（隐私扩展
+// 地址漂移不误判、同前缀轮换聚合计数），IPv4 与不可解析串原样。
+// 与 lbhuman.normalizeIP（lbhuman/cookie.go，CC 检测/cookie 绑定同粒度）
+// 语义等价：lbhuman 是依赖 Caddy 的独立插件模块，面板主模块不引入其依赖树，
+// 此处为镜像实现——改一处必须同步另一处，语义等价由
+// autoban_ipv6_granularity_test.go 的对拍钉测兜底。
+func autobanNormalizeIP(ip string) string {
+	parsed := net.ParseIP(ip)
+	if parsed == nil {
+		return ip
+	}
+	if parsed.To4() != nil {
+		return ip
+	}
+	return parsed.Mask(net.CIDRMask(64, 128)).String()
+}
+
+// autobanBanValue 把计数身份转成名单条目值：IPv6 /64 网络地址落 CIDR
+// （名单/匹配器按前缀封禁整段），IPv4 与其余形态保持裸地址。候选 IP 恒经
+// autobanNormalizeIP 归一，此处只判「是否 /64 网络地址」，不再二次掩码。
+func autobanBanValue(ip string) string {
+	parsed := net.ParseIP(ip)
+	if parsed == nil || parsed.To4() != nil {
+		return ip
+	}
+	if !parsed.Equal(parsed.Mask(net.CIDRMask(64, 128))) {
+		return ip
+	}
+	return ip + "/64"
+}
+
+// autobanEntryIdentity 把名单条目值归一为计数键身份：CIDR 取网络地址
+// （/64 自动封禁条目 → 与喂入归一键同形），裸 IPv6 同样按 /64 归一，IPv4
+// 与不可解析串原样。merge 的「已在名单/刚到期」判定与解封清桶共用本函数，
+// 保证条目值形态（裸地址/CIDR）不影响身份匹配。
+func autobanEntryIdentity(value string) string {
+	if prefix, err := netip.ParsePrefix(value); err == nil {
+		return autobanNormalizeIP(prefix.Masked().Addr().String())
+	}
+	return autobanNormalizeIP(value)
 }
 
 // AutobanSuggestion 观察建议/候选形态。
@@ -861,9 +918,12 @@ func autobanSetSuggestions(s []AutobanSuggestion) {
 func AutobanForgetIPs(ips []string) {
 	autobanMu.Lock()
 	defer autobanMu.Unlock()
+	// 解封值可能是 CIDR（IPv6 /64 自动条目）或裸地址：计数键恒为归一身份，
+	// 两侧经 autobanEntryIdentity 同键删除，否则删 /64 条目不清桶 → 下一轮
+	// 零新流量立即重封（「删除即解封」被撤销）。
 	for _, ip := range ips {
 		if ip != "" {
-			delete(autobanWindows, ip)
+			delete(autobanWindows, autobanEntryIdentity(ip))
 		}
 	}
 	// 同步清 autobanSuggestions 对应 IP——建议列表是上一轮
@@ -873,12 +933,12 @@ func AutobanForgetIPs(ips []string) {
 		gone := make(map[string]struct{}, len(ips))
 		for _, ip := range ips {
 			if ip != "" {
-				gone[ip] = struct{}{}
+				gone[autobanEntryIdentity(ip)] = struct{}{}
 			}
 		}
 		kept := autobanSuggestions[:0]
 		for _, s := range autobanSuggestions {
-			if _, drop := gone[s.IP]; !drop {
+			if _, drop := gone[autobanEntryIdentity(s.IP)]; !drop {
 				kept = append(kept, s)
 			}
 		}
@@ -1018,12 +1078,12 @@ func autobanMergeEntries(cfg AutobanConfig, candidates []AutobanSuggestion) (aut
 			if e.Remark != autobanEntryRemark {
 				out.ExpiredManual = append(out.ExpiredManual, e.Value)
 			}
-			expiredThisRound[e.Value] = struct{}{}
+			expiredThisRound[autobanEntryIdentity(e.Value)] = struct{}{}
 			out.Changed = true
 			continue
 		}
 		kept = append(kept, e)
-		inList[e.Value] = struct{}{}
+		inList[autobanEntryIdentity(e.Value)] = struct{}{}
 	}
 
 	// 2) 新封过滤：已在名单跳过；其余追加（permanent 不带 expires_at）。
@@ -1037,18 +1097,22 @@ func autobanMergeEntries(cfg AutobanConfig, candidates []AutobanSuggestion) (aut
 		if c.IP == "" {
 			continue
 		}
-		if _, justExpired := expiredThisRound[c.IP]; justExpired {
+		// 名单身份与计数身份同键：条目值可能是 CIDR（IPv6 /64 自动封禁），
+		// 候选恒为归一后的计数键——两侧都经 autobanEntryIdentity 归一，
+		// 否则「已在名单/刚到期」判定对 /64 条目恒失配（重复追加/同轮重封）。
+		identity := autobanEntryIdentity(c.IP)
+		if _, justExpired := expiredThisRound[identity]; justExpired {
 			continue
 		}
-		if _, exists := inList[c.IP]; exists {
+		if _, exists := inList[identity]; exists {
 			continue
 		}
-		entry := models.IPListEntry{Value: c.IP, Remark: autobanEntryRemark, CreatedAt: nowStr}
+		entry := models.IPListEntry{Value: autobanBanValue(c.IP), Remark: autobanEntryRemark, CreatedAt: nowStr}
 		if duration > 0 {
 			entry.ExpiresAt = now.Add(duration).Format(autobanTimeLayout)
 		}
 		toAdd = append(toAdd, entry)
-		inList[c.IP] = struct{}{}
+		inList[identity] = struct{}{}
 	}
 
 	// 3) 容量收敛：先挤「最早到期的自动条目」（永久自动条目次之），手动条目

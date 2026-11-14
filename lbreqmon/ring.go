@@ -85,14 +85,12 @@ func Record(rec RequestRecord) {
 
 // Snapshot 全量快照（最新优先；未写满时只返回已写入部分）。
 // 读侧依次取全部分片锁——与写侧互斥但分片粒度不放大写延迟。
+// snapshotRecords 逐分片至多收集槽位数，总量恒 ≤ RingCapacity，无需截断。
 func Snapshot() []RequestRecord {
 	out := snapshotRecords()
 	// 最新优先（全局单调序按 Ts 排序——分片遍历序非时间序）。
 	// 插入排序不适用大 N：用标准排序（50k 条 ~几 ms，低频路径可接受）。
 	sortByTsDesc(out)
-	if len(out) > RingCapacity {
-		out = out[:RingCapacity]
-	}
 	return out
 }
 

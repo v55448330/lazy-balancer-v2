@@ -15,6 +15,7 @@ import (
 
 	"lazy-balancer-v2/internal/config"
 	"lazy-balancer-v2/internal/db"
+	"lazy-balancer-v2/internal/i18n"
 	"lazy-balancer-v2/internal/models"
 	"lazy-balancer-v2/internal/taskengine"
 	"lazy-balancer-v2/wafiplist"
@@ -178,7 +179,9 @@ func TestSecurityEventsAttributePolicy_fallbackPrefersRenderedBeforeMissing(t *t
 func TestResolvePolicyIPListRefs_missingRefAuditThrottled(t *testing.T) {
 	_, database := newClusterTestService(t)
 	if db.AuditDB == nil {
-		t.Skip("audit db unavailable")
+		// 夹具（newClusterTestService→db.Initialize）恒初始化审计库：此分支
+		// 不可达；若命中说明装配回归，必须响亮失败而非静默 Skip 吞掉限流断言。
+		t.Fatal("audit db unavailable（夹具装配回归）")
 	}
 	restore := OverrideThreatWafDirForTest(t.TempDir())
 	defer restore()
@@ -369,5 +372,24 @@ func TestThreatIplistHasEntries_fastFirstWithoutExpansion(t *testing.T) {
 	}
 	if _, err := threatIplistHasEntries(path); err == nil {
 		t.Fatal("两个代际都不可用必须报错（fail-visible，不得按空集处理）")
+	}
+}
+
+// ---- 切换从节点成功文案的 catalog 词条 ----
+
+// SetClusterMode 成功响应（含明文 HTTP 警告变体）必须双语可译：zh 母本与
+// en 译文都在 catalog——缺任一侧英文用户都会看到中文。
+func TestClusterModeSwitchMessages_catalogBilingual(t *testing.T) {
+	cases := []struct{ key, zh string }{
+		{"k_f388eab8", "已切换为从节点，等待主节点审批"},
+		{"k_2a7d816f", "已切换为从节点，等待主节点审批；警告：证书私钥将经明文 HTTP 传输，建议使用 HTTPS"},
+	}
+	for _, tc := range cases {
+		if got := i18n.T(i18n.ZH, tc.key); got != tc.zh {
+			t.Fatalf("catalog zh[%s]=%q, want %q", tc.key, got, tc.zh)
+		}
+		if en := i18n.T(i18n.EN, tc.key); en == "" || en == tc.zh {
+			t.Fatalf("catalog en[%s]=%q, want 非空英文译文（缺译回落中文）", tc.key, en)
+		}
 	}
 }

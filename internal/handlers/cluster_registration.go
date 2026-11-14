@@ -32,10 +32,12 @@ func SetRegistrationStatusRejectionRecorder(recorder func(*gin.Context)) {
 }
 
 // registerAuditField 限制写入审计详情的节点字段：截断至 128B（回退合法 UTF-8
-// 边界）并去除控制字符，防未认证请求注入超长内容或伪造日志换行。
+// 边界）并去除控制字符（C0、DEL 与 C1 0x80-0x9F——与
+// models.NormalizeClusterNodeName 同区间），防未认证请求注入超长内容或伪造
+// 日志换行。
 func registerAuditField(s string) string {
 	s = strings.Map(func(r rune) rune {
-		if r < 0x20 || r == 0x7f {
+		if r < 0x20 || (r >= 0x7f && r <= 0x9f) {
 			return -1
 		}
 		return r

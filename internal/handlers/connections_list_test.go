@@ -10,12 +10,18 @@ package handlers
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os/exec"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/gin-gonic/gin"
 
 	"lazy-balancer-v2/internal/config"
 	"lazy-balancer-v2/internal/db"
@@ -200,4 +206,164 @@ func TestUpstreamResolveCache_boundedByCapacity(t *testing.T) {
 	if n > upstreamResolveCacheMax {
 		t.Fatalf("解析缓存条目=%d, want ≤ %d（容量上限淘汰）", n, upstreamResolveCacheMax)
 	}
+}
+
+// 共享总预算：多台上游域名同时 DNS 挂起时，loadCaddyEndpoints 的总时延
+// 必须落在单份预算窗口内——逐域名各给一份预算会让总时延随上游数量线性
+// 放大（3 台挂起=3×6s）。真实失败注入：解析缝阻塞到 ctx.Done。
+func TestLoadCaddyEndpoints_sharedBudgetAcrossHangingHosts(t *testing.T) {
+	withIsolatedGlobal(t)
+	setupSecurityPolicyTestDB(t)
+	resetConnectionsListCachesForTest(t)
+	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enabled) VALUES ('lb-budget','预算规则','http','budget.test',443,1)`); err != nil {
+		t.Fatal(err)
+	}
+	for i := range 3 {
+		if _, err := db.DB.Exec(`INSERT INTO upstreams (rule_id,host,port,enabled) VALUES ('lb-budget',?,8080,1)`, fmt.Sprintf("hang%d.invalid", i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	oldLookup := upstreamResolveLookup
+	upstreamResolveLookup = func(ctx context.Context, host string) ([]net.IPAddr, error) {
+		<-ctx.Done() // 模拟 DNS 挂起：直到上下文取消才返回
+		return nil, ctx.Err()
+	}
+	t.Cleanup(func() { upstreamResolveLookup = oldLookup })
+
+	done := make(chan struct{})
+	go func() {
+		loadCaddyEndpoints()
+		close(done)
+	}()
+	select {
+	case <-done:
+		// 共享预算内返回即通过。
+	case <-time.After(upstreamResolveTimeout + 3*time.Second):
+		t.Fatal("3 台 DNS 挂起时 loadCaddyEndpoints 未在单份预算窗口内返回（预算未共享，逐域名放大）")
+	}
+}
+
+// OpenAPI 示例必须与实现的三源 payload 同形：顶层键集 + connections[]/
+// requests[]/domains[] 行视图键集双向对账（真实 handler 响应为基准）。
+// 旧示例停留 WAF 叠加形态（entries/waf_blocked/last_rule），按文档建模的
+// 消费方解析必失败。
+func TestAPIDocs_connectionsListExampleKeysMatchImplementation(t *testing.T) {
+	withIsolatedGlobal(t)
+	setupSecurityPolicyTestDB(t)
+	resetConnectionsListCachesForTest(t)
+	reqMonMu.Lock()
+	reqMonUnavailableAt = time.Time{}
+	reqMonMu.Unlock()
+	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enabled) VALUES ('lb-doc','文档规则','http','doc.test',443,1)`); err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.Now()
+	admin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/lb/reqmon/snapshot"):
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"capacity": 100,
+				"entries": []map[string]any{{
+					"ts": now.UnixMilli(), "client_ip": "203.0.113.7", "method": "GET",
+					"proto": "HTTP/2.0", "scheme": "https", "rule_id": "lb-doc", "ua": "test-agent",
+					"host": "doc.test", "uri": "/", "status": 200, "duration_ms": 1.5, "size": 10, "req_size": 5,
+				}},
+			})
+		case r.URL.Path == "/metrics":
+			_, _ = io.WriteString(w, `caddy_http_requests_total{host="doc.test"} 3`+"\n")
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(admin.Close)
+
+	sample := strings.Join([]string{
+		"Proto Recv-Q Send-Q Local Address Foreign Address (state)",
+		netstatLine("ESTABLISHED", 1),
+	}, "\n")
+	oldNetstat := netstatCommand
+	netstatCommand = func(ctx context.Context) *exec.Cmd {
+		return exec.CommandContext(ctx, "printf", "%s", sample)
+	}
+	t.Cleanup(func() { netstatCommand = oldNetstat })
+	resetCaddyMetricsSnapshotCacheForTest()
+	t.Cleanup(resetCaddyMetricsSnapshotCacheForTest)
+
+	h := &Handlers{cfg: &config.Config{CaddyAdminURL: admin.URL, CaddyMetricsURL: admin.URL + "/metrics"}}
+	router := gin.New()
+	router.GET("/metrics/connections/list", h.GetConnectionsList)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics/connections/list", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var impl struct {
+		Data map[string]any `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &impl); err != nil {
+		t.Fatalf("parse implementation response: %v", err)
+	}
+	if impl.Data["req_mon"] != true {
+		t.Fatalf("req_mon=%v, want true（requests 行视图对账需要快照在场）", impl.Data["req_mon"])
+	}
+
+	docExample := docResponseExample(t, "GET /metrics/connections/list")
+	assertKeySetsEqual(t, "connections/list 顶层", mapKeysOf(docExample), mapKeysOf(impl.Data))
+	for _, pair := range []struct {
+		key    string
+		sample any
+	}{
+		{"connections", connectionEntry{}},
+		{"requests", requestEntry{}},
+		{"domains", domainStat{}},
+	} {
+		docRows, _ := docExample[pair.key].([]any)
+		implRows, _ := impl.Data[pair.key].([]any)
+		if len(docRows) == 0 || len(implRows) == 0 {
+			t.Fatalf("%s 行视图对账失效：doc=%d impl=%d（两侧都必须有行）", pair.key, len(docRows), len(implRows))
+		}
+		docRow, _ := docRows[0].(map[string]any)
+		implRow, _ := implRows[0].(map[string]any)
+		assertKeySetsEqual(t, "connections/list "+pair.key+"[]", mapKeysOf(docRow), mapKeysOf(implRow))
+		assertStructKeysDocumented(t, "connections/list "+pair.key+"[]", mapKeysOf(docRow), pair.sample)
+	}
+}
+
+// 人机事件丢失对账计数必须经面板代理透传（lbhuman/events.go 契约：
+// events_dropped=队列饱和丢弃、events_deliver_failed=投递失败丢弃，
+// 经 /lb/human/stats 下发）——代理只解码三计数会让丢失量在面板侧不可对账。
+func TestGetHumanVerifyStats_passesThroughEventLossCounters(t *testing.T) {
+	setupSecurityPolicyTestDB(t)
+	admin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"challenges":12,"passes":9,"fails":3,"events_dropped":4,"events_deliver_failed":5}`))
+	}))
+	t.Cleanup(admin.Close)
+
+	gin.SetMode(gin.TestMode)
+	h := &Handlers{cfg: &config.Config{CaddyAdminURL: admin.URL}}
+	router := gin.New()
+	router.GET("/security/human/stats", h.GetHumanVerifyStats)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/security/human/stats", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var envelope struct {
+		Data map[string]any `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("parse response: %v", err)
+	}
+	for key, want := range map[string]float64{"challenges": 12, "passes": 9, "fails": 3, "events_dropped": 4, "events_deliver_failed": 5} {
+		if got, _ := envelope.Data[key].(float64); got != want {
+			t.Fatalf("data[%s]=%v, want %v（丢失对账计数必须透传）body=%s", key, envelope.Data[key], want, rec.Body.String())
+		}
+	}
+	// 文档示例键集与代理响应双向对账（新增键不得漂移）。
+	docExample := docResponseExample(t, "GET /security/human/stats")
+	assertKeySetsEqual(t, "human/stats", mapKeysOf(docExample), mapKeysOf(envelope.Data))
 }

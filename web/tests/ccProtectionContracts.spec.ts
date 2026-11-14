@@ -16,7 +16,7 @@ import assert from 'node:assert/strict'
 
 import { buildStageModel, stageSubLabel, type SecurityStageBinding, type SecurityStagePolicy } from '../src/utils/securityStages.ts'
 import { tSafe } from '../src/i18n/tSafe.ts'
-import { code, section, source } from './_helpers.ts'
+import { code, matchBrace, section, source } from './_helpers.ts'
 import zhSecurity from '../src/locales/zh/security.ts'
 import enSecurity from '../src/locales/en/security.ts'
 import zhViews from '../src/locales/zh/views.ts'
@@ -55,10 +55,14 @@ test('CC 检测开启但人机验证关闭：保存警告接线（非阻断）+ 
   const save = section(policies, 'const handleSave = async', 'const payload = buildPolicyPayload(')
   assert.match(save, /ccDetectWithoutHumanWarning\(/, '保存流必须消费 CC-only 警告谓词')
   assert.match(save, /ElMessage\.warning\(t\('app\.security\.policies\.human\.ccNeedsHuman'\)\)/, '警告走 ElMessage.warning（非阻断）')
-  // 非阻断：警告之后不得 return（继续保存流程）
+  // 非阻断：警告所在 if 块整体不得 return（继续保存流程）。按块收尾判定，
+  // 固定字符窗会把块外下一条语句的 return 误判成阻断（或块变长后漏判）。
   const warnAt = save.indexOf("ElMessage.warning(t('app.security.policies.human.ccNeedsHuman')")
-  const afterWarn = save.slice(warnAt, warnAt + 200)
-  assert.doesNotMatch(afterWarn, /\breturn\b/, '警告不得阻断保存（无 return）')
+  assert.ok(warnAt >= 0, 'CC-only 警告调用必须在场')
+  const blockOpen = save.lastIndexOf('{', warnAt)
+  const blockClose = matchBrace(save, blockOpen)
+  assert.ok(blockOpen >= 0 && blockClose > blockOpen, '警告 if 块花括号必须闭合')
+  assert.doesNotMatch(save.slice(blockOpen, blockClose + 1), /\breturn\b/, '警告不得阻断保存（块内无 return）')
   // 就地警告线（autoNeedsCc 同形态：el-text type=warning）
   assert.match(policies, /v-if="form\.cc_detect_enabled && form\.human_verify_mode === 'off'"[\s\S]{0,160}?ccNeedsHuman/, 'CC 步骤内就地警告线（与 autoNeedsCc 同形态）')
   // 文案口径：仅人机开启时生效（与 ccEnabledTip 一致），不得宣称直接封禁

@@ -109,12 +109,11 @@ func innerMatcherJSON(t *testing.T, route map[string]interface{}) string {
 // headers→…→安全包裹→信任检测→reverse_proxy。
 func TestTrustedDetection_wrapsChainAndRendersMinimalTrustEngine(t *testing.T) {
 	stubSecurityLibsAvailable(t)
-	// Given：规则绑定 stage0 保留检测策略（信任 10.0.0.9）+ stage3 WAF + 限流策略
+	// Given：规则绑定 stage0 保留检测策略（信任 10.0.0.9）+ stage3 WAF 策略
 	_, database := newClusterTestService(t)
 	seedHTTPRuleForGeneration(t, database, "lb_td", "td.example.test", 8080)
 	seedStage0Policy(t, database, "lb_td", `["10.0.0.9"]`, true)
 	mpGenBindPolicy(t, database, "lb_td", "td-waf", mpGenPolicySpec{mode: "blocking", enabled: true})
-	mpGenBindPolicy(t, database, "lb_td", "td-rl", mpGenPolicySpec{mode: "blocking", enabled: true, rateLimit: true, rps: 10, burst: 20})
 
 	// When
 	_, mainRoute := mpGenRoutes(t, database, mpGenHTTPRule("lb_td", "td.example.test"))

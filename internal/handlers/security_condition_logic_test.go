@@ -8,16 +8,13 @@ import (
 	"testing"
 
 	"lazy-balancer-v2/internal/db"
-	"lazy-balancer-v2/internal/services"
 
 	"github.com/gin-gonic/gin"
 )
 
 func TestSecurityCustomRule_conditionLogicCRUDAndValidation(t *testing.T) {
 	setupSecurityPolicyTestDB(t)
-	fakeCaddy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }))
-	t.Cleanup(fakeCaddy.Close)
-	h := &Handlers{caddyService: services.NewCaddyService(fakeCaddy.URL)}
+	h := newFakeCaddyHandlers(t)
 	router := gin.New()
 	router.GET("/security/custom-rules", h.ListSecurityCustomRules)
 	router.POST("/security/custom-rules", h.CreateSecurityCustomRule)

@@ -28,7 +28,7 @@ test('parseVersion：v 前缀可有可无、预发布段按连字符后缀解析
 })
 
 test('parseVersion：畸形输入一律 null', () => {
-  for (const bad of ['', 'abc', 'v2.4', '2', 'v2.4.0.1', 'v2.4.0-', 'v2.4.0-', 'latest', 'v2.4.0.beta']) {
+  for (const bad of ['', 'abc', 'v2.4', '2', 'v2.4.0.1', 'v2.4.0-', 'v2.4.0- ', 'latest', 'v2.4.0.beta']) {
     assert.equal(parseVersion(bad), null, `畸形输入 ${JSON.stringify(bad)} 必须解析失败`)
   }
   assert.equal(parseVersion(undefined as unknown as string), null)

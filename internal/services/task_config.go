@@ -68,12 +68,15 @@ func globalTaskAutoUpdateEnabled(prefix string) bool {
 // 与「读不到」——后者保持上一次生效的调度态并等待周期性重试，不得把一次
 // 读失败固化成独立的调度关闭态（此后 tick 连 EnabledFn 都不再求值）。
 func globalTaskAutoUpdateState(prefix string) (enabled, known bool) {
-	if db.DB == nil {
+	// 调度读侧走原子句柄（与 versionTableAutoUpdateState/globalTaskSchedule
+	// 同口径）：db.DB 裸读在库交换窗口会读到旧句柄。
+	database := db.GetDB()
+	if database == nil {
 		return false, false
 	}
 	var v int
 	key := "schedule-read-" + prefix + "-auto-update"
-	if err := db.DB.QueryRow(`SELECT COALESCE(` + prefix + `_auto_update,1) FROM global_config WHERE id=1`).Scan(&v); err != nil {
+	if err := database.QueryRow(`SELECT COALESCE(` + prefix + `_auto_update,1) FROM global_config WHERE id=1`).Scan(&v); err != nil {
 		logScheduleReadFailure(key, err)
 		return false, false
 	}

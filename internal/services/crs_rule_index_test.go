@@ -13,6 +13,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"lazy-balancer-v2/internal/db"
 )
 
 // seedCRSRuleIndexFixture 在临时目录写入两个 CRS 形态的 conf 文件并覆盖
@@ -142,12 +144,46 @@ func TestGetCRSRuleIndex_cacheRebuildOnMtimeTouch(t *testing.T) {
 		t.Fatalf("cache must rebuild on mtime/size change, 943100 missing: %+v", second.Rules)
 	}
 
-	// 版本行变化同样触发重建：键含 security_crs_version 行值。
-	// （版本读取在 db.DB 为 nil 时回落 ""；此处只验证同键命中缓存的稳定性：
-	//   不改文件再取一次，两个指针必须共享同一份缓存实例。）
+	// 同键命中缓存的稳定性：不改文件再取一次，两个指针必须共享同一份缓存实例。
 	again := GetCRSRuleIndex()
 	if again != second {
 		t.Fatalf("unchanged key must hit cache (identity), got distinct instances")
+	}
+}
+
+// 版本行分量鉴别力：文件统计量（数量/mtime/size/权限）完全不变，仅
+// security_crs_version 行值变化 → 缓存键必须变化并重建（索引 Version 随之
+// 更新）。键含版本行分量却对版本变化无动于衷时，CRS 更新后索引版本展示与
+// 选组判定停留在旧代。
+func TestGetCRSRuleIndex_cacheRebuildOnVersionRowChange(t *testing.T) {
+	setupIsolatedDB(t)
+	seedCRSRuleIndexFixture(t)
+	if _, err := db.DB.Exec(`INSERT INTO security_crs_version (id, version) VALUES (1, 'v-test-1') ON CONFLICT(id) DO UPDATE SET version=excluded.version`); err != nil {
+		t.Fatalf("seed crs version: %v", err)
+	}
+
+	first := GetCRSRuleIndex()
+	if first.Version != "v-test-1" {
+		t.Fatalf("index version=%q, want v-test-1", first.Version)
+	}
+	// 同键稳定性前置：再取一次必须命中同一实例。
+	if again := GetCRSRuleIndex(); again != first {
+		t.Fatal("unchanged key must hit cache (identity)")
+	}
+
+	// 仅改版本行，文件零变化。
+	if _, err := db.DB.Exec(`UPDATE security_crs_version SET version='v-test-2' WHERE id=1`); err != nil {
+		t.Fatalf("bump crs version: %v", err)
+	}
+	second := GetCRSRuleIndex()
+	if second == first {
+		t.Fatal("版本行变化必须触发重建（键含版本分量），实际命中旧缓存实例")
+	}
+	if second.Version != "v-test-2" {
+		t.Fatalf("rebuild version=%q, want v-test-2", second.Version)
+	}
+	if findIndexEntry(t, second, "942100") == nil {
+		t.Fatalf("重建不得丢规则: %+v", second.Rules)
 	}
 }
 

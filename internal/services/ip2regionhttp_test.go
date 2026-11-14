@@ -164,17 +164,13 @@ func TestIP2RegionDownloadXDBLogged_startAndCompletionLines(t *testing.T) {
 
 // ---- 下载完整性门（Content-Length 回读 / 落盘同步）----
 
-// ip2RegionRoundTripFunc 把函数适配为 http.RoundTripper（合成响应，不经网络；
-// 包内已有同形 helper，此名避免重复声明）。
-type ip2RegionRoundTripFunc func(*http.Request) (*http.Response, error)
-
-func (f ip2RegionRoundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
+// 合成响应经包内共享 roundTripFunc 注入 http.Client.Transport（不经网络）。
 
 // 中间层截断：响应声明 Content-Length 大于实际可读字节时不得把 staging 文件
 // 当成功（安装段会 rename 它进 live 路径）。
 func TestDownloadIP2RegionXDB_rejectsTruncatedBodyAgainstDeclaredLength(t *testing.T) {
 	oldClient := ip2RegionDownloadClient
-	ip2RegionDownloadClient = &http.Client{Transport: ip2RegionRoundTripFunc(func(*http.Request) (*http.Response, error) {
+	ip2RegionDownloadClient = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
 		return &http.Response{
 			StatusCode:    http.StatusOK,
 			Body:          io.NopCloser(strings.NewReader("short-body")),
@@ -203,7 +199,7 @@ func TestDownloadIP2RegionXDB_rejectsTruncatedBodyAgainstDeclaredLength(t *testi
 // 落盘同步失败（掉电持久性门）必须上抛，不得把未 fsync 的 staging 文件当成功。
 func TestDownloadIP2RegionXDB_rejectsSyncFailure(t *testing.T) {
 	oldClient := ip2RegionDownloadClient
-	ip2RegionDownloadClient = &http.Client{Transport: ip2RegionRoundTripFunc(func(*http.Request) (*http.Response, error) {
+	ip2RegionDownloadClient = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
 		body := "xdb-payload"
 		return &http.Response{
 			StatusCode:    http.StatusOK,

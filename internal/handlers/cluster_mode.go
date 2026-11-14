@@ -116,11 +116,13 @@ func (h *Handlers) SetClusterMode(c *gin.Context) {
 	// Resume 立即拉起新循环进入注册轮询。
 	h.syncService.Resume()
 	recordAudit(c, "切换", "集群模式", switchToSlaveAuditDetail(masterAuditURL, outboundIPOK))
-	message := "已切换为从节点，等待主节点审批"
+	// 成功文案走 catalog 双语（与 Promote/UpdateClusterSettings 同口径）：
+	// 明文 HTTP 警告是独立变体词条，不得拼接硬编码中文。
+	key := "k_f388eab8"
 	if strings.HasPrefix(strings.TrimSpace(strings.ToLower(req.MasterURL)), "http://") {
-		message += "；警告：证书私钥将经明文 HTTP 传输，建议使用 HTTPS"
+		key = "k_2a7d816f"
 	}
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: message})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, key), MessageKey: key})
 }
 
 // requestProtocol 返回本节点自述访问协议，注册时上报主节点（用于拼接该

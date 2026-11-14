@@ -89,9 +89,10 @@ func trafficBumpSecond(nowSec uint64) (hits, prevHits uint32, rolled bool) {
 const (
 	fuseQPSPerSecond = 4000 // 单秒请求计数超过此值 → 进入 1/8 抽样
 	fuseSampleN      = 8
-	// 抽样期单秒计数低于此值 → 回落全量：×8 估计真值 <8000，与进入阈值
-	// 4000 构成 4000–8000 的滞回带（旧注释「真值≈×8 < fuseQPS」
-	// 与数值不符——1000×8=8000 > 4000）。
+	// 回落判定用的是上一秒的**全量**请求计数（trafficBumpSecond 对每个
+	// 请求 +1，抽样只影响计数桶的 ×N 还原，不影响秒计数），不是 ×8 估计：
+	// 上一秒全量计数低于此值（进入阈值 4000 的 1/4）→ 回落 N=1，
+	// 4000 进入 / 1000 回落构成滞回带防抖。
 	fuseFallbackPerSecond = 1000
 )
 

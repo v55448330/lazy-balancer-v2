@@ -28,7 +28,7 @@ func TestAutobanRunCycle_candidatesEvaluatedInsideCaddyOpLock(t *testing.T) {
 	setAutobanConfigRaw(t, true, 1, 5, "1h", "blocked,logged", false)
 
 	// 候选 IP：达阈值且窗口已过期（桶先评估再删——形态，兼作 barrier）
-	autobanObserveEvent("198.51.100.7", "blocked", "949110")
+	autobanObserveEvent("45.33.32.7", "blocked", "949110")
 	clock.Advance(2 * time.Hour)
 	if got := AutobanTrackedIPs(); got != 1 {
 		t.Fatalf("前置计数桶=%d, want 1", got)
@@ -46,7 +46,7 @@ func TestAutobanRunCycle_candidatesEvaluatedInsideCaddyOpLock(t *testing.T) {
 	}
 
 	// 持锁期间完成解封清桶（解封写路径临界区内的终态）
-	AutobanForgetIPs([]string{"198.51.100.7"})
+	AutobanForgetIPs([]string{"45.33.32.7"})
 	CaddyOpLock.Unlock()
 
 	select {
@@ -63,8 +63,8 @@ func TestAutobanRunCycle_candidatesEvaluatedInsideCaddyOpLock(t *testing.T) {
 		t.Fatalf("read preset list: %v", err)
 	}
 	for _, e := range entries {
-		if e.Value == "198.51.100.7" {
-			t.Fatal("解封落在候选评估与 merge 之间时不得回封 198.51.100.7（候选在锁外评估=陈旧候选进 merge 的 TOCTOU）")
+		if e.Value == "45.33.32.7" {
+			t.Fatal("解封落在候选评估与 merge 之间时不得回封 45.33.32.7（候选在锁外评估=陈旧候选进 merge 的 TOCTOU）")
 		}
 	}
 	if got := AutobanTrackedIPs(); got != 0 {
@@ -80,18 +80,18 @@ func TestAutobanForgetIPs_scrubsSuggestions(t *testing.T) {
 	t.Cleanup(resetAutobanStateForTest)
 
 	autobanSetSuggestions([]AutobanSuggestion{
-		{IP: "198.51.100.7", Count: 3},
-		{IP: "203.0.113.9", Count: 2},
+		{IP: "45.33.32.7", Count: 3},
+		{IP: "45.33.32.9", Count: 2},
 	})
-	AutobanForgetIPs([]string{"198.51.100.7"})
+	AutobanForgetIPs([]string{"45.33.32.7"})
 
 	out := AutobanSuggestions()
-	if len(out) != 1 || out[0].IP != "203.0.113.9" {
-		t.Fatalf("解封后建议列表=%v, want 仅 203.0.113.9（AutobanForgetIPs 未同步清 autobanSuggestions）", out)
+	if len(out) != 1 || out[0].IP != "45.33.32.9" {
+		t.Fatalf("解封后建议列表=%v, want 仅 45.33.32.9（AutobanForgetIPs 未同步清 autobanSuggestions）", out)
 	}
 
 	// 解封全部 → 建议列表清空
-	AutobanForgetIPs([]string{"203.0.113.9"})
+	AutobanForgetIPs([]string{"45.33.32.9"})
 	if out := AutobanSuggestions(); len(out) != 0 {
 		t.Fatalf("全量解封后建议列表=%v, want 空", out)
 	}

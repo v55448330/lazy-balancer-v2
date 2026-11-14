@@ -22,18 +22,7 @@ import (
 
 func TestJWTAuth_mapsAuthenticationStateQueryFailureTo500(t *testing.T) {
 	// Given：查询注入返回真实 SQL 错误（缺表），模拟瞬时基础设施故障。
-	oldDB := db.DB
-	database, err := sql.Open("sqlite", t.TempDir()+"/jwt-failure.db")
-	if err != nil {
-		t.Fatal(err)
-	}
-	db.DB = database
-	db.SetDB(database)
-	t.Cleanup(func() {
-		db.DB = oldDB
-		db.SetDB(oldDB)
-		_ = database.Close()
-	})
+	newIsolatedTestDB(t)
 
 	cfg := &config.Config{JWTSecret: "test-secret"}
 	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{

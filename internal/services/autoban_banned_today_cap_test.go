@@ -26,7 +26,7 @@ func TestAutobanBannedToday_countsOmittedBansBeyondRoundCap(t *testing.T) {
 
 	ips := make([]string, 0, 8)
 	for i := 1; i <= 8; i++ {
-		ips = append(ips, fmt.Sprintf("198.51.100.%d", i))
+		ips = append(ips, fmt.Sprintf("45.33.32.%d", i))
 	}
 	cfg := AutobanConfig{Threshold: 5, WindowMinutes: 10, Duration: "1h"}
 	autobanAuditBanned(cfg, ips)

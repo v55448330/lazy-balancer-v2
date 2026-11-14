@@ -1,9 +1,7 @@
 package services
 
 import (
-	"bytes"
 	"context"
-	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -196,23 +194,10 @@ func TestSyncService_Report_countsExpiringCertificatesAcrossDeployableStates(t *
 
 // cert_expiry_days 非法时按状态转换只记一次 warn，恢复记一次 info。
 func TestReport_certExpiryWarnOnlyOnStateTransition(t *testing.T) {
-	// 隔离共享状态转换 map 的该 key（同 metrics_test.go isolateMetricsState 范式）：
-	// 同文件其它 Report 用例可能已把该 key 置为 failed，状态机对「已失败→再失败」
-	// 不重复记，会静默吞掉本用例的首次失败告警（整文件顺序跑时复现）。
-	const certExpiryStateKey = "cluster-report-cert-expiry"
-	metricsStateMu.Lock()
-	previousState, hadPrevious := metricsStateFailed[certExpiryStateKey]
-	delete(metricsStateFailed, certExpiryStateKey)
-	metricsStateMu.Unlock()
-	t.Cleanup(func() {
-		metricsStateMu.Lock()
-		if hadPrevious {
-			metricsStateFailed[certExpiryStateKey] = previousState
-		} else {
-			delete(metricsStateFailed, certExpiryStateKey)
-		}
-		metricsStateMu.Unlock()
-	})
+	// 隔离共享状态转换 map 的该 key：同文件其它 Report 用例可能已把该 key
+	// 置为 failed，状态机对「已失败→再失败」不重复记，会静默吞掉本用例的
+	// 首次失败告警（整文件顺序跑时复现）。
+	ResetLogStateTransitionForTest("cluster-report-cert-expiry")
 
 	_, database := newClusterTestService(t)
 	setNodeMasterRole(t, database, false) // Report 只属于从节点语境
@@ -220,10 +205,7 @@ func TestReport_certExpiryWarnOnlyOnStateTransition(t *testing.T) {
 	t.Cleanup(func() { unregisterSyncDrainer(sync) })
 	ctx := context.Background()
 
-	var buf bytes.Buffer
-	oldWriter := log.Writer()
-	log.SetOutput(&buf)
-	t.Cleanup(func() { log.SetOutput(oldWriter) })
+	buf := captureLogf(t)
 
 	if _, err := database.Exec("UPDATE global_config SET cert_expiry_days=0 WHERE id=1"); err != nil {
 		t.Fatal(err)

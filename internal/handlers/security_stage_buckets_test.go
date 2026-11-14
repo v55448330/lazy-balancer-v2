@@ -3,10 +3,10 @@ package handlers
 import "testing"
 
 // 历史（用户裁定）：安全总览攻击类型分布支持按阶段展示（默认）——
-// stageCategorizeAttack 将事件归入与触发阶段一致的五桶：
+// stageCategorizeAttack 将事件归入与触发阶段一致的六桶：
 //
 //	信任名单 / IP 访问控制（黑白名单+地域+威胁库）/ WAF（CRS+自定义）/
-//	请求体异常 / 其他。
+//	请求体异常 / CC 防护（429 存量精确）/ 其他。
 //
 // 具体分类（取消勾选）沿用既有 categorizeAttack，不在此测试范围。
 func TestStageCategorizeAttack_buckets(t *testing.T) {

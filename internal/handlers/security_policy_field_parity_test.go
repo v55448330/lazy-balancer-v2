@@ -63,12 +63,10 @@ func TestSecurityPolicyDetailCoversEveryModelColumn(t *testing.T) {
 	model := securityPolicyModelJSONFields()
 	detail := jsonFieldSet(securityPolicyDetail{})
 	const documentedDetailGap = "updated_by"
-	// 配额限流已下线：三列保留兼容旧备份/混版本快照，但不再对外投影。
-	deprecatedDetailGaps := map[string]bool{"rate_limit_enabled": true, "rate_limit_rps": true, "rate_limit_burst": true}
 
 	var missing []string
 	for name := range model {
-		if name == documentedDetailGap || deprecatedDetailGaps[name] {
+		if name == documentedDetailGap {
 			continue
 		}
 		if _, ok := detail[name]; !ok {

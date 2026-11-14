@@ -12,6 +12,7 @@ package handlers
 // 不得出现该披露（否则每次正常导入都误报）。
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -178,5 +179,91 @@ func TestImportConfigBackup_stalledWarningCountsAllNonTerminalJobs(t *testing.T)
 	}
 	if normalizedAudit != 1 {
 		t.Fatalf("导入归一审计行=%d, want 1（waiting_ca 归一必须留痕）", normalizedAudit)
+	}
+}
+
+// Given 导入前证书队列激活，提交后 waiting_ca 归一失败（真实故障注入：
+// cert_jobs 上的 UPDATE 触发器 RAISE——与 DB busy/写失败同机制）。
+// When finish 执行恢复链路。
+// Then 队列不得停留停止态（按 wasActive 恢复），失败必须专项披露——
+// 响应 warnings 与操作审计双通道，且不得混同「用户停止签发」的停滞文案。
+func TestImportConfigBackup_queueResumeAndDisclosureWhenNormalizeFails(t *testing.T) {
+	services.ResetCAQueueManagerForTest()
+	services.InitCAQueueManager(func() error { return nil }, t.TempDir())
+	services.GetCAQueueManager().Start()
+	startCertQueueDispatchForTest(t)
+	t.Cleanup(services.ResetCAQueueManagerForTest)
+
+	h := newBackupTestHandlers(t)
+	if _, err := db.DB.Exec(`CREATE TRIGGER cert_jobs_block_normalize BEFORE UPDATE ON cert_jobs BEGIN SELECT RAISE(ABORT, 'forced normalize failure'); END`); err != nil {
+		t.Fatalf("inject normalize failure trigger: %v", err)
+	}
+
+	response := postBackupImport(t, h, stalledCertQueueBackup(t))
+
+	// 数据库已提交（归一失败不否决导入）：queue 阶段失败按部分成功
+	// 200+partial=true（500 会让前端误按已回滚处理）。
+	if response.Code != http.StatusOK {
+		t.Fatalf("import status=%d body=%s, want 200（部分成功不得按已回滚处理）", response.Code, response.Body.String())
+	}
+	var jobCount int
+	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM cert_jobs WHERE rule_id='lb_stalledacme'`).Scan(&jobCount); err != nil {
+		t.Fatalf("read imported cert job: %v", err)
+	}
+	if jobCount != 1 {
+		t.Fatalf("cert_jobs rows=%d, want 1（数据库必须已提交）", jobCount)
+	}
+	// 队列必须恢复活动态——归一失败不得把导入前在跑的队列留在停止态。
+	if !services.GetCAQueueManager().IsActive() {
+		t.Fatal("归一失败后证书队列停留停止态（必须按导入前活动态恢复）")
+	}
+	warnings := decodeImportWarnings(t, response)
+	if !warningsContain(warnings, "证书签发队列已恢复运行，但导入后的任务恢复未完成") {
+		t.Fatalf("warnings=%v, want 含恢复未完成专项披露", warnings)
+	}
+	if warningsContain(warnings, "因证书签发任务已停止而未重排") {
+		t.Fatalf("warnings=%v, 队列已恢复时不得出现「用户停止」停滞文案", warnings)
+	}
+	var auditCount int
+	if err := db.AuditDB.QueryRow(`SELECT COUNT(*) FROM audit_log WHERE resource='配置备份' AND detail LIKE '%导入后的任务恢复未完成%'`).Scan(&auditCount); err != nil {
+		t.Fatalf("read recovery audit: %v", err)
+	}
+	if auditCount != 1 {
+		t.Fatalf("恢复未完成审计行=%d, want 1（warnings 之外必须留操作审计）", auditCount)
+	}
+}
+
+// Given 导入前证书队列激活，提交后恢复重排失败（既有测试缝注入，与
+// config_backup_test.go 的 queue 部分失败用例同一机制）。
+// When finish 执行恢复链路。
+// Then 队列已恢复活动态（不停留停止态），失败必须专项披露——响应
+// warnings 点名「队列已恢复运行但任务恢复未完成」，不得混同「用户停止
+// 签发」的停滞文案。
+func TestImportConfigBackup_queueRecoveryFailureDisclosedAsResumed(t *testing.T) {
+	withIsolatedGlobal(t)
+	services.ResetCAQueueManagerForTest()
+	services.InitCAQueueManager(func() error { return nil }, t.TempDir())
+	services.GetCAQueueManager().Start()
+	startCertQueueDispatchForTest(t)
+	t.Cleanup(services.ResetCAQueueManagerForTest)
+	oldRequeue := requeueNonTerminalCertJobs
+	requeueNonTerminalCertJobs = func() error { return errors.New("requeue failed") }
+	t.Cleanup(func() { requeueNonTerminalCertJobs = oldRequeue })
+
+	h := newBackupTestHandlers(t)
+	response := postBackupImport(t, h, stalledCertQueueBackup(t))
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("import status=%d body=%s, want 200（部分成功不得按已回滚处理）", response.Code, response.Body.String())
+	}
+	if !services.GetCAQueueManager().IsActive() {
+		t.Fatal("重排失败后证书队列停留停止态（必须按导入前活动态恢复）")
+	}
+	warnings := decodeImportWarnings(t, response)
+	if !warningsContain(warnings, "证书签发队列已恢复运行，但导入后的任务恢复未完成") {
+		t.Fatalf("warnings=%v, want 含恢复未完成专项披露", warnings)
+	}
+	if warningsContain(warnings, "因证书签发任务已停止而未重排") {
+		t.Fatalf("warnings=%v, 队列已恢复时不得出现「用户停止」停滞文案", warnings)
 	}
 }

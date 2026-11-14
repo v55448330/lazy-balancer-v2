@@ -35,14 +35,13 @@ test('常驻行无下次执行：下次执行列显「—」', () => {
 
 test('结果标签=引擎结果域自有映射；未知值显「未知」，不借证书词表', () => {
   assert.doesNotMatch(vue, /certJobStatusLabel/, '结果列不得借用 cert_jobs 状态词表（域错位）')
-  const vueCode = code('src/views/settings/TaskMonitor.vue')
-  // i18n 后词表值为 t() 键——双钉:调用点钉六个 result.* 键,zh 母本钉 settings.ts
+  // 调用点钉键：六个 result.*/status.running 键必须在渲染面消费（文案口径由
+  // 词条函数承载，本 spec 不钉母本原文）。
   for (const key of ['success', 'failed', 'cancelled', 'interrupted', 'skipped']) {
-    assert.match(vueCode, new RegExp("t\\('app\\.settings\\.taskMonitor\\.result\\." + key + "'\\)"), `引擎结果词表缺 result.${key}`)
+    assert.match(vue, new RegExp("t\\('app\\.settings\\.taskMonitor\\.result\\." + key + "'\\)"), `引擎结果词表缺 result.${key}`)
   }
-    assert.match(vueCode, /t\('app\.settings\.taskMonitor\.status\.running'\)/, '引擎结果词表缺 status.running(运行中)')
-  const statusResultLabel = code('src/views/settings/TaskMonitor.vue')
-  assert.match(statusResultLabel, /hasOwn\(resultLabels, r\) \? resultLabels\[r\]! : t\('app\.settings\.taskMonitor\.status\.unknown'\)/, '未知值回显「未知」键，不做证书词表兜底')
-  const resultTagType = member(code('src/views/settings/TaskMonitor.vue'), 'const resultTagType')
+  assert.match(vue, /t\('app\.settings\.taskMonitor\.status\.running'\)/, '引擎结果词表缺 status.running(运行中)')
+  assert.match(vue, /hasOwn\(resultLabels, r\) \? resultLabels\[r\]! : t\('app\.settings\.taskMonitor\.status\.unknown'\)/, '未知值回显「未知」键，不做证书词表兜底')
+  const resultTagType = member(vue, 'const resultTagType')
   assert.doesNotMatch(resultTagType, /issued/, '结果色调不得保留证书业务态分支')
 })

@@ -249,3 +249,45 @@ test('ingest 词条 zh 母本钉(逐字,长文案抽关键短语)', () => {
     assert.ok(zhLexicon.includes(text), `ingest 词条 zh 原文「${text.slice(0, 16)}…」必须在母本中`)
   }
 })
+
+// 首命中分支不得掩蔽同帧的永久丢失事实：写侧降级/连续失败/健康位异常
+// 三条首命中文案都必须追加已知丢失披露段（与「任务已停 + 曾丢失」同单源）。
+test('写侧降级 + data_loss：首命中文案追加丢失披露段', () => {
+  const message = ingestionWarningMessage({
+    ...healthy,
+    writer_degraded: true,
+    writer_dropped: 7,
+    writer_io_errors: 2,
+    data_loss: true,
+    messages_dropped: 5,
+  })
+  assert.match(message, /审计日志写侧失败/)
+  assert.match(message, /此前曾发生安全事件丢失/)
+  assert.match(message, /命中明细截断 5 条/)
+})
+
+test('连续失败 + data_loss：首命中文案追加丢失披露段', () => {
+  const message = ingestionWarningMessage({
+    ...healthy,
+    healthy: false,
+    consecutive_failures: 4,
+    data_loss: true,
+    writer_dropped: 3,
+  })
+  assert.match(message, /连续失败 4 次/)
+  assert.match(message, /此前曾发生安全事件丢失/)
+  assert.match(message, /丢弃 3 条/)
+})
+
+test('健康位异常无归因 + data_loss：不得掩蔽丢失事实', () => {
+  const message = ingestionWarningMessage({
+    ...healthy,
+    healthy: false,
+    consecutive_failures: 0,
+    data_loss: true,
+    writer_dropped: 2,
+  })
+  assert.match(message, /健康位异常/)
+  assert.match(message, /此前曾发生安全事件丢失/)
+  assert.match(message, /丢弃 2 条/)
+})

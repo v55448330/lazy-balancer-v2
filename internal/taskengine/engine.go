@@ -2757,7 +2757,7 @@ func buildTaskMeta(id string, d Descriptor, loopOn, running, exhausted bool, sto
 // 槽缓存非零且求值节拍（schedSlotEvalAt）在地板周期内视为新鲜——直接复用
 // tick/executeRun 维护的槽缓存，展示值与调度面实际投递判定同源；缓存为零值
 // 或地板周期已过才锁外求值一次，并按 tick 同款 CAS 复核回写缓存、推进节拍
-// （求值窗口内槽被并发改写时保留现值）。/system/tasks 5s 轮询此前每次对
+// （求值窗口内槽被并发改写时保留现值）。/system/tasks 10s 轮询此前每次对
 // 全部 Scheduled 族各跑一次 NextSlotFn（生产=DB 直读），展示读放大固化成
 // 常驻负载；共用缓存后轮询读收敛到「每任务每地板周期至多一次」。展示新鲜
 // 度上界与调度面一致（生效延迟上界=地板周期）。
@@ -2880,7 +2880,7 @@ func (e *Engine) Stats24h(taskID string) TaskRunsStats {
 }
 
 // taskOverviewState 聚合查询失败态（首报/恢复各一条）：/system/tasks 前端
-// 5s 轮询，DB 故障期间逐轮 WARNING 会把首因信号淹没。语义与服务层
+// 10s 轮询，DB 故障期间逐轮 WARNING 会把首因信号淹没。语义与服务层
 // logStateTransition 相同（此处不能 import services——依赖方向）。
 var taskOverviewState = struct {
 	sync.Mutex
@@ -2921,7 +2921,7 @@ func (e *Engine) RunOverview() (map[string]*RunRecord, map[string]TaskRunsStats)
 	rows, err := database.Query(db.TaskRunsLatestPerTaskQuery)
 	if err != nil {
 		// 降级为空记录（视图仍可用），但不得静默——与同文件其余查询同口径。
-		// 5s 轮询下按失败态转换留痕（首报一条 WARNING，故障持续期静默）。
+		// 10s 轮询下按失败态转换留痕（首报一条 WARNING，故障持续期静默）。
 		latestFailed = true
 		if level := noteTaskOverviewFailure("latest", true); level != "" {
 			log.Printf("%s: taskengine: 最近运行批量查询失败（任务视图无运行记录）: %v", level, err)

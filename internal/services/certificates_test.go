@@ -2537,7 +2537,7 @@ func TestRestoreCertJobs_preservesDeploymentBackoffAdvancedAfterSnapshot(t *test
 	now := time.Now().UTC()
 	certPEM, keyPEM := certificatePairForDomains(t, now.Add(-time.Hour), now.Add(90*24*time.Hour), "backoff.example.com")
 	result, err := database.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,message,cert_pem,key_pem,expires_at,deployment_attempts,deployment_available_after)
-		VALUES (?, 'backoff.example.com', 'downloaded', '部署失败 [attempt=1/5]: reload failed', ?, ?, datetime('now','+90 days'), 1, datetime('now','+5 minutes'))`, ruleID, certPEM, keyPEM)
+		VALUES (?, 'backoff.example.com', 'downloaded', '部署失败 [attempt=1/10]: reload failed', ?, ?, datetime('now','+90 days'), 1, datetime('now','+5 minutes'))`, ruleID, certPEM, keyPEM)
 	if err != nil {
 		t.Fatalf("seed job: %v", err)
 	}
@@ -2551,7 +2551,7 @@ func TestRestoreCertJobs_preservesDeploymentBackoffAdvancedAfterSnapshot(t *test
 	}
 	// Given：快照之后部署链再次失败——材料与状态不变（同一份材料重试），
 	// 只有簿记列推进（deploymentFailedFrom 的写回形态）。
-	if _, err := database.Exec(`UPDATE cert_jobs SET deployment_attempts=2, message='部署失败 [attempt=2/5]: reload failed', deployment_available_after=datetime('now','+30 minutes') WHERE id=?`, jobID); err != nil {
+	if _, err := database.Exec(`UPDATE cert_jobs SET deployment_attempts=2, message='部署失败 [attempt=2/10]: reload failed', deployment_available_after=datetime('now','+30 minutes') WHERE id=?`, jobID); err != nil {
 		t.Fatalf("simulate deployment failure: %v", err)
 	}
 
@@ -2633,7 +2633,7 @@ func TestCertificateService_rescanSkipsJobsWithActiveTimer(t *testing.T) {
 	if _, err := database.Exec("UPDATE lb_rules SET enable_tls=1,tls_source='acme_dns' WHERE caddy_id='lb_rescan_skip'"); err != nil {
 		t.Fatal(err)
 	}
-	availableAfter := time.Now().UTC().Add(2 * time.Minute).Format("2006-01-02 15:04:05")
+	availableAfter := CanonicalDatetimeValue(time.Now().Add(2 * time.Minute))
 	res, err := database.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,cert_pem,key_pem,deployment_available_after) VALUES ('lb_rescan_skip','example.test','downloaded','x','y',?)`, availableAfter)
 	if err != nil {
 		t.Fatal(err)
@@ -2691,7 +2691,7 @@ func TestCertificateService_rescanPicksUpDroppedRetry(t *testing.T) {
 	if _, err := database.Exec("UPDATE lb_rules SET enable_tls=1,tls_source='acme_dns' WHERE caddy_id='lb_rescan_pick'"); err != nil {
 		t.Fatal(err)
 	}
-	availableAfter := time.Now().UTC().Add(-time.Minute).Format("2006-01-02 15:04:05")
+	availableAfter := CanonicalDatetimeValue(time.Now().Add(-time.Minute))
 	res, err := database.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,cert_pem,key_pem,deployment_available_after) VALUES ('lb_rescan_pick','example.test','downloaded','x','y',?)`, availableAfter)
 	if err != nil {
 		t.Fatal(err)
@@ -3303,5 +3303,53 @@ func TestCertificateService_requeueWaitingCAJobs_doesNotHoldServiceLockDuringPro
 	}
 	if requeued != 1 || disabled != 0 {
 		t.Fatalf("requeued=%d disabled=%d, want 1/0", requeued, disabled)
+	}
+}
+
+// writeSyncedFile 对已存在目标必须强制 mode：O_CREATE 的 mode 只在新建时生效，
+// 崩溃遗留/外部预置的 tmp 保留旧权限——不强制 chmod 时私钥 tmp 可短暂以 0644
+// 全局可读。
+func TestWriteSyncedFile_enforcesModeOnExistingFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "key.tmp")
+	if err := os.WriteFile(path, []byte("old"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeSyncedFile(path, []byte("new-key"), 0o600); err != nil {
+		t.Fatalf("writeSyncedFile: %v", err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("mode=%v, want 0600（已存在 tmp 的旧权限必须被强制收敛）", info.Mode().Perm())
+	}
+	if data, err := os.ReadFile(path); err != nil || string(data) != "new-key" {
+		t.Fatalf("content=%q err=%v, want new-key", data, err)
+	}
+}
+
+// 启动物化的逐行读失败必须披露进摘要：选择器的 scanFailures 曾被 `_` 丢弃，
+// 摘要无条件报「物化完成」——运维从任务日志看不出「本轮有行未物化」
+// （与对账侧失败轮聚合同形）。
+func TestMaterializeAllCertsFromDB_scanFailuresDisclosedInSummary(t *testing.T) {
+	newClusterTestService(t)
+	useTemporaryCertDir(t)
+	oldLogDir := taskengine.LogDir()
+	taskengine.SetLogDir(t.TempDir())
+	t.Cleanup(func() { taskengine.SetLogDir(oldLogDir) })
+	realDB := db.DB
+	fake := sql.OpenDB(&fakeIterErrConnector{failNeedle: noMatchingQuery, scanFailNeedle: "FROM cert_jobs"})
+	db.DB = fake
+	t.Cleanup(func() { db.DB = realDB; _ = fake.Close() })
+
+	MaterializeAllCertsFromDB()
+
+	summary, err := os.ReadFile(taskengine.TaskLogPath("startup:config-load"))
+	if err != nil {
+		t.Fatalf("read materialization task log: %v", err)
+	}
+	if !strings.Contains(string(summary), "1 行读取失败") {
+		t.Fatalf("摘要=%q, want 披露读取失败跳过行（存在未物化行时不得静默报完成）", string(summary))
 	}
 }

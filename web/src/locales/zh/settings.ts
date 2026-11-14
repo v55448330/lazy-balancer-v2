@@ -688,7 +688,6 @@ export default {
           "siteLocationPlaceholder": "选择省份或国家",
           "chinaProvincesGroup": "中国省份",
           "overseasGroup": "海外国家",
-          "siteCoord": "纬度 {lat} · 经度 {lng}",
           "siteLocationHint": "威胁大屏地图本站信标坐标；选择中国省份或海外国家后自动换算经纬度。未选择表示未设置，按地图视觉中心显示。",
           "visualMode": "大屏视觉模式",
           "visualMap": "360° 地图 · 雷达扫掠",

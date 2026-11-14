@@ -87,14 +87,14 @@ func assertBlockedCounterWrap(t *testing.T, ruleID, routeDesc string, flat []str
 func TestBlockedCounterWrapContract_acrossAllRenderShapes(t *testing.T) {
 	stubSecurityLibsAvailable(t) // 缺库降级：安全链渲染断言前先桩库可用
 
-	// 形状 1：blocking + 限流 + GeoIP
+	// 形状 1：blocking + 挑战 + GeoIP
 	_, database := newClusterTestService(t)
 	seedHTTPRuleForGeneration(t, database, "lb_wrap1", "wrap1.example.test", 8080)
 	mpGenBindPolicy(t, database, "lb_wrap1", "wrap1-p1", mpGenPolicySpec{
 		mode: "blocking", enabled: true, geoCountries: `["海外"]`,
 	})
 	mpGenBindPolicy(t, database, "lb_wrap1", "wrap1-p2", mpGenPolicySpec{
-		mode: "detection", enabled: true, rateLimit: true, rps: 100, burst: 50,
+		mode: "detection", enabled: true, challenge: true,
 	})
 	routes, mainRoute := mpGenRoutes(t, database, mpGenHTTPRule("lb_wrap1", "wrap1.example.test"))
 	for i, route := range routes {

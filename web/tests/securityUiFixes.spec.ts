@@ -2,10 +2,8 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { code, cssDeclarations, enclosingOpenTag, section } from './_helpers.ts'
 
-test('任务监控：KPI 不再显示证书工作项括注，筛选组右对齐，操作列保持单行', () => {
+test('任务监控：筛选组右对齐、操作列单行、运行按钮冷却 tooltip 条件化', () => {
   const page = code('src/views/settings/TaskMonitor.vue')
-  assert.doesNotMatch(page, /（不含证书工作项）|（含证书工作项）/)
-  assert.match(page, /<div class="tm-filter-group">/)
   assert.match(page, /class-name="tm-op-cell"/)
   // 样式按「声明集」判定：单行整串或「首个 } 收尾」的切片在换行重排、增删声明、
   // 属性顺序调整时都会假红/截断，而界面没变（声明集与排版形态无关）。
@@ -50,9 +48,9 @@ test('安全总览 Top10 源 IP 展示近 10 分钟/近 1 小时/近 24 小时�
   assert.match(page, /prop="recent_10m" :label="t\('app\.security\.overview\.topIps\.colRecent10m'\)" width="120"/)
   assert.match(page, /prop="recent_1h" :label="t\('app\.security\.overview\.topIps\.colRecent1h'\)" width="128"/)
   assert.match(page, /prop="recent_24h" :label="t\('app\.security\.overview\.topIps\.colRecent24h'\)" width="110"/, '近 24 小时列（用户要求 110 宽）')
-  assert.ok(code('src/locales/zh/security.ts').includes('近10分钟'), '近10分钟列头原文必须在 zh 母本词条中')
-  assert.ok(code('src/locales/zh/security.ts').includes('近1小时'), '近1小时列头原文必须在 zh 母本词条中')
-  assert.ok(code('src/locales/zh/security.ts').includes('"近24小时"'), '近24小时列头原文必须在 zh 母本词条中')
+  assert.ok(code('src/locales/zh/security.ts').includes('"colRecent10m": "近10分钟"'), '近10分钟列头原文必须钉在 colRecent10m 键上')
+  assert.ok(code('src/locales/zh/security.ts').includes('"colRecent1h": "近1小时"'), '近1小时列头原文必须钉在 colRecent1h 键上')
+  assert.ok(code('src/locales/zh/security.ts').includes('"colRecent24h": "近24小时"'), '近24小时列头原文必须钉在 colRecent24h 键上')
   // 新增列后不得整体撑破表格：IP 地址与攻击类型让宽（列头已抽词,调用点钉键）
   assert.match(page, /:label="t\('app\.security\.overview\.topIps\.colIp'\)" min-width="160"/, 'IP 地址列让宽到 160（原 200）')
   assert.match(page, /:label="t\('app\.security\.overview\.topIps\.colAttackType'\)" min-width="140"/, '攻击类型列让宽到 140（原 180）')
@@ -79,8 +77,8 @@ test('策略向导 WAF 步骤：排除行撑满内容列，记录请求体警示
   assert.match(item, /class="form-tip-line"/, '控件说明行必须保留')
   assert.match(item, /v-if="form\.log_request_body"[^>]*class="info-note-bar form-item-note-bar"/, '警示条必须移入带标签表单项内')
   assert.match(item, /t\('app\.security\.policies\.waf\.logRequestBodyWarn'\)/, '警示文案必须保留')
-  assert.ok(code('src/locales/zh/security.ts').includes('记录请求体'), '表单项标签原文必须在 zh 母本词条中')
-  assert.ok(code('src/locales/zh/security.ts').includes('请仅在排障期间开启'), '警示文案原文必须在 zh 母本词条中')
+  assert.ok(code('src/locales/zh/security.ts').includes('"logRequestBody": "记录请求体"'), '表单项标签原文必须钉在 logRequestBody 键上（子串包含会被警示/说明词条满足）')
+  assert.match(code('src/locales/zh/security.ts'), /"logRequestBodyWarn": "[^"]*请仅在排障期间开启/, '警示文案原文必须钉在 logRequestBodyWarn 键上')
   // 全局规范不被局部覆写：本文件不得重定义 info-note-bar 的盒模型
   assert.doesNotMatch(page, /\.info-note-bar[^{]*\{[^}]*padding/, 'info-note-bar 内边距必须走全局规范，禁局部覆写')
   assert.equal(cssDeclarations(page, '.form-item-note-bar').get('width'), '100%', '警示条必须撑满控件列')

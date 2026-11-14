@@ -633,7 +633,7 @@ func TestClusterSnapshot_danglingBindingPreserved(t *testing.T) {
 }
 
 // queryRecordingSnapshotStore 记录最近一次 QueryContext 的 SQL 后委托真实 DB
-// 执行（同时验证 SQL 可执行）——仅用于  的宽松 ORDER BY 成员断言。
+// 执行（同时验证 SQL 可执行）——仅用于绑定快照的宽松 ORDER BY 成员断言。
 type queryRecordingSnapshotStore struct {
 	database *sql.DB
 	query    string
@@ -646,15 +646,6 @@ func (s *queryRecordingSnapshotStore) QueryContext(ctx context.Context, query st
 
 func (s *queryRecordingSnapshotStore) QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row {
 	return s.database.QueryRowContext(ctx, query, args...)
-}
-
-func captureSnapshotQuery(t *testing.T, database *sql.DB, cluster *ClusterService) string {
-	t.Helper()
-	store := &queryRecordingSnapshotStore{database: database}
-	if _, err := cluster.snapshotSecurityBindings(context.Background(), store); err != nil {
-		t.Fatalf("snapshot security bindings: %v", err)
-	}
-	return store.query
 }
 
 // orderByNameSet 判定 ORDER BY 子句是否以列名形式覆盖给定全部列（大小写/
@@ -684,7 +675,7 @@ func orderByNameSet(query string, names ...string) bool {
 
 func TestClusterSnapshot_securityBindingsFullyOrdered(t *testing.T) {
 	// 回归：v2.2.0 多策略后同一 rule_caddy_id 最多 8 行绑定
-	// 上限 2026-09-21 已 5→8，注释滞同步）。ORDER BY 只给 rule_caddy_id 时行间
+	// （上限 2026-09-21 已 5→8）。ORDER BY 只给 rule_caddy_id 时行间
 	// 顺序在 SQL 层无定义（靠复合主键覆盖索引碰巧稳定，属查询计划偶然），而
 	// 快照指纹/缓存键要求字节级确定性。
 	// 旧断言钉 SQL 文本后缀（ORDER BY rule_caddy_id, policy_id），
@@ -724,18 +715,22 @@ func TestClusterSnapshot_securityBindingsFullyOrdered(t *testing.T) {
 		t.Fatalf("bindings snapshot=%s\nwant %s", forward, want)
 	}
 
-	// 契约钉（ 取舍说明）：字节确定性用例在 SQLite 上无法区分
+	// 契约钉：字节确定性用例在 SQLite 上无法区分
 	// 「ORDER BY 只给 rule_caddy_id」——复合主键覆盖索引恰可满足该排序，行间
-	// 次序仍稳定（正是找出项所说的「查询计划偶然」）。因此补一条宽松的
+	// 次序仍稳定（「查询计划偶然」）。因此补一条宽松的
 	// ORDER BY 成员断言：只要求子句里出现两列（去空白后按词元比较），容忍
 	// 空白/列序/别名写法，不对 SQL 文本做后缀级钉。
-	query := captureSnapshotQuery(t, database, cluster)
+	store := &queryRecordingSnapshotStore{database: database}
+	if _, err := cluster.snapshotSecurityBindings(context.Background(), store); err != nil {
+		t.Fatalf("snapshot security bindings: %v", err)
+	}
+	query := store.query
 	if !orderByNameSet(query, "rule_caddy_id", "policy_id") {
 		t.Fatalf("bindings query=%q, want ORDER BY 同时覆盖 rule_caddy_id 与 policy_id（仅一列时次序依赖查询计划）", query)
 	}
 }
 
-// 库值唯一真相（批 3）：集群 apply 门值列归一——旧主快照/带外脏值不得在从
+// 库值唯一真相：集群 apply 门值列归一——旧主快照/带外脏值不得在从
 // 节点复制静默漂移：anomaly_threshold<=0/nil→5、block_status_code 枚举外→403。
 func TestApplySnapshot_normalizesPolicyValueColumns(t *testing.T) {
 	_, database := newClusterTestService(t)

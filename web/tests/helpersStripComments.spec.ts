@@ -99,6 +99,37 @@ test('member：模板量 ${} 内嵌对象既不提前收尾也不越界', () => 
   assert.doesNotMatch(slice, /return 2/, '切片不得吞下下一个成员')
 })
 
+test('matchBrace：正则字面量里的花括号不参与配对（缺正则态会提前收尾/越界）', () => {
+  // 正则里的 `}` 若按代码计，切片在正则中途收尾，后续断言全部空转。
+  const src = 'const f = () => {\n  const re = /[}]/\n  return re\n}\nconst g = () => {\n  return 2\n}\n'
+  const slice = member(src, 'const f = ')
+  assert.match(slice, /return re/)
+  assert.doesNotMatch(slice, /return 2/, '切片不得吞下下一个成员')
+  // 箭头后的 `/` 是正则起点（`>` 不是表达式收尾）；正则里的 `{` 不得开新层。
+  const arrow = 'const f = () => {\n  const ok = () => /{/.test(\'{\')\n  return ok\n}\nconst g = () => {\n  return 2\n}\n'
+  const arrowSlice = member(arrow, 'const f = ')
+  assert.match(arrowSlice, /return ok/)
+  assert.doesNotMatch(arrowSlice, /return 2/)
+})
+
+test('matchBrace：除号/行注释/字符串收尾后的斜杠不得误入正则态', () => {
+  // 除号后的 `//` 是行注释：误入正则态会把注释后的真实 `}` 吞掉（越界）。
+  const div = 'const f = () => {\n  const r = total / count // }\n  return r\n}\nconst g = () => {\n  return 2\n}\n'
+  const divSlice = member(div, 'const f = ')
+  assert.match(divSlice, /return r/)
+  assert.doesNotMatch(divSlice, /return 2/, '行注释里的 } 不得改变配对')
+  // 字符串收尾后的 `/` 是除号；模板量收尾同理。
+  const str = "const f = () => {\n  const r = 'x' / 2\n  const t = `y` / 3\n  return r + t\n}\nconst g = () => {\n  return 2\n}\n"
+  const strSlice = member(str, 'const f = ')
+  assert.match(strSlice, /return r \+ t/)
+  assert.doesNotMatch(strSlice, /return 2/)
+  // 正则收尾后的 `/` 是除号（正则不是表达式起点的合法前驱）。
+  const re = 'const f = () => {\n  const r = /a/ / 2\n  return r\n}\nconst g = () => {\n  return 2\n}\n'
+  const reSlice = member(re, 'const f = ')
+  assert.match(reSlice, /return r/)
+  assert.doesNotMatch(reSlice, /return 2/)
+})
+
 test('行注释与块注释被剥离，字符串字面量保留', () => {
   const src = "const a = 1 // trailing\n/* block */ const b = '// not comment'\nconst c = `/* tpl */`"
   const out = stripComments(src)
@@ -245,6 +276,9 @@ test('脚本存在性断言文件禁止裸 source()/repoSource() 回流', () => 
     // 注释文案钉：自动封禁配置弹框「喂入门」注释口径（断言对象是注释本身，
     // 剥注释后无法判定）；其余代码存在性断言走 code()。
     'ccProtectionContracts.spec.ts',
+    // API 文档钉：断言对象是 apidocs.go 的示例 JSON 与说明文字（raw 视图），
+    // 后端代码存在性断言仍走 repoCode()。
+    'auditLogTotalStale.spec.ts',
   ])
   // 本文件自身含判据的合成样本字符串（非真实导入），排除自扫描。
   const offenders = specFiles.filter((name) => name !== 'helpersStripComments.spec.ts' && rawImport.test(readSpec(name)) && !allowedRaw.has(name))

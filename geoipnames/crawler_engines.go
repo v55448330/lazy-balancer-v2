@@ -22,7 +22,9 @@ import (
 // PetalBot）按厂商域名验证（观察级）。展示名不在本注册表：策略向导消费
 // 前端 i18n 镜像（web/src/views/security/SecurityPolicies.vue
 // crawlerEngineOptions，按 ID 对齐）——Go 侧曾有的 Name 字段生产零消费，
-// 已删除（避免与前端词条分叉的假单源）。
+// 已删除（避免与前端词条分叉的假单源）。镜像与默认勾选集由
+// crawler_frontend_parity_test.go 机械对账（ID 集合/顺序、两处前端默认
+// 字面量与 defaultCrawlerEngines 一致），任一侧漂移即红。
 type CrawlerEngine struct {
 	// ID 引擎标识（X-LB-Crawler-Verified 头值 + 规则 @streq 消费值；
 	// 稳定字符串，勿改动——已入库策略的 geoip_crawler_engines 引用此值）。
@@ -118,8 +120,9 @@ var crawlerEngines = []CrawlerEngine{
 		SpoofUARegex: regexp.MustCompile(`(?i)GPTBot|OAI-SearchBot`),
 	},
 	{
-		ID:          "deepseekbot",
-		UARegex:     regexp.MustCompile(`(?i)DeepSeekBot|DeepSeek`),
+		ID: "deepseekbot",
+		// DeepSeekBot 是 DeepSeek 的超串，裸品牌串一支已覆盖全部形态。
+		UARegex:     regexp.MustCompile(`(?i)DeepSeek`),
 		PTRSuffixes: []string{".deepseek.com"},
 		// 裸品牌串 DeepSeek 出现在普通 UA 中不构成伪装证据。
 		SpoofUARegex: regexp.MustCompile(`(?i)DeepSeekBot`),

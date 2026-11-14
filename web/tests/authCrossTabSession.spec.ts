@@ -310,3 +310,150 @@ test('登录 200 缺 token：显性报错，且不写脏令牌/不推进身份�
     host.__authPost = original
   }
 })
+
+// ── /config 会话代际守卫与在途门：与 /users/me 同口径 ──
+// await 之后代际或令牌任一变化即换会话，旧 /config 的成败都不得写回或排重试；
+// 登出必须清在途门，否则旧会话在飞请求会吞掉新会话的首次 fetchConfig。
+
+test('账号切换：旧 /config 的迟到成功响应不得覆盖新会话节点模式', async () => {
+  storage.set('token', 'tok-cfg-a')
+  const store = newStore()
+  const { queue, restore } = deferGets()
+  try {
+    const firstInit = store.init()
+    void firstInit.catch(() => {})
+    await flush()
+    assert.deepEqual(queue.map((g) => g.url), ['/users/me', '/config'])
+    queue[0].resolve(aliceMe)
+    await flush()
+
+    // 旧会话 /config 仍在途时另一标签页登录 B：本页跟随新令牌重拉
+    const beforeSwitch = queue.length
+    storage.set('token', 'tok-cfg-b')
+    dispatchStorage('token')
+    await flush()
+    const fresh = ownNewSessionGets(queue, beforeSwitch)
+    fresh[0].resolve(bobMe)
+    fresh[1].resolve({ data: { is_master: false, timezone: 'UTC', cert_renewal_days: 30, mfa_write_guard: false } })
+    await flush()
+    assert.equal(store.nodeMode, 'slave')
+
+    // 旧会话的主节点响应此刻才到：必须整条丢弃
+    queue[1].resolve(masterConfig)
+    await flush()
+    assert.equal(store.nodeMode, 'slave', '旧会话 /config 迟到响应不得把新会话改回主节点')
+    assert.equal(store.timezone, 'UTC', '旧会话投影字段同样不得写回')
+  } finally {
+    restore()
+  }
+})
+
+test('账号切换：旧 /config 的迟到失败不得排重试链', async () => {
+  storage.set('token', 'tok-cfg-c')
+  const store = newStore()
+  const { queue, restore } = deferGets()
+  try {
+    const firstInit = store.init()
+    void firstInit.catch(() => {})
+    await flush()
+    queue[0].resolve(aliceMe)
+    await flush()
+
+    const beforeSwitch = queue.length
+    storage.set('token', 'tok-cfg-d')
+    dispatchStorage('token')
+    await flush()
+    const fresh = ownNewSessionGets(queue, beforeSwitch)
+    fresh[0].resolve(bobMe)
+    fresh[1].resolve(masterConfig)
+    await flush()
+    const timersBefore = browser.timers.size
+
+    queue[1].reject(new Error('network down'))
+    await flush()
+    assert.equal(store.nodeMode, 'master', '迟到失败不得改动新会话节点模式')
+    assert.equal(browser.timers.size, timersBefore, '迟到失败不得为新会话排重试链')
+  } finally {
+    restore()
+  }
+})
+
+test('登出清 /config 在途门：新会话首次 fetchConfig 不得被吞', async () => {
+  storage.set('token', 'tok-cfg-e')
+  const store = newStore()
+  const { queue, restore } = deferGets()
+  try {
+    const late = store.fetchConfig()
+    await flush()
+    assert.equal(queue.length, 1)
+    assert.equal(queue[0].url, '/config')
+
+    await store.logout()
+    assert.equal(store.token, null)
+
+    // 新会话建立（模拟另一标签页登录后的同步路径）：首拉必须发出
+    storage.set('token', 'tok-cfg-f')
+    dispatchStorage('token')
+    await flush()
+    assert.deepEqual(queue.slice(1).map((g) => g.url), ['/users/me', '/config'], '在途门残留会吞掉新会话的 /config')
+    queue[1].resolve(bobMe)
+    queue[2].resolve(masterConfig)
+    await flush()
+    assert.equal(store.nodeMode, 'master')
+
+    // 旧请求迟到落地不得扰动新会话
+    queue[0].resolve(masterConfig)
+    await late
+    assert.equal(store.nodeMode, 'master')
+  } finally {
+    restore()
+  }
+})
+
+// ── node_mode 契约白名单：非三态值归一 unknown（fail-closed），不得直写 store ──
+// 白名单归一的直接断言：/config 保持未落地（login 的 await 由用例兜住），
+// 登录响应写入的 nodeMode 不被投影覆盖。
+test('登录响应 node_mode 非法值：/config 未落地前 store 保持 unknown 只读', async () => {
+  storage.set('token', 'tok-nm-keep2')
+  const store = newStore()
+  const originalPost = host.__authPost
+  const originalGet = host.__authGet as (url: string) => Promise<unknown>
+  host.__authPost = async () => ({ token: 'tok-nm-new2', node_mode: 'standalone' })
+  const configDeferred = Promise.withResolvers<unknown>()
+  host.__authGet = (url: string) => url === '/config' ? configDeferred.promise : originalGet(url)
+  try {
+    const loginPromise = store.login('alice', 'pw')
+    await flush()
+    assert.equal(store.token, 'tok-nm-new2')
+    assert.equal(store.nodeMode, 'unknown', '白名单外的 node_mode 必须归一 unknown')
+    assert.equal(store.readOnlyReason, 'unknown', '未知节点模式必须 fail-closed 只读')
+    configDeferred.resolve(masterConfig)
+    await loginPromise
+  } finally {
+    host.__authPost = originalPost
+    host.__authGet = originalGet
+  }
+})
+
+test('登录响应 node_mode 三态白名单值原样保留', async () => {
+  for (const mode of ['master', 'slave', 'unknown'] as const) {
+    storage.set('token', 'tok-nm-ok')
+    const store = newStore()
+    const originalPost = host.__authPost
+    const originalGet = host.__authGet as (url: string) => Promise<unknown>
+    host.__authPost = async () => ({ token: `tok-nm-${mode}`, node_mode: mode })
+    const configDeferred = Promise.withResolvers<unknown>()
+    host.__authGet = (url: string) => url === '/config' ? configDeferred.promise : originalGet(url)
+    try {
+      const loginPromise = store.login('alice', 'pw')
+      // /config 未落地前断言登录响应写入值：三态原样保留（unknown 不得被归一成别的值）。
+      await flush()
+      assert.equal(store.nodeMode, mode, `${mode} 属契约三态，登录响应必须原样写入`)
+      configDeferred.resolve(masterConfig)
+      await loginPromise
+    } finally {
+      host.__authPost = originalPost
+      host.__authGet = originalGet
+    }
+  }
+})

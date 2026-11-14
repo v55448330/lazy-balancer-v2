@@ -453,8 +453,11 @@ type SecurityOverview struct {
 	// 无影响）。HTTP 拆分由消费方按 合计−TCP 计算（契约 C5）。
 	TodayBlockedTCP int `json:"today_blocked_tcp"`
 	// TodayDetectedTCP 是今日检测的 TCP 协议拆分（event_type='tcp' AND
-	// action='logged'，原始表直算；来源=L4 信任检测 trust_detect）。TCP 检测
-	// 可能产生数据就必须如实统计与显示——HTTP 拆分由消费方按 合计−TCP 计算。
+	// action='trust'，原始表直算；来源=L4 信任检测 trust_detect，审计行经
+	// 摄取升格 logged→trust）。TCP 检测可能产生数据就必须如实统计与显示。
+	// 口径披露：本列属可见性拆分，不计入攻击口径 TodayDetected（trust 整类
+	// 排除）——HTTP 侧不得按 合计−TCP 推导（会得到负值/错值），HTTP 检测
+	// 份额以 TodayDetected 自身为准。
 	TodayDetectedTCP int `json:"today_detected_tcp"`
 	// YesterdayBlocked/YesterdayDetected 昨日拦截/检测合计（本地日界窗口
 	// [昨日 0 点, 今日 0 点)，原始表直算，攻击面谓词同今日直算分支）。口径
@@ -462,11 +465,13 @@ type SecurityOverview struct {
 	// raw_coverage_from 既有披露承载）；计入口径与 trend 一致（含保留地址）。
 	YesterdayBlocked int `json:"yesterday_blocked"`
 	// YesterdayBlockedTCP 昨日拦截的 TCP 协议拆分（event_type='tcp' AND
-	// action='blocked'，原始表窗口直算；L4 无检测概念，无 logged 拆分面）。
+	// action='blocked'，原始表窗口直算）。
 	YesterdayBlockedTCP int `json:"yesterday_blocked_tcp"`
 	YesterdayDetected   int `json:"yesterday_detected"`
-	// YesterdayDetectedTCP 昨日 TCP 检测数：L4 信任检测（trust_detect）产 tcp+logged
-	// 事件后计入（与 HTTP stage0 DetectionOnly 对齐）；无该形态时为 0。
+	// YesterdayDetectedTCP 昨日 TCP 检测数：L4 信任检测（trust_detect）审计行
+	// 经摄取升格为 tcp+trust 后计入（与 HTTP stage0 DetectionOnly 对齐）；无该
+	// 形态时为 0。口径同 TodayDetectedTCP：可见性拆分，不计入攻击口径
+	// YesterdayDetected，不得按 合计−TCP 推导 HTTP 份额。
 	YesterdayDetectedTCP int `json:"yesterday_detected_tcp"`
 	// NormalToday 今日正常请求 = HTTP+TCP 合计口径（HTTP 侧：规则级
 	// requests_total 累计差分 − 今日 per-rule requests_blocked 累计差分 −

@@ -47,7 +47,7 @@ test('请求记录身份代际，428 通过身份守卫编排弹码、刷新与�
   const stepUp = codeSection('src/utils/api.ts', "} else if (kind === 'step-up') {", '} else if (!isLoginRequest)')
   assert.match(stepUp, /runMfaStepUpRequest\(\{/)
   assert.match(stepUp, /isCurrent,/)
-  assert.match(stepUp, /replay: \(\) => \{[\s\S]*?service\.request\(error\.config\)/)
+  assert.match(stepUp, /replay: \(\) => \{[\s\S]*?config\._mfaRetried = true[\s\S]*?service\.request\(config\)/)
 
   // 接线只保留窄断言：守卫必须由 createSessionStepUpGate 构造、且拦截器内
   // 不得内联第二份代际比较。比较语义本身由下面的行为用例（apiFailure.spec）

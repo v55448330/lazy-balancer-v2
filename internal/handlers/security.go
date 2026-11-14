@@ -5390,12 +5390,16 @@ func categorizeAttack(ruleTriggered, ruleMsg string) string {
 	}
 }
 
-// stageCategorizeAttack 阶段五桶归并（用户裁定：攻击类型分布默认按
+// stageCategorizeAttack 阶段六桶归并（用户裁定：攻击类型分布默认按
 // 阶段展示，取消勾选切回 categorizeAttack 具体分类）——与触发阶段口径一致：
 //
 //	信任名单（id 3/12）/ IP 访问控制（黑白名单 2/4/5/7 + 地域 8/8xxxxx +
 //	威胁库 14/msg）/ WAF（CRS 9xxxxx + 自定义 5 位与 1 开头 ≥7 位合成）/
-//	请求体异常（id 11）/ CC 防护（429 存量精确 + human_* 由摄取侧归类）/ 其他。
+//	请求体异常（id 11）/ CC 防护（429 存量精确）/ 其他。
+//
+// human_*（新 CC 防护人机挑战）为 action=challenged，被攻击面谓词整类排除，
+// 不进总览攻击分布——本函数不消费该形态（事件列表 CC 防护族筛选另由
+// humanFamilyCondition 承载）。
 //
 // ID 形态判定收敛至 attackFamilyClassOf 单一事实源，
 // 本函数只做类→桶映射。与概览视图的唯一有意分叉：9 开头 CRS 段整段归 WAF
@@ -5592,11 +5596,11 @@ func (h *Handlers) GetSecurityOverview(c *gin.Context) {
 	// 自逐请求直算下沉进缓存（同款原始表窗口，口径不变）；昨日窗口与正常
 	// 请求字段口径披露见 models.SecurityOverview 对应字段注释。
 	overview.TodayBlockedTCP = agg.todayBlockedTCP
-	overview.TodayDetectedTCP = agg.todayDetectedTCP // L4 信任检测（trust_detect）产 tcp+logged
+	overview.TodayDetectedTCP = agg.todayDetectedTCP // L4 信任检测（trust_detect）经摄取升格产 tcp+trust
 	overview.YesterdayBlocked = agg.yesterdayBlocked
 	overview.YesterdayBlockedTCP = agg.yesterdayBlockedTCP
 	overview.YesterdayDetected = agg.yesterdayDetected
-	overview.YesterdayDetectedTCP = agg.yesterdayDetectedTCP // L4 信任检测（trust_detect）产 tcp+logged
+	overview.YesterdayDetectedTCP = agg.yesterdayDetectedTCP // L4 信任检测（trust_detect）经摄取升格产 tcp+trust
 	// 正常请求主数值 = HTTP + TCP 合计（未拦截且未检测的全部放行流量，含规则
 	// 未匹配的直连语义边界见 models/apidocs 披露）；HTTP/TCP 拆分行各自单列。
 	overview.NormalToday = agg.normalTodayHTTP + agg.normalTodayTCP

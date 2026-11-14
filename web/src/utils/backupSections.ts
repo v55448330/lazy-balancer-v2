@@ -29,7 +29,10 @@ export const importConfirmMessage = (type: string | undefined, sections: readonl
   if (type === 'v1') {
     return t('common.app.views.impexp.importConfirmV1')
   }
-  if (sections.length === BACKUP_SECTIONS.length) {
+  // 全量判定按「已知键集合等于全集」——length 相等会被未知键凑数（含未知键
+  // 仍报「覆盖全部配置」，与预览矛盾）；重复键由归一化去重，此处按集合判定。
+  const knownKeys = new Set(sections.filter((key) => BACKUP_SECTIONS.some((section) => section.key === key)))
+  if (knownKeys.size === BACKUP_SECTIONS.length) {
     return t('common.app.views.impexp.importConfirmFull')
   }
   const labels = sections.map((key) => BACKUP_SECTIONS.find((section) => section.key === key)?.label || key)

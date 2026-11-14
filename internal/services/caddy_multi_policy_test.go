@@ -9,8 +9,8 @@ import (
 
 // ..05（v2.2.0 多策略绑定 · Caddy 生成路径）：一条 LB 规则可绑定至多
 // maxBindingsPerRule=8 条安全策略，评估顺序 = 绑定 rank ASC（policy_id ASC 兜序；
-// mpGenBindPolicy 未写 rank，本组夹具走兜序）；每策略的 [rate_limit?, waf?] 处理器组
-// 按序编入规则主路由。geoip pass 路由至多一条（任一启用策略带 geoip 即存在，
+// mpGenBindPolicy 未写 rank，本组夹具走兜序）；每策略的 [lb_human?, waf?] 处理器组
+// 按序编入规则主路由（配额限流 rate_limit 已退役）。geoip pass 路由至多一条（任一启用策略带 geoip 即存在，
 // 为下游 coraza 的 GeoIP SecRule 设置 X-LB-GeoIP-* headers；地域拦截在各自策略的
 // waf directives 内评估，无 Caddy 原生 block 路由）；错误路由取首绑定（rank
 // 最小，policy_id 兜序）启用策略的拦截页，匹配表达式只含统一 403 interruption 子句；
@@ -20,9 +20,7 @@ import (
 type mpGenPolicySpec struct {
 	mode            string // off/detection/blocking（空 → off）
 	enabled         bool
-	rateLimit       bool
-	rps             int
-	burst           int
+	challenge       bool   // 阶段 2 人机挑战（human_verify_mode=force）
 	geoCountries    string // geoip_countries JSON（空 → '[]'）
 	geoMode         string // deny/allow（空 → deny）
 	blockPageID     int
@@ -65,7 +63,7 @@ func mpGenBindPolicy(t *testing.T, database *sql.DB, ruleCaddyID, name string, s
 		ipBlacklist = "[]"
 	}
 	humanMode, humanType := "off", "slider"
-	if spec.rateLimit {
+	if spec.challenge {
 		humanMode, humanType = "force", "slider"
 	}
 	result, err := database.Exec(`INSERT INTO security_policies
@@ -136,20 +134,20 @@ func mpCountGeoipPassRoutes(t *testing.T, routes []map[string]interface{}) int {
 
 // 路由顺序 = geoipPass(≤1) → pathRoutes → main；主路由处理器链按
 // 阶段化执行模型编排——阶段 1 合并预检（IP ACL+GeoIP，单/多策略同构）→ 阶段 2
-// 限流（全部策略 rate_limit 集中）→ 阶段 3 每策略独立 WAF 引擎（评估序
+// 人机挑战（lb_human；配额限流已退役）→ 阶段 3 每策略独立 WAF 引擎（评估序
 // rank ASC，policy_id 兜序）。
 // 纯 GeoIP 策略（p1 off+geoip）不再贡献策略 waf，GeoIP 链由预检 800000+ 段承接。
 func TestMultiPolicy_RouteComposition_OrderAndHandlerGroups(t *testing.T) {
 	stubSecurityLibsAvailable(t) // 缺库降级：安全链渲染断言前先桩库可用
 	// Given 一条规则绑定三条启用策略（mpGenBindPolicy 未写 rank，验证按 policy_id 兜序）：
-	// p1(off+geoip) < p2(blocking+限流) < p3(detection+geoip)
+	// p1(off+geoip) < p2(blocking+挑战) < p3(detection+geoip)
 	_, database := newClusterTestService(t)
 	seedHTTPRuleForGeneration(t, database, "lb_gen1", "gen1.example.test", 8080)
 	p1 := mpGenBindPolicy(t, database, "lb_gen1", "gen1-p1", mpGenPolicySpec{
 		mode: "off", enabled: true, geoCountries: `["海外"]`, blockStatusCode: 451,
 	})
 	p2 := mpGenBindPolicy(t, database, "lb_gen1", "gen1-p2", mpGenPolicySpec{
-		mode: "blocking", enabled: true, rateLimit: true, rps: 100, burst: 50,
+		mode: "blocking", enabled: true, challenge: true,
 	})
 	p3 := mpGenBindPolicy(t, database, "lb_gen1", "gen1-p3", mpGenPolicySpec{
 		mode: "detection", enabled: true, geoCountries: `["江苏"]`,
@@ -287,7 +285,7 @@ func TestMultiPolicy_GeoipPassRoute_ExistsIffAnyEnabledPolicyHasGeoIP(t *testing
 // 合并中断与无页策略中断）+ 每有页策略 1 条合成码归因路由（无 host，渲染
 // 各自拦截页与状态码）；配额限流 429 路由已随功能下线移除。
 func TestMultiPolicy_ErrorRoutes_FirstBoundBlockPageAndUnionMatcher(t *testing.T) {
-	// Given p1(geoip 451+page7) < p2(geoip 503+page8+限流)
+	// Given p1(geoip 451+page7) < p2(geoip 503+page8+挑战)
 	useTemporaryCertDir(t)
 	_, database := newClusterTestService(t)
 	seedHTTPRuleForGeneration(t, database, "lb_gen4", "gen4.example.test", 8080)
@@ -297,7 +295,7 @@ func TestMultiPolicy_ErrorRoutes_FirstBoundBlockPageAndUnionMatcher(t *testing.T
 		mode: "blocking", enabled: true, geoCountries: `["海外"]`, blockPageID: 7, blockStatusCode: 451,
 	})
 	p2 := mpGenBindPolicy(t, database, "lb_gen4", "gen4-p2", mpGenPolicySpec{
-		mode: "off", enabled: true, rateLimit: true, rps: 100, geoCountries: `["江苏"]`, blockPageID: 8, blockStatusCode: 503,
+		mode: "off", enabled: true, challenge: true, geoCountries: `["江苏"]`, blockPageID: 8, blockStatusCode: 503,
 	})
 	if !(p1 < p2) {
 		t.Fatalf("seed ids not ascending: %d %d", p1, p2)
@@ -360,7 +358,7 @@ func TestMultiPolicy_ErrorRoutes_FirstBoundBlockPageAndUnionMatcher(t *testing.T
 // enabled 兄弟策略照常贡献。
 func TestMultiPolicy_DisabledPolicyContributesNothing(t *testing.T) {
 	stubSecurityLibsAvailable(t) // 缺库降级：安全链渲染断言前先桩库可用
-	// Given p1(enabled, blocking) < p2(DISABLED, 限流+geoip+拦截页)——旧 MAX 语义
+	// Given p1(enabled, blocking) < p2(DISABLED, 挑战+geoip+拦截页)——旧 MAX 语义
 	// 取最高绑定会命中 disabled 而整规则无策略，新语义必须只看见 p1。
 	useTemporaryCertDir(t)
 	_, database := newClusterTestService(t)
@@ -368,7 +366,7 @@ func TestMultiPolicy_DisabledPolicyContributesNothing(t *testing.T) {
 	seedSecurityBlockPage(t, database, 9, "<html>disabled-block</html>")
 	p1 := mpGenBindPolicy(t, database, "lb_gen5", "gen5-p1", mpGenPolicySpec{mode: "blocking", enabled: true})
 	p2 := mpGenBindPolicy(t, database, "lb_gen5", "gen5-p2", mpGenPolicySpec{
-		mode: "blocking", enabled: false, rateLimit: true, rps: 100, burst: 50,
+		mode: "blocking", enabled: false, challenge: true,
 		geoCountries: `["海外"]`, blockPageID: 9, blockStatusCode: 503,
 	})
 	if !(p1 < p2) {
@@ -382,7 +380,7 @@ func TestMultiPolicy_DisabledPolicyContributesNothing(t *testing.T) {
 	if len(routes) != 1 {
 		t.Fatalf("want 1 route (main only), got %d: %#v", len(routes), routes)
 	}
-	// 主链：enabled p1 的 waf 存在；disabled p2 的 rate_limit 不存在
+	// 主链：enabled p1 的 waf 存在；配额限流 rate_limit 已退役，链中恒不出现
 	names := handlerNames(t, mainRoute)
 	if indexOfHandler(names, "waf") < 0 {
 		t.Fatalf("enabled policy's waf missing from chain %v", names)
@@ -404,7 +402,7 @@ func TestMultiPolicy_DisabledPolicyContributesNothing(t *testing.T) {
 
 // （多策略 IP ACL 优先 · IP 预检）：多策略绑定时，任一绑定策略的
 // deny 侧 IP 控制（deny 模式 ACL / allow 模式 ACL / 遗留黑名单）合并为一个
-// 极简 coraza 预检 WAF，置于处理器链最前（先于全部 rate_limit/waf）——被拒
+// 极简 coraza 预检 WAF，置于处理器链最前（先于全部 lb_human/waf）——被拒
 // IP 在任何策略的 CRS/自定义规则评估前即中断，不再产生前置策略的检测事件；
 // 预检仍是 coraza 拒绝（audit log 留痕、403 interruption → 拦截页错误路由）。
 // 单策略同构亦走预检（见 caddy.go:3180-3194）：ACL 并集与引擎 id:2/4 幂等重复无害——预检先拦，引擎内不再命中。
@@ -682,18 +680,17 @@ func TestMultiPolicy_PrecheckTrustDetectionOnly(t *testing.T) {
 	}
 }
 
-// 阶段 2 · CC 防护的链内固定序（2026-11-12 用户裁定）：先配额（rate_limit，429，
-// 便宜且与是否人类无关）→ 再人机挑战（lb_human）→ 最后阶段 3 内容防护（WAF）。
-// 历史缺陷：human handler 曾插在 rate_limit 之前，与界面「阶段 2 限流→阶段 3
-// 人机」的执行序相反。
-func TestCCStage_chainOrder_quotaThenChallengeThenWAF(t *testing.T) {
+// 阶段 2 · CC 防护的链内固定序（2026-11-12 用户裁定）：人机挑战（lb_human）→
+// 阶段 3 内容防护（WAF）。配额限流（rate_limit，429）已退役——链中恒不出现
+// 429 处理器。历史缺陷：human handler 曾插在配额限流之前，与界面执行序相反。
+func TestCCStage_chainOrder_challengeThenWAF(t *testing.T) {
 	stubSecurityLibsAvailable(t)
 	_, database := newClusterTestService(t)
 	seedHTTPRuleForGeneration(t, database, "lb_cc1", "cc1.example.test", 8080)
 	policyID := mpGenBindPolicy(t, database, "lb_cc1", "cc-p1", mpGenPolicySpec{
-		mode: "off", enabled: true, rateLimit: true, rps: 100, burst: 50,
+		mode: "off", enabled: true, challenge: true,
 	})
-	// CC 策略 = 阶段 2：配额 + 始终挑战 + 异常触发开关。
+	// CC 策略 = 阶段 2：始终挑战 + 异常触发开关。
 	if _, err := database.Exec(`UPDATE security_policies SET policy_type='stage2',
 		human_verify_mode='force', human_verify_type='slider', human_verify_ttl=30,
 		human_exempt_paths='[]', cc_detect_enabled=1, cc_rps_limit=40, cc_rps_window=10

@@ -1022,7 +1022,7 @@ func (h *Handlers) IssueCertificate(c *gin.Context) {
 	}
 	var batchTargets []certTarget
 	if req.CaddyID == "" && req.All {
-		rows, err := db.DB.Query("SELECT caddy_id, COALESCE(domain,'') FROM lb_rules WHERE enabled=1 AND enable_tls=1 AND tls_source='acme_dns' AND protocol='http' AND COALESCE(domain,'') != ''")
+		rows, err := db.DB.Query("SELECT caddy_id, COALESCE(domain,'') FROM lb_rules WHERE enabled=1 AND " + enableTLSEnabledSQLPredicate + " AND tls_source='acme_dns' AND protocol='http' AND COALESCE(domain,'') != ''")
 		if err != nil {
 			// 审计详情/响应体都只放固定归因，底层驱动文本只进运行日志
 			// （writeInternalError 记录 cause）——business 组任意登录用户可读。

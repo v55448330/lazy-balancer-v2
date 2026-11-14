@@ -18,6 +18,25 @@ func restoreTestDBHandles(oldDB, oldMetricsDB, oldAuditDB *sql.DB) {
 	db.SetDB(oldDB)
 }
 
+// newIsolatedTestDB 打开一个临时 SQLite 库并装配为进程库（db.DB + GetDB 原子
+// 视图），用例结束只关闭本夹具开出的句柄、经 restoreTestDBHandles 还原进入前
+// 的全部句柄。表结构/种子由各用例自行执行（不同认证链所需最小表不同）。
+func newIsolatedTestDB(t *testing.T) *sql.DB {
+	t.Helper()
+	database, err := sql.Open("sqlite", t.TempDir()+"/test.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldDB, oldMetricsDB, oldAuditDB := db.DB, db.MetricsDB, db.AuditDB
+	db.DB = database
+	db.SetDB(database)
+	t.Cleanup(func() {
+		_ = database.Close()
+		restoreTestDBHandles(oldDB, oldMetricsDB, oldAuditDB)
+	})
+	return database
+}
+
 // withIsolatedRateLimitBuckets 保存-清空-恢复全局限流桶表。
 //
 // 限流桶是进程级全局状态：用例「直接替换 entries」会让计数跨用例继承
@@ -43,8 +62,8 @@ func withIsolatedRateLimitBuckets(t *testing.T) {
 // 现场，避免整表清扫类用例吞掉其他用例的预热条目。
 func withIsolatedAPIKeyWhitelistCache(t *testing.T) {
 	t.Helper()
-	saved := make(map[any]any)
-	apiKeyWhitelistCache.Range(func(key, value any) bool {
+	saved := make(map[string]any)
+	apiKeyWhitelistCache.Range(func(key string, value any) bool {
 		saved[key] = value
 		return true
 	})

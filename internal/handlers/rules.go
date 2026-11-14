@@ -672,7 +672,7 @@ func queryRedirectShadowConflict(domain string, listenPort int, enableTLS, tlsHT
 		// 镜像 2026-09 复审裁定 2(跳转分支同款 EXISTS)
 		// 全部上游被禁用的规则不产生 host 路由与跳转(caddy.go ),
 		// 不作为占用方;此前裁定只落了单侧,该形态下 80 规则被纯误拦 400。
-		rows, err = db.DB.Query(`SELECT caddy_id, name, COALESCE(domain,'') FROM lb_rules WHERE protocol='http' AND enabled=1 AND enable_tls=1 AND tls_http_redirect=1 AND listen_port != 80 AND caddy_id != ? AND EXISTS (SELECT 1 FROM upstreams u WHERE u.rule_id=lb_rules.caddy_id AND `+services.UpstreamEnabledSQLPredicate+`)`, excludeCaddyID)
+		rows, err = db.DB.Query(`SELECT caddy_id, name, COALESCE(domain,'') FROM lb_rules WHERE protocol='http' AND enabled=1 AND `+enableTLSEnabledSQLPredicate+` AND tls_http_redirect=1 AND listen_port != 80 AND caddy_id != ? AND EXISTS (SELECT 1 FROM upstreams u WHERE u.rule_id=lb_rules.caddy_id AND `+services.UpstreamEnabledSQLPredicate+`)`, excludeCaddyID)
 	case enableTLS && tlsHTTPRedirect:
 		// 2026-09 复审裁定 2：与渲染面同口径——全部上游被禁用的 80 规则不产生
 		// host 路由、不会遮蔽跳转，不再作为占用方（报错与真实渲染行为一致）。
@@ -2633,11 +2633,10 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	if req.Protocol == "tcp" {
 		tcpZero := 0
 		// log_enabled 仅 HTTP 渲染消费（logger_names 按协议门控）——
-		// 指针合并会把存量 1 带进 TCP 终态，显式补 false 指针使同协议编辑也自愈。
-		if req.LogEnabled == nil {
-			tcpLogOff := false
-			req.LogEnabled = &tcpLogOff
-		}
+		// 指针合并（上方 nil 填充）已保证非 nil，TCP 终态一律置 false，
+		// 显式提交的 true 也不得残留。
+		tcpLogOff := false
+		req.LogEnabled = &tcpLogOff
 		// TCP 自愈族：代理超时族/自定义路径同协议编辑自愈——这些字段
 		// 在 UpdateRule 是「仅非 nil 才写库」的指针语义，nil 合并会沿用存量
 		// 死值并喂进 validateRuleFeatures TCP 分支，使任何无关编辑恒 400
@@ -3346,7 +3345,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 	}
 
 	if droppedBindings > 0 {
-		recordAudit(c, "更新", "安全策略", fmt.Sprintf("规则 %s 为 TCP，已解除 %d 条安全策略绑定（TCP 不参与策略渲染）", caddyID, droppedBindings))
+		recordAudit(c, "更新", "安全策略", fmt.Sprintf("规则 %s 为 TCP，已解除 %d 条安全策略绑定（仅 L4 不支持的 CC 防护/WAF 特征；stage0/1 绑定保留并由 TCP 渲染链消费）", caddyID, droppedBindings))
 	}
 
 	// /规则脱离 ACME（改手动/禁用 TLS）第二步——提交成功后留痕
@@ -4152,6 +4151,11 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 		if !rule.CustomRoutesEnabled {
 			rule.PathRules = []models.PathRule{}
 		}
+		// legacy 路径规则归一（与 Create/Update 同一单源 normalizePathRules）：
+		// 导入/带外写入的 match_type=''、路径/上游地址带空白形态若原样进
+		// 保存门，复制即 400 死端（路径不以 / 开头）；空白上游地址落库后
+		// 渲染 dial 恒 502。归一结果同时用于下方副本落库。
+		rule.PathRules = normalizePathRules(rule.PathRules)
 	}
 	// 非 acme_dns 来源的残留 acme_config_id 不被消费——副本不放大该
 	// 跨模式死引用（与 Create/Update/导入同口径；两协议同判；空来源同理）。
@@ -4362,10 +4366,10 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 	}
 
 	if rule.CustomRoutesEnabled {
-		if _, err := tx.Exec(`
-		INSERT INTO path_rules (rule_id, sort_order, match_type, path, upstream_path, upstreams_json, response_mode, response_status, response_body, response_content_type, redirect_to, created_at, updated_at)
-		SELECT ?, sort_order, match_type, path, upstream_path, upstreams_json, response_mode, response_status, response_body, response_content_type, redirect_to, datetime('now'), datetime('now') FROM path_rules WHERE rule_id = ?
-		`, newCaddyID, caddyID); err != nil {
+		// 副本路径规则从归一后的内存投影写入（与保存门同一形态），不再
+		// INSERT SELECT 原始行——legacy 死形态（空 match_type/空白地址）
+		// 不得随复制放大到副本。
+		if err := replacePathRulesTx(caddyWriteCtx(c), tx, newCaddyID, rule.PathRules); err != nil {
 			failInternal("复制路径规则失败，已回滚", err)
 			return
 		}
@@ -4878,20 +4882,16 @@ func (h *Handlers) EnableRule(c *gin.Context) {
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_fe056e38"), MessageKey: "k_fe056e38"})
 			return
 		}
-		// 同族收口：TCP 渲染链不加载安全策略，存量/带外绑定会在策略页显示
-		// 生效而运行态零防护——启用路径同样解除（与 UpdateRule/DeleteRule/
-		// 导入的清理对齐）。
-		bindingResult, err := tx.ExecContext(caddyWriteCtx(c), `DELETE FROM security_policy_bindings WHERE rule_caddy_id = ?`, caddyID)
+		// 同族收口：按 L4 阶段 0/1 语义（契约 C4）只清理「含 G2（CC 防护）/
+		// G3（WAF）特征」的绑定——stage0/stage1 特征绑定由 TCP 渲染链
+		// （buildTCPSecurityRoutes）消费，是合法状态，全删会让 L4 IP ACL/
+		// 信任/GeoIP 防护在「禁用→启用」后静默失效。谓词单源=
+		// db.TCPRuleUnsupportedBindingPruneSQL（与 UpdateRule/导入/启动迁移
+		// 共用同一份谓词）。
+		affected, err := pruneTCPUnsupportedBindings(caddyWriteCtx(c), tx)
 		if err != nil {
 			services.Logf("error", "EnableRule security_policy_bindings cleanup error for caddy_id=%s: %v", caddyID, err)
 			recordRuleWriteFailure(c, "启用", "清理安全策略绑定失败", err)
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_fe056e38"), MessageKey: "k_fe056e38"})
-			return
-		}
-		affected, raErr := bindingResult.RowsAffected()
-		if raErr != nil {
-			services.Logf("error", "EnableRule security_policy_bindings RowsAffected error for caddy_id=%s: %v", caddyID, raErr)
-			recordRuleWriteFailure(c, "启用", "确认安全策略绑定清理结果失败", raErr)
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_fe056e38"), MessageKey: "k_fe056e38"})
 			return
 		}
@@ -4943,7 +4943,7 @@ func (h *Handlers) EnableRule(c *gin.Context) {
 	}
 	committed = true
 	if droppedBindings > 0 {
-		recordAudit(c, "启用", "安全策略", fmt.Sprintf("规则 %s 为 TCP，已解除 %d 条安全策略绑定（TCP 不参与策略渲染）", caddyID, droppedBindings))
+		recordAudit(c, "启用", "安全策略", fmt.Sprintf("规则 %s 为 TCP，已解除 %d 条安全策略绑定（仅 L4 不支持的 CC 防护/WAF 特征；stage0/1 绑定保留并由 TCP 渲染链消费）", caddyID, droppedBindings))
 	}
 
 	var enqueuedJobID int

@@ -696,37 +696,32 @@ func PurgeOrphanRuleLogs(ctx context.Context) RuleLogHousekeepingResult {
 // rename 竞态，而崩溃遗留的体积上界=一份未压缩副本（≤ roll_size_mb），
 // 不参与统计与任何删除族，属可接受的瞬态残留。
 func ruleLogComponentOf(name string) (string, bool) {
-	core := name
-	for _, suffix := range []string{".gz", ".zst"} {
-		core = strings.TrimSuffix(core, suffix)
-	}
-	// 移位副本 <component>.log.<n>：只有剥掉数字段后仍以 .log 结尾才算，
-	// 基名本身不含 '.'（encodeFileComponent 的产物只用 [A-Za-z0-9_-%]）。
-	if dot := strings.LastIndexByte(core, '.'); dot > 0 && dot < len(core)-1 && ruleLogAllDigits(core[dot+1:]) {
-		if trimmed := core[:dot]; strings.HasSuffix(trimmed, ".log") {
-			core = trimmed
-		}
-	}
+	core := stripCompressionAndShift(name)
 	// timberjack 时间戳副本：与统计侧共用 SplitTimberjackRotationCopy
 	// （时间戳/尺寸余段/reason 家族/碰撞后缀单源）——两侧各持一份解析曾让
 	// 统计侧认领的 `-<ts>-<size>-<reason>.log` 在这里落成幻影规则 ID。
 	if stem, ok := SplitTimberjackRotationCopy(core); ok && stem != "" {
 		return stem, true
 	}
-	base, ok := strings.CutSuffix(core, ".log")
-	if !ok || base == "" || strings.Contains(base, ".") {
-		return "", false
-	}
-	return base, true
+	return ruleLogBodyOfCore(core)
 }
 
 // ruleLogFileBody 还原文件名的整段主体（encodeFileComponent 的**编码形态**，
 // 与 lb_rules.caddy_id 经 encodeFileComponent 一一对应，可直接比对）：剥压缩
-// 后缀与移位代次后取 .log 前段——与 ruleLogComponentOf 的前半段同变换，但
+// 后缀与移位代次后取 .log 前段——与 ruleLogComponentOf 共用前半段变换，但
 // **不做** timberjack 尾剥离。删除侧「类副本 ID 规则」的删除面用它把
 // <主体>.log[.<n>][.gz|.zst] 整族认领回来（剥尾主体落在存活前缀上，owner
 // 比对不到待删规则本身）。
 func ruleLogFileBody(name string) (string, bool) {
+	return ruleLogBodyOfCore(stripCompressionAndShift(name))
+}
+
+// stripCompressionAndShift 剥压缩后缀（.gz/.zst）与移位代次段（.log.<n>），
+// ruleLogComponentOf/ruleLogFileBody 的前半段变换单源（此前逐字重复，
+// 任一侧改口径另一侧静默漂移）。移位副本 <component>.log.<n>：只有剥掉
+// 数字段后仍以 .log 结尾才算，基名本身不含 '.'（encodeFileComponent 的产物
+// 只用 [A-Za-z0-9_-%]）。
+func stripCompressionAndShift(name string) string {
 	core := name
 	for _, suffix := range []string{".gz", ".zst"} {
 		core = strings.TrimSuffix(core, suffix)
@@ -736,11 +731,16 @@ func ruleLogFileBody(name string) (string, bool) {
 			core = trimmed
 		}
 	}
-	stem, ok := strings.CutSuffix(core, ".log")
-	if !ok || stem == "" || strings.Contains(stem, ".") {
+	return core
+}
+
+// ruleLogBodyOfCore 取 .log 前段主体；非 .log 结尾/空主体/含 '.' 一律不认领。
+func ruleLogBodyOfCore(core string) (string, bool) {
+	base, ok := strings.CutSuffix(core, ".log")
+	if !ok || base == "" || strings.Contains(base, ".") {
 		return "", false
 	}
-	return stem, true
+	return base, true
 }
 
 // ruleLogAllDigits 报告 s 是否全部为 ASCII 数字（非空）。

@@ -22,6 +22,14 @@ import (
 	"lazy-balancer-v2/internal/services"
 )
 
+// enableTLSEnabledSQLPredicate 是 lb_rules「启用 TLS」的 SQL 判定单源
+// （IIF 归一，与 services.UpstreamEnabledSQLPredicate 同族）：ACME 写守卫族
+// （批量签发候选/重试入队 CAS/部署重排守卫/删除守卫/删除失败恢复重入队）
+// 共用，禁止第二份裸 enable_tls=1 字面量。NULL 归一为 0（明文），'1'/1 归一
+// 为 1——lb_rules.enable_tls 为 NUMERIC 亲和，库内形态恒 INTEGER，本谓词
+// 与全仓读侧口径对齐。
+const enableTLSEnabledSQLPredicate = `IIF(enable_tls IN ('1',1),1,0)=1`
+
 var certJobOperationLocks [64]sync.Mutex
 
 // retryCertJobPreEnqueueHook 是测试专用钩子：在 SELECT 状态之后、EnqueueIfActive
@@ -557,7 +565,7 @@ func (h *Handlers) retryCertJobByID(c *gin.Context, id int) {
 			SET status='queued', message='重新排队签发', renewal_attempts=0, ca_available_after=NULL, last_error_code=NULL, updated_at=datetime('now')
 			WHERE id=? AND status=? AND EXISTS (
 				SELECT 1 FROM lb_rules
-				WHERE caddy_id=? AND enabled=1 AND enable_tls=1 AND tls_source='acme_dns' AND lower(replace(domain,' ','')) IN (?,?)
+				WHERE caddy_id=? AND enabled=1 AND `+enableTLSEnabledSQLPredicate+` AND tls_source='acme_dns' AND lower(replace(domain,' ','')) IN (?,?)
 			)`, id, status, ruleID, domain, reversedDomain)
 		if err != nil {
 			return id, false, err
@@ -575,7 +583,7 @@ func (h *Handlers) retryCertJobByID(c *gin.Context, id int) {
 		return
 	}
 	if !changed {
-		// SELECT(:254) 与 UPDATE 之间状态可能被 worker 流转（如 failed→creating_account），
+		// retryCertJobByID 的任务状态 SELECT 与 UPDATE 之间状态可能被 worker 流转（如 failed→creating_account），
 		// 导致 0 行影响；此时归因是并发竞争而非规则禁用，重读当前状态区分文案。
 		var currentStatus string
 		scanErr := db.DB.QueryRow("SELECT status FROM cert_jobs WHERE id=?", id).Scan(&currentStatus)
@@ -675,7 +683,7 @@ func markDownloadedCertJobDeploymentPending(id int, ruleID, domain string) (bool
 		  AND ` + services.CertJobMaterialPredicateSQL("") + `
 		  AND EXISTS (
 			SELECT 1 FROM lb_rules
-			WHERE caddy_id=? AND enabled=1 AND enable_tls=1 AND tls_source='acme_dns' AND lower(replace(domain,' ','')) IN (?,?)
+			WHERE caddy_id=? AND enabled=1 AND ` + enableTLSEnabledSQLPredicate + ` AND tls_source='acme_dns' AND lower(replace(domain,' ','')) IN (?,?)
 		  )`,
 		WhereArgs: []any{ruleID, domain, reversedDomain},
 	})
@@ -902,7 +910,7 @@ func (h *Handlers) DeleteCertJob(c *gin.Context) {
 	if guarded, message := certJobDeleteGuard(status); guarded {
 		var active int
 		if err := db.DB.QueryRow(`SELECT COUNT(1) FROM lb_rules
-			WHERE caddy_id=? AND enabled=1 AND enable_tls=1 AND tls_source='acme_dns'
+			WHERE caddy_id=? AND enabled=1 AND `+enableTLSEnabledSQLPredicate+` AND tls_source='acme_dns'
 			  AND lower(replace(domain,' ','')) IN (?,?)`,
 			ruleID, domain, reversedCertJobDomain(domain)).Scan(&active); err != nil {
 			releaseCaddyOp()
@@ -1053,7 +1061,7 @@ func (h *Handlers) DeleteCertJob(c *gin.Context) {
 					// 刻意无 ctx 豁免：④队列 worker 语境（见上方标记注释）。
 					updateResult, updateErr := db.DB.Exec(`UPDATE cert_jobs SET status='queued', message='删除失败，重新排队签发', updated_at=datetime('now')
 						WHERE id=? AND status='disabled' AND EXISTS (
-							SELECT 1 FROM lb_rules WHERE caddy_id=? AND enabled=1 AND enable_tls=1 AND tls_source='acme_dns' AND lower(replace(domain,' ','')) IN (?,?)
+							SELECT 1 FROM lb_rules WHERE caddy_id=? AND enabled=1 AND `+enableTLSEnabledSQLPredicate+` AND tls_source='acme_dns' AND lower(replace(domain,' ','')) IN (?,?)
 						)`, id, ruleID, domain, reversedCertJobDomain(domain))
 					if updateErr != nil {
 						return id, false, updateErr

@@ -332,91 +332,55 @@ func securityEventsRetentionCleanup(ctx context.Context) (SecurityEventsRetentio
 		rollupDays = 31
 	}
 	rollupCutoff := time.Now().UTC().AddDate(0, 0, -rollupDays).Format("2006-01-02 15:04")
-	for {
-		res, err := database.Exec(`DELETE FROM security_event_rollup WHERE minute < ? AND minute IN (
-			SELECT minute FROM security_event_rollup WHERE minute < ? GROUP BY minute ORDER BY minute LIMIT 60)`, rollupCutoff, rollupCutoff)
-		if err != nil {
-			Logf("warn", "security events retention: rollup cleanup failed: %v", err)
-			return result, err
-		}
-		affected, _ := res.RowsAffected()
-		result.Rollup += int(affected)
-		if affected == 0 {
-			break
-		}
-		select {
-		case <-ctx.Done():
-			Logf("info", "security events retention: rollup cleanup canceled mid-pass (deleted %d)", result.Rollup)
-			return result, nil
-		case <-time.After(10 * time.Millisecond):
-		}
+	deleted, err := trimRollupTable(ctx, database, "security_event_rollup", rollupCutoff)
+	if err != nil {
+		Logf("warn", "security events retention: rollup cleanup failed: %v", err)
+		return result, err
+	}
+	result.Rollup += deleted
+	if ctx.Err() != nil {
+		Logf("info", "security events retention: rollup cleanup canceled mid-pass (deleted %d)", result.Rollup)
+		return result, nil
 	}
 	if result.Rollup > 0 {
 		Logf("info", "security events retention: rollup cleanup removed %d rows older than %s", result.Rollup, rollupCutoff)
 	}
 	// 目标维度 rollup 与主 rollup 同生命周期——同批次/
 	// 同保留下界清理，否则 top_targets 投影无限增长。
-	for {
-		res, err := database.Exec(`DELETE FROM security_event_target_rollup WHERE minute < ? AND minute IN (
-			SELECT minute FROM security_event_target_rollup WHERE minute < ? GROUP BY minute ORDER BY minute LIMIT 60)`, rollupCutoff, rollupCutoff)
-		if err != nil {
-			Logf("warn", "security events retention: target rollup cleanup failed: %v", err)
-			return result, err
-		}
-		affected, _ := res.RowsAffected()
-		result.TargetRollup += int(affected)
-		if affected == 0 {
-			break
-		}
-		select {
-		case <-ctx.Done():
-			Logf("info", "security events retention: target rollup cleanup canceled mid-pass (deleted %d)", result.TargetRollup)
-			return result, nil
-		case <-time.After(10 * time.Millisecond):
-		}
+	deleted, err = trimRollupTable(ctx, database, "security_event_target_rollup", rollupCutoff)
+	if err != nil {
+		Logf("warn", "security events retention: target rollup cleanup failed: %v", err)
+		return result, err
+	}
+	result.TargetRollup += deleted
+	if ctx.Err() != nil {
+		Logf("info", "security events retention: target rollup cleanup canceled mid-pass (deleted %d)", result.TargetRollup)
+		return result, nil
 	}
 	if result.TargetRollup > 0 {
 		Logf("info", "security events retention: target rollup cleanup removed %d rows older than %s", result.TargetRollup, rollupCutoff)
 	}
 	// 总览预聚合（IP/规则维度，方案2）与主 rollup 同生命周期——同 cutoff
 	// 同批清理，否则总览读侧投影无限增长。
-	for {
-		res, err := database.Exec(`DELETE FROM security_event_ip_rollup WHERE minute < ? AND minute IN (
-			SELECT minute FROM security_event_ip_rollup WHERE minute < ? GROUP BY minute ORDER BY minute LIMIT 60)`, rollupCutoff, rollupCutoff)
-		if err != nil {
-			Logf("warn", "security events retention: overview ip rollup cleanup failed: %v", err)
-			return result, err
-		}
-		affected, _ := res.RowsAffected()
-		result.OverviewRollup += int(affected)
-		if affected == 0 {
-			break
-		}
-		select {
-		case <-ctx.Done():
-			Logf("info", "security events retention: overview ip rollup cleanup canceled mid-pass (deleted %d)", result.OverviewRollup)
-			return result, nil
-		case <-time.After(10 * time.Millisecond):
-		}
+	deleted, err = trimRollupTable(ctx, database, "security_event_ip_rollup", rollupCutoff)
+	if err != nil {
+		Logf("warn", "security events retention: overview ip rollup cleanup failed: %v", err)
+		return result, err
 	}
-	for {
-		res, err := database.Exec(`DELETE FROM security_event_rule_rollup WHERE minute < ? AND minute IN (
-			SELECT minute FROM security_event_rule_rollup WHERE minute < ? GROUP BY minute ORDER BY minute LIMIT 60)`, rollupCutoff, rollupCutoff)
-		if err != nil {
-			Logf("warn", "security events retention: overview rule rollup cleanup failed: %v", err)
-			return result, err
-		}
-		affected, _ := res.RowsAffected()
-		result.OverviewRollup += int(affected)
-		if affected == 0 {
-			break
-		}
-		select {
-		case <-ctx.Done():
-			Logf("info", "security events retention: overview rule rollup cleanup canceled mid-pass (deleted %d)", result.OverviewRollup)
-			return result, nil
-		case <-time.After(10 * time.Millisecond):
-		}
+	result.OverviewRollup += deleted
+	if ctx.Err() != nil {
+		Logf("info", "security events retention: overview ip rollup cleanup canceled mid-pass (deleted %d)", result.OverviewRollup)
+		return result, nil
+	}
+	deleted, err = trimRollupTable(ctx, database, "security_event_rule_rollup", rollupCutoff)
+	if err != nil {
+		Logf("warn", "security events retention: overview rule rollup cleanup failed: %v", err)
+		return result, err
+	}
+	result.OverviewRollup += deleted
+	if ctx.Err() != nil {
+		Logf("info", "security events retention: overview rule rollup cleanup canceled mid-pass (deleted %d)", result.OverviewRollup)
+		return result, nil
 	}
 	if result.OverviewRollup > 0 {
 		Logf("info", "security events retention: overview rollup cleanup removed %d rows older than %s", result.OverviewRollup, rollupCutoff)
@@ -460,6 +424,33 @@ func securityEventsRetentionCleanup(ctx context.Context) (SecurityEventsRetentio
 		securityEventsCheckpointWALIfDue(database, time.Now())
 	}
 	return result, nil
+}
+
+// trimRollupTable 按分钟分批删除一张 rollup 表的过期行（四张分钟聚合表
+// 共用单源：主 rollup/目标维度/总览 IP/总览规则——同 cutoff、每批 60 个
+// 分钟组、批间让写锁并响应 ctx）。table 只接受本文件内的编译期字面量表名。
+// 返回已删行数；ctx 取消时返回已删部分与 nil（调用方按「中途取消」收尾，
+// 与逐表循环时代的语义一致）。
+func trimRollupTable(ctx context.Context, database *sql.DB, table, cutoff string) (int, error) {
+	query := `DELETE FROM ` + table + ` WHERE minute < ? AND minute IN (
+			SELECT minute FROM ` + table + ` WHERE minute < ? GROUP BY minute ORDER BY minute LIMIT 60)`
+	deleted := 0
+	for {
+		res, err := database.Exec(query, cutoff, cutoff)
+		if err != nil {
+			return deleted, err
+		}
+		affected, _ := res.RowsAffected()
+		deleted += int(affected)
+		if affected == 0 {
+			return deleted, nil
+		}
+		select {
+		case <-ctx.Done():
+			return deleted, nil
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
 }
 
 // securityEventsWalCheckpointMinInterval 是 WAL TRUNCATE 检查点的最小间隔

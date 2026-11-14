@@ -21,7 +21,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readdirSync, readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
-import { code } from './_helpers.ts'
+import { code, matchBrace } from './_helpers.ts'
 
 import { AUDIT_ACTION_KEYS, AUDIT_RESOURCE_KEYS, auditActionLabel, auditResourceLabel } from '../src/utils/auditVocabulary.ts'
 import zhCommon from '../src/locales/zh/common.ts'
@@ -91,10 +91,16 @@ function extractLiteralPairs(goFiles: ReadonlyMap<string, string>): LiteralPair[
   return pairs
 }
 
-// FormatAuditAction（中间件 Generic 三条：caddy start/stop/restart）
+// FormatAuditAction（中间件 Generic 三条：caddy start/stop/restart）。
+// 先取函数体再提取：全文件跑正则会把其它函数的 return 词对误计入扫描面。
 function extractFormatAuditActionPairs(src: string): LiteralPair[] {
+  const at = src.indexOf('func FormatAuditAction(')
+  if (at < 0) throw new Error('FormatAuditAction 声明缺失（扫描面失效）')
+  const open = src.indexOf('{', at)
+  const close = matchBrace(src, open)
+  if (open < 0 || close < 0) throw new Error('FormatAuditAction 函数体花括号不平衡')
   const pairs: LiteralPair[] = []
-  for (const m of src.matchAll(/return\s+"([^"]+)",\s*"([^"]+)"/g)) {
+  for (const m of src.slice(open, close + 1).matchAll(/return\s+"([^"]+)",\s*"([^"]+)"/g)) {
     pairs.push({ action: m[1], resource: m[2], file: 'internal/services/auditlog.go#FormatAuditAction' })
   }
   return pairs
@@ -105,7 +111,7 @@ const walkGo = (dir: string): void => {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const full = `${dir}/${entry.name}`
     if (entry.isDirectory()) {
-      if (entry.name === 'waf-slave' || entry.name.startsWith('.')) continue
+      if (entry.name.startsWith('.')) continue
       walkGo(full)
     } else if (entry.name.endsWith('.go') && !entry.name.endsWith('_test.go')) {
       goFiles.set(full.replace(`${repoRoot}`, ''), readFileSync(full, 'utf-8'))

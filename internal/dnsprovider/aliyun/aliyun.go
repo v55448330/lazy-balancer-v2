@@ -4,9 +4,10 @@
 // AccessKey 对（授权 AliyunDNSFullAccess）。
 //
 // cleanUp 与 internal/dnsprovider/dnspod/dnspod.go、
-// internal/dnsprovider/tencent/tencent.go 是同构多实现（有意保留——底层 API
-// 与记录 ID 类型不同）。任一侧修改删除/留痕/兜底排空逻辑时，MUST 同步其他
-// 侧并保持语义一致（对齐门禁见 cleanup_parity_test.go）。
+// internal/dnsprovider/tencent/tencent.go、internal/dnsprovider/cloudflare/
+// cloudflare.go 是同构多实现（有意保留——底层 API 与记录 ID 类型不同）。
+// 任一侧修改删除/留痕/兜底排空/残余排空逻辑时，MUST 同步全部实现并保持语义
+// 一致（对齐门禁见 internal/dnsprovider/cleanup_parity_test.go）。
 package aliyun
 
 import (
@@ -79,17 +80,19 @@ type ownedRecord struct {
 	value    string
 }
 
-// Provider implements dnsprovider.Provider for Alibaba Cloud DNS.
+// userAgent 默认值与 SetUserAgent 装配接缝（镜像 cloudflare/dnspod/tencent
+// 同款接缝）：main 启动早期注入 config.Version，UA 与 APP_VERSION 同源。
 var userAgent = "lazy-balancer/2.0"
 
 // SetUserAgent 装配出网 UA 的版本段（main 启动早期调用；空串忽略）——镜像
-// cloudflare/dnspod 侧同款接缝，UA 与 APP_VERSION 同源。
+// cloudflare/dnspod/tencent 侧同款接缝，UA 与 APP_VERSION 同源。
 func SetUserAgent(v string) {
 	if v != "" {
 		userAgent = "lazy-balancer/" + v
 	}
 }
 
+// Provider implements dnsprovider.Provider for Alibaba Cloud DNS.
 type Provider struct {
 	// accessKeyID/accessKeySecret 凭据保持私有（与 dnspod/tencent 同口径）——
 	// 导出字段任何一次 %+v/JSON 序列化即泄密。生产读取全部是包内直读（构造
@@ -234,8 +237,8 @@ func (p *Provider) CountCleanupRecords(zone, tokenFQDN, value string) int {
 
 // cleanUp 是 CleanUp/CleanUpValue 的共享实现（按值定向删除+陈旧条目清理）。
 //
-// 本函数与 dnspod/tencent 的 cleanUp 是同构多实现（有意保留，见包注释）。
-// aliyun 侧的额外能力是 provider 侧残余排空：账本与内存兜底表全部未命中时，
+// 本函数与 dnspod/tencent/cloudflare 的 cleanUp 是同构多实现（有意保留，见
+// 包注释）。provider 侧残余排空为四家共有能力：账本与内存兜底表全部未命中时，
 // TXT 仍可能存在于 provider（账本条目退役/丢失、旧版本遗留），按 RR 精确匹配
 // + 按值过滤枚举并删除——ID 不来自账本，无「换账户后 ID 指向无关记录」风险，
 // 但命中过账本候选的清理不做网络枚举（正常路径零额外往返）。
@@ -354,7 +357,7 @@ func (p *Provider) cleanUp(ctx context.Context, zone, tokenFQDN, value string, b
 		p.owned[key] = append(p.owned[key], failed...)
 		p.mu.Unlock()
 	}
-	// provider 侧残余排空（aliyun 专属，见函数注释）：账本候选、内存兜底、
+	// provider 侧残余排空（与 dnspod/tencent/cloudflare 侧同构，见函数注释）：账本候选、内存兜底、
 	// 排空条目全部为空才触发——有任一候选即说明追踪链路仍在，残余排空只会
 	// 平添网络往返。ctx 已取消时不再发起枚举。
 	if len(records) == 0 && len(memorySelected) == 0 && attempted == 0 && ctx.Err() == nil {

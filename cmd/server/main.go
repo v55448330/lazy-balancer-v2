@@ -413,13 +413,7 @@ func run() error {
 		// StopTaskEngine 的 30s 默认——30s 本身已超 compose stop_grace_period。
 		// 安全事件 IPC 入库服务先于引擎/数据库收尾：关停后写侧按连接失败回退
 		// spool（补采在下次启动/引擎运行期完成），不得在 db.Close 后仍写库。
-		runWithin("安全事件 IPC 关停", shutdown.segment(ipcStopSegmentMax), func() {
-			ctx, cancel := context.WithTimeout(context.Background(), ipcStopSegmentMax)
-			defer cancel()
-			if err := securityEventsIPC.Stop(ctx); err != nil {
-				services.Logf("warn", "安全事件 IPC 服务关停未在预算内完成（进程继续退出）: %v", err)
-			}
-		})
+		stopSecurityEventsIPCWithin(securityEventsIPC, shutdown)
 		stopTaskEngineWithin(shutdown) // M2:引擎统一收尾(摄取/看门狗/清理/生命周期 daemon)
 		// 证书 worker 的等待有界（此前 Stop 自身无界阻塞、超时 select 不可达）。
 		lifecycle.ShutdownWithTimeout(shutdown.segment(acmeStopSegmentMax))
@@ -694,6 +688,29 @@ func stopTaskEngineWithin(b *shutdownBudget) {
 		return
 	}
 	awaitChannelWithin("任务引擎全局句柄清理", done, wait)
+}
+
+// ipcStopContext 派生安全事件 IPC 关停内层 Stop 的 ctx（预算派生段）。
+// 包级变量是测试注入缝（与 trafficNowUnix/securityTimingRandRead 同形）：
+// 测试捕获 ctx 断言其 deadline 跟随剩余预算而非固定段上限；生产恒为
+// context.WithTimeout。
+var ipcStopContext = func(d time.Duration) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), d)
+}
+
+// stopSecurityEventsIPCWithin 安全事件 IPC 服务按关停预算有界关停：外层
+// runWithin 与内层 Stop ctx 共用同一预算派生段——内层此前固定
+// ipcStopSegmentMax，HTTP/排水段吃满预算后仍会按 500ms 等待在途入库，
+// 超出共享 deadline。Stop 在 ctx 预算内未完成即返回错误（socket 文件仍
+// 移除），外层按同一预算放弃等待，进程继续退出。
+func stopSecurityEventsIPCWithin(ipc *handlers.SecurityEventsIPCServer, b *shutdownBudget) {
+	runWithin("安全事件 IPC 关停", b.segment(ipcStopSegmentMax), func() {
+		ctx, cancel := ipcStopContext(b.segment(ipcStopSegmentMax))
+		defer cancel()
+		if err := ipc.Stop(ctx); err != nil {
+			services.Logf("warn", "安全事件 IPC 服务关停未在预算内完成（进程继续退出）: %v", err)
+		}
+	})
 }
 
 // runWithin 关停期的有界单次调用：fn 放进 goroutine，等待由预算派生；超时

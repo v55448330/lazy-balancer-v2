@@ -2,7 +2,6 @@ package middleware
 
 import (
 	"crypto/sha256"
-	"database/sql"
 	"encoding/hex"
 	"net"
 	"net/http"
@@ -19,18 +18,7 @@ import (
 // 三把 Key 分别覆盖白名单 JSON 畸形、CIDR 越界（/33）与合法 CIDR。
 func newAPIKeyWhitelistFixture(t *testing.T) func(apiKey string) *httptest.ResponseRecorder {
 	t.Helper()
-	oldDB := db.DB
-	database, err := sql.Open("sqlite", t.TempDir()+"/test.db")
-	if err != nil {
-		t.Fatal(err)
-	}
-	db.DB = database
-	db.SetDB(database)
-	t.Cleanup(func() {
-		db.DB = oldDB
-		db.SetDB(oldDB)
-		database.Close()
-	})
+	database := newIsolatedTestDB(t)
 	if _, err := database.Exec(`CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT, role TEXT, is_enabled BOOLEAN);
 		CREATE TABLE api_keys (id INTEGER PRIMARY KEY, name TEXT, key_hash TEXT, key_prefix TEXT, created_by INTEGER, last_used DATETIME, expires_at DATETIME, is_enabled BOOLEAN, mcp_enabled BOOLEAN, read_only BOOLEAN, mcp_ip_whitelist TEXT);
 		INSERT INTO users VALUES (1,'whitelist-user','user',1);`); err != nil {

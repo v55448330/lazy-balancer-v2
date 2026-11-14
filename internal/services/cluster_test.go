@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -672,12 +673,14 @@ func TestClusterService_Promote_removes_old_master_pin_and_audits(t *testing.T) 
 	if _, err := os.Stat(pinPath); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("pin stat error=%v, want not exist", err)
 	}
-	var action, detail string
-	if err := db.AuditDB.QueryRow("SELECT action,detail FROM audit_log ORDER BY id DESC LIMIT 1").Scan(&action, &detail); err != nil {
+	// 按 action 过滤取 pin 清理审计：Promote 尾段还有「提升完成」等审计，
+	// 「最后一行」依赖写入时序，并发收尾行会顶掉目标行造成假红。
+	var detail string
+	if err := db.AuditDB.QueryRow("SELECT detail FROM audit_log WHERE action='清理' ORDER BY id DESC LIMIT 1").Scan(&detail); err != nil {
 		t.Fatal(err)
 	}
-	if action != "清理" || !strings.Contains(detail, masterURL) {
-		t.Fatalf("audit action=%q detail=%q", action, detail)
+	if !strings.Contains(detail, masterURL) {
+		t.Fatalf("cleanup audit detail=%q, want 含旧主节点地址 %q", detail, masterURL)
 	}
 }
 
@@ -1086,7 +1089,7 @@ func TestSyncService_restart_callback_runs_when_synced_admin_TLS_changes(t *test
 	// Then
 	select {
 	case <-restarted:
-	default:
+	case <-time.After(time.Second):
 		t.Fatal("restart callback was not invoked")
 	}
 }
@@ -1137,9 +1140,7 @@ func TestSyncService_Report_sends_status_with_space_format_last_sync(t *testing.
 	master := httptest.NewTLSServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		gotAuth = request.Header.Get("X-Cluster-Token")
 		if request.Body != nil {
-			buf := make([]byte, 4096)
-			n, _ := request.Body.Read(buf)
-			gotBody = buf[:n]
+			gotBody, _ = io.ReadAll(request.Body)
 		}
 		response.Header().Set("Content-Type", "application/json")
 		_, _ = response.Write([]byte(`{"code":0,"message":"ok"}`))

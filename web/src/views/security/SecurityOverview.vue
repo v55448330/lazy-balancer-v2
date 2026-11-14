@@ -66,8 +66,9 @@
             <div class="strip-label">{{ t('app.security.overview.status.detected') }}</div>
             <div class="strip-value is-warning">{{ fmtStatNum(overview.today_detected) }}</div>
             <div v-if="yesterdayDetected !== null" class="strip-sub"><span class="strip-sub-label">{{ t('app.security.overview.status.yesterday') }}</span> {{ fmtStatNum(yesterdayDetected) }}</div>
-            <!-- 协议拆分：TCP 检测来自信任检测（trust_detect） logged 事件——可能产生数据就如实显示；
-                 字段缺失（旧后端）整行隐藏。HTTP = 合计 − TCP（负值钳 0） -->
+            <!-- 协议拆分：TCP 检测来自信任检测（trust_detect）logged 事件——可能产生数据就如实显示；
+                 字段缺失（旧后端）整行隐藏。HTTP 份额 = today_detected 自身（攻击口径不含 trust，
+                 不得按 合计−TCP 推导，后端契约已明示） -->
             <div v-if="todayDetectedSplit" class="strip-sub">
               <span class="proto-split-item"><i class="proto-dot proto-dot--http"></i><span class="proto-split-label">HTTP</span><span class="strip-sub-num">{{ fmtStatNum(todayDetectedSplit.http) }}</span></span><span class="proto-split-item proto-split-item--tcp"><i class="proto-dot proto-dot--tcp"></i><span class="proto-split-label">TCP</span><span class="strip-sub-num">{{ fmtStatNum(todayDetectedSplit.tcp) }}</span></span>
             </div>
@@ -469,7 +470,8 @@ interface Overview {
   // 今日拦截的 TCP（L4 断连）份额：旧后端缺失 → 协议拆分行整行隐藏（防御式）。
   // 原始表直算（不走 rollup——rollup 无 event_type 维度），极端量级下行帽裁剪可能少计。
   today_blocked_tcp?: number
-  // 今日检测的 TCP（L4 信任检测 logged）份额：语义同 today_blocked_tcp（防御旧后端）。
+  // 今日检测的 TCP（L4 信任检测 logged→trust 升格）份额：可见性拆分列，不计入
+  // 攻击口径 today_detected（trust 整类排除）——HTTP 份额以 today_detected 自身为准。
   today_detected_tcp?: number
   // includes_reserved：后端口径披露——true=今日计数回退原始表直算（含私网/保留
   // 地址事件）；false=走分钟 rollup 与大屏同口径（不含私网）。tooltip 按此切换文案
@@ -510,13 +512,14 @@ const todayBlockedSplit = computed<{ http: number; tcp: number } | null>(() => {
   return { http: Math.max(0, overview.value.today_blocked - tcp), tcp }
 })
 
-// today_detected 是全协议合计（含 TCP 信任检测 logged），HTTP = 合计 − TCP
-//（负值钳 0）；字段存在即显示（TCP=0 也显示——可能产生数据就如实显示），
-// 缺失=旧后端隐藏
+// today_detected 是攻击口径合计（trust 整类排除），today_detected_tcp 是独立的
+// TCP 信任检测可见性拆分——不计入合计，HTTP 份额不得按 合计−TCP 推导（会得到
+// 负值/错值），HTTP = today_detected 自身（后端 models.SecurityOverview 契约）。
+// TCP 字段存在即显示（TCP=0 也显示——可能产生数据就如实显示），缺失=旧后端隐藏。
 const todayDetectedSplit = computed<{ http: number; tcp: number } | null>(() => {
   const tcp = overview.value.today_detected_tcp
   if (typeof tcp !== 'number' || !Number.isFinite(tcp)) return null
-  return { http: Math.max(0, overview.value.today_detected - tcp), tcp }
+  return { http: overview.value.today_detected, tcp }
 })
 
 // 昨日对比行共用门（三列 lockstep）：数值字段缺失/非有限数 → null（行隐藏，防御旧后端）

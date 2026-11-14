@@ -20,8 +20,10 @@ import (
 
 func TestRenderBlockPageShell_usesSquareCornersForAllBuiltinPages(t *testing.T) {
 	cfg := brandingConfig{AppName: "Acme"}
-	for _, variant := range []string{"default", "ratelimit", "maintenance"} {
-		page := renderBlockPageShell(cfg, blockPageSpecs[variant])
+	// 遍历规格全集（含 human/human_js）：新增内置页变体自动纳入直角钉测，
+	// 硬编码变体清单曾漏掉人机验证两页。
+	for variant, spec := range blockPageSpecs {
+		page := renderBlockPageShell(cfg, spec)
 		for _, rounded := range []string{
 			"border-radius: 22px", "border-radius: 24px", "border-radius: 32px",
 			"border-radius: 999px", "border-radius: 0 0 4px 4px",

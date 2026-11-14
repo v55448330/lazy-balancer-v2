@@ -77,3 +77,48 @@ func TestInitialize_migratesAutobanScopeMultiselect(t *testing.T) {
 		t.Fatalf("二次迁移不得触碰运行期写值，scope=%q", scope)
 	}
 }
+
+// 启动序钉测：旧单值 scope 必须先经一次性映射（读 count_human_failed 开关）
+// 再经 defaultUpdates 的非法值收敛——顺序颠倒时 'all' 在映射读取前就被复位成
+// 默认全选，count_human_failed 开关语义丢失（用户显式口径被静默改写）。
+func TestRunMigrations_legacyAutobanScopeMappedBeforeDefaults(t *testing.T) {
+	database := openMigrationTestDB(t)
+	if err := createTables(); err != nil {
+		t.Fatalf("create tables: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO global_config (id, caddy_config) VALUES (1, '{}')`); err != nil {
+		t.Fatalf("seed global config singleton: %v", err)
+	}
+	if err := ensureNewColumns(newColumnsRegistry, nil); err != nil {
+		t.Fatalf("ensure columns: %v", err)
+	}
+	// 模拟存量旧形态：单值 all + 开关开 + marker 未置位 + 旧列在场。
+	if _, err := database.Exec(`ALTER TABLE global_config ADD COLUMN autoban_count_human_failed BOOLEAN NOT NULL DEFAULT FALSE`); err != nil {
+		t.Fatalf("re-add legacy column: %v", err)
+	}
+	if _, err := database.Exec(`UPDATE global_config SET autoban_scope='all', autoban_count_human_failed=1, autoban_scope_multiselect_v1=0 WHERE id=1`); err != nil {
+		t.Fatalf("seed legacy scope: %v", err)
+	}
+
+	// When：完整启动迁移链（映射必须发生在 defaultUpdates 之前）。
+	if err := runMigrations(); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	// Then：映射按开关落三维集合，而不是被默认回填抢先改写为四维全选。
+	var scope string
+	var marker int
+	if err := database.QueryRow(`SELECT autoban_scope, autoban_scope_multiselect_v1 FROM global_config WHERE id=1`).Scan(&scope, &marker); err != nil {
+		t.Fatal(err)
+	}
+	if scope != "blocked,logged,challenge_failed" || marker != 1 {
+		t.Fatalf("启动迁移后 scope=%q marker=%d, want blocked,logged,challenge_failed / 1（旧单值映射必须先于默认回填）", scope, marker)
+	}
+	var colCount int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('global_config') WHERE name='autoban_count_human_failed'`).Scan(&colCount); err != nil {
+		t.Fatal(err)
+	}
+	if colCount != 0 {
+		t.Fatal("退役列 autoban_count_human_failed 必须被删除")
+	}
+}

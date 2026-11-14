@@ -6,7 +6,8 @@ package handlers
 // 的行不覆盖；残留任务会被续签扫描/任务列表当作活任务（与续签扫描口径
 // `enable_tls=1 AND tls_source='acme_dns'` 相悖；禁用但 acme 态的规则任务行保留
 // （DisableRule 再启用续期语义，cert_jobs 无补建路径——主审裁定收窄）。
-// 修复=导入后追加同谓词清理（v2 导入事务 + v1 协调器后处理两处同语句）。
+// 修复=导入后追加同谓词清理（coordinator 单点 collectPostCommitCleanup，
+// v1/v2 共用；「启用 TLS」判定走 enableTLSEnabledSQLPredicate 单源）。
 
 import (
 	"encoding/json"

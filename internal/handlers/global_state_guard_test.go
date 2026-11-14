@@ -201,8 +201,16 @@ func captureHandlerGlobalSeams() map[string]any {
 		"jwtJTIReader":      handlerGlobalPointer(jwtJTIReader),
 		// 审计下拉聚合缝。
 		"auditOptionsFetch": handlerGlobalPointer(auditOptionsFetch),
-		// 自动备份落盘缝。
-		"autoBackupWriteFile": handlerGlobalPointer(autoBackupWriteFile),
+		// 自助改密乐观守卫竞态注入缝。
+		"updateUserPasswordRaceHook": handlerGlobalPointer(updateUserPasswordRaceHook),
+		// OIDC JIT 开户唯一冲突重试注入缝。
+		"oidcJITInsertAttemptHook": handlerGlobalPointer(oidcJITInsertAttemptHook),
+		// 自动备份「读取备份范围」窗口取消注入缝。
+		"autoBackupBeforeSectionsReadHook": handlerGlobalPointer(autoBackupBeforeSectionsReadHook),
+		// 品牌热重载留痕锁序观测缝。
+		"brandingReloadAuditHook": handlerGlobalPointer(brandingReloadAuditHook),
+		// Caddy 日志 Stat/Read 增长窗口观测缝。
+		"caddyLogsStatHook": handlerGlobalPointer(caddyLogsStatHook),
 	}
 }
 

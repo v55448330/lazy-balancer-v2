@@ -50,13 +50,11 @@ func stallSetup(t *testing.T) (logPath, offsetPath string) {
 	return logPath, offsetPath
 }
 
+// stallEventCount 是 securityEventsRowCountForTest 的别名宿主（历史调用点
+// 保留）：行数口径单源在 securityevents_test.go，禁再手写同构查询。
 func stallEventCount(t *testing.T) int {
 	t.Helper()
-	var n int
-	if err := db.MetricsDB.QueryRow(`SELECT COUNT(*) FROM security_events`).Scan(&n); err != nil {
-		t.Fatal(err)
-	}
-	return n
+	return securityEventsRowCountForTest(t)
 }
 
 func stallHasEvent(t *testing.T, txID string) bool {

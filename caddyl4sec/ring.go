@@ -16,7 +16,6 @@ type l4Ring struct {
 	lens        []int    // 各槽有效长度
 	count       int      // 有效条目数（≤容量）
 	head        int      // 最旧条目位
-	write       int      // 下一写入位
 	overwritten uint64   // 满环覆写逐出的最旧事件累计（丢弃可观测）
 
 	// 容量/槽字节为构造期参数（测试经 newL4Ring 收窄），运行期不可变。
@@ -50,7 +49,7 @@ func (r *l4Ring) push(line []byte) (evicted uint64) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.count == r.capacity {
-		// 覆写最旧：head 即最旧位，写入位与其重合（环满时 write==head）。
+		// 覆写最旧：head 即最旧位，写入位与其重合（环满时 (head+count)%capacity==head）。
 		r.head = (r.head + 1) % r.capacity
 		r.count--
 		evicted = 1

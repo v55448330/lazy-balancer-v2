@@ -688,7 +688,6 @@ export default {
           "siteLocationPlaceholder": "Choose a province or country",
           "chinaProvincesGroup": "China provinces",
           "overseasGroup": "Other countries",
-          "siteCoord": "Lat {lat} · Lng {lng}",
           "siteLocationHint": "Coordinates of this site's beacon on the dashboard map; picking a province or country fills lat/lng automatically. Empty means unset — the map's visual center is used.",
           "visualMode": "Dashboard visual mode",
           "visualMap": "360° map · radar sweep",

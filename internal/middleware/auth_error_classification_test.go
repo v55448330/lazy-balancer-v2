@@ -73,18 +73,7 @@ func TestClusterAuthMiddlewares_recordAuthRejectionAudit(t *testing.T) {
 // API Key 认证必须区分「Key 无效」与基础设施故障——
 // DB 故障时返回 401「API 密钥无效」会诱导全站客户端重登且日志零线索。
 func TestAPIKeyAuth_mapsInfrastructureFailureTo500(t *testing.T) {
-	oldDB := db.DB
-	database, err := sql.Open("sqlite", t.TempDir()+"/apikey-failure.db")
-	if err != nil {
-		t.Fatal(err)
-	}
-	db.DB = database
-	db.SetDB(database)
-	t.Cleanup(func() {
-		db.DB = oldDB
-		db.SetDB(oldDB)
-		_ = database.Close()
-	})
+	database := newIsolatedTestDB(t)
 	if _, err := database.Exec(`CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT, role TEXT, is_enabled BOOLEAN);
 	CREATE TABLE api_keys (id INTEGER PRIMARY KEY, name TEXT, key_hash TEXT, key_prefix TEXT, created_by INTEGER,
 		last_used DATETIME, expires_at DATETIME, is_enabled BOOLEAN, mcp_enabled INTEGER, read_only INTEGER,

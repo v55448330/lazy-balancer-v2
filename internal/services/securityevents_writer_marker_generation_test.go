@@ -21,26 +21,13 @@ func isolationForWriterHealth(t *testing.T) {
 	// 侧车 written_at 是秒级 RFC3339：进程启动时刻回拨一分钟，避免「本代写入」
 	// 因秒截断被判成上一代（代际判定边界属于该判据自身的测试范围）。
 	securityEventsProcessStart = time.Now().Add(-time.Minute)
-	reset := func() {
-		securityEventsWriterHealth.mu.Lock()
-		securityEventsWriterHealth.baselineDropped = 0
-		securityEventsWriterHealth.baselineIO = 0
-		securityEventsWriterHealth.droppedTotal = 0
-		securityEventsWriterHealth.ioTotal = 0
-		securityEventsWriterHealth.window.start = time.Time{}
-		securityEventsWriterHealth.window.counter = 0
-		securityEventsWriterHealth.lastFailureAt = time.Time{}
-		securityEventsWriterHealth.sidecarReadFailures = 0
-		securityEventsWriterHealth.sidecarWriteFailureHits = 0
-		securityEventsWriterHealth.mu.Unlock()
-	}
-	reset()
 	t.Cleanup(func() {
 		auditLogPath = oldPath
 		securityEventsProcessStart = oldStart
-		reset()
 		SecurityEventsSetIngestionHealthForTest(SecurityEventsIngestionStatus{})
 	})
+	// 写侧计数/窗口/跳过累计的复位由 SecurityEventsSetIngestionHealthForTest
+	// 单源承载（健康位是一个整体）——手工逐字段 reset 与其完全重复，已删除。
 	SecurityEventsSetIngestionHealthForTest(SecurityEventsIngestionStatus{Observed: true, Healthy: true})
 }
 

@@ -1358,11 +1358,10 @@ func TestSyncService_Pull_refetchesFullSnapshotOnWafFileDrift(t *testing.T) {
 
 	// 主节点文件树：快照引用与文件包的真实来源。
 	masterTree := t.TempDir()
-	os.MkdirAll(filepath.Join(masterTree, "crs", "rules"), 0755)
-	os.WriteFile(filepath.Join(masterTree, "crs", "rules", "a.conf"), []byte("SecRule X 1"), 0644)
-	os.WriteFile(filepath.Join(masterTree, "crs", "VERSION"), []byte("v4.28.0"), 0644)
+	writeTestFile(t, filepath.Join(masterTree, "crs", "rules", "a.conf"), "SecRule X 1")
+	writeTestFile(t, filepath.Join(masterTree, "crs", "VERSION"), "v4.28.0")
 	masterXdb := filepath.Join(masterTree, "ip2region.xdb")
-	os.WriteFile(masterXdb, []byte("master-xdb-bytes"), 0644)
+	writeTestFile(t, masterXdb, "master-xdb-bytes")
 
 	t.Cleanup(OverrideWafLivePathsForTest(filepath.Join(masterTree, "crs"), masterXdb))
 	ref := BuildWafFileRef()
@@ -1370,7 +1369,6 @@ func TestSyncService_Pull_refetchesFullSnapshotOnWafFileDrift(t *testing.T) {
 	// 模拟 apply 期失败后的从节点：本地文件树为空（从未收敛）。
 	slaveTree := t.TempDir()
 	t.Cleanup(OverrideWafLivePathsForTest(filepath.Join(slaveTree, "crs"), filepath.Join(slaveTree, "ip2region.xdb")))
-	os.MkdirAll(crsLiveDir, 0755)
 	if ref == nil || bundle == nil {
 		t.Fatal("master ref/bundle must build")
 	}
@@ -1445,12 +1443,11 @@ func TestSyncService_Pull_convergesVersionTagOnlyWafDrift(t *testing.T) {
 	clusterSvc, database := newClusterTestService(t)
 
 	masterTree := t.TempDir()
-	os.MkdirAll(filepath.Join(masterTree, "crs", "rules"), 0755)
-	os.WriteFile(filepath.Join(masterTree, "crs", "rules", "a.conf"), []byte("SecRule X 1"), 0644)
-	os.WriteFile(filepath.Join(masterTree, "crs", "VERSION"), []byte("v4.28.0"), 0644)
+	writeTestFile(t, filepath.Join(masterTree, "crs", "rules", "a.conf"), "SecRule X 1")
+	writeTestFile(t, filepath.Join(masterTree, "crs", "VERSION"), "v4.28.0")
 	masterXdb := filepath.Join(masterTree, "ip2region.xdb")
-	os.WriteFile(masterXdb, []byte("same-xdb-bytes"), 0644)
-	os.WriteFile(masterXdb+".version", []byte("v3.17.0audit"), 0644)
+	writeTestFile(t, masterXdb, "same-xdb-bytes")
+	writeTestFile(t, masterXdb+".version", "v3.17.0audit")
 
 	t.Cleanup(OverrideWafLivePathsForTest(filepath.Join(masterTree, "crs"), masterXdb))
 	ref := BuildWafFileRef()
@@ -1459,11 +1456,10 @@ func TestSyncService_Pull_convergesVersionTagOnlyWafDrift(t *testing.T) {
 	// 从节点：内容与主节点完全一致（tar/xdb sha 相同），仅 .version 标签陈旧。
 	slaveTree := t.TempDir()
 	t.Cleanup(OverrideWafLivePathsForTest(filepath.Join(slaveTree, "crs"), filepath.Join(slaveTree, "ip2region.xdb")))
-	os.MkdirAll(filepath.Join(crsLiveDir, "rules"), 0755)
-	os.WriteFile(filepath.Join(crsLiveDir, "rules", "a.conf"), []byte("SecRule X 1"), 0644)
-	os.WriteFile(filepath.Join(crsLiveDir, "VERSION"), []byte("v4.28.0"), 0644)
-	os.WriteFile(ip2regionLivePath, []byte("same-xdb-bytes"), 0644)
-	os.WriteFile(ip2regionLivePath+".version", []byte("v3.16.0audit"), 0644)
+	writeTestFile(t, filepath.Join(crsLiveDir, "rules", "a.conf"), "SecRule X 1")
+	writeTestFile(t, filepath.Join(crsLiveDir, "VERSION"), "v4.28.0")
+	writeTestFile(t, ip2regionLivePath, "same-xdb-bytes")
+	writeTestFile(t, ip2regionLivePath+".version", "v3.16.0audit")
 	if ref == nil || bundle == nil || ref.IP2RegionTag != "v3.17.0audit" {
 		t.Fatalf("master ref=%+v bundle=%v, want tag v3.17.0audit", ref, bundle)
 	}
@@ -1572,11 +1568,10 @@ func TestSyncService_Pull_wafRepullPersistentFailureBackoffAndRecovery(t *testin
 
 	// 主节点文件树：快照引用与文件包的真实来源（与既有 WAF 漂移测试同口径）。
 	masterTree := t.TempDir()
-	os.MkdirAll(filepath.Join(masterTree, "crs", "rules"), 0755)
-	os.WriteFile(filepath.Join(masterTree, "crs", "rules", "a.conf"), []byte("SecRule X 1"), 0644)
-	os.WriteFile(filepath.Join(masterTree, "crs", "VERSION"), []byte("v4.28.0"), 0644)
+	writeTestFile(t, filepath.Join(masterTree, "crs", "rules", "a.conf"), "SecRule X 1")
+	writeTestFile(t, filepath.Join(masterTree, "crs", "VERSION"), "v4.28.0")
 	masterXdb := filepath.Join(masterTree, "ip2region.xdb")
-	os.WriteFile(masterXdb, []byte("master-xdb-bytes"), 0644)
+	writeTestFile(t, masterXdb, "master-xdb-bytes")
 
 	t.Cleanup(OverrideWafLivePathsForTest(filepath.Join(masterTree, "crs"), masterXdb))
 	// 安全节应用后置会重建爬虫运行快照（写进程级默认路径
@@ -1593,7 +1588,6 @@ func TestSyncService_Pull_wafRepullPersistentFailureBackoffAndRecovery(t *testin
 	// 从节点本地文件树为空（从未收敛），持续拉取失败期间保持分叉。
 	slaveTree := t.TempDir()
 	t.Cleanup(OverrideWafLivePathsForTest(filepath.Join(slaveTree, "crs"), filepath.Join(slaveTree, "ip2region.xdb")))
-	os.MkdirAll(crsLiveDir, 0755)
 	if ref == nil || bundle == nil {
 		t.Fatal("master ref/bundle must build")
 	}
@@ -2087,8 +2081,7 @@ func TestWafFilesDrifted_nullRefAppliedHashExempt(t *testing.T) {
 	// 从节点残留一个文件(本地 ref 非 nil)
 	tmp := t.TempDir()
 	t.Cleanup(OverrideWafLivePathsForTest(filepath.Join(tmp, "crs"), filepath.Join(tmp, "ip2region.xdb")))
-	os.MkdirAll(filepath.Join(crsLiveDir, "rules"), 0755)
-	os.WriteFile(filepath.Join(crsLiveDir, "rules", "a.conf"), []byte("residual"), 0644)
+	writeTestFile(t, filepath.Join(crsLiveDir, "rules", "a.conf"), "residual")
 
 	service := NewSyncService(database, &config.Config{DataDir: t.TempDir()}, nil)
 	if service.wafFilesDrifted(context.Background()) {

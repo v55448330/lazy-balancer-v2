@@ -91,9 +91,9 @@ func TestObserveHumanEvents_readsConfigOncePerBatch(t *testing.T) {
 	for range 8 {
 		at := autobanNow()
 		items = append(items,
-			HumanObserveItem{IP: "203.0.113.80", Kind: "challenge", At: at},
-			HumanObserveItem{IP: "203.0.113.80", Kind: "fail", At: at},
-			HumanObserveItem{IP: "203.0.113.80", Kind: "pass", At: at},
+			HumanObserveItem{IP: "45.33.32.80", Kind: "challenge", At: at},
+			HumanObserveItem{IP: "45.33.32.80", Kind: "fail", At: at},
+			HumanObserveItem{IP: "45.33.32.80", Kind: "pass", At: at},
 		)
 	}
 	ObserveHumanEvents(items)
@@ -102,7 +102,7 @@ func TestObserveHumanEvents_readsConfigOncePerBatch(t *testing.T) {
 		t.Fatalf("24 条事件一批喂入必须只读一次配置，实际读取 %d 次", got)
 	}
 	autobanMu.Lock()
-	w := autobanWindows["203.0.113.80"]
+	w := autobanWindows["45.33.32.80"]
 	autobanMu.Unlock()
 	if w == nil || w.Count != 16 {
 		t.Fatalf("发放+失败应计 16（通过不计），实际=%+v", w)
@@ -123,8 +123,8 @@ func TestObserveHumanEvents_batchGates(t *testing.T) {
 	probe := installAutobanConfigProbe(t)
 
 	items := []HumanObserveItem{
-		{IP: "203.0.113.81", Kind: "challenge", At: autobanNow()},
-		{IP: "203.0.113.81", Kind: "fail", At: autobanNow()},
+		{IP: "45.33.32.81", Kind: "challenge", At: autobanNow()},
+		{IP: "45.33.32.81", Kind: "fail", At: autobanNow()},
 	}
 
 	oldMaster := autobanIsMaster
@@ -157,10 +157,10 @@ func TestObserveHumanEvents_batchGates(t *testing.T) {
 
 	setAutobanConfigRaw(t, true, 100, 5, "1h", "challenge_issued,challenge_failed", false)
 	// 积压回放：早于当前窗口的事件不计（与单事件口径一致）。
-	stale := []HumanObserveItem{{IP: "203.0.113.82", Kind: "fail", At: autobanNow().Add(-2 * time.Hour)}}
+	stale := []HumanObserveItem{{IP: "45.33.32.82", Kind: "fail", At: autobanNow().Add(-2 * time.Hour)}}
 	ObserveHumanEvents(stale)
 	autobanMu.Lock()
-	_, staleCounted := autobanWindows["203.0.113.82"]
+	_, staleCounted := autobanWindows["45.33.32.82"]
 	autobanMu.Unlock()
 	if staleCounted {
 		t.Fatal("窗口外积压事件不得计数")
@@ -169,7 +169,7 @@ func TestObserveHumanEvents_batchGates(t *testing.T) {
 	// 启用态正常批：计数恢复（门解除后同批语义不变）。
 	ObserveHumanEvents(items)
 	autobanMu.Lock()
-	w := autobanWindows["203.0.113.81"]
+	w := autobanWindows["45.33.32.81"]
 	autobanMu.Unlock()
 	if w == nil || w.Count != 2 {
 		t.Fatalf("启用态批喂入应计 2，实际=%+v", w)

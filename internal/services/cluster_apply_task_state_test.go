@@ -12,8 +12,7 @@ import (
 // finished_at 必须以主端最后检查时刻收尾——否则页面呈现「已失败但未结束」，
 // 任务监控耗时按当前时刻持续增长。
 func TestApplySnapshot_activeTaskStateNormalizesFinishedAt(t *testing.T) {
-	cluster, database := newClusterTestService(t)
-	_ = cluster
+	_, database := newClusterTestService(t)
 	threatRows := []map[string]any{{
 		"id": 1, "name": "ustc", "display_name": "USTC", "url": "https://example.test/ustc.txt",
 		"format": "text", "update_enabled": true, "apply_enabled": true, "entry_count": 1,

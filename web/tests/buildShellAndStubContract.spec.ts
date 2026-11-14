@@ -10,7 +10,7 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
 import { calls, resetCalls, EL_MESSAGE_METHODS, STUB_ELEMENT, STUB_SAVE_RESULT_DEPS, type StubCall } from './_stubs.ts'
-import { code, matchBrace, stripComments } from './_helpers.ts'
+import { code, matchBrace, member, stripComments } from './_helpers.ts'
 
 const webRoot = new URL('../', import.meta.url)
 
@@ -77,17 +77,30 @@ const bodyBrace = (stripped: string, from: number): number => {
   return -1
 }
 
-const exampleCount = (block: string): number => {
+const exampleCount = (block: string, fileText: string): number => {
   let withoutPlaceholders = block
   for (const pattern of EMPTY_SPEC_PLACEHOLDERS) withoutPlaceholders = withoutPlaceholders.replace(pattern, '')
-  return (withoutPlaceholders.match(/\bassert\./g) ?? []).length
+  let count = (withoutPlaceholders.match(/\bassert\./g) ?? []).length
+  // 经本文件断言辅助函数（名含 assert）发出的断言同样是有效断言：只数块内
+  // 字面 `assert.` 会把「断言集中在辅助函数」的合法用例判成空用例。辅助函数
+  // 体自身必须含真断言（否则经它调用的用例全部空转）。
+  for (const call of withoutPlaceholders.matchAll(/\b(assert[A-Za-z_$][\w$]*)\s*\(/g)) {
+    let helper: string | null = null
+    try { helper = member(fileText, `const ${call[1]} = `) } catch { /* 非箭头声明形态，走 function 声明 */ }
+    if (helper === null) {
+      try { helper = member(fileText, `function ${call[1]}`) } catch { /* 本文件没有该辅助函数 */ }
+    }
+    // 解析不到辅助函数体：按零断言计（用例判空、门禁可见地红），不静默放行。
+    count += helper === null ? 0 : (helper.match(/\bassert\./g) ?? []).length
+  }
+  return count
 }
 
 const emptySpecReason = (text: string): string | null => {
   const stripped = stripComments(text)
   const blocks = testBlocks(stripped)
   if (blocks.length === 0) return 'test=0'
-  const emptyBlocks = blocks.filter((block) => exampleCount(block) === 0)
+  const emptyBlocks = blocks.filter((block) => exampleCount(block, stripped) === 0)
   if (emptyBlocks.length > 0) {
     return `test=${blocks.length}，其中 ${emptyBlocks.length} 个用例无有效 assert`
   }

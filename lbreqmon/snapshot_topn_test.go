@@ -190,3 +190,26 @@ func itoa(n int) string {
 	}
 	return string(b)
 }
+
+// 容量契约钉测：写满并覆写后，全量快照恰为 RingCapacity 条、最新优先、
+// 最旧覆写行不在场。snapshotRecords 逐分片收集恒 ≤ 容量（每分片至多返回
+// 槽位数），Snapshot 无需二次截断——本用例钉住该不变量的可观察终态。
+func TestSnapshot_fullRingReturnsCapacityNewestFirst(t *testing.T) {
+	resetRingForTest()
+	const total = RingCapacity + 1234
+	for i := range total {
+		Record(RequestRecord{Ts: int64(i), URI: "/r" + itoa(i)})
+	}
+	out := Snapshot()
+	if len(out) != RingCapacity {
+		t.Fatalf("len=%d, want %d（环容量上界）", len(out), RingCapacity)
+	}
+	for i := range out {
+		if want := int64(total - 1 - i); out[i].Ts != want {
+			t.Fatalf("index=%d Ts=%d, want %d（最新优先）", i, out[i].Ts, want)
+		}
+	}
+	if out[len(out)-1].Ts != int64(total-RingCapacity) {
+		t.Fatalf("oldest kept Ts=%d, want %d（覆写逐出的最旧行不得在场）", out[len(out)-1].Ts, total-RingCapacity)
+	}
+}

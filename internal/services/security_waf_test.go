@@ -477,7 +477,9 @@ func TestMergeOverridesLines_preservesExistingAndDedups(t *testing.T) {
 	// 重复行去重；空 diff 且既有为空 → nil（不写空文件）。
 	dir := t.TempDir()
 	path := filepath.Join(dir, "zz-user-overrides.conf")
-	os.WriteFile(path, []byte("# header\nSecAction pass,nolog,setvar:tx.old=1\n"), 0644)
+	if err := os.WriteFile(path, []byte("# header\nSecAction pass,nolog,setvar:tx.old=1\n"), 0644); err != nil {
+		t.Fatalf("seed overrides fixture: %v", err)
+	}
 	merged := mergeOverridesLines(path, "# new header\n", []string{"setvar tx.new=1", "SecAction pass,nolog,setvar:tx.old=1"})
 	out := string(merged)
 	for _, want := range []string{"setvar:tx.old=1", "setvar tx.new=1", "# new header"} {

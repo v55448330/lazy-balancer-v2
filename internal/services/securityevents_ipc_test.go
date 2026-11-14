@@ -53,13 +53,11 @@ func securityEventsTestAuditLine(txID, clientIP, timingID, uri string, blocked b
 		ts, txID, clientIP, uri, rawHeaders, blocked)
 }
 
+// securityEventsTestRowCount 是 securityEventsRowCountForTest 的别名宿主
+// （历史调用点保留）：行数口径单源在 securityevents_test.go。
 func securityEventsTestRowCount(t *testing.T) int {
 	t.Helper()
-	var n int
-	if err := db.MetricsDB.QueryRow(`SELECT COUNT(*) FROM security_events`).Scan(&n); err != nil {
-		t.Fatalf("count security_events: %v", err)
-	}
-	return n
+	return securityEventsRowCountForTest(t)
 }
 
 func TestIngestSecurityEventBatch_insertsAndDedupesTransactionID(t *testing.T) {
@@ -345,6 +343,40 @@ func TestSecurityEventsSpoolSnapshot_reportsEntriesBytesAndLimits(t *testing.T) 
 	status = securityEventsSpoolStatusFresh()
 	if !status.Saturated {
 		t.Fatalf("status=%+v, want saturated（entries>=limit）", status)
+	}
+}
+
+// 饱和判定逐目录独立：写侧上限按单一 spool 目录执行（HTTP 与 L4 各自独立
+// 目录、各自丢弃），双目录合计判定会在单目录远未触顶时提前报「写侧正在
+// 丢弃」；任一目录独立触顶则必须报饱和。Entries/Bytes 报告口径仍为合计。
+func TestSecurityEventsSpoolSnapshot_saturatedPerDirectoryNotCombined(t *testing.T) {
+	spoolDir := setupSecurityEventsSpoolTest(t)
+	l4Dir := filepath.Join(t.TempDir(), "security-events-spool-l4")
+	if err := os.MkdirAll(l4Dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(SecurityEventsL4SpoolDirEnv, l4Dir)
+	t.Setenv(SecurityEventsSpoolMaxEntriesEnv, "2")
+	t.Setenv(SecurityEventsSpoolMaxBytesEnv, "1048576")
+	lineA := securityEventsTestAuditLine("tx-perdir-a", "203.0.113.80", "", "/perdir", false, 1786447080) + "\n"
+	lineB := securityEventsTestAuditLine("tx-perdir-b", "203.0.113.80", "", "/perdir-b", false, 1786447081) + "\n"
+	writeSpoolFile(t, filepath.Join(spoolDir, "sealed-1700000000000000021.jsonl"), lineA)
+	writeSpoolFile(t, filepath.Join(l4Dir, "sealed-1700000000000000022.jsonl"), lineB)
+
+	// 合计 2 条=上限，但逐目录各 1 条——两侧写侧都未触顶，不得报饱和。
+	status := securityEventsSpoolStatusFresh()
+	if status.Entries != 2 {
+		t.Fatalf("entries=%d, want 2（报告口径仍为双目录合计）", status.Entries)
+	}
+	if status.Saturated {
+		t.Fatalf("status=%+v, want 未饱和（逐目录各 1 条 < 上限 2，合计判定提前误报）", status)
+	}
+
+	// 主目录独立触顶（2 条=上限）：即使 L4 目录为空也必须报饱和。
+	writeSpoolFile(t, filepath.Join(spoolDir, "sealed-1700000000000000023.jsonl"), lineA+lineB)
+	status = securityEventsSpoolStatusFresh()
+	if !status.Saturated {
+		t.Fatalf("status=%+v, want saturated（主目录独立触顶）", status)
 	}
 }
 

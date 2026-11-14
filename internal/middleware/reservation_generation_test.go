@@ -76,3 +76,28 @@ func TestReserveRateLimitBucket_computesRetryAfterWithRejection(t *testing.T) {
 		t.Fatalf("Retry-After=%d, want 17 from the rejection critical section", retryAfter)
 	}
 }
+
+// Retry-After 秒数计算单源钉测：分钟窗剩余时长向上取整、最小 1 秒。
+// clusterRateLimit 的超限分支与 reserveRateLimitBucket 的拒绝分支必须共用
+// 同一实现——两处逐字手抄一旦漂移，429 响应会给出与窗口重置时刻不一致的
+// 等待秒数（客户端按错误节奏重试）。
+func TestRetryAfterSeconds_ceilsWindowRemainderWithFloor(t *testing.T) {
+	now := time.Date(2026, 11, 15, 12, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		name      string
+		remaining time.Duration
+		want      int
+	}{
+		{"整秒边界不进位", 17 * time.Second, 17},
+		{"亚秒余量向上取整", 17*time.Second + time.Nanosecond, 18},
+		{"不足一秒取整为一", 500 * time.Millisecond, 1},
+		{"零余量下限为一", 0, 1},
+		{"负余量下限为一", -3 * time.Second, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := retryAfterSeconds(now.Add(tc.remaining), now); got != tc.want {
+				t.Fatalf("retryAfterSeconds(remaining=%v)=%d, want %d", tc.remaining, got, tc.want)
+			}
+		})
+	}
+}

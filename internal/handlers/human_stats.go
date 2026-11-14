@@ -21,11 +21,16 @@ var humanAdminClient = &http.Client{Timeout: 2 * time.Second}
 // 同容错口径）。2s 超时，不阻塞总览加载。
 // 计数为进程累计（重启归零）：挑战成功不落安全事件（2026-11-13 用户裁定），
 // 通过数/通过率以本端点为权威源；CC「封禁」响应退役后不再有 bans。
+// events_dropped/events_deliver_failed 为人机事件上报的丢失对账计数
+// （lbhuman/events.go 契约：队列满丢弃/投递失败丢弃），代理原样透传——
+// 丢失量必须可对账，不得在面板代理层静默丢弃。
 func (h *Handlers) GetHumanVerifyStats(c *gin.Context) {
 	type stats struct {
-		Challenges int64 `json:"challenges"`
-		Passes     int64 `json:"passes"`
-		Fails      int64 `json:"fails"`
+		Challenges          int64 `json:"challenges"`
+		Passes              int64 `json:"passes"`
+		Fails               int64 `json:"fails"`
+		EventsDropped       int64 `json:"events_dropped"`
+		EventsDeliverFailed int64 `json:"events_deliver_failed"`
 	}
 	out := stats{}
 	resp, err := humanAdminClient.Get(h.cfg.CaddyAdminURL + "/lb/human/stats")

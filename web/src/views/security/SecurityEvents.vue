@@ -754,7 +754,9 @@ const stageCategory = (row: SecurityEvent): 'trust' | 'acl' | 'crawler' | 'waf' 
 }
 
 // 触发类型显示映射:后端 trigger_type 为 zh 码(en 用户经此译;zh 用户命中 zh 词条同文)。
-// 未登记值回落原文(新触发类型不因缺词条而丢失)。
+// 未登记值回落原文(新触发类型不因缺词条而丢失)。键集与后端 triggerTypeForRule
+// 现行词对齐（爬虫Bot/WAF·CRS/WAF·自定义/威胁情报库/请求体异常/其他/CC防护）；
+// 「爬虫豁免/手动黑名单」为存量事件词，保留兼容。
 const TRIGGER_TYPE_KEYS: Record<string, string> = {
   'IP 访问控制': 'ipAcl',
   '地域拦截': 'geoBlock',
@@ -762,6 +764,13 @@ const TRIGGER_TYPE_KEYS: Record<string, string> = {
   '爬虫豁免': 'crawlerExempt',
   '手动黑名单': 'manualBlacklist',
   'CC防护': 'ccProtection',
+  '爬虫Bot': 'crawlerBot',
+  '威胁情报库': 'threatIntel',
+  '请求体异常': 'bodyAnomaly',
+  'WAF·CRS': 'wafCrs',
+  'WAF·自定义': 'wafCustom',
+  'CC 防护': 'ccProtectionSpaced',
+  '其他': 'other',
 }
 const triggerTypeLabel = (raw?: string): string => {
   if (!raw) return '—'

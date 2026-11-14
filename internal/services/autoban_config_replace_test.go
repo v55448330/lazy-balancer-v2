@@ -77,7 +77,7 @@ func TestAutobanConfigReplaceEffectNote_mapsEffectsToUserText(t *testing.T) {
 // Then 计数桶保留（窗口内证据不丢）、达标标记按新阈值重算；窗口变更则清桶。
 func TestReconcileAutobanRuntimeAfterConfigReplace_thresholdOnlyKeepsBuckets(t *testing.T) {
 	setupIsolatedDB(t)
-	AutobanSeedCounterForTest("203.0.113.77", 60, 100)
+	AutobanSeedCounterForTest("45.33.32.77", 60, 100)
 	if got := AutobanTrackedIPs(); got != 1 {
 		t.Fatalf("前置计数桶=%d, want 1", got)
 	}

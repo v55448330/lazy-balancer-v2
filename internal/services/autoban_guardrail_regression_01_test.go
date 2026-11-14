@@ -24,7 +24,7 @@ func feedAndRun(t *testing.T, threshold, windowMin int, duration, scope string, 
 		t.Fatalf("seed preset list: %v", err)
 	}
 	// 2026-10-30 阶段 3 口径后非数值 token 不再计数，候选前置喂 CRS 形态 id。
-	autobanObserveEvent("203.0.113.5", "blocked", "942100")
+	autobanObserveEvent("45.33.32.5", "blocked", "942100")
 	if err := RunAutobanCycle(taskengine.RunContext{Trigger: "auto"}); err != nil {
 		return err
 	}
@@ -75,8 +75,8 @@ func TestRunAutobanCycle_validConfigStillExecutes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 1 || entries[0].Value != "203.0.113.5" {
-		t.Fatalf("entries=%+v, want 1 auto entry for 203.0.113.5", entries)
+	if len(entries) != 1 || entries[0].Value != "45.33.32.5" {
+		t.Fatalf("entries=%+v, want 1 auto entry for 45.33.32.5", entries)
 	}
 	// 有时长枚举时条目必须带 expires_at（24h）——非永久形态
 	if entries[0].ExpiresAt == "" {

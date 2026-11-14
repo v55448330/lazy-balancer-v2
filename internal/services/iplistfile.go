@@ -457,13 +457,19 @@ const ipListGCInterval = time.Hour
 //     backup-deadbeef1234.txt 一律当作自身投影删除，且「旧文件清尽后自行
 //     失效」的注释不成立（分支恒命中任意前缀）。旧文件清尽后该分支对已知
 //     scope 仍可能命中（用户手放同形名），但不再吞未知前缀文件。
-var ipListProjectedFileName = regexp.MustCompile(`^(u-[A-Za-z0-9][A-Za-z0-9._-]*|p[0-9]+-(acl|trust|bl|crsxc-([0-9]+|[0-9a-f]{12}))|tp|l4-(trust12|trust|deny|bl|allow)-[A-Za-z0-9][A-Za-z0-9._-]*)(-[0-9a-f]{12})?\.txt$`)
+
+// ipListGCScopePattern 是投影名/临时名两条 GC regex 共用的 scope 白名单
+// 表达式（单源）：两侧只允许各自的前后缀不同，scope 形态增改只改这里——
+// 逐字复制曾让单侧增改 scope 时另一侧失配（孤儿永不回收/误删用户文件）。
+const ipListGCScopePattern = `(u-[A-Za-z0-9][A-Za-z0-9._-]*|p[0-9]+-(acl|trust|bl|crsxc-([0-9]+|[0-9a-f]{12}))|tp|l4-(trust12|trust|deny|bl|allow)-[A-Za-z0-9][A-Za-z0-9._-]*)`
+
+var ipListProjectedFileName = regexp.MustCompile(`^` + ipListGCScopePattern + `(-[0-9a-f]{12})?\.txt$`)
 
 // ipListTempFileName 匹配 internal/atomicfile.WriteAtomic 的真实临时名：
 // `.<投影文件名>-<随机数字>.tmp`（例如 `.p12-acl.txt-12345.tmp`）。
 // GC 只删除本模块拥有的临时文件——目录内的无关 .tmp 一律不动；24h 超龄
 // 门槛仍保护在役写入。scope 白名单与 ipListProjectedFileName 同源收口。
-var ipListTempFileName = regexp.MustCompile(`^\.(u-[A-Za-z0-9][A-Za-z0-9._-]*|p[0-9]+-(acl|trust|bl|crsxc-([0-9]+|[0-9a-f]{12}))|tp|l4-(trust12|trust|deny|bl|allow)-[A-Za-z0-9][A-Za-z0-9._-]*)(-[0-9a-f]{12})?\.txt-[0-9]+\.tmp$`)
+var ipListTempFileName = regexp.MustCompile(`^\.` + ipListGCScopePattern + `(-[0-9a-f]{12})?\.txt-[0-9]+\.tmp$`)
 
 // ipListRenderRefs 记录本进程渲染引用过的投影文件及最近引用时间：一次全量
 // 配置渲染会重新投影全部在役名单（同字节跳写也计引用），故「长期

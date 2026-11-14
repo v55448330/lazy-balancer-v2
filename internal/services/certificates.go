@@ -525,7 +525,7 @@ func requeueCertJobsSnapshot(ctx context.Context, snapshot CertJobsSnapshot, man
 		// deployment_available_after 非空的行——此前补偿保持/归一化到 downloaded 却不写
 		// 该列（补偿 downloaded 快照常为 NULL），队列未激活或 provider 不可用时任务
 		// 两条补扫通道都不收，只能等重启恢复；provider 不可用分支还会被 failJob 摘掉。
-		deploymentReadyAfter := time.Now().UTC().Format("2006-01-02 15:04:05")
+		deploymentReadyAfter := CanonicalDatetimeValue(time.Now())
 		switch {
 		case materialFastPath && liveStatus != "downloaded":
 			if err := transitionJob(db.DB, job.id, nonTerminalJobStatuses, "downloaded", map[string]any{

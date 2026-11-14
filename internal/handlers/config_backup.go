@@ -903,6 +903,10 @@ type importQueueRecovery struct {
 	// 观测性：任务列表显示进行中而实际没有 worker 才是缺陷。
 	stalledNonTerminal int
 	stalledUnknown     bool
+	// recoveryErr 是 finish 阶段恢复链路的失败留痕（归一/重排失败）。
+	// 队列已按导入前活动态恢复，但任务推进链路不完整——必须专项披露，
+	// 不得与「用户停止签发」的停滞文案混同。
+	recoveryErr error
 }
 
 func (recovery *importQueueRecovery) finish() error {
@@ -921,7 +925,13 @@ func (recovery *importQueueRecovery) finish() error {
 	// finish 语义一致——队列侧恢复问题必须显性可见，不得静默跳过）。
 	normalized, err := db.NormalizeWaitingCACertJobs()
 	if err != nil {
-		return fmt.Errorf("归一导入带入的 waiting_ca 证书任务失败: %w", err)
+		// 归一失败不否决已提交的导入，但队列不得停留停止态：导入前在跑
+		// （wasActive）就恢复活动态，失败经 recoveryErr 专项披露。
+		recovery.recoveryErr = fmt.Errorf("归一导入带入的 waiting_ca 证书任务失败: %w", err)
+		if recovery.manager != nil && recovery.wasActive {
+			recovery.manager.Resume()
+		}
+		return recovery.recoveryErr
 	}
 	if normalized > 0 {
 		detail := fmt.Sprintf("备份携带 %d 条 waiting_ca 证书任务，已按失败语义统一保窗归一为 failed（保留消息/重试次数/退避窗口）", normalized)
@@ -933,7 +943,12 @@ func (recovery *importQueueRecovery) finish() error {
 		return nil
 	}
 	recovery.manager.Resume()
-	return requeueNonTerminalCertJobs()
+	if err := requeueNonTerminalCertJobs(); err != nil {
+		// 队列已恢复活动态（不停留停止态），重排失败专项披露。
+		recovery.recoveryErr = err
+		return err
+	}
+	return nil
 }
 
 // countStalledNonTerminalCertJobs 只做披露用的只读统计。统计失败不得否决
@@ -950,6 +965,9 @@ func countStalledNonTerminalCertJobs() (count int, unknown bool) {
 // stalledWarning 是「证书任务因签发任务已停止而未重排」的披露文案单源
 // （响应 warnings 与操作审计同文；空串=无需披露）。
 func (recovery *importQueueRecovery) stalledWarning() string {
+	if recovery.recoveryErr != nil {
+		return "证书签发队列已恢复运行，但导入后的任务恢复未完成：" + recovery.recoveryErr.Error() + "——请检查证书任务列表，必要时手动重试"
+	}
 	if recovery.stalledUnknown {
 		return "证书签发任务已停止：导入的非终态证书任务本窗口未重排（数量统计失败，请检查任务列表）——恢复该任务后才会继续推进"
 	}
@@ -2930,7 +2948,7 @@ func certJobProviderDanglingCounts(ctx context.Context, q certJobRowQueryer, tab
 		return 0, 0, nil
 	}
 	// 「备份是否携带 lb_rules」按键存在判定（与 validateBackupRuleReferences /
-	// acmeRefResolvablePostImport / 链内缺席回填同口径）：键在但为空数组=导入后
+	// refResolvablePostImport / 链内缺席回填同口径）：键在但为空数组=导入后
 	// 无规则（applicableRules 空集→计数 0），不得回退去读 live 规则——live 行
 	// 在导入全量替换后会被删除，告警与实际结果相反。
 	_, rulesCarried := tables["lb_rules"]
@@ -2938,7 +2956,7 @@ func certJobProviderDanglingCounts(ctx context.Context, q certJobRowQueryer, tab
 		SELECT j.rule_id, COALESCE(j.ca_provider_id,0) FROM cert_jobs j
 		JOIN lb_rules r ON r.caddy_id=j.rule_id
 		WHERE COALESCE(j.ca_provider_id,0) <> 0
-		  AND r.enabled=1 AND r.enable_tls=1 AND r.tls_source='acme_dns'
+		  AND r.enabled=1 AND ` + enableTLSEnabledSQLPredicate + ` AND r.tls_source='acme_dns'
 		  AND j.status NOT IN ('failed','disabled')`
 	if rulesCarried {
 		query = `
@@ -3626,6 +3644,12 @@ type acmeImportRefIndex struct {
 	tables   map[string][]map[string]any
 	enabled  map[string]map[int]bool
 	fromLive map[string]bool
+	// liveQueryer 是 live 回退的读取面（nil=db.DB）。锁内消费方注入导入
+	// 事务：同一连接读事务视图（初检→加锁重验的 TOCTOU 契约），并避免
+	// WAL 下跨连接读与在途写事务互锁。
+	liveQueryer interface {
+		Query(query string, args ...any) (*sql.Rows, error)
+	}
 }
 
 func newACMEImportRefIndex(tables map[string][]map[string]any) *acmeImportRefIndex {
@@ -3634,6 +3658,23 @@ func newACMEImportRefIndex(tables map[string][]map[string]any) *acmeImportRefInd
 		enabled:  map[string]map[int]bool{},
 		fromLive: map[string]bool{},
 	}
+}
+
+// withQueryer 注入 live 回退读取面（返回自身供链式调用）。
+func (acmeIndex *acmeImportRefIndex) withQueryer(q interface {
+	Query(query string, args ...any) (*sql.Rows, error)
+}) *acmeImportRefIndex {
+	acmeIndex.liveQueryer = q
+	return acmeIndex
+}
+
+func (acmeIndex *acmeImportRefIndex) queryer() interface {
+	Query(query string, args ...any) (*sql.Rows, error)
+} {
+	if acmeIndex.liveQueryer != nil {
+		return acmeIndex.liveQueryer
+	}
+	return db.DB
 }
 
 // enabledIDs 返回该表在导入后的 id→启用视图（首次访问时构建并缓存）。
@@ -3654,7 +3695,7 @@ func (acmeIndex *acmeImportRefIndex) enabledIDs(table string) (map[int]bool, err
 		if table == "ca_providers" {
 			label = "校验 CA 提供商失败"
 		}
-		rows, err := db.DB.Query("SELECT id, COALESCE(enabled,1) FROM " + table)
+		rows, err := acmeIndex.queryer().Query("SELECT id, COALESCE(enabled,1) FROM " + table)
 		if err != nil {
 			return nil, fmt.Errorf("%s: %v", label, err)
 		}
@@ -4588,21 +4629,11 @@ func parseTrustedProxyRefIDs(refsText string) ([]int64, error) {
 }
 
 // backupCAProviderExistsPostImport 按「导入后视图」校验 CA 提供商存在性：
-// 备份携带 ca_providers 表时，导入后该表=备份行集合，只能
-// 在备份行内解析；表缺席（分类导出未选系统数据）=本地行保留，按库内解析。
+// 委托 refResolvablePostImport 单源（备份携带表→备份行集合；表缺席→live
+// 行），读失败保守按不可解析（与既有口径一致）。
 func backupCAProviderExistsPostImport(tables map[string][]map[string]any, id int) bool {
-	if _, carried := tables["ca_providers"]; carried {
-		row, found := backupRowByID(tables, "ca_providers", id)
-		return found && backupRowEnabled(row)
-	}
-	if db.DB == nil {
-		return false
-	}
-	var count int
-	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM ca_providers WHERE id=? AND COALESCE(enabled,1)=1`, id).Scan(&count); err != nil {
-		return false
-	}
-	return count > 0
+	resolvable, _ := refResolvablePostImport(tables, "ca_providers", id)
+	return resolvable
 }
 
 // backupFloat 读取备份中的数值（JSON 反序列化 float64 / 内部 int 形态）。
@@ -4823,21 +4854,26 @@ func backupRowEnabled(row map[string]any) bool {
 	return !exists || raw == nil || backupBooleanEnabled(raw)
 }
 
-// acmeRefResolvablePostImport:导入后某 ACME 引用(id)是否仍可解析——备份携带
-// 该表时以备份行为准(整表替换),否则 live 表原样保留。enabled 口径与
-// backupCAProviderExistsPostImport / acmeImportRefIndex 的 COALESCE(enabled,1)
-// 一致：可空列 NULL 视同启用（正常写路径 NULL→1 归一，NULL 只可能来自带外
-// 改库/极旧遗留；口径分裂会让悬挂告警与实际可用性相反）。
-func acmeRefResolvablePostImport(tables map[string][]map[string]any, table string, id int) bool {
+// refResolvablePostImport 导入后视图引用可解析性的单一实现（CA/ACME 共用）：
+// 备份携带该表时以备份行为准（整表替换），否则 live 表原样保留。enabled 口径
+// 与 acmeImportRefIndex 的 COALESCE(enabled,1) 一致：可空列 NULL 视同启用
+// （正常写路径 NULL→1 归一，NULL 只可能来自带外改库/极旧遗留；口径分裂会让
+// 悬挂告警与实际可用性相反）。读失败上抛——消费方自行决定保守 false 或
+// 显式披露，不得在实现内静默吞掉。db.DB 缺席（纯校验夹具）按不可解析，
+// 与备份 CA 存在性门既有口径一致。
+func refResolvablePostImport(tables map[string][]map[string]any, table string, id int) (bool, error) {
 	if _, carried := tables[table]; carried {
 		row, found := backupRowByID(tables, table, id)
-		return found && backupRowEnabled(row)
+		return found && backupRowEnabled(row), nil
+	}
+	if db.DB == nil {
+		return false, nil
 	}
 	var exists bool
 	if err := db.DB.QueryRow("SELECT EXISTS(SELECT 1 FROM "+table+" WHERE id = ? AND COALESCE(enabled,1) = 1)", id).Scan(&exists); err != nil {
-		return false
+		return false, err
 	}
-	return exists
+	return exists, nil
 }
 
 // ip2regionTagFromBackup:从备份表区读 IP2Region 版本 tag（随文件
@@ -6131,21 +6167,53 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 			return
 		}
 	}
+	// 锁内 ACME 悬挂统计：走 newACMEImportRefIndex 单源（每表最多构建一次
+	// id→启用视图，逐规则 O(1)），不再逐规则线性扫备份行/逐 id 打库。
+	// 读失败不得静默吞掉——留痕 + 响应披露「统计未完成」，不阻断导入
+	// （纯可观测性，与证书任务提供商悬挂统计同口径）。
+	acmeDanglingCountErr := error(nil)
 	if (tlsConfigsCarried || tlsProvidersCarried) && !tlsRulesCarried {
-		if rows, qerr := tx.QueryContext(ctx, `SELECT COALESCE(acme_config_id,0), COALESCE(ca_provider_id,0) FROM lb_rules WHERE enabled=1 AND tls_source='acme_dns'`); qerr == nil {
+		acmeRefs := newACMEImportRefIndex(backup.Tables).withQueryer(tx)
+		rows, qerr := tx.QueryContext(ctx, `SELECT COALESCE(acme_config_id,0), COALESCE(ca_provider_id,0) FROM lb_rules WHERE enabled=1 AND tls_source='acme_dns'`)
+		if qerr != nil {
+			acmeDanglingCountErr = qerr
+		} else {
 			for rows.Next() {
 				var acmeID, caID int
-				if rows.Scan(&acmeID, &caID) != nil {
-					continue
+				if scanErr := rows.Scan(&acmeID, &caID); scanErr != nil {
+					acmeDanglingCountErr = scanErr
+					break
 				}
-				if acmeID != 0 && !acmeRefResolvablePostImport(backup.Tables, "certificate_configs", acmeID) {
-					acmeDanglingRules++
-				} else if caID != 0 && !acmeRefResolvablePostImport(backup.Tables, "ca_providers", caID) {
-					acmeDanglingRules++
+				if acmeID != 0 {
+					resolvable, err := acmeRefs.resolveEnabled("certificate_configs", acmeID)
+					if err != nil {
+						acmeDanglingCountErr = err
+						break
+					}
+					if !resolvable {
+						acmeDanglingRules++
+						continue
+					}
 				}
+				if caID != 0 {
+					resolvable, err := acmeRefs.resolveEnabled("ca_providers", caID)
+					if err != nil {
+						acmeDanglingCountErr = err
+						break
+					}
+					if !resolvable {
+						acmeDanglingRules++
+					}
+				}
+			}
+			if acmeDanglingCountErr == nil {
+				acmeDanglingCountErr = rows.Err()
 			}
 			rows.Close()
 		}
+	}
+	if acmeDanglingCountErr != nil {
+		services.Logf("warn", "配置导入：锁内 ACME 引用悬挂统计失败: %v", acmeDanglingCountErr)
 	}
 	if acmeDanglingRules > 0 {
 		recordAudit(c, action+"警告", "配置备份", fmt.Sprintf(action+"后 %d 条启用 ACME 规则的提供商引用悬挂——下一次签发/续签将失败,请补齐 DNS 提供商配置", acmeDanglingRules))
@@ -6494,29 +6562,11 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 	}
 	_, certJobsReplaced := backup.Tables["cert_jobs"]
 	// 产物清理门：仅当本次导入替换了规则/证书任务面时才允许清理消失规则
-	// 与失效任务（users-only 等分类导入对 live 数据零触碰）。
+	// 与失效任务（users-only 等分类导入对 live 数据零触碰）。cert_jobs 两条
+	// DELETE 与到期回填统一收敛在 coordinator 单点
+	// （collectPostCommitCleanup，提交前事务视图内执行）——v1/v2 共用，
+	// 此处不再维护第二份同语句。
 	session.replaceRuleArtifacts = rulesReplaced || certJobsReplaced
-	if rulesReplaced || certJobsReplaced {
-		if _, err := tx.ExecContext(ctx, "DELETE FROM cert_jobs WHERE NOT EXISTS (SELECT 1 FROM lb_rules WHERE lb_rules.caddy_id = cert_jobs.rule_id)"); err != nil {
-			err = failImportTx(c, session, action, "清理孤儿证书任务失败", err, http.StatusInternalServerError, "清理孤儿证书任务失败")
-			return
-		}
-		// 规则存在但已非 ACME 自动签发态（manual/未启用/TLS
-		// 关闭）的 cert_jobs 行——上方孤儿清理只覆盖 rule_id 不在 lb_rules 的行，
-		// 此类「规则仍在」的失效任务会被续签扫描/任务列表当作活任务。谓词与续签
-		// 扫描（certjobs.go/caddy.go 的 ACME 规则判据）同口径。
-		if _, err := tx.ExecContext(ctx, "DELETE FROM cert_jobs WHERE rule_id IN (SELECT caddy_id FROM lb_rules WHERE NOT (COALESCE(enable_tls,0)=1 AND COALESCE(tls_source,'manual')='acme_dns'))"); err != nil {
-			err = failImportTx(c, session, action, "清理失效证书任务失败", err, http.StatusInternalServerError, "清理失效证书任务失败")
-			return
-		}
-		// 到期口径收敛：有效材料但 expires_at 缺失的导入行按 PEM 派生回填
-		// （已有列值优先，不改写）。不回填会让 /certificates/jobs 的派生值
-		// 与聚合端（节点健康 certs_expiring_30d、证书页）的列值口径分叉。
-		if _, err := backfillCertJobExpiryFromPEM(ctx, tx); err != nil {
-			err = failImportTx(c, session, action, "回填证书任务到期时间失败", err, http.StatusInternalServerError, "回填证书任务到期时间失败")
-			return
-		}
-	}
 	// 冲突矩阵置禁用的规则与 DisableRule 端点
 	// 同口径暂停证书任务——否则导入提交后队列恢复（RequeueNonTerminalCertJobs）
 	// 会给已禁用规则续签。写点=Rules 域收敛的单源
@@ -6988,6 +7038,9 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 	}
 	if certJobProviderCountErr != nil {
 		responseWarnings = append(append([]string{}, responseWarnings...), "证书任务 CA 提供商悬挂统计未完成（读取失败，导入本身不受影响）："+certJobProviderCountErr.Error())
+	}
+	if acmeDanglingCountErr != nil {
+		responseWarnings = append(append([]string{}, responseWarnings...), "ACME 引用悬挂统计未完成（读取失败，导入本身不受影响）："+acmeDanglingCountErr.Error())
 	}
 	if droppedTCPBindings > 0 {
 		responseWarnings = append(append([]string{}, responseWarnings...), fmt.Sprintf("已解除 %d 条 TCP 规则的安全策略绑定（TCP 不参与策略渲染）", droppedTCPBindings))

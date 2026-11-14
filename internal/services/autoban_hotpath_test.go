@@ -63,14 +63,14 @@ func TestAutobanConverge_gateHitHotPathZeroReload(t *testing.T) {
 	seedAutobanListReferencedByPolicy(t)
 	spy := installAutobanConvergeSpy(t, func() (IPListProjectionOutcome, error) { return ProjectionConverged, nil })
 
-	autobanObserveEvent("203.0.113.1", "blocked", "942100")
-	autobanObserveEvent("203.0.113.1", "blocked", "942100")
+	autobanObserveEvent("45.33.32.1", "blocked", "942100")
+	autobanObserveEvent("45.33.32.1", "blocked", "942100")
 	if err := RunAutobanCycle(taskengine.RunContext{Trigger: "auto"}); err != nil {
 		t.Fatalf("RunAutobanCycle: %v", err)
 	}
 	entries := presetEntries(t)
-	if len(entries) != 1 || entries[0].Value != "203.0.113.1" {
-		t.Fatalf("名单 merge 结果=%+v, want 新封 203.0.113.1", entries)
+	if len(entries) != 1 || entries[0].Value != "45.33.32.1" {
+		t.Fatalf("名单 merge 结果=%+v, want 新封 45.33.32.1", entries)
 	}
 	if spy.refreshes != 1 || spy.reloads != 0 {
 		t.Fatalf("资格门命中必须走投影热路径（零 /load）：refreshes=%d reloads=%d", spy.refreshes, spy.reloads)
@@ -90,8 +90,8 @@ func TestAutobanConverge_unreferencedSkipsReload(t *testing.T) {
 	setAutobanConfigRaw(t, true, 2, 5, "1h", "blocked,logged", false)
 	spy := installAutobanConvergeSpy(t, func() (IPListProjectionOutcome, error) { return ProjectionConverged, nil })
 
-	autobanObserveEvent("203.0.113.1", "blocked", "942100")
-	autobanObserveEvent("203.0.113.1", "blocked", "942100")
+	autobanObserveEvent("45.33.32.1", "blocked", "942100")
+	autobanObserveEvent("45.33.32.1", "blocked", "942100")
 	if err := RunAutobanCycle(taskengine.RunContext{Trigger: "auto"}); err != nil {
 		t.Fatalf("RunAutobanCycle: %v", err)
 	}
@@ -114,7 +114,7 @@ func TestAutobanConverge_refresherMissingFallsBack(t *testing.T) {
 	seedAutobanListReferencedByPolicy(t)
 	spy := installAutobanConvergeSpy(t, nil)
 
-	autobanObserveEvent("203.0.113.1", "blocked", "942100")
+	autobanObserveEvent("45.33.32.1", "blocked", "942100")
 	if err := RunAutobanCycle(taskengine.RunContext{Trigger: "auto"}); err != nil {
 		t.Fatalf("RunAutobanCycle: %v", err)
 	}
@@ -131,7 +131,7 @@ func TestAutobanConverge_hotNotConfirmedFallsBack(t *testing.T) {
 	seedAutobanListReferencedByPolicy(t)
 	spy := installAutobanConvergeSpy(t, func() (IPListProjectionOutcome, error) { return ProjectionFallback, nil })
 
-	autobanObserveEvent("203.0.113.1", "blocked", "942100")
+	autobanObserveEvent("45.33.32.1", "blocked", "942100")
 	if err := RunAutobanCycle(taskengine.RunContext{Trigger: "auto"}); err != nil {
 		t.Fatalf("RunAutobanCycle: %v", err)
 	}
@@ -155,7 +155,7 @@ func TestAutobanConverge_trustedProxyRefHotPath(t *testing.T) {
 	}
 	spy := installAutobanConvergeSpy(t, func() (IPListProjectionOutcome, error) { return ProjectionConverged, nil })
 
-	autobanObserveEvent("203.0.113.1", "blocked", "942100")
+	autobanObserveEvent("45.33.32.1", "blocked", "942100")
 	if err := RunAutobanCycle(taskengine.RunContext{Trigger: "auto"}); err != nil {
 		t.Fatalf("RunAutobanCycle: %v", err)
 	}
@@ -198,18 +198,18 @@ func TestAutobanDisableFlush_hotPathWhenEligible(t *testing.T) {
 	setAutobanConfigRaw(t, true, 1, 5, "1h", "blocked,logged", false)
 	seedAutobanListReferencedByPolicy(t)
 	seedPresetEntries(t, []models.IPListEntry{
-		{Value: "198.51.100.1", Remark: autobanEntryRemark, CreatedAt: "2026-10-13 10:00:00", ExpiresAt: "2026-10-14 09:00:00"}, // 已到期
-		{Value: "198.51.100.2", Remark: autobanEntryRemark, CreatedAt: "2026-10-14 09:30:00", ExpiresAt: "2026-10-14 11:00:00"}, // 未到期
+		{Value: "45.33.32.1", Remark: autobanEntryRemark, CreatedAt: "2026-10-13 10:00:00", ExpiresAt: "2026-10-14 09:00:00"}, // 已到期
+		{Value: "45.33.32.2", Remark: autobanEntryRemark, CreatedAt: "2026-10-14 09:30:00", ExpiresAt: "2026-10-14 11:00:00"}, // 未到期
 	})
 	spy := installAutobanConvergeSpy(t, func() (IPListProjectionOutcome, error) { return ProjectionConverged, nil })
 
 	AutobanDisableFlush()
 
 	got := entryValues(presetEntries(t))
-	if _, exists := got["198.51.100.1"]; exists {
+	if _, exists := got["45.33.32.1"]; exists {
 		t.Fatal("已到期条目必须在禁用收尾清除")
 	}
-	if _, exists := got["198.51.100.2"]; !exists {
+	if _, exists := got["45.33.32.2"]; !exists {
 		t.Fatal("未到期条目必须保留")
 	}
 	if spy.refreshes != 1 || spy.reloads != 0 {
@@ -252,7 +252,7 @@ func installAutobanHotPathIntegration(t *testing.T) (*CaddyService, *hotPathTest
 	admin := newHotPathTestAdmin(t)
 	s := NewCaddyService(admin.srv.URL)
 	policyID := seedHotPathPolicy(t, presetListID(t))
-	seedPresetEntries(t, []models.IPListEntry{{Value: "198.51.100.1", Remark: "事件处置", CreatedAt: "2026-10-14 09:00:00"}})
+	seedPresetEntries(t, []models.IPListEntry{{Value: "45.33.32.1", Remark: "事件处置", CreatedAt: "2026-10-14 09:00:00"}})
 	if err := s.GenerateAndApplyConfig(); err != nil {
 		t.Fatalf("首次全量应用: %v", err)
 	}
@@ -283,7 +283,7 @@ func autobanRunBanCycle(t *testing.T, ip string) {
 func TestAutobanCycle_hotPathZeroLoadProjectionRewritten(t *testing.T) {
 	_, admin, spy, policyID := installAutobanHotPathIntegration(t)
 
-	autobanRunBanCycle(t, "203.0.113.77")
+	autobanRunBanCycle(t, "45.33.32.77")
 
 	if spy.refreshes != 1 || spy.reloads != 0 {
 		t.Fatalf("refreshes=%d reloads=%d, want 1/0（热路径收敛，零全量重载）", spy.refreshes, spy.reloads)
@@ -292,7 +292,7 @@ func TestAutobanCycle_hotPathZeroLoadProjectionRewritten(t *testing.T) {
 		t.Fatalf("自动封禁 merge 后 /load 次数=%d, want 仍 1（零重载）", got)
 	}
 	content := mustReadProjection(t, policyID)
-	if !strings.Contains(content, "203.0.113.77/32") || !strings.Contains(content, "198.51.100.1/32") {
+	if !strings.Contains(content, "45.33.32.77/32") || !strings.Contains(content, "45.33.32.1/32") {
 		t.Fatalf("投影内容=%q, want 含新封 IP 与既有手动条目", content)
 	}
 }
@@ -320,7 +320,7 @@ func TestAutobanCycle_emptyListFirstBanHotPath(t *testing.T) {
 	autobanReloader = func() error { spy.reloads++; return s.GenerateAndApplyConfigForceInLock() }
 	t.Cleanup(func() { autobanProjectionRefresher, autobanReloader = oldRef, oldRel })
 
-	autobanRunBanCycle(t, "203.0.113.77")
+	autobanRunBanCycle(t, "45.33.32.77")
 
 	if spy.refreshes != 1 || spy.reloads != 0 {
 		t.Fatalf("空→首封（恒发射下纯内容变化）必须热路径收敛：refreshes=%d reloads=%d, want 1/0", spy.refreshes, spy.reloads)
@@ -328,7 +328,7 @@ func TestAutobanCycle_emptyListFirstBanHotPath(t *testing.T) {
 	if got := admin.loadCount(); got != 1 {
 		t.Fatalf("/load 次数=%d, want 仍 1（零重载）", got)
 	}
-	if content := mustReadProjection(t, policyID); !strings.Contains(content, "203.0.113.77/32") {
+	if content := mustReadProjection(t, policyID); !strings.Contains(content, "45.33.32.77/32") {
 		t.Fatalf("投影内容=%q, want 含新封 IP", content)
 	}
 }

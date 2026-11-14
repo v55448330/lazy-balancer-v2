@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"net/http/httptest"
 	"strconv"
 	"strings"
 	"testing"
@@ -23,12 +22,7 @@ import (
 
 func newSecurityEventsRouter(t *testing.T) *gin.Engine {
 	t.Helper()
-	fakeCaddy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-	t.Cleanup(fakeCaddy.Close)
-	gin.SetMode(gin.TestMode)
-	h := &Handlers{caddyService: services.NewCaddyService(fakeCaddy.URL)}
+	h := newFakeCaddyHandlers(t)
 	router := gin.New()
 	router.GET("/security/events", h.ListSecurityEvents)
 	router.GET("/security/overview", h.GetSecurityOverview)

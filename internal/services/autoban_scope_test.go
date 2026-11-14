@@ -42,33 +42,62 @@ func TestObserveHumanEvents_countsByScopeDimension(t *testing.T) {
 	setAutobanConfigRaw(t, true, 100, 5, "1h", "challenge_issued,challenge_failed", false)
 
 	ObserveHumanEvents([]HumanObserveItem{
-		{IP: "203.0.113.70", Kind: "challenge", At: autobanNow()},
-		{IP: "203.0.113.70", Kind: "fail", At: autobanNow()},
-		{IP: "203.0.113.70", Kind: "pass", At: autobanNow()}, // 通过不计
+		{IP: "45.33.32.70", Kind: "challenge", At: autobanNow()},
+		{IP: "45.33.32.70", Kind: "fail", At: autobanNow()},
+		{IP: "45.33.32.70", Kind: "pass", At: autobanNow()}, // 通过不计
 	})
 	autobanMu.Lock()
-	w := autobanWindows["203.0.113.70"]
+	w := autobanWindows["45.33.32.70"]
 	autobanMu.Unlock()
 	if w == nil || w.Count != 2 {
 		t.Fatalf("发放+失败应计 2，实际=%+v", w)
 	}
 
-	// 仅勾选挑战失败：发放不计。
+	// 仅勾选挑战失败：发放不计，失败照常计数并达阈值（阈值=3 形态）。
 	resetAutobanStateForTest()
-	setAutobanConfigRaw(t, true, 100, 5, "1h", "challenge_failed", false)
-	ObserveHumanEvents([]HumanObserveItem{{IP: "203.0.113.71", Kind: "challenge", At: autobanNow()}})
+	setAutobanConfigRaw(t, true, 3, 5, "1h", "challenge_failed", false)
+	ObserveHumanEvents([]HumanObserveItem{{IP: "45.33.32.71", Kind: "challenge", At: autobanNow()}})
 	autobanMu.Lock()
-	_, issuedCounted := autobanWindows["203.0.113.71"]
+	_, issuedCounted := autobanWindows["45.33.32.71"]
 	autobanMu.Unlock()
 	if issuedCounted {
 		t.Fatal("仅勾选挑战失败时，挑战发放不得计数")
 	}
-	ObserveHumanEvents([]HumanObserveItem{{IP: "203.0.113.71", Kind: "fail", At: autobanNow()}})
+	fails := make([]HumanObserveItem, 0, 3)
+	for range 3 {
+		fails = append(fails, HumanObserveItem{IP: "45.33.32.71", Kind: "fail", At: autobanNow()})
+	}
+	ObserveHumanEvents(fails)
 	autobanMu.Lock()
-	w = autobanWindows["203.0.113.71"]
+	w = autobanWindows["45.33.32.71"]
 	autobanMu.Unlock()
-	if w == nil || w.Count != 1 {
-		t.Fatalf("挑战失败应计 1，实际=%+v", w)
+	if w == nil || w.Count != 3 || !w.Reached {
+		t.Fatalf("挑战失败计数=%+v, want count=3 reached", w)
+	}
+
+	// 仅勾选检测（logged）：挑战发放/失败均不计。
+	resetAutobanStateForTest()
+	setAutobanConfigRaw(t, true, 3, 5, "1h", "logged", false)
+	ObserveHumanEvents([]HumanObserveItem{
+		{IP: "45.33.32.73", Kind: "fail", At: autobanNow()},
+		{IP: "45.33.32.73", Kind: "challenge", At: autobanNow()},
+	})
+	autobanMu.Lock()
+	_, humanCounted := autobanWindows["45.33.32.73"]
+	autobanMu.Unlock()
+	if humanCounted {
+		t.Fatal("仅检测口径时挑战事件不得计入")
+	}
+
+	// 挑战通过在任何口径下都不计（四维全选形态）。
+	resetAutobanStateForTest()
+	setAutobanConfigRaw(t, true, 3, 5, "1h", "blocked,logged,challenge_issued,challenge_failed", false)
+	ObserveHumanEvents([]HumanObserveItem{{IP: "45.33.32.74", Kind: "pass", At: autobanNow()}})
+	autobanMu.Lock()
+	_, passCounted := autobanWindows["45.33.32.74"]
+	autobanMu.Unlock()
+	if passCounted {
+		t.Fatal("挑战通过永不计入")
 	}
 }
 
@@ -77,19 +106,19 @@ func TestObserveBatch_wafDimensionsRespectScope(t *testing.T) {
 	installAutobanFixture(t, "2026-11-13 10:00:00")
 	setAutobanConfigRaw(t, true, 100, 5, "1h", "logged", false)
 	autobanObserveBatch([]autobanFeedItem{
-		{IP: "203.0.113.72", Action: "blocked", RuleTriggered: "942100", At: autobanNow()},
+		{IP: "45.33.32.72", Action: "blocked", RuleTriggered: "942100", At: autobanNow()},
 	})
 	autobanMu.Lock()
-	_, blockedCounted := autobanWindows["203.0.113.72"]
+	_, blockedCounted := autobanWindows["45.33.32.72"]
 	autobanMu.Unlock()
 	if blockedCounted {
 		t.Fatal("仅勾选检测时，WAF 拦截不得计数")
 	}
 	autobanObserveBatch([]autobanFeedItem{
-		{IP: "203.0.113.72", Action: "logged", RuleTriggered: "942100", At: autobanNow()},
+		{IP: "45.33.32.72", Action: "logged", RuleTriggered: "942100", At: autobanNow()},
 	})
 	autobanMu.Lock()
-	w := autobanWindows["203.0.113.72"]
+	w := autobanWindows["45.33.32.72"]
 	autobanMu.Unlock()
 	if w == nil || w.Count != 1 {
 		t.Fatalf("WAF 检测应计 1，实际=%+v", w)

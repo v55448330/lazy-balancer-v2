@@ -104,7 +104,7 @@ Transport 的 2 分钟），>0 时渲染为 reverse_proxy transport 的
 （间隔 10s / 超时 2s / 2 次成功恢复 / 3 次失败摘除）适合多数场景；失败摘除
 配合 `least_conn` 实现快速故障转移。被动健康检查（Caddy 内建）始终生效。
 
-### 2.5 压缩与限流保护
+### 2.5 压缩与 CC 防护
 
 - **响应压缩**：`enable_compress` + `compress_types`；CPU 充足时用 `zstd`
   （压缩比/速度优于 gzip），文本类站点建议开启，已压缩内容（图片/视频）勿开。
@@ -138,7 +138,7 @@ detection 模式 CRS 仅记录不拦截（自定义规则仍按规则内动作�
 
 ### 3.2 CRS 规则组裁剪
 
-> 阶段化模型：CRS 规则组属于**阶段 3 · WAF 类型策略**（与限流
+> 阶段化模型：CRS 规则组属于**阶段 3 · WAF 类型策略**（与 CC 防护
 > 等其它阶段分属不同策略实体）；下文的规则组裁剪在 WAF 类型策略的编辑页操作。
 
 只启用业务相关的规则组（策略编辑 → CRS 规则组），降低每请求的规则评估开销
@@ -160,16 +160,21 @@ detection 模式 CRS 仅记录不拦截（自定义规则仍按规则内动作�
 | 913/911 | 爬虫检测 / 方法限制 | 按需 |
 | 900/905/980/999 | CRS 前排除/通用异常/事件关联/CRS 后通用排除（普通可选组，不选不加载；发射时强制的仅 901/949（959 仅在开启响应检测 waf_check_response 时强制）。900 仅随包 .conf.example,改名启用才有实文件） | 按需 |
 
-### 3.3 阈值与限流
+### 3.3 阈值与 CC 防护
 
-> `anomaly_threshold` 属**阶段 3 · WAF 策略**、限流属**阶段 2 · 限流策略**——
-> 两者为独立策略实体（阶段化单职模型），分别绑定到目标规则。
+> `anomaly_threshold` 属**阶段 3 · WAF 策略**、CC 防护属**阶段 2 · CC 防护策略**——
+> 两者为独立策略实体（阶段化单职模型），分别绑定到目标规则。原阶段 2 配额限流
+> （`rate_limit_rps`/`rate_limit_burst`）已下线：相关列已删除，旧备份导入时自动裁剪，
+> 渲染链不再发射限流处理器。
 
 - `anomaly_threshold`：blocking 模式保持 CRS 默认 **5**；detection 观察期可用 5
   直接评估真实拦截面。
-- 限流（`rate_limit_rps` + `rate_limit_burst`，令牌桶）：登录/验证码/API 端点
-  建议小桶（如 10 rps/burst 20），静态资源不限。按规则粒度配置——绑定到对应
-  路径的规则上，避免全站限流误伤。
+- CC 防护（人机挑战 + CC 异常检测）：登录/验证码/API 等易被脚本刷的端点所在规则
+  建议绑定 CC 防护策略——「始终验证」对首次访问直接挑战，「智能触发」按突刺
+  （`cc_rps_limit`/`cc_rps_window`，默认 40 次/10 秒）、4xx 比例（`cc_4xx_ratio`，
+  默认 70%）、多 UA 会话（`cc_session_ua_threshold`，默认 5）阈值升级为挑战；
+  静态资源用豁免路径（`human_exempt_paths`）跳过挑战。每条规则最多一条阶段 2
+  策略，语义详见 security.zh-CN.md「CC 防护语义」。
 
 ### 3.4 IP 名单管理
 
@@ -221,7 +226,7 @@ detection 模式 CRS 仅记录不拦截（自定义规则仍按规则内动作�
 | 快速故障转移 | `proxy_dial_timeout` 3–5s + 主动健康检查 + `least_conn` |
 | WAF 灰度上线 | 策略 `mode`：detection → blocking |
 | CRS 裁剪 | 策略 `crs_rule_groups` + `crs_excluded_rules` |
-| 限流 | 策略 `rate_limit_rps`/`rate_limit_burst`（按规则粒度） |
+| CC 防护 | 策略 `human_verify_mode`/`human_verify_type` + `cc_detect_enabled`/`cc_rps_limit`/`cc_rps_window`/`cc_4xx_ratio`（每规则一条阶段 2 策略；配额限流已下线） |
 | 请求体上界 | 全局/规则 `request_body_max_size_mb` |
 | 上游保护 | 上游 `max_connections` |
 | 响应压缩 | 规则 `enable_compress` + `compress_types=zstd` |

@@ -73,3 +73,18 @@ func TestBlockPageResponseModeKeepsCustomJSON(t *testing.T) {
 		t.Fatalf("自定义 JSON 必须优先，got %q", body)
 	}
 }
+
+// 标题内残留标签必须剥除、HTML 实体必须反转义（包级去标签正则单源的
+// 行为钉：提取/剥除/反转义/回退四形状）。
+func TestDefaultBlockPageJSONMessage_stripsNestedTagsAndUnescapes(t *testing.T) {
+	content := `<html><head><title><b>Blocked</b> &amp; denied</title></head></html>`
+	got := defaultBlockPageJSONMessage(content)
+	want := `{"message":"Blocked \u0026 denied"}`
+	if got != want {
+		t.Fatalf("derived=%q, want %q", got, want)
+	}
+	// 无标题回退通用文案。
+	if got := defaultBlockPageJSONMessage(`<html><body>x</body></html>`); got != `{"message":"Request blocked"}` {
+		t.Fatalf("无标题回退=%q", got)
+	}
+}

@@ -14,13 +14,13 @@ import (
 // TestCrawlerExemptAttackScopeSQLMatchesGo 逐点对账：段界全覆盖 + 6 位全集
 // 抽样 + 畸形文本，SQL 与 Go 判定必须完全一致。
 func TestCrawlerExemptAttackScopeSQLMatchesGo(t *testing.T) {
-	oldDB, oldMetricsDB, oldAuditDB := db.DB, db.MetricsDB, db.AuditDB
+	oldDB, oldMetricsDB, oldAuditDB, oldCurrent := db.DB, db.MetricsDB, db.AuditDB, db.GetDB()
 	if err := db.Initialize(t.TempDir()); err != nil {
 		t.Fatalf("initialize test database: %v", err)
 	}
 	t.Cleanup(func() {
 		_ = db.Close()
-		db.DB, db.MetricsDB, db.AuditDB = oldDB, oldMetricsDB, oldAuditDB
+		restoreGlobalDBHandles(oldDB, oldMetricsDB, oldAuditDB, oldCurrent)
 	})
 
 	stmt, err := db.MetricsDB.Prepare(`SELECT ` + AttackEventSQLPredicate("rule_triggered", "action") + ` FROM (SELECT ? AS rule_triggered, ? AS action)`)
@@ -120,14 +120,13 @@ func TestTrustDetectLoggedEventExcludedFromAttackScope(t *testing.T) {
 		t.Fatal("id:12 blocked 形态必须保持计入攻击（防御性口径：pass 恒不中断，出现即畸形）")
 	}
 
-	oldDB, oldMetricsDB, oldAuditDB := db.DB, db.MetricsDB, db.AuditDB
+	oldDB, oldMetricsDB, oldAuditDB, oldCurrent := db.DB, db.MetricsDB, db.AuditDB, db.GetDB()
 	if err := db.Initialize(t.TempDir()); err != nil {
 		t.Fatalf("initialize test database: %v", err)
 	}
 	t.Cleanup(func() {
 		_ = db.Close()
-		db.SetDB(oldDB)
-		db.DB, db.MetricsDB, db.AuditDB = oldDB, oldMetricsDB, oldAuditDB
+		restoreGlobalDBHandles(oldDB, oldMetricsDB, oldAuditDB, oldCurrent)
 	})
 	stmt, err := db.MetricsDB.Prepare(`SELECT ` + AttackEventSQLPredicate("rule_triggered", "action") + ` FROM (SELECT ? AS rule_triggered, ? AS action)`)
 	if err != nil {

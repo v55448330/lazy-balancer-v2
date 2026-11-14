@@ -25,9 +25,15 @@ func TestGetSecurityPolicyForRule_LoadsWafCheckResponse(t *testing.T) {
 	if _, err := db.DB.Exec(`INSERT INTO security_policies (name, mode, waf_check_response, enabled) VALUES ('resp-on', 'blocking', 1, 1)`); err != nil {
 		t.Fatalf("seed policy2: %v", err)
 	}
-	db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,listen_port,enabled) VALUES ('lb_resp_check','r','http',8080,1)`)
-	db.DB.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id, policy_id) SELECT 'lb_resp_check', id FROM security_policies WHERE name='resp-on'`)
-	db.DB.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id, policy_id) SELECT 'lb_resp_check', id FROM security_policies WHERE name='resp-off'`)
+	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,listen_port,enabled) VALUES ('lb_resp_check','r','http',8080,1)`); err != nil {
+		t.Fatalf("seed rule: %v", err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id, policy_id) SELECT 'lb_resp_check', id FROM security_policies WHERE name='resp-on'`); err != nil {
+		t.Fatalf("seed resp-on binding: %v", err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id, policy_id) SELECT 'lb_resp_check', id FROM security_policies WHERE name='resp-off'`); err != nil {
+		t.Fatalf("seed resp-off binding: %v", err)
+	}
 
 	p := GetSecurityPolicyForRule("lb_resp_check")
 	if p == nil {
@@ -48,7 +54,9 @@ func TestGetSecurityPolicyForRule_LoadsWafCheckResponse(t *testing.T) {
 	if _, err := db.DB.Exec(`DELETE FROM security_policy_bindings WHERE rule_caddy_id='lb_resp_check'`); err != nil {
 		t.Fatal(err)
 	}
-	db.DB.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id, policy_id) SELECT 'lb_resp_check', id FROM security_policies WHERE name='resp-off'`)
+	if _, err := db.DB.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id, policy_id) SELECT 'lb_resp_check', id FROM security_policies WHERE name='resp-off'`); err != nil {
+		t.Fatalf("reseed resp-off binding: %v", err)
+	}
 	p2 := GetSecurityPolicyForRule("lb_resp_check")
 	if p2 == nil || p2.WAFCheckResponse {
 		t.Fatalf("p2=%v want WAFCheckResponse=false", p2)

@@ -593,6 +593,14 @@ const (
 	accountOwnedPageLimit = 20
 )
 
+// accountVerifyFallbackBudget 是账户级验证回退（GET /accounts 枚举 + 逐账户
+// verify）的独立时间预算（测试缝：var 而非 const，测试按比例缩放保持墙钟
+// 快速；生产代码不得改写）。口径与 services 侧保存前探针一致（基础预算
+// 30s × 重试包络 3）：回退链没有自己的上界时，无效 Token + 慢端点会让保存
+// 请求挂起「账户数 × 单请求重试包络」——数十分钟级。调用方请求 ctx 仍是
+// 上界（客户端断开立即中止）。
+var accountVerifyFallbackBudget = 90 * time.Second
+
 // VerifyToken 以 GET /user/tokens/verify 真实验证 API Token 有效性（保存前
 // 验证入口，registry 侧经 newDNSProviderFromCredentials 构造后调用）：请求
 // 成功且 Token 状态为 active 才算通过——不触 DNS 写入、无需 zone。
@@ -605,7 +613,9 @@ const (
 // 通过。非 invalid 类失败（403 权限不足/429 限流）照旧上抛——账户级尝试只
 // 服务于「值无效」信号；/accounts 枚举本身的失败同样照旧上抛（枚举失败说明
 // 账户可见性无法确认，不得伪装成账户级终态）。归因用的 token id 语义不变：
-// 结果只取 status，两级的 id 均不落任何账本。
+// 结果只取 status，两级的 id 均不落任何账本。账户级回退有独立时间预算
+// （accountVerifyFallbackBudget，以调用方 ctx 为上界）——无效 Token + 慢端点
+// 不得让保存请求逐账户挂起重试包络。
 func (p *Provider) VerifyToken(ctx context.Context) error {
 	var result struct {
 		ID     string `json:"id"`
@@ -622,19 +632,29 @@ func (p *Provider) VerifyToken(ctx context.Context) error {
 	if !errors.As(userErr, &apiErr) || !isInvalidToken(apiErr) {
 		return userErr
 	}
-	accounts, listErr := p.listVisibleAccounts(ctx)
+	fallbackCtx, cancel := context.WithTimeout(ctx, accountVerifyFallbackBudget)
+	defer cancel()
+	accounts, listErr := p.listVisibleAccounts(fallbackCtx)
 	if listErr != nil {
 		return listErr
 	}
 	for _, accountID := range accounts {
+		// 预算耗尽/调用方取消即停止逐账户尝试——不得在 ctx 已死后继续
+		// 发起请求（每次请求都会立即失败，空转且拖延终态）。
+		if err := fallbackCtx.Err(); err != nil {
+			return fmt.Errorf("Cloudflare API Token 账户级验证未在预算内完成（%s）: %w。用户级原始错误：%v", accountVerifyFallbackBudget, err, userErr)
+		}
 		var accountResult struct {
 			Status string `json:"status"`
 		}
 		// 单账户验证失败（无权限/非 active）只淘汰该账户，继续下一个；
 		// 任一 active 即整体通过。
-		if err := p.apiCall(ctx, http.MethodGet, "/accounts/"+accountID+"/tokens/verify", nil, &accountResult); err == nil && accountResult.Status == "active" {
+		if err := p.apiCall(fallbackCtx, http.MethodGet, "/accounts/"+accountID+"/tokens/verify", nil, &accountResult); err == nil && accountResult.Status == "active" {
 			return nil
 		}
+	}
+	if err := fallbackCtx.Err(); err != nil {
+		return fmt.Errorf("Cloudflare API Token 账户级验证未在预算内完成（%s）: %w。用户级原始错误：%v", accountVerifyFallbackBudget, err, userErr)
 	}
 	return fmt.Errorf("Cloudflare API Token 在用户级验证失败，账户级逐账户验证亦未通过（token 可见 %d 个账户）。%s。用户级原始错误：%v", len(accounts), accountTokenGuidance, userErr)
 }

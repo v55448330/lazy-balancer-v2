@@ -28,13 +28,16 @@ export function readHashQuery(hash: string = window.location.hash): HashQuery {
 }
 
 /**
- * 从当前地址的 hash 查询串剥离指定键并 replaceState 回写；剩余为空串时不拼
- * 「?」、hash 整段消失，避免 URL 残留「#?」。无任一键命中时不产生历史扰动。
+ * 从当前地址的 hash 查询串剥离指定键并 replaceState 回写；hash 路径段保留
+ * （深链导航不得因剥离令牌参数而丢页面）。剩余查询为空串时不拼「?」；
+ * 路径与查询都空时 hash 整段消失，避免 URL 残留「#?」。无任一键命中时不产生
+ * 历史扰动。
  */
 export function stripHashParams(keys: readonly string[]): void {
-  const { params } = readHashQuery()
+  const { path, params } = readHashQuery()
   if (!keys.some((key) => params.has(key))) return
   for (const key of keys) params.delete(key)
   const rest = params.toString()
-  window.history.replaceState({}, '', `${window.location.pathname}${window.location.search}${rest ? `#${rest}` : ''}`)
+  const hashBody = `${path}${rest ? `?${rest}` : ''}`
+  window.history.replaceState({}, '', `${window.location.pathname}${window.location.search}${hashBody ? `#${hashBody}` : ''}`)
 }

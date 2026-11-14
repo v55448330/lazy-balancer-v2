@@ -64,7 +64,7 @@ test('stripHashParams：剥离命中键、剩余空串不拼「?」、无命中�
   ;(globalThis as Record<string, unknown>).window = host
   try {
     stripHashParams(['token', 'expires_at'])
-    assert.equal(lastReplaced, '/admin/index.html#keep=y', '剩余非空保留键值；路径段随剥离消失')
+    assert.equal(lastReplaced, '/admin/index.html#/oidc/callback?keep=y', '剩余非空保留键值；路径段保留（深链不因剥离丢页面）')
     assert.equal(host.location.hash, '#/oidc/callback?token=x&keep=y', '只回写历史，不改运行时 hash')
 
     lastReplaced = null
@@ -76,6 +76,11 @@ test('stripHashParams：剥离命中键、剩余空串不拼「?」、无命中�
     host.location.hash = '#/dashboard'
     stripHashParams(['login_ticket', 'token'])
     assert.equal(lastReplaced, null, '无键命中时不产生 replaceState 扰动')
+
+    lastReplaced = null
+    host.location.hash = '#/rules?login_ticket=t1'
+    stripHashParams(['login_ticket'])
+    assert.equal(lastReplaced, '/admin/index.html#/rules', '查询剥空后路径段保留、不拼「?」')
   } finally {
     delete (globalThis as Record<string, unknown>).window
   }

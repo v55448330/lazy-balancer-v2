@@ -2521,7 +2521,9 @@ func (w *lbAuditWriter) Write(al plugintypes.AuditLog) error {
 		return nil
 	}
 	tid := ""
-	if tx := al.Transaction(); tx != nil && tx.HasRequest() {
+	// typed-nil 事务（接口非 nil 但底层指针为 nil）与 snapshotAuditLog 同门：
+	// 裸 != nil 会放行 typed-nil，随后 HasRequest() 解引用空指针 panic。
+	if tx := al.Transaction(); !isNilInterface(tx) && tx.HasRequest() {
 		headers := tx.Request().Headers()
 		tid = securityTimingIDFromHeaders(headers)
 		// logged 干预标记（检测放行拆分）：审计写侧天然知道事务终态——

@@ -794,9 +794,14 @@ func (s *l4Shipper) counters() (sent, failed, spooled, spoolErrs uint64) {
 // 计数层，见 stats.go beginLoad），杜绝 teardown 竞态丢事件。
 type l4Pipeline struct {
 	// ring=覆写环形缓冲（方案③）：入队永不阻塞（满环覆写最旧），内存精确
-	// 上界=容量×槽字节。depth==0 蕴含队列空——收尾刷盘据此排空。
+	// 上界=容量×槽字节。
 	ring   *l4Ring
 	notify chan struct{} // cap 1 非阻塞唤启 drain（满时静默，drain 轮询兜底）
+	// pending 是「已准入但尚未处理完」的行数：准入时递增（先于入队）、
+	// submit 完成后递减、满环覆写逐出时递减。pending==0 蕴含环空且无在途
+	// submit——收尾判据据此排空（只等环空会把已出队未提交的末行漏给下一轮
+	// 周期刷新）。与 auditwriter.pending 同口径。
+	pending atomic.Int64
 	// dropped 丢弃事件行累计（满环覆写/单行上限/IPC 关闭/永久拒绝/
 	// spool 失败），/lb/l4-shipper-stats 暴露。
 	dropped atomic.Uint64
@@ -867,7 +872,10 @@ func (p *l4Pipeline) enqueueEvent(line []byte) {
 		p.reportDropped("line exceeds per-line cap", 1)
 		return
 	}
+	// 准入即计（先于入队）：收尾以 pending==0 判定排空，不含「已准入未入队」漏窗。
+	p.pending.Add(1)
 	if evicted := p.ring.push(line); evicted > 0 {
+		p.pending.Add(-int64(evicted))
 		p.reportDropped("ring overwritten (oldest)", int(evicted))
 	}
 	select {
@@ -920,6 +928,7 @@ func (p *l4Pipeline) popAndSubmit() {
 			return
 		}
 		p.submit(line)
+		p.pending.Add(-1)
 		p.flushIfDueSafely()
 	}
 }
@@ -932,6 +941,7 @@ func (p *l4Pipeline) drainRemainder() {
 			break
 		}
 		p.submit(line)
+		p.pending.Add(-1)
 	}
 	p.flushNowSafely()
 	p.closeShipper()
@@ -988,10 +998,12 @@ func (p *l4Pipeline) closeShipper() {
 	p.shipper.close()
 }
 
-// flushQuiesced 等待已准入事件全部处理完（pending==0）后冲刷残留批。
+// flushQuiesced 限时等待「已准入事件全部处理完」（pending==0 蕴含环空且无
+// 在途 submit）后冲刷残留批——批内滞留行由本次冲刷投递。只等环空不够：
+// pop 与 submit 之间的在途行会在冲刷后才进批，被遗留给下一轮周期刷新。
 func (p *l4Pipeline) flushQuiesced(timeout time.Duration) {
 	deadline := time.Now().Add(timeout)
-	for p.ring.depth() > 0 && time.Now().Before(deadline) {
+	for p.pending.Load() > 0 && time.Now().Before(deadline) {
 		time.Sleep(time.Millisecond)
 	}
 	p.flushNowSafely()

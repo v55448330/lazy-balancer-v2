@@ -486,7 +486,7 @@ func (h *Handlers) GetCurrentUser(c *gin.Context) {
 type UpdateCurrentUserRequest struct {
 	DisplayName *string `json:"display_name" binding:"omitempty,max=50"`
 	// bcrypt 的字节上限 72——x/crypto v0.55+ 超出即返回 ErrPasswordTooLong
-	// (密码策略:8-24 可打印 ASCII,四类字符)
+	// (密码策略:8-24 可打印 ASCII，不强制四类全含，见 validatePasswordPolicy)
 	// 同族：binding 只拦空，长度/复杂度交
 	// validatePasswordPolicy 友好文案（CurrentPassword 例外见下）。
 	Password string `json:"password" binding:"omitempty"`

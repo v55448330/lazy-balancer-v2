@@ -366,7 +366,7 @@ func (s *CertIssuer) deploymentFailedFrom(jobID int, material issuedCertificate,
 		storedMessage += fmt.Sprintf("；证书材料已保留，转入 %d 分钟慢速重试（磁盘/重载恢复后自动收敛）", int(blockedDeploymentRetryDelay.Minutes()))
 	}
 	storedMessage = truncateJobMessage(storedMessage)
-	availableAfter := time.Now().UTC().Add(delay).Format("2006-01-02 15:04:05")
+	availableAfter := CanonicalDatetimeValue(time.Now().Add(delay))
 	// 材料随失败落库——首签发 confirm/persist 瞬时
 	// 失败改走本重试链时,材料仅在内存;不落库则任务回 downloaded 但
 	// 补扫 hasCertMaterial=0 跳过,永久不可达只能重签烧 CA 配额。
@@ -1007,7 +1007,7 @@ func (s *CertIssuer) noteFutureNotBefore(jobID int, material issuedCertificate) 
 	if delay <= 0 {
 		return
 	}
-	effectiveAt := notBefore.UTC().Format("2006-01-02 15:04:05")
+	effectiveAt := CanonicalDatetimeValue(notBefore)
 	Logf("warn", "证书任务 %d（规则 %s）：证书尚未生效（NotBefore=%s UTC），已登记生效后重载", jobID, material.ruleID, effectiveAt)
 	RecordAuditLog("system", "警告", "证书任务", FormatAuditDetail(
 		AuditJobPart(jobID), AuditRulePart(material.ruleID),

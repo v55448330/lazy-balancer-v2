@@ -27,6 +27,28 @@ import (
 	"lazy-balancer-v2/internal/models"
 )
 
+// seedConditionalReloadRows 播种条件重载用例的基线行。种子不含 security 表行——
+// 安全节经 JSON 文本列回放存在字节归一差异（applySecurityTables 的
+// snapshotJSONText 通道），回放后重建哈希与记账哈希分叉会走漂移重放而非哈希
+// 跳过，干扰「无变化」形态。users/rules 节经显式列回放，往返哈希稳定
+// （生产漂移守卫依赖的同一不变式）。
+func seedConditionalReloadRows(t *testing.T, database *sql.DB) {
+	t.Helper()
+	for _, stmt := range []string{
+		`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enabled) VALUES ('lb_dg','dg','http','dg.example',80,1)`,
+		`INSERT INTO upstreams (rule_id,host,port,weight,enabled) VALUES ('lb_dg','127.0.0.1',8080,1,1)`,
+		`INSERT INTO path_rules (rule_id,sort_order,match_type,path) VALUES ('lb_dg',0,'prefix','/api')`,
+		`INSERT INTO users (id,username,password_hash,role,is_enabled,last_login) VALUES (1,'admin','h','admin',1,datetime('now'))`,
+		`INSERT INTO api_keys (name,key_hash,key_prefix,created_by,is_enabled,last_used) VALUES ('k','kh','kp',1,1,datetime('now'))`,
+		`INSERT INTO security_crs_version (id,version) VALUES (1,'v4.0.0') ON CONFLICT(id) DO UPDATE SET version=excluded.version`,
+		`INSERT INTO security_ip2region_version (id,version) VALUES (1,'v3.17.0') ON CONFLICT(id) DO UPDATE SET version=excluded.version`,
+	} {
+		if _, err := database.Exec(stmt); err != nil {
+			t.Fatalf("seed %q: %v", stmt, err)
+		}
+	}
+}
+
 func TestSyncService_applySnapshot_skipsReloadWhenOnlyBookkeepingChanges(t *testing.T) {
 	service, database := newClusterTestService(t)
 	if _, err := database.Exec("UPDATE global_config SET is_master=0 WHERE id=1"); err != nil {
@@ -44,23 +66,7 @@ func TestSyncService_applySnapshot_skipsReloadWhenOnlyBookkeepingChanges(t *test
 	}))
 	defer caddyServer.Close()
 	syncService := NewSyncService(database, &config.Config{CaddyAdminURL: caddyServer.URL}, NewCaddyService(caddyServer.URL))
-	// 种子不含 security 表行——安全节经 JSON 文本列回放存在字节归一差异
-	// （applySecurityTables 的 snapshotJSONText 通道），回放后重建哈希与记账
-	// 哈希分叉会走漂移重放而非哈希跳过，干扰本测试的「无变化」形态。
-	// users/rules 节经显式列回放，往返哈希稳定（生产漂移守卫依赖的同一不变式）。
-	for _, stmt := range []string{
-		`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enabled) VALUES ('lb_dg','dg','http','dg.example',80,1)`,
-		`INSERT INTO upstreams (rule_id,host,port,weight,enabled) VALUES ('lb_dg','127.0.0.1',8080,1,1)`,
-		`INSERT INTO path_rules (rule_id,sort_order,match_type,path) VALUES ('lb_dg',0,'prefix','/api')`,
-		`INSERT INTO users (id,username,password_hash,role,is_enabled,last_login) VALUES (1,'admin','h','admin',1,datetime('now'))`,
-		`INSERT INTO api_keys (name,key_hash,key_prefix,created_by,is_enabled,last_used) VALUES ('k','kh','kp',1,1,datetime('now'))`,
-		`INSERT INTO security_crs_version (id,version) VALUES (1,'v4.0.0') ON CONFLICT(id) DO UPDATE SET version=excluded.version`,
-		`INSERT INTO security_ip2region_version (id,version) VALUES (1,'v3.17.0') ON CONFLICT(id) DO UPDATE SET version=excluded.version`,
-	} {
-		if _, err := database.Exec(stmt); err != nil {
-			t.Fatalf("seed %q: %v", stmt, err)
-		}
-	}
+	seedConditionalReloadRows(t, database)
 	loadCount := func() int {
 		mu.Lock()
 		defer mu.Unlock()
@@ -133,7 +139,6 @@ func TestSyncService_applySnapshot_skipsReloadWhenOnlyBookkeepingChanges(t *test
 // 物化路径，因子变化只能来自被测分量。
 type reloadFactorFixture struct {
 	t        *testing.T
-	database *sql.DB
 	service  *SyncService
 	slaveCRS string
 	slaveXdb string
@@ -151,7 +156,6 @@ func newReloadFactorFixture(t *testing.T) *reloadFactorFixture {
 	t.Helper()
 	fixture := &reloadFactorFixture{t: t}
 	clusterService, database := newClusterTestService(t)
-	fixture.database = database
 	if _, err := database.Exec("UPDATE global_config SET is_master=0 WHERE id=1"); err != nil {
 		t.Fatalf("set slave mode: %v", err)
 	}
@@ -357,21 +361,8 @@ func TestSyncService_applySnapshot_reloadsWhenBrandingFileRewrittenInCompensatio
 	if _, err := database.Exec("UPDATE global_config SET branding_json=? WHERE id=1", branding); err != nil {
 		t.Fatalf("seed branding mirror: %v", err)
 	}
-	// 种子与前一条用例同口径：users/rules 经显式列回放往返哈希稳定，
-	// security 表行缺失会走漂移重放（干扰「无变化」形态）。
-	for _, stmt := range []string{
-		`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enabled) VALUES ('lb_dg','dg','http','dg.example',80,1)`,
-		`INSERT INTO upstreams (rule_id,host,port,weight,enabled) VALUES ('lb_dg','127.0.0.1',8080,1,1)`,
-		`INSERT INTO path_rules (rule_id,sort_order,match_type,path) VALUES ('lb_dg',0,'prefix','/api')`,
-		`INSERT INTO users (id,username,password_hash,role,is_enabled,last_login) VALUES (1,'admin','h','admin',1,datetime('now'))`,
-		`INSERT INTO api_keys (name,key_hash,key_prefix,created_by,is_enabled,last_used) VALUES ('k','kh','kp',1,1,datetime('now'))`,
-		`INSERT INTO security_crs_version (id,version) VALUES (1,'v4.0.0') ON CONFLICT(id) DO UPDATE SET version=excluded.version`,
-		`INSERT INTO security_ip2region_version (id,version) VALUES (1,'v3.17.0') ON CONFLICT(id) DO UPDATE SET version=excluded.version`,
-	} {
-		if _, err := database.Exec(stmt); err != nil {
-			t.Fatalf("seed %q: %v", stmt, err)
-		}
-	}
+	// 种子与前一条用例同口径（seedConditionalReloadRows）。
+	seedConditionalReloadRows(t, database)
 	dataDir := t.TempDir()
 	var mu sync.Mutex
 	loads := 0

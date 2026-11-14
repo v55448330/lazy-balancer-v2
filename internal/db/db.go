@@ -412,9 +412,6 @@ func Initialize(dataDir string) (err error) {
 	if err := runMigrations(); err != nil {
 		return fmt.Errorf("failed to run migrations: %w", err)
 	}
-	if err := migrateAutobanScopeMultiselect(); err != nil {
-		return fmt.Errorf("failed to migrate autoban scope multiselect: %w", err)
-	}
 	if err := backfillHumanEventPolicyAttribution(); err != nil {
 		return fmt.Errorf("failed to backfill human event policy attribution: %w", err)
 	}
@@ -1741,6 +1738,12 @@ func runMigrations() error {
 		return fmt.Errorf("failed to drop cert_job_logs: %w", err)
 	}
 
+	// 口径单选→多选一次性映射必须先于 defaultUpdates 的 autoban_scope 收敛：
+	// 旧单值（blocked/logged/all）不在四维枚举内，先收敛会把 'all' 复位成默认
+	// 全选，映射读到的输入已被摧毁，count_human_failed 开关语义丢失。
+	if err := migrateAutobanScopeMultiselect(); err != nil {
+		return fmt.Errorf("failed to migrate autoban scope multiselect: %w", err)
+	}
 	// Normalize legacy/global default values that are invalid regardless of version
 	// 移除原第 3 条「追加 UA rename 行」的 UPDATE——该行每次启动都被下方
 	// 清理循环无条件剔除（死代码），且引发每启动一次无谓写放大。
@@ -5615,10 +5618,7 @@ func migrateTCPRuleSecurityPolicyBindings() error {
 	if err := DB.QueryRow(`SELECT COUNT(*) FROM security_policy_bindings b
 		JOIN lb_rules r ON r.caddy_id=b.rule_caddy_id AND r.protocol='tcp'
 		JOIN security_policies p ON p.id=b.policy_id
-		WHERE (COALESCE(p.human_verify_mode,'off') NOT IN ('','off') OR COALESCE(p.cc_detect_enabled,0)=1)
-			OR COALESCE(p.mode,'off') IN ('blocking','detection','custom_only')
-			OR CASE WHEN json_valid(COALESCE(p.custom_rules,'[]')) AND json_type(COALESCE(p.custom_rules,'[]'))='array'
-				THEN json_array_length(COALESCE(p.custom_rules,'[]')) ELSE 0 END > 0`).Scan(&stale); err != nil {
+		WHERE ` + tcpRuleUnsupportedBindingPredicate).Scan(&stale); err != nil {
 		return fmt.Errorf("failed to inspect TCP rule policy bindings: %w", err)
 	}
 	if stale == 0 {
@@ -5661,14 +5661,24 @@ func migrateTCPRuleSecurityPolicyBindings() error {
 //
 // 不 bump cluster_version：纯表示层格式归一，每节点本地启动迁移各自收敛；
 // 同版本前提下快照节哈希在两侧一致（归一是确定性的），无需版本门触发重拉。
+// tcpRuleUnsupportedBindingPredicate 是「TCP 规则绑定的策略携带 L4 不支持特征」
+// 的判定谓词单一事实源（策略行别名 p）：G2（CC：human_verify_mode≠off 或
+// cc_detect_enabled=1）或 G3（WAF：mode∈blocking/detection/custom_only 或自定义
+// 规则引用数组非空）。特征判定与 models.PolicyTypeFeatures 同语义（G2/G3 字面量
+// 口径）；custom_rules 仅认 JSON 数组形态（对象旧形态与 models.CustomRulesRefCount
+// 同判 0）；畸形 JSON 经 json_valid 门按 0 计（与渲染侧「不认领」口径一致）。
+// 消费方：启动迁移探测（migrateTCPRuleSecurityPolicyBindings）与清理语句
+// TCPRuleUnsupportedBindingPruneSQL——两处必须同源，探测偏窄会把待清理绑定
+// 静默留在库里，偏宽会空开写事务并扰动 cluster_version。
+const tcpRuleUnsupportedBindingPredicate = `(COALESCE(p.human_verify_mode,'off') NOT IN ('','off') OR COALESCE(p.cc_detect_enabled,0)=1)
+	OR COALESCE(p.mode,'off') IN ('blocking','detection','custom_only')
+	OR CASE WHEN json_valid(COALESCE(p.custom_rules,'[]')) AND json_type(COALESCE(p.custom_rules,'[]'))='array'
+		THEN json_array_length(COALESCE(p.custom_rules,'[]')) ELSE 0 END > 0`
+
 // TCPRuleUnsupportedBindingPruneSQL 是「TCP 规则上 L4 不支持的策略绑定」清理
 // 语句单一事实源（L4 阶段 0/1 语义）：TCP 规则可绑定 stage0/stage1 特征策略
 // （信任/IP ACL/黑名单/GeoIP，渲染链 buildTCPSecurityRoutes 消费），仅当绑定
-// 的策略携带 G2（CC：human_verify_mode≠off 或 cc_detect_enabled=1）或 G3（WAF：mode∈
-// blocking/detection/custom_only 或自定义规则引用数组非空）特征时清理。
-// 特征判定与 models.PolicyTypeFeatures 同语义（G2/G3 字面量口径）；
-// custom_rules 仅认 JSON 数组形态（对象旧形态与 models.CustomRulesRefCount
-// 同判 0）；畸形 JSON 经 json_valid 门按 0 计（与渲染侧「不认领」口径一致）。
+// 的策略命中 tcpRuleUnsupportedBindingPredicate 时清理。
 // 消费方：启动迁移 migrateTCPRuleSecurityPolicyBindings、导入事务
 // pruneTCPRuleBindings、保存/启用终态收口（handlers 共用本常量，禁止第二份
 // 字面量）。指向已删除策略的悬挂绑定不在本语句范围（悬挂族通用清理管辖）。
@@ -5680,10 +5690,7 @@ const TCPRuleUnsupportedBindingPruneSQL = `DELETE FROM security_policy_bindings
 		SELECT 1 FROM lb_rules r
 		JOIN security_policies p ON p.id = security_policy_bindings.policy_id
 		WHERE r.caddy_id = security_policy_bindings.rule_caddy_id AND r.protocol='tcp'
-			AND ((COALESCE(p.human_verify_mode,'off') NOT IN ('','off') OR COALESCE(p.cc_detect_enabled,0)=1)
-				OR COALESCE(p.mode,'off') IN ('blocking','detection','custom_only')
-				OR CASE WHEN json_valid(COALESCE(p.custom_rules,'[]')) AND json_type(COALESCE(p.custom_rules,'[]'))='array'
-					THEN json_array_length(COALESCE(p.custom_rules,'[]')) ELSE 0 END > 0))`
+			AND (` + tcpRuleUnsupportedBindingPredicate + `))`
 
 func normalizeRuleTimestampsMigration() error {
 	for _, table := range []string{"lb_rules", "path_rules"} {
@@ -5952,16 +5959,6 @@ func migrateRuleTLSModeResidue() error {
 	return nil
 }
 
-// migratePolicyStagesV1 阶段合并（2026-11-12 用户裁定，一次性）：
-//
-//	CC 防护 = 阶段 2（配额 + 人机挑战）——旧人机策略(stage3)并入同规则的 CC
-//	策略(stage2)：保留配额，吸收人机模式/方式/有效期/豁免与 cc_* 阈值；
-//	内容防护(WAF) = 阶段 3——旧 stage4 重编号。
-//
-// 同规则同时存在两条策略时：选定最小 id 的 stage2 为目标，逐条人机策略把配置
-// 合并进目标、删除该规则上的人机绑定；若人机策略仍绑定其他规则则保留行并改型
-// 为 stage2（无绑定且已被合并的行删除）。一次性门置位后重跑零改写——否则
-// WAF(stage3) 会被当成人机再次合并。
 // retireRateLimitQuota 彻底删除已下线的配额限流三列（rate_limit_enabled/rps/burst）。
 // 列删除后旧备份/旧快照的 rate_limit_* 由导入/同步侧裁剪（不进入 INSERT），
 // 旧规则绑定不受影响。幂等：列不存在时零操作。
@@ -6180,11 +6177,20 @@ func validAutobanScopeSet(scope string) bool {
 	return count > 0
 }
 
-// migratePolicyStagesV1 一次性阶段合并：把五阶段中间态（stage3=人机、stage4=WAF，
-// 仅 dev 库可达）收敛为四阶段——人机并入 CC(stage2)、旧 WAF(stage4) 重编号 stage3。
+// migratePolicyStagesV1 阶段合并（2026-11-12 用户裁定，一次性）：
+//
+//	CC 防护 = 阶段 2（人机挑战）——旧人机策略(stage3)并入同规则的 CC
+//	策略(stage2)：吸收人机模式/方式/有效期/豁免与 cc_* 阈值（配额限流列
+//	已由 retireRateLimitQuota 退役）；内容防护(WAF) = 阶段 3——旧 stage4 重编号。
+//
+// 同规则同时存在两条策略时：选定最小 id 的 stage2 为目标，逐条人机策略把配置
+// 合并进目标、删除该规则上的人机绑定；若人机策略仍绑定其他规则则保留行并改型
+// 为 stage2（无绑定且已被合并的行删除）。一次性门置位后重跑零改写——否则
+// WAF(stage3) 会被当成人机再次合并。
 // 人机候选与改型都带特征甄别（human_verify_mode!='off' 或 cc_detect_enabled=1）：
-// v2.4.3 及更早正式库 stage3=WAF，无甄别会把 WAF 当人机删除/改型（2026-11-13
-// 用户报障根因）。已受损库由 repairPolicyStageMergeV2 还原。幂等：门置位后重跑零改写。
+// v2.4.3 及更早正式库 stage3=WAF（五阶段中间态仅 dev 库可达），无甄别会把 WAF
+// 当人机删除/改型（2026-11-13 用户报障根因）。已受损库由 repairPolicyStageMergeV2
+// 还原。幂等：门置位后重跑零改写。
 func migratePolicyStagesV1() error {
 	if err := ensureNewColumns(map[string]string{
 		"global_config.policy_stage_merge_v1": "BOOLEAN DEFAULT 0",

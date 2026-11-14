@@ -108,7 +108,8 @@ func TestNextAutoBackupSlotReadConsumesRequestContext(t *testing.T) {
 	if !strings.Contains(text, "func NextAutoBackupSlot(ctx context.Context, now time.Time)") {
 		t.Fatal("NextAutoBackupSlot 必须提供接收请求 ctx 的入口")
 	}
-	if !strings.Contains(text, "db.DB.QueryRowContext(ctx,") {
+	if !strings.Contains(text, "database.QueryRowContext(ctx,") {
+		// db.GetDB() 原子句柄局部变量 database，ctx 仍传入
 		t.Fatal("自动备份设置快照必须使用 QueryRowContext，取消后不得继续无 ctx 单行读")
 	}
 }

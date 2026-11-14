@@ -935,8 +935,10 @@ func ruleIDsFromQueryer(ctx context.Context, q rowsQueryer) ([]string, error) {
 }
 
 // collectPostCommitCleanup 在导入事务视图内收集提交后待清理的产物集，并在
-// 事务内完成 cert_jobs 的必要删除（孤儿行 + 已非 ACME 签发态的行）。返回 nil
-// 表示本次导入未替换规则/证书任务面（users-only 等分类导入对 live 数据零触碰）。
+// 事务内完成 cert_jobs 的必要删除（孤儿行 + 已非 ACME 签发态的行）与到期
+// 回填——cert_jobs 清理的 coordinator 单点（v1/v2 共用，导入核心不再维护
+// 第二份同语句）。返回 nil 表示本次导入未替换规则/证书任务面（users-only
+// 等分类导入对 live 数据零触碰）。
 //
 // v2/v1 全量替换导入都清光 lb_rules 后重插（v1 还换新 caddy_id）：旧规则的
 // 证书文件（含 ACME 私钥）此前只写不删，与 DeleteRule「规则消失→密钥删除」的
@@ -948,15 +950,24 @@ func (session *configImportSession) collectPostCommitCleanup() (*importArtifactC
 		return nil, nil
 	}
 	ctx := session.ctx
-	// 与 v2 导入事务内同语句（幂等重复无害）：两处删除都是派生数据清理，
-	// 放事务内=与规则替换同生共死，失败随导入一起回滚。
+	// cert_jobs 清理单点（v1/v2 共用）：孤儿行 + 规则仍在但已非 ACME 自动
+	// 签发态（manual/TLS 关闭/NULL）的行。两条删除都是派生数据清理，放事务
+	// 内=与规则替换同生共死，失败随导入一起回滚。「启用 TLS」判定走
+	// enableTLSEnabledSQLPredicate 单源（IIF 归一，NULL→0），禁止第二份裸
+	// enable_tls 字面量。
 	if _, err := session.tx.ExecContext(ctx,
 		`DELETE FROM cert_jobs WHERE NOT EXISTS (SELECT 1 FROM lb_rules WHERE lb_rules.caddy_id = cert_jobs.rule_id)`); err != nil {
 		return nil, fmt.Errorf("清理孤儿证书任务失败: %w", err)
 	}
 	if _, err := session.tx.ExecContext(ctx,
-		`DELETE FROM cert_jobs WHERE rule_id IN (SELECT caddy_id FROM lb_rules WHERE NOT (COALESCE(enable_tls,0)=1 AND COALESCE(tls_source,'manual')='acme_dns'))`); err != nil {
+		`DELETE FROM cert_jobs WHERE rule_id IN (SELECT caddy_id FROM lb_rules WHERE NOT (`+enableTLSEnabledSQLPredicate+` AND COALESCE(tls_source,'manual')='acme_dns'))`); err != nil {
 		return nil, fmt.Errorf("清理失效证书任务失败: %w", err)
+	}
+	// 到期口径收敛：有效材料但 expires_at 缺失的导入行按 PEM 派生回填
+	// （已有列值优先，不改写）。不回填会让 /certificates/jobs 的派生值
+	// 与聚合端（节点健康 certs_expiring_30d、证书页）的列值口径分叉。
+	if _, err := backfillCertJobExpiryFromPEM(ctx, session.tx); err != nil {
+		return nil, fmt.Errorf("回填证书任务到期时间失败: %w", err)
 	}
 	plan := &importArtifactCleanupPlan{}
 	currentIDs, err := ruleIDsFromQueryer(ctx, session.tx)

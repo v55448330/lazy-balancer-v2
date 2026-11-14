@@ -587,6 +587,7 @@ func TestRunAutoBackupOnce_reportsSectionsReadFailure(t *testing.T) {
 // Then 按取消返回（context.Canceled），零 failed 行、零「备份失败」审计、零文件
 // ——读取阶段与构建/写盘的取消口径必须同形，取消不是备份失败。
 func TestRunAutoBackupOnce_cancelDuringSectionsReadLeavesNoFailedRowOrAudit(t *testing.T) {
+	withIsolatedGlobal(t)
 	h := newAutoBackupTestHandlers(t)
 	failedAuditsBefore := countAutoBackupAudit(t, "备份失败")
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1634,5 +1635,36 @@ func TestAutoBackupFileEndpoints_rejectRelativeBackupDir(t *testing.T) {
 	}
 	if data, err := os.ReadFile(target); err != nil || string(data) != "must-survive" {
 		t.Fatalf("CWD 同名文件被误操作: data=%q err=%v", string(data), err)
+	}
+}
+
+// keep=0 边界：全部行都是待删窗口（LIMIT -1 OFFSET 0），文件+行同删；
+// 空表裁剪零删除不报错。与既有 keep>0 用例互补钉住窗口读取语义。
+func TestPruneAutoBackups_keepZeroRemovesAllAndEmptyIsNoop(t *testing.T) {
+	h := newAutoBackupTestHandlers(t)
+	dir := h.cfg.BackupDir
+	for i := 1; i <= 3; i++ {
+		name := fmt.Sprintf("lbbak-auto-zero%d.lbbak", i)
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("payload"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.DB.Exec(`INSERT INTO auto_backups (filename, created_at, status, size_bytes, trigger_type) VALUES (?, datetime('now', ?), 'success', 7, 'schedule')`, name, fmt.Sprintf("-%d minutes", i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	pruneAutoBackups(context.Background(), dir, 0, 20)
+
+	if rows := autoBackupRows(t, "WHERE status='success'"); len(rows) != 0 {
+		t.Fatalf("keep=0 后 success 行=%d, want 0（全部行属待删窗口）", len(rows))
+	}
+	matches, _ := filepath.Glob(filepath.Join(dir, "lbbak-auto-zero*.lbbak"))
+	if len(matches) != 0 {
+		t.Fatalf("keep=0 后文件=%v, want 全删", matches)
+	}
+	// 空表再裁剪：零删除、不报错。
+	pruneAutoBackups(context.Background(), dir, 0, 20)
+	if rows := autoBackupRows(t, ""); len(rows) != 0 {
+		t.Fatalf("空表裁剪后行=%d, want 0", len(rows))
 	}
 }

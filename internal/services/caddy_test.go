@@ -1674,20 +1674,20 @@ func TestGenerateCaddyConfig_rendersOneErrorRoutePerRule_whenServerHasMultipleBl
 	assertEqual(t, betaHandler["body"], "<html>beta-block</html>")
 	assertEqual(t, betaHandler["status_code"], 403)
 	// 归因路由：483=alpha 策略（451），484=beta 策略（block_status_code 0 归一 403）
-	attr481 := bySynthetic["483"]
-	if attr481 == nil {
+	attr483 := bySynthetic["483"]
+	if attr483 == nil {
 		t.Fatalf("no 483 attribution route: %#v", errorRoutes)
 	}
-	attr481Handler := firstHandler(t, attr481)
-	assertEqual(t, attr481Handler["body"], "<html>alpha-block</html>")
-	assertEqual(t, attr481Handler["status_code"], 451)
-	attr482 := bySynthetic["484"]
-	if attr482 == nil {
+	attr483Handler := firstHandler(t, attr483)
+	assertEqual(t, attr483Handler["body"], "<html>alpha-block</html>")
+	assertEqual(t, attr483Handler["status_code"], 451)
+	attr484 := bySynthetic["484"]
+	if attr484 == nil {
 		t.Fatalf("no 484 attribution route: %#v", errorRoutes)
 	}
-	attr482Handler := firstHandler(t, attr482)
-	assertEqual(t, attr482Handler["body"], "<html>beta-block</html>")
-	assertEqual(t, attr482Handler["status_code"], 403)
+	attr484Handler := firstHandler(t, attr484)
+	assertEqual(t, attr484Handler["body"], "<html>beta-block</html>")
+	assertEqual(t, attr484Handler["status_code"], 403)
 }
 
 func TestGenerateCaddyConfig_omitsErrorRoutes_whenRuleHasNoPolicyBinding(t *testing.T) {

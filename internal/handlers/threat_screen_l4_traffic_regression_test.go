@@ -9,7 +9,6 @@ package handlers
 //     推进基线」（l4connstats.go）同语义背离。
 // 首轮（无基线）全量计数的既有契约不变（threat_screen_l4_traffic_test.go 钉测）。
 import (
-	"net/http/httptest"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -112,5 +111,3 @@ func l4RulesAllowed(t *testing.T, data gin.H, cid string) uint64 {
 	}
 	return r["allowed"]
 }
-
-var _ = httptest.NewServer // 保持导入对齐（newL4TrafficAdmin 同文件族）

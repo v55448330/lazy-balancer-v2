@@ -199,3 +199,38 @@ func TestCertJobProviderDanglingCounts_shapesAndRuleSource(t *testing.T) {
 		t.Fatalf("empty carried rules disabled/missing=%d/%d, want 0/0（空表随包不得回退读 live）", disabled, missing)
 	}
 }
+
+// 「启用 TLS」判定必须与全仓 IIF(enable_tls IN ('1',1),1,0) 归一口径一致：
+// TEXT '1' 带外写入形态的启用 ACME 规则必须计入悬挂统计（裸 enable_tls=1
+// 比较在 NUMERIC 亲和下对 TEXT '1' 失配，告警漏计）；NULL/0 形态不得计入。
+func TestCertJobProviderDanglingCounts_textFormEnableTLSIsEnabled(t *testing.T) {
+	database := initializeRuleFeatureTestDB(t)
+	ctx := context.Background()
+	if _, err := database.Exec(`INSERT OR IGNORE INTO global_config (id, caddy_config) VALUES (1,'{}')`); err != nil {
+		t.Fatalf("seed global config: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enabled,enable_tls,tls_source)
+		VALUES ('lb_text_tls','text-tls','http','text-tls.example.test',443,1,'1','acme_dns'),
+		       ('lb_null_tls','null-tls','http','null-tls.example.test',443,1,NULL,'acme_dns'),
+		       ('lb_zero_tls','zero-tls','http','zero-tls.example.test',443,1,0,'acme_dns')`); err != nil {
+		t.Fatalf("seed rules: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO ca_providers (id,name,provider,directory_url,credentials,enabled)
+		VALUES (21,'disabled-provider','letsencrypt','https://acme.example/dir','{}',0)`); err != nil {
+		t.Fatalf("seed disabled provider: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,ca_provider_id,created_at,updated_at)
+		VALUES ('lb_text_tls','text-tls.example.test','issued',21,datetime('now'),datetime('now')),
+		       ('lb_null_tls','null-tls.example.test','issued',21,datetime('now'),datetime('now')),
+		       ('lb_zero_tls','zero-tls.example.test','issued',21,datetime('now'),datetime('now'))`); err != nil {
+		t.Fatalf("seed cert jobs: %v", err)
+	}
+
+	disabled, missing, err := certJobProviderDanglingCounts(ctx, database, map[string][]map[string]any{}, map[string]bool{"ca_providers": true})
+	if err != nil {
+		t.Fatalf("counts: %v", err)
+	}
+	if disabled != 1 || missing != 0 {
+		t.Fatalf("disabled/missing=%d/%d, want 1/0（TEXT '1' 按启用 TLS 计入；NULL/0 不计）", disabled, missing)
+	}
+}

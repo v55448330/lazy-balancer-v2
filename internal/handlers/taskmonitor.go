@@ -81,8 +81,15 @@ func respondTaskTriggerAdmissionError(c *gin.Context, err error) {
 		c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: apimsg.Tf(c, "k_e48d88b3", apimsg.ErrMsg(c, err))})
 		return
 	}
-	if errors.Is(err, taskengine.ErrAlreadyRunning) || errors.Is(err, taskengine.ErrSchedulingPaused) || errors.Is(err, taskengine.ErrEngineStopped) {
+	if errors.Is(err, taskengine.ErrAlreadyRunning) || errors.Is(err, taskengine.ErrSchedulingPaused) {
 		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: apimsg.Tf(c, "k_e48d88b3", apimsg.ErrMsg(c, err))})
+		return
+	}
+	// 引擎已停止（IsStopped 预检之后才停止的关停竞态窗）：与 toggle/cancel/
+	// control 的 503「任务引擎已停止」同口径——同一事实不得在 trigger 面漂移
+	// 成 409（admission 拒绝不是任务状态冲突）。
+	if errors.Is(err, taskengine.ErrEngineStopped) {
+		respondTaskEngineStopped(c)
 		return
 	}
 	c.JSON(http.StatusServiceUnavailable, models.APIResponse{Code: 503, Message: apimsg.Tf(c, "k_cbf39b14", apimsg.ErrMsg(c, err))})

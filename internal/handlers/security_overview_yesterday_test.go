@@ -2,8 +2,8 @@ package handlers
 
 // 安全总览新增指标（昨日窗口计数 + 正常请求差分）RED→GREEN 用例：
 //   - 昨日拦截/检测走原始表单日窗口（本地日界跨 UTC），攻击面谓词同今日直算；
-//   - TCP 协议拆分（blocked）；检测 TCP 拆分（logged）来自 L4 信任检测
-//     （trust_detect）产 tcp+logged 事件，无该形态时为 0；
+//   - TCP 协议拆分（blocked）；检测 TCP 拆分（trust）来自 L4 信任检测
+//     （trust_detect）审计行经摄取升格 logged→trust，无该形态时为 0；
 //   - 正常请求 HTTP=累计差分−被拦差分（跨日/重置钳制/样本不足/负值钳零）；
 //   - 正常 TCP=lb_l4_conn_history 全局行 allowed 日差分；
 //   - apidocs 口径披露与示例键。
@@ -84,8 +84,8 @@ func seedOverviewEvent(t *testing.T, eventTime, clientIP, action, eventType stri
 
 // 昨日窗口按本地日界跨 UTC：昨日窗口=[昨日本地 0 点, 今日本地 0 点)（UTC 文本
 // 比较），窗口外（前日/今日起点及以后）事件不得计入；TCP 拆分只认
-// event_type='tcp' AND action='blocked'；yesterday_detected_tcp=tcp+logged
-// （L4 信任检测 trust_detect 产该形态，与 HTTP stage0 DetectionOnly 对齐）。
+// event_type='tcp' AND action='blocked'；yesterday_detected_tcp=tcp+trust
+// （L4 信任检测 trust_detect 经摄取升格产该形态，与 HTTP stage0 DetectionOnly 对齐）。
 func TestGetSecurityOverview_yesterdayWindowLocalBoundaryAndTCPSplit(t *testing.T) {
 	setupSecurityPolicyTestDB(t)
 	loc := services.CurrentLocation()
@@ -102,8 +102,8 @@ func TestGetSecurityOverview_yesterdayWindowLocalBoundaryAndTCPSplit(t *testing.
 	seedOverviewEvent(t, ts(ydayStart.Add(-time.Hour)), "93.184.216.10", "blocked", "crs")
 	// 边界：恰为今日本地 0 点的事件属今日（今日 TCP 拆分=1）。
 	seedOverviewEvent(t, ts(todayStart), "93.184.216.11", "blocked", "tcp")
-	// 昨日窗口内 tcp+logged（L4 信任检测 trust_detect 形态）计入 yesterday_detected_tcp。
-	seedOverviewEvent(t, ts(ydayStart.Add(4*time.Hour)), "93.184.216.12", "logged", "tcp")
+	// 昨日窗口内 tcp+trust（L4 信任检测 trust_detect 摄取升格形态）计入 yesterday_detected_tcp。
+	seedOverviewEvent(t, ts(ydayStart.Add(4*time.Hour)), "93.184.216.12", "trust", "tcp")
 
 	resp := fetchOverviewNewFields(t)
 	if got := *resp.Data.YesterdayBlocked; got != 2 {
@@ -112,11 +112,11 @@ func TestGetSecurityOverview_yesterdayWindowLocalBoundaryAndTCPSplit(t *testing.
 	if got := *resp.Data.YesterdayBlockedTCP; got != 1 {
 		t.Fatalf("yesterday_blocked_tcp=%d, want 1（仅 tcp+blocked）", got)
 	}
-	if got := *resp.Data.YesterdayDetected; got != 2 {
-		t.Fatalf("yesterday_detected=%d, want 2（合计口径含窗口内全部 logged，含人工 tcp+logged 形态）", got)
+	if got := *resp.Data.YesterdayDetected; got != 1 {
+		t.Fatalf("yesterday_detected=%d, want 1（攻击口径仅 logged crs；trust 整类排除）", got)
 	}
 	if got := *resp.Data.YesterdayDetectedTCP; got != 1 {
-		t.Fatalf("yesterday_detected_tcp=%d, want 1（窗口内 tcp+logged=信任检测形态）", got)
+		t.Fatalf("yesterday_detected_tcp=%d, want 1（窗口内 tcp+trust=信任检测形态）", got)
 	}
 	if got := *resp.Data.TodayBlockedTCP; got != 1 {
 		t.Fatalf("today_blocked_tcp=%d, want 1（今日起点事件属今日）", got)

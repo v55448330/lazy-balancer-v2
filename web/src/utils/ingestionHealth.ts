@@ -84,8 +84,11 @@ export function ingestionWarningMessage(status?: IngestionHealth | null): string
     // 两件事，追加丢失披露段（与单独 data_loss 分支同一单源）。
     return status.data_loss === true ? `${stopped}${t('common.app.views.ingest.lossWhileStopped', { detail: lossDisclosureMessage(status) })}` : stopped
   }
+  // 首命中分支不得掩蔽同帧的永久丢失事实：已知丢失计数追加披露段
+  // （与「任务已停 + 曾丢失」同一单源 lossDisclosureMessage）。
+  const lossSuffix = status.data_loss === true ? t('common.app.views.ingest.lossWhileStopped', { detail: lossDisclosureMessage(status) }) : ''
   if (status.writer_stats_unavailable === true) {
-    return t('common.app.views.ingest.writerStatsUnavailable')
+    return `${t('common.app.views.ingest.writerStatsUnavailable')}${lossSuffix}`
   }
   if (status.writer_degraded === true) {
     const format = status.writer_format_errors ?? 0
@@ -93,30 +96,30 @@ export function ingestionWarningMessage(status?: IngestionHealth | null): string
     const hint = format > 0
       ? t('common.app.views.ingest.writerDegradedFormatHint')
       : t('common.app.views.ingest.writerDegradedHint')
-    return t('common.app.views.ingest.writerDegraded', {
+    return `${t('common.app.views.ingest.writerDegraded', {
       dropped: status.writer_dropped ?? 0,
       io: status.writer_io_errors ?? 0,
       formatPart,
       hint,
-    })
+    })}${lossSuffix}`
   }
   if (status.observed === true && status.healthy === false) {
     const failures = status.consecutive_failures ?? 0
     if (failures > 0) {
       const detail = status.last_error ? t('common.app.views.ingest.lastErrorSuffix', { error: status.last_error }) : ''
-      return t('common.app.views.ingest.consecutiveFailures', { failures, detail })
+      return `${t('common.app.views.ingest.consecutiveFailures', { failures, detail })}${lossSuffix}`
     }
     if ((status.skipped_regions ?? 0) > 0) {
       const lastSkip = status.last_skip_at ? t('common.app.views.ingest.skipLastSuffix', { at: status.last_skip_at }) : ''
-      return t('common.app.views.ingest.skippedRegions', {
+      return `${t('common.app.views.ingest.skippedRegions', {
         regions: status.skipped_regions,
         size: humanBytes(status.skipped_bytes ?? 0),
         lastSkip,
-      })
+      })}${lossSuffix}`
     }
     // 后端健康位为 false 但前端已知归因均不成立：不虚构「连续失败 0 次」，
     // 也不得暗示事件停更（实时 IPC 入库不经该任务调度）。
-    return t('common.app.views.ingest.healthAnomaly')
+    return `${t('common.app.views.ingest.healthAnomaly')}${lossSuffix}`
   }
   // data_loss 单独成立（当前已恢复但曾丢失）：披露段与「任务已停 + 曾丢失」共用单源。
   return lossDisclosureMessage(status)

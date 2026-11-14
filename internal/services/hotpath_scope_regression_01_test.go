@@ -75,10 +75,10 @@ func TestPrecheckProjectionFilesScopedPerRule(t *testing.T) {
 	seedHTTPRuleForGeneration(t, database, "lb-scope-a", "scope-a.example.test", 8080)
 	seedHTTPRuleForGeneration(t, database, "lb-scope-b", "scope-b.example.test", 8080)
 	pidA := mpGenBindPolicy(t, database, "lb-scope-a", "scope-a-deny", mpGenPolicySpec{
-		mode: "detection", enabled: true, ipACLEnabled: true, ipACLMode: "deny", ipACLList: `["203.0.113.5"]`,
+		mode: "detection", enabled: true, ipACLEnabled: true, ipACLMode: "deny", ipACLList: `["45.33.32.5"]`,
 	})
 	pidB := mpGenBindPolicy(t, database, "lb-scope-b", "scope-b-deny", mpGenPolicySpec{
-		mode: "detection", enabled: true, ipACLEnabled: true, ipACLMode: "deny", ipACLList: `["198.51.100.9"]`,
+		mode: "detection", enabled: true, ipACLEnabled: true, ipACLMode: "deny", ipACLList: `["45.33.32.9"]`,
 	})
 
 	// When：逐规则走与全量渲染同通道的生产渲染（先 A 后 B——B 的渲染在后，
@@ -94,13 +94,13 @@ func TestPrecheckProjectionFilesScopedPerRule(t *testing.T) {
 	// 生产粒度=消费粒度，异规则同策略同文件同字节；异策略必不同文件。
 	gotA := readRenderedIPList(t, preA, fmt.Sprintf("p%d-acl", pidA))
 	gotB := readRenderedIPList(t, preB, fmt.Sprintf("p%d-acl", pidB))
-	if !strings.Contains(gotA, "203.0.113.5/32") {
-		t.Fatalf("规则 A 的 deny 并集投影被覆盖（缺 203.0.113.5/32）：A 文件=%q B 文件=%q\nA 预检段：\n%s", gotA, gotB, preA)
+	if !strings.Contains(gotA, "45.33.32.5/32") {
+		t.Fatalf("规则 A 的 deny 并集投影被覆盖（缺 45.33.32.5/32）：A 文件=%q B 文件=%q\nA 预检段：\n%s", gotA, gotB, preA)
 	}
-	if !strings.Contains(gotB, "198.51.100.9/32") {
-		t.Fatalf("规则 B 的 deny 并集投影缺自己的条目 198.51.100.9/32：B 文件=%q", gotB)
+	if !strings.Contains(gotB, "45.33.32.9/32") {
+		t.Fatalf("规则 B 的 deny 并集投影缺自己的条目 45.33.32.9/32：B 文件=%q", gotB)
 	}
-	if strings.Contains(gotA, "198.51.100.9") || strings.Contains(gotB, "203.0.113.5") {
+	if strings.Contains(gotA, "45.33.32.9") || strings.Contains(gotB, "45.33.32.5") {
 		t.Fatalf("逐策略 deny 投影串染（B 条目 %q / A 条目 %q）——异策略集规则不得共享投影文件", gotA, gotB)
 	}
 }
@@ -159,13 +159,13 @@ func TestCertMaterialChangeForcesReloadOnListConverge(t *testing.T) {
 	autobanReloader = func() error { spy.reloads++; return nil }
 	t.Cleanup(func() { autobanProjectionRefresher, autobanReloader = oldRef, oldRel })
 
-	autobanObserveEvent("203.0.113.1", "blocked", "942100")
-	autobanObserveEvent("203.0.113.1", "blocked", "942100")
+	autobanObserveEvent("45.33.32.1", "blocked", "942100")
+	autobanObserveEvent("45.33.32.1", "blocked", "942100")
 	if err := RunAutobanCycle(taskengine.RunContext{Trigger: "auto"}); err != nil {
 		t.Fatalf("RunAutobanCycle: %v", err)
 	}
-	if len(presetEntries(t)) != 1 || presetEntries(t)[0].Value != "203.0.113.1" {
-		t.Fatalf("名单 merge 结果=%+v, want 新封 203.0.113.1", presetEntries(t))
+	if len(presetEntries(t)) != 1 || presetEntries(t)[0].Value != "45.33.32.1" {
+		t.Fatalf("名单 merge 结果=%+v, want 新封 45.33.32.1", presetEntries(t))
 	}
 	if spy.refreshes != 1 {
 		t.Fatalf("资格门命中必须走投影热路径刷新：refreshes=%d", spy.refreshes)
@@ -259,7 +259,7 @@ func TestRefreshTriStateCertMaterialization(t *testing.T) {
 		t.Fatalf("首次应用: %v", err)
 	}
 	// 基线：名单写（无证书变化）→ Converged（零 /load 契约的回归形状）。
-	listID := seedHotPathList(t, `[{"value":"203.0.113.5","remark":""}]`)
+	listID := seedHotPathList(t, `[{"value":"45.33.32.5","remark":""}]`)
 	seedHotPathPolicy(t, listID)
 	// 名单新增会改变 p<id>-acl.txt 引用面（策略新增=发射面变化）——先全量
 	// 应用一次让发射面落定，再改名单内容。
@@ -276,7 +276,7 @@ func TestRefreshTriStateCertMaterialization(t *testing.T) {
 		t.Fatalf("update cert: %v", err)
 	}
 	if _, err := db.DB.Exec(`UPDATE security_ip_lists SET entries=? WHERE id=?`,
-		`[{"value":"203.0.113.5","remark":""},{"value":"198.51.100.7","remark":""}]`, listID); err != nil {
+		`[{"value":"45.33.32.5","remark":""},{"value":"45.33.32.7","remark":""}]`, listID); err != nil {
 		t.Fatalf("update list: %v", err)
 	}
 	out, err = s.RefreshIPListProjections()
@@ -291,7 +291,7 @@ func TestRefreshTriStateCertMaterialization(t *testing.T) {
 		t.Fatalf("强制收敛: %v", err)
 	}
 	if _, err := db.DB.Exec(`UPDATE security_ip_lists SET entries=? WHERE id=?`,
-		`[{"value":"203.0.113.5","remark":""},{"value":"198.51.100.8","remark":""}]`, listID); err != nil {
+		`[{"value":"45.33.32.5","remark":""},{"value":"45.33.32.8","remark":""}]`, listID); err != nil {
 		t.Fatalf("update list 2: %v", err)
 	}
 	out, err = s.RefreshIPListProjections()
@@ -326,7 +326,7 @@ func TestScopedExclusionBigListProjectedAndEngineAccepted(t *testing.T) {
 	policy := &models.SecurityPolicy{
 		AnomalyThreshold: 5,
 		Mode:             "blocking",
-		CRSExcludedRules: json.RawMessage(fmt.Sprintf(`[{"target":"942100","scope":"list","ips":"203.0.113.5","listRefs":[%d]}]`, listID)),
+		CRSExcludedRules: json.RawMessage(fmt.Sprintf(`[{"target":"942100","scope":"list","ips":"45.33.32.5","listRefs":[%d]}]`, listID)),
 	}
 	directives, err := BuildCorazaDirectives(policy, db.DB, "", false, 0, "lb-big-probe")
 	if err != nil {
@@ -345,7 +345,7 @@ func TestScopedExclusionBigListProjectedAndEngineAccepted(t *testing.T) {
 	}
 	// 投影文件内容=ips ∪ 名单条目（聚合后——6000 条连续 10.x 聚合为大网段）。
 	proj := readRenderedIPList(t, directives, "-crsxc-")
-	if !strings.Contains(proj, "203.0.113.5/32") || !strings.Contains(proj, "10.0.0.0/20") {
+	if !strings.Contains(proj, "45.33.32.5/32") || !strings.Contains(proj, "10.0.0.0/20") {
 		t.Fatalf("投影文件须含 ips 与聚合后的名单条目: %q…", proj[:min(200, len(proj))])
 	}
 	// ctl:ruleRemoveById + @ipListFast 新形状必须被 coraza 编译接受。

@@ -37,8 +37,10 @@ const connectionsReqWindow = time.Hour
 const connectionsActiveWindow = time.Minute
 const connectionsClosingWindow = 10 * time.Minute
 
-// upstreamResolveTimeout 上游域名解析的超时上限：DNS 挂起不得阻塞连接刷新
-// （netstat 快照本身已有 TTL*4 预算，解析是其后置步骤，需独立有界）。
+// upstreamResolveTimeout 上游域名解析的共享总预算：DNS 挂起不得阻塞连接刷新
+// （netstat 快照本身已有 TTL*4 预算，解析是其后置步骤，需独立有界）。预算
+// 由一次 loadCaddyEndpoints 内全部未缓存域名共用——逐域名各给一份会让
+// 总时延随上游数量线性放大（N 台挂起=N×预算）。
 const upstreamResolveTimeout = 6 * time.Second
 
 // upstreamResolveCacheMax 上游解析缓存条目上限：上游域名集合更替（规则增删/
@@ -320,7 +322,8 @@ func splitHostPortAddr(addr string) (string, int) {
 }
 
 // loadCaddyEndpoints Caddy 流量判别数据单源：监听端口（客户端侧）+ 上游
-// host:port 集合（反代侧，含域名一次性解析缓存）。
+// host:port 集合（反代侧，含域名一次性解析缓存）。全部未缓存域名共享
+// upstreamResolveTimeout 总预算（DNS 挂起时总时延有界，不随上游数放大）。
 func loadCaddyEndpoints() (map[int]struct{}, map[string]struct{}) {
 	ports := map[int]struct{}{}
 	upstreams := map[string]struct{}{}
@@ -352,6 +355,8 @@ func loadCaddyEndpoints() (map[int]struct{}, map[string]struct{}) {
 		rows.Close()
 	}
 	now := time.Now()
+	resolveCtx, cancelResolve := context.WithTimeout(context.Background(), upstreamResolveTimeout)
+	defer cancelResolve()
 	for _, u := range ups {
 		key := strings.ToLower(strings.TrimSpace(u.host))
 		upstreamResolveMu.Lock()
@@ -362,11 +367,10 @@ func loadCaddyEndpoints() (map[int]struct{}, map[string]struct{}) {
 			if net.ParseIP(key) != nil {
 				ips[key] = struct{}{}
 			} else {
-				// 带超时的解析：DNS 挂起不得阻塞连接刷新（LookupIPAddr 在
-				// ctx 到期时返回 ctx.Err，见 net/lookup.go 的 ctx.Done 分支）。
-				ctx, cancel := context.WithTimeout(context.Background(), upstreamResolveTimeout)
-				resolved, err := upstreamResolveLookup(ctx, key)
-				cancel()
+				// 共享预算解析：DNS 挂起不得阻塞连接刷新（LookupIPAddr 在
+				// ctx 到期时返回 ctx.Err，见 net/lookup.go 的 ctx.Done 分支）；
+				// 预算耗尽后其余域名直接按空解析集缓存，不再逐台等待。
+				resolved, err := upstreamResolveLookup(resolveCtx, key)
 				if err == nil {
 					for _, ip := range resolved {
 						ips[ip.IP.String()] = struct{}{}

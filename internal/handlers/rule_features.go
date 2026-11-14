@@ -488,7 +488,7 @@ func validateRuleFeatures(input ruleFeatureInput) error {
 				continue
 			}
 			headerCount++
-			if header != strings.TrimSpace(header) || strings.ContainsAny(header, " \t\r\n:") {
+			if strings.ContainsAny(header, " \t\r\n:") {
 				return fmt.Errorf("认证网关身份头 %q 含非法字符（空白/冒号/换行）", header)
 			}
 			if seenHeaders[header] {
@@ -540,26 +540,9 @@ func validateRuleFeatures(input ruleFeatureInput) error {
 			}
 		}
 	}
-	// 80 端口 + TLS 跳转自环：跳转目标 https://host:80 与来源同为 80 端口，
-	// 请求会被跳回自身监听器形成循环，必须在保存前拒绝。
-	if input.Protocol == "http" && input.ListenPort == 80 && input.EnableTLS && input.TLSHTTPRedirect {
-		return fmt.Errorf("80 端口开启 TLS 跳转无意义（目标与来源相同端口），请改用 443 端口或关闭跳转")
-	}
-	// 同族残留缺口：80 端口 + HTTPS（未开跳转）。Caddy 对配置的 HTTP 端口
-	// （默认 80）从不启用 TLS（http app 的 useTLS 判端口 != httpPort），
-	// 于是 tls_connection_policies 与证书 load_files 静默空转——规则实际以
-	// 明文在 :80 转发，而面板徽标/证书队列仍按「已启用 HTTPS」运转。
-	// 静默降级比拒绝更贵：证书照常签发续期、TLS 材料照常落盘，全都不生效。
-	if input.Protocol == "http" && input.ListenPort == 80 && input.EnableTLS {
-		return fmt.Errorf("80 端口是 HTTP 端口，Caddy 不会在此端口终止 TLS（规则将按明文转发），请改用 443 等 TLS 端口或关闭 HTTPS")
-	}
-	// 同族镜像（用户裁定）：443 端口 + 明文 HTTP——HTTPS 默认端口，浏览器对
-	// 该端口的唯一预期是 TLS，明文规则使 https://域名:443 握手必然失败；且
-	// 落库后启动/UpdateConfig 聚合门恒 400 点名（全局配置写冻结）。v1/v2 导入
-	// 链消费本函数——补门后导入与保存/启用/聚合四门同口径（导入即逐行 400，
-	// 不再「导入成功→应用冻结」）。
-	if input.Protocol == "http" && input.ListenPort == 443 && !input.EnableTLS {
-		return fmt.Errorf("443 端口是 HTTPS 默认端口，明文 HTTP 规则会使 https://域名:443 无法建立连接，请开启 HTTPS 或改用其他端口")
+	// 80/443 端口-TLS 语义门单源（保存/启用/聚合三入口共用 portTLSSemanticsError）。
+	if msg := portTLSSemanticsError(input.Protocol, input.ListenPort, input.EnableTLS, input.TLSHTTPRedirect); msg != "" {
+		return fmt.Errorf("%s", msg)
 	}
 	if input.Protocol == "tcp" {
 		// L4 代理无 HTTP Host 头可驱动动态 DNS 解析（Caddy layer4 直拨
@@ -591,6 +574,11 @@ func validateRuleFeatures(input ruleFeatureInput) error {
 		// （与存量门同源），此处只余健康检查端口。
 		if input.TCPHealthCheckPort < 0 {
 			return fmt.Errorf("TCP 健康检查端口与重试时长/间隔不能为负数")
+		}
+		// 上界门：>65535 的端口落库后渲染 dial 必败（API/MCP 直构可达），
+		// 保存前点名拒绝；0=未启用健康检查端口，放行。
+		if input.TCPHealthCheckPort > 65535 {
+			return fmt.Errorf("TCP 健康检查端口必须在 0 到 65535 之间（当前 %d）", input.TCPHealthCheckPort)
 		}
 	}
 	// 「重试窗口 >0 时重试间隔必填」与渲染门同文案，已由
@@ -1395,7 +1383,7 @@ type acmeReferenceInput struct {
 
 // validateRuleACMEReferences 校验 enable_tls+acme_dns 规则的 ACME 引用可解析：
 // acme_config_id 非 0 且引用存在且启用（COALESCE(enabled,1)=1）的
-// certificate_configs 行（发现4：与 ca_provider 检查及签发侧 certissuer.go
+// certificate_configs 行（与 ca_provider 检查及签发侧 certissuer.go
 // 的同口径对齐，引用禁用配置会在签发期查空单任务失败 + TLS 端口明文服务）；
 // ca_provider_id 为 0（系统默认）或引用存在且启用的 ca_providers 行。校验失败
 // 返回 *configValidationError（调用侧映射 400），查询失败返回普通错误（500）。
@@ -1543,6 +1531,36 @@ func validateStoredRuleProtocolFields(rule models.LbRule, includeMixedPool bool)
 // 首读与校验读之间的并发删除属冲突（409），不是服务端故障（500）。
 var errStoredRuleMissing = errors.New("规则不存在（可能已被并发删除）")
 
+// portTLSSemanticsError 是 80/443 端口-TLS 语义门的单源文案：保存族
+// （validateRuleFeatures）、单规则启用门（validateStoredRuleConfig）与
+// 启动/UpdateConfig 聚合门（validateEnabledStoredRuleConfigs）共用，
+// 改一处即三门同口径。返回空串=形态合法。
+//   - 80 + TLS 跳转：跳转目标 https://host:80 与来源同端口，请求被跳回
+//     自身监听器形成循环；
+//   - 80 + HTTPS（未开跳转）：Caddy 对配置的 HTTP 端口（默认 80）从不启用
+//     TLS（http app 的 useTLS 判端口 != httpPort），tls_connection_policies
+//     与证书 load_files 静默空转——规则实际以明文在 :80 转发，而面板徽标/
+//     证书队列仍按「已启用 HTTPS」运转。静默降级比拒绝更贵：证书照常签发
+//     续期、TLS 材料照常落盘，全都不生效；
+//   - 443 + 明文 HTTP（用户裁定）：HTTPS 默认端口，浏览器对该端口的唯一
+//     预期是 TLS，明文规则使 https://域名:443 握手必然失败；且落库后
+//     启动/UpdateConfig 聚合门恒 400 点名（全局配置写冻结）。
+func portTLSSemanticsError(protocol string, listenPort int, enableTLS, tlsHTTPRedirect bool) string {
+	if protocol != "http" {
+		return ""
+	}
+	if listenPort == 80 && enableTLS && tlsHTTPRedirect {
+		return "80 端口开启 TLS 跳转无意义（目标与来源相同端口），请改用 443 端口或关闭跳转"
+	}
+	if listenPort == 80 && enableTLS {
+		return "80 端口是 HTTP 端口，Caddy 不会在此端口终止 TLS（规则将按明文转发），请改用 443 等 TLS 端口或关闭 HTTPS"
+	}
+	if listenPort == 443 && !enableTLS {
+		return "443 端口是 HTTPS 默认端口，明文 HTTP 规则会使 https://域名:443 无法建立连接，请开启 HTTPS 或改用其他端口"
+	}
+	return ""
+}
+
 func validateStoredRuleConfig(ctx context.Context, caddyID string) error {
 	rules, err := loadRulesForConfigValidation(ctx, " WHERE caddy_id = ?", caddyID)
 	if err != nil {
@@ -1552,25 +1570,15 @@ func validateStoredRuleConfig(ctx context.Context, caddyID string) error {
 		return errStoredRuleMissing
 	}
 	rule := rules[0]
-	// 与 validateRuleFeatures 同口径，兜住历史存量/导入的 80 端口 + TLS 跳转自环规则。
-	if rule.Protocol == "http" && rule.ListenPort == 80 && rule.EnableTLS && rule.TLSHTTPRedirect {
-		return &configValidationError{message: "80 端口开启 TLS 跳转无意义（目标与来源相同端口），请改用 443 端口或关闭跳转"}
-	}
-	// 与保存侧同口径：80 端口 + HTTPS（未开跳转）在 Caddy 侧永不终止 TLS，
-	// 存量/导入/直改库形态启用前必须点名拒绝。
-	if rule.Protocol == "http" && rule.ListenPort == 80 && rule.EnableTLS {
-		return &configValidationError{message: "80 端口是 HTTP 端口，Caddy 不会在此端口终止 TLS（规则将按明文转发），请改用 443 等 TLS 端口或关闭 HTTPS"}
-	}
-	// 同族镜像（用户裁定）：443 端口 + 明文 HTTP——HTTPS 默认端口
-	// 上明文监听使 https://域名:443 握手必然失败，存量/导入/直改库形态启用
-	// 前必须点名拒绝（与 checkPortTLSMix 的协议/端口默认语义规则同口径）。
-	if rule.Protocol == "http" && rule.ListenPort == 443 && !rule.EnableTLS {
-		return &configValidationError{message: "443 端口是 HTTPS 默认端口，明文 HTTP 规则会使 https://域名:443 无法建立连接，请开启 HTTPS 或改用其他端口"}
+	// 与保存侧同口径（portTLSSemanticsError 单源），兜住历史存量/导入的
+	// 80/443 端口-TLS 语义坏形态，启用前点名拒绝。
+	if msg := portTLSSemanticsError(rule.Protocol, rule.ListenPort, rule.EnableTLS, rule.TLSHTTPRedirect); msg != "" {
+		return &configValidationError{message: msg}
 	}
 	if rule.Protocol == "http" && rule.EnableTLS && rule.TLSSource != "manual" && rule.TLSSource != "acme_dns" {
 		return &configValidationError{message: "启用 TLS 时必须选择证书来源（manual 或 acme_dns）"}
 	}
-	// 发现1：共享 ACME 引用校验（0 值门 + 存在性/enabled=1），与
+	// 共享 ACME 引用校验（0 值门 + 存在性/enabled=1），与
 	// Create/Update 写侧 400 口径对齐——导入残留的 acme_dns+0 坏规则与悬挂/禁用
 	// 引用均不得经 EnableRule 投入运行（签发必败且明文服务）。
 	if err := validateRuleACMEReferences(acmeReferenceInput{
@@ -1607,23 +1615,10 @@ func validateEnabledStoredRuleConfigs(ctx context.Context) error {
 	}
 	problems := make([]error, 0)
 	for _, rule := range rules {
-		// 存量规则可能建于校验上线前：80 端口 + TLS 跳转生成自环 Location，
-		// 启动再生配置前按保存路径同口径拦截并指出具体规则。
-		if rule.Protocol == "http" && rule.ListenPort == 80 && rule.EnableTLS && rule.TLSHTTPRedirect {
-			problems = append(problems, &configValidationError{message: fmt.Sprintf("规则 %s（%s）80 端口开启 TLS 跳转无意义（目标与来源相同端口），请改用 443 端口或关闭跳转", rule.Name, rule.CaddyID)})
-			continue
-		}
-		// 同族缺口：80 端口 + HTTPS（未开跳转）——Caddy 在该端口绝不终止 TLS，
-		// 启动/UpdateConfig 聚合校验必须点名（不得静默带病上线）。
-		if rule.Protocol == "http" && rule.ListenPort == 80 && rule.EnableTLS {
-			problems = append(problems, &configValidationError{message: fmt.Sprintf("规则 %s（%s）80 端口是 HTTP 端口，Caddy 不会在此端口终止 TLS（规则将按明文转发），请改用 443 等 TLS 端口或关闭 HTTPS", rule.Name, rule.CaddyID)})
-			continue
-		}
-		// 同族镜像（用户裁定）：443 端口 + 明文 HTTP——HTTPS 默认端口上明文
-		// 监听使 https://域名:443 握手必然失败，启动/UpdateConfig 聚合校验
-		// 必须点名（与 checkPortTLSMix 协议/端口默认语义规则同口径）。
-		if rule.Protocol == "http" && rule.ListenPort == 443 && !rule.EnableTLS {
-			problems = append(problems, &configValidationError{message: fmt.Sprintf("规则 %s（%s）443 端口是 HTTPS 默认端口，明文 HTTP 规则会使 https://域名:443 无法建立连接，请开启 HTTPS 或改用其他端口", rule.Name, rule.CaddyID)})
+		// 存量规则可能建于校验上线前：80/443 端口-TLS 语义坏形态在启动
+		// 再生配置前按保存路径同口径拦截并指出具体规则（单源文案）。
+		if msg := portTLSSemanticsError(rule.Protocol, rule.ListenPort, rule.EnableTLS, rule.TLSHTTPRedirect); msg != "" {
+			problems = append(problems, &configValidationError{message: fmt.Sprintf("规则 %s（%s）%s", rule.Name, rule.CaddyID, msg)})
 			continue
 		}
 		// 与 validateStoredRuleConfig 同口径的 tls_source 白名单——
@@ -1634,7 +1629,7 @@ func validateEnabledStoredRuleConfigs(ctx context.Context) error {
 			problems = append(problems, &configValidationError{message: fmt.Sprintf("规则 %s（%s）启用 TLS 时必须选择证书来源（manual 或 acme_dns）", rule.Name, rule.CaddyID)})
 			continue
 		}
-		// 发现1：启动/UpdateConfig 聚合校验与 EnableRule 同门——ACME 引用
+		// 启动/UpdateConfig 聚合校验与 EnableRule 同门——ACME 引用
 		// 不可解析（0 值/悬挂/已禁用）的启用规则必须点名，不得静默通过。
 		if err := validateRuleACMEReferences(acmeReferenceInput{
 			EnableTLS: rule.EnableTLS, TLSSource: rule.TLSSource,

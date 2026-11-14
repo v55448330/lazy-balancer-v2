@@ -615,6 +615,13 @@ func copyAuditLogTo(src, dst string) error {
 	if err != nil {
 		return err
 	}
+	// 已存在 tmp 的权限可能与目标不符（OpenFile mode 仅新建生效）——强制归一，
+	// 与 certstore.writeSyncedFile 同口径（掉电残留错误权限 tmp 不放大）。
+	if err := out.Chmod(info.Mode().Perm()); err != nil {
+		_ = out.Close()
+		_ = os.Remove(tmp)
+		return err
+	}
 	if _, err := io.Copy(out, in); err != nil {
 		_ = out.Close()
 		_ = os.Remove(tmp)

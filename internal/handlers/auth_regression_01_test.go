@@ -485,6 +485,7 @@ func TestOIDCCandidateUsername_boundedQueriesForCollisionShapes(t *testing.T) {
 // 不同 subject 并发首登撞同一候选用户名时，唯一冲突后重算候选名
 // 有限重试——不得把瞬时竞态升级为登录失败；重试上限内仍冲突才失败。
 func TestCreateOIDCUserWithRetry_survivesUsernameRace(t *testing.T) {
+	withIsolatedGlobal(t)
 	idp := newMockIdP(t)
 	setupOIDCTest(t, idp) // 仅需真实 DB schema
 

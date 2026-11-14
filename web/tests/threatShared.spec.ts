@@ -59,16 +59,18 @@ test('对数标尺公式钉：强度 = log10(1+count)/log10(1+max)，max=当前�
   assert.equal(heatIntensity(5000, 10000), Math.log10(5001) / Math.log10(10001))
 })
 
+/** rgb(…) 色差（欧氏距离）：数量级可辨判据共用单份，避免两份逐字副本口径漂移。 */
+const colorDist = (a: string, b: string): number => {
+  const pa = a.slice(4, -1).split(',').map(Number)
+  const pb = b.slice(4, -1).split(',').map(Number)
+  return Math.sqrt(pa.reduce((s, v, i) => s + (v - pb[i]) ** 2, 0))
+}
+
 test('数量级可辨：1/10/100/1k/10k 色相逐级可辨（冷→暖，欧氏距离阈值）', () => {
-  const dist = (a: string, b: string): number => {
-    const pa = a.slice(4, -1).split(',').map(Number)
-    const pb = b.slice(4, -1).split(',').map(Number)
-    return Math.sqrt(pa.reduce((s, v, i) => s + (v - pb[i]) ** 2, 0))
-  }
   let prev = heatCss(1, 10000)
   for (const count of [10, 100, 1000, 10000]) {
     const cur = heatCss(count, 10000)
-    const d = dist(prev, cur)
+    const d = colorDist(prev, cur)
     assert.ok(d >= 30, `count=${count} 与上一数量级色差必须可感知（ΔE=${d.toFixed(1)} < 30）`)
     prev = cur
   }
@@ -83,15 +85,10 @@ test('自适应 max：头部国家不再饱和于固定 1000 绝对标尺', () =
 })
 
 test('单调性与退化边界：count 增→色相逐级可辨；max 增→同 count 变暗；max≤0 退化=命中即最热', () => {
-  const dist = (a: string, b: string): number => {
-    const pa = a.slice(4, -1).split(',').map(Number)
-    const pb = b.slice(4, -1).split(',').map(Number)
-    return Math.sqrt(pa.reduce((s, v, i) => s + (v - pb[i]) ** 2, 0))
-  }
   let prev = heatCss(1, 10000)
   for (const count of [3, 30, 300, 3000, 10000]) {
     const cur = heatCss(count, 10000)
-    assert.ok(dist(prev, cur) >= 10, `count=${count} 色相应逐级可辨（ΔE=${dist(prev, cur).toFixed(1)} < 15）`)
+    assert.ok(colorDist(prev, cur) >= 10, `count=${count} 色相应逐级可辨（ΔE=${colorDist(prev, cur).toFixed(1)} < 10）`)
     prev = cur
   }
   assert.ok(heatCss(100, 1000) !== heatCss(100, 10000), '同 count，max 越大越暗（归一化口径）')

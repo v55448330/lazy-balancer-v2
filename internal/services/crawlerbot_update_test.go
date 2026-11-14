@@ -18,17 +18,14 @@ import (
 	"lazy-balancer-v2/internal/taskengine"
 )
 
-// TestCrawlerBotUpdate_fullCycle 全周期：下载→CIDR 提取→名单快照→IP 段命中。
-func TestCrawlerBotUpdate_fullCycle(t *testing.T) {
+// TestCrawlerBotUpdate_parseAndSnapshotCycle CIDR 提取→名单快照→幂等更新
+// （下载通道由本文件其余 httptest 用例覆盖）。
+func TestCrawlerBotUpdate_parseAndSnapshotCycle(t *testing.T) {
 	_, database := newClusterTestService(t)
 	oldFile := crawlerIPListFile
 	crawlerIPListFile = filepath.Join(t.TempDir(), "crawler-ip-lists.json")
 	defer func() { crawlerIPListFile = oldFile }()
 	body := `{"ipv4": [{"ipv4": "66.249.66.0/24"}, {"ipv4": "66.249.67.0/24"}]}`
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(body))
-	}))
-	defer ts.Close()
 
 	// 通用 CIDR 提取：合法 CIDR 保留、裸 IP 归一 /32、非 IP 数字串跳过
 	got, err := parseCrawlerCIDRsForFormat(body+"\n42.236.12.130\nnot.an.ip.version.1.2.3.4.5\n", "")

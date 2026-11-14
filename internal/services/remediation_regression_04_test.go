@@ -59,8 +59,8 @@ func TestAutobanRunCycle_expiredBucketStillBans(t *testing.T) {
 	oldFn := autobanReloader
 	autobanReloader = func() error { reloads++; return nil }
 	t.Cleanup(func() { autobanReloader = oldFn })
-	autobanObserveEvent("203.0.113.9", "blocked", "942100")
-	autobanObserveEvent("203.0.113.9", "blocked", "942100")
+	autobanObserveEvent("45.33.32.9", "blocked", "942100")
+	autobanObserveEvent("45.33.32.9", "blocked", "942100")
 	// 越过一个 tick（60s 循环）：窗口（5min）已到期、无新事件喂入。
 	f.Advance(6 * time.Minute)
 
@@ -68,11 +68,11 @@ func TestAutobanRunCycle_expiredBucketStillBans(t *testing.T) {
 		t.Fatalf("RunAutobanCycle: %v", err)
 	}
 	entries := presetEntries(t)
-	if len(entries) != 1 || entries[0].Value != "203.0.113.9" {
+	if len(entries) != 1 || entries[0].Value != "45.33.32.9" {
 		t.Fatalf("窗口到期但已跨阈值的 IP 必须落名单（先评估后修剪），得到 %+v", entries)
 	}
 	var n int
-	if err := db.AuditDB.QueryRow(`SELECT COUNT(*) FROM audit_log WHERE username='system' AND action='自动封禁' AND detail LIKE '%203.0.113.9%'`).Scan(&n); err != nil {
+	if err := db.AuditDB.QueryRow(`SELECT COUNT(*) FROM audit_log WHERE username='system' AND action='自动封禁' AND detail LIKE '%45.33.32.9%'`).Scan(&n); err != nil {
 		t.Fatalf("read audit: %v", err)
 	}
 	if n != 1 {

@@ -2628,6 +2628,76 @@ func TestMigrateTCPRuleSecurityPolicyBindings_clusterBumpFailureRollsBack(t *tes
 	}
 }
 
+// 探测谓词与清理语句同源钉测：对同一批绑定形态（G2/G3 特征 × TCP/HTTP ×
+// stage0/1 合法 × 畸形 custom_rules × 悬挂绑定），「探测命中数」必须恒等于
+// 「清理删除数」——探测偏窄会把待清理绑定静默留在库里（迁移被探测门跳过），
+// 探测偏宽会空开写事务并扰动 cluster_version。
+func TestMigrateTCPRuleSecurityPolicyBindings_probeMatchesPrune(t *testing.T) {
+	database := openMigrationTestDB(t)
+	if err := createTables(); err != nil {
+		t.Fatalf("create tables: %v", err)
+	}
+	for _, column := range []string{"human_verify_mode TEXT DEFAULT 'off'", "cc_detect_enabled BOOLEAN DEFAULT FALSE"} {
+		if _, err := database.Exec("ALTER TABLE security_policies ADD COLUMN " + column); err != nil {
+			t.Fatalf("add test column %s: %v", column, err)
+		}
+	}
+	if _, err := database.Exec(`INSERT INTO global_config (id,caddy_config,cluster_version) VALUES (1,'{}',0);
+		INSERT INTO lb_rules (caddy_id,name,protocol,listen_port) VALUES
+		('lb_probe_http','http-rule','http',8080),
+		('lb_probe_tcp_a','tcp-a','tcp',9001),
+		('lb_probe_tcp_b','tcp-b','tcp',9002),
+		('lb_probe_tcp_c','tcp-c','tcp',9003);
+		INSERT INTO security_policies (id,name,mode,human_verify_mode,cc_detect_enabled,custom_rules) VALUES
+		(1,'cc-human','off','slider',0,'[]'),
+		(2,'cc-detect','off','off',1,'[]'),
+		(3,'waf-blocking','blocking','off',0,'[]'),
+		(4,'waf-detection','detection','off',0,'[]'),
+		(5,'waf-custom-only','custom_only','off',0,'[]'),
+		(6,'waf-custom-array','off','off',0,'[{"id":1}]'),
+		(7,'malformed-custom','off','off',0,'not-json'),
+		(8,'object-custom','off','off',0,'{"id":1}'),
+		(9,'stage0-trust','off','off',0,'[]'),
+		(10,'stage1-blacklist','off','off',0,'[]');
+		INSERT INTO security_policy_bindings (rule_caddy_id,policy_id) VALUES
+		('lb_probe_http',1),('lb_probe_http',3),('lb_probe_http',6),
+		('lb_probe_tcp_a',1),('lb_probe_tcp_a',9),
+		('lb_probe_tcp_b',2),('lb_probe_tcp_b',3),('lb_probe_tcp_b',4),('lb_probe_tcp_b',5),
+		('lb_probe_tcp_c',6),('lb_probe_tcp_c',7),('lb_probe_tcp_c',8),('lb_probe_tcp_c',10),
+		('lb_probe_missing',3);`); err != nil {
+		t.Fatalf("seed probe matrix: %v", err)
+	}
+
+	// When：只读探测（与启动迁移同谓词）。
+	var probed int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM security_policy_bindings b
+		JOIN lb_rules r ON r.caddy_id=b.rule_caddy_id AND r.protocol='tcp'
+		JOIN security_policies p ON p.id=b.policy_id
+		WHERE ` + tcpRuleUnsupportedBindingPredicate).Scan(&probed); err != nil {
+		t.Fatalf("probe bindings: %v", err)
+	}
+
+	// Then：探测命中数 = 清理删除数（6 条 G2/G3 特征 TCP 绑定）。
+	if err := migrateTCPRuleSecurityPolicyBindings(); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	var remaining int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM security_policy_bindings`).Scan(&remaining); err != nil {
+		t.Fatal(err)
+	}
+	const seeded = 14
+	if removed := seeded - remaining; probed != removed || removed != 6 {
+		t.Fatalf("probed=%d removed=%d, want 6/6（探测与清理必须同谓词）", probed, removed)
+	}
+	var version int
+	if err := database.QueryRow(`SELECT cluster_version FROM global_config WHERE id=1`).Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	if version != 1 {
+		t.Fatalf("cluster_version=%d, want 1（实际删除须 bump）", version)
+	}
+}
+
 func TestMigrateTCPRuleDeadFields_bumpsNullClusterVersion(t *testing.T) {
 	// Given：带外/旧备份形态 cluster_version=NULL，以及一条确需清理的 TCP 行。
 	database := openMigrationTestDB(t)

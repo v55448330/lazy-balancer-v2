@@ -145,7 +145,7 @@ export const webFiles = (relativeDir: string, extensions: readonly string[]): st
 }
 
 /** 注释内出现代码形态仍算「源码里存在」——切片误命中注释会让断言空转。 */
-const REGEX_PRECEDING_KEYWORDS: Record<string, true> = {
+export const REGEX_PRECEDING_KEYWORDS: Record<string, true> = {
   return: true, typeof: true, case: true, in: true, of: true, new: true,
   delete: true, void: true, instanceof: true, yield: true, await: true, else: true, do: true,
 }
@@ -157,10 +157,21 @@ const REGEX_PRECEDING_KEYWORDS: Record<string, true> = {
  * 标签的 `/` 会把该行余下文本吞成「正则」，同行模板注释永不被剥离：注释里
  * 复述代码即假绿（`section()` 从注释中段起切），注释被当代码即误红。
  */
-const REGEX_PRECEDING_CHARS: Record<string, true> = {
+export const REGEX_PRECEDING_CHARS: Record<string, true> = {
   '(': true, ',': true, ';': true, ':': true, '=': true, '!': true, '&': true,
   '|': true, '?': true, '+': true, '-': true, '*': true, '%': true, '^': true,
   '~': true, '[': true, '{': true,
+}
+
+/**
+ * 正则字面量起点判定（commentSpans 与 matchBrace 共用单源）：表达式位置才可能
+ * 起正则——收尾记号后的 `/` 是除号，`=>` 后的 `/` 是正则。
+ */
+const regexStartAllowed = (prevSignificant: string, prevWord: string, prevIsArrow: boolean): boolean => {
+  if (prevSignificant === '') return true
+  if (prevIsArrow) return true
+  if (/[\w]/.test(prevSignificant)) return REGEX_PRECEDING_KEYWORDS[prevWord] === true
+  return REGEX_PRECEDING_CHARS[prevSignificant] === true
 }
 
 /**
@@ -175,12 +186,6 @@ const commentSpans = (text: string): Array<readonly [number, number]> => {
   let prevWord = ''
   // 箭头函数体（`=> /re/`）：`>` 本身不是正则起点，但紧跟 `=` 的 `>` 是。
   let prevIsArrow = false
-  const regexAllowedAfter = (): boolean => {
-    if (prevSignificant === '') return true
-    if (prevIsArrow) return true
-    if (/[\w]/.test(prevSignificant)) return REGEX_PRECEDING_KEYWORDS[prevWord] === true
-    return REGEX_PRECEDING_CHARS[prevSignificant] === true
-  }
   let i = 0
   while (i < text.length) {
     const ch = text[i]
@@ -226,7 +231,7 @@ const commentSpans = (text: string): Array<readonly [number, number]> => {
       prevIsArrow = false
       continue
     }
-    if (ch === '/' && regexAllowedAfter()) {
+    if (ch === '/' && regexStartAllowed(prevSignificant, prevWord, prevIsArrow)) {
       i++
       let inClass = false
       while (i < text.length) {
@@ -689,9 +694,10 @@ const memberBlockOpen = (text: string, start: number, marker: string): number =>
 /**
  * 花括号配对（open 指向 `{`）：返回匹配的 `}` 下标，未闭合返回 -1。
  *
- * 必须跳过字符串/模板量/注释里的括号：`const s = '}'` 或注释里的孤立 `}`
- * 会让切片提前收尾（后续 doesNotMatch 假绿）；孤立 `{` 则越界吞下相邻函数
- * （match 假绿）。模板量里的 `${...}` 是表达式，其内部括号按代码计。
+ * 必须跳过字符串/模板量/注释/正则字面量里的括号：`const s = '}'`、注释里的
+ * 孤立 `}` 或正则里的 `/[}]/` 会让切片提前收尾（后续 doesNotMatch 假绿）；
+ * 孤立 `{` 则越界吞下相邻函数（match 假绿）。模板量里的 `${...}` 是表达式，
+ * 其内部括号按代码计。正则起点判据与 commentSpans 同源（REGEX_PRECEDING_*）。
  *
  * 导出给「按块切分」的判据使用（例如把 spec 按用例块切片后逐块计数）：
  * 块边界必须由括号配对决定，空白行/缩进等文本启发式会把块截断。
@@ -702,6 +708,10 @@ export const matchBrace = (text: string, open: number): number => {
   let depth = 0
   // 进入模板量 `${` 时记录当前 depth；同 depth 的 `}` 返回模板量文本。
   const templateExprDepths: number[] = []
+  // 正则起点判定状态（与 commentSpans 同判据）：箭头 `=>` 后的 `/` 是正则。
+  let prevSignificant = ''
+  let prevWord = ''
+  let prevIsArrow = false
   for (let i = open; i < text.length; i++) {
     const ch = text[i]
     const next = text[i + 1]
@@ -716,29 +726,86 @@ export const matchBrace = (text: string, open: number): number => {
     if (mode === 'single' || mode === 'double') {
       const quote = mode === 'single' ? "'" : '"'
       if (ch === '\\') i++
-      else if (ch === quote) mode = 'code'
+      else if (ch === quote) {
+        mode = 'code'
+        prevSignificant = quote
+        prevWord = ''
+        prevIsArrow = false
+      }
       continue
     }
     if (mode === 'template') {
       if (ch === '\\') i++
-      else if (ch === '`') mode = 'code'
-      else if (ch === '$' && next === '{') { templateExprDepths.push(depth); mode = 'code'; i++ }
+      else if (ch === '`') {
+        mode = 'code'
+        prevSignificant = '`'
+        prevWord = ''
+        prevIsArrow = false
+      } else if (ch === '$' && next === '{') {
+        templateExprDepths.push(depth)
+        mode = 'code'
+        prevSignificant = '{'
+        prevWord = ''
+        prevIsArrow = false
+        i++
+      }
       continue
     }
     if (ch === '/' && next === '/') { mode = 'line'; i++; continue }
     if (ch === '/' && next === '*') { mode = 'block'; i++; continue }
+    if (ch === '/' && regexStartAllowed(prevSignificant, prevWord, prevIsArrow)) {
+      i++
+      let inClass = false
+      while (i < text.length) {
+        const c = text[i]
+        i++
+        if (c === '\\' && i < text.length) { i++; continue }
+        if (c === '[') inClass = true
+        else if (c === ']') inClass = false
+        else if (c === '/' && !inClass) break
+        else if (c === '\n') break
+      }
+      i--
+      prevSignificant = '/'
+      prevWord = ''
+      prevIsArrow = false
+      continue
+    }
     if (ch === '"') { mode = 'double'; continue }
     if (ch === "'") { mode = 'single'; continue }
     if (ch === '`') { mode = 'template'; continue }
-    if (ch === '{') { depth++; continue }
+    if (ch === '{') {
+      depth++
+      prevSignificant = ch
+      prevWord = ''
+      prevIsArrow = false
+      continue
+    }
     if (ch === '}') {
       if (templateExprDepths.length > 0 && templateExprDepths[templateExprDepths.length - 1] === depth) {
         templateExprDepths.pop()
         mode = 'template'
+        prevSignificant = '`'
+        prevWord = ''
+        prevIsArrow = false
         continue
       }
       depth--
       if (depth === 0) return i
+      prevSignificant = ch
+      prevWord = ''
+      prevIsArrow = false
+      continue
+    }
+    if (/\s/.test(ch)) continue
+    if (/[\w]/.test(ch)) {
+      prevWord = /[\w]/.test(prevSignificant) ? prevWord + ch : ch
+      prevSignificant = ch
+      prevIsArrow = false
+    } else {
+      prevIsArrow = ch === '>' && prevSignificant === '='
+      prevSignificant = ch
+      prevWord = ''
     }
   }
   return -1

@@ -32,7 +32,7 @@ func TestSecurityWrites409DuringImport(t *testing.T) {
 	router.DELETE("/security/policies/:id", h.DeleteSecurityPolicy)
 	router.POST("/security/policies/:id/bind", h.BindRuleToPolicy)
 	router.PUT("/security/rules/:caddy_id/policies", h.SetRuleSecurityPolicies)
-	router.PUT("/security/policies/:id/bindings", h.BulkUpdatePolicyBindings)
+	router.POST("/security/policies/:id/bindings/bulk", h.BulkUpdatePolicyBindings)
 	router.POST("/security/policies/batch-bind", h.BatchBindSecurityPolicies)
 	router.POST("/security/policies/:id/split", h.SplitSecurityPolicy)
 	router.DELETE("/security/policies/:id/bind/:caddy_id", h.UnbindRuleFromPolicy)
@@ -64,7 +64,7 @@ func TestSecurityWrites409DuringImport(t *testing.T) {
 		{"DELETE", "/security/policies/1", ""},
 		{"POST", "/security/policies/1/bind", `{"rule_caddy_id":"lb_x"}`},
 		{"PUT", "/security/rules/lb_x/policies", `{"policy_ids":[1]}`},
-		{"PUT", "/security/policies/1/bindings", `{"bind":["lb_x"]}`},
+		{"POST", "/security/policies/1/bindings/bulk", `{"bind":["lb_x"]}`},
 		{"POST", "/security/policies/batch-bind", `{"rule_ids":["lb_x"],"policy_ids":[1],"mode":"append"}`},
 		{"POST", "/security/policies/1/split", `{"rule_caddy_ids":["lb_x"]}`},
 		{"DELETE", "/security/policies/1/bind/lb_x", ""},

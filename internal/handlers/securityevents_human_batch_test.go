@@ -79,7 +79,7 @@ func TestHandleIngestHuman_batchLoadsAutobanConfigOnce(t *testing.T) {
 	t.Cleanup(services.ResetAutobanCounters)
 
 	ts := time.Now().UnixMilli()
-	body := humanObserveBatchBody("203.0.113.201", ts, "challenge", "fail", "challenge", "fail", "challenge", "fail")
+	body := humanObserveBatchBody("45.33.32.201", ts, "challenge", "fail", "challenge", "fail", "challenge", "fail")
 	recorder.reset()
 	postHumanObserveBatch(t, body)
 
@@ -102,7 +102,7 @@ func TestHandleIngestHuman_batchPassNeverFed(t *testing.T) {
 	t.Cleanup(services.ResetAutobanCounters)
 
 	ts := time.Now().UnixMilli()
-	body := humanObserveBatchBody("203.0.113.202", ts, "pass", "challenge", "pass", "fail")
+	body := humanObserveBatchBody("45.33.32.202", ts, "pass", "challenge", "pass", "fail")
 	recorder.reset()
 	postHumanObserveBatch(t, body)
 
@@ -132,7 +132,7 @@ func TestHandleIngestHuman_disabledAutobanSkipsFeedWithSingleRead(t *testing.T) 
 	t.Cleanup(services.ResetAutobanCounters)
 
 	ts := time.Now().UnixMilli()
-	body := humanObserveBatchBody("203.0.113.203", ts, "challenge", "fail", "challenge")
+	body := humanObserveBatchBody("45.33.32.203", ts, "challenge", "fail", "challenge")
 	recorder.reset()
 	postHumanObserveBatch(t, body)
 

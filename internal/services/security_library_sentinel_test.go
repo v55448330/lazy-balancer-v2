@@ -52,13 +52,13 @@ func TestArmSecurityLibraryFirstSlots_healsImportSentinelRow(t *testing.T) {
 }
 
 func TestArmSecurityLibraryFirstSlots_leavesHealthyVersionRowUntouched(t *testing.T) {
-	oldDB, oldMetricsDB, oldAuditDB := db.DB, db.MetricsDB, db.AuditDB
+	oldDB, oldMetricsDB, oldAuditDB, oldCurrent := db.DB, db.MetricsDB, db.AuditDB, db.GetDB()
 	if err := db.Initialize(t.TempDir()); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
 		_ = db.Close()
-		db.DB, db.MetricsDB, db.AuditDB = oldDB, oldMetricsDB, oldAuditDB
+		restoreGlobalDBHandles(oldDB, oldMetricsDB, oldAuditDB, oldCurrent)
 	})
 	// 用户已有真实版本且关闭自动更新：自愈/武装路径不得改写版本行。
 	if _, err := db.DB.Exec(`INSERT INTO security_crs_version (id, version, auto_update) VALUES (1, '9.9.9', 0)`); err != nil {

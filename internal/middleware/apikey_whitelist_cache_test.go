@@ -48,7 +48,7 @@ func TestAPIKeyWhitelistCache_boundsEntriesAndAllowsReplacement(t *testing.T) {
 
 	// Then 新键不越过全局上限，已有键仍可替换更新。
 	remaining := 0
-	apiKeyWhitelistCache.Range(func(_, _ any) bool { remaining++; return true })
+	apiKeyWhitelistCache.Range(func(_ string, _ any) bool { remaining++; return true })
 	if remaining != 1024 {
 		t.Fatalf("cache entries=%d, want bounded 1024", remaining)
 	}
@@ -77,7 +77,7 @@ func TestPurgeAllAPIKeyWhitelistCache_emptiesCache(t *testing.T) {
 
 	// Then：缓存全空
 	remaining := 0
-	apiKeyWhitelistCache.Range(func(_, _ any) bool { remaining++; return true })
+	apiKeyWhitelistCache.Range(func(_ string, _ any) bool { remaining++; return true })
 	if remaining != 0 {
 		t.Fatalf("缓存剩余 %d 条, want 0（api_keys 整体替换后必须清空）", remaining)
 	}

@@ -1,7 +1,6 @@
 package services
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"database/sql"
@@ -10,7 +9,6 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -26,8 +24,10 @@ import (
 
 func seedAppliedSection(t *testing.T, dbh *sql.DB, section, hash string) {
 	t.Helper()
-	dbh.Exec(`INSERT INTO cluster_applied_sections (section, hash, applied_version, applied_at) VALUES (?,?,1,datetime('now'))
-		ON CONFLICT(section) DO UPDATE SET hash=excluded.hash`, section, hash)
+	if _, err := dbh.Exec(`INSERT INTO cluster_applied_sections (section, hash, applied_version, applied_at) VALUES (?,?,1,datetime('now'))
+		ON CONFLICT(section) DO UPDATE SET hash=excluded.hash`, section, hash); err != nil {
+		t.Fatalf("seed applied section %s: %v", section, err)
+	}
 }
 
 // overrideWafPathsForServicesTest 重定向 CRS/xdb 活动路径到临时目录并预建
@@ -312,10 +312,7 @@ func TestWafFilesDrifted_warnsOnSwitchReadFailure(t *testing.T) {
 	if err := database.Close(); err != nil {
 		t.Fatalf("close database: %v", err)
 	}
-	var logs bytes.Buffer
-	originalWriter := log.Writer()
-	log.SetOutput(&logs)
-	t.Cleanup(func() { log.SetOutput(originalWriter) })
+	logs := captureLogf(t)
 
 	if service.wafFilesDrifted(context.Background()) {
 		t.Fatal("读失败时必须按未漂移处理（不得误触发全量重拉）")
@@ -332,10 +329,7 @@ func TestWafFilesDrifted_warnsOnBookkeepingHashReadFailure(t *testing.T) {
 	if _, err := database.Exec(`ALTER TABLE global_config RENAME COLUMN applied_waf_ref_hash TO applied_waf_ref_hash_unavailable`); err != nil {
 		t.Fatalf("hide bookkeeping column: %v", err)
 	}
-	var logs bytes.Buffer
-	originalWriter := log.Writer()
-	log.SetOutput(&logs)
-	t.Cleanup(func() { log.SetOutput(originalWriter) })
+	logs := captureLogf(t)
 
 	if service.wafFilesDrifted(context.Background()) {
 		t.Fatal("记账哈希不可读时必须按未漂移处理")
@@ -407,46 +401,8 @@ func TestRecordAppliedSectionHashes_persistsAndUpdates(t *testing.T) {
 	}
 }
 
-// oldBuildSecuritySectionHash 复现 COALESCE 加固前旧构建的 security 节哈希
-// 裸列直出（NULL 序列化为 null 字面量），构造混合版本场景的旧口径参照。
-// 列清单取自加固前 snapshotSecurityPolicies 的原始 SELECT（git 63e05fa5^）。
-func oldBuildSecuritySectionHash(t *testing.T, service *ClusterService, database *sql.DB) string {
-	t.Helper()
-	ctx := context.Background()
-	const oldColumns = "id,name,description,mode,anomaly_threshold,ip_acl_mode,ip_acl_list,ip_acl_enabled,ip_whitelist,ip_blacklist,crs_rule_groups,crs_excluded_rules,custom_rules,block_page_id,block_status_code,enabled,updated_by,created_at,updated_at,geoip_countries,geoip_mode,waf_check_response"
-	var snapshot models.ClusterSnapshot
-	var err error
-	if snapshot.SecurityPolicies, err = service.dumpTableAsJSON(ctx, database, "security_policies", oldColumns, "id"); err != nil {
-		t.Fatalf("旧口径 dump security_policies: %v", err)
-	}
-	if !strings.Contains(string(snapshot.SecurityPolicies), `"geoip_mode":null`) {
-		t.Fatalf("旧口径 dump 必须在 COALESCE 列携带 null 字面量: %s", snapshot.SecurityPolicies)
-	}
-	if snapshot.SecurityBindings, err = service.snapshotSecurityBindings(ctx, database); err != nil {
-		t.Fatalf("旧口径 dump bindings: %v", err)
-	}
-	if snapshot.SecurityCustomRules, err = service.snapshotSecurityCustomRules(ctx, database); err != nil {
-		t.Fatalf("旧口径 dump custom rules: %v", err)
-	}
-	if snapshot.SecurityBlockPages, err = service.snapshotSecurityBlockPages(ctx, database); err != nil {
-		t.Fatalf("旧口径 dump block pages: %v", err)
-	}
-	if snapshot.SecurityCRSVersion, err = service.snapshotSecurityCRSVersion(ctx, database); err != nil {
-		t.Fatalf("旧口径 dump crs version: %v", err)
-	}
-	if snapshot.SecurityIP2RegionVersion, err = service.snapshotSecurityIP2RegionVersion(ctx, database); err != nil {
-		t.Fatalf("旧口径 dump ip2region version: %v", err)
-	}
-	data, err := json.Marshal(sectionPayloadFor("security", &snapshot))
-	if err != nil {
-		t.Fatalf("序列化旧口径 security payload: %v", err)
-	}
-	sum := sha256.Sum256(data)
-	return hex.EncodeToString(sum[:])
-}
-
 func TestRecordAppliedSectionHashes_driftedSectionStoresLocalRebuiltHash(t *testing.T) {
-	// Given：问题 混合版本循环场景——新构建从节点（COALESCE 口径）对旧构建
+	// Given：混合版本循环场景——新构建从节点（COALESCE 口径）对旧构建
 	// 主节点（裸列口径）。本地 security_policies 在 COALESCE 列上含 NULL。
 	service, database := newClusterTestService(t)
 	setNodeMasterRole(t, database, false) // 节记账是从端专有写（角色谓词口径）
@@ -463,8 +419,38 @@ func TestRecordAppliedSectionHashes_driftedSectionStoresLocalRebuiltHash(t *test
 	if localView == "" {
 		t.Fatal("本地 security 节哈希必须非空")
 	}
-	// 旧主节点口径（裸列视图），二者必须真实分歧，否则夹具不成立：
-	oldView := oldBuildSecuritySectionHash(t, service, database)
+	// 旧主节点口径（裸列视图）：复现 COALESCE 加固前旧构建的 security 节哈希——
+	// 裸列直出（NULL 序列化为 null 字面量），二者必须真实分歧，否则夹具不成立。
+	// 列清单取自加固前 snapshotSecurityPolicies 的原始 SELECT（git 63e05fa5^）。
+	const oldColumns = "id,name,description,mode,anomaly_threshold,ip_acl_mode,ip_acl_list,ip_acl_enabled,ip_whitelist,ip_blacklist,crs_rule_groups,crs_excluded_rules,custom_rules,block_page_id,block_status_code,enabled,updated_by,created_at,updated_at,geoip_countries,geoip_mode,waf_check_response"
+	var oldSnapshot models.ClusterSnapshot
+	if oldSnapshot.SecurityPolicies, err = service.dumpTableAsJSON(ctx, database, "security_policies", oldColumns, "id"); err != nil {
+		t.Fatalf("旧口径 dump security_policies: %v", err)
+	}
+	if !strings.Contains(string(oldSnapshot.SecurityPolicies), `"geoip_mode":null`) {
+		t.Fatalf("旧口径 dump 必须在 COALESCE 列携带 null 字面量: %s", oldSnapshot.SecurityPolicies)
+	}
+	if oldSnapshot.SecurityBindings, err = service.snapshotSecurityBindings(ctx, database); err != nil {
+		t.Fatalf("旧口径 dump bindings: %v", err)
+	}
+	if oldSnapshot.SecurityCustomRules, err = service.snapshotSecurityCustomRules(ctx, database); err != nil {
+		t.Fatalf("旧口径 dump custom rules: %v", err)
+	}
+	if oldSnapshot.SecurityBlockPages, err = service.snapshotSecurityBlockPages(ctx, database); err != nil {
+		t.Fatalf("旧口径 dump block pages: %v", err)
+	}
+	if oldSnapshot.SecurityCRSVersion, err = service.snapshotSecurityCRSVersion(ctx, database); err != nil {
+		t.Fatalf("旧口径 dump crs version: %v", err)
+	}
+	if oldSnapshot.SecurityIP2RegionVersion, err = service.snapshotSecurityIP2RegionVersion(ctx, database); err != nil {
+		t.Fatalf("旧口径 dump ip2region version: %v", err)
+	}
+	oldData, err := json.Marshal(sectionPayloadFor("security", &oldSnapshot))
+	if err != nil {
+		t.Fatalf("序列化旧口径 security payload: %v", err)
+	}
+	oldSum := sha256.Sum256(oldData)
+	oldView := hex.EncodeToString(oldSum[:])
 	if oldView == localView {
 		t.Fatal("夹具必须复现跨构建口径分歧（NULL 裸列 vs COALESCE）")
 	}
@@ -509,37 +495,14 @@ func TestRecordAppliedSectionHashes_sameBuildDriftedChoiceImmaterial(t *testing.
 	}
 }
 
-func legacySecuritySectionHashWithoutBlockPageNormalization(t *testing.T, master *models.ClusterSnapshot) string {
-	t.Helper()
-	currentPayload, err := json.Marshal(sectionPayloadFor("security", master))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(currentPayload, &fields); err != nil {
-		t.Fatal(err)
-	}
-	originalPages, err := json.Marshal(master.SecurityBlockPages)
-	if err != nil {
-		t.Fatal(err)
-	}
-	fields["block_pages"] = originalPages
-	legacyPayload, err := json.Marshal(fields)
-	if err != nil {
-		t.Fatal(err)
-	}
-	sum := sha256.Sum256(legacyPayload)
-	return hex.EncodeToString(sum[:])
-}
-
-// 处置证据：从节点 apply 期归一化造成
-// 本地重建哈希与主节点快照哈希持久分歧时，同步周期必须收敛到稳态 304——
+// 从节点 apply 期归一化造成本地重建哈希与主节点快照哈希持久分歧时，
+// 同步周期必须收敛到稳态 304——
 // 首轮 changed 路径落快照侧哈希 h → 下一 304 周期漂移判定触发一次补偿全量
-// 重拉 → 漂移重放后问题 drifted 分支落本地重建哈希 lh → 此后
+// 重拉 → 漂移重放后 drifted 分支落本地重建哈希 lh → 此后
 // local==applied 不再触发漂移。锁定「无每周期 ping-pong」不变式；残余成本
-// （每个主节点版本递增一次补偿周期）见上方裁定，接受为已知边界。
+// （每个主节点版本递增一次补偿周期）接受为已知边界。
 func TestSectionSyncCycle_normalizationDivergenceConvergesAfterOneDriftCycle(t *testing.T) {
-	// Given：形态主节点快照——security 节携带两个 is_default=1 拦截页；
+	// Given：旧构建主节点快照——security 节携带两个 is_default=1 拦截页；
 	// 从节点 apply 后降级仅保留 MIN(id)，本地重建哈希与快照侧持久分歧。
 	service, database := newClusterTestService(t)
 	setNodeMasterRole(t, database, false) // 节记账是从端专有写（角色谓词口径）
@@ -573,7 +536,27 @@ func TestSectionSyncCycle_normalizationDivergenceConvergesAfterOneDriftCycle(t *
 	if localHash == "" || localHash != currentSnapshotHash {
 		t.Fatalf("同构建归一化哈希必须一致：local=%q snapshot=%q", localHash, currentSnapshotHash)
 	}
-	snapshotHash := legacySecuritySectionHashWithoutBlockPageNormalization(t, &master)
+	// 旧构建口径参照：block_pages 未经归一化的原始载荷（其余字段取当前
+	// 归一化 payload），构造主从哈希分歧。
+	currentPayload, err := json.Marshal(sectionPayloadFor("security", &master))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(currentPayload, &fields); err != nil {
+		t.Fatal(err)
+	}
+	originalPages, err := json.Marshal(master.SecurityBlockPages)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fields["block_pages"] = originalPages
+	legacyPayload, err := json.Marshal(fields)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(legacyPayload)
+	snapshotHash := hex.EncodeToString(sum[:])
 	master.SectionHashes["security"] = snapshotHash
 	if localHash == snapshotHash {
 		t.Fatalf("夹具必须复现旧构建归一化分歧：local=%q legacy=%q", localHash, snapshotHash)
@@ -939,10 +922,7 @@ func TestDriftedSections_warnsOnSwitchReadFailure(t *testing.T) {
 	fake := sql.OpenDB(&driftSwitchFailConnector{conn: conn})
 	t.Cleanup(func() { _ = fake.Close() })
 	service := &SyncService{db: fake, cluster: NewClusterService(fake, "")}
-	var logs bytes.Buffer
-	originalWriter := log.Writer()
-	log.SetOutput(&logs)
-	t.Cleanup(func() { log.SetOutput(originalWriter) })
+	logs := captureLogf(t)
 
 	if got := service.driftedSections(context.Background()); got != "" {
 		t.Fatalf("driftedSections=%q, want 空串（读失败不得误报漂移）", got)

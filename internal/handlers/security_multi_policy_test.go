@@ -13,7 +13,6 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"lazy-balancer-v2/internal/db"
-	"lazy-balancer-v2/internal/services"
 )
 
 // （v2.2.0 多策略绑定）：一规则绑多策略的 RED 测试。
@@ -23,12 +22,7 @@ import (
 
 func newMultiPolicyRouter(t *testing.T) *gin.Engine {
 	t.Helper()
-	fakeCaddy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-	t.Cleanup(fakeCaddy.Close)
-	gin.SetMode(gin.TestMode)
-	h := &Handlers{caddyService: services.NewCaddyService(fakeCaddy.URL)}
+	h := newFakeCaddyHandlers(t)
 	router := gin.New()
 	router.POST("/security/policies", h.CreateSecurityPolicy)
 	router.DELETE("/security/policies/:id", h.DeleteSecurityPolicy)
@@ -948,8 +942,6 @@ func TestGetAllSecurityBindings_toleratesNullMode(t *testing.T) {
 	}
 }
 
-// 硬化（GetAllSecurityBindings）：p.rate_limit_enabled 可空——NULL 同样
-// 不得丢绑定，归一化为 false（与生成投影 COALESCE(rate_limit_enabled,0) 一致）。
 // 硬化（GetAllSecurityBindings）：p.enabled 可空——生成路径以
 // WHERE enabled=1 把 NULL 当禁用，UI 标签必须与后端行为一致：
 // COALESCE(p.enabled,0) 呈现禁用态，绑定行本身仍可见。

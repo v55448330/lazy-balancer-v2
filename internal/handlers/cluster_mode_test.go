@@ -16,6 +16,7 @@ import (
 
 	"lazy-balancer-v2/internal/config"
 	"lazy-balancer-v2/internal/db"
+	"lazy-balancer-v2/internal/i18n"
 	"lazy-balancer-v2/internal/models"
 	"lazy-balancer-v2/internal/services"
 )
@@ -403,5 +404,53 @@ func TestSetClusterMode_successInvokesSyncResume(t *testing.T) {
 	}
 	if got := services.SyncResumeCallsForTest(); got != before+1 {
 		t.Fatalf("Resume 调用次数=%d, want %d（重新注册后必须调用唯一复活点）", got, before+1)
+	}
+}
+
+// 切换从节点成功响应必须走 catalog 双语（message_key + 按请求语言取词）——
+// 硬编码中文会让英文界面在角色切换这一关键操作上看到中文。
+func TestSetClusterMode_successResponseCarriesMessageKey(t *testing.T) {
+	h := newBackupTestHandlers(t)
+	master := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":{"registration_id":12,"registration_secret":"secret"}}`))
+	}))
+	defer master.Close()
+	parsed, err := url.Parse(master.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	port, err := strconv.Atoi(parsed.Port())
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.cfg.NodeName = "node-i18n"
+	h.cfg.Port = port + 1
+	h.syncService = services.NewSyncService(db.DB, h.cfg, services.NewCaddyService("http://127.0.0.1:1"))
+
+	router := gin.New()
+	router.POST("/cluster/mode", h.SetClusterMode)
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/cluster/mode", strings.NewReader(`{"mode":"slave","master_url":"`+master.URL+`","register_token":"one-time"}`))
+	request.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200", response.Code, response.Body.String())
+	}
+	var resp struct {
+		Message    string `json:"message"`
+		MessageKey string `json:"message_key"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v body=%s", err, response.Body.String())
+	}
+	if resp.MessageKey == "" {
+		t.Fatalf("成功响应缺 message_key（硬编码中文不可翻译）: %s", response.Body.String())
+	}
+	if resp.Message != i18n.T(i18n.ZH, resp.MessageKey) {
+		t.Fatalf("message=%q 与 catalog zh 词条 %q 不一致", resp.Message, i18n.T(i18n.ZH, resp.MessageKey))
+	}
+	if en := i18n.T(i18n.EN, resp.MessageKey); en == "" || en == resp.Message {
+		t.Fatalf("catalog 缺 en 译文（key=%s en=%q）——英文用户将回落中文", resp.MessageKey, en)
 	}
 }

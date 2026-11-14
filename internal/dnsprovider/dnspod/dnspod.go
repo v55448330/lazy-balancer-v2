@@ -432,6 +432,8 @@ func (p *Provider) listChallengeRecords(ctx context.Context, zone, subDomain str
 	}
 	var collected []enumeratedRecord
 	offset := 0
+	fetchedTotal := 0
+	seen := make(map[string]bool)
 	for range challengeListPageLimit {
 		params := url.Values{}
 		params.Set("domain_id", domainID)
@@ -472,6 +474,7 @@ func (p *Provider) listChallengeRecords(ctx context.Context, zone, subDomain str
 			// 「空结果」（没有符合条件的记录）：按空列表收尾。
 			return collected, nil
 		}
+		repeatedPage := true
 		for _, record := range result.Records {
 			if record.Type != "TXT" {
 				continue
@@ -481,17 +484,39 @@ func (p *Provider) listChallengeRecords(ctx context.Context, zone, subDomain str
 			}
 			// flexNumber 兼容历史两种形态（JSON 数字与带引号字符串），
 			// 与 Record.Create 侧的 id 读取同口径。
-			collected = append(collected, enumeratedRecord{recordID: string(record.ID), value: record.Value})
+			id := string(record.ID)
+			if seen[id] {
+				continue
+			}
+			repeatedPage = false
+			seen[id] = true
+			collected = append(collected, enumeratedRecord{recordID: id, value: record.Value})
 		}
 		// 服务端可能按更小的页容量返回：按实际返回条数推进 offset，用
 		// info.record_total 判定是否已扫完。offset 为绝对偏移（官方文档
 		// docs.dnspod.cn/api/record-list：「记录开始的偏移，第一条记录为 0」
 		// ——与 getDomainID 的 Domain.List 循环同口径），短页按实际取到数
 		// 推进不重不漏，无需按 length 整数倍对齐（钉测见
-		// dnspod_pagination_test.go）。
-		offset += len(result.Records)
+		// dnspod_pagination_test.go）。翻页终止与 cloudflare 侧统一（total
+		// 优先、短页兜底、按实际取到条数推进游标）：fetched==0 即终止；
+		// total>0 时按累计取到数 ≥ total 终止——中途短页（页间漂移/服务端
+		// 单页容量波动）继续翻页不漏扫；total 缺失时退回「短页即终止」。
+		// total 失真偏大且服务端重复下发同页（无进展）时同样终止——否则
+		// 空转到页数上限并重复收集（钉测见 stopsWhenPagesRepeatWithInflatedTotal）。
+		fetched := len(result.Records)
+		offset += fetched
+		fetchedTotal += fetched
+		if fetched == 0 || repeatedPage {
+			break
+		}
 		total := result.Info.RecordTotal.Int64()
-		if len(result.Records) == 0 || (total > 0 && int64(offset) >= total) {
+		if total > 0 {
+			if int64(fetchedTotal) >= total {
+				break
+			}
+			continue
+		}
+		if fetched < challengeListPageSize {
 			break
 		}
 	}

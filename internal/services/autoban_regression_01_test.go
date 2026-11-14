@@ -129,10 +129,10 @@ func TestAutobanRunCycle_validConfigKeepsLoopOn(t *testing.T) {
 func TestAutobanStatusCounters_matchRenderActiveCaliber(t *testing.T) {
 	installAutobanFixture(t, "2026-10-14 10:00:00")
 	seedPresetEntriesForTest(t, `[
-		{"value":"203.0.113.1","remark":"自动封禁","created_at":"2026-10-14 09:00:00","expires_at":"2026-10-15 09:00:00"},
-		{"value":"203.0.113.2","remark":"自动封禁","created_at":"2026-10-14 09:30:00","expires_at":"2026-10-14 09:45:00"},
-		{"value":"203.0.113.3","remark":"自动封禁","created_at":"2026-10-14 09:40:00","expires_at":"not-a-time"},
-		{"value":"198.51.100.1","remark":"","created_at":"2026-10-14 08:00:00"}
+		{"value":"45.33.32.1","remark":"自动封禁","created_at":"2026-10-14 09:00:00","expires_at":"2026-10-15 09:00:00"},
+		{"value":"45.33.32.2","remark":"自动封禁","created_at":"2026-10-14 09:30:00","expires_at":"2026-10-14 09:45:00"},
+		{"value":"45.33.32.3","remark":"自动封禁","created_at":"2026-10-14 09:40:00","expires_at":"not-a-time"},
+		{"value":"45.33.32.1","remark":"","created_at":"2026-10-14 08:00:00"}
 	]`)
 
 	entries, _, err := AutobanListEntries()
@@ -147,7 +147,7 @@ func TestAutobanStatusCounters_matchRenderActiveCaliber(t *testing.T) {
 		t.Fatalf("active entries=%d, want 3（仅剔除已到期未清理一条）", len(active))
 	}
 	for _, e := range active {
-		if e.Value == "203.0.113.2" {
+		if e.Value == "45.33.32.2" {
 			t.Fatal("已到期未清理条目不得出现在生效视图")
 		}
 	}

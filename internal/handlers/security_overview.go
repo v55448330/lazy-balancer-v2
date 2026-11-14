@@ -333,8 +333,9 @@ func securityOverviewDayWindowCounts(database *sql.DB, from, to time.Time) (bloc
 }
 
 // securityOverviewDayWindowTCPAction 原始表窗口 TCP 动作拆分
-// （event_type='tcp' AND action=?——blocked/logged 由参数给定，与今日 TCP
-// 直算同款，仅换窗口；to 为零值表示无上界——今日口径与切换前逐字一致）。
+// （event_type='tcp' AND action=?——blocked/trust 由参数给定；检测拆分取
+// trust：L4 信任检测（id:12）审计行经摄取升格 logged→trust，logged 形态在
+// 生产不可达。to 为零值表示无上界）。
 func securityOverviewDayWindowTCPAction(database *sql.DB, from, to time.Time, action string) (int, error) {
 	query := `SELECT COUNT(*) FROM security_events
 		WHERE event_type='tcp' AND action=? AND event_time >= ?`
@@ -678,37 +679,15 @@ func loadOverviewAggregatesFromRollup(metricsDB *sql.DB, dayStarts []time.Time, 
 		trend = append(trend, point)
 	}
 
-	// 近窗 recency：minute 文本经 Format 取整到分钟——同一分钟内的秒级边缘
-	// 与原始表秒级窗口可差 <1 分钟（rollup 无秒级分辨率，与今日计数
-	// 「含当前分钟截至最近固化」同类口径）。
-	nowUTC := now.UTC()
-	recent10m := nowUTC.Add(-10 * time.Minute).Format(minuteLayout)
-	recent1h := nowUTC.Add(-time.Hour).Format(minuteLayout)
-	recent24h := nowUTC.Add(-24 * time.Hour).Format(minuteLayout)
-	type ipRecency struct {
-		recent10m, recent1h, recent24h int
+	// 7 天总量 Top10：blocked+logged 降序截前 10。recency 只消费这 10 行——
+	// 先取榜再有界 IN 重查（与增量轨道 rerankSecurityOverviewTopIPs 同形），
+	// 不再全量 GROUP BY 落 map（24h 内 IP 基数无界，消费面却恒 ≤10）。
+	type topCandidate struct {
+		ip                string
+		blocked, detected int
+		lastTime          string
 	}
-	recencyByIP := map[string]ipRecency{}
-	recencyRows, err := metricsDB.Query(`SELECT COALESCE(client_ip,''),
-		COALESCE(SUM(CASE WHEN minute >= ? THEN count ELSE 0 END),0) as recent_10m,
-		COALESCE(SUM(CASE WHEN minute >= ? THEN count ELSE 0 END),0) as recent_1h,
-		COALESCE(SUM(count),0) as recent_24h
-		FROM `+securityEventIPRollupTable+` WHERE minute >= ? GROUP BY client_ip`, recent10m, recent1h, recent24h)
-	track(err)
-	for recencyRows != nil && recencyRows.Next() {
-		var ip string
-		var rec ipRecency
-		track(recencyRows.Scan(&ip, &rec.recent10m, &rec.recent1h, &rec.recent24h))
-		recencyByIP[ip] = rec
-	}
-	if recencyRows != nil {
-		track(recencyRows.Err())
-		recencyRows.Close()
-	}
-
-	// 7 天总量 Top10：blocked+logged 降序截前 10；recency 由 24h 全量查询
-	// 按 IP 合并（缺省 0——只出现在 24h 窗口之外的 IP）。
-	topRows := make([]topIPRow, 0, 10)
+	candidates := make([]topCandidate, 0, 10)
 	ipRows, err := metricsDB.Query(`SELECT COALESCE(client_ip,''),
 		COALESCE(SUM(CASE WHEN action='blocked' THEN count ELSE 0 END),0) as b,
 		COALESCE(SUM(CASE WHEN action='logged' THEN count ELSE 0 END),0) as l,
@@ -717,26 +696,69 @@ func loadOverviewAggregatesFromRollup(metricsDB *sql.DB, dayStarts []time.Time, 
 		GROUP BY client_ip ORDER BY b + l DESC, COALESCE(client_ip,'') ASC LIMIT 10`, windowStartMinute)
 	track(err)
 	for ipRows != nil && ipRows.Next() {
-		var ip string
-		var blocked, detected int
+		var cand topCandidate
 		var lastMinute string
-		track(ipRows.Scan(&ip, &blocked, &detected, &lastMinute))
-		rec := recencyByIP[ip]
-		topRows = append(topRows, topIPRow{
-			ip:        ip,
-			blocked:   blocked,
-			detected:  detected,
-			recent10m: rec.recent10m,
-			recent1h:  rec.recent1h,
-			recent24h: rec.recent24h,
-			// MAX(minute) 为 UTC 分钟文本（无秒位），补 ":00" 与原始表
-			// last_time 同形（UTC 文本透传，前端 formatDate 同一解析路径）。
-			lastTime: lastMinute + ":00",
-		})
+		track(ipRows.Scan(&cand.ip, &cand.blocked, &cand.detected, &lastMinute))
+		// MAX(minute) 为 UTC 分钟文本（无秒位），补 ":00" 与原始表
+		// last_time 同形（UTC 文本透传，前端 formatDate 同一解析路径）。
+		cand.lastTime = lastMinute + ":00"
+		candidates = append(candidates, cand)
 	}
 	if ipRows != nil {
 		track(ipRows.Err())
 		ipRows.Close()
+	}
+
+	// 近窗 recency：minute 文本经 Format 取整到分钟——同一分钟内的秒级边缘
+	// 与原始表秒级窗口可差 <1 分钟（rollup 无秒级分辨率，与今日计数
+	// 「含当前分钟截至最近固化」同类口径）。只查榜内 IP；24h 内无行的候选
+	// recency 归零（与全量 GROUP BY 求和的零值形状一致）。
+	nowUTC := now.UTC()
+	recent10m := nowUTC.Add(-10 * time.Minute).Format(minuteLayout)
+	recent1h := nowUTC.Add(-time.Hour).Format(minuteLayout)
+	recent24h := nowUTC.Add(-24 * time.Hour).Format(minuteLayout)
+	type ipRecency struct {
+		recent10m, recent1h, recent24h int
+	}
+	recencyByIP := map[string]ipRecency{}
+	if len(candidates) > 0 {
+		placeholders := make([]string, len(candidates))
+		args := make([]any, 0, len(candidates)+3)
+		args = append(args, recent10m, recent1h, recent24h)
+		for i, cand := range candidates {
+			placeholders[i] = "?"
+			args = append(args, cand.ip)
+		}
+		recencyRows, rerr := metricsDB.Query(fmt.Sprintf(`SELECT COALESCE(client_ip,''),
+			COALESCE(SUM(CASE WHEN minute >= ? THEN count ELSE 0 END),0) as recent_10m,
+			COALESCE(SUM(CASE WHEN minute >= ? THEN count ELSE 0 END),0) as recent_1h,
+			COALESCE(SUM(count),0) as recent_24h
+			FROM `+securityEventIPRollupTable+` WHERE minute >= ? AND client_ip IN (%s) GROUP BY client_ip`,
+			strings.Join(placeholders, ",")), args...)
+		track(rerr)
+		for recencyRows != nil && recencyRows.Next() {
+			var ip string
+			var rec ipRecency
+			track(recencyRows.Scan(&ip, &rec.recent10m, &rec.recent1h, &rec.recent24h))
+			recencyByIP[ip] = rec
+		}
+		if recencyRows != nil {
+			track(recencyRows.Err())
+			recencyRows.Close()
+		}
+	}
+	topRows := make([]topIPRow, 0, len(candidates))
+	for _, cand := range candidates {
+		rec := recencyByIP[cand.ip]
+		topRows = append(topRows, topIPRow{
+			ip:        cand.ip,
+			blocked:   cand.blocked,
+			detected:  cand.detected,
+			recent10m: rec.recent10m,
+			recent1h:  rec.recent1h,
+			recent24h: rec.recent24h,
+			lastTime:  cand.lastTime,
+		})
 	}
 
 	// 攻击族总量：规则维度 rollup GROUP BY rule_triggered, rule_msg——排序/
@@ -1149,7 +1171,7 @@ func refreshSecurityOverviewAggIncremental(metricsDB *sql.DB, prev securityOverv
 	if err != nil {
 		return securityOverviewAggregates{}, state, err
 	}
-	dayCounts.todayDetectedTCP, err = securityOverviewDayWindowTCPAction(metricsDB, todayDayStart, time.Time{}, "logged")
+	dayCounts.todayDetectedTCP, err = securityOverviewDayWindowTCPAction(metricsDB, todayDayStart, time.Time{}, services.SecurityEventActionTrust)
 	if err != nil {
 		return securityOverviewAggregates{}, state, err
 	}
@@ -1396,9 +1418,9 @@ func computeSecurityOverviewAggregatesFull(metricsDB *sql.DB, dayStarts []time.T
 	var dayErr error
 	dayCounts.yesterdayBlocked, dayCounts.yesterdayDetected, dayErr = securityOverviewDayWindowCounts(metricsDB, ydayStart, todayDayStart)
 	if dayErr == nil {
-		// 昨日 TCP 检测：L4 信任检测（trust_detect）产 tcp+logged 形态（与
-		// HTTP stage0 DetectionOnly 对齐）；无该形态时为 0。
-		dayCounts.yesterdayDetectedTCP, dayErr = securityOverviewDayWindowTCPAction(metricsDB, ydayStart, todayDayStart, "logged")
+		// 昨日 TCP 检测：L4 信任检测（trust_detect）审计行经摄取升格为
+		// tcp+trust（与 HTTP stage0 DetectionOnly 对齐）；无该形态时为 0。
+		dayCounts.yesterdayDetectedTCP, dayErr = securityOverviewDayWindowTCPAction(metricsDB, ydayStart, todayDayStart, services.SecurityEventActionTrust)
 	}
 	if dayErr != nil && srcErr == nil {
 		srcErr = dayErr
@@ -1411,7 +1433,7 @@ func computeSecurityOverviewAggregatesFull(metricsDB *sql.DB, dayStarts []time.T
 	if dayErr != nil && srcErr == nil {
 		srcErr = dayErr
 	}
-	dayCounts.todayDetectedTCP, dayErr = securityOverviewDayWindowTCPAction(metricsDB, todayDayStart, time.Time{}, "logged")
+	dayCounts.todayDetectedTCP, dayErr = securityOverviewDayWindowTCPAction(metricsDB, todayDayStart, time.Time{}, services.SecurityEventActionTrust)
 	if dayErr != nil && srcErr == nil {
 		srcErr = dayErr
 	}

@@ -47,11 +47,13 @@ func SetAutoBackupExecutor(fn func(ctx context.Context, trigger, operator string
 // 完全同形（零执行、零失败行、零日志）。状态转换口径（首报 warn + 恢复 info）
 // 与同族排程读取单源）。
 func AutoBackupEnabledState() (enabled, known bool) {
-	if db.DB == nil {
+	// 调度读侧走原子句柄（与 versionTableAutoUpdateState 同口径）。
+	database := db.GetDB()
+	if database == nil {
 		return false, false
 	}
 	var v int
-	if err := db.DB.QueryRow(`SELECT COALESCE(auto_backup_enabled,` + strconv.Itoa(db.DefaultAutoBackupEnabled) + `) FROM global_config WHERE id=1`).Scan(&v); err != nil {
+	if err := database.QueryRow(`SELECT COALESCE(auto_backup_enabled,` + strconv.Itoa(db.DefaultAutoBackupEnabled) + `) FROM global_config WHERE id=1`).Scan(&v); err != nil {
 		logScheduleReadFailure("schedule-read-auto-backup-enabled", err)
 		return false, false
 	}
@@ -214,11 +216,12 @@ func loadAutoBackupSettingsContext(ctx context.Context) (autoBackupSettingsRow, 
 	var row autoBackupSettingsRow
 	var lastRun sql.NullString
 	// nil 库守卫（生产不可达）——EnabledFn/NextSlotFn 消费方
-	// fail-closed（err 路径=已停止/零值槽）。
-	if db.DB == nil {
+	// fail-closed（err 路径=已停止/零值槽）。调度读侧走原子句柄。
+	database := db.GetDB()
+	if database == nil {
 		return row, sql.ErrConnDone
 	}
-	err := db.DB.QueryRowContext(ctx, `SELECT COALESCE(auto_backup_enabled,`+strconv.Itoa(db.DefaultAutoBackupEnabled)+`), COALESCE(auto_backup_frequency,'`+db.DefaultAutoBackupFrequency+`'),
+	err := database.QueryRowContext(ctx, `SELECT COALESCE(auto_backup_enabled,`+strconv.Itoa(db.DefaultAutoBackupEnabled)+`), COALESCE(auto_backup_frequency,'`+db.DefaultAutoBackupFrequency+`'),
 		COALESCE(auto_backup_time,'`+db.DefaultAutoBackupTime+`'), COALESCE(auto_backup_day,`+strconv.Itoa(db.DefaultAutoBackupDay)+`), auto_backup_last_run
 		FROM global_config WHERE id=1`).
 		Scan(&row.enabled, &row.freq, &row.hhmm, &row.day, &lastRun)
@@ -283,8 +286,9 @@ func nextAutoBackupSlot(now time.Time) (time.Time, bool) {
 }
 
 func nextAutoBackupSlotContext(ctx context.Context, now time.Time) (time.Time, bool) {
-	// nil 库守卫与 schedule.go 各族同口径（无库脚手架形态静默零槽，不留痕）。
-	if db.DB == nil {
+	// nil 库守卫与 schedule.go 各族同口径（无库脚手架形态静默零槽，不留痕）；
+	// 调度读侧走原子句柄。
+	if db.GetDB() == nil {
 		return time.Time{}, false
 	}
 	row, err := loadAutoBackupSettingsContext(ctx)

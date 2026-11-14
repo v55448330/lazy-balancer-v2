@@ -109,3 +109,50 @@ func TestDNSPodBuildCredentials_rejectsAmbiguousFamilies(t *testing.T) {
 		t.Fatalf("error=%q, want 歧义 wording", err.Error())
 	}
 }
+
+// DNSPod 是双族提供商（dnspod token / tencent secret 对），但他族凭据
+// （aliyun access 对 / cloudflare token）不得被静默接受——与 Aliyun/Cloudflare
+// 的族守卫同口径（fail-visible）：静默存储他族凭据会让「provider 元数据」与
+// 「凭据真相」分裂，保存接受后测试/签发结论倒挂。
+func TestDNSPod_BuildCredentialsJSON_rejectsForeignFamily(t *testing.T) {
+	provider := &DNSPod{}
+	for name, creds := range map[string]map[string]string{
+		"aliyun pair":         {"mode": "aliyun", "access_key_id": "ak", "access_key_secret": "sk"},
+		"aliyun pair ui form": {"auth_mode": "aliyun", "access_key_id": "ak", "access_key_secret": "sk"},
+		"cloudflare token":    {"mode": "cloudflare", "api_token": "cf-tok"},
+	} {
+		if _, err := provider.BuildCredentialsJSON(creds); err == nil {
+			t.Fatalf("%s 必须拒绝（fail-visible）", name)
+		} else if !strings.Contains(err.Error(), "对应提供商") {
+			t.Fatalf("%s error=%q, want 点名他族凭据应配置在对应提供商下", name, err.Error())
+		}
+	}
+}
+
+// 双族放行形状：mode=dnspod 与 mode=tencent（含 UI 形态 auth_mode=tencent_cloud）
+// 都必须被接受并产出对应族的 canonical 凭据——族守卫不得误伤本族。
+func TestDNSPod_BuildCredentialsJSON_acceptsBothNativeFamilies(t *testing.T) {
+	provider := &DNSPod{}
+	for name, input := range map[string]map[string]string{
+		"dnspod canonical":  {"mode": "dnspod", "api_token": "123,abc"},
+		"tencent canonical": {"mode": "tencent", "secret_id": "sid", "secret_key": "skey"},
+		"tencent ui form":   {"auth_mode": "tencent_cloud", "secret_id": "sid", "secret_key": "skey"},
+	} {
+		canonical, err := provider.BuildCredentialsJSON(input)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		switch canonical["mode"] {
+		case "dnspod":
+			if canonical["api_token"] != "123,abc" {
+				t.Fatalf("%s canonical=%v, want dnspod/api_token", name, canonical)
+			}
+		case "tencent":
+			if canonical["secret_id"] != "sid" || canonical["secret_key"] != "skey" {
+				t.Fatalf("%s canonical=%v, want tencent/secret 对", name, canonical)
+			}
+		default:
+			t.Fatalf("%s mode=%v, want dnspod/tencent", name, canonical["mode"])
+		}
+	}
+}

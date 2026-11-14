@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"net/http/httptest"
 	"strconv"
 	"strings"
 	"testing"
@@ -15,7 +14,6 @@ import (
 
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
-	"lazy-balancer-v2/internal/services"
 )
 
 // NULL 容忍残余：handler 端点裸扫描可空列，
@@ -27,12 +25,7 @@ import (
 // newNullCoalesceRouter 注册本文件三测试所需的全部端点。
 func newNullCoalesceRouter(t *testing.T) *gin.Engine {
 	t.Helper()
-	fakeCaddy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-	t.Cleanup(fakeCaddy.Close)
-	gin.SetMode(gin.TestMode)
-	h := &Handlers{caddyService: services.NewCaddyService(fakeCaddy.URL)}
+	h := newFakeCaddyHandlers(t)
 	router := gin.New()
 	router.GET("/security/rules/:caddy_id/policy", h.GetSecurityPolicyBindings)
 	router.GET("/security/custom-rules", h.ListSecurityCustomRules)
@@ -45,7 +38,7 @@ func newNullCoalesceRouter(t *testing.T) *gin.Engine {
 }
 
 // GetSecurityPolicyBindings 的逐策略查询与 securityPolicySelectColumns
-// 同 25 列但无 COALESCE——绑定策略任一可空列（如 description）为 NULL 时整列表 500。
+// 同 41 列但无 COALESCE——绑定策略任一可空列（如 description）为 NULL 时整列表 500。
 // 修复后按常量投影返回 200 与该策略的默认值形态。
 func TestGetSecurityPolicyBindings_nullPolicyColumnsReturn200(t *testing.T) {
 	// Given：一条 HTTP 规则绑定一条 description（及其余可空列）为 NULL 的启用策略

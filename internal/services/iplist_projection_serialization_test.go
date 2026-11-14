@@ -24,7 +24,15 @@ func TestGenerateSingleRuleCaddyConfig_serializesWithProjectionSnapshot(t *testi
 		t.Fatalf("snapshot projections: %v", err)
 	}
 	rendered := make(chan struct{})
+	// 正握手（entered 通道）：快照生命周期持有 ipListProjectionRenderMu，
+	// 串行化实现下预检渲染必然阻塞在入口。测试先确认渲染 goroutine 已到达
+	// 锁等待（而不是依赖「100ms 内渲染不完」的负窗口调度假设——慢机上
+	// 串行化回归会假绿），再执行回滚：未串行化实现此刻已写完 tp.txt 并登记
+	// 进本轮新建清单，回滚会把它当渲染新增删除；串行化实现下渲染尚未动盘，
+	// 回滚清单为空，tp.txt 在回滚后才生成并存活。
+	entered := make(chan struct{})
 	go func() {
+		close(entered)
 		defer close(rendered)
 		config := GenerateSingleRuleCaddyConfig(SingleRuleConfig{
 			CaddyID:                       "lb_projection_race",
@@ -42,17 +50,16 @@ func TestGenerateSingleRuleCaddyConfig_serializesWithProjectionSnapshot(t *testi
 			t.Errorf("single rule render failed: %v", config["error"])
 		}
 	}()
-	select {
-	case <-rendered:
-		// 未串行实现会先渲染完并把 tp.txt 登记进本轮回滚清单。
-	case <-time.After(100 * time.Millisecond):
-	}
+	<-entered
+	// 给渲染 goroutine 到达锁等待的宽限（正握手只证明「已启动」，此处
+	// 让出调度使其必然停在入口；串行化与否的区分由回滚终态断言承载）。
+	time.Sleep(50 * time.Millisecond)
 	if err := RestoreIPListProjections(snapshot); err != nil {
 		t.Fatalf("restore projections: %v", err)
 	}
 	select {
 	case <-rendered:
-	case <-time.After(2 * time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("单规则渲染在投影回滚后仍未完成（可能死锁）")
 	}
 	if _, err := os.Stat(filepath.Join(IPListDataDir, "tp.txt")); err != nil {

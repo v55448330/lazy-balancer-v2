@@ -7,6 +7,10 @@
 // UI 必须以 not_after 为准，否则后端已算出的 days_remaining/certificate_status
 // 在 expires_at 为 null 的行上没有任何消费方，页面显示「-」而规则页显示
 // 「剩 N 天」，运维会误判为未签发并重复触发签发。
+// legacy 兜底（not_after 缺失的旧响应）expires_at 是 DB UTC 墙钟串：裸
+// new Date 按浏览器本地时区解析，跨时区管理员的「自动重签时间」整体偏移。
+// 解析走 timeZoneFormat.parseDbDateMs 单源（墙钟归一为显式 UTC；RFC3339 原样）。
+import { parseDbDateMs } from './timeZoneFormat.ts'
 
 interface CertJobExpiryFields {
   rule_id?: string | number
@@ -72,11 +76,11 @@ export const certRenewalWindowConverged = (days: number): boolean =>
 export const certJobRenewalAt = (job: CertJobExpiryFields, renewalDays: number): string => {
   const expiryValue = certJobEffectiveNotAfter(job)
   if (!expiryValue) return ''
-  const expiry = new Date(expiryValue)
-  if (Number.isNaN(expiry.getTime())) return ''
+  const expiryMs = parseDbDateMs(expiryValue)
+  if (expiryMs === null) return ''
   if (!Number.isFinite(renewalDays)) return ''
   const jitterMs = certRenewalJitterSeconds(job.rule_id) * 1000
-  return new Date(expiry.getTime() - certRenewalWindowDays(renewalDays) * 24 * 60 * 60 * 1000 - jitterMs).toISOString()
+  return new Date(expiryMs - certRenewalWindowDays(renewalDays) * 24 * 60 * 60 * 1000 - jitterMs).toISOString()
 }
 
 /**

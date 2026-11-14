@@ -319,6 +319,9 @@ func resetSecurityEventsSpoolEntryCountCacheForTest() {
 // securityEventsSpoolStatusFresh 现扫 spool 目录（绕过状态 TTL）。逐文件行数
 // 另按 (size,mtime,append offset) 缓存：未变化文件零读取，追加中的 active 文件
 // 只读新增字节，避免每 10s 重读整批 sealed 文件。
+// 饱和判定逐目录独立：写侧上限按单一目录执行（HTTP/L4 各自独立目录、各自
+// 丢弃），合计判定会在单目录远未触顶时提前误报「写侧正在丢弃」；任一目录
+// 独立触顶即饱和。Entries/Bytes 报告口径仍为双目录合计。
 func securityEventsSpoolStatusFresh() SecurityEventsSpoolStatus {
 	dirs := securityEventsSpoolDirs()
 	limitEntries, limitBytes := securityEventsSpoolLimits()
@@ -334,12 +337,11 @@ func securityEventsSpoolStatusFresh() SecurityEventsSpoolStatus {
 		}
 	}
 	securityEventsSpoolCountCache.Unlock()
-	status.Saturated = (limitEntries > 0 && status.Entries >= limitEntries) ||
-		(limitBytes > 0 && status.Bytes >= limitBytes)
 	return status
 }
 
 func securityEventsSpoolStatusFreshIn(dir string, status *SecurityEventsSpoolStatus, seen map[string]struct{}) {
+	var dirEntries, dirBytes int64
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if !os.IsNotExist(err) {
@@ -367,7 +369,7 @@ func securityEventsSpoolStatusFreshIn(dir string, status *SecurityEventsSpoolSta
 			}
 			continue
 		}
-		status.Bytes += info.Size()
+		dirBytes += info.Size()
 		path := filepath.Join(dir, name)
 		seen[path] = struct{}{}
 		if info.Size() == 0 {
@@ -380,8 +382,14 @@ func securityEventsSpoolStatusFreshIn(dir string, status *SecurityEventsSpoolSta
 			}
 			continue
 		}
-		status.Entries += n
+		dirEntries += n
 	}
+	limitEntries, limitBytes := securityEventsSpoolLimits()
+	if (limitEntries > 0 && dirEntries >= limitEntries) || (limitBytes > 0 && dirBytes >= limitBytes) {
+		status.Saturated = true
+	}
+	status.Entries += dirEntries
+	status.Bytes += dirBytes
 }
 
 func securityEventsSpoolCountEntriesCached(path string, info os.FileInfo) (int64, error) {

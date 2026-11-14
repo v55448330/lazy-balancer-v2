@@ -33,11 +33,11 @@ function entriesMissingFromPayload(
   serverEntries: readonly string[],
   payloadValues: readonly string[],
 ): string[] {
-  const keep = new Set(payloadValues.map((value) => value.trim().toLowerCase()))
+  const keep = new Set(payloadValues.map(entryKey))
   const reported = new Set<string>()
   const missing: string[] = []
   for (const raw of serverEntries) {
-    const key = raw.trim().toLowerCase()
+    const key = entryKey(raw)
     if (!key || keep.has(key) || reported.has(key)) continue
     reported.add(key)
     missing.push(raw.trim())
