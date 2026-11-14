@@ -46,8 +46,12 @@ func TestCmdServerAgentDocReferencesExist(t *testing.T) {
 		if !strings.Contains(doc, symbol) {
 			t.Errorf("AGENTS.md WHERE TO LOOK 缺少实际入口 %s", symbol)
 		}
-		if !strings.Contains(pkgSrc.String(), "func "+symbol) && !strings.Contains(pkgSrc.String(), symbol) {
-			t.Errorf("AGENTS.md 引用的 %s 在 cmd/server 源码中不存在", symbol)
+		// 精确匹配函数/方法声明（func run( 或 ) ShutdownWithTimeout(），
+		// 不做裸子串匹配——注释里的 "run" 或 rerunTask 之类名字不得冒充
+		// 入口存在性。
+		src := pkgSrc.String()
+		if !strings.Contains(src, "func "+symbol+"(") && !strings.Contains(src, ") "+symbol+"(") {
+			t.Errorf("AGENTS.md 引用的 %s 在 cmd/server 源码中没有对应的函数/方法声明", symbol)
 		}
 	}
 

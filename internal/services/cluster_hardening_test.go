@@ -151,6 +151,7 @@ func mustDatabasePath(t *testing.T, database *sql.DB) string {
 // 哈希兜底并入审计），不得仅 warn 后静默。
 func TestRecordAppliedSectionHashes_reportsWriteFailure(t *testing.T) {
 	_, database := newClusterTestService(t)
+	setNodeMasterRole(t, database, false) // 节记账是从端专有写（角色谓词口径）
 	snapshot := models.ClusterSnapshot{Version: 7, SectionHashes: map[string]string{"users": "u", "rules": "r", "security": "s"}}
 	switches := SyncSwitches{Users: true, Rules: true, Security: true}
 	sk := &sectionSkips{disabled: map[string]bool{}, unchanged: map[string]bool{}}

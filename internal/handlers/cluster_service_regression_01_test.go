@@ -17,6 +17,7 @@ import (
 // 服务控制调用必须对「同主机名 + 升级为 https」的 Location 按原方法重放一次，
 // 否则票据调用在 301 上空 body 解析失败、服务控制全线不可用。
 func TestCallClusterServiceControl_followsSameHostTLSUpgradeRedirect(t *testing.T) {
+	withIsolatedGlobal(t)
 	setupClusterServiceControlDB(t)
 	// Given a slave whose plaintext port 301s to its HTTPS port (same hostname)
 	type slaveCall struct{ Action, Ticket string }
@@ -68,6 +69,7 @@ func TestCallClusterServiceControl_followsSameHostTLSUpgradeRedirect(t *testing.
 }
 
 func TestCallClusterServiceControl_doesNotFollowCrossHostRedirect(t *testing.T) {
+	withIsolatedGlobal(t)
 	setupClusterServiceControlDB(t)
 	// Given a redirect to the same listener but under a different hostname
 	received := make(chan struct{}, 1)

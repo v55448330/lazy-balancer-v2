@@ -159,7 +159,7 @@ func (h *HumanHandler) ServeHTTP(w http.ResponseWriter, r *http.Request, next ca
 	key := h.RuleID + "|" + normalizeIP(ip)
 	if h.CCEnabled {
 		current := ccPeek(key, h.CCWindowSec)
-		trig := evalCC(current, h.CCRPSLimit, h.CCWindowSec, h.CC4xxRatio, h.CCSessionUA, h.CCSession)
+		trig := evalCC(current, h.CCRPSLimit, h.CC4xxRatio, h.CCSessionUA, h.CCSession)
 		if trig.Triggered {
 			recordCCTrigger(trig.Reason)
 			h.serveChallengeForRequest(w, r, ip)
@@ -181,7 +181,8 @@ var (
 	_ caddyhttp.MiddlewareHandler = (*HumanHandler)(nil)
 )
 
-// timeNow 时间源（测试可替换）。
+// timeNow 时间源（测试可替换）：cookie 签发/校验、挑战 token、滑块拼图、
+// CC 窗口与实时会话的全部判时统一走它——替换后各面时间一致推进。
 var timeNow = func() time.Time { return time.Now() }
 
 // statusCapture 最小状态捕获（4xx 比例计数）。

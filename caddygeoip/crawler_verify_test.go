@@ -1158,3 +1158,39 @@ func TestCrawlerIPRangeSnapshot_parses4in6AndBareIPEntries(t *testing.T) {
 		t.Fatal("裸 IP 条目不得放大成整段命中")
 	}
 }
+
+// panicResolver 在 PTR 查询时 panic（真实故障注入：验证器不得让信号量槽位
+// 随 panic 泄漏——泄漏累积后全部爬虫验证永久退化为瞬态）。
+type panicResolver struct{}
+
+func (panicResolver) LookupAddr(context.Context, string) ([]string, error) {
+	panic("injected resolver panic")
+}
+func (panicResolver) LookupHost(context.Context, string) ([]string, error) { return nil, nil }
+
+// 信号量释放必须 panic-safe：验证本体 panic 后槽位仍须归还（defer 释放），
+// 后续验证照常取得槽位（泄漏时这里会因满员恒返 Transient 且不触达 resolver）。
+func TestVerifyCrawler_slotReleasedOnPanic(t *testing.T) {
+	ResetCrawlerVerifyCacheForTest(panicResolver{})
+	for len(crawlerVerifySem) > 0 {
+		<-crawlerVerifySem
+	}
+	func() {
+		defer func() { _ = recover() }()
+		VerifyCrawler("66.249.70.1", "googlebot")
+	}()
+	if got := len(crawlerVerifySem); got != 0 {
+		t.Fatalf("semaphore slots after panic=%d, want 0 (slot must be released via defer)", got)
+	}
+	// 终态断言：panic 之后正常验证仍能取得槽位并完成（换回可编程 resolver）。
+	ResetCrawlerVerifyCacheForTest(&fakeResolver{
+		ptr:  map[string][]string{"66.249.70.2": {"crawl-66-249-70-2.googlebot.com."}},
+		host: map[string][]string{"crawl-66-249-70-2.googlebot.com": {"66.249.70.2"}},
+	})
+	if got := VerifyCrawler("66.249.70.2", "googlebot"); got != CrawlerVerdictVerified {
+		t.Fatalf("post-panic verdict=%v, want Verified (slots must remain usable)", got)
+	}
+	if got := len(crawlerVerifySem); got != 0 {
+		t.Fatalf("semaphore slots after normal verify=%d, want 0", got)
+	}
+}

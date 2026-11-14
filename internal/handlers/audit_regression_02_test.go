@@ -92,7 +92,7 @@ func TestUpdateCAProvider_oversizedBodyReturns413(t *testing.T) {
 }
 
 // 5xx 写点单源：dbQueryNotFound 的 500 分支必须委托 writeInternalError，不得
-// 自行 services.Logf + c.JSON——本函数有 21 个调用点，未来统一 5xx 策略
+// 自行 services.Logf + c.JSON——本函数有 18 个调用点，未来统一 5xx 策略
 // （trace id / 统一脱敏 / 错误码映射）漏改这里即分叉。
 func TestDBQueryNotFound_500BranchUsesWriteInternalError(t *testing.T) {
 	source, err := os.ReadFile("db_errors.go")

@@ -138,6 +138,14 @@ func (s *SecurityEventsIPCServer) handleIngestHuman(w http.ResponseWriter, r *ht
 	}
 	var rows []humanEventRow
 	if err := json.NewDecoder(r.Body).Decode(&rows); err != nil {
+		// 超限 body 与 handleIngest 同口径：*http.MaxBytesError → 413（4xx=该批
+		// 不可入库，写侧不 spool），其余解析错误才是 400。json.Decoder 原样回传
+		// body 读取错误（encoding/json refill），errors.As 可命中。
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			http.Error(w, "human event batch too large", http.StatusRequestEntityTooLarge)
+			return
+		}
 		http.Error(w, "bad human event batch: "+err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -179,7 +187,12 @@ func (s *SecurityEventsIPCServer) handleIngestHuman(w http.ResponseWriter, r *ht
 		if ruleName == "" {
 			ruleName = "人机验证"
 		}
-		ts := time.UnixMilli(row.Ts).UTC()
+		// event_time 与全管线同口径：定宽 UTC 秒字符串（WAF 写侧
+		// securityEventsUnixTimestampUTC 同布局）。直接绑 time.Time 会被
+		// glebarez/go-sqlite 驱动按默认布局落出毫秒+时区后缀形态
+		// （2006-01-02 15:04:05.999999999-07:00），破坏读侧字符串窗口
+		// 比较/同秒边界/保留期清理的契约。
+		ts := time.UnixMilli(row.Ts).UTC().Format("2006-01-02 15:04:05")
 		if _, err := tx.ExecContext(ctx, `INSERT INTO security_events (event_time, rule_caddy_id, policy_id, client_ip, method, uri, event_type, rule_triggered, rule_msg, action, rule_name, policy_name)
 			VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
 			ts, row.RuleID, attr.policyID, row.ClientIP, row.Method, row.URI, "human", rule, "人机验证 "+row.Kind, action, ruleName, attr.policyName); err != nil {

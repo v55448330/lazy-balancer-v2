@@ -290,9 +290,9 @@ func NormalizeLegacySecurityPolicyEnums(ctx context.Context) {
 		return
 	}
 	if isMaster {
-		Logf("info", "security enum normalize: normalized %d legacy rows (empty-enum/threshold/status-code/rate-limit dirty rows), cluster version bumped", changed)
+		Logf("info", "security enum normalize: normalized %d legacy rows (empty-enum/threshold/status-code dirty rows), cluster version bumped", changed)
 	} else {
-		Logf("info", "security enum normalize: normalized %d legacy rows (empty-enum/threshold/status-code/rate-limit dirty rows; slave, sync_security off, no version authority)", changed)
+		Logf("info", "security enum normalize: normalized %d legacy rows (empty-enum/threshold/status-code dirty rows; slave, sync_security off, no version authority)", changed)
 	}
 	securityEnumReportNormalized(enumChanges)
 }

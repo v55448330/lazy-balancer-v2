@@ -732,7 +732,7 @@ func certJobRetryRemainingSeconds(status string, updatedAt, createdAt, caAvailab
 // certJobCAcooldownActive 单独判定，force 才能越过，传入零值 NullTime 使
 // CertJobRetryRemaining 只看通用窗口。
 func certJobRetryBlocked(status string, updatedAt, createdAt sql.NullTime, now time.Time) (bool, int, string) {
-	window, retryable := certJobRetryCooldown(status)
+	_, retryable := certJobRetryCooldown(status)
 	if !retryable {
 		// 永久条件不得用 429（SDK/前端会按限流退避轮询）。规则仍启用但任务行
 		// 已退役（历史残留/脏快照）时，唯一恢复路径是让规则重新解析证书任务：
@@ -742,7 +742,11 @@ func certJobRetryBlocked(status string, updatedAt, createdAt sql.NullTime, now t
 	remaining, retryable := services.CertJobRetryRemaining(status, updatedAt, createdAt, sql.NullTime{}, now)
 	if retryable && remaining > 0 {
 		if status == "failed" {
-			return true, http.StatusTooManyRequests, fmt.Sprintf("失败后请等待 %d 分钟再重试", int(window/time.Minute))
+			// 文案与门禁同判据：报「此刻剩余秒」（向上取整，与下发侧
+			// CertJobRetryRemainingSeconds 同源）——完整窗口分钟数在冷却
+			// 过半后说谎（剩 1s 仍提示等满窗口）。
+			seconds := services.CertJobRetryCooldownSeconds(remaining)
+			return true, http.StatusTooManyRequests, fmt.Sprintf("失败后请等待 %d 秒再重试", seconds)
 		}
 		message := "任务正在执行中，请稍后重试"
 		// 部署生命周期（downloaded/cleanup_dns/cleanup_warning）签发已完成（证书在库），

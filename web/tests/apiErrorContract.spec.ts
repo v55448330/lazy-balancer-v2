@@ -351,7 +351,9 @@ const MIN_ENVELOPES: Record<(typeof SCAN_DIRS)[number], number> = {
   // mfaInternalFailure（净 -1，另一处移入日志/审计单源）——文件级
   // auth.go -4 / users.go +4 / mfa.go -2 / auth_oidc.go +1。
   // 叠加上其它调用点增补（含证书族与自动备份族继续收敛）后实测 1293；
-  // 后续批次把 UpdateSecurityPolicy/CAProvider 等错误出口收敛到共享 helper 后实测 1280。
+  // 后续批次把 UpdateSecurityPolicy/CAProvider 等错误出口收敛到共享 helper 后实测 1280；
+  // 再后续收敛批次后实测 1261（middleware 44）。下限取略低于实测的整数，
+  // 只拦「目录被排除/扫描器失效」级塌方，合法收敛由调用点对账兜底。
   'internal/handlers': 1256,
   'internal/middleware': 43,
 }

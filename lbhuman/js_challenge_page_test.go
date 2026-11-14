@@ -1,6 +1,7 @@
 package lbhuman
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -90,5 +91,17 @@ func TestChallengeWidgets_placeholdersDoNotCross(t *testing.T) {
 	slider.serveSliderChallenge(rec2, httptest.NewRequest(http.MethodGet, "/x", nil), "203.0.113.123")
 	if strings.Contains(rec2.Body.String(), "{{human_js_widget}}") {
 		t.Fatal("滑块模式不得把 JS 占位符原样吐给访客（应回退内置滑块页）")
+	}
+}
+
+// crypto.subtle 只在安全上下文可用（HTTPS/localhost）：不可用时必须给出
+// 可操作提示（改用 HTTPS 访问），不得只说「浏览器无法完成验证」让访客无路可走。
+func TestJSWidget_insecureContextMessageActionable(t *testing.T) {
+	rendered := fmt.Sprintf(jsWidgetHTML, "tok", `"/x"`)
+	if !strings.Contains(rendered, "HTTPS") {
+		t.Fatalf("crypto.subtle 缺席分支必须提示改用 HTTPS 访问: %s", rendered)
+	}
+	if strings.Contains(rendered, "This browser cannot complete verification.") {
+		t.Fatal("不可操作的旧文案必须移除")
 	}
 }

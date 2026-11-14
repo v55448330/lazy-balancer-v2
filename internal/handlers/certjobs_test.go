@@ -882,6 +882,7 @@ func TestRetryCertJob_active_job_returns_queue_busy_message(t *testing.T) {
 // .5→.1（旧→新）再加当前文件——写侧保留 maxRotatedFiles=5 份历史，读侧此前
 // 只拼 .1，UI 可回看窗口远小于磁盘保留量。每文件保留现有 128KB/500 行截断。
 func TestGetCertJobLogs_concatenates_all_rotated_backups_oldest_first(t *testing.T) {
+	withIsolatedGlobal(t)
 	// Given：规则日志目录含当前文件与 .1-.5 全部轮转备份（.5 最旧）
 	h := newBackupTestHandlers(t)
 	if _, err := db.DB.Exec(`INSERT INTO cert_jobs (id,rule_id,domain,status) VALUES (9,'lb_logs','logs.example.test','failed')`); err != nil {
@@ -934,6 +935,7 @@ func TestGetCertJobLogs_concatenates_all_rotated_backups_oldest_first(t *testing
 // 单响应硬上限：总量超过 256KB 时必须尾窗保留并标注 truncated，避免
 // 「N 个失败任务 × 768KB」批量拉日志造成出流量/IO 抖动。
 func TestGetCertJobLogs_capsTotalResponseBytes(t *testing.T) {
+	withIsolatedGlobal(t)
 	h := newBackupTestHandlers(t)
 	if _, err := db.DB.Exec(`INSERT INTO cert_jobs (id,rule_id,domain,status) VALUES (9,'lb_logs_cap','logs-cap.example.test','failed')`); err != nil {
 		t.Fatalf("seed cert job: %v", err)
@@ -1235,6 +1237,7 @@ func TestListCertJobs_returnsStatusCountsForQueueBanner(t *testing.T) {
 // 修复前 T1 继续反向取 caddyOpMu → 死锁（5s 超时失败）；修复后 T1 先释放
 // per-job 锁再按规范顺序重取，两者依次完成且行按恢复语义落库。
 func TestDeleteCertJob_recoveryKeepsCanonicalLockOrder(t *testing.T) {
+	withIsolatedGlobal(t)
 	h := newBackupTestHandlers(t)
 	if _, err := db.DB.Exec(`INSERT INTO cert_jobs (rule_id,domain,status) VALUES ('lb_lockorder','lockorder.example.test','issued');
 		CREATE TRIGGER fail_lockorder_delete BEFORE DELETE ON cert_jobs BEGIN SELECT RAISE(ABORT,'delete failed'); END`); err != nil {

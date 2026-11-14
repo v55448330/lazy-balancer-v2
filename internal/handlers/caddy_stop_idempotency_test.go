@@ -21,6 +21,7 @@ type stopCaddyEnv struct {
 
 func newStopCaddyEnv(t *testing.T, stopScript string) *stopCaddyEnv {
 	t.Helper()
+	withIsolatedGlobal(t)
 	dir := t.TempDir()
 	env := &stopCaddyEnv{
 		procRoot:  filepath.Join(dir, "proc"),

@@ -272,6 +272,8 @@ export default {
           "mfaInvalid": "Enter a 6-digit numeric code",
           "sessionExpired": "Session expired",
           "requestFailed": "Request failed",
+          "unknownError": "Unknown error",
+          "triggerUpdateFailed": "Failed to trigger the update",
           "timeout": "Request timed out. Try again later",
           "network": "Network error. Check your connection",
           "unavailable": "Service temporarily unavailable. Try again later",

@@ -51,6 +51,13 @@ var (
 	// 请求去重键→环内序号索引：跨批改判据此定位上一批已入环的条目。
 	// 与环同生命周期——裁剪时同步删除被淘汰条目的键，避免索引无限增长。
 	threatScreenAttackFlowKeySeq = map[uint64]uint64{}
+	// threatScreenAttackFlowResetPending 标记「代际复位后尚有待消费的跨代游标」。
+	// 复位把 Seq 归零重编号并清空环：消费者携带的旧代 since 与新代序号重叠时，
+	// 环溢出判据（since<最老序号）不触发，新事件会被游标静默跳过。置位后首个
+	// 非零游标快照归零重放新代并以至少 1 披露跨代空洞（真实丢失量不可知），随即
+	// 清除标记——后续同代轮次不再误报。一次性标记而非序号水位：水位在新代序号
+	// 越过阈值后会把正常游标反复误判为跨代（稳态重放循环），故用消费即清。
+	threatScreenAttackFlowResetPending bool
 	// 采样档位租约表（与 Caddy 侧 traffic_lease.go 同模型）——
 	// 取代「全局单值最后写者胜」：多标签页/多租约并存时单租约释放不误杀
 	// 其他租约；有效档位=存活租约的 min（最密），无租约=0（关闭）。
@@ -294,6 +301,17 @@ func ThreatScreenAttackFlowSnapshot(since uint64, limit int) ([]ThreatScreenAtta
 	if since > 0 && len(threatScreenAttackFlowEvents) > 0 && since < threatScreenAttackFlowEvents[0].Seq && threatScreenAttackFlowEvents[0].Seq-since > 1 {
 		gapSkipped = threatScreenAttackFlowEvents[0].Seq - since - 1
 	}
+	// 代际复位把 Seq 归零重编号并清空环：消费者携带的旧代 since 与新代序号
+	// 重叠时上方环溢出判据不触发，新事件会被游标静默跳过（旧代记录已随重建
+	// 丢弃，真实丢失量不可知）。复位置位的一次性标记在首个非零游标快照消费：
+	// 归零重放新代并以至少 1 披露跨代空洞，随即清除——后续同代轮次不再误报。
+	if threatScreenAttackFlowResetPending && since > 0 {
+		since = 0
+		if gapSkipped == 0 {
+			gapSkipped = 1
+		}
+		threatScreenAttackFlowResetPending = false
+	}
 
 	out := make([]ThreatScreenAttackFlowEvent, 0, limit)
 	start := 0
@@ -334,6 +352,7 @@ var threatScreenAttackFlowGenerationResetHookForTest func()
 // ——租约属于展示会话，与数据代际无关。
 func threatScreenAttackFlowResetRingForGeneration() {
 	threatScreenAttackFlowMu.Lock()
+	threatScreenAttackFlowResetPending = true
 	threatScreenAttackFlowEvents = nil
 	threatScreenAttackFlowKeySeq = map[uint64]uint64{}
 	threatScreenAttackFlowSeq.Store(0)
@@ -350,6 +369,7 @@ func ResetThreatScreenAttackFlowForTest() {
 	threatScreenAttackFlowEvents = nil
 	threatScreenAttackFlowKeySeq = map[uint64]uint64{}
 	threatScreenAttackFlowLeases = map[string]threatScreenAttackFlowLease{}
+	threatScreenAttackFlowResetPending = false
 	threatScreenAttackFlowMu.Unlock()
 	threatScreenAttackFlowSeq.Store(0)
 	threatScreenAttackFlowAttempt.Store(0)

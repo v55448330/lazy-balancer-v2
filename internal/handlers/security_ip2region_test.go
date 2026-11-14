@@ -56,6 +56,36 @@ func TestGetIP2RegionInfo_returnsStoredState(t *testing.T) {
 	}
 }
 
+// v6 三列查询与 v4 同口径：真实 DB 故障（非缺行）必须 500，不得吞错把存储
+// 故障伪装成「v6 从未更新」的正常展示态。
+func TestGetIP2RegionInfo_v6QueryFailureReturns500(t *testing.T) {
+	setupIP2RegionHandlerTest(t)
+	// 真实故障注入：把版本表重建为缺 v6 列的旧形态——v4 七列查询照常成功，
+	// v6 三列查询报 no such column（非 ErrNoRows）。
+	if _, err := db.DB.Exec(`DROP TABLE security_ip2region_version;
+		CREATE TABLE security_ip2region_version (
+			id INTEGER PRIMARY KEY,
+			version TEXT NOT NULL,
+			updated_at DATETIME DEFAULT (datetime('now')),
+			auto_update BOOLEAN DEFAULT 1,
+			update_status TEXT DEFAULT 'idle',
+			message TEXT DEFAULT '',
+			trigger TEXT DEFAULT '',
+			last_checked DATETIME,
+			next_update DATETIME
+		);
+		INSERT INTO security_ip2region_version (id, version, auto_update) VALUES (1, 'v4-ok', 1)`); err != nil {
+		t.Fatal(err)
+	}
+	h := &Handlers{}
+	router := newIP2RegionRouter(h)
+
+	recorder := getRequest(t, router, "/security/ip2region")
+	if recorder.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d body=%s, want 500（v6 查询真实故障不得吞错回 200）", recorder.Code, recorder.Body.String())
+	}
+}
+
 // TestUpdateIP2RegionAutoUpdate_togglesFlag verifies the admin PUT toggles auto_update.
 func TestUpdateIP2RegionAutoUpdate_togglesFlag(t *testing.T) {
 	// Given a fresh version row with auto update off

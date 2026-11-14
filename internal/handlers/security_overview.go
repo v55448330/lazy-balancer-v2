@@ -1065,11 +1065,14 @@ func refreshSecurityOverviewAggregates(metricsDB *sql.DB, key securityOverviewAg
 		state securityOverviewAggState
 		err   error
 	)
+	mutatedRebuild := securityOverviewAggMutated.Load()
 	switch {
-	case securityOverviewAggMutated.CompareAndSwap(true, false):
+	case mutatedRebuild:
 		// 摄取侧行改判（检测→拦截原地 UPDATE）已发生：该行的旧结论已被上一
 		// 轮增量消费，增量轨道无法回溯——强制全量重建一次（重铸水位），此后
-		// 恢复增量轨道。stale 快照在重建期间照常服务（SWR）。
+		// 恢复增量轨道。stale 快照在重建期间照常服务（SWR）。脏标志只在重建
+		// 成功后消费：先 CAS 清除再重建时，重建失败会让改判行（id ≤ 水位）
+		// 永不被增量回溯，计数缺账直到日界换键。
 		data, state, err = computeSecurityOverviewAggregatesFull(metricsDB, dayStarts, today, now, fromRollup)
 	case !hasStale:
 		// 条目已被清（换库/测试 Reset）：退回全量建。
@@ -1092,6 +1095,9 @@ func refreshSecurityOverviewAggregates(metricsDB *sql.DB, key securityOverviewAg
 			return cloneSecurityOverviewAggregates(stale.data), err
 		}
 		return data, err
+	}
+	if mutatedRebuild {
+		securityOverviewAggMutated.Store(false)
 	}
 	securityOverviewAggCache.Set(key, securityOverviewAggEntry{data: cloneSecurityOverviewAggregates(data), state: state}, now, securityOverviewAggCacheTTL)
 	return data, nil

@@ -1164,6 +1164,7 @@ func TestUpdateRule_restores_database_and_Caddy_when_ACME_enqueue_fails(t *testi
 }
 
 func TestUpdateRule_compensationCancelsOnlyJobChangedByCurrentAttempt(t *testing.T) {
+	withIsolatedGlobal(t)
 	for _, tc := range []struct {
 		name       string
 		changed    bool
@@ -1282,6 +1283,7 @@ func TestEnableRule_rejectsExistingJobThatWasNotQueued(t *testing.T) {
 }
 
 func TestEnableRule_compensationCancelsOnlyJobChangedByCurrentAttempt(t *testing.T) {
+	withIsolatedGlobal(t)
 	for _, tc := range []struct {
 		name       string
 		changed    bool

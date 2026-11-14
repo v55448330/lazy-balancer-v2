@@ -389,6 +389,8 @@ func (h *Handlers) GetSystemTaskHistory(c *gin.Context) {
 // 前端对 cert-job 行的展示映射同口径：started_at=created_at、
 // finished_at=updated_at、duration=两者差、trigger=queue）。cert_jobs 时间戳
 // 为 UTC（RFC3339），统一转配置时区墙串——与引擎族 started_at 的展示口径一致。
+// status 经 services.CertJobTaskResult 映射为引擎结果词表（与列表
+// last_run.result 单源同口径）：业务态直通会让前端结果列恒显「未知」。
 func (h *Handlers) certJobRunHistory(c *gin.Context, taskID string) {
 	jobID, ok := parseCertJobTaskID(taskID)
 	if !ok {
@@ -418,7 +420,7 @@ func (h *Handlers) certJobRunHistory(c *gin.Context, taskID string) {
 		TaskID:     taskID,
 		Family:     "cert-job",
 		Trigger:    "queue",
-		Status:     status,
+		Status:     services.CertJobTaskResult(status),
 		Message:    message,
 		StartedAt:  startedAt,
 		FinishedAt: finishedAt,

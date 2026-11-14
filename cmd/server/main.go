@@ -566,11 +566,11 @@ func newRestartSignal() (<-chan struct{}, func()) {
 // 证书收尾段由 runtimeLifecycle.ShutdownWithTimeout 消费：段内先跑集群同步停止
 // （min(传入预算, syncStopSegmentMax=3s)），剩余预算全部留给 ACME 收尾。
 //
-// 最坏 10+2+0.5+1.5+0+5 = 19s ≤ 30s grace（引擎吃满时两处 segmentReserving
-// 段按设计归 0）。deadline 之外还有 engineHandleSwapGrace (50ms) 与各 select
-// 定时器的调度余量。唯一事实源是 shutdown_budget_test.go 的 fake-clock 最坏
-// 路径断言——本注释只是导读；新增收尾段必须同时加常量、更新
-// trailingStopReserve 与测试。
+// 最坏 10+2+0.5+7.5+0+5 = 25s = processShutdownBudget < 30s grace（引擎吃满
+// 排空段时，唯一的 segmentReserving 段（引擎句柄清理）按设计归 0）。deadline
+// 之外还有 engineHandleSwapGrace (50ms) 与各 select 定时器的调度余量。唯一
+// 事实源是 shutdown_budget_test.go 的 fake-clock 最坏路径断言——本注释只是
+// 导读；新增收尾段必须同时加常量、更新 trailingStopReserve 与测试。
 const (
 	processShutdownBudget  = 25 * time.Second
 	httpShutdownSegmentMax = 10 * time.Second

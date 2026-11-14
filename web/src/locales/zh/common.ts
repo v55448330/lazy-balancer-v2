@@ -272,6 +272,8 @@ export default {
           "mfaInvalid": "请输入 6 位数字验证码",
           "sessionExpired": "登录已过期",
           "requestFailed": "请求失败",
+          "unknownError": "未知错误",
+          "triggerUpdateFailed": "触发更新失败",
           "timeout": "请求超时，请稍后重试",
           "network": "网络连接失败，请检查网络连接",
           "unavailable": "服务暂时不可用，请稍后重试",

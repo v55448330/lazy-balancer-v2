@@ -107,9 +107,10 @@ var auditRoutePolicies = map[string]AuditPolicy{
 	"POST /api/v1/system/restart":          AuditPolicyGeneric,
 	// 任务监控（v2.3.4）：toggle/cancel/control 三操作 handler 均显式留痕。
 	// 任务触发：升为 Explicit——Skip 前提「任务体 defer
-	// 单记」随 v2.0 可触发族扩容失效（时仅 3 自记族，现 12 族中 7 族任务体
+	// 单记」随 v2.0 可触发族扩容失效（时仅 3 自记族，现 24 族中 18 族任务体
 	// 零审计：log-cleanup/audit-retention/security-events-retention/
-	// cert-renewal-scan/cert-reconcile/cert-manual-poll/cert-waiting-ca）。
+	// cert-renewal-scan/cert-reconcile/cert-manual-poll/cert-waiting-ca 等，
+	// 全量分流清单见 audit_policy_test.go 的族对表钉测）。
 	// handler 按 TaskTriggerSelfRecordsAudit 分流：非自记族显式补记「触发」，
 	// 自记族跳过（保 任务体单记裁定，operator 经 RunContext 归人）。
 	"POST /api/v1/system/tasks/:id/trigger": AuditPolicyExplicit,

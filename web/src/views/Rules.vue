@@ -170,7 +170,7 @@
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column :label="t('common.app.rules.common.lbPolicy')" :width="isEn ? 101 : 101" align="center" show-overflow-tooltip>
+        <el-table-column :label="t('common.app.rules.common.lbPolicy')" width="101" align="center" show-overflow-tooltip>
           <template #default="{ row }">
             <span>{{ getStrategyLabel(row.strategy) }}</span>
           </template>
@@ -4704,12 +4704,6 @@ onUnmounted(() => {
 .strategy-lock-icon {
   color: var(--el-color-primary);
   font-size: 14px;
-}
-
-.ntlm-switch-control {
-  display: flex;
-  align-items: center;
-  gap: 8px;
 }
 
 .active-check-control {

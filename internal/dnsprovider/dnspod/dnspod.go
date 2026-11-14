@@ -567,9 +567,13 @@ func sanitizeHTTPErrorBody(body string, secrets ...string) string {
 		}
 	}
 	redacted = credentialEchoPattern.ReplaceAllString(redacted, "${1}***")
+	// 残差检查双侧 ToLower（与 tencent/aliyun/cloudflare 同口径）：定向替换
+	// 大小写敏感，厂商/网关的大小写变体回声不参与替换但同为泄露，必须整段
+	// 丢弃（fail-closed）。
+	lowered := strings.ToLower(redacted)
 	for _, secret := range secrets {
 		for _, known := range echo.Secrets(secret) {
-			if strings.Contains(redacted, known) {
+			if strings.Contains(lowered, strings.ToLower(known)) {
 				return fmt.Sprintf("[response body withheld: %d bytes]", len(body))
 			}
 		}

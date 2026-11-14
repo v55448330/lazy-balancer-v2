@@ -418,10 +418,16 @@ func (n *txApplyNote) finalize() {
 func (h *Handlers) applyFromTxNote(c *gin.Context, tx *sql.Tx, reloadDetail string, rulesWrittenInTx bool) (*txApplyNote, error) {
 	// 裁定 ④'：Caddy CLI 层预检（真 validate-only，零运行时副作用）——校验
 	// 输入即事务视图的最终渲染。校验器不可用时放行（记日志），事务内应用
-	// 仍是最终门控。
+	// 仍是最终门控；投影快照失败例外——渲染不可回滚，按乱填保障直接失败。
 	cliValidated := true
 	cliStart := time.Now()
 	if err := h.caddyService.ValidateTxRenderViaCLI(tx, rulesWrittenInTx); err != nil {
+		if errors.Is(err, services.ErrProjectionSnapshot) {
+			// 投影快照失败=渲染副作用不可回滚：按乱填保障直接失败（调用方
+			// 回滚），不得按「校验器不可用」放行退化提交——未经任何 Caddy
+			// 级校验的配置绝不全量落库。
+			return nil, fmt.Errorf("%w: %w", services.ErrUnvalidatedApply, err)
+		}
 		if !errors.Is(err, services.ErrCLIValidatorUnavailable) {
 			return nil, err
 		}
@@ -553,7 +559,7 @@ func (h *Handlers) finishTxApply(c *gin.Context, tx *sql.Tx, f txApplyFinish) {
 			// 真实 /load 已发生（重载审计）+ 恢复失败时的分叉横幅。
 			reloadNote.auditReload()
 			h.recordPostCommitRestoreFailure(commitSaveFailedSubject, err, recovery.runtime, recovery.db)
-			recordAudit(c, f.AuditAction+"失败", f.Resource, services.FormatAuditDetail(commitUncertainLabel, joined.Error(), services.AuditResultPart("failure")))
+			recordAudit(c, f.AuditAction+"失败", f.Resource, services.FormatAuditDetail(commitUncertainLabel, services.RedactCaddyAdminEndpoint(joined.Error()), services.AuditResultPart("failure")))
 			writeInternalError(c, http.StatusInternalServerError, commitUncertainLabel, joined)
 			return
 		}

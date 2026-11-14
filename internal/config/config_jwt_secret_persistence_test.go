@@ -130,9 +130,11 @@ func TestJWTSecretPersistIsAtomicOnDisk(t *testing.T) {
 
 // 生产快照不得绕过 atomicfile；专用日志、下载与已有事务型格式转换必须显式
 // 登记理由。AST 扫描避免注释假阳性，并覆盖 WriteFile/Create/CreateTemp 与带写
-// 标志的 OpenFile（只读 OpenFile 不是落盘写入）。
+// 标志的 OpenFile（只读 OpenFile 不是落盘写入）。扫描面=internal/ 全量 +
+// cmd/（入口进程的直写同样在崩溃窗口内留截断文件）。
 func TestConfigProductionSourcesHaveNoDirectFileWrite(t *testing.T) {
 	exempt := map[string]string{
+		"../cmd/server/main.go":           "监督器 pause 标记协议（与 handlers/caddy.go 同一标记文件）",
 		"db/permissions.go":               "SQLite 文件预建与权限校正，不替换既有快照",
 		"handlers/caddy.go":               "监督器 pause 标记协议",
 		"handlers/config_backup_lbbak.go": "备份包临时解包与 WAF 目录事务恢复",
@@ -153,38 +155,48 @@ func TestConfigProductionSourcesHaveNoDirectFileWrite(t *testing.T) {
 		"testsupport/tmpdir.go":           "测试环境临时目录可写探针",
 	}
 	scanned := 0
-	err := filepath.WalkDir("..", func(path string, entry fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") || strings.HasSuffix(entry.Name(), "_test.go") {
+	cmdScanned := 0
+	scanTree := func(root string, counter *int) error {
+		return filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				return walkErr
+			}
+			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") || strings.HasSuffix(entry.Name(), "_test.go") {
+				return nil
+			}
+			scanned++
+			*counter++
+			calls, err := directFileWriteCalls(path)
+			if err != nil {
+				return err
+			}
+			if len(calls) == 0 {
+				return nil
+			}
+			rel, err := filepath.Rel("..", path)
+			if err != nil {
+				return err
+			}
+			rel = filepath.ToSlash(rel)
+			if reason, ok := exempt[rel]; ok {
+				t.Logf("%s: %d direct-write call(s), exemption: %s", rel, len(calls), reason)
+				return nil
+			}
+			t.Errorf("%s 出现直写落盘 %v：快照必须走 internal/atomicfile，专用形态须登记 Ruling", rel, calls)
 			return nil
-		}
-		scanned++
-		calls, err := directFileWriteCalls(path)
-		if err != nil {
-			return err
-		}
-		if len(calls) == 0 {
-			return nil
-		}
-		rel, err := filepath.Rel("..", path)
-		if err != nil {
-			return err
-		}
-		rel = filepath.ToSlash(rel)
-		if reason, ok := exempt[rel]; ok {
-			t.Logf("%s: %d direct-write call(s), exemption: %s", rel, len(calls), reason)
-			return nil
-		}
-		t.Errorf("%s 出现直写落盘 %v：快照必须走 internal/atomicfile，专用形态须登记 Ruling", rel, calls)
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("scan production sources: %v", err)
+		})
+	}
+	if err := scanTree("..", new(int)); err != nil {
+		t.Fatalf("scan internal production sources: %v", err)
+	}
+	if err := scanTree(filepath.Join("..", "..", "cmd"), &cmdScanned); err != nil {
+		t.Fatalf("scan cmd production sources: %v", err)
 	}
 	if scanned < 100 {
 		t.Fatalf("仅扫描到 %d 个生产源文件，递归扫描面退化", scanned)
+	}
+	if cmdScanned == 0 {
+		t.Fatal("cmd/ 扫描面为零：入口进程直写不再被守卫覆盖")
 	}
 }
 
@@ -256,5 +268,28 @@ func sample() {
 		if !strings.Contains(joined, want) {
 			t.Errorf("scanner missing %s: %v", want, calls)
 		}
+	}
+}
+
+// 扫描面覆盖钉：cmd/ 入口源码必须在直写守卫的扫描面内（扫描面退化回仅
+// internal/ 时，入口进程新增 os.WriteFile 直写不再被拦）。用合成直写样本
+// 验证扫描器对 cmd 形态文件的检出能力——不依赖现存 pause 标记（该标记
+// 将来若改走原子原语，本钉不得随之失效）。
+func TestDirectFileWriteGuard_coversCmdEntrypointSources(t *testing.T) {
+	cmdDir := filepath.Join("..", "..", "cmd", "server")
+	if _, err := os.Stat(filepath.Join(cmdDir, "main.go")); err != nil {
+		t.Fatalf("cmd 入口源码缺失（扫描面锚点失效）: %v", err)
+	}
+	path := filepath.Join(t.TempDir(), "cmd_sample.go")
+	source := "package main\nimport \"os\"\nfunc sample() { _ = os.WriteFile(\"snapshot\", nil, 0o600) }\n"
+	if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	calls, err := directFileWriteCalls(path)
+	if err != nil {
+		t.Fatalf("scan cmd-shaped sample: %v", err)
+	}
+	if len(calls) != 1 {
+		t.Fatalf("cmd 形态直写样本检出=%v, want 1（扫描器退化）", calls)
 	}
 }

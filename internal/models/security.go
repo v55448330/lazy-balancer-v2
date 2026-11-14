@@ -78,6 +78,11 @@ func CustomRulesRefCount(raw json.RawMessage) int {
 // 旧备份导入的共同单一事实源。恰好一组→对应类型，多组→mixed，
 // 零组→stage3（WAF 是安全策略默认心智，空策略归此）。
 func InferPolicyType(p *SecurityPolicy) string {
+	if p == nil {
+		// 与 PolicyTypeFeatures 的 nil 守卫同口径:零能力→stage3
+		// (WAF 是安全策略默认心智),不得解引用 panic。
+		return PolicyTypeStage3
+	}
 	fs := PolicyTypeFeatures(p)
 	humanOn := p.HumanVerifyMode != "" && p.HumanVerifyMode != "off"
 	// 四阶段（2026-11-12）：阶段 2 = CC 防护（人机挑战 + CC 异常检测），

@@ -15,6 +15,8 @@ package services
 //   - 重载前快照：apply 链在真实 /load 前同步执行一轮完整采集。
 
 import (
+	"database/sql"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -30,7 +32,7 @@ func aggDailyRow(t *testing.T, ruleID, localDate string) (total, blocked, logged
 	t.Helper()
 	err := db.MetricsDB.QueryRow(`SELECT requests_delta, blocked_delta, logged_delta
 		FROM metrics_daily_agg WHERE rule_id=? AND local_date=?`, ruleID, localDate).Scan(&total, &blocked, &logged)
-	if err != nil && err.Error() == "sql: no rows in result set" {
+	if errors.Is(err, sql.ErrNoRows) {
 		return 0, 0, 0, false
 	}
 	if err != nil {
@@ -52,7 +54,7 @@ func checkpointRow(t *testing.T, ruleID string) (total, blocked, logged int64, o
 	t.Helper()
 	err := db.MetricsDB.QueryRow(`SELECT requests_total, requests_blocked, requests_logged
 		FROM metrics_counter_checkpoint WHERE rule_id=?`, ruleID).Scan(&total, &blocked, &logged)
-	if err != nil && err.Error() == "sql: no rows in result set" {
+	if errors.Is(err, sql.ErrNoRows) {
 		return 0, 0, 0, false
 	}
 	if err != nil {

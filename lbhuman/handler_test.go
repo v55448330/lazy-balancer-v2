@@ -1,13 +1,15 @@
 package lbhuman
 
 import (
-	"github.com/caddyserver/caddy/v2"
-	"github.com/caddyserver/caddy/v2/modules/caddyhttp"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/caddyserver/caddy/v2"
+	"github.com/caddyserver/caddy/v2/modules/caddyhttp"
 )
 
 func TestCookieSignAndVerify(t *testing.T) {
@@ -66,13 +68,19 @@ func TestChallengeTokenOneTime(t *testing.T) {
 
 func TestPoWValidity(t *testing.T) {
 	// 找一个合法 nonce（难度 4 前导零，命中概率 1/65536）——上限取 2000000
-	// 使期望命中 ~30 次，消除小上限（200k）的概率性 flaky。
+	// 使期望命中 ~30 次，消除小上限的概率性 flaky。nonce 用十进制数字串
+	// （与浏览器提交同形；string(rune(i)) 在 i>0x10FFFF 退化为 U+FFFD）。
 	token := "test-token"
-	for i := 0; i < 2000000; i++ {
-		nonce := string(rune(i))
+	for i := range 2000000 {
+		nonce := strconv.Itoa(i)
 		if powValid(token, nonce) {
+			// 确定性：同一输入重复校验结果一致。
 			if !powValid(token, nonce) {
 				t.Fatal("pow must be deterministic")
+			}
+			// 判别力：相邻 nonce 不得同样通过（恒真实现会在此显形）。
+			if powValid(token, nonce+"x") {
+				t.Fatal("perturbed nonce must not validate (pow predicate must discriminate)")
 			}
 			return
 		}
@@ -90,7 +98,7 @@ func TestCCWindowAndTrigger(t *testing.T) {
 	if stats.Count != 45 {
 		t.Fatalf("count=%d want 45", stats.Count)
 	}
-	trig := evalCC(stats, 40, 10, 0, 0, false)
+	trig := evalCC(stats, 40, 0, 0, false)
 	if !trig.Triggered || trig.Reason != "rps_spike" {
 		t.Fatalf("rps spike must trigger: %+v", trig)
 	}
@@ -101,7 +109,7 @@ func TestCCWindowAndTrigger(t *testing.T) {
 		ccRecord(key2, 10, i < 20, "ua1") // 20 个 4xx，5 个正常
 	}
 	stats2 := ccPeek(key2, 10)
-	trig2 := evalCC(stats2, 1000, 10, 70, 0, false)
+	trig2 := evalCC(stats2, 1000, 70, 0, false)
 	if !trig2.Triggered || trig2.Reason != "4xx_ratio" {
 		t.Fatalf("4xx ratio must trigger: %+v", trig2)
 	}
@@ -112,7 +120,7 @@ func TestCCWindowAndTrigger(t *testing.T) {
 		ccRecord(key3, 10, false, string(rune('a'+i%8)))
 	}
 	stats3 := ccPeek(key3, 10)
-	trig3 := evalCC(stats3, 1000, 10, 0, 5, true)
+	trig3 := evalCC(stats3, 1000, 0, 5, true)
 	if !trig3.Triggered || trig3.Reason != "session_anomaly" {
 		t.Fatalf("session anomaly must trigger: %+v", trig3)
 	}
@@ -190,5 +198,21 @@ func TestChallengeResponseSplitsByRequestType(t *testing.T) {
 		} else if !strings.Contains(ct, "text/html") {
 			t.Fatalf("%s: content-type=%q, want HTML challenge page", tc.name, ct)
 		}
+	}
+}
+
+// cookie 是 bearer 凭证：exp 前可重复使用（verifyCookie 无 nonce 重放检查，
+// nonce 只作签名熵）——钉住该语义，防止误加一次性消费破坏正常放行。
+func TestCookieBearerReusableUntilExpiry(t *testing.T) {
+	secret := []byte("bearer-secret")
+	ip, ua := "203.0.113.160", "bearer-agent/1.0"
+	value, exp := signCookie(secret, ip, ua, 30*time.Minute)
+	for range 3 {
+		if !verifyCookie(secret, value, ip, ua, time.Now()) {
+			t.Fatal("cookie must remain valid on repeated use before expiry (bearer semantics)")
+		}
+	}
+	if verifyCookie(secret, value, ip, ua, exp.Add(time.Second)) {
+		t.Fatal("cookie must reject after expiry")
 	}
 }

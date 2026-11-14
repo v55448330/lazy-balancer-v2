@@ -6,7 +6,7 @@ import "time"
 // auditwriter 同形态：管线/计数注册表是进程级单例，测试以「重建 + 保存恢复」
 // 获得隔离，不引入生产分支。
 
-// setTunablesForTest 收窄队列/入队超时（返回快照供 restoreTunables 恢复）。
+// setTunablesForTest 收窄队列容量（返回快照供 restoreTunables 恢复）。
 // setTunablesForTest 参数兼容历史调用形状（容量,字节,超时）——环形缓冲下
 // 只有容量语义保留，后两项仅作快照位（不再有可调实现面）。
 func setTunablesForTest(queueSize int, byteBudget int64, enqueueTimeout time.Duration) []any {

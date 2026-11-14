@@ -204,7 +204,7 @@ func collectCertJobRows() ([]TaskInfo, bool) {
 			// 时按主节点处理（与上方行可见性判据同向）。
 			RoleApplicable: isMaster == 1,
 			LastRun: &TaskRunInfo{StartedAt: finishedAt, FinishedAt: finishedAt, DurationMs: 0,
-				Trigger: "queue", Result: status, Message: message},
+				Trigger: "queue", Result: CertJobTaskResult(status), Message: message},
 		}
 		ti.Runs24h, ti.Success24h, ti.Fail24h = runs24h, success, fail
 		// 「运行/重试」按钮的冷却：与证书任务列表同口径同源——下发「此刻剩余
@@ -260,6 +260,33 @@ func collectCertJobRows() ([]TaskInfo, bool) {
 		out = out[:certJobRowsLimit]
 	}
 	return out, truncated
+}
+
+// CertJobTaskResult 把 cert_jobs 业务态映射为引擎结果词表（running/success/
+// failed/cancelled/skipped/interrupted）——任务监控结果列与历史端点
+// （handlers.certJobRunHistory）共用单源。此前直通业务态（issued/queued/
+// disabled…），前端结果词表只认引擎六态，cert-job 动态行结果恒显「未知」。
+// 口径与状态列三态裁定同向：终态成功（issued/downloaded）=success；
+// failed=failed；退役（disabled）=skipped（非故障放弃，与 ErrTaskSkipped
+// 语义同族）；其余（含 queued/pending/waiting_ca 限流停车）=未完成工作项
+// =running。业务生命周期细节由 message 与免费证书页承载，不进结果词表。
+// 枚举外/空值保守按 failed（与 JobLifecycle 的未知态兜底同口径）。
+func CertJobTaskResult(status string) string {
+	switch status {
+	case "issued", "downloaded":
+		return "success"
+	case "failed":
+		return "failed"
+	case "disabled":
+		return "skipped"
+	default:
+		for _, known := range AllJobStatuses() {
+			if status == known {
+				return "running"
+			}
+		}
+		return "failed"
+	}
 }
 
 // certJobRowsLimit 任务监控视图内 cert-job 动态行上限（探针行 +1 由查询侧承担）。

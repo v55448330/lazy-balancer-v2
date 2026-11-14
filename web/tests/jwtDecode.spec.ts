@@ -8,7 +8,7 @@
 //
 // 运行：cd web && npm test
 
-import { after, test } from 'node:test'
+import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
 import { decodeJwtPayload } from '../src/utils/jwt.ts'
@@ -57,7 +57,6 @@ export const ElInputOtp = {}
   'element-plus/es/components/input-otp/style/css': dataModule(''),
 })
 const { isTokenExpired } = await import('../src/utils/api.ts')
-after(() => { /* 钩子进程级注册，随本 spec 进程退出 */ })
 
 test('isTokenExpired：exp 语义谓词保持，非 ASCII 同载荷段解码不回归', () => {
   const nowSec = Math.floor(Date.now() / 1000)

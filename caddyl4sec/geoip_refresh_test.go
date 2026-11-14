@@ -62,9 +62,7 @@ func TestL4GeoIPMatcher_refreshesSharedSearcherOnSwap(t *testing.T) {
 	delete(sharedSearchers, key)
 	sharedSearcherMu.Unlock()
 	t.Cleanup(func() {
-		sharedSearcherMu.Lock()
-		delete(sharedSearchers, key)
-		sharedSearcherMu.Unlock()
+		removeSharedSearchersForTest(key)
 		resetSharedSearcherProbesForTest()
 	})
 	// 旧实例延迟关闭拉到测试尺度外，避免 AfterFunc 干扰。
@@ -103,9 +101,7 @@ func TestL4GeoIPMatcher_recoversAfterDatabaseAppears(t *testing.T) {
 	delete(sharedSearchers, key)
 	sharedSearcherMu.Unlock()
 	t.Cleanup(func() {
-		sharedSearcherMu.Lock()
-		delete(sharedSearchers, key)
-		sharedSearcherMu.Unlock()
+		removeSharedSearchersForTest(key)
 		resetSharedSearcherProbesForTest()
 	})
 

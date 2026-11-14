@@ -214,7 +214,7 @@ func pruneOrphanThreatFiles() {
 		}
 		source := strings.TrimPrefix(name, "threat-")
 		source = strings.TrimSuffix(strings.TrimSuffix(source, ".fast"), ".iplist")
-		if source == "" || source == name {
+		if source == "" {
 			continue
 		}
 		if _, ok := known[source]; ok {

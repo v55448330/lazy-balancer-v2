@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -775,5 +776,23 @@ func TestSecurityEventsCheckpointWAL_busyCounted(t *testing.T) {
 	securityEventsWalCheckpointState.mu.Unlock()
 	if busy != 1 {
 		t.Fatalf("busyCount=%d, want 1（写者活跃时检查点让出必须计数）", busy)
+	}
+}
+
+// 指标库未初始化/关停尾部置 nil 时，保留清理必须返回 errMetricsDBUnavailable
+// 而不是 (零结果, nil)——与 cleanupHistory/PurgeOrphanMetricsHistory 的
+// fail-visible 单源同口径；静默成功会把「清理未执行」记成 success 轮。
+func TestSecurityEventsRetentionCleanup_nilMetricsDBReturnsUnavailable(t *testing.T) {
+	setupSecurityEventsRetentionTestDB(t)
+	metricsDB := db.MetricsDB
+	db.MetricsDB = nil
+	t.Cleanup(func() { db.MetricsDB = metricsDB })
+
+	result, err := securityEventsRetentionCleanup(context.Background())
+	if !errors.Is(err, errMetricsDBUnavailable) {
+		t.Fatalf("err=%v, want errMetricsDBUnavailable（与孤儿指标清理族同口径）", err)
+	}
+	if result.Events != 0 || result.Aggregates() != 0 {
+		t.Fatalf("nil 库不得产生删除量: %+v", result)
 	}
 }

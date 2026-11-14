@@ -4,6 +4,7 @@ package caddyl4sec
 // 事件（newest-wins），丢弃计数照记。替代 chan+2s 等待（风暴下每条被拒连接
 // 挂 2s 放大 fd/goroutine 驻留）。
 import (
+	"strconv"
 	"testing"
 	"time"
 )
@@ -124,5 +125,54 @@ func TestRingQueuedBytesSumsEffectiveLengths(t *testing.T) {
 	}
 	if got := r.queuedBytes(); got != 0 {
 		t.Fatalf("消费后 queuedBytes=%d, want 0", got)
+	}
+}
+
+// 原子快照对：depthAndBytes 一次锁内取两值——与逐值读取同口径（空环/
+// 非空/覆写后），观测端点据此不再出现 len/bytes 跨时刻瞬态对。
+func TestL4Ring_depthAndBytesAtomicPair(t *testing.T) {
+	r := newL4Ring(2, 1<<10)
+	if d, b := r.depthAndBytes(); d != 0 || b != 0 {
+		t.Fatalf("empty ring pair=(%d,%d), want (0,0)", d, b)
+	}
+	r.push([]byte("aa"))
+	r.push([]byte("bbbb"))
+	if d, b := r.depthAndBytes(); d != 2 || b != 6 {
+		t.Fatalf("pair=(%d,%d), want (2,6)", d, b)
+	}
+	r.push([]byte("c")) // 满环覆写最旧 "aa"
+	if d, b := r.depthAndBytes(); d != 2 || b != 5 {
+		t.Fatalf("after overwrite pair=(%d,%d), want (2,5)", d, b)
+	}
+	// 与独立读取同值（同一静止态）。
+	if d, b := r.depthAndBytes(); d != r.depth() || b != r.queuedBytes() {
+		t.Fatalf("pair=(%d,%d) disagrees with depth/queuedBytes=(%d,%d)", d, b, r.depth(), r.queuedBytes())
+	}
+}
+
+// 并发形状：持续 push/pop 时快照对读不竞争（-race），且每对内部自洽
+// （bytes ≤ depth×单行上限的松界；静止态精确相等由上一用例钉住）。
+func TestL4Ring_depthAndBytesConcurrent(t *testing.T) {
+	r := newL4Ring(8, 1<<10)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := range 2000 {
+			r.push([]byte("line-" + strconv.Itoa(i)))
+			if i%3 == 0 {
+				r.pop()
+			}
+		}
+	}()
+	for {
+		select {
+		case <-done:
+			return
+		default:
+		}
+		d, b := r.depthAndBytes()
+		if d < 0 || b < 0 || d > 8 {
+			t.Fatalf("invalid pair=(%d,%d)", d, b)
+		}
 	}
 }

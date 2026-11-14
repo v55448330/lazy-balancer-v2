@@ -754,16 +754,18 @@ const deleteConfig = async (config: CertConfig) => {
   if (isReadOnly.value || savingConfig.value || deletingId.value !== null) return
   const configId = config.id
   if (configId === undefined) return
-  try {
-    await ElMessageBox.confirm(t('app.settings.freeCerts.dns.deleteConfirm', { name: config.name }), t('app.settings.freeCerts.dns.deleteConfirmTitle'), { type: 'warning' })
-  } catch (error: unknown) {
-    if (error === 'cancel' || error === 'close') return
-    console.error('Failed to confirm cert config deletion:', error)
-    return
-  }
-  if (deletingId.value !== null) return
+  // 确认框弹出前即占位（与 useTrustAssociation/SecurityBlockPages 同款范式）：
+  // 双击不再叠两个确认框→两次 DELETE（第二次 404 误报失败）。取消/失败/完成
+  // 都在 finally 复位，按钮不会永久灰死。
   deletingId.value = configId
   try {
+    try {
+      await ElMessageBox.confirm(t('app.settings.freeCerts.dns.deleteConfirm', { name: config.name }), t('app.settings.freeCerts.dns.deleteConfirmTitle'), { type: 'warning' })
+    } catch (error: unknown) {
+      if (error === 'cancel' || error === 'close') return
+      console.error('Failed to confirm cert config deletion:', error)
+      return
+    }
     await request.delete(`/certificate-configs/${configId}`)
     mfaAwareSuccess(t('app.settings.freeCerts.dns.deleted'))
     fetchConfigs()

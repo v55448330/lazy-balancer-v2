@@ -1035,7 +1035,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import type { CascaderOption, CascaderProps, LazyLoad } from 'element-plus'
 import { request, ApiRequestError, mfaAwareSuccess } from '@/utils/api'
 import { showSaveResult } from '@/utils/saveResult'
-import { CADDY_APPLY_FAILED_MARKER, mergeBulkResults } from '@/utils/bulkApplyResult'
+import { isCaddyApplyDegraded, mergeBulkResults } from '@/utils/bulkApplyResult'
 import { isValidCidr } from '@/utils/ipAddress'
 import { popperViewportSafe } from '@/utils/popper'
 import { formatDate } from '@/utils/date'
@@ -1483,9 +1483,9 @@ const submitMigrate = async (): Promise<void> => {
     if (data && data.remapped > 0) parts.push(t('app.security.policies.msg.migrateRemapped', { n: data.remapped }))
     if (data && !data.deleted_original) parts.push(t('app.security.policies.msg.migrateKeepOriginal'))
     mfaAwareSuccess(parts.length > 0 ? parts.join(t('app.security.policies.common.sepSemi')) : t('app.security.policies.msg.migrateDone'))
-    // 退化 200+后缀（Caddy 应用失败但 DB 已提交）须持续警告可见——
-    // 有后缀才弹，无后缀不重复 toast（同下方保存主链路 FE1 口径）
-    if (res.message?.includes(CADDY_APPLY_FAILED_MARKER)) showSaveResult(res, '')
+    // 退化 200（Caddy 应用失败但 DB 已提交）须持续警告可见——语言无关判定
+    // （messageKey 优先，zh 标记兜底）；有退化才弹，无退化不重复 toast。
+    if (isCaddyApplyDegraded(res)) showSaveResult(res, '')
     if (data && data.skipped.length > 0) {
       ElMessage.warning(t('app.security.policies.msg.migrateSkipped', { n: data.skipped.length, reasons: data.skipped.map((s) => s.reason).join(t('app.security.policies.common.sepSemi')) }))
     }
@@ -3318,7 +3318,7 @@ const confirmExtract = async (): Promise<void> => {
     extractDialogVisible.value = false
     // 刷新引用列表缓存：选择器选项与「合计 N 条」提示立即反映新列表
     await fetchIpLists(openSeq)
-    showSaveResult(res as unknown as { message?: string }, t('app.security.policies.msg.extractDone', { name }))
+    showSaveResult(res, t('app.security.policies.msg.extractDone', { name }))
   } catch (error: unknown) {
     // 409 重名 / 400 条目非法已由全局拦截器 toast，这里仅记录避免 unhandled rejection
     console.error('Failed to extract IP list:', error)
@@ -3688,7 +3688,7 @@ const handleSave = async () => {
     // additive POST/DELETE 语义一致，但从 N 次全链请求收敛为 1 次单渲染请求）。
     // 逐片响应汇总后再呈现——只保留末片会让早先分片的
     // 退化 200（Caddy 应用失败但 DB 已提交）被覆盖丢失。
-    const bindResponses: Array<{ message?: string } | undefined> = []
+    const bindResponses: Array<{ message?: string; messageKey?: string } | undefined> = []
     try {
       // 2026-09-08 审计 FE1：捕获响应传 showSaveResult——退化 200+后缀
       // （Caddy 应用失败但 DB 已提交）时持续警告可见（有全局横幅兜底但即时
@@ -3696,16 +3696,16 @@ const handleSave = async () => {
       // 后端单次 bind+unbind 合计 ≤100（超限整批 400 且原样重试仍失败）
       // ——按方向分片提交（每片 ≤100，天然满足合计上限）；端点幂等，重试安全。
       for (const ids of chunkForBulk(added, SECURITY_BULK_LIMITS.policyBindings)) {
-        bindResponses.push(await request.post<{ message?: string }>(`/security/policies/${editingId.value}/bindings/bulk`, {
+        bindResponses.push(await request.post<{ message?: string; messageKey?: string }>(`/security/policies/${editingId.value}/bindings/bulk`, {
           bind: ids,
           unbind: [],
-        }) as { message?: string })
+        }))
       }
       for (const ids of chunkForBulk(removed, SECURITY_BULK_LIMITS.policyBindings)) {
-        bindResponses.push(await request.post<{ message?: string }>(`/security/policies/${editingId.value}/bindings/bulk`, {
+        bindResponses.push(await request.post<{ message?: string; messageKey?: string }>(`/security/policies/${editingId.value}/bindings/bulk`, {
           bind: [],
           unbind: ids,
-        }) as { message?: string })
+        }))
       }
     } catch (error: unknown) {
       // 失败的绑定请求已由全局拦截器 toast，这里仅记录并中止收尾。
@@ -3744,7 +3744,7 @@ const handleSave = async () => {
           unbind: [],
           orders,
         })
-        bindResponses.push(res as { message?: string })
+        bindResponses.push(res)
         const skippedItems = res.data?.skipped ?? []
         // 先归集 skipped 再回写——被跳过的规则未应用新序，保持「顺序待保存」
         // 待重试；成功规则即时清标记，下次保存重试只补坏规则。
@@ -3775,15 +3775,15 @@ const handleSave = async () => {
     if (skippedOrderNotes.length > 0) {
       ElMessage.warning(t('app.security.policies.msg.orderSkipped', { notes: skippedOrderNotes.join(t('app.security.policies.common.sepSemi')) }))
     }
-    // 保存结果单条呈现：服务端 message 与 Caddy 退化后缀原样保留。
+    // 保存结果单条呈现：服务端 message 与退化语义键原样保留（语言无关判定）。
     showSaveResult(
-      { message: saveRes?.message || t('app.security.policies.common.saveSuccess') },
+      { message: saveRes?.message || t('app.security.policies.common.saveSuccess'), messageKey: saveRes?.messageKey },
       t('app.security.policies.common.saveSuccess'),
     )
-    // 2026-09-08 审计 FE1：bind/执行序的退化 200+后缀也需可见（有后缀才弹，
-    // 无后缀不重复 toast）；汇总全部分片而非末片。
+    // bind/执行序的退化 200 也需可见（有退化才弹，无退化不重复 toast）；
+    // 汇总全部分片而非末片，判定走语言无关单源。
     const mergedBind = mergeBulkResults(bindResponses)
-    if (mergedBind?.message?.includes(CADDY_APPLY_FAILED_MARKER)) showSaveResult(mergedBind, '')
+    if (isCaddyApplyDegraded(mergedBind)) showSaveResult(mergedBind, '')
     // 保存后停在本次保存的类型 tab——否则新建非阶段 1 策略后列表仍停在
     // 阶段 1 空表，用户误读为「保存未生效」。类型须在关闭前取：关闭触发的
     // resetWizard 会清空 editingId/editingPolicyType。

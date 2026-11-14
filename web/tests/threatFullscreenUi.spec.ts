@@ -83,6 +83,8 @@ test('统计轮询周期与后端活跃源缓存 TTL 跨栈对表', () => {
   // 后端「活跃攻击源」缓存 TTL 必须覆盖本周期**并留一整轮余量**：等值时第二
   // 轮请求恰落在到期边界（±jitter 即 miss），缓存（连同其全窗口扫描的开销假设）
   // 收益归零，而 `>=` 判据在边界上恒绿。1.5 倍是 Go 侧同一判据的倍数。
+  // time.Duration 形态（N * time.Second）含标识符因子，不在 goConstInt/goConstExpr
+  // 的整型表达式口径内（单源见 _helpers）——此处保留专用提取，单位换算在调用点。
   const cache = repoCode('internal/handlers/threat_active_sources_cache.go')
   const ttlMatch = cache.match(/threatActiveSourcesCacheTTL = (\d+) \* time\.Second/)
   assert.ok(ttlMatch, '后端 threatActiveSourcesCacheTTL 声明缺失或形态变化（跨栈对表需同步）')

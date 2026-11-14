@@ -19,13 +19,14 @@ import (
 // perplexity.ai/perplexitybot.json、字节 zhanzhang.toutiao.com（PTR=*.byted.org）、
 // 360 so.com/help/spider_ip.html（官方声明不支持 nslookup→IP 段验证）、
 // Kimi kimi.ai/policies/kimi-crawlers）。无官方爬虫页的厂商（DeepSeek/
-// PetalBot）按厂商域名验证并在 Name 标注「观察级」。
+// PetalBot）按厂商域名验证（观察级）。展示名不在本注册表：策略向导消费
+// 前端 i18n 镜像（web/src/views/security/SecurityPolicies.vue
+// crawlerEngineOptions，按 ID 对齐）——Go 侧曾有的 Name 字段生产零消费，
+// 已删除（避免与前端词条分叉的假单源）。
 type CrawlerEngine struct {
 	// ID 引擎标识（X-LB-Crawler-Verified 头值 + 规则 @streq 消费值；
 	// 稳定字符串，勿改动——已入库策略的 geoip_crawler_engines 引用此值）。
 	ID string
-	// Name 中文展示名（策略向导勾选组）。
-	Name string
 	// UARegex 匹配（预编译，大小写不敏感）。只读：注册表共享同一 *Regexp，
 	// 禁止调用变异方法（Longest 等）——会改全局匹配语义。
 	UARegex *regexp.Regexp
@@ -58,25 +59,21 @@ const CrawlerVerifyIPRange = "iprange"
 var crawlerEngines = []CrawlerEngine{
 	{
 		ID:          "googlebot",
-		Name:        "Google",
 		UARegex:     regexp.MustCompile(`(?i)Googlebot`),
 		PTRSuffixes: []string{".googlebot.com", ".google.com"},
 	},
 	{
 		ID:          "bingbot",
-		Name:        "Bing",
 		UARegex:     regexp.MustCompile(`(?i)bingbot`),
 		PTRSuffixes: []string{".search.msn.com"},
 	},
 	{
 		ID:          "baiduspider",
-		Name:        "百度",
 		UARegex:     regexp.MustCompile(`(?i)Baiduspider`),
 		PTRSuffixes: []string{".crawl.baidu.com", ".baidu.com"},
 	},
 	{
-		ID:   "sogouspider",
-		Name: "搜狗",
+		ID: "sogouspider",
 		// 官方 UA 以空格分隔（"Sogou web spider/4.0"、"Sogou inst spider/4.0"），
 		// 仅历史上少数变体用 "+" 分隔；两种分隔符都允许，无分隔的垃圾串不认。
 		UARegex:     regexp.MustCompile(`(?i)Sogou[\s+]+(?:web[\s+]+|inst[\s+]+)?spider`),
@@ -84,7 +81,6 @@ var crawlerEngines = []CrawlerEngine{
 	},
 	{
 		ID:      "so360spider",
-		Name:    "360",
 		UARegex: regexp.MustCompile(`(?i)360Spider`),
 		// 官方声明不支持 nslookup（so.com/help/spider_ip.html）——IP 段验证；
 		// 段=官方公布全表归纳（42.236.10-15.x 归纳为 /21，含表外少量同段位；
@@ -94,32 +90,27 @@ var crawlerEngines = []CrawlerEngine{
 	},
 	{
 		ID:          "yisouspider",
-		Name:        "神马",
 		UARegex:     regexp.MustCompile(`(?i)YisouSpider`),
 		PTRSuffixes: []string{".shenma.cn"},
 	},
 	{
 		ID:          "petalbot",
-		Name:        "华为 PetalBot（观察级）",
 		UARegex:     regexp.MustCompile(`(?i)PetalBot`),
 		PTRSuffixes: []string{".petalbot.com"},
 	},
 	{
 		ID:          "duckduckbot",
-		Name:        "DuckDuckGo",
 		UARegex:     regexp.MustCompile(`(?i)DuckDuckBot|DuckDuckGo-Favicons-Bot`),
 		PTRSuffixes: []string{".duckduckgo.com"},
 	},
 	{
 		ID:          "yandexbot",
-		Name:        "Yandex",
 		UARegex:     regexp.MustCompile(`(?i)YandexBot`),
 		PTRSuffixes: []string{".yandex.com", ".yandex.ru"},
 	},
 	// ---- AI 企业爬虫（2026-10-17 用户裁定增补；默认不勾选，用户按需启用） ----
 	{
 		ID:          "gptbot",
-		Name:        "OpenAI（GPTBot/OAI-SearchBot）",
 		UARegex:     regexp.MustCompile(`(?i)GPTBot|OAI-SearchBot|ChatGPT-User`),
 		PTRSuffixes: []string{".openai.com"},
 		// ChatGPT-User 是对话式标记（用户触发的浏览请求），不是爬虫出口
@@ -128,7 +119,6 @@ var crawlerEngines = []CrawlerEngine{
 	},
 	{
 		ID:          "deepseekbot",
-		Name:        "DeepSeek（观察级，无官方爬虫页）",
 		UARegex:     regexp.MustCompile(`(?i)DeepSeekBot|DeepSeek`),
 		PTRSuffixes: []string{".deepseek.com"},
 		// 裸品牌串 DeepSeek 出现在普通 UA 中不构成伪装证据。
@@ -136,7 +126,6 @@ var crawlerEngines = []CrawlerEngine{
 	},
 	{
 		ID:          "claudebot",
-		Name:        "Anthropic Claude",
 		UARegex:     regexp.MustCompile(`(?i)ClaudeBot|Claude-SearchBot|Claude-User|Claude-Web|anthropic-ai`),
 		PTRSuffixes: []string{".anthropic.com", ".claude.ai"},
 		// Claude-User 是对话式标记，Claude-Web 已停用、anthropic-ai 是通用
@@ -145,7 +134,6 @@ var crawlerEngines = []CrawlerEngine{
 	},
 	{
 		ID:          "perplexitybot",
-		Name:        "Perplexity",
 		UARegex:     regexp.MustCompile(`(?i)PerplexityBot|Perplexity-User`),
 		PTRSuffixes: []string{".perplexity.ai", ".perplexity.com"},
 		// Perplexity-User 同样是对话式标记，不单独构成伪装证据。
@@ -153,13 +141,11 @@ var crawlerEngines = []CrawlerEngine{
 	},
 	{
 		ID:          "kimisearchbot",
-		Name:        "Kimi（观察级）",
 		UARegex:     regexp.MustCompile(`(?i)Kimi-SearchBot`),
 		PTRSuffixes: []string{".moonshot.cn", ".moonshot.ai"},
 	},
 	{
 		ID:          "bytespider",
-		Name:        "字节 Bytespider",
 		UARegex:     regexp.MustCompile(`(?i)Bytespider`),
 		PTRSuffixes: []string{".byted.org", ".bytedance.com"},
 	},

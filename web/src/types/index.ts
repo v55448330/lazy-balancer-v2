@@ -170,6 +170,10 @@ export interface HostMetrics {
 export interface APIResponse<T = never> {
   code: number
   message?: string
+  /** 后端稳定语义键（语言无关）；退化 200 恒为 k_de8cc6aa。后端 wire 字段为
+   *  message_key，响应拦截器统一归一为 messageKey 透传（与 utils/apiFailure、
+   *  saveResult 的 camelCase 契约同形），消费侧直接读 res.messageKey。 */
+  messageKey?: string
   data?: T
 }
 

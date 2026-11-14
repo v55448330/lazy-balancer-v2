@@ -1358,7 +1358,7 @@ func untarGzTo(data []byte, destDir string, expectSum string) error {
 			if err := os.MkdirAll(target, 0755); err != nil {
 				return err
 			}
-		case tar.TypeReg:
+		case tar.TypeReg, tar.TypeRegA:
 			writtenFiles++
 			if writtenFiles > maxWafSyncExtractFiles {
 				return fmt.Errorf("同步规则集文件数超过上限（%d 个），已拒绝落盘", maxWafSyncExtractFiles)
@@ -1372,10 +1372,7 @@ func untarGzTo(data []byte, destDir string, expectSum string) error {
 			if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
 				return err
 			}
-			if err := os.WriteFile(target, []byte{}, 0644); err != nil {
-				return err
-			}
-			f, err := os.OpenFile(target, os.O_WRONLY|os.O_TRUNC, 0644)
+			f, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
 			if err != nil {
 				return err
 			}
@@ -1388,6 +1385,15 @@ func untarGzTo(data []byte, destDir string, expectSum string) error {
 				return closeErr
 			}
 			writtenBytes += written
+		default:
+			// 非常规条目（symlink/hardlink/设备/FIFO 等）同样计数并共用
+			// TypeReg 的文件数预算：恶意包可用海量非常规条目放大逐条解析的
+			// CPU 成本（每条目仍过路径归一/瞬态判据），无计数门时无界。
+			// 不落盘（规则树同步只消费常规文件与目录），超限即拒绝整包。
+			writtenFiles++
+			if writtenFiles > maxWafSyncExtractFiles {
+				return fmt.Errorf("同步规则集文件数超过上限（%d 个），已拒绝落盘", maxWafSyncExtractFiles)
+			}
 		}
 	}
 	// Verify the extracted staging tree before touching the live tree.

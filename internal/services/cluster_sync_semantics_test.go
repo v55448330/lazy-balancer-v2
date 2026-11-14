@@ -10,6 +10,7 @@ import (
 
 	"lazy-balancer-v2/internal/config"
 	"lazy-balancer-v2/internal/db"
+	"lazy-balancer-v2/internal/models"
 )
 
 // 2026-10-03 用户裁定：从节点同步审计「同步」汇总行语义修复钉测试——
@@ -37,10 +38,15 @@ func syncAuditDetails(t *testing.T, action string) []string {
 }
 
 // syncSemanticsEnv 主从同库形态：harness DB 同时充当主节点快照源与从节点
-// 应用目标；bump 版本+重建缓存后取当前快照。
+// 应用目标；bump 版本+重建缓存后取当前快照。is_master=0：apply 侧记账
+// （recordAppliedSectionHashes）带从端角色谓词，主节点形态下记账 0 行生效，
+// 下一轮全节重放——夹具必须模拟从节点才能观测哈希跳过语义。
 func syncSemanticsEnv(t *testing.T) (*ClusterService, *sql.DB, *SyncService, func(version int)) {
 	t.Helper()
 	cluster, database := newClusterTestService(t)
+	if _, err := database.Exec("UPDATE global_config SET is_master=0 WHERE id=1"); err != nil {
+		t.Fatalf("set slave role: %v", err)
+	}
 	if _, err := database.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enabled) VALUES ('lb_syncsem','sem','http','sem.example.test',8080,1)`); err != nil {
 		t.Fatalf("seed rule: %v", err)
 	}
@@ -58,26 +64,38 @@ func syncSemanticsEnv(t *testing.T) (*ClusterService, *sql.DB, *SyncService, fun
 	return cluster, database, syncService, bump
 }
 
+// snapshotAsMaster 同库夹具的主端快照助手：Snapshot 需 is_master=1（角色门），
+// apply 侧记账需 is_master=0（从端专有写谓词）——取快照前翻主、取完翻从，
+// 模拟真实主从拓扑（主端下发、从端应用）。
+func snapshotAsMaster(t *testing.T, cluster *ClusterService, database *sql.DB) models.ClusterSnapshot {
+	t.Helper()
+	if _, err := database.Exec("UPDATE global_config SET is_master=1 WHERE id=1"); err != nil {
+		t.Fatalf("flip to master: %v", err)
+	}
+	snap, _, err := cluster.Snapshot(context.Background(), 0, "", "")
+	if err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	if _, err := database.Exec("UPDATE global_config SET is_master=0 WHERE id=1"); err != nil {
+		t.Fatalf("flip to slave: %v", err)
+	}
+	return snap
+}
+
 // Given 同内容快照连续应用两次（第二次仅版本号+1：全部节哈希一致）。
 // When 第二次 applySnapshot。
 // Then：全部节无变化时汇总行只点名哈希一致、不打印内容清单。
 func TestApplySnapshot_summaryAuditReflectsSectionOutcomes(t *testing.T) {
-	cluster, _, syncService, bump := syncSemanticsEnv(t)
+	cluster, database, syncService, bump := syncSemanticsEnv(t)
 	ctx := context.Background()
 	bump(100)
-	snap, _, err := cluster.Snapshot(ctx, 0, "", "")
-	if err != nil {
-		t.Fatalf("snapshot: %v", err)
-	}
+	snap := snapshotAsMaster(t, cluster, database)
 	if err := syncService.applySnapshot(ctx, snap); err != nil {
 		t.Fatalf("first apply: %v", err)
 	}
 	before := len(syncAuditDetails(t, "同步"))
 	bump(101)
-	snap2, _, err := cluster.Snapshot(ctx, 0, "", "")
-	if err != nil {
-		t.Fatalf("snapshot2: %v", err)
-	}
+	snap2 := snapshotAsMaster(t, cluster, database)
 	if err := syncService.applySnapshot(ctx, snap2); err != nil {
 		t.Fatalf("second apply: %v", err)
 	}
@@ -100,10 +118,7 @@ func TestApplySnapshot_summaryListsAppliedAndSkipped(t *testing.T) {
 	cluster, database, syncService, bump := syncSemanticsEnv(t)
 	ctx := context.Background()
 	bump(200)
-	snap, _, err := cluster.Snapshot(ctx, 0, "", "")
-	if err != nil {
-		t.Fatalf("snapshot: %v", err)
-	}
+	snap := snapshotAsMaster(t, cluster, database)
 	if err := syncService.applySnapshot(ctx, snap); err != nil {
 		t.Fatalf("first apply: %v", err)
 	}
@@ -112,10 +127,7 @@ func TestApplySnapshot_summaryListsAppliedAndSkipped(t *testing.T) {
 		t.Fatalf("seed second rule: %v", err)
 	}
 	bump(201)
-	snap2, _, err := cluster.Snapshot(ctx, 0, "", "")
-	if err != nil {
-		t.Fatalf("snapshot2: %v", err)
-	}
+	snap2 := snapshotAsMaster(t, cluster, database)
 	if err := syncService.applySnapshot(ctx, snap2); err != nil {
 		t.Fatalf("second apply: %v", err)
 	}

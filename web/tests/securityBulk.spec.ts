@@ -50,7 +50,7 @@ test('A4 分片请求按方向独立提交：每片对向数组为空且两向�
     },
     {
       file: 'src/views/security/SecurityPolicies.vue',
-      start: 'const bindResponses: Array<{ message?: string } | undefined> = []',
+      start: 'const bindResponses: Array<{ message?: string; messageKey?: string } | undefined> = []',
       end: 'const mergedBind = mergeBulkResults(bindResponses)',
       // 执行序随批量端点 orders 字段单事务应用：bind/unbind 双向皆空、方向由
       // orders 表达（同规则混入 bind/unbind 与 orders 是 400 冲突面）
@@ -155,10 +155,11 @@ test('D2 分片上限单源：与后端批量端点常量同值', () => {
   )
 })
 
-// 退化后缀判定单源：名单直接动作（useTrustAssociation 三侧快捷处置）与批量
-// 合并共用同一标记常量——字面量复制会在文案调整时静默失配（后缀不再常驻）。
-test('退化后缀判定单源：名单直接动作不复制字面量', () => {
+// 退化判定单源：名单直接动作（useTrustAssociation 三侧快捷处置）与批量合并/
+// 保存结果共用同一谓词——字面量复制会在文案调整时静默失配，en 响应（无 zh
+// 标记）则完全漏判；判定必须经语言无关的 isCaddyApplyDegraded。
+test('退化判定单源：名单直接动作经 isCaddyApplyDegraded，不复制字面量', () => {
   const composable = code('src/composables/useTrustAssociation.ts')
-  assert.match(composable, /import \{ CADDY_APPLY_FAILED_MARKER \} from '@\/utils\/bulkApplyResult'/)
+  assert.match(composable, /import \{ isCaddyApplyDegraded \} from '@\/utils\/bulkApplyResult'/)
   assert.doesNotMatch(composable, /['"]Caddy 配置应用失败['"]/, '不得复制退化后缀字面量')
 })

@@ -1086,6 +1086,7 @@ func TestImportConfigBackup_requeues_imported_non_terminal_certificate_jobs(t *t
 }
 
 func TestImportConfigBackup_reports_partial_failure_when_certificate_job_recovery_fails(t *testing.T) {
+	withIsolatedGlobal(t)
 	// Given
 	h := newBackupTestHandlers(t)
 	services.ResetCAQueueManagerForTest()
@@ -1122,6 +1123,7 @@ func TestImportConfigBackup_reports_partial_failure_when_certificate_job_recover
 // 「导入部分失败（数据库已提交，证书任务恢复失败）：」前缀，直接拼 Error() 会让
 // message 出现两遍同一句、warnings 再重复一遍——读者会当成两起失败。
 func TestImportConfigBackup_partialFailureDescribesPhaseOnce(t *testing.T) {
+	withIsolatedGlobal(t)
 	h := newBackupTestHandlers(t)
 	services.ResetCAQueueManagerForTest()
 	services.InitCAQueueManager(func() error { return nil }, t.TempDir())
@@ -1213,6 +1215,7 @@ func TestImportConfigBackup_commitFailureReportsIndeterminate(t *testing.T) {
 // 提交成功后 queue 阶段失败不得跳过提交后收敛；响应仍报部分失败，
 // 但任务日志缓存失效、哨兵清理等必须执行。
 func TestImportConfigBackup_queueFailureStillRunsPostCommitConvergence(t *testing.T) {
+	withIsolatedGlobal(t)
 	h := newBackupTestHandlers(t)
 	services.ResetCAQueueManagerForTest()
 	services.InitCAQueueManager(func() error { return nil }, t.TempDir())
@@ -1237,6 +1240,7 @@ func TestImportConfigBackup_queueFailureStillRunsPostCommitConvergence(t *testin
 }
 
 func TestImportConfigBackup_joins_import_and_certificate_job_recovery_failures(t *testing.T) {
+	withIsolatedGlobal(t)
 	// Given
 	h := newBackupTestHandlers(t)
 	services.ResetCAQueueManagerForTest()

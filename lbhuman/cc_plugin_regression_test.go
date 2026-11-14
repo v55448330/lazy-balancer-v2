@@ -100,7 +100,7 @@ func TestCCStats_concurrentRecordAndPeek(t *testing.T) {
 			defer wg.Done()
 			for range iterations {
 				stats := ccPeek(key, 10)
-				_ = evalCC(stats, 100000, 10, 0, 5, true)
+				_ = evalCC(stats, 100000, 0, 5, true)
 			}
 		}()
 	}

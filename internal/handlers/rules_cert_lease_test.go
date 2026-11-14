@@ -65,6 +65,7 @@ func TestUpdateRule_ReleasesBlockLeaseWhenCancelWindowPanics(t *testing.T) {
 // 旧实现的裸 Unlock→cancel→Lock 会触发不可恢复的二次 Unlock fatal，因此用
 // 子进程隔离验证；修复后 gin.Recovery 返回 500 且全局锁可再次获取。
 func TestUpdateRule_domainMigrationCancelPanicRestoresLock(t *testing.T) {
+	withIsolatedGlobal(t)
 	const helperEnv = "LB_TEST_DOMAIN_MIGRATION_CANCEL_PANIC"
 	if os.Getenv(helperEnv) != "1" {
 		command := exec.Command(os.Args[0], "-test.run=^TestUpdateRule_domainMigrationCancelPanicRestoresLock$", "-test.count=1")

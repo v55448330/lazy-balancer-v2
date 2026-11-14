@@ -30,8 +30,10 @@ func TestClusterRoleConditionAliasesMatchDB(t *testing.T) {
 // global_config WHERE id=1)=」完整比较式；global_config 自身行上的内联
 // 「COALESCE(is_master,1)=1/=0」是第二份手抄谓词（UpdateSettings/品牌镜像
 // 曾逐字内联），改单源口径时同步不到。本守卫扫 services 全部非测试源码：
-// SQL 文本（字符串字面量）里出现内联角色比较即红——角色条件必须经
-// masterRoleConditionSQL/slaveRoleConditionSQL 单源拼接。
+// 整份文件 compact（去全部空白）后做子串匹配——SQL 文本跨行拆行同样命中
+// （逐行扫描会漏掉字面量内部换行的形态）。注释里出现完整谓词字面量同样
+// 命中：角色谓词只允许经 masterRoleConditionSQL/slaveRoleConditionSQL 单源
+// 拼接，任何第二份全文副本（含注释）都是漂移源。
 func TestClusterRolePredicate_noInlineCopiesInServicesSQL(t *testing.T) {
 	entries, err := filepath.Glob("*.go")
 	if err != nil {
@@ -49,16 +51,9 @@ func TestClusterRolePredicate_noInlineCopiesInServicesSQL(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		// 只扫字符串字面量形态（SQL 文本）：注释里的口径说明不触发。
-		for _, line := range strings.Split(string(data), "\n") {
-			trimmed := strings.TrimSpace(line)
-			if strings.HasPrefix(trimmed, "//") {
-				continue
-			}
-			c := compact(line)
-			if strings.Contains(c, inlineMaster) || strings.Contains(c, inlineSlave) {
-				offenders = append(offenders, path+": "+trimmed)
-			}
+		c := compact(string(data))
+		if strings.Contains(c, inlineMaster) || strings.Contains(c, inlineSlave) {
+			offenders = append(offenders, path)
 		}
 	}
 	if len(offenders) > 0 {

@@ -11,6 +11,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -732,7 +733,7 @@ func (h *Handlers) DeleteSecurityBlockPage(c *gin.Context) {
 }
 
 // securityPolicySelectColumns 是 ListSecurityPolicies/GetSecurityPolicy 共用的
-// 33 表达式投影:与 scanSecurityPolicyInto 逐列对应、同默认值、同相对顺序
+// 41 表达式投影:与 scanSecurityPolicyInto 逐列对应、同默认值、同相对顺序
 // （canonical 副本：internal/services/security.go scanSecurityPolicyByID、
 // internal/services/caddy.go loadSecurityPolicyContext 批量预载）。services/ 归
 // 并行任务持有且两侧列集本就不同，此处按既定回退方案保持 handlers 本地副本——
@@ -1901,7 +1902,7 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 	// 存量行单次读取：本端点在写锁内要拿同一策略行的六组字段（CC 防护 / ACL /
 	// GeoIP / 引用 / 类型 / 审计 delta 基准），此前按门逐列各读一遍——同一行
 	// 读 10 次（含 3 次全列扫描），整段都在 BEGIN IMMEDIATE 写锁内。收敛为
-	// 事务开头一次 33 列投影，写后只保留必需的终态读（重推断 / 状态码归一 /
+	// 事务开头一次 41 列投影，写后只保留必需的终态读（重推断 / 状态码归一 /
 	// 审计名）。写锁已持，单次读与后续校验、审计基准零竞态。
 	var stored models.SecurityPolicy
 	if err := scanSecurityPolicyRow(tx.QueryRowContext(caddyWriteCtx(c), `SELECT `+securityPolicySelectColumns+` FROM security_policies WHERE id=?`, id), &stored); err != nil {
@@ -2313,16 +2314,14 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 		}
 	}
 	// 写侧拦截状态码归一与 Create 同口径（单源 normalizeBlockStatusCode）：
-	// 以写入后读回的终态判定——类型可能是本请求显式提交，也可能是上方按合并
-	// 内容重推断的结果；页面 id 同理（显式提交 ?? 存量）。此前只有「显式
+	// 以写入后读回的终态判定——页面 id 是显式提交 ?? 存量。此前只有「显式
 	// policy_type ∧ 显式 block_page_id=0」才归零，PUT {"block_status_code":404}
 	// 这类部分更新会落库一个不会被渲染消费的值。读取失败只告警不阻断（主更新
 	// 已就绪，下次编辑收敛；与同函数审计名读取失败的留痕口径一致）。
-	var finalPolicyType string
 	var finalBlockPageID, finalBlockStatus int
-	if err := tx.QueryRowContext(caddyWriteCtx(c), "SELECT COALESCE(policy_type,''), COALESCE(block_page_id,0), COALESCE(block_status_code,0) FROM security_policies WHERE id=?", id).Scan(&finalPolicyType, &finalBlockPageID, &finalBlockStatus); err != nil {
+	if err := tx.QueryRowContext(caddyWriteCtx(c), "SELECT COALESCE(block_page_id,0), COALESCE(block_status_code,0) FROM security_policies WHERE id=?", id).Scan(&finalBlockPageID, &finalBlockStatus); err != nil {
 		services.Logf("warn", "更新策略 #%s 后读取拦截状态码终态失败（未执行写侧归一）: %v", id, err)
-	} else if normalized := normalizeBlockStatusCode(finalBlockStatus, finalPolicyType, finalBlockPageID); normalized != finalBlockStatus {
+	} else if normalized := normalizeBlockStatusCode(finalBlockStatus, finalBlockPageID); normalized != finalBlockStatus {
 		if _, err := tx.ExecContext(caddyWriteCtx(c), "UPDATE security_policies SET block_status_code=? WHERE id=?", normalized, id); err != nil {
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_7944c0c2"), MessageKey: "k_7944c0c2"})
 			return
@@ -2331,6 +2330,19 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 		normalizedVal := normalized
 		req.BlockStatusCode = &normalizedVal
 	}
+	// 审计 delta 与落库值同源：人机/CC 字段的写侧归一（mapIntPtr/mapStrPtr）
+	// 返回新指针、不改 req——delta 若取请求原始值会记录从未落库的「变更」
+	// （cc_rps_limit=-5 落 40 却记录 40→-5）。UPDATE 已执行完毕，此处把 req
+	// 指针收敛到与 addInt/addStr 完全相同的归一终值（同一组 helper，单源），
+	// 下方 delta 即按实际落库值判定。
+	req.HumanVerifyMode = mapStrPtr(req.HumanVerifyMode, humanModeOrDefault)
+	req.HumanVerifyType = mapStrPtr(req.HumanVerifyType, humanTypeOrDefault)
+	req.HumanVerifyTTL = mapIntPtr(req.HumanVerifyTTL, humanTTLOrDefault)
+	req.HumanExemptPaths = mapStrPtr(req.HumanExemptPaths, humanJSONOrDefault)
+	req.CCRPSLimit = mapIntPtr(req.CCRPSLimit, ccRPSLimitOrDefault)
+	req.CCRPSWindow = mapIntPtr(req.CCRPSWindow, ccWindowOrDefault)
+	req.CC4xxRatio = mapIntPtr(req.CC4xxRatio, cc4xxRatioOrDefault)
+	req.CCSessionUAThreshold = mapIntPtr(req.CCSessionUAThreshold, func(v int) int { return ccIntOrDefault(v, 5) })
 	// 审计用 username（非数字 ID）+ 真 delta 变更详情（2026-09-25 用户裁定
 	// A 方案）：只记「提交值≠存量值」的字段（旧值→新值），IP 弹窗一键操作和
 	// 策略编辑页共用此端点，操作人/具体改了什么/IP 是什么必须在日志可追溯；
@@ -3608,63 +3620,140 @@ func (h *Handlers) BatchBindSecurityPolicies(c *gin.Context) {
 // splitChildSpec 是一次「混合策略拆分」要落库的单职子策略：阶段、名称与
 // insertChild 写入的全部业务列（爬虫豁免列在构造时按阶段归一）。
 type splitChildSpec struct {
-	policyType     string
-	name           string
-	mode           string
-	aclMode        string
-	aclList        string
-	aclEnabled     bool
-	whitelist      json.RawMessage
-	wlEnabled      bool
-	blacklist      json.RawMessage
-	crsGroups      string
-	crsExcluded    string
-	customRules    string
-	blockPageID    int
-	blockStatus    int
-	blockResp      string
-	geoCountries   json.RawMessage
-	geoMode        string
-	crawlerExempt  bool
-	crawlerEngines string
-	wafResp        bool
-	logBody        bool
-	aclRefs        string
-	wlRefs         string
-	trustDetection bool
+	policyType       string
+	name             string
+	mode             string
+	aclMode          string
+	aclList          string
+	aclEnabled       bool
+	whitelist        json.RawMessage
+	wlEnabled        bool
+	blacklist        json.RawMessage
+	crsGroups        string
+	crsExcluded      string
+	customRules      string
+	blockPageID      int
+	blockStatus      int
+	blockResp        string
+	geoCountries     json.RawMessage
+	geoMode          string
+	crawlerExempt    bool
+	crawlerEngines   string
+	wafResp          bool
+	logBody          bool
+	aclRefs          string
+	wlRefs           string
+	trustDetection   bool
+	humanMode        string
+	humanType        string
+	humanTTL         int
+	humanPaths       string
+	ccEnabled        bool
+	ccRPS            int
+	ccWindow         int
+	cc4xx            int
+	ccSessionAnomaly bool
+	ccUASession      int
 }
 
 // splitChildIdentity 是子策略的可比较身份：落库列全集，仅排除操作者痕迹
 // （updated_by）与时间戳。重试拆分时「配置完全一致」才允许复用既有子策略。
-// 全部为标量，可直接用 == 比较（Slice/Map 字段不进身份）。
+// 全部为标量，可直接用 == 比较（Slice/Map 字段不进身份）。字段集与
+// securityPolicyInsertColumns 机械对齐（splitChildIdentityColumnFields +
+// parity 守卫）——人机/CC 十字段曾缺席，管理员改过的 stage2 子策略被重试
+// 拆分静默复用。
 type splitChildIdentity struct {
-	policyType     string
-	name           string
-	description    string
-	mode           string
-	anomalyThr     int
-	aclMode        string
-	aclList        string
-	aclEnabled     bool
-	whitelist      string
-	wlEnabled      bool
-	blacklist      string
-	crsGroups      string
-	crsExcluded    string
-	customRules    string
-	blockPageID    int
-	blockStatus    int
-	blockResp      string
-	enabled        bool
-	geoCountries   string
-	geoMode        string
-	crawlerExempt  bool
-	crawlerEngines string
-	wafResp        bool
-	logBody        bool
-	aclRefs        string
-	wlRefs         string
-	trustDetection bool
+	policyType       string
+	name             string
+	description      string
+	mode             string
+	anomalyThr       int
+	aclMode          string
+	aclList          string
+	aclEnabled       bool
+	whitelist        string
+	wlEnabled        bool
+	blacklist        string
+	crsGroups        string
+	crsExcluded      string
+	customRules      string
+	blockPageID      int
+	blockStatus      int
+	blockResp        string
+	enabled          bool
+	geoCountries     string
+	geoMode          string
+	crawlerExempt    bool
+	crawlerEngines   string
+	wafResp          bool
+	logBody          bool
+	aclRefs          string
+	wlRefs           string
+	trustDetection   bool
+	humanMode        string
+	humanType        string
+	humanTTL         int
+	humanPaths       string
+	ccEnabled        bool
+	ccRPS            int
+	ccWindow         int
+	cc4xx            int
+	ccSessionAnomaly bool
+	ccUASession      int
+}
+
+// splitChildIdentityColumnFields 是 insert 列名 → splitChildIdentity 字段名的
+// 唯一映射（parity 守卫的键源）。updated_by 是操作者痕迹，豁免不进身份。
+var splitChildIdentityColumnFields = map[string]string{
+	"name": "name", "description": "description", "mode": "mode", "anomaly_threshold": "anomalyThr",
+	"ip_acl_mode": "aclMode", "ip_acl_list": "aclList", "ip_acl_enabled": "aclEnabled",
+	"ip_whitelist": "whitelist", "ip_whitelist_enabled": "wlEnabled", "ip_blacklist": "blacklist",
+	"crs_rule_groups": "crsGroups", "crs_excluded_rules": "crsExcluded", "custom_rules": "customRules",
+	"block_page_id": "blockPageID", "block_status_code": "blockStatus", "enabled": "enabled",
+	"geoip_countries": "geoCountries", "geoip_mode": "geoMode",
+	"geoip_crawler_exempt": "crawlerExempt", "geoip_crawler_engines": "crawlerEngines",
+	"waf_check_response": "wafResp", "log_request_body": "logBody",
+	"ip_acl_list_refs": "aclRefs", "ip_whitelist_refs": "wlRefs",
+	"policy_type": "policyType", "trust_detection": "trustDetection",
+	"human_verify_mode": "humanMode", "human_verify_type": "humanType", "human_verify_ttl": "humanTTL", "human_exempt_paths": "humanPaths",
+	"cc_detect_enabled": "ccEnabled", "cc_rps_limit": "ccRPS", "cc_rps_window": "ccWindow", "cc_4xx_ratio": "cc4xx",
+	"cc_session_anomaly": "ccSessionAnomaly", "cc_session_ua_threshold": "ccUASession",
+	"block_response_mode": "blockResp",
+}
+
+// splitChildIdentityExemptColumns 不进身份的 insert 列（列名 → 理由）。
+var splitChildIdentityExemptColumns = map[string]string{
+	"updated_by": "操作者痕迹：重试拆分由不同操作者发起不得构成配置冲突",
+}
+
+// splitChildIdentityParityGaps 返回身份字段集相对 insert 列清单的缺口（空=通过）：
+// insert 列未登记映射（新增列漏改身份）或映射指向不存在的字段即红。
+func splitChildIdentityParityGaps(columns []string, identityType reflect.Type) []string {
+	var gaps []string
+	mapped := make(map[string]bool, len(columns))
+	for _, column := range columns {
+		if _, exempt := splitChildIdentityExemptColumns[column]; exempt {
+			continue
+		}
+		field, ok := splitChildIdentityColumnFields[column]
+		if !ok {
+			gaps = append(gaps, "身份比较缺列 "+column+"（未登记 column→field 映射）")
+			continue
+		}
+		if _, ok := identityType.FieldByName(field); !ok {
+			gaps = append(gaps, "身份比较缺列 "+column+"（映射字段 "+field+" 不存在于 splitChildIdentity）")
+			continue
+		}
+		mapped[field] = true
+	}
+	for i := 0; i < identityType.NumField(); i++ {
+		name := identityType.Field(i).Name
+		if !mapped[name] {
+			gaps = append(gaps, "身份字段 "+name+" 不在 insert 列映射（残留/拼错）")
+		}
+	}
+	sort.Strings(gaps)
+	return gaps
 }
 
 // errSplitChildConflict 表示已存在同名同阶段但配置不同的策略：拆分必须显式
@@ -3683,6 +3772,9 @@ func splitChildIdentityOfSpec(p *models.SecurityPolicy, spec splitChildSpec) spl
 		crawlerExempt: spec.crawlerExempt, crawlerEngines: spec.crawlerEngines,
 		wafResp: spec.wafResp, logBody: spec.logBody,
 		aclRefs: spec.aclRefs, wlRefs: spec.wlRefs, trustDetection: spec.trustDetection,
+		humanMode: spec.humanMode, humanType: spec.humanType, humanTTL: spec.humanTTL, humanPaths: spec.humanPaths,
+		ccEnabled: spec.ccEnabled, ccRPS: spec.ccRPS, ccWindow: spec.ccWindow, cc4xx: spec.cc4xx,
+		ccSessionAnomaly: spec.ccSessionAnomaly, ccUASession: spec.ccUASession,
 	}
 }
 
@@ -3698,6 +3790,9 @@ func splitChildIdentityOfPolicy(stored *models.SecurityPolicy) splitChildIdentit
 		crawlerExempt: stored.GeoIPCrawlerExempt, crawlerEngines: string(stored.GeoIPCrawlerEngines),
 		wafResp: stored.WAFCheckResponse, logBody: stored.LogRequestBody,
 		aclRefs: stored.IPACLListRefs, wlRefs: stored.IPWhitelistRefs, trustDetection: stored.TrustDetection,
+		humanMode: stored.HumanVerifyMode, humanType: stored.HumanVerifyType, humanTTL: stored.HumanVerifyTTL, humanPaths: string(stored.HumanExemptPaths),
+		ccEnabled: stored.CCDetectEnabled, ccRPS: stored.CCRPSLimit, ccWindow: stored.CCRPSWindow, cc4xx: stored.CC4xxRatio,
+		ccSessionAnomaly: stored.CCSessionAnomaly, ccUASession: stored.CCSessionUAThreshold,
 	}
 }
 
@@ -3733,9 +3828,9 @@ func resolveSplitChild(ctx context.Context, tx *sql.Tx, p *models.SecurityPolicy
 }
 
 // SplitSecurityPolicy 混合策略一键拆分迁移（2026-09-20 用户裁定）：仅 mixed
-// 策略可用——按特征组生成「原名（阶段 N）」单职子策略（空组不生成；阶段 1/3
-// 子策略继承拦截页，阶段 2 恒 429、拦截页继承原策略——2026-09-25 用户裁
-// 定可配），全量重映射绑定（每条规则删原绑定+插全部子策略绑定；协议门
+// 策略可用——按特征组生成「原名（阶段 N）」单职子策略（空组不生成；阶段 1/2/3
+// 子策略继承拦截页与拦截状态码——2026-09-25 用户裁定 stage2 可配拦截页），
+// 全量重映射绑定（每条规则删原绑定+插全部子策略绑定；协议门
 // loadRuleBindingTarget 判非 HTTP 规则/规则不存在的进 skipped、合并后超
 // maxBindingsPerRule 上限的规则进 skipped
 // 并保留原绑定），无 skipped 才删除原策略（仍有规则引用时保留并在响应
@@ -3794,17 +3889,20 @@ func (h *Handlers) SplitSecurityPolicy(c *gin.Context) {
 		if geoipActive {
 			spec.crawlerEngines = string(p.GeoIPCrawlerEngines)
 		}
+		// CC(stage2) 子策略携带人机/CC 配置；其他阶段子策略一律落零值（与
+		// applyStageZerosToCreate 的跨阶段归零同口径，避免拆分产物带死配置）。
+		// 归一落在 spec 上：insertChild 落库与 splitChildIdentityOfSpec 身份
+		// 比较共用同一终值（此前身份结构不含这十字段，重试拆分静默复用管理员
+		// 改过的 stage2 子策略）。
+		spec.humanMode, spec.humanType, spec.humanTTL, spec.humanPaths = "off", "slider", 30, "[]"
+		spec.ccEnabled, spec.ccRPS, spec.ccWindow, spec.cc4xx, spec.ccSessionAnomaly, spec.ccUASession = false, 40, 10, 70, false, 5
+		if models.NormalizePolicyType(spec.policyType) == models.PolicyTypeStage2 {
+			spec.humanMode, spec.humanType, spec.humanTTL, spec.humanPaths = p.HumanVerifyMode, p.HumanVerifyType, p.HumanVerifyTTL, string(p.HumanExemptPaths)
+			spec.ccEnabled, spec.ccRPS, spec.ccWindow, spec.cc4xx, spec.ccSessionAnomaly, spec.ccUASession = p.CCDetectEnabled, p.CCRPSLimit, p.CCRPSWindow, p.CC4xxRatio, p.CCSessionAnomaly, p.CCSessionUAThreshold
+		}
 		return spec
 	}
 	insertChild := func(spec splitChildSpec) (int, error) {
-		// CC(stage2) 子策略携带人机/CC 配置；其他阶段子策略一律落零值（与
-		// applyStageZerosToCreate 的跨阶段归零同口径，避免拆分产物带死配置）。
-		humanMode, humanType, humanTTL, humanPaths := "off", "slider", 30, "[]"
-		ccEnabled, ccRPS, ccWindow, cc4xx, ccSessionAnomaly, ccUASession := false, 40, 10, 70, false, 5
-		if models.NormalizePolicyType(spec.policyType) == models.PolicyTypeStage2 {
-			humanMode, humanType, humanTTL, humanPaths = p.HumanVerifyMode, p.HumanVerifyType, p.HumanVerifyTTL, string(p.HumanExemptPaths)
-			ccEnabled, ccRPS, ccWindow, cc4xx, ccSessionAnomaly, ccUASession = p.CCDetectEnabled, p.CCRPSLimit, p.CCRPSWindow, p.CC4xxRatio, p.CCSessionAnomaly, p.CCSessionUAThreshold
-		}
 		// 列投影与 Create 共用单一清单（securityPolicyInsertColumns）——
 		// block_response_mode 等列随清单同步落库，拆分不再可能漏列。
 		values := securityPolicyInsertValues{
@@ -3816,8 +3914,8 @@ func (h *Handlers) SplitSecurityPolicy(c *gin.Context) {
 			geoCountries: string(spec.geoCountries), geoMode: spec.geoMode, crawlerExempt: spec.crawlerExempt, crawlerEngines: spec.crawlerEngines,
 			wafResp: spec.wafResp, logBody: spec.logBody, aclRefs: spec.aclRefs, wlRefs: spec.wlRefs,
 			updatedBy: operator, policyType: spec.policyType, trustDetection: spec.trustDetection,
-			humanMode: humanMode, humanType: humanType, humanTTL: humanTTL, humanPaths: humanPaths,
-			ccEnabled: ccEnabled, ccRPS: ccRPS, ccWindow: ccWindow, cc4xx: cc4xx, ccSessionAnomaly: ccSessionAnomaly, ccUASession: ccUASession,
+			humanMode: spec.humanMode, humanType: spec.humanType, humanTTL: spec.humanTTL, humanPaths: spec.humanPaths,
+			ccEnabled: spec.ccEnabled, ccRPS: spec.ccRPS, ccWindow: spec.ccWindow, cc4xx: spec.cc4xx, ccSessionAnomaly: spec.ccSessionAnomaly, ccUASession: spec.ccUASession,
 			blockResponseMode: spec.blockResp,
 		}
 		result, err := tx.ExecContext(caddyWriteCtx(c), securityPolicyInsertSQL(), values.args()...)
@@ -3936,15 +4034,17 @@ func (h *Handlers) SplitSecurityPolicy(c *gin.Context) {
 	}
 	humanOn := p.HumanVerifyMode != "" && p.HumanVerifyMode != "off"
 	if features.G2 || humanOn {
-		// stage2 子策略继承原策略拦截页（用户裁定：2026-09-25
-		// 起 stage2 可配拦截页，拆分不得丢页）；block_status_code 保持归一 0
-		//（阶段 2 恒 429 自动语义，与 applyStageZerosToCreate 同口径）。
+		// stage2 子策略继承原策略拦截页与拦截状态码（用户裁定：2026-09-25
+		// 起 stage2 可配拦截页，拆分不得丢页）；block_status_code 与 Create/Update
+		// 保留口径对齐——继承 p.BlockStatusCode（normalizeBlockStatusCode 无页归零、
+		// 有页保留），不再恒 0。阶段 2 挑战/封禁响应码由 lb_human 插件决定，策略侧
+		// 配码仅在绑定拦截页的直接封禁归因路径被渲染消费。
 		specs = append(specs, completeChild(splitChildSpec{
 			policyType: models.PolicyTypeStage2, name: p.Name + stageSuffix[models.PolicyTypeStage2],
 			mode: "off", aclMode: "deny", aclList: "[]",
 			whitelist: json.RawMessage("[]"), blacklist: json.RawMessage("[]"),
 			crsGroups: "[]", crsExcluded: "[]", customRules: "[]",
-			blockPageID: p.BlockPageID, blockResp: normalizeBlockResponseMode(p.BlockResponseMode),
+			blockPageID: p.BlockPageID, blockStatus: p.BlockStatusCode, blockResp: normalizeBlockResponseMode(p.BlockResponseMode),
 			geoCountries: json.RawMessage("[]"), geoMode: "off",
 			aclRefs: "[]", wlRefs: "[]",
 		}))
@@ -4205,7 +4305,7 @@ func (h *Handlers) GetSecurityPolicyBindings(c *gin.Context) {
 	policies := make([]models.SecurityPolicy, 0, len(policyIDs))
 	for _, policyID := range policyIDs {
 		var p models.SecurityPolicy
-		// 与 securityPolicySelectColumns 同 33 列同序投影（COALESCE 默认值），
+		// 与 securityPolicySelectColumns 同 41 列同序投影（COALESCE 默认值），
 		// 任一可空列 NULL 不再使整接口 500；WHERE enabled=1 语义不变（NULL-enabled
 		// 仍被 SQL 过滤）。
 		if err := scanSecurityPolicyRow(db.DB.QueryRow(`SELECT `+securityPolicySelectColumns+`
@@ -5864,9 +5964,14 @@ func (h *Handlers) GetIP2RegionInfo(c *gin.Context) {
 	info.V6Version, _ = services.GetIP2RegionV6Version()
 	info.V6DbSize = services.GetIP2RegionV6EntryCount()
 	info.V6UpdateStatus = "idle"
-	_ = db.DB.QueryRow(`SELECT COALESCE(v6_updated_at,''), COALESCE(v6_update_status,'idle'), COALESCE(v6_message,'')
+	// 与 v4 同口径：真实 DB 故障 500，仅缺行回落（吞错会把存储故障伪装成
+	// 「v6 从未更新」的正常展示态）。
+	if err := db.DB.QueryRow(`SELECT COALESCE(v6_updated_at,''), COALESCE(v6_update_status,'idle'), COALESCE(v6_message,'')
 		FROM security_ip2region_version WHERE id=1`).
-		Scan(&info.V6UpdatedAt, &info.V6UpdateStatus, &info.V6Message)
+		Scan(&info.V6UpdatedAt, &info.V6UpdateStatus, &info.V6Message); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_1b76435f"), MessageKey: "k_1b76435f"})
+		return
+	}
 	if info.V6Version == "" {
 		info.V6Version = "unknown"
 	}
@@ -6234,7 +6339,7 @@ func resolveCreatePolicyType(req *models.CreateSecurityPolicyRequest) (string, e
 		// 缺省类型推断路径与显式类型路径同口径归一拦截状态码：无页策略的
 		// deny 恒 403，落库非零值会让详情/列表宣称一个不生效的状态码
 		// （旧实现只对显式类型调用归一，API/MCP 省略 policy_type 即可落 404）。
-		req.BlockStatusCode = normalizeBlockStatusCode(req.BlockStatusCode, policyType, req.BlockPageID)
+		req.BlockStatusCode = normalizeBlockStatusCode(req.BlockStatusCode, req.BlockPageID)
 		return policyType, nil
 	case models.PolicyTypeStage0, models.PolicyTypeStage1, models.PolicyTypeStage2, models.PolicyTypeStage4, models.PolicyTypeStage3:
 		// 创建路径的显式类型 = 「按该阶段类型落库」的全量归一契约（编辑器提交
@@ -6257,18 +6362,17 @@ func resolveCreatePolicyType(req *models.CreateSecurityPolicyRequest) (string, e
 type stageZeroFamily int
 
 const (
-	stageZeroModeOff         stageZeroFamily = iota // mode → off（阶段 0/1/2 无 WAF 引擎面）
-	stageZeroCRSText                                // crs_rule_groups / crs_excluded_rules / custom_rules
-	stageZeroWAFFlags                               // waf_check_response / log_request_body
-	stageZeroIPACL                                  // ip_acl_enabled / list / list_refs
-	stageZeroIPWhitelist                            // ip_whitelist_enabled / list / refs
-	stageZeroIPBlacklist                            // ip_blacklist
-	stageZeroGeoIP                                  // geoip_mode / geoip_countries
-	stageZeroGeoIPCrawler                           // geoip_crawler_exempt / geoip_crawler_engines
-	stageZeroHuman                                  // human_verify_* 五列 + cc_*（阶段 2 CC 防护专属）
-	stageZeroBlockPageAll                           // block_page_id + block_status_code
-	stageZeroBlockStatusCode                        // 仅 block_status_code（无页策略的 deny 恒 403）
-	stageZeroTrustDetection                         // trust_detection（stage0 专属）
+	stageZeroModeOff        stageZeroFamily = iota // mode → off（阶段 0/1/2 无 WAF 引擎面）
+	stageZeroCRSText                               // crs_rule_groups / crs_excluded_rules / custom_rules
+	stageZeroWAFFlags                              // waf_check_response / log_request_body
+	stageZeroIPACL                                 // ip_acl_enabled / list / list_refs
+	stageZeroIPWhitelist                           // ip_whitelist_enabled / list / refs
+	stageZeroIPBlacklist                           // ip_blacklist
+	stageZeroGeoIP                                 // geoip_mode / geoip_countries
+	stageZeroGeoIPCrawler                          // geoip_crawler_exempt / geoip_crawler_engines
+	stageZeroHuman                                 // human_verify_* 五列 + cc_*（阶段 2 CC 防护专属）
+	stageZeroBlockPageAll                          // block_page_id + block_status_code
+	stageZeroTrustDetection                        // trust_detection（stage0 专属）
 )
 
 // outOfStageZeroFamilies 返回该阶段必须归零的字段族——矩阵唯一出处
@@ -6317,7 +6421,7 @@ func normalizeBlockResponseMode(mode string) string {
 	}
 }
 
-func normalizeBlockStatusCode(statusCode int, policyType string, blockPageID int) int {
+func normalizeBlockStatusCode(statusCode int, blockPageID int) int {
 	if blockPageID == 0 {
 		return 0
 	}
@@ -6368,15 +6472,13 @@ func applyStageZerosToCreate(req *models.CreateSecurityPolicyRequest, policyType
 			req.GeoIPCrawlerExempt, req.GeoIPCrawlerEngines = false, "[]"
 		case stageZeroBlockPageAll:
 			req.BlockPageID, req.BlockStatusCode, req.BlockResponseMode = 0, 0, ""
-		case stageZeroBlockStatusCode:
-			req.BlockStatusCode = 0
 		case stageZeroTrustDetection:
 			req.TrustDetection = false
 		}
 	}
 	// 无自定义页面时状态码不被渲染消费；写侧归一，避免 UI 宣称生效
 	// （与 Update 的写后归一单源，见 normalizeBlockStatusCode）。
-	req.BlockStatusCode = normalizeBlockStatusCode(req.BlockStatusCode, policyType, req.BlockPageID)
+	req.BlockStatusCode = normalizeBlockStatusCode(req.BlockStatusCode, req.BlockPageID)
 }
 
 // applyStageZerosToUpdate 按同一矩阵把更新请求的阶段外字段指针赋为零值
@@ -6417,8 +6519,6 @@ func applyStageZerosToUpdate(req *models.UpdateSecurityPolicyRequest, policyType
 			req.GeoIPCrawlerExempt, req.GeoIPCrawlerEngines = new(false), new("[]")
 		case stageZeroBlockPageAll:
 			req.BlockPageID, req.BlockStatusCode, req.BlockResponseMode = new(0), new(0), new("")
-		case stageZeroBlockStatusCode:
-			req.BlockStatusCode = new(0)
 		case stageZeroTrustDetection:
 			req.TrustDetection = new(false)
 		}

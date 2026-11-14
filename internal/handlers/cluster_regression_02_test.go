@@ -30,6 +30,7 @@ func (t *closeIdleCountingTransport) RoundTrip(request *http.Request) (*http.Res
 func (t *closeIdleCountingTransport) CloseIdleConnections() { t.closed.Add(1) }
 
 func TestCallClusterServiceControl_closesIdleConnections(t *testing.T) {
+	withIsolatedGlobal(t)
 	// Given：工厂每次构造新客户端（其 Transport 自带连接池，IdleConnTimeout=90s）
 	transport := &closeIdleCountingTransport{}
 	oldFactory := clusterServiceControlClientFactory

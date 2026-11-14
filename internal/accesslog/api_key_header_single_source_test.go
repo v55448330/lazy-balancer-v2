@@ -16,10 +16,21 @@ import (
 // 变成「认证读的头与脱敏滤的头不是同一个」或文档/CORS 漂移。
 //
 // 字符串按包含匹配（CORS 列表与 YAML 不是独立头名串），注释也纳入；paths.go
-// 允许保留唯一一处定义及自身示例。
+// 允许保留唯一一处定义及自身示例。扫描面覆盖认证/转发/脱敏全链：accesslog
+// 自身、apikey、mcpserver、middleware、handlers、services（渲染 encoder）、
+// db（启动迁移）、cmd（入口进程）。
 func TestAPIKeyHeaderName_noHandWrittenLiterals(t *testing.T) {
 	const definitionFile = "paths.go"
-	packages := []string{".", filepath.Join("..", "apikey"), filepath.Join("..", "mcpserver"), filepath.Join("..", "middleware"), filepath.Join("..", "handlers")}
+	packages := []string{
+		".",
+		filepath.Join("..", "apikey"),
+		filepath.Join("..", "mcpserver"),
+		filepath.Join("..", "middleware"),
+		filepath.Join("..", "handlers"),
+		filepath.Join("..", "services"),
+		filepath.Join("..", "db"),
+		filepath.Join("..", "..", "cmd", "server"),
+	}
 	for _, pkgDir := range packages {
 		entries, err := os.ReadDir(pkgDir)
 		if err != nil {

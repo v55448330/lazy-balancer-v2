@@ -564,9 +564,11 @@ func (p *Provider) listChallengeRecords(ctx context.Context, zone, subDomain str
 // 不存在（81044）或所属 zone 已删除（记录随之消亡）两种形态下都无残留可
 // 清，幂等保证清理不误报、所有权条目正常移除。
 func (p *Provider) deleteRecord(ctx context.Context, zoneID, recordID string) error {
-	if recordID == "" || strings.ContainsAny(recordID, "/?# \t\r\n") {
+	if recordID == "" || recordID == "." || recordID == ".." || strings.ContainsAny(recordID, "/?# \t\r\n") {
 		// 记录 ID 直接拼进 URL 路径：账本条目可能来自集群快照/旧版本写入，
 		// 路径敌对字符必须 fail-visible 拒绝，而不是静默构造错误请求。
+		// 点段（"." / ".."）经客户端/服务端路径归一化会把 DELETE 落到
+		// zone 集合端点，同样拒绝。
 		return fmt.Errorf("cloudflare: 非法记录 ID %q，拒绝构造删除请求", recordID)
 	}
 	if err := p.apiCall(ctx, http.MethodDelete, "/zones/"+zoneID+"/dns_records/"+recordID, nil, nil); err != nil {

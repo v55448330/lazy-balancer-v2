@@ -26,7 +26,7 @@ ENV GOTOOLCHAIN=auto
 # 架构（本阶段已固定在 BUILDPLATFORM 上执行，必须显式指定产物平台）。
 ARG TARGETOS=linux
 ARG TARGETARCH
-# xcaddy 阶段只需五个本地目录（--with 引用），窄化 COPY 面——整目录复制会让
+# xcaddy 阶段只需七个本地目录（--with 引用），窄化 COPY 面——整目录复制会让
 # 任何前端/文档变更 bust 该层并重跑 xcaddy build（缓存挂载兜底仍需分钟级增量
 # 编译）。backend 阶段同样用显式清单（见该阶段注释）。geoipnames 是零依赖
 # 共享表库——
@@ -313,10 +313,10 @@ RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 # 不跟随跳转（避免把登录页 200 误判为健康）。探针使用二进制自带子命令。
 # 端口固定 8000，与容器启动参数无关：entrypoint 会透传 `docker run` 的显式参数，
 # 但用 -config 改 port 会让本探针打错端口（Docker DNS/健康状态误判）。
-# zlib 锁 edge 仓库 1.4-r0（CVE 修复版本；3.24-stable 尚为 1.3.2——zlib 仅链接
-# musl，edge 包在 stable 基座可用；版本钉死保证可重现），见下方 apk add 一行。
-# 无关：entrypoint 会透传 `docker run` 的显式参数，但用 -config 改 port 会让本探针
-# 打错端口（Docker DNS/健康状态误判），容器形态请不要改面板端口。
+# zlib 最终镜像为 edge 仓库 1.4-r0（CVE 修复版；stable 3.24 分支为 1.3.2）：
+# 上方基础 apk add 先钉 1.3.2-r1，CRS/xdb 下载层随 curl 从 edge 升级到 1.4-r0
+# （该层末 apk del 只删 curl，zlib 留存）。zlib 动态链接 musl，运行期由
+# apk/libapk 消费；版本钉死保证可重现，见上方两处 apk add。
 # 两段尝试各 2s，合计小于 --timeout=5s。
 HEALTHCHECK --interval=30s --timeout=5s --start-period=90s --retries=3 \
   CMD ["/usr/local/bin/lazy-balancer", "--healthcheck"]

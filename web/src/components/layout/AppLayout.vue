@@ -276,17 +276,18 @@ const hasCustomDisplayName = computed(() => {
 // 此前侧栏 menu 与 pageTitle 各持一份页面名字面量，改名必漏一侧（菜单与
 // 面包屑不一致）；现在模板与面包屑都从本表取值，settings 段继续复用
 // utils/settingsPages 的标题单源。
-const SECURITY_PARENT = t('common.app.views.layout.securityParent')
 // i18n:词条随 locale 响应式重算——模块/setup 顶层 t() 会固化切换前语言
 // (英文界面出中文导航的事故根因),必须 computed 化,模板消费自动解包。
+// SECURITY_PARENT 同为词条派生,不得在 setup 顶层快照(与 NAV_ITEMS 同口径)。
+const SECURITY_PARENT = computed(() => t('common.app.views.layout.securityParent'))
 const NAV_ITEMS = computed<ReadonlyArray<{ id: string; label: string; parent?: string }>>(() => [
   { id: 'dashboard', label: t('common.app.views.layout.navDashboard') },
   { id: 'rules', label: t('common.app.views.layout.navRules') },
-  { id: 'security-overview', label: t('common.app.views.layout.navSecurityOverview'), parent: SECURITY_PARENT },
-  { id: 'security-policies', label: t('common.app.views.layout.navSecurityPolicies'), parent: SECURITY_PARENT },
-  { id: 'security-rules', label: t('common.app.views.layout.navSecurityRules'), parent: SECURITY_PARENT },
-  { id: 'security-block-pages', label: t('common.app.views.layout.navSecurityBlockPages'), parent: SECURITY_PARENT },
-  { id: 'security-events', label: t('common.app.views.layout.navSecurityEvents'), parent: SECURITY_PARENT },
+  { id: 'security-overview', label: t('common.app.views.layout.navSecurityOverview'), parent: SECURITY_PARENT.value },
+  { id: 'security-policies', label: t('common.app.views.layout.navSecurityPolicies'), parent: SECURITY_PARENT.value },
+  { id: 'security-rules', label: t('common.app.views.layout.navSecurityRules'), parent: SECURITY_PARENT.value },
+  { id: 'security-block-pages', label: t('common.app.views.layout.navSecurityBlockPages'), parent: SECURITY_PARENT.value },
+  { id: 'security-events', label: t('common.app.views.layout.navSecurityEvents'), parent: SECURITY_PARENT.value },
   { id: 'caddy', label: t('common.app.views.layout.navCaddy') },
   { id: 'users', label: t('common.app.views.layout.navUsers'), parent: settingsBreadcrumbParent() },
   { id: 'audit-log', label: t('common.app.views.layout.navAuditLog') },

@@ -133,8 +133,10 @@ func VerifyCrawler(ip, engineID string) CrawlerVerdict {
 		if !acquireCrawlerSlot() {
 			return CrawlerVerdictTransient // 瞬态资源饱和：本次不形成持久结论。
 		}
+		// defer 释放：验证本体 panic 时槽位同样归还（非 defer 释放会让
+		// 泄漏累积，满员后全部爬虫验证永久退化为瞬态）。
+		defer releaseCrawlerSlot()
 		verified, dnsCacheable := verifyCrawlerDNS(ip, engineID)
-		releaseCrawlerSlot()
 		cacheable = dnsCacheable
 		if verified {
 			verdict = CrawlerVerdictVerified

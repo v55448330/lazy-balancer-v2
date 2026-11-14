@@ -7,6 +7,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -96,8 +97,8 @@ func TestGetSystemTaskHistory_mapsCertJobRowToRunRecord(t *testing.T) {
 	if run.TaskID != "cert-job:"+strconv.FormatInt(jobID, 10) || run.Family != "cert-job" || run.Trigger != "queue" {
 		t.Fatalf("run identity=(%q,%q,%q), want cert-job/queue", run.TaskID, run.Family, run.Trigger)
 	}
-	if run.Status != "issued" || run.Message != "签发完成" || run.ID != jobID {
-		t.Fatalf("run=(%+v), want status/message/id 取自 cert_jobs 行", run)
+	if run.Status != "success" || run.Message != "签发完成" || run.ID != jobID {
+		t.Fatalf("run=(%+v), want status=引擎词表映射(issued→success)/message/id 取自 cert_jobs 行", run)
 	}
 	if run.StartedAt != "2026-10-20 12:00:00" || run.FinishedAt != "2026-10-20 12:00:05" {
 		t.Fatalf("时间墙串=(%q,%q), want 配置时区(+8)串", run.StartedAt, run.FinishedAt)
@@ -176,6 +177,41 @@ func TestGetSystemTaskHistory_certJobFlatUTCLayout(t *testing.T) {
 	}
 	if run.DurationMs != 5000 {
 		t.Fatalf("duration_ms=%d, want 5000", run.DurationMs)
+	}
+}
+
+// Given 覆盖 cert_jobs 业务态代表形态的证书任务行。
+// When 请求 cert-job 历史。
+// Then status 落引擎结果词表（与列表 last_run.result 同一单源
+// services.CertJobTaskResult）——业务态直通会让前端结果列恒显「未知」。
+func TestGetSystemTaskHistory_certJobStatusUsesEngineVocabulary(t *testing.T) {
+	h := newBackupTestHandlers(t)
+	cases := []struct{ status, want string }{
+		{"issued", "success"},
+		{"downloaded", "success"},
+		{"failed", "failed"},
+		{"disabled", "skipped"},
+		{"queued", "running"},
+		{"waiting_ca", "running"},
+		{"creating_order", "running"},
+	}
+	for i, tc := range cases {
+		result, err := db.DB.Exec(`INSERT INTO cert_jobs (rule_id, domain, status) VALUES (?,?,?)`,
+			"lb_vocab", fmt.Sprintf("vocab-%d.example.test", i), tc.status)
+		if err != nil {
+			t.Fatalf("seed %s: %v", tc.status, err)
+		}
+		jobID, err := result.LastInsertId()
+		if err != nil {
+			t.Fatal(err)
+		}
+		recorder, response := getTaskHistory(t, h.GetSystemTaskHistory, "cert-job:"+strconv.FormatInt(jobID, 10))
+		if recorder.Code != http.StatusOK || len(response.Data.Runs) != 1 {
+			t.Fatalf("%s: status=%d runs=%d, want 200/1", tc.status, recorder.Code, len(response.Data.Runs))
+		}
+		if got := response.Data.Runs[0].Status; got != tc.want {
+			t.Fatalf("%s 历史 status=%q, want %q（引擎词表映射）", tc.status, got, tc.want)
+		}
 	}
 }
 

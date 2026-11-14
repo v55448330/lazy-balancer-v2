@@ -50,14 +50,17 @@ if ! controlled=$(git ls-files --cached --others --exclude-standard); then
   echo "ERROR: git ls-files 失败——必须在 git 检出内运行本守卫" >&2
   exit 1
 fi
-
 # 构建产物/运行数据/本地工具目录一律不入扫描面（.gitignore 已覆盖大部分，
 # 这里再显式声明一次：守卫不依赖 .gitignore 的完整性来避免扫描噪声）。
 # WAF 运行目录按「waf」+ 可选后缀分隔符收窄（waf/、waf-slave/、waf.dist/、
 # waf.log/）：宽形态 `waf[^/]*/` 会连带命中嵌套 Go 模块 wafiplist/，把整个模块
 # 从路径与内容两条通道同时摘掉——模块里的注释编号与轮次测试文件名因此永不入面
 # （永久静默盲区）。运行目录以 `-`/`.` 起后缀，模块名不会。
-skip_re='^(\.git/|(.*/)?node_modules/|(.*/)?dist/|ui/|(.*/)?backup[^/]*/|(.*/)?data[^/]*/|(.*/)?logs[^/]*/|(.*/)?certs[^/]*/|(.*/)?waf([-.][^/]*)?/|test-ui/|test-data/|(\.(omp|agent|superpowers|omo|sisyphus|opencode|worktrees|playwright-mcp))/)'
+# backup/data/logs/certs 四族同理收窄为**仅根目录**运行时目录（backup/、
+# data/、logs/、certs/）：宽形态 `(.*/)?data[^/]*/` 会把 internal/database/、
+# pkg/backup2024/ 这类源码目录从两条通道同时摘掉（潜在静默盲区）。运行时目录
+# 只出现在仓根；嵌套同名目录是源码，必须入面。
+skip_re='^(\.git/|(.*/)?node_modules/|(.*/)?dist/|ui/|backup/|data/|logs/|certs/|(.*/)?waf([-.][^/]*)?/|test-ui/|test-data/|(\.(omp|agent|superpowers|omo|sisyphus|opencode|worktrees|playwright-mcp))/)'
 
 # ---------------------------------------------------------------------------
 # 审计产物路径模式——单一事实源。

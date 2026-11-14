@@ -199,6 +199,7 @@ func TestUpdateCertificateConfig_corruptedStoredCredentialsReturns500(t *testing
 // When 定向签发。
 // Then 409 并点名可操作原因（审计结果 skipped），不得折成 500。
 func TestIssueCertificate_directedEnqueueConflictReturns409(t *testing.T) {
+	withIsolatedGlobal(t)
 	h := newBackupTestHandlers(t)
 	initIssueQueue(t)
 	seedIssueRule(t, "lb_enq_conflict", "enq-conflict.example.com")
@@ -230,6 +231,7 @@ func TestIssueCertificate_directedEnqueueConflictReturns409(t *testing.T) {
 // When 定向签发。
 // Then 500 只回固定前缀，底层文本只进运行日志。
 func TestIssueCertificate_directedInternalFailureHidesCause(t *testing.T) {
+	withIsolatedGlobal(t)
 	h := newBackupTestHandlers(t)
 	initIssueQueue(t)
 	seedIssueRule(t, "lb_enq_internal", "enq-internal.example.com")
@@ -259,6 +261,7 @@ func TestIssueCertificate_directedInternalFailureHidesCause(t *testing.T) {
 // When {"all":true}。
 // Then 整批 409（不得 500），文案点名可操作原因。
 func TestIssueCertificate_batchEnqueueConflictReturns409(t *testing.T) {
+	withIsolatedGlobal(t)
 	h := newBackupTestHandlers(t)
 	initIssueQueue(t)
 	seedIssueRule(t, "lb_batch_busy_a", "batch-busy-a.example.com")
@@ -288,6 +291,7 @@ func TestIssueCertificate_batchEnqueueConflictReturns409(t *testing.T) {
 // When {"all":true}。
 // Then 500 只回固定文案，失败明细（SQL 片段）只进运行日志。
 func TestIssueCertificate_batchInternalFailureHidesCause(t *testing.T) {
+	withIsolatedGlobal(t)
 	h := newBackupTestHandlers(t)
 	initIssueQueue(t)
 	seedIssueRule(t, "lb_batch_int_a", "batch-int-a.example.com")

@@ -7,7 +7,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"time"
 
 	"lazy-balancer-v2/internal/apimsg"
 
@@ -57,8 +56,7 @@ func (h *Handlers) GetHumanLiveChallenges(c *gin.Context) {
 	}
 	target := h.cfg.CaddyAdminURL + "/lb/human/live?scope=" + url.QueryEscape(scope)
 	out := humanLiveChallengePayload{Sessions: []humanLiveChallengeSession{}}
-	client := &http.Client{Timeout: 2 * time.Second}
-	resp, err := client.Get(target)
+	resp, err := humanAdminClient.Get(target)
 	if err == nil {
 		defer resp.Body.Close()
 		if resp.StatusCode == http.StatusOK {

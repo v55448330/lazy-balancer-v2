@@ -976,6 +976,11 @@ func (s *CertificateService) rescanDroppedDeploymentRetries(gates ...func() erro
 	if db.DB == nil {
 		return 0, nil
 	}
+	// 在途守卫与 requeueLostMaterialCertJob 同口径：签发执行仍在途（含
+	// downloaded/cleanup_* 进度已落库、DNS 清理未结束的窗口）时不得抢先部署
+	// 旧库材料——行被提交成 issued 后 worker 的部署确认拒绝该源态，新材料
+	// 静默丢弃。队列未就绪（nil）时不拦，维持既有恢复语义。
+	qm := GetCAQueueManager()
 	settleMinutes := int(deploymentWindowNullSettle / time.Minute)
 	rows, err := db.DB.Query(`
 		SELECT j.id, COALESCE(j.rule_id,''), COALESCE(j.domain,''), COALESCE(j.ca_provider_id,0), COALESCE(j.deployment_attempts,0),
@@ -1045,6 +1050,9 @@ func (s *CertificateService) rescanDroppedDeploymentRetries(gates ...func() erro
 	}()
 	for _, job := range jobs {
 		if !certJobRuleApplicable(job.applicable, job.ruleDomain, job.jobDomain) {
+			continue
+		}
+		if qm != nil && qm.IsJobActive(job.id) {
 			continue
 		}
 		// 写前门（逐项）：本路径的两个写面（无材料行转 queued / 登记部署 timer
@@ -2078,7 +2086,7 @@ func upsertQueuedCertJob(ruleID string, list []string, caProviderID int) (int, b
 			last_error_code = NULL,
 			ca_provider_id = excluded.ca_provider_id,
 			updated_at = datetime('now')
-		WHERE cert_jobs.status IN ('waiting_ca','issued','failed','downloaded','disabled')
+		WHERE cert_jobs.status IN ('waiting_ca','issued','failed',`+DeploymentLifecycleJobStatusSQL+`,'disabled')
 		  AND EXISTS (
 			SELECT 1 FROM lb_rules r
 			WHERE r.caddy_id=cert_jobs.rule_id AND r.enabled=1 AND r.enable_tls=1

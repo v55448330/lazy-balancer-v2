@@ -30,22 +30,35 @@ def scan(path):
     for i, ln in enumerate(lines, 1):
         s = ln.strip()
         if in_comment:
-            in_comment = s.endswith('*/') and not s.startswith('*/') or (in_comment and not s.endswith('*/'))
-            continue
-        if s.startswith('/*'):
-            in_comment = not s.endswith('*/')
-            continue
+            # 块注释内：找本行的 */ 闭合点。闭合后同行剩余代码仍要提取；
+            # 旧状态机在同行闭合时不复位（恒 True），后续所有行被当注释漏提。
+            end = s.find('*/')
+            if end == -1:
+                continue
+            in_comment = False
+            s = s[end + 2:].strip()
+            if not s:
+                continue
+        elif s.startswith('/*'):
+            end = s.find('*/', 2)
+            if end == -1:
+                in_comment = True
+                continue
+            # 同行闭合：注释后的代码保留提取
+            s = s[end + 2:].strip()
+            if not s:
+                continue
         if s.startswith('//') or s.startswith('<!--'):
             continue
-        for m in TPL_ATTR.finditer(ln):
+        for m in TPL_ATTR.finditer(s):
             out.append({'line': i, 'text': m.group(2), 'kind': 'tpl-attr'})
-        for m in TPL_TEXT.finditer(ln):
+        for m in TPL_TEXT.finditer(s):
             t = m.group(1).strip()
             if t:
                 out.append({'line': i, 'text': t, 'kind': 'tpl-text'})
         # JS 字符串:排除已被 tpl-attr 命中的行内重复(粗口径,人工复核)
-        if '<template' not in ln:
-            for m in JS_STR.finditer(ln):
+        if '<template' not in s:
+            for m in JS_STR.finditer(s):
                 t = m.group(0)[1:-1]
                 out.append({'line': i, 'text': t, 'kind': 'js-str'})
     return out

@@ -258,8 +258,9 @@ func TestCAQueueManager_enqueueCompensation_pauseDuringProviderResolveRejectsLat
 
 // newEmptyQueueManager 直构一个零队列、不启动 worker 的管理器：收尾守卫用例
 // 只关心「解析窗口结束后是否新建队列/pending 项」。不复用 newStubbedQueueManager
-// 是因为它预置的队列从不启动 loop，而 PauseAndDrain 对未启动 loop 的队列会
-// 永久等待 loopDone（本组用例不得靠超时判定）。
+// 是因为它预置了带 pending/active 登记的队列——PauseAndDrain 会等在途执行
+// 退出并走退役队列登记，收尾断言「零队列/零 pending」将不成立（自建泵退役后
+// q.wait 只等在途 executions，无 loopDone 可等；本组用例不得靠超时判定）。
 func newEmptyQueueManager(t *testing.T) (*CAQueueManager, int) {
 	t.Helper()
 	result, err := db.DB.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,ca_provider_id) VALUES ('lb_queue_lock_scope','lock-scope.example.com','queued',1)`)

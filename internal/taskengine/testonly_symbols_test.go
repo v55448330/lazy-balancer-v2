@@ -17,8 +17,9 @@ import (
 // 声明保留在 engine.go——跨包测试经导出方法调用；本守卫钉的是「生产零调用」：
 // 产品文件新增调用即把已收口的入口拉回主链。扫描面=本包产品文件 + 仓库
 // internal/ 与 cmd/ 全部产品文件（跨包接线同样不得消费 test-only 入口；
-// 此前只扫本包，跨包违规不红）。白名单符号若被改名/删除，声明计数断言
-// 会让守卫响亮失效，防止清单空转。
+// 此前只扫本包，跨包违规不红）。白名单声明计数只统计本包产品文件——
+// 他包同名 FuncDecl 不得顶替本包声明（否则本包入口被删时守卫仍绿，
+// 白名单过期检查空转）。符号若被改名/删除，声明计数断言会让守卫响亮失效。
 func TestEnginePackageHasNoProductionReferencesToTestOnlyEntryPoints(t *testing.T) {
 	testOnly := map[string]bool{
 		"Trigger":    true,
@@ -28,7 +29,7 @@ func TestEnginePackageHasNoProductionReferencesToTestOnlyEntryPoints(t *testing.
 	}
 	fset := token.NewFileSet()
 	declared := map[string]int{}
-	scanFile := func(path, display string) {
+	scanFile := func(path, display string, countDeclarations bool) {
 		file, err := parser.ParseFile(fset, path, nil, 0)
 		if err != nil {
 			t.Fatalf("parse %s: %v", path, err)
@@ -36,7 +37,7 @@ func TestEnginePackageHasNoProductionReferencesToTestOnlyEntryPoints(t *testing.
 		ast.Inspect(file, func(n ast.Node) bool {
 			switch node := n.(type) {
 			case *ast.FuncDecl:
-				if testOnly[node.Name.Name] {
+				if countDeclarations && testOnly[node.Name.Name] {
 					declared[node.Name.Name]++
 				}
 			case *ast.CallExpr:
@@ -64,7 +65,7 @@ func TestEnginePackageHasNoProductionReferencesToTestOnlyEntryPoints(t *testing.
 		if entry.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
 			continue
 		}
-		scanFile(name, name)
+		scanFile(name, name, true)
 	}
 	// 跨包产品文件：internal/ 与 cmd/ 全量（测试 cwd=包目录，仓库根=../..）。
 	scanned := 0
@@ -78,7 +79,7 @@ func TestEnginePackageHasNoProductionReferencesToTestOnlyEntryPoints(t *testing.
 			}
 			scanned++
 			rel, _ := filepath.Rel(filepath.Join("..", ".."), path)
-			scanFile(path, filepath.ToSlash(rel))
+			scanFile(path, filepath.ToSlash(rel), false)
 			return nil
 		})
 		if err != nil {

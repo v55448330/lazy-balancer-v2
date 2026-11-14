@@ -11,18 +11,18 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { code, openTags, repoCode, section } from './_helpers.ts'
+import { code, goConstInt, openTags, repoCode, section } from './_helpers.ts'
 
 /** Go 侧上限常量声明；缺失时硬失败（不得回退到字面量）。 */
 const certJobRowsLimit = (): number => {
-  const go = repoCode('internal/services/taskmonitor.go')
-  const declared = /^const certJobRowsLimit = (\d+)$/m.exec(go)
-  assert.ok(declared, '后端缺 certJobRowsLimit 常量声明（前端行数文案的权威值）')
+  // 声明提取走 goConstInt 单源（缺失即抛错）。
+  const limit = goConstInt('internal/services/taskmonitor.go', 'certJobRowsLimit')
   // 常量必须真的是切片上限：探针 +1 查询、超出即截断——否则「对表」对上的是死值。
+  const go = repoCode('internal/services/taskmonitor.go')
   assert.match(go, /certJobRowsLimit\+1\)/, '查询必须多取 1 行作截断探针')
   assert.match(go, /truncated := len\(out\) > certJobRowsLimit/, '超出上限必须置 truncated')
   assert.match(go, /out = out\[:certJobRowsLimit\]/, '输出必须按该常量切片')
-  return Number(declared[1])
+  return limit
 }
 
 const page = code('src/views/settings/TaskMonitor.vue')

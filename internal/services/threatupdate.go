@@ -81,6 +81,11 @@ type ThreatUpdateManager struct {
 // 调度器（首轮即下载）带进无关测试。
 var threatUpdateManager *ThreatUpdateManager
 
+// threatRunPanicHookForTest 在 runWithContext 入口（内层 recover 注册之后）
+// 提供确定性 panic 注入缝，用于钉住 StartUpdate 外层兜底 recover 的 failed
+// 终态；生产恒 nil。
+var threatRunPanicHookForTest func()
+
 // InitThreatUpdateManager 初始化单例（main.go 启动装配调用一次）。
 func InitThreatUpdateManager() {
 	threatUpdateManager = &ThreatUpdateManager{}
@@ -197,6 +202,11 @@ func (m *ThreatUpdateManager) StartUpdate(trigger string, rc *taskengine.RunCont
 				Logf("error", "threat update: run panicked: %v\n%s", r, debug.Stack())
 				m.mu.Lock()
 				m.running = false
+				// 兜底 recover 同样落定 failed 终态（与 runWithContext 内层
+				// recover 同口径）：仅复位 running 会让 status 端点滞留上一轮
+				// 终态/首轮空串，任务监控把 panic 轮误读成上一轮结果。
+				m.lastFinishedAt = time.Now().UTC().Format(crsTimeLayout)
+				m.lastTaskOutcome = "failed"
 				m.mu.Unlock()
 			}
 		}()
@@ -369,6 +379,12 @@ func (m *ThreatUpdateManager) runWithContext(runCtx context.Context, trigger str
 			m.lastFinishedAt = time.Now().UTC().Format(crsTimeLayout)
 			m.lastTaskOutcome = "failed"
 			m.mu.Unlock()
+		}
+		// 兜底路径注入缝：在内层 recover 的 defer 体内 panic 会逃逸到
+		// StartUpdate 外层 recover（模拟「defer 自身 panic」形态），用于钉住
+		// 外层兜底同样落定 failed 终态；生产恒 nil，不触发。
+		if threatRunPanicHookForTest != nil {
+			threatRunPanicHookForTest()
 		}
 	}()
 	// 本轮四个状态字段在角色门之前初始化——旧实现 skipped

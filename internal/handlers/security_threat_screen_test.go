@@ -1000,6 +1000,7 @@ func TestThreatFixMinute_groupsByRuleIdentityColumns(t *testing.T) {
 
 func installThreatClock(t *testing.T, now time.Time) {
 	t.Helper()
+	withIsolatedGlobal(t)
 	old := threatScreenNow
 	threatScreenNow = func() time.Time { return now }
 	t.Cleanup(func() { threatScreenNow = old })
@@ -1033,6 +1034,7 @@ func threatRollupCountForMinute(t *testing.T, minute string) int {
 }
 
 func TestThreatRollup_previousMinuteFinalizedAfterLateWrites(t *testing.T) {
+	withIsolatedGlobal(t)
 	setupSecurityPolicyTestDB(t)
 	base := time.Date(2026, 10, 18, 12, 0, 30, 0, time.UTC)
 	installThreatClock(t, base)
@@ -1239,6 +1241,7 @@ func TestEnsureThreatRollup_backfillBatchedNoLockStarvation(t *testing.T) {
 }
 
 func TestThreatScreen_lastSumQueryFailure_returns500(t *testing.T) {
+	withIsolatedGlobal(t)
 	setupSecurityPolicyTestDB(t)
 	router := newThreatScreenRouter(t, newThreatMetricsServer(t).URL)
 	old := queryThreatRecentBlocked

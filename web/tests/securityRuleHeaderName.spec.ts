@@ -82,7 +82,13 @@ test('警示样式单源：port-warning 全局类、regex-error-icon 警示色�
   const portDecls = cssDeclarations(mainCss, '.port-warning')
   assert.equal(portDecls.get('color'), '#eab308', '全局警示色类收敛 main.css')
   // 级联钉：与 .form-tip-line 同特异性（0,1,0），必须声明在后才能覆盖其灰字色。
-  assert.ok(mainCss.indexOf('.port-warning {') > mainCss.indexOf('.form-tip-line {'), 'port-warning 必须声明在 form-tip-line 之后（同特异性靠源序覆盖）')
+  // 两侧都必须先存在：form-tip-line 被删时 indexOf=-1，「任何位置 > -1」恒真，
+  // 级联断言空转（覆盖对象消失不等于覆盖成立）。
+  const tipAt = mainCss.indexOf('.form-tip-line {')
+  const warnAt = mainCss.indexOf('.port-warning {')
+  assert.ok(tipAt >= 0, '.form-tip-line 声明必须在场（级联覆盖的左操作数）')
+  assert.ok(warnAt >= 0, '.port-warning 声明必须在场')
+  assert.ok(warnAt > tipAt, 'port-warning 必须声明在 form-tip-line 之后（同特异性靠源序覆盖）')
   const rulesScoped = code('src/views/Rules.vue')
   assert.doesNotMatch(rulesScoped, /\.port-warning\s*\{/, 'Rules.vue scoped 重复定义必须移除（禁止组件内重复定义全局类）')
   assert.match(page, /class="form-tip-line port-warning"/, 'SecurityRules 引用全局类')

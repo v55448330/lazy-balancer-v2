@@ -111,3 +111,4 @@ docs/audit/
 
 # 本地开发容器覆盖层（开发线 beta 通道，不入库）
 docker-compose.override.yml
+__pycache__/

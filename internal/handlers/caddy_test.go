@@ -23,6 +23,7 @@ import (
 )
 
 func TestCaddyLifecycleHandlers_wait_for_rule_operation_lock(t *testing.T) {
+	withIsolatedGlobal(t)
 	// 测试隔离——注入临时 pause/pid 路径与失败命令桩，避免
 	// 写真实 /tmp/lazy-balancer-caddy-paused 或执行真实 caddy run/stop。
 	// 命令桩恒失败，锁释放后的 handler 快速返回，不会走到 nil caddyService。
@@ -240,6 +241,7 @@ func TestGetCaddyStatus_fallsBackToProcWhenAdminUnreachable(t *testing.T) {
 }
 
 func TestStartCaddy_does_not_overlap_UpdateRule(t *testing.T) {
+	withIsolatedGlobal(t)
 	harness := newUpdateAuditRuleHandlers(t, "lb_lifecycle", 0, true)
 	seedAuditRule(t, "lb_lifecycle", "original", "lifecycle.example.test", 8080, true, "manual", false)
 	seedAuditUpstream(t, "lb_lifecycle")
@@ -285,6 +287,7 @@ func TestStartCaddy_does_not_overlap_UpdateRule(t *testing.T) {
 }
 
 func TestStartCaddy_returns_500_when_process_exits_before_ready(t *testing.T) {
+	withIsolatedGlobal(t)
 	original := caddyRunCommand
 	caddyRunCommand = func() *exec.Cmd { return exec.Command("sh", "-c", "exit 7") }
 	t.Cleanup(func() { caddyRunCommand = original })
@@ -588,6 +591,7 @@ func TestUpdateConfig_appliesExactlyOnce(t *testing.T) {
 // 应答→reapply_last_good churn；败者=直启实例时假 500）。修复后返回明确错误，
 // 留给监督器继续拉起。
 func TestStartCaddy_supervisorTimeoutDoesNotDirectSpawn(t *testing.T) {
+	withIsolatedGlobal(t)
 	// Given：监督器标记在场（pid 存活——自此在场判定含 pid 校验，
 	// 伪 /proc 种活 pid）+ admin 死端口不就绪 + 调小委托等待
 	dir := t.TempDir()
@@ -634,6 +638,7 @@ func TestStartCaddy_supervisorTimeoutDoesNotDirectSpawn(t *testing.T) {
 // 陈旧标记——标记留存无害（supervisorAlive 按 pid 存活判定消化），而误删
 // 监督器并发首写的在位标记会永久失标（直启与监督器拉起双启抢口）。
 func TestStartCaddy_staleSupervisorMarkerFallsBackToDirectSpawn(t *testing.T) {
+	withIsolatedGlobal(t)
 	// Given：标记在场记死 pid + 空 /proc 视图 + 就绪 admin
 	dir := t.TempDir()
 	pidFile := filepath.Join(dir, "supervisor.pid")
@@ -689,6 +694,7 @@ func TestStartCaddy_staleSupervisorMarkerFallsBackToDirectSpawn(t *testing.T) {
 // 委托空等 5s 超时报错，直启兜底永不可达。修复后读 /proc/<pid>/stat 状态
 // 字节，Z 视死 → 落直启恢复。
 func TestStartCaddy_zombieSupervisorFallsBackToDirectSpawn(t *testing.T) {
+	withIsolatedGlobal(t)
 	// Given：标记在场记僵尸监督器 pid + 伪 /proc 种 Z 状态 + 就绪 admin
 	dir := t.TempDir()
 	pidFile := filepath.Join(dir, "supervisor.pid")

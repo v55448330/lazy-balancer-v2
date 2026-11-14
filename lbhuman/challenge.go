@@ -128,6 +128,10 @@ func (h *HumanHandler) serveChallengeByType(w http.ResponseWriter, r *http.Reque
 // jsWidgetHTML 自定义挑战页的 JS 验证组件（{{human_js_widget}} 替换目标）。
 // 与滑块组件并列、互不干扰：滑块用 {{human_verify_widget}}。内联样式隔离
 // （类名前缀 lb-hv-js），直角方形、英文状态，零外部资源。
+// 已知限制（如实披露）：PoW 依赖 crypto.subtle，仅安全上下文可用
+// （HTTPS/localhost）——纯 HTTP 站点访客无法完成 JS 验证，组件在该分支
+// 给出「改用 HTTPS 访问」的可操作提示；生产部署强制 HTTPS，此形态仅
+// 裸 HTTP 直连出现。需要纯 HTTP 可用时应选滑块方式（不依赖 WebCrypto）。
 const jsWidgetHTML = `<div class="lb-hv-js" style="width:280px;max-width:100%%;margin:18px auto 0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif">
 <style>
 .lb-hv-js *{box-sizing:border-box}
@@ -149,7 +153,7 @@ var token="%s",redirect=%s,root=document.currentScript.parentNode,st=root.queryS
 function fail(msg){root.classList.add("lb-hv-js-error");st.textContent=msg;st.className="lb-hv-js-status lb-hv-js-fail"}
 function sha256Hex(msg){return crypto.subtle.digest("SHA-256",new TextEncoder().encode(msg)).then(function(buf){return Array.from(new Uint8Array(buf)).map(function(b){return b.toString(16).padStart(2,"0")}).join("")})}
 async function solve(){var nonce=0,start=Date.now();for(;;){var hex=await sha256Hex(token+nonce);if(hex.indexOf(prefix)===0)return String(nonce);nonce++;if(nonce%%512===0){st.textContent="Verifying your browser… ("+nonce+")";await new Promise(function(r){setTimeout(r,0)});if(Date.now()-start>30000)throw new Error("timeout")}}}
-if(!window.crypto||!crypto.subtle){fail("This browser cannot complete verification.");return}
+if(!window.crypto||!crypto.subtle){fail("Verification requires a secure connection. Please open this site via HTTPS.");return}
 solve().then(function(nonce){return fetch("/__lb/human/verify",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},credentials:"same-origin",body:"token="+encodeURIComponent(token)+"&nonce="+encodeURIComponent(nonce)})}).then(function(res){
 if(!res.ok)throw new Error("verify failed");
 root.classList.add("lb-hv-js-done");st.textContent="Verified";st.className="lb-hv-js-status lb-hv-js-ok";setTimeout(function(){window.location.href=redirect},400)}).catch(function(){fail("Verification failed, please reload the page.")})})();

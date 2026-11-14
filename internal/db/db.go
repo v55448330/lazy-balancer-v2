@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -441,6 +442,14 @@ func Initialize(dataDir string) (err error) {
 	if err := ensureClusterAppliedSections(); err != nil {
 		return fmt.Errorf("failed to ensure cluster_applied_sections: %w", err)
 	}
+	// cookie 签名密钥启动播种：渲染链在写事务内只读密钥——此前惰性生成在
+	// 渲染事务外自写 global_config，与自身事务的写锁冲突（WAL 单写者 +
+	// busy_timeout 硬等），失败被吞后密钥仅存进程内存（重启 cookie 全失效、
+	// 主从分叉）。迁移期播种（仅空值写，幂等；非空值=集群/导入携带，不覆盖），
+	// 写失败响亮阻断启动，不留空密钥静默放行。
+	if err := seedHumanSecretAtStartup(); err != nil {
+		return fmt.Errorf("failed to seed human_secret: %w", err)
+	}
 
 	if initErr := InitializeAuditDB(dataDir); initErr != nil {
 		auditDB = AuditDB
@@ -455,6 +464,28 @@ func Initialize(dataDir string) (err error) {
 	// （taskengine）——Initialize 不再自建后台循环。
 
 	log.Println("Database initialized successfully")
+	return nil
+}
+
+// seedHumanSecretAtStartup 播种 cookie 签名密钥（32 字节 hex）。只读探测门：
+// 仅空值写（幂等；非空值=集群 apply/备份导入携带，跨重启保留），收敛库二次
+// 启动零写。写失败上抛阻断启动——空密钥静默放行会退化回「渲染事务内惰性
+// 自写」形态（与自身事务写锁冲突 + 密钥仅存进程内存）。
+func seedHumanSecretAtStartup() error {
+	var secret string
+	if err := DB.QueryRow(`SELECT COALESCE(human_secret,'') FROM global_config WHERE id=1`).Scan(&secret); err != nil {
+		return fmt.Errorf("read human_secret: %w", err)
+	}
+	if secret != "" {
+		return nil
+	}
+	raw := make([]byte, 32)
+	if _, err := rand.Read(raw); err != nil {
+		return fmt.Errorf("generate human_secret: %w", err)
+	}
+	if _, err := DB.Exec(`UPDATE global_config SET human_secret=? WHERE id=1 AND COALESCE(human_secret,'')=''`, hex.EncodeToString(raw)); err != nil {
+		return fmt.Errorf("persist human_secret: %w", err)
+	}
 	return nil
 }
 
@@ -4501,13 +4532,13 @@ func migrateSecurityPoliciesNullable() error {
 		);
 		INSERT INTO security_policies_new (id,name,description,mode,anomaly_threshold,ip_acl_mode,ip_acl_list,ip_acl_enabled,
 			ip_whitelist,ip_blacklist,crs_rule_groups,crs_excluded_rules,
-			custom_rules,block_page_id,block_status_code,enabled,updated_by,created_at,updated_at,ip_whitelist_enabled,geoip_countries,geoip_mode,waf_check_response,
+			custom_rules,block_page_id,block_status_code,block_response_mode,enabled,updated_by,created_at,updated_at,ip_whitelist_enabled,geoip_countries,geoip_mode,waf_check_response,
 			log_request_body,ip_acl_list_refs,ip_whitelist_refs,policy_type,trust_detection,geoip_crawler_exempt,geoip_crawler_engines,
 			human_verify_mode,human_verify_type,human_verify_ttl,human_exempt_paths,
 			cc_detect_enabled,cc_rps_limit,cc_rps_window,cc_4xx_ratio,cc_session_anomaly,cc_session_ua_threshold)
 		SELECT id,name,description,mode,anomaly_threshold,ip_acl_mode,ip_acl_list,ip_acl_enabled,
 			ip_whitelist,ip_blacklist,crs_rule_groups,crs_excluded_rules,
-			custom_rules,block_page_id,block_status_code,enabled,updated_by,created_at,updated_at,COALESCE(ip_whitelist_enabled,1),geoip_countries,geoip_mode,waf_check_response,
+			custom_rules,block_page_id,block_status_code,COALESCE(block_response_mode,'auto'),enabled,updated_by,created_at,updated_at,COALESCE(ip_whitelist_enabled,1),geoip_countries,geoip_mode,waf_check_response,
 			COALESCE(log_request_body,0),COALESCE(ip_acl_list_refs,'[]'),COALESCE(ip_whitelist_refs,'[]'),policy_type,COALESCE(trust_detection,0),COALESCE(geoip_crawler_exempt,0),COALESCE(geoip_crawler_engines,'[]'),
 			COALESCE(human_verify_mode,'off'),COALESCE(human_verify_type,'slider'),COALESCE(human_verify_ttl,30),COALESCE(human_exempt_paths,'[]'),
 			COALESCE(cc_detect_enabled,0),COALESCE(cc_rps_limit,40),COALESCE(cc_rps_window,10),COALESCE(cc_4xx_ratio,70),COALESCE(cc_session_anomaly,0),COALESCE(cc_session_ua_threshold,5)

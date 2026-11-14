@@ -559,6 +559,7 @@ func TestIssueCertificate_waitingCACoolingRequiresForce(t *testing.T) {
 // When 签发入口返回 500。
 // Then 两种失败审计都必须保留「手动越过 CA 冷却」；只有 changed=false 才不得记。
 func TestIssueCertificate_forceFailureAuditKeepsCooldownOverride(t *testing.T) {
+	withIsolatedGlobal(t)
 	for _, tc := range []struct {
 		name string
 		all  bool

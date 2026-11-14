@@ -1611,6 +1611,10 @@ const deleteIpList = (row: IPListRow) => {
 // —— 条目纯前端导入/导出：只修改弹框内条目表，点保存前不落库 ——
 const importEntriesInput = ref<HTMLInputElement | null>(null)
 
+// 导入体积上限与备份导入同口径（BasicSettings IMPORT_MAX_BYTES=128MB）：
+// readAsText 前拒绝超大文件，防全量读入内存冻结标签页（自伤边界）。
+const IP_LIST_IMPORT_MAX_BYTES = 128 * 1024 * 1024
+
 const triggerImportEntries = (): void => {
   importEntriesInput.value?.click()
 }
@@ -1625,6 +1629,10 @@ const onImportEntriesFileChange = (event: Event): void => {
   const file = input.files?.[0]
   input.value = '' // 复位以支持再次选择同一文件
   if (!file) return
+  if (file.size > IP_LIST_IMPORT_MAX_BYTES) {
+    ElMessage.error(t('common.app.views.secRules.msgs.importFileTooLarge', { maxMb: Math.round(IP_LIST_IMPORT_MAX_BYTES / (1024 * 1024)) }))
+    return
+  }
   const reader = new FileReader()
   reader.onload = () => {
     const text = typeof reader.result === 'string' ? reader.result : ''

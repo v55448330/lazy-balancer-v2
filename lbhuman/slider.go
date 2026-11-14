@@ -44,23 +44,24 @@ var (
 	sliderPuzzlesMu sync.Mutex
 )
 
-// newSliderPuzzle 生成拼图：随机缺口 x（40%–85% 区段），TTL 2min。
+// newSliderPuzzle 生成拼图：随机缺口 x（可用区段 25%–75%，左右各留 12px
+// 边缘余量——避开左端起始与右端终点），TTL 2min。
 func newSliderPuzzle() *sliderPuzzle {
 	raw := make([]byte, 8)
 	_, _ = rand.Read(raw)
 	id := hex.EncodeToString(raw)
-	// 缺口 x ∈ [40%, 85%] 区段（避开左端起始与右端终点）
+	// 缺口 x ∈ 可用区段 [25%, 75%]（避开左端起始与右端终点）
 	margin := 12 // 缺口不贴拼图左右边缘
 	usable := float64(sliderWidth - sliderPieceSize - margin*2)
 	minX := margin + int(usable*0.25)
 	maxX := margin + int(usable*0.75)
 	gapX := minX + int(raw[0])%(maxX-minX+1)
-	p := &sliderPuzzle{id: id, gapX: gapX, createdAt: time.Now()}
+	p := &sliderPuzzle{id: id, gapX: gapX, createdAt: timeNow()}
 	sliderPuzzlesMu.Lock()
 	sliderPuzzles[id] = p
 	// 清理过期
 	for k, v := range sliderPuzzles {
-		if time.Since(v.createdAt) > sliderPuzzleTTL {
+		if timeNow().Sub(v.createdAt) > sliderPuzzleTTL {
 			delete(sliderPuzzles, k)
 		}
 	}
@@ -125,7 +126,7 @@ const humanSliderVerifyPath = "/__lb/human/slider-verify"
 
 // sliderVerify 校验：x 偏移容差 + 轨迹合理性（采样点数/时长/加速度方差）。
 func sliderVerify(p *sliderPuzzle, x int, track []int, durationMs int) bool {
-	if p == nil || time.Since(p.createdAt) > sliderPuzzleTTL {
+	if p == nil || timeNow().Sub(p.createdAt) > sliderPuzzleTTL {
 		return false
 	}
 	if int(math.Abs(float64(x-p.gapX))) > sliderTolerance {
@@ -135,10 +136,8 @@ func sliderVerify(p *sliderPuzzle, x int, track []int, durationMs int) bool {
 	if len(track) < 8 || durationMs < 300 || durationMs > 10000 {
 		return false
 	}
-	// 加速度方差（相邻位移差的方差）——匀速直线拖动方差=0（脚本特征）
-	if len(track) < 3 {
-		return false
-	}
+	// 加速度方差（相邻位移差的方差）——匀速直线拖动方差=0（脚本特征）。
+	// 点数下限已由上方 len(track)<8 把守，无需二次判 len<3。
 	deltas := make([]float64, len(track)-1)
 	for i := 1; i < len(track); i++ {
 		deltas[i-1] = float64(track[i] - track[i-1])
@@ -167,7 +166,7 @@ func consumeSliderPuzzle(id string) *sliderPuzzle {
 	if !ok {
 		return nil
 	}
-	if time.Since(p.createdAt) > sliderPuzzleTTL {
+	if timeNow().Sub(p.createdAt) > sliderPuzzleTTL {
 		delete(sliderPuzzles, id)
 		return nil
 	}

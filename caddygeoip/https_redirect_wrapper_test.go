@@ -262,14 +262,14 @@ func TestHTTPSRedirectSplit_oversizedHeaderRejected400(t *testing.T) {
 	for i := range chunk {
 		chunk[i] = 'a'
 	}
+	// 服务端读满 1MiB 帽即回 400 并关连接——剩余字节的写入可能撞上
+	// broken pipe（对端已不再读），属预期竞态：写失败即停，断言以应答为准。
 	for written := 0; written < 2<<20; written += len(chunk) {
 		if _, err := client.Write(chunk); err != nil {
-			t.Fatal(err)
+			break
 		}
 	}
-	if _, err := client.Write([]byte("\r\n\r\n")); err != nil {
-		t.Fatal(err)
-	}
+	_, _ = client.Write([]byte("\r\n\r\n"))
 	resp := readResponse(t, client)
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("status=%d, want 400（超大头必须被拒，不得无界读入内存）", resp.StatusCode)

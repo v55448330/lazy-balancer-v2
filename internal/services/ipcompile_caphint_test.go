@@ -3,6 +3,7 @@ package services
 import (
 	"net/netip"
 	"testing"
+	"unsafe"
 )
 
 // .iplist 编译容量预估必须封顶（对齐 wafiplist.prefixCapHint 口径）：
@@ -36,7 +37,10 @@ func TestCompilePrefixCapHint_cappedForCommentDenseFile(t *testing.T) {
 	if got := compilePrefixCapHint(1 << 40); got > capBound {
 		t.Fatalf("预分配 %d 超过容量上界 %d", got, capBound)
 	}
-	//  sanity：netip.Prefix 尺寸确认（每项 32B 量级）。
-	var p netip.Prefix
-	_ = p
+	// sanity：预分配上界的内存量级依赖 netip.Prefix 尺寸（注释口径 32B）——
+	// 尺寸漂移（如 netip 内部表示变更）时封顶常量必须重新核算，不得空转。
+	if got := unsafe.Sizeof(netip.Prefix{}); got != 32 {
+		t.Fatalf("netip.Prefix 尺寸=%d 字节, want 32（容量上界 %d 项 ≈ %d MiB 的口径失效）",
+			got, capBound, int64(capBound)*int64(got)/(1<<20))
+	}
 }

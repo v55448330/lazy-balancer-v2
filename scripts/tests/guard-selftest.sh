@@ -357,6 +357,69 @@ printf '// 88 轮修复：上游排除规则文案\n' >"$tmp_root/waf/crs/rules/
 git -C "$tmp_root" add -f waf/crs/rules/REQUEST-900-EXCLUSION.md
 assert_good "waf runtime dir stays out of scan surface"
 
+# 3e) backup/data/logs/certs 四族收窄为仅根目录运行时目录：嵌套同名前缀的
+#     源码目录（internal/database/、pkg/backup2024/ 等）必须留在两条通道扫描面
+#     内——宽形态 `(.*/)?data[^/]*/` 会把它们整体摘出（永久静默盲区）。
+reset_fixture
+mkdir_in internal/database/probe.go
+cat >"$tmp_root/internal/database/probe.go" <<'EOF'
+package database
+
+// 88 轮修复：连接池单飞。
+func noop() {}
+EOF
+git -C "$tmp_root" add -f internal/database/probe.go
+assert_bad "nested data* source dir is content-scanned" "internal/database/probe.go"
+
+reset_fixture
+mkdir_in pkg/backup2024/audit109_probe_test.go
+cat >"$tmp_root/pkg/backup2024/audit109_probe_test.go" <<'EOF'
+package backup2024
+
+func TestProbe(t *testing.T) {}
+EOF
+git -C "$tmp_root" add -f pkg/backup2024/audit109_probe_test.go
+assert_bad "nested backup* source dir is path-checked" "pkg/backup2024/audit109_probe_test.go"
+
+reset_fixture
+mkdir_in internal/logs_archive/probe.go
+cat >"$tmp_root/internal/logs_archive/probe.go" <<'EOF'
+package logs_archive
+
+// 88 轮修复：轮转落盘。
+func noop() {}
+EOF
+git -C "$tmp_root" add -f internal/logs_archive/probe.go
+assert_bad "nested logs* source dir is content-scanned" "internal/logs_archive/probe.go"
+
+reset_fixture
+mkdir_in internal/certs_old/probe.go
+cat >"$tmp_root/internal/certs_old/probe.go" <<'EOF'
+package certs_old
+
+// 88 轮修复：续期单飞。
+func noop() {}
+EOF
+git -C "$tmp_root" add -f internal/certs_old/probe.go
+assert_bad "nested certs* source dir is content-scanned" "internal/certs_old/probe.go"
+
+# 3f) 反向对照：根目录运行时目录（backup/ data/ logs/ certs/）仍在扫描面之外
+#     ——收窄不得把运行数据重新拉进文本扫描（噪声与误报）。
+reset_fixture
+mkdir_in data/runtime.md
+printf '// 88 轮修复：运行数据文案\n' >"$tmp_root/data/runtime.md"
+git -C "$tmp_root" add -f data/runtime.md
+mkdir_in backup/old.md
+printf '// 88 轮修复：备份数据文案\n' >"$tmp_root/backup/old.md"
+git -C "$tmp_root" add -f backup/old.md
+mkdir_in logs/run.md
+printf '// 88 轮修复：日志数据文案\n' >"$tmp_root/logs/run.md"
+git -C "$tmp_root" add -f logs/run.md
+mkdir_in certs/store.md
+printf '// 88 轮修复：证书数据文案\n' >"$tmp_root/certs/store.md"
+git -C "$tmp_root" add -f certs/store.md
+assert_good "root runtime dirs stay out of scan surface"
+
 # 4) 轮次测试文件名（.ts spec）
 reset_fixture
 mkdir_in web/src/views/round40_latency.spec.ts

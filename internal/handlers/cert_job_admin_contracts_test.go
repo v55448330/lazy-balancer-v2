@@ -109,7 +109,8 @@ func TestDeleteCertJobGuardedRecordsFailureAudit(t *testing.T) {
 }
 
 // 重试冷却门禁与文案必须同源：门禁说冷却中时文案不得显示「0s」，失败文案
-// 的分钟数由 services.CertJobRetryCooldown 派生（硬编码 5 分钟会随策略漂移）。
+// 的剩余秒由 services.CertJobRetryRemaining 按 updated_at 扣减后派生（完整
+// 窗口分钟数会在冷却过半后说谎；硬编码会随策略漂移）。
 func TestCertJobRetryCooldownGateAndMessageSharePolicy(t *testing.T) {
 	now := time.Now()
 
@@ -118,17 +119,21 @@ func TestCertJobRetryCooldownGateAndMessageSharePolicy(t *testing.T) {
 		t.Fatalf("message=%q, want 剩余约 1s（<1s 向上取整）", got)
 	}
 
-	// failed 窗口取自 services 单源：窗口内拦截且文案分钟数与窗口一致。
+	// failed 窗口取自 services 单源：窗口内拦截且文案剩余秒与同一判据一致
+	//（窗口剩 1s 时不得报完整窗口分钟数）。
 	window, retryable := services.CertJobRetryCooldown("failed")
 	if !retryable {
 		t.Fatal("failed 应可重试")
 	}
 	updated := sql.NullTime{Time: now.Add(-window + time.Second), Valid: true}
 	created := sql.NullTime{Time: now.Add(-window + time.Second), Valid: true}
+	wantSeconds, _ := services.CertJobRetryRemainingSeconds("failed", updated, created, sql.NullTime{}, now)
 	if blocked, code, message := certJobRetryBlocked("failed", updated, created, now); !blocked || code != http.StatusTooManyRequests {
 		t.Fatalf("blocked=%v code=%d, want true/429（窗口内）", blocked, code)
-	} else if !strings.Contains(message, strconv.Itoa(int(window/time.Minute))+" 分钟") {
-		t.Fatalf("message=%q, want 与策略窗口一致的分钟数", message)
+	} else if !strings.Contains(message, strconv.FormatInt(wantSeconds, 10)+" 秒") {
+		t.Fatalf("message=%q, want 与剩余秒判据一致的 %d 秒", message, wantSeconds)
+	} else if strings.Contains(message, strconv.Itoa(int(window/time.Minute))+" 分钟") {
+		t.Fatalf("message=%q, 冷却剩 %d 秒时不得报完整窗口分钟数", message, wantSeconds)
 	}
 
 	// 窗口外放行（同一来源判定）。

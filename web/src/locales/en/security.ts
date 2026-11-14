@@ -814,8 +814,6 @@ export default {
       '新疆维吾尔自治区': 'Xinjiang',
       '香港特别行政区': 'Hong Kong SAR',
       '澳门特别行政区': 'Macao SAR',
-      '广州': 'Guangzhou',
-      '武汉': 'Wuhan',
     },
      "crawlerLabel": "Crawler Exemption",
      "crawlerNoneWarn": "No engine selected: this exempts all engines (this state cannot be saved — select at least one engine or turn off crawler exemption)",

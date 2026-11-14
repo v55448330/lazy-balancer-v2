@@ -16,19 +16,15 @@ import {
   patternOverLimit,
 } from '../src/utils/customRuleLimits.ts'
 import { mergeConcurrentBanEntries } from '../src/utils/ipListSaveGuard.ts'
-import { code, openTags, repoCode, section } from './_helpers.ts'
+import { code, goConstExpr, goConstInt, openTags, section } from './_helpers.ts'
 
-const securityGo = repoCode('internal/services/security.go')
+const SECURITY_GO = 'internal/services/security.go'
 const page = code('src/views/security/SecurityRules.vue')
 
 test('条件数/pattern 上限与 Go 写侧门同值（改门即红）', () => {
-  const conditions = /customRuleMaxConditions = (\d+)/.exec(securityGo)
-  assert.ok(conditions, '后端缺 customRuleMaxConditions')
-  assert.equal(CUSTOM_RULE_MAX_CONDITIONS, Number(conditions[1]), '条件数上限漂移')
-
-  const patternBytes = /customRuleMaxPatternBytes = (\d+) << (\d+)/.exec(securityGo)
-  assert.ok(patternBytes, '后端缺 customRuleMaxPatternBytes')
-  assert.equal(CUSTOM_RULE_MAX_PATTERN_BYTES, Number(patternBytes[1]) * 2 ** Number(patternBytes[2]), 'pattern 字节上限漂移')
+  // 声明提取/求值走 goConstInt/goConstExpr 单源（缺失即抛错，不拿 undefined 对表）。
+  assert.equal(CUSTOM_RULE_MAX_CONDITIONS, goConstInt(SECURITY_GO, 'customRuleMaxConditions'), '条件数上限漂移')
+  assert.equal(CUSTOM_RULE_MAX_PATTERN_BYTES, goConstExpr(SECURITY_GO, 'customRuleMaxPatternBytes'), 'pattern 字节上限漂移')
 })
 
 test('pattern 上限按 UTF-8 字节求值（字符计数看不出中文超限）', () => {

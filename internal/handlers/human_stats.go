@@ -11,6 +11,11 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// humanAdminClient 人机验证运行态/统计共用的 Caddy admin HTTP 客户端（与
+// reqMonClient 同模式）：单源共享，面板 2s 轮询下连接池跨请求复用，避免各
+// 端点各自新建 client/各自维护超时形态。2s 超时，不阻塞总览加载。
+var humanAdminClient = &http.Client{Timeout: 2 * time.Second}
+
 // GetHumanVerifyStats GET /security/human/stats：人机验证挑战统计（Caddy admin
 // /lb/human/stats 拉取；端点缺失=旧二进制，返回全零不报错——与 l4-conn-stats
 // 同容错口径）。2s 超时，不阻塞总览加载。
@@ -23,8 +28,7 @@ func (h *Handlers) GetHumanVerifyStats(c *gin.Context) {
 		Fails      int64 `json:"fails"`
 	}
 	out := stats{}
-	client := &http.Client{Timeout: 2 * time.Second}
-	resp, err := client.Get(h.cfg.CaddyAdminURL + "/lb/human/stats")
+	resp, err := humanAdminClient.Get(h.cfg.CaddyAdminURL + "/lb/human/stats")
 	if err == nil {
 		defer resp.Body.Close()
 		if resp.StatusCode == http.StatusOK {

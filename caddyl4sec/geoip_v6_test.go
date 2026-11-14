@@ -184,8 +184,7 @@ func TestSharedGeoIPSearcher_v6CacheKeySeparates(t *testing.T) {
 	keyOff := v4 + "\x00"
 	keyOn := v4 + "\x00" + v6
 	t.Cleanup(func() {
-		delete(sharedSearchers, keyOff)
-		delete(sharedSearchers, keyOn)
+		removeSharedSearchersForTest(keyOff, keyOn)
 	})
 	off, err := sharedGeoIPSearcher(v4, "")
 	if err != nil {
@@ -219,9 +218,7 @@ func TestSharedGeoIPSearcher_probeTTLThrottlesFileIO(t *testing.T) {
 	delete(sharedSearchers, keyOn)
 	sharedSearcherMu.Unlock()
 	t.Cleanup(func() {
-		sharedSearcherMu.Lock()
-		delete(sharedSearchers, keyOn)
-		sharedSearcherMu.Unlock()
+		removeSharedSearchersForTest(keyOn)
 		resetSharedSearcherProbesForTest()
 	})
 
@@ -266,5 +263,23 @@ func TestSharedGeoIPSearcher_probeTTLThrottlesFileIO(t *testing.T) {
 	}
 	if headerLoads != 2 || stats != 4 {
 		t.Fatalf("expired probe must hit disk again: headerLoads=%d stats=%d", headerLoads, stats)
+	}
+}
+
+// removeSharedSearchersForTest 持锁摘除并关闭指定键的共享 searcher（测试
+// 清理统一入口）：直删 map 不持锁在并行化后是数据竞争，且不 Close 会泄漏
+// xdb fd/缓冲。关闭在锁外执行（CloseTimeout 可能等待在途借还）。
+func removeSharedSearchersForTest(keys ...string) {
+	sharedSearcherMu.Lock()
+	var entries []*sharedSearcherEntry
+	for _, key := range keys {
+		if e, ok := sharedSearchers[key]; ok {
+			entries = append(entries, e)
+			delete(sharedSearchers, key)
+		}
+	}
+	sharedSearcherMu.Unlock()
+	for _, e := range entries {
+		e.searcher.Close()
 	}
 }

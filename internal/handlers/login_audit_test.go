@@ -25,7 +25,13 @@ func setupLoginAuditDB(t *testing.T) {
 	if err := db.InitializeAuditDB(t.TempDir()); err != nil {
 		t.Fatalf("init audit db: %v", err)
 	}
-	t.Cleanup(func() { db.AuditDB = oldAudit })
+	// 直换包级句柄必须 Close 新句柄：否则每用例泄漏一个连接池（≤5 连接）
+	// 连同 fd 至进程退出（与 auditlog/auth_setup 夹具同口径）。
+	newAudit := db.AuditDB
+	t.Cleanup(func() {
+		db.AuditDB = oldAudit
+		_ = newAudit.Close()
+	})
 }
 
 // 登录成功审计详情含完整用户标识「用户 N（username）」,非裸数字 ID(2026-09-11 裁定)。

@@ -1,8 +1,9 @@
 package main
 
 // docker run 部署形态的停止宽限门：panel 的关停链预算是 processShutdownBudget
-// （最坏路径 25s：HTTP 在途请求 → Caddy 排水 → 引擎排空 → metrics/时区/日志
-// 轮转收尾 → ACME 收尾）。compose 的 stop_grace_period 由
+// （最坏路径 25s：HTTP 在途请求 → Caddy 排水 → 安全事件 IPC 关停 → 引擎排空
+// （watcher/warmer/metrics/时区刷新/日志轮转等生命周期 daemon 的停止与在途排空
+// 已归口此段）→ 引擎句柄清理 → ACME 收尾）。compose 的 stop_grace_period 由
 // shutdown_budget_test.go 对账，但 README 主推的 docker run 形态此前没有任何
 // 机械约束——示例少一个参数，Docker 就会在第 10 秒 SIGKILL，把排水/排空/取
 // 证收尾整段截断（die exitCode=137、task_runs 滞留 running、日志尾部丢失）。

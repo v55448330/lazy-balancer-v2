@@ -67,11 +67,25 @@ scan_scripts() {
     # perl -pi -e / python -c）：紧邻匹配漏掉它们等于第一道闸门对最常见的
     # 批量改写作业形态失效（事故形态正是「全仓 sed/perl 正则替换」）。
     grep -Eq '(re\.sub|re\.compile|sed[^|;&]*[[:space:]](-[A-Za-z]*i|--in-place)|perl[[:space:]][^|;&]*-[A-Za-z]*i|python[0-9.]*[[:space:]]+-c|shutil\.(copy|move)|\.write_text\(|open\([^)]*["'\'']w|writeFileSync|writeFile\()' "$f" && writes=1 || true
-    # dry-run 判据必须在可执行位置：剥掉「整行注释」（行首空白后 #）再匹配。
-    # 注释里提一句 --dry-run（事故形态「临时脚本 + 注释 TODO: add --dry-run +
-    # git ls-files | xargs perl -pi -e」）不构成只读模式；行尾注释不受影响
-    # （同一行存在可执行上下文）。
-    grep -v '^[[:space:]]*#' "$f" | grep -Eq -- '(--dry-run|DRY_RUN)' && dry=1 || true
+    # dry-run 判据必须在可执行位置：剥掉「整行注释」（行首空白后 #）再匹配；
+    # Python 脚本还须剥掉 docstring——三引号文档串里提一句 --dry-run 同样
+    # 不构成只读模式（事故形态的 docstring 变体）。只认真参数解析/注释行以外
+    # 的可执行上下文。
+    case "$f" in
+      *.py)
+        python3 - "$f" <<'PY' && dry=1 || true
+import re, sys
+text = open(sys.argv[1], encoding='utf-8').read()
+# 剥三引号 docstring/字符串块（含跨行）；单行三引号同样剥掉
+text = re.sub(r'("""|\'\'\').*?\1', '', text, flags=re.S)
+code = "\n".join(ln for ln in text.splitlines() if not re.match(r'^\s*#', ln))
+sys.exit(0 if re.search(r'--dry-run|DRY_RUN', code) else 1)
+PY
+        ;;
+      *)
+        grep -v '^[[:space:]]*#' "$f" | grep -Eq -- '(--dry-run|DRY_RUN)' && dry=1 || true
+        ;;
+    esac
     if (( traverses && writes && !dry )); then
       echo "ERROR: 批量改写脚本缺少 --dry-run 只读模式：$f" >&2
       bad=1
@@ -83,12 +97,11 @@ scan_scripts() {
   # 枚举面=仓内全部 .sh/.py（不限 scripts/）：仓根/tools/hack 的一次性批量脚本
   # 与 scripts/ 内的脚本按同一口径受检。
   done < <(git ls-files --cached --others --exclude-standard '*.sh' '*.py' \
-    | grep -v 'check-bulk-edit-safety.sh' \
+    | grep -v -E '(^|/)check-bulk-edit-safety\.sh$' \
     | grep -v -E "$selftest_exempt_re" \
     | grep -v '^web/node_modules/' || true)
   return "$bad"
 }
-
 # diff_ranges 列出全部需要检查的变更集（每行一个），而不是互斥取一段：
 # 常见的「部分暂存」工作流下 staged 非空会让未暂存改动完全跳过通道 B——
 # 而第二段改动往往正是批量变换。

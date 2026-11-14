@@ -165,7 +165,11 @@ test('Caddy 全局配置卡接入 configLoaded 双重门控', () => {
   const save = section(card, 'const handleSave = async', 'if (isReadOnly.value || saving.value) return')
   assert.match(save, /!props\.configLoaded/, 'configLoaded 门必须早于常规写守卫')
   const page = code('src/views/Settings.vue')
-  assert.match(page, /<CaddyGlobalSettings[\s\S]*?:config-loaded="configLoaded"/)
+  // 绑定必须落在 CaddyGlobalSettings 自己的开标签属性集内：无界 [\s\S]*? 会跨元素
+  // 命中 FreeCertificates 的 :config-loaded（删掉本卡绑定仍绿）。
+  const caddyTags = openTags(page, 'CaddyGlobalSettings')
+  assert.equal(caddyTags.length, 1, 'Settings.vue 必须恰有一个 CaddyGlobalSettings 实例')
+  assert.ok(caddyTags[0].includes(':config-loaded="configLoaded"'), 'CaddyGlobalSettings 开标签必须绑定 config-loaded')
 })
 
 test('任一 /config 成功读取恢复 configLoaded，失败可重试', () => {

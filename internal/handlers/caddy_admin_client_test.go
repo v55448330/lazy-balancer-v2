@@ -34,6 +34,7 @@ func (body *caddyAdminTrackedBody) Close() error {
 }
 
 func TestCaddyAdminGet_redirectErrorClosesBodyAndCancelsRequest(t *testing.T) {
+	withIsolatedGlobal(t)
 	oldClient := caddyAdminHTTPClient
 	body := &caddyAdminTrackedBody{Reader: strings.NewReader("redirect")}
 	var requestCtx context.Context

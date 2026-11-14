@@ -41,7 +41,7 @@ func TestCCRecord_uaSetBoundedAtCap(t *testing.T) {
 	if stats.UASetSize != ccUASetCap {
 		t.Fatalf("UASetSize=%d, want saturated at cap %d", stats.UASetSize, ccUASetCap)
 	}
-	trig := evalCC(stats, 0, 600, 0, 5, true)
+	trig := evalCC(stats, 0, 0, 5, true)
 	if !trig.Triggered || trig.Reason != "session_anomaly" {
 		t.Fatalf("saturated UA set must still trigger session_anomaly: %+v", trig)
 	}

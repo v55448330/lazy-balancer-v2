@@ -236,6 +236,7 @@ func TestRunAutoBackupOnce_failureRecordsFailedRowAndAudit(t *testing.T) {
 // 原子写已完成 rename、仅父目录 fsync 失败时，最终文件已经存在；写失败
 // 收尾必须删除它，连续调度不得积累没有数据库行的敏感备份。
 func TestRunAutoBackupOnce_writeFailureRemovesFinalFile(t *testing.T) {
+	withIsolatedGlobal(t)
 	h := newAutoBackupTestHandlers(t)
 	oldWrite := autoBackupWriteFile
 	autoBackupWriteFile = func(path string, payload []byte) error {
@@ -264,6 +265,7 @@ func TestRunAutoBackupOnce_writeFailureRemovesFinalFile(t *testing.T) {
 }
 
 func TestRunAutoBackupOnce_cancelCleanupFailureLogsFilename(t *testing.T) {
+	withIsolatedGlobal(t)
 	h := newAutoBackupTestHandlers(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	oldWrite := autoBackupWriteFile
@@ -293,6 +295,7 @@ func TestRunAutoBackupOnce_cancelCleanupFailureLogsFilename(t *testing.T) {
 }
 
 func TestRunAutoBackupOnce_rowFailureCleanupFailureLogsFilename(t *testing.T) {
+	withIsolatedGlobal(t)
 	h := newAutoBackupTestHandlers(t)
 	oldWrite := autoBackupWriteFile
 	autoBackupWriteFile = func(path string, payload []byte) error {

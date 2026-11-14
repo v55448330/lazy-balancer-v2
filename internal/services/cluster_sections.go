@@ -489,6 +489,10 @@ func sectionOutcomeNames(sk *sectionSkips) (applied, hashSkipped, disSkipped []s
 // error 返回（仍逐条 warn 留痕）：调用方不回滚已提交的快照应用，但必须
 // 感知失败——记账陈旧时漂移/跳过判定失真，apply 的 WAF 门据此回退
 // 「不依赖 DB 记账」的内容哈希兜底。
+// 从端专有写（与 slaveRoleConditionSQL 同族）：cluster_applied_sections 与
+// applied_waf_ref_* 只由从端 apply 维护、升主清空——apply 提交与记账之间
+// 升主时，在途记账不得把旧拓扑节行/文件态重插回新主节点（角色谓词编进
+// 语句，0 行生效不是错误）。
 func recordAppliedSectionHashes(ctx context.Context, dbh *sql.DB, snapshot models.ClusterSnapshot, sk *sectionSkips, switches SyncSwitches, localHashes map[string]string) error {
 	if dbh == nil {
 		return nil
@@ -506,7 +510,7 @@ func recordAppliedSectionHashes(ctx context.Context, dbh *sql.DB, snapshot model
 			// UPDATE 命中 0 行（行被并发清理/Role flip 清表）
 			// 时 err==nil 仍 continue，会静默不记账 → 下一次 304 多一轮漂移重放。
 			// 只有真正更新到行才跳过落哈希。
-			result, err := dbh.ExecContext(ctx, `UPDATE cluster_applied_sections SET applied_version=?, applied_at=datetime('now') WHERE section=?`, snapshot.Version, sec.Key)
+			result, err := dbh.ExecContext(ctx, `UPDATE cluster_applied_sections SET applied_version=?, applied_at=datetime('now') WHERE section=? AND `+slaveRoleConditionSQL, snapshot.Version, sec.Key)
 			if err == nil {
 				if n, rowsErr := result.RowsAffected(); rowsErr == nil && n > 0 {
 					continue
@@ -523,7 +527,8 @@ func recordAppliedSectionHashes(ctx context.Context, dbh *sql.DB, snapshot model
 				h = lh
 			}
 		}
-		if _, err := dbh.ExecContext(ctx, `INSERT INTO cluster_applied_sections (section, hash, applied_version, applied_at) VALUES (?,?,?,datetime('now'))
+		if _, err := dbh.ExecContext(ctx, `INSERT INTO cluster_applied_sections (section, hash, applied_version, applied_at)
+			SELECT ?,?,?,datetime('now') WHERE `+slaveRoleConditionSQL+`
 			ON CONFLICT(section) DO UPDATE SET hash=excluded.hash, applied_version=excluded.applied_version, applied_at=excluded.applied_at`, sec.Key, h, snapshot.Version); err != nil {
 			Logf("warn", "记录已应用节哈希失败（section=%s）: %v", sec.Key, err)
 			errs = append(errs, fmt.Errorf("节 %s: %w", sec.Key, err))
@@ -542,7 +547,7 @@ func recordAppliedSectionHashes(ctx context.Context, dbh *sql.DB, snapshot model
 				refHash = hh
 			}
 		}
-		if _, err := dbh.ExecContext(ctx, `UPDATE global_config SET applied_waf_ref_hash=?, applied_waf_ref_version=? WHERE id=1`, refHash, snapshot.Version); err != nil {
+		if _, err := dbh.ExecContext(ctx, `UPDATE global_config SET applied_waf_ref_hash=?, applied_waf_ref_version=? WHERE id=1 AND `+slaveRoleConditionSQL, refHash, snapshot.Version); err != nil {
 			Logf("warn", "记录文件态记账失败（applied_waf_ref_*）: %v", err)
 			errs = append(errs, fmt.Errorf("applied_waf_ref_*: %w", err))
 		}

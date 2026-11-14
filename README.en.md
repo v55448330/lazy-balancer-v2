@@ -122,7 +122,7 @@ docker buildx build --platform linux/amd64,linux/arm64 \
 
 ## Tech Stack
 
-Go 1.26 · Gin · SQLite · Caddy v2.11 · Coraza v3 · OWASP CRS v4 · Vue 3 · Element Plus
+Go 1.26+ (minimum language version per go.mod; official image builds with the Go 1.27 toolchain) · Gin · SQLite · Caddy v2.11 · Coraza v3 · OWASP CRS v4 · Vue 3 · Element Plus
 
 ## License
 

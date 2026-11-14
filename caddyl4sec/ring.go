@@ -96,6 +96,19 @@ func (r *l4Ring) depth() int {
 func (r *l4Ring) queuedBytes() int64 {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	return r.queuedBytesLocked()
+}
+
+// depthAndBytes 一次锁内取（条目数, 字节合计）原子快照对：观测端点分两次
+// 锁读会在并发入队/消费间隙拿到不一致的瞬态对（len 与 bytes 来自不同时刻）。
+func (r *l4Ring) depthAndBytes() (int, int64) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.count, r.queuedBytesLocked()
+}
+
+// queuedBytesLocked 字节合计（调用方持锁）。
+func (r *l4Ring) queuedBytesLocked() int64 {
 	var total int64
 	for i := range r.count {
 		total += int64(r.lens[(r.head+i)%r.capacity])

@@ -26,10 +26,7 @@ func TestClusterSync_ruleLibScheduleColumnsPropagate(t *testing.T) {
 	bump(300)
 
 	// When 主端快照（须携带排程列）
-	snap, _, err := cluster.Snapshot(ctx, 0, "", "")
-	if err != nil {
-		t.Fatalf("snapshot: %v", err)
-	}
+	snap := snapshotAsMaster(t, cluster, database)
 	// And 从端本地值已漂移（模拟从未收到排程的存量从端）
 	if _, err := database.Exec(`UPDATE security_crs_version SET schedule_days='7', schedule_time='06:00' WHERE id=1`); err != nil {
 		t.Fatal(err)

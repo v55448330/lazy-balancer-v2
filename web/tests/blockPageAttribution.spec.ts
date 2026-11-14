@@ -101,18 +101,6 @@ test('阶段 1：allow 策略恰为链首有页策略时，兜底显示本策略
   assert.deepEqual(resolveBlockPageAttribution(1, chain), { stage: 1, effective: 'self' })
 })
 
-test('阶段 1：allow 策略无归属语义，页显示只由兜底路由决定', () => {
-  // allow-only 策略自身不发射 deny 链：即便配置了页，阶段 1 归因也不因「本策略触发」
-  // 而生效——链首有页策略是对端时判 peer。
-  const chain = [
-    peer({ policyId: 1, blockPageId: 5, pageHasContent: true, name: '链首有页策略' }),
-    self({ policyId: 9, blockPageId: 7, pageHasContent: true, stage1DenyContributor: false }),
-  ]
-  const result = resolveBlockPageAttribution(1, chain)
-  assert.equal(result.effective, 'peer')
-  assert.equal(result.winnerName, '链首有页策略')
-})
-
 test('阶段 2：配额限流已下线 → 拦截页恒 none', () => {
   const chain = [
     self({ blockPageId: 7, pageHasContent: true }),

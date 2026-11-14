@@ -46,7 +46,7 @@
         <span class="conn-toolbar-divider"></span>
         <span class="conn-toolbar-label">{{ t('app.dashboard.connAutoRefresh') }}</span>
         <el-switch v-model="autoRefresh" size="small" />
-        <el-button size="small" text type="primary" :icon="Refresh" :loading="loading" class="conn-refresh-btn" @click="fetchOnce">{{ t('app.dashboard.connRefreshNow') }}</el-button>
+        <el-button size="small" text type="primary" :icon="Refresh" :loading="loading" class="conn-refresh-btn" @click="refreshNow">{{ t('app.dashboard.connRefreshNow') }}</el-button>
         <span v-if="lastUpdated" class="conn-toolbar-updated">{{ t('app.dashboard.connUpdatedAt', { time: lastUpdated }) }}</span>
       </div>
     </div>
@@ -118,13 +118,14 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onUnmounted, ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Connection, Refresh, CaretLeft, CaretRight } from '@element-plus/icons-vue'
 import DialogHeader from '@/components/DialogHeader.vue'
 import { request } from '@/utils/api'
 import { generalizeUA } from '@/utils/uaGeneralize'
 import { useClampedPagination } from '@/composables/useClampedPagination'
+import { usePollingTask } from '@/composables/usePollingTask'
 import { formatDate, formatChartTimeInConfigTz } from '@/utils/date'
 
 const props = defineProps<{ visible: boolean }>()
@@ -174,7 +175,6 @@ const domains = ref<DomainStat[]>([])
 const category = ref('active')
 const page = ref(1)
 const pageSize = 50
-let timer: number | undefined
 
 // 四分类（默认活跃）：请求窗口语义，文案保留原四分类。
 const filterCats = computed(() => [
@@ -226,7 +226,10 @@ const catLabel = (c: string): string => {
   return found ? found.label : c
 }
 
-const fetchOnce = async (): Promise<void> => {
+// 单飞 + 会话序号守卫由 usePollingTask 承担：慢响应乱序到达时 isCurrent()
+// 失配即丢弃，不再覆写新帧（原裸 setInterval 无守卫，瞬时陈旧帧下 tick 自愈）。
+// 轮次 signal 透传请求：关闭弹框/暂停自动刷新即取消在途，不再空跑完成。
+const fetchOnce = async (roundSignal?: AbortSignal, isCurrent?: () => boolean): Promise<void> => {
   loading.value = true
   try {
     const res = await request.get<{
@@ -239,7 +242,8 @@ const fetchOnce = async (): Promise<void> => {
         req_mon: boolean
         generated_at: string
       }
-    }>('/metrics/connections/list', { silent: true })
+    }>('/metrics/connections/list', { silent: true, signal: roundSignal })
+    if (isCurrent && !isCurrent()) return // 会话已换代：迟到响应不得写回
     const d = res.data
     counts.value = d?.counts ?? {}
     connCounts.value = d?.conn_counts ?? {}
@@ -249,27 +253,15 @@ const fetchOnce = async (): Promise<void> => {
     reqMon.value = d?.req_mon ?? false
     lastUpdated.value = formatChartTimeInConfigTz(Date.now())
   } catch {
-    /* 静默：弹框保留上次数据 */
+    /* 静默：弹框保留上次数据（含 abort 取消） */
   } finally {
     loading.value = false
   }
 }
 
-const tick = async (): Promise<void> => {
-  if (!autoRefresh.value || !props.visible) return
-  await fetchOnce()
-}
-
-const startPolling = (): void => {
-  stopPolling()
-  timer = window.setInterval(() => void tick(), 2000)
-}
-const stopPolling = (): void => {
-  if (timer !== undefined) {
-    window.clearInterval(timer)
-    timer = undefined
-  }
-}
+// 弹框级轮询：pause/resume 非终态（关闭重开可反复），stop 终态清理由
+// usePollingTask 内置 onUnmounted 兜底。autoRefresh 关闭只 pause 定时器。
+const polling = usePollingTask(async ({ signal, isCurrent }) => { await fetchOnce(signal, isCurrent) }, { interval: 2000 })
 
 watch(
   () => props.visible,
@@ -277,16 +269,22 @@ watch(
     if (v) {
       category.value = 'active'
       page.value = 1
-      void fetchOnce()
-      startPolling()
+      if (autoRefresh.value) polling.resume() // 恢复即刷新（首帧立即取数）
     } else {
-      stopPolling()
+      polling.pause()
     }
   },
 )
-onUnmounted(stopPolling)
+watch(autoRefresh, (on) => {
+  if (!props.visible) return
+  if (on) polling.resume()
+  else polling.pause()
+})
 
-defineExpose({ fetchOnce })
+// 手动「立即刷新」：经 run() 与在途轮次去重（单飞），不另起裸请求。
+const refreshNow = (): void => { void polling.run() }
+
+defineExpose({ refreshNow })
 </script>
 
 <style scoped>

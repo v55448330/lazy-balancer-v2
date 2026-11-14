@@ -6,7 +6,8 @@
 // 规则级阶段页覆盖（481/482）已退役。
 import type { RuleFlowPathRule } from '@/types/rules'
 import { hasOwn } from './hasOwn.ts'
-import { conditionTargetLabel } from './customRuleLimits.ts'
+import { conditionTargetLabel, CUSTOM_RULE_MAX_CONDITIONS } from './customRuleLimits.ts'
+import { normalizeCrsGroups } from './crsGroups.ts'
 import { toV4Long, toV6BigInt } from './ipAddress.ts'
 import { tSafe as t } from '../i18n/tSafe.ts'
 
@@ -644,7 +645,10 @@ const buildStage3Rows = (
   // 「CRS 规则组」行（blocking/detection 才有 CRS 评估；0=全部默认）
   if (mode === 'blocking' || mode === 'detection') {
     const crsRaw = policy?.crs_rule_groups
-    const crsCount = Array.isArray(crsRaw) ? crsRaw.length : parseIPList(typeof crsRaw === 'string' ? crsRaw : undefined).length
+    // 组数口径与策略列表/编辑器写回同源（normalizeCrsGroups）：历史文件名前缀、
+    // 重复值、系统基础组（01/49/59）不得把组数说大——同一策略在锁摘要/流程抽屉
+    // 与列表摘要显示不同组数会让用户无从判断哪份是生效配置。
+    const crsCount = normalizeCrsGroups(Array.isArray(crsRaw) ? crsRaw : parseIPList(typeof crsRaw === 'string' ? crsRaw : undefined)).length
     rows.push({ label: t('common.app.views.stages.crsGroupsRowLabel'), detail: crsCount > 0 ? t('common.app.views.stages.crsGroupsCount', { count: crsCount }) : t('common.app.views.stages.crsGroupsAll') })
   }
   if (policy?.has_custom_rules) rows.push({ label: t('common.app.views.stages.customRulesRowLabel'), detail: t('common.app.views.stages.customRulesCount', { count: policy.custom_rules_count }) })
@@ -1065,6 +1069,17 @@ type ParsedCidr =
   | { readonly family: 4; readonly base: number; readonly bits: number }
   | { readonly family: 6; readonly base: bigint; readonly bits: number }
 
+// v4-mapped IPv6（::ffff:0:0/96 映射族）折算单源——与 ipAddress.cidrContains
+// 同口径：仅该 96 位前缀的 mapped 形态折算为等价 v4，普通 IPv6（含 ::ffff:0:x
+// 兼容族）不折。事件侧与写侧查询对同一地址的命中结论必须一致，否则详情弹框
+// 「命中/已恢复拦截」与名单 CIDR 查询分叉。
+const V4_MAPPED_BASE = 0xffff00000000n
+const V4_MAPPED_MASK = 0xffffffff00000000n
+
+/** 128 位值 → mapped 族内的 32 位 v4；非 mapped 返回 null。 */
+const mappedV4Of = (value: bigint): number | null =>
+  (value & V4_MAPPED_MASK) === V4_MAPPED_BASE ? Number(value & 0xffffffffn) : null
+
 const parseCidrUncached = (cidr: string): ParsedCidr | null => {
   const idx = cidr.indexOf('/')
   if (idx < 0) return null
@@ -1075,6 +1090,13 @@ const parseCidrUncached = (cidr: string): ParsedCidr | null => {
     if (bits > 128) return null
     const baseLong = toV6BigInt(base)
     if (baseLong === null) return null
+    // mapped 前缀折算：/112 ≡ v4 /16、/120 ≡ v4 /24；前缀不足 96 无法折算为
+    // v4 前缀（cidrContains 同口径返回不命中），解析为 null 由调用方判 false。
+    const mapped = mappedV4Of(baseLong)
+    if (mapped !== null) {
+      if (bits < 96) return null
+      return { family: 4, base: mapped, bits: bits - 96 }
+    }
     return { family: 6, base: baseLong, bits }
   }
   if (bits > 32) return null
@@ -1100,7 +1122,12 @@ const parseCidr = (cidr: string): ParsedCidr | null => {
 
 const parsedCidrContains = (parsed: ParsedCidr, ip: string): boolean => {
   if (parsed.family === 4) {
-    const ipLong = toV4Long(ip.trim())
+    // 探针双形态收：裸 v4 与 mapped v6（::ffff:a.b.c.d）都折算到 v4 参与比较。
+    let ipLong = toV4Long(ip.trim())
+    if (ipLong < 0) {
+      const v6 = toV6BigInt(ip)
+      ipLong = v6 === null ? -1 : (mappedV4Of(v6) ?? -1)
+    }
     if (ipLong < 0) return false
     const mask = parsed.bits === 0 ? 0 : (~0 << (32 - parsed.bits)) >>> 0
     return (ipLong & mask) === (parsed.base & mask)
@@ -1124,8 +1151,14 @@ const ipInCidr = (ip: string, cidr: string): boolean => {
  */
 export const createIpMatcher = (ip: string): ((entry: string) => boolean) => {
   const trimmed = ip.trim()
-  const v4 = toV4Long(trimmed)
-  const v6 = v4 < 0 ? toV6BigInt(trimmed) : null
+  let v4 = toV4Long(trimmed)
+  let v6: bigint | null = null
+  if (v4 < 0) {
+    v6 = toV6BigInt(trimmed)
+    // mapped v6 探针折算为 v4（与 parsedCidrContains 同口径）——裸 v4 条目/
+    // 折算后的 mapped CIDR 都能命中同一地址的不同书写形态。
+    if (v6 !== null) v4 = mappedV4Of(v6) ?? -1
+  }
   return (entry) => {
     if (entry === trimmed) return true
     if (!entry.includes('/')) return false
@@ -1570,7 +1603,8 @@ export const IP_LIST_CATEGORIES = ['搜索引擎爬虫', 'CDN 节点', '云服�
 export type TriggerStageFamily = 'trust' | 'ipAcl' | 'geoip' | 'crawler' | 'threat' | 'wafCustom' | 'wafCrs' | 'body' | 'human' | 'other'
 
 const CUSTOM_RULE_OR_CONDITION_ID_BASE = 3000000
-const CUSTOM_RULE_MAX_CONDITIONS = 64
+// OR 条件分支 emit id 的除数与写侧条件数上限同源（customRuleLimits 单源，
+// 跨栈对表 Go customRuleMaxConditions）——双份字面量后端变更漏一处会静默错解父 id。
 
 // 普通 emit id 与 OR 条件分支 emit id 都回解到同一 DB 父规则；旧内嵌合成 id 无父行。
 export const customRuleEventDbID = (ruleTriggered: string): number => {

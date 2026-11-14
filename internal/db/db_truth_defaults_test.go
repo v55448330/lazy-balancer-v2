@@ -552,6 +552,7 @@ func TestSecurityPoliciesRebuildSchema_matchesFreshDDL(t *testing.T) {
 		custom_rules TEXT DEFAULT '[]',
 		block_page_id INTEGER DEFAULT 0,
 		block_status_code INTEGER NOT NULL DEFAULT 0,
+		block_response_mode TEXT DEFAULT 'auto',
 		enabled BOOLEAN DEFAULT TRUE,
 		updated_by INTEGER DEFAULT 0,
 		created_at DATETIME DEFAULT (datetime('now')),
@@ -579,10 +580,10 @@ func TestSecurityPoliciesRebuildSchema_matchesFreshDDL(t *testing.T) {
 	)`); err != nil {
 		t.Fatalf("create legacy security_policies table: %v", err)
 	}
-	if _, err := database.Exec(`INSERT INTO security_policies (name,mode,geoip_countries,geoip_mode,waf_check_response,block_status_code,
+	if _, err := database.Exec(`INSERT INTO security_policies (name,mode,geoip_countries,geoip_mode,waf_check_response,block_status_code,block_response_mode,
 		human_verify_mode,human_verify_type,human_verify_ttl,human_exempt_paths,
 		cc_detect_enabled,cc_rps_limit,cc_rps_window,cc_4xx_ratio,cc_session_anomaly,cc_session_ua_threshold)
-		VALUES ('legacy-policy','blocking','["CN"]','allow',1,403,
+		VALUES ('legacy-policy','blocking','["CN"]','allow',1,403,'json',
 		'force','click',60,'["/healthz"]',1,99,15,80,1,7)`); err != nil {
 		t.Fatalf("seed legacy policy: %v", err)
 	}
@@ -594,14 +595,14 @@ func TestSecurityPoliciesRebuildSchema_matchesFreshDDL(t *testing.T) {
 
 	// Then 形状与 fresh 逐列一致（四列收敛可空），且行数据保留。
 	assertShapeMatchesFresh(t, "security_policies", freshShape, tablePragmaShape(t, database, "security_policies"))
-	var countries, geoMode string
+	var countries, geoMode, responseMode string
 	var wafCheck, blockStatus int
-	if err := database.QueryRow(`SELECT geoip_countries, geoip_mode, waf_check_response, block_status_code FROM security_policies WHERE name='legacy-policy'`).
-		Scan(&countries, &geoMode, &wafCheck, &blockStatus); err != nil {
+	if err := database.QueryRow(`SELECT geoip_countries, geoip_mode, waf_check_response, block_status_code, block_response_mode FROM security_policies WHERE name='legacy-policy'`).
+		Scan(&countries, &geoMode, &wafCheck, &blockStatus, &responseMode); err != nil {
 		t.Fatalf("read rebuilt policy: %v", err)
 	}
-	if countries != `["CN"]` || geoMode != "allow" || wafCheck != 1 || blockStatus != 403 {
-		t.Fatalf("rebuilt policy values=(%q,%q,%d,%d), want preserved", countries, geoMode, wafCheck, blockStatus)
+	if countries != `["CN"]` || geoMode != "allow" || wafCheck != 1 || blockStatus != 403 || responseMode != "json" {
+		t.Fatalf("rebuilt policy values=(%q,%q,%d,%d,%q), want preserved（block_response_mode 显式 json 不得被重建重置 auto）", countries, geoMode, wafCheck, blockStatus, responseMode)
 	}
 	// 人机/CC 十列显式值必须随重建保留（重建 DDL 漏列时此处读回默认值）。
 	var humanMode, humanType, exemptPaths string

@@ -221,6 +221,8 @@ type tarEntry struct {
 	body         []byte
 	// typeflag 非零时写入指定 tar 类型（如 tar.TypeDir 构造目录条目）。
 	typeflag byte
+	// linkname 非空时写入链接目标（TypeSymlink/TypeLink 构造海量非常规条目）。
+	linkname string
 }
 
 // rawTarGz 按给定条目直接构造 tar.gz（不做路径归一/排序，用于构造恶意包）。
@@ -238,7 +240,7 @@ func rawTarGz(t *testing.T, entries []tarEntry) []byte {
 			}
 			size = entry.declaredSize
 		}
-		if err := tw.WriteHeader(&tar.Header{Name: entry.name, Mode: 0644, Size: size, Typeflag: entry.typeflag}); err != nil {
+		if err := tw.WriteHeader(&tar.Header{Name: entry.name, Mode: 0644, Size: size, Typeflag: entry.typeflag, Linkname: entry.linkname}); err != nil {
 			t.Fatal(err)
 		}
 		if headerOnly {
@@ -312,6 +314,24 @@ func TestUntarGzTo_rejectsOversizedBundleAndCleansStaging(t *testing.T) {
 		err := untarGzTo(data, destDir, "")
 		if err == nil || !strings.Contains(err.Error(), "解包体积超过上限") {
 			t.Fatalf("error=%v, want byte-size limit rejection", err)
+		}
+		assertNoStagingRemains(t, destDir)
+	})
+	t.Run("non-regular entries over limit", func(t *testing.T) {
+		// 海量 symlink 等非常规条目不落盘，但逐条解析仍有 CPU 成本——
+		// 必须与 TypeReg 共用文件数预算，超限拒绝而不是无界遍历。
+		entries := make([]tarEntry, 0, maxWafSyncExtractFiles+1)
+		for i := 0; i <= maxWafSyncExtractFiles; i++ {
+			entries = append(entries, tarEntry{
+				name:     fmt.Sprintf("rules/link%05d", i),
+				typeflag: tar.TypeSymlink,
+				linkname: "target.conf",
+			})
+		}
+		destDir := t.TempDir()
+		err := untarGzTo(rawTarGz(t, entries), destDir, "")
+		if err == nil || !strings.Contains(err.Error(), "文件数超过上限") {
+			t.Fatalf("error=%v, want file-count limit rejection for non-regular entries", err)
 		}
 		assertNoStagingRemains(t, destDir)
 	})

@@ -546,3 +546,39 @@ func TestIngestSecurityEventBatch_concurrentWithHealthSnapshot(t *testing.T) {
 		t.Fatalf("rows=%d, want %d", got, batches)
 	}
 }
+
+// 目标名冲突探测循环遇到非 NotExist 错误（此处注入真实 EACCES：spool 目录去掉
+// 搜索权限，Lstat 恒返 permission denied）必须有界退出——旧实现仅 IsNotExist
+// 退出，Lstat 持续返回非 NotExist 错误时无界重试。修复后放弃本文件封存并留痕，
+// active 原样保留待下轮。
+func TestSealOrphanedSecurityEventsSpoolFiles_lstatErrorExitsBounded(t *testing.T) {
+	skipChmodFaultInjectionIfRoot(t)
+	dir := t.TempDir()
+	active := filepath.Join(dir, "active-2147483647-1.jsonl")
+	if err := os.WriteFile(active, []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	mod := time.Now().Add(-10 * time.Minute)
+	if err := os.Chtimes(active, mod, mod); err != nil {
+		t.Fatal(err)
+	}
+	files := []securityEventsSpoolFile{{name: filepath.Base(active), path: active, mod: mod, pid: 2147483647}}
+
+	// 去掉目录搜索权限：sealed 目标名的 Lstat 恒返 EACCES（非 NotExist）。
+	// 退出前恢复权限，否则 t.TempDir 清理无法遍历。
+	if err := os.Chmod(dir, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+
+	done := make(chan int, 1)
+	go func() { done <- sealOrphanedSecurityEventsSpoolFiles(files, time.Now()) }()
+	select {
+	case sealed := <-done:
+		if sealed != 0 {
+			t.Fatalf("sealed=%d, want 0（目标名不可判定时不得封存）", sealed)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Lstat 非 NotExist 错误下封存循环无界重试（必须有界退出）")
+	}
+}

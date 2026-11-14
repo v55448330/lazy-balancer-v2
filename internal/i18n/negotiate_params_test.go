@@ -1,0 +1,20 @@
+package i18n
+
+import "testing"
+
+// q 参数可出现在分号分隔的任意位置（RFC 9110 的 Accept-Language 扩展参数
+// 不保证 q 在首段）：此前只识别分段首个参数，"en;foo=bar;q=0.9" 被按 1.0
+// 权重处理，语言排序失真。
+func TestNegotiate_qParameterInAnyPosition(t *testing.T) {
+	cases := []struct{ header, want string }{
+		{"en;foo=bar;q=0.2,zh;q=0.9", ZH},
+		{"zh;foo=bar;q=0.2,en;q=0.9", EN},
+		{"en;q=0.2;foo=bar,zh;q=0.9", ZH}, // q 在首段仍须识别（回归形状）
+		{"zh;foo=bar,en;q=0.5", ZH},       // 无 q 分段按 1.0（回归形状）
+	}
+	for _, c := range cases {
+		if got := negotiate(c.header); got != c.want {
+			t.Errorf("negotiate(%q)=%q want %q", c.header, got, c.want)
+		}
+	}
+}

@@ -196,8 +196,7 @@ func serveL4ShipperStats(w http.ResponseWriter, r *http.Request) error {
 	if p := currentL4Pipeline(); p != nil {
 		payload.IPCEnabled = p.shipper != nil
 		payload.IPCSent, payload.IPCFailed, payload.SpoolWrites, payload.SpoolErrors = p.shipperCounters()
-		payload.QueueLen = p.ring.depth()
-		payload.QueueBytes = p.ring.queuedBytes()
+		payload.QueueLen, payload.QueueBytes = p.ring.depthAndBytes()
 		payload.Dropped = p.dropped.Load()
 	}
 	raw, err := json.Marshal(payload)

@@ -6,6 +6,7 @@ package i18n
 
 import (
 	"math"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -21,7 +22,7 @@ var (
 	mu       sync.RWMutex
 	catalog  = map[string][2]string{} // key -> {zh, en}
 	errTpls  = map[string]string{}    // zh 模板(%s 占位) -> en 模板
-	errZh    []string                 // zh 模板切片,保证遍历顺序稳定
+	errZh    []string                 // zh 模板切片,按静态字面量总长降序(具体模板先于泛化命中)
 	hdrMu    sync.Mutex
 	hdrCache = map[string]string{} // Accept-Language 头 -> lang(热路径缓存)
 )
@@ -80,7 +81,13 @@ func negotiate(header string) string {
 		lang, q := part, 1.0
 		if j := strings.IndexByte(part, ';'); j >= 0 {
 			lang = part[:j]
-			if v := strings.TrimSpace(part[j+1:]); strings.HasPrefix(v, "q=") {
+			// q 可出现在分号分隔的任意参数位(RFC 9110 扩展参数不保证
+			// q 在首段):遍历全分段取 q,不得只看首个参数。
+			for _, param := range strings.Split(part[j+1:], ";") {
+				v := strings.TrimSpace(param)
+				if !strings.HasPrefix(v, "q=") {
+					continue
+				}
 				// q 按 RFC 9110 解析为 [0,1] 实数:硬编码集外的 q(0.3/0.95…)
 				// 此前默认 1.0,语言排序失真。非法/NaN 按 0(该候选不优先),
 				// 越界钳到 [0,1]。
@@ -88,6 +95,7 @@ func negotiate(header string) string {
 				if parsed, perr := strconv.ParseFloat(strings.TrimPrefix(v, "q="), 64); perr == nil && !math.IsNaN(parsed) {
 					q = math.Min(1, math.Max(0, parsed))
 				}
+				break
 			}
 		}
 		lang = strings.ToLower(strings.TrimSpace(lang))
@@ -131,17 +139,33 @@ func T(lang, key string) string {
 }
 
 // RegisterErrTpl 登记服务层中文错误模板(含 %s/%d 占位)与英文对应模板。
+// 登记后按静态字面量总长降序重排 errZh:泛化模板("写入 %s: %s")不得抢先
+// 吞掉具体模板("写入 CRS VERSION 标记: %s")——注册序不可控,匹配优先级
+// 只由字面量具体度决定(同长按注册序稳定)。
 func RegisterErrTpl(zhTpl, enTpl string) {
 	mu.Lock()
 	defer mu.Unlock()
 	if _, dup := errTpls[zhTpl]; !dup {
 		errZh = append(errZh, zhTpl)
+		sort.SliceStable(errZh, func(i, j int) bool {
+			return tplLiteralLen(errZh[i]) > tplLiteralLen(errZh[j])
+		})
 	}
 	errTpls[zhTpl] = enTpl
 }
 
+// tplLiteralLen 模板的静态字面量总长(%s 占位不计,%% 按渲染后的单个 % 计)。
+func tplLiteralLen(tpl string) int {
+	n := 0
+	for _, seg := range splitTplPlaceholders(tpl) {
+		n += len(seg)
+	}
+	return n
+}
+
 // TrErr 把服务层产生的中文错误串翻成目标语言:
-// 先精确匹配,再按模板逐个尝试占位对齐;未命中返回原文(中文母本兜底)。
+// 先精确匹配,再按静态字面量具体度降序逐个尝试占位对齐(具体模板先于泛化);
+// 未命中返回原文(中文母本兜底)。
 func TrErr(msg, lang string) string {
 	if lang != EN || msg == "" || !strings.ContainsFunc(msg, isZh) {
 		return msg

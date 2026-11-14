@@ -51,7 +51,7 @@ export const useIpListAdd = () => {
       if (res.data?.added) {
         // 2026-09-07 裁定 L1：经 showSaveResult 呈现——退化 200+后缀（Caddy 应用
         // 失败但 DB 已提交）时弹持续警告而非成功 toast，安全处置操作不可静默。
-        showSaveResult(res as unknown as { message?: string }, options.successText ?? t('common.app.views.ipAdd.successDefault', { verb, list: list.name }))
+        showSaveResult(res, options.successText ?? t('common.app.views.ipAdd.successDefault', { verb, list: list.name }))
       } else ElMessage.info(t('common.app.views.ipAdd.alreadyInList', { list: list.name }))
       return true
     } catch {

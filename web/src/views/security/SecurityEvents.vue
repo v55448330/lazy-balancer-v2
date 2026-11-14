@@ -1044,7 +1044,6 @@ const refreshPage = (): void => {
 
 <style scoped>
 .autoban-section-title { font-size: 14px; font-weight: 600; color: var(--text-primary); margin: 4px 0 4px; }
-.autoban-section-cc { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--el-border-color-lighter); }
 .autoban-section-desc { font-size: 12px; color: var(--text-secondary); line-height: 1.5; margin-bottom: 12px; }
 /* 自动封禁状态卡——*/
 .autoban-card { margin-bottom: 16px; }

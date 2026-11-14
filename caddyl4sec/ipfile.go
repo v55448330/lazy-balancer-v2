@@ -65,7 +65,6 @@ type L4IPFileMatcher struct {
 	lastSize  int64
 	stopCh    chan struct{}
 	stopOnce  sync.Once
-	done      chan struct{}
 	warnLog   *keyedWarnThrottle // 同原因节流告警（指针：禁止值拷贝带锁结构）
 	provision sync.Mutex         // Provision 内部顺序化（非热路径）
 }
@@ -99,7 +98,6 @@ func (m *L4IPFileMatcher) Provision(ctx caddy.Context) error {
 	m.snap.Store(set)
 
 	m.stopCh = make(chan struct{})
-	m.done = make(chan struct{})
 	go m.monitor()
 	return nil
 }
@@ -152,7 +150,6 @@ func (m *L4IPFileMatcher) Match(cx *layer4.Connection) (bool, error) {
 // watcher）。watcher 错误只告警不退出——stat 兜底继续自愈（上游在此退出=
 // 永久 stale）。
 func (m *L4IPFileMatcher) monitor() {
-	defer close(m.done)
 	ticker := time.NewTicker(l4IPFilePollInterval)
 	defer ticker.Stop()
 

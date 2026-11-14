@@ -18,6 +18,7 @@ import (
 // 签发失败（随机源异常/密钥未装配）不得推进 last_login：账号活动证据必须
 // 与审计口径一致，不能出现「最后登录时间已更新 + 审计记登录失败」。
 func TestLogin_signingFailureDoesNotAdvanceLastLogin(t *testing.T) {
+	withIsolatedGlobal(t)
 	database := setupAuthTestDB(t)
 	if _, err := database.Exec(`CREATE TABLE global_config (id INTEGER PRIMARY KEY, is_master BOOLEAN, jwt_expire_minutes INTEGER, mfa_lockout_enabled BOOLEAN); INSERT INTO global_config VALUES (1,1,20,1)`); err != nil {
 		t.Fatalf("create global config: %v", err)

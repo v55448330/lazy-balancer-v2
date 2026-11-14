@@ -21,7 +21,7 @@ func dbQueryNotFound(c *gin.Context, err error, notFoundMessage, operation strin
 		return true
 	}
 	// 500 分支必须经统一写点：operation 归因与固定文案只维护一处，未来统一
-	// 5xx 策略（trace id / 统一脱敏 / 错误码映射）时不会漏改本函数的 21 个
+	// 5xx 策略（trace id / 统一脱敏 / 错误码映射）时不会漏改本函数的 18 个
 	// 调用点。
 	writeInternalError(c, http.StatusInternalServerError, "数据库错误", fmt.Errorf("%s: %w", operation, err))
 	return true

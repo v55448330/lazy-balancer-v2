@@ -1,5 +1,6 @@
 import { ref } from 'vue'
 import type { Ref } from 'vue'
+import { tSafe } from '../i18n/tSafe.ts'
 
 const INITIAL_CONTRACT_BACKOFF_MS = 30_000
 const MAX_CONTRACT_BACKOFF_MS = 300_000
@@ -27,7 +28,7 @@ export const usePollingErrorState = (): PollingErrorState => {
 
   const recordError = (error: unknown): void => {
     const now = Date.now()
-    const message = error instanceof Error ? error.message : '未知错误'
+    const message = error instanceof Error ? error.message : tSafe('common.app.api.unknownError')
     if (error instanceof TypeError) {
       contractFailureCount += 1
       const delay = Math.min(

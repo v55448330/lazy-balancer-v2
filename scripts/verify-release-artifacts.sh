@@ -24,6 +24,9 @@ check_bin() { # $1=特征串 $2=说明
 
 echo "R-17 发布产物包含性验证（${CONTAINER}）"
 check_asset "today_detected_tcp" "总览检测列 TCP 拆分字段"
+# 二进制特征核验（R-17 第 2 条：UI 资产 + 二进制逐项 grep）：后端 JSON 键是
+# 产线构建幸存的字面量（struct tag 不受压缩影响），与 UI 侧同一特征串互为印证。
+check_bin "today_detected_tcp" "总览检测列 TCP 拆分字段（后端 struct tag）"
 # 特征串选串规则：只允许产线构建幸存的字面量（API JSON 键、用户可见文案）；
 # 压缩混淆会改写局部标识符（todayDetectedSplit/heatLegendTicks 即误选例）。
 # 批次身份由 build-info.json 的 commit 字段承载（必须=本批次 commit）。

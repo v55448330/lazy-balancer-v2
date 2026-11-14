@@ -2,7 +2,7 @@ import { ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { mfaAwareSuccess, request } from '@/utils/api'
 import { showSaveResult } from '@/utils/saveResult'
-import { CADDY_APPLY_FAILED_MARKER } from '@/utils/bulkApplyResult'
+import { isCaddyApplyDegraded } from '@/utils/bulkApplyResult'
 import { parseRefIds } from '@/utils/securityStages'
 import { useIpListAdd, type IpListOption } from '@/composables/useIpListAdd'
 import { tSafe as t } from '../i18n/tSafe.ts'
@@ -239,8 +239,9 @@ export const useTrustAssociation = (options: {
         if (!alreadyLinked) {
           try {
             const assocRes = await request.put(`/security/policies/${policy.id}`, { [cfg.refField]: JSON.stringify([...latestRefs, reuse.id]) })
-            // 关联中间跳的退化后缀（Caddy 应用失败但 DB 已提交）不可静默
-            if (assocRes.message?.includes(CADDY_APPLY_FAILED_MARKER)) showSaveResult(assocRes, '')
+            // 关联中间跳的退化 200（Caddy 应用失败但 DB 已提交）不可静默——
+            // 判定语言无关（messageKey 优先，zh 标记兜底），en 文案同样披露。
+            if (isCaddyApplyDegraded(assocRes)) showSaveResult(assocRes, '')
           } catch {
             // 半态显性披露：条目已就绪，重试只会补关联（幂等，不重复写入）
             ElMessage.error(t('common.app.views.trustAssoc.assocFailedAfterAdd', { ip, name: reuse.name }))
@@ -253,7 +254,7 @@ export const useTrustAssociation = (options: {
         // 把「已存在」说成「已加入」会让用户以为刚完成一次处置。
         if (added.data?.added === true) {
           showSaveResult(
-            added as unknown as { message?: string },
+            added,
             alreadyLinked
               ? t('common.app.views.trustAssoc.joinedList', { verb: cfg.verb, name: reuse.name })
               : t('common.app.views.trustAssoc.linkedExistingJoined', { name: reuse.name, ip }),
@@ -276,8 +277,8 @@ export const useTrustAssociation = (options: {
         category: 'custom',
         entries: JSON.stringify([{ value: ip, remark: '' }]),
       })
-      // 中间跳退化 200+后缀（Caddy 应用失败但 DB 已提交）也须可见——有后缀才弹
-      if (created.message?.includes(CADDY_APPLY_FAILED_MARKER)) showSaveResult(created, '')
+      // 中间跳退化 200（Caddy 应用失败但 DB 已提交）也须可见——语言无关判定
+      if (isCaddyApplyDegraded(created)) showSaveResult(created, '')
       const newId = created.data?.id
       if (!newId) {
         ElMessage.error(t('common.app.views.trustAssoc.createBadResponse', { name: createName }))
@@ -289,9 +290,9 @@ export const useTrustAssociation = (options: {
         await options.onChanged?.()
         return false
       }
-      // 关联是最后一步：退化后缀弹警告，正常成功用动作口径文案（响应 message 是
-      // 策略更新的通用文案，不能拿来当本次动作的反馈）。
-      if (assocRes.message?.includes(CADDY_APPLY_FAILED_MARKER)) showSaveResult(assocRes, '')
+      // 关联是最后一步：退化弹警告（语言无关判定），正常成功用动作口径文案
+      //（响应 message 是策略更新的通用文案，不能拿来当本次动作的反馈）。
+      if (isCaddyApplyDegraded(assocRes)) showSaveResult(assocRes, '')
       else mfaAwareSuccess(t('common.app.views.trustAssoc.createdJoined', { name: createName, ip }))
       await options.onChanged?.()
       return true
@@ -326,8 +327,9 @@ export const useTrustAssociation = (options: {
         return
       }
       // 移除是一次写事件（MFA step-up 覆盖）：与同文件「加入/创建」同口径经
-      // mfaAwareSuccess 发出——宽限窗内放行时提示必须带「免验证」前缀。
-      mfaAwareSuccess(t('common.app.views.trustAssoc.removedFromList', { name: list.name }))
+      // showSaveResult 发出——退化 200（messageKey=k_de8cc6aa，语言无关）必须
+      // 常驻警告而非成功；正常成功内部走 mfaAwareSuccess（宽限窗前缀不丢）。
+      showSaveResult(res, t('common.app.views.trustAssoc.removedFromList', { name: list.name }))
       await options.onChanged?.()
     } catch {
       // 全局拦截器已提示

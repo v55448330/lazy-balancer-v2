@@ -185,6 +185,18 @@ func dnsCredentialFamilyMode(m map[string]string) string {
 	}
 }
 
+// dnsCredentialFamilyProviderCode 把凭证认证族归一到提供商注册表口径：
+// tencent 族（腾讯云 API）由 dnspod 提供商消费（auth_mode=tencent_cloud 是其
+// 合法认证方式，见 dnsproviders.DNSPod.CredentialFieldOptions），其余族与
+// 提供商代码同名。仅供跨族掩码继承守卫比较使用——dnsCredentialFamilyMode
+// 的族语义（剪枝与 credentialsSemanticallyEqual 消费）不得随之改变。
+func dnsCredentialFamilyProviderCode(family string) string {
+	if family == "tencent" {
+		return "dnspod"
+	}
+	return family
+}
+
 // pruneSupersededDNSCredentialFamily 在维护请求把认证族从 stored 切到 creds 时
 // 删除旧族字段，返回被删除的键名（未切换返回 nil）。
 //
@@ -531,8 +543,10 @@ func (h *Handlers) UpdateCertificateConfig(c *gin.Context) {
 	// 形态的存量经掩码合并而来），保存时点名拒绝——旧族 token 静默沿用会让
 	// 失败推迟到签发/测试端点，且旧族密钥在窗口期随快照/备份扩散。省略凭据
 	// + provider 变更路径不受影响（旧值携带旧 mode → buildCredentials 族门 400）。
+	// 比较前把族归一到提供商口径（tencent→dnspod）：腾讯云 API 凭证是 dnspod
+	// 提供商的合法认证方式，按族名直比会把该合法切换恒 400 误拒。
 	if effectiveProvider != oldProvider {
-		if family := dnsCredentialFamilyMode(effectiveCredentials); family != "" && family != effectiveProvider {
+		if family := dnsCredentialFamilyMode(effectiveCredentials); family != "" && dnsCredentialFamilyProviderCode(family) != effectiveProvider {
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_ce55150e"), MessageKey: "k_ce55150e"})
 			return
 		}

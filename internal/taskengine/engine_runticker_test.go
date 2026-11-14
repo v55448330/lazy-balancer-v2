@@ -117,3 +117,26 @@ func TestRunTicker_nonPositiveIntervalFallsBackToOneSecond(t *testing.T) {
 	// interval<=0 兜底 1s 并记一次 warn：不得静默空转（无节拍）也不得热循环。
 	waitForEngine(t, "兜底 1s 节拍出现第二轮", 3*time.Second, func() bool { return runs.Load() >= 2 })
 }
+
+// Given ctx 在 RunTicker 启动前已取消（Stop×daemon 启动竞态窗）。
+// When RunTicker 执行。
+// Then 零执行直接返回——bootstrap 不得无条件先跑一轮 fn（fn 会持已取消
+// ctx 执行一整轮，与「ctx 取消即停」契约矛盾）。
+func TestRunTicker_preCancelledContextSkipsBootstrap(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	var runs atomic.Int32
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		RunTicker(ctx, time.Millisecond, nil, func(context.Context) { runs.Add(1) })
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("预取消 ctx 的 RunTicker 未立即返回")
+	}
+	if got := runs.Load(); got != 0 {
+		t.Fatalf("预取消 ctx 执行次数=%d, want 0（bootstrap 前必须查 ctx.Err）", got)
+	}
+}

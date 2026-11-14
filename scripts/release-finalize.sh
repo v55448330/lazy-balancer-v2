@@ -14,9 +14,9 @@
 #   --tag           必填：本次发布的镜像 tag（如 v2.4.2-beta）
 #   --push-channel  beta|stable：beta=只推测试 tag（不更新 latest）；stable=推正式 tag+latest
 #   --skip-cloud    跳过 buildx 推送与远端断言（仅本地构建+容器对账）
-#   --keep-bench    保留压测容器（默认清理）
 #
-# 每步产出机器可判定输出；任一步失败立即退出非零（set -e + 显式检查）。
+# 每步产出机器可判定输出：基线（①）失败立即退出非零（不再继续构建/部署/推送）；
+# 其余步失败累积后汇总非零（set -e + 显式检查）。
 set -euo pipefail
 
 TAG="" CHANNEL="" SKIP_CLOUD=0 DRY_RUN=0 SELF_TEST=0
@@ -59,7 +59,8 @@ validate_release_channel() {
   return 0
 }
 
-# self_test 离线断言 latest 通道门（不构建/不推送/不写盘）。
+# self_test 离线断言 latest 通道门与基线失败传播（不构建/不推送；基线用例在
+# mktemp 夹具仓里跑，不触碰本仓工作树）。
 self_test() {
   local fail=0 out
   out="$(release_image_tags v2.4.5 stable)"
@@ -71,7 +72,28 @@ self_test() {
   validate_release_channel v2.4.5-beta beta >/dev/null 2>&1 || { echo "SELFTEST FAIL: beta+-beta tag 应通过" >&2; fail=1; }
   if validate_release_channel v2.4.5-beta stable >/dev/null 2>&1; then echo "SELFTEST FAIL: stable+-beta tag 应拒绝" >&2; fail=1; fi
   if validate_release_channel v2.4.5 beta >/dev/null 2>&1; then echo "SELFTEST FAIL: beta+正式 tag 应拒绝" >&2; fail=1; fi
-  if [[ "$fail" == "0" ]]; then echo "SELFTEST: OK（latest 仅 stable 推送）"; fi
+  # 基线失败传播：夹具仓工作树弄脏 → ① 必须立即退出非零，且 ② 及以后步骤
+  # 不得执行（旧实现累积 FAILURES 继续跑，基线失败仍会 compose 部署+buildx 推送）。
+  local fixture rc
+  fixture="$(mktemp -d "${TMPDIR:-/tmp}/finalize-selftest.XXXXXX")"
+  mkdir -p "$fixture/scripts" "$fixture/web"
+  cp "$0" "$fixture/scripts/release-finalize.sh"
+  set +e
+  (
+    cd "$fixture" || exit 1
+    git init -q && git config user.email selftest@local && git config user.name selftest || exit 1
+    printf 'base\n' > .gitkeep
+    git add -A && git commit -qm base || exit 1
+    printf 'dirty\n' >> .gitkeep
+    bash scripts/release-finalize.sh --tag v9.9.9-beta --push-channel beta --skip-cloud >"$fixture/out.log" 2>&1
+  )
+  rc=$?
+  set -e
+  if [[ "$rc" -ne 1 ]]; then echo "SELFTEST FAIL: 基线失败应立即退出 1，实际 rc=$rc" >&2; fail=1; fi
+  if grep -q '② 前端构建' "$fixture/out.log"; then echo "SELFTEST FAIL: 基线失败后仍执行了后续步骤" >&2; fail=1; fi
+  if ! grep -q '基线对账失败' "$fixture/out.log"; then echo "SELFTEST FAIL: 基线失败未给出立即退出原因" >&2; fail=1; fi
+  rm -rf "$fixture"
+  if [[ "$fail" == "0" ]]; then echo "SELFTEST: OK（latest 仅 stable 推送；基线失败立即退出）"; fi
   return "$fail"
 }
 if [[ "$SELF_TEST" == "1" ]]; then self_test; exit $?; fi
@@ -102,6 +124,19 @@ step() { echo ""; echo "=== $1 ==="; }
 pass() { echo "  ✓ $1"; }
 fail() { echo "  ✗ $1"; FAILURES+=("$1"); }
 
+# 基线失败立即退出：① 的任一项失败都不再进入构建/部署/推送（基线不干净时
+# 继续跑 ④ compose 部署与 ⑤ buildx 推送会把未对账的产物发出去）。其余步保持
+# 累积语义：失败记入 FAILURES，末尾汇总非零。
+baseline_gate() {
+  if [[ ${#FAILURES[@]} -ne 0 ]]; then
+    echo ""
+    echo "FINALIZE: 基线对账失败（${#FAILURES[@]} 项），立即退出——不构建/不部署/不推送"
+    local f
+    for f in "${FAILURES[@]}"; do echo "  ✗ $f"; done
+    exit 1
+  fi
+}
+
 # ── ① 基线：HEAD 干净且 dist 构建戳 == HEAD ──
 step "① 基线对账（HEAD/dist/tag）"
 HEAD="$(git rev-parse HEAD)"
@@ -112,6 +147,7 @@ if [[ "$DIST_STAMP" == "$HEAD" ]]; then
 else
   fail "dist 构建戳=$DIST_STAMP ≠ HEAD=${HEAD}（cd web && npm run build 后再跑本脚本）"
 fi
+baseline_gate
 
 # ── ② 前端构建（保证 dist 与 HEAD 一致）──
 step "② 前端构建"

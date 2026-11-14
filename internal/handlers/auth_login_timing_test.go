@@ -346,6 +346,7 @@ func TestLogin_rejectsOverlongCredentials(t *testing.T) {
 // ② 「用户名不存在」路径确实执行了一次 dummy 比较，且比较对象就是该 dummy 哈希。
 // 删掉比较语句、改用 MinCost 或走格式错误快路径都会使本用例变红。
 func TestLogin_unknownUserRunsDummyBcryptComparison(t *testing.T) {
+	withIsolatedGlobal(t)
 	database := setupAuthTestDB(t)
 	if _, err := database.Exec(`CREATE TABLE global_config (id INTEGER PRIMARY KEY, is_master BOOLEAN, jwt_expire_minutes INTEGER, mfa_lockout_enabled BOOLEAN); INSERT INTO global_config VALUES (1,1,20,0)`); err != nil {
 		t.Fatalf("create global config: %v", err)

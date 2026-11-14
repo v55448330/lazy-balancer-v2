@@ -37,8 +37,9 @@ import (
 //     文件兜底可用。
 //
 // 风暴自防（契约 C1）：2048 容量环形缓冲（满环覆写最旧，newest-wins）+
-// 64MiB 驻留字节预算 + 64KiB 单行上限——入队零阻塞恒定纳秒级，超限丢弃并
-// 计数（dropped），不无界驻留、不阻塞连接路径。
+// 64KiB 单行上限——内存精确上界=容量×槽字节（槽按需增长，单行上限把守），
+// 入队零阻塞恒定纳秒级（无入队超时、无独立驻留字节预算——满环即覆写），
+// 覆写/超限丢弃并计数（dropped），不无界驻留、不阻塞连接路径。
 
 const (
 	l4IPCSocketEnv        = "LB_SECURITY_EVENTS_IPC_SOCKET"
@@ -796,7 +797,7 @@ type l4Pipeline struct {
 	// 上界=容量×槽字节。depth==0 蕴含队列空——收尾刷盘据此排空。
 	ring   *l4Ring
 	notify chan struct{} // cap 1 非阻塞唤启 drain（满时静默，drain 轮询兜底）
-	// dropped 丢弃事件行累计（队列满/字节预算/单行上限/IPC 关闭/永久拒绝/
+	// dropped 丢弃事件行累计（满环覆写/单行上限/IPC 关闭/永久拒绝/
 	// spool 失败），/lb/l4-shipper-stats 暴露。
 	dropped atomic.Uint64
 
@@ -811,9 +812,8 @@ type l4Pipeline struct {
 }
 
 var (
-	l4PipelineMu      sync.Mutex
-	l4GlobalPipeline  *l4Pipeline
-	l4PipelineForTest func() // 测试注入的 global 重建钩子（tests 设置；生产 nil）
+	l4PipelineMu     sync.Mutex
+	l4GlobalPipeline *l4Pipeline
 )
 
 // acquirePipeline 返回进程级管线单例（首次创建时解析 IPC 配置并启动 drain）。
@@ -857,7 +857,7 @@ func (p *l4Pipeline) start() {
 	})
 }
 
-// enqueueEvent 零阻塞入队：满环覆写最旧（newest-wins），仅字节预算超限时
+// enqueueEvent 零阻塞入队：满环覆写最旧（newest-wins）并计数，单行超限
 // 丢弃计数（风暴自防——连接路径恒定纳秒级，事件行恒定小体量）。
 func (p *l4Pipeline) enqueueEvent(line []byte) {
 	// 零阻塞（方案③）：结构上不存在等待——满环覆写最旧，连接路径恒定纳秒级

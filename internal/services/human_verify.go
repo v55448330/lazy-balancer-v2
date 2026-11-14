@@ -14,7 +14,8 @@ import (
 // 人机验证配置装配（阶段 3，2026-11-12）：
 //   - 策略级：模式/方式/有效期/豁免（human_verify_* 列）
 //   - CC 检测阈值：global_config（自动封禁同族），渲染期一次读取
-//   - cookie 签名密钥：global_config.human_secret 惰性生成（32 字节 hex）
+//   - cookie 签名密钥：global_config.human_secret 启动期播种（db.Initialize，
+//     32 字节 hex，仅空值写）；渲染事务内只读。空值惰性兼容仅为带外清库兜底。
 
 // CCConfig 自动封禁 CC 检测配置（global_config 同族）。CC「封禁」响应退役
 // （2026-11-13）：CC 统一走挑战页，封禁由自动封禁管线承载。
@@ -53,15 +54,23 @@ var (
 	humanSecretCache string
 )
 
-// resetHumanSecretCache 集群 apply 写入新密钥后调用：强制下次渲染重新读取，
-// 使从节点与主端共用同一 cookie 签名密钥。
+// resetHumanSecretCache 强制下次渲染重新读取密钥（集群 apply / 备份导入
+// 写入新密钥后调用），使运行配置与库值收敛、从节点与主端共用同一密钥。
 func resetHumanSecretCache() {
 	humanSecretMu.Lock()
 	humanSecretCache = ""
 	humanSecretMu.Unlock()
 }
 
-// getHumanSecret 读取/惰性生成 cookie 签名密钥。
+// ResetHumanSecretCache 是 resetHumanSecretCache 的导出入口，供导入面
+// （handlers/config_backup.go 导入提交后收敛处）消费：备份导入改写
+// human_secret 后必须失效缓存，否则运行 Caddy 的 lb_human.secret 与库分叉
+// 至重启。集群 apply 链在包内直接调用 resetHumanSecretCache。
+func ResetHumanSecretCache() { resetHumanSecretCache() }
+
+// getHumanSecret 读取 cookie 签名密钥（启动期已由 db.Initialize 播种，
+// 正常路径只读）。空值惰性生成仅为带外清库兼容：写失败必须 warn 留痕——
+// 密钥仅存进程内存意味着重启后 cookie 全失效，不得静默。
 func getHumanSecret() string {
 	humanSecretMu.Lock()
 	defer humanSecretMu.Unlock()
@@ -81,7 +90,9 @@ func getHumanSecret() string {
 			return ""
 		}
 		secret = hex.EncodeToString(raw)
-		_, _ = db.DB.Exec(`UPDATE global_config SET human_secret=? WHERE id=1`, secret)
+		if _, err := db.DB.Exec(`UPDATE global_config SET human_secret=? WHERE id=1`, secret); err != nil {
+			Logf("warn", "人机验证：cookie 签名密钥落库失败（密钥仅存进程内存，重启后已签发 cookie 将全部失效）：%v", err)
+		}
 	}
 	humanSecretCache = secret
 	return secret

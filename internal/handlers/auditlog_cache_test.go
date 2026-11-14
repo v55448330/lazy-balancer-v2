@@ -23,6 +23,7 @@ import (
 )
 
 func TestGetAuditLogOptions_concurrentMissRunsSingleAggregation(t *testing.T) {
+	withIsolatedGlobal(t)
 	resetAuditOptionsCacheForTest()
 	oldFetch := auditOptionsFetch
 	var calls atomic.Int32

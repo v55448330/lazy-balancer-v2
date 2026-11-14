@@ -596,6 +596,11 @@ func (e *Engine) tryStartDaemon(r *registration, restartIntent bool) {
 	e.startDaemon(r.desc.ID, r, ctx, cancel)
 }
 
+// beforeRegisterAdmission 生产恒等 no-op 的测试缝：把 Register 的
+// 「stopped 检查→取锁」窗口变成确定性注入点（同包 beforeTaskRunsRead/
+// taskRunTerminalExec 先例），回归测试借此钉住 Register×Stop 竞态。
+var beforeRegisterAdmission = func() {}
+
 func (e *Engine) Register(d Descriptor) error {
 	if d.ID == "" || d.Family == "" {
 		return errors.New("taskengine: ID/Family 必填")
@@ -678,11 +683,14 @@ func (e *Engine) Register(d Descriptor) error {
 	// 永不被调度」的静默形态（StartLoop 对 stopped 恒 no-op）。响亮拒绝，
 	// 装配方须显式新建引擎。门排在描述符校验之后：停止态下传入非法描述符时
 	// 先报真正缺失的字段（排障指向正确），合法描述符仍被 ErrEngineStopped 拒绝。
+	// stopped 检查与登记同属 e.mu 临界区（与 reserveRunInternal admission
+	// 同族）：锁外 check-then-lock 会让并发 Stop 穿过检查，留下静默注册项。
+	beforeRegisterAdmission()
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	if e.stopped.Load() {
 		return ErrEngineStopped
 	}
-	e.mu.Lock()
-	defer e.mu.Unlock()
 	if _, exists := e.regs[d.ID]; exists {
 		return fmt.Errorf("taskengine: %s 重复注册", d.ID)
 	}
@@ -1147,6 +1155,11 @@ func (e *Engine) IsRunning(id string) bool {
 
 // ---- Daemon 生命周期 ----
 
+// daemonStartHookForTest 生产恒 nil 的测试缝：覆写常驻 Run 的计时起点，
+// 把「运行 24h 边界刚过即崩溃」的长运行形态变成确定性用例（同包
+// beforeTaskRunsRead/taskRunTerminalExec 注入缝先例）。
+var daemonStartHookForTest func() time.Time
+
 func (e *Engine) startDaemon(id string, r *registration, ctx context.Context, cancel context.CancelCauseFunc) bool {
 	e.mu.RLock()
 	if e.stopped.Load() {
@@ -1168,6 +1181,9 @@ func (e *Engine) startDaemon(id string, r *registration, ctx context.Context, ca
 	e.finishRun(runID, "success", 0)
 
 	start := time.Now()
+	if daemonStartHookForTest != nil {
+		start = daemonStartHookForTest()
+	}
 	go func() {
 		defer e.daemonWG.Done()
 		err := runGuarded(r.desc.Run, RunContext{Ctx: ctx, Trigger: "auto", RunID: runID})
@@ -1237,8 +1253,12 @@ func (e *Engine) startDaemon(id string, r *registration, ctx context.Context, ca
 		r.mu.Unlock()
 
 		if abnormal {
-			// 异常退出（非取消）：补记 failed 行（真实时长与错误）
-			failID := globalInsertRunAt(id, r.desc.Family, "auto", start.In(engineLocPtr()).Format("2006-01-02 15:04:05"), "")
+			// 异常退出（非取消）：补记 failed 行（真实时长与错误）。
+			// started_at=崩溃时刻（engineNowStr）而非回填原启动时刻：
+			// 24h 统计按 started_at 窗口（taskRunsStats24hSelect 单源），
+			// 长运行（>24h）daemon 崩溃回填启动时刻会落窗外——状态列
+			// failed 而 Fail24h=0 计数背离；duration_ms 仍为真实运行时长。
+			failID := globalInsertRunAt(id, r.desc.Family, "auto", engineNowStr(), "")
 			e.finishRunWithMessage(failID, "failed", dur, truncMsg(err))
 			taskLogAppendContext(ctx, id, fmt.Sprintf("[done] failed 耗时=%dms 触发=auto 错误=%s", dur, err.Error()))
 			switch {
@@ -2834,6 +2854,9 @@ type TaskRunsStats struct{ Runs, Success, Fail int }
 // taskRunsStats24hSelect 24h 统计聚合列单源（Stats24h 逐任务与
 // RunOverview 批量共用——同窗口同口径：started_at > now-1day，配置时区
 // 墙钟 engineNowStr）。改动窗口/聚合必须只动此处。
+// 常驻异常退出的 failed 行按崩溃时刻落 started_at（见 startDaemon 退出
+// 清理）：长运行 daemon 崩溃若回填原启动时刻会落窗外，状态列 failed 而
+// Fail24h=0 计数背离——事件行以事件时刻入窗，duration_ms 承载真实时长。
 const taskRunsStats24hSelect = `COUNT(*),
 		COALESCE(SUM(CASE WHEN status='success' THEN 1 ELSE 0 END),0),
 		COALESCE(SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END),0)`

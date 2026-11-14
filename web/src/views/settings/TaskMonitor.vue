@@ -1002,9 +1002,11 @@ const triggerLabels: Record<string, string> = { manual: t('app.settings.taskMoni
 const triggerLabel = (key: string) => (hasOwn(triggerLabels, key) ? triggerLabels[key] : key) || '—'
 // 结果词表=引擎 task_runs 结果域自有映射（running/success/failed/cancelled/
 // skipped/interrupted，与 GET /system/tasks/:id/history 的 status 枚举同源）；
-// 未知值显性回显「未知」——不借用 cert_jobs 状态机词表（issued/waiting_ca 等
-// 属证书业务域，进了结果列只会域错位误导；cert-job 动态行的业务状态由任务
-// 名称/详情的业务文本承载）。
+// 未知值显性回显「未知」。cert-job 动态行的业务态由后端单源
+// services.CertJobTaskResult 映射进本词表（issued/downloaded→success、
+// failed→failed、disabled→skipped、其余含限流停车→running），列表与历史
+// 同口径——业务生命周期细节由 message/免费证书页承载，前端不借用 cert_jobs
+// 状态机词表（进了结果列只会域错位误导）。
 const resultLabels: Record<string, string> = { success: t('app.settings.taskMonitor.result.success'), failed: t('app.settings.taskMonitor.result.failed'), cancelled: t('app.settings.taskMonitor.result.cancelled'), interrupted: t('app.settings.taskMonitor.result.interrupted'), running: t('app.settings.taskMonitor.result.running'), skipped: t('app.settings.taskMonitor.result.skipped') }
 const statusResultLabel = (r: string): string =>
   hasOwn(resultLabels, r) ? resultLabels[r]! : t('app.settings.taskMonitor.status.unknown')

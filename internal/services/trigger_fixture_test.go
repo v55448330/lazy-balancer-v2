@@ -47,6 +47,13 @@ const (
 	certJobVersionTriggerOldMember = "OLD.status<>'disabled' AND COALESCE(OLD.cert_pem,'')<>'' AND COALESCE(OLD.key_pem,'')<>'' AND datetime(OLD.expires_at)>datetime('now')"
 )
 
+// certJobVersionTriggerMasterGuard 是触发器的主节点角色守卫。生产单源是
+// db.MasterRoleConditionSQL（middleware 触发器 WHEN 子句经 whenClause 引用同一
+// 常量）；测试侧无法引用 middleware 未导出标识符，故此处保留字面量并由
+// TestCertJobVersionTriggerFixture_matchesMiddlewareSource 与 db 单源对账，
+// 守卫单边漂移不再静默绿。
+const certJobVersionTriggerMasterGuard = "(SELECT COALESCE(is_master,1) FROM global_config WHERE id=1)=1"
+
 // certJobVersionTriggerDDL 生成与生产同语义的 cert_jobs UPDATE 触发器：
 // 主节点守卫 + 成员条件（OLD 或 NEW 任一为成员）+ 语义列值真实变化守卫 +
 // disabled 双向例外。
@@ -60,7 +67,7 @@ func certJobVersionTriggerDDL(name string) string {
 	valueChange = append(valueChange, "(OLD.status<>'disabled' AND NEW.status='disabled')")
 	valueChange = append(valueChange, "(OLD.status='disabled' AND NEW.status<>'disabled')")
 
-	when := "(SELECT COALESCE(is_master,1) FROM global_config WHERE id=1)=1" +
+	when := certJobVersionTriggerMasterGuard +
 		" AND ((" + certJobVersionTriggerOldMember + ") OR (" + certJobVersionTriggerNewMember + "))" +
 		" AND (" + strings.Join(valueChange, " OR ") + ")"
 	return fmt.Sprintf(`CREATE TRIGGER %s
@@ -92,6 +99,13 @@ func TestCertJobVersionTriggerFixture_matchesMiddlewareSource(t *testing.T) {
 		t.Fatalf("read production trigger source %s: %v", middlewarePath, err)
 	}
 	text := string(source)
+
+	// 0) 主节点角色守卫：测试字面量必须与 db.MasterRoleConditionSQL 单源逐字
+	//    一致（生产 middleware 触发器 WHEN 子句经 whenClause 引用同一常量）。
+	//    此前守卫是手抄字面量且未纳入对账——单边漂移静默绿，版本 bump 契约失网。
+	if certJobVersionTriggerMasterGuard != db.MasterRoleConditionSQL {
+		t.Fatalf("主节点守卫漂移：\ndb 单源 = %q\n测试   = %q", db.MasterRoleConditionSQL, certJobVersionTriggerMasterGuard)
+	}
 
 	// 1) 成员条件：生产 NEW/OLD 常量字符串必须与测试字面量逐字一致。
 	for _, want := range []struct {

@@ -114,6 +114,12 @@ type httpsRedirectListener struct {
 // Accept 逐连接嗅探首字节：0x16=TLS ClientHello 透传（首字节经
 // peekedConn 重放，TLS 握手完整）；其余字节=明文 HTTP，起 goroutine 应答
 // （301/400 terminal，连接即闭）后继续 Accept。
+//
+// 已知残余（有意设计，用户裁定保留）：嗅探在 Accept 单循环内串行——
+// 静默客户端（connect 后不发字节）占住循环至多 acceptSniffDeadline（5s），
+// 持续多条此类连接会累积延迟后续 TLS 握手（低速 DoS 面）。死线已把单连接
+// 占用封顶；彻底消除需把嗅探移出 Accept 循环（每连接 goroutine 预读），
+// 代价是连接建立路径的 goroutine/内存放大，权衡后维持现状。
 func (l *httpsRedirectListener) Accept() (net.Conn, error) {
 	for {
 		conn, err := l.Listener.Accept()

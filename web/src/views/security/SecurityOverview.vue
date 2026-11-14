@@ -446,6 +446,7 @@ import type { APIResponse } from '@/types'
 import { securityActionColors } from '@/utils/chartTheme'
 import { ingestionWarningMessage, type IngestionHealth } from '@/utils/ingestionHealth'
 import { autobanStateLabel, autobanStatValue, isAutobanIneffective, suggestionBand } from '@/utils/autobanStatus'
+import { hasOwn } from '@/utils/hasOwn'
 
 const { t } = useI18n()
 
@@ -751,7 +752,9 @@ const autobanScopeText = computed(() => {
     challenge_issued: t('app.security.overview.autoban.scopeChallengeIssued'),
     challenge_failed: t('app.security.overview.autoban.scopeChallengeFailed'),
   }
-  const parts = (autobanStatus.value?.scope || '').split(',').map(s => s.trim()).filter(s => labels[s])
+  // 原型键守卫（hasOwn）：scope 库值经带外改库可含 constructor/toString 等，
+  // 裸下标会命中原型链函数（真值）绕过 filter，渲染出函数源码。
+  const parts = (autobanStatus.value?.scope || '').split(',').map(s => s.trim()).filter(s => hasOwn(labels, s))
   return parts.length > 0 ? parts.map(s => labels[s]).join(' + ') : '—'
 })
 const autobanSuggestions = computed(() => (autobanStatus.value?.suggestions || []).slice(0, 5))
@@ -882,7 +885,6 @@ onMounted(() => { void reloadAll() })
 }
 .strip-value.is-danger { color: #f56c6c; }
 .strip-value.is-warning { color: #e6a23c; }
-.strip-value.is-info { color: #409eff; }
 .strip-sub { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-secondary); white-space: nowrap; font-variant-numeric: tabular-nums; }
 .strip-sub .proto-split-item--tcp { margin-left: 10px; }
 .strip-sub-num { color: var(--text-secondary); }
@@ -937,7 +939,6 @@ onMounted(() => { void reloadAll() })
 .challenge-live-countdown.is-pass strong { color: #15803d; }
 .challenge-live-status { display: flex; flex-direction: column; align-items: center; gap: 3px; }
 .challenge-live-attempts { font-size: 11px; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
-.challenge-live-muted { color: var(--text-secondary); }
 .challenge-live-attribution { display: flex; flex-direction: column; line-height: 1.3; }
 .challenge-live-attribution span:last-child { font-size: 11px; color: var(--text-secondary); }
 .challenge-live-method { display: inline-block; min-width: 38px; font-weight: 600; color: var(--text-secondary); }

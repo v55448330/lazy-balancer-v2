@@ -608,11 +608,6 @@ func ResetAutobanCounters() {
 	autobanCapWarned = false
 }
 
-// autobanActionMatches WAF 事件口径过滤：action（blocked/logged）须在口径集合内。
-func autobanActionMatches(scope, action string) bool {
-	return AutobanScopeSet(scope)[action]
-}
-
 // HumanObserveItem 人机事件批量喂入的最小形态（IPC 提交点按批提交）。
 // Kind=challenge|fail|pass。
 type HumanObserveItem struct {
@@ -693,7 +688,16 @@ func autobanSourceEligible(ruleTriggered string) bool {
 }
 
 func autobanObserveEventScopedAt(cfg AutobanConfig, ip, action, ruleTriggered string, at time.Time) {
+	// 廉价门控前置：身份/窗口不合法的事件直接丢弃，不做口径解析与族判定。
+	if ip == "" || ruleTriggered == "" {
+		return
+	}
 	window := time.Duration(cfg.WindowMinutes) * time.Minute
+	if window <= 0 {
+		return
+	}
+	// 口径集合每事件只解析一次：WAF 事件与人机维度共用同一成员表
+	//（此前 autobanActionMatches 二次解析同一 scope，热路径双倍字符串切分）。
 	scopeSet := AutobanScopeSet(cfg.Scope)
 	if action == "challenged" {
 		// 人机事件：发放/失败按各自维度成员资格计数；通过永不计。
@@ -707,10 +711,7 @@ func autobanObserveEventScopedAt(cfg AutobanConfig, ip, action, ruleTriggered st
 		if dim == "" || !scopeSet[dim] {
 			return
 		}
-	} else if !autobanActionMatches(cfg.Scope, action) || !autobanStage3Eligible(ruleTriggered) || !autobanSourceEligible(ruleTriggered) {
-		return
-	}
-	if ip == "" || ruleTriggered == "" || window <= 0 {
+	} else if !scopeSet[action] || !autobanStage3Eligible(ruleTriggered) || !autobanSourceEligible(ruleTriggered) {
 		return
 	}
 	now := autobanNow()

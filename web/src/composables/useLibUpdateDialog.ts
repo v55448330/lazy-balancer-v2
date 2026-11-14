@@ -3,6 +3,7 @@ import { ElMessage } from 'element-plus'
 import { request, ApiRequestError } from '@/utils/api'
 import type { APIResponse } from '@/types'
 import { usePollingTask } from '@/composables/usePollingTask'
+import { tSafe } from '../i18n/tSafe.ts'
 
 /**
  * 规则库更新弹框单一范式（收敛 SecurityRules 三处近逐字重复的
@@ -135,7 +136,7 @@ export function useLibUpdateDialog<TInfo>(options: UseLibUpdateDialogOptions<TIn
       if (!(error instanceof ApiRequestError && error.status === 409)) {
         // 非 409 失败=触发未生效，报错后终止（原实现继续走 refreshStatus+startPolling，
         // 会把无关的既有任务进度当成本次触发结果轮询）；409 维持「已有任务在跑，直接轮询」
-        ElMessage.error(error instanceof Error ? error.message : '触发更新失败')
+        ElMessage.error(error instanceof Error ? error.message : tSafe('common.app.api.triggerUpdateFailed'))
         return
       }
     } finally {

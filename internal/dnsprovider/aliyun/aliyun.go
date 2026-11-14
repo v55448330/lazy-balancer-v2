@@ -398,6 +398,7 @@ type enumeratedRecord struct {
 // 过滤，客户端按 RR 精确匹配（大小写不敏感）收窄，翻页直到取尽。
 func (p *Provider) listChallengeRecords(ctx context.Context, zone, subDomain string) ([]enumeratedRecord, error) {
 	var collected []enumeratedRecord
+	var fetchedTotal int64
 	for page := 1; page <= challengeListPageLimit; page++ {
 		body, err := p.apiCall(ctx, "DescribeDomainRecords", map[string]string{
 			"DomainName": zone,
@@ -436,7 +437,12 @@ func (p *Provider) listChallengeRecords(ctx context.Context, zone, subDomain str
 			collected = append(collected, enumeratedRecord{recordID: record.RecordId, value: record.Value})
 		}
 		fetched := int64(len(result.DomainRecords.Record))
-		if fetched == 0 || int64(page)*challengeListPageSize >= result.TotalCount {
+		fetchedTotal += fetched
+		// 终止按累计实际取到数（与 dnspod/tencent/cloudflare 同口径）：
+		// 服务端可能按更小页容量返回，"页号×请求页大小" 会提前终止漏扫。
+		// TotalCount 缺失/失真（≤0）时短页兜底（与 cloudflare 同口径）：
+		// 不足请求页大小即末页，页数上限兜底防失控翻页。
+		if fetched == 0 || (result.TotalCount > 0 && fetchedTotal >= result.TotalCount) || fetched < challengeListPageSize {
 			return collected, nil
 		}
 	}

@@ -66,6 +66,16 @@ export function detectLocale(): Locale {
   return /^en\b/i.test(nav) ? 'en' : 'zh-CN'
 }
 
+// 语言标记到 html：data-locale 供 CSS 按语言覆盖布局(英文 label auto、中文
+// 固定宽)；lang 供读屏/翻译启发按实际语言处理页面(a11y)——en 界面不得恒
+// 留 zh-CN。boot 与 setLocale 共用本同步点,切换与首帧口径一致。
+function syncLocaleMarkers(l: Locale): void {
+  if (typeof document !== 'undefined' && document.documentElement) {
+    document.documentElement.dataset.locale = l
+    document.documentElement.lang = l
+  }
+}
+
 export function setLocale(l: Locale): void {
   // storage 禁用环境(嵌入式 webview)裸 setItem 抛错会跳过
   // reload——用户困在旧语言页面。静默降级(偏好不持久化,本次会话仍生效)。
@@ -74,13 +84,11 @@ export function setLocale(l: Locale): void {
   } catch {
     /* storage 禁用:忽略 */
   }
+  syncLocaleMarkers(l)
   window.location.reload()
 }
 
-// 语言标记到 html(供 CSS 按语言覆盖布局:英文 label auto、中文固定宽)
-if (typeof document !== 'undefined' && document.documentElement) {
-  document.documentElement.dataset.locale = detectLocale()
-}
+syncLocaleMarkers(detectLocale())
 
 export const i18n = createI18n({
   legacy: false,

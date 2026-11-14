@@ -2391,10 +2391,20 @@ func (s *SyncService) bumpRegistrationConfirmFailure(ctx context.Context, reason
 		//（secret 已清、token 未清 → 下一轮的 401 以通用文案覆盖终止提示并把
 		// 循环置 Halted，明文令牌生命周期也超出设计）。失败必须留痕——静默
 		// 失败会让排障只剩通用 401。
-		if applied, derr := s.updateSlaveConfig(ctx, "registration_secret='', registration_id=NULL, registration_confirm_failures=0, cluster_token=''"); derr != nil {
+		applied, derr := s.updateSlaveConfig(ctx, "registration_secret='', registration_id=NULL, registration_confirm_failures=0, cluster_token=''")
+		if derr != nil {
 			Logf("warn", "bumpRegistrationConfirmFailure: 清除注册态失败（终止文案可能被后续 401 覆盖，需人工重新注册）: %v", derr)
 		} else if !applied {
 			Logf("info", "bumpRegistrationConfirmFailure: 节点已升主，清除注册态按预期 no-op")
+		}
+		// 终止轨道与令牌撤销同口径置 Halted：只清注册态不置 Halted 时，
+		// run 循环按未注册态 10s 空转，任务监控呈现 running 而节点状态已终止
+		//（两观测面分叉）。Halted 后任务面经状态镜像投射 failed；恢复通道=
+		// 重新注册（BecomeSlave 的 Resume）/提升为主节点，与终止文案指引一致。
+		// 仅在清除真实生效（从端语境）时置位——升主 no-op 不得把主节点同步
+		// 服务误置 Halted。
+		if applied {
+			s.state.Store(uint32(syncStateHalted))
 		}
 	} else {
 		Logf("error", "集群注册确认失败 %d/%d：%s", failures, registrationConfirmMaxFailures, reason)

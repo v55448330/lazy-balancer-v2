@@ -517,9 +517,10 @@ func clusterRegisterRateLimit() gin.HandlerFunc {
 	return clusterRateLimit("register", 30, "注册请求过于频繁，请稍后再试")
 }
 
-// MCP 使用双档限流：认证前的 IP 桶只保留 401 失败预算，认证后的 Key 桶为
-// 每个身份提供独立的 120/min 请求额度。同出口多 Key 不互相挤占，成功请求也
-// 不消耗匿名失败预算；体读与 MCP 转发仍在两道限流之后。
+// MCP 使用双档限流：认证前的 IP 桶只保留 401 失败预算，认证后的 Key 桶按
+// (来源 IP, API Key) 分桶——每 API Key 每来源 IP 各 120/min（同一 Key 从不同
+// 来源 IP 调用各享独立额度）。同出口多 Key 不互相挤占，成功请求也不消耗匿名
+// 失败预算；体读与 MCP 转发仍在两道限流之后。
 const mcpRateLimitPerMinute = 120
 
 func mcpSourceRateLimit() gin.HandlerFunc {

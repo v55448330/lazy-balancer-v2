@@ -157,10 +157,6 @@ func TestNormalizeLegacySecurityPolicyEnums_trimsWhitespaceDirtyValues(t *testin
 	}
 }
 
-// TestNormalizeLegacySecurityPolicyEnums_disablesRateLimitWithInvalidRPS
-// （enabled=1 & rps<1，修复前 Update 缺陷可落库）绑定启用规则时整份配置
-// 生成失败（render fail-visible）。启动归一关停业务开关（enabled=0，rps 库值
-// 保持原样不造假），与其他遗留行同事务归一+bump。
 // TestNormalizeLegacySecurityPolicyEnums_noBump_whenNoLegacyRows 验证无遗留
 // 行时归一是纯 no-op：不 bump 集群版本（避免每次启动版本空转）。
 func TestNormalizeLegacySecurityPolicyEnums_noBump_whenNoLegacyRows(t *testing.T) {
@@ -307,9 +303,9 @@ func TestNormalizeLegacySecurityPolicyEnums_backfillsInvalidBlockStatusCode(t *t
 	}
 }
 
-// 归一是保护语义变更（mode 非法→off 停发该策略全部规则，限流 1→0
-// 关闭保护），必须可选定位到策略：逐字段 warn 留痕并对两种收窄方向
-// 各落一条系统审计；合法限流行不得产生关停审计。
+// 归一是保护语义变更（mode 非法→off 停发该策略全部规则，ip_acl_mode 空→deny
+// 开始按名单拦截），必须可定位到策略：逐字段 warn 留痕，mode 收窄方向落一条
+// 系统审计；合法行不得产生归一留痕。
 func TestNormalizeLegacySecurityPolicyEnums_leavesPerPolicyTrace(t *testing.T) {
 	setupSecurityEnumTestDB(t)
 	insertLegacyPolicyRow(t, "legacy-blocking-typo", "BLOCKING", "deny", "deny")

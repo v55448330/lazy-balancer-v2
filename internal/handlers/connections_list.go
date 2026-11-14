@@ -37,6 +37,21 @@ const connectionsReqWindow = time.Hour
 const connectionsActiveWindow = time.Minute
 const connectionsClosingWindow = 10 * time.Minute
 
+// upstreamResolveTimeout 上游域名解析的超时上限：DNS 挂起不得阻塞连接刷新
+// （netstat 快照本身已有 TTL*4 预算，解析是其后置步骤，需独立有界）。
+const upstreamResolveTimeout = 6 * time.Second
+
+// upstreamResolveCacheMax 上游解析缓存条目上限：上游域名集合更替（规则增删/
+// 改 host）时旧键不得只增不逐出。超限整体重置——与 enrichLocationCache 同形态
+// （有界增长优先于精确 LRU，上游域名量级小，重建代价可忽略）。
+const upstreamResolveCacheMax = 1024
+
+// upstreamResolveLookup 上游域名解析缝（默认 net.Resolver.LookupIPAddr，带
+// ctx 超时）；var 供测试注入挂起/失败形态，钉「解析有界」契约。
+var upstreamResolveLookup = func(ctx context.Context, host string) ([]net.IPAddr, error) {
+	return net.DefaultResolver.LookupIPAddr(ctx, host)
+}
+
 type connectionEntry struct {
 	Proto    string `json:"proto"`
 	Local    string `json:"local"`
@@ -225,6 +240,36 @@ type upstreamResolveEntry struct {
 	expiresAt time.Time
 }
 
+// storeUpstreamResolveEntry 写入解析缓存并执行容量淘汰（调用方不持锁）：
+// 超过上限整体重置后再写入——缓存键只增不逐出会让上游域名集合更替时无界增长。
+func storeUpstreamResolveEntry(key string, entry upstreamResolveEntry) {
+	upstreamResolveMu.Lock()
+	if upstreamResolveCache == nil {
+		upstreamResolveCache = map[string]upstreamResolveEntry{}
+	}
+	if len(upstreamResolveCache) >= upstreamResolveCacheMax {
+		upstreamResolveCache = map[string]upstreamResolveEntry{}
+	}
+	upstreamResolveCache[key] = entry
+	upstreamResolveMu.Unlock()
+}
+
+// connectionCategoryPriority 连接态的截断保留优先级（数值小者优先保留）：
+// established=活跃（排障主视图）→ time_wait=待关闭 → closed=已关闭。
+// 超上限截断按此排序，活跃连接最后才被丢弃；未知分类兜底排末位。
+func connectionCategoryPriority(category string) int {
+	switch category {
+	case "established":
+		return 0
+	case "time_wait":
+		return 1
+	case "closed":
+		return 2
+	default:
+		return 3
+	}
+}
+
 // parseNetstatEntries netstat -tan 输出 → 连接明细（排除 LISTEN 行）。
 // 分类映射：ESTABLISHED=established；TIME_WAIT=time_wait；
 // CLOSE_WAIT/LAST_ACK/FIN_WAIT1/FIN_WAIT2/CLOSING=closed（终结态合计族）。
@@ -307,11 +352,6 @@ func loadCaddyEndpoints() (map[int]struct{}, map[string]struct{}) {
 		rows.Close()
 	}
 	now := time.Now()
-	upstreamResolveMu.Lock()
-	if upstreamResolveCache == nil {
-		upstreamResolveCache = map[string]upstreamResolveEntry{}
-	}
-	upstreamResolveMu.Unlock()
 	for _, u := range ups {
 		key := strings.ToLower(strings.TrimSpace(u.host))
 		upstreamResolveMu.Lock()
@@ -321,15 +361,20 @@ func loadCaddyEndpoints() (map[int]struct{}, map[string]struct{}) {
 			ips := map[string]struct{}{}
 			if net.ParseIP(key) != nil {
 				ips[key] = struct{}{}
-			} else if resolved, err := net.LookupIP(key); err == nil {
-				for _, ip := range resolved {
-					ips[ip.String()] = struct{}{}
+			} else {
+				// 带超时的解析：DNS 挂起不得阻塞连接刷新（LookupIPAddr 在
+				// ctx 到期时返回 ctx.Err，见 net/lookup.go 的 ctx.Done 分支）。
+				ctx, cancel := context.WithTimeout(context.Background(), upstreamResolveTimeout)
+				resolved, err := upstreamResolveLookup(ctx, key)
+				cancel()
+				if err == nil {
+					for _, ip := range resolved {
+						ips[ip.IP.String()] = struct{}{}
+					}
 				}
 			}
 			cached = upstreamResolveEntry{ips: ips, expiresAt: now.Add(time.Minute)}
-			upstreamResolveMu.Lock()
-			upstreamResolveCache[key] = cached
-			upstreamResolveMu.Unlock()
+			storeUpstreamResolveEntry(key, cached)
 		}
 		for ip := range cached.ips {
 			upstreams[ip+":"+strconv.Itoa(u.port)] = struct{}{}
@@ -428,17 +473,23 @@ func (h *Handlers) getConnectionsListCached() (connectionsListPayload, error) {
 		entries := parseNetstatEntries(string(output))
 		ports, upstreams := loadCaddyEndpoints()
 		conns := filterCaddyConnections(entries, ports, upstreams)
-		truncated := false
-		if len(conns) > connectionsListMaxRows {
-			sort.SliceStable(conns, func(a, b int) bool { return conns[a].Category < conns[b].Category })
-			truncated = true
-			conns = conns[:connectionsListMaxRows]
-		}
-		joinConnectionsMetadata(conns)
+		// 计数按截断前全集：截断只收窄下发明细行，不得让活跃计数低报
+		// （truncated=true 单独披露明细被截断，计数仍是全量事实）。
 		connCounts := map[string]int64{}
 		for _, e := range conns {
 			connCounts[e.Category]++
 		}
+		truncated := false
+		if len(conns) > connectionsListMaxRows {
+			// 按连接态优先级保留：established（活跃）优先，其次 time_wait
+			// （待关闭），最后 closed（已关闭）——字母序会把活跃连接先丢光。
+			sort.SliceStable(conns, func(a, b int) bool {
+				return connectionCategoryPriority(conns[a].Category) < connectionCategoryPriority(conns[b].Category)
+			})
+			truncated = true
+			conns = conns[:connectionsListMaxRows]
+		}
+		joinConnectionsMetadata(conns)
 		requests, reqMonOK := fetchReqMonSnapshot(h.cfg.CaddyAdminURL, fresh)
 		if reqMonOK {
 			joinRequestMetadata(requests)

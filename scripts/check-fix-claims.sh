@@ -507,6 +507,47 @@ EOF
     echo "SELFTEST FAIL: --commit 缺参数值的退出码应为 2，实际 ${missing_commit_rc}" >&2; return 1
   fi
 
+  # 32) 反例：前端 test: 证据被近似名前缀顶替——台账声称 DemoBehavior，仓里
+  #     只有 test('DemoBehaviorX'。闭合引号未锚定时前缀命中＝假绿。
+  printf "test('DemoBehaviorX', () => {})\n" > "$tmp/web/tests/prefix-sub.spec.ts"
+  cat > "$tmp/prefix-sub.tsv" <<'EOF'
+id|status|evidence|reason
+F-1|fixed|test:DemoBehavior|
+EOF
+  if (cd "$tmp" && bash scripts/check-fix-claims.sh --ledger prefix-sub.tsv >/dev/null 2>&1); then
+    echo "SELFTEST FAIL: 前端 test: 近似名前缀顶替却通过" >&2; return 1
+  fi
+  rm -f "$tmp/web/tests/prefix-sub.spec.ts"
+  # 正例对照：精确同名（闭合引号锚定后）仍须通过。
+  printf "test('DemoBehavior', () => {})\n" > "$tmp/web/tests/exact-name.spec.ts"
+  cat > "$tmp/exact-fe-name.tsv" <<'EOF'
+id|status|evidence|reason
+F-1|fixed|test:DemoBehavior|
+EOF
+  if ! (cd "$tmp" && bash scripts/check-fix-claims.sh --ledger exact-fe-name.tsv >/dev/null); then
+    echo "SELFTEST FAIL: 前端 test: 精确名正例被拒" >&2; return 1
+  fi
+  rm -f "$tmp/web/tests/exact-name.spec.ts"
+
+  # 33) 反例：code: 证据缺第三冒号——token 退化为行号字符串（code:path:3 的
+  #     token="3"），必须按格式错误拒绝，而不是拿行号当 token 弱比对。
+  cat > "$tmp/code-missing-colon.tsv" <<'EOF'
+id|status|evidence|reason
+F-1|fixed|code:internal/demo/demo.go:3|
+EOF
+  set +e
+  local missing_colon_out
+  missing_colon_out="$(cd "$tmp" && bash scripts/check-fix-claims.sh --ledger code-missing-colon.tsv 2>&1)"
+  local missing_colon_rc=$?
+  set -e
+  if [ "$missing_colon_rc" -eq 0 ]; then
+    echo "SELFTEST FAIL: code: 缺第三冒号却通过" >&2; return 1
+  fi
+  case "$missing_colon_out" in
+    *"格式错误"*) ;;
+    *) echo "SELFTEST FAIL: code: 缺第三冒号未按格式错误拒绝: $missing_colon_out" >&2; return 1;;
+  esac
+
   echo "fix-claims selftest: PASS"
 }
 
@@ -572,6 +613,12 @@ while IFS='|' read -r id status evidence reason; do
             rest="${item#code:}"
             path="${rest%%:*}"
             rest="${rest#*:}"
+            # 第三冒号必须存在：缺失时 token 退化为行号字符串（code:path:3 的
+            # token="3"），弱断言几乎恒命中——按格式错误显式拒绝。
+            case "$rest" in
+              *:*) ;;
+              *) echo "FAIL ${id}: code: 证据格式错误（须为 code:<path>:<line>:<token>，缺第三冒号）: $item" >&2; fail=1; continue;;
+            esac
             line="${rest%%:*}"
             token="${rest#*:}"
             if [ ! -f "$path" ]; then
@@ -616,7 +663,9 @@ while IFS='|' read -r id status evidence reason; do
             # 未转义插值会命中近似名。
             test_scope="${test_dir:-.}"
             escaped_name="$(escape_ere "$name")"
-            matches="$(code_match_files "^[[:space:]]*func[[:space:]]+${escaped_name}[(]|^[[:space:]]*test[(]['\"]${escaped_name}" "$test_scope")"
+            # 前端 test('name' 必须锚定闭合引号：不锚定时 TestFoo 会命中
+            # test('TestFooBar'（近似名前缀顶替，台账声称的测试其实不存在）。
+            matches="$(code_match_files "^[[:space:]]*func[[:space:]]+${escaped_name}[(]|^[[:space:]]*test[(]['\"]${escaped_name}['\"]" "$test_scope")"
             match_count="$(printf '%s\n' "$matches" | grep -c . || true)"
             if [ "$match_count" -eq 0 ]; then
               echo "FAIL ${id}: 测试不存在（注释掉的声明不算证据）: ${name}（搜索面: ${test_scope}）" >&2; fail=1

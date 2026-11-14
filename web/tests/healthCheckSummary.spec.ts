@@ -110,5 +110,9 @@ test('被动摘要语义钉迁词条:恢复窗口在场、不宣称超时(原 ru
   assert.ok(zhLexicon.includes('视为不健康'), '被动摘要判不健康原文必须在 zh 母本词条中')
   assert.ok(zhLexicon.includes('TCP 主动探测端口'), '主动 TCP 摘要原文必须在 zh 母本词条中')
   assert.ok(zhLexicon.includes('次判不健康，连续'), '主动阈值原文必须在 zh 母本词条中')
-  assert.doesNotMatch(zhLexicon.split('\n').filter((l) => l.includes('ingest.passive')).join('\n'), /超时/, '被动词条不得宣称超时语义')
+  // 过滤针必须匹配嵌套词条树的实际键形（'passive': 行）：点路径 ingest.passive
+  // 在母本里不存在，旧 filter 恒空 → doesNotMatch 空串永绿（i18n 迁移遗留空转）。
+  const passiveLines = zhLexicon.split('\n').filter((l) => /^\s*'passive':/.test(l))
+  assert.equal(passiveLines.length, 1, 'passive 词条必须恰有一行（过滤针不得落空）')
+  assert.doesNotMatch(passiveLines.join('\n'), /超时/, '被动词条不得宣称超时语义')
 })

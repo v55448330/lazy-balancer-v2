@@ -126,6 +126,7 @@ func TestRefreshBrandingMirrorDB_ignoresEmptyDataDir(t *testing.T) {
 // 时不得静默 continue（否则下一次 304 多一轮漂移重放）。
 func TestRecordAppliedSectionHashes_unchangedBranchInsertsMissingRow(t *testing.T) {
 	_, database := newClusterTestService(t)
+	setNodeMasterRole(t, database, false) // 节记账是从端专有写（角色谓词口径）
 	if _, err := database.Exec("DELETE FROM cluster_applied_sections"); err != nil {
 		t.Fatal(err)
 	}

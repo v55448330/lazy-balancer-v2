@@ -1,8 +1,9 @@
 package handlers
 
 // stage2（CC 防护）策略拦截页（2026-09-25 用户裁定开放）：创建/更新可携带
-// block_page_id（不再归一清零）；block_status_code 仍归一 0——挑战与封禁的
-// 响应码由 lb_human 插件决定（封禁固定 403），策略侧配码无处生效。
+// block_page_id（不再归一清零）；block_status_code 与其余阶段同口径——无页
+// 归零、有页保留（挑战/封禁响应码由 lb_human 插件决定，策略侧配码仅在绑定
+// 拦截页的直接封禁归因路径被渲染消费）。
 
 import (
 	"fmt"
@@ -59,10 +60,10 @@ func TestStage2Policy_blockPageIDRoundTrip(t *testing.T) {
 	}
 }
 
-// 写侧拦截状态码归一对齐：状态码只在「非 stage2 ∧ 已绑定自定义拦截页」时被
-// 渲染消费（stage2 限流恒 429；无页策略的 deny 恒 403）。Create 已归一，
-// 但 Update 的部分更新（只提交 block_status_code）曾原样落库——同一条 DB 形态
-// 只能经 PUT 产生，详情/列表于是宣称一个不生效的状态码。
+// 写侧拦截状态码归一对齐：状态码只在「已绑定自定义拦截页」时被渲染消费
+// （无页策略的 deny 恒 403）。Create 已归一，但 Update 的部分更新（只提交
+// block_status_code）曾原样落库——同一条 DB 形态只能经 PUT 产生，详情/列表
+// 于是宣称一个不生效的状态码。stage2 有页时与其余阶段同口径保留配码。
 func TestUpdateSecurityPolicy_blockStatusCodeNormalization(t *testing.T) {
 	t.Run("非 stage2 无拦截页时归零", func(t *testing.T) {
 		setupSecurityPolicyTestDB(t)

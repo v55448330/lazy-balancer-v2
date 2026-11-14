@@ -622,6 +622,14 @@ func persistCRSSnapshotFromInLock(liveDir, snapshotDir, version string) error {
 //     known &&!isMaster（真降级）：不回滚——树/行/标记同为
 //     新 tag 是一致态，且 run() 的 demote 分支（skipped 终态）不做 restore，
 //     交集群同步收敛。
+//
+// 已登记取舍（展示观察项，非数据面缺陷）：树交换段已把版本行/VERSION 标记落为
+// 新 tag，而 update_status 仍是交换前的中间阶段（installing/reloading）；本观察点
+// 返回取消错误后由 run() 的 cancel(...) 统一落 cancelled 终态。交换→cancel 落库
+// 之间的极窄窗口内，状态端点可能短暂展示「中间阶段 + 新版本号」的组合。这是
+// 有意设计：版本行先于 reloader 写入（crsPoolFingerprint 池键输入），版本一致性
+// 由同代回滚（rollbackAfterReloadFailure）与启动对账（ReconcileCRSState）保证，
+// 展示层的瞬时滞留不引入跨代态，不为消除窗口而把终态写入提前到交换段内。
 func (m *CRSUpdateManager) observeCancelAfterSwap(parent context.Context, prevTag, stage string) error {
 	cerr := parent.Err()
 	if cerr == nil {

@@ -151,6 +151,7 @@ func TestThreatRollup_geoGenerationPreservesTrimmedMinutes(t *testing.T) {
 }
 
 func TestThreatRollup_trailingRepairBackfillsLateMinute(t *testing.T) {
+	withIsolatedGlobal(t)
 	setupSecurityPolicyTestDB(t)
 	base := time.Date(2026, 10, 18, 12, 5, 30, 0, time.UTC)
 	installThreatClock(t, base)

@@ -1105,6 +1105,7 @@ var lbRuleColumns = fmt.Sprintf(`COALESCE(id,0), COALESCE(caddy_id,''), name, CO
 	COALESCE(health_check_path,''), COALESCE(health_check_interval,%d), COALESCE(health_check_timeout,%d), COALESCE(health_check_unhealthy_threshold,%d), COALESCE(health_check_healthy_threshold,%d),
 	COALESCE(enable_active_health_check,0), COALESCE(tcp_health_check_port,0), COALESCE(tcp_proxy_protocol,0), COALESCE(tcp_try_duration,0), COALESCE(tcp_try_interval,%d),
 	COALESCE(request_body_max_size_mb,0), COALESCE(upstream_keepalive_timeout,0), COALESCE(server_tokens_hidden,0), COALESCE(ntlm_compatible,0), COALESCE(upstream_force_http1,0),
+	COALESCE(forward_auth_enabled,0), COALESCE(forward_auth_upstream,''), COALESCE(forward_auth_uri,''), COALESCE(forward_auth_copy_headers,''),
 	COALESCE(custom_routes_enabled,0),
 	COALESCE(proxy_dial_timeout,0), COALESCE(proxy_response_header_timeout,0), COALESCE(proxy_read_timeout,0), COALESCE(proxy_write_timeout,0), COALESCE(proxy_stream_timeout,0), COALESCE(proxy_flush_interval,0), COALESCE(proxy_stream_close_delay,0),
 	COALESCE(enable_tls,0), COALESCE(tls_source,'manual'), COALESCE(acme_config_id,0), COALESCE(ca_provider_id,0), COALESCE(tls_cert,''), COALESCE(tls_key,''),
@@ -1121,6 +1122,7 @@ func scanLbRules(rows *sql.Rows) ([]models.LbRule, error) {
 	for rows.Next() {
 		var r models.LbRule
 		var description, domain, strategy, dnsFamily, tlsSource, tlsCert, tlsKey, compressTypes, hostHeader, healthCheckHost string
+		var forwardAuthUpstream, forwardAuthURI, forwardAuthCopyHeaders string
 		var dynamicDNS, enableDnsServer, enableActiveHealthCheck, enableTLS, tlsHTTPRedirect, enableCompress bool
 		var acmeConfigID, caProviderID int
 		var createdBy, updatedBy sql.NullInt64
@@ -1130,6 +1132,7 @@ func scanLbRules(rows *sql.Rows) ([]models.LbRule, error) {
 			&r.HealthCheckPath, &r.HealthCheckInterval, &r.HealthCheckTimeout, &r.HealthCheckUnhealthyThreshold, &r.HealthCheckHealthyThreshold,
 			&enableActiveHealthCheck, &r.TCPHealthCheckPort, &r.TCPProxyProtocol, &r.TCPTryDuration, &r.TCPTryInterval,
 			&r.RequestBodyMaxSizeMB, &r.UpstreamKeepaliveTimeout, &r.ServerTokensHidden, &r.NTLMCompatible, &r.UpstreamForceHTTP1,
+			&r.ForwardAuthEnabled, &forwardAuthUpstream, &forwardAuthURI, &forwardAuthCopyHeaders,
 			&r.CustomRoutesEnabled,
 			&r.ProxyDialTimeout, &r.ProxyResponseHeaderTimeout, &r.ProxyReadTimeout, &r.ProxyWriteTimeout, &r.ProxyStreamTimeout, &r.ProxyFlushInterval, &r.ProxyStreamCloseDelay,
 			&enableTLS, &tlsSource, &acmeConfigID, &caProviderID, &tlsCert, &tlsKey, &tlsHTTPRedirect,
@@ -1159,6 +1162,9 @@ func scanLbRules(rows *sql.Rows) ([]models.LbRule, error) {
 		r.CompressTypes = compressTypes
 		r.HostHeader = hostHeader
 		r.HealthCheckHost = healthCheckHost
+		r.ForwardAuthUpstream = forwardAuthUpstream
+		r.ForwardAuthURI = forwardAuthURI
+		r.ForwardAuthCopyHeaders = forwardAuthCopyHeaders
 		if createdBy.Valid {
 			r.CreatedBy = int(createdBy.Int64)
 		}
@@ -1174,6 +1180,72 @@ func scanLbRules(rows *sql.Rows) ([]models.LbRule, error) {
 		rules = append(rules, r)
 	}
 	return rules, rows.Err()
+}
+
+// ─── 读投影列集机械护栏（相对 services.LbRuleInsertColumns() 全集）────────────
+// lbRuleColumns 是手写 SQL 投影；写侧 specs 加列而读投影漏改时，GetRule/ListRules
+// 恒回零值 → GET→PUT 回写与复制静默丢列（认证网关四列曾缺席：UI 任意无关编辑
+// 关闭运行中的认证网关）。列名表与投影表达式逐位对应（唯一手写处），包初始化
+// 对全集做双向断言（无豁免——读投影携带全部列含审计四列），漏列即 panic
+// （fail-visible，与 UpdateRule 列投影护栏同模式）；钉测负向变异验证判定。
+var lbRuleReadProjectionColumnNames = []string{
+	"id", "caddy_id", "name", "description", "protocol", "domain", "listen_port", "strategy",
+	"dynamic_dns", "enable_dns_server", "dns_server", "dns_family",
+	"health_check_path", "health_check_interval", "health_check_timeout", "health_check_unhealthy_threshold", "health_check_healthy_threshold",
+	"enable_active_health_check", "tcp_health_check_port", "tcp_proxy_protocol", "tcp_try_duration", "tcp_try_interval",
+	"request_body_max_size_mb", "upstream_keepalive_timeout", "server_tokens_hidden", "ntlm_compatible", "upstream_force_http1",
+	"forward_auth_enabled", "forward_auth_upstream", "forward_auth_uri", "forward_auth_copy_headers",
+	"custom_routes_enabled",
+	"proxy_dial_timeout", "proxy_response_header_timeout", "proxy_read_timeout", "proxy_write_timeout", "proxy_stream_timeout", "proxy_flush_interval", "proxy_stream_close_delay",
+	"enable_tls", "tls_source", "acme_config_id", "ca_provider_id", "tls_cert", "tls_key",
+	"tls_http_redirect", "enable_compress", "compress_types", "enabled", "log_enabled",
+	"created_by", "created_at", "updated_at", "updated_by", "host_header", "health_check_host",
+	"block_page_stage1_id", "block_page_stage1_status", "block_page_stage3_id", "block_page_stage3_status",
+}
+
+// lbRuleReadProjectionColumns 返回完整读投影列名（init 冻结快照，运行期读路径
+// 与钉测不受源表原地变异影响）。
+func lbRuleReadProjectionColumns() []string {
+	return append([]string(nil), lbRuleReadProjectionColumnNames...)
+}
+
+// lbRuleListProjectionColumns 返回列表派生投影列名——派生仅把证书两列表达式
+// 置空占位，列集与完整投影恒一致。
+func lbRuleListProjectionColumns() []string {
+	return lbRuleReadProjectionColumns()
+}
+
+// lbRuleReadProjectionParityGaps 返回读投影列集相对 specs 全集的缺口（空=通过）。
+// 双向核对：specs 有而投影无（新增列漏改）与投影有而 specs 无（拼错/已删列残留）。
+func lbRuleReadProjectionParityGaps(projection, spec []string) []string {
+	specSet := make(map[string]bool, len(spec))
+	for _, column := range spec {
+		specSet[column] = true
+	}
+	projSet := make(map[string]bool, len(projection))
+	var gaps []string
+	for _, column := range projection {
+		if projSet[column] {
+			gaps = append(gaps, "读投影含重复列 "+column)
+		}
+		projSet[column] = true
+		if !specSet[column] {
+			gaps = append(gaps, "读投影含未知列 "+column+"（不在 LbRuleInsertColumns 全集）")
+		}
+	}
+	for _, column := range spec {
+		if !projSet[column] {
+			gaps = append(gaps, "读投影缺列 "+column)
+		}
+	}
+	sort.Strings(gaps)
+	return gaps
+}
+
+func init() {
+	if gaps := lbRuleReadProjectionParityGaps(lbRuleReadProjectionColumns(), services.LbRuleInsertColumns()); len(gaps) > 0 {
+		panic("lb_rules 读投影全集断言失败：" + strings.Join(gaps, "；"))
+	}
 }
 
 // ruleRelationBatchSize 关系批量查询的分块大小：单条

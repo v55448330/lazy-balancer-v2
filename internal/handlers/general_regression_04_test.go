@@ -106,6 +106,7 @@ func TestRetireCertJobsForDomain(t *testing.T) {
 // （同为新域）便放行，把旧域证书部署到新域（瞬时 TLS 名称不匹配）。测试直接
 // 观测取消回调触发时任务行仍是旧域（取消先于迁移 UPDATE）。
 func TestUpdateRule_cancels_in_flight_job_before_domain_migration(t *testing.T) {
+	withIsolatedGlobal(t)
 	// Given：一条 acme_dns 规则 + 旧域已签发任务
 	harness := newUpdateAuditRuleHandlers(t, "lb_migrate_cancel", 0, false)
 	seedAuditRule(t, "lb_migrate_cancel", "before", "mc-old.example.test", 8080, true, "acme_dns", true)

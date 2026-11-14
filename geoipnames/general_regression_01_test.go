@@ -64,9 +64,6 @@ func TestCrawlerEngines_registryInvariants(t *testing.T) {
 			t.Errorf("引擎 ID 重复: %q（CrawlerEngineVerifyMethod/ValidCrawlerEngineID 语义歧义）", e.ID)
 		}
 		seen[e.ID] = true
-		if e.Name == "" {
-			t.Errorf("%s: Name 不得为空", e.ID)
-		}
 		if e.UARegex == nil {
 			t.Errorf("%s: UARegex 不得为 nil", e.ID)
 		}

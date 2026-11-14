@@ -376,8 +376,9 @@ var backupBooleanTableColumns = map[string][]string{
 	"nodes": {"is_approved", "cluster_token_delivered"},
 }
 
-// 备份表 NULL→默认值归一映射（restoreTable 写入侧，覆盖除
-// security_policy_bindings 外的 16 表——绑定表为派生数据，无 NULL 归一列）。
+// 备份表 NULL→默认值归一映射（restoreTable 写入侧，覆盖全部 18 张备份表，
+// 含 security_policy_bindings 的 rank 列——绑定表虽为派生数据，rank 的 NULL
+// 仍需归一 0，见下方映射内注释）。
 // 默认值与集群快照 dump 侧逐列对齐（cluster_snapshot.go 各 snapshot* 函数的
 // COALESCE 表达式）——「全量替换」两条通道（备份导入/集群快照）对同一 NULL
 // 行必须产出同一落库值。
@@ -3811,8 +3812,8 @@ func validateV2BackupAutobanConfig(config map[string]any) ([]string, error) {
 				notes = append(notes, fmt.Sprintf("autoban_threshold 越界（%d），已钳位为 %d", n, clamped))
 			}
 		} else {
-			config["autoban_threshold"] = 100
-			notes = append(notes, "autoban_threshold 非整数形态，已归一为 100")
+			config["autoban_threshold"] = db.DefaultAutobanThreshold
+			notes = append(notes, fmt.Sprintf("autoban_threshold 非整数形态，已归一为 %d", db.DefaultAutobanThreshold))
 		}
 	}
 	if raw, exists := config["autoban_window_minutes"]; exists && raw != nil {
@@ -3829,8 +3830,8 @@ func validateV2BackupAutobanConfig(config map[string]any) ([]string, error) {
 				notes = append(notes, fmt.Sprintf("autoban_window_minutes 越界（%d），已钳位为 %d", n, clamped))
 			}
 		} else {
-			config["autoban_window_minutes"] = 5
-			notes = append(notes, "autoban_window_minutes 非整数形态，已归一为 5")
+			config["autoban_window_minutes"] = db.DefaultAutobanWindowMinutes
+			notes = append(notes, fmt.Sprintf("autoban_window_minutes 非整数形态，已归一为 %d", db.DefaultAutobanWindowMinutes))
 		}
 	}
 	// 旧备份兼容（2026-11-13 口径多选改造）：单值 scope（blocked/logged/all）
@@ -3863,7 +3864,7 @@ func validateV2BackupAutobanConfig(config map[string]any) ([]string, error) {
 		invalid func(string) bool
 		choices string
 	}{
-		{"autoban_duration", "1h", func(s string) bool { return !services.ValidAutobanDuration(s) }, "10m/30m/1h/6h/12h/24h/permanent"},
+		{"autoban_duration", db.DefaultAutobanDuration, func(s string) bool { return !services.ValidAutobanDuration(s) }, "10m/30m/1h/6h/12h/24h/permanent"},
 		{"autoban_scope", db.DefaultAutobanScope, func(s string) bool { return !services.ValidAutobanScope(s) }, "blocked/logged/challenge_issued/challenge_failed 的非空组合"},
 	} {
 		raw, exists := config[field.key]
@@ -4443,23 +4444,33 @@ func revalidateImportTrustedProxyRefs(ctx context.Context, tx *sql.Tx, backup *c
 //   - security_policies.ip_whitelist_refs
 //   - security_policies.crs_excluded_rules 条目内 listRefs（读侧双格式归一）
 //
-// 判据：引用 id 必须存在于「导入后名单集合」（=备份携带的名单行 id 集）。初检
-// （validateV2BackupSecurityPoliciesWithQuerier）只遍历备份携带的两表行，策略表
-// 缺席时整条轴跳过；名单表替换又是全量 delete+insert（restoreTable 保留原 id），
-// 于是同 id 的内容可以整份换人——策略的生效/放行 IP 集合随备份内容变化而
-// 没有任何告警。悬空即 400 点名策略与名单 id（与受信代理轴同一取向：宁可
-// 要求同时携带策略表，也不放行「已绑定但语义换人」的静默状态）。
+// 判据一（存在性）：引用 id 必须存在于「导入后名单集合」（=备份携带的名单行
+// id 集）。初检（validateV2BackupSecurityPoliciesWithQuerier）只遍历备份携带
+// 的两表行，策略表缺席时整条轴跳过；名单表替换又是全量 delete+insert
+// （restoreTable 保留原 id），于是同 id 的内容可以整份换人——策略的生效/放行
+// IP 集合随备份内容变化而没有任何告警。悬空即 400 点名策略与名单 id（与受信
+// 代理轴同一取向：宁可要求同时携带策略表，也不放行「已绑定但语义换人」的
+// 静默状态）。
+// 判据二（内置名单角色门）：备份行以 system=1 顶替同 id 时，live 策略的引用
+// 按写侧 validateBuiltinIPListRefs 同一契约复核——内置名单仅允许 ACL deny，
+// 信任名单/allow/CRS 排除引用内置名单会让威胁/封禁 IP 获得放行语义（黑名单
+// 语义反转）。初检的名称白名单（validateImportedSystemIPLists）允许 id 撞号，
+// 与受信代理轴 revalidateImportTrustedProxyRefs 的内置门同构。
 func revalidateImportLivePolicyIPListRefs(ctx context.Context, tx *sql.Tx, backup *configBackup) error {
 	if backup == nil {
 		return nil
 	}
 	carriedListIDs := make(map[int64]struct{}, len(backup.Tables["security_ip_lists"]))
+	builtinLists := make(map[int64]string, len(backup.Tables["security_ip_lists"]))
 	for _, row := range backup.Tables["security_ip_lists"] {
 		if id, ok := backupInteger(row["id"]); ok {
 			carriedListIDs[int64(id)] = struct{}{}
+			if backupBooleanEnabled(row["system"]) {
+				builtinLists[int64(id)] = backupString(row["name"])
+			}
 		}
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT id, COALESCE(name,''), COALESCE(ip_acl_list_refs,'[]'), COALESCE(ip_whitelist_refs,'[]'), COALESCE(crs_excluded_rules,'[]') FROM security_policies`)
+	rows, err := tx.QueryContext(ctx, `SELECT id, COALESCE(name,''), COALESCE(ip_acl_mode,''), COALESCE(ip_acl_list_refs,'[]'), COALESCE(ip_whitelist_refs,'[]'), COALESCE(crs_excluded_rules,'[]') FROM security_policies`)
 	if err != nil {
 		return fmt.Errorf("锁内读取安全策略的名单引用失败: %v", err)
 	}
@@ -4468,10 +4479,11 @@ func revalidateImportLivePolicyIPListRefs(ctx context.Context, tx *sql.Tx, backu
 	var firstName string
 	var firstListID int64
 	found := false
+	var builtinMessage string
 	for rows.Next() {
 		var policyID int64
-		var policyName, aclRefs, whitelistRefs, crsExcluded string
-		if err := rows.Scan(&policyID, &policyName, &aclRefs, &whitelistRefs, &crsExcluded); err != nil {
+		var policyName, aclMode, aclRefs, whitelistRefs, crsExcluded string
+		if err := rows.Scan(&policyID, &policyName, &aclMode, &aclRefs, &whitelistRefs, &crsExcluded); err != nil {
 			return fmt.Errorf("锁内读取安全策略的名单引用失败: %v", err)
 		}
 		check := func(listID int64) {
@@ -4482,13 +4494,26 @@ func revalidateImportLivePolicyIPListRefs(ctx context.Context, tx *sql.Tx, backu
 				firstPolicyID, firstName, firstListID, found = policyID, policyName, listID, true
 			}
 		}
-		for _, raw := range []string{aclRefs, whitelistRefs} {
-			for _, listID := range parseIPListRefsIDs(raw) {
-				check(listID)
-			}
-		}
-		for _, listID := range crsExcludedListRefs(crsExcluded) {
+		aclRefIDs := parseIPListRefsIDs(aclRefs)
+		wlRefIDs := parseIPListRefsIDs(whitelistRefs)
+		excludedRefIDs := crsExcludedListRefs(crsExcluded)
+		for _, listID := range aclRefIDs {
 			check(listID)
+		}
+		for _, listID := range wlRefIDs {
+			check(listID)
+		}
+		for _, listID := range excludedRefIDs {
+			check(listID)
+		}
+		// 内置名单角色门：空 ip_acl_mode 按 deny 归一（与初检/写侧同口径）。
+		if builtinMessage == "" && len(builtinLists) > 0 {
+			if aclMode == "" {
+				aclMode = "deny"
+			}
+			if message := validateBuiltinIPListRefs(builtinLists, aclRefIDs, wlRefIDs, excludedRefIDs, aclMode); message != "" {
+				builtinMessage = fmt.Sprintf("导入后安全策略 %q(#%d)：%s（策略表未随包携带，而名单表被替换为内置名单顶替同 id）——请同时携带安全策略表或改用自定义名单", policyName, policyID, message)
+			}
 		}
 	}
 	if err := rows.Err(); err != nil {
@@ -4496,6 +4521,9 @@ func revalidateImportLivePolicyIPListRefs(ctx context.Context, tx *sql.Tx, backu
 	}
 	if found {
 		return fmt.Errorf("导入后安全策略 %q(#%d) 引用的地址列表 #%d 将不存在（策略表未随包携带，而名单表被替换为不含该 id 的集合）——请同时携带安全策略表或保留该名单", firstName, firstPolicyID, firstListID)
+	}
+	if builtinMessage != "" {
+		return errors.New(builtinMessage)
 	}
 	return nil
 }
@@ -6165,11 +6193,13 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 			oldAutoBackupEnabled, oldAutoBackupEnabledKnown = enabled, true
 		}
 	}
-	// 六列自动封禁配置的「导入前」快照：仅在备份实际携带该组列时读取（未
-	// 携带时通用 UPDATE 不写这些列，运行值不可能变化——省一次点查且避免把
-	// 无关导入纳入收敛判定）。读失败=未知：跳过运行期收敛并留痕，不升级为
-	// 导入失败（该组列与导入主体无关，误判方向是「少清一次桶」而非数据损坏）。
-	if backup.Config != nil && configCarriesAutobanColumns(backup.Config) {
+	// 六列自动封禁配置的「导入前」快照：仅在备份实际携带该组列（或
+	// human_secret——同经通用 UPDATE 写入、提交后需缓存失效收敛）时读取
+	// （未携带时通用 UPDATE 不写这些列，运行值不可能变化——省一次点查且
+	// 避免把无关导入纳入收敛判定）。读失败=未知：跳过运行期收敛并留痕，
+	// 不升级为导入失败（该组列与导入主体无关，误判方向是「少清一次桶」
+	// 而非数据损坏）。
+	if backup.Config != nil && configCarriesAutobanRuntimeColumns(backup.Config) {
 		if cfg, readErr := services.ReadAutobanConfigFrom(ctx, tx); readErr != nil {
 			services.Logf("warn", "配置导入：读取导入前自动封禁配置失败，已跳过运行期收敛: %v", readErr)
 		} else {
@@ -6787,6 +6817,16 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 			})
 		}
 	}
+	// human_secret 的第二条写入路径（同上方通用 `UPDATE global_config`）：
+	// 集群 apply 链写入新密钥后调用 resetHumanSecretCache 失效进程缓存，导入
+	// 面此前缺同一接线——缓存保留旧密钥会让下一次渲染的 lb_human.secret 与
+	// 库分叉至重启（已签发挑战凭证按旧密钥校验）。携带即失效（幂等；密钥
+	// 未变化时重读同值，无副作用）；仅在提交成功后执行，回滚路径不触碰缓存。
+	if backup.Config != nil {
+		if _, carriesHumanSecret := backup.Config[configBackupHumanSecretColumn]; carriesHumanSecret {
+			services.ResetHumanSecretCache()
+		}
+	}
 	if len(pendingDeletedNodePins) > 0 {
 		// 已删除节点的 pin/缓存清理与导入同生共死：只在提交成功后登记执行
 		// （见 collectDeletedNodePinTargets 注释）。此处点仍在 caddyOpMu 临界区，
@@ -7173,25 +7213,35 @@ func readImportOldAutoBackupEnabled(ctx context.Context, q importRowQuerier) (in
 	return enabled, nil
 }
 
-// configBackupAutobanColumns 是自动封禁六列：通用
-// `UPDATE global_config` 的写入面，也是运行期收敛（清桶/重算达标/禁用收尾/
-// 调度联动）判定的输入面。新增/改名时必须与 services.ReadAutobanConfigFrom
-// 的列清单同步——否则导入侧比对到「无变化」而运行期实际已换配置。
+// configBackupAutobanColumns 是自动封禁六列（与 services.ReadAutobanConfigFrom
+// 的 SELECT 列清单一一对应）：通用 `UPDATE global_config` 的写入面，也是
+// 运行期收敛（清桶/重算达标/禁用收尾/调度联动）判定的输入面。新增/改名时
+// 必须与读侧同步——否则导入侧比对到「无变化」而运行期实际已换配置。
+// cc_* 阈值列不在此清单：CC 检测阈值已迁策略级（security_policies.cc_*，
+// loadCCConfig 按启用策略读取），global_config 的同名列是零运行期消费的
+// 遗留列，不参与自动封禁收敛判定。
 var configBackupAutobanColumns = []string{
 	"autoban_enabled", "autoban_threshold", "autoban_window_minutes",
 	"autoban_duration", "autoban_scope", "autoban_dry_run",
-	"cc_rps_limit", "cc_rps_window", "cc_4xx_ratio", "cc_session_ua_threshold", "human_secret",
 }
 
-// configCarriesAutobanColumns 报告备份全局配置区是否携带自动封禁六列之一
-// （携带即可能改写运行值，需要在提交后比对并收敛）。
-func configCarriesAutobanColumns(config map[string]any) bool {
+// configBackupHumanSecretColumn 人机验证 cookie 签名密钥列：不属于自动封禁
+// 六列（ReadAutobanConfigFrom 不读取），但同经通用 `UPDATE global_config`
+// 写入，提交后需要独立的缓存失效收敛（services.ResetHumanSecretCache），
+// 故单列登记而不混入六列清单。
+const configBackupHumanSecretColumn = "human_secret"
+
+// configCarriesAutobanRuntimeColumns 报告备份全局配置区是否携带自动封禁
+// 六列或 human_secret 之一（携带即可能改写运行值/缓存前提，需要在提交后
+// 比对并收敛；human_secret 触发的是密钥缓存失效而非六列比对）。
+func configCarriesAutobanRuntimeColumns(config map[string]any) bool {
 	for _, column := range configBackupAutobanColumns {
 		if _, carried := config[column]; carried {
 			return true
 		}
 	}
-	return false
+	_, carriesSecret := config[configBackupHumanSecretColumn]
+	return carriesSecret
 }
 
 // importAutoBackupResetNeeded 判定导入提交后是否重置自动备份水位（口径

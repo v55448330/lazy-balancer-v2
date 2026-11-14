@@ -311,3 +311,84 @@ func TestSecurityEventsIPCHandler_humanEventCarriesRuleAndPolicyAttribution(t *t
 		t.Fatalf("attribution=(%d,%q,%q), want (%d,归属规则,归属CC策略)", gotPID, ruleName, policyName, pid)
 	}
 }
+
+// Given 三条人机事件（challenge/fail），ts 带非零毫秒且同秒。
+// When 摄入提交。
+// Then event_time 落库为定宽 UTC 秒字符串（与 WAF 写侧同口径）——直接绑定
+// time.Time 会让驱动按默认布局落出带毫秒/时区后缀的形态（实测
+// 2026-08-11 11:21:40.123+00:00），读侧的字符串窗口比较/同秒边界/保留期清理
+// 随之失真。断言用 CAST 取原始存储文本：DATETIME 声明列经驱动 Scan 会被
+// 解析成 time.Time 再渲染，掩盖真实落库形态。
+func TestSecurityEventsIPCHandler_humanEventTimeStoredAsCanonicalUTCSeconds(t *testing.T) {
+	setupSecurityPolicyTestDB(t)
+	h := &SecurityEventsIPCServer{}
+	// 毫秒非零：驱动默认布局会把它写成小数秒；同秒两行钉住截秒语义。
+	// 第三行整秒（ms=0）：无小数秒的规范形态不得回归。
+	body := `[{"ts":1786447300123,"rule_id":"lb-ts","client_ip":"203.0.113.81","method":"GET","uri":"/t","ua":"TS/1.0","kind":"challenge"},{"ts":1786447300456,"rule_id":"lb-ts","client_ip":"203.0.113.81","method":"GET","uri":"/t","ua":"TS/1.0","kind":"fail"},{"ts":1786447301000,"rule_id":"lb-ts","client_ip":"203.0.113.81","method":"GET","uri":"/t","ua":"TS/1.0","kind":"challenge"}]`
+	req := httptest.NewRequest(http.MethodPost, services.SecurityEventsIPCIngestHumanPath, strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	http.HandlerFunc(h.ingestRouter).ServeHTTP(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status=%d body=%s, want 204", rec.Code, rec.Body.String())
+	}
+	rows, err := db.MetricsDB.Query(`SELECT CAST(event_time AS TEXT) FROM security_events WHERE event_type='human' ORDER BY id`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	want := time.UnixMilli(1786447300123).UTC().Format("2006-01-02 15:04:05")
+	var times []string
+	for rows.Next() {
+		var et string
+		if err := rows.Scan(&et); err != nil {
+			t.Fatal(err)
+		}
+		times = append(times, et)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if len(times) != 3 {
+		t.Fatalf("human rows=%d, want 3", len(times))
+	}
+	wantSecond := time.UnixMilli(1786447301000).UTC().Format("2006-01-02 15:04:05")
+	wants := []string{want, want, wantSecond}
+	for i, et := range times {
+		if len(et) != len("2006-01-02 15:04:05") || strings.ContainsAny(et, "+.TZ") {
+			t.Fatalf("event_time=%q, want 定宽 19 字符 UTC 秒串（无毫秒/时区后缀）", et)
+		}
+		if et != wants[i] {
+			t.Fatalf("event_time[%d]=%q, want %q（ts 毫秒必须截到秒）", i, et, wants[i])
+		}
+	}
+}
+
+// Given 超过人机批上限（1MiB）的 body。
+// When 摄入。
+// Then 413（与 coraza ingest 端点同口径：4xx=不可入库，写侧不 spool），
+// 而非把超限误报成畸形 JSON 的 400。
+func TestSecurityEventsIPCHandler_humanOversizeBodyReturns413(t *testing.T) {
+	setupSecurityPolicyTestDB(t)
+	h := &SecurityEventsIPCServer{}
+	// 合法 JSON 形态但超限：错误必须是「体积超限」而非解析失败。
+	body := `[{"ts":1786447300123,"rule_id":"lb-big","client_ip":"203.0.113.82","method":"GET","uri":"/` +
+		strings.Repeat("x", (1<<20)+1) + `","ua":"Big/1.0","kind":"challenge"}]`
+	req := httptest.NewRequest(http.MethodPost, services.SecurityEventsIPCIngestHumanPath, strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	http.HandlerFunc(h.ingestRouter).ServeHTTP(rec, req)
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("oversize status=%d body=%.120s, want 413（与 coraza ingest 同口径）", rec.Code, rec.Body.String())
+	}
+	// 超限批必须整批拒收：不得有半批落库（写侧收到 4xx 不 spool）。
+	if got := securityEventsIPCRowCount(t); got != 0 {
+		t.Fatalf("oversize rows=%d, want 0（413 必须整批拒收）", got)
+	}
+
+	// 回归形态：畸形 JSON（未超限）仍走 400，不被 413 分支吞掉。
+	req = httptest.NewRequest(http.MethodPost, services.SecurityEventsIPCIngestHumanPath, strings.NewReader(`[{"ts":`))
+	rec = httptest.NewRecorder()
+	http.HandlerFunc(h.ingestRouter).ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("malformed status=%d body=%s, want 400", rec.Code, rec.Body.String())
+	}
+}

@@ -19,6 +19,7 @@ import (
 )
 
 func TestDeleteCertJob_cancelRunsOutsideCaddyOpLock(t *testing.T) {
+	withIsolatedGlobal(t)
 	setupSecurityPolicyTestDB(t)
 	res, err := db.DB.Exec(`INSERT INTO cert_jobs (rule_id, domain, status, message) VALUES ('lb_r76cancel', 'cancel.example.com', 'failed', '给定在途态')`)
 	if err != nil {

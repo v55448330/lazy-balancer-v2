@@ -99,6 +99,34 @@ func TestThreatRunUpdate_panicRoundAuditsFailureOnce(t *testing.T) {
 	}
 }
 
+// 外层兜底 recover（runWithContext 内层 defer 自身 panic 等极端形态）同样必须
+// 落定 failed 终态——旧实现仅复位 running，status 端点滞留上一轮终态/首轮空串。
+func TestThreatStartUpdate_outerRecoverLandsFailedTerminal(t *testing.T) {
+	overrideWafDirForTest(t)
+	newClusterTestService(t)
+	setupThreatTest(t, nil, nil, nil)
+	threatRunPanicHookForTest = func() { panic("injected defer panic") }
+	t.Cleanup(func() { threatRunPanicHookForTest = nil })
+
+	m := GetThreatUpdateManager()
+	done, err := m.StartUpdate("manual", &taskengine.RunContext{Trigger: "manual"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitUpdateTestSignal(t, done, "外层兜底 recover 的威胁更新")
+
+	snap := m.StatusSnapshot()
+	if snap.Outcome != "failed" {
+		t.Fatalf("outcome=%q, want failed（外层兜底 recover 必须落定失败终态）", snap.Outcome)
+	}
+	if snap.FinishedAt == "" {
+		t.Fatal("finished_at 为空：外层兜底 recover 必须落定完成时刻")
+	}
+	if snap.Cancellable {
+		t.Fatal("running 标记必须已复位")
+	}
+}
+
 // 更新 goroutine 内的 panic（拉取/安装/reloader 等任意环节）必须被拦截并落定
 // failed 终态——裸 goroutine 的未捕获 panic=整个 admin 进程退出。IP2Region 与
 // 威胁族已有两层 recover，CRS 族此前完全没有：同类异常直接把进程带走。

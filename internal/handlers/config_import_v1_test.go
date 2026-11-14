@@ -477,6 +477,7 @@ func TestImportV1Config_requeues_original_non_terminal_jobs_after_rollback(t *te
 }
 
 func TestImportV1Config_reports_partial_failure_when_certificate_job_recovery_fails(t *testing.T) {
+	withIsolatedGlobal(t)
 	// Given
 	h := newBackupTestHandlers(t)
 	services.ResetCAQueueManagerForTest()
@@ -508,6 +509,7 @@ func TestImportV1Config_reports_partial_failure_when_certificate_job_recovery_fa
 }
 
 func TestImportV1Config_joins_import_and_certificate_job_recovery_failures(t *testing.T) {
+	withIsolatedGlobal(t)
 	// Given
 	h := newBackupTestHandlers(t)
 	services.ResetCAQueueManagerForTest()

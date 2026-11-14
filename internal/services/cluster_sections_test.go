@@ -243,6 +243,7 @@ func TestDriftGuardSectionHashes_usersIncludesGlobalSettings(t *testing.T) {
 // 的 304 兜底重拉与标签自愈依赖该记录;随安全防护开关写入/冻结。
 func TestRecordAppliedSectionHashes_wafFilesBookkeepingFollowsSecuritySwitch(t *testing.T) {
 	_, database := newClusterTestService(t)
+	setNodeMasterRole(t, database, false) // 节记账是从端专有写（角色谓词口径）
 	snapshot := models.ClusterSnapshot{Version: 9, WafFiles: &models.ClusterWafFilesRef{CRSSha256: "abc", CRSVersion: "v9"}}
 	switches := SyncSwitches{Users: true, Rules: true, Security: true}
 	sk := &sectionSkips{disabled: map[string]bool{}, unchanged: map[string]bool{}}
@@ -378,6 +379,7 @@ func seedAppliedWafRefHash(t *testing.T, dbh *sql.DB, hash string) {
 
 func TestRecordAppliedSectionHashes_persistsAndUpdates(t *testing.T) {
 	_, database := newClusterTestService(t)
+	setNodeMasterRole(t, database, false) // 节记账是从端专有写（角色谓词口径）
 	snapshot := models.ClusterSnapshot{Version: 7}
 	snapshot.SectionHashes = map[string]string{"rules": "r7"}
 	switches := SyncSwitches{Rules: true}
@@ -447,6 +449,7 @@ func TestRecordAppliedSectionHashes_driftedSectionStoresLocalRebuiltHash(t *test
 	// Given：问题 混合版本循环场景——新构建从节点（COALESCE 口径）对旧构建
 	// 主节点（裸列口径）。本地 security_policies 在 COALESCE 列上含 NULL。
 	service, database := newClusterTestService(t)
+	setNodeMasterRole(t, database, false) // 节记账是从端专有写（角色谓词口径）
 	ctx := context.Background()
 	if _, err := database.ExecContext(ctx, `INSERT INTO security_policies (name, description, mode, geoip_mode, ip_acl_list) VALUES ('p1', NULL, NULL, NULL, NULL)`); err != nil {
 		t.Fatal(err)
@@ -489,6 +492,7 @@ func TestRecordAppliedSectionHashes_sameBuildDriftedChoiceImmaterial(t *testing.
 	// Given：同构建场景——本地重建哈希 == 快照侧哈希，漂移节存哪个口径都相同，
 	// 同构建行为必须保持不变（回归护栏）。
 	_, database := newClusterTestService(t)
+	setNodeMasterRole(t, database, false) // 节记账是从端专有写（角色谓词口径）
 	snapshot := models.ClusterSnapshot{Version: 3}
 	snapshot.SectionHashes = map[string]string{"security": "same-hash"}
 	local := map[string]string{"security": "same-hash"}
@@ -538,6 +542,7 @@ func TestSectionSyncCycle_normalizationDivergenceConvergesAfterOneDriftCycle(t *
 	// Given：形态主节点快照——security 节携带两个 is_default=1 拦截页；
 	// 从节点 apply 后降级仅保留 MIN(id)，本地重建哈希与快照侧持久分歧。
 	service, database := newClusterTestService(t)
+	setNodeMasterRole(t, database, false) // 节记账是从端专有写（角色谓词口径）
 	ctx := context.Background()
 	for _, page := range []struct {
 		id   int

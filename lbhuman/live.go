@@ -56,7 +56,7 @@ func registerChallengeSession(id, kind, ruleID, clientIP, method, uri, ua string
 	if id == "" {
 		return
 	}
-	now := time.Now()
+	now := timeNow()
 	s := &challengeSession{
 		ID: id, Kind: kind, RuleID: ruleID, ClientIP: clientIP,
 		Method: method, URI: uri, UserAgent: ua,
@@ -114,7 +114,7 @@ func markChallengeAttempt(id string, pass, final bool, passExpiresAt time.Time) 
 		return
 	}
 	s.Attempts++
-	s.UpdatedAtMS = time.Now().UnixMilli()
+	s.UpdatedAtMS = timeNow().UnixMilli()
 	if pass {
 		s.LastResult = "pass"
 		s.Status = challengeStatusPassed
@@ -137,8 +137,8 @@ func markChallengeInvalid(id string) {
 	}
 	s.Attempts++
 	s.LastResult = "fail"
-	s.UpdatedAtMS = time.Now().UnixMilli()
-	if time.Now().UnixMilli() > s.ExpiresAtMS {
+	s.UpdatedAtMS = timeNow().UnixMilli()
+	if timeNow().UnixMilli() > s.ExpiresAtMS {
 		s.Status = challengeStatusExpired
 		return
 	}
@@ -173,7 +173,7 @@ type challengeLiveJSON struct {
 
 // snapshotChallengeSessions 返回运行态副本；waiting 但超过 TTL 的会话按 expired 呈现。
 func snapshotChallengeSessions(scope string) challengeLiveJSON {
-	now := time.Now()
+	now := timeNow()
 	nowMS := now.UnixMilli()
 	challengeSessionsMu.Lock()
 	pruneChallengeSessionsLocked(now)

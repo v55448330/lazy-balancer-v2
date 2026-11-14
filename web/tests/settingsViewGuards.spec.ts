@@ -9,7 +9,8 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { code, member, repoCode, section } from './_helpers.ts'
+import { code, goConstExpr, goConstInt, member, repoCode, section } from './_helpers.ts'
+import { patternByteLength } from '../src/utils/customRuleLimits.ts'
 
 const page = code('src/views/settings/BasicSettings.vue')
 
@@ -59,20 +60,21 @@ test('C 管理面板证书解析失败在弹框内常驻可见，重选文件即
 })
 
 test('D 访问日志格式：maxlength 是字符上限，后端按 UTF-8 字节拒绝', () => {
-  const handlers = repoCode('internal/handlers/caddy.go')
-  const bytes = /maxAccessLogFormatBytes = (\d+) \* (\d+)/.exec(handlers)
-  const lines = /maxAccessLogFormatLines = (\d+)/.exec(handlers)
-  assert.ok(bytes && lines, '后端缺访问日志格式写侧门')
-  const byteLimit = Number(bytes[1]) * Number(bytes[2])
+  // 字节/行数上限提取走 goConstExpr/goConstInt 单源（缺失即抛错）。
+  const byteLimit = goConstExpr('internal/handlers/caddy.go', 'maxAccessLogFormatBytes')
+  const lineLimit = goConstInt('internal/handlers/caddy.go', 'maxAccessLogFormatLines')
 
   const settings = code('src/views/settings/CaddyGlobalSettings.vue')
   const input = section(settings, 'v-model="settings.access_log_format"', '/>')
   assert.match(input, new RegExp(`maxlength="${byteLimit}"`), 'maxlength 仅作为同数值的宽松字符上限')
   assert.match(input, /show-word-limit/)
-  assert.ok(code('src/locales/zh/settings.ts').includes('最多 200 行、16 KiB（后端按 UTF-8 字节计）'), '提示必须明确真正拒绝口径是 UTF-8 字节')
+  assert.ok(code('src/locales/zh/settings.ts').includes(`最多 ${lineLimit} 行、${byteLimit / 1024} KiB（后端按 UTF-8 字节计）`), '提示必须明确真正拒绝口径是 UTF-8 字节')
   assert.match(settings, /app\.settings\.caddy\.accessLog\.mappingLimitHint/)
 
-  const byteLength = (value: string): number => new TextEncoder().encode(value).length
+  // 字节口径断言必须消费产品的字节门函数（utils/customRuleLimits 的 patternByteLength，
+  // 与后端 len(string) 同口径）：自造 TextEncoder 期望钉的是运行时 API 而非产品代码，
+  // 产品字节计数被改坏也不会红。
+  const byteLength = patternByteLength
   assert.equal(byteLength('a'.repeat(byteLimit)), byteLimit, 'ASCII 恰 16 KiB')
   assert.equal(byteLength('a'.repeat(byteLimit + 1)), byteLimit + 1, 'ASCII 超 1 字节')
   const chinese = '界'.repeat(byteLimit)
@@ -82,6 +84,7 @@ test('D 访问日志格式：maxlength 是字符上限，后端按 UTF-8 字节�
   const emoji = '😀'.repeat(byteLimit / 2)
   assert.equal(emoji.length, byteLimit)
   assert.equal(byteLength(emoji), byteLimit * 2)
+  const handlers = repoCode('internal/handlers/caddy.go')
   const validator = section(handlers, 'func validateAccessLogFormatSize', '\n}')
   assert.match(validator, /len\(format\); n > maxAccessLogFormatBytes/, 'Go len(string) 必须执行 UTF-8 字节门')
 })

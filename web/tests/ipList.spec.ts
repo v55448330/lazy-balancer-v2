@@ -20,7 +20,7 @@ import {
   parseIPList,
   sharedEntriesCache,
 } from '../src/utils/securityStages.ts'
-import { code, repoCode, section } from './_helpers.ts'
+import { code, goConstInt, repoCode, section } from './_helpers.ts'
 
 
 test('规则流程只拉本规则阶段 0 策略的信任引用', () => {
@@ -296,15 +296,12 @@ test('名单条目上限/备注长度与后端 securityiplists.go 同源（跨�
   // 上限此前在 SFC 硬编码两处（校验 + 文案），后端单一常量 ipListMaxEntries；
   // 备注长度后端按 rune 计（len([]rune(...)) > 上限），前端按 code point 计。
   const go = repoCode('internal/handlers/securityiplists.go')
-  // gofmt 对齐重排会让固定空格数假红——用 \s* 匹配
-  assert.match(go, /\bipListMaxEntries\s*=\s*2000\b/, '后端条目上限常量漂移')
-  assert.equal(IP_LIST_MAX_ENTRIES, 2000)
+  // 声明提取走 goConstInt 单源（行锚 + 剥注释，缺失即抛错）；gofmt 对齐重排不影响。
+  assert.equal(IP_LIST_MAX_ENTRIES, goConstInt('internal/handlers/securityiplists.go', 'ipListMaxEntries'), '后端条目上限常量漂移')
   // 备注上限必须**从后端声明派生**再与前端常量对表：写死 `assert.equal(x, 100)`
   // 只是自证（后端扩额到 200 时前端仍按 100 拒绝，导入逐行报「备注超过 100 字」
   // 而这批数据 API 完全接受）。
-  const goMax = /ipListMaxRemarkLength\s*=\s*(\d+)/.exec(go)
-  assert.ok(goMax !== null, '后端备注上限常量缺失：前端失去对表锚点')
-  assert.equal(ipListRemarkMaxLength, Number(goMax[1]), '备注上限两端必须同值')
+  assert.equal(ipListRemarkMaxLength, goConstInt('internal/handlers/securityiplists.go', 'ipListMaxRemarkLength'), '备注上限两端必须同值')
   // 备注判定必须是「按 rune 计且与备注上限比较」这一**具体形态**：文件里另有
   // 名称/描述/分类三处 rune 计数，宽口径 `includes('len([]rune(')` 会被它们满足，
   // 把备注一路改成字节比较（中文 3 字节/字，34 字即被后端拒绝）也不会红。

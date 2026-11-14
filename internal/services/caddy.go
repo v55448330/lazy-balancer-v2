@@ -774,10 +774,16 @@ func boundedValidateDetail(output []byte) []byte {
 // 要么写入失败，绝不全量落库）。
 var ErrUnvalidatedApply = errors.New("config unvalidated by any Caddy-level check")
 
+// ErrProjectionSnapshot 标记 IP 名单投影快照失败（投影目录/文件不可读）：
+// 快照不完整时渲染的副作用无法回滚，写路径必须按乱填保障回滚，不得按
+// 「校验器不可用」退化提交——未经任何 Caddy 级校验的配置绝不全量落库。
+var ErrProjectionSnapshot = errors.New("IP 名单投影快照失败")
+
 // ValidateTxRenderViaCLI 用 caddy CLI 校验事务视图渲染出的全量候选配置——
 // 校验输入=最终将应用的渲染本身（裁定 2026-09-06 ④'：任意 Caddy 修改三层
 // 校验的 Caddy 层），零运行时副作用。未启用时返回 nil。分类：拒绝→
-// *ConfigRejectedError（门控回滚 400）；不可用→ErrCLIValidatorUnavailable。
+// *ConfigRejectedError（门控回滚 400）；不可用→ErrCLIValidatorUnavailable；
+// 投影快照失败→ErrProjectionSnapshot（写路径按乱填保障回滚，不得退化提交）。
 // rulesWrittenInTx：调用方事务是否写过 lb_rules（ACME 谓词 miss 补查门控，
 // 见 generateCaddyConfigWithCertSource）。
 func (s *CaddyService) ValidateTxRenderViaCLI(tx *sql.Tx, rulesWrittenInTx bool) error {
@@ -792,10 +798,12 @@ func (s *CaddyService) ValidateTxRenderViaCLI(tx *sql.Tx, rulesWrittenInTx bool)
 	//成功路径保留新投影供随后的 ApplyConfigFromTx 使用。
 	// 快照失败（目录/投影瞬时读失败）必须显式失败：以不完整快照渲染后，
 	// 拒绝路径既无法回写缺项内容，也不能用「目录里有、快照里没有」判定新增
-	// ——那会把在役投影当渲染产物删掉。
+	// ——那会把在役投影当渲染产物删掉。分类为 ErrProjectionSnapshot（环境
+	// IO 故障，不是配置被拒，也不是校验器不可用）：写路径按乱填保障回滚，
+	// 绝不退化提交未经校验的配置。
 	projectionSnapshot, snapshotErr := SnapshotIPListProjections()
 	if snapshotErr != nil {
-		return fmt.Errorf("IP 名单投影快照失败，拒绝在不可回滚的前提下渲染: %w", snapshotErr)
+		return fmt.Errorf("%w: 拒绝在不可回滚的前提下渲染: %v", ErrProjectionSnapshot, snapshotErr)
 	}
 	applied := false
 	defer func() {
@@ -1559,7 +1567,8 @@ type securityPolicyContext struct {
 	// 缺失/空值在渲染处回退 text/html; charset=utf-8。
 	blockPageTypeByID map[int]string
 	// policySynthetic 是拦截页按触发策略归因的合成中断码分配（policy_id →
-	// 481+序号）：取全部被任一规则绑定的启用策略中 BlockPageID>0 且页内容
+	// 483+序号，blockPageSyntheticBase 单源）：取全部被任一规则绑定的启用策略中
+	// BlockPageID>0 且页内容
 	// 非空者，按 policy_id ASC 分配。按策略身份（非绑定序）使同一策略在所有
 	// 规则上同码，错误路由可按策略去重。无有效页的策略不进表（取值 0=不抬
 	// 码），避免合成码无路由承接泄漏到客户端。区间上限 599（合法状态码），
@@ -2290,7 +2299,7 @@ func generateCaddyConfigWithCertSource(store, certSource caddyConfigStore, rules
 
 	if hasCustomRoutes {
 		pathRows, pathErr := store.Query(`
-		SELECT p.rule_id, p.sort_order, p.match_type, p.path, p.upstream_path, p.upstreams_json, p.response_mode, p.response_status, p.response_body, p.response_content_type, p.redirect_to
+		SELECT p.rule_id, ` + db.PathRuleSelectColumns("p") + `
 			FROM path_rules p JOIN lb_rules r ON r.caddy_id = p.rule_id
 			WHERE r.enabled = 1 AND r.custom_routes_enabled = 1
 			ORDER BY p.rule_id, p.sort_order, p.id
@@ -2302,7 +2311,7 @@ func generateCaddyConfigWithCertSource(store, certSource caddyConfigStore, rules
 			var ruleID string
 			var pathRule PathRuleConfig
 			var upstreamsJSON sql.NullString
-			if scanErr := pathRows.Scan(&ruleID, &pathRule.SortOrder, &pathRule.MatchType, &pathRule.Path, &pathRule.UpstreamPath, &upstreamsJSON,
+			if scanErr := pathRows.Scan(&ruleID, &pathRule.ID, &pathRule.RuleID, &pathRule.SortOrder, &pathRule.MatchType, &pathRule.Path, &pathRule.UpstreamPath, &upstreamsJSON,
 				&pathRule.ResponseMode, &pathRule.ResponseStatus, &pathRule.ResponseBody, &pathRule.ResponseContentType, &pathRule.RedirectTo); scanErr != nil {
 				closeErr := pathRows.Close()
 				return generationFailure("scan path rule: %v", errors.Join(scanErr, closeErr))
@@ -3521,6 +3530,10 @@ type SingleRuleConfig struct {
 }
 
 type PathRuleConfig struct {
+	// ID/RuleID 随 db.PathRuleSelectColumns 单源读入（渲染不消费，仅扫描承接；
+	// 与 db.ScanPathRule 的承接形态同构）。
+	ID        int
+	RuleID    string
 	SortOrder int
 	MatchType string
 	Path      string

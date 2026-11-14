@@ -826,8 +826,11 @@ const toggleCrsSnippet = async (): Promise<void> => {
 watch(() => props.modelValue, (v) => {
   if (!v) return
   void loadAll()
+  // 会话序号无条件推进（与 loadAll 的 ++loadSeq 同范式）：换开非同类事件时
+  // 上一会话的在途 CRS 响应必须失配丢弃——kind 门控只决定本次是否取索引，
+  // 不能让旧会话序号在新会话里继续生效（污染当前不可见，范式一致性收口）。
+  const seq = (crsDialogSeq = issueCrsIndexSession())
   if (kind.value === 'waf-crs') {
-    const seq = (crsDialogSeq = issueCrsIndexSession())
     crsSnippet.value = ''
     crsSnippetLoading.value = false
     crsSnippetExpanded.value = false

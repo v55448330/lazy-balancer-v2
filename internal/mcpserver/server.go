@@ -377,7 +377,7 @@ const serverInstructions = `Lazy Balancer V2 负载均衡管理接口。认证�
 - 快速看全局指标：get_metrics_overview（轻量）；get_metrics_dashboard 为全量聚合，数据量大，非必要不用
 - 修改规则前先 get_rule 取完整现状；delete_rule 不可恢复，调用前必须确认
 
-错误约定：401=密钥无效/缺失或使用 JWT；403=未开启 MCP/IP 白名单拦截/只读 Key 越权/从节点非集群写工具；429=每 API Key 每分钟 120 次请求，同一来源 IP 另有每分钟 120 次匿名/认证失败预算（仅 401 计入，成功请求回滚，Key 之间互不占额），响应为 REST 形态并携带 Retry-After 秒数，须按该值等待并指数退避后重试；缺参/缺密钥/传输失败与 REST 业务错误均以 IsError+文本返回（含具体 message，读后修正重试）；协议层暂不启用 input_schema 校验（不产生 -32602），schema 仅作构参契约——先读 schema 再调用，不要猜测字段名。
+错误约定：401=密钥无效/缺失或使用 JWT；403=未开启 MCP/IP 白名单拦截/只读 Key 越权/从节点非集群写工具；429=每 API Key 每来源 IP 每分钟 120 次请求（同一 Key 从不同来源 IP 调用各享独立额度），同一来源 IP 另有每分钟 120 次匿名/认证失败预算（仅 401 计入，成功请求回滚，Key 之间互不占额），响应为 REST 形态并携带 Retry-After 秒数，须按该值等待并指数退避后重试；缺参/缺密钥/传输失败与 REST 业务错误均以 IsError+文本返回（含具体 message，读后修正重试）；协议层暂不启用 input_schema 校验（不产生 -32602），schema 仅作构参契约——先读 schema 再调用，不要猜测字段名。
 
 完整操作手册：resources/read 读取 lazy-balancer://docs/ops-playbook（接入/scope/工作流/排障/纪律/性能建议）。`
 

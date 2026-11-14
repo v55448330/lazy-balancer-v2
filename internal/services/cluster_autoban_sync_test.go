@@ -140,10 +140,7 @@ func TestClusterSync_autobanColumnsPropagate(t *testing.T) {
 	bump(300)
 
 	// When 主端快照（须携带六列）；从端本地值漂移（模拟未接线时代的存量从端）
-	snap, _, err := cluster.Snapshot(ctx, 0, "", "")
-	if err != nil {
-		t.Fatalf("snapshot: %v", err)
-	}
+	snap := snapshotAsMaster(t, cluster, database)
 	if _, err := database.Exec(`UPDATE global_config SET autoban_enabled=0, autoban_threshold=100, autoban_window_minutes=5,
 		autoban_duration='1h', autoban_scope='blocked,logged', autoban_dry_run=1 WHERE id=1`); err != nil {
 		t.Fatal(err)

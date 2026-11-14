@@ -108,6 +108,7 @@ func auditDetailsServiceControlRows(t *testing.T) []string {
 }
 
 func TestClusterServiceControl_start_caddy_executes_and_audits(t *testing.T) {
+	withIsolatedGlobal(t)
 	setupClusterServiceControlDB(t)
 	fakeAdmin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -137,6 +138,7 @@ func TestClusterServiceControl_start_caddy_executes_and_audits(t *testing.T) {
 }
 
 func TestClusterServiceControl_stop_caddy_executes(t *testing.T) {
+	withIsolatedGlobal(t)
 	setupClusterServiceControlDB(t)
 	originalCmd, originalProcRoot := caddyStopCommand, caddyProcRoot
 	caddyStopCommand = func(string) *exec.Cmd { return exec.Command("sh", "-c", "exit 0") }
@@ -156,6 +158,7 @@ func TestClusterServiceControl_stop_caddy_executes(t *testing.T) {
 }
 
 func TestClusterServiceControl_caddy_failure_returns_500(t *testing.T) {
+	withIsolatedGlobal(t)
 	setupClusterServiceControlDB(t)
 	originalRun, originalStop := caddyRunCommand, caddyStopCommand
 	caddyRunCommand = func() *exec.Cmd { return exec.Command("sh", "-c", "exit 7") }
@@ -207,6 +210,7 @@ func mustActionForTicket(t *testing.T, ticket string) string {
 }
 
 func TestClusterServiceControl_restart_app_delays_exit(t *testing.T) {
+	withIsolatedGlobal(t)
 	setupClusterServiceControlDB(t)
 	const clusterToken = "lb_cluster_ctl-restart-app"
 	seedControlNode(t, clusterToken, nil)
@@ -303,6 +307,7 @@ func TestClusterServiceControl_rejects_bad_ticket_without_leaking_it(t *testing.
 }
 
 func TestClusterServiceControl_rejects_replay(t *testing.T) {
+	withIsolatedGlobal(t)
 	setupClusterServiceControlDB(t)
 	const clusterToken = "lb_cluster_ctl-replay"
 	seedControlNode(t, clusterToken, nil)
@@ -564,6 +569,7 @@ func TestClusterServiceControlOperatorTransfer(t *testing.T) {
 // 从节点响应读取与同族读端点一致：limit+1 探测读取，超限显式报错——把截断
 // 体交给 JSON 解析只会得到「unexpected end of JSON input」，掩盖真实原因。
 func TestCallClusterServiceControl_rejectsOversizedSlaveResponse(t *testing.T) {
+	withIsolatedGlobal(t)
 	setupClusterServiceControlDB(t)
 	oversized := strings.Repeat("a", int(clusterServiceControlMaxBytes)+1)
 	slave := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

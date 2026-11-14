@@ -322,4 +322,65 @@ if ! bash scripts/check-bulk-edit-safety.sh >"${work}/bulk-tests-exempt.out" 2>&
   echo "SELFTEST FAIL: 显式登记的自检脚本被误拦"; cat "${work}/bulk-tests-exempt.out"; exit 1
 fi
 
+# 16) 自豁免必须锚定完整路径：guard-selftest.sh.bak.sh 不是登记的自检文件，
+#     非锚定子串排除会把它（以及任何以自检名开头的脚本）一并免检——把真实
+#     批量改写脚本改名成自检前缀即绕过闸门。
+mk_repo "$work/exempt-substring"
+mkdir -p scripts/tests
+cat > scripts/tests/guard-selftest.sh.bak.sh <<'SH'
+#!/usr/bin/env bash
+find . -name '*.go' -exec sed -i 's/a/b/' {} +
+SH
+git add -A && git commit -qm script
+if bash scripts/check-bulk-edit-safety.sh >"${work}/bulk-exempt-sub.out" 2>&1; then
+  echo "SELFTEST FAIL: 自检名子串脚本（.bak）被误豁免"; cat "${work}/bulk-exempt-sub.out"; exit 1
+fi
+if ! grep -q '缺少 --dry-run' "${work}/bulk-exempt-sub.out"; then
+  echo "SELFTEST FAIL: 子串豁免形态命中原因错误（应为缺 dry-run）"; cat "${work}/bulk-exempt-sub.out"; exit 1
+fi
+
+# 17) docstring 里提 --dry-run 不构成只读模式：Python 三引号文档串不是可执行
+#     上下文，剥整行注释的旧判据对它失效（事故形态的 docstring 变体）。
+mk_repo "$work/dryrun-docstring"
+cat > scripts/rewrite.py <<'PY'
+"""批量改写。
+TODO: 支持 --dry-run（还没实现）
+"""
+import os, re
+for dp, _, fs in os.walk('.'):
+    for f in fs:
+        if f.endswith('.go'):
+            p = os.path.join(dp, f)
+            open(p, 'w').write(re.sub(r'\s+$', '', open(p).read()))
+PY
+git add -A && git commit -qm script
+if bash scripts/check-bulk-edit-safety.sh >"${work}/bulk-dry-doc.out" 2>&1; then
+  echo "SELFTEST FAIL: 仅 docstring 提及 --dry-run 的写盘脚本被放行"; cat "${work}/bulk-dry-doc.out"; exit 1
+fi
+if ! grep -q '缺少 --dry-run' "${work}/bulk-dry-doc.out"; then
+  echo "SELFTEST FAIL: docstring 豁免形态命中原因错误"; cat "${work}/bulk-dry-doc.out"; exit 1
+fi
+
+# 17b) 正例对照：真参数解析（argparse --dry-run）的 Python 批量脚本必须放行。
+mk_repo "$work/dryrun-argparse"
+cat > scripts/rewrite.py <<'PY'
+"""批量改写（支持 --dry-run）。"""
+import argparse, os, re
+ap = argparse.ArgumentParser()
+ap.add_argument('--dry-run', action='store_true')
+args = ap.parse_args()
+for dp, _, fs in os.walk('.'):
+    for f in fs:
+        if f.endswith('.go'):
+            p = os.path.join(dp, f)
+            if args.dry_run:
+                print('would rewrite', p)
+                continue
+            open(p, 'w').write(re.sub(r'\s+$', '', open(p).read()))
+PY
+git add -A && git commit -qm script
+if ! bash scripts/check-bulk-edit-safety.sh >"${work}/bulk-dry-argparse.out" 2>&1; then
+  echo "SELFTEST FAIL: 真参数解析 --dry-run 的批量脚本被误拦"; cat "${work}/bulk-dry-argparse.out"; exit 1
+fi
+
 echo "bulk-edit safety selftest: PASS"

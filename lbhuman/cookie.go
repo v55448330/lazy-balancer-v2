@@ -76,9 +76,11 @@ func uaHash(ua string) string {
 }
 
 // signCookie 签名 cookie：base64url(exp|nonce) + "." + HMAC-SHA256(secret,
-// ip|uaHash|exp|nonce)。IP/UA 绑定，exp 固定到期（校验不重签、不续期），nonce 一次性。
+// ip|uaHash|exp|nonce)。IP/UA 绑定，exp 固定到期（校验不重签、不续期）。
+// nonce 只作签名熵（同参数两次签发不同值）——verifyCookie 不做 nonce 重放
+// 检查，cookie 在 exp 前可重复使用（bearer 常态，非一次性凭证）。
 func signCookie(secret []byte, ip, ua string, ttl time.Duration) (value string, expiresAt time.Time) {
-	expiresAt = time.Now().Add(ttl)
+	expiresAt = timeNow().Add(ttl)
 	nonce := make([]byte, 8)
 	_, _ = rand.Read(nonce)
 	payload := fmt.Sprintf("%d|%s", expiresAt.Unix(), hex.EncodeToString(nonce))
@@ -145,7 +147,7 @@ func issueChallengeToken() string {
 	raw := make([]byte, 16)
 	_, _ = rand.Read(raw)
 	token := hex.EncodeToString(raw)
-	now := time.Now()
+	now := timeNow()
 	challengeTokensMu.Lock()
 	challengeTokens[token] = challengeToken{issuedAt: now, expiresAt: now.Add(challengeTokenTTL)}
 	// 顺手清理过期 token（低频写路径顺带，无独立 janitor）
@@ -185,7 +187,7 @@ func consumeChallengeToken(token string) bool {
 	challengeTokensMu.Lock()
 	defer challengeTokensMu.Unlock()
 	t, ok := challengeTokens[token]
-	if !ok || t.used || time.Now().After(t.expiresAt) {
+	if !ok || t.used || timeNow().After(t.expiresAt) {
 		return false
 	}
 	challengeTokens[token] = challengeToken{issuedAt: t.issuedAt, expiresAt: t.expiresAt, used: true}

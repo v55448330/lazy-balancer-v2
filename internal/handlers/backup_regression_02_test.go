@@ -630,6 +630,7 @@ func TestClusterWriteEndpoints409DuringImport(t *testing.T) {
 }
 
 func TestV1ImportQueueFailureStillConverges(t *testing.T) {
+	withIsolatedGlobal(t)
 	h := newBackupTestHandlers(t)
 	services.ResetCAQueueManagerForTest()
 	services.InitCAQueueManager(func() error { return nil }, t.TempDir())

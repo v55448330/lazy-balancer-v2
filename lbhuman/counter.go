@@ -28,11 +28,12 @@ type CCWindowStats struct {
 }
 
 // ccEntry 分片内活计数器（UASet 仅在分片锁内读写；对外只发值快照）。
+// UASet 是集合语义（判定只用 len）——值用 struct{} 零字节，不存无消费方的计数。
 type ccEntry struct {
 	WindowStart int64
 	Count       int
 	Status4xx   int
-	UASet       map[string]int
+	UASet       map[string]struct{}
 	WindowSec   int
 }
 
@@ -74,10 +75,10 @@ func ccRecord(key string, windowSec int, is4xx bool, uaFp string) CCWindowStats 
 	shard := ccShardFor(key)
 	shard.mu.Lock()
 	defer shard.mu.Unlock()
-	now := time.Now().Unix()
+	now := timeNow().Unix()
 	st, ok := shard.m[key]
 	if !ok {
-		st = &ccEntry{UASet: map[string]int{}, WindowSec: windowSec}
+		st = &ccEntry{UASet: map[string]struct{}{}, WindowSec: windowSec}
 		shard.m[key] = st
 	}
 	if now-st.WindowStart >= int64(windowSec) {
@@ -85,7 +86,7 @@ func ccRecord(key string, windowSec int, is4xx bool, uaFp string) CCWindowStats 
 		st.WindowStart = now
 		st.Count = 0
 		st.Status4xx = 0
-		st.UASet = map[string]int{}
+		st.UASet = map[string]struct{}{}
 	}
 	st.WindowSec = windowSec
 	st.Count++
@@ -94,7 +95,7 @@ func ccRecord(key string, windowSec int, is4xx bool, uaFp string) CCWindowStats 
 	}
 	if uaFp != "" {
 		if _, known := st.UASet[uaFp]; known || len(st.UASet) < ccUASetCap {
-			st.UASet[uaFp]++
+			st.UASet[uaFp] = struct{}{}
 		}
 		// 超帽的新 UA 不存键：请求/4xx 计数照常，集合饱和在帽上。
 	}
@@ -106,7 +107,7 @@ func ccRecord(key string, windowSec int, is4xx bool, uaFp string) CCWindowStats 
 // 不被固定 cutoff 误删。
 func ccJanitor() {
 	ccInit()
-	now := time.Now().Unix()
+	now := timeNow().Unix()
 	for i := range ccCounters {
 		shard := &ccCounters[i]
 		shard.mu.Lock()
@@ -139,8 +140,9 @@ type CCTriggerResult struct {
 }
 
 // evalCC 判定是否触发 CC（突刺/4xx 比例/会话异常）。
-// 阈值来自渲染配置（自动封禁 CC 检测规则）。
-func evalCC(stats CCWindowStats, rpsLimit, windowSec, ratio4xx, sessionUACount int, sessionAnomaly bool) CCTriggerResult {
+// 阈值来自渲染配置（自动封禁 CC 检测规则）；窗口长度由 stats.WindowSec 携带
+// （计数器登记值），不再单独传参。
+func evalCC(stats CCWindowStats, rpsLimit, ratio4xx, sessionUACount int, sessionAnomaly bool) CCTriggerResult {
 	if stats.Count > rpsLimit && rpsLimit > 0 {
 		return CCTriggerResult{Triggered: true, Reason: "rps_spike"}
 	}

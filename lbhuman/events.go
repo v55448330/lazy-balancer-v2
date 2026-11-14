@@ -14,7 +14,9 @@ import (
 
 // 人机验证事件上报（2026-11-12 用户裁定：挑战/通过/失败入 security_events）：
 // 异步 UDS 投递（复用安全事件 IPC socket 契约），独立端点
-// /security-events/ingest-human；失败静默丢弃（监控事件不阻塞请求路径）。
+// /security-events/ingest-human；失败丢弃但**计数可观测**（events_deliver_failed
+// 经 stats 端点下发——监控事件不阻塞请求路径，丢失量必须可对账；无重试/spool，
+// 保持请求路径零阻塞裁定）。
 
 const (
 	humanEventSocketEnv = "LB_SECURITY_EVENTS_IPC_SOCKET"
@@ -31,6 +33,7 @@ type humanEvent struct {
 	uri    string
 	ua     string
 	kind   string
+	ts     int64         // 发生（入队）时刻 unix 毫秒——投递时刻会随队列积压漂移
 	done   chan struct{} // 非 nil=排空探针：worker 处理到该事件即关闭
 }
 
@@ -42,11 +45,14 @@ type humanEventPoster struct {
 
 var poster = &humanEventPoster{}
 
-// humanEventQueue 缓冲投递队列；humanEventDropped 队列满丢弃计数（可观测）。
+// humanEventQueue 缓冲投递队列；humanEventDropped 队列满丢弃计数、
+// humanEventDeliverFailed 投递失败丢弃计数（连接拒绝/非 204/序列化失败——
+// 两者都是可观测对账源，经 /lb/human/stats 下发）。
 var (
-	humanEventQueue   = make(chan humanEvent, humanEventQueueCap)
-	humanEventDropped atomic.Int64
-	humanEventWorker  sync.Once
+	humanEventQueue         = make(chan humanEvent, humanEventQueueCap)
+	humanEventDropped       atomic.Int64
+	humanEventDeliverFailed atomic.Int64
+	humanEventWorker        sync.Once
 )
 
 func (p *humanEventPoster) initClient() {
@@ -84,11 +90,12 @@ func (p *humanEventPoster) shouldReport(ip, kind string, now time.Time) bool {
 }
 
 // reportHumanEvent 异步上报（非阻塞：投递到缓冲 channel，单 worker 串行发送；
-// 队列满即丢弃计数，失败静默——监控事件不阻塞请求路径）。
+// 队列满即丢弃计数，投递失败计数——监控事件不阻塞请求路径）。
+// ts 在入队时刻定格：事件时间戳=发生时刻，不随队列积压/投递阻塞漂移。
 func reportHumanEvent(ruleID, ip, method, uri, ua, kind string) {
 	humanEventWorker.Do(func() { go humanEventWorkerLoop() })
 	select {
-	case humanEventQueue <- humanEvent{ruleID: ruleID, ip: ip, method: method, uri: uri, ua: ua, kind: kind}:
+	case humanEventQueue <- humanEvent{ruleID: ruleID, ip: ip, method: method, uri: uri, ua: ua, kind: kind, ts: time.Now().UnixMilli()}:
 	default:
 		humanEventDropped.Add(1)
 	}
@@ -115,19 +122,28 @@ func (p *humanEventPoster) deliver(ev humanEvent) {
 	target := p.url
 	p.mu.Unlock()
 	if client == nil {
+		humanEventDeliverFailed.Add(1)
 		return
 	}
 	payload := []map[string]any{{
-		"ts": time.Now().UnixMilli(), "rule_id": ev.ruleID, "client_ip": ev.ip,
+		"ts": ev.ts, "rule_id": ev.ruleID, "client_ip": ev.ip,
 		"method": ev.method, "uri": ev.uri, "ua": ev.ua, "kind": ev.kind,
 	}}
 	raw, err := json.Marshal(payload)
 	if err != nil {
+		humanEventDeliverFailed.Add(1)
 		return
 	}
 	resp, err := client.Post(target, "application/json", bytes.NewReader(raw))
-	if err == nil {
-		resp.Body.Close()
+	if err != nil {
+		humanEventDeliverFailed.Add(1)
+		return
+	}
+	defer resp.Body.Close()
+	// 跨进程契约（与 L4/审计写侧同口径）：只有 204 代表本批 DB commit 完成；
+	// 其余状态码（含 2xx 非 204）=入库未完成，按投递失败计数。
+	if resp.StatusCode != http.StatusNoContent {
+		humanEventDeliverFailed.Add(1)
 	}
 }
 

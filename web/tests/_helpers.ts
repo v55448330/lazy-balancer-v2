@@ -63,35 +63,36 @@ export const code = (relative: string): string => readStrippedCached(new URL(rel
 export const repoCode = (relative: string): string => readStrippedCached(new URL(`../${relative}`, webRoot))
 
 /**
- * 跨栈对表：读仓库内 Go 源（剥注释），提取整型常量声明的值（缺失即抛错——
- * 对表断言拿 undefined 当值会假绿）。
+ * 跨栈对表：读仓库内 Go 源（剥注释），提取常量声明的值（缺失即抛错——
+ * 对表断言拿 undefined 当值会假绿）。整型常量与表达式常量共用同一声明锚
+ * （goConstInt 委托 goConstExpr），锚定松紧只有一份实现。
  *
- * 锚定口径单源：`[const] NAME = <int>` 行锚（顶层/函数内 `const X = n` 与
- * const 块内的裸赋值两形态都命中），行尾锚防前缀更长的同名常量误命中；
- * 注释里的常量提及（如「不超 maxBindingsPerRule」）先剥注释再匹配，不参与。
+ * 声明形态：`[const|var] NAME [type] = <N | N << M | N * M [* …]>`——顶层
+ * `const X = n`、const 块内裸赋值、带类型声明（如 `var X time.Duration = …`）
+ * 都命中；行尾锚防前缀更长的同名常量误命中；注释里的常量提及（如「不超
+ * maxBindingsPerRule」）先剥注释再匹配，不参与。
  * 此前各 spec 自写提取正则、锚定松紧不一（有的 ^…$m、有的裸 search），统一走本函数。
  */
-export const goConstInt = (repoPath: string, name: string): number => {
-  const declared = repoCode(repoPath).match(new RegExp(`^[ \\t]*(?:const\\s+)?${name}\\s*=\\s*(\\d+)[ \\t]*$`, 'm'))
-  if (!declared) throw new Error(`goConstInt: ${repoPath} 未解析到常量声明 ${name}`)
-  return Number(declared[1])
-}
+export const goConstInt = (repoPath: string, name: string): number => goConstExpr(repoPath, name)
 
 /**
- * 跨栈对表的表达式形态：`const/var [type] NAME = <N | N << M | N * M [* …]>`。
- * 仅支持 `*` 与 `<<`（Go 同优先级、左结合，逐项 fold）；位移以外的运算符不进
- * 本函数（出现即解析失败抛错，不静默求出错误值）。用于字节数常量
- * （`128 << 20` / `16 * 1024`）跨栈同值断言。
+ * 跨栈对表的表达式求值：仅支持 `*` 与 `<<`（Go 同优先级、左结合，逐项 fold）；
+ * 其它运算符/标识符因子不进本函数（出现即解析失败抛错，不静默求出错误值）。
+ * 用于字节数常量（`128 << 20` / `16 * 1024`）跨栈同值断言。
  */
 export const goConstExpr = (repoPath: string, name: string): number => {
   // Go 顺序：`const NAME = …` / `var NAME <type>? = …`（类型在名字之后）。
   const declared = repoCode(repoPath).match(
-    new RegExp(`^[ \\t]*(?:const|var)\\s+${name}(?:\\s+[A-Za-z_][\\w.\\[\\]\\*]*)?\\s*=\\s*([\\d*<> \\t]+)$`, 'm'),
+    new RegExp(`^[ \\t]*(?:const\\s+|var\\s+)?${name}(?:\\s+[A-Za-z_][\\w.\\[\\]\\*]*)?\\s*=\\s*([\\d*<> \\t]+)$`, 'm'),
   )
   if (!declared) throw new Error(`goConstExpr: ${repoPath} 未解析到常量声明 ${name}`)
   const tokens = declared[1].trim().split(/[ \t]+/)
+  if (!/^\d+$/.test(tokens[0]) || (tokens.length - 1) % 2 !== 0) {
+    throw new Error(`goConstExpr: ${repoPath} ${name} 含不支持的表达式形态`)
+  }
   let value = Number(tokens[0])
   for (let i = 1; i < tokens.length; i += 2) {
+    if (!/^\d+$/.test(tokens[i + 1])) throw new Error(`goConstExpr: ${repoPath} ${name} 含不支持的表达式形态`)
     if (tokens[i] === '<<') value *= 2 ** Number(tokens[i + 1])
     else if (tokens[i] === '*') value *= Number(tokens[i + 1])
     else throw new Error(`goConstExpr: ${repoPath} ${name} 含不支持的表达式形态`)

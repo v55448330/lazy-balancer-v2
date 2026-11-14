@@ -173,6 +173,36 @@ func captureHandlerGlobalSeams() map[string]any {
 		// 大屏流量缓存的 TTL 旋钮：漏复位后后续用例按 50ms 过期跑（缓存命中
 		// 断言随机失效），失败用例看起来与被测逻辑无关。
 		"threatTrafficCacheTTL": threatTrafficCacheTTL,
+		// 可赋值 seam 完备登记（同族收敛）：凡测试可直接赋值的函数缝/客户端
+		// 缝均入册，漏登一个即对写侧隔离静态门不可见。按域分组。
+		// 连接明细上游解析缝。
+		"upstreamResolveLookup": handlerGlobalPointer(upstreamResolveLookup),
+		// Caddy 进程/监督器控制缝。
+		"caddyRunCommand":      handlerGlobalPointer(caddyRunCommand),
+		"caddyStopCommand":     handlerGlobalPointer(caddyStopCommand),
+		"caddyAdminHTTPClient": handlerGlobalPointer(caddyAdminHTTPClient),
+		// 集群服务控制缝。
+		"clusterServiceExit":                 handlerGlobalPointer(clusterServiceExit),
+		"clusterServiceControlClientFactory": handlerGlobalPointer(clusterServiceControlClientFactory),
+		// 证书任务缝。
+		"cancelCertJob":              handlerGlobalPointer(cancelCertJob),
+		"certJobLogPathForRule":      handlerGlobalPointer(certJobLogPathForRule),
+		"createOrRequeueCertJob":     handlerGlobalPointer(createOrRequeueCertJob),
+		"requeueNonTerminalCertJobs": handlerGlobalPointer(requeueNonTerminalCertJobs),
+		// 威胁大屏时钟/查询缝。
+		"threatScreenNow":          handlerGlobalPointer(threatScreenNow),
+		"queryThreatRecentBlocked": handlerGlobalPointer(queryThreatRecentBlocked),
+		// 事务补发缝。
+		"rollbackLeakedTx": handlerGlobalPointer(rollbackLeakedTx),
+		// 归属地富化查询缝。
+		"enrichIPLocationLookup": handlerGlobalPointer(enrichIPLocationLookup),
+		// 认证缝。
+		"loginDummyCompare": handlerGlobalPointer(loginDummyCompare),
+		"jwtJTIReader":      handlerGlobalPointer(jwtJTIReader),
+		// 审计下拉聚合缝。
+		"auditOptionsFetch": handlerGlobalPointer(auditOptionsFetch),
+		// 自动备份落盘缝。
+		"autoBackupWriteFile": handlerGlobalPointer(autoBackupWriteFile),
 	}
 }
 

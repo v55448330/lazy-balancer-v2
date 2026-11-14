@@ -610,11 +610,24 @@ func sealOrphanedSecurityEventsSpoolFiles(files []securityEventsSpoolFile, now t
 		// -<k>（rename 会覆盖同名目标，必须先确认名字空闲——覆盖=丢一整批事件）。
 		dir := filepath.Dir(f.path)
 		target := filepath.Join(dir, securityEventsSpoolSealedPrefix+strconv.FormatInt(f.mod.UnixNano(), 10)+securityEventsSpoolFileSuffix)
+		free := false
 		for k := 1; ; k++ {
-			if _, err := os.Lstat(target); os.IsNotExist(err) {
+			_, err := os.Lstat(target)
+			if os.IsNotExist(err) {
+				free = true
+				break
+			}
+			if err != nil {
+				// 非 NotExist 错误（EACCES/ENOTDIR/IO 等）下名字占用不可判定，
+				// 且重试不会改变结果——继续循环=无界重试。放弃本文件封存并留痕，
+				// 下一轮补采重试（防御性：前置 ReadDir 已成功，正常不可达）。
+				Logf("warn", "security events spool: 孤儿 active 文件目标名探测失败 %s: %v", target, err)
 				break
 			}
 			target = filepath.Join(dir, fmt.Sprintf("%s%d-%d%s", securityEventsSpoolSealedPrefix, f.mod.UnixNano(), k, securityEventsSpoolFileSuffix))
+		}
+		if !free {
+			continue
 		}
 		if err := os.Rename(f.path, target); err != nil {
 			Logf("warn", "security events spool: 孤儿 active 文件封存失败 %s: %v", f.name, err)

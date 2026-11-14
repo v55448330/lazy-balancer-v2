@@ -17,11 +17,23 @@ import (
 	"lazy-balancer-v2/internal/services"
 )
 
-func TestUpdateConfig_skipsReloadAuditWhenRenderUnchanged(t *testing.T) {
-	setupSecurityPolicyTestDB(t)
+// reinitAuditDBForTest 在既有夹具之上重开审计库并登记新句柄的 Close：
+// setupSecurityPolicyTestDB 已经 db.Initialize 装配了一个 AuditDB，二次
+// InitializeAuditDB 直换句柄若不 Close 新句柄，每用例泄漏一个连接池（≤5
+// 连接）连同 fd 至进程退出。复位到旧句柄由 setupSecurityPolicyTestDB 的
+// cleanup 承担（注册更早、执行更晚），此处只负责关闭本用例新开的句柄。
+func reinitAuditDBForTest(t *testing.T) {
+	t.Helper()
 	if err := db.InitializeAuditDB(t.TempDir()); err != nil {
 		t.Fatal(err)
 	}
+	newAudit := db.AuditDB
+	t.Cleanup(func() { _ = newAudit.Close() })
+}
+
+func TestUpdateConfig_skipsReloadAuditWhenRenderUnchanged(t *testing.T) {
+	setupSecurityPolicyTestDB(t)
+	reinitAuditDBForTest(t)
 	var lastBody []byte
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
@@ -83,9 +95,7 @@ func TestUpdateConfig_skipsReloadAuditWhenRenderUnchanged(t *testing.T) {
 // 重载」审计不得落笔（ApplyConfigReporting.loaded=false）。
 func TestPutCaddyConfig_skipsReloadAuditWhenByteIdentical(t *testing.T) {
 	setupSecurityPolicyTestDB(t)
-	if err := db.InitializeAuditDB(t.TempDir()); err != nil {
-		t.Fatal(err)
-	}
+	reinitAuditDBForTest(t)
 	var lastBody []byte
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {

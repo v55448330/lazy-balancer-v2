@@ -446,3 +446,61 @@ func TestSecurityOverviewIncremental_mutatedRowForcesFullRebuild(t *testing.T) {
 	}
 	overviewIncAssertEqual(t, "改判后恢复增量", refreshed, overviewIncFullReference(t, metrics))
 }
+
+// TestSecurityOverviewIncremental_mutatedFlagSurvivesFailedRebuild：改判脏标志
+// 必须在全量重建成功后才消费——重建失败（真实 DB 故障）时标志保留，故障消除
+// 后的下一次刷新仍走全量重建，改判行（id ≤ 水位）的结论修正不丢。先 CAS 清
+// 标志再重建的旧序在重建失败时让改判行永不被增量回溯（计数缺账直到日界）。
+func TestSecurityOverviewIncremental_mutatedFlagSurvivesFailedRebuild(t *testing.T) {
+	setupSecurityPolicyTestDB(t)
+	resetSecurityOverviewAggCacheForTest()
+	t.Cleanup(resetSecurityOverviewAggCacheForTest)
+	metrics := db.MetricsDB
+	insertOverviewIncEvent(t, metrics, overviewIncEvent{eventTime: "2026-10-19 01:00:00", ip: "10.1.0.1", triggered: "942100", msg: "SQL Injection", action: "logged"})
+
+	key := overviewIncTestKey(metrics)
+	cold, err := loadSecurityOverviewAggregates(metrics, overviewIncTestToday, overviewIncTestTodayStart, overviewIncTestTZ)
+	if err != nil {
+		t.Fatalf("cold build: %v", err)
+	}
+	if cold.trend[6].Detected != 1 || cold.trend[6].Blocked != 0 {
+		t.Fatalf("冷基线 detected=%d blocked=%d, want 1/0", cold.trend[6].Detected, cold.trend[6].Blocked)
+	}
+
+	// 行改判 + 置脏标志，随后真实故障（表被移除）使重建失败。
+	if _, err := metrics.Exec(`UPDATE security_events SET action='blocked' WHERE event_time='2026-10-19 01:00:00'`); err != nil {
+		t.Fatal(err)
+	}
+	securityOverviewAggMutated.Store(true)
+	if _, err := metrics.Exec(`DROP TABLE security_events`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := refreshSecurityOverviewAggregates(metrics, key, overviewIncTestToday); err == nil {
+		t.Fatal("重建必须失败（events 表缺失）")
+	}
+	// 脏标志不得在失败轮被消费。
+	if !securityOverviewAggMutated.Load() {
+		t.Fatal("重建失败后脏标志被清除——改判行将永不被增量回溯")
+	}
+
+	// 故障消除（重建表并恢复改判后的行）：下一次刷新必须仍走全量重建，
+	// 拦截/检测拆分反映改判后结论。
+	if _, err := metrics.Exec(`CREATE TABLE security_events (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		event_time DATETIME NOT NULL DEFAULT (datetime('now')),
+		client_ip TEXT DEFAULT '', rule_triggered TEXT DEFAULT '',
+		rule_msg TEXT DEFAULT '', action TEXT DEFAULT '', event_type TEXT DEFAULT 'waf'
+	)`); err != nil {
+		t.Fatal(err)
+	}
+	insertOverviewIncEvent(t, metrics, overviewIncEvent{eventTime: "2026-10-19 01:00:00", ip: "10.1.0.1", triggered: "942100", msg: "SQL Injection", action: "blocked"})
+	refreshed, err := refreshSecurityOverviewAggregates(metrics, key, overviewIncTestToday)
+	if err != nil {
+		t.Fatalf("恢复后刷新: %v", err)
+	}
+	if refreshed.trend[6].Blocked != 1 || refreshed.trend[6].Detected != 0 {
+		t.Fatalf("恢复后 trend blocked=%d detected=%d, want 1/0（脏标志保留使重建补上改判）",
+			refreshed.trend[6].Blocked, refreshed.trend[6].Detected)
+	}
+	overviewIncAssertEqual(t, "故障恢复后改判收敛", refreshed, overviewIncFullReference(t, metrics))
+}

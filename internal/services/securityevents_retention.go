@@ -226,7 +226,11 @@ func securityEventsRetentionCleanup(ctx context.Context) (SecurityEventsRetentio
 	var result SecurityEventsRetentionResult
 	database := db.MetricsDB
 	if database == nil {
-		return result, nil
+		// 与 cleanupHistory/PurgeOrphanMetricsHistory 同口径：库未初始化或
+		// 关停尾部已置 nil 时返回 errMetricsDBUnavailable，而不是 (零结果, nil)。
+		// 静默成功会让「清理未执行」被任务引擎记成 success 轮，与兄弟清理函数
+		// 的 fail-visible 单源分叉。
+		return result, errMetricsDBUnavailable
 	}
 	policy, err := securityEventsRetentionPolicyFromDB()
 	if err != nil {

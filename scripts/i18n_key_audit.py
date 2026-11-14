@@ -43,7 +43,12 @@ def parse_ts_object(path):
                     out.append('\\n')
                 elif nxt == 't':
                     out.append('\\t')
+                elif nxt == '\\':
+                    # \\ → 单个反斜杠（JSON 转义为 \\）；旧实现输出三个反斜杠，
+                    # 解码值失真（路径类文案 C:\temp 变 C:\\temp）。
+                    out.append('\\\\')
                 else:
+                    # 未知转义（如 \d）：保留反斜杠与原字符，同样按 JSON 双反斜杠输出
                     out.append('\\\\' + nxt)
                 i += 2
                 continue
@@ -103,22 +108,15 @@ for dom in ('common', 'rules', 'security', 'misc', 'settings', 'views'):
         print(f'PARSE FAIL en/{dom}: {e}'); raise
 
 def deep_merge(base, *srcs):
+    """递归合并多份词条模块（唯一实现；此前另有一份同构 deepMerge2，双份
+    漂移风险——合并语义单源）。"""
     out = dict(base)
     for src in srcs:
         for k, v in src.items():
             if isinstance(out.get(k), dict) and isinstance(v, dict):
-                out[k] = deepMerge2(out[k], v)
+                out[k] = deep_merge(out[k], v)
             else:
                 out[k] = v
-    return out
-
-def deepMerge2(a, b):
-    out = dict(a)
-    for k, v in b.items():
-        if isinstance(out.get(k), dict) and isinstance(v, dict):
-            out[k] = deepMerge2(out[k], v)
-        else:
-            out[k] = v
     return out
 
 zhTree = deep_merge({}, *zh_mods.values())

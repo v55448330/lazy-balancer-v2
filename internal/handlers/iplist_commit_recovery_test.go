@@ -12,6 +12,7 @@ import (
 // 而不是自造 tx.Rollback 后吞掉 ErrTxDone：Commit 失败后 database/sql 不再调用
 // driver.Rollback，遗留事务会滞留写锁并让复用连接看到未提交内容。
 func TestIPListHotPath_convergedCommitFailureSupplementsRollbackOnce(t *testing.T) {
+	withIsolatedGlobal(t)
 	restoreRollback := rollbackLeakedTx
 	calls := 0
 	rollbackLeakedTx = func() {

@@ -16,7 +16,9 @@
 package lbreqmon
 
 import (
+	"bufio"
 	"container/heap"
+	"io"
 	"net"
 	"net/http"
 	"sort"
@@ -198,6 +200,11 @@ func clientIP(r *http.Request) string {
 }
 
 // statusWriter 最小响应捕获包装（嵌入原接口，只覆写计数点）。
+// Hijack 覆写：升级（WebSocket）后的连接字节不再经过 Write——包装连接
+// 逐次把写字节累加进 bytes（caddyhttp responseRecorder.hijackedConn 同形，
+// 独立模块不 import；读字节=请求方向不计响应 Size）。计数只在连接 goroutine
+// 侧发生，ServeHTTP 在 next 返回后读 bytes——hijack 语义下 next 返回即连接
+// 生命周期结束（reverse_proxy 阻塞到隧道关闭），无并发读写。
 type statusWriter struct {
 	http.ResponseWriter
 	status int
@@ -220,7 +227,42 @@ func (w *statusWriter) Write(b []byte) (int, error) {
 	return n, err
 }
 
+// Hijack 经 ResponseController 走 Unwrap 链取底层连接，再包装计数。
+// brw.Writer 重定向到包装连接（bufio 直写原连接会绕过计数）；读缓冲原样
+// 保留（预读字节属请求方向，不影响响应 Size）。
+func (w *statusWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	conn, brw, err := http.NewResponseController(w.ResponseWriter).Hijack()
+	if err != nil {
+		return nil, nil, err
+	}
+	hc := &hijackedConn{Conn: conn, w: w}
+	if brw != nil {
+		brw.Writer.Reset(hc)
+	}
+	return hc, brw, nil
+}
+
+// hijackedConn 升级后连接的写字节计数包装（读路径原样透传）。
+type hijackedConn struct {
+	net.Conn
+	w *statusWriter
+}
+
+func (hc *hijackedConn) Write(p []byte) (int, error) {
+	n, err := hc.Conn.Write(p)
+	hc.w.bytes += int64(n)
+	return n, err
+}
+
+// ReadFrom 覆盖 io.Copy 快路径（reverse_proxy 隧道用 io.Copy）：不覆写则
+// io.Copy 直落底层 Conn，字节绕过 Write 计数。
+func (hc *hijackedConn) ReadFrom(r io.Reader) (int64, error) {
+	n, err := io.Copy(hc.Conn, r)
+	hc.w.bytes += n
+	return n, err
+}
+
 // Unwrap 暴露底层 ResponseWriter：http.ResponseController 依赖 Unwrap 链
-// 找到 Hijacker/Flusher（缺此方法则全站 WebSocket 升级报 not supported；
+// 找到 Flusher 等能力（缺此方法则全站 WebSocket 升级报 not supported；
 // reqmon 挂全部 HTTP 规则，断链影响面=全站）。
 func (w *statusWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }

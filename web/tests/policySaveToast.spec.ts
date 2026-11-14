@@ -56,5 +56,5 @@ test('绑定/执行序分片响应：任一分片退化都进入持续警告结�
 
   const save = section(page, 'const bindResponses', 'const savedType = editorPolicyType.value')
   assert.match(save, /mergeBulkResults\(bindResponses\)/, '绑定与执行序响应必须进入统一合并')
-  assert.match(save, /mergedBind\?\.message\?\.includes\(CADDY_APPLY_FAILED_MARKER\)\) showSaveResult\(mergedBind, ''\)/)
+  assert.match(save, /isCaddyApplyDegraded\(mergedBind\)\) showSaveResult\(mergedBind, ''\)/, '退化判定必须走语言无关单源（messageKey 优先，zh 标记兜底）')
 })

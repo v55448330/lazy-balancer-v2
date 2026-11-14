@@ -23,7 +23,11 @@ func RunTicker(ctx context.Context, interval time.Duration, wake <-chan struct{}
 		interval = time.Second
 	}
 	// bootstrap：先立即执行一次，再进入节拍循环（启动即消费积压/恢复现场，
-	// 不等首个 interval 到期）。
+	// 不等首个 interval 到期）。ctx 已取消则零执行直接返回——Stop×daemon
+	// 启动竞态窗内不得再让 fn 持已取消 ctx 跑一整轮（与「ctx 取消即停」同契约）。
+	if ctx.Err() != nil {
+		return
+	}
 	runTickerOnce(ctx, fn)
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()

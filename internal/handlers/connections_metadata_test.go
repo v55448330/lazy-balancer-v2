@@ -11,6 +11,7 @@ import (
 )
 
 func TestJoinConnectionsMetadata_stripsPortForIPv4AndIPv6(t *testing.T) {
+	withIsolatedGlobal(t)
 	var lookedUp []string
 	old := enrichIPLocationLookup
 	enrichIPLocationLookup = func(ip string) string {

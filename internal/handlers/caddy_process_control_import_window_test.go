@@ -25,6 +25,7 @@ import (
 // 请求确实走到了命令执行），pause 文件与监督器标记指向临时目录。
 func newProcessControlTestHandlers(t *testing.T) (*Handlers, *int32, *int32) {
 	t.Helper()
+	withIsolatedGlobal(t)
 	var runs, stops int32
 	origPause, origPid, origWait := caddyPauseFile, caddySupervisorPidFile, caddySupervisorWaitTimeout
 	origRun, origStop := caddyRunCommand, caddyStopCommand

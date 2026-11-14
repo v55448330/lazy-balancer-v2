@@ -10,18 +10,30 @@ import assert from 'node:assert/strict'
 import {
   SETTINGS_TAB_IDS,
   settingsTabConsumesConfig,
+  settingsTabDesc,
   settingsTabOfPage,
+  settingsTabTitle,
 } from '../src/utils/settingsPages.ts'
-import { code } from './_helpers.ts'
+import { code, section } from './_helpers.ts'
 
 const zhViewsLayout = (): string => code('src/locales/zh/views.ts')
 
 test('分页清单：页键 ↔ 页头标题/描述一一对应（可见文案即契约）', () => {
   assert.deepEqual([...SETTINGS_TAB_IDS], ['basic', 'cluster', 'certificates', 'apikeys', 'tasks'])
-  // i18n:标题经 settingsTabTitle(词条 settingsTab.*);zh 母本钉 views.ts
+  // i18n:标题/描述经 settingsTabTitle/settingsTabDesc(词条 layout.settingsTab/settingsDesc.*)。
+  // 断言必须落在 settingsTab/settingsDesc 块内：全文件子串匹配会被平铺重复键
+  // （layout.basic 等）满足——删掉 settingsTab 块内页键也恒绿。
   const zhViews = code('src/locales/zh/views.ts')
+  const tabBlock = section(zhViews, 'settingsTab: {', '},')
+  const descBlock = section(zhViews, 'settingsDesc: {', '},')
   for (const tab of SETTINGS_TAB_IDS) {
-    assert.ok(zhViews.includes(`${tab}:`), `settingsTab 词条缺 ${tab}`)
+    const title = new RegExp(`^\\s*${tab}: '([^']+)'`, 'm').exec(tabBlock)
+    assert.ok(title, `settingsTab 块内缺页键 ${tab}`)
+    const desc = new RegExp(`^\\s*${tab}: '([^']+)'`, 'm').exec(descBlock)
+    assert.ok(desc, `settingsDesc 块内缺页键 ${tab}（页头描述零覆盖即此形态）`)
+    // 行为相位:单源函数必须解析出块内原文（键路径漂移/词条缺失即红）。
+    assert.equal(settingsTabTitle(tab), title[1], `${tab} 标题解析与母本漂移`)
+    assert.equal(settingsTabDesc(tab), desc[1], `${tab} 描述解析与母本漂移`)
   }
   assert.ok(zhViewsLayout().includes('settingsBreadcrumbParent'), '面包屑父级词条须存在')
 })
@@ -40,6 +52,7 @@ test('分页清单：两处消费方共用单源，不再自带第二份映射',
   const settings = code('src/views/Settings.vue')
   assert.match(settings, /from '@\/utils\/settingsPages'/)
   assert.match(settings, /settingsTabTitle\(activeTab\.value\)/)
+  assert.match(settings, /settingsTabDesc\(activeTab\.value\)/, '页头描述必须同样消费单源（描述不是死代码）')
   assert.match(settings, /settingsTabOfPage\(authStore\.currentPage\) \?\? 'basic'/)
   assert.doesNotMatch(settings, /const titles: Record<string, string>/)
   assert.doesNotMatch(settings, /const descs: Record<string, string>/)

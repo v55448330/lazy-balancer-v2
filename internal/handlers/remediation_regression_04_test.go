@@ -466,9 +466,7 @@ func TestReconcileThreatFiles(t *testing.T) {
 
 func TestRunAutoBackupNowRejectsPausedBefore202(t *testing.T) {
 	h := newAutoBackupTestHandlers(t)
-	if err := db.InitializeAuditDB(t.TempDir()); err != nil {
-		t.Fatal(err)
-	}
+	reinitAuditDBForTest(t)
 	wireAutoBackupEngineForTest(t, h)
 	te := services.TaskEngine()
 	te.PauseScheduling()

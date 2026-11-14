@@ -594,6 +594,12 @@ import type { SystemInfo } from '@/types'
 const { t, locale } = useI18n()
 // 列表拼接分隔符随语言(en 逗号/zh 顿号)
 const listJoin = (arr: string[]): string => arr.join(locale.value === 'en' ? ', ' : '、')
+// 分号分隔符随语言(en 「; 」/zh 「；」)——冲突对手列表拼接用。
+const semiJoin = (arr: string[]): string => arr.join(locale.value === 'en' ? '; ' : '；')
+// 括注随语言(en 半角括号带前空格/zh 全角括号)——冲突行与备份明细的
+// 「主文（补充）」拼接用，en 界面不再渲染 zh 全角标点。
+const parenNote = (main: string, note: string): string =>
+  locale.value === 'en' ? `${main} (${note})` : `${main}（${note}）`
 
 const authStore = useAuthStore()
 const isReadOnly = computed(() => authStore.readOnlyReason !== null)
@@ -979,7 +985,7 @@ const autoBackupScopeText = (row: AutoBackupRow): string => {
 }
 const autoBackupDetailTip = (row: AutoBackupRow): string => {
   const trigger = row.trigger_type === 'manual' ? t('app.settings.basic.autoBackup.triggerManual') : t('app.settings.basic.autoBackup.triggerScheduled')
-  return row.message ? `${row.message}（${trigger}）` : `${autoBackupScopeText(row)}（${trigger}）`
+  return row.message ? parenNote(row.message, trigger) : parenNote(autoBackupScopeText(row), trigger)
 }
 
 const downloadAutoBackup = async (row: AutoBackupRow): Promise<void> => {
@@ -1126,9 +1132,8 @@ let importPreviewSession: ImportPreviewSession<ImportValidation> | null = null
 const conflictIdentifier = (conflict: { name?: string; caddy_id?: string }): string => conflict.name || conflict.caddy_id || t('app.settings.basic.import.unnamedRule')
 
 const formatImportConflict = (conflict: DisabledRuleConflict, alreadyDisabled = false): string => {
-  const opponents = conflict.conflicts_with
-    .map((opponent) => `${conflictIdentifier(opponent)}（${opponent.reason}）`)
-    .join('；')
+  const opponents = semiJoin(conflict.conflicts_with
+    .map((opponent) => parenNote(conflictIdentifier(opponent), opponent.reason)))
   return t('app.settings.basic.import.conflictLine', { rule: conflictIdentifier(conflict), state: alreadyDisabled ? t('app.settings.basic.import.alreadyDisabled') : t('app.settings.basic.import.willDisable'), opponents })
 }
 

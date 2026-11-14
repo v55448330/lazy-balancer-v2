@@ -151,6 +151,7 @@ func TestRunAutoBackupOnce_cancelledContextWritesNothing(t *testing.T) {
 // 写失败不得留下临时文件（残留会让 auto_backups 行 → prune 永不回收；修复前
 // 仅 Rename 失败分支清理）。
 func TestRunAutoBackupOnce_writeFailureLeavesNoTmp(t *testing.T) {
+	withIsolatedGlobal(t)
 	// 写失败注入走落盘缝（autoBackupWriteFile）：不依赖文件系统权限语义——
 	// root / 容器内 chmod 0500 不阻断写入，权限位形态会让该回归在 CI 假红
 	// （或被跳过而彻底失去覆盖）。注入形态任何身份都可跑。

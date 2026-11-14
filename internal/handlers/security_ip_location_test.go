@@ -304,6 +304,7 @@ func TestListSecurityPolicies_enabledFilter(t *testing.T) {
 // 归属地富化缓存：同一 IP 重复富化只查一次库（大屏逐行富化同一批攻击源
 // IP）；xdb 代际变化（库热换/重置）后旧值失效重查。
 func TestEnrichIPLocation_cachesPerIPUntilGenerationChange(t *testing.T) {
+	withIsolatedGlobal(t)
 	old := enrichIPLocationLookup
 	calls := 0
 	enrichIPLocationLookup = func(string) string {

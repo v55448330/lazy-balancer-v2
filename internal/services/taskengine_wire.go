@@ -1376,6 +1376,9 @@ func armSecurityLibraryFirstSlots() {
 		var autoUpdate int
 		var nextUpdate string
 		if err := db.DB.QueryRow(`SELECT COALESCE(auto_update,1), COALESCE(next_update,'') FROM `+tc.table+` WHERE id=1`).Scan(&autoUpdate, &nextUpdate); err != nil {
+			// 读失败与同函数写失败同口径留痕：静默 continue 会让启动武装
+			// 跳过无排障信号（自动更新停摆无从定位）。
+			Logf("warn", "首槽武装：%s 版本行读取失败（本轮跳过武装）: %v", tc.table, err)
 			continue
 		}
 		if autoUpdate != 1 || nextUpdate != "" {

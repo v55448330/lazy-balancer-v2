@@ -468,6 +468,10 @@ func (l *jobLogger) Log(stage, message string) {
 	if len(from) == 0 {
 		from = nonTerminalJobStatuses
 	}
+	// 进度写失败只留 error 日志、不打断签发（有意设计）：进度是展示面，
+	// 签发链的状态推进由后续阶段写点与部署 CAS 兜底；CAS 冲突多为并发
+	// 胜者已提交终态（终态不可逆，见上方 from 集合契约）。此处若上抛会
+	// 把「进度展示滞后」升级成「签发中断」，得不偿失。
 	if err := transitionJob(db.DB, l.jobID, from, stage, map[string]any{"message": message}); err != nil {
 		Logf("error", "cert job %d status update failed: %v", l.jobID, err)
 	}

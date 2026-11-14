@@ -144,6 +144,10 @@ func TestUserStatusToggle_revokesOldSessionAcrossDisableEnable(t *testing.T) {
 
 func TestUserStatusToggle_revokesPendingMFAChallenge(t *testing.T) {
 	router := newMiddlewareTestRouter(t)
+	// 预算敏感：本用例登录族调用与 login/mfa-verify/ticket-login 共享
+	// 10/min/IP 桶；不隔离时 -count=2 或同窗叠加会产生与实现无关的 429 假红
+	//（与 sibling TestUserStatusToggle_revokesOldSessionAcrossDisableEnable 同口径）。
+	withIsolatedRateLimitBuckets(t)
 	hash := seedSessionPassword(t)
 	if _, err := db.DB.Exec(`INSERT INTO users (id,username,password_hash,role,is_enabled) VALUES (1,'admin',?,'admin',1)`, hash); err != nil {
 		t.Fatal(err)

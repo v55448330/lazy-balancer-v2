@@ -2,11 +2,11 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { code, cssDeclarations, member, openTags, section } from './_helpers.ts'
 
-// 安全总览状态条重设计（用户裁定）：活跃策略退役，四 KPI（拦截/检测/正常请求/
-// 人机验证）等分栅格 + 每列同构（标签/今日/昨日/协议拆分），契约字段防御式消费，
-// 趋势与攻击类型分布同行等高。源码钉 spec：断言落在剥注释视图上。
+// 安全总览状态条重设计（用户裁定）：活跃策略退役，三 KPI（拦截/检测/正常请求）
+// 等分栅格 + 每列同构（标签/今日/昨日/协议拆分），人机验证挑战移入 CC 卡片，
+// 契约字段防御式消费，趋势与攻击类型分布同行等高。源码钉 spec：断言落在剥注释视图上。
 
-/** 状态条防护区（status-guard）按竖分隔线切成四列切片。 */
+/** 状态条防护区（status-guard）按竖分隔线切成三列切片。 */
 const guardCols = (): [string, string, string] => {
   const guard = section(code('src/views/security/SecurityOverview.vue'), '<div class="status-guard">', '<div class="status-lib">')
   const cols = guard.split('<div class="strip-divider"></div>')
@@ -108,7 +108,7 @@ test('每列同构：标签 / 今日主数值 / 昨日对比 / 协议拆分 / �
   assert.equal(cssDeclarations(page, '.autoban-stat').get('border-radius'), '0', '自动封禁统计块必须直角')
   assert.equal(cssDeclarations(page, '.challenge-live-counter').get('border-radius'), '0', '实时弹框计数块必须直角')
   assert.doesNotMatch(page, /rateLimitBlocks|fetchRateLimitBlocks|rate-limit-blocks/, '限流卡片与取数必须整体移除')
-  assert.equal(cssDeclarations(page, '.strip-value.is-info').get('color'), '#409eff')
+  assert.doesNotMatch(page, /strip-value is-info|\.strip-value\.is-info/, 'is-info 蓝色变体已随活跃策略列退役（死类，模板与样式均不得残留）')
 })
 
 test('防御式消费：契约字段缺失（旧后端）对应行隐藏', () => {

@@ -1637,14 +1637,6 @@ onBeforeUnmount(() => {
 }
 .stat-tab[aria-selected='true'] { background: #3ad1ff; border-color: #3ad1ff; color: #03101f; font-weight: 700; }
 
-.panel-footer {
-  flex: none; display: flex; align-items: baseline; gap: 8px;
-  padding: 8px 14px; border-top: 1px solid rgba(80, 160, 255, 0.16);
-  font-size: 11px; color: #8ea7d6;
-}
-.panel-footer b { margin-left: auto; font-size: 16px; color: #e2ecff; font-variant-numeric: tabular-nums; }
-.panel-footer em { font-style: normal; font-size: 10px; color: #56709f; }
-
 .rules { display: grid; gap: 9px; margin: 0; padding: 0; list-style: none; }
 .rule { display: grid; grid-template-columns: 1fr auto; gap: 4px 10px; font-size: 12px; align-items: baseline; }
 .rule-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

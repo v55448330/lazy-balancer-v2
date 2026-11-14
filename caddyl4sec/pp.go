@@ -152,5 +152,11 @@ func (h *L4PPHandler) Handle(cx *layer4.Connection, next layer4.Handler) error {
 	// 安装手法同上游 Handle：包装连接替换 cx 的底层连接（vars/repl 等上下文
 	// 随 Wrap 透传），同链后续 handler（lb_l4_sec、proxy）经 RemoteAddr() 读
 	// 采信后对端；路由 matcher 先于本 handler 评估，不受改写影响。
+	// 占位符口径（如实披露）：{l4.remote_addr} 在 WrapConnection 时定格为
+	// socket 对端（caddy-l4 connection.go 初始化 repl.Set），Wrap 不更新它——
+	// 本 handler 的 PROXY 改写到不了该占位符。当前渲染侧与上游 l4proxy 均不
+	// 消费 {l4.remote_addr}（上游 PROXY 头用活 RemoteAddr()，事件归因走
+	// clientIPFromConn），无实际分叉；若未来有消费方，须改用活对端或在此
+	// 同步 repl。
 	return next.Handle(cx.Wrap(pconn))
 }

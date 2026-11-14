@@ -55,7 +55,7 @@ func TestImportConfigBackup_clamps_autoban_threshold(t *testing.T) {
 		{"合法值保持不变", 42, 42},
 		{"边界 1 保持不变", 1, 1},
 		{"边界 10000 保持不变", 10000, 10000},
-		{"非整数形态回退缺省 100", "garbage", 100},
+		{"非整数形态回退缺省（db.DefaultAutobanThreshold）", "garbage", db.DefaultAutobanThreshold},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -86,7 +86,7 @@ func TestImportConfigBackup_clamps_autoban_window_minutes(t *testing.T) {
 		{"0 钳位到 1（写侧下限）", 0, 1},
 		{"61 钳位到 60（写侧上限）", 61, 60},
 		{"合法值保持不变", 13, 13},
-		{"非整数形态回退缺省 5", "garbage", 5},
+		{"非整数形态回退缺省（db.DefaultAutobanWindowMinutes）", "garbage", db.DefaultAutobanWindowMinutes},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -143,8 +143,8 @@ func TestImportConfigBackup_autobanEnumGate(t *testing.T) {
 		cfg   map[string]any
 		check func(t *testing.T)
 	}{
-		{"duration 空串归一 1h", map[string]any{"autoban_duration": ""}, func(t *testing.T) {
-			assertImportedAutobanText(t, "autoban_duration", "1h")
+		{"duration 空串归一默认（db.DefaultAutobanDuration）", map[string]any{"autoban_duration": ""}, func(t *testing.T) {
+			assertImportedAutobanText(t, "autoban_duration", db.DefaultAutobanDuration)
 		}},
 		{"duration 合法保持 24h", map[string]any{"autoban_duration": "24h"}, func(t *testing.T) {
 			assertImportedAutobanText(t, "autoban_duration", "24h")

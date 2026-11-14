@@ -176,8 +176,10 @@ func (securityRowsErrConn) QueryContext(_ context.Context, query string, _ []dri
 		// TestSplitSecurityPolicy_emptyFeaturesRejectsBeforeAnyQuery）。
 		return &rowsErrFixedRows{cols: securityRowsErrPolicyColumns, rows: [][]driver.Value{{
 			int64(1), "混拆迁移", "", "off", int64(5), "", "[]", int64(0), int64(1), `["203.0.113.7"]`, "[]",
-			int64(0), int64(0), int64(0), "[]", "[]", "[]", int64(0), int64(0), int64(1), int64(0),
-			"", "", "[]", "off", int64(0), "[]", int64(0), int64(0), "[]", "[]", "mixed", int64(0),
+			"[]", "[]", "[]", int64(0), int64(0), int64(1), int64(0), "", "",
+			"[]", "off", int64(0), "[]", int64(0), int64(0), "[]", "[]", "mixed", int64(0),
+			"off", "slider", int64(30), "[]",
+			int64(0), int64(40), int64(10), int64(70), int64(0), int64(5), "auto",
 		}}}, nil
 	case strings.Contains(query, "FROM security_policies WHERE name=? AND policy_type=?"):
 		// 同名子策略解析：无存量 → 复用判定为 0（待插入）。
@@ -192,12 +194,17 @@ func (securityRowsErrConn) QueryContext(_ context.Context, query string, _ []dri
 	}
 }
 
+// securityRowsErrPolicyColumns 与生产 securityPolicySelectColumns 同 41 列同序
+// （假库行形状必须与投影 arity 一致——旧 33 列形状含已退役 rate_limit 三列、
+// 缺人机/CC/响应方式八列，Scan 列数错使拆分在绑定迭代前即 500，钉测空转）。
 var securityRowsErrPolicyColumns = []string{
 	"id", "name", "description", "mode", "anomaly_threshold", "ip_acl_mode", "ip_acl_list", "ip_acl_enabled",
-	"ip_whitelist_enabled", "ip_whitelist", "ip_blacklist", "rate_limit_enabled", "rate_limit_rps", "rate_limit_burst",
+	"ip_whitelist_enabled", "ip_whitelist", "ip_blacklist",
 	"crs_rule_groups", "crs_excluded_rules", "custom_rules", "block_page_id", "block_status_code", "enabled",
 	"updated_by", "created_at", "updated_at", "geoip_countries", "geoip_mode", "geoip_crawler_exempt", "geoip_crawler_engines",
 	"waf_check_response", "log_request_body", "ip_acl_list_refs", "ip_whitelist_refs", "policy_type", "trust_detection",
+	"human_verify_mode", "human_verify_type", "human_verify_ttl", "human_exempt_paths",
+	"cc_detect_enabled", "cc_rps_limit", "cc_rps_window", "cc_4xx_ratio", "cc_session_anomaly", "cc_session_ua_threshold", "block_response_mode",
 }
 
 type rowsErrNoOpTx struct{}
