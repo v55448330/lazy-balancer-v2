@@ -3,10 +3,12 @@ package caddygeoip
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/caddyserver/caddy/v2"
@@ -71,7 +73,8 @@ func (p *HTTPSRedirectSplitWrapper) WrapListener(ln net.Listener) net.Listener {
 	for _, d := range p.Domains {
 		allowed[normalizeRedirectHost(d)] = struct{}{}
 	}
-	return &httpsRedirectListener{Listener: ln, cfg: p, allowed: allowed}
+	return &httpsRedirectListener{Listener: ln, cfg: p, allowed: allowed,
+		plainSlots: make(chan struct{}, maxPlainRedirectWorkers)}
 }
 
 // acceptSniffDeadline 首字节嗅探读死线（生产 5s；测试经包级变量缩窗到毫秒
@@ -81,11 +84,31 @@ func (p *HTTPSRedirectSplitWrapper) WrapListener(ln net.Listener) net.Listener {
 // servePlain 自设 10s 双死线。超时/EOF 连接直接关闭（与既有 rerr 分支同构）。
 var acceptSniffDeadline = 5 * time.Second
 
+// maxPlainRedirectWorkers 是明文应答 goroutine 的并发上限（生产 128，与
+// cmd/server 协议嗅探 worker 上限 maxProtocolSniffers 同量级；测试经包级
+// 变量缩窗）。每连接一个 goroutine 无上限会让慢客户端洪峰无限堆积
+// goroutine/内存；槽满时新明文连接直接关闭（fail-closed，不排队、不阻塞
+// Accept——TLS 透传路径不受影响）。
+var maxPlainRedirectWorkers = 128
+
+// plainRedirectSlots 是明文 worker 信号量（容量=maxPlainRedirectWorkers，
+// WrapListener 时按当前上限构造）。plainWorkersInFlight 仅测试观测在役数。
+var plainWorkersInFlight atomic.Int64
+
+// plainHeaderMaxBytes 是明文请求头的读取上限（1MiB，与主 server
+// MaxHeaderBytes 同量级）。http.ReadRequest 本身无头帽（Go 1.27.1
+// readRequest 以 math.MaxInt64 调 readMIMEHeader），必须先以 io.LimitReader
+// 封顶再解析——超大头按解析失败回 400，不得把任意大小的头读进内存。
+const plainHeaderMaxBytes = 1 << 20
+
 // httpsRedirectListener 分类 Accept：TLS 连接透传，明文连接就地应答。
 type httpsRedirectListener struct {
 	net.Listener
 	cfg     *HTTPSRedirectSplitWrapper
 	allowed map[string]struct{}
+	// plainSlots 明文 worker 信号量（容量=maxPlainRedirectWorkers）：
+	// 非阻塞获取，槽满即关闭新明文连接（fail-closed）。
+	plainSlots chan struct{}
 }
 
 // Accept 逐连接嗅探首字节：0x16=TLS ClientHello 透传（首字节经
@@ -114,7 +137,14 @@ func (l *httpsRedirectListener) Accept() (net.Conn, error) {
 		if first == 0x16 {
 			return pc, nil
 		}
-		go l.servePlain(pc)
+		select {
+		case l.plainSlots <- struct{}{}:
+			go l.servePlain(pc)
+		default:
+			// 槽满：不起新 goroutine、不排队，直接关闭（明文流量本就
+			// fail-closed，丢跳转不产生上游转发；TLS 透传不受影响）。
+			_ = pc.Close()
+		}
 	}
 }
 
@@ -122,10 +152,17 @@ func (l *httpsRedirectListener) Accept() (net.Conn, error) {
 // （保留 path+query）；白名单外/解析失败 → Go 标准文案 400。pc 的首字节
 // 重放保证请求行完整。
 func (l *httpsRedirectListener) servePlain(pc *peekedConn) {
-	defer func() { _ = pc.Close() }()
+	plainWorkersInFlight.Add(1)
+	defer func() {
+		plainWorkersInFlight.Add(-1)
+		<-l.plainSlots
+		_ = pc.Close()
+	}()
 	_ = pc.SetReadDeadline(time.Now().Add(10 * time.Second))
 	_ = pc.SetWriteDeadline(time.Now().Add(10 * time.Second))
-	req, err := http.ReadRequest(bufio.NewReader(pc))
+	// 头帽先于解析：ReadRequest 无界（math.MaxInt64），LimitReader 把
+	// 请求行+头总量封顶在 plainHeaderMaxBytes，超限按解析失败回 400。
+	req, err := http.ReadRequest(bufio.NewReader(io.LimitReader(pc, plainHeaderMaxBytes)))
 	if err != nil {
 		l.respond(pc, 400, plainHTTPOnTLSPortMessage)
 		return

@@ -170,3 +170,37 @@ func TestCaddyRestartWatcher_backoffWindowSkipsExecutionAndQuietRoundOmitsRow(t 
 		t.Fatalf("第 2 次尝试（Quiet）落行：%d → %d, want 不新增", rowsAfterFirst, got)
 	}
 }
+
+// 慢尝试（执行耗时超过退避档位）的退避必须以结束时刻为基准：按开始时刻计
+// 会让窗口在尝试结束前到期，紧接着的下一轮立即重试——退避失效。
+func TestCaddyRestartWatcher_slowAttemptBackoffStartsAtEnd(t *testing.T) {
+	initTaskEngineForTest(t)
+	newBackupTestHandlers(t)
+	services.SetConfigLoadRerun(func(string) error {
+		// 模拟慢尝试：耗时超过首档退避（2s）。
+		time.Sleep(2100 * time.Millisecond)
+		return errors.New("caddy unavailable")
+	})
+	t.Cleanup(func() { services.SetConfigLoadRerun(nil) })
+	resetCaddyRestartBackoffForTest()
+	t.Cleanup(resetCaddyRestartBackoffForTest)
+
+	h := &Handlers{}
+	trigger := filepath.Join(t.TempDir(), "caddy-restarted")
+	if err := os.WriteFile(trigger, []byte("1"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	processStart := time.Now().Add(-time.Minute)
+
+	// When：首轮慢尝试失败（耗时 2.1s > 首档 2s）
+	h.caddyRestartWatcherOnce(trigger, processStart)
+
+	// Then：退避窗口从结束时刻起算——紧接着的下一轮必须仍在窗口内（不执行）。
+	// 修复前按开始时刻计：窗口已到期，第二轮立即再执行。
+	caddyRestartBackoff.mu.Lock()
+	nextAttempt := caddyRestartBackoff.nextAttempt
+	caddyRestartBackoff.mu.Unlock()
+	if !nextAttempt.After(time.Now()) {
+		t.Fatalf("慢尝试失败后 nextAttempt=%s 已到期, want 从结束时刻起算的退避窗口", nextAttempt)
+	}
+}

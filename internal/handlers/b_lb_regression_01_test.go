@@ -170,9 +170,6 @@ func TestUpdateRule_tryWindowStoredHealsButExplicitRejected(t *testing.T) {
 	if duration != 0 || interval != 0 {
 		t.Fatalf("存量越界未自愈: duration=%d interval=%d, want 0/0", duration, interval)
 	}
-	if duration > 0 && interval <= 0 {
-		t.Fatalf("自愈后自相矛盾: duration=%d interval=%d（渲染必填门必败）", duration, interval)
-	}
 
 	// 显式 interval 越界 → 400（修复前静默归零 200）
 	seed("lb_explicittrywin", "explicit-try-win", 18811, 0, 250)

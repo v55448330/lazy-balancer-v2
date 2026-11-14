@@ -409,7 +409,6 @@ type L4GeoIPMatcher struct {
 	countries []string
 	allowMode bool
 	xdbPath   string
-	searcher  *service.Ip2Region
 }
 
 // CaddyModule returns the Caddy module information.
@@ -420,8 +419,11 @@ func (*L4GeoIPMatcher) CaddyModule() caddy.ModuleInfo {
 	}
 }
 
-// Provision 编译条目并打开共享 searcher；库不可用降级 fail-open（不拒绝
+// Provision 编译条目并预热共享 searcher；库不可用降级 fail-open（不拒绝
 // 配置加载——地域库缺失不应阻断整个 L4 站点，与用户裁定的 fail-open 同向）。
+// 不钉住实例：Match 每次经 sharedGeoIPSearcher 取共享单例（探测 TTL 节流），
+// 换库重建/缺库恢复无需 Caddy reload 即收敛——Provision 期钉死实例会让
+// matcher 恒查旧库，重建失败边角还会永久持有已闭池的旧实例。
 func (m *L4GeoIPMatcher) Provision(ctx caddy.Context) error {
 	if len(m.Countries) == 0 {
 		return fmt.Errorf("lb_geoip: countries 不能为空（空名单在渲染侧应被内容门控拦截）")
@@ -449,15 +451,11 @@ func (m *L4GeoIPMatcher) Provision(ctx caddy.Context) error {
 		m.XdbPath = l4DefaultXdbPath
 	}
 	m.xdbPath = m.XdbPath
-	searcher, err := sharedGeoIPSearcher(m.xdbPath, m.XdbV6Path)
-	if err != nil {
+	if _, err := sharedGeoIPSearcher(m.xdbPath, m.XdbV6Path); err != nil {
 		// 告警已在 sharedGeoIPSearcher 内按（原因|路径）节流。
 		ctx.Logger().Debug("lb_geoip: ip2region unavailable, matcher fails open",
 			zap.String("xdb_path", m.xdbPath), zap.Error(err))
-		m.searcher = nil
-		return nil
 	}
-	m.searcher = searcher
 	return nil
 }
 
@@ -466,9 +464,6 @@ func (m *L4GeoIPMatcher) Provision(ctx caddy.Context) error {
 // （无 error——error 在 MatcherSet 语义下同样是不匹配，但显式 false 让
 // 「放行」成为唯一出口，不放大为路由错误）。
 func (m *L4GeoIPMatcher) Match(cx *layer4.Connection) (bool, error) {
-	if m.searcher == nil {
-		return false, nil
-	}
 	ip := clientIPFromConn(cx)
 	parsed := net.ParseIP(ip)
 	if parsed == nil {
@@ -476,10 +471,17 @@ func (m *L4GeoIPMatcher) Match(cx *layer4.Connection) (bool, error) {
 	}
 	// 私网/回环/链路本地豁免：与 HTTP 链首私网豁免同语义（内网源连接不经
 	// GeoIP 判定；xdb 对这些段返回 Reserved 行，deny「海外」会误拦内网）。
+	// 豁免先于取库——内网连接不付探测/查库成本。
 	if parsed.IsPrivate() || parsed.IsLoopback() || parsed.IsLinkLocalUnicast() || parsed.IsLinkLocalMulticast() || parsed.IsUnspecified() {
 		return false, nil
 	}
-	region, err := m.searcher.Search(parsed.String())
+	// 每次取共享单例（形态未变时命中缓存，探测按 TTL 节流）：换库重建、
+	// 缺库→恢复都随采样收敛；取库失败 fail-open（告警在单源内节流）。
+	searcher, err := sharedGeoIPSearcher(m.xdbPath, m.XdbV6Path)
+	if err != nil || searcher == nil {
+		return false, nil
+	}
+	region, err := searcher.Search(parsed.String())
 	if err != nil || region == "" {
 		return false, nil
 	}

@@ -1186,8 +1186,14 @@ var osLink = os.Link
 // 全部成功后才替换 live 文件。fast 先替换时优先保留硬链接备份，硬链接失败
 // 改用同目录原子复制；第二个 rename 若失败可恢复旧 fast。
 // 任何前置失败均不触碰 live .iplist。
+// 可解析率门（与下载侧/heal 同源阈值 threatMinParseRatio）：文本大面积损坏
+// （可解析率 <50%）或空/仅注释时拒绝落盘并保留本地文件——否则垃圾备份经
+// lbbak 导入聚合归零后照常落盘，live 威胁名单被静默削弱（拦截面缩水）。
 // 调用方必须持 WafFileLock（lbbak 导入与威胁更新器均已在外层持有）。
 func WriteThreatIplistCompiled(iplistPath string, data []byte) error {
+	if err := threatIplistParseGate(iplistPath, data); err != nil {
+		return err
+	}
 	fastPath := iplistPath + ".fast"
 	for _, path := range []string{iplistPath, fastPath} {
 		info, err := os.Stat(path)
@@ -1266,6 +1272,29 @@ func WriteThreatIplistCompiled(iplistPath string, data []byte) error {
 	}
 	if err := syncParentDir(iplistPath); err != nil {
 		return err
+	}
+	return nil
+}
+
+// threatIplistParseGate 是编译落盘前的可解析率门（与下载侧
+// downloadAndParseThreatSourceCtx / heal 同源判据）：单遍扫描统计可解析行
+// 比例，空文本或比例低于 threatMinParseRatio 即拒绝（保留本地文件，调用方
+// 据错误披露）。行过滤口径单源 iterIPListTextLines，合法行判定同一解析器
+// wafiplist.ParseIPEntry。
+func threatIplistParseGate(iplistPath string, data []byte) error {
+	total, parsed := 0, 0
+	iterIPListTextLines(data, func(line string) bool {
+		total++
+		if _, err := wafiplist.ParseIPEntry(line); err == nil {
+			parsed++
+		}
+		return true
+	})
+	if total == 0 {
+		return fmt.Errorf("威胁库 %s 文本为空/仅注释，拒绝以空集编译落盘（保留本地文件）", filepath.Base(iplistPath))
+	}
+	if float64(parsed)/float64(total) < threatMinParseRatio {
+		return fmt.Errorf("威胁库 %s 可解析行比例 %d/%d 低于 50%%——文本疑似损坏，拒绝编译落盘（保留本地文件）", filepath.Base(iplistPath), parsed, total)
 	}
 	return nil
 }

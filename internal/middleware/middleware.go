@@ -313,6 +313,7 @@ func PurgeAllAPIKeyWhitelistCache() {
 func init() {
 	handlers.SetAPIKeyWhitelistCachePurge(PurgeAPIKeyWhitelistCache)
 	handlers.SetAPIKeyWhitelistCachePurgeAll(PurgeAllAPIKeyWhitelistCache)
+	handlers.SetRegistrationStatusRejectionRecorder(RecordRegistrationStatusRejection)
 	services.SetAPIKeyWhitelistCachePurgeAll(PurgeAllAPIKeyWhitelistCache)
 }
 

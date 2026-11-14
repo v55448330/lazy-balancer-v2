@@ -1,4 +1,4 @@
-import { canonicalV6Text } from './ipAddress.ts'
+import { canonicalV6Text, unmapV4Text } from './ipAddress.ts'
 
 // 与后端 joinUpstreamAddress（net.JoinHostPort）同口径——IPv6 主机
 // （含 ':'）包方括号，健康详情键两侧一致（后端键为 "[::1]:80" 形态）。
@@ -16,6 +16,11 @@ export const hostPortKey = (host: string, port: number): string =>
 export const upstreamHostKey = (host: string): string => {
   const trimmed = host.trim()
   const bare = trimmed.replace(/^\[/, '').replace(/\]$/, '')
+  // IPv4-mapped（::ffff:a.b.c.d）先折成等价 v4——与后端 upstreamDedupeHost 的
+  // netip.ParseAddr(...).Unmap() 同口径：不折会让 ::ffff:10.0.0.1 与 10.0.0.1
+  // 判成两个上游（权重翻倍、健康检查跑两遍），后端写侧 Unmap 后必判重 400。
+  const unmapped = unmapV4Text(bare)
+  if (unmapped) return unmapped
   const canonical = canonicalV6Text(bare)
   if (canonical) return canonical
   return trimmed.toLowerCase()

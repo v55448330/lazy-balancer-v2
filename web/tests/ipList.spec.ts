@@ -82,11 +82,14 @@ test('C2 二次往返不累积漂移', () => {
 })
 
 test('C2b 备注首尾空白往返保真（未加引号会被导入侧 trim 掉）', () => {
-  for (const remark of [' x ', ' 前后空白 ', '\t制表符\t']) {
+  for (const remark of [' x ', ' 前后空白 ']) {
     const line = formatIpListEntryLine('10.0.0.1', remark)
     assert.equal(line, `10.0.0.1,"${remark}"`)
     assert.deepEqual(parseIpListEntryLine(line, isValidCidr), { value: '10.0.0.1', remark })
   }
+  // 控制字符备注（Tab/C0/DEL/C1）导入侧必拒——与后端 hasIPListRemarkControlChar
+  // 同判据（备注是单行展示/导出字段，控制字符不可接受）。
+  assert.equal(parseIpListEntryLine('10.0.0.1,"\t制表符\t"', isValidCidr), null)
   // 纯空白备注：加引号后回读为空串以外的原值；空备注仍走无引号形态
   assert.equal(formatIpListEntryLine('10.0.0.1', ' '), '10.0.0.1," "')
   assert.equal(formatIpListEntryLine('10.0.0.1', ''), '10.0.0.1,')
@@ -361,7 +364,9 @@ test('导出中和单元格公式前导字符，导入对称剥离（往返逐�
   // 制表符前缀的公式形态同样中和（部分工具先剥空白再识别公式），且仍按首尾空白加引号
   const tabbed = formatIpListEntryLine('10.0.0.1', '\t=cmd|/c calc')
   assert.equal(tabbed, '10.0.0.1,"\'\t=cmd|/c calc"')
-  assert.deepEqual(parseIpListEntryLine(tabbed, isValidCidr), { value: '10.0.0.1', remark: '\t=cmd|/c calc' })
+  // 导入侧拒收：Tab 属控制字符（后端 hasIPListRemarkControlChar 同判据），
+  // 导出中和形态保留但回读不再保真——控制字符备注一律拒。
+  assert.equal(parseIpListEntryLine(tabbed, isValidCidr), null)
 })
 
 test('字面单引号不被中和标记吞掉（引号串长度判定）', () => {

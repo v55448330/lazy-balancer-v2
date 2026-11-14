@@ -14,12 +14,12 @@ import (
 	"lazy-balancer-v2/internal/db"
 )
 
-// 429 是限流专用语义(scrapeRateLimitBlocksUncached 限流卡片按 code=429 计数),
-// WAF 拦截页使用 429 会混入限流指标口径。
+// 429 已退役，存量行归一 403；写侧白名单拒绝新写入 429，避免拦截页
+// 状态码与已退役的限流语义混淆。
 func TestValidateSecurityPolicyEnums_rejectsBlockStatus429(t *testing.T) {
 	// Given 合法基线枚举(mode/ip_acl_mode/geoip_mode 均合法)
 
-	// When block_status_code=429(限流专用语义)
+	// When block_status_code=429(已退役语义)
 	err := validateSecurityPolicyEnums("blocking", "deny", "deny", 429, 5)
 
 	// Then 必须拒绝

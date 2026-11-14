@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { code, section, source } from './_helpers.ts'
+import { code, openTags, section, source } from './_helpers.ts'
 import * as configValues from '../src/utils/configValues.ts'
 import * as trustedProxyRanges from '../src/utils/trustedProxyRanges.ts'
 
@@ -149,7 +149,11 @@ test('manual trusted-header edits detach the selected CDN preset', () => {
   const writeAt = /trustedHeaders\.value\s*=/.exec(edit)?.index ?? -1
   assert.ok(detachAt >= 0, '手动编辑必须清空预设选择')
   assert.ok(writeAt > detachAt, '清预设必须先于回写头列表（否则预设会被重新套用）')
-  assert.match(page, /:model-value="trustedHeaders"[\s\S]*@update:model-value="onTrustedHeadersEdit"/)
+  // 无界通配跨元素匹配：@update 事件挪到别的 el-select 也恒绿。
+  // 双属性必须同在一个开标签内（按开标签属性集判定）。
+  const trustedSelect = openTags(page, 'el-select').find((tag) => tag.includes(':model-value="trustedHeaders"'))
+  assert.ok(trustedSelect, '缺可信头选择器')
+  assert.match(trustedSelect, /@update:model-value="onTrustedHeadersEdit"/, '手动编辑事件必须接在同一选择器上')
 })
 
 // 清空 el-input-number 回写 null：此前按 0 提交，而写侧门 cert_expiry_days 1-365、

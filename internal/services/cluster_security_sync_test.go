@@ -151,7 +151,7 @@ func TestApplySnapshot_securityPoliciesEverySchemaColumnRoundTrip(t *testing.T) 
 		"ip_acl_list_refs": true, "ip_whitelist_refs": true,
 	}
 	booleanColumns := map[string]bool{
-		"ip_acl_enabled": true, "ip_whitelist_enabled": true, "rate_limit_enabled": true,
+		"ip_acl_enabled": true, "ip_whitelist_enabled": true,
 		"enabled": true, "geoip_crawler_exempt": true, "waf_check_response": true,
 		"cc_detect_enabled": true, "cc_session_anomaly": true,
 		"log_request_body": true, "trust_detection": true,

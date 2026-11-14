@@ -554,7 +554,7 @@ func TestDeleteCertJob_keeps_row_when_delete_fails(t *testing.T) {
 	if count != 1 {
 		t.Fatalf("job count=%d, want 1", count)
 	}
-	if !strings.Contains(response.Body.String(), "delete") {
+	if !strings.Contains(response.Body.String(), "删除证书任务失败") {
 		t.Fatalf("unexpected response: %s", response.Body.String())
 	}
 }

@@ -41,19 +41,22 @@ func serveReqMonSnapshot(w http.ResponseWriter, r *http.Request) error {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	// limit=N：仅返回最新 N 条（LB 弹框展示上限 500，无需全量 50k JSON
-	// 编解码——2s 轮询下的 Caddy 进程 CPU 从 O(50k 排序+序列化) 降为 O(N)）。
+	// 编解码——2s 轮询下的 Caddy 进程 CPU 从 O(M log M) 全量排序降为
+	// O(M log N) top-N 选择 + N 条序列化）。
 	limit := 0
 	if v := r.URL.Query().Get("limit"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= RingCapacity {
 			limit = n
 		}
 	}
-	entries := Snapshot()
+	var entries []RequestRecord
+	if limit > 0 {
+		entries = SnapshotTopN(limit)
+	} else {
+		entries = Snapshot()
+	}
 	if entries == nil {
 		entries = []RequestRecord{}
-	}
-	if limit > 0 && len(entries) > limit {
-		entries = entries[:limit] // Snapshot 最新优先，截尾即最旧丢弃
 	}
 	raw, err := json.Marshal(reqMonSnapshotPayload{Capacity: RingCapacity, Entries: entries})
 	if err != nil {

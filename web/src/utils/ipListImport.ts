@@ -3,6 +3,7 @@
  * 选择文件只暂存原文，保存时才解析判定——重复条目弹窗点名（以 IP 为准，
  * 同 IP 不同备注按首条为准），其余新条目合并进列表。
  */
+import { entryKey } from './ipListSaveGuard.ts'
 
 interface ImportSourceLine {
   no: number
@@ -38,7 +39,9 @@ export function computeImportOutcome(
   lines: readonly ImportSourceLine[],
   parse: (text: string) => ImportLineParseResult,
 ): ImportOutcome {
-  const seen = new Set(existingValues)
+  // 判重键与保存守卫单源同口径（entryKey：trim+小写）——IPv6 大小写变体是同一
+  // 地址，按原文判重会漏判（2001:DB8::1 与 2001:db8::1 重复入表，后端写侧判重 400）。
+  const seen = new Set([...existingValues].map(entryKey))
   const newEntries: ImportOutcome['newEntries'] = []
   const duplicates: ImportDuplicate[] = []
   const invalidLines: number[] = []
@@ -52,11 +55,12 @@ export function computeImportOutcome(
       invalidLines.push(line.no)
       continue
     }
-    if (seen.has(parsed.value)) {
+    const key = entryKey(parsed.value)
+    if (seen.has(key)) {
       duplicates.push({ lineNo: line.no, value: parsed.value, remark: parsed.remark })
       continue
     }
-    seen.add(parsed.value)
+    seen.add(key)
     newEntries.push({ lineNo: line.no, value: parsed.value, remark: parsed.remark })
   }
   return { newEntries, duplicates, invalidLines }

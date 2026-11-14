@@ -259,6 +259,28 @@ func TestOpenValidatedIP2RegionSearcherDual_v6Attach(t *testing.T) {
 	}
 }
 
+// TestOpenValidatedIP2RegionSearcherDual_probeRejectsCorruptV4：更新安装校验
+// 入口（dual 变体）必须与启动/重载/导入同强度——结构自检通过、探针段越界的
+// 损坏 v4 在真实 Search 时 panic，校验须把 panic 转成错误（recover 真实可达），
+// 不得让坏工件经弱门进入 live。此前 dual 变体只构造不探针，recover 恒不可达。
+func TestOpenValidatedIP2RegionSearcherDual_probeRejectsCorruptV4(t *testing.T) {
+	dir := t.TempDir()
+	v4Path := filepath.Join(dir, "corrupt.xdb")
+	writeCorruptProbeSegmentXDB(t, v4Path)
+
+	searcher, err := openValidatedIP2RegionSearcherDual(v4Path, "")
+	if err == nil {
+		searcher.Close()
+		t.Fatal("段指针损坏的 v4 必须被 dual 校验拒绝（探针 Search + recover）")
+	}
+	if searcher != nil {
+		t.Fatal("拒绝时不得返回半构造 searcher")
+	}
+	if !strings.Contains(err.Error(), "内部异常") && !strings.Contains(err.Error(), "搜索失败") {
+		t.Fatalf("错误须指明探针校验失败: %v", err)
+	}
+}
+
 // TestValidateIP2RegionV6XDB_probeRejectsBroken：结构自检通过、探针段越界的
 // 损坏 v6（段指针改写指向向量区）必须被显性拒绝——与 v4 同强度。
 func TestValidateIP2RegionV6XDB_probeRejectsBroken(t *testing.T) {

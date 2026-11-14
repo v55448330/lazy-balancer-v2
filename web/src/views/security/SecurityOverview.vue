@@ -437,7 +437,7 @@ import { useI18n } from 'vue-i18n'
 import { request } from '@/utils/api'
 import { useAuthStore } from '@/stores/auth'
 import IPLocationAction from '@/views/security/IPLocationAction.vue'
-import { formatDate } from '@/utils/date'
+import { formatDate, formatChartTimeInConfigTz } from '@/utils/date'
 import { pageUrl } from '@/utils/deepLink'
 import { libraryStatusLabel, libraryStatusTagType, summarizeLibrarySources, type LibrarySourceRow } from '@/utils/securityLibraries'
 import '@/utils/echarts' // 统一注册（副作用，全站单点）
@@ -600,7 +600,8 @@ const formatLiveRemaining = (ms: number): string => {
   const seconds = total % 60
   return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
 }
-const formatLiveClock = (ms: number): string => ms > 0 ? new Date(ms).toLocaleTimeString() : '—'
+// 挑战会话时刻经配置时区单源（与图表轴同口径）；0/缺失显示占位。
+const formatLiveClock = (ms: number): string => ms > 0 ? formatChartTimeInConfigTz(ms) : '—'
 const formatLiveAttempts = (row: ChallengeEvent): string => row.max_attempts > 1
   ? `${row.attempts}/${row.max_attempts}`
   : String(row.attempts)
@@ -614,7 +615,7 @@ const fetchChallengeLive = async (): Promise<void> => {
     })
     challengeEvents.value = res.data?.sessions || []
     challengeLiveActiveCount.value = res.data?.active_count || 0
-    challengeLiveUpdated.value = new Date().toLocaleTimeString()
+    challengeLiveUpdated.value = formatChartTimeInConfigTz(Date.now())
     challengeLiveError.value = false
   } catch {
     challengeLiveError.value = true

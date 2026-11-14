@@ -243,3 +243,130 @@ func TestHTTPSRedirectSplit_silentClientDoesNotStallPort(t *testing.T) {
 		t.Fatal("后续 TLS 连接未在超时内透传（端口仍被静默连接拖死）")
 	}
 }
+
+// 超大头明文请求必须被拒（内存受限钉）：http.ReadRequest 本身无头帽
+// （Go 1.27.1 readRequest 以 math.MaxInt64 调 readMIMEHeader），servePlain
+// 必须先以 io.LimitReader 封顶再解析——超过上限的请求按解析失败回 Go 标准
+// 文案 400，不得把任意大小的头读进内存（主 server MaxHeaderBytes 同量级）。
+func TestHTTPSRedirectSplit_oversizedHeaderRejected400(t *testing.T) {
+	ln := newRedirectSplitListener(t, 666, []string{"shop.example.test"})
+	startAccept(t, ln)
+
+	client := dialRaw(t, ln)
+	// 请求行合法 + 单个 2MiB 头值（超过 1MiB 帽）。
+	head := "GET / HTTP/1.1\r\nHost: shop.example.test:666\r\nX-Big: "
+	if _, err := client.Write([]byte(head)); err != nil {
+		t.Fatal(err)
+	}
+	chunk := make([]byte, 64<<10)
+	for i := range chunk {
+		chunk[i] = 'a'
+	}
+	for written := 0; written < 2<<20; written += len(chunk) {
+		if _, err := client.Write(chunk); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := client.Write([]byte("\r\n\r\n")); err != nil {
+		t.Fatal(err)
+	}
+	resp := readResponse(t, client)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status=%d, want 400（超大头必须被拒，不得无界读入内存）", resp.StatusCode)
+	}
+}
+
+// 帽内大头回归形状：512KiB 头（<1MiB 帽）的白名单请求照常 301——
+// 头帽不得误伤正常请求。
+func TestHTTPSRedirectSplit_largeHeaderWithinCapStillRedirects(t *testing.T) {
+	ln := newRedirectSplitListener(t, 666, []string{"shop.example.test"})
+	startAccept(t, ln)
+
+	client := dialRaw(t, ln)
+	head := "GET /page HTTP/1.1\r\nHost: shop.example.test:666\r\nX-Big: "
+	if _, err := client.Write([]byte(head)); err != nil {
+		t.Fatal(err)
+	}
+	chunk := make([]byte, 64<<10)
+	for i := range chunk {
+		chunk[i] = 'a'
+	}
+	for written := 0; written < 512<<10; written += len(chunk) {
+		if _, err := client.Write(chunk); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := client.Write([]byte("\r\n\r\n")); err != nil {
+		t.Fatal(err)
+	}
+	resp := readResponse(t, client)
+	if resp.StatusCode != http.StatusMovedPermanently {
+		t.Fatalf("status=%d, want 301（帽内大头不得误伤）", resp.StatusCode)
+	}
+}
+
+// 明文应答 goroutine 并发上限钉：每连接一个 goroutine 无上限会让慢客户端
+// 洪峰无限堆积 goroutine/内存。信号量满时新明文连接直接关闭（fail-closed，
+// 不排队），槽位释放后恢复应答。上限经包级变量缩窗到 2（生产 128，与
+// cmd/server 协议嗅探 worker 上限同量级）。
+func TestHTTPSRedirectSplit_plainWorkerConcurrencyBounded(t *testing.T) {
+	orig := maxPlainRedirectWorkers
+	maxPlainRedirectWorkers = 2
+	t.Cleanup(func() { maxPlainRedirectWorkers = orig })
+
+	ln := newRedirectSplitListener(t, 666, []string{"shop.example.test"})
+	startAccept(t, ln)
+
+	// 两条慢客户端：只发首字节后停住，各占一个 worker 槽（10s 读死线内
+	// 不释放）。首字节非 0x16 → 明文路径。
+	slow1 := dialRaw(t, ln)
+	slow2 := dialRaw(t, ln)
+	for _, c := range []net.Conn{slow1, slow2} {
+		if _, err := c.Write([]byte("G")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// 等两个 worker 进入 servePlain（槽位占满）。
+	waitPlainWorkers(t, 2)
+
+	// 第三条明文连接：槽满必须被立即关闭（不得起第三个 goroutine）。
+	overflow := dialRaw(t, ln)
+	if _, err := overflow.Write([]byte("G")); err != nil {
+		t.Fatal(err)
+	}
+	_ = overflow.SetReadDeadline(time.Now().Add(2 * time.Second))
+	buf := make([]byte, 1)
+	if _, err := overflow.Read(buf); err == nil {
+		t.Fatal("槽满时新明文连接必须被关闭（读到数据=未被拒绝）")
+	}
+
+	// 释放一个槽（关闭慢客户端 → 其 servePlain 读到 EOF 退出）。
+	_ = slow1.Close()
+	waitPlainWorkers(t, 1)
+
+	// 槽位释放后新明文连接恢复应答（白名单 Host → 301）。
+	client := dialRaw(t, ln)
+	req, _ := http.NewRequest(http.MethodGet, "http://shop.example.test:666/ok", nil)
+	req.Host = "shop.example.test:666"
+	if err := req.Write(client); err != nil {
+		t.Fatal(err)
+	}
+	resp := readResponse(t, client)
+	if resp.StatusCode != http.StatusMovedPermanently {
+		t.Fatalf("status=%d, want 301（槽位释放后必须恢复应答）", resp.StatusCode)
+	}
+	_ = slow2.Close()
+}
+
+// waitPlainWorkers 轮询等待在役明文 worker 数达到目标值（信号量占用观测）。
+func waitPlainWorkers(t *testing.T, want int) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if plainWorkersInFlight.Load() == int64(want) {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("在役明文 worker=%d, want %d（2s 内未达目标）", plainWorkersInFlight.Load(), want)
+}

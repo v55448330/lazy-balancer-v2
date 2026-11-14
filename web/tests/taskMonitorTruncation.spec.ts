@@ -56,22 +56,9 @@ test('截断时渲染提示条（复用全局 info-note-bar 样式，不写局�
 })
 
 test('证书行运行按钮：冷却中可运行（信息提示），仅永久不可重试态禁用', () => {
-  // /system/tasks 对证书行下发剩余冷却秒数（0=可运行，null=永久不可重试）与
-  // cert_job_ca_cooldown_active（CA 退避窗口判定布尔）。
-  // 2026-11-02 用户裁定：冷却不再禁用手动运行——文案降级为信息提示；
-  // 2026-11-07 用户裁定：提示按实门口径披露——CA 退避窗口内触发默认 429
-  // （越窗出口在证书任务页「重签」）；仅通用冷却的行触发放行，不得声称被拒。
+  // 冷却披露契约（实门口径/词条语义锚/禁用判据同源）单源归
+  // taskMonitorTriggerCooldownTip.spec.ts；本文件只钉按钮禁用面与 tooltip 接线。
   assert.match(page, /retry_cooldown_seconds\?: number/, 'TaskInfo 必须声明冷却字段')
-  assert.match(page, /cert_job_ca_cooldown_active\?: boolean/, 'TaskInfo 必须声明 CA 退避窗口布尔字段')
-  assert.match(page, /const runCooldownReason = \(row: TaskInfo\): string =>/, '必须单源计算冷却提示')
-  const helper = section(page, 'const runCooldownReason = (row: TaskInfo): string =>', '\nconst onTrigger')
-  assert.match(helper, /Math\.ceil\(seconds \/ 60\)/, '提示需换算为分钟')
-  assert.match(helper, /cert_job_ca_cooldown_active/, '必须按后端布尔分支（不得按行状态猜测窗口）')
-  assert.match(helper, /app\.settings\.taskMonitor\.cooldown\.caWindow/, 'CA 退避窗口内提示必须披露拒绝语义')
-  assert.match(helper, /app\.settings\.taskMonitor\.cooldown\.normal/, '仅通用冷却的行必须披露「冷却期后可直接重试」')
-  assert.match(helper, /app\.settings\.taskMonitor\.cooldown\.caWindow/, '提示必须披露越窗出口位置')
-  assert.match(helper, /app\.settings\.taskMonitor\.cooldown\.caWindow/, '提示必须披露越窗出口动作')
-  assert.match(helper, /app\.settings\.taskMonitor\.cooldown\.permanent/, '永久不可重试态仍需禁用提示')
 
   // 运行按钮块：禁用只保留永久不可重试态；冷却原因仍进 tooltip 供解释。
   const actions = section(page, "t('app.settings.taskMonitor.col.actions')", '</el-table-column>')

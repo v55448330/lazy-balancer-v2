@@ -235,12 +235,12 @@ func (m oidcIssuerMigration) auditText() string {
 // 与配置写回同生共死）。读取阶段先查冲突：同 subject 已存在归一值行时迁移会
 // 触发 (oidc_issuer,oidc_subject) 唯一索引，且意味着同一自然人有两行身份
 // （角色/禁用状态分叉）——必须拒绝并列出 subject 交人工合并，绝不静默二选一。
-func migrateOIDCIdentityIssuer(tx *sql.Tx, from, to string) (oidcIssuerMigration, error) {
+func migrateOIDCIdentityIssuer(ctx context.Context, tx *sql.Tx, from, to string) (oidcIssuerMigration, error) {
 	mig := oidcIssuerMigration{from: from, to: to}
 	if from == "" || to == "" || from == to {
 		return mig, nil
 	}
-	rows, err := tx.Query(`SELECT oidc_subject FROM users
+	rows, err := tx.QueryContext(ctx, `SELECT oidc_subject FROM users
 		WHERE auth_provider='oidc' AND oidc_subject<>'' AND oidc_issuer=?
 		  AND oidc_subject IN (SELECT oidc_subject FROM users WHERE auth_provider='oidc' AND oidc_subject<>'' AND oidc_issuer=?)
 		ORDER BY oidc_subject`, from, to)
@@ -263,7 +263,7 @@ func migrateOIDCIdentityIssuer(tx *sql.Tx, from, to string) (oidcIssuerMigration
 	if len(mig.conflicts) > 0 {
 		return mig, nil
 	}
-	res, err := tx.Exec(`UPDATE users SET oidc_issuer=? WHERE auth_provider='oidc' AND oidc_subject<>'' AND oidc_issuer=?`, to, from)
+	res, err := tx.ExecContext(ctx, `UPDATE users SET oidc_issuer=? WHERE auth_provider='oidc' AND oidc_subject<>'' AND oidc_issuer=?`, to, from)
 	if err != nil {
 		return mig, err
 	}
@@ -300,7 +300,7 @@ func saveOIDCConfigWithIssuerMigration(ctx context.Context, cfg OIDCConfig, migr
 			_ = tx.Rollback()
 		}
 	}()
-	res, err := tx.Exec("UPDATE global_config SET oidc_config=? WHERE id=1", string(raw))
+	res, err := tx.ExecContext(ctx, "UPDATE global_config SET oidc_config=? WHERE id=1", string(raw))
 	if err != nil {
 		return mig, err
 	}
@@ -311,7 +311,7 @@ func saveOIDCConfigWithIssuerMigration(ctx context.Context, cfg OIDCConfig, migr
 	if affected != 1 {
 		return mig, fmt.Errorf("保存 OIDC 配置失败：影响行数 %d（global_config 行缺失）", affected)
 	}
-	mig, err = migrateOIDCIdentityIssuer(tx, migrateFrom, cfg.Issuer)
+	mig, err = migrateOIDCIdentityIssuer(ctx, tx, migrateFrom, cfg.Issuer)
 	if err != nil {
 		return mig, err
 	}

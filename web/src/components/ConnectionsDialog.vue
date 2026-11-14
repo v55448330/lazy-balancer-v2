@@ -32,7 +32,7 @@
       </div>
       <div class="conn-toolbar-right">
         <span v-if="domains.length" class="conn-domain-pager">
-          <button type="button" class="conn-domain-arrow" :disabled="domainPage === 0" @click="domainPage--" :aria-label="t('app.dashboard.connDomainPrev')">
+          <button type="button" class="conn-domain-arrow" :disabled="domainPage <= 1" @click="domainPage--" :aria-label="t('app.dashboard.connDomainPrev')">
             <el-icon><CaretLeft /></el-icon>
           </button>
           <span v-for="d in pagedDomains" :key="d.host" class="conn-domain-chip" :title="t('app.dashboard.connDomainTip', { requests: d.requests, flight: d.in_flight })">
@@ -41,7 +41,7 @@
           <button type="button" class="conn-domain-arrow" :disabled="domainPageMax" @click="domainPage++" :aria-label="t('app.dashboard.connDomainNext')">
             <el-icon><CaretRight /></el-icon>
           </button>
-          <span v-if="domainPageCount > 1" class="conn-domain-pageinfo">{{ domainPage + 1 }}/{{ domainPageCount }}</span>
+          <span v-if="domainPageCount > 1" class="conn-domain-pageinfo">{{ domainPage }}/{{ domainPageCount }}</span>
         </span>
         <span class="conn-toolbar-divider"></span>
         <span class="conn-toolbar-label">{{ t('app.dashboard.connAutoRefresh') }}</span>
@@ -124,6 +124,8 @@ import { Connection, Refresh, CaretLeft, CaretRight } from '@element-plus/icons-
 import DialogHeader from '@/components/DialogHeader.vue'
 import { request } from '@/utils/api'
 import { generalizeUA } from '@/utils/uaGeneralize'
+import { useClampedPagination } from '@/composables/useClampedPagination'
+import { formatDate, formatChartTimeInConfigTz } from '@/utils/date'
 
 const props = defineProps<{ visible: boolean }>()
 const emit = defineEmits<{ (e: 'close'): void }>()
@@ -186,21 +188,17 @@ const filterCats = computed(() => [
 // 不用省略号/popover）——每页 3 个 chip，‹ › 翻页+页码指示；域名数量多时
 // 工具行占宽恒定不换行错乱。域名变化时页码钳制（刷新/聚合变化安全）。
 const DOMAIN_PAGE_SIZE = 3
-const domainPage = ref(0)
+const domainPage = ref(1)
+const domainPageSize = ref(DOMAIN_PAGE_SIZE)
+// 分页夹紧+切片单源（useClampedPagination）：domains 收缩（刷新后聚合变化）时
+// 页码自动回夹——原实现只在 slice 内 Math.min，页码指示仍显示越界的「5/2」。
+const { pagedItems: pagedDomains } = useClampedPagination(domains, domainPage, domainPageSize)
 const domainPageCount = computed(() => Math.max(1, Math.ceil(domains.value.length / DOMAIN_PAGE_SIZE)))
-const domainPageMax = computed(() => domainPage.value >= domainPageCount.value - 1)
-const pagedDomains = computed(() => {
-  const start = Math.min(domainPage.value, domainPageCount.value - 1) * DOMAIN_PAGE_SIZE
-  return domains.value.slice(start, start + DOMAIN_PAGE_SIZE)
-})
+const domainPageMax = computed(() => domainPage.value >= domainPageCount.value)
 
-// 时间列含年月日（用户裁定）：YYYY-MM-DD HH:mm:ss。
-const fmtTime = (ts: number): string => {
-  if (!ts) return ''
-  const d = new Date(ts)
-  const p2 = (n: number): string => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())} ${p2(d.getHours())}:${p2(d.getMinutes())}:${p2(d.getSeconds())}`
-}
+// 时间列含年月日（用户裁定）：YYYY-MM-DD HH:mm:ss——经配置时区单源（utils/date），
+// 与图表轴/其余时间列同口径，跨时区管理员不再看到浏览器本地钟面。
+const fmtTime = (ts: number): string => (ts ? formatDate(new Date(ts)) : '')
 const fmtDuration = (ms: number): string => (ms >= 100 ? `${(ms / 1000).toFixed(2)}s` : `${ms.toFixed(ms < 10 ? 2 : 0)}ms`)
 // 协议两列（用户裁定：传输层/HTTP 版本分开；版本保留完整 HTTP/1.1 等原文）。
 const schemeShort = (scheme: string): string => (scheme || 'http').toUpperCase()
@@ -249,7 +247,7 @@ const fetchOnce = async (): Promise<void> => {
     connections.value = d?.connections ?? []
     domains.value = d?.domains ?? []
     reqMon.value = d?.req_mon ?? false
-    lastUpdated.value = new Date().toLocaleTimeString()
+    lastUpdated.value = formatChartTimeInConfigTz(Date.now())
   } catch {
     /* 静默：弹框保留上次数据 */
   } finally {

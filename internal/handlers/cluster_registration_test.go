@@ -137,3 +137,33 @@ func TestGetClusterRegistrationStatus_rejectsSlaveNode(t *testing.T) {
 		t.Fatalf("status=%d body=%s, want 403 (master-only)", recorder.Code, recorder.Body.String())
 	}
 }
+
+// 注册状态轮询的 handler 级凭证拒绝必须留痕（与同族机器端点同口径）：
+// 中间件验密后事务内复核仍可能拒（密钥轮换/到期），零审计会让残留凭证的
+// 枚举尝试在取证面无痕。留痕经 middleware 注入的钩子（一分钟去重单源）。
+func TestGetClusterRegistrationStatus_credentialRejectionInvokesAuditRecorder(t *testing.T) {
+	h := newBackupTestHandlers(t)
+	// pending 节点带注册密钥哈希——错误密钥在事务内复核被拒（ErrInvalidClusterAuth）。
+	if _, err := db.DB.Exec(`INSERT INTO nodes (id,name,ip_address,port,status,is_approved,registration_secret)
+		VALUES (5,'pending-node','10.0.0.5',8000,'pending',0,'stored-secret-hash')`); err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	old := registrationStatusRejectionRecorder
+	registrationStatusRejectionRecorder = func(*gin.Context) { calls++ }
+	t.Cleanup(func() { registrationStatusRejectionRecorder = old })
+
+	router := gin.New()
+	router.GET("/cluster/register/:id/status", func(c *gin.Context) {
+		c.Set("registration_secret", "wrong-secret")
+		h.GetClusterRegistrationStatus(c)
+	})
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/cluster/register/5/status", nil))
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("status=%d body=%s, want 401", recorder.Code, recorder.Body.String())
+	}
+	if calls != 1 {
+		t.Fatalf("拒绝留痕钩子调用=%d, want 1（凭证拒绝必须进审计面）", calls)
+	}
+}

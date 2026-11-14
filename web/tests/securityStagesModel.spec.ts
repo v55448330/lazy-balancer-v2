@@ -282,9 +282,9 @@ test('拦截页回落文案：失效策略页不得断言「回落默认 403」�
     label: '拦截页',
     detail: '已失效（回落绑定链首个有效页）',
   })
-  // 阶段 4（WAF）同口径：逐策略合成码，页失效时回落同为绑定链首个有效页
-  const stage4 = stageRows(bindingOf({ block_page_id: 9 }), policyOf({ mode: 'blocking' }), [], 3)
-  assert.equal(stage4.find((row) => row.label === '拦截页')?.detail, '已失效（回落绑定链首个有效页）')
+  // 阶段 3（WAF）同口径：逐策略合成码，页失效时回落同为绑定链首个有效页
+  const stage3 = stageRows(bindingOf({ block_page_id: 9 }), policyOf({ mode: 'blocking' }), [], 3)
+  assert.equal(stage3.find((row) => row.label === '拦截页')?.detail, '已失效（回落绑定链首个有效页）')
   // 未配置：跟随绑定链首个有效页，无则默认 403
   const unset = stageRows(bindingOf({ block_page_id: 0 }), policyOf({ mode: 'blocking' }), [], 3)
   assert.equal(unset.find((row) => row.label === '拦截页')?.detail, '未配置（跟随绑定链首个有效页，无则默认 403）')
@@ -354,7 +354,7 @@ test('缺失名单条目判定单源：只报未缓存的正 id（静默失败�
 })
 
 test('阶段可拦截能力门：stage3 关模式/检测无 block 规则、stage1 无能力均不得宣称生效', () => {
-  // 阶段 2 恒可（429 归因另由绑定链限流门控）
+  // 阶段 2 恒可（挑战计数口径：发放/失败计入，挑战通过不计；配额限流已下线，不再宣称 429）
   assert.equal(blockPageStageCanIntercept({ stage: 2 }), true)
   // 阶段 3：off 恒 false；blocking 恒 true；detection/custom_only 仅 block 自定义规则
   assert.equal(blockPageStageCanIntercept({ stage: 3, mode: 'off', hasBlockingCustomRule: true }), false)

@@ -4145,6 +4145,13 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 				rule.TCPTryDuration = 0
 			}
 		}
+		// 自定义路由开关关闭时源行残留 path_rules 不得进入保存门
+		//（validateRuleFeatures 对 !CustomRoutesEnabled && len(PathRules)>0
+		// 显式 400）或复制到副本——与 TCP 分支同族自愈（hydrateRuleRelations
+		// 不按开关过滤，带外/旧版本残留行在此显式清空）。
+		if !rule.CustomRoutesEnabled {
+			rule.PathRules = []models.PathRule{}
+		}
 	}
 	// 非 acme_dns 来源的残留 acme_config_id 不被消费——副本不放大该
 	// 跨模式死引用（与 Create/Update/导入同口径；两协议同判；空来源同理）。

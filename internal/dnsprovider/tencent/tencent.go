@@ -390,7 +390,8 @@ type enumeratedRecord struct {
 // 故障，按空列表处理——与 deleteRecord 的幂等删除同方向。
 func (p *Provider) listChallengeRecords(ctx context.Context, zone, subDomain string) ([]enumeratedRecord, error) {
 	var collected []enumeratedRecord
-	for page := range challengeListPageLimit {
+	var offset uint64
+	for range challengeListPageLimit {
 		req := dnspod.NewDescribeRecordListRequest()
 		req.Domain = common.StringPtr(zone)
 		req.SubDomain = common.StringPtr(subDomain)
@@ -398,7 +399,7 @@ func (p *Provider) listChallengeRecords(ctx context.Context, zone, subDomain str
 		// ErrorOnEmpty=no：查询不到数据时返回空列表而不是报错；不认该参数
 		// 的服务端仍可能回 ResourceNotFound.NoDataOfRecord，由上方兜底。
 		req.ErrorOnEmpty = common.StringPtr("no")
-		req.Offset = common.Uint64Ptr(uint64(page) * challengeListPageSize)
+		req.Offset = common.Uint64Ptr(offset)
 		req.Limit = common.Uint64Ptr(challengeListPageSize)
 		resp, err := p.client.DescribeRecordListWithContext(ctx, req)
 		if err != nil {
@@ -438,7 +439,11 @@ func (p *Provider) listChallengeRecords(ctx context.Context, zone, subDomain str
 			total = *info.TotalCount
 		}
 		fetched := uint64(len(resp.Response.RecordList))
-		if fetched == 0 || uint64(page+1)*challengeListPageSize >= total {
+		// 服务端可能按更小的页容量返回：按实际返回条数推进 offset（绝对
+		// 偏移语义，与 dnspod 侧同口径），短页不重不漏，无需按 Limit 整数倍
+		// 对齐（钉测见 tencent_pagination_test.go）。
+		offset += fetched
+		if fetched == 0 || (total > 0 && offset >= total) {
 			return collected, nil
 		}
 	}

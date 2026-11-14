@@ -14,7 +14,7 @@ import (
 )
 
 func TestRequestSurfaceWritesConsumeRequestContext(t *testing.T) {
-	ctxless := regexp.MustCompile(`db\.DB\.(Exec|Begin)\(`)
+	ctxless := regexp.MustCompile(`(?:db\.DB|tx)\.(Exec|Begin|QueryRow)\(`)
 	tests := []struct {
 		file    string
 		fn      string
@@ -54,6 +54,14 @@ func TestRequestSurfaceWritesConsumeRequestContext(t *testing.T) {
 			file:    "auth.go",
 			fn:      "func (h *Handlers) Logout(c *gin.Context) {",
 			markers: []string{"ExecContext(c.Request.Context()"},
+		},
+		{
+			// API Key 状态更新：事务开启已消费请求 ctx，事务内快照读与
+			// UPDATE 同样必须消费——否则「取消即中止」只在 BeginTx 点成立，
+			// 客户端断开后事务内语句仍无主跑完（与 UpdateCurrentUser 同契约）。
+			file:    "apikeys.go",
+			fn:      "func updateAPIKeyStatus(c *gin.Context, currentUserOnly bool) {",
+			markers: []string{"QueryRowContext(c.Request.Context()", "ExecContext(c.Request.Context()"},
 		},
 	}
 	for _, test := range tests {

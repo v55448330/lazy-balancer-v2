@@ -104,7 +104,7 @@ func TestSyncService_ForgetPins_clearsMemoryAndDiskPins(t *testing.T) {
 	remaining := len(service.verifiedPins)
 	service.pinMu.Unlock()
 	if remaining != 0 {
-		t.Fatalf("内存指纹缓存残留 %d 条, want 0（残留会让 forge 后的请求继续读旧指纹）", remaining)
+		t.Fatalf("内存指纹缓存残留 %d 条, want 0（内存/磁盘 TOFU 生命周期须对齐：pin 文件已删而内存旧指纹仍在，后续握手会按旧指纹复核，重钉入口打不开）", remaining)
 	}
 	for _, pinPath := range pinPaths {
 		if _, err := os.Stat(pinPath); !errors.Is(err, os.ErrNotExist) {

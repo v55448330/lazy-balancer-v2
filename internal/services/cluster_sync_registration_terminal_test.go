@@ -101,7 +101,7 @@ func TestSyncService_bumpRegistrationConfirmFailure_readFailureKeepsRegistration
 	t.Cleanup(func() { _ = fake.Close() })
 	service := &SyncService{db: fake}
 
-	service.bumpRegistrationConfirmFailure(context.Background(), "approved-token", "confirm 端点返回 401")
+	service.bumpRegistrationConfirmFailure(context.Background(), "confirm 端点返回 401")
 
 	for _, query := range conn.executedWrites() {
 		// 读失败（未知）时唯一允许的写是计数自增本身；任何清空注册态/
@@ -186,7 +186,7 @@ func TestSyncService_bumpRegistrationConfirmFailure_terminalClearIsSingleStateme
 	log.SetOutput(&buffer)
 	t.Cleanup(func() { log.SetOutput(oldWriter) })
 
-	service.bumpRegistrationConfirmFailure(context.Background(), "approved-token", "confirm 端点返回 401")
+	service.bumpRegistrationConfirmFailure(context.Background(), "confirm 端点返回 401")
 
 	var clears []string
 	for _, query := range conn.executedWrites() {

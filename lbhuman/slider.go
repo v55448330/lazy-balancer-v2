@@ -24,9 +24,9 @@ const (
 	sliderTolerance   = 3  // x 偏移容差 px（收紧：视觉偏差不再轻易通过）
 	sliderPuzzleTTL   = 2 * time.Minute
 	sliderMaxAttempts = 3 // 失败 3 次强制换图（防爆破）
-	// sliderVerifyMaxBody 匿名校验端点请求体硬上限（64KiB，远超合法提交：
-	// track 点数帽 4096 × 每点 ≤8 字符 + 表单开销）。
-	sliderVerifyMaxBody = 64 << 10
+	// humanVerifyMaxBody 匿名校验端点请求体硬上限（64KiB，滑块与 JS PoW 同口径；
+	// 远超合法提交：track 点数帽 4096 × 每点 ≤8 字符 + 表单开销）。
+	humanVerifyMaxBody = 64 << 10
 	// sliderTrackMaxPoints 轨迹采样点数帽（10s 时长上限内合法拖动远低于此值；
 	// 超限直接 400，不做无界 Split）。
 	sliderTrackMaxPoints = 4096
@@ -158,6 +158,8 @@ func sliderVerify(p *sliderPuzzle, x int, track []int, durationMs int) bool {
 
 // consumeSliderPuzzle 消费拼图（一次性；失败达上限后下一次强制失效换新；
 // TTL 过期即删返回 nil——过期提交走 retryable=false 换新图路径）。
+// 返回锁内值快照：attempts/gapX/createdAt 不再被并发消耗改写，
+// 调用方锁外读快照无数据竞争（attempts_left 响应组装据此）。
 func consumeSliderPuzzle(id string) *sliderPuzzle {
 	sliderPuzzlesMu.Lock()
 	defer sliderPuzzlesMu.Unlock()
@@ -174,7 +176,8 @@ func consumeSliderPuzzle(id string) *sliderPuzzle {
 		delete(sliderPuzzles, id)
 		return nil
 	}
-	return p
+	snap := *p
+	return &snap
 }
 
 // serveSliderChallenge 滑块挑战页（内联 SVG+JS，零外部资源）。
@@ -207,7 +210,7 @@ func (h *HumanHandler) serveSliderVerify(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	// 匿名端点请求体硬上限：超限读取报错 → 400（不得全量读入无界 body）。
-	r.Body = http.MaxBytesReader(w, r.Body, sliderVerifyMaxBody)
+	r.Body = http.MaxBytesReader(w, r.Body, humanVerifyMaxBody)
 	if err := r.ParseForm(); err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		_, _ = w.Write([]byte(`{"ok":false}`))
@@ -253,7 +256,7 @@ func (h *HumanHandler) serveSliderVerify(w http.ResponseWriter, r *http.Request,
 		// retryable=false，客户端 reload 换新图。attempts_left 服务端权威。
 		attemptsLeft := 0
 		if p != nil {
-			attemptsLeft = sliderMaxAttempts - p.attempts
+			attemptsLeft = sliderMaxAttempts - p.attempts // p 为锁内值快照，读无竞争
 			if attemptsLeft < 0 {
 				attemptsLeft = 0
 			}

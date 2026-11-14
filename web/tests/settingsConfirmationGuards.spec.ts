@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { code, section } from './_helpers.ts'
+import { code, matchBrace, section } from './_helpers.ts'
 
 const page = () => code('src/views/settings/BasicSettings.vue')
 
@@ -177,7 +177,13 @@ test('证书重签先占位再确认，取消后也释放在途标记', () => {
   const confirmAt = body.indexOf('await ElMessageBox.confirm(')
   assert.ok(busyAt > 0 && confirmAt > busyAt, '重签必须先占位再弹出确认')
   assert.ok(confirmAt < body.indexOf('request.post('), '确认必须先于重签请求')
-  assert.match(body, /finally \{[\s\S]*nextRetryingIds\.delete\(row\.id\)/, '取消与请求结束都必须释放占位')
+  // finally 按花括号配对取块：无界 `[\s\S]*` 会匹配到后续嵌套函数里的 finally，
+  // 真 finally 不再释放占位也恒绿。释放必须在外层 finally 块内。
+  const finallyAt = body.indexOf('\n  } finally {')
+  assert.ok(finallyAt > 0, '缺外层 finally')
+  const finallyOpen = body.indexOf('{', finallyAt + 4)
+  const finallyBlock = body.slice(finallyOpen + 1, matchBrace(body, finallyOpen))
+  assert.match(finallyBlock, /nextRetryingIds\.delete\(row\.id\)/, '取消与请求结束都必须在外层 finally 释放占位')
 })
 
 test('MFA 重置与关闭在写操作验证开启时不再先弹验证码', () => {

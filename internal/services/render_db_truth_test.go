@@ -7,9 +7,9 @@ package services
 // 带外直写/旧备份绕过导入门）→ 渲染显性报错（fail-visible），不再回退写死
 // 常量。类型②省略型（0=不发射该 key，继承 Caddy 引擎默认）保持不变。
 //
-// 批 3（2026-10-15）扩展：安全策略值列 anomaly_threshold（①）/rate_limit_rps
-// （①，条件消费）/rate_limit_burst（②省略型）/block_status_code（②省略型，
-// 0=跟随默认 403）与 global_config.cert_expiry_days（①）。
+// 批 3（2026-10-15）扩展：安全策略值列 anomaly_threshold（①）/
+// block_status_code（②省略型，0=跟随默认 403）与
+// global_config.cert_expiry_days（①）。
 //
 // 反兜底机制钉测见 render_anti_fallback_scan_test.go。
 
@@ -399,14 +399,14 @@ func TestRenderDBTruth_SecurityAnomalyThresholdInvalidFailVisible(t *testing.T) 
 func TestRenderDBTruth_BlockStatusCodeZeroFollowsDefault403(t *testing.T) {
 	// 类型②省略型回归钉：0=未设置，跟随默认 403（static_response 必须显式
 	// 状态码，省略以默认值替换实现——反兜底白名单 Ruling 披露）。
-	routes := buildBlockPageAttributionRoute(483, nil, "<html>bp</html>", "", 0, "", "auto")
+	routes := buildBlockPageAttributionRoute(483, "<html>bp</html>", "", 0, "", "auto")
 	route := routes[len(routes)-1]
 	resp := route["handle"].([]interface{})[0].(map[string]interface{})
 	if resp["status_code"] != 403 {
 		t.Fatalf("block_status_code=0 must render 403 (跟随默认), got %v", resp["status_code"])
 	}
 	// 非零哨兵贯通（503=写侧白名单合法值）。
-	routes = buildBlockPageAttributionRoute(483, nil, "<html>bp</html>", "", 503, "", "auto")
+	routes = buildBlockPageAttributionRoute(483, "<html>bp</html>", "", 503, "", "auto")
 	route = routes[len(routes)-1]
 	resp = route["handle"].([]interface{})[0].(map[string]interface{})
 	if resp["status_code"] != 503 {

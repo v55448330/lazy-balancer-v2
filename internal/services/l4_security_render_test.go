@@ -720,7 +720,8 @@ func TestBuildTCPServer_tcpGeoipPolicyIDOverflowSegment_softSkips(t *testing.T) 
 }
 
 // 引擎级实证（R-10 类）：绑定 stage0/1 策略的 TCP 渲染产物必须通过真实
-// `caddy validate --adapter json`——与 caddy_engine_acceptance_test.go 同门槛：
+// `caddy validate`（裸 JSON 默认按 JSON 读取，--adapter json 未注册于标准
+// 构建）——与 caddy_engine_acceptance_test.go 同门槛：
 // PATH 无 caddy 二进制 / 二进制未编入 lb_l4_sec 模块时显式 SKIP（结构断言
 // 由上方各形状用例承担），有引擎时配置被拒即 FAIL。
 func TestL4SecConfig_caddyEngineAcceptance(t *testing.T) {
@@ -769,8 +770,8 @@ func TestL4SecConfig_caddyEngineAcceptance(t *testing.T) {
 	if err := os.WriteFile(path, rendered, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	out, verr := exec.Command(binary, "validate", "--adapter", "json", "--config", path).CombinedOutput()
-	t.Logf("caddy validate --adapter json --config %s\n%s", path, strings.TrimSpace(string(out)))
+	out, verr := exec.Command(binary, "validate", "--config", path).CombinedOutput()
+	t.Logf("caddy validate --config %s\n%s", path, strings.TrimSpace(string(out)))
 	if verr != nil {
 		t.Fatalf("真实 Caddy 引擎拒绝了 L4 安全路由渲染产物: %v", verr)
 	}

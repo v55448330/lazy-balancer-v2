@@ -1,22 +1,18 @@
 package services
 
-//
-// u-* 并集投影稳定命名冲突——预检逐规则渲染（policiesForRule）但
-// u-deny/u-trust/u-bl/u-allow/u-allow-exempt/u-trust12 是全局单文件名，
-// 异策略集多规则时后渲染覆盖前者=漏拦+误拦。修复方向：scope 编入规则身份
-// （ruleCaddyID），GC regex 收新形态。
-//
-// refreshIPListProjectionsInLock 丢弃证书快照——热路径渲染经
-// MaterializeCertPairs 物化了新证书文件（快照非空）而 JSON 字节一致时返回
-// 「收敛」，磁盘新证书+Caddy 内存旧证书静默分叉（「物化即有变⇒强制
-// 重载」在热路径失守）。修复方向：三态（收敛/需强制/回退），调用方据态走
-// 强制重载。
-//
-// 资格门（ipListsReferencedByEnabledPolicyLabeled）只查
-// ip_acl_list_refs/ip_whitelist_refs，不覆盖仅被 trusted_proxy_range_refs
-// 或 CRS 排除 scope=ip/list 条目 ListRefs 引用的名单——保守回退口径缺口。
-// 本文件 RED 阶段全部使用既有 API（签名不变更即可编译运行），实现后追加
-// 新签名钉测。
+// 回归覆盖（热路径名单投影作用域与收敛三态，现状钉测）：
+//   - deny ACL / 黑名单预检投影为逐策略命名（p<id>-acl / p<id>-bl，
+//     security.go）：生产粒度=消费粒度，异规则同策略同文件同字节，
+//     异策略必不同文件，互不覆盖；id:12 信任投影按规则身份隔离
+//     （u-trust12-<ruleCaddyID>.txt）；空规则身份显性报错（fail-loud）。
+//   - refreshIPListProjectionsInLock 返回三态（ProjectionConverged /
+//     ProjectionNeedForce / ProjectionFallback）：JSON 字节一致但本轮渲染
+//     经 MaterializeCertPairs 物化了证书文件时返回 NeedForce，调用方走
+//     强制重载收敛——杜绝磁盘新证书 × Caddy 内存旧证书静默分叉。
+//   - 资格门 ipListsReferencedByEnabledPolicyLabeled 覆盖
+//     ip_acl_list_refs/ip_whitelist_refs/trusted_proxy_range_refs 与
+//     CRS 排除 scope=ip/list 条目的 ListRefs；scope=all 条目与未启用受信
+//     代理的 refs 不构成引用面。
 
 import (
 	"crypto/ecdsa"
@@ -69,10 +65,10 @@ func testCertPEM(t *testing.T, cn string) (string, string) {
 		string(pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}))
 }
 
-// 钉测（RED 先行）：两条规则各绑一个异条目 deny ACL 策略，经生产渲染
-// 通道逐规则出预检段。修复前两次渲染先后覆写同一个 u-deny.txt——后渲染的
-// 并集顶掉前者，先渲染规则的预检算子读到的文件不再是自己的并集（漏拦+误拦）。
-// 修复后各规则投影进 u-deny-<ruleCaddyID>.txt，内容各自正确且互不覆盖。
+// 钉测：两条规则各绑一个异条目 deny ACL 策略，经生产渲染通道逐规则出
+// 预检段。历史全局单文件名（u-deny.txt）形态下两次渲染先后覆写同一文件，
+// 后渲染的并集顶掉前者（漏拦+误拦）。现行逐策略投影 p<id>-acl：异策略
+// 必不同文件，内容各自正确且互不覆盖。
 func TestPrecheckProjectionFilesScopedPerRule(t *testing.T) {
 	stubSecurityLibsAvailable(t)
 	_, database := newClusterTestService(t)

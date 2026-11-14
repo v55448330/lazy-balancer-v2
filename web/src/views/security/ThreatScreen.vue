@@ -604,6 +604,8 @@ const feedNow = ref(Date.now())
 const WEEKDAYS = computed(() => [t('app.security.threat.weekdaySun'), t('app.security.threat.weekdayMon'), t('app.security.threat.weekdayTue'), t('app.security.threat.weekdayWed'), t('app.security.threat.weekdayThu'), t('app.security.threat.weekdayFri'), t('app.security.threat.weekdaySat')])
 const camReadout = ref('--')
 const tgtReadout = ref('--')
+// 有意豁免配置时区单源（utils/date）：大屏主时钟是「墓钟」视觉——展示值守现场
+// 的本机墙钟（与操作者手表同钟面），不是业务时间戳；事件/统计时间仍走配置时区。
 function tickClock(): void {
   const now = new Date()
   feedNow.value = now.getTime()

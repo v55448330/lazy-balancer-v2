@@ -20,6 +20,17 @@ import (
 // （无 JWT/API Key 认证），超大体可撑爆审计库。
 const registerRequestMaxBytes = 16 << 10
 
+// registrationStatusRejectionRecorder 由 middleware 包注入（middleware 导入
+// handlers，反向会成环——与 apiKeyWhitelistCachePurge 同款倒置装配）：注册
+// 状态轮询的 handler 级凭证拒绝经 middleware 的认证拒绝审计单源留痕
+// （reason/path/ip 一分钟去重）。nil=未装配（单测直连 handlers 时静默跳过）。
+var registrationStatusRejectionRecorder func(*gin.Context)
+
+// SetRegistrationStatusRejectionRecorder 装配拒绝留痕钩子（middleware init 注册）。
+func SetRegistrationStatusRejectionRecorder(recorder func(*gin.Context)) {
+	registrationStatusRejectionRecorder = recorder
+}
+
 // registerAuditField 限制写入审计详情的节点字段：截断至 128B（回退合法 UTF-8
 // 边界）并去除控制字符，防未认证请求注入超长内容或伪造日志换行。
 func registerAuditField(s string) string {
@@ -182,6 +193,12 @@ func (h *Handlers) GetClusterRegistrationStatus(c *gin.Context) {
 		// 仅凭证类哨兵 401——DB 故障误映射 401 会驱使从节点走
 		// 五连败轨道耗尽注册配额。
 		if errors.Is(err, services.ErrNodeNotFound) || errors.Is(err, services.ErrInvalidClusterAuth) {
+			// 凭证拒绝留痕（与同族机器端点 registrationAuth/confirm 同口径）：
+			// 中间件验密后事务内复核仍可能拒（密钥轮换/到期），零审计会让
+			// 残留凭证的枚举尝试在取证面无痕。一分钟去重由 middleware 单源承担。
+			if registrationStatusRejectionRecorder != nil {
+				registrationStatusRejectionRecorder(c)
+			}
 			clusterError(c, http.StatusUnauthorized, "注册凭证无效", err)
 			return
 		}

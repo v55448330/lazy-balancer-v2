@@ -161,6 +161,7 @@ func (h *HumanHandler) ServeHTTP(w http.ResponseWriter, r *http.Request, next ca
 		current := ccPeek(key, h.CCWindowSec)
 		trig := evalCC(current, h.CCRPSLimit, h.CCWindowSec, h.CC4xxRatio, h.CCSessionUA, h.CCSession)
 		if trig.Triggered {
+			recordCCTrigger(trig.Reason)
 			h.serveChallengeForRequest(w, r, ip)
 			return nil
 		}

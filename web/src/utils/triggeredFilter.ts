@@ -46,7 +46,7 @@ const isTriggeredCategory = (value: string): value is TriggeredCategory =>
  *
  * 规则（与视图注释同口径）：
  *  - 空选 = 不过滤 → null；
- *  - 八类全中且无自定义 tag = 全选 → null（不发参数）；
+ *  - 九类全中且无自定义 tag = 全选 → null（不发参数）；
  *  - 其余（类别子集、含自定义 tag）= 选中类别展开为族段 + 自定义 tag 原样并入，
  *    英文逗号连接（后端逐段 OR）。
  */

@@ -44,8 +44,8 @@ import (
 // antiFallbackScanTargets 渲染层函数清单（写死兜底禁区），按源文件分组。
 // 批 3 起扫描面扩展到 security.go 渲染函数与 caddy.go 安全渲染消费函数。
 var antiFallbackScanTargets = map[string][]string{
-	// 人机验证（阶段 3，2026-11-12）：策略字段省略型默认值（DB DEFAULT 单源，
-	// 渲染层承担省略替换——与 geoip/rate_limit 同模式），Ruling 见 allowlist。
+	// 人机验证（阶段 2，2026-11-12）：策略字段省略型默认值（DB DEFAULT 单源，
+	// 渲染层承担省略替换——与 geoip 同模式），Ruling 见 allowlist。
 	"human_verify.go": {
 		"humanPolicyMerged",
 		"loadCCConfig",

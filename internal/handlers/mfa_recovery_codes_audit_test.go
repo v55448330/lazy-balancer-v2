@@ -27,6 +27,7 @@ func TestMFARecoveryCodes_regeneratesWithAuditTrail(t *testing.T) {
 	ctx.Request = httptest.NewRequest(http.MethodPost, "/auth/mfa/recovery-codes", nil)
 	ctx.Request.Header.Set("Content-Type", "application/json")
 	ctx.Set("user_id", 1)
+	ctx.Set("auth_type", "jwt") // 自助 MFA 仅限 JWT 会话（机器身份门）
 	h.MFARecoveryCodes(ctx)
 
 	// Then：请求成功且审计库留痕（动作「生成」/对象「恢复码」）
@@ -58,6 +59,7 @@ func TestMFARecoveryCodes_statusReadFailureReturns500(t *testing.T) {
 	ctx.Request = httptest.NewRequest(http.MethodPost, "/auth/mfa/recovery-codes", nil)
 	ctx.Request.Header.Set("Content-Type", "application/json")
 	ctx.Set("user_id", 1)
+	ctx.Set("auth_type", "jwt") // 自助 MFA 仅限 JWT 会话（机器身份门）
 	h.MFARecoveryCodes(ctx)
 
 	if recorder.Code != http.StatusInternalServerError {

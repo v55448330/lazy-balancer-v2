@@ -341,7 +341,8 @@ func normalizeUnregisteredThreatSourceSlots() {
 	}
 }
 
-// InitTaskEngine 建引擎、恢复孤儿运行、注册全部 19 任务并启动默认循环。
+// InitTaskEngine 建引擎、恢复孤儿运行、注册全部 27 任务（本文件 19 +
+// taskengine_wire_runtime.go 运行期族 8）并启动默认循环。
 // 非幂等——调用方保证单次装配；重复调用前须先
 // StopTaskEngine（否则旧 scheduleLoop goroutine 泄漏、双引擎双写 task_runs）。
 // 测试环境须先 db.Initialize。
@@ -800,6 +801,11 @@ func InitTaskEngine(watchdogAdminURL, runtimeLogFile string) *taskengine.Engine 
 				// demote 中止落 skipped 终态而非 success
 				return taskengine.ErrTaskSkipped
 			}
+			// 排程槽未推进（写路径严格读排程失败/状态行写入失败/取消推进
+			// 失败）：不得以 success 收尾——引擎会把本槽记入消费水位，该族
+			// 自动更新静默停摆。按失败返回走退避重投（1s/5s/30s；连续 4 轮
+			// 仍未推进由引擎停调，需在业务页重新保存或重启）。记录器只在
+			// 终态落定前写入（<-done 后可见），此处一次检查即覆盖全部终态。
 			if serr := m.ScheduleSlotError(); serr != nil {
 				return serr
 			}
@@ -810,13 +816,6 @@ func InitTaskEngine(watchdogAdminURL, runtimeLogFile string) *taskengine.Engine 
 			}
 			if snap := m.StatusSnapshot(); snap.Status == string(CRSStatusFailed) {
 				return fmt.Errorf("CRS 更新失败: %s", snap.Message)
-			}
-			// 状态行 success 但排程槽未推进（写路径严格读排程失败，或状态行
-			// 写入失败）：不得以 success 收尾——引擎会把本槽记入消费水位，该族
-			// 自动更新静默停摆。按失败返回走退避重投（1s/5s/30s；连续 4 轮
-			// 仍未推进由引擎停调，需在业务页重新保存或重启）。
-			if serr := m.ScheduleSlotError(); serr != nil {
-				return serr
 			}
 			return nil
 		},
@@ -889,6 +888,8 @@ func InitTaskEngine(watchdogAdminURL, runtimeLogFile string) *taskengine.Engine 
 				// demote 中止落 skipped 终态而非 success
 				return taskengine.ErrTaskSkipped
 			}
+			// 排程槽未推进（见 CRS 族同型说明）：按失败返回让引擎退避重投
+			// 同一槽。记录器只在终态落定前写入，一次检查覆盖全部终态。
 			if serr := m.ScheduleSlotError(); serr != nil {
 				return serr
 			}
@@ -898,11 +899,6 @@ func InitTaskEngine(watchdogAdminURL, runtimeLogFile string) *taskengine.Engine 
 			}
 			if snap := m.StatusSnapshot(); snap.Status == string(IP2RegionStatusFailed) {
 				return fmt.Errorf("IP2Region 更新失败: %s", snap.Message)
-			}
-			// 状态行 success 但排程槽未推进（见 CRS 族同型说明）：按失败返回
-			// 让引擎退避重投同一槽。
-			if serr := m.ScheduleSlotError(); serr != nil {
-				return serr
 			}
 			return nil
 		},
@@ -933,10 +929,12 @@ func InitTaskEngine(watchdogAdminURL, runtimeLogFile string) *taskengine.Engine 
 			return time.Time{}
 		},
 		EnabledFn: func() bool { // 业务开关门（备份未启用=已停止——展示+调度面跳过）
-			// 读库失败 fail-closed——曾 err!=nil||enabled
-			// 把读错误报为启用。
-			row, err := loadAutoBackupSettings()
-			return err == nil && row.enabled
+			// 消费带留痕的开关单源（读失败首报 warn + 恢复 info）：引擎先求值
+			// EnabledFn 再求值 NextSlotFn，读错即短路——裸 loadAutoBackupSettings
+			// 会让库故障窗口静默停摆（零执行/零失败行/零日志，与用户关闭同形）。
+			// known=false（不可判定）fail-closed 为关，下一 tick 重新求值。
+			enabled, known := AutoBackupEnabledState()
+			return known && enabled
 		},
 		Run: func(rc taskengine.RunContext) error {
 			if rc.Trigger == "manual" {
@@ -982,10 +980,13 @@ func InitTaskEngine(watchdogAdminURL, runtimeLogFile string) *taskengine.Engine 
 	// config-watchdog 曾被白名单遗漏致循环任务无「运行」操作）：
 	// 定时/循环/触发均可手动调度；常驻族恒不可（启停即可，启停由调度开关+重启承担）。
 
-	// 默认调度启动：
-	// - 循环共 10 个，默认启动 8 个（cert-waiting-ca 除外——默认关闭，续期扫描唤醒；
-	//   autoban 除外——调度唯一前提=业务启用，见下）
-	// - 常驻 3 个全启动（系统启动即运行；关闭调度=启动也不运行）
+	// 默认调度启动（本文件内置清单；运行期族 8 个的默认启动在
+	// registerRuntimeLifecycleTasks 内同口径执行）：
+	// - 循环共 11 个，本清单默认启动 8 个（cert-waiting-ca 除外——默认关闭，
+	//   续期扫描唤醒；autoban 除外——调度唯一前提=业务启用，见下；
+	//   metrics-history-cleanup 属运行期族，在其装配处启动）
+	// - 常驻共 10 个，本清单启动 3 个（系统启动即运行；关闭调度=启动也不运行；
+	//   其余 7 个运行期常驻在 registerRuntimeLifecycleTasks 启动）
 	// - 定时 4 个启动排程（threat/crs/ip2region/auto-backup——EnabledFn/
 	//   NextSlotFn 内含开关判断；crawlerbot-update 不在本清单，调度由
 	//   SyncBusinessTaskDrivers 按业务开关对齐）

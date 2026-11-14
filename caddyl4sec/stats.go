@@ -185,7 +185,7 @@ type l4ShipperStatsPayload struct {
 	SpoolWrites uint64 `json:"spool_written"`
 	SpoolErrors uint64 `json:"spool_errors"`
 	QueueLen    int    `json:"queue_len"`
-	QueueBytes  int64  `json:"queue_bytes"`
+	QueueBytes  int64  `json:"queue_bytes"` // 队列内有效行真实字节合计（非槽容量×深度）
 	Dropped     uint64 `json:"dropped"`
 }
 
@@ -197,7 +197,7 @@ func serveL4ShipperStats(w http.ResponseWriter, r *http.Request) error {
 		payload.IPCEnabled = p.shipper != nil
 		payload.IPCSent, payload.IPCFailed, payload.SpoolWrites, payload.SpoolErrors = p.shipperCounters()
 		payload.QueueLen = p.ring.depth()
-		payload.QueueBytes = int64(p.ring.depth() * l4RingSlotBytes)
+		payload.QueueBytes = p.ring.queuedBytes()
 		payload.Dropped = p.dropped.Load()
 	}
 	raw, err := json.Marshal(payload)

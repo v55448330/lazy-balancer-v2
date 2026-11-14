@@ -43,9 +43,11 @@ func validateCaddyJSONForAcceptance(t *testing.T, binary string, rendered []byte
 	if err := os.WriteFile(path, rendered, 0o600); err != nil {
 		t.Fatalf("write generated Caddy JSON: %v", err)
 	}
-	cmd := exec.CommandContext(t.Context(), binary, "validate", "--adapter", "json", "--config", path)
+	// 裸 JSON 配置不携带 adapter（caddy validate 默认按 JSON 读取；
+	// --adapter json 未注册于标准构建，携带即 unrecognized adapter 恒红）。
+	cmd := exec.CommandContext(t.Context(), binary, "validate", "--config", path)
 	output, err := cmd.CombinedOutput()
-	t.Logf("caddy validate --adapter json --config %s\n%s", path, strings.TrimSpace(string(output)))
+	t.Logf("caddy validate --config %s\n%s", path, strings.TrimSpace(string(output)))
 	if err != nil {
 		t.Fatalf("real Caddy engine rejected generated JSON: %v", err)
 	}

@@ -1308,16 +1308,23 @@ func (h *Handlers) CreateSecurityPolicy(c *gin.Context) {
 	if req.Enabled != nil {
 		enabled = *req.Enabled
 	}
-	result, err := tx.ExecContext(caddyWriteCtx(c), `INSERT INTO security_policies (name, description, mode, anomaly_threshold, ip_acl_mode, ip_acl_list, ip_acl_enabled, ip_whitelist, ip_whitelist_enabled, ip_blacklist,
-		crs_rule_groups, crs_excluded_rules, custom_rules, block_page_id, block_status_code, enabled, geoip_countries, geoip_mode, geoip_crawler_exempt, geoip_crawler_engines, waf_check_response, log_request_body, ip_acl_list_refs, ip_whitelist_refs, updated_by, policy_type, trust_detection, human_verify_mode, human_verify_type, human_verify_ttl, human_exempt_paths,
-		cc_detect_enabled, cc_rps_limit, cc_rps_window, cc_4xx_ratio, cc_session_anomaly, cc_session_ua_threshold, block_response_mode)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		req.Name, req.Description, req.Mode, max1(req.AnomalyThreshold, 5), req.IPACLMode, req.IPACLList, req.IPACLEnabled, req.IPWhitelist, policyWhitelistDefault(req.IPWhitelistEnabled), req.IPBlacklist,
-		req.CRSRuleGroups, req.CRSExcludedRules, req.CustomRules, req.BlockPageID, req.BlockStatusCode, enabled, req.GeoIPCountries, req.GeoIPMode, crawlerExemptBool(req.GeoIPCrawlerExempt, geoIPActive(req.GeoIPMode)), crawlerEnginesJSON(req.GeoIPCrawlerEngines), req.WAFCheckResponse, req.LogRequestBody, req.IPACLListRefs, req.IPWhitelistRefs, int(contextUserID(c)), policyType, req.TrustDetection,
-		humanModeOrDefault(req.HumanVerifyMode), humanTypeOrDefault(req.HumanVerifyType), humanTTLOrDefault(req.HumanVerifyTTL),
-		humanJSONOrDefault(req.HumanExemptPaths),
-		req.CCDetectEnabled, ccIntOrDefault(req.CCRPSLimit, 40), ccWindowOrDefault(req.CCRPSWindow),
-		cc4xxRatioOrDefault(derefIntPtr(req.CC4xxRatio, db.DefaultCC4xxRatio)), req.CCSessionAnomaly, ccIntOrDefault(req.CCSessionUAThreshold, 5), normalizeBlockResponseMode(req.BlockResponseMode))
+	values := securityPolicyInsertValues{
+		name: req.Name, description: req.Description, mode: req.Mode, anomalyThreshold: max1(req.AnomalyThreshold, 5),
+		ipACLMode: req.IPACLMode, ipACLList: req.IPACLList, ipACLEnabled: req.IPACLEnabled,
+		ipWhitelist: req.IPWhitelist, ipWhitelistEnabled: policyWhitelistDefault(req.IPWhitelistEnabled), ipBlacklist: req.IPBlacklist,
+		crsRuleGroups: req.CRSRuleGroups, crsExcludedRules: req.CRSExcludedRules, customRules: req.CustomRules,
+		blockPageID: req.BlockPageID, blockStatusCode: req.BlockStatusCode, enabled: enabled,
+		geoCountries: req.GeoIPCountries, geoMode: req.GeoIPMode,
+		crawlerExempt: crawlerExemptBool(req.GeoIPCrawlerExempt, geoIPActive(req.GeoIPMode)), crawlerEngines: crawlerEnginesJSON(req.GeoIPCrawlerEngines),
+		wafResp: req.WAFCheckResponse, logBody: req.LogRequestBody,
+		aclRefs: req.IPACLListRefs, wlRefs: req.IPWhitelistRefs, updatedBy: int(contextUserID(c)), policyType: policyType, trustDetection: req.TrustDetection,
+		humanMode: humanModeOrDefault(req.HumanVerifyMode), humanType: humanTypeOrDefault(req.HumanVerifyType), humanTTL: humanTTLOrDefault(req.HumanVerifyTTL),
+		humanPaths: humanJSONOrDefault(req.HumanExemptPaths),
+		ccEnabled:  req.CCDetectEnabled, ccRPS: ccRPSLimitOrDefault(req.CCRPSLimit), ccWindow: ccWindowOrDefault(req.CCRPSWindow),
+		cc4xx: cc4xxRatioOrDefault(derefIntPtr(req.CC4xxRatio, db.DefaultCC4xxRatio)), ccSessionAnomaly: req.CCSessionAnomaly, ccUASession: ccIntOrDefault(req.CCSessionUAThreshold, 5),
+		blockResponseMode: normalizeBlockResponseMode(req.BlockResponseMode),
+	}
+	result, err := tx.ExecContext(caddyWriteCtx(c), securityPolicyInsertSQL(), values.args()...)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
 		return
@@ -1329,6 +1336,67 @@ func (h *Handlers) CreateSecurityPolicy(c *gin.Context) {
 		SuccessMsg:  "安全策略创建成功", // audit137-A5 豁免:txApplyFinish 内部事务记录字段,无请求上下文 i18n 不适用
 		Data:        gin.H{"id": id},
 	})
+}
+
+// securityPolicyInsertColumns 是 security_policies 业务列写入投影的单一清单：
+// Create 与混合策略拆分（insertChild）共用同一份列名与占位符——新增列只需
+// 在此与 securityPolicyInsertValues 各落一处，两条写路径同步获得，杜绝
+// 「Create 有列、拆分漏列」的静默回退（block_response_mode 曾漏拆分子策略）。
+// 列序与 securityPolicyInsertValues 字段序逐位对应；updated_by 由调用方传入。
+var securityPolicyInsertColumns = []string{
+	"name", "description", "mode", "anomaly_threshold", "ip_acl_mode", "ip_acl_list", "ip_acl_enabled", "ip_whitelist", "ip_whitelist_enabled", "ip_blacklist",
+	"crs_rule_groups", "crs_excluded_rules", "custom_rules", "block_page_id", "block_status_code", "enabled", "geoip_countries", "geoip_mode", "geoip_crawler_exempt", "geoip_crawler_engines", "waf_check_response", "log_request_body", "ip_acl_list_refs", "ip_whitelist_refs", "updated_by", "policy_type", "trust_detection",
+	"human_verify_mode", "human_verify_type", "human_verify_ttl", "human_exempt_paths",
+	"cc_detect_enabled", "cc_rps_limit", "cc_rps_window", "cc_4xx_ratio", "cc_session_anomaly", "cc_session_ua_threshold", "block_response_mode",
+}
+
+// securityPolicyInsertSQL 由列清单生成 INSERT 语句（占位符数量恒等于列数）。
+func securityPolicyInsertSQL() string {
+	return "INSERT INTO security_policies (" + strings.Join(securityPolicyInsertColumns, ", ") + ") VALUES (" +
+		strings.TrimSuffix(strings.Repeat("?,", len(securityPolicyInsertColumns)), ",") + ")"
+}
+
+// securityPolicyInsertValues 与 securityPolicyInsertColumns 逐位对应的落库值。
+// 按字段名构造（不用位置字面量）——列清单增删时漏配字段是编译错误而非静默错位。
+type securityPolicyInsertValues struct {
+	name, description, mode         string
+	anomalyThreshold                int
+	ipACLMode                       string
+	ipACLList                       string
+	ipACLEnabled                    bool
+	ipWhitelist                     string
+	ipWhitelistEnabled              bool
+	ipBlacklist                     string
+	crsRuleGroups, crsExcludedRules string
+	customRules                     string
+	blockPageID, blockStatusCode    int
+	enabled                         bool
+	geoCountries                    string
+	geoMode                         string
+	crawlerExempt                   bool
+	crawlerEngines                  string
+	wafResp, logBody                bool
+	aclRefs, wlRefs                 string
+	updatedBy                       int
+	policyType                      string
+	trustDetection                  bool
+	humanMode, humanType            string
+	humanTTL                        int
+	humanPaths                      string
+	ccEnabled                       bool
+	ccRPS, ccWindow, cc4xx          int
+	ccSessionAnomaly                bool
+	ccUASession                     int
+	blockResponseMode               string
+}
+
+func (v securityPolicyInsertValues) args() []any {
+	return []any{
+		v.name, v.description, v.mode, v.anomalyThreshold, v.ipACLMode, v.ipACLList, v.ipACLEnabled, v.ipWhitelist, v.ipWhitelistEnabled, v.ipBlacklist,
+		v.crsRuleGroups, v.crsExcludedRules, v.customRules, v.blockPageID, v.blockStatusCode, v.enabled, v.geoCountries, v.geoMode, v.crawlerExempt, v.crawlerEngines, v.wafResp, v.logBody, v.aclRefs, v.wlRefs, v.updatedBy, v.policyType, v.trustDetection,
+		v.humanMode, v.humanType, v.humanTTL, v.humanPaths,
+		v.ccEnabled, v.ccRPS, v.ccWindow, v.cc4xx, v.ccSessionAnomaly, v.ccUASession, v.blockResponseMode,
+	}
 }
 
 // geoipEntriesEqual：比较两个 geoip_countries JSON 数组的
@@ -2163,7 +2231,7 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 	addInt("human_verify_ttl", mapIntPtr(req.HumanVerifyTTL, humanTTLOrDefault))
 	addStr("human_exempt_paths", mapStrPtr(req.HumanExemptPaths, humanJSONOrDefault))
 	addBool("cc_detect_enabled", req.CCDetectEnabled)
-	addInt("cc_rps_limit", mapIntPtr(req.CCRPSLimit, func(v int) int { return ccIntOrDefault(v, 40) }))
+	addInt("cc_rps_limit", mapIntPtr(req.CCRPSLimit, ccRPSLimitOrDefault))
 	addInt("cc_rps_window", mapIntPtr(req.CCRPSWindow, ccWindowOrDefault))
 	addInt("cc_4xx_ratio", mapIntPtr(req.CC4xxRatio, cc4xxRatioOrDefault))
 	addBool("cc_session_anomaly", req.CCSessionAnomaly)
@@ -3554,6 +3622,7 @@ type splitChildSpec struct {
 	customRules    string
 	blockPageID    int
 	blockStatus    int
+	blockResp      string
 	geoCountries   json.RawMessage
 	geoMode        string
 	crawlerExempt  bool
@@ -3585,6 +3654,7 @@ type splitChildIdentity struct {
 	customRules    string
 	blockPageID    int
 	blockStatus    int
+	blockResp      string
 	enabled        bool
 	geoCountries   string
 	geoMode        string
@@ -3608,7 +3678,7 @@ func splitChildIdentityOfSpec(p *models.SecurityPolicy, spec splitChildSpec) spl
 		aclMode: spec.aclMode, aclList: spec.aclList, aclEnabled: spec.aclEnabled,
 		whitelist: string(spec.whitelist), wlEnabled: spec.wlEnabled, blacklist: string(spec.blacklist),
 		crsGroups: spec.crsGroups, crsExcluded: spec.crsExcluded, customRules: spec.customRules,
-		blockPageID: spec.blockPageID, blockStatus: spec.blockStatus, enabled: p.Enabled,
+		blockPageID: spec.blockPageID, blockStatus: spec.blockStatus, blockResp: spec.blockResp, enabled: p.Enabled,
 		geoCountries: string(spec.geoCountries), geoMode: spec.geoMode,
 		crawlerExempt: spec.crawlerExempt, crawlerEngines: spec.crawlerEngines,
 		wafResp: spec.wafResp, logBody: spec.logBody,
@@ -3623,7 +3693,7 @@ func splitChildIdentityOfPolicy(stored *models.SecurityPolicy) splitChildIdentit
 		aclMode: stored.IPACLMode, aclList: stored.IPACLList, aclEnabled: stored.IPACLEnabled,
 		whitelist: string(stored.IPWhitelist), wlEnabled: stored.IPWhitelistEnabled, blacklist: string(stored.IPBlacklist),
 		crsGroups: string(stored.CRSRuleGroups), crsExcluded: string(stored.CRSExcludedRules), customRules: string(stored.CustomRules),
-		blockPageID: stored.BlockPageID, blockStatus: stored.BlockStatusCode, enabled: stored.Enabled,
+		blockPageID: stored.BlockPageID, blockStatus: stored.BlockStatusCode, blockResp: normalizeBlockResponseMode(stored.BlockResponseMode), enabled: stored.Enabled,
 		geoCountries: string(stored.GeoIPCountries), geoMode: stored.GeoIPMode,
 		crawlerExempt: stored.GeoIPCrawlerExempt, crawlerEngines: string(stored.GeoIPCrawlerEngines),
 		wafResp: stored.WAFCheckResponse, logBody: stored.LogRequestBody,
@@ -3735,13 +3805,22 @@ func (h *Handlers) SplitSecurityPolicy(c *gin.Context) {
 			humanMode, humanType, humanTTL, humanPaths = p.HumanVerifyMode, p.HumanVerifyType, p.HumanVerifyTTL, string(p.HumanExemptPaths)
 			ccEnabled, ccRPS, ccWindow, cc4xx, ccSessionAnomaly, ccUASession = p.CCDetectEnabled, p.CCRPSLimit, p.CCRPSWindow, p.CC4xxRatio, p.CCSessionAnomaly, p.CCSessionUAThreshold
 		}
-		result, err := tx.ExecContext(caddyWriteCtx(c), `INSERT INTO security_policies (name, description, mode, anomaly_threshold, ip_acl_mode, ip_acl_list, ip_acl_enabled, ip_whitelist, ip_whitelist_enabled, ip_blacklist,
-			crs_rule_groups, crs_excluded_rules, custom_rules, block_page_id, block_status_code, enabled, geoip_countries, geoip_mode, geoip_crawler_exempt, geoip_crawler_engines, waf_check_response, log_request_body, ip_acl_list_refs, ip_whitelist_refs, updated_by, policy_type, trust_detection,
-			human_verify_mode, human_verify_type, human_verify_ttl, human_exempt_paths, cc_detect_enabled, cc_rps_limit, cc_rps_window, cc_4xx_ratio, cc_session_anomaly, cc_session_ua_threshold)
-			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-			spec.name, p.Description, spec.mode, p.AnomalyThreshold, spec.aclMode, spec.aclList, spec.aclEnabled, spec.whitelist, spec.wlEnabled, spec.blacklist,
-			spec.crsGroups, spec.crsExcluded, spec.customRules, spec.blockPageID, spec.blockStatus, p.Enabled, spec.geoCountries, spec.geoMode, spec.crawlerExempt, spec.crawlerEngines, spec.wafResp, spec.logBody, spec.aclRefs, spec.wlRefs, operator, spec.policyType, spec.trustDetection,
-			humanMode, humanType, humanTTL, humanPaths, ccEnabled, ccRPS, ccWindow, cc4xx, ccSessionAnomaly, ccUASession)
+		// 列投影与 Create 共用单一清单（securityPolicyInsertColumns）——
+		// block_response_mode 等列随清单同步落库，拆分不再可能漏列。
+		values := securityPolicyInsertValues{
+			name: spec.name, description: p.Description, mode: spec.mode, anomalyThreshold: p.AnomalyThreshold,
+			ipACLMode: spec.aclMode, ipACLList: spec.aclList, ipACLEnabled: spec.aclEnabled,
+			ipWhitelist: string(spec.whitelist), ipWhitelistEnabled: spec.wlEnabled, ipBlacklist: string(spec.blacklist),
+			crsRuleGroups: spec.crsGroups, crsExcludedRules: spec.crsExcluded, customRules: spec.customRules,
+			blockPageID: spec.blockPageID, blockStatusCode: spec.blockStatus, enabled: p.Enabled,
+			geoCountries: string(spec.geoCountries), geoMode: spec.geoMode, crawlerExempt: spec.crawlerExempt, crawlerEngines: spec.crawlerEngines,
+			wafResp: spec.wafResp, logBody: spec.logBody, aclRefs: spec.aclRefs, wlRefs: spec.wlRefs,
+			updatedBy: operator, policyType: spec.policyType, trustDetection: spec.trustDetection,
+			humanMode: humanMode, humanType: humanType, humanTTL: humanTTL, humanPaths: humanPaths,
+			ccEnabled: ccEnabled, ccRPS: ccRPS, ccWindow: ccWindow, cc4xx: cc4xx, ccSessionAnomaly: ccSessionAnomaly, ccUASession: ccUASession,
+			blockResponseMode: spec.blockResp,
+		}
+		result, err := tx.ExecContext(caddyWriteCtx(c), securityPolicyInsertSQL(), values.args()...)
 		if err != nil {
 			return 0, err
 		}
@@ -3838,6 +3917,7 @@ func (h *Handlers) SplitSecurityPolicy(c *gin.Context) {
 			crsGroups:    "[]",
 			crsExcluded:  "[]",
 			customRules:  "[]",
+			blockResp:    "auto",
 			geoCountries: json.RawMessage("[]"), geoMode: "off",
 			aclRefs: "[]", wlRefs: p.IPWhitelistRefs,
 			trustDetection: true,
@@ -3849,7 +3929,7 @@ func (h *Handlers) SplitSecurityPolicy(c *gin.Context) {
 			mode: "off", aclMode: childACLMode, aclList: p.IPACLList, aclEnabled: p.IPACLEnabled,
 			whitelist: json.RawMessage("[]"), blacklist: p.IPBlacklist,
 			crsGroups: "[]", crsExcluded: "[]", customRules: "[]",
-			blockPageID: p.BlockPageID, blockStatus: p.BlockStatusCode,
+			blockPageID: p.BlockPageID, blockStatus: p.BlockStatusCode, blockResp: normalizeBlockResponseMode(p.BlockResponseMode),
 			geoCountries: p.GeoIPCountries, geoMode: p.GeoIPMode,
 			aclRefs: p.IPACLListRefs, wlRefs: "[]",
 		}))
@@ -3864,7 +3944,7 @@ func (h *Handlers) SplitSecurityPolicy(c *gin.Context) {
 			mode: "off", aclMode: "deny", aclList: "[]",
 			whitelist: json.RawMessage("[]"), blacklist: json.RawMessage("[]"),
 			crsGroups: "[]", crsExcluded: "[]", customRules: "[]",
-			blockPageID:  0,
+			blockPageID: p.BlockPageID, blockResp: normalizeBlockResponseMode(p.BlockResponseMode),
 			geoCountries: json.RawMessage("[]"), geoMode: "off",
 			aclRefs: "[]", wlRefs: "[]",
 		}))
@@ -3875,7 +3955,7 @@ func (h *Handlers) SplitSecurityPolicy(c *gin.Context) {
 			mode: p.Mode, aclMode: "deny", aclList: "[]",
 			whitelist: json.RawMessage("[]"), blacklist: json.RawMessage("[]"),
 			crsGroups: rawJSONString(p.CRSRuleGroups), crsExcluded: rawJSONString(p.CRSExcludedRules), customRules: rawJSONString(p.CustomRules),
-			blockPageID: p.BlockPageID, blockStatus: p.BlockStatusCode,
+			blockPageID: p.BlockPageID, blockStatus: p.BlockStatusCode, blockResp: normalizeBlockResponseMode(p.BlockResponseMode),
 			geoCountries: json.RawMessage("[]"), geoMode: "off",
 			wafResp: p.WAFCheckResponse, logBody: p.LogRequestBody,
 			aclRefs: "[]", wlRefs: "[]",
@@ -6779,6 +6859,23 @@ func humanJSONOrDefault(v string) string {
 func ccIntOrDefault(v, def int) int {
 	if v <= 0 {
 		return def
+	}
+	return v
+}
+
+// ccRPSLimitMax 是 cc_rps_limit 写侧上界——与前端编辑器 el-input-number
+// max=100000 同口径（SecurityPolicies.vue 的 CC 突刺阈值控件）。API/MCP
+// 直写超大值会让 CC 检测阈值失去意义，写侧统一钳制。
+const ccRPSLimitMax = 100000
+
+// ccRPSLimitOrDefault cc_rps_limit 专用归一（Create/Update 单源）：0/负回落
+// 缺省 40（rps 无「0=关」语义），超上限钳到 ccRPSLimitMax。
+func ccRPSLimitOrDefault(v int) int {
+	if v <= 0 {
+		return db.DefaultCCRPSLimit
+	}
+	if v > ccRPSLimitMax {
+		return ccRPSLimitMax
 	}
 	return v
 }

@@ -17,14 +17,16 @@ func saveWafPathVars(t *testing.T) {
 		wafDir, wafDistDir, ipListDir, allowedPrefix               string
 		crsLive, crsDirectives, crsRuleIndex, crsSnapshot, crsDist string
 		xdbLive, xdbDist, crawlerSeed, crawlerLive                 string
+		xdbV6Live, xdbV6Dist                                       string
 		auditLog, eventsOffset, downloadIntegrity                  string
-		ipcSocket, spoolDir                                        string
+		ipcSocket, spoolDir, l4SpoolDir                            string
 	}{
 		wafDir, wafDistDir, IPListDataDir, wafiplist.AllowedPathPrefix,
 		crsLiveDir, crsDirectivesDir, CRSRuleIndexDir, crsSnapshotDir, crsDistDir,
 		ip2regionLivePath, ip2regionDistPath, crawlerDistSeedFile, crawlerIPListFile,
+		ip2regionV6LivePath, ip2regionV6DistPath,
 		auditLogPath, securityEventsOffsetPath, downloadIntegrityPath,
-		securityEventsIPCSocketPath, securityEventsSpoolDir,
+		securityEventsIPCSocketPath, securityEventsSpoolDir, securityEventsL4SpoolDir,
 	}
 	t.Cleanup(func() {
 		wafDir, wafDistDir, IPListDataDir, wafiplist.AllowedPathPrefix =
@@ -33,10 +35,36 @@ func saveWafPathVars(t *testing.T) {
 			old.crsLive, old.crsDirectives, old.crsRuleIndex, old.crsSnapshot, old.crsDist
 		ip2regionLivePath, ip2regionDistPath, crawlerDistSeedFile, crawlerIPListFile =
 			old.xdbLive, old.xdbDist, old.crawlerSeed, old.crawlerLive
+		ip2regionV6LivePath, ip2regionV6DistPath = old.xdbV6Live, old.xdbV6Dist
 		auditLogPath, securityEventsOffsetPath = old.auditLog, old.eventsOffset
 		downloadIntegrityPath = old.downloadIntegrity
-		securityEventsIPCSocketPath, securityEventsSpoolDir = old.ipcSocket, old.spoolDir
+		securityEventsIPCSocketPath, securityEventsSpoolDir, securityEventsL4SpoolDir =
+			old.ipcSocket, old.spoolDir, old.l4SpoolDir
 	})
+}
+
+// saveWafPathVars 必须覆盖 ConfigureWafDirs 改写的全部路径变量——含 v6 双路径
+// 与 L4 spool。漏保存会让派生用例改写这些变量后不恢复，跨用例泄漏。子测试
+// 形态：cleanup 在子测试结束时执行，父测试断言保存/恢复闭环。
+func TestSaveWafPathVars_restoresAllDerivedPaths(t *testing.T) {
+	origV6Live, origV6Dist := ip2regionV6LivePath, ip2regionV6DistPath
+	origL4 := securityEventsL4SpoolDir
+	origIPC, origSpool := securityEventsIPCSocketPath, securityEventsSpoolDir
+
+	t.Run("derive", func(t *testing.T) {
+		saveWafPathVars(t)
+		ConfigureWafDirs(filepath.Join(t.TempDir(), "custom-data"))
+	})
+
+	if ip2regionV6LivePath != origV6Live || ip2regionV6DistPath != origV6Dist {
+		t.Fatalf("v6 双路径未恢复: live=%q dist=%q", ip2regionV6LivePath, ip2regionV6DistPath)
+	}
+	if securityEventsL4SpoolDir != origL4 {
+		t.Fatalf("L4 spool 路径未恢复: %q", securityEventsL4SpoolDir)
+	}
+	if securityEventsIPCSocketPath != origIPC || securityEventsSpoolDir != origSpool {
+		t.Fatalf("IPC/spool 路径未恢复: ipc=%q spool=%q", securityEventsIPCSocketPath, securityEventsSpoolDir)
+	}
 }
 
 func TestConfigureWafDirs_propagatesThreatWafDir(t *testing.T) {

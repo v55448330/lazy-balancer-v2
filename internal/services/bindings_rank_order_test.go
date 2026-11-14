@@ -12,7 +12,6 @@ import (
 	"testing"
 
 	"lazy-balancer-v2/internal/db"
-	"lazy-balancer-v2/internal/models"
 )
 
 func seedRankPolicy(t *testing.T, id int, name string) {
@@ -117,5 +116,3 @@ func TestSnapshotSecurityBindings_byteDeterministic(t *testing.T) {
 		t.Fatalf("rank 3 → %d, want 3", got)
 	}
 }
-
-var _ = models.SecurityPolicy{}

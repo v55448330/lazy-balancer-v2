@@ -236,9 +236,11 @@ func ClassifyAuditRoute(method, path string) AuditPolicy {
 //   - auto-backup：备份执行器（handlers/autobackup.go）按结果记「备份/备份失败」；
 //   - startup:config-load：runConfigLoad 载入审计（启动与手动同体）。
 //
-// 其余 10 个可手动触发族（config-watchdog/log-cleanup/audit-retention/
+// 其余 18 个可手动触发族（config-watchdog/log-cleanup/audit-retention/
 // security-events-retention/metrics-orphan-cleanup/cert-renewal-scan/
-// cert-reconcile/cert-manual-poll/cert-waiting-ca/autoban）任务体零
+// cert-reconcile/cert-manual-poll/cert-waiting-ca/autoban/metrics-history-cleanup/
+// metrics-collector/threat-rollup-warmer/caddy-restart-watcher/ratelimit-bucket-sweep/
+// apikey-usage-flusher/runtime-log-threshold/runtime-tz-refresh）任务体零
 // RecordAuditLog，由 trigger handler 显式补记。新增可触发族时必须评估本集合
 // （任务体自记 → 加入；否则 handler 自动补记）；清单与
 // audit_policy_test.go 的可手动触发族断言同源，两处必须同步。

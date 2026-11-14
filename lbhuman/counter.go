@@ -11,13 +11,19 @@ import (
 
 const ccShards = 16
 
+// ccUASetCap 单计数器 UA 指纹集合硬上限（与挑战材料表 challengeMaterialCap
+// 同口径）：distinct-UA 洪峰（session_anomaly 开启 + 高 rpsLimit + 长窗口）
+// 不得无界增长内存。超帽只递增请求计数、不再存新键——UASetSize 饱和在帽上，
+// 会话异常判定（UASetSize > 阈值，阈值上限 100 ≪ 帽）语义不倒退。
+const ccUASetCap = 2000
+
 // CCWindowStats 单 (rule, IP) 滑窗统计快照（值拷贝，不携带共享 map——
 // UASetSize 在分片锁内取 len(UASet)，锁外读快照无数据竞争）。
 type CCWindowStats struct {
 	WindowStart int64 // 窗口起点（unix 秒）
 	Count       int   // 窗口内请求数
 	Status4xx   int   // 窗口内 4xx 数
-	UASetSize   int   // 窗口内不同 UA 指纹数（会话异常检测）
+	UASetSize   int   // 窗口内不同 UA 指纹数（会话异常检测；饱和于 ccUASetCap）
 	WindowSec   int   // 本计数器登记的窗口秒数（janitor 按窗口保留）
 }
 
@@ -87,7 +93,10 @@ func ccRecord(key string, windowSec int, is4xx bool, uaFp string) CCWindowStats 
 		st.Status4xx++
 	}
 	if uaFp != "" {
-		st.UASet[uaFp]++
+		if _, known := st.UASet[uaFp]; known || len(st.UASet) < ccUASetCap {
+			st.UASet[uaFp]++
+		}
+		// 超帽的新 UA 不存键：请求/4xx 计数照常，集合饱和在帽上。
 	}
 	return st.snapshot()
 }

@@ -239,20 +239,6 @@ func TestMultiPolicy_RouteComposition_OrderAndHandlerGroups(t *testing.T) {
 	}
 }
 
-// 两条策略同时开启限流 → 2 个 rate_limit 处理器，zone 键互不相同且
-// 嵌入 policy_id（{ruleID}-p{policyID}-sec / -min；burst=0 时 {ruleID}-p{policyID}）。
-// 阶段化执行模型——阶段 2（限流）集中在全部 WAF 引擎（阶段 3）
-// 之前：双策略各开限流时主路由 handle 链中两个 rate_limit 的索引均小于全部
-// 策略 waf 的索引（单/多策略链形状同构：阶段 1 预检 → 阶段 2 限流 → 阶段 3
-// WAF；限流恒 429，被前位 WAF 拦的请求也消耗后位策略配额为已裁定口径）。
-func mapKeys(m map[string]interface{}) []string {
-	keys := make([]string, 0, len(m))
-	for key := range m {
-		keys = append(keys, key)
-	}
-	return keys
-}
-
 // geoip pass 路由存在 ⟺ 至少一条绑定启用策略带 geoip；多条 geoip
 // 策略时 pass 路由仍至多一条（地域拦截改走各自策略的 coraza directives）。
 func TestMultiPolicy_GeoipPassRoute_ExistsIffAnyEnabledPolicyHasGeoIP(t *testing.T) {

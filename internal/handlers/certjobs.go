@@ -187,7 +187,7 @@ func (h *Handlers) ListCertJobs(c *gin.Context) {
 	statusCounts := map[string]int64{}
 	statusRows, err := db.DB.Query("SELECT j.status, COUNT(*) FROM cert_jobs j"+whereClause+" GROUP BY j.status", filterArgs...)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_72286097"), MessageKey: "k_72286097"})
+		writeInternalError(c, http.StatusInternalServerError, "统计证书任务状态失败", err)
 		return
 	}
 	for statusRows.Next() {
@@ -195,7 +195,7 @@ func (h *Handlers) ListCertJobs(c *gin.Context) {
 		var count int64
 		if err := statusRows.Scan(&status, &count); err != nil {
 			statusRows.Close()
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_72286097"), MessageKey: "k_72286097"})
+			writeInternalError(c, http.StatusInternalServerError, "统计证书任务状态失败", err)
 			return
 		}
 		statusCounts[status] = count
@@ -203,7 +203,7 @@ func (h *Handlers) ListCertJobs(c *gin.Context) {
 	}
 	if err := statusRows.Err(); err != nil {
 		statusRows.Close()
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_72286097"), MessageKey: "k_72286097"})
+		writeInternalError(c, http.StatusInternalServerError, "统计证书任务状态失败", err)
 		return
 	}
 	statusRows.Close()
@@ -287,7 +287,7 @@ func (h *Handlers) GetCurrentCertJobs(c *gin.Context) {
 		WHERE j.rule_id IN (`+placeholders+`) AND j.status <> 'disabled'
 		ORDER BY j.rule_id, j.created_at DESC, j.id DESC`, args...)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_719add36"), MessageKey: "k_719add36"})
+		writeInternalError(c, http.StatusInternalServerError, "查询证书任务失败", err)
 		return
 	}
 	defer rows.Close()
@@ -541,9 +541,8 @@ func (h *Handlers) retryCertJobByID(c *gin.Context, id int) {
 
 	qm := services.GetCAQueueManager()
 	if qm == nil {
-		services.Logf("error", "Manual retry enqueue failed for job %d: CA queue manager not initialized", id)
 		auditFailureWithRule("queue_unavailable")
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "CA queue manager not initialized"})
+		writeInternalError(c, http.StatusInternalServerError, "CA 队列管理器未初始化", errors.New("CA queue manager not initialized"))
 		return
 	}
 	// cert_jobs.domain 按排序后的规范形式存储，而 lb_rules.domain 保留用户输入顺序，
@@ -567,13 +566,12 @@ func (h *Handlers) retryCertJobByID(c *gin.Context, id int) {
 		return id, rowsAffected != 0, err
 	})
 	if err != nil {
-		services.Logf("error", "Manual retry enqueue failed for job %d: %v", id, err)
 		if changed && cooldownActive && forceRetry {
 			auditFailureWithRule("enqueue_failed", "手动越过 CA 冷却")
 		} else {
 			auditFailureWithRule("enqueue_failed")
 		}
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to enqueue retry"})
+		writeInternalError(c, http.StatusInternalServerError, "重试入队失败", err)
 		return
 	}
 	if !changed {
@@ -591,9 +589,8 @@ func (h *Handlers) retryCertJobByID(c *gin.Context, id int) {
 		if scanErr != nil {
 			// 重读失败属瞬时 DB 错误（SQLITE_BUSY 等），归因为规则禁用会误导用户，
 			// 显式区分 500。
-			services.Logf("error", "RetryCertJob reread job %d status failed: %v", id, scanErr)
 			auditFailureWithRule("status_read_failed")
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_561c3fa4"), MessageKey: "k_561c3fa4"})
+			writeInternalError(c, http.StatusInternalServerError, "读取任务状态失败", scanErr)
 			return
 		}
 		if currentStatus != status {
@@ -906,7 +903,7 @@ func (h *Handlers) DeleteCertJob(c *gin.Context) {
 			ruleID, domain, reversedCertJobDomain(domain)).Scan(&active); err != nil {
 			releaseCaddyOp()
 			auditFailure("rule_state_read_failed")
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to check rule state"})
+			writeInternalError(c, http.StatusInternalServerError, "检查规则状态失败", err)
 			return
 		}
 		if active > 0 {
@@ -931,14 +928,14 @@ func (h *Handlers) DeleteCertJob(c *gin.Context) {
 	if err != nil {
 		releaseCaddyOp()
 		auditFailure("disable_failed")
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to disable job"})
+		writeInternalError(c, http.StatusInternalServerError, "禁用证书任务失败", err)
 		return
 	}
 	rowsAffected, err := result.RowsAffected()
 	if err != nil {
 		releaseCaddyOp()
 		auditFailure("disable_verify_failed")
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to verify disabled job"})
+		writeInternalError(c, http.StatusInternalServerError, "校验证书任务禁用结果失败", err)
 		return
 	}
 	if rowsAffected != 1 {
@@ -956,9 +953,8 @@ func (h *Handlers) DeleteCertJob(c *gin.Context) {
 		}
 		if scanErr != nil {
 			releaseCaddyOp()
-			services.Logf("error", "DeleteCertJob reread job %d status failed: %v", id, scanErr)
 			auditFailure("status_read_failed")
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_561c3fa4"), MessageKey: "k_561c3fa4"})
+			writeInternalError(c, http.StatusInternalServerError, "读取任务状态失败", scanErr)
 			return
 		}
 		releaseCaddyOp()
@@ -1095,9 +1091,8 @@ func (h *Handlers) DeleteCertJob(c *gin.Context) {
 				deleteErr = errors.Join(deleteErr, fmt.Errorf("自动部署登记失败（窗口已推进，周期补扫将接手）: %w", retryErr))
 			}
 		}
-		services.Logf("error", "DeleteCertJob failed for job %d: %v", id, deleteErr)
 		auditFailure("delete_failed")
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "Failed to delete job"})
+		writeInternalError(c, http.StatusInternalServerError, "删除证书任务失败", deleteErr)
 		return
 	}
 	rowsAffected, err = result.RowsAffected()
@@ -1159,8 +1154,7 @@ func (h *Handlers) GetCertJobLogs(c *gin.Context) {
 	if readErr != nil {
 		// 读不出与「尚无日志」必须可区分（与 services.rulelog 同口径）：
 		// 恒 200 空内容会让排障把权限漂移/目录被替换误判为「没有签发记录」。
-		services.Logf("warn", "读取证书任务 %d 日志失败（规则 %s，路径 %s）: %v", id, ruleID, logPath, readErr)
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_e82ce0ad"), MessageKey: "k_e82ce0ad"})
+		writeInternalError(c, http.StatusInternalServerError, "读取任务日志失败", fmt.Errorf("读取证书任务 %d 日志失败（规则 %s，路径 %s）: %w", id, ruleID, logPath, readErr))
 		return
 	}
 

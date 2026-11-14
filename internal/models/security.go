@@ -180,13 +180,13 @@ type SecurityPolicy struct {
 	LogRequestBody      bool            `json:"log_request_body"`
 	// IPACLListRefs / IPWhitelistRefs：引用的 security_ip_lists id 数组（JSON 文本，
 	// 与 IPACLList 同为原始 string 列、同扫描机制）。生成期与 inline 条目取并集。
-	// 人机验证（阶段 3，2026-11-12）：模式/方式/有效期/豁免——CC 检测阈值
-	// 不在策略（在 global_config 自动封禁同族）。
+	// 人机验证（阶段 2 CC 防护，2026-11-12）：模式/方式/有效期/豁免——CC 检测
+	// 阈值同属本策略（自动封禁引用）。
 	HumanVerifyMode  string          `json:"human_verify_mode"`  // off | auto | force
 	HumanVerifyType  string          `json:"human_verify_type"`  // slider | js
 	HumanVerifyTTL   int             `json:"human_verify_ttl"`   // 分钟
 	HumanExemptPaths json.RawMessage `json:"human_exempt_paths"` // 路径前缀数组
-	// CC 检测阈值（阶段 3 触发源，2026-11-12 用户裁定：在策略配置，自动封禁引用）
+	// CC 检测阈值（阶段 2 触发源，2026-11-12 用户裁定：在策略配置，自动封禁引用）
 	CCDetectEnabled      bool `json:"cc_detect_enabled"`
 	CCRPSLimit           int  `json:"cc_rps_limit"`
 	CCRPSWindow          int  `json:"cc_rps_window"`
@@ -313,8 +313,8 @@ type CreateSecurityPolicyRequest struct {
 	PolicyType string `json:"policy_type"`
 	// TrustDetection：阶段 0「保留检测记录」开关（默认 false=直通上游）。
 	TrustDetection bool `json:"trust_detection"`
-	// 人机验证（阶段 3，2026-11-12）：模式/方式/有效期/豁免——CC 检测阈值
-	// 不在策略（在 global_config 自动封禁同族）。
+	// 人机验证（阶段 2 CC 防护，2026-11-12）：模式/方式/有效期/豁免——CC 检测
+	// 阈值同属本策略（自动封禁引用）。
 	HumanVerifyMode      string `json:"human_verify_mode"`  // off | auto | force
 	HumanVerifyType      string `json:"human_verify_type"`  // slider | js
 	HumanVerifyTTL       int    `json:"human_verify_ttl"`   // 分钟
@@ -360,7 +360,7 @@ type UpdateSecurityPolicyRequest struct {
 	PolicyType *string `json:"policy_type"`
 	// TrustDetection：阶段 0「保留检测记录」开关；nil=保留现值。
 	TrustDetection *bool `json:"trust_detection"`
-	// 人机验证（阶段 3）：指针语义（nil=保持现值）
+	// 人机验证（阶段 2 CC 防护）：指针语义（nil=保持现值）
 	HumanVerifyMode      *string `json:"human_verify_mode"`
 	HumanVerifyType      *string `json:"human_verify_type"`
 	HumanVerifyTTL       *int    `json:"human_verify_ttl"`

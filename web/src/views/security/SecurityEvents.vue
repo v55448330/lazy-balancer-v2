@@ -940,19 +940,19 @@ const pageSize = ref(20)
 const total = ref(0)
 const logStorageRefreshKey = ref(0)
 
-// 触发阶段筛选为固定预置八类（用户裁定：固定预置值，不接受任意值）。
+// 触发阶段筛选为固定预置九类（用户裁定：固定预置值，不接受任意值）。
 // 令牌 → 后端族段映射与序列化单源在 utils/triggeredFilter
 // 原实现内联在本文件、无行为测试）。
 const filters = ref({ action: '', event_type: '', ip: '', uri: '', rule_name: '', rule_triggered: [...TRIGGERED_CATEGORIES] as string[], policy_name: '', timeRange: null as [string, string] | null })
 
-// 头部全选复选框三态：八类全中=全选；部分中=半选
+// 头部全选复选框三态：九类全中=全选；部分中=半选
 const triggeredCheckAll = computed(() => TRIGGERED_CATEGORIES.every((c) => filters.value.rule_triggered.includes(c)))
 const triggeredIndeterminate = computed(() => {
   const hit = TRIGGERED_CATEGORIES.filter((c) => filters.value.rule_triggered.includes(c)).length
   return hit > 0 && hit < TRIGGERED_CATEGORIES.length
 })
-// 全选：勾选=八类并入当前选择（保留用户已输入的自定义 tag，与绑定编辑器/
-// 策略向导的规则选择器同为并集语义）、取消=只摘八类、自定义 tag 原样保留——
+// 全选：勾选=九类并入当前选择（保留用户已输入的自定义 tag，与绑定编辑器/
+// 策略向导的规则选择器同为并集语义）、取消=只摘九类、自定义 tag 原样保留——
 // 该控件允许 allow-create 自定义规则 ID（如 942100），替换语义会在半选态点
 // 「全选」时静默丢掉这些 tag，筛选结果集被改写而界面只显示「勾上了全选」。
 const toggleTriggeredAll = (checked: CheckboxValueType) => {
@@ -1003,7 +1003,7 @@ const fetchEvents = async () => {
     if (filters.value.event_type) p.set('event_type', filters.value.event_type)
     if (filters.value.ip) p.set('ip', filters.value.ip)
     if (filters.value.rule_name) p.set('rule_name', filters.value.rule_name)
-    // 触发规则：全选（八类全中且无自定义 tag）或空选 = 不过滤，不发送参数；
+    // 触发规则：全选（九类全中且无自定义 tag）或空选 = 不过滤，不发送参数；
     // 子集或含自定义 tag 时按族段展开 + 自定义 tag 原样连接（单源 serializeTriggeredFilter）。
     const triggeredValue = serializeTriggeredFilter(filters.value.rule_triggered)
     if (triggeredValue !== null) p.set('rule_triggered', triggeredValue)
@@ -1121,7 +1121,7 @@ const refreshPage = (): void => {
 .triggered-filter-popper .el-select-dropdown__header .el-checkbox { display: flex; height: unset; margin-right: 0; }
 .triggered-filter-popper .el-select-dropdown__header .el-checkbox .el-checkbox__label { padding-left: 8px; }
 /* 选中项不加粗：EP 2.14 多选下拉 is-selected 默认 font-weight:bold，该筛选常态
-   全选（八类全勾）导致整列粗体，覆写回 normal（选中色与右侧 ✓ 保留） */
+   全选（九类全勾）导致整列粗体，覆写回 normal（选中色与右侧 ✓ 保留） */
 .triggered-filter-popper .el-select-dropdown__item.is-selected { font-weight: normal; }
 
 /* 自动封禁启用确认框（dangerouslyUseHTMLString 精排，2026-10-14 裁定）：

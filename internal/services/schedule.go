@@ -105,7 +105,7 @@ func userCancelledRun(ctx context.Context) bool {
 // 上即可永久压住整个任务。故按同一推进门处理全部到期/空槽行（未来槽不回拨），
 // 语义=「本槽放弃，预约下一槽」。
 //
-// names 是该族运行域（威胁族传注册表源名，爬虫族传 nil=全部启用行）：槽域
+// names 是该族运行域（威胁/爬虫两族都传各自注册表源名）：槽域
 // 必须 ⊆ 运行域，否则取消路径会把注册表外的惰性槽重新写回，与启动期清理、
 // 读侧寻槽、保存排程的收窄互相抵消。slotOf 取严格读形态——排程不可读时本轮
 // 不推进（失败已由严格读单源留痕），不得用默认排程覆盖用户的预约。
@@ -762,8 +762,9 @@ func threatSlotAdvanceAssign(trigger string) (string, []any) {
 // 槽域必须 ⊆ 运行域，否则注册表外的启用行一旦过期，其 next_update 没有任何
 // 推进写点（markSourceSuccess/failSourceRow 只按已处理源写），最早槽恒钉在
 // 过去——auto 轮恒投递、运行体零到期源提前返回、槽永不被消费，该族自动更新
-// 就此静默停摆。威胁族传内置源名集合（运行域=注册表三源）；爬虫族运行域=全部
-// 启用行，传 nil 保持「全部启用行」语义。
+// 就此静默停摆。威胁族传内置源名集合（运行域=注册表三源）；爬虫族同传
+// 内置源名集合（crawlerSourceRegistryNames，运行体 filterBuiltinCrawlerSources
+// 按同一集合跳过未知名行）。
 //
 // 排序按 datetime() 归一后的时间序而非原始串 MIN：库内允许 crsTimeLayout
 // （空格）与 RFC3339（T 分隔）双形态（parseUTCSlot 明确兼容），字典序把
@@ -776,8 +777,8 @@ func earliestEnabledSourceUpdate(sourceTable string, names []string) string {
 	if database == nil {
 		return ""
 	}
-	// 名过滤与威胁族运行域同源（threatSourceRegistryNames）。空名单不拼子句
-	//（此时保持「全部启用行」——与爬虫族运行域一致）。
+	// 名过滤与各族运行域同源（threatSourceRegistryNames/crawlerSourceRegistryNames）。
+	// 空名单不拼子句=「全部启用行」兜底形态（现两族调用方均传注册表名）。
 	nameClause, args := sourceNameSetClause("name", names, false)
 	var next string
 	if err := database.QueryRow(`SELECT datetime(next_update) FROM `+sourceTable+`
@@ -892,8 +893,8 @@ func SetIP2RegionSchedule(days []int, hhmm string) error {
 
 // setGlobalTaskSchedule 保存任务级排程并事务化重排启用源 next_update。
 // 配置列前缀与源表由内部调用方固定传入，不接受外部输入。names 是该族的运行域
-// 源名集合（威胁族传注册表源名，爬虫族传 nil=全部启用行）：槽域必须等于
-// 运行域，否则保存排程会把注册表外的惰性槽一并写回（与启动期清理互相抵消）。
+// 源名集合（威胁/爬虫两族都传各自注册表源名）：槽域必须等于运行域，
+// 否则保存排程会把注册表外的惰性槽一并写回（与启动期清理互相抵消）。
 func setGlobalTaskSchedule(prefix, sourceTable string, names []string, days []int, hhmm string) error {
 	norm, err := validateScheduleInput(days, hhmm)
 	if err != nil {
@@ -935,9 +936,10 @@ func SetThreatSchedule(days []int, hhmm string) error {
 	return setGlobalTaskSchedule("threat", "security_threat_sources", threatSourceRegistryNames(), days, hhmm)
 }
 
-// SetCrawlerSchedule 保存爬虫地址库独立排程并重排全部启用爬虫源。
+// SetCrawlerSchedule 保存爬虫地址库独立排程并重排注册表内启用爬虫源
+// （槽域=运行域，与读侧 earliestCrawlerNextUpdate 同源收窄）。
 func SetCrawlerSchedule(days []int, hhmm string) error {
-	return setGlobalTaskSchedule("crawler", "security_crawler_sources", nil, days, hhmm)
+	return setGlobalTaskSchedule("crawler", "security_crawler_sources", crawlerSourceRegistryNames(), days, hhmm)
 }
 
 // versionUpdateStatuses 是版本表/更新源表 update_status 列的合法词表

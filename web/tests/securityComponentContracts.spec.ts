@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { code, member, section } from './_helpers.ts'
+import { code, elementSlice, matchBrace, member, openTags, section } from './_helpers.ts'
 
 test('IP 快捷添加统一走共享写入链，只有完成时才收起目标面板', () => {
   const page = code('src/views/security/IPLocationAction.vue')
@@ -9,7 +9,13 @@ test('IP 快捷添加统一走共享写入链，只有完成时才收起目标�
   assert.match(execute, /joinSpecificList\(/, '名单分支必须复用 useIpListAdd 的共享包装')
   assert.match(execute, /ensureListAndJoin\(/, '自动建单分支继续复用信任关联组合子')
   assert.doesNotMatch(execute, /request\.post<[^>]+>\(`\/security\/ip-lists\/\$\{target\.listId\}\/ips`/, '弹框不得保留第二份名单 POST')
-  assert.match(execute, /if \(done\) \{[\s\S]*activeAddSide\.value = null/, '取消或失败时不得收起目标面板')
+  // done 分支按花括号配对取块：无界 `[\s\S]*` 能从 if 头匹配到块外的收起语句
+  // （取消/失败路径照样收起面板也恒绿）。收起必须发生在 done 块内。
+  const doneAt = execute.indexOf('if (done) {')
+  assert.ok(doneAt > 0, '缺完成判定分支')
+  const doneOpen = execute.indexOf('{', doneAt)
+  const doneBlock = execute.slice(doneOpen + 1, matchBrace(execute, doneOpen))
+  assert.match(doneBlock, /activeAddSide\.value = null/, '只有完成时才收起目标面板（取消/失败不得收起）')
 
   const association = code('src/composables/useTrustAssociation.ts')
   assert.match(association, /ensureListAndJoin = async \([^)]*\): Promise<boolean>/, '调用方需要可区分的完成/取消/失败结果')
@@ -99,7 +105,14 @@ test('关联规则链条目：统一序号+阶段色类，不再出现阶段 0 �
 test('安全策略可选拦截响应方式（auto/html/json）', () => {
   const page = code('src/views/security/SecurityPolicies.vue')
   assert.match(page, /v-model="form\.block_response_mode"/)
-  assert.match(page, /value="auto"[\s\S]*value="html"[\s\S]*value="json"/)
+  // 无界通配会从他控件（human 验证的 value="auto"）起匹配，删掉本组选项仍绿。
+  // 收敛到 v-model 所在的 el-radio-group 切片内逐值断言三个选项。
+  const groupAt = page.indexOf('v-model="form.block_response_mode"')
+  assert.ok(groupAt > 0, '缺拦截响应方式单选组')
+  const groupOpen = page.lastIndexOf('<el-radio-group', groupAt)
+  const group = elementSlice(page, groupOpen, 'el-radio-group')
+  const values = openTags(group, 'el-radio-button').map((tag) => /value="([^"]+)"/.exec(tag)?.[1])
+  assert.deepEqual(values, ['auto', 'html', 'json'], '响应方式组内必须恰好三选项 auto/html/json（删任一选项必红）')
   const payload = code('src/utils/policyPayload.ts')
   assert.match(payload, /block_response_mode: input\.blockResponseMode/)
 })

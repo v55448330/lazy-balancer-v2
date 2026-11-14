@@ -589,7 +589,7 @@ func ForeignRunningRuleRoutes(adminURL string, ownIDs map[string]bool) (foreign 
 	for id := range ownIDs {
 		own[id] = id
 	}
-	claimed := claimedRoutePrefixes(own)
+	claimed := claimedRouteIDs(own)
 	for routeID := range running {
 		// 只把 lb_ 前缀 @id 视为「规则路由」（外来实例误指探针的启发式面）：
 		// 非 lb_ 的 @id 既可能是导入的非前缀规则（本库 caddy_id 可合法不带
@@ -621,7 +621,7 @@ func diffExpectedMissing(expected map[string]string, running map[string]bool) []
 
 func diffRunningExtra(expected map[string]string, running map[string]bool) []string {
 	var extra []string
-	claimed := claimedRoutePrefixes(expected)
+	claimed := claimedRouteIDs(expected)
 	for routeID := range running {
 		// 子路由（lb_x_redirect / lb_x_path_0 等，caddy.go tagRuleRoute 系）属于其
 		// 主规则——仅当没有任何期望规则认领该 @id 时才计为多余（// 精确匹配会把每条 HTTPS 跳转/路径规则的子路由误报为多余）。
@@ -633,31 +633,37 @@ func diffRunningExtra(expected map[string]string, running map[string]bool) []str
 	return extra
 }
 
-// claimedRoutePrefixes预建路由认领前缀集合：每个期望
-// @id 收录其自身与 "<id>_" 两种形态，供 routeClaimedByAny 单次 O(1)/O(len)
-// 判定——替代原先每 routeID 全量扫描期望集合的 O(running×expected)。行为
-// 等价于 `routeID == caddyID || strings.HasPrefix(routeID, caddyID+"_")`。
-func claimedRoutePrefixes(expected map[string]string) map[string]struct{} {
-	set := make(map[string]struct{}, len(expected)*2)
+// claimedRouteIDs 预建期望规则 @id 集合（routeClaimedByAny 的精确命中面；
+// 子路由归属由其内部按 RouteIDBelongsToRule 白名单判定）。
+func claimedRouteIDs(expected map[string]string) map[string]struct{} {
+	set := make(map[string]struct{}, len(expected))
 	for caddyID := range expected {
 		set[caddyID] = struct{}{}
-		set[caddyID+"_"] = struct{}{}
 	}
 	return set
 }
 
-// routeClaimedByAny 判定 routeID 是否被某个期望 @id 认领：精确命中集合，或
-// routeID 以某期望 @id+"_" 为前缀（子路由归属主规则）。claimed 由
-// claimedRoutePrefixes 预建。
+// routeClaimedByAny 判定 routeID 是否被某个期望规则认领：精确命中，或按
+// 生成侧后缀白名单（RouteIDBelongsToRule：path_<序号>/geoip/redirect）归属
+// 主规则——与渲染侧/配置查看框同一判据。裸 ruleID+"_" 前缀会把「恰为下划线
+// 前缀」的另一条规则主路由（lb_web 与 lb_web_path 并存，v1 导入/历史 ID 允许
+// 下划线）误认领，漂移明细漏报。claimed 为期望规则 @id 集合；候选前缀按
+// routeID 的下划线边界逐个 O(1) 探测，整体 O(len(routeID))，不随期望规则数
+// 放大（看门狗 60s 轮询热路径）。
 func routeClaimedByAny(routeID string, claimed map[string]struct{}) bool {
 	if _, ok := claimed[routeID]; ok {
 		return true
 	}
 	for i := 1; i < len(routeID); i++ {
-		if routeID[i] == '_' {
-			if _, ok := claimed[routeID[:i+1]]; ok {
-				return true
-			}
+		if routeID[i] != '_' {
+			continue
+		}
+		candidate := routeID[:i]
+		if _, ok := claimed[candidate]; !ok {
+			continue
+		}
+		if RouteIDBelongsToRule(routeID, candidate) {
+			return true
 		}
 	}
 	return false

@@ -156,11 +156,10 @@ func TestTaskLogsHousekeeping_reportsDetails(t *testing.T) {
 	}
 }
 
-// security-events-ingestion daemon 停机时
-// audit.log 无守护无界增长（写侧在 Caddy 进程内持续追加，轮转仅由 daemon
-// 2s tick 驱动）——log-cleanup 任务体补 waf-audit 超阈兜底：audit.log 走
-// SecurityEventsPollOnce 全套安全链（daemon 在场时等价一次普通 tick）。
-// （侧车退役，耗时随审计行内嵌流转。）
+// 证书任务日志的保留期清理必须等待写入侧路径锁：写入方持锁追加时清理不得
+// 删除在写文件（持锁期间零删除，解锁后继续并删除过期文件）。
+// 注意：audit.log（waf-audit 兜底缓存）的摄取/轮转归 security-events-ingestion
+// 链路，log-cleanup 不触碰——见 TestRuntimeLogCleanupOnce_doesNotTouchWafAuditFallback。
 func TestTaskLogsHousekeeping_waitsForCertJobWriteLock(t *testing.T) {
 	setupIsolatedDB(t)
 	if months, err := auditRetentionMonths(t.Context()); err != nil {

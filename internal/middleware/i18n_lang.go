@@ -16,6 +16,3 @@ func i18nMiddleware() gin.HandlerFunc {
 		c.Next()
 	}
 }
-
-// Lang 取当前请求语言(默认 zh)。兼容薄封装,新代码建议直接 i18n.FromCtx。
-func Lang(c *gin.Context) string { return i18n.FromCtx(c) }

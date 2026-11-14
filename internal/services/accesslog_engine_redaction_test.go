@@ -75,7 +75,7 @@ func runAccessLogEngineProbe(t *testing.T, binary string, encoder map[string]int
 		t.Fatalf("write engine config: %v", err)
 	}
 
-	cmd := exec.Command(binary, "run", "--config", configPath, "--adapter", "json")
+	cmd := exec.Command(binary, "run", "--config", configPath)
 	var output strings.Builder
 	cmd.Stdout = &output
 	cmd.Stderr = &output

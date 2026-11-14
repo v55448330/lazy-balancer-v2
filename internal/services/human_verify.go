@@ -182,8 +182,9 @@ func humanChallengeFallbackPage(ctx *securityPolicyContext, policies []*models.S
 
 // buildHumanHandler 阶段 3 人机验证 handler 渲染：有任一策略启用人机验证
 // （mode != off）即注入；CC 检测阈值随配置下发（auto 模式插件内判定）。
-// CC「封禁」响应退役（2026-11-13）：不再下发 cc_response/ban_*，挑战页内容
-// 经 challengePage 传入（可变参数兼容既有调用方）。
+// CC「封禁」响应退役（2026-11-13）：不再下发 cc_response/ban_*。challengePage
+// 变参只消费首元素（挑战页 HTML）；后续元素（历史调用方携带的页内容类型）
+// 有意忽略——挑战页响应恒 text/html 契约，内容类型不参与渲染。
 func buildHumanHandler(ruleCaddyID string, policies []*models.SecurityPolicy, challengePage ...string) map[string]interface{} {
 	mode, typ, ttl, exemptPaths := humanPolicyMerged(policies)
 	if mode == "off" {
@@ -204,7 +205,7 @@ func buildHumanHandler(ruleCaddyID string, policies []*models.SecurityPolicy, ch
 		"mode":                mode,
 		"type":                typ,
 		"ttl":                 ttl,
-		"secret":              getHumanSecret(),
+		"secret":              secret,
 		"cc_enabled":          cc.Enabled,
 		"cc_rps_limit":        cc.RPSLimit,
 		"cc_window_sec":       cc.WindowSec,

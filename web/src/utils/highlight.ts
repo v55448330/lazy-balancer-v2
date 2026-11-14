@@ -1,12 +1,11 @@
 import Prism from 'prismjs'
 import 'prismjs/themes/prism-okaidia.css'
+// 仅保留有消费方的语法：markup（拦截页 HTML）/css/apacheconf（CRS 规则预览）/
+// json（Caddy 配置/拦截页 JSON）。clike/nginx/http/ini 全仓零消费（Prism 1.30.0
+// 核实 apacheconf/json/markup/css 不依赖它们），删除以收敛包体。
 import 'prismjs/components/prism-markup'
 import 'prismjs/components/prism-css'
-import 'prismjs/components/prism-clike'
 import 'prismjs/components/prism-apacheconf'
-import 'prismjs/components/prism-nginx'
-import 'prismjs/components/prism-http'
-import 'prismjs/components/prism-ini'
 import 'prismjs/components/prism-json'
 import { escapeHtml } from '@/utils/escape'
 import { hasOwn } from '@/utils/hasOwn'

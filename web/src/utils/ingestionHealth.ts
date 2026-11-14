@@ -51,6 +51,22 @@ function detailLossParts(status: IngestionHealth): string[] {
   return (status.messages_dropped ?? 0) > 0 ? [t('common.app.views.ingest.lossDetailTruncated', { count: status.messages_dropped })] : []
 }
 
+/**
+ * 丢失事实披露（data_loss 成立时）：区分「整条事件丢失」与「事件在库但规则命中
+ * 明细被截断」。独立成段供「任务已停 + 曾丢失」与「单独曾丢失」两分支共用——
+ * 任务停止不得掩蔽同帧的永久丢失事实（停止只暂停补采/轮转，丢失是另一回事）。
+ */
+function lossDisclosureMessage(status: IngestionHealth): string {
+  const eventParts = eventLossParts(status)
+  const detailParts = detailLossParts(status)
+  if (eventParts.length === 0 && detailParts.length > 0) {
+    return t('common.app.views.ingest.detailTruncatedOnly', { parts: detailParts.join('、') })
+  }
+  const parts = [...eventParts, ...detailParts]
+  const detailSuffix = detailParts.length > 0 ? t('common.app.views.ingest.detailLossSuffix') : ''
+  return t('common.app.views.ingest.dataLoss', { parts: parts.join('、') || t('common.app.views.ingest.lossPartsUnavailable'), suffix: detailSuffix })
+}
+
 /** 统一提示文案（空串 = 不提示）：判据与文案同源，三处视图只调这一个函数。 */
 export function ingestionWarningMessage(status?: IngestionHealth | null): string {
   if (!status) return ''
@@ -63,7 +79,10 @@ export function ingestionWarningMessage(status?: IngestionHealth | null): string
   if (status.task_state === 'stopped') {
     // 任务只拥有「尾读存量 + spool 补采 + 审计日志轮转 + 健康记账」；实时 IPC
     // 主路径不经调度，事件仍入库。文案不得说成「事件不再更新」。
-    return t('common.app.views.ingest.taskStopped')
+    const stopped = t('common.app.views.ingest.taskStopped')
+    // 同帧 data_loss=true（曾永久丢失）不得被「任务已停」掩蔽——停止与丢失是
+    // 两件事，追加丢失披露段（与单独 data_loss 分支同一单源）。
+    return status.data_loss === true ? `${stopped}${t('common.app.views.ingest.lossWhileStopped', { detail: lossDisclosureMessage(status) })}` : stopped
   }
   if (status.writer_stats_unavailable === true) {
     return t('common.app.views.ingest.writerStatsUnavailable')
@@ -99,15 +118,6 @@ export function ingestionWarningMessage(status?: IngestionHealth | null): string
     // 也不得暗示事件停更（实时 IPC 入库不经该任务调度）。
     return t('common.app.views.ingest.healthAnomaly')
   }
-  // data_loss 单独成立（当前已恢复但曾丢失）：必须区分「整条事件丢失」与
-  // 「事件在库但规则命中明细被截断」——后者说成「事件可能缺失」会误导排障。
-  const eventParts = eventLossParts(status)
-  const detailParts = detailLossParts(status)
-  if (eventParts.length === 0 && detailParts.length > 0) {
-    return t('common.app.views.ingest.detailTruncatedOnly', { parts: detailParts.join('、') })
-  }
-  const parts = [...eventParts, ...detailParts]
-  const detailSuffix = detailParts.length > 0 ? t('common.app.views.ingest.detailLossSuffix') : ''
-  return t('common.app.views.ingest.dataLoss', { parts: parts.join('、') || t('common.app.views.ingest.lossPartsUnavailable'), suffix: detailSuffix })
-
+  // data_loss 单独成立（当前已恢复但曾丢失）：披露段与「任务已停 + 曾丢失」共用单源。
+  return lossDisclosureMessage(status)
 }

@@ -171,7 +171,7 @@
             <!-- 检查更新入口：进页拉取一次官网版本目录，仅在有更新时渲染；
                  AccessibleLink 保证键盘/读屏可达（与页内「支持的操作」同族）。
                  提示置于版本号标签左侧，small 号不加粗。 -->
-            <AccessibleLink v-if="updateAvailable" type="warning" size="small" class="update-hint-link" @click="openUpdateDialog">{{ t('app.settings.basic.update.title') }} {{ updateBadgeVersion }}，点击查看</AccessibleLink>
+            <AccessibleLink v-if="updateAvailable" type="warning" size="small" class="update-hint-link" @click="openUpdateDialog">{{ t('app.settings.basic.update.badgeHint', { title: t('app.settings.basic.update.title'), version: updateBadgeVersion }) }}</AccessibleLink>
             <el-tag type="info" size="small">{{ appVersion }}</el-tag>
           </div>
         </div>
@@ -439,7 +439,7 @@
             <el-option v-for="(label, idx) in AUTO_BACKUP_WEEKDAYS" :key="label" :value="idx + 1" :label="label" />
           </el-select>
           <el-select v-else-if="autoBackupForm.frequency === 'monthly'" v-model="autoBackupForm.day" size="small" style="width: 110px; margin-left: 12px">
-            <el-option v-for="d in 28" :key="d" :value="d" :label="`${d} 日`" />
+            <el-option v-for="d in 28" :key="d" :value="d" :label="t('app.settings.basic.autoBackup.dayLabel', { day: d })" />
           </el-select>
         </el-form-item>
         <el-form-item :label="t('app.settings.basic.autoBackup.time')">

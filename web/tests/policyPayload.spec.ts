@@ -76,7 +76,9 @@ test('Create 与 Update 请求结构字段集一致（同一载荷双路径消�
 
 test('载荷字段集与后端 UpdateSecurityPolicyRequest 逐项对表', () => {
   assert.ok(GO_FIELD_TAGS.length >= 28, `后端字段解析不足: ${GO_FIELD_TAGS.length}`)
-  const payloadKeys = Object.keys(buildPolicyPayload(base()))
+  // stage2 承载人机/CC 全字段族——用全承载阶段对表（stage0/1/3/4 有意裁剪
+  // 人机/CC 十字段，与后端 outOfStageZeroFamilies 矩阵同口径）。
+  const payloadKeys = Object.keys(buildPolicyPayload(base({ policyType: 'stage2' })))
   const unknownToGo = payloadKeys.filter((key) => !GO_FIELD_TAGS.includes(key))
   assert.deepEqual(unknownToGo, [], '前端提交的字段后端必须接收（否则静默丢弃）')
   const notSubmitted = GO_FIELD_TAGS.filter((tag) => !payloadKeys.includes(tag))
@@ -140,34 +142,38 @@ test('geoip 三态归一：关闭 → off；开启但模式 off → deny；爬�
   assert.equal(buildPolicyPayload(base({ geoipEnabled: true, geoipCrawlerExempt: true })).geoip_crawler_exempt, true)
 })
 
-test('阶段 2/3 人机验证载荷：stage2/stage3 承载全字段；其余类型归零（与后端阶段能力矩阵同口径）', () => {
+test('阶段 2 承载人机/CC 全字段；其余类型裁剪该族（与后端阶段能力矩阵同口径）', () => {
+  // stage2 = 人机验证 + CC 防护阶段，承载全字段族。
   const s2 = buildPolicyPayload(base({ policyType: 'stage2' }))
   assert.equal(s2.human_verify_mode, 'auto')
   assert.equal(s2.human_verify_type, 'slider')
+  assert.equal(s2.human_verify_ttl, 30)
+  assert.equal(s2.human_exempt_paths, '["/static/"]')
   assert.equal(s2.cc_detect_enabled, true)
-  const s3 = buildPolicyPayload(base({ policyType: 'stage3' }))
-  assert.equal(s3.human_verify_mode, 'auto')
-  assert.equal(s3.human_verify_type, 'slider')
-  assert.equal(s3.human_verify_ttl, 30)
-  assert.equal(s3.human_exempt_paths, '["/static/"]')
+  assert.equal(s2.cc_rps_limit, 40)
+  assert.equal(s2.cc_rps_window, 10)
+  assert.equal(s2.cc_4xx_ratio, 70)
+  assert.equal(s2.cc_session_anomaly, false)
+  assert.equal(s2.cc_session_ua_threshold, 5)
   // IP 级放行与挑战页已退役（2026-11-12 用户裁定）：载荷不得再出现该两键
-  assert.equal('human_exempt_ips' in s3, false, '豁免 IP 已退役（阶段 0 信任名单为唯一入口）')
-  assert.equal('human_challenge_page_id' in s3, false, '自定义挑战页已退役（拦截页覆盖）')
-  assert.equal(s3.cc_detect_enabled, true)
-  assert.equal(s3.cc_rps_limit, 40)
-  assert.equal(s3.cc_rps_window, 10)
-  assert.equal(s3.cc_4xx_ratio, 70)
-  assert.equal(s3.cc_session_anomaly, false)
-  assert.equal(s3.cc_session_ua_threshold, 5)
-  // 非阶段 3：能力域归零（后端 applyStageZeros 同口径），但数值字段保留（后端按需归一）
+  assert.equal('human_exempt_ips' in s2, false, '豁免 IP 已退役（阶段 0 信任名单为唯一入口）')
+  assert.equal('human_challenge_page_id' in s2, false, '自定义挑战页已退役（拦截页覆盖）')
+  // stage3（WAF）不承载人机/CC 族：十字段全部缺席（后端 outOfStageZeroFamilies 同口径）。
+  const humanCcKeys = ['human_verify_mode', 'human_verify_type', 'human_verify_ttl', 'human_exempt_paths',
+    'cc_detect_enabled', 'cc_rps_limit', 'cc_rps_window', 'cc_4xx_ratio', 'cc_session_anomaly', 'cc_session_ua_threshold']
+  const s3 = buildPolicyPayload(base({ policyType: 'stage3' }))
+  for (const key of humanCcKeys) {
+    assert.equal(key in s3, false, `stage3 不得提交人机/CC 字段 ${key}`)
+  }
+  // 非阶段 2（stage4）：人机/CC 族同样缺席。
   const waf = buildPolicyPayload(base({ policyType: 'stage4', humanVerifyMode: 'force', humanExemptPaths: ['/x/'], ccDetectEnabled: true }))
-  assert.equal(waf.human_verify_mode, 'off', '非人机验证阶段不得提交非 off 模式')
-  assert.equal(waf.human_exempt_paths, '[]')
-  assert.equal(waf.cc_detect_enabled, false)
-  // mixed 不提交 policy_type，人机验证同样归零（混合策略不含阶段 3 能力）
+  for (const key of humanCcKeys) {
+    assert.equal(key in waf, false, `stage4 不得提交人机/CC 字段 ${key}`)
+  }
+  // mixed 不提交 policy_type，人机/CC 族保留（后端按内容推断，裁剪会丢配置）。
   const mixed = buildPolicyPayload(base({ policyType: 'mixed' }))
   assert.equal(mixed.policy_type, undefined)
-  assert.equal(mixed.human_verify_mode, 'off')
+  assert.equal(mixed.human_verify_mode, 'auto')
 })
 
 test('mixed 不显式提交类型（省略=后端按内容推断）', () => {

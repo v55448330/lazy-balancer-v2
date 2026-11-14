@@ -134,6 +134,7 @@ export default {
     "pathRules": {
       "duplicateRule": "Duplicates rule {n}",
       "shadowRule": "Same path as rule {n} — prefix/exact rules shadow each other",
+      "shadowedByPrior": "Shadowed by earlier prefix rule {n} ({path}) — will not take effect",
       "redirectAddressRequired": "A 301 redirect requires a redirect URL",
       "redirectInvalidChars": "Redirect URL contains invalid characters",
       "redirectAbsoluteRequired": "Redirect URL must be an http(s):// absolute URL or a /-prefixed path"
@@ -142,6 +143,7 @@ export default {
       "minPrefixMessage": "Minimum allowed: /{v4} (IPv4) and /{v6} (IPv6)",
       "notEmpty": "Cannot be empty",
       "invalidCidr": "Not a valid IP or CIDR",
+      "emptyPlaceholder": "(empty)",
       "coversAll": "Covers the entire address space — equivalent to trusting every source",
       "inlineEntryLimit": "At most {max} inline entries ({current} now) — store the overflow in an address list and reference it",
       "rangesUnavailable": "Trusted ranges unusable: {details}",

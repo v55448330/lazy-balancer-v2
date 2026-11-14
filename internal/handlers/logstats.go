@@ -70,13 +70,13 @@ type rotationCopyKind int
 
 const (
 	rotationCopyNone rotationCopyKind = iota
-	// rotationCopyShift：<base>.1..9（自研 shift 后缀，可带 .gz）
+	// rotationCopyShift：<base>.1..9999（自研 shift 后缀，位数 ≤4，可带 .gz/.zst）
 	rotationCopyShift
-	// rotationCopyTimestamp：<base>.YYYYMMDD-HHMMSS（运行日志族 16 字符时间戳，可带 .gz）
+	// rotationCopyTimestamp：<base>.YYYYMMDD-HHMMSS（运行日志族 16 字符时间戳，可带 .gz/.zst）
 	rotationCopyTimestamp
-	// rotationCopyTimberjack：<stem>-YYYYMMDD-HHMMSS-size.log[.gz]
+	// rotationCopyTimberjack：<stem>-<ts>[.<毫秒>][-<数字段>]*-<reason>[_<碰撞>].log[.gz|.zst]
 	rotationCopyTimberjack
-	// rotationCopyWholeGzip：<base>.gz（整文件 gzip 归档）
+	// rotationCopyWholeGzip：<base>.gz/.zst（整文件压缩归档，未命中任何轮转族时的归并兜底）
 	rotationCopyWholeGzip
 )
 
@@ -246,8 +246,8 @@ func logStatsFileSize(path string) (int64, bool) {
 // （替代「逐目录项重复 ReadDir」的 O(N²) 形态；聚合累加 RotatedCount，且压缩
 // 归档不再冒充活跃）。返回 基名 → 归并结果，与单文件口径共用唯一实现：
 //   - base（匹配、非轮转副本、非压缩归档）计入 Active；
-//     .1..9 移位副本、运行日志族 base.、timberjack
-//     <stem>-<ts>-size.log[.gz/.zst] 副本计入所属 base 的 Rotated/RotCount；
+//     .1..9999 移位副本、运行日志族 base.YYYYMMDD-HHMMSS、timberjack
+//     <stem>-<ts>-<reason>[_<碰撞>].log[.gz/.zst] 副本计入所属 base 的 Rotated/RotCount；
 //   - 不归属任何匹配 base 的压缩归档（.gz/.zst）按归档计入 Rotated
 //     （压缩归档不是活跃文件）。
 //

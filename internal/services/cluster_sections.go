@@ -574,7 +574,7 @@ func logSyncSwitchGuards(ctx context.Context, dbh *sql.DB, snapshot models.Clust
 	if dbh != nil {
 		// 读失败属稀有基础设施故障——不限频 warn 一行，否则去重依据静默归零、
 		// 每个 apply 周期都刷审计告警且无信号解释。
-		if err := dbh.QueryRow("SELECT COALESCE(applied_waf_ref_version,0) FROM global_config WHERE id=1").Scan(&lastWarnVersion); err != nil {
+		if err := dbh.QueryRowContext(ctx, "SELECT COALESCE(applied_waf_ref_version,0) FROM global_config WHERE id=1").Scan(&lastWarnVersion); err != nil {
 			Logf("warn", "读取文件态记账版本失败（同步开关告警去重不可用）: %v", err)
 		}
 	}

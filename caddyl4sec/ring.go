@@ -89,3 +89,16 @@ func (r *l4Ring) depth() int {
 	defer r.mu.Unlock()
 	return r.count
 }
+
+// queuedBytes 当前有效条目的真实字节合计（逐槽有效长度求和，不是
+// 槽容量×深度——槽预分配 8KiB 而实际行 ~300B，容量口径会把队列体量
+// 放大约 27 倍）。与 depth 同锁口径。
+func (r *l4Ring) queuedBytes() int64 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var total int64
+	for i := range r.count {
+		total += int64(r.lens[(r.head+i)%r.capacity])
+	}
+	return total
+}

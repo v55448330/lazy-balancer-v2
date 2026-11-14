@@ -266,14 +266,16 @@ var clusterSyncedTables = []clusterSyncedTable{
 	// login_locked_until 的保值写不 bump，见下方守卫段）。仅失败计数
 	// （login_failed_attempts）不入列：普通失败不产生版本抖动；从端本地写由
 	// WHEN is_master=1 守卫排除。
-	// auth_provider/oidc_subject/oidc_issuer 三列刻意不入
-	// OF——当前唯一写路径是 OIDC JIT 开户 INSERT(auth_oidc.go),无 UPDATE
-	// 写路径;若未来新增该三列 UPDATE 写路径(换绑/issuer 迁移),必须同步
-	// 补 OF,否则稳态变更不 bump 版本、永不传播到从节点。
+	// auth_provider/oidc_subject/oidc_issuer 三列入 OF：OIDC JIT 开户是
+	// INSERT（INSERT 触发器本就 bump），而 issuer 归一迁移存在 UPDATE 写路径
+	// （auth_oidc.go migrateOIDCIdentityIssuer）——此前注释称「无 UPDATE 写
+	// 路径」与实现不符，迁移仅靠同事务 oidc_config 写回 bump 掩盖。身份三列
+	// 入 OF 后任何直接改写都独立 bump，不再依赖配置写回同事务这一隐含前提；
+	// 值变化守卫（下方 users 专属）保证同值写不产生版本抖动。
 	// users 节：login_locked_until 参与触发器 bump，但不进 users 载荷/节哈希，
 	// 锁状态经顶层 locked_users 下发（见 models.ClusterLockedUser 注释）——
 	// 移除该列会让主端锁定永不传播到从节点，且无测试会红。
-	{name: "users", snapshotColumns: "id,username,password_hash,role,display_name,is_enabled,password_version,password_changed_at,mfa_enabled,mfa_secret,mfa_recovery_codes,login_locked_until"},
+	{name: "users", snapshotColumns: "id,username,password_hash,role,display_name,is_enabled,password_version,password_changed_at,mfa_enabled,mfa_secret,mfa_recovery_codes,login_locked_until,auth_provider,oidc_subject,oidc_issuer"},
 	{name: "api_keys", snapshotColumns: "id,name,key_hash,key_prefix,created_by,expires_at,is_enabled,mcp_enabled,read_only,mcp_ip_whitelist"},
 	{name: "ca_providers", snapshotColumns: "id,name,provider,directory_url,credentials,max_concurrent,min_interval_ms,enabled,created_at,updated_at"},
 	{name: "certificate_configs", snapshotColumns: "id,name,dns_provider,dns_credentials,enabled,created_at,updated_at"},

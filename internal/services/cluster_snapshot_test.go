@@ -118,7 +118,7 @@ func TestSnapshotSecurityPolicies_nullEnabledDumpsAsDisabled(t *testing.T) {
 	payload, err := service.snapshotSecurityPolicies(context.Background(), database)
 
 	// Then：enabled 键存在且为禁用表示（dump 整数列经 JSON 序列化为数字 0，
-	// 解码为 float64(0)——与 rate_limit_enabled 等 COALESCE(...,0) 列同形）
+	// 解码为 float64(0)——与 cc_detect_enabled 等 COALESCE(...,0) 列同形）
 	if err != nil {
 		t.Fatalf("snapshotSecurityPolicies: %v", err)
 	}

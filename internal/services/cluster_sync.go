@@ -1250,6 +1250,9 @@ func (s *SyncService) driftedSections(ctx context.Context) string {
 	applied := readAppliedSectionHashes(ctx, s.db)
 	switches, err := readSyncSwitches(ctx, s.db)
 	if err != nil {
+		// 读失败回退全开是保守形态（宁可多比对不漏漂移），但不得静默——
+		// 与 wafFilesDrifted 的开关读失败 warn 同族，持续故障有信号可查。
+		Logf("warn", "读取同步开关失败，漂移检测按全开处理: %v", err)
 		switches = SyncSwitches{Users: true, Rules: true, Security: true}
 	}
 	var drifted []string
@@ -1450,7 +1453,7 @@ func (s *SyncService) wafFilesDrifted(ctx context.Context) bool {
 	if !switches.Security {
 		return false
 	}
-	appliedHash := readAppliedWafRefHash(s.db)
+	appliedHash := readAppliedWafRefHash(ctx, s.db)
 	if appliedHash == "" || appliedHash == wafFilesNullRefHash {
 		// 主节点无任何 WAF 文件(记账=nullRef 基准):无文件态可比对,
 		// 全量重拉也无法收敛本地残留,必须豁免(否则 404 重拉死循环)。
@@ -1471,12 +1474,12 @@ func (s *SyncService) wafFilesDrifted(ctx context.Context) bool {
 // readAppliedWafRefHash 读取文件态记账哈希(方案A 列,替代旧 waf_files
 // 记账行);空串=从未记录。读失败必须留痕：静默按「从未记录」处理会让检测
 // 无声跳过（同 driftedSections 的读失败 warn 家族）。
-func readAppliedWafRefHash(dbh *sql.DB) string {
+func readAppliedWafRefHash(ctx context.Context, dbh *sql.DB) string {
 	if dbh == nil {
 		return ""
 	}
 	var hash sql.NullString
-	if err := dbh.QueryRow(`SELECT applied_waf_ref_hash FROM global_config WHERE id=1`).Scan(&hash); err != nil || !hash.Valid {
+	if err := dbh.QueryRowContext(ctx, `SELECT applied_waf_ref_hash FROM global_config WHERE id=1`).Scan(&hash); err != nil || !hash.Valid {
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			Logf("warn", "读取文件态记账哈希失败，WAF 文件漂移检测按未记录处理: %v", err)
 		}
@@ -2134,7 +2137,7 @@ func (s *SyncService) pollRegistration(ctx context.Context) {
 			// 终止文案（含连续失败次数与人工介入指引）覆盖通用文案；反向顺序
 			// 会让终止文案被通用文案冲掉。
 			s.combineOrReplaceSyncError(ctx, message, models.SyncErrorCodeValidationFailed)
-			s.bumpRegistrationConfirmFailure(ctx, "", fmt.Sprintf("注册状态轮询被主节点拒绝（HTTP %d）", resp.StatusCode))
+			s.bumpRegistrationConfirmFailure(ctx, fmt.Sprintf("注册状态轮询被主节点拒绝（HTTP %d）", resp.StatusCode))
 			return
 		}
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 200))
@@ -2177,7 +2180,7 @@ func (s *SyncService) pollRegistration(ctx context.Context) {
 		// 先落通用文案再累计（与 401/404/410 分支同序）：第 5 次时 bump 的
 		// 终止文案覆盖通用文案，否则「已停止自动重试」提示会被冲掉。
 		s.combineOrReplaceSyncError(ctx, "注册已被主节点拒绝，请重新注册或提升为主节点", models.SyncErrorCodeValidationFailed)
-		s.bumpRegistrationConfirmFailure(ctx, "", "主节点已拒绝该注册（节点记录不存在）")
+		s.bumpRegistrationConfirmFailure(ctx, "主节点已拒绝该注册（节点记录不存在）")
 		return
 	}
 	if envelope.Data.Status == "approved" && envelope.Data.ClusterToken != "" {
@@ -2256,7 +2259,7 @@ func (s *SyncService) redeemRegistrationConfirm(ctx context.Context, masterURL, 
 			confirmed.StatusCode, strings.TrimSpace(string(body)))
 		// 先落可行动文案再累计——第 5 次时 bump 的终止文案覆盖本条。
 		s.combineOrReplaceSyncError(ctx, "集群注册确认被主节点拒绝（HTTP "+strconv.Itoa(confirmed.StatusCode)+"），请重新注册或提升为主节点", models.SyncErrorCodeValidationFailed)
-		s.bumpRegistrationConfirmFailure(ctx, clusterToken, reason)
+		s.bumpRegistrationConfirmFailure(ctx, reason)
 		// 终止轨道清空了集群令牌：回读确认，避免调用方用已失效令牌继续拉取
 		// 并以「尚未完成集群审批」覆盖终止文案。
 		var remaining string
@@ -2363,7 +2366,7 @@ func registrationConfirmTerminal(status int) bool {
 
 // bumpRegistrationConfirmFailure 累计 confirm 失败次数。达到上限后清除 registration_secret，
 // 让从节点脱离注册状态，并通过 persistSyncError 提示运维人工介入。
-func (s *SyncService) bumpRegistrationConfirmFailure(ctx context.Context, clusterToken, reason string) {
+func (s *SyncService) bumpRegistrationConfirmFailure(ctx context.Context, reason string) {
 	_, err := s.updateSlaveConfig(ctx, "registration_confirm_failures = COALESCE(registration_confirm_failures, 0) + 1")
 	if err != nil {
 		Logf("warn", "bumpRegistrationConfirmFailure: update failed: %v", err)

@@ -1,7 +1,7 @@
 // 覆盖率分母哨兵：`node --test` 的覆盖率只统计**运行期被装载过**的模块，
 // `--test-coverage-include='src/**/*.ts'` 只是对已装载模块的过滤器。因此未被任何
-// 行为用例 import 的源文件（当前 9 个：api.ts / highlight.ts / echarts.ts /
-// restart.ts / chartTheme.ts / clusterSyncSwitches.ts / useCrsRuleIndex.ts /
+// 行为用例 import 的源文件（当前 8 个：highlight.ts / echarts.ts / restart.ts /
+// chartTheme.ts / clusterSyncSwitches.ts / useCrsRuleIndex.ts /
 // useDebouncedHighlight.ts / main.ts）完全不在分母里——新增一个零测试的源文件
 // 不会拉低任何指标，门禁恒绿。
 //

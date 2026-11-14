@@ -19,7 +19,7 @@ func TestBuildHumanHandler_noBanResponseKeys(t *testing.T) {
 		HumanVerifyTTL: 30, CCDetectEnabled: true, CCRPSLimit: 40, CCRPSWindow: 10,
 		CC4xxRatio: 70, CCSessionUAThreshold: 5,
 	}}
-	h := buildHumanHandler("lb_cc", policies, "<html>{{human_verify_widget}}</html>", "text/html")
+	h := buildHumanHandler("lb_cc", policies, "<html>{{human_verify_widget}}</html>")
 	if h == nil {
 		t.Fatal("human handler missing")
 	}

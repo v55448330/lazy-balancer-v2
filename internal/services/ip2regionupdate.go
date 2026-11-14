@@ -1188,18 +1188,11 @@ func (m *IP2RegionUpdateManager) restorePreviousVersionRowLocked() {
 	}
 }
 
-// writeDistRollbackMarkers dist 回退后写保守标识 bundled（已装载内置库，
-// 版本不可知；不得冒称 prevVersion），下次远端数值 tag 可建立基线。
-// 行与 sidecar 同 wafFileMu 临界区，与 restorePreviousVersionRow 同构。
-// 「更新前版本不可知」（行缺失或版本为空串的回滚）复用同一标识——两种形态
-// 的事实相同：磁盘上的库不是任何已知 tag，版本行不得声称是。
-func (m *IP2RegionUpdateManager) writeDistRollbackMarkers() {
-	wafFileMu.Lock()
-	defer wafFileMu.Unlock()
-	m.writeDistRollbackMarkersLocked()
-}
-
-// writeDistRollbackMarkersLocked 是调用方已持 wafFileMu 的实现。
+// writeDistRollbackMarkersLocked dist 回退后写保守标识 bundled（已装载内置
+// 库，版本不可知；不得冒称 prevVersion），下次远端数值 tag 可建立基线。
+// 调用方已持 wafFileMu（行与 sidecar 同临界区，与 restorePreviousVersionRowLocked
+// 同构）。「更新前版本不可知」（行缺失或版本为空串的回滚）复用同一标识——
+// 两种形态的事实相同：磁盘上的库不是任何已知 tag，版本行不得声称是。
 func (m *IP2RegionUpdateManager) writeDistRollbackMarkersLocked() {
 	if _, err := db.DB.Exec("UPDATE security_ip2region_version SET version='bundled', updated_at=datetime('now') WHERE id=1"); err != nil {
 		Logf("error", "ip2region update: 写入 dist 回退标识失败: %v", err)
@@ -1291,7 +1284,18 @@ func openValidatedIP2RegionSearcherDual(v4Path, v6Path string) (searcher *ip2reg
 			err = fmt.Errorf("探针搜索触发内部异常（文件损坏）: %v", r)
 		}
 	}()
-	return openIP2RegionSearcherDual(v4Path, v6Path)
+	searcher, err = openIP2RegionSearcherDual(v4Path, v6Path)
+	if err != nil {
+		return nil, err
+	}
+	// 探针 Search 复用同一 searcher 实例（保持单次装载契约：校验与热换共享
+	// 这一次构造，不重复装载）。结构自检只覆盖已知布局，段数据 dataPtr 带外
+	// 等仍以 panic 呈现——探针把这类损坏在校验期显性化，recover 真实可达。
+	if _, serr := searcher.Search(ip2regionProbeIP); serr != nil {
+		searcher.Close()
+		return nil, fmt.Errorf("探针搜索失败: %w", serr)
+	}
+	return searcher, nil
 }
 
 // validateIP2RegionXDB opens the staged xdb and performs a probe search.

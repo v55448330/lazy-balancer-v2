@@ -3844,7 +3844,9 @@ func validateV2BackupAutobanConfig(config map[string]any) ([]string, error) {
 			} else {
 				countHuman := false
 				if ch, ok := config["autoban_count_human_failed"]; ok {
-					countHuman, _ = ch.(bool)
+					// JSON 反序列化的开关是数值 1/0（float64）——裸 ch.(bool)
+					// 恒 false 会丢 challenge_failed 维；走备份布尔单源。
+					countHuman = backupBooleanEnabled(ch)
 				}
 				migrated := services.MigrateLegacyAutobanScope(value, countHuman)
 				if migrated != value {

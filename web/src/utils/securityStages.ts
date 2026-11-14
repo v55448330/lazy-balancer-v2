@@ -1013,7 +1013,10 @@ export const inferPolicyType = (p: SecurityPolicyTypeInput): SecurityPolicyType 
   // s1 用内容门：与后端 PolicyTypeFeatures/ 同形；摘要标志
   // has_ip_control 开启即 true 且含信任，直接消费会把空 ACL 策略误归阶段 1。
   const s1 = hasIPACLControl(p) || hasGeoIPControl(p)
-  const s2 = (p.human_verify_mode !== undefined && p.human_verify_mode !== 'off') || p.cc_detect_enabled === true
+  // 空串 mode 当 off（与同函数人机分支 :995 及后端 models.InferPolicyType 的
+  // `HumanVerifyMode != "" && != "off"` 同口径）——缺省/空串不是启用态，否则
+  // 零能力空策略被误归 stage2 而非 stage3。
+  const s2 = (p.human_verify_mode !== undefined && p.human_verify_mode !== '' && p.human_verify_mode !== 'off') || p.cc_detect_enabled === true
   const s3 =
     p.mode === 'blocking' || p.mode === 'detection' || p.mode === 'custom_only'
       ? true

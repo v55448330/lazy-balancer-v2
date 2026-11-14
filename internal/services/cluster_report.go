@@ -218,14 +218,22 @@ func reportSecurityLibraryVersions(ctx context.Context, database *sql.DB) (strin
 		latestLibraryVersionOrEmpty(ctx, database, "security_crawler_sources")
 }
 
-// latestLibraryVersionOrEmpty 把「版本未知」降级为空串并留一条 warn：
+// latestLibraryVersionOrEmpty 把「版本未知」降级为空串并留痕：
 // 上报不得因单表读失败中断，但也不得把残缺行集的最大值当成真实版本
-// （失败口径见 latestSourceVersion）。
+// （失败口径见 latestSourceVersion）。Report 每同步周期都读两表——持续
+// 读失败按状态转换限频（首报 warn、恢复一条 info），与同函数 cert-expiry
+// 口径读取同族，不再每 60s 一条 warn。
 func latestLibraryVersionOrEmpty(ctx context.Context, database *sql.DB, table string) string {
 	version, err := latestSourceVersion(ctx, database, table)
+	key := "cluster-report-library-version-" + table
 	if err != nil {
-		Logf("warn", "读取 %s 版本失败（上报按未更新处理）: %v", table, err)
+		if level := logStateTransition(key, true); level != "" {
+			Logf(level, "读取 %s 版本失败（上报按未更新处理）: %v", table, err)
+		}
 		return ""
+	}
+	if level := logStateTransition(key, false); level != "" {
+		Logf(level, "读取 %s 版本恢复正常", table)
 	}
 	return version
 }

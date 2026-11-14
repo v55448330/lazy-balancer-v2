@@ -17,7 +17,7 @@ import (
 // 变更自然流向从节点;内容不变零写入零版本扰动。文件缺失镜像为空串
 // (重置语义);文件存在但 0 字节属半截写形态,视同不可解析、不镜像(保
 // 上一份有效配置)。
-// 仅主节点生效(WHERE is_master=1,与触发器 WHEN 同守卫)。
+// 仅主节点生效(WHERE 带 masterRoleConditionSQL 单源角色条件,与触发器 WHEN 同口径)。
 // 调用点:GetBranding(文件变化检测路径)等经全局 db.DB 的既有调用方。
 func RefreshBrandingMirror(dataDir string) (changed bool, err error) {
 	return RefreshBrandingMirrorDB(db.DB, dataDir)
@@ -75,11 +75,11 @@ func RefreshBrandingMirrorDB(database *sql.DB, dataDir string) (changed bool, er
 	} else if !os.IsNotExist(rerr) {
 		return false, fmt.Errorf("读取品牌配置文件: %w", rerr)
 	}
-	// 先读后写短路：与 UPDATE 的 is_master=1 守卫同语义（非主节点无行，
+	// 先读后写短路：与 UPDATE 的角色条件守卫同语义（非主节点无行，
 	// 直接返回「未变更」）。读失败且非「无行」时按不可判定继续走写入——
 	// 保持旧行为（写入自身会暴露真实失败面），不把读故障伪装成未变更。
 	var current string
-	if qerr := database.QueryRow(`SELECT COALESCE(branding_json,'') FROM global_config WHERE id=1 AND COALESCE(is_master,1)=1`).Scan(&current); qerr == nil {
+	if qerr := database.QueryRow(`SELECT COALESCE(branding_json,'') FROM global_config WHERE id=1 AND ` + masterRoleConditionSQL).Scan(&current); qerr == nil {
 		if current == content {
 			return false, nil
 		}
@@ -87,7 +87,7 @@ func RefreshBrandingMirrorDB(database *sql.DB, dataDir string) (changed bool, er
 		return false, nil
 	}
 	result, err := database.Exec(
-		`UPDATE global_config SET branding_json=? WHERE id=1 AND COALESCE(is_master,1)=1 AND COALESCE(branding_json,'')<>?`,
+		`UPDATE global_config SET branding_json=? WHERE id=1 AND `+masterRoleConditionSQL+` AND COALESCE(branding_json,'')<>?`,
 		content, content)
 	if err != nil {
 		return false, fmt.Errorf("镜像品牌配置: %w", err)

@@ -141,8 +141,8 @@ const GO_KEY_TO_FAMILY: Readonly<Record<string, TriggerStageFamily>> = {
   '地域拦截': 'geoip',
   '威胁情报库': 'threat',
   '请求体异常': 'body',
-  // CC 防护（429）：后端族键已由「限流」更名为「CC防护」；无 sec_events 数据源、
-  // 列表层不设类别与阶段桶（见 triggeredFilter 的固定八类），阶段族归 other。
+  // CC 防护：后端族键已由「限流」更名为「CC防护」；列表层筛选为固定预置九类
+  // （含 CC 防护，见 triggeredFilter），阶段族归 other。
   'CC防护': 'other',
 }
 

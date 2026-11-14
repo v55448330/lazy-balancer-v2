@@ -207,8 +207,8 @@ func (l *CertJobFileLogger) Log(stage, message string) {
 }
 
 // WriteCertJobLog is a package-level helper for code paths that only have a
-// jobID (e.g. failJob, markJobWaitingCA). It resolves the ruleID from the
-// database and delegates to a CertJobFileLogger.
+// jobID (e.g. recordJobFailure, deferDeploymentForMaterialBearingJob). It
+// resolves the ruleID from the database and delegates to a CertJobFileLogger.
 func WriteCertJobLog(jobID int, level, stage, message string) {
 	var ruleID string
 	if err := db.DB.QueryRow("SELECT rule_id FROM cert_jobs WHERE id=?", jobID).Scan(&ruleID); err != nil {

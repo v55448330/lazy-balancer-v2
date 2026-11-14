@@ -1,8 +1,11 @@
 package services
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
+	"log"
+	"strings"
 	"testing"
 )
 
@@ -76,5 +79,27 @@ func TestReportSecurityLibraryVersions_nilDatabaseYieldsEmpty(t *testing.T) {
 	threat, crawler := reportSecurityLibraryVersions(context.Background(), nil)
 	if threat != "" || crawler != "" {
 		t.Fatalf("nil 库版本=(%q,%q), want 空串", threat, crawler)
+	}
+}
+
+// 版本读失败的 warn 必须按状态转换限频：Report 每同步周期都读两表，
+// 持续读失败不得每 60s 一条 warn（与同函数 cert-expiry 口径读取同族）。
+func TestLatestLibraryVersionOrEmpty_warnThrottledAcrossRepeatedFailures(t *testing.T) {
+	fake := sql.OpenDB(&fakeIterErrConnector{failNeedle: "FROM security_threat_sources"})
+	var logs bytes.Buffer
+	originalWriter := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(originalWriter) })
+
+	// When：同一失败形态连续三轮
+	for range 3 {
+		if got := latestLibraryVersionOrEmpty(context.Background(), fake, "security_threat_sources"); got != "" {
+			t.Fatalf("version=%q, want 空串", got)
+		}
+	}
+
+	// Then：只留一条 warn（首报），持续失败静默
+	if got := strings.Count(logs.String(), "读取 security_threat_sources 版本失败"); got != 1 {
+		t.Fatalf("持续失败 warn=%d 条, want 1（状态转换限频）", got)
 	}
 }

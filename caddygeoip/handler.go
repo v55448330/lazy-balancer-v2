@@ -340,8 +340,10 @@ type geoipSharedSearcher struct {
 	searcher  *geoipSearcher
 	modTime   time.Time
 	size      int64
+	ino       int64
 	v6ModTime time.Time
 	v6Size    int64
+	v6Ino     int64
 	// needsRebuild 标记「文件形态曾不可 stat」：下一次 Provision 即使 stat
 	// 形态与缓存一致也必须重建（rsync -a 保留 mtime+size 的重铺形态），
 	// 防被删 inode 的旧库被无限期当有效数据服务。重建成功后由新条目清除。
@@ -430,6 +432,7 @@ func sharedGeoIPSearcher(path, v6Path string) (*geoipSearcher, error) {
 	defer geoipSharedMu.Unlock()
 	if cached, ok := geoipSharedSearchers[key]; ok && !cached.needsRebuild &&
 		cached.modTime.Equal(st.ModTime()) && cached.size == st.Size() &&
+		cached.ino == statIno(st) &&
 		v6FormUnchanged(cached, v6Effective) {
 		clearGeoIPWarnLogs(path)
 		return cached.searcher, nil
@@ -452,10 +455,10 @@ func sharedGeoIPSearcher(path, v6Path string) (*geoipSearcher, error) {
 			zap.String("xdb_path", path), zap.Error(err))
 		return nil, err
 	}
-	entry := &geoipSharedSearcher{searcher: searcher, modTime: st.ModTime(), size: st.Size()}
+	entry := &geoipSharedSearcher{searcher: searcher, modTime: st.ModTime(), size: st.Size(), ino: statIno(st)}
 	if v6Effective != "" {
 		if v6st, v6err := os.Stat(v6Effective); v6err == nil {
-			entry.v6ModTime, entry.v6Size = v6st.ModTime(), v6st.Size()
+			entry.v6ModTime, entry.v6Size, entry.v6Ino = v6st.ModTime(), v6st.Size(), statIno(v6st)
 		}
 	}
 	if replaced, ok := geoipSharedSearchers[key]; ok {
@@ -501,7 +504,17 @@ func v6FormUnchanged(cached *geoipSharedSearcher, v6Effective string) bool {
 	if err != nil {
 		return false
 	}
-	return cached.v6ModTime.Equal(v6st.ModTime()) && cached.v6Size == v6st.Size()
+	return cached.v6ModTime.Equal(v6st.ModTime()) && cached.v6Size == v6st.Size() && cached.v6Ino == statIno(v6st)
+}
+
+// statIno 提取文件 inode（非 unix 形态回落 0，与 geoipContentBuffer 同口径）。
+// 外层共享缓存键含 inode：带外 rsync -a 换库（新 inode、保留 mtime+size）
+// 可被检出重建，与内容缓存的 inode 防陈旧同强度。
+func statIno(st os.FileInfo) int64 {
+	if stt, ok := st.Sys().(*syscall.Stat_t); ok {
+		return int64(stt.Ino)
+	}
+	return 0
 }
 
 // geoipCorazaHeaders lists the request headers this module owns. v2.2.0 地域

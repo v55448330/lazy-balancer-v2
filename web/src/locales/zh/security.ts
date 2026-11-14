@@ -134,8 +134,6 @@ export default {
      "labelContent": "内容",
      "labelJson": "API 响应体（JSON）",
      "tabHtml": "浏览器 · HTML",
-     "jsonPlaceholder": "留空，或粘贴一个合法的 JSON 对象（例如包含 code 与 message 字段）",
-     "jsonAutoPlaceholder": "（留空：按状态码自动生成最小 JSON）",
      "jsonTip": "留空时按页面标题自动生成默认 JSON；不再包含状态码（由 HTTP status 表达）。实际返回 HTML 还是 JSON 由安全策略的「拦截响应」决定。",
      "editorAria": "拦截页面内容",
            "insertHumanWidget": "插入滑块验证组件",
@@ -155,10 +153,6 @@ export default {
      "subtitle": "在隔离沙箱中预览客户端接收的响应内容",
      "effectTitle": "页面效果",
      "emptyContent": "(空内容)"
-    },
-    "contentTypeOptions": {
-     "html": "HTML 页面（text/html）",
-     "plainText": "纯文本（text/plain）"
     },
     "messages": {
      "jsonInvalid": "API 响应体不是合法 JSON，请修正后再保存",
@@ -527,7 +521,6 @@ export default {
     "tabRules": "命中规则",
     "noTargetData": "暂无目标数据",
     "noData": "暂无数据",
-    "windowIndependent": "不受窗口影响",
     "trendTitle": "{window}事件趋势",
     "totalLabel": "合计",
     "histTooltip": "{label} — {count} 次",

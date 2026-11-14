@@ -55,28 +55,6 @@ func rdbStrictBindRefPolicy(t *testing.T, database *sql.DB, ruleCaddyID, name st
 	}
 }
 
-// rdbStrictFindHandler 在路由树内递归查找指定 handler 名。
-func rdbStrictFindHandler(v interface{}, want string) bool {
-	switch x := v.(type) {
-	case map[string]interface{}:
-		if h, ok := x["handler"].(string); ok && h == want {
-			return true
-		}
-		for _, vv := range x {
-			if rdbStrictFindHandler(vv, want) {
-				return true
-			}
-		}
-	case []interface{}:
-		for _, vv := range x {
-			if rdbStrictFindHandler(vv, want) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
 // Given：deny 策略引用威胁库列表（.iplist 文件缺失）；同规则另一策略无引用。
 // When：生成配置。
 // Then：未受影响策略照常渲染（geoip 处理器在场）——文件缺失不拖垮整条规则。

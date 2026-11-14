@@ -120,7 +120,7 @@
                 </div>
               </div>
               <div class="ipm-source-actions">
-                <a v-if="!source.exact" class="ipm-text-button" :href="source.kind === 'list' ? '#/security-rules?tab=ip-lists' : '#/security-policies'" @click.stop>{{ t('app.security.ipLocation.sections.edit') }}</a>
+                <a v-if="!source.exact" class="ipm-text-button" href="#/security-rules" @click.stop.prevent="goEditSource(source)">{{ t('app.security.ipLocation.sections.edit') }}</a>
                 <button
                   v-else
                   type="button"
@@ -162,7 +162,7 @@
               </div>
             </div>
             <div class="ipm-source-actions">
-              <a v-if="autobanHitIsCidr" class="ipm-text-button" href="#/security-rules?tab=ip-lists">{{ t('app.security.ipLocation.sections.edit') }}</a>
+              <a v-if="autobanHitIsCidr" class="ipm-text-button" href="#/security-rules" @click.prevent="goSecurityRulesIpLists">{{ t('app.security.ipLocation.sections.edit') }}</a>
               <button v-else type="button" class="ipm-remove" :disabled="autobanUnbanning" @click="unbanAutoban">
                 {{ autobanExpired ? t('app.security.ipLocation.autoban.clear') : t('app.security.ipLocation.autoban.removeBan') }}
               </button>
@@ -196,6 +196,7 @@ import { buildIpQuickModel, type IpQuickPolicy, type IpQuickList, type IpQuickSi
 import { popperViewportSafe } from '@/utils/popper'
 import { activateOnce } from '@/utils/keyboardActivate'
 import { formatDate } from '@/utils/date'
+import { DEEP_LINK_PARAMS, pageUrl } from '@/utils/deepLink'
 import { autobanEntryExpired, autobanEntryRemaining } from '@/utils/autobanEntry'
 import type { APIResponse } from '@/types'
 
@@ -321,6 +322,20 @@ const openAdd = (side: IpQuickSide): void => {
 const goSecurityPolicies = (): void => {
   activeAddSide.value = null
   authStore.setCurrentPage('security-policies')
+}
+// 编辑入口导航：视图切换走 authStore.setCurrentPage（全站无 hash 路由，原生
+// href="#/..." 只改 URL 不切视图——死链）。带 tab 的深链用 pageUrl 单源构造
+// /?page=...&tab=... 形态，replaceState 写入查询串后切页；SecurityRules 挂载时
+// 从 location.search 消费 tab（与 goToCustomRulesPage 的 pageUrl 深链同口径）。
+const goSecurityRulesIpLists = (): void => {
+  activeAddSide.value = null
+  const url = new URL(pageUrl('security-rules', { [DEEP_LINK_PARAMS.securityRulesTab]: 'ip-lists' }), window.location.origin)
+  window.history.replaceState(null, '', url.pathname + url.search)
+  authStore.setCurrentPage('security-rules')
+}
+const goEditSource = (source: IpQuickSource): void => {
+  if (source.kind === 'list') goSecurityRulesIpLists()
+  else goSecurityPolicies()
 }
 const executeAdd = async (): Promise<void> => {
   const side = activeAddSide.value

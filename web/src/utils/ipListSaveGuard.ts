@@ -53,7 +53,9 @@ interface IpListEntryLike {
   readonly expires_at?: string
 }
 
-const entryKey = (value: string): string => value.trim().toLowerCase()
+/** 条目身份键（去空白 + 小写）：导入判重与保存守卫共用同一口径——IPv6 大小写
+ *  变体（2001:DB8::1 与 2001:db8::1）是同一地址，按文本判重会漏判重复入表。 */
+export const entryKey = (value: string): string => value.trim().toLowerCase()
 
 /**
  * 保存前的最终复核：把「打开弹框后由任务新增、本次载荷又没有」的封禁条目

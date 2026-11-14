@@ -299,7 +299,7 @@ func (m *CrawlerUpdateManager) RunUpdate(ctx context.Context, rc taskengine.RunC
 	// demote/导入排空/进程停止的取消不推进（引擎侧同样不消费槽，恢复后补跑）。
 	defer func() {
 		if outcome == "cancelled" && userCancelledRun(ctx) {
-			if err := advanceSourceSlotsAfterUserCancel("security_crawler_sources", rc.Trigger, nil, crawlerNextSlotStrict); err != nil {
+			if err := advanceSourceSlotsAfterUserCancel("security_crawler_sources", rc.Trigger, crawlerSourceRegistryNames(), crawlerNextSlotStrict); err != nil {
 				runErr = errors.Join(runErr, err)
 			}
 		}

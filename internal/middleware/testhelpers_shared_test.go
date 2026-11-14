@@ -38,7 +38,8 @@ func withIsolatedRateLimitBuckets(t *testing.T) {
 }
 
 // withIsolatedAPIKeyWhitelistCache 保存-清空-恢复进程级白名单解析缓存。
-// sync.Map 不可直接复制，因此逐键快照；cleanup 先清掉用例写入再恢复调用前
+// 缓存是自定义有界缓存 apiKeyWhitelistCIDRCache（Range 走快照、条目有硬上限，
+// 见 middleware.go），逐键快照保存现场；cleanup 先清掉用例写入再恢复调用前
 // 现场，避免整表清扫类用例吞掉其他用例的预热条目。
 func withIsolatedAPIKeyWhitelistCache(t *testing.T) {
 	t.Helper()

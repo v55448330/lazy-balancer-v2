@@ -189,7 +189,7 @@ func (s *ClusterService) UpdateSettings(ctx context.Context, req models.ClusterS
 	}
 	defer func() { _ = tx.Rollback() }()
 	if req.SyncInterval != nil {
-		result, err := tx.ExecContext(ctx, "UPDATE global_config SET sync_interval=? WHERE id=1 AND COALESCE(is_master,1)=1", *req.SyncInterval)
+		result, err := tx.ExecContext(ctx, "UPDATE global_config SET sync_interval=? WHERE id=1 AND "+masterRoleConditionSQL, *req.SyncInterval)
 		if err != nil {
 			return fmt.Errorf("更新同步间隔: %w", err)
 		}
@@ -223,7 +223,7 @@ func (s *ClusterService) UpdateSettings(ctx context.Context, req models.ClusterS
 		if sw.val == nil {
 			continue
 		}
-		result, err := tx.ExecContext(ctx, "UPDATE global_config SET "+sw.name+"=? WHERE id=1 AND COALESCE(is_master,1)=1", *sw.val)
+		result, err := tx.ExecContext(ctx, "UPDATE global_config SET "+sw.name+"=? WHERE id=1 AND "+masterRoleConditionSQL, *sw.val)
 		if err != nil {
 			return fmt.Errorf("更新 %s: %w", sw.name, err)
 		}
@@ -681,10 +681,23 @@ func (s *ClusterService) DeleteNode(ctx context.Context, nodeID int) error {
 	if addrErr == nil {
 		accessURL = resolveNodeAccessURL(ipAddress, port, protocol, accessURL)
 		if pinPath, host, perr := nodePinPathFromAccessURL(s.dataDir, s.db, accessURL); perr == nil {
+			pinGone := false
 			if rerr := os.Remove(pinPath); rerr == nil {
+				pinGone = true
 				RecordAuditLog("system", "清除", "证书指纹", FormatAuditDetail(fmt.Sprintf("节点删除伴随清除 pin：%s", host), AuditResultPart("success")), "")
-			} else if !errors.Is(rerr, os.ErrNotExist) {
+			} else if errors.Is(rerr, os.ErrNotExist) {
+				pinGone = true
+			} else {
 				Logf("warn", "节点删除后清除 pin 失败(%s): %v", host, rerr)
+			}
+			// 磁盘 pin 已删（或本就不存在）时同步失效内存指纹缓存——与
+			// ForgetNodePin handler 的 ForgetNodePinCache 收尾对称：残留内存
+			// 条目会让本节点曾作为从节点时代的旧指纹继续参与复核，内存/磁盘
+			// 生命周期分叉。删除失败时不清（磁盘仍在，缓存仍有效）。
+			if pinGone {
+				for _, drainer := range syncDrainersFor(s.db) {
+					drainer.ForgetNodePinCache(host)
+				}
 			}
 		}
 	}

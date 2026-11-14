@@ -1379,11 +1379,14 @@ func (h *Handlers) caddyRestartWatcherOnce(triggerFile string, processStart time
 		runErr = h.ApplyConfigOnStartup("")
 	}
 	if runErr != nil {
-		caddyRestartEndAttempt(now, false)
+		// 退避以尝试**结束**时刻为基准（契约见 caddyRestartEndAttempt 注释）：
+		// 慢尝试（RunSync 耗时超过退避档位）若按开始时刻计，窗口在尝试结束前
+		// 已到期，下一轮立即重试——退避失效。
+		caddyRestartEndAttempt(time.Now(), false)
 		services.Logf("error", "Caddy 重启后配置重应用失败（触发文件保留，按退避重试）: %v", runErr)
 		return
 	}
-	caddyRestartEndAttempt(now, true)
+	caddyRestartEndAttempt(time.Now(), true)
 	services.Logf("info", "Caddy 重启后配置重应用完成（引擎调度，与启动流程同源）")
 	markCaddyRestartTriggerApplied(st.ModTime())
 	if err := os.Remove(triggerFile); err != nil {

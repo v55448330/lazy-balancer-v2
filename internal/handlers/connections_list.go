@@ -191,20 +191,10 @@ func ruleNameMap() map[string]string {
 	return m
 }
 
-// joinRequestMetadata 请求明细叠加归属地（client_ip 去重批量）+ 规则名映射
-// （X-LB-Rule-ID → lb_rules.name；2026-11-12 用户裁定：去 WAF 列，增反代数据）。
+// joinRequestMetadata 请求明细叠加归属地（逐行 enrichIPLocation，进程内缓存
+// 吸收重复 IP）+ 规则名映射（X-LB-Rule-ID → lb_rules.name；2026-11-12 用户
+// 裁定：去 WAF 列，增反代数据）。
 func joinRequestMetadata(entries []requestEntry) {
-	ipsSet := map[string]struct{}{}
-	for i := range entries {
-		if entries[i].ClientIP != "" {
-			ipsSet[entries[i].ClientIP] = struct{}{}
-		}
-	}
-	ips := make([]string, 0, len(ipsSet))
-	for ip := range ipsSet {
-		ips = append(ips, ip)
-	}
-	sort.Strings(ips)
 	names := ruleNameMap()
 	for i := range entries {
 		entries[i].Country = enrichIPLocation(entries[i].ClientIP)
@@ -367,28 +357,19 @@ func filterCaddyConnections(entries []connectionEntry, ports map[int]struct{}, u
 	return out
 }
 
-// joinConnectionsMetadata 归属地+安全事件批量叠加（去重远端 IP 一次查询，
-// 防逐连接放大；单 IP 查询走 idx_security_events_ip_time 复合索引）。
+// joinConnectionsMetadata 远端地址剥端口后叠加归属地（逐行 enrichIPLocation，
+// 进程内缓存吸收重复 IP）。剥端口走 splitHostPortAddr 单源（与流量判别同口径）：
+// IPv4 host:port / [v6]:port / 无括号 v6:port 都按最后一个冒号切——此前只认
+// 「≤1 个冒号」的 IPv4 形态，IPv6 远端带端口整体进查库，归属地恒空。
 func joinConnectionsMetadata(entries []connectionEntry) {
-	remoteIPs := map[string]struct{}{}
 	for i := range entries {
-		ip := entries[i].Remote
-		if idx := strings.LastIndex(ip, ":"); idx >= 0 && strings.Count(ip, ":") <= 1 {
-			ip = ip[:idx] // IPv4 host:port
-		}
-		if ip != "" && ip != "*" {
-			remoteIPs[ip] = struct{}{}
-			entries[i].Remote = ip
+		host, _ := splitHostPortAddr(entries[i].Remote)
+		if host != "" && host != "*" {
+			entries[i].Remote = host
 		} else {
 			entries[i].Remote = strings.TrimPrefix(entries[i].Remote, "*:")
 		}
 	}
-	ips := make([]string, 0, len(remoteIPs))
-	for ip := range remoteIPs {
-		ips = append(ips, ip)
-	}
-	sort.Strings(ips)
-
 	for i := range entries {
 		entries[i].Country = enrichIPLocation(entries[i].Remote)
 	}

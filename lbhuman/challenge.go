@@ -22,6 +22,26 @@ var humanStats struct {
 	Fails      atomic.Int64 // 验证失败数
 }
 
+// humanCCTriggers CC 触发原因分布（auto 模式阈值触发计数；进程累计，重启归零）。
+// force 模式挑战不是 CC 触发，不计入。运维据此区分突刺/4xx 比例/会话异常。
+var humanCCTriggers struct {
+	RPSSpike       atomic.Int64 // rps_spike：窗口请求数超阈
+	Ratio4xx       atomic.Int64 // 4xx_ratio：4xx 比例超阈
+	SessionAnomaly atomic.Int64 // session_anomaly：distinct-UA 数超阈
+}
+
+// recordCCTrigger 按 evalCC 判定原因递增触发计数（仅 auto 模式触发路径调用）。
+func recordCCTrigger(reason string) {
+	switch reason {
+	case "rps_spike":
+		humanCCTriggers.RPSSpike.Add(1)
+	case "4xx_ratio":
+		humanCCTriggers.Ratio4xx.Add(1)
+	case "session_anomaly":
+		humanCCTriggers.SessionAnomaly.Add(1)
+	}
+}
+
 // serveJSChallenge 发放 JS 挑战页（PoW 工作量证明，浏览器执行）。
 // 判定边界（准确表述）：挡的是**不执行 JS 的客户端**（curl/requests/多数扫描器与
 // CC 工具）；能跑 JS 的自动化客户端（headless 浏览器）可以通过，PoW 只提高其
@@ -50,6 +70,14 @@ func (h *HumanHandler) serveJSVerify(w http.ResponseWriter, r *http.Request, ip 
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
+		_, _ = w.Write([]byte(`{"ok":false}`))
+		return
+	}
+	// 匿名端点请求体硬上限（与滑块校验同口径）：超限读取报错 → 400，
+	// 且拒绝先于一次性 token 消费（超大 body 不得烧掉他人挑战）。
+	r.Body = http.MaxBytesReader(w, r.Body, humanVerifyMaxBody)
+	if err := r.ParseForm(); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
 		_, _ = w.Write([]byte(`{"ok":false}`))
 		return
 	}

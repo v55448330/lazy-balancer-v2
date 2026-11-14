@@ -903,14 +903,15 @@ func ReadAdminConfigBody(resp *http.Response) ([]byte, error) {
 	return data, nil
 }
 
-// ValidateConfig validates Caddy configuration using the /load API with validate=true
+// ValidateConfig 经 admin /load 真实加载候选配置完成校验。Caddy v2.11.9 的
+// /load 不消费任何 validate 查询参数（caddyconfig/load.go handleLoad 只读
+// body/Content-Type/Cache-Control，随后 caddy.Load 真实 provision）——历史
+// ?validate=true 是死参数，已移除。候选载荷会成为运行配置，与 apply 同为
+// 写操作：调用方必须在校验后回弹 DB 权威配置（handlers.ValidateConfig 的
+// CLI 不可用回退路径承担），并持 CaddyOpLock 进入（本函数仅持 s.mu 保护
+// CaddyService 内部状态；与并发 apply/证书快照恢复的互斥由调用方的
+// CaddyOpLock 临界区承担）。
 func (s *CaddyService) ValidateConfig(config map[string]interface{}) (err error) {
-	// validate=true 实为真实加载（Caddy 以校验模式执行完整的 provision/
-	// 加载路径，coraza 等插件照常编译并持有资源），与 apply 同为写操作——
-	// 跨层串行化契约：**调用方须持 CaddyOpLock** 进入（本函数仅持 s.mu 保护
-	// CaddyService 内部状态；与并发 apply/证书快照恢复的互斥由调用方的
-	// CaddyOpLock 临界区承担——，历史：原注释「必须持写锁串行化」
-	// 误读为本函数自取跨层写锁）。
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if message, ok := config[caddyConfigGenerationErrorKey].(string); ok {
@@ -927,7 +928,7 @@ func (s *CaddyService) ValidateConfig(config map[string]interface{}) (err error)
 		return err
 	}
 
-	validateURL := s.adminURL + "/load?validate=true"
+	validateURL := s.adminURL + "/load"
 	resp, err := s.client.Post(validateURL, "application/json", bytes.NewReader(data))
 	if err != nil {
 		return fmt.Errorf("validation request failed: %w", err)
@@ -2776,7 +2777,7 @@ func generateCaddyConfigWithCertSource(store, certSource caddyConfigStore, rules
 					continue
 				}
 				emittedSynthetic[key] = struct{}{}
-				for _, route := range buildBlockPageAttributionRoute(code, nil, securityCtx.blockPageByID[policy.BlockPageID], securityCtx.blockPageJSONByID[policy.BlockPageID], policy.BlockStatusCode, securityCtx.blockPageTypeByID[policy.BlockPageID], policy.BlockResponseMode) {
+				for _, route := range buildBlockPageAttributionRoute(code, securityCtx.blockPageByID[policy.BlockPageID], securityCtx.blockPageJSONByID[policy.BlockPageID], policy.BlockStatusCode, securityCtx.blockPageTypeByID[policy.BlockPageID], policy.BlockResponseMode) {
 					errorRoutes = append(errorRoutes, route)
 				}
 			}
@@ -4093,7 +4094,7 @@ func stripOriginPort(host string) string {
 // 文中的合成中断码（483+，拦截页逐策略归因——规则级阶段页覆盖层已停用，
 // 2026-11 用户裁定）；无批量上下文（非批量生成路径）或策略未分配（无有效页/
 // 超区间上限）时返回 0——BuildCorazaDirectives 逐字节保持现状（403/缺省）。
-func blockStatusForPolicy(securityCtx *securityPolicyContext, rule SingleRuleConfig, policy *models.SecurityPolicy) int {
+func blockStatusForPolicy(securityCtx *securityPolicyContext, policy *models.SecurityPolicy) int {
 	if securityCtx == nil || policy == nil {
 		return 0
 	}
@@ -4212,19 +4213,16 @@ func buildDualBlockPageRoutes(baseMatcher map[string]interface{}, content, jsonC
 	return routes
 }
 
-// buildBlockPageAttributionRoute 返回一条按策略/规则归因的错误路由：matcher
-// 为合成中断码 + interruption 消息，hosts 非空时追加 host 限定（规则级 481/482
-// 必须按规则域名隔离；逐策略 483+ 传 nil，保持全局唯一）。static_response
-// 渲染对应拦截页内容与配置状态码（0 归一 403）。
-func buildBlockPageAttributionRoute(synthetic int, hosts []string, content, jsonContent string, statusCode int, contentType, responseMode string) []map[string]interface{} {
+// buildBlockPageAttributionRoute 返回一条按策略归因的错误路由：matcher 为
+// 合成中断码（逐策略 483+，全局唯一）+ interruption 消息。static_response
+// 渲染对应拦截页内容与配置状态码（0 归一 403）。规则级 481/482 阶段页覆盖层
+// 已停用（2026-11 用户裁定），host 限定分支随之退役。
+func buildBlockPageAttributionRoute(synthetic int, content, jsonContent string, statusCode int, contentType, responseMode string) []map[string]interface{} {
 	if statusCode == 0 {
 		statusCode = 403
 	}
 	matcher := map[string]interface{}{
 		"expression": fmt.Sprintf("({http.error.status_code} == %d && {http.error.message} == 'interruption triggered')", synthetic),
-	}
-	if len(hosts) > 0 {
-		matcher["host"] = hosts
 	}
 	return buildDualBlockPageRoutes(matcher, content, jsonContent, contentType, statusCode, nil, responseMode)
 }
@@ -4620,7 +4618,7 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig, sec
 		// 阶段 2 = CC 防护（2026-11-12 用户裁定；配额限流已下线）：
 		// 仅人机挑战，挑战页挡住的脚本不消耗阶段 3 WAF 评估资源。
 		if rule.Protocol == "http" && len(policies) > 0 {
-			banContent, banType := "", ""
+			banContent := ""
 			if ctx != nil {
 				// 挑战页与 merged 配置同优先序（force > auto，humanTopPolicy
 				// 单源）：绑定序在前的 auto 策略不得遮蔽 force 策略的页——
@@ -4628,16 +4626,15 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig, sec
 				// 为空时回落内置页（humanChallengeFallbackPage）。
 				if top := humanTopPolicy(policies); top != nil && top.BlockPageID > 0 {
 					banContent = ctx.blockPageByID[top.BlockPageID]
-					banType = ctx.blockPageTypeByID[top.BlockPageID]
 				}
 				// CC 挑战模式的默认拦截页=内置人机验证页（按验证方式选页：
 				// js→9006 JS 人机验证页面，其余→9005 滑块）；策略未显式配页时
 				// 不再走 lbhuman 生成的通用挑战页。内置页缺失才回退生成页。
 				if banContent == "" {
-					banContent, banType = humanChallengeFallbackPage(ctx, policies)
+					banContent, _ = humanChallengeFallbackPage(ctx, policies)
 				}
 			}
-			if humanHandler := buildHumanHandler(rule.CaddyID, policies, banContent, banType); humanHandler != nil {
+			if humanHandler := buildHumanHandler(rule.CaddyID, policies, banContent); humanHandler != nil {
 				securityChain = append(securityChain, humanHandler)
 			}
 		}
@@ -4649,7 +4646,7 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig, sec
 			// 本策略信任 IP 由预检统一记录(事件去重),他策略信任 IP 照常拦截
 			// (「信任仅豁免所属策略」边界);单策略保持平原形态(预检虽同构存在,
 			// 但策略层自身信任 DetectionOnly 已正确处理,无跨策略信任边界)。
-			wafHandler, err := buildWafHandlerWithIndex(rule.CaddyID, policy, policyStore, needFingerprint(), len(policies) > 1, blockStatusForPolicy(ctx, rule, policy), effectiveRequestBodyMaxSizeMB, detectionTrust, ctx.crsRuleIndex(), scopedCache)
+			wafHandler, err := buildWafHandlerWithIndex(rule.CaddyID, policy, policyStore, needFingerprint(), len(policies) > 1, blockStatusForPolicy(ctx, policy), effectiveRequestBodyMaxSizeMB, detectionTrust, ctx.crsRuleIndex(), scopedCache)
 			if err != nil {
 				return nil, err
 			}
@@ -4715,7 +4712,7 @@ func buildHTTPHandleChain(rule SingleRuleConfig, upstreams []UpstreamConfig, sec
 	// 渲染，名单内容变化走热路径。链位在安全包裹之后、reverse_proxy 之前，事务
 	// 经 counter 注入的 X-LB-Rule-ID/请求级标识头完成归因与请求归并。
 	if rule.Protocol == "http" && len(trustDetectRanges) > 0 && len(securityChain) > 0 {
-		trustHandler, err := buildTrustDetectHandler(rule.CaddyID, detectionTrust)
+		trustHandler, err := buildTrustDetectHandler(rule.CaddyID, trustDetectRanges)
 		if err != nil {
 			return nil, err
 		}

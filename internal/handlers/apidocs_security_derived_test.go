@@ -63,8 +63,8 @@ func TestAPIDocContractsSecurityMatchesRegistrationSurface(t *testing.T) {
 		key := route.Method + " " + route.Path
 		registration, ok := registrations[key]
 		if !ok {
-			// 路由↔文档双向集合对账由 apidocs_routes_test 负责，此处只校验
-			// security 口径；未注册的文档路由在那道门报红。
+			// 路由↔文档双向集合对账由 mcpserver 包的 apidocs_routes_test 负责
+			//（本包无同名守卫），此处只校验 security 口径；未注册的文档路由在那道门报红。
 			continue
 		}
 		want := apiDocSecurityFromRegistration(registration, authChainLine)

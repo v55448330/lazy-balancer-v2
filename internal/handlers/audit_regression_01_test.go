@@ -396,8 +396,6 @@ func TestUpdateConfig_restores_Caddy_when_commit_fails(t *testing.T) {
 			body := currentConfig
 			mu.Unlock()
 			_, _ = w.Write([]byte(body))
-		case r.Method == http.MethodPost && r.URL.Path == "/load" && r.URL.Query().Get("validate") == "true":
-			w.WriteHeader(http.StatusOK)
 		case r.Method == http.MethodPost && r.URL.Path == "/load":
 			body, _ := io.ReadAll(r.Body)
 			mu.Lock()

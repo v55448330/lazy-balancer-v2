@@ -1503,14 +1503,6 @@ func runMigrations() error {
 	if _, err := DB.Exec("DROP TABLE IF EXISTS config_versions"); err != nil {
 		return fmt.Errorf("failed to drop config_versions: %w", err)
 	}
-	// 阶段合并（一次）：人机 stage3 并入 CC stage2；旧 WAF stage4 重编号为 stage3。
-	if err := migratePolicyStagesV1(); err != nil {
-		return err
-	}
-	// 阶段合并修复（一次）：还原被 v1 旧判据误改型为 stage2 的存量 WAF 策略。
-	if err := repairPolicyStageMergeV2(); err != nil {
-		return err
-	}
 	// 配额限流下线（2026-11-12 用户裁定）：阶段 2 仅保留 CC 人机挑战。
 	// 物理删除 rate_limit_* 列；旧备份/快照字段由导入/同步侧裁剪。
 	if err := retireRateLimitQuota(); err != nil {
@@ -1583,6 +1575,18 @@ func runMigrations() error {
 		"security_policy_bindings.rank": "UPDATE security_policy_bindings SET rank = (SELECT COUNT(*) FROM security_policy_bindings b2 WHERE b2.rule_caddy_id = security_policy_bindings.rule_caddy_id AND b2.policy_id <= security_policy_bindings.policy_id)",
 	}
 	if err := ensureNewColumns(newColumns, newColumnBackfills); err != nil {
+		return err
+	}
+	// 阶段合并两迁移必须在统一 ensureNewColumns 之后：候选查询消费
+	// policy_type 列，而 pre-2026-09-20 旧库直跳升级时该列尚未补齐——
+	// 先于补列执行会「no such column: policy_type」阻断启动。局部补列
+	//（human_verify_mode/cc_detect_enabled）不含 policy_type，兜不住。
+	// 阶段合并（一次）：人机 stage3 并入 CC stage2；旧 WAF stage4 重编号为 stage3。
+	if err := migratePolicyStagesV1(); err != nil {
+		return err
+	}
+	// 阶段合并修复（一次）：还原被 v1 旧判据误改型为 stage2 的存量 WAF 策略。
+	if err := repairPolicyStageMergeV2(); err != nil {
 		return err
 	}
 	// 带外非 0/1 的 is_enabled 先归一，重建/读取链路只消费规范两态
@@ -4448,9 +4452,10 @@ func migrateSecurityPoliciesNullable() error {
 		if err := dropRebuildResidue(tx, "security_policies", "security_policies_new"); err != nil {
 			return err
 		}
-		// rebuild 必须与 fresh CREATE（含 refs 两列）同形状并搬运其数据——
+		// rebuild 必须与「fresh CREATE + newColumns 稳态」同形状并搬运其数据
+		//（含人机/CC 十列——它们只经补列通道到达，fresh DDL 不携带）——
 		// 陈旧 DDL 会把同一 runMigrations 早前 newColumns 刚加的列丢掉
-		//（窗口期库首启安全策略子系统整体 no such column）。
+		//（窗口期库首启安全策略子系统整体 no such column / 人机 CC 配置丢失）。
 		if _, err := tx.Exec(fmt.Sprintf(`CREATE TABLE security_policies_new (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			name TEXT NOT NULL,
@@ -4482,16 +4487,30 @@ func migrateSecurityPoliciesNullable() error {
 			policy_type TEXT NOT NULL DEFAULT '',
 			trust_detection BOOLEAN NOT NULL DEFAULT 0,
 			geoip_crawler_exempt INTEGER NOT NULL DEFAULT 0,
-			geoip_crawler_engines TEXT NOT NULL DEFAULT '[]'
+			geoip_crawler_engines TEXT NOT NULL DEFAULT '[]',
+			human_verify_mode TEXT NOT NULL DEFAULT 'off',
+			human_verify_type TEXT NOT NULL DEFAULT 'slider',
+			human_verify_ttl INTEGER NOT NULL DEFAULT 30,
+			human_exempt_paths TEXT NOT NULL DEFAULT '[]',
+			cc_detect_enabled INTEGER NOT NULL DEFAULT 0,
+			cc_rps_limit INTEGER NOT NULL DEFAULT 40,
+			cc_rps_window INTEGER NOT NULL DEFAULT 10,
+			cc_4xx_ratio INTEGER NOT NULL DEFAULT 70,
+			cc_session_anomaly INTEGER NOT NULL DEFAULT 0,
+			cc_session_ua_threshold INTEGER NOT NULL DEFAULT 5
 		);
 		INSERT INTO security_policies_new (id,name,description,mode,anomaly_threshold,ip_acl_mode,ip_acl_list,ip_acl_enabled,
 			ip_whitelist,ip_blacklist,crs_rule_groups,crs_excluded_rules,
 			custom_rules,block_page_id,block_status_code,enabled,updated_by,created_at,updated_at,ip_whitelist_enabled,geoip_countries,geoip_mode,waf_check_response,
-			log_request_body,ip_acl_list_refs,ip_whitelist_refs,policy_type,trust_detection,geoip_crawler_exempt,geoip_crawler_engines)
+			log_request_body,ip_acl_list_refs,ip_whitelist_refs,policy_type,trust_detection,geoip_crawler_exempt,geoip_crawler_engines,
+			human_verify_mode,human_verify_type,human_verify_ttl,human_exempt_paths,
+			cc_detect_enabled,cc_rps_limit,cc_rps_window,cc_4xx_ratio,cc_session_anomaly,cc_session_ua_threshold)
 		SELECT id,name,description,mode,anomaly_threshold,ip_acl_mode,ip_acl_list,ip_acl_enabled,
 			ip_whitelist,ip_blacklist,crs_rule_groups,crs_excluded_rules,
 			custom_rules,block_page_id,block_status_code,enabled,updated_by,created_at,updated_at,COALESCE(ip_whitelist_enabled,1),geoip_countries,geoip_mode,waf_check_response,
-			COALESCE(log_request_body,0),COALESCE(ip_acl_list_refs,'[]'),COALESCE(ip_whitelist_refs,'[]'),policy_type,COALESCE(trust_detection,0),COALESCE(geoip_crawler_exempt,0),COALESCE(geoip_crawler_engines,'[]')
+			COALESCE(log_request_body,0),COALESCE(ip_acl_list_refs,'[]'),COALESCE(ip_whitelist_refs,'[]'),policy_type,COALESCE(trust_detection,0),COALESCE(geoip_crawler_exempt,0),COALESCE(geoip_crawler_engines,'[]'),
+			COALESCE(human_verify_mode,'off'),COALESCE(human_verify_type,'slider'),COALESCE(human_verify_ttl,30),COALESCE(human_exempt_paths,'[]'),
+			COALESCE(cc_detect_enabled,0),COALESCE(cc_rps_limit,40),COALESCE(cc_rps_window,10),COALESCE(cc_4xx_ratio,70),COALESCE(cc_session_anomaly,0),COALESCE(cc_session_ua_threshold,5)
 		FROM security_policies;
 		DROP TABLE security_policies;
 		ALTER TABLE security_policies_new RENAME TO security_policies;`, DefaultAnomalyThreshold)); err != nil {

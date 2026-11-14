@@ -81,11 +81,11 @@ cd web && npm ci && npm run build && cd ..
 git rev-parse HEAD && cat web/dist/build-info.json
 
 # 2) Docker Compose (Linux; the primary node uses host networking)
-#    Mind the channel: the checked-in docker-compose.yml pins the current
-#    development line's beta tag (e.g. vX.Y.Z-beta, kept in sync with the
-#    Dockerfile VERSION by a gate). For a stable release use the `:latest`
-#    tag from the example above, or change both image tags to the matching
-#    stable tag.
+#    Mind the channel: the checked-in docker-compose.yml pins the most recent
+#    stable tag (the stable deployment group, kept in sync with the frontend
+#    version fallback and updated on promotion). For the current development
+#    line's pre-release use the matching -beta tag (e.g. vX.Y.Z-beta; see the
+#    build example in step 3 below), or `:latest`.
 docker compose up -d
 
 # 3) Or build and push the image directly: VERSION is the formal version (what

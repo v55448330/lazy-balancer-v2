@@ -3082,10 +3082,15 @@ const CRSExclusionPathMaxRunes = 256
 
 // ValidCRSExclusionPath 是 scope=path 条目 path 字段的单一形态真值（写侧 400
 // 与渲染守卫共用）：必填、以 / 开头、≤256 字符、无空白/控制字符、无双引号或
-// 反斜杠。双引号/反斜杠拒绝是 seclang 注入门——path 逐字拼进带引号的
-// "@beginsWith <path>" 操作数，任一引入即可越出引号注入任意动作串。
+// 反斜杠、无 %{ 宏序列。双引号/反斜杠拒绝是 seclang 注入门——path 逐字拼进
+// 带引号的 "@beginsWith <path>" 操作数，任一引入即可越出引号注入任意动作串。
+// %{ 拒绝与自定义规则写侧同口径（corazaMacroSequence）：@beginsWith 运行期
+// 展开宏，排除前缀不得随请求变量静默动态化。
 func ValidCRSExclusionPath(path string) bool {
 	if path == "" || !strings.HasPrefix(path, "/") || utf8.RuneCountInString(path) > CRSExclusionPathMaxRunes {
+		return false
+	}
+	if containsCorazaMacroSequence(path) {
 		return false
 	}
 	for _, r := range path {
@@ -3094,6 +3099,15 @@ func ValidCRSExclusionPath(path string) bool {
 		}
 	}
 	return true
+}
+
+// containsCorazaMacroSequence 报告文本是否含 coraza 宏展开序列 "%{"。
+// @contains/@streq/@beginsWith 的操作数在 coraza 内包成 Macro 运行期展开
+// （@rx 不展开）——宏会让匹配/排除语义随请求变量静默动态化。自定义规则
+// 写侧（validateCustomRulePattern）与 CRS 排除 path 形态门
+// （ValidCRSExclusionPath）共用本判据，单一口径。
+func containsCorazaMacroSequence(s string) bool {
+	return strings.Contains(s, "%{")
 }
 
 // emitPathScopedCRSExclusions 发射路径前缀作用域（scope=path）的排除条目：
@@ -3107,7 +3121,7 @@ func emitPathScopedCRSExclusions(sb *strings.Builder, p *models.SecurityPolicy, 
 	index := chainIndex()
 	for _, entry := range entries {
 		if !ValidCRSExclusionPath(entry.Path) {
-			if msg := fmt.Sprintf("跳过非法 path 的 CRS 排除条目 %q（path=%q，策略 %q）：path 必填、以 / 开头、≤256 字符且不含空白/控制字符/双引号/反斜杠", entry.Target, entry.Path, p.Name); auditFailureShouldLog(msg) {
+			if msg := fmt.Sprintf("跳过非法 path 的 CRS 排除条目 %q（path=%q，策略 %q）：path 必填、以 / 开头、≤256 字符且不含空白/控制字符/双引号/反斜杠/%%{宏", entry.Target, entry.Path, p.Name); auditFailureShouldLog(msg) {
 				Logf("warn", "%s", msg)
 			}
 			continue
@@ -3585,7 +3599,7 @@ func validateCustomRulePattern(operator, pattern string) error {
 	// coraza 的 @contains/@streq/@beginsWith 会把参数包成 Macro 并做
 	// %{VAR} 宏展开；@rx 不展开。非 regex 运算符里的宏会让规则语义静默
 	// 动态化，畸形宏还会让 NewWAF 拒绝整份配置。
-	if operator != "regex" && strings.Contains(pattern, "%{") {
+	if operator != "regex" && containsCorazaMacroSequence(pattern) {
 		return fmt.Errorf("该运算符不支持 %%{...} 宏语法；如需匹配字面量请使用正则运算符并转义 %%")
 	}
 	if strings.HasSuffix(pattern, `\`) {

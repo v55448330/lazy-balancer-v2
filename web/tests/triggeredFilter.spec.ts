@@ -32,7 +32,7 @@ test('类别子集按族段展开（段序 = 选中顺序）', () => {
   assert.equal(serializeTriggeredFilter(['WAF·自定义']), 'WAF·自定义,自定义规则')
 })
 
-test('八类子集（缺一类）视为过滤而非全选', () => {
+test('九类子集（缺一类）视为过滤而非全选', () => {
   const missingOne = TRIGGERED_CATEGORIES.filter((c) => c !== '请求体异常')
   assert.equal(serializeTriggeredFilter(missingOne), '爬虫Bot,地域拦截,IP 访问控制,信任名单,威胁情报库,WAF·CRS,WAF·自定义,自定义规则,CC 防护')
 })

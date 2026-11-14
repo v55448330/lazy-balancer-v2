@@ -515,9 +515,9 @@ func threatIplistPreferFast(textInfo os.FileInfo, textErr error, fastInfo os.Fil
 }
 
 // threatIplistHasEntries 只判定威胁名单是否有生效条目（摘要/列表路径）：
-// .fast 可优先时只取头部规模（ReadFastFile 后取 len(V4)+len(V6)>0），不再把
-// 整份前缀集展开成 []string（威胁上限 20 万条时省一次 MB 级分配）；.fast
-// 缺失/损坏/更旧时回退完整读取（含文本可解析率门），失败判定与渲染同源。
+// .fast 可优先时 ReadFastFile 后取 len(V4)+len(V6)>0——仍会展开 []netip.Prefix
+// 前缀集，但省去逐条 String() 成 []string 的那层 MB 级分配（威胁上限 20 万条）；
+// .fast 缺失/损坏/更旧时回退完整读取（含文本可解析率门），失败判定与渲染同源。
 func threatIplistHasEntries(iplistPath string) (bool, error) {
 	textInfo, textErr := os.Stat(iplistPath)
 	fastPath := wafiplist.FastPath(iplistPath)

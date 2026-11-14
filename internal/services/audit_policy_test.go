@@ -120,8 +120,8 @@ func TestAuditResultText_translates_partial_result(t *testing.T) {
 	}
 }
 
-// 16 个可手动触发族的自记分流必须与现实一致——6 族
-// 任务体自记审计（handler 跳过复记），10 族任务体零审计（handler 补记）。
+// 24 个可手动触发族的自记分流必须与现实一致——6 族
+// 任务体自记审计（handler 跳过复记），18 族任务体零审计（handler 补记）。
 // 集合漂移（新增可触发族未评估/自记机制撤销）会在这里当场失败。
 func TestTaskTriggerSelfRecordsAudit_familySplit(t *testing.T) {
 	// Given 6 个自记族（任务体 defer/执行器/载入审计，operator 经 RunContext 归人）
@@ -131,7 +131,7 @@ func TestTaskTriggerSelfRecordsAudit_familySplit(t *testing.T) {
 			t.Fatalf("自记族 %s 应报告 true（handler 复记会双审计，违反单记口径）", id)
 		}
 	}
-	// When/Then 10 个非自记族报告 false（handler 显式补记「触发/任务监控」）
+	// When/Then 18 个非自记族报告 false（handler 显式补记「触发/任务监控」）
 	handlerRecorded := []string{"config-watchdog", "log-cleanup", "audit-retention", "security-events-retention", "metrics-orphan-cleanup", "cert-renewal-scan", "cert-reconcile", "cert-manual-poll", "cert-waiting-ca", "autoban", "metrics-history-cleanup", "metrics-collector", "threat-rollup-warmer", "caddy-restart-watcher", "ratelimit-bucket-sweep", "apikey-usage-flusher", "runtime-log-threshold", "runtime-tz-refresh"}
 	for _, id := range handlerRecorded {
 		if TaskTriggerSelfRecordsAudit(id) {

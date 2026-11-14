@@ -400,7 +400,10 @@ test('useLibUpdateDialog 409 路径不得重复立即轮询', () => {
 
 test('大屏光流可用性位/恢复基线/重装复位（L8 前端三项）', () => {
   const text = code('src/views/security/ThreatScreen.vue')
-  assert.match(text, /<div v-if="flowError || attackFlowError" class="error-banner site-unset">光流数据加载失败，正在重试…<\/div>/, '光流端点失败必须显性横幅')
+  // i18n 后双钉:调用点钉键,zh 母本钉原文(任一漂移必红)。`\|\|` 必须转义——
+  // 未转义的 `||` 是正则交替,会产生可匹配空串的空分支,assert.match 恒绿。
+  assert.match(text, /<div v-if="flowError \|\| attackFlowError" class="error-banner site-unset">\{\{ t\('app\.security\.threat\.flowLoadFailed'\) \}\}<\/div>/, '光流端点失败必须显性横幅')
+  assert.ok(code('src/locales/zh/security.ts').includes('"flowLoadFailed": "光流数据加载失败，正在重试…"'), '光流失败横幅原文必须在 zh 母本词条中')
   assert.match(text, /interval: ATTACK_FLOW_POLL_MS, onError: \(\) => \{ attackFlowError\.value = true \}/)
   assert.match(text, /interval: 1000, onError: \(\) => \{ flowError\.value = true \}/)
   // 恢复首轮重建基线：手动暂停恢复 + 可见性恢复两处（原仅「不可用」一处）。

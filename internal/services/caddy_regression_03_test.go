@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"unicode/utf8"
 
@@ -15,11 +16,14 @@ import (
 func TestCaddyErrorBodyTruncation(t *testing.T) {
 	// 1500 字节中文 + 3KB ASCII 的混合超长错误体：截断点落在多字节字符中间。
 	longBody := strings.Repeat("中", 500) + strings.Repeat("x", 3000)
+	// apply 与 validate 同为 POST /load（validate 查询参数已退役）——按调用
+	// 序分发状态码：第 1 次（ApplyConfig）500，第 2 次（ValidateConfig）400。
+	var calls atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.Contains(r.URL.RawQuery, "validate=true") {
-			w.WriteHeader(http.StatusBadRequest)
-		} else {
+		if calls.Add(1) == 1 {
 			w.WriteHeader(http.StatusInternalServerError)
+		} else {
+			w.WriteHeader(http.StatusBadRequest)
 		}
 		_, _ = w.Write([]byte(longBody))
 	}))
@@ -33,7 +37,7 @@ func TestCaddyErrorBodyTruncation(t *testing.T) {
 	}
 	assertBoundedErrorBody(t, "ApplyConfig", applyErr.Error())
 
-	// /load?validate=true 路径（ValidateConfig）
+	// /load 路径（ValidateConfig，真实加载语义）
 	validateErr := service.ValidateConfig(map[string]interface{}{})
 	if validateErr == nil {
 		t.Fatal("ValidateConfig succeeded despite mock 400")

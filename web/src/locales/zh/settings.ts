@@ -97,7 +97,8 @@ export default {
           "tabHttp": "HTTP 服务器",
           "tabProxy": "反向代理",
           "autoRefresh": "自动刷新",
-          "refreshBtn": "刷新"
+          "refreshBtn": "刷新",
+          "closeBtn": "关闭"
         },
         "list": {
           "title": "存为地址列表",
@@ -771,6 +772,7 @@ export default {
         },
         "update": {
           "title": "发现新版本",
+          "badgeHint": "{title} {version}，点击查看",
           "subtitle": "官网发布了新版本，以下为版本号与更新内容",
           "stable": "稳定版",
           "beta": "测试版",

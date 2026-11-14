@@ -355,6 +355,17 @@ func TestHumanEventDelivery_boundedQueueDrains(t *testing.T) {
 		poster.mu.Unlock()
 	}()
 
+	// 隔离全局计数器与队列残留：shuffle 顺序下前序测试可能留下 dropped 计数
+	// 或队列事件，绝对值守恒（got+dropped==total）须从 clean 态起算。
+	humanEventDropped.Store(0)
+	for pending := true; pending; {
+		select {
+		case <-humanEventQueue:
+		default:
+			pending = false
+		}
+	}
+
 	const total = 200
 	for range total {
 		reportHumanEvent("lb-evt", "203.0.113.9", http.MethodGet, "/", "ua", "challenge")

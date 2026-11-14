@@ -619,7 +619,8 @@ func countSubroutes(t *testing.T, mainRoute map[string]interface{}) int {
 // TestTrustedDetection_overlappingIPExcludedFromTrustRoute 直通∩保留检测重叠 IP：
 // 直通优先（与 TCP 路由序「直通 → 保留检测」同语义）——重叠 IP 不进信任检测
 // 路由（零 id:12 事件），仅保留检测集 IP 照常进；跳过并集仍是两者之并（热路径
-// 字节语义不变），最小检测事务的并集文件保持全量（引擎/预检字节不变）。
+// 字节语义不变）；最小检测事务的 operand 投影与路由 matcher 消费同一差集
+// （内容面不再宽于命中面）。
 func TestTrustedDetection_overlappingIPExcludedFromTrustRoute(t *testing.T) {
 	stubSecurityLibsAvailable(t)
 	_, database := newClusterTestService(t)
@@ -652,9 +653,10 @@ func TestTrustedDetection_overlappingIPExcludedFromTrustRoute(t *testing.T) {
 		t.Fatal("仅检测集 IP 必须命中信任检测路由 gate")
 	}
 
-	// 最小检测事务并集文件与防御性 id:12 保持全量并集（引擎面零变化）。
+	// 最小检测事务 operand 投影=差集（与 matcher 同源；重叠 IP 归直通，
+	// 不在检测事务名单内）。
 	directives, _ := shape.trustHandler["directives"].(string)
-	assertTrustDetectDirectivesShape(t, directives, "10.0.0.9/32\n203.0.113.9/32\n")
+	assertTrustDetectDirectivesShape(t, directives, "203.0.113.9/32\n")
 }
 
 // TestTrustedDetection_nestedOverlapSplitsTrustRouteRanges 嵌套重叠（保留检测

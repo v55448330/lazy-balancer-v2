@@ -30,9 +30,6 @@ var clusterSyncedColumnExclusions = map[string]map[string]string{
 		"mfa_last_timestep":     "MFA 时间步记账：随哈希清零不参与漂移判定",
 		"mfa_pending_fails":     "step-up 待定计数：单次会话内状态，不跨节点",
 		"mfa_pending_secret":    "step-up 待定密钥：单次会话内状态，不跨节点",
-		"auth_provider":         "认证来源仅 OIDC JIT 开户 INSERT 写（无 UPDATE 路径）",
-		"oidc_subject":          "OIDC 身份仅开户 INSERT 写（无 UPDATE 路径）",
-		"oidc_issuer":           "OIDC 签发方仅开户 INSERT 写（无 UPDATE 路径）",
 		"is_setup_admin":        "跨节点派生标记：由用户集在启动/导入/快照应用后归一重建，不参与版本漂移判定",
 	},
 	"api_keys": {

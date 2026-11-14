@@ -516,10 +516,16 @@ func TestUsersRebuildSchema_matchesFreshDDL(t *testing.T) {
 	}
 }
 
+// security_policies 重建 parity 基线=fresh+newColumns 稳态：fresh CREATE 不
+// 追平 newColumns 为既定口径（人机/CC 十列只经补列通道到达），只比 fresh
+// 会让「重建 DDL 漏十列」假绿——窗口期库重建后人机/CC 配置整族丢失。
 func TestSecurityPoliciesRebuildSchema_matchesFreshDDL(t *testing.T) {
 	database := openMigrationTestDB(t)
 	if err := createTables(); err != nil {
 		t.Fatalf("create fresh tables: %v", err)
+	}
+	if err := ensureNewColumns(newColumnsRegistry, nil); err != nil {
+		t.Fatalf("ensure new columns for steady-state baseline: %v", err)
 	}
 	freshShape := tablePragmaShape(t, database, "security_policies")
 	if _, err := database.Exec(`DROP TABLE security_policies`); err != nil {
@@ -559,12 +565,25 @@ func TestSecurityPoliciesRebuildSchema_matchesFreshDDL(t *testing.T) {
 		policy_type TEXT NOT NULL DEFAULT '',
 		trust_detection BOOLEAN NOT NULL DEFAULT 0,
 		geoip_crawler_exempt INTEGER NOT NULL DEFAULT 0,
-		geoip_crawler_engines TEXT NOT NULL DEFAULT '[]'
+		geoip_crawler_engines TEXT NOT NULL DEFAULT '[]',
+		human_verify_mode TEXT NOT NULL DEFAULT 'off',
+		human_verify_type TEXT NOT NULL DEFAULT 'slider',
+		human_verify_ttl INTEGER NOT NULL DEFAULT 30,
+		human_exempt_paths TEXT NOT NULL DEFAULT '[]',
+		cc_detect_enabled INTEGER NOT NULL DEFAULT 0,
+		cc_rps_limit INTEGER NOT NULL DEFAULT 40,
+		cc_rps_window INTEGER NOT NULL DEFAULT 10,
+		cc_4xx_ratio INTEGER NOT NULL DEFAULT 70,
+		cc_session_anomaly INTEGER NOT NULL DEFAULT 0,
+		cc_session_ua_threshold INTEGER NOT NULL DEFAULT 5
 	)`); err != nil {
 		t.Fatalf("create legacy security_policies table: %v", err)
 	}
-	if _, err := database.Exec(`INSERT INTO security_policies (name,mode,geoip_countries,geoip_mode,waf_check_response,block_status_code)
-		VALUES ('legacy-policy','blocking','["CN"]','allow',1,403)`); err != nil {
+	if _, err := database.Exec(`INSERT INTO security_policies (name,mode,geoip_countries,geoip_mode,waf_check_response,block_status_code,
+		human_verify_mode,human_verify_type,human_verify_ttl,human_exempt_paths,
+		cc_detect_enabled,cc_rps_limit,cc_rps_window,cc_4xx_ratio,cc_session_anomaly,cc_session_ua_threshold)
+		VALUES ('legacy-policy','blocking','["CN"]','allow',1,403,
+		'force','click',60,'["/healthz"]',1,99,15,80,1,7)`); err != nil {
 		t.Fatalf("seed legacy policy: %v", err)
 	}
 
@@ -583,6 +602,20 @@ func TestSecurityPoliciesRebuildSchema_matchesFreshDDL(t *testing.T) {
 	}
 	if countries != `["CN"]` || geoMode != "allow" || wafCheck != 1 || blockStatus != 403 {
 		t.Fatalf("rebuilt policy values=(%q,%q,%d,%d), want preserved", countries, geoMode, wafCheck, blockStatus)
+	}
+	// 人机/CC 十列显式值必须随重建保留（重建 DDL 漏列时此处读回默认值）。
+	var humanMode, humanType, exemptPaths string
+	var humanTTL, ccEnabled, ccRPS, ccWindow, cc4xx, ccSessionAnomaly, ccUAThreshold int
+	if err := database.QueryRow(`SELECT human_verify_mode, human_verify_type, human_verify_ttl, human_exempt_paths,
+		cc_detect_enabled, cc_rps_limit, cc_rps_window, cc_4xx_ratio, cc_session_anomaly, cc_session_ua_threshold
+		FROM security_policies WHERE name='legacy-policy'`).
+		Scan(&humanMode, &humanType, &humanTTL, &exemptPaths, &ccEnabled, &ccRPS, &ccWindow, &cc4xx, &ccSessionAnomaly, &ccUAThreshold); err != nil {
+		t.Fatalf("read rebuilt human/CC columns: %v", err)
+	}
+	if humanMode != "force" || humanType != "click" || humanTTL != 60 || exemptPaths != `["/healthz"]` ||
+		ccEnabled != 1 || ccRPS != 99 || ccWindow != 15 || cc4xx != 80 || ccSessionAnomaly != 1 || ccUAThreshold != 7 {
+		t.Fatalf("rebuilt human/CC values=(%q,%q,%d,%q,%d,%d,%d,%d,%d,%d), want (force,click,60,[/healthz],1,99,15,80,1,7)",
+			humanMode, humanType, humanTTL, exemptPaths, ccEnabled, ccRPS, ccWindow, cc4xx, ccSessionAnomaly, ccUAThreshold)
 	}
 }
 

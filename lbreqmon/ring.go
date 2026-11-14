@@ -16,6 +16,7 @@
 package lbreqmon
 
 import (
+	"container/heap"
 	"net"
 	"net/http"
 	"sort"
@@ -83,15 +84,46 @@ func Record(rec RequestRecord) {
 // Snapshot 全量快照（最新优先；未写满时只返回已写入部分）。
 // 读侧依次取全部分片锁——与写侧互斥但分片粒度不放大写延迟。
 func Snapshot() []RequestRecord {
-	ringInitOnce()
-	total := uint64(0)
-	for i := range shards {
-		shards[i].mu.Lock()
-		total += shards[i].count
-		shards[i].mu.Unlock()
+	out := snapshotRecords()
+	// 最新优先（全局单调序按 Ts 排序——分片遍历序非时间序）。
+	// 插入排序不适用大 N：用标准排序（50k 条 ~几 ms，低频路径可接受）。
+	sortByTsDesc(out)
+	if len(out) > RingCapacity {
+		out = out[:RingCapacity]
 	}
-	// 二次取：期间的新写入可能落进已锁过的分片——快照语义允许（少读
-	// 到极新记录；总条数以第二次 count 计），不做全局锁。
+	return out
+}
+
+// SnapshotTopN 最新 N 条（top-N 选择，不做全量排序）。
+// 分片收集与 Snapshot 同语义（依次取分片锁、允许少读极新记录）；
+// 选择用容量 N 的最小堆：O(M log N)（M=已写入条数），N ≪ M 时远低于
+// 全量 O(M log M) 排序；结果按 Ts 降序（N 条排序可忽略）。
+// limit<=0 返回 nil（调用方回落全量快照）。
+func SnapshotTopN(limit int) []RequestRecord {
+	if limit <= 0 {
+		return nil
+	}
+	h := &tsMinHeap{}
+	forEachRecord(func(rec RequestRecord) {
+		if h.Len() < limit {
+			heap.Push(h, rec)
+			return
+		}
+		if rec.Ts > (*h)[0].Ts {
+			(*h)[0] = rec
+			heap.Fix(h, 0)
+		}
+	})
+	out := []RequestRecord(*h)
+	sortByTsDesc(out)
+	return out
+}
+
+// snapshotRecords 分片收集全部已写入记录（未排序）。
+// 期间的新写入可能落进已锁过的分片——快照语义允许（少读到极新记录），
+// 不做全局锁。
+func snapshotRecords() []RequestRecord {
+	ringInitOnce()
 	out := make([]RequestRecord, 0, RingCapacity)
 	for i := range shards {
 		shards[i].mu.Lock()
@@ -103,14 +135,40 @@ func Snapshot() []RequestRecord {
 		}
 		shards[i].mu.Unlock()
 	}
-	// 最新优先（全局单调序按 Ts 排序——分片遍历序非时间序）。
-	// 插入排序不适用大 N：用标准排序（50k 条 ~几 ms，低频路径可接受）。
-	sortByTsDesc(out)
-	if len(out) > RingCapacity {
-		out = out[:RingCapacity]
-	}
-	_ = total
 	return out
+}
+
+// forEachRecord 逐条访问已写入记录（分片锁内回调，调用方不得阻塞）。
+func forEachRecord(fn func(RequestRecord)) {
+	ringInitOnce()
+	for i := range shards {
+		shards[i].mu.Lock()
+		n := shards[i].count
+		if n > uint64(len(shards[i].slots)) {
+			n = uint64(len(shards[i].slots))
+		}
+		for j := uint64(0); j < n; j++ {
+			fn(shards[i].slots[j])
+		}
+		shards[i].mu.Unlock()
+	}
+}
+
+// tsMinHeap 容量受限的最小堆（按 Ts）：堆顶=当前 top-N 中最旧一条，
+// 新记录更晚即替换堆顶——标准 container/heap 接口。
+type tsMinHeap []RequestRecord
+
+func (h tsMinHeap) Len() int           { return len(h) }
+func (h tsMinHeap) Less(i, j int) bool { return h[i].Ts < h[j].Ts }
+func (h tsMinHeap) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
+func (h *tsMinHeap) Push(x any)        { *h = append(*h, x.(RequestRecord)) }
+func (h *tsMinHeap) Pop() any {
+	old := *h
+	n := len(old)
+	x := old[n-1]
+	old[n-1] = RequestRecord{} // 释放引用（字符串字段）
+	*h = old[:n-1]
+	return x
 }
 
 func sortByTsDesc(recs []RequestRecord) {

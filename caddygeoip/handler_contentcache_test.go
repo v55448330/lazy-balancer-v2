@@ -206,3 +206,50 @@ func TestGeoipContentCache_rebuildOnFormChangeLoadsFreshBytes(t *testing.T) {
 		t.Fatalf("rebuilt instance must serve lookups: region=%q err=%v", region, err)
 	}
 }
+
+// 外层共享实例缓存键必须含 inode（与内容缓存 geoipContentBuffer 同口径）：
+// 带外 rsync -a 换库（新 inode、保留 mtime+size）时，仅 mtime+size 的外层键
+// 会短路命中旧实例——内容缓存虽能凭 inode 检出新字节，但外层根本不走重建，
+// 旧 inode 的库被无限期当有效数据服务。本钉以「同 mtime+size、新 inode」的
+// rename 替换强制外层重建。
+func TestGeoipSharedSearcher_rebuildOnInodeChangeWithSameForm(t *testing.T) {
+	path := seedXdbCopy(t)
+	cleanupSharedSearcher(t, path)
+
+	s1, err := sharedGeoIPSearcher(path, "")
+	if err != nil {
+		t.Fatalf("first acquire: %v", err)
+	}
+	st, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 构造「同内容、同 mtime+size、新 inode」的替换文件（rsync -a 形态）：
+	// 复制原字节到临时文件 → 回拨 mtime 到原值 → rename 覆盖（新 inode）。
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmp := path + ".rsync-new"
+	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(tmp, st.ModTime(), st.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		t.Fatal(err)
+	}
+
+	s2, err := sharedGeoIPSearcher(path, "")
+	if err != nil {
+		t.Fatalf("rebuild acquire: %v", err)
+	}
+	if s1 == s2 {
+		t.Fatal("inode 变化（同 mtime+size）必须重建外层共享实例，不得短路命中旧实例")
+	}
+	if region, err := s2.Search("114.114.114.114"); err != nil || region == "" {
+		t.Fatalf("rebuilt instance must serve lookups: region=%q err=%v", region, err)
+	}
+}

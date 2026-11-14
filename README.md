@@ -79,9 +79,9 @@ cd web && npm ci && npm run build && cd ..
 git rev-parse HEAD && cat web/dist/build-info.json
 
 # 2) Docker Compose（Linux；主节点为 host 网络）
-#    注意通道：仓库里的 docker-compose.yml 钉的是当前开发线的测试通道 tag
-#    （形如 vX.Y.Z-beta，与 Dockerfile 的 VERSION 同步校验）。要稳定版请改用
-#    上面示例里的 `:latest` 标签，或把两处 image 改成对应的稳定版 tag。
+#    注意通道：仓库里的 docker-compose.yml 钉的是最近稳定版 tag（stable 部署组，
+#    与前端版本回退值同口径，转正时同步更新）。要当前开发线的测试版请改用
+#    对应的 -beta tag（形如 vX.Y.Z-beta，构建示例见下方第 3 步），或 `:latest`。
 docker compose up -d
 
 # 3) 或直接构建并推送镜像：VERSION=正式版本号（面板展示口径）；镜像 tag 可带

@@ -35,10 +35,21 @@ func (HumanStatsAdmin) Routes() []caddy.AdminRoute {
 
 // humanStatsPayload 统计响应（总览卡数据源；差分语义由 LB 侧聚合）。
 // CC「封禁」响应退役（2026-11-13）：封禁由自动封禁管线承载，此处不再有 bans。
+// cc_triggers=触发原因分布（auto 模式阈值触发，进程累计）；
+// events_dropped=事件队列饱和丢弃计数（静默丢事件的对账源）。
 type humanStatsPayload struct {
-	Challenges int64 `json:"challenges"`
-	Passes     int64 `json:"passes"`
-	Fails      int64 `json:"fails"`
+	Challenges    int64          `json:"challenges"`
+	Passes        int64          `json:"passes"`
+	Fails         int64          `json:"fails"`
+	CCTriggers    ccTriggersJSON `json:"cc_triggers"`
+	EventsDropped int64          `json:"events_dropped"`
+}
+
+// ccTriggersJSON CC 触发原因分布（键与 evalCC Reason 同口径）。
+type ccTriggersJSON struct {
+	RPSSpike       int64 `json:"rps_spike"`
+	Ratio4xx       int64 `json:"4xx_ratio"`
+	SessionAnomaly int64 `json:"session_anomaly"`
 }
 
 func serveHumanStats(w http.ResponseWriter, r *http.Request) error {
@@ -48,6 +59,12 @@ func serveHumanStats(w http.ResponseWriter, r *http.Request) error {
 		Challenges: humanStats.Challenges.Load(),
 		Passes:     humanStats.Passes.Load(),
 		Fails:      humanStats.Fails.Load(),
+		CCTriggers: ccTriggersJSON{
+			RPSSpike:       humanCCTriggers.RPSSpike.Load(),
+			Ratio4xx:       humanCCTriggers.Ratio4xx.Load(),
+			SessionAnomaly: humanCCTriggers.SessionAnomaly.Load(),
+		},
+		EventsDropped: humanEventDropped.Load(),
 	})
 	if err != nil {
 		raw = []byte(`{}`)

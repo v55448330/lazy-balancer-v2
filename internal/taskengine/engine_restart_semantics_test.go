@@ -186,13 +186,15 @@ func TestEngine_TaskRunPanicRecordsFailed(t *testing.T) {
 	}
 }
 
-// Given daemon 任务体启动即 panic。
+// Given daemon 任务体启动即 panic，重拉退避缩短到 200ms。
 // When StartLoop。
-// Then 补记 failed 行且退避窗口内不得紧循环（起异常退出按有界退避
-// 重拉——默认首档 1s，本断言窗口 200ms 内必须保持未运行；重拉本身由
-// u05_r79_test.go 的缩短退避用例覆盖）。
+// Then 补记 failed 行且退避到期前不得紧循环：负断言窗口（100ms）必须落在
+// 「panic 退出 → 首档退避到期」之间——默认 1s 退避下任何 200ms 窗口都恒绿
+// （钉不住声称的防护），缩短退避后窗口才真正压在重拉 deadline 之前。
+// 有界重拉次数/用尽停调由 general_regression_01_test.go 的缩短退避用例覆盖。
 func TestEngine_DaemonRunPanicRecordsFailedWithBackoff(t *testing.T) {
-	e := newTestEngine(t)
+	e := newTestEngineWithOptions(t, Options{TickInterval: 10 * time.Millisecond,
+		DaemonRestartDelays: []time.Duration{200 * time.Millisecond, 200 * time.Millisecond}})
 	e.Register(Descriptor{ID: "t-dpanic", Family: "t", Name: "恐慌常驻", Kind: KindDaemon, RunsOn: RoleAny,
 		Run: func(rc RunContext) error { panic("daemon boom") }})
 	e.SetRole(true)
@@ -204,7 +206,9 @@ func TestEngine_DaemonRunPanicRecordsFailedWithBackoff(t *testing.T) {
 	})
 	// 退避窗口内不得紧循环（真实运行位归 false 后保持）
 	waitDaemonNotRunning(t, e, "t-dpanic", time.Second, "daemon panic 后必须退出运行（不得紧循环）")
-	time.Sleep(200 * time.Millisecond)
+	// 此刻距 panic 退出 ≤ 数十 ms，首档重拉在 ~200ms 后——100ms 窗口严格
+	// 落在退避到期前；无退避的紧循环实现会在窗口内重新拉起而判红。
+	time.Sleep(100 * time.Millisecond)
 	if daemonRunning(e, "t-dpanic") {
 		t.Fatal("daemon panic 后在退避窗口内被立即重启——紧循环风险")
 	}

@@ -60,7 +60,7 @@ export const pathRuleShadowWarning = (rules: readonly PathRule[], index: number)
   const priorIndex = shadowedByIndex(rules, index)
   if (priorIndex < 0) return ''
   const prior = rules[priorIndex]
-  return `被前序前缀规则 ${priorIndex + 1}（${prior?.path.trim() ?? ''}）遮蔽，不会生效`
+  return t('common.app.pathRules.shadowedByPrior', { n: priorIndex + 1, path: prior?.path.trim() ?? '' })
 }
 
 // isForwardResponseMode 转发判定：''（API 形态）与 'forward'（UI 哨兵——el-select

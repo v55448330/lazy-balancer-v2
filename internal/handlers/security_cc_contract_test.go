@@ -149,6 +149,9 @@ func TestSecurityPolicy_updateNormalizesHumanCCFieldsLikeCreate(t *testing.T) {
 		{"cc_rps_limit", -5, 40},        // 负 → 缺省 40
 		{"cc_rps_limit", 0, 40},         // 0 → 缺省 40（rps 无「0=关」语义）
 		{"cc_rps_limit", 55, 55},
+		{"cc_rps_limit", 100000, 100000}, // 上界保留（与前端 max 同口径）
+		{"cc_rps_limit", 100001, 100000}, // 超上限钳 100000
+		{"cc_rps_limit", 999999, 100000},
 		{"cc_session_ua_threshold", -1, 5},
 		{"cc_session_ua_threshold", 0, 5},
 		{"cc_session_ua_threshold", 7, 7},

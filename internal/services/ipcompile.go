@@ -45,10 +45,10 @@ func CompileFromIplistFile(iplistPath string) error {
 	}
 	// 逐条目只解析一次：解析产物直接进聚合，不再
 	// 「校验解析一次 + AggregatePrefixes 再解析一次」。
-	// 容量估算用换行计数（bytes.Count 零分配）——旧实现在此再
-	// `strings.Split` 一遍整份文本只为取 len(lines)，20 万条名单多出一份
-	// []string 头 + 全量字符串复制，且与 iterIPListTextLines 内部的切分重复。
-	prefixes := make([]netip.Prefix, 0, bytes.Count(raw, []byte("\n"))+1)
+	// 容量估算用换行计数（bytes.Count 零分配）并封顶（compilePrefixCapHint，
+	// 对齐 wafiplist.prefixCapHint 口径）——注释/空行密集的文件不得把预分配
+	// 放大到数十 MiB；超出部分由 append 几何增长补齐，不改变拒绝语义。
+	prefixes := make([]netip.Prefix, 0, compilePrefixCapHint(bytes.Count(raw, []byte("\n"))))
 	skipped := 0
 	over := false
 	iterIPListTextLines(raw, func(line string) bool {
@@ -72,6 +72,22 @@ func CompileFromIplistFile(iplistPath string) error {
 	}
 	v4, v6 := splitV4V6(wafiplist.AggregateParsedPrefixes(prefixes))
 	return wafiplist.WriteFastFile(wafiplist.FastPath(iplistPath), v4, v6)
+}
+
+// compilePrefixInitialCapacity 是编译侧预分配的条目上限（2^16 × 32B ≈ 2MiB，
+// 与 wafiplist.initialPrefixCapacity 同量级）。
+const compilePrefixInitialCapacity = 1 << 16
+
+// compilePrefixCapHint 返回编译侧一次性预分配的条目容量：换行计数 +1（末行
+// 无换行），再封顶 compilePrefixInitialCapacity。预分配只服务热路径常量因子，
+// 注释/空行密集文件（带外写入/损坏残留）的超大预估由 append 几何增长补齐，
+// 体积门与条目门仍先/后独立生效（不改变任何拒绝语义）。
+func compilePrefixCapHint(newlines int) int {
+	capHint := newlines + 1
+	if capHint > compilePrefixInitialCapacity {
+		capHint = compilePrefixInitialCapacity
+	}
+	return capHint
 }
 
 // CompileFromEntries/CompileFromPrefixes 已删除（新发现，用户

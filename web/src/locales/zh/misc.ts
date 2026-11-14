@@ -136,6 +136,7 @@ export default {
     "pathRules": {
       "duplicateRule": "与规则 {n} 重复",
       "shadowRule": "与规则 {n} 同路径前缀+精确互相遮蔽",
+      "shadowedByPrior": "被前序前缀规则 {n}（{path}）遮蔽，不会生效",
       "redirectAddressRequired": "301 跳转需要填写跳转地址",
       "redirectInvalidChars": "跳转地址含非法字符",
       "redirectAbsoluteRequired": "跳转地址须为 http(s):// 绝对地址或 / 开头路径"
@@ -144,6 +145,7 @@ export default {
       "minPrefixMessage": "最小允许 /{v4}（IPv4）与 /{v6}（IPv6）",
       "notEmpty": "不能为空",
       "invalidCidr": "不是合法的 IP 或 CIDR",
+      "emptyPlaceholder": "(空)",
       "coversAll": "覆盖全部地址空间，等同信任任意来源",
       "inlineEntryLimit": "内联网段最多 {max} 条（当前 {current} 条），超出部分请存为地址列表后引用",
       "rangesUnavailable": "受信网段不可用：{details}",

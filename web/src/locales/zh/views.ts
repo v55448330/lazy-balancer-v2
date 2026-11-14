@@ -269,6 +269,7 @@ export default {
     'lossIoErrors': '写盘错误 {count} 次',
     'lossPartsUnavailable': '计数不可用',
     'lossSkippedRegions': '跳过畸形区 {count} 处（{size}）',
+    'lossWhileStopped': '；此外{detail}',
     'otherBucket': '其他',
     'passive': '被动检查 (失败 {unhealthy} 次视为不健康, 恢复窗口 {window}s)',
     'probePortDefault': '默认',

@@ -76,7 +76,11 @@ export const parseIPv6Groups = (
       if (part.includes('.')) {
         // 嵌入 IPv4 只允许出现在整条地址的最后 32 位（`::` 左侧的段不算末尾）
         if (!allowEmbeddedV4 || i !== parts.length - 1) return null
-        const octets = parseIPv4Octets(part, { allowLeadingZeros: true })
+        // 内嵌 IPv4 的前导零严格度与外层 zone 口径绑同一开关：写侧（allowZone=false）
+        // 必须拒 `::ffff:01.2.3.4`——后端 netip.parseIPv4Fields 对前导零必拒
+        // （netip.go "IPv4 field has octet with leading zero"）；事件匹配侧
+        // （allowZone=true）按数值宽容收，与 toV6BigInt 的链路本地宽容同口径。
+        const octets = parseIPv4Octets(part, { allowLeadingZeros: options.allowZone })
         if (!octets) return null
         out.push((octets[0] << 8) | octets[1])
         out.push((octets[2] << 8) | octets[3])
@@ -136,6 +140,19 @@ const compressV6Groups = (groups: readonly number[]): string => {
 export const canonicalV6Text = (value: string): string | null => {
   const groups = parseIPv6Groups(value, { allowZone: false })
   return groups === null ? null : compressV6Groups(groups)
+}
+
+/**
+ * IPv4-mapped IPv6（::ffff:a.b.c.d）→ 等价 IPv4 点分串；非 mapped 形态返回 null。
+ * 与后端 netip.Addr.Unmap() 同口径：仅 ::ffff:0:0/96 映射族折叠，普通 IPv6
+ * （含 ::ffff:0:1.2.3.4 之外的兼容族）不折。判据复用 parseIPv6Groups 的解析结果，
+ * 不另写一份地址语法（上游判重单源 upstreamKeys 消费）。
+ */
+export const unmapV4Text = (value: string): string | null => {
+  const groups = parseIPv6Groups(value, { allowZone: false })
+  if (!groups) return null
+  if (!(groups[0] === 0 && groups[1] === 0 && groups[2] === 0 && groups[3] === 0 && groups[4] === 0 && groups[5] === 0xffff)) return null
+  return `${groups[6] >> 8}.${groups[6] & 0xff}.${groups[7] >> 8}.${groups[7] & 0xff}`
 }
 
 /** 事件侧宽容 IPv4 解析单源（toV4Long 的实现基座）。
@@ -199,6 +216,10 @@ export const isValidCidr = (rawValue: string): boolean => {
 
   const prefixText = parts[1] ?? ''
   if (!/^\d+$/.test(prefixText)) return false
+  // 前缀位前导零：后端 netip.ParsePrefix 对 len>1 且首字符非 '1'-'9' 的位串必拒
+  // （netip.go "bad bits after slash"，strconv.Atoi 虽收前导零但 netip 显式拦）。
+  // 单个 '0' 合法（/0 全族）；'00'/'08'/'032' 必拒。前端写侧同口径前置拦截。
+  if (prefixText.length > 1 && prefixText[0] === '0') return false
   const prefix = Number(prefixText)
   return prefix >= 0 && prefix <= (isV4 ? 32 : 128)
 }

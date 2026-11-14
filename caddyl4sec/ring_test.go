@@ -90,3 +90,39 @@ func TestRingSlotGrowth(t *testing.T) {
 		t.Fatalf("pop=%q ok=%v, want ok（FIFO 存活子序列）", string(line), ok)
 	}
 }
+
+// TestRingQueuedBytesSumsEffectiveLengths queue_bytes 必须是环内有效行的真实
+// 字节合计（逐槽 lens 求和），不是槽容量×深度——槽预分配远大于实际行时
+// 容量口径会把队列体量放大数十倍。覆写逐出后只计存活行。
+func TestRingQueuedBytesSumsEffectiveLengths(t *testing.T) {
+	// Given：槽容量 1KiB 远大于实际行，环容量 3。
+	r := newL4Ring(3, 1<<10)
+	if got := r.queuedBytes(); got != 0 {
+		t.Fatalf("空环 queuedBytes=%d, want 0", got)
+	}
+	// When：入队三条不等长行。
+	r.push([]byte("aa"))     // 2
+	r.push([]byte("bbbb"))   // 4
+	r.push([]byte("cccccc")) // 6
+	// Then：合计=2+4+6=12，而非槽容量×深度（3×1024）。
+	if got := r.queuedBytes(); got != 12 {
+		t.Fatalf("queuedBytes=%d, want 12（Σ有效长度，非槽容量×深度）", got)
+	}
+	// When：满环覆写逐出最旧 "aa"，入队 "d"（1 字节）。
+	if evicted := r.push([]byte("d")); evicted != 1 {
+		t.Fatalf("evicted=%d, want 1", evicted)
+	}
+	// Then：存活 bbbb+cccccc+d = 4+6+1 = 11。
+	if got := r.queuedBytes(); got != 11 {
+		t.Fatalf("覆写后 queuedBytes=%d, want 11（只计存活行）", got)
+	}
+	// When：消费清空。
+	for {
+		if _, ok := r.pop(); !ok {
+			break
+		}
+	}
+	if got := r.queuedBytes(); got != 0 {
+		t.Fatalf("消费后 queuedBytes=%d, want 0", got)
+	}
+}

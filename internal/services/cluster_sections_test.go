@@ -5,8 +5,11 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"database/sql/driver"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"io"
 	"log"
 	"net/http"
 	"net/http/httptest"
@@ -921,3 +924,90 @@ func TestSnapshotUsersSection_hashParityWithCaddyNumericClamp(t *testing.T) {
 		t.Fatalf("主端 users 节哈希 %s ≠ 从端重建 %s——数值归一仅单边生效", masterHash[:16], slaveHashes["users"][:16])
 	}
 }
+
+// 漂移守卫的开关读失败回退全开是保守形态，但不得静默——与 wafFilesDrifted
+// 的开关读失败 warn 同族：持续故障必须有信号，否则漂移检测口径变化无人知晓。
+// 用假驱动让「哈希重建内的开关读」成功、「driftedSections 自身的开关读」失败，
+// 精确命中被守卫的读点（真实库上两处读同列，无法只坏第二处）。
+func TestDriftedSections_warnsOnSwitchReadFailure(t *testing.T) {
+	conn := &driftSwitchFailConn{}
+	fake := sql.OpenDB(&driftSwitchFailConnector{conn: conn})
+	t.Cleanup(func() { _ = fake.Close() })
+	service := &SyncService{db: fake, cluster: NewClusterService(fake, "")}
+	var logs bytes.Buffer
+	originalWriter := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(originalWriter) })
+
+	if got := service.driftedSections(context.Background()); got != "" {
+		t.Fatalf("driftedSections=%q, want 空串（读失败不得误报漂移）", got)
+	}
+	if !strings.Contains(logs.String(), "读取同步开关失败，漂移检测按全开处理") {
+		t.Fatalf("logs=%q, want 含开关读失败告警（静默回退全开无信号）", logs.String())
+	}
+}
+
+// driftSwitchFailConn 第一次 sync_rules 查询（哈希重建内）返回空集成功，
+// 第二次（driftedSections 自身）返回错误——模拟开关读的瞬时故障。
+type driftSwitchFailConn struct {
+	switchReads int
+}
+
+func (c *driftSwitchFailConn) Prepare(string) (driver.Stmt, error) {
+	return nil, errors.New("未实现 Prepare")
+}
+func (c *driftSwitchFailConn) Close() error              { return nil }
+func (c *driftSwitchFailConn) Begin() (driver.Tx, error) { return fakeIterErrTx{}, nil }
+func (c *driftSwitchFailConn) BeginTx(context.Context, driver.TxOptions) (driver.Tx, error) {
+	return fakeIterErrTx{}, nil
+}
+func (c *driftSwitchFailConn) QueryContext(_ context.Context, query string, _ []driver.NamedValue) (driver.Rows, error) {
+	if strings.Contains(query, "sync_rules") {
+		c.switchReads++
+		if c.switchReads >= 2 {
+			return nil, errors.New("注入的开关读取失败")
+		}
+		// 开关读本身是两列子查询（无 COALESCE）——首次须成功返回一行。
+		return &driftSettingsRow{width: 2}, nil
+	}
+	if strings.Contains(query, "FROM global_config") {
+		// 按查询的 COALESCE 列数返回对应宽度的单行——覆盖装载路径的全部
+		// 设置查询形态（本测试只关心开关读失败分支，不消费设置内容）。
+		return &driftSettingsRow{width: strings.Count(query, "COALESCE(")}, nil
+	}
+	return &fakeEmptyRows{columns: []string{"a"}}, nil
+}
+func (c *driftSwitchFailConn) ExecContext(context.Context, string, []driver.NamedValue) (driver.Result, error) {
+	return driver.RowsAffected(0), nil
+}
+
+// driftSettingsRow 按查询列数返回单行零值；caddy_config 等 JSON 列由
+// 调用方查询的 COALESCE 默认值兜底，零值不触发解析失败。
+type driftSettingsRow struct {
+	done  bool
+	width int
+}
+
+func (r *driftSettingsRow) Columns() []string {
+	cols := make([]string, r.width)
+	for i := range cols {
+		cols[i] = "c"
+	}
+	return cols
+}
+func (r *driftSettingsRow) Close() error { return nil }
+func (r *driftSettingsRow) Next(dest []driver.Value) error {
+	if r.done {
+		return io.EOF
+	}
+	r.done = true
+	for i := range dest {
+		dest[i] = int64(0)
+	}
+	return nil
+}
+
+type driftSwitchFailConnector struct{ conn *driftSwitchFailConn }
+
+func (c *driftSwitchFailConnector) Connect(context.Context) (driver.Conn, error) { return c.conn, nil }
+func (c *driftSwitchFailConnector) Driver() driver.Driver                        { return fakeIterErrDriver{} }

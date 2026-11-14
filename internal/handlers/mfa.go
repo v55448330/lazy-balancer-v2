@@ -263,6 +263,21 @@ func rejectOIDCUserMFAOperation(c *gin.Context, targetUserID int) bool {
 	return false
 }
 
+// rejectNonJWTSelfServiceMFA 自助 MFA 端点的身份门：仅 JWT 会话可操作本人
+// 第二因子。可写 API Key 是机器身份——「JWT 会话即确认」的信任边界对它不
+// 成立：免验码首绑/重绑 MFA、重生成恢复码、凭码换发会话 JWT 都等于把人类
+// 第二因子能力授予机器凭证（管理员登录 DoS + 第二因子获取）。与管理员重置
+// 对 API Key 仍验码的口径对齐。拒绝留审计（认证拒绝/用户认证，Key 归因由
+// recordAudit 统一附加），先于导入窗口与 OIDC 门——身份判定不依赖任何库读。
+func rejectNonJWTSelfServiceMFA(c *gin.Context) bool {
+	if c.GetString("auth_type") == "jwt" {
+		return false
+	}
+	recordAudit(c, "认证拒绝", "用户认证", services.FormatAuditDetail("MFA 自助操作仅限 JWT 会话（机器身份拒绝）", services.AuditResultPart("failure")))
+	c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: apimsg.T(c, "k_528f89a0"), MessageKey: "k_528f89a0"})
+	return true
+}
+
 // mfaVerifyFailureResponse 收敛「登录后验码失败」的响应与审计口径
 // verr != nil = 查询/写库故障 → 500（不把底层 SQL 错误文本透给
 // 客户端、也不写「验证码错误」误导排障）；verr == nil = 真验证码错误 → 调用方
@@ -313,6 +328,10 @@ func (h *Handlers) MFASetup(c *gin.Context) {
 	// 静默覆盖（用户以为 MFA 已启用实被回滚）或阻塞至 busy_timeout——与
 	// users/apikeys 写端点同口径 409 fast-fail，先于一切参数解析与身份判定。
 	if rejectWriteDuringImport(c, "执行 MFA 写操作") {
+		return
+	}
+	// 机器身份门：自助 MFA 仅限 JWT 会话（API Key 等机器身份无自助语义，403）。
+	if rejectNonJWTSelfServiceMFA(c) {
 		return
 	}
 	if rejectOIDCUserMFAOperation(c, 0) {
@@ -394,8 +413,11 @@ func (h *Handlers) MFASetup(c *gin.Context) {
 
 // MFAActivate POST /auth/mfa/activate — 验证当前码 → 启用 + 恢复码（仅此一次明文）。
 func (h *Handlers) MFAActivate(c *gin.Context) {
-	// 导入窗口 409（同 MFASetup——五个 MFA 写端点同门）。
+	// 导入窗口 409（同 MFASetup——五个 MFA 写端点同门，先于身份判定）。
 	if rejectWriteDuringImport(c, "执行 MFA 写操作") {
+		return
+	}
+	if rejectNonJWTSelfServiceMFA(c) {
 		return
 	}
 	if rejectOIDCUserMFAOperation(c, 0) {
@@ -477,8 +499,11 @@ func (h *Handlers) MFAActivate(c *gin.Context) {
 // MFADisable POST /auth/mfa/disable — 确认有效验证码后禁用（2026-09 用户裁定：
 // 登录后无密码输入；验码失败只提示不计数，唯一锁定在登录阶段）。
 func (h *Handlers) MFADisable(c *gin.Context) {
-	// 导入窗口 409（同 MFASetup——五个 MFA 写端点同门）。
+	// 导入窗口 409（同 MFASetup——五个 MFA 写端点同门，先于身份判定）。
 	if rejectWriteDuringImport(c, "执行 MFA 写操作") {
+		return
+	}
+	if rejectNonJWTSelfServiceMFA(c) {
 		return
 	}
 	if rejectOIDCUserMFAOperation(c, 0) {
@@ -525,8 +550,11 @@ func (h *Handlers) MFADisable(c *gin.Context) {
 // 补 OIDC 门——五个 MFA 写入口仅此一处缺席，与
 // setup/activate/disable 同为自助端点，targetUserID=0（操作自己，从 JWT 取）。
 func (h *Handlers) MFARecoveryCodes(c *gin.Context) {
-	// 导入窗口 409（同 MFASetup——五个 MFA 写端点同门）。
+	// 导入窗口 409（同 MFASetup——五个 MFA 写端点同门，先于身份判定）。
 	if rejectWriteDuringImport(c, "执行 MFA 写操作") {
+		return
+	}
+	if rejectNonJWTSelfServiceMFA(c) {
 		return
 	}
 	if rejectOIDCUserMFAOperation(c, 0) {
@@ -565,6 +593,9 @@ func (h *Handlers) MFARecoveryCodes(c *gin.Context) {
 
 // MFAVerifyStep POST /auth/mfa/ — 验证码 → 新 JWT（mfa_ts 刷新）。
 func (h *Handlers) MFAVerifyStep(c *gin.Context) {
+	if rejectNonJWTSelfServiceMFA(c) {
+		return
+	}
 	if !guardConfiguredJSONBody(c) {
 		return
 	}

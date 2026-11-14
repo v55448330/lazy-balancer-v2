@@ -1,9 +1,9 @@
 package handlers
 
-// 契约：stage2 子策略拆分时必须继承原策略的可配拦截页（block_page_id=0
-// 与 stage2 可配拦截页口径（2026-09-25 用户裁定）不一致
-// ——G0+G2 组合 mixed 拆分时限流页丢失。修复后 stage2 子策略继承原策略
-// block_page_id（block_status_code 保持归一 0，阶段 2 恒 429 自动语义）。
+// 契约：stage2 子策略拆分时必须继承原策略的可配拦截页（2026-09-25 用户裁定
+// stage2 可配拦截页）——G0+G2 组合 mixed 拆分时拦截页不得丢失。stage2 子策略
+// 继承原策略 block_page_id（block_status_code 保持归一 0，阶段 2 恒 429 自动
+// 语义）；stage0 无拦截页概念，恒 0。
 
 import (
 	"fmt"
@@ -43,7 +43,7 @@ func TestSplitSecurityPolicy_stage2ChildInheritsBlockPage(t *testing.T) {
 		t.Fatalf("split status=%d body=%s, want 200", split.Code, split.Body.String())
 	}
 
-	// Then：配额限流下线后 stage2 子策略不再配置拦截页；stage0 亦不携带
+	// Then：stage2 子策略继承原策略拦截页；stage0 不携带
 	var stage2Page, stage0Page int
 	if err := db.DB.QueryRow(`SELECT COALESCE(block_page_id,0) FROM security_policies WHERE name='拆分母策略（阶段 2）'`).Scan(&stage2Page); err != nil {
 		t.Fatalf("stage2 子策略未创建: %v", err)
@@ -51,8 +51,8 @@ func TestSplitSecurityPolicy_stage2ChildInheritsBlockPage(t *testing.T) {
 	if err := db.DB.QueryRow(`SELECT COALESCE(block_page_id,0) FROM security_policies WHERE name='拆分母策略（阶段 0）'`).Scan(&stage0Page); err != nil {
 		t.Fatalf("stage0 子策略未创建: %v", err)
 	}
-	if stage2Page != 0 {
-		t.Fatalf("stage2 子策略 block_page_id=%d, want 0（阶段 2 不再消费拦截页）", stage2Page)
+	if stage2Page != int(pageID) {
+		t.Fatalf("stage2 子策略 block_page_id=%d, want %d（继承原策略拦截页）", stage2Page, pageID)
 	}
 	if stage0Page != 0 {
 		t.Fatalf("stage0 子策略 block_page_id=%d, want 0（阶段 0 无拦截页概念）", stage0Page)

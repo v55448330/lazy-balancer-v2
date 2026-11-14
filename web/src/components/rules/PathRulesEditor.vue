@@ -172,7 +172,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onMounted } from 'vue'
 import { ArrowDown, ArrowUp, Delete, Plus } from '@element-plus/icons-vue'
 import FieldHelpIcon from '@/components/common/FieldHelpIcon.vue'
 import DialogSectionHeader from '@/components/DialogSectionHeader.vue'
@@ -214,12 +214,33 @@ const rowDiagnostics = computed(() => pathRules.value.map((_, index) => ({
   responseError: pathRuleResponseError(pathRules.value[index]),
 })))
 
-// 负数临时 id 单源(镜像 Rules.vue nextTemporaryPathRuleId)——
-// :key 原按索引回退,moveRule/removeRule 后 key 随索引重排,焦点/输入法组合态
-// 可能落到另一行;负 id 与后端正数 id 空间不相交,提交前由保存链剔除。
+// 负数临时 id 单源（本编辑器独占生成——Rules.vue 不再持有平行计数器，杜绝两份
+// 都从 -1 起 mint 出重复 :key）：:key 原按索引回退，moveRule/removeRule 后 key 随
+// 索引重排，焦点/输入法组合态可能落到另一行；负 id 与后端正数 id 空间不相交，
+// 提交前由保存链剔除。计数器跳过已存在的负 id（复制向导带入的源规则负 id），
+// 保证同一清单内 key 恒唯一。
 let nextTemporaryPathRuleId = -1
+const mintTemporaryPathRuleId = (): number => {
+  const used = new Set(pathRules.value.map((rule) => rule.id))
+  while (used.has(nextTemporaryPathRuleId)) nextTemporaryPathRuleId -= 1
+  const id = nextTemporaryPathRuleId
+  nextTemporaryPathRuleId -= 1
+  return id
+}
+// 缺 id 的行补临时 id（复制/水合可能带入无 id 行）；已有 id（含源规则负 id）不动。
+const ensureTemporaryIds = (): void => {
+  for (const rule of pathRules.value) {
+    if (rule.id === undefined) rule.id = mintTemporaryPathRuleId()
+  }
+}
+// 挂载即为缺 id 行补 id；开关开启时清单为空则播种一条默认前缀规则（保持
+// 「开启自定义路由即有一条可编辑规则」的既有交互，生成单源仍在本编辑器）。
+onMounted(() => {
+  ensureTemporaryIds()
+  if (pathRules.value.length === 0) addRule()
+})
 const addRule = (): void => {
-  pathRules.value.push({ id: nextTemporaryPathRuleId--, match_type: 'prefix', path: '/', upstream_path: '', sort_order: pathRules.value.length, upstreams: null, response_mode: 'forward', response_status: 200, response_body: '', response_content_type: '', redirect_to: '' })
+  pathRules.value.push({ id: mintTemporaryPathRuleId(), match_type: 'prefix', path: '/', upstream_path: '', sort_order: pathRules.value.length, upstreams: null, response_mode: 'forward', response_status: 200, response_body: '', response_content_type: '', redirect_to: '' })
 }
 
 const removeRule = (index: number): void => {

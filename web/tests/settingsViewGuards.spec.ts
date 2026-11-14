@@ -9,7 +9,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { code, repoCode, section } from './_helpers.ts'
+import { code, member, repoCode, section } from './_helpers.ts'
 
 const page = code('src/views/settings/BasicSettings.vue')
 
@@ -31,9 +31,13 @@ test('B 备份行还原/删除有在途门（占位先于确认、按钮联动 l
   assert.ok(guard > 0 && occupy > guard && confirm > occupy, '占位必须先于确认框（双击不得叠两个确认框）')
   assert.match(restore, /finally \{\s*restoringBackupId\.value = null/, '在途态必须在 finally 释放')
 
-  const del = section(page, 'const deleteAutoBackup = async', 'interface ImportValidation')
+  const del = member(page, 'const deleteAutoBackup = async')
   assert.match(del, /if \(backupDisabled\.value \|\| autoBackupActionBusy\.value\) return/)
-  assert.match(del, /deletingBackupId\.value = row\.id[\s\S]*ElMessageBox\.confirm/, '删除同样占位先于确认')
+  // 无界通配能从占位匹配到其后任意处的 confirm 字面量（含 helper 定义/提前
+  // 插入的确认）：改首次出现的位置序——占位必须先于首次确认调用。
+  const occupyAt = del.indexOf('deletingBackupId.value = row.id')
+  const confirmAt = del.indexOf('ElMessageBox.confirm')
+  assert.ok(occupyAt > 0 && confirmAt > occupyAt, '删除同样占位先于确认（首次确认不得先于占位）')
   assert.match(del, /finally \{\s*deletingBackupId\.value = null/)
 
   assert.match(page, /:loading="restoringBackupId === row\.id"/, '还原按钮须呈在途态')

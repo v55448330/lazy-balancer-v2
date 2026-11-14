@@ -9,8 +9,7 @@ import (
 	"lazy-balancer-v2/internal/db"
 )
 
-// 保留给限流(scrapeRateLimitBlocksUncached 限流卡片按 code=429 计数),WAF 拦截
-// 页 429 会混入限流指标口径。写侧白名单已剔除 429(handlers 侧),存量行经
+// 429 已退役，存量行归一 403。写侧白名单已剔除 429(handlers 侧),存量行经
 // legacySecurityEnumBackfills 既有模式归一(security_block_pages 无
 // status_code 列,429 仅可能存于 security_policies,见 createTables 的
 // security_policies DDL 与 legacySecurityEnumBackfills 注释)。

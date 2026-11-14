@@ -27,7 +27,9 @@ func CrawlerAutoUpdateEnabled() bool { return globalTaskAutoUpdateEnabled("crawl
 func ArmCrawlerFirstSlots() { armCrawlerFirstSlots() }
 
 // armCrawlerFirstSlots 爬虫地址库首槽武装：启用自动更新时，空 next_update
-// 的启用源写入独立排程槽；开启业务开关的调用方也必须经过这里。
+// 的注册表内启用源写入独立排程槽；开启业务开关的调用方也必须经过这里。
+// 只武装注册表内的源（与读侧槽域同源，对照 ArmThreatFirstSlots）：注册表外
+// 启用行的槽没有任何推进写点，武装它只会留下惰性槽并与启动期清理互相抵消。
 func armCrawlerFirstSlots() {
 	if db.DB == nil || !CrawlerAutoUpdateEnabled() {
 		return
@@ -36,7 +38,9 @@ func armCrawlerFirstSlots() {
 		Logf("warn", "首槽武装：security_crawler_sources 种子失败: %v", err)
 		return
 	}
-	if _, err := db.DB.Exec(`UPDATE security_crawler_sources SET next_update=? WHERE update_enabled=1 AND COALESCE(next_update,'')=''`, crawlerNextSlot(time.Now().UTC())); err != nil {
+	nameClause, args := sourceNameSetClause("name", crawlerSourceRegistryNames(), false)
+	args = append([]any{crawlerNextSlot(time.Now().UTC())}, args...)
+	if _, err := db.DB.Exec(`UPDATE security_crawler_sources SET next_update=? WHERE update_enabled=1 AND COALESCE(next_update,'')=''`+nameClause, args...); err != nil {
 		Logf("warn", "首槽武装：security_crawler_sources 写入 next_update 失败: %v", err)
 	}
 }

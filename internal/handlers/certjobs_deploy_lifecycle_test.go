@@ -81,7 +81,7 @@ func TestRetryCertJob_deployLifecycleReschedulesInsteadOfReissuing(t *testing.T)
 }
 
 // 反向：同类状态但材料缺失（脏行）才允许回落重新签发路径（此处队列为 nil
-// → 500「CA queue manager not initialized」），不得被误判为部署重排。
+// → 500「CA 队列管理器未初始化」），不得被误判为部署重排。
 func TestRetryCertJob_deployLifecycleWithoutMaterialFallsBackToIssuance(t *testing.T) {
 	h := newBackupTestHandlers(t)
 	services.ResetCAQueueManagerForTest()
@@ -95,7 +95,7 @@ func TestRetryCertJob_deployLifecycleWithoutMaterialFallsBackToIssuance(t *testi
 	router.POST("/jobs/:id/retry", h.RetryCertJob)
 	response := httptest.NewRecorder()
 	router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/jobs/"+strconv.FormatInt(id, 10)+"/retry", nil))
-	if response.Code != http.StatusInternalServerError || !strings.Contains(response.Body.String(), "CA queue manager not initialized") {
+	if response.Code != http.StatusInternalServerError || !strings.Contains(response.Body.String(), "CA 队列管理器未初始化") {
 		t.Fatalf("status=%d body=%s, want 500 回落重新入队路径", response.Code, response.Body.String())
 	}
 }

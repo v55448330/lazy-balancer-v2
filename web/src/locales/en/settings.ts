@@ -97,7 +97,8 @@ export default {
           "tabHttp": "HTTP server",
           "tabProxy": "Reverse proxy",
           "autoRefresh": "Auto-refresh",
-          "refreshBtn": "Refresh"
+          "refreshBtn": "Refresh",
+          "closeBtn": "Close"
         },
         "list": {
           "title": "Save as IP list",
@@ -771,6 +772,7 @@ export default {
         },
         "update": {
           "title": "New version available",
+          "badgeHint": "{title} {version} — click to view",
           "subtitle": "A new version was published; version and changes below",
           "stable": "Stable",
           "beta": "Beta",

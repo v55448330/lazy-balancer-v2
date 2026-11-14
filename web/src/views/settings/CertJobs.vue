@@ -25,7 +25,7 @@
     <el-button link type="primary" @click="manualFilterActive = false">{{ t('app.settings.certJobs.clearFilterBtn') }}</el-button>
   </div>
   <!-- 宽度观测容器：容器变窄时按优先级隐藏低价值列（见 utils/certJobColumns）。
-       收敛下限 619px（不可让位列合计）；更窄时切 overflow-x:auto——「日志/重签」
+       收敛下限 CERT_JOB_COLUMNS_MIN_WIDTH（不可让位列合计，由列宽派生）；更窄时切 overflow-x:auto——「日志/重签」
        操作列可达性优先于无滚动条目标（overflow:hidden 会把操作列硬裁到不可见）。 -->
   <div ref="tableWrapRef" class="cert-jobs-wrap" :class="{ 'cert-jobs-wrap--scroll': tableBelowMinWidth }">
   <el-table
@@ -203,7 +203,7 @@ let disposed = false
 const tableWrapRef = ref<HTMLDivElement | null>(null)
 const tableWrapWidth = ref(Number.POSITIVE_INFINITY)
 const visibleColumns = computed(() => pickVisibleCertJobColumns(tableWrapWidth.value))
-// 最小集（619px）之下表格必然溢出：overflow:hidden 会把「操作」列裁到不可达，
+// 最小集（CERT_JOB_COLUMNS_MIN_WIDTH，由列宽派生）之下表格必然溢出：overflow:hidden 会把「操作」列裁到不可达，
 // 切横向滚动兜底（可达性优先）。
 const tableBelowMinWidth = computed(() => tableWrapWidth.value < CERT_JOB_COLUMNS_MIN_WIDTH)
 let tableWrapObserver: ResizeObserver | null = null
@@ -576,7 +576,7 @@ onUnmounted(() => {
   overflow: hidden;
 }
 .cert-jobs-wrap--scroll {
-  /* 窄于最小集（619px）：列让位已耗尽，恢复横向滚动保住操作列可达 */
+  /* 窄于最小集（CERT_JOB_COLUMNS_MIN_WIDTH）：列让位已耗尽，恢复横向滚动保住操作列可达 */
   overflow-x: auto;
 }
 .cert-jobs-table {

@@ -21,7 +21,8 @@ import (
 // 同一归一化消息 60s 内仅首条放行；不同消息各自计时、立即放行。
 // 限流 map 有界增长——每次放行时清扫已过期（≥60s）条目，仍超上限则
 // 整体重置（各变体至多重复放行一条，无数据影响）；否则内嵌数字参数的变体
-// 消息（见）会无界增加键（最坏 ~43k 键/天）。
+// 消息（如 "ingest live tail [%d, %d) failed"，见 auditFailureThrottleKey）
+// 会无界增加键（最坏 ~43k 键/天）。
 var (
 	auditFailureLogMu    sync.Mutex
 	auditFailureLogTimes = map[string]time.Time{}

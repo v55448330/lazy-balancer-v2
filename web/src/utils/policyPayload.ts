@@ -93,16 +93,18 @@ interface PolicyPayload {
   log_request_body: boolean
   trust_detection: boolean
   policy_type?: string
-  human_verify_mode: string
-  human_verify_type: string
-  human_verify_ttl: number
-  human_exempt_paths: string
-  cc_detect_enabled: boolean
-  cc_rps_limit: number
-  cc_rps_window: number
-  cc_4xx_ratio: number
-  cc_session_anomaly: boolean
-  cc_session_ua_threshold: number
+  // 人机/CC 族：仅 stage2（CC 防护）与 mixed（按内容推断）承载；stage0/1/3/4
+  // 按后端归零矩阵不下发（省略=后端落零值），故为可选键。
+  human_verify_mode?: string
+  human_verify_type?: string
+  human_verify_ttl?: number
+  human_exempt_paths?: string
+  cc_detect_enabled?: boolean
+  cc_rps_limit?: number
+  cc_rps_window?: number
+  cc_4xx_ratio?: number
+  cc_session_anomaly?: boolean
+  cc_session_ua_threshold?: number
 }
 
 /**
@@ -116,6 +118,23 @@ export const trustEnabledForPolicyType = (policyType: string, ipWhitelistEnabled
 
 export const buildPolicyPayload = (input: PolicyPayloadInput): PolicyPayload => {
   const trustEnabled = trustEnabledForPolicyType(input.policyType, input.ipWhitelistEnabled)
+  // 人机/CC 族按后端归零矩阵（outOfStageZeroFamilies）裁剪：stage0/1/3 与旧编号
+  // stage4（读侧已归一 stage3）该族恒落零值——前端不下发（省略=后端落零），不再
+  // 提交一份后端必然丢弃的值并谎称「与后端矩阵同口径」。stage2（CC 防护）与
+  // mixed（不显式提交类型、后端按内容推断、不归零）承载全字段。
+  const carriesHuman = input.policyType === 'stage2' || input.policyType === 'mixed'
+  const humanFields = carriesHuman ? {
+    human_verify_mode: input.humanVerifyMode,
+    human_verify_type: input.humanVerifyType,
+    human_verify_ttl: input.humanVerifyTtl,
+    human_exempt_paths: JSON.stringify(input.humanExemptPaths),
+    cc_detect_enabled: input.ccDetectEnabled,
+    cc_rps_limit: input.ccRpsLimit,
+    cc_rps_window: input.ccRpsWindow,
+    cc_4xx_ratio: input.cc4xxRatio,
+    cc_session_anomaly: input.ccSessionAnomaly,
+    cc_session_ua_threshold: input.ccSessionUaThreshold,
+  } : {}
   return {
     name: input.name,
     description: input.description,
@@ -150,23 +169,10 @@ export const buildPolicyPayload = (input: PolicyPayloadInput): PolicyPayload => 
     trust_detection: input.trustDetection,
     // mixed 不允许显式提交（省略=后端按内容推断）
     policy_type: input.policyType === 'mixed' ? undefined : input.policyType,
-    // 阶段 2/3 人机验证：stage2（CC 防护）与 stage3 承载；其余类型按后端
-    // 「非本阶段能力归零」同口径强制 off/0/关，避免类型切换后残留配置误发射。
-    human_verify_mode: isHumanStage(input.policyType) ? input.humanVerifyMode : 'off',
-    human_verify_type: input.humanVerifyType,
-    human_verify_ttl: input.humanVerifyTtl,
-    human_exempt_paths: JSON.stringify(isHumanStage(input.policyType) ? input.humanExemptPaths : []),
-    cc_detect_enabled: isHumanStage(input.policyType) && input.ccDetectEnabled,
-    cc_rps_limit: input.ccRpsLimit,
-    cc_rps_window: input.ccRpsWindow,
-    cc_4xx_ratio: input.cc4xxRatio,
-    cc_session_anomaly: isHumanStage(input.policyType) && input.ccSessionAnomaly,
-    cc_session_ua_threshold: input.ccSessionUaThreshold,
+    // 人机/CC 族：仅 stage2/mixed 承载（见上方 carriesHuman 裁剪注释）。
+    ...humanFields,
   }
 }
-
-/** 阶段 2/3（人机验证/CC）能力域；mixed 可能含 WAF 但不含人机验证阶段（后端同口径归零） */
-const isHumanStage = (policyType: string): boolean => policyType === 'stage2' || policyType === 'stage3'
 
 /**
  * 爬虫豁免「空引擎」守卫。
@@ -191,14 +197,14 @@ export const crawlerExemptionNeedsEngines = (state: {
  * 永不发起挑战，CC 阈值形同虚设（与 ccEnabledTip「仅在人机验证开启时生效」
  * 同口径）。保存照常放行（警告不阻断），由调用方就近提示用户。
  *
- * 入参 ccDetectEnabled 取**载荷侧**值（buildPolicyPayload 已按类型裁剪：
- * 非 stage2/stage3 恒 false）——故 stage0/1/mixed 即便表单残留 CC 开关也不误报。
+ * 入参 ccDetectEnabled 取**表单侧**值；类型门保持既有口径（stage2/stage3），
+ * 载荷侧裁剪（carriesHuman）不改变本谓词——stage0/1/mixed 即便表单残留 CC 开关也不误报。
  */
 export const ccDetectWithoutHumanWarning = (state: {
   policyType: string
   ccDetectEnabled: boolean
   humanVerifyMode: string
-}): boolean => isHumanStage(state.policyType) && state.ccDetectEnabled && state.humanVerifyMode === 'off'
+}): boolean => (state.policyType === 'stage2' || state.policyType === 'stage3') && state.ccDetectEnabled && state.humanVerifyMode === 'off'
 
 /**
  * 阶段 2 挑战页组件占位符校验（保存门与提示线共用单源）。

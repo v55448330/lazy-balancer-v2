@@ -16,6 +16,11 @@ import (
 	"lazy-balancer-v2/internal/db"
 )
 
+// TestTaskRunReadsDBHandleOncePerFunction 单次快照不变量的唯一 AST 守卫
+// （表驱动）：taskrun.go 每个函数体内 db.DB 至多一次；角色判定/started_at
+// 读取两个关键函数必须恰一次（函数被删除/重命名同样红——守卫对象漂移不得
+// 静默空转）。注释中的提及不构成 AST 节点，字符串字面量是 BasicLit 而非
+// SelectorExpr，口径即「真实的句柄直读次数」。
 func TestTaskRunReadsDBHandleOncePerFunction(t *testing.T) {
 	fset := token.NewFileSet()
 	file, err := parser.ParseFile(fset, "taskrun.go", nil, 0)
@@ -25,18 +30,17 @@ func TestTaskRunReadsDBHandleOncePerFunction(t *testing.T) {
 	countDBReads := func(body *ast.BlockStmt) int {
 		n := 0
 		ast.Inspect(body, func(node ast.Node) bool {
-			sel, ok := node.(*ast.SelectorExpr)
-			if !ok {
-				return true
-			}
-			ident, ok := sel.X.(*ast.Ident)
-			if ok && ident.Name == "db" && sel.Sel.Name == "DB" {
-				n++
+			if sel, ok := node.(*ast.SelectorExpr); ok {
+				if ident, ok := sel.X.(*ast.Ident); ok && ident.Name == "db" && sel.Sel.Name == "DB" {
+					n++
+				}
 			}
 			return true
 		})
 		return n
 	}
+	// 关键函数必须存在且恰一次快照（原命名版守卫的超集语义并入本表）。
+	exactlyOnce := map[string]bool{"updateRunRole": false, "taskRunStartedAt": false}
 	checked := 0
 	for _, decl := range file.Decls {
 		fn, ok := decl.(*ast.FuncDecl)
@@ -44,12 +48,24 @@ func TestTaskRunReadsDBHandleOncePerFunction(t *testing.T) {
 			continue
 		}
 		checked++
-		if got := countDBReads(fn.Body); got > 1 {
-			t.Fatalf("%s 内 db.DB 取值 %d 次（判定与使用必须共用 `database := db.DB` 的单次快照，双读在两次读取之间被置 nil 时会 panic）", fn.Name.Name, got)
+		got := countDBReads(fn.Body)
+		if got > 1 {
+			t.Errorf("%s 内 db.DB 取值 %d 次（判定与使用必须共用 `database := db.DB` 的单次快照，双读在两次读取之间被置 nil 时会 panic）", fn.Name.Name, got)
+		}
+		if _, critical := exactlyOnce[fn.Name.Name]; critical {
+			exactlyOnce[fn.Name.Name] = true
+			if got != 1 {
+				t.Errorf("%s 体内 db.DB 出现 %d 次（必须恰 1 次：单次快照，判定与使用共用同一句柄）", fn.Name.Name, got)
+			}
 		}
 	}
 	if checked == 0 {
 		t.Fatal("taskrun.go 无可检查函数——守卫空洞")
+	}
+	for name, found := range exactlyOnce {
+		if !found {
+			t.Errorf("taskrun.go 缺少函数 %s——守卫对象漂移，请随重构更新守卫目标", name)
+		}
 	}
 }
 

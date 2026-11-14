@@ -179,7 +179,9 @@ test('接线钉：版本行徽标经 AccessibleLink 键盘可达，文案与弹�
   assert.ok(badge.includes('v-if="updateAvailable"'), '徽标仅在有更新时渲染')
   assert.ok(badge.includes('<AccessibleLink'), '徽标必须是键盘可达组件（AccessibleLink）')
   assert.ok(badge.includes('@click="openUpdateDialog"'), '点击打开弹框')
-  assert.ok(badge.includes("t('app.settings.basic.update.title')") && badge.includes('{{ updateBadgeVersion }}') && badge.includes('，点击查看'), '徽标文案')
+  // 徽标文案词条化（badgeHint 参数化 title/version）：调用点钉键 + zh 母本钉原文。
+  assert.ok(badge.includes("t('app.settings.basic.update.badgeHint'") && badge.includes('version: updateBadgeVersion'), '徽标文案走 badgeHint 词条（title/version 参数化）')
+  assert.ok(code('src/locales/zh/settings.ts').includes('"badgeHint": "{title} {version}，点击查看"'), '徽标原文必须在 zh 母本词条中')
 })
 
 test('接线钉：弹框 = DialogHeader + el-tabs，无更新内容的 tab 隐藏，说明插值渲染', () => {

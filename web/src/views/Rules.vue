@@ -549,7 +549,7 @@
               <div v-if="certInfo.valid || certInfo.warning || certInfo.error" class="cert-info-container">
                 <div v-if="certInfo.valid" class="info-note-bar cert-info-alert">
                   <span class="info-note-desc">{{ certInfo.warning ? t('common.app.rules.wizard.certVerifyPassedWarned') : t('common.app.rules.wizard.certVerifyPassed') }}</span>
-                  <span class="info-note-sub">{{ t('common.app.rules.wizard.certDomainPrefix') }}{{ certInfo.domain }} | {{ t('common.app.rules.wizard.expiryPrefix') }}{{ certInfo.expiryDate }} <span v-if="certInfo.daysUntilExpiry <= 30" class="cert-expiry-warning">{{ t('common.app.rules.wizard.daysLeftParen', { n: certInfo.daysUntilExpiry }) }}</span><span v-else class="cert-expiry-normal">(剩余 {{ certInfo.daysUntilExpiry }} 天)</span></span>
+                  <span class="info-note-sub">{{ t('common.app.rules.wizard.certDomainPrefix') }}{{ certInfo.domain }} | {{ t('common.app.rules.wizard.expiryPrefix') }}{{ certInfo.expiryDate }} <span v-if="certInfo.daysUntilExpiry <= 30" class="cert-expiry-warning">{{ t('common.app.rules.wizard.daysLeftParen', { n: certInfo.daysUntilExpiry }) }}</span><span v-else class="cert-expiry-normal">{{ t('common.app.rules.wizard.daysLeftParen', { n: certInfo.daysUntilExpiry }) }}</span></span>
                   <span v-if="certInfo.warning" class="info-note-sub">⚠️ {{ certInfo.warning }}</span>
                 </div>
                 <div v-if="certInfo.error" class="info-note-bar cert-info-alert"><span class="info-note-desc">{{ certInfo.error }}</span></div>
@@ -1985,7 +1985,6 @@ const currentStep = ref<WizardStep>(WIZARD_STEP.BASIC)
 watch(currentStep, () => window.dispatchEvent(new Event('resize')))
 watch(wizardVisible, (v) => { if (v) setTimeout(() => window.dispatchEvent(new Event('resize')), 80) })
 const upstreamTouched = ref<boolean[]>([])
-let nextTemporaryPathRuleId = -1
 const certConfigs = ref<CertificateConfig[]>([])
 const caProviders = ref<CAProvider[]>([])
 // 启用项 ∪ 当前选中项（存量规则指向已禁用项时回显「名称（已禁用）」灰态选项，
@@ -2365,15 +2364,6 @@ const wizardForm = reactive<RuleForm>({
   proxy_flush_interval: 0,
   proxy_stream_close_delay: 0,
 })
-
-watch(() => wizardForm.path_rules, (pathRules) => {
-  pathRules.forEach((pathRule) => {
-    if (pathRule.id === undefined) {
-      pathRule.id = nextTemporaryPathRuleId
-      nextTemporaryPathRuleId -= 1
-    }
-  })
-}, { deep: true })
 
 let hydratingWizard = false
 // 向导打开序列号——丢弃编辑/复制在途 GET 的过期返回，防止覆盖新建表单。
@@ -3083,10 +3073,8 @@ const removeUpstream = (index: number) => {
 }
 
 const onCustomRoutesToggle = (enabled: string | number | boolean): void => {
-  if (Boolean(enabled) && wizardForm.path_rules.length === 0) {
-    wizardForm.path_rules.push({ id: nextTemporaryPathRuleId, match_type: 'prefix', path: '/', upstream_path: '', sort_order: 0, upstreams: null, response_mode: 'forward', response_status: 200, response_body: '', response_content_type: '', redirect_to: '' })
-    nextTemporaryPathRuleId -= 1
-  }
+  // 开启时不再在此 mint 临时 id 播种——默认规则与临时 id 生成单源在 PathRulesEditor
+  // （挂载时空清单自动播种一条），杜绝父级平行计数器与编辑器计数器撞 key。
   if (!enabled) wizardForm.path_rules = []
 }
 

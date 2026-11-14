@@ -7,7 +7,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { code, member, repoCode, section, source } from './_helpers.ts'
+import { code, cssDeclarations, member, repoCode, section, source } from './_helpers.ts'
 import { bucketTerminology } from '../src/utils/threatScreenMetrics.ts'
 
 test('规则向导切 TCP 清空动态上游与 DNS 字段（隐藏控件不得留下恒拒残留）', () => {
@@ -304,15 +304,19 @@ test('规则库四库回刷：silent 拉取 + 每库请求序号守卫', () => {
 })
 
 test('样式契约收敛：scoped 重复删除、main.css 合并、死重量清理', () => {
-  for (const file of ['src/views/Rules.vue', 'src/views/settings/CertJobs.vue', 'src/views/AuditLog.vue']) {
-    assert.doesNotMatch(
-      code(file),
-      /^\.polling-error-alert \{ margin-bottom: 16px; \}$/m,
-      `${file} 仍逐字重复全局 .polling-error-alert`,
-    )
+  // 逐字单行正则双向失真：多行排版的重复声明加回仍绿（假绿），单源换行
+  // 重排即假红。改 cssDeclarations 声明集口径：样式证据与排版形态无关。
+  const hasPollingAlertRule = (text: string): boolean => {
+    try {
+      return cssDeclarations(text, '.polling-error-alert').size > 0
+    } catch {
+      return false // 无该选择器规则（缺失即抛错）
+    }
   }
-  const css = code('src/styles/main.css')
-  assert.match(css, /^\.polling-error-alert \{ margin-bottom: 16px; \}$/m, '全局单源必须保留')
+  for (const file of ['src/views/Rules.vue', 'src/views/settings/CertJobs.vue', 'src/views/AuditLog.vue']) {
+    assert.equal(hasPollingAlertRule(code(file)), false, `${file} 不得再局部定义全局 .polling-error-alert（任何排版形态）`)
+  }
+  assert.equal(cssDeclarations(code('src/styles/main.css'), '.polling-error-alert').get('margin-bottom'), '16px', '全局单源必须保留 margin-bottom: 16px')
   assert.doesNotMatch(code('src/views/security/SecurityPolicies.vue'), /mb-5/, 'mb-5 被同权重后置声明覆盖，属死重量')
 })
 

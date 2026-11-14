@@ -69,6 +69,20 @@ function readQuotedField(raw: string, start: number): { text: string; next: numb
 export const ipListRemarkMaxLength = 100
 
 /**
+ * 备注控制字符门（与后端 hasIPListRemarkControlChar 同判据）：C0（<0x20，含
+ * \n \r \t）、DEL（0x7f）、C1（0x80-0x9f）。备注是单行展示/导出字段，控制字符
+ * 无正常用途；后端写侧必拒（400），导入侧前置拦截避免「导入成功保存才 400」。
+ * 按 code point 遍历（与后端 for-range rune 同口径）。
+ */
+function hasRemarkControlChar(remark: string): boolean {
+  for (const ch of remark) {
+    const r = ch.codePointAt(0) ?? 0
+    if (r < 0x20 || r === 0x7f || (r >= 0x80 && r <= 0x9f)) return true
+  }
+  return false
+}
+
+/**
  * 引号字段闭合后的剩余部分：三形态——「空白 + 单个逗号 + 备注」「纯空白」
  * 「空白 + 备注（无逗号，与非引号分支的空白分隔对齐）」；其余残留返回 null
  * （整行按非法拒绝——闭合引号后直接粘连的残片不得并入备注）。旧实现把首
@@ -130,6 +144,8 @@ export function parseIpListEntryLine(
   // 导出侧为防表格软件求值而前置的单引号在此对称剥离（未悬挂公式字符的字面
   // 单引号原样保留）——往返逐字相等。
   remark = readUnneutralized(remark)
+  // 控制字符门在最终备注值上判（含引号包裹内的 \t 等）——后端写侧同判据必拒。
+  if (hasRemarkControlChar(remark)) return null
   if (Array.from(remark).length > ipListRemarkMaxLength) {
     return { error: 'remark_too_long' }
   }

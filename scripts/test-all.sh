@@ -29,7 +29,7 @@ for arg in "$@"; do
       exit 0
       ;;
     *)
-      echo "未知参数: ${arg}（可用 --fast / --full / --help）" >&2
+      echo "未知参数: ${arg}（可用 --fast / --fast-deep / --full / --help）" >&2
       exit 2
       ;;
   esac

@@ -14,8 +14,14 @@ func TestStage2PolicyDoesNotEmitRetiredRateLimitHandler(t *testing.T) {
 	if _, err := database.Exec(`INSERT INTO security_policies (name,mode,policy_type,human_verify_mode,enabled) VALUES ('legacy-cc','blocking','stage2','force',1)`); err != nil {
 		t.Fatalf("seed legacy rate-limit policy: %v", err)
 	}
-	if _, err := database.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id,policy_id) SELECT 'rule-http', id FROM security_policies WHERE name='legacy-rl'`); err != nil {
+	bindResult, err := database.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id,policy_id) SELECT 'rule-http', id FROM security_policies WHERE name='legacy-cc'`)
+	if err != nil {
 		t.Fatalf("bind legacy policy: %v", err)
+	}
+	// 前置断言：夹具必须真实绑定 1 行——名字错配时 SELECT 插 0 行，
+	// 「无 rate_limit」断言对空策略链恒真（空转假绿）。
+	if n, _ := bindResult.RowsAffected(); n != 1 {
+		t.Fatalf("legacy policy bound rows=%d, want 1（夹具名错配会让断言空转）", n)
 	}
 	rule := baseHTTPRule()
 

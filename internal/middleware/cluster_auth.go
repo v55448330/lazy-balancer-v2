@@ -68,6 +68,14 @@ func registrationAuth(database *sql.DB) gin.HandlerFunc {
 	}
 }
 
+// RecordRegistrationStatusRejection 注册状态轮询的 handler 级凭证拒绝留痕
+// （registrationAuth 中间件已验过密钥，但 RegistrationStatus 在事务内复核
+// 哈希/有效期——审批窗口内密钥轮换/到期后的残留凭证在此被拒）。与中间件
+// 同族共用一分钟去重限流器（reason/path/ip 键），洪水期审计有界。
+func RecordRegistrationStatusRejection(c *gin.Context) {
+	recordAuthenticationRejection(c, "registration_status_secret_invalid")
+}
+
 // bearerToken 从 Authorization 头提取 Bearer 令牌。解析规则单源在 apikey 包
 // 的 BearerToken（clusterTokenAuth / registrationAuth / jwtAuth / 凭据指纹
 // 共用；API Key 传输由 apikey 包按同一 Fields 口径解析），此处只作薄包装，

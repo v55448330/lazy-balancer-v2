@@ -1328,6 +1328,26 @@ func TestAPIDocRoutes_mfaWriteEndpointsDocumentImportWindowAndOIDC(t *testing.T)
 	}
 }
 
+// MFA 自助端点仅 JWT 会话：机器身份（API Key）403 必须进错误表与描述——
+// 文档若只写 OIDC 403，按文档编排的自动化会把可写 Key 当成合法调用方。
+func TestAPIDocRoutes_mfaSelfServiceEndpointsDocumentMachineIdentityRejection(t *testing.T) {
+	for _, key := range []string{
+		"POST /auth/mfa/setup",
+		"POST /auth/mfa/activate",
+		"POST /auth/mfa/disable",
+		"POST /auth/mfa/recovery-codes",
+		"POST /auth/mfa/verify-step",
+	} {
+		route := routesEntry(t, key)
+		if !containsRouteError(route.Errors, "403") {
+			t.Errorf("%s errors=%v, want 403（机器身份拒绝）", key, route.Errors)
+		}
+		if !strings.Contains(route.Description, "JWT") || !strings.Contains(route.Description, "机器身份") {
+			t.Errorf("%s description=%q, want 交代仅 JWT 会话/机器身份拒绝", key, route.Description)
+		}
+	}
+}
+
 // 分页/时间参数校验 400：安全事件与证书任务列表对非法 page/page_size 与
 // 无效/倒置时间区间返回 400（非静默忽略），错误表必须登记。
 func TestAPIDocRoutes_paginatedReadsDocumentValidation400(t *testing.T) {
@@ -3314,6 +3334,9 @@ func TestAPIDocs_certJobRetryCauseEnumerationParity(t *testing.T) {
 	extract(body, `Code: (409|500|http\.StatusConflict|http\.StatusInternalServerError), Message: "([^"]+)"`)
 	extract(cooldownBody, `return true, (http\.StatusConflict), "([^"]+)"`)
 	extract(deployBody, `return (http\.StatusConflict|http\.StatusInternalServerError), "([^"]+)"`)
+	// 5xx 统一写点形态：writeInternalError(c, status, "固定中文", cause)——
+	// 消息是第 3 参（第 4 参 cause 可能是 errors.New("英文")，不得误抽）。
+	extract(body, `writeInternalError\(c, (http\.StatusInternalServerError), "([^"]+)"`)
 	for _, m := range regexp.MustCompile(`message \+ "([^"]+)"`).FindAllStringSubmatch(deployBody, -1) {
 		exits = append(exits, rejection{code: "409/500", message: m[1]})
 	}
@@ -3325,10 +3348,7 @@ func TestAPIDocs_certJobRetryCauseEnumerationParity(t *testing.T) {
 	retry := routesEntry(t, "POST /certificates/jobs/:id/retry")
 	retryText := retry.Description + "\x00" + strings.Join(retry.Errors, "\x00")
 	union := triggerText + "\x00" + retryText
-	registered := map[string]string{
-		"CA queue manager not initialized": "队列管理器未初始化",
-		"Failed to enqueue retry":          "入队失败",
-	}
+	registered := map[string]string{}
 	for _, exit := range exits {
 		fragment := exit.message
 		if mapped, ok := registered[exit.message]; ok {

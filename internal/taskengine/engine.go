@@ -297,6 +297,14 @@ func init() {
 	schedSlotEvalFloor.Store(int64(time.Minute))
 }
 
+// SchedSlotEvalFloorForTest 跨包测试缝：设置槽重评地板周期并返回原值
+// （services 接线钉测把分钟级地板拉进 tick 量级，驱动真实 EnabledFn 求值）。
+// 生产零调用；调用方必须在 cleanup 写回原值（与包内测试同契约）。
+func SchedSlotEvalFloorForTest(d time.Duration) time.Duration {
+	old := schedSlotEvalFloor.Swap(int64(d))
+	return time.Duration(old)
+}
+
 func NewEngine(opts Options) *Engine {
 	if opts.TickInterval <= 0 {
 		opts.TickInterval = time.Second

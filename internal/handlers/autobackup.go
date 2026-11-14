@@ -190,12 +190,18 @@ func nextAutoBackupFilename(ctx context.Context, dir, trigger string, now time.T
 		}
 		var exists int
 		if db.DB != nil {
-			var queryErr error
-			queryErr = db.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM auto_backups WHERE filename=?`, name).Scan(&exists)
-			if queryErr != nil && ctx.Err() != nil {
-				return "", ctx.Err()
+			queryErr := db.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM auto_backups WHERE filename=?`, name).Scan(&exists)
+			if queryErr != nil {
+				if ctx.Err() != nil {
+					return "", ctx.Err()
+				}
+				// 非取消类 DB 失败不得按「名可用」放行（fail-open）：占名检查
+				// 失效时分配的名字可能已被 auto_backups 行占用——两行共享一份
+				// 文件，裁剪按行删文件会误删他人备份。fail-visible 让本轮备份
+				// 落 failed 行，库恢复后自然重试。
+				return "", fmt.Errorf("检查备份文件名占用 %s: %w", name, queryErr)
 			}
-			if queryErr == nil && exists > 0 {
+			if exists > 0 {
 				continue
 			}
 		}
@@ -541,7 +547,15 @@ func (h *Handlers) RunAutoBackupOnce(ctx context.Context, trigger, operator stri
 // —— HTTP 端点 ——
 
 func (h *Handlers) requireAutoBackupMaster(c *gin.Context) bool {
-	isMaster, err := h.clusterService.IsMaster(c.Request.Context())
+	if !h.requireClusterService(c) {
+		return false
+	}
+	// 角色读脱离客户端生命周期（与 requireMasterNode 同口径）：请求 ctx 已
+	// 取消时 IsMaster 会把「客户端断开」误报成角色查询失败——响亮 500 把排障
+	// 指向集群角色，实际只是前端超时/关页。2s 上限防库故障无限挂起。
+	roleCtx, cancel := context.WithTimeout(context.WithoutCancel(c.Request.Context()), 2*time.Second)
+	isMaster, err := h.clusterService.IsMaster(roleCtx)
+	cancel()
 	return requireMasterResult(c, isMaster, err, masterGateOptions{
 		queryFailure: "节点角色查询失败",
 		forbidden:    "仅主节点支持管理自动备份",

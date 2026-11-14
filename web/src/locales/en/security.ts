@@ -134,8 +134,6 @@ export default {
      "labelContent": "Content",
      "labelJson": "API body (JSON)",
      "tabHtml": "Browser · HTML",
-     "jsonPlaceholder": "Leave empty, or paste a valid JSON object (e.g. with code and message fields)",
-     "jsonAutoPlaceholder": "(empty: minimal JSON generated from status code)",
      "jsonTip": "Leave empty to derive a default JSON message from the page title; no status code inside (HTTP status expresses it). The policy\'s Block response setting decides whether HTML or JSON is actually returned.",
      "editorAria": "Block page content",
            "insertHumanWidget": "Insert slider widget",
@@ -155,10 +153,6 @@ export default {
      "subtitle": "Preview the response content the client receives in an isolated sandbox",
      "effectTitle": "Rendered page",
      "emptyContent": "(no content)"
-    },
-    "contentTypeOptions": {
-     "html": "HTML page (text/html)",
-     "plainText": "Plain text (text/plain)"
     },
     "messages": {
      "jsonInvalid": "API body is not valid JSON — fix it before saving",
@@ -527,7 +521,6 @@ export default {
     "tabRules": "Matched rules",
     "noTargetData": "No target data",
     "noData": "No data",
-    "windowIndependent": "Not affected by window",
     "trendTitle": "{window} event trend",
     "totalLabel": "Total",
     "histTooltip": "{label} — {count} hits",

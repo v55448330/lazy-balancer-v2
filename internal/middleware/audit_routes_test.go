@@ -44,7 +44,7 @@ func TestSetupRouter_writeRoutesHaveExplicitAuditClassification(t *testing.T) {
 		// 大屏流量采集租约：UI 生命周期内部动作，显式 skip。
 		"POST /api/v1/security/overview/threat-screen/collector":   {},
 		"DELETE /api/v1/security/overview/threat-screen/collector": {},
-		// 任务触发：已升 Explicit——12 个可触发族中 7 族
+		// 任务触发：已升 Explicit——24 个可触发族中 18 族
 		// 任务体零审计，handler 对非自记族显式补记「触发/任务监控」（自记族
 		// 跳过，保 单记裁定），不再属有意跳过。
 	}

@@ -92,7 +92,7 @@ export const trustedProxyRangesError = (values: readonly string[]): string => {
   const problems = values
     .map((value) => ({ value: value.trim(), error: trustedProxyRangeError(value) }))
     .filter((item) => item.error !== '')
-  const parts = problems.map((item) => `${item.value || '(空)'}（${item.error}）`)
+  const parts = problems.map((item) => `${item.value || t('common.app.trustedProxy.emptyPlaceholder')}（${item.error}）`)
   if (values.length > TRUSTED_PROXY_MAX_INLINE_ENTRIES) {
     parts.push(t('common.app.trustedProxy.inlineEntryLimit', { max: TRUSTED_PROXY_MAX_INLINE_ENTRIES, current: values.length }))
   }
@@ -118,7 +118,7 @@ export const trustedProxyHeadersError = (values: readonly string[]): string => {
   const parts = values
     .map((value) => ({ value, error: trustedProxyHeaderError(value) }))
     .filter((item) => item.error !== '')
-    .map((item) => `${item.value || '(空)'}（${item.error}）`)
+    .map((item) => `${item.value || t('common.app.trustedProxy.emptyPlaceholder')}（${item.error}）`)
   const uniqueCount = new Set(values.map((value) => value.toLowerCase())).size
   if (uniqueCount > TRUSTED_PROXY_MAX_HEADERS) {
     const merged = uniqueCount < values.length ? t('common.app.trustedProxy.headerMergedNote') : ''
@@ -161,7 +161,7 @@ export const trustedProxyReferencedRangesError = (
     if (ref.values === null) continue
     for (const value of ref.values) {
       const error = trustedProxyRangeError(value)
-      if (error) problems.push(t('common.app.trustedProxy.refEntryProblem', { name: ref.name, value: value.trim() || '(空)', error }))
+      if (error) problems.push(t('common.app.trustedProxy.refEntryProblem', { name: ref.name, value: value.trim() || t('common.app.trustedProxy.emptyPlaceholder'), error }))
     }
   }
   return problems.length === 0 ? '' : t('common.app.trustedProxy.rangesUnavailable', { details: problems.join('；') })

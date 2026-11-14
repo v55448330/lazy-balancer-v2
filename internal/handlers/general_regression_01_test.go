@@ -191,12 +191,16 @@ func TestValidateConfig_fallbackRestoresAuthoritativeConfigOnRejection(t *testin
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/config/":
 			_, _ = w.Write([]byte(`{}`))
-		case r.Method == http.MethodPost && r.URL.Path == "/load" && r.URL.Query().Get("validate") == "true":
-			validateCalls++
-			http.Error(w, "invalid config", http.StatusBadRequest)
 		case r.Method == http.MethodPost && r.URL.Path == "/load":
-			restoreCalls++
-			w.WriteHeader(http.StatusOK)
+			// 验证 /load 不再带 ?validate=true（真实加载）——按调用序分发：
+			// 首次=验证（Caddy 拒绝），二次=回弹权威配置。
+			if validateCalls == 0 {
+				validateCalls++
+				http.Error(w, "invalid config", http.StatusBadRequest)
+			} else {
+				restoreCalls++
+				w.WriteHeader(http.StatusOK)
+			}
 		default:
 			w.WriteHeader(http.StatusOK)
 		}
@@ -226,23 +230,28 @@ func TestValidateConfig_fallbackRestoresAuthoritativeConfigOnRejection(t *testin
 // 500 而非伪装成「配置无效」400。
 func TestValidateConfig_fallbackTransportError500_andRestores(t *testing.T) {
 	newBackupTestHandlers(t)
-	var restoreCalls int
+	var loadCalls, restoreCalls int
 	fakeCaddy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/config/":
 			_, _ = w.Write([]byte(`{}`))
-		case r.Method == http.MethodPost && r.URL.Path == "/load" && r.URL.Query().Get("validate") == "true":
-			if hijacker, ok := w.(http.Hijacker); ok {
-				conn, _, err := hijacker.Hijack()
-				if err == nil {
-					_ = conn.Close()
-					return
-				}
-			}
-			w.WriteHeader(http.StatusInternalServerError)
 		case r.Method == http.MethodPost && r.URL.Path == "/load":
-			restoreCalls++
-			w.WriteHeader(http.StatusOK)
+			// 验证 /load 不再带 ?validate=true——按调用序分发：首次=验证
+			// （传输错误：劫持连接即闭），二次=回弹权威配置。
+			loadCalls++
+			if loadCalls == 1 {
+				if hijacker, ok := w.(http.Hijacker); ok {
+					conn, _, err := hijacker.Hijack()
+					if err == nil {
+						_ = conn.Close()
+						return
+					}
+				}
+				w.WriteHeader(http.StatusInternalServerError)
+			} else {
+				restoreCalls++
+				w.WriteHeader(http.StatusOK)
+			}
 		default:
 			w.WriteHeader(http.StatusOK)
 		}

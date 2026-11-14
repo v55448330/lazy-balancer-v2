@@ -188,11 +188,11 @@ func autoBackupDayHigh(freq string) int {
 }
 
 // normalizeAutoBackupDay 把读到的 day 收敛到 1..autoBackupDayHigh(freq)，越界
-// 回退 DB 默认 1——与 handlers 读侧 「越界存量值回退默认」同口径，保证
-// 「UI 显示的即生效值」。
+// 回退 db.DefaultAutoBackupDay（与建库 DEFAULT/补列登记同源，默认值变更不漂移）
+// ——与 handlers 读侧「越界存量值回退默认」同口径，保证「UI 显示的即生效值」。
 func normalizeAutoBackupDay(freq string, day int) int {
 	if day < 1 || day > autoBackupDayHigh(freq) {
-		return 1
+		return db.DefaultAutoBackupDay
 	}
 	return day
 }

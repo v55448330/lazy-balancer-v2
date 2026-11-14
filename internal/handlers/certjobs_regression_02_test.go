@@ -138,7 +138,7 @@ func TestDeleteCertJob_concurrent_status_change_returns_409(t *testing.T) {
 
 func TestDeleteCertJob_row_disappearing_before_disable_returns_404(t *testing.T) {
 	// CAS 命中 0 行且重读发现行已不存在（并发删除），按 handler 对
-	// 缺失任务的既有语义返回 404，而非 500「Failed to verify disabled job」。
+	// 缺失任务的既有语义返回 404，而非 500「校验证书任务禁用结果失败」。
 	// Given
 	h := newBackupTestHandlers(t)
 	if _, err := db.DB.Exec(`INSERT INTO cert_jobs (rule_id,domain,status) VALUES ('lb_gone','gone.example.test','validating')`); err != nil {

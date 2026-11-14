@@ -5,6 +5,8 @@
 package i18n
 
 import (
+	"math"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -79,18 +81,12 @@ func negotiate(header string) string {
 		if j := strings.IndexByte(part, ';'); j >= 0 {
 			lang = part[:j]
 			if v := strings.TrimSpace(part[j+1:]); strings.HasPrefix(v, "q=") {
-				fmt := strings.TrimPrefix(v, "q=")
-				switch fmt {
-				case "0":
-					q = 0
-				case "0.5":
-					q = 0.5
-				case "0.7":
-					q = 0.7
-				case "0.8":
-					q = 0.8
-				case "0.9":
-					q = 0.9
+				// q 按 RFC 9110 解析为 [0,1] 实数:硬编码集外的 q(0.3/0.95…)
+				// 此前默认 1.0,语言排序失真。非法/NaN 按 0(该候选不优先),
+				// 越界钳到 [0,1]。
+				q = 0
+				if parsed, perr := strconv.ParseFloat(strings.TrimPrefix(v, "q="), 64); perr == nil && !math.IsNaN(parsed) {
+					q = math.Min(1, math.Max(0, parsed))
 				}
 			}
 		}
@@ -118,18 +114,6 @@ func Register(key, zh, en string) {
 	mu.Lock()
 	defer mu.Unlock()
 	catalog[key] = [2]string{zh, en}
-}
-
-// CatalogKeysForTest 供测试断言 catalog 键唯一性(唯一性守卫):
-// 重复 Register 为 map 覆盖语义,单边编辑副本会静默分叉——测试侧机械断言防回归。
-func CatalogKeysForTest() []string {
-	mu.RLock()
-	defer mu.RUnlock()
-	keys := make([]string, 0, len(catalog))
-	for k := range catalog {
-		keys = append(keys, k)
-	}
-	return keys
 }
 
 // T 查词条;缺译/未知键回落 key 本身(调用方通常已把消息原文存为 key 场景外)。
@@ -181,10 +165,39 @@ func TrErr(msg, lang string) string {
 
 func isZh(r rune) bool { return r >= 0x4E00 && r <= 0x9FFF }
 
+// splitTplPlaceholders 按 %s 占位符切分模板为字面量段；%% 是转义的百分号
+// 字面量（fmt 渲染后为单个 %），不是占位符——裸 strings.Split 会把 %%s 形态
+// 的 "%s" 误判成占位符，含百分号字面量的模板（可解析率 50%% 等）永不命中。
+// 返回 len(占位符)+1 个字面量段。
+func splitTplPlaceholders(tpl string) []string {
+	var parts []string
+	var lit strings.Builder
+	for i := 0; i < len(tpl); i++ {
+		if tpl[i] != '%' {
+			lit.WriteByte(tpl[i])
+			continue
+		}
+		if i+1 < len(tpl) && tpl[i+1] == '%' {
+			lit.WriteByte('%')
+			i++
+			continue
+		}
+		if i+1 < len(tpl) && tpl[i+1] == 's' {
+			parts = append(parts, lit.String())
+			lit.Reset()
+			i++
+			continue
+		}
+		lit.WriteByte('%')
+	}
+	parts = append(parts, lit.String())
+	return parts
+}
+
 // matchTpl 尝试把 msg 按 zh 模板(占位符 %s)切开并按 en 模板重装。
 // 仅支持 %s 占位;字面量必须全序对齐,尾字面量必须闭合到串尾。
 func matchTpl(msg, zhTpl, enTpl string) (string, bool) {
-	parts := strings.Split(zhTpl, "%s")
+	parts := splitTplPlaceholders(zhTpl)
 	n := len(parts)
 	if n < 2 {
 		return "", false
@@ -217,7 +230,7 @@ func matchTpl(msg, zhTpl, enTpl string) (string, bool) {
 	if rest != "" {
 		return "", false
 	}
-	enParts := strings.Split(enTpl, "%s")
+	enParts := splitTplPlaceholders(enTpl)
 	if len(enParts) != n {
 		return "", false
 	}

@@ -243,6 +243,7 @@ func serveUserMutation(h *Handlers, method, path, body string, actorID int, hand
 	context.Params = gin.Params{{Key: "id", Value: strings.TrimPrefix(path, "/users/")}}
 	context.Set("user_id", actorID)
 	context.Set("role", "admin")
+	context.Set("auth_type", "jwt") // JWT 会话写路径（自助 MFA 机器身份门同口径）
 	handler(context)
 	return response
 }

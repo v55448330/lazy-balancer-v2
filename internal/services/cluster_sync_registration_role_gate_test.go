@@ -68,7 +68,7 @@ func TestSyncService_registrationBookkeeping_roleGate(t *testing.T) {
 
 	// When：在途的 confirm 成功/失败回写晚到
 	service.redeemRegistrationConfirm(context.Background(), master.URL, "old-token")
-	service.bumpRegistrationConfirmFailure(context.Background(), "old-token", "confirm 端点返回 500")
+	service.bumpRegistrationConfirmFailure(context.Background(), "confirm 端点返回 500")
 	service.resetRegistrationConfirmFailure(context.Background())
 
 	// Then：注册密钥、失败计数与令牌均不得被旧从端改写
@@ -107,7 +107,7 @@ func TestSyncService_bumpRegistrationConfirmFailure_slaveStillCounts(t *testing.
 	}
 	service := NewSyncService(database, &config.Config{DataDir: t.TempDir()}, nil)
 
-	service.bumpRegistrationConfirmFailure(context.Background(), "approved-token", "confirm 端点返回 401")
+	service.bumpRegistrationConfirmFailure(context.Background(), "confirm 端点返回 401")
 
 	var failures int
 	var secret, token string

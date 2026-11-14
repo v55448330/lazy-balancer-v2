@@ -50,7 +50,7 @@ func containsAllSubs(s string, subs ...string) bool {
 	return true
 }
 
-// 四阶段推断（2026-11-12）：人机/限流 → CC(stage2)；WAF → stage3；
+// 四阶段推断（2026-11-12）：人机/CC 检测 → CC(stage2)；WAF → stage3；
 // 跨阶段组合 → mixed；零能力 → 内容防护关闭态(stage3)。
 func TestInferPolicyType_fourStage(t *testing.T) {
 	cases := []struct {

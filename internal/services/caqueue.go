@@ -1962,8 +1962,8 @@ func failJobRateLimited(jobID int, retryAfter time.Duration) {
 }
 
 // maxRenewalAttemptsMessage 在续签失败累计达到上限时追加终态说明，
-// 与 429 路径（markJobWaitingCA）的「已达到最大重试次数」口径一致；
-// 幂等：已含标记的 message 不再重复追加。
+// 与 429 路径（failJobRateLimited → recordJobFailure）的「已达到最大重试
+// 次数」口径一致；幂等：已含标记的 message 不再重复追加。
 func maxRenewalAttemptsMessage(message string, maxAttempts int) string {
 	const marker = "已达到最大重试次数"
 	if strings.Contains(message, marker) {

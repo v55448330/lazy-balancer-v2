@@ -224,7 +224,7 @@
     <template #footer>
       <div style="display: flex; align-items: center;">
         <LogStorageBar :key="activeLogTab" :log-key="caddyTabLogKey" style="margin-right: auto" />
-        <el-button @click="logDialogVisible = false">{{ t('app.settings.caddy.off') }}</el-button>
+        <el-button @click="logDialogVisible = false">{{ t('app.settings.caddy.viewer.closeBtn') }}</el-button>
       </div>
     </template>
   </el-dialog>

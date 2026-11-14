@@ -86,7 +86,7 @@ func TestSyncService_bumpRegistrationConfirmFailure_terminalWriteViaHelper(t *te
 	service := NewSyncService(database, &config.Config{DataDir: t.TempDir()}, nil)
 
 	// When：第 5 次 confirm 失败
-	service.bumpRegistrationConfirmFailure(context.Background(), "approved-token", "confirm 端点返回 500")
+	service.bumpRegistrationConfirmFailure(context.Background(), "confirm 端点返回 500")
 
 	// Then：终止类错误经 helper 覆盖标记（与直写语义等价），注册状态清理
 	var stored string

@@ -5,10 +5,11 @@
 //    均分给这些列（固定宽的只有状态/重试/操作）；
 // ② 容器更窄时按优先级隐藏低价值列——min-width 之和超过容器仍会撑出滚动条。
 // 收敛下限：不可让位列（domain/status/validity/attempts/actions）最小合计
-// CERT_JOB_COLUMNS_MIN_WIDTH = 619px。容器 ≥619px 时由 .cert-jobs-wrap 的
-// overflow:hidden 兜底（卡片/页面级不出现横向滚动）；容器 <619px、让位耗尽后
-// 仍未装下时切 .cert-jobs-wrap--scroll 的 overflow-x:auto 横向滚动——可滚动
-// 优先于裁切：裁断会让右侧「操作」列不可达，滚动保住全部可达列。
+// CERT_JOB_COLUMNS_MIN_WIDTH（由 WIDTHS 派生，当前 659px——改列宽即自动跟随，
+// 不手抄魔数）。容器 ≥ 该下限时由 .cert-jobs-wrap 的 overflow:hidden 兜底
+// （卡片/页面级不出现横向滚动）；容器窄于下限、让位耗尽后仍未装下时切
+// .cert-jobs-wrap--scroll 的 overflow-x:auto 横向滚动——可滚动优先于裁切：
+// 裁断会让右侧「操作」列不可达，滚动保住全部可达列。
 //
 // 下方 WIDTHS 即「每列最小宽度」，既用于 ② 的让位判据，也是 ① 的弹性基线。
 // 纯函数便于单测：给定容器宽度返回应显示的列集合。

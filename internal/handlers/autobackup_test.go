@@ -302,7 +302,10 @@ func TestRunAutoBackupOnce_rowFailureCleanupFailureLogsFilename(t *testing.T) {
 		return os.WriteFile(filepath.Join(path, "payload"), payload, 0o600)
 	}
 	t.Cleanup(func() { autoBackupWriteFile = oldWrite })
-	if _, err := db.DB.Exec(`DROP TABLE auto_backups`); err != nil {
+	// 仅插入失败（BEFORE INSERT 触发器 RAISE），不破坏表结构——文件名占用
+	// 检查（SELECT COUNT）须正常通过，才能走到落行失败+清理路径（DROP TABLE
+	// 会连同文件名检查一起破坏，测不到落行失败分支）。
+	if _, err := db.DB.Exec(`CREATE TRIGGER auto_backups_insert_fail BEFORE INSERT ON auto_backups BEGIN SELECT RAISE(ABORT, 'forced row insert failure'); END`); err != nil {
 		t.Fatalf("force backup row insert failure: %v", err)
 	}
 	logs := captureLog(t)

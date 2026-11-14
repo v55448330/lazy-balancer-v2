@@ -476,7 +476,7 @@ func updateAPIKeyStatus(c *gin.Context, currentUserOnly bool) {
 	var beforeEnabledRaw sql.NullInt64
 	var beforeMCPEnabled, beforeReadOnly int
 	var beforeWhitelist string
-	if err := tx.QueryRow(query, args...).Scan(&name, &beforeEnabledRaw, &beforeMCPEnabled, &beforeReadOnly, &beforeWhitelist); dbQueryNotFound(c, err, "API 密钥不存在", "updateAPIKeyStatus query key") {
+	if err := tx.QueryRowContext(c.Request.Context(), query, args...).Scan(&name, &beforeEnabledRaw, &beforeMCPEnabled, &beforeReadOnly, &beforeWhitelist); dbQueryNotFound(c, err, "API 密钥不存在", "updateAPIKeyStatus query key") {
 		return
 	}
 	beforeEnabled := 0
@@ -531,7 +531,7 @@ func updateAPIKeyStatus(c *gin.Context, currentUserOnly bool) {
 		update += " AND created_by = ?"
 		updateArgs = append(updateArgs, userID)
 	}
-	result, err := tx.Exec(update, updateArgs...)
+	result, err := tx.ExecContext(c.Request.Context(), update, updateArgs...)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_8b56878d"), MessageKey: "k_8b56878d"})
 		return

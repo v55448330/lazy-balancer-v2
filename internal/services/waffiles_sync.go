@@ -1543,6 +1543,7 @@ func (s *SyncService) fetchWafFiles(ctx context.Context, ref *models.ClusterWafF
 	// 直写审计详情与 VERSION/.version 落盘文件：形状校验后置空。
 	bundle.CRSVersion = sanitizeBundleVersion(bundle.CRSVersion)
 	bundle.IP2RegionTag = sanitizeBundleVersion(bundle.IP2RegionTag)
+	bundle.IP2RegionV6Tag = sanitizeBundleVersion(bundle.IP2RegionV6Tag)
 	return &bundle, nil
 }
 

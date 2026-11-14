@@ -269,6 +269,7 @@ export default {
     'lossIoErrors': '{count} write errors',
     'lossPartsUnavailable': 'counters unavailable',
     'lossSkippedRegions': '{count} malformed regions skipped ({size})',
+    'lossWhileStopped': '; additionally, {detail}',
     'otherBucket': 'Other',
     'passive': 'Passive check (unhealthy after {unhealthy} failures, recovery window {window}s)',
     'probePortDefault': 'default',

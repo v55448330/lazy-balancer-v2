@@ -24,9 +24,7 @@ import { code, webFiles } from './_helpers.ts'
 // 明令：读取点「自带 ?? 兜底」不构成豁免理由——原型键裸下标返回的是函数
 // （真值），`??` 永不触发（本文件头注释的原始事故形态）。
 const NON_VOCABULARY_RECORD_TABLES = [
-  // 导航标题：只以字面量页面键读取（页面键集合由 utils/pageIds 单源）
-  // 设置页标题投影：仅展开进 pageTitle，不直接以下标消费
-    // HTML 转义表：固定正则字符集键，不是库值/后端枚举
+  // HTML 转义表：固定正则字符集键，不是库值/后端枚举
   'src/utils/escape.ts#escapeHtmlTable',
   // 表格锁弹框登记表：键为规则 caddy_id，值是组件实例，不用于标签展示
   'src/views/Rules.vue#lockPopovers',
@@ -34,9 +32,6 @@ const NON_VOCABULARY_RECORD_TABLES = [
   'src/views/settings/TaskMonitor.vue#TASK_NAME_KEYS',
   // CRS 分类显示映射:键=后端 zh 分类码(查表即译,无外部键源)
   'src/utils/crsCategories.ts#CRS_CATEGORY_KEYS',
-  // IP 名单分类显示映射:键=后端 zh 分类码(查表即译,无外部键源)
-
-
   // 触发类型显示映射:键=后端 zh 码(查表即译,无外部键源)
   'src/views/security/SecurityEvents.vue#TRIGGER_TYPE_KEYS',
   'src/components/layout/AppLayout.vue#navLabels',

@@ -235,8 +235,10 @@ func enrichIPLocation(ip string) string {
 	if ip == "" {
 		return ""
 	}
-	// 保留地址前置拦截:xdb 仅 IPv4(NewV4Config),IPv6 回环/链路本地等
-	// 查库返回空串会裸显示 IP;私网/回环/链路本地/未指定一律「保留地址」。
+	// 保留地址前置拦截:xdb 双协议(v4 NewV4Config + v6 NewV6Config,见
+	// services.openIP2RegionSearcherDual)虽可解析公网 IPv6,但回环/链路本地/
+	// 私网等保留地址查库返回空串会裸显示 IP;私网/回环/链路本地/未指定一律
+	// 「保留地址」(v4/v6 同口径,先于查库拦截)。
 	if isReservedIP(ip) {
 		return "保留地址"
 	}

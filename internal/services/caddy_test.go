@@ -1768,26 +1768,6 @@ func TestGenerateCaddyConfig_blockPageErrorRoute_usesFirstBoundPolicy(t *testing
 	assertEqual(t, h484["status_code"], 503)
 }
 
-// TestGenerateCaddyConfig_rateLimitErrorRoute_usesFirstBoundPolicy verifies the
-// rate-limit error route also renders the first-bound enabled policy's page
-// (lowest policy_id with BlockPageID > 0).
-func findRateLimitErrorRoute(t *testing.T, generated map[string]interface{}) map[string]interface{} {
-	t.Helper()
-	errorRoutes, _ := serverErrorRoutes(t, generated, "http_8080")
-	for _, routeValue := range errorRoutes {
-		route := mustMap(t, routeValue, "error route")
-		matcher := routeMatcher(t, route)
-		// 双档：JSON 变体带 header matcher；HTML 主档是最后一条（无 header）。
-		if expr, ok := matcher["expression"].(string); ok && expr == "{http.error.status_code} == 429" {
-			if _, hasHeader := matcher["header"]; !hasHeader {
-				return route
-			}
-		}
-	}
-	t.Fatalf("rate-limit error route (matcher == 429) not found: %#v", errorRoutes)
-	return nil
-}
-
 func TestBuildCorazaDirectives_emitsAclExclusionsThresholdAndBlockStatus(t *testing.T) {
 	_, database := newClusterTestService(t)
 	result, err := database.Exec(`INSERT INTO security_policies (name,mode,anomaly_threshold,ip_acl_mode,ip_acl_list,ip_acl_enabled,crs_excluded_rules,block_page_id,enabled)
