@@ -53,6 +53,7 @@ func newAutobanTestEnv(t *testing.T) *gin.Engine {
 	router.DELETE("/security/ip-lists/:id", h.DeleteIPList)
 	router.POST("/security/ip-lists/:id/ips", h.AddIPToList)
 	router.POST("/security/ip-lists/:id/remove-ip", h.RemoveIPFromList)
+	router.POST("/security/ip-lists", h.CreateIPList)
 	return router
 }
 

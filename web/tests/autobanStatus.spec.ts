@@ -189,6 +189,12 @@ test('总览卡：四统计卡一行 + 单黄条 + IP 建议表 + 累犯下钻�
   // 四统计卡一行（grid 4 列）+ 移动端堆叠
   assert.match(page, /\.autoban-stats \{[^}]*grid-template-columns: repeat\(4, minmax\(0, 1fr\)\)/, '四统计卡必须 grid 4 列一行')
   assert.match(page, /@media \(max-width: 768px\) \{[\s\S]*?\.autoban-body \{ flex-direction: column; \}/, '移动端必须堆叠')
+  // 黄条与卡体间距必须显式声明（mb-3 工具类全站未定义，曾零间距贴住卡体）
+  assert.match(page, /class="autoban-alert"/, '卡内黄条必须挂间距类')
+  assert.match(page, /\.autoban-alert \{[^}]*margin-bottom: 12px/, '黄条下间距必须显式声明')
+  // 建议区定宽不伸缩 + 窄桌面提前堆叠（中间宽度带不再把建议表挤成窄条）
+  assert.match(page, /\.autoban-suggestions \{[^}]*flex: 0 0 420px/, '建议区必须定宽不伸缩')
+  assert.match(page, /@media \(max-width: 1200px\) \{[\s\S]*?\.autoban-body \{ flex-direction: column; \}/, '窄桌面必须提前堆叠')
   // 建议区自适应剩余宽度：标题 ellipsis+tooltip，无水平滚动
   assert.match(page, /\.autoban-suggestions-title \{[^}]*text-overflow: ellipsis/, '建议标题必须 ellipsis 不换行')
   assert.match(page, /\.autoban-suggestions \{[^}]*min-width: 0/, '建议区必须可收缩（不撑破卡体）')
@@ -205,13 +211,17 @@ test('总览卡：四统计卡一行 + 单黄条 + IP 建议表 + 累犯下钻�
 
 // 共享累犯弹框（总览下钻 + 事件页入口复用）：数据源/重置/表格列/footer 布局
 // 在组件内单源钉住；两页只传写门与配置实态。
-test('累犯弹框共享组件：端点/四列/下次封禁单源/footer 破坏性左置', () => {
+test('累犯弹框共享组件：端点/七列/状态三态/下次封禁单源/footer 破坏性左置', () => {
   const dialog = code('src/components/security/RecidivismDialog.vue')
-  assert.match(dialog, /request\.get<APIResponse<\{ records: RecidivismRecord\[\] \}>>\('\/security\/autoban\/recidivism'/, '弹框数据源必须是 GET /security/autoban/recidivism')
+  assert.match(dialog, /request\.get<APIResponse<\{ records: RecidivismRecord\[\]; total: number \}>>\(`\/security\/autoban\/recidivism\?\$\{params\}`/, '弹框数据源必须是 GET /security/autoban/recidivism 携参')
   assert.match(dialog, /await request\.delete\('\/security\/autoban\/recidivism'\)/, '重置必须走 DELETE 同端点')
   assert.match(dialog, /ElMessageBox\.confirm\(\s*t\('app\.security\.overview\.autoban\.recidivismResetConfirm'\)/, '重置必须二次确认')
-  for (const col of ['recidivismColIdentity', 'recidivismColOffenses', 'recidivismColLastBan', 'recidivismColNextBan']) {
+  for (const col of ['recidivismColIdentity', 'recidivismColStatus', 'recidivismColHits24h', 'recidivismColOffenses', 'recidivismColLastBan', 'recidivismColNextBan', 'recidivismColLastEvent']) {
     assert.ok(dialog.includes(col), `弹框缺列键 ${col}`)
+  }
+  // 操作列退役（处置由 IP 快捷弹框覆盖）：单条取消的按钮/确认/DELETE 调用不得残留
+  for (const gone of ['recidivismColActions', 'recidivismCancel', 'cancelRecord', 'cancelingIdentity']) {
+    assert.ok(!dialog.includes(gone), `操作列残留：${gone}`)
   }
   // 表格内容优化：身份 CIDR 形态单源 / 累计加「次」单位 / 下次封禁预期单源 /
   // 上次执法时长 tooltip 披露（历史留痕不丢）
@@ -219,14 +229,43 @@ test('累犯弹框共享组件：端点/四列/下次封禁单源/footer 破坏�
   assert.match(dialog, /row\.offense_count \}\} \{\{ t\('app\.security\.overview\.autoban\.times'\)/, '累计封禁必须带单位')
   assert.match(dialog, /autobanNextBanDuration\(/, '下次封禁必须走预期时长单源')
   assert.match(dialog, /recidivismLastDurationTip', \{ duration: autobanDurationLabel\(row\.escalated_duration\) \}/, '上次执法时长必须 tooltip 披露')
+  // 重做形态（参照连接弹框）：1280 宽 + 筛选工具行 + 固定表高 + 分页
+  assert.match(dialog, /v-model="hidePermanent"/, '必须有隐藏永久封禁开关')
+  assert.match(dialog, /v-model="ipQuery"/, '必须有 IP 搜索框')
+  // 服务端分页契约：筛选/搜索/分页携参（hide_permanent/ip/page/page_size），
+  // total 取响应驱动分页；前端不得残留客户端切片/兜底筛选。
+  assert.match(dialog, /useRecidivismList\(/, '数据面必须走服务端分页状态单源')
+  assert.match(dialog, /hide_permanent: String\(hide\), page: String\(p\), page_size: String\(size\)/, '分页请求必须携 hide_permanent/page/page_size 参数')
+  assert.match(dialog, /if \(ip\) params\.set\('ip', ip\)/, 'IP 搜索必须携 ip 参数（后端 identity 子串匹配）')
+  assert.match(dialog, /total: res\.data\?\.total \|\| 0/, 'total 必须取响应（筛选后总数）')
+  assert.ok(!dialog.includes('filteredRecords') && !dialog.includes('pagedRecords'), '不得残留前端兜底筛选/切片')
+  assert.match(dialog, /:data="records"/, '表格必须直渲服务端页（无二次切片）')
+  assert.match(dialog, /<el-pagination/, '必须有分页控件')
+  assert.match(dialog, /:height="TABLE_HEIGHT"/, '表格必须固定高度')
+  // IP 列复用 IP 快捷弹框（用户裁定：与事件页同逻辑）——身份经 CIDR 形态单源
+  // 传入（后端 AutobanEntryIdentity 归一后清累犯行），写完成回调重取列表并
+  // 联动宿主状态卡；紧凑归属地由 IPLocationAction 内部经 compactIpLocation 呈现。
+  assert.match(dialog, /import IPLocationAction from '@\/views\/security\/IPLocationAction\.vue'/, 'IP 列必须复用 IP 快捷弹框组件')
+  assert.match(dialog, /<IPLocationAction :ip="autobanIdentityDisplay\(row\.identity\)" :location="row\.ip_location \|\| ''" @changed="onIpActionChanged" \/>/, 'IP 列必须挂快捷弹框（CIDR 形态身份 + 归属地 + changed 回调）')
+  assert.match(dialog, /const onIpActionChanged = \(\): void => \{\s*void fetchRecords\(\)\s*emit\('reset'\)\s*\}/, '写完成必须重取累犯列表并 emit reset 联动宿主状态卡')
+  assert.match(dialog, /recidivismCleanupNote/, '必须披露定期清理（30 天无再犯自动清理）')
+  // 当前状态列：ban_status 三态 tag（限时=warning+剩余时长单源、永久=danger、
+  // 未封禁=info）；限时到期时刻 tooltip 披露；24h 命中/最近事件直渲后端富化字段
+  assert.match(dialog, /row\.ban_status === 'permanent'/, '状态列必须区分永久封禁')
+  assert.match(dialog, /row\.ban_status === 'timed'/, '状态列必须区分限时封禁')
+  assert.match(dialog, /autobanEntryRemaining\(row\.ban_expires_at \|\| ''\)/, '限时封禁剩余时长必须走名单条目展示单源')
+  assert.match(dialog, /:content="formatDate\(row\.ban_expires_at\)"/, '限时封禁必须 tooltip 披露到期时刻')
+  assert.match(dialog, /recidivismStatusNone/, '未封禁态必须有文案键')
+  assert.match(dialog, /row\.hits_24h \?\? 0/, '24h 命中必须直渲后端字段（旧后端缺省 0）')
+  assert.match(dialog, /row\.last_event_at \? formatDate\(row\.last_event_at\) : '—'/, '最近事件缺失必须占位')
   // footer：破坏性操作（重置）左对齐分离、关闭右对齐（flex justify-between）
   const footer = section(dialog, '<template #footer>', '</template>')
   assert.match(footer, /class="recidivism-footer"/, 'footer 必须挂布局类')
   assert.ok(footer.indexOf('recidivismReset') < footer.indexOf('recidivismClose'), '重置必须在关闭之前（左→右）')
   const footerCss = section(dialog, '.recidivism-footer {', '}')
   assert.match(footerCss, /justify-content: space-between/, 'footer 必须两端对齐')
-  // 打开即拉取（每次打开取最新历史）
-  assert.match(dialog, /watch\(\(\) => props\.modelValue, \(visible\) => \{ if \(visible\) void fetchRecords\(\) \}\)/)
+  // 打开即复位筛选并拉取（每次打开取最新历史，不沿用陈旧快照/筛选）
+  assert.match(dialog, /watch\(\(\) => props\.modelValue, \(visible\) => \{ if \(visible\) open\(\); else invalidate\(\) \}\)/)
 })
 
 test('两页累犯入口复用同一共享组件（写门/配置实态传入，重置联动状态卡）', () => {
@@ -238,11 +277,11 @@ test('两页累犯入口复用同一共享组件（写门/配置实态传入，�
   }
   // 事件页入口在配置主热区之外（点击不触发配置弹框）；加载/失败态禁用
   const events = code('src/views/security/SecurityEvents.vue')
-  assert.match(events, /class="autoban-recidivism-link" :disabled="autobanStatusError \|\| autobanStatusLoading" @click="recidivismDialogVisible = true"/, '事件页必须有累犯弹框入口')
-  const bar = section(events, '<div class="autoban-bar">', '<div class="autoban-actions">')
-  const entryAt = bar.indexOf('autoban-recidivism-link')
-  const mainClose = bar.indexOf('</el-tooltip>')
-  assert.ok(entryAt > mainClose && mainClose >= 0, '入口必须在配置主热区（tooltip 包裹）之外')
+  assert.match(events, /size="small" type="primary" plain :disabled="autobanStatusError \|\| autobanStatusLoading" @click="recidivismDialogVisible = true"/, '事件页累犯入口必须是按钮（与禁用/编辑同规格）')
+  assert.doesNotMatch(events, /autoban-recidivism-link/, '旧 link 入口形态必须退役')
+  const actions = section(events, '<div class="autoban-actions">', '</div>')
+  assert.match(actions, /statRecidivism/, '累犯入口必须与禁用/编辑同组（autoban-actions）')
+  assert.ok(events.indexOf('</el-tooltip>') < events.indexOf('<div class="autoban-actions">'), '入口必须在配置主热区（tooltip 包裹）之外')
 })
 
 test('事件页：单黄条 + IP 建议表 + 七项配置弹框接线', () => {
@@ -250,6 +289,10 @@ test('事件页：单黄条 + IP 建议表 + 七项配置弹框接线', () => {
   assert.match(page, /v-if="autobanIneffective"/)
   assert.match(page, /autobanSuggestedDurationKey\(autobanStatus\.duration\)/, '建议时长按配置派生')
   assert.match(page, /:ip="row\.ip"/, '建议行 IP 处置直接消费 IP')
+  // 配置预览行必须含累犯升级档位（状态级口径，短文案单源）
+  const statsRow = section(page, '<div class="autoban-stats">', '</div>')
+  assert.match(statsRow, /t\('app\.security\.events\.escalationLabel'\)/, '配置预览必须含累犯升级标签')
+  assert.match(statsRow, /autobanEscalationShortKey\(autobanStatus\.escalation\)/, '累犯升级档位必须消费状态级 escalation')
   // 配置弹框七项（六基础 + 累犯升级）；NAT 段整体退役
   assert.match(page, /v-model="autobanForm\.escalation"/, '累犯升级选择必须绑定')
   for (const gone of ['nat_detection', 'nat_fingerprint_threshold', 'natPrivacyNotice', 'autobanNatActive', 'autobanChannelSplit', 'autobanEnforcementLayer', 'autobanIdentityIp', 'session_bans', 'ban_effective_session']) {
@@ -273,14 +316,20 @@ test('autoban 词条 zh 母本钉 + en 侧齐备（NAT 键退役）', () => {
     '"recidivismDialogTitle": "累犯升级记录"',
     '"recidivismReset": "重置累犯记录"',
     '"bannedTodayTip": "今日写入自动封禁名单的 IP 数"',
+    '"recidivismColIdentity": "IP地址"',
+    '"recidivismColStatus": "当前状态"',
+    '"recidivismStatusNone": "未封禁"',
+    '"recidivismColHits24h": "24h命中"',
+    '"recidivismColLastEvent": "最近事件"',
+    '"recidivismHidePermanent": "隐藏永久封禁"',
   ]
   for (const text of zhTexts) assert.ok(zhSec.includes(text), `zh 母本缺「${text}」`)
-  const enKeys = ['escalationLabel', 'colIdentity', 'colEscalation', 'recidivismDialogTitle', 'recidivismDialogSubtitle', 'recidivismColIdentity', 'recidivismColOffenses', 'recidivismColLastBan', 'recidivismColNextBan', 'recidivismLastDurationTip', 'recidivismEmpty', 'recidivismLoadFailed', 'recidivismRetry', 'recidivismReset', 'recidivismResetTitle', 'recidivismResetConfirm', 'recidivismResetConfirmBtn', 'recidivismResetDone', 'recidivismClose', 'bannedTodayTip', 'statRecidivism', 'escalationPermanentDisabledHint']
+  const enKeys = ['escalationLabel', 'colIdentity', 'colEscalation', 'recidivismDialogTitle', 'recidivismDialogSubtitle', 'recidivismColIdentity', 'recidivismColStatus', 'recidivismStatusNone', 'recidivismColHits24h', 'recidivismColOffenses', 'recidivismColLastBan', 'recidivismColNextBan', 'recidivismColLastEvent', 'recidivismHidePermanent', 'recidivismIpPlaceholder', 'recidivismCleanupNote', 'recidivismLastDurationTip', 'recidivismEmpty', 'recidivismLoadFailed', 'recidivismRetry', 'recidivismReset', 'recidivismResetTitle', 'recidivismResetConfirm', 'recidivismResetConfirmBtn', 'recidivismResetDone', 'recidivismClose', 'bannedTodayTip', 'statRecidivism', 'escalationPermanentDisabledHint']
   for (const key of enKeys) assert.ok(enSec.includes(`"${key}"`), `en 侧缺键 ${key}`)
-  // NAT 键双语同步退役（漏删一侧 = 键集漂移）
-  for (const gone of ['natDetectionLabel', 'natThresholdLabel', 'natPrivacyNotice', 'natActiveBadge', 'ineffectiveSession', 'ineffectiveIp', 'durationSession', 'identitySession', 'enforcementSession', 'bannedTodaySession', 'listEntriesSession']) {
-    assert.ok(!zhSec.includes(`"${gone}"`), `zh 侧 NAT 键残留 ${gone}`)
-    assert.ok(!enSec.includes(`"${gone}"`), `en 侧 NAT 键残留 ${gone}`)
+  // NAT 键与操作列词条双语同步退役（漏删一侧 = 键集漂移）
+  for (const gone of ['natDetectionLabel', 'natThresholdLabel', 'natPrivacyNotice', 'natActiveBadge', 'ineffectiveSession', 'ineffectiveIp', 'durationSession', 'identitySession', 'enforcementSession', 'bannedTodaySession', 'listEntriesSession', 'recidivismColActions', 'recidivismCancel', 'recidivismCancelTitle', 'recidivismCancelConfirm', 'recidivismCancelConfirmBtn', 'recidivismCancelDone']) {
+    assert.ok(!zhSec.includes(`"${gone}"`), `zh 侧退役键残留 ${gone}`)
+    assert.ok(!enSec.includes(`"${gone}"`), `en 侧退役键残留 ${gone}`)
   }
 })
 

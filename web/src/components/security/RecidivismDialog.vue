@@ -1,10 +1,12 @@
 <template>
   <!-- 累犯历史弹框（总览「累犯升级」统计与事件页 autoban 卡共用）：
-       GET /security/autoban/recidivism（offense_count 降序、identity 升序，
-       后端单源排序）；重置=清空全部历史（DELETE 同端点，二次确认，只清历史
-       记账、不动已生效封禁条目）。写门与事件页 autobanWritable 同口径：
-       只读契约/从节点/状态未就绪一律禁用（writable/blockedReason 由宿主传入）。 -->
-  <el-dialog :model-value="modelValue" width="min(720px, 94vw)" top="6vh" append-to-body class="dialog-body-inset" @update:model-value="emit('update:modelValue', $event)">
+       参照仪表盘连接弹框的宽体形态——1280px + 筛选工具行 + 固定表高 + 分页。
+       GET /security/autoban/recidivism（offense_count 降序、identity 升序，后端
+       单源排序）。处置走 IP 快捷弹框（加黑/白/信任名单即中断累犯），不设逐行
+       操作列；重置=清空全部历史（DELETE 同端点，二次确认，只清历史记账、
+       不动已生效封禁条目）。写门与事件页 autobanWritable 同口径：只读契约/
+       从节点/状态未就绪一律禁用（writable/blockedReason 由宿主传入）。 -->
+  <el-dialog :model-value="modelValue" width="min(1280px, 96vw)" top="5vh" append-to-body class="dialog-body-inset" :close-on-click-modal="false" @update:model-value="emit('update:modelValue', $event)">
     <template #header>
       <DialogHeader :icon="Lock" :title="t('app.security.overview.autoban.recidivismDialogTitle')" :subtitle="t('app.security.overview.autoban.recidivismDialogSubtitle')" />
     </template>
@@ -12,30 +14,71 @@
       <span class="info-note-desc">{{ t('app.security.overview.autoban.recidivismLoadFailed') }}</span>
       <el-button size="small" type="primary" plain @click="fetchRecords">{{ t('app.security.overview.autoban.recidivismRetry') }}</el-button>
     </div>
-    <el-table v-else v-loading="loading" :data="records" size="small" max-height="420" :header-cell-style="{ background: '#f9fafb' }">
-      <template #empty><el-empty :description="t('app.security.overview.autoban.recidivismEmpty')" :image-size="60" /></template>
-      <!-- 身份列：IPv6 /64 身份键展示 CIDR 形态（与封禁条目同口径，单源
-           autobanIdentityDisplay）；等宽字体便于逐位核对地址 -->
-      <el-table-column :label="t('app.security.overview.autoban.recidivismColIdentity')" min-width="180" show-overflow-tooltip>
-        <template #default="{ row }"><span class="recidivism-identity">{{ autobanIdentityDisplay(row.identity) }}</span></template>
-      </el-table-column>
-      <el-table-column :label="t('app.security.overview.autoban.recidivismColOffenses')" width="100" align="center">
-        <template #default="{ row }">{{ row.offense_count }} {{ t('app.security.overview.autoban.times') }}</template>
-      </el-table-column>
-      <el-table-column :label="t('app.security.overview.autoban.recidivismColLastBan')" width="170">
-        <template #default="{ row }">{{ row.last_ban_at ? formatDate(row.last_ban_at) : '—' }}</template>
-      </el-table-column>
-      <!-- 「下次封禁」=按当前档位+累计次数推算的预期时长（单源
-           autobanNextBanDuration，与后端档位映射对表）；tooltip 披露上次实际
-           执法时长（历史留痕，配置变更后可能与当前档位不同） -->
-      <el-table-column :label="t('app.security.overview.autoban.recidivismColNextBan')" width="120" align="center">
-        <template #default="{ row }">
-          <el-tooltip :content="t('app.security.overview.autoban.recidivismLastDurationTip', { duration: autobanDurationLabel(row.escalated_duration) })" placement="top">
-            <span class="recidivism-next-duration">{{ autobanDurationLabel(nextBanDurationOf(row as RecidivismRecord)) }}</span>
-          </el-tooltip>
-        </template>
-      </el-table-column>
-    </el-table>
+    <template v-else>
+      <!-- 筛选工具行：默认隐藏永久封禁 + IP 子串搜索（左）；定期清理披露（右） -->
+      <div class="recid-toolbar">
+        <div class="recid-filters">
+          <span class="recid-toggle">
+            <el-switch v-model="hidePermanent" size="small" />
+            <span>{{ t('app.security.overview.autoban.recidivismHidePermanent') }}</span>
+          </span>
+          <el-input v-model="ipQuery" class="recid-ip-input" size="small" :prefix-icon="Search" clearable :placeholder="t('app.security.overview.autoban.recidivismIpPlaceholder')" @keyup.enter="fetchRecords" />
+        </div>
+        <div class="recid-cleanup">
+          <el-icon><InfoFilled /></el-icon>
+          <span>{{ t('app.security.overview.autoban.recidivismCleanupNote') }}</span>
+        </div>
+      </div>
+      <el-table v-loading="loading" :data="records" size="small" :height="TABLE_HEIGHT" :header-cell-style="{ background: '#f9fafb' }">
+        <template #empty><el-empty :description="t('app.security.overview.autoban.recidivismEmpty')" :image-size="60" /></template>
+        <!-- IP 地址列：身份键展示 CIDR 形态（单源 autobanIdentityDisplay），并复用
+             IP 快捷弹框（IPLocationAction）做黑/白/信任处置——popover teleport 到
+             body，层级高于本弹框，无嵌套冲突。加名单成功后端同步清该身份累犯记账，
+             changed 回调重取列表并联动宿主状态卡。 -->
+        <el-table-column :label="t('app.security.overview.autoban.recidivismColIdentity')" min-width="240">
+          <template #default="{ row }">
+            <IPLocationAction :ip="autobanIdentityDisplay(row.identity)" :location="row.ip_location || ''" @changed="onIpActionChanged" />
+          </template>
+        </el-table-column>
+        <!-- 当前状态列：join 自动封禁名单生效条目（后端 ban_status 三态），
+             一眼看出该累犯是否正在被封；限时封禁 tooltip 披露到期时刻，剩余
+             时长走名单条目展示单源（autobanEntryRemaining）。 -->
+        <el-table-column :label="t('app.security.overview.autoban.recidivismColStatus')" width="150" align="center">
+          <template #default="{ row }">
+            <el-tag v-if="row.ban_status === 'permanent'" type="danger" size="small" effect="light">{{ t('app.security.ipLocation.autoban.permanent') }}</el-tag>
+            <el-tooltip v-else-if="row.ban_status === 'timed'" :content="formatDate(row.ban_expires_at)" placement="top">
+              <el-tag type="warning" size="small" effect="light">{{ t('app.security.ipLocation.autoban.stateActive') }} · {{ autobanEntryRemaining(row.ban_expires_at || '') }}</el-tag>
+            </el-tooltip>
+            <el-tag v-else type="info" size="small" effect="plain">{{ t('app.security.overview.autoban.recidivismStatusNone') }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column :label="t('app.security.overview.autoban.recidivismColHits24h')" width="90" align="center">
+          <template #default="{ row }">{{ row.hits_24h ?? 0 }}</template>
+        </el-table-column>
+        <el-table-column :label="t('app.security.overview.autoban.recidivismColOffenses')" width="100" align="center">
+          <template #default="{ row }">{{ row.offense_count }} {{ t('app.security.overview.autoban.times') }}</template>
+        </el-table-column>
+        <el-table-column :label="t('app.security.overview.autoban.recidivismColLastBan')" width="160">
+          <template #default="{ row }">{{ row.last_ban_at ? formatDate(row.last_ban_at) : '—' }}</template>
+        </el-table-column>
+        <!-- 「下次封禁」=按当前档位+累计次数推算的预期时长（单源
+             autobanNextBanDuration，与后端档位映射对表）；tooltip 披露上次实际
+             执法时长（历史留痕，配置变更后可能与当前档位不同） -->
+        <el-table-column :label="t('app.security.overview.autoban.recidivismColNextBan')" width="110" align="center">
+          <template #default="{ row }">
+            <el-tooltip :content="t('app.security.overview.autoban.recidivismLastDurationTip', { duration: autobanDurationLabel(row.escalated_duration) })" placement="top">
+              <span class="recid-next-duration">{{ autobanDurationLabel(nextBanDurationOf(row as RecidivismRecord)) }}</span>
+            </el-tooltip>
+          </template>
+        </el-table-column>
+        <el-table-column :label="t('app.security.overview.autoban.recidivismColLastEvent')" width="160">
+          <template #default="{ row }">{{ row.last_event_at ? formatDate(row.last_event_at) : '—' }}</template>
+        </el-table-column>
+      </el-table>
+      <div class="recid-pagination">
+        <el-pagination v-model:current-page="page" v-model:page-size="pageSize" :total="total" :page-sizes="[20, 50, 100]" layout="total, sizes, prev, pager, next" small @size-change="onPageSizeChange" @current-change="fetchRecords" />
+      </div>
+    </template>
     <!-- footer 统一惯例：破坏性操作（重置）左对齐分离，关闭右对齐
          （与配置弹框 cancel→save 的右对齐主操作同体系） -->
     <template #footer>
@@ -54,17 +97,20 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Lock } from '@element-plus/icons-vue'
+import { Lock, Search, InfoFilled } from '@element-plus/icons-vue'
 import { ElMessageBox } from 'element-plus'
 import DialogHeader from '@/components/DialogHeader.vue'
 import { request, mfaAwareSuccess } from '@/utils/api'
 import { formatDate, parseDbTimeMs } from '@/utils/date'
+import { autobanEntryRemaining } from '@/utils/autobanEntry'
 import { autobanDurationLabel, autobanIdentityDisplay, autobanNextBanDuration } from '@/utils/autobanStatus'
+import IPLocationAction from '@/views/security/IPLocationAction.vue'
+import { useRecidivismList, type RecidivismRecord } from '@/composables/useRecidivismList'
 import type { APIResponse } from '@/types'
 
 // 宿主契约：writable/blockedReason 与宿主 autoban 写门同口径；duration/escalation
-// 为当前配置实态（「下次封禁」预期按此推算）；重置成功后 emit('reset') 由宿主
-// 刷新自身状态卡（escalated_count 归零）。
+// 为当前配置实态（「下次封禁」预期按此推算）；重置/快捷弹框写动作成功后
+// emit('reset') 由宿主刷新自身状态卡（escalated_count 联动）。
 const props = defineProps<{
   readonly modelValue: boolean
   readonly writable: boolean
@@ -79,31 +125,36 @@ const emit = defineEmits<{
 
 const { t } = useI18n()
 
-interface RecidivismRecord { identity: string; offense_count: number; last_ban_at: string; escalated_duration: string }
-const records = ref<RecidivismRecord[]>([])
-const loading = ref(false)
-const loadError = ref(false)
+// 数据面=服务端分页单源（useRecidivismList）：fetchRecords 携
+// hide_permanent/ip/page/page_size 参数，total 取响应（筛选后总数），
+// 页码越界回夹同口径；ip_location 为后端富化字段（enrichIPLocation 单源；
+// 无 xdb/旧后端缺省空串），缺失时归属地段不渲染。
+const { records, total, loading, loadError, hidePermanent, ipQuery, page, pageSize, fetchRecords, open, invalidate } = useRecidivismList(async ({ hidePermanent: hide, ip, page: p, pageSize: size }) => {
+  const params = new URLSearchParams({ hide_permanent: String(hide), page: String(p), page_size: String(size) })
+  if (ip) params.set('ip', ip)
+  const res = await request.get<APIResponse<{ records: RecidivismRecord[]; total: number }>>(`/security/autoban/recidivism?${params}`, { silent: true })
+  return { records: res.data?.records || [], total: res.data?.total || 0 }
+})
+
+// 固定表高（参照连接弹框）：行多表格内垂直滚动，行少留白尺寸恒定。
+const TABLE_HEIGHT = 480
+// 全量重置在途锁：防重入，驱动重置按钮 loading。
 const resetting = ref(false)
-// 弹框会话序号：快速关开时旧响应不得写回新会话（与事件页状态读取同范式）。
-let seq = 0
-const fetchRecords = async (): Promise<void> => {
-  const requestSeq = ++seq
-  loading.value = true
-  loadError.value = false
-  try {
-    const res = await request.get<APIResponse<{ records: RecidivismRecord[] }>>('/security/autoban/recidivism', { silent: true })
-    if (requestSeq !== seq) return
-    records.value = res.data?.records || []
-  } catch {
-    if (requestSeq !== seq) return
-    records.value = []
-    loadError.value = true
-  } finally {
-    if (requestSeq === seq) loading.value = false
-  }
+
+// 打开即复位筛选并拉取（每次打开取最新历史；关闭再开不沿用陈旧快照）；
+// 关闭作废在途响应（快速关开时旧响应不得写回新会话）。
+watch(() => props.modelValue, (visible) => { if (visible) open(); else invalidate() })
+// 页大小变化回首页（与事件页 handleSizeChange 同口径）；watch 合并同一
+// tick 的回首页写入，只发一次携参请求。
+const onPageSizeChange = (): void => { page.value = 1 }
+
+// 快捷弹框写动作完成（加黑/白/信任名单）：后端 AddIPToList 已同步清该身份的
+// 累犯记账——重取列表让该行消失，并 emit('reset') 由宿主刷新状态卡
+// （escalated_count 联动，与重置同一刷新出口）。
+const onIpActionChanged = (): void => {
+  void fetchRecords()
+  emit('reset')
 }
-// 打开即拉取（每次打开取最新历史；关闭再开不沿用陈旧快照）。
-watch(() => props.modelValue, (visible) => { if (visible) void fetchRecords() })
 
 // 「下次封禁」预期：now/last_ban_at 经 DB 墙钟单源解析（配置时区口径与
 // formatDate 一致）；解析失败不做衰减推算（与后端同口径）。
@@ -136,7 +187,20 @@ const resetRecords = async (): Promise<void> => {
 </script>
 
 <style scoped>
+/* 工具行：筛选（左）/ 定期清理披露（右），窄视口换行不挤压。 */
+.recid-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
+.recid-filters { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.recid-toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-regular); white-space: nowrap; }
+.recid-ip-input { width: 220px; }
+.recid-cleanup { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-secondary); min-width: 0; line-height: 1.5; }
+.recid-cleanup .el-icon { flex: none; }
+/* IP 列身份形态（CIDR/等宽/截断）与快捷弹框内单元同源（IPLocationAction 的
+   ip-cell/ip-text/ip-loc），此处不再重复一套展示样式。 */
+.recid-next-duration { cursor: help; border-bottom: 1px dashed #c0c4cc; }
+.recid-pagination { display: flex; justify-content: flex-end; margin-top: 12px; }
 .recidivism-footer { display: flex; align-items: center; justify-content: space-between; }
-.recidivism-identity { font-family: monospace; font-size: 12px; }
-.recidivism-next-duration { cursor: help; border-bottom: 1px dashed #c0c4cc; }
+@media (max-width: 768px) {
+  .recid-toolbar { align-items: flex-start; }
+  .recid-ip-input { width: 100%; }
+}
 </style>

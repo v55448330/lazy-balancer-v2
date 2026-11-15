@@ -198,21 +198,20 @@ import { activateOnce } from '@/utils/keyboardActivate'
 import { formatDate } from '@/utils/date'
 import { DEEP_LINK_PARAMS, pageUrl } from '@/utils/deepLink'
 import { autobanEntryExpired, autobanEntryRemaining } from '@/utils/autobanEntry'
+import { compactIpLocation } from '@/utils/ipLocationParts'
 import type { APIResponse } from '@/types'
 
 const { t } = useI18n()
 
 const props = defineProps<{ ip: string; location: string }>()
+// 写动作完成后对宿主的刷新通知（累犯弹框据此重取列表并联动状态卡）；
+// 事件页/总览等既有消费方不监听，行为不变。
+const emit = defineEmits<{ changed: [] }>()
 const trimmedIp = computed(() => props.ip.trim())
-const compactLocation = computed(() => {
-  if (!props.location) return ''
-  const parts = props.location.split('·').map((part) => part.trim()).filter(Boolean)
-  // 地理库数据值为中文原文（保留地址/中国）：判定锚定后端数据值，展示走词条本地化
-  if (parts[0] === '保留地址') return t('app.security.ipLocation.geo.reserved')
-  if (parts[0] !== '中国') return parts[0]
-  if (parts.length === 1) return t('app.security.ipLocation.geo.china')
-  return parts.length === 2 ? parts[1] : parts[2]
-})
+const compactLocation = computed(() => compactIpLocation(props.location, {
+  reserved: t('app.security.ipLocation.geo.reserved'),
+  china: t('app.security.ipLocation.geo.china'),
+}))
 
 const authStore = useAuthStore()
 const canManage = computed(() => authStore.readOnlyReason === null)
@@ -308,6 +307,7 @@ const loadAll = async (): Promise<void> => {
 const refreshAfterWrite = async (): Promise<void> => {
   invalidateSharedEntriesCache()
   await loadAll()
+  emit('changed')
 }
 const trustApi = useTrustAssociation({ getList: () => ipLists.value, onChanged: refreshAfterWrite })
 const { ensureListAndJoin, joinSpecificList, removeFromSideRef } = trustApi

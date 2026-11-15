@@ -354,8 +354,8 @@
       </template>
       <!-- 未生效黄条：判据单源 utils/autobanStatus（enabled ∧ ban_effective===false，
            IP 名单通道：名单为空或未被启用中的 deny 策略引用） -->
-      <el-alert v-if="autobanIneffective" type="warning" show-icon :closable="false" class="mb-3" :title="t('app.security.overview.autoban.ineffective')" />
-      <el-alert v-if="autobanStatus?.enabled && autobanStatus?.feed_degraded" type="warning" show-icon :closable="false" class="mb-3" :title="autobanStatus?.feed_degraded_reason || t('app.security.overview.autoban.feedDegraded')" />
+      <el-alert v-if="autobanIneffective" type="warning" show-icon :closable="false" class="autoban-alert" :title="t('app.security.overview.autoban.ineffective')" />
+      <el-alert v-if="autobanStatus?.enabled && autobanStatus?.feed_degraded" type="warning" show-icon :closable="false" class="autoban-alert" :title="autobanStatus?.feed_degraded_reason || t('app.security.overview.autoban.feedDegraded')" />
       <div class="autoban-body">
         <div class="autoban-stats">
           <div class="autoban-stat">
@@ -1040,6 +1040,11 @@ onMounted(() => { void reloadAll() })
    右侧观察建议 Top5 自适应剩余宽度（标题 ellipsis+tooltip，表列紧凑，无横滚）；
    ≤768px 移动堆叠。 */
 .autoban-body { display: flex; gap: 24px; align-items: stretch; }
+/* 卡内黄条与卡体的间距单源：mb-3 工具类全站未定义（恒 0），黄条曾零间距
+   贴住卡体——此处显式声明下间距；双黄条并存时上条收窄，与 info-note-bar
+   相邻条口径一致。 */
+.autoban-alert { margin-bottom: 12px; }
+.autoban-alert + .autoban-alert { margin-bottom: 8px; }
 /* 四统计卡恒一行（桌面）：grid 4 列；配置摘要独占次行 */
 .autoban-stats { flex: 1 1 auto; min-width: 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; align-items: stretch; align-content: flex-start; }
 .autoban-stat { display: flex; flex-direction: column; gap: 4px; padding: 10px 16px; border-radius: 0; background: #f7f9fc; min-width: 0; }
@@ -1053,11 +1058,18 @@ onMounted(() => { void reloadAll() })
 .autoban-stat-link:not(:disabled):hover .autoban-stat-value { text-decoration: underline; }
 .autoban-config-summary { grid-column: 1 / -1; display: flex; flex-direction: column; gap: 4px; padding: 4px 8px; font-size: 12px; color: var(--text-secondary); justify-content: center; }
 .autoban-config-line { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-/* 建议区让位不换行：收缩剩余宽度（min-width 0），标题 ellipsis+tooltip */
-.autoban-suggestions { flex: 0 1 420px; min-width: 0; border-left: 1px solid var(--el-border-color-lighter); padding-left: 20px; }
+/* 建议区定宽 420 不伸缩（min-width 0 防内容撑破），标题 ellipsis+tooltip；
+   窄桌面由下方断点整卡堆叠，不在中间宽度带里把建议表挤到不可读 */
+.autoban-suggestions { flex: 0 0 420px; min-width: 0; border-left: 1px solid var(--el-border-color-lighter); padding-left: 20px; }
 .autoban-suggestions-title { font-size: 13px; font-weight: 600; color: #303133; margin-bottom: 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .autoban-suggestions-empty { font-size: 12px; color: var(--text-secondary); padding: 12px 0; }
 .autoban-escalation-tier { font-size: 12px; color: var(--text-secondary); white-space: nowrap; }
+/* 窄桌面（侧栏展开后内容区放不下「四统计列 + 420 建议区」）提前堆叠，
+   避免观察建议被挤成窄条；768 以下同形态。 */
+@media (max-width: 1200px) {
+  .autoban-body { flex-direction: column; }
+  .autoban-suggestions { flex-basis: auto; border-left: none; padding-left: 0; border-top: 1px solid var(--el-border-color-lighter); padding-top: 12px; }
+}
 @media (max-width: 768px) {
   .autoban-body { flex-direction: column; }
   .autoban-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }

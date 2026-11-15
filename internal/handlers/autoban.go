@@ -8,6 +8,7 @@ package handlers
 import (
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
@@ -167,16 +168,60 @@ func (h *Handlers) GetAutobanStatus(c *gin.Context) {
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: resp})
 }
 
-// GetAutobanRecidivism GET /security/autoban/recidivism：累犯历史全量
+// GetAutobanRecidivism GET /security/autoban/recidivism：累犯历史筛选分页
 // （business 组全员可读）——面板「累犯升级」统计的下钻弹框数据源。
-// offense_count 降序、identity 升序；空表 records=[]（数组契约）。
+// query：hide_permanent（默认 true，隐藏 escalated_duration=permanent 行；
+// false/0 显示全部）、ip（identity 子串匹配）、page/page_size（默认 1/20，
+// parsePaginationParam 统一口径）。offense_count 降序、identity 升序；
+// 空结果 records=[]（数组契约）；响应 {records,total,page,page_size}。
+// 逐行 ip_location 富化与安全事件列表同源（enrichIPLocation 单源：保留地址
+// 前置拦截、无 xdb 降级空串、永不报错）；ban_status/ban_expires_at 与
+// hits_24h/last_event_at 由服务层富化（名单生效条目 join + metrics 近 24h
+// 按身份键聚合，展示位容错）。
 func (h *Handlers) GetAutobanRecidivism(c *gin.Context) {
-	records, err := services.ListAutobanRecidivism()
+	page, ok := parsePaginationParam(c, "page", 1, 1000)
+	if !ok {
+		return
+	}
+	pageSize, ok := parsePaginationParam(c, "page_size", 20, 100)
+	if !ok {
+		return
+	}
+	hidePermanent := true
+	switch strings.TrimSpace(c.Query("hide_permanent")) {
+	case "false", "0":
+		hidePermanent = false
+	}
+	ipFilter := strings.TrimSpace(c.Query("ip"))
+	records, total, err := services.ListAutobanRecidivism(hidePermanent, ipFilter, page, pageSize)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("读取自动封禁累犯记录失败", err)})
 		return
 	}
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"records": records}})
+	for i := range records {
+		records[i].IPLocation = enrichIPLocation(records[i].Identity)
+	}
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"records": records, "total": total, "page": page, "page_size": pageSize}})
+}
+
+// DeleteAutobanRecidivism DELETE /security/autoban/recidivism/:identity：
+// 单条取消累犯身份（删除该 identity 行，下次达阈值按首次档起算）。
+// 幂等（identity 不存在也返回成功，与全量重置同族）；只清历史记账，
+// 已生效封禁条目保持至到期。主节点门+导入窗口门同全量重置。
+func (h *Handlers) DeleteAutobanRecidivism(c *gin.Context) {
+	if rejectWriteDuringImport(c, "删除自动封禁累犯记录（配置导入进行中）") {
+		return
+	}
+	if !requireMasterNode(c) {
+		return
+	}
+	identity := c.Param("identity")
+	if err := services.DeleteAutobanRecidivism(identity); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("删除自动封禁累犯记录失败", err)})
+		return
+	}
+	recordAudit(c, "删除", "累犯记录", fmt.Sprintf("取消累犯身份 %s（下次达阈值按首次档起算；已生效封禁条目不受影响）", identity))
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0})
 }
 
 // ResetAutobanRecidivism DELETE /security/autoban/recidivism：重置全部累犯

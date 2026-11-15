@@ -1073,9 +1073,10 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 				// 自动封禁：配置写（主节点门在 handler 内；保存联动
 				// 调度启停——2026-10-14 裁定，/run 端点已废除）
 				admin.PUT("/security/autoban", h.UpdateAutobanConfig)
-				// 累犯历史重置（主节点门在 handler 内；只清历史记账，
+				// 累犯历史重置/单条取消（主节点门在 handler 内；只清历史记账，
 				// 不动已生效封禁条目）
 				admin.DELETE("/security/autoban/recidivism", h.ResetAutobanRecidivism)
+				admin.DELETE("/security/autoban/recidivism/:identity", h.DeleteAutobanRecidivism)
 			}
 			// admin 组路由集合注入 MCP 工具可见性——非管理员属主的 Key
 			// 不应在 tools/list 看到恒 403 的工具（get_caddy_config / preview_config /

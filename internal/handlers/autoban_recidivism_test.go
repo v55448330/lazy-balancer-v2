@@ -24,6 +24,7 @@ func newAutobanRecidivismRouter(t *testing.T) *gin.Engine {
 	router := newAutobanTestEnv(t)
 	router.GET("/security/autoban/recidivism", (&Handlers{}).GetAutobanRecidivism)
 	router.DELETE("/security/autoban/recidivism", (&Handlers{}).ResetAutobanRecidivism)
+	router.DELETE("/security/autoban/recidivism/:identity", (&Handlers{}).DeleteAutobanRecidivism)
 	return router
 }
 
@@ -46,13 +47,13 @@ type recidivismDocRow struct {
 }
 
 // Given 累犯表四行（计数 3/2/2/1，含并列）。
-// When GET /security/autoban/recidivism。
+// When GET /security/autoban/recidivism?hide_permanent=false（全量视图）。
 // Then 200 信封；四列逐行齐备；offense_count 降序、identity 升序（并列按身份）。
 func TestAutobanRecidivism_getListsRowsOrdered(t *testing.T) {
 	router := newAutobanRecidivismRouter(t)
 	seedRecidivismTestRows(t)
 
-	rec := getRequest(t, router, "/security/autoban/recidivism")
+	rec := getRequest(t, router, "/security/autoban/recidivism?hide_permanent=false")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
@@ -148,11 +149,11 @@ func TestAutobanRecidivism_resetIdempotentOnEmpty(t *testing.T) {
 
 // Given 文档示例与实现。
 // When 对照 GET 响应顶层键与行键。
-// Then 示例键集与 handler 事实一致（records/四列），不漂移。
+// Then 示例键集与 handler 事实一致（records/total/page/page_size + 行九键），不漂移。
 func TestAutobanRecidivism_docExampleMatchesImplementation(t *testing.T) {
 	router := newAutobanRecidivismRouter(t)
 	seedRecidivismTestRows(t)
-	rec := getRequest(t, router, "/security/autoban/recidivism")
+	rec := getRequest(t, router, "/security/autoban/recidivism?hide_permanent=false")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
@@ -164,12 +165,16 @@ func TestAutobanRecidivism_docExampleMatchesImplementation(t *testing.T) {
 	if !ok {
 		t.Fatalf("data must be object, got %T", resp.Data)
 	}
-	if _, ok := payload["records"]; !ok {
-		t.Fatalf("data keys=%v, want records", payload)
+	for _, key := range []string{"records", "total", "page", "page_size"} {
+		if _, ok := payload[key]; !ok {
+			t.Fatalf("data keys=%v, want %s", payload, key)
+		}
 	}
 	example := docResponseExample(t, "GET /security/autoban/recidivism")
-	if _, ok := example["records"]; !ok {
-		t.Fatalf("doc example keys=%v, want records", example)
+	for _, key := range []string{"records", "total", "page", "page_size"} {
+		if _, ok := example[key]; !ok {
+			t.Fatalf("doc example keys=%v, want %s", example, key)
+		}
 	}
 	rows, ok := example["records"].([]any)
 	if !ok || len(rows) == 0 {
@@ -179,7 +184,7 @@ func TestAutobanRecidivism_docExampleMatchesImplementation(t *testing.T) {
 	if !ok {
 		t.Fatalf("doc example row must be object, got %T", rows[0])
 	}
-	for _, key := range []string{"identity", "offense_count", "last_ban_at", "escalated_duration"} {
+	for _, key := range []string{"identity", "offense_count", "last_ban_at", "escalated_duration", "ip_location", "ban_status", "ban_expires_at", "hits_24h", "last_event_at"} {
 		if _, ok := row[key]; !ok {
 			t.Fatalf("doc example row lacks %s: %v", key, row)
 		}

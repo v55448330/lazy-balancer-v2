@@ -853,6 +853,22 @@ func (h *Handlers) CreateIPList(c *gin.Context) {
 		return
 	}
 	id, _ := result.LastInsertId()
+	// 「创建并加入」与 AddIPToList 同语义（用户裁定：手动加入任何名单=
+	// 主动处置）：种子条目逐 IP 中断累犯——快捷弹框对无同侧名单的策略默认
+	// 走本路径，漏清会让加黑主入口之一绕过处置。累犯行删除与名单创建同事务
+	// （DeleteAutobanRecidivismFrom 单源，identity 经 AutobanEntryIdentity 归一）；
+	// 清桶/建议剔除经 AutobanForgetIPs 单一入口（纯内存，先于提交无回滚副作用）。
+	if len(entries) > 0 {
+		values := make([]string, len(entries))
+		for i, e := range entries {
+			values[i] = e.Value
+			if err := services.DeleteAutobanRecidivismFrom(caddyWriteCtx(c), tx, services.AutobanEntryIdentity(e.Value)); err != nil {
+				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+				return
+			}
+		}
+		services.AutobanForgetIPs(values)
+	}
 	createData := gin.H{"id": id, "entry_count": len(entries)}
 	if prunedExpired > 0 {
 		createData["pruned_expired"] = prunedExpired
@@ -1307,6 +1323,22 @@ func (h *Handlers) AddIPToList(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
 		return
 	}
+	// 手动加入任何名单=主动处置（用户裁定）：抹累犯前科+停当前计数——
+	// 信任名单豁免后旧前科仍会让下次达阈值按升级档执法；黑名单手动封禁
+	// 与 autoban 累犯是双重处置，同样中断。预置名单手动封禁走同一路径。
+	// 累犯行删除与名单写入同事务（事务外 DELETE 会与持写锁的本事务争
+	// SQLITE_BUSY；同事务原子提交/回滚，处置语义不分裂），复用单条删除
+	// 服务的事务形态（DeleteAutobanRecidivismFrom，与 DELETE 端点同一 SQL
+	// 单源）。identity 经 AutobanEntryIdentity 归一，与 merge 记账键同形。
+	if err := services.DeleteAutobanRecidivismFrom(caddyWriteCtx(c), tx, services.AutobanEntryIdentity(req.Value)); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+		return
+	}
+	// 清桶/建议剔除经 AutobanForgetIPs 单一入口（与 remove-ip/差集保存同族；
+	// 纯内存操作无库锁）。先于提交无回滚副作用（同 remove-ip 路径口径）：
+	// 事务失败回滚时计数桶已清只重置旧计数，新流量重新计数，不产生行为分叉。
+	// 幂等 no-op 路径（生效条目已在）在上方提前返回，不经过本清理。
+	services.AutobanForgetIPs([]string{req.Value})
 
 	// 覆盖已到期条目的动作在审计中显式区分（不是「新增」）——响应仍为
 	// added:true（该 IP 已进入生效集），审计标签与之一致地表述为「新增

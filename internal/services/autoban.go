@@ -854,6 +854,10 @@ func autobanEntryIdentity(value string) string {
 	return autobanIdentityKey(value)
 }
 
+// AutobanEntryIdentity 把名单条目值/处置 IP 归一为计数键身份（公开包装，
+// handlers 加名单中断路径消费——与 merge/解封清桶同键，禁止旁路第二份归一）。
+func AutobanEntryIdentity(value string) string { return autobanEntryIdentity(value) }
+
 // AutobanSuggestion 观察建议/候选形态。
 type AutobanSuggestion struct {
 	IP    string `json:"ip"`
@@ -1395,6 +1399,28 @@ func autobanEscalatedDuration(tx *sql.Tx, cfg AutobanConfig, identity string, no
 	return d, offense, nil
 }
 
+// autobanPruneDecayedRecidivism 物理清理衰减行（RunAutobanCycle 每轮调用，
+// 防表无限增长）：last_ban_at 距今超过 autobanRecidivismDecay 的身份行删除。
+// 与读时衰减（autobanEscalatedDuration 清零重算）同窗口口径——读时衰减只
+// 在再犯时生效，长期不再犯的身份行会永久滞留；物理清理补齐收敛。边界同读时
+// 判据（严格 > decay，恰在窗口边界保留）；空 last_ban_at 不清理。墙钟串与
+// 存储同格式（autobanTimeLayout），字典序=时间序；写侧恒落该格式。
+// decay<=0（衰减禁用）不清理。
+// DELETE 触发器 bump cluster_version，从端下一同步周期整表收敛。
+func autobanPruneDecayedRecidivism(now time.Time) {
+	if autobanRecidivismDecay <= 0 {
+		return
+	}
+	d := db.GetDB()
+	if d == nil {
+		return
+	}
+	cutoff := now.Add(-autobanRecidivismDecay).Format(autobanTimeLayout)
+	if _, err := d.Exec(`DELETE FROM autoban_recidivism WHERE last_ban_at <> '' AND last_ban_at < ?`, cutoff); err != nil {
+		TaskLogfWarn(AutobanTaskID, "cycle", "累犯衰减行清理失败（本轮跳过，下轮重试）: %v", err)
+	}
+}
+
 // ---- 重载节流 ----
 
 // autobanReloadState 本轮收敛请求的终态（摘要尾注与暂存标记一致——
@@ -1663,6 +1689,8 @@ func RunAutobanCycle(rc taskengine.RunContext) error {
 	}
 	window := time.Duration(cfg.WindowMinutes) * time.Minute
 	autobanFlushPendingReload(false)
+	// 累犯表物理衰减清理（每轮；dry-run 观察轮同样执行——表增长与模式无关）。
+	autobanPruneDecayedRecidivism(autobanNow())
 
 	// 喂入源健康联动。计数唯一喂入点是被停掉的
 	// 安全事件采集时，本任务仍会每轮 success 记「计数 0 IP」——自动封禁静默
@@ -2047,40 +2075,215 @@ func AutobanEscalatedCount() int {
 
 // AutobanRecidivismRecord 累犯历史行（面板「累犯升级」下钻弹框投影）：
 // identity 为封禁身份键（IPv6 /64 归一/IPv4 裸地址，与计数键同形）。
+// IPLocation 由 handlers 层富化（enrichIPLocation 单源，与事件日志同口径；
+// 服务层不依赖 GeoIP）。BanStatus/BanExpiresAt join 自动封禁名单生效条目
+// （AutobanActiveEntries 同口径）；Hits24h/LastEventAt 按身份键聚合 metrics
+// security_events 近 24h（IPv6 /64 归一，展示位容错）。
 type AutobanRecidivismRecord struct {
 	Identity          string `json:"identity"`
 	OffenseCount      int    `json:"offense_count"`
 	LastBanAt         string `json:"last_ban_at"`
 	EscalatedDuration string `json:"escalated_duration"`
+	IPLocation        string `json:"ip_location"`
+	BanStatus         string `json:"ban_status"`
+	BanExpiresAt      string `json:"ban_expires_at"`
+	Hits24h           int    `json:"hits_24h"`
+	LastEventAt       string `json:"last_event_at"`
 }
 
-// ListAutobanRecidivism 累犯历史全量（offense_count 降序、identity 升序——
-// 面板弹框按再犯次数优先呈现）。空表返回非 nil 空切片（JSON [] 契约）。
+// ListAutobanRecidivism 累犯历史筛选分页查询（offense_count 降序、identity
+// 升序——面板弹框按再犯次数优先呈现）。hidePermanent=true 隐藏
+// escalated_duration=permanent 行（默认视图只看可升级身份）；ipFilter 非空时
+// 按 identity 子串匹配（LIKE 通配符 %/_/\ 转义为字面，与审计日志筛选同口径）。
+// 返回 (本页记录, 筛选后总数)；空结果返回非 nil 空切片（JSON [] 契约）。
+// page/pageSize 由调用方解析保证 ≥1（parsePaginationParam 统一口径）。
 // 读失败返回错误，由调用方响亮 500——不以空列表冒充成功（与状态卡
 // fail-closed 口径同族：确定态不得由故障伪造）。
-func ListAutobanRecidivism() ([]AutobanRecidivismRecord, error) {
+func ListAutobanRecidivism(hidePermanent bool, ipFilter string, page, pageSize int) ([]AutobanRecidivismRecord, int, error) {
 	d := db.GetDB()
 	if d == nil {
-		return nil, errors.New("database unavailable")
+		return nil, 0, errors.New("database unavailable")
+	}
+	where := " WHERE 1=1"
+	var args []any
+	if hidePermanent {
+		where += " AND escalated_duration <> 'permanent'"
+	}
+	if ipFilter != "" {
+		where += " AND identity LIKE ? ESCAPE '\\'"
+		args = append(args, "%"+autobanEscapeLike(ipFilter)+"%")
+	}
+	var total int
+	if err := d.QueryRow(`SELECT COUNT(*) FROM autoban_recidivism`+where, args...).Scan(&total); err != nil {
+		return nil, 0, err
 	}
 	rows, err := d.Query(`SELECT identity, offense_count, last_ban_at, escalated_duration
-		FROM autoban_recidivism ORDER BY offense_count DESC, identity`)
+		FROM autoban_recidivism`+where+` ORDER BY offense_count DESC, identity LIMIT ? OFFSET ?`,
+		append(args, pageSize, (page-1)*pageSize)...)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer rows.Close()
 	out := make([]AutobanRecidivismRecord, 0)
 	for rows.Next() {
 		var r AutobanRecidivismRecord
 		if err := rows.Scan(&r.Identity, &r.OffenseCount, &r.LastBanAt, &r.EscalatedDuration); err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		out = append(out, r)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	return out, nil
+	enrichAutobanRecidivismRows(out)
+	return out, total, nil
+}
+
+// enrichAutobanRecidivismRows 行富化（名单封禁态 + 近 24h 事件聚合）：
+//   - ban_status/ban_expires_at：join 自动封禁名单生效条目（AutobanListEntries
+//   - AutobanActiveEntries，与 /status 生效面同口径——已到期未清理条目不算
+//     封禁中）。条目值经 autobanEntryIdentity 归一匹配身份键（IPv6 /64 CIDR
+//     与裸身份同键）；无到期时刻=permanent，有到期=timed（到期时刻透传）；
+//     名单无条目/名单读取失败=none（展示位容错，列表主体已读成功，不因
+//     join 失败整体 500）。
+//   - hits_24h/last_event_at：metrics security_events 近 24h 按身份键聚合。
+//     原始表 client_ip 为逐地址形态（非 /64 归一）：IPv4 身份走 client_ip IN
+//     精确批量（idx_security_events_ip_time 索引范围扫描）；IPv6 身份取回窗口
+//     内 IPv6 行后经 autobanIdentityKey 归一聚合（/64 漂移地址计入本段，与
+//     计数身份同粒度）。窗口 [now-24h, now]（UTC 墙钟串，含边界）；metrics
+//     句柄缺失/查询失败降级零值（状态卡统计位容错同族）。
+func enrichAutobanRecidivismRows(records []AutobanRecidivismRecord) {
+	if len(records) == 0 {
+		return
+	}
+	byIdentity := make(map[string]int, len(records))
+	for i := range records {
+		records[i].BanStatus = "none"
+		byIdentity[records[i].Identity] = i
+	}
+	if entries, _, err := AutobanListEntries(); err == nil {
+		for _, e := range AutobanActiveEntries(entries) {
+			idx, ok := byIdentity[autobanEntryIdentity(e.Value)]
+			if !ok {
+				continue
+			}
+			if e.ExpiresAt == "" {
+				records[idx].BanStatus = "permanent"
+				records[idx].BanExpiresAt = ""
+			} else {
+				records[idx].BanStatus = "timed"
+				records[idx].BanExpiresAt = e.ExpiresAt
+			}
+		}
+	}
+	metrics := db.MetricsDB
+	if metrics == nil {
+		return
+	}
+	now := autobanNow()
+	windowStart := now.Add(-24 * time.Hour).Format(autobanTimeLayout)
+	nowText := now.Format(autobanTimeLayout)
+	var v4Args []any
+	var placeholders []string
+	hasV6 := false
+	for identity := range byIdentity {
+		if strings.Contains(identity, ":") {
+			hasV6 = true
+			continue
+		}
+		placeholders = append(placeholders, "?")
+		v4Args = append(v4Args, identity)
+	}
+	if len(placeholders) > 0 {
+		rows, err := metrics.Query(`SELECT client_ip, COUNT(*), MAX(event_time) FROM security_events
+			WHERE event_time >= ? AND event_time <= ? AND client_ip IN (`+strings.Join(placeholders, ",")+`)
+			GROUP BY client_ip`, append([]any{windowStart, nowText}, v4Args...)...)
+		if err == nil {
+			for rows.Next() {
+				var ip, last string
+				var hits int
+				if rows.Scan(&ip, &hits, &last) == nil {
+					if idx, ok := byIdentity[ip]; ok {
+						records[idx].Hits24h = hits
+						records[idx].LastEventAt = autobanRecidivismEventTime(last)
+					}
+				}
+			}
+			rows.Close()
+		}
+	}
+	if !hasV6 {
+		return
+	}
+	rows, err := metrics.Query(`SELECT client_ip, event_time FROM security_events
+		WHERE event_time >= ? AND event_time <= ? AND client_ip LIKE '%:%'`, windowStart, nowText)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var ip, eventTime string
+		if rows.Scan(&ip, &eventTime) != nil {
+			continue
+		}
+		idx, ok := byIdentity[autobanIdentityKey(ip)]
+		if !ok {
+			continue
+		}
+		records[idx].Hits24h++
+		eventTime = autobanRecidivismEventTime(eventTime)
+		if eventTime > records[idx].LastEventAt {
+			records[idx].LastEventAt = eventTime
+		}
+	}
+}
+
+// autobanRecidivismEventTime 把 security_events.event_time 归一为 DB 墙钟布局：
+// DATETIME 列经 SQLite datetime() 规范化可能呈 ISO 形态（"…T…Z"，采集默认值
+// 路径），展示侧与 last_ban_at 同布局（YYYY-MM-DD HH:MM:SS，UTC）；不可解析
+// 原样透传（不丢数据，前端 formatDate 双形态兼容）。
+func autobanRecidivismEventTime(value string) string {
+	if ts, err := time.Parse(time.RFC3339, value); err == nil {
+		return ts.UTC().Format(autobanTimeLayout)
+	}
+	return value
+}
+
+// autobanEscapeLike 使用户筛选输入在 SQL LIKE 中保持字面量子串语义
+// （与 handlers.escapeLikePattern 同口径镜像——services 不反向依赖 handlers）；
+// 调用方负责包裹 % 并在 SQL 中声明 ESCAPE '\\'。
+func autobanEscapeLike(value string) string {
+	return strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(value)
+}
+
+// AutobanRecidivismDeleter 是单条删除的最小依赖面（库句柄或已开启的事务）。
+// 事务形态是加名单处置的必需用法：处置与名单写入同事务原子提交，事务外
+// DELETE 会与持写锁的调用方事务争 SQLITE_BUSY（与 AutobanConfigQuerier 同族）。
+type AutobanRecidivismDeleter interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}
+
+// deleteAutobanRecidivismSQL 单条删除语句单源（库句柄/事务两形态共用）。
+const deleteAutobanRecidivismSQL = `DELETE FROM autoban_recidivism WHERE identity=?`
+
+// DeleteAutobanRecidivismFrom 在调用方给定的视图上删除单条累犯身份行。
+// 幂等：identity 不存在时同样成功（DELETE 零行不报错）。
+func DeleteAutobanRecidivismFrom(ctx context.Context, e AutobanRecidivismDeleter, identity string) error {
+	_, err := e.ExecContext(ctx, deleteAutobanRecidivismSQL, identity)
+	return err
+}
+
+// DeleteAutobanRecidivism 删除单条累犯身份行（取消累犯身份——下次达阈值按
+// 首次档起算）。幂等：identity 不存在时同样成功（DELETE 零行不报错）。
+// 只清历史记账，不动名单条目：已生效封禁保持至到期。
+// DELETE 触发器 bump cluster_version，从端下一同步周期整表收敛。
+func DeleteAutobanRecidivism(identity string) error {
+	d := db.GetDB()
+	if d == nil {
+		return errors.New("database unavailable")
+	}
+	_, err := d.Exec(deleteAutobanRecidivismSQL, identity)
+	return err
 }
 
 // ResetAutobanRecidivism 清空全部累犯历史（重置计数——下次达阈值按首次档

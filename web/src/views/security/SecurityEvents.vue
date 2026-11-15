@@ -55,17 +55,19 @@
               <el-divider direction="vertical" />
               <span class="autoban-stat">{{ t(autobanStatusEscalationOn ? 'app.security.events.firstBanDuration' : 'app.security.events.statDuration') }} <b>{{ autobanStatValue(autobanStatusError, autobanDurationText) }}</b></span>
               <el-divider direction="vertical" />
+              <span class="autoban-stat">{{ t('app.security.events.escalationLabel') }} <b>{{ t(autobanEscalationShortKey(autobanStatus.escalation)) }}</b></span>
+              <el-divider direction="vertical" />
               <span class="autoban-stat">{{ t('app.security.events.statTodayBanned') }} <b class="autoban-danger">{{ autobanStatValue(autobanStatusError, autobanStatus.banned_today) }}</b></span>
               <el-divider direction="vertical" />
               <span class="autoban-stat">{{ t('app.security.events.statListEntries') }} <b>{{ autobanStatValue(autobanStatusError, autobanStatus.list_entries, t('app.security.events.suffixEntries')) }}</b></span>
             </div>
           </div>
         </el-tooltip>
-        <!-- 累犯记录入口（与总览「累犯升级」下钻同款弹框，共享组件复用）：
+        <!-- 操作组：累犯记录入口与禁用/编辑同组同规格（small plain、组 gap 8px），
              置于配置主热区之外——点击只开累犯弹框，不触发配置弹框；
              状态加载中/失败禁用（口径与总览下钻入口一致） -->
-        <el-button link type="primary" class="autoban-recidivism-link" :disabled="autobanStatusError || autobanStatusLoading" @click="recidivismDialogVisible = true">{{ t('app.security.events.statRecidivism') }}</el-button>
         <div class="autoban-actions">
+          <el-button size="small" type="primary" plain :disabled="autobanStatusError || autobanStatusLoading" @click="recidivismDialogVisible = true">{{ t('app.security.events.statRecidivism') }}</el-button>
           <template v-if="autobanStatus.enabled">
             <el-button size="small" type="danger" plain :disabled="!autobanWritable" :loading="autobanToggling" @click="toggleAutobanEnabled">{{ t('app.security.events.actionDisable') }}</el-button>
             <el-button size="small" plain :disabled="!autobanWritable" @click="openAutobanConfig">{{ t('app.security.events.actionEdit') }}</el-button>
@@ -485,7 +487,7 @@ import { formatDurationUs, isWafDurationFamily, triggerStageFamily } from '@/uti
 import { TRIGGERED_CATEGORIES, serializeTriggeredFilter, CRAWLER_FAMILY_LABEL } from '@/utils/triggeredFilter'
 import { ANOMALY_SCORE_HIGH, ANOMALY_SCORE_MID } from '@/utils/severityScale'
 import { DEEP_LINK_PARAMS, pageUrl } from '@/utils/deepLink'
-import { autobanStateLabel, autobanStatValue, isAutobanIneffective, autobanSuggestedDurationKey, autobanDurationLabel, suggestionBand, type SuggestionBand } from '@/utils/autobanStatus'
+import { autobanStateLabel, autobanStatValue, isAutobanIneffective, autobanSuggestedDurationKey, autobanDurationLabel, autobanEscalationShortKey, suggestionBand, type SuggestionBand } from '@/utils/autobanStatus'
 import { requestBodyEmptyNotice, viewerCanReadRequestBody } from '@/utils/requestBodyAccess'
 import { activateOnce } from '@/utils/keyboardActivate'
 import IPLocationAction from '@/views/security/IPLocationAction.vue'
@@ -1138,8 +1140,7 @@ const refreshPage = (): void => {
 .autoban-stats { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; flex: 0 1 auto; min-width: 0; font-size: 12px; color: var(--text-secondary, #6b7280); }
 .autoban-stat b { color: #111827; font-weight: 600; margin-left: 2px; }
 .autoban-danger { color: #f56c6c !important; }
-/* 累犯记录入口：link 按钮观感与统计行同字号（12px），不抢占参数区宽度 */
-.autoban-recidivism-link { font-size: 12px; height: auto; padding: 0; flex-shrink: 0; }
+/* 累犯记录入口与禁用/编辑按钮同组同规格（small plain），间距由组 gap 统一 */
 .autoban-actions { flex-shrink: 0; display: flex; gap: 8px; }
 .autoban-warn-bar { margin-top: 10px; }
 

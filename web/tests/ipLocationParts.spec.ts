@@ -4,7 +4,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { parseIpLocation } from '../src/utils/ipLocationParts.ts'
+import { parseIpLocation, compactIpLocation } from '../src/utils/ipLocationParts.ts'
 import { code } from './_helpers.ts'
 
 test('国内联值取前两段（国家/省），第三段及以后忽略', () => {
@@ -45,4 +45,46 @@ test('消费接线：弧线端点走单源拆分，两引擎不各自再拆一�
   const offenders = ['src/utils/threatScene.ts', 'src/utils/threatGlobe.ts']
     .filter((file) => /split\(['"]·['"]\)/.test(code(file)))
   assert.deepEqual(offenders, [], '场景/地球引擎只消费 threatShared 的结果，不得自带第二份分隔符拆分')
+})
+
+// ── 紧凑展示单源 compactIpLocation（IP 处置单元/累犯弹框共用）──
+
+const LABELS = { reserved: '保留地址', china: '中国' }
+const EN_LABELS = { reserved: 'Reserved', china: 'China' }
+
+test('紧凑归属地：国内三段取市、两段取省、单段取国名', () => {
+  assert.equal(compactIpLocation('中国·广东省·深圳市', LABELS), '深圳市')
+  assert.equal(compactIpLocation('中国·广东省', LABELS), '广东省')
+  assert.equal(compactIpLocation('中国', LABELS), '中国')
+})
+
+test('紧凑归属地：保留地址/海外按词条本地化，判定锚定数据值', () => {
+  assert.equal(compactIpLocation('保留地址', EN_LABELS), 'Reserved')
+  assert.equal(compactIpLocation('中国', EN_LABELS), 'China')
+  assert.equal(compactIpLocation('中国·广东省·深圳市', EN_LABELS), '深圳市')
+  // 海外国家名原样（数据值即展示值，不做二次翻译）
+  assert.equal(compactIpLocation('美国·California', EN_LABELS), '美国')
+})
+
+test('紧凑归属地：空/缺失回退空串；空段被过滤不顶替段序', () => {
+  assert.equal(compactIpLocation('', LABELS), '')
+  assert.equal(compactIpLocation(undefined, LABELS), '')
+  // 空段过滤后「中国··深圳市」= [中国, 深圳市] 两段 → 取第二段
+  assert.equal(compactIpLocation('中国··深圳市', LABELS), '深圳市')
+})
+
+test('消费接线：IP 处置单元走紧凑单源，累犯弹框经处置单元间接消费', () => {
+  const action = code('src/views/security/IPLocationAction.vue')
+  assert.match(action, /import \{ compactIpLocation \} from '@\/utils\/ipLocationParts'/, 'IP 处置单元必须复用单源导入')
+  assert.match(action, /compactIpLocation\(props\.location/, '紧凑文案必须经本函数')
+  const dialog = code('src/components/security/RecidivismDialog.vue')
+  // 累犯弹框 IP 列改用 IPLocationAction 快捷弹框（用户裁定）：归属地紧凑文案
+  // 由处置单元内部经 compactIpLocation 呈现，弹框不得自带第二份紧凑实现。
+  assert.match(dialog, /import IPLocationAction from '@\/views\/security\/IPLocationAction\.vue'/, '累犯弹框必须复用 IP 快捷弹框组件')
+  assert.doesNotMatch(dialog, /compactIpLocation/, '弹框不得自带紧凑归属地实现（经处置单元单源消费）')
+  // 两处不得自带第二份「保留地址/中国」判定或 split('·') 紧凑实现
+  for (const [file, text] of [['IPLocationAction', action], ['RecidivismDialog', dialog]] as const) {
+    assert.doesNotMatch(text, /=== '保留地址'/, `${file} 不得自带保留地址判定`)
+    assert.doesNotMatch(text, /split\(['"]·['"]\)/, `${file} 不得自带第二份分隔符拆分`)
+  }
 })
