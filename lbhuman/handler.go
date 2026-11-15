@@ -163,6 +163,7 @@ func (h *HumanHandler) ServeHTTP(w http.ResponseWriter, r *http.Request, next ca
 		trig := evalCC(current, h.CCRPSLimit, h.CC4xxRatio, h.CCSessionUA, h.CCSession)
 		if trig.Triggered {
 			recordCCTrigger(trig.Reason)
+			stashCCTriggerReason(h.RuleID, ip, trig.Reason)
 			h.serveChallengeForRequest(w, r, ip)
 			return nil
 		}

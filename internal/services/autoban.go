@@ -556,6 +556,93 @@ type autobanCounter struct {
 	// 的「达阈值」明细与 /status 的达阈值 IP 计数；热路径喂入不写任何分级
 	// 日志——每轮只有 Run 的汇总行「活跃 M 个 IP」）。
 	Reached bool
+	// Reasons 窗口内按触发原因类别计数（有限键集=autobanBanReasonOrder，
+	// 非无界增长）——候选主原因归因数据源，窗口滚动随 Count 一并清零。
+	Reasons map[string]int
+}
+
+// autobanBanReasonOrder 原因类别固定优先序（平局裁决：人机>会话异常>CRS>
+// 自定义，拦截>检测>挑战）——候选主原因取窗口内计数最多类别，平局按此序。
+// 键集即桶 Reasons 的有限键域；新增类别须同步 autobanBanReason 分类。
+var autobanBanReasonOrder = []string{
+	"人机验证失败", "人机验证挑战",
+	"会话异常", "突刺", "4xx激增",
+	"CRS拦截", "CRS检测",
+	"自定义规则拦截", "自定义规则检测",
+}
+
+// autobanBanReason 把喂入事件的 action×rule_triggered 归类为封禁原因文本
+// （名单条目备注消费）。值域=喂入点实际可达形态（阶段 3 族门内：人机两态
+// + CRS/自定义 × blocked/logged）；未知形态返回空串（merge 降级占位符）。
+// 备注是存储层数据非 UI 词条，中文常量直存（与「事件处置」「手动封禁」同口径）。
+func autobanBanReason(action, ruleTriggered string) string {
+	switch {
+	case action == "challenged" && ruleTriggered == "human_failed":
+		return "人机验证失败"
+	case action == "challenged" && ruleTriggered == "human_challenge":
+		return "人机验证挑战"
+	case action == "challenged" && strings.HasPrefix(ruleTriggered, "cc_"):
+		return AutobanCCTriggerReasonLabel(strings.TrimPrefix(ruleTriggered, "cc_"))
+	case securityEventsRuleIsCRSFamily(ruleTriggered):
+		if action == "blocked" {
+			return "CRS拦截"
+		}
+		if action == "logged" {
+			return "CRS检测"
+		}
+	case securityEventsRuleIsCustomFamily(ruleTriggered):
+		if action == "blocked" {
+			return "自定义规则拦截"
+		}
+		if action == "logged" {
+			return "自定义规则检测"
+		}
+	}
+	return ""
+}
+
+// AutobanCCTriggerReasonLabel CC 触发原因 token → 中文标签单源（lbhuman
+// evalCC 的 Reason 值域：rps_spike/4xx_ratio/session_anomaly）。条目备注
+// 与事件 rule_msg 共用；未知 token 返回空串（不污染归因）。
+func AutobanCCTriggerReasonLabel(reason string) string {
+	switch reason {
+	case "session_anomaly":
+		return "会话异常"
+	case "rps_spike":
+		return "突刺"
+	case "4xx_ratio":
+		return "4xx激增"
+	}
+	return ""
+}
+
+// autobanDominantReason 窗口内主原因：计数最多类别，平局按固定优先序
+// （autobanBanReasonOrder）；空桶返回空串。
+func autobanDominantReason(reasons map[string]int) string {
+	best, bestCount := "", 0
+	for _, r := range autobanBanReasonOrder {
+		if c := reasons[r]; c > bestCount {
+			best, bestCount = r, c
+		}
+	}
+	return best
+}
+
+// autobanEntryIsAutomatic 自动条目判据（merge 挤出/到期手动豁免单源）：
+// 存量占位符「自动封禁」、原因词表形态、「累犯·」前缀形态均识别为自动
+// 条目——备注升级为具体原因后判据不得把自动条目误判为手动（挤出/清理/
+// 豁免错乱）。手动备注（「手动封禁」「事件处置」/自定义文本）不命中。
+func autobanEntryIsAutomatic(e models.IPListEntry) bool {
+	if e.Remark == autobanEntryRemark {
+		return true
+	}
+	remark := strings.TrimPrefix(e.Remark, "累犯·")
+	for _, r := range autobanBanReasonOrder {
+		if remark == r {
+			return true
+		}
+	}
+	return false
 }
 
 // autobanFeedItem 摄取提交点的最小喂入形态。
@@ -655,7 +742,10 @@ func ResetAutobanCounters() {
 type HumanObserveItem struct {
 	IP   string
 	Kind string
-	At   time.Time
+	// Reason CC 触发原因（session_anomaly/rps_spike/4xx_ratio；非 CC 触发空）——
+	// 会话异常等 CC 触发的归因数据源（条目备注/事件详情）。
+	Reason string
+	At     time.Time
 }
 
 // ObserveHumanEvents 供人机事件 IPC 提交后按批喂入挑战证据（2026-11-13
@@ -678,6 +768,11 @@ func ObserveHumanEvents(items []HumanObserveItem) {
 			ruleTriggered = "human_failed"
 		case "pass":
 			ruleTriggered = "human_pass"
+		}
+		// CC 触发放行事件改用 CC 原因 token（会话异常等归因）；失败/通过
+		// 保持人机维度 token（失败是独立计数维度，不并入触发原因）。
+		if it.Kind == "challenge" && it.Reason != "" {
+			ruleTriggered = "cc_" + it.Reason
 		}
 		autobanObserveEventScopedAt(cfg, it.IP, "challenged", ruleTriggered, it.At)
 	}
@@ -756,10 +851,12 @@ func autobanObserveEventScopedAt(cfg AutobanConfig, ip, action, ruleTriggered st
 	if action == "challenged" {
 		// 人机事件：发放/失败按各自维度成员资格计数；通过永不计。
 		dim := ""
-		switch ruleTriggered {
-		case "human_challenge":
+		switch {
+		case ruleTriggered == "human_challenge" || strings.HasPrefix(ruleTriggered, "cc_"):
+			// CC 触发放行（cc_session_anomaly 等）属发放维度——与 human_challenge
+			// 同口径计数，原因分类另走 autobanBanReason。
 			dim = AutobanScopeChallengeIssued
-		case "human_failed":
+		case ruleTriggered == "human_failed":
 			dim = AutobanScopeChallengeFailed
 		}
 		if dim == "" || !scopeSet[dim] {
@@ -791,9 +888,16 @@ func autobanObserveEventScopedAt(cfg AutobanConfig, ip, action, ruleTriggered st
 			w.Count = 0
 			w.WindowStart = now
 			w.Reached = false
+			w.Reasons = nil
 		}
 		w.Count++
 		w.LastSeen = now
+		if reason := autobanBanReason(action, ruleTriggered); reason != "" {
+			if w.Reasons == nil {
+				w.Reasons = make(map[string]int, len(autobanBanReasonOrder))
+			}
+			w.Reasons[reason]++
+		}
 		if !w.Reached && cfg.Threshold > 0 && w.Count >= cfg.Threshold {
 			w.Reached = true
 		}
@@ -888,6 +992,10 @@ type AutobanSuggestion struct {
 	// Location 归属地展示文本（仅 /status 建议列表富化：handlers 侧
 	// enrichIPLocation 单源装填；引擎候选/审计路径不消费，恒空串）。
 	Location string `json:"ip_location"`
+	// Reason 窗口内主触发原因（计数最多类别，平局按固定优先序）——merge
+	// 写条目备注消费（「累犯·原因」/直接原因）；无 feed 详情的 direct seam
+	// 恒空串（merge 降级占位符）。
+	Reason string `json:"reason,omitempty"`
 }
 
 // autobanCandidates 评估候选：先评估后修剪——过期桶若计数
@@ -904,7 +1012,7 @@ func autobanCandidates(threshold int, window time.Duration) []AutobanSuggestion 
 		if !w.WindowStart.IsZero() && now.Sub(w.WindowStart) >= window {
 			// 先评估——过期桶已跨阈值的并入候选，再删桶。
 			if w.Count >= threshold {
-				expiredCandidates = append(expiredCandidates, AutobanSuggestion{IP: ip, Count: w.Count, WindowStart: w.WindowStart, LastSeen: w.LastSeen})
+				expiredCandidates = append(expiredCandidates, AutobanSuggestion{IP: ip, Count: w.Count, WindowStart: w.WindowStart, LastSeen: w.LastSeen, Reason: autobanDominantReason(w.Reasons)})
 			}
 			if w.Reached {
 				expiredReached = append(expiredReached, ip)
@@ -915,7 +1023,7 @@ func autobanCandidates(threshold int, window time.Duration) []AutobanSuggestion 
 	var out []AutobanSuggestion
 	for ip, w := range autobanWindows {
 		if w.Count >= threshold {
-			out = append(out, AutobanSuggestion{IP: ip, Count: w.Count, WindowStart: w.WindowStart, LastSeen: w.LastSeen})
+			out = append(out, AutobanSuggestion{IP: ip, Count: w.Count, WindowStart: w.WindowStart, LastSeen: w.LastSeen, Reason: autobanDominantReason(w.Reasons)})
 		}
 	}
 	out = append(out, expiredCandidates...)
@@ -1158,7 +1266,7 @@ func autobanMergeEntries(cfg AutobanConfig, candidates []AutobanSuggestion) (aut
 	for _, e := range entries {
 		if exp := parseAutobanEntryTime(e.ExpiresAt); !exp.IsZero() && !exp.After(now) {
 			out.Expired = append(out.Expired, e.Value)
-			if e.Remark != autobanEntryRemark {
+			if !autobanEntryIsAutomatic(e) {
 				out.ExpiredManual = append(out.ExpiredManual, e.Value)
 			}
 			expiredThisRound[autobanEntryIdentity(e.Value)] = struct{}{}
@@ -1206,7 +1314,15 @@ func autobanMergeEntries(cfg AutobanConfig, candidates []AutobanSuggestion) (aut
 			}
 			banDuration, offense = d, n
 		}
-		entry := models.IPListEntry{Value: autobanBanValue(c.IP), Remark: autobanEntryRemark, CreatedAt: nowStr}
+		// 备注=具体触发原因（用户裁定）：累犯升档（offense>1 且升级开启）
+		// 冠「累犯·」前缀；首封/关闭档直接原因；无原因降级占位符（存量形态）。
+		remark := c.Reason
+		if remark == "" {
+			remark = autobanEntryRemark
+		} else if offense > 1 {
+			remark = "累犯·" + remark
+		}
+		entry := models.IPListEntry{Value: autobanBanValue(c.IP), Remark: remark, CreatedAt: nowStr}
 		if banDuration > 0 {
 			entry.ExpiresAt = now.Add(banDuration).Format(autobanTimeLayout)
 		}
@@ -1232,7 +1348,7 @@ func autobanMergeEntries(cfg AutobanConfig, candidates []AutobanSuggestion) (aut
 	}
 	evictQueue := make([]evictCandidate, 0, len(kept))
 	for i, e := range kept {
-		if e.Remark != autobanEntryRemark {
+		if !autobanEntryIsAutomatic(e) {
 			continue
 		}
 		exp := parseAutobanEntryTime(e.ExpiresAt)

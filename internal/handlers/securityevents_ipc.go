@@ -134,7 +134,8 @@ func (s *SecurityEventsIPCServer) handleIngestHuman(w http.ResponseWriter, r *ht
 		Method   string `json:"method"`
 		URI      string `json:"uri"`
 		UA       string `json:"ua"`
-		Kind     string `json:"kind"` // challenge | pass | fail
+		Kind     string `json:"kind"`   // challenge | pass | fail
+		Reason   string `json:"reason"` // CC 触发原因（session_anomaly/rps_spike/4xx_ratio；非 CC 触发空）
 	}
 	var rows []humanEventRow
 	if err := json.NewDecoder(r.Body).Decode(&rows); err != nil {
@@ -193,9 +194,14 @@ func (s *SecurityEventsIPCServer) handleIngestHuman(w http.ResponseWriter, r *ht
 		// （2006-01-02 15:04:05.999999999-07:00），破坏读侧字符串窗口
 		// 比较/同秒边界/保留期清理的契约。
 		ts := time.UnixMilli(row.Ts).UTC().Format("2006-01-02 15:04:05")
+		// rule_msg 携带 CC 触发原因（事件详情可读）；非 CC 触发保持原形态。
+		ruleMsg := "人机验证 " + row.Kind
+		if label := services.AutobanCCTriggerReasonLabel(row.Reason); label != "" {
+			ruleMsg += "（" + label + "）"
+		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO security_events (event_time, rule_caddy_id, policy_id, client_ip, method, uri, event_type, rule_triggered, rule_msg, action, rule_name, policy_name)
 			VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
-			ts, row.RuleID, attr.policyID, row.ClientIP, row.Method, row.URI, "human", rule, "人机验证 "+row.Kind, action, ruleName, attr.policyName); err != nil {
+			ts, row.RuleID, attr.policyID, row.ClientIP, row.Method, row.URI, "human", rule, ruleMsg, action, ruleName, attr.policyName); err != nil {
 			http.Error(w, "human event insert: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -210,7 +216,7 @@ func (s *SecurityEventsIPCServer) handleIngestHuman(w http.ResponseWriter, r *ht
 	feed := make([]services.HumanObserveItem, 0, len(rows))
 	for _, row := range rows {
 		if row.Kind == "challenge" || row.Kind == "fail" {
-			feed = append(feed, services.HumanObserveItem{IP: row.ClientIP, Kind: row.Kind, At: time.UnixMilli(row.Ts).UTC()})
+			feed = append(feed, services.HumanObserveItem{IP: row.ClientIP, Kind: row.Kind, Reason: row.Reason, At: time.UnixMilli(row.Ts).UTC()})
 		}
 	}
 	services.ObserveHumanEvents(feed)

@@ -175,3 +175,22 @@ func TestObserveHumanEvents_batchGates(t *testing.T) {
 		t.Fatalf("启用态批喂入应计 2，实际=%+v", w)
 	}
 }
+
+// Given CC 触发放行事件携带 reason=session_anomaly（IPC 贯通形态）。
+// When ObserveHumanEvents 批喂入（challenge_issued 口径）。
+// Then 计入发放维度且候选主原因=会话异常（条目备注归因数据源）；
+// 无 reason 的普通发放仍归人机验证挑战（不污染）。
+func TestObserveHumanEvents_ccReasonFlowsToCandidate(t *testing.T) {
+	installAutobanFixture(t, "2026-11-15 10:00:00")
+	setAutobanConfigRaw(t, true, 3, 5, "1h", "challenge_issued", false)
+	at := autobanNow()
+	ObserveHumanEvents([]HumanObserveItem{
+		{IP: "45.33.32.85", Kind: "challenge", Reason: "session_anomaly", At: at},
+		{IP: "45.33.32.85", Kind: "challenge", Reason: "session_anomaly", At: at},
+		{IP: "45.33.32.85", Kind: "challenge", At: at},
+	})
+	candidates := autobanCandidates(3, 5*time.Minute)
+	if len(candidates) != 1 || candidates[0].Reason != "会话异常" {
+		t.Fatalf("候选=%+v, want 主原因=会话异常（2/3 多数）", candidates)
+	}
+}

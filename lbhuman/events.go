@@ -33,6 +33,7 @@ type humanEvent struct {
 	uri    string
 	ua     string
 	kind   string
+	reason string        // CC 触发原因（session_anomaly/rps_spike/4xx_ratio；非 CC 触发空）
 	ts     int64         // 发生（入队）时刻 unix 毫秒——投递时刻会随队列积压漂移
 	done   chan struct{} // 非 nil=排空探针：worker 处理到该事件即关闭
 }
@@ -89,13 +90,32 @@ func (p *humanEventPoster) shouldReport(ip, kind string, now time.Time) bool {
 	return true
 }
 
+// ccTriggerReasons CC 触发原因暂存（ruleID|normalizeIP → reason）：触发点
+// （ServeHTTP CC 判定）与发放事件上报点（serveChallengeForRequest 族）分离，
+// 按键暂存-一次性消费贯通原因，不改 reportHumanEvent 签名（13 调用点零扰动）。
+// 同键并发触发按后值覆盖（同窗口同原因，语义无损）；消费即删不滞留。
+var ccTriggerReasons sync.Map
+
+// stashCCTriggerReason 触发点暂存原因（仅 CC 判定触发时调用）。
+func stashCCTriggerReason(ruleID, ip, reason string) {
+	ccTriggerReasons.Store(ruleID+"|"+normalizeIP(ip), reason)
+}
+
+// takeCCTriggerReason 发放上报点消费原因（一次性；无暂存返回空串）。
+func takeCCTriggerReason(ruleID, ip string) string {
+	if v, ok := ccTriggerReasons.LoadAndDelete(ruleID + "|" + normalizeIP(ip)); ok {
+		return v.(string)
+	}
+	return ""
+}
+
 // reportHumanEvent 异步上报（非阻塞：投递到缓冲 channel，单 worker 串行发送；
 // 队列满即丢弃计数，投递失败计数——监控事件不阻塞请求路径）。
 // ts 在入队时刻定格：事件时间戳=发生时刻，不随队列积压/投递阻塞漂移。
 func reportHumanEvent(ruleID, ip, method, uri, ua, kind string) {
 	humanEventWorker.Do(func() { go humanEventWorkerLoop() })
 	select {
-	case humanEventQueue <- humanEvent{ruleID: ruleID, ip: ip, method: method, uri: uri, ua: ua, kind: kind, ts: time.Now().UnixMilli()}:
+	case humanEventQueue <- humanEvent{ruleID: ruleID, ip: ip, method: method, uri: uri, ua: ua, kind: kind, reason: takeCCTriggerReason(ruleID, ip), ts: time.Now().UnixMilli()}:
 	default:
 		humanEventDropped.Add(1)
 	}
@@ -125,10 +145,14 @@ func (p *humanEventPoster) deliver(ev humanEvent) {
 		humanEventDeliverFailed.Add(1)
 		return
 	}
-	payload := []map[string]any{{
+	entry := map[string]any{
 		"ts": ev.ts, "rule_id": ev.ruleID, "client_ip": ev.ip,
 		"method": ev.method, "uri": ev.uri, "ua": ev.ua, "kind": ev.kind,
-	}}
+	}
+	if ev.reason != "" {
+		entry["reason"] = ev.reason
+	}
+	payload := []map[string]any{entry}
 	raw, err := json.Marshal(payload)
 	if err != nil {
 		humanEventDeliverFailed.Add(1)

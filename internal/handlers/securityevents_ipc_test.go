@@ -392,3 +392,26 @@ func TestSecurityEventsIPCHandler_humanOversizeBodyReturns413(t *testing.T) {
 		t.Fatalf("malformed status=%d body=%s, want 400", rec.Code, rec.Body.String())
 	}
 }
+
+// Given 人机事件携带 CC 触发原因（reason=session_anomaly）。
+// When 摄入提交。
+// Then rule_msg 落具体原因文案（事件详情可读），喂入携带 reason
+// （自动封禁条目备注「会话异常」归因数据源）。
+func TestSecurityEventsIPCHandler_humanEventReasonCarried(t *testing.T) {
+	setupSecurityPolicyTestDB(t)
+	h := &SecurityEventsIPCServer{}
+	body := `[{"ts":1786447300123,"rule_id":"lb-cc-reason","client_ip":"203.0.113.95","method":"GET","uri":"/x","ua":"test","kind":"challenge","reason":"session_anomaly"}]`
+	req := httptest.NewRequest(http.MethodPost, services.SecurityEventsIPCIngestHumanPath, strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	http.HandlerFunc(h.ingestRouter).ServeHTTP(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var ruleMsg string
+	if err := db.MetricsDB.QueryRow(`SELECT COALESCE(rule_msg,'') FROM security_events WHERE rule_caddy_id='lb-cc-reason'`).Scan(&ruleMsg); err != nil {
+		t.Fatal(err)
+	}
+	if ruleMsg != "人机验证 challenge（会话异常）" {
+		t.Fatalf("rule_msg=%q, want 人机验证 challenge（会话异常）", ruleMsg)
+	}
+}

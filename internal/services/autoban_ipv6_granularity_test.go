@@ -75,7 +75,7 @@ func TestAutobanObserve_ipv6PrivacyRotationAggregatesPer64(t *testing.T) {
 	}
 	entries := entryValues(presetEntries(t))
 	e, ok := entries["2606:4700:abcd:1234::/64"]
-	if !ok || e.Remark != autobanEntryRemark || e.ExpiresAt == "" {
+	if !ok || !autobanEntryIsAutomatic(e) || e.ExpiresAt == "" {
 		t.Fatalf("名单终态=%+v, want /64 CIDR 自动条目带到期", entries)
 	}
 }
