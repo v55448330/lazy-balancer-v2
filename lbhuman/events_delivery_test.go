@@ -159,3 +159,51 @@ func TestHumanEvent_tsIsEnqueueTimeNotDeliveryTime(t *testing.T) {
 		t.Fatalf("second event ts=%d outside enqueue window [%d,%d] (ts must be occurrence time, not delivery time)", second, enqueueBefore, enqueueAfter)
 	}
 }
+
+// panic 隔离必须计数：deliver 内部 panic（真实故障机制——注入的 Transport
+// RoundTrip panic，模拟序列化/网络栈异常）被 recover 吞掉时，丢失量必须
+// 经 events_deliver_failed 可对账（旧实现 recover 分支零计数，监控盲区）。
+// worker 不得因 panic 退出：后续事件照常投递。
+type panicRoundTripper struct{}
+
+func (panicRoundTripper) RoundTrip(*http.Request) (*http.Response, error) {
+	panic("injected transport panic")
+}
+
+func TestHumanEventDelivery_panicCountedAndWorkerSurvives(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+	resetHumanEventPosterForTest(t, srv.URL)
+	// 真实 panic 注入：替换 client.Transport（RoundTrip panic 经 client.Post
+	// 传导到 deliver 的 recover 分支）。
+	poster.mu.Lock()
+	poster.client = &http.Client{Timeout: 2 * time.Second, Transport: panicRoundTripper{}}
+	poster.mu.Unlock()
+
+	reportHumanEvent("lb-panic", "203.0.113.64", http.MethodGet, "/", "ua", "challenge")
+	if !drainHumanEventsForTest(10 * time.Second) {
+		t.Fatal("queue must drain (worker must survive the panic)")
+	}
+	if got := humanEventDeliverFailed.Load(); got != 1 {
+		t.Fatalf("deliver_failed=%d, want 1 (panic must be counted as delivery failure)", got)
+	}
+	// 终态断言：stats 端点下发该计数。
+	payload := ccTriggerStatsSnapshot(t)
+	if v, ok := payload["events_deliver_failed"].(float64); !ok || v != 1 {
+		t.Fatalf("stats events_deliver_failed=%v, want 1 (payload=%v)", v, payload)
+	}
+
+	// worker 存活：恢复 transport 后下一条事件照常投递成功（不再计失败）。
+	poster.mu.Lock()
+	poster.client = &http.Client{Timeout: 2 * time.Second}
+	poster.mu.Unlock()
+	reportHumanEvent("lb-after-panic", "203.0.113.65", http.MethodGet, "/", "ua", "pass")
+	if !drainHumanEventsForTest(10 * time.Second) {
+		t.Fatal("queue must drain after recovery")
+	}
+	if got := humanEventDeliverFailed.Load(); got != 1 {
+		t.Fatalf("deliver_failed=%d, want 1 (recovered delivery must not add failures)", got)
+	}
+}

@@ -5,7 +5,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
 import { parseIpLocation, compactIpLocation } from '../src/utils/ipLocationParts.ts'
-import { code } from './_helpers.ts'
+import { code, member } from './_helpers.ts'
 
 test('国内联值取前两段（国家/省），第三段及以后忽略', () => {
   assert.deepEqual(parseIpLocation('中国·广东省·深圳市'), { country: '中国', province: '广东省' })
@@ -99,6 +99,6 @@ test('自动封禁取消：CIDR 条目同路径可解禁 + 写成功通知宿主
   assert.match(action, /confirmTextCidr/, 'CIDR 整段解封必须用网段口径确认文案')
   // 取消封禁成功 → emit('changed')（与加名单同族），宿主累犯弹框
   // ban_status/移除禁用态即时刷新。
-  const unban = action.slice(action.indexOf('const unbanAutoban'), action.indexOf('const eventCount'))
+  const unban = member(action, 'const unbanAutoban')
   assert.match(unban, /emit\('changed'\)/, '取消封禁成功必须通知宿主刷新')
 })

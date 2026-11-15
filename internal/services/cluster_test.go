@@ -310,8 +310,15 @@ func TestClusterService_ApproveNode_redelivers_cluster_token_until_confirmed(t *
 	if _, _, err := service.Snapshot(context.Background(), 0, "", first.ClusterToken); err != nil {
 		t.Fatalf("authenticate snapshot: %v", err)
 	}
-	if _, err := service.RegistrationStatus(context.Background(), registration.RegistrationID, registration.RegistrationSecret, time.Now()); !errors.Is(err, ErrInvalidClusterAuth) {
-		t.Fatalf("registration secret remained valid after authenticated snapshot delivery: %v", err)
+	// 首个快照已消费 registration_secret：状态轮询必须幂等重交付同一令牌
+	// （与 ConfirmRegistration 幂等契约对称），不得返回 401——否则从端 5 连败
+	// 轨道清空注册态，需人工重新注册。
+	redelivered, err := service.RegistrationStatus(context.Background(), registration.RegistrationID, registration.RegistrationSecret, time.Now())
+	if err != nil {
+		t.Fatalf("status poll after snapshot consumption must be idempotent: %v", err)
+	}
+	if redelivered.Status != "approved" || redelivered.ClusterToken != first.ClusterToken {
+		t.Fatalf("redelivered status=%#v, want approved with same token %q", redelivered, first.ClusterToken)
 	}
 }
 

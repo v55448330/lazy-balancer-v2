@@ -132,3 +132,34 @@ func TestListChallengeRecords_missingTotalStopsOnEmptyPage(t *testing.T) {
 		t.Fatalf("records=%d calls=%d, want %d/3（空页收尾，整页不漏收）", len(records), calls, 2*challengeListPageSize)
 	}
 }
+
+// TotalCount 失真偏大（1000）且每页重复下发整页同批记录：无进展兜底必须
+// 终止（与 dnspod/tencent 同构）——重复取到已见记录说明翻页没有换来新数据，
+// 继续翻页只是空转+重复收集。旧口径只看「空页/累计≥total/短页」，整页重复
+// 形态下空转到页数上限（20 次调用、2000 条重复记录）；新口径第二次取到
+// 重复整页即收手（2 次调用、100 条记录）。
+func TestListChallengeRecords_stopsWhenPagesRepeatWithInflatedTotal(t *testing.T) {
+	var calls int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		records := make([]map[string]any, 0, challengeListPageSize)
+		for i := range challengeListPageSize {
+			records = append(records, map[string]any{
+				"RecordId": strconv.Itoa(1000 + i), "RR": "_acme-challenge.www", "Type": "TXT", "Value": "challenge-value",
+			})
+		}
+		writeFakeJSON(w, http.StatusOK, map[string]any{
+			"TotalCount": 1000, "DomainRecords": map[string]any{"Record": records}, "RequestId": "req-list",
+		})
+	}))
+	t.Cleanup(server.Close)
+	provider := newFakeProvider(t, server.URL, 1)
+
+	records, err := provider.listChallengeRecords(context.Background(), testZone, "_acme-challenge.www")
+	if err != nil {
+		t.Fatalf("listChallengeRecords: %v", err)
+	}
+	if len(records) != challengeListPageSize || calls != 2 {
+		t.Fatalf("records=%d calls=%d, want %d/2（重复页无进展即收手，不空转页数上限）", len(records), calls, challengeListPageSize)
+	}
+}

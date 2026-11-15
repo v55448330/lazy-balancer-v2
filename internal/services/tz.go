@@ -286,8 +286,11 @@ func hasASCIIPrefixFold(value []byte, prefix string) bool {
 // FixedZone+8 占位时区；装配点即时刷新消除该窗口，导入新时区亦即时生效。
 func ApplyLogLevel() {
 	level := db.DefaultLogLevel
-	if db.DB != nil {
-		if err := db.DB.QueryRow("SELECT COALESCE(log_level,?) FROM global_config WHERE id=1", db.DefaultLogLevel).Scan(&level); err != nil {
+	// 句柄取局部快照（与同文件 refreshLocation 同形）：nil 判定与查询必须
+	// 针对同一个 *sql.DB——db.DB 双读在关停交错下第二次读可能已置 nil。
+	database := db.DB
+	if database != nil {
+		if err := database.QueryRow("SELECT COALESCE(log_level,?) FROM global_config WHERE id=1", db.DefaultLogLevel).Scan(&level); err != nil {
 			// 读失败不得静默降级：warn/error 配置失效会放大日志量，与「配置
 			// 读失败必须留痕」同族。状态转换口径（首报 warn + 恢复 info）避免
 			// 每次装配刷屏。

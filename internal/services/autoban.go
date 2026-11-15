@@ -962,14 +962,24 @@ func autobanEntryIdentity(value string) string {
 // handlers 加名单中断路径消费——与 merge/解封清桶同键，禁止旁路第二份归一）。
 func AutobanEntryIdentity(value string) string { return autobanEntryIdentity(value) }
 
-// AutobanIdentityActivelyBanned 判定身份是否正在被自动封禁（名单生效条目
-// 命中——限时未到期或永久）。与 enrichAutobanRecidivismRows 的 ban_status
-// join 同口径（AutobanListEntries + AutobanActiveEntries + autobanEntryIdentity
-// 归一，IPv6 /64 CIDR↔裸身份键）；handlers 单条移除守卫消费——封禁中的身份
-// 不允许经累犯弹框移除（须先从 IP 快捷弹框取消封禁）。
-func AutobanIdentityActivelyBanned(identity string) (bool, error) {
-	entries, _, err := AutobanListEntries()
+// autobanIdentityBannedInView 在调用方给定视图上判定身份是否正被封禁
+// （预置名单生效条目命中——限时未到期或永久）。与 enrichAutobanRecidivismRows
+// 的 ban_status join 同口径（AutobanActiveEntries + autobanEntryIdentity 归一，
+// IPv6 /64 CIDR↔裸身份键）。视图形态供守卫与删除同事务消费（BEGIN
+// IMMEDIATE 写锁下读到的名单即删除时刻的名单，无 TOCTOU 窗口）；名单行
+// 缺失按未封禁（只读判定不补建——与库句柄形态的 ensure 补建刻意分叉，
+// 补建是写动作，不得混入守卫事务）。
+func autobanIdentityBannedInView(ctx context.Context, q AutobanConfigQuerier, identity string) (bool, error) {
+	var raw string
+	err := q.QueryRowContext(ctx, `SELECT COALESCE(entries,'[]') FROM security_ip_lists WHERE name=? AND COALESCE(system,0)=1`, AutobanPresetListName).Scan(&raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
 	if err != nil {
+		return false, err
+	}
+	var entries []models.IPListEntry
+	if err := json.Unmarshal([]byte(raw), &entries); err != nil {
 		return false, err
 	}
 	key := autobanEntryIdentity(identity)
@@ -979,6 +989,15 @@ func AutobanIdentityActivelyBanned(identity string) (bool, error) {
 		}
 	}
 	return false, nil
+}
+
+// AutobanIdentityActivelyBanned 判定身份是否正在被自动封禁（库句柄视图；
+// handlers 单条移除守卫的事务形态见 DeleteAutobanRecidivismGuarded）。
+func AutobanIdentityActivelyBanned(identity string) (bool, error) {
+	if db.DB == nil {
+		return false, errors.New("数据库未初始化")
+	}
+	return autobanIdentityBannedInView(context.Background(), db.DB, identity)
 }
 
 // AutobanSuggestion 观察建议/候选形态。
@@ -2402,22 +2421,60 @@ type AutobanRecidivismDeleter interface {
 const deleteAutobanRecidivismSQL = `DELETE FROM autoban_recidivism WHERE identity=?`
 
 // DeleteAutobanRecidivismFrom 在调用方给定的视图上删除单条累犯身份行。
+// identity 经 autobanEntryIdentity 归一（与计数键/merge 记账键同形——
+// 大写/完整形态 IPv6 与 /64 CIDR 均命中归一行）。
 // 幂等：identity 不存在时同样成功（DELETE 零行不报错）。
 func DeleteAutobanRecidivismFrom(ctx context.Context, e AutobanRecidivismDeleter, identity string) error {
-	_, err := e.ExecContext(ctx, deleteAutobanRecidivismSQL, identity)
+	_, err := e.ExecContext(ctx, deleteAutobanRecidivismSQL, autobanEntryIdentity(identity))
 	return err
 }
 
+// ErrAutobanIdentityBanned 单条移除守卫拒绝：身份正被自动封禁（名单生效
+// 条目命中）。handlers 映射 400「封禁中」——须先取消封禁再移除前科。
+var ErrAutobanIdentityBanned = errors.New("autoban identity actively banned")
+
+// DeleteAutobanRecidivismGuarded 守卫+删除同一 BEGIN IMMEDIATE 事务
+// （DSN _txlock=immediate：事务开始即持写锁）：守卫读到的名单即删除时刻
+// 的名单——并发 merge/名单写在守卫读与 DELETE 之间无法提交，杜绝
+// 「守卫放行→封禁落库→前科被删」的处置语义分裂（TOCTOU）。identity 在
+// 入口归一（返回值供审计留痕）。封禁中返回 ErrAutobanIdentityBanned 且
+// 事务回滚（零写入）；幂等：不存在也成功。只清历史记账，不动名单条目。
+// DELETE 触发器 bump cluster_version，从端下一同步周期整表收敛。
+func DeleteAutobanRecidivismGuarded(ctx context.Context, identity string) (string, error) {
+	identity = autobanEntryIdentity(identity)
+	d := db.GetDB()
+	if d == nil {
+		return identity, errors.New("database unavailable")
+	}
+	tx, err := d.BeginTx(ctx, nil)
+	if err != nil {
+		return identity, err
+	}
+	defer tx.Rollback()
+	banned, err := autobanIdentityBannedInView(ctx, tx, identity)
+	if err != nil {
+		return identity, err
+	}
+	if banned {
+		return identity, ErrAutobanIdentityBanned
+	}
+	if _, err := tx.ExecContext(ctx, deleteAutobanRecidivismSQL, identity); err != nil {
+		return identity, err
+	}
+	return identity, tx.Commit()
+}
+
 // DeleteAutobanRecidivism 删除单条累犯身份行（取消累犯身份——下次达阈值按
-// 首次档起算）。幂等：identity 不存在时同样成功（DELETE 零行不报错）。
-// 只清历史记账，不动名单条目：已生效封禁保持至到期。
+// 首次档起算）。identity 经 autobanEntryIdentity 归一。幂等：identity 不存在
+// 时同样成功（DELETE 零行不报错）。只清历史记账，不动名单条目：已生效封禁
+// 保持至到期。守卫+删除原子形态见 DeleteAutobanRecidivismGuarded。
 // DELETE 触发器 bump cluster_version，从端下一同步周期整表收敛。
 func DeleteAutobanRecidivism(identity string) error {
 	d := db.GetDB()
 	if d == nil {
 		return errors.New("database unavailable")
 	}
-	_, err := d.Exec(deleteAutobanRecidivismSQL, identity)
+	_, err := d.Exec(deleteAutobanRecidivismSQL, autobanEntryIdentity(identity))
 	return err
 }
 

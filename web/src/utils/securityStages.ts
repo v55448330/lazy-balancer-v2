@@ -1160,7 +1160,7 @@ export const createIpMatcher = (ip: string): ((entry: string) => boolean) => {
     if (v6 !== null) v4 = mappedV4Of(v6) ?? -1
   }
   return (entry) => {
-    if (entry === trimmed) return true
+    if (entry === trimmed || entry.toLowerCase() === trimmed.toLowerCase()) return true
     if (!entry.includes('/')) return false
     const parsed = parseCidr(entry)
     if (parsed === null) return false
@@ -1178,7 +1178,7 @@ export const createIpMatcher = (ip: string): ((entry: string) => boolean) => {
 
 /** 条目匹配：精确 IP 或 CIDR 包含（IPv4/IPv6 双栈，CIDR 仅作用于同族） */
 export const entryMatchesIp = (entry: string, ip: string): boolean => {
-  if (entry === ip) return true
+  if (entry === ip || entry.toLowerCase() === ip.toLowerCase()) return true
   if (entry.includes('/')) return ipInCidr(ip, entry)
   return false
 }

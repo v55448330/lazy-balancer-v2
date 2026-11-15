@@ -47,8 +47,8 @@ type humanEventPoster struct {
 var poster = &humanEventPoster{}
 
 // humanEventQueue 缓冲投递队列；humanEventDropped 队列满丢弃计数、
-// humanEventDeliverFailed 投递失败丢弃计数（连接拒绝/非 204/序列化失败——
-// 两者都是可观测对账源，经 /lb/human/stats 下发）。
+// humanEventDeliverFailed 投递失败丢弃计数（连接拒绝/非 204/序列化失败/
+// panic 隔离——都是可观测对账源，经 /lb/human/stats 下发）。
 var (
 	humanEventQueue         = make(chan humanEvent, humanEventQueueCap)
 	humanEventDropped       atomic.Int64
@@ -132,7 +132,13 @@ func humanEventWorkerLoop() {
 }
 
 func (p *humanEventPoster) deliver(ev humanEvent) {
-	defer func() { _ = recover() }()
+	defer func() {
+		if recover() != nil {
+			// panic 隔离同样计入丢失对账：recover 吞掉异常不等于事件送达，
+			// 零计数会让监控盲区（events_deliver_failed 是唯一丢失量观测源）。
+			humanEventDeliverFailed.Add(1)
+		}
+	}()
 	if !p.shouldReport(ev.ip, ev.kind, time.Now()) {
 		return
 	}

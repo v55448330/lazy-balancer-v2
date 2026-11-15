@@ -12,6 +12,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
 import { code, goConstInt, openTags, repoCode, section } from './_helpers.ts'
+import { i18n } from '../src/i18n/index.ts'
 
 /** Go 侧上限常量声明；缺失时硬失败（不得回退到字面量）。 */
 const certJobRowsLimit = (): number => {
@@ -38,10 +39,25 @@ test('提示条行数文案与后端 certJobRowsLimit 同值（改上限必须�
   const capNote = "t('app.settings.taskMonitor.chart.distHint')"
   assert.equal(page.split(recent).length - 1, 1, `提示条必须恰好一处「${recent}」`)
   assert.equal(page.split(capNote).length - 1, 1, `图表口径必须恰好一处「${capNote}」`)
-  assert.ok(code('src/locales/zh/settings.ts').includes(`上限 ${limit}`), '口径上限值必须与后端常量同批')
-  // 防第三份副本：任何「最近 N 条 / 上限 N」形态的数字都必须等于 Go 常量值。
-  for (const match of page.matchAll(/最近 (\d+) 条|上限 (\d+)/g)) {
-    assert.equal(match[1] ?? match[2], String(limit), `文案行数「${match[0]}」与后端上限 ${limit} 漂移`)
+  // 数值钉落在词条行本身：页面只引用键（无内联数字），对页面做数字扫描
+  // 恒零命中（空转假绿）。从运行期词表取两条词条值，提取全部数字逐一
+  // 与 Go 常量对表——zh/en 双侧同钉（en 侧漂移同样误导用户）。
+  const savedLocale = i18n.global.locale.value
+  try {
+    for (const locale of ['zh-CN', 'en'] as const) {
+      i18n.global.locale.value = locale
+      for (const key of ['app.settings.taskMonitor.certQueue.truncatedNote', 'app.settings.taskMonitor.chart.distHint']) {
+        const text = i18n.global.t(key)
+        assert.notEqual(text, key, `${locale} 词条 ${key} 不得裸键回退`)
+        const digits = [...text.matchAll(/\d+/g)].map((m) => m[0])
+        assert.ok(digits.length > 0, `${locale} 词条 ${key} 必须含行数上限数字：${text}`)
+        for (const digit of digits) {
+          assert.equal(digit, String(limit), `${locale} 词条 ${key} 数字「${digit}」与后端上限 ${limit} 漂移：${text}`)
+        }
+      }
+    }
+  } finally {
+    i18n.global.locale.value = savedLocale
   }
 })
 

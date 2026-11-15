@@ -238,13 +238,17 @@ type securityOverviewAggCacheKey struct {
 // （securityOverviewAggEntry）：请求路径只读 data，后台刷新读写 state。
 var securityOverviewAggCache = newTTLCache[securityOverviewAggCacheKey, securityOverviewAggEntry](0)
 
-// securityOverviewAggMutated 摄取侧行改判标志（检测→拦截原地 UPDATE）：置位
-// 后下一次后台刷新强制全量重建（增量轨道无法回溯已消费行的旧结论）。由
+// securityOverviewAggMutated 摄取侧行改判世代计数（检测→拦截原地 UPDATE）：
+// 每次改判提交 +1；下一次后台刷新读到非零世代即强制全量重建（增量轨道
+// 无法回溯已消费行的旧结论），重建成功后 CAS 只清「读到的世代」——重建
+// 期间的新改判（世代推进）不被吞掉，留给下一次刷新。由
 // services.SecurityEventsRowMutatedHook 在改判事务提交后触发。
-var securityOverviewAggMutated atomic.Bool
+// 世代计数而非布尔：布尔的「重建后再 Load」无法区分本轮待清置位与
+// 重建期间新置位（两者同为 true），并发丢失只能靠世代 CAS 闭合。
+var securityOverviewAggMutated atomic.Int64
 
 func init() {
-	services.SecurityEventsRowMutatedHook = func() { securityOverviewAggMutated.Store(true) }
+	services.SecurityEventsRowMutatedHook = func() { securityOverviewAggMutated.Add(1) }
 }
 
 // securityOverviewTodayCounts 今日拦截/检测计数单源：优先读分钟 rollup
@@ -1063,6 +1067,12 @@ var securityOverviewAggRefreshGroup singleflight.Group
 // 的 metrics 库不该刷屏日志）。
 var securityOverviewAggRefreshWarnLast atomic.Int64
 
+// securityOverviewMutatedRebuildHookForTest 仅测试注入的并发窗口钩子：在
+// 「读脏标志」与「全量重建」之间执行（生产恒 nil，零成本）。用于确定性
+// 模拟「重建期间摄取侧再次改判置位」——旧实现重建后无条件 Store(false)
+// 会把这次新置位一并吞掉（改判行 id ≤ 新水位，增量永不回溯）。
+var securityOverviewMutatedRebuildHookForTest func()
+
 func warnSecurityOverviewAggRefresh(err error) {
 	now := time.Now().UnixNano()
 	last := securityOverviewAggRefreshWarnLast.Load()
@@ -1087,9 +1097,12 @@ func refreshSecurityOverviewAggregates(metricsDB *sql.DB, key securityOverviewAg
 		state securityOverviewAggState
 		err   error
 	)
-	mutatedRebuild := securityOverviewAggMutated.Load()
+	mutatedGeneration := securityOverviewAggMutated.Load()
+	if hook := securityOverviewMutatedRebuildHookForTest; hook != nil {
+		hook()
+	}
 	switch {
-	case mutatedRebuild:
+	case mutatedGeneration != 0:
 		// 摄取侧行改判（检测→拦截原地 UPDATE）已发生：该行的旧结论已被上一
 		// 轮增量消费，增量轨道无法回溯——强制全量重建一次（重铸水位），此后
 		// 恢复增量轨道。stale 快照在重建期间照常服务（SWR）。脏标志只在重建
@@ -1118,8 +1131,13 @@ func refreshSecurityOverviewAggregates(metricsDB *sql.DB, key securityOverviewAg
 		}
 		return data, err
 	}
-	if mutatedRebuild {
-		securityOverviewAggMutated.Store(false)
+	if mutatedGeneration != 0 {
+		// 只清「本轮读到的世代」（CAS）：重建期间摄取侧再次改判会推进世代，
+		// 无条件 Store(0) 会把新改判一并吞掉——改判行 id ≤ 重铸水位，增量
+		// 永不回溯，计数缺账直到日界换键。CAS 失败=世代已推进，保留新世代
+		// 给下一次刷新强制重建。脏标志只在重建成功后消费：先清再重建时，
+		// 重建失败会让改判行永不被增量回溯（同既有失败保留契约）。
+		securityOverviewAggMutated.CompareAndSwap(mutatedGeneration, 0)
 	}
 	securityOverviewAggCache.Set(key, securityOverviewAggEntry{data: cloneSecurityOverviewAggregates(data), state: state}, now, securityOverviewAggCacheTTL)
 	return data, nil

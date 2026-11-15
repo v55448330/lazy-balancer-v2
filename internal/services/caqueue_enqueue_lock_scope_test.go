@@ -273,3 +273,36 @@ func newEmptyQueueManager(t *testing.T) (*CAQueueManager, int) {
 	}
 	return &CAQueueManager{queues: make(map[int]*caQueue), active: true}, int(jobID64)
 }
+
+// EnqueueIfActive 以 jobID=0 进入（创建路径：任务行尚未落库，transition 才
+// 产生真实 id）时，在途预留必须跟着 transition 的返回值重键到真实 jobID：
+// 预留登记在键 0 上，而并发补扫/手动重试按真实 id 查 IsJobActive——键 0 的
+// 预留对它们不可见，「判定 → 迁移 → 入队」的原子性在创建+补扫毫秒窗内失效
+// （同 jobID 双执行）。窗口断言：beforeProviderEnqueue（已迁移、未解析
+// provider）内 IsJobActive(真实ID) 必须为 true。
+func TestCAQueueManager_EnqueueIfActive_rekeysReservationToCreatedJobID(t *testing.T) {
+	newClusterTestService(t)
+	manager, jobID := newEmptyQueueManager(t)
+
+	var activeInWindow bool
+	manager.beforeProviderEnqueue = func() {
+		activeInWindow = manager.IsJobActive(jobID)
+	}
+
+	returnedID, changed, err := manager.EnqueueIfActive(1, 0, "lb_queue_lock_scope", "lock-scope.example.com",
+		func() (int, bool, error) { return jobID, true, nil })
+
+	if err != nil || !changed || returnedID != jobID {
+		t.Fatalf("enqueue id=%d changed=%v err=%v, want %d/true/nil", returnedID, changed, err, jobID)
+	}
+	if !activeInWindow {
+		t.Fatal("transition 后的解析窗口内 IsJobActive(真实ID)=false——预留仍登记在键 0，补扫可双入队")
+	}
+	manager.mu.Lock()
+	_, reservedReal := manager.reservedJobs[jobID]
+	_, reservedZero := manager.reservedJobs[0]
+	manager.mu.Unlock()
+	if reservedReal || reservedZero {
+		t.Fatalf("入队落定后预留未释放（real=%v zero=%v）", reservedReal, reservedZero)
+	}
+}

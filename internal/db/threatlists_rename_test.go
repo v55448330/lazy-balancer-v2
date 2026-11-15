@@ -243,6 +243,57 @@ func TestThreatSystemListRename_returnsConflictScanError(t *testing.T) {
 	}
 }
 
+// 占名冲突指纹的 id 扫描真实失败（畸形 schema：system 行 id 为不可转 int64
+// 的文本）时不得静默吞错——吞错会把故障指纹（id=0）当稳定指纹落 marker，
+// 「同一僵持态只留一条审计」失效且无排查线索。与 marker 读侧同口径：点名
+// 留痕后按未告警继续（fail-open，不阻断启动），审计照常留一条跳过接管。
+func TestThreatSystemListRename_fingerprintScanFailureDisclosed(t *testing.T) {
+	// Given 真实畸形 schema：双方 system 行 id 均为文本（带外形态）。
+	openMigrationTestDB(t)
+	if _, err := DB.Exec(`CREATE TABLE security_ip_lists (
+		id TEXT PRIMARY KEY,
+		name TEXT,
+		description TEXT,
+		system INTEGER,
+		updated_at TEXT
+	)`); err != nil {
+		t.Fatalf("create malformed legacy list table: %v", err)
+	}
+	newName := ThreatListNameBySource("ustc")
+	if _, err := DB.Exec(`INSERT INTO security_ip_lists (id,name,description,system,updated_at) VALUES
+		('legacy-sys','威胁情报库-中科大黑 IP','旧',1,datetime('now')),
+		('canonical-sys',?,'另一 system 行',1,datetime('now'))`, newName); err != nil {
+		t.Fatalf("seed malformed system rows: %v", err)
+	}
+	drainSystemAuditBuffer()
+	var logBuf strings.Builder
+	log.SetOutput(&logBuf)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+
+	// When：指纹 Scan 失败必须按未告警继续，不得中止启动。
+	if err := migrateThreatSystemListNames(); err != nil {
+		t.Fatalf("migrate: %v（指纹 Scan 失败必须按未告警继续，不得中止启动）", err)
+	}
+	log.SetOutput(os.Stderr)
+
+	// Then：点名留痕指纹生成失败（此前静默吞错零信号）。
+	if !strings.Contains(logBuf.String(), "指纹生成失败") {
+		t.Fatalf("日志缺少指纹生成失败点名留痕: %q", logBuf.String())
+	}
+	// And：fail-open 语义不变——审计仍留一条跳过接管，双方保留。
+	entries := drainSystemAuditBuffer()
+	if len(entries) != 1 || entries[0].resource != "IP 名单" || !strings.Contains(entries[0].detail, "跳过接管") {
+		t.Fatalf("占名冲突审计=%+v, want 降级下仍留一条跳过接管告警", entries)
+	}
+	var rows int
+	if err := DB.QueryRow(`SELECT COUNT(*) FROM security_ip_lists`).Scan(&rows); err != nil {
+		t.Fatal(err)
+	}
+	if rows != 2 {
+		t.Fatalf("rows=%d, want 2（双方保留，不得接管）", rows)
+	}
+}
+
 // 新名口径：去「威胁情报库-」前缀，专业化命名
 func TestThreatSystemLists_professionalNames(t *testing.T) {
 	names := map[string]string{}

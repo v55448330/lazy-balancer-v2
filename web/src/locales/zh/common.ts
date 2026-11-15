@@ -241,6 +241,7 @@ export default {
     nodeServices: '节点服务',
     ruleStore: '规则库',
     ruleMetrics: '规则指标',
+    metrics: '指标',
     ruleLogs: '规则日志',
     certificate: '证书',
     certificateArtifacts: '证书产物',

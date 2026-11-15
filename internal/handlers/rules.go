@@ -4377,17 +4377,30 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 
 	// 2026-09-20 用户裁定（样式批第 4 项）：副本携带安全策略绑定——不携带
 	// 会在「启用副本」时形成零防护静默缺口。同事务 INSERT SELECT（与上游/
-	// 路径规则复制同口径），成功消息明示携带数量。
-	// TCP 副本不复制绑定——TCP 渲染链零消费策略，复制只会把
-	// 存量惰性绑定放大到副本（复制路径与协议切换/导入同口径不自造惰性绑定）。
-	if rule.Protocol != "tcp" {
-		if _, err := tx.Exec(`
-			INSERT INTO security_policy_bindings (rule_caddy_id, policy_id)
-			SELECT ?, policy_id FROM security_policy_bindings WHERE rule_caddy_id = ?
-		`, newCaddyID, caddyID); err != nil {
-			failInternal("复制策略绑定失败，已回滚", err)
+	// 路径规则复制同口径），成功消息明示携带数量。rank 一并携带——读路径
+	// 按 (rank ASC, policy_id ASC) 排序（GetSecurityPoliciesForRule），丢
+	// rank 落 DDL 默认 0 会让副本执行序退化为 policy_id 序（策略按序评估，
+	// 序漂移即防护语义漂移）。
+	// TCP 副本按 L4 阶段 0/1 语义（契约 C4）携带绑定：stage0/stage1 特征
+	// 绑定合法（buildTCPSecurityRoutes 消费）；含 G2（CC）/G3（WAF）特征
+	// 的绑定在 TCP 渲染链零效果，复制后由 pruneTCPUnsupportedBindings 收口
+	// （与编辑/启用/导入/启动迁移共用 db.TCPRuleUnsupportedBindingPruneSQL
+	// 单源谓词），不把存量惰性绑定放大到副本。
+	if _, err := tx.Exec(`
+		INSERT INTO security_policy_bindings (rule_caddy_id, policy_id, rank)
+		SELECT ?, policy_id, rank FROM security_policy_bindings WHERE rule_caddy_id = ?
+	`, newCaddyID, caddyID); err != nil {
+		failInternal("复制策略绑定失败，已回滚", err)
+		return
+	}
+	var droppedBindings int64
+	if rule.Protocol == "tcp" {
+		affected, err := pruneTCPUnsupportedBindings(caddyWriteCtx(c), tx)
+		if err != nil {
+			failInternal("复制策略绑定失败（清理 TCP 不支持绑定），已回滚", err)
 			return
 		}
+		droppedBindings = affected
 	}
 	var copiedBindings int
 	if err := tx.QueryRow(`SELECT COUNT(*) FROM security_policy_bindings WHERE rule_caddy_id = ?`, newCaddyID).Scan(&copiedBindings); err != nil {
@@ -4409,6 +4422,9 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 		duplicateAuditParts = append(duplicateAuditParts, hint)
 	}
 	recordAudit(c, "复制", "负载规则", services.FormatAuditDetail(duplicateAuditParts...))
+	if droppedBindings > 0 {
+		recordAudit(c, "复制", "安全策略", fmt.Sprintf("副本 %s 为 TCP，已解除 %d 条安全策略绑定（仅 L4 不支持的 CC 防护/WAF 特征；stage0/1 绑定保留并由 TCP 渲染链消费）", newCaddyID, droppedBindings))
+	}
 	successMsg := "副本已创建（已禁用）：域名与源规则相同，启用前请修改域名或端口"
 	if copiedBindings > 0 {
 		successMsg += fmt.Sprintf("；已携带 %d 条策略绑定", copiedBindings)

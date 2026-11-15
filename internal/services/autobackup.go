@@ -373,7 +373,7 @@ func runAutoBackupScheduledAt(ctx context.Context, engineRunID int64, startedAt 
 	// 才退避，否则默认 1s tick 下每秒重投一次完整备份（每条一行 task_runs）。
 	// 口径：备份业务本身可能已成功，失败信号表达的是「本槽未被记账」——
 	// 面板短暂 failed 优于每秒重跑全文备份；下次成功记账即恢复正常。
-	advanceErr := advanceAutoBackupWatermark(startedAt)
+	advanceErr := advanceAutoBackupWatermark(ctx, startedAt)
 	return errors.Join(execErr, advanceErr)
 }
 
@@ -399,7 +399,28 @@ func autoBackupWatermarkSlot(startedAt time.Time) (time.Time, bool) {
 // advanceAutoBackupWatermark 把水位线推进到本次实际执行的槽；SQL 侧同样带
 // 「仅前进」守卫（并发手动/定时执行的更晚槽不被回退）。返回错误供调用方
 // 让本轮失败（触发引擎退避），不再是只 warn 的尽力而为。
-func advanceAutoBackupWatermark(startedAt time.Time) error {
+//
+// ctx 贯穿读写（与 auditRetentionMonths 同口径）：调用方处在有界关停/导入
+// 排空预算内，取消已发出即按 ctx 返回。句柄取 db.GetDB() 局部快照——
+// nil 判定与读写必须针对同一个 *sql.DB：关停尾部 db.Close() 先 SetDB(nil)
+// 再置空 db.DB，在途备份轮不得 nil 解引用，也不得在已注销句柄上继续写。
+func advanceAutoBackupWatermark(ctx context.Context, startedAt time.Time) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	// 句柄守卫必须先于槽求值：autoBackupWatermarkSlot 读失败按「无槽」处理
+	// （ok=false），句柄已注销/已关闭时若先求值会静默返回 nil——本轮假装
+	// 记账成功，槽永不推进也不触发退避。快照同时供下方读写共用。
+	database := db.GetDB()
+	if database == nil {
+		return fmt.Errorf("推进自动备份水位线失败：数据库未初始化或已关闭")
+	}
+	// 已关闭句柄同样要在槽求值前显性失败：autoBackupWatermarkSlot 的读失败
+	// 按「无槽」吞掉（ok=false），不探针会让本轮静默「记账成功」。Ping 是
+	// 池健康检查（不占连接），失败即返回真实驱动错误。
+	if err := database.PingContext(ctx); err != nil {
+		return fmt.Errorf("推进自动备份水位线失败（数据库不可用）: %w", err)
+	}
 	slot, ok := autoBackupWatermarkSlot(startedAt)
 	if !ok {
 		// 无需推进（无槽/已覆盖）：不是失败。
@@ -414,11 +435,11 @@ func advanceAutoBackupWatermark(startedAt time.Time) error {
 	// 空格+时区后缀形态（datetime() 合法且晚于目标槽）读侧每 tick 判「未跑」
 	// 重跑全量备份、写侧却拒绝覆盖——水位线永不推进也不自愈。
 	var raw sql.NullString
-	if err := db.DB.QueryRow(`SELECT auto_backup_last_run FROM global_config WHERE id=1`).Scan(&raw); err != nil {
+	if err := database.QueryRowContext(ctx, `SELECT auto_backup_last_run FROM global_config WHERE id=1`).Scan(&raw); err != nil {
 		Logf("warn", "自动备份：读取 auto_backup_last_run 失败: %v", err)
 		return fmt.Errorf("读取自动备份水位线（槽 %s）失败: %w", formatted, err)
 	}
-	if _, err := db.DB.Exec(`UPDATE global_config SET auto_backup_last_run=? WHERE id=1 AND (auto_backup_last_run IS NULL OR auto_backup_last_run='' OR auto_backup_last_run=?)`, formatted, raw.String); err != nil {
+	if _, err := database.ExecContext(ctx, `UPDATE global_config SET auto_backup_last_run=? WHERE id=1 AND (auto_backup_last_run IS NULL OR auto_backup_last_run='' OR auto_backup_last_run=?)`, formatted, raw.String); err != nil {
 		Logf("warn", "自动备份：更新 auto_backup_last_run 失败: %v", err)
 		return fmt.Errorf("更新自动备份水位线（槽 %s）失败: %w", formatted, err)
 	}

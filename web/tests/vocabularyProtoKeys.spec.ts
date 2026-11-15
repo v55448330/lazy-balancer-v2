@@ -123,15 +123,34 @@ test('判据自检：同名词表的读取不得跨文件互相救活（死表�
   assert.equal(tableReads(new Map([['a.ts', 'const T: Record<string, string> = {}']]), 'T'), 0)
 })
 
+// 词表发现规则单源（扫描与自检共用）：computed 词表值型不设限（string
+// 限定曾让非 string 值的 computed 词表整体逃出扫描面）；显式注解与
+// Readonly<Record<…>> 形状同样命中。
+const VOCABULARY_TABLE_DISCOVERY = /^(?:export )?const ([A-Za-z_$][\w$]*)(?:: (?:Readonly<)?Record<string, | = computed<Record<string, )/gm
+
+// 判据自检：发现规则对 computed 词表的值型不设限（string 限定曾漏掉
+// 非 string 值表）；显式注解/Readonly 形状同样命中。样本与真实声明同形。
+test('判据自检：computed 词表任意值型入扫描面（发现规则自检样本）', () => {
+  const discover = VOCABULARY_TABLE_DISCOVERY
+  const samples = [
+    'const toneLabels = computed<Record<string, string>>(() => ({ deny: \'danger\' }))',
+    'const countLabels = computed<Record<string, number>>(() => ({ deny: 1 }))',
+    'const viewLabels = computed<Record<string, { label: string }>>(() => ({ deny: { label: \'拒绝\' } }))',
+    'const plain: Record<string, string> = {}',
+    'const frozen: Readonly<Record<string, string>> = {}',
+  ]
+  const names = samples.flatMap((sample) => [...sample.matchAll(discover)].map((m) => m[1]))
+  assert.deepEqual(names, ['toneLabels', 'countLabels', 'viewLabels', 'plain', 'frozen'], '发现规则必须覆盖 computed 任意值型与显式/Readonly 形状')
+})
+
 test('全仓 Record<string, …> 表：展示词表读取全部过 hasOwn（目录扫描）', () => {
   const files = webFiles('src', ['.ts', '.vue'])
   assert.ok(files.length >= 150, `扫描面过小（${files.length} 个文件）——目录枚举失效`)
   const tables: Array<{ key: string; file: string; name: string }> = []
   for (const file of files) {
-    // i18n computed 化的词表同样入扫描面(computed<Record<string,…>>)
-    // 补 Readonly<Record<…>> 形状——三张该形状表(eventAction 等)
-    // 曾全部逃出扫描,其中一张裸下标读未被发现。
-    for (const match of code(file).matchAll(/^(?:export )?const ([A-Za-z_$][\w$]*)(?:: (?:Readonly<)?Record<string, | = computed<Record<string, string>)/gm)) {
+    // i18n computed 化的词表同样入扫描面（值型不限）；Readonly 形状曾整体
+    // 逃出扫描,其中一张裸下标读未被发现。发现规则与自检共用单源。
+    for (const match of code(file).matchAll(VOCABULARY_TABLE_DISCOVERY)) {
       tables.push({ key: `${file}#${match[1]}`, file, name: match[1]! })
     }
   }

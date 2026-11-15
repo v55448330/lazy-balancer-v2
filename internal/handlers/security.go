@@ -3083,15 +3083,22 @@ func (h *Handlers) BulkUpdatePolicyBindings(c *gin.Context) {
 		}
 	}
 	// orders（绑定顺序批量应用，2026-11 用户裁定）：键与 bind/unbind 冲突同样
-	// 400；规则数计入同一 maxBulkBindings 预算。
-	orderRules := make([]string, 0, len(req.Orders))
+	// 400；规则数计入同一 maxBulkBindings 预算。键与 bind/unbind 同口径
+	// TrimSpace 归一——取值必须遍历原 map（trim 后键回查原 map 对带空白键
+	// 恒 miss，合法顺序被误判「序列为空」400）；trim 碰撞（"lb_x"/" lb_x "）
+	// 按排序后首个原键取值（确定性，重复项语义同 normalizeRuleIDs 去重）。
+	rawOrderKeys := make([]string, 0, len(req.Orders))
 	for rule := range req.Orders {
-		orderRules = append(orderRules, strings.TrimSpace(rule))
+		rawOrderKeys = append(rawOrderKeys, rule)
 	}
-	sort.Strings(orderRules)
+	sort.Strings(rawOrderKeys)
 	normalizedOrders := map[string][]int{}
-	for _, rule := range orderRules {
+	for _, raw := range rawOrderKeys {
+		rule := strings.TrimSpace(raw)
 		if rule == "" {
+			continue
+		}
+		if _, dup := normalizedOrders[rule]; dup {
 			continue
 		}
 		if _, clash := unbindSet[rule]; clash {
@@ -3104,7 +3111,7 @@ func (h *Handlers) BulkUpdatePolicyBindings(c *gin.Context) {
 				return
 			}
 		}
-		ids := normalizePolicyIDs(req.Orders[rule])
+		ids := normalizePolicyIDs(req.Orders[raw])
 		if len(ids) == 0 {
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "k_3717c01c", rule), MessageKey: "k_3717c01c"})
 			return
@@ -3115,6 +3122,11 @@ func (h *Handlers) BulkUpdatePolicyBindings(c *gin.Context) {
 		}
 		normalizedOrders[rule] = ids
 	}
+	orderRules := make([]string, 0, len(normalizedOrders))
+	for rule := range normalizedOrders {
+		orderRules = append(orderRules, rule)
+	}
+	sort.Strings(orderRules)
 	if len(bindIDs)+len(unbindIDs)+len(normalizedOrders) > maxBulkBindings {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "k_2112aa23", maxBulkBindings), MessageKey: "k_2112aa23"})
 		return

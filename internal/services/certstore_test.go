@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -708,5 +709,161 @@ func TestCertStore_perRuleWritesParallelGlobalRestoreExclusive(t *testing.T) {
 	certWriteMu.RUnlock()
 	if err := <-restoreDone; err != nil {
 		t.Fatalf("restore after lock release: %v", err)
+	}
+}
+
+// 删除证书文件必须枚举全部代际（与 RemoveCertJobLogFiles 同构）：写盘失败/
+// 崩溃遗留的 .tmp 与快照恢复遗留的 .restore 若只删 .crt/.key，私钥暂存内容
+// 永久残留磁盘（规则已删，材料本应随规则消亡）。
+func TestRemoveCertFiles_removesTemporaryGenerations(t *testing.T) {
+	// Given：目标对 + 四代暂存残留（证书/私钥 × tmp/restore）
+	dir := useTemporaryCertDir(t)
+	certPath, keyPath := CertFilePaths("lb_tmpgen")
+	for _, path := range []string{certPath, keyPath, certPath + ".tmp", keyPath + ".tmp", certPath + ".restore", keyPath + ".restore"} {
+		if err := os.WriteFile(path, []byte("material"), 0600); err != nil {
+			t.Fatalf("seed %s: %v", path, err)
+		}
+	}
+
+	// When
+	if err := RemoveCertFiles("lb_tmpgen"); err != nil {
+		t.Fatalf("RemoveCertFiles: %v", err)
+	}
+
+	// Then：目录零残留（含私钥暂存代）
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read cert dir: %v", err)
+	}
+	if len(entries) != 0 {
+		names := make([]string, 0, len(entries))
+		for _, entry := range entries {
+			names = append(names, entry.Name())
+		}
+		t.Fatalf("删除后残留 %v（.tmp/.restore 代际必须随规则删除一并清理）", names)
+	}
+}
+
+// 私钥暂存写盘失败不得遗留 .key.tmp：writeSyncedFile 打开成功后写入可失败
+// （文件大小限额——OpenFile 成功而 Write 返回 EFBIG 是真实形态），失败路径
+// 只清 certTmp 时私钥暂存（含私钥材料）留在磁盘。注入真实失败机制：RLIMIT_FSIZE
+// 压到证书暂存大小——certTmp 恰好写满，keyTmp 的 Write 真实触发 EFBIG；断言
+// 终态（目录内零 .tmp 残留）而非仅返回值。
+func TestWriteCertFiles_failureLeavesNoKeyTmp(t *testing.T) {
+	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
+		t.Skip("RLIMIT_FSIZE 注入仅支持 unix 形态")
+	}
+	// Given：文件大小上限压到证书材料字节数——certTmp 写入恰好达上限成功，
+	// keyTmp 材料更长，Write 超限真实失败（EFBIG，不是 mock 返回值）。
+	const certMaterial = "cert-material"
+	const keyMaterial = "key-material-longer-than-limit"
+	var original syscall.Rlimit
+	if err := syscall.Getrlimit(syscall.RLIMIT_FSIZE, &original); err != nil {
+		t.Fatalf("read RLIMIT_FSIZE: %v", err)
+	}
+	if err := syscall.Setrlimit(syscall.RLIMIT_FSIZE, &syscall.Rlimit{Cur: uint64(len(certMaterial)), Max: original.Max}); err != nil {
+		t.Fatalf("set RLIMIT_FSIZE: %v", err)
+	}
+	t.Cleanup(func() { _ = syscall.Setrlimit(syscall.RLIMIT_FSIZE, &original) })
+	dir := useTemporaryCertDir(t)
+
+	// When
+	err := WriteCertFiles("lb_keytmp_fail", certMaterial, keyMaterial)
+
+	// Then：错误上抛，且目录零残留——私钥暂存不得随失败遗留。
+	if err == nil {
+		t.Fatal("write succeeded despite file size limit")
+	}
+	entries, readErr := os.ReadDir(dir)
+	if readErr != nil {
+		t.Fatalf("read cert dir: %v", readErr)
+	}
+	if len(entries) != 0 {
+		names := make([]string, 0, len(entries))
+		for _, entry := range entries {
+			names = append(names, entry.Name())
+		}
+		t.Fatalf("写盘失败后残留 %v（失败路径必须清理全部暂存）", names)
+	}
+}
+
+// 快照恢复的写盘失败同族形态（与 writeCertPairFiles 的 keyTmp 同构）：
+// restoreCertFile 的 .restore 暂存在 writeSyncedFile 打开成功后写入失败时
+// 不得遗留（私钥恢复时暂存含私钥材料）。注入真实失败机制：RLIMIT_FSIZE 压到
+// 小于恢复材料——Write 真实触发 EFBIG；断言终态（无 .restore 残留）。
+func TestRestoreCertFiles_failureLeavesNoRestoreTmp(t *testing.T) {
+	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
+		t.Skip("RLIMIT_FSIZE 注入仅支持 unix 形态")
+	}
+	// Given：恢复材料超过文件大小上限——.restore 的 Write 真实失败。
+	const material = "snapshot-material-longer-than-limit"
+	var original syscall.Rlimit
+	if err := syscall.Getrlimit(syscall.RLIMIT_FSIZE, &original); err != nil {
+		t.Fatalf("read RLIMIT_FSIZE: %v", err)
+	}
+	if err := syscall.Setrlimit(syscall.RLIMIT_FSIZE, &syscall.Rlimit{Cur: 13, Max: original.Max}); err != nil {
+		t.Fatalf("set RLIMIT_FSIZE: %v", err)
+	}
+	t.Cleanup(func() { _ = syscall.Setrlimit(syscall.RLIMIT_FSIZE, &original) })
+	dir := useTemporaryCertDir(t)
+	snapshot := CertFilesSnapshot{
+		"lb_restore_fail": {
+			Cert: CertFileSnapshot{Data: []byte(material), Mode: 0644, Exists: true},
+			Key:  CertFileSnapshot{Data: []byte(material), Mode: 0600, Exists: true},
+		},
+	}
+
+	// When
+	err := RestoreCertFiles(snapshot)
+
+	// Then：错误上抛，且目录零残留——.restore 暂存不得随失败遗留。
+	if err == nil {
+		t.Fatal("restore succeeded despite file size limit")
+	}
+	entries, readErr := os.ReadDir(dir)
+	if readErr != nil {
+		t.Fatalf("read cert dir: %v", readErr)
+	}
+	if len(entries) != 0 {
+		names := make([]string, 0, len(entries))
+		for _, entry := range entries {
+			names = append(names, entry.Name())
+		}
+		t.Fatalf("恢复失败后残留 %v（失败路径必须清理 .restore 暂存）", names)
+	}
+}
+
+// 证书暂存自写失败同族形态：certTmp 的 writeSyncedFile 打开成功后写入失败
+// 同样不得遗留 .crt.tmp（与 keyTmp/.restore 同口径）。
+func TestWriteCertFiles_certTmpFailureLeavesNoResidue(t *testing.T) {
+	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
+		t.Skip("RLIMIT_FSIZE 注入仅支持 unix 形态")
+	}
+	const certMaterial = "cert-material-longer-than-limit"
+	var original syscall.Rlimit
+	if err := syscall.Getrlimit(syscall.RLIMIT_FSIZE, &original); err != nil {
+		t.Fatalf("read RLIMIT_FSIZE: %v", err)
+	}
+	if err := syscall.Setrlimit(syscall.RLIMIT_FSIZE, &syscall.Rlimit{Cur: 13, Max: original.Max}); err != nil {
+		t.Fatalf("set RLIMIT_FSIZE: %v", err)
+	}
+	t.Cleanup(func() { _ = syscall.Setrlimit(syscall.RLIMIT_FSIZE, &original) })
+	dir := useTemporaryCertDir(t)
+
+	err := WriteCertFiles("lb_certtmp_fail", certMaterial, "key")
+
+	if err == nil {
+		t.Fatal("write succeeded despite file size limit")
+	}
+	entries, readErr := os.ReadDir(dir)
+	if readErr != nil {
+		t.Fatalf("read cert dir: %v", readErr)
+	}
+	if len(entries) != 0 {
+		names := make([]string, 0, len(entries))
+		for _, entry := range entries {
+			names = append(names, entry.Name())
+		}
+		t.Fatalf("证书暂存写失败后残留 %v", names)
 	}
 }

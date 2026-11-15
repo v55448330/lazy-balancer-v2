@@ -53,14 +53,28 @@ func AuthenticateRegistrationSecret(ctx context.Context, database *sql.DB, nodeI
 	// 形态(SQL 等值比对是提前退出的 memcmp,泄露哈希前缀匹配长度)。
 	// 到期过滤依赖存储值与请求密钥无关,保留在 WHERE;仅密钥相关比较移出。
 	var storedSecretHash string
-	err := database.QueryRowContext(ctx, "SELECT COALESCE(registration_secret,'') FROM nodes WHERE id=? AND (registration_secret_expires_at IS NULL OR registration_secret_expires_at='' OR datetime(registration_secret_expires_at) > datetime('now'))", nodeID).Scan(&storedSecretHash)
+	var approved bool
+	var storedTokenHash sql.NullString
+	err := database.QueryRowContext(ctx, "SELECT COALESCE(registration_secret,''), COALESCE(is_approved,0), cluster_token_hash FROM nodes WHERE id=? AND (registration_secret_expires_at IS NULL OR registration_secret_expires_at='' OR datetime(registration_secret_expires_at) > datetime('now'))", nodeID).Scan(&storedSecretHash, &approved, &storedTokenHash)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ErrInvalidClusterAuth
 	}
 	if err != nil {
 		return fmt.Errorf("校验注册凭证: %w", err)
 	}
-	if storedSecretHash == "" || subtle.ConstantTimeCompare([]byte(storedSecretHash), []byte(tokenHash(secret))) != 1 {
+	if storedSecretHash == "" {
+		// 与 RegistrationStatus 幂等契约对称：首个真实快照（或上一次确认）已
+		// 消费 registration_secret，从节点在令牌落库前重复轮询仍携带原密钥。
+		// 门层若 401，服务层幂等分支不可达、从端 5 连败轨道清空注册态。已审批
+		// 且已交付令牌哈希与 permanentClusterToken(secret) 同源 → 放行（令牌由
+		// secret 确定性派生且已真实交付，权限面不扩大）；否则拒绝。
+		if approved && storedTokenHash.Valid &&
+			subtle.ConstantTimeCompare([]byte(storedTokenHash.String), []byte(tokenHash(permanentClusterToken(secret)))) == 1 {
+			return nil
+		}
+		return ErrInvalidClusterAuth
+	}
+	if subtle.ConstantTimeCompare([]byte(storedSecretHash), []byte(tokenHash(secret))) != 1 {
 		return ErrInvalidClusterAuth
 	}
 	return nil

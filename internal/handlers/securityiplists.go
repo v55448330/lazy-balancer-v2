@@ -1050,25 +1050,56 @@ func (h *Handlers) UpdateIPList(c *gin.Context) {
 	if !rowsAffectedOrRespond(c, result, "IP 地址列表不存在") {
 		return
 	}
-	// 同族收敛：预置名单差集全量保存中被移除的条目即解封
-	//（删除语义=解封起点，手动/自动条目同口径）——old−new 差集逐 IP 清零
-	// 计数桶（services.AutobanForgetIPs 单一入口，与 remove-ip 端点同族），
-	// 否则窗口内旧计数让 autoban 下一轮零新流量重封、解封被 ≤1 tick 撤销。
-	// 清桶先于提交无回滚副作用（同 remove-ip 路径注释）。
-	if autobanPreset && req.Entries != nil {
+	// 整表保存的条目差集处置（req.Entries != nil 才有新输入）：
+	//  1. 新增差集（new−old，所有名单不只预置）=主动处置——用户裁定「手动
+	//     加入任何名单=抹累犯前科+停计数」的整表编辑面：逐 IP 同事务删除
+	//     累犯行（DeleteAutobanRecidivismFrom 单源，identity 经
+	//     AutobanEntryIdentity 归一，与 AddIPToList/CreateIPList 同口径）+
+	//     清桶/建议剔除（AutobanForgetIPs 单一入口）。基线取**生效**旧条目
+	//     ——已到期条目不再构成「已在名单」，重新加入=新处置（与 AddIPToList
+	//     覆盖已到期条目 added:true 同语义）。
+	//  2. 预置名单移除差集（old−new）即解封（删除语义=解封起点，手动/自动
+	//     条目同口径）——逐 IP 清零计数桶，否则窗口内旧计数让 autoban 下一轮
+	//     零新流量重封、解封被 ≤1 tick 撤销。
+	// 清桶先于提交无回滚副作用（同 remove-ip 路径注释）：事务失败回滚时
+	// 计数桶已清只重置旧计数，新流量重新计数，不产生行为分叉。
+	if req.Entries != nil {
 		var oldEntries []models.IPListEntry
 		if err := json.Unmarshal([]byte(oldEntriesJSON), &oldEntries); err == nil {
-			newValues := make(map[string]struct{}, len(entries))
-			for _, e := range entries {
-				newValues[e.Value] = struct{}{}
+			oldValues := make(map[string]struct{}, len(oldEntries))
+			for _, e := range services.AutobanActiveEntries(oldEntries) {
+				oldValues[e.Value] = struct{}{}
 			}
-			removed := make([]string, 0, len(oldEntries))
-			for _, e := range oldEntries {
-				if _, kept := newValues[e.Value]; !kept {
-					removed = append(removed, e.Value)
+			// forget 承载本次保存的全部处置集：新增差集（所有名单）+
+			// 预置名单移除差集（解封）——同一 AutobanForgetIPs 入口一次消费。
+			forget := make([]string, 0, len(entries)+len(oldEntries))
+			seen := make(map[string]struct{}, len(entries))
+			for _, e := range entries {
+				if _, existed := oldValues[e.Value]; existed {
+					continue
+				}
+				if _, dup := seen[e.Value]; dup {
+					continue
+				}
+				seen[e.Value] = struct{}{}
+				forget = append(forget, e.Value)
+				if err := services.DeleteAutobanRecidivismFrom(caddyWriteCtx(c), tx, services.AutobanEntryIdentity(e.Value)); err != nil {
+					c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("服务器内部错误", err)})
+					return
 				}
 			}
-			services.AutobanForgetIPs(removed)
+			if autobanPreset {
+				newValues := make(map[string]struct{}, len(entries))
+				for _, e := range entries {
+					newValues[e.Value] = struct{}{}
+				}
+				for _, e := range oldEntries {
+					if _, kept := newValues[e.Value]; !kept {
+						forget = append(forget, e.Value)
+					}
+				}
+			}
+			services.AutobanForgetIPs(forget)
 		}
 	}
 	applyData := gin.H(nil)

@@ -152,7 +152,7 @@ func TestAuthenticateRegistrationSecret_contract(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = database.Close() })
-	if _, err := database.Exec(`CREATE TABLE nodes (id INTEGER PRIMARY KEY, registration_secret TEXT, registration_secret_expires_at DATETIME)`); err != nil {
+	if _, err := database.Exec(`CREATE TABLE nodes (id INTEGER PRIMARY KEY, registration_secret TEXT, registration_secret_expires_at DATETIME, is_approved INTEGER DEFAULT 0, cluster_token_hash TEXT)`); err != nil {
 		t.Fatal(err)
 	}
 	const secret = "registration-contract-secret"

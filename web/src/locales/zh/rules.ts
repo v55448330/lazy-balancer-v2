@@ -142,6 +142,8 @@ export default {
       list: {
         accessLogTitle: '负载均衡规则请求访问日志',
         auxLoadFailPrefix: '辅助数据加载失败（',
+        auxLoadFailSuffix: '）',
+        auxLoadFailJoin: '；',
         auxUpdatersFailHint: '更新者列表（更新者列将显示「-」）',
         caCooldownNote: 'CA 限流冷却中，不阻塞规则启停、删除与编辑（后台稍后重试签发）',
         certDeployBackoffTooltip: '证书已签发、部署退避重试中，不阻塞编辑；启停/删除待部署收敛',

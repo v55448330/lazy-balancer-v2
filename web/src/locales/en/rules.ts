@@ -142,6 +142,8 @@ export default {
       list: {
         accessLogTitle: 'Load balancing rule request access log',
         auxLoadFailPrefix: 'Auxiliary data failed to load (',
+        auxLoadFailSuffix: ')',
+        auxLoadFailJoin: '; ',
         auxUpdatersFailHint: 'Updater list (the Updater column will show "-")',
         caCooldownNote: 'CA rate-limit cooldown; enabling/disabling, deletion and editing are not blocked (issuance retried in the background)',
         certDeployBackoffTooltip: 'Certificate issued; deployment is backing off and retrying. Editing is not blocked; enable/disable/delete wait for deployment to converge.',

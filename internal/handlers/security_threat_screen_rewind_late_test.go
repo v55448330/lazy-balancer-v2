@@ -240,6 +240,11 @@ func TestThreatRollupRewind_legacyPredicateRowsKeepLateInserts(t *testing.T) {
 // 否则改判（UPDATE，id 不变）永远不再被全量重算，该分钟口径永久陈旧。
 func TestThreatRollupRewind_failureRefillsConsumedQueue(t *testing.T) {
 	setupSecurityPolicyTestDB(t)
+	// 清理：回填的全局队列不得泄漏到其他用例（含断言失败提前退出路径）。
+	t.Cleanup(func() {
+		threatRollupRewindPending.Store(0)
+		_ = takeThreatRollupReclassifyPending()
+	})
 	m := time.Date(2026, 10, 18, 12, 0, 0, 0, time.UTC)
 	seedThreatRewindWatermark(t, m.Format(threatRewindMinuteLayout))
 	// 注入失败：metrics_state 不可读 → 水位读取失败（threatRollupRewindToInLock 早退 false）。
@@ -259,9 +264,6 @@ func TestThreatRollupRewind_failureRefillsConsumedQueue(t *testing.T) {
 	if !hasPendingThreatRollupReclassify() {
 		t.Fatal("失败后改判分钟必须回填（否则该分钟永不转全量重算）")
 	}
-	// 清理：回填的全局队列不得泄漏到其他用例。
-	threatRollupRewindPending.Store(0)
-	_ = takeThreatRollupReclassifyPending()
 }
 
 // 直通路径（ThreatRollupRewindTo 抢到锁后直接应用入参）同样必须消费回退

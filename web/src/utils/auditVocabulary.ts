@@ -144,7 +144,7 @@ export const AUDIT_ACTION_KEYS: Record<string, string> = {
   '测试失败': 'testFailed',
 }
 
-// ── 对象（Resource）枚举：61 词 ──────────────────────────────────────
+// ── 对象（Resource）枚举：62 词 ──────────────────────────────────────
 export const AUDIT_RESOURCE_KEYS: Record<string, string> = {
   'ACME配置': 'acmeSettings',
   'API密钥': 'apiKey',
@@ -188,6 +188,7 @@ export const AUDIT_RESOURCE_KEYS: Record<string, string> = {
   '节点服务': 'nodeServices',
   '规则库': 'ruleStore',
   '规则指标': 'ruleMetrics',
+  '指标': 'metrics',
   '规则日志': 'ruleLogs',
   '证书': 'certificate',
   '证书产物': 'certificateArtifacts',

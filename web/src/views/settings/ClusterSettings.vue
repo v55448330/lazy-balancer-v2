@@ -336,8 +336,9 @@ const executeServiceControl = async (): Promise<void> => {
     mfaAwareSuccess(t('app.settings.cluster.actions.dispatched'))
   } catch (error: unknown) {
     // 全局拦截器已弹 toast；428 MFA 重试也由全局处理。
-    // 指纹不匹配（后端 502 专属文案）在弹框内提供按节点重钉通道。
-    if (error instanceof Error && error.message.includes('证书指纹不匹配')) {
+    // 指纹不匹配在弹框内提供按节点重钉通道：优先判后端结构化语义键
+    // pin_mismatch（与文案解耦），旧后端无键时回落文案子串兼容。
+    if (error instanceof Error && ((error as { messageKey?: string }).messageKey === 'pin_mismatch' || error.message.includes('证书指纹不匹配'))) {
       serviceControlPinMismatch.value = true
     }
     console.error('service control failed', error)

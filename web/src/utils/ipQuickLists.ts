@@ -83,6 +83,7 @@ export const buildIpQuickModel = (
   // 输入每次击键都重建整表模型，逐条 entryMatchesIp 会把同一 IP 重复解析
   // N 条名单 × 3 侧（内置威胁名单数万条时是主线程卡顿源）。
   const matchesIp = createIpMatcher(ip)
+  const ipLower = ip.toLowerCase()
   const listById = new Map(lists.map((list) => [list.id, list]))
   const result: Record<IpQuickSide, { sources: IpQuickSource[]; targets: IpQuickTarget[] }> = {
     deny: { sources: [], targets: [] },
@@ -105,7 +106,7 @@ export const buildIpQuickModel = (
           name: policy.name,
           policyId: policy.id,
           entryCount: inline.length,
-          exact: inline.includes(ip),
+          exact: inline.some((e) => e.toLowerCase() === ipLower),
           matchedEntry: inlineHit,
           policies: [{ id: policy.id, name: policy.name }],
         })
@@ -131,7 +132,7 @@ export const buildIpQuickModel = (
               name: list.name,
               listId,
               entryCount: list.entry_count,
-              exact: listEntries.includes(ip),
+              exact: listEntries.some((e) => e.toLowerCase() === ipLower),
               matchedEntry,
               policies: list.ref_policies?.length ? [...list.ref_policies] : [{ id: policy.id, name: policy.name }],
             })

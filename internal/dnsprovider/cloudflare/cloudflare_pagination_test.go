@@ -98,3 +98,26 @@ func TestListRecordsByName_shortPageFallbackWithoutResultInfo(t *testing.T) {
 func recordIDFor(i int) string {
 	return fmt.Sprintf("r%d", i)
 }
+
+// total_count 失真偏大（1000）且每页重复下发整页同批记录：无进展兜底必须
+// 终止（与 dnspod/tencent 同构）——重复取到已见记录说明翻页没有换来新数据，
+// 继续翻页只是空转+重复收集。旧口径只看「空页/累计≥total/短页」，整页重复
+// 形态下空转到页数上限（20 次调用、2000 条重复记录）；新口径第二次取到
+// 重复整页即收手（2 次调用、100 条记录）。
+func TestListRecordsByName_stopsWhenPagesRepeatWithInflatedTotal(t *testing.T) {
+	s := newCloudflareTestServer(t)
+	s.zones["example.com"] = "z1"
+	// 单元素脚本：越界回退最后一个——每页都是同一整页（100 条），total_count
+	// 失真偏大（1000）。
+	s.scriptedRecordPages = []string{scriptedPage(t, 1, 1000, rangeIDs("r", 0, 100))}
+	p := newCloudflareTestProvider(t, "cf-token", s)
+
+	collected, err := p.listRecordsByName(t.Context(), "z1", "_acme-challenge.example.com")
+	if err != nil {
+		t.Fatalf("list records: %v", err)
+	}
+	calls := s.countRequests(http.MethodGet, "/zones/z1/dns_records")
+	if len(collected) != 100 || calls != 2 {
+		t.Fatalf("records=%d calls=%d, want 100/2（重复页无进展即收手，不空转页数上限）", len(collected), calls)
+	}
+}

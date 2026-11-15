@@ -1265,3 +1265,56 @@ func TestBulkUpdatePolicyBindings_ordersAuditCarriesRuleSequences(t *testing.T) 
 		}
 	}
 }
+
+// orders 键带空白（" lb_x "）必须与 bind/unbind 同口径 TrimSpace 归一后
+// 取到原 map 的值——旧实现以 trim 后键回查原 map 恒 miss，合法顺序被误判
+// 「策略序列为空」400。钉：200 按序落库 + 审计/响应记归一规则 id。
+func TestBulkUpdatePolicyBindings_ordersWhitespaceKeyNormalized(t *testing.T) {
+	setupSecurityPolicyTestDB(t)
+	router := newMultiPolicyRouter(t)
+	seedHTTPRule(t, "lb_ord_ws")
+	p1 := createMultiPolicy(t, router, "策略1")
+	p2 := createMultiPolicy(t, router, "策略2")
+	p3 := createMultiPolicy(t, router, "策略3")
+	if r := putMultiJSON(t, router, "/security/rules/lb_ord_ws/policies", map[string]any{"policy_ids": []int{p1, p2, p3}}); r.Code != http.StatusOK {
+		t.Fatalf("PUT status=%d body=%s", r.Code, r.Body.String())
+	}
+
+	rec := postJSON(t, router, "/security/policies/"+strconv.Itoa(p3)+"/bindings/bulk",
+		map[string]any{"orders": map[string]any{" lb_ord_ws ": []int{p3, p1, p2}}})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("bulk orders status=%d body=%s, want 200（空白键归一后取值）", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Code int `json:"code"`
+		Data struct {
+			Ordered int `json:"ordered"`
+			Orders  []struct {
+				RuleID    string `json:"rule_id"`
+				PolicyIDs []int  `json:"policy_ids"`
+			} `json:"orders"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("parse bulk response %s: %v", rec.Body.String(), err)
+	}
+	if resp.Data.Ordered != 1 || len(resp.Data.Orders) != 1 {
+		t.Fatalf("ordered=%d orders=%v, want 1/1 条", resp.Data.Ordered, resp.Data.Orders)
+	}
+	if resp.Data.Orders[0].RuleID != "lb_ord_ws" {
+		t.Fatalf("rule_id=%q, want 归一 id lb_ord_ws", resp.Data.Orders[0].RuleID)
+	}
+	assertIDSlice(t, queryBoundPolicyIDs(t, "lb_ord_ws"), []int{p3, p1, p2})
+
+	// 回归形状：纯空白键仍跳过（无规则可应用）；trim 后与 bind 冲突仍 400。
+	rec = postJSON(t, router, "/security/policies/"+strconv.Itoa(p3)+"/bindings/bulk",
+		map[string]any{"orders": map[string]any{"   ": []int{p1}}})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("blank-key status=%d body=%s, want 200（空白键跳过）", rec.Code, rec.Body.String())
+	}
+	rec = postJSON(t, router, "/security/policies/"+strconv.Itoa(p3)+"/bindings/bulk",
+		map[string]any{"bind": []string{"lb_ord_ws"}, "orders": map[string]any{" lb_ord_ws ": []int{p3, p1, p2}}})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("conflict status=%d body=%s, want 400（trim 后键与 bind 冲突）", rec.Code, rec.Body.String())
+	}
+}

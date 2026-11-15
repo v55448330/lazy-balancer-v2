@@ -487,10 +487,13 @@ func (p *Provider) createRecord(ctx context.Context, zoneID, recordName, value s
 // dnspod/tencent/aliyun 侧统一（total 优先、短页兜底、按实际取到条数推进
 // 游标）：fetched==0 即终止；result_info.total_count>0 时按累计取到数 ≥
 // total 终止——中途短页（页间漂移/服务端单页容量波动）继续翻页不漏扫；
-// total 缺失时退回「短页即终止」（per_page=100 已是 API 单页上限）。
+// total 缺失时退回「短页即终止」（per_page=100 已是 API 单页上限）。total
+// 失真偏大且服务端重复下发同页（无进展）时同样终止——否则空转到页数上限并
+// 重复收集（钉测见 stopsWhenPagesRepeatWithInflatedTotal）。
 func (p *Provider) listRecordsByName(ctx context.Context, zoneID, recordName string) ([]enumeratedRecord, error) {
 	var collected []enumeratedRecord
 	fetchedTotal := 0
+	seen := make(map[string]bool)
 	for page := 1; page <= challengeListPageLimit; page++ {
 		query := url.Values{}
 		query.Set("type", "TXT")
@@ -524,6 +527,7 @@ func (p *Provider) listRecordsByName(ctx context.Context, zoneID, recordName str
 		if fetched == 0 {
 			break
 		}
+		repeatedPage := true
 		for _, record := range pageRecords {
 			if record.Type != "TXT" {
 				continue
@@ -531,9 +535,17 @@ func (p *Provider) listRecordsByName(ctx context.Context, zoneID, recordName str
 			if dnsname.NormalizeName(record.Name) != recordName {
 				continue
 			}
+			if seen[record.ID] {
+				continue
+			}
+			repeatedPage = false
+			seen[record.ID] = true
 			collected = append(collected, enumeratedRecord{recordID: record.ID, value: record.Content})
 		}
 		fetchedTotal += fetched
+		if fetched == 0 || repeatedPage {
+			break
+		}
 		if total := envelope.ResultInfo.TotalCount; total > 0 {
 			if fetchedTotal >= total {
 				break

@@ -1990,10 +1990,22 @@ func (s *SyncService) run(ctx context.Context) {
 		pullFailed := false
 		if token == "" {
 			s.pollRegistration(ctx)
+			// 注册终止轨道（5 连败）置 Halted 后 run 必须退出，与 Pull 终止
+			// 轨道同构：Halted 而 run 仍存活时 finishRun 不清 cancel/done，
+			// Resume 的 <-done 前提永不成立——重新注册（BecomeSlave→Resume）
+			// 死锁，只能重启进程。
+			if s.IsHalted() {
+				return
+			}
 		} else if s.retryPendingRegistrationConfirm(ctx) {
 			// 注册确认终止轨道已清空集群令牌：本轮不再按失效令牌拉取，
 			// 下一轮 loadState 按未注册态处理（终止文案不被覆盖）。
 			token = ""
+			// 同口径：confirm 重试的 5 连败同样置 Halted，run 必须退出，
+			// 否则 Resume 死锁（与上方 pollRegistration 分支同一前提）。
+			if s.IsHalted() {
+				return
+			}
 		} else {
 			// 304「配置无变化」是稳态事件，不留审计（曾按周期刷屏，移除）；
 			// 有意义的状态跃迁（漂移自愈、失败）仍在各自路径留痕。

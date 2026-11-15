@@ -24,6 +24,7 @@ import (
 func TestSyncSwitchGuard_threatOnlyUpdateWarns(t *testing.T) {
 	_, database := newClusterTestService(t)
 	overrideWafPathsForServicesTest(t)
+	setNodeMasterRole(t, database, false) // 去重推进是从端专有写（角色谓词）
 	threatDir := t.TempDir()
 	t.Cleanup(OverrideThreatWafDirForTest(threatDir))
 	fastPath := filepath.Join(threatDir, "threat-ustc.iplist.fast")
@@ -138,6 +139,7 @@ func TestWafFilesRefVersionLabelsDiffer_labelsOnly(t *testing.T) {
 func TestSyncSwitchGuard_dedupVersionWriteFailureIsVisible(t *testing.T) {
 	_, database := newClusterTestService(t)
 	overrideWafPathsForServicesTest(t)
+	setNodeMasterRole(t, database, false) // 去重推进是从端专有写（角色谓词）
 	threatDir := t.TempDir()
 	t.Cleanup(OverrideThreatWafDirForTest(threatDir))
 	if err := os.WriteFile(filepath.Join(threatDir, "threat-ustc.iplist.fast"), []byte("local-stale"), 0o644); err != nil {

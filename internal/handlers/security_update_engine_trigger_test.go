@@ -20,28 +20,6 @@ import (
 	"lazy-balancer-v2/internal/taskengine"
 )
 
-// countTaskRunsByID 统计指定任务的 task_runs 行数。
-func countTaskRunsByID(t *testing.T, taskID string) int {
-	t.Helper()
-	var n int
-	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM task_runs WHERE task_id=?`, taskID).Scan(&n); err != nil {
-		t.Fatalf("count task_runs: %v", err)
-	}
-	return n
-}
-
-// waitTaskRun 轮询等待任务行落库（引擎异步触发）。
-func waitTaskRun(t *testing.T, taskID string) {
-	t.Helper()
-	for i := 0; i < 60; i++ {
-		if countTaskRunsByID(t, taskID) > 0 {
-			return
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-	t.Fatalf("task_runs 3s 内未落行（task_id=%s）——手动触发未经引擎", taskID)
-}
-
 // waitTaskRunManualSuccess 等最新一条 task_runs 落定为 manual/success。
 func waitTaskRunManualSuccess(t *testing.T, taskID string) {
 	t.Helper()

@@ -593,6 +593,13 @@ func (h *Handlers) MFARecoveryCodes(c *gin.Context) {
 
 // MFAVerifyStep POST /auth/mfa/ — 验证码 → 新 JWT（mfa_ts 刷新）。
 func (h *Handlers) MFAVerifyStep(c *gin.Context) {
+	// 导入窗口 409（五个 MFA 写端点同门，先于身份判定）：verify-step 换发
+	// JWT（mfa_ts 刷新）同属写面——导入事务全量替换 users 表，窗口内换发的
+	// 会话可能基于被覆盖的用户行。不构成 428 死锁：step-up 机制本体豁免的是
+	// 「要求验码」（DecideMFAStepUp），不是导入期拒绝写。
+	if rejectWriteDuringImport(c, "执行 MFA 写操作") {
+		return
+	}
 	if rejectNonJWTSelfServiceMFA(c) {
 		return
 	}

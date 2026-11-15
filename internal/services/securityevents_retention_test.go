@@ -107,13 +107,12 @@ func TestSecurityEventsRetentionCleanup_deletesEventsOlderThanConfiguredDays(t *
 }
 
 func TestSecurityEventsRetentionCleanup_keepsAllBelowSafetyMax(t *testing.T) {
-	// 原名 trimsOldestRowsWhenCountExceedsMax 与断言
-	// 语义相反（行为变更后复用旧名）——本用例实际钉「宽年龄窗+远低于安全上限
-	// 时全存活」。count-trim 分支的独立钉测见
-	// TestSecurityEventsRetentionCleanup_trimsOldestWhenRowCapExceeded（历史
-	// v2.3.8 起 security_events_row_cap 可配置，cap=小值即可经济构造
-	// 该分支——原「不可构造」豁免理由已失效）。
+	// 本用例钉「宽年龄窗+远低于行帽时全存活」。行帽分支的独立钉测见
+	// TestSecurityEventsRetentionCleanup_trimsOldestWhenRowCapExceeded。
 	setupSecurityEventsRetentionTestDB(t)
+	// 行帽阶段以预聚合就绪为前置：不预置就绪键时整个行帽分支被跳过，
+	// 「全存活」恒真（把 below-max 改成全删也测不出来）。
+	seedRollupReadyState(t)
 	if _, err := db.DB.Exec(`UPDATE global_config SET security_events_retention_days=3650 WHERE id=1`); err != nil {
 		t.Fatal(err)
 	}
@@ -125,7 +124,17 @@ func TestSecurityEventsRetentionCleanup_keepsAllBelowSafetyMax(t *testing.T) {
 	}
 
 	// When
-	securityEventsRetentionCleanup(context.Background())
+	res, err := securityEventsRetentionCleanup(context.Background())
+	if err != nil {
+		t.Fatalf("cleanup: %v", err)
+	}
+	// Then：行帽分支真正执行（未被就绪门推迟），且未删任何行。
+	if res.RowCapDeferred {
+		t.Fatal("就绪键已预置，行帽分支不得被推迟（否则 below-max 断言恒真）")
+	}
+	if res.Events != 0 {
+		t.Fatalf("below-max 清理删除=%d 行, want 0", res.Events)
+	}
 
 	// Then: all 5 events survive (safety max not reached)
 	var count int

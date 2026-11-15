@@ -74,8 +74,12 @@ func TestThreatRDBBootstrap_hashHitStillWritesFiles(t *testing.T) {
 
 	// 模拟升级形态：删除文件，哈希保持命中
 	iplistPath := filepath.Join(wafDir, "threat-ustc.iplist")
-	os.Remove(iplistPath)
-	os.Remove(iplistPath + ".fast")
+	if err := os.Remove(iplistPath); err != nil {
+		t.Fatalf("模拟升级形态：删除 .iplist 失败: %v", err)
+	}
+	if err := os.Remove(iplistPath + ".fast"); err != nil {
+		t.Fatalf("模拟升级形态：删除 .fast 失败: %v", err)
+	}
 
 	// 第二轮：内容未变（哈希命中）但文件缺失 → 必须重写文件
 	if err := GetThreatUpdateManager().RunUpdate("manual", nil); err != nil {

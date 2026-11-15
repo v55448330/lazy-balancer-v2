@@ -11,6 +11,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"lazy-balancer-v2/internal/db"
+	"lazy-balancer-v2/internal/services"
 )
 
 // (用户 2026-09-19 裁定按建议修)
@@ -163,6 +164,78 @@ func TestDuplicateRule_copiesSecurityPolicyBindings(t *testing.T) {
 	// 成功消息明示携带数量
 	if !strings.Contains(response.Body.String(), "2 条策略绑定") {
 		t.Fatalf("success message must state carried bindings, body=%.300s", response.Body.String())
+	}
+}
+
+// 复制必须携带绑定的执行序（rank），不只携带数量：读路径按 (rank ASC,
+// policy_id ASC) 排序（GetSecurityPoliciesForRule），复制丢 rank 落 DDL
+// 默认 0 会让副本执行序退化为 policy_id 序——策略按序评估，源的非平凡序
+// 与副本逐位不一致即防护语义漂移。源序刻意与 policy_id 序相反以区分两种
+// 排序来源。
+func TestDuplicateRule_preservesSecurityPolicyBindingRankOrder(t *testing.T) {
+	// Given：源规则三条绑定，rank 序与 policy_id 序相反（非平凡序）
+	handler, _, _ := newAuditRuleHandlers(t, 0)
+	seedAuditRule(t, "lb_duprank", "dup-rank", "duprank.example.test", 8080, false, "manual", false)
+	var pids []int
+	for _, name := range []string{"rank-a", "rank-b", "rank-c"} {
+		res, err := db.DB.Exec(`INSERT INTO security_policies (name,mode,policy_type,enabled) VALUES (?, 'off', 'stage3', 1)`, name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		pid, err := res.LastInsertId()
+		if err != nil {
+			t.Fatal(err)
+		}
+		pids = append(pids, int(pid))
+	}
+	rankOf := map[int]int{pids[0]: 3, pids[1]: 1, pids[2]: 2}
+	for _, pid := range pids {
+		if _, err := db.DB.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id,policy_id,rank) VALUES ('lb_duprank',?,?)`, pid, rankOf[pid]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	wantOrder := []int{pids[1], pids[2], pids[0]}
+	router := gin.New()
+	router.POST("/rules/:caddy_id/duplicate", handler.DuplicateRule)
+	response := httptest.NewRecorder()
+
+	// When
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/rules/lb_duprank/duplicate", nil))
+
+	// Then：201 + 副本的读路径顺序与源逐位一致
+	if response.Code != http.StatusCreated && response.Code != http.StatusOK {
+		t.Fatalf("duplicate status=%d body=%.200s, want 2xx", response.Code, response.Body.String())
+	}
+	var newID string
+	if err := db.DB.QueryRow(`SELECT caddy_id FROM lb_rules WHERE name LIKE 'dup-rank（副本）%' AND caddy_id<>'lb_duprank'`).Scan(&newID); err != nil {
+		t.Fatalf("find duplicate: %v", err)
+	}
+	gotIDs := func(ruleID string) []int {
+		t.Helper()
+		policies := services.GetSecurityPoliciesForRule(ruleID)
+		ids := make([]int, 0, len(policies))
+		for _, p := range policies {
+			ids = append(ids, p.ID)
+		}
+		return ids
+	}
+	sourceOrder := gotIDs("lb_duprank")
+	if len(sourceOrder) != 3 {
+		t.Fatalf("source policies=%v, want 3 seeded bindings", sourceOrder)
+	}
+	for i, pid := range wantOrder {
+		if sourceOrder[i] != pid {
+			t.Fatalf("source order=%v, want %v（rank 非平凡序前提）", sourceOrder, wantOrder)
+		}
+	}
+	copyOrder := gotIDs(newID)
+	if len(copyOrder) != len(sourceOrder) {
+		t.Fatalf("copy policies=%v, want same length as source %v", copyOrder, sourceOrder)
+	}
+	for i := range sourceOrder {
+		if copyOrder[i] != sourceOrder[i] {
+			t.Fatalf("copy order=%v, want %v（逐位与源一致；丢 rank 会退化为 policy_id 序）", copyOrder, sourceOrder)
+		}
 	}
 }
 

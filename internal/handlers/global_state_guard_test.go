@@ -192,6 +192,8 @@ func captureHandlerGlobalSeams() map[string]any {
 		// 威胁大屏时钟/查询缝。
 		"threatScreenNow":          handlerGlobalPointer(threatScreenNow),
 		"queryThreatRecentBlocked": handlerGlobalPointer(queryThreatRecentBlocked),
+		// 安全总览改判重建并发窗口注入缝。
+		"securityOverviewMutatedRebuildHookForTest": handlerGlobalPointer(securityOverviewMutatedRebuildHookForTest),
 		// 事务补发缝。
 		"rollbackLeakedTx": handlerGlobalPointer(rollbackLeakedTx),
 		// 归属地富化查询缝。

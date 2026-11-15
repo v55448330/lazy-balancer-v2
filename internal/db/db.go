@@ -1813,8 +1813,11 @@ func runMigrations() error {
 		updateWhere("global_config", fmt.Sprintf("autoban_duration='%s'", DefaultAutobanDuration), "autoban_duration IS NULL OR autoban_duration NOT IN ('10m','30m','1h','6h','12h','24h','permanent')"),
 		// 口径多选集合收敛（镜像 services.ValidAutobanScope：非空、逐成员属四维、
 		// 无重复）：NULL/空串/含非法成员/重复成员的脏行复位默认全选。合法集合恒不触碰。
+		// 引号/反斜杠脏值（带外直写/畸形备份）会拼出非法 JSON 让 json_each 报错、
+		// 探测即炸启动——json_valid 门把畸形直接判脏复位（与 SecurityPolicyCustomOnlyModeNormalizationSQL/
+		// tcpRuleUnsupportedBindingPredicate 同族同口径）。
 		updateWhere("global_config", fmt.Sprintf("autoban_scope='%s'", DefaultAutobanScope),
-			`autoban_scope IS NULL OR TRIM(autoban_scope)='' OR EXISTS (
+			`autoban_scope IS NULL OR TRIM(autoban_scope)='' OR NOT json_valid('["' || REPLACE(autoban_scope, ',', '","') || '"]') OR EXISTS (
 				SELECT 1 FROM json_each('["' || REPLACE(autoban_scope, ',', '","') || '"]')
 				WHERE TRIM(value) NOT IN ('blocked','logged','challenge_issued','challenge_failed')
 			) OR (
@@ -6268,8 +6271,8 @@ func migratePolicyStagesV1() error {
 	var changed int64
 	if err := withWriteTx("policy stage merge v1", func(tx *sql.Tx) error {
 		for _, rp := range pairs {
-			// 人机配置快照（以人机行为准：模式/方式/有效期/豁免；cc_* 仅在启用了
-			// CC 检测时覆盖目标的默认阈值）。
+			// 人机配置快照（以人机行为准：模式/方式/有效期/豁免与 cc_* 全量
+			// 覆盖目标——含 cc_detect_enabled 本身；迁移一次性完成，不做条件覆盖）。
 			var humanMode, humanType, humanPaths string
 			var humanTTL int
 			var ccEnabled bool

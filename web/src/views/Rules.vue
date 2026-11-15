@@ -59,7 +59,7 @@
             usersLoadError ? t('common.app.rules.list.auxUpdatersFailHint') : '',
             certConfigsLoadError ? t('common.app.rules.wizard.dnsConfigSelectorNote') : '',
             caProvidersLoadError ? t('common.app.rules.wizard.caProviderSelectorNote') : '',
-          ].filter(Boolean).join('；') }}）</span>
+          ].filter(Boolean).join(t('common.app.rules.list.auxLoadFailJoin')) }}{{ t('common.app.rules.list.auxLoadFailSuffix') }}</span>
           <el-button link type="danger" :loading="auxDataRetryLoading" @click="retryAuxData">{{ t('common.app.rules.list.retryNow') }}</el-button>
         </div>
       </template>

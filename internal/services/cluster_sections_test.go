@@ -856,6 +856,7 @@ func TestLogSyncSwitchGuards_sameVersionDoesNotHashWafFiles(t *testing.T) {
 func TestLogSyncSwitchGuards_newVersionHashesAndAdvancesDedup(t *testing.T) {
 	_, database := newClusterTestService(t)
 	overrideWafPathsForServicesTest(t)
+	setNodeMasterRole(t, database, false) // 去重推进是从端专有写（角色谓词）
 	if _, err := database.Exec(`UPDATE global_config SET applied_waf_ref_version=7 WHERE id=1`); err != nil {
 		t.Fatal(err)
 	}

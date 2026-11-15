@@ -280,6 +280,26 @@ test('createIpMatcher 与 entryMatchesIp 差分等价（v4/v6、CIDR 边界、�
   assert.equal(v4('::/0'), false)
 })
 
+test('裸 IPv6 条目大小写不敏感命中（createIpMatcher 与 entryMatchesIp 同口径）', () => {
+  // 后端身份归一按小写存储/比对；前端裸 IP 精确匹配此前大小写敏感——
+  // 大写书写形态的同一地址漏判。两侧（弹框扫描 createIpMatcher / 名单判定
+  // entryMatchesIp）必须同口径命中。
+  const upper = '2001:DB8::ABCD'
+  const lower = '2001:db8::abcd'
+  const matcher = createIpMatcher(upper)
+  assert.equal(matcher(lower), true, 'createIpMatcher 大写探针命中小写条目')
+  assert.equal(matcher(upper), true)
+  assert.equal(entryMatchesIp(lower, upper), true, 'entryMatchesIp 小写条目命中大写探针')
+  assert.equal(entryMatchesIp(upper, lower), true, '反向同样命中')
+  // 差分等价：大小写混合集合两侧一致
+  for (const entry of [lower, upper, '2001:db8::1', '2001:DB8::/32']) {
+    assert.equal(matcher(entry), entryMatchesIp(entry, upper), `差分不一致 entry=${entry}`)
+  }
+  // 不同地址不得因归一误命中
+  assert.equal(matcher('2001:db8::abce'), false)
+  assert.equal(entryMatchesIp('2001:db8::abce', upper), false)
+})
+
 test('attachStageDetails 阶段 3：targets 投影经 conditionTargetLabel（头名限定可区分）', () => {
   // 带头名=限单头、空头名=扫全部头的值、非 headers 目标不消费头名——
   // 三种条件在流程弹框明细行必须显示不同（此前 targets 只拼 target 串）。

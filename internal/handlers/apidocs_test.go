@@ -1296,6 +1296,7 @@ func TestAPIDocRoutes_mfaWriteEndpointsDocumentImportWindowAndOIDC(t *testing.T)
 		"POST /auth/mfa/disable",
 		"POST /auth/mfa/recovery-codes",
 		"POST /users/:id/mfa/reset",
+		"POST /auth/mfa/verify-step",
 	} {
 		route := routesEntry(t, key)
 		if !containsRouteError(route.Errors, "409") {
@@ -1979,6 +1980,52 @@ func TestBuildOpenAPIYAML_mergesSameStatusErrorSemantics(t *testing.T) {
 	}
 }
 
+// 组合状态码（409/500——deployment_retry_failed 族按错误类型映射到两种状态）
+// 不是合法 OpenAPI 响应键：生成器必须展开为两条独立响应，描述并入各自已有
+// 同码条目（复用同码合并逻辑），否则按规格生成的客户端无法消费该键。
+func TestBuildOpenAPIYAML_expandsCombinedStatusCodes(t *testing.T) {
+	openAPI := buildOpenAPIYAML()
+	// 整篇输出零命中组合码：既不得作为响应键发射，描述散文也不得残留
+	// 409/500 字样（统一「409 或 500」口径）；下方解析键模式校验逐键兜底。
+	if strings.Contains(openAPI, "409/500") {
+		t.Fatal("OpenAPI 输出含组合码 409/500（非法响应键/残留字样，必须展开为独立状态码条目）")
+	}
+	var document struct {
+		Paths map[string]map[string]struct {
+			Responses map[string]struct {
+				Description string `yaml:"description"`
+			} `yaml:"responses"`
+		} `yaml:"paths"`
+	}
+	if err := yaml.Unmarshal([]byte(openAPI), &document); err != nil {
+		t.Fatalf("parse generated OpenAPI YAML: %v", err)
+	}
+	statusPattern := regexp.MustCompile(`^[1-5][0-9]{2}$`)
+	for path, operations := range document.Paths {
+		for method, operation := range operations {
+			for status := range operation.Responses {
+				if !statusPattern.MatchString(status) {
+					t.Errorf("%s %s 响应键 %q 不符合 OpenAPI 状态码模式", method, path, status)
+				}
+			}
+		}
+	}
+	// 携带组合码的两个端点：描述必须并入各自已有的 409/500 条目（不得丢语义）。
+	for _, key := range []string{"POST /system/tasks/:id/trigger", "POST /certificates/jobs/:id/retry"} {
+		route := routesEntry(t, key)
+		operation := document.Paths[apipath.ToOpenAPI(route.Path)][strings.ToLower(route.Method)]
+		for _, status := range []string{"409", "500"} {
+			response, ok := operation.Responses[status]
+			if !ok {
+				t.Fatalf("%s 缺 %s 响应（组合码展开丢失）", key, status)
+			}
+			if !strings.Contains(response.Description, "deployment_retry_failed") {
+				t.Errorf("%s %s description=%q, want 并入 deployment_retry_failed 描述", key, status, response.Description)
+			}
+		}
+	}
+}
+
 // docDataArray 取示例信封 data 数组的首元素（数组载荷端点）。
 func docDataArray(t *testing.T, key string) map[string]any {
 	t.Helper()
@@ -2171,15 +2218,13 @@ func TestBuildOpenAPIYAML_errorDescriptionRoundTrip(t *testing.T) {
 		var order []string
 		descriptions := map[string][]string{}
 		for _, entry := range route.Errors {
-			parts := strings.SplitN(entry, " ", 2)
-			if _, seen := descriptions[parts[0]]; !seen {
-				order = append(order, parts[0])
+			code, description := splitAPIRouteError(entry)
+			for _, status := range strings.Split(code, "/") {
+				if _, seen := descriptions[status]; !seen {
+					order = append(order, status)
+				}
+				descriptions[status] = append(descriptions[status], description)
 			}
-			description := "错误"
-			if len(parts) == 2 {
-				description = parts[1]
-			}
-			descriptions[parts[0]] = append(descriptions[parts[0]], description)
 		}
 		for _, status := range order {
 			want := strings.Join(descriptions[status], " / ")

@@ -210,3 +210,96 @@ func TestCleanupMarkerDrift_detectsSingleSideChanges(t *testing.T) {
 		t.Fatalf("顺序漂移未被检出: %v", drift)
 	}
 }
+
+// 挑战记录枚举翻页终止骨架多实现对齐守卫：aliyun/dnspod/tencent/cloudflare
+// 的枚举函数是同构多实现（底层 API 与记录 ID 类型不同），终止判定必须四家
+// 同形：total 优先、短页兜底、按实际取到数推进游标，且 total 失真偏大 +
+// 服务端重复下发整页（无进展）时收手。只改一侧（如去掉重复页守卫）会让该
+// provider 在失真 total 下空转到页数上限并重复收集，而单侧测试永远绿。
+// 枚举函数名两家不同（cloudflare 是 listRecordsByName，其余是
+// listChallengeRecords），按 provider 分别定位。
+var paginationFuncNames = map[string]string{
+	"aliyun":     "listChallengeRecords",
+	"cloudflare": "listRecordsByName",
+	"dnspod":     "listChallengeRecords",
+	"tencent":    "listChallengeRecords",
+}
+
+// paginationSharedMarkers 是枚举翻页骨架的有序结构标记：四侧必须同现且
+// 顺序一致。条目描述的是语义不变量（不是注释文本），改语义必须同时改四侧
+// 与本清单。
+var paginationSharedMarkers = []struct {
+	name   string
+	marker string
+}{
+	{"去重：已见记录表", "seen := make(map["},
+	{"无进展：整页重复判定初值", "repeatedPage := true"},
+	{"去重：已见记录跳过", "if seen["},
+	{"无进展：取到新记录才解除重复判定", "repeatedPage = false"},
+	{"无进展：登记已见记录", "] = true"},
+	{"终止：空页或整页重复即收手", "fetched == 0 || repeatedPage"},
+}
+
+// paginationFuncBody 从源文件里取指定枚举函数体文本（AST 定位，注释与字符串
+// 内的花括号不干扰边界）。
+func paginationFuncBody(t *testing.T, path, name string) string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("读取 %s: %v", path, err)
+	}
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, path, data, 0)
+	if err != nil {
+		t.Fatalf("解析 %s: %v", path, err)
+	}
+	for _, decl := range file.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Name.Name != name || fn.Recv == nil || len(fn.Recv.List) != 1 {
+			continue
+		}
+		start := fset.Position(fn.Body.Pos()).Offset
+		end := fset.Position(fn.Body.End()).Offset
+		return string(data[start:end])
+	}
+	t.Fatalf("%s 未找到 (p *Provider) %s 方法", path, name)
+	return ""
+}
+
+// TestProviderPaginationImplementationsStayInSync 是枚举翻页对齐门禁：只改
+// 一侧的终止骨架（删去重/删无进展收手/挪判定顺序）必须在此红灯。比较器复用
+// cleanupMarkerDrift（缺失+同现异序两形态，自检见
+// TestCleanupMarkerDrift_detectsSingleSideChanges）。
+func TestProviderPaginationImplementationsStayInSync(t *testing.T) {
+	args := make([]string, 0, len(paginationSharedMarkers))
+	for _, entry := range paginationSharedMarkers {
+		args = append(args, entry.marker)
+	}
+	bodies := make(map[string]string, len(cleanupProviderSource))
+	names := make([]string, 0, len(cleanupProviderSource))
+	for provider, path := range cleanupProviderSource {
+		bodies[provider] = paginationFuncBody(t, path, paginationFuncNames[provider])
+		names = append(names, provider)
+	}
+	sort.Strings(names)
+	for i := range names {
+		for j := i + 1; j < len(names); j++ {
+			left, right := names[i], names[j]
+			if drift := cleanupMarkerDrift(bodies[left], bodies[right], args); len(drift) > 0 {
+				t.Fatalf("枚举翻页 %s/%s 骨架漂移（任一侧修改终止判定必须同步全部实现）:\n  %s",
+					left, right, strings.Join(drift, "\n  "))
+			}
+		}
+	}
+	// 钉测登记：无进展收手必须有行为钉测（注释登记在函数头，AST 函数体不含
+	// 注释，按整源检查）。
+	for provider, path := range cleanupProviderSource {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("读取 %s: %v", path, err)
+		}
+		if !strings.Contains(string(data), "stopsWhenPagesRepeatWithInflatedTotal") {
+			t.Errorf("%s 的枚举翻页缺少重复页收手钉测登记（stopsWhenPagesRepeatWithInflatedTotal）", provider)
+		}
+	}
+}

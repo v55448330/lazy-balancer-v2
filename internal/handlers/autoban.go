@@ -6,6 +6,7 @@ package handlers
 // 「立即执行」端点已废除（2026-10-14 裁定：调度唯一前提=业务启用）。
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -206,11 +207,13 @@ func (h *Handlers) GetAutobanRecidivism(c *gin.Context) {
 
 // DeleteAutobanRecidivism DELETE /security/autoban/recidivism/:identity：
 // 单条移除累犯身份（删除该 identity 行 + 清计数桶/观察建议——打断累犯
-// 流程，与加名单中断同口径；下次达阈值按首次档起算）。封禁中的身份
-// （名单生效条目命中，限时/永久）拒绝移除（400）——须先从 IP 快捷弹框
-// 取消封禁，避免「移除前科但封禁仍在」的处置语义分裂。幂等（identity
-// 不存在也返回成功）；只清历史记账，不动名单条目。主节点门+导入窗口门
-// 同全量重置。
+// 流程，与加名单中断同口径；下次达阈值按首次档起算）。identity 经
+// services.AutobanEntryIdentity 归一（大写/完整形态 IPv6 与记账键同形，
+// 审计记归一值）。封禁中的身份（名单生效条目命中，限时/永久）拒绝移除
+// （400）——须先从 IP 快捷弹框取消封禁，避免「移除前科但封禁仍在」的处置
+// 语义分裂；守卫读与删除同一 BEGIN IMMEDIATE 事务（并发 merge 不得在
+// 两者之间落封禁条目）。幂等（identity 不存在也返回成功）；只清历史记账，
+// 不动名单条目。主节点门+导入窗口门同全量重置。
 func (h *Handlers) DeleteAutobanRecidivism(c *gin.Context) {
 	if rejectWriteDuringImport(c, "删除自动封禁累犯记录（配置导入进行中）") {
 		return
@@ -218,17 +221,13 @@ func (h *Handlers) DeleteAutobanRecidivism(c *gin.Context) {
 	if !requireMasterNode(c) {
 		return
 	}
-	identity := c.Param("identity")
-	banned, err := services.AutobanIdentityActivelyBanned(identity)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("读取自动封禁名单失败", err)})
-		return
-	}
-	if banned {
+	identity := services.AutobanEntryIdentity(c.Param("identity"))
+	identity, err := services.DeleteAutobanRecidivismGuarded(caddyWriteCtx(c), identity)
+	if errors.Is(err, services.ErrAutobanIdentityBanned) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_d5ad4db8"), MessageKey: "k_d5ad4db8"})
 		return
 	}
-	if err := services.DeleteAutobanRecidivism(identity); err != nil {
+	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("删除自动封禁累犯记录失败", err)})
 		return
 	}

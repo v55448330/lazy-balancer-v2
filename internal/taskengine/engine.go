@@ -1761,6 +1761,10 @@ func (e *Engine) executeRun(res *runReservation, id, trigger, operator string) (
 	// 零重触发窗口），再回锁一次性落 running/cancel/槽缓存。若新槽仍为过去
 	// （业务失败未推进等），running 标志在 CAS 前防重入，此处值供下 tick 判定。
 	var nextSlot time.Time
+	// 退避分支的日志行快照：锁内只算状态，锁外按快照写（与 [done] 行同形）。
+	// taskLogAppendContext 的尺寸求值生产读库（最坏占满 busy_timeout），
+	// 持 r.mu 写会把同任务的 Cancel/IsRunning/StopLoop 一起拖住。
+	var backoffWarnLine, backoffStopLine string
 	if r.desc.Kind == KindScheduled && r.desc.NextSlotFn != nil {
 		// 与 tick/Lookup/DescribeAll 同口径的
 		// panic 隔离——NextSlotFn 是装配方闭包（生产为 DB 直读），裸调
@@ -1827,9 +1831,9 @@ func (e *Engine) executeRun(res *runReservation, id, trigger, operator string) (
 			if warnDue {
 				r.schedBackoffLastWarnAt = time.Now()
 				if auto {
-					taskLogAppendContext(ctx, id, fmt.Sprintf("[warn] 排程槽未推进且本轮%s，退避 %s 后重投（连续 %d 轮；业务 Run 早退须推进槽，见任务引擎标准）", outcome, delay, streak))
+					backoffWarnLine = fmt.Sprintf("[warn] 排程槽未推进且本轮%s，退避 %s 后重投（连续 %d 轮；业务 Run 早退须推进槽，见任务引擎标准）", outcome, delay, streak)
 				} else {
-					taskLogAppendContext(ctx, id, fmt.Sprintf("[warn] 排程槽未推进且本轮手动%s，退避 %s 后重投（手动轮不计入自动停调预算）", outcome, delay))
+					backoffWarnLine = fmt.Sprintf("[warn] 排程槽未推进且本轮手动%s，退避 %s 后重投（手动轮不计入自动停调预算）", outcome, delay)
 				}
 			}
 			if auto && streak >= scheduledFailStreakStopLimit {
@@ -1848,7 +1852,7 @@ func (e *Engine) executeRun(res *runReservation, id, trigger, operator string) (
 				if recoverHint == "" {
 					recoverHint = "任务页调度开关或重启进程"
 				}
-				taskLogAppendContext(ctx, id, fmt.Sprintf("[error] 排程槽连续 %d 轮未推进且本轮%s，已停止该任务调度（修复失败原因后重新开启调度：%s）", scheduledFailStreakStopLimit, outcome, recoverHint))
+				backoffStopLine = fmt.Sprintf("[error] 排程槽连续 %d 轮未推进且本轮%s，已停止该任务调度（修复失败原因后重新开启调度：%s）", scheduledFailStreakStopLimit, outcome, recoverHint)
 			}
 		default:
 			r.schedFailStreak = 0
@@ -1868,6 +1872,12 @@ func (e *Engine) executeRun(res *runReservation, id, trigger, operator string) (
 			}
 		}
 		r.mu.Unlock()
+	}
+	if backoffWarnLine != "" {
+		taskLogAppendContext(ctx, id, backoffWarnLine)
+	}
+	if backoffStopLine != "" {
+		taskLogAppendContext(ctx, id, backoffStopLine)
 	}
 
 	if status == "failed" && runErr != nil {

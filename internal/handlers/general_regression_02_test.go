@@ -1,7 +1,7 @@
 package handlers
 
 // 回归覆盖：
-//   - 重试窗口；协议切换丢绑定；TCP 复制不搬运绑定；混合 TLS 冲突；管理端口；
+//   - 重试窗口；协议切换丢绑定；TCP 复制仅搬运 L4 合法 stage0/1 绑定；混合 TLS 冲突；管理端口；
 //   - ACME 残留归一；TCP log_enabled 死配置的保存/导入归一。
 // 所有断言基于真实 DB / HTTP 处理器行为。
 
@@ -233,7 +233,11 @@ func l7ConflictRows() []map[string]any {
 	}
 }
 
-func TestDuplicateTCPRuleDoesNotCopyInertBindings(t *testing.T) {
+// TCP 复制按 L4 阶段 0/1 语义（契约 C4）搬运绑定：stage0/stage1 特征绑定
+// 合法（buildTCPSecurityRoutes 消费）必须携带；含 G2（CC）/G3（WAF）特征
+// 的绑定在 TCP 渲染链零效果，不得随复制放大（与编辑/启用/导入的
+// pruneTCPUnsupportedBindings 收口同口径）。
+func TestDuplicateTCPRuleCopiesOnlyL4SupportedBindings(t *testing.T) {
 	handler := newRuleFeatureTestHandlers(t)
 	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,description,protocol,listen_port,strategy,health_check_interval,health_check_timeout,
 		health_check_unhealthy_threshold,health_check_healthy_threshold,enabled)
@@ -244,13 +248,17 @@ func TestDuplicateTCPRuleDoesNotCopyInertBindings(t *testing.T) {
 		VALUES ('lb_l7dup','127.0.0.1',9000,1,1,'tcp')`); err != nil {
 		t.Fatalf("seed tcp upstream: %v", err)
 	}
-	res, err := db.DB.Exec(`INSERT INTO security_policies (name,policy_type,mode,enabled) VALUES ('l7-dup-policy','stage1','blocking',1)`)
-	if err != nil {
-		t.Fatalf("seed policy: %v", err)
-	}
-	policyID, _ := res.LastInsertId()
-	if _, err := db.DB.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id,policy_id) VALUES ('lb_l7dup',?)`, policyID); err != nil {
-		t.Fatalf("seed inert binding: %v", err)
+	stage0 := l4GateSeedPolicy(t, "l7-dup-stage0", true, false, false, false)
+	stage1 := l4GateSeedPolicy(t, "l7-dup-stage1", false, true, false, false)
+	g3 := l4GateSeedPolicy(t, "l7-dup-waf", false, false, false, true)
+	g2 := l4GateSeedPolicy(t, "l7-dup-cc", false, false, true, false)
+	for _, binding := range []struct {
+		pid  int
+		rank int
+	}{{g3, 1}, {stage1, 2}, {g2, 3}, {stage0, 4}} {
+		if _, err := db.DB.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id,policy_id,rank) VALUES ('lb_l7dup',?,?)`, binding.pid, binding.rank); err != nil {
+			t.Fatalf("seed binding %d: %v", binding.pid, err)
+		}
 	}
 
 	gin.SetMode(gin.TestMode)
@@ -266,8 +274,39 @@ func TestDuplicateTCPRuleDoesNotCopyInertBindings(t *testing.T) {
 	if err := db.DB.QueryRow(`SELECT caddy_id FROM lb_rules WHERE name LIKE 'l7-dup-tcp%（副本）' LIMIT 1`).Scan(&copyID); err != nil {
 		t.Fatalf("read duplicate rule: %v", err)
 	}
-	if got := l7BindingCount(t, copyID); got != 0 {
-		t.Fatalf("TCP duplicate must not copy inert bindings, got %d", got)
+	// 副本只保留 stage0/1 两条，且携带源 rank（源相对序 stage1→stage0，
+	// 与 policy_id 序相反——丢 rank 会退化为 policy_id 序）。
+	rows, err := db.DB.Query(`SELECT policy_id, rank FROM security_policy_bindings WHERE rule_caddy_id=? ORDER BY rank ASC, policy_id ASC`, copyID)
+	if err != nil {
+		t.Fatalf("read copy bindings: %v", err)
+	}
+	defer rows.Close()
+	type copyBinding struct {
+		pid  int
+		rank int
+	}
+	var copied []copyBinding
+	for rows.Next() {
+		var b copyBinding
+		if err := rows.Scan(&b.pid, &b.rank); err != nil {
+			t.Fatalf("scan copy binding: %v", err)
+		}
+		copied = append(copied, b)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate copy bindings: %v", err)
+	}
+	want := []copyBinding{{stage1, 2}, {stage0, 4}}
+	if len(copied) != len(want) {
+		t.Fatalf("TCP duplicate bindings=%v, want stage0/1 only %v", copied, want)
+	}
+	for i := range want {
+		if copied[i] != want[i] {
+			t.Fatalf("TCP duplicate bindings=%v, want %v（G2/G3 不携带且保留 rank 序）", copied, want)
+		}
+	}
+	if !strings.Contains(response.Body.String(), "2 条策略绑定") {
+		t.Fatalf("success message must state carried bindings, body=%s", response.Body.String())
 	}
 	if !strings.Contains(response.Body.String(), `"caddy_id"`) {
 		t.Fatalf("duplicate response missing caddy_id: %s", response.Body.String())

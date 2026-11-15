@@ -19,3 +19,11 @@ test('requireData: 有 data 原样返回（含空对象/空数组等真值载荷
   assert.deepEqual(requireData({}, 'x'), {})
   assert.deepEqual(requireData([], 'x'), [])
 })
+
+test('requireData: falsy 载荷原样透传（仅 null/undefined 抛，不得误伤 0/空串/false）', () => {
+  // 计数/开关/空文本类接口的合法 falsy 载荷：== null 判据之外的任何
+  // truthiness 收窄（!data / data == false）都会把合法响应误判为契约违约。
+  assert.equal(requireData(0, 'x'), 0)
+  assert.equal(requireData('', 'x'), '')
+  assert.equal(requireData(false, 'x'), false)
+})

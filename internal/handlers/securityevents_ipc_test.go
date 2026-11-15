@@ -24,6 +24,7 @@ import (
 
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/services"
+	"lazy-balancer-v2/internal/taskengine"
 )
 
 // securityEventsIPCTestLine 构造一行写侧形态的 audit JSON。
@@ -413,5 +414,39 @@ func TestSecurityEventsIPCHandler_humanEventReasonCarried(t *testing.T) {
 	}
 	if ruleMsg != "人机验证 challenge（会话异常）" {
 		t.Fatalf("rule_msg=%q, want 人机验证 challenge（会话异常）", ruleMsg)
+	}
+}
+
+// Given 主节点+自动封禁启用（challenge_issued 口径），两条 reason=session_anomaly
+// 的 challenge 事件经 IPC 摄入（阈值 2）。
+// When 摄入提交后跑一轮自动封禁（观察模式）。
+// Then 候选主原因=会话异常——handler 喂入缝必须把行内 reason 传给
+// ObserveHumanEvents；只钉 rule_msg 文案拦不住喂入侧丢 reason（备注归因
+// 静默退化为「人机验证挑战」）。
+func TestSecurityEventsIPCHandler_humanReasonFeedsAutobanAttribution(t *testing.T) {
+	setupSecurityPolicyTestDB(t)
+	installHumanObserveMasterEngine(t)
+	if err := services.SetAutobanConfig(services.AutobanConfig{Enabled: true, Threshold: 2, WindowMinutes: 5, Duration: "1h", Scope: services.AutobanScopeChallengeIssued, DryRun: true}); err != nil {
+		t.Fatalf("enable autoban: %v", err)
+	}
+	services.ResetAutobanCounters()
+	t.Cleanup(services.ResetAutobanCounters)
+
+	ts := time.Now().UnixMilli()
+	body := fmt.Sprintf(`[{"ts":%d,"rule_id":"lb-cc-feed","client_ip":"45.33.32.90","method":"GET","uri":"/x","ua":"test","kind":"challenge","reason":"session_anomaly"},{"ts":%d,"rule_id":"lb-cc-feed","client_ip":"45.33.32.90","method":"GET","uri":"/x","ua":"test","kind":"challenge","reason":"session_anomaly"}]`, ts, ts+1)
+	postHumanObserveBatch(t, body)
+	if got := services.AutobanTrackedIPs(); got != 1 {
+		t.Fatalf("tracked_ips=%d, want 1（challenge_issued 口径必须计入喂入）", got)
+	}
+
+	if err := services.RunAutobanCycle(taskengine.RunContext{Trigger: "auto"}); err != nil {
+		t.Fatalf("autoban cycle: %v", err)
+	}
+	suggestions := services.AutobanSuggestions()
+	if len(suggestions) != 1 {
+		t.Fatalf("建议=%+v, want 恰 1 条达阈值候选", suggestions)
+	}
+	if suggestions[0].Reason != "会话异常" {
+		t.Fatalf("候选主原因=%q, want 会话异常（IPC 喂入缝丢失 reason：备注归因退化为通用人机挑战）", suggestions[0].Reason)
 	}
 }

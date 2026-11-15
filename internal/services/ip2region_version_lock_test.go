@@ -15,7 +15,6 @@ import (
 	"os"
 	"strings"
 	"testing"
-	"time"
 )
 
 // Given wafFileMu 被预持（模拟并发的 lbbak 导入文件相位）。
@@ -26,26 +25,13 @@ func TestIP2RegionUpdateManager_install_writes_version_state_inside_waf_file_loc
 	seedIP2RegionVersionRow(t, "v3.0.0", true)
 	m.downloadXDB = fakeIP2RegionDownload(t, true)
 
-	WafFileLock().Lock()
-	done := make(chan error, 1)
-	go func() {
-		done <- m.downloadAndInstall(context.Background(), "v3.1.0", true, false)
-	}()
-	select {
-	case err := <-done:
-		WafFileLock().Unlock()
-		t.Fatalf("安装段在 wafFileMu 被预持期间完成（版本状态写入未入锁）, err=%v", err)
-	case <-time.After(300 * time.Millisecond):
-	}
-	WafFileLock().Unlock()
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatalf("锁释放后 downloadAndInstall 失败: %v", err)
-		}
-	case <-time.After(10 * time.Second):
-		t.Fatal("锁释放后 downloadAndInstall 10s 内未完成")
-	}
+	// 阻塞判定复用共享探针（started 正握手 + 探针错误外露）；固定负窗口
+	// 无法区分「被锁阻塞」与「goroutine 调度延迟」——慢机上未入锁的实现
+	// 也可能在窗口内未完成（假绿），此精度局限由探针的启动握手收敛，
+	// 残余调度窗口内的区分力由释放后的终态断言承载。
+	probeBlocksUnderWafFileLock(t, "ip2region install writes version state", func() error {
+		return m.downloadAndInstall(context.Background(), "v3.1.0", true, false)
+	})
 	// 版本行随安装段落库——导出读相位（持同一锁）永远读不到文件新/行旧偏斜。
 	if version, _, _, _, _, _, _ := ip2RegionVersionRow(t); version != "v3.1.0" {
 		t.Fatalf("version row=%q, want v3.1.0（版本行写入必须随安装段同互斥区完成）", version)

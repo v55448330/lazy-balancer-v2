@@ -261,3 +261,132 @@ func TestAuditSpoolRotateFlushFailureHonestFallback(t *testing.T) {
 		t.Fatalf("recovery appendLines = %d, %v; want 1, nil", n, err)
 	}
 }
+
+// TestAuditSpoolResetStatFailureKeepsActiveForRetry：reset 的磁盘实况探测
+// （os.Stat）真实失败（目录搜索权限被剥夺 → EACCES）时，已落盘内容不得
+// 随 activePath 清零变成孤儿——写侧存活期间根服务只消费 sealed，孤儿
+// active 永不补采（根服务孤儿清理只管「pid 已不存在」的遗留）。钉测：
+// (a) Stat 失败后 active 文件保留且 activePath 不清（待封存清单）；
+// (b) 权限恢复后下一批写入前重试封存——已落盘基线进 sealed（补采可达面）；
+// (c) 新批落新 active，恢复性完整。
+func TestAuditSpoolResetStatFailureKeepsActiveForRetry(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("root 不受目录权限位约束，EACCES 注入不可达")
+	}
+	dir := filepath.Join(t.TempDir(), "spool")
+	s, err := openAuditSpool(dir, 64<<20, 4096)
+	if err != nil {
+		t.Fatalf("open spool: %v", err)
+	}
+	defer func() { _ = s.close() }()
+
+	baseline := []byte(`{"k":"baseline"}`)
+	if n, err := s.appendLines([][]byte{baseline, baseline}); err != nil || n != 2 {
+		t.Fatalf("baseline appendLines = %d, %v; want 2, nil", n, err)
+	}
+
+	// 真实故障注入：剥夺目录搜索权限 → os.Stat(activePath) EACCES。
+	if err := os.Chmod(dir, 0o600); err != nil {
+		t.Fatalf("chmod fault: %v", err)
+	}
+	restore := func() {
+		if err := os.Chmod(dir, 0o750); err != nil {
+			t.Fatalf("chmod restore: %v", err)
+		}
+	}
+	defer restore()
+	closeSpoolActiveForTest(t, s)
+
+	// 批末 flush 真实失败 → resetWriterLocked → Stat 失败分支。
+	if n, err := s.appendLines([][]byte{[]byte(`{"i":1}`)}); err == nil || n != 0 {
+		t.Fatalf("appendLines = %d, %v; want 0, real flush error", n, err)
+	}
+	restore()
+
+	// (a) 已落盘 active 不得孤儿化：文件保留 + 路径入待封存清单
+	//（activePath 让位给新 active，清单承载重试职责）。
+	s.mu.Lock()
+	pending := append([]string(nil), s.pendingSeal...)
+	s.mu.Unlock()
+	if len(pending) != 1 {
+		t.Fatalf("待封存清单=%v, want 1 条（Stat 失败后已落盘基线必须保留待重试，不得清零孤儿化）", pending)
+	}
+	if _, err := os.Stat(pending[0]); err != nil {
+		t.Fatalf("active 文件必须保留待封存: %v", err)
+	}
+
+	// (b) 恢复后下一批：待封存 active 先重试封存（基线进补采可达面）。
+	if n, err := s.appendLines([][]byte{[]byte(`{"r":1}`)}); err != nil || n != 1 {
+		t.Fatalf("recovery appendLines = %d, %v; want 1, nil", n, err)
+	}
+	var actives, sealeds int
+	for _, name := range spoolFiles(t, dir) {
+		switch {
+		case strings.HasPrefix(name, auditSpoolActivePrefix):
+			actives++
+		case strings.HasPrefix(name, auditSpoolSealedPrefix):
+			sealeds++
+		default:
+			t.Fatalf("spool 文件名不符合契约: %s", name)
+		}
+	}
+	if actives != 1 || sealeds != 1 {
+		t.Fatalf("spool after retry: active=%d sealed=%d, want 1/1（基线封存+新批 active）", actives, sealeds)
+	}
+	lines := spoolLines(t, dir)
+	var baselineSeen int
+	for _, l := range lines {
+		if strings.Contains(l, "baseline") {
+			baselineSeen++
+		}
+	}
+	if baselineSeen != 2 {
+		t.Fatalf("sealed/active 内容 baseline 行=%d, want 2（已落盘字节零丢失）: %v", baselineSeen, lines)
+	}
+}
+
+// TestAuditSpoolCloseSealsStatFailureOrphan：Stat 失败遗留的待封存 active
+// 在 close 收尾必须封存（进程退出后根服务孤儿清理虽可兜底，但写侧自己
+// 收尾不得把已落盘内容留在 active——close 契约=本代全部行 sealed）。
+func TestAuditSpoolCloseSealsStatFailureOrphan(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("root 不受目录权限位约束，EACCES 注入不可达")
+	}
+	dir := filepath.Join(t.TempDir(), "spool")
+	s, err := openAuditSpool(dir, 64<<20, 4096)
+	if err != nil {
+		t.Fatalf("open spool: %v", err)
+	}
+	baseline := []byte(`{"k":"baseline"}`)
+	if n, err := s.appendLines([][]byte{baseline}); err != nil || n != 1 {
+		t.Fatalf("baseline appendLines = %d, %v; want 1, nil", n, err)
+	}
+	if err := os.Chmod(dir, 0o600); err != nil {
+		t.Fatalf("chmod fault: %v", err)
+	}
+	closeSpoolActiveForTest(t, s)
+	if _, err := s.appendLines([][]byte{[]byte(`{"i":1}`)}); err == nil {
+		t.Fatal("flush 必须真实失败")
+	}
+	if err := os.Chmod(dir, 0o750); err != nil {
+		t.Fatalf("chmod restore: %v", err)
+	}
+	if err := s.close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	var actives, sealeds int
+	for _, name := range spoolFiles(t, dir) {
+		switch {
+		case strings.HasPrefix(name, auditSpoolActivePrefix):
+			actives++
+		case strings.HasPrefix(name, auditSpoolSealedPrefix):
+			sealeds++
+		}
+	}
+	if actives != 0 || sealeds != 1 {
+		t.Fatalf("spool after close: active=%d sealed=%d, want 0/1（待封存 active 必须收尾封存）", actives, sealeds)
+	}
+	if lines := spoolLines(t, dir); len(lines) != 1 || !strings.Contains(lines[0], "baseline") {
+		t.Fatalf("sealed content = %v, want 1 baseline line", lines)
+	}
+}

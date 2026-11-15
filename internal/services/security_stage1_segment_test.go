@@ -74,8 +74,9 @@ func TestStage1PrecheckSegmentSQL_executesAgainstSQLite(t *testing.T) {
 		"800000", "800001", "899999", "900000", "80", "80000", "8000000", "",
 		// ACL/黑名单链段界内（GLOB 锚定后必须命中）
 		"1500000", "1500002", "1509999", "1510000", "1510002", "1519999",
-		// 非数字脏行（带外写入形态）：前缀碰巧同段但含字母——LIKE 会放行，GLOB 必须拒绝
-		"150abc", "151x", "8xx", "80000a",
+		// 非数字脏行（带外写入形态）：前缀碰巧同段但含字母——LIKE 会放行，
+		// GLOB 必须拒绝。7 位形态专钉 ACL 链段分支（短脏行只触达 GeoIP 段）。
+		"150abc", "151x", "8xx", "80000a", "150000a", "151000x",
 	}
 	for _, v := range values {
 		if _, err := database.Exec(`INSERT INTO stage1_probe (rule_triggered) VALUES (?)`, v); err != nil {
@@ -134,49 +135,6 @@ func TestStage1PrecheckSegmentSQL_eventDurationPredicateReconciled(t *testing.T)
 	for _, id := range []int{geoipPrecheckRuleBase - 1, geoipPrecheckRuleLimit} {
 		if securityEventsIsPrecheckRule(strconv.Itoa(id)) {
 			t.Fatalf("securityEventsIsPrecheckRule(%d)=true，超出 GeoIP 段界", id)
-		}
-	}
-}
-
-// 真执行钉：非数字脏行（带外写入形态）不得因前缀碰巧同段而误入阶段 1 段
-// （LIKE '150%' 会放行 '150abc'，GLOB 字符集锚定必须拒绝）。
-func TestStage1PrecheckSegmentSQL_rejectsNonNumericRows(t *testing.T) {
-	_, database := newClusterTestService(t)
-	if _, err := database.Exec("CREATE TABLE stage1_probe (rule_triggered TEXT)"); err != nil {
-		t.Fatal(err)
-	}
-	values := []string{
-		"1500000", "1500002", "1509999", "1510000", "1510002", "1519999", // ACL/黑名单链段界内
-		"150abc", "151x", "8xx", "80000a", // 非数字脏行：LIKE 会放行，GLOB 必须拒绝
-	}
-	for _, v := range values {
-		if _, err := database.Exec("INSERT INTO stage1_probe (rule_triggered) VALUES (?)", v); err != nil {
-			t.Fatalf("insert %q: %v", v, err)
-		}
-	}
-	rows, err := database.Query("SELECT rule_triggered FROM stage1_probe WHERE " + Stage1PrecheckSegmentSQL)
-	if err != nil {
-		t.Fatalf("阶段 1 段谓词在 SQLite 执行失败: %v", err)
-	}
-	defer rows.Close()
-	got := map[string]bool{}
-	for rows.Next() {
-		var v string
-		if err := rows.Scan(&v); err != nil {
-			t.Fatal(err)
-		}
-		got[v] = true
-	}
-	if err := rows.Err(); err != nil {
-		t.Fatal(err)
-	}
-	for _, v := range values {
-		want := false
-		if n, convErr := strconv.Atoi(v); convErr == nil {
-			want = IsStage1PrecheckEventID(n)
-		}
-		if got[v] != want {
-			t.Fatalf("值 %q 在段谓词中命中=%v, want %v（SQL 与 Go 谓词分叉）", v, got[v], want)
 		}
 	}
 }

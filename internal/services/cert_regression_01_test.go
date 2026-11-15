@@ -198,7 +198,7 @@ func TestAutoBackupWatermarkSlot_UsesTriggerTime(t *testing.T) {
 	}
 	// 执行体必须使用触发时刻（旧实现用完成时刻 time.Now() 重算：跨过 03:00
 	// 边界会把今日未执行的槽写成已跑，静默漏跑）。
-	advanceAutoBackupWatermark(trigger)
+	advanceAutoBackupWatermark(context.Background(), trigger)
 	var stored string
 	if err := db.DB.QueryRow("SELECT auto_backup_last_run FROM global_config WHERE id=1").Scan(&stored); err != nil {
 		t.Fatalf("read watermark: %v", err)

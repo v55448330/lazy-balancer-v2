@@ -1007,11 +1007,24 @@ func (m *CAQueueManager) EnqueueIfActive(providerID int, jobID int, ruleID, doma
 	}
 	m.reserveJobLocked(jobID)
 	m.mu.Unlock()
-	defer m.releaseJobReservation(jobID)
+	// 预留键随 transition 的返回值重键：创建路径以 jobID=0 进入（任务行尚未
+	// 落库），真实 id 由 transition 产生——预留必须登记到真实 id 上，否则
+	// 并发补扫/手动重试按真实 id 查 IsJobActive 看不到键 0 的预留，「判定 →
+	// 迁移 → 入队」的原子性在创建+补扫窗口内失效。defer 闭包引用重赋值后的
+	// 变量，任一退出路径都释放当前键。
+	reservedID := jobID
+	defer func() { m.releaseJobReservation(reservedID) }()
 
 	jobID, changed, err := transition()
 	if err != nil || !changed {
 		return jobID, changed, err
+	}
+	if jobID != reservedID {
+		m.mu.Lock()
+		delete(m.reservedJobs, reservedID)
+		m.reserveJobLocked(jobID)
+		m.mu.Unlock()
+		reservedID = jobID
 	}
 	provider, err := m.resolveEnqueueProvider(providerID, jobID, ruleID)
 	if err != nil {

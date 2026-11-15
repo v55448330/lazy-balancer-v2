@@ -18,7 +18,8 @@ import (
 
 // 阶段化安全流水线批 2 端点：
 //   GET  /security/rules/:caddy_id/stage-stats（阶段计数 chip：阶段 1/3=24h
-//        blocked 事件分桶，阶段 2=重载口径 429 按 host 映射回规则）
+//        blocked 事件分桶 + 分段耗时；阶段 2 CC 防护统计由 lb_human 插件供给，
+//        配额限流退役后本端点不再读 429 指标）
 //   POST /security/policies/batch-bind（批量绑定：单事务单渲染，merge/replace）
 //   POST /rules/batch-block-pages（批量阶段拦截页：单事务单渲染）
 
@@ -314,9 +315,10 @@ func TestBatchRuleBlockPages_deprecatedUpdatesAndSkips(t *testing.T) {
 		t.Fatalf("invalid status code status=%d body=%s, want 200", response.Code, response.Body.String())
 	}
 }
-func TestGetRuleStageStats_bucketsAndRateLimitMapping(t *testing.T) {
+
+func TestGetRuleStageStats_bucketsAndTiming(t *testing.T) {
 	// Given：规则 lb_ss（双域名）+ 24h 内 blocked 事件（id 2 / 14 / 800123 / 942100 /
-	// 10005）+ 界外事件（logged / 25h 前）+ 指标桩 429 计数
+	// 10005）+ 界外事件（logged / 25h 前）
 	handler, _ := newStageBatchTestHandlers(t)
 	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,strategy,enabled) VALUES ('lb_ss','ss','http','ss.example.test,api.ss.test',8080,'weighted_round_robin',1)`); err != nil {
 		t.Fatal(err)
@@ -342,17 +344,6 @@ func TestGetRuleStageStats_bucketsAndRateLimitMapping(t *testing.T) {
 	seedEvent("2", "logged", "datetime('now','-1 hour')")           // 非 blocked 不计
 	seedEvent("2", "blocked", "datetime('now','-25 hours')")        // 超 24h 窗不计
 	seedEvent("949110", "blocked", "datetime('now','-30 minutes')") // 阶段 3 评分拦截
-	resetCaddyMetricsSnapshotCacheForTest()
-	t.Cleanup(resetCaddyMetricsSnapshotCacheForTest)
-	metrics := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`caddy_http_request_duration_seconds_count{code="429",handler="rate_limit",host="ss.example.test",method="GET",server="http_8080"} 7
-caddy_http_request_duration_seconds_count{code="429",handler="rate_limit",host="api.ss.test",method="GET",server="http_8080"} 2
-caddy_http_request_duration_seconds_count{code="429",handler="rate_limit",host="other.example.test",method="GET",server="http_8080"} 5
-caddy_http_request_duration_seconds_count{code="200",handler="rate_limit",host="ss.example.test",method="GET",server="http_8080"} 100
-`))
-	}))
-	t.Cleanup(metrics.Close)
-	handler.cfg.CaddyMetricsURL = metrics.URL
 	router := stageBatchRouter(handler)
 
 	// When
@@ -361,8 +352,7 @@ caddy_http_request_duration_seconds_count{code="200",handler="rate_limit",host="
 	router.ServeHTTP(response, request)
 
 	// Then：阶段 1={2,4,7,8,14}∪800xxx=4（2/14/800123×2），阶段 3=其余=3
-	// （942100/10005/949110），429=按域名映射 7+2=9（other.example.test 与
-	// code=200 排除）
+	// （942100/10005/949110）
 	if response.Code != http.StatusOK {
 		t.Fatalf("stage-stats status=%d body=%s, want 200", response.Code, response.Body.String())
 	}
@@ -381,8 +371,8 @@ caddy_http_request_duration_seconds_count{code="200",handler="rate_limit",host="
 	}
 }
 
-// 同域多端口：两条规则各自只认自己监听端口的 429 计数（按 host 求和会让每条
-// chip 变成两条之和）；泛域名规则匹配子域 host（此前恒 0）。
+// 分段耗时：预检段（固定 id/GeoIP/ACL 链段）与 WAF 段分别取正样本均值——
+// 零快照存量行不稀释、防御性预检 id 不混入 WAF 桶、24h 界外行不参与。
 func TestGetRuleStageStats_timingUsesConsistentSegmentsAndPositiveSamples(t *testing.T) {
 	// Given：WAF 事件携带预检快照、3/5/12 防御性预检 ID、升级前 precheck_us=0
 	// 的存量预检行，以及非数字触发 ID 和 24h 界外行。

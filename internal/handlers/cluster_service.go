@@ -123,7 +123,9 @@ func (h *Handlers) ControlClusterNodeService(c *gin.Context) {
 		// 指纹不匹配必须与通用不可达区分下发——否则前端无法提示
 		//「清除该节点证书指纹」补救通道（该信息此前只进服务端日志）。
 		if errors.Is(err, services.ErrClusterPinMismatch) {
-			clusterError(c, http.StatusBadGateway, "从节点证书指纹不匹配（该节点管理面板证书可能已更换），可清除该节点证书指纹后重试", err)
+			// 结构化语义键 pin_mismatch：前端按键判定补救通道（与文案解耦，
+			// 文案词条化后入口不失效），与从节点侧 sync_error_code 同口径。
+			clusterErrorKeyed(c, http.StatusBadGateway, "从节点证书指纹不匹配（该节点管理面板证书可能已更换），可清除该节点证书指纹后重试", "pin_mismatch", err)
 			return
 		}
 		clusterError(c, http.StatusBadGateway, "从节点不可达或响应异常", err)

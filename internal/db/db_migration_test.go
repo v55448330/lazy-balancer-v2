@@ -4215,6 +4215,60 @@ func TestMigrateCertJobsWaitingCA_convertsToFailedAndRetainsFields(t *testing.T)
 	}
 }
 
+// 空 message 的过期冷却行：空值分支写入的终态文案必须与幂等判据同形
+// （带括号标记）——裸文案不含标记，二次启动会再追加一遍，message 随重启
+// 次数漂移（「冷却已过期，可直接重试（冷却已过期，可直接重试）」）。
+func TestMigrateCertJobsWaitingCA_emptyMessageNoteIdempotent(t *testing.T) {
+	database := openMigrationTestDB(t)
+	createLegacyCertJobs(t, database, "'queued'",
+		"'queued','failed','waiting_ca','issued','disabled'")
+	if _, err := database.Exec(`INSERT INTO cert_jobs (rule_id, domain, status, message, renewal_attempts, ca_available_after) VALUES
+		('lb_e1', 'e1.example', 'failed', '', 1, datetime('now','-1 minute')),
+		('lb_e2', 'e2.example', 'failed', NULL, 1, datetime('now','-1 minute'))`); err != nil {
+		t.Fatalf("seed empty-message expired jobs: %v", err)
+	}
+	readMessages := func() []string {
+		t.Helper()
+		rows, err := database.Query(`SELECT COALESCE(message,'') FROM cert_jobs ORDER BY id`)
+		if err != nil {
+			t.Fatalf("read messages: %v", err)
+		}
+		defer rows.Close()
+		var got []string
+		for rows.Next() {
+			var m string
+			if err := rows.Scan(&m); err != nil {
+				t.Fatalf("scan message: %v", err)
+			}
+			got = append(got, m)
+		}
+		if err := rows.Err(); err != nil {
+			t.Fatalf("iterate messages: %v", err)
+		}
+		return got
+	}
+	if err := migrateCertJobsWaitingCA(); err != nil {
+		t.Fatalf("first migrate: %v", err)
+	}
+	first := readMessages()
+	if len(first) != 2 {
+		t.Fatalf("rows=%d, want 2", len(first))
+	}
+	for i, m := range first {
+		if m != certCooldownExpiredNote {
+			t.Fatalf("首轮第 %d 行 message=%q, want 与判据同形的标记文案 %q", i, m, certCooldownExpiredNote)
+		}
+	}
+	if err := migrateCertJobsWaitingCA(); err != nil {
+		t.Fatalf("second migrate: %v", err)
+	}
+	for i, m := range readMessages() {
+		if m != first[i] {
+			t.Fatalf("二次迁移后第 %d 行 message=%q, want 恒等 %q（空值分支幂等）", i, m, first[i])
+		}
+	}
+}
+
 // 配置导入/还原与启动迁移共用 NormalizeWaitingCACertJobs：waiting_ca 行保窗
 // 归一为 failed（保留 message/次数/窗口/错误码），返回归一行数，二次执行零命中。
 func TestMigrateCertJobsWaitingCA_normalizeHelperPreservesFieldsAndCounts(t *testing.T) {

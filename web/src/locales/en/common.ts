@@ -241,6 +241,7 @@ export default {
     nodeServices: 'Node services',
     ruleStore: 'Rule store',
     ruleMetrics: 'Rule metrics',
+    metrics: 'Metrics',
     ruleLogs: 'Rule logs',
     certificate: 'Certificate',
     certificateArtifacts: 'Certificate artifacts',

@@ -8,8 +8,10 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -228,5 +230,58 @@ func TestMarkStartupFallbackFailed_writesCompensationMarker(t *testing.T) {
 	syncService := NewSyncService(database, &config.Config{}, nil)
 	if !syncService.syncMarkerPresent(context.Background(), syncReloadFailureMarkerPrefix) {
 		t.Fatal("重载失败标记探测=false——Pull 304 分支不会触发全量重拉，补偿通道失明")
+	}
+}
+
+// persistLastGoodLocked 的 .tmp 写失败（RLIMIT_FSIZE 部分写）此前留下孤儿
+// .tmp——与 certstore 临时文件自清理同口径修复。注入真实失败机制：把文件
+// 大小上限压到新载荷之下，writeSyncedFile 的 Write 真实触发 EFBIG；断言终态
+// （零 .tmp 残留 + 既有 last-good 主文件不被破坏）而非仅返回值。
+func TestCaddyService_persistLastGood_writeFailureLeavesNoTmpOrphan(t *testing.T) {
+	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
+		t.Skip("RLIMIT_FSIZE 注入仅支持 unix 形态")
+	}
+	// Given：既有 last-good 主文件（上一次可用配置）。
+	dir := t.TempDir()
+	path := filepath.Join(dir, "last_good.json")
+	const previous = `{"apps":{"previous":true}}`
+	if err := os.WriteFile(path, []byte(previous), 0o600); err != nil {
+		t.Fatalf("seed last-good: %v", err)
+	}
+	svc := NewCaddyService("http://127.0.0.1:1") // 不触网，直接调 persistLastGoodLocked
+	svc.SetLastGoodPath(path)
+
+	// 文件大小上限压到新载荷字节数之下——Write 超限真实失败（EFBIG）。
+	payload := []byte(`{"apps":{"new-longer-than-limit":true}}`)
+	var original syscall.Rlimit
+	if err := syscall.Getrlimit(syscall.RLIMIT_FSIZE, &original); err != nil {
+		t.Fatalf("read RLIMIT_FSIZE: %v", err)
+	}
+	if err := syscall.Setrlimit(syscall.RLIMIT_FSIZE, &syscall.Rlimit{Cur: uint64(len(payload) - 1), Max: original.Max}); err != nil {
+		t.Fatalf("set RLIMIT_FSIZE: %v", err)
+	}
+	t.Cleanup(func() { _ = syscall.Setrlimit(syscall.RLIMIT_FSIZE, &original) })
+
+	// When
+	svc.mu.Lock()
+	svc.persistLastGoodLocked(payload)
+	svc.mu.Unlock()
+
+	// Then：零 .tmp 残留，且既有 last-good 主文件逐字节不变。
+	entries, readErr := os.ReadDir(dir)
+	if readErr != nil {
+		t.Fatalf("read dir: %v", readErr)
+	}
+	for _, entry := range entries {
+		if strings.HasSuffix(entry.Name(), ".tmp") {
+			t.Fatalf("写盘失败后残留 .tmp 孤儿 %s（失败路径必须清理暂存）", entry.Name())
+		}
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("last-good main file missing after failed persist: %v", err)
+	}
+	if string(got) != previous {
+		t.Fatalf("last-good main file=%s, want previous payload unchanged", string(got))
 	}
 }

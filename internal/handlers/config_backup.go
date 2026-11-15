@@ -3,6 +3,7 @@ package handlers
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
@@ -4013,6 +4014,28 @@ func validateV2BackupRuntimeSettings(config map[string]any, tables map[string][]
 		}
 		config["acme_email"] = email
 	}
+	// human_secret（cookie 签名密钥）强度门：与启动播种
+	// （db.seedHumanSecretAtStartup，32 字节随机 hex）同口径。弱值/非字符串
+	// 落库会让已签发挑战凭证可被离线伪造；空串不落库——归一为现场重新生成
+	// 强密钥（渲染链只读，空值会跳过 lb_human 渲染）。
+	if raw, exists := config[configBackupHumanSecretColumn]; exists {
+		if raw == nil {
+			return fmt.Errorf("备份的 human_secret 必须为字符串（空串=重新生成密钥）")
+		}
+		secret, ok := raw.(string)
+		if !ok {
+			return fmt.Errorf("备份的 human_secret 必须为字符串（空串=重新生成密钥）")
+		}
+		if secret == "" {
+			regenerated, err := generateImportHumanSecret()
+			if err != nil {
+				return fmt.Errorf("备份的 human_secret 为空串，重新生成密钥失败: %w", err)
+			}
+			config[configBackupHumanSecretColumn] = regenerated
+		} else if len(secret) < 32 {
+			return fmt.Errorf("备份的 human_secret 强度不足：至少 32 字节（当前 %d 字节），与启动播种的 32 字节密钥同口径", len(secret))
+		}
+	}
 	if raw, exists := config["sync_interval"]; exists && raw != nil {
 		value, ok := backupInteger(raw)
 		if !ok || value < 10 || value > 86400 {
@@ -7288,6 +7311,17 @@ var configBackupAutobanColumns = []string{
 // 写入，提交后需要独立的缓存失效收敛（services.ResetHumanSecretCache），
 // 故单列登记而不混入七列清单。
 const configBackupHumanSecretColumn = "human_secret"
+
+// generateImportHumanSecret 为「空串=重新生成」语义现场生成强密钥：与启动
+// 播种同形（32 字节 crypto/rand → hex）。随机源失败响亮拒绝导入——不得把
+// 空值/弱值落库留给渲染链兜底。
+func generateImportHumanSecret() (string, error) {
+	raw := make([]byte, 32)
+	if _, err := rand.Read(raw); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(raw), nil
+}
 
 // configCarriesAutobanRuntimeColumns 报告备份全局配置区是否携带自动封禁
 // 七列或 human_secret 之一（携带即可能改写运行值/缓存前提，需要在提交后

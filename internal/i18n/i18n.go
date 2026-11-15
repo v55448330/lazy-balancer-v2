@@ -99,6 +99,11 @@ func negotiate(header string) string {
 			}
 		}
 		lang = strings.ToLower(strings.TrimSpace(lang))
+		// RFC 9110：q=0 显式声明该语言不可接受——候选直接跳过，不得参与
+		// 择优（全零候选回落默认 zh）。非法/NaN 已在上方按 0 处理，同此口径。
+		if q == 0 {
+			continue
+		}
 		switch {
 		case lang == "zh" || strings.HasPrefix(lang, "zh-"):
 			cs = append(cs, cand{"zh", q})

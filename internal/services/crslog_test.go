@@ -2,6 +2,7 @@ package services
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -26,6 +27,10 @@ func TestWriteCRSUpdateLog_singleSinkNoDoubleTee(t *testing.T) {
 	n := strings.Count(content, "集群同步回放规则库")
 	if n != 2 {
 		t.Fatalf("两次写入应恰 2 行（曾双写为 4），got %d:\n%s", n, content)
+	}
+	// 守卫②：旧 crs-update.log 不再产生（曾双写落旧路径）。
+	if _, err := os.Stat(filepath.Join(dir, "crs-update.log")); !os.IsNotExist(err) {
+		t.Fatalf("旧 crs-update.log 不得再产生: err=%v", err)
 	}
 }
 

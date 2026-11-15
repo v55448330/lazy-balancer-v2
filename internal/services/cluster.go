@@ -610,7 +610,52 @@ func (s *ClusterService) RegistrationStatus(ctx context.Context, nodeID int, sec
 		return models.ClusterRegistrationStatus{}, fmt.Errorf("读取注册状态: %w", err)
 	}
 	// 哈希比对改常量时间——与 HMAC 链路的 hmac.Equal 同口径。
-	if storedSecretHash == "" || subtle.ConstantTimeCompare([]byte(storedSecretHash), []byte(tokenHash(secret))) != 1 || (secretExpiresAt.Valid && !secretExpiresAt.Time.After(now)) {
+	hashMatches := subtle.ConstantTimeCompare([]byte(storedSecretHash), []byte(tokenHash(secret))) == 1
+	secretConsumed := storedSecretHash == ""
+	if secretConsumed {
+		// 与 ConfirmRegistration 幂等契约对称：首个真实下发的快照（Snapshot
+		// 旧协议交付确认）或上一次成功确认已消费 registration_secret，而从
+		// 节点在令牌落库前可能重复轮询状态——消费后不得返回 401（从端 5 连败
+		// 轨道会清空注册态，需人工重新注册）。已审批节点按 permanentClusterToken
+		// 重交付同一令牌（secret 确定性派生，权限面不扩大）；未审批维持 pending。
+		// 密钥不可验证（哈希已消费）时以已交付的 cluster_token_hash 复核交付
+		// 事实：不匹配=凭证无效。过期检查对已消费密钥不适用（消费即失效）。
+		if approved {
+			clusterToken := permanentClusterToken(secret)
+			var storedTokenHash sql.NullString
+			if err := tx.QueryRowContext(ctx, `SELECT cluster_token_hash FROM nodes WHERE id=?`, nodeID).Scan(&storedTokenHash); err != nil {
+				return models.ClusterRegistrationStatus{}, fmt.Errorf("读取集群令牌哈希: %w", err)
+			}
+			if !storedTokenHash.Valid || storedTokenHash.String != tokenHash(clusterToken) {
+				return models.ClusterRegistrationStatus{}, ErrInvalidClusterAuth
+			}
+			result, err := tx.ExecContext(ctx, "UPDATE nodes SET cluster_token_delivered=1 WHERE id=? AND "+masterRoleConditionSQL, nodeID)
+			if err != nil {
+				return models.ClusterRegistrationStatus{}, fmt.Errorf("重交付集群令牌: %w", err)
+			}
+			updated, err := result.RowsAffected()
+			if err != nil {
+				return models.ClusterRegistrationStatus{}, fmt.Errorf("读取集群令牌重交付结果: %w", err)
+			}
+			if updated != 1 {
+				// 先回滚再复核角色：nodeWriteMissError 使用独立连接，不能在持锁事务内调用。
+				_ = tx.Rollback()
+				return models.ClusterRegistrationStatus{}, s.nodeWriteMissError(ctx)
+			}
+			if err := tx.Commit(); err != nil {
+				return models.ClusterRegistrationStatus{}, fmt.Errorf("提交状态查询: %w", err)
+			}
+			return models.ClusterRegistrationStatus{Status: "approved", ClusterToken: clusterToken}, nil
+		}
+		if status == "pending" {
+			if err := tx.Commit(); err != nil {
+				return models.ClusterRegistrationStatus{}, fmt.Errorf("提交状态查询: %w", err)
+			}
+			return models.ClusterRegistrationStatus{Status: "pending"}, nil
+		}
+		return models.ClusterRegistrationStatus{Status: "rejected"}, nil
+	}
+	if !hashMatches || (secretExpiresAt.Valid && !secretExpiresAt.Time.After(now)) {
 		return models.ClusterRegistrationStatus{}, ErrInvalidClusterAuth
 	}
 	response := models.ClusterRegistrationStatus{Status: "pending"}
@@ -988,7 +1033,10 @@ func (s *ClusterService) detachFromMaster(ctx context.Context, masterURL, oldTok
 	s.cleanupClusterPin(pinPath, parsedMasterURL.Scheme+"://"+parsedMasterURL.Host)
 }
 
-func (s *ClusterService) cleanupClusterPin(pinPath, auditURL string) {
+// cleanupClusterPin 删除 pin 文件；失败登记 pendingPins 待周期重试并按失败
+// 形态节流审计。返回 pinGone=磁盘 pin 已删除或本就不存在（调用方据此失效
+// 内存指纹缓存，保持内存/磁盘 TOFU 生命周期对齐）。
+func (s *ClusterService) cleanupClusterPin(pinPath, auditURL string) (pinGone bool) {
 	s.pinCleanupMu.Lock()
 	defer s.pinCleanupMu.Unlock()
 	if err := os.Remove(pinPath); err != nil {
@@ -997,7 +1045,7 @@ func (s *ClusterService) cleanupClusterPin(pinPath, auditURL string) {
 			// 恒现——从未写过 pin)记「清理成功」审计是假阳性,跳过;
 			// pending 状态仍清空(无遗留需重试)。
 			s.clearPendingPinLocked(pinPath)
-			return
+			return true
 		}
 		// 同一 pin 路径的审计地址保持首次登记值（该 pin 只对应一个旧主节点）；
 		// 不同路径各占一条，互不覆盖——单槽实现会让先前的待重试项永久失联。
@@ -1019,10 +1067,11 @@ func (s *ClusterService) cleanupClusterPin(pinPath, auditURL string) {
 			s.pinCleanupFailureKeys[pinPath] = failureKey
 			RecordAuditLog("system", "清理失败", "证书指纹", FormatAuditDetail("旧主节点："+auditURL, err.Error()), "")
 		}
-		return
+		return false
 	}
 	s.clearPendingPinLocked(pinPath)
 	RecordAuditLog("system", "清理", "证书指纹", FormatAuditDetail("旧主节点："+auditURL, AuditResultPart("success")), "")
+	return true
 }
 
 // clearPendingPinLocked 清除该路径的待重试与失败去重状态（调用方持锁）。

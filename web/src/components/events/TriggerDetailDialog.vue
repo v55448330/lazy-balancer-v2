@@ -838,6 +838,9 @@ watch(() => props.modelValue, (v) => {
     crsSnippetError.value = false
     void ensureCrsRuleIndex(seq)
   }
+  // customRuleSeq 同样无条件推进（与 crsDialogSeq 同范式）：换开非 custom 事件时
+  // 上一会话在途的自定义规则响应必须失配丢弃，不能写进新会话。
+  customRuleSeq++
   if (kind.value === 'waf-custom') void loadCustomRule()
 })
 </script>

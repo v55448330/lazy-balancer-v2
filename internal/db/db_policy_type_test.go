@@ -29,8 +29,8 @@ func TestRunMigrations_policyTypeColumnAndBackfill(t *testing.T) {
 	}
 
 	// Then：列存在且逐行推断落值
-	// 五阶段模型（2026-11-12）：WAF=stage4（人机验证占 stage3）；无特征存量行
-	// 同样归 stage4（InferPolicyType default 分支）。
+	// 四阶段模型：WAF=stage3（stage4 为退役别名，NormalizePolicyType 归一到
+	// stage3）；无特征存量行同样归 stage3（InferPolicyType default 分支）。
 	want := map[string]string{
 		"legacy-waf":   "stage3",
 		"legacy-acl":   "stage1",

@@ -183,8 +183,13 @@ type l4Spool struct {
 	totalBytes    int64
 	totalEntries  int64
 	entriesByFile map[string]int64
-	lastWrite     time.Time
-	closed        bool
+	// pendingSeal 待封存清单：reset 时封存故障遗留的 active 路径（句柄已
+	// 关闭）。下一批写入前与 close 收尾重试封存——写侧存活期间补采端只消费
+	// sealed，清零丢弃即孤儿（见 resetWriterLocked）。与 caddygeoip/auditwriter
+	// 同构。
+	pendingSeal []string
+	lastWrite   time.Time
+	closed      bool
 	// now 时钟注入缝（生产 time.Now，测试推进节流窗口）；budgetRefreshedAt
 	// 上次预算核算时刻——节流窗口内复用上次结果，不逐批扫目录。
 	now               func() time.Time
@@ -314,6 +319,9 @@ func (s *l4Spool) appendLines(lines [][]byte) (int, error) {
 	if s.maxBytes < 0 {
 		return 0, errors.New("l4sec: security-events spool dir unavailable")
 	}
+	// 待封存清单先于新批重试：故障遗留的已落盘 active 尽快进补采可达面
+	//（也先于预算核算——封存不改变目录字节总量，仅换名）。
+	s.sealPendingLocked()
 	if s.budgetRefreshedAt.IsZero() || s.now().Sub(s.budgetRefreshedAt) >= l4SpoolBudgetRefreshInterval {
 		s.refreshBudgetLocked()
 	}
@@ -414,9 +422,49 @@ func (s *l4Spool) resetWriterLocked() {
 	if s.activePath != "" {
 		if newPath, serr := s.sealedPathLocked(); serr == nil && os.Rename(s.activePath, newPath) == nil {
 			s.noteActiveRenameLocked(s.activePath, newPath)
+		} else {
+			// 封存失败（名字探测/改名故障）不得孤儿化：写侧存活期间补采端
+			// 只消费 sealed，清零 activePath 即让已落盘行永不被补采。保留
+			// 路径入待封存清单，下一批写入前重试（sealPendingLocked），close
+			// 收尾兜底封存。
+			s.pendingSeal = append(s.pendingSeal, s.activePath)
 		}
 		s.activePath = ""
 	}
+}
+
+// sealPendingLocked 重试待封存清单（封存故障遗留的 active）：成功封存或
+// 确认已被带外移除即出清单；仍失败的保留下批再试。调用方持 s.mu。清单内
+// 路径的句柄已在 reset 时关闭，与当前 active 无写竞争。与 caddygeoip/auditwriter
+// 同构。
+func (s *l4Spool) sealPendingLocked() {
+	if len(s.pendingSeal) == 0 {
+		return
+	}
+	kept := s.pendingSeal[:0]
+	for _, path := range s.pendingSeal {
+		info, err := os.Stat(path)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				delete(s.entriesByFile, path)
+				continue
+			}
+			kept = append(kept, path)
+			continue
+		}
+		if info.Size() == 0 {
+			_ = os.Remove(path)
+			delete(s.entriesByFile, path)
+			continue
+		}
+		newPath, serr := s.sealedPathLocked()
+		if serr != nil || os.Rename(path, newPath) != nil {
+			kept = append(kept, path)
+			continue
+		}
+		s.noteActiveRenameLocked(path, newPath)
+	}
+	s.pendingSeal = kept
 }
 
 func (s *l4Spool) flushLocked() error {
@@ -529,6 +577,9 @@ func (s *l4Spool) close() error {
 		return nil
 	}
 	s.closed = true
+	// 待封存清单收尾重试：故障遗留的已落盘 active 不得以 active 形态留存
+	// ——close 契约=本代全部行 sealed。
+	s.sealPendingLocked()
 	var err error
 	if s.bw != nil {
 		err = s.bw.Flush()

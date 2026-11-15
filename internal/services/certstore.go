@@ -255,10 +255,13 @@ func writeCertPairFiles(certPath, keyPath, certPEM, keyPEM string) (bool, error)
 
 	certTmp, keyTmp := certPath+".tmp", keyPath+".tmp"
 	if err := writeSyncedFile(certTmp, []byte(certPEM), 0644); err != nil {
-		return false, fmt.Errorf("写入证书: %w", err)
+		// 打开成功后写入/fsync 失败会留下 certTmp——与 keyTmp 同口径清理。
+		return false, errors.Join(fmt.Errorf("写入证书: %w", err), removeTemporaryCertFile(certTmp))
 	}
 	if err := writeSyncedFile(keyTmp, []byte(keyPEM), 0600); err != nil {
-		return false, errors.Join(fmt.Errorf("写入私钥: %w", err), removeTemporaryCertFile(certTmp))
+		// 打开成功后写入/fsync 失败会留下含私钥材料的 keyTmp——与 certTmp
+		// 同口径清理，失败路径不得遗留私钥暂存。
+		return false, errors.Join(fmt.Errorf("写入私钥: %w", err), removeTemporaryCertFile(certTmp), removeTemporaryCertFile(keyTmp))
 	}
 	if err := os.Rename(certTmp, certPath); err != nil {
 		return false, errors.Join(fmt.Errorf("部署证书: %w", err), removeTemporaryCertFile(certTmp), removeTemporaryCertFile(keyTmp))
@@ -330,12 +333,19 @@ func RemoveCertFiles(ruleID string) error {
 	if certPath == "" {
 		return fmt.Errorf("非法的规则编号: %q", ruleID)
 	}
+	// 枚举全部代际（与 RemoveCertJobLogFiles 同构）：目标对 + 写盘/恢复的
+	// 暂存代（.tmp/.restore）。只删 .crt/.key 时，写盘失败/崩溃遗留的私钥
+	// 暂存（含私钥材料）随规则删除永久残留磁盘。
 	var certErr, keyErr error
-	if err := os.Remove(certPath); err != nil && !os.IsNotExist(err) {
-		certErr = fmt.Errorf("删除证书: %w", err)
+	for _, candidate := range []string{certPath, certPath + ".tmp", certPath + ".restore"} {
+		if err := os.Remove(candidate); err != nil && !os.IsNotExist(err) {
+			certErr = errors.Join(certErr, fmt.Errorf("删除证书: %w", err))
+		}
 	}
-	if err := os.Remove(keyPath); err != nil && !os.IsNotExist(err) {
-		keyErr = fmt.Errorf("删除私钥: %w", err)
+	for _, candidate := range []string{keyPath, keyPath + ".tmp", keyPath + ".restore"} {
+		if err := os.Remove(candidate); err != nil && !os.IsNotExist(err) {
+			keyErr = errors.Join(keyErr, fmt.Errorf("删除私钥: %w", err))
+		}
 	}
 	return errors.Join(certErr, keyErr)
 }
@@ -505,7 +515,9 @@ func restoreCertFile(path string, snapshot CertFileSnapshot) error {
 	}
 	temporaryPath := path + ".restore"
 	if err := writeSyncedFile(temporaryPath, snapshot.Data, snapshot.Mode); err != nil {
-		return err
+		// 打开成功后写入/fsync 失败会留下 .restore 暂存（私钥恢复时含私钥
+		// 材料）——与 writeCertPairFiles 的 keyTmp 同口径清理。
+		return errors.Join(err, removeTemporaryCertFile(temporaryPath))
 	}
 	if err := os.Rename(temporaryPath, path); err != nil {
 		removeErr := os.Remove(temporaryPath)

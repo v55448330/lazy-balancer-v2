@@ -27,7 +27,15 @@ func TestRefreshIPListProjections_serializesWithProjectionSnapshot(t *testing.T)
 		t.Fatalf("snapshot projections: %v", err)
 	}
 	rendered := make(chan struct{})
+	// 正握手（entered 通道，与姊妹文件单规则预检同模式）：先确认刷新
+	// goroutine 已启动，再让出调度使其到达锁等待——不依赖「100ms 内渲染
+	// 不完」的负窗口调度假设（慢机上串行化回归会假绿）。串行化与否的
+	// 区分由回滚终态断言承载：未串行化实现此刻已写完 tp.txt 并登记进
+	// 本轮回滚清单，回滚把它当渲染新增删除；串行化实现下刷新尚未动盘，
+	// tp.txt 在回滚后才生成并存活。
+	entered := make(chan struct{})
 	go func() {
+		close(entered)
 		defer close(rendered)
 		// DB 视图刷新变体（自取 CaddyOpLock）：无运行中 Caddy 时按
 		// ProjectionFallback 收尾（运行配置不可读），但投影写盘（渲染
@@ -37,11 +45,9 @@ func TestRefreshIPListProjections_serializesWithProjectionSnapshot(t *testing.T)
 			t.Errorf("refresh projections: %v", err)
 		}
 	}()
-	select {
-	case <-rendered:
-		// 未串行实现会先渲染完并把 tp.txt 登记进本轮回滚清单。
-	case <-time.After(100 * time.Millisecond):
-	}
+	<-entered
+	// 正握手只证明「已启动」；宽限让出调度使刷新停在锁入口。
+	time.Sleep(50 * time.Millisecond)
 	if err := RestoreIPListProjections(snapshot); err != nil {
 		t.Fatalf("restore projections: %v", err)
 	}

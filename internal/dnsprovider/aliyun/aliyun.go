@@ -398,10 +398,14 @@ type enumeratedRecord struct {
 }
 
 // listChallengeRecords 枚举 zone 下指定 RR 的 TXT 记录：KeyWord 前缀在服务端
-// 过滤，客户端按 RR 精确匹配（大小写不敏感）收窄，翻页直到取尽。
+// 过滤，客户端按 RR 精确匹配（大小写不敏感）收窄，翻页直到取尽。翻页终止与
+// dnspod/tencent/cloudflare 侧统一（total 优先、短页兜底、按实际取到条数推进
+// 游标）：total 失真偏大且服务端重复下发同页（无进展）时同样终止——否则空转
+// 到页数上限并重复收集（钉测见 stopsWhenPagesRepeatWithInflatedTotal）。
 func (p *Provider) listChallengeRecords(ctx context.Context, zone, subDomain string) ([]enumeratedRecord, error) {
 	var collected []enumeratedRecord
 	var fetchedTotal int64
+	seen := make(map[string]bool)
 	for page := 1; page <= challengeListPageLimit; page++ {
 		body, err := p.apiCall(ctx, "DescribeDomainRecords", map[string]string{
 			"DomainName": zone,
@@ -430,6 +434,7 @@ func (p *Provider) listChallengeRecords(ctx context.Context, zone, subDomain str
 		if err := json.Unmarshal(body, &result); err != nil {
 			return nil, fmt.Errorf("DescribeDomainRecords response decode: %w", err)
 		}
+		repeatedPage := true
 		for _, record := range result.DomainRecords.Record {
 			if record.Type != "TXT" {
 				continue
@@ -437,15 +442,25 @@ func (p *Provider) listChallengeRecords(ctx context.Context, zone, subDomain str
 			if dnsname.NormalizeName(record.RR) != subDomain {
 				continue
 			}
+			if seen[record.RecordId] {
+				continue
+			}
+			repeatedPage = false
+			seen[record.RecordId] = true
 			collected = append(collected, enumeratedRecord{recordID: record.RecordId, value: record.Value})
 		}
 		fetched := int64(len(result.DomainRecords.Record))
 		fetchedTotal += fetched
 		// 终止按累计实际取到数（与 dnspod/tencent/cloudflare 同口径）：
 		// 服务端可能按更小页容量返回，"页号×请求页大小" 会提前终止漏扫。
+		// 空页或整页重复（无进展）即收手——TotalCount 失真偏大且服务端重复
+		// 下发整页时不得空转到页数上限（与 dnspod/tencent 同构）。
+		if fetched == 0 || repeatedPage {
+			return collected, nil
+		}
 		// TotalCount 缺失/失真（≤0）时短页兜底（与 cloudflare 同口径）：
 		// 不足请求页大小即末页，页数上限兜底防失控翻页。
-		if fetched == 0 || (result.TotalCount > 0 && fetchedTotal >= result.TotalCount) || fetched < challengeListPageSize {
+		if (result.TotalCount > 0 && fetchedTotal >= result.TotalCount) || fetched < challengeListPageSize {
 			return collected, nil
 		}
 	}

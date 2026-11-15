@@ -120,11 +120,17 @@ func writeThreatListTakeoverSkipMarker(fingerprints map[string]struct{}) {
 
 // threatListTakeoverSkipFingerprint 标识一处「规范名被另一 system=1 行占用」
 // 僵持态：规范名 + 旧名 + 双方行 id。任何一方变化（人工归并后新建冲突）都
-// 视为新冲突并重报。
+// 视为新冲突并重报。id 扫描失败（库忙/畸形 id 等）点名留痕后按 0 计——与
+// marker 读侧同口径（fail-open：指纹可能失真致同一冲突重报一条审计，但不得
+// 静默吞错，也不得阻断启动）。
 func threatListTakeoverSkipFingerprint(canonical, legacy string) string {
 	var canonicalID, legacyID int64
-	_ = DB.QueryRow(`SELECT id FROM security_ip_lists WHERE name=? AND system=1 ORDER BY id LIMIT 1`, canonical).Scan(&canonicalID)
-	_ = DB.QueryRow(`SELECT id FROM security_ip_lists WHERE name=? AND system=1 ORDER BY id LIMIT 1`, legacy).Scan(&legacyID)
+	if err := DB.QueryRow(`SELECT id FROM security_ip_lists WHERE name=? AND system=1 ORDER BY id LIMIT 1`, canonical).Scan(&canonicalID); err != nil {
+		log.Printf("WARN: 启动迁移：威胁名单占名冲突告警指纹生成失败（规范名 %q 行 id 读取失败，按未告警继续，同一冲突可能重报一条审计）: %v", canonical, err)
+	}
+	if err := DB.QueryRow(`SELECT id FROM security_ip_lists WHERE name=? AND system=1 ORDER BY id LIMIT 1`, legacy).Scan(&legacyID); err != nil {
+		log.Printf("WARN: 启动迁移：威胁名单占名冲突告警指纹生成失败（旧名 %q 行 id 读取失败，按未告警继续，同一冲突可能重报一条审计）: %v", legacy, err)
+	}
 	return fmt.Sprintf("%s|%s|%d|%d", canonical, legacy, canonicalID, legacyID)
 }
 

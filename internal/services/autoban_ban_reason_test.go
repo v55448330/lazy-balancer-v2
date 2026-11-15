@@ -40,6 +40,28 @@ func TestAutobanBanReason_classifiesFeedShapes(t *testing.T) {
 	}
 }
 
+// Given CC 触发原因 token 值域（lbhuman evalCC 的 Reason：三合法 token +
+// 未知/空）。
+// When AutobanCCTriggerReasonLabel 映射。
+// Then 三 token 各归中文标签；未知/空返回空串（不污染归因，rule_msg 与
+// 条目备注共用本单源）。
+func TestAutobanCCTriggerReasonLabel_valueDomain(t *testing.T) {
+	cases := []struct {
+		reason, want string
+	}{
+		{"session_anomaly", "会话异常"},
+		{"rps_spike", "突刺"},
+		{"4xx_ratio", "4xx激增"},
+		{"unknown_token", ""},
+		{"", ""},
+	}
+	for _, c := range cases {
+		if got := AutobanCCTriggerReasonLabel(c.reason); got != c.want {
+			t.Fatalf("AutobanCCTriggerReasonLabel(%q)=%q, want %q", c.reason, got, c.want)
+		}
+	}
+}
+
 // Given 桶内混合原因（CRS拦截×2 + 人机验证失败×3）。
 // When 评估候选。
 // Then 候选主原因=计数最多类别（人机验证失败）。

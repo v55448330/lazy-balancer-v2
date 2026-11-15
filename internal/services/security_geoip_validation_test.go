@@ -51,9 +51,9 @@ func TestValidateGeoIPCountries_rejectsUnknownProvinceWhenNothingLoaded(t *testi
 	if err == nil || !strings.Contains(err.Error(), "未加载") {
 		t.Fatalf("unknown province without loaded database must be rejected with 未加载, got %v", err)
 	}
-	// And："海外" 是唯一可判定归属的条目，放行；空条目仍拒绝
-	// （用户裁决覆盖海外放行）：海外拦截同样依赖 live
-	// searcher 设置占位变量，缺库时 CEL 恒假零强制——未加载时一并拒绝。
+	// And："海外" 同样拒绝（用户裁决覆盖海外放行）：海外拦截依赖 live
+	// searcher 设置占位变量，缺库时 CEL 恒假零强制——未加载时一并拒绝；
+	// 空条目仍拒绝。
 	if err := ValidateGeoIPCountries(`["海外"]`, "deny"); err == nil || !strings.Contains(err.Error(), "未加载") {
 		t.Fatalf("海外 without loaded database must be rejected with 未加载, got %v", err)
 	}

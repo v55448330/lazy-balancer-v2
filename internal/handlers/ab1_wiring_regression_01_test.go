@@ -5,7 +5,9 @@ package handlers
 //     （AddIPToList 追加、CreateIPList「创建并加入」种子条目：手动加入任何
 //     名单=抹累犯前科+停计数）必须调用 services.AutobanForgetIPs（机制侧行为
 //     由 services 层 TestAutobanForgetIPs_deleteThenNoNewEventsNoReban 钉死，
-//     本钉测锁定调用点不旁路：securityiplists.go 源扫描恰 4 次）；
+//     本钉测锁定调用点不旁路：securityiplists.go 源扫描恰 4 次）。
+//     UpdateIPList 整表保存处置面（新增差集中断累犯+预置移除差集解封）
+//     并入「差集全量保存」同一调用点（处置集合并一次消费，不新增调用点）；
 //  2. 唯一生产入口 importConfigBackupCore（HTTP 导入+自动备份还原双面共用）
 //     必须在 commit 成功后调用 services.ResetAutobanCounters（Ruling：全量替换
 //     语义下整体清桶，差集 ForgetIPs 不更正确——见
@@ -32,7 +34,7 @@ func TestAutobanUnban_bucketClearWiringPinned(t *testing.T) {
 		t.Fatalf("read securityiplists.go: %v", err)
 	}
 	if got := strings.Count(string(src), "services.AutobanForgetIPs("); got != 4 {
-		t.Fatalf("services.AutobanForgetIPs 调用点=%d, want 恰 4（remove-ip 端点+差集全量保存+AddIPToList 追加+CreateIPList 创建并加入；新增解封/处置面必须走同一入口并更新本钉测）", got)
+		t.Fatalf("services.AutobanForgetIPs 调用点=%d, want 恰 4（remove-ip 端点+差集全量保存[含整表保存新增/移除处置集]+AddIPToList 追加+CreateIPList 创建并加入；新增解封/处置面必须走同一入口并更新本钉测）", got)
 	}
 }
 

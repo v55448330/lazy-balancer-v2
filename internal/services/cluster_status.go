@@ -10,7 +10,6 @@ import (
 	"lazy-balancer-v2/internal/models"
 	"net"
 	"net/url"
-	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -681,15 +680,9 @@ func (s *ClusterService) DeleteNode(ctx context.Context, nodeID int) error {
 	if addrErr == nil {
 		accessURL = resolveNodeAccessURL(ipAddress, port, protocol, accessURL)
 		if pinPath, host, perr := nodePinPathFromAccessURL(s.dataDir, s.db, accessURL); perr == nil {
-			pinGone := false
-			if rerr := os.Remove(pinPath); rerr == nil {
-				pinGone = true
-				RecordAuditLog("system", "清除", "证书指纹", FormatAuditDetail(fmt.Sprintf("节点删除伴随清除 pin：%s", host), AuditResultPart("success")), "")
-			} else if errors.Is(rerr, os.ErrNotExist) {
-				pinGone = true
-			} else {
-				Logf("warn", "节点删除后清除 pin 失败(%s): %v", host, rerr)
-			}
+			// 与 Promote 清理链同构：失败进 pendingPins 周期重试 + 审计节流，
+			// 不再裸 os.Remove 只留一行日志（pin 从此无重试通道，只能人工删盘）。
+			pinGone := s.cleanupClusterPin(pinPath, accessURL)
 			// 磁盘 pin 已删（或本就不存在）时同步失效内存指纹缓存——与
 			// ForgetNodePin handler 的 ForgetNodePinCache 收尾对称：残留内存
 			// 条目会让本节点曾作为从节点时代的旧指纹继续参与复核，内存/磁盘

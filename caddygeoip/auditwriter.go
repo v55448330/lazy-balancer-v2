@@ -2706,8 +2706,12 @@ type auditSpool struct {
 	totalBytes    int64
 	totalEntries  int64
 	entriesByFile map[string]int64
-	lastWrite     time.Time
-	closed        bool
+	// pendingSeal 待封存清单：reset 时 Stat/封存故障遗留的 active 路径
+	//（句柄已关闭）。下一批写入前与 close 收尾重试封存——写侧存活期间
+	// 根服务只消费 sealed，不清零丢弃即孤儿（见 resetWriterLocked）。
+	pendingSeal []string
+	lastWrite   time.Time
+	closed      bool
 }
 
 // openAuditSpool 创建/打开 spool 目录并开启本进程的 active 文件。
@@ -2799,6 +2803,9 @@ func (s *auditSpool) appendLines(lines [][]byte) (int, error) {
 	if s.closed {
 		return 0, errors.New("security-events spool closed")
 	}
+	// 待封存清单先于新批重试：故障遗留的已落盘 active 尽快进补采可达面
+	//（也先于预算核算——封存不改变目录字节总量，仅换名）。
+	s.sealPendingLocked()
 	s.refreshBudgetLocked()
 	if s.active == nil {
 		if err := s.openActiveLocked(); err != nil {
@@ -2868,6 +2875,10 @@ func (s *auditSpool) noteActiveRenameLocked(oldPath, newPath string) {
 // 直接移除回收预算，不给补采端留空文件。滞留行本身由 appendLines 的返回值
 // 交调用方兜底，零真丢。落盘证据取磁盘 size 而非 activeBytes/entriesByFile：
 // 两者按「已交缓冲」计数，含从未落盘的滞留行。
+// Stat 失败（EACCES/ENOTDIR 等，目录权限/形态故障）不得清零 activePath：
+// 已落盘内容可能仍在盘上，清零即孤儿（写侧存活期根服务不消费 active，
+// 孤儿清理只管 pid 已退出的遗留）——保留路径入待封存清单，下一批写入前
+// 重试（sealPendingLocked），close 收尾兜底封存。
 func (s *auditSpool) resetWriterLocked() {
 	s.bw = nil
 	if s.active != nil {
@@ -2877,14 +2888,67 @@ func (s *auditSpool) resetWriterLocked() {
 	if s.activePath == "" {
 		return
 	}
-	if info, err := os.Stat(s.activePath); err == nil && info.Size() > 0 {
+	info, err := os.Stat(s.activePath)
+	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			// 探测失败≠文件不存在：保留待封存（含 entriesByFile 记账），
+			// 下一批重试；反复失败由 close 收尾与根服务孤儿清理兜底。
+			s.pendingSeal = append(s.pendingSeal, s.activePath)
+			s.activePath = ""
+			return
+		}
+		// 带外删除：记账随文件消失回收。
+		delete(s.entriesByFile, s.activePath)
+		s.activePath = ""
+		return
+	}
+	if info.Size() > 0 {
 		if newPath, serr := s.sealedPathLocked(); serr == nil && os.Rename(s.activePath, newPath) == nil {
 			s.noteActiveRenameLocked(s.activePath, newPath)
+		} else {
+			// 封存失败（名字探测/改名故障）同样不得孤儿化：待封存重试。
+			s.pendingSeal = append(s.pendingSeal, s.activePath)
+			s.activePath = ""
+			return
 		}
-	} else if err == nil {
+	} else {
 		_ = os.Remove(s.activePath)
+		delete(s.entriesByFile, s.activePath)
 	}
 	s.activePath = ""
+}
+
+// sealPendingLocked 重试待封存清单（Stat/封存故障遗留的 active）：成功封存
+// 或确认已被带外移除即出清单；仍失败的保留下批再试。调用方持 s.mu。
+// 清单内路径的句柄已在 reset 时关闭，与当前 active 无写竞争。
+func (s *auditSpool) sealPendingLocked() {
+	if len(s.pendingSeal) == 0 {
+		return
+	}
+	kept := s.pendingSeal[:0]
+	for _, path := range s.pendingSeal {
+		info, err := os.Stat(path)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				delete(s.entriesByFile, path)
+				continue
+			}
+			kept = append(kept, path)
+			continue
+		}
+		if info.Size() == 0 {
+			_ = os.Remove(path)
+			delete(s.entriesByFile, path)
+			continue
+		}
+		newPath, serr := s.sealedPathLocked()
+		if serr != nil || os.Rename(path, newPath) != nil {
+			kept = append(kept, path)
+			continue
+		}
+		s.noteActiveRenameLocked(path, newPath)
+	}
+	s.pendingSeal = kept
 }
 
 // flushLocked 把 bufio 内容推入 active 文件。
@@ -2995,6 +3059,9 @@ func (s *auditSpool) close() error {
 		return nil
 	}
 	s.closed = true
+	// 待封存清单收尾重试：故障遗留的已落盘 active 不得以 active 形态
+	// 留给「pid 已退出」孤儿清理兜底——close 契约=本代全部行 sealed。
+	s.sealPendingLocked()
 	err := s.flushLocked()
 	if s.bw != nil {
 		s.bw = nil

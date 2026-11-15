@@ -1233,3 +1233,107 @@ func TestCreateRule_canonicalizesForwardAuthCopyHeaders(t *testing.T) {
 		}
 	})
 }
+
+// 认证网关开关越界必须显式 400（与 ntlm_compatible 同口径），不得被写侧
+// 归一静默归零：用户提交 forward_auth_enabled=2 表达开启意图，静默落 0
+// 会让用户以为网关已生效而实际零防护。保存族 Create/Update 同门；
+// TCP+越界同样先命中值域门（越界判定先于协议判定）。
+func TestRuleWrites_rejectOutOfRangeForwardAuthEnabled(t *testing.T) {
+	handler := newRuleFeatureTestHandlers(t)
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.POST("/rules", handler.CreateRule)
+	router.PUT("/rules/:caddy_id", handler.UpdateRule)
+	do := func(method, path, body string) *httptest.ResponseRecorder {
+		t.Helper()
+		request := httptest.NewRequest(method, path, strings.NewReader(body))
+		request.Header.Set("Content-Type", "application/json")
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, request)
+		return response
+	}
+
+	for _, value := range []int{2, -1} {
+		t.Run(fmt.Sprintf("create-%d", value), func(t *testing.T) {
+			body := fmt.Sprintf(`{
+				"name":"fa-range-%d","protocol":"http","domain":"fa-range-%d.example.test","listen_port":%d,
+				"forward_auth_enabled":%d,"forward_auth_upstream":"http://gw.internal:7000",
+				"health_check_interval":10,"health_check_timeout":2,"health_check_unhealthy_threshold":3,"health_check_healthy_threshold":2,
+				"upstreams":[{"host":"127.0.0.1","port":9000,"enabled":true}]
+			}`, value, value, 13016+value, value)
+			response := do(http.MethodPost, "/rules", body)
+			if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "forward_auth_enabled 必须为 0 或 1") {
+				t.Fatalf("status=%d body=%.300s, want 400 值域点名（不得静默归零）", response.Code, response.Body.String())
+			}
+			var count int
+			if err := db.DB.QueryRow(`SELECT COUNT(*) FROM lb_rules WHERE name=?`, fmt.Sprintf("fa-range-%d", value)).Scan(&count); err != nil {
+				t.Fatalf("count rule: %v", err)
+			}
+			if count != 0 {
+				t.Fatalf("rejected create must not persist (count=%d)", count)
+			}
+		})
+	}
+
+	t.Run("create-tcp-2", func(t *testing.T) {
+		body := `{
+			"name":"fa-range-tcp","protocol":"tcp","listen_port":13019,
+			"forward_auth_enabled":2,
+			"health_check_interval":10,"health_check_timeout":2,"health_check_unhealthy_threshold":3,"health_check_healthy_threshold":2,
+			"upstreams":[{"host":"127.0.0.1","port":9000,"enabled":true}]
+		}`
+		response := do(http.MethodPost, "/rules", body)
+		if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "forward_auth_enabled 必须为 0 或 1") {
+			t.Fatalf("status=%d body=%.300s, want 400 值域点名（TCP 越界先于协议判定）", response.Code, response.Body.String())
+		}
+	})
+
+	t.Run("update-2", func(t *testing.T) {
+		seedAuditRule(t, "lb_fa_range", "fa-range", "fa-range.example.test", 13020, false, "manual", false)
+		seedAuditUpstream(t, "lb_fa_range")
+		response := do(http.MethodPut, "/rules/lb_fa_range", `{"forward_auth_enabled":2}`)
+		if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "forward_auth_enabled 必须为 0 或 1") {
+			t.Fatalf("status=%d body=%.300s, want 400 值域点名（不得静默归零）", response.Code, response.Body.String())
+		}
+		var stored int
+		if err := db.DB.QueryRow(`SELECT forward_auth_enabled FROM lb_rules WHERE caddy_id='lb_fa_range'`).Scan(&stored); err != nil {
+			t.Fatalf("read rule: %v", err)
+		}
+		if stored != 0 {
+			t.Fatalf("rejected update must keep stored value, got %d", stored)
+		}
+	})
+
+	t.Run("update-tcp-2", func(t *testing.T) {
+		seedTCPStoredRule(t, "lb_fa_range_tcp", "fa-range-tcp", 13021, false, "weighted_round_robin", false)
+		response := do(http.MethodPut, "/rules/lb_fa_range_tcp", `{"forward_auth_enabled":2}`)
+		if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "forward_auth_enabled 必须为 0 或 1") {
+			t.Fatalf("status=%d body=%.300s, want 400 值域点名（TCP 显式携带越界同拒）", response.Code, response.Body.String())
+		}
+	})
+}
+
+// 导入链与保存链同门：越界 forward_auth_enabled 不得被写侧归一静默归零
+// 后放行（validateV2BackupRules 直调形状，镜像保存侧值域门测试）。
+func TestValidateV2BackupRules_rejectsOutOfRangeForwardAuthEnabled(t *testing.T) {
+	newRuleFeatureTestHandlers(t)
+	for _, value := range []int{2, -1} {
+		tables := ruleTablesShared()
+		tables["lb_rules"][0]["forward_auth_enabled"] = value
+		err := validateV2BackupRules(tables)
+		if err == nil || !strings.Contains(err.Error(), "forward_auth_enabled 必须为 0 或 1") {
+			t.Fatalf("value=%d import err=%v, want 值域拒绝（不得静默归零）", value, err)
+		}
+	}
+	// 合法 0/1 形态回归放行。
+	for _, value := range []int{0, 1} {
+		tables := ruleTablesShared()
+		tables["lb_rules"][0]["forward_auth_enabled"] = value
+		if value == 1 {
+			tables["lb_rules"][0]["forward_auth_upstream"] = "http://gw.internal:7000"
+		}
+		if err := validateV2BackupRules(tables); err != nil {
+			t.Fatalf("value=%d legal shape rejected: %v", value, err)
+		}
+	}
+}

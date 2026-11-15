@@ -77,19 +77,34 @@ export function useRecidivismList(fetchPage: RecidivismFetch) {
   }
   watch([maxPage, page], clampPage, { immediate: true })
 
-  // 打开复位：筛选回默认并取最新历史。复位与取数同一同步块（watch 回调
-  // 合并触发），避免「先按旧筛选取一次、再按默认取一次」的双发。
+  // 打开复位：筛选回默认。取数统一交给 watcher——值有变化时 pre-flush
+  // watch 合并触发一次 fetch；值未变（净筛选重开）watch 不触发，补一次
+  // 显式 fetch。避免「显式 fetch + watch 再 fetch」的双发。
+  // ipQuery 复位会触发防抖 watch——用 suppressIpReset 标记抑制这次冗余防抖
+  // 取数（复位取数已由 [hidePermanent,page,pageSize] watch / 显式 fetch 承载）。
+  // watch 为 pre-flush 异步回调，标记由回调消费（非同步块）。
+  let suppressIpReset = false
   const open = (): void => {
+    const changed = hidePermanent.value !== true || ipQuery.value !== '' || page.value !== 1
+    if (ipQuery.value !== '') suppressIpReset = true
     hidePermanent.value = true
     ipQuery.value = ''
     page.value = 1
-    void fetchRecords()
+    clearTimeout(ipDebounce) // 丢弃复位前在途的键击防抖
+    if (!changed) void fetchRecords()
   }
 
-  // 筛选/搜索/翻页/改页大小都携参重取；筛选变化先回首页。watch 默认
-  // pre-flush 合并同一 tick 的多次写入（改页大小同时回首页只发一次请求）。
-  watch([hidePermanent, ipQuery], () => { page.value = 1 })
-  watch([hidePermanent, ipQuery, page, pageSize], () => { void fetchRecords() })
+  // 筛选/翻页/改页大小携参重取；筛选变化先回首页。watch 默认 pre-flush
+  // 合并同一 tick 的多次写入（改页大小同时回首页只发一次请求）。
+  watch([hidePermanent, page, pageSize], () => { void fetchRecords() })
+  // IP 搜索防抖：键击 300ms 后才发请求（避免每键一击一发）；回首页与
+  // 取数同一防抖回调，翻页/筛选不受影响。open 复位触发的变更不取数。
+  let ipDebounce: NodeJS.Timeout | undefined
+  watch(ipQuery, () => {
+    if (suppressIpReset) { suppressIpReset = false; return }
+    clearTimeout(ipDebounce)
+    ipDebounce = setTimeout(() => { page.value = 1; void fetchRecords() }, 300)
+  })
 
   // 关闭作废在途响应：快速关开时旧会话响应不得写回新会话（open 会再 ++seq）；
   // 同时落 loading——被作废的请求 finally 不再复位，留着会卡死遮罩。

@@ -52,6 +52,12 @@ func TestInitialize_backfillsAutobanColumns(t *testing.T) {
 		{"scope-duplicate-member", `UPDATE global_config SET autoban_scope='blocked,blocked' WHERE id=1`, func(t *testing.T) {
 			assertAutobanText(t, "autoban_scope", DefaultAutobanScope)
 		}},
+		{"scope-quote-dirty", `UPDATE global_config SET autoban_scope='blocked,"x' WHERE id=1`, func(t *testing.T) {
+			assertAutobanText(t, "autoban_scope", DefaultAutobanScope)
+		}},
+		{"scope-backslash-dirty", `UPDATE global_config SET autoban_scope='blocked,\x' WHERE id=1`, func(t *testing.T) {
+			assertAutobanText(t, "autoban_scope", DefaultAutobanScope)
+		}},
 		{"scope-valid-untouched", `UPDATE global_config SET autoban_scope='blocked' WHERE id=1`, func(t *testing.T) {
 			assertAutobanText(t, "autoban_scope", "blocked")
 		}},

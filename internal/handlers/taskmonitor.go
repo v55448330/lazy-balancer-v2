@@ -252,17 +252,17 @@ func (h *Handlers) ToggleSystemTask(c *gin.Context) {
 // 引擎路径经 te.Cancel（Cancelable+CancelHook 元数据路由），
 // 不再硬编码三族清单；无引擎回退（测试环境）直调 manager。
 func (h *Handlers) CancelSystemTask(c *gin.Context) {
-	id := c.Param("id")
-	if !requireMasterNode(c) {
-		return
-	}
-	// 配置导入窗口 409（与 toggle/control 同门）：导入/还原期间协调器执行
-	// PauseScheduling+CancelInFlightRuns+WaitInFlightRuns 的系统性排空；此时
-	// 命中的 auto 轮若被用户取消，Cancel 走 consumeCancelledSlotLocked 消费
-	// 已到期槽——与「导入排空不消费槽（恢复后补跑）」语义相反，回滚后该族
-	// 自动更新会推迟到下一排程槽。
+	// 配置导入窗口 409（与 trigger/toggle/control 同门同序——先于主节点门）：
+	// 导入/还原期间协调器执行 PauseScheduling+CancelInFlightRuns+WaitInFlightRuns
+	// 的系统性排空；此时命中的 auto 轮若被用户取消，Cancel 走
+	// consumeCancelledSlotLocked 消费已到期槽——与「导入排空不消费槽（恢复后
+	// 补跑）」语义相反，回滚后该族自动更新会推迟到下一排程槽。
 	if configImportBusy() {
 		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: apimsg.T(c, "k_48976923"), MessageKey: "k_48976923"})
+		return
+	}
+	id := c.Param("id")
+	if !requireMasterNode(c) {
 		return
 	}
 	// 取消与 Trigger/Toggle/Control 共用集群写门；引擎 RunsOn 另管执行角色。

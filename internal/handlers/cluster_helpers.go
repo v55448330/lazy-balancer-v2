@@ -62,6 +62,17 @@ func clusterError(c *gin.Context, status int, message string, err error) {
 	c.JSON(status, models.APIResponse{Code: status, Message: message})
 }
 
+// clusterErrorKeyed 与 clusterError 同形，额外携带结构化语义键 messageKey
+// （前端按键判定补救通道，与文案解耦）。message 仍为 zh 母本（cluster 服务
+// 控制面 Tier 2 残余口径，与 clusterError 一致）；键经变量传入，响应面不出现
+// 「中文直写 Message + MessageKey」混合行（direct_message_guard 口径）。
+func clusterErrorKeyed(c *gin.Context, status int, message, messageKey string, err error) {
+	if err != nil {
+		services.Logf("error", "cluster request failed: %v", err)
+	}
+	c.JSON(status, models.APIResponse{Code: status, Message: message, MessageKey: messageKey})
+}
+
 // clusterMasterForbidden 统一服务层 ErrNotMasterNode → 403 的输出形状
 // 与 requireMasterResult 同源携带 X-LB-Error-Code——从端
 // Pull 的错误分类（cluster_sync.go）依赖该头，服务层降级竞态 403 不得裸发。

@@ -201,35 +201,65 @@ func TestLoadSecurityPolicyContext_toleratesNullCoreColumns(t *testing.T) {
 	}
 }
 
-// TestLoadSecurityPolicyContext_toleratesAllNullColumns 锁定缺口
-// toleratesNullGeoIPColumns / toleratesNullCoreColumns 只覆盖 7 列——对批量
-// SELECT 中其余任一可空列的定向 PARTIAL 回退（如 created_at / description /
-// rate_limit_rps）当前全部测试不感知。本测试把 security_policies 的全部
-// 19 个可空列一次性置 NULL（description, mode, anomaly_threshold,
-// ip_acl_mode, ip_acl_list, ip_acl_enabled, ip_whitelist, ip_blacklist,
-// crs_rule_groups,
-// crs_excluded_rules, custom_rules, block_page_id, block_status_code,
-// updated_by, created_at, updated_at, geoip_countries, geoip_mode,
-// waf_check_response），任一列的 COALESCE 缺失 → NULL 直接 scan 进非指针
+// TestLoadSecurityPolicyContext_toleratesAllNullColumns 锁定全列缺口：
+// 定向子集钉（toleratesNullGeoIPColumns / toleratesNullCoreColumns）只覆盖
+// 部分列，新增可空列（log_request_body/ip_acl_list_refs/ip_whitelist_refs/
+// block_response_mode 等）曾整体漏出扫描面。本测试按 PRAGMA table_info
+// 自动枚举 security_policies 的全部可空列一次性置 NULL——新增可空列自动
+// 纳入，无需手改清单。任一列的 COALESCE 缺失 → NULL 直接 scan 进非指针
 // 目标 → loadSecurityPolicyContext 报错 → 本测试失败。
-// 例外说明：id 为 AUTOINCREMENT 主键（省略）；name NOT NULL（给值）；
-// enabled 虽在 schema 可空，但两条读路径（批量 WHERE enabled=1 与单查
-// WHERE enabled=1）均刻意不对其 COALESCE——NULL/0 策略行对两条路径同时
-// 不可见，本身同构，且置 NULL 会使行被过滤、scan 永不执行，故播种为 1。
+// 例外说明：id/name NOT NULL（name 给值、id 省略）；enabled 虽在 schema
+// 可空，但两条读路径（批量与单查 WHERE enabled=1）均刻意不对其 COALESCE——
+// NULL/0 策略行对两条路径同时不可见，本身同构，且置 NULL 会使行被过滤、
+// scan 永不执行，故播种为 1。
 func TestLoadSecurityPolicyContext_toleratesAllNullColumns(t *testing.T) {
-	// Given：全部 22 个可空列显式 NULL（模拟最极端的脏数据行）
 	_, database := newClusterTestService(t)
-	result, err := database.Exec(`INSERT INTO security_policies
-		(name, enabled, description, mode, anomaly_threshold,
-		 ip_acl_mode, ip_acl_list, ip_acl_enabled, ip_whitelist, ip_blacklist,
-		 crs_rule_groups, crs_excluded_rules, custom_rules,
-		 block_page_id, block_status_code, updated_by, created_at, updated_at,
-		 geoip_countries, geoip_mode, waf_check_response)
-		VALUES ('all-null', 1, NULL, NULL, NULL,
-		 NULL, NULL, NULL, NULL, NULL,
-		 NULL, NULL, NULL,
-		 NULL, NULL, NULL, NULL, NULL,
-		 NULL, NULL, NULL)`)
+	// Given：schema 全部可空列显式 NULL（模拟最极端的脏数据行）
+	infoRows, err := database.Query(`PRAGMA table_info(security_policies)`)
+	if err != nil {
+		t.Fatalf("read security_policies schema: %v", err)
+	}
+	var nullableCols []string
+	for infoRows.Next() {
+		var cid, notNull, pk int
+		var name, colType string
+		var dflt sql.NullString
+		if err := infoRows.Scan(&cid, &name, &colType, &notNull, &dflt, &pk); err != nil {
+			infoRows.Close()
+			t.Fatalf("scan table_info: %v", err)
+		}
+		if pk != 0 || notNull != 0 || name == "enabled" {
+			continue
+		}
+		nullableCols = append(nullableCols, name)
+	}
+	if err := infoRows.Err(); err != nil {
+		infoRows.Close()
+		t.Fatalf("iterate table_info: %v", err)
+	}
+	infoRows.Close()
+	// 扫描面下限：防 PRAGMA 枚举失效后空集假绿（当前 schema 24 列可空；
+	// 低于下限说明枚举失效或可空列被意外收紧）。
+	if len(nullableCols) < 20 {
+		t.Fatalf("可空扫描列=%d（%v），want ≥20——schema 枚举失效或可空列被意外收紧", len(nullableCols), nullableCols)
+	}
+	// 漏列回归锚：这四列曾被手工清单整体漏出扫描面。
+	nullableSet := make(map[string]struct{}, len(nullableCols))
+	for _, col := range nullableCols {
+		nullableSet[col] = struct{}{}
+	}
+	for _, required := range []string{"log_request_body", "ip_acl_list_refs", "ip_whitelist_refs", "block_response_mode"} {
+		if _, ok := nullableSet[required]; !ok {
+			t.Fatalf("可空列 %q 未纳入全 NULL 播种（曾漏出扫描面的四列之一）", required)
+		}
+	}
+	cols := append([]string{"name", "enabled"}, nullableCols...)
+	values := make([]string, len(cols))
+	values[0], values[1] = "'all-null'", "1"
+	for i := 2; i < len(values); i++ {
+		values[i] = "NULL"
+	}
+	result, err := database.Exec(`INSERT INTO security_policies (` + strings.Join(cols, ", ") + `) VALUES (` + strings.Join(values, ", ") + `)`)
 	if err != nil {
 		t.Fatalf("seed all-null policy: %v", err)
 	}
@@ -272,6 +302,20 @@ func TestLoadSecurityPolicyContext_toleratesAllNullColumns(t *testing.T) {
 	}
 	if p.BlockPageID != 0 {
 		t.Fatalf("BlockPageID = %d, want COALESCE 归一化后的 0", p.BlockPageID)
+	}
+	// 新增四列的归一化值钉（COALESCE 缺失时上方 scan 已报错；此处再钉
+	// 默认值语义，防 COALESCE 兜底值漂移）。
+	if p.LogRequestBody {
+		t.Fatalf("LogRequestBody = true, want COALESCE 归一化后的 false")
+	}
+	if string(p.IPACLListRefs) != "[]" {
+		t.Fatalf("IPACLListRefs = %q, want COALESCE 归一化后的 %q", string(p.IPACLListRefs), "[]")
+	}
+	if string(p.IPWhitelistRefs) != "[]" {
+		t.Fatalf("IPWhitelistRefs = %q, want COALESCE 归一化后的 %q", string(p.IPWhitelistRefs), "[]")
+	}
+	if p.BlockResponseMode != "auto" {
+		t.Fatalf("BlockResponseMode = %q, want COALESCE 归一化后的 %q", p.BlockResponseMode, "auto")
 	}
 }
 

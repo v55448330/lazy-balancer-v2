@@ -428,7 +428,7 @@ func TestSecurityOverviewIncremental_mutatedRowForcesFullRebuild(t *testing.T) {
 	if _, err := metrics.Exec(`UPDATE security_events SET action='blocked' WHERE event_time='2026-10-19 01:00:00'`); err != nil {
 		t.Fatal(err)
 	}
-	securityOverviewAggMutated.Store(true)
+	securityOverviewAggMutated.Add(1)
 
 	refreshed, err := refreshSecurityOverviewAggregates(metrics, key, overviewIncTestToday)
 	if err != nil {
@@ -471,7 +471,7 @@ func TestSecurityOverviewIncremental_mutatedFlagSurvivesFailedRebuild(t *testing
 	if _, err := metrics.Exec(`UPDATE security_events SET action='blocked' WHERE event_time='2026-10-19 01:00:00'`); err != nil {
 		t.Fatal(err)
 	}
-	securityOverviewAggMutated.Store(true)
+	securityOverviewAggMutated.Add(1)
 	if _, err := metrics.Exec(`DROP TABLE security_events`); err != nil {
 		t.Fatal(err)
 	}
@@ -479,7 +479,7 @@ func TestSecurityOverviewIncremental_mutatedFlagSurvivesFailedRebuild(t *testing
 		t.Fatal("重建必须失败（events 表缺失）")
 	}
 	// 脏标志不得在失败轮被消费。
-	if !securityOverviewAggMutated.Load() {
+	if securityOverviewAggMutated.Load() == 0 {
 		t.Fatal("重建失败后脏标志被清除——改判行将永不被增量回溯")
 	}
 
@@ -503,4 +503,59 @@ func TestSecurityOverviewIncremental_mutatedFlagSurvivesFailedRebuild(t *testing
 			refreshed.trend[6].Blocked, refreshed.trend[6].Detected)
 	}
 	overviewIncAssertEqual(t, "故障恢复后改判收敛", refreshed, overviewIncFullReference(t, metrics))
+}
+
+// TestSecurityOverviewIncremental_mutatedSetDuringRebuildPreserved：全量重建
+// 期间摄取侧再次改判置位（钩子确定性注入「读世代→重建」窗口），重建成功
+// 后只清读到的世代（CAS）——新置位必须保留，下一次刷新仍强制全量重建。
+// 旧实现重建后无条件 Store(false) 把新置位一并吞掉：新改判行 id ≤ 重铸
+// 水位，增量永不回溯，计数缺账直到日界换键。
+func TestSecurityOverviewIncremental_mutatedSetDuringRebuildPreserved(t *testing.T) {
+	withIsolatedGlobal(t)
+	setupSecurityPolicyTestDB(t)
+	resetSecurityOverviewAggCacheForTest()
+	t.Cleanup(resetSecurityOverviewAggCacheForTest)
+	metrics := db.MetricsDB
+	insertOverviewIncEvent(t, metrics, overviewIncEvent{eventTime: "2026-10-19 01:00:00", ip: "10.1.0.1", triggered: "942100", msg: "SQL Injection", action: "logged"})
+
+	key := overviewIncTestKey(metrics)
+	if _, err := loadSecurityOverviewAggregates(metrics, overviewIncTestToday, overviewIncTestTodayStart, overviewIncTestTZ); err != nil {
+		t.Fatalf("cold build: %v", err)
+	}
+
+	// 第一次改判 + 置位（本轮重建的触发世代）。
+	if _, err := metrics.Exec(`UPDATE security_events SET action='blocked' WHERE event_time='2026-10-19 01:00:00'`); err != nil {
+		t.Fatal(err)
+	}
+	securityOverviewAggMutated.Add(1)
+
+	// 钩子窗口：读世代之后、重建执行之前，摄取侧第二次改判（新行改判，
+	// 其 id 将 ≤ 本轮重铸水位）+ 再次置位。
+	securityOverviewMutatedRebuildHookForTest = func() {
+		if _, err := metrics.Exec(`UPDATE security_events SET action='blocked' WHERE event_time='2026-10-19 01:30:00'`); err != nil {
+			t.Errorf("hook mutate: %v", err)
+		}
+		securityOverviewAggMutated.Add(1)
+	}
+	t.Cleanup(func() { securityOverviewMutatedRebuildHookForTest = nil })
+	insertOverviewIncEvent(t, metrics, overviewIncEvent{eventTime: "2026-10-19 01:30:00", ip: "10.1.0.2", triggered: "942100", msg: "SQL Injection", action: "logged"})
+
+	if _, err := refreshSecurityOverviewAggregates(metrics, key, overviewIncTestToday); err != nil {
+		t.Fatalf("rebuild refresh: %v", err)
+	}
+	// 新置位必须保留（只清读到的世代）。
+	if securityOverviewAggMutated.Load() == 0 {
+		t.Fatal("重建期间的新置位被吞掉——新改判行将永不被增量回溯")
+	}
+
+	// 下一次刷新消费保留世代：仍走全量重建，结果与全量重算对账一致。
+	securityOverviewMutatedRebuildHookForTest = nil
+	refreshed, err := refreshSecurityOverviewAggregates(metrics, key, overviewIncTestToday)
+	if err != nil {
+		t.Fatalf("second refresh: %v", err)
+	}
+	if securityOverviewAggMutated.Load() != 0 {
+		t.Fatal("保留世代消费后必须归零（一次性消费契约）")
+	}
+	overviewIncAssertEqual(t, "重建期间改判收敛", refreshed, overviewIncFullReference(t, metrics))
 }

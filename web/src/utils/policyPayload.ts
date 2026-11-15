@@ -197,8 +197,9 @@ export const crawlerExemptionNeedsEngines = (state: {
  * 永不发起挑战，CC 阈值形同虚设（与 ccEnabledTip「仅在人机验证开启时生效」
  * 同口径）。保存照常放行（警告不阻断），由调用方就近提示用户。
  *
- * 入参 ccDetectEnabled 取**表单侧**值；类型门保持既有口径（stage2/stage3），
- * 载荷侧裁剪（carriesHuman）不改变本谓词——stage0/1/mixed 即便表单残留 CC 开关也不误报。
+ * 入参 ccDetectEnabled 取**表单侧**值；保存期警告类型门保持既有口径（stage2/stage3）。
+ * mixed 虽承载全量 CC 字段（carriesHuman 含 mixed），但其 CC-无-人机提示由表单内联
+ * 警告覆盖（SecurityPolicies 无类型门），保存期不重复警告——故本谓词不含 mixed。
  */
 export const ccDetectWithoutHumanWarning = (state: {
   policyType: string

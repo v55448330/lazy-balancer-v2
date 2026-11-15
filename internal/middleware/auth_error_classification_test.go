@@ -49,7 +49,7 @@ func TestClusterAuthMiddlewares_recordAuthRejectionAudit(t *testing.T) {
 			t.Fatal(regErr)
 		}
 		t.Cleanup(func() { _ = registrationDB.Close() })
-		if _, execErr := registrationDB.Exec(`CREATE TABLE nodes (id INTEGER PRIMARY KEY, registration_secret TEXT, registration_secret_expires_at DATETIME);
+		if _, execErr := registrationDB.Exec(`CREATE TABLE nodes (id INTEGER PRIMARY KEY, registration_secret TEXT, registration_secret_expires_at DATETIME, is_approved INTEGER DEFAULT 0, cluster_token_hash TEXT);
 			INSERT INTO nodes (id, registration_secret, registration_secret_expires_at) VALUES (7, 'abc', datetime('now','+1 hour'))`); execErr != nil {
 			t.Fatal(execErr)
 		}

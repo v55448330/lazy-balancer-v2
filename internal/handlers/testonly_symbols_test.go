@@ -31,6 +31,7 @@ var productionInjectionSeams = map[string]string{
 	"caddyMetricsSnapshotDoBeforeForTest":       "面板指标抓取在请求发出前注入观测/失败",
 	"threatRuleNamePointQueriesForTest":         "威胁大屏按 id 点查计数（只增观测）",
 	"toastSummaryBetweenMaxAndAggregateForTest": "toast 聚合区间注入并发切换",
+	"securityOverviewMutatedRebuildHookForTest": "安全总览脏标志重建注入并发置位窗口（generation CAS 回归）",
 }
 
 func TestHandlersPackageHasNoProductionTestOnlyEntryPoints(t *testing.T) {

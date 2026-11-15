@@ -584,10 +584,18 @@ func (s *CaddyService) persistLastGoodLocked(data []byte) {
 	// （临时文件 fsync + 父目录 fsync 后 rename）。
 	if err := writeSyncedFile(tmp, data, 0o600); err != nil {
 		Logf("error", "last-known-good: write temp file failed: %v", err)
+		// 写失败（如 RLIMIT_FSIZE 部分写）会留下 .tmp 孤儿——清理，
+		// 与 certstore 临时文件自清理同口径；last-good 主文件不动。
+		if rmErr := os.Remove(tmp); rmErr != nil && !os.IsNotExist(rmErr) {
+			Logf("warn", "last-known-good: cleanup temp file failed: %v", rmErr)
+		}
 		return
 	}
 	if err := os.Rename(tmp, s.lastGoodPath); err != nil {
 		Logf("error", "last-known-good: rename into place failed: %v", err)
+		if rmErr := os.Remove(tmp); rmErr != nil && !os.IsNotExist(rmErr) {
+			Logf("warn", "last-known-good: cleanup temp file failed: %v", rmErr)
+		}
 		return
 	}
 	if err := syncParentDir(s.lastGoodPath); err != nil {

@@ -19,6 +19,15 @@ const row = (identity: string): RecidivismRecord => ({
   identity, offense_count: 2, last_ban_at: '2026-11-15 10:00:00', escalated_duration: '24h',
 })
 
+/** 防抖窗口收尾：真实时钟等待 > 300ms（composable 用 setTimeout(300)），
+ * 再排空微任务让 fetch 链收敛。仅搜索防抖用例需要真实时钟。 */
+const waitDebounce = async (): Promise<void> => {
+  const { promise, resolve } = Promise.withResolvers<void>()
+  setTimeout(resolve, 360)
+  await promise
+  await flushMicrotasks()
+}
+
 interface FetchCall { hidePermanent: boolean; ip: string; page: number; pageSize: number }
 
 /** 可控取数面：记录每次携参，按队列返回（缺省空页）。 */
@@ -72,7 +81,7 @@ test('翻页/改页大小/关隐藏永久都携参重取；筛选变化回首页
   assert.equal(list.total.value, 300, 'total 随筛选响应更新')
 })
 
-test('IP 搜索 trim 后携 ip 参数并回首页；空串不带 ip', async () => {
+test('IP 搜索防抖后 trim 携 ip 参数并回首页；空串不带 ip', async () => {
   const { calls, fetchPage } = makeFetch([
     { records: [], total: 5 },
     { records: [row('45.33.32.77')], total: 1 },
@@ -85,12 +94,60 @@ test('IP 搜索 trim 后携 ip 参数并回首页；空串不带 ip', async () =
 
   list.ipQuery.value = '  45.33  '
   await nextTick(); await flushMicrotasks()
+  assert.equal(calls.length, 1, '防抖窗口内键击不立即发请求')
+  await waitDebounce()
   assert.deepEqual(calls[1], { hidePermanent: true, ip: '45.33', page: 1, pageSize: 20 })
   assert.equal(list.records.value.length, 1)
 
   list.ipQuery.value = ''
-  await nextTick(); await flushMicrotasks()
+  await waitDebounce()
   assert.equal(calls[2].ip, '', '清空搜索回到全量')
+})
+
+test('脏筛选重开只发一条请求（双发回归）；净筛选重开同样一条', async () => {
+  const { calls, fetchPage } = makeFetch()
+  const list = useRecidivismList(fetchPage)
+  list.open()
+  await flushMicrotasks()
+  assert.equal(calls.length, 1, '首次 open 一条')
+
+  // 脏筛选：改 hidePermanent + 搜索词 + 翻页，再 open 复位。
+  list.hidePermanent.value = false
+  list.ipQuery.value = '45.33'
+  await waitDebounce()
+  list.page.value = 3
+  await nextTick(); await flushMicrotasks()
+  const before = calls.length
+  list.open()
+  await nextTick(); await flushMicrotasks()
+  await waitDebounce() // 防抖窗口收尾，确认无残留第二条
+  assert.equal(calls.length - before, 1, '脏筛选重开只发一条（显式 fetch + watch 双发已修）')
+  assert.deepEqual(calls[calls.length - 1], { hidePermanent: true, ip: '', page: 1, pageSize: 20 })
+
+  // 净筛选重开（值未变）：watch 不触发，补一次显式 fetch。
+  const before2 = calls.length
+  list.open()
+  await nextTick(); await flushMicrotasks()
+  await waitDebounce()
+  assert.equal(calls.length - before2, 1, '净筛选重开补一次显式 fetch')
+})
+
+test('IP 搜索连续键击防抖合并：窗口内多次输入只发末值一条', async () => {
+  const { calls, fetchPage } = makeFetch()
+  const list = useRecidivismList(fetchPage)
+  list.open()
+  await flushMicrotasks()
+  const before = calls.length
+  list.ipQuery.value = '4'
+  await nextTick()
+  list.ipQuery.value = '45'
+  await nextTick()
+  list.ipQuery.value = '45.33'
+  await nextTick(); await flushMicrotasks()
+  assert.equal(calls.length, before, '防抖窗口内零请求')
+  await waitDebounce()
+  assert.equal(calls.length - before, 1, '连续键击合并为末值一条')
+  assert.equal(calls[calls.length - 1].ip, '45.33')
 })
 
 test('列表收缩页码越界自动回夹并重取（删末页末条/重置不留空页）', async () => {

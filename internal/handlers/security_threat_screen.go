@@ -41,6 +41,13 @@ const threatRollupRewindWindowHours = 24 * 7
 // threatActiveSourceWindow 活跃攻击源窗口（设计定稿）：近 10 分钟去重 client_ip。
 const threatActiveSourceWindow = 10 * time.Minute
 
+// threatAdminClient 威胁大屏 collector/events/traffic 三个 admin 代理共用的
+// Caddy admin HTTP 客户端（与 humanAdminClient 同模式）：单源共享，大屏
+// 1-2s 轮询下连接池跨请求复用，避免各端点每请求新建 client/各自维护超时
+// 形态。2s 超时，不阻塞大屏轮询协程。collector/events 经
+// NewRequestWithContext 保留请求 ctx 可取消语义。
+var threatAdminClient = &http.Client{Timeout: 2 * time.Second}
+
 // threatRuleNamePointQueriesForTest 仅测试观测「自定义规则名单键点查主库」
 // 的次数：大屏标签解析必须走批量预取（生产零消费，仅原子自增）。
 var threatRuleNamePointQueriesForTest atomic.Int64
@@ -1743,8 +1750,7 @@ func (h *Handlers) ControlThreatScreenCollector(c *gin.Context) {
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
-	client := &http.Client{Timeout: 2 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := threatAdminClient.Do(req)
 	if err != nil {
 		services.Logf("warn", "threat-screen collector: admin request failed: %v", err)
 		c.JSON(http.StatusServiceUnavailable, models.APIResponse{Code: 503, Message: apimsg.T(c, "k_71c129b9"), MessageKey: "k_71c129b9"})
@@ -1803,8 +1809,7 @@ func (h *Handlers) GetThreatScreenFlowEvents(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_40bb937c"), MessageKey: "k_40bb937c"})
 		return
 	}
-	client := &http.Client{Timeout: 2 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := threatAdminClient.Do(req)
 	if err != nil {
 		services.Logf("warn", "threat-screen events: admin request failed: %v", err)
 		c.JSON(http.StatusServiceUnavailable, models.APIResponse{Code: 503, Message: apimsg.T(c, "k_43766663"), MessageKey: "k_43766663"})
@@ -1885,8 +1890,7 @@ func (h *Handlers) GetThreatScreenTraffic(c *gin.Context) {
 // fetchThreatTrafficSnapshot 抓取并翻译一次流量快照；任何失败（不可达/非
 // 200/解码失败）ok=false 并告警——超时 2s，不阻塞大屏轮询协程。
 func fetchThreatTrafficSnapshot(adminURL string) (gin.H, bool) {
-	client := &http.Client{Timeout: 2 * time.Second}
-	resp, err := client.Get(adminURL + "/lb/traffic-stats")
+	resp, err := threatAdminClient.Get(adminURL + "/lb/traffic-stats")
 	if err != nil {
 		services.Logf("warn", "threat-screen traffic: admin fetch failed: %v", err)
 		return nil, false

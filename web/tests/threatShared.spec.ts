@@ -8,7 +8,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { heatEntriesEqual, heatCss, heatIntensity, maxHeatCount, heatRampGradientCss, DOT_LAND, arcEndpoints, POINTY_TOP_HEX_VERTICES, drillCountryAllowed, arcOriginForLocation, normalizeCountryName, adminShortName, aggregateCountryCounts, hasProvinceStats, drillCommitAllowed, buildCountryCellGrid, countryGridCell } from '../src/utils/threatShared.ts'
+import { heatEntriesEqual, heatCss, heatIntensity, maxHeatCount, heatRampGradientCss, DOT_LAND, arcEndpoints, POINTY_TOP_HEX_VERTICES, drillCountryAllowed, arcOriginForLocation, normalizeCountryName, adminShortName, aggregateCountryCounts, hasProvinceStats, drillCommitAllowed, buildCountryCellGrid, countryGridCell, provinceDotGrid, pointInPolys } from '../src/utils/threatShared.ts'
 import { FALLBACK_CENTROID } from '../src/utils/countryCentroids.ts'
 import { member, repoCode, code } from './_helpers.ts'
 
@@ -205,8 +205,6 @@ test('下钻续体作废：seq 过期或已销毁一律丢弃（双引擎共用�
 // 省点阵 bbox 预筛钉测——预筛只是跳点优化，产出必须与无预筛
 // 形态逐点一致（宽幅国家下 34 省 × 全网格直接 pointInPolys 是首次下钻长任务，
 // 与 threatScene.ts 省级 bbox 预筛同构）。
-import { provinceDotGrid } from '../src/utils/threatShared.ts'
-import { pointInPolys } from '../src/utils/threatShared.ts'
 import { WORLD_COUNTRIES } from '../src/utils/worldBorders.ts'
 import { ADMIN1_PROVINCES } from '../src/utils/admin1Provinces.ts'
 import { CHINA_PROVINCES } from '../src/utils/chinaProvinces.ts'

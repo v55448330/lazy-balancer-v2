@@ -150,3 +150,35 @@ test('目标排序：名单入口在前、策略出口在后（同类按名称�
   assert.deepEqual(model.deny.targets.map((target) => target.kind), ['list', 'policy'])
   assert.equal(model.deny.targets[0].name, 'Z 名单')
 })
+
+// 剩余时长三档文案的值钉：固定 now 注入（Date.now 覆写），墙钟串由同一
+// 固定 now 派生——形状断言（/^\d+ 小时/）拦不住档位错选/进位错误。
+// 词条值经 i18n 主实例解析（zh 默认回落），期望串与 zh 母本逐字对表。
+test('剩余时长值钉：固定 now 下三档文案与分钟/24小时边界', () => {
+  const fixedNow = Date.UTC(2026, 10, 16, 12, 0, 0)
+  const realNow = Date.now
+  Date.now = () => fixedNow
+  try {
+    const at = (msFromNow: number): string =>
+      new Date(fixedNow + msFromNow).toISOString().slice(0, 19).replace('T', ' ')
+    const MIN = 60_000
+    const HOUR = 3_600_000
+    const DAY = 86_400_000
+    // 三档主值
+    assert.equal(autobanEntryRemaining(at(3 * HOUR + 1 * MIN)), '3 小时 1 分')
+    assert.equal(autobanEntryRemaining(at(2 * DAY + 5 * HOUR)), '2 天 5 时')
+    assert.equal(autobanEntryRemaining(at(45 * MIN)), '45 分钟')
+    // 分钟档边界：59 分仍分钟档；60 分进位小时档（分钟归零）
+    assert.equal(autobanEntryRemaining(at(59 * MIN)), '59 分钟')
+    assert.equal(autobanEntryRemaining(at(60 * MIN)), '1 小时 0 分')
+    // 天档边界：23h59m 仍小时档；24h 进位天档（小时归零）
+    assert.equal(autobanEntryRemaining(at(23 * HOUR + 59 * MIN)), '23 小时 59 分')
+    assert.equal(autobanEntryRemaining(at(24 * HOUR)), '1 天 0 时')
+    // 空/脏串不可解析 → 破折号；已到期 → 0 分钟（负值钳零）
+    assert.equal(autobanEntryRemaining(''), '—')
+    assert.equal(autobanEntryRemaining('not-a-timestamp'), '—')
+    assert.equal(autobanEntryRemaining(at(-5 * MIN)), '0 分钟')
+  } finally {
+    Date.now = realNow
+  }
+})

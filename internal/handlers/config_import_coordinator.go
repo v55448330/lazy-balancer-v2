@@ -1065,6 +1065,9 @@ func (session *configImportSession) runPostCommitCleanup(plan *importArtifactCle
 			if _, err := db.MetricsDB.ExecContext(ctx, "DELETE FROM metrics_history WHERE rule_id=?", id); err != nil {
 				failedMetrics++
 				services.Logf("error", "导入清理：删除消失规则 %s 的指标失败: %v", id, err)
+				// 与证书文件/规则日志/证书日志同口径：同一类失败必须同样
+				// 进审计页，不能只有运行日志（逐项点名哪条规则的指标残留）。
+				services.RecordAuditLog("system", "清理失败", "指标", fmt.Sprintf("导入后清理规则 %s 的指标失败：%v", id, err), "")
 			}
 		}
 		if err := removeImportRuleLogFiles(id); err != nil {

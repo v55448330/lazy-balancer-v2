@@ -22,7 +22,7 @@ func normalizeWaitingCAWrite() migrationWrite {
 func expiredCooldownMessageWrite() migrationWrite {
 	where := "status='failed' AND ca_available_after IS NOT NULL AND datetime(ca_available_after) <= datetime('now')" +
 		" AND (message IS NULL OR message NOT LIKE '%" + certCooldownExpiredNote + "%')"
-	write := "UPDATE cert_jobs SET message = CASE WHEN COALESCE(message,'')='' THEN '冷却已过期，可直接重试'" +
+	write := "UPDATE cert_jobs SET message = CASE WHEN COALESCE(message,'')='' THEN '" + certCooldownExpiredNote + "'" +
 		" ELSE message || '" + certCooldownExpiredNote + "' END WHERE " + where
 	return migrationWrite{table: "cert_jobs", where: where, write: write}
 }

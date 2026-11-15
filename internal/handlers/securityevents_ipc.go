@@ -29,6 +29,8 @@ import (
 	"strings"
 	"time"
 
+	sqlite "github.com/glebarez/go-sqlite"
+
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/services"
 )
@@ -78,11 +80,30 @@ func (s *SecurityEventsIPCServer) handleIngest(w http.ResponseWriter, r *http.Re
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// sqlite 扩展错误码的低 8 位为主码（>0xff 为扩展位）；仅用主码判定。
+const (
+	sqliteIngestCodeBusy   = 5  // SQLITE_BUSY（含 SQLITE_BUSY_SNAPSHOT 等扩展）
+	sqliteIngestCodeLocked = 6  // SQLITE_LOCKED（含 SQLITE_LOCKED_SHAREDCACHE）
+	sqliteIngestCodeIOErr  = 10 // SQLITE_IOERR（临时 IO 故障族）
+	sqliteIngestCodeFull   = 13 // SQLITE_FULL（磁盘满——空间回收后可重试）
+)
+
 // securityEventsIngestErrorRetryable 判定入库错误是否属「可重试」类（SQLite
 // busy/locked、临时 IO 故障）：可重试 → 503，写侧落 spool 稍后补采。
+// 优先按驱动类型化错误码判定（glebarez/go-sqlite 的 *sqlite.Error 经
+// errors.As 穿透 database/sql 与 fmt.Errorf 包装链，与 db.isCorruptionError
+// 同模式）；字符串兜底只认真实锁/IO 措辞——裸 "busy"/"locked" 单词过宽，
+// 规则文本/URI 回显含这两个词会把永久失败误判可重试（毒批无限 spool 重试）。
 func securityEventsIngestErrorRetryable(err error) bool {
+	var sqliteErr *sqlite.Error
+	if errors.As(err, &sqliteErr) {
+		switch sqliteErr.Code() & 0xff {
+		case sqliteIngestCodeBusy, sqliteIngestCodeLocked, sqliteIngestCodeIOErr, sqliteIngestCodeFull:
+			return true
+		}
+	}
 	msg := strings.ToLower(err.Error())
-	for _, needle := range []string{"database is locked", "database is busy", "busy", "locked", "disk i/o error", "no space left"} {
+	for _, needle := range []string{"database is locked", "database is busy", "disk i/o error", "no space left"} {
 		if strings.Contains(msg, needle) {
 			return true
 		}

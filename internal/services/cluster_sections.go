@@ -599,8 +599,11 @@ func logSyncSwitchGuards(ctx context.Context, dbh *sql.DB, snapshot models.Clust
 	// 消费),保证每版本 bump 至多一条告警。推进失败必须留痕：该列是去重唯一
 	// 依据，静默失败会让同一告警按 apply 轮重复刷审计且无信号解释（正是上方
 	// 读失败分支注释要防的形态）；用 ExecContext 与同文件其余写点同口径。
+	// 从端专有写带角色谓词（与 recordAppliedSectionHashes 的 applied_waf_ref_*
+	// 同口径）：apply 提交与告警之间升主时，在途推进不得把旧拓扑去重版本写回
+	// 新主节点（升主已清零该列）。命中 0 行=已升主，属预期 no-op。
 	if dbh != nil {
-		if _, err := dbh.ExecContext(ctx, `UPDATE global_config SET applied_waf_ref_version=? WHERE id=1`, snapshot.Version); err != nil {
+		if _, err := dbh.ExecContext(ctx, `UPDATE global_config SET applied_waf_ref_version=? WHERE id=1 AND `+slaveRoleConditionSQL, snapshot.Version); err != nil {
 			Logf("warn", "推进文件态告警去重版本失败（下轮可能重复告警）: %v", err)
 		}
 	}

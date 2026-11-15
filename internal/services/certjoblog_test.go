@@ -81,10 +81,12 @@ func TestCertJobLogDir_migratesLegacyFilesOnce(t *testing.T) {
 }
 
 // 升级场景的不可逆保护：目标文件已存在时不得覆盖。
-// 迁移是一次性且不可逆（os.Rename 覆盖），若目标目录已写入新日志（本轮重启
-// 后已产生），旧根残留的同名文件覆盖它即内容错乱，且只在首次启动发生、
-// 事后无法复现。守卫 `if _, err := os.Stat(dst); err == nil { continue }`
-// （certjoblog.go 迁移循环）必须被这条用例钉住：删掉守卫即红。
+// 迁移落位用 os.Link 原子仲裁（EEXIST 即让位跳过），不是 Stat→Rename 的
+// check-then-act：若目标目录已写入新日志（本轮重启后已产生），旧根残留的
+// 同名文件覆盖它即内容错乱，且只在首次启动发生、事后无法复现。守卫
+// `if linkErr := certJobLogMigrateLink(source, dst); ... errors.Is(linkErr, os.ErrExist) { continue }`
+// （certjoblog.go 迁移循环）必须被这条用例钉住：删掉让位判定即红。
+// 并发写者竞态形态见 TestCertJobLogDir_migrationYieldsToConcurrentWriter。
 func TestCertJobLogDir_migrationDoesNotOverwriteExistingTarget(t *testing.T) {
 	base := t.TempDir()
 	legacyDir := filepath.Join(base, "logs")
