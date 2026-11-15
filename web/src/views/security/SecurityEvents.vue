@@ -61,6 +61,10 @@
             </div>
           </div>
         </el-tooltip>
+        <!-- 累犯记录入口（与总览「累犯升级」下钻同款弹框，共享组件复用）：
+             置于配置主热区之外——点击只开累犯弹框，不触发配置弹框；
+             状态加载中/失败禁用（口径与总览下钻入口一致） -->
+        <el-button link type="primary" class="autoban-recidivism-link" :disabled="autobanStatusError || autobanStatusLoading" @click="recidivismDialogVisible = true">{{ t('app.security.events.statRecidivism') }}</el-button>
         <div class="autoban-actions">
           <template v-if="autobanStatus.enabled">
             <el-button size="small" type="danger" plain :disabled="!autobanWritable" :loading="autobanToggling" @click="toggleAutobanEnabled">{{ t('app.security.events.actionDisable') }}</el-button>
@@ -334,20 +338,23 @@
           <el-input-number v-model="autobanForm.threshold" :min="1" :max="10000" :step="10" controls-position="right" style="width: 140px" />
           <div class="form-tip-line">{{ t('app.security.events.thresholdHint') }}</div>
         </el-form-item>
-        <!-- 累犯升级开启时时长配置项语义收窄为「首封时长」：标签随档位切换，
-             角标 tooltip 披露阶梯（off 不渲染角标，保持固定时长口径） -->
+        <!-- 累犯升级开启时时长配置项语义收窄为「首封时长」：标签随档位切换。
+             阶梯口径在累犯升级项的 hint 披露，时长项不再挂角标图标。 -->
         <el-form-item>
-          <template #label><span>{{ t(autobanFormEscalationOn ? 'app.security.events.firstBanDuration' : 'app.security.events.durationLabel') }}<FieldHelpIcon v-if="autobanFormEscalationOn" :content="autobanFormEscalationTip" /></span></template>
+          <template #label><span>{{ t(autobanFormEscalationOn ? 'app.security.events.firstBanDuration' : 'app.security.events.durationLabel') }}</span></template>
           <el-select v-model="autobanForm.duration" style="width: 160px">
             <el-option v-for="d in AUTOBAN_DURATIONS" :key="d" :label="autobanDurationLabel(d)" :value="d" />
           </el-select>
           <div class="form-tip-line">{{ t('app.security.events.durationHint') }}</div>
         </el-form-item>
+        <!-- 方案 A：配置时长=永久时首封即顶格，累犯升级无意义——选择禁用并
+             提示；切到永久时 escalation 自动归 off（watch 单源），后端消费侧
+             对带外 permanent+非 off 同样按 off 兜底 -->
         <el-form-item :label="t('app.security.events.escalationLabel')">
-          <el-select v-model="autobanForm.escalation" style="width: 280px">
+          <el-select v-model="autobanForm.escalation" style="width: 280px" :disabled="autobanFormPermanentDuration">
             <el-option v-for="e in AUTOBAN_ESCALATIONS" :key="e" :label="autobanEscalationLabel(e)" :value="e" />
           </el-select>
-          <div class="form-tip-line">{{ t('app.security.events.escalationHint') }}</div>
+          <div class="form-tip-line">{{ t(autobanFormPermanentDuration ? 'app.security.events.escalationPermanentDisabledHint' : 'app.security.events.escalationHint') }}</div>
         </el-form-item>
       </el-form>
       <div class="info-note-bar"><span class="info-note-desc">{{ t('app.security.events.counterResetNotice') }}</span></div>
@@ -356,6 +363,17 @@
         <el-button type="primary" :loading="autobanSaving" :disabled="!autobanWritable" @click="saveAutobanConfig">{{ t('app.security.events.save') }}</el-button>
       </template>
     </el-dialog>
+
+    <!-- 累犯历史弹框（共享组件，总览「累犯升级」下钻同款）：写门/配置实态
+         与本页 autoban 卡同口径；重置成功后刷新本页状态卡。 -->
+    <RecidivismDialog
+      v-model="recidivismDialogVisible"
+      :writable="autobanWritable"
+      :blocked-reason="autobanConfigTooltip"
+      :duration="autobanStatus.duration"
+      :escalation="autobanStatus.escalation"
+      @reset="fetchAutobanStatus"
+    />
 
     <!-- 请求上下文详情：策略开启「记录请求体」后，命中规则事件携带的请求头/请求体。
          请求头为 map[string][]string JSON 文本（多值以 ", " 连接；Cookie/Authorization/
@@ -451,7 +469,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Refresh, Warning, View, Hide, Document, Lock } from '@element-plus/icons-vue'
 import DialogHeader from '@/components/DialogHeader.vue'
@@ -463,15 +481,15 @@ import { useAuthStore } from '@/stores/auth'
 import LogStorageBar from '@/components/LogStorageBar.vue'
 import TriggerDetailDialog from '@/components/events/TriggerDetailDialog.vue'
 import AccessibleLink from '@/components/common/AccessibleLink.vue'
-import FieldHelpIcon from '@/components/common/FieldHelpIcon.vue'
 import { formatDurationUs, isWafDurationFamily, triggerStageFamily } from '@/utils/securityStages'
 import { TRIGGERED_CATEGORIES, serializeTriggeredFilter, CRAWLER_FAMILY_LABEL } from '@/utils/triggeredFilter'
 import { ANOMALY_SCORE_HIGH, ANOMALY_SCORE_MID } from '@/utils/severityScale'
 import { DEEP_LINK_PARAMS, pageUrl } from '@/utils/deepLink'
-import { autobanStateLabel, autobanStatValue, isAutobanIneffective, autobanSuggestedDurationKey, suggestionBand, type SuggestionBand } from '@/utils/autobanStatus'
+import { autobanStateLabel, autobanStatValue, isAutobanIneffective, autobanSuggestedDurationKey, autobanDurationLabel, suggestionBand, type SuggestionBand } from '@/utils/autobanStatus'
 import { requestBodyEmptyNotice, viewerCanReadRequestBody } from '@/utils/requestBodyAccess'
 import { activateOnce } from '@/utils/keyboardActivate'
 import IPLocationAction from '@/views/security/IPLocationAction.vue'
+import RecidivismDialog from '@/components/security/RecidivismDialog.vue'
 import { formatDate } from '@/utils/date'
 import { eventActionFull, eventActionShort, eventActionTone } from '@/utils/eventAction'
 import { ingestionWarningMessage, type IngestionHealth } from '@/utils/ingestionHealth'
@@ -520,18 +538,8 @@ const autobanEscalationLabel = (value: string): string => {
     default: return t('app.security.events.escalationOff')
   }
 }
-const autobanDurationLabel = (value: string): string => {
-  switch (value) {
-    case '10m': return t('app.security.events.duration10m')
-    case '30m': return t('app.security.events.duration30m')
-    case '1h': return t('app.security.events.duration1h')
-    case '6h': return t('app.security.events.duration6h')
-    case '12h': return t('app.security.events.duration12h')
-    case '24h': return t('app.security.events.duration24h')
-    case 'permanent': return t('app.security.events.durationPermanent')
-    default: return value
-  }
-}
+// 时长标签单源 utils/autobanStatus.autobanDurationLabel（总览/累犯弹框共用，
+// events.duration* 词条；未知值原样回显）。
 const autobanScopeLabel = (value: string): string => {
   switch (value) {
     case 'blocked': return t('app.security.events.scopeBlocked')
@@ -581,17 +589,20 @@ const autobanConfigTooltip = computed(() => {
 const autobanScopeText = computed(() => autobanScopeTextOf(autobanStatus.value.scope))
 const autobanDurationText = computed(() => autobanDurationLabel(autobanStatus.value.duration))
 // 累犯升级开启时「封禁时长」语义收窄为「首封时长」（用户裁定方案 A）：
-// 弹框标签/状态卡摘要同口径切换，角标 tooltip 披露阶梯；判据与后端
-// autobanEscalatedDuration 档位映射同口径（standard：首封配置时长→二次
-// 24h→三次起永久；aggressive：首封配置时长→二次起永久）。
+// 弹框标签/状态卡摘要同口径切换；判据与后端 autobanEscalatedDuration 档位
+// 映射同口径（standard：首封配置时长→二次 24h→三次起永久；aggressive：首封
+// 配置时长→二次起永久）。阶梯口径在累犯升级项 hint 披露，时长项不挂角标。
 const autobanStatusEscalationOn = computed(() =>
   autobanStatus.value.escalation === 'standard' || autobanStatus.value.escalation === 'aggressive')
 const autobanFormEscalationOn = computed(() =>
   autobanForm.value.escalation === 'standard' || autobanForm.value.escalation === 'aggressive')
-const autobanFormEscalationTip = computed(() =>
-  autobanForm.value.escalation === 'aggressive'
-    ? t('app.security.events.escalationAggressiveTip')
-    : t('app.security.events.escalationStandardTip'))
+// 方案 A：永久时长下升级无意义——弹框 escalation 选择禁用；切到永久时自动
+// 归 off（直观披露：用户看到档位被重置，而非保留一个永不生效的值）。
+const autobanFormPermanentDuration = computed(() => autobanForm.value.duration === 'permanent')
+
+// 累犯记录弹框（autoban 卡入口）：共享组件 RecidivismDialog，写门/配置实态
+// 直接复用本页 autobanWritable/autobanConfigTooltip 与状态实态。
+const recidivismDialogVisible = ref(false)
 
 // 命中次数色深（命中越多越深）：档位判据单源 utils/autobanStatus 的 suggestionBand，
 // 此处只做「档位 → 样式/颜色」映射。
@@ -644,6 +655,9 @@ const fetchAutobanStatus = async (): Promise<void> => {
 const autobanDialogVisible = ref(false)
 const autobanSaving = ref(false)
 const autobanForm = ref({ dry_run: true, threshold: 100, window_minutes: 5, duration: '1h', scope: [...AUTOBAN_SCOPE_DEFAULT] as string[], escalation: 'off' })
+watch(() => autobanForm.value.duration, (duration) => {
+  if (duration === 'permanent' && autobanForm.value.escalation !== 'off') autobanForm.value.escalation = 'off'
+})
 // 七项配置实态缓存（GET /security/autoban）：/status 不携带全部配置项时
 // 弹框回填与禁用直切的兜底源；null=未成功拉取（回填退 /status 已知键）。
 const autobanConfigCache = ref<AutobanConfig | null>(null)
@@ -1124,6 +1138,8 @@ const refreshPage = (): void => {
 .autoban-stats { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; flex: 0 1 auto; min-width: 0; font-size: 12px; color: var(--text-secondary, #6b7280); }
 .autoban-stat b { color: #111827; font-weight: 600; margin-left: 2px; }
 .autoban-danger { color: #f56c6c !important; }
+/* 累犯记录入口：link 按钮观感与统计行同字号（12px），不抢占参数区宽度 */
+.autoban-recidivism-link { font-size: 12px; height: auto; padding: 0; flex-shrink: 0; }
 .autoban-actions { flex-shrink: 0; display: flex; gap: 8px; }
 .autoban-warn-bar { margin-top: 10px; }
 

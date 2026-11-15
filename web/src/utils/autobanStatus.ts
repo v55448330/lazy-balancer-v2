@@ -67,7 +67,7 @@ export const autobanEscalationShortKey = (escalation: string | undefined): strin
 export const autobanSuggestedDurationKey = (duration: string): string =>
   `app.security.events.${autobanDurationKey(duration)}`
 
-/** IP 时长库值 → events.duration* 词条键段（未知值原样回显，与事件页同口径）。 */
+/** IP 时长库值 → events.duration* 词条键段。 */
 const autobanDurationKey = (duration: string): string => {
   switch (duration) {
     case '10m': return 'duration10m'
@@ -79,5 +79,63 @@ const autobanDurationKey = (duration: string): string => {
     case 'permanent': return 'durationPermanent'
     default: return duration
   }
+}
+
+/**
+ * 时长库值 → 展示文案（events.duration* 词条；未知值原样回显，空值占位「—」）。
+ * 总览/事件两页时长展示与累犯弹框「上次执法/下次封禁」列共用本单源。
+ */
+export const autobanDurationLabel = (duration: string): string => {
+  switch (duration) {
+    case '10m': case '30m': case '1h': case '6h': case '12h': case '24h': case 'permanent':
+      return t(`app.security.events.${autobanDurationKey(duration)}`)
+    default: return duration || '—'
+  }
+}
+
+// ---- 累犯弹框「下次封禁」预期时长 ----
+
+/**
+ * 下次封禁预期时长（按当前 escalation 档位 + 累计次数推算下一档，与后端
+ * autobanEscalatedDuration 档位映射同口径，autobanStatus.spec 跨栈对表）：
+ * - 首封即永久 / off / 非法档位 → 固定配置时长（永久时长下升级无意义，
+ *   消费侧按 off 兜底，预期不得虚构「下次更重」）；
+ * - standard：第 2 次 24h、第 3 次起永久；aggressive：第 2 次起永久。
+ * 衰减近似：距上次封禁超过 30 天无再犯则历史清零、按首次档重新起算——
+ * 后端衰减窗口可配（测试缝），面板按默认 30 天近似；last_ban_at 缺失/不可
+ * 解析时不做衰减推算（与后端 parse 失败不衰减同口径）。
+ */
+export const autobanNextBanDuration = (
+  cfg: { duration: string; escalation?: string },
+  row: { offense_count: number; last_ban_at: string },
+  nowMs: number,
+  lastBanMs: number | null,
+): string => {
+  if (cfg.duration === 'permanent') return cfg.duration
+  const tier = cfg.escalation === 'standard' || cfg.escalation === 'aggressive' ? cfg.escalation : 'off'
+  if (tier === 'off') return cfg.duration
+  const decayed = lastBanMs !== null && nowMs - lastBanMs > 30 * 24 * 60 * 60 * 1000
+  const nextOffense = (decayed ? 0 : row.offense_count) + 1
+  if (tier === 'standard') {
+    if (nextOffense <= 1) return cfg.duration
+    if (nextOffense === 2) return '24h'
+    return 'permanent'
+  }
+  return nextOffense <= 1 ? cfg.duration : 'permanent'
+}
+
+/**
+ * 累犯身份展示形态：IPv6 /64 网络地址（后端身份键 = /64 归一后的网络地址，
+ * 低 64 位恒零）展示为 CIDR，与封禁条目形态同口径；IPv4/不可解析串原样。
+ * 不做二次掩码（身份已是网络地址）——与后端 autobanBanValue 同判据。
+ */
+export const autobanIdentityDisplay = (identity: string): string => {
+  if (!identity.includes(':')) return identity
+  // :: 压缩尾缀（后端归一键恒把全零低 64 位压成 ::）即 /64 网络地址
+  if (identity.endsWith('::')) return `${identity}/64`
+  const groups = identity.split(':')
+  // 完整 8 组无压缩：低 4 组全零才是 /64 网络地址
+  if (groups.length === 8 && groups.slice(4).every((g) => /^0+$/.test(g))) return `${identity}/64`
+  return identity
 }
 

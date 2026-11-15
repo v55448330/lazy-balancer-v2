@@ -387,13 +387,96 @@ test('只读 Key 工具清单与后端只读探测集一致', () => {
 
 // 本套件的前提守卫：node --test 没有 .vue 装载器，spec 一律不得 import SFC
 // （引入 loader 时本用例转红，提醒同步更正各 spec 的「文本钉」前提注释）。
-// 三种形态都要拦：单行静态 import、跨行静态 import、动态 import()。
-const VUE_STATIC_IMPORT = /(?:^|\n)\s*(?:import|export)\b[\s\S]*?from\s+['"][^'"]+\.vue['"]/
-const VUE_SIDE_EFFECT_IMPORT = /(?:^|\n)\s*import\s+['"][^'"]+\.vue['"]/
-const VUE_DYNAMIC_IMPORT = /\bimport\s*\(\s*['"][^'"]+\.vue['"]\s*\)/
+// 判定走记号扫描而非整源正则：字符串/模板/正则字面量里的 `import … from
+// '…vue'` 是文本钉（assert.match 的样本），不是导入——整源正则会从文件头真实
+// import 一路扫到后文字面量产生假红。记号化后按导入声明形态识别：
+//   静态 `import … from '…vue'`（单行/跨行/副作用）与动态 `import('…vue')`。
+interface SpecToken { kind: 'word' | 'string' | 'punct'; value: string }
+const tokenizeSpec = (text: string): SpecToken[] => {
+  const tokens: SpecToken[] = []
+  let i = 0
+  let prev = ''
+  // 正则起点判据（与 _helpers.commentSpans 同族）：表达式位置的 `/` 才是正则，
+  // 收尾记号后的 `/` 是除号。
+  const regexStart = prev === '' || '(,=:[!&|?{};'.includes(prev) || prev === 'return' || prev === '=>'
+  while (i < text.length) {
+    const ch = text[i]
+    if (/\s/.test(ch)) { i++; continue }
+    if (/[A-Za-z_$]/.test(ch)) {
+      const start = i
+      while (i < text.length && /[\w$]/.test(text[i])) i++
+      prev = text.slice(start, i)
+      tokens.push({ kind: 'word', value: prev })
+      continue
+    }
+    if (ch === '"' || ch === "'" || ch === '`') {
+      const quote = ch
+      let j = i + 1
+      let value = ''
+      while (j < text.length) {
+        if (text[j] === '\\') { value += text[j + 1] ?? ''; j += 2; continue }
+        if (text[j] === quote) break
+        value += text[j]
+        j++
+      }
+      tokens.push({ kind: 'string', value })
+      prev = 'string'
+      i = j + 1
+      continue
+    }
+    if (ch === '/' && regexStart) {
+      let j = i + 1
+      let inClass = false
+      while (j < text.length) {
+        const c = text[j]
+        if (c === '\\') { j += 2; continue }
+        if (c === '[') inClass = true
+        else if (c === ']') inClass = false
+        else if (c === '/' && !inClass) break
+        else if (c === '\n') break
+        j++
+      }
+      i = j + 1
+      while (i < text.length && /[a-z]/.test(text[i])) i++
+      tokens.push({ kind: 'punct', value: '/re/' })
+      prev = 'string'
+      continue
+    }
+    if (ch === '=' && text[i + 1] === '>') { tokens.push({ kind: 'punct', value: '=>' }); prev = '=>'; i += 2; continue }
+    tokens.push({ kind: 'punct', value: ch })
+    prev = ch
+    i++
+  }
+  return tokens
+}
 const vueImportOffender = (text: string): boolean => {
-  const body = stripComments(text)
-  return VUE_STATIC_IMPORT.test(body) || VUE_SIDE_EFFECT_IMPORT.test(body) || VUE_DYNAMIC_IMPORT.test(body)
+  const tokens = tokenizeSpec(stripComments(text))
+  for (let i = 0; i < tokens.length; i++) {
+    const tk = tokens[i]
+    if (tk.kind !== 'word' || (tk.value !== 'import' && tk.value !== 'export')) continue
+    // 动态 import('…vue')
+    if (tk.value === 'import' && tokens[i + 1]?.value === '(') {
+      if (tokens[i + 2]?.kind === 'string' && tokens[i + 2].value.endsWith('.vue')) return true
+      continue
+    }
+    // 成员访问（foo.import）不是声明
+    if (tokens[i - 1]?.value === '.') continue
+    // 静态声明：扫到 from '…vue'（跨行形态天然覆盖）或 import '…vue' 副作用形态；
+    // 语句边界（; 或下一 import/export/const 等声明词）前未见 from 即非导入。
+    if (tokens[i + 1]?.kind === 'string') {
+      if (tokens[i + 1].value.endsWith('.vue')) return true
+      continue
+    }
+    for (let j = i + 1; j < tokens.length; j++) {
+      const t2 = tokens[j]
+      if (t2.kind === 'word' && t2.value === 'from') {
+        if (tokens[j + 1]?.kind === 'string' && tokens[j + 1].value.endsWith('.vue')) return true
+        break
+      }
+      if (t2.value === ';' || (t2.kind === 'word' && ['import', 'export', 'const', 'let', 'var', 'function', 'test'].includes(t2.value))) break
+    }
+  }
+  return false
 }
 
 test('spec 不得 import .vue（SFC 无 node 装载器）', () => {
@@ -424,6 +507,10 @@ test('.vue 导入守卫覆盖单行/跨行/副作用/动态四形态（元测试
   assert.equal(vueImportOffender("import { ref } from 'vue'"), false)
   assert.equal(vueImportOffender("import { section } from './_helpers.ts'"), false)
   assert.equal(vueImportOffender(sample("const doc = 'src/views/Rules<vue>'")), false)
+  // 文本钉不是导入：assert.match 的正则样本 / includes 的字符串样本里的
+  // `import … from '…vue'` 不得误伤（整源正则曾从文件头真实 import 扫到此处）
+  assert.equal(vueImportOffender(sample("import { test } from 'node:test'\ntest('x', () => {\n  assert.match(page, /import Rules from '@\\/views\\/Rules<vue>'/)\n})")), false)
+  assert.equal(vueImportOffender(sample("import { test } from 'node:test'\nassert.ok(page.includes(\"import Rules from '@/views/Rules<vue>'\"))")), false)
 })
 
 test('用户页：初始化管理员不可删除/禁用（标记由列表响应透出）', () => {

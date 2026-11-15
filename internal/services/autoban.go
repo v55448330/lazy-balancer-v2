@@ -1099,6 +1099,12 @@ func autobanMergeEntries(cfg AutobanConfig, candidates []AutobanSuggestion) (aut
 	if !ValidAutobanEscalation(cfg.Escalation) {
 		cfg.Escalation = AutobanEscalationOff
 	}
+	// 永久时长下升级无意义（首封即顶格，无升级空间）：UI 切 permanent 已把
+	// escalation 归 off；消费侧兜底——绕过 UI 直 PUT / 带外库值同样按 off 消费，
+	// 不产生累犯记账。
+	if cfg.Duration == "permanent" {
+		cfg.Escalation = AutobanEscalationOff
+	}
 	now := autobanNow()
 	nowStr := now.Format(autobanTimeLayout)
 	id, err := ensureAutobanPresetListID()

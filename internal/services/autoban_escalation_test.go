@@ -272,6 +272,33 @@ func TestAutobanEscalation_offKeepsFixedDuration(t *testing.T) {
 	}
 }
 
+// Given 配置时长 permanent（首封即顶格，无升级空间）+ escalation 非 off
+// （绕过 UI 直 PUT / 带外库值的兜底形态；UI 切 permanent 已自动归 off）。
+// When 同一 IP 三次「封禁→手动解封→再犯」。
+// Then 消费侧按 off 兜底：每次恒永久、不产生累犯记账——升级阶梯不得在
+// 永久时长下虚构「下次更重」的档位语义。
+func TestAutobanEscalation_permanentDurationConsumesAsOff(t *testing.T) {
+	clock := installAutobanFixture(t, "2026-11-15 10:00:00")
+	const ip = "45.33.32.17"
+	for _, escalation := range []string{AutobanEscalationStandard, AutobanEscalationAggressive} {
+		cfg := AutobanConfig{Enabled: true, Threshold: 1, WindowMinutes: 5, Duration: "permanent", Scope: "blocked", Escalation: escalation}
+		for i := range 3 {
+			if exp := escalationBan(t, cfg, ip); exp != "" {
+				t.Fatalf("%s 档第 %d 次封禁到期=%q, want 空（permanent 恒永久）", escalation, i+1, exp)
+			}
+			var rows int
+			if err := db.GetDB().QueryRow(`SELECT COUNT(*) FROM autoban_recidivism`).Scan(&rows); err != nil {
+				t.Fatalf("count recidivism: %v", err)
+			}
+			if rows != 0 {
+				t.Fatalf("%s 档第 %d 次：permanent+escalation 必须按 off 消费，不得写累犯表，得到 %d 行", escalation, i+1, rows)
+			}
+			clock.Advance(time.Hour)
+			escalationUnban(t, ip)
+		}
+	}
+}
+
 // Given standard 已把某 IP 记到三次（permanent）。
 // When 距上次封禁超过衰减窗口（30 天）后再犯。
 // Then 历史清零、按首次档重新起步（offense_count=1、配置时长）——永久标签

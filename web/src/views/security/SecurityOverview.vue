@@ -380,9 +380,10 @@
             <el-tooltip :content="t('app.security.overview.autoban.escalatedCountTip')" placement="top">
               <div class="autoban-stat-label">{{ t('app.security.overview.autoban.escalatedCount') }}</div>
             </el-tooltip>
-            <!-- 累犯升级可点击下钻：弹框查看逐身份累犯历史（计数/上次封禁/执法时长），
-                 并可重置全部历史（二次确认）；加载失败态禁用（数值为「—」不可下钻） -->
-            <el-button link type="primary" class="autoban-stat-link" :disabled="autobanError" @click="openRecidivismDialog">
+            <!-- 累犯升级可点击下钻：共享弹框查看逐身份累犯历史（计数/上次封禁/
+                 下次封禁预期），并可重置全部历史（二次确认）；加载失败态禁用
+                 （数值为「—」不可下钻） -->
+            <el-button link type="primary" class="autoban-stat-link" :disabled="autobanError" @click="recidivismDialogVisible = true">
               <span class="autoban-stat-value">{{ autobanStatValue(autobanError, autobanStatus?.escalated_count ?? 0) }}</span>
             </el-button>
           </div>
@@ -418,38 +419,17 @@
       </div>
     </el-card>
 
-    <!-- 累犯历史弹框：「累犯升级」统计的下钻明细（GET /security/autoban/recidivism，
-         按 offense_count 降序）；重置=清空全部历史（DELETE 同端点，二次确认，
-         只清历史记账、不动已生效封禁条目）。写门与事件页 autobanWritable 同口径：
-         只读契约/从节点/状态未就绪一律禁用。 -->
-    <el-dialog v-model="recidivismDialogVisible" width="min(720px, 94vw)" top="6vh" append-to-body class="dialog-body-inset">
-      <template #header>
-        <DialogHeader :icon="Lock" :title="t('app.security.overview.autoban.recidivismDialogTitle')" :subtitle="t('app.security.overview.autoban.recidivismDialogSubtitle')" />
-      </template>
-      <div v-if="recidivismError" class="info-note-bar autoban-warn-bar">
-        <span class="info-note-desc">{{ t('app.security.overview.autoban.recidivismLoadFailed') }}</span>
-        <el-button size="small" type="primary" plain @click="fetchRecidivism">{{ t('app.security.overview.autoban.recidivismRetry') }}</el-button>
-      </div>
-      <el-table v-else v-loading="recidivismLoading" :data="recidivismRecords" size="small" max-height="420" :header-cell-style="{ background: '#f9fafb' }">
-        <template #empty><el-empty :description="t('app.security.overview.autoban.recidivismEmpty')" :image-size="60" /></template>
-        <el-table-column prop="identity" :label="t('app.security.overview.autoban.recidivismColIdentity')" min-width="180" show-overflow-tooltip />
-        <el-table-column prop="offense_count" :label="t('app.security.overview.autoban.recidivismColOffenses')" width="100" align="center" />
-        <el-table-column :label="t('app.security.overview.autoban.recidivismColLastBan')" width="170">
-          <template #default="{ row }">{{ row.last_ban_at ? formatDate(row.last_ban_at) : '—' }}</template>
-        </el-table-column>
-        <el-table-column :label="t('app.security.overview.autoban.recidivismColDuration')" width="120" align="center">
-          <template #default="{ row }">{{ autobanDurationLabelOf(row.escalated_duration) }}</template>
-        </el-table-column>
-      </el-table>
-      <template #footer>
-        <el-tooltip :content="recidivismWriteBlockedReason" :disabled="recidivismWritable" placement="top">
-          <span>
-            <el-button type="danger" plain :disabled="!recidivismWritable || recidivismResetting" :loading="recidivismResetting" @click="resetRecidivism">{{ t('app.security.overview.autoban.recidivismReset') }}</el-button>
-          </span>
-        </el-tooltip>
-        <el-button @click="recidivismDialogVisible = false">{{ t('app.security.overview.autoban.recidivismClose') }}</el-button>
-      </template>
-    </el-dialog>
+    <!-- 累犯历史弹框（共享组件，事件页 autoban 卡同款入口复用）：
+         「累犯升级」统计的下钻明细；写门/配置实态由本页传入，
+         重置成功后刷新本页状态卡（escalated_count 归零）。 -->
+    <RecidivismDialog
+      v-model="recidivismDialogVisible"
+      :writable="recidivismWritable"
+      :blocked-reason="recidivismWriteBlockedReason"
+      :duration="autobanStatus?.duration ?? ''"
+      :escalation="autobanStatus?.escalation"
+      @reset="fetchAutobanStatus"
+    />
 
     <el-card shadow="always">
       <template #header>
@@ -497,9 +477,8 @@
 import { ref, onMounted, onBeforeUnmount, computed } from 'vue'
 import { DataAnalysis, TrendCharts, PieChart, Location, Warning, Odometer, Monitor, InfoFilled, Stopwatch, Lock, Tickets } from '@element-plus/icons-vue'
 import { useI18n } from 'vue-i18n'
-import { request, mfaAwareSuccess } from '@/utils/api'
-import { ElMessageBox } from 'element-plus'
-import DialogHeader from '@/components/DialogHeader.vue'
+import { request } from '@/utils/api'
+import RecidivismDialog from '@/components/security/RecidivismDialog.vue'
 import { useAuthStore } from '@/stores/auth'
 import IPLocationAction from '@/views/security/IPLocationAction.vue'
 import { formatDate, formatChartTimeInConfigTz } from '@/utils/date'
@@ -510,7 +489,7 @@ import VChart from 'vue-echarts'
 import type { APIResponse } from '@/types'
 import { securityActionColors } from '@/utils/chartTheme'
 import { ingestionWarningMessage, type IngestionHealth } from '@/utils/ingestionHealth'
-import { autobanStateLabel, autobanStatValue, isAutobanIneffective, autobanEscalationShortKey, suggestionBand } from '@/utils/autobanStatus'
+import { autobanStateLabel, autobanStatValue, isAutobanIneffective, autobanEscalationShortKey, suggestionBand, autobanDurationLabel } from '@/utils/autobanStatus'
 import { hasOwn } from '@/utils/hasOwn'
 
 const { t } = useI18n()
@@ -818,14 +797,7 @@ const autobanIneffective = computed(() => autobanStatus.value !== null && isAuto
 // 累犯升级开启时配置摘要时长行同口径标「首封时长」（与事件页状态卡一致）。
 const autobanStatusEscalationOn = computed(() =>
   autobanStatus.value?.escalation === 'standard' || autobanStatus.value?.escalation === 'aggressive')
-const autobanDurationText = computed(() => {
-  const d = autobanStatus.value?.duration || ''
-  const keys: Record<string, string> = {
-    '10m': 'duration10m', '30m': 'duration30m', '1h': 'duration1h', '6h': 'duration6h',
-    '12h': 'duration12h', '24h': 'duration24h', permanent: 'durationPermanent',
-  }
-  return hasOwn(keys, d) ? t(`app.security.events.${keys[d]}`) : (d || '—')
-})
+const autobanDurationText = computed(() => autobanDurationLabel(autobanStatus.value?.duration ?? ''))
 const autobanScopeText = computed(() => {
   const labels: Record<string, string> = {
     blocked: t('app.security.overview.autoban.scopeBlocked'),
@@ -844,36 +816,9 @@ const autobanSuggestionTone = (count: number): 'danger' | 'warning' | 'info' => 
   return band === 'high' ? 'danger' : band === 'mid' ? 'warning' : 'info'
 }
 
-// 累犯历史弹框（「累犯升级」统计下钻）：数据源 GET /security/autoban/recidivism
-// （offense_count 降序、identity 升序，后端单源排序）；重置 DELETE 同端点。
-interface RecidivismRecord { identity: string; offense_count: number; last_ban_at: string; escalated_duration: string }
+// 累犯历史弹框（「累犯升级」统计下钻）：数据/重置/表格在共享组件
+// RecidivismDialog（事件页 autoban 卡复用同款）；本页只持有可见态与写门。
 const recidivismDialogVisible = ref(false)
-const recidivismRecords = ref<RecidivismRecord[]>([])
-const recidivismLoading = ref(false)
-const recidivismError = ref(false)
-const recidivismResetting = ref(false)
-// 弹框会话序号：快速关开时旧响应不得写回新会话（与事件页状态读取同范式）。
-let recidivismSeq = 0
-const fetchRecidivism = async (): Promise<void> => {
-  const seq = ++recidivismSeq
-  recidivismLoading.value = true
-  recidivismError.value = false
-  try {
-    const res = await request.get<APIResponse<{ records: RecidivismRecord[] }>>('/security/autoban/recidivism', { silent: true })
-    if (seq !== recidivismSeq) return
-    recidivismRecords.value = res.data?.records || []
-  } catch {
-    if (seq !== recidivismSeq) return
-    recidivismRecords.value = []
-    recidivismError.value = true
-  } finally {
-    if (seq === recidivismSeq) recidivismLoading.value = false
-  }
-}
-const openRecidivismDialog = (): void => {
-  recidivismDialogVisible.value = true
-  void fetchRecidivism()
-}
 // 重置写门与事件页 autobanWritable 同口径：全局只读契约 ∧ 主节点 ∧ 状态已就绪。
 const recidivismWritable = computed(() => authStore.readOnlyReason === null && (autobanStatus.value?.is_master ?? false) && !autobanError.value)
 const recidivismWriteBlockedReason = computed(() => {
@@ -881,32 +826,6 @@ const recidivismWriteBlockedReason = computed(() => {
   if (!(autobanStatus.value?.is_master ?? false)) return t('app.security.events.blockedReasonMasterOnly')
   return t('app.security.events.blockedReasonLoadFail')
 })
-// 执法时长标签复用 events.duration* 词条（hasOwn 原型键守卫，未知值原样回显）。
-const autobanDurationLabelOf = (d: string): string => {
-  const keys: Record<string, string> = {
-    '10m': 'duration10m', '30m': 'duration30m', '1h': 'duration1h', '6h': 'duration6h',
-    '12h': 'duration12h', '24h': 'duration24h', permanent: 'durationPermanent',
-  }
-  return hasOwn(keys, d) ? t(`app.security.events.${keys[d]}`) : (d || '—')
-}
-const resetRecidivism = async (): Promise<void> => {
-  if (recidivismResetting.value || !recidivismWritable.value) return
-  try {
-    await ElMessageBox.confirm(
-      t('app.security.overview.autoban.recidivismResetConfirm'),
-      t('app.security.overview.autoban.recidivismResetTitle'),
-      { confirmButtonText: t('app.security.overview.autoban.recidivismResetConfirmBtn'), cancelButtonText: t('app.security.events.cancel'), type: 'warning' },
-    )
-  } catch { return }
-  recidivismResetting.value = true
-  try {
-    await request.delete('/security/autoban/recidivism')
-    mfaAwareSuccess(t('app.security.overview.autoban.recidivismResetDone'))
-    void fetchRecidivism()
-    void fetchAutobanStatus()
-  } catch { /* 错误已由全局拦截器 toast */ }
-  finally { recidivismResetting.value = false }
-}
 
 const ip2regionVersion = ref('—')
 const ip2regionStatus = ref('')
