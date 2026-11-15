@@ -2,8 +2,9 @@
   <!-- 累犯历史弹框（总览「累犯升级」统计与事件页 autoban 卡共用）：
        参照仪表盘连接弹框的宽体形态——1280px + 筛选工具行 + 固定表高 + 分页。
        GET /security/autoban/recidivism（offense_count 降序、identity 升序，后端
-       单源排序）。处置走 IP 快捷弹框（加黑/白/信任名单即中断累犯），不设逐行
-       操作列；重置=清空全部历史（DELETE 同端点，二次确认，只清历史记账、
+       单源排序）。处置双通道：IP 快捷弹框（加黑/白/信任名单即中断累犯）+
+       操作列移除（删行+清桶/建议打断累犯流程；封禁中禁用，须先取消封禁）；
+       重置=清空全部历史（DELETE 同端点，二次确认，只清历史记账、
        不动已生效封禁条目）。写门与事件页 autobanWritable 同口径：只读契约/
        从节点/状态未就绪一律禁用（writable/blockedReason 由宿主传入）。 -->
   <el-dialog :model-value="modelValue" width="min(1280px, 96vw)" top="5vh" append-to-body class="dialog-body-inset" :close-on-click-modal="false" @update:model-value="emit('update:modelValue', $event)">
@@ -74,6 +75,19 @@
         <el-table-column :label="t('app.security.overview.autoban.recidivismColLastEvent')" width="160">
           <template #default="{ row }">{{ row.last_event_at ? formatDate(row.last_event_at) : '—' }}</template>
         </el-table-column>
+        <!-- 操作列：移除单条累犯身份（DELETE /:identity，二次确认；后端同步
+             清计数桶/观察建议打断累犯流程）。封禁中（ban_status timed/permanent）
+             禁用——须先从 IP 快捷弹框取消封禁（hover 提示）；写门同重置
+             （writable/blockedReason 由宿主传入）。 -->
+        <el-table-column :label="t('app.security.overview.autoban.recidivismColActions')" width="100" align="center">
+          <template #default="{ row }">
+            <el-tooltip :content="row.ban_status && row.ban_status !== 'none' ? t('app.security.overview.autoban.recidivismRemoveBannedTip') : blockedReason" :disabled="writable && (!row.ban_status || row.ban_status === 'none')" placement="top">
+              <span>
+                <el-button size="small" type="danger" plain :disabled="!writable || (row.ban_status && row.ban_status !== 'none') || removingIdentity !== null" :loading="removingIdentity === row.identity" @click="removeRecord(row as RecidivismRecord)">{{ t('app.security.overview.autoban.recidivismRemove') }}</el-button>
+              </span>
+            </el-tooltip>
+          </template>
+        </el-table-column>
       </el-table>
       <div class="recid-pagination">
         <el-pagination v-model:current-page="page" v-model:page-size="pageSize" :total="total" :page-sizes="[20, 50, 100]" layout="total, sizes, prev, pager, next" small @size-change="onPageSizeChange" @current-change="fetchRecords" />
@@ -140,6 +154,8 @@ const { records, total, loading, loadError, hidePermanent, ipQuery, page, pageSi
 const TABLE_HEIGHT = 480
 // 全量重置在途锁：防重入，驱动重置按钮 loading。
 const resetting = ref(false)
+// 单条移除在途身份：占位防重入，同时驱动该行按钮 loading。
+const removingIdentity = ref<string | null>(null)
 
 // 打开即复位筛选并拉取（每次打开取最新历史；关闭再开不沿用陈旧快照）；
 // 关闭作废在途响应（快速关开时旧响应不得写回新会话）。
@@ -183,6 +199,30 @@ const resetRecords = async (): Promise<void> => {
     emit('reset')
   } catch { /* 错误已由全局拦截器 toast */ }
   finally { resetting.value = false }
+}
+
+// 单条移除：DELETE /:identity（identity 经 URL 编码，兼容 IPv6/带斜杠形态）。
+// 后端同步清计数桶/观察建议（打断累犯流程）；封禁中身份后端 400 拒绝
+// （前端按钮已禁用，此处为 API 面兜底）。成功后重取列表+emit('reset')
+// 联动宿主状态卡（与重置/快捷弹框同一刷新出口）。
+const removeRecord = async (row: RecidivismRecord): Promise<void> => {
+  if (removingIdentity.value !== null || !props.writable) return
+  if (row.ban_status && row.ban_status !== 'none') return
+  try {
+    await ElMessageBox.confirm(
+      t('app.security.overview.autoban.recidivismRemoveConfirm', { ip: autobanIdentityDisplay(row.identity) }),
+      t('app.security.overview.autoban.recidivismRemoveTitle'),
+      { confirmButtonText: t('app.security.overview.autoban.recidivismRemoveConfirmBtn'), cancelButtonText: t('app.security.events.cancel'), type: 'warning' },
+    )
+  } catch { return }
+  removingIdentity.value = row.identity
+  try {
+    await request.delete(`/security/autoban/recidivism/${encodeURIComponent(row.identity)}`)
+    mfaAwareSuccess(t('app.security.overview.autoban.recidivismRemoveDone'))
+    void fetchRecords()
+    emit('reset')
+  } catch { /* 错误已由全局拦截器 toast */ }
+  finally { removingIdentity.value = null }
 }
 </script>
 

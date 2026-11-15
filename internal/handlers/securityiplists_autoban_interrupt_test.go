@@ -21,6 +21,9 @@ import (
 func TestAddIPToList_interruptsRecidivismAndCounters(t *testing.T) {
 	router := newAutobanTestEnv(t)
 	const ip = "45.33.32.77"
+	// 全局计数桶跨用例共享：先重置既定基线，tracked_ips==0 断言才不受
+	// 前置用例泄漏影响（shuffle 顺序无关）。
+	services.ResetAutobanCounters()
 	services.AutobanSeedCounterForTest(ip, 5, 3)
 	services.AutobanSetSuggestionsForTest([]services.AutobanSuggestion{
 		{IP: ip, Count: 5},
@@ -121,6 +124,8 @@ func TestAddIPToList_idempotentNoopKeepsRecidivism(t *testing.T) {
 func TestCreateIPList_seedEntriesInterruptRecidivism(t *testing.T) {
 	router := newAutobanTestEnv(t)
 	const ip = "198.51.100.7"
+	// 全局计数桶跨用例共享：先重置既定基线（同 AddIPToList 中断钉）。
+	services.ResetAutobanCounters()
 	services.AutobanSeedCounterForTest(ip, 5, 3)
 	services.AutobanSetSuggestionsForTest([]services.AutobanSuggestion{{IP: ip, Count: 5}})
 	t.Cleanup(func() { services.AutobanSetSuggestionsForTest(nil) })

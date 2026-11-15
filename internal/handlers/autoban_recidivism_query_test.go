@@ -6,9 +6,10 @@ package handlers
 //          （enrichIPLocation 单源，保留地址前置拦截）；records[].ban_status/
 //          ban_expires_at（名单生效条目 join 三态）与 hits_24h/last_event_at
 //          （metrics security_events 近 24h 按身份键聚合，IPv6 /64 归一）。
-//   DELETE /security/autoban/recidivism/:identity 单条取消累犯身份
-//          （幂等——不存在也 200）；主节点门+导入窗口门同全量重置；
-//          显式审计「删除」；不动已生效封禁条目。
+//   DELETE /security/autoban/recidivism/:identity 单条移除累犯身份
+//          （幂等——不存在也 200；删行+清桶/建议打断累犯流程）；封禁中
+//          （限时/永久）拒绝 400；主节点门+导入窗口门同全量重置；
+//          显式审计「删除」；不动名单条目。
 
 import (
 	"encoding/json"
@@ -165,20 +166,20 @@ func TestAutobanRecidivism_getEnrichesIPLocation(t *testing.T) {
 	}
 }
 
-// Given 种子四行 + 预置名单生效条目。
-// When DELETE /security/autoban/recidivism/45.33.32.10。
+// Given 种子四行 + 预置名单生效条目（45.33.32.10 封禁中，与目标无关）。
+// When DELETE /security/autoban/recidivism/45.33.32.11（未封禁身份）。
 // Then 200；仅该行删除；审计「删除/累犯记录」；封禁条目不受影响。
 func TestAutobanRecidivism_deleteSingleIdentity(t *testing.T) {
 	router := newAutobanRecidivismRouter(t)
 	seedRecidivismTestRows(t)
 	seedAutobanListEntries(t, `[{"value":"45.33.32.10","remark":"auto","expires_at":"2099-01-01 00:00:00"}]`)
 
-	rec := deleteRequest(t, router, "/security/autoban/recidivism/45.33.32.10")
+	rec := deleteRequest(t, router, "/security/autoban/recidivism/45.33.32.11")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
 	var n int
-	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM autoban_recidivism WHERE identity='45.33.32.10'`).Scan(&n); err != nil {
+	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM autoban_recidivism WHERE identity='45.33.32.11'`).Scan(&n); err != nil {
 		t.Fatalf("count: %v", err)
 	}
 	if n != 0 {
@@ -358,5 +359,89 @@ func TestAutobanRecidivism_getEnrichesBanStatusAndHits(t *testing.T) {
 	v6 := enrichRowByIdentity(t, rows, "2606:4700:abcd:1234::")
 	if v6.BanStatus != "none" || v6.Hits24h != 2 || v6.LastEventAt != recent {
 		t.Fatalf("IPv6 /64 身份聚合失真（漂移地址计入本段）: %+v", v6)
+	}
+}
+
+// Given 累犯行 + 名单限时生效条目（封禁中）。
+// When DELETE 单条。
+// Then 400（封禁中不允许移除，须先从 IP 快捷弹框取消封禁）；行保留；
+// 封禁条目不受影响。
+func TestAutobanRecidivism_deleteSingleActivelyBannedRejected(t *testing.T) {
+	router := newAutobanRecidivismRouter(t)
+	seedRecidivismTestRows(t)
+	future := time.Now().UTC().Add(2 * time.Hour).Format("2006-01-02 15:04:05")
+	seedAutobanListEntries(t, `[{"value":"45.33.32.10","expires_at":"`+future+`"}]`)
+
+	rec := deleteRequest(t, router, "/security/autoban/recidivism/45.33.32.10")
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s, want 400（封禁中拒绝移除）", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "封禁中") {
+		t.Fatalf("body=%s, want 含「封禁中」守卫文案", rec.Body.String())
+	}
+	var n int
+	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM autoban_recidivism WHERE identity='45.33.32.10'`).Scan(&n); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("封禁中拒绝后行必须保留, got %d", n)
+	}
+	entries := readAutobanListEntries(t, autobanPresetID(t))
+	if len(entries) != 1 || entries[0].Value != "45.33.32.10" {
+		t.Fatalf("拒绝移除不得动封禁条目, got %+v", entries)
+	}
+}
+
+// Given 累犯行 + 名单永久条目（expires_at 空=永久封禁）。
+// When DELETE 单条。
+// Then 400（永久封禁同样拒绝移除）；行保留。
+func TestAutobanRecidivism_deleteSinglePermanentBannedRejected(t *testing.T) {
+	router := newAutobanRecidivismRouter(t)
+	seedRecidivismTestRows(t)
+	seedAutobanListEntries(t, `[{"value":"45.33.32.10"}]`)
+
+	rec := deleteRequest(t, router, "/security/autoban/recidivism/45.33.32.10")
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s, want 400（永久封禁拒绝移除）", rec.Code, rec.Body.String())
+	}
+	var n int
+	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM autoban_recidivism WHERE identity='45.33.32.10'`).Scan(&n); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("永久封禁拒绝后行必须保留, got %d", n)
+	}
+}
+
+// Given 累犯行（未封禁）+ 观察建议含该身份。
+// When DELETE 单条。
+// Then 200；行删除；观察建议同步剔除该身份（移除打断累犯流程——
+// 清桶+清建议，与加名单中断同口径）。
+func TestAutobanRecidivism_deleteSingleInterruptsSuggestion(t *testing.T) {
+	router := newAutobanRecidivismRouter(t)
+	seedRecidivismTestRows(t)
+	services.AutobanSetSuggestionsForTest([]services.AutobanSuggestion{
+		{IP: "45.33.32.11", Count: 6},
+		{IP: "45.33.32.99", Count: 7},
+	})
+	t.Cleanup(func() { services.AutobanSetSuggestionsForTest(nil) })
+
+	rec := deleteRequest(t, router, "/security/autoban/recidivism/45.33.32.11")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	for _, s := range services.AutobanSuggestions() {
+		if s.IP == "45.33.32.11" {
+			t.Fatalf("移除后建议必须剔除该身份, got %+v", services.AutobanSuggestions())
+		}
+	}
+	var found bool
+	for _, s := range services.AutobanSuggestions() {
+		if s.IP == "45.33.32.99" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("无关身份建议必须保留, got %+v", services.AutobanSuggestions())
 	}
 }

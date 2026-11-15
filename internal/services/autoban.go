@@ -858,6 +858,25 @@ func autobanEntryIdentity(value string) string {
 // handlers 加名单中断路径消费——与 merge/解封清桶同键，禁止旁路第二份归一）。
 func AutobanEntryIdentity(value string) string { return autobanEntryIdentity(value) }
 
+// AutobanIdentityActivelyBanned 判定身份是否正在被自动封禁（名单生效条目
+// 命中——限时未到期或永久）。与 enrichAutobanRecidivismRows 的 ban_status
+// join 同口径（AutobanListEntries + AutobanActiveEntries + autobanEntryIdentity
+// 归一，IPv6 /64 CIDR↔裸身份键）；handlers 单条移除守卫消费——封禁中的身份
+// 不允许经累犯弹框移除（须先从 IP 快捷弹框取消封禁）。
+func AutobanIdentityActivelyBanned(identity string) (bool, error) {
+	entries, _, err := AutobanListEntries()
+	if err != nil {
+		return false, err
+	}
+	key := autobanEntryIdentity(identity)
+	for _, e := range AutobanActiveEntries(entries) {
+		if autobanEntryIdentity(e.Value) == key {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 // AutobanSuggestion 观察建议/候选形态。
 type AutobanSuggestion struct {
 	IP    string `json:"ip"`

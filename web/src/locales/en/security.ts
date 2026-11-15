@@ -487,6 +487,13 @@ export default {
      "recidivismIpPlaceholder": "Search IP address",
      "recidivismCleanupNote": "Periodic cleanup: records without re-offense for 30 days after the last ban are removed automatically and restart from the first-offense tier",
      "recidivismClose": "Close",
+     "recidivismColActions": "Actions",
+     "recidivismRemove": "Remove",
+     "recidivismRemoveBannedTip": "This identity is banned; cancel the ban from the IP quick popover first",
+     "recidivismRemoveTitle": "Remove recidivism record",
+     "recidivismRemoveConfirm": "Remove the recidivism record for {ip}? This interrupts the recidivism flow (clears the counter and observation suggestion); the next threshold hit starts from the first-offense tier. Active ban entries are unaffected.",
+     "recidivismRemoveConfirmBtn": "Confirm removal",
+     "recidivismRemoveDone": "Recidivism record removed",
     },
 
     "topIps": {

@@ -211,17 +211,22 @@ test('总览卡：四统计卡一行 + 单黄条 + IP 建议表 + 累犯下钻�
 
 // 共享累犯弹框（总览下钻 + 事件页入口复用）：数据源/重置/表格列/footer 布局
 // 在组件内单源钉住；两页只传写门与配置实态。
-test('累犯弹框共享组件：端点/七列/状态三态/下次封禁单源/footer 破坏性左置', () => {
+test('累犯弹框共享组件：端点/八列/状态三态/移除打断/封禁禁用/footer 破坏性左置', () => {
   const dialog = code('src/components/security/RecidivismDialog.vue')
   assert.match(dialog, /request\.get<APIResponse<\{ records: RecidivismRecord\[\]; total: number \}>>\(`\/security\/autoban\/recidivism\?\$\{params\}`/, '弹框数据源必须是 GET /security/autoban/recidivism 携参')
   assert.match(dialog, /await request\.delete\('\/security\/autoban\/recidivism'\)/, '重置必须走 DELETE 同端点')
   assert.match(dialog, /ElMessageBox\.confirm\(\s*t\('app\.security\.overview\.autoban\.recidivismResetConfirm'\)/, '重置必须二次确认')
-  for (const col of ['recidivismColIdentity', 'recidivismColStatus', 'recidivismColHits24h', 'recidivismColOffenses', 'recidivismColLastBan', 'recidivismColNextBan', 'recidivismColLastEvent']) {
+  for (const col of ['recidivismColIdentity', 'recidivismColStatus', 'recidivismColHits24h', 'recidivismColOffenses', 'recidivismColLastBan', 'recidivismColNextBan', 'recidivismColLastEvent', 'recidivismColActions']) {
     assert.ok(dialog.includes(col), `弹框缺列键 ${col}`)
   }
-  // 操作列退役（处置由 IP 快捷弹框覆盖）：单条取消的按钮/确认/DELETE 调用不得残留
-  for (const gone of ['recidivismColActions', 'recidivismCancel', 'cancelRecord', 'cancelingIdentity']) {
-    assert.ok(!dialog.includes(gone), `操作列残留：${gone}`)
+  // 操作列移除（打断累犯流程）：单条 DELETE 携身份 + 二次确认 + 封禁中禁用 +
+  // hover 提示从 IP 快捷弹框取消封禁；旧 cancel 命名不得残留。
+  assert.match(dialog, /request\.delete\(`\/security\/autoban\/recidivism\/\$\{encodeURIComponent\(row\.identity\)\}`\)/, '移除必须走 DELETE /:identity 携 URL 编码身份')
+  assert.match(dialog, /recidivismRemoveConfirm/, '移除必须二次确认')
+  assert.match(dialog, /row\.ban_status && row\.ban_status !== 'none'/, '封禁中（timed/permanent）必须禁用移除')
+  assert.match(dialog, /recidivismRemoveBannedTip/, '封禁中禁用必须 hover 提示从 IP 快捷弹框取消封禁')
+  for (const gone of ['recidivismCancel', 'cancelRecord', 'cancelingIdentity']) {
+    assert.ok(!dialog.includes(gone), `旧 cancel 命名残留：${gone}`)
   }
   // 表格内容优化：身份 CIDR 形态单源 / 累计加「次」单位 / 下次封禁预期单源 /
   // 上次执法时长 tooltip 披露（历史留痕不丢）
@@ -322,12 +327,16 @@ test('autoban 词条 zh 母本钉 + en 侧齐备（NAT 键退役）', () => {
     '"recidivismColHits24h": "24h命中"',
     '"recidivismColLastEvent": "最近事件"',
     '"recidivismHidePermanent": "隐藏永久封禁"',
+    '"recidivismColActions": "操作"',
+    '"recidivismRemove": "移除"',
+    '"recidivismRemoveBannedTip": "该身份正在封禁中，请从 IP 快捷弹框取消封禁"',
   ]
   for (const text of zhTexts) assert.ok(zhSec.includes(text), `zh 母本缺「${text}」`)
-  const enKeys = ['escalationLabel', 'colIdentity', 'colEscalation', 'recidivismDialogTitle', 'recidivismDialogSubtitle', 'recidivismColIdentity', 'recidivismColStatus', 'recidivismStatusNone', 'recidivismColHits24h', 'recidivismColOffenses', 'recidivismColLastBan', 'recidivismColNextBan', 'recidivismColLastEvent', 'recidivismHidePermanent', 'recidivismIpPlaceholder', 'recidivismCleanupNote', 'recidivismLastDurationTip', 'recidivismEmpty', 'recidivismLoadFailed', 'recidivismRetry', 'recidivismReset', 'recidivismResetTitle', 'recidivismResetConfirm', 'recidivismResetConfirmBtn', 'recidivismResetDone', 'recidivismClose', 'bannedTodayTip', 'statRecidivism', 'escalationPermanentDisabledHint']
+  const enKeys = ['escalationLabel', 'colIdentity', 'colEscalation', 'recidivismDialogTitle', 'recidivismDialogSubtitle', 'recidivismColIdentity', 'recidivismColStatus', 'recidivismStatusNone', 'recidivismColHits24h', 'recidivismColOffenses', 'recidivismColLastBan', 'recidivismColNextBan', 'recidivismColLastEvent', 'recidivismColActions', 'recidivismRemove', 'recidivismRemoveBannedTip', 'recidivismRemoveTitle', 'recidivismRemoveConfirm', 'recidivismRemoveConfirmBtn', 'recidivismRemoveDone', 'recidivismHidePermanent', 'recidivismIpPlaceholder', 'recidivismCleanupNote', 'recidivismLastDurationTip', 'recidivismEmpty', 'recidivismLoadFailed', 'recidivismRetry', 'recidivismReset', 'recidivismResetTitle', 'recidivismResetConfirm', 'recidivismResetConfirmBtn', 'recidivismResetDone', 'recidivismClose', 'bannedTodayTip', 'statRecidivism', 'escalationPermanentDisabledHint']
   for (const key of enKeys) assert.ok(enSec.includes(`"${key}"`), `en 侧缺键 ${key}`)
-  // NAT 键与操作列词条双语同步退役（漏删一侧 = 键集漂移）
-  for (const gone of ['natDetectionLabel', 'natThresholdLabel', 'natPrivacyNotice', 'natActiveBadge', 'ineffectiveSession', 'ineffectiveIp', 'durationSession', 'identitySession', 'enforcementSession', 'bannedTodaySession', 'listEntriesSession', 'recidivismColActions', 'recidivismCancel', 'recidivismCancelTitle', 'recidivismCancelConfirm', 'recidivismCancelConfirmBtn', 'recidivismCancelDone']) {
+  // NAT 键与旧 cancel 词条双语同步退役（漏删一侧 = 键集漂移）；
+  // recidivismColActions 已恢复（操作列移除），不在退役清单。
+  for (const gone of ['natDetectionLabel', 'natThresholdLabel', 'natPrivacyNotice', 'natActiveBadge', 'ineffectiveSession', 'ineffectiveIp', 'durationSession', 'identitySession', 'enforcementSession', 'bannedTodaySession', 'listEntriesSession', 'recidivismCancel', 'recidivismCancelTitle', 'recidivismCancelConfirm', 'recidivismCancelConfirmBtn', 'recidivismCancelDone']) {
     assert.ok(!zhSec.includes(`"${gone}"`), `zh 侧退役键残留 ${gone}`)
     assert.ok(!enSec.includes(`"${gone}"`), `en 侧退役键残留 ${gone}`)
   }

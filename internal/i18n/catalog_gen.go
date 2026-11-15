@@ -156,6 +156,7 @@ func init() {
 	Register("k_58751208", "IP 列表名称已存在", "IP list name already exists")
 	Register("k_592011de", "域名 %s 已被规则 %s 的 HTTPS 跳转占用（跳转在 80 端口优先生效，保存后本规则将不可达）", "Domain %s is taken by rule %s's HTTPS redirect (redirect on port 80 takes precedence; this rule would become unreachable)")
 	Register("k_5974d10a", "CRS 配置文件不存在", "CRS configuration file does not exist")
+	Register("k_59c6ba41", "该身份正在封禁中，请先从 IP 快捷弹框取消封禁", "This identity is currently banned; cancel the ban from the IP quick popover first")
 	Register("k_5a59c9b5", "规则已被删除或并发变更，请刷新后重试", "The rule has been deleted or concurrently modified; please refresh and try again")
 	Register("k_5b317a72", "用户 ID 无效", "Invalid user ID")
 	Register("k_5b71a9a0", "配置验证失败", "Configuration validation failed")

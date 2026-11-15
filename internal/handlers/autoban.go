@@ -205,9 +205,12 @@ func (h *Handlers) GetAutobanRecidivism(c *gin.Context) {
 }
 
 // DeleteAutobanRecidivism DELETE /security/autoban/recidivism/:identity：
-// 单条取消累犯身份（删除该 identity 行，下次达阈值按首次档起算）。
-// 幂等（identity 不存在也返回成功，与全量重置同族）；只清历史记账，
-// 已生效封禁条目保持至到期。主节点门+导入窗口门同全量重置。
+// 单条移除累犯身份（删除该 identity 行 + 清计数桶/观察建议——打断累犯
+// 流程，与加名单中断同口径；下次达阈值按首次档起算）。封禁中的身份
+// （名单生效条目命中，限时/永久）拒绝移除（400）——须先从 IP 快捷弹框
+// 取消封禁，避免「移除前科但封禁仍在」的处置语义分裂。幂等（identity
+// 不存在也返回成功）；只清历史记账，不动名单条目。主节点门+导入窗口门
+// 同全量重置。
 func (h *Handlers) DeleteAutobanRecidivism(c *gin.Context) {
 	if rejectWriteDuringImport(c, "删除自动封禁累犯记录（配置导入进行中）") {
 		return
@@ -216,11 +219,23 @@ func (h *Handlers) DeleteAutobanRecidivism(c *gin.Context) {
 		return
 	}
 	identity := c.Param("identity")
+	banned, err := services.AutobanIdentityActivelyBanned(identity)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("读取自动封禁名单失败", err)})
+		return
+	}
+	if banned {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_59c6ba41"), MessageKey: "k_59c6ba41"})
+		return
+	}
 	if err := services.DeleteAutobanRecidivism(identity); err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("删除自动封禁累犯记录失败", err)})
 		return
 	}
-	recordAudit(c, "删除", "累犯记录", fmt.Sprintf("取消累犯身份 %s（下次达阈值按首次档起算；已生效封禁条目不受影响）", identity))
+	// 移除=主动处置：清计数桶+观察建议（纯内存，与加名单中断同口径），
+	// 否则旧计数仍在下一轮达阈值立即重封，「移除打断累犯」被撤销。
+	services.AutobanForgetIPs([]string{identity})
+	recordAudit(c, "删除", "累犯记录", fmt.Sprintf("移除累犯身份 %s（打断累犯流程：清计数桶与观察建议，下次达阈值按首次档起算；已生效封禁条目不受影响）", identity))
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0})
 }
 

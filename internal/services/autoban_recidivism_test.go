@@ -411,3 +411,37 @@ func TestListAutobanRecidivism_metricsUnavailableDegrades(t *testing.T) {
 		t.Fatalf("名单 join 不受 metrics 缺失影响: %+v", r)
 	}
 }
+
+// Given 预置名单含限时/永久/已到期条目 + IPv6 /64 CIDR 条目。
+// When AutobanIdentityActivelyBanned 判定各身份。
+// Then 限时/永久=true；已到期/名单无条目=false；IPv6 CIDR 条目经身份归一
+// 命中裸身份键（与 ban_status join 同口径）。
+func TestAutobanIdentityActivelyBanned(t *testing.T) {
+	installAutobanFixture(t, "2026-11-15 10:00:00")
+	seedPresetEntries(t, []models.IPListEntry{
+		{Value: "203.0.113.10", ExpiresAt: "2026-11-15 12:30:00"},
+		{Value: "203.0.113.11"},
+		{Value: "203.0.113.12", ExpiresAt: "2026-11-15 09:00:00"},
+		{Value: "2606:4700:abcd:1234::/64", ExpiresAt: "2026-11-16 10:00:00"},
+	})
+	cases := []struct {
+		identity string
+		want     bool
+	}{
+		{"203.0.113.10", true},           // 限时生效
+		{"203.0.113.11", true},           // 永久
+		{"203.0.113.12", false},          // 已到期
+		{"203.0.113.99", false},          // 名单无条目
+		{"2606:4700:abcd:1234::", true},  // IPv6 /64 CIDR 归一命中
+		{"2606:4700:abcd:9999::", false}, // 邻段不串
+	}
+	for _, c := range cases {
+		got, err := AutobanIdentityActivelyBanned(c.identity)
+		if err != nil {
+			t.Fatalf("identity %s: %v", c.identity, err)
+		}
+		if got != c.want {
+			t.Fatalf("identity %s actively banned=%v, want %v", c.identity, got, c.want)
+		}
+	}
+}

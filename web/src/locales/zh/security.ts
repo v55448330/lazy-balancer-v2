@@ -487,6 +487,13 @@ export default {
      "recidivismIpPlaceholder": "搜索 IP 地址",
      "recidivismCleanupNote": "定期清理：距上次封禁超过 30 天无再犯的记录由后端自动清理，按首次档重新起算",
      "recidivismClose": "关闭",
+     "recidivismColActions": "操作",
+     "recidivismRemove": "移除",
+     "recidivismRemoveBannedTip": "该身份正在封禁中，请从 IP 快捷弹框取消封禁",
+     "recidivismRemoveTitle": "移除累犯记录",
+     "recidivismRemoveConfirm": "确认移除 {ip} 的累犯记录？移除将打断累犯流程（清空计数与观察建议），下次达阈值按首次档起算；已生效的封禁条目不受影响。",
+     "recidivismRemoveConfirmBtn": "确认移除",
+     "recidivismRemoveDone": "累犯记录已移除",
     },
 
     "topIps": {

@@ -129,7 +129,7 @@ var mcpUncoveredRoutes = map[string]string{
 	"GET /api/v1/security/autoban/status":                  "自动封禁运行态/今日封禁/观察建议聚合（面板状态卡轮询数据源）",
 	"GET /api/v1/security/autoban/recidivism":              "累犯历史下钻（面板「累犯升级」弹框数据源）；Agent 判断拦截效果消费 get_security_overview 即可",
 	"DELETE /api/v1/security/autoban/recidivism":           "累犯历史重置（低频管理面板操作；面板有二次确认）",
-	"DELETE /api/v1/security/autoban/recidivism/:identity": "单条累犯身份取消（低频管理 API；面板弹框已改 IP 快捷弹框处置，本端点保留 API 面完整）",
+	"DELETE /api/v1/security/autoban/recidivism/:identity": "单条累犯身份移除（低频管理面板操作；面板弹框操作列有移除按钮，封禁中禁用须先取消封禁）",
 	"GET /api/v1/security/ip-lists/:id/export":             "名单 TXT 导出下载（文本附件下载，面板地址列表页操作）",
 	// —— 规则库定时调度（v2.3.x）：三库排程设置为低频管理面板操作 ——
 	"PUT /api/v1/security/crs/schedule":             "CRS 定时更新排程（低频管理面板操作）",
