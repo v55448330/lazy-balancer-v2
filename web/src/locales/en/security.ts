@@ -79,6 +79,7 @@ export default {
     },
     "autobanRemove": {
      "confirmText": "{ip} will be removed from the auto-ban list and the IP's auto-ban counter cleared. Other blacklists and security policies are unaffected. Continue?",
+     "confirmTextCidr": "Subnet {ip} will be removed from the auto-ban list (the whole segment is unbanned) and its auto-ban counter cleared. Other blacklists and security policies are unaffected. Continue?",
      "clearTitle": "Clear expired ban",
      "removeTitle": "Remove auto ban",
      "removedToast": "Removed {ip} from the auto-ban list"
@@ -458,8 +459,8 @@ export default {
      "times": "hits",
      "colIdentity": "IP address",
      "colEscalation": "Recidivism",
-     "escalationOffShort": "Fixed duration",
-     "escalationStandardShort": "Progressive",
+     "escalationOffShort": "Off",
+     "escalationStandardShort": "Standard",
      "escalationAggressiveShort": "Aggressive",
      "ineffective": "Auto-ban inactive: the auto-ban list is empty or not referenced by an enabled IP access control (deny) policy",
      "feedDegraded": "Counting feed is degraded; auto-ban counts may be lower than actual",
@@ -489,7 +490,7 @@ export default {
      "recidivismClose": "Close",
      "recidivismColActions": "Actions",
      "recidivismRemove": "Remove",
-     "recidivismRemoveBannedTip": "This identity is banned; cancel the ban from the IP quick popover first",
+     "recidivismRemoveBannedTip": "Cannot remove the record while banned; to clear it, cancel the ban from the IP quick popover first, then remove",
      "recidivismRemoveTitle": "Remove recidivism record",
      "recidivismRemoveConfirm": "Remove the recidivism record for {ip}? This interrupts the recidivism flow (clears the counter and observation suggestion); the next threshold hit starts from the first-offense tier. Active ban entries are unaffected.",
      "recidivismRemoveConfirmBtn": "Confirm removal",

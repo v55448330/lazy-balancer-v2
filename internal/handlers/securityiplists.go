@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"lazy-balancer-v2/internal/apimsg"
 	"lazy-balancer-v2/internal/db"
@@ -493,6 +494,19 @@ func validateIPListShape(name, description, category, entriesJSON string) ([]mod
 	return entries, prunedExpired, nil
 }
 
+// stampNewIPListEntryTimes 给缺加入时间的条目盖章（UTC 墙钟，与自动封禁
+// merge 写侧同布局）。「加入时间」列与 autoban 挤出排序消费 created_at——
+// 写侧新增条目（种子/整表保存新值）必须落时间戳；已有/客户端回传的时间戳
+// 原样保留（重新盖章会让挤出顺序与加入时间展示漂移）。
+func stampNewIPListEntryTimes(entries []models.IPListEntry) {
+	now := time.Now().UTC().Format("2006-01-02 15:04:05")
+	for i := range entries {
+		if entries[i].CreatedAt == "" {
+			entries[i].CreatedAt = now
+		}
+	}
+}
+
 // hasIPListRemarkControlChar 报告备注是否含 C0/C1 控制字符或 DEL
 // （含 \n \r \t）。备注是单行展示/导出的文本字段，控制字符无正常用途。
 func hasIPListRemarkControlChar(remark string) bool {
@@ -806,6 +820,7 @@ func (h *Handlers) CreateIPList(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.ErrMsg(c, err)})
 		return
 	}
+	stampNewIPListEntryTimes(entries)
 	// 落库形态=校验返回的生效条目（到期条目已剔除，见 validateIPListShape）。
 	entriesJSON, err := json.Marshal(entries)
 	if err != nil {
@@ -963,6 +978,7 @@ func (h *Handlers) UpdateIPList(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.ErrMsg(c, err)})
 			return
 		}
+		stampNewIPListEntryTimes(entries)
 		// 落库形态=生效条目（到期条目已剔除）：原始条数与生效条数不再有两个
 		// 口径，后续保存不会再被到期残留顶到上限。
 		marshaled, merr := json.Marshal(entries)
@@ -1300,7 +1316,7 @@ func (h *Handlers) AddIPToList(c *gin.Context) {
 			c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"added": false}})
 			return
 		}
-		entries[i] = models.IPListEntry{Value: req.Value, Remark: newEntryRemark}
+		entries[i] = models.IPListEntry{Value: req.Value, Remark: newEntryRemark, CreatedAt: time.Now().UTC().Format("2006-01-02 15:04:05")}
 		added = false
 		break
 	}
@@ -1312,7 +1328,7 @@ func (h *Handlers) AddIPToList(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "k_66ac459b", ipListMaxEntries), MessageKey: "k_66ac459b"})
 			return
 		}
-		entries = append(entries, models.IPListEntry{Value: req.Value, Remark: newEntryRemark})
+		entries = append(entries, models.IPListEntry{Value: req.Value, Remark: newEntryRemark, CreatedAt: time.Now().UTC().Format("2006-01-02 15:04:05")})
 	}
 	mergedJSON, err := json.Marshal(entries)
 	if err != nil {

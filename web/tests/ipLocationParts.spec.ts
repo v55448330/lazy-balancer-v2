@@ -88,3 +88,17 @@ test('消费接线：IP 处置单元走紧凑单源，累犯弹框经处置单�
     assert.doesNotMatch(text, /split\(['"]·['"]\)/, `${file} 不得自带第二份分隔符拆分`)
   }
 })
+
+test('自动封禁取消：CIDR 条目同路径可解禁 + 写成功通知宿主', () => {
+  const action = code('src/views/security/IPLocationAction.vue')
+  // CIDR（IPv6 /64 整段）与裸地址同按钮同路径——累犯弹框「封禁中禁用
+  // 移除，请先取消封禁」的指引对 v6 必须成立（旧实现 CIDR 只给编辑跳转，
+  // unbanAutoban 对 CIDR 直接 return，指引落空）。
+  assert.doesNotMatch(action, /if \(!hit \|\| !listId \|\| autobanHitIsCidr\.value/, 'unbanAutoban 不得再按 CIDR 拒绝解禁')
+  assert.match(action, /<button type="button" class="ipm-remove" :disabled="autobanUnbanning" @click="unbanAutoban">/, '取消封禁按钮必须对全部条目形态在场（无 v-else 门）')
+  assert.match(action, /confirmTextCidr/, 'CIDR 整段解封必须用网段口径确认文案')
+  // 取消封禁成功 → emit('changed')（与加名单同族），宿主累犯弹框
+  // ban_status/移除禁用态即时刷新。
+  const unban = action.slice(action.indexOf('const unbanAutoban'), action.indexOf('const eventCount'))
+  assert.match(unban, /emit\('changed'\)/, '取消封禁成功必须通知宿主刷新')
+})

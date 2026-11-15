@@ -329,7 +329,10 @@ test('autoban 词条 zh 母本钉 + en 侧齐备（NAT 键退役）', () => {
     '"recidivismHidePermanent": "隐藏永久封禁"',
     '"recidivismColActions": "操作"',
     '"recidivismRemove": "移除"',
-    '"recidivismRemoveBannedTip": "该身份正在封禁中，请从 IP 快捷弹框取消封禁"',
+    '"recidivismRemoveBannedTip": "封禁中不可移除前科；如需清除，请先从 IP 快捷弹框取消封禁，再移除"',
+    '"escalationOffShort": "关闭"',
+    '"escalationStandardShort": "标准"',
+    '"escalationAggressiveShort": "激进"',
   ]
   for (const text of zhTexts) assert.ok(zhSec.includes(text), `zh 母本缺「${text}」`)
   const enKeys = ['escalationLabel', 'colIdentity', 'colEscalation', 'recidivismDialogTitle', 'recidivismDialogSubtitle', 'recidivismColIdentity', 'recidivismColStatus', 'recidivismStatusNone', 'recidivismColHits24h', 'recidivismColOffenses', 'recidivismColLastBan', 'recidivismColNextBan', 'recidivismColLastEvent', 'recidivismColActions', 'recidivismRemove', 'recidivismRemoveBannedTip', 'recidivismRemoveTitle', 'recidivismRemoveConfirm', 'recidivismRemoveConfirmBtn', 'recidivismRemoveDone', 'recidivismHidePermanent', 'recidivismIpPlaceholder', 'recidivismCleanupNote', 'recidivismLastDurationTip', 'recidivismEmpty', 'recidivismLoadFailed', 'recidivismRetry', 'recidivismReset', 'recidivismResetTitle', 'recidivismResetConfirm', 'recidivismResetConfirmBtn', 'recidivismResetDone', 'recidivismClose', 'bannedTodayTip', 'statRecidivism', 'escalationPermanentDisabledHint']

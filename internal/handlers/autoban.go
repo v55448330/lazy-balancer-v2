@@ -225,7 +225,7 @@ func (h *Handlers) DeleteAutobanRecidivism(c *gin.Context) {
 		return
 	}
 	if banned {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_59c6ba41"), MessageKey: "k_59c6ba41"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_d5ad4db8"), MessageKey: "k_d5ad4db8"})
 		return
 	}
 	if err := services.DeleteAutobanRecidivism(identity); err != nil {

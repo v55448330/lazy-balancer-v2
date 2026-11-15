@@ -163,7 +163,7 @@
             </div>
             <div class="ipm-source-actions">
               <a v-if="autobanHitIsCidr" class="ipm-text-button" href="#/security-rules" @click.prevent="goSecurityRulesIpLists">{{ t('app.security.ipLocation.sections.edit') }}</a>
-              <button v-else type="button" class="ipm-remove" :disabled="autobanUnbanning" @click="unbanAutoban">
+              <button type="button" class="ipm-remove" :disabled="autobanUnbanning" @click="unbanAutoban">
                 {{ autobanExpired ? t('app.security.ipLocation.autoban.clear') : t('app.security.ipLocation.autoban.removeBan') }}
               </button>
             </div>
@@ -448,11 +448,13 @@ const retryAutoban = (): void => { void loadAutoban() }
 const unbanAutoban = async (): Promise<void> => {
   const hit = autobanHit.value
   const listId = autoban.value?.listId
-  if (!hit || !listId || autobanHitIsCidr.value || autobanUnbanning.value) return
+  // CIDR 条目（IPv6 /64 整段）同样可取消封禁——remove-ip 按条目值精确
+  // 删除，与裸地址同路径；累犯弹框「封禁中禁用移除」的指引对 v6 也成立。
+  if (!hit || !listId || autobanUnbanning.value) return
   autobanUnbanning.value = true
   try {
     await ElMessageBox.confirm(
-      t('app.security.ipLocation.autobanRemove.confirmText', { ip: hit.value }),
+      t(hit.value.includes('/') ? 'app.security.ipLocation.autobanRemove.confirmTextCidr' : 'app.security.ipLocation.autobanRemove.confirmText', { ip: hit.value }),
       autobanExpired.value ? t('app.security.ipLocation.autobanRemove.clearTitle') : t('app.security.ipLocation.autobanRemove.removeTitle'),
       { confirmButtonText: t('app.security.ipLocation.inlineRemove.confirm'), cancelButtonText: t('app.security.ipLocation.sections.cancel'), type: 'warning' },
     )
@@ -460,6 +462,9 @@ const unbanAutoban = async (): Promise<void> => {
     showSaveResult(res as unknown as { message?: string }, t('app.security.ipLocation.autobanRemove.removedToast', { ip: hit.value }))
     invalidateSharedEntriesCache()
     await Promise.all([loadAll(), loadAutoban()])
+    // 取消封禁与加名单同族写动作：通知宿主刷新（累犯弹框 ban_status/
+    // 移除禁用态即时更新，不滞留旧封禁态）。
+    emit('changed')
   } catch {
     // 取消或失败由既有确认框/全局请求拦截器处理。
   } finally {
