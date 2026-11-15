@@ -349,7 +349,7 @@ test('autoban 词条 zh 母本钉 + en 侧齐备（NAT 键退役）', () => {
 
 test('首封时长：弹框标签随 escalation 切换（阶梯口径在下拉选项标签披露，时长项不挂角标）', () => {
   const page = code('src/views/security/SecurityEvents.vue')
-  const durationItem = elementSlice(page, page.indexOf('<el-form-item>\n          <template #label><span>{{ t(autobanFormEscalationOn'), 'el-form-item')
+  const durationItem = elementSlice(page, page.lastIndexOf('<el-form-item>', page.indexOf('<template #label><span>{{ t(autobanFormEscalationOn')), 'el-form-item')
   assert.match(durationItem, /t\(autobanFormEscalationOn \? 'app\.security\.events\.firstBanDuration' : 'app\.security\.events\.durationLabel'\)/, '时长标签必须按 escalation 档位切换')
   assert.match(durationItem, /v-model="autobanForm\.duration"/, '切片必须是时长配置项本体')
   assert.doesNotMatch(durationItem, /FieldHelpIcon/, '时长项不挂角标图标（用户裁定移除无用叹号）')

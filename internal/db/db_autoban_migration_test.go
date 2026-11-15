@@ -19,6 +19,9 @@ var autobanColumnsExpected = []struct{ column, dflt string }{
 	{"autoban_duration", "'" + DefaultAutobanDuration + "'"},
 	{"autoban_scope", "'" + DefaultAutobanScope + "'"},
 	{"autoban_dry_run", fmt.Sprint(DefaultAutobanDryRun)},
+	{"autoban_counting_mode", "'" + DefaultAutobanCountingMode + "'"},
+	{"autoban_suspicion_multiplier", fmt.Sprint(DefaultAutobanSuspicionMultiplier)},
+	{"autoban_confirm_floor_ratio", "'" + DefaultAutobanConfirmFloorRatio + "'"},
 }
 
 // AutobanPresetListName 预置名单行名（services 层常量的镜像锚点——迁移侧

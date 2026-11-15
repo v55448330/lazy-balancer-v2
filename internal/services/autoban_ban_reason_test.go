@@ -75,7 +75,7 @@ func TestAutobanCandidates_carriesDominantReason(t *testing.T) {
 	for range 3 {
 		autobanObserveEventScopedAt(cfg, ip, "challenged", "human_failed", autobanNow())
 	}
-	candidates := autobanCandidates(5, 5*time.Minute)
+	candidates := autobanCandidates(AutobanConfig{Threshold: 5}, 5*time.Minute)
 	if len(candidates) != 1 {
 		t.Fatalf("candidates=%+v, want 1", candidates)
 	}
@@ -97,7 +97,7 @@ func TestAutobanCandidates_reasonTieBreakFixedOrder(t *testing.T) {
 	for range 2 {
 		autobanObserveEventScopedAt(cfg, ip, "blocked", "942100", autobanNow())
 	}
-	candidates := autobanCandidates(4, 5*time.Minute)
+	candidates := autobanCandidates(AutobanConfig{Threshold: 4}, 5*time.Minute)
 	if len(candidates) != 1 || candidates[0].Reason != "CRS拦截" {
 		t.Fatalf("平局主原因=%+v, want CRS拦截（固定优先序）", candidates)
 	}
@@ -114,7 +114,7 @@ func TestAutobanCandidates_expiredReachedCarriesReason(t *testing.T) {
 		autobanObserveEventScopedAt(cfg, ip, "blocked", "942100", autobanNow())
 	}
 	clock.Advance(6 * time.Minute)
-	candidates := autobanCandidates(2, 5*time.Minute)
+	candidates := autobanCandidates(AutobanConfig{Threshold: 2}, 5*time.Minute)
 	if len(candidates) != 1 || candidates[0].Reason != "CRS拦截" {
 		t.Fatalf("过期候选=%+v, want 携带 CRS拦截", candidates)
 	}
@@ -130,7 +130,7 @@ func TestAutobanMerge_firstBanRemarkIsReason(t *testing.T) {
 	for range 2 {
 		autobanObserveEventScopedAt(cfg, ip, "blocked", "942100", autobanNow())
 	}
-	if _, err := autobanMergeEntries(cfg, autobanCandidates(2, 5*time.Minute)); err != nil {
+	if _, err := autobanMergeEntries(cfg, autobanCandidates(AutobanConfig{Threshold: 2}, 5*time.Minute)); err != nil {
 		t.Fatalf("merge: %v", err)
 	}
 	entries := presetEntries(t)
@@ -150,7 +150,7 @@ func TestAutobanMerge_escalatedBanRemarkHasRecidPrefix(t *testing.T) {
 	for range 2 {
 		autobanObserveEventScopedAt(cfg, ip, "challenged", "human_failed", autobanNow())
 	}
-	if _, err := autobanMergeEntries(cfg, autobanCandidates(2, 5*time.Minute)); err != nil {
+	if _, err := autobanMergeEntries(cfg, autobanCandidates(AutobanConfig{Threshold: 2}, 5*time.Minute)); err != nil {
 		t.Fatalf("merge: %v", err)
 	}
 	entries := presetEntries(t)
@@ -170,7 +170,7 @@ func TestAutobanMerge_escalationOffRemarkNoPrefix(t *testing.T) {
 	for range 2 {
 		autobanObserveEventScopedAt(cfg, ip, "logged", "10001", autobanNow())
 	}
-	if _, err := autobanMergeEntries(cfg, autobanCandidates(2, 5*time.Minute)); err != nil {
+	if _, err := autobanMergeEntries(cfg, autobanCandidates(AutobanConfig{Threshold: 2}, 5*time.Minute)); err != nil {
 		t.Fatalf("merge: %v", err)
 	}
 	entries := presetEntries(t)

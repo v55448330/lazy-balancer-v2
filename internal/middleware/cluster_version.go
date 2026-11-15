@@ -163,6 +163,9 @@ var globalConfigSyncedColumns = []string{
 	// 与六列同族：仅写该列的端点/直改 SQL 也须 bump，否则稳态变更经 304 门
 	// 滞留主节点（SetAutobanConfig 七列同语句写被旧六列掩盖，单独写即暴露）。
 	"autoban_escalation",
+	// 证据分层三列随 users 节同步（models.ClusterBasicSettings）——与七列同族：
+	// 仅写这些列的端点/直改 SQL 也须 bump，否则稳态变更经 304 门滞留主节点。
+	"autoban_counting_mode", "autoban_suspicion_multiplier", "autoban_confirm_floor_ratio",
 	// v2.3.8：安全事件保留两列与大屏采样口径随 users 节同步并物化到从端
 	// （models.ClusterBasicSettings / services/cluster_apply.go）——
 	// 补列：此前仅靠「同语句 UPDATE 含其他 OF 列」偶然触发 bump，仅写这三列

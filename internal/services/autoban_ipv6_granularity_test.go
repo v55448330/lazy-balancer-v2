@@ -62,7 +62,7 @@ func TestAutobanObserve_ipv6PrivacyRotationAggregatesPer64(t *testing.T) {
 		t.Fatalf("/64 聚合计数=%+v, want count=6 reached", w)
 	}
 
-	candidates := autobanCandidates(3, 5*time.Minute)
+	candidates := autobanCandidates(AutobanConfig{Threshold: 3}, 5*time.Minute)
 	if len(candidates) != 1 || candidates[0].IP != "2606:4700:abcd:1234::" || candidates[0].Count != 6 {
 		t.Fatalf("候选=%+v, want 单条 /64 键 count=6", candidates)
 	}
@@ -110,7 +110,7 @@ func TestAutobanObserve_ipv4GranularityUnchanged(t *testing.T) {
 	if w == nil || w.Count != 2 {
 		t.Fatalf("IPv4 键必须保持裸地址, got %+v", w)
 	}
-	out, err := autobanMergeEntries(AutobanConfig{Duration: "1h"}, autobanCandidates(2, 5*time.Minute))
+	out, err := autobanMergeEntries(AutobanConfig{Duration: "1h"}, autobanCandidates(AutobanConfig{Threshold: 2}, 5*time.Minute))
 	if err != nil {
 		t.Fatalf("merge: %v", err)
 	}

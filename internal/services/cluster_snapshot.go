@@ -808,13 +808,16 @@ func (s *ClusterService) loadSnapshotGlobalSettings(ctx context.Context, store s
 	// 指针装载+COALESCE 兜底恒携带，升主即按主端配置生效）。局部名 abn* 与上方
 	// 自动备份组 ab* 区分（同一函数作用域）。
 	var abnEnabled, abnDryRun bool
-	var abnThreshold, abnWindow int
-	var abnDuration, abnScope, abnEscalation string
+	var abnThreshold, abnWindow, abnMult int
+	var abnDuration, abnScope, abnEscalation, abnMode, abnFloor string
 	if err := store.QueryRowContext(ctx, `SELECT COALESCE(autoban_enabled,?), COALESCE(autoban_threshold,?),
-		COALESCE(autoban_window_minutes,?), COALESCE(autoban_duration,?), COALESCE(autoban_scope,?), COALESCE(autoban_dry_run,?), COALESCE(autoban_escalation,?)
+		COALESCE(autoban_window_minutes,?), COALESCE(autoban_duration,?), COALESCE(autoban_scope,?), COALESCE(autoban_dry_run,?), COALESCE(autoban_escalation,?),
+		COALESCE(autoban_counting_mode,?), COALESCE(autoban_suspicion_multiplier,?), COALESCE(autoban_confirm_floor_ratio,?)
 		FROM global_config WHERE id=1`,
 		db.DefaultAutobanEnabled, db.DefaultAutobanThreshold, db.DefaultAutobanWindowMinutes,
-		db.DefaultAutobanDuration, db.DefaultAutobanScope, db.DefaultAutobanDryRun, db.DefaultAutobanEscalation).Scan(&abnEnabled, &abnThreshold, &abnWindow, &abnDuration, &abnScope, &abnDryRun, &abnEscalation); err != nil {
+		db.DefaultAutobanDuration, db.DefaultAutobanScope, db.DefaultAutobanDryRun, db.DefaultAutobanEscalation,
+		db.DefaultAutobanCountingMode, db.DefaultAutobanSuspicionMultiplier, db.DefaultAutobanConfirmFloorRatio).Scan(
+		&abnEnabled, &abnThreshold, &abnWindow, &abnDuration, &abnScope, &abnDryRun, &abnEscalation, &abnMode, &abnMult, &abnFloor); err != nil {
 		return fmt.Errorf("读取自动封禁设置: %w", err)
 	}
 	snapshot.BasicSettings.AutobanEnabled = &abnEnabled
@@ -824,6 +827,9 @@ func (s *ClusterService) loadSnapshotGlobalSettings(ctx context.Context, store s
 	snapshot.BasicSettings.AutobanScope = &abnScope
 	snapshot.BasicSettings.AutobanDryRun = &abnDryRun
 	snapshot.BasicSettings.AutobanEscalation = &abnEscalation
+	snapshot.BasicSettings.AutobanCountingMode = &abnMode
+	snapshot.BasicSettings.AutobanSuspicionMultiplier = &abnMult
+	snapshot.BasicSettings.AutobanConfirmFloorRatio = &abnFloor
 	return nil
 }
 

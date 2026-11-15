@@ -464,6 +464,10 @@ type ClusterBasicSettings struct {
 	AutobanScope         *string `json:"autoban_scope,omitempty"`
 	AutobanDryRun        *bool   `json:"autoban_dry_run,omitempty"`
 	AutobanEscalation    *string `json:"autoban_escalation,omitempty"`
+	// 证据分层三列随 users 节同步（nil 门混跑兼容：旧主端缺席→从端保留本地）。
+	AutobanCountingMode        *string `json:"autoban_counting_mode,omitempty"`
+	AutobanSuspicionMultiplier *int    `json:"autoban_suspicion_multiplier,omitempty"`
+	AutobanConfirmFloorRatio   *string `json:"autoban_confirm_floor_ratio,omitempty"`
 }
 
 type ClusterUser struct {

@@ -49,8 +49,11 @@ func (h *Handlers) UpdateAutobanConfig(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_868de64b"), MessageKey: "k_868de64b"})
 		return
 	}
-	// Escalation 缺省（旧客户端未携带）归一 off，与 SetAutobanConfig 同单源。
+	// 缺省归一（旧客户端未携带新字段）与 SetAutobanConfig 同单源。
 	req.Escalation = services.AutobanEscalationOrOff(req.Escalation)
+	req.CountingMode = services.AutobanCountingModeOrClassic(req.CountingMode)
+	req.SuspicionMultiplier = services.AutobanSuspicionMultiplierOrDefault(req.SuspicionMultiplier)
+	req.ConfirmFloorRatio = services.AutobanConfirmFloorRatioOrDefault(req.ConfirmFloorRatio)
 	if !requireMasterNode(c) {
 		return
 	}
@@ -69,10 +72,11 @@ func (h *Handlers) UpdateAutobanConfig(c *gin.Context) {
 	// 启用与调度是同一字段的两面（保存即联动调度启停），只产出一个状态位并
 	// 括注联动关系——旧文案「启用：开；调度：开启」两个同义布尔易被误读为
 	// 独立状态。
-	recordAudit(c, "更新", "自动封禁", fmt.Sprintf("启用：%s（调度随之启停）；阈值：%d 次/%d 分钟；时长：%s；口径：%s；模式：%s",
+	recordAudit(c, "更新", "自动封禁", fmt.Sprintf("启用：%s（调度随之启停）；阈值：%d 次/%d 分钟；时长：%s；口径：%s；模式：%s；计数：%s",
 		boolOnOff(req.Enabled), req.Threshold, req.WindowMinutes,
 		services.AutobanDurationLabel(req.Duration), autobanScopeText(req.Scope),
-		map[bool]string{true: "观察", false: "正式"}[req.DryRun]))
+		map[bool]string{true: "观察", false: "正式"}[req.DryRun],
+		autobanCountingModeText(req)))
 	updated, err := services.GetAutobanConfig()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("回读自动封禁配置失败", err)})
@@ -90,6 +94,15 @@ func boolOnOff(b bool) string {
 
 func autobanScopeText(scope string) string {
 	return services.AutobanScopeLabel(scope)
+}
+
+// autobanCountingModeText 计数模式审计文案：classic=等权；evidence 披露
+// 倍率/打底（配置变更留痕需可还原判定参数）。
+func autobanCountingModeText(cfg services.AutobanConfig) string {
+	if cfg.CountingMode == services.AutobanCountingEvidence {
+		return fmt.Sprintf("证据分层（嫌疑倍率 %d，确证打底 %s）", cfg.SuspicionMultiplier, cfg.ConfirmFloorRatio)
+	}
+	return "等权"
 }
 
 // GetAutobanStatus GET /security/autoban/status：状态卡数据源（business 组全员
@@ -122,17 +135,21 @@ func (h *Handlers) GetAutobanStatus(c *gin.Context) {
 	// 封禁生效判定（ban_effective=IP 名单引用通道）。
 	ipEffective := h.autobanBanEffectiveIP(preset)
 	resp := gin.H{
-		"enabled":         cfg.Enabled,
-		"dry_run":         cfg.DryRun,
-		"threshold":       cfg.Threshold,
-		"window_minutes":  cfg.WindowMinutes,
-		"duration":        cfg.Duration,
-		"scope":           cfg.Scope,
-		"escalation":      cfg.Escalation,
-		"escalated_count": services.AutobanEscalatedCount(),
-		"banned_today":    services.AutobanBannedToday(),
-		"list_entries":    preset.activeCount,
-		"list_referenced": h.autobanListReferenced(preset),
+		"enabled":              cfg.Enabled,
+		"dry_run":              cfg.DryRun,
+		"threshold":            cfg.Threshold,
+		"window_minutes":       cfg.WindowMinutes,
+		"duration":             cfg.Duration,
+		"scope":                cfg.Scope,
+		"escalation":           cfg.Escalation,
+		"counting_mode":        cfg.CountingMode,
+		"suspicion_multiplier": cfg.SuspicionMultiplier,
+		"confirm_floor_ratio":  cfg.ConfirmFloorRatio,
+		"list_id":              listID,
+		"escalated_count":      services.AutobanEscalatedCount(),
+		"banned_today":         services.AutobanBannedToday(),
+		"list_entries":         preset.activeCount,
+		"list_referenced":      h.autobanListReferenced(preset),
 		// 黄条真正需要的是「封禁是否生效」——IP 级=名单被 deny + IP 访问
 		// 控制启用的策略引用且名单非空。list_referenced 复用热路径资格门的
 		// 四面引用集（含白名单/受信代理/CRS 排除），不能区分「引用」与

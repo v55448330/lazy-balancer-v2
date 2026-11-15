@@ -20,6 +20,7 @@ func TestConfigBackupAutobanColumns_matchReadAutobanConfigFrom(t *testing.T) {
 	want := []string{
 		"autoban_enabled", "autoban_threshold", "autoban_window_minutes",
 		"autoban_duration", "autoban_scope", "autoban_dry_run", "autoban_escalation",
+		"autoban_counting_mode", "autoban_suspicion_multiplier", "autoban_confirm_floor_ratio",
 	}
 	if !reflect.DeepEqual(configBackupAutobanColumns, want) {
 		t.Fatalf("configBackupAutobanColumns=%v, want 与 ReadAutobanConfigFrom 同集同序 %v", configBackupAutobanColumns, want)

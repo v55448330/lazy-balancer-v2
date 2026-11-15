@@ -189,7 +189,7 @@ func TestObserveHumanEvents_ccReasonFlowsToCandidate(t *testing.T) {
 		{IP: "45.33.32.85", Kind: "challenge", Reason: "session_anomaly", At: at},
 		{IP: "45.33.32.85", Kind: "challenge", At: at},
 	})
-	candidates := autobanCandidates(3, 5*time.Minute)
+	candidates := autobanCandidates(AutobanConfig{Threshold: 3}, 5*time.Minute)
 	if len(candidates) != 1 || candidates[0].Reason != "会话异常" {
 		t.Fatalf("候选=%+v, want 主原因=会话异常（2/3 多数）", candidates)
 	}

@@ -32,7 +32,7 @@ test('深链交接入口：7 个 window.open 调用点全部走 pageUrl，视图
   // （入口消失）仍全绿。pageUrl 生产调用点共 7 处（总览自动封禁配置入口已随
   // NAT 移除批退役——配置统一在事件页）。
   const callSites: Array<{ path: string; expected: number }> = [
-    { path: 'src/views/security/SecurityEvents.vue', expected: 3 },
+    { path: 'src/views/security/SecurityEvents.vue', expected: 5 },
     { path: 'src/views/security/SecurityOverview.vue', expected: 1 },
     { path: 'src/views/security/SecurityPolicies.vue', expected: 3 },
   ]

@@ -166,6 +166,15 @@ func TestAccumulateDailyAgg_counterResetAttribution(t *testing.T) {
 // ≤30s 归属偏移）；同日内增量落当日。
 func TestAccumulateDailyAgg_dayBoundaryAttribution(t *testing.T) {
 	setupIsolatedDBWithMetrics(t)
+	// 固定全局时区免疫：runtime-tz-refresh daemon（前序引擎测试启动）在
+	// shuffle 长链下可能于本用例运行期间 tick，读全局 db.GetDB 并 ConfigureLocation
+	// 改写 CurrentLocation，污染跨天归因。本用例显式固定时区 + cleanup 恢复，
+	// 与临时库 timezone 默认（Asia/Shanghai）同值——daemon 即便 tick 也收敛同值。
+	prevLoc := CurrentLocation()
+	if _, err := ConfigureLocation("Asia/Shanghai"); err != nil {
+		t.Fatalf("fix timezone: %v", err)
+	}
+	t.Cleanup(func() { _, _ = ConfigureLocation(prevLoc.String()) })
 	service := NewMetricsService("", 30)
 	now := time.Now()
 	today := cstDate(t, 0, now)

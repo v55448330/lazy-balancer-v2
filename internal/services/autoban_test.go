@@ -51,13 +51,14 @@ func (c *autobanTestClock) Advance(d time.Duration) {
 // installAutobanFixture：初始化临时库+接管全局时钟缝。LIFO 清理还原。
 func installAutobanFixture(t *testing.T, start string) *autobanTestClock {
 	t.Helper()
-	oldDB, oldMetricsDB, oldAuditDB := db.DB, db.MetricsDB, db.AuditDB
+	oldDB, oldMetricsDB, oldAuditDB, oldCurrent := db.DB, db.MetricsDB, db.AuditDB, db.GetDB()
 	if err := db.Initialize(t.TempDir()); err != nil {
 		t.Fatalf("initialize test database: %v", err)
 	}
 	t.Cleanup(func() {
 		_ = db.Close()
-		db.DB, db.MetricsDB, db.AuditDB = oldDB, oldMetricsDB, oldAuditDB
+		// 还原全部全局句柄（含 db.GetDB 原子句柄）——与 setupIsolatedDB 同口径。
+		restoreGlobalDBHandles(oldDB, oldMetricsDB, oldAuditDB, oldCurrent)
 	})
 	taskengine.SetLogDir(t.TempDir())
 	t.Cleanup(func() { taskengine.SetLogDir("") })
@@ -1122,7 +1123,7 @@ func TestAutobanCandidates_pruneStaleBuckets(t *testing.T) {
 	setAutobanConfigRaw(t, true, 2, 5, "1h", "blocked,logged", true)
 	autobanObserveEvent("45.33.32.1", "blocked", "942100") // 1 次 < 阈值 2
 	f.Advance(6 * time.Minute)
-	cands := autobanCandidates(2, 5*time.Minute)
+	cands := autobanCandidates(AutobanConfig{Threshold: 2}, 5*time.Minute)
 	if len(cands) != 0 {
 		t.Fatalf("过期且未跨阈值的桶不得产生候选，得到 %v", cands)
 	}
@@ -1152,7 +1153,7 @@ func TestAutobanForgetIPs_deleteThenNoNewEventsNoReban(t *testing.T) {
 		autobanObserveEventScoped(cfg, "45.33.32.9", "blocked", "944100")
 		autobanObserveEventScoped(cfg, "45.33.32.7", "blocked", "944100")
 	}
-	cands := autobanCandidates(3, time.Hour)
+	cands := autobanCandidates(AutobanConfig{Threshold: 3}, time.Hour)
 	if len(cands) != 2 {
 		t.Fatalf("given: 候选数=%d, want 2", len(cands))
 	}
@@ -1175,7 +1176,7 @@ func TestAutobanForgetIPs_deleteThenNoNewEventsNoReban(t *testing.T) {
 	// 零新事件，越 2 个调度 tick。
 	f.Advance(2 * time.Minute)
 
-	next := autobanCandidates(3, time.Hour)
+	next := autobanCandidates(AutobanConfig{Threshold: 3}, time.Hour)
 	seen := map[string]bool{}
 	for _, c := range next {
 		seen[c.IP] = true
@@ -1234,7 +1235,7 @@ func TestAutobanSuggestions_carryWindowFirstAndLastSeen(t *testing.T) {
 	f.Advance(2 * time.Minute)
 	autobanObserveEvent("45.33.32.7", "blocked", "941100")
 
-	cands := autobanCandidates(2, 5*time.Minute)
+	cands := autobanCandidates(AutobanConfig{Threshold: 2}, 5*time.Minute)
 	if len(cands) != 1 {
 		t.Fatalf("候选数=%d, want 1", len(cands))
 	}
@@ -1653,7 +1654,7 @@ func TestAutobanCounter_tieredLogging(t *testing.T) {
 	}
 	// 逐轮汇总的过期清零行由 Run 的修剪路径产生（每轮一行，不逐 IP 刷屏）。
 	f.Advance(6 * time.Minute)
-	autobanCandidates(3, 5*time.Minute)
+	autobanCandidates(AutobanConfig{Threshold: 3}, 5*time.Minute)
 	if got := strings.Count(autobanLogNow(t), "计数窗口过期，清零"); got != 1 {
 		t.Fatalf("Run 修剪路径汇总清零日志=%d 行, want 1（同链保留）:\n%s", got, autobanLogNow(t))
 	}
@@ -1673,7 +1674,7 @@ func TestAutobanCandidates_aggregateExpiryLog(t *testing.T) {
 	AutobanSeedCounterForTest("45.33.32.99", 0, 1)
 	f.Advance(6 * time.Minute)
 
-	candidates := autobanCandidates(1, 5*time.Minute)
+	candidates := autobanCandidates(AutobanConfig{Threshold: 1}, 5*time.Minute)
 
 	if len(candidates) != 6 {
 		t.Fatalf("过期达标候选=%d, want 6（汇总日志不得改变评估）", len(candidates))
@@ -1937,7 +1938,7 @@ func TestSetAutobanConfig_disableClearsStaleCounters(t *testing.T) {
 	if got := autobanTrackedCount(); got != 0 {
 		t.Fatalf("重新启用后计数桶=%d, want 0", got)
 	}
-	if cand := autobanCandidates(cfg.Threshold, time.Duration(cfg.WindowMinutes)*time.Minute); len(cand) != 0 {
+	if cand := autobanCandidates(cfg, time.Duration(cfg.WindowMinutes)*time.Minute); len(cand) != 0 {
 		t.Fatalf("重新启用零新流量候选=%v, want 空（不得以陈旧计数封禁）", cand)
 	}
 }
@@ -1998,7 +1999,7 @@ func TestAutobanFormalMerge_beyondSuggestionCap(t *testing.T) {
 		autobanObserveEventScoped(cfg, ip, "blocked", "942100")
 	}
 
-	cands := autobanCandidates(cfg.Threshold, time.Hour)
+	cands := autobanCandidates(cfg, time.Hour)
 	if len(cands) != total {
 		t.Fatalf("candidates=%d, want %d（候选评估不得按展示上限截断）", len(cands), total)
 	}
@@ -2045,7 +2046,7 @@ func TestAutobanMerge_expiredEntryNotRebannedSameRound(t *testing.T) {
 	for range 3 {
 		autobanObserveEventScoped(cfg, ip, "blocked", "944100")
 	}
-	cands := autobanCandidates(3, time.Hour)
+	cands := autobanCandidates(AutobanConfig{Threshold: 3}, time.Hour)
 	if len(cands) != 1 {
 		t.Fatalf("给定：候选=%v，want 1（%s 封禁前）", cands, ip)
 	}
@@ -2058,7 +2059,7 @@ func TestAutobanMerge_expiredEntryNotRebannedSameRound(t *testing.T) {
 
 	// When 越过 10 分钟时长（计数窗口 60m 尚未过期 → 桶仍跨阈值）
 	f.Advance(11 * time.Minute)
-	expiredCands := autobanCandidates(3, time.Hour)
+	expiredCands := autobanCandidates(AutobanConfig{Threshold: 3}, time.Hour)
 	found := false
 	for _, c := range expiredCands {
 		if c.IP == ip {
@@ -2097,7 +2098,7 @@ func TestAutobanMerge_expiredEntryNotRebannedSameRound(t *testing.T) {
 	if got := AutobanTrackedIPs(); got != 0 {
 		t.Fatalf("到期清桶后计数键=%d，want 0", got)
 	}
-	if again := autobanCandidates(3, time.Hour); len(again) != 0 {
+	if again := autobanCandidates(AutobanConfig{Threshold: 3}, time.Hour); len(again) != 0 {
 		t.Fatalf("到期清桶后零新事件不得再产候选，got=%v", again)
 	}
 }

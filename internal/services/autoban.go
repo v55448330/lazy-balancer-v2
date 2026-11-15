@@ -155,6 +155,105 @@ func AutobanEscalationOrOff(s string) string {
 	return s
 }
 
+// 证据分层计数模式（classic=四口径等权存量语义；evidence=确证/嫌疑双累加器）。
+const (
+	AutobanCountingClassic  = "classic"
+	AutobanCountingEvidence = "evidence"
+)
+
+var autobanCountingModes = map[string]bool{
+	AutobanCountingClassic:  true,
+	AutobanCountingEvidence: true,
+}
+
+// ValidAutobanCountingMode 计数模式枚举校验（写侧/导入/消费侧三通道同口径）。
+func ValidAutobanCountingMode(s string) bool { return autobanCountingModes[s] }
+
+// AutobanCountingModeOrClassic 把缺省形态（空串=旧客户端未携带）归一 classic；
+// 显式值原样返回（非法值交 ValidateAutobanConfig 拒绝）。
+func AutobanCountingModeOrClassic(s string) string {
+	if s == "" {
+		return AutobanCountingClassic
+	}
+	return s
+}
+
+// 嫌疑倍率域 [2,20]（1 会退化等权、上限防嫌疑通道虚设）与确证打底枚举
+// {0.2,0.4,0.6}（离散档避免自由小数配置面）。
+const (
+	AutobanSuspicionMultiplierMin = 2
+	AutobanSuspicionMultiplierMax = 20
+)
+
+// autobanSuspicionMultiplierDefault 与 db 默认同值（缺省归一单源）。
+const autobanSuspicionMultiplierDefault = 4
+
+// autobanConfirmFloorRatioDefault 与 db 默认同值（缺省归一单源）。
+const autobanConfirmFloorRatioDefault = "0.4"
+
+// AutobanSuspicionMultiplierOrDefault 缺省形态（0=旧客户端未携带）归一默认；
+// 显式越界交 ValidateAutobanConfig 拒绝。
+func AutobanSuspicionMultiplierOrDefault(n int) int {
+	if n == 0 {
+		return autobanSuspicionMultiplierDefault
+	}
+	return n
+}
+
+// AutobanConfirmFloorRatioOrDefault 缺省形态（空串）归一默认。
+func AutobanConfirmFloorRatioOrDefault(s string) string {
+	if s == "" {
+		return autobanConfirmFloorRatioDefault
+	}
+	return s
+}
+
+var autobanConfirmFloorRatios = map[string]bool{"0.2": true, "0.4": true, "0.6": true}
+
+// ValidAutobanConfirmFloorRatio 打底比例枚举校验。
+func ValidAutobanConfirmFloorRatio(s string) bool { return autobanConfirmFloorRatios[s] }
+
+// autobanConfirmFloorPermille 把打底比例枚举解析为千分比整数（避免浮点）：
+// "0.2"→200,"0.4"→400,"0.6"→600。非法值返回 0（调用方须先校验）。
+func autobanConfirmFloorPermille(s string) int {
+	switch s {
+	case "0.2":
+		return 200
+	case "0.4":
+		return 400
+	case "0.6":
+		return 600
+	}
+	return 0
+}
+
+// autobanScopeIsConfirmed 报告口径维度是否属攻击确证组（blocked/challenge_failed）；
+// logged/challenge_issued 属嫌疑组。证据分层计数分组单源。
+func autobanScopeIsConfirmed(dim string) bool {
+	return dim == AutobanScopeBlocked || dim == AutobanScopeChallengeFailed
+}
+
+// autobanEvidenceFloor 确证打底门槛 = ceil(T1 × 打底比例)（千分比整数避免浮点）。
+// T1>=1 且比例>0 时 floor>=1——纯嫌疑（确证 0）永不达标。
+func autobanEvidenceFloor(threshold int, floorRatio string) int {
+	permille := autobanConfirmFloorPermille(floorRatio)
+	return (threshold*permille + 999) / 1000
+}
+
+// autobanEvidenceReached 证据分层达标判定：
+// 确证 >= T1（快通道）OR（确证 >= 打底 AND 确证+嫌疑 >= T1×倍率）。
+func autobanEvidenceReached(confirmed, suspicion, threshold, multiplier int, floorRatio string) bool {
+	if threshold <= 0 {
+		return false
+	}
+	if confirmed >= threshold {
+		return true
+	}
+	floor := autobanEvidenceFloor(threshold, floorRatio)
+	t2 := threshold * multiplier
+	return confirmed >= floor && confirmed+suspicion >= t2
+}
+
 // 自动封禁统计口径四维度（2026-11-13 用户裁定：单选改多选）。scope 存逗号
 // 分隔集合；挑战发放/失败拆为独立维度（证据强度不同），count_human_failed
 // 开关退役（语义并入 challenge_failed）。
@@ -259,6 +358,11 @@ type AutobanConfig struct {
 	Scope         string `json:"scope"`
 	DryRun        bool   `json:"dry_run"`
 	Escalation    string `json:"escalation"`
+	// 证据分层计数：classic=四口径等权（默认，存量语义）；evidence=确证/嫌疑
+	// 双累加器 + 打底门槛。倍率/打底仅在 evidence 下参与判定。
+	CountingMode        string `json:"counting_mode"`
+	SuspicionMultiplier int    `json:"suspicion_multiplier"`
+	ConfirmFloorRatio   string `json:"confirm_floor_ratio"`
 }
 
 // autobanNow 时钟缝（测试注入时间轴）。
@@ -316,36 +420,45 @@ type AutobanConfigQuerier interface {
 // NULL；读失败显性返回错误）。GetAutobanConfig 与导入侧共用本单源——
 // 两份手写 SELECT 的列/COALESCE 默认值漂移会让导入侧比对出假的「配置变化」。
 func ReadAutobanConfigFrom(ctx context.Context, q AutobanConfigQuerier) (AutobanConfig, error) {
-	var en, threshold, window, dry int
-	var duration, scope, escalation string
+	var en, threshold, window, dry, mult int
+	var duration, scope, escalation, mode, floor string
 	err := q.QueryRowContext(ctx, `SELECT COALESCE(autoban_enabled,?), COALESCE(autoban_threshold,?),
-		COALESCE(autoban_window_minutes,?), COALESCE(autoban_duration,?), COALESCE(autoban_scope,?), COALESCE(autoban_dry_run,?), COALESCE(autoban_escalation,?)
+		COALESCE(autoban_window_minutes,?), COALESCE(autoban_duration,?), COALESCE(autoban_scope,?), COALESCE(autoban_dry_run,?), COALESCE(autoban_escalation,?),
+		COALESCE(autoban_counting_mode,?), COALESCE(autoban_suspicion_multiplier,?), COALESCE(autoban_confirm_floor_ratio,?)
 		FROM global_config WHERE id=1`,
 		db.DefaultAutobanEnabled, db.DefaultAutobanThreshold, db.DefaultAutobanWindowMinutes,
-		db.DefaultAutobanDuration, db.DefaultAutobanScope, db.DefaultAutobanDryRun, db.DefaultAutobanEscalation).Scan(&en, &threshold, &window, &duration, &scope, &dry, &escalation)
+		db.DefaultAutobanDuration, db.DefaultAutobanScope, db.DefaultAutobanDryRun, db.DefaultAutobanEscalation,
+		db.DefaultAutobanCountingMode, db.DefaultAutobanSuspicionMultiplier, db.DefaultAutobanConfirmFloorRatio).Scan(
+		&en, &threshold, &window, &duration, &scope, &dry, &escalation, &mode, &mult, &floor)
 	if err != nil {
 		return AutobanConfig{}, err
 	}
 	return AutobanConfig{
-		Enabled:       en == 1,
-		Threshold:     threshold,
-		WindowMinutes: window,
-		Duration:      duration,
-		Scope:         scope,
-		DryRun:        dry == 1,
-		Escalation:    escalation,
+		Enabled:             en == 1,
+		Threshold:           threshold,
+		WindowMinutes:       window,
+		Duration:            duration,
+		Scope:               scope,
+		DryRun:              dry == 1,
+		Escalation:          escalation,
+		CountingMode:        mode,
+		SuspicionMultiplier: mult,
+		ConfirmFloorRatio:   floor,
 	}, nil
 }
 
 // GetAutobanConfig 读七项配置（COALESCE 仅归一存量 NULL；读失败显性返回错误）。
 func GetAutobanConfig() (AutobanConfig, error) {
 	cfg := AutobanConfig{
-		Threshold:     db.DefaultAutobanThreshold,
-		WindowMinutes: db.DefaultAutobanWindowMinutes,
-		Duration:      db.DefaultAutobanDuration,
-		Scope:         db.DefaultAutobanScope,
-		DryRun:        db.DefaultAutobanDryRun == 1,
-		Escalation:    db.DefaultAutobanEscalation,
+		Threshold:           db.DefaultAutobanThreshold,
+		WindowMinutes:       db.DefaultAutobanWindowMinutes,
+		Duration:            db.DefaultAutobanDuration,
+		Scope:               db.DefaultAutobanScope,
+		DryRun:              db.DefaultAutobanDryRun == 1,
+		Escalation:          db.DefaultAutobanEscalation,
+		CountingMode:        db.DefaultAutobanCountingMode,
+		SuspicionMultiplier: db.DefaultAutobanSuspicionMultiplier,
+		ConfirmFloorRatio:   db.DefaultAutobanConfirmFloorRatio,
 	}
 	if db.DB == nil {
 		return cfg, errors.New("自动封禁配置数据库未装配")
@@ -389,6 +502,21 @@ func ValidateAutobanConfig(cfg AutobanConfig) error {
 	if !ValidAutobanEscalation(cfg.Escalation) {
 		return errors.New("累犯升级取值无效")
 	}
+	// 证据分层三字段：缺省形态（空模式/0 倍率/空比例=旧调用方未携带）在
+	// 校验内归一默认——直调 Validate 的部分配置（既有测试/内部构造）不因
+	// 新字段缺省而误拒；显式非法值仍响亮拒绝。写侧入口另先归一（幂等）。
+	mode := AutobanCountingModeOrClassic(cfg.CountingMode)
+	mult := AutobanSuspicionMultiplierOrDefault(cfg.SuspicionMultiplier)
+	floor := AutobanConfirmFloorRatioOrDefault(cfg.ConfirmFloorRatio)
+	if !ValidAutobanCountingMode(mode) {
+		return errors.New("计数模式取值无效")
+	}
+	if mult < AutobanSuspicionMultiplierMin || mult > AutobanSuspicionMultiplierMax {
+		return fmt.Errorf("嫌疑累计倍率须在 %d-%d 之间", AutobanSuspicionMultiplierMin, AutobanSuspicionMultiplierMax)
+	}
+	if !ValidAutobanConfirmFloorRatio(floor) {
+		return errors.New("确证打底比例取值无效")
+	}
 	return nil
 }
 
@@ -399,6 +527,9 @@ func ValidateAutobanConfig(cfg AutobanConfig) error {
 // 固定时长现行行为；显式非法值仍由 ValidateAutobanConfig 响亮拒绝。
 func SetAutobanConfig(cfg AutobanConfig) error {
 	cfg.Escalation = AutobanEscalationOrOff(cfg.Escalation)
+	cfg.CountingMode = AutobanCountingModeOrClassic(cfg.CountingMode)
+	cfg.SuspicionMultiplier = AutobanSuspicionMultiplierOrDefault(cfg.SuspicionMultiplier)
+	cfg.ConfirmFloorRatio = AutobanConfirmFloorRatioOrDefault(cfg.ConfirmFloorRatio)
 	if err := ValidateAutobanConfig(cfg); err != nil {
 		return err
 	}
@@ -413,8 +544,9 @@ func SetAutobanConfig(cfg AutobanConfig) error {
 	if cfg.DryRun {
 		dry = 1
 	}
-	if _, err := db.DB.Exec(`UPDATE global_config SET autoban_enabled=?, autoban_threshold=?, autoban_window_minutes=?, autoban_duration=?, autoban_scope=?, autoban_dry_run=?, autoban_escalation=? WHERE id=1`,
-		en, cfg.Threshold, cfg.WindowMinutes, cfg.Duration, cfg.Scope, dry, cfg.Escalation); err != nil {
+	if _, err := db.DB.Exec(`UPDATE global_config SET autoban_enabled=?, autoban_threshold=?, autoban_window_minutes=?, autoban_duration=?, autoban_scope=?, autoban_dry_run=?, autoban_escalation=?, autoban_counting_mode=?, autoban_suspicion_multiplier=?, autoban_confirm_floor_ratio=? WHERE id=1`,
+		en, cfg.Threshold, cfg.WindowMinutes, cfg.Duration, cfg.Scope, dry, cfg.Escalation,
+		cfg.CountingMode, cfg.SuspicionMultiplier, cfg.ConfirmFloorRatio); err != nil {
 		return err
 	}
 	// 运行期收敛（清桶/重算 Reached/禁用收尾/调度联动）与备份导入提交后
@@ -449,7 +581,10 @@ type autobanConfigReplaceEffects struct {
 
 func autobanConfigReplaceEffectsOf(old, new AutobanConfig) autobanConfigReplaceEffects {
 	effect := autobanConfigReplaceEffects{
-		resetCounters:          old.WindowMinutes != new.WindowMinutes || old.Scope != new.Scope,
+		resetCounters: old.WindowMinutes != new.WindowMinutes || old.Scope != new.Scope ||
+			old.CountingMode != new.CountingMode ||
+			old.SuspicionMultiplier != new.SuspicionMultiplier ||
+			old.ConfirmFloorRatio != new.ConfirmFloorRatio,
 		recomputeReached:       old.Threshold != new.Threshold,
 		disableFlush:           !new.Enabled,
 		disableFlushTransition: old.Enabled && !new.Enabled,
@@ -481,7 +616,7 @@ func ReconcileAutobanRuntimeAfterConfigReplace(old, new AutobanConfig) {
 	if effect.resetCounters {
 		ResetAutobanCounters()
 	} else if effect.recomputeReached {
-		autobanRecomputeReached(new.Threshold)
+		autobanRecomputeReached(new)
 	}
 	if effect.disableFlush {
 		AutobanDisableFlush()
@@ -559,6 +694,11 @@ type autobanCounter struct {
 	// Reasons 窗口内按触发原因类别计数（有限键集=autobanBanReasonOrder，
 	// 非无界增长）——候选主原因归因数据源，窗口滚动随 Count 一并清零。
 	Reasons map[string]int
+	// Confirmed/Suspicion 证据分层双累加器（仅 evidence 模式写入）：
+	// 确证=blocked+challenge_failed；嫌疑=logged+challenge_issued。
+	// Count 恒等于二者之和（排序/展示复用）；classic 模式二者恒 0。
+	Confirmed int
+	Suspicion int
 }
 
 // autobanBanReasonOrder 原因类别固定优先序（平局裁决：人机>会话异常>CRS>
@@ -848,9 +988,12 @@ func autobanObserveEventScopedAt(cfg AutobanConfig, ip, action, ruleTriggered st
 	// 口径集合每事件只解析一次：WAF 事件与人机维度共用同一成员表
 	//（此前 autobanActionMatches 二次解析同一 scope，热路径双倍字符串切分）。
 	scopeSet := AutobanScopeSet(cfg.Scope)
+	// dim 是事件的口径维度（WAF=action；人机=发放/失败映射）——evidence
+	// 模式按 dim 分组累加确证/嫌疑。
+	dim := action
 	if action == "challenged" {
 		// 人机事件：发放/失败按各自维度成员资格计数；通过永不计。
-		dim := ""
+		dim = ""
 		switch {
 		case ruleTriggered == "human_challenge" || strings.HasPrefix(ruleTriggered, "cc_"):
 			// CC 触发放行（cc_session_anomaly 等）属发放维度——与 human_challenge
@@ -886,11 +1029,21 @@ func autobanObserveEventScopedAt(cfg AutobanConfig, ip, action, ruleTriggered st
 	if w != nil {
 		if w.WindowStart.IsZero() || now.Sub(w.WindowStart) >= window {
 			w.Count = 0
+			w.Confirmed = 0
+			w.Suspicion = 0
 			w.WindowStart = now
 			w.Reached = false
 			w.Reasons = nil
 		}
 		w.Count++
+		evidence := cfg.CountingMode == AutobanCountingEvidence
+		if evidence {
+			if autobanScopeIsConfirmed(dim) {
+				w.Confirmed++
+			} else {
+				w.Suspicion++
+			}
+		}
 		w.LastSeen = now
 		if reason := autobanBanReason(action, ruleTriggered); reason != "" {
 			if w.Reasons == nil {
@@ -898,8 +1051,12 @@ func autobanObserveEventScopedAt(cfg AutobanConfig, ip, action, ruleTriggered st
 			}
 			w.Reasons[reason]++
 		}
-		if !w.Reached && cfg.Threshold > 0 && w.Count >= cfg.Threshold {
-			w.Reached = true
+		if !w.Reached {
+			if evidence {
+				w.Reached = autobanEvidenceReached(w.Confirmed, w.Suspicion, cfg.Threshold, cfg.SuspicionMultiplier, cfg.ConfirmFloorRatio)
+			} else if cfg.Threshold > 0 && w.Count >= cfg.Threshold {
+				w.Reached = true
+			}
 		}
 	}
 	autobanMu.Unlock()
@@ -1015,6 +1172,10 @@ type AutobanSuggestion struct {
 	// 写条目备注消费（「累犯·原因」/直接原因）；无 feed 详情的 direct seam
 	// 恒空串（merge 降级占位符）。
 	Reason string `json:"reason,omitempty"`
+	// ConfirmedCount/SuspicionCount 证据分层双分数（evidence 模式投影；
+	// classic 模式 confirmed=count、suspicion=0——旧前端读 count 不变）。
+	ConfirmedCount int `json:"confirmed_count"`
+	SuspicionCount int `json:"suspicion_count"`
 }
 
 // autobanCandidates 评估候选：先评估后修剪——过期桶若计数
@@ -1022,16 +1183,34 @@ type AutobanSuggestion struct {
 // 候选再删，否则该 IP 永不封禁；未跨阈值的过期桶照常修剪不产生候选。曾达标
 // IP 的过期桶修剪时按轮汇总一条 expire（与 Feed 路径同语义——窗口过期清零的
 // 唯一两条发射面）。
-func autobanCandidates(threshold int, window time.Duration) []AutobanSuggestion {
+func autobanCandidates(cfg AutobanConfig, window time.Duration) []AutobanSuggestion {
 	now := autobanNow()
+	threshold := cfg.Threshold
+	evidence := cfg.CountingMode == AutobanCountingEvidence
+	// reached 判定单源：classic 等权 Count>=T1；evidence 双条件。
+	reached := func(w *autobanCounter) bool {
+		if evidence {
+			return autobanEvidenceReached(w.Confirmed, w.Suspicion, threshold, cfg.SuspicionMultiplier, cfg.ConfirmFloorRatio)
+		}
+		return threshold > 0 && w.Count >= threshold
+	}
+	suggestion := func(ip string, w *autobanCounter) AutobanSuggestion {
+		s := AutobanSuggestion{IP: ip, Count: w.Count, WindowStart: w.WindowStart, LastSeen: w.LastSeen, Reason: autobanDominantReason(w.Reasons)}
+		if evidence {
+			s.ConfirmedCount, s.SuspicionCount = w.Confirmed, w.Suspicion
+		} else {
+			s.ConfirmedCount, s.SuspicionCount = w.Count, 0
+		}
+		return s
+	}
 	var expiredReached []string
 	autobanMu.Lock()
 	var expiredCandidates []AutobanSuggestion
 	for ip, w := range autobanWindows {
 		if !w.WindowStart.IsZero() && now.Sub(w.WindowStart) >= window {
 			// 先评估——过期桶已跨阈值的并入候选，再删桶。
-			if w.Count >= threshold {
-				expiredCandidates = append(expiredCandidates, AutobanSuggestion{IP: ip, Count: w.Count, WindowStart: w.WindowStart, LastSeen: w.LastSeen, Reason: autobanDominantReason(w.Reasons)})
+			if reached(w) {
+				expiredCandidates = append(expiredCandidates, suggestion(ip, w))
 			}
 			if w.Reached {
 				expiredReached = append(expiredReached, ip)
@@ -1041,8 +1220,8 @@ func autobanCandidates(threshold int, window time.Duration) []AutobanSuggestion 
 	}
 	var out []AutobanSuggestion
 	for ip, w := range autobanWindows {
-		if w.Count >= threshold {
-			out = append(out, AutobanSuggestion{IP: ip, Count: w.Count, WindowStart: w.WindowStart, LastSeen: w.LastSeen, Reason: autobanDominantReason(w.Reasons)})
+		if reached(w) {
+			out = append(out, suggestion(ip, w))
 		}
 	}
 	out = append(out, expiredCandidates...)
@@ -1861,13 +2040,13 @@ func RunAutobanCycle(rc taskengine.RunContext) error {
 	if cfg.DryRun {
 		// 观察模式不写名单，无 TOCTOU 面——候选评估无需临界区。展示/建议
 		// 口径在此截断（评估层不截断，正式 merge 消费全量）。
-		candidates := autobanCandidates(cfg.Threshold, window)
+		candidates := autobanCandidates(cfg, window)
 		if len(candidates) > autobanSuggestionCap {
 			candidates = candidates[:autobanSuggestionCap]
 		}
 		autobanSetSuggestions(candidates)
-		TaskLogf(AutobanTaskID, "cycle", "观察模式：计数 %d IP / 活跃 %d 个 IP / 达阈值 %d（阈值 %d 次/%d 分钟，口径 %s）%s",
-			autobanTrackedCount(), autobanReachedCount(), len(candidates), cfg.Threshold, cfg.WindowMinutes, AutobanScopeLabel(cfg.Scope), feedNote)
+		TaskLogf(AutobanTaskID, "cycle", "观察模式：计数 %d IP / 活跃 %d 个 IP / 达阈值 %d（%s，口径 %s）%s",
+			autobanTrackedCount(), autobanReachedCount(), len(candidates), autobanHitDetail(cfg), AutobanScopeLabel(cfg.Scope), feedNote)
 		return nil
 	}
 
@@ -1899,7 +2078,7 @@ func RunAutobanCycle(rc taskengine.RunContext) error {
 	if err := func() error {
 		CaddyOpLock.Lock()
 		defer CaddyOpLock.Unlock()
-		candidates = autobanCandidates(cfg.Threshold, window)
+		candidates = autobanCandidates(cfg, window)
 		o, err := autobanMergeEntries(cfg, candidates)
 		if err != nil {
 			return err
@@ -1967,7 +2146,7 @@ func autobanAuditBanned(cfg AutobanConfig, banned []string) {
 	for _, ip := range banned {
 		RecordAuditLog("system", AutobanAuditAction, "IP 地址列表",
 			FormatAuditDetail("IP："+ip,
-				fmt.Sprintf("命中：%d 次/%d 分钟", cfg.Threshold, cfg.WindowMinutes),
+				autobanHitDetail(cfg),
 				"时长："+AutobanDurationLabel(cfg.Duration),
 				AuditResultPart("success")), "")
 	}
@@ -1976,6 +2155,16 @@ func autobanAuditBanned(cfg AutobanConfig, banned []string) {
 			fmt.Sprintf("%s%d 个 IP 省略逐条记录（本轮共 %d 个 IP，逐条上限 %d；完整名单见预置 IP 列表）",
 				autobanAuditSummaryPrefix, omitted, len(banned)+omitted, autobanAuditPerRoundCap), "")
 	}
+}
+
+// autobanHitDetail 封禁审计/日志的命中口径文案：classic 等权「N 次/M 分钟」；
+// evidence 披露双阈值（确证 T1 / 嫌疑 T2=T1×倍率，打底比例）。
+func autobanHitDetail(cfg AutobanConfig) string {
+	if cfg.CountingMode == AutobanCountingEvidence {
+		return fmt.Sprintf("命中：确证阈值 %d / 嫌疑阈值 %d（打底 %s）/%d 分钟",
+			cfg.Threshold, cfg.Threshold*cfg.SuspicionMultiplier, cfg.ConfirmFloorRatio, cfg.WindowMinutes)
+	}
+	return fmt.Sprintf("命中：%d 次/%d 分钟", cfg.Threshold, cfg.WindowMinutes)
 }
 
 // autobanAuditExpiredUnban 到期解封审计（Run 轮与禁用收尾共用单一实现，
@@ -2100,13 +2289,18 @@ func autobanTrackedCount() int {
 	return len(autobanWindows)
 }
 
-// autobanRecomputeReached 按当前阈值重算全部计数桶的达标标记（阈值变更时
+// autobanRecomputeReached 按当前配置重算全部计数桶的达标标记（阈值变更时
 // 调用；O(键数)，10 万键上限下为毫秒级）。Reached 只服务展示/过期摘要，
-// 封禁判定用实时 Count>=threshold。
-func autobanRecomputeReached(threshold int) {
+// 封禁判定用实时候选评估。evidence 模式按双条件重算。
+func autobanRecomputeReached(cfg AutobanConfig) {
 	autobanMu.Lock()
+	evidence := cfg.CountingMode == AutobanCountingEvidence
 	for _, w := range autobanWindows {
-		w.Reached = threshold > 0 && w.Count >= threshold
+		if evidence {
+			w.Reached = autobanEvidenceReached(w.Confirmed, w.Suspicion, cfg.Threshold, cfg.SuspicionMultiplier, cfg.ConfirmFloorRatio)
+		} else {
+			w.Reached = cfg.Threshold > 0 && w.Count >= cfg.Threshold
+		}
 	}
 	autobanMu.Unlock()
 }

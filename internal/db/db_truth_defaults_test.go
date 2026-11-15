@@ -1070,6 +1070,7 @@ func TestGovernedDefaultLiteralsBoundInConsumers(t *testing.T) {
 				"db.DefaultAutobanWindowMinutes", "db.DefaultAutobanDuration",
 				"db.DefaultAutobanScope", "db.DefaultAutobanDryRun",
 				"db.DefaultAutobanEscalation",
+				"db.DefaultAutobanCountingMode", "db.DefaultAutobanSuspicionMultiplier", "db.DefaultAutobanConfirmFloorRatio",
 			},
 		},
 		{
@@ -1091,6 +1092,7 @@ func TestGovernedDefaultLiteralsBoundInConsumers(t *testing.T) {
 				"db.DefaultAutobanEnabled", "db.DefaultAutobanThreshold", "db.DefaultAutobanWindowMinutes",
 				"db.DefaultAutobanDuration", "db.DefaultAutobanScope", "db.DefaultAutobanDryRun",
 				"db.DefaultAutobanEscalation",
+				"db.DefaultAutobanCountingMode", "db.DefaultAutobanSuspicionMultiplier", "db.DefaultAutobanConfirmFloorRatio",
 			},
 		},
 		{

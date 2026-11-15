@@ -2326,6 +2326,18 @@ func updateSnapshotSettings(ctx context.Context, tx *sql.Tx, snapshot models.Clu
 		settingClauses = append(settingClauses, "autoban_escalation=?")
 		settingArgs = append(settingArgs, *settings.AutobanEscalation)
 	}
+	if settings.AutobanCountingMode != nil {
+		settingClauses = append(settingClauses, "autoban_counting_mode=?")
+		settingArgs = append(settingArgs, *settings.AutobanCountingMode)
+	}
+	if settings.AutobanSuspicionMultiplier != nil {
+		settingClauses = append(settingClauses, "autoban_suspicion_multiplier=?")
+		settingArgs = append(settingArgs, *settings.AutobanSuspicionMultiplier)
+	}
+	if settings.AutobanConfirmFloorRatio != nil {
+		settingClauses = append(settingClauses, "autoban_confirm_floor_ratio=?")
+		settingArgs = append(settingArgs, *settings.AutobanConfirmFloorRatio)
+	}
 
 	if len(settingClauses) > 0 {
 		if _, err := tx.ExecContext(ctx, `UPDATE global_config SET `+strings.Join(settingClauses, ",")+` WHERE id=1`, settingArgs...); err != nil {

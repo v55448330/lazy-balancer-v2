@@ -49,7 +49,7 @@ func TestAutobanIdentityKey_counterMergeRecidivismShareNormalizedKey(t *testing.
 		autobanObserveEventScopedAt(cfg, ip, "blocked", "942100", autobanNow())
 	}
 
-	out, err := autobanMergeEntries(cfg, autobanCandidates(2, 5*time.Minute))
+	out, err := autobanMergeEntries(cfg, autobanCandidates(AutobanConfig{Threshold: 2}, 5*time.Minute))
 	if err != nil {
 		t.Fatalf("merge: %v", err)
 	}

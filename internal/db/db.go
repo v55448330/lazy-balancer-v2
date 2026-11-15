@@ -213,6 +213,11 @@ const (
 	DefaultAutobanScope         = "blocked,logged,challenge_issued,challenge_failed"
 	DefaultAutobanDryRun        = 1
 	DefaultAutobanEscalation    = "off"
+	// 证据分层计数（classic=四口径等权历史行为；evidence=确证/嫌疑双累加器）。
+	// 默认 classic 冻结存量语义；倍率/打底域由 services 校验持有。
+	DefaultAutobanCountingMode        = "classic"
+	DefaultAutobanSuspicionMultiplier = 4
+	DefaultAutobanConfirmFloorRatio   = "0.4"
 )
 
 // defaultAutoBackupSectionList 返回 DefaultAutoBackupSections 的切片形态，供
@@ -1504,6 +1509,10 @@ var newColumnsRegistry = map[string]string{
 	"global_config.autoban_scope":          "TEXT NOT NULL DEFAULT '" + DefaultAutobanScope + "'",
 	"global_config.autoban_dry_run":        "INTEGER NOT NULL DEFAULT " + fmt.Sprint(DefaultAutobanDryRun),
 	"global_config.autoban_escalation":     "TEXT NOT NULL DEFAULT '" + DefaultAutobanEscalation + "'",
+	// 证据分层计数三列：模式/嫌疑倍率/确证打底比例（默认 classic 冻结存量行为）。
+	"global_config.autoban_counting_mode":        "TEXT NOT NULL DEFAULT '" + DefaultAutobanCountingMode + "'",
+	"global_config.autoban_suspicion_multiplier": "INTEGER NOT NULL DEFAULT " + fmt.Sprint(DefaultAutobanSuspicionMultiplier),
+	"global_config.autoban_confirm_floor_ratio":  "TEXT NOT NULL DEFAULT '" + DefaultAutobanConfirmFloorRatio + "'",
 	// 口径单选→多选一次性迁移门（旧 scope+count_human_failed → 四维集合）。
 	"global_config.autoban_scope_multiselect_v1": "BOOLEAN DEFAULT 0",
 	"nodes.server_map_lat":                       "REAL NOT NULL DEFAULT 0",
@@ -1827,6 +1836,11 @@ func runMigrations() error {
 			)`),
 		updateWhere("global_config", fmt.Sprintf("autoban_dry_run=%d", DefaultAutobanDryRun), "autoban_dry_run IS NULL OR autoban_dry_run NOT IN (0,1)"),
 		updateWhere("global_config", fmt.Sprintf("autoban_escalation='%s'", DefaultAutobanEscalation), "autoban_escalation IS NULL OR autoban_escalation NOT IN ('off','standard','aggressive')"),
+		// 证据分层三列：模式枚举外/NULL→classic；倍率越 [2,20]→默认；打底非
+		// {0.2,0.4,0.6}→默认（镜像 services.ValidAutobanCounting* 域，SQL 字面量双锚）。
+		updateWhere("global_config", fmt.Sprintf("autoban_counting_mode='%s'", DefaultAutobanCountingMode), "autoban_counting_mode IS NULL OR autoban_counting_mode NOT IN ('classic','evidence')"),
+		updateWhere("global_config", fmt.Sprintf("autoban_suspicion_multiplier=%d", DefaultAutobanSuspicionMultiplier), fmt.Sprintf("autoban_suspicion_multiplier IS NULL OR autoban_suspicion_multiplier<2 OR autoban_suspicion_multiplier>%d", 20)),
+		updateWhere("global_config", fmt.Sprintf("autoban_confirm_floor_ratio='%s'", DefaultAutobanConfirmFloorRatio), "autoban_confirm_floor_ratio IS NULL OR autoban_confirm_floor_ratio NOT IN ('0.2','0.4','0.6')"),
 		// 安全事件保留两列的**上界**每启动收敛（与写入侧/导入钳制/从端 apply
 		// 同一上界常量）。下界（<=0）由一次性 marker 迁移处理——marker 置位后
 		// 运行期显式 0 不得被重启改写（既有裁定），故此处只判越上界：带外直写

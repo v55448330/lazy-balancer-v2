@@ -79,6 +79,33 @@ func TestInitialize_backfillsAutobanColumns(t *testing.T) {
 		{"dry-run-valid-untouched", `UPDATE global_config SET autoban_dry_run=0 WHERE id=1`, func(t *testing.T) {
 			assertAutobanInt(t, "autoban_dry_run", 0)
 		}},
+		{"counting-mode-bogus", `UPDATE global_config SET autoban_counting_mode='bogus' WHERE id=1`, func(t *testing.T) {
+			assertAutobanText(t, "autoban_counting_mode", DefaultAutobanCountingMode)
+		}},
+		{"counting-mode-empty", `UPDATE global_config SET autoban_counting_mode='' WHERE id=1`, func(t *testing.T) {
+			assertAutobanText(t, "autoban_counting_mode", DefaultAutobanCountingMode)
+		}},
+		{"counting-mode-valid-untouched", `UPDATE global_config SET autoban_counting_mode='evidence' WHERE id=1`, func(t *testing.T) {
+			assertAutobanText(t, "autoban_counting_mode", "evidence")
+		}},
+		{"suspicion-multiplier-below-min", `UPDATE global_config SET autoban_suspicion_multiplier=1 WHERE id=1`, func(t *testing.T) {
+			assertAutobanInt(t, "autoban_suspicion_multiplier", DefaultAutobanSuspicionMultiplier)
+		}},
+		{"suspicion-multiplier-above-max", `UPDATE global_config SET autoban_suspicion_multiplier=21 WHERE id=1`, func(t *testing.T) {
+			assertAutobanInt(t, "autoban_suspicion_multiplier", DefaultAutobanSuspicionMultiplier)
+		}},
+		{"suspicion-multiplier-valid-untouched", `UPDATE global_config SET autoban_suspicion_multiplier=10 WHERE id=1`, func(t *testing.T) {
+			assertAutobanInt(t, "autoban_suspicion_multiplier", 10)
+		}},
+		{"confirm-floor-bogus", `UPDATE global_config SET autoban_confirm_floor_ratio='bogus' WHERE id=1`, func(t *testing.T) {
+			assertAutobanText(t, "autoban_confirm_floor_ratio", DefaultAutobanConfirmFloorRatio)
+		}},
+		{"confirm-floor-not-in-enum", `UPDATE global_config SET autoban_confirm_floor_ratio='0.5' WHERE id=1`, func(t *testing.T) {
+			assertAutobanText(t, "autoban_confirm_floor_ratio", DefaultAutobanConfirmFloorRatio)
+		}},
+		{"confirm-floor-valid-untouched", `UPDATE global_config SET autoban_confirm_floor_ratio='0.6' WHERE id=1`, func(t *testing.T) {
+			assertAutobanText(t, "autoban_confirm_floor_ratio", "0.6")
+		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if _, err := DB.Exec(tc.seed); err != nil {

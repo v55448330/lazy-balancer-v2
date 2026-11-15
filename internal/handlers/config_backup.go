@@ -3904,6 +3904,26 @@ func validateV2BackupAutobanConfig(config map[string]any) ([]string, error) {
 	// 键忽略（不写入、不拒绝——列已随启动迁移删除，通用写入面按列存在性跳过）。
 	delete(config, "autoban_nat_detection")
 	delete(config, "autoban_nat_fingerprint_threshold")
+	// 证据分层三列导入门（与保存侧拒/回填复位有意分歧：历史快照越界钳位、
+	// 缺省归一、非空非法枚举响亮拒绝）。键缺席/null 不注入（保留库内存量值）。
+	if raw, exists := config["autoban_suspicion_multiplier"]; exists && raw != nil {
+		if n, ok := backupInteger(raw); ok {
+			if n < services.AutobanSuspicionMultiplierMin || n > services.AutobanSuspicionMultiplierMax {
+				clamped := n
+				if n < services.AutobanSuspicionMultiplierMin {
+					clamped = services.AutobanSuspicionMultiplierMin
+				}
+				if n > services.AutobanSuspicionMultiplierMax {
+					clamped = services.AutobanSuspicionMultiplierMax
+				}
+				config["autoban_suspicion_multiplier"] = clamped
+				notes = append(notes, fmt.Sprintf("autoban_suspicion_multiplier 越界（%d），已钳位为 %d", n, clamped))
+			}
+		} else {
+			config["autoban_suspicion_multiplier"] = db.DefaultAutobanSuspicionMultiplier
+			notes = append(notes, fmt.Sprintf("autoban_suspicion_multiplier 非整数形态，已归一为 %d", db.DefaultAutobanSuspicionMultiplier))
+		}
+	}
 	for _, field := range []struct {
 		key     string
 		def     string
@@ -3913,6 +3933,8 @@ func validateV2BackupAutobanConfig(config map[string]any) ([]string, error) {
 		{"autoban_duration", db.DefaultAutobanDuration, func(s string) bool { return !services.ValidAutobanDuration(s) }, "10m/30m/1h/6h/12h/24h/permanent"},
 		{"autoban_scope", db.DefaultAutobanScope, func(s string) bool { return !services.ValidAutobanScope(s) }, "blocked/logged/challenge_issued/challenge_failed 的非空组合"},
 		{"autoban_escalation", db.DefaultAutobanEscalation, func(s string) bool { return !services.ValidAutobanEscalation(s) }, "off/standard/aggressive"},
+		{"autoban_counting_mode", db.DefaultAutobanCountingMode, func(s string) bool { return !services.ValidAutobanCountingMode(s) }, "classic/evidence"},
+		{"autoban_confirm_floor_ratio", db.DefaultAutobanConfirmFloorRatio, func(s string) bool { return !services.ValidAutobanConfirmFloorRatio(s) }, "0.2/0.4/0.6"},
 	} {
 		raw, exists := config[field.key]
 		if !exists || raw == nil {
@@ -7304,6 +7326,7 @@ func readImportOldAutoBackupEnabled(ctx context.Context, q importRowQuerier) (in
 var configBackupAutobanColumns = []string{
 	"autoban_enabled", "autoban_threshold", "autoban_window_minutes",
 	"autoban_duration", "autoban_scope", "autoban_dry_run", "autoban_escalation",
+	"autoban_counting_mode", "autoban_suspicion_multiplier", "autoban_confirm_floor_ratio",
 }
 
 // configBackupHumanSecretColumn 人机验证 cookie 签名密钥列：不属于自动封禁

@@ -125,6 +125,20 @@ export const autobanNextBanDuration = (
 }
 
 /**
+ * 升级阶梯预览（配置弹框 escalation 选择器旁）：复用 autobanNextBanDuration
+ * 的逐次推算（offense_count=n-1、无衰减），渲染第 1/2/3 次封禁时长。
+ * 与后端档位映射同口径（跨栈钉测对表）；permanent 配置时长下各档恒永久。
+ */
+export const autobanEscalationLadder = (
+  cfg: { duration: string; escalation?: string },
+): string[] => {
+  const now = Date.now()
+  return [1, 2, 3].map((offense) =>
+    autobanNextBanDuration(cfg, { offense_count: offense - 1, last_ban_at: '' }, now, null),
+  )
+}
+
+/**
  * 累犯身份展示形态：IPv6 /64 网络地址（后端身份键 = /64 归一后的网络地址，
  * 低 64 位恒零）展示为 CIDR，与封禁条目形态同口径；IPv4/不可解析串原样。
  * 不做二次掩码（身份已是网络地址）——与后端 autobanBanValue 同判据。

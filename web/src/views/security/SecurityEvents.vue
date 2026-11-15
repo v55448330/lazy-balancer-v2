@@ -79,6 +79,7 @@
            IP 名单通道：名单为空或未被启用中的 deny 策略引用） -->
       <div v-if="autobanIneffective" class="info-note-bar autoban-warn-bar">
         <span class="info-note-desc">{{ t('app.security.events.ineffectiveNotice') }}</span>
+        <el-button v-if="autobanWritable" size="small" type="primary" plain :loading="autobanFixing" @click="fixAutobanIneffective">{{ t('app.security.events.fixAction') }}</el-button>
       </div>
       <!-- 喂入源降级：补采/轮转停摆或写侧持续失败时披露原因。实时 IPC 入库仍在
            运行并继续喂入计数器——兜底文案不得声称「计数不会增长」 -->
@@ -89,6 +90,7 @@
       <template v-if="autobanStatus.enabled && autobanStatus.dry_run && (autobanStatus.suggestions?.length ?? 0) > 0">
         <div class="info-note-bar autoban-warn-bar">
           <span class="info-note-desc">{{ t('app.security.events.suggestionSummary', { minutes: autobanStatus.window_minutes, times: autobanStatus.threshold }) }}</span>
+          <el-button v-if="autobanWritable" size="small" type="warning" plain :loading="autobanEnforcing" @click="startAutobanEnforcement">{{ t('app.security.events.enforceAction') }}</el-button>
         </div>
         <el-table :data="autobanStatus.suggestions" size="small" max-height="320" :header-cell-style="{ background: '#f9fafb' }">
           <el-table-column :label="t('app.security.overview.autoban.colIdentity')" min-width="230">
@@ -98,6 +100,13 @@
           </el-table-column>
           <el-table-column :label="t('app.security.events.colHitCount')" width="110" align="center" sortable :sort-by="'count'" :sort-orders="['descending']">
             <template #default="{ row }"><span :style="suggestionCountStyle(row.count)">{{ row.count }}</span></template>
+          </el-table-column>
+          <!-- evidence 双分数列（classic 不渲染）：确证/嫌疑拆分。 -->
+          <el-table-column v-if="autobanIsEvidence" :label="t('app.security.events.colEvidenceSplit')" width="130" align="center">
+            <template #default="{ row }">
+              <span class="autoban-score-confirmed">{{ t('app.security.events.scoreConfirmed', { n: row.confirmed_count ?? row.count }) }}</span>
+              <span class="autoban-score-suspicion">{{ t('app.security.events.scoreSuspicion', { n: row.suspicion_count ?? 0 }) }}</span>
+            </template>
           </el-table-column>
           <el-table-column :label="t('app.security.events.colThresholdRatio')" min-width="150" align="center">
             <template #default="{ row }">
@@ -117,9 +126,47 @@
               </el-tooltip>
             </template>
           </el-table-column>
+          <!-- 观察闭环：候选行封禁（复用 useIpListAdd 处置链）。 -->
+          <el-table-column v-if="autobanWritable" :label="t('app.security.events.colAction')" width="90" align="center">
+            <template #default="{ row }">
+              <el-button size="small" type="danger" plain @click="banSuggestion(row as AutobanSuggestion)">{{ t('app.security.events.banVerb') }}</el-button>
+            </template>
+          </el-table-column>
         </el-table>
         <div class="form-tip-inline" v-if="(autobanStatus.suggestions?.length ?? 0) >= 50">{{ t('app.security.events.suggestionsLimit') }}</div>
       </template>
+      <!-- 卡片中枢：当前封禁折叠列表（默认收起，展开随 status 刷新）。 -->
+      <el-collapse v-if="autobanStatus.enabled && autobanStatus.list_id" v-model="autobanBansOpen" class="autoban-bans">
+        <el-collapse-item name="bans">
+          <template #title>
+            <span class="autoban-bans-title">{{ t('app.security.events.currentBans', { n: autobanStatus.list_entries }) }}</span>
+          </template>
+          <div v-loading="autobanBansLoading">
+            <el-table v-if="autobanBansShown.length > 0" :data="autobanBansShown" size="small" max-height="280" :header-cell-style="{ background: '#f9fafb' }">
+              <el-table-column :label="t('app.security.overview.autoban.colIdentity')" min-width="200">
+                <template #default="{ row }"><IPLocationAction :ip="row.value" :location="''" /></template>
+              </el-table-column>
+              <el-table-column :label="t('app.security.events.banRemaining')" width="150" align="center">
+                <template #default="{ row }">
+                  <el-tag v-if="!row.expires_at" size="small" effect="plain" type="info">{{ t('app.security.events.banPermanent') }}</el-tag>
+                  <el-tag v-else-if="autobanEntryExpired(row.expires_at)" size="small" effect="plain" type="info">{{ t('app.security.events.banExpired') }}</el-tag>
+                  <span v-else class="text-secondary">{{ autobanEntryRemaining(row.expires_at) }}</span>
+                </template>
+              </el-table-column>
+              <el-table-column v-if="autobanWritable" :label="t('app.security.events.colAction')" width="90" align="center">
+                <template #default="{ row }">
+                  <el-button size="small" type="primary" plain :disabled="autobanUnbanning" @click="unbanAutobanEntry(row as AutobanBanEntry)">{{ t('app.security.events.banRemoveVerb') }}</el-button>
+                </template>
+              </el-table-column>
+            </el-table>
+            <div v-else class="form-tip-inline">{{ t('app.security.events.bansEmpty') }}</div>
+            <div v-if="autobanBansTruncated" class="form-tip-inline">
+              {{ t('app.security.events.bansTruncated') }}
+              <el-button link type="primary" size="small" @click="goToAutobanList">{{ t('app.security.events.bansGoToList') }}</el-button>
+            </div>
+          </div>
+        </el-collapse-item>
+      </el-collapse>
     </el-card>
 
     <el-card>
@@ -321,43 +368,86 @@
       </template>
       <div class="autoban-section-title">{{ t('app.security.events.sectionBanTitle') }}</div>
       <div class="autoban-section-desc">{{ t('app.security.events.sectionBanDesc') }}</div>
+      <!-- 预设档位卡片（常显）：三档人话预设，选中整组回填；改参数落自定义。 -->
+      <div class="autoban-preset-row">
+        <button v-for="id in AUTOBAN_PRESET_IDS" :key="id" type="button" class="autoban-preset-card" :class="{ active: autobanActivePreset === id }" :disabled="autobanSaving" @click="applyAutobanPreset(id)">
+          <span class="autoban-preset-name">{{ t('app.security.events.preset.' + id + '.name') }}</span>
+          <span class="autoban-preset-desc">{{ t('app.security.events.preset.' + id + '.desc') }}</span>
+        </button>
+        <span v-if="autobanActivePreset === null" class="autoban-preset-custom">{{ t('app.security.events.presetCustom') }}</span>
+      </div>
       <el-form :model="autobanForm" :label-width="$flw('96px')" label-position="right" :disabled="autobanSaving">
         <el-form-item :label="t('app.security.events.dryRunLabel')">
           <el-switch v-model="autobanForm.dry_run" />
           <div class="form-tip-line">{{ t('app.security.events.dryRunHint') }}</div>
         </el-form-item>
-        <el-form-item :label="t('app.security.events.scopeLabel')">
-          <el-checkbox-group v-model="autobanForm.scope">
-            <el-checkbox v-for="s in AUTOBAN_SCOPES" :key="s" :value="s">{{ autobanScopeLabel(s) }}</el-checkbox>
-          </el-checkbox-group>
-          <div class="form-tip-line">{{ t('app.security.events.scopeHint') }}</div>
-        </el-form-item>
-        <el-form-item :label="t('app.security.events.windowLabel')">
-          <el-input-number v-model="autobanForm.window_minutes" :min="1" :max="60" :step="5" controls-position="right" style="width: 140px" />
-          <div class="form-tip-line">{{ t('app.security.events.windowHint') }}</div>
-        </el-form-item>
-        <el-form-item :label="t('app.security.events.thresholdLabel')">
-          <el-input-number v-model="autobanForm.threshold" :min="1" :max="10000" :step="10" controls-position="right" style="width: 140px" />
-          <div class="form-tip-line">{{ t('app.security.events.thresholdHint') }}</div>
-        </el-form-item>
-        <!-- 累犯升级开启时时长配置项语义收窄为「首封时长」：标签随档位切换。
-             阶梯口径在累犯升级项的 hint 披露，时长项不再挂角标图标。 -->
-        <el-form-item>
-          <template #label><span>{{ t(autobanFormEscalationOn ? 'app.security.events.firstBanDuration' : 'app.security.events.durationLabel') }}</span></template>
-          <el-select v-model="autobanForm.duration" style="width: 160px">
-            <el-option v-for="d in AUTOBAN_DURATIONS" :key="d" :label="autobanDurationLabel(d)" :value="d" />
-          </el-select>
-          <div class="form-tip-line">{{ t('app.security.events.durationHint') }}</div>
-        </el-form-item>
-        <!-- 方案 A：配置时长=永久时首封即顶格，累犯升级无意义——选择禁用并
-             提示；切到永久时 escalation 自动归 off（watch 单源），后端消费侧
-             对带外 permanent+非 off 同样按 off 兜底 -->
-        <el-form-item :label="t('app.security.events.escalationLabel')">
-          <el-select v-model="autobanForm.escalation" style="width: 280px" :disabled="autobanFormPermanentDuration">
-            <el-option v-for="e in AUTOBAN_ESCALATIONS" :key="e" :label="autobanEscalationLabel(e)" :value="e" />
-          </el-select>
-          <div class="form-tip-line">{{ t(autobanFormPermanentDuration ? 'app.security.events.escalationPermanentDisabledHint' : 'app.security.events.escalationHint') }}</div>
-        </el-form-item>
+        <!-- 高级参数折叠：口径/窗口/阈值/时长/升级/计数模式。 -->
+        <el-collapse v-model="autobanAdvancedOpen" class="autoban-advanced">
+          <el-collapse-item :title="t('app.security.events.advancedTitle')" name="advanced">
+            <el-form-item :label="t('app.security.events.scopeLabel')">
+              <div class="autoban-scope-group">
+                <span class="autoban-scope-group-label">{{ t('app.security.events.scopeGroupConfirmed') }}</span>
+                <el-checkbox-group v-model="autobanForm.scope">
+                  <el-checkbox value="blocked">{{ autobanScopeLabel('blocked') }}</el-checkbox>
+                  <el-checkbox value="challenge_failed">{{ autobanScopeLabel('challenge_failed') }}</el-checkbox>
+                </el-checkbox-group>
+              </div>
+              <div class="autoban-scope-group">
+                <span class="autoban-scope-group-label">{{ t('app.security.events.scopeGroupSuspicion') }}</span>
+                <el-checkbox-group v-model="autobanForm.scope">
+                  <el-checkbox value="logged">{{ autobanScopeLabel('logged') }}</el-checkbox>
+                  <el-checkbox value="challenge_issued">{{ autobanScopeLabel('challenge_issued') }}</el-checkbox>
+                </el-checkbox-group>
+              </div>
+              <div class="form-tip-line">{{ t('app.security.events.scopeHint') }}</div>
+            </el-form-item>
+            <el-form-item :label="t('app.security.events.windowLabel')">
+              <el-input-number v-model="autobanForm.window_minutes" :min="1" :max="60" :step="5" controls-position="right" style="width: 140px" />
+              <div class="form-tip-line">{{ t('app.security.events.windowHint') }}</div>
+            </el-form-item>
+            <el-form-item :label="t('app.security.events.thresholdLabel')">
+              <el-input-number v-model="autobanForm.threshold" :min="1" :max="10000" :step="10" controls-position="right" style="width: 140px" />
+              <div class="form-tip-line">{{ t('app.security.events.thresholdHint') }}</div>
+            </el-form-item>
+            <el-form-item>
+              <template #label><span>{{ t(autobanFormEscalationOn ? 'app.security.events.firstBanDuration' : 'app.security.events.durationLabel') }}</span></template>
+              <el-select v-model="autobanForm.duration" style="width: 160px">
+                <el-option v-for="d in AUTOBAN_DURATIONS" :key="d" :label="autobanDurationLabel(d)" :value="d" />
+              </el-select>
+              <div class="form-tip-line">{{ t('app.security.events.durationHint') }}</div>
+            </el-form-item>
+            <el-form-item :label="t('app.security.events.escalationLabel')">
+              <el-select v-model="autobanForm.escalation" style="width: 280px" :disabled="autobanFormPermanentDuration">
+                <el-option v-for="e in AUTOBAN_ESCALATIONS" :key="e" :label="autobanEscalationLabel(e)" :value="e" />
+              </el-select>
+              <!-- 升级阶梯预览：第 1/2/3 次封禁时长（跨栈口径单源）。 -->
+              <div class="autoban-ladder">
+                <span v-for="(d, i) in autobanLadderPreview" :key="i" class="autoban-ladder-step">{{ t('app.security.events.ladderOffense', { n: i + 1 }) }} {{ autobanDurationLabel(d) }}</span>
+              </div>
+              <div class="form-tip-line">{{ t(autobanFormPermanentDuration ? 'app.security.events.escalationPermanentDisabledHint' : 'app.security.events.escalationHint') }}</div>
+            </el-form-item>
+            <!-- 计数模式：classic 等权 / evidence 证据分层（纯嫌疑永不封）。 -->
+            <el-form-item :label="t('app.security.events.countingModeLabel')">
+              <el-select v-model="autobanForm.counting_mode" style="width: 280px">
+                <el-option value="classic" :label="t('app.security.events.countingClassic')" />
+                <el-option value="evidence" :label="t('app.security.events.countingEvidence')" />
+              </el-select>
+              <div class="form-tip-line">{{ t('app.security.events.countingModeHint') }}</div>
+            </el-form-item>
+            <template v-if="autobanForm.counting_mode === 'evidence'">
+              <el-form-item :label="t('app.security.events.suspicionMultiplierLabel')">
+                <el-input-number v-model="autobanForm.suspicion_multiplier" :min="AUTOBAN_SUSPICION_MULTIPLIER_MIN" :max="AUTOBAN_SUSPICION_MULTIPLIER_MAX" :step="1" controls-position="right" style="width: 140px" />
+                <div class="form-tip-line">{{ t('app.security.events.suspicionMultiplierHint') }}</div>
+              </el-form-item>
+              <el-form-item :label="t('app.security.events.confirmFloorLabel')">
+                <el-select v-model="autobanForm.confirm_floor_ratio" style="width: 160px">
+                  <el-option v-for="f in AUTOBAN_CONFIRM_FLOOR_RATIOS" :key="f" :label="f" :value="f" />
+                </el-select>
+                <div class="form-tip-line">{{ t('app.security.events.confirmFloorHint') }}</div>
+              </el-form-item>
+            </template>
+          </el-collapse-item>
+        </el-collapse>
       </el-form>
       <div class="info-note-bar"><span class="info-note-desc">{{ t('app.security.events.counterResetNotice') }}</span></div>
       <template #footer>
@@ -487,7 +577,12 @@ import { formatDurationUs, isWafDurationFamily, triggerStageFamily } from '@/uti
 import { TRIGGERED_CATEGORIES, serializeTriggeredFilter, CRAWLER_FAMILY_LABEL } from '@/utils/triggeredFilter'
 import { ANOMALY_SCORE_HIGH, ANOMALY_SCORE_MID } from '@/utils/severityScale'
 import { DEEP_LINK_PARAMS, pageUrl } from '@/utils/deepLink'
-import { autobanStateLabel, autobanStatValue, isAutobanIneffective, autobanSuggestedDurationKey, autobanDurationLabel, autobanEscalationShortKey, suggestionBand, type SuggestionBand } from '@/utils/autobanStatus'
+import { autobanStateLabel, autobanStatValue, isAutobanIneffective, autobanSuggestedDurationKey, autobanDurationLabel, autobanEscalationShortKey, autobanEscalationLadder, suggestionBand, type SuggestionBand } from '@/utils/autobanStatus'
+import { AUTOBAN_PRESETS, AUTOBAN_PRESET_IDS, AUTOBAN_SUSPICION_MULTIPLIER_MIN, AUTOBAN_SUSPICION_MULTIPLIER_MAX, AUTOBAN_CONFIRM_FLOOR_RATIOS, matchAutobanPreset, type AutobanPresetId } from '@/utils/autobanPresets'
+import { autobanEntryExpired, autobanEntryRemaining } from '@/utils/autobanEntry'
+import { useIpListAdd } from '@/composables/useIpListAdd'
+import { parseRefIds, invalidateSharedEntriesCache } from '@/utils/securityStages'
+import { showSaveResult } from '@/utils/saveResult'
 import { requestBodyEmptyNotice, viewerCanReadRequestBody } from '@/utils/requestBodyAccess'
 import { activateOnce } from '@/utils/keyboardActivate'
 import IPLocationAction from '@/views/security/IPLocationAction.vue'
@@ -503,7 +598,7 @@ interface SecurityEvent { id: number; event_time: string; rule_caddy_id: string;
 
 // 自动封禁：状态卡/配置弹框 ——
 
-interface AutobanSuggestion { ip: string; count: number; ip_location?: string; window_start?: string; last_seen?: string }
+interface AutobanSuggestion { ip: string; count: number; ip_location?: string; window_start?: string; last_seen?: string; confirmed_count?: number; suspicion_count?: number }
 interface AutobanStatus {
   enabled: boolean; dry_run: boolean; threshold: number; window_minutes: number
   duration: string; scope: string; banned_today: number; list_entries: number
@@ -513,6 +608,10 @@ interface AutobanStatus {
   ban_effective: boolean
   // 累犯披露键（旧后端缺省 → 档位按 off、升级数按 0，防御式消费）。
   escalation?: string; escalated_count?: number
+  // 证据分层计数键（旧后端缺省 → classic/4/0.4，防御式消费）。
+  counting_mode?: string; suspicion_multiplier?: number; confirm_floor_ratio?: string
+  // 自动封禁预置名单 id（卡片当前封禁列表数据源；旧后端缺省 → 不渲染列表）。
+  list_id?: number
   // 喂入源（安全事件补采/日志轮转）健康：补采停摆或写侧持续失败时计数可能
   // 偏少，状态卡据此就近提示降级原因并说明实时 IPC 入库仍在运行（不自动
   // 拉起用户显式停止的采集任务）。
@@ -523,11 +622,12 @@ interface AutobanStatus {
   // 本卡零消费，不再声明。
   is_master: boolean
 }
-// 配置弹框回填/保存用的七项配置形态（GET/PUT /security/autoban 契约）。
+// 配置弹框回填/保存用的配置形态（GET/PUT /security/autoban 契约）。
 interface AutobanConfig {
   enabled: boolean; dry_run: boolean; threshold: number; window_minutes: number
   duration: string; scope: string
   escalation: string
+  counting_mode?: string; suspicion_multiplier?: number; confirm_floor_ratio?: string
 }
 const AUTOBAN_DURATIONS = ['10m', '30m', '1h', '6h', '12h', '24h', 'permanent']
 const AUTOBAN_SCOPES = ['blocked', 'logged', 'challenge_issued', 'challenge_failed']
@@ -656,10 +756,20 @@ const fetchAutobanStatus = async (): Promise<void> => {
 // 配置弹框（七项配置 + 口径/窗口变更重置提示）
 const autobanDialogVisible = ref(false)
 const autobanSaving = ref(false)
-const autobanForm = ref({ dry_run: true, threshold: 100, window_minutes: 5, duration: '1h', scope: [...AUTOBAN_SCOPE_DEFAULT] as string[], escalation: 'off' })
+const autobanForm = ref({ dry_run: true, threshold: 100, window_minutes: 5, duration: '1h', scope: [...AUTOBAN_SCOPE_DEFAULT] as string[], escalation: 'off', counting_mode: 'classic', suspicion_multiplier: 4, confirm_floor_ratio: '0.4' })
 watch(() => autobanForm.value.duration, (duration) => {
   if (duration === 'permanent' && autobanForm.value.escalation !== 'off') autobanForm.value.escalation = 'off'
 })
+// 高级折叠态（预设档位卡片常显，详细参数收进折叠）。
+const autobanAdvancedOpen = ref<string[]>([])
+// 当前表单匹配的预设档位（null=自定义）；选预设=整组回填，改参数自动落自定义。
+const autobanActivePreset = computed<AutobanPresetId | null>(() => matchAutobanPreset(autobanForm.value))
+const applyAutobanPreset = (id: AutobanPresetId): void => {
+  const p = AUTOBAN_PRESETS[id]
+  autobanForm.value = { ...autobanForm.value, threshold: p.threshold, window_minutes: p.window_minutes, duration: p.duration, scope: [...p.scope], escalation: p.escalation, counting_mode: p.counting_mode, suspicion_multiplier: p.suspicion_multiplier, confirm_floor_ratio: p.confirm_floor_ratio }
+}
+// 升级阶梯预览（第 1/2/3 次封禁时长，复用 autobanNextBanDuration 跨栈口径）。
+const autobanLadderPreview = computed(() => autobanEscalationLadder({ duration: autobanForm.value.duration, escalation: autobanForm.value.escalation }))
 // 七项配置实态缓存（GET /security/autoban）：/status 不携带全部配置项时
 // 弹框回填与禁用直切的兜底源；null=未成功拉取（回填退 /status 已知键）。
 const autobanConfigCache = ref<AutobanConfig | null>(null)
@@ -680,6 +790,9 @@ const openAutobanConfig = (): void => {
     threshold: autobanStatus.value.threshold, window_minutes: autobanStatus.value.window_minutes,
     duration: autobanStatus.value.duration, scope: parseAutobanScope(autobanStatus.value.scope),
     escalation: autobanStatus.value.escalation ?? cfg?.escalation ?? 'off',
+    counting_mode: autobanStatus.value.counting_mode ?? cfg?.counting_mode ?? 'classic',
+    suspicion_multiplier: autobanStatus.value.suspicion_multiplier ?? cfg?.suspicion_multiplier ?? 4,
+    confirm_floor_ratio: autobanStatus.value.confirm_floor_ratio ?? cfg?.confirm_floor_ratio ?? '0.4',
   }
   autobanDialogVisible.value = true
 }
@@ -780,12 +893,122 @@ const toggleAutobanEnabled = async (): Promise<void> => {
       scope: autobanStatus.value.scope,
       // escalation 从 /status 实态回填（旧后端缺键退配置缓存/缺省，与弹框回填同口径）
       escalation: autobanStatus.value.escalation ?? autobanConfigCache.value?.escalation ?? 'off',
+      counting_mode: autobanStatus.value.counting_mode ?? autobanConfigCache.value?.counting_mode ?? 'classic',
+      suspicion_multiplier: autobanStatus.value.suspicion_multiplier ?? autobanConfigCache.value?.suspicion_multiplier ?? 4,
+      confirm_floor_ratio: autobanStatus.value.confirm_floor_ratio ?? autobanConfigCache.value?.confirm_floor_ratio ?? '0.4',
     })
     mfaAwareSuccess(t('app.security.events.disabledNotice'))
     fetchAutobanStatus()
   } catch { /* 取消无需处理；请求错误已由全局拦截器 toast */ }
   finally { autobanToggling.value = false }
 }
+
+// —— 卡片中枢：当前封禁折叠列表（复用名单 API，list_id 由 status 投影）——
+interface AutobanBanEntry { value: string; remark: string; created_at?: string; expires_at?: string }
+const autobanBansOpen = ref<string[]>([])
+const autobanBans = ref<AutobanBanEntry[]>([])
+const autobanBansLoading = ref(false)
+const autobanBansTruncated = computed(() => autobanBans.value.length > 20)
+const autobanBansShown = computed(() => autobanBans.value.slice(0, 20))
+const fetchAutobanBans = async (): Promise<void> => {
+  const listId = autobanStatus.value.list_id
+  if (!listId) return
+  autobanBansLoading.value = true
+  try {
+    const res = await request.get<APIResponse<{ entries?: AutobanBanEntry[] }>>(`/security/ip-lists/${listId}`, { silent: true })
+    autobanBans.value = res.data?.entries ?? []
+  } catch { /* 静默：折叠列表非关键面 */ }
+  finally { autobanBansLoading.value = false }
+}
+watch(autobanBansOpen, (open) => { if (open.includes('bans')) void fetchAutobanBans() })
+// 展开时随 status 轮询刷新（status 每 15s 拉取，此处跟随）。
+watch(() => autobanStatus.value.list_entries, () => { if (autobanBansOpen.value.includes('bans')) void fetchAutobanBans() })
+const autobanUnbanning = ref(false)
+const unbanAutobanEntry = async (entry: AutobanBanEntry): Promise<void> => {
+  const listId = autobanStatus.value.list_id
+  if (!listId || autobanUnbanning.value || !autobanWritable.value) return
+  autobanUnbanning.value = true
+  try {
+    await ElMessageBox.confirm(
+      t('app.security.events.banRemoveConfirm', { ip: entry.value }),
+      t('app.security.events.banRemoveTitle'),
+      { confirmButtonText: t('app.security.events.banRemoveOk'), cancelButtonText: t('app.security.events.cancel'), type: 'warning' },
+    )
+    const res = await request.post(`/security/ip-lists/${listId}/remove-ip`, { value: entry.value })
+    showSaveResult(res as unknown as { message?: string }, t('app.security.events.banRemovedToast', { ip: entry.value }))
+    invalidateSharedEntriesCache()
+    await Promise.all([fetchAutobanBans(), fetchAutobanStatus()])
+  } catch { /* 取消/失败由确认框/全局拦截器处理 */ }
+  finally { autobanUnbanning.value = false }
+}
+const goToAutobanList = (): void => { window.open(pageUrl('security-rules'), '_blank', 'noopener') }
+
+// —— 未生效一键修复：把 autoban 名单绑到启用中的 deny 策略（复用补引用链）——
+const autobanFixing = ref(false)
+const fixAutobanIneffective = async (): Promise<void> => {
+  const listId = autobanStatus.value.list_id
+  if (!listId || autobanFixing.value || !autobanWritable.value) return
+  autobanFixing.value = true
+  try {
+    const res = await request.get<APIResponse<Array<{ id: number; name: string; enabled: boolean; ip_acl_enabled: boolean; ip_acl_mode: string; ip_acl_list_refs?: string }>>>('/security/policies?enabled=true', { silent: true })
+    const candidates = (res.data ?? []).filter((p) => p.enabled && p.ip_acl_enabled && p.ip_acl_mode === 'deny')
+    if (candidates.length === 0) {
+      // 无可用 deny 策略：深链引导创建。
+      window.open(pageUrl('security-policies'), '_blank', 'noopener')
+      ElMessage.info(t('app.security.events.fixNoPolicy'))
+      return
+    }
+    const target = candidates[0]
+    await ElMessageBox.confirm(
+      t('app.security.events.fixConfirm', { policy: target.name }),
+      t('app.security.events.fixTitle'),
+      { confirmButtonText: t('app.security.events.fixOk'), cancelButtonText: t('app.security.events.cancel'), type: 'info' },
+    )
+    // 确认后重读最新 refs（防并发覆盖，与 useTrustAssociation 同口径）。
+    const latest = await request.get<APIResponse<{ policy?: { ip_acl_list_refs?: string } }>>(`/security/policies/${target.id}`, { silent: true })
+    const refs = parseRefIds(latest.data?.policy?.ip_acl_list_refs)
+    if (refs.includes(listId)) { ElMessage.info(t('app.security.events.fixAlready')); await fetchAutobanStatus(); return }
+    await request.put(`/security/policies/${target.id}`, { ip_acl_list_refs: JSON.stringify([...refs, listId]) })
+    mfaAwareSuccess(t('app.security.events.fixDone'))
+    await fetchAutobanStatus()
+  } catch { /* 取消/失败由确认框/全局拦截器处理 */ }
+  finally { autobanFixing.value = false }
+}
+
+// —— 观察闭环：候选行封禁（复用 useIpListAdd）+ 开始执法（PUT dry_run=false）——
+const { addIpToList } = useIpListAdd()
+const banSuggestion = async (row: AutobanSuggestion): Promise<void> => {
+  const listId = autobanStatus.value.list_id
+  if (!listId || !autobanWritable.value) return
+  const ok = await addIpToList(row.ip, { id: listId, name: t('app.security.events.autobanListName'), entry_count: autobanStatus.value.list_entries }, { verb: t('app.security.events.banVerb') })
+  if (ok) await fetchAutobanStatus()
+}
+const autobanEnforcing = ref(false)
+const startAutobanEnforcement = async (): Promise<void> => {
+  if (autobanEnforcing.value || !autobanWritable.value) return
+  autobanEnforcing.value = true
+  try {
+    await ElMessageBox.confirm(
+      t('app.security.events.enforceConfirm'),
+      t('app.security.events.enforceTitle'),
+      { confirmButtonText: t('app.security.events.enforceOk'), cancelButtonText: t('app.security.events.cancel'), type: 'warning' },
+    )
+    await request.put('/security/autoban', {
+      enabled: true, dry_run: false,
+      threshold: autobanStatus.value.threshold, window_minutes: autobanStatus.value.window_minutes,
+      duration: autobanStatus.value.duration, scope: autobanStatus.value.scope,
+      escalation: autobanStatus.value.escalation ?? autobanConfigCache.value?.escalation ?? 'off',
+      counting_mode: autobanStatus.value.counting_mode ?? autobanConfigCache.value?.counting_mode ?? 'classic',
+      suspicion_multiplier: autobanStatus.value.suspicion_multiplier ?? autobanConfigCache.value?.suspicion_multiplier ?? 4,
+      confirm_floor_ratio: autobanStatus.value.confirm_floor_ratio ?? autobanConfigCache.value?.confirm_floor_ratio ?? '0.4',
+    })
+    mfaAwareSuccess(t('app.security.events.enforceDone'))
+    await fetchAutobanStatus()
+  } catch { /* 取消/失败由确认框/全局拦截器处理 */ }
+  finally { autobanEnforcing.value = false }
+}
+// evidence 双分数展示判据（classic 不渲染分段）。
+const autobanIsEvidence = computed(() => (autobanStatus.value.counting_mode ?? 'classic') === 'evidence')
 
 // 触发阶段分类（追加需求，用户裁定）：IP ACL 族=黑白名单/信任/地域/
 // 威胁库预检，统一展示「IP 访问控制」；WAF 含 CRS 与自定义两源；请求体异常独立。
@@ -1143,6 +1366,30 @@ const refreshPage = (): void => {
 /* 累犯记录入口与禁用/编辑按钮同组同规格（small plain），间距由组 gap 统一 */
 .autoban-actions { flex-shrink: 0; display: flex; gap: 8px; }
 .autoban-warn-bar { margin-top: 10px; }
+
+/* 预设档位卡片行：三档横排，选中描边高亮；自定义态徽标。 */
+.autoban-preset-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: stretch; margin-bottom: 12px; }
+.autoban-preset-card { flex: 1 1 140px; min-width: 140px; display: flex; flex-direction: column; gap: 4px; align-items: flex-start; text-align: left; padding: 10px 12px; border: 1px solid var(--el-border-color, #dcdfe6); border-radius: 8px; background: var(--el-fill-color-blank, #fff); cursor: pointer; transition: border-color .15s, background .15s; }
+.autoban-preset-card:hover { border-color: var(--el-color-primary, #409eff); }
+.autoban-preset-card.active { border-color: var(--el-color-primary, #409eff); background: var(--el-color-primary-light-9, #ecf5ff); }
+.autoban-preset-card:disabled { cursor: default; opacity: .6; }
+.autoban-preset-name { font-size: 13px; font-weight: 600; color: var(--text-primary, #111827); }
+.autoban-preset-desc { font-size: 11px; color: var(--text-secondary, #6b7280); line-height: 1.4; }
+.autoban-preset-custom { align-self: center; font-size: 12px; color: var(--el-color-warning, #e6a23c); font-weight: 600; }
+/* 高级参数折叠：去掉默认边框感，与表单融为一体。 */
+.autoban-advanced { border-top: none; border-bottom: none; margin-top: 4px; }
+.autoban-advanced :deep(.el-collapse-item__header) { font-size: 13px; font-weight: 600; color: var(--text-secondary, #6b7280); }
+/* 口径分组：确证组/嫌疑组各一行小标题。 */
+.autoban-scope-group { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 4px; }
+.autoban-scope-group-label { font-size: 12px; color: var(--text-secondary, #6b7280); min-width: 72px; }
+/* 升级阶梯预览：第 1/2/3 次时长横排小徽标。 */
+.autoban-ladder { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 6px; }
+.autoban-ladder-step { font-size: 11px; color: var(--text-secondary, #6b7280); background: var(--el-fill-color-light, #f5f7fa); border-radius: 4px; padding: 2px 8px; }
+/* 当前封禁折叠列表 + evidence 双分数。 */
+.autoban-bans { margin-top: 10px; border-top: none; border-bottom: none; }
+.autoban-bans-title { font-size: 13px; font-weight: 600; color: var(--text-secondary, #6b7280); }
+.autoban-score-confirmed { display: block; font-size: 11px; color: #f56c6c; font-weight: 600; }
+.autoban-score-suspicion { display: block; font-size: 11px; color: #e6a23c; }
 
 /* 工具行单行排布（1280px 视口全控件 + 筛选/重置一行放下）：nowrap 禁止换行，
    各控件定宽不收缩，极端窄视口降级为横向滚动而非把按钮顶到第二行 */
