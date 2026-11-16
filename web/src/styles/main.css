@@ -288,6 +288,22 @@ body {
   border-radius: 0;
 }
 
+/* 全站数字输入框统一尺寸与左对齐（用户裁定：默认尺寸偏大、内容右对齐不一致）：
+ * 高度 32→28px、字号 13px、内容左对齐；右侧步进列 28px 紧凑。显式 size=large
+ * 不在此列（保留大尺寸语义）；small 同口径。 */
+.el-input-number.el-input-number:not(.el-input-number--large) .el-input__wrapper { height: 28px; }
+.el-input-number.el-input-number:not(.el-input-number--large) .el-input__inner {
+  text-align: left;
+  font-size: 13px;
+  height: 26px;
+  line-height: 26px;
+}
+.el-input-number.el-input-number:not(.el-input-number--large) .el-input-number__increase,
+.el-input-number.el-input-number:not(.el-input-number--large) .el-input-number__decrease {
+  width: 28px;
+  font-size: 12px;
+}
+
 /* 自定义控件与开关：Element 变量覆盖不到的业务 chip/触发器单源收敛。 */
 body .el-switch .el-switch__core,
 body .el-switch__core,

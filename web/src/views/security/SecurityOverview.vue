@@ -1047,12 +1047,12 @@ onMounted(() => { void reloadAll() })
 .autoban-alert + .autoban-alert { margin-bottom: 8px; }
 /* 四统计卡恒一行（桌面）：grid 4 列；配置摘要独占次行 */
 .autoban-stats { flex: 1 1 auto; min-width: 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; align-items: stretch; align-content: flex-start; }
-.autoban-stat { display: flex; flex-direction: column; gap: 4px; padding: 10px 16px; border-radius: 0; background: #f7f9fc; min-width: 0; }
+.autoban-stat { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; padding: 10px 16px; border-radius: 0; background: #f7f9fc; min-width: 0; }
 .autoban-stat-label { font-size: 12px; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .autoban-stat-value { font-size: 24px; font-weight: 700; line-height: 1.1; font-variant-numeric: tabular-nums; color: #303133; }
 .autoban-stat-value.is-ban { color: #f56c6c; }
 /* 累犯升级下钻入口：link 按钮承载统计数值（去按钮内边距，观感同普通数值） */
-.autoban-stat-link { height: auto; padding: 0; }
+.autoban-stat-link { height: auto; padding: 0; border: none; justify-content: flex-start; }
 .autoban-stat-link .autoban-stat-value { color: inherit; }
 .autoban-stat-link:not(:disabled) .autoban-stat-value { color: var(--el-color-primary); }
 .autoban-stat-link:not(:disabled):hover .autoban-stat-value { text-decoration: underline; }
