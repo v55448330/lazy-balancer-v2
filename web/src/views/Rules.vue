@@ -1361,6 +1361,8 @@
 import { ref, reactive, onMounted, onUnmounted, computed, watch, h } from 'vue'
 import { useAuthStore } from '@/stores/auth'
 import { request, mfaAwareSuccess, ApiRequestError } from '@/utils/api'
+import { showSaveResult } from '@/utils/saveResult'
+import { isCaddyApplyDegraded } from '@/utils/bulkApplyResult'
 import { Plus, Operation, Delete, InfoFilled, Lock, Connection, Guide, Check, ArrowLeft, ArrowRight, Document, CircleCheckFilled, CircleCloseFilled, Setting, RefreshRight, Search, WarningFilled, Location, Link, Tickets } from '@element-plus/icons-vue'
 import DialogHeader from '@/components/DialogHeader.vue'
 import { generalizeUA } from '@/utils/uaGeneralize'
@@ -3682,8 +3684,14 @@ const submitWizard = async () => {
           ElMessage.error(t('common.app.rules.msgs.copyPartialFail'))
         } else {
           try {
-            await request.put<APIResponse>(`/security/rules/${encodeURIComponent(newCaddyId)}/policies`, { policy_ids: sourcePolicyIds })
-            createMessage += t('common.app.rules.msgs.copyBoundSuffix', { n: sourcePolicyIds.length })
+            const bindRes = await request.put<APIResponse>(`/security/rules/${encodeURIComponent(newCaddyId)}/policies`, { policy_ids: sourcePolicyIds })
+            // 退化 200（Caddy 重载失败但 DB 已提交）必须即时披露常驻警告，
+            // 与同族端点（SecurityPolicies 绑定保存）同口径——不得当成功吞掉。
+            if (isCaddyApplyDegraded(bindRes)) {
+              showSaveResult(bindRes, '')
+            } else {
+              createMessage += t('common.app.rules.msgs.copyBoundSuffix', { n: sourcePolicyIds.length })
+            }
           } catch (bindError: unknown) {
             console.error('copy bindings failed', bindError)
             ElMessage.error(t('common.app.rules.msgs.copyPartialFail'))

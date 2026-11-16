@@ -149,11 +149,9 @@ func TestSecurityOverviewIncremental_deleteTriggersFullRebuild(t *testing.T) {
 		t.Fatalf("cold build: %v", err)
 	}
 
-	if _, err := metrics.Exec(`DELETE FROM security_events WHERE ip_is_not_real = 0 AND client_ip='10.1.0.1'`); err != nil {
-		// 兼容列名探测失败路径：直接按 id 删两行。
-		if _, err := metrics.Exec(`DELETE FROM security_events WHERE id IN (SELECT id FROM security_events LIMIT 2)`); err != nil {
-			t.Fatalf("delete rows: %v", err)
-		}
+	// 按 client_ip 定向删两行（基线该 IP 有 2 行）触发删除检测重建。
+	if _, err := metrics.Exec(`DELETE FROM security_events WHERE client_ip='10.1.0.1'`); err != nil {
+		t.Fatalf("delete rows: %v", err)
 	}
 
 	refreshed, err := refreshSecurityOverviewAggregates(metrics, key, overviewIncTestToday)
