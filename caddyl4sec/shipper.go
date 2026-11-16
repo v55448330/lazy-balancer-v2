@@ -194,6 +194,9 @@ type l4Spool struct {
 	// 上次预算核算时刻——节流窗口内复用上次结果，不逐批扫目录。
 	now               func() time.Time
 	budgetRefreshedAt time.Time
+	// sealLog 封存失败告警节流（首次立即，其后每分钟一条）：持续封存失败
+	// 时每行重试不得逐行刷 ERROR 日志洪泛（与 spoolLog/dropLog 同口径）。
+	sealLog l4Throttle
 }
 
 // l4SpoolLossError 携带一次失败 appendLines 丢弃的行数：滞留缓冲行 + 本批未
@@ -512,11 +515,15 @@ func (s *l4Spool) rotateLocked() error {
 		oldPath := s.activePath
 		newPath, serr := s.sealedPathLocked()
 		if serr != nil {
-			l4IOLogf("l4sec: security-events spool seal failed for %s (continuing on the same active): %v", s.activePath, serr)
+			if _, logNow := s.sealLog.report(time.Now()); logNow {
+				l4IOLogf("l4sec: security-events spool seal failed for %s (continuing on the same active): %v", s.activePath, serr)
+			}
 			return nil
 		}
 		if err := os.Rename(oldPath, newPath); err != nil {
-			l4IOLogf("l4sec: security-events spool seal failed for %s (continuing on the same active): %v", s.activePath, err)
+			if _, logNow := s.sealLog.report(time.Now()); logNow {
+				l4IOLogf("l4sec: security-events spool seal failed for %s (continuing on the same active): %v", s.activePath, err)
+			}
 			return nil
 		}
 		s.noteActiveRenameLocked(oldPath, newPath)
