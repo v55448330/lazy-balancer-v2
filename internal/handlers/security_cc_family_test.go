@@ -1,6 +1,6 @@
 package handlers
 
-// P2-03 修复钉测：CC 事件（human_* 挑战 / cc_rate_reject 拒绝）攻击族必须归
+// CC 事件攻击族归属钉测：CC 事件（human_* 挑战 / cc_rate_reject 拒绝）攻击族必须归
 // CC防护，不得落「其他」；CC 筛选 SQL 条件必须覆盖 cc_rate_reject。
 
 import (

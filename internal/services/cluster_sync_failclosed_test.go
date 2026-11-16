@@ -19,7 +19,7 @@ import (
 // 读失败时按「存在」返回（fail-closed）：调用方据此跳过清空/覆盖，宁可让
 // 标记消息暂不刷新，也不冒静默销毁补偿触发器的风险。
 // 测试专用 helper（消费方均同包测试）：原留驻 cluster_sync.go 未登记 testonly
-// 绊线，移入测试文件归位（audit145 svc-CLUSTER-P3-01）。
+// 绊线，移入测试文件归位（测试专用 helper 归位）。
 func (s *SyncService) syncMarkerPresent(ctx context.Context, prefix string) bool {
 	msg, known := s.readSyncMarkerMessage(ctx)
 	return !known || strings.HasPrefix(msg, prefix)

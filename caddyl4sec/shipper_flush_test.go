@@ -1,6 +1,6 @@
 package caddyl4sec
 
-// P2-04 修复钉测：L4 事件管线必须有生产收尾冲刷（FlushL4Pipeline），
+// L4 事件管线生产收尾冲刷钉测：FlushL4Pipeline 必须有生产收尾冲刷，
 // 进程退出/Cleanup 时环内+批内尾部行不得静默丢失（镜像 HTTP FlushAuditPipelines）。
 
 import (

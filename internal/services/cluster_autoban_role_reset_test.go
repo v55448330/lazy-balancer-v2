@@ -1,6 +1,6 @@
 package services
 
-// P2-02 修复钉测：角色翻转（Promote/BecomeSlave）必须清 autoban 内存计数器——
+// 角色翻转清 autoban 计数器钉测：角色翻转（Promote/BecomeSlave）必须清 autoban 内存计数器——
 // 主→从→主往返后旧主时代陈旧计数不得按新口径执法（错误封禁+累犯升档永久化）。
 
 import (
