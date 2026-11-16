@@ -766,6 +766,10 @@ func (s *ClusterService) applyRoleSideEffects() {
 		s.clearAllSectionReports()
 	}
 	ResetConfigDrift()
+	// 角色翻转清 autoban 内存计数器（双向）：旧角色时代陈旧计数不得按新口径
+	// 执法——主→从→主往返后残留 reached 桶升主首轮 merge 会全部封禁（数小时/
+	// 数天前数据），累犯升档可永久化扩散全集群。降级清防残留、升主清防旧口径。
+	ResetAutobanCounters()
 }
 
 // rebuildCrawlerSnapshotAfterPromote 升主后以本地 DB 重建爬虫运行快照——

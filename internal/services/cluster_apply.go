@@ -2339,7 +2339,17 @@ func updateSnapshotSettings(ctx context.Context, tx *sql.Tx, snapshot models.Clu
 		settingClauses = append(settingClauses, "autoban_confirm_floor_ratio=?")
 		settingArgs = append(settingArgs, *settings.AutobanConfirmFloorRatio)
 	}
-
+	// autoban 配置列经快照变更 ⇒ 清内存计数器（与 SetAutobanConfig 的
+	// autobanConfigReplaceEffects.resetCounters 同口径）：旧计数不可与新口径
+	// 混算。从端 apply 绕过 SetAutobanConfig，须在此补清桶不变量。
+	autobanChanged := settings.AutobanEnabled != nil || settings.AutobanThreshold != nil ||
+		settings.AutobanWindowMinutes != nil || settings.AutobanDuration != nil ||
+		settings.AutobanScope != nil || settings.AutobanDryRun != nil ||
+		settings.AutobanEscalation != nil || settings.AutobanCountingMode != nil ||
+		settings.AutobanSuspicionMultiplier != nil || settings.AutobanConfirmFloorRatio != nil
+	if autobanChanged {
+		ResetAutobanCounters()
+	}
 	if len(settingClauses) > 0 {
 		if _, err := tx.ExecContext(ctx, `UPDATE global_config SET `+strings.Join(settingClauses, ",")+` WHERE id=1`, settingArgs...); err != nil {
 			return fmt.Errorf("写入快照扩展设置: %w", err)
