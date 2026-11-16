@@ -83,12 +83,14 @@
           <div class="info-note-bar"><span class="info-note-desc">{{ t('common.app.views.trigDetail.crawlerVerifyNote') }}</span></div>
         </template>
 
-        <!-- 阶段 2 · CC 防护（人机挑战）：策略配置（只读）；本次结果由 hero 动作标签唯一展示 -->
+        <!-- 阶段 2 · CC 防护（人机挑战）：策略配置（只读）；本次结果由 hero 动作标签唯一展示。
+             触发后动作/等待秒数/4xx/会话行复用 buildStageModel 阶段 2 投影（与规则流程抽屉同口径）。 -->
         <template v-else-if="kind === 'human'">
           <div class="trg-kv"><span class="k">{{ t('common.app.views.trigDetail.ccMode') }}</span><span>{{ ccModeText }}</span></div>
           <div class="trg-kv"><span class="k">{{ t('common.app.views.trigDetail.ccType') }}</span><span>{{ ccTypeText }}</span></div>
           <div class="trg-kv"><span class="k">{{ t('common.app.views.trigDetail.ccTtl') }}</span><span>{{ policy?.human_verify_ttl ? t('common.app.views.trigDetail.ccTtlValue', { ttl: policy.human_verify_ttl }) : '—' }}</span></div>
           <div v-if="policy?.cc_detect_enabled" class="trg-kv"><span class="k">{{ t('common.app.views.trigDetail.ccSpike') }}</span><span>{{ t('common.app.views.trigDetail.ccSpikeValue', { n: policy.cc_rps_limit ?? 0, sec: policy.cc_rps_window ?? 0 }) }}</span></div>
+          <div v-for="r in ccDetailRows" :key="r.label" class="trg-kv"><span class="k">{{ r.label }}</span><span>{{ r.detail }}</span></div>
           <div class="info-note-bar"><span class="info-note-desc">{{ t('common.app.views.trigDetail.ccNote') }}</span></div>
         </template>
 
@@ -187,7 +189,9 @@ import { formatDate } from '@/utils/date'
 import { hasOwn } from '@/utils/hasOwn'
 import { conditionTargetLabel } from '@/utils/customRuleLimits'
 import { eventActionFull, eventActionTone } from '@/utils/eventAction'
-import { parseIPList, parseRefIds, createIpMatcher, triggerStageFamily, customRuleEventDbID, sharedEntriesCache, subscribeSharedEntriesCache, ensureSharedEntries, missingSharedEntryIds, formatDurationUs, eventDetailRefIds, detectionModeExplains, isTrustExemptionCandidate, trustHitMode, isWafDurationFamily, extractCrsRuleSnippet, wafModeLabel } from '@/utils/securityStages'
+import { parseIPList, parseRefIds, createIpMatcher, triggerStageFamily, customRuleEventDbID, sharedEntriesCache, subscribeSharedEntriesCache, ensureSharedEntries, missingSharedEntryIds, formatDurationUs, eventDetailRefIds, detectionModeExplains, isTrustExemptionCandidate, trustHitMode, isWafDurationFamily, extractCrsRuleSnippet, buildStageModel, wafModeLabel } from '@/utils/securityStages'
+import type { SecurityStagePolicy } from '@/utils/securityStages'
+import { normalizeCrsGroups } from '@/utils/crsGroups'
 import { issueCrsIndexSession, useCrsRuleIndex } from '@/composables/useCrsRuleIndex'
 import { activateOnce } from '@/utils/keyboardActivate'
 import { useCountryNamesCn, countryLabel } from '@/composables/useCountryNamesCn'
@@ -455,6 +459,11 @@ interface PolicyRow {
   cc_detect_enabled?: boolean
   cc_rps_limit?: number
   cc_rps_window?: number
+  cc_trigger_action?: string
+  cc_4xx_ratio?: number
+  cc_session_anomaly?: boolean
+  cc_session_ua_threshold?: number
+  cc_queue_wait_sec?: number
 }
 const policy = ref<PolicyRow | null>(null)
 // CC 防护（人机挑战）明细：结果由规则 id 区分（human_challenge/pass/failed）。
@@ -470,9 +479,42 @@ const ccModeText = computed(() => {
   if (mode === 'auto') return t('common.app.views.trigDetail.ccModeAuto')
   return t('common.app.views.trigDetail.ccModeOff')
 })
+// 验证方式词（humanSummary 摘要行与 ccType 明细行共用）
 const ccTypeText = computed(() => (policy.value?.human_verify_type === 'js'
   ? t('common.app.views.trigDetail.ccTypeJs')
   : t('common.app.views.trigDetail.ccTypeSlider')))
+// 触发后动作/等待秒数/4xx/会话明细行复用 buildStageModel 阶段 2 投影（与规则
+// 流程抽屉同一行构造，口径不再双源）。模式/方式/TTL/突刺四行由本弹框既有
+// trg-kv 行呈现（trigDetail 词条、展示门不变），按标签滤除避免重复；策略级
+// 拦截页行不属本弹框展示面，一并滤除。策略详情字段是 SecurityStagePolicy 的
+// 子集；摘要专属字段投影不消费（WAF 关闭模式无阶段 1/3 行），以空值占位保持
+// 类型完整。
+const ccDetailRows = computed<Array<{ label: string; detail: string }>>(() => {
+  const p = policy.value
+  if (!p) return []
+  const projected: SecurityStagePolicy = {
+    ...p,
+    mode: p.mode ?? 'off',
+    has_ip_control: false,
+    has_geoip: false,
+    has_custom_rules: false,
+    geoip_countries: p.geoip_countries ?? '',
+    custom_rules_count: 0,
+    ip_acl_mode: p.ip_acl_mode ?? '',
+    ip_acl_list: p.ip_acl_list ?? '',
+    ip_whitelist: p.ip_whitelist ?? '',
+  }
+  const binding = { policy_id: p.id, name: p.name, mode: projected.mode, enabled: p.enabled }
+  const rows = buildStageModel([binding], [projected], [], []).stages[2].groups[0]?.rows ?? []
+  const ownRowLabels = new Set([
+    t('common.app.views.stages.humanModeLabel'),
+    t('common.app.views.stages.humanTypeLabel'),
+    t('common.app.views.stages.humanTtlLabel'),
+    t('common.app.views.stages.ccSpikeRowLabel'),
+    t('common.app.views.stages.stage2PageLabel'),
+  ])
+  return rows.filter((r) => !ownRowLabels.has(r.label))
+})
 // 全部启用策略（追加修复：跨策略信任豁免判定——预检 DetectionOnly
 // 为事务级全局，命中策略与豁免信任策略可以是两条不同策略）
 const enabledPolicies = ref<PolicyRow[]>([])
@@ -638,14 +680,15 @@ const wafSummary = computed(() => {
   // 模式词取 securityStages.WAF_MODE_TEXT 单源（与策略列表摘要/流程投影同词）
   const mode = wafModeLabel(p.mode) || '—'
   let groups = ''
-  try {
-    const g = (JSON.parse(p.crs_rule_groups ?? '[]') as string[]) || []
-    if (p.mode !== 'off' && p.mode !== 'custom_only' && g.length > 0) groups = t('common.app.views.trigDetail.crsGroupsSuffix', { count: g.length })
-  } catch { /* 畸形按无组处理 */ }
+  // 组数口径与策略列表/流程投影同源（normalizeCrsGroups）：历史文件名前缀、
+  // 重复值、系统基础组（01/49/59）不得把组数说大。
+  const crsCount = normalizeCrsGroups(parseIPList(p.crs_rule_groups)).length
+  if (p.mode !== 'off' && p.mode !== 'custom_only' && crsCount > 0) groups = t('common.app.views.trigDetail.crsGroupsSuffix', { count: crsCount })
   let custom = ''
   try {
     const c = (JSON.parse(p.custom_rules ?? '[]') as string[]) || []
-    if ((p.mode === 'custom_only' || p.mode === 'blocking') && c.length > 0) custom = t('common.app.views.trigDetail.customRulesSuffix', { count: c.length })
+    // detection 与 blocking/custom_only 同门（buildStage3Rows 的自定义规则评估面）
+    if ((p.mode === 'custom_only' || p.mode === 'blocking' || p.mode === 'detection') && c.length > 0) custom = t('common.app.views.trigDetail.customRulesSuffix', { count: c.length })
   } catch { /* 畸形按无规则处理 */ }
   return `${mode}${groups}${custom}`
 })

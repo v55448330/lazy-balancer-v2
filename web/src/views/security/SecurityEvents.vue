@@ -607,10 +607,11 @@ import { formatDurationUs, isWafDurationFamily, triggerStageFamily } from '@/uti
 import { TRIGGERED_CATEGORIES, serializeTriggeredFilter, CRAWLER_FAMILY_LABEL } from '@/utils/triggeredFilter'
 import { ANOMALY_SCORE_HIGH, ANOMALY_SCORE_MID } from '@/utils/severityScale'
 import { DEEP_LINK_PARAMS, pageUrl } from '@/utils/deepLink'
-import { autobanStateLabel, autobanStatValue, isAutobanIneffective, autobanSuggestedDurationKey, autobanDurationLabel, autobanEscalationShortKey, autobanEscalationLadder, suggestionBand, type SuggestionBand } from '@/utils/autobanStatus'
+import { autobanStateLabel, autobanStatValue, isAutobanIneffective, autobanSuggestedDurationKey, autobanDurationLabel, autobanEscalationShortKey, autobanEscalationLadder, suggestionBand, autobanScopeLabel, isAutobanScopeMember, type SuggestionBand } from '@/utils/autobanStatus'
 import { AUTOBAN_PRESETS, AUTOBAN_PRESET_IDS, AUTOBAN_SUSPICION_MULTIPLIER_MIN, AUTOBAN_SUSPICION_MULTIPLIER_MAX, AUTOBAN_CONFIRM_FLOOR_RATIOS, matchAutobanPreset, type AutobanPresetId } from '@/utils/autobanPresets'
 import { autobanEntryExpired, autobanEntryRemaining } from '@/utils/autobanEntry'
 import { useIpListAdd } from '@/composables/useIpListAdd'
+import { useClampedPagination } from '@/composables/useClampedPagination'
 import { parseRefIds, invalidateSharedEntriesCache } from '@/utils/securityStages'
 import { showSaveResult } from '@/utils/saveResult'
 import { requestBodyEmptyNotice, viewerCanReadRequestBody } from '@/utils/requestBodyAccess'
@@ -661,7 +662,7 @@ interface AutobanConfig {
 }
 const AUTOBAN_DURATIONS = ['10m', '30m', '1h', '6h', '12h', '24h', 'permanent']
 const AUTOBAN_SCOPES = ['blocked', 'logged', 'challenge_issued', 'challenge_failed']
-const AUTOBAN_SCOPE_DEFAULT = ['blocked', 'logged', 'challenge_issued', 'challenge_failed']
+const AUTOBAN_SCOPE_DEFAULT = [...AUTOBAN_SCOPES]
 const AUTOBAN_ESCALATIONS = ['off', 'standard', 'aggressive']
 const autobanEscalationLabel = (value: string): string => {
   switch (value) {
@@ -670,20 +671,11 @@ const autobanEscalationLabel = (value: string): string => {
     default: return t('app.security.events.escalationOff')
   }
 }
-// 时长标签单源 utils/autobanStatus.autobanDurationLabel（总览/累犯弹框共用，
-// events.duration* 词条；未知值原样回显）。
-const autobanScopeLabel = (value: string): string => {
-  switch (value) {
-    case 'blocked': return t('app.security.events.scopeBlocked')
-    case 'logged': return t('app.security.events.scopeLogged')
-    case 'challenge_issued': return t('app.security.events.scopeChallengeIssued')
-    case 'challenge_failed': return t('app.security.events.scopeChallengeFailed')
-    default: return value
-  }
-}
+// 时长/口径标签单源 utils/autobanStatus（autobanDurationLabel/autobanScopeLabel，
+// 总览/事件页/累犯弹框共用；events.* 词条，未知值原样回显）。
 // 集合字符串 ↔ 数组互转（过滤非法成员；空集回退默认全选）。
 const parseAutobanScope = (scope: string): string[] => {
-  const parts = (scope || '').split(',').map(s => s.trim()).filter(s => AUTOBAN_SCOPES.includes(s))
+  const parts = (scope || '').split(',').map(s => s.trim()).filter(isAutobanScopeMember)
   return parts.length > 0 ? parts : [...AUTOBAN_SCOPE_DEFAULT]
 }
 const autobanScopeTextOf = (scope: string): string => parseAutobanScope(scope).map(autobanScopeLabel).join(' + ')
@@ -958,12 +950,8 @@ const autobanBansFiltered = computed(() => {
   if (!q) return autobanBans.value
   return autobanBans.value.filter((e) => e.value.toLowerCase().includes(q))
 })
-const autobanBansPaged = computed(() => {
-  const maxPage = Math.max(1, Math.ceil(autobanBansFiltered.value.length / banPageSize.value))
-  if (banPage.value > maxPage) banPage.value = maxPage
-  const start = (banPage.value - 1) * banPageSize.value
-  return autobanBansFiltered.value.slice(start, start + banPageSize.value)
-})
+// 分页切片走夹紧组合子（列表收缩/页大小变化自动回夹，computed 内不写页码）
+const { pagedItems: autobanBansPaged } = useClampedPagination(autobanBansFiltered, banPage, banPageSize)
 watch(banQuery, () => { banPage.value = 1 })
 const fetchAutobanBans = async (): Promise<void> => {
   const listId = autobanStatus.value.list_id

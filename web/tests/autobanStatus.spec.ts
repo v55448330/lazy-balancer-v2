@@ -205,7 +205,7 @@ test('总览卡：四统计卡一行 + 单黄条 + IP 建议表 + 累犯下钻�
     assert.ok(!page.includes(gone), `NAT/旧形态残留：${gone}`)
   }
   // 累犯下钻：统计值可点击 → 共享弹框组件（数据/重置/表格在组件内，下方钉）
-  assert.match(page, /class="autoban-stat-link" :disabled="autobanError" @click="recidivismDialogVisible = true"/, '累犯升级统计必须可点击下钻')
+  assert.match(page, /class="autoban-stat-link" :disabled="autobanStatus === null \|\| autobanError" @click="recidivismDialogVisible = true"/, '累犯升级统计必须可点击下钻（加载中/加载失败禁用）')
   assert.match(page, /<RecidivismDialog[\s\S]*?v-model="recidivismDialogVisible"/, '下钻必须挂共享弹框组件')
 })
 

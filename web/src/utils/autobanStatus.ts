@@ -93,6 +93,27 @@ export const autobanDurationLabel = (duration: string): string => {
   }
 }
 
+// ---- 统计口径成员标签（总览/事件页单源）----
+
+/**
+ * 口径成员展示文案（events.scope* 词条；未知值原样回显——fail-visible，
+ * 原型键不得渲染成函数源码）。总览配置摘要与事件页口径选择/摘要共用本单源，
+ * 两页不再各持一份词条映射。
+ */
+export const autobanScopeLabel = (value: string): string => {
+  switch (value) {
+    case 'blocked': return t('app.security.events.scopeBlocked')
+    case 'logged': return t('app.security.events.scopeLogged')
+    case 'challenge_issued': return t('app.security.events.scopeChallengeIssued')
+    case 'challenge_failed': return t('app.security.events.scopeChallengeFailed')
+    default: return value
+  }
+}
+
+/** 口径合法成员判定（集合字符串解析/过滤用；与标签函数同一成员集）。 */
+export const isAutobanScopeMember = (value: string): boolean =>
+  value === 'blocked' || value === 'logged' || value === 'challenge_issued' || value === 'challenge_failed'
+
 // ---- 累犯弹框「下次封禁」预期时长 ----
 
 /**

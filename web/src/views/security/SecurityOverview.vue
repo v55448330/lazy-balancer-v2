@@ -381,9 +381,9 @@
               <div class="autoban-stat-label">{{ t('app.security.overview.autoban.escalatedCount') }}</div>
             </el-tooltip>
             <!-- 累犯升级可点击下钻：共享弹框查看逐身份累犯历史（计数/上次封禁/
-                 下次封禁预期），并可重置全部历史（二次确认）；加载失败态禁用
-                 （数值为「—」不可下钻） -->
-            <el-button link type="primary" class="autoban-stat-link" :disabled="autobanError" @click="recidivismDialogVisible = true">
+                 下次封禁预期），并可重置全部历史（二次确认）；加载中/加载失败态
+                 禁用（与事件页封禁控制台入口同口径，数值为「—」不可下钻） -->
+            <el-button link type="primary" class="autoban-stat-link" :disabled="autobanStatus === null || autobanError" @click="recidivismDialogVisible = true">
               <span class="autoban-stat-value">{{ autobanStatValue(autobanError, autobanStatus?.escalated_count ?? 0) }}</span>
             </el-button>
           </div>
@@ -489,8 +489,7 @@ import VChart from 'vue-echarts'
 import type { APIResponse } from '@/types'
 import { securityActionColors } from '@/utils/chartTheme'
 import { ingestionWarningMessage, type IngestionHealth } from '@/utils/ingestionHealth'
-import { autobanStateLabel, autobanStatValue, isAutobanIneffective, autobanEscalationShortKey, suggestionBand, autobanDurationLabel } from '@/utils/autobanStatus'
-import { hasOwn } from '@/utils/hasOwn'
+import { autobanStateLabel, autobanStatValue, isAutobanIneffective, autobanEscalationShortKey, suggestionBand, autobanDurationLabel, autobanScopeLabel, isAutobanScopeMember } from '@/utils/autobanStatus'
 
 const { t } = useI18n()
 
@@ -798,17 +797,11 @@ const autobanIneffective = computed(() => autobanStatus.value !== null && isAuto
 const autobanStatusEscalationOn = computed(() =>
   autobanStatus.value?.escalation === 'standard' || autobanStatus.value?.escalation === 'aggressive')
 const autobanDurationText = computed(() => autobanDurationLabel(autobanStatus.value?.duration ?? ''))
+// 口径标签单源 utils/autobanStatus.autobanScopeLabel（与事件页同词表）；
+// 成员判定走 isAutobanScopeMember（原型键/非法成员不得进入展示）。
 const autobanScopeText = computed(() => {
-  const labels: Record<string, string> = {
-    blocked: t('app.security.overview.autoban.scopeBlocked'),
-    logged: t('app.security.overview.autoban.scopeLogged'),
-    challenge_issued: t('app.security.overview.autoban.scopeChallengeIssued'),
-    challenge_failed: t('app.security.overview.autoban.scopeChallengeFailed'),
-  }
-  // 原型键守卫（hasOwn）：scope 库值经带外改库可含 constructor/toString 等，
-  // 裸下标会命中原型链函数（真值）绕过 filter，渲染出函数源码。
-  const parts = (autobanStatus.value?.scope || '').split(',').map(s => s.trim()).filter(s => hasOwn(labels, s))
-  return parts.length > 0 ? parts.map(s => labels[s]).join(' + ') : '—'
+  const parts = (autobanStatus.value?.scope || '').split(',').map(s => s.trim()).filter(isAutobanScopeMember)
+  return parts.length > 0 ? parts.map(autobanScopeLabel).join(' + ') : '—'
 })
 const autobanSuggestions = computed(() => (autobanStatus.value?.suggestions || []).slice(0, 5))
 const autobanSuggestionTone = (count: number): 'danger' | 'warning' | 'info' => {
@@ -823,8 +816,12 @@ const recidivismDialogVisible = ref(false)
 const recidivismWritable = computed(() => authStore.readOnlyReason === null && (autobanStatus.value?.is_master ?? false) && !autobanError.value)
 const recidivismWriteBlockedReason = computed(() => {
   if (authStore.readOnlyReason !== null) return authStore.readOnlyMessage
-  if (!(autobanStatus.value?.is_master ?? false)) return t('app.security.events.blockedReasonMasterOnly')
-  return t('app.security.events.blockedReasonLoadFail')
+  // 加载中与加载失败分开披露（与事件页 autobanConfigTooltip 同口径）：
+  // 状态未就绪不得谎称「加载失败」。
+  if (autobanStatus.value === null) return t('app.security.events.blockedReasonLoading')
+  if (!(autobanStatus.value.is_master ?? false)) return t('app.security.events.blockedReasonMasterOnly')
+  if (autobanError.value) return t('app.security.events.blockedReasonLoadFail')
+  return ''
 })
 
 const ip2regionVersion = ref('—')

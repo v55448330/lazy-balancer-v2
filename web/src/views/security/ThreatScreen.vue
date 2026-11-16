@@ -1686,6 +1686,11 @@ onBeforeUnmount(() => {
 .act { margin-left: auto; font: 10px/1 mono, monospace; padding: 2px 5px; border-radius: 3px; border: 1px solid; }
 .act-blocked { color: #ff8a8a; border-color: rgba(226, 84, 84, 0.5); background: rgba(226, 84, 84, 0.12); }
 .act-logged { color: #ffd166; border-color: rgba(255, 209, 102, 0.45); background: rgba(255, 209, 102, 0.08); }
+/* trust/challenged 动作徽标：与 eventActionTone 同色族——trust=success 绿
+   （同 sev-low 绿系）、challenged=primary 蓝（同正常弧/TCP 徽标青蓝系）；
+   透明度节奏与 blocked/logged 一致。 */
+.act-trust { color: #3ddc84; border-color: rgba(61, 220, 132, 0.5); background: rgba(61, 220, 132, 0.12); }
+.act-challenged { color: #7dd3fc; border-color: rgba(56, 189, 248, 0.5); background: rgba(56, 189, 248, 0.1); }
 .site-unset { color: #ffd166; }
 
 /* 地图引擎根容器适配（引擎内部自管 canvas/标签层） */

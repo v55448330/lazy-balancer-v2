@@ -237,11 +237,13 @@ body {
    has 收窄前者底距——相邻 margin 塌陷
    取大，仅调后者的 margin-top 压不过前者 12px 底距。 */
 .info-note-bar:has(+ .info-note-bar) { margin-bottom: 8px; }
-/* 弹框正文水平留白已并入下方全局三段式规范；保留 class 作为既有弹框分组标记。 */
+/* 弹框正文水平留白：.dialog-body-inset 为显式标记类（定义见下方三段式规范），
+   与全局正文 padding 同值；append-to-body teleport 弹框的 scoped :deep 不可靠，
+   故类挂弹框、规则在全局。 */
 
 /* ===== 弹框基础视觉（全系统单源） =====
  * 头部/正文/脚部三段式：与 IP 快捷弹框同一视觉语言。
- * 正文上间距必须覆盖 dialog-body-inset 的零 padding，禁止内容贴标题分隔线。 */
+ * 正文 20px 留白禁止内容贴标题分隔线（.dialog-body-inset 同值显式声明）。 */
 :root {
   --el-dialog-border-radius: 0;
   --el-popover-border-radius: 0;
@@ -401,6 +403,10 @@ body .rule-lock-popper :is(.lock-stage, .lock-policy-group) { border-radius: 0; 
 }
 .el-dialog__headerbtn { top: 20px; right: 20px; }
 .el-dialog .el-dialog__body { padding: 20px; scrollbar-gutter: stable; }
+/* 正文留白标记类：与上方全局三段式正文 padding 同值（20px）的显式声明——
+   消费方挂此类表达「标准正文留白」语义；全局规则已覆盖全部弹框，本规则
+   不改变渲染，只保证标记类有定义、留白口径单点可查。 */
+.dialog-body-inset .el-dialog__body { padding: 20px; }
 .el-dialog__footer {
   padding: 14px 20px;
   background: var(--el-fill-color-lighter, #fafbfc);
