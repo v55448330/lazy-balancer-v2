@@ -199,6 +199,12 @@ func (s *SecurityEventsIPCServer) handleIngestHuman(w http.ResponseWriter, r *ht
 		if row.Kind == "pass" {
 			continue
 		}
+		// 未知 kind（带外脏数据/旧版本残余形态）不得静默落 challenged 污染
+		// 事件日志与自动封禁喂入——与 pass 同口径跳过，响亮 warn 留痕。
+		if row.Kind != "challenge" && row.Kind != "fail" && row.Kind != "rate_reject" {
+			services.Logf("warn", "安全事件 IPC 收到未知 kind，跳过不落库: kind=%q rule_id=%s ip=%s", row.Kind, row.RuleID, row.ClientIP)
+			continue
+		}
 		action := "challenged"
 		rule := "human_challenge"
 		if row.Kind == "fail" {
