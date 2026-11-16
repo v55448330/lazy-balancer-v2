@@ -291,17 +291,24 @@ body {
 /* 全站数字输入框统一尺寸与左对齐（用户裁定：默认尺寸偏大、内容右对齐不一致）：
  * 高度 32→28px、字号 13px、内容左对齐；右侧步进列 28px 紧凑。显式 size=large
  * 不在此列（保留大尺寸语义）；small 同口径。 */
-.el-input-number.el-input-number:not(.el-input-number--large) .el-input__wrapper { height: 28px; box-sizing: border-box; }
+.el-input-number.el-input-number:not(.el-input-number--large) .el-input__wrapper { height: 28px; box-sizing: border-box; padding-right: 32px; }
 .el-input-number.el-input-number:not(.el-input-number--large) .el-input__inner {
   text-align: left;
   font-size: 13px;
   height: 26px;
   line-height: 26px;
 }
+/* 右侧步进按钮：宽 32（EP 标准列宽）+ 高 13（2×13+分隔线=28 填满 wrapper，
+ * 消除 EP 默认 15px 按 32px 算导致的重叠/缝隙）；图标居中。 */
 .el-input-number.el-input-number:not(.el-input-number--large) .el-input-number__increase,
 .el-input-number.el-input-number:not(.el-input-number--large) .el-input-number__decrease {
-  width: 28px;
+  width: 32px;
+  height: 13px;
+  line-height: 13px;
   font-size: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 /* 下拉选择框与数字输入框高度一致（用户裁定：其他页面两者同高，small 下拉
  * EP 默认 24px 与数字框 28px 不齐）——非 large 下拉 wrapper 同口径 28px。 */
@@ -314,6 +321,11 @@ body {
   font-size: 13px;
   line-height: 26px;
 }
+/* 普通文本输入框与数字/下拉同高（用户裁定：表格行内输入框高度一致）——
+ * 非 large 输入 wrapper 28px border-box，inner 26px/13px。数字框内部输入
+ * 由上方 el-input-number 规则同口径覆盖，不冲突。 */
+.el-input.el-input:not(.el-input--large) .el-input__wrapper { height: 28px; box-sizing: border-box; }
+.el-input.el-input:not(.el-input--large) .el-input__inner { height: 26px; line-height: 26px; font-size: 13px; }
 
 /* 自定义控件与开关：Element 变量覆盖不到的业务 chip/触发器单源收敛。 */
 body .el-switch .el-switch__core,
