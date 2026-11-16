@@ -109,10 +109,10 @@ func (h *HumanHandler) serveRateJSON(w http.ResponseWriter, r *http.Request, ip 
 // queueWidgetHTML 排队倒计时组件（%d=等待秒数，%s=原 URI JSON）。
 // 客户端指数退避：首次等 N 秒自动重放；仍超限再拿等待页时 JS 读
 // sessionStorage 退避计数翻倍（封顶 300s）——服务端零队列状态。
-const queueWidgetHTML = `<div class="lb-queue" style="width:300px;max-width:100%%;margin:18px auto 0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;text-align:center">
+const queueWidgetHTML = `<div class="lb-queue" style="width:300px;max-width:100%%;margin:18px auto 0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;text-align:center">
 <div style="font-size:34px;font-weight:700;color:#d97706" id="lb-queue-count">%d</div>
-<div style="font-size:13px;color:#6b7280;margin-top:6px">请求过于频繁，倒计时结束后自动重试<br>Too many requests — retrying automatically</div>
-<button id="lb-queue-retry" style="margin-top:14px;padding:8px 22px;border:1px solid #d97706;background:#fffbeb;color:#b45309;font-size:13px;cursor:pointer">立即重试 / Retry now</button>
+<div style="font-size:13px;color:#6b7280;margin-top:6px">Too many requests — retrying automatically when the countdown ends.</div>
+<button id="lb-queue-retry" style="margin-top:14px;padding:8px 22px;border:1px solid #d97706;background:#fffbeb;color:#b45309;font-size:13px;cursor:pointer">Retry now</button>
 <script>
 (function(){
 var base=%d,uri=%s,key="lb_queue_backoff";
@@ -130,21 +130,21 @@ document.getElementById("lb-queue-retry").onclick=function(){clearInterval(t);go
 
 // queueWaitPage 内置等待页回退（策略未配页/无占位符时）。
 const queueWaitPage = `<!DOCTYPE html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>请稍候 / Please Wait</title></head>
-<body style="margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#fffbeb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif">
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Please Wait</title></head>
+<body style="margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#fffbeb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif">
 <div style="text-align:center;padding:32px">
-<div style="font-size:20px;font-weight:700;color:#b45309">请稍候 / Please Wait</div>
-<div style="font-size:13px;color:#92400e;margin-top:8px">请求过于频繁，稍后自动重试。<br>You have sent too many requests. This page retries automatically.</div>
+<div style="font-size:20px;font-weight:700;color:#b45309">Please Wait</div>
+<div style="font-size:13px;color:#92400e;margin-top:8px">You have sent too many requests. This page retries automatically.</div>
 %s
 </div>
 </body></html>`
 
 // rateRejectPage 内置拒绝页回退（429）。
 const rateRejectPage = `<!DOCTYPE html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>429 Too Many Requests</title></head>
-<body style="margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#fffbeb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif">
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>429 Too Many Requests</title></head>
+<body style="margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#fffbeb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif">
 <div style="text-align:center;padding:32px">
-<div style="font-size:20px;font-weight:700;color:#b45309">429 · 请求过于频繁 / Too Many Requests</div>
-<div style="font-size:13px;color:#92400e;margin-top:8px">您短时间内发送了过多请求，请稍后再试。<br>You have sent too many requests in a short time. Please wait and try again.</div>
+<div style="font-size:20px;font-weight:700;color:#b45309">429 · Too Many Requests</div>
+<div style="font-size:13px;color:#92400e;margin-top:8px">You have sent too many requests in a short time. Please wait and try again.</div>
 </div>
 </body></html>`

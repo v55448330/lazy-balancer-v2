@@ -102,22 +102,23 @@
           <el-tabs v-model="bodyTab" class="block-page-body-tabs">
             <el-tab-pane :label="t('app.security.blockPages.dialog.tabHtml')" name="html">
               <div v-if="!isReadOnly && !currentPage?.is_default && !currentPage?.is_builtin" class="block-widget-bar">
-                <div class="block-widget-row">
+                <span class="block-widget-label">{{ t('app.security.blockPages.dialog.insertPrefix') }}</span>
+                <el-tooltip :content="t('app.security.blockPages.dialog.humanWidgetTip')" placement="top" :show-after="200">
                   <el-button size="small" :disabled="saving" @click="insertHumanWidget">{{ t('app.security.blockPages.dialog.insertHumanWidget') }}</el-button>
-                  <span class="form-tip-line">{{ t('app.security.blockPages.dialog.humanWidgetTip') }}</span>
-                </div>
-                <div class="block-widget-row">
+                </el-tooltip>
+                <el-tooltip :content="t('app.security.blockPages.dialog.jsWidgetTip')" placement="top" :show-after="200">
                   <el-button size="small" :disabled="saving" @click="insertJsWidget">{{ t('app.security.blockPages.dialog.insertJsWidget') }}</el-button>
-                  <span class="form-tip-line">{{ t('app.security.blockPages.dialog.jsWidgetTip') }}</span>
-                </div>
-                <div class="block-widget-row">
+                </el-tooltip>
+                <el-tooltip :content="t('app.security.blockPages.dialog.queueWidgetTip')" placement="top" :show-after="200">
                   <el-button size="small" :disabled="saving" @click="insertQueueWidget">{{ t('app.security.blockPages.dialog.insertQueueWidget') }}</el-button>
-                  <span class="form-tip-line">{{ t('app.security.blockPages.dialog.queueWidgetTip') }}</span>
-                </div>
+                </el-tooltip>
+                <el-tooltip :content="t('app.security.blockPages.dialog.widgetCommonTip')" placement="top" :show-after="200">
+                  <el-icon class="block-widget-info"><InfoFilled /></el-icon>
+                </el-tooltip>
               </div>
               <div class="block-content-editor" style="width: 100%">
                 <SyntaxHighlight v-if="isReadOnly || currentPage?.is_default || currentPage?.is_builtin" :content="form.content" language="markup" height="320px" />
-                <CodeEditor v-else v-model="form.content" language="markup" height="320px" :aria-label="t('app.security.blockPages.dialog.editorAria')" :placeholder="t('app.security.blockPages.dialog.placeholderContent')" :readonly="saving" />
+                <CodeEditor v-else v-model="form.content" language="markup" height="420px" :aria-label="t('app.security.blockPages.dialog.editorAria')" :placeholder="t('app.security.blockPages.dialog.placeholderContent')" :readonly="saving" />
               </div>
               <div class="form-tip-line">
                 {{ (currentPage?.is_default || currentPage?.is_builtin) ? t('app.security.blockPages.dialog.contentTipReadonly') : t('app.security.blockPages.dialog.contentTipEditable') }}
@@ -164,7 +165,7 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Plus, Document } from '@element-plus/icons-vue'
+import { Plus, Document, InfoFilled } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { request } from '@/utils/api'
 import { formatBytes } from '@/utils/formatBytes'
@@ -388,11 +389,11 @@ onMounted(fetchData)
 
 <style scoped>
 .block-content-editor { border: 1px solid #e4e7ed; overflow: hidden; }
-/* 验证组件插入：每组件一行（按钮 + 描述换行堆叠），三组件三行，
-   长描述不再挤在按钮右侧单行（用户裁定）。 */
-.block-widget-bar { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
-.block-widget-row { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; }
-.block-widget-row .form-tip-line { margin: 0; }
+/* 验证组件插入：单行工具条（前缀标签 + 三按钮 + ⓘ），长描述移入悬浮
+   tooltip，省出高度给代码编辑器（用户裁定：组件区不得挤占编辑空间）。 */
+.block-widget-bar { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; }
+.block-widget-label { font-size: 12px; color: var(--text-secondary, #6b7280); }
+.block-widget-info { font-size: 14px; color: var(--text-secondary, #9ca3af); cursor: help; }
 
 /* 弹框高度约束（2026-11-12 用户反馈：原弹框超出屏幕）：
    表单区内滚，编辑器随标签页切换按需占用高度；弹框自身不超出视口。 */

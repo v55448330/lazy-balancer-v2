@@ -154,6 +154,19 @@ test('阶段 2 拦截页失效：回退内置挑战页（插件占位符回退�
   assert.match(zhView, /'blockPageBroken403': '已失效（回落绑定链首个有效页）'/)
 })
 
+// ── 7b. stage2 投影行词条齐全（防裸键渲染：ccSpikeRowLabel 等曾缺失） ──
+test('stage2 投影行词条齐全：突刺阈值/处置动作/等待秒数 zh/en 成对（无裸键）', () => {
+  const keys = ['ccSpikeRowLabel', 'ccSpikeSummary', 'ccActionRowLabel', 'ccAction_challenge', 'ccAction_queue', 'ccAction_reject', 'ccQueueWaitRowLabel', 'ccQueueWaitRowValue', 'humanMode_auto', 'humanMode_force']
+  for (const k of keys) {
+    assert.match(zhView, new RegExp(`'${k}':`), `zh views.stages.${k} 必须定义（投影消费，缺失=裸键渲染）`)
+    assert.match(enView, new RegExp(`'${k}':`), `en views.stages.${k} 必须成对定义`)
+  }
+  // 投影消费点与词条键同源（突刺阈值行只在 CC 检测开启时渲染）
+  const stages = code('src/utils/securityStages.ts')
+  assert.match(stages, /ccSpikeRowLabel/, '投影必须消费 ccSpikeRowLabel')
+  assert.match(stages, /ccActionRowLabel/, '投影必须消费 ccActionRowLabel（处置动作行）')
+})
+
 // ── 8. 死键群清理（zh/en 成对删除；活键保留） ──
 test('退役死词条整族清除：events.cc* / overview.status.human* / cc.passFail / challengePageLabel*（zh/en 成对）', () => {
   // events.cc* 死键只在 events 命名空间内判定——policies.human.ccSection/ccEnabledLabel

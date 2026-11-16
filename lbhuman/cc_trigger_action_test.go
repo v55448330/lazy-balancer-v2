@@ -5,8 +5,10 @@ package lbhuman
 // queue/reject 均拿 JSON 429+Retry-After。等待秒数 0=自动取 CC 窗口。
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -147,5 +149,29 @@ func TestCCTriggerAction_forceStillChallenge(t *testing.T) {
 	}
 	if w.Code != http.StatusOK {
 		t.Fatalf("force 模式必须恒挑战页，status=%d", w.Code)
+	}
+}
+
+// 内置拦截页统一英文标准（用户裁定）：queue 倒计时组件/等待页/拒绝页面向终端
+// 访客，不得含中文；文档语言 lang=en（与 blockPageSpecs 英文标准同口径）。
+func TestBuiltinRatePages_areEnglishOnly(t *testing.T) {
+	cjk := regexp.MustCompile(`[\p{Han}]`)
+	pages := map[string]string{
+		"queueWidgetHTML": fmt.Sprintf(queueWidgetHTML, 10, 10, `"/"`),
+		"queueWaitPage":   fmt.Sprintf(queueWaitPage, ""),
+		"rateRejectPage":  rateRejectPage,
+	}
+	for name, html := range pages {
+		if cjk.MatchString(html) {
+			t.Fatalf("内置页 %s 含中文（终端访客页面必须英文）", name)
+		}
+	}
+	for name, html := range map[string]string{"queueWaitPage": pages["queueWaitPage"], "rateRejectPage": pages["rateRejectPage"]} {
+		if !strings.Contains(html, `<html lang="en">`) {
+			t.Fatalf("内置页 %s 文档语言必须为 en", name)
+		}
+	}
+	if !strings.Contains(pages["queueWidgetHTML"], "Retry now") {
+		t.Fatal("queue 组件重试按钮必须为英文 Retry now")
 	}
 }
