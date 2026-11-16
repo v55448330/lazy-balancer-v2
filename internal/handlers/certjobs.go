@@ -466,6 +466,7 @@ func (h *Handlers) retryCertJobByID(c *gin.Context, id int) {
 	// （续期巡检、waiting_ca 补扫、批量全量重签）——任务卡片/任务监控的
 	// 「重签/运行」是知情显式操作，冷却中放行并如实留审计痕迹。其余形状
 	// （退役 409、在途执行中、部署退避窗口）不受裁定影响，按原语义拒绝。
+	failedCooldownOverride := false
 	cooling, statusCode, message := certJobRetryBlocked(status, updatedAt, createdAt, now)
 	if cooling {
 		if statusCode == http.StatusConflict || status != "failed" {
@@ -477,14 +478,10 @@ func (h *Handlers) retryCertJobByID(c *gin.Context, id int) {
 			c.JSON(statusCode, models.APIResponse{Code: statusCode, Message: message})
 			return
 		}
-		// 越冷提示不是失败——走「重试」动作的成功通道留痕，
-		// 详情携带 cooldown_override 语义（结果：越过失败冷却）。此前借用
-		// auditFailureWithRule 会先记一行「重试失败」、成功后又记一行「重试」，
-		// 同一操作先败后成；且与真实失败行（重试失败+固定归因）无法区分。
-		// 真实失败路径（下方各拒绝/入队失败出口）审计语义不变。
-		recordAudit(c, "重试", "证书任务", services.FormatAuditDetail(
-			services.AuditJobPart(id), services.AuditRulePart(ruleID),
-			"手动重签越过失败冷却", message, services.AuditResultPart("cooldown_override")))
+		// 越冷留痕以入队实际发生（changed=true）为前提（与 CA-force 族同口径）：
+		// 此处仅标记，待入队成功后并入成功审计片段——防请求最终被 CA 退避
+		// 429 拒绝/入队失败时残留成功通道审计行（稀释 cooldown_override 取证）。
+		failedCooldownOverride = true
 	}
 
 	// CA 退避窗口（failed/waiting_ca 行的 ca_available_after，429=Retry-After
@@ -626,6 +623,14 @@ func (h *Handlers) retryCertJobByID(c *gin.Context, id int) {
 	if cooldownActive && forceRetry {
 		// 越过冷却必须可见（运维逃生通道的留痕义务）；冷却已到期时不记。
 		auditParts = append(auditParts, "手动越过 CA 冷却")
+	}
+	if failedCooldownOverride {
+		// 通用失败冷却越冷（failed 行豁免）——入队实际发生才留痕（延迟到
+		// 成功路径，防 CA 429 拒绝/入队失败残留成功行）；独立审计行与既有
+		// 钉测同格式（结果：越过失败冷却），与 queued 行分列。
+		recordAudit(c, "重试", "证书任务", services.FormatAuditDetail(
+			services.AuditJobPart(id), services.AuditRulePart(ruleID),
+			"手动重签越过失败冷却", message, services.AuditResultPart("越过失败冷却")))
 	}
 	if renewalAttempts > 0 {
 		// 重试会把 renewal_attempts 归零（最大重试预算对人工操作重新计）——留痕

@@ -1091,6 +1091,10 @@ func (h *Handlers) IssueCertificate(c *gin.Context) {
 	skippedRetired := 0
 	// force=true 显式越过 CA 冷却（与任务重试同一契约），仅在实际越过时留痕。
 	forceCAOverride := false
+	// failed 通用冷却越冷留痕延迟到入队实际发生（changed=true）才记录，
+	// 与 CA-force 族同口径（防 429 拒绝/入队失败残留成功通道审计行）。
+	failedCooldownOverride := false
+	failedCooldownMessage := ""
 	forceIssue := c.Query("force") == "true"
 	if req.CaddyID != "" {
 		// 规则删除/迁移屏障期按冲突语义 409 点名（EnqueueIfActive 内部
@@ -1154,13 +1158,11 @@ func (h *Handlers) IssueCertificate(c *gin.Context) {
 					c.JSON(statusCode, models.APIResponse{Code: statusCode, Message: message})
 					return
 				}
-				// 越冷提示不是失败——走「触发签发」动作的成功通道留痕（结果：
-				// cooldown_override），与任务卡片重试同型；防稀释要求与越冷审计
-				// 模式共用（借用 auditFailure 会先记「失败」、成功后又记一行，
-				// 同一操作先败后成）。真实失败路径（下方各拒绝/入队失败出口）
-				// 审计语义不变。
-				recordAudit(c, "触发签发", "证书", services.FormatAuditDetail(scope,
-					"定向重签越过失败冷却", message, services.AuditResultPart("cooldown_override")))
+				// 越冷留痕以入队实际发生（changed=true）为前提（与 CA-force 族
+				// 同口径）：此处仅标记，待 createOrRequeueCertJob 成功后记录——
+				// 防请求最终被 CA 退避 429 拒绝/入队失败时残留成功通道审计行。
+				failedCooldownOverride = true
+				failedCooldownMessage = message
 			}
 			// waiting_ca 的 CA 退避窗口与任务重试共用同一契约：未到期且未
 			// force 时 429 并给出剩余时长，否则手动「重新签发」会把退避窗口
@@ -1261,6 +1263,10 @@ func (h *Handlers) IssueCertificate(c *gin.Context) {
 				c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: apimsg.T(c, "k_86cb4d68"), MessageKey: "k_86cb4d68"})
 			}
 			return
+		}
+		if failedCooldownOverride {
+			recordAudit(c, "触发签发", "证书", services.FormatAuditDetail(scope,
+				"定向重签越过失败冷却", failedCooldownMessage, services.AuditResultPart("cooldown_override")))
 		}
 		queued++
 	} else {
