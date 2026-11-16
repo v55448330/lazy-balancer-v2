@@ -325,7 +325,7 @@
 
     <!-- 自动封禁配置弹框：七项配置（六项基础 + 累犯升级）
          + 口径/窗口变更重置提示 -->
-    <el-dialog v-model="autobanDialogVisible" width="min(980px, 96vw)" top="3vh" append-to-body class="autoban-config-dialog dialog-body-inset" :close-on-click-modal="false" :close-on-press-escape="!autobanSaving" :show-close="!autobanSaving">
+    <el-dialog v-model="autobanDialogVisible" width="min(860px, 96vw)" top="3vh" append-to-body class="autoban-config-dialog dialog-body-inset" :close-on-click-modal="false" :close-on-press-escape="!autobanSaving" :show-close="!autobanSaving">
       <template #header>
         <!-- 喂入门=四维统计口径（2026-11-13 多选裁定）：WAF 命中按 blocked/logged
              计数（CRS 与自定义两族，阶段门 autobanStage3Eligible，已验证爬虫豁免
@@ -355,8 +355,8 @@
         </button>
       </div>
       <el-form :model="autobanForm" :label-width="$flw('96px')" label-position="top" size="small" :disabled="autobanSaving">
-        <!-- 高级参数折叠：三列网格（980px 宽弹框，标签顶部对齐）——短项三三一行，
-             口径/升级阶梯等宽项跨全列；目标全展开无垂直滚动（矮视口兜底 auto）。 -->
+        <!-- 高级参数折叠：两列网格（860px 宽弹框，标签顶部对齐）——短项两两一行，
+             口径/升级阶梯跨全列；evidence 条件字段成组保证列对齐（用户裁定）。 -->
         <el-collapse v-model="autobanAdvancedOpen" class="autoban-advanced">
           <el-collapse-item :title="t('app.security.events.advancedTitle')" name="advanced">
             <div class="autoban-grid">
@@ -401,8 +401,8 @@
                 </el-select>
                 <div class="form-tip-line">{{ t(autobanFormPermanentDuration ? 'app.security.events.escalationPermanentDisabledHint' : 'app.security.events.escalationHint') }}</div>
               </el-form-item>
-              <!-- 升级阶梯预览：跨双列独立行（flex-basis:100% 强制断行，label 只与
-                   select 单行居中）；off/永久档隐藏（各次相同时无信息量）。 -->
+              <!-- 升级阶梯预览：紧跟累犯升级下拉下方（同属升级语义），跨两列；
+                   off/永久档隐藏（各次相同时无信息量）。 -->
               <div v-if="autobanFormEscalationOn && !autobanFormPermanentDuration" class="autoban-ladder autoban-grid-full">
                 <span class="autoban-ladder-label">{{ t('app.security.events.ladderTitle') }}</span>
                 <span v-for="(d, i) in autobanLadderPreview" :key="i" class="autoban-ladder-step">{{ t('app.security.events.ladderOffense', { n: i + 1 }) }} {{ autobanDurationLabel(d) }}</span>
@@ -414,18 +414,20 @@
                 </el-select>
                 <div class="form-tip-line">{{ t('app.security.events.countingModeHint') }}</div>
               </el-form-item>
-              <template v-if="autobanForm.counting_mode === 'evidence'">
-                <el-form-item :label="t('app.security.events.suspicionMultiplierLabel')">
+              <!-- evidence 条件字段：display:contents 组（子项直接参与父网格），
+                   order 保证倍数与计数方式同行两列、打底比例次行左列。 -->
+              <div v-if="autobanForm.counting_mode === 'evidence'" class="autoban-evidence-group">
+                <el-form-item :label="t('app.security.events.suspicionMultiplierLabel')" class="autoban-multiplier-item">
                   <el-input-number v-model="autobanForm.suspicion_multiplier" :min="AUTOBAN_SUSPICION_MULTIPLIER_MIN" :max="AUTOBAN_SUSPICION_MULTIPLIER_MAX" :step="1" controls-position="right" class="autoban-num" />
                   <div class="form-tip-line">{{ t('app.security.events.suspicionMultiplierHint', { n: autobanForm.threshold * autobanForm.suspicion_multiplier }) }}</div>
                 </el-form-item>
-                <el-form-item :label="t('app.security.events.confirmFloorLabel')" class="autoban-grid-full">
+                <el-form-item :label="t('app.security.events.confirmFloorLabel')" class="autoban-floor-item">
                   <el-select v-model="autobanForm.confirm_floor_ratio" class="autoban-select">
                     <el-option v-for="f in AUTOBAN_CONFIRM_FLOOR_RATIOS" :key="f" :label="f" :value="f" />
                   </el-select>
                   <div class="form-tip-line">{{ t('app.security.events.confirmFloorHint', { n: autobanConfirmFloorCount }) }}</div>
                 </el-form-item>
-              </template>
+              </div>
             </div>
           </el-collapse-item>
         </el-collapse>
@@ -1449,13 +1451,19 @@ const refreshPage = (): void => {
 .autoban-advanced { border-top: none; border-bottom: none; margin-top: 4px; }
 .autoban-advanced :deep(.el-collapse-item__header) { font-size: 14px; font-weight: 600; color: var(--text-primary, #374151); height: 40px; line-height: 40px; }
 .autoban-advanced :deep(.el-collapse-item__content) { padding-bottom: 8px; }
-.autoban-grid { display: grid; grid-template-columns: repeat(3, 1fr); column-gap: 24px; row-gap: 2px; align-items: start; }
+.autoban-grid { display: grid; grid-template-columns: repeat(2, 1fr); column-gap: 24px; row-gap: 2px; align-items: start; }
 .autoban-grid-full { grid-column: 1 / -1; }
 .autoban-grid .el-form-item { margin-bottom: 12px; }
 .autoban-grid :deep(.el-form-item__label) { padding-bottom: 2px; line-height: 1.4; font-size: 13px; font-weight: 500; color: var(--text-primary, #374151); }
 .autoban-grid .form-tip-line { font-size: 12px; line-height: 1.45; margin-top: 2px; color: var(--text-secondary, #6b7280); }
-/* 控件宽度：数字 120 / 下拉占满列宽，每列左缘对齐。 */
-.autoban-num { width: 120px; }
+/* evidence 条件字段组：display:contents 让子项直接参与父两列网格（组自身
+   不占格）；order 保证倍数与计数方式同行（计数 col1/倍数 col2），打底比例
+   次行左列（不再独占整行）。 */
+.autoban-evidence-group { display: contents; }
+.autoban-multiplier-item { order: 1; }
+.autoban-floor-item { order: 2; }
+/* 控件宽度：数字/下拉均占满列宽，每列左缘严格对齐。 */
+.autoban-num { width: 100%; }
 .autoban-select { width: 100%; }
 /* 口径分组：两组横向并排（标签顶部对齐，各占半宽），checkbox 行内紧凑。 */
 .autoban-scope-groups { display: flex; gap: 32px; flex-wrap: wrap; }
