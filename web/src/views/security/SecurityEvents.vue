@@ -325,7 +325,7 @@
 
     <!-- 自动封禁配置弹框：七项配置（六项基础 + 累犯升级）
          + 口径/窗口变更重置提示 -->
-    <el-dialog v-model="autobanDialogVisible" width="min(980px, 96vw)" top="6vh" append-to-body class="autoban-config-dialog dialog-body-inset" :close-on-click-modal="false" :close-on-press-escape="!autobanSaving" :show-close="!autobanSaving">
+    <el-dialog v-model="autobanDialogVisible" width="min(980px, 96vw)" top="3vh" append-to-body class="autoban-config-dialog dialog-body-inset" :close-on-click-modal="false" :close-on-press-escape="!autobanSaving" :show-close="!autobanSaving">
       <template #header>
         <!-- 喂入门=四维统计口径（2026-11-13 多选裁定）：WAF 命中按 blocked/logged
              计数（CRS 与自定义两族，阶段门 autobanStage3Eligible，已验证爬虫豁免
@@ -346,10 +346,10 @@
           <span class="autoban-preset-desc">{{ t('app.security.events.preset.' + id + '.desc') }}</span>
         </button>
       </div>
-      <el-form :model="autobanForm" :label-width="$flw('96px')" label-position="top" :disabled="autobanSaving">
-        <el-form-item :label="t('app.security.events.dryRunLabel')">
+      <el-form :model="autobanForm" :label-width="$flw('96px')" label-position="top" size="small" :disabled="autobanSaving">
+        <el-form-item :label="t('app.security.events.dryRunLabel')" label-position="right" class="autoban-dryrun-item">
           <el-switch v-model="autobanForm.dry_run" />
-          <div class="form-tip-line">{{ t('app.security.events.dryRunHint') }}</div>
+          <span class="form-tip-inline">{{ t('app.security.events.dryRunHint') }}</span>
         </el-form-item>
         <!-- 高级参数折叠：三列网格（980px 宽弹框，标签顶部对齐）——短项三三一行，
              口径/升级阶梯等宽项跨全列；目标全展开无垂直滚动（矮视口兜底 auto）。 -->
@@ -357,20 +357,22 @@
           <el-collapse-item :title="t('app.security.events.advancedTitle')" name="advanced">
             <div class="autoban-grid">
               <el-form-item :label="t('app.security.events.scopeLabel')" class="autoban-grid-full">
-                <!-- 两组各占独立块级行（用户裁定：中文下不得挤同行）。 -->
-                <div class="autoban-scope-group">
-                  <div class="autoban-scope-group-label">{{ t('app.security.events.scopeGroupConfirmed') }}</div>
-                  <el-checkbox-group v-model="autobanForm.scope">
-                    <el-checkbox value="blocked">{{ autobanScopeLabel('blocked') }}</el-checkbox>
-                    <el-checkbox value="challenge_failed">{{ autobanScopeLabel('challenge_failed') }}</el-checkbox>
-                  </el-checkbox-group>
-                </div>
-                <div class="autoban-scope-group">
-                  <div class="autoban-scope-group-label">{{ t('app.security.events.scopeGroupSuspicion') }}</div>
-                  <el-checkbox-group v-model="autobanForm.scope">
-                    <el-checkbox value="logged">{{ autobanScopeLabel('logged') }}</el-checkbox>
-                    <el-checkbox value="challenge_issued">{{ autobanScopeLabel('challenge_issued') }}</el-checkbox>
-                  </el-checkbox-group>
+                <!-- 两组横向并排（标签顶部对齐，各占半宽；组内 label+checkbox 堆叠）。 -->
+                <div class="autoban-scope-groups">
+                  <div class="autoban-scope-group">
+                    <div class="autoban-scope-group-label">{{ t('app.security.events.scopeGroupConfirmed') }}</div>
+                    <el-checkbox-group v-model="autobanForm.scope">
+                      <el-checkbox value="blocked">{{ autobanScopeLabel('blocked') }}</el-checkbox>
+                      <el-checkbox value="challenge_failed">{{ autobanScopeLabel('challenge_failed') }}</el-checkbox>
+                    </el-checkbox-group>
+                  </div>
+                  <div class="autoban-scope-group">
+                    <div class="autoban-scope-group-label">{{ t('app.security.events.scopeGroupSuspicion') }}</div>
+                    <el-checkbox-group v-model="autobanForm.scope">
+                      <el-checkbox value="logged">{{ autobanScopeLabel('logged') }}</el-checkbox>
+                      <el-checkbox value="challenge_issued">{{ autobanScopeLabel('challenge_issued') }}</el-checkbox>
+                    </el-checkbox-group>
+                  </div>
                 </div>
                 <div class="form-tip-line">{{ t('app.security.events.scopeHint') }}</div>
               </el-form-item>
@@ -1403,8 +1405,8 @@ const refreshPage = (): void => {
 </script>
 
 <style scoped>
-.autoban-section-title { font-size: 14px; font-weight: 600; color: var(--text-primary); margin: 4px 0 4px; }
-.autoban-section-desc { font-size: 12px; color: var(--text-secondary); line-height: 1.5; margin-bottom: 12px; }
+.autoban-section-title { font-size: 14px; font-weight: 600; color: var(--text-primary); margin: 0 0 2px; }
+.autoban-section-desc { font-size: 12px; color: var(--text-secondary); line-height: 1.4; margin-bottom: 8px; }
 /* 自动封禁状态卡——*/
 .autoban-card { margin-bottom: 16px; }
 .autoban-bar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
@@ -1426,30 +1428,37 @@ const refreshPage = (): void => {
 
 /* 预设档位卡片：全项目直角令（main.css --el-border-radius-base:0），不得圆角。
    选中态=描边+浅底+「当前」角标；顶部说明行取代悬空自定义徽标。 */
-.autoban-preset-hint { font-size: 12px; color: var(--text-secondary, #6b7280); margin-bottom: 8px; }
-.autoban-preset-row { display: flex; gap: 8px; align-items: stretch; margin-bottom: 14px; }
-.autoban-preset-card { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; gap: 4px; align-items: flex-start; text-align: left; padding: 10px 12px; border: 1px solid var(--el-border-color, #dcdfe6); border-radius: 0; background: var(--el-fill-color-blank, #fff); cursor: pointer; transition: border-color .15s, background .15s; }
+.autoban-preset-hint { font-size: 12px; color: var(--text-secondary, #6b7280); margin-bottom: 4px; }
+.autoban-preset-row { display: flex; gap: 8px; align-items: stretch; margin-bottom: 8px; }
+.autoban-preset-card { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; gap: 2px; align-items: flex-start; text-align: left; padding: 6px 10px; border: 1px solid var(--el-border-color, #dcdfe6); border-radius: 0; background: var(--el-fill-color-blank, #fff); cursor: pointer; transition: border-color .15s, background .15s; }
 .autoban-preset-card:hover { border-color: var(--el-color-primary, #409eff); }
 .autoban-preset-card.active { border-color: var(--el-color-primary, #409eff); background: var(--el-color-primary-light-9, #ecf5ff); }
 .autoban-preset-card:disabled { cursor: default; opacity: .6; }
 .autoban-preset-name { font-size: 13px; font-weight: 600; color: var(--text-primary, #111827); display: flex; align-items: center; gap: 6px; }
 .autoban-preset-current { font-size: 10px; font-weight: 600; color: var(--el-color-primary, #409eff); border: 1px solid currentColor; padding: 0 4px; line-height: 1.5; }
-.autoban-preset-desc { font-size: 11px; color: var(--text-secondary, #6b7280); line-height: 1.4; }
+.autoban-preset-desc { font-size: 11px; color: var(--text-secondary, #6b7280); line-height: 1.3; }
+/* 观察模式：右标签单行紧凑（开关+行内提示），不占顶部标签整行高度。 */
+.autoban-dryrun-item { margin-bottom: 8px; }
+.autoban-dryrun-item :deep(.el-form-item__label) { line-height: 32px; padding-bottom: 0; }
 /* 高级参数折叠 + 三列网格（标签顶部对齐）：短项三三一行，宽项（口径/阶梯）跨全列。 */
-.autoban-advanced { border-top: none; border-bottom: none; margin-top: 4px; }
-.autoban-advanced :deep(.el-collapse-item__header) { font-size: 13px; font-weight: 600; color: var(--text-secondary, #6b7280); }
+.autoban-advanced { border-top: none; border-bottom: none; margin-top: 2px; }
+.autoban-advanced :deep(.el-collapse-item__header) { font-size: 13px; font-weight: 600; color: var(--text-secondary, #6b7280); height: 36px; line-height: 36px; }
+.autoban-advanced :deep(.el-collapse-item__content) { padding-bottom: 4px; }
 .autoban-grid { display: grid; grid-template-columns: repeat(3, 1fr); column-gap: 20px; align-items: start; }
 .autoban-grid-full { grid-column: 1 / -1; }
-.autoban-grid .el-form-item { margin-bottom: 12px; }
-.autoban-grid :deep(.el-form-item__label) { padding-bottom: 2px; line-height: 1.4; }
+.autoban-grid .el-form-item { margin-bottom: 6px; }
+.autoban-grid :deep(.el-form-item__label) { padding-bottom: 0; line-height: 1.2; font-size: 12px; }
+.autoban-grid .form-tip-line { font-size: 11px; line-height: 1.3; margin-top: 0; }
 /* 控件宽度：数字 120 / 下拉占满列宽，每列左缘对齐。 */
 .autoban-num { width: 120px; }
 .autoban-select { width: 100%; }
-/* 口径分组：两组横向并排（标签顶部对齐后各占半宽），中英一致。 */
-.autoban-scope-group { display: inline-block; vertical-align: top; margin-right: 24px; margin-bottom: 4px; }
-.autoban-scope-group-label { font-size: 12px; font-weight: 600; color: var(--text-secondary, #6b7280); margin-bottom: 2px; }
+/* 口径分组：两组横向并排（标签顶部对齐，各占半宽），checkbox 行内紧凑。 */
+.autoban-scope-groups { display: flex; gap: 24px; flex-wrap: wrap; }
+.autoban-scope-group { margin-bottom: 2px; }
+.autoban-scope-group-label { font-size: 12px; font-weight: 600; color: var(--text-secondary, #6b7280); margin-bottom: 1px; }
+.autoban-scope-group :deep(.el-checkbox) { height: 24px; margin-right: 12px; }
 /* 升级阶梯预览：跨全列独立行，单行紧凑徽标（直角，无负 margin）。 */
-.autoban-ladder { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin: 0 0 12px; }
+.autoban-ladder { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin: 0 0 6px; }
 .autoban-ladder-label { font-size: 12px; color: var(--text-secondary, #6b7280); }
 .autoban-ladder-step { font-size: 11px; color: var(--text-secondary, #6b7280); background: var(--el-fill-color-light, #f5f7fa); border-radius: 0; padding: 1px 6px; line-height: 1.6; }
 /* 封禁与累犯合并弹框：搜索框/底部行 + evidence 双分数。 */
@@ -1508,8 +1517,9 @@ const refreshPage = (): void => {
    （.crs-event-dialog 左半选择器删除——CRS 事件弹框已迁入 TriggerDetailDialog） */
 .ctx-event-dialog .el-dialog__body { max-height: calc(90vh - 130px); overflow-y: auto; }
 /* 自动封禁配置弹框：三列网格压缩高度后常态无滚动；限高仅作矮视口兜底
-   （top=6vh + header/footer≈180px），保证保存按钮恒在视口内。 */
-.autoban-config-dialog .el-dialog__body { max-height: calc(100vh - 180px); overflow-y: auto; }
+   （top=3vh + header/footer/padding≈230px 实测），保证保存按钮恒在视口内。 */
+.autoban-config-dialog .el-dialog__body { max-height: calc(100vh - 222px); overflow-y: auto; padding: 14px 20px; }
+.autoban-config-dialog .info-note-bar { margin-top: 6px; padding: 6px 10px; }
 /* 封禁与累犯合并弹框：同款限高（top=5vh，表高 480 + 工具行/分页/tab 头）。 */
 .ban-console-dialog .el-dialog__body { max-height: calc(90vh - 130px); overflow-y: auto; }
 /* 请求上下文弹框正文 20px 水平留白走全局 .dialog-body-inset（2026-09-25 用户裁定；
