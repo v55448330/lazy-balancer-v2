@@ -311,10 +311,16 @@ body {
   justify-content: center;
 }
 /* 下拉选择框与数字输入框高度一致（用户裁定：其他页面两者同高，small 下拉
- * EP 默认 24px 与数字框 28px 不齐）——非 large 下拉 wrapper 同口径 28px。 */
-.el-select.el-select:not(.el-select--large) .el-select__wrapper {
+ * EP 默认 24px 与数字框 28px 不齐）——非 large **单选** wrapper 同口径 28px。
+ * 多选（含 .el-select__selection 标签容器）豁免固定高：多标签需自然撑高，
+ * 固定 28px 会致标签上下溢出裁切（引用地址列表等多选输入框样式异常根因）。 */
+.el-select.el-select:not(.el-select--large) .el-select__wrapper:not(:has(.el-select__selection)) {
   min-height: 28px;
   height: 28px;
+}
+.el-select.el-select:not(.el-select--large) .el-select__wrapper:has(.el-select__selection) {
+  min-height: 28px;
+  height: auto;
 }
 .el-select.el-select:not(.el-select--large) .el-select__selected-item,
 .el-select.el-select:not(.el-select--large) .el-select__placeholder {
