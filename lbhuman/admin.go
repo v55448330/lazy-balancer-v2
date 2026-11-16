@@ -45,6 +45,7 @@ type humanStatsPayload struct {
 	CCTriggers          ccTriggersJSON `json:"cc_triggers"`
 	EventsDropped       int64          `json:"events_dropped"`
 	EventsDeliverFailed int64          `json:"events_deliver_failed"`
+	EventsShutdownLost  int64          `json:"events_shutdown_lost"`
 }
 
 // ccTriggersJSON CC 触发原因分布（键与 evalCC Reason 同口径）。
@@ -68,6 +69,7 @@ func serveHumanStats(w http.ResponseWriter, r *http.Request) error {
 		},
 		EventsDropped:       humanEventDropped.Load(),
 		EventsDeliverFailed: humanEventDeliverFailed.Load(),
+		EventsShutdownLost:  humanEventShutdownLost.Load(),
 	})
 	if err != nil {
 		raw = []byte(`{}`)

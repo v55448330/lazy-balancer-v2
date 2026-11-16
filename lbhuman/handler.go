@@ -48,6 +48,14 @@ func (h *HumanHandler) Provision(caddy.Context) error {
 	return nil
 }
 
+// Cleanup implements caddy.CleanerUpper：停机/reload 收尾把队列尾部事件计入
+// shutdown_lost 对账源（人机通道无 spool 是裁定，但丢失量必须可观测）。
+// 进程级队列多实例共享，FlushHumanEvents 幂等（排空后重复调用计 0）。
+func (h *HumanHandler) Cleanup() error {
+	FlushHumanEvents()
+	return nil
+}
+
 // Validate implements caddy.Validator.
 func (h *HumanHandler) Validate() error {
 	if h.Mode != "auto" && h.Mode != "force" {

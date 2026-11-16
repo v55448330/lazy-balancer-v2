@@ -55,6 +55,7 @@ var (
 	humanEventQueue         = make(chan humanEvent, humanEventQueueCap)
 	humanEventDropped       atomic.Int64
 	humanEventDeliverFailed atomic.Int64
+	humanEventShutdownLost  atomic.Int64
 	humanEventWorker        sync.Once
 )
 
@@ -147,6 +148,23 @@ func humanEventWorkerLoop() {
 			continue
 		}
 		poster.deliver(ev)
+	}
+}
+
+// FlushHumanEvents 停机收尾：把队列内未投递的尾部事件计入 shutdown_lost
+// 对账源（人机通道无 spool/重试是用户裁定，但丢失量必须可对账——此前停机
+// 尾部静默蒸发不入任何计数，与「丢弃必须可观测」契约张力）。Caddy 模块
+// Cleanup（reload/优雅停机）调用；幂等（排空后队列空，重复调用计 0）。
+func FlushHumanEvents() {
+	for {
+		select {
+		case ev := <-humanEventQueue:
+			if ev.done == nil {
+				humanEventShutdownLost.Add(1)
+			}
+		default:
+			return
+		}
 	}
 }
 
