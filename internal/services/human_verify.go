@@ -184,24 +184,27 @@ func humanChallengeEnabled(policies []*models.SecurityPolicy) bool {
 	return mode != "off"
 }
 
-// humanChallengeFallbackPage 返回人机挑战的默认内置页内容（按 CC 触发动作
-// 与验证方式选页）：queue→9007 等待页、reject→9001 拒绝页、challenge→按验证
-// 方式 9005/9006；非挑战或页面缺失时返回空（调用方回退 lbhuman 内置生成页）。
+// humanChallengeFallbackPage 返回人机挑战的默认内置页内容（按合并模式、
+// CC 触发动作与验证方式选页）：force 恒按验证方式选 9005/9006（CC 动作不
+// 参与——强制验证的请求必须拿到可完成验证的挑战页，排队/拒绝页没有验证
+// 组件会让 force 验证死路）；auto 按 CC 动作 queue→9007 等待页、reject→
+// 9001 拒绝页、challenge→按验证方式 9005/9006；非挑战或页面缺失时返回空
+// （调用方回退 lbhuman 内置生成页）。
 func humanChallengeFallbackPage(ctx *securityPolicyContext, policies []*models.SecurityPolicy) (string, string) {
 	if ctx == nil || !humanChallengeEnabled(policies) {
 		return "", ""
 	}
-	pageID := 0
-	switch cc := loadCCConfig(policies); cc.TriggerAction {
-	case "queue":
-		pageID = builtinQueueWaitPageID
-	case "reject":
-		pageID = builtinRateLimitPageID
-	default:
-		_, typ, _, _ := humanPolicyMerged(policies)
-		pageID = builtinHumanVerifyPageID
-		if typ == "js" {
-			pageID = builtinHumanJSVerifyPageID
+	mode, typ, _, _ := humanPolicyMerged(policies)
+	pageID := builtinHumanVerifyPageID
+	if typ == "js" {
+		pageID = builtinHumanJSVerifyPageID
+	}
+	if mode != "force" {
+		switch cc := loadCCConfig(policies); cc.TriggerAction {
+		case "queue":
+			pageID = builtinQueueWaitPageID
+		case "reject":
+			pageID = builtinRateLimitPageID
 		}
 	}
 	return ctx.blockPageByID[pageID], ctx.blockPageTypeByID[pageID]

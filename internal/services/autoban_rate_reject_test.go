@@ -56,3 +56,48 @@ func TestObserveHumanEvents_challengeFailDimsUnchanged(t *testing.T) {
 		t.Fatalf("challenge=嫌疑/fail=确证 现行维度不得变，w=%+v", w)
 	}
 }
+
+// Given CC reject 拦截事件经人机通道喂入（blocked×cc_rate_reject）。
+// When 窗口原因计数与候选归因。
+// Then 原因类别=限流拒绝（不得丢归因降级占位符），主原因透传候选。
+func TestObserveHumanEvents_rateRejectCarriesReason(t *testing.T) {
+	installAutobanFixture(t, "2026-10-14 10:00:00")
+	cfg := AutobanConfig{Enabled: true, Threshold: 1, WindowMinutes: 5, Duration: "1h", Scope: "blocked"}
+	if err := SetAutobanConfig(cfg); err != nil {
+		t.Fatal(err)
+	}
+	ObserveHumanEvents([]HumanObserveItem{
+		{IP: "45.33.32.63", Kind: "rate_reject", At: time.Time{}},
+	})
+	autobanMu.Lock()
+	w := autobanWindows["45.33.32.63"]
+	autobanMu.Unlock()
+	if w == nil || w.Reasons["限流拒绝"] != 1 {
+		t.Fatalf("rate_reject 必须计入「限流拒绝」原因桶，w=%+v", w)
+	}
+	cands := autobanCandidates(cfg, 5*time.Minute)
+	if len(cands) != 1 || cands[0].Reason != "限流拒绝" {
+		t.Fatalf("候选主原因=%+v, want 限流拒绝", cands)
+	}
+}
+
+// Given rate_reject 达阈值候选。
+// When merge 落名单。
+// Then 条目备注=限流拒绝（归因缺口修复：此前分类空串→占位符「自动封禁」）。
+func TestObserveHumanEvents_rateRejectBanRemark(t *testing.T) {
+	installAutobanFixture(t, "2026-10-14 10:00:00")
+	cfg := AutobanConfig{Enabled: true, Threshold: 1, WindowMinutes: 5, Duration: "1h", Scope: "blocked"}
+	if err := SetAutobanConfig(cfg); err != nil {
+		t.Fatal(err)
+	}
+	ObserveHumanEvents([]HumanObserveItem{
+		{IP: "45.33.32.64", Kind: "rate_reject", At: time.Time{}},
+	})
+	if _, err := autobanMergeEntries(cfg, autobanCandidates(cfg, 5*time.Minute)); err != nil {
+		t.Fatalf("merge: %v", err)
+	}
+	entries := presetEntries(t)
+	if len(entries) != 1 || entries[0].Remark != "限流拒绝" {
+		t.Fatalf("封禁备注=%+v, want 限流拒绝", entries)
+	}
+}

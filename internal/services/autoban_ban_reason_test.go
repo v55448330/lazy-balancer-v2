@@ -26,6 +26,7 @@ func TestAutobanBanReason_classifiesFeedShapes(t *testing.T) {
 		{"challenged", "human_challenge", "人机验证挑战"},
 		{"challenged", "human_failed", "人机验证失败"},
 		{"challenged", "cc_session_anomaly", "会话异常"},
+		{"blocked", "cc_rate_reject", "限流拒绝"},
 		{"blocked", "942100", "CRS拦截"},
 		{"logged", "942100", "CRS检测"},
 		{"blocked", "10001", "自定义规则拦截"},

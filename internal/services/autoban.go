@@ -185,25 +185,21 @@ const (
 	AutobanSuspicionMultiplierMax = 20
 )
 
-// autobanSuspicionMultiplierDefault 与 db 默认同值（缺省归一单源）。
-const autobanSuspicionMultiplierDefault = 4
-
-// autobanConfirmFloorRatioDefault 与 db 默认同值（缺省归一单源）。
-const autobanConfirmFloorRatioDefault = "0.4"
-
 // AutobanSuspicionMultiplierOrDefault 缺省形态（0=旧客户端未携带）归一默认；
-// 显式越界交 ValidateAutobanConfig 拒绝。
+// 默认值直绑 db 治理常量（DDL DEFAULT/启动回填/读侧 COALESCE 同一单源，
+// 禁止私抄字面量副本）；显式越界交 ValidateAutobanConfig 拒绝。
 func AutobanSuspicionMultiplierOrDefault(n int) int {
 	if n == 0 {
-		return autobanSuspicionMultiplierDefault
+		return db.DefaultAutobanSuspicionMultiplier
 	}
 	return n
 }
 
-// AutobanConfirmFloorRatioOrDefault 缺省形态（空串）归一默认。
+// AutobanConfirmFloorRatioOrDefault 缺省形态（空串）归一默认（直绑 db 治理
+// 常量，与倍率同口径单源）。
 func AutobanConfirmFloorRatioOrDefault(s string) string {
 	if s == "" {
-		return autobanConfirmFloorRatioDefault
+		return db.DefaultAutobanConfirmFloorRatio
 	}
 	return s
 }
@@ -701,19 +697,20 @@ type autobanCounter struct {
 	Suspicion int
 }
 
-// autobanBanReasonOrder 原因类别固定优先序（平局裁决：人机>会话异常>CRS>
-// 自定义，拦截>检测>挑战）——候选主原因取窗口内计数最多类别，平局按此序。
-// 键集即桶 Reasons 的有限键域；新增类别须同步 autobanBanReason 分类。
+// autobanBanReasonOrder 原因类别固定优先序（平局裁决：人机>会话异常>CC
+// 拦截>CRS>自定义，拦截>检测>挑战）——候选主原因取窗口内计数最多类别，
+// 平局按此序。键集即桶 Reasons 的有限键域；新增类别须同步 autobanBanReason 分类。
 var autobanBanReasonOrder = []string{
 	"人机验证失败", "人机验证挑战",
-	"会话异常", "突刺", "4xx激增",
+	"会话异常", "突刺", "4xx激增", "限流拒绝",
 	"CRS拦截", "CRS检测",
 	"自定义规则拦截", "自定义规则检测",
 }
 
 // autobanBanReason 把喂入事件的 action×rule_triggered 归类为封禁原因文本
 // （名单条目备注消费）。值域=喂入点实际可达形态（阶段 3 族门内：人机两态
-// + CRS/自定义 × blocked/logged）；未知形态返回空串（merge 降级占位符）。
+// + CRS/自定义 × blocked/logged；人机通道豁免族门的 blocked×cc_rate_reject
+// =限流拒绝）；未知形态返回空串（merge 降级占位符）。
 // 备注是存储层数据非 UI 词条，中文常量直存（与「事件处置」「手动封禁」同口径）。
 func autobanBanReason(action, ruleTriggered string) string {
 	switch {
@@ -723,6 +720,10 @@ func autobanBanReason(action, ruleTriggered string) string {
 		return "人机验证挑战"
 	case action == "challenged" && strings.HasPrefix(ruleTriggered, "cc_"):
 		return AutobanCCTriggerReasonLabel(strings.TrimPrefix(ruleTriggered, "cc_"))
+	case action == "blocked" && ruleTriggered == "cc_rate_reject":
+		// CC reject（429）经人机通道喂 blocked 口径（族门豁免）——归因
+		// 「限流拒绝」，与事件 rule_msg「限流拒绝（429）」同族语义。
+		return "限流拒绝"
 	case securityEventsRuleIsCRSFamily(ruleTriggered):
 		if action == "blocked" {
 			return "CRS拦截"
@@ -1363,8 +1364,13 @@ type autobanMergeOutcome struct {
 	// 来源说错（排障时无法区分自动/手动），故单列供审计分流。
 	ExpiredManual []string
 	Banned        []string // 本轮新封禁的 IP
-	Evicted       int      // 超限挤出的自动条目数
-	EvictedIPs    []string // 被挤出条目的 IP（挤出=解封同语义：调用方须随
+	// BannedDurations 与 Banned 平行：逐新封的实际执法时长（累犯升档后可能
+	// 不同于配置时长，0=永久）——逐 IP 审计按实际时长报告；容量丢弃的新封
+	// 不在此列（未执法不审计）。空/短于 Banned=无 merge 详情的直调形态，
+	// 审计回退配置时长。
+	BannedDurations []time.Duration
+	Evicted         int      // 超限挤出的自动条目数
+	EvictedIPs      []string // 被挤出条目的 IP（挤出=解封同语义：调用方须随
 	// Expired 一起清计数桶，否则旧计数仍 ≥ 阈值 → 下轮零新事件立即重封，
 	// 形成「挤出→重封→再挤出」轮转；同时供容量收敛留痕点名身份）
 	DroppedNew int // 容量不足丢弃的新封数
@@ -1495,10 +1501,9 @@ func autobanMergeEntries(cfg AutobanConfig, candidates []AutobanSuggestion) (aut
 	// 清空，新流量重新计数/达标仍会再封（与手动解封同语义）。
 	duration := autobanDurations[cfg.Duration]
 	var toAdd []models.IPListEntry
-	// bannedDurations/bannedOffenses 与 toAdd 平行：逐新封的实际执法时长与
-	// 衰减后的本次累计次数（升级后可能不同于配置时长/原记账），落库后累犯
-	// 记账用（容量丢弃的新封不记账）。
-	var bannedDurations []time.Duration
+	// bannedOffenses 与 toAdd 平行：衰减后的本次累计次数（升级后可能不同于
+	// 原记账），落库后累犯记账用（容量丢弃的新封不记账）。逐新封的实际执法
+	// 时长随 out.BannedDurations 传出（审计消费，与 toAdd 同容量截断口径）。
 	var bannedOffenses []int
 	for _, c := range candidates {
 		if c.IP == "" {
@@ -1538,7 +1543,7 @@ func autobanMergeEntries(cfg AutobanConfig, candidates []AutobanSuggestion) (aut
 			entry.ExpiresAt = now.Add(banDuration).Format(autobanTimeLayout)
 		}
 		toAdd = append(toAdd, entry)
-		bannedDurations = append(bannedDurations, banDuration)
+		out.BannedDurations = append(out.BannedDurations, banDuration)
 		bannedOffenses = append(bannedOffenses, offense)
 		inList[identity] = struct{}{}
 	}
@@ -1617,6 +1622,7 @@ func autobanMergeEntries(cfg AutobanConfig, candidates []AutobanSuggestion) (aut
 			out.DroppedIPs = append(out.DroppedIPs, dropped.Value)
 		}
 		toAdd = toAdd[:keep]
+		out.BannedDurations = out.BannedDurations[:keep]
 		break
 	}
 	if evictedCount > 0 {
@@ -1665,7 +1671,7 @@ func autobanMergeEntries(cfg AutobanConfig, candidates []AutobanSuggestion) (aut
 	// 否则每次读都重新衰减、永不收敛（防永久标签失效）。
 	if cfg.Escalation != AutobanEscalationOff {
 		for i, e := range toAdd {
-			label := autobanEscalationDurationLabel(bannedDurations[i])
+			label := autobanEscalationDurationLabel(out.BannedDurations[i])
 			if _, err := tx.Exec(`INSERT INTO autoban_recidivism (identity, offense_count, last_ban_at, escalated_duration)
 				VALUES (?, ?, ?, ?)
 				ON CONFLICT(identity) DO UPDATE SET
@@ -2118,7 +2124,7 @@ func RunAutobanCycle(rc taskengine.RunContext) error {
 			return nil
 		}
 		// 审计逐 IP「自动封禁」+ 每批「到期解封」汇总（系统操作者）。
-		autobanAuditBanned(cfg, out.Banned)
+		autobanAuditBanned(cfg, out)
 		autobanAuditExpiredUnban(out.Expired, out.ExpiredManual)
 	}
 	TaskLogf(AutobanTaskID, "cycle", "本轮：计数 %d IP / 活跃 %d 个 IP / 候选 %d / 新封 %d / 到期解封 %d / 名单 %d 条%s%s",
@@ -2145,9 +2151,12 @@ func autobanReportCapacityOutcome(scope string, out autobanMergeOutcome) {
 }
 
 // autobanAuditBanned 逐 IP「自动封禁」审计（Run 轮：降级窗口外、名单已收敛）。
+// 时长报该 IP 的实际执法时长（out.BannedDurations，累犯升档后可能不同于
+// 配置时长）；无 merge 详情（直调形态）回退配置时长。
 // 逐 IP 行受单轮上限约束：超限时保留前 N 条并补一条汇总行（完整名单以预置
 // IP 列表为准），避免洪峰下单轮写放大到 AutobanListEntryCap 行审计。
-func autobanAuditBanned(cfg AutobanConfig, banned []string) {
+func autobanAuditBanned(cfg AutobanConfig, out autobanMergeOutcome) {
+	banned := out.Banned
 	if len(banned) == 0 {
 		return
 	}
@@ -2156,11 +2165,15 @@ func autobanAuditBanned(cfg AutobanConfig, banned []string) {
 		omitted = len(banned) - autobanAuditPerRoundCap
 		banned = banned[:autobanAuditPerRoundCap]
 	}
-	for _, ip := range banned {
+	for i, ip := range banned {
+		durationLabel := cfg.Duration
+		if i < len(out.BannedDurations) {
+			durationLabel = autobanEscalationDurationLabel(out.BannedDurations[i])
+		}
 		RecordAuditLog("system", AutobanAuditAction, "IP 地址列表",
 			FormatAuditDetail("IP："+ip,
 				autobanHitDetail(cfg),
-				"时长："+AutobanDurationLabel(cfg.Duration),
+				"时长："+AutobanDurationLabel(durationLabel),
 				AuditResultPart("success")), "")
 	}
 	if omitted > 0 {

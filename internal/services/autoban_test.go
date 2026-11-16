@@ -2320,7 +2320,7 @@ func TestAutobanAuditBanned_capsPerRoundRows(t *testing.T) {
 	t.Cleanup(func() { autobanAuditPerRoundCap = oldCap })
 
 	autobanAuditBanned(AutobanConfig{Threshold: 5, WindowMinutes: 10, Duration: "1h"},
-		[]string{"45.33.32.1", "45.33.32.2", "45.33.32.3", "45.33.32.4"})
+		autobanMergeOutcome{Banned: []string{"45.33.32.1", "45.33.32.2", "45.33.32.3", "45.33.32.4"}})
 
 	rows, err := db.AuditDB.Query(`SELECT detail FROM audit_log WHERE action='自动封禁' ORDER BY id`)
 	if err != nil {

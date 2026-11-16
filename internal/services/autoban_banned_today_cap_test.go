@@ -29,7 +29,7 @@ func TestAutobanBannedToday_countsOmittedBansBeyondRoundCap(t *testing.T) {
 		ips = append(ips, fmt.Sprintf("45.33.32.%d", i))
 	}
 	cfg := AutobanConfig{Threshold: 5, WindowMinutes: 10, Duration: "1h"}
-	autobanAuditBanned(cfg, ips)
+	autobanAuditBanned(cfg, autobanMergeOutcome{Banned: ips})
 
 	// 前提：上限确实把逐 IP 行截到 3 条，剩余信息只存在于一条非逐 IP 的汇总行。
 	var perIP, total int
@@ -47,7 +47,7 @@ func TestAutobanBannedToday_countsOmittedBansBeyondRoundCap(t *testing.T) {
 	}
 
 	// 未超上限的轮次：逐 IP 行直接计数，跨轮累加。
-	autobanAuditBanned(cfg, ips[:2])
+	autobanAuditBanned(cfg, autobanMergeOutcome{Banned: ips[:2]})
 	if got := AutobanBannedToday(); got != 10 {
 		t.Fatalf("跨轮累计今日封禁=%d, want 10", got)
 	}
