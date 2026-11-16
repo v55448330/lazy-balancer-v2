@@ -291,7 +291,7 @@ body {
 /* 全站数字输入框统一尺寸与左对齐（用户裁定：默认尺寸偏大、内容右对齐不一致）：
  * 高度 32→28px、字号 13px、内容左对齐；右侧步进列 28px 紧凑。显式 size=large
  * 不在此列（保留大尺寸语义）；small 同口径。 */
-.el-input-number.el-input-number:not(.el-input-number--large) .el-input__wrapper { height: 28px; }
+.el-input-number.el-input-number:not(.el-input-number--large) .el-input__wrapper { height: 28px; box-sizing: border-box; }
 .el-input-number.el-input-number:not(.el-input-number--large) .el-input__inner {
   text-align: left;
   font-size: 13px;
@@ -302,6 +302,17 @@ body {
 .el-input-number.el-input-number:not(.el-input-number--large) .el-input-number__decrease {
   width: 28px;
   font-size: 12px;
+}
+/* 下拉选择框与数字输入框高度一致（用户裁定：其他页面两者同高，small 下拉
+ * EP 默认 24px 与数字框 28px 不齐）——非 large 下拉 wrapper 同口径 28px。 */
+.el-select.el-select:not(.el-select--large) .el-select__wrapper {
+  min-height: 28px;
+  height: 28px;
+}
+.el-select.el-select:not(.el-select--large) .el-select__selected-item,
+.el-select.el-select:not(.el-select--large) .el-select__placeholder {
+  font-size: 13px;
+  line-height: 26px;
 }
 
 /* 自定义控件与开关：Element 变量覆盖不到的业务 chip/触发器单源收敛。 */
