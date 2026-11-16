@@ -1112,6 +1112,7 @@ export default {
     'ccAction_reject': '直接拒绝（429）',
     'ccQueueWaitRowLabel': '等待秒数',
     'ccQueueWaitRowValue': '{sec} 秒',
+    'ccQueueWaitAutoValue': '自动（{sec} 秒）',
     'ccSpikeRowLabel': '突刺阈值',
     'ccSpikeSummary': '{n} 次 / {sec} 秒',
     'cc4xxRowLabel': '4xx 比例',

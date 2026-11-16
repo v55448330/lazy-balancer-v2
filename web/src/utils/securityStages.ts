@@ -734,8 +734,14 @@ export const buildStageModel = (
             s2rows.push({ label: t('common.app.views.stages.humanTtlLabel'), detail: t('common.app.views.stages.humanTtlValue', { ttl: policy.human_verify_ttl }) })
           }
         }
-        if (effAction === 'queue' && policy.cc_queue_wait_sec) {
-          s2rows.push({ label: t('common.app.views.stages.ccQueueWaitRowLabel'), detail: t('common.app.views.stages.ccQueueWaitRowValue', { sec: policy.cc_queue_wait_sec }) })
+        if (effAction === 'queue') {
+          // 等待 0=自动取 CC 窗口（与表单 ccQueueWaitTip 同口径）——最常见
+          // 配置不得整行隐去，披露「自动（N 秒）」。
+          const waitSec = policy.cc_queue_wait_sec ?? 0
+          const detail = waitSec > 0
+            ? t('common.app.views.stages.ccQueueWaitRowValue', { sec: waitSec })
+            : t('common.app.views.stages.ccQueueWaitAutoValue', { sec: policy.cc_rps_window ?? 0 })
+          s2rows.push({ label: t('common.app.views.stages.ccQueueWaitRowLabel'), detail })
         }
       }
       // 异常触发三条件（突刺/4xx/会话）只在启用 CC 检测且挑战开启时可观测；

@@ -1112,6 +1112,7 @@ export default {
     'ccAction_reject': 'Reject (429)',
     'ccQueueWaitRowLabel': 'Wait seconds',
     'ccQueueWaitRowValue': '{sec}s',
+    'ccQueueWaitAutoValue': 'Auto ({sec}s)',
     'ccSpikeRowLabel': 'Spike threshold',
     'ccSpikeSummary': '{n} requests / {sec}s',
     'cc4xxRowLabel': '4xx ratio',
