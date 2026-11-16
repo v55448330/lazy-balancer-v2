@@ -553,7 +553,7 @@ test('阶段 2 复用拦截页步骤：挑战页选择与页面内滑块/JS 组�
   assert.doesNotMatch(text, /ccResponseLabel/, '响应方式标签已退役')
   assert.match(text, /challengePageTip/, '挑战页需说明验证组件占位符')
   assert.match(text, /<el-form-item :label="t\('app\.security\.policies\.bp\.pageLabel'\)">/, '挑战页选择器')
-  assert.match(text, /<div class="info-note-bar form-item-note-bar"><span class="info-note-desc">\{\{ t\('app\.security\.policies\.human\.whenTip'\) \}\}<\/span><\/div>/, '何时介入说明使用 info-note-bar 信息说明样式（弹框描述统一裁定）')
+  assert.match(text, /<div class="info-note-bar cc-step-note"><span class="info-note-desc">\{\{ t\('app\.security\.policies\.human\.whenTip'\) \}\}<\/span><\/div>/, '何时介入说明使用 info-note-bar 且对齐投影条宽度（cc-step-note）')
   assert.doesNotMatch(code('src/locales/zh/security.ts'), /\{\{human_verify_widget\}\}/, 'i18n 文案不得内嵌双花括号：vue-i18n 渲染会抛错并吞掉页面选择器')
   assert.match(text, /v-text="challengePagePlaceholder"/, '占位符用 v-text 原样展示（单源 computed）')
   assert.match(text, /human_verify_type === 'js' \? '\{\{human_js_widget\}\}' : '\{\{human_verify_widget\}\}'/, '占位符按验证方式分流：JS→{{human_js_widget}}，滑块→{{human_verify_widget}}')
