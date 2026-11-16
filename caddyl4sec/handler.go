@@ -165,6 +165,10 @@ func (h *L4SecHandler) Cleanup() error {
 	if h.ruleID != "" && h.counters != nil {
 		deregisterRuleCounters(h.ruleID, h.counters)
 	}
+	// 收尾冲刷进程级管线尾部行（镜像 HTTP SecurityBlockedCounter.Cleanup→
+	// FlushAuditPipelines）：停机/reload 时环内+批内在途事件不得静默丢失。
+	// 进程级单例多实例共享，flushQuiesced 幂等（排空后 flushNowSafely 无副作用）。
+	FlushL4Pipeline()
 	return nil
 }
 

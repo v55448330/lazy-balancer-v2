@@ -907,6 +907,21 @@ func currentL4Pipeline() *l4Pipeline {
 	return l4GlobalPipeline
 }
 
+// l4FlushDrainWait 是 FlushL4Pipeline 的有界排空等待上限：停机/Cleanup 时
+// 环内+批内尾部行必须冲刷送达，不得静默丢失（镜像 HTTP FlushAuditPipelines）。
+const l4FlushDrainWait = 2 * time.Second
+
+// FlushL4Pipeline 冲刷进程级 L4 管线尾部行（有界排空+flushNowSafely）。
+// Caddy 模块 Cleanup（reload/优雅停机）调用——不关闭管线（进程级单例裁决
+// 不变，见 l4GlobalPipeline 注释），仅排空在途行防停机静默丢失。未创建=no-op。
+func FlushL4Pipeline() {
+	p := currentL4Pipeline()
+	if p == nil {
+		return
+	}
+	p.flushQuiesced(l4FlushDrainWait)
+}
+
 func (p *l4Pipeline) start() {
 	p.startOnce.Do(func() {
 		go p.drain()
