@@ -680,44 +680,20 @@
             </div>
           </div>
           <el-form :model="form" :label-width="$flw('100px')" :disabled="formFrozen">
-            <el-form-item :label="t('app.security.policies.human.modeLabel')">
-              <el-radio-group v-model="form.human_verify_mode">
-                <el-radio-button value="off">{{ t('app.security.policies.human.modeOff') }}</el-radio-button>
-                <el-radio-button value="auto">{{ t('app.security.policies.human.modeAuto') }}</el-radio-button>
-                <el-radio-button value="force">{{ t('app.security.policies.human.modeForce') }}</el-radio-button>
+            <!-- 何时介入（三档单选，消灭「智能触发 vs CC检测开关」重复）：
+                 none=off / always=force（恒挑战）/ anomaly=auto+检测开（阈值触发）。 -->
+            <el-form-item :label="t('app.security.policies.human.whenLabel')">
+              <el-radio-group :model-value="ccIntervention" @update:model-value="onInterventionChange">
+                <el-radio-button value="none">{{ t('app.security.policies.human.whenNone') }}</el-radio-button>
+                <el-radio-button value="always">{{ t('app.security.policies.human.whenAlways') }}</el-radio-button>
+                <el-radio-button value="anomaly">{{ t('app.security.policies.human.whenAnomaly') }}</el-radio-button>
               </el-radio-group>
-              <div class="form-tip-line">{{ t('app.security.policies.human.modeTip') }}</div>
-              <div v-if="form.human_verify_mode === 'auto' && !form.cc_detect_enabled" class="form-tip-line">
-                <el-text type="warning" size="small">{{ t('app.security.policies.human.autoNeedsCc') }}</el-text>
-              </div>
-              <div v-if="form.cc_detect_enabled && form.human_verify_mode === 'off'" class="form-tip-line">
-                <el-text type="warning" size="small">{{ t('app.security.policies.human.ccNeedsHuman') }}</el-text>
-              </div>
+              <div class="form-tip-line">{{ t('app.security.policies.human.whenTip') }}</div>
             </el-form-item>
-            <template v-if="form.human_verify_mode !== 'off'">
-              <el-form-item :label="t('app.security.policies.human.typeLabel')">
-                <el-radio-group v-model="form.human_verify_type">
-                  <el-radio-button value="slider">{{ t('app.security.policies.human.typeSlider') }}</el-radio-button>
-                  <el-radio-button value="js">{{ t('app.security.policies.human.typeJs') }}</el-radio-button>
-                </el-radio-group>
-                <div class="form-tip-line">{{ t('app.security.policies.human.typeTip') }}</div>
-              </el-form-item>
-              <el-form-item :label="t('app.security.policies.human.ttlLabel')">
-                <el-input-number v-model="form.human_verify_ttl" :min="1" :max="1440" style="width: 120px" />
-                <span class="form-tip-inline">{{ t('app.security.policies.human.ttlTip') }}</span>
-              </el-form-item>
-              <el-form-item :label="t('app.security.policies.human.exemptPathsLabel')">
-                <el-select v-model="form.human_exempt_paths" multiple filterable allow-create default-first-option :placeholder="t('app.security.policies.human.exemptPathsTip')" style="width: 100%" />
-                <div class="form-tip-line">{{ t('app.security.policies.human.exemptIpGuide') }}</div>
-              </el-form-item>
-              <template v-if="form.human_verify_mode !== 'force'">
-              <el-divider>{{ t('app.security.policies.human.ccSection') }}</el-divider>
-              <el-form-item :label="t('app.security.policies.human.ccEnabledLabel')">
-                <el-switch v-model="form.cc_detect_enabled" />
-                <div class="form-tip-line">{{ t('app.security.policies.human.ccEnabledTip') }}</div>
-              </el-form-item>
-              <template v-if="form.cc_detect_enabled">
-
+            <template v-if="ccIntervention !== 'none'">
+              <!-- 异常阈值：仅「仅异常流量」展开（always=force 恒挑战，阈值不参与）。 -->
+              <template v-if="ccIntervention === 'anomaly'">
+                <el-divider>{{ t('app.security.policies.human.ccSection') }}</el-divider>
                 <el-form-item :label="t('app.security.policies.human.ccRpsLabel')">
                   <el-input-number v-model="form.cc_rps_limit" :min="1" :max="100000" style="width: 120px" />
                   <span class="form-tip-inline">{{ t('app.security.policies.human.ccRpsPer') }}</span>
@@ -734,23 +710,45 @@
                   <el-input-number v-if="form.cc_session_anomaly" v-model="form.cc_session_ua_threshold" :min="1" :max="100" style="width: 100px; margin-left: 10px" />
                   <span v-if="form.cc_session_anomaly" class="form-tip-inline">{{ t('app.security.policies.human.ccSessionTip') }}</span>
                 </el-form-item>
-                <!-- CC 触发动作三态（用户裁定：统一检测面，响应动作可选）：
-                     challenge=人机验证（默认）/queue=排队等待页/reject=429 拒绝页。 -->
-                <el-form-item :label="t('app.security.policies.human.ccActionLabel')">
-                  <el-select v-model="form.cc_trigger_action" style="width: 260px">
-                    <el-option value="challenge" :label="t('app.security.policies.human.ccActionChallenge')" />
-                    <el-option value="queue" :label="t('app.security.policies.human.ccActionQueue')" />
-                    <el-option value="reject" :label="t('app.security.policies.human.ccActionReject')" />
-                  </el-select>
-                  <div class="form-tip-line">{{ t('app.security.policies.human.ccActionTip') }}</div>
+              </template>
+              <el-divider>{{ t('app.security.policies.human.actionSection') }}</el-divider>
+              <!-- 怎么处置（三档单选，与「何时」正交）：验证方式降为 challenge 子参数，
+                   动作选项不再含「滑块/JS」字样（消除语义重复）。force 恒挑战，选择器隐藏。 -->
+              <el-form-item v-if="ccIntervention === 'anomaly'" :label="t('app.security.policies.human.actionLabel')">
+                <el-radio-group v-model="form.cc_trigger_action">
+                  <el-radio-button value="challenge">{{ t('app.security.policies.human.actionChallenge') }}</el-radio-button>
+                  <el-radio-button value="queue">{{ t('app.security.policies.human.actionQueue') }}</el-radio-button>
+                  <el-radio-button value="reject">{{ t('app.security.policies.human.actionReject') }}</el-radio-button>
+                </el-radio-group>
+                <div class="form-tip-line">{{ t('app.security.policies.human.actionTip') }}</div>
+              </el-form-item>
+              <div v-else class="form-tip-line">{{ t('app.security.policies.human.alwaysChallengeTip') }}</div>
+              <!-- challenge 子参数：验证方式 + 通过有效期（仅有效动作=challenge 时显示）。 -->
+              <template v-if="ccEffectiveActionValue === 'challenge'">
+                <el-form-item :label="t('app.security.policies.human.typeLabel')">
+                  <el-radio-group v-model="form.human_verify_type">
+                    <el-radio-button value="slider">{{ t('app.security.policies.human.typeSlider') }}</el-radio-button>
+                    <el-radio-button value="js">{{ t('app.security.policies.human.typeJs') }}</el-radio-button>
+                  </el-radio-group>
+                  <div class="form-tip-line">{{ t('app.security.policies.human.typeTip') }}</div>
                 </el-form-item>
-                <el-form-item v-if="form.cc_trigger_action === 'queue'" :label="t('app.security.policies.human.ccQueueWaitLabel')">
-                  <el-input-number v-model="form.cc_queue_wait_sec" :min="0" :max="300" style="width: 120px" />
-                  <span class="form-tip-inline">{{ t('app.security.policies.human.ccQueueWaitTip', { sec: form.cc_rps_window }) }}</span>
+                <el-form-item :label="t('app.security.policies.human.ttlLabel')">
+                  <el-input-number v-model="form.human_verify_ttl" :min="1" :max="1440" style="width: 120px" />
+                  <span class="form-tip-inline">{{ t('app.security.policies.human.ttlTip') }}</span>
                 </el-form-item>
               </template>
-              </template>
-              <div v-else class="form-tip-line">{{ t('app.security.policies.human.forceIgnoresCc') }}</div>
+              <!-- queue 子参数：等待秒数。 -->
+              <el-form-item v-if="ccEffectiveActionValue === 'queue'" :label="t('app.security.policies.human.ccQueueWaitLabel')">
+                <el-input-number v-model="form.cc_queue_wait_sec" :min="0" :max="300" style="width: 120px" />
+                <span class="form-tip-inline">{{ t('app.security.policies.human.ccQueueWaitTip', { sec: form.cc_rps_window }) }}</span>
+              </el-form-item>
+              <el-form-item :label="t('app.security.policies.human.exemptPathsLabel')">
+                <el-select v-model="form.human_exempt_paths" multiple filterable allow-create default-first-option :placeholder="t('app.security.policies.human.exemptPathsTip')" style="width: 100%" />
+                <div class="form-tip-line">{{ t('app.security.policies.human.exemptIpGuide') }}</div>
+              </el-form-item>
+              <!-- 跨步指引：页面在拦截页步配置；反复命中走自动封禁（全局管线）。 -->
+              <div class="form-tip-line">{{ t('app.security.policies.human.pageInNextStep') }}</div>
+              <div class="form-tip-line">{{ t('app.security.policies.human.autobanLinkTip') }}<AccessibleLink type="primary" @click="goToAutobanConfig">{{ t('app.security.policies.human.autobanLinkLabel') }}</AccessibleLink></div>
             </template>
           </el-form>
         </div>
@@ -816,20 +814,21 @@
             <el-form-item :label="t('app.security.policies.bp.pageLabel')">
               <el-select v-model="form.block_page_id" :placeholder="t('app.security.policies.bp.pagePlaceholder')" style="width: 100%">
                 <el-option :value="0" :label="t(editorPolicyType === 'stage2' ? 'app.security.policies.bp.stage2NoPageDefault' : 'app.security.policies.bp.noPageDefault')" />
-                <el-option v-for="p in blockPages" :key="p.id" :label="pageLabel(p)" :value="p.id" />
+                <el-option v-for="p in ccFilteredBlockPages" :key="p.id" :label="pageLabel(p)" :value="p.id" />
               </el-select>
-              <!-- 页步骤三态（CC 触发动作）：challenge=挑战页组件占位符；
-                   queue=等待页组件占位符；reject=纯拦截页（无占位符要求）。 -->
-              <div v-if="editorPolicyType === 'stage2' && form.cc_trigger_action !== 'reject'" class="form-tip-line">
-                {{ t(form.cc_trigger_action === 'queue' ? 'app.security.policies.human.queuePageTip' : 'app.security.policies.human.challengePageTip') }} <code class="placeholder-code" v-text="challengePagePlaceholder" />
+              <!-- 页步骤三态（按有效处置动作，force 恒 challenge）：challenge=挑战页
+                   组件占位符；queue=等待页组件占位符；reject=纯拦截页（无占位符要求）。
+                   stage2 下拉已按动作过滤兼容页；mixed 不过滤（兼 WAF 页），靠提示+校验。 -->
+              <div v-if="editorPolicyType === 'stage2' && ccEffectiveActionValue !== 'reject'" class="form-tip-line">
+                {{ t(ccEffectiveActionValue === 'queue' ? 'app.security.policies.human.queuePageTip' : 'app.security.policies.human.challengePageTip') }} <code class="placeholder-code" v-text="challengePagePlaceholder" />
               </div>
-              <div v-if="editorPolicyType === 'stage2' && form.cc_trigger_action === 'reject'" class="form-tip-line">
+              <div v-if="editorPolicyType === 'stage2' && ccEffectiveActionValue === 'reject'" class="form-tip-line">
                 {{ t('app.security.policies.human.rejectPageTip') }}
               </div>
               <div v-if="challengePageMissingWidget" class="form-tip-line is-error">
                 {{ t('app.security.policies.human.challengePageNeedsWidget') }}
               </div>
-              <div v-else-if="form.block_page_id === 0" class="form-tip-line">{{ t(editorPolicyType === 'stage2' ? (form.cc_trigger_action === 'queue' ? 'app.security.policies.bp.stage2NoPageQueueTip' : form.cc_trigger_action === 'reject' ? 'app.security.policies.bp.stage2NoPageRejectTip' : 'app.security.policies.bp.stage2NoPageTip') : 'app.security.policies.bp.noPageTipDefault') }}</div>
+              <div v-else-if="form.block_page_id === 0" class="form-tip-line">{{ t(editorPolicyType === 'stage2' ? (ccEffectiveActionValue === 'queue' ? 'app.security.policies.bp.stage2NoPageQueueTip' : ccEffectiveActionValue === 'reject' ? 'app.security.policies.bp.stage2NoPageRejectTip' : 'app.security.policies.bp.stage2NoPageTip') : 'app.security.policies.bp.noPageTipDefault') }}</div>
               <div v-else class="form-tip-line">{{ t('app.security.policies.bp.manageTip') }}<AccessibleLink type="primary" @click="goToBlockPagesPage">{{ t('app.security.policies.common.goCreateEdit') }}</AccessibleLink></div>
               <!-- 归属汇总卡（用户验收裁定）：逐条重复提示收敛为单源汇总——主行 +
                    例外分面（TCP/兜底差异，仅存在才渲染）+ 能力门行；
@@ -1078,7 +1077,7 @@ import { hasOwn } from '@/utils/hasOwn'
 import { SECURITY_DESCRIPTION_MAX_RUNES, SECURITY_NAME_MAX_RUNES } from '@/utils/securityLimits'
 import { CRS_HIDDEN_GROUP_CODES, CRS_INFRA_GROUP_CODES, isInfraRuleId, normalizeCrsGroups } from '@/utils/crsGroups'
 import { DEEP_LINK_PARAMS, pageUrl } from '@/utils/deepLink'
-import { buildPolicyPayload, ccDetectWithoutHumanWarning, challengePageMissingWidget as challengePageNeedsWidgetCheck, crawlerExemptionNeedsEngines, trustEnabledForPolicyType } from '@/utils/policyPayload'
+import { buildPolicyPayload, ccDetectWithoutHumanWarning, ccEffectiveAction, ccFormFromIntervention, ccInterventionFromForm, ccStage2PageOptions, challengePageMissingWidget as challengePageNeedsWidgetCheck, crawlerExemptionNeedsEngines, trustEnabledForPolicyType, type CCIntervention } from '@/utils/policyPayload'
 import { activateOnce } from '@/utils/keyboardActivate'
 
 const { t, locale } = useI18n()
@@ -1318,8 +1317,8 @@ const policySummaryLine = (row: PolicySummary): string => {
     const parts: string[] = []
     if (row.human_verify_mode && row.human_verify_mode !== 'off') {
       const modeLabel = row.human_verify_mode === 'force'
-        ? t('app.security.policies.human.modeForce')
-        : t('app.security.policies.human.modeAuto')
+        ? t('app.security.policies.human.whenAlways')
+        : t('app.security.policies.human.whenAnomaly')
       parts.push(t('app.security.policies.summary.ccChallenge', { mode: modeLabel }))
     }
     if (row.cc_detect_enabled && row.human_verify_mode && row.human_verify_mode !== 'off') {
@@ -3537,9 +3536,40 @@ const beforeWizardClose = (done: () => void): void => {
 // 挑战页组件占位符按验证方式分流：JS 用 {{human_js_widget}}，滑块用
 // {{human_verify_widget}}——内置页/自定义页校验与提示共用此单源。
 const challengePagePlaceholder = computed<string>(() => {
-  if (form.value.cc_trigger_action === 'queue') return '{{queue_widget}}'
+  if (ccEffectiveActionValue.value === 'queue') return '{{queue_widget}}'
   return form.value.human_verify_type === 'js' ? '{{human_js_widget}}' : '{{human_verify_widget}}'
 })
+
+// 何时介入三档（UI 重组映射，数据模型零破坏）：none/always/anomaly ↔
+// human_verify_mode + cc_detect_enabled。auto+检测关历史态归一 anomaly。
+const ccIntervention = computed<CCIntervention>(() => ccInterventionFromForm({
+  humanVerifyMode: form.value.human_verify_mode,
+  ccDetectEnabled: form.value.cc_detect_enabled,
+}))
+const onInterventionChange = (v: string | number | boolean | undefined): void => {
+  const f = ccFormFromIntervention(v as CCIntervention)
+  form.value.human_verify_mode = f.human_verify_mode
+  form.value.cc_detect_enabled = f.cc_detect_enabled
+}
+// 有效处置动作：force 恒 challenge（后端 force 不经动作分流）；驱动子参数
+// 显示与拦截页过滤/校验，避免「force 选了 queue 但实际挑战」的口径分叉。
+const ccEffectiveActionValue = computed<string>(() => ccEffectiveAction(form.value.human_verify_mode, form.value.cc_trigger_action))
+// 拦截页步 stage2 页面下拉：按有效动作过滤兼容页（mixed 不过滤，兼 WAF 页）。
+// 处置动作/验证方式切换后，已选自定义页若不再兼容（stage2）→ 重置为默认页(0)，
+// 避免下拉显示空值。mixed 不重置（单页兼 WAF，由校验提示引导）。
+watch([ccEffectiveActionValue, () => form.value.human_verify_type], () => {
+  if (editorPolicyType.value !== 'stage2') return
+  if (form.value.block_page_id > 0 && challengePageNeedsWidgetCheck({
+    policyType: editorPolicyType.value,
+    blockPageId: form.value.block_page_id,
+    blockPages: blockPages.value,
+    humanVerifyType: form.value.human_verify_type,
+    ccTriggerAction: ccEffectiveActionValue.value,
+  })) {
+    form.value.block_page_id = 0
+  }
+})
+const ccFilteredBlockPages = computed(() => ccStage2PageOptions(blockPages.value, editorPolicyType.value, ccEffectiveActionValue.value, form.value.human_verify_type))
 
 // 占位符校验单源（utils/policyPayload）：0=内置挑战页一等路径放行，仅 >0 真实页
 // 校验当前动作组件；保存门与提示线共用，不内联第二份判定。
@@ -3548,7 +3578,7 @@ const challengePageMissingWidget = computed<boolean>(() => challengePageNeedsWid
   blockPageId: form.value.block_page_id,
   blockPages: blockPages.value,
   humanVerifyType: form.value.human_verify_type,
-  ccTriggerAction: form.value.cc_trigger_action,
+  ccTriggerAction: ccEffectiveActionValue.value,
 }))
 
 const handleSave = async () => {
@@ -3851,6 +3881,7 @@ function handleDelete(row: PolicySummary) {
 
 const goToCustomRulesPage = () => { window.open(pageUrl('security-rules', { [DEEP_LINK_PARAMS.securityRulesTab]: 'custom' }), '_blank', 'noopener') }
 const goToBlockPagesPage = () => { window.open(pageUrl('security-block-pages'), '_blank', 'noopener') }
+const goToAutobanConfig = () => { window.open(pageUrl('security-events'), '_blank', 'noopener') }
 const openRuleInNewTab = (caddyId: string): void => {
   // 交接改走 URL query（rs 参数），Rules.vue onMounted 消费后清除。
   window.open(pageUrl('rules', { [DEEP_LINK_PARAMS.ruleSearch]: caddyId }), '_blank', 'noopener')

@@ -553,7 +553,7 @@ test('阶段 2 复用拦截页步骤：挑战页选择与页面内滑块/JS 组�
   assert.doesNotMatch(text, /ccResponseLabel/, '响应方式标签已退役')
   assert.match(text, /challengePageTip/, '挑战页需说明验证组件占位符')
   assert.match(text, /<el-form-item :label="t\('app\.security\.policies\.bp\.pageLabel'\)">/, '挑战页选择器')
-  assert.match(text, /<div class="form-tip-line">\{\{ t\('app\.security\.policies\.human\.ccEnabledTip'\) \}\}<\/div>/, 'CC 说明使用换行描述样式')
+  assert.match(text, /<div class="form-tip-line">\{\{ t\('app\.security\.policies\.human\.whenTip'\) \}\}<\/div>/, '何时介入说明使用换行描述样式')
   assert.doesNotMatch(code('src/locales/zh/security.ts'), /\{\{human_verify_widget\}\}/, 'i18n 文案不得内嵌双花括号：vue-i18n 渲染会抛错并吞掉页面选择器')
   assert.match(text, /v-text="challengePagePlaceholder"/, '占位符用 v-text 原样展示（单源 computed）')
   assert.match(text, /human_verify_type === 'js' \? '\{\{human_js_widget\}\}' : '\{\{human_verify_widget\}\}'/, '占位符按验证方式分流：JS→{{human_js_widget}}，滑块→{{human_verify_widget}}')
@@ -562,6 +562,7 @@ test('阶段 2 复用拦截页步骤：挑战页选择与页面内滑块/JS 组�
   const editor = code('src/views/security/SecurityBlockPages.vue')
   assert.match(editor, /insertHumanWidget/, '拦截页编辑器保留插入滑块验证组件')
   assert.match(editor, /insertJsWidget/, '拦截页编辑器提供插入 JS 验证组件')
+  assert.match(editor, /insertQueueWidget/, '拦截页编辑器提供插入排队等待组件')
 })
 
 test('安全规则预设项可键盘操作（折叠头 button + 标签/模板键盘语义）', () => {

@@ -50,8 +50,8 @@ test('CC 4xx 比例输入：min=0（0=关闭）且 max=100（后端合法域上�
   assert.ok(windowInput && /:max="3600"/.test(windowInput[0]), 'cc_rps_window 上界 3600 保持')
 })
 
-// ── 2. CC-only 保存警告（非阻断；复用 autoNeedsCc 警告形态） ──
-test('CC 检测开启但人机验证关闭：保存警告接线（非阻断）+ 文案与 ccEnabledTip 同口径', () => {
+// ── 2. CC-only 保存警告（非阻断；防御历史/导入数据 cc_detect+off 态） ──
+test('CC 检测开启但人机验证关闭：保存警告接线（非阻断）+ 文案口径', () => {
   const save = section(policies, 'const handleSave = async', 'const payload = buildPolicyPayload(')
   assert.match(save, /ccDetectWithoutHumanWarning\(/, '保存流必须消费 CC-only 警告谓词')
   assert.match(save, /ElMessage\.warning\(t\('app\.security\.policies\.human\.ccNeedsHuman'\)\)/, '警告走 ElMessage.warning（非阻断）')
@@ -63,12 +63,12 @@ test('CC 检测开启但人机验证关闭：保存警告接线（非阻断）+ 
   const blockClose = matchBrace(save, blockOpen)
   assert.ok(blockOpen >= 0 && blockClose > blockOpen, '警告 if 块花括号必须闭合')
   assert.doesNotMatch(save.slice(blockOpen, blockClose + 1), /\breturn\b/, '警告不得阻断保存（块内无 return）')
-  // 就地警告线（autoNeedsCc 同形态：el-text type=warning）
-  assert.match(policies, /v-if="form\.cc_detect_enabled && form\.human_verify_mode === 'off'"[\s\S]{0,160}?ccNeedsHuman/, 'CC 步骤内就地警告线（与 autoNeedsCc 同形态）')
-  // 文案口径：仅人机开启时生效（与 ccEnabledTip 一致），不得宣称直接封禁
+  // 文案口径：仅人机开启时生效，不得宣称直接封禁。CC 交互重组后「何时三档」
+  // 从源头消除 auto+检测关 / 检测开+off 矛盾态，就地警告线退役；保存期警告
+  // 保留作历史/导入数据防御。
   const zhTip = zhSec.match(/"ccNeedsHuman": "([^"]*)"/)
   assert.ok(zhTip, 'ccNeedsHuman zh 词条必须在场')
-  assert.match(zhTip![1], /仅在人机验证开启时生效|人机验证关闭/, '警告口径必须与 ccEnabledTip「仅人机开启时生效」一致')
+  assert.match(zhTip![1], /仅在人机验证开启时生效|人机验证关闭/, '警告口径必须为「仅人机开启时生效」')
   assert.ok(enSec.includes('"ccNeedsHuman"'), 'ccNeedsHuman en 词条必须成对在场')
 })
 
@@ -86,8 +86,8 @@ test('阶段 2 未配挑战页（0）：保存校验放行（内置挑战页一�
 test('阶段 2 未配挑战页（0）：下拉选项与提示走挑战语境（内置挑战页，不宣称 403/绑定链兜底）', () => {
   // 下拉 0 选项与提示线按 stage 分流（stage2 → 挑战语境键）
   assert.match(policies, /:label="t\(editorPolicyType === 'stage2' \? 'app\.security\.policies\.bp\.stage2NoPageDefault' : 'app\.security\.policies\.bp\.noPageDefault'\)"/, '0 选项 label 按 stage 分流')
-  // 三态（CC 触发动作）：stage2 按动作分流挑战/排队/拒绝语境键
-  assert.match(policies, /form\.cc_trigger_action === 'queue' \? 'app\.security\.policies\.bp\.stage2NoPageQueueTip' : form\.cc_trigger_action === 'reject' \? 'app\.security\.policies\.bp\.stage2NoPageRejectTip' : 'app\.security\.policies\.bp\.stage2NoPageTip'/, '未配页提示必须按 CC 动作三态分流')
+  // 三态（按有效处置动作，force 恒 challenge）：stage2 按动作分流挑战/排队/拒绝语境键
+  assert.match(policies, /ccEffectiveActionValue === 'queue' \? 'app\.security\.policies\.bp\.stage2NoPageQueueTip' : ccEffectiveActionValue === 'reject' \? 'app\.security\.policies\.bp\.stage2NoPageRejectTip' : 'app\.security\.policies\.bp\.stage2NoPageTip'/, '未配页提示必须按有效处置动作三态分流')
   // 只读查看投影同样分流
   assert.match(policies, /d\.human_verify_mode[\s\S]{0,80}stage2NoPageDefault/, '只读查看投影 0 页按 stage2 分流')
   // zh 文案：内置挑战页语义，无 403/绑定链兜底
@@ -186,8 +186,12 @@ test('退役死词条整族清除：events.cc* / overview.status.human* / cc.pas
   assert.match(zhSec, /"ccProtectionHint"/, 'ccProtectionHint 是活键，不得误删')
   assert.match(events, /t\('app\.security\.events\.ccProtectionHint'\)/, 'ccProtectionHint 消费点必须在场')
   assert.match(policies, /t\('app\.security\.policies\.human\.ccSection'\)/, 'policies.human.ccSection 活键不得误删')
-  assert.match(policies, /t\('app\.security\.policies\.human\.ccEnabledLabel'\)/, 'policies.human.ccEnabledLabel 活键不得误删')
-  assert.match(zhSec, /"ccEnabledTip"/, 'ccEnabledTip 活键保留')
+  // CC 交互重组：ccEnabledLabel/ccEnabledTip 退役（何时三档取代独立检测开关），
+  // whenLabel/actionLabel 为新活键。
+  assert.match(policies, /t\('app\.security\.policies\.human\.whenLabel'\)/, 'policies.human.whenLabel 活键在场')
+  assert.match(policies, /t\('app\.security\.policies\.human\.actionLabel'\)/, 'policies.human.actionLabel 活键在场')
+  assert.doesNotMatch(zhSec, /"ccEnabledLabel"/, 'ccEnabledLabel 已退役（何时三档取代）')
+  assert.doesNotMatch(enSec, /"ccEnabledLabel"/, 'en ccEnabledLabel 已退役')
 })
 
 test('自动封禁状态接口：不声明后端不返回的 cc_* 字段（AutobanStatus 死字段清除）', () => {

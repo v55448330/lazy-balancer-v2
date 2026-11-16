@@ -102,10 +102,18 @@
           <el-tabs v-model="bodyTab" class="block-page-body-tabs">
             <el-tab-pane :label="t('app.security.blockPages.dialog.tabHtml')" name="html">
               <div v-if="!isReadOnly && !currentPage?.is_default && !currentPage?.is_builtin" class="block-widget-bar">
-                <el-button size="small" :disabled="saving" @click="insertHumanWidget">{{ t('app.security.blockPages.dialog.insertHumanWidget') }}</el-button>
-                <el-button size="small" :disabled="saving" @click="insertJsWidget">{{ t('app.security.blockPages.dialog.insertJsWidget') }}</el-button>
-                <span class="form-tip-inline">{{ t('app.security.blockPages.dialog.humanWidgetTip') }}</span>
-                <span class="form-tip-inline">{{ t('app.security.blockPages.dialog.jsWidgetTip') }}</span>
+                <div class="block-widget-row">
+                  <el-button size="small" :disabled="saving" @click="insertHumanWidget">{{ t('app.security.blockPages.dialog.insertHumanWidget') }}</el-button>
+                  <span class="form-tip-line">{{ t('app.security.blockPages.dialog.humanWidgetTip') }}</span>
+                </div>
+                <div class="block-widget-row">
+                  <el-button size="small" :disabled="saving" @click="insertJsWidget">{{ t('app.security.blockPages.dialog.insertJsWidget') }}</el-button>
+                  <span class="form-tip-line">{{ t('app.security.blockPages.dialog.jsWidgetTip') }}</span>
+                </div>
+                <div class="block-widget-row">
+                  <el-button size="small" :disabled="saving" @click="insertQueueWidget">{{ t('app.security.blockPages.dialog.insertQueueWidget') }}</el-button>
+                  <span class="form-tip-line">{{ t('app.security.blockPages.dialog.queueWidgetTip') }}</span>
+                </div>
               </div>
               <div class="block-content-editor" style="width: 100%">
                 <SyntaxHighlight v-if="isReadOnly || currentPage?.is_default || currentPage?.is_builtin" :content="form.content" language="markup" height="320px" />
@@ -184,6 +192,11 @@ const insertHumanWidget = (): void => {
 const insertJsWidget = (): void => {
   if (form.value.content.includes('{{human_js_widget}}')) return
   form.value.content = form.value.content.trimEnd() + '\n{{human_js_widget}}\n'
+}
+
+const insertQueueWidget = (): void => {
+  if (form.value.content.includes('{{queue_widget}}')) return
+  form.value.content = form.value.content.trimEnd() + '\n{{queue_widget}}\n'
 }
 
 const { t } = useI18n()
@@ -375,6 +388,11 @@ onMounted(fetchData)
 
 <style scoped>
 .block-content-editor { border: 1px solid #e4e7ed; overflow: hidden; }
+/* 验证组件插入：每组件一行（按钮 + 描述换行堆叠），三组件三行，
+   长描述不再挤在按钮右侧单行（用户裁定）。 */
+.block-widget-bar { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
+.block-widget-row { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; }
+.block-widget-row .form-tip-line { margin: 0; }
 
 /* 弹框高度约束（2026-11-12 用户反馈：原弹框超出屏幕）：
    表单区内滚，编辑器随标签页切换按需占用高度；弹框自身不超出视口。 */

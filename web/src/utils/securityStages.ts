@@ -722,11 +722,20 @@ export const buildStageModel = (
       const s2rows: StageRow[] = []
       if (policy?.human_verify_mode && policy.human_verify_mode !== 'off') {
         s2rows.push({ label: t('common.app.views.stages.humanModeLabel'), detail: t('common.app.views.stages.humanMode_' + policy.human_verify_mode) })
-        if (policy.human_verify_type) {
-          s2rows.push({ label: t('common.app.views.stages.humanTypeLabel'), detail: t('common.app.views.stages.humanType_' + policy.human_verify_type) })
+        // 处置动作（force 恒挑战；auto 按 cc_trigger_action）——queue/reject 策略
+        // 在预览/规则流程抽屉可见，不再只显示模式/方式/阈值。
+        const effAction = policy.human_verify_mode === 'force' ? 'challenge' : (policy.cc_trigger_action ?? 'challenge')
+        s2rows.push({ label: t('common.app.views.stages.ccActionRowLabel'), detail: t('common.app.views.stages.ccAction_' + effAction) })
+        if (effAction === 'challenge') {
+          if (policy.human_verify_type) {
+            s2rows.push({ label: t('common.app.views.stages.humanTypeLabel'), detail: t('common.app.views.stages.humanType_' + policy.human_verify_type) })
+          }
+          if (policy.human_verify_ttl) {
+            s2rows.push({ label: t('common.app.views.stages.humanTtlLabel'), detail: t('common.app.views.stages.humanTtlValue', { ttl: policy.human_verify_ttl }) })
+          }
         }
-        if (policy.human_verify_ttl) {
-          s2rows.push({ label: t('common.app.views.stages.humanTtlLabel'), detail: t('common.app.views.stages.humanTtlValue', { ttl: policy.human_verify_ttl }) })
+        if (effAction === 'queue' && policy.cc_queue_wait_sec) {
+          s2rows.push({ label: t('common.app.views.stages.ccQueueWaitRowLabel'), detail: t('common.app.views.stages.ccQueueWaitRowValue', { sec: policy.cc_queue_wait_sec }) })
         }
       }
       // 异常触发（突刺/4xx/多UA）只在启用 CC 检测且挑战开启时可观测。

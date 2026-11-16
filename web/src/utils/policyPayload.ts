@@ -239,3 +239,53 @@ export const challengePageMissingWidget = (state: {
   const page = state.blockPages.find((p) => p.id === state.blockPageId)
   return !page || !(page.content ?? '').includes(placeholder)
 }
+
+/**
+ * CC 防护交互重组（何时介入 × 怎么处置 两个正交问题，纯前端 UI 映射）。
+ * 数据模型零破坏：human_verify_mode/cc_detect_enabled/cc_trigger_action 全保留。
+ */
+export type CCIntervention = 'none' | 'always' | 'anomaly'
+
+/** 表单 → 何时介入三档。auto+检测关（历史装饰态）归一 anomaly——保存即启用
+ *  检测，消除「智能触发但永不触发」矛盾态。 */
+export const ccInterventionFromForm = (state: { humanVerifyMode: string; ccDetectEnabled: boolean }): CCIntervention => {
+  if (state.humanVerifyMode === 'force') return 'always'
+  if (state.humanVerifyMode === 'auto') return 'anomaly'
+  return 'none'
+}
+
+/** 何时介入三档 → 表单字段。none=off；always=force（恒挑战，检测关）；
+ *  anomaly=auto+检测开（阈值触发）。 */
+export const ccFormFromIntervention = (v: CCIntervention): { human_verify_mode: string; cc_detect_enabled: boolean } => {
+  if (v === 'always') return { human_verify_mode: 'force', cc_detect_enabled: false }
+  if (v === 'anomaly') return { human_verify_mode: 'auto', cc_detect_enabled: true }
+  return { human_verify_mode: 'off', cc_detect_enabled: false }
+}
+
+/** 有效处置动作：force 恒 challenge（后端 lbhuman force 不经动作分流，
+ *  queue/reject 仅 auto+CC 触发时生效）；auto/off 透传存储值。 */
+export const ccEffectiveAction = (humanVerifyMode: string, ccTriggerAction: string): string =>
+  humanVerifyMode === 'force' ? 'challenge' : ccTriggerAction
+
+/** 页面是否兼容当前处置动作（占位符要求）：challenge 按验证方式要人机
+ *  组件；queue 要排队组件；reject 任何页均可（纯拦截页）。 */
+export const ccPageCompatible = (
+  page: { content?: string },
+  action: string,
+  humanVerifyType: string,
+): boolean => {
+  if (action === 'reject') return true
+  const placeholder = action === 'queue'
+    ? '{{queue_widget}}'
+    : humanVerifyType === 'js' ? '{{human_js_widget}}' : '{{human_verify_widget}}'
+  return (page.content ?? '').includes(placeholder)
+}
+
+/** 拦截页步 stage2 页面下拉过滤：仅 stage2 按动作过滤兼容页；mixed/stage3
+ *  不过滤——单 block_page_id 兼 WAF 拦截页，硬过滤会破坏阶段3页选择。 */
+export const ccStage2PageOptions = <T extends { id: number; content?: string }>(
+  pages: ReadonlyArray<T>,
+  policyType: string,
+  action: string,
+  humanVerifyType: string,
+): T[] => policyType === 'stage2' ? pages.filter((p) => ccPageCompatible(p, action, humanVerifyType)) : [...pages]
