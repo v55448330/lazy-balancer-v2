@@ -9,6 +9,9 @@ import (
 )
 
 func TestFlushHumanEvents_countsQueuedTail(t *testing.T) {
+	// 停常驻 worker 隔离（shuffle 顺序下前序排空测试可能已启动 worker，
+	// 会与 Flush 竞争消费队列）——本测试独占消费计 shutdown_lost。
+	stopHumanEventWorkerForTest()
 	// 直接入队两条（不经 worker 投递），Flush 应计入 shutdown_lost。
 	humanEventQueue <- humanEvent{ruleID: "r1", ip: "203.0.113.1", kind: "challenge", ts: time.Now().UnixMilli()}
 	humanEventQueue <- humanEvent{ruleID: "r1", ip: "203.0.113.2", kind: "challenge", ts: time.Now().UnixMilli()}
@@ -25,6 +28,7 @@ func TestFlushHumanEvents_countsQueuedTail(t *testing.T) {
 }
 
 func TestFlushHumanEvents_emptyNoOp(t *testing.T) {
+	stopHumanEventWorkerForTest()
 	before := humanEventShutdownLost.Load()
 	FlushHumanEvents()
 	if humanEventShutdownLost.Load() != before {

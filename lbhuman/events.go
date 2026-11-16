@@ -56,7 +56,12 @@ var (
 	humanEventDropped       atomic.Int64
 	humanEventDeliverFailed atomic.Int64
 	humanEventShutdownLost  atomic.Int64
-	humanEventWorker        sync.Once
+	// worker 可停止化（测试隔离）：sync.Once 常驻 goroutine 不可停，shuffle
+	// 顺序下前序排空测试启动的 worker 会与停机收尾钉测竞争消费队列。mutex+
+	// stop chan 支持测试停 worker 隔离 FlushHumanEvents；生产语义不变（首次
+	// 上报启动单 worker 串行投递，Cleanup 不停 worker——进程级单例）。
+	humanEventWorkerMu   sync.Mutex
+	humanEventWorkerStop chan struct{}
 )
 
 func (p *humanEventPoster) initClient() {
@@ -133,7 +138,7 @@ func takeCCTriggerReason(ruleID, ip, kind string) string {
 // 队列满即丢弃计数，投递失败计数——监控事件不阻塞请求路径）。
 // ts 在入队时刻定格：事件时间戳=发生时刻，不随队列积压/投递阻塞漂移。
 func reportHumanEvent(ruleID, ip, method, uri, ua, kind string) {
-	humanEventWorker.Do(func() { go humanEventWorkerLoop() })
+	startHumanEventWorker()
 	select {
 	case humanEventQueue <- humanEvent{ruleID: ruleID, ip: ip, method: method, uri: uri, ua: ua, kind: kind, reason: takeCCTriggerReason(ruleID, ip, kind), ts: time.Now().UnixMilli()}:
 	default:
@@ -141,13 +146,30 @@ func reportHumanEvent(ruleID, ip, method, uri, ua, kind string) {
 	}
 }
 
-func humanEventWorkerLoop() {
-	for ev := range humanEventQueue {
-		if ev.done != nil {
-			close(ev.done) // 排空探针：此前入队事件均已处理完毕
-			continue
+// startHumanEventWorker 幂等启动单 worker（mutex 守护，stop chan 标记运行态）。
+func startHumanEventWorker() {
+	humanEventWorkerMu.Lock()
+	defer humanEventWorkerMu.Unlock()
+	if humanEventWorkerStop != nil {
+		return // 已在运行
+	}
+	stop := make(chan struct{})
+	humanEventWorkerStop = stop
+	go humanEventWorkerLoop(stop)
+}
+
+func humanEventWorkerLoop(stop chan struct{}) {
+	for {
+		select {
+		case <-stop:
+			return
+		case ev := <-humanEventQueue:
+			if ev.done != nil {
+				close(ev.done) // 排空探针：此前入队事件均已处理完毕
+				continue
+			}
+			poster.deliver(ev)
 		}
-		poster.deliver(ev)
 	}
 }
 
@@ -221,7 +243,7 @@ func (p *humanEventPoster) deliver(ev humanEvent) {
 // drainHumanEventsForTest 等待队列排空（测试等待语义）：入队一个排空探针，
 // worker 处理到它即证明此前全部入队事件已处理完毕。
 func drainHumanEventsForTest(timeout time.Duration) bool {
-	humanEventWorker.Do(func() { go humanEventWorkerLoop() })
+	startHumanEventWorker()
 	done := make(chan struct{})
 	select {
 	case humanEventQueue <- humanEvent{done: done}:
@@ -233,5 +255,25 @@ func drainHumanEventsForTest(timeout time.Duration) bool {
 		return true
 	case <-time.After(timeout):
 		return false
+	}
+}
+
+// stopHumanEventWorkerForTest 停止常驻 worker 并排空队列残留（测试隔离）：
+// 停机收尾钉测须独占消费队列计 shutdown_lost，前序排空测试启动的 worker
+// 不得竞争。停 worker 后清空队列残留事件，还原 clean 态（生产不调用）。
+func stopHumanEventWorkerForTest() {
+	humanEventWorkerMu.Lock()
+	stop := humanEventWorkerStop
+	humanEventWorkerStop = nil
+	humanEventWorkerMu.Unlock()
+	if stop != nil {
+		close(stop)
+	}
+	for {
+		select {
+		case <-humanEventQueue:
+		default:
+			return
+		}
 	}
 }
