@@ -529,17 +529,19 @@ func (p *Provider) listRecordsByName(ctx context.Context, zoneID, recordName str
 		}
 		repeatedPage := true
 		for _, record := range pageRecords {
+			// 无进展守卫按记录 ID 判定（先于 Type/名称精确收窄，与 aliyun 同
+			// 骨架）：整页非目标记录不得误判无进展提前收手漏扫后续页。
+			if seen[record.ID] {
+				continue
+			}
+			repeatedPage = false
+			seen[record.ID] = true
 			if record.Type != "TXT" {
 				continue
 			}
 			if dnsname.NormalizeName(record.Name) != recordName {
 				continue
 			}
-			if seen[record.ID] {
-				continue
-			}
-			repeatedPage = false
-			seen[record.ID] = true
 			collected = append(collected, enumeratedRecord{recordID: record.ID, value: record.Content})
 		}
 		fetchedTotal += fetched

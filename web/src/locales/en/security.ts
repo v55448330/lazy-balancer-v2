@@ -187,7 +187,6 @@ export default {
         "bodyAnomaly": "Request body anomaly",
         "wafCrs": "WAF·CRS",
         "wafCustom": "WAF·Custom",
-        "ccProtectionSpaced": "CC protection",
         "other": "Other",
       },
     "title": "Event log",

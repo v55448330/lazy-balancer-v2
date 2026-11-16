@@ -198,8 +198,8 @@
           <el-option :label="t('app.security.events.crawlerBot')" value="爬虫Bot" :title="t('app.security.events.crawlerBotHint')" />
           <el-option :label="t('app.security.events.geoBlock')" value="地域拦截" :title="t('app.security.events.geoBlockHint')" />
           <!-- 阶段 2 配额限流退役：旧「限流」筛选项移除，CC 防护事件由下方
-               「CC 防护」项承载（human_* 整族）。退役前的 429 存量行仍在列表中
-               显示（归类「CC防护」），但不属 human_* 族筛选范围。 -->
+               「CC 防护」项承载（human_* + cc_rate_reject + 429 存量同族，
+               后端双筛选键同归 humanFamilyCondition）。 -->
           <el-option :label="t('app.security.events.ipAcl')" value="IP 访问控制" :title="t('app.security.events.ipAclHint')" />
           <el-option :label="t('app.security.events.trustList')" value="信任名单" :title="t('app.security.events.trustListHint')" />
           <el-option :label="t('app.security.events.threatIntel')" value="威胁情报库" :title="t('app.security.events.threatIntelHint')" />
@@ -1114,7 +1114,7 @@ const TRIGGER_TYPE_KEYS: Record<string, string> = {
   '请求体异常': 'bodyAnomaly',
   'WAF·CRS': 'wafCrs',
   'WAF·自定义': 'wafCustom',
-  'CC 防护': 'ccProtectionSpaced',
+  'CC 防护': 'ccProtection',
   '其他': 'other',
 }
 const triggerTypeLabel = (raw?: string): string => {

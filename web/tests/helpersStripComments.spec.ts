@@ -279,6 +279,9 @@ test('脚本存在性断言文件禁止裸 source()/repoSource() 回流', () => 
     // API 文档钉：断言对象是 apidocs.go 的示例 JSON 与说明文字（raw 视图），
     // 后端代码存在性断言仍走 repoCode()。
     'auditLogTotalStale.spec.ts',
+    // 注释文案钉：dialog-body-inset 旧「零 padding」注释必须与定义同步（断言
+    // 对象是注释本身，剥注释后无法判定）；其余代码存在性断言走 code()。
+    'securityViewsProjection.spec.ts',
   ])
   // 本文件自身含判据的合成样本字符串（非真实导入），排除自扫描。
   const offenders = specFiles.filter((name) => name !== 'helpersStripComments.spec.ts' && rawImport.test(readSpec(name)) && !allowedRaw.has(name))

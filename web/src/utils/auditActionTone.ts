@@ -83,6 +83,9 @@ const ACTION_TONE_EXCEPTIONS: Record<string, AuditActionTone> = {
   // 导入归一：备份携带的 waiting_ca 存量在导入提交后保窗归一为 failed（失败
   // 语义统一的导入路径延伸）——与「启动迁移」同族的状态收敛动作，告警性呈现。
   '导入归一': 'warning',
+  // 导入注记：导入 finish 追加冷却已过期终态注记（与「导入归一」同族的
+  // 状态收敛留痕动作，告警性呈现）。
+  '导入注记': 'warning',
   '脱离': 'warning',
   '服务控制': 'warning',
   '暂停': 'warning',

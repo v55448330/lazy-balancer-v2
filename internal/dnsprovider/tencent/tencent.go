@@ -421,6 +421,13 @@ func (p *Provider) listChallengeRecords(ctx context.Context, zone, subDomain str
 			if item == nil || item.RecordId == nil {
 				continue
 			}
+			// 无进展守卫按记录 ID 判定（先于 Type/名称精确收窄，与 aliyun 同
+			// 骨架）：整页非目标记录不得误判无进展提前收手漏扫后续页。
+			if seen[*item.RecordId] {
+				continue
+			}
+			repeatedPage = false
+			seen[*item.RecordId] = true
 			if item.Type == nil || *item.Type != "TXT" {
 				continue
 			}
@@ -435,11 +442,6 @@ func (p *Provider) listChallengeRecords(ctx context.Context, zone, subDomain str
 			if item.Value != nil {
 				value = *item.Value
 			}
-			if seen[*item.RecordId] {
-				continue
-			}
-			repeatedPage = false
-			seen[*item.RecordId] = true
 			collected = append(collected, enumeratedRecord{recordID: *item.RecordId, value: value})
 		}
 		var total uint64

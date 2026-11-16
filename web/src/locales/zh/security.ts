@@ -187,7 +187,6 @@ export default {
         "bodyAnomaly": "请求体异常",
         "wafCrs": "WAF·CRS",
         "wafCustom": "WAF·自定义",
-        "ccProtectionSpaced": "CC 防护",
         "other": "其他",
       },
     "title": "事件日志",

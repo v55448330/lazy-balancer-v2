@@ -444,8 +444,8 @@ func (p *Provider) listChallengeRecords(ctx context.Context, zone, subDomain str
 			if seen[record.RecordId] {
 				continue
 			}
-			seen[record.RecordId] = true
 			repeatedPage = false
+			seen[record.RecordId] = true
 			if record.Type != "TXT" || dnsname.NormalizeName(record.RR) != subDomain {
 				continue
 			}

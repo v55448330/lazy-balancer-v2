@@ -9,6 +9,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"strconv"
+	"strings"
 
 	"lazy-balancer-v2/internal/db"
 )
@@ -242,16 +243,20 @@ func TestThreatTopTargets_ghostRulesDoNotCrowdOutExisting(t *testing.T) {
 	}
 }
 
-// 限流族是 429 精确 ID——旧实现按 3 字符前缀 + 三个下划线拼成
-// LIKE '429___'，永不命中。
+// 限流族 429 精确 ID（非 LIKE '429___' 前缀拼凑）；双筛选键同归后「CC防护」
+// 无空格 legacy 键与「CC 防护」人机族键同口径——human_* + cc_rate_reject +
+// 429 存量同族（429 仍精确匹配，不得退化成 3 字符前缀 LIKE）。
 func TestRuleTriggeredFilterSQL_rateLimitFamilyExact(t *testing.T) {
 	var args []any
 	cond := ruleTriggeredFilterSQL("CC防护", &args)
-	if len(args) != 1 || args[0] != "429" {
-		t.Fatalf("args=%v, want [429]（CC 防护族=429 精确匹配）", args)
+	if !strings.Contains(cond, "rule_triggered = '429'") {
+		t.Fatalf("cond=%q, want 含 429 精确匹配（非 LIKE 前缀拼凑）", cond)
 	}
-	if cond != "(rule_triggered = ?)" {
-		t.Fatalf("cond=%q, want 精确匹配条件", cond)
+	if !strings.Contains(cond, "human_*") || !strings.Contains(cond, "cc_rate_reject") {
+		t.Fatalf("cond=%q, want 双键同归 human 族（human_* + cc_rate_reject）", cond)
+	}
+	if strings.Contains(cond, "429___") {
+		t.Fatalf("cond=%q, 429 不得退化成 3 字符前缀 LIKE", cond)
 	}
 	// 回归形状：CRS 3 字符前缀族仍锚定 6 位。
 	args = nil

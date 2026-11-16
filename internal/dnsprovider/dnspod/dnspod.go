@@ -476,20 +476,22 @@ func (p *Provider) listChallengeRecords(ctx context.Context, zone, subDomain str
 		}
 		repeatedPage := true
 		for _, record := range result.Records {
+			// flexNumber 兼容历史两种形态（JSON 数字与带引号字符串），
+			// 与 Record.Create 侧的 id 读取同口径。
+			id := string(record.ID)
+			// 无进展守卫按记录 ID 判定（先于 Type/名称精确收窄，与 aliyun 同
+			// 骨架）：整页非目标记录不得误判无进展提前收手漏扫后续页。
+			if seen[id] {
+				continue
+			}
+			repeatedPage = false
+			seen[id] = true
 			if record.Type != "TXT" {
 				continue
 			}
 			if dnsname.NormalizeName(record.Name) != subDomain {
 				continue
 			}
-			// flexNumber 兼容历史两种形态（JSON 数字与带引号字符串），
-			// 与 Record.Create 侧的 id 读取同口径。
-			id := string(record.ID)
-			if seen[id] {
-				continue
-			}
-			repeatedPage = false
-			seen[id] = true
 			collected = append(collected, enumeratedRecord{recordID: id, value: record.Value})
 		}
 		// 服务端可能按更小的页容量返回：按实际返回条数推进 offset，用

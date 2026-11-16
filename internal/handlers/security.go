@@ -4624,8 +4624,10 @@ func ruleTriggeredFilterSQL(input string, args *[]any) string {
 		if input == "爬虫Bot" {
 			ors = append(ors, crawlerFamilyCondition)
 		}
-		if input == "CC 防护" {
-			ors = append(ors, humanFamilyCondition)
+		if input == "CC 防护" || input == "CC防护" {
+			// 双筛选键同归（有空格人机族键 / 无空格 legacy 429 键）：human_*
+			// + cc_rate_reject + 429 存量同族，两键口径不得分叉。
+			ors = append(ors, humanFamilyCondition, "rule_triggered = '429'")
 		}
 		if input == "IP 访问控制" {
 			// 阶段 1 预检逐策略 ACL deny/黑名单链（1500000+/1510000+ 段）与
@@ -4662,8 +4664,8 @@ func ruleTriggeredFilterSQL(input string, args *[]any) string {
 		if strings.HasPrefix("爬虫Bot", input) {
 			ors = append(ors, crawlerFamilyCondition)
 		}
-		if strings.HasPrefix("CC 防护", input) {
-			ors = append(ors, humanFamilyCondition)
+		if strings.HasPrefix("CC 防护", input) || strings.HasPrefix("CC防护", input) {
+			ors = append(ors, humanFamilyCondition, "rule_triggered = '429'")
 		}
 		if strings.HasPrefix("IP 访问控制", input) {
 			ors = append(ors, aclPrecheckFamilyConditionShape)

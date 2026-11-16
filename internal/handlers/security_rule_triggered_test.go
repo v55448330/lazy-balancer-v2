@@ -486,3 +486,53 @@ func TestRuleTriggeredFilterSQL_ccProtectionFamily(t *testing.T) {
 		t.Errorf("CC 防护,WAF·CRS 并集失真: %v", union)
 	}
 }
+
+// 双筛选键同归（CC防护 无空格 legacy 429 键 / CC 防护 有空格人机族键）：
+// 后端 legacyRuleFamilies 429 键「CC防护」与前端筛选「CC 防护」并存——无空格
+// 键筛选必须同归 humanFamilyCondition（human_* + cc_rate_reject），不得仅命中
+// 429 存量而漏新 CC 防护事件（同一事件族两键口径分叉）。
+func TestRuleTriggeredFilterSQL_ccProtectionSpacedKeysUnified(t *testing.T) {
+	setupSecurityPolicyTestDB(t)
+	if _, err := db.DB.Exec(`CREATE TABLE rule_triggered_cc_spaced_probe (rule_triggered TEXT, rule_msg TEXT)`); err != nil {
+		t.Fatal(err)
+	}
+	probes := []string{"human_challenge", "human_failed", "cc_rate_reject", "429", "942100", "2"}
+	for _, id := range probes {
+		if _, err := db.DB.Exec(`INSERT INTO rule_triggered_cc_spaced_probe (rule_triggered) VALUES (?)`, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	matchSet := func(t *testing.T, family string) map[string]bool {
+		t.Helper()
+		var args []any
+		cond := ruleTriggeredFilterSQL(family, &args)
+		matched := map[string]bool{}
+		rows, err := db.DB.Query(`SELECT rule_triggered FROM rule_triggered_cc_spaced_probe WHERE `+cond, args...)
+		if err != nil {
+			t.Fatalf("query %q family filter: %v", family, err)
+		}
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				t.Fatal(err)
+			}
+			matched[id] = true
+		}
+		rows.Close()
+		return matched
+	}
+	// 无空格 legacy 键与有空格键同口径：human_* + cc_rate_reject + 429 存量。
+	for _, key := range []string{"CC防护", "CC 防护"} {
+		m := matchSet(t, key)
+		for _, id := range []string{"human_challenge", "human_failed", "cc_rate_reject", "429"} {
+			if !m[id] {
+				t.Errorf("筛选键 %q 必须命中 %q（双键同归 human 族）: %v", key, id, m)
+			}
+		}
+		for _, id := range []string{"942100", "2"} {
+			if m[id] {
+				t.Errorf("筛选键 %q 不得命中数字规则 id %q: %v", key, id, m)
+			}
+		}
+	}
+}

@@ -110,6 +110,7 @@ export default {
     importWarning: '导入警告',
     restore: '还原',
     importNormalized: '导入归一',
+    importAnnotated: '导入注记',
     export: '导出',
     cancel: '取消',
     enable: '启用',

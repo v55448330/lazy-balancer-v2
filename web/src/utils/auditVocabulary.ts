@@ -46,6 +46,7 @@ export const AUDIT_ACTION_KEYS: Record<string, string> = {
   '导入失败': 'importFailed',
   '导入警告': 'importWarning',
   '导入归一': 'importNormalized',
+  '导入注记': 'importAnnotated',
   '还原': 'restore',
   '还原警告': 'restoreWarning',
   '导出': 'export',

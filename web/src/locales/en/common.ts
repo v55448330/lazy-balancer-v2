@@ -110,6 +110,7 @@ export default {
     importWarning: 'Import warning',
     restore: 'Restore',
     importNormalized: 'Import normalized',
+    importAnnotated: 'Import annotated',
     export: 'Export',
     cancel: 'Cancel',
     enable: 'Enable',

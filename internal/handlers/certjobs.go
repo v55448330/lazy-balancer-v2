@@ -630,7 +630,7 @@ func (h *Handlers) retryCertJobByID(c *gin.Context, id int) {
 		// 钉测同格式（结果：越过失败冷却），与 queued 行分列。
 		recordAudit(c, "重试", "证书任务", services.FormatAuditDetail(
 			services.AuditJobPart(id), services.AuditRulePart(ruleID),
-			"手动重签越过失败冷却", message, services.AuditResultPart("越过失败冷却")))
+			"手动重签越过失败冷却", message, services.AuditResultPart("cooldown_override")))
 	}
 	if renewalAttempts > 0 {
 		// 重试会把 renewal_attempts 归零（最大重试预算对人工操作重新计）——留痕

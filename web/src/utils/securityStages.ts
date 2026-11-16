@@ -1618,8 +1618,9 @@ export const IP_LIST_CATEGORIES = ['搜索引擎爬虫', 'CDN 节点', '云服�
 //   合成自定义 id 上界段 [900000,1000000)（DB 规则 id
 //   ≥90000 → 触发 id ≥910000，会与 9\d{5} CRS 段重叠）——自定义规则 id 达 9 万
 //   不现实（不可达），边界不修，仅登记留痕。
-//   429 存量后端归「CC防护」族，但列表层筛选项是 human_* 整族（见 triggeredFilter
-//   的类别清单），429 存量不在其内——本函数归 other。
+//   429 存量与 human_*/cc_rate_reject 同归 CC 防护族（后端双筛选键「CC防护」/
+//   「CC 防护」同归 humanFamilyCondition + 429 精确）；本函数 429 数字 id 归
+//   other 仅影响详情弹框阶段投影，列表筛选/攻击族分布以后端为准。
 // （有意设计，勿"统一"）：id '8' 例外——本函数归 ipAcl，而后端权威分类
 // （attackFamilyClassOf）把 8 归 GeoIP。这是 历史共享 id 口径，现代引擎
 // 地域事件已改发 800xxx、不再走 id 8，无现实影响；triggerFamily.spec.ts 与
