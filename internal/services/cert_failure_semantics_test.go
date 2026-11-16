@@ -9,7 +9,8 @@ package services
 //     写 message、写任务日志；达 cert_renewal_attempts 上限则窗口 NULL；
 //   - 续签失败（旧行带旧材料）不得被 30s 部署补扫折回 issued；
 //   - 30s 补扫改扫 failed+窗口到期并重新入队；
-//   - certJobsActive 把 failed+窗口非空计入活跃；失败写窗后唤醒 cert-waiting-ca。
+//   - certJobsActive 把 failed+窗口非空且 attempts 未达上限计入活跃（与补扫
+//     谓词单源对齐）；失败写窗后唤醒 cert-waiting-ca。
 
 import (
 	"context"
@@ -19,6 +20,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"lazy-balancer-v2/internal/db"
 )
@@ -267,6 +269,67 @@ func TestFailureSemantics_certJobsActive_countsFailedWithWindow(t *testing.T) {
 	}
 	if certJobsActive() {
 		t.Fatal("failed + 窗口 NULL（终态）不得计入活跃")
+	}
+}
+
+// 活跃判据的 failed 分支必须并入 attempts 门（与 scanWaitingCACandidates
+// 谓词单源对齐）：配置下调后存量 attempts 超上限且窗口非空的行不再被任何
+// 自动通道消费，计入活跃会让 30s 补扫永续空转且调度永不自停。
+func TestCertJobsActive_failedBranchHonorsAttemptsGate(t *testing.T) {
+	_, database := newClusterTestService(t)
+	if _, err := database.Exec(`UPDATE global_config SET cert_renewal_attempts=3 WHERE id=1`); err != nil {
+		t.Fatalf("set attempts cap: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,ca_available_after,renewal_attempts) VALUES
+		('lb_gate_capped','gate-capped.example','failed',datetime('now','+1 hour'),3)`); err != nil {
+		t.Fatalf("seed capped row: %v", err)
+	}
+
+	// 超限行（窗口非空但 attempts≥上限）：不得计入活跃。
+	if certJobsActive() {
+		t.Fatal("failed+窗口非空但 attempts 已达上限的行不得计入活跃（补扫谓词不收，计入即永续空转）")
+	}
+
+	// 未达上限的窗口行照常计入（门不误伤真实在途信号）。
+	if _, err := database.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,ca_available_after,renewal_attempts) VALUES
+		('lb_gate_live','gate-live.example','failed',datetime('now','+1 hour'),2)`); err != nil {
+		t.Fatalf("seed live row: %v", err)
+	}
+	if !certJobsActive() {
+		t.Fatal("failed+窗口非空且 attempts 未达上限必须计入活跃")
+	}
+}
+
+// 上限说明必须完整保留：base 超长时「先追加后截断」会把终态说明整段截掉
+// （UI 看不出已停止自动重试）。修复=先按「上限-说明长度」预算截断 base 再追加。
+func TestFailureSemantics_maxAttemptsNoteSurvivesLongBase(t *testing.T) {
+	_, database := newClusterTestService(t)
+	resetCertificateServiceForTest(t)
+	useTemporaryCertJobLogDir(t)
+	seedRuleWithCAProvider(t, "lb_cap_long", "cap-long.example.test", 1)
+	if _, err := database.Exec(`UPDATE global_config SET cert_renewal_attempts=3 WHERE id=1`); err != nil {
+		t.Fatalf("set attempts cap: %v", err)
+	}
+	result, err := database.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,renewal_attempts,ca_provider_id)
+		VALUES ('lb_cap_long','cap-long.example.test','validating',2,1)`)
+	if err != nil {
+		t.Fatalf("seed job: %v", err)
+	}
+	jobID, _ := result.LastInsertId()
+
+	// When：超长 CA 错误详情（2000 字节）触顶失败。
+	handleQueueExecutionError(int(jobID), errors.New(strings.Repeat("x", 2000)))
+
+	// Then：message 不超上限、合法 UTF-8，且上限说明完整保留。
+	var message string
+	if err := database.QueryRow(`SELECT COALESCE(message,'') FROM cert_jobs WHERE id=?`, jobID).Scan(&message); err != nil {
+		t.Fatalf("read message: %v", err)
+	}
+	if len(message) > maxJobMessageBytes || !utf8.ValidString(message) {
+		t.Fatalf("message len=%d valid=%v, want <=%d 合法 UTF-8", len(message), utf8.ValidString(message), maxJobMessageBytes)
+	}
+	if !strings.Contains(message, "已达到最大重试次数 3，停止自动重试，可手动重试") {
+		t.Fatalf("message 尾部丢失上限说明（先追加后截断漂移）: %.120s...", message)
 	}
 }
 

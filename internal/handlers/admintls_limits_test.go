@@ -112,6 +112,7 @@ func padAdminTLSPEMToLimit(t *testing.T, pemText string) string {
 // 超过 2 MiB」而非单字段归因——两条对外契约自相矛盾。multipart 与 JSON
 // 两通道同口径。
 func TestUpdateAdminTLS_acceptsMaxSizePairOnBothChannels(t *testing.T) {
+	withIsolatedGlobal(t)
 	certPEM, keyPEM, err := generateTestCert("max-size.example.com", time.Now().Add(-time.Hour), time.Now().Add(24*time.Hour))
 	if err != nil {
 		t.Fatalf("generate cert pair: %v", err)

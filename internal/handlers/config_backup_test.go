@@ -3341,9 +3341,11 @@ func TestImportAutoBackupResetNeeded(t *testing.T) {
 
 // ── v2 备份 JSON 夹具 ──
 //
-// 这是全包唯一的 v2 备份 JSON 构造器。此前并存 9 个各自命名的 *BackupJSON
-// 构造器（全表回填 / 精确表集 / 缺席集合 / sections 注入 / nil 视同缺席等），
-// 语义各不相同；新用例选错构造器会静默绕过目标门（事故：缺
+// 这是全包唯一的 v2 备份 JSON 构造实现。历史并存的 9 个各自命名 *BackupJSON
+// 构造器已全部收敛为本构造器的薄委托（legacyBackupJSON/configBackupJSON/
+// tableSetBackupJSON/completeBackupJSONOmit/noIPListsBackupJSON/
+// sectionsBackupJSON/portsBackupJSON——签名兼容存量调用点，实现单源）；
+// 新用例直接用 backupFixtureOptions，不得再建平行构造实现（事故：缺
 // exported_at/checksum 导致全部早退，断言只命中「非 true」的假绿——见
 // v2BackupBody 上方注释）。
 //

@@ -788,9 +788,11 @@ func rebuildCrawlerSnapshotAfterPromote() {
 //
 // 用户显式停止的 cluster-sync（loopOn=false）保持停止——角色翻转不得复活
 // 用户停止态（task-engine 标准 v2.2 §5）：切从只翻转角色语义，不覆盖用户
-// 对调度开关的裁定。此时以 Logf warn + 操作审计显式提示「切从后不会同步，
-// 请手动开启」，不得静默脱管；偏好表也不再回写 enabled=1（旧实现无条件
-// StartLoop + 持久化偏好，既复活了停止态，重启后还会按残留偏好继续停同步）。
+// 对调度开关的裁定。此时以 Logf warn + 操作审计显式提示真实恢复路径
+// （从节点任务写端点 requireMasterNode + 前端禁用，「请手动开启」在从节点
+// 不可达——必须先升主开启调度再切回），不得静默脱管；偏好表也不再回写
+// enabled=1（旧实现无条件 StartLoop + 持久化偏好，既复活了停止态，重启后
+// 还会按残留偏好继续停同步）。
 // 开启态：确保调度开启 + 持久化偏好（偏好表若残留主节点期间的 0，下次重启
 // 会再次停同步）。resumeHaltedSyncLifecycle 只在开启态调用——daemon 停止时
 // 复活同步服务会让同步在无调度的情况下运行，违背用户停止裁定。
@@ -800,9 +802,9 @@ func restoreClusterSyncSchedulingAfterDemote() {
 		return
 	}
 	if meta, ok := te.Lookup("cluster-sync"); ok && !meta.LoopOn {
-		Logf("warn", "cluster-sync 调度处于用户停止态：切从后不会同步，请手动开启")
+		Logf("warn", "cluster-sync 调度处于用户停止态：切从后不会同步。恢复方法：提升为主节点后在任务监控开启 cluster-sync 调度，再切回从节点")
 		RecordAuditLog("system", "同步停止", "集群模式",
-			FormatAuditDetail("已停止：切从后不会同步，请手动开启", AuditResultPart("warning")), "")
+			FormatAuditDetail("已停止：切从后不会同步。恢复方法：提升为主节点后在任务监控开启 cluster-sync 调度，再切回从节点", AuditResultPart("warning")), "")
 		return
 	}
 	// 角色恢复：非唤醒——仅恢复角色翻转前已开启的调度（loopEnabled 保留语义），

@@ -71,12 +71,18 @@ func TestRuleEndpoint5xxBodiesHideInternalErrors(t *testing.T) {
 		file   string
 		fname  string
 		leaked func(*token.FileSet, ast.Node) []string
+		kind   string // "5xx" | "oknote"
 	}{
-		{"handlers.go", "finishTxApply", collect5xxErrorTextLeaks},
-		{"handlers.go", "finishTxApply", okFailureNoteLeaks},
+		{"handlers.go", "finishTxApply", collect5xxErrorTextLeaks, "5xx"},
+		{"handlers.go", "finishTxApply", okFailureNoteLeaks, "oknote"},
 		// tryIPListHotPathApply 的强制重载收尾镜像 finishTxApply 三分支，
 		// 200 失败注记同受脱敏契约约束。
-		{"securityiplists.go", "tryIPListHotPathApply", okFailureNoteLeaks},
+		{"securityiplists.go", "tryIPListHotPathApply", okFailureNoteLeaks, "oknote"},
+		// 热路径 5xx 面同受扫描（admin 细节政策登记在 adminBusiness5xxDetailFunctions，
+		// 可判性门强制登记——消除「既不登记也不扫描」真空区）。
+		{"securityiplists.go", "tryIPListHotPathApply", collect5xxErrorTextLeaks, "5xx"},
+		// IPv6 地理库开关 200 注记脱敏面（applyErr 不得直拼进成功响应）。
+		{"security.go", "SetIP2RegionV6Enabled", okFailureNoteLeaks, "oknote"},
 	}
 	for _, target := range okNoteTargets {
 		parsedFile, err := parser.ParseFile(fset, target.file, nil, 0)
@@ -87,6 +93,14 @@ func TestRuleEndpoint5xxBodiesHideInternalErrors(t *testing.T) {
 			decl, ok := fn.(*ast.FuncDecl)
 			if !ok || decl.Name.Name != target.fname {
 				continue
+			}
+			// admin 细节政策登记函数豁免 5xx 固定文案门（可判性门
+			// TestAdminBusiness5xxDetailPolicyIsExplicit 强制登记+路由组门）；
+			// 200 注记脱敏门（okFailureNoteLeaks）不豁免。
+			if target.kind == "5xx" && target.fname == "tryIPListHotPathApply" {
+				if _, registered := adminBusiness5xxDetailFunctions[target.file+":"+target.fname]; registered {
+					continue
+				}
 			}
 			for _, leak := range target.leaked(fset, decl) {
 				t.Errorf("%s:%s: 响应拼接了未脱敏的内部错误文本: %s", target.file, decl.Name.Name, leak)
@@ -111,6 +125,8 @@ func f(c *gin.Context, err error, status int) {
 	// 不经 .Error() 字面串的形态同样会泄露内部文本（SQL/路径/admin 地址）。
 	c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: fmt.Sprintf("x: %v", err)})
 	fail(http.StatusBadGateway, fmt.Errorf("y: %s", err))
+	c.JSON(http.StatusServiceUnavailable, models.APIResponse{Code: 503, Message: "admission: " + err.Error()})
+	c.JSON(http.StatusGatewayTimeout, models.APIResponse{Code: 504, Message: fmt.Sprintf("timeout: %v", err)})
 	// 动态状态与经局部变量传递的错误文案不得绕过扫描。
 	message := err.Error()
 	c.JSON(status, models.APIResponse{Code: status, Message: message})
@@ -130,8 +146,8 @@ func f(c *gin.Context, err error, status int) {
 	if err != nil {
 		t.Fatalf("parse synthetic source: %v", err)
 	}
-	if leaks := collect5xxErrorTextLeaks(fset, parsed); len(leaks) != 12 {
-		t.Fatalf("扫描器应捕获 12 处 5xx 泄漏，实际 %d: %v", len(leaks), leaks)
+	if leaks := collect5xxErrorTextLeaks(fset, parsed); len(leaks) != 14 {
+		t.Fatalf("扫描器应捕获 14 处 5xx 泄漏（含 503/504），实际 %d: %v", len(leaks), leaks)
 	}
 }
 
@@ -335,6 +351,16 @@ func collect5xxErrorTextLeaksInScope(fset *token.FileSet, scope ast.Node, params
 			if len(call.Args) >= 5 && hasInternalStatus(call.Args[4]) && hasErrorText(call.Args[3]) {
 				leaks = append(leaks, printNode(fset, call))
 			}
+		case "clusterError":
+			// 实参形态 (c, status, message, err)——message 拼接内部文本即泄漏。
+			if len(call.Args) >= 3 && hasInternalStatus(call.Args[1]) && hasErrorText(call.Args[2]) {
+				leaks = append(leaks, printNode(fset, call))
+			}
+		case "clusterErrorKeyed":
+			// 实参形态 (c, status, message, messageKey, err)。
+			if len(call.Args) >= 4 && hasInternalStatus(call.Args[1]) && hasErrorText(call.Args[2]) {
+				leaks = append(leaks, printNode(fset, call))
+			}
 		}
 		return true
 	})
@@ -344,9 +370,10 @@ func collect5xxErrorTextLeaksInScope(fset *token.FileSet, scope ast.Node, params
 func isInternalStatusExpr(expr ast.Expr) bool {
 	switch e := expr.(type) {
 	case *ast.SelectorExpr:
-		return e.Sel.Name == "StatusInternalServerError" || e.Sel.Name == "StatusBadGateway"
+		return e.Sel.Name == "StatusInternalServerError" || e.Sel.Name == "StatusBadGateway" ||
+			e.Sel.Name == "StatusServiceUnavailable" || e.Sel.Name == "StatusGatewayTimeout"
 	case *ast.BasicLit:
-		return e.Kind == token.INT && (e.Value == "500" || e.Value == "502")
+		return e.Kind == token.INT && (e.Value == "500" || e.Value == "502" || e.Value == "503" || e.Value == "504")
 	}
 	return false
 }
@@ -736,14 +763,24 @@ func TestAuditLogEndpoint5xxBodiesHideInternalErrors(t *testing.T) {
 // 读失败，配置导入/还原需保留事务回滚原因。未登记即按 business 组口径
 // （固定文案）——不存在「既不登记也不扫描」的真空区。
 var adminBusiness5xxDetailFunctions = map[string]string{
-	"autobackup.go:AutoBackupSettings":       "设置/备份列表读取失败需管理员看到 errno",
-	"autobackup.go:UpdateAutoBackupSettings": "设置事务写失败需点名（DB 锁/只读库）",
-	"autobackup.go:RunAutoBackupNow":         "引擎触发失败需点名（admission/执行错误）",
-	"autobackup.go:RestoreAutoBackup":        "备份文件读取失败需点名（权限/errno）",
-	"autobackup.go:DownloadAutoBackup":       "备份文件读取失败需点名（权限/errno）",
-	"admintls.go:UpdateAdminTLS":             "当前 HTTPS 配置读校验失败需点名，避免半套材料落库",
-	"config_backup.go:ExportConfigBackup":    "导出失败需管理员区分备份内容错误与系统故障",
-	"config_backup.go:failImportTx":          "导入/还原必须点名事务回滚原因（既有响应契约）",
+	"autobackup.go:AutoBackupSettings":                "设置/备份列表读取失败需管理员看到 errno",
+	"autobackup.go:UpdateAutoBackupSettings":          "设置事务写失败需点名（DB 锁/只读库）",
+	"autobackup.go:RunAutoBackupNow":                  "引擎触发失败需点名（admission/执行错误）",
+	"autobackup.go:RestoreAutoBackup":                 "备份文件读取失败需点名（权限/errno）",
+	"autobackup.go:DownloadAutoBackup":                "备份文件读取失败需点名（权限/errno）",
+	"admintls.go:UpdateAdminTLS":                      "当前 HTTPS 配置读校验失败需点名，避免半套材料落库",
+	"config_backup.go:ExportConfigBackup":             "导出失败需管理员区分备份内容错误与系统故障",
+	"config_backup.go:failImportTx":                   "导入/还原必须点名事务回滚原因（既有响应契约）",
+	"cluster_mode.go:SetClusterMode":                  "主从切换注册失败需管理员看到目标主节点不可达原因（网络/证书/拒绝）",
+	"cluster_sync.go:PullClusterSnapshot":             "手动同步失败需管理员看到拉取/应用失败原因（排障契约）",
+	"cluster_sync.go:ForgetClusterPins":               "清除指纹失败需点名（权限/只读目录）",
+	"config_import_v1.go:ImportV1Config":              "v1 导入规则编号生成失败需点名（既有响应契约）",
+	"taskmonitor.go:respondTaskTriggerAdmissionError": "任务触发 admission 失败需管理员看到引擎错误（503 default 分支；四写端点共用 helper）",
+	"securityiplists.go:tryIPListHotPathApply":        "提交不确定态需管理员看到 commit/恢复原因（与 caddy.go 同口径；iplist_commit_recovery_test 钉住原文披露契约）",
+	"cluster_mode.go:PromoteClusterNode":              "升主失败需管理员看到原因（角色/排干/拓扑事务）",
+	"cluster_mode.go:UpdateClusterSettings":           "集群设置保存失败需点名（既有响应契约）",
+	"taskmonitor.go:ToggleSystemTask":                 "调度偏好保存失败需管理员看到 DB 错误（词条携带详情槽）",
+	"taskmonitor.go:ControlSystemTask":                "任务控制失败需管理员看到引擎错误（词条携带详情槽）",
 }
 
 // 政策前提门（admin 业务族）：清单条目必须是 admin 组的**路由处理器**——
@@ -756,7 +793,9 @@ var adminBusiness5xxDetailFunctions = map[string]string{
 // 列在 helper 白名单里并附理由，新增的未注册条目一律判红（不得靠沉默混过）。
 func TestAdminBusiness5xxDetailPolicyRoutesAreAdminGroup(t *testing.T) {
 	helpersWithoutRoutes := map[string]string{
-		"config_backup.go:failImportTx": "导入事务回滚收尾的内部辅助函数，无独立路由入口",
+		"config_backup.go:failImportTx":                   "导入事务回滚收尾的内部辅助函数，无独立路由入口",
+		"securityiplists.go:tryIPListHotPathApply":        "名单热路径提交收尾的内部辅助函数，无独立路由入口（由各名单写端点调用）",
+		"taskmonitor.go:respondTaskTriggerAdmissionError": "admission 错误映射的内部辅助函数，无独立路由入口（trigger/toggle/cancel/control 共用）",
 	}
 	registrations := caddyRouteGroupRegistrations(t)
 	routed := 0

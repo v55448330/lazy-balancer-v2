@@ -273,6 +273,9 @@ crs/ip2region 状态镜像仅在对应 manager 本进程在途时采纳——持
       后三处入队成功入口=`services.WakeCertWaitingCAForEnqueuedJob()`
       （RearmLoop(..., true)，以入队成功为工作事实，不重查 certJobsActive）
 自停：Run 体发现 certJobsActive()==false → StopLoop（回到默认关闭态）
+      certJobsActive 的 failed 分支与补扫谓词单源对齐：failed+窗口非空+
+      renewal_attempts 未达 cert_renewal_attempts 上限才计活跃——配置下调后
+      超限行不再被任何自动通道消费，不得让补扫永续空转/调度永不自停
 ```
 
 唤醒语义：`RearmLoop(..., true)` 越过「已停止」态恢复调度并立即补跑，
@@ -366,6 +369,8 @@ task_runs 保留 90 天（audit-retention 每日清理）。`Engine.Stop` 先取
 **装配期启动屏障**：`Options.StartPaused` 只覆盖 tick 投递与 `Trigger`/`RunSync`/`runNow` 登记，**不覆盖常驻族启停**——默认清单里 `security-events-ingestion`/`cert-issuance`/`cluster-sync` 先于 `startup:config-load` 被 `StartLoop` 拉起，其 Run 体起步即真实接管服务（证书签发 → `StartACME` → CA 队列 / 证书部署重试 → Caddy `/load`）。其中只有 `cert-issuance` 写部署面。因此装配方在启动默认清单**之前**进入配置屏障（`BeginConfigImportHold`），BootSync（规则库载入 → 证书物化 → Caddy 渲染/应用）完成后 `EndConfigImportHold` 兑现被延迟的队列与生命周期启动：配置载入前面板不得已有证书部署写入运行配置。**屏障的实际覆盖范围只有部署面**（`startCertIssuanceLifecycle` 与 `caqueue` 的 `configImportHoldActive` 门）：`security-events-ingestion`（只读尾读）与 `cluster-sync` 照常先启动，行为与引入屏障前一致（从节点快照应用由快照应用自身收敛），不得据此宣称「全部常驻族被挡在配置载入之后」。不得把常驻启停并入 `schedPaused`（会与 `loopEnabled`/`pendingRestart` 语义纠缠）。
 
 **调度自动停摆的留痕口径**：两类「引擎自行停止调度」都必须与用户主动停止可区分——① `IntervalFn` 返回非正周期：立即停调并落一条 `failed` 运行行（状态列呈现 failed，含原因）+ `[error]` 日志；② 定时槽连续 `scheduledFailStreakStopLimit`（4）轮**自动轮**未推进且本轮失败/跳过：停调 + `[error]` 日志（失败轮本身已有 failed 行），并在任务元数据透出 `schedule_stopped_reason=fail-streak`（视图据此把「引擎停调」与「用户停止」分开呈现，业务驱动任务提示到业务页重新保存自动更新）。手动轮失败只走退避节流，不消耗停调预算。恢复入口：`StartLoop` 关→开（业务驱动任务=对应业务页重新保存开关）、`ResetScheduleProgress` 或重启进程，均清空停调来源与退避/槽水位。
+
+**角色翻转保持用户停止态（cluster-sync 切从）**：`BecomeSlave`/角色对账降级遇 cluster-sync 已被用户停止（`loop_on=false`）时保持停止——不 `StartLoop`、不复活 Halted 同步服务、不回写调度偏好，并以 warn + 操作审计显式提示真实恢复路径：「已停止：切从后不会同步。恢复方法：提升为主节点后在任务监控开启 cluster-sync 调度，再切回从节点」。任务写端点统一 `requireMasterNode`（§4.3），从节点本地开关不可达，提示不得写「请手动开启」这类在从节点无法执行的指引。handler 侧重新注册/手动同步的同步复活必须经 `services.ResumeSyncIfUserEnabled` 门控（`loop_on=false` 不复活），与服务层同口径。
 
 ## 6. 业务侧 helper
 

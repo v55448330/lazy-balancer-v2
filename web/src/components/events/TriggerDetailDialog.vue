@@ -907,6 +907,10 @@ watch(() => props.modelValue, (v) => {
 .trg-hero.trg-source--acl { border-color: var(--el-color-danger-light-7); background: var(--el-color-danger-light-9); }
 .trg-hero.trg-source--waf-crs, .trg-hero.trg-source--waf-custom { border-color: var(--el-color-primary-light-7); background: var(--el-color-primary-light-9); }
 .trg-hero.trg-source--body { border-color: var(--el-color-info-light-7); background: var(--el-color-info-light-9); }
+/* 未登记形态兜底：人机挑战族（human）与其余（other）——kind 投影对任何非空
+   触发 id 恒落某族，缺配色会让这两族退化成默认白底（与「全类型同构」不符）。 */
+.trg-hero.trg-source--human { border-color: var(--el-color-primary-light-7); background: var(--el-color-primary-light-9); }
+.trg-hero.trg-source--other { border-color: var(--el-color-info-light-7); background: var(--el-color-info-light-9); }
 .trg-source-geo { color: var(--el-text-color-secondary); font-size: 12px; }
 /* ② 信息卡：KV 行 */
 .trg-kv { display: flex; gap: 8px; font-size: 13px; padding: 3px 0; }

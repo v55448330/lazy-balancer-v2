@@ -21,22 +21,7 @@ import (
 // 缺席(模拟分类导出产物——缺席表不得被当作「清空本地表」应用)。
 func sectionsBackupJSON(t *testing.T, sections []string, tables map[string][]map[string]any) string {
 	t.Helper()
-	payload := map[string][]map[string]any{}
-	for table, rows := range tables {
-		if rows == nil {
-			continue
-		}
-		payload[table] = rows
-	}
-	cfg := map[string]any{}
-	backup := configBackup{
-		Meta:     configBackupMeta{App: "lazy-balancer-v2", Version: 2, ExportedAt: "2026-09-18T00:00:00Z"},
-		Config:   cfg,
-		Tables:   payload,
-		Sections: sections,
-	}
-	backup.Meta.Checksum = checksumBackupPayload(t, payload, cfg)
-	return marshalJSONForTest(t, backup)
+	return buildBackup(t, backupFixtureOptions{Sections: sections, Tables: tables, DropNil: true, EmptyConfigIfNil: true})
 }
 
 // 规则——这些规则马上会被备份内的规则整体替换,预检恒误报。

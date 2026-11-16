@@ -2624,8 +2624,12 @@ func (h *Handlers) GetSecurityEventFeed(c *gin.Context) {
 func triggerTypeForRule(ruleTriggered string) string {
 	// 预检段家族判定经 services.PrecheckRuleFamilyOf 单一事实源（段界
 	// 字面量禁止复写——段基址调整时 handlers 不得静默分叉）。
-	// 人机挑战/通过/失败属阶段 2（CC 防护）家族：非数字规则 id，单列归类。
-	if strings.HasPrefix(ruleTriggered, "human_") {
+	// 人机挑战/通过/失败（human_*）与 CC 限流拒绝（cc_rate_reject）属阶段 2
+	// （CC 防护）家族：非数字规则 id，单列归类（与 attackFamilyClassOf/
+	// humanFamilyCondition 同口径——漏 cc_ 前缀会让触发类型列显示「其他」，
+	// 同事件的阶段列/族筛选/攻击族却全正确）。展示词非 rollup 固化值，
+	// 不涉 threatRollupClassifierVersion。
+	if strings.HasPrefix(ruleTriggered, "human_") || strings.HasPrefix(ruleTriggered, "cc_") {
 		return "CC防护"
 	}
 	n, err := strconv.Atoi(ruleTriggered)

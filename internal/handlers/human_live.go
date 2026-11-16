@@ -71,7 +71,8 @@ func (h *Handlers) GetHumanLiveChallenges(c *gin.Context) {
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: out})
 }
 
-// enrichHumanLiveAttribution 按 rule_id 批量补全规则/阶段 2 策略名。
+// enrichHumanLiveAttribution 按 rule_id 批量补全规则/CC 属主策略名
+// （stage2 优先、mixed 存量兜底，与 lookupHumanEventAttribution 单源同口径）。
 func enrichHumanLiveAttribution(rows []humanLiveChallengeSession) {
 	if len(rows) == 0 {
 		return

@@ -664,7 +664,7 @@ func TestV1ImportQueueFailureStillConverges(t *testing.T) {
 	if !strings.Contains(rec.Body.String(), "证书任务恢复失败") {
 		t.Fatalf("queue 分支缺恢复失败警告，body=%s", rec.Body.String())
 	}
-	// 重载审计与陈旧横幅清理（v2 :4650-4662 同口径）。审计写 AuditDB。
+	// 重载审计与陈旧横幅清理（v2 recordCaddyApplyResult(nil) 清横幅同口径）。审计写 AuditDB。
 	var reloadAudit int
 	if err := db.AuditDB.QueryRow(`SELECT COUNT(*) FROM audit_log WHERE action='重载' AND resource='Caddy服务'`).Scan(&reloadAudit); err != nil {
 		t.Fatal(err)

@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
-	"sync"
 	"testing"
 
 	"lazy-balancer-v2/internal/config"
@@ -53,51 +52,21 @@ func TestSyncService_pollRegistration_terminalMessageOutlivesGenericMessage(t *t
 	}
 }
 
-// registrationCountReadFailConn 模拟「失败计数读取失败」：计数查询返回迭代
-// 错误，写语句被记录以便断言未执行破坏性清空。
-type registrationCountReadFailConn struct {
-	mu    sync.Mutex
-	execs []string
-}
-
-func (c *registrationCountReadFailConn) Prepare(string) (driver.Stmt, error) {
-	return nil, errors.New("未实现 Prepare")
-}
-func (c *registrationCountReadFailConn) Close() error              { return nil }
-func (c *registrationCountReadFailConn) Begin() (driver.Tx, error) { return fakeIterErrTx{}, nil }
-
-func (c *registrationCountReadFailConn) QueryContext(_ context.Context, query string, _ []driver.NamedValue) (driver.Rows, error) {
-	if strings.Contains(query, "registration_confirm_failures") {
-		return &fakeIterErrRows{columns: []string{"a"}, err: errors.New("注入的计数读取失败")}, nil
+// needleRegistrationCountReadFailConn 模拟「失败计数读取失败」：计数查询返回
+// 迭代错误，写语句被记录以便断言未执行破坏性清空。复用 needleFailConn 单源
+// （写影响行数=1，与既有形态一致）。
+func needleRegistrationCountReadFailConn() *needleFailConn {
+	return &needleFailConn{
+		failNeedle: "registration_confirm_failures",
+		execOverride: func(string) (driver.Result, error) {
+			return driver.RowsAffected(1), nil
+		},
 	}
-	return &fakeEmptyRows{columns: []string{"a"}}, nil
 }
-
-func (c *registrationCountReadFailConn) ExecContext(_ context.Context, query string, _ []driver.NamedValue) (driver.Result, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.execs = append(c.execs, query)
-	return driver.RowsAffected(1), nil
-}
-
-func (c *registrationCountReadFailConn) executedWrites() []string {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return append([]string(nil), c.execs...)
-}
-
-type registrationCountReadFailConnector struct {
-	conn *registrationCountReadFailConn
-}
-
-func (c *registrationCountReadFailConnector) Connect(context.Context) (driver.Conn, error) {
-	return c.conn, nil
-}
-func (c *registrationCountReadFailConnector) Driver() driver.Driver { return fakeIterErrDriver{} }
 
 func TestSyncService_bumpRegistrationConfirmFailure_readFailureKeepsRegistrationState(t *testing.T) {
-	conn := &registrationCountReadFailConn{}
-	fake := sql.OpenDB(&registrationCountReadFailConnector{conn: conn})
+	conn := needleRegistrationCountReadFailConn()
+	fake := sql.OpenDB(&needleFailConnector{conn: conn})
 	t.Cleanup(func() { _ = fake.Close() })
 	service := &SyncService{db: fake}
 
@@ -112,51 +81,24 @@ func TestSyncService_bumpRegistrationConfirmFailure_readFailureKeepsRegistration
 	}
 }
 
-// 终止轨道的清空必须是一条语句且失败留痕：多语句分步清空会在中途 DB 写失败时
-// 留下半清空状态（secret 已清、token 未清），后续 401 以通用文案覆盖终止提示
-// 并把循环置 Halted，排障线索与明文令牌生命周期同时失控。
-type registrationTerminalClearFailConn struct {
-	mu    sync.Mutex
-	execs []string
-}
-
-func (c *registrationTerminalClearFailConn) Prepare(string) (driver.Stmt, error) {
-	return nil, errors.New("未实现 Prepare")
-}
-func (c *registrationTerminalClearFailConn) Close() error              { return nil }
-func (c *registrationTerminalClearFailConn) Begin() (driver.Tx, error) { return fakeIterErrTx{}, nil }
-
-func (c *registrationTerminalClearFailConn) QueryContext(_ context.Context, query string, _ []driver.NamedValue) (driver.Rows, error) {
-	if strings.Contains(query, "registration_confirm_failures") {
-		return &singleIntRows{columns: []string{"registration_confirm_failures"}, value: 5}, nil
+// needleRegistrationTerminalClearFailConn 终止轨道清空形态：计数读返回定值 5
+// （达上限），清空语句注入写失败。复用 needleFailConn 单源。
+func needleRegistrationTerminalClearFailConn() *needleFailConn {
+	return &needleFailConn{
+		queryOverride: func(query string) (driver.Rows, bool) {
+			if strings.Contains(query, "registration_confirm_failures") {
+				return &singleIntRows{columns: []string{"registration_confirm_failures"}, value: 5}, true
+			}
+			return nil, false
+		},
+		execOverride: func(query string) (driver.Result, error) {
+			if strings.Contains(query, "registration_secret=''") {
+				return nil, errors.New("注入的清空失败")
+			}
+			return driver.RowsAffected(1), nil
+		},
 	}
-	return &fakeEmptyRows{columns: []string{"a"}}, nil
 }
-
-func (c *registrationTerminalClearFailConn) ExecContext(_ context.Context, query string, _ []driver.NamedValue) (driver.Result, error) {
-	c.mu.Lock()
-	c.execs = append(c.execs, query)
-	c.mu.Unlock()
-	if strings.Contains(query, "registration_secret=''") {
-		return nil, errors.New("注入的清空失败")
-	}
-	return driver.RowsAffected(1), nil
-}
-
-func (c *registrationTerminalClearFailConn) executedWrites() []string {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return append([]string(nil), c.execs...)
-}
-
-type registrationTerminalClearFailConnector struct {
-	conn *registrationTerminalClearFailConn
-}
-
-func (c *registrationTerminalClearFailConnector) Connect(context.Context) (driver.Conn, error) {
-	return c.conn, nil
-}
-func (c *registrationTerminalClearFailConnector) Driver() driver.Driver { return fakeIterErrDriver{} }
 
 type singleIntRows struct {
 	columns []string
@@ -176,8 +118,8 @@ func (r *singleIntRows) Next(dest []driver.Value) error {
 }
 
 func TestSyncService_bumpRegistrationConfirmFailure_terminalClearIsSingleStatementAndWarns(t *testing.T) {
-	conn := &registrationTerminalClearFailConn{}
-	fake := sql.OpenDB(&registrationTerminalClearFailConnector{conn: conn})
+	conn := needleRegistrationTerminalClearFailConn()
+	fake := sql.OpenDB(&needleFailConnector{conn: conn})
 	t.Cleanup(func() { _ = fake.Close() })
 	service := &SyncService{db: fake}
 

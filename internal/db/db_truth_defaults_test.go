@@ -960,6 +960,30 @@ func TestGovernedDefaultLiteralsBoundInConsumers(t *testing.T) {
 			},
 		},
 		{
+			// db.go 自身的三处消费面（newColumnsRegistry 补列 DDL、
+			// security_policies 重建迁移的 CREATE DEFAULT 与 COALESCE 回填、
+			// 阶段合并读侧 COALESCE）此前各持一份字面量——常量注释宣称
+			// 「三处单源」失实，调整默认值时创建侧与迁移回填静默分叉。
+			// 包内引用无 db. 前缀，选择器按裸常量名断言。
+			file: "db.go",
+			forbidden: []string{
+				"human_verify_type TEXT NOT NULL DEFAULT 'slider'",
+				"human_verify_ttl INTEGER NOT NULL DEFAULT 30",
+				"cc_rps_limit INTEGER NOT NULL DEFAULT 40",
+				"cc_rps_window INTEGER NOT NULL DEFAULT 10",
+				"cc_4xx_ratio INTEGER NOT NULL DEFAULT 70",
+				"cc_session_ua_threshold INTEGER NOT NULL DEFAULT 5",
+				"COALESCE(human_verify_type,'slider')", "COALESCE(human_verify_ttl,30)",
+				"COALESCE(cc_rps_limit,40)", "COALESCE(cc_rps_window,10)",
+				"COALESCE(cc_4xx_ratio,70)", "COALESCE(cc_session_ua_threshold,5)",
+			},
+			required: []string{
+				"DefaultHumanVerifyType", "DefaultHumanVerifyTTL",
+				"DefaultCCRPSLimit", "DefaultCCRPSWindow",
+				"DefaultCC4xxRatio", "DefaultCCSessionUAThreshold",
+			},
+		},
+		{
 			// 快照策略行归一（apply 写侧与 security 节哈希输入共用）是治理
 			// 默认值的第三份副本：此前写死 int64(5)/int64(403)，常量调整后
 			// 创建侧默认与从端归一静默分叉。
@@ -1428,7 +1452,8 @@ func TestGovernedDefaultLiteralsBoundInConsumers(t *testing.T) {
 
 // governedDefaultSurface 一次 AST 遍历收集契约表三通道判据：字符串字面量
 // （strconv.Unquote 后值）、int64(<整数字面量>) 换算形态（快照/导入侧写
-// map 的数值默认值形态）与 db.X 选择器引用。TestGovernedDefaultLiterals-
+// map 的数值默认值形态）与常量引用（跨包 db.X 选择器 + 包内裸标识符——
+// db.go 自身消费面按裸常量名断言）。TestGovernedDefaultLiterals-
 // BoundInConsumers 与 forbidden 通道判别力钉测共用同一扫描口径。
 func governedDefaultSurface(fset *token.FileSet, file *ast.File) (literals []string, intConversions []string, selectors map[string]bool) {
 	selectors = map[string]bool{}
@@ -1450,6 +1475,10 @@ func governedDefaultSurface(fset *token.FileSet, file *ast.File) (literals []str
 			if x, ok := n.X.(*ast.Ident); ok {
 				selectors[x.Name+"."+n.Sel.Name] = true
 			}
+		case *ast.Ident:
+			// 包内消费面（db.go 自身）无 db. 前缀：裸标识符同样登记，
+			// required 表按 "DefaultX" 形态断言（跨包仍按 "db.DefaultX"）。
+			selectors[n.Name] = true
 		}
 		return true
 	})

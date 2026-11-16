@@ -31,8 +31,8 @@ import (
 
 // l4SecHandlerID / l4SecGeoipMatcherID / l4SecIPFileMatcherID 是 caddyl4sec
 // 模块注册 ID 的渲染侧字面量（契约 C2 固定；模块侧同名注册由契约对账测试
-// 钉住。lb_ipfile 为仓内模块，绕开 caddy-l4 v0.1.2 上游 remote_ip_list 的
-// Cleanup 死锁——主审裁定，A2 交付前不得发版渲染引用）。
+// 钉住。lb_ipfile 为仓内模块，绕开 caddy-l4 v0.1.3 上游 remote_ip_list 的残留缺陷（②Match 路径持锁重读+
+// ③watcher 出错退出仍在；①Cleanup 死锁 v0.1.3 已修）——主审裁定，A2 交付前不得发版渲染引用）。
 const (
 	l4SecHandlerID       = "lb_l4_sec"
 	l4SecGeoipMatcherID  = "lb_geoip"
@@ -296,7 +296,8 @@ func buildTCPSecurityRoutesWithDegradation(rule SingleRuleConfig, proxyHandler m
 }
 
 // l4IPFileMatchers 是文件族匹配器集（layer4.matchers.lb_ipfile，仓内模块，
-// 绕开 caddy-l4 v0.1.2 上游 remote_ip_list 的 Cleanup 死锁——主审裁定）：
+// 绕开 caddy-l4 v0.1.3 上游 remote_ip_list 的残留缺陷（②Match 路径持锁重读+
+// ③watcher 出错退出仍在；①Cleanup 死锁 v0.1.3 已修）——主审裁定）：
 // 每实例单文件键 file；match 数组跨 matcher set 为 OR——多文件=多 set，
 // 任一文件命中即该集命中。本渲染器每条安全路由恰好投影一个名单文件。
 func l4IPFileMatchers(paths ...string) []interface{} {

@@ -212,7 +212,7 @@ func TestValidateConfig_fallbackRestoresAuthoritativeConfigOnRejection(t *testin
 	router := gin.New()
 	router.POST("/config/validate", h.ValidateConfig)
 	response := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/config/validate", strings.NewReader(`{"apps":{"http":{"servers":{}}}}`))
+	request := httptest.NewRequest(http.MethodPost, "/config/validate", strings.NewReader(`{"admin":{"listen":"`+fakeCaddy.Listener.Addr().String()+`"},"apps":{"http":{"servers":{}}}}`))
 	request.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(response, request)
 
@@ -263,7 +263,7 @@ func TestValidateConfig_fallbackTransportError500_andRestores(t *testing.T) {
 	router := gin.New()
 	router.POST("/config/validate", h.ValidateConfig)
 	response := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/config/validate", strings.NewReader(`{"apps":{"http":{"servers":{}}}}`))
+	request := httptest.NewRequest(http.MethodPost, "/config/validate", strings.NewReader(`{"admin":{"listen":"`+fakeCaddy.Listener.Addr().String()+`"},"apps":{"http":{"servers":{}}}}`))
 	request.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(response, request)
 

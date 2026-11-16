@@ -77,3 +77,25 @@ func TestGetAuditLogs_countCacheEvictsOldestBucketInsteadOfResetting(t *testing.
 		t.Fatal("新桶未写入")
 	}
 }
+
+// 缓存键与筛选条件一一对应：值含字面 US 分隔符（\x1f）时不得与另一组
+// 筛选碰撞（裸拼接形态 username="a\x1fb"&action="c" 与
+// username="a"&action="b\x1fc" 曾生成同一键，TTL 内跨筛选串用 total）。
+func TestAuditLogCountCacheKey_separatorInValueDoesNotCollide(t *testing.T) {
+	where := "username LIKE ? AND action LIKE ?"
+	keyA := auditLogCountCacheKey(where, []interface{}{"a\x1fb", "c"})
+	keyB := auditLogCountCacheKey(where, []interface{}{"a", "b\x1fc"})
+	if keyA == keyB {
+		t.Fatalf("含分隔符的两组筛选生成同一缓存键（跨筛选串用 total）: %q", keyA)
+	}
+	// 回归形状：同值同键（缓存命中语义不变）。
+	if auditLogCountCacheKey(where, []interface{}{"a\x1fb", "c"}) != keyA {
+		t.Fatal("同筛选条件键不稳定——缓存命中语义被破坏")
+	}
+	// 常规值不受转义影响语义（键形态变化但一一对应保持）。
+	k1 := auditLogCountCacheKey(where, []interface{}{"admin", "登录"})
+	k2 := auditLogCountCacheKey(where, []interface{}{"admin", "登"})
+	if k1 == k2 {
+		t.Fatal("不同常规值碰撞")
+	}
+}

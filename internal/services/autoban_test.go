@@ -1256,11 +1256,11 @@ func TestAutobanBannedToday_countsAuditBansOfDay(t *testing.T) {
 	installAutobanFixture(t, "2026-10-14 10:00:00")
 	// 钉 UTC（默认包级 init=CST+8）：今日边界=「2026-10-14 00:00:00」UTC，
 	// 断言的 UTC 字面量与之严格对应。
-	previous := CurrentLocation().String()
+	// 还原走 snapshotLocationState（init 占位 CST 不可 LoadLocation 重建）。
+	snapshotLocationState(t)
 	if _, err := ConfigureLocation("UTC"); err != nil {
 		t.Fatalf("configure UTC: %v", err)
 	}
-	t.Cleanup(func() { _, _ = ConfigureLocation(previous) })
 	seedAudit := func(action, createdUTC string) {
 		t.Helper()
 		if _, err := db.AuditDB.Exec(`INSERT INTO audit_log (username, action, resource, detail, ip_address, created_at) VALUES ('system', ?, 'IP 地址列表', 'IP：x', '', ?)`,
@@ -1296,11 +1296,11 @@ func TestAutobanBannedToday_countsAuditBansOfDay(t *testing.T) {
 // 16:00:00Z 恰为今日第一秒必计。
 func TestAutobanBannedToday_usesConfiguredTimezoneDayBoundary(t *testing.T) {
 	installAutobanFixture(t, "2026-10-14 12:00:00")
-	previous := CurrentLocation().String()
+	// 还原走 snapshotLocationState（init 占位 CST 不可 LoadLocation 重建）。
+	snapshotLocationState(t)
 	if _, err := ConfigureLocation("Asia/Shanghai"); err != nil {
 		t.Fatalf("configure Asia/Shanghai: %v", err)
 	}
-	t.Cleanup(func() { _, _ = ConfigureLocation(previous) })
 	seedAudit := func(createdUTC string) {
 		t.Helper()
 		if _, err := db.AuditDB.Exec(`INSERT INTO audit_log (username, action, resource, detail, ip_address, created_at) VALUES ('system', ?, 'IP 地址列表', 'IP：x', '', ?)`,

@@ -56,7 +56,8 @@
             </div>
             <div class="strip-value is-danger">{{ fmtStatNum(overview.today_blocked) }}</div>
             <div v-if="yesterdayBlocked !== null" class="strip-sub"><span class="strip-sub-label">{{ t('app.security.overview.status.yesterday') }}</span> {{ fmtStatNum(yesterdayBlocked) }}</div>
-            <!-- 协议拆分（L4 阶段 0/1 披露，今日口径）：HTTP = 合计 − TCP；响应缺字段或 TCP=0 时隐藏 -->
+            <!-- 协议拆分（L4 阶段 0/1 披露，今日口径）：HTTP = today_blocked（含 TCP 的合计）− TCP；
+                 字段存在即显示（TCP=0 也显示——可能产生数据就如实呈现），缺失=旧后端整行隐藏 -->
             <div v-if="todayBlockedSplit" class="strip-sub">
               <span class="proto-split-item"><i class="proto-dot proto-dot--http"></i><span class="proto-split-label">HTTP</span><span class="strip-sub-num">{{ fmtStatNum(todayBlockedSplit.http) }}</span></span><span class="proto-split-item proto-split-item--tcp"><i class="proto-dot proto-dot--tcp"></i><span class="proto-split-label">TCP</span><span class="strip-sub-num">{{ fmtStatNum(todayBlockedSplit.tcp) }}</span></span>
             </div>
@@ -176,7 +177,7 @@
           </div>
         </div>
       </template>
-      <el-alert v-if="challengeLiveError" type="error" show-icon :closable="false" class="mb-3" :title="t('app.security.overview.events.loadFailed')" />
+      <el-alert v-if="challengeLiveError" type="error" show-icon :closable="false" class="challenge-live-alert" :title="t('app.security.overview.events.loadFailed')" />
       <div class="challenge-live-toolbar">
         <div class="challenge-live-counter" :class="{ 'is-active': challengeLiveActiveCount > 0 }">
           <span>{{ t('app.security.overview.cc.liveActiveCount') }}</span>
@@ -989,6 +990,9 @@ onMounted(() => { void reloadAll() })
 .challenge-live-updated { font-size: 12px; color: var(--text-secondary); }
 .challenge-live-auto-label { font-size: 12px; color: var(--text-secondary); }
 .challenge-live-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
+/* 实时挑战区加载失败条与下表间距：显式声明（全站只有 .mb-5，无 mb-3 工具类，
+   原 class="mb-3" 恒 0 间距——错误条贴住工具栏）。 */
+.challenge-live-alert { margin-bottom: 12px; }
 .challenge-live-counter { display: inline-flex; align-items: baseline; gap: 8px; padding: 6px 12px; border-radius: 0; background: #f5f7fa; color: var(--text-secondary); font-size: 12px; }
 .challenge-live-counter strong { font-size: 20px; line-height: 1; font-variant-numeric: tabular-nums; color: #606266; }
 .challenge-live-counter.is-active strong { color: #409eff; }
@@ -1037,9 +1041,8 @@ onMounted(() => { void reloadAll() })
    右侧观察建议 Top5 自适应剩余宽度（标题 ellipsis+tooltip，表列紧凑，无横滚）；
    ≤768px 移动堆叠。 */
 .autoban-body { display: flex; gap: 24px; align-items: stretch; }
-/* 卡内黄条与卡体的间距单源：mb-3 工具类全站未定义（恒 0），黄条曾零间距
-   贴住卡体——此处显式声明下间距；双黄条并存时上条收窄，与 info-note-bar
-   相邻条口径一致。 */
+/* 卡内黄条与卡体的间距单源：黄条曾靠未定义的工具类取间距（恒 0）贴住卡体——
+   此处显式声明下间距；双黄条并存时上条收窄，与 info-note-bar 相邻条口径一致。 */
 .autoban-alert { margin-bottom: 12px; }
 .autoban-alert + .autoban-alert { margin-bottom: 8px; }
 /* 四统计卡恒一行（桌面）：grid 4 列；配置摘要独占次行 */

@@ -42,7 +42,9 @@ func TestGlobalConfigSyncedColumns_coverClusterBasicSettings(t *testing.T) {
 }
 
 // 三列此前仅靠「同语句 UPDATE 含其他 OF 列」偶然触发 bump；单独 UPDATE 必须
-// 也能 bump（trigger 的 OF 成员资格）。
+// 也能 bump（trigger 的 OF 成员资格）。值变化守卫落地后，OF 成员资格探测
+// 必须用真实值变化形态（col=col 同值写被值守卫有意拦下，不再能探 OF）——
+// 逐列全量形态见 TestGlobalConfigSyncedColumns_OFMembershipIndependentOfValueGuard。
 func TestClusterVersionTrigger_bumpsForRetentionAndSampleColumns(t *testing.T) {
 	for _, column := range []string{"security_events_retention_days", "security_events_row_cap", "threat_traffic_sample_n"} {
 		t.Run(column, func(t *testing.T) {
@@ -56,9 +58,8 @@ func TestClusterVersionTrigger_bumpsForRetentionAndSampleColumns(t *testing.T) {
 			if got := clusterVersion(t, database); got != 100 {
 				t.Fatalf("baseline cluster_version=%d, want 100", got)
 			}
-			// SQLite UPDATE OF 只要 SET 提到该列即触发（与值是否变化无关）；
-			// 用 col=col 写入保持列值语义不变。
-			if _, err := database.Exec("UPDATE global_config SET " + column + " = " + column + " WHERE id=1"); err != nil {
+			// 真实值变化（+1）：OF 漏列时不 bump；值守卫不得掩盖漏列。
+			if _, err := database.Exec("UPDATE global_config SET " + column + " = " + column + " + 1 WHERE id=1"); err != nil {
 				t.Fatalf("update %s: %v", column, err)
 			}
 			if got := clusterVersion(t, database); got != 101 {

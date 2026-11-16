@@ -3,12 +3,9 @@ package services
 import (
 	"context"
 	"database/sql"
-	"database/sql/driver"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
-	"sync"
 	"testing"
 
 	"lazy-balancer-v2/internal/config"
@@ -25,51 +22,19 @@ func (s *SyncService) syncMarkerPresent(ctx context.Context, prefix string) bool
 	return !known || strings.HasPrefix(msg, prefix)
 }
 
-// markerReadFailConn 模拟「global_config.last_sync_error 读失败」的真实库
-// 故障形态（SQLITE_BUSY/连接重建/磁盘抖动）：查询返回迭代错误，写侧记录
-// 以便断言「未知标记态下不得执行清空/覆盖写」。
-type markerReadFailConn struct {
-	mu    sync.Mutex
-	execs []string
+// needleMarkerReadFailConn 模拟「global_config.last_sync_error 读失败」的
+// 真实库故障形态（SQLITE_BUSY/连接重建/磁盘抖动）：查询返回迭代错误，写侧
+// 记录以便断言「未知标记态下不得执行清空/覆盖写」。复用 needleFailConn 单源。
+func needleMarkerReadFailConn() *needleFailConn {
+	return &needleFailConn{failNeedle: "last_sync_error"}
 }
-
-func (c *markerReadFailConn) Prepare(string) (driver.Stmt, error) {
-	return nil, errors.New("未实现 Prepare")
-}
-func (c *markerReadFailConn) Close() error              { return nil }
-func (c *markerReadFailConn) Begin() (driver.Tx, error) { return fakeIterErrTx{}, nil }
-
-func (c *markerReadFailConn) QueryContext(_ context.Context, query string, _ []driver.NamedValue) (driver.Rows, error) {
-	if strings.Contains(query, "last_sync_error") {
-		return &fakeIterErrRows{columns: []string{"a"}, err: errors.New("注入的读取失败")}, nil
-	}
-	return &fakeEmptyRows{columns: []string{"a"}}, nil
-}
-
-func (c *markerReadFailConn) ExecContext(_ context.Context, query string, _ []driver.NamedValue) (driver.Result, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.execs = append(c.execs, query)
-	return driver.RowsAffected(0), nil
-}
-
-func (c *markerReadFailConn) executedWrites() []string {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return append([]string(nil), c.execs...)
-}
-
-type markerReadFailConnector struct{ conn *markerReadFailConn }
-
-func (c *markerReadFailConnector) Connect(context.Context) (driver.Conn, error) { return c.conn, nil }
-func (c *markerReadFailConnector) Driver() driver.Driver                        { return fakeIterErrDriver{} }
 
 // 标记存在性读取失败必须按「存在」处理（fail-closed）：成功路径据此跳过
 // 清空，否则瞬时读错误会把 apply_ok_reload_failed 标记静默销毁，304 补偿
 // 重拉通道失明——库=新版本、Caddy=旧运行配置的分叉存活到下次真实变更/重启。
 func TestRecordSyncError_unknownMarkerStateDoesNotClearMarker(t *testing.T) {
-	conn := &markerReadFailConn{}
-	fake := sql.OpenDB(&markerReadFailConnector{conn: conn})
+	conn := needleMarkerReadFailConn()
+	fake := sql.OpenDB(&needleFailConnector{conn: conn})
 	t.Cleanup(func() { _ = fake.Close() })
 	service := &SyncService{db: fake}
 
@@ -83,8 +48,8 @@ func TestRecordSyncError_unknownMarkerStateDoesNotClearMarker(t *testing.T) {
 // 组合写同理：读失败=标记存在性未知，不得覆盖（否则仍存活的标记被普通
 // 错误消息替换）。
 func TestCombineSyncError_unknownMarkerStateDoesNotOverwrite(t *testing.T) {
-	conn := &markerReadFailConn{}
-	fake := sql.OpenDB(&markerReadFailConnector{conn: conn})
+	conn := needleMarkerReadFailConn()
+	fake := sql.OpenDB(&needleFailConnector{conn: conn})
 	t.Cleanup(func() { _ = fake.Close() })
 	service := &SyncService{db: fake}
 
@@ -97,8 +62,8 @@ func TestCombineSyncError_unknownMarkerStateDoesNotOverwrite(t *testing.T) {
 
 // 查询助手直接暴露 fail-closed 语义：读失败时 present=true。
 func TestSyncMarkerPresent_readFailureTreatedAsPresent(t *testing.T) {
-	conn := &markerReadFailConn{}
-	fake := sql.OpenDB(&markerReadFailConnector{conn: conn})
+	conn := needleMarkerReadFailConn()
+	fake := sql.OpenDB(&needleFailConnector{conn: conn})
 	t.Cleanup(func() { _ = fake.Close() })
 	service := &SyncService{db: fake}
 
@@ -151,6 +116,9 @@ func TestSyncService_Pull_transientFetchErrorsPreserveReloadMarker(t *testing.T)
 	cases := []struct {
 		name    string
 		respond http.HandlerFunc
+		// wantCause 本形态的真实失败原因片段（逐形态点名，不用 OR 互放行——
+		// 死析取项会让错误归因漂移静默通过）。
+		wantCause string
 	}{
 		{
 			// 反代错误页/响应截断：下一周期自然恢复。
@@ -159,6 +127,7 @@ func TestSyncService_Pull_transientFetchErrorsPreserveReloadMarker(t *testing.T)
 				response.Header().Set("Content-Type", "application/json")
 				_, _ = response.Write([]byte(`{"code":0,"data":`))
 			},
+			wantCause: "解析集群快照",
 		},
 		{
 			// 目标主节点已降级：对方重新升主即恢复。
@@ -168,6 +137,7 @@ func TestSyncService_Pull_transientFetchErrorsPreserveReloadMarker(t *testing.T)
 				response.WriteHeader(http.StatusForbidden)
 				_, _ = response.Write([]byte("该操作仅允许在主节点执行"))
 			},
+			wantCause: "已降级为从节点",
 		},
 		{
 			// 未跟随的跨主机重定向：运维改回主节点地址即恢复。
@@ -176,6 +146,7 @@ func TestSyncService_Pull_transientFetchErrorsPreserveReloadMarker(t *testing.T)
 				response.Header().Set("Location", "http://elsewhere.invalid/api/v1/cluster/sync/snapshot")
 				response.WriteHeader(http.StatusFound)
 			},
+			wantCause: "重定向",
 		},
 	}
 	for _, testCase := range cases {
@@ -204,9 +175,8 @@ func TestSyncService_Pull_transientFetchErrorsPreserveReloadMarker(t *testing.T)
 			if !strings.HasPrefix(msg, syncReloadFailureMarkerPrefix) {
 				t.Fatalf("last_sync_error=%q, want 以重载失败标记开头（304 补偿通道已失明）", msg)
 			}
-			if !strings.Contains(msg, testCase.name) && !strings.Contains(msg, "解析集群快照") &&
-				!strings.Contains(msg, "已降级为从节点") && !strings.Contains(msg, "重定向") {
-				t.Fatalf("last_sync_error=%q, want 携带本次失败原因", msg)
+			if !strings.Contains(msg, testCase.wantCause) {
+				t.Fatalf("last_sync_error=%q, want 携带本形态失败原因 %q", msg, testCase.wantCause)
 			}
 		})
 	}

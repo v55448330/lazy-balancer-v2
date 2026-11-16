@@ -4,8 +4,11 @@ package services
 // AuditPolicyGeneric 由 auditMiddleware 生成通用行、AuditPolicySkip 明确不留痕。
 //
 // 通用审计不覆盖 4xx（auditMiddleware 在 400≤status<500 时直接返回）：
-//   - 401/403/428/429 由各守卫经 recordAuthenticationRejection 留痕
-//     （含限流去重），不是留白；
+//   - 401/403/428 由各守卫经 recordAuthenticationRejection 留痕；429 分两类：
+//     handler/守卫级限流经 recordAuthenticationRejection 留痕（含去重），
+//     中间件级限流（登录/注册/MCP/集群机器接口桶）在身份判定前拒绝、有意
+//     不记操作审计（无操作者可归因，权威痕迹在访问日志；见 middleware.go
+//     各 abort 站点注释），不是留白缺口；
 //   - 400/409（参数错误、导入与集群写冲突）在 handler 未显式记录时**没有**
 //     通用审计行——权威痕迹在访问日志与具体 handler 的显式事件里。
 //

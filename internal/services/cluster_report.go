@@ -72,6 +72,10 @@ func (s *SyncService) Report(ctx context.Context) error {
 	// 下界 `> now` 必须与上界同时存在：expired 与 expiring 在
 	// CertificateExpiryStatus 里互斥（先判 expired），只有上界会把数月前就过期、
 	// 尚未续期的行算成「临期」，健康卡数字虚高且与规则页状态矛盾。
+	// 天粒度口径取舍（裁定维持）：健康卡临期窗口按整天（+N days）
+	// 截断，与规则页/任务页的完整时长口径在边界 1 天内存在分叉（如 5 天窗口
+	// 对 4 天 23 小时到期的证书：健康卡计入、完整时长口径不计）——展示面
+	// 取舍，非状态机分叉；改完整时长须动 datetime 修饰符为小时级，收益低。
 	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM cert_jobs WHERE status IN ('issued','failed',`+DeploymentLifecycleJobStatusSQL+`) AND expires_at IS NOT NULL AND datetime(expires_at)>datetime('now') AND datetime(expires_at)<=datetime('now','+`+expiryModifier+` days')`).Scan(&expiringCount); err != nil {
 		return fmt.Errorf("统计即将到期证书: %w", err)
 	}

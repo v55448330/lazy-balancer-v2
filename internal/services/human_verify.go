@@ -34,8 +34,18 @@ type CCConfig struct {
 // loadCCConfig CC 检测配置=策略合并（2026-11-12 用户裁定：阈值在策略配置，
 // 自动封禁引用策略——全局不再持有阈值，消除双份配置）。取首个启用 CC 检测的
 // 策略的阈值（多条启用策略时按绑定序首条；与 humanPolicyMerged 同优先级）。
+//
+// 无启用策略时的回退值必须绑定 db.Default* 治理常量（db 包单源）：
+// 私抄字面量会在 DDL/启动回填默认值调整后静默分叉（本文件此前写死
+// 40/10/70/5）。策略列读侧 COALESCE 默认值见 securityPolicyRowColumns，
+// 同批绑定同一组常量。
 func loadCCConfig(policies []*models.SecurityPolicy) CCConfig {
-	cfg := CCConfig{RPSLimit: 40, WindowSec: 10, Ratio4xx: 70, SessionUAThresh: 5}
+	cfg := CCConfig{
+		RPSLimit:        db.DefaultCCRPSLimit,
+		WindowSec:       db.DefaultCCRPSWindow,
+		Ratio4xx:        db.DefaultCC4xxRatio,
+		SessionUAThresh: db.DefaultCCSessionUAThreshold,
+	}
 	for _, p := range policies {
 		if p == nil || !p.CCDetectEnabled {
 			continue

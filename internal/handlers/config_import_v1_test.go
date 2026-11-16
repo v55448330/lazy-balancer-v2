@@ -745,6 +745,7 @@ func TestConfigImportLimitMessage_derivesFromConfiguredLimit(t *testing.T) {
 }
 
 func TestImportV1ConfigSurvivesRequestCancellationAfterSessionStarts(t *testing.T) {
+	withIsolatedGlobal(t)
 	h := newBackupTestHandlers(t)
 	backup := `{"proxy_config":{"config":[{"pk":1,"fields":{"proxy_name":"new-rule","protocol":true,"listen":18443,"server_name":"example.test","status":true,"upstream_list":[1]}}]},"upstream_config":{"config":[{"pk":1,"fields":{"status":true,"address":"127.0.0.1","port":9000,"weight":100}}]}}`
 	ctx, cancel := context.WithCancel(context.Background())

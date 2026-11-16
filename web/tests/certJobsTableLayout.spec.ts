@@ -56,7 +56,9 @@ const COLUMN_IDS: Record<string, CertJobColumnId> = {
 const FIXED_COLUMNS: Partial<Record<CertJobColumnId, true>> = { status: true, attempts: true, actions: true }
 
 test('状态列 hover=派生口径（2026-10-30 裁定）：CA 原文只在「日志」对话框', () => {
-  assert.doesNotMatch(tableBody, /label="消息"/)
+  // 结构负钉：消息列已退役（CA 原文只在日志对话框）——不得残留消息列键/直消费
+  // message 的列（裸中文 label="消息" 在 i18n 后永不命中）。
+  assert.doesNotMatch(tableBody, /colMessage|label="消息"/)
   const status = columnBody('app.settings.certJobs.colStatus')
   // 旧契约（:content="row.message"）会把 CA 原文挂上状态标签——终态失败的
   // message 即 CA 错误原文，只在「日志」对话框呈现。
@@ -97,8 +99,9 @@ test('列宽基线取自 CERT_JOB_COLUMN_WIDTHS 单源（弹性 min-width / 固�
 })
 
 test('证书有效期合并单列：日期 + 剩余/已过期天数，精确时间走 tooltip', () => {
-  assert.doesNotMatch(tableBody, /label="过期时间"/)
-  assert.doesNotMatch(tableBody, /label="剩余天数"/)
+  // 结构负钉：有效期合并单列——旧两列不得残留（列 roster 无 expiry/remaining
+  // 独立列；裸中文 label 负钉 i18n 后空转）。
+  assert.doesNotMatch(tableBody, /colExpireTime|colDaysLeft|label="过期时间"|label="剩余天数"/)
   const body = columnBody('app\.settings\.certJobs\.colValidity')
   assert.match(body, new RegExp(`\\bmin-width="${CERT_JOB_COLUMN_WIDTHS.validity}"`))
   assert.match(body, /formatDateShort\(effectiveNotAfter\(row(?: as [A-Za-z]+)?\)\)/)

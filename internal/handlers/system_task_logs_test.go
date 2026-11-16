@@ -136,6 +136,7 @@ func TestParseCertJobTaskID_shapesUnified(t *testing.T) {
 // 关停窗口在「判定句柄」与「执行查询」之间置 nil 时，两条任务日志
 // 路径都必须继续使用同一局部快照，不得二次解引用包级 db.DB。
 func TestSystemTaskLogPaths_snapshotHandleAcrossShutdown(t *testing.T) {
+	withIsolatedGlobal(t)
 	newBackupTestHandlers(t)
 	if _, err := db.DB.Exec(`INSERT INTO cert_jobs (rule_id,domain,status) VALUES ('lb_shutdown','shutdown.example','queued')`); err != nil {
 		t.Fatal(err)

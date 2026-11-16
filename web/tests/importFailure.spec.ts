@@ -69,7 +69,11 @@ test('接线：拦截器透传响应体，导入/还原失败路径复用同一�
 
   const restore = section(page, 'const restoreAutoBackup', 'const deleteAutoBackup')
   assert.match(restore, /showImportFailure\(error, t\('app\.settings\.basic\.restore\.failTitle'\), t\('app\.settings\.basic\.restore\.failShort'\)\)/, '还原失败必须展示 warnings')
-  assert.doesNotMatch(restore, /配置未受影响/, '不得把「配置未受影响」当成确定事实（文件面可能已分裂）')
+  // 结构负钉：失败分支（catch）不得消费成功口径键/「配置未受影响」类断言——
+  // 文件面可能已分裂（裸中文负钉 i18n 后空转；成功路径的 restore.success 属合法）。
+  const restoreCatchAt = restore.indexOf('} catch (error: unknown) {')
+  assert.ok(restoreCatchAt > 0, '还原缺失败分支')
+  assert.doesNotMatch(restore.slice(restoreCatchAt), /restore\.success|restore\.done|notAffected|configUnaffected|配置未受影响/)
 
   const importFn = section(page, 'const confirmImport', 'interface BasicSettingsConfig')
   assert.match(importFn, /showImportFailure\(error, t\('app\.settings\.basic\.import\.failTitle'\), t\('app\.settings\.basic\.import\.failShort'\)\)/, '导入失败必须展示 warnings')

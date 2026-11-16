@@ -394,5 +394,12 @@ func (h *Handlers) clusterNodeAction(c *gin.Context, action string, operation fu
 		return
 	}
 	recordAudit(c, action, "集群节点", services.FormatAuditDetail(fmt.Sprintf("节点 %d", id), services.AuditResultPart("success")))
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.Tf(c, "k_6139d1f3", action), MessageKey: "k_6139d1f3"})
+	// 成功消息的动词插值按请求语言取词条（审计动作词保持 zh 字面量）——
+	// 此前中文动词直达 en 模板呈「审批 node succeeded」中英混杂。
+	verbKeys := map[string]string{"审批": "k_779c0c37", "拒绝": "k_e13e8259", "删除": "k_9ae0ab8e", "更新地址": "k_ead777fd"}
+	verb := action
+	if key, ok := verbKeys[action]; ok {
+		verb = apimsg.T(c, key)
+	}
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.Tf(c, "k_6139d1f3", verb), MessageKey: "k_6139d1f3"})
 }

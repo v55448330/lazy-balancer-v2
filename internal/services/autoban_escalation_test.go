@@ -5,7 +5,8 @@ package services
 //     解封清桶与累犯表键同形；
 //   - autoban_recidivism 累犯表：off 固定时长；standard 首次 duration→二次
 //     24h→三次+永久；aggressive 首次 duration→二次+永久；
-//   - 衰减窗口：N 天无再犯 offense_count 降一级（防永久标签）；
+//   - 衰减窗口：N 天无再犯 offense_count 清零、按首次档重新起算
+//     （防永久标签；不是「降一级」——只降一级净计数不回落，衰减形同虚设）；
 //   - 写侧配置校验拒绝非法 Escalation。
 
 import (

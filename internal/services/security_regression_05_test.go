@@ -242,6 +242,7 @@ func TestCrawlerRunUpdate_convergesProjectionWhenContentChanged(t *testing.T) {
 		t.Fatal(err)
 	}
 	// manual 触发会跑全部启用源；其余内置源是真实外网 URL，必须禁用，
+	// 否则本用例会出网拉取真实名单（离线/受限环境失败且污染快照）。
 	if _, err := database.Exec(`UPDATE security_crawler_sources SET update_enabled=0 WHERE name<>'googlebot'`); err != nil {
 		t.Fatal(err)
 	}

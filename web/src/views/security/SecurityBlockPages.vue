@@ -396,10 +396,11 @@ onMounted(fetchData)
 .block-widget-info { font-size: 14px; color: var(--text-secondary, #9ca3af); cursor: help; }
 
 /* 弹框高度约束（2026-11-12 用户反馈：原弹框超出屏幕）：
-   表单区内滚，编辑器随标签页切换按需占用高度；弹框自身不超出视口。 */
+   表单区内滚，编辑器随标签页切换按需占用高度；弹框自身不超出视口。
+   正文限高规则在 styles/main.css（.block-page-dialog）——弹框 append-to-body，
+   scoped :deep 不穿透 teleport 到 body 的弹框根。 */
 .block-page-form--scroll { max-height: calc(90vh - 150px); overflow-y: auto; padding-right: 6px; }
 .block-page-body-tabs { width: 100%; }
-.block-page-dialog :deep(.el-dialog__body) { max-height: calc(96vh - 120px); overflow: hidden; }
 
 /* .rules-pagination 已收敛 styles/main.css（四处逐字重复单源化） */
 

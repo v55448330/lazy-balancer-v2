@@ -417,10 +417,18 @@ func (p *Provider) listChallengeRecords(ctx context.Context, zone, subDomain str
 			return collected, nil
 		}
 		repeatedPage := true
+		hasValidID := false
 		for _, item := range resp.Response.RecordList {
 			if item == nil || item.RecordId == nil {
 				continue
 			}
+			// 畸形零值记录 ID 不参与去重折叠（整页 0 ID 不得误判无进展，
+			// 与 aliyun/dnspod/cloudflare 的空 ID 守卫同族；SDK RecordId 是
+			// *uint64，0 不是合法记录 ID）：整条跳过。
+			if *item.RecordId == 0 {
+				continue
+			}
+			hasValidID = true
 			// 无进展守卫按记录 ID 判定（先于 Type/名称精确收窄，与 aliyun 同
 			// 骨架）：整页非目标记录不得误判无进展提前收手漏扫后续页。
 			if seen[*item.RecordId] {
@@ -459,7 +467,9 @@ func (p *Provider) listChallengeRecords(ctx context.Context, zone, subDomain str
 		// 空转到页数上限并重复收集（钉测见 stopsWhenPagesRepeatWithInflatedTotal）。
 		offset += fetched
 		fetchedTotal += fetched
-		if fetched == 0 || repeatedPage {
+		// 整页畸形（无任何有效 ID）不构成「重复页」证据：没有可追踪的记录
+		// 可判重，按 total/短页口径继续判定，不得折叠成无进展提前收手。
+		if fetched == 0 || (repeatedPage && hasValidID) {
 			return collected, nil
 		}
 		if total > 0 {

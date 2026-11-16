@@ -1,8 +1,14 @@
 package db
 
 import (
+	"database/sql/driver"
 	"fmt"
 	"log"
+	"strconv"
+	"sync"
+	"unicode/utf8"
+
+	gosqlite "github.com/glebarez/go-sqlite"
 )
 
 // certCooldownExpiredNote 追加到「冷却窗口已过期」失败行 message 的终态标记。
@@ -20,12 +26,62 @@ func normalizeWaitingCAWrite() migrationWrite {
 // message 已含标记（或为 NULL/空串走覆盖分支）不重复追加；NULL 窗口
 // （已达上限仅手动重试）与窗口仍在未来的行不加注。启动迁移与配置导入
 // 提交后共用（见 AnnotateExpiredCooldownMessages）。
+//
+// 长度契约与 services.maxJobMessageBytes（1024 字节）同口径：先把 base 截到
+// 「上限-说明长度」字节预算再追加。截断经驱动级 UDF lb_trunc_utf8（Go 字节
+// 语义+UTF-8 边界回退）——纯 SQL 无法可靠表达：TEXT substr 按字符计（多字节
+// base 超限），BLOB substr 按字节但 modernc 的 CAST/length 对非法 UTF-8 尾部
+// 不做逐字节替换，边界判定不可靠（实测 v1.56.0）。裸 `message || note` 会让
+// 带外/旧备份的超长 message 绕过上限。
 func expiredCooldownMessageWrite() migrationWrite {
 	where := "status='failed' AND ca_available_after IS NOT NULL AND datetime(ca_available_after) <= datetime('now')" +
 		" AND (message IS NULL OR message NOT LIKE '%" + certCooldownExpiredNote + "%')"
+	baseBudget := strconv.Itoa(1024 - len(certCooldownExpiredNote))
 	write := "UPDATE cert_jobs SET message = CASE WHEN COALESCE(message,'')='' THEN '" + certCooldownExpiredNote + "'" +
-		" ELSE message || '" + certCooldownExpiredNote + "' END WHERE " + where
+		" ELSE lb_trunc_utf8(message, " + baseBudget + ") || '" + certCooldownExpiredNote + "' END WHERE " + where
 	return migrationWrite{table: "cert_jobs", where: where, write: write}
+}
+
+var registerTruncUDFOnce sync.Once
+
+// ensureTruncUTF8UDF 注册 lb_trunc_utf8(text, maxBytes)：按字节预算截断并回退
+// 合法 UTF-8 边界（与 services.truncateJobMessage 同语义）。驱动级注册对所有
+// 此后新建连接生效（主库/审计/metrics 与测试库同驱动）；重复注册会报错，
+// sync.Once 保证进程内只注册一次。
+func ensureTruncUTF8UDF() {
+	registerTruncUDFOnce.Do(func() {
+		gosqlite.MustRegisterDeterministicScalarFunction("lb_trunc_utf8", 2, func(_ *gosqlite.FunctionContext, args []driver.Value) (driver.Value, error) {
+			if len(args) != 2 {
+				return nil, fmt.Errorf("lb_trunc_utf8 expects 2 arguments")
+			}
+			var text string
+			switch v := args[0].(type) {
+			case string:
+				text = v
+			case []byte:
+				text = string(v)
+			case nil:
+				return "", nil
+			default:
+				return nil, fmt.Errorf("lb_trunc_utf8: unsupported text type %T", args[0])
+			}
+			budget, ok := args[1].(int64)
+			if !ok {
+				return nil, fmt.Errorf("lb_trunc_utf8: unsupported budget type %T", args[1])
+			}
+			if budget <= 0 {
+				return "", nil
+			}
+			if int64(len(text)) <= budget {
+				return text, nil
+			}
+			b := []byte(text[:budget])
+			for len(b) > 0 && !utf8.Valid(b) {
+				b = b[:len(b)-1]
+			}
+			return string(b), nil
+		})
+	})
 }
 
 // NormalizeWaitingCACertJobs 将 cert_jobs 中残留的 waiting_ca 行保窗归一为
@@ -62,6 +118,7 @@ func NormalizeWaitingCACertJobs() (int64, error) {
 // 幂等：message 已含标记不重复追加；经 execMigrationWriteIfNeeded 探测，
 // 零命中即跳过。失败上抛。
 func AnnotateExpiredCooldownMessages() (int64, error) {
+	ensureTruncUTF8UDF()
 	result, err := execMigrationWriteIfNeeded(expiredCooldownMessageWrite())
 	if err != nil {
 		return 0, fmt.Errorf("failed to annotate expired ca cooldown messages: %w", err)

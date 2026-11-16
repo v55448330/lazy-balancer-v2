@@ -260,6 +260,10 @@ test('脚本存在性断言文件禁止裸 source()/repoSource() 回流', () => 
     'panelUiWiring.spec.ts',
     // 注释文案钉（断言对象是过时注释本身，剥注释后无法判定）。
     'viewStateContracts.spec.ts',
+    // 注释文案钉（负钉排查改 raw）：断言对象是过时注释承诺本身
+    //（「MFA 自身端点整体豁免」/「等待下次轮询同步」），剥注释后恒真。
+    'mfaErrors.spec.ts',
+    'ruleToggleRollback.spec.ts',
     // 注释文案钉：断言对象是过时注释本身，剥注释后无法判定（用例名标注文档钉）。
     'feCoreContracts.spec.ts',
     'settingsWiringContracts.spec.ts',

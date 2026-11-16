@@ -129,6 +129,7 @@ func TestSecurityWrites_transportFailureDegradesToCommit(t *testing.T) {
 // 裁定 2026-09-07（残余项处置）：安全域写路径与规则域共享 caddyOpMu——
 // 跨域并发写（规则+安全）不再有渲染/应用交错窗口。
 func TestSecurityWrites_serializeWithRuleWrites(t *testing.T) {
+	withIsolatedGlobal(t)
 	// Given
 	setupSecurityPolicyTestDB(t)
 	handler, _, _ := newAuditRuleHandlers(t, 0)

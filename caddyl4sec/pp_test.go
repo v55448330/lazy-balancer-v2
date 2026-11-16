@@ -1,11 +1,12 @@
 package caddyl4sec
 
 // TCP 规则 PROXY v2 入站解析信任门控（layer4.handlers.lb_l4_pp）钉测：
-// 上游 l4proxyprotocol 在 go-proxyproto v0.15 下 NewConn 恒施加 DefaultPolicy
-// （REQUIRE——直连无头即拒 + 任意来源声明源被采信），其 allow/fallback_policy
-// 字段不进 NewConn，属死配置。本模块以逐连接显式策略替代：
-// 对端 ∈ Allow（受信代理网段）→ USE（采信声明源）；其余 → IGNORE（头被
-// 消费不采信，按直连地址；无头直连照常透传）。
+// v0.1.2 时代上游 l4proxyprotocol 在 go-proxyproto v0.15 下 NewConn 恒施加
+// DefaultPolicy（REQUIRE——直连无头即拒 + 任意来源声明源被采信），其
+// allow/fallback_policy 字段不进 NewConn，属死配置；caddy-l4 v0.1.3 已修复
+//（逐连接 policy 回调，默认 IGNORE），lb_l4_pp 保留（主审裁定，见 pp.go）。
+// 本模块以逐连接显式策略替代：对端 ∈ Allow（受信代理网段）→ USE（采信
+// 声明源）；其余 → IGNORE（头被消费不采信，按直连地址；无头直连照常透传）。
 import (
 	"bytes"
 	"context"
@@ -187,7 +188,7 @@ func TestL4PPHandleUntrustedSourceKeepsRealAddr(t *testing.T) {
 }
 
 // TestL4PPHandleHeaderlessDirectClient 直连客户端（无 PROXY 头）照常透传：
-// 显式 IGNORE 不要求头（与上游 v0.15 REQUIRE 默认值分叉的本体）。
+// 显式 IGNORE 不要求头（与 v0.1.2 时代上游 v0.15 REQUIRE 默认值分叉的本体）。
 func TestL4PPHandleHeaderlessDirectClient(t *testing.T) {
 	h := newPPHandlerForTest(t, []string{"203.0.113.0/24"})
 	next := &ppCapture{}

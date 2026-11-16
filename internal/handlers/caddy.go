@@ -1181,6 +1181,17 @@ func (h *Handlers) ValidateConfig(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_5b71a9a0"), MessageKey: "k_5b71a9a0", Data: err.Error()})
 		return
 	}
+	// admin 自锁护栏（回退真实 /load 之前）：与逃生口 PutCaddyConfig 同口径——
+	// 回退路径的候选载荷会成为运行配置，admin off/改址后面板控制面全失联且
+	// 回弹必然失败（只能重启容器）。两个真实 /load 入口的自锁防护必须对称；
+	// CLI 可用路径零运行时扰动，不需要本护栏（admin off 是合法 Caddy 配置）。
+	if h.cfg != nil {
+		if err := validateCaddyAdminSection(configData, h.cfg.CaddyAdminURL); err != nil {
+			recordAudit(c, "校验失败", "Caddy配置", services.FormatAuditDetail("配置校验", err.Error(), services.AuditResultPart("failure")))
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.ErrMsg(c, err)})
+			return
+		}
+	}
 	// CLI 校验器不可用回退：-c——/load 无 validate-only 语义，候选
 	// 载荷会成为运行配置。候选可能已被 Caddy 加载后请求才
 	// 断连/超时（客户端看到传输错误），因此**无论 ValidateConfig 成功或
@@ -1239,6 +1250,12 @@ func (h *Handlers) ReloadCaddy(c *gin.Context) {
 }
 
 func (h *Handlers) GetCaddyStatus(c *gin.Context) {
+	// nil-cfg 零值契约（config_degradation_test 同族）：嵌入/测试装配形态
+	// 未注入 cfg 时返回可解析零值，不裸解引用 panic。
+	if h.cfg == nil {
+		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"status": "unknown", "running": false}})
+		return
+	}
 	applyError := ""
 	if db.DB != nil {
 		// 读取失败不再静默吞——apply_error 缺失会让
@@ -1300,6 +1317,11 @@ func driftSinceText(drift services.ConfigDriftStatus) string {
 }
 
 func (h *Handlers) GetCaddyConfig(c *gin.Context) {
+	// nil-cfg 零值契约（config_degradation_test 同族）。
+	if h.cfg == nil {
+		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{}})
+		return
+	}
 	// 原始运行配置可能含经 PUT /caddy/config 逃生口写入的内联私钥
 	// 或敏感 header——与 GetConfig 的 caddy_config 脱敏同口径：非管理员及
 	// 只读 API Key 一律拒绝（路由已收敛到 admin 组，此处为纵深防御）。
@@ -1342,10 +1364,10 @@ var caddyLogPaths = map[string]string{
 	"proxy":   "/app/logs/caddy-proxy.log",
 }
 
-// caddyLogsStatHook 是测试专用钩子（生产恒 nil）：在 Stat 成功之后、打开并
-// 读取之前触发，用于模拟「Stat 与 Read 之间日志增长」的窗口（回归测试
-// 读取必须受 128KB 窗口上限约束，不得随增长无界放大）。
-var caddyLogsStatHook func()
+// logTailWindowStatHook 是测试专用钩子（生产恒 nil）：在尾窗尺寸快照之后、
+// Seek/Read 之前触发，模拟「尺寸判定与读取之间日志增长」的窗口（回归测试
+// 读取必须受窗口上限约束）。单源尾窗 readLogTailWindow 与本端点共用。
+var logTailWindowStatHook func()
 
 // caddyLogTypes 返回 caddyLogPaths 的确定性展示顺序（错误文案与文档共用）——
 // 由路径表即时派生而非第二份手写枚举：新增日志类型时只改路径表，文案不会
@@ -1368,68 +1390,17 @@ func (h *Handlers) GetCaddyLogs(c *gin.Context) {
 		return
 	}
 
-	const maxBytes = 128 * 1024
-	const maxLines = 500
-
-	info, err := os.Stat(logPath)
+	// 尾窗读取收敛单源 readLogTailFile（128KB/500 行，与证书任务日志同口径）：
+	// 尺寸取自 openRegularLogFile 已打开 fd 的 FileInfo——此前 open 前置
+	// os.Stat 留下「stat 后目标被轮转/替换」窗口，offset 按旧尺寸算读错尾部。
+	content, err := readLogTailFile(logPath)
 	if err != nil {
-		if os.IsNotExist(err) {
-			c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: map[string]string{"content": ""}})
-			return
-		}
 		// 本端点在 business 组（任意登录用户可读）：5xx 一律固定文案，路径与
 		// errno 只进运行日志（admin 细节政策只适用于 admin 组端点，见文件头）。
 		writeInternalError(c, http.StatusInternalServerError, "日志文件不可访问", err)
 		return
 	}
-
-	startOffset := int64(0)
-	if info.Size() > maxBytes {
-		startOffset = info.Size() - maxBytes
-	}
-	// 测试专用钩子（生产恒 nil）：在 Stat 与读取之间模拟日志增长，钉住
-	// 「读取严格受窗口上限约束」的不变量。
-	if caddyLogsStatHook != nil {
-		caddyLogsStatHook()
-	}
-
-	f, err := os.Open(logPath)
-	if err != nil {
-		writeInternalError(c, http.StatusInternalServerError, "打开日志文件失败", err)
-		return
-	}
-	defer f.Close()
-
-	if _, err := f.Seek(startOffset, io.SeekStart); err != nil {
-		writeInternalError(c, http.StatusInternalServerError, "读取日志文件失败", err)
-		return
-	}
-
-	// 与 certjobs.readLogTailFile 同源形态——
-	// Stat 与 Read 之间日志增长（高流量 + 轮转滞后）时，裸 ReadAll 会突破
-	// 128KB 尾窗上限；LimitReader 把读取严格钉在窗口大小。
-	data, err := io.ReadAll(io.LimitReader(f, int64(maxBytes)))
-	if err != nil {
-		writeInternalError(c, http.StatusInternalServerError, "读取日志文件失败", err)
-		return
-	}
-	// 尾窗首行残段截断统一走 tailLogWindow
-	// 口径——窗口内无 '\n' 时整窗为同一巨行中段，输出为空；此前此处分叉
-	// 返回原始中段，多字节 rune 切断处 U+FFFD 污染）。
-	data = tailLogWindow(f, data, startOffset)
-
-	lines := strings.Split(string(data), "\n")
-	if len(lines) > maxLines {
-		// 以 \n 结尾的窗口经 Split 会多出一个尾部空元素（行终止符不是
-		// 一行），按元素数切片会把空元素计作一行，少显示一行真实日志。
-		if lines[len(lines)-1] == "" {
-			lines = lines[:len(lines)-1]
-		}
-		if len(lines) > maxLines {
-			lines = lines[len(lines)-maxLines:]
-		}
-	}
-	content := convertLogTimezone(strings.Join(lines, "\n"))
+	content = convertLogTimezone(content)
 
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: map[string]string{"content": content}})
 }
@@ -1670,7 +1641,7 @@ func (h *Handlers) PutCaddyConfig(c *gin.Context) {
 	runtimeSnapshot, err := h.snapshotImportRuntime(nil)
 	if err != nil {
 		recordAudit(c, "更新失败", "Caddy配置", caddyFailureAuditDetail("备份当前 Caddy 配置失败", err))
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.Tf(c, "k_f56aab74", apimsg.ErrMsg(c, err))})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.Tf(c, "k_480789d0", apimsg.ErrMsg(c, err))})
 		return
 	}
 	tx, err := beginCaddyWriteTx(c)
@@ -1690,7 +1661,7 @@ func (h *Handlers) PutCaddyConfig(c *gin.Context) {
 	result, err := tx.ExecContext(caddyWriteCtx(c), "UPDATE global_config SET caddy_config=?, updated_at=datetime('now') WHERE id=1", req.Content)
 	if err != nil {
 		recordAudit(c, "更新失败", "Caddy配置", services.FormatAuditDetail("保存 Caddy 配置失败", err.Error(), services.AuditResultPart("failure")))
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.Tf(c, "k_b6fa6f68", apimsg.ErrMsg(c, err))})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.Tf(c, "k_bf5c6d0c", apimsg.ErrMsg(c, err))})
 		return
 	}
 	rowsAffected, err := result.RowsAffected()
@@ -1726,7 +1697,7 @@ func (h *Handlers) PutCaddyConfig(c *gin.Context) {
 		recordAudit(c, "更新失败", "Caddy配置", caddyFailureAuditDetail("Caddy 配置应用失败", err))
 		// 2026-09-07：与统一——配置拒绝→400，传输/系统→500。
 		if rejected {
-			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "k_e39daedf", apimsg.ErrMsg(c, err))})
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "k_6a049747", apimsg.ErrMsg(c, err))})
 		} else {
 			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.Tf(c, "k_a76cfec8", apimsg.ErrMsg(c, err))})
 		}
@@ -1994,9 +1965,9 @@ func validateAccessLogFormat(format string) error {
 	if err := renameAlias([]string{"request>uri"}, []string{"uri_path"}); err != nil {
 		return err
 	}
-	// 祖先前缀同样命中——request>headers 或 request
-	// 整树改名会连带移走 （与:1082-1088 fieldKept 的祖先删除、
-	// :1111-1114 renameAlias 的祖先前缀同口径）。
+	// 祖先前缀同样命中——request>headers 或 request 整树改名会连带移走
+	// User-Agent（与上方 fieldKept 的祖先删除、renameAlias 的祖先前缀同口径；
+	// 符号引用不持行号，防漂移）。
 	for _, r := range rules {
 		if r.action == "" || r.action == "delete" {
 			continue

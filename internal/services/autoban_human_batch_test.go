@@ -19,8 +19,11 @@ import (
 // autobanConfigReadProbe 计数「global_config 单行配置读」的查询探针：
 // 真实驱动包装同一 sqlite 文件（与 autobanEnabledFailConnector 同模式），
 // 经 db.DB 全局替换注入——GetAutobanConfig 直读 db.DB，无函数缝。
+// reads=全部单行读（含启用位单列读）；fullReads=完整十列配置读
+// （GetAutobanConfig / ReadAutobanConfigFrom 形态）。
 type autobanConfigReadProbe struct {
-	reads atomic.Int64
+	reads     atomic.Int64
+	fullReads atomic.Int64
 }
 
 type autobanConfigProbeConnector struct {
@@ -47,6 +50,9 @@ type autobanConfigProbeConn struct {
 func (c *autobanConfigProbeConn) QueryContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
 	if strings.Contains(query, "FROM global_config WHERE id=1") {
 		c.probe.reads.Add(1)
+		if strings.Contains(query, "COALESCE(autoban_threshold") {
+			c.probe.fullReads.Add(1)
+		}
 	}
 	if qc, ok := c.Conn.(driver.QueryerContext); ok {
 		return qc.QueryContext(ctx, query, args)

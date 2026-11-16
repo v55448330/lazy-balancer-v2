@@ -186,6 +186,45 @@ func TestRequeueNonTerminalCertJobs_skipsIssuance_whenSelectedCertificateIsOutsi
 	}
 }
 
+// 启动恢复「检测到已有有效证书」issued 终态同样必须清零上一代失败预算
+// （issuedFinalizeFields 单源）：漏项时失败计数跨证书世代携带，下一轮续期
+// 首次失败即触顶，自动续签停摆。
+func TestRequeueNonTerminalCertJobs_existingCertIssuedResetsRenewalBudget(t *testing.T) {
+	// Given：在途（creating_order）任务持有 90 天有效证书 + 上一代失败预算
+	// （attempts=4、残留退避窗口/错误码）。
+	_, database := newClusterTestService(t)
+	now := time.Now().UTC()
+	certPEM, keyPEM := certificatePairForDomains(t, now.Add(-time.Hour), now.Add(90*24*time.Hour), "recovery-budget.example.com")
+	if _, err := database.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enabled,enable_tls,tls_source)
+		VALUES ('lb_recovery_budget','recovery-budget','http','recovery-budget.example.com',443,1,1,'acme_dns')`); err != nil {
+		t.Fatalf("seed rule: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,expires_at,cert_pem,key_pem,renewal_attempts,ca_available_after,last_error_code,updated_at)
+		VALUES ('lb_recovery_budget','recovery-budget.example.com','creating_order',datetime('now','+90 days'),?,?,4,datetime('now','+1 hour'),'429',datetime('now'))`, certPEM, keyPEM); err != nil {
+		t.Fatalf("seed recovery job with stale budget: %v", err)
+	}
+
+	// When
+	if err := requeueNonTerminalCertJobs(context.Background(), func(int, issuedCertificate, time.Duration) error { return nil }); err != nil {
+		t.Fatalf("recover certificate jobs: %v", err)
+	}
+
+	// Then：issued + 失败预算三项清零。
+	var status string
+	var attempts int
+	var window, errorCode any
+	if err := database.QueryRow(`SELECT status, COALESCE(renewal_attempts,0), ca_available_after, last_error_code
+		FROM cert_jobs WHERE rule_id='lb_recovery_budget'`).Scan(&status, &attempts, &window, &errorCode); err != nil {
+		t.Fatalf("read recovery job: %v", err)
+	}
+	if status != "issued" {
+		t.Fatalf("status=%q, want issued（已有有效证书恢复优化未命中）", status)
+	}
+	if attempts != 0 || window != nil || errorCode != nil {
+		t.Fatalf("issued 终态携带上一代失败预算 attempts=%d window=%v code=%v, want 0/NULL/NULL", attempts, window, errorCode)
+	}
+}
+
 type certificateSelectionFixture struct {
 	jobDomains string
 	sanDomains []string

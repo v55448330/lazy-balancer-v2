@@ -250,8 +250,9 @@ func crawlerSnapshotShrinkGuard(engineID string, newCount int, set *crawlerBasel
 // 上限，与 AutobanListEntryCap 同型的跨包契约）。
 const CrawlerIPListEntryCap = 2000
 
-// crawlerSnapshotGrowthGuard 条数扩张门：源响应上限
-// 16MB，通用 CIDR 提取后可产出数十万条，膨胀会放大 DB 行、
+// crawlerSnapshotGrowthGuard 条数扩张门：源响应体上限按格式分档（HTML/纯文本
+// 16MB、JSON 2MB——结构化解码放大更高，见 crawler_fetch.go 的 crawlerBodyCap /
+// crawlerJSONBodyCap），通用 CIDR 提取后可产出数十万条，膨胀会放大 DB 行、
 // crawler-ip-lists.json、插件每 10min 重载的前缀表与渲染期内存。
 // 仅保留绝对上限 CrawlerIPListEntryCap；相对当前快照的合法扩张不拒绝。
 // 拒绝时保留上次快照；调用方按源失败留痕（任务日志 ERROR + 源状态 failed +
@@ -496,7 +497,7 @@ func (m *CrawlerUpdateManager) RunUpdate(ctx context.Context, rc taskengine.RunC
 		}
 		changed, err := upsertCrawlerIPListChangedInner(src.Name, entries)
 		if err != nil {
-			// 部分提交收敛 部分提交收敛：DB 已更新而快照写失败时 upsert 返回
+			// 部分提交收敛：DB 已更新而快照写失败时 upsert 返回
 			// changed=true + err——DB 与投影/插件快照已分叉，仍须计入收敛面，
 			// 由下方 changedCount>0 分支触发投影收敛对齐 DB（插件快照由下一轮
 			// 源重试的 crawlerSnapshotMatchesEngine 校验自愈）。

@@ -26,14 +26,14 @@ func autobanWindowCountForRoleTest() int {
 
 // 升主清桶：从节点期间冻结的陈旧计数升主后必须清空（防旧口径执法）。
 func TestClusterService_Promote_resetsAutobanCounters(t *testing.T) {
-	oldDB, oldMetricsDB, oldAuditDB := db.DB, db.MetricsDB, db.AuditDB
+	oldDB, oldMetricsDB, oldAuditDB, oldCurrent := db.DB, db.MetricsDB, db.AuditDB, db.GetDB()
 	if err := db.Initialize(t.TempDir()); err != nil {
 		t.Fatalf("initialize: %v", err)
 	}
 	t.Cleanup(func() {
 		StopTaskEngine()
 		_ = db.Close()
-		db.DB, db.MetricsDB, db.AuditDB = oldDB, oldMetricsDB, oldAuditDB
+		restoreGlobalDBHandles(oldDB, oldMetricsDB, oldAuditDB, oldCurrent)
 		ResetAutobanCounters()
 	})
 	SetConfigLoadRerun(func(operator string) error { return nil })
@@ -48,6 +48,7 @@ func TestClusterService_Promote_resetsAutobanCounters(t *testing.T) {
 		t.Fatal("前置失败：陈旧计数未种入")
 	}
 	service := NewClusterService(db.DB, "")
+	t.Cleanup(func() { unregisterClusterService(service) })
 	installGlobalConfigVersionTrigger(t, db.DB)
 	if err := service.Promote(context.Background()); err != nil {
 		t.Fatalf("promote: %v", err)
@@ -59,14 +60,14 @@ func TestClusterService_Promote_resetsAutobanCounters(t *testing.T) {
 
 // 降级清桶：主节点陈旧计数降级后必须清空（防升主往返残留）。
 func TestClusterService_BecomeSlave_resetsAutobanCounters(t *testing.T) {
-	oldDB, oldMetricsDB, oldAuditDB := db.DB, db.MetricsDB, db.AuditDB
+	oldDB, oldMetricsDB, oldAuditDB, oldCurrent := db.DB, db.MetricsDB, db.AuditDB, db.GetDB()
 	if err := db.Initialize(t.TempDir()); err != nil {
 		t.Fatalf("initialize: %v", err)
 	}
 	t.Cleanup(func() {
 		StopTaskEngine()
 		_ = db.Close()
-		db.DB, db.MetricsDB, db.AuditDB = oldDB, oldMetricsDB, oldAuditDB
+		restoreGlobalDBHandles(oldDB, oldMetricsDB, oldAuditDB, oldCurrent)
 		ResetAutobanCounters()
 	})
 	SetConfigLoadRerun(func(operator string) error { return nil })
@@ -78,6 +79,7 @@ func TestClusterService_BecomeSlave_resetsAutobanCounters(t *testing.T) {
 	}
 	seedAutobanWindowForRoleTest(t)
 	service := NewClusterService(db.DB, "")
+	t.Cleanup(func() { unregisterClusterService(service) })
 	installGlobalConfigVersionTrigger(t, db.DB)
 	if err := service.BecomeSlave(context.Background(), "https://master.example", models.ClusterRegistration{RegistrationID: 9, RegistrationSecret: "secret"}); err != nil {
 		t.Fatalf("become slave: %v", err)

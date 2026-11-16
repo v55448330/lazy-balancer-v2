@@ -54,3 +54,35 @@ func TestCCChallengeFallbackRejectUses9001(t *testing.T) {
 		t.Fatalf("reject 动作必须回退 9001 拒绝页: %q", html)
 	}
 }
+
+// Given auto 模式 + CC 触发动作 challenge（默认态），验证方式 js / slider。
+// When 选挑战页回退。
+// Then 按验证方式回退 9006 / 9005——三态链的 challenge 支必须实钉
+// （头注释宣称三态，此前只钉 queue/reject 两态）。
+func TestCCChallengeFallbackAutoChallengeByVerifyType(t *testing.T) {
+	cases := []struct {
+		name   string
+		typ    string
+		pageID int
+		html   string
+	}{
+		{"js→9006", "js", builtinHumanJSVerifyPageID, "<html>js-challenge</html>"},
+		{"slider→9005", "slider", builtinHumanVerifyPageID, "<html>slider-challenge</html>"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			ctx := &securityPolicyContext{
+				blockPageByID:     map[int]string{c.pageID: c.html},
+				blockPageTypeByID: map[int]string{c.pageID: "text/html"},
+			}
+			policies := []*models.SecurityPolicy{{
+				CCDetectEnabled: true, HumanVerifyMode: "auto", HumanVerifyType: c.typ,
+				CCTriggerAction: "challenge",
+			}}
+			html, _ := humanChallengeFallbackPage(ctx, policies)
+			if html != c.html {
+				t.Fatalf("auto+challenge(%s) 必须回退 %d 挑战页: %q", c.typ, c.pageID, html)
+			}
+		})
+	}
+}

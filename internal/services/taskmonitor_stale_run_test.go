@@ -35,16 +35,12 @@ func findTaskInfo(t *testing.T, rows []TaskInfo, id string) TaskInfo {
 
 func alignMonitorEngineLocation(t *testing.T) {
 	t.Helper()
-	previous := CurrentLocation().String()
+	// 指针级双状态还原（snapshotLocationState 单源）——字符串往返缝在
+	// init 占位 CST 时不可 LoadLocation 重建（-shuffle/隔离运行显形）。
+	snapshotLocationState(t)
 	if _, err := ConfigureLocation("Asia/Shanghai"); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() {
-		if previous == "CST" {
-			previous = "Asia/Shanghai"
-		}
-		_, _ = ConfigureLocation(previous)
-	})
 }
 
 func TestCollectEngineFamilies_staleRunningRowIsNotRunning(t *testing.T) {

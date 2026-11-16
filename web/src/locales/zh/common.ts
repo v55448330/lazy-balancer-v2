@@ -76,8 +76,13 @@ export default {
   cadence: {
     everyNMinutes: '每 {n} 分钟',
     everyNMinutesSingle: '每 1 分钟',
-    every15Minutes: '每 15 分钟',
+    everyNSeconds: '每 {n} 秒',
+    everyNHours: '每 {n} 小时',
+    everyNDays: '每 {n} 天',
     dailyAt: '每天 {time}',
+    scheduled: '定时排程',
+    daemon: '常驻自管理',
+    manual: '手动触发',
   },
   // 审计日志动作/对象枚举词条：zh 母本=audit_log 库值原样（zh 原样展示契约），
   // en 翻译在 locales/en/common.ts；枚举钉见 tests/auditVocabularyPairs.spec.ts。

@@ -240,7 +240,9 @@ test('视图口径与样式契约：端口门、CA 门、摘要披露、分页�
   const cluster = code('src/views/settings/cluster/ClusterMasterPanel.vue')
   assert.doesNotMatch(cluster, /\.settings-form \.form-tip-inline/, '全局类不得在 scoped 中重定义')
   const task = code('src/views/settings/TaskMonitor.vue')
-  assert.doesNotMatch(task, /（不含证书工作项）|（含证书工作项）/)
+  // 结构负钉：统计口径必须走 col.successFailTip 词条键（下面双钉），不得本地
+  // 第二份「含/不含证书工作项」说明（裸中文负钉 i18n 后空转）。
+  assert.doesNotMatch(task, /successFailTip[^}]*\+|certWorkItemsNote/, '统计口径不得本地拼装第二份')
   assert.match(task, /<div class="tm-filter-group">/)
   assert.match(task, /t\('app\.settings\.taskMonitor\.col\.successFailTip'\)/)
   assert.ok(code('src/locales/zh/settings.ts').includes('近 24 小时成功 / 失败次数；历史明细最多 50 条'), '统计口径原文必须在 zh 母本词条中')

@@ -118,8 +118,8 @@ test('段界与形态分支跨栈对表（后端段界/分支调整必须红）'
   const handler = repoCode('internal/handlers/security.go')
   const fn = section(handler, 'func attackFamilyClassOf(', '\n}')
   for (const anchor of [
-    'case len(ruleTriggered) == 5:',
-    "case len(ruleTriggered) == 6 && ruleTriggered[0] >= '1' && ruleTriggered[0] <= '7':",
+    'case len(ruleTriggered) == 5 && ruleTriggeredAllDigits(ruleTriggered):',
+    "case len(ruleTriggered) == 6 && ruleTriggered[0] >= '1' && ruleTriggered[0] <= '7' && ruleTriggeredAllDigits(ruleTriggered):",
     'case strings.HasPrefix(ruleTriggered, "1") && len(ruleTriggered) >= 7:',
     'legacyFamily := legacyRuleFamily{}',
     'case legacyFamily.class == attackFamilyTrust:',

@@ -87,6 +87,7 @@ func seedWindow2Rule(t *testing.T, caddyID, name, domain string, port int) {
 
 // 第 1 个中止出口：UpdateRule 证书取消窗口内规则被并发删除。
 func TestUpdateRule_reloadAuditedWhenRuleDeletedInCancelWindow(t *testing.T) {
+	withIsolatedGlobal(t)
 	handler, _, _ := newAuditRuleHandlers(t, 0)
 	seedAuditRule(t, "lb_rl_w1_del", "rlw1del", "rlw1del.example.test", 18011, true, "manual", false)
 	seedAuditUpstream(t, "lb_rl_w1_del")
@@ -135,6 +136,7 @@ func assertConcurrencyAbortSaysCommitted(t *testing.T, body, action string) {
 
 // 第 2 个中止出口：UpdateRule 证书取消窗口内规则被并发修改。
 func TestUpdateRule_reloadAuditedWhenConcurrentlyModifiedInCancelWindow(t *testing.T) {
+	withIsolatedGlobal(t)
 	handler, _, _ := newAuditRuleHandlers(t, 0)
 	seedAuditRule(t, "lb_rl_w1_mod", "rlw1mod", "rlw1mod.example.test", 18012, true, "manual", false)
 	seedAuditUpstream(t, "lb_rl_w1_mod")
@@ -163,6 +165,7 @@ func TestUpdateRule_reloadAuditedWhenConcurrentlyModifiedInCancelWindow(t *testi
 
 // 第 3 个中止出口：UpdateRule 域名迁移取消窗口内规则被并发删除。
 func TestUpdateRule_reloadAuditedWhenRuleDeletedInMigrationWindow(t *testing.T) {
+	withIsolatedGlobal(t)
 	handler, _, _ := newAuditRuleHandlers(t, 0)
 	seedWindow2Rule(t, "lb_rl_w2_del", "rlw2del", "rlw2del-old.example.test", 18013)
 	startRuleLockWindowQueue(t)
@@ -189,6 +192,7 @@ func TestUpdateRule_reloadAuditedWhenRuleDeletedInMigrationWindow(t *testing.T) 
 
 // 第 4 个中止出口：UpdateRule 域名迁移取消窗口内规则被并发修改。
 func TestUpdateRule_reloadAuditedWhenConcurrentlyModifiedInMigrationWindow(t *testing.T) {
+	withIsolatedGlobal(t)
 	handler, _, _ := newAuditRuleHandlers(t, 0)
 	seedWindow2Rule(t, "lb_rl_w2_mod", "rlw2mod", "rlw2mod-old.example.test", 18014)
 	startRuleLockWindowQueue(t)
@@ -216,6 +220,7 @@ func TestUpdateRule_reloadAuditedWhenConcurrentlyModifiedInMigrationWindow(t *te
 
 // 第 5 个中止出口：DisableRule 证书取消窗口内规则被并发删除。
 func TestDisableRule_reloadAuditedWhenRuleDeletedInLockWindow(t *testing.T) {
+	withIsolatedGlobal(t)
 	handler, _, _ := newAuditRuleHandlers(t, 0)
 	seedAuditRule(t, "lb_rl_dis_del", "rldisdel", "rldisdel.example.test", 18015, true, "acme_dns", true)
 	seedAuditUpstream(t, "lb_rl_dis_del")
@@ -241,6 +246,7 @@ func TestDisableRule_reloadAuditedWhenRuleDeletedInLockWindow(t *testing.T) {
 
 // 第 6 个中止出口：DisableRule 证书取消窗口内规则被并发修改（启用/更新）。
 func TestDisableRule_reloadAuditedWhenConcurrentlyModifiedInLockWindow(t *testing.T) {
+	withIsolatedGlobal(t)
 	handler, _, _ := newAuditRuleHandlers(t, 0)
 	seedAuditRule(t, "lb_rl_dis_mod", "rldismod", "rldismod.example.test", 18016, true, "acme_dns", true)
 	seedAuditUpstream(t, "lb_rl_dis_mod")

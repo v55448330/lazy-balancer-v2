@@ -203,6 +203,7 @@ func TestIssueCertificate_batchAllFailedCarriesSkippedCounts(t *testing.T) {
 // When 批量签发。
 // Then 审计/文案不得声称「手动越过 CA 冷却」——ca_available_after 从未被清空。
 func TestIssueCertificate_batchForceDoesNotClaimOverrideWhenTargetSkipped(t *testing.T) {
+	withIsolatedGlobal(t)
 	h := newBackupTestHandlers(t)
 	initIssueQueue(t)
 	seedIssueRule(t, "lb_force_meta", "force-meta.example")

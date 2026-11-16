@@ -1,6 +1,6 @@
 package handlers
 
-//   自动封禁六列：布尔两键入 validateV2BackupBooleanTypes 枚举（非布尔
+//   自动封禁十列：布尔两键入 validateV2BackupBooleanTypes 枚举（非布尔
 //   形态整包 400 点名键）；threshold/window 数值钳制（写侧同边界 [1,10000]/
 //   [1,60]，非整数形态归一缺省）；duration/scope 枚举校验（空串/null 归一
 //   缺省、非空非法拒绝——镜像 security_policies mode 族口径），导入/预览双路径同序。

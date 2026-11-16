@@ -790,3 +790,112 @@ func names(entries []os.DirEntry) []string {
 	}
 	return out
 }
+
+// idle-seal 失败告警必须节流（首次立即，其后每分钟一条并携带被抑制数）：
+// 持续封存故障下 drain ticker 每 auditIPCFlushInterval 重试一次，不节流即按
+// ticker 频率洪泛 ERROR 日志（与 L4 侧 idleSealLog 同族同口径）。
+func TestAuditIPCShipperIdleSealFailureLogThrottled(t *testing.T) {
+	dir := t.TempDir()
+	spool, err := openAuditSpool(dir, 1<<20, 100)
+	if err != nil {
+		t.Fatalf("open spool: %v", err)
+	}
+	shipper := &auditIPCShipper{spool: spool}
+	defer func() { _ = spool.close() }()
+	if n, err := spool.appendLines([][]byte{[]byte(`{"k":"v"}`)}); err != nil || n != 1 {
+		t.Fatalf("baseline appendLines = %d, %v; want 1, nil", n, err)
+	}
+	// 真实故障注入：spool 目录改为只读（r-x）——active fd 仍有效（flush
+	// 成功），sealIfIdle 的 os.Rename 需要目录写权限，真实失败（EACCES）；
+	// active 保持打开，每次 flushIfDue 都重试并失败（持续故障形态）。
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatalf("chmod spool dir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o750) })
+
+	var mu sync.Mutex
+	var logs []string
+	oldLog := auditIOLogf
+	auditIOLogf = func(format string, args ...any) {
+		mu.Lock()
+		logs = append(logs, fmt.Sprintf(format, args...))
+		mu.Unlock()
+	}
+	t.Cleanup(func() { auditIOLogf = oldLog })
+
+	future := time.Now().Add(2 * auditSpoolIdleSeal)
+	for range 20 {
+		shipper.flushIfDue(future)
+	}
+	mu.Lock()
+	n := len(logs)
+	var first string
+	if n > 0 {
+		first = logs[0]
+	}
+	mu.Unlock()
+	if n != 1 {
+		t.Fatalf("20 次持续 idle-seal 失败告警 %d 条, want 1（首次立即，窗口内抑制）", n)
+	}
+	if !strings.Contains(first, "idle seal failed") {
+		t.Fatalf("首条告警文案失真: %q", first)
+	}
+}
+
+// rotateLocked rename 失败告警必须节流：持续封存故障下每批重试不得逐批刷
+// ERROR（首次立即，窗口内抑制；镜像 L4 rotateLocked 的 sealLog 形态）。
+func TestAuditSpoolRotateSealFailureLogThrottled(t *testing.T) {
+	dir := t.TempDir()
+	spool, err := openAuditSpool(dir, 64<<20, 100000)
+	if err != nil {
+		t.Fatalf("open spool: %v", err)
+	}
+	defer func() { _ = spool.close() }()
+	line := []byte(`{"k":"v"}`)
+	if n, err := spool.appendLines([][]byte{line}); err != nil || n != 1 {
+		t.Fatalf("baseline appendLines = %d, %v; want 1, nil", n, err)
+	}
+	// 单行阈值：每行写完即触发轮转。
+	spool.mu.Lock()
+	spool.rotateBytes = 1
+	spool.mu.Unlock()
+	if n, err := spool.appendLines([][]byte{line}); err != nil || n != 1 {
+		t.Fatalf("rotate appendLines = %d, %v; want 1, nil", n, err)
+	}
+	// 真实故障注入：spool 目录改为只读（r-x）——active fd 仍有效（flush
+	// 成功、名字探测成功），os.Rename 需要目录写权限，真实失败（EACCES），
+	// 持续命中 rename 失败分支；active 保持续写（不丢行契约），每批重试。
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatalf("chmod spool dir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o750) })
+
+	var mu sync.Mutex
+	var logs []string
+	oldLog := auditIOLogf
+	auditIOLogf = func(format string, args ...any) {
+		mu.Lock()
+		logs = append(logs, fmt.Sprintf(format, args...))
+		mu.Unlock()
+	}
+	t.Cleanup(func() { auditIOLogf = oldLog })
+
+	for range 20 {
+		if _, err := spool.appendLines([][]byte{line}); err != nil {
+			t.Fatalf("appendLines must keep succeeding on rename failure (continue on same active): %v", err)
+		}
+	}
+	mu.Lock()
+	n := len(logs)
+	var first string
+	if n > 0 {
+		first = logs[0]
+	}
+	mu.Unlock()
+	if n != 1 {
+		t.Fatalf("20 次持续封存 rename 失败告警 %d 条, want 1（首次立即，窗口内抑制）", n)
+	}
+	if !strings.Contains(first, "seal failed") {
+		t.Fatalf("首条告警文案失真: %q", first)
+	}
+}

@@ -14,7 +14,9 @@ test('全局 DNS 提供商：表单入口、过度承诺文案与保存传播均
   // 「不得回流」断言走剥注释视图：注释里写一句历史说明不得把用例改红。
   const page = code('src/views/settings/FreeCertificates.vue')
   assert.doesNotMatch(page, /v-model="global\.dns_provider"/, '死配置不得继续呈现为可改')
-  assert.doesNotMatch(page, /创建规则时默认使用/, '文案不得承诺不存在的全局默认机制')
+  // 结构负钉：死配置 dns_provider 不得呈现/传播（上下两钉已承载）；承诺文案
+  // 已键化，裸中文负钉空转——改钉全局默认机制的本地文案形态不得回潮。
+  assert.doesNotMatch(page, /globalDefaultProvider|dnsProviderDefault|defaultDnsProvider/, '不得残留全局默认 DNS 机制文案/状态')
   const save = member(page, 'const handleSave = async')
   assert.doesNotMatch(save, /dns_provider: global\.value\.dns_provider/, '保存不得继续传播退役字段')
 })

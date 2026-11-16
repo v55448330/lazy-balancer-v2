@@ -383,4 +383,40 @@ if ! bash scripts/check-bulk-edit-safety.sh >"${work}/bulk-dry-argparse.out" 2>&
   echo "SELFTEST FAIL: 真参数解析 --dry-run 的批量脚本被误拦"; cat "${work}/bulk-dry-argparse.out"; exit 1
 fi
 
+# 17c) .sh 字符串字面量里提一句 --dry-run 不构成只读模式：echo/提示语提及
+#      即豁免的宽判据会把「临时脚本 + 全仓 sed -i + echo 提及 dry-run」放行
+#      （与 Python docstring 变体同族）。剥字符串字面量后必须无可执行判据。
+mk_repo "$work/dryrun-echo"
+cat > scripts/rewrite.sh <<'SH'
+#!/usr/bin/env bash
+echo "TODO: add --dry-run support later"
+git ls-files -z '*.go' | xargs -0 sed -i 's/a/b/'
+SH
+git add -A && git commit -qm script
+if bash scripts/check-bulk-edit-safety.sh >"${work}/bulk-dry-echo.out" 2>&1; then
+  echo "SELFTEST FAIL: 仅 echo 字符串提及 --dry-run 的写盘脚本被放行"; cat "${work}/bulk-dry-echo.out"; exit 1
+fi
+if ! grep -q '缺少 --dry-run' "${work}/bulk-dry-echo.out"; then
+  echo "SELFTEST FAIL: echo 字符串豁免形态命中原因错误"; cat "${work}/bulk-dry-echo.out"; exit 1
+fi
+
+# 17d) 正例对照：真参数解析（case "$1" in --dry-run）的 .sh 批量脚本必须放行
+#      （剥字符串字面量不得把可执行位置的选项分支一并剥掉）。
+mk_repo "$work/dryrun-sh-arg"
+cat > scripts/rewrite.sh <<'SH'
+#!/usr/bin/env bash
+dry=0
+case "${1:-}" in
+  --dry-run) dry=1 ;;
+esac
+for f in *.go; do
+  if (( dry )); then echo "would rewrite $f"; continue; fi
+  sed -i 's/a/b/' "$f"
+done
+SH
+git add -A && git commit -qm script
+if ! bash scripts/check-bulk-edit-safety.sh >"${work}/bulk-dry-sh-arg.out" 2>&1; then
+  echo "SELFTEST FAIL: 真参数解析 --dry-run 的 .sh 批量脚本被误拦"; cat "${work}/bulk-dry-sh-arg.out"; exit 1
+fi
+
 echo "bulk-edit safety selftest: PASS"

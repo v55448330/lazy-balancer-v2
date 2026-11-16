@@ -279,7 +279,7 @@ func (h *Handlers) TestCAProvider(c *gin.Context) {
 			case "config":
 				result = "invalid_config"
 				auditCAProviderTestResult(c, id, providerName, result)
-				c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "k_d68aa436", apimsg.ErrMsg(c, terr))})
+				c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "k_dc33dd6e", apimsg.ErrMsg(c, terr))})
 			case "register":
 				result = "register_failed"
 				auditCAProviderTestResult(c, id, providerName, result)

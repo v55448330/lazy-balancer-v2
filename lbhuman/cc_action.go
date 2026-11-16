@@ -53,7 +53,7 @@ func (h *HumanHandler) serveQueueWait(w http.ResponseWriter, r *http.Request, ip
 	}
 	// queue 等待页属挑战发放口径（kind=challenge），与事件落库同口径计计数器。
 	humanStats.Challenges.Add(1)
-	reportHumanEvent(h.RuleID, ip, r.Method, r.URL.RequestURI(), r.UserAgent(), "challenge")
+	reportHumanEvent(h.RuleID, ip, r.Method, r.URL.RequestURI(), "challenge")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusOK) // 等待页=200（与挑战页同语义，非错误）
@@ -75,7 +75,13 @@ func (h *HumanHandler) serveRateReject(w http.ResponseWriter, r *http.Request, i
 		return
 	}
 	// reject 事件按「被拦截」口径喂自动封禁（kind=rate_reject → blocked 维度）。
-	reportHumanEvent(h.RuleID, ip, r.Method, r.URL.RequestURI(), r.UserAgent(), "rate_reject")
+	// 大屏口径（用户裁定，注释明示）：rate_reject 落库
+	// action=blocked/rule=cc_rate_reject，进事件 feed 与总量，但**不入攻击
+	// 光流环**（光流只收 WAF 攻击族；CC 限流拒绝属人机通道）——同屏「有 CC
+	// 光流（挑战族）无 CC 弧（拒绝族）」是有意口径，非遗漏。
+	// anomaly_score 口径：人机/CC 事件不自带评分，落库恒 0，
+	// 评分由面板预检/存量补分承载——产生侧不发射评分字段。
+	reportHumanEvent(h.RuleID, ip, r.Method, r.URL.RequestURI(), "rate_reject")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Retry-After", strconv.Itoa(wait))
@@ -91,11 +97,11 @@ func (h *HumanHandler) serveRateReject(w http.ResponseWriter, r *http.Request, i
 // serveRateJSON API/XHR 客户端的 429 JSON（queue/reject 同形，code 区分）。
 func (h *HumanHandler) serveRateJSON(w http.ResponseWriter, r *http.Request, ip string, wait int, action string) {
 	if action == "reject" {
-		reportHumanEvent(h.RuleID, ip, r.Method, r.URL.RequestURI(), r.UserAgent(), "rate_reject")
+		reportHumanEvent(h.RuleID, ip, r.Method, r.URL.RequestURI(), "rate_reject")
 	} else {
 		// queue JSON 同属挑战发放口径（reject 走 rate_reject→blocked，不计）。
 		humanStats.Challenges.Add(1)
-		reportHumanEvent(h.RuleID, ip, r.Method, r.URL.RequestURI(), r.UserAgent(), "challenge")
+		reportHumanEvent(h.RuleID, ip, r.Method, r.URL.RequestURI(), "challenge")
 	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")

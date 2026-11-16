@@ -17,6 +17,7 @@ import {
   type CertJobStatus,
 } from '../src/utils/certJobStatus.ts'
 import { code, goConstInt, installBrowserHost, member, repoCode, section } from './_helpers.ts'
+import { tSafe } from '../src/i18n/tSafe.ts'
 
 test('证书任务页与任务监控页冷却展示同源（冷却不再禁用，仅信息提示）', () => {
   const certJobs = code('src/views/settings/CertJobs.vue')
@@ -69,7 +70,9 @@ test('证书任务状态 label/tone 覆盖后端 db.certJobStatuses 全 26 态',
   const tones = ['success', 'danger', 'warning', 'info']
   for (const status of backend) {
     const label = certJobStatusLabel(status as CertJobStatus)
-    assert.notEqual(label, '未知', `${status} 未补专属文案（空值兜底分支）`)
+    // 空值兜底分支已键化（certJob.unknown）：与 zh 母本同值对表——硬编码 '未知'
+    // 在词条改文案后空转（负断言恒真），兜底漂移不再红。
+    assert.notEqual(label, tSafe('common.app.certJob.unknown'), `${status} 未补专属文案（空值兜底分支）`)
     assert.notEqual(label, status, `${status} 落入 unknown 分支（显示原始 token）`)
     assert.ok(label.length > 0)
     assert.ok(tones.includes(certJobStatusTone(status as CertJobStatus)), `${status} tone 非法`)
@@ -81,8 +84,10 @@ test('重签禁用面收敛：只读与退役仍禁用，冷却不再禁用', ()
   const fn = section(page, 'const retryDisabledReason', '\n}')
   assert.match(fn, /readOnlyMessage/, '只读仍禁用')
   assert.match(fn, /app\.settings\.certJobs\.disabledNoRenew/, '退役（disabled）仍禁用')
-  assert.doesNotMatch(fn, /需等待/, '冷却禁用文案必须退役')
-  assert.doesNotMatch(fn, /当前状态暂不可重签/, 'null 契约形态随禁用逻辑一并退役')
+  // 结构负钉（原裸中文负钉在 i18n 化后空转——code() 视图里文案只剩词条键，
+  // 中文原文永不命中）：冷却分支不得回潮（ca_available_after/冷却判据）。
+  assert.doesNotMatch(fn, /ca_available_after|cooldown/i, '冷却禁用分支必须退役（冷却只约束自动通道，不禁用手动重签）')
+  assert.doesNotMatch(fn, /return null/, 'null 契约形态随禁用逻辑一并退役')
 })
 
 test('重签松绑：冷却中可点且确认弹框含配额警示；就绪判定工具退役', () => {

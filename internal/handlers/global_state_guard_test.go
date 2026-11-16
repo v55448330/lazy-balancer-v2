@@ -211,8 +211,40 @@ func captureHandlerGlobalSeams() map[string]any {
 		"autoBackupBeforeSectionsReadHook": handlerGlobalPointer(autoBackupBeforeSectionsReadHook),
 		// 品牌热重载留痕锁序观测缝。
 		"brandingReloadAuditHook": handlerGlobalPointer(brandingReloadAuditHook),
-		// Caddy 日志 Stat/Read 增长窗口观测缝。
-		"caddyLogsStatHook": handlerGlobalPointer(caddyLogsStatHook),
+		// 尾窗尺寸快照/Read 增长窗口观测缝（单源 readLogTailWindow 共用）。
+		"logTailWindowStatHook": handlerGlobalPointer(logTailWindowStatHook),
+		// AST 派生完备门（TestHandlerGlobalSeamRegistryCoversAllAssignableVars）
+		// 捕获的漏登 seam 批量补全——写侧隔离静态门此前对其全盲。
+		"apiKeyWhitelistCachePurge":                 handlerGlobalPointer(apiKeyWhitelistCachePurge),
+		"apiKeyWhitelistCachePurgeAll":              handlerGlobalPointer(apiKeyWhitelistCachePurgeAll),
+		"deleteCertificateConfigPreDeleteHook":      handlerGlobalPointer(deleteCertificateConfigPreDeleteHook),
+		"issueCertificateBatchSnapshotHook":         handlerGlobalPointer(issueCertificateBatchSnapshotHook),
+		"deleteCertJobPreDisableHook":               handlerGlobalPointer(deleteCertJobPreDisableHook),
+		"deleteCertJobPreRestoreHook":               handlerGlobalPointer(deleteCertJobPreRestoreHook),
+		"retryCertJobPreEnqueueHook":                handlerGlobalPointer(retryCertJobPreEnqueueHook),
+		"registrationStatusRejectionRecorder":       handlerGlobalPointer(registrationStatusRejectionRecorder),
+		"configImportAfterSessionHook":              handlerGlobalPointer(configImportAfterSessionHook),
+		"cancelImportInFlightRuns":                  handlerGlobalPointer(cancelImportInFlightRuns),
+		"configImportBeforePrelockHook":             handlerGlobalPointer(configImportBeforePrelockHook),
+		"configImportBeginAttemptHook":              handlerGlobalPointer(configImportBeginAttemptHook),
+		"importBeginTx":                             handlerGlobalPointer(importBeginTx),
+		"importPostCommitCleanupHook":               handlerGlobalPointer(importPostCommitCleanupHook),
+		"txCommitForTest":                           handlerGlobalPointer(txCommitForTest),
+		"txRollbackForTest":                         handlerGlobalPointer(txRollbackForTest),
+		"caddyMetricsSnapshotDoBeforeForTest":       handlerGlobalPointer(caddyMetricsSnapshotDoBeforeForTest),
+		"mfaGenerateSecretForTest":                  handlerGlobalPointer(mfaGenerateSecretForTest),
+		"cancelRuleJobs":                            handlerGlobalPointer(cancelRuleJobs),
+		"disableRuleLockWindowHook":                 handlerGlobalPointer(disableRuleLockWindowHook),
+		"enableCertJobResumePreUpdateHook":          handlerGlobalPointer(enableCertJobResumePreUpdateHook),
+		"pinLastGoodForTest":                        handlerGlobalPointer(pinLastGoodForTest),
+		"updateRuleLockWindowHook":                  handlerGlobalPointer(updateRuleLockWindowHook),
+		"createSecurityCustomRulePreLockHook":       handlerGlobalPointer(createSecurityCustomRulePreLockHook),
+		"querySecurityPolicy24hCounts":              handlerGlobalPointer(querySecurityPolicy24hCounts),
+		"toastSummaryBetweenMaxAndAggregateForTest": handlerGlobalPointer(toastSummaryBetweenMaxAndAggregateForTest),
+		"ipListCommitTxForTest":                     handlerGlobalPointer(ipListCommitTxForTest),
+		"beforeSystemTaskLogDBQuery":                handlerGlobalPointer(beforeSystemTaskLogDBQuery),
+		"exitProcess":                               handlerGlobalPointer(exitProcess),
+		"importCleanupBudget":                       importCleanupBudget,
 	}
 }
 

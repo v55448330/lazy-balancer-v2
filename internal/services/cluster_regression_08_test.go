@@ -574,8 +574,9 @@ func TestBecomeSlave_keepsUserStoppedClusterSyncWithManualEnableHint(t *testing.
 	}
 
 	// 角色翻转不得复活用户停止态（task-engine 标准 v2.2 §5）：调度保持停止、
-	// 同步生命周期零调用，且以 warn + 操作审计显式提示「切从后不会同步，
-	// 请手动开启」（不静默脱管）；偏好表不回写 enabled=1。
+	// 同步生命周期零调用，且以 warn + 操作审计显式提示真实恢复路径（从节点
+	// 任务写端点不可达，须先升主开启调度再切回——不静默脱管）；偏好表不回写
+	// enabled=1。
 	if meta, ok := te.Lookup("cluster-sync"); !ok || meta.LoopOn {
 		t.Fatalf("cluster-sync loop_on=%v, want 保持用户停止态", meta.LoopOn)
 	}
@@ -583,11 +584,11 @@ func TestBecomeSlave_keepsUserStoppedClusterSyncWithManualEnableHint(t *testing.
 	if enabled, ok := loadTaskLoopPrefs()["cluster-sync"]; ok && enabled {
 		t.Fatalf("cluster-sync preference=%v found=%v, want 保持关闭（不得回写启用）", enabled, ok)
 	}
-	if got := strings.Count(logs.String(), "切从后不会同步，请手动开启"); got != 1 {
+	if got := strings.Count(logs.String(), "切从后不会同步。恢复方法：提升为主节点后在任务监控开启 cluster-sync 调度，再切回从节点"); got != 1 {
 		t.Fatalf("保持停止提示 warn=%d 条, want 1: %s", got, logs.String())
 	}
 	var audits int
-	if err := db.AuditDB.QueryRow(`SELECT COUNT(*) FROM audit_log WHERE action='同步停止' AND detail LIKE '%切从后不会同步，请手动开启%'`).Scan(&audits); err != nil {
+	if err := db.AuditDB.QueryRow(`SELECT COUNT(*) FROM audit_log WHERE action='同步停止' AND detail LIKE '%切从后不会同步。恢复方法：提升为主节点后在任务监控开启 cluster-sync 调度，再切回从节点%'`).Scan(&audits); err != nil {
 		t.Fatalf("read audit log: %v", err)
 	}
 	if audits != 1 {

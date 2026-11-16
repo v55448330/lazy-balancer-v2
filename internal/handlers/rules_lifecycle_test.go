@@ -299,6 +299,7 @@ func TestUpdateRuleTables_frozenAgainstInPlaceMutation(t *testing.T) {
 
 // 删除复核：DisableRule 放锁窗口内规则被并发删除 → 冲突中止且不写「禁用」审计。
 func TestDisableRule_abortsWhenRuleDeletedInLockWindow(t *testing.T) {
+	withIsolatedGlobal(t)
 	// Given
 	handler, _, _ := newAuditRuleHandlers(t, 0)
 	seedAuditRule(t, "lb_dis_window", "diswindow", "diswindow.example.test", 18001, true, "acme_dns", true)
@@ -337,6 +338,7 @@ func TestDisableRule_abortsWhenRuleDeletedInLockWindow(t *testing.T) {
 // 并发修改复核：UpdateRule 放锁窗口内规则被并发修改 → 409 + 审计「并发修改」，
 // DB 保留他人已提交内容。
 func TestUpdateRule_abortsWhenRuleConcurrentlyModifiedInLockWindow(t *testing.T) {
+	withIsolatedGlobal(t)
 	// Given：manual TLS（orphanACME=true）打开证书取消窗口
 	handler, _, _ := newAuditRuleHandlers(t, 0)
 	seedAuditRule(t, "lb_upd_conc", "updconc", "updconc.example.test", 18002, true, "manual", false)
@@ -1007,6 +1009,7 @@ func TestLbRuleColumns_governedDefaultsBindConstants(t *testing.T) {
 // 「禁用」成功审计（否则成功留痕与最终状态矛盾——启用侧重新入队的
 // 任务已被本请求取消）。
 func TestDisableRule_abortsWhenRuleConcurrentlyModifiedInLockWindow(t *testing.T) {
+	withIsolatedGlobal(t)
 	// Given
 	handler, _, _ := newAuditRuleHandlers(t, 0)
 	seedAuditRule(t, "lb_dis_conc", "disconc", "disconc.example.test", 18011, true, "acme_dns", true)

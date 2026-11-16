@@ -49,6 +49,8 @@ var auditResultTextMap = map[string]string{
 	"sync_failed":          "同步失败",
 	"io_error":             "文件写入失败",
 	"query_failed":         "查询失败",
+	"scan_failed":          "行读取失败",
+	"iterate_failed":       "迭代读取失败",
 	"warning":              "警告",
 	// 部署失败的状态回写本身失败（瞬时 DB 故障/CAS 冲突）：任务转入簿记
 	// 补写 + 重试登记，审计必须能读懂这个结果码。

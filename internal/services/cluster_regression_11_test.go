@@ -76,14 +76,14 @@ func TestClusterSnapshot_HTTPPublisherPullAndFingerprint304(t *testing.T) {
 	// 快照读取是主节点-only 契约（读路径 SQL 角色复核）：发布方与拉取方
 	// 不得共用同一库句柄（回环形态下拉取侧把共享库降级为从角色后，发布侧
 	// 快照会被正确拒绝）——从端独立建库，与生产双进程形态一致。
-	pubGlobalsDB, pubGlobalsMetrics, pubGlobalsAudit := db.DB, db.MetricsDB, db.AuditDB
+	pubGlobalsDB, pubGlobalsMetrics, pubGlobalsAudit, pubGlobalsCurrent := db.DB, db.MetricsDB, db.AuditDB, db.GetDB()
 	if err := db.Initialize(t.TempDir()); err != nil {
 		t.Fatal(err)
 	}
 	slaveDB := db.DB
 	t.Cleanup(func() {
 		_ = db.Close()
-		db.DB, db.MetricsDB, db.AuditDB = pubGlobalsDB, pubGlobalsMetrics, pubGlobalsAudit
+		restoreGlobalDBHandles(pubGlobalsDB, pubGlobalsMetrics, pubGlobalsAudit, pubGlobalsCurrent)
 	})
 	if _, err := slaveDB.Exec("UPDATE global_config SET is_master=0, master_url=?, cluster_token=?, applied_version=0, sync_fingerprint='' WHERE id=1", master.URL, token); err != nil {
 		t.Fatal(err)

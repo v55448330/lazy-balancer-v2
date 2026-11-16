@@ -1364,7 +1364,7 @@ func TestUpdateSnapshotSettings_legacyAbsentFieldsPreserveEntireLocalRow(t *test
 		request_body_max_size_mb=64,http_read_timeout=61,http_write_timeout=62,http_idle_timeout=63,
 		upstream_keepalive_timeout=64,proxy_dial_timeout=65,proxy_response_header_timeout=66,
 		proxy_read_timeout=67,proxy_write_timeout=68,proxy_stream_timeout=69,proxy_flush_interval=70,
-		proxy_stream_close_delay=71,github_proxy_url='https://local.proxy',server_tokens_hidden=1,
+		proxy_stream_close_delay=71,server_tokens_hidden=1,
 		trusted_proxy_enabled=1,trusted_proxy_ranges='["192.0.2.1"]',trusted_proxy_range_refs='[7]',
 		trusted_proxy_headers='["X-Local"]',trusted_proxy_strict=0
 		WHERE id=1`); err != nil {

@@ -7,16 +7,26 @@ package services
 //   - 保留/私网/回环地址与攻击光流环同一判据排除，不得计入。
 
 import (
+	"bytes"
+	"go/ast"
+	"go/parser"
+	"go/printer"
+	"go/token"
 	"net"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"lazy-balancer-v2/internal/models"
 )
 
-// lbhumanNormalizeIPReference 是 lbhuman/cookie.go normalizeIP 的语义参照
-// （逐行同算法）：lbhuman 是依赖 Caddy 的独立插件模块，面板主模块不引入其
-// 依赖树，等价性由本对拍钉测锁定——修改任一侧必须同步另一侧。
+// lbhumanNormalizeIPReference 是 lbhuman/cookie.go normalizeIP 的语义参照：
+// lbhuman 是依赖 Caddy 的独立插件模块，面板主模块不引入其依赖树，故不能在
+// 本包直接调用真实实现。等价性不再依赖「逐行手抄」的自觉——
+// TestAutobanNormalizeIP_referenceMatchesLbhumanSource 直接解析
+// lbhuman/cookie.go 的函数体与本参照逐结构对拍，任一侧漂移即红。
 func lbhumanNormalizeIPReference(ip string) string {
 	parsed := net.ParseIP(ip)
 	if parsed == nil {
@@ -246,4 +256,48 @@ func TestObserveHumanEvents_reservedIPsExcluded(t *testing.T) {
 	if len(autobanWindows) != 1 || autobanWindows["45.33.32.9"] == nil {
 		t.Fatalf("仅公网地址应计数，键=%v", autobanWindows)
 	}
+}
+
+// Given lbhuman 插件侧 normalizeIP 的真实源码（同仓 lbhuman/cookie.go）。
+// When 与本文件的语义参照逐结构对拍。
+// Then 两个函数体完全一致（去空白/注释后的 AST 打印形态）——参照不再是
+// 「手抄不校验」的虚标：任一侧改掩码位数/分支顺序/回退形态都会让本用例红。
+func TestAutobanNormalizeIP_referenceMatchesLbhumanSource(t *testing.T) {
+	lbhumanSrc, err := os.ReadFile(filepath.Join("..", "..", "lbhuman", "cookie.go"))
+	if err != nil {
+		t.Fatalf("读取 lbhuman/cookie.go: %v", err)
+	}
+	localSrc, err := os.ReadFile("autoban_ipv6_granularity_test.go")
+	if err != nil {
+		t.Fatalf("读取本文件: %v", err)
+	}
+	want := normalizedFuncBody(t, lbhumanSrc, "normalizeIP")
+	got := normalizedFuncBody(t, localSrc, "lbhumanNormalizeIPReference")
+	if got != want {
+		t.Fatalf("参照实现与 lbhuman 真实实现漂移：\n got=%s\nwant=%s", got, want)
+	}
+}
+
+// normalizedFuncBody 打印同名顶层函数的函数体并归一空白（注释不进
+// FuncDecl.Body，天然被排除）。
+func normalizedFuncBody(t *testing.T, src []byte, name string) string {
+	t.Helper()
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, name+".go", src, 0)
+	if err != nil {
+		t.Fatalf("parse %s 源码: %v", name, err)
+	}
+	for _, decl := range file.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Recv != nil || fn.Name.Name != name || fn.Body == nil {
+			continue
+		}
+		var buf bytes.Buffer
+		if err := printer.Fprint(&buf, fset, fn.Body); err != nil {
+			t.Fatalf("print %s body: %v", name, err)
+		}
+		return strings.Join(strings.Fields(buf.String()), " ")
+	}
+	t.Fatalf("源码中找不到函数 %s", name)
+	return ""
 }

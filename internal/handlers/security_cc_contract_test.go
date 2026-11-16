@@ -332,7 +332,7 @@ func assertCCZeroed(t *testing.T, id int) {
 }
 
 // 显式非 stage2 类型更新携带「生效中」的人机/CC 字段 = 矛盾载荷 400（与其余阶段外
-// 族同口径）；惰性默认值（off/slider/30/[]/false/40/10/70/false/5）不算冲突。
+// 族同口径）；惰性默认值（off/slider/30/[]/false/40/10/70/false/5/challenge/0）不算冲突。
 func TestUpdateSecurityPolicy_rejectsActiveHumanCCForNonStage2(t *testing.T) {
 	setupSecurityPolicyTestDB(t)
 	useCRSRuleIndexFixture(t)
@@ -352,6 +352,8 @@ func TestUpdateSecurityPolicy_rejectsActiveHumanCCForNonStage2(t *testing.T) {
 		{"human-ttl-nondefault", map[string]any{"human_verify_ttl": 45}},
 		{"human-type-js", map[string]any{"human_verify_type": "js"}},
 		{"human-paths-nonempty", map[string]any{"human_exempt_paths": `["/keep/"]`}},
+		{"cc-trigger-action-reject", map[string]any{"cc_trigger_action": "reject"}},
+		{"cc-queue-wait-nonzero", map[string]any{"cc_queue_wait_sec": 7}},
 	}
 	for _, tc := range activeCases {
 		t.Run("reject/"+tc.name, func(t *testing.T) {
@@ -384,6 +386,7 @@ func TestUpdateSecurityPolicy_rejectsActiveHumanCCForNonStage2(t *testing.T) {
 			"human_exempt_paths": "[]",
 			"cc_detect_enabled":  false, "cc_rps_limit": 40, "cc_rps_window": 10,
 			"cc_4xx_ratio": 70, "cc_session_anomaly": false, "cc_session_ua_threshold": 5,
+			"cc_trigger_action": "challenge", "cc_queue_wait_sec": 0,
 		})
 		if rec.Code != http.StatusOK {
 			t.Fatalf("PUT status=%d body=%s, want 200（惰性默认值不算矛盾载荷）", rec.Code, rec.Body.String())

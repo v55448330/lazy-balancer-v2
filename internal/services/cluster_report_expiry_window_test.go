@@ -60,3 +60,50 @@ func TestSyncService_Report_countsOnlyNotYetExpiredCertificates(t *testing.T) {
 		t.Fatalf("certs_expiring_30d=%d, want 1（只计未过期且窗口内的行：已过期行属 expired，不计入临期）", report.Health.CertsExpiring30d)
 	}
 }
+
+// 天粒度上界口径钉（裁定维持的取舍）：健康卡窗口按整天截断
+// （datetime('+30 days')），窗口内不足整天的行（+29 days +23 hours）计入，
+// 超窗口不足整天的行（+30 days +1 hour）不计——与完整时长口径的边界
+// 分叉是展示面取舍（cluster_report.go 注释披露），本钉固化该口径防漂移。
+func TestSyncService_Report_expiryWindowDayGranularityBoundary(t *testing.T) {
+	_, database := newClusterTestService(t)
+	ctx := context.Background()
+	if _, err := database.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enabled,enable_tls,tls_source)
+		VALUES ('lb_expiry_bnd','expiry-bnd','http','expiry-bnd.example.test',443,1,1,'acme_dns')`); err != nil {
+		t.Fatalf("seed rule: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,expires_at) VALUES
+		('lb_expiry_bnd','inside.example.test','issued',datetime('now','+29 days','+23 hours')),
+		('lb_expiry_bnd','outside.example.test','issued',datetime('now','+30 days','+1 hour'))`); err != nil {
+		t.Fatalf("seed cert jobs: %v", err)
+	}
+	reported := make(chan models.ClusterReport, 1)
+	master := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var report models.ClusterReport
+		if err := json.NewDecoder(r.Body).Decode(&report); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		reported <- report
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer master.Close()
+	caddy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }))
+	defer caddy.Close()
+	if _, err := database.Exec(`UPDATE global_config SET is_master=0,master_url=?,cluster_token='cluster-token' WHERE id=1`, master.URL); err != nil {
+		t.Fatal(err)
+	}
+	service := NewSyncService(database, &config.Config{DataDir: t.TempDir()}, NewCaddyService(caddy.URL))
+	if err := service.Report(ctx); err != nil {
+		t.Fatalf("report: %v", err)
+	}
+	var report models.ClusterReport
+	select {
+	case report = <-reported:
+	default:
+		t.Fatal("master did not receive cluster report")
+	}
+	if report.Health.CertsExpiring30d != 1 {
+		t.Fatalf("certs_expiring_30d=%d, want 1（天粒度上界：+29d23h 计入、+30d1h 不计）", report.Health.CertsExpiring30d)
+	}
+}

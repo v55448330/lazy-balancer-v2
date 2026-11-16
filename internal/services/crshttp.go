@@ -221,9 +221,10 @@ const crsRepoSlug = "coreruleset/coreruleset"
 var crsLatestReleaseAPIURL = "https://api.github.com/repos/coreruleset/coreruleset/releases/latest"
 
 // fetchLatestGitHubTag 是 CRS/ip2region 最新版本查询的单源实现
-// 先直连 api.github.com（快路径不变），仅在 403 限流与传输类失败（Do() 错误、
+// 先直连 api.github.com（快路径不变），仅在 403/401 与传输类失败（Do() 错误、
 // 5xx、读体中断）时经 GitHub 代理回退查询 releases/latest 页面（api.github.com
-// 不可代理，verified 403）；其余 4xx 与 tag 解析失败不重试。两路均失败时错误
+// 不可代理，verified 403）；其余 4xx 与 tag 解析失败不重试。403=未认证限流、
+// 401=令牌失效/作废——同属认证面失败，代理页面可绕过。两路均失败时错误
 // 同时点名两个尝试过的 URL。resource 仅用于错误文案。
 func fetchLatestGitHubTag(ctx context.Context, client *http.Client, apiURL, slug, resource string) (string, error) {
 	tag, err, transport := fetchGitHubLatestTagFromAPI(ctx, client, apiURL)

@@ -40,6 +40,28 @@ func stalledCertQueueBackup(t *testing.T) string {
 	}, EmptyConfigIfNil: true})
 }
 
+// stalledCertQueueBackupWithWaitingCA 在停滞夹具基础上追加一条 waiting_ca
+// 行——NormalizeWaitingCACertJobs 的只读探测必须命中才会执行 UPDATE，
+// 故障注入触发器才打在归一分支（而非 requeue 分支）。
+func stalledCertQueueBackupWithWaitingCA(t *testing.T) string {
+	t.Helper()
+	return buildBackup(t, backupFixtureOptions{FillAll: true, Tables: map[string][]map[string]any{
+		"lb_rules": {
+			{"caddy_id": "lb_stalledacme", "name": "stalledacme", "protocol": "http", "domain": "stalled.example.test",
+				"listen_port": 8499, "enabled": 1, "enable_tls": 1, "tls_source": "acme_dns", "acme_config_id": 96},
+			{"caddy_id": "lb_stalledwca", "name": "stalledwca", "protocol": "http", "domain": "stalled-wca.example.test",
+				"listen_port": 8500, "enabled": 1, "enable_tls": 1, "tls_source": "acme_dns", "acme_config_id": 96},
+		},
+		"certificate_configs": {
+			{"id": 96, "name": "stalled-dns", "dns_provider": "dnspod", "enabled": 1},
+		},
+		"cert_jobs": {
+			{"rule_id": "lb_stalledacme", "domain": "stalled.example.test", "status": "creating_order"},
+			{"rule_id": "lb_stalledwca", "domain": "stalled-wca.example.test", "status": "waiting_ca"},
+		},
+	}, EmptyConfigIfNil: true})
+}
+
 // Given 证书队列未激活（等价于管理员在任务监控里停止了「证书签发」）。
 // When 导入含一条非终态证书任务的备份。
 // Then 导入成功、任务行保持原状态（未被越过停止意图重排），且响应 warnings
@@ -199,7 +221,10 @@ func TestImportConfigBackup_queueResumeAndDisclosureWhenNormalizeFails(t *testin
 		t.Fatalf("inject normalize failure trigger: %v", err)
 	}
 
-	response := postBackupImport(t, h, stalledCertQueueBackup(t))
+	// 夹具必须含 waiting_ca 行：NormalizeWaitingCACertJobs 先只读探测
+	// （SELECT 1 … status='waiting_ca'），零行即跳过 UPDATE——触发器永不
+	// 命中，注入会打偏到 requeue 分支（与 queueRecoveryFailure 用例重复）。
+	response := postBackupImport(t, h, stalledCertQueueBackupWithWaitingCA(t))
 
 	// 数据库已提交（归一失败不否决导入）：queue 阶段失败按部分成功
 	// 200+partial=true（500 会让前端误按已回滚处理）。
@@ -207,11 +232,11 @@ func TestImportConfigBackup_queueResumeAndDisclosureWhenNormalizeFails(t *testin
 		t.Fatalf("import status=%d body=%s, want 200（部分成功不得按已回滚处理）", response.Code, response.Body.String())
 	}
 	var jobCount int
-	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM cert_jobs WHERE rule_id='lb_stalledacme'`).Scan(&jobCount); err != nil {
+	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM cert_jobs`).Scan(&jobCount); err != nil {
 		t.Fatalf("read imported cert job: %v", err)
 	}
-	if jobCount != 1 {
-		t.Fatalf("cert_jobs rows=%d, want 1（数据库必须已提交）", jobCount)
+	if jobCount != 2 {
+		t.Fatalf("cert_jobs rows=%d, want 2（数据库必须已提交：creating_order+waiting_ca）", jobCount)
 	}
 	// 队列必须恢复活动态——归一失败不得把导入前在跑的队列留在停止态。
 	if !services.GetCAQueueManager().IsActive() {
@@ -230,6 +255,16 @@ func TestImportConfigBackup_queueResumeAndDisclosureWhenNormalizeFails(t *testin
 	}
 	if auditCount != 1 {
 		t.Fatalf("恢复未完成审计行=%d, want 1（warnings 之外必须留操作审计）", auditCount)
+	}
+	// 分支身份钉：失败披露必须点名「归一导入带入的 waiting_ca 证书任务失败」
+	//（normalize 分支），不得是 requeue 分支的泛化文案——两分支产出同形
+	// stalledWarning，无此断言则触发器打偏分支恒绿。
+	var normalizeAudit int
+	if err := db.AuditDB.QueryRow(`SELECT COUNT(*) FROM audit_log WHERE detail LIKE '%归一导入带入的 waiting_ca 证书任务失败%'`).Scan(&normalizeAudit); err != nil {
+		t.Fatalf("read normalize failure audit: %v", err)
+	}
+	if normalizeAudit == 0 {
+		t.Fatal("normalize 失败分支未触达（触发器打偏 requeue 分支——夹具 waiting_ca 行缺失或探测跳过）")
 	}
 }
 

@@ -115,9 +115,11 @@ const (
 	// 三者静默分叉。
 	DefaultBlockStatusCode = 403
 	// 阶段 3 人机验证与挑战页 CC 触发的默认值（2026-11-12）：DDL DEFAULT
-	// （newColumns 的 security_policies.* / global_config.*）、v2 备份导入归一
-	// （config_backup.go）与集群 apply 快照归一（cluster_apply.go）三处单源——
-	// 与 DefaultAnomalyThreshold 同族，调整默认值只改这里。
+	// （newColumns 的 security_policies.* / global_config.*）、db.go 内迁移消费面
+	// （security_policies 重建的 CREATE DEFAULT/COALESCE 回填、阶段合并读侧
+	// COALESCE）、v2 备份导入归一（config_backup.go）与集群 apply 快照归一
+	// （cluster_apply.go）全部单源——与 DefaultAnomalyThreshold 同族，调整
+	// 默认值只改这里（db_truth_defaults_test 双向钉死字面量不得回流）。
 	DefaultHumanVerifyType      = "slider"
 	DefaultHumanVerifyTTL       = 30
 	DefaultCCRPSLimit           = 40
@@ -347,6 +349,10 @@ func GetDB() *sql.DB {
 }
 
 func Initialize(dataDir string) (err error) {
+	// lb_trunc_utf8 等驱动级 UDF 只对注册后新建的连接生效——必须在任何
+	// sql.Open 之前注册（连接池会复用先于注册打开的连接，迁移 SQL 将报
+	// no such function）。幂等（sync.Once），重复 Initialize 安全。
+	ensureTruncUTF8UDF()
 	if err := secureDataDirectory(dataDir); err != nil {
 		return fmt.Errorf("failed to create data directory: %w", err)
 	}
@@ -1231,23 +1237,23 @@ var newColumnsRegistry = map[string]string{
 	"security_policy_bindings.rank":             "INTEGER NOT NULL DEFAULT 0",
 	"security_policies.trust_detection":         "BOOLEAN NOT NULL DEFAULT 0",
 	"security_policies.human_verify_mode":       "TEXT NOT NULL DEFAULT 'off'",
-	"security_policies.human_verify_type":       "TEXT NOT NULL DEFAULT 'slider'",
-	"security_policies.human_verify_ttl":        "INTEGER NOT NULL DEFAULT 30",
+	"security_policies.human_verify_type":       fmt.Sprintf("TEXT NOT NULL DEFAULT '%s'", DefaultHumanVerifyType),
+	"security_policies.human_verify_ttl":        fmt.Sprintf("INTEGER NOT NULL DEFAULT %d", DefaultHumanVerifyTTL),
 	"security_policies.human_exempt_paths":      "TEXT NOT NULL DEFAULT '[]'",
 	"security_policies.cc_detect_enabled":       "INTEGER NOT NULL DEFAULT 0",
-	"security_policies.cc_rps_limit":            "INTEGER NOT NULL DEFAULT 40",
-	"security_policies.cc_rps_window":           "INTEGER NOT NULL DEFAULT 10",
-	"security_policies.cc_4xx_ratio":            "INTEGER NOT NULL DEFAULT 70",
+	"security_policies.cc_rps_limit":            fmt.Sprintf("INTEGER NOT NULL DEFAULT %d", DefaultCCRPSLimit),
+	"security_policies.cc_rps_window":           fmt.Sprintf("INTEGER NOT NULL DEFAULT %d", DefaultCCRPSWindow),
+	"security_policies.cc_4xx_ratio":            fmt.Sprintf("INTEGER NOT NULL DEFAULT %d", DefaultCC4xxRatio),
 	"security_policies.cc_session_anomaly":      "INTEGER NOT NULL DEFAULT 0",
-	"security_policies.cc_session_ua_threshold": "INTEGER NOT NULL DEFAULT 5",
+	"security_policies.cc_session_ua_threshold": fmt.Sprintf("INTEGER NOT NULL DEFAULT %d", DefaultCCSessionUAThreshold),
 	// CC 触发动作三态（challenge=人机验证默认/queue=排队等待页/reject=429 拒绝页）
 	// + 排队等待秒数（0=自动取 CC 窗口；域 [0,300] 写侧钳位）。
 	"security_policies.cc_trigger_action": "TEXT NOT NULL DEFAULT 'challenge'",
 	"security_policies.cc_queue_wait_sec": "INTEGER NOT NULL DEFAULT 0",
 	"global_config.cc_detect_enabled":     "INTEGER NOT NULL DEFAULT 0",
-	"global_config.cc_rps_limit":          "INTEGER NOT NULL DEFAULT 40",
-	"global_config.cc_rps_window":         "INTEGER NOT NULL DEFAULT 10",
-	"global_config.cc_4xx_ratio":          "INTEGER NOT NULL DEFAULT 70",
+	"global_config.cc_rps_limit":          fmt.Sprintf("INTEGER NOT NULL DEFAULT %d", DefaultCCRPSLimit),
+	"global_config.cc_rps_window":         fmt.Sprintf("INTEGER NOT NULL DEFAULT %d", DefaultCCRPSWindow),
+	"global_config.cc_4xx_ratio":          fmt.Sprintf("INTEGER NOT NULL DEFAULT %d", DefaultCC4xxRatio),
 	"global_config.cc_session_anomaly":    "INTEGER NOT NULL DEFAULT 0",
 
 	"global_config.human_secret":                      "TEXT NOT NULL DEFAULT ''",
@@ -4580,15 +4586,15 @@ func migrateSecurityPoliciesNullable() error {
 			geoip_crawler_exempt INTEGER NOT NULL DEFAULT 0,
 			geoip_crawler_engines TEXT NOT NULL DEFAULT '[]',
 			human_verify_mode TEXT NOT NULL DEFAULT 'off',
-			human_verify_type TEXT NOT NULL DEFAULT 'slider',
-			human_verify_ttl INTEGER NOT NULL DEFAULT 30,
+			human_verify_type TEXT NOT NULL DEFAULT '%s',
+			human_verify_ttl INTEGER NOT NULL DEFAULT %d,
 			human_exempt_paths TEXT NOT NULL DEFAULT '[]',
 			cc_detect_enabled INTEGER NOT NULL DEFAULT 0,
-			cc_rps_limit INTEGER NOT NULL DEFAULT 40,
-			cc_rps_window INTEGER NOT NULL DEFAULT 10,
-			cc_4xx_ratio INTEGER NOT NULL DEFAULT 70,
+			cc_rps_limit INTEGER NOT NULL DEFAULT %d,
+			cc_rps_window INTEGER NOT NULL DEFAULT %d,
+			cc_4xx_ratio INTEGER NOT NULL DEFAULT %d,
 			cc_session_anomaly INTEGER NOT NULL DEFAULT 0,
-			cc_session_ua_threshold INTEGER NOT NULL DEFAULT 5,
+			cc_session_ua_threshold INTEGER NOT NULL DEFAULT %d,
 			cc_trigger_action TEXT NOT NULL DEFAULT 'challenge',
 			cc_queue_wait_sec INTEGER NOT NULL DEFAULT 0
 		);
@@ -4602,11 +4608,14 @@ func migrateSecurityPoliciesNullable() error {
 			ip_whitelist,ip_blacklist,crs_rule_groups,crs_excluded_rules,
 			custom_rules,block_page_id,block_status_code,COALESCE(block_response_mode,'auto'),enabled,updated_by,created_at,updated_at,COALESCE(ip_whitelist_enabled,1),geoip_countries,geoip_mode,waf_check_response,
 			COALESCE(log_request_body,0),COALESCE(ip_acl_list_refs,'[]'),COALESCE(ip_whitelist_refs,'[]'),policy_type,COALESCE(trust_detection,0),COALESCE(geoip_crawler_exempt,0),COALESCE(geoip_crawler_engines,'[]'),
-			COALESCE(human_verify_mode,'off'),COALESCE(human_verify_type,'slider'),COALESCE(human_verify_ttl,30),COALESCE(human_exempt_paths,'[]'),
-			COALESCE(cc_detect_enabled,0),COALESCE(cc_rps_limit,40),COALESCE(cc_rps_window,10),COALESCE(cc_4xx_ratio,70),COALESCE(cc_session_anomaly,0),COALESCE(cc_session_ua_threshold,5),%s,%s
+			COALESCE(human_verify_mode,'off'),COALESCE(human_verify_type,'%s'),COALESCE(human_verify_ttl,%d),COALESCE(human_exempt_paths,'[]'),
+			COALESCE(cc_detect_enabled,0),COALESCE(cc_rps_limit,%d),COALESCE(cc_rps_window,%d),COALESCE(cc_4xx_ratio,%d),COALESCE(cc_session_anomaly,0),COALESCE(cc_session_ua_threshold,%d),%s,%s
 		FROM security_policies;
 		DROP TABLE security_policies;
-		ALTER TABLE security_policies_new RENAME TO security_policies;`, DefaultAnomalyThreshold, ccActionSel, ccWaitSel)); err != nil {
+		ALTER TABLE security_policies_new RENAME TO security_policies;`, DefaultAnomalyThreshold,
+			DefaultHumanVerifyType, DefaultHumanVerifyTTL, DefaultCCRPSLimit, DefaultCCRPSWindow, DefaultCC4xxRatio, DefaultCCSessionUAThreshold,
+			DefaultHumanVerifyType, DefaultHumanVerifyTTL, DefaultCCRPSLimit, DefaultCCRPSWindow, DefaultCC4xxRatio, DefaultCCSessionUAThreshold,
+			ccActionSel, ccWaitSel)); err != nil {
 			return fmt.Errorf("rebuild security_policies table: %w", err)
 		}
 		return nil
@@ -6312,11 +6321,12 @@ func migratePolicyStagesV1() error {
 			var ccEnabled bool
 			var ccRPS, ccWindow, cc4xx, ccUASession int
 			var ccSessionAnomaly bool
-			if err := tx.QueryRow(`SELECT COALESCE(human_verify_mode,'off'), COALESCE(human_verify_type,'slider'),
-				COALESCE(human_verify_ttl,30), COALESCE(human_exempt_paths,'[]'),
-				COALESCE(cc_detect_enabled,0), COALESCE(cc_rps_limit,40), COALESCE(cc_rps_window,10),
-				COALESCE(cc_4xx_ratio,70), COALESCE(cc_session_anomaly,0), COALESCE(cc_session_ua_threshold,5)
-				FROM security_policies WHERE id=?`, rp.human).
+			if err := tx.QueryRow(fmt.Sprintf(`SELECT COALESCE(human_verify_mode,'off'), COALESCE(human_verify_type,'%s'),
+				COALESCE(human_verify_ttl,%d), COALESCE(human_exempt_paths,'[]'),
+				COALESCE(cc_detect_enabled,0), COALESCE(cc_rps_limit,%d), COALESCE(cc_rps_window,%d),
+				COALESCE(cc_4xx_ratio,%d), COALESCE(cc_session_anomaly,0), COALESCE(cc_session_ua_threshold,%d)
+				FROM security_policies WHERE id=?`,
+				DefaultHumanVerifyType, DefaultHumanVerifyTTL, DefaultCCRPSLimit, DefaultCCRPSWindow, DefaultCC4xxRatio, DefaultCCSessionUAThreshold), rp.human).
 				Scan(&humanMode, &humanType, &humanTTL, &humanPaths, &ccEnabled, &ccRPS, &ccWindow, &cc4xx, &ccSessionAnomaly, &ccUASession); err != nil {
 				return fmt.Errorf("读取人机策略 %d: %w", rp.human, err)
 			}

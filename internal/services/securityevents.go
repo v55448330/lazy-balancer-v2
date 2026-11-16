@@ -322,7 +322,9 @@ func securityEventsParseTransaction(raw json.RawMessage) (*securityEventRecord, 
 	// 不含 coraza 评分段——入库时补固定语义分，全管线统一评分驱动
 	// （事件日志评分列与威胁大屏危险等级同源）：IP 名单/预检=12（高危），
 	// GeoIP=6（中危）；WAF 事件不受影响。429 是退役配额限流的存量事件，
-	// 同样无评分段，按中危 6 补齐（新 CC 防护事件为 human_*，自带评分）。
+	// 同样无评分段，按中危 6 补齐。新 CC 防护事件（human_*/cc_rate_reject）
+	// 经人机旁路直写入库，不走本补分管线，anomaly_score 恒 0（不自带评分）——
+	// 大屏危险等级对 CC 事件按 zeroScoreSeverity 回退 mid 档，评分列显示「—」。
 	// 爬虫两族必须先判（否则普通 GeoIP 的 8xxxxx 被当
 	// 爬虫豁免得 0 分）；普通 GeoIP（id 8 / 8xxxxx 非爬虫族）的 6 分必须先于
 	// 通用预检 12 分判定；429 不在预检谓词内，保持 6。分支内不重复 2/3 字面量

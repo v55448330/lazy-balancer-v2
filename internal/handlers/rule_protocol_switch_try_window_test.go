@@ -86,3 +86,59 @@ func TestUpdateRule_switchToHTTPKeepsExplicitTryWindow(t *testing.T) {
 		t.Fatalf("部分显式切换: duration=%d interval=%d, want 0/0（显式 0 保留、存量 interval 清零）", duration, interval)
 	}
 }
+
+// HTTP→TCP 方向的对称契约（补齐——此前只钉 TCP→HTTP 一半）：
+// 切换请求显式携带合法窗口必须原样落库；未提交时存量非负窗口沿用
+// （该方向契约是「沿用」而非「清零」，与 TCP→HTTP 不对称——最易被误改的点）。
+func TestUpdateRule_switchToTCPKeepsExplicitTryWindow(t *testing.T) {
+	handler := newRuleFeatureTestHandlers(t)
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.PUT("/rules/:caddy_id", handler.UpdateRule)
+
+	seedHTTP := func(id, name string, port int, duration, interval int) {
+		t.Helper()
+		if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,description,protocol,domain,listen_port,strategy,enabled,tcp_try_duration,tcp_try_interval)
+			VALUES (?,?,?,'http',?,?,'weighted_round_robin',1,?,?)`, id, name, "", name+".test", port, duration, interval); err != nil {
+			t.Fatalf("seed rule %s: %v", id, err)
+		}
+		if _, err := db.DB.Exec(`INSERT INTO upstreams (rule_id,host,port,weight,enabled,protocol) VALUES (?,?,9000,1,1,'http')`, id, "127.0.0.1"); err != nil {
+			t.Fatalf("seed upstream %s: %v", id, err)
+		}
+	}
+	put := func(id, body string) *httptest.ResponseRecorder {
+		t.Helper()
+		request := httptest.NewRequest(http.MethodPut, "/rules/"+id, strings.NewReader(body))
+		request.Header.Set("Content-Type", "application/json")
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, request)
+		return response
+	}
+	readWindow := func(id string) (int, int) {
+		t.Helper()
+		var duration, interval int
+		if err := db.DB.QueryRow(`SELECT COALESCE(tcp_try_duration,0), COALESCE(tcp_try_interval,0) FROM lb_rules WHERE caddy_id=?`, id).
+			Scan(&duration, &interval); err != nil {
+			t.Fatal(err)
+		}
+		return duration, interval
+	}
+
+	// 目标形状：HTTP 行切换 TCP 显式携带合法窗口 → 原样落库。
+	seedHTTP("lb_swtcp_explicit", "swtcp-explicit", 18711, 0, 0)
+	if response := put("lb_swtcp_explicit", `{"protocol":"tcp","tcp_try_duration":5000,"tcp_try_interval":250}`); response.Code != http.StatusOK {
+		t.Fatalf("switch to tcp with explicit window: status=%d body=%s, want 200", response.Code, response.Body.String())
+	}
+	if duration, interval := readWindow("lb_swtcp_explicit"); duration != 5000 || interval != 250 {
+		t.Fatalf("显式窗口被切换清零: duration=%d interval=%d, want 5000/250", duration, interval)
+	}
+
+	// 对照形状：未提交窗口时存量非负窗口沿用（不清零——与 TCP→HTTP 不对称）。
+	seedHTTP("lb_swtcp_stored", "swtcp-stored", 18712, 3000, 200)
+	if response := put("lb_swtcp_stored", `{"protocol":"tcp"}`); response.Code != http.StatusOK {
+		t.Fatalf("switch to tcp without window: status=%d body=%s, want 200", response.Code, response.Body.String())
+	}
+	if duration, interval := readWindow("lb_swtcp_stored"); duration != 3000 || interval != 200 {
+		t.Fatalf("未提交窗口的存量非负值应沿用: duration=%d interval=%d, want 3000/200", duration, interval)
+	}
+}

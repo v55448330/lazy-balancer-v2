@@ -112,6 +112,7 @@ func TestCreateRule_commitFailureRestoreOKNoBanner(t *testing.T) {
 }
 
 func forceCommitFailure(t *testing.T) {
+	withIsolatedGlobal(t)
 	t.Helper()
 	previous := txCommitForTest
 	txCommitForTest = func(tx *sql.Tx) error {

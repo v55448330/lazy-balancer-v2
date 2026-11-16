@@ -26,6 +26,7 @@ import {
   withOidcAppNonce,
 } from '../src/utils/oidcCallback.ts'
 import { code, matchBrace, repoCode, section } from './_helpers.ts'
+import { tSafe } from '../src/i18n/tSafe.ts'
 
 const GENERIC = '登录失败，请重新登录'
 
@@ -130,7 +131,9 @@ test('失败文案：RFC 标准错误码映射为固定中文文案', () => {
   // 码表补齐的 6 码：客户端配置类故障不得被读成「用户拒绝」
   assert.equal(oidcErrorMessage('提供商拒绝授权: invalid_client'), '客户端凭证无效，请联系管理员检查 OIDC 配置')
   assert.equal(oidcErrorMessage('提供商拒绝授权: expired_token'), '登录令牌已过期，请重新登录')
-  assert.notEqual(oidcErrorMessage('提供商拒绝授权: unsupported_grant_type'), '授权被拒绝')
+  // 兜底文案已键化（oidc.errAccessDenied）：与 zh 母本同值对表——硬编码中文
+  // 在词条改文案后空转（notEqual 恒真），「配置故障被读成用户拒绝」不再红。
+  assert.notEqual(oidcErrorMessage('提供商拒绝授权: unsupported_grant_type'), tSafe('common.app.oidc.errAccessDenied'))
 })
 
 test('失败文案：任意链接投放的陌生文案／HTML／超长串归一到通用文案', () => {

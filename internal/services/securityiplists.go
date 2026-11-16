@@ -388,8 +388,10 @@ func (s threatTextScan) logDiscarded(path string) {
 // 任何读者同一套门；病态大文件的内存峰值在分配前被拒。
 var iplistTextMaxBytes int64 = 64 << 20
 
-// iplistTextMaxEntries 是文本条目行数门，与引擎侧条目门同口径。
-const iplistTextMaxEntries = 1_000_000
+// iplistTextMaxEntries 是文本条目行数门，与引擎侧条目门同口径（var：测试
+// 可收窄——与体积累 iplistTextMaxBytes 同形态；生产值即 100 万，拒绝语义不因
+// 可覆写而改变）。
+var iplistTextMaxEntries = 1_000_000
 
 // readIplistTextBounded 是 services 侧 .iplist 文本的统一有界读：体积门先于
 // 任何分配；调用方行迭代须以 iplistTextMaxEntries 封顶（readIplistEntriesBounded

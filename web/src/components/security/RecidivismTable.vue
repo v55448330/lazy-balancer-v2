@@ -81,7 +81,9 @@
           <el-button type="danger" plain size="small" :disabled="!writable || resetting" :loading="resetting" @click="resetRecords">{{ t('app.security.overview.autoban.recidivismReset') }}</el-button>
         </span>
       </el-tooltip>
-      <el-pagination v-model:current-page="page" v-model:page-size="pageSize" :total="total" :page-sizes="[20, 50, 100]" layout="total, sizes, prev, pager, next" small @size-change="onPageSizeChange" @current-change="fetchRecords" />
+      <!-- 翻页/改页大小由 composable 的 watch([hidePermanent,page,pageSize]) 统一携参
+           重取（含首页回夹）——不再挂 @current-change，否则翻页会双发请求。 -->
+      <el-pagination v-model:current-page="page" v-model:page-size="pageSize" :total="total" :page-sizes="[20, 50, 100]" layout="total, sizes, prev, pager, next" small @size-change="onPageSizeChange" />
     </div>
   </template>
 </template>

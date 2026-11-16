@@ -16,7 +16,7 @@
 import { tSafe } from '../i18n/tSafe.ts'
 import { hasOwn } from './hasOwn.ts'
 
-// ── 动作（Action）枚举：113 词 + 语义族分组 ───────────────────────────
+// ── 动作（Action）枚举：117 词 + 语义族分组 ───────────────────────────
 export const AUDIT_ACTION_KEYS: Record<string, string> = {
   // 会话/认证
   '登录成功': 'signedIn',
@@ -145,7 +145,7 @@ export const AUDIT_ACTION_KEYS: Record<string, string> = {
   '测试失败': 'testFailed',
 }
 
-// ── 对象（Resource）枚举：62 词 ──────────────────────────────────────
+// ── 对象（Resource）枚举：63 词 ──────────────────────────────────────
 export const AUDIT_RESOURCE_KEYS: Record<string, string> = {
   'ACME配置': 'acmeSettings',
   'API密钥': 'apiKey',

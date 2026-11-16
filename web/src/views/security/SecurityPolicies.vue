@@ -2688,7 +2688,11 @@ const pickerMeta = (rule: Rule): { chain: ChainEntry[]; selfPos: number; blockRe
       blockReason = t('app.security.policies.picker.blockCap', { max: MAX_POLICIES_PER_RULE })
     }
   }
-  return { chain, selfPos: chain.findIndex((e) => e.isSelf) + 1, blockReason }
+  // 本策略落点（1-based）：新建态链里没有 isSelf（editingId=null 不注入本策略），
+  // findIndex=-1 会让「本策略排第 0 位」这种无意义落点恒显——新建恒追加到链尾
+  // （绑定保存后执行序末位），落点=现有绑定数+1。
+  const selfIndex = chain.findIndex((e) => e.isSelf)
+  return { chain, selfPos: selfIndex >= 0 ? selfIndex + 1 : existing.length + 1, blockReason }
 }
 
 // 冲突检测视图：仅启用策略参与（禁用策略不生成配置）；
@@ -2758,9 +2762,24 @@ const buildConflictChain = (caddyId: string): ConflictPolicyView[] => {
     ipTrustEntries: selfSides.trust,
     ipDenyEntries: selfSides.deny,
   }
-  const all = [...serverPolicies, self]
-  all.sort((a, b) => (a.id ?? Number.MAX_SAFE_INTEGER) - (b.id ?? Number.MAX_SAFE_INTEGER))
-  return all
+  // 链序=执行序（与 buildDisplayChain 同源 orderedChainPolicyIds，阶段 0 置顶、
+  // 其余按 rank/暂存序）：原按 policy id 排序会与展示链/后端执行顺序分叉，
+  // 「前位于后位」类冲突提示可能指向相反的先后关系。
+  const byId = new Map<number | null, ConflictPolicyView>()
+  for (const p of serverPolicies) if (p.id !== null) byId.set(p.id, p)
+  // 本策略按表单实时值替换同 id 快照（服务端快照已在 serverPolicies 中剔除）。
+  byId.set(self.id, self)
+  const ordered: ConflictPolicyView[] = []
+  for (const id of orderedChainPolicyIds(caddyId)) {
+    const p = byId.get(id)
+    if (!p) continue
+    ordered.push(p)
+    byId.delete(id)
+  }
+  // 本策略尚未在绑定链中（新建策略/新增绑定）：保存后追加到链尾——按此落位，
+  // 确保「本策略」始终参与冲突判定且不因缺序被丢弃。
+  if (byId.has(self.id)) ordered.push(self)
+  return ordered
 }
 
 // 五类绑定冲突提示（client-side 计算，规则完整绑定链 = 现有 + 本策略）：

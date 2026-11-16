@@ -201,9 +201,12 @@ func reconcileTaskEngineRoleFor(te *taskengine.Engine) {
 	if len(instances) == 0 {
 		// 未登记 ClusterService（测试/嵌入形态）：快照缓存以库句柄为键直接
 		// 失效；分区上报缓存无实例可清（该形态不存在上报面），漂移态仍须
-		// 同源复位。
+		// 同源复位。autoban 计数器是包级内存态（不依赖实例），必须与实例
+		// 分支 applyRoleSideEffects 同口径清空——否则旧角色时代陈旧计数
+		// 按新口径执法（升主往返残留 reached 桶 merge 全部封禁）。
 		clusterSnapshotCaches.Delete(database)
 		ResetConfigDrift()
+		ResetAutobanCounters()
 	}
 	// 旧拓扑的节记账/WAF 文件态复位：翻转路径在事务内完成，对账路径库角色
 	// 已是目标值，此处幂等补做（失败留痕；下一次升主/切从会重做同一清理）。
@@ -403,7 +406,7 @@ func InitTaskEngine(watchdogAdminURL, runtimeLogFile string) *taskengine.Engine 
 		normalizeUnregisteredThreatSourceSlots()
 	}
 
-	// ============ 循环（10）============
+	// ============ 循环（11）============
 
 	// 看门狗：60s 一致性检查（漂移/恢复+小时级心跳——一致轮不逐轮记录）
 	watchdogAdminURLValue = watchdogAdminURL
@@ -1276,6 +1279,25 @@ func WakeCertWaitingCAForEnqueuedJob() {
 		return
 	}
 	te.RearmLoop("cert-waiting-ca", true)
+}
+
+// CertJobsActive 是 certJobsActive 的导出入口（导入恢复链唤醒判据消费）：
+// failed+冷却窗口行属在途信号，导入 finish 归一/重排后按有活唤醒补扫。
+func CertJobsActive() bool { return certJobsActive() }
+
+// ResumeSyncIfUserEnabled 是 handler 侧同步复活的唯一门控入口：用户停止态
+// （loop_on=false）不得复活 Halted 同步循环（task-engine 标准 §5——服务层
+// restoreClusterSyncSchedulingAfterDemote 同口径；此前 handler 裸 Resume
+// 把服务层守门结果推翻，同步在无调度状态运行且与「切从后不会同步」审计矛盾）。
+// 开启态委托 SyncService.Resume（Halted 拉起/非 Halted 唤醒幂等）。
+func ResumeSyncIfUserEnabled(resume func()) {
+	te := TaskEngine()
+	if te != nil {
+		if meta, ok := te.Lookup("cluster-sync"); ok && !meta.LoopOn {
+			return
+		}
+	}
+	resume()
 }
 
 func clusterSyncStatusMirror() string {

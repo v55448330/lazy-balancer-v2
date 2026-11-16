@@ -191,6 +191,7 @@ func TestIPListHotPath_needForceRejectedRestoresCommittedState(t *testing.T) {
 }
 
 func installIPListCommitFailure(t *testing.T) {
+	withIsolatedGlobal(t)
 	t.Helper()
 	old := ipListCommitTxForTest
 	ipListCommitTxForTest = func(tx *sql.Tx) error {

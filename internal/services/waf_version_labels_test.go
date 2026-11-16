@@ -14,9 +14,10 @@ import (
 	"lazy-balancer-v2/internal/models"
 )
 
-// 「同步开关关闭」告警走轻量比对：CRS/ip2region 只读两个小版本文件，威胁库
-// 逐源读取紧凑的 .fast（16B 头 + 5B/v4），均不打包整棵规则树；内容级漂移
-// 检测仍由 wafFilesRefDiffers 承担。
+// 「同步开关关闭」告警走轻量比对：CRS/ip2region（v4+v6 标签）只读版本文件，
+// 威胁库逐源读取紧凑的 .fast（16B 头 + 5B/v4），均不打包整棵规则树；内容级
+// 漂移检测由独立实现 wafFilesDrifted（集群 apply 侧）承担——本文件的
+// wafFilesRefVersionLabelsDiffer 只服务上述告警，不再参与内容级漂移判定。
 
 // 「同步开关关闭」告警的唯一生产路径必须覆盖威胁库段：仅威胁 .fast 更新
 // （CRS/ip2region 版本标签不变）同样要产生「同步警告」——它是从节点威胁名单

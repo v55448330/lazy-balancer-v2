@@ -1,12 +1,14 @@
 package caddyl4sec
 
 // TCP 规则 PROXY v2 入站解析信任门控（layer4.handlers.lb_l4_pp）：
-// 上游 l4proxyprotocol 在 go-proxyproto v0.15 下 NewConn 恒施加 DefaultPolicy
-// （REQUIRE——直连无头即拒 + 任意来源声明源被采信），其 allow/fallback_policy
-// 字段不进 NewConn，属死配置。本模块以逐连接显式策略替代上游裸发射：
-// 对端 ∈ Allow（受信代理网段，渲染侧经受信代理解析单源展开）→ USE（采信
-// 声明源）；其余 → IGNORE（头被消费不采信，按直连地址处理；无头直连照常
-// 透传）。策略逐连接显式设置，不依赖上游版本默认值。
+// v0.1.2 时代上游 l4proxyprotocol 在 go-proxyproto v0.15 下 NewConn 恒施加
+// DefaultPolicy（REQUIRE——直连无头即拒 + 任意来源声明源被采信），其
+// allow/fallback_policy 字段不进 NewConn，属死配置。**caddy-l4 v0.1.3 已修复**
+//（go-proxyproto v0.16，Allow/Deny/FallbackPolicy 进逐连接 policy 回调，
+// 默认 IGNORE；module cache modules/l4proxyprotocol/handler.go 实证）。
+// lb_l4_pp 保留（主审裁定）：渲染侧受信代理解析单源展开 + 逐连接显式策略，
+// 不依赖上游版本默认值——对端 ∈ Allow（受信代理网段）→ USE（采信声明源）；
+// 其余 → IGNORE（头被消费不采信，按直连地址处理；无头直连照常透传）。
 import (
 	"fmt"
 	"net"

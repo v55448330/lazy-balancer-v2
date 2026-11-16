@@ -516,6 +516,20 @@ func ValidateAutobanConfig(cfg AutobanConfig) error {
 	return nil
 }
 
+// autobanConfigReplaceMu 串行化「读旧值 → 写十列 → 运行期收敛」：两条写路径
+// （PUT 保存 / 备份导入提交后收敛）与 Run 轮/喂入批的配置读共用。
+//
+// 不加锁的两种实测分叉：
+//   - 并发 PUT 各自读旧值再写，后写者的变更判定以陈旧基线比对——A 把窗口
+//     5→10（拓宽）后 B 仍按旧值 5 与自己写入的 5 比对，判定「未变更」跳过
+//     清桶，A 的宽窗口计数桶在窄口径下残留整窗口；
+//   - Run 轮在 UPDATE 与收尾之间读配置，拿到「新配置 + 旧桶」按新窗口并入
+//     候选（窗口变小/口径收窄即批量误封）。
+//
+// 锁序：本锁 → CaddyOpLock（收敛内的禁用收尾）。反向路径不存在：导入面
+// 在释放 CaddyOpLock 之后才排入收敛（见 config_backup 的 postLockActions）。
+var autobanConfigReplaceMu sync.RWMutex
+
 // SetAutobanConfig 写十项配置；窗口/口径变更时重置计数器（口径语义
 // 变了，旧计数不可与新口径混算）。禁用（enabled=false）同样清空计数桶与观察
 // 建议——停用期无喂入，陈旧计数不得在重新启用后立即封禁（见下方调用点注释）。
@@ -529,6 +543,9 @@ func SetAutobanConfig(cfg AutobanConfig) error {
 	if err := ValidateAutobanConfig(cfg); err != nil {
 		return err
 	}
+	// 读旧值→写→收敛必须原子（见 autobanConfigReplaceMu）：中间态对外不可见。
+	autobanConfigReplaceMu.Lock()
+	defer autobanConfigReplaceMu.Unlock()
 	prev, err := GetAutobanConfig()
 	if err != nil {
 		return fmt.Errorf("读取自动封禁配置失败: %w", err)
@@ -548,7 +565,8 @@ func SetAutobanConfig(cfg AutobanConfig) error {
 	// 运行期收敛（清桶/重算 Reached/禁用收尾/调度联动）与备份导入提交后
 	// 共用同一单源——十列有第二条写入路径（导入/还原的通用
 	// `UPDATE global_config`），各自内联判断会让不变量在导入面静默失效。
-	ReconcileAutobanRuntimeAfterConfigReplace(prev, cfg)
+	// 本函数已持写锁，走动作体（导出入口负责自取锁）。
+	reconcileAutobanRuntimeAfterConfigReplace(prev, cfg)
 	return nil
 }
 
@@ -557,7 +575,15 @@ func SetAutobanConfig(cfg AutobanConfig) error {
 // AutobanConfigReplaceEffectNote 的文案共用本判定（判定与文案漂移会让
 // 「响应说清了桶」与「实际清桶」分叉）。
 type autobanConfigReplaceEffects struct {
-	// resetCounters：口径/窗口变更 → 旧计数不可与新口径混算。
+	// windowChanged：统计窗口变更（桶长语义变了）。
+	windowChanged bool
+	// scopeChanged：统计口径（维度集合）变更——旧计数按新口径不可混算。
+	scopeChanged bool
+	// countingParamsChanged：证据分层计数参数（计数方式/嫌疑倍率/确证打底
+	// 比例）变更——同一批事件在两种口径下的累加与达阈值判据不同。
+	countingParamsChanged bool
+	// resetCounters：上述任一 → 旧计数不可与新口径混算。合并判定单源；
+	// 文案不得把合并判定当成「窗口/口径变了」的事实（分项见上）。
 	resetCounters bool
 	// recomputeReached：阈值变更 → 重算「已达阈值」读口径。
 	recomputeReached bool
@@ -577,8 +603,9 @@ type autobanConfigReplaceEffects struct {
 
 func autobanConfigReplaceEffectsOf(old, new AutobanConfig) autobanConfigReplaceEffects {
 	effect := autobanConfigReplaceEffects{
-		resetCounters: old.WindowMinutes != new.WindowMinutes || old.Scope != new.Scope ||
-			old.CountingMode != new.CountingMode ||
+		windowChanged: old.WindowMinutes != new.WindowMinutes,
+		scopeChanged:  old.Scope != new.Scope,
+		countingParamsChanged: old.CountingMode != new.CountingMode ||
 			old.SuspicionMultiplier != new.SuspicionMultiplier ||
 			old.ConfirmFloorRatio != new.ConfirmFloorRatio,
 		recomputeReached:       old.Threshold != new.Threshold,
@@ -586,6 +613,7 @@ func autobanConfigReplaceEffectsOf(old, new AutobanConfig) autobanConfigReplaceE
 		disableFlushTransition: old.Enabled && !new.Enabled,
 		loopToggled:            old.Enabled != new.Enabled,
 	}
+	effect.resetCounters = effect.windowChanged || effect.scopeChanged || effect.countingParamsChanged
 	return effect
 }
 
@@ -608,6 +636,16 @@ func autobanConfigReplaceEffectsOf(old, new AutobanConfig) autobanConfigReplaceE
 //     以旧计数立即封禁并从这里重算封禁起点/时长；
 //   - 启用态 → 调度联动（应用值在锁内按库实态读取，本参数仅作读失败回退）。
 func ReconcileAutobanRuntimeAfterConfigReplace(old, new AutobanConfig) {
+	// 收敛动作与配置读互斥（见 autobanConfigReplaceMu）：动作执行期间
+	// Run/喂入批读不到「新配置 + 旧桶」的中间态。
+	autobanConfigReplaceMu.Lock()
+	defer autobanConfigReplaceMu.Unlock()
+	reconcileAutobanRuntimeAfterConfigReplace(old, new)
+}
+
+// reconcileAutobanRuntimeAfterConfigReplace 是收敛动作体：调用方必须已持
+// autobanConfigReplaceMu 写锁（SetAutobanConfig 与导出入口共用）。
+func reconcileAutobanRuntimeAfterConfigReplace(old, new AutobanConfig) {
 	effect := autobanConfigReplaceEffectsOf(old, new)
 	if effect.resetCounters {
 		ResetAutobanCounters()
@@ -625,12 +663,38 @@ func ReconcileAutobanRuntimeAfterConfigReplace(old, new AutobanConfig) {
 // AutobanConfigReplaceEffectNote 返回「替换十列后运行期收敛动作」的用户可读
 // 说明（导入/还原响应的 warnings 与成功审计单源）；无收敛动作（十列相同，
 // 或仅时长/观察模式变化）时返回空串。
+//
+// 文案只披露真实变化的因子：清桶是合并判定（窗口 ∪ 口径 ∪ 证据分层参数），
+// 把合并判定写成「统计窗口/口径由 X 改为 X」会在仅改证据分层字段时谎报
+// 窗口/口径变更（判定与文案必须由同一组分项驱动）。
 func AutobanConfigReplaceEffectNote(old, new AutobanConfig) string {
 	effect := autobanConfigReplaceEffectsOf(old, new)
 	parts := []string{}
 	if effect.resetCounters {
-		parts = append(parts, fmt.Sprintf("统计窗口/口径由 %d 分钟/%s 改为 %d 分钟/%s，已清空自动封禁统计计数（旧计数不适用于新口径）",
-			old.WindowMinutes, old.Scope, new.WindowMinutes, new.Scope))
+		changed := make([]string, 0, 3)
+		if effect.windowChanged {
+			changed = append(changed, fmt.Sprintf("统计窗口由 %d 分钟改为 %d 分钟",
+				old.WindowMinutes, new.WindowMinutes))
+		}
+		if effect.scopeChanged {
+			changed = append(changed, fmt.Sprintf("统计口径由 %s 改为 %s", old.Scope, new.Scope))
+		}
+		if effect.countingParamsChanged {
+			params := make([]string, 0, 3)
+			if old.CountingMode != new.CountingMode {
+				params = append(params, fmt.Sprintf("计数方式由 %s 改为 %s", old.CountingMode, new.CountingMode))
+			}
+			if old.SuspicionMultiplier != new.SuspicionMultiplier {
+				params = append(params, fmt.Sprintf("嫌疑累计倍率由 %d 改为 %d",
+					old.SuspicionMultiplier, new.SuspicionMultiplier))
+			}
+			if old.ConfirmFloorRatio != new.ConfirmFloorRatio {
+				params = append(params, fmt.Sprintf("确证打底比例由 %s 改为 %s",
+					old.ConfirmFloorRatio, new.ConfirmFloorRatio))
+			}
+			changed = append(changed, "证据分层计数参数变更（"+strings.Join(params, "、")+"）")
+		}
+		parts = append(parts, strings.Join(changed, "；")+"，已清空自动封禁统计计数（旧计数不适用于新口径）")
 	} else if effect.recomputeReached {
 		parts = append(parts, fmt.Sprintf("封禁阈值由 %d 改为 %d，已按新阈值重算统计达标标记", old.Threshold, new.Threshold))
 	}
@@ -879,7 +943,7 @@ func ResetAutobanCounters() {
 }
 
 // HumanObserveItem 人机事件批量喂入的最小形态（IPC 提交点按批提交）。
-// Kind=challenge|fail|pass。
+// Kind=challenge|fail|pass|rate_reject（未知 kind 在 IPC 摄入端跳过不落库）。
 type HumanObserveItem struct {
 	IP   string
 	Kind string
@@ -895,10 +959,21 @@ type HumanObserveItem struct {
 // 逐事件 SELECT 是热路径 O(事件) 库查询）。挑战事件不受 WAF 阶段 3 族门
 // 约束；pass 的维度为空，由 autobanObserveEventScopedAt 自然跳过。
 func ObserveHumanEvents(items []HumanObserveItem) {
-	if len(items) == 0 || !autobanIsMaster() {
+	if len(items) == 0 {
 		return
 	}
+	// 攻击光流环与自动封禁门解耦（环是本地展示面，从节点同样有自己的环）：
+	// CC reject（429）是拦截弧，同屏 feed/总量/拦截率已按事件表计入——
+	// 光流环缺该弧会让大屏显示「有拦截率、无弹道」自相矛盾。
+	observeHumanAttackFlow(items)
+	if !autobanIsMaster() {
+		return
+	}
+	// 配置读与「替换+收敛」互斥（见 autobanConfigReplaceMu）：读到新配置时
+	// 计数桶必然已按新口径清过（旧计数不按新口径混算）。
+	autobanConfigReplaceMu.RLock()
 	cfg, err := GetAutobanConfig()
+	autobanConfigReplaceMu.RUnlock()
 	if err != nil || !cfg.Enabled {
 		return
 	}
@@ -926,6 +1001,35 @@ func ObserveHumanEvents(items []HumanObserveItem) {
 	}
 }
 
+// observeHumanAttackFlow 把人机通道的拦截事件（CC reject=429）喂入攻击光流
+// 环。判据与 WAF 摄取路径同口径：SecurityEventCountsAsAttack（challenged/
+// 信任不算攻击，故发放/失败不入环）+ 非空 + 保留地址硬排除（与入环门同一
+// 判据，防内网扫描占满环把真实外网攻击弧挤出窗口）。At 缺失（非 IPC 形态
+// 的调用方）不入环——光流弧必须可按时间定位。
+func observeHumanAttackFlow(items []HumanObserveItem) {
+	flow := make([]threatScreenAttackFlowItem, 0, len(items))
+	for _, it := range items {
+		if it.Kind != "rate_reject" {
+			continue
+		}
+		ip := strings.TrimSpace(it.IP)
+		if ip == "" || it.At.IsZero() || IsReservedClientIP(ip) {
+			continue
+		}
+		action, rule := "blocked", "cc_rate_reject"
+		if !SecurityEventCountsAsAttack(action, rule) {
+			continue
+		}
+		flow = append(flow, threatScreenAttackFlowItem{
+			at:            it.At,
+			clientIP:      ip,
+			action:        action,
+			ruleTriggered: rule,
+		})
+	}
+	threatScreenAttackFlowRecordBatch(flow)
+}
+
 // autobanObserveBatch 摄取提交点喂入（每批 Commit 后调用）。五重门：主节点 +
 // 启用 + WAF 事件（rule_triggered 非空）+ 口径 + 阶段 3 族。任一门不过整批
 // 跳过；批内逐条按口径过滤。阶段 3 族门与逐事件门收敛在
@@ -940,7 +1044,11 @@ func autobanObserveBatch(items []autobanFeedItem) {
 	// 启用门并入同一行读取（GetAutobanConfig 的 SELECT
 	// 已含 autoban_enabled）——旧实现先 AutobanEnabled() 再 GetAutobanConfig()，
 	// 每批多一次主库单行查询；读失败时本批不喂入（fail-closed 语义不变）。
+	// 读与「替换+收敛」互斥（见 autobanConfigReplaceMu）：读到新配置时计数桶
+	// 必然已按新口径清过。
+	autobanConfigReplaceMu.RLock()
 	cfg, err := GetAutobanConfig()
+	autobanConfigReplaceMu.RUnlock()
 	if err != nil || !cfg.Enabled {
 		return
 	}
@@ -1160,15 +1268,6 @@ func autobanIdentityBannedInView(ctx context.Context, q AutobanConfigQuerier, id
 		}
 	}
 	return false, nil
-}
-
-// AutobanIdentityActivelyBanned 判定身份是否正在被自动封禁（库句柄视图；
-// handlers 单条移除守卫的事务形态见 DeleteAutobanRecidivismGuarded）。
-func AutobanIdentityActivelyBanned(identity string) (bool, error) {
-	if db.DB == nil {
-		return false, errors.New("数据库未初始化")
-	}
-	return autobanIdentityBannedInView(context.Background(), db.DB, identity)
 }
 
 // AutobanSuggestion 观察建议/候选形态。
@@ -1690,8 +1789,9 @@ func autobanMergeEntries(cfg AutobanConfig, candidates []AutobanSuggestion) (aut
 // ---- 累犯渐进升级 ----
 
 // autobanRecidivismDecay 累犯衰减窗口：距上次封禁超过该时长无再犯，
-// offense_count 降一级（防永久标签——改过自新的身份不被历史永久钉死）。
-// 默认 30 天；测试缝可覆写（生产可配点）。
+// offense_count 清零（按首次档重新起算——防永久标签，改过自新的身份不被
+// 历史永久钉死；不是「降一级」：只降一级再 +1 净计数不变，档位永不回落，
+// 衰减形同虚设）。默认 30 天；测试缝可覆写（生产可配点）。
 var autobanRecidivismDecay = 30 * 24 * time.Hour
 
 // autobanEscalationDurationLabel 执法时长的枚举标签（累犯表 escalated_duration
@@ -2016,7 +2116,11 @@ func RunAutobanCycle(rc taskengine.RunContext) error {
 		}
 		return errors.New("自动封禁未启用，已停止调度（请先在安全事件页配置中启用）")
 	}
+	// 配置读与「替换+收敛」互斥（见 autobanConfigReplaceMu）：读到新配置时
+	// 计数桶必然已按新口径清过，不会出现「新窗口 + 旧桶」混算。
+	autobanConfigReplaceMu.RLock()
 	cfg, err := GetAutobanConfig()
+	autobanConfigReplaceMu.RUnlock()
 	if err != nil {
 		TaskLogfWarn(AutobanTaskID, "failed", "读取自动封禁配置失败，本轮未执行: %v", err)
 		return fmt.Errorf("读取自动封禁配置失败: %w", err)
@@ -2025,7 +2129,7 @@ func RunAutobanCycle(rc taskengine.RunContext) error {
 	// 铁律：无效值拒绝执行+显性报错，禁止静默兜底）。threshold<=0 会让
 	// 「count>=threshold」把全量候选收进名单；duration 非法经 autobanDurations
 	// 查表得 0 被当「永久」（候选全落永久封禁条目）；window<=0 让窗口失真。
-	// 带外脏行由启动回填（db.go defaultUpdates 六列）在下次启动收敛；校验单源
+	// 带外脏行由启动回填（db.go defaultUpdates 十列）在下次启动收敛；校验单源
 	// 复用写侧 ValidateAutobanConfig（导入/写侧/消费侧三通道同一口径——通道
 	// 语义差异见 ValidateAutobanConfig 注释）。
 	// 无效配置是带外污染造成的**持续态**（保存
@@ -2682,20 +2786,6 @@ func DeleteAutobanRecidivismGuarded(ctx context.Context, identity string) (strin
 		return identity, err
 	}
 	return identity, tx.Commit()
-}
-
-// DeleteAutobanRecidivism 删除单条累犯身份行（取消累犯身份——下次达阈值按
-// 首次档起算）。identity 经 autobanEntryIdentity 归一。幂等：identity 不存在
-// 时同样成功（DELETE 零行不报错）。只清历史记账，不动名单条目：已生效封禁
-// 保持至到期。守卫+删除原子形态见 DeleteAutobanRecidivismGuarded。
-// DELETE 触发器 bump cluster_version，从端下一同步周期整表收敛。
-func DeleteAutobanRecidivism(identity string) error {
-	d := db.GetDB()
-	if d == nil {
-		return errors.New("database unavailable")
-	}
-	_, err := d.Exec(deleteAutobanRecidivismSQL, autobanEntryIdentity(identity))
-	return err
 }
 
 // ResetAutobanRecidivism 清空全部累犯历史（重置计数——下次达阈值按首次档

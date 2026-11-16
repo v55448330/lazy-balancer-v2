@@ -10,7 +10,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
 import { accountInitial, accountTriggerLabel, sidebarCollapsed, sidebarOverlay, sidebarWidth, toggleSidebarState } from '../src/utils/sidebarLayout.ts'
-import { code, section } from './_helpers.ts'
+import { code, matchBrace, section } from './_helpers.ts'
 
 test('宽屏：折叠态由用户显式选择决定', () => {
   assert.equal(sidebarCollapsed({ narrow: false, userCollapsed: false, narrowExpanded: false }), false)
@@ -82,9 +82,22 @@ test('侧栏子菜单间距：is-opened 不再复述 margin-bottom（无被覆�
     /\.layout-menu :deep\(\.el-sub-menu\) \{\s*margin-top: 4px !important;\s*margin-bottom: 4px !important;/,
     '基础规则必须是间距唯一真源',
   )
-  const openedRules = [...style.matchAll(/\.el-sub-menu\.is-opened\)\s*\{([^}]*)\}/g)]
-    .map((match) => match[1] ?? '')
-  const withMarginBottom = openedRules.filter((rule) => /margin-bottom/.test(rule))
+  // 全扫描：选择器含 .el-sub-menu.is-opened 的规则块（:deep(...) 与裸选择器两种
+  // 形态），块内**含嵌套块**都不得再声明 margin-bottom——历史 bug 是同特异性后置
+  // 覆盖，只识别单一形态/只扫顶层声明会让换形态复发恒绿。
+  const openedBlocks: string[] = []
+  const selectorRe = /([^{}]+)\{/g
+  let m: RegExpExecArray | null
+  while ((m = selectorRe.exec(style)) !== null) {
+    const selector = m[1] ?? ''
+    if (!/\.el-sub-menu\.is-opened/.test(selector)) continue
+    const open = m.index + m[0].length - 1
+    const close = matchBrace(style, open)
+    assert.ok(close > open, `is-opened 规则块花括号不平衡：${selector.trim()}`)
+    openedBlocks.push(style.slice(open + 1, close))
+    selectorRe.lastIndex = close + 1
+  }
+  const withMarginBottom = openedBlocks.filter((block) => /margin-bottom/.test(block))
   assert.equal(
     withMarginBottom.length,
     0,

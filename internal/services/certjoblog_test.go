@@ -145,17 +145,17 @@ func captureCertJobLogWarns(t *testing.T) func() []string {
 	}
 }
 
-// 删除规则时必须同时清掉当前日志、.N 轮转副本、.gz 整文件归档与历史
-// 压缩代（.N.gz，外部 logrotate 形态）；同目录其他规则文件不受影响。
+// 删除规则时必须同时清掉当前日志、.N 轮转副本、整文件压缩归档（.gz/.zst）
+// 与历史压缩代（.N.gz/.N.zst，外部 logrotate 形态）；同目录其他规则文件不受影响。
 func TestRemoveCertJobLogFiles_removesCompressedAndRotatedGenerations(t *testing.T) {
 	useCertJobLogTestEnv(t, 1<<20)
 	base := CertJobLogPath("lb_remove_all")
 	if err := os.MkdirAll(filepath.Dir(base), 0755); err != nil {
 		t.Fatal(err)
 	}
-	paths := []string{base, base + ".gz"}
+	paths := []string{base, base + ".gz", base + ".zst"}
 	for i := 1; i <= maxRotatedFiles; i++ {
-		paths = append(paths, fmt.Sprintf("%s.%d", base, i), fmt.Sprintf("%s.%d.gz", base, i))
+		paths = append(paths, fmt.Sprintf("%s.%d", base, i), fmt.Sprintf("%s.%d.gz", base, i), fmt.Sprintf("%s.%d.zst", base, i))
 	}
 	for _, path := range paths {
 		if err := os.WriteFile(path, []byte("log\n"), 0644); err != nil {

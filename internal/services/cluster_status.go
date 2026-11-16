@@ -207,9 +207,10 @@ func (s *ClusterService) UpdateSettings(ctx context.Context, req models.ClusterS
 		return ErrSyncUsersLocked
 	}
 	// sync_users 不落写：该列在读取侧（readSyncSwitches）恒归一为 true、在快照
-	// 镜像侧恒写 1，写它只会产生一次「值未变」的 global_config UPDATE——而
-	// cluster_version_global_config_update 触发器没有值变更守卫（WHEN 只比
-	// cluster_version），无谓写会 bump 版本并让全部从节点多做一轮快照拉取。
+	// 镜像侧恒写 1，写它只会产生一次「值未变」的 global_config UPDATE——
+	// cluster_version_global_config_update 触发器已有值变化守卫（全链
+	// OLD.col IS NOT NEW.col，与 users 同构，单源 globalConfigSyncedColumns），
+	// 同值写不 bump 版本；避免无谓写的理由是减少写锁竞争与审计噪声。
 	// req.SyncUsers 的合法性仍由上方哨兵校验（false 恒 400）。
 	switchUpdates := []struct {
 		name string

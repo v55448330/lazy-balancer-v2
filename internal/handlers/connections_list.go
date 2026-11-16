@@ -448,6 +448,11 @@ func (h *Handlers) collectDomainStats() []domainStat {
 // getConnectionsListCached 缓存+单飞外壳（TTL 吸收弹框 2s 轮询；singleflight
 // 合并并发；负缓存防故障打穿）。
 func (h *Handlers) getConnectionsListCached() (connectionsListPayload, error) {
+	// nil-cfg 零值契约（config_degradation_test 同族）：嵌入/测试装配形态
+	// 未注入 cfg 时返回空列表零值，不裸解引用 panic。
+	if h.cfg == nil {
+		return connectionsListPayload{}, nil
+	}
 	connectionsListMu.Lock()
 	now := time.Now()
 	if now.Before(connectionsListExpireAt) {

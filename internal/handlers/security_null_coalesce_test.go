@@ -5,6 +5,9 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"net/http"
 	"strconv"
 	"strings"
@@ -237,5 +240,65 @@ func TestListSecurityEvents_nullProjectionColumnsReturn200(t *testing.T) {
 	}
 	if !strings.Contains(recorder.Body.String(), `"total":1`) {
 		t.Fatalf("body=%s, want total:1", recorder.Body.String())
+	}
+}
+
+// handlers 侧投影 securityPolicySelectColumns 的人机/CC COALESCE 回退值必须
+// 绑 db.Default* 治理常量（与 services/security.go securityPolicyRowColumns
+// 的 TestSecurityPolicyRowColumns_bindsGovernedDefaults 同口径——该钉只解析
+// services/security.go，不覆盖 handlers 本地副本）：私抄字面量会在 DDL
+// DEFAULT/启动回填调整后与读侧静默分叉（UI 与引擎看到两套默认值）。
+func TestSecurityPolicySelectColumns_bindsGovernedDefaults(t *testing.T) {
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "security.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parse security.go: %v", err)
+	}
+	seen := map[string]bool{}
+	ast.Inspect(file, func(n ast.Node) bool {
+		spec, ok := n.(*ast.ValueSpec)
+		if !ok {
+			return true
+		}
+		declared := false
+		for _, name := range spec.Names {
+			if name.Name == "securityPolicySelectColumns" {
+				declared = true
+			}
+		}
+		if !declared {
+			return true
+		}
+		ast.Inspect(spec, func(inner ast.Node) bool {
+			if sel, ok := inner.(*ast.SelectorExpr); ok {
+				if pkg, ok := sel.X.(*ast.Ident); ok && pkg.Name == "db" {
+					seen[sel.Sel.Name] = true
+				}
+			}
+			return true
+		})
+		return false
+	})
+	for _, want := range []string{
+		"DefaultHumanVerifyType", "DefaultHumanVerifyTTL",
+		"DefaultCCRPSLimit", "DefaultCCRPSWindow",
+		"DefaultCC4xxRatio", "DefaultCCSessionUAThreshold",
+	} {
+		if !seen[want] {
+			t.Fatalf("securityPolicySelectColumns 未绑定 db.%s（COALESCE 回退值私抄为字面量）", want)
+		}
+	}
+	// 运行期形态仍须与常量同值（拼接/引号位置正确）。
+	for _, want := range []string{
+		"'" + db.DefaultHumanVerifyType + "'",
+		strconv.Itoa(db.DefaultHumanVerifyTTL),
+		strconv.Itoa(db.DefaultCCRPSLimit),
+		strconv.Itoa(db.DefaultCCRPSWindow),
+		strconv.Itoa(db.DefaultCC4xxRatio),
+		strconv.Itoa(db.DefaultCCSessionUAThreshold),
+	} {
+		if !strings.Contains(securityPolicySelectColumns, want) {
+			t.Fatalf("securityPolicySelectColumns 缺默认值形态 %q: %s", want, securityPolicySelectColumns)
+		}
 	}
 }

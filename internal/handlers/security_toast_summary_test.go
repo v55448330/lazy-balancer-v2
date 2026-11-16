@@ -221,6 +221,7 @@ func TestGetSecurityEventToastSummary_rebasesCursorWhenSinceExceedsMax(t *testin
 // 并发事件不得计入本批。否则 next_id 仍推进到旧 maxID，下一轮从 maxID 重扫，
 // 同一事件会被弹框两次（洪峰下每轮重复 1~10 条）。
 func TestGetSecurityEventToastSummary_excludesEventsArrivingAfterMaxRead(t *testing.T) {
+	withIsolatedGlobal(t)
 	setupSecurityPolicyTestDB(t)
 	now := time.Now().UTC().Truncate(time.Second).Format("2006-01-02 15:04:05")
 	insert := func(ip, uri string) int64 {

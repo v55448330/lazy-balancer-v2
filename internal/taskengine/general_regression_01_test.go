@@ -117,6 +117,51 @@ func TestEngine_DaemonRearmAfterStopStartsFreshRestartBudget(t *testing.T) {
 	waitForEngine(t, "新一代首次异常后仍按新预算重拉", 2*time.Second, func() bool { return runs.Load() >= 4 })
 }
 
+// demote×崩溃微窗口：Run 返回错误后、退出清理快照角色之前 demote 完成
+// （SetRole 翻角色位并取消 ctx）——陈旧 allows 快照会让 master-only daemon
+// 在从节点消耗自愈预算并延迟重拉。修复：abnormal 分支消费预算前复核 ctx
+// （与 premature-exit 分支的 ctx 复核同形态）；重拉有到点角色复核兜底，
+// 本钉测锁预算记账不偏差。
+func TestEngine_DaemonAbnormalExitRechecksCtxBeforeBudget(t *testing.T) {
+	e := newTestEngineWithOptions(t, Options{TickInterval: 10 * time.Millisecond,
+		DaemonRestartDelays: []time.Duration{20 * time.Millisecond, 30 * time.Millisecond}})
+	var runs atomic.Int32
+	release := make(chan struct{})
+	entered := make(chan struct{})
+	e.Register(Descriptor{ID: "t-crash-demote", Family: "t", Name: "崩溃×降级常驻", Kind: KindDaemon,
+		RunsOn: RoleMasterOnly, RestartOnRoleFlip: true,
+		Run: func(rc RunContext) error {
+			runs.Add(1)
+			close(entered)
+			<-release
+			return errors.New("boom")
+		}})
+	e.StartLoop("t-crash-demote")
+	waitForEngineSignal(t, "首代启动", entered)
+	// demote 先于 Run 返回：SetRole 取消在途 ctx（角色位同时翻为从）。
+	e.SetRole(false)
+	close(release) // Run 返回错误（ctx 已取消）
+	waitForEngine(t, "退出清理落定", 2*time.Second, func() bool { return !daemonRunning(e, "t-crash-demote") })
+	time.Sleep(120 * time.Millisecond) // 覆盖两次退避窗（20+30ms）
+	if got := runs.Load(); got != 1 {
+		t.Fatalf("ctx 已取消仍重拉：执行次数=%d, want 1（demote/停机不得消耗自愈预算）", got)
+	}
+	r := regOf(t, e, "t-crash-demote")
+	r.mu.Lock()
+	budget := r.abnormalRestarts
+	r.mu.Unlock()
+	if budget != 0 {
+		t.Fatalf("ctx 取消的退出消耗了自愈预算 abnormalRestarts=%d, want 0", budget)
+	}
+	var failed int
+	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM task_runs WHERE task_id='t-crash-demote' AND status='failed'`).Scan(&failed); err != nil {
+		t.Fatalf("count failed: %v", err)
+	}
+	if failed != 0 {
+		t.Fatalf("ctx 取消的退出不得补记 failed 行, got %d", failed)
+	}
+}
+
 // 任务元数据，不得让任务监控整页 500（修复前裸调 Ever*/NextSlot/EnabledFn）。
 func TestEngine_MetadataFnPanicIsolated(t *testing.T) {
 	e := newTestEngine(t)

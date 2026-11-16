@@ -1601,13 +1601,16 @@ onBeforeUnmount(() => {
   z-index: 4;
 }
 /* 错误/信息条堆叠区：置顶居中、位于攻击弹框（.toasts z-index 7）之下，
-   默认点击穿透（条带自身不遮挡其下弹框/按钮），仅重试按钮恢复可点。 */
+   默认点击穿透（条带自身不遮挡其下弹框/按钮），仅交互控件恢复可点——
+   重试按钮与各 info-note-bar 的「知道了」dismiss 都必须 auto（否则
+   pointer-events 继承 none，横幅按钮点不动）。 */
 .error-stack {
   position: absolute; left: 50%; top: 8px; transform: translateX(-50%);
   display: flex; flex-direction: column; align-items: center; gap: 4px; z-index: 6;
   pointer-events: none; max-width: min(720px, calc(100% - 32px));
 }
 .error-stack .error-retry { pointer-events: auto; }
+.error-stack .info-note-dismiss { pointer-events: auto; }
 .error-banner {
   padding: 4px 14px; border: 1px solid rgba(255, 77, 94, 0.5);
   background: rgba(255, 77, 94, 0.15); color: #ff8f9a; font-size: 12px;
@@ -1686,11 +1689,8 @@ onBeforeUnmount(() => {
 .act { margin-left: auto; font: 10px/1 mono, monospace; padding: 2px 5px; border-radius: 3px; border: 1px solid; }
 .act-blocked { color: #ff8a8a; border-color: rgba(226, 84, 84, 0.5); background: rgba(226, 84, 84, 0.12); }
 .act-logged { color: #ffd166; border-color: rgba(255, 209, 102, 0.45); background: rgba(255, 209, 102, 0.08); }
-/* trust/challenged 动作徽标：与 eventActionTone 同色族——trust=success 绿
-   （同 sev-low 绿系）、challenged=primary 蓝（同正常弧/TCP 徽标青蓝系）；
-   透明度节奏与 blocked/logged 一致。 */
-.act-trust { color: #3ddc84; border-color: rgba(61, 220, 132, 0.5); background: rgba(61, 220, 132, 0.12); }
-.act-challenged { color: #7dd3fc; border-color: rgba(56, 189, 248, 0.5); background: rgba(56, 189, 248, 0.1); }
+/* trust/challenged 无徽标配色：大屏事件流走攻击口径（后端
+   AttackEventSQLPredicate 整类排除 trust/challenged），这两族不可达。 */
 .site-unset { color: #ffd166; }
 
 /* 地图引擎根容器适配（引擎内部自管 canvas/标签层） */

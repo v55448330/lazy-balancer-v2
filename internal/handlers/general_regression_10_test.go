@@ -42,6 +42,7 @@ func ruleTableBuildBackup(t *testing.T, tables map[string][]map[string]any, cfg 
 // 字符串 "1" 在校验期被 backupBooleanEnabled 读为 false，而 SQLite 亲和性在
 // 恢复期把同一文本转存为 INTEGER 1（同一值两期含义相反），全部门
 // 被击穿（admin_tls 崩溃循环、TLSShape 白名单绕过、冲突矩阵漏判）。校验必须
+// 在恢复前拒绝非布尔类型形态（本用例钉住该门）。
 func TestValidateV2Backup_rejects_non_boolean_typed_boolean_columns(t *testing.T) {
 	tests := []struct {
 		name      string

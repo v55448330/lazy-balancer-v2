@@ -35,6 +35,7 @@ func newAdminTLSTestRouter(t *testing.T) (*gin.Engine, *Handlers) {
 // 自签名证书对的落点必须是 cfg.DataDir——测试夹具给空目录时探针会把材料写进
 // 源码树（曾被 git add -A 扫进仓库）。
 func TestUpdateAdminTLS_selfSignedProbeStaysInDataDir(t *testing.T) {
+	withIsolatedGlobal(t)
 	initializeRuleFeatureTestDB(t)
 	oldExit := exitProcess
 	exited := make(chan struct{}, 1)
@@ -69,6 +70,7 @@ func TestUpdateAdminTLS_selfSignedProbeStaysInDataDir(t *testing.T) {
 // 否则 `?enabled=false&mode=upload` 会让已提交的 selfsigned 保存落成相反
 // 状态或落到误导性材料错误。
 func TestUpdateAdminTLS_multipartFieldsIgnoreURLQuery(t *testing.T) {
+	withIsolatedGlobal(t)
 	initializeRuleFeatureTestDB(t)
 	oldExit := exitProcess
 	exited := make(chan struct{}, 1)
@@ -113,6 +115,7 @@ func TestUpdateAdminTLS_multipartFieldsIgnoreURLQuery(t *testing.T) {
 // JSON 通道 enabled 取值域与 multipart 同白名单：true/1/false/0 四种形态
 // （布尔、字符串、数值字面量）都接受，其余数值显式 400 且文案与实现一致。
 func TestUpdateAdminTLS_JSONNumericEnabledValues(t *testing.T) {
+	withIsolatedGlobal(t)
 	cases := []struct {
 		name      string
 		body      string
@@ -178,6 +181,7 @@ func TestUpdateAdminTLS_JSONNumericEnabledValues(t *testing.T) {
 // JSON 单字段上限与 multipart 单文件同口径（1 MiB）：超限显式 400 且点名
 // 字段，不落到「证书与私钥不匹配」这类误导性材料错误，也不落库。
 func TestUpdateAdminTLS_JSONPerFieldSizeCap(t *testing.T) {
+	withIsolatedGlobal(t)
 	oversized := strings.Repeat("A", maxAdminTLSFileBytes+1)
 	cases := []struct {
 		name      string
@@ -227,6 +231,7 @@ func TestUpdateAdminTLS_JSONPerFieldSizeCap(t *testing.T) {
 // 同一请求的两处来源（multipart body 与 URL query）冲突时，body 胜出——
 // 用另一方向（query mode=selfsigned / body mode=upload）复核不是单向巧合。
 func TestUpdateAdminTLS_multipartQueryConflictBodyWinsBothDirections(t *testing.T) {
+	withIsolatedGlobal(t)
 	initializeRuleFeatureTestDB(t)
 	certPEM, keyPEM, err := generateTestCert("query-conflict.example.com", time.Now().Add(-time.Hour), time.Now().Add(24*time.Hour))
 	if err != nil {

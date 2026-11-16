@@ -916,10 +916,10 @@ func (recovery *importQueueRecovery) finish() error {
 		return nil
 	}
 	recovery.done = true
-	if recovery.hold {
-		recovery.hold = false
-		services.EndConfigImportHold()
-	}
+	// 归一/注记先于屏障释放：EndConfigImportHold 会同步兑现导入期间登记的
+	// 延迟启动（升主/daemon 换代），拉起 StartACME→recoverJobs 消费 waiting_ca
+	// 存量——若归一未先行，恢复链按「已有有效证书」分支复活或整轮重签，绕过
+	// 保窗归一与冷却（recoverJobs 的「本查询时库内不存在 waiting_ca 行」不变式）。
 	// 导入提交可能带回旧备份的 waiting_ca 存量（waiting_ca 停车状态已退役，
 	// 启动迁移只覆盖启动路径）：停摆统计与恢复重排消费这些行之前先保窗归一
 	// 为 failed（db.NormalizeWaitingCACertJobs 单源，与启动迁移同谓词）。
@@ -929,7 +929,13 @@ func (recovery *importQueueRecovery) finish() error {
 	if err != nil {
 		// 归一失败不否决已提交的导入，但队列不得停留停止态：导入前在跑
 		// （wasActive）就恢复活动态，失败经 recoveryErr 专项披露。
+		// 屏障先释放（归一/注记已尝试完毕，延迟启动兑现不再绕过归一）；
+		// Resume 受 hold 门控，未释放时是 no-op。
 		recovery.recoveryErr = fmt.Errorf("归一导入带入的 waiting_ca 证书任务失败: %w", err)
+		if recovery.hold {
+			recovery.hold = false
+			services.EndConfigImportHold()
+		}
 		if recovery.manager != nil && recovery.wasActive {
 			recovery.manager.Resume()
 		}
@@ -947,6 +953,10 @@ func (recovery *importQueueRecovery) finish() error {
 	annotated, annotateErr := db.AnnotateExpiredCooldownMessages()
 	if annotateErr != nil {
 		recovery.recoveryErr = fmt.Errorf("追加导入带入的过期冷却终态注记失败: %w", annotateErr)
+		if recovery.hold {
+			recovery.hold = false
+			services.EndConfigImportHold()
+		}
 		if recovery.manager != nil && recovery.wasActive {
 			recovery.manager.Resume()
 		}
@@ -956,6 +966,16 @@ func (recovery *importQueueRecovery) finish() error {
 		detail := fmt.Sprintf("备份带入 %d 条冷却窗口已过期的失败证书任务，message 已追加终态说明（冷却已过期，可直接重试）", annotated)
 		services.Logf("info", "配置导入/还原：%s", detail)
 		services.RecordAuditLog("system", "导入注记", "证书任务", services.FormatAuditDetail(services.AuditSourcePart("config_import"), detail), "")
+	}
+	if recovery.hold {
+		recovery.hold = false
+		services.EndConfigImportHold()
+	}
+	// 导入恢复的 failed+冷却窗口行属 cert-waiting-ca 在途信号，但默认调度
+	// 关闭/全终态自停后无人唤醒——与「全部入队成功路径必须唤醒唯一属主」
+	// 家族契约对齐（续期扫描兜底最长 6h，补扫节拍 30s）。有活才唤醒。
+	if services.CertJobsActive() {
+		services.WakeCertWaitingCAForEnqueuedJob()
 	}
 	if recovery.manager == nil || !recovery.wasActive {
 		recovery.stalledNonTerminal, recovery.stalledUnknown = countStalledNonTerminalCertJobs()
@@ -1279,10 +1299,11 @@ func restoreRowStatement(table string, row map[string]any, valid map[string]bool
 
 // tcpRuleDeadFieldsResetSQL：TCP 行 HTTP 专属死值清零（HTTP 头/健康检查/
 // 压缩/请求体/NTLM/force_http1 + TLS 来源、跳转与材料 + 代理超时族七列 +
-// 自定义路由 + dynamic_dns + strategy(cookie) + dns_family(ipv4) + 阶段页四列
-// + log_enabled，共 32 列 SET）——字面量单源已下沉 db 包（启动迁移与导入归一
-// 共用同一常量，消灭跨包双份逐字镜像的漂移面）；本别名仅保留 handlers 包内
-// 既有引用点与派生（下方单规则变体）。
+// 自定义路由 + dynamic_dns + strategy(cookie/空串) + dns_family(ipv4)
+// + log_enabled，共 28 列 SET；规则级阶段页四列已停用（2026-11 裁定）不入列）
+// ——字面量单源已下沉 db 包（启动迁移与导入归一共用同一常量，消灭跨包
+// 双份逐字镜像的漂移面）；本别名仅保留 handlers 包内既有引用点与派生
+// （下方单规则变体）。列数与 db.TCPRuleDeadFieldsResetSQL 注释同源。
 const tcpRuleDeadFieldsResetSQL = db.TCPRuleDeadFieldsResetSQL
 
 // tcpRulePathRulesResetSQL：TCP 规则残留路径规则清理（TCP 自愈族）——
@@ -3504,6 +3525,38 @@ func validateV2BackupSecurityPoliciesWithQuerier(ctx context.Context, tables map
 				policy["cc_queue_wait_sec"] = int64(0)
 			} else {
 				policy["cc_queue_wait_sec"] = int64(ccQueueWaitOrDefault(int(n)))
+			}
+		}
+		// CC 数值四列导入门（导入不宽于保存侧——三态列已设门，数值列同批补齐）：
+		// 复用保存侧 cc*OrDefault 单源钳制。运行期护栏兜底（lbhuman evalCC 对
+		// 非正值守卫），越界显式值最多削弱/关闭检测，不构成 WAF 绕过；本门是
+		// 防御纵深一致性（手造备份不得突破保存侧值域）。缺失键走 NULL→默认通道。
+		if raw, exists := policy["cc_rps_limit"]; exists {
+			if n, ok := backupInteger(raw); !ok {
+				policy["cc_rps_limit"] = int64(db.DefaultCCRPSLimit)
+			} else {
+				policy["cc_rps_limit"] = int64(ccRPSLimitOrDefault(int(n)))
+			}
+		}
+		if raw, exists := policy["cc_rps_window"]; exists {
+			if n, ok := backupInteger(raw); !ok {
+				policy["cc_rps_window"] = int64(db.DefaultCCRPSWindow)
+			} else {
+				policy["cc_rps_window"] = int64(ccWindowOrDefault(int(n)))
+			}
+		}
+		if raw, exists := policy["cc_4xx_ratio"]; exists {
+			if n, ok := backupInteger(raw); !ok {
+				policy["cc_4xx_ratio"] = int64(db.DefaultCC4xxRatio)
+			} else {
+				policy["cc_4xx_ratio"] = int64(cc4xxRatioOrDefault(int(n)))
+			}
+		}
+		if raw, exists := policy["cc_session_ua_threshold"]; exists {
+			if n, ok := backupInteger(raw); !ok {
+				policy["cc_session_ua_threshold"] = int64(db.DefaultCCSessionUAThreshold)
+			} else {
+				policy["cc_session_ua_threshold"] = int64(ccIntOrDefault(int(n), db.DefaultCCSessionUAThreshold))
 			}
 		}
 		mode := backupString(policy["mode"])
@@ -6956,9 +7009,11 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 	// 面此前缺同一接线——缓存保留旧密钥会让下一次渲染的 lb_human.secret 与
 	// 库分叉至重启（已签发挑战凭证按旧密钥校验）。携带即失效（幂等；密钥
 	// 未变化时重读同值，无副作用）；仅在提交成功后执行，回滚路径不触碰缓存。
+	humanSecretConvergeNeeded := false
 	if backup.Config != nil {
 		if _, carriesHumanSecret := backup.Config[configBackupHumanSecretColumn]; carriesHumanSecret {
 			services.ResetHumanSecretCache()
+			humanSecretConvergeNeeded = true
 		}
 	}
 	if len(pendingDeletedNodePins) > 0 {
@@ -6989,6 +7044,19 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 		if note != "" {
 			reseedApplyFailed = true
 			recordAudit(c, action+"警告", "配置备份", "默认拦截页面重新播种后"+note)
+		}
+	}
+	// human_secret 运行配置收敛：事务内应用读的是已提交库旧值（WAL 下未提交
+	// tx 对 db.DB 读者不可见），提交后 reset 缓存只保证未来渲染正确——携带
+	// 密钥变更且 reseed 未触发重载时，运行 Caddy 的 lb_human.secret 停留旧值
+	// 直至下一次无关重载（集群形态主从密钥分叉，用户反复被挑战）。与集群
+	// apply 链「写密钥+reset 后提交后强制重载」对齐；reseed 已重载时该次
+	// 应用已读 reset 后的新值，不重复发射。
+	if humanSecretConvergeNeeded && !reseedBlockPageNeeded {
+		note := h.caddyApplyNoteLocked()
+		if note != "" {
+			reseedApplyFailed = true
+			recordAudit(c, action+"警告", "配置备份", "人机密钥收敛重载失败"+note)
 		}
 	}
 

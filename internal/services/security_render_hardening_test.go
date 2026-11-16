@@ -390,9 +390,18 @@ func TestSecurityPolicyContext_allowIntersectionCached(t *testing.T) {
 
 func resetCRSRuleIndexCacheForHardeningTest(t *testing.T) {
 	t.Helper()
+	// 快照并在用例结束还原：只清不还时，前序用例的索引缓存（或本用例写入的
+	// 缓存）会跨用例滞留，-shuffle/单测隔离下与真实目录态分叉（命中陈旧索引
+	// 或把本用例夹具当稳态）。
 	crsRuleIndexMu.Lock()
+	prevCache, prevKey := crsRuleIndexCache, crsRuleIndexKey
 	crsRuleIndexCache, crsRuleIndexKey = nil, ""
 	crsRuleIndexMu.Unlock()
+	t.Cleanup(func() {
+		crsRuleIndexMu.Lock()
+		crsRuleIndexCache, crsRuleIndexKey = prevCache, prevKey
+		crsRuleIndexMu.Unlock()
+	})
 }
 
 // crs_excluded_rules 渲染侧条目上限（与 crs_rule_groups 同构的防御深度）：

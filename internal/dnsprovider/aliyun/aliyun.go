@@ -440,7 +440,16 @@ func (p *Provider) listChallengeRecords(ctx context.Context, zone, subDomain str
 		// RR 判进展会误判无进展提前收手，漏扫后续页的目标记录（复用扫描漏检
 		// +残余排空漏删）。seen 跨页去重防重复收集，RR 过滤只作用于 collected。
 		repeatedPage := true
+		hasValidID := false
 		for _, record := range result.DomainRecords.Record {
+			// 畸形空记录 ID 不参与去重折叠：整页空 ID 会被 seen 折叠成
+			// 「已见」误判无进展提前收手（后续页真实记录漏扫），空 ID 进
+			// collected 还会污染复用/清理（与 createRecord 的空 ID 不复用
+			// 同口径）——整条跳过，不登记 seen、不进 collected。
+			if record.RecordId == "" {
+				continue
+			}
+			hasValidID = true
 			if seen[record.RecordId] {
 				continue
 			}
@@ -453,16 +462,26 @@ func (p *Provider) listChallengeRecords(ctx context.Context, zone, subDomain str
 		}
 		fetched := int64(len(result.DomainRecords.Record))
 		fetchedTotal += fetched
-		// 终止按累计实际取到数（与 dnspod/tencent/cloudflare 同口径）：
-		// 服务端可能按更小页容量返回，"页号×请求页大小" 会提前终止漏扫。
-		// 空页或整页重复（无进展）即收手——TotalCount 失真偏大且服务端重复
-		// 下发整页时不得空转到页数上限（与 dnspod/tencent 同构）。
-		if fetched == 0 || repeatedPage {
+		// 终止与 dnspod/tencent/cloudflare 统一（total 优先、短页兜底、按
+		// 实际取到条数推进游标）：服务端可能按更小页容量返回，"页号×请求页
+		// 大小" 会提前终止漏扫。空页或整页重复（无进展）即收手——TotalCount
+		// 失真偏大且服务端重复下发整页时不得空转到页数上限。
+		// 整页畸形（无任何有效 ID）不构成「重复页」证据：没有可追踪的记录
+		// 可判重，按 total/短页口径继续判定，不得折叠成无进展提前收手。
+		if fetched == 0 || (repeatedPage && hasValidID) {
 			return collected, nil
 		}
-		// TotalCount 缺失/失真（≤0）时短页兜底（与 cloudflare 同口径）：
-		// 不足请求页大小即末页，页数上限兜底防失控翻页。
-		if (result.TotalCount > 0 && fetchedTotal >= result.TotalCount) || fetched < challengeListPageSize {
+		// total>0 时按累计取到数判定：中途短页（页间漂移/服务端单页容量
+		// 波动）继续翻页不漏扫；total 缺失/失真（≤0）才退回短页兜底
+		// （不足请求页大小即末页），页数上限兜底防失控翻页。
+		total := result.TotalCount
+		if total > 0 {
+			if fetchedTotal >= total {
+				return collected, nil
+			}
+			continue
+		}
+		if fetched < challengeListPageSize {
 			return collected, nil
 		}
 	}

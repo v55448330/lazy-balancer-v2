@@ -32,7 +32,11 @@ var crsDirectivesDir = defaultCRSLiveDir
 // 列序与同一 scanSecurityPolicyRow。此前两处各维护一份 32 列 SELECT + Scan，
 // 列序在 ip_whitelist / ip_whitelist_enabled 处对调——字段错位风险没有任何
 // 机械防线（两路径的读结果必须在字段级一致）。
-const securityPolicyRowColumns = `id, name, COALESCE(description,''), COALESCE(mode,'off'), COALESCE(anomaly_threshold,0),
+//
+// 人机/CC 列的 COALESCE 回退值绑定 db.Default* 治理常量（db 包单源，与 DDL
+// DEFAULT/启动回填同源）：私抄字面量会在默认值调整后静默分叉。缓冲值为
+// 常量拼接，组装一次（DB 查询串），不在热路径重复格式化。
+var securityPolicyRowColumns = `id, name, COALESCE(description,''), COALESCE(mode,'off'), COALESCE(anomaly_threshold,0),
 		COALESCE(ip_acl_mode,''), COALESCE(ip_acl_list,'[]'), COALESCE(ip_acl_enabled,0),
 		COALESCE(ip_whitelist_enabled,1), COALESCE(ip_whitelist,'[]'), COALESCE(ip_blacklist,'[]'),
 		COALESCE(crs_rule_groups,'[]'), COALESCE(crs_excluded_rules,'[]'), COALESCE(custom_rules,'[]'),
@@ -40,10 +44,10 @@ const securityPolicyRowColumns = `id, name, COALESCE(description,''), COALESCE(m
 		COALESCE(geoip_countries,'[]'), COALESCE(geoip_mode,'off'), COALESCE(geoip_crawler_exempt,0), COALESCE(geoip_crawler_engines,'[]'),
 		COALESCE(waf_check_response,0), COALESCE(log_request_body,0),
 		COALESCE(ip_acl_list_refs,'[]'), COALESCE(ip_whitelist_refs,'[]'), COALESCE(policy_type,''), COALESCE(trust_detection,0),
-		COALESCE(human_verify_mode,'off'), COALESCE(human_verify_type,'slider'), COALESCE(human_verify_ttl,30),
+		COALESCE(human_verify_mode,'off'), COALESCE(human_verify_type,'` + db.DefaultHumanVerifyType + `'), COALESCE(human_verify_ttl,` + strconv.Itoa(db.DefaultHumanVerifyTTL) + `),
 		COALESCE(human_exempt_paths,'[]'),
-		COALESCE(cc_detect_enabled,0), COALESCE(cc_rps_limit,40), COALESCE(cc_rps_window,10),
-		COALESCE(cc_4xx_ratio,70), COALESCE(cc_session_anomaly,0), COALESCE(cc_session_ua_threshold,5),
+		COALESCE(cc_detect_enabled,0), COALESCE(cc_rps_limit,` + strconv.Itoa(db.DefaultCCRPSLimit) + `), COALESCE(cc_rps_window,` + strconv.Itoa(db.DefaultCCRPSWindow) + `),
+		COALESCE(cc_4xx_ratio,` + strconv.Itoa(db.DefaultCC4xxRatio) + `), COALESCE(cc_session_anomaly,0), COALESCE(cc_session_ua_threshold,` + strconv.Itoa(db.DefaultCCSessionUAThreshold) + `),
 		COALESCE(cc_trigger_action,'challenge'), COALESCE(cc_queue_wait_sec,0),
 		COALESCE(block_response_mode,'auto')`
 
@@ -216,12 +220,15 @@ func crsPoolFingerprintForChain() string {
 	return crsPoolFingerprint()
 }
 
-// crsPoolFingerprintEvals 是测试可观察的指纹求值计数器：批次级缓存的钉测
-// 断言同一轮全量渲染只求值一次（生产零消费，仅原子自增）。
-var crsPoolFingerprintEvals atomic.Int64
+// crsPoolFingerprintEvalsForTest 是测试可观察的指纹求值计数器：批次级缓存的
+// 钉测断言同一轮全量渲染只求值一次（生产零消费，仅生产渲染路径原子自增——
+// 自增点不可迁移，故宿主留驻产品文件并登记 testonly 绊线名单）。
+//
+// testseam: 生产路径自增、同包测试读取的观测计数器（宿主不可能在 *_test.go）。
+var crsPoolFingerprintEvalsForTest atomic.Int64
 
 func crsPoolFingerprint() string {
-	crsPoolFingerprintEvals.Add(1)
+	crsPoolFingerprintEvalsForTest.Add(1)
 	var version string
 	if db.DB == nil {
 		version = "unknown"

@@ -21,16 +21,25 @@ var humanAdminClient = &http.Client{Timeout: 2 * time.Second}
 // 同容错口径）。2s 超时，不阻塞总览加载。
 // 计数为进程累计（重启归零）：挑战成功不落安全事件（2026-11-13 用户裁定），
 // 通过数/通过率以本端点为权威源；CC「封禁」响应退役后不再有 bans。
-// events_dropped/events_deliver_failed 为人机事件上报的丢失对账计数
-// （lbhuman/events.go 契约：队列满丢弃/投递失败丢弃），代理原样透传——
-// 丢失量必须可对账，不得在面板代理层静默丢弃。
+// events_dropped/events_deliver_failed/events_shutdown_lost 为人机事件上报的
+// 丢失对账计数（lbhuman/events.go 契约：队列满丢弃/投递失败丢弃/关停预算内
+// 未投递丢弃），cc_triggers 为 CC 触发原因分布——代理原样透传，丢失量与触发
+// 分布必须可对账，不得在面板代理层静默丢弃（键集与插件 humanStatsPayload
+// 互锁钉测：connections_list_test.go）。
 func (h *Handlers) GetHumanVerifyStats(c *gin.Context) {
+	type ccTriggers struct {
+		RPSSpike       int64 `json:"rps_spike"`
+		Ratio4xx       int64 `json:"4xx_ratio"`
+		SessionAnomaly int64 `json:"session_anomaly"`
+	}
 	type stats struct {
-		Challenges          int64 `json:"challenges"`
-		Passes              int64 `json:"passes"`
-		Fails               int64 `json:"fails"`
-		EventsDropped       int64 `json:"events_dropped"`
-		EventsDeliverFailed int64 `json:"events_deliver_failed"`
+		Challenges          int64      `json:"challenges"`
+		Passes              int64      `json:"passes"`
+		Fails               int64      `json:"fails"`
+		CCTriggers          ccTriggers `json:"cc_triggers"`
+		EventsDropped       int64      `json:"events_dropped"`
+		EventsDeliverFailed int64      `json:"events_deliver_failed"`
+		EventsShutdownLost  int64      `json:"events_shutdown_lost"`
 	}
 	out := stats{}
 	resp, err := humanAdminClient.Get(h.cfg.CaddyAdminURL + "/lb/human/stats")

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -145,7 +146,11 @@ func auditLogCountCacheKey(where string, args []interface{}) string {
 	b.WriteString(where)
 	for _, arg := range args {
 		b.WriteString("\x1f")
-		b.WriteString(fmt.Sprint(arg))
+		// 值侧转义分隔符：筛选值可含字面 US 控制符（URL %1F 送达，无控制
+		// 字符门）——裸拼接会让 username="a\x1fb"&action="c" 与
+		// username="a"&action="b\x1fc" 生成同一键，TTL 内跨筛选串用 total。
+		// strconv.Quote 转义不可打印字符，键与筛选条件一一对应。
+		b.WriteString(strconv.Quote(fmt.Sprint(arg)))
 	}
 	return b.String()
 }

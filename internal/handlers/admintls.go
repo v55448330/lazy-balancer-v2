@@ -523,7 +523,7 @@ func (h *Handlers) UpdateAdminTLS(c *gin.Context) {
 		enabled, mode, cert, key)
 	if err != nil {
 		auditAdminTLSFailure(c, "写入 HTTPS 配置失败: "+err.Error())
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.Tf(c, "k_fdfd248a", apimsg.ErrMsg(c, err))})
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.Tf(c, "k_a4acc30a", apimsg.ErrMsg(c, err))})
 		return
 	}
 	if n, rowsErr := res.RowsAffected(); rowsErr != nil || n != 1 {

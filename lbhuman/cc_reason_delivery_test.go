@@ -28,7 +28,7 @@ func TestHumanEventDelivery_ccTriggerReasonCarried(t *testing.T) {
 	resetHumanEventPosterForTest(t, srv.URL)
 
 	stashCCTriggerReason("lb-cc", "203.0.113.90", "session_anomaly")
-	reportHumanEvent("lb-cc", "203.0.113.90", http.MethodGet, "/", "ua", "challenge")
+	reportHumanEvent("lb-cc", "203.0.113.90", http.MethodGet, "/", "challenge")
 	if !drainHumanEventsForTest(10 * time.Second) {
 		t.Fatal("queue must drain")
 	}
@@ -53,8 +53,8 @@ func TestHumanEventDelivery_ccTriggerReasonConsumedOnce(t *testing.T) {
 	resetHumanEventPosterForTest(t, srv.URL)
 
 	stashCCTriggerReason("lb-cc2", "203.0.113.91", "rps_spike")
-	reportHumanEvent("lb-cc2", "203.0.113.91", http.MethodGet, "/", "ua", "challenge")
-	reportHumanEvent("lb-cc2", "203.0.113.91", http.MethodGet, "/", "ua", "challenge")
+	reportHumanEvent("lb-cc2", "203.0.113.91", http.MethodGet, "/", "challenge")
+	reportHumanEvent("lb-cc2", "203.0.113.91", http.MethodGet, "/", "challenge")
 	if !drainHumanEventsForTest(10 * time.Second) {
 		t.Fatal("queue must drain")
 	}
@@ -82,7 +82,7 @@ func TestHumanEventDelivery_noStashNoReason(t *testing.T) {
 	defer srv.Close()
 	resetHumanEventPosterForTest(t, srv.URL)
 
-	reportHumanEvent("lb-force", "203.0.113.92", http.MethodGet, "/", "ua", "challenge")
+	reportHumanEvent("lb-force", "203.0.113.92", http.MethodGet, "/", "challenge")
 	if !drainHumanEventsForTest(10 * time.Second) {
 		t.Fatal("queue must drain")
 	}

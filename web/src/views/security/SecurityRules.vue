@@ -1200,9 +1200,14 @@ const toggleIP2RegionV6 = async (val: boolean | string | number) => {
   if (ip2regionInfo.value.v6_enabled === val) return
   savingIP2RegionV6.value = true
   try {
+    // 拦截器已解包：res 即响应信封（message/messageKey 在信封层，res.data 是载荷）——
+    // 原读 res.data?.message 恒 undefined，退化 200 被吞成「成功」。
     const res = await request.put<APIResponse<{ message?: string }>>('/security/ip2region/v6-enabled', { enabled: !!val })
-    if (res.data?.message && res.data.message !== '已更新') {
-      ElMessage.warning(res.data.message)
+    // 退化 200（库开关已落库、Caddy 重载失败）判定走稳定语义键（语言无关）：
+    // k_7d87740a=已保存但重载失败（需用户知晓「待下次重载生效」），
+    // k_573eb966=已更新。不用 zh 字面量比较。
+    if (res.messageKey === 'k_7d87740a') {
+      ElMessage.warning(res.message || t('common.app.views.secRules.lib.v6ReloadFailed'))
     } else {
       mfaAwareSuccess(t('common.app.views.secRules.lib.v6ToggleResult', { state: val ? t('common.app.views.secRules.lib.stateOn') : t('common.app.views.secRules.lib.stateOff') }))
     }
@@ -1643,6 +1648,9 @@ const onImportEntriesFileChange = (event: Event): void => {
     const outcome = computeImportOutcome(existingValues, importLines, (t) => parseEntryLine(t))
     // 新条目直接渲染进条目表（跳到首个新增条目所在页）；重复条目弹窗点名
     ipListForm.value.entries.push(...outcome.newEntries)
+    // 跳页落地（原注释声称跳页但未执行）：新增恒追加到末尾，末页即首个新增条目
+    // 所在页；与 addIpListEntry 同式（ceil(条目数/页大小)）。
+    ipListEntryPage.value = Math.max(1, Math.ceil(ipListForm.value.entries.length / ipListEntryPageSize))
     pendingInvalidCount.value = outcome.invalidLines.length
     pendingInvalidLineNos.value = outcome.invalidLines.slice(0, 10).join('、') + (outcome.invalidLines.length > 10 ? t('common.app.views.secRules.msgs.etcSuffix') : '')
     if (outcome.duplicates.length > 0) {

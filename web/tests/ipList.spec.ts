@@ -20,7 +20,7 @@ import {
   parseIPList,
   sharedEntriesCache,
 } from '../src/utils/securityStages.ts'
-import { code, goConstInt, repoCode, section } from './_helpers.ts'
+import { code, elementSlice, goConstInt, repoCode, section } from './_helpers.ts'
 
 
 test('规则流程只拉本规则阶段 0 策略的信任引用', () => {
@@ -386,8 +386,13 @@ test('导入提示：重复行号点名与口径说明接线（SecurityRules 导
   assert.match(page, /importDuplicateVisible\.value = true/, '存在重复必须弹窗点名具体条目')
   assert.match(page, /t\('common\.app\.views\.secRules\.importDup\.summary'/, '弹窗必须走口径词条键')
   assert.ok(code('src/locales/zh/views.ts').includes('以 IP 为准，同 IP 不同备注按首条为准'), '以 IP 为准口径必须在 zh 母本词条中')
-  assert.doesNotMatch(page, /待导入文件：/, '「待导入文件」提示条必须移除（点导入即判定）')
-  assert.doesNotMatch(page, /跳过重复并导入/, '弹窗只提示不执行导入（不得有执行按钮）')
+  // 结构负钉：导入重复弹窗只提示不执行——footer 不得有执行按钮/第二份导入流
+  // （裸中文「待导入文件/跳过重复并导入」负钉 i18n 后空转）。
+  const dupAt = page.indexOf('<el-dialog v-model="importDuplicateVisible"')
+  assert.ok(dupAt > 0, '导入重复弹窗必须存在')
+  const dupDialog = elementSlice(page, dupAt, 'el-dialog')
+  assert.doesNotMatch(dupDialog, /@click="(confirmImport|doImport|importAndSkip|applyImport)/, '弹窗不得有执行导入按钮')
+  assert.match(dupDialog, /@click="importDuplicateVisible = false"/, '弹窗唯一动作=知悉关闭')
   assert.match(page, /entries-head-bar/, '名单条目标题与查询区必须同行（右对齐、垂直居中）')
 })
 

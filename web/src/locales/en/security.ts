@@ -288,7 +288,7 @@ export default {
     "presetCurrent": "Current",
     preset: {
       conservative: { name: "Conservative", desc: "Counts only confirmed attacks, fixed ban duration, fewest false bans" },
-      standard: { name: "Standard", desc: "Counts all protection events, repeat offenders banned longer (current default)" },
+      standard: { name: "Standard", desc: "Counts all protection events with equal weight, no automatic escalation (current default)" },
       enhanced: { name: "Enhanced", desc: "Separates confirmed attacks from suspicious behavior; suspicion alone never bans — more sensitive, fewer false bans" },
     },
     "scopeGroupConfirmed": "Confirmed attacks",
@@ -354,6 +354,7 @@ export default {
     "enableNote1": "New bans take effect within about 1 minute; long-lived connections may be reset during reload",
     "enableNote2": "Under sustained attacks, at most one reload occurs per minute, with a small performance cost",
     "enableNote3": "Run in observation mode first and confirm the suggestions are accurate before enforcing bans",
+    "enableNote4": "IPv6 is banned by its /64 prefix: other addresses in the same /64 are affected too",
     "enableHowtoLabel": "How it takes effect",
     "enableHowtoText": "Reference the \"Auto-ban list\" address list in an IP access control (deny) policy",
     "disableConfirmTitle": "Disable auto-ban",

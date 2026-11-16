@@ -8,6 +8,7 @@ package services
 
 import (
 	"encoding/json"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -15,6 +16,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -25,9 +27,11 @@ func TestForwardAuthEngineEndToEnd(t *testing.T) {
 		t.Skipf("真实 Caddy 引擎不可用：PATH 中未找到 caddy（需含 forward_auth 所需标准模块）: %v", err)
 	}
 
-	backendHits := 0
+	// httptest handler 在服务 goroutine 执行、断言在测试 goroutine——跨
+	// goroutine 共享状态必须原子化（裸变量是数据竞争，-race 门不覆盖本 E2E）。
+	var backendHits atomic.Int64
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		backendHits++
+		backendHits.Add(1)
 		// 引擎级剥离实证（上游面）：内部控制头不得透传上游后端。
 		if leaked := leakedInternalControlHeaders(r); len(leaked) > 0 {
 			t.Errorf("backend received internal control headers: %v", leaked)
@@ -38,7 +42,8 @@ func TestForwardAuthEngineEndToEnd(t *testing.T) {
 	}))
 	defer backend.Close()
 
-	gatewayMode := "allow"
+	var gatewayMode atomic.Value // string: "allow"/"deny"
+	gatewayMode.Store("allow")
 	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			t.Errorf("gateway got method %s, want GET", r.Method)
@@ -51,7 +56,7 @@ func TestForwardAuthEngineEndToEnd(t *testing.T) {
 		if leaked := leakedInternalControlHeaders(r); len(leaked) > 0 {
 			t.Errorf("gateway received forged internal control headers: %v", leaked)
 		}
-		if gatewayMode == "deny" {
+		if gatewayMode.Load() == "deny" {
 			w.WriteHeader(http.StatusUnauthorized)
 			_, _ = w.Write([]byte("gateway-401-body"))
 			return
@@ -167,20 +172,22 @@ func TestForwardAuthEngineEndToEnd(t *testing.T) {
 	})
 
 	t.Run("401 原样透传", func(t *testing.T) {
-		gatewayMode = "deny"
-		hitsBefore := backendHits
+		gatewayMode.Store("deny")
+		hitsBefore := backendHits.Load()
 		resp, err := doForged("/denied")
 		if err != nil {
 			t.Fatalf("request: %v", err)
 		}
 		defer resp.Body.Close()
-		buf := make([]byte, 64)
-		n, _ := resp.Body.Read(buf)
-		if resp.StatusCode != 401 || string(buf[:n]) != "gateway-401-body" {
-			t.Fatalf("status=%d body=%q, want 401/gateway-401-body", resp.StatusCode, string(buf[:n]))
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatalf("read gateway body: %v", err)
 		}
-		if backendHits != hitsBefore {
-			t.Fatalf("backend received %d requests on unauthenticated path, want 0", backendHits-hitsBefore)
+		if resp.StatusCode != 401 || string(body) != "gateway-401-body" {
+			t.Fatalf("status=%d body=%q, want 401/gateway-401-body", resp.StatusCode, string(body))
+		}
+		if got := backendHits.Load(); got != hitsBefore {
+			t.Fatalf("backend received %d requests on unauthenticated path, want 0", got-hitsBefore)
 		}
 	})
 }

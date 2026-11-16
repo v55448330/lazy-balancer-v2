@@ -90,7 +90,6 @@ test('事件详情 WAF 摘要：组数经 normalizeCrsGroups，detection 模式�
   const dialog = code(dialogFile)
   const waf = section(dialog, 'const wafSummary = computed', '\n})')
   assert.match(waf, /normalizeCrsGroups\(/, 'CRS 组数必须归一（历史文件名前缀/重复/系统基础组不得把组数说大）')
-  assert.match(waf, /from '@\/utils\/crsGroups'|normalizeCrsGroups/, '归一函数必须自单源导入')
   assert.match(dialog, /import \{ normalizeCrsGroups \} from '@\/utils\/crsGroups'/)
   // detection 与 blocking/custom_only 同门（buildStage3Rows 的 CRS 评估面）
   assert.match(waf, /p\.mode === 'custom_only' \|\| p\.mode === 'blocking' \|\| p\.mode === 'detection'/, '自定义计数门必须含 detection')
@@ -121,15 +120,14 @@ test('autoban 口径标签单源：两视图都消费 utils/autobanStatus 的标
   }
 })
 
-// ── 大屏事件流：trust/challenged 徽标配色 ──────────────────────
-test('大屏事件流 trust/challenged 徽标有配色（绿/蓝，与 eventActionTone 同色族）', () => {
+// ── 大屏事件流：trust/challenged 死样式不得回潮 ─────────────────
+// feed 的 AttackEventSQLPredicate 整类排除 trust/challenged（事件流不可达），
+// 两条徽标配色规则已已删除——类名/样式任一回潮都是死代码回归。
+test('大屏事件流：trust/challenged 徽标类不存在（feed 整类排除，死样式删除回归钉）', () => {
   const screen = code('src/views/security/ThreatScreen.vue')
-  const trust = cssDeclarations(screen, '.act-trust')
-  assert.ok(trust.size > 0, '.act-trust 缺定义（trust 徽标无配色）')
-  assert.match(trust.get('color') ?? '', /#3ddc84|rgb/, 'trust 必须绿系（success 色族）')
-  const challenged = cssDeclarations(screen, '.act-challenged')
-  assert.ok(challenged.size > 0, '.act-challenged 缺定义（challenged 徽标无配色）')
-  assert.match(challenged.get('color') ?? '', /#7dd3fc|#38bdf8|rgb/, 'challenged 必须蓝系（primary 色族）')
+  for (const cls of ['.act-trust', '.act-challenged']) {
+    assert.ok(!screen.includes(cls), `${cls} 死样式不得回潮（feed 排除 trust/challenged，不可达）`)
+  }
 })
 
 // ── 总览累犯下钻：加载门（与事件页入口同口径）──────────────────

@@ -161,5 +161,8 @@ test('D2 分片上限单源：与后端批量端点常量同值', () => {
 test('退化判定单源：名单直接动作经 isCaddyApplyDegraded，不复制字面量', () => {
   const composable = code('src/composables/useTrustAssociation.ts')
   assert.match(composable, /import \{ isCaddyApplyDegraded \} from '@\/utils\/bulkApplyResult'/)
+  // 结构负钉：退化后缀字面量单源在 bulkApplyResult.CADDY_APPLY_FAILED_MARKER，
+  // 消费方不得复制第二份（裸中文引号字面量在 i18n/词条化后可能换形态逃逸）。
+  assert.doesNotMatch(composable, /CADDY_APPLY_FAILED_MARKER\s*=/, '不得本地复写退化标记常量')
   assert.doesNotMatch(composable, /['"]Caddy 配置应用失败['"]/, '不得复制退化后缀字面量')
 })

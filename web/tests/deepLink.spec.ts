@@ -60,4 +60,5 @@ test('深链交接入口：9 个 window.open 调用点全部走 pageUrl，视图
   assert.match(code('src/views/Rules.vue'), /get\(DEEP_LINK_PARAMS\.ruleSearch\)/)
   assert.match(code('src/views/security/SecurityRules.vue'), /get\(DEEP_LINK_PARAMS\.securityRulesTab\)/)
   assert.match(code('src/views/security/SecurityPolicies.vue'), /get\(DEEP_LINK_PARAMS\.policySearch\)/)
+  assert.match(code('src/views/security/SecurityPolicies.vue'), /get\(DEEP_LINK_PARAMS\.policyId\)/, 'sp（策略 ID 聚焦）消费侧必须走常量')
 })

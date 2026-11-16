@@ -12,11 +12,16 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"os/exec"
+	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -333,13 +338,16 @@ func TestAPIDocs_connectionsListExampleKeysMatchImplementation(t *testing.T) {
 }
 
 // 人机事件丢失对账计数必须经面板代理透传（lbhuman/events.go 契约：
-// events_dropped=队列饱和丢弃、events_deliver_failed=投递失败丢弃，
-// 经 /lb/human/stats 下发）——代理只解码三计数会让丢失量在面板侧不可对账。
+// events_dropped=队列饱和丢弃、events_deliver_failed=投递失败丢弃、
+// events_shutdown_lost=关停预算内未投递丢弃；cc_triggers=CC 触发原因分布，
+// 经 /lb/human/stats 下发）——代理只解码部分计数会让丢失量/触发分布在面板侧
+// 不可对账。插件键集 ⊇ 代理键集：插件新增键未入代理即红（文档示例同步归
+// apidocs.go，由主审协调 D6）。
 func TestGetHumanVerifyStats_passesThroughEventLossCounters(t *testing.T) {
 	setupSecurityPolicyTestDB(t)
 	admin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"challenges":12,"passes":9,"fails":3,"events_dropped":4,"events_deliver_failed":5}`))
+		_, _ = w.Write([]byte(`{"challenges":12,"passes":9,"fails":3,"events_dropped":4,"events_deliver_failed":5,"events_shutdown_lost":6,"cc_triggers":{"rps_spike":2,"4xx_ratio":1,"session_anomaly":3}}`))
 	}))
 	t.Cleanup(admin.Close)
 
@@ -363,7 +371,70 @@ func TestGetHumanVerifyStats_passesThroughEventLossCounters(t *testing.T) {
 			t.Fatalf("data[%s]=%v, want %v（丢失对账计数必须透传）body=%s", key, envelope.Data[key], want, rec.Body.String())
 		}
 	}
+	if got, _ := envelope.Data["events_shutdown_lost"].(float64); got != 6 {
+		t.Fatalf("events_shutdown_lost=%v, want 6（关停丢失计数必须透传）body=%s", envelope.Data["events_shutdown_lost"], rec.Body.String())
+	}
+	triggers, _ := envelope.Data["cc_triggers"].(map[string]any)
+	for key, want := range map[string]float64{"rps_spike": 2, "4xx_ratio": 1, "session_anomaly": 3} {
+		if got, _ := triggers[key].(float64); got != want {
+			t.Fatalf("cc_triggers[%s]=%v, want %v（触发原因分布必须透传）body=%s", key, triggers[key], want, rec.Body.String())
+		}
+	}
+	// 插件⊇代理互锁：lbhuman/admin.go humanStatsPayload 的 json 键集是插件
+	// 发射面单源；代理漏解码任一键 = 面板静默丢弃（本条发现的形态）。
+	pluginKeys := lbhumanStatsPayloadKeys(t)
+	for key := range mapKeysOf(envelope.Data) {
+		if !pluginKeys[key] {
+			t.Fatalf("代理键 %q 不在插件 humanStatsPayload 键集（契约漂移）", key)
+		}
+	}
+	for key := range pluginKeys {
+		if _, ok := envelope.Data[key]; !ok {
+			t.Fatalf("插件键 %q 被面板代理丢弃（human_stats.go stats 结构体漏字段）", key)
+		}
+	}
 	// 文档示例键集与代理响应双向对账（新增键不得漂移）。
 	docExample := docResponseExample(t, "GET /security/human/stats")
 	assertKeySetsEqual(t, "human/stats", mapKeysOf(docExample), mapKeysOf(envelope.Data))
+}
+
+// lbhumanStatsPayloadKeys 从插件源码（lbhuman/admin.go humanStatsPayload）
+// 提取 json 键集——插件发射面单源。lbhuman 是独立 module（Caddy 插件），
+// handlers 不可 import，键集互锁走源码解析（与 IPC 契约双包镜像钉同模式）。
+func lbhumanStatsPayloadKeys(t *testing.T) map[string]bool {
+	t.Helper()
+	fset := token.NewFileSet()
+	node, err := parser.ParseFile(fset, "../../lbhuman/admin.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parse lbhuman/admin.go: %v", err)
+	}
+	keys := map[string]bool{}
+	ast.Inspect(node, func(n ast.Node) bool {
+		ts, ok := n.(*ast.TypeSpec)
+		if !ok || ts.Name.Name != "humanStatsPayload" {
+			return true
+		}
+		st, ok := ts.Type.(*ast.StructType)
+		if !ok {
+			t.Fatal("humanStatsPayload 非结构体形态（插件契约漂移）")
+		}
+		for _, f := range st.Fields.List {
+			if f.Tag == nil {
+				continue
+			}
+			tag, err := strconv.Unquote(f.Tag.Value)
+			if err != nil {
+				continue
+			}
+			key := strings.Split(reflect.StructTag(tag).Get("json"), ",")[0]
+			if key != "" && key != "-" {
+				keys[key] = true
+			}
+		}
+		return false
+	})
+	if len(keys) == 0 {
+		t.Fatal("humanStatsPayload 键集提取为空（结构体改名/漂移，互锁失效）")
+	}
+	return keys
 }

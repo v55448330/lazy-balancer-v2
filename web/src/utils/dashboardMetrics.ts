@@ -14,7 +14,7 @@ export const buildRuleMetricsUnavailable = (
   return [rule.caddy_id, rule.enabled && (!metricsAvailable || !hasMetrics)]
 }))
 
-// 问题：TCP 单规则指标按上游地址汇总——caddy-l4（v0.1.2）L4 指标
+// 问题：TCP 单规则指标按上游地址汇总——caddy-l4（v0.1.3）L4 指标
 //（caddy_layer4_proxy_connections_total/active_connections）仅携带 upstream
 // 标签，无 server/listener/rule 级标签，引擎层面无法按规则拆分；多条 TCP
 // 规则共享同一上游地址时各规则显示同一跨规则合计值。UI 必须明示该口径

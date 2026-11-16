@@ -528,7 +528,14 @@ func (p *Provider) listRecordsByName(ctx context.Context, zoneID, recordName str
 			break
 		}
 		repeatedPage := true
+		hasValidID := false
 		for _, record := range pageRecords {
+			// 畸形空记录 ID 不参与去重折叠（整页空 ID 不得误判无进展，
+			// 与 aliyun/dnspod/tencent 同口径）：整条跳过。
+			if record.ID == "" {
+				continue
+			}
+			hasValidID = true
 			// 无进展守卫按记录 ID 判定（先于 Type/名称精确收窄，与 aliyun 同
 			// 骨架）：整页非目标记录不得误判无进展提前收手漏扫后续页。
 			if seen[record.ID] {
@@ -545,10 +552,13 @@ func (p *Provider) listRecordsByName(ctx context.Context, zoneID, recordName str
 			collected = append(collected, enumeratedRecord{recordID: record.ID, value: record.Content})
 		}
 		fetchedTotal += fetched
-		if fetched == 0 || repeatedPage {
+		// 整页畸形（无任何有效 ID）不构成「重复页」证据：没有可追踪的记录
+		// 可判重，按 total/短页口径继续判定，不得折叠成无进展提前收手。
+		if fetched == 0 || (repeatedPage && hasValidID) {
 			break
 		}
-		if total := envelope.ResultInfo.TotalCount; total > 0 {
+		total := envelope.ResultInfo.TotalCount
+		if total > 0 {
 			if fetchedTotal >= total {
 				break
 			}

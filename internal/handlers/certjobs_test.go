@@ -200,6 +200,7 @@ func TestRetryCertJob_rejects_inactive_rule_atomically(t *testing.T) {
 }
 
 func TestRetryCertJob_concurrent_status_change_returns_refresh_message(t *testing.T) {
+	withIsolatedGlobal(t)
 	// worker 在 SELECT 与 UPDATE 之间流转状态时，409 文案应区分归因。
 	h := newBackupTestHandlers(t)
 	services.ResetCAQueueManagerForTest()
@@ -689,6 +690,7 @@ func TestCertJobOperationLock_serializes_retry_and_delete(t *testing.T) {
 }
 
 func TestRetryCertJob_does_not_acquire_caddyOpMu(t *testing.T) {
+	withIsolatedGlobal(t)
 	// 锁序回归网：DeleteCertJob 以 caddyOpMu→certJobOperationLock 顺序持锁，
 	// RetryCertJob 只持 certJobOperationLock。若未来 RetryCertJob 在 operationLock
 	// 临界区内再获取 caddyOpMu，即与 DeleteCertJob 构成 AB-BA 死锁——现有测试
@@ -729,6 +731,7 @@ func TestRetryCertJob_does_not_acquire_caddyOpMu(t *testing.T) {
 }
 
 func TestRetryCertJob_reread_row_deleted_returns_404(t *testing.T) {
+	withIsolatedGlobal(t)
 	// UPDATE 0 行后重读若返回 scanErr（SQLITE_BUSY 等瞬时错误），
 	// 不能落入通用 409 把 DB 错误归因为规则禁用——必须显式 500。
 	// 行被并发删除（ErrNoRows）从 500 细分为 404（对齐 DeleteCertJob
@@ -1760,5 +1763,42 @@ func TestRetryCertJob_failedCooldownManualOverride(t *testing.T) {
 	}
 	if rejectionCount != 1 {
 		t.Fatalf("rejection audit=%d, want 1（真实失败路径形态不变：重试失败+结果：冷却中）", rejectionCount)
+	}
+}
+
+// Given failed 冷却中的任务手动重签已迁移（changed=true，冷却窗口已清），
+// 随后 provider 解析失败（显式选择已禁用）。
+// When 重试入口返回 500。
+// Then 失败路径同样留「越过失败冷却」独立行（与成功路径 cooldown_override
+// 对称；CA-force 族 changed=true+err 留痕同口径）。
+func TestRetryCertJob_failedCooldownOverrideDisclosedOnEnqueueFailure(t *testing.T) {
+	h := newBackupTestHandlers(t)
+	services.ResetCAQueueManagerForTest()
+	services.InitCAQueueManager(func() error { return nil }, t.TempDir())
+	services.GetCAQueueManager().Start()
+	startCertQueueDispatchForTest(t)
+	t.Cleanup(services.ResetCAQueueManagerForTest)
+	if _, err := db.DB.Exec(`INSERT INTO ca_providers (id,name,provider,directory_url,credentials,max_concurrent,min_interval_ms,enabled) VALUES (77,'disabled-ca','letsencrypt','https://acme.example.test/dir','{}',1,0,0);
+		INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enabled,enable_tls,tls_source,acme_config_id,ca_provider_id)
+		VALUES ('lb_cdov_fail','cdov-fail','http','cdov-fail.example.test',8080,1,1,'acme_dns',0,77);
+		INSERT INTO cert_jobs (rule_id,domain,status,message,ca_provider_id,updated_at) VALUES
+			('lb_cdov_fail','cdov-fail.example.test','failed','签发失败',77,datetime('now','-1 minutes'))`); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.POST("/jobs/:id/retry", h.RetryCertJob)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/jobs/1/retry", nil))
+	if response.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d body=%s, want 500（provider 解析失败）", response.Code, response.Body.String())
+	}
+	var overrideCount int
+	if err := db.AuditDB.QueryRow(`SELECT COUNT(*) FROM audit_log
+		WHERE action='重试' AND resource='证书任务' AND detail LIKE '%越过失败冷却%' AND detail LIKE '%结果：越过失败冷却%'`).Scan(&overrideCount); err != nil {
+		t.Fatalf("read audit: %v", err)
+	}
+	if overrideCount != 1 {
+		t.Fatalf("cooldown_override 留痕=%d, want 1（changed=true+err 失败路径同样留越冷痕）", overrideCount)
 	}
 }

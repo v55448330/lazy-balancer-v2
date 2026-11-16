@@ -604,10 +604,10 @@ import LogStorageBar from '@/components/LogStorageBar.vue'
 import TriggerDetailDialog from '@/components/events/TriggerDetailDialog.vue'
 import AccessibleLink from '@/components/common/AccessibleLink.vue'
 import { formatDurationUs, isWafDurationFamily, triggerStageFamily } from '@/utils/securityStages'
-import { TRIGGERED_CATEGORIES, serializeTriggeredFilter, CRAWLER_FAMILY_LABEL } from '@/utils/triggeredFilter'
+import { TRIGGERED_CATEGORIES, serializeTriggeredFilter } from '@/utils/triggeredFilter'
 import { ANOMALY_SCORE_HIGH, ANOMALY_SCORE_MID } from '@/utils/severityScale'
 import { DEEP_LINK_PARAMS, pageUrl } from '@/utils/deepLink'
-import { autobanStateLabel, autobanStatValue, isAutobanIneffective, autobanSuggestedDurationKey, autobanDurationLabel, autobanEscalationShortKey, autobanEscalationLadder, suggestionBand, autobanScopeLabel, isAutobanScopeMember, type SuggestionBand } from '@/utils/autobanStatus'
+import { autobanStateLabel, autobanStatValue, isAutobanIneffective, autobanSuggestedDurationKey, autobanDurationLabel, autobanEscalationShortKey, autobanEscalationLadder, autobanIdentityDisplay, suggestionBand, autobanScopeLabel, isAutobanScopeMember, type SuggestionBand } from '@/utils/autobanStatus'
 import { AUTOBAN_PRESETS, AUTOBAN_PRESET_IDS, AUTOBAN_SUSPICION_MULTIPLIER_MIN, AUTOBAN_SUSPICION_MULTIPLIER_MAX, AUTOBAN_CONFIRM_FLOOR_RATIOS, matchAutobanPreset, type AutobanPresetId } from '@/utils/autobanPresets'
 import { autobanEntryExpired, autobanEntryRemaining } from '@/utils/autobanEntry'
 import { useIpListAdd } from '@/composables/useIpListAdd'
@@ -875,6 +875,7 @@ const autobanEnableConfirmHtml = computed(() => `
     <div class="autoban-confirm-note"><span class="autoban-confirm-dot"></span>${t('app.security.events.enableNote1')}</div>
     <div class="autoban-confirm-note"><span class="autoban-confirm-dot"></span>${t('app.security.events.enableNote2')}</div>
     <div class="autoban-confirm-note"><span class="autoban-confirm-dot"></span>${t('app.security.events.enableNote3')}</div>
+    <div class="autoban-confirm-note"><span class="autoban-confirm-dot"></span>${t('app.security.events.enableNote4')}</div>
   </div>
   <div class="autoban-confirm-howto"><span class="autoban-confirm-howto-label">${t('app.security.events.enableHowtoLabel')}</span>${t('app.security.events.enableHowtoText')}</div>
 </div>`)
@@ -1033,7 +1034,16 @@ const { addIpToList } = useIpListAdd()
 const banSuggestion = async (row: AutobanSuggestion): Promise<void> => {
   const listId = autobanStatus.value.list_id
   if (!listId || !autobanWritable.value) return
-  const ok = await addIpToList(row.ip, { id: listId, name: t('app.security.events.autobanListName'), entry_count: autobanStatus.value.list_entries }, { verb: t('app.security.events.banVerb') })
+  // 建议行的 ip 是后端身份键（IPv6 已按 /64 归一为网络地址，低 64 位全零）。
+  // 名单条目值必须经 autobanIdentityDisplay 转 CIDR 形态（<network>::/64）：
+  // 后端 validIPOrCIDR 拒绝 IPv6 裸网络地址——裸地址只封该网络地址单主机，
+  // 且与 /64 身份键同键，会让该 /64 整段自动封禁被「已在名单」永久抑制。
+  const value = autobanIdentityDisplay(row.ip)
+  const ok = await addIpToList(value, { id: listId, name: t('app.security.events.autobanListName'), entry_count: autobanStatus.value.list_entries }, {
+    verb: t('app.security.events.banVerb'),
+    // /64 连带封禁披露：确认框明示同前缀其它地址一并受影响
+    note: value.endsWith('/64') ? t('app.security.events.enableNote4') : undefined,
+  })
   if (ok) await fetchAutobanStatus()
 }
 const autobanEnforcing = ref(false)
@@ -1081,8 +1091,9 @@ const ctxWafFamily = computed(() => isWafDurationFamily(triggerStageFamily(ctxEv
 // ipAcl/geoip/threat 同归「IP 访问控制」（阶段 1 合并口径），wafCrs/wafCustom
 // 同归「WAF」；trust/body/other 同名直通。
 // crawler 独立成类（后端 v2.3.8 将已验证爬虫/伪装从地域段拆出）——
-// 阶段列展示词与筛选类别/触发类型列同源（crawler 族统一为后端权威词
-// CRAWLER_FAMILY_LABEL「爬虫Bot」——原此处渲染「爬虫校验」，同页三称谓并存）。
+// 阶段列展示词与筛选类别/触发类型列同源（crawler 族统一走后端权威词
+// 「爬虫Bot」的词条键 app.security.events.crawlerBot——原此处渲染中文常量
+// 「爬虫校验」，同页三称谓并存且 en 下中文漏出）。
 // 点击进入同一触发详情弹框。
 const stageCategory = (row: SecurityEvent): 'trust' | 'acl' | 'crawler' | 'waf' | 'body' | 'human' | 'other' => {
   const trig = row.rule_triggered
@@ -1130,7 +1141,7 @@ const stageLabel = (row: SecurityEvent): string => {
   if (row.rule_triggered === '8') return t('app.security.events.stageLegacyGeo')
   switch (stageCategory(row)) {
     case 'trust': return t('app.security.events.trustList')
-    case 'crawler': return CRAWLER_FAMILY_LABEL
+    case 'crawler': return t('app.security.events.crawlerBot')
     case 'acl': return t('app.security.events.ipAcl')
     case 'waf': return 'WAF'
     case 'body': return t('app.security.events.bodyAnomaly')
@@ -1399,7 +1410,6 @@ const refreshPage = (): void => {
 </script>
 
 <style scoped>
-.autoban-section-title { font-size: 15px; font-weight: 600; color: var(--text-primary); margin: 0 0 4px; padding-left: 8px; border-left: 3px solid var(--el-color-primary, #409eff); line-height: 1.3; }
 .autoban-section-desc { font-size: 13px; color: var(--text-secondary); line-height: 1.5; margin-bottom: 10px; }
 /* 自动封禁状态卡——*/
 .autoban-card { margin-bottom: 16px; }
@@ -1418,7 +1428,8 @@ const refreshPage = (): void => {
 .autoban-danger { color: #f56c6c !important; }
 /* 累犯记录入口与禁用/编辑按钮同组同规格（small plain），间距由组 gap 统一 */
 .autoban-actions { flex-shrink: 0; display: flex; gap: 8px; }
-.autoban-warn-bar { margin-top: 10px; }
+/* .autoban-warn-bar 已收敛 styles/main.css（跨组件共享：本页多处分区黄条 +
+   RecidivismTable 共享组件——scoped 类在子组件不生效）。 */
 
 /* 预设档位卡片：全项目直角令（main.css --el-border-radius-base:0），不得圆角。
    选中态=描边+浅底+「当前」角标；顶部说明行取代悬空自定义徽标。 */
@@ -1435,7 +1446,7 @@ const refreshPage = (): void => {
 .autoban-preset-current { font-size: 10px; font-weight: 600; color: var(--el-color-primary, #409eff); border: 1px solid currentColor; padding: 0 4px; line-height: 1.5; }
 .autoban-preset-desc { font-size: 12px; color: var(--text-secondary, #6b7280); line-height: 1.45; }
 /* 观察模式已上移合并预设说明行（autoban-dryrun-inline），独立 form-item 退役。 */
-/* 高级参数折叠 + 三列网格（标签顶部对齐）：短项三三一行，宽项（口径/阶梯）跨全列。 */
+/* 高级参数折叠 + 两列网格（标签顶部对齐）：短项两两一行，宽项（口径/阶梯）跨全列。 */
 .autoban-advanced { border-top: none; border-bottom: none; margin-top: 4px; }
 .autoban-advanced :deep(.el-collapse-item__header) { font-size: 14px; font-weight: 600; color: var(--text-primary, #374151); height: 40px; line-height: 40px; }
 .autoban-advanced :deep(.el-collapse-item__content) { padding-bottom: 8px; }
@@ -1517,7 +1528,7 @@ const refreshPage = (): void => {
 /* 请求上下文弹框：正文区自适应限高（top=5vh + 头/脚 ≈ 110px），内容多时整体不超视口
    （.crs-event-dialog 左半选择器删除——CRS 事件弹框已迁入 TriggerDetailDialog） */
 .ctx-event-dialog .el-dialog__body { max-height: calc(90vh - 130px); overflow-y: auto; }
-/* 自动封禁配置弹框：三列网格压缩高度后常态无滚动；限高仅作矮视口兜底
+/* 自动封禁配置弹框：两列网格压缩高度后常态无滚动；限高仅作矮视口兜底
    （top=3vh + header/footer/padding≈230px 实测），保证保存按钮恒在视口内。 */
 .autoban-config-dialog .el-dialog__body { max-height: calc(100vh - 222px); overflow-y: auto; padding: 14px 20px; }
 .autoban-config-dialog .info-note-bar { margin-top: 6px; padding: 6px 10px; }
@@ -1537,8 +1548,8 @@ const refreshPage = (): void => {
 .triggered-filter-popper .el-select-dropdown__item.is-selected { font-weight: normal; }
 
 /* 自动封禁启用确认框（dangerouslyUseHTMLString 精排，2026-10-14 裁定）：
-   MessageBox 挂 body，scoped 样式不可达 → 全局作用域。两段式（启用前须知三条
-   列表 + 使用建议正文），13px 正文紧凑排布，弹框宽 480px（customStyle 指定） */
+   MessageBox 挂 body，scoped 样式不可达 → 全局作用域。两段式（启用前须知四条
+   列表 + 使用建议正文），13px 正文紧凑排布，弹框宽 540px（customStyle 指定） */
 .autoban-confirm { text-align: left; }
 .autoban-confirm-hero { display: flex; align-items: flex-start; gap: 14px; margin-bottom: 18px; }
 .autoban-confirm-icon { flex: none; width: 42px; height: 42px; border-radius: 50%; display: flex; align-items: center; justify-content: center; background: var(--el-color-warning-light-9, #fdf6ec); color: var(--el-color-warning, #e6a23c); }
@@ -1550,13 +1561,15 @@ const refreshPage = (): void => {
 .autoban-confirm-howto { display: flex; align-items: baseline; gap: 8px; font-size: 12.5px; line-height: 1.7; color: var(--el-text-color-secondary, #909399); }
 .autoban-confirm-howto-label { flex: none; font-size: 11px; padding: 1px 8px; border-radius: 10px; color: var(--el-color-primary, #409eff); background: var(--el-color-primary-light-9, #ecf5ff); }
 /* MessageBox 四区统一版式：外框零内边距，标题/正文/按钮区各自 24px 侧距——
-   与 Element Plus 默认窄内边距（15px）整体覆盖，视觉边距一致 */
-:global(.autoban-confirm-box) { padding: 0; }
-:global(.autoban-confirm-box .el-message-box__header) { padding: 20px 24px 8px; }
-:global(.autoban-confirm-box .el-message-box__title) { padding: 0; font-size: 16px; font-weight: 600; }
-:global(.autoban-confirm-box .el-message-box__container) { padding: 0 24px; }
-:global(.autoban-confirm-box .el-message-box__message) { display: block; padding: 4px 0 0; }
-:global(.autoban-confirm-box .el-message-box__btns) { padding: 18px 24px 20px 0; }
+   与 Element Plus 默认窄内边距（15px）整体覆盖，视觉边距一致。
+   本块已是非 scoped 全局作用域：`:global()` 只在 scoped/module 块内有效，
+   写在普通 <style> 里会原样输出成非法选择器、整条规则被浏览器丢弃。 */
+.autoban-confirm-box { padding: 0; }
+.autoban-confirm-box .el-message-box__header { padding: 20px 24px 8px; }
+.autoban-confirm-box .el-message-box__title { padding: 0; font-size: 16px; font-weight: 600; }
+.autoban-confirm-box .el-message-box__container { padding: 0 24px; }
+.autoban-confirm-box .el-message-box__message { display: block; padding: 4px 0 0; }
+.autoban-confirm-box .el-message-box__btns { padding: 18px 24px 20px 0; }
 
 /* 日志统计与分页固定同一行：统计占满剩余宽度并在内部省略，分页不换行、不被挤压。 */
 .events-footer { margin-top: 16px; display: flex; align-items: center; gap: 16px; flex-wrap: nowrap; }

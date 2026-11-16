@@ -123,14 +123,17 @@ func TestStageZeroMatrix_updatePointerFieldsCoveredByMatrix(t *testing.T) {
 }
 
 // stageZeroStringZero 判定「阶段外归一」语义下字符串字段的零形态：空串恒零；
-// mode 族认 "off"（applyStageZeros 的 mode 归一口径）；列表族认 "[]"（JSON
-// 空清单）。
+// mode 族认 "off"（applyStageZeros 的 mode 归一口径）；cc_trigger_action 认
+// "challenge"（stageZeroHuman 归零值）；列表族认 "[]"（JSON 空清单）。
 func stageZeroStringZero(tag, value string) bool {
 	if value == "" {
 		return true
 	}
 	if tag == "mode" || tag == "geoip_mode" {
 		return value == "off"
+	}
+	if tag == "cc_trigger_action" {
+		return value == "challenge"
 	}
 	return value == "[]"
 }
@@ -268,6 +271,8 @@ func TestStageZeroMatrix_keepsInStageFields(t *testing.T) {
 		{models.PolicyTypeStage2, "geoip_crawler_engines", true},
 		{models.PolicyTypeStage4, "crs_rule_groups", false},
 		{models.PolicyTypeStage4, "ip_acl_enabled", true},
+		{models.PolicyTypeStage4, "cc_trigger_action", true},
+		{models.PolicyTypeStage4, "cc_queue_wait_sec", true},
 	}
 	for _, tc := range cases {
 		createReq := pollutedCreateRequest()
@@ -319,6 +324,8 @@ func pollutedCreateRequest() models.CreateSecurityPolicyRequest {
 		CC4xxRatio:           new(70),
 		CCSessionAnomaly:     true,
 		CCSessionUAThreshold: 5,
+		CCTriggerAction:      "queue",
+		CCQueueWaitSec:       7,
 	}
 }
 
@@ -358,6 +365,8 @@ func pollutedUpdateRequest() models.UpdateSecurityPolicyRequest {
 		CC4xxRatio:           c.CC4xxRatio,
 		CCSessionAnomaly:     &c.CCSessionAnomaly,
 		CCSessionUAThreshold: &c.CCSessionUAThreshold,
+		CCTriggerAction:      &c.CCTriggerAction,
+		CCQueueWaitSec:       &c.CCQueueWaitSec,
 	}
 }
 

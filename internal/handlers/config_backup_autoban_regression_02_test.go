@@ -17,7 +17,6 @@ package handlers
 // 预览端（ValidateConfigImport）零写入语义、不发生替换，不接清桶。
 
 import (
-	"encoding/json"
 	"net/http"
 	"testing"
 
@@ -29,29 +28,7 @@ import (
 // 备份体（迟到表「缺席=保留本地」形态），校验和按实际表集合计算。
 func completeBackupJSONOmit(t *testing.T, omit map[string]struct{}, tables map[string][]map[string]any) string {
 	t.Helper()
-	completeTables := make(map[string][]map[string]any, len(configBackupTables))
-	for _, table := range configBackupTables {
-		if _, skip := omit[table]; skip {
-			continue
-		}
-		completeTables[table] = []map[string]any{}
-	}
-	completeTables["users"] = []map[string]any{{"id": 1, "username": "backup-admin", "password_hash": "hash", "role": "admin", "is_enabled": 1}}
-	for table, rows := range tables {
-		completeTables[table] = rows
-	}
-	cfg := map[string]any{}
-	backup := configBackup{
-		Meta:   configBackupMeta{App: "lazy-balancer-v2", Version: 2, ExportedAt: "2026-08-19T00:00:00Z"},
-		Config: cfg,
-		Tables: completeTables,
-	}
-	backup.Meta.Checksum = checksumBackupPayload(t, completeTables, cfg)
-	data, err := json.Marshal(backup)
-	if err != nil {
-		t.Fatalf("marshal backup: %v", err)
-	}
-	return string(data)
+	return buildBackup(t, backupFixtureOptions{FillAll: true, Omit: omit, Tables: tables, EmptyConfigIfNil: true})
 }
 
 func enableAutobanFormalMode(t *testing.T) {

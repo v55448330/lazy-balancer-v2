@@ -3353,3 +3353,100 @@ func TestMaterializeAllCertsFromDB_scanFailuresDisclosedInSummary(t *testing.T) 
 		t.Fatalf("摘要=%q, want 披露读取失败跳过行（存在未物化行时不得静默报完成）", string(summary))
 	}
 }
+
+// manual 侧（FROM lb_rules）的逐行读失败分支必须被真实驱动：此前 fake 针只打
+// FROM cert_jobs（ACME 选择器），manualScanFailures 分支零测试覆盖。本用例
+// 针打 FROM lb_rules——manual 扫描失败计入摘要，且逐行失败有审计留痕。
+func TestMaterializeAllCertsFromDB_manualScanFailureDisclosedAndAudited(t *testing.T) {
+	newClusterTestService(t)
+	useTemporaryCertDir(t)
+	oldLogDir := taskengine.LogDir()
+	taskengine.SetLogDir(t.TempDir())
+	t.Cleanup(func() { taskengine.SetLogDir(oldLogDir) })
+	realDB := db.DB
+	fake := sql.OpenDB(&fakeIterErrConnector{failNeedle: noMatchingQuery, scanFailNeedle: "FROM lb_rules"})
+	db.DB = fake
+	t.Cleanup(func() { db.DB = realDB; _ = fake.Close() })
+
+	MaterializeAllCertsFromDB()
+
+	summary, err := os.ReadFile(taskengine.TaskLogPath("startup:config-load"))
+	if err != nil {
+		t.Fatalf("read materialization task log: %v", err)
+	}
+	if !strings.Contains(string(summary), "1 行读取失败") {
+		t.Fatalf("摘要=%q, want 披露 manual 侧读取失败跳过行", string(summary))
+	}
+	var audited int
+	if err := db.AuditDB.QueryRow(`SELECT COUNT(*) FROM audit_log WHERE action='恢复失败' AND resource='证书文件' AND detail LIKE '%行读取失败%'`).Scan(&audited); err != nil {
+		t.Fatalf("count scan-failure audit rows: %v", err)
+	}
+	if audited == 0 {
+		t.Fatal("manual 逐行读失败必须有审计留痕（与 io_error 同权）")
+	}
+}
+
+// requeueCertJobsSnapshot 的规则态读取必须与 restore 侧同口径容忍 NULL 形状
+// （COALESCE(domain,”)/IIF(enabled...)/COALESCE(enable_tls,0)）：带外写入/旧
+// 备份可产生 NULL domain/enable_tls——裸 Scan 报错会把补偿拖入永久退避循环且
+// 租约永不释放。NULL enable_tls 按未启用收敛（放弃语义），NULL domain 走既有
+// 「域名不可规范化」放弃分支。
+func TestRequeueCertJobsSnapshot_nullRuleColumnsGiveUpNotBackoff(t *testing.T) {
+	seedNullShape := func(t *testing.T, ruleID string, nullDomain, nullEnableTLS bool) CertJobsSnapshot {
+		t.Helper()
+		_, database := newClusterTestService(t)
+		if _, err := database.Exec(`INSERT INTO ca_providers (id,name,provider,directory_url,enabled) VALUES (7,'requeue CA','letsencrypt','https://invalid.example/directory',1)`); err != nil {
+			t.Fatalf("seed CA provider: %v", err)
+		}
+		domain := any("null-shape.example.com")
+		if nullDomain {
+			domain = nil
+		}
+		enableTLS := any(1)
+		if nullEnableTLS {
+			enableTLS = nil
+		}
+		if _, err := database.Exec(`INSERT INTO lb_rules (caddy_id,name,domain,protocol,listen_port,enabled,enable_tls,tls_source) VALUES (?, 'requeue-null', ?, 'http', 8080, 1, ?, 'acme_dns')`, ruleID, domain, enableTLS); err != nil {
+			t.Fatalf("seed rule: %v", err)
+		}
+		if _, err := database.Exec(`INSERT INTO cert_jobs (rule_id,domain,status,ca_provider_id) VALUES (?, 'null-shape.example.com', 'creating_order', 7)`, ruleID); err != nil {
+			t.Fatalf("seed job: %v", err)
+		}
+		snapshot, err := SnapshotCertJobsForRule(ruleID)
+		if err != nil {
+			t.Fatalf("snapshot jobs: %v", err)
+		}
+		return snapshot
+	}
+	for _, tc := range []struct {
+		name          string
+		nullDomain    bool
+		nullEnableTLS bool
+	}{
+		{name: "NULL enable_tls 按未启用收敛", nullEnableTLS: true},
+		{name: "NULL domain 走不可规范化放弃分支", nullDomain: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			const ruleID = "lb_requeue_null"
+			snapshot := seedNullShape(t, ruleID, tc.nullDomain, tc.nullEnableTLS)
+			var enqueues atomic.Int32
+			manager := &CAQueueManager{
+				queues:       make(map[int]*caQueue),
+				active:       true,
+				blockedRules: map[string]map[RuleBlockToken]struct{}{ruleID: {1: {}}},
+			}
+			manager.beforeEnqueue = func() { enqueues.Add(1) }
+
+			// When
+			err := requeueCertJobsSnapshot(context.Background(), snapshot, manager)
+
+			// Then：按成功收尾（返回错误=永久退避+租约锁死）且零入队。
+			if err != nil {
+				t.Fatalf("requeue err=%v, want nil（NULL 形状必须走放弃语义，不得报错进退避循环）", err)
+			}
+			if got := enqueues.Load(); got != 0 {
+				t.Fatalf("enqueue attempts=%d, want 0", got)
+			}
+		})
+	}
+}

@@ -1,6 +1,8 @@
 // 自动封禁配置预设档位（纯前端映射单源）：保守/标准/强化三档人话预设，
-// 落既有 PUT /security/autoban。标准档=现默认参数（存量无感）；强化档=
-// 证据分层计数（evidence）。预设不是新持久化字段——手动改参数即「自定义」。
+// 落既有 PUT /security/autoban。标准档=后端 db 默认参数（逐字段相等：阈值/
+// 窗口/时长/四口径全选/观察/off 升级/classic 等权/倍率 4/打底 0.4），存量
+// 配置命中「标准」而非「自定义」；强化档=证据分层计数（evidence）。预设不是
+// 新持久化字段——手动改参数即「自定义」。
 //
 // 参数值与后端 db.DefaultAutoban* / services 校验域跨栈对账（autobanPresets.spec）。
 
@@ -28,10 +30,11 @@ export const AUTOBAN_PRESETS: Record<AutobanPresetId, AutobanPresetValues> = {
     scope: [...CONFIRMED_SCOPES], escalation: 'off',
     counting_mode: 'classic', suspicion_multiplier: 4, confirm_floor_ratio: '0.4',
   },
-  // 标准：现默认（四口径全选+等权+standard 升级）——存量配置无感。
+  // 标准：db 默认逐字段对齐（四口径全选+等权+off 不升级）——存量默认命中
+  // 本档，不静默启用累犯升级（升级需用户显式选档或改「累犯升级」）。
   standard: {
     threshold: 100, window_minutes: 5, duration: '1h',
-    scope: [...ALL_SCOPES], escalation: 'standard',
+    scope: [...ALL_SCOPES], escalation: 'off',
     counting_mode: 'classic', suspicion_multiplier: 4, confirm_floor_ratio: '0.4',
   },
   // 强化：证据分层（纯嫌疑永不封）+阈值减半+standard 升级。

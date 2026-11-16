@@ -2,8 +2,12 @@ package services
 
 // 自动封禁隐私披露文档钉测（个保法/GDPR 告知义务）：docs/security.zh-CN.md
 // 自动封禁段必须披露采集/处置事实——IPv6 /64 归一的连带面、保留地址
-// 硬排除、累犯渐进升级档位语义。配置弹框告知（前端）与本文档同口径，
-// 任一面缺失即红。
+// 硬排除、累犯渐进升级档位语义、智能计数（evidence）模式的判定差异。
+//
+// 覆盖边界（如实化）：本钉测只读文档，**不**覆盖前端配置弹框告知面——
+// 前端文案（web/src/locales/**）与页面在 Go 测试设施之外，services 侧无法
+// 断言；弹框侧的 /64 连带披露属前端代码与其测试的覆盖范围。此前头注释宣称
+// 「弹框与文档任一面缺失即红」是虚标：删掉弹框告知本用例照样绿。
 
 import (
 	"os"
@@ -44,6 +48,9 @@ func TestSecurityDocs_autobanPrivacyDisclosure(t *testing.T) {
 		"aggressive", // 渐进升级档位语义
 		"24h",        // standard 二次档时长
 		"永久",         // 三次+永久档
+		"智能计数",       // evidence 模式披露（判定差异属采集/处置事实）
+		"确证",         // 确证/可疑分流
+		"可疑",         // 可疑只作辅助、纯可疑永不封
 	} {
 		if !strings.Contains(section, want) {
 			t.Errorf("自动封禁段隐私披露缺 %q", want)

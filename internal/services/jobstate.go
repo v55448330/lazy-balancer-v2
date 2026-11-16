@@ -115,8 +115,6 @@ type jobTransitionExecutor interface {
 	Exec(query string, args ...any) (sql.Result, error)
 }
 
-type jobSQLExpression string
-
 // AllJobStatuses 返回 cert_jobs.status 规范枚举的副本（单一真源
 // 与 db.CertJobStatuses()/fresh DDL CHECK/迁移白名单同源）。调用方可安全修改
 // 返回值，不影响状态机。
@@ -166,6 +164,54 @@ func truncateJobMessage(message string) string {
 	return string(truncateValidUTF8Tail([]byte(message[:maxJobMessageBytes])))
 }
 
+// appendJobMessageNote 给任务消息追加终态/状态说明（上限说明、慢速重试说明
+// 等）：先截断 base 到「上限-说明长度」预算再追加，说明恒完整保留且整体不超
+// maxJobMessageBytes。此前各写点「先追加后截断」——base 过长时尾部说明被整段
+// 截掉（终态语义丢失，UI 看不出已停止自动重试/已转慢速重试）。
+func appendJobMessageNote(base, note string) string {
+	budget := maxJobMessageBytes - len(note)
+	if budget < 0 {
+		budget = 0
+	}
+	return truncateJobMessageTo(base, budget) + note
+}
+
+// truncateJobMessageTo 按指定字节预算截断并回退合法 UTF-8 边界
+// （truncateJobMessage 的预算参数化单源）。
+func truncateJobMessageTo(message string, budget int) string {
+	if len(message) <= budget {
+		return message
+	}
+	if budget <= 0 {
+		return ""
+	}
+	return string(truncateValidUTF8Tail([]byte(message[:budget])))
+}
+
+// issuedFinalizeResetFields 是 issued 成功终态必须清零的失败预算单源：
+// renewal_attempts/ca_available_after/last_error_code。证书成功签发即新一代
+// 开始，上一代的失败计数/退避窗口不得跨世代携带——否则配置上限附近的行在
+// 下一轮续期首次失败即触顶，自动续签停摆。全部 issued 终态写点（主签发路径、
+// 快速重部署两出口、启动恢复「已有有效证书」出口）必须并入本字段集，禁止各
+// 写点再自持一份（历史上三处漂移即由此产生）。
+func issuedFinalizeResetFields() map[string]any {
+	return map[string]any{
+		"renewal_attempts":   0,
+		"ca_available_after": nil,
+		"last_error_code":    nil,
+	}
+}
+
+// issuedFinalizeFields 组装 issued 终态写入字段：失败预算清零（单源）+
+// 调用方附加字段（message/expires_at/部署簿记等；附加键不得覆盖预算键）。
+func issuedFinalizeFields(extra map[string]any) map[string]any {
+	fields := issuedFinalizeResetFields()
+	for key, value := range extra {
+		fields[key] = value
+	}
+	return fields
+}
+
 func transitionJob(tx jobTransitionExecutor, id int, from []string, to string, fields map[string]any) error {
 	if len(from) == 0 {
 		return fmt.Errorf("transition certificate job %d to %s: %w", id, to, ErrJobTransitionConflict)
@@ -179,10 +225,6 @@ func transitionJob(tx jobTransitionExecutor, id int, from []string, to string, f
 	assignments := []string{"status=?"}
 	args := []any{to}
 	for _, key := range keys {
-		if expression, ok := fields[key].(jobSQLExpression); ok {
-			assignments = append(assignments, key+"="+string(expression))
-			continue
-		}
 		assignments = append(assignments, key+"=?")
 		args = append(args, fields[key])
 	}

@@ -7,6 +7,7 @@ package handlers
 // services 侧 TestSnapshot_rulesInvalidHealthColumns_normalizedByTransportGate 钉测）。
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -117,6 +118,14 @@ func TestV2ImportBackfillsInvalidRuleAndGlobalColumns(t *testing.T) {
 		row["health_check_unhealthy_threshold"] != int64(3) || row["health_check_healthy_threshold"] != int64(2) ||
 		row["tcp_try_interval"] != int64(250) {
 		t.Fatalf("rule row not backfilled to governed defaults: %v", row)
+	}
+	// 全局列回填（测试名承诺的 Global 面）：0 值经备份归一门写回治理默认。
+	global := map[string]any{
+		"http_read_timeout": int64(0), "http_write_timeout": int64(0), "http_idle_timeout": int64(0),
+	}
+	clampBackupConfigInts(global)
+	if fmt.Sprint(global["http_read_timeout"]) != "60" || fmt.Sprint(global["http_write_timeout"]) != "60" || fmt.Sprint(global["http_idle_timeout"]) != "120" {
+		t.Fatalf("global columns not backfilled to governed defaults: %v", global)
 	}
 }
 

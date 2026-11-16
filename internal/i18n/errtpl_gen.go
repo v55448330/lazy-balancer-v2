@@ -193,7 +193,7 @@ func init() {
 	RegisterErrTpl("写入证书: %s", "write certificate: %s")
 	RegisterErrTpl("写威胁库 .fast %s: %s", "write threat feed .fast %s: %s")
 	RegisterErrTpl("写源哈希失败: %s", "failed to write source hash: %s")
-	RegisterErrTpl("列 %s 的值（%sT）无法序列化为 JSON: %s", "value of column %s (%s) cannot be serialized to JSON: %s")
+	RegisterErrTpl("列 %s 的值（%s）无法序列化为 JSON: %s", "value of column %s (%s) cannot be serialized to JSON: %s")
 	RegisterErrTpl("列表 %s 不映射到任何威胁源", "list %s does not map to any threat source")
 	RegisterErrTpl("创建 IP 名单目录 %s 失败: %s", "failed to create IP list directory %s: %s")
 	RegisterErrTpl("创建 staging 目录: %s", "create staging directory: %s")

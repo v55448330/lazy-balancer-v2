@@ -137,7 +137,7 @@
             <el-tooltip :disabled="!row.description" placement="top" :offset="8" :show-after="150" :show-arrow="false" popper-class="tm-name-tip">
               <template #content>
                 <div class="tm-tip-title">{{ taskDisplayName(row.name) }}</div>
-                <div v-if="row.cadence" class="tm-tip-cadence">{{ t('app.settings.taskMonitor.cadencePrefix') }}{{ row.cadence }}</div>
+                <div v-if="row.cadence" class="tm-tip-cadence">{{ t('app.settings.taskMonitor.cadencePrefix') }}{{ cadenceText(row.cadence) }}</div>
                 <div class="tm-tip-desc">{{ row.description }}</div>
               </template>
               <div class="tm-task-name">{{ taskDisplayName(row.name) }}</div>
@@ -657,14 +657,25 @@ const taskDesc = (task: { name: string; description?: string }): string => {
   }
   return task.description || ''
 }
-// Cadence 显示:后端拼装 zh(如"每 1 分钟");登记周期形态→词条,未命中原样
+// Cadence 显示:后端拼装 zh(如"每 1 分钟"/"每 2 小时"/"定时排程")——登记形态
+// →词条,未命中原样回落（新增节奏形态不因缺词条而丢字）。判据与后端
+// taskmonitor.humanInterval + collectEngineFamilies 的 Cadence 组装同口径。
 const cadenceText = (cadence?: string): string => {
   if (!cadence) return '—'
   const m = cadence.match(/^每 (\d+) 分钟$/)
   if (m) return m[1] === '1' ? t('common.app.cadence.everyNMinutesSingle') : t('common.app.cadence.everyNMinutes', { n: m[1] })
-  if (cadence === '每 15 分钟') return t('common.app.cadence.every15Minutes')
-  const h = cadence.match(/^每天 (\d{2}:\d{2})$/)
-  if (h) return t('common.app.cadence.dailyAt', { time: h[1] })
+  const sec = cadence.match(/^每 (\d+) 秒$/)
+  if (sec) return t('common.app.cadence.everyNSeconds', { n: sec[1] })
+  const hour = cadence.match(/^每 (\d+) 小时$/)
+  if (hour) return t('common.app.cadence.everyNHours', { n: hour[1] })
+  const day = cadence.match(/^每 (\d+) 天$/)
+  if (day) return t('common.app.cadence.everyNDays', { n: day[1] })
+  const at = cadence.match(/^每天 (\d{2}:\d{2})$/)
+  if (at) return t('common.app.cadence.dailyAt', { time: at[1] })
+  // 引擎族非周期节奏（后端 KindScheduled/KindDaemon/KindOneshot 固定词）
+  if (cadence === '定时排程') return t('common.app.cadence.scheduled')
+  if (cadence === '常驻自管理') return t('common.app.cadence.daemon')
+  if (cadence === '手动触发') return t('common.app.cadence.manual')
   return cadence
 }
 

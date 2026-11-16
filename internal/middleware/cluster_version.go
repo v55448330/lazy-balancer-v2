@@ -17,7 +17,9 @@ import (
 func clusterVersionMiddleware(database *sql.DB) gin.HandlerFunc {
 	// 触发器就绪：生产启动路径已在任务引擎之前完成安装（安装失败即拒绝启动），
 	// 此处重装是防御刷新并保持测试/嵌入形态自足。重装仍会全量 DROP/CREATE
-	// （105 条 DDL、BEGIN IMMEDIATE 取写锁）——若此刻撞上后台写事务并等满
+	// （每条触发器 DROP+CREATE 两条 DDL，另加一条遗留触发器清理；条数由
+	// clusterVersionTriggerStatements 单源派生，注释不持具体计数；
+	// BEGIN IMMEDIATE 取写锁）——若此刻撞上后台写事务并等满
 	// busy_timeout，旧实现把「一次瞬时忙」变成**进程内永久 500**（所有分类写
 	// 与主端登录 fail-closed 到重启），与「启动门不得带病运行」的取向相反。
 	// 因此重装失败后回退为只读探测：库内触发器齐备（就绪门装的那批）即视为
@@ -565,16 +567,27 @@ func clusterVersionTriggerStatements() []clusterVersionTrigger {
 	// 共十列入 OF(同先例,单源 globalConfigSyncedColumns)——主端 PUT /security/autoban 保存即下发;
 	// 不在 OF 内则稳态变更经 304 门滞留主节点,从端恒默认值、升主后按陈旧配置
 	// 静默运行(名单传播而配置不传播)。
+	// 值变化守卫（与 users 表同构）：保存基础设置等写路径用 COALESCE(?,col)
+	// 把全部 OF 列写一遍（未提交字段保值），SQLite UPDATE OF 按 SET 列出现
+	// 即触发——无守卫时每次保存都 bump，从节点空拉一轮全量快照。改为
+	// 「任一同步列值真实变化」（OLD.col IS NOT NEW.col 全链 OR，NULL 安全，
+	// 列清单与 OF 共用 globalConfigSyncedColumns 单源）：同值写零 bump，
+	// 真实变更照常 bump。非 OF 列（server_map_*/github_token/updated_at 等）
+	// 单独写本就不触发，语义不变。
+	globalConfigValueChange := make([]string, 0, len(globalConfigSyncedColumns))
+	for _, col := range globalConfigSyncedColumns {
+		globalConfigValueChange = append(globalConfigValueChange, fmt.Sprintf("OLD.%s IS NOT NEW.%s", col, col))
+	}
 	triggers = append(triggers, clusterVersionTrigger{
 		name:    "cluster_version_global_config_update",
 		dropSQL: "DROP TRIGGER IF EXISTS cluster_version_global_config_update",
 		createSQL: fmt.Sprintf(`CREATE TRIGGER cluster_version_global_config_update
 		AFTER UPDATE OF %s
 		ON global_config
-		WHEN OLD.cluster_version IS NEW.cluster_version AND COALESCE(NEW.is_master,1)=1
+		WHEN OLD.cluster_version IS NEW.cluster_version AND COALESCE(NEW.is_master,1)=1 AND (%s)
 		BEGIN
 			UPDATE global_config SET cluster_version=COALESCE(cluster_version,0)+1 WHERE id=1;
-		END`, strings.Join(globalConfigSyncedColumns, ",")),
+		END`, strings.Join(globalConfigSyncedColumns, ","), strings.Join(globalConfigValueChange, " OR ")),
 	})
 	return triggers
 }

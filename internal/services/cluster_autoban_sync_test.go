@@ -1,7 +1,8 @@
 package services
 
-// 自动封禁六列集群传播四段接线钉测——
-//   ①主端快照恒携带六列（指针非 nil+线格式六键，镜像自动备份组）；
+// 自动封禁十列集群传播五段接线钉测——
+//   ①主端快照恒携带十列（指针非 nil+线格式十键，镜像自动备份组；证据分层
+//   三列的携带/落库/缺席保留另见 cluster_autoban_counting_sync_test.go）；
 //   ②快照携带时从端 apply 落库；③旧主端快照缺席（全 nil）时从端保留本地值；
 //   ④主端保存（列变化）→ OF 触发器 bump（middleware 侧钉）→ 快照 → 从端收敛；
 //   ⑤升主后按 AutobanEnabled() 重开 autoban 调度（从端期间调度未开）。
@@ -126,20 +127,20 @@ func TestUpdateSnapshotSettings_autobanSettingsAbsentPreservesLocal(t *testing.T
 	}
 }
 
-// 全链路钉：主端六列非默认值 → bump → 快照 → 从端本地漂移值被收敛
+// 全链路钉：主端基础六列非默认值 → bump → 快照 → 从端本地漂移值被收敛
 // （镜像 三库排程列传播钉测）。
 func TestClusterSync_autobanColumnsPropagate(t *testing.T) {
 	cluster, database, syncService, bump := syncSemanticsEnv(t)
 	ctx := context.Background()
 
-	// Given 主端六列全部非默认值
+	// Given 主端基础六列全部非默认值
 	if _, err := database.Exec(`UPDATE global_config SET autoban_enabled=1, autoban_threshold=42, autoban_window_minutes=13,
 		autoban_duration='24h', autoban_scope='blocked', autoban_dry_run=0 WHERE id=1`); err != nil {
 		t.Fatal(err)
 	}
 	bump(300)
 
-	// When 主端快照（须携带六列）；从端本地值漂移（模拟未接线时代的存量从端）
+	// When 主端快照（须携带基础六列）；从端本地值漂移（模拟未接线时代的存量从端）
 	snap := snapshotAsMaster(t, cluster, database)
 	if _, err := database.Exec(`UPDATE global_config SET autoban_enabled=0, autoban_threshold=100, autoban_window_minutes=5,
 		autoban_duration='1h', autoban_scope='blocked,logged', autoban_dry_run=1 WHERE id=1`); err != nil {
@@ -149,7 +150,7 @@ func TestClusterSync_autobanColumnsPropagate(t *testing.T) {
 		t.Fatalf("apply: %v", err)
 	}
 
-	// Then 从端六列全部收敛到主端值
+	// Then 从端基础六列全部收敛到主端值
 	var enabled, dry bool
 	var threshold, window int
 	var duration, scope string
@@ -159,7 +160,7 @@ func TestClusterSync_autobanColumnsPropagate(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !enabled || threshold != 42 || window != 13 || duration != "24h" || scope != "blocked" || dry {
-		t.Fatalf("autoban 六列=(%v,%d,%d,%q,%q,%v), want (true,42,13,24h,blocked,false)——主端配置须随快照到达从端",
+		t.Fatalf("autoban 基础六列=(%v,%d,%d,%q,%q,%v), want (true,42,13,24h,blocked,false)——主端配置须随快照到达从端",
 			enabled, threshold, window, duration, scope, dry)
 	}
 }
@@ -168,14 +169,14 @@ func TestClusterSync_autobanColumnsPropagate(t *testing.T) {
 // 落到从端库（配置传播，前四段）→ 升主。Promote 尾部必须按 AutobanEnabled()
 // 重开 autoban 调度——否则库值已启用而 loop 永不开（静默停摆）。
 func TestClusterService_Promote_resumesAutobanScheduling(t *testing.T) {
-	oldDB, oldMetricsDB, oldAuditDB := db.DB, db.MetricsDB, db.AuditDB
+	oldDB, oldMetricsDB, oldAuditDB, oldCurrent := db.DB, db.MetricsDB, db.AuditDB, db.GetDB()
 	if err := db.Initialize(t.TempDir()); err != nil {
 		t.Fatalf("initialize: %v", err)
 	}
 	t.Cleanup(func() {
 		StopTaskEngine()
 		_ = db.Close()
-		db.DB, db.MetricsDB, db.AuditDB = oldDB, oldMetricsDB, oldAuditDB
+		restoreGlobalDBHandles(oldDB, oldMetricsDB, oldAuditDB, oldCurrent)
 	})
 	SetConfigLoadRerun(func(operator string) error { return nil })
 	t.Cleanup(func() { SetConfigLoadRerun(nil) })
@@ -186,13 +187,14 @@ func TestClusterService_Promote_resumesAutobanScheduling(t *testing.T) {
 	if m, _ := te.Lookup(AutobanTaskID); m.LoopOn {
 		t.Fatal("前置失败：未启用时启动不得开调度")
 	}
-	// 模拟从端收到主端快照：六列落库（enabled=1）——配置传播不联动从端调度
+	// 模拟从端收到主端快照：基础六列落库（enabled=1）——配置传播不联动从端调度
 	if _, err := db.DB.Exec(`UPDATE global_config SET autoban_enabled=1, autoban_threshold=42, is_master=0 WHERE id=1`); err != nil {
 		t.Fatal(err)
 	}
 
 	// When 升主
 	service := NewClusterService(db.DB, "")
+	t.Cleanup(func() { unregisterClusterService(service) })
 	installGlobalConfigVersionTrigger(t, db.DB)
 	if err := service.Promote(context.Background()); err != nil {
 		t.Fatalf("promote: %v", err)
@@ -207,14 +209,14 @@ func TestClusterService_Promote_resumesAutobanScheduling(t *testing.T) {
 // 反向形状：升主时库内未启用（autoban_enabled=0）不得开调度——否则首 tick 被
 // Run 体业务门拦停，每次升主落一行「未启用」假失败（与启动门同口径）。
 func TestClusterService_Promote_doesNotStartAutobanWhenDisabled(t *testing.T) {
-	oldDB, oldMetricsDB, oldAuditDB := db.DB, db.MetricsDB, db.AuditDB
+	oldDB, oldMetricsDB, oldAuditDB, oldCurrent := db.DB, db.MetricsDB, db.AuditDB, db.GetDB()
 	if err := db.Initialize(t.TempDir()); err != nil {
 		t.Fatalf("initialize: %v", err)
 	}
 	t.Cleanup(func() {
 		StopTaskEngine()
 		_ = db.Close()
-		db.DB, db.MetricsDB, db.AuditDB = oldDB, oldMetricsDB, oldAuditDB
+		restoreGlobalDBHandles(oldDB, oldMetricsDB, oldAuditDB, oldCurrent)
 	})
 	SetConfigLoadRerun(func(operator string) error { return nil })
 	t.Cleanup(func() { SetConfigLoadRerun(nil) })
@@ -225,6 +227,7 @@ func TestClusterService_Promote_doesNotStartAutobanWhenDisabled(t *testing.T) {
 	}
 
 	service := NewClusterService(db.DB, "")
+	t.Cleanup(func() { unregisterClusterService(service) })
 	installGlobalConfigVersionTrigger(t, db.DB)
 	if _, err := db.DB.Exec(`UPDATE global_config SET is_master=0, master_url='' WHERE id=1`); err != nil {
 		t.Fatal(err)

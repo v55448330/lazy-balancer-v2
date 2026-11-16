@@ -2,11 +2,13 @@ package db
 
 import "testing"
 
-// 阶段合并迁移（2026-11-12 用户裁定）：CC 防护 = 阶段 2（配额+人机挑战），
-// 内容防护(WAF) = 阶段 3；旧的人机阶段 3 并入阶段 2，旧 WAF 阶段 4 重编号为 3。
-//   - 同一规则同时绑定旧 stage2(限流) 与旧 stage3(人机) → 合并为一条 stage2：
-//     保留限流配额，吸收人机模式/方式/有效期/豁免与 cc_* 阈值，绑定去重后
-//     人机行删除；
+// 阶段合并迁移（2026-11-12 用户裁定）：CC 防护 = 阶段 2（人机挑战 + cc_*
+// 阈值；配额限流列已由 retireRateLimitQuota 退役），内容防护(WAF) = 阶段 3；
+// 旧的人机阶段 3 并入阶段 2，旧 WAF 阶段 4 重编号为 3。
+//   - 同一规则同时绑定旧 stage2(CC) 与旧 stage3(人机) → 合并为一条 stage2：
+//     保留目标行，人机行的模式/方式/有效期/豁免与 cc_* 全量覆盖目标
+//     （含 cc_detect_enabled 与 cc_rps_limit——快照整体覆盖，不做条件保留），
+//     绑定去重后人机行删除；
 //   - 仅人机：原行改型为 stage2；
 //   - 全部旧 stage4 → stage3；
 //   - 一次性：marker 置位后重跑不改写（否则会把人机语义再套到 WAF 行上）。
@@ -42,7 +44,8 @@ func TestRunMigrations_mergesHumanIntoCCAndRenumbersWAF(t *testing.T) {
 		t.Fatalf("run migrations: %v", err)
 	}
 
-	// 合并：规则 a 只剩一条 stage2，且配额来自 10、人机配置来自 11
+	// 合并：规则 a 只剩一条 stage2；人机行 11 的配置快照整体覆盖目标 10
+	// （cc_detect_enabled/cc_rps_limit 随快照取 11 的值，不保留 10 的旧值）
 	var n int
 	if err := database.QueryRow(`SELECT COUNT(*) FROM security_policy_bindings WHERE rule_caddy_id='rule-a'`).Scan(&n); err != nil {
 		t.Fatal(err)
@@ -52,13 +55,14 @@ func TestRunMigrations_mergesHumanIntoCCAndRenumbersWAF(t *testing.T) {
 	}
 	var typ, humanMode string
 	var ccLimit int
-	if err := database.QueryRow(`SELECT p.policy_type, p.human_verify_mode, p.cc_rps_limit
+	var ccEnabled bool
+	if err := database.QueryRow(`SELECT p.policy_type, p.human_verify_mode, p.cc_rps_limit, p.cc_detect_enabled
 		FROM security_policies p JOIN security_policy_bindings b ON b.policy_id=p.id WHERE b.rule_caddy_id='rule-a'`).
-		Scan(&typ, &humanMode, &ccLimit); err != nil {
+		Scan(&typ, &humanMode, &ccLimit, &ccEnabled); err != nil {
 		t.Fatal(err)
 	}
-	if typ != "stage2" || humanMode != "force" || ccLimit != 99 {
-		t.Fatalf("合并结果 type=%s human=%s cc=%d，want stage2/force/99", typ, humanMode, ccLimit)
+	if typ != "stage2" || humanMode != "force" || ccLimit != 99 || !ccEnabled {
+		t.Fatalf("合并结果 type=%s human=%s cc=%d ccEnabled=%v，want stage2/force/99/true（人机行快照整体覆盖目标）", typ, humanMode, ccLimit, ccEnabled)
 	}
 	// 人机行 11 已被合并删除；仅人机 12 改型为 stage2 且保留其阈值
 	var remaining int

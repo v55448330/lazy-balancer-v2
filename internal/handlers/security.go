@@ -748,11 +748,14 @@ func (h *Handlers) DeleteSecurityBlockPage(c *gin.Context) {
 //     行）；services 两条生成投影已改 COALESCE(...,0) 无效哨兵——NULL/<=0
 //     在渲染层 fail-visible（BuildCorazaDirectives 显性报错），展示层不做
 //     行为消费，无需同口径。
-const securityPolicySelectColumns = `id, name, COALESCE(description,''), COALESCE(mode,'off'), COALESCE(anomaly_threshold,5), COALESCE(ip_acl_mode,''), COALESCE(ip_acl_list,'[]'), COALESCE(ip_acl_enabled,0), COALESCE(ip_whitelist_enabled,1), COALESCE(ip_whitelist,'[]'), COALESCE(ip_blacklist,'[]'),
+//
+// 人机/CC 列的 COALESCE 回退值绑定 db.Default* 治理常量（与 services 侧
+// securityPolicyRowColumns 同口径，AST 钉 TestSecurityPolicySelectColumns_bindsGovernedDefaults）。
+var securityPolicySelectColumns = `id, name, COALESCE(description,''), COALESCE(mode,'off'), COALESCE(anomaly_threshold,5), COALESCE(ip_acl_mode,''), COALESCE(ip_acl_list,'[]'), COALESCE(ip_acl_enabled,0), COALESCE(ip_whitelist_enabled,1), COALESCE(ip_whitelist,'[]'), COALESCE(ip_blacklist,'[]'),
 	COALESCE(crs_rule_groups,'[]'), COALESCE(crs_excluded_rules,'[]'), COALESCE(custom_rules,'[]'), COALESCE(block_page_id,0), COALESCE(block_status_code,0), COALESCE(enabled,1), COALESCE(updated_by,0), COALESCE(created_at,''), COALESCE(updated_at,''), COALESCE(geoip_countries,'[]'), COALESCE(geoip_mode,'off'), COALESCE(geoip_crawler_exempt,0), COALESCE(geoip_crawler_engines,'[]'), COALESCE(waf_check_response,0), COALESCE(log_request_body,0), COALESCE(ip_acl_list_refs,'[]'), COALESCE(ip_whitelist_refs,'[]'), COALESCE(policy_type,''), COALESCE(trust_detection,0),
-	COALESCE(human_verify_mode,'off'), COALESCE(human_verify_type,'slider'), COALESCE(human_verify_ttl,30), COALESCE(human_exempt_paths,'[]'),
-	COALESCE(cc_detect_enabled,0), COALESCE(cc_rps_limit,40), COALESCE(cc_rps_window,10), COALESCE(cc_4xx_ratio,70),
-	COALESCE(cc_session_anomaly,0), COALESCE(cc_session_ua_threshold,5), COALESCE(cc_trigger_action,'challenge'), COALESCE(cc_queue_wait_sec,0), COALESCE(block_response_mode,'auto')`
+	COALESCE(human_verify_mode,'off'), COALESCE(human_verify_type,'` + db.DefaultHumanVerifyType + `'), COALESCE(human_verify_ttl,` + strconv.Itoa(db.DefaultHumanVerifyTTL) + `), COALESCE(human_exempt_paths,'[]'),
+	COALESCE(cc_detect_enabled,0), COALESCE(cc_rps_limit,` + strconv.Itoa(db.DefaultCCRPSLimit) + `), COALESCE(cc_rps_window,` + strconv.Itoa(db.DefaultCCRPSWindow) + `), COALESCE(cc_4xx_ratio,` + strconv.Itoa(db.DefaultCC4xxRatio) + `),
+	COALESCE(cc_session_anomaly,0), COALESCE(cc_session_ua_threshold,` + strconv.Itoa(db.DefaultCCSessionUAThreshold) + `), COALESCE(cc_trigger_action,'challenge'), COALESCE(cc_queue_wait_sec,0), COALESCE(block_response_mode,'auto')`
 
 func (h *Handlers) ListSecurityPolicies(c *gin.Context) {
 	// 过滤条件按「主查询列名」与「绑定计数查询的限定列名」成对给出：绑定计数
@@ -4452,8 +4455,8 @@ func buildRuleTriggeredFamilyPrefixes() map[string][]string {
 		// WAF·自定义（customRuleFamilyCondition 复用）；「自定义规则」同条件。
 		"WAF·自定义": {},
 		"自定义规则":   {},
-		// CC 防护（人机挑战）：非数字 rule_triggered（human_*），形态条件由
-		// humanFamilyCondition 承载，与数字规则 id 族互斥。
+		// CC 防护（人机挑战+限流拒绝）：非数字 rule_triggered（human_*/
+		// cc_rate_reject），形态条件由 humanFamilyCondition 承载，与数字规则 id 族互斥。
 		"CC 防护": {},
 		"评分拦截":  {"949", "959"},
 		"协议异常":  {"920"},
@@ -4522,9 +4525,10 @@ const geoipFamilyCondition = "rule_triggered GLOB '80[0-9][0-9][0-9][0-9]'"
 // 与 services 侧 encode/decodePrecheckRuleID 段界单一事实源同步。
 const crawlerFamilyCondition = "rule_triggered GLOB '8[1-9][0-9][0-9][0-9][0-9]'"
 
-// humanFamilyCondition CC 防护（人机挑战）族形态条件：ingest-human 写入非数字
-// rule_triggered（human_challenge/human_failed，历史含 human_pass）——GLOB 'human_*'
-// 整族覆盖，与数字规则 id 族互斥。pass 已不落库（2026-11-13），GLOB 仍兼容存量。
+// humanFamilyCondition CC 防护（人机挑战+限流拒绝）族形态条件：ingest-human
+// 写入非数字 rule_triggered（human_challenge/human_failed/cc_rate_reject，
+// 历史含 human_pass）——GLOB 'human_*' + cc_rate_reject 精确整族覆盖，与数字
+// 规则 id 族互斥。pass 已不落库（2026-11-13），GLOB 仍兼容存量。
 const humanFamilyCondition = "(rule_triggered GLOB 'human_*' OR rule_triggered = 'cc_rate_reject')"
 
 // ruleTriggeredPartStructured 报告一段筛选输入是否可按结构化路径解析（family
@@ -5251,6 +5255,21 @@ var legacyRuleFamilies = map[int]legacyRuleFamily{
 // class attackFamilyOther）。
 func legacyRuleFamilyOf(id int) legacyRuleFamily { return legacyRuleFamilies[id] }
 
+// ruleTriggeredAllDigits 报告 triggered 是否全为 ASCII 数字（非空）——
+// 5/6 位形谓词与 SQL GLOB '[0-9]' 同口径的校验单源（带外/集群写入的
+// 非数字形态不得被长度+首字符判据误归族）。
+func ruleTriggeredAllDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := range s {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 // attackFamilyClassOf 共享形态谓词——两个 Go 视图函数的唯一分类入口。
 // 预检 8xxxxx 段的家族/边界经 services.DecodePrecheckRuleID 单一事实源
 // 解码（段界字面量禁止在 handlers 复写——历史分叉：n>800000 vs n>=800000）。
@@ -5273,14 +5292,16 @@ func attackFamilyClassOf(ruleTriggered, ruleMsg string) attackFamilyClass {
 		// 自定义分支（同 7 位形态，漏判会把 IP 名单拦截记成自定义规则，
 		// 总览攻击族与阶段桶双错）。
 		return attackFamilyIPACL
-	case len(ruleTriggered) == 5:
+	case len(ruleTriggered) == 5 && ruleTriggeredAllDigits(ruleTriggered):
 		// 5 位 ID 恒为自定义规则(发射 id=crID+10000 落 10000-99999;
 		// CRS 恒 6 位)——先于 9 前缀判定,crID≥82000 发射 92000-99999 时不再被
-		// 遮蔽误标;与 customRuleFamilyCondition长度判据同口径。
+		// 遮蔽误标;与 customRuleFamilyCondition GLOB '[0-9]'×5 同口径
+		//（全数字校验：带外非数字形态不得误归自定义族）。
 		return attackFamilyCustomRule
-	case len(ruleTriggered) == 6 && ruleTriggered[0] >= '1' && ruleTriggered[0] <= '7':
+	case len(ruleTriggered) == 6 && ruleTriggered[0] >= '1' && ruleTriggered[0] <= '7' && ruleTriggeredAllDigits(ruleTriggered):
 		// DB 自定义规则 id 10000-789999 发射为 id+10000，6 位 1xxxxx-7xxxxx
 		// 是真实可达形态；8xxxxx/9xxxxx 分别由地域爬虫与 CRS 分支独占。
+		// 全数字校验与 GLOB '[1-7][0-9]'×5 同口径。
 		return attackFamilyCustomRule
 	case customORBranch:
 		// OR 条件分支使用独立高段，展示与筛选仍归同一自定义规则族。
@@ -5293,8 +5314,8 @@ func attackFamilyClassOf(ruleTriggered, ruleMsg string) attackFamilyClass {
 		// triggeredLabel 须与本分支保持一致。
 		return attackFamilyCustomRule
 	case legacyFamily.class == attackFamilyRateLimit:
-		// 429 精确命中（退役配额限流的存量事件；新 CC 防护事件为 human_*，
-		// 可达性实证见 categorizeAttack 的生产者声明）。
+		// 429 精确命中（退役配额限流的存量事件；新 CC 防护事件为 human_*/
+		// cc_rate_reject，可达性实证见 categorizeAttack 的生产者声明）。
 		return attackFamilyRateLimit
 	case strings.HasPrefix(ruleTriggered, "human_") || strings.HasPrefix(ruleTriggered, "cc_"):
 		// CC 防护人机事件（human_challenge/human_failed）与限流拒绝
@@ -5405,8 +5426,8 @@ func categorizeAttack(ruleTriggered, ruleMsg string) string {
 	// 429 是精确 ID，无前缀歧义。
 	//
 	// 可达性（实证）：阶段 2 配额限流退役后不再产生新的 429 行——CC 防护改由
-	// lb_human 插件响应，事件 id 为 human_*；但退役前的存量 429 行仍在库中
-	// （本地库实测 72 行，2026-10-15~10-16），本分支对这些行仍然生效，不是死码。
+	// lb_human 插件响应，事件 id 为 human_*/cc_rate_reject；但退役前的存量 429
+	// 行仍在库中（本地库实测 72 行，2026-10-15~10-16），本分支对这些行仍然生效，不是死码。
 	// 分类口径变更会改变 rollup 固化结果——必须同步递增
 	// threatRollupClassifierVersion（见 security_threat_screen.go 代际注释）。
 	// 5 位 ID 恒为自定义规则——先于 3 位前缀判定,crID≥82000
@@ -5449,8 +5470,8 @@ func categorizeAttack(ruleTriggered, ruleMsg string) string {
 //	请求体异常（id 11）/ CC 防护（429 存量精确）/ 其他。
 //
 // human_*（新 CC 防护人机挑战）为 action=challenged，被攻击面谓词整类排除，
-// 不进总览攻击分布——本函数不消费该形态（事件列表 CC 防护族筛选另由
-// humanFamilyCondition 承载）。
+// 不进总览攻击分布；cc_rate_reject 为 action=blocked，经 attackFamilyClassOf
+// 归 CC 防护桶（事件列表 CC 防护族筛选另由 humanFamilyCondition 承载）。
 //
 // ID 形态判定收敛至 attackFamilyClassOf 单一事实源，
 // 本函数只做类→桶映射。与概览视图的唯一有意分叉：9 开头 CRS 段整段归 WAF
@@ -5459,8 +5480,8 @@ func categorizeAttack(ruleTriggered, ruleMsg string) string {
 // customRuleFamilyCondition/geoipFamilyCondition）SQL 侧口径同步义务不变。
 func stageCategorizeAttack(ruleTriggered, ruleMsg string) string {
 	// 429 存量独立成桶：与事件列表的 CC 防护归类同口径，此前落「其他」——
-	// 同一事件在列表与总览口径分叉。退役后新事件为 human_*（不经本函数的
-	// 数字 id 形态判定）；分类口径变更须递增 threatRollupClassifierVersion。
+	// 同一事件在列表与总览口径分叉。退役后新事件为 human_*/cc_rate_reject
+	//（不经本函数的数字 id 形态判定）；分类口径变更须递增 threatRollupClassifierVersion。
 	class := attackFamilyClassOf(ruleTriggered, ruleMsg)
 	// WAF=自定义规则类+CRS 9 前缀段（categorizeAttack 的 crsAttackLabel 细分段
 	// 此处整段归一）。msg 门命中的 9 开头形态同样归 WAF（不 fall-through）。
@@ -6062,11 +6083,15 @@ func (h *Handlers) SetIP2RegionV6Enabled(c *gin.Context) {
 	services.WriteIP2RegionTreeCacheForToggle()
 	recordAudit(c, "更新", "IP数据库", "IPv6 地理库已"+enabledStateLabel(enabled))
 	applyErr := h.applyCaddyConfigE()
-	msg := "已更新"
 	if applyErr != nil {
-		msg = "已保存，但重载 Caddy 配置失败（待下次成功重载生效）: " + applyErr.Error()
+		// 200 注记面向任意登录用户：/load 传输错误恒含 admin 地址，与
+		// finishTxApply 退化提交注记同口径经 RedactCaddyAdminEndpoint 脱敏
+		//（详情由 applyCaddyConfigE 的日志/横幅留痕）。脱敏包裹必须内联在
+		// 响应写点（okFailureNoteLeaks 按写点实参识别脱敏出口）。
+		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.Tf(c, "k_7d87740a", services.RedactCaddyAdminEndpoint(applyErr.Error())), MessageKey: "k_7d87740a"})
+		return
 	}
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: msg})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_573eb966"), MessageKey: "k_573eb966"})
 }
 
 // ip2RegionRegionsResponse regions 响应体：地域树 + country_names_cn 并行
@@ -6686,8 +6711,9 @@ func updateOutOfStageConflict(req *models.UpdateSecurityPolicyRequest, policyTyp
 			return req.TrustDetection != nil && *req.TrustDetection
 		case stageZeroHuman:
 			// 人机/CC 族「显式生效」= 任一字段偏离阶段零值（off/slider/30/[] 与
-			// false/40/10/70/false/5）。编辑器对不呈现字段回传的惰性默认值不算
-			// 冲突（与其余族同口径）；nil=未提供不修改，不参与判定。
+			// false/40/10/70/false/5/challenge/0，与 applyStageZerosToUpdate 的
+			// stageZeroHuman 归零面逐字段对齐）。编辑器对不呈现字段回传的惰性
+			// 默认值不算冲突（与其余族同口径）；nil=未提供不修改，不参与判定。
 			activeStr := func(p *string, zero string) bool { return p != nil && *p != zero }
 			activeInt := func(p *int, zero int) bool { return p != nil && *p != zero }
 			activeBool := func(p *bool) bool { return p != nil && *p }
@@ -6700,7 +6726,9 @@ func updateOutOfStageConflict(req *models.UpdateSecurityPolicyRequest, policyTyp
 				activeInt(req.CCRPSWindow, db.DefaultCCRPSWindow) ||
 				activeInt(req.CC4xxRatio, db.DefaultCC4xxRatio) ||
 				activeBool(req.CCSessionAnomaly) ||
-				activeInt(req.CCSessionUAThreshold, db.DefaultCCSessionUAThreshold)
+				activeInt(req.CCSessionUAThreshold, db.DefaultCCSessionUAThreshold) ||
+				activeStr(req.CCTriggerAction, "challenge") ||
+				activeInt(req.CCQueueWaitSec, 0)
 		}
 		return false
 	})
@@ -6752,6 +6780,10 @@ func validateIPCIDRList(field, raw string) error {
 // validIPOrCIDR 是 IP/CIDR 条目的值级判定：接受 netip.ParsePrefix（CIDR）或
 // netip.ParseAddr（裸 IP）双形态。validateIPCIDRList 与 IP 地址列表条目校验
 // （securityiplists.go）共用，保证两处口径一致。
+// IPv6 裸网络地址（host 位全零，如 2001:db8::）拒绝：ACL 按单主机匹配只封
+// 该网络地址本身，而 autobanEntryIdentity 把它归一为 /64 身份键——与自动
+// 封禁候选同键，inList 命中后该 /64 整段自动封禁被永久抑制（手动条目
+// remark≠自动封禁，merge 永不挤出）。整段封禁意图必须显式 CIDR（/64）。
 func validIPOrCIDR(entry string) bool {
 	if _, err := netip.ParsePrefix(entry); err == nil {
 		return true
@@ -6760,7 +6792,19 @@ func validIPOrCIDR(entry string) bool {
 	// 但 coraza @ipMatch 静默丢弃(引擎 ip_match.go 不识别 zone)——零留痕
 	// 落库即失效。此处拒绝:带 zone 的地址不视为有效条目。
 	addr, err := netip.ParseAddr(entry)
-	return err == nil && addr.Zone() == ""
+	if err != nil || addr.Zone() != "" {
+		return false
+	}
+	if addr.Is6() && !addr.Is4In6() {
+		b := addr.As16()
+		for _, v := range b[8:] {
+			if v != 0 {
+				return true
+			}
+		}
+		return false // /64 网络地址（host 位全零）
+	}
+	return true
 }
 
 // user-id 三 helper 已合一为 rule_features.go 的

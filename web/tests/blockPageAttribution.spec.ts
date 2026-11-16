@@ -146,7 +146,10 @@ test('拦截页步骤：汇总卡替代逐条重复提示（主行 + 例外分�
   // i18n 后双钉:调用点钉键,zh 母本钉原文(任一漂移必红)
   assert.match(text, /t\('app\.security\.policies\.bp\.projection'\)/)
   assert.ok(code('src/locales/zh/security.ts').includes('触发本策略拦截时，向客户端返回下方选择的拦截页'), '顶部说明原文必须在 zh 母本词条中')
-  assert.doesNotMatch(text, /恒走兜底路由/, '内部术语不得回流')
+  // 结构负钉：顶部说明必须直消费 projection 词条键（上面已钉键+zh 母本），不得
+  // 经本地 computed 拼装第二份说明（裸中文「恒走兜底路由」负钉 i18n 后空转）。
+  assert.match(text, /\{\{ t\('app\.security\.policies\.bp\.projection'\) \}\}/, '顶部说明必须直消费词条键（无本地拼装层）')
+  assert.doesNotMatch(text, /blockPageProjectionText|bpProjectionNote/, '不得残留本地投影说明副本')
   assert.match(text, /t\('app\.security\.policies\.bind\.relatedCount', \{ n: boundRules\.length \}\)/)
   assert.ok(code('src/locales/zh/security.ts').includes('已关联 {n} 条规则'), '计数小标签原文必须在 zh 母本词条中')
   // 汇总卡：主行 + 例外分面（仅存在才渲染）+ 数据源复用绑定链/归因单源
@@ -168,7 +171,9 @@ test('拦截页步骤：汇总卡替代逐条重复提示（主行 + 例外分�
 test('接线：关联规则归属提示退役（常态信息由汇总行承载，逐条徽标/整句退役）', () => {
   const text = code('src/views/security/SecurityPolicies.vue')
   assert.doesNotMatch(text, /rowAttributionBadge/, '徽标判定单源已退役')
-  assert.doesNotMatch(text, /显示本策略页/, '两态徽标文案退役（拦截页必选，常态恒 self 无信息量）')
+  // 结构负钉：两态徽标已退役——归属只能走 bindingsAttribution 汇总键（下面钉），
+  // 不得残留徽标判定/逐行注记（裸中文「显示本策略页」负钉 i18n 后空转）。
+  assert.doesNotMatch(text, /blockPageNotes|attributionBadge|rowAttribution/)
   assert.doesNotMatch(text, /bound-rule-attribution/, '徽标样式随行退役')
   // 汇总行保留（info-note 规范）：N 条规则 + 兜底归属一句话。
   // i18n 后双钉:调用点钉键,zh 母本钉两句原文(任一漂移必红)

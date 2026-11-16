@@ -11,6 +11,14 @@ import {
 import { autobanEscalationLadder } from '../src/utils/autobanStatus.ts'
 import { repoCode, goConstInt, section } from './_helpers.ts'
 
+// Go 字符串常量取值（db 默认 duration/escalation/打底比例是字符串形态；
+// goConstInt 只覆盖整型）。缺失即抛错——对表断言拿 undefined 会假绿。
+const goConstString = (repoPath: string, name: string): string => {
+  const m = repoCode(repoPath).match(new RegExp(`^[ \\t]*(?:const\\s+|var\\s+)?${name}(?:\\s+[A-Za-z_][\\w.\\[\\]\\*]*)?\\s*=\\s*"([^"]*)"$`, 'm'))
+  if (!m) throw new Error(`goConstString: ${repoPath} 未解析到常量声明 ${name}`)
+  return m[1]!
+}
+
 test('预设档位：标准档==后端 db 默认（跨栈对账，存量无感）', () => {
   const std = AUTOBAN_PRESETS.standard
   assert.equal(std.threshold, goConstInt('internal/db/db.go', 'DefaultAutobanThreshold'))
@@ -18,6 +26,15 @@ test('预设档位：标准档==后端 db 默认（跨栈对账，存量无感�
   assert.equal(std.counting_mode, 'classic')
   // 标准档 scope=四全选（与 DefaultAutobanScope 同集合）。
   assert.deepEqual([...std.scope].sort(), ['blocked', 'challenge_failed', 'challenge_issued', 'logged'])
+  // 全字段对账：时长/升级档/倍率/打底比例逐项对齐 db 默认——
+  // 任一漂移会让「存量配置」显示为「自定义」，或选预设静默改变升级语义。
+  assert.equal(std.duration, goConstString('internal/db/db.go', 'DefaultAutobanDuration'))
+  assert.equal(std.escalation, goConstString('internal/db/db.go', 'DefaultAutobanEscalation'))
+  assert.equal(std.suspicion_multiplier, goConstInt('internal/db/db.go', 'DefaultAutobanSuspicionMultiplier'))
+  assert.equal(std.confirm_floor_ratio, goConstString('internal/db/db.go', 'DefaultAutobanConfirmFloorRatio'))
+  // 不静默启用累犯升级：db 默认 off，标准档必须同为 off（选中预设不得改变
+  // 升级语义）。
+  assert.equal(std.escalation, 'off')
 })
 
 test('预设档位：强化档=evidence+阈值减半+standard 升级', () => {

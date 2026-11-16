@@ -112,7 +112,8 @@ func TestInitialize_backfillsAutobanColumns(t *testing.T) {
 				t.Fatalf("seed: %v", err)
 			}
 			// 每轮重初始化前关闭上一轮主/metrics/audit 三个句柄；真实文件保留，
-			// 既验证重启回填路径，也避免前序连接泄漏到后续 14 轮。
+			// 既验证重启回填路径，也避免前序连接泄漏到后续各轮（用例数随表增长，
+			// 注释不再持具体计数）。
 			if err := Close(); err != nil {
 				t.Fatalf("close before re-initialize: %v", err)
 			}

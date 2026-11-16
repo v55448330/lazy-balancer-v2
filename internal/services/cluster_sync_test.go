@@ -2093,7 +2093,7 @@ func TestWafFilesDrifted_nullRefAppliedHashExempt(t *testing.T) {
 // 并保留方法与集群凭证——否则从节点 ErrUseLastResponse 拿到空 body 走
 // JSON 解析,报「解析集群快照: unexpected end of JSON input」且永不自愈
 // (用户 2026-09-18 实测:启用 admin TLS 后从节点同步持续失败)。
-// 跨主机重定向仍不得跟随(凭证外泄防护,见 doesNotFollowHTTPRedirect)。
+// 跨主机重定向仍不得跟随(凭证外泄防护,见 TestDoWithSameHostTLSUpgradeRedirect_doesNotFollowCrossHostHTTPSRedirect)。
 func TestSyncService_do_followsSameHostTLSUpgradeRedirect(t *testing.T) {
 	received := make(chan string, 2)
 	var targetURL string

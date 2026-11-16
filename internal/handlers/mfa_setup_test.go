@@ -194,6 +194,7 @@ func TestMFASetup_pendingWriteFailure_returns500(t *testing.T) {
 // 「读取 pending 故障」分支同口径）。生成器经测试缝注入（crypto/rand 故障
 // 无法在测试里自然构造）。
 func TestMFASetup_generateSecretFailureWritesLog(t *testing.T) {
+	withIsolatedGlobal(t)
 	// Given
 	h := newBackupTestHandlers(t)
 	seedMfaSetupUser(t)

@@ -21,8 +21,9 @@ const zhViewsLayout = (): string => code('src/locales/zh/views.ts')
 test('分页清单：页键 ↔ 页头标题/描述一一对应（可见文案即契约）', () => {
   assert.deepEqual([...SETTINGS_TAB_IDS], ['basic', 'cluster', 'certificates', 'apikeys', 'tasks'])
   // i18n:标题/描述经 settingsTabTitle/settingsTabDesc(词条 layout.settingsTab/settingsDesc.*)。
-  // 断言必须落在 settingsTab/settingsDesc 块内：全文件子串匹配会被平铺重复键
-  // （layout.basic 等）满足——删掉 settingsTab 块内页键也恒绿。
+  // 断言必须落在 settingsTab/settingsDesc 块内：全文件子串匹配会被其它块同形
+  // 键满足——删掉 settingsTab 块内页键也恒绿。（layout 平铺页键已随 settingsTab
+  // 单源收敛删除，此处不再以平铺重复键为反例。）
   const zhViews = code('src/locales/zh/views.ts')
   const tabBlock = section(zhViews, 'settingsTab: {', '},')
   const descBlock = section(zhViews, 'settingsDesc: {', '},')

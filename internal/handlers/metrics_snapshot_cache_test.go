@@ -245,6 +245,7 @@ func TestLoadCaddyMetricsSnapshot_callerPolicyControlsFailureReuse(t *testing.T)
 }
 
 func TestLoadCaddyMetricsSnapshot_canceledLeaderDoesNotFailWaiters(t *testing.T) {
+	withIsolatedGlobal(t)
 	// 并发消费面共用一个 single-flight：leader 客户端断开不得把 ctx 错误交给
 	// 其余健康请求（否则一次断开瞬断同批所有指标请求）。
 	resetCaddyMetricsSnapshotCacheForTest()

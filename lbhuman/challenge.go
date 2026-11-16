@@ -49,7 +49,7 @@ func recordCCTrigger(reason string) {
 // 页面选择与滑块同构：策略页含 {{human_js_widget}} 则注入 JS 组件，否则回退内置页。
 func (h *HumanHandler) serveJSChallenge(w http.ResponseWriter, r *http.Request, ip string) {
 	humanStats.Challenges.Add(1)
-	reportHumanEvent(h.RuleID, ip, r.Method, r.URL.RequestURI(), r.UserAgent(), "challenge")
+	reportHumanEvent(h.RuleID, ip, r.Method, r.URL.RequestURI(), "challenge")
 	token := issueChallengeToken()
 	registerChallengeSession(token, "js", h.RuleID, ip, r.Method, r.URL.RequestURI(), r.UserAgent(), challengeTokenTTL, 1)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -98,7 +98,7 @@ func (h *HumanHandler) serveJSVerify(w http.ResponseWriter, r *http.Request, ip 
 	}
 	if !tokenOK || !powOK {
 		humanStats.Fails.Add(1)
-		reportHumanEvent(h.RuleID, ip, r.Method, r.URL.RequestURI(), r.UserAgent(), "fail")
+		reportHumanEvent(h.RuleID, ip, r.Method, r.URL.RequestURI(), "fail")
 		w.WriteHeader(http.StatusBadRequest)
 		_, _ = w.Write([]byte(`{"ok":false}`))
 		return
@@ -112,7 +112,7 @@ func (h *HumanHandler) serveJSVerify(w http.ResponseWriter, r *http.Request, ip 
 	}
 	w.Header().Set("Set-Cookie", fmt.Sprintf("%s=%s; Path=/; HttpOnly; SameSite=Lax; Expires=%s%s", cookieName, cookieValue, exp.UTC().Format(http.TimeFormat), secure))
 	humanStats.Passes.Add(1)
-	reportHumanEvent(h.RuleID, ip, r.Method, r.URL.RequestURI(), r.UserAgent(), "pass")
+	reportHumanEvent(h.RuleID, ip, r.Method, r.URL.RequestURI(), "pass")
 	_, _ = w.Write([]byte(`{"ok":true}`))
 }
 

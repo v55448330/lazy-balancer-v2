@@ -472,6 +472,7 @@
           :title="t('app.settings.basic.autoBackup.history')"
           :description="autoBackupNextRunLabel ? t('app.settings.basic.autoBackup.lastAndNext', { last: autoBackupLastRunLabel, next: autoBackupNextRunLabel }) : t('app.settings.basic.autoBackup.lastOnly', { last: autoBackupLastRunLabel })"
         />
+        <el-alert v-if="autoBackupTruncated" type="warning" show-icon :closable="false" class="auto-backup-truncated" :title="t('app.settings.basic.autoBackup.historyTruncated')" />
         <div class="dialog-panel dialog-panel--flush auto-backup-list">
         <el-table v-loading="autoBackupLoading" :data="autoBackupRows" size="small" :max-height="320">
           <el-table-column :label="t('app.settings.basic.autoBackup.time')" width="170">
@@ -564,6 +565,7 @@ import { useAuthStore } from '@/stores/auth'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { request, mfaAwareSuccess, suspendSessionExpiredHandling } from '@/utils/api'
 import { formatBytes } from '@/utils/formatBytes'
+import { isConfigUnchanged } from '@/utils/saveResult'
 import LogStorageBar from '@/components/LogStorageBar.vue'
 import { useLogTailPolling } from '@/composables/useLogTailPolling'
 import { useSettingsDraft, type AdminTlsCertInfo } from '@/composables/useSettingsDraft'
@@ -574,9 +576,8 @@ import { normalizeTrafficSampleN } from '@/utils/threatFlowRules'
 import { shouldToastQuietPollError } from '@/utils/pollErrorToast'
 import { displaySecurityEventsRetentionDays, displaySecurityEventsRowCap, displayThreatScreenMode, securityEventsWritePayload, threatScreenWritePayload } from '@/utils/configValues'
 import { CHINA_SITE_CHOICES, COUNTRY_SITE_CHOICES, coordsForSiteLocation, nearestSiteLocation } from '@/utils/siteLocation'
-import { useCountryNamesCn } from '@/composables/useCountryNamesCn'
+import { useSiteChoiceLabel } from '@/composables/useSiteChoiceLabel'
 import RestoreResultDialog from '@/components/settings/RestoreResultDialog.vue'
-import { hasOwn } from '@/utils/hasOwn'
 import { BACKUP_SECTIONS, importConfirmMessage, normalizeBackupSectionKeys } from '@/utils/backupSections'
 import { createImportPreviewSession, importPreviewFingerprint, invalidateImportPreviews, type ImportPreviewSession } from '@/utils/importPreview'
 import { createLatestReadSession } from '@/utils/viewAsyncState'
@@ -771,6 +772,10 @@ interface AutoBackupSettingsResponse {
   last_success_at: string | null
   next_run_at: string | null
   catch_up_due: boolean
+  /** 备份列表被窗口截断（后端 limit+1 探测）：true=还有更旧的备份未返回。
+   *  正常态恒 false；旧后端缺省按 false（不冒充「已到最早」的确定结论也
+   *  不得反过来谎报截断）。 */
+  backups_truncated?: boolean
   backups: AutoBackupRow[]
 }
 
@@ -798,6 +803,9 @@ const autoBackupSavedSections = ref<string[]>([])
 const autoBackupLastRun = ref<string | null>(null)
 const autoBackupNextRunAt = ref<string | null>(null)
 const autoBackupCatchUpDue = ref(false)
+// 备份列表截断位（backups_truncated）：true 时列表上方提示「还有更旧的未返回」，
+// 否则用户会把窗口裁剪误读为「这就是全部历史」。
+const autoBackupTruncated = ref(false)
 // 行级在途门（占位先于确认框，同 TaskMonitor/ClusterSettings 范式）：双击或
 // 连点不同行不得叠出两个确认框、并发提交两次整库覆盖/删除。
 const restoringBackupId = ref<number | null>(null)
@@ -819,12 +827,15 @@ const openAutoBackupDialog = (): void => {
   if (backupDisabled.value) return
   autoBackupNextRunAt.value = null
   autoBackupCatchUpDue.value = false
+  autoBackupTruncated.value = false
   autoBackupVisible.value = true
 }
 
 const applyAutoBackupStatus = (d: AutoBackupSettingsResponse): void => {
   autoBackupNextRunAt.value = d.next_run_at ?? null
   autoBackupCatchUpDue.value = d.catch_up_due === true
+  // 截断位=显式 true 才提示（缺省/旧后端 false，不臆测）。
+  autoBackupTruncated.value = d.backups_truncated === true
   autoBackupRows.value = d.backups || []
   // last_run 是调度水位线（off→on=now），不是执行事实；「上次成功备份」
   // 只认最近一次 success 行（last_success_at）。
@@ -1559,26 +1570,9 @@ const restoreResult = ref<{ visible: boolean; kind: 'restore' | 'import'; messag
 // 站点位置下拉选项按 locale 映射(2026-11 用户需求):en 下中国省名走 provinces
 // 词条(裸键 fallback 原名);国家名源表 COUNTRY_CENTROIDS 键为中文国名,en 下经
 // country_names_cn 反查英文名(未收录回退原样);zh 下中文键原样展示。
-// value 保持 item.key 不变,提交语义零改动。
-const zhCountryNames = useCountryNamesCn()
-// 反转表=派生缓存(每次映射源变化重建),非展示词表——不进 vocabularyProtoKeys
-// 扫描面(该守卫面向静态展示词表);读取仍按原型键契约走 hasOwn。
-const cnToEnCountry = computed(() => {
-  const inv: Record<string, string> = {}
-  for (const [en, cn] of Object.entries(zhCountryNames.value)) {
-    if (!(cn in inv)) inv[cn] = en
-  }
-  return inv
-})
-const siteChoiceLabel = (item: { key: string; label: string }): string => {
-  if (locale.value !== 'en') return item.label
-  if (item.key.startsWith('cn:')) {
-    const mapped = t(`app.security.policies.geo.provinces.${item.label}`)
-    return mapped.includes('app.security.policies') ? item.label : mapped
-  }
-  const table = cnToEnCountry.value
-  return hasOwn(table, item.label) ? table[item.label] : item.label
-}
+// value 保持 item.key 不变,提交语义零改动。映射逻辑单源见
+// composables/useSiteChoiceLabel（集群节点配置弹框同用一份）。
+const { siteChoiceLabel } = useSiteChoiceLabel()
 const applySiteLocation = (key: string): void => {
   if (!key) {
     settings.value.server_map_lat = 0
@@ -2011,8 +2005,14 @@ const handleSave = async () => {
         ElMessage.error(t('app.settings.basic.messages.tlsSaveFail', { reason }))
       }
     } else {
+      // 无变化判定走语言无关 messageKey（k_f724d3c8）：原 zh 字面量 includes 在 en
+      // 下恒失配 → 无变化被谎报为「保存成功」。无变化按 info 呈现后端如实文案。
       const message = (saveResp as unknown as { message?: string }).message ?? ''
-      mfaAwareSuccess(message.includes('配置无变化') ? message : t('app.settings.basic.messages.saved'))
+      if (isConfigUnchanged(saveResp as unknown as { message?: string; messageKey?: string })) {
+        ElMessage.info(message || t('app.settings.basic.messages.noChanges'))
+      } else {
+        mfaAwareSuccess(t('app.settings.basic.messages.saved'))
+      }
     }
   } catch (error) {
     // MessageBox 仅以 'cancel'/'close' 字符串 reject（用户取消），静默短路；
@@ -2128,6 +2128,8 @@ const handleSave = async () => {
 .auto-backup-scope-text { white-space: nowrap; }
 .auto-backup-scope-text.is-warning { color: var(--el-color-warning); }
 .auto-backup-list { min-height: 80px; }
+/* 截断提示与列表的间距（el-alert 默认无底部外边距） */
+.auto-backup-truncated { margin-bottom: 8px; }
 
 /* 自管标签行族已退役（2026-10-11 用户裁定：对齐统一走原生 el-form-item，
  * Firefox label-for 控制台告警为 EP 上游已知形态、非用户可见）——

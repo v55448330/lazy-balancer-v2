@@ -382,6 +382,7 @@ export default {
           "configChanged": "Configuration changes detected",
           "acmeSettingsTitle": "ACME settings",
           "confirmSaveSection": "Confirm saving {section}?",
+          "noChanges": "No configuration changes",
           "saved": "Saved"
         }
       },
@@ -851,6 +852,7 @@ export default {
           "scope": "Backup scope",
           "scopeHint": "Select at least one section (unselected sections are not backed up)",
           "history": "Backup history",
+          "historyTruncated": "Older backups exist but were not returned (only the most recent batch is listed)",
           "lastAndNext": "Last successful backup: {last} · Next backup: {next}",
           "lastOnly": "Last successful backup: {last}",
           "colVersion": "Version",
@@ -930,6 +932,7 @@ export default {
           "confirmSaveSection": "Confirm saving {section}?",
           "unknownError": "Unknown error",
           "tlsSaveFail": "Basic settings saved; HTTPS configuration failed to save: {reason}. The certificate is unchanged — save again to retry only the HTTPS part",
+          "noChanges": "No configuration changes",
           "saved": "Saved"
         }
       },

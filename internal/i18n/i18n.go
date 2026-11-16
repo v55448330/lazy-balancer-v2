@@ -143,7 +143,8 @@ func T(lang, key string) string {
 	return v[0]
 }
 
-// RegisterErrTpl 登记服务层中文错误模板(含 %s/%d 占位)与英文对应模板。
+// RegisterErrTpl 登记服务层中文错误模板(仅 %s 占位——matchTpl 只按 %s 切分
+// 对齐,%d/%v 等一律按字面量处理)与英文对应模板。
 // 登记后按静态字面量总长降序重排 errZh:泛化模板("写入 %s: %s")不得抢先
 // 吞掉具体模板("写入 CRS VERSION 标记: %s")——注册序不可控,匹配优先级
 // 只由字面量具体度决定(同长按注册序稳定)。

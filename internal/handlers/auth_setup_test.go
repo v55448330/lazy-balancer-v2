@@ -113,6 +113,47 @@ func TestLogin_returns_created_at_and_new_last_login_as_nullable_values(t *testi
 	}
 }
 
+// master 登录写点 last_login 绑定平面串（2026-10-11 时间戳统一裁定）：
+// 写侧不再直绑 time.Time（驱动默认带时区后缀）。glebarez 驱动对 DATETIME
+// 列有亲和归一——读回恒 RFC3339（探针实证），存储形态由驱动决定；本钉
+// 断言读回是合法时间戳且与登录时刻一致（写侧收口的可观测面），不钉存储
+// 字节形态（驱动行为不可从写侧收口，如实披露见 touchLastLogin 注释）。
+func TestLogin_lastLoginStoredFlatFormat(t *testing.T) {
+	database := setupAuthTestDB(t)
+	if _, err := database.Exec(`CREATE TABLE global_config (id INTEGER PRIMARY KEY, is_master BOOLEAN, jwt_expire_minutes INTEGER, mfa_lockout_enabled BOOLEAN); INSERT INTO global_config VALUES (1,1,20,1)`); err != nil {
+		t.Fatalf("create global config: %v", err)
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte("Secret123!"), bcrypt.MinCost)
+	if err != nil {
+		t.Fatalf("hash password: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO users (username,password_hash,role,is_enabled) VALUES ('root',?,'admin',1)`, string(hash)); err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+	h := &Handlers{cfg: &config.Config{JWTSecret: "test-secret"}}
+	router := gin.New()
+	router.POST("/auth/login", h.Login)
+	request := httptest.NewRequest(http.MethodPost, "/auth/login", strings.NewReader(`{"username":"root","password":"Secret123!"}`))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	before := time.Now().UTC().Add(-2 * time.Second)
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("login status=%d body=%s", response.Code, response.Body.String())
+	}
+	var stored string
+	if err := database.QueryRow(`SELECT last_login FROM users WHERE username='root'`).Scan(&stored); err != nil {
+		t.Fatalf("read last_login: %v", err)
+	}
+	parsed, err := time.Parse(time.RFC3339, stored)
+	if err != nil {
+		t.Fatalf("last_login=%q 非合法时间戳: %v", stored, err)
+	}
+	if parsed.Before(before) || parsed.After(time.Now().UTC().Add(2*time.Second)) {
+		t.Fatalf("last_login=%q 与登录时刻不一致", stored)
+	}
+}
+
 func TestLogin_signs_password_version_claim(t *testing.T) {
 	database := setupAuthTestDB(t)
 	if _, err := database.Exec(`CREATE TABLE global_config (id INTEGER PRIMARY KEY, is_master BOOLEAN, jwt_expire_minutes INTEGER, mfa_lockout_enabled BOOLEAN); INSERT INTO global_config VALUES (1,1,20,1)`); err != nil {

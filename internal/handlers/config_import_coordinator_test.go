@@ -107,6 +107,7 @@ func beginImportWindowForTest(t *testing.T) func() {
 // 并发导入必须串行；第二个会话在第一个
 // close 前不得已执行 Pause，否则第一个 Resume 会让它失去排空保护。
 func TestBeginConfigImport_serializesConcurrentSessions(t *testing.T) {
+	withIsolatedGlobal(t)
 	h := newBackupTestHandlers(t)
 	initTaskEngineForTest(t)
 	te := services.TaskEngine()
@@ -437,6 +438,7 @@ func TestBeginConfigImport_ruleReadFailureAudits(t *testing.T) {
 }
 
 func TestBeginConfigImport_beginTxFailureAudits(t *testing.T) {
+	withIsolatedGlobal(t)
 	h := newBackupTestHandlers(t)
 	initTaskEngineForTest(t)
 	services.ResetCAQueueManagerForTest()
@@ -586,6 +588,7 @@ func TestConfigImportAbort_restoresCommittedLKGWhenRuntimeRestoreFails(t *testin
 }
 
 func TestImportConfigBackup_invalidatesTaskLogCacheAndCancelsInFlightRuns(t *testing.T) {
+	withIsolatedGlobal(t)
 	// Given import side-effect spies.
 	h := newBackupTestHandlers(t)
 	oldInvalidate, oldCancel := invalidateImportTaskLogCache, cancelImportInFlightRuns

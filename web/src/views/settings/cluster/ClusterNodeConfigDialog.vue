@@ -39,10 +39,10 @@
             @change="applySiteLocation"
           >
             <el-option-group :label="t('common.app.views.cluster.groupChinaProvinces')">
-              <el-option v-for="item in CHINA_SITE_CHOICES" :key="item.key" :label="item.label" :value="item.key" />
+              <el-option v-for="item in CHINA_SITE_CHOICES" :key="item.key" :label="siteChoiceLabel(item)" :value="item.key" />
             </el-option-group>
             <el-option-group :label="t('common.app.views.cluster.groupIntlCountries')">
-              <el-option v-for="item in COUNTRY_SITE_CHOICES" :key="item.key" :label="item.label" :value="item.key" />
+              <el-option v-for="item in COUNTRY_SITE_CHOICES" :key="item.key" :label="siteChoiceLabel(item)" :value="item.key" />
             </el-option-group>
           </el-select>
           <span class="form-tip-inline">{{ coordSummary }}</span>
@@ -66,10 +66,14 @@ import { Setting } from '@element-plus/icons-vue'
 import DialogHeader from '@/components/DialogHeader.vue'
 import { validateClusterUrl } from '@/utils/clusterUrl'
 import { CHINA_SITE_CHOICES, COUNTRY_SITE_CHOICES, coordsForSiteLocation, initialNodeSiteForm, nearestSiteLocation, nodeSiteCoordsChanged } from '@/utils/siteLocation'
+import { useSiteChoiceLabel } from '@/composables/useSiteChoiceLabel'
 import type { ClusterNode } from '@/types'
 
 // 弹框文案走 i18n(批次 D cluster 域,common.app.views.cluster.*)。
 const { t } = useI18n()
+// 站点坐标下拉标签单源（zh 原名 / en 省名词条 + 国家名反查；与基础设置本站
+// 坐标选择器同一实现）——value 仍是 item.key，提交语义不变。
+const { siteChoiceLabel } = useSiteChoiceLabel()
 
 interface NodeConfigForm {
   access_url: string

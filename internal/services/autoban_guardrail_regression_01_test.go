@@ -13,7 +13,7 @@ import (
 	"lazy-balancer-v2/internal/taskengine"
 )
 
-// feedAndRun 前置：预置名单+喂一个候选 IP 进计数器+配置六列，跑一轮 Run。
+// feedAndRun 前置：预置名单+喂一个候选 IP 进计数器+配置十列，跑一轮 Run。
 func feedAndRun(t *testing.T, threshold, windowMin int, duration, scope string, dryRun bool) error {
 	t.Helper()
 	installAutobanFixture(t, "2026-10-14 10:00:00")

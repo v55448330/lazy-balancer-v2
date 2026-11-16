@@ -114,9 +114,11 @@ test('历史统计失败置错误态并给重试，空态文案不再代表失�
   const dialog = section(dashboard, '<el-dialog v-model="ruleHistoryVisible"', '</el-dialog>')
   assert.match(dialog, /v-if="ruleHistoryError"/)
   assert.match(dialog, /@click="fetchRuleHistory"/)
-  // 错误态分支内不得再出现「该时间范围内暂无数据」（zh 母本钉原文，避免键改名后负断言空转）
+  // 错误态分支内不得消费空态词条键 noDataInRange（zh 母本另钉原文；键级负钉防 i18n 后空转）
   const errorBranch = dialog.slice(dialog.indexOf('v-if="ruleHistoryError"'), dialog.indexOf('<template v-else>', dialog.indexOf('v-if="ruleHistoryError"')))
-  assert.doesNotMatch(errorBranch, /该时间范围内暂无数据/)
+  // i18n 后空态文案已键化：错误分支不得消费空态词条键（原裸中文负钉在 code()
+  // 视图里永不命中——空态文案回潮不再红）。
+  assert.doesNotMatch(errorBranch, /noDataInRange/)
   assert.ok(code('src/locales/zh/common.ts').includes('该时间范围内暂无数据'), '空态文案必须在 zh 母本词条中')
   // i18n 后双钉:失败文案调用点钉键 + zh 母本钉原文
   assert.match(dialog, /t\('common\.app\.dashboard\.historyLoadFailed'\)/)
@@ -397,8 +399,9 @@ const tokenizeSpec = (text: string): SpecToken[] => {
   let i = 0
   let prev = ''
   // 正则起点判据（与 _helpers.commentSpans 同族）：表达式位置的 `/` 才是正则，
-  // 收尾记号后的 `/` 是除号。
-  const regexStart = prev === '' || '(,=:[!&|?{};'.includes(prev) || prev === 'return' || prev === '=>'
+  // 收尾记号后的 `/` 是除号。判据必须按当前 prev 逐记号计算——一次性常量在
+  // prev='' 时恒真，后续所有除号都会被当正则吞掉。
+  const regexStart = (): boolean => prev === '' || '(,=:[!&|?{};'.includes(prev) || prev === 'return' || prev === '=>'
   while (i < text.length) {
     const ch = text[i]
     if (/\s/.test(ch)) { i++; continue }
@@ -424,7 +427,7 @@ const tokenizeSpec = (text: string): SpecToken[] => {
       i = j + 1
       continue
     }
-    if (ch === '/' && regexStart) {
+    if (ch === '/' && regexStart()) {
       let j = i + 1
       let inClass = false
       while (j < text.length) {

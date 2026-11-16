@@ -273,6 +273,7 @@ import { useAuthStore } from '@/stores/auth'
 import { useLogTailPolling } from '@/composables/useLogTailPolling'
 import { ansiToHtml } from '@/utils/ansi'
 import { request, mfaAwareSuccess } from '@/utils/api'
+import { isConfigUnchanged } from '@/utils/saveResult'
 import { CDN_PRESETS, DEFAULT_ACCESS_LOG_FORMAT } from '@/utils/caddyDefaults'
 import { buildCaddyConfigPayload } from '@/utils/caddyConfigPayload'
 import { numberOr } from '@/utils/configValues'
@@ -706,8 +707,11 @@ const handleSave = async (): Promise<void> => {
       })
     }
     const saved = await request.put('/config', payload)
-    // 诚实提示（v2.3.2 用户反馈）：无变化时不得谎报「保存成功」
-    if (!changed || saved?.message?.startsWith(t('app.settings.caddy.messages.noChanges'))) {
+    // 诚实提示（v2.3.2 用户反馈）：无变化时不得谎报「保存成功」。
+    // 判定：预览未变更（!changed）或后端语义键=k_f724d3c8（语言无关；原按
+    // t(noChanges) 前缀比较，en 下与后端 en 文案虽同源但耦合译文、zh 下亦然——
+    // 语义键是稳定判据）。
+    if (!changed || isConfigUnchanged(saved as unknown as { message?: string; messageKey?: string })) {
       ElMessage.info(t('app.settings.caddy.messages.noChanges'))
     } else {
       mfaAwareSuccess(t('app.settings.caddy.messages.saved'))

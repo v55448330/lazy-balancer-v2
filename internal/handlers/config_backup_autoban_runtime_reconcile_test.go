@@ -1,7 +1,7 @@
 package handlers
 
 // 备份导入（含自动备份还原）用通用
-// `UPDATE global_config SET …` 直接写 `autoban_*` 六列，绕过
+// `UPDATE global_config SET …` 直接写 `autoban_*` 十列，绕过
 // `services.SetAutobanConfig` 的运行期收敛不变量——
 //   - 统计窗口/口径变更 → 清空固定窗口计数桶（旧计数不可与新口径混算）；
 //   - 阈值变更 → 重算「已达阈值」标记；
@@ -9,10 +9,10 @@ package handlers
 //     会让重新启用后零新流量立即批量封禁）。
 //
 // 既有唯一清桶门只覆盖「备份携带 security_ip_lists（全量替换）」形态：
-// 只导「系统数据」（备份含 global_config 而不含名单迟到表）时六列被改写、
+// 只导「系统数据」（备份含 global_config 而不含名单迟到表）时十列被改写、
 // 计数桶原样保留 → ≤60s 后的评估轮把陈旧计数按新窗口整批并入封禁候选。
 //
-// 修复口径：提交成功后按「导入前后六列是否变化」执行与 SetAutobanConfig
+// 修复口径：提交成功后按「导入前后十列是否变化」执行与 SetAutobanConfig
 // 同源的收敛（单源 services.ReconcileAutobanRuntimeAfterConfigReplace），
 // 结论并入响应 warnings 与成功审计。
 
@@ -55,7 +55,7 @@ func autobanRuntimeImportBackup(t *testing.T, omit map[string]struct{}, cfg map[
 // When 导入「系统数据」分类备份（含 global_config、不含 security_ip_lists），
 // 备份把窗口改为 1 分钟。
 // Then 提交后计数桶必须清零（旧计数不得按新窗口参与候选评估），且响应
-// warnings 披露该收敛；对照组（六列未变化的导入）不得清桶。
+// warnings 披露该收敛；对照组（十列未变化的导入）不得清桶。
 func TestImportConfigBackup_resetsAutobanCountersOnConfigChange(t *testing.T) {
 	h := newBackupTestHandlers(t)
 	enableAutobanFormalMode(t) // enabled=true / threshold=1 / window=5 / all / 正式
@@ -78,7 +78,7 @@ func TestImportConfigBackup_resetsAutobanCountersOnConfigChange(t *testing.T) {
 		t.Fatalf("read autoban_window_minutes: %v", err)
 	}
 	if storedWindow != 1 {
-		t.Fatalf("autoban_window_minutes=%d, want 1（前置：六列确实随导入落库）", storedWindow)
+		t.Fatalf("autoban_window_minutes=%d, want 1（前置：十列确实随导入落库）", storedWindow)
 	}
 	if got := services.AutobanTrackedIPs(); got != 0 {
 		t.Fatalf("导入提交后 autoban 计数桶=%d, want 0（口径/窗口变更必须清桶：陈旧计数会被新窗口整批并入封禁候选）", got)
@@ -88,7 +88,7 @@ func TestImportConfigBackup_resetsAutobanCountersOnConfigChange(t *testing.T) {
 	}
 }
 
-// 对照组：备份携带的六列与当前运行值完全一致 → 运行期状态不得被清
+// 对照组：备份携带的十列与当前运行值完全一致 → 运行期状态不得被清
 // （防过度清桶把观察态证据无谓丢弃）。
 func TestImportConfigBackup_keepsAutobanCountersWhenConfigUnchanged(t *testing.T) {
 	h := newBackupTestHandlers(t)
@@ -104,11 +104,11 @@ func TestImportConfigBackup_keepsAutobanCountersWhenConfigUnchanged(t *testing.T
 		t.Fatalf("import status=%d body=%s, want 200", response.Code, response.Body.String())
 	}
 	if got := services.AutobanTrackedIPs(); got != 1 {
-		t.Fatalf("六列未变化的导入不得清计数桶，tracked=%d, want 1", got)
+		t.Fatalf("十列未变化的导入不得清计数桶，tracked=%d, want 1", got)
 	}
 }
 
-// 对照组：备份根本未携带 global_config（Config=nil）→ 六列不可能变化，
+// 对照组：备份根本未携带 global_config（Config=nil）→ 十列不可能变化，
 // 不得触碰运行期状态。
 func TestImportConfigBackup_keepsAutobanCountersWhenConfigNotCarried(t *testing.T) {
 	h := newBackupTestHandlers(t)

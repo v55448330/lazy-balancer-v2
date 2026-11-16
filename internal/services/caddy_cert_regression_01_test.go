@@ -153,27 +153,27 @@ func TestGenerateCaddyConfig_crsPoolFingerprintEvaluatedOncePerBatch(t *testing.
 		seedBoundSecurityPolicy(t, database, id, "detection", true)
 	}
 
-	before := crsPoolFingerprintEvals.Load()
+	before := crsPoolFingerprintEvalsForTest.Load()
 	// 计数器为包级共享：测后把本用例增量还回去（跨用例残留会让后续断言失真）。
 	// 本包无 t.Parallel 用例，串行执行下「增量恰 1」是可判定的。
 	t.Cleanup(func() {
-		crsPoolFingerprintEvals.Add(-(crsPoolFingerprintEvals.Load() - before))
+		crsPoolFingerprintEvalsForTest.Add(-(crsPoolFingerprintEvalsForTest.Load() - before))
 	})
 	generated := generateCaddyConfigFromStore(database)
 	if message, failed := generated[caddyConfigGenerationErrorKey].(string); failed {
 		t.Fatalf("generate config: %s", message)
 	}
-	if delta := crsPoolFingerprintEvals.Load() - before; delta != 1 {
+	if delta := crsPoolFingerprintEvalsForTest.Load() - before; delta != 1 {
 		t.Fatalf("单轮渲染指纹求值 %d 次, want 1（批次级缓存必须收敛为一次）", delta)
 	}
 
 	// 第二轮独立渲染：批次缓存不得跨轮残留——新批次仍须各自求值一次。
-	secondBase := crsPoolFingerprintEvals.Load()
+	secondBase := crsPoolFingerprintEvalsForTest.Load()
 	generated = generateCaddyConfigFromStore(database)
 	if message, failed := generated[caddyConfigGenerationErrorKey].(string); failed {
 		t.Fatalf("second generate config: %s", message)
 	}
-	if delta := crsPoolFingerprintEvals.Load() - secondBase; delta != 1 {
+	if delta := crsPoolFingerprintEvalsForTest.Load() - secondBase; delta != 1 {
 		t.Fatalf("第二轮渲染指纹求值 %d 次, want 1（批次缓存跨轮残留）", delta)
 	}
 }

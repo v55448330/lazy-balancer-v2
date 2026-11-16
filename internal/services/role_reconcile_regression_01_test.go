@@ -121,7 +121,8 @@ func assertRoleSideEffectsApplied(t *testing.T) {
 
 // 降级方向（DB=从、引擎=主）：对账必须做 BecomeSlave 的配套半边。用户显式
 // 停止的 cluster-sync 保持停止（角色翻转不得复活用户停止态——task-engine
-// 标准 v2.2 §5），并以 warn 显式提示手动开启，不得静默脱管。
+// 标准 v2.2 §5），并以 warn 显式提示真实恢复路径（先升主开启调度再切回），
+// 不得静默脱管。
 func TestReconcileTaskEngineRole_demoteAppliesSideEffects(t *testing.T) {
 	te := newWireTestEngine(t)
 	if !te.IsMaster() {
@@ -160,8 +161,40 @@ func TestReconcileTaskEngineRole_demoteAppliesSideEffects(t *testing.T) {
 	if enabled, ok := loadTaskLoopPrefs()["cluster-sync"]; ok && enabled {
 		t.Fatalf("切从后 cluster-sync 持久偏好不得回写启用, got %v (found=%v)", enabled, ok)
 	}
-	if got := strings.Count(logs.String(), "切从后不会同步，请手动开启"); got != 1 {
+	if got := strings.Count(logs.String(), "切从后不会同步。恢复方法：提升为主节点后在任务监控开启 cluster-sync 调度，再切回从节点"); got != 1 {
 		t.Fatalf("保持停止提示 warn=%d 条, want 1: %s", got, logs.String())
+	}
+}
+
+// 零实例兜底分支（未登记 ClusterService 的测试/嵌入形态）：角色对账降级
+// 必须与实例分支同口径清 autoban 内存计数器——旧角色时代陈旧计数不得按新
+// 口径执法（主→从→主往返残留 reached 桶升主首轮 merge 全部封禁）。
+func TestReconcileTaskEngineRole_zeroInstancesStillResetsAutobanCounters(t *testing.T) {
+	te := newWireTestEngine(t)
+	// 摘除本库全部登记实例，构造零实例兜底形态（newWireTestEngine 的装配
+	// 可能登记实例；逐个注销后对账走 len(instances)==0 分支）。
+	for _, instance := range clusterServicesFor(db.DB) {
+		unregisterClusterService(instance)
+	}
+	if got := clusterServicesFor(db.DB); len(got) != 0 {
+		t.Fatalf("前置失败：仍有 %d 个登记实例", len(got))
+	}
+	if _, err := db.DB.Exec(`UPDATE global_config SET is_master=0 WHERE id=1`); err != nil {
+		t.Fatalf("seed slave db state: %v", err)
+	}
+	seedAutobanWindowForRoleTest(t)
+	t.Cleanup(ResetAutobanCounters)
+	if autobanWindowCountForRoleTest() == 0 {
+		t.Fatal("前置失败：陈旧计数未种入")
+	}
+
+	reconcileTaskEngineRole()
+
+	if te.IsMaster() {
+		t.Fatal("DB=从时引擎必须降级")
+	}
+	if n := autobanWindowCountForRoleTest(); n != 0 {
+		t.Fatalf("零实例兜底分支必须清 autoban 陈旧计数（与实例分支 applyRoleSideEffects 同口径），残留 %d 桶", n)
 	}
 }
 

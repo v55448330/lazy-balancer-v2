@@ -32,7 +32,8 @@ test('IP 弹框首开先完成名单快照，再读取自动封禁，避免重�
 test('策略向导关闭前核对完整编辑快照，脏状态需确认放弃', () => {
   const page = code('src/views/security/SecurityPolicies.vue')
   const snapshot = member(page, 'const wizardStateSnapshot =')
-  for (const field of ['form', 'boundRules', 'bindingOrderEdits', 'ipACLList', 'ipWhitelist', 'crsExcludedRows']) {
+  // 13 字段与 wizardStateSnapshot 逐键对表（漏钉字段被移除=可编辑态静默丢弃修改）
+  for (const field of ['form', 'ipACLList', 'ipWhitelist', 'ipWhitelistEnabled', 'ipBlacklistSelf', 'ipACLListRefs', 'ipWhitelistRefs', 'geoipCountries', 'crsRuleGroups', 'crsExcludedRows', 'selectedCustomRules', 'boundRules', 'bindingOrderEdits']) {
     assert.match(snapshot, new RegExp(`\\b${field}\\b`), `未保存判定遗漏 ${field}`)
   }
   const close = member(page, 'const beforeWizardClose =')
@@ -62,7 +63,9 @@ test('威胁大屏配置到达前和读取失败时均不默认全量采样', ()
   assert.match(page, /const activeSampleN = ref\(0\)/, '首帧必须以关闭采样起步')
   const load = member(page, 'async function loadServerCentroid')
   assert.match(load, /activeSampleN\.value = flowSampleN\.value === 0 \? 0 : 1/, '配置到达后再按配置启用采样')
-  const failure = load.slice(load.indexOf('} catch {'))
+  const catchAt = load.indexOf('} catch {')
+  assert.ok(catchAt > 0, '缺配置读取失败分支（marker 漂移时切片空转=假绿）')
+  const failure = load.slice(catchAt)
   assert.doesNotMatch(failure, /activeSampleN\.value = 1/, '配置失败不得回退全量')
 })
 

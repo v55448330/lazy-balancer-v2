@@ -9,6 +9,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -42,5 +44,41 @@ func TestFetchWafFiles_sanitizesV6VersionTag(t *testing.T) {
 	// 合法版本串零变化（三族同钉，防消毒误伤正常同步）。
 	if bundle.CRSVersion != "v4.29.0" || bundle.IP2RegionTag != "v3.17.0" {
 		t.Fatalf("合法版本串必须原样保留: %+v", bundle)
+	}
+}
+
+// Given 本地 v6 库伴生 .version 与 ref 声明的 IP2RegionV6Tag。
+// When 「同步开关关闭」轻量比对（wafFilesRefVersionLabelsDiffer）。
+// Then v6 标签必须参与判定：一致→不判分叉；不一致→分叉；标签文件缺失但
+// ref 声明非空→分叉（读失败按分叉，不静默放行）。
+// 此前轻量比对只钉了 threat 段，v6 分支删掉也全绿（标签面漏判会让从端
+// 停在旧 v6 库上不重拉）。
+func TestWafFilesRefVersionLabelsDiffer_v6TagBranch(t *testing.T) {
+	dir := t.TempDir()
+	oldV6 := ip2regionV6LivePath
+	ip2regionV6LivePath = filepath.Join(dir, "ip2region_v6.xdb")
+	t.Cleanup(func() { ip2regionV6LivePath = oldV6 })
+
+	label := ip2regionV6LivePath + ".version"
+	if err := os.WriteFile(label, []byte("v6.1.0\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ref := &models.ClusterWafFilesRef{IP2RegionV6Tag: "v6.1.0"}
+	if wafFilesRefVersionLabelsDiffer(ref) {
+		t.Fatal("v6 标签一致时不得判分叉")
+	}
+
+	if err := os.WriteFile(label, []byte("v6.2.0\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if !wafFilesRefVersionLabelsDiffer(ref) {
+		t.Fatal("v6 标签不一致必须判分叉")
+	}
+
+	if err := os.Remove(label); err != nil {
+		t.Fatal(err)
+	}
+	if !wafFilesRefVersionLabelsDiffer(ref) {
+		t.Fatal("ref 声明非空而本地 v6 标签缺失（读失败）必须判分叉")
 	}
 }

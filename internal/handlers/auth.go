@@ -23,8 +23,8 @@ import (
 	"lazy-balancer-v2/internal/services"
 )
 
-// maxAuthJSONBodyBytes 公开 auth 端点（login/setup/ticket-login）的 JSON 请求体
-// 上限。这三条路由无认证，前置 loginRateLimit 只限次数不限体积；
+// maxAuthJSONBodyBytes 公开 auth 端点（login/setup/ticket-login/mfa-verify）的
+// JSON 请求体上限。这四条路由无认证，前置 loginRateLimit 只限次数不限体积；
 // encoding/json 在 binding max= 约束生效前就把整个字符串物化进堆——单个超大
 // password 字段即 O(n) 分配，ReadTimeout=30s 下单请求载荷可达带宽×30s，足以
 // OOM 单进程应用并连带容器内 Caddy 子进程（与问题/ 认证
@@ -322,7 +322,13 @@ func touchLastLogin(userID int, username, clientIP string) (time.Time, bool) {
 	lastLogin := time.Now().UTC()
 	// 刻意无 ctx 豁免：last_login 是账号活动证据而非授权前提，best-effort 记账
 	// 有意设计（失败留痕不撤销已签发会话）；随请求中止只会让活动证据系统性缺失。
-	_, err := db.DB.Exec("UPDATE users SET last_login = ? WHERE id = ?", lastLogin, userID)
+	// 平面格式意图落库（2026-10-11 时间戳统一裁定）：绑定平面串而非 time.Time
+	// （后者经驱动默认带时区后缀）。注意：glebarez 驱动对 DATETIME 列有亲和
+	// 归一——即使绑定平面串，读回仍 RFC3339（"2006-01-02T15:04:05Z"，探针
+	// 实证 typeof=text）；存储形态由驱动决定，写侧收口只保证绑定值平面。
+	// 读侧全容忍（parseTimeFormats 双形态），last_login 无跨值 SQL 时间比较
+	// （仅 cluster_apply 自值保全），格式乒乓无功能损坏。
+	_, err := db.DB.Exec("UPDATE users SET last_login = ? WHERE id = ?", lastLogin.Format("2006-01-02 15:04:05"), userID)
 	if err == nil {
 		lastLoginTouchFailing.Reset()
 		return lastLogin, true

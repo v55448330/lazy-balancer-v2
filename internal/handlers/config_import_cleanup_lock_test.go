@@ -22,6 +22,7 @@ import (
 )
 
 func TestImportV1PostCommitCleanupRunsOutsideCaddyLockInsideImportWindow(t *testing.T) {
+	withIsolatedGlobal(t)
 	h := newBackupTestHandlers(t)
 	certDir := t.TempDir()
 	t.Cleanup(services.SetCertDirForTest(certDir))
@@ -88,6 +89,7 @@ func TestImportV1PostCommitCleanupRunsOutsideCaddyLockInsideImportWindow(t *test
 // Then HTTP handler 不等清理结束就返回响应（客户端不再「导入卡住」），清理在
 // 后台继续并在放行后完成——清理已与请求生命周期解耦（WithoutCancel + 预算）。
 func TestImportV1PostCommitCleanupRunsAsync(t *testing.T) {
+	withIsolatedGlobal(t)
 	h := newBackupTestHandlers(t)
 	certDir := t.TempDir()
 	t.Cleanup(services.SetCertDirForTest(certDir))

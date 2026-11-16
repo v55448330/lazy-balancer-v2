@@ -496,6 +496,7 @@ func TestUpdateRule_reissues_when_default_CA_differs_from_latest_job_provider(t 
 }
 
 func TestDeleteRule_returns_timeout_and_preserves_rule_when_worker_does_not_exit(t *testing.T) {
+	withIsolatedGlobal(t)
 	// Given
 	handler, _, _ := newAuditRuleHandlers(t, 0)
 	seedAuditRule(t, "lb_delete_timeout", "timeout", "timeout.example.test", 8080, true, "acme_dns", true)
@@ -2389,6 +2390,7 @@ func waitTestChannel(t *testing.T, ch <-chan struct{}, label string) {
 }
 
 func TestRuleCertCancellation_releasesCaddyOpLock(t *testing.T) {
+	withIsolatedGlobal(t)
 	tests := []struct {
 		name  string
 		setup func(t *testing.T) (*Handlers, *gin.Engine, *http.Request, string)

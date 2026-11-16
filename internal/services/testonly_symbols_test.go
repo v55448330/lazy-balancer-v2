@@ -39,6 +39,11 @@ var testOnlyEntryList = map[string]bool{
 	// 宿主已迁到 autoban_testonly_helpers_test.go。
 	"autobanObserveEvent":       true,
 	"autobanObserveEventScoped": true,
+	// 累犯表的 test-only 导出入口（生产守卫/删除恒走
+	// DeleteAutobanRecidivismGuarded 的事务视图）：宿主已迁
+	// autoban_recidivism_test.go，搬回产品文件即报错。
+	"AutobanIdentityActivelyBanned": true,
+	"DeleteAutobanRecidivism":       true,
 	// 安全事件 spool 测试缝（有意留驻产品文件：Reset 入口被 handlers 测试
 	// 跨包消费、计数器由生产读取路径自增供测试观测——宿主不可能在 *_test.go）。
 	"ResetSecurityEventsSpoolStateForTest":           true,
@@ -53,6 +58,9 @@ var testOnlyEntryList = map[string]bool{
 	// 同步循环 Resume 观测计数缝（生产路径自增、handlers 测试跨包消费，
 	// 宿主留驻产品文件；同带 //testseam: 标记）。
 	"SyncResumeCallsForTest": true,
+	// CRS 池指纹求值计数缝（生产渲染路径自增、同包测试读取；宿主留驻
+	// 产品文件，同带 //testseam: 标记）。
+	"crsPoolFingerprintEvalsForTest": true,
 }
 
 // productTestOnlyViolations 扫描单个产品文件源码，返回违规描述（空切片=通过）。

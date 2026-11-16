@@ -2712,6 +2712,10 @@ type auditSpool struct {
 	pendingSeal []string
 	lastWrite   time.Time
 	closed      bool
+	// sealLog 封存失败告警节流（首次立即，其后每分钟一条并携带被抑制数）：
+	// 持续封存失败时每批重试不得逐批刷 ERROR 日志洪泛（与 L4 rotateLocked
+	// 的 sealLog 同族同口径）。
+	sealLog auditLogThrottle
 }
 
 // openAuditSpool 创建/打开 spool 目录并开启本进程的 active 文件。
@@ -2996,7 +3000,9 @@ func (s *auditSpool) rotateLocked() error {
 			return serr
 		}
 		if err := os.Rename(oldPath, newPath); err != nil {
-			auditIOLogf("audit writer: security-events spool seal failed for %s (continuing on the same active file): %v", s.activePath, err)
+			if suppressed, logNow := s.sealLog.report(time.Now()); logNow {
+				auditIOLogf("audit writer: security-events spool seal failed for %s (continuing on the same active file, suppressed %d since last report): %v", s.activePath, suppressed, err)
+			}
 			return nil
 		}
 		s.noteActiveRenameLocked(oldPath, newPath)
@@ -3115,6 +3121,10 @@ type auditIPCShipper struct {
 	spooled   atomic.Uint64
 	spoolErrs atomic.Uint64
 	spoolLog  auditLogThrottle
+	// idleSealLog idle 封存失败告警节流（首次立即，其后每分钟一条并携带
+	// 被抑制数）：持续封存故障下 drain ticker 每 auditIPCFlushInterval 重试
+	// 一次，不节流即按 ticker 频率洪泛 ERROR（与 spoolLog/sealLog 同族）。
+	idleSealLog auditLogThrottle
 }
 
 // newAuditIPCShipper 按配置建出货器。spool 打不开不阻断写侧：IPC 失败时行改走
@@ -3177,7 +3187,9 @@ func (s *auditIPCShipper) submit(line []byte) {
 func (s *auditIPCShipper) flushIfDue(now time.Time) {
 	if s.spool != nil {
 		if err := s.spool.sealIfIdle(now, auditSpoolIdleSeal); err != nil {
-			auditIOLogf("audit writer: security-events spool idle seal failed: %v", err)
+			if suppressed, logNow := s.idleSealLog.report(now); logNow {
+				auditIOLogf("audit writer: security-events spool idle seal failed (suppressed %d since last report): %v", suppressed, err)
+			}
 		}
 	}
 	s.mu.Lock()

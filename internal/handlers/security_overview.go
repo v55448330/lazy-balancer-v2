@@ -103,8 +103,10 @@ var ruleStageStatsCache = newTTLCache[ruleStageStatsCacheKey, ruleStageStatsSnap
 
 // loadRuleStageStats 返回单规则近 24h 的阶段分桶计数与分段耗时（命中缓存时
 // 零查询）。分桶口径：阶段 1={2,4,7,8,14}∪[800000,900000)∪[1500000,1520000)
-// 预检段（IsStage1PrecheckID 单一事实源），非数字 triggered 归「未归因」独立桶（与
-// categorizeAttack 的「其他/未归因」口径一致），其余归阶段 3。
+// 预检段（IsStage1PrecheckID 单一事实源）；429（退役配额限流存量）与
+// cc_rate_reject（CC 限流拒绝）属阶段 2 CC 防护，与 429 同口径排除（阶段 2
+// 统计由 lb_human 插件供给，不得混入未归因桶）；其余非数字 triggered 归
+// 「未归因」独立桶（与 categorizeAttack 的「其他/未归因」口径一致），其余归阶段 3。
 // 分桶查询失败显式上抛（不缓存）；耗时为增强信息——失败留 warn 按零值并入
 // 快照（响应仍返回其余已取数据，与缓存前口径一致）。
 func loadRuleStageStats(metricsDB *sql.DB, ruleCaddyID string, now time.Time) (ruleStageStatsSnapshot, error) {
@@ -132,7 +134,7 @@ func loadRuleStageStats(metricsDB *sql.DB, ruleCaddyID string, now time.Time) (r
 		}
 		n, convErr := strconv.Atoi(triggered)
 		switch {
-		case triggered == "429":
+		case triggered == "429", triggered == "cc_rate_reject":
 			continue
 		case convErr == nil && services.IsStage1PrecheckID(n):
 			snapshot.stage1 += count

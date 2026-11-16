@@ -1234,7 +1234,10 @@ func (e *Engine) startDaemon(id string, r *registration, ctx context.Context, ca
 				// 健康运行一段后再崩=新故障，预算重置（抖动不得永久耗尽）。
 				r.abnormalRestarts = 0
 			}
-			if r.loopEnabled && !stopped && allows && !r.relaunchPending {
+			// ctx 复核与 premature-exit 分支同形态：demote/停机在 Run 返回
+			// 与角色快照之间取消 ctx 时，陈旧 allows 快照不得消费自愈预算
+			// （到点重拉另有角色复核兜底，但预算记账偏差本身即缺陷）。
+			if r.loopEnabled && !stopped && allows && !r.relaunchPending && ctx.Err() == nil {
 				if r.abnormalRestarts < len(e.daemonRestartDelays) {
 					relaunchDelay = e.daemonRestartDelays[r.abnormalRestarts]
 					r.abnormalRestarts++

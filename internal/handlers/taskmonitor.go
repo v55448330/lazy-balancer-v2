@@ -78,11 +78,11 @@ func triggerAuditContext(c *gin.Context, family, name string) services.TriggerAu
 // 审计由触发服务/调用方按既有单记口径处理，本 helper 只写响应。
 func respondTaskTriggerAdmissionError(c *gin.Context, err error) {
 	if errors.Is(err, taskengine.ErrNotMaster) {
-		c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: apimsg.Tf(c, "k_e48d88b3", apimsg.ErrMsg(c, err))})
+		c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: apimsg.Tf(c, "k_b550cb83", apimsg.ErrMsg(c, err))})
 		return
 	}
 	if errors.Is(err, taskengine.ErrAlreadyRunning) || errors.Is(err, taskengine.ErrSchedulingPaused) {
-		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: apimsg.Tf(c, "k_e48d88b3", apimsg.ErrMsg(c, err))})
+		c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: apimsg.Tf(c, "k_b550cb83", apimsg.ErrMsg(c, err))})
 		return
 	}
 	// 引擎已停止（IsStopped 预检之后才停止的关停竞态窗）：与 toggle/cancel/
@@ -92,7 +92,7 @@ func respondTaskTriggerAdmissionError(c *gin.Context, err error) {
 		respondTaskEngineStopped(c)
 		return
 	}
-	c.JSON(http.StatusServiceUnavailable, models.APIResponse{Code: 503, Message: apimsg.Tf(c, "k_cbf39b14", apimsg.ErrMsg(c, err))})
+	c.JSON(http.StatusServiceUnavailable, models.APIResponse{Code: 503, Message: apimsg.Tf(c, "k_684247f0", apimsg.ErrMsg(c, err))})
 }
 
 // respondTaskEngineUnavailable 任务引擎未装配的统一响应。引擎缺失属「服务

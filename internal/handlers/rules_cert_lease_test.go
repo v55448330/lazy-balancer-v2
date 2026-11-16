@@ -15,6 +15,7 @@ import (
 )
 
 func TestUpdateRule_ReleasesBlockLeaseWhenCancelWindowPanics(t *testing.T) {
+	withIsolatedGlobal(t)
 	// Given an enabled ACME rule whose certificate cancellation window panics.
 	handler, _, _ := newAuditRuleHandlers(t, 0)
 	seedAuditRule(t, "lb_update_lease_panic", "update-lease-panic", "update-lease-panic.example.test", 8080, true, "acme_dns", true)
@@ -99,6 +100,7 @@ func TestUpdateRule_domainMigrationCancelPanicRestoresLock(t *testing.T) {
 }
 
 func TestDisableRule_ReleasesBlockLeaseWhenCancelWindowPanics(t *testing.T) {
+	withIsolatedGlobal(t)
 	// Given an enabled ACME rule whose certificate cancellation window panics.
 	handler, _, _ := newAuditRuleHandlers(t, 0)
 	seedAuditRule(t, "lb_disable_lease_panic", "disable-lease-panic", "disable-lease-panic.example.test", 8080, true, "acme_dns", true)

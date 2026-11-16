@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -17,25 +16,7 @@ import (
 // 公共夹具：与 completeBackupJSON 同构，但允许注入全局配置区（Config）。
 func configBackupJSON(t *testing.T, tables map[string][]map[string]any, cfg map[string]any) string {
 	t.Helper()
-	completeTables := make(map[string][]map[string]any, len(configBackupTables))
-	for _, table := range configBackupTables {
-		completeTables[table] = []map[string]any{}
-	}
-	completeTables["users"] = []map[string]any{{"id": 1, "username": "backup-admin", "password_hash": "hash", "role": "admin", "is_enabled": 1}}
-	for table, rows := range tables {
-		completeTables[table] = rows
-	}
-	backup := configBackup{
-		Meta:   configBackupMeta{App: "lazy-balancer-v2", Version: 2, ExportedAt: "2026-08-21T00:00:00Z"},
-		Config: cfg,
-		Tables: completeTables,
-	}
-	backup.Meta.Checksum = checksumBackupPayload(t, completeTables, cfg)
-	data, err := json.Marshal(backup)
-	if err != nil {
-		t.Fatalf("marshal backup: %v", err)
-	}
-	return string(data)
+	return buildBackup(t, backupFixtureOptions{FillAll: true, Tables: tables, Config: cfg})
 }
 
 func assertZeroWriteShared(t *testing.T) {

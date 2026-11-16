@@ -71,10 +71,11 @@ func TestListChallengeRecords_terminationByFetchedTotalNotPageArithmetic(t *test
 	}
 }
 
-// TotalCount 失真偏大（1000）而实际只有 1 条（短页）时，短页兜底必须终止
-// （与 cloudflare 同口径）：不足请求页大小即末页。旧口径 "页号×请求页大小
-// ≥TotalCount" 在 1000 的失真总数下永不成立，空转到页数上限（20 次调用）；
-// 新口径短页即收手（1 次调用），记录不漏收。
+// TotalCount 失真偏大（1000）而每页只回同一条短页记录：total 优先口径下
+// 短页不再无条件收手（裁定：对齐三家 total 优先，函数头注释明示统一契约），
+// 由「整页重复（无进展）」守卫终止——第 2 页取到已见记录即收手（2 次调用、
+// 1 条记录），不空转到页数上限。短页兜底仅在 total≤0 时生效（见
+// missingTotalStopsOnEmptyPage 与 shortPageFallback 形状）。
 func TestListChallengeRecords_shortPageStopsWithInflatedTotal(t *testing.T) {
 	var calls int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -94,8 +95,8 @@ func TestListChallengeRecords_shortPageStopsWithInflatedTotal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("listChallengeRecords: %v", err)
 	}
-	if len(records) != 1 || calls != 1 {
-		t.Fatalf("records=%d calls=%d, want 1/1（短页兜底终止，不空转页数上限）", len(records), calls)
+	if len(records) != 1 || calls != 2 {
+		t.Fatalf("records=%d calls=%d, want 1/2（重复页无进展即收手，不空转页数上限）", len(records), calls)
 	}
 }
 
@@ -200,5 +201,38 @@ func TestListChallengeRecords_nonTargetFullPageContinuesToTarget(t *testing.T) {
 	}
 	if calls < 2 {
 		t.Fatalf("calls=%d, want ≥2（必须翻到第 2 页取目标记录）", calls)
+	}
+}
+
+// TotalCount 缺失（0）时短页兜底（与 cloudflare/tencent 同口径）：不足请求
+// 页大小即末页。第 1 页整页 100 条（继续），第 2 页 50 条短页（收手），
+// 取尽 150 条且不重不漏——total 优先口径下兜底只在 total≤0 生效。
+func TestListChallengeRecords_shortPageFallbackWithoutTotal(t *testing.T) {
+	var calls int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		count := challengeListPageSize
+		if calls == 2 {
+			count = 50
+		}
+		records := make([]map[string]any, 0, count)
+		for i := range count {
+			records = append(records, map[string]any{
+				"RecordId": strconv.Itoa(1000 + (calls-1)*challengeListPageSize + i), "RR": "_acme-challenge.www", "Type": "TXT", "Value": "challenge-value",
+			})
+		}
+		writeFakeJSON(w, http.StatusOK, map[string]any{
+			"TotalCount": 0, "DomainRecords": map[string]any{"Record": records}, "RequestId": "req-list",
+		})
+	}))
+	t.Cleanup(server.Close)
+	provider := newFakeProvider(t, server.URL, 1)
+
+	records, err := provider.listChallengeRecords(context.Background(), testZone, "_acme-challenge.www")
+	if err != nil {
+		t.Fatalf("listChallengeRecords: %v", err)
+	}
+	if len(records) != 150 || calls != 2 {
+		t.Fatalf("records=%d calls=%d, want 150/2（total 缺失时短页兜底，整页不漏扫）", len(records), calls)
 	}
 }

@@ -69,3 +69,34 @@ func TestDeploymentFailedTruncatesMessage(t *testing.T) {
 		t.Fatalf("deployment-failed message lost attempt prefix: %.120s...", message)
 	}
 }
+
+// 封顶形态的长错误详情：慢速重试说明必须完整保留（先按「上限-说明长度」
+// 预算截断 base 再追加）——「先追加后截断」会把终态说明整段截掉，UI 看不出
+// 任务已转入慢速重试。
+func TestDeploymentFailedTruncatesMessage_keepsSlowRetryNoteAtCap(t *testing.T) {
+	jobID, ruleID := seedCertificateJob(t, "downloaded")
+	// 计数器预置到上限前一次：本次失败即封顶（attempt=10/10）。
+	if _, err := db.DB.Exec("UPDATE cert_jobs SET deployment_attempts=? WHERE id=?", maxCertificateDeploymentAttempts-1, jobID); err != nil {
+		t.Fatalf("seed deployment attempts: %v", err)
+	}
+	issuer := NewCertIssuer(func() error { return errors.New("reload failed") })
+	issuer.deploymentRetry = func(int, issuedCertificate, time.Duration) error { return nil }
+	material := issuedCertificate{
+		ruleID: ruleID, certPEM: "new-cert", keyPEM: "new-key",
+		notAfter: time.Now().Add(90 * 24 * time.Hour), providerID: 1,
+	}
+	longDetail := strings.Repeat("中", 400) + strings.Repeat("deploy-error:", 300)
+
+	_ = issuer.deploymentFailed(jobID, material, longDetail, errors.New("reload failed"))
+
+	var message string
+	if err := db.DB.QueryRow("SELECT message FROM cert_jobs WHERE id=?", jobID).Scan(&message); err != nil {
+		t.Fatalf("read deployment-failed job message: %v", err)
+	}
+	if len(message) > maxJobMessageBytes || !utf8.ValidString(message) {
+		t.Fatalf("cert_jobs.message len=%d valid=%v, want <=%d valid UTF-8", len(message), utf8.ValidString(message), maxJobMessageBytes)
+	}
+	if !strings.Contains(message, "慢速重试（磁盘/重载恢复后自动收敛）") {
+		t.Fatalf("封顶 message 丢失慢速重试说明（先追加后截断漂移）: %.120s...", message)
+	}
+}

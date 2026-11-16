@@ -18,6 +18,7 @@ import (
 // 让管理员对整个分钟级导入重试，而「会话建立后不受断连影响」是协调器的书面
 // 契约（session.ctx = WithoutCancel(request)）。
 func TestImportConfigBackupCore_survivesRequestCancellationDuringApply(t *testing.T) {
+	withIsolatedGlobal(t)
 	// Given：一份可导入的规则库备份 + 在 begin 阶段就已断连的请求
 	h := newBackupTestHandlers(t)
 	seedLiveAdminShared(t)

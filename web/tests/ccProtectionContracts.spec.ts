@@ -259,7 +259,8 @@ test('双语 parity：CC 改动域 zh/en 键集完全一致（无单侧裸键）
     ['views.stages', zhViewsTree.stages, enViewsTree.stages],
   ]
   // geo.provinces 为有意不对称映射（zh 市名即源文，消费方仅 en 侧映射且带裸键回退
-  // 守卫，见 SecurityPolicies.vue / BasicSettings.vue 的 mapped.includes 判定），
+  // 守卫，见 SecurityPolicies.vue 的 mapped.includes 判定与 composables/
+  // useSiteChoiceLabel.ts（BasicSettings + ClusterNodeConfigDialog 共用）），
   // 不属本次 CC 改动域，parity 比对显式豁免该子树。
   const PARITY_EXEMPT_PREFIX = 'security.policies.geo.provinces.'
   for (const [name, zh, en] of pairs) {

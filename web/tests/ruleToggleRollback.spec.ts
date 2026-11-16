@@ -14,7 +14,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { code, member } from './_helpers.ts'
+import { code, member, source } from './_helpers.ts'
 
 const RULES = 'src/views/Rules.vue'
 
@@ -35,8 +35,9 @@ test('成功分支仍回读列表（服务端归一化后的状态以列表为�
   const toggle = member(text, 'const toggleRule = async (rule: Rule) =>')
   const success = toggle.slice(toggle.indexOf('mfaAwareSuccess'), toggle.indexOf('} catch'))
   assert.match(success, /await fetchRules\(\)/, '成功后回读列表（不得依赖「等待下次轮询同步」）')
-  // 旧注释声称有轮询兜底——规则列表没有轮询，该承诺是错的
-  assert.doesNotMatch(text, /等待下次轮询同步/, '规则列表没有轮询兜底，不得保留该承诺')
+  // 注释钉：旧注释声称有轮询兜底（规则列表没有轮询）——必须按 raw 视图钉，
+  // code() 剥注释后该负断言恒真（假绿）。
+  assert.doesNotMatch(source(RULES), /等待下次轮询同步/, '规则列表没有轮询兜底，不得保留该承诺')
 })
 
 test('在途门与只读门仍在（双击不叠双请求）', () => {

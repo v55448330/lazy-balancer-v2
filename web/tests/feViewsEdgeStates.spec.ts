@@ -215,7 +215,9 @@ test('TCP 锁图标有名称、规则开关有名称', () => {
   // TCP 锁与 HTTP 同构（阶段 0/1 放开）：灰 placeholder 锁退役，
   // TCP 走同一 popover 锁（role=button + 流程弹框 aria 名称，键盘语义共享）
   assert.doesNotMatch(rules, /acl-lock-icon--tcp/)
-  assert.doesNotMatch(rules, /TCP 规则不支持安全策略/)
+  // 结构负钉：TCP 锁与 HTTP 同构（下方 reference 单源钉已承载）；退役文案
+  // 「TCP 规则不支持安全策略」已键化，裸中文负钉空转——改钉协议分叉形态。
+  assert.doesNotMatch(rules, /v-if="row\.protocol === 'tcp'"[^>]*acl-lock/)
   const reference = section(rules, '<template #reference>', '</template>')
   assert.match(reference, /role="button"/)
   // i18n 后双钉:调用点钉键,zh 母本钉文案原文(任一漂移必红)

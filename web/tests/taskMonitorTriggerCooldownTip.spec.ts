@@ -14,7 +14,9 @@ const vue = code('src/views/settings/TaskMonitor.vue')
 const fn = member(vue, 'const runCooldownReason')
 
 test('冷却 tooltip 不再承诺「手动运行将立即尝试」', () => {
-  assert.doesNotMatch(fn, /手动运行将立即尝试/, '失真承诺不得回潮：触发无 force，冷却中会被 429 拒绝')
+  // 结构负钉：tooltip 不得承诺 force 语义——触发无 force，冷却中会被 429 拒绝。
+  // 函数体不得出现 force 参数/立即尝试承诺（裸中文负钉 i18n 后空转）。
+  assert.doesNotMatch(fn, /force|立即尝试/, '触发语义不得承诺 force/立即尝试')
 })
 
 test('冷却 tooltip 按后端布尔披露实门口径：拒绝条件与越窗出口', () => {
@@ -31,7 +33,11 @@ test('冷却 tooltip 按后端布尔披露实门口径：拒绝条件与越窗�
   assert.ok(caWindowTip.includes('重签'), 'caWindow 词条必须披露越窗出口动作：「重签」')
   // 仅通用冷却（布尔=false）：触发放行——不得声称被拒
   assert.match(fn, /app\.settings\.taskMonitor\.cooldown\.normal/, '仅通用冷却的行必须如实披露「冷却期后可直接重试」')
-  assert.doesNotMatch(fn, /冷却期内手动触发将被拒绝/, '通用冷却分支「将被拒绝」过声称不得回潮')
+  // 结构负钉：通用冷却是函数末尾兜底返回（normal 键），其后不得再有 caWindow
+  // 拒绝分支（裸中文「将被拒绝」负钉 i18n 后空转）。
+  const normalAt = fn.indexOf("t('app.settings.taskMonitor.cooldown.normal'")
+  assert.ok(normalAt > 0, '缺通用冷却兜底分支')
+  assert.doesNotMatch(fn.slice(normalAt), /caWindow/, '通用冷却分支之后不得再消费 caWindow 拒绝口径')
 })
 
 test('永久不可重试禁用判据与冷却分钟数同源不受文案改动影响', () => {

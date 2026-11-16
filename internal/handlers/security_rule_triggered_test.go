@@ -116,10 +116,10 @@ func TestRuleTriggeredMultiFilterSQL_partialFamilyPrefix(t *testing.T) {
 }
 
 // （2026-09-05 安全核心域审计裁定修复）：「自定义规则」筛选 family 必须与
-// categorizeAttack 总览口径一致——5 位任意数字 ID（emit=crID+10000）与 ≥7 位
-// 以 1 开头的合成 ID（1000000+）归本族；6 位 1xxxxx（CRS 保留段余数、无发射
-// 源，总览判「其他」）不得被 LIKE 前缀误并入。以真实 SQLite 判定生成的条件
-// 实际命中哪些 ID。
+// categorizeAttack 总览口径一致——5 位任意数字 ID（emit=crID+10000）、6 位
+// 1xxxxx-7xxxxx（DB id 10000-789999 发射 id+10000）与 ≥7 位以 1 开头的合成
+// ID（1000000+）归本族；非数字形态不得被长度/前缀判据误并入（与 SQL GLOB
+// 全数字口径一致）。以真实 SQLite 判定生成的条件实际命中哪些 ID。
 func TestRuleTriggeredFilterSQL_customRuleFamilyMatchesCategorizeAttackScope(t *testing.T) {
 	setupSecurityPolicyTestDB(t)
 	if _, err := db.DB.Exec(`CREATE TABLE rule_triggered_family_probe (rule_triggered TEXT)`); err != nil {
@@ -132,10 +132,10 @@ func TestRuleTriggeredFilterSQL_customRuleFamilyMatchesCategorizeAttackScope(t *
 		"1234567",  // 7 位以 1 开头
 		"3642688",  // OR 分支（DB 父规则 42）
 		"67000064", // 旧内嵌 OR 分支（合成父 emit id 1000001）
-		"100123",   // 6 位 1xxxxx：CRS 保留段余数，总览判「其他」
+		"100123",   // 6 位 1xxxxx：DB 自定义发射形态，总览归自定义规则
 		"942100",   // CRS
 		"2",        // IP ACL
-		"223456",   // 6 位非 1 开头
+		"223456",   // 6 位 2xxxxx：同为自定义发射形态（1xxxxx-7xxxxx）
 	}
 	for _, id := range probes {
 		if _, err := db.DB.Exec(`INSERT INTO rule_triggered_family_probe (rule_triggered) VALUES (?)`, id); err != nil {
@@ -533,6 +533,43 @@ func TestRuleTriggeredFilterSQL_ccProtectionSpacedKeysUnified(t *testing.T) {
 			if m[id] {
 				t.Errorf("筛选键 %q 不得命中数字规则 id %q: %v", key, id, m)
 			}
+		}
+	}
+}
+
+// attackFamilyClassOf 的 5/6 位形谓词必须与 SQL GLOB 同口径校验全数字：
+// 带外/集群写入的非数字形态（"12a45"/"1x3456"）不得被长度+首字符判据误归
+// 自定义规则族（GLOB '[0-9]...' 不命中）。总览分桶与事件页族筛选同窗口口径。
+func TestAttackFamilyClassOf_nonDigitShapesNotCustomRule(t *testing.T) {
+	setupSecurityPolicyTestDB(t)
+	if _, err := db.DB.Exec(`CREATE TABLE rule_triggered_digit_probe (rule_triggered TEXT)`); err != nil {
+		t.Fatal(err)
+	}
+	probes := []string{"12a45", "1x3456", "7x3456", "12345", "123456"}
+	for _, id := range probes {
+		if _, err := db.DB.Exec(`INSERT INTO rule_triggered_digit_probe (rule_triggered) VALUES (?)`, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var args []any
+	cond := ruleTriggeredFilterSQL("自定义规则", &args)
+	rows, err := db.DB.Query(`SELECT rule_triggered FROM rule_triggered_digit_probe WHERE `+cond, args...)
+	if err != nil {
+		t.Fatalf("query family filter: %v", err)
+	}
+	matched := map[string]bool{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		matched[id] = true
+	}
+	rows.Close()
+	for _, id := range probes {
+		goCustom := attackFamilyClassOf(id, "") == attackFamilyCustomRule
+		if goCustom != matched[id] {
+			t.Errorf("attackFamilyClassOf(%q) 自定义=%v 与 SQL GLOB 命中=%v 分叉（5/6 位形必须全数字）", id, goCustom, matched[id])
 		}
 	}
 }

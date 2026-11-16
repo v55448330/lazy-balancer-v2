@@ -3,8 +3,6 @@ package services
 // DeleteNode 伴随的 pin 清理失败必须进入 pendingPins 重试链（与 Promote 的
 // cleanupClusterPin 同构）：裸 os.Remove 失败只留一行日志，pin 文件从此既无
 // 周期重试也无节流审计，只能人工删盘。真实失败机制=非空目录（os.Remove
-// ENOTEMPTY），断言系统终态（pendingPins 登记 + 重试收敛 + 审计节流）。
-
 import (
 	"context"
 	"errors"
@@ -12,6 +10,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"lazy-balancer-v2/internal/config"
 	"lazy-balancer-v2/internal/db"
 )
 
@@ -80,6 +79,76 @@ func TestClusterService_DeleteNode_pinCleanupFailureEntersPendingRetry(t *testin
 	cluster.pinCleanupMu.Unlock()
 	if pending != 0 {
 		t.Fatalf("重试成功后 pendingPins=%d, want 0", pending)
+	}
+	if got := countAuditRows(t, auditDB, "清理", "证书指纹"); got != 1 {
+		t.Fatalf("清理成功审计=%d, want 1", got)
+	}
+}
+
+// Pull 的 pin 重试必须遍历本库登记的全部 ClusterService 实例（与主端巡检
+// clusterServicesFor 同形态）：生产装配下 NewSyncService 自建内层实例，而
+// pendingPins 登记在 BecomeSlave 接收者（外层）——只打内层实例恒触达空表，
+// 外层残留永不清理。真实失败机制=非空目录占据 pin 路径（os.Remove
+// ENOTEMPTY），断言系统终态（审计留痕 + 障碍移除后磁盘 pin 消失/登记清空）。
+func TestSyncService_Pull_pinRetrySweepsRegisteredInstances(t *testing.T) {
+	outer, database := newClusterTestService(t)
+	setNodeMasterRole(t, database, false)
+	sync := NewSyncService(database, &config.Config{DataDir: t.TempDir()}, nil)
+	t.Cleanup(func() { unregisterSyncDrainer(sync) })
+	if sync.cluster == outer {
+		t.Fatal("前置不成立：内层与外层同实例（装配形态已变）")
+	}
+	pinPath, err := clusterPinPath("", database, "old-master.example:8443")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(pinPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pinPath, "child"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(pinPath) })
+	// 外层登记 pendingPins（BecomeSlave→detachFromMaster→cleanupClusterPin 失败形态）。
+	outer.pinCleanupMu.Lock()
+	outer.pendingPins = map[string]string{pinPath: "https://old-master.example:8443"}
+	outer.pinCleanupMu.Unlock()
+	auditDB := db.AuditDB
+
+	// When：一轮 Pull（未审批形态早退失败，但 pin 重试先于审批检查执行）。
+	if _, pullErr := sync.Pull(context.Background()); pullErr == nil {
+		t.Fatal("want 未审批早退失败")
+	}
+
+	// Then：重试触达外层实例——失败形态留一条「清理失败」审计且登记保留。
+	if got := countAuditRows(t, auditDB, "清理失败", "证书指纹"); got != 1 {
+		t.Fatalf("清理失败审计=%d, want 1（重试必须触达登记 pendingPins 的外层实例，而非内层空表）", got)
+	}
+	outer.pinCleanupMu.Lock()
+	tracked := outer.pendingPins[pinPath] != ""
+	outer.pinCleanupMu.Unlock()
+	if !tracked {
+		t.Fatal("失败形态必须保留 pending 登记（下轮继续重试）")
+	}
+
+	// When：障碍移除（pin 变为可删除形态），再一轮 Pull。
+	if err := os.RemoveAll(pinPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(pinPath, []byte("fingerprint\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, _ = sync.Pull(context.Background())
+
+	// Then：系统终态收敛——磁盘 pin 消失、外层登记清空、成功审计一条。
+	if _, err := os.Stat(pinPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("重试后磁盘 pin 未删除: %v", err)
+	}
+	outer.pinCleanupMu.Lock()
+	remaining := len(outer.pendingPins)
+	outer.pinCleanupMu.Unlock()
+	if remaining != 0 {
+		t.Fatalf("重试成功后外层 pendingPins=%d, want 0", remaining)
 	}
 	if got := countAuditRows(t, auditDB, "清理", "证书指纹"); got != 1 {
 		t.Fatalf("清理成功审计=%d, want 1", got)

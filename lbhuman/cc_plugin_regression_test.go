@@ -357,18 +357,14 @@ func TestHumanEventDelivery_boundedQueueDrains(t *testing.T) {
 
 	// 隔离全局计数器与队列残留：shuffle 顺序下前序测试可能留下 dropped 计数
 	// 或队列事件，绝对值守恒（got+dropped==total）须从 clean 态起算。
+	// 停 worker 既有缝（先停消费再清残留）——裸 drain 会与存活 worker 竞争
+	// 消费队列，残留清不净；reportHumanEvent 会重启 worker，生产语义不变。
+	stopHumanEventWorkerForTest()
 	humanEventDropped.Store(0)
-	for pending := true; pending; {
-		select {
-		case <-humanEventQueue:
-		default:
-			pending = false
-		}
-	}
 
 	const total = 200
 	for range total {
-		reportHumanEvent("lb-evt", "203.0.113.9", http.MethodGet, "/", "ua", "challenge")
+		reportHumanEvent("lb-evt", "203.0.113.9", http.MethodGet, "/", "challenge")
 	}
 	// 宽限 30s：并行测试负载下 200 次本地投递可能远超常态耗时，
 	// 等待语义以排空探针为准而非固定短截止。

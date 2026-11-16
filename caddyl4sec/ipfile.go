@@ -21,18 +21,20 @@ import (
 
 // —— layer4.matchers.lb_ipfile ——
 //
-// 上游 layer4.matchers.remote_ip_list（caddy-l4 v0.1.2）的替代实现。上游有三处
-// 缺陷（容器实证 P0：caddy validate 偶发挂死）：
+// 上游 layer4.matchers.remote_ip_list 的替代实现。v0.1.2 时代上游有三处缺陷
+//（容器实证 P0：caddy validate 偶发挂死）；升级 caddy-l4 v0.1.3 后逐条复核
+//（module cache modules/l4remoteiplist 实证）：
 //
-//  1. Cleanup 的 `stop <- true` 是无缓冲 send——monitor 已沿 ctx.Done/watcher
-//     错误路径退出后，Cleanup 永久阻塞（validate 生命周期被随机击杀）；
-//  2. 文件重读发生在 Match 连接路径（reloadNeededMutex 持锁读文件）；
+//  1. Cleanup 的 `stop <- true` 无缓冲 send 死锁——**上游 v0.1.3 已修复**
+//     （stopOnce sync.Once + close(stop)，StopMonitoring 幂等不阻塞）；
+//  2. 文件重读发生在 Match 连接路径（reloadNeededMutex 持锁读文件）——
+//     **v0.1.3 仍在**（IsMatched 内 reloadNeeded 判定+loadIPAddresses）；
 //  3. watcher 一旦出错/关闭 monitor 直接退出，只剩 stale 集合 + 每次 Match
-//     刷一条 warn。
+//     刷一条 warn——**v0.1.3 仍在**（w.Errors/w.Events 关闭即 return）。
 //
-// 本实现逐条修正：
+// ②③仍在故 lb_ipfile 保留（主审裁定）。本实现逐条修正：
 //   - 生命周期信号 = close(stopCh)（sync.Once 幂等）+ ctx.Done 双保险，
-//     Cleanup 绝不阻塞、绝不 panic，重复调用安全；
+//     Cleanup 绝不阻塞、绝不 panic，重复调用安全（与上游 v0.1.3 修复同形态）；
 //   - 文件重读只在 monitor goroutine（fsnotify 事件 + 1s mtime/size stat
 //     兜底节流，wafiplist 同模式），Match 读 atomic 快照——连接路径零 IO 零锁；
 //   - watcher 错误不退出 monitor（降级 stat 兜底），文件/目录缺失 = 空集 +

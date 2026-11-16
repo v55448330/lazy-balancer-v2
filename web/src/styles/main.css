@@ -230,6 +230,9 @@ body {
 .info-note-bar .info-note-dismiss:hover { border-color: #2563eb; background: #eef4ff; }
 .info-note-bar:first-child { margin-top: 0; }
 .info-note-desc { font-weight: 600; color: #374151; line-height: 1.55; }
+/* 自动封禁状态卡分区黄条：跨组件共享（SecurityEvents 多处分区 + RecidivismTable
+   共享组件）——原写在事件页 scoped 块，子组件内部类名不带父 scopeId 故不生效。 */
+.autoban-warn-bar { margin-top: 10px; }
 .info-note-sub { display: block; font-weight: 400; color: #6b7280; line-height: 1.55; }
 .info-note-bar--inset { margin-left: 20px; margin-right: 20px; }
 /* 连续 info-note-bar 相邻节奏（2026-10-03 用户裁定）：默认 12px，连续 bar
@@ -383,7 +386,7 @@ body .rule-lock-popper :is(.lock-stage, .lock-policy-group) { border-radius: 0; 
   .info-note-bar
 ) { border-radius: 0; }
 
-#app .threat-screen :is(.chip, .act, .window-switch, .empty-state) { border-radius: 0; }
+#app .threat-screen :is(.chip, .act, .empty-state) { border-radius: 0; }
 #app *:focus-visible { border-radius: 0; }
 
 .el-dialog__title,
@@ -407,6 +410,11 @@ body .rule-lock-popper :is(.lock-stage, .lock-policy-group) { border-radius: 0; 
    消费方挂此类表达「标准正文留白」语义；全局规则已覆盖全部弹框，本规则
    不改变渲染，只保证标记类有定义、留白口径单点可查。 */
 .dialog-body-inset .el-dialog__body { padding: 20px; }
+/* 拦截页编辑弹框正文限高：弹框 append-to-body，scoped :deep 不穿透 teleport 落点
+   （`[data-v] .el-dialog__body` 要求弹框根带父 scopeId）——规则挂全局生效。
+   正文自身限高 + overflow:hidden，内容滚动由内部表单区（.block-page-form--scroll）
+   承担，弹框整体不超出视口。 */
+.block-page-dialog .el-dialog__body { max-height: calc(96vh - 120px); overflow: hidden; }
 .el-dialog__footer {
   padding: 14px 20px;
   background: var(--el-fill-color-lighter, #fafbfc);

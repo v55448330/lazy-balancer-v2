@@ -46,7 +46,9 @@ test('表单上限与后端写侧门对齐（证书重签天数 / HTTP 超时）
   // 对「窗口 > 寿命 − 7 天」的配置会收敛为到期前 7 天并限频告警（旧文案描述的
   // 「反复重签」来自已删除的迟滞实现，会让用户以为窗口越大会越早开始续签）。
   assert.match(cert, /app\.settings\.freeCerts\.acme\.renewalTimeHint/, '提示必须写明 84–88 天被收敛为到期前 7 天')
-  assert.doesNotMatch(cert, /反复重签/, '不得再用已删除的旧实现形态描述收敛行为')
+  // 结构负钉：收敛行为说明必须走 renewalTimeHint/renewalTimeTitle 词条键（上面
+  // 已钉键），不得本地第二份描述（裸中文「反复重签」负钉 i18n 后空转）。
+  assert.doesNotMatch(cert, /renewalTimeHint[^}]*\+|renewalConvergedText/, '不得本地拼装第二份收敛说明')
   // 跨栈钉：后端上界 = 规划寿命 90 − 2
   const certinfo = repoCode('internal/services/certinfo.go')
   assert.match(certinfo, /const CertRenewalLifetimeDays = 90/)
@@ -60,7 +62,9 @@ test('表单上限与后端写侧门对齐（证书重签天数 / HTTP 超时）
     assert.match(line, /:min="1"/)
   }
   // 提示文案同步：不再是「必须为 1-86400」
-  assert.doesNotMatch(caddy, /必须为 1-86400/, '提示文案不得再声称后端不存在的时间上限')
+  // 结构负钉：超时提示必须走 timeout.*Hint 词条键（下面已钉 readHint），不得
+  // 本地上限文案（裸中文「必须为 1-86400」负钉 i18n 后空转）。
+  assert.doesNotMatch(caddy, /timeout\.value[^}]*86400|:max="86400"/, '不得残留 86400 硬上限/本地文案')
   assert.match(caddy, /app\.settings\.caddy\.timeout\.readHint/)
 })
 
@@ -114,6 +118,7 @@ test('威胁大屏：攻击弹框层级高于错误条堆叠，且错误条默�
   const stack = section(page, '.error-stack {', '}')
   assert.match(stack, /pointer-events: none/, '错误条不得拦截其下弹框点击')
   assert.match(page, /\.error-stack \.error-retry \{ pointer-events: auto; \}/, '重试按钮必须可点')
+  assert.match(page, /\.error-stack \.info-note-dismiss \{ pointer-events: auto; \}/, '横幅关闭按钮必须可点（error-stack 默认穿透）')
 })
 
 test('规则流程弹框会话打开即作废在途证书响应', () => {

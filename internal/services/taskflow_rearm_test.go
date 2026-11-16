@@ -189,6 +189,35 @@ func TestCollectSystemTasks_daemonStartedAtZeroWhenBootRowMissing(t *testing.T) 
 	t.Fatalf("%s 未出现在任务视图", id)
 }
 
+// Given 常驻任务崩溃退避窗内（最新行=failed 崩溃行，boot success 行在前）。
+// When CollectSystemTasks 聚合。
+// Then started_at=最近 boot（success）行时刻，不得取崩溃行时刻——「常驻 ·
+// 启动于」显示崩溃时刻与语义矛盾；最近行非 boot 时同样回落最近 boot 行。
+func TestCollectSystemTasks_daemonStartedAtUsesLatestBootRow(t *testing.T) {
+	te := newWireTestEngine(t)
+	const id = "cluster-sync"
+	te.StartLoop(id)
+	waitForCond(t, 2*time.Second, func() bool {
+		m, ok := te.Lookup(id)
+		return ok && m.Running
+	})
+	bootAt := time.Now().In(CurrentLocation()).Add(-time.Hour).Format("2006-01-02 15:04:05")
+	crashAt := time.Now().In(CurrentLocation()).Format("2006-01-02 15:04:05")
+	if _, err := db.DB.Exec(`UPDATE task_runs SET started_at=? WHERE task_id=? AND status='success'`, bootAt, id); err != nil {
+		t.Fatal(err)
+	}
+	// 崩溃行（最新行）：started_at=崩溃时刻（引擎异常退出补记口径）。
+	if _, err := db.DB.Exec(`INSERT INTO task_runs (task_id, family, trigger, status, started_at, finished_at, duration_ms, message)
+		VALUES (?, 'cluster', 'auto', 'failed', ?, ?, 3600000, 'boom')`, id, crashAt, crashAt); err != nil {
+		t.Fatal(err)
+	}
+
+	ti := findTaskInfo(t, collectEngineFamilies(te), id)
+	if ti.StartedAt != bootAt {
+		t.Fatalf("started_at=%q, want 最近 boot 行 %q（崩溃退避窗内不得显示崩溃时刻）", ti.StartedAt, bootAt)
+	}
+}
+
 // Given 从节点集群同步重载失败（快照已提交、Caddy /load 失败）。
 // When RecordBackgroundApplyFailure(BackgroundApplyClusterSync) 登记。
 // Then 后台失败面快照/横幅可见该来源（从节点「库态≠运行态」分叉的全局信号）；

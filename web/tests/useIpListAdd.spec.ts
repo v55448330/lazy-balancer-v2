@@ -67,6 +67,21 @@ test('确认后幂等 POST：added=true 走 showSaveResult，返回完成并复�
   assert.equal(adding.value, false, '完成后必须释放重入锁')
 })
 
+test('确认框附加披露（note）：拼在主体文案后；缺省不改变既有文案', async () => {
+  reset()
+  const { addIpToList } = useIpListAdd()
+  assert.equal(await addIpToList('2606:4700:abcd:1234::/64', list, { verb: '封禁', note: 'IPv6 按 /64 前缀封禁：同一 /64 下的其它地址会被连带封禁' }), true)
+  const [confirm] = callsOf('confirm')
+  const [message] = confirm.args ?? []
+  assert.match(String(message), /2606:4700:abcd:1234::\/64/, '确认文案必须点名 CIDR 形态条目值')
+  assert.match(String(message), /IPv6 按 \/64 前缀封禁/, '附加披露必须拼进确认文案（/64 连带影响可见）')
+  // 缺省 note：文案与无选项形态逐字一致（不引入尾部空格/第二份口径）
+  reset()
+  assert.equal(await addIpToList('1.2.3.4', list), true)
+  const [plain] = callsOf('confirm')
+  assert.ok(!String(plain.args?.[0]).endsWith(' '), '缺省 note 不得引入尾部空隙')
+})
+
 test('added=false（已存在）以 info 呈现，不弹成功提示', async () => {
   reset()
   g.__post = async (url: unknown) => {

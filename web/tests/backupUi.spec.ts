@@ -52,7 +52,9 @@ test('还原文案按备份分类，失败行不显示下载', () => {
   assert.match(restore, /autoBackupScopeText\(row\)/)
   assert.match(restore, /t\('app\.settings\.basic\.autoBackup\.restoreConfirm'/)
   assert.ok(code('src/locales/zh/settings.ts').includes('"restoreConfirm": "将使用备份「{name}」覆盖该备份包含的分类'), 'zh 母本须保留「覆盖该备份包含的分类」原文')
-  assert.doesNotMatch(restore, /覆盖当前全部配置/)
+  // 结构负钉：还原文案必须按备份分类投影（上面已钉 restoreConfirm 键+zh 母本），
+  // 不得消费全量覆盖口径键 coverAll/importConfirmFull（裸中文负钉 i18n 后空转）。
+  assert.doesNotMatch(restore, /coverAll|importConfirmFull/)
   // 属性序与字面空隙不是契约（格式工具栏/换行重排即批量假红）：按「标签 + 属性集」
   // 判定，按钮身份由 @click 处理器认领。
   const downloads = openTags(page, 'el-button').filter((tag) => tag.includes('@click="downloadAutoBackup('))
@@ -65,6 +67,16 @@ test('还原文案按备份分类，失败行不显示下载', () => {
   assert.match(download, /:disabled="autoBackupActionBusy"/, '执行中必须禁用')
   assert.match(elementSlice(page, page.indexOf(download), 'el-button'), />\{\{ t\('app\.settings\.basic\.autoBackup\.download'\) \}\}<\/el-button>/, '按钮文案(调用点钉键)')
   assert.ok(code('src/locales/zh/settings.ts').includes('"download": "下载"'), 'zh 母本须保留「下载」原文')
+})
+
+test('备份历史截断披露：backups_truncated 显式 true 才提示，打开弹框复位', () => {
+  assert.match(page, /const autoBackupTruncated = ref\(false\)/)
+  assert.match(page, /autoBackupTruncated\.value = d\.backups_truncated === true/, '截断位=显式 true 才提示（缺省/旧后端不臆测）')
+  assert.match(page, /<el-alert v-if="autoBackupTruncated" type="warning"[^>]*:title="t\('app\.settings\.basic\.autoBackup\.historyTruncated'\)"/, '截断必须以警告横幅显性披露')
+  const openDialog = section(page, 'const openAutoBackupDialog', '\n}')
+  assert.match(openDialog, /autoBackupTruncated\.value = false/, '打开弹框必须复位截断态')
+  assert.ok(code('src/locales/zh/settings.ts').includes('"historyTruncated": "还有更旧的备份未返回（列表仅显示最近一批）"'), '截断披露原文必须在 zh 母本')
+  assert.ok(code('src/locales/en/settings.ts').includes('"historyTruncated"'), '截断披露必须成对在场（en）')
 })
 
 test('下次备份只消费调度器返回值并标明补跑', () => {

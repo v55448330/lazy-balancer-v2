@@ -101,3 +101,30 @@ func TestObserveHumanEvents_rateRejectBanRemark(t *testing.T) {
 		t.Fatalf("封禁备注=%+v, want 限流拒绝", entries)
 	}
 }
+
+// Given CC reject（429）人机通道批喂入（IPC 提交后形态）+ 一次挑战发放 +
+// 一条保留地址 reject。
+// When ObserveHumanEvents。
+// Then 只有 429 拦截弧入攻击光流环（同屏 feed/拦截率已含该事件，光流不得缺弧）；
+// challenged（发放/失败）不属攻击、保留地址按入环门硬排除。
+func TestObserveHumanEvents_rateRejectFeedsAttackFlow(t *testing.T) {
+	installAutobanFixture(t, "2026-11-15 10:00:00")
+	setAutobanConfigRaw(t, true, 100, 5, "1h", "blocked", true)
+	ResetThreatScreenAttackFlowForTest()
+	mustAcquireAttackFlowLease(t, "tab-d1-flow", 1)
+	t.Cleanup(ResetThreatScreenAttackFlowForTest)
+	at := autobanNow()
+	ObserveHumanEvents([]HumanObserveItem{
+		{IP: "45.33.32.66", Kind: "rate_reject", At: at},
+		{IP: "45.33.32.67", Kind: "challenge", At: at},
+		{IP: "192.168.5.5", Kind: "rate_reject", At: at},
+	})
+	events, _, _ := ThreatScreenAttackFlowSnapshot(0, 10)
+	if len(events) != 1 {
+		t.Fatalf("光流环入环数=%d, want 1（仅 CC reject 拦截弧）: %+v", len(events), events)
+	}
+	ev := events[0]
+	if ev.ClientIP != "45.33.32.66" || ev.Action != "blocked" || ev.RuleTriggered != "cc_rate_reject" {
+		t.Fatalf("光流弧=%+v, want 45.33.32.66/blocked/cc_rate_reject", ev)
+	}
+}

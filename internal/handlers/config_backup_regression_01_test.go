@@ -23,18 +23,7 @@ import (
 // 「表未携带」形态须自组表集），users 恒含一个启用管理员（过管理员门）。
 func noIPListsBackupJSON(t *testing.T, cfg map[string]any) string {
 	t.Helper()
-	tables := fullBackupTablesMinusShared("security_ip_lists")
-	backup := configBackup{
-		Meta:   configBackupMeta{App: "lazy-balancer-v2", Version: 2, ExportedAt: "2026-08-21T00:00:00Z"},
-		Config: cfg,
-		Tables: tables,
-	}
-	backup.Meta.Checksum = checksumBackupPayload(t, tables, cfg)
-	data, err := json.Marshal(backup)
-	if err != nil {
-		t.Fatalf("marshal backup: %v", err)
-	}
-	return string(data)
+	return buildBackup(t, backupFixtureOptions{FillAll: true, Omit: map[string]struct{}{"security_ip_lists": {}}, Config: cfg})
 }
 
 // TestImportConfigBackup_trustedProxyRefsResolvedAgainstBackupRowsOnly

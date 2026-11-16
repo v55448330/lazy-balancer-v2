@@ -1250,7 +1250,7 @@ func (index prometheusMetricsIndex) ruleMetrics(target ruleMetricTarget) gin.H {
 }
 
 // tcpRuleMetrics 按上游地址归集 TCP 单规则指标
-// caddy-l4 v0.1.2 的 L4 指标（caddy_layer4_proxy_connections_total /
+// caddy-l4 v0.1.3 的 L4 指标（caddy_layer4_proxy_connections_total /
 // active_connections / upstream_healthy）标签仅 []string{"upstream"}
 // （模块源码 modules/l4proxy/metrics.go:57-75 实证）——无 server/listener/
 // rule 级标签，引擎层面无法按规则拆分。多条 TCP 规则共享同一上游地址时，
@@ -1675,6 +1675,12 @@ func isAlnumASCII(b byte) bool {
 	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9')
 }
 
+// isValidDomain 规则域名校验。与上游侧 isValidHost 的口径差异是有意设计
+// （裁定维持）：上游主机拒绝全数字点分非法 IP 笔误（999.1.1.1），
+// 但规则域名侧放行——合法 IP（1.2.3.4）作为 Caddy site host 是支持形态，
+// 域名语义宽于上游主机；全数字点分笔误（999.1.1.1）落库后仅不匹配流量，
+// 无安全/数据损害。若未来对齐上游口径加 allNumericLabels 门，须先豁免
+// net.ParseIP 成功形态（合法 IP 域名不得误拒）。
 func isValidDomain(domain string) bool {
 	domain = strings.ToLower(domain)
 	if len(domain) > 253 {

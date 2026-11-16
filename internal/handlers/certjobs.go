@@ -576,6 +576,14 @@ func (h *Handlers) retryCertJobByID(c *gin.Context, id int) {
 		} else {
 			auditFailureWithRule("enqueue_failed")
 		}
+		if changed && failedCooldownOverride {
+			// changed=true+err：transition 已提交（失败冷却窗口已清空）但收尾
+			// 失败——越冷实际发生，失败路径同样留痕（与成功路径 cooldown_override
+			// 独立行对称；CA-force 族 changed+err 留痕同口径）。
+			recordAudit(c, "重试", "证书任务", services.FormatAuditDetail(
+				services.AuditJobPart(id), services.AuditRulePart(ruleID),
+				"手动重签越过失败冷却", services.AuditResultPart("cooldown_override")))
+		}
 		writeInternalError(c, http.StatusInternalServerError, "重试入队失败", err)
 		return
 	}
@@ -1284,6 +1292,9 @@ func readLogTailWindow(path string, maxBytes, maxLines int) (string, error) {
 	startOffset := int64(0)
 	if size := info.Size(); size > windowBytes {
 		startOffset = size - windowBytes
+	}
+	if logTailWindowStatHook != nil {
+		logTailWindowStatHook()
 	}
 
 	if _, err := f.Seek(startOffset, io.SeekStart); err != nil {

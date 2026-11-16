@@ -67,10 +67,11 @@ scan_scripts() {
     # perl -pi -e / python -c）：紧邻匹配漏掉它们等于第一道闸门对最常见的
     # 批量改写作业形态失效（事故形态正是「全仓 sed/perl 正则替换」）。
     grep -Eq '(re\.sub|re\.compile|sed[^|;&]*[[:space:]](-[A-Za-z]*i|--in-place)|perl[[:space:]][^|;&]*-[A-Za-z]*i|python[0-9.]*[[:space:]]+-c|shutil\.(copy|move)|\.write_text\(|open\([^)]*["'\'']w|writeFileSync|writeFile\()' "$f" && writes=1 || true
-    # dry-run 判据必须在可执行位置：剥掉「整行注释」（行首空白后 #）再匹配；
-    # Python 脚本还须剥掉 docstring——三引号文档串里提一句 --dry-run 同样
-    # 不构成只读模式（事故形态的 docstring 变体）。只认真参数解析/注释行以外
-    # 的可执行上下文。
+    # dry-run 判据必须在可执行位置：剥掉「整行注释」（行首空白后 #）与
+    # 「非判据位置」的字符串字面量再匹配——echo/提示语里提一句 --dry-run
+    # 不构成只读模式（与 Python docstring 变体同族）。比较/case 选项位置
+    # 的引号词是运行期判据（[[ "$1" == "--dry-run" ]] / case --dry-run），
+    # 保留；其余引号串（echo 文案等）剥掉。Python 脚本另剥三引号文档串。
     case "$f" in
       *.py)
         python3 - "$f" <<'PY' && dry=1 || true
@@ -83,7 +84,19 @@ sys.exit(0 if re.search(r'--dry-run|DRY_RUN', code) else 1)
 PY
         ;;
       *)
-        grep -v '^[[:space:]]*#' "$f" | grep -Eq -- '(--dry-run|DRY_RUN)' && dry=1 || true
+        python3 - "$f" <<'PY' && dry=1 || true
+import re, sys
+text = open(sys.argv[1], encoding='utf-8').read()
+# 字符串字面量按位置分判：前邻 token 是比较运算符（==/!=/=~）或 case/选项
+# 分隔符（case/in/|/;;/;&/esac）时是运行期判据，保留；否则（echo 文案等）
+# 剥掉。转义字符不终止字符串；跨行引号串同样处理。
+keep = re.compile(r'(==|!=|=~|\bcase|\bin|\||;;|;&|\besac)\s*$')
+def strip(m):
+    return m.group(0) if keep.search(text[:m.start()]) else ''
+text = re.sub(r'"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'', strip, text, flags=re.S)
+code = "\n".join(ln for ln in text.splitlines() if not re.match(r'^\s*#', ln))
+sys.exit(0 if re.search(r'--dry-run|DRY_RUN', code) else 1)
+PY
         ;;
     esac
     if (( traverses && writes && !dry )); then

@@ -946,8 +946,12 @@ func (s *SyncService) Pull(ctx context.Context) (result SyncResult, err error) {
 	// 从端 pin 清理重试驱动（与主端 Snapshot/巡检对称）：降级节点 BecomeSlave
 	// 尾部 pin 清理失败登记 pendingPins 后，从端身份期间主端两驱动都不运行——
 	// 借从端每周期 Pull 重试，旧主 pin 残留不再等到再升主/forget-pins/重启。
-	if s.cluster != nil {
-		s.cluster.retryPendingPinCleanup()
+	// 必须遍历本库登记的全部实例（与巡检 clusterServicesFor 同形态）：生产
+	// 装配下 NewSyncService 自建内层 ClusterService，而 pendingPins 登记在
+	// BecomeSlave 接收者（外层）——只打 s.cluster 恒触达内层空表，外层残留
+	// 永不清理。
+	for _, service := range clusterServicesFor(s.db) {
+		service.retryPendingPinCleanup()
 	}
 	// wafRepullAttempted 标记本周期是否执行了 WAF 文件兜底全量重拉：重拉轮
 	// 的 applySnapshot 会清空 last_sync_error（记录同步状态），安全数据若

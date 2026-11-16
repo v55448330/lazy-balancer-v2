@@ -14,6 +14,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"lazy-balancer-v2/internal/models"
 )
@@ -2857,6 +2858,8 @@ func TestMigrateSyncSwitches_forcesUsersEvenWhenMarkerDone(t *testing.T) {
 }
 
 func openMigrationTestDB(t *testing.T) *sql.DB {
+	// 驱动级 UDF 只对注册后新建连接生效：与生产 Initialize 同口径先注册。
+	ensureTruncUTF8UDF()
 	t.Helper()
 	database, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "migration.db")+"?_pragma=foreign_keys(1)")
 	if err != nil {
@@ -4303,5 +4306,58 @@ func TestMigrateCertJobsWaitingCA_normalizeHelperPreservesFieldsAndCounts(t *tes
 	}
 	if again != 0 {
 		t.Fatalf("二次归一 changed=%d, want 0（幂等零命中）", again)
+	}
+}
+
+// 过期冷却终态说明的 SQL 追加必须遵守 message 长度契约（与
+// services.maxJobMessageBytes=1024 字节同口径）：先按「上限-说明长度」字节
+// 预算截 base 再追加（BLOB substr 按字节；TEXT substr 按字符会让多字节 base
+// 超限）——裸 `message || note` 会让带外/旧备份的超长 message 绕过上限
+// （同步到从节点并展示在 UI 的列不得无界增长）。
+func TestAnnotateExpiredCooldownMessages_capsAppendedMessage(t *testing.T) {
+	database := openMigrationTestDB(t)
+	createLegacyCertJobs(t, database, "'queued'",
+		"'queued','failed','waiting_ca','issued','disabled'")
+	longBase := strings.Repeat("x", 2000)
+	multibyteBase := strings.Repeat("中", 500) // 1500 字节：按字符截断会超限
+	if _, err := database.Exec(`INSERT INTO cert_jobs (rule_id, domain, status, message, renewal_attempts, ca_available_after) VALUES
+		('lb_cap_long', 'cap-long.example', 'failed', ?, 1, datetime('now','-1 minute')),
+		('lb_cap_cn', 'cap-cn.example', 'failed', ?, 1, datetime('now','-1 minute')),
+		('lb_cap_short', 'cap-short.example', 'failed', '短消息', 1, datetime('now','-1 minute'))`, longBase, multibyteBase); err != nil {
+		t.Fatalf("seed expired cooldown rows: %v", err)
+	}
+
+	annotated, err := AnnotateExpiredCooldownMessages()
+	if err != nil {
+		t.Fatalf("annotate expired cooldown messages: %v", err)
+	}
+	if annotated != 3 {
+		t.Fatalf("annotated=%d, want 3", annotated)
+	}
+
+	var longMessage, cnMessage, shortMessage string
+	if err := database.QueryRow(`SELECT message FROM cert_jobs WHERE rule_id='lb_cap_long'`).Scan(&longMessage); err != nil {
+		t.Fatalf("read long message: %v", err)
+	}
+	if err := database.QueryRow(`SELECT message FROM cert_jobs WHERE rule_id='lb_cap_cn'`).Scan(&cnMessage); err != nil {
+		t.Fatalf("read multibyte message: %v", err)
+	}
+	if err := database.QueryRow(`SELECT message FROM cert_jobs WHERE rule_id='lb_cap_short'`).Scan(&shortMessage); err != nil {
+		t.Fatalf("read short message: %v", err)
+	}
+	if len(longMessage) > 1024 {
+		t.Fatalf("追加后 message len=%d, want <=1024（SQL 追加不得绕过长度上限）", len(longMessage))
+	}
+	if !strings.HasSuffix(longMessage, certCooldownExpiredNote) {
+		t.Fatalf("超长 base 追加后终态说明被截掉: %.80s...", longMessage)
+	}
+	if len(cnMessage) > 1024 || !utf8.ValidString(cnMessage) {
+		t.Fatalf("多字节 base 追加后 len=%d valid=%v, want <=1024 字节且合法 UTF-8（按字符截断会超限/留残片）", len(cnMessage), utf8.ValidString(cnMessage))
+	}
+	if !strings.HasSuffix(cnMessage, certCooldownExpiredNote) {
+		t.Fatalf("多字节 base 追加后终态说明被截掉: %.80s...", cnMessage)
+	}
+	if shortMessage != "短消息"+certCooldownExpiredNote {
+		t.Fatalf("短消息追加形态=%q, want 原样保留+说明", shortMessage)
 	}
 }

@@ -28,6 +28,7 @@ import (
 // installCommitSeam 注入提交失败形态：commitFirst=true 模拟「实际已提交但
 // 确认丢失」；false 模拟「确实回滚」。
 func installCommitSeam(t *testing.T, commitFirst bool) {
+	withIsolatedGlobal(t)
 	t.Helper()
 	previous := txCommitForTest
 	txCommitForTest = func(tx *sql.Tx) error {

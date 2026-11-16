@@ -2872,7 +2872,7 @@ func TestAPIDocsAndMCPSchemaTriggeredCategoriesMatchFrontendSingleSource(t *test
 	if err != nil {
 		t.Fatalf("读取前端触发阶段筛选单源失败: %v", err)
 	}
-	crawlerLabel := regexp.MustCompile(`export const CRAWLER_FAMILY_LABEL = '([^']+)'`).FindStringSubmatch(string(feSource))
+	crawlerLabel := regexp.MustCompile(`(?:export )?const CRAWLER_FAMILY_LABEL = '([^']+)'`).FindStringSubmatch(string(feSource))
 	if len(crawlerLabel) != 2 {
 		t.Fatal("前端单源缺 CRAWLER_FAMILY_LABEL 定义")
 	}

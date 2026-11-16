@@ -1897,3 +1897,60 @@ func TestFormatRuleCertInfo_notYetValidReportsNote(t *testing.T) {
 		t.Fatalf("已生效证书 error=%q, want 空", info.Error)
 	}
 }
+
+// issued 成功终态必须清零上一代失败预算（renewal_attempts/ca_available_after/
+// last_error_code）——快速重部署两出口曾漏项：失败计数跨证书世代携带，配置
+// 上限附近的行下一轮续期首次失败即触顶，自动续签停摆。主签发路径同口径
+// （issuedFinalizeFields 单源），本用例钉快速路径两出口。
+func TestCertIssuer_Issue_fastPathIssuedResetsRenewalBudget(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		// predeploy=true 命中「文件已一致，无需重新部署」出口，false 命中重写盘出口。
+		predeploy bool
+	}{
+		{name: "文件已一致的出口", predeploy: true},
+		{name: "重新写盘的出口", predeploy: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// Given：downloaded 任务携带上一代失败预算（attempts=4，上限默认 5）
+			// 与残留退避窗口/错误码；材料为 90 天有效证书（远离续签窗口）。
+			jobID, ruleID := seedCertificateJob(t, "downloaded")
+			useTemporaryCertDir(t)
+			if _, err := db.DB.Exec("UPDATE lb_rules SET ca_provider_id=1 WHERE caddy_id=?", ruleID); err != nil {
+				t.Fatalf("bind rule CA provider: %v", err)
+			}
+			certPEM, keyPEM := certificatePairForDomains(t, time.Now().Add(-time.Hour), time.Now().Add(90*24*time.Hour), "example.com")
+			if _, err := db.DB.Exec(`UPDATE cert_jobs SET cert_pem=?, key_pem=?, renewal_attempts=4,
+				ca_available_after=datetime('now','+1 hour'), last_error_code='429' WHERE id=?`, certPEM, keyPEM, jobID); err != nil {
+				t.Fatalf("seed material and stale budget: %v", err)
+			}
+			if tc.predeploy {
+				if err := WriteCertFiles(ruleID, certPEM, keyPEM); err != nil {
+					t.Fatalf("predeploy files: %v", err)
+				}
+			}
+			issuer := NewCertIssuer(func() error { return nil })
+
+			// When
+			if err := issuer.Issue(context.Background(), jobID, ruleID, "example.com", models.CAProvider{ID: 1}); err != nil {
+				t.Fatalf("issue via fast path: %v", err)
+			}
+
+			// Then：issued 终态 + 失败预算三项清零（与主路径同口径）。
+			var status string
+			var attempts int
+			var window sql.NullString
+			var errorCode sql.NullString
+			if err := db.DB.QueryRow(`SELECT status, COALESCE(renewal_attempts,0), ca_available_after, last_error_code FROM cert_jobs WHERE id=?`, jobID).
+				Scan(&status, &attempts, &window, &errorCode); err != nil {
+				t.Fatalf("read job: %v", err)
+			}
+			if status != "issued" {
+				t.Fatalf("status=%q, want issued（快速路径未命中）", status)
+			}
+			if attempts != 0 || window.Valid || errorCode.Valid {
+				t.Fatalf("issued 终态携带上一代失败预算 attempts=%d window=%v code=%v, want 0/NULL/NULL（失败预算不得跨证书世代携带）", attempts, window, errorCode)
+			}
+		})
+	}
+}

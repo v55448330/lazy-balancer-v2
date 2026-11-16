@@ -440,6 +440,12 @@ func (h *Handlers) RunAutoBackupOnce(ctx context.Context, trigger, operator stri
 	convergeAutoBackupDirPermissions(dir)
 	filename, ferr := nextAutoBackupFilename(ctx, dir, trigger, now)
 	if ferr != nil {
+		if ctx.Err() != nil {
+			// 取消不落「备份失败」审计（与写盘/sections 读窗口同口径）——
+			// 角色降级/引擎停止不是用户可见的备份故障；task_runs 经引擎
+			// terminalStatus 落 cancelled，任务日志 tee 记「备份已取消」。
+			return autoBackupRowView{}, fmt.Errorf("生成备份文件名: %w", ferr)
+		}
 		// 无安全可归因文件名，不落 failed 行；审计与任务日志留痕。
 		services.Logf("warn", "%s失败：生成备份文件名：%v", action, ferr)
 		services.RecordAuditLog(operator, "备份失败", "配置备份", services.FormatAuditDetail(
@@ -515,9 +521,14 @@ func (h *Handlers) RunAutoBackupOnce(ctx context.Context, trigger, operator stri
 	sectionsJSON, _ := json.Marshal(exportedSections)
 	id, err := insertAutoBackupRow(ctx, filename, "success", int64(len(payload)), string(sectionsJSON), trigger, countsSummary, h.cfg.Version)
 	if err != nil {
-		// 文件已写、行未落——删除孤儿文件保持两侧一致，审计留痕后按失败返回。
+		// 文件已写、行未落——删除孤儿文件保持两侧一致。
 		if removeErr := os.Remove(finalPath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
 			services.Logf("warn", "自动备份：落行失败后清理最终文件 %s 失败: %v", finalPath, removeErr)
+		}
+		if ctx.Err() != nil {
+			// 写锁排队期间被取消（导入持锁/demote/引擎停止）：不落「备份失败」
+			// 审计——与占名/写盘窗口同口径，task_runs 落 cancelled。
+			return autoBackupRowView{}, fmt.Errorf("备份记录写入失败: %w", err)
 		}
 		return autoBackupRowView{}, fail("备份记录写入失败", err)
 	}
@@ -953,7 +964,7 @@ func (h *Handlers) RunAutoBackupNow(c *gin.Context) {
 			c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: apimsg.ErrMsg(c, err)})
 		default:
 			services.Logf("error", "手动备份触发失败: %v", err)
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.Tf(c, "k_f6dbbbd2", apimsg.ErrMsg(c, err))})
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.Tf(c, "k_eaa18452", apimsg.ErrMsg(c, err))})
 		}
 		return
 	}

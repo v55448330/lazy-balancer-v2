@@ -22,18 +22,7 @@ import (
 // v2.1.2+ 新格式覆盖实际 tables+config,与真实导出同构。
 func tableSetBackupJSON(t *testing.T, tables map[string][]map[string]any) string {
 	t.Helper()
-	cfg := map[string]any{}
-	backup := configBackup{
-		Meta:   configBackupMeta{App: "lazy-balancer-v2", Version: 2, ExportedAt: "2026-08-21T00:00:00Z"},
-		Config: cfg,
-		Tables: tables,
-	}
-	backup.Meta.Checksum = checksumBackupPayload(t, tables, cfg)
-	data, err := json.Marshal(backup)
-	if err != nil {
-		t.Fatalf("marshal backup: %v", err)
-	}
-	return string(data)
+	return buildBackup(t, backupFixtureOptions{Tables: tables, EmptyConfigIfNil: true})
 }
 
 // fullBackupTablesMinusShared 构造全量形态表集(configBackupTables 去掉
@@ -103,7 +92,7 @@ func TestImportConfigBackup_acceptsPreLateTableEraFullBackups(t *testing.T) {
 	}
 }
 
-// 预览路径确认:ValidateConfigImport(config_import_v1.go:577)
+// 预览路径确认:ValidateConfigImport(config_import_v1.go，符号引用不持行号)
 // 与导入同走校验链的完整性校验门——一处修复双路径生效,预览不得再误报
 // 「备份缺少必需的数据表」。
 func TestValidateConfigImport_acceptsV220EraFullBackup(t *testing.T) {
@@ -182,7 +171,7 @@ func TestImportConfigBackup_eightTableEraUsesClassificationBranch(t *testing.T) 
 }
 
 // 导入校验对 ca_providers 行补 provider 白名单门——保存/更新侧
-// (services/caproviders.go:194)恒拒 letsencrypt/zerossl 之外的 provider,导入
+// (services/caproviders.go 白名单门)恒拒 letsencrypt/zerossl 之外的 provider,导入
 // 侧不得更宽;违例整包 400 且零写入。
 func TestImportConfigBackup_rejectsUnknownCAProvider(t *testing.T) {
 	// Given 备份携带 provider=evil-ca 的 ca_providers 行
@@ -205,7 +194,7 @@ func TestImportConfigBackup_rejectsUnknownCAProvider(t *testing.T) {
 	assertZeroWriteShared(t)
 }
 
-// directory_url 无条件覆写为官方常量(与服务层:197-201 同
+// directory_url 无条件覆写为官方常量(与服务层白名单门同
 // 语义)——合法 provider + 恶意目录 URL 的备份导入后,落库 directory_url 必须
 // 是官方常量而非备份原值。
 func TestImportConfigBackup_overwritesDirectoryURLWithOfficialConstant(t *testing.T) {
@@ -347,7 +336,7 @@ func TestValidateV2Backup_normalizesBlockStatus429(t *testing.T) {
 		t.Fatalf("unmarshal backup: %v", err)
 	}
 
-	// When 策略校验(归一所在阶段;导入 :2144 与预览 config_import_v1.go:622 双路径同走)
+	// When 策略校验(归一所在阶段;导入与预览双路径同走 validateV2BackupSecurityPoliciesWithQuerier 单源)
 	if err := validateV2BackupSecurityPolicies(b.Tables, false); err != nil {
 		t.Fatalf("validateV2BackupSecurityPolicies unexpected error: %v", err)
 	}

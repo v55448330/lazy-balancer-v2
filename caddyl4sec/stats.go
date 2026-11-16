@@ -146,6 +146,11 @@ func connStatsJSON() []byte {
 // L4StatsAdmin 注册 GET /lb/l4-conn-stats（契约 C3）与 GET /lb/l4-shipper-stats
 // （投递/丢弃计数——丢弃可观测）。契约 C3 的 /lb/l4-conn-stats JSON 形状锁定；
 // shipper 端点是本模块的附加观测面，A1 不消费。
+//
+// 披露范围（用户裁定，注释明示）：L4 内存真丢计数
+// （ring 覆写/spool 满，dropped/spool_errors）**仅 admin 端点可查**，面板
+// 健康位不消费本端点——L4 风暴下健康位不反映真丢（假绿）是已声明的有意
+// 取舍（端点存在满足最低契约；接入健康位属功能增强，超修复范围）。
 type L4StatsAdmin struct{}
 
 // CaddyModule returns the Caddy module information.

@@ -475,10 +475,18 @@ func (p *Provider) listChallengeRecords(ctx context.Context, zone, subDomain str
 			return collected, nil
 		}
 		repeatedPage := true
+		hasValidID := false
 		for _, record := range result.Records {
 			// flexNumber 兼容历史两种形态（JSON 数字与带引号字符串），
 			// 与 Record.Create 侧的 id 读取同口径。
 			id := string(record.ID)
+			// 畸形空记录 ID 不参与去重折叠（整页空 ID 不得误判无进展，
+			// 与 aliyun/tencent/cloudflare 同口径）：整条跳过，不登记 seen、
+			// 不进 collected（空 ID 进清理路径会永久删除失败）。
+			if id == "" {
+				continue
+			}
+			hasValidID = true
 			// 无进展守卫按记录 ID 判定（先于 Type/名称精确收窄，与 aliyun 同
 			// 骨架）：整页非目标记录不得误判无进展提前收手漏扫后续页。
 			if seen[id] {
@@ -508,12 +516,14 @@ func (p *Provider) listChallengeRecords(ctx context.Context, zone, subDomain str
 		fetched := len(result.Records)
 		offset += fetched
 		fetchedTotal += fetched
-		if fetched == 0 || repeatedPage {
+		// 整页畸形（无任何有效 ID）不构成「重复页」证据：没有可追踪的记录
+		// 可判重，按 total/短页口径继续判定，不得折叠成无进展提前收手。
+		if fetched == 0 || (repeatedPage && hasValidID) {
 			break
 		}
 		total := result.Info.RecordTotal.Int64()
 		if total > 0 {
-			if int64(fetchedTotal) >= total {
+			if total <= int64(fetchedTotal) {
 				break
 			}
 			continue
@@ -787,6 +797,11 @@ func (p *Provider) getDomainID(ctx context.Context, zone string) (string, error)
 	}
 	domainIDCacheMu.Unlock()
 	offset := 0
+	seen := make(map[string]bool)
+	// exhausted 标记扫描是否真取尽（空页/offset≥total 终态）。无进展收手
+	// 与页数上限收手都属「未扫尽」——「域名不在账户」结论不成立，不得落
+	// 负缓存（否则异常服务端的一次重复页被放大成 TTL 内持续失败）。
+	exhausted := false
 	for page := 0; page < domainListMaxPages; page++ {
 		params := url.Values{}
 		params.Set("offset", strconv.Itoa(offset))
@@ -794,8 +809,8 @@ func (p *Provider) getDomainID(ctx context.Context, zone string) (string, error)
 		var result struct {
 			Status  apiStatus `json:"status"`
 			Domains []struct {
-				ID   json.Number `json:"id"`
-				Name string      `json:"name"`
+				ID   flexNumber `json:"id"`
+				Name string     `json:"name"`
 			} `json:"domains"`
 			Info struct {
 				DomainTotal flexNumber `json:"domain_total"`
@@ -807,11 +822,27 @@ func (p *Provider) getDomainID(ctx context.Context, zone string) (string, error)
 		if result.Status.Code.String() != "1" {
 			return "", fmt.Errorf("Domain.List failed: %s", p.sanitizeMessage(result.Status.Message))
 		}
+		// 无进展守卫（与 Record.List/aliyun/tencent/cloudflare 枚举翻页同族）：
+		// 异常服务端忽略 offset 重复下发同页且 domain_total 失真偏大时，
+		// 整页无新域名 ID 即收手，不空转 domainListMaxPages。畸形空 ID 不参与
+		// seen 去重（整页空 ID 不得折叠成无进展）；flexNumber 兼容数字/字符串
+		// 两种历史形态（空串不再像 json.Number 那样整页解码失败）。
+		repeatedPage := true
+		hasValidID := false
 		for _, d := range result.Domains {
+			id := string(d.ID)
+			if id == "" {
+				continue
+			}
+			hasValidID = true
+			if seen[id] {
+				continue
+			}
+			repeatedPage = false
+			seen[id] = true
 			// 两侧归一后再比较：服务端规范形态当前是小写，但依赖该实现细节会让
 			// 「返回形态变化」静默变成「域名不在账户」的错误结论。
 			if dnsname.NormalizeName(d.Name) == zone {
-				id := d.ID.String()
 				p.putDomainIDCache(cacheKey, id)
 				return id, nil
 			}
@@ -823,19 +854,41 @@ func (p *Provider) getDomainID(ctx context.Context, zone string) (string, error)
 		// length 整数倍对齐（按 length 对齐的假设与官方码表相悖：码表 7
 		// 「记录开始的偏移无效」只拦越界偏移；本注释锁死该判定，钉测见
 		// dnspod_pagination_test.go）。
-		offset += len(result.Domains)
+		fetched := len(result.Domains)
+		offset += fetched
 		total := result.Info.DomainTotal.Int64()
-		if len(result.Domains) == 0 || (total > 0 && int64(offset) >= total) {
+		// 终止与四家枚举翻页统一（total 优先、短页兜底）：空页即真终态；
+		// total>0 按累计 offset 判定取尽，中途短页继续翻页不漏扫；total
+		// 缺失（≤0）才退回短页兜底（不足请求页大小即末页）。
+		if fetched == 0 {
+			exhausted = true
+			break
+		}
+		if total > 0 {
+			if int64(offset) >= total {
+				exhausted = true
+				break
+			}
+		} else if fetched < domainListPageSize {
+			exhausted = true
+			break
+		}
+		// 整页畸形（无任何有效 ID）不构成「重复页」证据：没有可追踪的域名
+		// 可判重，按 total/短页口径继续判定，不得折叠成无进展提前收手。
+		if repeatedPage && hasValidID {
 			break
 		}
 	}
-	// 全量扫描终态「域名不在账户」才落负缓存——瞬时 API 失败（网络/5xx）不落，
-	// 否则把瞬时故障放大成 TTL 内的持续失败。
-	domainIDCacheMu.Lock()
-	domainIDNegativeCache[cacheKey] = time.Now()
-	domainIDCacheTouchLRU(cacheKey)
-	domainIDCacheEvictLRU()
-	domainIDCacheMu.Unlock()
+	if exhausted {
+		// 全量扫描终态「域名不在账户」才落负缓存——瞬时 API 失败（网络/5xx）
+		// 与未扫尽收手（无进展/页数上限）不落，否则把一次异常放大成 TTL 内
+		// 的持续失败。
+		domainIDCacheMu.Lock()
+		domainIDNegativeCache[cacheKey] = time.Now()
+		domainIDCacheTouchLRU(cacheKey)
+		domainIDCacheEvictLRU()
+		domainIDCacheMu.Unlock()
+	}
 	return "", domainNotFoundErr(zone)
 }
 

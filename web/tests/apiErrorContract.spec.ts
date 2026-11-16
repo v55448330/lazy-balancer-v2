@@ -222,7 +222,9 @@ test('前端业务码失败分支携带 HTTP status（api.ts 契约）', () => {
     /new ApiRequestError\(res\.message \|\| t\('common\.app\.api\.requestFailed'\), response\.status, res\)/,
     '业务码失败必须携带完整响应体信封（与 HTTP 失败分支同形）',
   )
-  assert.doesNotMatch(branch, /new ApiRequestError\(res\.message \|\| '请求失败', response\.status, res\.data\)/, '不得只传载荷（信封少一层）')
+  // 结构负钉：第三参必须是完整信封 res，不得是载荷 res.data（原钉死旧中文兜底
+  // 字面量——i18n 化后该形态永不出现，负断言空转；信封层数才是契约）。
+  assert.doesNotMatch(branch, /new ApiRequestError\([^)]*,\s*res\.data\)/, '不得只传载荷（信封少一层）')
   // HTTP 失败分支已经是三参形态（两类失败同形的前提）
   assert.match(api, /new ApiRequestError\(message, status, error\.response\?\.data\)/, 'HTTP 失败分支必须携带响应体')
 })

@@ -1910,10 +1910,12 @@ func recordJobFailure(jobID int, fromSet []string, message, errorCode string, re
 	var window time.Duration
 	if attempts < maxAttempts {
 		window = computeBackoff(attempts, retryAfter)
+		message = truncateJobMessage(message)
 	} else {
+		// 上限说明先于截断保留（maxRenewalAttemptsMessage 内部按预算截断 base）：
+		// 「先追加后截断」在 base 过长时会把终态说明整段截掉。
 		message = maxRenewalAttemptsMessage(message, maxAttempts)
 	}
-	message = truncateJobMessage(message)
 	fields := map[string]any{
 		"message":          message,
 		"renewal_attempts": attempts,
@@ -1980,9 +1982,9 @@ func failJobRateLimited(jobID int, retryAfter time.Duration) {
 func maxRenewalAttemptsMessage(message string, maxAttempts int) string {
 	const marker = "已达到最大重试次数"
 	if strings.Contains(message, marker) {
-		return message
+		return truncateJobMessage(message)
 	}
-	return fmt.Sprintf("%s（%s %d，停止自动重试，可手动重试）", message, marker, maxAttempts)
+	return appendJobMessageNote(message, fmt.Sprintf("（%s %d，停止自动重试，可手动重试）", marker, maxAttempts))
 }
 
 // failJobTransition 是失败终态迁移的共享实现（起

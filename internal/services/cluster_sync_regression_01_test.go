@@ -13,8 +13,13 @@ import (
 // 重新注册必须能拉起新循环进入注册轮询，否则从节点静默永久脱同步。
 func TestSyncService_halted_startNoOp_resumeRestarts(t *testing.T) {
 	_, database := newClusterTestService(t)
+	// 夹具默认 is_master=1：Resume 拉起的 run 循环 loadState 读到主节点角色
+	// 会立即净返回（finishRun 清 cancel），cancel 断言间歇假红且「重启进入
+	// 注册轮询」意图落空。钉从节点角色，run 循环稳定存活至 Stop。
+	setNodeMasterRole(t, database, false)
 	svc := NewSyncService(database, &config.Config{NodeName: "t", Port: 8000}, NewCaddyService("http://127.0.0.1:1"))
 	t.Cleanup(svc.Stop)
+	t.Cleanup(func() { unregisterSyncDrainer(svc) })
 
 	// 白盒注入 halt 终态（生产由 token 撤销/schema 不匹配的 run 循环置位，
 	// finishRun 保留 Halted 并清空 cancel/done——与此处手工构造等价）

@@ -207,7 +207,9 @@ test('Vite 开发代理默认 HTTP，仅显式环境开关使用 HTTPS', () => {
 test('库计数列文案与「数量 / 大小」列义', () => {
   const text = code('src/views/security/SecurityRules.vue')
   assert.match(text, /crsRuleCountLabel\(crsInfo\.value\.rule_count\)/)
-  assert.doesNotMatch(text, /个文件/)
+  // i18n 后计数文案键化（ruleCountUnit）：裸中文负钉空转——改钉 zh 母本词条口径
+  // （「条规则」而非「个文件」，832 条规则不得被读成 832 个文件）。
+  assert.ok(code('src/locales/zh/views.ts').includes("'ruleCountUnit': '{count} 条规则'"), '计数单位必须是「条规则」（zh 母本）')
   // i18n 后双钉:调用点钉键,zh 母本钉原文(任一漂移必红)
   assert.match(text, /:label="t\('common\.app\.views\.secRules\.lib\.colCountSize'\)"/)
   assert.ok(code('src/locales/zh/views.ts').includes("'数量 / 大小'"), '列头原文必须在 zh 母本词条中')
@@ -239,6 +241,11 @@ test('主列表失败可辨识（错误态 + 横幅重试 + 空态文案切换�
   const rejected = text.indexOf("if (polRes.status === 'rejected')")
   const setErr = text.indexOf('policiesLoadError.value = true', rejected)
   assert.ok(rejected > 0 && setErr > rejected, 'rejected 分支必须置错误态')
+  // catch 路径同样置位（原注释宣称两条失败路径却只钉 rejected——catch 失守不红）
+  const catchAt = text.indexOf('} catch (error: unknown) {', rejected)
+  assert.ok(catchAt > rejected, 'fetchData 缺 catch 失败路径')
+  const catchSetErr = text.indexOf('policiesLoadError.value = true', catchAt)
+  assert.ok(catchSetErr > catchAt, 'catch 分支必须置错误态')
   // 成功路径：主列表按严格阶段序落值（stage0→stage3，mixed 垫底），并复位错误态
   const okPath = text.indexOf('policies.value = (polRes.value.data || [])')
   assert.ok(okPath > 0, '成功路径必须给主列表赋值')
@@ -448,7 +455,8 @@ test('拦截页汇总必须过阶段能力门（stage3 off / stage1 无能力不
   // i18n 后双钉:调用点钉键,zh 母本钉原文(任一漂移必红)
   assert.match(summary, /t\('app\.security\.policies\.bp\.stage2NoPage'/)
   assert.ok(code('src/locales/zh/security.ts').includes('挑战按内置挑战页返回'), '阶段 2 内置页口径原文必须在 zh 母本词条中')
-  assert.doesNotMatch(summary, /规则已配置阶段页覆盖/)
+  // 结构负钉：规则级阶段页覆盖已退役，汇总不得消费覆盖字段/批量端点（裸中文负钉 i18n 后空转）
+  assert.doesNotMatch(summary, /ruleBlockPages|rule_block_pages|batch-block-pages/)
 })
 
 test('规则级阶段页覆盖写路径退役：无批量端点调用与暂存状态', () => {
@@ -496,7 +504,9 @@ test('信任语义单源：事件详情与流程副标题共用 trustHitMode', (
   assert.match(trigger, /t\('common\.app\.views\.trigDetail\.trustDetectionInline'\)/, 'mixed 等其他类型=引擎内降级不跳段')
   assert.ok(code('src/locales/zh/views.ts').includes('保留检测：跳过全部安全阶段，仅由独立轻量检测事务记录（动作=检测）'), 'stage0 口径原文必须在 zh 母本词条中')
   assert.ok(code('src/locales/zh/views.ts').includes('保留检测：引擎内检测降级，仍逐段评估、仅记录不拦截（动作=检测）'), '降级口径原文必须在 zh 母本词条中')
-  assert.doesNotMatch(trigger, /继续后续/, '旧「继续后续阶段评估」语义退场')
+  // 结构负钉：信任语义不得按布尔自分支（必须经 trustHitMode 单源投影，上面三键已钉）；
+  // 原裸中文「继续后续」负钉在 code() 视图空转（文案已键化）。
+  assert.doesNotMatch(trigger, /trust_detection === true \?/, '信任语义不得按布尔自分支（trustHitMode 单源）')
   assert.doesNotMatch(trigger, /policy\?\.trust_detection === true \? '保留检测/)
 
   const flow = code('src/components/RuleFlowDialog.vue')
@@ -734,7 +744,9 @@ test('TCP 锁与 HTTP 同构：灰 placeholder 退役，阶段 2/3 恒「不适�
   // 锁 popover 不再按协议分叉：TCP 与 HTTP 共用同一 popover（v-if 分支移除）
   assert.doesNotMatch(rules, /v-if="row\.protocol === 'http'"/)
   // 灰色 placeholder 锁与「不支持」tooltip 退役（含 --tcp 修饰类）
-  assert.doesNotMatch(rules, /TCP 规则不支持安全策略/)
+  // 退役文案已键化（tcpUnsupportedReason 等）：裸中文负钉空转——结构负钉钉
+  // 协议分叉形态不得回潮（与下方 acl-lock-icon--tcp 同族）。
+  assert.doesNotMatch(rules, /v-if="row\.protocol === 'tcp'"[^>]*acl-lock/)
   assert.doesNotMatch(rules, /acl-lock-icon--tcp/)
   // 锁色三态（未绑/禁用=黄 is-unbound，已绑=绿 is-allow）对 TCP 与 HTTP 同一表达式
   assert.match(rules, /ruleDisabled \? 'is-unbound' : ruleStageModel\(row as Rule\)\.hasAnyPolicy \? 'is-allow' : 'is-unbound'/)
@@ -748,7 +760,7 @@ test('规则行「安全」绑定入口与流程弹框对 TCP 放开', () => {
   const rules = code('src/views/Rules.vue')
   // 绑定按钮禁用条件不再含 TCP（含 2/3 特征策略的拒绝由后端 400 + 编辑器置灰承接）
   assert.doesNotMatch(rules, /:disabled="row\.protocol === 'tcp'/)
-  assert.doesNotMatch(rules, /TCP 规则不经过安全链/)
+  assert.doesNotMatch(rules, /protocol === 'tcp' \? null : ruleStageModel/, '流程弹框模型不得按协议置空（旧形态）')
   // 流程弹框模型不再按协议置空
   assert.match(rules, /flowDialogModel\.value = ruleStageModel\(rule\)/)
 })
@@ -829,9 +841,27 @@ test('TCP 绑定门谓词与文案单源（securityStages）', () => {
   assert.match(editor, /TCP_BIND_UNSUPPORTED_REASON/)
   // 策略向导选择器放开 TCP（不再只列 HTTP）
   const policies = code('src/views/security/SecurityPolicies.vue')
-  assert.doesNotMatch(policies, /选择器只列 HTTP/)
+  // 结构负钉：选择器不得按协议排除 TCP（裸中文「选择器只列 HTTP」i18n 后空转）
+  const pickerFiltered = member(policies, 'const pickerFilteredRules = computed')
+  assert.doesNotMatch(pickerFiltered, /protocol !== 'tcp'/, '候选列表不得整体排除 TCP（筛选只收窄视野）')
   // 向导关联规则步骤 TCP 行内标注
   // i18n 后双钉:调用点钉键,zh 母本钉原文(security.ts 为 zh/en 合并词条,原文在 "zh" 行)
   assert.match(policies, /infoHints\.push\(t\('app\.security\.policies\.bind\.tcpHint'\)\)/)
   assert.ok(code('src/locales/zh/security.ts').includes('拦截=断连，无拦截页；CDN 回源需开启 PROXY protocol'), 'TCP 行内标注原文必须在 zh 母本词条中')
+})
+
+test('IPv6 地理库开关：退化 200 按 messageKey 判定（语言无关），不得吞成成功', () => {
+  const rules = code('src/views/security/SecurityRules.vue')
+  const toggle = member(rules, 'const toggleIP2RegionV6 = async')
+  // 信封层读取（拦截器已解包）：res.messageKey，不是 res.data?.message（恒 undefined）
+  assert.match(toggle, /res\.messageKey === 'k_7d87740a'/, '退化判定必须走稳定语义键（语言无关）')
+  assert.match(toggle, /ElMessage\.warning\(res\.message \|\| t\('common\.app\.views\.secRules\.lib\.v6ReloadFailed'\)\)/, '退化 200 必须显性警告（后端文案优先，词条兜底）')
+  assert.doesNotMatch(toggle, /res\.data\?\.message|res\.data\.message/, '不得读载荷层 message（信封误读=退化被吞）')
+  assert.doesNotMatch(toggle, /重载失败'|重载 Caddy 配置失败/, '不得用 zh 字面量比较（en 响应漏判）')
+  // 成功路径仍走 mfaAwareSuccess + 状态词条；失败后回读权威值
+  assert.match(toggle, /mfaAwareSuccess\(t\('common\.app\.views\.secRules\.lib\.v6ToggleResult'/, '成功路径保持既有口径')
+  assert.match(toggle, /finally \{[\s\S]*?fetchIP2RegionInfo\(\)/, '无论成败必须回读权威开关值')
+  // 词条双钉：zh/en 母本 v6ReloadFailed 成对在场
+  assert.ok(code('src/locales/zh/views.ts').includes("'v6ReloadFailed': 'IPv6 地理库开关已保存，但重载 Caddy 配置失败（待下次成功重载生效）'"), 'v6ReloadFailed 原文必须在 zh 母本')
+  assert.ok(code('src/locales/en/views.ts').includes("'v6ReloadFailed'"), 'v6ReloadFailed 必须成对在场（en）')
 })

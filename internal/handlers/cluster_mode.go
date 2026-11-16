@@ -113,8 +113,10 @@ func (h *Handlers) SetClusterMode(c *gin.Context) {
 	// 重启、注册轮询不可达，从节点静默永久脱同步（唯一出口 Resume 此前只有手动
 	// 同步一处调用，且重新注册后 token='' 使 Pull 在 Resume 之前就失败早退）。
 	// Resume 对非 Halted 态是 no-op，幂等安全；此时 run 循环已终止（done 已关），
-	// Resume 立即拉起新循环进入注册轮询。
-	h.syncService.Resume()
+	// Resume 立即拉起新循环进入注册轮询。**用户停止态门控**：loop_on=false 时
+	// 不得复活（标准 §5，与服务层 restore 同口径——裸 Resume 会让同步在无调度
+	// 状态运行，与 BecomeSlave 刚写入的「切从后不会同步」审计直接矛盾）。
+	services.ResumeSyncIfUserEnabled(h.syncService.Resume)
 	recordAudit(c, "切换", "集群模式", switchToSlaveAuditDetail(masterAuditURL, outboundIPOK))
 	// 成功文案走 catalog 双语（与 Promote/UpdateClusterSettings 同口径）：
 	// 明文 HTTP 警告是独立变体词条，不得拼接硬编码中文。

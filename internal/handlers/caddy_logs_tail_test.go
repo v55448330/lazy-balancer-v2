@@ -247,10 +247,10 @@ func TestGetCaddyLogs_capsWindowReadAt128KB(t *testing.T) {
 	oldPaths := caddyLogPaths
 	caddyLogPaths = map[string]string{"runtime": logPath}
 	t.Cleanup(func() { caddyLogPaths = oldPaths })
-	oldHook := caddyLogsStatHook
-	// Stat 与读取之间的增长窗口：追加 200KB（轮转滞后/高流量形态）。
-	caddyLogsStatHook = func() { writeLines(200 * 1024) }
-	t.Cleanup(func() { caddyLogsStatHook = oldHook })
+	oldHook := logTailWindowStatHook
+	// 尺寸快照与读取之间的增长窗口：追加 200KB（轮转滞后/高流量形态）。
+	logTailWindowStatHook = func() { writeLines(200 * 1024) }
+	t.Cleanup(func() { logTailWindowStatHook = oldHook })
 
 	gin.SetMode(gin.TestMode)
 	router := gin.New()

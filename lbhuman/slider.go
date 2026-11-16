@@ -182,7 +182,7 @@ func consumeSliderPuzzle(id string) *sliderPuzzle {
 // serveSliderChallenge 滑块挑战页（内联 SVG+JS，零外部资源）。
 func (h *HumanHandler) serveSliderChallenge(w http.ResponseWriter, r *http.Request, ip string) {
 	humanStats.Challenges.Add(1)
-	reportHumanEvent(h.RuleID, ip, r.Method, r.URL.RequestURI(), r.UserAgent(), "challenge")
+	reportHumanEvent(h.RuleID, ip, r.Method, r.URL.RequestURI(), "challenge")
 	p := newSliderPuzzle()
 	registerChallengeSession(p.id, "slider", h.RuleID, ip, r.Method, r.URL.RequestURI(), r.UserAgent(), sliderPuzzleTTL, sliderMaxAttempts)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -249,7 +249,7 @@ func (h *HumanHandler) serveSliderVerify(w http.ResponseWriter, r *http.Request,
 	}
 	if !sliderOK {
 		humanStats.Fails.Add(1)
-		reportHumanEvent(h.RuleID, ip, r.Method, r.URL.RequestURI(), r.UserAgent(), "fail")
+		reportHumanEvent(h.RuleID, ip, r.Method, r.URL.RequestURI(), "fail")
 		// 区分「可重试」与「拼图失效」：attempts_left>0 表示拼图仍在，客户端可
 		// 原地重试；耗尽（left=0）即删拼图（与「失败 3 次强制换图」一致），
 		// retryable=false，客户端 reload 换新图。attempts_left 服务端权威。
@@ -283,7 +283,7 @@ func (h *HumanHandler) serveSliderVerify(w http.ResponseWriter, r *http.Request,
 	}
 	w.Header().Set("Set-Cookie", fmt.Sprintf("%s=%s; Path=/; HttpOnly; SameSite=Lax; Expires=%s%s", cookieName, cookieValue, exp.UTC().Format(http.TimeFormat), secure))
 	humanStats.Passes.Add(1)
-	reportHumanEvent(h.RuleID, ip, r.Method, r.URL.RequestURI(), r.UserAgent(), "pass")
+	reportHumanEvent(h.RuleID, ip, r.Method, r.URL.RequestURI(), "pass")
 	_, _ = w.Write([]byte(`{"ok":true}`))
 }
 

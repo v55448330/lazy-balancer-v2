@@ -7,7 +7,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
 import { autobanStateLabel, autobanStatValue, isAutobanIneffective, suggestionBand } from '../src/utils/autobanStatus.ts'
-import { code, elementSlice, repoCode, section } from './_helpers.ts'
+import { code, cssRule, elementSlice, repoCode, section } from './_helpers.ts'
 
 test('启用且 ban_effective === false 时展示黄条', () => {
   assert.equal(isAutobanIneffective({ enabled: true, ban_effective: false }), true)
@@ -188,13 +188,15 @@ test('总览卡：四统计卡一行 + 单黄条 + IP 建议表 + 累犯下钻�
   assert.match(page, /autobanEscalationShortKey\(autobanStatus\?\.escalation\)/, '累犯档列必须消费状态级 escalation')
   // 四统计卡一行（grid 4 列）+ 移动端堆叠
   assert.match(page, /\.autoban-stats \{[^}]*grid-template-columns: repeat\(4, minmax\(0, 1fr\)\)/, '四统计卡必须 grid 4 列一行')
-  assert.match(page, /@media \(max-width: 768px\) \{[\s\S]*?\.autoban-body \{ flex-direction: column; \}/, '移动端必须堆叠')
+  assert.match(cssRule(page, '@media (max-width: 768px)'), /\.autoban-body \{ flex-direction: column; \}/, '移动端必须堆叠')
   // 黄条与卡体间距必须显式声明（mb-3 工具类全站未定义，曾零间距贴住卡体）
   assert.match(page, /class="autoban-alert"/, '卡内黄条必须挂间距类')
   assert.match(page, /\.autoban-alert \{[^}]*margin-bottom: 12px/, '黄条下间距必须显式声明')
   // 建议区定宽不伸缩 + 窄桌面提前堆叠（中间宽度带不再把建议表挤成窄条）
   assert.match(page, /\.autoban-suggestions \{[^}]*flex: 0 0 420px/, '建议区必须定宽不伸缩')
-  assert.match(page, /@media \(max-width: 1200px\) \{[\s\S]*?\.autoban-body \{ flex-direction: column; \}/, '窄桌面必须提前堆叠')
+  // 限段：堆叠声明必须落在 1200px 媒体查询块内——无界 [\s\S]*? 会跨块命中
+  // 768px 块里的同形声明（1200px 断点被删也恒绿）。
+  assert.match(cssRule(page, '@media (max-width: 1200px)'), /\.autoban-body \{ flex-direction: column; \}/, '窄桌面必须提前堆叠')
   // 建议区自适应剩余宽度：标题 ellipsis+tooltip，无水平滚动
   assert.match(page, /\.autoban-suggestions-title \{[^}]*text-overflow: ellipsis/, '建议标题必须 ellipsis 不换行')
   assert.match(page, /\.autoban-suggestions \{[^}]*min-width: 0/, '建议区必须可收缩（不撑破卡体）')
@@ -481,6 +483,20 @@ test('身份 CIDR 形态：IPv6 /64 网络地址加 /64，IPv4/非网络地址�
   assert.equal(autobanIdentityDisplay('45.33.32.10'), '45.33.32.10')
   assert.equal(autobanIdentityDisplay('not-an-ip'), 'not-an-ip')
   assert.equal(autobanIdentityDisplay(''), '')
+})
+
+// ── 观察建议「封禁」接线：/64 身份键必须发 CIDR 形态（后端 validIPOrCIDR 拒绝
+// IPv6 裸网络地址；裸地址只封单主机且与 /64 身份键同键，整段自动封禁被永久抑制）──
+test('观察建议封禁：身份键经 autobanIdentityDisplay 转 CIDR，/64 确认框附连带披露', () => {
+  const events = code('src/views/security/SecurityEvents.vue')
+  const ban = section(events, 'const banSuggestion = async', '\n}')
+  assert.match(ban, /const value = autobanIdentityDisplay\(row\.ip\)/, '条目值必须经身份显示单源（/64 → <network>::/64）')
+  assert.match(ban, /addIpToList\(value, \{ id: listId/, '写入必须走共享链且用转换后的值')
+  assert.match(ban, /note: value\.endsWith\('\/64'\) \? t\('app\.security\.events\.enableNote4'\) : undefined/, '/64 连带封禁披露必须随确认框')
+  assert.doesNotMatch(ban, /addIpToList\(row\.ip/, '不得直发裸身份键（后端拒绝 IPv6 裸网络地址）')
+  // 词条双钉：调用点钉键（上），zh/en 母本钉原文（任一漂移必红）
+  assert.ok(code('src/locales/zh/security.ts').includes('"enableNote4": "IPv6 按 /64 前缀封禁：同一 /64 下的其它地址会被连带封禁"'), 'enableNote4 原文必须在 zh 母本')
+  assert.ok(code('src/locales/en/security.ts').includes('"enableNote4"'), 'enableNote4 必须成对在场（en）')
 })
 
 test('时长标签单源：库值→词条，未知值原样回显，空值占位', () => {

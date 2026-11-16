@@ -20,6 +20,8 @@ interface AddIpToListOptions {
   verb?: string
   /** 成功反馈文案覆盖（默认「已{verb}地址列表「{list.name}」」） */
   successText?: string
+  /** 确认框附加披露句（拼在主体确认文案后；如 IPv6 /64 连带封禁说明） */
+  note?: string
 }
 
 /**
@@ -40,8 +42,9 @@ export const useIpListAdd = () => {
     adding.value = true
     try {
       try {
+        const confirmMessage = t('common.app.views.ipAdd.confirmMessage', { ip, verb, list: list.name })
         await ElMessageBox.confirm(
-          t('common.app.views.ipAdd.confirmMessage', { ip, verb, list: list.name }),
+          options.note ? `${confirmMessage} ${options.note}` : confirmMessage,
           t('common.app.views.ipAdd.confirmTitle', { verb }),
           { confirmButtonText: t('common.app.views.ipAdd.confirmOk'), cancelButtonText: t('common.app.views.ipAdd.cancel'), type: 'info' },
         )

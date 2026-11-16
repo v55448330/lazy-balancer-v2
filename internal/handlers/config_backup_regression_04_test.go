@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"encoding/json"
 	"net/http"
 	"strings"
 	"testing"
@@ -16,18 +15,7 @@ import (
 // 单独导出的缺表形态)。sections 为调用方分类选择(空=全选默认)。
 func portsBackupJSON(t *testing.T, sections []string, tables map[string][]map[string]any, cfg map[string]any) string {
 	t.Helper()
-	backup := configBackup{
-		Sections: sections,
-		Meta:     configBackupMeta{App: "lazy-balancer-v2", Version: 2, ExportedAt: "2026-09-19T00:00:00Z"},
-		Config:   cfg,
-		Tables:   tables,
-	}
-	backup.Meta.Checksum = checksumBackupPayload(t, tables, cfg)
-	data, err := json.Marshal(backup)
-	if err != nil {
-		t.Fatalf("marshal ports backup: %v", err)
-	}
-	return string(data)
+	return buildBackup(t, backupFixtureOptions{Sections: sections, Tables: tables, Config: cfg})
 }
 
 // postValidateString 走预览端点并解码响应(导入/预览双路径同序钉板)。

@@ -204,8 +204,9 @@ test('关联规则步骤：说明走标准提示框 + 归属汇总（裸文本�
   // i18n 后双钉:调用点钉键,zh 母本钉原文(任一漂移必红)
   assert.match(text, /info-note-desc">\{\{ t\('app\.security\.policies\.bind\.orderNote'\) \}\}<\/span>/)
   assert.ok(code('src/locales/zh/security.ts').includes('策略按绑定顺序依次触发，先触发的先拦截；顺序调整仅改变触发先后，不影响拦截页归属'), '归属汇总原文必须在 zh 母本词条中')
-  assert.doesNotMatch(text, /多策略按绑定顺序依次评估/, '旧裸文本长说明退役')
-  assert.doesNotMatch(text, /form-tip-line">多策略按绑定顺序/)
+  // 结构负钉：长说明必须走 info-note 标准提示框 + bind.orderNote 词条键（上面
+  // 双钉），不得残留裸文本提示行容器（裸中文负钉 i18n 后空转）。
+  assert.doesNotMatch(text, /form-tip-line">[^<]*绑定顺序/, '说明不得回落 form-tip-line 裸文本形态')
 })
 
 test('IP ACL 名单校验只作用于启用态字段（关闭后隐藏的条目不得点名）', () => {
@@ -213,12 +214,24 @@ test('IP ACL 名单校验只作用于启用态字段（关闭后隐藏的条目�
   assert.match(validate, /if \(form\.value\.ip_acl_enabled\) \{\n\s*const invalidEntry = ipACLList\.value\.find/)
   // 白名单空生效集不再硬阻断（用户裁定 warning-not-block）：校验函数退出门，
   // 保存流改走显性确认（确认后照常保存，与 ipListSaveGuard 先例同形态）
-  assert.doesNotMatch(validate, /白名单模式下 IP 列表不能为空/, '空名单不得再在校验函数里硬阻断')
+  // 结构负钉：校验函数只保留格式类校验——空生效集不得 return false 硬阻断
+  // （裸中文负钉 i18n 后空转；保存流确认门由下方 confirm 钉承载）。
+  assert.doesNotMatch(validate, /ipWhitelist\.value\.length === 0|allowEmpty|emptyAllowList/, '空名单不得再在校验函数里硬阻断')
   const confirm = section(page, 'const handleSave = async () => {', 'const payload = buildPolicyPayload(')
   // i18n 后双钉:调用点钉键,zh 母本钉原文(确认文案漂移仍必红)
   assert.match(confirm, /t\('app\.security\.policies\.msg\.emptyAllowConfirm'\)/, '保存流必须先显性确认空名单后果')
   assert.ok(code('src/locales/zh/security.ts').includes('该策略关联的规则将拒绝所有请求，确定继续？'), '空名单确认原文必须在 zh 母本词条中')
   assert.match(confirm, /aclSaveCount\.value === 0/, '确认门只对空生效集触发')
   // 后端 400 门移除由 Go 侧同步落地；此处钉前端不再自设硬阻断即可。
-  assert.doesNotMatch(page, /阶段页覆盖|规则级覆盖/, '退役功能文案不得回流')
+  // 结构负钉：规则级阶段页覆盖已退役——不得消费覆盖字段/批量端点（裸中文
+  // 「阶段页覆盖/规则级覆盖」负钉 i18n 后空转）。
+  assert.doesNotMatch(page, /ruleBlockPages|rule_block_pages|batch-block-pages|stagePageOverride/)
+})
+
+test('关联规则选择器落点：新建态 selfPos=现有绑定数+1（不得恒显「排第 0 位」）', () => {
+  // 新建态链里没有 isSelf（editingId=null 不注入本策略），findIndex=-1——
+  // 落点必须回落 existing.length+1（绑定保存后执行序末位），不是 -1+1=0。
+  assert.match(page, /selfPos: selfIndex >= 0 \? selfIndex \+ 1 : existing\.length \+ 1/, '新建态落点=现有绑定数+1（编辑态=链内序号+1）')
+  assert.match(page, /const selfIndex = chain\.findIndex\(\(e\) => e\.isSelf\)/, '编辑态落点仍按链内 isSelf 序号')
+  assert.match(page, /pickerMeta\(rule\)\.selfPos/, '模板必须消费 selfPos 落点')
 })

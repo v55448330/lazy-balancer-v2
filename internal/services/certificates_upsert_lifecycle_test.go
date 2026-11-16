@@ -57,7 +57,9 @@ func TestUpsertQueuedCertJob_requeuesDeploymentLifecycleRows(t *testing.T) {
 // 回归形状（基线钉测）：排队中/执行态不在白名单——changed=false 让上游归因
 // 在途/冷却，不得把正在执行的签发打回 queued。
 func TestUpsertQueuedCertJob_keepsNonRequeueableRows(t *testing.T) {
-	for _, status := range []string{"queued", "processing", "creating_order"} {
+	// downloading（ACME 字节已到手、downloaded 进度未落库）同样在途——
+	// 白名单误收会把正在执行的签发打回 queued（负向抽样补齐该形态）。
+	for _, status := range []string{"queued", "processing", "creating_order", "downloading"} {
 		t.Run(status, func(t *testing.T) {
 			id, ruleID, domain := seedUpsertLifecycleJob(t, status)
 

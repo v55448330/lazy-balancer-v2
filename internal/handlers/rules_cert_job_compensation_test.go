@@ -19,6 +19,7 @@ import (
 // 都会因「规则启用但无可用证书」把整条规则摘除（fail-closed），用户唯一自觉的
 // /enable 入口又因 disabled 任务被 409 挡住。快照必须来自请求前状态。
 func TestUpdateRule_disableRestoresPausedCertJobsWhenPostCommitResolveFails(t *testing.T) {
+	withIsolatedGlobal(t)
 	// Given：启用中的 ACME 规则 + 已签发任务行
 	handler, _, _ := newAuditRuleHandlers(t, 0)
 	seedAuditRule(t, "lb_disable_jobs", "before", "disable-jobs.example.test", 8080, true, "acme_dns", true)

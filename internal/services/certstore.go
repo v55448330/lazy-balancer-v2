@@ -534,8 +534,11 @@ func MaterializeAllCertsFromDB() {
 	manualRecovered := 0
 	acmeRecovered := 0
 	manualScanFailures := 0
+	var manualIterErr error
 
-	rows, err := db.DB.Query(`SELECT caddy_id, tls_cert, tls_key FROM lb_rules WHERE enable_tls=1 AND tls_source='manual' AND COALESCE(tls_cert,'')!='' AND COALESCE(tls_key,'')!=''`)
+	// 谓词与 ACME 侧（latestApplicableACMECertMaterials）同口径补 enabled=1
+	// AND protocol='http'：禁用规则与非 HTTP 规则的手动私钥不得在启动时物化。
+	rows, err := db.DB.Query(`SELECT caddy_id, tls_cert, tls_key FROM lb_rules WHERE enabled=1 AND protocol='http' AND enable_tls=1 AND tls_source='manual' AND COALESCE(tls_cert,'')!='' AND COALESCE(tls_key,'')!=''`)
 	if err != nil {
 		Logf("error", "certstore: query manual certs failed: %v", err)
 		RecordAuditLog("system", "恢复失败", "证书文件", FormatAuditDetail(AuditSourcePart("startup_materialization"), "类型：手动证书", AuditResultPart("query_failed")), "")
@@ -544,6 +547,9 @@ func MaterializeAllCertsFromDB() {
 			var ruleID, certPEM, keyPEM string
 			if err := rows.Scan(&ruleID, &certPEM, &keyPEM); err != nil {
 				Logf("error", "certstore: scan manual cert failed: %v", err)
+				// 逐行读失败与 io_error 同权留痕：被跳过的行本轮未物化，
+				// 只计数不审计会让运维无从定位是哪条规则的证书缺席。
+				RecordAuditLog("system", "恢复失败", "证书文件", FormatAuditDetail(AuditSourcePart("startup_materialization"), "类型：手动证书", AuditResultPart("scan_failed")), "")
 				manualScanFailures++
 				continue
 			}
@@ -555,8 +561,12 @@ func MaterializeAllCertsFromDB() {
 				manualRecovered++
 			}
 		}
-		if err := rows.Err(); err != nil {
-			Logf("error", "certstore: iterate manual certs failed: %v", err)
+		if iterErr := rows.Err(); iterErr != nil {
+			manualIterErr = iterErr
+			Logf("error", "certstore: iterate manual certs failed: %v", iterErr)
+			// 迭代级失败=结果集不完整（未遍历行全部未物化），与查询级失败
+			// 同权审计留痕；摘要按失败轮如实标注，不得无条件报「完成」。
+			RecordAuditLog("system", "恢复失败", "证书文件", FormatAuditDetail(AuditSourcePart("startup_materialization"), "类型：手动证书", AuditResultPart("iterate_failed")), "")
 		}
 		rows.Close()
 	}
@@ -588,6 +598,12 @@ func MaterializeAllCertsFromDB() {
 	skippedNote := ""
 	if totalScanFailures > 0 {
 		skippedNote = fmt.Sprintf("（另 %d 行读取失败已跳过）", totalScanFailures)
+	}
+	if err != nil || manualIterErr != nil || selectErr != nil {
+		// 查询/迭代级失败：本轮物化不完整，摘要不得报「完成」（与对账侧
+		// 失败轮口径一致；启动路径无 task_runs 终态可承载，摘要即唯一信号）。
+		TaskLogf("startup:config-load", "certs", "证书物化失败（部分完成：手动证书 %d 个、ACME 证书 %d 个落盘%s）：手动侧查询=%v；手动侧迭代=%v；ACME侧=%v", manualRecovered, acmeRecovered, skippedNote, err, manualIterErr, selectErr)
+		return
 	}
 	TaskLogf("startup:config-load", "certs", "证书物化完成：手动证书 %d 个、ACME 证书 %d 个落盘%s", manualRecovered, acmeRecovered, skippedNote)
 }

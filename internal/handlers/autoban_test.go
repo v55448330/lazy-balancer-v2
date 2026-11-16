@@ -1,7 +1,7 @@
 package handlers
 
 // 自动封禁端点与预置名单例外钉
-//   GET/PUT /security/autoban 六项配置（校验/审计；保存联动调度启停）
+//   GET/PUT /security/autoban 十项配置（校验/审计；保存联动调度启停）
 //   POST /security/autoban/run 已废除（2026-10-14 裁定：调度唯一前提=启用）
 //   GET  /security/autoban/status 运行态+今日封禁+名单数+观察建议+引用状态
 //   预置「自动封禁名单」（system=1）删 400/条目可改 200/删除条目即解封/导出 TXT

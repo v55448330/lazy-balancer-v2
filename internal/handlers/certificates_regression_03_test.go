@@ -71,6 +71,7 @@ func TestListCertJobs_statusUsesSharedDayGranularity(t *testing.T) {
 // Then 删除全程持 caddyOpMu（窗口内不可再取锁），并发绑定只能在删除完成后
 // 进入校验并被拒（非 200）——引用检查与删除对规则写路径原子。
 func TestDeleteCertificateConfig_holds_caddyOpMuAcrossReferenceCheckAndDelete(t *testing.T) {
+	withIsolatedGlobal(t)
 	h := newRuleFeatureTestHandlers(t)
 	if _, err := db.DB.Exec(`INSERT INTO certificate_configs (id,name,dns_provider,dns_credentials,enabled) VALUES (1,'probe','dnspod','{}',1)`); err != nil {
 		t.Fatalf("seed config: %v", err)
@@ -708,6 +709,7 @@ func TestIssueCertificate_disabledJobClassifiedAsRetired(t *testing.T) {
 // Then 全部失败且均为规则状态冲突 → 409「刷新后重试」（与定向同口径），
 // 不得折成 500 服务器故障。
 func TestIssueCertificate_batchAllConflictReturns409(t *testing.T) {
+	withIsolatedGlobal(t)
 	h := newBackupTestHandlers(t)
 	initIssueQueue(t)
 	seedIssueRule(t, "lb_conflict_batch", "conflict-batch.example")

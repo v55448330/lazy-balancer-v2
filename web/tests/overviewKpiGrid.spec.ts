@@ -23,8 +23,9 @@ test('三 KPI 等分栅格：拦截/检测/正常请求 同构三列，挑战移
     '必须恰好三个 guard-item 列（挑战统计移至 CC 卡片）',
   )
   assert.equal(guard.split('<div class="strip-divider"></div>').length - 1, 2, '列间必须两条竖分隔线')
-  assert.doesNotMatch(page, /活跃策略/, '活跃策略指标必须退役')
-  assert.doesNotMatch(guard, /active_policies/, '防护区不得再渲染 active_policies')
+  // 结构负钉：活跃策略 KPI 已退役——防护区零消费（接口字段保留属契约面，不在
+  // 本钉范围；裸中文「活跃策略」负钉 i18n 后空转）。
+  assert.doesNotMatch(guard, /activePolicies|active_policies|kpiActive/, '活跃策略指标必须退役（防护区零消费）')
   // 等分与分隔形态（flex 等宽栅格，不引新组件）
   const item = cssDeclarations(page, '.guard-item')
   assert.equal(item.get('flex'), '1 1 0', '三列必须 flex:1 1 0 等宽')

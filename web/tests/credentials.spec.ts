@@ -90,7 +90,11 @@ test('B 三处密码入口 + 两处用户名入口均消费 credentials 单源',
   assert.match(login, /validatePassword\(value\)/)
   // 不得回流本地正则/长度字面量
   assert.doesNotMatch(login, /const usernamePolicyRe = \/\^\[a-z\]\[a-z0-9\]\*\$\//, '本地用户名字符集正则必须退役')
-  assert.doesNotMatch(users, /密码长度8-24位，仅限数字、大小写字母和特殊字符/, '本地密码文案必须退役')
+  // 结构负钉：密码规则提示必须走单源词条键 pwdRuleHint（zh 母本另钉原文），
+  // 不得本地第二份规则文案（裸中文负钉 i18n 后空转）。
+  assert.match(users, /t\('common\.app\.views\.users\.pwdRuleHint'\)/, '密码规则提示必须走词条单源')
+  assert.ok(code('src/locales/zh/views.ts').includes("'pwdRuleHint': '请输入8-24位，仅限数字、大小写字母和特殊字符密码'"), '密码规则原文必须在 zh 母本词条中')
+  assert.doesNotMatch(users, /密码长度8-24位/, '本地密码文案字面量必须退役')
 })
 
 // 编辑态用户名输入恒禁用（后端支持改名，但 UI 不提供入口）——因此不存在

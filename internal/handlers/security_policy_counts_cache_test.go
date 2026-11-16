@@ -166,6 +166,7 @@ func TestLoadSecurityPolicy24hCounts_hitReturnsClone(t *testing.T) {
 // 并发 miss 必须合并为一趟聚合查询（singleflight）：策略列表多页签/多客户端
 // 秒级轮询，miss 瞬间的并发不得放大为 N 趟近 24h 全窗口扫描。
 func TestLoadSecurityPolicy24hCounts_concurrentMissRunsSingleQuery(t *testing.T) {
+	withIsolatedGlobal(t)
 	newBackupTestHandlers(t)
 	resetSecurityPolicy24hCountsCacheForTest()
 	t.Cleanup(resetSecurityPolicy24hCountsCacheForTest)

@@ -14,11 +14,13 @@ import (
 func TestAutobanBannedToday_countsOmittedBansBeyondRoundCap(t *testing.T) {
 	installAutobanFixture(t, "2026-10-14 10:00:00")
 	// 钉 UTC：今日边界由 autobanNow（夹具时钟）换算，时区参与判定。
-	previous := CurrentLocation().String()
+	// 还原必须走 snapshotLocationState（currentLocation + 任务引擎双写同源
+	// 还原）：init 占位的 FixedZone("CST") 不可经 LoadLocation 重建，按字符串
+	// 回写会在 -shuffle/隔离下静默留 UTC 污染后续用例。
+	snapshotLocationState(t)
 	if _, err := ConfigureLocation("UTC"); err != nil {
 		t.Fatalf("configure UTC: %v", err)
 	}
-	t.Cleanup(func() { _, _ = ConfigureLocation(previous) })
 
 	oldCap := autobanAuditPerRoundCap
 	autobanAuditPerRoundCap = 3

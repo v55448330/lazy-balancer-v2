@@ -474,3 +474,51 @@ func TestSecurityEventsIPCHandler_rateRejectStoredAsBlocked(t *testing.T) {
 		t.Fatalf("rule_msg=%q, want 含「限流拒绝」", ruleMsg)
 	}
 }
+
+// 人机摄入端点 405 必须携带 Allow: POST（与 handleIngest 同口径）——
+// RFC 9110 要求 405 响应列出允许方法，写侧/排障据此区分「方法错」与「端点缺失」。
+func TestSecurityEventsIPCHuman_methodNotAllowedCarriesAllow(t *testing.T) {
+	h := &SecurityEventsIPCServer{}
+	req := httptest.NewRequest(http.MethodGet, services.SecurityEventsIPCIngestHumanPath, nil)
+	rec := httptest.NewRecorder()
+	http.HandlerFunc(h.ingestRouter).ServeHTTP(rec, req)
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("status=%d, want 405", rec.Code)
+	}
+	if got := rec.Header().Get("Allow"); got != http.MethodPost {
+		t.Fatalf("Allow=%q, want POST（405 必须携带允许方法）", got)
+	}
+}
+
+// 人机事件归属必须覆盖 mixed 存量属主：渲染层按内容特征（human_verify_mode/
+// cc_detect_enabled）选取 CC 属主（services/human_verify.go humanTopPolicy/
+// loadCCConfig），不看 policy_type——阶段化迁移前绑定的 mixed 策略仍在真实
+// 发放挑战。归因只认 policy_type='stage2' 会把 mixed 存量属主排除，触发详情
+// 把合法 CC 事件误标「无策略归属」。stage2 与 mixed 并存时 stage2 优先。
+func TestLookupHumanEventAttribution_mixedLegacyOwner(t *testing.T) {
+	setupSecurityPolicyTestDB(t)
+	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enabled) VALUES ('lb-mix-attr','混合属主规则','http','mix.test',8443,1)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO security_policies (id,name,mode,policy_type,enabled,human_verify_mode,human_verify_type) VALUES (71,'混合存量CC','off','mixed',1,'force','slider')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id,policy_id,rank) VALUES ('lb-mix-attr',71,0)`); err != nil {
+		t.Fatal(err)
+	}
+	attr := lookupHumanEventAttribution("lb-mix-attr")
+	if attr.policyID != 71 || attr.policyName != "混合存量CC" || attr.ruleName != "混合属主规则" {
+		t.Fatalf("mixed 存量属主必须被归因，got %+v（policy_id=0 即「无策略归属」误标）", attr)
+	}
+	// stage2 与 mixed 并存：stage2 优先（与渲染层阶段化属主同序）。
+	if _, err := db.DB.Exec(`INSERT INTO security_policies (id,name,mode,policy_type,enabled,human_verify_mode,human_verify_type) VALUES (72,'阶段2CC','off','stage2',1,'force','slider')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id,policy_id,rank) VALUES ('lb-mix-attr',72,1)`); err != nil {
+		t.Fatal(err)
+	}
+	attr = lookupHumanEventAttribution("lb-mix-attr")
+	if attr.policyID != 72 || attr.policyName != "阶段2CC" {
+		t.Fatalf("stage2 属主必须优先于 mixed，got %+v", attr)
+	}
+}

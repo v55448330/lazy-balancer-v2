@@ -288,7 +288,7 @@ export default {
     "presetCurrent": "当前",
     preset: {
       conservative: { name: "保守", desc: "只统计确认攻击，封禁时长固定，误封最少" },
-      standard: { name: "标准", desc: "统计所有防护事件，再犯封得更久（当前默认）" },
+      standard: { name: "标准", desc: "统计所有防护事件，等权计数、不自动升级（当前默认）" },
       enhanced: { name: "强化", desc: "区分确认攻击与可疑行为，光可疑不会封，更灵敏也更少误封" },
     },
     "scopeGroupConfirmed": "确认攻击",
@@ -354,6 +354,7 @@ export default {
     "enableNote1": "新封禁约 1 分钟内生效，重载时长连接可能被重置",
     "enableNote2": "持续攻击时每分钟至多一次重载，有少量性能开销",
     "enableNote3": "建议先以观察模式运行，确认建议准确后再正式封禁",
+    "enableNote4": "IPv6 按 /64 前缀封禁：同一 /64 下的其它地址会被连带封禁",
     "enableHowtoLabel": "生效方式",
     "enableHowtoText": "在 IP 访问控制（黑名单）策略中引用「自动封禁名单」地址列表",
     "disableConfirmTitle": "禁用自动封禁",

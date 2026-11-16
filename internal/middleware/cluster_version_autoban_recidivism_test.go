@@ -44,7 +44,8 @@ func TestClusterVersionTrigger_recidivismWritesBump(t *testing.T) {
 }
 
 // Given 触发器已装配、主节点形态。
-// When 仅写第七列（col=col 同值写，OF 按 SET 列出现即触发）。
+// When 仅写第七列（真实值变化；值变化守卫落地后 col=col 同值写不再能探
+// OF 成员资格——同值写不 bump 是守卫语义，OF 探测须用真实变更）。
 // Then 该列独立 bump cluster_version（漏列时稳态变更经 304 门滞留主节点）。
 func TestClusterVersionTrigger_autobanEscalationColumnBump(t *testing.T) {
 	for _, column := range []string{"autoban_escalation"} {
@@ -56,7 +57,7 @@ func TestClusterVersionTrigger_autobanEscalationColumnBump(t *testing.T) {
 			if _, err := database.Exec("UPDATE global_config SET is_master=1, cluster_version=100 WHERE id=1"); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := database.Exec("UPDATE global_config SET " + column + " = " + column + " WHERE id=1"); err != nil {
+			if _, err := database.Exec("UPDATE global_config SET " + column + " = CASE WHEN " + column + " = 'off' THEN '24h' ELSE 'off' END WHERE id=1"); err != nil {
 				t.Fatalf("update %s: %v", column, err)
 			}
 			if got := clusterVersion(t, database); got != 101 {

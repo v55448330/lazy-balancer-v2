@@ -145,6 +145,7 @@ func TestGetClusterRegistrationStatus_rejectsSlaveNode(t *testing.T) {
 // 中间件验密后事务内复核仍可能拒（密钥轮换/到期），零审计会让残留凭证的
 // 枚举尝试在取证面无痕。留痕经 middleware 注入的钩子（一分钟去重单源）。
 func TestGetClusterRegistrationStatus_credentialRejectionInvokesAuditRecorder(t *testing.T) {
+	withIsolatedGlobal(t)
 	h := newBackupTestHandlers(t)
 	// pending 节点带注册密钥哈希——错误密钥在事务内复核被拒（ErrInvalidClusterAuth）。
 	if _, err := db.DB.Exec(`INSERT INTO nodes (id,name,ip_address,port,status,is_approved,registration_secret)

@@ -144,7 +144,9 @@ test('个人资料仅修改密码时确认，普通资料保存直接提交', ()
   assert.match(passwordBranch, /await ElMessageBox\.confirm\(/, '修改密码仍需确认重新登录')
   assert.match(passwordBranch, /t\('common\.app\.views\.profile\.passwordChangeConfirmMsg'\)/)
   assert.ok(code('src/locales/zh/views.ts').includes('保存后需要重新登录'), '重登录警示必须在 zh 母本词条中')
-  assert.doesNotMatch(body, /将保存个人资料修改，是否继续/, '仅改显示名不得追加确认')
+  // 结构负钉：仅改显示名不得追加确认——确认框只允许出现在密码分支（上面已钉
+  // passwordBranch），整段不得有第二处 confirm（裸中文负钉 i18n 后空转）。
+  assert.equal([...body.matchAll(/ElMessageBox\.confirm\(/g)].length, 1, '保存流只允许密码分支一处确认')
   const busyAt = body.indexOf('saving.value = true')
   const confirmAt = body.indexOf('await ElMessageBox.confirm(')
   assert.ok(busyAt > 0 && busyAt < confirmAt, '必须先占位再弹密码确认（确认悬挂期即防重）')

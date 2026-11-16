@@ -224,6 +224,10 @@ func (h *Handlers) ClusterServiceControl(c *gin.Context) {
 	// 端点同口径 409 fast-fail。位置在票据校验前（窗口内拒绝不得消费一次性
 	// 票据，主节点重试不必重新注册），且仅收 caddy 动作——restart_app 的进程
 	// 退出本身会终结导入会话，不存在「超时判失败后仍执行」的双向错位。
+	// 留痕口径如实披露：rejectWriteDuringImport 全局统一 409 响应不留操作
+	// 审计（导入窗拒绝是瞬态门控，权威痕迹在导入会话审计与访问日志）——
+	// 本端点票据校验后的失败路径有审计，窗口 409 分支无，属全局门控有意
+	// 口径而非本端点遗漏（补留痕须改全局门，影响全部写端点）。
 	if req.Action != models.ClusterServiceActionRestartApp {
 		if rejectWriteDuringImport(c, "执行服务控制（配置导入进行中）") {
 			return

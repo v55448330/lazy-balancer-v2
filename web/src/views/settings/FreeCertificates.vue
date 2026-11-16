@@ -173,8 +173,8 @@
                 v-else
                 v-model="form.dns_credentials[field.name]"
                 :type="field.type === 'password' ? 'password' : 'text'"
+                :show-password="field.type === 'password'"
                 :placeholder="field.placeholder || ''"
-                show-password
               />
               <div v-if="field.description" class="form-tip-line">{{ field.description }}</div>
             </el-form-item>
@@ -263,6 +263,7 @@
 import { ref, onMounted, computed, reactive } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { request, mfaAwareSuccess } from '@/utils/api'
+import { isConfigUnchanged } from '@/utils/saveResult'
 import { useAuthStore } from '@/stores/auth'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Check, Connection, Document, OfficeBuilding, Plus, Postcard, Setting } from '@element-plus/icons-vue'
@@ -895,8 +896,13 @@ const handleSave = async () => {
       })
     }
     const saveResp = await request.put('/config', payload)
-    const saveMessage = (saveResp as unknown as { message?: string }).message ?? ''
-    mfaAwareSuccess(saveMessage.includes('配置无变化') ? saveMessage : t('app.settings.freeCerts.messages.saved'))
+    // 无变化判定走语言无关 messageKey（k_f724d3c8）：原 zh 字面量 includes 在 en
+    // 下恒失配 → 无变化被谎报为「保存成功」。
+    if (isConfigUnchanged(saveResp as unknown as { message?: string; messageKey?: string })) {
+      ElMessage.info((saveResp as unknown as { message?: string }).message || t('app.settings.freeCerts.messages.noChanges'))
+    } else {
+      mfaAwareSuccess(t('app.settings.freeCerts.messages.saved'))
+    }
     // 等待父级回填后再由 finally 解冻，避免迟到的 /config 覆盖在途编辑；
     // onSave 为必填回调（Settings.vue 三卡统一接线）。
     await props.onSave()

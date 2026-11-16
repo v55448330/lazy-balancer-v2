@@ -41,7 +41,7 @@ func TestNormalizeLegacySecurityPolicyEnums_slaveNormalizesLocally_whenSyncSecur
 }
 
 // TestNormalizeLegacySecurityPolicyEnums_normalizesWhitespaceAndNullRows 验证
-// 仅 ” 等值匹配覆盖不到这两类残留）。
+// 纯空格值与 NULL 值两类残留都被归一（只做等值匹配覆盖不到这两类形态）。
 func TestNormalizeLegacySecurityPolicyEnums_normalizesWhitespaceAndNullRows(t *testing.T) {
 	// Given 主节点 + 一条纯空格值行 + 一条 NULL 值行
 	setupSecurityEnumTestDB(t)

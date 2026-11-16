@@ -25,6 +25,7 @@ import (
 
 // installPinFailure 注入 LKG 钉回失败（测试缝生产恒为 nil）。
 func installPinFailure(t *testing.T, err error) {
+	withIsolatedGlobal(t)
 	t.Helper()
 	previous := pinLastGoodForTest
 	pinLastGoodForTest = func() error { return err }
@@ -34,6 +35,7 @@ func installPinFailure(t *testing.T, err error) {
 // installRollbackFailure 注入「未提交事务回滚失败」：测试实现先真正回滚再返回
 // 错误（与 txCommitForTest 同型），否则恢复路径读已提交视图会撞在泄漏写锁上。
 func installRollbackFailure(t *testing.T, err error) {
+	withIsolatedGlobal(t)
 	t.Helper()
 	previous := txRollbackForTest
 	txRollbackForTest = func(tx *sql.Tx) error {

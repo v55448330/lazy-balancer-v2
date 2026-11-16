@@ -76,8 +76,13 @@ export default {
   cadence: {
     everyNMinutes: 'Every {n} minutes',
     everyNMinutesSingle: 'Every minute',
-    every15Minutes: 'Every 15 minutes',
+    everyNSeconds: 'Every {n} seconds',
+    everyNHours: 'Every {n} hours',
+    everyNDays: 'Every {n} days',
     dailyAt: 'Daily at {time}',
+    scheduled: 'Scheduled',
+    daemon: 'Daemon (self-managed)',
+    manual: 'Manual trigger',
   },
   // 审计日志动作/对象枚举词条（audit-i18n 方案 C 第 1 步）：键=枚举库值的词条后缀，
   // 单源在 utils/auditVocabulary.ts（枚举钉见 tests/auditVocabularyPairs.spec.ts）。

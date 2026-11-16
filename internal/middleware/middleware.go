@@ -503,6 +503,9 @@ func clusterRateLimit(scope string, limit int, message string) gin.HandlerFunc {
 		}
 		bucket.mu.Unlock()
 
+		// 中间件级限流 429 有意不记操作审计（auditpolicy 契约已披露）：
+		// 拒绝发生在身份判定之前，无操作者可归因；权威痕迹在访问日志。
+		// 补留痕需新审计动作词+前端色调，影响面大，非缺口。
 		if exceeded {
 			c.Header("Retry-After", strconv.Itoa(retryAfter))
 			c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{"code": http.StatusTooManyRequests, "message": message})
@@ -551,6 +554,8 @@ func mcpAPIKeyRateLimit() gin.HandlerFunc {
 	}
 }
 
+// abortMCPRateLimit 中间件级限流 429 有意不记操作审计（同 clusterRateLimit
+// 口径，auditpolicy 契约已披露）：身份判定前拒绝，痕迹在访问日志。
 func abortMCPRateLimit(c *gin.Context, retryAfter int) {
 	c.Header("Retry-After", strconv.Itoa(retryAfter))
 	c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{"code": http.StatusTooManyRequests, "message": apimsg.T(c, "k_656b34a1"), "message_key": "k_656b34a1"})
@@ -684,6 +689,9 @@ func releaseRateLimitReservation(bucket *loginRateBucket, generation uint64, fai
 	}
 }
 
+// abortClusterMachineRateLimit 中间件级限流 429 有意不记操作审计（同
+// clusterRateLimit 口径，auditpolicy 契约已披露）：凭证/IP 桶在身份判定前
+// 拒绝，痕迹在访问日志；401 失败尝试另经 recordAuthenticationRejection 留痕。
 func abortClusterMachineRateLimit(c *gin.Context, retryAfter int) {
 	c.Header("Retry-After", strconv.Itoa(retryAfter))
 	c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{"code": http.StatusTooManyRequests, "message": apimsg.T(c, "k_783deafa"), "message_key": "k_783deafa"})

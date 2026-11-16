@@ -56,6 +56,7 @@ func TestUpdateSecurityPolicy_reinferredPolicyTypeAudited(t *testing.T) {
 }
 
 func TestUpdateAdminTLS_disabledRejectsUnknownMode(t *testing.T) {
+	withIsolatedGlobal(t)
 	initializeRuleFeatureTestDB(t)
 	oldExit := exitProcess
 	exitProcess = func(int) {}

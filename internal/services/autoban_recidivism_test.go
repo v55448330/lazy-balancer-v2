@@ -4,17 +4,45 @@ package services
 //   - ListAutobanRecidivism：hidePermanent/ip 子串筛选、分页 total、排序契约；
 //   - 行富化：ban_status join 名单生效条目（限时/永久/未封禁三态）、
 //     hits_24h/last_event_at 按身份键聚合 security_events（IPv6 /64 归一）；
-//   - DeleteAutobanRecidivism：单条删除、幂等（不存在也成功）；
+//   - DeleteAutobanRecidivism（test-only，宿主在本文件）：单条删除、幂等
+//     （不存在也成功）；生产删除恒走 DeleteAutobanRecidivismGuarded 的事务
+//     守卫形态，这两个导出入口零生产消费方——留在产品文件会让「生产调用
+//     面」判断失真（testonly_symbols_test 绊线名单登记防回迁）；
 //   - RunAutobanCycle 每轮物理清理衰减行（last_ban_at < now-decay），
 //     与读时衰减清零同窗口口径，防表无限增长。
 
 import (
+	"context"
+	"errors"
 	"testing"
 
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
 	"lazy-balancer-v2/internal/taskengine"
 )
+
+// AutobanIdentityActivelyBanned 判定身份是否正在被自动封禁（库句柄视图；
+// test-only——生产守卫的事务形态见 DeleteAutobanRecidivismGuarded）。
+func AutobanIdentityActivelyBanned(identity string) (bool, error) {
+	if db.DB == nil {
+		return false, errors.New("数据库未初始化")
+	}
+	return autobanIdentityBannedInView(context.Background(), db.DB, identity)
+}
+
+// DeleteAutobanRecidivism 删除单条累犯身份行（取消累犯身份——下次达阈值按
+// 首次档起算）。identity 经 autobanEntryIdentity 归一。幂等：identity 不存在
+// 时同样成功（DELETE 零行不报错）。只清历史记账，不动名单条目：已生效封禁
+// 保持至到期。守卫+删除原子形态见 DeleteAutobanRecidivismGuarded（生产唯一
+// 消费面）。
+func DeleteAutobanRecidivism(identity string) error {
+	d := db.GetDB()
+	if d == nil {
+		return errors.New("database unavailable")
+	}
+	_, err := d.Exec(deleteAutobanRecidivismSQL, autobanEntryIdentity(identity))
+	return err
+}
 
 // seedAutobanRecidivismRows 直填累犯行（绕 merge 写路径——查询/清理契约只
 // 消费表形态，不依赖升级档位）。
@@ -36,7 +64,7 @@ func recidivismIdentities(records []AutobanRecidivismRecord) []string {
 	return out
 }
 
-// Given 累犯表五行（含 permanent/并列计数/不同 IP 段）。
+// Given 累犯表四行（含 permanent/并列计数/不同 IP 段）。
 // When ListAutobanRecidivism 缺省筛选（hidePermanent=true）。
 // Then permanent 行隐藏；total=筛选后总数；offense_count 降序、identity 升序。
 func TestListAutobanRecidivism_hidePermanentDefault(t *testing.T) {
@@ -64,7 +92,7 @@ func TestListAutobanRecidivism_hidePermanentDefault(t *testing.T) {
 	}
 }
 
-// Given 同上五行。
+// Given 同上表的两行（含 permanent 行）。
 // When hidePermanent=false。
 // Then permanent 行可见，total=全表行数。
 func TestListAutobanRecidivism_showPermanent(t *testing.T) {

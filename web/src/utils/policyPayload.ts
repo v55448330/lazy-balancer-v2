@@ -57,7 +57,7 @@ export interface PolicyPayloadInput {
   humanVerifyTtl: number
   /** 豁免路径（前缀/通配），JSON 数组文本下发。IP 级放行唯一入口=阶段 0 信任名单 */
   humanExemptPaths: readonly string[]
-  // —— 挑战页 CC 触发（同一阶段 3 节点）——
+  // —— 挑战页 CC 触发（同一阶段 2 CC 防护节点）——
   ccDetectEnabled: boolean
   ccRpsLimit: number
   ccRpsWindow: number

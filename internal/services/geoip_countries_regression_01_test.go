@@ -236,3 +236,37 @@ func TestBuildIPPrecheckDirectives_geoipCountryEntries(t *testing.T) {
 	}
 	compileForEngineGate(t, directives)
 }
+
+// Given 已装载地域树（广东省 → 深圳市）。
+// When 校验「省/市」复合条目。
+// Then 省已知且市属该省 → 通过；省已知但市不存在 → 拒（防拼写错误生成 CEL
+// 恒假死条目）；省未知 → 拒。此前复合分支的接受面与「真实城市」拒绝面零覆盖
+// （只钉了国名/城市复合拒绝）。
+func TestValidateGeoIPCountries_provinceCityCompound(t *testing.T) {
+	dir := t.TempDir()
+	live := filepath.Join(dir, "ip2region.xdb")
+	writeTestXDB(t, live, []xdbSegment{
+		{startIP: 0x01020300, endIP: 0x010203FF, region: "中国|广东省|深圳市|0|CN"},
+	})
+	withIP2RegionPaths(t, live, filepath.Join(dir, "missing.xdb"))
+	oldProvinces := ip2RegionLiveProvincesOverride
+	SetIP2RegionLiveProvincesForTest([]string{"广东省", "海外"})
+	t.Cleanup(func() { SetIP2RegionLiveProvincesForTest(oldProvinces) })
+
+	for _, entry := range []string{`["广东省/深圳市"]`, `["广东省/深圳市","海外"]`} {
+		if err := ValidateGeoIPCountries(entry, "deny"); err != nil {
+			t.Fatalf("合法省/市条目必须放行 %s: %v", entry, err)
+		}
+	}
+	cases := []struct{ entry, wantErr string }{
+		{`["广东省/火星市"]`, "城市不在该省城市列表"},
+		{`["火星省/深圳市"]`, "未知省份"},
+		{`["广东省/"]`, "城市不在该省城市列表"},
+	}
+	for _, c := range cases {
+		err := ValidateGeoIPCountries(c.entry, "deny")
+		if err == nil || !strings.Contains(err.Error(), c.wantErr) {
+			t.Fatalf("%s 必须拒绝（含 %q）, err=%v", c.entry, c.wantErr, err)
+		}
+	}
+}

@@ -36,8 +36,8 @@ func TestCCTriggerReason_failDoesNotSteal(t *testing.T) {
 	resetHumanEventPosterForTest(t, srv.URL)
 
 	stashCCTriggerReason("lb-kind-fail", "203.0.113.93", "session_anomaly")
-	reportHumanEvent("lb-kind-fail", "203.0.113.93", http.MethodGet, "/", "ua", "fail")
-	reportHumanEvent("lb-kind-fail", "203.0.113.93", http.MethodGet, "/", "ua", "challenge")
+	reportHumanEvent("lb-kind-fail", "203.0.113.93", http.MethodGet, "/", "fail")
+	reportHumanEvent("lb-kind-fail", "203.0.113.93", http.MethodGet, "/", "challenge")
 	if !drainHumanEventsForTest(10 * time.Second) {
 		t.Fatal("queue must drain")
 	}
@@ -68,8 +68,8 @@ func TestCCTriggerReason_passDoesNotSteal(t *testing.T) {
 	resetHumanEventPosterForTest(t, srv.URL)
 
 	stashCCTriggerReason("lb-kind-pass", "203.0.113.94", "rps_spike")
-	reportHumanEvent("lb-kind-pass", "203.0.113.94", http.MethodGet, "/", "ua", "pass")
-	reportHumanEvent("lb-kind-pass", "203.0.113.94", http.MethodGet, "/", "ua", "challenge")
+	reportHumanEvent("lb-kind-pass", "203.0.113.94", http.MethodGet, "/", "pass")
+	reportHumanEvent("lb-kind-pass", "203.0.113.94", http.MethodGet, "/", "challenge")
 	if !drainHumanEventsForTest(10 * time.Second) {
 		t.Fatal("queue must drain")
 	}
@@ -101,8 +101,8 @@ func TestCCTriggerReason_rateRejectConsumesWithoutCarrying(t *testing.T) {
 	resetHumanEventPosterForTest(t, srv.URL)
 
 	stashCCTriggerReason("lb-kind-reject", "203.0.113.95", "4xx_ratio")
-	reportHumanEvent("lb-kind-reject", "203.0.113.95", http.MethodGet, "/", "ua", "rate_reject")
-	reportHumanEvent("lb-kind-reject", "203.0.113.95", http.MethodGet, "/", "ua", "challenge")
+	reportHumanEvent("lb-kind-reject", "203.0.113.95", http.MethodGet, "/", "rate_reject")
+	reportHumanEvent("lb-kind-reject", "203.0.113.95", http.MethodGet, "/", "challenge")
 	if !drainHumanEventsForTest(10 * time.Second) {
 		t.Fatal("queue must drain")
 	}
@@ -188,7 +188,7 @@ func TestHumanEventDelivery_disabledEnvSkipsDial(t *testing.T) {
 	t.Setenv(humanEventSocketEnv, "")
 	humanEventDeliverFailed.Store(0)
 
-	reportHumanEvent("lb-disabled", "203.0.113.96", http.MethodGet, "/", "ua", "challenge")
+	reportHumanEvent("lb-disabled", "203.0.113.96", http.MethodGet, "/", "challenge")
 	if !drainHumanEventsForTest(10 * time.Second) {
 		t.Fatal("queue must drain (disabled skip must not block worker)")
 	}
@@ -247,7 +247,7 @@ func TestHumanEventDelivery_envSocketDialsTrimmedPath(t *testing.T) {
 	t.Setenv(humanEventSocketEnv, "  "+sockPath+"  ")
 	humanEventDeliverFailed.Store(0)
 
-	reportHumanEvent("lb-uds", "203.0.113.97", http.MethodGet, "/", "ua", "challenge")
+	reportHumanEvent("lb-uds", "203.0.113.97", http.MethodGet, "/", "challenge")
 	// 排空探针只证明 worker 处理完毕；handler 写入经 channel 交接，
 	// 避免与 Serve goroutine 的数据竞争。
 	var got []map[string]any

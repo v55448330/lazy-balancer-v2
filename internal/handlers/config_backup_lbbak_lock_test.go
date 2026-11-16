@@ -197,6 +197,7 @@ func TestBuildLbbakExport_holdsWafLockAcrossDBSnapshot(t *testing.T) {
 }
 
 func TestLbbakImport_waitsForWafLockBeforeDBTransaction(t *testing.T) {
+	withIsolatedGlobal(t)
 	h := newBackupTestHandlers(t)
 	g := newBackupSectionRouter(h)
 	crsDir, _ := overrideTestWafPaths(t)

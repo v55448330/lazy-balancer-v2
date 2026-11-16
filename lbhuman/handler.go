@@ -111,7 +111,7 @@ func (h *HumanHandler) serveChallengeForRequest(w http.ResponseWriter, r *http.R
 		return
 	}
 	humanStats.Challenges.Add(1)
-	reportHumanEvent(h.RuleID, ip, r.Method, r.URL.RequestURI(), r.UserAgent(), "challenge")
+	reportHumanEvent(h.RuleID, ip, r.Method, r.URL.RequestURI(), "challenge")
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Human-Challenge", "1")

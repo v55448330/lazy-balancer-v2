@@ -363,9 +363,12 @@ func (s *CertIssuer) deploymentFailedFrom(jobID int, material issuedCertificate,
 	}
 	storedMessage := fmt.Sprintf("部署失败 [attempt=%d/%d]: %s", displayDeploymentAttempt(attempt), maxCertificateDeploymentAttempts, message)
 	if capped {
-		storedMessage += fmt.Sprintf("；证书材料已保留，转入 %d 分钟慢速重试（磁盘/重载恢复后自动收敛）", int(blockedDeploymentRetryDelay.Minutes()))
+		// 先截断 base 再追加说明（appendJobMessageNote 单源）：base 过长时
+		// 「先追加后截断」会把慢速重试说明整段截掉，终态语义丢失。
+		storedMessage = appendJobMessageNote(storedMessage, fmt.Sprintf("；证书材料已保留，转入 %d 分钟慢速重试（磁盘/重载恢复后自动收敛）", int(blockedDeploymentRetryDelay.Minutes())))
+	} else {
+		storedMessage = truncateJobMessage(storedMessage)
 	}
-	storedMessage = truncateJobMessage(storedMessage)
 	availableAfter := CanonicalDatetimeValue(time.Now().Add(delay))
 	// 材料随失败落库——首签发 confirm/persist 瞬时
 	// 失败改走本重试链时,材料仅在内存;不落库则任务回 downloaded 但
@@ -785,12 +788,12 @@ func (s *CertIssuer) redeployDownloadedInLock(ctx context.Context, jobID int, ma
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if err := transitionJob(db.DB, jobID, []string{"downloaded", "issued"}, "issued", map[string]any{
+		if err := transitionJob(db.DB, jobID, []string{"downloaded", "issued"}, "issued", issuedFinalizeFields(map[string]any{
 			"message":                    "证书已部署，无需重新部署",
 			"expires_at":                 CanonicalDatetimeValue(material.notAfter),
 			"deployment_attempts":        0,
 			"deployment_available_after": nil,
-		}); err != nil {
+		})); err != nil {
 			return fmt.Errorf("finalize already deployed certificate: %w", err)
 		}
 		RecordAuditLog("system", "签发成功", "证书任务", fmt.Sprintf("规则 %s 证书已部署，无需重新部署", ruleID), "")
@@ -837,12 +840,12 @@ func (s *CertIssuer) redeployDownloadedInLock(ctx context.Context, jobID int, ma
 	// 的快速路径走到这里时，finalize 的 from-set 必须含 "issued"——
 	// 否则 transitionJob CAS 失败 → errors.Join 恢复 → 磁盘回滚到
 	// 不匹配状态 → 自愈路径断裂（job 保持 issued、磁盘永远错）。
-	err := transitionJob(db.DB, jobID, []string{"downloaded", "issued"}, "issued", map[string]any{
+	err := transitionJob(db.DB, jobID, []string{"downloaded", "issued"}, "issued", issuedFinalizeFields(map[string]any{
 		"message":                    "证书文件重新部署成功",
 		"expires_at":                 CanonicalDatetimeValue(material.notAfter),
 		"deployment_attempts":        0,
 		"deployment_available_after": nil,
-	})
+	}))
 	if err != nil {
 		return errors.Join(fmt.Errorf("finalize certificate redeploy: %w", err), restoreCertificateDeployment(snapshot, s.caddyReloader))
 	}
@@ -935,14 +938,11 @@ func (s *CertIssuer) deployIssuedCertificate(ctx context.Context, jobID int, mat
 		return s.deploymentFailed(jobID, material, "开启证书事务失败: "+err.Error(), fmt.Errorf("begin certificate transaction: %w", err))
 	}
 	defer func() { _ = tx.Rollback() }()
-	err = transitionJob(tx, jobID, deploymentLifecycleJobStatuses, "issued", map[string]any{
+	err = transitionJob(tx, jobID, deploymentLifecycleJobStatuses, "issued", issuedFinalizeFields(map[string]any{
 		"message":                    "签发成功",
-		"renewal_attempts":           0,
-		"ca_available_after":         nil,
-		"last_error_code":            nil,
 		"deployment_attempts":        0,
 		"deployment_available_after": nil,
-	})
+	}))
 	if err == nil {
 		err = tx.Commit()
 	}

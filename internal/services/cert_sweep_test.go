@@ -219,6 +219,42 @@ func TestCertReconcileOnce_propagates_read_failure(t *testing.T) {
 	}
 }
 
+// 对账失败轮摘要必须与中止/成功轮同口径携带任务补建计数：补建先于失败
+// 判定完成，漏报会让运维误判「本轮零补建」（三态摘要口径分叉）。
+func TestCertReconcileOnce_failureSummaryIncludesBackfillCount(t *testing.T) {
+	useCertSweepTickTestEnv(t)
+	// Given：启用 ACME 规则无任务行（补建将创建 1 行）+ 一条不可解析 PEM 的
+	// issued 行（对账重建真实 io_error → 失败轮；补建链照常完成）。
+	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enabled,enable_tls,tls_source)
+		VALUES ('lb_bf_fail','bf-fail','http','bf-fail.example.test',8443,1,1,'acme_dns')`); err != nil {
+		t.Fatalf("seed rule: %v", err)
+	}
+	useTemporaryCertDir(t)
+	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enabled,enable_tls,tls_source)
+		VALUES ('lb_bf_bad','bf-bad','http','bf-bad.example.test',8444,1,1,'acme_dns')`); err != nil {
+		t.Fatalf("seed bad-material rule: %v", err)
+	}
+	seedOrphanCertJob(t, "lb_bf_bad", "bf-bad.example.test", "issued")
+	if _, err := db.DB.Exec(`UPDATE cert_jobs SET cert_pem='not-a-pem', key_pem='not-a-key', domain='bf-bad.example.test' WHERE rule_id='lb_bf_bad'`); err != nil {
+		t.Fatalf("seed unparseable material: %v", err)
+	}
+
+	// When
+	err := CertReconcileOnce(context.Background())
+
+	// Then：失败轮 + 摘要含补建计数 1（与中止/成功轮同口径）
+	if err == nil {
+		t.Fatal("CertReconcileOnce err=nil, want 对账读故障上抛")
+	}
+	data, readErr := os.ReadFile(taskengine.TaskLogPath("cert-reconcile"))
+	if readErr != nil {
+		t.Fatalf("read task log: %v", readErr)
+	}
+	if !strings.Contains(string(data), "状态对账失败") || !strings.Contains(string(data), "1 个补建") {
+		t.Fatalf("失败轮摘要=%q, want 含「状态对账失败」与「1 个补建」（补建计数不得在失败轮漏报）", string(data))
+	}
+}
+
 // 回归形状：健康库上对账轮必须返回 nil 且照常写「完成」摘要——上抛改造不得把
 // 正常轮次变成失败轮。
 func TestCertReconcileOnce_healthy_round_reports_completion(t *testing.T) {

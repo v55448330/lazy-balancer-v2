@@ -13,11 +13,11 @@
 // CC 防护（2026-11-13 用户裁定新增）：人机挑战事件族（human_*），后端
 // humanFamilyCondition 承载。
 
-// crawler 族展示词单源：后端 family 键/trigger_type 权威词为「爬虫Bot」
+// crawler 族筛选类别词：后端 family 键/trigger_type 权威词为「爬虫Bot」
 //（internal/handlers/security_threat_screen.go triggerTypeForRule）。
-// 筛选类别与事件列表「触发阶段」列同词——原阶段列渲染「爬虫校验」，
-// 同页筛选/触发类型列显示「爬虫Bot」，用户需自行判断两词同族。
-export const CRAWLER_FAMILY_LABEL = '爬虫Bot'
+// 筛选类别（序列化键）用它；界面展示统一走词条 app.security.events.crawlerBot
+//（阶段列/触发类型列）——本常量仅为本模块 TRIGGERED_CATEGORIES 的序列化键。
+const CRAWLER_FAMILY_LABEL = '爬虫Bot'
 
 export const TRIGGERED_CATEGORIES = [CRAWLER_FAMILY_LABEL, '地域拦截', 'IP 访问控制', '信任名单', '威胁情报库', '请求体异常', 'WAF·CRS', 'WAF·自定义', 'CC 防护'] as const
 type TriggeredCategory = typeof TRIGGERED_CATEGORIES[number]

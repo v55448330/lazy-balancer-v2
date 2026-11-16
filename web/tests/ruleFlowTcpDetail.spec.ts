@@ -19,8 +19,9 @@ import { stagePolicy } from './fixtures/stagePolicy.ts'
 const dialog = code('src/components/RuleFlowDialog.vue')
 
 test('信息块已删除：TCP 能力说明不再整块重复（灰态与脚注已承载）', () => {
-  assert.doesNotMatch(dialog, /TCP 规则支持阶段 0\/1 安全能力/)
-  assert.doesNotMatch(dialog, /拒绝动作=断连（无拦截页），限流与 WAF 阶段不适用/, '信息块副文案随块删除')
+  // 结构负钉：TCP 能力信息块已删除——能力边界由阶段行灰态（tcpNotSupported）
+  // 与脚注承载；不得残留整块说明容器（裸中文负钉 i18n 后空转）。
+  assert.doesNotMatch(dialog, /tcp-capability-info|tcpCapabilityNote|TCP 规则支持阶段/, 'TCP 能力信息块必须退役')
 })
 
 test('阶段 1 面板头 tag：TCP 下显示「拦截页不支持」，HTTP 保持「拦截页跟随策略」', () => {
@@ -96,7 +97,9 @@ test('阶段 0 脚注 TCP 分支：保留检测=记录为检测后直达上游�
   assert.ok(entryLine, 'trustModeTcpNote 必须在 zh 母本词条中')
   assert.match(entryLine!, /「直通上游」模式：/, '直通模式说明保留')
   assert.match(entryLine!, /「保留检测记录」模式：命中产检测事件[^]*后直达上游，不拦截/, '保留检测模式在 TCP 下明确呈现（logged 语义）')
-  assert.doesNotMatch(dialog, /信任直通=连接直达上游：命中的连接直接转发（不产生安全事件，故无计数 chip）/, '仅直通旧文案退场')
+  // 结构负钉：阶段 0 脚注必须走 trustModeTcpNote 词条键（上面已钉键+zh 母本），
+  // 不得本地第二份直通说明（裸中文旧文案负钉 i18n 后空转）。
+  assert.doesNotMatch(dialog, /trustModeTcpNote[^}]*\+|tcpTrustLegacyNote/, '不得本地拼装第二份 TCP 信任说明')
 })
 
 test('TCP 阶段 1 脚注：保留检测信任命中记录为检测后直达上游', () => {
@@ -113,11 +116,13 @@ test('策略向导阶段 0 提示：跳段话术限 stage0，mixed 信任命中�
   const zhLexicon = code('src/locales/zh/security.ts')
   assert.match(policies, /t\('app\.security\.policies\.stage0\.detectOn'\)/, '开启话术协议中立且为跳段语义')
   assert.ok(zhLexicon.includes('开启：信任 IP 跳过全部安全阶段，仅由独立轻量检测事务记录（事件动作=检测）、不拦截'), '开启话术原文必须在 zh 母本词条中')
-  assert.doesNotMatch(policies, /继续后续/, '旧「继续后续评估」语义退场')
+  // 结构负钉：阶段 0 话术必须走 stage0.* 词条键（下面逐键钉），不得本地第二份
+  // 「继续后续」分支（裸中文负钉 i18n 后空转）。
+  assert.doesNotMatch(policies, /stage0\.(projection|trustTip|detectOn)[^}]*\+/, '阶段 0 话术不得本地拼装')
   assert.match(policies, /t\('app\.security\.policies\.stage0\.projection'\)/, '投影条按类型限定跳段')
   assert.ok(zhLexicon.includes('「类型=信任名单（stage0）」策略命中后跳过全部后续安全阶段（直通=零安全事件；保留检测=仅由独立轻量检测事务记录，动作=检测）'), '投影条原文必须在 zh 母本词条中')
   assert.match(policies, /t\('app\.security\.policies\.stage0\.trustTip'\)/, '提示线按类型限定跳段')
   assert.ok(zhLexicon.includes('「类型=信任名单（stage0）」策略：名单内 IP 命中后跳过全部后续安全阶段（IP 访问控制 / CC 防护 / WAF'), '提示线原文必须在 zh 母本词条中')
   assert.ok(zhLexicon.includes('mixed 等其他类型策略信任命中为引擎内检测降级'), 'mixed 场景如实呈现引擎内降级')
-  assert.doesNotMatch(policies, /保留检测模式仅记录检测、不拦截/, '旧「仅记录检测」话术退场')
+  assert.doesNotMatch(policies, /trustDetectionLegacyNote|detectionOnlyText/, '旧「仅记录检测」本地话术必须退役')
 })

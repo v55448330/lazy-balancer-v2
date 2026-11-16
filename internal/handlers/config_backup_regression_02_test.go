@@ -34,29 +34,7 @@ import (
 // legacyBackupJSON 构造 v2 备份体（可注入 sections），checksum 按 {tables,config}。
 func legacyBackupJSON(t *testing.T, tables map[string][]map[string]any, cfg map[string]any, sections []string) string {
 	t.Helper()
-	completeTables := map[string][]map[string]any{}
-	for _, table := range configBackupTables {
-		completeTables[table] = []map[string]any{}
-	}
-	completeTables["users"] = []map[string]any{{"id": 1, "username": "backup-admin", "password_hash": "hash", "role": "admin", "is_enabled": 1}}
-	for table, rows := range tables {
-		completeTables[table] = rows
-	}
-	if cfg == nil {
-		cfg = map[string]any{}
-	}
-	backup := configBackup{
-		Meta:     configBackupMeta{App: "lazy-balancer-v2", Version: 2, ExportedAt: "2026-10-18T00:00:00Z"},
-		Config:   cfg,
-		Tables:   completeTables,
-		Sections: sections,
-	}
-	backup.Meta.Checksum = checksumBackupPayload(t, completeTables, cfg)
-	data, err := json.Marshal(backup)
-	if err != nil {
-		t.Fatalf("marshal backup: %v", err)
-	}
-	return string(data)
+	return buildBackup(t, backupFixtureOptions{FillAll: true, Tables: tables, Config: cfg, Sections: sections, EmptyConfigIfNil: true})
 }
 
 // 布尔列枚举补项 + PRAGMA/语义列对照

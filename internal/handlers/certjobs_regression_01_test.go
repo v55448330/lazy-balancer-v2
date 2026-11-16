@@ -15,6 +15,7 @@ import (
 // 存在、续签链断」会被审计文案「证书仍有效，恢复使用现有证书」掩盖。必须核对
 // RowsAffected==1，否则 failEnable 恢复规则与任务快照。
 func TestEnableRule_fails_when_resume_target_row_disappears(t *testing.T) {
+	withIsolatedGlobal(t)
 	// Given：禁用中的 acme_dns 规则持有一条 disabled 任务（证书 90 天后到期，
 	// 不在续签窗口 → EnableCertJobResume 分支）
 	handler, _, _ := newAuditRuleHandlers(t, 0)

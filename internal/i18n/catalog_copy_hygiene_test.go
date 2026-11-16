@@ -8,7 +8,10 @@ import (
 	"testing"
 )
 
-// 英文词条不得携带冒号后双空格（":  %s" 等）——中文母本不动。
+// 英文词条不得携带词间双空格（":  %s"、"Task restarted  %s" 等）——中文母本
+// 不动。旧判据只认冒号后双空格，"restarted  %s" 这类词间形态漏网
+// （前轮修了冒号族、词间残留 4 条）。判据：非空白字符之间的连续 ≥2
+// 空格；行首缩进/行尾空白不属词间形态，不误报。
 func TestCatalogEnglishEntriesNoDoubleSpaceAfterColon(t *testing.T) {
 	source, err := os.ReadFile("catalog_gen.go")
 	if err != nil {
@@ -19,13 +22,14 @@ func TestCatalogEnglishEntriesNoDoubleSpaceAfterColon(t *testing.T) {
 	if len(matches) == 0 {
 		t.Fatal("catalog_gen.go 未扫到任何 Register——守卫对象漂移")
 	}
+	wordDoubleSpace := regexp.MustCompile(`\S {2,}\S`)
 	for _, m := range matches {
 		en, err := strconv.Unquote(m[2])
 		if err != nil {
 			t.Fatalf("英文词条解码失败: %v", err)
 		}
-		if strings.Contains(en, ":  ") {
-			t.Errorf("英文词条含冒号后双空格: %q", en)
+		if wordDoubleSpace.MatchString(en) {
+			t.Errorf("英文词条含词间双空格: %q", en)
 		}
 	}
 }

@@ -232,12 +232,33 @@ var paginationSharedMarkers = []struct {
 	name   string
 	marker string
 }{
+	{"终止判据：累计取到数游标", "fetchedTotal"},
 	{"去重：已见记录表", "seen := make(map["},
 	{"无进展：整页重复判定初值", "repeatedPage := true"},
+	// 畸形空/零值 ID 不参与去重折叠（整页空 ID 不得误判无进展）：seen 登记
+	// 前必须有 ID 有效性跳过守卫。各家 ID 类型不同（aliyun/dnspod/cloudflare
+	// 字符串空串、tencent SDK *uint64 零值），守卫标记按 provider 专属断言
+	// （见 paginationIDGuardMarkers），不进共同清单。
 	{"去重：已见记录跳过", "if seen["},
 	{"无进展：取到新记录才解除重复判定", "repeatedPage = false"},
 	{"无进展：登记已见记录", "] = true"},
-	{"终止：空页或整页重复即收手", "fetched == 0 || repeatedPage"},
+	{"终止：空页或整页重复即收手（整页畸形不构成重复证据）", "fetched == 0 || (repeatedPage && hasValidID)"},
+	// total 优先结构标记（裁定：四侧统一 total>0→累计判定+续页，短页兜底
+	// 仅 total≤0）：total 门必须先于短页兜底——只改一侧（如 aliyun 旧
+	// 「短页无条件收手」把短页判定并进 total 门）在此红灯。续页语义由
+	// 累计判定标记承载（total 门内未取尽不得收手）。
+	{"终止：total 优先门", "if total > 0"},
+	{"终止：total 缺失短页兜底", "fetched < challengeListPageSize"},
+}
+
+// paginationIDGuardMarkers 是各 provider 的畸形 ID 跳过守卫标记（类型不同，
+// 语义同族：空/零值 ID 不登记 seen、不进 collected）。必须出现在 seen 跳过
+// 之前（顺序由 TestProviderPaginationImplementationsStayInSync 断言）。
+var paginationIDGuardMarkers = map[string]string{
+	"aliyun":     `record.RecordId == ""`,
+	"cloudflare": `record.ID == ""`,
+	"dnspod":     `id == ""`,
+	"tencent":    `*item.RecordId == 0`,
 }
 
 // paginationFuncBody 从源文件里取指定枚举函数体文本（AST 定位，注释与字符串
@@ -289,6 +310,23 @@ func TestProviderPaginationImplementationsStayInSync(t *testing.T) {
 				t.Fatalf("枚举翻页 %s/%s 骨架漂移（任一侧修改终止判定必须同步全部实现）:\n  %s",
 					left, right, strings.Join(drift, "\n  "))
 			}
+		}
+	}
+	// 畸形 ID 跳过守卫：各家 ID 类型不同（字符串空串 / *uint64 零值），
+	// 按 provider 专属标记断言存在且位于 seen 跳过之前（先过滤再判重）。
+	for provider, body := range bodies {
+		normalized := normalizeCleanupBody(body)
+		guard, ok := paginationIDGuardMarkers[provider]
+		if !ok {
+			t.Fatalf("%s 未登记畸形 ID 跳过守卫标记（paginationIDGuardMarkers）", provider)
+		}
+		guardIdx := strings.Index(normalized, guard)
+		if guardIdx < 0 {
+			t.Errorf("%s 枚举翻页缺少畸形 ID 跳过守卫 %q（整页空/零值 ID 会折叠成无进展）", provider, guard)
+			continue
+		}
+		if seenIdx := strings.Index(normalized, "if seen["); seenIdx >= 0 && guardIdx > seenIdx {
+			t.Errorf("%s 畸形 ID 跳过守卫晚于 seen 判重（空/零值 ID 已参与去重折叠）", provider)
 		}
 	}
 	// 钉测登记：无进展收手必须有行为钉测（注释登记在函数头，AST 函数体不含

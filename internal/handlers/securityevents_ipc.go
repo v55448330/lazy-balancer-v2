@@ -35,7 +35,8 @@ import (
 	"lazy-balancer-v2/internal/services"
 )
 
-// SecurityEventsIPCServer 是 UDS 上的最小 HTTP 服务端（仅一个入库端点）。
+// SecurityEventsIPCServer 是 UDS 上的最小 HTTP 服务端（两个入库端点：
+// WAF audit 批入库 + 人机事件摄入）。
 type SecurityEventsIPCServer struct {
 	server   *http.Server
 	listener net.Listener
@@ -112,8 +113,9 @@ func securityEventsIngestErrorRetryable(err error) bool {
 }
 
 // humanEventAttribution 人机事件归属（rule/policy 快照）。挑战事件由
-// lb_human 按规则发放；入库时回填实际负载规则与阶段 2 策略，触发详情才不会
-// 把合法的 CC 挑战事件误标成“无策略归属”。
+// lb_human 按规则发放；入库时回填实际负载规则与 CC 属主策略（stage2 优先，
+// mixed 存量属主兜底——渲染层按内容特征选属主，不看 policy_type），触发详情
+// 才不会把合法的 CC 挑战事件误标成“无策略归属”。
 type humanEventAttribution struct {
 	policyID   int
 	ruleName   string
@@ -128,9 +130,9 @@ func lookupHumanEventAttribution(ruleID string) humanEventAttribution {
 	err := db.DB.QueryRow(`SELECT COALESCE(r.name,''), CASE WHEN p.id IS NOT NULL THEN b.policy_id ELSE 0 END, CASE WHEN p.id IS NOT NULL THEN p.name ELSE '' END
 		FROM lb_rules r
 		LEFT JOIN security_policy_bindings b ON b.rule_caddy_id=r.caddy_id
-		LEFT JOIN security_policies p ON p.id=b.policy_id AND p.policy_type='stage2'
+		LEFT JOIN security_policies p ON p.id=b.policy_id AND p.policy_type IN ('stage2','mixed')
 		WHERE r.caddy_id=?
-		ORDER BY CASE WHEN p.policy_type='stage2' THEN 0 ELSE 1 END, b.rank, b.policy_id
+		ORDER BY CASE WHEN p.policy_type='stage2' THEN 0 WHEN p.policy_type='mixed' THEN 1 ELSE 2 END, b.rank, b.policy_id
 		LIMIT 1`, ruleID).Scan(&a.ruleName, &a.policyID, &a.policyName)
 	if err != nil {
 		return humanEventAttribution{}
@@ -139,11 +141,16 @@ func lookupHumanEventAttribution(ruleID string) humanEventAttribution {
 }
 
 // handleIngestHuman 人机验证事件摄入（POST /security-events/ingest-human）：
-// 紧凑 JSON 行（ts/rule_id/client_ip/method/uri/ua/kind），直写 security_events
-// （event_type=human；challenge/fail 落库 action=challenged、pass 跳过不落库）。
+// 紧凑 JSON 行（ts/rule_id/client_ip/method/uri/kind/reason），直写 security_events
+// （event_type=human；challenge/fail 落库 action=challenged、rate_reject 落库
+// action=blocked/rule=cc_rate_reject、pass 跳过不落库、未知 kind 跳过+warn 留痕）。
+// anomaly_score 不写（恒 0）：人机通道无 coraza 评分段，也不走 WAF 管线的
+// 固定语义补分（429 存量补 6 仅属 coraza 审计形态）——危险等级展示对 CC 事件
+// 不承载语义，评分口径分叉的如实披露见 services/securityevents.go 补分注释。
 // 独立于 coraza 审计 tailer——人机事件非 coraza 形态，不经攻击归因管线。
 func (s *SecurityEventsIPCServer) handleIngestHuman(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
@@ -154,8 +161,8 @@ func (s *SecurityEventsIPCServer) handleIngestHuman(w http.ResponseWriter, r *ht
 		ClientIP string `json:"client_ip"`
 		Method   string `json:"method"`
 		URI      string `json:"uri"`
-		UA       string `json:"ua"`
-		Kind     string `json:"kind"`   // challenge | pass | fail
+		UA       string `json:"ua"`     // 写侧已停止发射（人机不携带 UA 契约）；解析仅向后兼容旧版在途批，落库不消费
+		Kind     string `json:"kind"`   // challenge | pass | fail | rate_reject（未知 kind 跳过不落库+warn）
 		Reason   string `json:"reason"` // CC 触发原因（session_anomaly/rps_spike/4xx_ratio；非 CC 触发空）
 	}
 	var rows []humanEventRow

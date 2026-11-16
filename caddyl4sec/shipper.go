@@ -151,11 +151,13 @@ func (t *l4Throttle) report(now time.Time) (suppressed int, logNow bool) {
 	return suppressed, logNow
 }
 
-func l4DropLogf(format string, args ...any) {
+// l4DropLogf/l4IOLogf 告警/错误日志缝（测试注入；缺省 caddy.Log）。与
+// caddygeoip auditIOLogf 同形态——节流钉测经此缝捕获实际发射条数。
+var l4DropLogf = func(format string, args ...any) {
 	caddy.Log().Named("l4sec").Sugar().Warnf(format, args...)
 }
 
-func l4IOLogf(format string, args ...any) {
+var l4IOLogf = func(format string, args ...any) {
 	caddy.Log().Named("l4sec").Sugar().Errorf(format, args...)
 }
 
@@ -646,6 +648,10 @@ type l4Shipper struct {
 	onDrop func(reason string, n int)
 
 	spoolLog l4Throttle
+	// idleSealLog idle 封存失败告警节流（首次立即，其后每分钟一条并携带
+	// 被抑制数）：持续封存故障下 drain ticker 每 l4FlushInterval 重试一次，
+	// 不节流即按 ticker 频率洪泛 ERROR（与 spoolLog/sealLog 同族同口径）。
+	idleSealLog l4Throttle
 }
 
 // l4SpoolDirPath 解析 spool 目录：env LB_SECURITY_EVENTS_L4_SPOOL_DIR 优先
@@ -699,7 +705,9 @@ func (s *l4Shipper) submit(line []byte) {
 func (s *l4Shipper) flushIfDue(now time.Time) {
 	if s.spool != nil {
 		if err := s.spool.sealIfIdle(now, l4SpoolIdleSeal); err != nil {
-			l4IOLogf("l4sec: security-events spool idle seal failed: %v", err)
+			if suppressed, logNow := s.idleSealLog.report(now); logNow {
+				l4IOLogf("l4sec: security-events spool idle seal failed (suppressed %d since last report): %v", suppressed, err)
+			}
 		}
 	}
 	s.mu.Lock()
@@ -918,15 +926,73 @@ func currentL4Pipeline() *l4Pipeline {
 // 环内+批内尾部行必须冲刷送达，不得静默丢失（镜像 HTTP FlushAuditPipelines）。
 const l4FlushDrainWait = 2 * time.Second
 
+// l4FlushCoalescedDrainWait 是合并窗口内（非首个）Cleanup 的小额有界排空
+// 时间：管线是进程级单例（drain 单消费者），窗口内重复 Cleanup 共享一次
+// 等待即可，把「窗口内紧跟进程停止」的丢失面从「全部在队行」收敛到窗口内
+// 未处理的行（环容量 2048，正常流量下 200ms 足够排空）。镜像 HTTP
+// auditFlushCoalescedDrainWait。
+const l4FlushCoalescedDrainWait = 200 * time.Millisecond
+
+// l4FlushCoalesceWindow 是 FlushL4Pipeline 的合并窗口：一次 Caddy reload/
+// 优雅停机会让**每个安全路由实例**各调一次 Cleanup（实例数 = 安全路由数）。
+// 持续事件流量下 pending 很难为 0，每个实例都等满 l4FlushDrainWait，收尾
+// 成本即「实例数 × 2s」（管理面 /load 卡顿）。窗口内的重复调用跳过完整排空
+// 等待（首个调用已把同一管线排空，其后的等待纯属叠加），但**不跳过冲刷
+// 本身**——见 FlushL4Pipeline。
+//
+// 窗口取 2×l4FlushDrainWait（而非 HTTP 侧的 =drainWait）：L4 管线是进程级
+// 单例，首个 Cleanup 等满 l4FlushDrainWait 返回时恰好落在 =drainWait 的窗口
+// 边界，串行后续实例会重新领取资格再等满——合并失效。放宽到 2× 保证首个
+// 等满返回后、后续实例仍落在窗口内快进（收尾总时长 ≈ 单窗口）。窗口仍远
+// 小于两次 reload 的间隔，且周期刷新兜底尾部行。var 供测试收窄。
+var l4FlushCoalesceWindow = 2 * l4FlushDrainWait
+
+// l4LastFlushNano 是最近一次领到冲刷资格的时刻（单调读数，基线见
+// l4FlushClockBase；0=从未冲刷）。CAS 领取保证并发 Cleanup 只有一个走完整
+// 等待路径。单调时钟（不用挂钟 UnixNano）：NTP/手动回拨不会让 n-last 为负
+// 而误判「窗口内」跳过排空。镜像 HTTP auditLastFlushNano。
+var l4LastFlushNano atomic.Int64
+
+// l4FlushClockBase 是单调时钟基线（包加载时取一次）。
+var l4FlushClockBase = time.Now()
+
+func l4MonotonicNowNano() int64 { return int64(time.Since(l4FlushClockBase)) }
+
+// claimL4Flush 在合并窗口内领取一次冲刷资格；窗口内返回 false（本次
+// Cleanup 走小额有界排空，见 FlushL4Pipeline）。无锁 CAS：并发调用者同刻
+// 到达时只有一个成功。镜像 HTTP claimAuditFlush。
+func claimL4Flush() bool {
+	n := l4MonotonicNowNano()
+	for {
+		last := l4LastFlushNano.Load()
+		if last != 0 && n-last < int64(l4FlushCoalesceWindow) {
+			return false
+		}
+		if l4LastFlushNano.CompareAndSwap(last, n) {
+			return true
+		}
+	}
+}
+
 // FlushL4Pipeline 冲刷进程级 L4 管线尾部行（有界排空+flushNowSafely）。
 // Caddy 模块 Cleanup（reload/优雅停机）调用——不关闭管线（进程级单例裁决
 // 不变，见 l4GlobalPipeline 注释），仅排空在途行防停机静默丢失。未创建=no-op。
+//
+// 合并窗口（claimL4Flush）：一次 reload 会按安全路由实例数调用 N 次本函数，
+// 只有窗口内首个调用付出完整排空等待（l4FlushDrainWait），其余走小额有界
+// 排空（l4FlushCoalescedDrainWait）——收尾成本与实例数解耦。窗口内若紧跟
+// 进程停止，这次 Cleanup 就是唯一收尾机会：**省掉的只能是等待时长**，批内
+// 滞留与已在队/在途行都要尽量冲刷送达。镜像 HTTP FlushAuditPipelines。
 func FlushL4Pipeline() {
 	p := currentL4Pipeline()
 	if p == nil {
 		return
 	}
-	p.flushQuiesced(l4FlushDrainWait)
+	if claimL4Flush() {
+		p.flushQuiesced(l4FlushDrainWait)
+		return
+	}
+	p.flushQuiesced(l4FlushCoalescedDrainWait)
 }
 
 func (p *l4Pipeline) start() {

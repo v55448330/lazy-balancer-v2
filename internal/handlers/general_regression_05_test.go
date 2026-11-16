@@ -20,6 +20,7 @@ import (
 // enqueueCompensation 见租约缺失而永久退避（每轮重新 drain+restore，
 // 反复打断该规则合法签发）。租约必须由补偿 goroutine 自身在完成时释放。
 func TestDeleteRule_keeps_block_lease_when_compensation_started_after_drain_timeout(t *testing.T) {
+	withIsolatedGlobal(t)
 	// Given：drain 首次超时（abort），补偿 goroutine 的二次 drain 被测试闸住，
 	// 保证处理程序返回时补偿仍在运行、尚未到达自释放点。
 	handler, _, _ := newAuditRuleHandlers(t, 0)
@@ -76,6 +77,7 @@ func TestDeleteRule_keeps_block_lease_when_compensation_started_after_drain_time
 // 不清理 blockedRules——租约 defer 必须登记在 drain 之前，否则屏障滞留到下一次
 // Stop，该规则证书任务被静默永久拦截。
 func TestDeleteRule_releases_block_lease_when_drain_panics(t *testing.T) {
+	withIsolatedGlobal(t)
 	// Given
 	handler, _, _ := newAuditRuleHandlers(t, 0)
 	seedAuditRule(t, "lb_drain_panic", "drain-panic", "drain-panic.example.test", 8080, true, "acme_dns", true)

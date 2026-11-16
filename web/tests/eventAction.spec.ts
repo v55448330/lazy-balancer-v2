@@ -62,7 +62,9 @@ test('四个视图共用单源映射，本地副本已删除', () => {
   assert.doesNotMatch(trigger, /trigDetail\.sourceIp/, '来源 IP 已在 hero 区展示，meta 不得重复')
   assert.match(trigger, /case 'human': return t\('common\.app\.views\.trigDetail\.humanSummary'/, 'human 专属配置摘要，不误用 ACL 摘要')
   assert.match(events, /colAction'\)" width="85"/, '英文 Challenge 需要 5px 余量')
-  assert.doesNotMatch(trigger, /已记录（检测）/, '第四份措辞必须退役')
+  // 结构负钉：触发详情动作展示必须经 eventActionFull 单源（上面已钉），不得
+  // 本地第四份措辞映射（裸中文「已记录（检测）」负钉 i18n 后空转）。
+  assert.doesNotMatch(trigger, /const actionLabel|function actionLabel|actionText = computed|已记录（检测）/, '本地动作措辞映射必须退役')
   // 2026-11-13 用户裁定：彩色类别标签对 human 显示验证模式（智能触发/始终验证），
   // 不再与右侧 heroStage「阶段 2 · CC 防护」重复同一文案。断言限定 categoryLabel
   // 块内——heroStage 合法使用阶段文案，不得被全局否定断言误伤。

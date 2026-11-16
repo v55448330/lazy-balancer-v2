@@ -7,6 +7,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"database/sql"
 	"encoding/pem"
 	"math/big"
 	"os"
@@ -18,6 +19,7 @@ import (
 	"time"
 
 	"lazy-balancer-v2/internal/db"
+	"lazy-balancer-v2/internal/taskengine"
 )
 
 func useTemporaryCertDir(t *testing.T) string {
@@ -865,5 +867,84 @@ func TestWriteCertFiles_certTmpFailureLeavesNoResidue(t *testing.T) {
 			names = append(names, entry.Name())
 		}
 		t.Fatalf("证书暂存写失败后残留 %v", names)
+	}
+}
+
+// manual 启动物化谓词必须含 enabled=1 AND protocol='http'（与 ACME 侧
+// latestApplicableACMECertMaterials 同口径）：禁用规则与非 HTTP 规则的手动
+// 私钥不得在启动时物化到磁盘。
+func TestMaterializeAllCertsFromDB_manualGuardsEnabledAndHTTPProtocol(t *testing.T) {
+	_, database := newClusterTestService(t)
+	useTemporaryCertDir(t)
+	certPEM, keyPEM := matchingCertificatePair(t, "guard.example.test")
+	for _, tc := range []struct {
+		ruleID   string
+		protocol string
+		enabled  int
+	}{
+		{"lb_manual_guard_ok", "http", 1},
+		{"lb_manual_guard_disabled", "http", 0},
+		{"lb_manual_guard_tcp", "tcp", 1},
+	} {
+		if _, err := database.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enabled,enable_tls,tls_source,tls_cert,tls_key)
+			VALUES (?,?,?,?,8443,?,1,'manual',?,?)`, tc.ruleID, tc.ruleID, tc.protocol, "guard.example.test", tc.enabled, certPEM, keyPEM); err != nil {
+			t.Fatalf("seed rule %s: %v", tc.ruleID, err)
+		}
+	}
+
+	MaterializeAllCertsFromDB()
+
+	for _, tc := range []struct {
+		ruleID   string
+		wantFile bool
+	}{
+		{"lb_manual_guard_ok", true},
+		{"lb_manual_guard_disabled", false},
+		{"lb_manual_guard_tcp", false},
+	} {
+		certPath, keyPath := CertFilePaths(tc.ruleID)
+		_, certErr := os.Stat(certPath)
+		_, keyErr := os.Stat(keyPath)
+		if tc.wantFile {
+			if certErr != nil || keyErr != nil {
+				t.Fatalf("%s: 启用 HTTP 规则的手动证书必须物化 cert=%v key=%v", tc.ruleID, certErr, keyErr)
+			}
+		} else if !os.IsNotExist(certErr) || !os.IsNotExist(keyErr) {
+			t.Fatalf("%s: 禁用/非 HTTP 规则的手动私钥不得物化 cert=%v key=%v", tc.ruleID, certErr, keyErr)
+		}
+	}
+}
+
+// manual 侧查询/迭代级失败必须进摘要（不得无条件报「完成」）并有审计留痕：
+// 迭代级失败=结果集不完整，未遍历行全部未物化，摘要即启动路径唯一信号。
+func TestMaterializeAllCertsFromDB_manualIterationFailureDisclosed(t *testing.T) {
+	newClusterTestService(t)
+	useTemporaryCertDir(t)
+	oldLogDir := taskengine.LogDir()
+	taskengine.SetLogDir(t.TempDir())
+	t.Cleanup(func() { taskengine.SetLogDir(oldLogDir) })
+	realDB := db.DB
+	fake := sql.OpenDB(&fakeIterErrConnector{failNeedle: "FROM lb_rules"})
+	db.DB = fake
+	t.Cleanup(func() { db.DB = realDB; _ = fake.Close() })
+
+	MaterializeAllCertsFromDB()
+
+	summary, err := os.ReadFile(taskengine.TaskLogPath("startup:config-load"))
+	if err != nil {
+		t.Fatalf("read materialization task log: %v", err)
+	}
+	if strings.Contains(string(summary), "证书物化完成") {
+		t.Fatalf("迭代失败轮摘要谎报完成: %q", string(summary))
+	}
+	if !strings.Contains(string(summary), "证书物化失败") {
+		t.Fatalf("摘要=%q, want 如实标注失败轮（部分完成）", string(summary))
+	}
+	var audited int
+	if err := db.AuditDB.QueryRow(`SELECT COUNT(*) FROM audit_log WHERE action='恢复失败' AND resource='证书文件' AND detail LIKE '%迭代读取失败%'`).Scan(&audited); err != nil {
+		t.Fatalf("count iterate-failure audit rows: %v", err)
+	}
+	if audited == 0 {
+		t.Fatal("manual 迭代级失败必须有审计留痕（与查询级失败同权）")
 	}
 }

@@ -2264,7 +2264,7 @@ func updateSnapshotSettings(ctx context.Context, tx *sql.Tx, snapshot models.Clu
 		settingClauses = append(settingClauses, "crawler_schedule_time=?")
 		settingArgs = append(settingArgs, *settings.CrawlerScheduleTime)
 	}
-	// 自动封禁六项配置同口径入块（指针缺席=旧主端快照未
+	// 自动封禁十项配置同口径入块（指针缺席=旧主端快照未
 	// 携带——跳过写入保留从端本地值，不清零；新主端恒携带全组，升主即生效）。
 	// 安全事件保留/采样三列已在上方经 normalizeSnapshotSecurityRetentionSettings
 	// 归一（与主端装载侧同一函数），此处只负责入块。

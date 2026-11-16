@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -113,6 +114,11 @@ func TestSetIP2RegionVersion_missingRowKeepsAutoUpdateDefault(t *testing.T) {
 
 // 版本行读取故障（非 ErrNoRows）不得被当作「未写入」而覆盖为
 // bundled/unknown——真实版本记录必须保留（fail-visible）。
+//
+// 假库必须让角色读问询成功返回主节点：写入门（wafFileStartupWritesAllowed）
+// 先行关闭时版本同步块根本不执行——原夹具的角色读落到「空结果」扫描失败
+// 分支使 writesAllowed=false，用例在「零写版本行」上空转假绿（删掉被测
+// guard 也不会红）。roleMasterRow 把门打开，被测分支才真正到达。
 func TestInitIP2Region_versionReadFailureKeepsStoredVersion(t *testing.T) {
 	dir := t.TempDir()
 	live := filepath.Join(dir, "ip2region.xdb")
@@ -165,6 +171,9 @@ func (*versionFailingConn) Close() error { return nil }
 func (*versionFailingConn) Begin() (driver.Tx, error) { return nil, errors.New("no tx") }
 
 func (*versionFailingConn) QueryContext(_ context.Context, query string, _ []driver.NamedValue) (driver.Rows, error) {
+	if strings.Contains(query, "is_master") {
+		return &roleMasterRow{value: true}, nil
+	}
 	if strings.Contains(query, "security_ip2region_version") {
 		return nil, errors.New("注入的版本行读取故障")
 	}
@@ -174,4 +183,24 @@ func (*versionFailingConn) QueryContext(_ context.Context, query string, _ []dri
 func (c *versionFailingConn) ExecContext(_ context.Context, query string, _ []driver.NamedValue) (driver.Result, error) {
 	c.execs = append(c.execs, query)
 	return driver.RowsAffected(1), nil
+}
+
+// roleMasterRow 单行单列 bool 结果集：角色读问询返回主节点（打开启动期
+// 写入门），其余查询维持空结果。bool 而非 int64——database/sql 的 Scan 到
+// bool 不接受整数驱动值（convertAssign 无 int64→bool 通道），写成 1 会让
+// 角色读失败，写入门照旧关闭（同一假绿形态）。
+type roleMasterRow struct {
+	value bool
+	done  bool
+}
+
+func (r *roleMasterRow) Columns() []string { return []string{"is_master"} }
+func (r *roleMasterRow) Close() error      { return nil }
+func (r *roleMasterRow) Next(dest []driver.Value) error {
+	if r.done {
+		return io.EOF
+	}
+	r.done = true
+	dest[0] = r.value
+	return nil
 }

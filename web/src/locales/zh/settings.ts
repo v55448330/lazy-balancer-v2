@@ -382,6 +382,7 @@ export default {
           "configChanged": "检测到配置变更",
           "acmeSettingsTitle": "ACME 设置",
           "confirmSaveSection": "确认保存{section}？",
+          "noChanges": "配置无变化",
           "saved": "保存成功"
         }
       },
@@ -851,6 +852,7 @@ export default {
           "scope": "备份范围",
           "scopeHint": "至少选择一个分类（未选分类不进入备份）",
           "history": "备份历史",
+          "historyTruncated": "还有更旧的备份未返回（列表仅显示最近一批）",
           "lastAndNext": "上次成功备份：{last} · 下次备份：{next}",
           "lastOnly": "上次成功备份：{last}",
           "colVersion": "版本号",
@@ -930,6 +932,7 @@ export default {
           "confirmSaveSection": "确认保存{section}？",
           "unknownError": "未知错误",
           "tlsSaveFail": "基础设置已保存；HTTPS 配置保存失败：{reason}。证书未变更，可再次保存以仅重试 HTTPS 段",
+          "noChanges": "配置无变化",
           "saved": "保存成功"
         }
       },

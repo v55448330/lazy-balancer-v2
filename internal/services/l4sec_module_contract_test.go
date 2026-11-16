@@ -51,7 +51,7 @@ func l4secRendererSource(t *testing.T) string {
 func TestL4SecContract_moduleRegistrationsMatchRender(t *testing.T) {
 	src := l4secModuleSource(t)
 	// 模块注册 ID（契约 C2 固定，两侧不得改名）。lb_ipfile 是仓内模块
-	// （绕开 caddy-l4 v0.1.2 上游 remote_ip_list 的 Cleanup 死锁——主审裁定）：
+	// （绕开 caddy-l4 v0.1.3 上游 remote_ip_list 残留缺陷②③——主审裁定；①Cleanup 死锁 v0.1.3 已修）：
 	// 注册已落地，与其余 ID 同列无条件断言。
 	for _, literal := range []string{
 		"layer4.handlers.lb_l4_sec",

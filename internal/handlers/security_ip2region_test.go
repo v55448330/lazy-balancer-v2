@@ -3,10 +3,13 @@ package handlers
 import (
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
 
+	"lazy-balancer-v2/internal/config"
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/services"
 )
@@ -151,4 +154,38 @@ func newIP2RegionRouter(h *Handlers) *gin.Engine {
 	router.GET("/security/ip2region/update/status", h.GetIP2RegionUpdateStatus)
 	router.GET("/security/ip2region/update/logs", h.GetIP2RegionUpdateLogs)
 	return router
+}
+
+// v6 开关「已保存但重载失败」200 注记必须经 RedactCaddyAdminEndpoint 脱敏
+// （与 finishTxApply 退化提交注记同口径）：/load 传输错误恒含 admin 地址，
+// 200 注记面向任意登录用户，直拼 applyErr.Error() 等于披露内部控制面端点。
+func TestSetIP2RegionV6Enabled_reloadFailureNoteRedacted(t *testing.T) {
+	setupIP2RegionHandlerTest(t)
+	// admin 不可达 → 开关落库成功、重载失败（200+警告形态）。
+	dead := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	adminURL := dead.URL
+	dead.Close()
+	h := &Handlers{cfg: &config.Config{CaddyAdminURL: adminURL}, caddyService: services.NewCaddyService(adminURL)}
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.PUT("/security/ip2region/v6-enabled", h.SetIP2RegionV6Enabled)
+	rec := putJSON(t, router, "/security/ip2region/v6-enabled", map[string]any{"enabled": true})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200（开关已保存，重载失败走警告）", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if !strings.Contains(resp.Message, "已保存，但重载 Caddy 配置失败") {
+		t.Fatalf("message=%q, want 含重载失败警告（确认走了失败注记分支）", resp.Message)
+	}
+	if strings.Contains(resp.Message, adminURL) || strings.Contains(resp.Message, strings.TrimPrefix(adminURL, "http://")) {
+		t.Fatalf("200 注记泄露 Caddy admin 端点: %q", resp.Message)
+	}
+	if !strings.Contains(resp.Message, "<Caddy admin 端点>") {
+		t.Fatalf("message=%q, want 脱敏占位（RedactCaddyAdminEndpoint 同口径）", resp.Message)
+	}
 }

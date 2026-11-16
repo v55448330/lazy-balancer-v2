@@ -475,14 +475,13 @@ func collectEngineFamilies(te *taskengine.Engine) []TaskInfo {
 		}
 		st := runStats[m.ID]
 		ti.Runs24h, ti.Success24h, ti.Fail24h = st.Runs, st.Success, st.Fail
-		// 常驻族启动时刻——「常驻 · 启动于」。用该 daemon 最近 boot 行时刻
-		// （重启后正确更新）；从未运行的常驻任务（角色门未获/调度关闭未拉起）
-		// 置零值——UI '—' 兜底，不再回退引擎进程启动时刻
-		// （=uptime 语义，与「空闲/已停止」状态矛盾）。两种形态（运行中/
-		// 已停止）同取最近一行：Running=true 但 boot 行缺失（插入失败仅 WARN /
-		// DB 短窗）保持零值，同样落 UI '—'。
-		if m.Kind == taskengine.KindDaemon && latestRun != nil {
-			ti.StartedAt = latestRun.StartedAt
+		// 常驻族启动时刻——「常驻 · 启动于」。取该 daemon 最近 boot（success）行
+		// 时刻（重启后正确更新）：崩溃退避窗内最新行是 failed 崩溃行
+		// （started_at=崩溃时刻），直通会让「启动于」显示崩溃时刻。从未运行/
+		// boot 行缺失（插入失败仅 WARN / DB 短窗）保持零值——UI '—' 兜底，
+		// 不回退引擎进程启动时刻（=uptime 语义，与「空闲/已停止」状态矛盾）。
+		if m.Kind == taskengine.KindDaemon {
+			ti.StartedAt = daemonLatestBootStartedAt(m.ID)
 		}
 		out = append(out, ti)
 	}
@@ -511,6 +510,21 @@ func humanInterval(sec int) string {
 	default:
 		return fmt.Sprintf("%d 秒", sec)
 	}
+}
+
+// daemonLatestBootStartedAt 返回该常驻任务最近 boot（success）行的 started_at。
+// boot 行=引擎 startDaemon「启动即记 success」落库行；异常退出补记的 failed
+// 行 started_at=崩溃时刻，不得充当启动时刻。无 boot 行返回空串（UI '—'）。
+func daemonLatestBootStartedAt(taskID string) string {
+	database := db.DB
+	if database == nil {
+		return ""
+	}
+	var at string
+	if err := database.QueryRow(`SELECT started_at FROM task_runs WHERE task_id=? AND status='success' ORDER BY id DESC LIMIT 1`, taskID).Scan(&at); err != nil {
+		return ""
+	}
+	return at
 }
 
 // CertJobRunTimes 把 cert_jobs 行的时间戳映射为执行时间视图（单源）：

@@ -9,7 +9,7 @@ import assert from 'node:assert/strict'
 import { isMfaCredentialRejection, MFA_CREDENTIAL_REJECTION_MESSAGES } from '../src/utils/mfaErrors.ts'
 import { MFA_SCOPE_GROUPS } from '../src/utils/mfaScopeGroups.ts'
 import { tSafe } from '../src/i18n/tSafe.ts'
-import { repoCode, section, code } from './_helpers.ts'
+import { repoCode, section, code, source } from './_helpers.ts'
 
 // jwtAuth 的真实过期文案（MFA 端点先经它鉴权）；「未登录或登录已过期」只来自
 // handlers/auth.go 的资料接口，与这些端点无关。
@@ -118,14 +118,19 @@ test('MFA「支持的操作」清单覆盖 middleware 各写端点族', () => {
   // 与 logout，setup/activate/disable/recovery-codes 全部在覆盖面内（同弹框
   // 清单也列了「启用/禁用/重新生成恢复码（自己的）」）。写成「MFA 自助端点
   // 除外」会让用户以为关写保护后不必验码。
-  assert.doesNotMatch(page, /MFA 自助端点除外/, '副标题不得把 MFA 自助端点整体列为豁免')
-  assert.doesNotMatch(page, /与 MFA 自身端点/, '注释不得宣称 MFA 自身端点整体豁免')
+  // 结构负钉：副标题豁免口径必须走 mfaScope.subtitle 词条键（上面双钉），不得
+  // 本地第二份豁免文案（裸中文负钉 i18n 后空转；注释豁免宣称由 raw 钉承载）。
+  assert.doesNotMatch(page, /mfaScope\.subtitle[^}]*\+|mfaExemptNote/, '副标题不得本地拼装/另键豁免口径')
+  assert.doesNotMatch(source('src/views/settings/BasicSettings.vue'), /与 MFA 自身端点/, '注释不得宣称 MFA 自身端点整体豁免')
   const mfa = repoCode('internal/handlers/mfa.go')
   const stepUp = section(mfa, 'if path == "/api/v1/auth/mfa/verify-step"', '\n\t}')
   assert.ok(stepUp.includes('"/api/v1/auth/logout"'), 'DecideMFAStepUp 的豁免集已变化——副标题需同步')
   assert.ok(!stepUp.includes('/api/v1/auth/mfa/disable'), 'DecideMFAStepUp 扩大豁免集——副标题与清单需同步')
   // 证书配置/CA 测试会真实写 DNS/EAB，不得再宣称「测试连接…不受影响」
-  assert.doesNotMatch(page, /测试连接、预览、解析类操作不受影响/)
+  // 词条面同钉：mfaScope.note 不得宣称证书配置/CA 测试不受影响（它们真实写
+  // DNS/EAB）——裸中文负钉在 code() 视图空转，文案契约钉在 zh 母本键值上。
+  const mfaScopeBlock = section(code('src/locales/zh/settings.ts'), '"mfaScope": {', '\n        },')
+  assert.doesNotMatch(mfaScopeBlock, /测试连接、预览、解析类操作不受影响/, 'mfaScope.note 不得宣称写操作不受影响')
 })
 
 // 反查钉：从 middleware.go 的 admin/business 组枚举全部写路由（含与写同级的

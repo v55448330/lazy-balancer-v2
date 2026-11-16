@@ -457,7 +457,10 @@ func requeueCertJobsSnapshot(ctx context.Context, snapshot CertJobsSnapshot, man
 	var ruleDomain string
 	var enabled, enableTLS bool
 	var tlsSource string
-	if err := db.DB.QueryRowContext(ctx, `SELECT domain,IIF(enabled IN ('1',1),1,0),enable_tls,COALESCE(tls_source,'manual') FROM lb_rules WHERE caddy_id=?`, snapshot.ruleID).
+	// 可空列与 restore 侧（restoreCertJobsForRule）同口径 COALESCE/IIF：带外
+	// 写入/旧备份可产生 NULL domain/enable_tls——裸 Scan 对 NULL 报错会把补偿
+	// 拖入永久退避循环且租约永不释放；NULL enable_tls 按 0（未启用 TLS）收敛。
+	if err := db.DB.QueryRowContext(ctx, `SELECT COALESCE(domain,''),IIF(enabled IN ('1',1),1,0),COALESCE(enable_tls,0),COALESCE(tls_source,'manual') FROM lb_rules WHERE caddy_id=?`, snapshot.ruleID).
 		Scan(&ruleDomain, &enabled, &enableTLS, &tlsSource); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			// 规则已被并发删除：没有可补偿对象，按成功收尾——
@@ -1272,9 +1275,12 @@ func certScanDatabaseReady() bool {
 }
 
 // certJobsActive 报告是否存在需要周期通道的证书任务——issued/disabled 之外的
-// 状态，外加「failed + ca_available_after 非空」（B2 失败语义统一：退避窗口
-// 未到期的失败行由 cert-waiting-ca 30s 补扫按到期重排，属在途信号）；failed +
-// 窗口 NULL 是终态（已达上限仅手动重试），不计入。
+// 状态，外加「failed + ca_available_after 非空 + renewal_attempts 未达上限」
+// （B2 失败语义统一：退避窗口未到期的失败行由 cert-waiting-ca 30s 补扫按到期
+// 重排，属在途信号）；failed + 窗口 NULL 是终态（已达上限仅手动重试），不计入。
+// failed 分支的 attempts 门与补扫谓词（scanWaitingCACandidates）单源对齐：
+// 配置下调后超限行不再被任何自动通道消费，计入活跃只会让 30s 补扫永续空转
+// 且调度永不自停（StopLoop 判据同源）。
 func certJobsActive() bool {
 	if db.DB == nil {
 		// 启动/测试装配窗口没有可执行的数据库工作；与查询错误的「宁扫勿漏」
@@ -1284,7 +1290,8 @@ func certJobsActive() bool {
 	var active int
 	if err := db.DB.QueryRow(`SELECT EXISTS(SELECT 1 FROM cert_jobs
 		WHERE status NOT IN ('issued','failed','disabled')
-		   OR (status = 'failed' AND ca_available_after IS NOT NULL))`).Scan(&active); err != nil {
+		   OR (status = 'failed' AND ca_available_after IS NOT NULL
+		       AND COALESCE(renewal_attempts,0) < ?))`, getCertRenewalAttempts()).Scan(&active); err != nil {
 		return true // 判定失败按有活处理——宁扫勿漏（安全网语义）
 	}
 	return active == 1
@@ -1508,7 +1515,7 @@ func CertReconcileOnce(ctx context.Context) error {
 			TaskLogf("cert-reconcile", "skipped", "状态对账中止：%v（已收敛 %d 个断链、%d 个到期回填、%d 个孤儿、%d 个补建——均为部分计数，恢复后下一周期重做）", err, rebuilt, filledExpiry, swept, created)
 			return err
 		}
-		TaskLogf("cert-reconcile", "reconcile", "状态对账失败：%v（失败轮结果不可信，下一周期重试；已收敛 %d 个断链、%d 个到期回填、%d 个孤儿——均为部分计数）", err, rebuilt, filledExpiry, swept)
+		TaskLogf("cert-reconcile", "reconcile", "状态对账失败：%v（失败轮结果不可信，下一周期重试；已收敛 %d 个断链、%d 个到期回填、%d 个孤儿、%d 个补建——均为部分计数）", err, rebuilt, filledExpiry, swept, created)
 		return err
 	}
 	TaskLogf("cert-reconcile", "reconcile", "状态对账完成：断链重建 %d 个、到期回填 %d 个、孤儿清理 %d 个、任务补建 %d 个（一致时为 0）", rebuilt, filledExpiry, swept, created)
@@ -1880,7 +1887,7 @@ func requeueNonTerminalCertJobs(ctx context.Context, deploymentRetry func(int, i
 				canonicalSelected, selectedErr := CanonicalACMEDomains(selection.Candidate.Domain)
 				canonicalRule, ruleErr := CanonicalACMEDomains(job.ruleDomain)
 				if selectedErr == nil && ruleErr == nil && canonicalSelected == canonicalRule && selection.Certificate.NotAfter.After(now.Add(time.Duration(renewalDays)*24*time.Hour)) {
-					if err := transitionJob(db.DB, job.id, nonTerminalJobStatuses, "issued", map[string]any{"message": "检测到已有有效证书，跳过恢复签发"}); err != nil {
+					if err := transitionJob(db.DB, job.id, nonTerminalJobStatuses, "issued", issuedFinalizeFields(map[string]any{"message": "检测到已有有效证书，跳过恢复签发"})); err != nil {
 						// CAS 冲突同样跳过继续（同上 disable 站点语义）。
 						if errors.Is(err, ErrJobTransitionConflict) {
 							continue

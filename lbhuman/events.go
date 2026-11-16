@@ -27,12 +27,16 @@ const (
 	humanEventQueueCap = 1024
 )
 
+// humanEvent 人机事件行。**契约：人机不携带 UA**（用户裁定）：
+// 摄取侧 handleIngestHuman 解析 ua 但从不落库（security_events 无
+// UA 列），端到端采集即丢——产生侧停止采集，不再发射 ua 键。取证上下文
+// 与 WAF 的不对称是有意取舍（落库方案影响面大不取）；cookie UA 绑定/CC
+// UA 指纹/实时会话 UA 展示各有独立消费面，不经本事件通道。
 type humanEvent struct {
 	ruleID string
 	ip     string
 	method string
 	uri    string
-	ua     string
 	kind   string
 	reason string        // CC 触发原因（session_anomaly/rps_spike/4xx_ratio；非 CC 触发空）
 	ts     int64         // 发生（入队）时刻 unix 毫秒——投递时刻会随队列积压漂移
@@ -137,16 +141,19 @@ func takeCCTriggerReason(ruleID, ip, kind string) string {
 // reportHumanEvent 异步上报（非阻塞：投递到缓冲 channel，单 worker 串行发送；
 // 队列满即丢弃计数，投递失败计数——监控事件不阻塞请求路径）。
 // ts 在入队时刻定格：事件时间戳=发生时刻，不随队列积压/投递阻塞漂移。
-func reportHumanEvent(ruleID, ip, method, uri, ua, kind string) {
+// 不采集 UA（契约见 humanEvent 注释：人机不携带 UA，摄取侧不落库）。
+func reportHumanEvent(ruleID, ip, method, uri, kind string) {
 	startHumanEventWorker()
 	select {
-	case humanEventQueue <- humanEvent{ruleID: ruleID, ip: ip, method: method, uri: uri, ua: ua, kind: kind, reason: takeCCTriggerReason(ruleID, ip, kind), ts: time.Now().UnixMilli()}:
+	case humanEventQueue <- humanEvent{ruleID: ruleID, ip: ip, method: method, uri: uri, kind: kind, reason: takeCCTriggerReason(ruleID, ip, kind), ts: time.Now().UnixMilli()}:
 	default:
 		humanEventDropped.Add(1)
 	}
 }
 
 // startHumanEventWorker 幂等启动单 worker（mutex 守护，stop chan 标记运行态）。
+// 每次启动重置退出信号（上一代 worker 的 exited 已被 stopHumanEventWorker
+// 等待并关闭）——停机收尾停 worker 后后续上报重启时信号必须新鲜。
 func startHumanEventWorker() {
 	humanEventWorkerMu.Lock()
 	defer humanEventWorkerMu.Unlock()
@@ -155,10 +162,17 @@ func startHumanEventWorker() {
 	}
 	stop := make(chan struct{})
 	humanEventWorkerStop = stop
+	humanEventWorkerExited = make(chan struct{})
 	go humanEventWorkerLoop(stop)
 }
 
+// humanEventWorkerExited 由 worker goroutine 退出时关闭（defer）：停机收尾
+// 停 worker 后等它，确保「已取出未投递」的在途事件落定（deliver 的失败计数
+// 先于收尾排空完成），shutdown_lost 只计真正滞留队列的尾部——对账不重不漏。
+var humanEventWorkerExited = make(chan struct{})
+
 func humanEventWorkerLoop(stop chan struct{}) {
+	defer close(humanEventWorkerExited)
 	for {
 		select {
 		case <-stop:
@@ -173,11 +187,34 @@ func humanEventWorkerLoop(stop chan struct{}) {
 	}
 }
 
+// stopHumanEventWorker 停止常驻 worker 并等待其退出（幂等；无 worker=仅复位
+// 退出信号）。停机收尾与测试隔离共用：先停消费再排空，杜绝 worker 与收尾
+// 竞争消费队列导致 shutdown_lost 计数失真。
+func stopHumanEventWorker() {
+	humanEventWorkerMu.Lock()
+	stop := humanEventWorkerStop
+	humanEventWorkerStop = nil
+	humanEventWorkerMu.Unlock()
+	if stop != nil {
+		close(stop)
+		<-humanEventWorkerExited
+	}
+	// 复位退出信号供下一次 worker 启动（无论本次是否有 worker 在跑）。
+	humanEventWorkerMu.Lock()
+	humanEventWorkerExited = make(chan struct{})
+	humanEventWorkerMu.Unlock()
+}
+
 // FlushHumanEvents 停机收尾：把队列内未投递的尾部事件计入 shutdown_lost
 // 对账源（人机通道无 spool/重试是用户裁定，但丢失量必须可对账——此前停机
 // 尾部静默蒸发不入任何计数，与「丢弃必须可观测」契约张力）。Caddy 模块
 // Cleanup（reload/优雅停机）调用；幂等（排空后队列空，重复调用计 0）。
+//
+// 先停常驻 worker 再独占排空：worker 活着时并发消费队列，会把尾部事件绕进
+// deliver_failed（投递失败计数）而非 shutdown_lost——reload 竞态下对账计数
+// 失真。停 worker 后后续上报经 reportHumanEvent 重启 worker（生产语义不变）。
 func FlushHumanEvents() {
+	stopHumanEventWorker()
 	for {
 		select {
 		case ev := <-humanEventQueue:
@@ -214,9 +251,11 @@ func (p *humanEventPoster) deliver(ev humanEvent) {
 		humanEventDeliverFailed.Add(1)
 		return
 	}
+	// 契约：人机不携带 UA（不发射 ua 键；摄取侧 humanEventRow.UA 解析
+	// 兼容旧版写侧，落库本就不消费——见 handleIngestHuman）。
 	entry := map[string]any{
 		"ts": ev.ts, "rule_id": ev.ruleID, "client_ip": ev.ip,
-		"method": ev.method, "uri": ev.uri, "ua": ev.ua, "kind": ev.kind,
+		"method": ev.method, "uri": ev.uri, "kind": ev.kind,
 	}
 	if ev.reason != "" {
 		entry["reason"] = ev.reason
@@ -262,13 +301,7 @@ func drainHumanEventsForTest(timeout time.Duration) bool {
 // 停机收尾钉测须独占消费队列计 shutdown_lost，前序排空测试启动的 worker
 // 不得竞争。停 worker 后清空队列残留事件，还原 clean 态（生产不调用）。
 func stopHumanEventWorkerForTest() {
-	humanEventWorkerMu.Lock()
-	stop := humanEventWorkerStop
-	humanEventWorkerStop = nil
-	humanEventWorkerMu.Unlock()
-	if stop != nil {
-		close(stop)
-	}
+	stopHumanEventWorker()
 	for {
 		select {
 		case <-humanEventQueue:

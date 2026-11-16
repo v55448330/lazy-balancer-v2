@@ -447,7 +447,9 @@ test('/admin-tls 读取失败显性化并提供重试', () => {
 
 test('兜底提醒不承诺不会发生的自动跳转', () => {
   const page = code('src/views/settings/BasicSettings.vue')
-  assert.doesNotMatch(page, /若未自动跳转/)
+  // 结构负钉：兜底提醒必须走 restart.manualUrl 词条键（下面双钉），不得承诺
+  // 自动跳转（裸中文「若未自动跳转」负钉 i18n 后空转）。
+  assert.doesNotMatch(page, /autoRedirect|autoJump|若未自动跳转/, '不得残留自动跳转承诺')
   // i18n 后双钉:调用点钉键,zh 母本钉原文(任一漂移必红)
   assert.match(page, /ElMessage\.warning\(t\('app\.settings\.basic\.restart\.manualUrl', \{ target \}\)\)/)
   assert.ok(code('src/locales/zh/settings.ts').includes('请手动访问新地址：{target}'), '手动访问提示原文必须在 zh 母本词条中')
@@ -541,7 +543,9 @@ test('后端下发 visible_when/option_labels，前端不再硬编码 dnspod 字
   assert.match(vue, /credentialFieldVisible\(field, form\.value\.dns_credentials\)/)
   assert.match(vue, /:label="credentialOptionLabel\(field, opt\)"/)
   assert.doesNotMatch(vue, /field\.name === 'auth_mode'\) return true/)
-  assert.doesNotMatch(vue, /opt === 'dnspod' \? 'DNSPod API' : '腾讯云 API'/)
+  // 结构负钉：选项标签必须经 utils/dnsProviderFields.credentialOptionLabel 单源
+  // （上面已钉消费），不得本地第二份映射（裸中文负钉 i18n 后空转）。
+  assert.doesNotMatch(vue, /const credentialOptionLabel|optionLabel = \(|DNSPod API' : '/, '选项标签不得本地第二份映射')
 })
 
 test('OIDC GET 失败清空为未配置态并禁止保存（不得回填上一轮状态）', () => {
@@ -672,7 +676,11 @@ test('安全事件：tooltip 死条件删除，crawler 族展示词单源，旧 
   const show = section(page, 'const showTriggeredMsg', 'const triggerDetailVisible')
   assert.match(show, /!!row\.rule_triggered && !!row\.rule_msg/)
   assert.doesNotMatch(show, /!== '2'|!== '3'|!== '4'|!== '5'|\^949/, '这些排除项永不命中（前两个 el-link 分支已截走）')
-  assert.match(page, /case 'crawler': return CRAWLER_FAMILY_LABEL/)
+  // crawler 族展示词单源：阶段列与筛选/触发类型列同词条键（D9 反转——原渲染
+  // 中文常量 CRAWLER_FAMILY_LABEL，同页三称谓并存且 en 下中文漏出）。
+  assert.match(page, /case 'crawler': return t\('app\.security\.events\.crawlerBot'\)/)
+  assert.match(page, /<el-option :label="t\('app\.security\.events\.crawlerBot'\)" value="爬虫Bot"/, '筛选项展示词同键（value 保持序列化键）')
+  assert.doesNotMatch(page, /CRAWLER_FAMILY_LABEL/, '阶段列不得再消费中文常量（模块私有，仅序列化键）')
   assert.match(page, /if \(row\.rule_triggered === '8'\) return t\('app\.security\.events\.stageLegacyGeo'\)/)
   // 分类例外保持不变（triggerStageFamily 对 8 归 ipAcl;局部形参改名 trig 避让 i18n t）
   assert.match(page, /switch \(triggerStageFamily\(trig\)\)/)

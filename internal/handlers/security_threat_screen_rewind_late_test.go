@@ -81,7 +81,9 @@ func threatRewindStateRows(t *testing.T, key string) int {
 // 由增量重固并入（删除高水位会让 newTotal<oldTotal 分支再也找不到迟到行）。
 func TestThreatRollupRewind_insertSourceKeepsLateInsertsOnTrimmedMinute(t *testing.T) {
 	setupSecurityPolicyTestDB(t)
-	m := time.Date(2026, 10, 18, 12, 0, 0, 0, time.UTC)
+	// 夹具相对当前时刻：固定历史日期会随时间滑出 7d 回退窗口
+	//（threatRollupRewindMinute 钳制到展示下界），回退变 no-op、钉测假绿。
+	m := time.Now().UTC().Truncate(time.Minute).Add(-2 * time.Hour)
 	minute := m.Format(threatRewindMinuteLayout)
 	eventTime := m.Add(5 * time.Second).Format("2006-01-02 15:04:05")
 

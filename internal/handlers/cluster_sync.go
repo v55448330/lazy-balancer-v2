@@ -115,7 +115,7 @@ func (h *Handlers) PullClusterSnapshot(c *gin.Context) {
 	} else {
 		recordAudit(c, "手动同步", "集群同步", services.FormatAuditDetail("配置无变化", services.AuditResultPart("success")))
 	}
-	h.syncService.Resume()
+	services.ResumeSyncIfUserEnabled(h.syncService.Resume)
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_91110f22"), MessageKey: "k_91110f22", Data: result})
 }
 

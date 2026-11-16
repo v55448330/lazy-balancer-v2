@@ -11,6 +11,7 @@ import (
 	"io"
 	"log"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -336,21 +337,39 @@ type fakeIterErrTx struct{}
 func (fakeIterErrTx) Commit() error   { return nil }
 func (fakeIterErrTx) Rollback() error { return nil }
 
-type fakeIterErrConn struct {
+// needleFailConn 是 needle 路由假驱动的单一实现（原 markerReadFailConn/
+// registrationCountReadFailConn/registrationTerminalClearFailConn/
+// driftSwitchFailConn 四份近似拷贝收敛）：failNeedle 命中的查询返回首迭代
+// 即失败的结果集，其余查询返回空集；写语句逐条记录供「不得执行破坏性写」
+// 断言。queryOverride/execOverride 承载各用例的特化路由（计数读返回定值/
+// 清空语句注入写失败/开关读第二次失败），零值即纯 needle 形态。
+type needleFailConn struct {
 	failNeedle string
 	// scanFailNeedle 命中时返回「首行值不可扫描」的结果集（钉逐行 Scan 失败）。
 	scanFailNeedle string
 	// partialScanNeedle 命中时返回「首行可扫描、次行不可扫描」的结果集
 	// （钉部分扫描失败不得产出部分聚合结果）。
 	partialScanNeedle string
+	queryOverride     func(query string) (driver.Rows, bool)
+	execOverride      func(query string) (driver.Result, error)
+	mu                sync.Mutex
+	execs             []string
 }
 
-func (c *fakeIterErrConn) Prepare(string) (driver.Stmt, error) {
+func (c *needleFailConn) Prepare(string) (driver.Stmt, error) {
 	return nil, errors.New("未实现 Prepare")
 }
-func (c *fakeIterErrConn) Close() error              { return nil }
-func (c *fakeIterErrConn) Begin() (driver.Tx, error) { return fakeIterErrTx{}, nil }
-func (c *fakeIterErrConn) QueryContext(_ context.Context, query string, _ []driver.NamedValue) (driver.Rows, error) {
+func (c *needleFailConn) Close() error              { return nil }
+func (c *needleFailConn) Begin() (driver.Tx, error) { return fakeIterErrTx{}, nil }
+func (c *needleFailConn) BeginTx(context.Context, driver.TxOptions) (driver.Tx, error) {
+	return fakeIterErrTx{}, nil
+}
+func (c *needleFailConn) QueryContext(_ context.Context, query string, _ []driver.NamedValue) (driver.Rows, error) {
+	if c.queryOverride != nil {
+		if rows, ok := c.queryOverride(query); ok {
+			return rows, nil
+		}
+	}
 	columns := []string{"a"}
 	if c.partialScanNeedle != "" && strings.Contains(query, c.partialScanNeedle) {
 		return &fakePartialScanRows{}, nil
@@ -360,10 +379,26 @@ func (c *fakeIterErrConn) QueryContext(_ context.Context, query string, _ []driv
 		// 但首行的值不可 Scan（驱动级异常形态）。
 		return &fakeScanErrRows{columns: []string{"section", "hash"}}, nil
 	}
-	if strings.Contains(query, c.failNeedle) {
+	if c.failNeedle != "" && strings.Contains(query, c.failNeedle) {
 		return &fakeIterErrRows{columns: columns, err: errors.New("注入的迭代失败")}, nil
 	}
 	return &fakeEmptyRows{columns: columns}, nil
+}
+
+func (c *needleFailConn) ExecContext(_ context.Context, query string, _ []driver.NamedValue) (driver.Result, error) {
+	c.mu.Lock()
+	c.execs = append(c.execs, query)
+	c.mu.Unlock()
+	if c.execOverride != nil {
+		return c.execOverride(query)
+	}
+	return driver.RowsAffected(0), nil
+}
+
+func (c *needleFailConn) executedWrites() []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]string(nil), c.execs...)
 }
 
 type fakeIterErrDriver struct{}
@@ -379,9 +414,16 @@ type fakeIterErrConnector struct {
 }
 
 func (c *fakeIterErrConnector) Connect(context.Context) (driver.Conn, error) {
-	return &fakeIterErrConn{failNeedle: c.failNeedle, scanFailNeedle: c.scanFailNeedle, partialScanNeedle: c.partialScanNeedle}, nil
+	return &needleFailConn{failNeedle: c.failNeedle, scanFailNeedle: c.scanFailNeedle, partialScanNeedle: c.partialScanNeedle}, nil
 }
 func (c *fakeIterErrConnector) Driver() driver.Driver { return fakeIterErrDriver{} }
+
+// needleFailConnector 把单个 needleFailConn 实例暴露为 driver.Connector
+// （写记录/特化路由需要跨 Connect 共享同一实例）。
+type needleFailConnector struct{ conn *needleFailConn }
+
+func (c *needleFailConnector) Connect(context.Context) (driver.Conn, error) { return c.conn, nil }
+func (c *needleFailConnector) Driver() driver.Driver                        { return fakeIterErrDriver{} }
 
 func TestDumpTableAsJSON_propagatesRowsIterationError(t *testing.T) {
 	// Given：security_policies 迭代中途驱动失败

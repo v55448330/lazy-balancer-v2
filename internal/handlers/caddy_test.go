@@ -405,7 +405,9 @@ func TestValidateConfig_validates_submitted_config(t *testing.T) {
 		return services.ErrCLIValidatorUnavailable
 	})
 	response := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/config/validate", strings.NewReader(`{"apps":{"http":{}}}`))
+	// 回退路径真实 /load：省略 admin 会回落 Caddy 默认 localhost:2019，与面板
+	// 随机端口不一致即自锁（护栏与 PUT 同判）——夹具显式携带面板 admin 地址。
+	request := httptest.NewRequest(http.MethodPost, "/config/validate", strings.NewReader(`{"admin":{"listen":"`+fakeCaddy.Listener.Addr().String()+`"},"apps":{"http":{}}}`))
 	request.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(response, request)
 	if response.Code != http.StatusOK {
@@ -870,6 +872,47 @@ func TestUpdateConfig_rollbackFailurePersistsApplyBanner(t *testing.T) {
 	}
 }
 
+// 复合故障（apply 传输失败 + 回弹被 Caddy 拒绝）：拒绝分类只查 join 前
+// 快照——restoreErr 携带的 ConfigRejectedError 不得污染分类，必须 500
+// 系统失败而非 400 配置拒绝（restoreErr 只参与横幅判定）。
+func TestUpdateConfig_compoundFailureClassifiesByPreJoinSnapshot(t *testing.T) {
+	setupSecurityPolicyTestDB(t)
+	if err := db.InitializeAuditDB(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	var loads atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/config/":
+			_, _ = w.Write([]byte(`{"old":true}`))
+		case r.Method == http.MethodPost && r.URL.Path == "/load":
+			if loads.Add(1) == 1 {
+				// 首次 apply：500 系统故障（非 ConfigRejected）。
+				w.WriteHeader(http.StatusInternalServerError)
+				_, _ = w.Write([]byte(`{"error":"transport boom"}`))
+				return
+			}
+			// 回弹：400 配置拒绝（restoreErr 携带 ConfigRejectedError）。
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"error":"restore rejected"}`))
+		default:
+			w.WriteHeader(http.StatusOK)
+		}
+	}))
+	defer srv.Close()
+	gin.SetMode(gin.TestMode)
+	h := &Handlers{caddyService: services.NewCaddyService(srv.URL)}
+	router := gin.New()
+	router.PUT("/config", h.UpdateConfig)
+	request := httptest.NewRequest(http.MethodPut, "/config", strings.NewReader(`{"source":"basic","proxy_dial_timeout":5}`))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d body=%s, want 500（复合故障按 join 前快照分类，回弹拒绝不得污染成 400）", response.Code, response.Body.String())
+	}
+}
+
 // 配置拒绝（Caddy 4xx/CLI 校验拒绝）不写 caddy_apply_error 横幅：候选未
 // /load、事务已回滚，库态与运行态仍是提交前形态，无分叉事实（与
 // finishTxApply 拒绝分支同口径）。传输/恢复失败仍写横幅（上方用例）。
@@ -960,7 +1003,7 @@ func TestValidateConfig_restoreFailurePersistsApplyBanner(t *testing.T) {
 	router.POST("/config/validate", h.ValidateConfig)
 
 	response := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/config/validate", strings.NewReader(`{"apps":{"http":{}}}`))
+	request := httptest.NewRequest(http.MethodPost, "/config/validate", strings.NewReader(`{"admin":{"listen":"`+fakeCaddy.Listener.Addr().String()+`"},"apps":{"http":{}}}`))
 	request.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(response, request)
 
@@ -1010,7 +1053,7 @@ func TestValidateConfig_adminSystemFailureMapsTo500(t *testing.T) {
 	router.POST("/config/validate", h.ValidateConfig)
 
 	response := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/config/validate", strings.NewReader(`{"apps":{"http":{}}}`))
+	request := httptest.NewRequest(http.MethodPost, "/config/validate", strings.NewReader(`{"admin":{"listen":"`+fakeCaddy.Listener.Addr().String()+`"},"apps":{"http":{}}}`))
 	request.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(response, request)
 

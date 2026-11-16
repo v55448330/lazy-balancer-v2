@@ -100,7 +100,9 @@ func TestDifferenceIPEntries_equivalenceProperty(t *testing.T) {
 		}
 	}
 
-	// 输出为聚合规范形态：升序且两两不相交（下游 client_ip ranges 依赖）。
+	// 输出为聚合规范形态：两两不相交（下游 client_ip ranges 依赖）。升序由
+	// differenceIPEntries 的上游聚合/排序保证（本用例的解析顺序不构成对升序的
+	// 独立断言）。
 	parsed := make([]netip.Prefix, 0, len(got))
 	for _, entry := range got {
 		prefix, err := wafiplist.ParseIPEntry(entry)

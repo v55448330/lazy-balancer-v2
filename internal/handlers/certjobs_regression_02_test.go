@@ -97,6 +97,7 @@ func TestDeleteCertJob_reread_failure_returns_500(t *testing.T) {
 }
 
 func TestDeleteCertJob_concurrent_status_change_returns_409(t *testing.T) {
+	withIsolatedGlobal(t)
 	// 在途态任务（放行的 escape-hatch 对象）删除时，worker 在
 	// SELECT 与 disabled 翻转之间推进状态（如 validating→validated），CAS
 	// 命中 0 行属并发竞争而非服务器故障——必须重读区分归因并返回 409
@@ -137,6 +138,7 @@ func TestDeleteCertJob_concurrent_status_change_returns_409(t *testing.T) {
 }
 
 func TestDeleteCertJob_row_disappearing_before_disable_returns_404(t *testing.T) {
+	withIsolatedGlobal(t)
 	// CAS 命中 0 行且重读发现行已不存在（并发删除），按 handler 对
 	// 缺失任务的既有语义返回 404，而非 500「校验证书任务禁用结果失败」。
 	// Given
@@ -168,6 +170,7 @@ func TestDeleteCertJob_row_disappearing_before_disable_returns_404(t *testing.T)
 }
 
 func TestDeleteCertJob_restore_skips_when_row_left_disabled(t *testing.T) {
+	withIsolatedGlobal(t)
 	// 删除窗口内行被并发移离 disabled（如 worker 重新排队）时，恢复不得把
 	// 已推进的状态覆写回原态；RowsAffected=0 须并入 deleteErr 上抛 500。
 	// Given：failed 任务 + DELETE 恒失败（触发器注入）
@@ -208,6 +211,7 @@ func TestDeleteCertJob_restore_skips_when_row_left_disabled(t *testing.T) {
 }
 
 func TestDeleteCertJob_restore_failedFallbackKeepsRowLeftDisabled(t *testing.T) {
+	withIsolatedGlobal(t)
 	// 恢复 else 分支（排队/等待态）的 failed 回退必须与另三分支同构带
 	// status='disabled' 守卫：行在删除窗口内被并发移离 disabled（worker 接管）
 	// 时不得覆写其新状态，RowsAffected=0 并入 deleteErr 上抛 500。
@@ -353,6 +357,7 @@ func assertCaddyOpLockFree(t *testing.T, exit string) {
 // DeleteCertJob 每个出口都必须释放 caddyOpMu：表驱动探针逐个出口断言
 // TryLock 成功（成功路径、404、409、500 全覆盖）。
 func TestDeleteCertJob_releasesCaddyOpLockOnEveryExit(t *testing.T) {
+	withIsolatedGlobal(t)
 	seedActiveACMEJob := func(t *testing.T) {
 		t.Helper()
 		if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enabled,enable_tls,tls_source)
@@ -472,6 +477,7 @@ func TestDeleteCertJob_releasesCaddyOpLockOnEveryExit(t *testing.T) {
 // 临界区内发生 panic（钩子/运行时错误）时，defer 兜底必须释放全局写锁——
 // 手动配对的下一次回归（新增出口忘记 Unlock）会在这里锁死整条 Caddy 写链。
 func TestDeleteCertJob_releasesCaddyOpLockOnPanic(t *testing.T) {
+	withIsolatedGlobal(t)
 	assertCaddyOpLockFree(t, "前置")
 	h := newBackupTestHandlers(t)
 	if _, err := db.DB.Exec(`INSERT INTO cert_jobs (rule_id,domain,status)

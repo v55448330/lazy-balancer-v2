@@ -20,6 +20,7 @@ import (
 // 释放——否则节点重新提升后该规则的证书任务被屏障永久拦截，静默停发直到下一
 // 次 Stop。
 func TestDeleteRule_releases_block_lease_when_compensation_start_fails_on_drain_failure(t *testing.T) {
+	withIsolatedGlobal(t)
 	// Given：一条规则 + 已停止（模拟 BecomeSlave 完成降级）的 CA 队列管理器，
 	// drain 被强制失败，使 StartRuleDeletionCompensation 命中 stopped 拒绝分支。
 	handler, _, _ := newAuditRuleHandlers(t, 0)

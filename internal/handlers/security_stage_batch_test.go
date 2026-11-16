@@ -21,10 +21,12 @@ import (
 //        blocked 事件分桶 + 分段耗时；阶段 2 CC 防护统计由 lb_human 插件供给，
 //        配额限流退役后本端点不再读 429 指标）
 //   POST /security/policies/batch-bind（批量绑定：单事务单渲染，merge/replace）
-//   POST /rules/batch-block-pages（批量阶段拦截页：单事务单渲染）
+//   POST /rules/batch-block-pages（批量阶段拦截页：已停用——零写入零渲染，
+//        路由保留兼容旧自动化，见 rules.go BatchRuleBlockPages）
 
-// newStageBatchTestHandlers 带 /load 计数器的 Caddy 桩——批量端点必须一次
-// finishTxApply（单渲染），计数>1 即违反「单事务单渲染」契约。
+// newStageBatchTestHandlers 带 /load 计数器的 Caddy 桩——batch-bind 必须一次
+// finishTxApply（单渲染），计数>1 即违反「单事务单渲染」契约；
+// batch-block-pages 已停用，计数必须恒 0。
 func newStageBatchTestHandlers(t *testing.T) (*Handlers, *int) {
 	t.Helper()
 	initializeRuleFeatureTestDB(t)
@@ -640,11 +642,12 @@ func TestGetRuleStageStats_nonNumericTriggeredGoesUnattributed(t *testing.T) {
 		triggered string
 		count     int
 	}{
-		{"garbage", 3}, // 非数字 → 未归因
-		{"", 2},        // 空串 → 未归因
-		{"942100", 5},  // 策略引擎（阶段 3）
-		{"800005", 1},  // 地域预检精确段（阶段 1）
-		{"429", 4},     // 限流：不计入阶段 chip（既有口径）
+		{"garbage", 3},        // 非数字 → 未归因
+		{"", 2},               // 空串 → 未归因
+		{"942100", 5},         // 策略引擎（阶段 3）
+		{"800005", 1},         // 地域预检精确段（阶段 1）
+		{"429", 4},            // 限流：不计入阶段 chip（既有口径）
+		{"cc_rate_reject", 3}, // CC 限流拒绝（阶段 2）：与 429 同口径排除
 	}
 	for _, row := range seed {
 		for range row.count {
@@ -672,6 +675,6 @@ func TestGetRuleStageStats_nonNumericTriggeredGoesUnattributed(t *testing.T) {
 		t.Fatalf("stage split=%+v, want stage1=1 stage3=5 unattributed=5", payload.Data)
 	}
 	if payload.Data.Stage1Blocked24h+payload.Data.Stage3Blocked24h+payload.Data.Unattributed != 11 {
-		t.Fatalf("合计口径变化（429 仍应排除）: %+v", payload.Data)
+		t.Fatalf("合计口径变化（429/cc_rate_reject 仍应排除）: %+v", payload.Data)
 	}
 }

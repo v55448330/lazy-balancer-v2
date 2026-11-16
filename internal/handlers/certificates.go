@@ -584,7 +584,7 @@ func (h *Handlers) UpdateCertificateConfig(c *gin.Context) {
 	//（签发/续期/渲染证书门均以 enable_tls=1 为前提），点名它属误报。
 	if req.Enabled != nil && !*req.Enabled && oldEnabled {
 		references, refsErr := queryCertificateConfigRuleRefs(c.Request.Context(), tx,
-			`SELECT caddy_id, COALESCE(domain,'') FROM lb_rules WHERE acme_config_id=? AND enabled=1 AND tls_source='acme_dns' AND IIF(enable_tls IN ('1',1),1,0)=1 ORDER BY caddy_id`, id)
+			`SELECT caddy_id, COALESCE(domain,'') FROM lb_rules WHERE acme_config_id=? AND enabled=1 AND tls_source='acme_dns' AND `+enableTLSEnabledSQLPredicate+` ORDER BY caddy_id`, id)
 		if refsErr != nil {
 			writeInternalError(c, http.StatusInternalServerError, "检查规则引用失败", refsErr)
 			return
@@ -1235,6 +1235,12 @@ func (h *Handlers) IssueCertificate(c *gin.Context) {
 				// changed=true,error 表示冷却窗口已在 provider 解析前清空；
 				// 失败审计仍须留下本次实际发生的手动越冷。
 				auditMessage += "，手动越过 CA 冷却"
+			}
+			if changed && failedCooldownOverride {
+				// 与 CA-force 族同口径：失败冷却越冷实际发生（窗口已清）但收尾
+				// 失败——独立 cooldown_override 行留痕（成功路径 :1267 对称）。
+				recordAudit(c, "触发签发", "证书", services.FormatAuditDetail(scope,
+					"定向重签越过失败冷却", failedCooldownMessage, services.AuditResultPart("cooldown_override")))
 			}
 			if statusCode == http.StatusConflict {
 				auditFailure("skipped", auditMessage)

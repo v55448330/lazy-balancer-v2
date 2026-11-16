@@ -984,7 +984,7 @@ export const pickDefaultPolicyTab = (counts: Readonly<Partial<Record<SecurityPol
 // 推断输入形状（策略类型组件/列表/抽屉共用；SecurityStagePolicy 与策略页 PolicySummary 均结构满足）
 export interface SecurityPolicyTypeInput {
   policy_type?: string
-  // 人机验证（阶段 3）：off 之外=启用人机验证特征
+  // 人机验证（阶段 2 CC 防护）：off 之外=启用人机验证特征
   human_verify_mode?: string
   has_ip_control: boolean
   has_geoip?: boolean
@@ -1018,7 +1018,8 @@ export const inferPolicyType = (p: SecurityPolicyTypeInput): SecurityPolicyType 
   if (declared === 'stage0' || declared === 'stage1' || declared === 'stage2' || declared === 'stage3' || declared === 'mixed') {
     return declared
   }
-  // 人机验证策略（human_verify_mode != off）：无其他阶段特征时归 human；
+  // 人机验证策略（human_verify_mode != off）：无其他阶段特征时归 stage2（CC 防护；
+  // human 为已退役的类型名，不再作为推断输出）。
   // 与其他阶段特征并存 → mixed（与后端 InferPolicyType 同口径）
   const humanOn = p.human_verify_mode !== undefined && p.human_verify_mode !== '' && p.human_verify_mode !== 'off'
   if (humanOn) {

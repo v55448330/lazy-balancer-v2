@@ -31,6 +31,7 @@ func newAdminTLSHandlers(t *testing.T) *Handlers {
 }
 
 func TestUpdateAdminTLS_disables_upload_mode_without_new_files(t *testing.T) {
+	withIsolatedGlobal(t)
 	initializeRuleFeatureTestDB(t)
 	if _, err := db.DB.Exec(`UPDATE global_config SET admin_tls_enabled=1,admin_tls_mode='upload',
 		admin_tls_cert='existing cert',admin_tls_key='existing key' WHERE id=1`); err != nil {
@@ -165,6 +166,7 @@ func TestInspectAdminTLSCertJSONBody_rejectsInvalidPEMLikeMultipart(t *testing.T
 }
 
 func TestUpdateAdminTLSJSONBody_savesUploadModeCertificate(t *testing.T) {
+	withIsolatedGlobal(t)
 	// Given：JSON 通道提交 upload 模式证书（enabled/mode/cert_file/key_file
 	// 字段名与 multipart 表单一致），走与文件上传相同的校验与落盘链路
 	initializeRuleFeatureTestDB(t)
@@ -210,6 +212,7 @@ func TestUpdateAdminTLSJSONBody_savesUploadModeCertificate(t *testing.T) {
 }
 
 func TestUpdateAdminTLSJSONBody_rejectsMismatchedPairWithoutSaving(t *testing.T) {
+	withIsolatedGlobal(t)
 	// Given：upload 模式提交不匹配证书对——校验层拦截，不落库不重启
 	initializeRuleFeatureTestDB(t)
 	if _, err := db.DB.Exec(`UPDATE global_config SET admin_tls_enabled=0,admin_tls_mode='selfsigned',
@@ -284,6 +287,7 @@ func TestAdminTLSOversizedBodyReturns413(t *testing.T) {
 // 审计 detail 须显式记录本次是否替换了证书材料——
 // 仅启用/禁用 + 来源无法区分「只开关」与「换证书」。
 func TestUpdateAdminTLS_auditDetailRecordsCertificateReplacement(t *testing.T) {
+	withIsolatedGlobal(t)
 	newRouter := func(handler gin.HandlerFunc) *gin.Engine {
 		router := gin.New()
 		router.PUT("/admin-tls", handler)
@@ -387,6 +391,7 @@ func TestUpdateAdminTLS_auditDetailRecordsCertificateReplacement(t *testing.T) {
 // global_config（selfsigned 由 ResolveCertificate 自生成，残留 upload 材料无消费者，
 // 且随备份/导入继续传播）。切换后必须清空；upload 模式禁用保留既有钉测已锁。
 func TestUpdateAdminTLS_switchingToSelfsignedClearsUploadedMaterial(t *testing.T) {
+	withIsolatedGlobal(t)
 	initializeRuleFeatureTestDB(t)
 	if _, err := db.DB.Exec(`UPDATE global_config SET admin_tls_enabled=1,admin_tls_mode='upload',
 		admin_tls_cert='existing cert',admin_tls_key='existing key' WHERE id=1`); err != nil {
@@ -438,6 +443,7 @@ func TestUpdateAdminTLS_switchingToSelfsignedClearsUploadedMaterial(t *testing.T
 // 「不写库」必须查 DB 终态：同值 UPDATE 也会刷新 updated_at，进而打断集群
 // 版本/快照指纹的「无变化」判定链——仅断言响应文案与不重启无法发现退化。
 func TestUpdateAdminTLS_unchangedConfigSkipsWriteAndRestart(t *testing.T) {
+	withIsolatedGlobal(t)
 	initializeRuleFeatureTestDB(t)
 	if _, err := db.DB.Exec(`UPDATE global_config SET admin_tls_enabled=1,admin_tls_mode='selfsigned',
 		admin_tls_cert='',admin_tls_key='',updated_at='2000-01-01 00:00:00' WHERE id=1`); err != nil {
@@ -494,6 +500,7 @@ func TestUpdateAdminTLS_unchangedConfigSkipsWriteAndRestart(t *testing.T) {
 // 携带证书材料但生效来源不是 upload 时不得静默丢弃
 // （旧行为可能回「配置未变更」200）——必须 400 点名正确做法且不落库。
 func TestUpdateAdminTLSJSONBody_rejectsUploadPayloadWithoutUploadMode(t *testing.T) {
+	withIsolatedGlobal(t)
 	initializeRuleFeatureTestDB(t)
 	if _, err := db.DB.Exec(`UPDATE global_config SET admin_tls_enabled=0,admin_tls_mode='selfsigned',
 		admin_tls_cert='',admin_tls_key='' WHERE id=1`); err != nil {
@@ -541,6 +548,7 @@ func TestUpdateAdminTLSJSONBody_rejectsUploadPayloadWithoutUploadMode(t *testing
 // enabled 是安全开关，字符串值必须遵循 true/1/false/0 白名单；
 // 非法拼写不得静默按 false 关闭 HTTPS 并触发重启，合法 "0" 保持回归。
 func TestUpdateAdminTLS_enabledValueWhitelist(t *testing.T) {
+	withIsolatedGlobal(t)
 	for _, tc := range []struct {
 		name        string
 		multipart   bool
@@ -754,6 +762,7 @@ func TestAdminTLSOversizedMultipartBodyReturns413(t *testing.T) {
 // caddyOpMu 时并发保存会以各自基线整体覆盖，前一次变更
 // 静默丢失。本测试钉住「锁被占用时保存必须等待」——修复前请求会立即完成。
 func TestUpdateAdminTLS_serializesReadModifyWriteWithCaddyOpLock(t *testing.T) {
+	withIsolatedGlobal(t)
 	initializeRuleFeatureTestDB(t)
 	if _, err := db.DB.Exec(`UPDATE global_config SET admin_tls_enabled=1,admin_tls_mode='upload',
 		admin_tls_cert='existing cert',admin_tls_key='existing key' WHERE id=1`); err != nil {

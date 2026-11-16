@@ -47,10 +47,9 @@ test('健康位异常且无归因 → 不得暗示事件停更', () => {
 
 test('自动封禁降级条兜底文案不得声称计数不增长', () => {
   const page = code('src/views/security/SecurityEvents.vue')
-  assert.ok(
-    !page.includes('自动封禁计数不会增长'),
-    '兜底文案不得声称计数不增长（任务只停补采，实时 IPC 入库仍喂入计数器）',
-  )
+  // 结构负钉：兜底句必须走 feedDegradedDefault 词条键（下面双钉），不得本地
+  // 第二份「计数不增长」文案（裸中文 includes 负钉 i18n 后空转）。
+  assert.doesNotMatch(page, /feedDegraded[^']*'\s*\+|feedDegradedFallbackText/, '降级兜底不得本地拼装第二份')
   // i18n 后双钉:调用点钉键,zh 母本钉兜底原文(任一漂移必红)
   assert.match(page, /t\('app\.security\.events\.feedDegradedDefault'\)/)
   assert.ok(code('src/locales/zh/security.ts').includes('实时 IPC 入库仍在运行'), '降级兜底句必须在 zh 母本词条中')
