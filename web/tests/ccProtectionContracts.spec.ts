@@ -156,7 +156,7 @@ test('阶段 2 拦截页失效：回退内置挑战页（插件占位符回退�
 
 // ── 7b. stage2 投影行词条齐全（防裸键渲染：ccSpikeRowLabel 等曾缺失） ──
 test('stage2 投影行词条齐全：突刺阈值/处置动作/等待秒数 zh/en 成对（无裸键）', () => {
-  const keys = ['ccSpikeRowLabel', 'ccSpikeSummary', 'ccActionRowLabel', 'ccAction_challenge', 'ccAction_queue', 'ccAction_reject', 'ccQueueWaitRowLabel', 'ccQueueWaitRowValue', 'humanMode_auto', 'humanMode_force']
+  const keys = ['ccSpikeRowLabel', 'ccSpikeSummary', 'cc4xxRowLabel', 'cc4xxSummary', 'ccSessionRowLabel', 'ccSessionSummary', 'ccActionRowLabel', 'ccAction_challenge', 'ccAction_queue', 'ccAction_reject', 'ccQueueWaitRowLabel', 'ccQueueWaitRowValue', 'humanMode_auto', 'humanMode_force']
   for (const k of keys) {
     assert.match(zhView, new RegExp(`'${k}':`), `zh views.stages.${k} 必须定义（投影消费，缺失=裸键渲染）`)
     assert.match(enView, new RegExp(`'${k}':`), `en views.stages.${k} 必须成对定义`)
@@ -165,6 +165,8 @@ test('stage2 投影行词条齐全：突刺阈值/处置动作/等待秒数 zh/e
   const stages = code('src/utils/securityStages.ts')
   assert.match(stages, /ccSpikeRowLabel/, '投影必须消费 ccSpikeRowLabel')
   assert.match(stages, /ccActionRowLabel/, '投影必须消费 ccActionRowLabel（处置动作行）')
+  assert.match(stages, /cc4xxRowLabel/, '投影必须消费 cc4xxRowLabel（4xx 比例行）')
+  assert.match(stages, /ccSessionRowLabel/, '投影必须消费 ccSessionRowLabel（会话异常行）')
 })
 
 // ── 8. 死键群清理（zh/en 成对删除；活键保留） ──

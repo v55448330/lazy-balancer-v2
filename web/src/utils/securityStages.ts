@@ -738,9 +738,16 @@ export const buildStageModel = (
           s2rows.push({ label: t('common.app.views.stages.ccQueueWaitRowLabel'), detail: t('common.app.views.stages.ccQueueWaitRowValue', { sec: policy.cc_queue_wait_sec }) })
         }
       }
-      // 异常触发（突刺/4xx/多UA）只在启用 CC 检测且挑战开启时可观测。
+      // 异常触发三条件（突刺/4xx/会话）只在启用 CC 检测且挑战开启时可观测；
+      // 逐条件独立行（标签对齐 UI），4xx=0（关闭）/会话未启用不虚增行。
       if (policy?.cc_detect_enabled && policy?.human_verify_mode && policy.human_verify_mode !== 'off') {
         s2rows.push({ label: t('common.app.views.stages.ccSpikeRowLabel'), detail: t('common.app.views.stages.ccSpikeSummary', { n: policy.cc_rps_limit ?? 0, sec: policy.cc_rps_window ?? 0 }) })
+        if ((policy.cc_4xx_ratio ?? 0) > 0) {
+          s2rows.push({ label: t('common.app.views.stages.cc4xxRowLabel'), detail: t('common.app.views.stages.cc4xxSummary', { n: policy.cc_4xx_ratio ?? 0 }) })
+        }
+        if (policy.cc_session_anomaly) {
+          s2rows.push({ label: t('common.app.views.stages.ccSessionRowLabel'), detail: t('common.app.views.stages.ccSessionSummary', { n: policy.cc_session_ua_threshold ?? 0 }) })
+        }
       }
       // 策略级拦截页（阶段 2：挑战页与封禁响应共用模板；未配不虚增行）
       const s2PageId = binding.block_page_id ?? policy?.block_page_id ?? 0
