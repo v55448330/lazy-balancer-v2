@@ -24,18 +24,18 @@
           <span class="form-tip-inline">{{ t('app.settings.freeCerts.acme.emailHint') }}</span>
         </el-form-item>
         <el-form-item :label="t('app.settings.freeCerts.acme.expiryWarnDays')">
-          <el-input-number v-model="global.cert_expiry_days" :min="1" :max="365" />
+          <el-input-number v-model="global.cert_expiry_days" :min="1" :max="365" controls-position="right" />
           <span class="form-tip-inline">{{ t('app.settings.freeCerts.acme.expiryWarnHint') }}</span>
         </el-form-item>
         <el-form-item :label="t('app.settings.freeCerts.acme.renewalTime')">
-          <el-input-number v-model="global.cert_renewal_days" :min="1" :max="CERT_RENEWAL_DAYS_MAX" />
+          <el-input-number v-model="global.cert_renewal_days" :min="1" :max="CERT_RENEWAL_DAYS_MAX" controls-position="right" />
           <span
             class="form-tip-inline"
             :title="t('app.settings.freeCerts.acme.renewalTimeTitle')"
           >{{ t('app.settings.freeCerts.acme.renewalTimeHint', { max: CERT_RENEWAL_DAYS_MAX }) }}</span>
         </el-form-item>
         <el-form-item :label="t('app.settings.freeCerts.acme.renewalAttempts')">
-          <el-input-number v-model="global.cert_renewal_attempts" :min="1" :max="10" />
+          <el-input-number v-model="global.cert_renewal_attempts" :min="1" :max="10" controls-position="right" />
           <span class="form-tip-inline">{{ t('app.settings.freeCerts.acme.renewalAttemptsHint') }}</span>
         </el-form-item>
         <el-form-item :label="t('app.settings.freeCerts.acme.caProvider')" required>
@@ -209,11 +209,11 @@
         </el-form-item>
         <el-divider content-position="left" class="section-divider">{{ t('app.settings.freeCerts.ca.rateTitle') }}</el-divider>
         <el-form-item :label="t('app.settings.freeCerts.ca.colMaxConcurrent')">
-          <el-input-number v-model="caForm.max_concurrent" :min="1" :max="100" />
+          <el-input-number v-model="caForm.max_concurrent" :min="1" :max="100" controls-position="right" />
           <span class="form-tip-inline">{{ t('app.settings.freeCerts.ca.rateConcurrentHint') }}</span>
         </el-form-item>
         <el-form-item :label="t('app.settings.freeCerts.ca.minInterval')">
-          <el-input-number v-model="caForm.min_interval_ms" :min="1" :max="60000" :step="1000" />
+          <el-input-number v-model="caForm.min_interval_ms" :min="1" :max="60000" :step="1000" controls-position="right" />
           <span class="form-tip-inline">{{ t('app.settings.freeCerts.ca.minIntervalHint') }}</span>
         </el-form-item>
         <template v-if="caForm.provider === 'zerossl'">

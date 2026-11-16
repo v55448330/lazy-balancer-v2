@@ -695,19 +695,19 @@
               <template v-if="ccIntervention === 'anomaly'">
                 <el-divider>{{ t('app.security.policies.human.ccSection') }}</el-divider>
                 <el-form-item :label="t('app.security.policies.human.ccRpsLabel')">
-                  <el-input-number v-model="form.cc_rps_limit" :min="1" :max="100000" style="width: 120px" />
+                  <el-input-number v-model="form.cc_rps_limit" :min="1" :max="100000" controls-position="right" style="width: 120px" />
                   <span class="form-tip-inline">{{ t('app.security.policies.human.ccRpsPer') }}</span>
-                  <el-input-number v-model="form.cc_rps_window" :min="1" :max="3600" style="width: 100px; margin-left: 6px" />
+                  <el-input-number v-model="form.cc_rps_window" :min="1" :max="3600" controls-position="right" style="width: 100px; margin-left: 6px" />
                   <span class="form-tip-inline">{{ t('app.security.policies.human.ccRpsSec') }}</span>
                 </el-form-item>
                 <el-form-item :label="t('app.security.policies.human.cc4xxLabel')">
-                  <el-input-number v-model="form.cc_4xx_ratio" :min="0" :max="100" style="width: 110px" />
+                  <el-input-number v-model="form.cc_4xx_ratio" :min="0" :max="100" controls-position="right" style="width: 110px" />
                   <span class="form-tip-inline">%</span>
                   <span class="form-tip-inline">{{ t('app.security.policies.human.cc4xxTip') }}</span>
                 </el-form-item>
                 <el-form-item :label="t('app.security.policies.human.ccSessionLabel')">
                   <el-switch v-model="form.cc_session_anomaly" />
-                  <el-input-number v-if="form.cc_session_anomaly" v-model="form.cc_session_ua_threshold" :min="1" :max="100" style="width: 100px; margin-left: 10px" />
+                  <el-input-number v-if="form.cc_session_anomaly" v-model="form.cc_session_ua_threshold" :min="1" :max="100" controls-position="right" style="width: 100px; margin-left: 10px" />
                   <span v-if="form.cc_session_anomaly" class="form-tip-inline">{{ t('app.security.policies.human.ccSessionTip') }}</span>
                 </el-form-item>
               </template>
@@ -733,13 +733,13 @@
                   <div class="form-tip-line">{{ t('app.security.policies.human.typeTip') }}</div>
                 </el-form-item>
                 <el-form-item :label="t('app.security.policies.human.ttlLabel')">
-                  <el-input-number v-model="form.human_verify_ttl" :min="1" :max="1440" style="width: 120px" />
+                  <el-input-number v-model="form.human_verify_ttl" :min="1" :max="1440" controls-position="right" style="width: 120px" />
                   <span class="form-tip-inline">{{ t('app.security.policies.human.ttlTip') }}</span>
                 </el-form-item>
               </template>
               <!-- queue 子参数：等待秒数。 -->
               <el-form-item v-if="ccEffectiveActionValue === 'queue'" :label="t('app.security.policies.human.ccQueueWaitLabel')">
-                <el-input-number v-model="form.cc_queue_wait_sec" :min="0" :max="300" style="width: 120px" />
+                <el-input-number v-model="form.cc_queue_wait_sec" :min="0" :max="300" controls-position="right" style="width: 120px" />
                 <span class="form-tip-inline">{{ t('app.security.policies.human.ccQueueWaitTip', { sec: form.cc_rps_window }) }}</span>
               </el-form-item>
               <el-form-item :label="t('app.security.policies.human.exemptPathsLabel')">

@@ -23,7 +23,7 @@
 
       <el-form-item :label="t('common.app.views.cluster.syncIntervalLabel')">
         <div class="interval-row">
-          <el-input-number v-model="syncInterval" :min="10" :max="86400" :disabled="intervalDisabled" />
+          <el-input-number v-model="syncInterval" :min="10" :max="86400" :disabled="intervalDisabled" controls-position="right" />
           <!-- 单位后缀归一全局 form-tip-inline（原自管.interval-unit
                与全局类仅色差/字号差）；行内 gap 已提供间距，左侧外边距置零 -->
           <span class="form-tip-inline" style="margin-left: 0">{{ t('common.app.views.cluster.unitSeconds') }}</span>
