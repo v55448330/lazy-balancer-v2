@@ -434,19 +434,21 @@ func (p *Provider) listChallengeRecords(ctx context.Context, zone, subDomain str
 		if err := json.Unmarshal(body, &result); err != nil {
 			return nil, fmt.Errorf("DescribeDomainRecords response decode: %w", err)
 		}
+		// 无进展守卫按「本页是否取到任何新记录 ID」判定（先于 RR 精确收窄）：
+		// aliyun 服务端 KeyWord 是前缀/子串过滤（同时命中 _acme-challenge 与
+		// _acme-challenge.www 等多挑战名），整页可能全是非目标 RR——若按目标
+		// RR 判进展会误判无进展提前收手，漏扫后续页的目标记录（复用扫描漏检
+		// +残余排空漏删）。seen 跨页去重防重复收集，RR 过滤只作用于 collected。
 		repeatedPage := true
 		for _, record := range result.DomainRecords.Record {
-			if record.Type != "TXT" {
-				continue
-			}
-			if dnsname.NormalizeName(record.RR) != subDomain {
-				continue
-			}
 			if seen[record.RecordId] {
 				continue
 			}
-			repeatedPage = false
 			seen[record.RecordId] = true
+			repeatedPage = false
+			if record.Type != "TXT" || dnsname.NormalizeName(record.RR) != subDomain {
+				continue
+			}
 			collected = append(collected, enumeratedRecord{recordID: record.RecordId, value: record.Value})
 		}
 		fetched := int64(len(result.DomainRecords.Record))

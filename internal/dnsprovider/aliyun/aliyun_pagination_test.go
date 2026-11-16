@@ -163,3 +163,42 @@ func TestListChallengeRecords_stopsWhenPagesRepeatWithInflatedTotal(t *testing.T
 		t.Fatalf("records=%d calls=%d, want %d/2（重复页无进展即收手，不空转页数上限）", len(records), calls, challengeListPageSize)
 	}
 }
+
+// 整页非目标 RR（KeyWord 前缀过滤命中其他挑战名）不得误判无进展提前收手——
+// 后续页的目标记录必须扫到（复用扫描/残余排空不漏）。
+func TestListChallengeRecords_nonTargetFullPageContinuesToTarget(t *testing.T) {
+	var calls int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		records := make([]map[string]any, 0, challengeListPageSize)
+		if calls == 1 {
+			// 第 1 页整页非目标 RR（_acme-challenge.other，前缀过滤命中）。
+			for i := range challengeListPageSize {
+				records = append(records, map[string]any{
+					"RecordId": strconv.Itoa(2000 + i), "RR": "_acme-challenge.other", "Type": "TXT", "Value": "other-value",
+				})
+			}
+		} else {
+			// 第 2 页含目标 RR 记录。
+			records = append(records, map[string]any{
+				"RecordId": "3000", "RR": "_acme-challenge.www", "Type": "TXT", "Value": "target-value",
+			})
+		}
+		writeFakeJSON(w, http.StatusOK, map[string]any{
+			"TotalCount": 1000, "DomainRecords": map[string]any{"Record": records}, "RequestId": "req-list",
+		})
+	}))
+	t.Cleanup(server.Close)
+	provider := newFakeProvider(t, server.URL, 1)
+
+	records, err := provider.listChallengeRecords(context.Background(), testZone, "_acme-challenge.www")
+	if err != nil {
+		t.Fatalf("listChallengeRecords: %v", err)
+	}
+	if len(records) != 1 || records[0].value != "target-value" {
+		t.Fatalf("records=%d, want 1 条目标记录（整页非目标 RR 不得提前收手漏扫后续页）", len(records))
+	}
+	if calls < 2 {
+		t.Fatalf("calls=%d, want ≥2（必须翻到第 2 页取目标记录）", calls)
+	}
+}
