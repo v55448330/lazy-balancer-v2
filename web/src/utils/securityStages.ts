@@ -57,7 +57,7 @@ export interface SecurityStagePolicy {
   // 策略级拦截页（2026-09-25 裁定 stage1/stage2 均可配；投影面此前未呈现）
   block_page_id?: number
   block_status_code?: number
-  // 人机验证（阶段 3，2026-11-12）
+  // 人机验证（阶段 2 CC 防护，2026-11-12）
   human_verify_mode?: string
   human_verify_type?: string
   human_verify_ttl?: number

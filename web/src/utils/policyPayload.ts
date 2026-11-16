@@ -48,8 +48,8 @@ export interface PolicyPayloadInput {
   trustDetection: boolean
   /** 编辑器类型（mixed 不显式提交） */
   policyType: string
-  // —— 阶段 3 人机验证（2026-11-12）——
-  /** off/auto/force；仅 stage3 类型提交非 off 值，其余类型强制 off */
+  // —— 阶段 2 CC 防护人机验证（2026-11-12）——
+  /** off/auto/force；仅 stage2/mixed 类型提交非 off 值，其余类型强制 off */
   humanVerifyMode: string
   /** slider/js */
   humanVerifyType: string
@@ -207,7 +207,7 @@ export const crawlerExemptionNeedsEngines = (state: {
  * 永不发起挑战，CC 阈值形同虚设（与 ccEnabledTip「仅在人机验证开启时生效」
  * 同口径）。保存照常放行（警告不阻断），由调用方就近提示用户。
  *
- * 入参 ccDetectEnabled 取**表单侧**值；保存期警告类型门保持既有口径（stage2/stage3）。
+ * 入参 ccDetectEnabled 取**表单侧**值；保存期警告类型门仅 stage2（CC 防护）。
  * mixed 虽承载全量 CC 字段（carriesHuman 含 mixed），但其 CC-无-人机提示由表单内联
  * 警告覆盖（SecurityPolicies 无类型门），保存期不重复警告——故本谓词不含 mixed。
  */
@@ -215,7 +215,7 @@ export const ccDetectWithoutHumanWarning = (state: {
   policyType: string
   ccDetectEnabled: boolean
   humanVerifyMode: string
-}): boolean => (state.policyType === 'stage2' || state.policyType === 'stage3') && state.ccDetectEnabled && state.humanVerifyMode === 'off'
+}): boolean => state.policyType === 'stage2' && state.ccDetectEnabled && state.humanVerifyMode === 'off'
 
 /**
  * 阶段 2 挑战页组件占位符校验（保存门与提示线共用单源）。

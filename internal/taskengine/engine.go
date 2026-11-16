@@ -279,11 +279,12 @@ var defaultDaemonRestartDelays = []time.Duration{time.Second, 5 * time.Second, 3
 
 const daemonAbnormalResetAfter = time.Minute
 
-// Scheduled 槽闭包降频参数（测试可调——生产装配后不再变更）：
+// Scheduled 槽闭包降频参数（生产装配后不再变更）：
 // schedSlotEvalLead=到期前导窗（窗内每 tick 求值，保证到点即投）；
 // schedSlotEvalFloor=槽远期/已消费时的重评地板周期（收敛用户重排/带外
 // 改库造成的陈旧缓存——生效延迟上界即本周期）。
 //
+// schedSlotEvalLead 为编译期常量语义（普通 var，初始化后恒只读，无测试写入方）；
 // schedSlotEvalFloor 用原子值承载（纳秒）：测试用「缩短地板」把分钟级周期拉进
 // 时间尺度内，并在 cleanup 里写回原值——cleanup 与仍存活的 tick goroutine
 // 并发（引擎停止的 cleanup 与地板恢复的 cleanup 之间没有先后保证），普通
