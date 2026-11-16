@@ -1445,7 +1445,7 @@ const refreshPage = (): void => {
 .autoban-num { width: 140px; }
 .autoban-select { width: 220px; }
 /* 口径分组：块级各占一行（label 独立小标题行 + checkbox 行），中英一致。 */
-.autoban-scope-group { display: block; margin-bottom: 6px; }
+.autoban-scope-group { display: block; flex-basis: 100%; margin-bottom: 6px; }
 .autoban-scope-group-label { font-size: 12px; font-weight: 600; color: var(--text-secondary, #6b7280); margin-bottom: 2px; }
 /* 升级阶梯预览：跨双列独立行，单行紧凑徽标（直角）。 */
 .autoban-ladder { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin: -4px 0 12px; }
@@ -1506,9 +1506,9 @@ const refreshPage = (): void => {
 /* 请求上下文弹框：正文区自适应限高（top=5vh + 头/脚 ≈ 110px），内容多时整体不超视口
    （.crs-event-dialog 左半选择器删除——CRS 事件弹框已迁入 TriggerDetailDialog） */
 .ctx-event-dialog .el-dialog__body { max-height: calc(90vh - 130px); overflow-y: auto; }
-/* 自动封禁配置弹框：同款限高范式（top=6vh + 头/脚 ≈ 130px）——高级参数展开
-   +evidence 条件控件曾高达 1391px 超出视口、保存按钮不可见（用户实测）。 */
-.autoban-config-dialog .el-dialog__body { max-height: calc(88vh - 130px); overflow-y: auto; }
+/* 自动封禁配置弹框：限高范式（top=6vh≈54px + header≈110px + footer≈62px +
+   边距）——body 上限 = 100vh - 250px，保证保存按钮恒在视口内（用户实测）。 */
+.autoban-config-dialog .el-dialog__body { max-height: calc(100vh - 250px); overflow-y: auto; }
 /* 封禁与累犯合并弹框：同款限高（top=5vh，表高 480 + 工具行/分页/tab 头）。 */
 .ban-console-dialog .el-dialog__body { max-height: calc(90vh - 130px); overflow-y: auto; }
 /* 请求上下文弹框正文 20px 水平留白走全局 .dialog-body-inset（2026-09-25 用户裁定；
