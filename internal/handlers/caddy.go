@@ -1044,6 +1044,10 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 				// 成功空操作，不得 join 成「恢复失败」假信号（横幅/审计污染）。
 				restoreErr = nil
 			}
+			// 拒绝分类只查原始 applyErr（join 前快照）：restoreErr 携带的
+			// ConfigRejectedError 不得污染分类——复合故障（传输失败+回弹被拒）
+			// 应报 500 系统失败而非 400 配置拒绝（restoreErr 只参与横幅判定）。
+			rejected := services.IsConfigRejected(applyErr)
 			applyErr = errors.Join(applyErr, restoreErr)
 			// 回弹目标可能本身就是漂移形态（外来路由/带外改动）——先回滚事务
 			// 释放写锁，再把 LKG 钉回已提交库视图：LKG 的全族不变量是「最后一次
@@ -1061,7 +1065,7 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 			// 校验/admin 4xx）时候选未 /load、事务已回滚，运行配置仍是旧形态，
 			// 横幅会制造不存在的不一致（finishTxApply 拒绝分支即不写）；恢复失败
 			// （Caddy 不可达/超时）则运行配置状态未知，必须落横幅。
-			rejected := services.IsConfigRejected(applyErr)
+			// 横幅事实源用 join 前快照 rejected（restoreErr 不污染分类）。
 			if !rejected || restoreErr != nil {
 				h.recordCaddyApplyFailure(applyErr, restoreErr)
 			}
@@ -1702,6 +1706,9 @@ func (h *Handlers) PutCaddyConfig(c *gin.Context) {
 			rollbackErr = nil
 		}
 		restoreErr := h.restoreImportRuntime(runtimeSnapshot)
+		// 拒绝分类只查原始 applyErr（join 前快照）：rollbackErr/restoreErr 携带
+		// 的 ConfigRejectedError 不得污染分类（复合故障应报 500 而非 400）。
+		rejected := services.IsConfigRejected(err)
 		err = errors.Join(err, rollbackErr, restoreErr)
 		// 回弹目标是请求前运行配置（可能已漂移）——事务已显式回滚，把 LKG
 		// 钉回已提交库视图，维持「LKG=已提交库视图」的全族不变量（逃生口的
@@ -1712,7 +1719,7 @@ func (h *Handlers) PutCaddyConfig(c *gin.Context) {
 		// 横幅事实源：配置拒绝（admin 4xx）时候选未生效、事务已回滚，库态与
 		// 运行态无分叉——不写横幅（与 finishTxApply 拒绝分支同口径）；恢复失败
 		// 表示运行配置状态未知，必须持久化（事务已显式回滚）。
-		rejected := services.IsConfigRejected(err)
+		// 横幅事实源用 join 前快照 rejected（restoreErr 不污染分类）。
 		if !rejected || restoreErr != nil {
 			h.recordCaddyApplyFailure(err, restoreErr)
 		}
