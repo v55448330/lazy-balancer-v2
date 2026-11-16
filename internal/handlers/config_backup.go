@@ -940,6 +940,23 @@ func (recovery *importQueueRecovery) finish() error {
 		services.Logf("info", "配置导入/还原：%s", detail)
 		services.RecordAuditLog("system", "导入归一", "证书任务", services.FormatAuditDetail(services.AuditSourcePart("config_import"), detail), "")
 	}
+	// 归一后与启动迁移同口径：冷却窗口已过期的 failed 行 message 追加终态
+	// 注记（db.AnnotateExpiredCooldownMessages 单源）——导入路径不经过启动
+	// 迁移，不加注会让「冷却明明已过」的行继续显示等待冷却。失败不否决已
+	// 提交的导入，经 recoveryErr 专项披露（队列按导入前活动态恢复）。
+	annotated, annotateErr := db.AnnotateExpiredCooldownMessages()
+	if annotateErr != nil {
+		recovery.recoveryErr = fmt.Errorf("追加导入带入的过期冷却终态注记失败: %w", annotateErr)
+		if recovery.manager != nil && recovery.wasActive {
+			recovery.manager.Resume()
+		}
+		return recovery.recoveryErr
+	}
+	if annotated > 0 {
+		detail := fmt.Sprintf("备份带入 %d 条冷却窗口已过期的失败证书任务，message 已追加终态说明（冷却已过期，可直接重试）", annotated)
+		services.Logf("info", "配置导入/还原：%s", detail)
+		services.RecordAuditLog("system", "导入注记", "证书任务", services.FormatAuditDetail(services.AuditSourcePart("config_import"), detail), "")
+	}
 	if recovery.manager == nil || !recovery.wasActive {
 		recovery.stalledNonTerminal, recovery.stalledUnknown = countStalledNonTerminalCertJobs()
 		return nil
@@ -6176,7 +6193,7 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 	// 跳过水位重置。
 	oldAutoBackupEnabled := 0
 	oldAutoBackupEnabledKnown := false
-	// 导入前快照自动封禁六列——六列是运行期收敛（清桶/重算达标/禁用收尾/
+	// 导入前快照自动封禁十列——该组列是运行期收敛（清桶/重算达标/禁用收尾/
 	// 调度联动）的输入，导入走通用 UPDATE 直接落库（绕过
 	// services.SetAutobanConfig），提交后必须按「导入前后是否变化」补收敛
 	// known=false 表示读取失败或备份未携带该组列（无变化可比）。
@@ -6328,7 +6345,7 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 			oldAutoBackupEnabled, oldAutoBackupEnabledKnown = enabled, true
 		}
 	}
-	// 六列自动封禁配置的「导入前」快照：仅在备份实际携带该组列（或
+	// 十列自动封禁配置的「导入前」快照：仅在备份实际携带该组列（或
 	// human_secret——同经通用 UPDATE 写入、提交后需缓存失效收敛）时读取
 	// （未携带时通用 UPDATE 不写这些列，运行值不可能变化——省一次点查且
 	// 避免把无关导入纳入收敛判定）。读失败=未知：跳过运行期收敛并留痕，
@@ -6910,15 +6927,15 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 		}
 		services.ResetAutobanCounters()
 	}
-	// 六列自动封禁配置的第二条写入路径（上方通用
+	// 十列自动封禁配置的第二条写入路径（上方通用
 	// `UPDATE global_config`）绕过 services.SetAutobanConfig 的清桶/禁用收尾
 	// 不变量。上方的清桶门只覆盖「备份携带 security_ip_lists（名单全量替换）」
-	// 形态——只导「系统数据」（含 global_config、不含迟到表）时六列被改写而
+	// 形态——只导「系统数据」（含 global_config、不含迟到表）时该组列被改写而
 	// 计数桶原样保留，≤60s 后的评估轮会按新窗口把陈旧计数整批并入封禁候选
 	// （窗口变小/口径收窄 → 批量误封；停用后不收敛 → 重新启用即按数天前的
 	// 计数立即封禁）。收敛判定、动作与文案单源
 	// services.ReconcileAutobanRuntimeAfterConfigReplace /
-	// AutobanConfigReplaceEffectNote（与 PUT 保存同语义，六列未变化时不清桶）。
+	// AutobanConfigReplaceEffectNote（与 PUT 保存同语义，配置未变化时不清桶）。
 	// 执行时机：本函数仍持 caddyOpMu，而禁用收尾要自取 CaddyOpLock（非重入
 	// 锁）——排入 session.postLockActions，在 close() 释放锁之后、调度恢复之前
 	// 执行；响应/审计只披露「将要执行的收敛」，不谎报已落定。
@@ -7026,7 +7043,7 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 	auditParts = append(auditParts, configClampNotes...)
 	auditParts = append(auditParts, autobanClampNotes...)
 	if autobanRuntimeNote != "" {
-		// 六列运行期收敛（清桶/禁用收尾/调度联动）是导入的可感知副作用，
+		// 自动封禁运行期收敛（清桶/禁用收尾/调度联动）是导入的可感知副作用，
 		// 必须与响应 warnings 同源留痕（此前只在 PUT 保存路径有审计）。
 		auditParts = append(auditParts, autobanRuntimeNote)
 	}

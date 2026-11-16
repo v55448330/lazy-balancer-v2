@@ -18,7 +18,8 @@ func normalizeWaitingCAWrite() migrationWrite {
 // expiredCooldownMessageWrite 登记「冷却窗口已过期的 failed 行 message 追加
 // 终态说明」：消除「message 说等待冷却、冷却却已过」的显示滞后。幂等：
 // message 已含标记（或为 NULL/空串走覆盖分支）不重复追加；NULL 窗口
-// （已达上限仅手动重试）与窗口仍在未来的行不加注。
+// （已达上限仅手动重试）与窗口仍在未来的行不加注。启动迁移与配置导入
+// 提交后共用（见 AnnotateExpiredCooldownMessages）。
 func expiredCooldownMessageWrite() migrationWrite {
 	where := "status='failed' AND ca_available_after IS NOT NULL AND datetime(ca_available_after) <= datetime('now')" +
 		" AND (message IS NULL OR message NOT LIKE '%" + certCooldownExpiredNote + "%')"
@@ -51,6 +52,30 @@ func NormalizeWaitingCACertJobs() (int64, error) {
 	return n, nil
 }
 
+// AnnotateExpiredCooldownMessages 给「冷却窗口已过期」的 failed 行 message
+// 追加终态说明（certCooldownExpiredNote），返回追加行数。两个消费方：
+//   - 启动迁移 migrateCertJobsWaitingCA（存量库）；
+//   - 配置导入/还原提交后（importQueueRecovery.finish）——旧备份带入的过期
+//     冷却行不经过启动迁移，库文案停留冷却语境会让「冷却明明已过」的行继续
+//     显示等待。
+//
+// 幂等：message 已含标记不重复追加；经 execMigrationWriteIfNeeded 探测，
+// 零命中即跳过。失败上抛。
+func AnnotateExpiredCooldownMessages() (int64, error) {
+	result, err := execMigrationWriteIfNeeded(expiredCooldownMessageWrite())
+	if err != nil {
+		return 0, fmt.Errorf("failed to annotate expired ca cooldown messages: %w", err)
+	}
+	if result == nil {
+		return 0, nil
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("failed to read expired cooldown annotation count: %w", err)
+	}
+	return n, nil
+}
+
 // migrateCertJobsWaitingCA 实现 ACME 失败语义统一（B2）的存量迁移：waiting_ca
 // 停车状态退役——429 与其它失败统一落 failed，不再产生 waiting_ca。存量
 // waiting_ca 行转为 failed，保留 message/renewal_attempts/ca_available_after/
@@ -77,18 +102,16 @@ func migrateCertJobsWaitingCA() error {
 		log.Print(detail)
 		recordSystemAudit("启动迁移", "证书任务", detail)
 	}
-	// 经 execMigrationWriteIfNeeded 同一惯用法（探测零命中即跳过）；追加按
-	// 标记去重，收敛库上二次启动零命中。
-	annotated, err := execMigrationWriteIfNeeded(expiredCooldownMessageWrite())
+	// 追加按标记去重（AnnotateExpiredCooldownMessages 单源，与导入 finish
+	// 共用），收敛库上二次启动零命中。
+	annotated, err := AnnotateExpiredCooldownMessages()
 	if err != nil {
-		return fmt.Errorf("failed to annotate expired ca cooldown messages: %w", err)
+		return err
 	}
-	if annotated != nil {
-		if n, err := annotated.RowsAffected(); err == nil && n > 0 {
-			detail := fmt.Sprintf("启动迁移：%d 条失败证书任务的冷却窗口已过期，message 追加终态说明「%s」", n, certCooldownExpiredNote)
-			log.Print(detail)
-			recordSystemAudit("启动迁移", "证书任务", detail)
-		}
+	if annotated > 0 {
+		detail := fmt.Sprintf("启动迁移：%d 条失败证书任务的冷却窗口已过期，message 追加终态说明「%s」", annotated, certCooldownExpiredNote)
+		log.Print(detail)
+		recordSystemAudit("启动迁移", "证书任务", detail)
 	}
 	return nil
 }

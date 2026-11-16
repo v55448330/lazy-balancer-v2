@@ -375,12 +375,20 @@ func (h *Handlers) respondLoginWithMFA(c *gin.Context, user models.User, passwor
 	nodeMode := "unknown"
 	if db.DB == nil {
 		services.Logf("warn", "login: 数据库未装配，节点角色未知（node_mode=unknown）")
-	} else if isMaster, err := services.RoleOf(c.Request.Context(), db.DB); err != nil {
-		services.Logf("warn", "login: 节点角色查询失败，按 unknown 下发（前端只读）: %v", err)
-	} else if isMaster {
-		nodeMode = "master"
 	} else {
-		nodeMode = "slave"
+		// 角色读是单行索引查询，与请求生命周期无关（与 GetSystemInfo 同口径）：
+		// 脱离客户端取消的短超时上下文——客户端断开不得被记成「角色查询失败」
+		// 而把刚成功登录的主节点呈现成 unknown 只读视图。
+		roleCtx, cancel := context.WithTimeout(context.WithoutCancel(c.Request.Context()), 2*time.Second)
+		isMaster, err := services.RoleOf(roleCtx, db.DB)
+		cancel()
+		if err != nil {
+			services.Logf("warn", "login: 节点角色查询失败，按 unknown 下发（前端只读）: %v", err)
+		} else if isMaster {
+			nodeMode = "master"
+		} else {
+			nodeMode = "slave"
+		}
 	}
 
 	// authMethod 由实际认证路径显式传入：本地密码登录即使读到导入遗留的

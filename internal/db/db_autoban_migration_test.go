@@ -6,12 +6,13 @@ import (
 	"testing"
 )
 
-// 自动封禁迁移钉：六项配置列 + 预置名单行。
-// 六列不在 fresh CREATE 里——fresh 与存量库同走 newColumns 补列通道；
+// 自动封禁迁移钉：配置列 + 预置名单行。
+// 配置列不在 fresh CREATE 里——fresh 与存量库同走 newColumns 补列通道；
 // 预置名单行由 runMigrations→SeedSystemIPLists 播种（schema 段不播种子，
 // 见 db.go schema 注释），Initialize/runMigrations 幂等补齐。
 
-// autobanColumnsExpected 全部六列的期望默认值（与 newColumns 登记逐字对齐）。
+// autobanColumnsExpected 本清单九列的期望默认值（与 newColumns 登记逐字对齐；
+// escalation 列由 db_autoban_escalation_migration_test 独立钉）。
 var autobanColumnsExpected = []struct{ column, dflt string }{
 	{"autoban_enabled", fmt.Sprint(DefaultAutobanEnabled)},
 	{"autoban_threshold", fmt.Sprint(DefaultAutobanThreshold)},
@@ -29,7 +30,7 @@ var autobanColumnsExpected = []struct{ column, dflt string }{
 const autobanPresetListName = "自动封禁名单"
 
 // TestInitialize_freshSchemaCarriesAutobanColumnsAndSeed：
-// 全新安装即携带六列（NOT NULL+默认值）与预置 security_ip_lists 行（system=1）。
+// 全新安装即携带本清单九列（NOT NULL+默认值）与预置 security_ip_lists 行（system=1）。
 func TestInitialize_freshSchemaCarriesAutobanColumnsAndSeed(t *testing.T) {
 	dir := t.TempDir()
 	preserveDatabaseHandles(t)
@@ -63,7 +64,7 @@ func TestInitialize_freshSchemaCarriesAutobanColumnsAndSeed(t *testing.T) {
 	}
 }
 
-// TestRunMigrations_addsAutobanColumnsAndSeedToLegacyDB：存量库（无六列/无预置
+// TestRunMigrations_addsAutobanColumnsAndSeedToLegacyDB：存量库（无本清单各列/无预置
 // 行）经迁移补齐，存量行读回默认值；重复迁移幂等（预置行不重复）。
 func TestRunMigrations_addsAutobanColumnsAndSeedToLegacyDB(t *testing.T) {
 	database := openMigrationTestDB(t)
@@ -109,7 +110,7 @@ func TestRunMigrations_addsAutobanColumnsAndSeedToLegacyDB(t *testing.T) {
 		}
 	}
 
-	// Then 六列补出且存量行读回默认值
+	// Then 本清单各列补出且存量行读回默认值
 	for _, tc := range autobanColumnsExpected {
 		var got sql.NullString
 		if err := database.QueryRow(`SELECT ` + tc.column + ` FROM global_config WHERE id=1`).Scan(&got); err != nil {

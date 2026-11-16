@@ -222,9 +222,9 @@ func insertAutoBackupRow(ctx context.Context, filename, status string, sizeBytes
 }
 
 // pruneAutoBackupStatus 裁剪单一状态：按 created_at/id 倒序保留 keep 个，
-// 多余者文件+行同删；文件删除失败保留行供下轮重试。只读取待删窗口
-// （LIMIT -1 OFFSET keep），不全量读行——历史备份行无界增长时全量读
-// 会把整表搬进内存。
+// 多余者文件+行同删；文件删除失败或文件名非法（路径穿越防御拒绝）保留行
+// 供下轮重试/人工介入。只读取待删窗口（LIMIT -1 OFFSET keep），不全量读行
+// ——历史备份行无界增长时全量读会把整表搬进内存。
 func pruneAutoBackupStatus(ctx context.Context, dir, status string, keep int) int {
 	rows, err := db.DB.QueryContext(ctx, `SELECT id, filename FROM auto_backups WHERE status=? ORDER BY created_at DESC, id DESC LIMIT -1 OFFSET ?`, status, keep)
 	if err != nil {
@@ -257,13 +257,18 @@ func pruneAutoBackupStatus(ctx context.Context, dir, status string, keep int) in
 		if err := ctx.Err(); err != nil {
 			return removed
 		}
-		if autoBackupSafeFilename(r.filename) {
-			if err := os.Remove(filepath.Join(dir, r.filename)); err != nil && !errors.Is(err, os.ErrNotExist) {
-				// 文件删除失败(非 ErrNotExist)保留行
-				// 下轮重试——行随 warn 一并删除会让残留文件成孤儿永不再裁剪。
-				services.Logf("warn", "自动备份裁剪：删除文件失败 %s: %v", r.filename, err)
-				continue
-			}
+		if !autoBackupSafeFilename(r.filename) {
+			// 非法文件名（带外改库的路径穿越形态）与「文件删除失败」同口径：
+			// 保留行+warn。静默删行会让行指向的文件成孤儿永不再裁剪，且
+			// 抹掉带外篡改的唯一可见证据。
+			services.Logf("warn", "自动备份裁剪：文件名非法，保留行待人工处理 id=%d filename=%q", r.id, r.filename)
+			continue
+		}
+		if err := os.Remove(filepath.Join(dir, r.filename)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			// 文件删除失败(非 ErrNotExist)保留行
+			// 下轮重试——行随 warn 一并删除会让残留文件成孤儿永不再裁剪。
+			services.Logf("warn", "自动备份裁剪：删除文件失败 %s: %v", r.filename, err)
+			continue
 		}
 		if _, err := db.DB.ExecContext(ctx, `DELETE FROM auto_backups WHERE id=?`, r.id); err != nil {
 			services.Logf("warn", "自动备份裁剪：删除行失败 id=%d: %v", r.id, err)

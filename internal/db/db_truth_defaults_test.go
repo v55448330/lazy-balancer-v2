@@ -121,7 +121,8 @@ func TestRunMigrationsColumnDefaults_MatchGovernedConstants(t *testing.T) {
 		{"threat_schedule_time", "'" + DefaultScheduleTime + "'", 1},
 		{"crawler_schedule_days", "'" + DefaultScheduleDays + "'", 1},
 		{"crawler_schedule_time", "'" + DefaultScheduleTime + "'", 1},
-		// 自动封禁六列（newColumns 补列）与读侧 COALESCE/启动回填同源。
+		// 自动封禁基础六列（newColumns 补列）与读侧 COALESCE/启动回填同源
+		//（证据分层三列与 escalation 由各自迁移钉测覆盖）。
 		{"autoban_enabled", fmt.Sprint(DefaultAutobanEnabled), 1},
 		{"autoban_threshold", fmt.Sprint(DefaultAutobanThreshold), 1},
 		{"autoban_window_minutes", fmt.Sprint(DefaultAutobanWindowMinutes), 1},

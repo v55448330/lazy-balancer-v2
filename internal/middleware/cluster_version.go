@@ -560,8 +560,9 @@ func clusterVersionTriggerStatements() []clusterVersionTrigger {
 	// threat_auto_update/threat_schedule_days/
 	// threat_schedule_time 三列入 OF(同先例)——主端保存威胁库排程/
 	// 总开关即下发,从端升主后按主端排程运行。
-	// autoban_enabled/threshold/window_minutes/duration/scope/
-	// dry_run 六列入 OF(同先例)——主端 PUT /security/autoban 保存即下发;
+	// autoban 基础六列(enabled/threshold/window_minutes/duration/scope/dry_run)
+	// 及 escalation/证据分层三列(counting_mode/suspicion_multiplier/confirm_floor_ratio)
+	// 共十列入 OF(同先例,单源 globalConfigSyncedColumns)——主端 PUT /security/autoban 保存即下发;
 	// 不在 OF 内则稳态变更经 304 门滞留主节点,从端恒默认值、升主后按陈旧配置
 	// 静默运行(名单传播而配置不传播)。
 	triggers = append(triggers, clusterVersionTrigger{

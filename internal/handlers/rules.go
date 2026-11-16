@@ -2607,11 +2607,19 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 				req.HealthCheckHost = &empty
 			}
 		case "http":
-			// TCP 三字段已指针化，切回 http 时以显式零指针清理。
+			// TCP 专属字段已指针化，切回 http 时以显式零指针清理。
 			req.TCPHealthCheckPort = &zero
 			req.TCPProxyProtocol = &disabled
-			req.TCPTryDuration = &zero
-			req.TCPTryInterval = &zero
+			// 重试窗口是 http/tcp 共用字段（方案 C）：显式提交的值必须
+			// 原样保留（与 HTTP→TCP 方向「非负值尊重指针合并契约」对称，
+			// 越界显式值交 validateTCPTryWindowBounds 400）；只有未提交的
+			// 存量 TCP 残留才随切换清零，不得把用户显式给出的窗口静默归零。
+			if !tcpTryDurationProvided {
+				req.TCPTryDuration = &zero
+			}
+			if !tcpTryIntervalProvided {
+				req.TCPTryInterval = &zero
+			}
 			// 回切 http 恢复 dns_family 默认——切 TCP 时 DnsFamily 已由
 			// tcpDeadFieldReset 归一 ipv4（见 rules.go tcpDeadFieldReset），本填充
 			// 仅覆盖存量 '' 行（v1 导入/带外遗留），避免脏空值落库

@@ -163,14 +163,14 @@ func TestImportConfigBackup_stalledWarningCountsAllNonTerminalJobs(t *testing.T)
 	if !strings.Contains(strings.Join(decodeImportWarnings(t, response), "\n"), "恢复该任务后才会继续推进") {
 		t.Fatalf("warnings 缺少可操作指引（恢复签发任务后才会推进）")
 	}
-	// waiting_ca 行已在 finish 阶段保窗归一为 failed（message 保留，窗口不在
-	// 本断言面——由 NormalizeWaitingCACertJobs 单元钉）。
+	// waiting_ca 行已在 finish 阶段保窗归一为 failed；本行窗口（2026-01-01）
+	// 已过期，finish 与启动迁移同口径追加终态注记（AnnotateExpiredCooldownMessages）。
 	var status, message string
 	if err := db.DB.QueryRow(`SELECT status, COALESCE(message,'') FROM cert_jobs WHERE rule_id='lb_stalledc'`).Scan(&status, &message); err != nil {
 		t.Fatalf("read imported waiting_ca job: %v", err)
 	}
-	if status != "failed" || message != "等待 CA 冷却" {
-		t.Fatalf("waiting_ca 行=(%s,%q), want failed 且 message 保留（导入期保窗归一）", status, message)
+	if status != "failed" || message != "等待 CA 冷却（冷却已过期，可直接重试）" {
+		t.Fatalf("waiting_ca 行=(%s,%q), want failed 且 message 保留+过期终态注记（导入期保窗归一）", status, message)
 	}
 	// 归一动作必须留操作审计（响应 warnings 不携带归一信息，审计是唯一追溯面）。
 	var normalizedAudit int

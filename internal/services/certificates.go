@@ -1538,10 +1538,13 @@ type waitingCACandidate struct {
 // 逐任务处置与入队留给调用方在锁外执行。
 //
 // 候选谓词（B2 失败语义统一）：status='failed' 且退避窗口（ca_available_after）
-// 已到期。窗口 NULL 的 failed 行不收：已达 cert_renewal_attempts 上限的行停止
-// 自动重试（仅手动），NULL 只可能来自上限终态/导入/旧备份——上限行有续期巡检
-// 的上限分支告警；导入行经导入期归一为 failed（db.NormalizeWaitingCACertJobs），
-// 带窗口的行走本补扫自动通道，启动迁移兜底旧库存量。
+// 已到期且 renewal_attempts 未达 cert_renewal_attempts 上限（与续期扫描
+// checkFailedFirstIssuance 同口径——配置下调后存量 attempts 超上限且窗口非空
+// 的行不得被本补扫每 30s 重排白烧 CA 尝试，上限行仅手动重试可达）。窗口 NULL
+// 的 failed 行不收：已达上限的行停止自动重试（仅手动），NULL 只可能来自上限
+// 终态/导入/旧备份——上限行有续期巡检的上限分支告警；导入行经导入期归一为
+// failed（db.NormalizeWaitingCACertJobs），带窗口的行走本补扫自动通道，启动
+// 迁移兜底旧库存量。
 func (s *CertificateService) scanWaitingCACandidates() ([]waitingCACandidate, []error, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1555,7 +1558,8 @@ func (s *CertificateService) scanWaitingCACandidates() ([]waitingCACandidate, []
 		WHERE j.status = 'failed'
 		  AND j.ca_available_after IS NOT NULL
 		  AND datetime(j.ca_available_after) <= datetime('now')
-	`)
+		  AND COALESCE(j.renewal_attempts,0) < ?
+	`, getCertRenewalAttempts())
 	if err != nil {
 		Logf("error", "waiting_ca scan: query failed: %v", err)
 		return nil, nil, fmt.Errorf("扫描 CA 冷却任务: %w", err)
