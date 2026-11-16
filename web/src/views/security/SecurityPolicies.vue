@@ -845,6 +845,11 @@
               </div>
             </el-form-item>
 
+            <!-- 阶段 2 状态码/响应方式由处置动作语义决定（ challenge/queue=200、
+                 reject=429；响应自动匹配浏览器 HTML/API JSON），不提供选择器——
+                 只读说明解释为何无状态码/响应项（用户裁定补文案）。 -->
+            <div v-if="editorPolicyType === 'stage2'" class="form-tip-line">{{ t('app.security.policies.human.ccStatusResponseNote') }}</div>
+
 
             <el-form-item v-if="editorPolicyType !== 'stage2'" :label="t('app.security.policies.bp.statusLabel')">
               <el-select v-model="form.block_status_code" style="width: 200px" :disabled="form.block_page_id === 0">

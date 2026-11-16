@@ -1027,6 +1027,7 @@ export default {
       "ccQueueWaitTip": "seconds. 0 = auto (matches the counting window, currently {sec}s); if a retry is still over the limit the wait doubles automatically (max 300s)",
       "queuePageTip": "The wait page must contain the queue widget placeholder; the built-in wait page already includes it. For a custom page, insert the widget in the block page editor.",
       "rejectPageTip": "The reject action uses a plain block page (no verification/queue widget needed); the built-in rate-limit block page (429) is used when none is configured.",
+      "ccStatusResponseNote": "Status code and response format follow the action: verification/queue return 200, reject returns 429; the response auto-matches the client (HTML for browsers, JSON for APIs) — no separate configuration needed.",
       "projection": "Stage 2 · CC protection: spikes / 4xx ratio / multi-UA trigger a human challenge (an independent result, not counted as blocked/detected); failed challenges feed auto-ban observation (observation mode by default) rather than banning directly; challenged requests cost no WAF evaluation",
       "whenLabel": "Protection mode",
       "whenNone": "Off",
