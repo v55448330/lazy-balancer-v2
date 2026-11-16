@@ -688,7 +688,7 @@
                 <el-radio-button value="always">{{ t('app.security.policies.human.whenAlways') }}</el-radio-button>
                 <el-radio-button value="anomaly">{{ t('app.security.policies.human.whenAnomaly') }}</el-radio-button>
               </el-radio-group>
-              <div class="form-tip-line">{{ t('app.security.policies.human.whenTip') }}</div>
+              <div class="info-note-bar form-item-note-bar"><span class="info-note-desc">{{ t('app.security.policies.human.whenTip') }}</span></div>
             </el-form-item>
             <template v-if="ccIntervention !== 'none'">
               <!-- 异常阈值：仅「仅异常流量」展开（always=force 恒挑战，阈值不参与）。 -->
@@ -720,9 +720,9 @@
                   <el-radio-button value="queue">{{ t('app.security.policies.human.actionQueue') }}</el-radio-button>
                   <el-radio-button value="reject">{{ t('app.security.policies.human.actionReject') }}</el-radio-button>
                 </el-radio-group>
-                <div class="form-tip-line">{{ t('app.security.policies.human.actionTip') }}</div>
+                <div class="info-note-bar form-item-note-bar"><span class="info-note-desc">{{ t('app.security.policies.human.actionTip') }}</span></div>
               </el-form-item>
-              <div v-else class="form-tip-line">{{ t('app.security.policies.human.alwaysChallengeTip') }}</div>
+              <div v-else class="info-note-bar"><span class="info-note-desc">{{ t('app.security.policies.human.alwaysChallengeTip') }}</span></div>
               <!-- challenge 子参数：验证方式 + 通过有效期（仅有效动作=challenge 时显示）。 -->
               <template v-if="ccEffectiveActionValue === 'challenge'">
                 <el-form-item :label="t('app.security.policies.human.typeLabel')">
@@ -730,7 +730,7 @@
                     <el-radio-button value="slider">{{ t('app.security.policies.human.typeSlider') }}</el-radio-button>
                     <el-radio-button value="js">{{ t('app.security.policies.human.typeJs') }}</el-radio-button>
                   </el-radio-group>
-                  <div class="form-tip-line">{{ t('app.security.policies.human.typeTip') }}</div>
+                  <div class="info-note-bar form-item-note-bar"><span class="info-note-desc">{{ t('app.security.policies.human.typeTip') }}</span></div>
                 </el-form-item>
                 <el-form-item :label="t('app.security.policies.human.ttlLabel')">
                   <el-input-number v-model="form.human_verify_ttl" :min="1" :max="1440" controls-position="right" style="width: 120px" />
@@ -744,11 +744,11 @@
               </el-form-item>
               <el-form-item :label="t('app.security.policies.human.exemptPathsLabel')">
                 <el-select v-model="form.human_exempt_paths" multiple filterable allow-create default-first-option :placeholder="t('app.security.policies.human.exemptPathsTip')" style="width: 100%" />
-                <div class="form-tip-line">{{ t('app.security.policies.human.exemptIpGuide') }}</div>
+                <div class="info-note-bar form-item-note-bar"><span class="info-note-desc">{{ t('app.security.policies.human.exemptIpGuide') }}</span></div>
               </el-form-item>
               <!-- 跨步指引：页面在拦截页步配置；反复命中走自动封禁（全局管线）。 -->
-              <div class="form-tip-line">{{ t('app.security.policies.human.pageInNextStep') }}</div>
-              <div class="form-tip-line">{{ t('app.security.policies.human.autobanLinkTip') }}<AccessibleLink type="primary" @click="goToAutobanConfig">{{ t('app.security.policies.human.autobanLinkLabel') }}</AccessibleLink></div>
+              <div class="info-note-bar"><span class="info-note-desc">{{ t('app.security.policies.human.pageInNextStep') }}</span></div>
+              <div class="info-note-bar"><span class="info-note-desc">{{ t('app.security.policies.human.autobanLinkTip') }}<AccessibleLink type="primary" @click="goToAutobanConfig">{{ t('app.security.policies.human.autobanLinkLabel') }}</AccessibleLink></span></div>
             </template>
           </el-form>
         </div>
@@ -819,17 +819,17 @@
               <!-- 页步骤三态（按有效处置动作，force 恒 challenge）：challenge=挑战页
                    组件占位符；queue=等待页组件占位符；reject=纯拦截页（无占位符要求）。
                    stage2 下拉已按动作过滤兼容页；mixed 不过滤（兼 WAF 页），靠提示+校验。 -->
-              <div v-if="editorPolicyType === 'stage2' && ccEffectiveActionValue !== 'reject'" class="form-tip-line">
+              <div v-if="editorPolicyType === 'stage2' && ccEffectiveActionValue !== 'reject'" class="info-note-bar form-item-note-bar"><span class="info-note-desc">
                 {{ t(ccEffectiveActionValue === 'queue' ? 'app.security.policies.human.queuePageTip' : 'app.security.policies.human.challengePageTip') }} <code class="placeholder-code" v-text="challengePagePlaceholder" />
-              </div>
-              <div v-if="editorPolicyType === 'stage2' && ccEffectiveActionValue === 'reject'" class="form-tip-line">
+              </span></div>
+              <div v-if="editorPolicyType === 'stage2' && ccEffectiveActionValue === 'reject'" class="info-note-bar form-item-note-bar"><span class="info-note-desc">
                 {{ t('app.security.policies.human.rejectPageTip') }}
-              </div>
+              </span></div>
               <div v-if="challengePageMissingWidget" class="form-tip-line is-error">
                 {{ t('app.security.policies.human.challengePageNeedsWidget') }}
               </div>
-              <div v-else-if="form.block_page_id === 0" class="form-tip-line">{{ t(editorPolicyType === 'stage2' ? (ccEffectiveActionValue === 'queue' ? 'app.security.policies.bp.stage2NoPageQueueTip' : ccEffectiveActionValue === 'reject' ? 'app.security.policies.bp.stage2NoPageRejectTip' : 'app.security.policies.bp.stage2NoPageTip') : 'app.security.policies.bp.noPageTipDefault') }}</div>
-              <div v-else class="form-tip-line">{{ t('app.security.policies.bp.manageTip') }}<AccessibleLink type="primary" @click="goToBlockPagesPage">{{ t('app.security.policies.common.goCreateEdit') }}</AccessibleLink></div>
+              <div v-else-if="form.block_page_id === 0" class="info-note-bar form-item-note-bar"><span class="info-note-desc">{{ t(editorPolicyType === 'stage2' ? (ccEffectiveActionValue === 'queue' ? 'app.security.policies.bp.stage2NoPageQueueTip' : ccEffectiveActionValue === 'reject' ? 'app.security.policies.bp.stage2NoPageRejectTip' : 'app.security.policies.bp.stage2NoPageTip') : 'app.security.policies.bp.noPageTipDefault') }}</span></div>
+              <div v-else class="info-note-bar form-item-note-bar"><span class="info-note-desc">{{ t('app.security.policies.bp.manageTip') }}<AccessibleLink type="primary" @click="goToBlockPagesPage">{{ t('app.security.policies.common.goCreateEdit') }}</AccessibleLink></span></div>
               <!-- 归属汇总卡（用户验收裁定）：逐条重复提示收敛为单源汇总——主行 +
                    例外分面（TCP/兜底差异，仅存在才渲染）+ 能力门行；
                    数据源复用绑定列表与 capableAttributions 单源，不平行实现。 -->
@@ -848,7 +848,7 @@
             <!-- 阶段 2 状态码/响应方式由处置动作语义决定（ challenge/queue=200、
                  reject=429；响应自动匹配浏览器 HTML/API JSON），不提供选择器——
                  只读说明解释为何无状态码/响应项（用户裁定补文案）。 -->
-            <div v-if="editorPolicyType === 'stage2'" class="form-tip-line">{{ t('app.security.policies.human.ccStatusResponseNote') }}</div>
+            <div v-if="editorPolicyType === 'stage2'" class="info-note-bar"><span class="info-note-desc">{{ t('app.security.policies.human.ccStatusResponseNote') }}</span></div>
 
 
             <el-form-item v-if="editorPolicyType !== 'stage2'" :label="t('app.security.policies.bp.statusLabel')">
