@@ -61,7 +61,6 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     if xcaddy build v2.11.9 \
       --with github.com/mholt/caddy-l4@v0.1.2 \
       --with github.com/caddyserver/transform-encoder@ba4124974830222da7f12a091cf11ddf4d49363f \
-      --with github.com/mholt/caddy-ratelimit@v0.1.0 \
       --with github.com/caddyserver/ntlm-transport@v0.1.2 \
       --replace github.com/go-chi/chi/v5=github.com/go-chi/chi/v5@v5.4.0 \
       --with github.com/corazawaf/coraza-caddy/v2@v2.6.2 \
