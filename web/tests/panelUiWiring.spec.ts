@@ -245,11 +245,14 @@ test('自动封禁口径文案与后端喂入门同口径（四维多选，WAF �
   // 文案必须与真实喂入一致：既不得自缩为「WAF 事件」，也不得宣称 ACL/地域/
   // 威胁情报计数（用户按文案校准阈值必须可达）。
   assert.doesNotMatch(events, /WAF 事件固定窗口计数/)
-  // i18n 后双钉:调用点钉键,zh 母本钉口径原文(喂入口径漂移仍必红)
+  // i18n 后双钉:调用点钉键,zh 母本钉口径语义（通俗化文案批后口径句在 scopeHint，
+  // subtitle 精简为人话——喂入口径漂移仍必红，判据换为语义关键词而非整句原文）。
   assert.match(events, /:subtitle="t\('app\.security\.events\.dialogSubtitle'\)"/)
-  assert.ok(code('src/locales/zh/security.ts').includes('WAF 命中按拦截/检测计数（已验证爬虫豁免除外）'), 'WAF 计数口径句必须在 zh 母本词条中')
-  assert.ok(code('src/locales/zh/security.ts').includes('人机挑战按发放/失败计数（挑战通过不计）'), '挑战计数口径句必须在 zh 母本词条中')
-  assert.ok(code('src/locales/zh/security.ts').includes('IP 访问控制、地域拦截与威胁情报事件不参与计数'), '排除口径句必须在 zh 母本词条中')
+  const zhSec = code('src/locales/zh/security.ts')
+  assert.ok(zhSec.includes('拦截来自 WAF 防护命中与限流拒绝（429）'), 'WAF+限流拒绝计数口径句必须在 zh 母本词条中')
+  assert.ok(zhSec.includes('检测来自 WAF 记录（已验证的搜索引擎爬虫除外）'), '检测口径句必须在 zh 母本词条中')
+  assert.ok(zhSec.includes('挑战发放/挑战失败来自人机验证（验证通过不计）'), '挑战计数口径句必须在 zh 母本词条中')
+  assert.ok(zhSec.includes('IP 访问控制、地域拦截与威胁情报事件不参与统计'), '排除口径句必须在 zh 母本词条中')
   // 四维多选 checkbox（单选 radio 已退役）+ 空集校验。
   assert.match(events, /<el-checkbox-group v-model="autobanForm\.scope">/, '口径必须为多选 checkbox 组')
   assert.match(events, /autobanForm\.value\.scope\.length === 0/, '空集必须拦截保存')

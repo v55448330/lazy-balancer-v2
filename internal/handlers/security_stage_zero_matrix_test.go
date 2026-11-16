@@ -36,6 +36,8 @@ var stageZeroMatrixFields = []string{
 	"cc_4xx_ratio",
 	"cc_session_anomaly",
 	"cc_session_ua_threshold",
+	"cc_trigger_action",
+	"cc_queue_wait_sec",
 	"ip_acl_enabled",
 	"ip_acl_list",
 	"ip_acl_list_refs",

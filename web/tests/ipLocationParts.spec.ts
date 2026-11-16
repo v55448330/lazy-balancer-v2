@@ -77,13 +77,13 @@ test('消费接线：IP 处置单元走紧凑单源，累犯弹框经处置单�
   const action = code('src/views/security/IPLocationAction.vue')
   assert.match(action, /import \{ compactIpLocation \} from '@\/utils\/ipLocationParts'/, 'IP 处置单元必须复用单源导入')
   assert.match(action, /compactIpLocation\(props\.location/, '紧凑文案必须经本函数')
-  const dialog = code('src/components/security/RecidivismDialog.vue')
-  // 累犯弹框 IP 列改用 IPLocationAction 快捷弹框（用户裁定）：归属地紧凑文案
-  // 由处置单元内部经 compactIpLocation 呈现，弹框不得自带第二份紧凑实现。
-  assert.match(dialog, /import IPLocationAction from '@\/views\/security\/IPLocationAction\.vue'/, '累犯弹框必须复用 IP 快捷弹框组件')
-  assert.doesNotMatch(dialog, /compactIpLocation/, '弹框不得自带紧凑归属地实现（经处置单元单源消费）')
+  const dialog = code('src/components/security/RecidivismTable.vue')
+  // 累犯表格 IP 列用 IPLocationAction 快捷弹框（用户裁定）：归属地紧凑文案
+  // 由处置单元内部经 compactIpLocation 呈现，表格不得自带第二份紧凑实现。
+  assert.match(dialog, /import IPLocationAction from '@\/views\/security\/IPLocationAction\.vue'/, '累犯表格必须复用 IP 快捷弹框组件')
+  assert.doesNotMatch(dialog, /compactIpLocation/, '表格不得自带紧凑归属地实现（经处置单元单源消费）')
   // 两处不得自带第二份「保留地址/中国」判定或 split('·') 紧凑实现
-  for (const [file, text] of [['IPLocationAction', action], ['RecidivismDialog', dialog]] as const) {
+  for (const [file, text] of [['IPLocationAction', action], ['RecidivismTable', dialog]] as const) {
     assert.doesNotMatch(text, /=== '保留地址'/, `${file} 不得自带保留地址判定`)
     assert.doesNotMatch(text, /split\(['"]·['"]\)/, `${file} 不得自带第二份分隔符拆分`)
   }

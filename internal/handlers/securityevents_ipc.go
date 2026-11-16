@@ -204,6 +204,12 @@ func (s *SecurityEventsIPCServer) handleIngestHuman(w http.ResponseWriter, r *ht
 		if row.Kind == "fail" {
 			rule = "human_failed"
 		}
+		// CC reject（429 限流拒绝）=拦截事件：action=blocked、rule=cc_rate_reject
+		//（与自动封禁 blocked 口径映射同源）；event_type 仍 human（人机通道）。
+		if row.Kind == "rate_reject" {
+			action = "blocked"
+			rule = "cc_rate_reject"
+		}
 		attr := attributions[row.RuleID]
 		ruleName := attr.ruleName
 		if ruleName == "" {
@@ -217,6 +223,9 @@ func (s *SecurityEventsIPCServer) handleIngestHuman(w http.ResponseWriter, r *ht
 		ts := time.UnixMilli(row.Ts).UTC().Format("2006-01-02 15:04:05")
 		// rule_msg 携带 CC 触发原因（事件详情可读）；非 CC 触发保持原形态。
 		ruleMsg := "人机验证 " + row.Kind
+		if row.Kind == "rate_reject" {
+			ruleMsg = "限流拒绝（429）"
+		}
 		if label := services.AutobanCCTriggerReasonLabel(row.Reason); label != "" {
 			ruleMsg += "（" + label + "）"
 		}
@@ -236,7 +245,7 @@ func (s *SecurityEventsIPCServer) handleIngestHuman(w http.ResponseWriter, r *ht
 	// 与 WAF 事件共用；主节点/启用/口径门在 services 内收敛。挑战通过永不计。
 	feed := make([]services.HumanObserveItem, 0, len(rows))
 	for _, row := range rows {
-		if row.Kind == "challenge" || row.Kind == "fail" {
+		if row.Kind == "challenge" || row.Kind == "fail" || row.Kind == "rate_reject" {
 			feed = append(feed, services.HumanObserveItem{IP: row.ClientIP, Kind: row.Kind, Reason: row.Reason, At: time.UnixMilli(row.Ts).UTC()})
 		}
 	}

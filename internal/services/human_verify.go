@@ -26,6 +26,9 @@ type CCConfig struct {
 	Ratio4xx        int  `json:"ratio_4xx"`
 	SessionAnomaly  bool `json:"session_anomaly"`
 	SessionUAThresh int  `json:"session_ua_threshold"`
+	// 触发动作三态（challenge 默认/queue 等待页/reject 429）+ 排队等待秒数。
+	TriggerAction string `json:"trigger_action"`
+	QueueWaitSec  int    `json:"queue_wait_sec"`
 }
 
 // loadCCConfig CC 检测配置=策略合并（2026-11-12 用户裁定：阈值在策略配置，
@@ -43,6 +46,8 @@ func loadCCConfig(policies []*models.SecurityPolicy) CCConfig {
 		cfg.Ratio4xx = p.CC4xxRatio
 		cfg.SessionAnomaly = p.CCSessionAnomaly
 		cfg.SessionUAThresh = p.CCSessionUAThreshold
+		cfg.TriggerAction = p.CCTriggerAction
+		cfg.QueueWaitSec = p.CCQueueWaitSec
 		return cfg
 	}
 	return cfg
@@ -168,6 +173,8 @@ func humanPolicyMerged(policies []*models.SecurityPolicy) (mode, typ string, ttl
 const (
 	builtinHumanVerifyPageID   = 9005 // 滑块人机验证页面
 	builtinHumanJSVerifyPageID = 9006 // JS 人机验证页面
+	builtinQueueWaitPageID     = 9007 // 限流排队等待页（CC 动作 queue 默认）
+	builtinRateLimitPageID     = 9001 // 限流拦截页面（CC 动作 reject 默认）
 )
 
 // humanChallengeEnabled 判断策略链是否启用人机挑战（force/auto 任一，CC 检测
@@ -177,16 +184,25 @@ func humanChallengeEnabled(policies []*models.SecurityPolicy) bool {
 	return mode != "off"
 }
 
-// humanChallengeFallbackPage 返回人机挑战的默认内置页内容（按验证方式选页）；
-// 非挑战或页面缺失时返回空（调用方回退 lbhuman 内置生成页）。
+// humanChallengeFallbackPage 返回人机挑战的默认内置页内容（按 CC 触发动作
+// 与验证方式选页）：queue→9007 等待页、reject→9001 拒绝页、challenge→按验证
+// 方式 9005/9006；非挑战或页面缺失时返回空（调用方回退 lbhuman 内置生成页）。
 func humanChallengeFallbackPage(ctx *securityPolicyContext, policies []*models.SecurityPolicy) (string, string) {
 	if ctx == nil || !humanChallengeEnabled(policies) {
 		return "", ""
 	}
-	_, typ, _, _ := humanPolicyMerged(policies)
-	pageID := builtinHumanVerifyPageID
-	if typ == "js" {
-		pageID = builtinHumanJSVerifyPageID
+	pageID := 0
+	switch cc := loadCCConfig(policies); cc.TriggerAction {
+	case "queue":
+		pageID = builtinQueueWaitPageID
+	case "reject":
+		pageID = builtinRateLimitPageID
+	default:
+		_, typ, _, _ := humanPolicyMerged(policies)
+		pageID = builtinHumanVerifyPageID
+		if typ == "js" {
+			pageID = builtinHumanJSVerifyPageID
+		}
 	}
 	return ctx.blockPageByID[pageID], ctx.blockPageTypeByID[pageID]
 }
@@ -223,6 +239,8 @@ func buildHumanHandler(ruleCaddyID string, policies []*models.SecurityPolicy, ch
 		"cc_4xx_ratio":        cc.Ratio4xx,
 		"cc_session":          cc.SessionAnomaly,
 		"cc_session_ua":       cc.SessionUAThresh,
+		"cc_trigger_action":   cc.TriggerAction,
+		"cc_queue_wait_sec":   cc.QueueWaitSec,
 		"challenge_page_html": challengeHTML,
 		"exempt_paths":        exemptPaths,
 		"rule_id":             ruleCaddyID,

@@ -86,7 +86,8 @@ test('阶段 2 未配挑战页（0）：保存校验放行（内置挑战页一�
 test('阶段 2 未配挑战页（0）：下拉选项与提示走挑战语境（内置挑战页，不宣称 403/绑定链兜底）', () => {
   // 下拉 0 选项与提示线按 stage 分流（stage2 → 挑战语境键）
   assert.match(policies, /:label="t\(editorPolicyType === 'stage2' \? 'app\.security\.policies\.bp\.stage2NoPageDefault' : 'app\.security\.policies\.bp\.noPageDefault'\)"/, '0 选项 label 按 stage 分流')
-  assert.match(policies, /t\(editorPolicyType === 'stage2' \? 'app\.security\.policies\.bp\.stage2NoPageTip' : 'app\.security\.policies\.bp\.noPageTipDefault'\)/, '未配页提示按 stage 分流')
+  // 三态（CC 触发动作）：stage2 按动作分流挑战/排队/拒绝语境键
+  assert.match(policies, /form\.cc_trigger_action === 'queue' \? 'app\.security\.policies\.bp\.stage2NoPageQueueTip' : form\.cc_trigger_action === 'reject' \? 'app\.security\.policies\.bp\.stage2NoPageRejectTip' : 'app\.security\.policies\.bp\.stage2NoPageTip'/, '未配页提示必须按 CC 动作三态分流')
   // 只读查看投影同样分流
   assert.match(policies, /d\.human_verify_mode[\s\S]{0,80}stage2NoPageDefault/, '只读查看投影 0 页按 stage2 分流')
   // zh 文案：内置挑战页语义，无 403/绑定链兜底

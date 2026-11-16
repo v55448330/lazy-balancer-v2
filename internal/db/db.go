@@ -1240,11 +1240,15 @@ var newColumnsRegistry = map[string]string{
 	"security_policies.cc_4xx_ratio":            "INTEGER NOT NULL DEFAULT 70",
 	"security_policies.cc_session_anomaly":      "INTEGER NOT NULL DEFAULT 0",
 	"security_policies.cc_session_ua_threshold": "INTEGER NOT NULL DEFAULT 5",
-	"global_config.cc_detect_enabled":           "INTEGER NOT NULL DEFAULT 0",
-	"global_config.cc_rps_limit":                "INTEGER NOT NULL DEFAULT 40",
-	"global_config.cc_rps_window":               "INTEGER NOT NULL DEFAULT 10",
-	"global_config.cc_4xx_ratio":                "INTEGER NOT NULL DEFAULT 70",
-	"global_config.cc_session_anomaly":          "INTEGER NOT NULL DEFAULT 0",
+	// CC 触发动作三态（challenge=人机验证默认/queue=排队等待页/reject=429 拒绝页）
+	// + 排队等待秒数（0=自动取 CC 窗口；域 [0,300] 写侧钳位）。
+	"security_policies.cc_trigger_action": "TEXT NOT NULL DEFAULT 'challenge'",
+	"security_policies.cc_queue_wait_sec": "INTEGER NOT NULL DEFAULT 0",
+	"global_config.cc_detect_enabled":     "INTEGER NOT NULL DEFAULT 0",
+	"global_config.cc_rps_limit":          "INTEGER NOT NULL DEFAULT 40",
+	"global_config.cc_rps_window":         "INTEGER NOT NULL DEFAULT 10",
+	"global_config.cc_4xx_ratio":          "INTEGER NOT NULL DEFAULT 70",
+	"global_config.cc_session_anomaly":    "INTEGER NOT NULL DEFAULT 0",
 
 	"global_config.human_secret":                      "TEXT NOT NULL DEFAULT ''",
 	"security_crs_version.update_status":              "TEXT DEFAULT 'idle'",
@@ -4525,6 +4529,20 @@ func migrateSecurityPoliciesNullable() error {
 		if err := dropRebuildResidue(tx, "security_policies", "security_policies_new"); err != nil {
 			return err
 		}
+		// CC 动作两列经补列通道到达；直接调本迁移的 legacy 库（测试/带外）
+		// 可能尚未补列——SELECT 侧按列存在性取列值或字面量默认，避免 no such column。
+		hasCol := func(col string) bool {
+			var n int
+			_ = tx.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('security_policies') WHERE name=?`, col).Scan(&n)
+			return n > 0
+		}
+		ccActionSel, ccWaitSel := "'challenge'", "0"
+		if hasCol("cc_trigger_action") {
+			ccActionSel = "COALESCE(cc_trigger_action,'challenge')"
+		}
+		if hasCol("cc_queue_wait_sec") {
+			ccWaitSel = "COALESCE(cc_queue_wait_sec,0)"
+		}
 		// rebuild 必须与「fresh CREATE + newColumns 稳态」同形状并搬运其数据
 		//（含人机/CC 十列——它们只经补列通道到达，fresh DDL 不携带）——
 		// 陈旧 DDL 会把同一 runMigrations 早前 newColumns 刚加的列丢掉
@@ -4570,23 +4588,25 @@ func migrateSecurityPoliciesNullable() error {
 			cc_rps_window INTEGER NOT NULL DEFAULT 10,
 			cc_4xx_ratio INTEGER NOT NULL DEFAULT 70,
 			cc_session_anomaly INTEGER NOT NULL DEFAULT 0,
-			cc_session_ua_threshold INTEGER NOT NULL DEFAULT 5
+			cc_session_ua_threshold INTEGER NOT NULL DEFAULT 5,
+			cc_trigger_action TEXT NOT NULL DEFAULT 'challenge',
+			cc_queue_wait_sec INTEGER NOT NULL DEFAULT 0
 		);
 		INSERT INTO security_policies_new (id,name,description,mode,anomaly_threshold,ip_acl_mode,ip_acl_list,ip_acl_enabled,
 			ip_whitelist,ip_blacklist,crs_rule_groups,crs_excluded_rules,
 			custom_rules,block_page_id,block_status_code,block_response_mode,enabled,updated_by,created_at,updated_at,ip_whitelist_enabled,geoip_countries,geoip_mode,waf_check_response,
 			log_request_body,ip_acl_list_refs,ip_whitelist_refs,policy_type,trust_detection,geoip_crawler_exempt,geoip_crawler_engines,
 			human_verify_mode,human_verify_type,human_verify_ttl,human_exempt_paths,
-			cc_detect_enabled,cc_rps_limit,cc_rps_window,cc_4xx_ratio,cc_session_anomaly,cc_session_ua_threshold)
+			cc_detect_enabled,cc_rps_limit,cc_rps_window,cc_4xx_ratio,cc_session_anomaly,cc_session_ua_threshold,cc_trigger_action,cc_queue_wait_sec)
 		SELECT id,name,description,mode,anomaly_threshold,ip_acl_mode,ip_acl_list,ip_acl_enabled,
 			ip_whitelist,ip_blacklist,crs_rule_groups,crs_excluded_rules,
 			custom_rules,block_page_id,block_status_code,COALESCE(block_response_mode,'auto'),enabled,updated_by,created_at,updated_at,COALESCE(ip_whitelist_enabled,1),geoip_countries,geoip_mode,waf_check_response,
 			COALESCE(log_request_body,0),COALESCE(ip_acl_list_refs,'[]'),COALESCE(ip_whitelist_refs,'[]'),policy_type,COALESCE(trust_detection,0),COALESCE(geoip_crawler_exempt,0),COALESCE(geoip_crawler_engines,'[]'),
 			COALESCE(human_verify_mode,'off'),COALESCE(human_verify_type,'slider'),COALESCE(human_verify_ttl,30),COALESCE(human_exempt_paths,'[]'),
-			COALESCE(cc_detect_enabled,0),COALESCE(cc_rps_limit,40),COALESCE(cc_rps_window,10),COALESCE(cc_4xx_ratio,70),COALESCE(cc_session_anomaly,0),COALESCE(cc_session_ua_threshold,5)
+			COALESCE(cc_detect_enabled,0),COALESCE(cc_rps_limit,40),COALESCE(cc_rps_window,10),COALESCE(cc_4xx_ratio,70),COALESCE(cc_session_anomaly,0),COALESCE(cc_session_ua_threshold,5),%s,%s
 		FROM security_policies;
 		DROP TABLE security_policies;
-		ALTER TABLE security_policies_new RENAME TO security_policies;`, DefaultAnomalyThreshold)); err != nil {
+		ALTER TABLE security_policies_new RENAME TO security_policies;`, DefaultAnomalyThreshold, ccActionSel, ccWaitSel)); err != nil {
 			return fmt.Errorf("rebuild security_policies table: %w", err)
 		}
 		return nil

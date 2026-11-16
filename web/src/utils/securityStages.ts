@@ -69,6 +69,8 @@ export interface SecurityStagePolicy {
   cc_4xx_ratio?: number
   cc_session_anomaly?: boolean
   cc_session_ua_threshold?: number
+  cc_trigger_action?: string
+  cc_queue_wait_sec?: number
 }
 
 // 规则-策略绑定（GET /security/bindings 值数组元素）

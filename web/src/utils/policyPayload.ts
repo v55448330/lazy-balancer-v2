@@ -64,6 +64,8 @@ export interface PolicyPayloadInput {
   cc4xxRatio: number
   ccSessionAnomaly: boolean
   ccSessionUaThreshold: number
+  ccTriggerAction?: string
+  ccQueueWaitSec?: number
 }
 
 interface PolicyPayload {
@@ -105,6 +107,8 @@ interface PolicyPayload {
   cc_4xx_ratio?: number
   cc_session_anomaly?: boolean
   cc_session_ua_threshold?: number
+  cc_trigger_action?: string
+  cc_queue_wait_sec?: number
 }
 
 /**
@@ -134,6 +138,8 @@ export const buildPolicyPayload = (input: PolicyPayloadInput): PolicyPayload => 
     cc_4xx_ratio: input.cc4xxRatio,
     cc_session_anomaly: input.ccSessionAnomaly,
     cc_session_ua_threshold: input.ccSessionUaThreshold,
+    cc_trigger_action: input.ccTriggerAction,
+    cc_queue_wait_sec: input.ccQueueWaitSec,
   } : {}
   return {
     name: input.name,
@@ -220,10 +226,16 @@ export const challengePageMissingWidget = (state: {
   blockPageId: number
   blockPages: ReadonlyArray<{ id: number; content?: string }>
   humanVerifyType: string
+  ccTriggerAction?: string
 }): boolean => {
   if (state.policyType !== 'stage2') return false
   if (state.blockPageId <= 0) return false
-  const placeholder = state.humanVerifyType === 'js' ? '{{human_js_widget}}' : '{{human_verify_widget}}'
+  // CC 触发动作三态占位符：queue=排队组件；reject=纯拦截页（无占位符要求，
+  // 任何页均可作拒绝页）；challenge=按验证方式的人机组件。
+  if (state.ccTriggerAction === 'reject') return false
+  const placeholder = state.ccTriggerAction === 'queue'
+    ? '{{queue_widget}}'
+    : state.humanVerifyType === 'js' ? '{{human_js_widget}}' : '{{human_verify_widget}}'
   const page = state.blockPages.find((p) => p.id === state.blockPageId)
   return !page || !(page.content ?? '').includes(placeholder)
 }

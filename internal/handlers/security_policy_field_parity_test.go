@@ -119,14 +119,14 @@ func TestSecurityPolicyDetailProjectionCarriesSentinels(t *testing.T) {
 		created_at, updated_at, geoip_countries, geoip_mode, geoip_crawler_exempt, geoip_crawler_engines,
 		waf_check_response, log_request_body, ip_acl_list_refs, ip_whitelist_refs, updated_by, policy_type, trust_detection,
 		human_verify_mode, human_verify_type, human_verify_ttl, human_exempt_paths,
-		cc_detect_enabled, cc_rps_limit, cc_rps_window, cc_4xx_ratio, cc_session_anomaly, cc_session_ua_threshold)
+		cc_detect_enabled, cc_rps_limit, cc_rps_window, cc_4xx_ratio, cc_session_anomaly, cc_session_ua_threshold, cc_trigger_action, cc_queue_wait_sec)
 		VALUES ('哨兵策略', '哨兵描述', 'custom_only', 15, 'deny', '["203.0.113.0/24"]', 1,
 		        '["198.51.100.7"]', 1, '["192.0.2.9"]',
 		        '["942"]', '["942100"]', '[]', 0, 503, 'html', 1,
 		        '2026-10-01 01:02:03', '2026-10-02 04:05:06', '["CN"]', 'deny', 1, '["googlebot"]',
 		        1, 1, '[3]', '[4]', 7, 'mixed', 1,
 		        'auto', 'js', 45, '["/health/"]',
-		        1, 55, 15, 65, 1, 7)`)
+		        1, 55, 15, 65, 1, 7, 'queue', 77)`)
 	if err != nil {
 		t.Fatalf("insert sentinel policy: %v", err)
 	}
@@ -161,6 +161,7 @@ func TestSecurityPolicyDetailProjectionCarriesSentinels(t *testing.T) {
 		HumanVerifyMode: "auto", HumanVerifyType: "js", HumanVerifyTTL: 45,
 		HumanExemptPaths: `["/health/"]`,
 		CCDetectEnabled:  true, CCRPSLimit: 55, CCRPSWindow: 15, CC4xxRatio: 65, CCSessionAnomaly: true, CCSessionUAThreshold: 7,
+		CCTriggerAction: "queue", CCQueueWaitSec: 77,
 	}
 	if !reflect.DeepEqual(payload.Data.Policy, want) {
 		t.Fatalf("详情投影与落库哨兵不一致:\n got=%+v\nwant=%+v", payload.Data.Policy, want)

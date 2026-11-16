@@ -450,3 +450,27 @@ func TestSecurityEventsIPCHandler_humanReasonFeedsAutobanAttribution(t *testing.
 		t.Fatalf("候选主原因=%q, want 会话异常（IPC 喂入缝丢失 reason：备注归因退化为通用人机挑战）", suggestions[0].Reason)
 	}
 }
+
+// CC reject（rate_reject）事件落库=拦截口径：action=blocked、rule=cc_rate_reject、
+// rule_msg 含「限流拒绝」——与自动封禁 blocked 维度映射同源（429 确属拦截）。
+func TestSecurityEventsIPCHandler_rateRejectStoredAsBlocked(t *testing.T) {
+	setupSecurityPolicyTestDB(t)
+	h := &SecurityEventsIPCServer{}
+	body := `[{"ts":1786447300123,"rule_id":"lb-rr","client_ip":"203.0.113.90","method":"GET","uri":"/r","ua":"RR/1.0","kind":"rate_reject","reason":"rps_spike"}]`
+	req := httptest.NewRequest(http.MethodPost, services.SecurityEventsIPCIngestHumanPath, strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	http.HandlerFunc(h.ingestRouter).ServeHTTP(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var action, rule, ruleMsg string
+	if err := db.MetricsDB.QueryRow(`SELECT action, rule_triggered, rule_msg FROM security_events WHERE rule_caddy_id='lb-rr'`).Scan(&action, &rule, &ruleMsg); err != nil {
+		t.Fatal(err)
+	}
+	if action != "blocked" || rule != "cc_rate_reject" {
+		t.Fatalf("rate_reject 落库=(%q,%q), want (blocked,cc_rate_reject)", action, rule)
+	}
+	if !strings.Contains(ruleMsg, "限流拒绝") {
+		t.Fatalf("rule_msg=%q, want 含「限流拒绝」", ruleMsg)
+	}
+}

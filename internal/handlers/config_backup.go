@@ -532,6 +532,7 @@ var backupTableNullDefaults = map[string]map[string]any{
 		"human_exempt_paths": "[]",
 		"cc_detect_enabled":  int64(0), "cc_rps_limit": int64(db.DefaultCCRPSLimit), "cc_rps_window": int64(db.DefaultCCRPSWindow),
 		"cc_4xx_ratio": int64(db.DefaultCC4xxRatio), "cc_session_anomaly": int64(0), "cc_session_ua_threshold": int64(db.DefaultCCSessionUAThreshold),
+		"cc_trigger_action": "challenge", "cc_queue_wait_sec": int64(0),
 	},
 	"security_custom_rules": {
 		"description": "", "conditions": "[]", "condition_logic": "and", "action": "block", "score": int64(5),

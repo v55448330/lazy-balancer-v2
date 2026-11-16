@@ -734,6 +734,20 @@
                   <el-input-number v-if="form.cc_session_anomaly" v-model="form.cc_session_ua_threshold" :min="1" :max="100" style="width: 100px; margin-left: 10px" />
                   <span v-if="form.cc_session_anomaly" class="form-tip-inline">{{ t('app.security.policies.human.ccSessionTip') }}</span>
                 </el-form-item>
+                <!-- CC 触发动作三态（用户裁定：统一检测面，响应动作可选）：
+                     challenge=人机验证（默认）/queue=排队等待页/reject=429 拒绝页。 -->
+                <el-form-item :label="t('app.security.policies.human.ccActionLabel')">
+                  <el-select v-model="form.cc_trigger_action" style="width: 260px">
+                    <el-option value="challenge" :label="t('app.security.policies.human.ccActionChallenge')" />
+                    <el-option value="queue" :label="t('app.security.policies.human.ccActionQueue')" />
+                    <el-option value="reject" :label="t('app.security.policies.human.ccActionReject')" />
+                  </el-select>
+                  <div class="form-tip-line">{{ t('app.security.policies.human.ccActionTip') }}</div>
+                </el-form-item>
+                <el-form-item v-if="form.cc_trigger_action === 'queue'" :label="t('app.security.policies.human.ccQueueWaitLabel')">
+                  <el-input-number v-model="form.cc_queue_wait_sec" :min="0" :max="300" style="width: 120px" />
+                  <span class="form-tip-inline">{{ t('app.security.policies.human.ccQueueWaitTip', { sec: form.cc_rps_window }) }}</span>
+                </el-form-item>
               </template>
               </template>
               <div v-else class="form-tip-line">{{ t('app.security.policies.human.forceIgnoresCc') }}</div>
@@ -804,13 +818,18 @@
                 <el-option :value="0" :label="t(editorPolicyType === 'stage2' ? 'app.security.policies.bp.stage2NoPageDefault' : 'app.security.policies.bp.noPageDefault')" />
                 <el-option v-for="p in blockPages" :key="p.id" :label="pageLabel(p)" :value="p.id" />
               </el-select>
-              <div v-if="editorPolicyType === 'stage2'" class="form-tip-line">
-                {{ t('app.security.policies.human.challengePageTip') }} <code class="placeholder-code" v-text="challengePagePlaceholder" />
+              <!-- 页步骤三态（CC 触发动作）：challenge=挑战页组件占位符；
+                   queue=等待页组件占位符；reject=纯拦截页（无占位符要求）。 -->
+              <div v-if="editorPolicyType === 'stage2' && form.cc_trigger_action !== 'reject'" class="form-tip-line">
+                {{ t(form.cc_trigger_action === 'queue' ? 'app.security.policies.human.queuePageTip' : 'app.security.policies.human.challengePageTip') }} <code class="placeholder-code" v-text="challengePagePlaceholder" />
+              </div>
+              <div v-if="editorPolicyType === 'stage2' && form.cc_trigger_action === 'reject'" class="form-tip-line">
+                {{ t('app.security.policies.human.rejectPageTip') }}
               </div>
               <div v-if="challengePageMissingWidget" class="form-tip-line is-error">
                 {{ t('app.security.policies.human.challengePageNeedsWidget') }}
               </div>
-              <div v-else-if="form.block_page_id === 0" class="form-tip-line">{{ t(editorPolicyType === 'stage2' ? 'app.security.policies.bp.stage2NoPageTip' : 'app.security.policies.bp.noPageTipDefault') }}</div>
+              <div v-else-if="form.block_page_id === 0" class="form-tip-line">{{ t(editorPolicyType === 'stage2' ? (form.cc_trigger_action === 'queue' ? 'app.security.policies.bp.stage2NoPageQueueTip' : form.cc_trigger_action === 'reject' ? 'app.security.policies.bp.stage2NoPageRejectTip' : 'app.security.policies.bp.stage2NoPageTip') : 'app.security.policies.bp.noPageTipDefault') }}</div>
               <div v-else class="form-tip-line">{{ t('app.security.policies.bp.manageTip') }}<AccessibleLink type="primary" @click="goToBlockPagesPage">{{ t('app.security.policies.common.goCreateEdit') }}</AccessibleLink></div>
               <!-- 归属汇总卡（用户验收裁定）：逐条重复提示收敛为单源汇总——主行 +
                    例外分面（TCP/兜底差异，仅存在才渲染）+ 能力门行；
@@ -1064,7 +1083,7 @@ import { activateOnce } from '@/utils/keyboardActivate'
 
 const { t, locale } = useI18n()
 
-interface PolicyDetail { id: number; name: string; description: string; mode: string; anomaly_threshold: number; ip_acl_mode: string; ip_acl_list: string; ip_acl_enabled: boolean; ip_whitelist: string; ip_whitelist_enabled?: boolean; ip_blacklist?: string; ip_acl_list_refs?: string; ip_whitelist_refs?: string; crs_rule_groups: string; crs_excluded_rules: string; custom_rules: string; block_page_id: number; block_status_code: number; block_response_mode?: string; enabled: boolean; updated_at: string; geoip_mode?: string; geoip_countries?: string; geoip_crawler_exempt?: boolean; geoip_crawler_engines?: string; waf_check_response?: boolean; log_request_body?: boolean; trust_detection?: boolean; human_verify_mode?: string; human_verify_type?: string; human_verify_ttl?: number; human_exempt_paths?: string[]; cc_detect_enabled?: boolean; cc_rps_limit?: number; cc_rps_window?: number; cc_4xx_ratio?: number; cc_session_anomaly?: boolean; cc_session_ua_threshold?: number; }
+interface PolicyDetail { id: number; name: string; description: string; mode: string; anomaly_threshold: number; ip_acl_mode: string; ip_acl_list: string; ip_acl_enabled: boolean; ip_whitelist: string; ip_whitelist_enabled?: boolean; ip_blacklist?: string; ip_acl_list_refs?: string; ip_whitelist_refs?: string; crs_rule_groups: string; crs_excluded_rules: string; custom_rules: string; block_page_id: number; block_status_code: number; block_response_mode?: string; enabled: boolean; updated_at: string; geoip_mode?: string; geoip_countries?: string; geoip_crawler_exempt?: boolean; geoip_crawler_engines?: string; waf_check_response?: boolean; log_request_body?: boolean; trust_detection?: boolean; human_verify_mode?: string; human_verify_type?: string; human_verify_ttl?: number; human_exempt_paths?: string[]; cc_detect_enabled?: boolean; cc_rps_limit?: number; cc_rps_window?: number; cc_4xx_ratio?: number; cc_session_anomaly?: boolean; cc_session_ua_threshold?: number; cc_trigger_action?: string; cc_queue_wait_sec?: number; }
 // 规则行消费面（关联规则行内执行序/投影数据源；协议与域名等展示字段）
 interface Rule { caddy_id: string; name: string; domain: string; listen_port: number; protocol: string }
 // v2.2.0 多策略绑定：/security/bindings 的值从单 BindingInfo 改为数组（rank 序=执行序；
@@ -1885,7 +1904,7 @@ const pickerProtoFilter = ref<'all' | 'http' | 'tcp'>('http')
 const pickerPage = ref(1)
 const pickerSelected = ref<string[]>([])
 const PICKER_PAGE_SIZE = 20
-const defaultForm = () => ({ name: '', description: '', enabled: true, mode: 'off', anomaly_threshold: 5, ip_acl_enabled: false, ip_acl_mode: 'allow', block_page_id: 1, block_status_code: 403, block_response_mode: 'auto', geoip_enabled: false, geoip_mode: 'deny', geoip_crawler_exempt: false, geoip_crawler_engines: ['googlebot', 'bingbot', 'baiduspider'], waf_check_response: false, log_request_body: false, trust_detection: false, human_verify_mode: 'off', human_verify_type: 'slider', human_verify_ttl: 30, human_exempt_paths: [] as string[], cc_detect_enabled: false, cc_rps_limit: 40, cc_rps_window: 10, cc_4xx_ratio: 70, cc_session_anomaly: false, cc_session_ua_threshold: 5 })
+const defaultForm = () => ({ name: '', description: '', enabled: true, mode: 'off', anomaly_threshold: 5, ip_acl_enabled: false, ip_acl_mode: 'allow', block_page_id: 1, block_status_code: 403, block_response_mode: 'auto', geoip_enabled: false, geoip_mode: 'deny', geoip_crawler_exempt: false, geoip_crawler_engines: ['googlebot', 'bingbot', 'baiduspider'], waf_check_response: false, log_request_body: false, trust_detection: false, human_verify_mode: 'off', human_verify_type: 'slider', human_verify_ttl: 30, human_exempt_paths: [] as string[], cc_detect_enabled: false, cc_rps_limit: 40, cc_rps_window: 10, cc_4xx_ratio: 70, cc_session_anomaly: false, cc_session_ua_threshold: 5, cc_trigger_action: 'challenge', cc_queue_wait_sec: 0 })
 
 const form = ref(defaultForm())
 // v2.3.8 爬虫豁免引擎注册表（geoipnames 单源镜像；ID 稳定——后端白名单校验）
@@ -3211,6 +3230,8 @@ const previewModel = computed<RuleStageModel>(() => {
     cc_4xx_ratio: form.value.cc_4xx_ratio,
     cc_session_anomaly: form.value.cc_session_anomaly,
     cc_session_ua_threshold: form.value.cc_session_ua_threshold,
+    cc_trigger_action: form.value.cc_trigger_action,
+    cc_queue_wait_sec: form.value.cc_queue_wait_sec,
     ip_blacklist: JSON.stringify(ipBlacklistSelf.value),
     ip_acl_list_refs: JSON.stringify(ipACLListRefs.value),
     ip_whitelist_refs: JSON.stringify(ipWhitelistRefs.value),
@@ -3402,6 +3423,8 @@ async function openDialog(row?: PolicySummary) {
         cc_4xx_ratio: d.cc_4xx_ratio ?? 70,
         cc_session_anomaly: d.cc_session_anomaly ?? false,
         cc_session_ua_threshold: d.cc_session_ua_threshold ?? 5,
+        cc_trigger_action: d.cc_trigger_action ?? 'challenge',
+        cc_queue_wait_sec: d.cc_queue_wait_sec ?? 0,
     }
     ipACLList.value = parseIPList(d.ip_acl_list)
     ipWhitelist.value = parseIPList(d.ip_whitelist)
@@ -3513,17 +3536,19 @@ const beforeWizardClose = (done: () => void): void => {
 
 // 挑战页组件占位符按验证方式分流：JS 用 {{human_js_widget}}，滑块用
 // {{human_verify_widget}}——内置页/自定义页校验与提示共用此单源。
-const challengePagePlaceholder = computed<string>(() =>
-  form.value.human_verify_type === 'js' ? '{{human_js_widget}}' : '{{human_verify_widget}}',
-)
+const challengePagePlaceholder = computed<string>(() => {
+  if (form.value.cc_trigger_action === 'queue') return '{{queue_widget}}'
+  return form.value.human_verify_type === 'js' ? '{{human_js_widget}}' : '{{human_verify_widget}}'
+})
 
 // 占位符校验单源（utils/policyPayload）：0=内置挑战页一等路径放行，仅 >0 真实页
-// 校验当前验证方式组件；保存门与提示线共用，不内联第二份判定。
+// 校验当前动作组件；保存门与提示线共用，不内联第二份判定。
 const challengePageMissingWidget = computed<boolean>(() => challengePageNeedsWidgetCheck({
   policyType: editorPolicyType.value,
   blockPageId: form.value.block_page_id,
   blockPages: blockPages.value,
   humanVerifyType: form.value.human_verify_type,
+  ccTriggerAction: form.value.cc_trigger_action,
 }))
 
 const handleSave = async () => {
@@ -3672,6 +3697,8 @@ const handleSave = async () => {
       cc4xxRatio: form.value.cc_4xx_ratio,
       ccSessionAnomaly: form.value.cc_session_anomaly,
       ccSessionUaThreshold: form.value.cc_session_ua_threshold,
+      ccTriggerAction: form.value.cc_trigger_action,
+      ccQueueWaitSec: form.value.cc_queue_wait_sec,
     })
     let saveRes: APIResponse<{ id: number }> | undefined
     if (editingId.value) {

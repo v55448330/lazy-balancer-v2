@@ -175,6 +175,8 @@ func TestApplySnapshot_securityPoliciesEverySchemaColumnRoundTrip(t *testing.T) 
 			expected[column] = "auto"
 		case column == "human_verify_type":
 			expected[column] = "slider"
+		case column == "cc_trigger_action":
+			expected[column] = "queue"
 		case column == "created_at" || column == "updated_at":
 			expected[column] = "2026-01-02 03:04:05"
 		case column == "block_status_code":

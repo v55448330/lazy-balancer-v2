@@ -198,6 +198,10 @@ type SecurityPolicy struct {
 	CC4xxRatio           int  `json:"cc_4xx_ratio"`
 	CCSessionAnomaly     bool `json:"cc_session_anomaly"`
 	CCSessionUAThreshold int  `json:"cc_session_ua_threshold"`
+	// CC 触发动作（challenge=人机验证/queue=排队等待页/reject=429 拒绝页）；
+	// 等待秒数 0=自动取 CC 窗口（域 [0,300]）。
+	CCTriggerAction string `json:"cc_trigger_action"`
+	CCQueueWaitSec  int    `json:"cc_queue_wait_sec"`
 
 	IPACLListRefs   string `json:"ip_acl_list_refs"`
 	IPWhitelistRefs string `json:"ip_whitelist_refs"`
@@ -240,6 +244,8 @@ type SecurityPolicySummary struct {
 	CC4xxRatio           int    `json:"cc_4xx_ratio"`
 	CCSessionAnomaly     bool   `json:"cc_session_anomaly"`
 	CCSessionUAThreshold int    `json:"cc_session_ua_threshold"`
+	CCTriggerAction      string `json:"cc_trigger_action"`
+	CCQueueWaitSec       int    `json:"cc_queue_wait_sec"`
 	ID                   int    `json:"id"`
 	Name                 string `json:"name"`
 	Mode                 string `json:"mode"`
@@ -330,6 +336,8 @@ type CreateSecurityPolicyRequest struct {
 	CC4xxRatio           *int   `json:"cc_4xx_ratio"` // 指针：nil=省略→缺省 70，显式 0=关闭（与 Update 同口径）
 	CCSessionAnomaly     bool   `json:"cc_session_anomaly"`
 	CCSessionUAThreshold int    `json:"cc_session_ua_threshold"`
+	CCTriggerAction      string `json:"cc_trigger_action"`
+	CCQueueWaitSec       int    `json:"cc_queue_wait_sec"`
 	IPACLListRefs        string `json:"ip_acl_list_refs"`
 	IPWhitelistRefs      string `json:"ip_whitelist_refs"`
 }
@@ -376,6 +384,8 @@ type UpdateSecurityPolicyRequest struct {
 	CC4xxRatio           *int    `json:"cc_4xx_ratio"`
 	CCSessionAnomaly     *bool   `json:"cc_session_anomaly"`
 	CCSessionUAThreshold *int    `json:"cc_session_ua_threshold"`
+	CCTriggerAction      *string `json:"cc_trigger_action"`
+	CCQueueWaitSec       *int    `json:"cc_queue_wait_sec"`
 }
 
 // SecurityEventFeedItem 威胁大屏增量事件流条目（GET /security/events/feed）：

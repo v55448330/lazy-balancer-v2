@@ -564,6 +564,10 @@ func renderBuiltinBlockPage(cfg brandingConfig, variant string) string {
 		// JS 挑战组件占位符（与滑块并列、互不干扰）：lb_human 替换为 PoW 组件。
 		page = strings.Replace(page, `<div class="divider">`, `{{human_js_widget}}<div class="divider">`, 1)
 	}
+	if variant == "queue" {
+		// 排队倒计时组件占位符：lb_human 在 CC 触发 queue 动作时替换。
+		page = strings.Replace(page, `<div class="divider">`, `{{queue_widget}}<div class="divider">`, 1)
+	}
 	return page
 }
 
@@ -618,6 +622,14 @@ var blockPageSpecs = map[string]blockPageSpec{
 		chip:    "429 Too Many Requests", title: "Too Many Requests",
 		line1: "You have sent too many requests in a short time.",
 		line2: "Please wait a moment and try again.",
+	},
+	"queue": {
+		accent: "#f59e0b", accentSoft: "#fbbf24", ringFrom: "#fffbeb", ringTo: "#fef3c7",
+		ringBorder: "#fde68a", haloBorder: "#fcd34d", chipText: "#b45309", chipBorder: "#fde68a",
+		iconSVG: `<svg viewBox="0 0 24 24" fill="none" stroke="#d97706" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>`,
+		chip:    "429 Too Many Requests", title: "Please Wait",
+		line1: "You have sent too many requests in a short time.",
+		line2: "This page will retry automatically when the wait is over.",
 	},
 	"maintenance": {
 		accent: "#3b82f6", accentSoft: "#60a5fa", ringFrom: "#eff6ff", ringTo: "#dbeafe",
@@ -714,6 +726,9 @@ var builtinBlockPageIdentities = []builtinBlockPageIdentity{
 	// 占位符由 lb_human 按策略验证方式替换为真实组件，策略选本页后生效。
 	{9005, "滑块人机验证页面", "系统内置滑块人机验证挑战页（{{human_verify_widget}} 占位符由 lb_human 替换为滑块组件；策略选择本页后生效）", "human"},
 	{9006, "JS 人机验证页面", "系统内置 JS 人机验证挑战页（{{human_js_widget}} 占位符由 lb_human 替换为 JS 验证组件；策略选择本页后生效）", "human_js"},
+	// 排队等待页（CC 触发动作 queue）：{{queue_widget}} 由 lb_human 替换为
+	// 倒计时+自动重试组件；策略选本页后生效，缺省回退本页。
+	{9007, "限流排队等待页", "系统内置限流排队等待页（{{queue_widget}} 占位符由 lb_human 替换为倒计时组件；CC 触发动作=排队时生效）", "queue"},
 	{9001, "限流拦截页面", "系统内置 429 限流拦截页面（备选，手动选用后生效）", "ratelimit"},
 	{9002, "系统维护页面", "系统内置维护页面（备选，手动选用后生效）", "maintenance"},
 }

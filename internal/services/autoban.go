@@ -902,6 +902,13 @@ func ObserveHumanEvents(items []HumanObserveItem) {
 		return
 	}
 	for _, it := range items {
+		// CC reject 动作（429 限流拒绝）按「被拦截」口径喂 blocked 维度——
+		// 429 确属拦截，与 WAF blocked 同组（evidence 模式计确证）。走人机
+		// 事件传输通道但 action=blocked，rule token 用 cc_rate_reject 归因。
+		if it.Kind == "rate_reject" {
+			autobanObserveEventScopedAt(cfg, it.IP, "blocked", "cc_rate_reject", it.At)
+			continue
+		}
 		ruleTriggered := "human_challenge"
 		switch it.Kind {
 		case "fail":
@@ -1005,8 +1012,14 @@ func autobanObserveEventScopedAt(cfg AutobanConfig, ip, action, ruleTriggered st
 		if dim == "" || !scopeSet[dim] {
 			return
 		}
-	} else if !scopeSet[action] || !autobanStage3Eligible(ruleTriggered) || !autobanSourceEligible(ruleTriggered) {
+	} else if !scopeSet[action] || !autobanSourceEligible(ruleTriggered) {
 		return
+	} else if action != "blocked" || ruleTriggered != "cc_rate_reject" {
+		// WAF 事件须过阶段 3 族门；CC reject（cc_rate_reject）是人机通道
+		// 的拦截事件，不属 WAF 族但语义确属拦截，豁免族门（口径门仍生效）。
+		if !autobanStage3Eligible(ruleTriggered) {
+			return
+		}
 	}
 	now := autobanNow()
 	// 积压回放（摄取停摆恢复/轮转补采）不得按到达时间瞬时达标：早于当前

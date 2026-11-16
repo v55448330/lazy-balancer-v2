@@ -329,6 +329,7 @@ func init() {
 	Register("k_b0ab26a2", "备份日期必须在 1-%d 之间", "Backup day of month must be between 1 and %d")
 	Register("k_b10d0772", "生成规则 ID 失败", "Failed to generate the rule ID")
 	Register("k_b120c74e", "登录凭证无效", "Invalid credentials")
+	Register("k_b1bbb2d1", "CC 触发动作取值无效（须为 challenge/queue/reject）", "Invalid CC trigger action (must be challenge/queue/reject)")
 	Register("k_b2018a58", "已有备份任务正在执行（含定时备份），请稍后重试", "A backup task is already running (including scheduled backups); please try again later")
 	Register("k_b2073f69", "Caddy 已停止", "Caddy stopped")
 	Register("k_b34004dd", "非管理员不能修改角色", "Non-administrators cannot change roles")

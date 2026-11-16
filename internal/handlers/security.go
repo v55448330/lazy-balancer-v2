@@ -752,7 +752,7 @@ const securityPolicySelectColumns = `id, name, COALESCE(description,''), COALESC
 	COALESCE(crs_rule_groups,'[]'), COALESCE(crs_excluded_rules,'[]'), COALESCE(custom_rules,'[]'), COALESCE(block_page_id,0), COALESCE(block_status_code,0), COALESCE(enabled,1), COALESCE(updated_by,0), COALESCE(created_at,''), COALESCE(updated_at,''), COALESCE(geoip_countries,'[]'), COALESCE(geoip_mode,'off'), COALESCE(geoip_crawler_exempt,0), COALESCE(geoip_crawler_engines,'[]'), COALESCE(waf_check_response,0), COALESCE(log_request_body,0), COALESCE(ip_acl_list_refs,'[]'), COALESCE(ip_whitelist_refs,'[]'), COALESCE(policy_type,''), COALESCE(trust_detection,0),
 	COALESCE(human_verify_mode,'off'), COALESCE(human_verify_type,'slider'), COALESCE(human_verify_ttl,30), COALESCE(human_exempt_paths,'[]'),
 	COALESCE(cc_detect_enabled,0), COALESCE(cc_rps_limit,40), COALESCE(cc_rps_window,10), COALESCE(cc_4xx_ratio,70),
-	COALESCE(cc_session_anomaly,0), COALESCE(cc_session_ua_threshold,5), COALESCE(block_response_mode,'auto')`
+	COALESCE(cc_session_anomaly,0), COALESCE(cc_session_ua_threshold,5), COALESCE(cc_trigger_action,'challenge'), COALESCE(cc_queue_wait_sec,0), COALESCE(block_response_mode,'auto')`
 
 func (h *Handlers) ListSecurityPolicies(c *gin.Context) {
 	// 过滤条件按「主查询列名」与「绑定计数查询的限定列名」成对给出：绑定计数
@@ -891,6 +891,7 @@ func (h *Handlers) ListSecurityPolicies(c *gin.Context) {
 			HumanVerifyTTL: p.HumanVerifyTTL, HumanExemptPaths: string(p.HumanExemptPaths),
 			CCDetectEnabled: p.CCDetectEnabled, CCRPSLimit: p.CCRPSLimit, CCRPSWindow: p.CCRPSWindow,
 			CC4xxRatio: p.CC4xxRatio, CCSessionAnomaly: p.CCSessionAnomaly, CCSessionUAThreshold: p.CCSessionUAThreshold,
+			CCTriggerAction: p.CCTriggerAction, CCQueueWaitSec: p.CCQueueWaitSec,
 			Blocked24h:         blockedCounts[p.ID],
 			Trigger24h:         triggerCounts[p.ID],
 			IPWhitelistEnabled: p.IPWhitelistEnabled,
@@ -1236,6 +1237,11 @@ func (h *Handlers) CreateSecurityPolicy(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.ErrMsg(c, err)})
 		return
 	}
+	// CC 触发动作三态校验（缺省归一 challenge；非法值响亮拒绝）。
+	if !validCCTriggerAction(ccTriggerActionOrDefault(req.CCTriggerAction)) {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_b1bbb2d1"), MessageKey: "k_b1bbb2d1"})
+		return
+	}
 	// 配额限流已下线（2026-11-12 用户裁定）：阶段 2 仅 CC 人机挑战；
 	// allow 模式 + 空生效名单：渲染端把空 allow 集照常并入交集，交集为空即
 	// 发射「@rx .* 恒拒」——空名单的运行时语义是**拒绝全部（fail-closed）**，
@@ -1323,6 +1329,7 @@ func (h *Handlers) CreateSecurityPolicy(c *gin.Context) {
 		humanPaths: humanJSONOrDefault(req.HumanExemptPaths),
 		ccEnabled:  req.CCDetectEnabled, ccRPS: ccRPSLimitOrDefault(req.CCRPSLimit), ccWindow: ccWindowOrDefault(req.CCRPSWindow),
 		cc4xx: cc4xxRatioOrDefault(derefIntPtr(req.CC4xxRatio, db.DefaultCC4xxRatio)), ccSessionAnomaly: req.CCSessionAnomaly, ccUASession: ccIntOrDefault(req.CCSessionUAThreshold, 5),
+		ccAction: ccTriggerActionOrDefault(req.CCTriggerAction), ccQueueWait: ccQueueWaitOrDefault(req.CCQueueWaitSec),
 		blockResponseMode: normalizeBlockResponseMode(req.BlockResponseMode),
 	}
 	result, err := tx.ExecContext(caddyWriteCtx(c), securityPolicyInsertSQL(), values.args()...)
@@ -1348,7 +1355,7 @@ var securityPolicyInsertColumns = []string{
 	"name", "description", "mode", "anomaly_threshold", "ip_acl_mode", "ip_acl_list", "ip_acl_enabled", "ip_whitelist", "ip_whitelist_enabled", "ip_blacklist",
 	"crs_rule_groups", "crs_excluded_rules", "custom_rules", "block_page_id", "block_status_code", "enabled", "geoip_countries", "geoip_mode", "geoip_crawler_exempt", "geoip_crawler_engines", "waf_check_response", "log_request_body", "ip_acl_list_refs", "ip_whitelist_refs", "updated_by", "policy_type", "trust_detection",
 	"human_verify_mode", "human_verify_type", "human_verify_ttl", "human_exempt_paths",
-	"cc_detect_enabled", "cc_rps_limit", "cc_rps_window", "cc_4xx_ratio", "cc_session_anomaly", "cc_session_ua_threshold", "block_response_mode",
+	"cc_detect_enabled", "cc_rps_limit", "cc_rps_window", "cc_4xx_ratio", "cc_session_anomaly", "cc_session_ua_threshold", "cc_trigger_action", "cc_queue_wait_sec", "block_response_mode",
 }
 
 // securityPolicyInsertSQL 由列清单生成 INSERT 语句（占位符数量恒等于列数）。
@@ -1388,6 +1395,8 @@ type securityPolicyInsertValues struct {
 	ccRPS, ccWindow, cc4xx          int
 	ccSessionAnomaly                bool
 	ccUASession                     int
+	ccAction                        string
+	ccQueueWait                     int
 	blockResponseMode               string
 }
 
@@ -1396,7 +1405,7 @@ func (v securityPolicyInsertValues) args() []any {
 		v.name, v.description, v.mode, v.anomalyThreshold, v.ipACLMode, v.ipACLList, v.ipACLEnabled, v.ipWhitelist, v.ipWhitelistEnabled, v.ipBlacklist,
 		v.crsRuleGroups, v.crsExcludedRules, v.customRules, v.blockPageID, v.blockStatusCode, v.enabled, v.geoCountries, v.geoMode, v.crawlerExempt, v.crawlerEngines, v.wafResp, v.logBody, v.aclRefs, v.wlRefs, v.updatedBy, v.policyType, v.trustDetection,
 		v.humanMode, v.humanType, v.humanTTL, v.humanPaths,
-		v.ccEnabled, v.ccRPS, v.ccWindow, v.cc4xx, v.ccSessionAnomaly, v.ccUASession, v.blockResponseMode,
+		v.ccEnabled, v.ccRPS, v.ccWindow, v.cc4xx, v.ccSessionAnomaly, v.ccUASession, v.ccAction, v.ccQueueWait, v.blockResponseMode,
 	}
 }
 
@@ -1888,6 +1897,11 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.ErrMsg(c, err)})
 		return
 	}
+	// CC 触发动作三态校验（nil=保持现值；显式非法拒绝，与 Create 同口径）。
+	if req.CCTriggerAction != nil && !validCCTriggerAction(ccTriggerActionOrDefault(*req.CCTriggerAction)) {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_b1bbb2d1"), MessageKey: "k_b1bbb2d1"})
+		return
+	}
 	// 下方三处门控读(CC 防护/ allow/GeoIP)原以裸连接
 	// db.DB 读取,位于 BeginTx 之前——与同函数事务内读的标准漂移;
 	// ImportConfigBackup 不持 caddyOpMu,构成并发写者, 窗口可落
@@ -2237,6 +2251,8 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 	addInt("cc_4xx_ratio", mapIntPtr(req.CC4xxRatio, cc4xxRatioOrDefault))
 	addBool("cc_session_anomaly", req.CCSessionAnomaly)
 	addInt("cc_session_ua_threshold", mapIntPtr(req.CCSessionUAThreshold, func(v int) int { return ccIntOrDefault(v, 5) }))
+	addStr("cc_trigger_action", mapStrPtr(req.CCTriggerAction, ccTriggerActionOrDefault))
+	addInt("cc_queue_wait_sec", mapIntPtr(req.CCQueueWaitSec, ccQueueWaitOrDefault))
 
 	if req.BlockPageID != nil {
 		query += ", block_page_id=?"
@@ -2343,6 +2359,8 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 	req.CCRPSWindow = mapIntPtr(req.CCRPSWindow, ccWindowOrDefault)
 	req.CC4xxRatio = mapIntPtr(req.CC4xxRatio, cc4xxRatioOrDefault)
 	req.CCSessionUAThreshold = mapIntPtr(req.CCSessionUAThreshold, func(v int) int { return ccIntOrDefault(v, 5) })
+	req.CCTriggerAction = mapStrPtr(req.CCTriggerAction, ccTriggerActionOrDefault)
+	req.CCQueueWaitSec = mapIntPtr(req.CCQueueWaitSec, ccQueueWaitOrDefault)
 	// 审计用 username（非数字 ID）+ 真 delta 变更详情（2026-09-25 用户裁定
 	// A 方案）：只记「提交值≠存量值」的字段（旧值→新值），IP 弹窗一键操作和
 	// 策略编辑页共用此端点，操作人/具体改了什么/IP 是什么必须在日志可追溯；
@@ -2492,6 +2510,8 @@ func (h *Handlers) UpdateSecurityPolicy(c *gin.Context) {
 	deltaInt("CC 4xx 比例", req.CC4xxRatio, stored.CC4xxRatio)
 	deltaBool("CC 会话异常", req.CCSessionAnomaly, stored.CCSessionAnomaly)
 	deltaInt("CC 会话 UA 阈值", req.CCSessionUAThreshold, stored.CCSessionUAThreshold)
+	deltaStr("CC 触发动作", req.CCTriggerAction, stored.CCTriggerAction)
+	deltaInt("CC 排队等待秒数", req.CCQueueWaitSec, stored.CCQueueWaitSec)
 	deltaStr("信任名单", req.IPWhitelist, string(stored.IPWhitelist))
 	deltaStr("旧版黑名单", req.IPBlacklist, string(stored.IPBlacklist))
 	deltaRefs("ACL 列表引用", "security_ip_lists", req.IPACLListRefs, stored.IPACLListRefs)
@@ -3666,6 +3686,8 @@ type splitChildSpec struct {
 	cc4xx            int
 	ccSessionAnomaly bool
 	ccUASession      int
+	ccAction         string
+	ccQueueWait      int
 }
 
 // splitChildIdentity 是子策略的可比较身份：落库列全集，仅排除操作者痕迹
@@ -3712,6 +3734,8 @@ type splitChildIdentity struct {
 	cc4xx            int
 	ccSessionAnomaly bool
 	ccUASession      int
+	ccAction         string
+	ccQueueWait      int
 }
 
 // splitChildIdentityColumnFields 是 insert 列名 → splitChildIdentity 字段名的
@@ -3730,6 +3754,7 @@ var splitChildIdentityColumnFields = map[string]string{
 	"human_verify_mode": "humanMode", "human_verify_type": "humanType", "human_verify_ttl": "humanTTL", "human_exempt_paths": "humanPaths",
 	"cc_detect_enabled": "ccEnabled", "cc_rps_limit": "ccRPS", "cc_rps_window": "ccWindow", "cc_4xx_ratio": "cc4xx",
 	"cc_session_anomaly": "ccSessionAnomaly", "cc_session_ua_threshold": "ccUASession",
+	"cc_trigger_action": "ccAction", "cc_queue_wait_sec": "ccQueueWait",
 	"block_response_mode": "blockResp",
 }
 
@@ -3787,6 +3812,7 @@ func splitChildIdentityOfSpec(p *models.SecurityPolicy, spec splitChildSpec) spl
 		humanMode: spec.humanMode, humanType: spec.humanType, humanTTL: spec.humanTTL, humanPaths: spec.humanPaths,
 		ccEnabled: spec.ccEnabled, ccRPS: spec.ccRPS, ccWindow: spec.ccWindow, cc4xx: spec.cc4xx,
 		ccSessionAnomaly: spec.ccSessionAnomaly, ccUASession: spec.ccUASession,
+		ccAction: spec.ccAction, ccQueueWait: spec.ccQueueWait,
 	}
 }
 
@@ -3805,6 +3831,7 @@ func splitChildIdentityOfPolicy(stored *models.SecurityPolicy) splitChildIdentit
 		humanMode: stored.HumanVerifyMode, humanType: stored.HumanVerifyType, humanTTL: stored.HumanVerifyTTL, humanPaths: string(stored.HumanExemptPaths),
 		ccEnabled: stored.CCDetectEnabled, ccRPS: stored.CCRPSLimit, ccWindow: stored.CCRPSWindow, cc4xx: stored.CC4xxRatio,
 		ccSessionAnomaly: stored.CCSessionAnomaly, ccUASession: stored.CCSessionUAThreshold,
+		ccAction: stored.CCTriggerAction, ccQueueWait: stored.CCQueueWaitSec,
 	}
 }
 
@@ -3908,9 +3935,11 @@ func (h *Handlers) SplitSecurityPolicy(c *gin.Context) {
 		// 改过的 stage2 子策略）。
 		spec.humanMode, spec.humanType, spec.humanTTL, spec.humanPaths = "off", "slider", 30, "[]"
 		spec.ccEnabled, spec.ccRPS, spec.ccWindow, spec.cc4xx, spec.ccSessionAnomaly, spec.ccUASession = false, 40, 10, 70, false, 5
+		spec.ccAction, spec.ccQueueWait = "challenge", 0
 		if models.NormalizePolicyType(spec.policyType) == models.PolicyTypeStage2 {
 			spec.humanMode, spec.humanType, spec.humanTTL, spec.humanPaths = p.HumanVerifyMode, p.HumanVerifyType, p.HumanVerifyTTL, string(p.HumanExemptPaths)
 			spec.ccEnabled, spec.ccRPS, spec.ccWindow, spec.cc4xx, spec.ccSessionAnomaly, spec.ccUASession = p.CCDetectEnabled, p.CCRPSLimit, p.CCRPSWindow, p.CC4xxRatio, p.CCSessionAnomaly, p.CCSessionUAThreshold
+			spec.ccAction, spec.ccQueueWait = p.CCTriggerAction, p.CCQueueWaitSec
 		}
 		return spec
 	}
@@ -3928,6 +3957,7 @@ func (h *Handlers) SplitSecurityPolicy(c *gin.Context) {
 			updatedBy: operator, policyType: spec.policyType, trustDetection: spec.trustDetection,
 			humanMode: spec.humanMode, humanType: spec.humanType, humanTTL: spec.humanTTL, humanPaths: spec.humanPaths,
 			ccEnabled: spec.ccEnabled, ccRPS: spec.ccRPS, ccWindow: spec.ccWindow, cc4xx: spec.cc4xx, ccSessionAnomaly: spec.ccSessionAnomaly, ccUASession: spec.ccUASession,
+			ccAction: spec.ccAction, ccQueueWait: spec.ccQueueWait,
 			blockResponseMode: spec.blockResp,
 		}
 		result, err := tx.ExecContext(caddyWriteCtx(c), securityPolicyInsertSQL(), values.args()...)
@@ -6170,6 +6200,7 @@ func scanSecurityPolicyInto(scan func(dest ...any) error, p *models.SecurityPoli
 		&crsRuleGroups, &crsExcludedRules, &customRules, &p.BlockPageID, &p.BlockStatusCode, &p.Enabled, &p.UpdatedBy, &p.CreatedAt, &p.UpdatedAt, &geoipCountries, &p.GeoIPMode, &p.GeoIPCrawlerExempt, &crawlerEnginesJSON, &p.WAFCheckResponse, &p.LogRequestBody, &p.IPACLListRefs, &p.IPWhitelistRefs, &p.PolicyType, &p.TrustDetection,
 		&p.HumanVerifyMode, &p.HumanVerifyType, &p.HumanVerifyTTL, &humanExemptPaths,
 		&p.CCDetectEnabled, &p.CCRPSLimit, &p.CCRPSWindow, &p.CC4xxRatio, &p.CCSessionAnomaly, &p.CCSessionUAThreshold,
+		&p.CCTriggerAction, &p.CCQueueWaitSec,
 		&p.BlockResponseMode); err != nil {
 		return err
 	}
@@ -6249,6 +6280,8 @@ type securityPolicyDetail struct {
 	CC4xxRatio           int    `json:"cc_4xx_ratio"`
 	CCSessionAnomaly     bool   `json:"cc_session_anomaly"`
 	CCSessionUAThreshold int    `json:"cc_session_ua_threshold"`
+	CCTriggerAction      string `json:"cc_trigger_action"`
+	CCQueueWaitSec       int    `json:"cc_queue_wait_sec"`
 }
 
 func newSecurityPolicyDetail(p *models.SecurityPolicy) securityPolicyDetail {
@@ -6289,6 +6322,7 @@ func newSecurityPolicyDetail(p *models.SecurityPolicy) securityPolicyDetail {
 		HumanExemptPaths:    string(p.HumanExemptPaths),
 		CCDetectEnabled:     p.CCDetectEnabled, CCRPSLimit: p.CCRPSLimit, CCRPSWindow: p.CCRPSWindow,
 		CC4xxRatio: p.CC4xxRatio, CCSessionAnomaly: p.CCSessionAnomaly, CCSessionUAThreshold: p.CCSessionUAThreshold,
+		CCTriggerAction: p.CCTriggerAction, CCQueueWaitSec: p.CCQueueWaitSec,
 	}
 }
 
@@ -6480,6 +6514,8 @@ func applyStageZerosToCreate(req *models.CreateSecurityPolicyRequest, policyType
 			req.CC4xxRatio = new(db.DefaultCC4xxRatio)
 			req.CCSessionAnomaly = false
 			req.CCSessionUAThreshold = db.DefaultCCSessionUAThreshold
+			req.CCTriggerAction = "challenge"
+			req.CCQueueWaitSec = 0
 		case stageZeroIPBlacklist:
 			req.IPBlacklist = "[]"
 		case stageZeroGeoIP:
@@ -6527,6 +6563,8 @@ func applyStageZerosToUpdate(req *models.UpdateSecurityPolicyRequest, policyType
 			req.CC4xxRatio = new(db.DefaultCC4xxRatio)
 			req.CCSessionAnomaly = new(false)
 			req.CCSessionUAThreshold = new(db.DefaultCCSessionUAThreshold)
+			req.CCTriggerAction = new("challenge")
+			req.CCQueueWaitSec = new(0)
 		case stageZeroIPBlacklist:
 			req.IPBlacklist = new("[]")
 		case stageZeroGeoIP:
@@ -7017,6 +7055,32 @@ func ccWindowOrDefault(v int) int {
 	}
 	if v > 3600 {
 		return 3600
+	}
+	return v
+}
+
+// ccTriggerActionOrDefault CC 触发动作归一：缺省（空串）→ challenge（存量
+// 行为冻结）；三态之外的值原样返回由校验拒绝（与 humanModeOrDefault 同形）。
+func ccTriggerActionOrDefault(v string) string {
+	if v == "" {
+		return "challenge"
+	}
+	return v
+}
+
+// validCCTriggerAction 三态枚举校验（写侧拒绝非法值）。
+func validCCTriggerAction(v string) bool {
+	return v == "challenge" || v == "queue" || v == "reject"
+}
+
+// ccQueueWaitOrDefault 排队等待秒数归一：0=自动（取 CC 窗口，合法保留）；
+// 负值回落 0；超上限钳 300（防「等一小时」自伤面）。
+func ccQueueWaitOrDefault(v int) int {
+	if v < 0 {
+		return 0
+	}
+	if v > 300 {
+		return 300
 	}
 	return v
 }
