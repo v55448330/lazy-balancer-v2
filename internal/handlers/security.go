@@ -4525,7 +4525,7 @@ const crawlerFamilyCondition = "rule_triggered GLOB '8[1-9][0-9][0-9][0-9][0-9]'
 // humanFamilyCondition CC 防护（人机挑战）族形态条件：ingest-human 写入非数字
 // rule_triggered（human_challenge/human_failed，历史含 human_pass）——GLOB 'human_*'
 // 整族覆盖，与数字规则 id 族互斥。pass 已不落库（2026-11-13），GLOB 仍兼容存量。
-const humanFamilyCondition = "rule_triggered GLOB 'human_*'"
+const humanFamilyCondition = "(rule_triggered GLOB 'human_*' OR rule_triggered = 'cc_rate_reject')"
 
 // ruleTriggeredPartStructured 报告一段筛选输入是否可按结构化路径解析（family
 // 精确/family 部分前缀/WAF 规则（CRS）或其前缀/纯数字）——只能走消息关键词
@@ -5293,6 +5293,13 @@ func attackFamilyClassOf(ruleTriggered, ruleMsg string) attackFamilyClass {
 	case legacyFamily.class == attackFamilyRateLimit:
 		// 429 精确命中（退役配额限流的存量事件；新 CC 防护事件为 human_*，
 		// 可达性实证见 categorizeAttack 的生产者声明）。
+		return attackFamilyRateLimit
+	case strings.HasPrefix(ruleTriggered, "human_") || strings.HasPrefix(ruleTriggered, "cc_"):
+		// CC 防护人机事件（human_challenge/human_failed）与限流拒绝
+		// （cc_rate_reject）归 CC 防护族——与退役 429 存量同族。此前落
+		// attackFamilyOther（「其他」），CC reject 站点「拦截很多但攻击类型
+		// 全是其他」，与 429 退役前事故同形。ingest/autoban 侧已明确这些
+		// token 属 CC 拦截，分类/筛选须同口径。
 		return attackFamilyRateLimit
 	case legacyFamily.class == attackFamilyBodyAnomaly:
 		return attackFamilyBodyAnomaly

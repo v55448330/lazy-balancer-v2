@@ -1639,10 +1639,10 @@ export const customRuleEventDbID = (ruleTriggered: string): number => {
 export const triggerStageFamily = (ruleTriggered: string): TriggerStageFamily => {
   const t = (ruleTriggered ?? '').trim()
   if (!t) return 'other'
-  // 阶段 3 人机验证（2026-11-12）：ingest-human 写入 human_challenge/human_pass/
-  // human_failed（非数字规则 id）——先于数字解析，避免归 other 后详情弹框按
-  // default 误归 ACL。
-  if (t.startsWith('human_')) return 'human'
+  // 阶段 2 CC 防护：ingest-human 写入 human_challenge/human_failed（人机挑战）
+  // 与 cc_rate_reject（限流拒绝）——先于数字解析，避免归 other 后详情弹框按
+  // default 误归 ACL。与后端 attackFamilyClassOf human_/cc_ 分支同口径。
+  if (t.startsWith('human_') || t.startsWith('cc_')) return 'human'
   if (t === '11') return 'body'
   const n = Number(t)
   if (!Number.isFinite(n)) return 'other'
