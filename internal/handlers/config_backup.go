@@ -3473,6 +3473,22 @@ func validateV2BackupSecurityPoliciesWithQuerier(ctx context.Context, tables map
 				policy["block_status_code"] = int64(db.DefaultBlockStatusCode)
 			}
 		}
+		// CC 三态列导入门（导入不宽于保存侧）：cc_trigger_action 枚举外/非字符串
+		// 归一 challenge（与 block_status_code 归一同格，旧备份合法携带不硬拒）；
+		// cc_queue_wait_sec 钳位 [0,300]（保存侧 ccQueueWaitOrDefault 同口径，
+		// 防手造备份突破 300s 上限）。缺失键由 NULL→默认通道承担。
+		if raw, exists := policy["cc_trigger_action"]; exists {
+			if s, ok := raw.(string); !ok || !validCCTriggerAction(s) {
+				policy["cc_trigger_action"] = "challenge"
+			}
+		}
+		if raw, exists := policy["cc_queue_wait_sec"]; exists {
+			if n, ok := backupInteger(raw); !ok {
+				policy["cc_queue_wait_sec"] = int64(0)
+			} else {
+				policy["cc_queue_wait_sec"] = int64(ccQueueWaitOrDefault(int(n)))
+			}
+		}
 		mode := backupString(policy["mode"])
 		if mode == "" {
 			mode = "off"

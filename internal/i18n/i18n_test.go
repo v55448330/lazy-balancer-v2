@@ -134,9 +134,9 @@ func TestErrTplPlaceholderParity(t *testing.T) {
 // 运行时形状:带百分号字面量的服务层错误(可解析率/宏语法)必须能翻成英文。
 func TestTrErr_percentLiteralTemplatesTranslate(t *testing.T) {
 	cases := []struct{ msg, want string }{
-		{"可解析行比例 3/10 低于 50%——疑似错页或劫持", "parseable line ratio 3/10 is below 50%——error page or hijack suspected"},
+		{"可解析行比例 3/10 低于 50%——疑似错页或劫持", "parseable line ratio 3/10 is below 50% — error page or hijack suspected"},
 		{"威胁名单 feed-a 文本可解析率 3/10 低于 50% 且 .fast 不可读: boom", "threat list feed-a text parseable ratio 3/10 below 50% and the .fast is unreadable: boom"},
-		{"威胁名单 feed-a 文本可解析率 3/10 低于 50% 且无 .fast 可回退（等待下次威胁库更新重建）", "threat list feed-a text parseable ratio 3/10 below 50% and no .fast to fall back to（waiting for the next threat feed update to rebuild）"},
+		{"威胁名单 feed-a 文本可解析率 3/10 低于 50% 且无 .fast 可回退（等待下次威胁库更新重建）", "threat list feed-a text parseable ratio 3/10 below 50% and no .fast to fall back to (waiting for the next threat feed update to rebuild)"},
 		{"威胁名单 feed-a 的 .fast 不可读且文本可解析率 3/10 低于 50%: boom", "the .fast of threat list feed-a is unreadable and its text parseable ratio 3/10 is below 50%: boom"},
 		{"该运算符不支持 %{...} 宏语法；如需匹配字面量请使用正则运算符并转义 %", "this operator does not support %{...} macro syntax; to match a literal, use the regex operator and escape %"},
 	}
