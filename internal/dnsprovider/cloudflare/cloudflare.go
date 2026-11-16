@@ -677,6 +677,7 @@ func (p *Provider) VerifyToken(ctx context.Context) error {
 // 重试耗尽）原样上抛。
 func (p *Provider) listVisibleAccounts(ctx context.Context) ([]string, error) {
 	var accounts []string
+	seen := make(map[string]bool)
 	fetchedTotal := 0
 	for page := 1; page <= accountOwnedPageLimit; page++ {
 		query := url.Values{}
@@ -702,10 +703,19 @@ func (p *Provider) listVisibleAccounts(ctx context.Context) ([]string, error) {
 		if fetched == 0 {
 			break
 		}
+		// 无进展守卫 + 去重（与 listRecordsByName 同口径）：total_count 失真
+		// 偏大且服务端重复下发同页时，整页无新账户 ID 即收手，防空转满
+		// pageLimit 并收集重复账户逐账户重复 verify。
+		newSeen := false
 		for _, account := range pageAccounts {
-			if account.ID != "" {
+			if account.ID != "" && !seen[account.ID] {
+				seen[account.ID] = true
 				accounts = append(accounts, account.ID)
+				newSeen = true
 			}
+		}
+		if !newSeen {
+			break
 		}
 		fetchedTotal += fetched
 		if total := envelope.ResultInfo.TotalCount; total > 0 && fetchedTotal >= total {

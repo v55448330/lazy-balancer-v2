@@ -533,6 +533,7 @@ func MaterializeAllCertsFromDB() {
 	}
 	manualRecovered := 0
 	acmeRecovered := 0
+	manualScanFailures := 0
 
 	rows, err := db.DB.Query(`SELECT caddy_id, tls_cert, tls_key FROM lb_rules WHERE enable_tls=1 AND tls_source='manual' AND COALESCE(tls_cert,'')!='' AND COALESCE(tls_key,'')!=''`)
 	if err != nil {
@@ -543,6 +544,7 @@ func MaterializeAllCertsFromDB() {
 			var ruleID, certPEM, keyPEM string
 			if err := rows.Scan(&ruleID, &certPEM, &keyPEM); err != nil {
 				Logf("error", "certstore: scan manual cert failed: %v", err)
+				manualScanFailures++
 				continue
 			}
 			changed, materializeErr := materializeCertPair(ruleID, certPEM, keyPEM)
@@ -580,11 +582,12 @@ func MaterializeAllCertsFromDB() {
 	if manualRecovered > 0 || acmeRecovered > 0 {
 		RecordAuditLog("system", "恢复", "证书文件", FormatAuditDetail(AuditSourcePart("startup_materialization"), fmt.Sprintf("手动证书 %d 个", manualRecovered), fmt.Sprintf("ACME证书 %d 个", acmeRecovered)), "")
 	}
-	// 逐行读失败（选择器已逐行 error 留痕）必须进摘要：被跳过的行本轮未物化，
-	// 无条件报「完成」会让运维看不出残缺轮（与对账侧失败聚合同形）。
+	// 逐行读失败（manual Scan + ACME 选择器已逐行 error 留痕）必须进摘要：
+	// 被跳过的行本轮未物化，无条件报「完成」会让运维看不出残缺轮（两侧对称）。
+	totalScanFailures := manualScanFailures + scanFailures
 	skippedNote := ""
-	if scanFailures > 0 {
-		skippedNote = fmt.Sprintf("（另 %d 行读取失败已跳过）", scanFailures)
+	if totalScanFailures > 0 {
+		skippedNote = fmt.Sprintf("（另 %d 行读取失败已跳过）", totalScanFailures)
 	}
 	TaskLogf("startup:config-load", "certs", "证书物化完成：手动证书 %d 个、ACME 证书 %d 个落盘%s", manualRecovered, acmeRecovered, skippedNote)
 }
