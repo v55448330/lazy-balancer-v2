@@ -127,12 +127,16 @@ export const buildPolicyPayload = (input: PolicyPayloadInput): PolicyPayload => 
   // 提交一份后端必然丢弃的值并谎称「与后端矩阵同口径」。stage2（CC 防护）与
   // mixed（不显式提交类型、后端按内容推断、不归零）承载全字段。
   const carriesHuman = input.policyType === 'stage2' || input.policyType === 'mixed'
+  // CC 防护模式归一（单源）：界面三档（关闭/始终验证/智能触发）⇒落库 human_verify_mode
+  // + cc_detect_enabled 一致。消除「界面显示智能触发但 cc_detect_enabled=false→引擎
+  // 检测静默失效」分叉（新建默认 auto+检测关、radio 纯展示点击已选中项不 emit）。
+  const ccNorm = ccFormFromIntervention(ccInterventionFromForm({ humanVerifyMode: input.humanVerifyMode, ccDetectEnabled: input.ccDetectEnabled }))
   const humanFields = carriesHuman ? {
-    human_verify_mode: input.humanVerifyMode,
+    human_verify_mode: ccNorm.human_verify_mode,
     human_verify_type: input.humanVerifyType,
     human_verify_ttl: input.humanVerifyTtl,
     human_exempt_paths: JSON.stringify(input.humanExemptPaths),
-    cc_detect_enabled: input.ccDetectEnabled,
+    cc_detect_enabled: ccNorm.cc_detect_enabled,
     cc_rps_limit: input.ccRpsLimit,
     cc_rps_window: input.ccRpsWindow,
     cc_4xx_ratio: input.cc4xxRatio,
