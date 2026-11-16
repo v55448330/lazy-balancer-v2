@@ -15,6 +15,16 @@ import (
 	"lazy-balancer-v2/internal/models"
 )
 
+// syncMarkerPresent 报告 last_sync_error 是否携带指定后置副作用标记。
+// 读失败时按「存在」返回（fail-closed）：调用方据此跳过清空/覆盖，宁可让
+// 标记消息暂不刷新，也不冒静默销毁补偿触发器的风险。
+// 测试专用 helper（消费方均同包测试）：原留驻 cluster_sync.go 未登记 testonly
+// 绊线，移入测试文件归位（audit145 svc-CLUSTER-P3-01）。
+func (s *SyncService) syncMarkerPresent(ctx context.Context, prefix string) bool {
+	msg, known := s.readSyncMarkerMessage(ctx)
+	return !known || strings.HasPrefix(msg, prefix)
+}
+
 // markerReadFailConn 模拟「global_config.last_sync_error 读失败」的真实库
 // 故障形态（SQLITE_BUSY/连接重建/磁盘抖动）：查询返回迭代错误，写侧记录
 // 以便断言「未知标记态下不得执行清空/覆盖写」。

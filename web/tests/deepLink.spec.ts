@@ -27,10 +27,11 @@ test('参数键常量与消费侧解析一致', () => {
   assert.equal(DEEP_LINK_PARAMS.securityRulesTab, 'tab')
 })
 
-test('深链交接入口：8 个 window.open 调用点全部走 pageUrl，视图内无 /?page= 字面量', () => {
+test('深链交接入口：9 个 window.open 调用点全部走 pageUrl，视图内无 /?page= 字面量', () => {
   // 调用点名册（逐个正向断言）：仅断言「无字面量」时，整行 window.open 被删
-  // （入口消失）仍全绿。pageUrl 生产调用点共 7 处（总览自动封禁配置入口已随
-  // NAT 移除批退役——配置统一在事件页；策略页新增自动封禁配置深链共 8 处）。
+  // （入口消失）仍全绿。pageUrl 生产调用点共 9 处（总览自动封禁配置入口已随
+  // NAT 移除批退役——配置统一在事件页；策略页自动封禁配置深链保留；
+  // 事件 4 + 总览 1 + 策略 4，与名册求和一致）。
   const callSites: Array<{ path: string; expected: number }> = [
     { path: 'src/views/security/SecurityEvents.vue', expected: 4 },
     { path: 'src/views/security/SecurityOverview.vue', expected: 1 },

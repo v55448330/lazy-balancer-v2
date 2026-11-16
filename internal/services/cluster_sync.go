@@ -1648,14 +1648,6 @@ func (s *SyncService) readSyncMarkerMessage(ctx context.Context) (string, bool) 
 	return msg, true
 }
 
-// syncMarkerPresent 报告 last_sync_error 是否携带指定后置副作用标记。
-// 读失败时按「存在」返回（fail-closed）：调用方据此跳过清空/覆盖，宁可让
-// 标记消息暂不刷新，也不冒静默销毁补偿触发器的风险。
-func (s *SyncService) syncMarkerPresent(ctx context.Context, prefix string) bool {
-	msg, known := s.readSyncMarkerMessage(ctx)
-	return !known || strings.HasPrefix(msg, prefix)
-}
-
 // syncPostCommitFailureMarkerPresent 报告是否存在任一后置副作用失败标记
 // （单次读取后本地判族，见 readSyncMarkerMessage）。
 func (s *SyncService) syncPostCommitFailureMarkerPresent(ctx context.Context) bool {
