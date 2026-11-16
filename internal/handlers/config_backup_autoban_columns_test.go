@@ -4,7 +4,7 @@ package handlers
 // parity 绊线：清单是导入侧「运行期收敛是否需要比对」的输入面，读侧是
 // 收敛判定的唯一事实源——两侧漂移会让导入比对到假的「无变化」。
 // cc_* 阈值已迁策略级（global_config 同名列零运行期消费），不得混入；
-// human_secret 单列登记（携带判定需要，但不属于七列比对）。
+// human_secret 单列登记（携带判定需要，但不属于十列比对）。
 
 import (
 	"reflect"
@@ -45,19 +45,19 @@ func TestConfigBackupAutobanColumns_matchReadAutobanConfigFrom(t *testing.T) {
 }
 
 // human_secret 携带判定：单列登记必须被 configCarriesAutobanRuntimeColumns
-// 消费（提交后缓存失效收敛的触发前提），且不属于七列清单本体。
+// 消费（提交后缓存失效收敛的触发前提），且不属于十列清单本体。
 func TestConfigCarriesAutobanRuntimeColumns_humanSecretTriggersConvergence(t *testing.T) {
 	if !configCarriesAutobanRuntimeColumns(map[string]any{configBackupHumanSecretColumn: "x"}) {
 		t.Fatal("携带 human_secret 必须触发提交后收敛判定")
 	}
 	for _, carried := range configBackupAutobanColumns {
 		if carried == configBackupHumanSecretColumn {
-			t.Fatal("human_secret 不属于自动封禁七列（ReadAutobanConfigFrom 不读取）")
+			t.Fatal("human_secret 不属于自动封禁十列（ReadAutobanConfigFrom 不读取）")
 		}
 	}
-	// 七列任一携带同样触发；无关键不触发。
+	// 十列任一携带同样触发；无关键不触发。
 	if !configCarriesAutobanRuntimeColumns(map[string]any{"autoban_threshold": 5}) {
-		t.Fatal("携带七列之一必须触发收敛判定")
+		t.Fatal("携带十列之一必须触发收敛判定")
 	}
 	if configCarriesAutobanRuntimeColumns(map[string]any{"log_level": "info"}) {
 		t.Fatal("无关配置键不得触发收敛判定")

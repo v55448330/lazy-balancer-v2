@@ -1,6 +1,6 @@
 package handlers
 
-// 自动封禁端面：配置读写（七项+校验；保存联动调度启停）、
+// 自动封禁端面：配置读写（十项+校验；保存联动调度启停）、
 // 运行状态（状态卡数据源：运行态/今日封禁/名单条数/引用状态/观察建议）。
 // 预置名单的条目管理例外（删 400/条目可改）在 securityiplists.go。
 // 「立即执行」端点已废除（2026-10-14 裁定：调度唯一前提=业务启用）。
@@ -19,7 +19,7 @@ import (
 	"lazy-balancer-v2/internal/services"
 )
 
-// GetAutobanConfig GET /security/autoban：七项配置（全员可读，business 组）。
+// GetAutobanConfig GET /security/autoban：十项配置（全员可读，business 组）。
 func (h *Handlers) GetAutobanConfig(c *gin.Context) {
 	cfg, err := services.GetAutobanConfig()
 	if err != nil {
@@ -29,7 +29,7 @@ func (h *Handlers) GetAutobanConfig(c *gin.Context) {
 	c.JSON(http.StatusOK, cfg)
 }
 
-// UpdateAutobanConfig PUT /security/autoban：七项配置写侧（校验：阈值 1-10000、
+// UpdateAutobanConfig PUT /security/autoban：十项配置写侧（校验：阈值 1-10000、
 // 窗口 1-60 分钟、时长/口径/升级枚举）。窗口/口径变更由 services 层重置计数器
 // （口径语义变化后旧计数不可混算）。保存联动调度启停（2026-10-14 裁定：
 // 本任务调度唯一前提=业务启用——enabled=true 开 autoban 循环调度、false 停；

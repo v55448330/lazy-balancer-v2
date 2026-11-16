@@ -3858,7 +3858,7 @@ func validateV2BackupAdminTLS(config map[string]any) error {
 	return nil
 }
 
-// validateV2BackupAutobanConfig 自动封禁七列导入门（导入/
+// validateV2BackupAutobanConfig 自动封禁十列导入门（导入/
 // 预览双路径同序调用，镜像 validateV2BackupAdminTLS 位次）：布尔键的类型门
 // 已由 backupBooleanConfigKeys 枚举（validateV2BackupBooleanTypes）承担；此处
 // 承担数值钳制与枚举校验——写侧（services.ValidateAutobanConfig）同口径，导入
@@ -7350,7 +7350,7 @@ func readImportOldAutoBackupEnabled(ctx context.Context, q importRowQuerier) (in
 	return enabled, nil
 }
 
-// configBackupAutobanColumns 是自动封禁七列（与 services.ReadAutobanConfigFrom
+// configBackupAutobanColumns 是自动封禁十列（与 services.ReadAutobanConfigFrom
 // 的 SELECT 列清单一一对应）：通用 `UPDATE global_config` 的写入面，也是
 // 运行期收敛（清桶/重算达标/禁用收尾/调度联动）判定的输入面。新增/改名时
 // 必须与读侧同步——否则导入侧比对到「无变化」而运行期实际已换配置。
@@ -7364,9 +7364,9 @@ var configBackupAutobanColumns = []string{
 }
 
 // configBackupHumanSecretColumn 人机验证 cookie 签名密钥列：不属于自动封禁
-// 七列（ReadAutobanConfigFrom 不读取），但同经通用 `UPDATE global_config`
+// 十列（ReadAutobanConfigFrom 不读取），但同经通用 `UPDATE global_config`
 // 写入，提交后需要独立的缓存失效收敛（services.ResetHumanSecretCache），
-// 故单列登记而不混入七列清单。
+// 故单列登记而不混入十列清单。
 const configBackupHumanSecretColumn = "human_secret"
 
 // generateImportHumanSecret 为「空串=重新生成」语义现场生成强密钥：与启动
@@ -7381,8 +7381,8 @@ func generateImportHumanSecret() (string, error) {
 }
 
 // configCarriesAutobanRuntimeColumns 报告备份全局配置区是否携带自动封禁
-// 七列或 human_secret 之一（携带即可能改写运行值/缓存前提，需要在提交后
-// 比对并收敛；human_secret 触发的是密钥缓存失效而非七列比对）。
+// 十列或 human_secret 之一（携带即可能改写运行值/缓存前提，需要在提交后
+// 比对并收敛；human_secret 触发的是密钥缓存失效而非十列比对）。
 func configCarriesAutobanRuntimeColumns(config map[string]any) bool {
 	for _, column := range configBackupAutobanColumns {
 		if _, carried := config[column]; carried {

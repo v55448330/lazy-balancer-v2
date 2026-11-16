@@ -342,7 +342,7 @@ func AutobanDurationLabel(s string) string {
 	}
 }
 
-// AutobanConfig 七项配置（GET/PUT /security/autoban 载荷与任务/计数器共用形态）。
+// AutobanConfig 十项配置（GET/PUT /security/autoban 载荷与任务/计数器共用形态）。
 // Scope 为逗号分隔口径集合（blocked/logged/challenge_issued/challenge_failed，
 // 2026-11-13 用户裁定多选）；count_human_failed 开关退役，语义并入 challenge_failed。
 // Escalation 为累犯渐进升级档位（off/standard/aggressive，默认 off）。
@@ -405,14 +405,14 @@ func SetAutobanProjectionRefresher(fn func() (IPListProjectionOutcome, error)) {
 
 // ---- 配置读写 ----
 
-// AutobanConfigQuerier 是七列读取的最小依赖面（库句柄或已开启的事务）。
+// AutobanConfigQuerier 是十列读取的最小依赖面（库句柄或已开启的事务）。
 // 事务形态是备份导入的必需用法：导入在写事务内比对「导入前」运行值，
 // 事务外读 live 会与已开启的写事务争同一连接（单连接池下自锁）。
 type AutobanConfigQuerier interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }
 
-// ReadAutobanConfigFrom 在调用方给定的视图上读七列（COALESCE 仅归一存量
+// ReadAutobanConfigFrom 在调用方给定的视图上读十列（COALESCE 仅归一存量
 // NULL；读失败显性返回错误）。GetAutobanConfig 与导入侧共用本单源——
 // 两份手写 SELECT 的列/COALESCE 默认值漂移会让导入侧比对出假的「配置变化」。
 func ReadAutobanConfigFrom(ctx context.Context, q AutobanConfigQuerier) (AutobanConfig, error) {
@@ -443,7 +443,7 @@ func ReadAutobanConfigFrom(ctx context.Context, q AutobanConfigQuerier) (Autoban
 	}, nil
 }
 
-// GetAutobanConfig 读七项配置（COALESCE 仅归一存量 NULL；读失败显性返回错误）。
+// GetAutobanConfig 读十项配置（COALESCE 仅归一存量 NULL；读失败显性返回错误）。
 func GetAutobanConfig() (AutobanConfig, error) {
 	cfg := AutobanConfig{
 		Threshold:           db.DefaultAutobanThreshold,
@@ -468,7 +468,7 @@ func GetAutobanConfig() (AutobanConfig, error) {
 
 // ValidateAutobanConfig 写侧校验：阈值 1-10000、窗口 1-60 分钟、时长/口径/升级枚举。
 //
-// 历史设计评审（显式声明）：七列配置的三条归一通道语义
+// 历史设计评审（显式声明）：十列配置的三条归一通道语义
 // **有意分歧**，各自贴合通道处境，不做统一——
 //   - 保存侧（本函数，PUT /security/autoban）：**拒绝**——面板表单是用户
 //     直接意图，非法值响亮 400 让用户改输入；
@@ -516,7 +516,7 @@ func ValidateAutobanConfig(cfg AutobanConfig) error {
 	return nil
 }
 
-// SetAutobanConfig 写七项配置；窗口/口径变更时重置计数器（口径语义
+// SetAutobanConfig 写十项配置；窗口/口径变更时重置计数器（口径语义
 // 变了，旧计数不可与新口径混算）。禁用（enabled=false）同样清空计数桶与观察
 // 建议——停用期无喂入，陈旧计数不得在重新启用后立即封禁（见下方调用点注释）。
 // Escalation 缺省（空串=旧客户端/旧调用方未携带该字段）归一为 off——保持
@@ -546,13 +546,13 @@ func SetAutobanConfig(cfg AutobanConfig) error {
 		return err
 	}
 	// 运行期收敛（清桶/重算 Reached/禁用收尾/调度联动）与备份导入提交后
-	// 共用同一单源——七列有第二条写入路径（导入/还原的通用
+	// 共用同一单源——十列有第二条写入路径（导入/还原的通用
 	// `UPDATE global_config`），各自内联判断会让不变量在导入面静默失效。
 	ReconcileAutobanRuntimeAfterConfigReplace(prev, cfg)
 	return nil
 }
 
-// autobanConfigReplaceEffects 是「七列配置已被替换」后的运行期收敛判定。
+// autobanConfigReplaceEffects 是「十列配置已被替换」后的运行期收敛判定。
 // 单源：ReconcileAutobanRuntimeAfterConfigReplace 的动作与
 // AutobanConfigReplaceEffectNote 的文案共用本判定（判定与文案漂移会让
 // 「响应说清了桶」与「实际清桶」分叉）。
@@ -589,7 +589,7 @@ func autobanConfigReplaceEffectsOf(old, new AutobanConfig) autobanConfigReplaceE
 	return effect
 }
 
-// ReconcileAutobanRuntimeAfterConfigReplace 在「七列自动封禁配置已被替换」之后
+// ReconcileAutobanRuntimeAfterConfigReplace 在「十列自动封禁配置已被替换」之后
 // 收敛运行期状态（单源：PUT 保存 / 备份导入-还原提交后）。old/new 分别为
 // 替换前后的运行值；调用方只需保证替换已完成（本函数不写库）。
 //
@@ -622,8 +622,8 @@ func ReconcileAutobanRuntimeAfterConfigReplace(old, new AutobanConfig) {
 	applyBusinessTaskLoop(AutobanTaskID, new.Enabled)
 }
 
-// AutobanConfigReplaceEffectNote 返回「替换七列后运行期收敛动作」的用户可读
-// 说明（导入/还原响应的 warnings 与成功审计单源）；无收敛动作（七列相同，
+// AutobanConfigReplaceEffectNote 返回「替换十列后运行期收敛动作」的用户可读
+// 说明（导入/还原响应的 warnings 与成功审计单源）；无收敛动作（十列相同，
 // 或仅时长/观察模式变化）时返回空串。
 func AutobanConfigReplaceEffectNote(old, new AutobanConfig) string {
 	effect := autobanConfigReplaceEffectsOf(old, new)

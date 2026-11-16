@@ -204,7 +204,7 @@ const (
 	DefaultAutoBackupTime      = "03:00"
 	DefaultAutoBackupDay       = 1
 	DefaultAutoBackupKeep      = 7
-	// 自动封禁七列治理默认：DDL、启动回填、services 读侧 COALESCE 与
+	// 自动封禁十列治理默认：DDL、启动回填、services 读侧 COALESCE 与
 	// 无库默认结构体共用。枚举/边界仍由 services 校验持有，db 不反向依赖。
 	DefaultAutobanEnabled       = 0
 	DefaultAutobanThreshold     = 100
@@ -1500,7 +1500,7 @@ var newColumnsRegistry = map[string]string{
 	// 的 304 兜底与标签自愈依赖;哈希域=纯 ref 含版本标签)。
 	"global_config.applied_waf_ref_hash":    "TEXT DEFAULT ''",
 	"global_config.applied_waf_ref_version": "INTEGER DEFAULT 0",
-	// 自动封禁七项配置列：启用/阈值/窗口分钟/封禁时长（枚举
+	// 自动封禁十项配置列：启用/阈值/窗口分钟/封禁时长（枚举
 	// '10m','30m','1h','6h','12h','24h','permanent'）/统计口径（四维多选集合
 	// 'blocked,logged,challenge_issued,challenge_failed'，2026-11-13 用户裁定）/
 	// 观察模式（1=默认 dry-run，仅记录建议不落名单）/累犯渐进升级
@@ -1813,7 +1813,7 @@ func runMigrations() error {
 		// 静默吞掉，无任何留痕）。读侧 GetCertRenewalDays/Attempts 直读零兜底。
 		updateWhere("global_config", fmt.Sprintf("cert_renewal_days=%d", DefaultCertRenewalDays), "cert_renewal_days IS NULL OR cert_renewal_days<=0"),
 		updateWhere("global_config", fmt.Sprintf("cert_renewal_attempts=%d", DefaultCertRenewalAttempts), "cert_renewal_attempts IS NULL OR cert_renewal_attempts<=0"),
-		// 自动封禁七列每启动幂等回填（同上铁律的最后防线
+		// 自动封禁十列每启动幂等回填（同上铁律的最后防线
 		// 形态）——带外直写/畸形备份导入的脏行（0-1 外布尔、枚举外文本、写侧
 		// 边界外数值）在下次启动收敛到治理默认；运行期窗口内的无效值由消费侧
 		// 护栏（RunAutobanCycle 执行前校验，拒绝执行+显性报错）承担，不静默兜底。

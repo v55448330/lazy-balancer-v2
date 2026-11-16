@@ -1055,7 +1055,7 @@ func TestGovernedDefaultLiteralsBoundInConsumers(t *testing.T) {
 			},
 		},
 		{
-			// 自动封禁读侧七列 COALESCE 与无库默认结构体必须同源：调整
+			// 自动封禁读侧十列 COALESCE 与无库默认结构体必须同源：调整
 			// 窗口/阈值/封禁时长/升级档位时，运行期读取与迁移回填不得分叉。
 			file: "../services/autoban.go",
 			forbidden: []string{
