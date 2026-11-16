@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -39,9 +40,10 @@ type humanEvent struct {
 }
 
 type humanEventPoster struct {
-	mu     sync.Mutex
-	client *http.Client
-	url    string // 投递地址（默认 UDS；测试可注入本地端点）
+	mu       sync.Mutex
+	client   *http.Client
+	url      string // 投递地址（默认 UDS；测试可注入本地端点）
+	disabled bool   // env 显式空串/空白=关闭上报（不建客户端、不拨号）
 }
 
 var poster = &humanEventPoster{}
@@ -60,9 +62,16 @@ func (p *humanEventPoster) initClient() {
 	if p.client != nil {
 		return
 	}
-	socket := os.Getenv(humanEventSocketEnv)
-	if socket == "" {
-		socket = "/app/data/security-events.sock"
+	// socket env 契约与 caddygeoip/caddyl4sec 同口径：未设置=容器默认 socket；
+	// 显式空串/纯空白=关闭上报（不拨号）；有效值 TrimSpace。
+	// disabled 每次重解析（不粘滞）：client 被重置后按当前 env 重新判定。
+	socket := "/app/data/security-events.sock"
+	if v, ok := os.LookupEnv(humanEventSocketEnv); ok {
+		socket = strings.TrimSpace(v)
+	}
+	p.disabled = socket == ""
+	if p.disabled {
+		return
 	}
 	p.client = &http.Client{
 		Timeout: 2 * time.Second,
@@ -81,6 +90,7 @@ func (p *humanEventPoster) initClientWithURL(rawURL string) {
 	defer p.mu.Unlock()
 	p.client = &http.Client{Timeout: 2 * time.Second}
 	p.url = rawURL
+	p.disabled = false
 }
 
 // shouldReport 挑战发放/通过/失败全部逐请求上报（2026-11-13 用户裁定：
@@ -94,6 +104,7 @@ func (p *humanEventPoster) shouldReport(ip, kind string, now time.Time) bool {
 // （ServeHTTP CC 判定）与发放事件上报点（serveChallengeForRequest 族）分离，
 // 按键暂存-一次性消费贯通原因，不改 reportHumanEvent 签名（13 调用点零扰动）。
 // 同键并发触发按后值覆盖（同窗口同原因，语义无损）；消费即删不滞留。
+// 消费按 kind 门控（takeCCTriggerReason）：仅发放族消费，防跨 kind 窃取。
 var ccTriggerReasons sync.Map
 
 // stashCCTriggerReason 触发点暂存原因（仅 CC 判定触发时调用）。
@@ -102,9 +113,17 @@ func stashCCTriggerReason(ruleID, ip, reason string) {
 }
 
 // takeCCTriggerReason 发放上报点消费原因（一次性；无暂存返回空串）。
-func takeCCTriggerReason(ruleID, ip string) string {
+// 仅发放族 kind 消费：pass/fail 是验证流程事件，不得跨 kind 窃取待发放
+// 挑战的原因；rate_reject 即消但不携带（blocked 口径不做挑战归因，
+// 防滞留原因污染后续挑战归因）。
+func takeCCTriggerReason(ruleID, ip, kind string) string {
+	if kind != "challenge" && kind != "rate_reject" {
+		return ""
+	}
 	if v, ok := ccTriggerReasons.LoadAndDelete(ruleID + "|" + normalizeIP(ip)); ok {
-		return v.(string)
+		if kind == "challenge" {
+			return v.(string)
+		}
 	}
 	return ""
 }
@@ -115,7 +134,7 @@ func takeCCTriggerReason(ruleID, ip string) string {
 func reportHumanEvent(ruleID, ip, method, uri, ua, kind string) {
 	humanEventWorker.Do(func() { go humanEventWorkerLoop() })
 	select {
-	case humanEventQueue <- humanEvent{ruleID: ruleID, ip: ip, method: method, uri: uri, ua: ua, kind: kind, reason: takeCCTriggerReason(ruleID, ip), ts: time.Now().UnixMilli()}:
+	case humanEventQueue <- humanEvent{ruleID: ruleID, ip: ip, method: method, uri: uri, ua: ua, kind: kind, reason: takeCCTriggerReason(ruleID, ip, kind), ts: time.Now().UnixMilli()}:
 	default:
 		humanEventDropped.Add(1)
 	}
@@ -146,7 +165,11 @@ func (p *humanEventPoster) deliver(ev humanEvent) {
 	p.initClient()
 	client := p.client
 	target := p.url
+	disabled := p.disabled
 	p.mu.Unlock()
+	if disabled {
+		return // env 显式关闭：不拨号不计失败（关闭≠投递故障）
+	}
 	if client == nil {
 		humanEventDeliverFailed.Add(1)
 		return

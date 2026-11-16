@@ -51,6 +51,8 @@ func (h *HumanHandler) serveQueueWait(w http.ResponseWriter, r *http.Request, ip
 		h.serveRateJSON(w, r, ip, wait, "queue")
 		return
 	}
+	// queue 等待页属挑战发放口径（kind=challenge），与事件落库同口径计计数器。
+	humanStats.Challenges.Add(1)
 	reportHumanEvent(h.RuleID, ip, r.Method, r.URL.RequestURI(), r.UserAgent(), "challenge")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
@@ -91,6 +93,8 @@ func (h *HumanHandler) serveRateJSON(w http.ResponseWriter, r *http.Request, ip 
 	if action == "reject" {
 		reportHumanEvent(h.RuleID, ip, r.Method, r.URL.RequestURI(), r.UserAgent(), "rate_reject")
 	} else {
+		// queue JSON 同属挑战发放口径（reject 走 rate_reject→blocked，不计）。
+		humanStats.Challenges.Add(1)
 		reportHumanEvent(h.RuleID, ip, r.Method, r.URL.RequestURI(), r.UserAgent(), "challenge")
 	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
@@ -107,8 +111,9 @@ func (h *HumanHandler) serveRateJSON(w http.ResponseWriter, r *http.Request, ip 
 }
 
 // queueWidgetHTML 排队倒计时组件（%d=等待秒数，%s=原 URI JSON）。
-// 客户端指数退避：首次等 N 秒自动重放；仍超限再拿等待页时 JS 读
-// sessionStorage 退避计数翻倍（封顶 300s）——服务端零队列状态。
+// 客户端指数退避：首次等 N 秒自动重放；倒计时自然结束保留退避计数——仍超限
+// 再拿等待页时 JS 读 sessionStorage 计数翻倍等待（封顶 300s）；仅手动
+// Retry now 清零回基础等待。服务端零队列状态。
 const queueWidgetHTML = `<div class="lb-queue" style="width:300px;max-width:100%%;margin:18px auto 0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;text-align:center">
 <div style="font-size:34px;font-weight:700;color:#d97706" id="lb-queue-count">%d</div>
 <div style="font-size:13px;color:#6b7280;margin-top:6px">Too many requests — retrying automatically when the countdown ends.</div>
@@ -121,9 +126,9 @@ var wait=Math.min(base*Math.pow(2,n),300);
 sessionStorage.setItem(key,String(n+1));
 var el=document.getElementById("lb-queue-count"),left=wait;
 el.textContent=left;
-function go(){sessionStorage.removeItem(key);window.location.href=uri;}
+function go(manual){if(manual){sessionStorage.removeItem(key);}window.location.href=uri;}
 var t=setInterval(function(){left--;if(left<=0){clearInterval(t);go();}else{el.textContent=left;}},1000);
-document.getElementById("lb-queue-retry").onclick=function(){clearInterval(t);go();};
+document.getElementById("lb-queue-retry").onclick=function(){clearInterval(t);go(true);};
 })();
 </script>
 </div>`
