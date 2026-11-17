@@ -351,7 +351,7 @@ func normalizeUnregisteredThreatSourceSlots() {
 	}
 }
 
-// InitTaskEngine 建引擎、恢复孤儿运行、注册全部 27 任务（本文件 19 +
+// InitTaskEngine 建引擎、恢复孤儿运行、注册全部 31 任务（本文件 19 +
 // taskengine_wire_runtime.go 运行期族 8）并启动默认循环。
 // 非幂等——调用方保证单次装配；重复调用前须先
 // StopTaskEngine（否则旧 scheduleLoop goroutine 泄漏、双引擎双写 task_runs）。
@@ -1007,6 +1007,7 @@ func InitTaskEngine(watchdogAdminURL, runtimeLogFile string) *taskengine.Engine 
 	// 默认启动前先读偏好——显式停止的 daemon 必须在任何
 	// StartLoop 副作用（启动记录/首轮执行）之前跳过；否则先启动再 StopLoop
 	// 会留下假启动记录并可能实际跑一轮。
+	registerNotificationTasks(te)
 	taskLoopPrefs := loadTaskLoopPrefs()
 	// 装配期服务屏障：部署面常驻任务（cert-issuance）的 Run 体起步即真实接管
 	// 服务（cert-issuance → StartACME → CA 队列/证书部署重试 → Caddy /load），

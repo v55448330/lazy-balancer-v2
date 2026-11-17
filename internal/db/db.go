@@ -536,6 +536,62 @@ func createTables() error {
 	);
 	CREATE INDEX IF NOT EXISTS idx_api_keys_prefix_hash ON api_keys(key_prefix, key_hash);
 
+	-- 通知中心（audit151 方案：通道/订阅/投递留痕/QQ 绑定码/MCP 会话）
+	CREATE TABLE IF NOT EXISTS notification_channels (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		user_id INTEGER NOT NULL,
+		type TEXT NOT NULL,
+		name TEXT NOT NULL,
+		target TEXT NOT NULL,
+		enabled INTEGER NOT NULL DEFAULT 1,
+		last_test_at DATETIME,
+		last_test_ok INTEGER,
+		created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		UNIQUE(user_id, type, target)
+	);
+	CREATE INDEX IF NOT EXISTS idx_notification_channels_user ON notification_channels(user_id, enabled);
+
+	CREATE TABLE IF NOT EXISTS notification_subscriptions (
+		user_id INTEGER NOT NULL,
+		event_type TEXT NOT NULL,
+		min_level TEXT NOT NULL DEFAULT 'info',
+		PRIMARY KEY (user_id, event_type)
+	);
+
+	CREATE TABLE IF NOT EXISTS notification_deliveries (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		user_id INTEGER NOT NULL,
+		event_type TEXT NOT NULL,
+		level TEXT NOT NULL DEFAULT 'info',
+		title TEXT NOT NULL,
+		body TEXT NOT NULL DEFAULT '',
+		status TEXT NOT NULL DEFAULT 'pending',
+		attempts INTEGER NOT NULL DEFAULT 0,
+		error TEXT DEFAULT '',
+		created_at TEXT NOT NULL,
+		sent_at DATETIME
+	);
+	CREATE INDEX IF NOT EXISTS idx_notification_deliveries_status ON notification_deliveries(status, id);
+	CREATE INDEX IF NOT EXISTS idx_notification_deliveries_user ON notification_deliveries(user_id, id);
+
+	CREATE TABLE IF NOT EXISTS qq_bind_codes (
+		code TEXT PRIMARY KEY,
+		user_id INTEGER NOT NULL,
+		expires_at DATETIME NOT NULL
+	);
+
+	CREATE TABLE IF NOT EXISTS mcp_sessions (
+		session_id TEXT PRIMARY KEY,
+		user_id INTEGER NOT NULL,
+		api_key_id INTEGER NOT NULL,
+		ip TEXT NOT NULL DEFAULT '',
+		user_agent TEXT DEFAULT '',
+		first_seen TEXT NOT NULL,
+		last_seen TEXT NOT NULL
+	);
+	CREATE INDEX IF NOT EXISTS idx_mcp_sessions_user ON mcp_sessions(user_id, last_seen);
+
 	-- LB Rules table (caddy_id is now the primary key)
 	CREATE TABLE IF NOT EXISTS lb_rules (
 		-- id 是主键迁移（id→caddy_id）前的历史列：新行恒 NULL，唯一残存消费是
