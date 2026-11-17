@@ -283,6 +283,22 @@ var apiDocRoutes = []apiDocRoute{
 	{"PUT", "/security/crawler-lib/:id/flags", "安全", "更新爬虫地址库逐源开关", `{"update_enabled":true}`, `{"code":0,"message":"已更新"}`, []string{"400 无可更新字段", "401 unauthenticated", "403 slave_or_admin_required", "404 源不存在", "428 mfa_step_up_required", "409 import_in_progress（配置导入窗口拒绝写）"}, "仅 update_enabled 可改。"},
 	{"GET", "/security/crawler-lib/update/status", "安全", "爬虫地址库更新任务状态", "", `{"running":false,"trigger":"manual","started_at":"2026-10-17 04:00:00","finished_at":"2026-10-17 04:00:05","outcome":"success"}`, []string{"401 unauthenticated", "503 task_engine_unavailable"}, "直接读取 crawlerbot-update 自身任务历史。"},
 	{"GET", "/security/crawler-lib/update/logs", "安全", "爬虫地址库更新任务日志", "", `{"content":"2026/10/16 22:00:00 [INFO] crawlerbot-update: 源 googlebot 更新 170 个 IP 段"}`, []string{"401 unauthenticated"}, ""},
+	{"GET", "/notification/catalog", "通知", "事件目录（订阅矩阵数据源）", "", `{"code":0,"data":{"events":[{"id":"cert.failed","title":"证书签发失败","level":"critical","default_subscribed":true,"group":"证书"}]}}`, []string{"401 unauthenticated"}, "所有已登录用户可读。事件目录全量导出：id/标题（目录模板静态文本）/级别/默认订阅/分组（认证/配置/安全/证书/集群/系统）；目录为订阅矩阵与模板的唯一事实源。"},
+	{"GET", "/notification/subscriptions", "通知", "当前用户订阅矩阵", "", `{"code":0,"data":{"subscriptions":[{"event_type":"cert.failed","level":"critical","default_subscribed":true,"subscribed":true,"min_level":"warn"}]}}`, []string{"401 unauthenticated"}, "所有已登录用户可读。目录全量行合并本人显式订阅：subscribed=true 表示存在显式行（min_level 为该行值）；false 为默认态（default_subscribed 兜底，critical+warn 默认开）。"},
+	{"PUT", "/notification/subscriptions", "通知", "批量设置当前用户订阅", `{"items":[{"event_type":"cert.failed","min_level":"warn"},{"event_type":"auth.login_success","min_level":""}]}`, `{"code":0}`, []string{"400 invalid_request", "400 订阅事件不在目录中", "400 订阅级别必须为 info/warn/critical", "401 unauthenticated", "403 read_only_key_or_slave（只读 Key/从节点恒 403）", "428 mfa_step_up_required"}, "部分更新语义：min_level ∈ info/warn/critical 为 UPSERT；空串=删除显式行回目录默认态。事件 ID 必须在目录内。"},
+	{"GET", "/notification/deliveries", "通知", "投递流水", "", `{"code":0,"data":{"deliveries":[{"id":1,"user_id":7,"event_type":"cert.failed","level":"critical","title":"证书签发失败","body":"...","status":"failed","attempts":2,"error":"dial timeout","created_at":"2026-11-18 09:00:00","sent_at":""}]}}`, []string{"400 invalid_request", "400 不支持的投递状态过滤", "401 unauthenticated"}, "默认仅本人投递（id 倒序）。?limit= 默认 50 上限 200；?status= ∈ pending/sent/failed/dead；管理员 ?all=1 查全平台（含 user_id，跨属主行正文截断脱敏）。"},
+	{"POST", "/notification/deliveries/:id/resend", "通知", "重发投递", "", `{"code":0,"message":"重发已受理，等待投递"}`, []string{"403 仅可重发自己的通知投递", "404 通知投递不存在", "409 该投递已处于待发队列", "428 mfa_step_up_required"}, "属主或管理员；非 pending 行重置回 pending（清错误/重置尝试/刷新时间戳）并唤醒投递循环立即补发，审计留痕。"},
+	{"GET", "/notification/channels", "通知", "通知通道列表", "", `{"code":0,"data":{"channels":[{"id":1,"user_id":7,"type":"webhook","name":"运维群","target":"{\"url\":\"https://...\"}","enabled":true,"last_test_at":"","last_test_ok":false}]}}`, []string{"401 unauthenticated"}, "管理员全平台（非属主行 target 脱敏），普通用户仅自己的。"},
+	{"POST", "/notification/channels", "通知", "创建通知通道", `{"type":"webhook","name":"运维群","target":"{\"url\":\"https://example.com/hook\"}"}`, `{"code":0,"data":{"id":1}}`, []string{"400 invalid_request", "400 不支持的通知通道类型", "400 目标校验失败（按类型的 URL/邮箱/openid/receiver 契约）", "403 read_only_key_or_slave（只读 Key/从节点恒 403）", "428 mfa_step_up_required"}, "type ∈ webhook/email/qq/wx_clawbot；target 为该类型契约的 JSON。"},
+	{"PUT", "/notification/channels/:id", "通知", "更新通知通道", `{"name":"新名称","target":"{\"url\":\"https://...\"}","enabled":false}`, `{"code":0}`, []string{"404 not_found", "403 仅可管理自己的通知通道", "428 mfa_step_up_required"}, "属主或管理员；部分更新（仅提供的键生效），跨属主修改审计留痕。"},
+	{"DELETE", "/notification/channels/:id", "通知", "删除通知通道", "", `{"code":0}`, []string{"404 not_found", "403 仅可管理自己的通知通道", "428 mfa_step_up_required"}, "属主或管理员；跨属主删除审计留痕。"},
+	{"POST", "/notification/channels/:id/test", "通知", "测试通知通道", "", `{"code":0,"message":"测试消息已发送"}`, []string{"404 not_found", "403 仅可测试自己的通知通道", "502 测试消息发送失败", "428 mfa_step_up_required"}, "发送一条测试消息并回写 last_test_at/last_test_ok。"},
+	{"GET", "/notification/settings", "通知", "通知设置（管理员）", "", `{"code":0,"data":{"smtp":{"host":"","port":"","user":"","from":"","pass_configured":false},"qq":{"appid":"","secret_configured":false},"wx_bot_cred_configured":false,"mcp_enabled":false,"attack_warn_at":50,"attack_critical_at":200}}`, []string{"403 仅管理员可管理通知设置"}, "secret 类永不回显（只回「已配置」布尔）；阈值未配置时返回生效默认（50/200）。"},
+	{"PUT", "/notification/settings", "通知", "更新通知设置（管理员）", `{"smtp":{"host":"smtp.example.com","port":"465","pass":"***"},"qq":{"appid":"123","secret":"***"},"mcp_enabled":true,"attack_warn_at":80,"attack_critical_at":300}`, `{"code":0,"message":"通知设置已保存"}`, []string{"400 invalid_request", "400 SMTP 端口必须为 1-65535 的数字", "400 拦截告警阈值需满足 0 < warn < critical", "403 仅管理员可管理通知设置", "428 mfa_step_up_required"}, "部分更新（仅提供的键生效）；secret 传空串=清除；微信 iLink 凭据经扫码端点落库（本端点只回 wx_bot_cred_configured 布尔，不直写）；thresholds 以生效值合并请求值后整体校验。变更键审计留痕。"},
+	{"POST", "/notification/daily-report/trigger", "通知", "手动触发每日日报（管理员）", "", `{"code":0,"message":"每日日报已触发"}`, []string{"403 仅管理员可管理通知设置", "500 日报生成失败", "428 mfa_step_up_required"}, "立即渲染昨日摘要并按订阅矩阵走投递通道；审计留痕。每日 09:00 定时触发见任务监控 notification-daily-report。"},
+	{"GET", "/security/mcp-sessions", "通知", "MCP 会话列表（管理员）", "", `{"code":0,"data":{"sessions":[{"session_id":"mcp-session-3f","user_id":7,"username":"alice","key_id":42,"key_name":"ci-key","ip":"10.0.0.1","user_agent":"claude-code/1","first_seen":"2026-11-18 09:00:00","last_seen":"2026-11-18 09:30:00","online":true}]}}`, []string{"403 admin_required"}, "管理员全量；?mine=1 仅本人。online=last_seen 30 分钟内有活动（与投递 Daemon 清理同口径）；username/key_name 由 JOIN 取展示名，用户/Key 已删回空串。"},
+	{"POST", "/security/mcp-sessions/:id/disconnect", "通知", "强制断开 MCP 会话（管理员）", "", `{"code":0,"message":"MCP 会话已断开"}`, []string{"403 admin_required", "428 mfa_step_up_required", "404 MCP 会话不存在", "500 断开 MCP 会话失败"}, "删会话行+终止服务端会话（该会话后续请求 404，实时推送不再命中），审计留痕会话 ID/属主/Key。"},
+	{"GET", "/notification/mcp/stats", "通知", "MCP 调用统计（管理员）", "", `{"code":0,"data":{"today_calls":12,"active_sessions":2,"error_rate":0.25,"top_tools":[{"tool":"list_rules","calls":10}],"trend":[{"date":"2026-11-12","calls":0},{"date":"2026-11-18","calls":12}]}}`, []string{"403 admin_required"}, "今日调用/在线会话数/今日错误率/TOP 工具（今日前 5）/近 7 天调用趋势（含今日，无调用日补零）。"},
 }
 
 // apiDocImportWindowError 返回导入窗口门的文档条目（按方法派生）。门对只读/
@@ -794,30 +810,34 @@ var apiDocRetryByMethod = map[string]string{
 //
 // 语义边界：PUT/PATCH/DELETE 的文案由 apiDocRetryByMethod 派生，不进本表。
 var createLikeWriteDocRoutes = map[string]struct{}{
-	"POST /auth/login":                                {},
-	"POST /auth/ticket-login":                         {},
-	"POST /auth/mfa/verify":                           {},
-	"POST /auth/mfa/setup":                            {},
-	"POST /auth/mfa/activate":                         {},
-	"POST /auth/mfa/disable":                          {},
-	"POST /auth/mfa/recovery-codes":                   {},
-	"POST /auth/mfa/verify-step":                      {},
-	"POST /users/:id/mfa/reset":                       {},
-	"POST /auth/setup":                                {},
-	"POST /users":                                     {},
-	"POST /users/:id/reset-password":                  {},
-	"POST /users/me/api-keys":                         {},
-	"POST /api-keys":                                  {},
-	"POST /config/import":                             {},
-	"POST /system/tasks/:id/trigger":                  {},
-	"POST /system/tasks/:id/toggle":                   {},
-	"POST /system/tasks/:id/control":                  {},
-	"POST /system/tasks/:id/cancel":                   {},
-	"POST /auto-backup/run":                           {},
-	"POST /auto-backup/:id/restore":                   {},
-	"POST /config/reload":                             {},
-	"POST /rules":                                     {},
-	"POST /certificate-configs":                       {},
+	"POST /auth/login":               {},
+	"POST /auth/ticket-login":        {},
+	"POST /auth/mfa/verify":          {},
+	"POST /auth/mfa/setup":           {},
+	"POST /auth/mfa/activate":        {},
+	"POST /auth/mfa/disable":         {},
+	"POST /auth/mfa/recovery-codes":  {},
+	"POST /auth/mfa/verify-step":     {},
+	"POST /users/:id/mfa/reset":      {},
+	"POST /auth/setup":               {},
+	"POST /users":                    {},
+	"POST /users/:id/reset-password": {},
+	"POST /users/me/api-keys":        {},
+	"POST /api-keys":                 {},
+	"POST /config/import":            {},
+	"POST /system/tasks/:id/trigger": {},
+	"POST /system/tasks/:id/toggle":  {},
+	"POST /system/tasks/:id/control": {},
+	"POST /system/tasks/:id/cancel":  {},
+	"POST /auto-backup/run":          {},
+	"POST /auto-backup/:id/restore":  {},
+	"POST /config/reload":            {},
+	"POST /rules":                    {},
+	"POST /certificate-configs":      {},
+	// 通知中心：创建类/动作类 POST（重复调用产生新行或再次触发）。
+	"POST /notification/channels":                     {},
+	"POST /notification/channels/:id/test":            {},
+	"POST /notification/daily-report/trigger":         {},
 	"POST /certificates/jobs/current":                 {},
 	"POST /cluster/nodes/:id/approve":                 {},
 	"POST /cluster/nodes/:id/reject":                  {},
@@ -880,6 +900,11 @@ func operationDescription(route apiDocRoute) string {
 		retry = "不可安全重试：重复调用会签发新的单次登录票据。"
 	case "POST /rules/:caddy_id/duplicate":
 		retry = "不可安全重试：重复调用会创建额外副本。"
+	case "POST /security/mcp-sessions/:id/disconnect":
+		retry = "可安全重试：重复调用返回 404（会话已断开，终态幂等）。"
+	case "POST /notification/deliveries/:id/resend":
+		// 重发是状态重置：已重置行重复请求返回 409，无额外副作用。
+		retry = "可安全重试：重复请求对已重置行返回 409，不产生额外副作用。"
 	case "POST /certificates/issue":
 		retry = "不可盲目安全重试：重复调用可能返回 429 或再次排队签发任务。"
 	case "POST /certificates/jobs/:id/retry":

@@ -2,7 +2,6 @@ package notify
 
 import (
 	"fmt"
-	"time"
 )
 
 // renderTitle/renderBody 按目录模板渲染。参数以 evt.Fields 按序填充
@@ -30,16 +29,15 @@ func renderBody(e catalogEntry, evt Event) string {
 
 func fieldsArgs(evt Event) []any {
 	args := make([]any, 0, len(evt.Fields))
-	// Fields 以 "1","2",… 为键序（发布方模板参数序约定）。
+	// Fields 以 "1","2",… 为键序（发布方模板参数序约定，契约见 catalog.go
+	// 头注）：按序连续取键，首个缺号截断——多填键忽略，缺序参数位丢失由
+	// 埋点侧以目录为参数序事实源避免。
 	for i := 1; ; i++ {
 		v, ok := evt.Fields[fmt.Sprintf("%d", i)]
 		if !ok {
 			break
 		}
 		args = append(args, v)
-	}
-	if len(args) == 0 && evt.Time != (time.Time{}) {
-		// 无 Fields 的事件（如登录成功）把时间作为尾参兜底，保证模板 %s 不缺参。
 	}
 	return args
 }

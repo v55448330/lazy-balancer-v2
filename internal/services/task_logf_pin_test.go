@@ -195,6 +195,11 @@ var expectedTaskKinds = map[string]taskengine.Kind{
 	"security-events-ingestion": taskengine.KindDaemon, "cert-issuance": taskengine.KindDaemon,
 	"cluster-sync":        taskengine.KindDaemon,
 	"startup:config-load": taskengine.KindOneshot,
+	// 通知中心（2026-11-18）：投递常驻/日报定时/QQ+微信长连出站
+	"notification-delivery":     taskengine.KindDaemon,
+	"qq-bot-connection":         taskengine.KindDaemon,
+	"wx-bot-connection":         taskengine.KindDaemon,
+	"notification-daily-report": taskengine.KindScheduled,
 }
 
 // Given v2.0 四类型标准全量注册。

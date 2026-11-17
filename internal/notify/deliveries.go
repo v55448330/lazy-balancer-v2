@@ -19,12 +19,12 @@ type deliveryTarget struct {
 
 // pendingDeliveries 取一批 pending 投递行（FIFO，单批上限防长时间占锁）。
 func pendingDeliveries(limit int) ([]struct {
-	ID       int64
-	UserID   int64
+	ID        int64
+	UserID    int64
 	EventType string
-	Level    string
-	Title    string
-	Body     string
+	Level     string
+	Title     string
+	Body      string
 }, error) {
 	rows, err := db.DB.Query(`SELECT id, user_id, event_type, level, title, body
 		FROM notification_deliveries WHERE status='pending' ORDER BY id LIMIT ?`, limit)

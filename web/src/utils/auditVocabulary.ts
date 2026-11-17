@@ -16,7 +16,7 @@
 import { tSafe } from '../i18n/tSafe.ts'
 import { hasOwn } from './hasOwn.ts'
 
-// ── 动作（Action）枚举：117 词 + 语义族分组 ───────────────────────────
+// ── 动作（Action）枚举：121 词 + 语义族分组 ───────────────────────────
 export const AUDIT_ACTION_KEYS: Record<string, string> = {
   // 会话/认证
   '登录成功': 'signedIn',
@@ -40,6 +40,10 @@ export const AUDIT_ACTION_KEYS: Record<string, string> = {
   '写入': 'write',
   '写入失败': 'writeFailed',
   '修改状态': 'statusChange',
+  // 通知中心 / MCP 会话写点（notification_*.go / mcp_sessions.go）
+  '修改': 'modified',
+  '断开': 'disconnected',
+  '重发': 'resent',
   '复制': 'duplicate',
   '复制失败': 'duplicateFailed',
   '导入': 'import',
@@ -143,9 +147,10 @@ export const AUDIT_ACTION_KEYS: Record<string, string> = {
   '更新信息': 'profileUpdated',
   '测试成功': 'testPassed',
   '测试失败': 'testFailed',
+  '测试': 'test',
 }
 
-// ── 对象（Resource）枚举：63 词 ──────────────────────────────────────
+// ── 对象（Resource）枚举：69 词 ──────────────────────────────────────
 export const AUDIT_RESOURCE_KEYS: Record<string, string> = {
   'ACME配置': 'acmeSettings',
   'API密钥': 'apiKey',
@@ -204,6 +209,13 @@ export const AUDIT_RESOURCE_KEYS: Record<string, string> = {
   '集群模式': 'clusterMode',
   '集群管理': 'clusterManagement',
   '集群节点': 'clusterNode',
+  // 通知中心 / MCP 会话资源（notification_*.go / mcp_sessions.go）
+  '通知通道': 'notificationChannel',
+  '通知投递': 'notificationDelivery',
+  '通知订阅': 'notificationSubscription',
+  '通知设置': 'notificationSettings',
+  '通知日报': 'notificationDailyReport',
+  'MCP 会话': 'mcpSession',
   '集群设置': 'clusterSettings',
   '操作日志': 'auditLog',
   'IP 名单': 'ipList',

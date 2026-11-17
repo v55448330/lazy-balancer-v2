@@ -22,6 +22,7 @@ import (
 	"lazy-balancer-v2/internal/apimsg"
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
+	"lazy-balancer-v2/internal/notify"
 	"lazy-balancer-v2/internal/services"
 )
 
@@ -1829,6 +1830,8 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 		createAuditParts = append(createAuditParts, "证书警告："+strings.Join(certWarnings, "；"))
 	}
 	recordAudit(c, "创建", "负载规则", services.FormatAuditDetail(createAuditParts...))
+	notify.Publish(notify.Event{Type: notify.EvtRuleCreated,
+		Fields: map[string]string{"1": c.GetString("username"), "2": req.Name}})
 	reloadNote.finalize()
 	c.JSON(http.StatusCreated, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_6162ed62"), MessageKey: "k_6162ed62", Data: gin.H{"caddy_id": caddyID}})
 }
@@ -3776,6 +3779,8 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 		auditParts = append(auditParts, "可用性变更："+strings.Join(updateWarnings, "；"))
 	}
 	recordAudit(c, "更新", "负载规则", services.FormatAuditDetail(auditParts...))
+	notify.Publish(notify.Event{Type: notify.EvtRuleUpdated,
+		Fields: map[string]string{"1": c.GetString("username"), "2": req.Name}})
 	reloadNote.finalize()
 	if len(updateWarnings) > 0 {
 		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_a79e5c4d"), MessageKey: "k_a79e5c4d", Data: gin.H{"warnings": updateWarnings}})
@@ -4035,6 +4040,8 @@ func (h *Handlers) DeleteRule(c *gin.Context) {
 	}
 
 	recordAudit(c, "删除", "负载规则", services.FormatAuditDetail(services.AuditRulePart(caddyID), fmt.Sprintf("协议：%s", protocol), fmt.Sprintf("端口：%d", listenPort), domain))
+	notify.Publish(notify.Event{Type: notify.EvtRuleDeleted,
+		Fields: map[string]string{"1": c.GetString("username"), "2": domain}})
 	reloadNote.finalize()
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_63e66ff5"), MessageKey: "k_63e66ff5"})
 }
@@ -5191,6 +5198,8 @@ func (h *Handlers) EnableRule(c *gin.Context) {
 	}
 
 	recordAudit(c, "启用", "负载规则", services.FormatAuditDetail(services.AuditRulePart(caddyID), "状态：已启用"))
+	notify.Publish(notify.Event{Type: notify.EvtRuleToggled,
+		Fields: map[string]string{"1": c.GetString("username"), "2": "启用", "3": ruleDomain}})
 	reloadNote.finalize()
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_941bac5d"), MessageKey: "k_941bac5d"})
 }
@@ -5617,6 +5626,8 @@ func (h *Handlers) DisableRule(c *gin.Context) {
 	}
 
 	recordAudit(c, "禁用", "负载规则", services.FormatAuditDetail(services.AuditRulePart(caddyID), "状态：已禁用"))
+	notify.Publish(notify.Event{Type: notify.EvtRuleToggled,
+		Fields: map[string]string{"1": c.GetString("username"), "2": "禁用", "3": domain}})
 	reloadNote.finalize()
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_c427b5bb"), MessageKey: "k_c427b5bb"})
 }

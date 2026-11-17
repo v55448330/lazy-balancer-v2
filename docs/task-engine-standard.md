@@ -158,9 +158,9 @@ type Descriptor struct {
 
 已删除：`SilentProbes`/`RecordFailuresOnly`/`SignalledWork`/`AsKind`/`Cadence`/`Singleton`——Kind 单独决定全部行为；`ToggleFn`/`ToggleName`（2026-10-11）——v2.0 调度开关统一（StartLoop/StopLoop）后声明族零消费退役，TaskMeta/TaskInfo 的 `toggleable`/`toggle_name` 序列化字段一并删除；`ManualRun`（勘误）——手动触发能力由 Kind 派生（DescribeAll `CanTrigger`），声明字段无消费；`TaskMeta.Enabled`（任务监控只认 `loop_on`，`Lookup/DescribeAll` 不再求值 `EnabledFn`）——`Descriptor.EnabledFn` 仍保留为 Scheduled/Periodic 调度门。
 
-## 2. 任务清单（27 注册任务；实时全集以 `DescribeAll` 为准）
+## 2. 任务清单（31 注册任务；实时全集以 `DescribeAll` 为准）
 
-### 定时（5）——排程槽驱动，Run 纯业务
+### 定时（6）——排程槽驱动，Run 纯业务
 
 | 任务 | NextSlotFn 数据源 | Run 体 |
 |---|---|---|
@@ -169,6 +169,7 @@ type Descriptor struct {
 | ip2region | `security_ip2region_version.next_update` | `StartUpdate`+wait |
 | crawlerbot-update | `security_crawler_sources.next_update` 最早值（UTC） | `CrawlerUpdateManager.RunUpdate` 直达 |
 | auto-backup | `nextAutoBackupSlot()`（last_run 感知——漏跑追补/已跑步进） | `runAutoBackupScheduled` |
+| notification-daily-report | 每日 09:00 本地时间（错过跨点下一 tick 立即补发一次） | 渲染昨日摘要→Publish(daily_report)（发送全走投递 Daemon） |
 
 到期检查全部移出 Run 体——引擎保证在排程槽调用，Run 只执行业务。
 
@@ -180,7 +181,7 @@ failed 行（没有执行就没有 task_runs 记录）。该形态的可观测�
 （1s→5s→30s 封顶，连续失败节流 WARN）——但那要求 Run 至少执行过一次；
 纯排程读取失败（连首轮都无法投递）不在退避覆盖面内。
 
-### 常驻（10）——Run 阻塞至停止（`RunTicker` 节拍或自管理阻塞循环）
+### 常驻（13）——Run 阻塞至停止（`RunTicker` 节拍或自管理阻塞循环）
 
 | 任务 | Run 体 | 实际工作 |
 |---|---|---|
@@ -194,6 +195,9 @@ failed 行（没有执行就没有 task_runs 记录）。该形态的可观测�
 | apikey-usage-flusher | `RunTicker(60s)`（附表清理 1h 业务闸门，非第二调度源） | `api_keys.last_used` 批量落库 + 过期吊销 JWT/集群注册密钥清理 |
 | runtime-log-threshold | `RunTicker(30s)`（装配期同步首跑 `RefreshRuntimeLogSizeOnce`） | `global_config.runtime_log_size_mb` 应用到运行日志滚动阈值 |
 | runtime-tz-refresh | `RunTicker(30s)`（装配期同步首跑 `RefreshTimezoneOnce`） | `global_config.timezone` 应用到面板/任务/审计展示时区 |
+| notification-delivery | 自管理循环（15s tick+唤醒通道）——scope-exempt: daemon-run-body-loop | 投递队列扫描：pending→按用户启用通道发送（webhook/邮件/QQ/微信/MCP 推送），失败重试；通道健康探测；MCP 会话 30min 超时清理 |
+| qq-bot-connection | 自管理阻塞循环（WebSocket 长连：鉴权/心跳/Resume 重连）——scope-exempt: daemon-run-body-loop | QQ 官方机器人事件网关（绑定指令收）；**RunsOn=MasterOnly**，掉线触发 notify_channel_down 告警 |
+| wx-bot-connection | 自管理阻塞循环（iLink 长轮询+REST 发送）——scope-exempt: daemon-run-body-loop | 微信个人 Bot（扫码登录态维护/绑定指令）；**RunsOn=MasterOnly**，掉线触发 notify_channel_down 告警 |
 
 运行期常驻族 7 个 daemon（metrics-collector/threat-rollup-warmer/caddy-restart-watcher/ratelimit-bucket-sweep/apikey-usage-flusher/runtime-log-threshold/runtime-tz-refresh）与其余运行期循环任务（metrics-history-cleanup）描述符与工作体在 `taskengine_wire_runtime.go`；跨包工作体经 `Set*` 钩子注入（main 在 `InitTaskEngine` 前装配），钩子未接线时空载体阻塞至停止（零 task_runs 噪音）。
 

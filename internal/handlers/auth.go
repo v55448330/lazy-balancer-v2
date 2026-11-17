@@ -20,6 +20,7 @@ import (
 	"lazy-balancer-v2/internal/apimsg"
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
+	"lazy-balancer-v2/internal/notify"
 	"lazy-balancer-v2/internal/services"
 )
 
@@ -123,6 +124,15 @@ func recordLoginFailure(userID int) {
 	}
 }
 
+// notifyLoginFailed 登录失败通知（fire-and-forget；Fields 键序=目录模板
+// 参数序「用户（原因），来源 IP」）。仅在用户可感知的认证结果失败分支调用
+// （认证失败/锁定/禁用/MFA 验证错误）；请求形态无效与基础设施故障不发
+// （前者无认证语义，后者会在故障期灌满发布队列）。
+func notifyLoginFailed(username, reason, ip string) {
+	notify.Publish(notify.Event{Type: notify.EvtLoginFailed,
+		Fields: map[string]string{"1": username, "2": reason, "3": ip}})
+}
+
 // parseLoginLockedUntil 锁定时间解析单源——写侧恒为 UTC「2006-01-02 15:04:05」，
 // 兼容带外写入的 RFC3339/毫秒/带时区偏移形态（导入/手工修库）。两函数
 // （判定与文案）共用，不再字符串比较（'T' 与 ' ' 的字典序比较在同日边界会错判
@@ -206,6 +216,7 @@ func (h *Handlers) Login(c *gin.Context) {
 		// 丢弃，只取等时副作用），消除与「密码错误」路径的时序差后返回同形 401。
 		_ = loginDummyCompare(loginDummyBcryptHash, []byte(req.Password))
 		services.RecordAuditLog(req.Username, "登录失败", "用户认证", services.AuditResultPart("invalid_credentials"), c.ClientIP())
+		notifyLoginFailed(req.Username, "认证失败", c.ClientIP())
 		c.JSON(http.StatusUnauthorized, models.APIResponse{Code: 401, Message: apimsg.T(c, "k_5fd4ce83"), MessageKey: "k_5fd4ce83"})
 		return
 	}
@@ -227,6 +238,7 @@ func (h *Handlers) Login(c *gin.Context) {
 	if locked {
 		_ = bcrypt.CompareHashAndPassword(loginCompareHash(passwordHash), []byte(req.Password))
 		services.RecordAuditLog(req.Username, "登录失败", "用户认证", services.FormatAuditDetail(services.AuditUserPart(user.ID, user.Username), "账户已锁定"), c.ClientIP())
+		notifyLoginFailed(req.Username, "账户已锁定", c.ClientIP())
 		c.JSON(http.StatusTooManyRequests, models.APIResponse{Code: 429, Message: apimsg.Tf(c, "k_be499438", loginLockRemainingMinutes(loginLockedUntil, time.Now().UTC())), MessageKey: "k_be499438"})
 		return
 	}
@@ -242,11 +254,13 @@ func (h *Handlers) Login(c *gin.Context) {
 	if compareErr != nil {
 		recordLoginFailure(user.ID)
 		services.RecordAuditLog(req.Username, "登录失败", "用户认证", services.AuditResultPart("invalid_credentials"), c.ClientIP())
+		notifyLoginFailed(req.Username, "认证失败", c.ClientIP())
 		c.JSON(http.StatusUnauthorized, models.APIResponse{Code: 401, Message: apimsg.T(c, "k_5fd4ce83"), MessageKey: "k_5fd4ce83"})
 		return
 	}
 	if !user.IsEnabled {
 		services.RecordAuditLog(req.Username, "登录失败", "用户认证", services.FormatAuditDetail(services.AuditUserPart(user.ID, user.Username), "账号已禁用"), c.ClientIP())
+		notifyLoginFailed(req.Username, "账号已禁用", c.ClientIP())
 		c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: apimsg.T(c, "k_8eacf7e3"), MessageKey: "k_8eacf7e3"})
 		return
 	}
@@ -411,6 +425,8 @@ func (h *Handlers) respondLoginWithMFA(c *gin.Context, user models.User, passwor
 		// 写失败当 500 并丢弃已签发令牌，与 OIDC 路径（warn 放行）分叉——
 		// 取证时两条路径的「最后活动时间」与审计可信度不一致。
 		services.RecordAuditLog(user.Username, "登录成功", "用户认证", services.FormatAuditDetail(services.AuditUserPart(user.ID, user.Username), services.AuditResultPart("success")), c.ClientIP())
+		notify.Publish(notify.Event{Type: notify.EvtLoginSuccess,
+			Fields: map[string]string{"1": user.Username, "2": time.Now().Format("2006-01-02 15:04:05"), "3": c.ClientIP()}})
 		if lastLogin, ok := touchLastLogin(user.ID, user.Username, c.ClientIP()); ok {
 			user.LastLogin = sql.NullTime{Time: lastLogin, Valid: true}
 		}
@@ -753,6 +769,11 @@ func (h *Handlers) UpdateCurrentUser(c *gin.Context) {
 		recordAudit(c, "更新信息", "用户", services.FormatAuditDetail(services.AuditUserPart(user.ID, user.Username), "无修改"))
 	} else {
 		recordAudit(c, "更新信息", "用户", services.FormatAuditDetail(services.AuditUserPart(user.ID, user.Username), fmt.Sprintf("变更：%s", strings.Join(changed, "、"))))
+		// 密码变更属自助安全动作（昵称变更不是）——提交成功才发通知。
+		if passwordHash != "" {
+			notify.Publish(notify.Event{Type: notify.EvtPasswordChanged,
+				Fields: map[string]string{"1": user.Username}})
+		}
 	}
 	response := models.NewUserResponse(user, meta.MFAEnabled)
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: response})

@@ -210,6 +210,12 @@ test('MFA 清单反查：middleware 全部写路由族均有清单锚点', () =>
     ['/api/v1/certificate-configs', '证书配置'],
     ['/api/v1/certificates/issue', '触发证书签发'],
     ['/api/v1/certificates/jobs', '证书任务'],
+    ['/api/v1/notification/settings', '通知系统设置（SMTP/QQ/微信凭据与 MCP 全局开关）'],
+    ['/api/v1/notification/daily-report', '通知订阅与每日日报设置（含手动触发）'],
+    ['/api/v1/notification/subscriptions', '通知订阅与每日日报设置（含手动触发）'],
+    ['/api/v1/notification/deliveries/', '投递记录失败重发'],
+    ['/api/v1/notification/channels', '通知通道增删改/测试'],
+    ['/api/v1/security/mcp-sessions/', 'MCP 会话强制断开'],
   ]
 
   const unmapped: string[] = []
@@ -236,7 +242,7 @@ test('MFA 清单反查：middleware 全部写路由族均有清单锚点', () =>
 //   ② zh 母本钉原文：views.ts 逐键含原 zh 字面量（键↔文案绑定）；
 //   ③ 运行时等值：tSafe(key) === 原 zh 字面量（tSafe zh 直出逐字等价，
 //      上方族锚点/清单覆盖用例因此不受键化影响）。
-test('MFA 清单词条键化：50 键三向对表（调用点/zh 母本/运行时）', () => {
+test('MFA 清单词条键化：56 键三向对表（调用点/zh 母本/运行时）', () => {
   const src = code('src/utils/mfaScopeGroups.ts')
   const zhViews = code('src/locales/zh/views.ts')
   for (const [key, zh] of Object.entries(MFA_SCOPE_I18N_TABLE) as Array<[string, string]>) {
@@ -289,14 +295,20 @@ const MFA_SCOPE_I18N_TABLE: Record<string, string> = {
   "scopeGroupSecurity": "安全防护",
   "scopeGroupSystem": "系统与服务",
   "scopeGroupUsersKeys": "用户与密钥",
+  "scopeGroupNotify": "通知与 MCP",
   "scopeIpListCrud": "IP 名单增删改与条目增删",
   "scopeLibUpdate": "CRS/IP 库更新与自动更新开关",
   "scopeManualSync": "手动同步",
+  "scopeMcpSessionDisconnect": "MCP 会话强制断开",
   "scopeMfaReset": "重置 MFA（含管理员代重置）",
   "scopeModeSwitch": "主从模式切换/提升",
   "scopeNodeApproval": "节点审批/拒绝/删除",
   "scopeNodeService": "服务控制（启动/停止/重启 Caddy、重启应用）",
   "scopeNodeSite": "节点站点坐标配置",
+  "scopeNotifyChannelCrud": "通知通道增删改/测试",
+  "scopeNotifyDeliveryResend": "投递记录失败重发",
+  "scopeNotifySettings": "通知系统设置（SMTP/QQ/微信凭据与 MCP 全局开关）",
+  "scopeNotifySubs": "通知订阅与每日日报设置（含手动触发）",
   "scopeOidcConfig": "OIDC 配置修改/删除",
   "scopeProfileUpdate": "个人资料修改",
   "scopeRawCaddyOverwrite": "原始 Caddy 配置覆写（JSON 逃生口）",
@@ -319,4 +331,5 @@ const MFA_SCOPE_KEY_LAYOUT: ReadonlyArray<readonly [string, readonly string[]]> 
   ['scopeGroupUsersKeys', ['scopeUserCrud', 'scopeProfileUpdate', 'scopeApiKeyMgmt', 'scopeMfaReset', 'scopeRecoveryCodes']],
   ['scopeGroupSystem', ['scopeSettingsSave', 'scopeConfigReloadValidate', 'scopeConfigImport', 'scopeConfigExportBackup', 'scopeAdminTls', 'scopeOidcConfig', 'scopeCaddyService', 'scopeRawCaddyOverwrite', 'scopeTaskMonitor', 'scopeSystemRestart']],
   ['scopeGroupCluster', ['scopeNodeApproval', 'scopeAccessUrl', 'scopeNodeSite', 'scopeNodeService', 'scopeForgetPin', 'scopeRegisterToken', 'scopeModeSwitch', 'scopeManualSync', 'scopeClusterSync', 'scopeReplicaLogin']],
+  ['scopeGroupNotify', ['scopeNotifyChannelCrud', 'scopeNotifySubs', 'scopeNotifyDeliveryResend', 'scopeNotifySettings', 'scopeMcpSessionDisconnect']],
 ]

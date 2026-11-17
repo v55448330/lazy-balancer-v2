@@ -20,6 +20,7 @@ import (
 	"lazy-balancer-v2/internal/apimsg"
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
+	"lazy-balancer-v2/internal/notify"
 	"lazy-balancer-v2/internal/services"
 )
 
@@ -198,6 +199,8 @@ func deleteAPIKey(c *gin.Context, scopedUserID int) {
 		return
 	}
 	recordAudit(c, "删除", "API密钥", services.FormatAuditDetail(fmt.Sprintf("密钥 %d", id), name))
+	notify.Publish(notify.Event{Type: notify.EvtAPIKeyDeleted,
+		Fields: map[string]string{"1": c.GetString("username"), "2": name}})
 	purgeAPIKeyWhitelistCache(id)
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_1b27cea2"), MessageKey: "k_1b27cea2"})
 }
@@ -354,6 +357,8 @@ func createAPIKeyForUser(c *gin.Context, userID int) {
 		"MCP："+boolOnOff(req.MCPEnabled),
 		fmt.Sprintf("IP 白名单（约束全部 REST 与 MCP）：%d 条", len(whitelist)),
 	))
+	notify.Publish(notify.Event{Type: notify.EvtAPIKeyCreated,
+		Fields: map[string]string{"1": c.GetString("username"), "2": req.Name}})
 	c.JSON(http.StatusCreated, models.APIResponse{Code: 0, Data: gin.H{
 		"id":      id,
 		"key":     apiKey,

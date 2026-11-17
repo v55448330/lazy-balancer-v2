@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"lazy-balancer-v2/internal/db"
+	"lazy-balancer-v2/internal/notify"
 	"lazy-balancer-v2/internal/taskengine"
 )
 
@@ -199,6 +200,14 @@ func reconcileTaskEngineRoleFor(te *taskengine.Engine) {
 	for _, instance := range instances {
 		instance.applyRoleSideEffects()
 	}
+	// 角色对账修正也是一次真实翻转（DB 为权威；典型成因=导入替换了
+	// global_config.is_master 或原翻转路径 SetRole 未生效），发翻转通知。
+	roleLabel := "从节点"
+	if roleMaster {
+		roleLabel = "主节点"
+	}
+	notify.Publish(notify.Event{Type: notify.EvtClusterRoleChanged,
+		Fields: map[string]string{"1": notify.LocalNodeName(), "2": roleLabel}})
 	if len(instances) == 0 {
 		// 未登记 ClusterService（测试/嵌入形态）：快照缓存以库句柄为键直接
 		// 失效；分区上报缓存无实例可清（该形态不存在上报面），漂移态仍须
@@ -1028,6 +1037,9 @@ func InitTaskEngine(watchdogAdminURL, runtimeLogFile string) *taskengine.Engine 
 		"cert-renewal-scan", "cert-reconcile", "cert-manual-poll",
 		"security-events-ingestion", "cert-issuance", "cluster-sync",
 		"threat", "crs", "ip2region", "auto-backup",
+		// 通知中心（2026-11-18）：投递常驻/日报定时/QQ+微信长连出站
+		"notification-delivery", "notification-daily-report",
+		"qq-bot-connection", "wx-bot-connection",
 	} {
 		if enabled, found := taskLoopPrefs[id]; found && !enabled {
 			continue

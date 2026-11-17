@@ -76,6 +76,10 @@ var mcpUncoveredRoutes = map[string]string{
 	"GET /api/v1/cluster/sync/waf-files":        "集群机器接口：从节点按哈希差量拉取完整 CRS 规则树与 GeoIP 数据库（集群令牌认证；MB 级 tar/xdb）",
 	"POST /api/v1/cluster/nodes/report":         "集群机器接口：从节点上报健康状态（集群令牌认证；定时上报非人工操作）",
 	"POST /api/v1/cluster/service-control":      "集群机器接口：主节点签发的一次性 HMAC 票据在从节点侧的服务控制入口（control_cluster_node_service 工具是主节点侧遥控入口，二者为同一条控制链的两端）",
+	// —— MCP 会话可见性与调用统计（前端管理页专用；无 Agent 消费场景）——
+	"GET /api/v1/security/mcp-sessions":                 "前端「MCP 会话」管理页数据源（在线会话可见/属主/来源展示）；Agent 不需要观察其他会话",
+	"POST /api/v1/security/mcp-sessions/:id/disconnect": "前端会话管理动作（管理员强制断开）；不暴露为 MCP 工具——Agent 经自身会话接入，无远程终止他人会话场景",
+	"GET /api/v1/notification/mcp/stats":                "通知中心统计卡片数据源（今日调用/错误率/TOP 工具/趋势聚合）；前端可视化专用，Agent 无消费场景",
 	// —— 流式端点（MCP 无流式语义）——
 	"GET /api/v1/rules/:caddy_id/log-stream": "offset 增量续读规则访问日志（单次请求-响应、无长连接）；MCP 工具 get_rule_logs 为最近 1000 行尾读（无 offset 续读），Agent 查近期日志用 get_rule_logs，需增量续读时走本 REST 端点",
 	// —— 批量便捷端点（面向面板列表轮询的批量形态；Agent 用单条工具）——
@@ -156,6 +160,21 @@ var mcpUncoveredRoutes = map[string]string{
 
 	"PUT /api/v1/security/ip2region/v6-enabled": "IP 地理库 IPv6 开关为面板 UI 专用运维操作（数据源配置态，非告警/巡检面板 UI）",
 	"GET /api/v1/metrics/connections/list":      "连接明细（活跃/待关闭/已关闭四分类+归属地+WAF 叠加，面板连接监控弹框数据源；audit140）",
+	// —— 通知中心（订阅/投递/通道为「当前会话用户」自助语义；设置与日报触发
+	//    为管理员 Web 控制台低频操作；通知消费在用户侧通道完成，Agent 无收件场景）——
+	"GET /api/v1/notification/catalog":                "事件目录只读参考（订阅矩阵 UI 数据源；无 Agent 消费场景）",
+	"GET /api/v1/notification/subscriptions":          "JWT 会话专属：当前会话用户订阅矩阵自助读取",
+	"PUT /api/v1/notification/subscriptions":          "JWT 会话专属：当前会话用户订阅自助批量设置（min_level UPSERT/删行回默认）",
+	"GET /api/v1/notification/deliveries":             "JWT 会话专属：当前用户投递流水（?all=1 管理员排障视角为 Web 控制台语义）",
+	"POST /api/v1/notification/deliveries/:id/resend": "投递重发：属主本人自助重试动作；Agent 无通知收件场景",
+	"GET /api/v1/notification/channels":               "JWT 会话专属：当前用户通知通道列表（管理员全平台元数据为 Web 控制台语义）",
+	"POST /api/v1/notification/channels":              "JWT 会话专属：当前用户创建自己的通知通道（自助凭据面，MCP 不承载）",
+	"PUT /api/v1/notification/channels/:id":           "JWT 会话专属：属主/管理员更新通知通道（自助凭据面，MCP 不承载）",
+	"DELETE /api/v1/notification/channels/:id":        "JWT 会话专属：属主/管理员删除通知通道（自助凭据面，MCP 不承载）",
+	"POST /api/v1/notification/channels/:id/test":     "通道测试发送：属主/管理员自助验证动作（真实外发一条测试消息，Agent 不管理通道）",
+	"GET /api/v1/notification/settings":               "管理员凭据/开关/阈值读取（secret 只回「已配置」布尔，Web 控制台低频管理操作）",
+	"PUT /api/v1/notification/settings":               "管理员凭据/开关/阈值写入（部分更新，Web 控制台低频管理操作）",
+	"POST /api/v1/notification/daily-report/trigger":  "管理员手动触发每日日报（每日 09:00 定时任务已承载常规触发；Agent 无消费场景）",
 }
 
 func TestMCPUncoveredRoutes_areExplicitlyExempted(t *testing.T) {

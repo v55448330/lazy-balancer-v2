@@ -21,6 +21,7 @@ import (
 	"lazy-balancer-v2/internal/apimsg"
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
+	"lazy-balancer-v2/internal/notify"
 	"lazy-balancer-v2/internal/services"
 )
 
@@ -381,10 +382,15 @@ func (h *Handlers) RunAutoBackupOnce(ctx context.Context, trigger, operator stri
 		switch {
 		case err == nil:
 			backupTee("backup", "备份完成")
+			// 备份终态通知（取消不是终态失败，不发；参数序=「备份文件名」）。
+			notify.Publish(notify.Event{Type: notify.EvtBackupDone,
+				Fields: map[string]string{"1": row.Filename}})
 		case errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded):
 			backupTee("backup", "备份已取消（角色降级/引擎停止）")
 		default:
 			backupTee("backup", "备份失败："+err.Error())
+			notify.Publish(notify.Event{Type: notify.EvtBackupFailed,
+				Fields: map[string]string{"1": err.Error()}})
 		}
 	}()
 

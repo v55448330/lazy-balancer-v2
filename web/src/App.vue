@@ -22,6 +22,7 @@
       <CaddyConfig v-else-if="currentPage === 'caddy'" />
       <Users v-else-if="currentPage === 'users'" />
       <AuditLog v-else-if="currentPage === 'audit-log'" />
+      <NotificationCenter v-else-if="currentPage === 'notifications'" />
       <!-- 兜底：PAGE_IDS 新增键但漏接线（或深链带旧键）时给出可见提示，不留白屏 -->
       <el-empty v-else :description="t('common.app.pageNotFound')" />
     </AppLayout>
@@ -73,6 +74,7 @@ const Settings = createAsyncPage(() => import('@/views/Settings.vue'))
 const CaddyConfig = createAsyncPage(() => import('@/views/CaddyConfig.vue'))
 const Users = createAsyncPage(() => import('@/views/Users.vue'))
 const AuditLog = createAsyncPage(() => import('@/views/AuditLog.vue'))
+const NotificationCenter = createAsyncPage(() => import('@/views/notifications/NotificationCenter.vue'))
 
 const authStore = useAuthStore()
 const loading = ref(true)

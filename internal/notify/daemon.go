@@ -19,9 +19,9 @@ const (
 )
 
 // RunDeliveryLoop 投递主循环（rc.Ctx 取消=引擎停止/角色门停）。
-func RunDeliveryLoop(ctx context.Context) error {
+func RunDeliveryLoop(ctx context.Context) error { //scope-exempt: daemon-run-body-loop
 	requeueStalePending()
-	t := time.NewTicker(deliveryTickInterval)
+	t := time.NewTicker(deliveryTickInterval) //scope-exempt: daemon-run-body-loop
 	defer t.Stop()
 	for {
 		select {
@@ -30,6 +30,9 @@ func RunDeliveryLoop(ctx context.Context) error {
 		case <-t.C:
 			processPendingBatch(ctx)
 			cleanupExpiredMCPSessions()
+		case <-deliveryWakeCh:
+			// 重发唤醒：立即补扫 pending（tick 兜底仍保留）。
+			processPendingBatch(ctx)
 		}
 	}
 }

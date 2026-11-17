@@ -13,6 +13,8 @@ import zhSettings from '../locales/zh/settings.ts'
 import enSettings from '../locales/en/settings.ts'
 import zhViews from '../locales/zh/views.ts'
 import enViews from '../locales/en/views.ts'
+import zhNotifications from '../locales/zh/notifications.ts'
+import enNotifications from '../locales/en/notifications.ts'
 
 type Tree = Record<string, unknown>
 
@@ -37,8 +39,8 @@ function deepMerge(base: Tree, ...sources: Tree[]): Tree {
 //   t('app.x.*')(C/F 形态)        → messages.app = T
 //   t('common.app.x.*')(A/B/E/D) → messages.common.app = T.app ∪ T 根级散域键
 // 同树双路径加倍词条体积(P5 优化项:统一调用前缀后收敛),运行期语义一致。
-const zhTree = deepMerge({}, zhCommon, zhRules, zhSecurity, zhMisc, zhSettings, zhViews as Tree)
-const enTree = deepMerge({}, enCommon, enRules, enSecurity, enMisc, enSettings, enViews as Tree)
+const zhTree = deepMerge({}, zhCommon, zhRules, zhSecurity, zhMisc, zhSettings, zhViews, zhNotifications as Tree)
+const enTree = deepMerge({}, enCommon, enRules, enSecurity, enMisc, enSettings, enViews, enNotifications as Tree)
 
 function commonApp(tree: Tree): Tree {
   const app = isPlainObject(tree.app) ? { ...tree.app } : {}

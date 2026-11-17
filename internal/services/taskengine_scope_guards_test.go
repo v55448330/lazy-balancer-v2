@@ -59,6 +59,9 @@ var daemonRunTickerContracts = map[string]string{
 var daemonBlockingLoopRegistry = map[string]string{
 	"security-events-ingestion": "internal/services/securityevents.go:runIngestionLoop",
 	"cluster-sync":              "internal/services/cluster_masterserving.go:masterSyncServingLoop",
+	"notification-delivery":     "internal/notify/daemon.go:RunDeliveryLoop",
+	"qq-bot-connection":         "internal/notify/qqbot.go:RunQQBotConnection",
+	"wx-bot-connection":         "internal/notify/wxbot.go:RunWxBotConnection",
 }
 
 var (
@@ -261,12 +264,12 @@ func guardCheckCategory(t *testing.T, cat, path string, line int) {
 // （全集逐项对账由 expectedTaskKinds 钉测承载，此处只钉「文档口径=注册表」）。
 func TestGuard_DescribeAllMatchesStandardSection2(t *testing.T) {
 	te := newWireTestEngine(t)
-	const wantTotal = 27 // 定时 5 / 常驻 10 / 循环 11 / 触发 1
+	const wantTotal = 31 // 定时 6 / 常驻 13 / 循环 11 / 触发 1
 	if got := len(te.DescribeAll()); got != wantTotal {
 		t.Fatalf("DescribeAll 总数=%d, want %d（与标准文档 §2 计数同步）", got, wantTotal)
 	}
 	doc := guardReadRepoFile(t, filepath.Join("docs", "task-engine-standard.md"))
-	for _, heading := range []string{"任务清单（27 注册任务", "定时（5）", "常驻（10）", "循环（11）", "触发（1）"} {
+	for _, heading := range []string{"任务清单（31 注册任务", "定时（6）", "常驻（13）", "循环（11）", "触发（1）"} {
 		if !strings.Contains(doc, heading) {
 			t.Errorf("标准文档 §2 缺 %q——注册表与文档计数失同步", heading)
 		}

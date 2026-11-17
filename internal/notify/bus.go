@@ -6,7 +6,7 @@ package notify
 
 import (
 	"log"
-	"strconv"
+
 	"sync"
 	"sync/atomic"
 	"time"
@@ -20,6 +20,7 @@ var (
 	droppedCount atomic.Int64
 	stopCh       chan struct{}
 	stopOnce     sync.Once
+	loopDone     chan struct{} // 分发循环退出信号（Stop 后等待排空面；Start 置新）
 )
 
 // Start 启动分发循环（进程生命周期一次；重复调用为 no-op）。
@@ -29,11 +30,20 @@ func Start() {
 	}
 	queue = make(chan Event, 1024)
 	stopCh = make(chan struct{})
+	loopDone = make(chan struct{})
 	go dispatchLoop()
 }
 
 // Stop 停止分发循环（进程关停兜底；在途事件随进程回收——事实已在库）。
 func Stop() { stopOnce.Do(func() { close(stopCh) }) }
+
+// Bootstrap 进程启动挂接（cmd/server 启动链 DB 装配后调用一次）：启动分发
+// 循环并做一次 pending 重投兜底（超龄判 dead、近期 pending 留队交投递
+// Daemon 重扫）。库未装配时 requeue 为 no-op；此前的 Publish 按无队列丢弃。
+func Bootstrap() {
+	Start()
+	requeueStalePending()
+}
 
 // DroppedCount 已丢弃事件计数（监控/测试用）。
 func DroppedCount() int64 { return droppedCount.Load() }
@@ -56,6 +66,7 @@ func Publish(evt Event) {
 }
 
 func dispatchLoop() {
+	defer close(loopDone)
 	for {
 		select {
 		case <-stopCh:
@@ -81,6 +92,12 @@ func dispatch(evt Event) {
 	if evt.Body == "" {
 		evt.Body = renderBody(entry, evt)
 	}
+	if db.DB == nil {
+		// 库未装配（启动早期失败路径/测试剥离）时事件无处落库：丢弃并留痕，
+		// 绝不让分发 goroutine 在 nil 句柄上 panic 拖垮进程。
+		log.Printf("WARN: notify 库未装配，事件 %s 丢弃", evt.Type)
+		return
+	}
 	userIDs, err := subscribersFor(evt.Type, evt.Level)
 	if err != nil {
 		log.Printf("WARN: notify 查询订阅者失败（事件 %s 本轮未投递）: %v", evt.Type, err)
@@ -88,6 +105,7 @@ func dispatch(evt Event) {
 	}
 	for _, uid := range userIDs {
 		insertDeliveryPending(uid, evt)
+		firePushHooks(uid, Message{EventType: evt.Type, Level: string(evt.Level), Title: evt.Title, Body: evt.Body})
 	}
 }
 
@@ -103,6 +121,3 @@ func insertDeliveryPending(userID int64, evt Event) {
 		log.Printf("WARN: notify 投递行落库失败（user=%d event=%s）: %v", userID, evt.Type, err)
 	}
 }
-
-// strconvPlaceholder 防 unused import；模板参数格式化由 renderTitle/renderBody 使用。
-var _ = strconv.Itoa

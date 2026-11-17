@@ -27,6 +27,7 @@ import (
 	"lazy-balancer-v2/internal/config"
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
+	"lazy-balancer-v2/internal/notify"
 )
 
 type SyncResult struct {
@@ -1056,10 +1057,17 @@ func (s *SyncService) Pull(ctx context.Context) (result SyncResult, err error) {
 			if drifted := s.driftedSections(ctx); drifted != "" {
 				Logf("warn", "本地数据与同步记录不一致（%s），以全量快照重新同步", drifted)
 				RecordAuditLog("system", "同步自愈", "集群同步", FormatAuditDetail(fmt.Sprintf("本地数据与记录不一致：%s", drifted), "配置无变化但本地数据缺失，已改为全量拉取"), "")
+				// 漂移通知只在「无漂移→有漂移」转换轮发一次（持续漂移轮由上方
+				// WARN/审计逐轮留痕，通知不逐轮重复）；收敛轮复位状态机。
+				if logStateTransition("notify:cluster-sync-drift", true) == "warn" {
+					notify.Publish(notify.Event{Type: notify.EvtClusterSyncDrift,
+						Fields: map[string]string{"1": notify.LocalNodeName()}})
+				}
 				resp.Body.Close()
 				sinceVersion, sinceFingerprint = 0, ""
 				continue
 			}
+			logStateTransition("notify:cluster-sync-drift", false)
 			// 品牌文件态自愈。304 稳态下 applySnapshot 不运行，品牌
 			// 文件没有物化通道——文件被删除/损坏会永久停留默认品牌（进程重启时
 			// EnsureBrandingFile 也只会写全空模板）。按 global_config.branding_json

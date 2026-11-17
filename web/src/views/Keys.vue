@@ -122,6 +122,12 @@
       <el-empty :description="t('common.app.views.keys.emptyText')" :image-size="80" />
     </el-card>
 
+    <el-divider content-position="left" class="section-divider">{{ t('app.notification.keysAccess.title') }}</el-divider>
+
+    <McpAccessCard :stats="mcpStats" class="keys-mcp-block" />
+    <McpSessionsCard class="keys-mcp-block" />
+    <McpUsageCard v-if="isAdmin" :stats="mcpStats" class="keys-mcp-block" />
+
     <el-dialog
       v-model="mcpDocsVisible"
       class="mcp-docs-dialog dialog-body-inset"
@@ -396,11 +402,15 @@ import { saveBlob } from '@/utils/download'
 import { ElMessageBox, ElMessage } from 'element-plus'
 import { CircleCheckFilled, Connection, CopyDocument, Delete, Document, Key, Plus, Setting, SetUp, SwitchButton, VideoPlay } from '@element-plus/icons-vue'
 import type { APIKey, APIResponse, CreateAPIKeyInput, MCPToolSpec, UpdateAPIKeyInput } from '@/types'
+import type { McpStats, McpStatsResponse } from '@/types/notifications.ts'
 import { useI18n } from 'vue-i18n'
-
-const { t } = useI18n()
 import DialogHeader from '@/components/DialogHeader.vue'
 import DialogSectionHeader from '@/components/DialogSectionHeader.vue'
+import McpAccessCard from './settings/McpAccessCard.vue'
+import McpSessionsCard from './settings/McpSessionsCard.vue'
+import McpUsageCard from './settings/McpUsageCard.vue'
+
+const { t } = useI18n()
 
 interface CreateAPIKeyResponse {
   readonly data?: {
@@ -411,6 +421,19 @@ interface CreateAPIKeyResponse {
 }
 
 const authStore = useAuthStore()
+// MCP 调用统计（管理员）：/notification/mcp/stats，接入卡与统计卡共享一次拉取
+const mcpStats = ref<McpStats | null>(null)
+const fetchMcpStats = async (): Promise<void> => {
+  if (!isAdmin.value) return
+  try {
+    const res = await request.get<McpStatsResponse>('/notification/mcp/stats')
+    mcpStats.value = res.data ?? null
+  } catch (error: unknown) {
+    // 统计缺失不阻断密钥管理主功能；全局拦截器已提示
+    console.error('Failed to fetch MCP usage stats:', error)
+    mcpStats.value = null
+  }
+}
 // 从节点判定走 store 单源；节点模式未知仍按既有契约 fail-closed。
 // 主节点非 admin 可管理本人密钥，因此不能复用全站 non-admin 只读门。
 const nodeWriteBlocked = computed(() => authStore.isSlaveNode || authStore.readOnlyReason === 'unknown')
@@ -729,6 +752,7 @@ const copyMCPServiceURL = async (): Promise<void> => {
 
 onMounted(() => {
   fetchKeys()
+  void fetchMcpStats()
 })
 </script>
 
@@ -741,6 +765,8 @@ onMounted(() => {
 .header-actions :deep(.el-button .el-icon) { margin-right: 4px; }
 
 .key-col { margin-bottom: 20px; }
+
+.keys-mcp-block { margin-bottom: 20px; }
 
 .key-card-disabled { opacity: 0.72; }
 

@@ -67,6 +67,14 @@ const ACTION_TONE_EXCEPTIONS: Record<string, AuditActionTone> = {
   '复制': 'warning',
   '触发签发': 'warning',
   '触发': 'warning',
+  // 通知中心动作族：订阅/设置/通道变更=配置面修改（与「修改状态」同族）；
+  // 测试=外发一条测试消息（告警性呈现，非 success 绿标）；
+  // 重发=投递重试（与「重试」同族）。
+  '修改': 'warning',
+  '测试': 'warning',
+  '重发': 'warning',
+  // MCP 会话强制断开：终止在线 Agent 会话（破坏性动作，与「删除」同族 danger）。
+  '断开': 'danger',
   '写入': 'warning',
   '恢复排队': 'warning',
   '续签排队': 'warning',

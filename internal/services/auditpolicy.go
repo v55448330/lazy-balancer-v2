@@ -52,16 +52,27 @@ var auditRoutePolicies = map[string]AuditPolicy{
 	// AuditClassification 要求每条写路由显式分类（intentionalSkip 断言
 	// IsAuditedWriteRoute 命中本表），删除将落入「默认分类」漂移告警。MCP 写
 	// 操作审计由内部转发重入的 REST 层各自显式记录承担。
-	"POST /api/v1/mcp":                            AuditPolicySkip,
-	"POST /api/v1/users":                          AuditPolicyExplicit,
-	"PUT /api/v1/users/:id":                       AuditPolicyExplicit,
-	"PUT /api/v1/users/:id/status":                AuditPolicyExplicit,
-	"POST /api/v1/users/:id/reset-password":       AuditPolicyExplicit,
-	"DELETE /api/v1/users/:id":                    AuditPolicyExplicit,
-	"PATCH /api/v1/users/me":                      AuditPolicyExplicit,
-	"POST /api/v1/users/me/api-keys":              AuditPolicyExplicit,
-	"PATCH /api/v1/users/me/api-keys/:id":         AuditPolicyExplicit,
-	"DELETE /api/v1/users/me/api-keys/:id":        AuditPolicyExplicit,
+	"POST /api/v1/mcp":                      AuditPolicySkip,
+	"POST /api/v1/users":                    AuditPolicyExplicit,
+	"PUT /api/v1/users/:id":                 AuditPolicyExplicit,
+	"PUT /api/v1/users/:id/status":          AuditPolicyExplicit,
+	"POST /api/v1/users/:id/reset-password": AuditPolicyExplicit,
+	"DELETE /api/v1/users/:id":              AuditPolicyExplicit,
+	"PATCH /api/v1/users/me":                AuditPolicyExplicit,
+	"POST /api/v1/users/me/api-keys":        AuditPolicyExplicit,
+	"PATCH /api/v1/users/me/api-keys/:id":   AuditPolicyExplicit,
+	"DELETE /api/v1/users/me/api-keys/:id":  AuditPolicyExplicit,
+	// 通知中心订阅/投递/设置（handler 显式留痕，中间件不复记）。
+	"PUT /api/v1/notification/subscriptions":          AuditPolicyExplicit,
+	"POST /api/v1/notification/deliveries/:id/resend": AuditPolicyExplicit,
+	"PUT /api/v1/notification/settings":               AuditPolicyExplicit,
+	"POST /api/v1/notification/daily-report/trigger":  AuditPolicyExplicit,
+	// 通知通道 CRUD/测试：创建与测试由中间件通用留痕；更新与删除 handler
+	// 显式留痕（显式分类防双记；删除对属主与跨属主均记录）。
+	"POST /api/v1/notification/channels":          AuditPolicyGeneric,
+	"POST /api/v1/notification/channels/:id/test": AuditPolicyGeneric,
+	"PUT /api/v1/notification/channels/:id":       AuditPolicyExplicit,
+	"DELETE /api/v1/notification/channels/:id":    AuditPolicyExplicit,
 	"POST /api/v1/api-keys":                       AuditPolicyExplicit,
 	"PATCH /api/v1/api-keys/:id/status":           AuditPolicyExplicit,
 	"DELETE /api/v1/api-keys/:id":                 AuditPolicyExplicit,
@@ -83,11 +94,14 @@ var auditRoutePolicies = map[string]AuditPolicy{
 	"POST /api/v1/cluster/service-control":   AuditPolicySkip,
 	"DELETE /api/v1/cluster/nodes/:id":       AuditPolicyExplicit,
 	"POST /api/v1/cluster/nodes/report":      AuditPolicySkip,
-	"POST /api/v1/cluster/mode":              AuditPolicyExplicit,
-	"POST /api/v1/cluster/promote":           AuditPolicyExplicit,
-	"POST /api/v1/cluster/sync/pull":         AuditPolicyExplicit,
-	"POST /api/v1/cluster/forget-pins":       AuditPolicyExplicit,
-	"PUT /api/v1/cluster/settings":           AuditPolicyExplicit,
+	// MCP 会话强制断开（通知中心管理动作）：handler 显式记录会话 ID/属主/Key
+	// 三元组，中间件不复记。
+	"POST /api/v1/security/mcp-sessions/:id/disconnect": AuditPolicyExplicit,
+	"POST /api/v1/cluster/mode":                         AuditPolicyExplicit,
+	"POST /api/v1/cluster/promote":                      AuditPolicyExplicit,
+	"POST /api/v1/cluster/sync/pull":                    AuditPolicyExplicit,
+	"POST /api/v1/cluster/forget-pins":                  AuditPolicyExplicit,
+	"PUT /api/v1/cluster/settings":                      AuditPolicyExplicit,
 	// OIDC 认证集成(v2.3.0):配置写操作显式审计(handler 内已留痕,分类为显式)
 	"PUT /api/v1/settings/oidc":       AuditPolicyExplicit,
 	"DELETE /api/v1/settings/oidc":    AuditPolicyExplicit,

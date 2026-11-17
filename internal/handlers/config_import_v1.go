@@ -982,6 +982,8 @@ func (h *Handlers) ImportV1Config(c *gin.Context) {
 			recordAudit(c, "部分失败", "配置备份", auditDetail)
 			recordAudit(c, "重载", "Caddy服务", "导入配置后自动重载")
 			h.recordCaddyApplyResult(nil)
+			// DB 已提交=导入完成事实（部分失败仅降级了证书队列恢复），发完成通知。
+			notifyImportOutcome(c, "导入", true, "")
 			// 提交已落地：imported 是真实已提交条数（回滚路径相反，不报条数）。
 			// message/warnings 只带阶段说明与真实原因（不重复动作词）——与 v2
 			// 出口共用 importPartialSuccess* 单源（此前 v1 自行内联两份同义文案，
@@ -1002,6 +1004,7 @@ func (h *Handlers) ImportV1Config(c *gin.Context) {
 			message = "备份生成的配置未通过 Caddy 验证，未执行导入: " + importFailureAuditDetail(err)
 		}
 		recordAudit(c, "导入失败", "配置备份", importFailureAuditDetail(err))
+		notifyImportOutcome(c, "导入", false, importFailureAuditDetail(err))
 		// 事务已回滚：循环里的插入计数全部作废，不得报 imported（否则前端/
 		// 运维会误判部分规则已落地）。warnings 透出会话收尾披露（提交不确定态
 		// 下的产物清理去向），否则「删除失败」被读成「磁盘也已收敛」。
@@ -1020,6 +1023,7 @@ func (h *Handlers) ImportV1Config(c *gin.Context) {
 	}
 	auditParts = append(auditParts, services.AuditResultPart("success"))
 	recordAudit(c, "导入", "配置备份", services.FormatAuditDetail(auditParts...))
+	notifyImportOutcome(c, "导入", true, "")
 	recordAudit(c, "重载", "Caddy服务", "导入配置后自动重载")
 	// 2026-09-07：导入成功后清除陈旧 caddy_apply_error（对齐口径）。
 	h.recordCaddyApplyResult(nil)

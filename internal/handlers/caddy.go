@@ -41,6 +41,7 @@ import (
 	"lazy-balancer-v2/internal/apimsg"
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
+	"lazy-balancer-v2/internal/notify"
 	"lazy-balancer-v2/internal/services"
 )
 
@@ -1131,6 +1132,9 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 		for _, section := range sortedStringKeys(plan.SectionChanges) {
 			recordAudit(c, "更新", section, fmt.Sprintf("修改了: %s", strings.Join(plan.SectionChanges[section], ", ")))
 		}
+		// 全局配置变更通知（有分区变更才发；参数序=「操作者（分区清单）」）。
+		notify.Publish(notify.Event{Type: notify.EvtGlobalChanged,
+			Fields: map[string]string{"1": c.GetString("username"), "2": strings.Join(sortedStringKeys(plan.SectionChanges), "、")}})
 	}
 
 	reloadNote.finalize()

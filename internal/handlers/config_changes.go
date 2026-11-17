@@ -84,6 +84,8 @@ func fieldAffectsCaddy(field string) bool {
 		"proxy_flush_interval", "proxy_stream_close_delay",
 		"server_tokens_hidden",
 		"access_log_json", "access_log_format",
+		// 应用失败横幅列：渲染器读取并在配置面呈现（渲染消费面对账钉住）。
+		"caddy_apply_error",
 		"trusted_proxy_enabled", "trusted_proxy_ranges", "trusted_proxy_range_refs",
 		"trusted_proxy_headers", "trusted_proxy_strict":
 		return true

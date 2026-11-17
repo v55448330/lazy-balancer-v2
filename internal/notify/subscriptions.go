@@ -1,6 +1,8 @@
 package notify
 
 import (
+	"sort"
+
 	"lazy-balancer-v2/internal/db"
 )
 
@@ -12,7 +14,7 @@ func subscribersFor(eventType string, level Level) ([]int64, error) {
 	if !ok {
 		return nil, nil
 	}
-	rows, err := db.DB.Query(`SELECT DISTINCT user_id FROM notification_subscriptions WHERE event_type=?`, eventType)
+	rows, err := db.DB.Query(`SELECT user_id, min_level FROM notification_subscriptions WHERE event_type=?`, eventType)
 	if err != nil {
 		return nil, err
 	}
@@ -48,27 +50,37 @@ func subscribersFor(eventType string, level Level) ([]int64, error) {
 		return nil, err
 	}
 
-	// 全量用户兜底默认订阅（critical+warn）：无显式订阅行的用户按目录默认集。
-	// user_id 从 channels/keys 侧取全集代价高——改为按 subscriptions 显式行 +
-	// 「默认订阅且启用通道」两步合并：显式订阅者直接评估；未显式订阅者若启用
-	// 通道且目录 DefaultSub=true 且级别达标则纳入。
+	// 合并语义：显式订阅行是用户意志的唯一表达——凡有显式行的用户只按其
+	// min_level 评估，绝不落入默认集（否则「显式订阅 min_level=critical」
+	// 的用户会被 info 事件的默认兜底二次纳入，显式过滤形同虚设）。
+	// 默认集仅补「本事件无任何显式行」的用户：目录 DefaultSub=true 且有
+	// 启用通道且事件级别达标。
 	out := make([]int64, 0, len(byEvent))
-	seen := map[int64]bool{}
 	for uid, minLevel := range byEvent {
 		if !hasChannel[uid] {
 			continue
 		}
 		if AtLeast(level, Level(minLevel)) {
 			out = append(out, uid)
-			seen[uid] = true
 		}
 	}
 	if entry.DefaultSub {
 		for uid := range hasChannel {
-			if !seen[uid] && AtLeast(level, entry.Level) {
+			if _, explicit := byEvent[uid]; explicit {
+				continue
+			}
+			if AtLeast(level, entry.Level) {
 				out = append(out, uid)
 			}
 		}
 	}
-	return out, nil
+	// 升序去重（map 遍历序不定；去重防御显式行与默认集理论上的交叠）。
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	deduped := out[:0]
+	for i, uid := range out {
+		if i == 0 || uid != out[i-1] {
+			deduped = append(deduped, uid)
+		}
+	}
+	return deduped, nil
 }

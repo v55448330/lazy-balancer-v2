@@ -29,6 +29,7 @@ import (
 	"lazy-balancer-v2/internal/accesslog"
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
+	"lazy-balancer-v2/internal/notify"
 )
 
 // caddyInternalKeyPrefix 渲染层内部标记键统一前缀：caddyPayload 按前缀整体
@@ -510,8 +511,11 @@ func (s *CaddyService) applyConfigWithOptions(config map[string]interface{}, opt
 	// 事务内 apply 会在 commit 前清横幅，commit 失败时留下「看起来已恢复」的
 	// 假象；本轮渲染有降级时上方刚写入降级横幅，不得覆盖。
 	if force && opts.persistDegradation && LastRenderDegradation() == "" && db.DB != nil {
-		if _, execErr := db.DB.Exec(`UPDATE global_config SET caddy_apply_error='' WHERE id=1 AND caddy_apply_error<>''`); execErr != nil {
+		if res, execErr := db.DB.Exec(`UPDATE global_config SET caddy_apply_error='' WHERE id=1 AND caddy_apply_error<>''`); execErr != nil {
 			Logf("warn", "后台重载成功但清除陈旧应用失败横幅失败（横幅可能滞留）: %v", execErr)
+		} else if affected, aerr := res.RowsAffected(); aerr == nil && affected == 1 {
+			// 标记由失败态真实清空 → 恢复 info（0 行=本就无标记，不发）。
+			notify.PublishCaddyRecovered()
 		}
 	}
 	return data, nil
@@ -549,6 +553,16 @@ func applyRenderDegradationState(config map[string]interface{}, persist bool) {
 	}
 	RecordAuditLog("system", "应用降级", "Caddy配置", degraded, "")
 	if db.DB != nil {
+		// 标记状态变化驱动通知：仅「空 → 置值」的新失败发事件（已存在不重复发；
+		// 恢复走后台重载清除分支的 RowsAffected 判定）。
+		var prev string
+		if err := db.DB.QueryRow(`SELECT COALESCE(caddy_apply_error,'') FROM global_config WHERE id=1`).Scan(&prev); err != nil {
+			prev = "unknown"
+			Logf("warn", "读取写前 caddy_apply_error 失败（不重复发失败通知）: %v", err)
+		}
+		if prev == "" {
+			notify.PublishCaddyApplyFailed(degraded)
+		}
 		if _, err := db.DB.Exec(`UPDATE global_config SET caddy_apply_error=? WHERE id=1`, degraded); err != nil {
 			Logf("warn", "D3: 持久化渲染降级横幅失败: %v", err)
 		}

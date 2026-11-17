@@ -8,14 +8,31 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 )
 
 // Message 已渲染的通知消息（标题+正文+级别）。
+// Time/Node/Fields 为通道载荷透传位：投递行当前未落这三列（deliveries 表
+// 无对应列），webhook 侧 Time 零值以发送时刻兜底、Node/Fields 空值原样呈现；
+// 后续投递行扩列后由投递 Daemon 透传即可，Sender 侧无需再改。
 type Message struct {
 	EventType string
 	Level     string
 	Title     string
 	Body      string
+	Time      time.Time
+	Node      string
+	Fields    map[string]string
+}
+
+// testNotificationMessage 通道「测试」按钮共用的测试消息。
+func testNotificationMessage() Message {
+	return Message{
+		Level: string(LevelInfo),
+		Time:  time.Now(),
+		Title: "通知中心测试消息",
+		Body:  "这是一条来自通知中心的测试消息；收到即表示该通道配置有效。",
+	}
 }
 
 // Sender 通道发送适配器。

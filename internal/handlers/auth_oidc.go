@@ -43,6 +43,7 @@ import (
 	"lazy-balancer-v2/internal/apimsg"
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
+	"lazy-balancer-v2/internal/notify"
 	"lazy-balancer-v2/internal/services"
 )
 
@@ -1362,6 +1363,8 @@ func (h *Handlers) OIDCCallback(c *gin.Context) {
 		return
 	}
 	services.RecordAuditLog(username, "登录成功", "用户认证", services.FormatAuditDetail(fmt.Sprintf("OIDC 登录 %s", services.AuditUserPart(userID, username)), services.AuditResultPart("success")), c.ClientIP())
+	notify.Publish(notify.Event{Type: notify.EvtLoginSuccess,
+		Fields: map[string]string{"1": username, "2": time.Now().Format("2006-01-02 15:04:05"), "3": c.ClientIP()}})
 	// 与密码登录同序同源（touchLastLogin 单源）：成功审计已在上方落库，
 	// last_login 尽力更新。记账失败不撤销已签发登录（不 500/不改 302），
 	// 但必须留痕（连续失败首条升级 error 级）。

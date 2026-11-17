@@ -362,6 +362,14 @@ func auditRetentionRound(ctx context.Context) (auditDeleted int, runsDeleted int
 // 由中间件记录 → 入 Generic 并在本函数补映射 + TestAuditGenericRoutesExactlyOnce
 // 登记表同步。契约绊线见 TestAuditExplicitRoutesMappingEmpty / TestAuditPolicyListsEqual。
 func FormatAuditAction(path string) (action, resource, detail string) {
+	// 通知通道 Generic 路由按完整路径精确匹配（Contains 会把 Explicit 的
+	// PUT :id 与 handler 自记的 DELETE :id 一并吞进来，破坏 exactly-once）。
+	switch path {
+	case "/api/v1/notification/channels":
+		return "创建", "通知通道", path
+	case "/api/v1/notification/channels/:id/test":
+		return "测试", "通知通道", path
+	}
 	switch {
 	// /api/v1/config 为 Explicit（handler 记录，HasExplicitAuditEvent
 	// 前置短路）；/config/reload 为 Generic 且由 handler（ReloadCaddy）显式记录，

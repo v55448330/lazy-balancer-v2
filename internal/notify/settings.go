@@ -1,0 +1,120 @@
+package notify
+
+// 通知中心管理设置 KV 存取（notify_settings 表：key/value；键清单见键常量）。
+// 写入入口=handlers 通知设置端点（管理员）；读取方=本包连接器/聚合器与
+// handlers 设置聚合。
+
+import (
+	"errors"
+	"strconv"
+	"strings"
+
+	"lazy-balancer-v2/internal/db"
+)
+
+// 设置键（notify_settings.key）。secret 类值仅落库，REST 响应只回「已配置」布尔。
+const (
+	KeySMTPHost         = "notify.smtp_host"
+	KeySMTPPort         = "notify.smtp_port"
+	KeySMTPUser         = "notify.smtp_user"
+	KeySMTPPass         = "notify.smtp_pass"
+	KeySMTPFrom         = "notify.smtp_from"
+	KeyQQAppID          = "notify.qq_appid"
+	KeyQQSecret         = "notify.qq_secret"
+	KeyMCPEnabled       = "notify.mcp_enabled"
+	KeyAttackWarnAt     = "notify.attack_warn_at"
+	KeyAttackCriticalAt = "notify.attack_critical_at"
+	KeyWxBotCred        = "notify.wx_bot_cred" // 微信扫码登录态（连接器域写入）
+)
+
+// GetSetting 取单键值（未配置/库不可用返回空串）。
+func GetSetting(key string) string {
+	if db.DB == nil {
+		return ""
+	}
+	var v string
+	if err := db.DB.QueryRow(`SELECT value FROM notify_settings WHERE key=?`, key).Scan(&v); err != nil {
+		return ""
+	}
+	return v
+}
+
+// GetSettings 批量取键值（返回存在的键；库不可用返回空映射）。
+func GetSettings(keys ...string) map[string]string {
+	out := map[string]string{}
+	if db.DB == nil || len(keys) == 0 {
+		return out
+	}
+	rows, err := db.DB.Query(`SELECT key, value FROM notify_settings WHERE key IN (`+placeholders(len(keys))+`)`, toArgs(keys)...)
+	if err != nil {
+		return out
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var k, v string
+		if err := rows.Scan(&k, &v); err != nil {
+			continue
+		}
+		out[k] = v
+	}
+	return out
+}
+
+// SetSettings 批量写入（事务 UPSERT；空串=清除配置）。
+func SetSettings(kv map[string]string) error {
+	if db.DB == nil {
+		return errors.New("数据库不可用")
+	}
+	tx, err := db.DB.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for k, v := range kv {
+		if _, err := tx.Exec(`INSERT INTO notify_settings (key, value) VALUES (?,?)
+			ON CONFLICT(key) DO UPDATE SET value=excluded.value`, k, v); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func placeholders(n int) string {
+	var b strings.Builder
+	for i := range n {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		b.WriteByte('?')
+	}
+	return b.String()
+}
+
+func toArgs(keys []string) []any {
+	out := make([]any, len(keys))
+	for i, k := range keys {
+		out[i] = k
+	}
+	return out
+}
+
+// MCPEnabled MCP 推送通道全局开关（notify.mcp_enabled，'1'=开）。
+func MCPEnabled() bool { return GetSetting(KeyMCPEnabled) == "1" }
+
+// BlockedThresholds 拦截聚合升级阈值（滚动窗口累计 ≥warn→warn、
+// ≥critical→critical）。设置缺省/非法（非正数或 critical≤warn）回落内置
+// 默认——阈值失效不得让告警静默消失或全部升级。
+func BlockedThresholds() (warnAt, criticalAt int) {
+	warnAt, criticalAt = blockedWarnAt, blockedCriticalAt
+	m := GetSettings(KeyAttackWarnAt, KeyAttackCriticalAt)
+	if w, err := strconv.Atoi(m[KeyAttackWarnAt]); err == nil && w > 0 {
+		warnAt = w
+	}
+	if c, err := strconv.Atoi(m[KeyAttackCriticalAt]); err == nil && c > 0 {
+		criticalAt = c
+	}
+	if criticalAt <= warnAt {
+		return blockedWarnAt, blockedCriticalAt
+	}
+	return warnAt, criticalAt
+}

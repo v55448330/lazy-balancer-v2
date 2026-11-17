@@ -1,0 +1,165 @@
+package handlers
+
+// 通知中心管理设置 REST（管理员）：凭据（SMTP/QQ/微信）、MCP 推送开关、
+// 拦截聚合阈值、每日日报手动触发。secret 类写后不回显（GET 只回「已配置」
+// 布尔）；PUT 部分更新（只更新提供的键）。
+
+import (
+	"context"
+	"net/http"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/gin-gonic/gin"
+
+	"lazy-balancer-v2/internal/apimsg"
+	"lazy-balancer-v2/internal/models"
+	"lazy-balancer-v2/internal/notify"
+	"lazy-balancer-v2/internal/services"
+	"lazy-balancer-v2/internal/taskengine"
+)
+
+// GetNotificationSettings GET /notification/settings——聚合 notify_settings
+// 键值；secret 类只回布尔。
+func (h *Handlers) GetNotificationSettings(c *gin.Context) {
+	if !isAdminRequest(c) {
+		c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: apimsg.T(c, "k_20b2245c"), MessageKey: "k_20b2245c"})
+		return
+	}
+	m := notify.GetSettings(
+		notify.KeySMTPHost, notify.KeySMTPPort, notify.KeySMTPUser, notify.KeySMTPPass, notify.KeySMTPFrom,
+		notify.KeyQQAppID, notify.KeyQQSecret,
+		notify.KeyWxBotCred,
+	)
+	warnAt, criticalAt := notify.BlockedThresholds()
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{
+		"smtp": gin.H{
+			"host":            m[notify.KeySMTPHost],
+			"port":            m[notify.KeySMTPPort],
+			"user":            m[notify.KeySMTPUser],
+			"from":            m[notify.KeySMTPFrom],
+			"pass_configured": m[notify.KeySMTPPass] != "",
+		},
+		"qq": gin.H{
+			"appid":             m[notify.KeyQQAppID],
+			"secret_configured": m[notify.KeyQQSecret] != "",
+		},
+		"wx_bot_cred_configured": m[notify.KeyWxBotCred] != "",
+		"mcp_enabled":            notify.MCPEnabled(),
+		"attack_warn_at":         warnAt,
+		"attack_critical_at":     criticalAt,
+	}})
+}
+
+// UpdateNotificationSettings PUT /notification/settings——部分更新：仅出现
+// 在请求体中的键生效；secret 类传空串=清除。阈值整体校验 0<warn<critical。
+func (h *Handlers) UpdateNotificationSettings(c *gin.Context) {
+	if !isAdminRequest(c) {
+		c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: apimsg.T(c, "k_20b2245c"), MessageKey: "k_20b2245c"})
+		return
+	}
+	var req struct {
+		SMTP *struct {
+			Host *string `json:"host"`
+			Port *string `json:"port"`
+			User *string `json:"user"`
+			Pass *string `json:"pass"`
+			From *string `json:"from"`
+		} `json:"smtp"`
+		QQ *struct {
+			AppID  *string `json:"appid"`
+			Secret *string `json:"secret"`
+		} `json:"qq"`
+		MCPEnabled       *bool `json:"mcp_enabled"`
+		AttackWarnAt     *int  `json:"attack_warn_at"`
+		AttackCriticalAt *int  `json:"attack_critical_at"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_76de02a0"), MessageKey: "k_76de02a0"})
+		return
+	}
+
+	updates := map[string]string{}
+	changed := []string{}
+	put := func(key string, v *string) {
+		if v != nil {
+			updates[key] = *v
+			changed = append(changed, key)
+		}
+	}
+	if req.SMTP != nil {
+		if req.SMTP.Port != nil && *req.SMTP.Port != "" {
+			if p, err := strconv.Atoi(*req.SMTP.Port); err != nil || p < 1 || p > 65535 {
+				c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_d37587be"), MessageKey: "k_d37587be"})
+				return
+			}
+		}
+		put(notify.KeySMTPHost, req.SMTP.Host)
+		put(notify.KeySMTPPort, req.SMTP.Port)
+		put(notify.KeySMTPUser, req.SMTP.User)
+		put(notify.KeySMTPPass, req.SMTP.Pass)
+		put(notify.KeySMTPFrom, req.SMTP.From)
+	}
+	if req.QQ != nil {
+		put(notify.KeyQQAppID, req.QQ.AppID)
+		put(notify.KeyQQSecret, req.QQ.Secret)
+	}
+	if req.MCPEnabled != nil {
+		v := "0"
+		if *req.MCPEnabled {
+			v = "1"
+		}
+		updates[notify.KeyMCPEnabled] = v
+		changed = append(changed, notify.KeyMCPEnabled)
+	}
+	// 阈值：以生效值合并请求值后整体校验（0<warn<critical）。
+	warnAt, criticalAt := notify.BlockedThresholds()
+	if req.AttackWarnAt != nil {
+		warnAt = *req.AttackWarnAt
+		changed = append(changed, notify.KeyAttackWarnAt)
+	}
+	if req.AttackCriticalAt != nil {
+		criticalAt = *req.AttackCriticalAt
+		changed = append(changed, notify.KeyAttackCriticalAt)
+	}
+	if warnAt <= 0 || criticalAt <= warnAt {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_04f0eea4"), MessageKey: "k_04f0eea4"})
+		return
+	}
+	if req.AttackWarnAt != nil {
+		updates[notify.KeyAttackWarnAt] = strconv.Itoa(warnAt)
+	}
+	if req.AttackCriticalAt != nil {
+		updates[notify.KeyAttackCriticalAt] = strconv.Itoa(criticalAt)
+	}
+
+	if len(changed) == 0 {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_76de02a0"), MessageKey: "k_76de02a0"})
+		return
+	}
+	if err := notify.SetSettings(updates); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("保存通知设置失败", err)})
+		return
+	}
+	recordAudit(c, "修改", "通知设置", services.FormatAuditDetail("变更键: "+strings.Join(changed, ","), "", services.AuditResultPart("success")))
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_ce6e6687"), MessageKey: "k_ce6e6687"})
+}
+
+// TriggerDailyReport POST /notification/daily-report/trigger——管理员手动
+// 触发一次日报渲染与投递（发送走投递 Daemon 常规通道）。
+func (h *Handlers) TriggerDailyReport(c *gin.Context) {
+	if !isAdminRequest(c) {
+		c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: apimsg.T(c, "k_20b2245c"), MessageKey: "k_20b2245c"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
+	defer cancel()
+	if err := notify.DailyReportRun(taskengine.RunContext{Ctx: ctx, Trigger: "manual", Operator: auditOperator(c)}); err != nil {
+		msg := apimsg.Tf(c, "k_43ce31bf", err.Error())
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: msg, MessageKey: "k_43ce31bf"})
+		return
+	}
+	recordAudit(c, "触发", "通知日报", services.FormatAuditDetail("手动触发日报生成", "", services.AuditResultPart("success")))
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_e0d0be34"), MessageKey: "k_e0d0be34"})
+}

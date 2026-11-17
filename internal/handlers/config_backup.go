@@ -26,6 +26,7 @@ import (
 
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
+	"lazy-balancer-v2/internal/notify"
 	"lazy-balancer-v2/internal/services"
 	"lazy-balancer-v2/internal/services/dnsproviders"
 )
@@ -6097,6 +6098,7 @@ func failImportAbort(c *gin.Context, session *configImportSession, action, detai
 		detail = detailPrefix + ": " + causeDetail
 	}
 	recordAudit(c, action+"失败", "配置备份", detail)
+	notifyImportOutcome(c, action, false, detail)
 	return err
 }
 
@@ -6149,7 +6151,26 @@ func rowsAffectedOrUnknown(result sql.Result, action, what string) (int64, bool)
 // 否则取证面只剩 stdout 日志。尺寸类探测走 413 分支，不经此处。
 func failImportValidation(c *gin.Context, action, detail string) {
 	recordAudit(c, action+"失败", "配置备份", detail)
+	notifyImportOutcome(c, action, false, detail)
 	c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: detail})
+}
+
+// notifyImportOutcome 导入/还原终态通知（fire-and-forget）：action（「导入」/
+// 「还原」）映射目录事件，ok=true 发完成（参数=操作者）、false 发失败
+// （参数=失败详情）。仅在真实终态收尾点调用（共享失败单源
+// failImportAbort/failImportValidation 与各成功出口）。
+func notifyImportOutcome(c *gin.Context, action string, ok bool, detail string) {
+	doneType, failedType := notify.EvtImportDone, notify.EvtImportFailed
+	if action == "还原" {
+		doneType, failedType = notify.EvtRestoreDone, notify.EvtRestoreFailed
+	}
+	eventType := failedType
+	fields := map[string]string{"1": detail}
+	if ok {
+		eventType = doneType
+		fields = map[string]string{"1": c.GetString("username")}
+	}
+	notify.Publish(notify.Event{Type: eventType, Fields: fields})
 }
 
 // importConfigBackupCore 携带导入全量逻辑,HTTP 导入端点与自动备份还原端点
@@ -6951,6 +6972,7 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 			auditAction := action + "失败"
 			auditDetail := importFailureAuditDetail(err)
 			recordAudit(c, auditAction, "配置备份", auditDetail)
+			notifyImportOutcome(c, action, false, auditDetail)
 			respondAfterWafFailure(status, message)
 			return
 		}
@@ -7334,9 +7356,11 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 		// 可能重复导入。改为 200 + partial=true，warning 说明失败面。文案单源：
 		// 阶段描述只出现一次（见 importPartialSuccessMessage）。
 		responseWarnings = append(responseWarnings, importPartialSuccessWarning(queueRecoveryErr))
+		notifyImportOutcome(c, action, true, "")
 		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: importPartialSuccessMessage(action, queueRecoveryErr), Data: gin.H{"summary": counts, "disabled_conflicts": disabledConflicts, "warnings": responseWarnings, "partial": true}})
 		return
 	}
+	notifyImportOutcome(c, action, true, "")
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.Tf(c, "k_2499ff15", action, strings.ReplaceAll(counts, "；", "、")), MessageKey: "k_2499ff15", Data: gin.H{"summary": counts, "disabled_conflicts": disabledConflicts, "warnings": responseWarnings}})
 }
 

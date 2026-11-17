@@ -97,7 +97,7 @@ for root, dirs, files in os.walk(SRC):
 # --- 模拟接线树 ---
 zh_mods = {}
 en_mods = {}
-for dom in ('common', 'rules', 'security', 'misc', 'settings', 'views'):
+for dom in ('common', 'rules', 'security', 'misc', 'settings', 'views', 'notifications'):
     try:
         zh_mods[dom] = parse_ts_object(f'{LOCALES}/zh/{dom}.ts')
     except Exception as e:

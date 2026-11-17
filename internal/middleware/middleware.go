@@ -852,7 +852,7 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 		// /mcp：限流先于认证与请求体读取——未认证流量不得先花掉 1 MiB 体读
 		// 与一次密钥点查（此前该端点唯一无限流，单个 IP 可线速灌内部 API 与
 		// 审计库）。apiKeyAuth → mcpAccessGuard 的次序不变。
-		v1.POST("/mcp", mcpSourceRateLimit(), apiKeyAuth(db.DB), mcpAPIKeyRateLimit(), mcpAccessGuard(), func(c *gin.Context) {
+		v1.POST("/mcp", mcpSourceRateLimit(), apiKeyAuth(db.DB), mcpAPIKeyRateLimit(), mcpAccessGuard(), mcpGlobalSwitchGuard(), func(c *gin.Context) {
 			c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 1<<20)
 			body, err := io.ReadAll(c.Request.Body)
 			if err != nil {
@@ -885,6 +885,10 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 			// 属主属性随 context 复用，可见性判定不再重复点查。
 			if c.GetString("auth_type") == "api_key" {
 				ctx = mcpserver.WithAPIKeyVisibility(ctx, c.GetBool("api_key_read_only"), c.GetString("role") == "admin")
+				// 会话属主随 context 进 MCP 层：initialize 响应捕获会话 ID 时落
+				// mcp_sessions 行（user/key/IP/UA），管理端会话可见性与实时推送
+				// 按 user_id 命中。
+				ctx = mcpserver.WithSessionOwner(ctx, int64(c.GetInt("user_id")), int64(c.GetInt("api_key_id")), c.ClientIP(), c.Request.UserAgent())
 			}
 			c.Request = c.Request.WithContext(ctx)
 			gin.WrapH(mcpHandler)(c)
@@ -1042,6 +1046,13 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 				admin.POST("/settings/oidc/test", h.OIDCSettingsTest)
 				admin.DELETE("/settings/oidc", h.OIDCSettingsDelete)
 
+				// Notification center admin: credentials/switches/thresholds
+				// and manual daily-report trigger (secret values are never
+				// echoed back; handler re-checks the admin role).
+				admin.GET("/notification/settings", noStoreResponse(), h.GetNotificationSettings)
+				admin.PUT("/notification/settings", noStoreResponse(), h.UpdateNotificationSettings)
+				admin.POST("/notification/daily-report/trigger", noStoreResponse(), h.TriggerDailyReport)
+
 				// Security (admin write)
 				admin.POST("/security/policies", h.CreateSecurityPolicy)
 				admin.PUT("/security/policies/:id", h.UpdateSecurityPolicy)
@@ -1085,6 +1096,13 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 				// 不动已生效封禁条目）
 				admin.DELETE("/security/autoban/recidivism", h.ResetAutobanRecidivism)
 				admin.DELETE("/security/autoban/recidivism/:identity", h.DeleteAutobanRecidivism)
+
+				// MCP 会话可见性与通知统计（通知中心）：会话列表管理员全量、
+				// ?mine=1 仅本人；断开为管理动作（handler 显式审计留痕，路由
+				// 分类 AuditPolicyExplicit）；统计端点聚合 mcp_tool_stats。
+				admin.GET("/security/mcp-sessions", noStoreResponse(), h.ListMCPSessions)
+				admin.POST("/security/mcp-sessions/:id/disconnect", noStoreResponse(), h.DisconnectMCPSession)
+				admin.GET("/notification/mcp/stats", noStoreResponse(), h.GetMCPStats)
 			}
 			// admin 组路由集合注入 MCP 工具可见性——非管理员属主的 Key
 			// 不应在 tools/list 看到恒 403 的工具（get_caddy_config / preview_config /
@@ -1121,6 +1139,20 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 				business.POST("/users/me/api-keys", noStoreResponse(), h.CreateCurrentUserAPIKey)
 				business.PATCH("/users/me/api-keys/:id", h.UpdateCurrentUserAPIKeyStatus)
 				business.DELETE("/users/me/api-keys/:id", h.DeleteCurrentUserAPIKey)
+
+				// Notification center (self-service: catalog/subscriptions/
+				// deliveries/channels for the authenticated user; admin-only
+				// settings & daily-report trigger live in the admin group)
+				business.GET("/notification/catalog", noStoreResponse(), h.ListNotificationCatalog)
+				business.GET("/notification/subscriptions", noStoreResponse(), h.ListNotificationSubscriptions)
+				business.PUT("/notification/subscriptions", noStoreResponse(), h.UpdateNotificationSubscriptions)
+				business.GET("/notification/deliveries", noStoreResponse(), h.ListNotificationDeliveries)
+				business.POST("/notification/deliveries/:id/resend", noStoreResponse(), h.ResendNotificationDelivery)
+				business.GET("/notification/channels", noStoreResponse(), h.ListNotificationChannels)
+				business.POST("/notification/channels", noStoreResponse(), h.CreateNotificationChannel)
+				business.PUT("/notification/channels/:id", noStoreResponse(), h.UpdateNotificationChannel)
+				business.DELETE("/notification/channels/:id", noStoreResponse(), h.DeleteNotificationChannel)
+				business.POST("/notification/channels/:id/test", noStoreResponse(), h.TestNotificationChannel)
 
 				// lists (all authenticated users)
 				business.GET("/mcp/tools", h.GetMCPTools)

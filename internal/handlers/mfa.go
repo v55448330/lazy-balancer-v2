@@ -13,6 +13,7 @@ import (
 	"lazy-balancer-v2/internal/apimsg"
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
+	"lazy-balancer-v2/internal/notify"
 	"lazy-balancer-v2/internal/services"
 
 	"github.com/gin-gonic/gin"
@@ -135,6 +136,7 @@ func (h *Handlers) MFAVerifyLogin(c *gin.Context) {
 	}
 	if locked {
 		services.RecordAuditLog(user.Username, "登录失败", "用户认证", services.FormatAuditDetail(services.AuditUserPart(userID, user.Username), "账户已锁定"), c.ClientIP())
+		notifyLoginFailed(user.Username, "账户已锁定", c.ClientIP())
 		c.JSON(http.StatusTooManyRequests, models.APIResponse{Code: 429, Message: apimsg.Tf(c, "k_be499438", loginLockRemainingMinutes(loginLockedUntil, time.Now().UTC())), MessageKey: "k_be499438"})
 		return
 	}
@@ -186,6 +188,7 @@ func (h *Handlers) MFAVerifyLogin(c *gin.Context) {
 			return
 		}
 		services.RecordAuditLog(user.Username, "认证拒绝", "用户认证", services.FormatAuditDetail("MFA", "验证码错误"), c.ClientIP())
+		notifyLoginFailed(user.Username, "MFA 验证码错误", c.ClientIP())
 		// 挑战级失败计数——分布式 IP 限流绕过下对单挑战的爆破收敛
 		//（10 次作废，需重新走密码步取新挑战）。
 		_ = services.MFARecordChallengeFailure(req.MFAToken)
@@ -493,6 +496,8 @@ func (h *Handlers) MFAActivate(c *gin.Context) {
 		return
 	}
 	recordAudit(c, "启用", "用户认证", services.FormatAuditDetail("MFA", services.AuditResultPart("success")))
+	notify.Publish(notify.Event{Type: notify.EvtMFAChanged,
+		Fields: map[string]string{"1": c.GetString("username"), "2": "启用"}})
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_2e37ecec"), MessageKey: "k_2e37ecec", Data: gin.H{"recovery_codes": codes}})
 }
 
@@ -542,6 +547,8 @@ func (h *Handlers) MFADisable(c *gin.Context) {
 		return
 	}
 	recordAudit(c, "禁用", "用户认证", services.FormatAuditDetail("MFA", services.AuditResultPart("success")))
+	notify.Publish(notify.Event{Type: notify.EvtMFAChanged,
+		Fields: map[string]string{"1": c.GetString("username"), "2": "禁用"}})
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_62e2b696"), MessageKey: "k_62e2b696"})
 }
 
@@ -902,5 +909,7 @@ func (h *Handlers) MFAResetByAdmin(c *gin.Context) {
 		detail = fmt.Sprintf("目标用户 %s（由 %s 操作）", target, operatorName)
 	}
 	recordAudit(c, "重置", "用户认证", services.FormatAuditDetail(detail, services.AuditResultPart("success")))
+	notify.Publish(notify.Event{Type: notify.EvtMFAChanged,
+		Fields: map[string]string{"1": target, "2": "重置"}})
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_54bac549"), MessageKey: "k_54bac549"})
 }

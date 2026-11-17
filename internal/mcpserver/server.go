@@ -489,13 +489,32 @@ func newWithVisibilityResolver(baseURL string, client *http.Client, internalAuth
 			return forward(ctx, client, baseURL, internalAuthSecret, spec, request)
 		})
 	}
-	streamable := server.NewStreamableHTTPServer(mcpServer, server.WithStateLess(true), server.WithEndpointPath("/api/v1/mcp"))
+	// 有状态会话：自定义 SessionIdManager 生成并回传会话 ID（initialize 响应
+	// 头 Mcp-Session-Id），Validate 仅拒绝被管理端强制断开的 ID。注：v0.58.0
+	// 的 WithStateLess(false) 是无操作（该选项只在 true 时改写管理器），退出
+	// 无状态模式须由 WithSessionIdManager 承担。Validate 对空/未知 ID 放行——
+	// 无会话头的单发请求（历史无状态客户端）按原路径继续可用。
+	// 会话行的网关侧登记/活性刷新/强制断开/推送见 session_registry.go：
+	// serveWithSessionRegistry 捕获 initialize 响应头落 mcp_sessions 行（属主
+	// 来自网关认证链注入的 WithSessionOwner），并注册实时推送 hook。
+	streamable := server.NewStreamableHTTPServer(mcpServer, server.WithSessionIdManager(activeSessionManager), server.WithEndpointPath("/api/v1/mcp"))
+	registerNotifyPush(mcpServer)
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		serveWithToolVisibility(writer, request, streamable, resolver)
+		serveWithSessionRegistry(writer, request, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			serveWithToolVisibility(w, r, streamable, resolver)
+		}))
 	})
 }
 
+// forward 工具调用统一入口：转发结果之外记录调用统计（mcp_tool_stats 按日
+// 按工具按 Key upsert，见 recordToolStat）。
 func forward(ctx context.Context, client *http.Client, baseURL, internalAuthSecret string, spec toolSpec, call mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	result, err := forwardInner(ctx, client, baseURL, internalAuthSecret, spec, call)
+	recordToolStat(ctx, spec.name, err != nil || (result != nil && result.IsError))
+	return result, err
+}
+
+func forwardInner(ctx context.Context, client *http.Client, baseURL, internalAuthSecret string, spec toolSpec, call mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	arguments := call.GetArguments()
 	path := spec.path
 	for _, name := range spec.pathArgs {

@@ -358,9 +358,9 @@ func loadFrontendAuditTone(t *testing.T) *frontendAuditTone {
 		t.Fatalf("read %s: %v", frontendAuditToneSource, err)
 	}
 	tone := parseFrontendAuditTone(t, data, frontendAuditToneSource)
-	// 当前单源登记 71 条（「导入注记」随导入冷却终态注记新增）；
+	// 当前单源登记 75 条（71+通知中心 修改/测试/重发 + MCP 会话断开）；
 	// 等值门同时拦截整表漏解析与未经审查的新增/删除。
-	const registeredExceptionCount = 71
+	const registeredExceptionCount = 75
 	if len(tone.exceptions) != registeredExceptionCount {
 		t.Fatalf("%s 解析漂移：例外表解析到 %d 条（登记值 %d）——请同步审查映射并更新解析", frontendAuditToneSource, len(tone.exceptions), registeredExceptionCount)
 	}
@@ -545,6 +545,11 @@ var genericRouteRegistry = []struct {
 	{"/api/v1/caddy/start", "StartCaddy", false},
 	{"/api/v1/caddy/stop", "StopCaddy", false},
 	{"/api/v1/caddy/restart", "RestartCaddy", false},
+	// 通知通道（Generic 分类见 auditRoutePolicies）：
+	// 创建/测试由中间件经映射记录（handler 不自记）；
+	// 删除为 Explicit（handler 对属主与跨属主删除均显式留痕）。
+	{"/api/v1/notification/channels", "CreateNotificationChannel", false},
+	{"/api/v1/notification/channels/:id/test", "TestNotificationChannel", false},
 }
 
 // TestAuditGenericRoutesExactlyOnce Generic 路由 exactly-once 绊线
@@ -629,8 +634,11 @@ func TestAuditPolicyListsEqual(t *testing.T) {
 	// 冻结的独立期望（按类计数）：只遍历策略表再断言自身派生结果属自指——
 	// 路由被降级/新增时计数两侧同步变化，测试仍绿。策略表变更必须同步本清单。
 	const (
-		wantExplicit = 106
-		wantGeneric  = 5
+		// 113=106 基线+MCP 会话强制断开（Explicit）+通知中心 6 条显式留痕动作
+		//（订阅/重发/设置/日报触发/通道更新/通道删除）；7=5 基线+通知通道创建/测试
+		// Generic 两族。两类新增见 auditpolicy.go 各自登记处注释。
+		wantExplicit = 113
+		wantGeneric  = 7
 		wantSkip     = 16
 	)
 	explicitCount, genericCount, skipCount := 0, 0, 0

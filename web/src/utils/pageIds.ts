@@ -17,6 +17,7 @@ const CORE_PAGE_IDS = [
   'caddy',
   'users',
   'audit-log',
+  'notifications',
 ] as const
 
 // 设置分页键由单源派生：新增/改名分页只改 utils/settingsPages 一处，

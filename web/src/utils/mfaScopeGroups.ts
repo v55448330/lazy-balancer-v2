@@ -39,4 +39,8 @@ export const MFA_SCOPE_GROUPS: MfaScopeGroup[] = [
     title: t('common.app.views.mfa.scopeGroupCluster'),
     items: [t('common.app.views.mfa.scopeNodeApproval'), t('common.app.views.mfa.scopeAccessUrl'), t('common.app.views.mfa.scopeNodeSite'), t('common.app.views.mfa.scopeNodeService'), t('common.app.views.mfa.scopeForgetPin'), t('common.app.views.mfa.scopeRegisterToken'), t('common.app.views.mfa.scopeModeSwitch'), t('common.app.views.mfa.scopeManualSync'), t('common.app.views.mfa.scopeClusterSync'), t('common.app.views.mfa.scopeReplicaLogin')],
   },
+  {
+    title: t('common.app.views.mfa.scopeGroupNotify'),
+    items: [t('common.app.views.mfa.scopeNotifyChannelCrud'), t('common.app.views.mfa.scopeNotifySubs'), t('common.app.views.mfa.scopeNotifyDeliveryResend'), t('common.app.views.mfa.scopeNotifySettings'), t('common.app.views.mfa.scopeMcpSessionDisconnect')],
+  },
 ]

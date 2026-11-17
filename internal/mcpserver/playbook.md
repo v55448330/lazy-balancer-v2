@@ -76,6 +76,7 @@
 - 审计日志务必分页；单工具响应上限 4 MiB，超限请改用分页参数（page/page_size）缩小返回范围；无分页参数的整份返回工具（list_rules/list_ip_lists/get_config 等）超限时改用对应的单条查询工具（get_* 系列）缩小范围，或经管理面板查看/导出
 - 配置备份导入（import_config/import_v1_config/validate_import）请求体上限 1 MiB（网关体积限制，REST 侧为 128 MiB）：备份超过 1 MiB 时 MCP 通道不可用，请改用管理面板或 REST 导入
 - 保持 HTTP 连接复用（一个 MCP 会话内不要每次新建连接）
+- 会话通知推送：面板通知命中你的订阅时按会话推送（notifications/message，级别映射 info/warning/critical）；Streamable HTTP 下通知在你该会话的**下一次请求响应**中以 SSE 形态冲刷（无独立长连监听流）——高频轮询场景请保持正常工具调用节奏，通知随下一次交互即时到达
 
 ## 7. 错误码速查
 

@@ -86,6 +86,10 @@
             <el-icon><Key /></el-icon>
             <template #title>{{ NAV_LABELS['settings-apikeys'] }}</template>
           </el-menu-item>
+          <el-menu-item index="notifications" @click="goPage('notifications')">
+            <el-icon><Bell /></el-icon>
+            <template #title>{{ NAV_LABELS.notifications }}</template>
+          </el-menu-item>
           <el-menu-item index="settings-tasks" @click="goPage('settings-tasks')">
             <el-icon><Timer /></el-icon>
             <template #title>{{ NAV_LABELS['settings-tasks'] }}</template>
@@ -221,7 +225,7 @@ import { useAuthStore } from '@/stores/auth'
 import { accountInitial, accountTriggerLabel, sidebarCollapsed, sidebarOverlay, sidebarWidth, toggleSidebarState } from '@/utils/sidebarLayout'
 import type { PageId } from '@/utils/pageIds'
 import { request } from '@/utils/api'
-import {Timer,  DataAnalysis, List, Setting, Cpu, User, Connection, Lock, Key, Document, Warning, Notebook } from '@element-plus/icons-vue'
+import {Timer,  DataAnalysis, List, Setting, Cpu, User, Connection, Lock, Key, Document, Warning, Notebook, Bell } from '@element-plus/icons-vue'
 import ProfileDialog from '@/components/ProfileDialog.vue'
 import AppLogo from '@/components/AppLogo.vue'
 import { appName, footerHtml } from '@/utils/branding'
@@ -291,6 +295,7 @@ const NAV_ITEMS = computed<ReadonlyArray<{ id: string; label: string; parent?: s
   { id: 'caddy', label: t('common.app.views.layout.navCaddy') },
   { id: 'users', label: t('common.app.views.layout.navUsers'), parent: settingsBreadcrumbParent() },
   { id: 'audit-log', label: t('common.app.views.layout.navAuditLog') },
+  { id: 'notifications', label: t('common.app.views.layout.navNotifications'), parent: settingsBreadcrumbParent() },
 ])
 
 // 系统设置五个分页标题与 Settings.vue 页头同源（utils/settingsPages）——原两处

@@ -29,6 +29,7 @@ import (
 	"lazy-balancer-v2/internal/dnsprovider/tencent"
 	"lazy-balancer-v2/internal/handlers"
 	"lazy-balancer-v2/internal/middleware"
+	"lazy-balancer-v2/internal/notify"
 
 	"lazy-balancer-v2/internal/services"
 )
@@ -63,6 +64,10 @@ func runMain(args []string, healthcheck func() int, serve func() error) int {
 		var startupFailure *startupError
 		if errors.As(err, &startupFailure) {
 			services.Logf("error", "startup failed: %v", startupFailure.err)
+			// 启动期失败通知（库装配前的失败 Publish 安全丢弃——分发循环
+			// 未启动/无队列时入 default 分支计数，绝不阻塞失败退出路径）。
+			notify.Publish(notify.Event{Type: notify.EvtStartupAbnormal,
+				Fields: map[string]string{"1": startupFailure.err.Error()}})
 		} else {
 			services.Logf("error", "HTTP server stopped unexpectedly: %v", err)
 		}
@@ -121,6 +126,9 @@ func run() error {
 		}
 	}()
 	services.ApplyLogLevel()
+	// 通知中心分发循环与 pending 重投兜底（库装配后尽早挂接——启动期已发生
+	// 的事件（自动封禁/证书任务恢复等）由此可落投递队列）。
+	notify.Bootstrap()
 	// 配置载入期告警重放：此刻运行日志文件写端与级别门都已装配，误配信号
 	// （未知键/类型错误/弱 JWT 密钥/caddy_admin_url 失联/APP_VERSION 未注入）
 	// 才进入统一日志链——此前只到容器 stdout，只采集日志文件的部署看不到。
@@ -473,6 +481,9 @@ func run() error {
 		}
 		go func() { serverErrors <- server.Serve(ln) }()
 	}
+	// 监听已建立=启动完成事实点（此后异常属运行期，走 serverErrors 链）。
+	notify.Publish(notify.Event{Type: notify.EvtStartupCompleted,
+		Fields: map[string]string{"1": addr}})
 
 	serverErr := waitForServerStop(server, serverStopSignals{quit: quit, restart: restart, serverErrors: serverErrors, caddyAdminURL: cfg.CaddyAdminURL, budget: shutdown})
 	if serverErr != nil && !errors.Is(serverErr, http.ErrServerClosed) {

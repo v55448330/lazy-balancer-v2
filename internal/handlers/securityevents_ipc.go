@@ -32,6 +32,7 @@ import (
 	sqlite "github.com/glebarez/go-sqlite"
 
 	"lazy-balancer-v2/internal/db"
+	"lazy-balancer-v2/internal/notify"
 	"lazy-balancer-v2/internal/services"
 )
 
@@ -259,6 +260,22 @@ func (s *SecurityEventsIPCServer) handleIngestHuman(w http.ResponseWriter, r *ht
 		db.RollbackLeakedTx(db.MetricsDB, db.MetricsPoolMaxOpen)
 		http.Error(w, "human event commit: "+err.Error(), http.StatusInternalServerError)
 		return
+	}
+	// 通知挂钩（提交成功后逐行评估；fire-and-forget，绝不影响响应）：
+	//   - rate_reject=拦截事件 → 拦截聚合（首条立即告警+窗口聚合）；
+	//   - 携带 CC 触发原因（reason 非空）=evalCC 触发后路径 → CC 触发事件
+	//     （级联抑制/逐 IP 去抖在 notify 包内收敛，同 IP 10 分钟窗口去重）。
+	for _, row := range rows {
+		if row.Kind == "pass" {
+			continue
+		}
+		attr := attributions[row.RuleID]
+		if row.Kind == "rate_reject" {
+			notify.RecordBlockedEvent(attr.ruleName, notify.Publish)
+		}
+		if label := services.AutobanCCTriggerReasonLabel(row.Reason); label != "" {
+			notify.PublishCCTriggered(row.ClientIP, label)
+		}
 	}
 	// 迟到插入回退通知（与 WAF 批同构）：积压超过修复窗的分钟若无此通知，
 	// rollup 水位已过、增量重固扫不到，大屏/总览对该分钟永久少计。纯插入批

@@ -4,10 +4,12 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
 	"lazy-balancer-v2/internal/db"
+	"lazy-balancer-v2/internal/notify"
 )
 
 const (
@@ -271,5 +273,30 @@ func transitionJob(tx jobTransitionExecutor, id int, from []string, to string, f
 	if updated != 1 {
 		return fmt.Errorf("transition certificate job %d to %s: %w", id, to, ErrJobTransitionConflict)
 	}
+	// 证书任务终态通知（fire-and-forget，不影响转换本身）：
+	//   - →issued：签发成功（域名）；
+	//   - →failed 且 from 集不含部署生命周期态（downloaded/issued）：签发失败
+	//     （部署失败走快速重部署链自动收敛，不按「签发失败」通知）。
+	if to == "issued" || (to == "failed" && !slices.Contains(from, "downloaded") && !slices.Contains(from, "issued")) {
+		notifyCertJobOutcome(id, to, fields["message"])
+	}
 	return nil
+}
+
+// notifyCertJobOutcome 证书签发终态通知（jobstate 单点覆盖全部转换路径——
+// 签发/恢复/续签/部署完成）。
+func notifyCertJobOutcome(jobID int, status string, message any) {
+	var domain string
+	if err := db.DB.QueryRow("SELECT COALESCE(domain,'') FROM cert_jobs WHERE id=?", jobID).Scan(&domain); err != nil {
+		Logf("warn", "证书任务通知读取域名失败（job=%d status=%s）: %v", jobID, status, err)
+		return
+	}
+	msg, _ := message.(string)
+	eventType := notify.EvtCertIssued
+	fields := map[string]string{"1": domain, "2": "已部署生效"}
+	if status == "failed" {
+		eventType = notify.EvtCertFailed
+		fields = map[string]string{"1": domain, "2": msg}
+	}
+	notify.Publish(notify.Event{Type: eventType, Fields: fields})
 }

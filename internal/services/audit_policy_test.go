@@ -120,8 +120,8 @@ func TestAuditResultText_translates_partial_result(t *testing.T) {
 	}
 }
 
-// 17 个可手动触发族的自记分流必须与现实一致——6 族任务体自记审计
-// （handler 跳过复记），11 个 Periodic 族任务体零审计（handler 补记）；
+// 18 个可手动触发族的自记分流必须与现实一致——6 族任务体自记审计
+// （handler 跳过复记），12 个 Periodic 族任务体零审计（handler 补记）；
 // 常驻（daemon）族恒不可手动触发（CanTrigger=Kind!=daemon），不在分流面。
 // 集合漂移（新增可触发族未评估/自记机制撤销）会在这里当场失败。
 func TestTaskTriggerSelfRecordsAudit_familySplit(t *testing.T) {
@@ -132,8 +132,8 @@ func TestTaskTriggerSelfRecordsAudit_familySplit(t *testing.T) {
 			t.Fatalf("自记族 %s 应报告 true（handler 复记会双审计，违反单记口径）", id)
 		}
 	}
-	// When/Then 11 个非自记可触发族报告 false（handler 显式补记「触发/任务监控」）
-	handlerRecorded := []string{"config-watchdog", "log-cleanup", "audit-retention", "security-events-retention", "metrics-orphan-cleanup", "cert-renewal-scan", "cert-reconcile", "cert-manual-poll", "cert-waiting-ca", "autoban", "metrics-history-cleanup"}
+	// When/Then 12 个非自记可触发族报告 false（handler 显式补记「触发/任务监控」）
+	handlerRecorded := []string{"config-watchdog", "log-cleanup", "audit-retention", "security-events-retention", "metrics-orphan-cleanup", "cert-renewal-scan", "cert-reconcile", "cert-manual-poll", "cert-waiting-ca", "autoban", "metrics-history-cleanup", "notification-daily-report"}
 	for _, id := range handlerRecorded {
 		if TaskTriggerSelfRecordsAudit(id) {
 			t.Fatalf("非自记族 %s 应报告 false（任务体零审计，handler 不补记则手动触发无痕）", id)

@@ -13,9 +13,9 @@ import (
 )
 
 const (
-	blockedWindow      = 5 * time.Minute
-	blockedWarnAt      = 50  // 窗口累计 ≥50 → warn
-	blockedCriticalAt  = 200 // 窗口累计 ≥200 → critical
+	blockedWindow     = 5 * time.Minute
+	blockedWarnAt     = 50  // 窗口累计 ≥50 → warn（内置默认；可被 notify_settings 阈值覆盖）
+	blockedCriticalAt = 200 // 窗口累计 ≥200 → critical（内置默认；可被 notify_settings 阈值覆盖）
 )
 
 type blockedWindowState struct {
@@ -82,9 +82,10 @@ func flushBlockedWindow() {
 		return
 	}
 	level := LevelInfo
-	if w.count >= blockedCriticalAt {
+	warnAt, criticalAt := BlockedThresholds()
+	if w.count >= criticalAt {
 		level = LevelCritical
-	} else if w.count >= blockedWarnAt {
+	} else if w.count >= warnAt {
 		level = LevelWarn
 	}
 	top := topRules(w.topRule, 3)

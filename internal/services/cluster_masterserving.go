@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"lazy-balancer-v2/internal/db"
+	"lazy-balancer-v2/internal/notify"
 	"lazy-balancer-v2/internal/taskengine"
 )
 
@@ -171,9 +172,14 @@ func masterSyncServingRound(ctx context.Context, now time.Time, w *masterServing
 				w.offlineAlerted[n.id] = true
 				if !n.lastSeen.Valid {
 					TaskLogfWarn("cluster-sync", "serving", "从节点 %s 离线：从未上报（超时阈值 %d 秒）", n.name, int(threshold.Seconds()))
+					notify.Publish(notify.Event{Type: notify.EvtClusterOffline,
+						Fields: map[string]string{"1": n.name, "2": "从未上报"}})
 				} else {
+					lastSeenText := lastSeen.In(CurrentLocation()).Format("2006-01-02 15:04:05")
 					TaskLogfWarn("cluster-sync", "serving", "从节点 %s 离线：最后上报 %s（超时阈值 %d 秒）",
-						n.name, lastSeen.In(CurrentLocation()).Format("2006-01-02 15:04:05"), int(threshold.Seconds()))
+						n.name, lastSeenText, int(threshold.Seconds()))
+					notify.Publish(notify.Event{Type: notify.EvtClusterOffline,
+						Fields: map[string]string{"1": n.name, "2": lastSeenText}})
 				}
 			}
 			continue

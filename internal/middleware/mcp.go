@@ -6,7 +6,23 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+
+	"lazy-balancer-v2/internal/apimsg"
+	"lazy-balancer-v2/internal/mcpserver"
 )
+
+// mcpGlobalSwitchGuard MCP 全局开关门（notify_settings 键 notify.mcp_enabled，
+// 缺行/读失败按启用）：停用时 /mcp 全链路 503——认证与 Key 级 mcp_enabled 判
+// 定已在前序守卫完成（401/403 优先于 503，拒绝真因不因全局停用被遮蔽）。
+func mcpGlobalSwitchGuard() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if mcpserver.MCPSwitchEnabled() {
+			c.Next()
+			return
+		}
+		c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{"code": http.StatusServiceUnavailable, "message": apimsg.T(c, "k_963a42ce"), "message_key": "k_963a42ce"})
+	}
+}
 
 func mcpAccessGuard() gin.HandlerFunc {
 	return func(c *gin.Context) {

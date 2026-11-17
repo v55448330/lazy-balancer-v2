@@ -1,9 +1,9 @@
 package handlers
 
-// 通知中心 REST（audit151 方案）：通道 CRUD/测试、订阅矩阵、投递流水/重发、
+// 通知中心 REST：通道 CRUD/测试、订阅矩阵、投递流水/重发、
 // 管理员凭据与全平台概览、MCP 会话列表。
 // 权限：登录用户=自己的资源；管理员=全平台元数据（通道目标对非属主脱敏），
-// 跨属主管理动作审计留痕（边界见审计151 报告「管理可见性纪律」）。
+// 跨属主管理动作审计留痕（管理可见性纪律：元数据+聚合计数可见，内容与联系方式脱敏）。
 // 角色判定与 API Key 同口径：c.GetString("role") == "admin"（apiKeyAuth 链注入）。
 
 import (
@@ -148,7 +148,7 @@ func (h *Handlers) CreateNotificationChannel(c *gin.Context) {
 	switch req.Type {
 	case channelTypeWebhook, channelTypeEmail, channelTypeQQ, channelTypeWx:
 	default:
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: "不支持的通知通道类型"})
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_0b1f0aee"), MessageKey: "k_0b1f0aee"})
 		return
 	}
 	if err := validateChannelTarget(req.Type, req.Target); err != nil {
@@ -177,7 +177,7 @@ func (h *Handlers) UpdateNotificationChannel(c *gin.Context) {
 		return
 	}
 	if owner != uid && !admin {
-		c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: "仅可管理自己的通知通道"})
+		c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: apimsg.T(c, "k_6928b5b0"), MessageKey: "k_6928b5b0"})
 		return
 	}
 	var req struct {
@@ -225,7 +225,7 @@ func boolToInt(b bool) int {
 }
 
 // DeleteNotificationChannel DELETE /notification/channels/:id——属主或管理员，
-// 跨属主删除审计留痕。
+// 删除审计留痕（跨属主注明管理员代删；Generic 分类=中间件不复记）。
 func (h *Handlers) DeleteNotificationChannel(c *gin.Context) {
 	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
 	uid := contextUserID(c)
@@ -236,7 +236,7 @@ func (h *Handlers) DeleteNotificationChannel(c *gin.Context) {
 		return
 	}
 	if owner != uid && !admin {
-		c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: "仅可管理自己的通知通道"})
+		c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: apimsg.T(c, "k_6928b5b0"), MessageKey: "k_6928b5b0"})
 		return
 	}
 	if _, err := db.DB.Exec(`DELETE FROM notification_channels WHERE id=?`, id); err != nil {
@@ -245,6 +245,8 @@ func (h *Handlers) DeleteNotificationChannel(c *gin.Context) {
 	}
 	if owner != uid {
 		recordAudit(c, "删除", "通知通道", "管理员删除用户通道 #"+strconv.FormatInt(id, 10))
+	} else {
+		recordAudit(c, "删除", "通知通道", services.FormatAuditDetail("通道 #"+strconv.FormatInt(id, 10), "", services.AuditResultPart("success")))
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0})
 }
@@ -261,7 +263,7 @@ func (h *Handlers) TestNotificationChannel(c *gin.Context) {
 		return
 	}
 	if owner != uid && !admin {
-		c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: "仅可测试自己的通知通道"})
+		c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: apimsg.T(c, "k_435eb4ab"), MessageKey: "k_435eb4ab"})
 		return
 	}
 	msg := notify.Message{
@@ -274,9 +276,9 @@ func (h *Handlers) TestNotificationChannel(c *gin.Context) {
 	ok := err == nil
 	_, _ = db.DB.Exec(`UPDATE notification_channels SET last_test_at=datetime('now'), last_test_ok=? WHERE id=?`, boolToInt(ok), id)
 	if err != nil {
-		c.JSON(http.StatusBadGateway, models.APIResponse{Code: 502, Message: "测试消息发送失败: " + err.Error()})
+		c.JSON(http.StatusBadGateway, models.APIResponse{Code: 502, Message: apimsg.Tf(c, "k_8e353bc9", err.Error()), MessageKey: "k_8e353bc9"})
 		return
 	}
 	_ = msg
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "测试消息已发送"})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_4bde3724"), MessageKey: "k_4bde3724"})
 }

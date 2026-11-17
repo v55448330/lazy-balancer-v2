@@ -44,6 +44,7 @@ import (
 
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
+	"lazy-balancer-v2/internal/notify"
 	"lazy-balancer-v2/internal/taskengine"
 )
 
@@ -2289,6 +2290,8 @@ func autobanAuditBanned(cfg AutobanConfig, out autobanMergeOutcome) {
 				autobanHitDetail(cfg),
 				"时长："+AutobanDurationLabel(durationLabel),
 				AuditResultPart("success")), "")
+		// 逐 IP 封禁通知（与审计同限；发出即武装该 IP 的 CC 级联抑制窗）。
+		notify.PublishAutobanTriggered(ip, autobanHitDetail(cfg)+"，时长："+AutobanDurationLabel(durationLabel))
 	}
 	if omitted > 0 {
 		RecordAuditLog("system", AutobanAuditAction, "IP 地址列表",
@@ -2327,6 +2330,11 @@ func autobanAuditExpiredUnban(ips, manual []string) {
 			continue
 		}
 		autoIPs = append(autoIPs, ip)
+	}
+	// 自动封禁条目到期 → 逐 IP 到期通知（手动条目解封不是「自动封禁到期」
+	// 语义，不发；与下方审计分行同口径）。
+	for _, ip := range autoIPs {
+		notify.PublishAutobanExpired(ip)
 	}
 	autobanAuditUnbanGroup(autoIPs, func(total int, joined string) string {
 		return fmt.Sprintf("到期自动解封 %d 个自动封禁 IP：%s", total, joined)

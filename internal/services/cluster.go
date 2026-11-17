@@ -20,6 +20,7 @@ import (
 
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
+	"lazy-balancer-v2/internal/notify"
 )
 
 var (
@@ -592,6 +593,13 @@ func (s *ClusterService) ApproveNode(ctx context.Context, nodeID int, now time.T
 		}
 		return fmt.Errorf("%w: 当前状态 %s", ErrNodeNotPending, status)
 	}
+	// 审批成功=节点正式加入集群。节点名失败不阻断审批结果（通知降级匿名）。
+	nodeName, nameErr := s.NodeName(ctx, nodeID)
+	if nameErr != nil || nodeName == "" {
+		nodeName = fmt.Sprintf("#%d", nodeID)
+	}
+	notify.Publish(notify.Event{Type: notify.EvtClusterNodeJoined,
+		Fields: map[string]string{"1": nodeName}})
 	return nil
 }
 
@@ -944,6 +952,9 @@ func (s *ClusterService) Promote(ctx context.Context) error {
 	promoted = true
 	// 角色生效面的进程内失效半边（与 BecomeSlave/对账器共用同一入口）。
 	s.applyRoleSideEffects()
+	// 角色翻转通知（提升事务已提交=翻转事实；标签=本机主机名）。
+	notify.Publish(notify.Event{Type: notify.EvtClusterRoleChanged,
+		Fields: map[string]string{"1": notify.LocalNodeName(), "2": "主节点"}})
 	rebuildCrawlerSnapshotAfterPromote()
 
 	if registrationID > 0 {

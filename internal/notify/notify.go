@@ -34,11 +34,11 @@ func AtLeast(evt, min Level) bool { return levelRank[evt] >= levelRank[min] }
 
 // Event 一条待分发通知事件。
 type Event struct {
-	Type  string // 事件 ID（catalog.go 常量，如 CertFailed）
-	Level Level
-	Time  time.Time
-	Node  string // 发生节点标识（空=本机）
-	Title string
-	Body  string
+	Type   string // 事件 ID（catalog.go 常量，如 CertFailed）
+	Level  Level
+	Time   time.Time
+	Node   string // 发生节点标识（空=本机）
+	Title  string
+	Body   string
 	Fields map[string]string // 结构化附加字段（通道可格式化呈现）
 }

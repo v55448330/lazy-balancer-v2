@@ -536,7 +536,7 @@ func createTables() error {
 	);
 	CREATE INDEX IF NOT EXISTS idx_api_keys_prefix_hash ON api_keys(key_prefix, key_hash);
 
-	-- 通知中心（audit151 方案：通道/订阅/投递留痕/QQ 绑定码/MCP 会话）
+	-- 通知中心（通道/订阅/投递留痕/QQ 绑定码/MCP 会话）
 	CREATE TABLE IF NOT EXISTS notification_channels (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		user_id INTEGER NOT NULL,
@@ -575,6 +575,16 @@ func createTables() error {
 	CREATE INDEX IF NOT EXISTS idx_notification_deliveries_status ON notification_deliveries(status, id);
 	CREATE INDEX IF NOT EXISTS idx_notification_deliveries_user ON notification_deliveries(user_id, id);
 
+	-- 通知中心管理设置（KV）：notify.smtp_*（SMTP 发信）、notify.qq_appid/
+	-- notify.qq_secret、notify.mcp_enabled（'1'/'0'）、notify.attack_warn_at/
+	-- notify.attack_critical_at（聚合升级阈值，缺省 50/200）、notify.wx_bot_cred
+	-- （微信扫码登录态，连接器域）。secret 类值仅落库，REST 响应只回
+	-- 「已配置」布尔。
+	CREATE TABLE IF NOT EXISTS notify_settings (
+		key TEXT PRIMARY KEY,
+		value TEXT NOT NULL DEFAULT ''
+	);
+
 	CREATE TABLE IF NOT EXISTS qq_bind_codes (
 		code TEXT PRIMARY KEY,
 		user_id INTEGER NOT NULL,
@@ -596,6 +606,17 @@ func createTables() error {
 		last_seen TEXT NOT NULL
 	);
 	CREATE INDEX IF NOT EXISTS idx_mcp_sessions_user ON mcp_sessions(user_id, last_seen);
+
+	-- MCP 工具调用统计（按日×工具×Key upsert）：calls/errors 恒增，MCP 会话
+	-- 可见性页与通知中心统计端点聚合读取（今日调用/错误率/TOP 工具/7 天趋势）。
+	CREATE TABLE IF NOT EXISTS mcp_tool_stats (
+		date TEXT NOT NULL,
+		tool TEXT NOT NULL,
+		key_id INTEGER NOT NULL DEFAULT 0,
+		calls INTEGER NOT NULL DEFAULT 0,
+		errors INTEGER NOT NULL DEFAULT 0,
+		PRIMARY KEY (date, tool, key_id)
+	);
 
 	-- LB Rules table (caddy_id is now the primary key)
 	CREATE TABLE IF NOT EXISTS lb_rules (
@@ -1586,22 +1607,6 @@ var newColumnsRegistry = map[string]string{
 	"global_config.autoban_confirm_floor_ratio":  "TEXT NOT NULL DEFAULT '" + DefaultAutobanConfirmFloorRatio + "'",
 	// 口径单选→多选一次性迁移门（旧 scope+count_human_failed → 四维集合）。
 	"global_config.autoban_scope_multiselect_v1": "BOOLEAN DEFAULT 0",
-	// 通知中心凭据列（fresh/存量库同走补列通道）：SMTP 发信与 QQ 机器人
-	// AppID+Secret、微信 iLink Bot 扫码登录态（凭证 JSON：token/baseUrl/
-	// accountId/userId）。全部空串=未配置，读取侧 fail-loud。
-	"global_config.notify_smtp_host": "TEXT NOT NULL DEFAULT ''",
-	"global_config.notify_smtp_port": "TEXT NOT NULL DEFAULT ''",
-	"global_config.notify_smtp_user": "TEXT NOT NULL DEFAULT ''",
-	"global_config.notify_smtp_pass": "TEXT NOT NULL DEFAULT ''",
-	"global_config.notify_smtp_from": "TEXT NOT NULL DEFAULT ''",
-	"global_config.notify_qq_appid":  "TEXT NOT NULL DEFAULT ''",
-	"global_config.notify_qq_secret": "TEXT NOT NULL DEFAULT ''",
-	"global_config.notify_wx_bot_cred": "TEXT NOT NULL DEFAULT ''",
-	// 通知中心管理设置列：MCP 推送通道全局开关、拦截聚合升级阈值
-	// （warn/critical；读取侧 0<warn<critical 校验，缺省/非法回落内置默认）。
-	"global_config.notify_mcp_enabled":        "INTEGER NOT NULL DEFAULT 0",
-	"global_config.notify_attack_warn_at":     "INTEGER NOT NULL DEFAULT 50",
-	"global_config.notify_attack_critical_at": "INTEGER NOT NULL DEFAULT 200",
 	"nodes.server_map_lat":                       "REAL NOT NULL DEFAULT 0",
 	"nodes.server_map_lon":                       "REAL NOT NULL DEFAULT 0",
 }

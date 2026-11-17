@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
+	"lazy-balancer-v2/internal/notify"
 	"net"
 	"net/url"
 	"strconv"
@@ -129,6 +130,9 @@ func (s *ClusterService) BecomeSlave(ctx context.Context, masterURL string, regi
 	// 与复位之间打开窗口，在途看门狗轮次按从节点角色对旧主节点的漂移状态
 	// 误报一次「配置漂移」。升主路径（cluster.go Promote）已是先复位后换角色。
 	s.applyRoleSideEffects()
+	// 角色翻转通知（DB 拓扑已提交=翻转事实；标签=本机主机名）。
+	notify.Publish(notify.Event{Type: notify.EvtClusterRoleChanged,
+		Fields: map[string]string{"1": notify.LocalNodeName(), "2": "从节点"}})
 	// 角色翻转由引擎 SetRole 唯一驱动：master-only 任务统一停调，cluster-sync
 	// 经 RestartOnRoleFlip 换代为从节点分支；无管理器/旧调度器旁路。
 	// 已知有界缺口（登记，勿再上报）：拓扑事务 Commit（is_master=0）到下方
@@ -647,13 +651,14 @@ func (s *ClusterService) DeleteNode(ctx context.Context, nodeID int) error {
 		return fmt.Errorf("开启删除节点事务: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	// 删行前取访问地址——删行后 pin 成孤儿且无 API
+	// 删行前取访问地址与节点名——删行后 pin 成孤儿且无 API
 	// 清除通道,同 host:port 复用时服务控制 fail-closed PinMismatch 只能手工
-	// 删盘。地址解析与 ForgetNodePin 同口径(access_url 优先)。
-	var ipAddress, protocol, accessURL string
+	// 删盘。地址解析与 ForgetNodePin 同口径(access_url 优先)；节点名供移除
+	// 通知（删行后无从回查）。
+	var ipAddress, protocol, accessURL, nodeName string
 	var port int
-	addrErr := tx.QueryRowContext(ctx, `SELECT ip_address,port,COALESCE(protocol,'http'),COALESCE(access_url,'') FROM nodes WHERE id=?`, nodeID).
-		Scan(&ipAddress, &port, &protocol, &accessURL)
+	addrErr := tx.QueryRowContext(ctx, `SELECT ip_address,port,COALESCE(protocol,'http'),COALESCE(access_url,''),COALESCE(name,'') FROM nodes WHERE id=?`, nodeID).
+		Scan(&ipAddress, &port, &protocol, &accessURL, &nodeName)
 	result, err := tx.ExecContext(ctx, "DELETE FROM nodes WHERE id=? AND "+masterRoleConditionSQL, nodeID)
 	if err != nil {
 		return fmt.Errorf("删除节点: %w", err)
@@ -678,6 +683,12 @@ func (s *ClusterService) DeleteNode(ctx context.Context, nodeID int) error {
 		return fmt.Errorf("提交删除节点: %w", err)
 	}
 	s.clearSectionReport(nodeID)
+	// 移除通知（拓扑已提交；行已删，节点名取自删行前快照）。
+	if nodeName == "" {
+		nodeName = fmt.Sprintf("#%d", nodeID)
+	}
+	notify.Publish(notify.Event{Type: notify.EvtClusterNodeRemoved,
+		Fields: map[string]string{"1": nodeName}})
 	// 行已删:清 pin(读址失败/无 pin/地址无效均不影响删除结果,仅留痕)。
 	if addrErr != nil {
 		Logf("warn", "DeleteNode %d: 读取访问地址失败，pin 清理已跳过: %v", nodeID, addrErr)

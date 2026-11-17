@@ -20,6 +20,7 @@ import (
 	"lazy-balancer-v2/internal/config"
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
+	"lazy-balancer-v2/internal/notify"
 	"lazy-balancer-v2/internal/services"
 )
 
@@ -180,8 +181,11 @@ func (h *Handlers) recordCaddyApplyResult(err error) {
 			// 刻意无 ctx 豁免（登记表=auth_oidc_write_ctx_guard_test.go）：
 			// apply 结果横幅清除 best-effort——调用方含 commit 后收尾与异步
 			// 路径，写失败仅 warn 留痕（陈旧失败横幅滞留可见），中止清除无害。
-			if _, err := db.DB.Exec(`UPDATE global_config SET caddy_apply_error='' WHERE id=1 AND caddy_apply_error<>''`); err != nil {
+			if res, err := db.DB.Exec(`UPDATE global_config SET caddy_apply_error='' WHERE id=1 AND caddy_apply_error<>''`); err != nil {
 				services.Logf("warn", "caddy_apply_error_clear_failed: 清除 caddy_apply_error 失败(陈旧失败横幅可能滞留): %v", err)
+			} else if affected, aerr := res.RowsAffected(); aerr == nil && affected == 1 {
+				// 标记由失败态真实清空 → 恢复 info（0 行=本就无标记，不发）。
+				notify.PublishCaddyRecovered()
 			}
 		}
 		return
@@ -237,6 +241,17 @@ func persistCaddyApplyBanner(text string) {
 		return
 	}
 	visible := services.RedactCaddyAdminEndpoint(text)
+	// 标记状态变化驱动通知：仅「空 → 置值」的真实新失败发事件（已存在不重复
+	// 发）；恢复（置空）由 recordCaddyApplyResult 的清除分支按 RowsAffected 发。
+	var prev string
+	if err := db.DB.QueryRow(`SELECT COALESCE(caddy_apply_error,'') FROM global_config WHERE id=1`).Scan(&prev); err != nil {
+		// 读失败时保守视为「已存在失败态」（不重复发）——横幅持久化照常。
+		prev = "unknown"
+		services.Logf("warn", "caddy_apply_error_prev_read_failed: 读取写前横幅失败（不重复发失败通知）: %v", err)
+	}
+	if prev == "" {
+		notify.PublishCaddyApplyFailed(visible)
+	}
 	// 刻意无 ctx 豁免（登记表=auth_oidc_write_ctx_guard_test.go）：横幅持久化
 	// best-effort 运维可见性记账（脱敏后落库，失败仅 warn——「重启后真实失败
 	// 不可见」已点名），中止持久化无害。

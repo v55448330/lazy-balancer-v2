@@ -28,6 +28,7 @@ import (
 
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
+	"lazy-balancer-v2/internal/notify"
 	"lazy-balancer-v2/wafiplist"
 )
 
@@ -2881,6 +2882,16 @@ func (t *securityEventsTailer) securityEventsProcessPass(ctx context.Context, f 
 				// entryAutobanAction 记录本行实际喂入的动作（跨 pass 改判决策依据）。
 				entryAutobanAction := autobanFedUnknown
 				if affected == 1 {
+					// 通知挂钩（真实插入才计数；fire-and-forget 不影响摄取）：
+					//   - blocked=拦截事件 → 拦截聚合；
+					//   - challenged × cc_ 前缀=WAF 侧 evalCC 触发事件 → CC 触发
+					//     （级联抑制/逐 IP 去抖在 notify 包内收敛）。改判升级的
+					//   行不在此路径（dedupe 改判分支），拦截聚合口径=首次落库。
+					if rec.Action == "blocked" {
+						notify.RecordBlockedEvent(rule.name, notify.Publish)
+					} else if rec.Action == "challenged" && strings.HasPrefix(rec.RuleTriggered, "cc_") {
+						notify.PublishCCTriggered(rec.ClientIP, AutobanCCTriggerReasonLabel(strings.TrimPrefix(rec.RuleTriggered, "cc_")))
+					}
 					batchMessagesDropped += uint64(rec.messagesDropped)
 					eventAt, _ := time.ParseInLocation("2006-01-02 15:04:05", rec.EventTime, time.UTC)
 					if eventAt.IsZero() {
