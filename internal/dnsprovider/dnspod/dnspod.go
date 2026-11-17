@@ -478,7 +478,8 @@ func (p *Provider) listChallengeRecords(ctx context.Context, zone, subDomain str
 		hasValidID := false
 		for _, record := range result.Records {
 			// flexNumber 兼容历史两种形态（JSON 数字与带引号字符串），
-			// 与 Record.Create 侧的 id 读取同口径。
+			// 与 Record.Create 侧 record.id 同为 flexNumber（空串走各自
+			// 的显式空检查，不再整页/整响应解码失败）。
 			id := string(record.ID)
 			// 畸形空记录 ID 不参与去重折叠（整页空 ID 不得误判无进展，
 			// 与 aliyun/tencent/cloudflare 同口径）：整条跳过，不登记 seen、
@@ -923,7 +924,7 @@ func (p *Provider) createRecord(ctx context.Context, zone, domainID, subDomain, 
 	var result struct {
 		Status apiStatus `json:"status"`
 		Record struct {
-			ID json.Number `json:"id"`
+			ID flexNumber `json:"id"`
 		} `json:"record"`
 	}
 	if err := p.apiCall(ctx, "Record.Create", params, &result); err != nil {
@@ -937,10 +938,10 @@ func (p *Provider) createRecord(ctx context.Context, zone, domainID, subDomain, 
 		}
 		return "", err
 	}
-	if result.Record.ID.String() == "" {
+	if string(result.Record.ID) == "" {
 		return "", fmt.Errorf("Record.Create returned no record ID")
 	}
-	return result.Record.ID.String(), nil
+	return string(result.Record.ID), nil
 }
 
 func (p *Provider) deleteRecord(ctx context.Context, domainID, recordID string) error {

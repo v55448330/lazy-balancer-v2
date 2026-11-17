@@ -208,8 +208,8 @@ func TestRunAutoBackupOnce_writeFailureLeavesNoTmp(t *testing.T) {
 	})
 }
 
-// ABORT）时频率/范围/保留份数不得已生效（修复前先落库后写开关，返回 500
-// 但设置已改）。
+// 开关写失败（触发器 RAISE(ABORT)）时频率/范围/保留份数不得已生效（修复前
+// 先落库后写开关，返回 500 但设置已改）。
 func TestUpdateAutoBackupSettings_atomicOnEnabledFailure(t *testing.T) {
 	h := newAutoBackupTestHandlers(t)
 	if _, err := db.DB.Exec(`UPDATE global_config SET auto_backup_enabled=1, auto_backup_frequency='daily',

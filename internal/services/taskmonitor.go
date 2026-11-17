@@ -428,9 +428,14 @@ func collectEngineFamilies(te *taskengine.Engine) []TaskInfo {
 			// failed 是统一失败语义后的现役形态（窗口到期前由 cert-waiting-ca
 			// 补扫重排），waiting_ca 仅覆盖旧备份/导入存量遗留行；且只统计窗口
 			// 仍在未来的行——已到期窗口即将被重排，展示成「下次可用」会误导。
+			// attempts 门与补扫谓词（scanWaitingCACandidates）/活跃判定
+			// （certJobsActive）单源对齐：配置下调后超限 failed 行不再被任何
+			// 自动通道消费（仅手动重试可达），展示其重排时刻会误导运维等待；
+			// waiting_ca 遗留行按导入归一契约恒未超限，同门无副作用。
 			var at string
 			if err := db.DB.QueryRow(`SELECT COALESCE(MIN(NULLIF(ca_available_after,'')),'') FROM cert_jobs
-				WHERE status IN ('failed','waiting_ca') AND ca_available_after IS NOT NULL AND datetime(ca_available_after)>datetime('now')`).Scan(&at); err != nil {
+				WHERE status IN ('failed','waiting_ca') AND ca_available_after IS NOT NULL AND datetime(ca_available_after)>datetime('now')
+				AND COALESCE(renewal_attempts,0) < ?`, getCertRenewalAttempts()).Scan(&at); err != nil {
 				// 查询失败不得静默丢弃（否则页面「—」与「无 waiting_ca 任务」
 				// 不可区分）：按失败态转换留痕（首报 WARNING，恢复补 INFO）。
 				if lvl := logStateTransition(taskMonitorWaitingCALogKey, true); lvl != "" {

@@ -50,6 +50,7 @@ func countLogOccurrences(logs *bytes.Buffer, fragment string) int {
 }
 
 func TestLogStatsVolume_dirReadFailureIsVisibleAndRecovers(t *testing.T) {
+	withIsolatedGlobal(t)
 	resetLogStatsVolumeStateForTest()
 	t.Cleanup(resetLogStatsVolumeStateForTest)
 	dir := t.TempDir()
@@ -91,6 +92,7 @@ func TestLogStatsVolume_dirReadFailureIsVisibleAndRecovers(t *testing.T) {
 // 端点级：体量读取失败时响应保持 200 与单行形状（不新增错误面），失败由
 // 日志留痕承担。
 func TestGetLogStats_responseStaysOKOnVolumeReadFailure(t *testing.T) {
+	withIsolatedGlobal(t)
 	h := newBackupTestHandlers(t)
 	resetLogStatsVolumeStateForTest()
 	t.Cleanup(resetLogStatsVolumeStateForTest)

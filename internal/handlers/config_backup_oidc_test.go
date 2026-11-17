@@ -88,14 +88,7 @@ func TestImportBackup_oidcConfigPreservedWhenPresent(t *testing.T) {
 		"lb_rules": {{"caddy_id": "imp1", "name": "imp", "protocol": "http", "domain": "a.example.com", "listen_port": 80, "enabled": 1}},
 	}
 	oidcCfg := map[string]any{"oidc_config": `{"enabled":true,"issuer":"https://idp2.example.com","client_id":"lb2","client_secret":"s2"}`}
-	backup := configBackup{
-		Meta:     configBackupMeta{App: "lazy-balancer-v2", Version: 2, ExportedAt: "2026-09-18T00:00:00Z"},
-		Config:   oidcCfg,
-		Tables:   payload,
-		Sections: []string{"users"},
-	}
-	backup.Meta.Checksum = checksumBackupPayload(t, payload, oidcCfg)
-	backupJSON := marshalJSONForTest(t, backup)
+	backupJSON := buildBackup(t, backupFixtureOptions{Tables: payload, Config: oidcCfg, Sections: []string{"users"}})
 
 	rec := postJSONImport(t, g, backupJSON)
 	if rec.Code != http.StatusOK {

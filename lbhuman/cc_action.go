@@ -75,12 +75,14 @@ func (h *HumanHandler) serveRateReject(w http.ResponseWriter, r *http.Request, i
 		return
 	}
 	// reject 事件按「被拦截」口径喂自动封禁（kind=rate_reject → blocked 维度）。
-	// 大屏口径（用户裁定，注释明示）：rate_reject 落库
-	// action=blocked/rule=cc_rate_reject，进事件 feed 与总量，但**不入攻击
-	// 光流环**（光流只收 WAF 攻击族；CC 限流拒绝属人机通道）——同屏「有 CC
-	// 光流（挑战族）无 CC 弧（拒绝族）」是有意口径，非遗漏。
-	// anomaly_score 口径：人机/CC 事件不自带评分，落库恒 0，
-	// 评分由面板预检/存量补分承载——产生侧不发射评分字段。
+	// 大屏口径（与 services/autoban.go observeHumanAttackFlow 同词）：rate_reject
+	// 落库 action=blocked/rule=cc_rate_reject，进事件 feed 与总量，且**入攻击
+	// 光流环**（429 确属拦截弧——同屏 feed/拦截率已含该事件，光流缺弧会显示
+	// 「有拦截率、无弹道」自相矛盾）；挑战发放/失败不属攻击，不入环。
+	// anomaly_score 口径：人机/CC 事件经人机旁路直写入库，不走 WAF 补分管线，
+	// 落库恒 0（不自带评分）——大屏危险等级对 blocked 的 CC 事件按零分回退 mid
+	// 档展示、评分列显示「—」，产生侧不发射评分字段（见 services/securityevents.go
+	// 补分注释）。
 	reportHumanEvent(h.RuleID, ip, r.Method, r.URL.RequestURI(), "rate_reject")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")

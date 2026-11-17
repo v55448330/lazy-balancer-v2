@@ -178,9 +178,6 @@ func TestDeliberateCtxlessWritesAreRegistered(t *testing.T) {
 		{file: "handlers.go", fn: "func (h *Handlers) recordCaddyApplyResult(err error) {", count: 1},
 		// persistCaddyApplyBanner：横幅持久化（best-effort，失败仅 warn）。
 		{file: "handlers.go", fn: "func persistCaddyApplyBanner(text string) {", count: 1},
-		// rollbackLeakedTx：提交失败后连接池补发 ROLLBACK——var 闭包无顶层
-		// func 签名，按 var 声明行钉名（改名即失效，登记与代码同步更新）。
-		{file: "handlers.go", fn: "var rollbackLeakedTx = func() {", count: 1},
 		// clampAuditRetentionMonthsOnStartup：启动阶段一次性钳位（无请求 ctx
 		// 存在的语境）。
 		{file: "handlers.go", fn: "func clampAuditRetentionMonthsOnStartup() {", count: 1},

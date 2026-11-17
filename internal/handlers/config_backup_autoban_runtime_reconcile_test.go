@@ -17,7 +17,6 @@ package handlers
 // 结论并入响应 warnings 与成功审计。
 
 import (
-	"encoding/json"
 	"net/http"
 	"strings"
 	"testing"
@@ -28,27 +27,10 @@ import (
 
 // autobanRuntimeImportBackup 构造「分类导入」形态的备份：omit 中的表不出现在
 // 备份体（迟到表「缺席=保留本地」），cfg 为 global_config 携带的键值。
+// buildBackup 单源夹具的薄委托（FillAll+Omit 表达缺席表集）。
 func autobanRuntimeImportBackup(t *testing.T, omit map[string]struct{}, cfg map[string]any) string {
 	t.Helper()
-	tables := make(map[string][]map[string]any, len(configBackupTables))
-	for _, table := range configBackupTables {
-		if _, skip := omit[table]; skip {
-			continue
-		}
-		tables[table] = []map[string]any{}
-	}
-	tables["users"] = []map[string]any{{"id": 1, "username": "backup-admin", "password_hash": "hash", "role": "admin", "is_enabled": 1}}
-	backup := configBackup{
-		Meta:   configBackupMeta{App: "lazy-balancer-v2", Version: 2, ExportedAt: "2026-10-27T00:00:00Z"},
-		Config: cfg,
-		Tables: tables,
-	}
-	backup.Meta.Checksum = checksumBackupPayload(t, tables, cfg)
-	data, err := json.Marshal(backup)
-	if err != nil {
-		t.Fatalf("marshal backup: %v", err)
-	}
-	return string(data)
+	return buildBackup(t, backupFixtureOptions{FillAll: true, Omit: omit, Config: cfg})
 }
 
 // Given 自动封禁启用（正式模式、阈值 1、窗口 5 分钟）且已有计数桶。

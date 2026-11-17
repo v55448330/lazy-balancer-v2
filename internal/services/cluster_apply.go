@@ -345,6 +345,13 @@ func (s *SyncService) applySnapshot(ctx context.Context, snapshot models.Cluster
 		// api_keys 已随 users 节整体替换并提交——清空
 		// 白名单 CIDR 解析缓存（逐 Key 清扫无法枚举存活 Key；重建廉价）。
 		apiKeyWhitelistCachePurgeAll()
+		// human_secret 缓存失效必须在 commit 后（与导入面同口径）：事务内
+		// reset 会让 reset→commit 窗口的并发渲染读旧密钥回填缓存，commit 后
+		// 强制重载消费投毒旧值→主从密钥分叉（用户反复被挑战）。快照未携带
+		// 新密钥（nil/空串=保留本地值）时不失效。
+		if hs := snapshot.BasicSettings.HumanSecret; hs != nil && *hs != "" {
+			resetHumanSecretCache()
+		}
 	}
 	// 品牌配置随节同步(2026-09-11):快照携带的 branding.json 落盘本地
 	// 并注入 landing——必须在下方 Caddy 重载前完成,新文案随重载生效。
@@ -2296,8 +2303,9 @@ func updateSnapshotSettings(ctx context.Context, tx *sql.Tx, snapshot models.Clu
 	if settings.HumanSecret != nil && *settings.HumanSecret != "" {
 		settingClauses = append(settingClauses, "human_secret=?")
 		settingArgs = append(settingArgs, *settings.HumanSecret)
-		// 从端内存缓存的是旧密钥：置空强制下次渲染重新读取并重建 Caddy 配置。
-		resetHumanSecretCache()
+		// 缓存失效不在事务内做：reset→commit 窗口内并发渲染会读 db.DB 已提交
+		// 旧密钥回填缓存，commit 后重载消费被投毒的旧值→主从密钥分叉。
+		// 失效移到 commit 成功后收敛段（与导入面 config_backup 同口径）。
 	}
 	if settings.AutobanEnabled != nil {
 		settingClauses = append(settingClauses, "autoban_enabled=?")

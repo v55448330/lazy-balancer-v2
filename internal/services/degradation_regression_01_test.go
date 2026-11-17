@@ -104,10 +104,11 @@ func TestTrustedProxyDegradation_bannerRecordsOnApply(t *testing.T) {
 	}
 }
 
-// TestTrustedProxyDegradation_shortCircuitStillRecordsBanner：启用特性但本轮
-// 渲染降级、产物又与运行配置同字节（短路出口）时，降级横幅/状态同样必须落
-// ——否则「保存成功、面板显示已启用、实际未生效且零横幅」可观测性缺陷复发。
-func TestTrustedProxyDegradation_shortCircuitStillRecordsBanner(t *testing.T) {
+// TestTrustedProxyDegradation_shortCircuitDefersBannerToCommit：启用特性但本轮
+// 渲染降级、产物又与运行配置同字节（短路出口）时，降级状态必须收敛、降级审计
+// 必须留下待 commit 补落——但事务内不得即时写主库（persistDegradation=false
+// 契约：未提交配置的降级不写主库/审计，commit 后 recordCaddyApplyResult 补落）。
+func TestTrustedProxyDegradation_shortCircuitDefersBannerToCommit(t *testing.T) {
 	stubSecurityLibsAvailable(t)
 	_, database := newClusterTestService(t)
 	seedGenerationRule(t, database, "lb-d3-short", false)
@@ -171,12 +172,19 @@ func TestTrustedProxyDegradation_shortCircuitStillRecordsBanner(t *testing.T) {
 	if got := LastRenderDegradation(); !strings.Contains(got, "受信代理") {
 		t.Fatalf("短路出口必须收敛降级状态，got %q", got)
 	}
+	// 事务内契约（persistDegradation=false）：短路出口收敛降级状态但**不即时
+	// 写主库**——横幅/审计延后到 commit 成功后由 recordCaddyApplyResult(nil)
+	// 经 TakePendingRenderDegradationAudit 补落（未提交配置的降级不得写入主库，
+	// 且事务持写锁时 db.DB.Exec 撞 WAL 单写者）。
 	var banner string
 	if err := database.QueryRow(`SELECT COALESCE(caddy_apply_error,'') FROM global_config WHERE id=1`).Scan(&banner); err != nil {
 		t.Fatalf("read banner: %v", err)
 	}
-	if !strings.Contains(banner, "受信代理") {
-		t.Fatalf("短路出口必须持久化降级横幅，got %q", banner)
+	if strings.Contains(banner, "受信代理") {
+		t.Fatalf("事务内短路出口不得即时持久化降级横幅（commit 前写主库违约），got %q", banner)
+	}
+	if pending := TakePendingRenderDegradationAudit(); !strings.Contains(pending, "受信代理") {
+		t.Fatalf("短路出口必须留下待 commit 补落的降级审计，got %q", pending)
 	}
 }
 

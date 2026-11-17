@@ -337,24 +337,13 @@ func TestUpdateConfig_trustedProxyReadFailureIsAudited(t *testing.T) {
 // Then 500 + 固定文案（此前一律「备份校验失败」400 并透出 SQL 文本）。
 func TestImportConfigBackup_trustedProxyReadFailureReturns500(t *testing.T) {
 	h := newBackupTestHandlers(t)
-	completeTables := make(map[string][]map[string]any, len(configBackupTables))
-	for _, table := range configBackupTables {
-		completeTables[table] = []map[string]any{}
+	completeTables := map[string][]map[string]any{
+		"users": {{"id": 1, "username": "admin", "password_hash": "hash", "role": "admin", "is_enabled": 1}},
 	}
-	completeTables["users"] = []map[string]any{{"id": 1, "username": "admin", "password_hash": "hash", "role": "admin", "is_enabled": 1}}
 	importCfg := map[string]any{
 		"trusted_proxy_ranges": `["203.0.113.0/24"]`,
 	}
-	backup := configBackup{
-		Meta:   configBackupMeta{App: "lazy-balancer-v2", Version: 2, ExportedAt: "2026-10-19T00:00:00Z"},
-		Config: importCfg,
-		Tables: completeTables,
-	}
-	backup.Meta.Checksum = checksumBackupPayload(t, completeTables, importCfg)
-	body, err := json.Marshal(backup)
-	if err != nil {
-		t.Fatalf("marshal backup: %v", err)
-	}
+	body := []byte(buildBackup(t, backupFixtureOptions{Tables: completeTables, Config: importCfg, FillAll: true}))
 
 	gin.SetMode(gin.TestMode)
 	router := gin.New()

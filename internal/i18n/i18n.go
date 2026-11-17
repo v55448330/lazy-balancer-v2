@@ -82,17 +82,18 @@ func negotiate(header string) string {
 		if j := strings.IndexByte(part, ';'); j >= 0 {
 			lang = part[:j]
 			// q 可出现在分号分隔的任意参数位(RFC 9110 扩展参数不保证
-			// q 在首段):遍历全分段取 q,不得只看首个参数。
+			// q 在首段):遍历全分段取 q,不得只看首个参数。参数名大小写
+			// 不敏感(RFC 9110):Q= 与 q= 同义;q 值本身不动。
 			for _, param := range strings.Split(part[j+1:], ";") {
-				v := strings.TrimSpace(param)
-				if !strings.HasPrefix(v, "q=") {
+				name, value, found := strings.Cut(strings.TrimSpace(param), "=")
+				if !found || !strings.EqualFold(strings.TrimSpace(name), "q") {
 					continue
 				}
 				// q 按 RFC 9110 解析为 [0,1] 实数:硬编码集外的 q(0.3/0.95…)
 				// 此前默认 1.0,语言排序失真。非法/NaN 按 0(该候选不优先),
 				// 越界钳到 [0,1]。
 				q = 0
-				if parsed, perr := strconv.ParseFloat(strings.TrimPrefix(v, "q="), 64); perr == nil && !math.IsNaN(parsed) {
+				if parsed, perr := strconv.ParseFloat(strings.TrimSpace(value), 64); perr == nil && !math.IsNaN(parsed) {
 					q = math.Min(1, math.Max(0, parsed))
 				}
 				break
@@ -148,7 +149,16 @@ func T(lang, key string) string {
 // 登记后按静态字面量总长降序重排 errZh:泛化模板("写入 %s: %s")不得抢先
 // 吞掉具体模板("写入 CRS VERSION 标记: %s")——注册序不可控,匹配优先级
 // 只由字面量具体度决定(同长按注册序稳定)。
+// 相邻 %s%s 占位符无字面量分隔,matchTpl 的参数切分歧义,登记期响亮拒绝。
 func RegisterErrTpl(zhTpl, enTpl string) {
+	for _, tpl := range [2]string{zhTpl, enTpl} {
+		parts := splitTplPlaceholders(tpl)
+		for k := 1; k < len(parts)-1; k++ {
+			if parts[k] == "" {
+				panic("i18n: 错误模板含相邻 %s%s 占位符(参数切分歧义,禁止登记): " + tpl)
+			}
+		}
+	}
 	mu.Lock()
 	defer mu.Unlock()
 	if _, dup := errTpls[zhTpl]; !dup {
@@ -226,6 +236,7 @@ func splitTplPlaceholders(tpl string) []string {
 
 // matchTpl 尝试把 msg 按 zh 模板(占位符 %s)切开并按 en 模板重装。
 // 仅支持 %s 占位;字面量必须全序对齐,尾字面量必须闭合到串尾。
+// 相邻 %s%s 已在 RegisterErrTpl 登记期拒绝,空字面量段只可能是尾占位。
 func matchTpl(msg, zhTpl, enTpl string) (string, bool) {
 	parts := splitTplPlaceholders(zhTpl)
 	n := len(parts)

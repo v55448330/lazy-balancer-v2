@@ -1307,6 +1307,7 @@ export default {
     'ccResultChallenge': '发放挑战（等待验证）',
     'ccResultPass': '挑战通过',
     'ccResultFail': '挑战失败',
+    'ccResultRateReject': '限流拒绝',
     'ccMode': '触发方式',
     'ccModeAuto': '智能触发（配额突刺 / 4xx 激增 / 多 UA）',
     'ccModeForce': '始终验证',

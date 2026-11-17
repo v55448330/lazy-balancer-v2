@@ -1989,6 +1989,14 @@ func SetSecurityEventsRollupRewrite(fn func(time.Time, []time.Time)) {
 	securityEventsRollupRewriteHook = fn
 }
 
+// NotifySecurityEventsRollupRewrite 供跨包摄取提交点（人机 IPC 摄入）在
+// 事务提交后通知回退钩子——与 WAF 批 processPass 内部 notify 同契约：
+// minute=本批最旧插入分钟（UTC 分钟截断），纯插入批 reclassifyMinutes=nil。
+// 迟到插入落在 rollup 已覆盖且出修复窗的分钟时，无此通知则该分钟永久少计。
+func NotifySecurityEventsRollupRewrite(minute time.Time, reclassifyMinutes []time.Time) {
+	notifySecurityEventsRollupRewrite(minute, reclassifyMinutes)
+}
+
 // notifySecurityEventsRollupRewrite 在事务提交后通知回退钩子（无插入且无
 // 原地改判=零动作）。
 func notifySecurityEventsRollupRewrite(minute time.Time, reclassifyMinutes []time.Time) {

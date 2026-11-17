@@ -1,9 +1,10 @@
 // 证书任务表「按容器宽收敛」：固定列宽会把表格撑出卡片容器产生水平滚动条
 // （实测 1366/1280/1024 视口均有滚动）。收敛口径 = 容器不足时按优先级隐藏
 // 低价值列，并把被隐藏列的信息并入相邻单元格（规则 ID→域名副行、冷却→重试
-// tooltip）。收敛下限 = 不可让位列合计 619px：容器 ≥619px 由 .cert-jobs-wrap
-// 的 overflow:hidden 兜底（卡片/页面级不出现横向滚动）；<619px 切
-// .cert-jobs-wrap--scroll 的 overflow-x:auto——可滚动优先，操作列保持可达。
+// tooltip）。收敛下限 = 不可让位列合计 CERT_JOB_COLUMNS_MIN_WIDTH（由单源
+// 宽度表派生，不手抄魔数）：容器 ≥ 下限时由 .cert-jobs-wrap 的 overflow:hidden
+// 兜底（卡片/页面级不出现横向滚动）；低于下限切 .cert-jobs-wrap--scroll 的
+// overflow-x:auto——可滚动优先，操作列保持可达。
 //
 // 运行：cd web && npm test
 
@@ -28,8 +29,8 @@ test('模板列宽必须取自单源表（列数与总宽基线由表布局用�
     const width = CERT_JOB_COLUMN_WIDTHS[id]
     assert.ok(width > 0, `${id} 缺少正宽度`)
   }
-  // 组件模板里每个宽度都必须能在常量表找到（防两处漂移）；列数/1209 总宽
-  // 由 certJobsTableLayout（按 label 的映射更严）唯一承担，不在此重复。
+  // 组件模板里每个宽度都必须能在常量表找到（防两处漂移）；列数/总宽
+  //（CERT_JOB_COLUMNS_TOTAL_WIDTH 派生）由 certJobsTableLayout（按 label 的映射更严）唯一承担，不在此重复。
   const declared = [...tableBody.matchAll(/(?:min-)?width="(\d+)"/g)].map((m) => Number(m[1]))
   assert.ok(declared.length > 0)
   for (const w of declared) {
@@ -59,7 +60,7 @@ test('贪心让位：容器不足时按优先级隐藏，且隐藏后合计不�
       assert.equal(tighter.has(hideOrder[k]), false, `${width - 1}px 必须让位 ${hideOrder[k]}`)
       assert.ok(certJobColumnsWidth(tighter) <= width - 1, `${width - 1}px 让位后仍超宽`)
     } else {
-      // 让位耗尽后仍可能超宽：不可让位列合计 619px 已是下限——此时由消费方切
+      // 让位耗尽后仍可能超宽：不可让位列合计（CERT_JOB_COLUMNS_MIN_WIDTH）已是下限——此时由消费方切
       // .cert-jobs-wrap--scroll 横向滚动（见下方用例），该超宽是显式口径而非
       // 断言豁免。
       assert.equal(total, CERT_JOB_COLUMNS_MIN_WIDTH)

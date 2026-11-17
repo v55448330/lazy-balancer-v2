@@ -969,11 +969,14 @@ func ObserveHumanEvents(items []HumanObserveItem) {
 	if !autobanIsMaster() {
 		return
 	}
-	// 配置读与「替换+收敛」互斥（见 autobanConfigReplaceMu）：读到新配置时
-	// 计数桶必然已按新口径清过（旧计数不按新口径混算）。
+	// 配置读+写桶与「替换+收敛」互斥（见 autobanConfigReplaceMu）：RLock
+	// 覆盖整批（读 cfg 与写桶同一临界区）——只锁读调用会留下「读后写前」
+	// 窄窗口：替换写锁插入完成清桶后，旧口径在途批落入新代桶（窗口收窄时
+	// 少量误计）。替换写锁等批完成（单批 µs-ms 级）；锁序不变：RLock→
+	// autobanMu 既有方向，替换写锁内 reconcile 同向。
 	autobanConfigReplaceMu.RLock()
+	defer autobanConfigReplaceMu.RUnlock()
 	cfg, err := GetAutobanConfig()
-	autobanConfigReplaceMu.RUnlock()
 	if err != nil || !cfg.Enabled {
 		return
 	}
@@ -1044,11 +1047,12 @@ func autobanObserveBatch(items []autobanFeedItem) {
 	// 启用门并入同一行读取（GetAutobanConfig 的 SELECT
 	// 已含 autoban_enabled）——旧实现先 AutobanEnabled() 再 GetAutobanConfig()，
 	// 每批多一次主库单行查询；读失败时本批不喂入（fail-closed 语义不变）。
-	// 读与「替换+收敛」互斥（见 autobanConfigReplaceMu）：读到新配置时计数桶
-	// 必然已按新口径清过。
+	// 读+写桶与「替换+收敛」互斥（见 autobanConfigReplaceMu）：RLock 覆盖
+	// 整批（与 ObserveHumanEvents 同构——只锁读调用留下「读后写前」跨代
+	// 窄窗口，旧口径在途批落入新代桶）。替换写锁等批完成（单批 µs-ms 级）。
 	autobanConfigReplaceMu.RLock()
+	defer autobanConfigReplaceMu.RUnlock()
 	cfg, err := GetAutobanConfig()
-	autobanConfigReplaceMu.RUnlock()
 	if err != nil || !cfg.Enabled {
 		return
 	}

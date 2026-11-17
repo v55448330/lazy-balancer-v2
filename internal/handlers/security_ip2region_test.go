@@ -189,3 +189,29 @@ func TestSetIP2RegionV6Enabled_reloadFailureNoteRedacted(t *testing.T) {
 		t.Fatalf("message=%q, want 脱敏占位（RedactCaddyAdminEndpoint 同口径）", resp.Message)
 	}
 }
+
+// 行为钉：v6 开关落库失败（真实 DB 故障：表缺失）时 500 只回固定文案——
+// DB 表列名/驱动错误由服务层 error 日志留痕，不得拼进响应体。
+func TestSetIP2RegionV6Enabled_500BodyHidesSQLDetails(t *testing.T) {
+	setupIP2RegionHandlerTest(t)
+	if _, err := db.DB.Exec(`DROP TABLE security_ip2region_version`); err != nil {
+		t.Fatalf("drop version table: %v", err)
+	}
+	h := &Handlers{}
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.PUT("/security/ip2region/v6-enabled", h.SetIP2RegionV6Enabled)
+	rec := putJSON(t, router, "/security/ip2region/v6-enabled", map[string]any{"enabled": true})
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d body=%s, want 500", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	for _, leak := range []string{"security_ip2region_version", "no such table", "UPDATE", "sql:"} {
+		if strings.Contains(body, leak) {
+			t.Fatalf("500 body 泄露内部细节 %q: %s", leak, body)
+		}
+	}
+	if !strings.Contains(body, "保存 IPv6 开关失败") {
+		t.Fatalf("500 body 缺少固定文案: %s", body)
+	}
+}

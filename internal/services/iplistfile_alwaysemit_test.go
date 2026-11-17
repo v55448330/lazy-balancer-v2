@@ -12,7 +12,8 @@ package services
 //     会使全部默认策略/站点凭空获得引擎与信任规则——门禁钉测实证），维持
 //     内容门控（空↔非空仍走全量链）；
 //   · allow 模式 ACL（!@ipListFast 否定算子）：空集=恒命中=全拒，与「无规则
-//     =全放」语义不等价且有全站锁死风险——维持内容门控；
+//     =全放」语义不等价且有全站锁死风险——不设内容门：空集=否定算子恒拒，
+//     无条件发射（fail-closed，下方两钉测锁定）；
 //   · 遗留黑名单 ip_blacklist：内联字段仅经策略保存（全量链）变化，收敛无
 //     热路径收益——维持内容门控。
 
@@ -109,9 +110,9 @@ func TestBuildCorazaDirectives_stage0DetectionEmptyAlwaysEmitsID12(t *testing.T)
 	}
 }
 
-// allow 模式空名单： 失败关闭——必须发射拒绝规则（否定算子命中
-// 全部来源），不得静默放行。
-func TestBuildCorazaDirectives_emptyAllowACLKeepsContentGate(t *testing.T) {
+// allow 模式空名单：不设内容门，无条件发射失败关闭拒绝规则（否定算子
+// 命中全部来源），不得静默放行。
+func TestBuildCorazaDirectives_emptyAllowACLAlwaysEmitsFailClosed(t *testing.T) {
 	policy := &models.SecurityPolicy{Mode: "off", IPACLEnabled: true, IPACLMode: "allow", IPACLList: `[]`}
 	directives := mustDirectives(BuildCorazaDirectives(policy, nil, "", false, 0, "lb_test"))
 	if !strings.Contains(directives, "!@ipListFast") || !strings.Contains(directives, "deny") {
@@ -175,9 +176,9 @@ func TestBuildIPPrecheckDirectives_emptyTrustKeepsContentGate(t *testing.T) {
 	}
 }
 
-// 预检合并段：allow 模式空名单 → 失败关闭，必须发射 id:7 拒绝（否定算子命中
-// 全部来源）。
-func TestBuildIPPrecheckDirectives_emptyAllowACLKeepsContentGate(t *testing.T) {
+// 预检合并段：allow 模式空名单 → 不设内容门，无条件发射 id:7 失败关闭拒绝
+// （否定算子命中全部来源）。
+func TestBuildIPPrecheckDirectives_emptyAllowACLAlwaysEmitsFailClosed(t *testing.T) {
 	policies := []*models.SecurityPolicy{{IPACLEnabled: true, IPACLMode: "allow", IPACLList: `[]`}}
 	directives, err := buildIPPrecheckDirectives(policies, "lb_test")
 	if err != nil {

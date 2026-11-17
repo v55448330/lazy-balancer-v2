@@ -19,6 +19,7 @@ import (
 // 永久丢失：规则恢复旧域、任务却是新域+无 PEM，下一次配置再生成该规则无证书
 // 可服务，TLS 静默中断且无自动恢复路径。
 func TestUpdateRule_restores_issued_cert_pem_when_enqueue_fails_after_domain_migration(t *testing.T) {
+	withIsolatedGlobal(t)
 	// Given：启用中的 acme_dns 规则（旧域）持有一条已签发任务（PEM 在库），
 	// 改域名后 ACME 入队被强制失败。
 	harness := newUpdateAuditRuleHandlers(t, "lb_migrate_pem", 0, false)

@@ -238,31 +238,52 @@ func TestLbbakImport_preservesXdbVersionSidecar(t *testing.T) {
 	}
 }
 
-// 规则库文件落盘失败必须进入响应 warnings(不得静默纯成功)。
+// 规则库文件「装载被拒」与「落盘失败」两条警告分支各自钉住：
+// 坏 xdb 在装载校验即拒（落盘分支不可达）；validXdb + .sync 预占为目录则
+// 真实触达落盘失败分支（FailedXdb 告警）。两条都不得静默纯成功。
 func TestLbbakImport_wafFileFailureWarns(t *testing.T) {
-	h := newBackupTestHandlers(t)
-	g := newBackupSectionRouter(h)
-	_, xdbPath := overrideTestWafPaths(t)
-	// 制造落盘失败:预占 xdb.sync 为目录 → WriteFile 失败
-	if err := os.MkdirAll(xdbPath+".sync", 0o755); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.Remove(xdbPath + ".sync") })
-
-	backup := buildBackup(t, backupFixtureOptions{FillAll: true, Tables: map[string][]map[string]any{
-		"security_ip2region_version": {{"id": 1, "version": "t", "auto_update": 1}},
-	}, EmptyConfigIfNil: true})
-
-	body := buildTestLbbak(t, backup, []byte("DIFFERENT-XDB"))
-	rec := postLbbakImport(g, t, body, "")
-	if rec.Code != http.StatusOK {
-		t.Fatalf("import should still succeed: %d %s", rec.Code, rec.Body.String())
-	}
-	// 坏 xdb 在落盘前即被装载验证拒绝，响应必须同时明示「无法装载」
-	// 与版本记录同批丢弃（文件未落盘 → 记录不得存活）。
-	if !strings.Contains(rec.Body.String(), "无法装载") || !strings.Contains(rec.Body.String(), "版本记录已丢弃") {
-		t.Fatalf("waf file apply failure must surface in response warnings: %s", rec.Body.String())
-	}
+	t.Run("load-rejected", func(t *testing.T) {
+		h := newBackupTestHandlers(t)
+		g := newBackupSectionRouter(h)
+		overrideTestWafPaths(t)
+		backup := buildBackup(t, backupFixtureOptions{FillAll: true, Tables: map[string][]map[string]any{
+			"security_ip2region_version": {{"id": 1, "version": "t", "auto_update": 1}},
+		}, EmptyConfigIfNil: true})
+		body := buildTestLbbak(t, backup, []byte("DIFFERENT-XDB"))
+		rec := postLbbakImport(g, t, body, "")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("import should still succeed: %d %s", rec.Code, rec.Body.String())
+		}
+		// 坏 xdb 在落盘前即被装载验证拒绝，响应必须同时明示「无法装载」
+		// 与版本记录同批丢弃（文件未落盘 → 记录不得存活）。
+		if !strings.Contains(rec.Body.String(), "无法装载") || !strings.Contains(rec.Body.String(), "版本记录已丢弃") {
+			t.Fatalf("waf file apply failure must surface in response warnings: %s", rec.Body.String())
+		}
+	})
+	t.Run("write-failure", func(t *testing.T) {
+		h := newBackupTestHandlers(t)
+		g := newBackupSectionRouter(h)
+		_, xdbPath := overrideTestWafPaths(t)
+		// 制造真实落盘失败：validXdb 过装载校验后，live xdb 路径被**目录**
+		// 预占 → 原子写 rename(file→dir) 必败（FailedXdb 分支）。
+		//（历史死夹具：.sync 预占无效——原子写临时名是 CreateTemp 随机后缀，
+		// 且坏 xdb 在装载校验即拒，落盘分支从未触达。）
+		if err := os.MkdirAll(xdbPath, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Remove(xdbPath) })
+		backup := buildBackup(t, backupFixtureOptions{FillAll: true, Tables: map[string][]map[string]any{
+			"security_ip2region_version": {{"id": 1, "version": "t", "auto_update": 1}},
+		}, EmptyConfigIfNil: true})
+		body := buildTestLbbak(t, backup, validXdbBytes(t))
+		rec := postLbbakImport(g, t, body, "")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("import should still succeed: %d %s", rec.Code, rec.Body.String())
+		}
+		if !strings.Contains(rec.Body.String(), "IP2Region 数据文件未成功应用") || !strings.Contains(rec.Body.String(), "版本记录已丢弃") {
+			t.Fatalf("xdb write failure must surface FailedXdb warning: %s", rec.Body.String())
+		}
+	})
 }
 
 // 三分类合并(2026-09-19 用户裁定):legacy 分类键 global_config 是「系统数据」
@@ -345,17 +366,8 @@ func TestImportConfigBackup_usersCategoryBackupImports(t *testing.T) {
 		"certificate_configs": {},
 	}
 	cfg := map[string]any{"log_level": "warn"}
-	backup := configBackup{
-		Meta:   configBackupMeta{App: "lazy-balancer-v2", Version: 2, ExportedAt: "2026-09-19T00:00:00Z"},
-		Config: cfg,
-		Tables: tables,
-	}
-	backup.Meta.Checksum = checksumBackupPayload(t, tables, cfg)
-	data, err := json.Marshal(backup)
-	if err != nil {
-		t.Fatal(err)
-	}
-	rec := postLbbakImport(g, t, buildTestLbbak(t, string(data), nil), "")
+	data := buildBackup(t, backupFixtureOptions{Tables: tables, Config: cfg})
+	rec := postLbbakImport(g, t, buildTestLbbak(t, data, nil), "")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("users-category backup must import, got %d %s", rec.Code, rec.Body.String())
 	}

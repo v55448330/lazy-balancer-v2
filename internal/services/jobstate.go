@@ -203,10 +203,15 @@ func issuedFinalizeResetFields() map[string]any {
 }
 
 // issuedFinalizeFields 组装 issued 终态写入字段：失败预算清零（单源）+
-// 调用方附加字段（message/expires_at/部署簿记等；附加键不得覆盖预算键）。
+// 调用方附加字段（message/expires_at/部署簿记等）。附加键不得覆盖预算键
+// （renewal_attempts/ca_available_after/last_error_code）——携带即 panic
+// 响亮拒绝：静默覆盖会让失败计数/退避窗口跨证书世代携带，破坏清零单源。
 func issuedFinalizeFields(extra map[string]any) map[string]any {
 	fields := issuedFinalizeResetFields()
 	for key, value := range extra {
+		if _, budget := fields[key]; budget {
+			panic(fmt.Sprintf("issuedFinalizeFields: 附加键 %q 不得覆盖失败预算键（清零单源 issuedFinalizeResetFields）", key))
+		}
 		fields[key] = value
 	}
 	return fields

@@ -70,6 +70,7 @@ func generateTestCAChain(t *testing.T, dnsNames []string) (certPEM, keyPEM strin
 // injectTestRoots 用测试根池替换系统根源(验证链完整性判定),返回还原函数。
 func injectTestRoots(t *testing.T, roots *x509.CertPool) {
 	t.Helper()
+	withIsolatedGlobal(t)
 	old := tlsCertSystemRoots
 	tlsCertSystemRoots = func() (*x509.CertPool, error) { return roots, nil }
 	t.Cleanup(func() { tlsCertSystemRoots = old })

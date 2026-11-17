@@ -233,6 +233,62 @@ func TestRunAutoBackupOnce_failureRecordsFailedRowAndAudit(t *testing.T) {
 	}
 }
 
+// Given 备份在目录创建窗口内被取消（角色降级/引擎停止）且 MkdirAll 真实
+// 失败（目录被同名文件占据）——复合条件：取消落在 MkdirAll 执行期间。
+// When RunAutoBackupOnce 返回。
+// Then 按取消返回（context.Canceled），零 failed 行、零「备份失败」审计——
+// 与占名/读范围/构建/写盘窗口的取消口径同形（取消不是备份失败）。
+func TestRunAutoBackupOnce_cancelDuringDirCreateLeavesNoFailedRowOrAudit(t *testing.T) {
+	withIsolatedGlobal(t)
+	h := newAutoBackupTestHandlers(t)
+	blocked := filepath.Join(t.TempDir(), "blocked")
+	if err := os.WriteFile(blocked, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h.cfg.BackupDir = blocked
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	// 取消注入点：目录创建窗口观测缝（MkdirAll 之前触发）——MkdirAll 随后
+	// 真实失败（路径被文件占据），构成「真失败+取消同窗」复合形态。
+	previousHook := autoBackupBeforeDirCreateHook
+	autoBackupBeforeDirCreateHook = func() { cancel() }
+	t.Cleanup(func() { autoBackupBeforeDirCreateHook = previousHook })
+
+	_, err := h.RunAutoBackupOnce(ctx, "schedule", "system", 1)
+
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err=%v, want context.Canceled（目录创建窗口取消按取消返回）", err)
+	}
+	if rows := autoBackupRows(t, "WHERE status='failed'"); len(rows) != 0 {
+		t.Fatalf("failed rows=%d, want 0（取消不得落 failed 行）", len(rows))
+	}
+	if got := countAutoBackupAudit(t, "备份失败"); got != 0 {
+		t.Fatalf("备份失败审计=%d, want 0（取消不得记备份失败）", got)
+	}
+}
+
+// Given 备份目录未配置（autoBackupDir 守卫必败）且取消发生在目录窗口。
+// Then 同口径按取消返回，零 failed 审计（目录无效分支与创建窗口同族）。
+func TestRunAutoBackupOnce_cancelWithInvalidDirLeavesNoAudit(t *testing.T) {
+	withIsolatedGlobal(t)
+	h := newAutoBackupTestHandlers(t)
+	h.cfg.BackupDir = ""
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	previousHook := autoBackupBeforeDirCreateHook
+	autoBackupBeforeDirCreateHook = func() { cancel() }
+	t.Cleanup(func() { autoBackupBeforeDirCreateHook = previousHook })
+
+	_, err := h.RunAutoBackupOnce(ctx, "schedule", "system", 1)
+
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err=%v, want context.Canceled", err)
+	}
+	if got := countAutoBackupAudit(t, "备份失败"); got != 0 {
+		t.Fatalf("备份失败审计=%d, want 0", got)
+	}
+}
+
 // 原子写已完成 rename、仅父目录 fsync 失败时，最终文件已经存在；写失败
 // 收尾必须删除它，连续调度不得积累没有数据库行的敏感备份。
 func TestRunAutoBackupOnce_writeFailureRemovesFinalFile(t *testing.T) {

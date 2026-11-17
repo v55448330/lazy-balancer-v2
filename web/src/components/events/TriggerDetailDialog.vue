@@ -466,11 +466,14 @@ interface PolicyRow {
   cc_queue_wait_sec?: number
 }
 const policy = ref<PolicyRow | null>(null)
-// CC 防护（人机挑战）明细：结果由规则 id 区分（human_challenge/pass/failed）。
+// CC 防护（人机挑战）明细：结果由规则 token 区分（human_challenge/pass/failed
+// + cc_rate_reject 限流拒绝——带外/集群回插的拒绝事件 rule_name 为空，hero
+// 命中源消费本结果词，缺分支会把 429 拒绝误显「发放挑战」）。
 const ccResultText = computed(() => {
   const rule = props.row?.rule_triggered ?? ''
   if (rule === 'human_pass') return t('common.app.views.trigDetail.ccResultPass')
   if (rule === 'human_failed') return t('common.app.views.trigDetail.ccResultFail')
+  if (rule === 'cc_rate_reject') return t('common.app.views.trigDetail.ccResultRateReject')
   return t('common.app.views.trigDetail.ccResultChallenge')
 })
 const ccModeText = computed(() => {

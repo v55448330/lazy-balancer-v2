@@ -209,6 +209,8 @@ func captureHandlerGlobalSeams() map[string]any {
 		"oidcJITInsertAttemptHook": handlerGlobalPointer(oidcJITInsertAttemptHook),
 		// 自动备份「读取备份范围」窗口取消注入缝。
 		"autoBackupBeforeSectionsReadHook": handlerGlobalPointer(autoBackupBeforeSectionsReadHook),
+		// 自动备份「目录创建」窗口取消注入缝。
+		"autoBackupBeforeDirCreateHook": handlerGlobalPointer(autoBackupBeforeDirCreateHook),
 		// 品牌热重载留痕锁序观测缝。
 		"brandingReloadAuditHook": handlerGlobalPointer(brandingReloadAuditHook),
 		// 尾窗尺寸快照/Read 增长窗口观测缝（单源 readLogTailWindow 共用）。
@@ -244,7 +246,29 @@ func captureHandlerGlobalSeams() map[string]any {
 		"ipListCommitTxForTest":                     handlerGlobalPointer(ipListCommitTxForTest),
 		"beforeSystemTaskLogDBQuery":                handlerGlobalPointer(beforeSystemTaskLogDBQuery),
 		"exitProcess":                               handlerGlobalPointer(exitProcess),
-		"importCleanupBudget":                       importCleanupBudget,
+		// 类型派生完备门捕获的函数引用初始化缝（var x = pkg.Func /
+		// var x = localFunc）与可替换客户端缝——AST 形态判据曾整体漏检。
+		"openAPIYAMLOnce":                 handlerGlobalPointer(openAPIYAMLOnce),
+		"oidcProbeClient":                 handlerGlobalPointer(oidcProbeClient),
+		"oidcOutboundClient":              handlerGlobalPointer(oidcOutboundClient),
+		"autoBackupWriteFile":             handlerGlobalPointer(autoBackupWriteFile),
+		"caddyAdminTransport":             handlerGlobalPointer(caddyAdminTransport),
+		"certJobDeploymentRetryRegistrar": handlerGlobalPointer(certJobDeploymentRetryRegistrar),
+		"invalidateImportTaskLogCache":    handlerGlobalPointer(invalidateImportTaskLogCache),
+		"removeImportRuleLogFiles":        handlerGlobalPointer(removeImportRuleLogFiles),
+		"removeImportCertJobLogFiles":     handlerGlobalPointer(removeImportCertJobLogFiles),
+		"importRuleIDsForBegin":           handlerGlobalPointer(importRuleIDsForBegin),
+		"reqMonClient":                    handlerGlobalPointer(reqMonClient),
+		"caddyRestartStat":                handlerGlobalPointer(caddyRestartStat),
+		"tlsCertSystemRoots":              handlerGlobalPointer(tlsCertSystemRoots),
+		"dialOutboundIPFn":                handlerGlobalPointer(dialOutboundIPFn),
+		"humanAdminClient":                handlerGlobalPointer(humanAdminClient),
+		"logStatsReadDir":                 handlerGlobalPointer(logStatsReadDir),
+		"createOrRequeueCertJobVerified":  handlerGlobalPointer(createOrRequeueCertJobVerified),
+		"threatAdminClient":               handlerGlobalPointer(threatAdminClient),
+		"threatRollupRewindApplyInLock":   handlerGlobalPointer(threatRollupRewindApplyInLock),
+		"deltaUint64":                     handlerGlobalPointer(deltaUint64),
+		"importCleanupBudget":             importCleanupBudget,
 	}
 }
 
@@ -351,6 +375,121 @@ func TestGlobalStateGuard_detectsImportSeamLeaks(t *testing.T) {
 		old := newLbbakWafFileSnapshotDir
 		t.Cleanup(func() { newLbbakWafFileSnapshotDir = old })
 		assertHandlerGlobalStateLeak(t, "newLbbakWafFileSnapshotDir", func() { newLbbakWafFileSnapshotDir = nil })
+	})
+}
+
+// 函数引用初始化缝（var x = pkg.Func）与可替换客户端缝的泄漏可见性自证：
+// 这批缝曾因 AST 形态判据漏登而对守卫全盲——补登后故意泄漏必须当场命中。
+func TestGlobalStateGuard_detectsFuncRefSeamLeaks(t *testing.T) {
+	t.Run("autoBackupWriteFile", func(t *testing.T) {
+		old := autoBackupWriteFile
+		t.Cleanup(func() { autoBackupWriteFile = old })
+		assertHandlerGlobalStateLeak(t, "autoBackupWriteFile", func() {
+			autoBackupWriteFile = func(string, []byte) error { return nil }
+		})
+	})
+	t.Run("caddyRestartStat", func(t *testing.T) {
+		old := caddyRestartStat
+		t.Cleanup(func() { caddyRestartStat = old })
+		assertHandlerGlobalStateLeak(t, "caddyRestartStat", func() { caddyRestartStat = nil })
+	})
+	t.Run("logStatsReadDir", func(t *testing.T) {
+		old := logStatsReadDir
+		t.Cleanup(func() { logStatsReadDir = old })
+		assertHandlerGlobalStateLeak(t, "logStatsReadDir", func() { logStatsReadDir = nil })
+	})
+	t.Run("tlsCertSystemRoots", func(t *testing.T) {
+		old := tlsCertSystemRoots
+		t.Cleanup(func() { tlsCertSystemRoots = old })
+		assertHandlerGlobalStateLeak(t, "tlsCertSystemRoots", func() { tlsCertSystemRoots = nil })
+	})
+	t.Run("certJobDeploymentRetryRegistrar", func(t *testing.T) {
+		old := certJobDeploymentRetryRegistrar
+		t.Cleanup(func() { certJobDeploymentRetryRegistrar = old })
+		assertHandlerGlobalStateLeak(t, "certJobDeploymentRetryRegistrar", func() {
+			certJobDeploymentRetryRegistrar = nil
+		})
+	})
+	t.Run("invalidateImportTaskLogCache", func(t *testing.T) {
+		old := invalidateImportTaskLogCache
+		t.Cleanup(func() { invalidateImportTaskLogCache = old })
+		assertHandlerGlobalStateLeak(t, "invalidateImportTaskLogCache", func() { invalidateImportTaskLogCache = func() {} })
+	})
+	t.Run("createOrRequeueCertJobVerified", func(t *testing.T) {
+		old := createOrRequeueCertJobVerified
+		t.Cleanup(func() { createOrRequeueCertJobVerified = old })
+		assertHandlerGlobalStateLeak(t, "createOrRequeueCertJobVerified", func() { createOrRequeueCertJobVerified = nil })
+	})
+	t.Run("removeImportRuleLogFiles", func(t *testing.T) {
+		old := removeImportRuleLogFiles
+		t.Cleanup(func() { removeImportRuleLogFiles = old })
+		assertHandlerGlobalStateLeak(t, "removeImportRuleLogFiles", func() { removeImportRuleLogFiles = nil })
+	})
+	t.Run("removeImportCertJobLogFiles", func(t *testing.T) {
+		old := removeImportCertJobLogFiles
+		t.Cleanup(func() { removeImportCertJobLogFiles = old })
+		assertHandlerGlobalStateLeak(t, "removeImportCertJobLogFiles", func() { removeImportCertJobLogFiles = nil })
+	})
+	t.Run("importRuleIDsForBegin", func(t *testing.T) {
+		old := importRuleIDsForBegin
+		t.Cleanup(func() { importRuleIDsForBegin = old })
+		assertHandlerGlobalStateLeak(t, "importRuleIDsForBegin", func() { importRuleIDsForBegin = nil })
+	})
+	t.Run("dialOutboundIPFn", func(t *testing.T) {
+		old := dialOutboundIPFn
+		t.Cleanup(func() { dialOutboundIPFn = old })
+		assertHandlerGlobalStateLeak(t, "dialOutboundIPFn", func() {
+			dialOutboundIPFn = func() (string, bool) { return "", false }
+		})
+	})
+	t.Run("threatRollupRewindApplyInLock", func(t *testing.T) {
+		old := threatRollupRewindApplyInLock
+		t.Cleanup(func() { threatRollupRewindApplyInLock = old })
+		assertHandlerGlobalStateLeak(t, "threatRollupRewindApplyInLock", func() { threatRollupRewindApplyInLock = nil })
+	})
+	t.Run("deltaUint64", func(t *testing.T) {
+		old := deltaUint64
+		t.Cleanup(func() { deltaUint64 = old })
+		assertHandlerGlobalStateLeak(t, "deltaUint64", func() {
+			deltaUint64 = func(cur, prev uint64) uint64 { return 0 }
+		})
+	})
+	t.Run("openAPIYAMLOnce", func(t *testing.T) {
+		old := openAPIYAMLOnce
+		t.Cleanup(func() { openAPIYAMLOnce = old })
+		assertHandlerGlobalStateLeak(t, "openAPIYAMLOnce", func() {
+			openAPIYAMLOnce = func() string { return "" }
+		})
+	})
+	t.Run("caddyAdminTransport", func(t *testing.T) {
+		old := caddyAdminTransport
+		t.Cleanup(func() { caddyAdminTransport = old })
+		assertHandlerGlobalStateLeak(t, "caddyAdminTransport", func() { caddyAdminTransport = nil })
+	})
+	t.Run("reqMonClient", func(t *testing.T) {
+		old := reqMonClient
+		t.Cleanup(func() { reqMonClient = old })
+		assertHandlerGlobalStateLeak(t, "reqMonClient", func() { reqMonClient = nil })
+	})
+	t.Run("humanAdminClient", func(t *testing.T) {
+		old := humanAdminClient
+		t.Cleanup(func() { humanAdminClient = old })
+		assertHandlerGlobalStateLeak(t, "humanAdminClient", func() { humanAdminClient = nil })
+	})
+	t.Run("threatAdminClient", func(t *testing.T) {
+		old := threatAdminClient
+		t.Cleanup(func() { threatAdminClient = old })
+		assertHandlerGlobalStateLeak(t, "threatAdminClient", func() { threatAdminClient = nil })
+	})
+	t.Run("oidcProbeClient", func(t *testing.T) {
+		old := oidcProbeClient
+		t.Cleanup(func() { oidcProbeClient = old })
+		assertHandlerGlobalStateLeak(t, "oidcProbeClient", func() { oidcProbeClient = nil })
+	})
+	t.Run("oidcOutboundClient", func(t *testing.T) {
+		old := oidcOutboundClient
+		t.Cleanup(func() { oidcOutboundClient = old })
+		assertHandlerGlobalStateLeak(t, "oidcOutboundClient", func() { oidcOutboundClient = nil })
 	})
 }
 

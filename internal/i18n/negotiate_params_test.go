@@ -36,3 +36,20 @@ func TestNegotiate_zeroQualityNotAcceptable(t *testing.T) {
 		}
 	}
 }
+
+// RFC 9110 参数名大小写不敏感：Q= 与 q= 同义。此前参数名前缀比较
+// 大小写敏感，"zh;Q=0.3" 被按缺 q 默认 1.0，语言排序失真。
+func TestNegotiate_qParameterNameCaseInsensitive(t *testing.T) {
+	cases := []struct{ header, want string }{
+		{"zh;Q=0.3,en;q=0.8", EN},
+		{"en;Q=0.2,zh;q=0.9", ZH},
+		{"zh;foo=bar;Q=0.2,en;q=0.9", EN}, // 大写 Q 在任意参数位
+		{"en;Q=0", ZH},                    // 大写 Q=0 同样声明不可接受
+		{"en;q=0.2,zh;q=0.9", ZH},         // 小写回归形状
+	}
+	for _, c := range cases {
+		if got := negotiate(c.header); got != c.want {
+			t.Errorf("negotiate(%q)=%q want %q", c.header, got, c.want)
+		}
+	}
+}

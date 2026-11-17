@@ -1090,12 +1090,8 @@ interface Rule { caddy_id: string; name: string; domain: string; listen_port: nu
 // v2.2.0 多策略绑定：/security/bindings 的值从单 BindingInfo 改为数组（rank 序=执行序；
 // policy_id 仅作遗留 rank=0 行的并列兜底）
 interface BindingInfo { policy_id: number; name: string; mode: string; enabled: boolean; block_page_id?: number; block_status_code?: number }
-// GET /security/rules/:caddy_id/policy 直接序列化 models.SecurityPolicy——json.RawMessage
-// 字段以原生 JSON（数组）出现，与策略详情接口的字符串形态不同，按 unknown 接收再解析。
-interface RuleBoundPolicy { id: number; name: string; mode: string; enabled: boolean; ip_acl_enabled: boolean; ip_acl_mode: string; crs_rule_groups: unknown; custom_rules: unknown; block_page_id: number }
-interface CustomRuleRef { id: number; action: string }
 interface ChainEntry { policyId: number | null; name: string; enabled: boolean; isSelf: boolean; blockPageId?: number; blockStatusCode?: number }
-interface BoundRuleRow { caddyId: string; name: string; protocol: string; domain: string; listenPort: number; chain: ChainEntry[]; mergedCount: number; showPerfTip: boolean; hints: string[]; infoHints: string[] }
+interface BoundRuleRow { caddyId: string; name: string; protocol: string; domain: string; listenPort: number; chain: ChainEntry[]; showPerfTip: boolean }
 interface BlockPage { id: number; name: string; content?: string }
 
 const blockPages = ref<BlockPage[]>([])
@@ -1927,7 +1923,7 @@ const crawlerEngineOptions = [
   { id: 'bytespider', name: t('app.security.policies.crawler.bytespider') },
 ]
 const selectedCustomRules = ref<number[]>([])
-// action/enabled/conditions 供冲突检测与按 Coraza 相位判定真实拦截能力
+// action/enabled/conditions 供按 Coraza 相位判定真实拦截能力（stageCapableOf）
 const allCustomRules = ref<SecurityStageCustomRule[]>([])
 
 // 返回是否加载成功——聚焦流程需区分
@@ -2559,40 +2555,12 @@ const handlePickerSelectAll = (checked: string | number | boolean): void => {
   pickerSelected.value = pickerSelected.value.filter((id) => !selectableIdSet.has(id))
 }
 
-// 拦截页面 = 首绑策略的页面（执行序首个有页策略）；单规则最多
-// MAX_POLICIES_PER_RULE 条（securityStages 单源，与后端 maxBindingsPerRule 同口径）；
-// security_policies.id 为 AUTOINCREMENT——新建策略的 ID 必然大于全部现存策略，
-// 因此新建策略在任何规则的绑定链上都落在末位。
+// 绑定链性能提示阈值：启用策略超过 3 条时提示处理链叠加可能影响转发性能
+//（提示文案 bind.perfWarn 同口径）。
 const PERF_POLICY_THRESHOLD = 3
-
-// 选中规则的完整绑定策略明细（冲突检测需要 crs_rule_groups/custom_rules 内容，
-// /security/bindings 的 BindingInfo 不含这些字段）——按规则懒加载，对话框关闭时
-// 清空防止跨编辑会话的 stale 数据。
-const ruleBoundPolicies = ref<Record<string, RuleBoundPolicy[]>>({})
-const ensureBindingDetails = async (caddyIds: string[]): Promise<void> => {
-  const missing = caddyIds.filter((id) => !(id in ruleBoundPolicies.value))
-  if (missing.length === 0) return
-  // 捕获对话框会话序列号——对话框关闭（resetWizard 已清空缓存）后落地的
-  // 过期响应不得回写，否则下一次会话把 stale 条目当作缓存跳过重取（missing 过滤）
-  const openSeq = policyDialogOpenSeq
-  const results = await Promise.allSettled(
-    missing.map((id) => request.get<APIResponse<RuleBoundPolicy[]>>(`/security/rules/${encodeURIComponent(id)}/policy`)),
-  )
-  if (!dialogVisible.value || openSeq !== policyDialogOpenSeq) return
-  const next = { ...ruleBoundPolicies.value }
-  results.forEach((res, i) => {
-    // 失败的不写入：保持缺省以便下次进入步骤时重试（全局拦截器已 toast）
-    if (res.status !== 'fulfilled') return
-    const caddyId = missing[i]
-    if (caddyId === undefined) return
-    next[caddyId] = res.value.data || []
-  })
-  ruleBoundPolicies.value = next
-}
 
 watch(currentStep, (step) => {
   if (step === WIZARD_STEP.WAF_RULES && dialogVisible.value) void ensureCrsDirectory()
-  if (step === WIZARD_STEP.BINDINGS && dialogVisible.value) void ensureBindingDetails(boundRules.value)
 })
 
 // IP 名单归一化（去空白、去重）统一走 mergeIpEntryValues(values, [])。
@@ -2602,7 +2570,7 @@ watch(currentStep, (step) => {
 // 策略 IP 名单按真实生效范围拆分：ACL 允许侧与信任名单不能合并——ACL 与存量
 // 非阶段 0 信任仅豁免所属策略，阶段 0 信任则跨策略直通或降级为仅检测。
 // 拒绝侧 = 黑名单模式下的 ACL 列表 + 独立 ip_blacklist 字段（由策略页外入口维护）。
-// 供 Step 4 冲突检测与 WAF/IP 步骤实时警告共用，保证两处口径一致。
+// 供 WAF/IP 步骤实时警告消费（绑定步骤冲突死簇已退役）。
 // 信任名单须看启用态（三态：关闭=保留名单零生效）——否则对端已关闭的信任名单
 // 仍会触发误报冲突告警。返回的三组条目分别归一去重，不再制造第二份合并允许侧。
 const ipAclSideEntries = (mode: string, aclEnabled: boolean, aclList: string[], whitelist: string[], blacklist: string[], whitelistEnabled = true): { aclAllow: string[]; trust: string[]; deny: string[] } => {
@@ -2612,37 +2580,6 @@ const ipAclSideEntries = (mode: string, aclEnabled: boolean, aclList: string[], 
   if (aclEnabled && mode === 'deny') deny.push(...aclList)
   deny.push(...blacklist)
   return { aclAllow: mergeIpEntryValues(aclAllow, []), trust: mergeIpEntryValues(trust, []), deny: mergeIpEntryValues(deny, []) }
-}
-
-// 本策略（表单实时值）的允许/信任/拒绝三侧名单——引用列表条目并入内联后参与比较
-const selfIpAclSides = computed(() => ipAclSideEntries(form.value.ip_acl_mode, form.value.ip_acl_enabled, mergeIpEntries(ipACLList.value, ipACLListRefs.value), mergeIpEntries(ipWhitelist.value, ipWhitelistRefs.value), ipBlacklistSelf.value, trustEnabledInEditor.value))
-
-const customRuleActionOf = (id: number): string => allCustomRules.value.find((r) => r.id === id)?.action ?? ''
-
-// 自定义规则引用解析：兼容纯 ID 数组与内嵌对象（{id, action}）两种存储形状；
-// 内嵌对象缺 action 或纯 ID 时回查自定义规则表
-const parseCustomRuleRefs = (raw: unknown): CustomRuleRef[] => {
-  let items: unknown[] = []
-  if (Array.isArray(raw)) items = raw
-  else if (typeof raw === 'string') {
-    try {
-      const parsed: unknown = JSON.parse(raw)
-      if (Array.isArray(parsed)) items = parsed
-    } catch { items = [] }
-  }
-  const refs: CustomRuleRef[] = []
-  for (const item of items) {
-    if (typeof item === 'number' && item > 0) {
-      refs.push({ id: item, action: customRuleActionOf(item) })
-    } else if (typeof item === 'object' && item !== null && 'id' in item) {
-      const id = (item as { id?: unknown }).id
-      if (typeof id === 'number' && id > 0) {
-        const embeddedAction = (item as { action?: unknown }).action
-        refs.push({ id, action: typeof embeddedAction === 'string' && embeddedAction !== '' ? embeddedAction : customRuleActionOf(id) })
-      }
-    }
-  }
-  return refs
 }
 
 // 展示链：完整绑定列表（含禁用策略，标灰）+ 本策略，按绑定执行序（rank 序，
@@ -2695,197 +2632,8 @@ const pickerMeta = (rule: Rule): { chain: ChainEntry[]; selfPos: number; blockRe
   return { chain, selfPos: selfIndex >= 0 ? selfIndex + 1 : existing.length + 1, blockReason }
 }
 
-// 冲突检测视图：仅启用策略参与（禁用策略不生成配置）；
-// 服务端快照中本策略的条目被移除，以表单实时值替代
-interface ConflictPolicyView {
-  id: number | null
-  name: string
-  enabled: boolean
-  mode: string
-  ipAclEnabled: boolean
-  ipAclMode: string
-  policyType: SecurityPolicyType
-  trustDetection: boolean
-  crsGroups: string[]
-  customRefs: CustomRuleRef[]
-  ipAclAllowEntries: string[]
-  ipTrustEntries: string[]
-  ipDenyEntries: string[]
-}
-
-const buildConflictChain = (caddyId: string): ConflictPolicyView[] => {
-  const serverPolicies = (ruleBoundPolicies.value[caddyId] || [])
-    .filter((p) => p.id !== editingId.value)
-    .map((p): ConflictPolicyView => {
-      // /security/rules/:id/policy 不携带 IP 名单——按 id 回联策略列表快照
-      //（PolicySummary 含 ip_acl_list/ip_whitelist/ip_blacklist）
-      const summary = policies.value.find((sp) => sp.id === p.id)
-      const sides = summary
-        ? ipAclSideEntries(
-          summary.ip_acl_mode,
-          summary.ip_acl_enabled,
-          mergeIpEntries(parseIPList(summary.ip_acl_list), parseRefIds(summary.ip_acl_list_refs)),
-          mergeIpEntries(parseIPList(summary.ip_whitelist), parseRefIds(summary.ip_whitelist_refs)),
-          parseIPList(summary.ip_blacklist),
-          summary.ip_whitelist_enabled !== false,
-        )
-        : { aclAllow: [] as string[], trust: [] as string[], deny: [] as string[] }
-      return {
-        id: p.id,
-        name: p.name,
-        enabled: p.enabled,
-        mode: p.mode,
-        ipAclEnabled: p.ip_acl_enabled,
-        ipAclMode: p.ip_acl_mode,
-        policyType: summary ? policyTypeOf(summary) : 'stage3',
-        trustDetection: summary?.trust_detection === true,
-        crsGroups: normalizeCrsGroups(parseUnknownStrings(p.crs_rule_groups)),
-        customRefs: parseCustomRuleRefs(p.custom_rules),
-        ipAclAllowEntries: sides.aclAllow,
-        ipTrustEntries: sides.trust,
-        ipDenyEntries: sides.deny,
-      }
-    })
-  const selfSides = selfIpAclSides.value
-  const self: ConflictPolicyView = {
-    id: editingId.value,
-    name: form.value.name || t('app.security.policies.common.selfPolicy'),
-    enabled: form.value.enabled,
-    mode: form.value.mode,
-    ipAclEnabled: form.value.ip_acl_enabled,
-    ipAclMode: form.value.ip_acl_mode,
-    policyType: editorPolicyType.value,
-    trustDetection: form.value.trust_detection,
-    crsGroups: crsRuleGroups.value,
-    customRefs: selectedCustomRules.value.map((id) => ({ id, action: customRuleActionOf(id) })),
-    ipAclAllowEntries: selfSides.aclAllow,
-    ipTrustEntries: selfSides.trust,
-    ipDenyEntries: selfSides.deny,
-  }
-  // 链序=执行序（与 buildDisplayChain 同源 orderedChainPolicyIds，阶段 0 置顶、
-  // 其余按 rank/暂存序）：原按 policy id 排序会与展示链/后端执行顺序分叉，
-  // 「前位于后位」类冲突提示可能指向相反的先后关系。
-  const byId = new Map<number | null, ConflictPolicyView>()
-  for (const p of serverPolicies) if (p.id !== null) byId.set(p.id, p)
-  // 本策略按表单实时值替换同 id 快照（服务端快照已在 serverPolicies 中剔除）。
-  byId.set(self.id, self)
-  const ordered: ConflictPolicyView[] = []
-  for (const id of orderedChainPolicyIds(caddyId)) {
-    const p = byId.get(id)
-    if (!p) continue
-    ordered.push(p)
-    byId.delete(id)
-  }
-  // 本策略尚未在绑定链中（新建策略/新增绑定）：保存后追加到链尾——按此落位，
-  // 确保「本策略」始终参与冲突判定且不因缺序被丢弃。
-  if (byId.has(self.id)) ordered.push(self)
-  return ordered
-}
-
-// 五类绑定冲突提示（client-side 计算，规则完整绑定链 = 现有 + 本策略）：
-// (1) 绑定策略间 CRS 规则组重叠；(2) 免检测/白名单型策略夹在拦截策略中间；
-// (3) 前位策略含放行型自定义规则 vs 后位策略含拦截型；(4) 自定义规则 ID 跨策略重复；
-// (5) 地址级允许×拒绝冲突（一侧允许/信任名单条目出现在另一侧黑名单中）
-const computeBindingConflicts = (chain: ConflictPolicyView[]): string[] => {
-  const hints: string[] = []
-  const active = chain.filter((p) => p.enabled)
-  if (active.length < 2) return hints
-
-  // (1) CRS 规则组重叠：空数组 = 加载全部规则 → 与任何选择重叠；仅 CRS 生效模式(blocking/detection)加载 CRS(2026-09-09 四态化)
-  const wafActive = active.filter((p) => p.mode === 'blocking' || p.mode === 'detection')
-  for (let i = 0; i < wafActive.length; i++) {
-    for (let j = i + 1; j < wafActive.length; j++) {
-      const a = wafActive[i]
-      const b = wafActive[j]
-      if (!a || !b) continue
-      let overlap: string[]
-      if (a.crsGroups.length === 0 && b.crsGroups.length === 0) overlap = [t('app.security.policies.conflict.allGroups')]
-      else if (a.crsGroups.length === 0) overlap = b.crsGroups
-      else if (b.crsGroups.length === 0) overlap = a.crsGroups
-      else overlap = a.crsGroups.filter((g) => b.crsGroups.includes(g))
-      if (overlap.length > 0) {
-        const shown = overlap.slice(0, 3).join(t('app.security.policies.common.sep'))
-        hints.push(t('app.security.policies.conflict.crsOverlap', { a: a.name, b: b.name, groups: shown + (overlap.length > 3 ? t('app.security.policies.common.etcSuffix') : '') }))
-      }
-    }
-  }
-
-  // (2) 免检测/白名单型策略夹在拦截型策略中间：免检测/白名单仅作用于自身引擎，
-  // 不会为前后策略放行流量（各策略引擎独立判定、互不影响），位置安排不影响拦截效果
-  const isBlocking = (p: ConflictPolicyView): boolean => p.mode === 'blocking'
-  const isBypassLike = (p: ConflictPolicyView): boolean => p.ipAclEnabled && (p.ipAclMode === '绕过' || p.ipAclMode === 'allow')
-  active.forEach((p, i) => {
-    if (!isBypassLike(p)) return
-    const hasBlockingBefore = active.slice(0, i).some(isBlocking)
-    const hasBlockingAfter = active.slice(i + 1).some(isBlocking)
-    if (hasBlockingBefore && hasBlockingAfter) {
-      hints.push(t('app.security.policies.conflict.bypassMiddle', { name: p.name, mode: p.ipAclMode === '绕过' ? t('app.security.policies.acl.bypassShort') : t('app.security.policies.acl.allowShort') }))
-    }
-  })
-
-  // (3) 前位策略含放行型（pass）自定义规则，后位策略含拦截型（block）：pass 不阻断请求、
-  // 仅跳过本策略引擎内的匹配，后位拦截不受影响；顺序上真正需注意的是前位拦截策略
-  // 一旦命中即中断整条链，后位策略只处理前位放行的流量
-  const hasAllowRule = (p: ConflictPolicyView): boolean => p.customRefs.some((r) => r.action === 'pass')
-  const hasDenyRule = (p: ConflictPolicyView): boolean => p.customRefs.some((r) => r.action === 'block')
-  for (let i = 0; i < active.length; i++) {
-    const earlier = active[i]
-    if (!earlier || !hasAllowRule(earlier)) continue
-    for (let j = i + 1; j < active.length; j++) {
-      const later = active[j]
-      if (!later || !hasDenyRule(later)) continue
-      hints.push(t('app.security.policies.conflict.passBlock', { earlier: earlier.name, later: later.name }))
-      break
-    }
-  }
-
-  // (4) 自定义规则 ID 跨策略重复引用 → 同一请求重复计分/处理
-  const idOwners = new Map<number, string[]>()
-  active.forEach((p) => {
-    const seen = new Set<number>()
-    p.customRefs.forEach((r) => {
-      if (seen.has(r.id)) return
-      seen.add(r.id)
-      const owners = idOwners.get(r.id) ?? []
-      owners.push(p.name)
-      idOwners.set(r.id, owners)
-    })
-  })
-  idOwners.forEach((owners, ruleId) => {
-    if (owners.length <= 1) return
-    const ruleName = allCustomRules.value.find((r) => r.id === ruleId)?.name || `#${ruleId}`
-    hints.push(t('app.security.policies.conflict.duplicateRule', { rule: ruleName, owners: owners.map((n) => t('app.security.policies.common.nameQuoted', { name: n })).join(t('app.security.policies.common.sep')) }))
-  })
-
-  // (5) 地址级允许×拒绝提示：ACL/存量信任只豁免所属策略；阶段 0 信任
-  // 则按直通或保留检测模式跨策略优先。与 WAF/IP 步骤实时警告同源
-  //（ipAclSideEntries），仅精确字符串匹配，不展开 CIDR 包含关系。
-  // 万级名单下 includes 扫描是 O(A×D)，先为每个策略建 Set 再求交。
-  const denySets = active.map((p) => new Set(p.ipDenyEntries))
-  for (let i = 0; i < active.length; i++) {
-    for (let j = 0; j < active.length; j++) {
-      if (i === j) continue
-      const allowSide = active[i]
-      const denySide = active[j]
-      if (!allowSide || !denySide) continue
-      const aclOverlap = entriesIntersect(allowSide.ipAclAllowEntries, denySets[j] ?? new Set())
-      if (aclOverlap.length > 0) {
-        const shown = aclOverlap.slice(0, 2).join(t('app.security.policies.common.sep'))
-        hints.push(t('app.security.policies.conflict.addrAclDeny', { addr: shown + (aclOverlap.length > 2 ? t('app.security.policies.common.etcSuffix') : ''), allow: allowSide.name, deny: denySide.name, detail: addressAllowDenyConflictText({ kind: 'acl', denyPolicyName: denySide.name }) }))
-      }
-      const trustOverlap = entriesIntersect(allowSide.ipTrustEntries, denySets[j] ?? new Set())
-      if (trustOverlap.length > 0) {
-        const shown = trustOverlap.slice(0, 2).join(t('app.security.policies.common.sep'))
-        hints.push(t('app.security.policies.conflict.addrTrustDeny', { addr: shown + (trustOverlap.length > 2 ? t('app.security.policies.common.etcSuffix') : ''), allow: allowSide.name, deny: denySide.name, detail: addressAllowDenyConflictText({ kind: 'trust', policyType: allowSide.policyType, trustDetection: allowSide.trustDetection, denyPolicyName: denySide.name }) }))
-      }
-    }
-  }
-
-  return hints
-}
-
 // ================= 跨策略重复/冲突的实时步骤内警告（WAF/IP 步骤） =================
-// 与 Step 4 computeBindingConflicts 同源语义，但比较范围不同：
+// 比较语义与实时警告共用 ipAclSideEntries/addressAllowDenyConflictText 单源：
 // - 比较集合 = 与本策略当前绑定上下文（boundRules，编辑时含服务端既有绑定）共享
 //   ≥1 条规则的其他启用策略（与 buildDisplayChain/pickerMeta 同数据源 securityBindings）；
 // - 若该集合为空（新建未选规则），退化为全部其他启用策略，文案用「若绑定同一规则」。
@@ -2917,8 +2665,8 @@ const peerPolicyViews = computed<PeerPolicyView[]>(() =>
     }),
 )
 
-// 与本策略共享 ≥1 条绑定规则的其他策略 ID（含禁用；禁用策略在比较时被过滤，
-// 与 computeBindingConflicts 的 active 口径一致）
+// 与本策略共享 ≥1 条绑定规则的其他策略 ID（含禁用；禁用策略在 peerPolicyViews
+// 构建时已被过滤，仅启用策略参与比较）
 const coBoundPeerIds = computed<Set<number>>(() => {
   const ids = new Set<number>()
   for (const caddyId of boundRules.value) {
@@ -2938,8 +2686,8 @@ const comparisonContext = computed<{ peers: PeerPolicyView[]; coBound: boolean }
   return { peers: peerPolicyViews.value, coBound: false }
 })
 
-// WAF 步骤：CRS 规则组与其他策略重复的实时警告。空数组 = 加载全部规则组
-//（与 computeBindingConflicts 同语义），随当前选择实时重算——修复「有时候不显示」。
+// WAF 步骤：CRS 规则组与其他策略重复的实时警告。空数组 = 加载全部规则组，
+// 随当前选择实时重算——修复「有时候不显示」。
 const wafStepCrsAlert = computed<string>(() => {
   if (form.value.mode !== 'blocking' && form.value.mode !== 'detection') return ''
   const { peers, coBound } = comparisonContext.value
@@ -3042,14 +2790,6 @@ const whitelistSectionAlert = computed<string>(() => {
   if (items.length === 0) return ''
   return items.slice(0, 2).join(t('app.security.policies.common.sepSemi')) + (items.length > 2 ? t('app.security.policies.conflict.moreSuffix', { n: items.length }) : '')
 })
-
-// 拦截页归因（哪条策略触发的拦截就显示哪条策略的拦截页）的两类可静态检测提示：
-// ② 空页预告（warn）——策略配置了拦截页但页已删除/内容为空（后端等同无页，
-// 该策略 deny 不抬码，中断落首绑定有页策略的 403 兜底路由）。
-// 拦截页列表未成功落地过一次时不得判定「已删除/内容为空」——bpRes
-// 部分失败会让所有启用策略挂上假警告；加载门在单源谓词内（blockPageMissing）。
-const blockPageBroken = (e: ChainEntry): boolean =>
-  blockPageMissing(e.blockPageId ?? 0, blockPages.value, blockPagesLoaded.value)
 
 // 本策略拦截页「按阶段实际生效」判定——单源走 resolveBlockPageAttribution
 // （与 caddy.go 触发归因口径逐条对齐：阶段 1 deny 链/阶段 3 逐策略合成码，
@@ -3166,28 +2906,11 @@ const blockPageSummary = computed<{ lines: Array<{ text: string; tone: 'active' 
   return { lines }
 })
 
-// Step 4 已关联规则的逐条视图：绑定链 + 执行序 + 行内归属提示 + 冲突提示
+// Step 4 已关联规则的逐条视图：绑定链 + 执行序（冲突/失效页提示已收敛到
+// WAF/IP 步骤实时警告与拦截页步骤归属汇总卡，行内不再重复提示）
 const boundRuleRows = computed<BoundRuleRow[]>(() => boundRules.value.map((caddyId) => {
   const rule = allRules.value.find((r) => r.caddy_id === caddyId)
   const chain = buildDisplayChain(caddyId)
-  const enabledEntries = chain.filter((e) => e.enabled)
-  // ② 空页预告（warn 级，与冲突提示同管线）：失效页策略触发时由兜底路由显示
-  // 绑定链首个有页策略的页面（触发归因，见 resolveBlockPageAttribution）。
-  const emptyPageHints = enabledEntries
-    .filter((e) => blockPageBroken(e))
-    .map((e) => t('app.security.policies.bind.deadPageHint', { name: e.name }))
-  // ① 配置不一致提示（info 级）：启用策略间 (拦截页, 状态码) 组合不一致——
-  // 非错误，声明触发归因语义（触发策略显示自己的页；未配置的策略触发时兜底）
-  const combos = new Set(enabledEntries.map((e) => `${e.blockPageId ?? 0}:${e.blockStatusCode || 403}`))
-  const infoHints: string[] = []
-  if (rule?.protocol === 'tcp') {
-    // TCP（L4）规则能力注记：拒绝动作=断连（无 HTTP 拦截页/状态码面）；
-    // CDN 回源真实客户端 IP 依赖上游连接的 PROXY protocol（回源对端是 CDN 时必须开启）
-    infoHints.push(t('app.security.policies.bind.tcpHint'))
-  }
-  if (enabledEntries.length > 1 && combos.size > 1) {
-    infoHints.push(t('app.security.policies.bind.mixedPagesHint'))
-  }
   return {
     caddyId,
     name: rule?.name || caddyId,
@@ -3197,15 +2920,11 @@ const boundRuleRows = computed<BoundRuleRow[]>(() => boundRules.value.map((caddy
     chain,
     // 性能提示应按实际生效的处理链计——禁用策略不产生处理链，
     // 计入会虚高（提示"超过 3 条可能影响性能"在不达 3 条时误报）。
-    mergedCount: enabledEntries.length,
-    showPerfTip: enabledEntries.length > PERF_POLICY_THRESHOLD,
-    hints: [...computeBindingConflicts(buildConflictChain(caddyId)), ...emptyPageHints],
-    infoHints,
+    showPerfTip: chain.filter((e) => e.enabled).length > PERF_POLICY_THRESHOLD,
   }
 }))
 
 // 步骤顶紧凑预警（用户裁定：三条灰横幅按预警语义收敛为两条条件行——
-// 低价值的「拦截页/状态码不同」进各规则行 infoHint（触发归因语义自明）；
 // TCP 断连注记仅在绑定 TCP 规则时出现）。
 const boundRuleWarnPerf = computed(() => boundRuleRows.value.some((r) => r.showPerfTip))
 const hasTcpBoundRule = computed(() => boundRuleRows.value.some((r) => r.protocol === 'tcp'))
@@ -3298,8 +3017,6 @@ const openRulePicker = (): void => {
 const confirmRulePicker = (): void => {
   boundRules.value = [...pickerSelected.value]
   rulePickerVisible.value = false
-  // 新选中的规则需要绑定明细来计算冲突提示（步骤内已选中规则由 watch 覆盖）
-  void ensureBindingDetails(boundRules.value)
 }
 
 const removeBoundRule = (caddyId: string): void => {
@@ -3536,7 +3253,6 @@ const resetWizard = () => {
   editingId.value = null
   editingPolicyType.value = null
   rulePickerVisible.value = false
-  ruleBoundPolicies.value = {}
   // 执行序暂存须随向导复位清空——否则编辑策略 A 暂存的新顺序会跨会话
   // 泄漏到绑定同规则的策略 B（保存时按 A 的暂存序提交）。
   bindingOrderEdits.value = {}

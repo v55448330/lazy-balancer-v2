@@ -683,29 +683,44 @@ func (h *Handlers) recoverCommittedViewAfterCommitFailure(tx *sql.Tx) postCommit
 }
 
 // rollbackLeakedTx 在事务提交失败后补发 ROLLBACK（见调用点注释）。
-// 连接池按 LIFO 复用，刚归还的泄漏连接会被优先取到；若取到的是无活动事务
-// 的其它空闲连接（池内有竞争），重试直到命中或次数用尽——此时泄漏事务仍
-// 持写锁，其它连接不可能有写事务，重复 ROLLBACK 不会误伤。
+// 覆盖语义：逐个签出池内连接（至多 maxOpen=10 条，与 db 主库池尺寸同源）
+// 并各自执行 ROLLBACK——不能依赖池级 Exec 的 LIFO 重试：泄漏连接非栈顶时
+// （并发读把其它空闲连接压到其上），重试全部命中同一条无事务的栈顶连接，
+// 写锁持续滞留直到重启。签出把连接从空闲列表摘走，逐条遍历必然覆盖泄漏
+// 连接；无活动事务的连接报 "no transaction is active"，忽略即可。泄漏事务
+// 持写锁期间其它连接不可能有写事务，重复 ROLLBACK 不会误伤。
 //
 // var 而非 func：测试缝（部署/回滚路径的可观测性断言——提交失败分支必须
 // 恰好走一次统一补发，不得自造 tx.Rollback 吞掉 ErrTxDone）。生产恒为本实现。
 var rollbackLeakedTx = func() {
-	// 刻意无 ctx 豁免（登记表=auth_oidc_write_ctx_guard_test.go）：提交失败后
-	// 的连接池补发 ROLLBACK——事务对象已被 database/sql 标记 done
-	// （ErrTxDone 不再调 driver 回滚），泄漏事务仍持写锁必须无条件回收；
-	// 错误恢复语境无请求 ctx 可言，重试至命中（池 LIFO 见上方注释）。
+	// 提交失败后的连接池补发 ROLLBACK——事务对象已被 database/sql 标记 done
+	// （ErrTxDone 不再调 driver 回滚），泄漏事务仍持写锁必须无条件回收。
+	// 错误恢复语境无请求 ctx 可言：自带 30s 预算 ctx 经 Conn/ExecContext
+	// 遍历池连接（非 ctx-less 写点，不入豁免登记表）。
 	if db.DB == nil {
 		return
 	}
-	for attempt := range 5 {
-		_, err := db.DB.Exec("ROLLBACK")
-		if err == nil {
-			return
+	const maxPoolConns = 10 // db.applySQLitePool 主库 maxOpen
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	var held []*sql.Conn
+	defer func() {
+		for _, conn := range held {
+			_ = conn.Close()
 		}
-		if strings.Contains(err.Error(), "no transaction is active") {
-			continue
+	}()
+	for range maxPoolConns {
+		conn, err := db.DB.Conn(ctx)
+		if err != nil {
+			// 池耗尽/超时：在用连接正被其它请求持有——持写锁的泄漏事务
+			// 不可能在用（其 Tx 已 done 归还），剩余空闲连接已遍历完。
+			break
 		}
-		services.Logf("warn", "提交失败后补发 ROLLBACK 失败（第 %d 次）: %v", attempt+1, err)
+		held = append(held, conn)
+		if _, err := conn.ExecContext(ctx, "ROLLBACK"); err != nil &&
+			!strings.Contains(err.Error(), "no transaction is active") {
+			services.Logf("warn", "提交失败后补发 ROLLBACK 失败（第 %d 条连接）: %v", len(held), err)
+		}
 	}
 }
 

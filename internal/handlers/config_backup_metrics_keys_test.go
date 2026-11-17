@@ -18,11 +18,9 @@ import (
 func TestImportConfigBackup_toleratesDeadMetricsConfigKeys(t *testing.T) {
 	// Given：老格式备份（Config 携带两个已删死列的键 + 一个正常键）
 	h := newBackupTestHandlers(t)
-	completeTables := make(map[string][]map[string]any, len(configBackupTables))
-	for _, table := range configBackupTables {
-		completeTables[table] = []map[string]any{}
+	completeTables := map[string][]map[string]any{
+		"users": {{"id": 1, "username": "admin", "password_hash": "hash", "role": "admin", "is_enabled": 1}},
 	}
-	completeTables["users"] = []map[string]any{{"id": 1, "username": "admin", "password_hash": "hash", "role": "admin", "is_enabled": 1}}
 	importCfg := map[string]any{
 		"metrics_public":         true,
 		"metrics_origins":        "https://legacy.example.test",
@@ -31,16 +29,7 @@ func TestImportConfigBackup_toleratesDeadMetricsConfigKeys(t *testing.T) {
 		"log_level":              "warn",
 		"github_proxy_url":       "https://v4.gh-proxy.org/",
 	}
-	importBackup := configBackup{
-		Meta:   configBackupMeta{App: "lazy-balancer-v2", Version: 2, ExportedAt: "2026-08-19T00:00:00Z"},
-		Config: importCfg,
-		Tables: completeTables,
-	}
-	importBackup.Meta.Checksum = checksumBackupPayload(t, completeTables, importCfg)
-	body, err := json.Marshal(importBackup)
-	if err != nil {
-		t.Fatal(err)
-	}
+	body := []byte(buildBackup(t, backupFixtureOptions{Tables: completeTables, Config: importCfg, FillAll: true}))
 	router := gin.New()
 	router.POST("/config/import", h.ImportConfigBackup)
 	router.GET("/config/export", h.ExportConfigBackup)
@@ -93,24 +82,13 @@ func TestImportConfigBackup_toleratesDeadMetricsConfigKeys(t *testing.T) {
 // 归一为 ”(中间件把非空串当白名单配置,null 解析成功但 0 CIDR→全来源 403)。
 func TestImportConfigBackup_normalizesNullWhitelist(t *testing.T) {
 	h := newBackupTestHandlers(t)
-	completeTables := make(map[string][]map[string]any, len(configBackupTables))
-	for _, table := range configBackupTables {
-		completeTables[table] = []map[string]any{}
+	completeTables := map[string][]map[string]any{
+		"users": {{"id": 1, "username": "admin", "password_hash": "hash", "role": "admin", "is_enabled": 1}},
 	}
-	completeTables["users"] = []map[string]any{{"id": 1, "username": "admin", "password_hash": "hash", "role": "admin", "is_enabled": 1}}
 	// 旧从节点库(pre-fix)导出形态:mcp_ip_whitelist 为字符串 "null"
 	completeTables["api_keys"] = []map[string]any{{"id": 1, "name": "k", "key_hash": "h", "key_prefix": "p", "created_by": 1, "is_enabled": 1, "mcp_ip_whitelist": "null"}}
 	importCfg := map[string]any{"timezone": "Asia/Shanghai"}
-	importBackup := configBackup{
-		Meta:   configBackupMeta{App: "lazy-balancer-v2", Version: 2, ExportedAt: "2026-08-19T00:00:00Z"},
-		Config: importCfg,
-		Tables: completeTables,
-	}
-	importBackup.Meta.Checksum = checksumBackupPayload(t, completeTables, importCfg)
-	body, err := json.Marshal(importBackup)
-	if err != nil {
-		t.Fatal(err)
-	}
+	body := []byte(buildBackup(t, backupFixtureOptions{Tables: completeTables, Config: importCfg, FillAll: true}))
 	router := gin.New()
 	router.POST("/config/import", h.ImportConfigBackup)
 	importRec := httptest.NewRecorder()
@@ -133,23 +111,12 @@ func TestImportConfigBackup_normalizesNullWhitelist(t *testing.T) {
 // 导入携带 0 值不落库(恒同步不变量的第五强制点)。
 func TestExportImportConfigBackup_syncUsersProtected(t *testing.T) {
 	h := newBackupTestHandlers(t)
-	completeTables := make(map[string][]map[string]any, len(configBackupTables))
-	for _, table := range configBackupTables {
-		completeTables[table] = []map[string]any{}
+	completeTables := map[string][]map[string]any{
+		"users": {{"id": 1, "username": "admin", "password_hash": "hash", "role": "admin", "is_enabled": 1}},
 	}
-	completeTables["users"] = []map[string]any{{"id": 1, "username": "admin", "password_hash": "hash", "role": "admin", "is_enabled": 1}}
 	// 导出侧:携带其他配置键,sync_users 若意外存在应被剔除
 	exportCfg := map[string]any{"timezone": "Asia/Shanghai", "sync_users": false}
-	backup := configBackup{
-		Meta:   configBackupMeta{App: "lazy-balancer-v2", Version: 2, ExportedAt: "2026-08-19T00:00:00Z"},
-		Config: exportCfg,
-		Tables: completeTables,
-	}
-	backup.Meta.Checksum = checksumBackupPayload(t, completeTables, exportCfg)
-	body, err := json.Marshal(backup)
-	if err != nil {
-		t.Fatal(err)
-	}
+	body := []byte(buildBackup(t, backupFixtureOptions{Tables: completeTables, Config: exportCfg, FillAll: true}))
 	router := gin.New()
 	router.POST("/config/import", h.ImportConfigBackup)
 	router.GET("/config/export", h.ExportConfigBackup)

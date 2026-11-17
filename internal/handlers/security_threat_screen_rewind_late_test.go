@@ -343,6 +343,7 @@ func TestDrainThreatRollupRewindPending_reportsFailure(t *testing.T) {
 // 缝在第 8 次调用前一律失败、之后成功——旧实现会一路重试到「成功」并返回
 // nil，新实现在有界次数内放弃并返回错误。
 func TestEnsureThreatRollup_boundedRetriesWhenRewindKeepsFailing(t *testing.T) {
+	withIsolatedGlobal(t)
 	setupSecurityPolicyTestDB(t)
 	// 预置总览预聚合就绪标记：本用例验证稳态下的回退重试有界性——总览升级
 	// 回填（就绪标记缺失）会把窄窗固化扩成 7d 分批回填，掩盖被测前提。
@@ -442,6 +443,7 @@ func TestThreatFixMinute_lateEventStillMergesAfterRepeat(t *testing.T) {
 // 缝「成功但立即重新入队」模拟该形态：有界实现 N 轮后返回 nil 且队列仍有项，
 // 无界实现在断言窗口内不返回（由 stop 关闭解除粘住，随后按失败路径返回错误）。
 func TestEnsureThreatRollup_boundedIterationsWhenRewindKeepsQueueing(t *testing.T) {
+	withIsolatedGlobal(t)
 	setupSecurityPolicyTestDB(t)
 	// 预置总览预聚合就绪标记：本用例验证稳态下的迭代有界性——总览升级回填
 	// （就绪标记缺失）会把窄窗固化扩成 7d 分批回填，掩盖被测前提。

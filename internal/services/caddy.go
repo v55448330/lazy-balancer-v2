@@ -202,13 +202,16 @@ func (s *CaddyService) ApplyConfig(config map[string]interface{}) (err error) {
 	return err
 }
 
-// ApplyConfigReportingForCommit 应用原始配置但把 last-known-good 延后到
-// 调用方 commit 成功后补写；返回值同时携带已下发字节与真实 /load 标记
-// （失败分支 loaded=false：失败应用不是真实重载）。
+// ApplyConfigReportingForCommit 应用原始配置但把 last-known-good 与降级
+// 持久化均延后到调用方 commit 成功后补写（事务内 apply 契约：persistDegradation
+// 与 persistLastGood 必须 false——未提交配置的降级/横幅不得写入主库/审计，
+// 且事务持写锁时 db.DB.Exec 会撞 WAL 单写者 busy_timeout）；降级收尾由
+// commit 后 recordCaddyApplyResult(nil) 经 TakePendingRenderDegradationAudit
+// 补落。返回值同时携带已下发字节与真实 /load 标记（失败分支 loaded=false）。
 func (s *CaddyService) ApplyConfigReportingForCommit(config map[string]interface{}) (applied []byte, loaded bool, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	applied, err = s.applyConfigWithOptions(config, caddyApplyOptions{persistDegradation: true, persistLastGood: false})
+	applied, err = s.applyConfigWithOptions(config, caddyApplyOptions{persistDegradation: false, persistLastGood: false})
 	if IsSameConfig(err) {
 		return nil, false, nil
 	}
@@ -978,6 +981,15 @@ func caddyPayload(config map[string]interface{}) map[string]interface{} {
 		payload[key] = value
 	}
 	return payload
+}
+
+// StripCaddyInternalKeys 返回剔除渲染层内部标记键（__lazy_balancer_ 前缀）
+// 的副本——供用户原始载荷入口（PutCaddyConfig 逃生口）净化：内部键是渲染器
+// 私有通道（降级标记/证书快照/生成错误），用户载荷携带时不得进入降级判定/
+// 审计/横幅任何消费面（CLI 不可用放行形态下可被手造注入）。与 caddyPayload
+// 同前缀口径，单源维护。
+func StripCaddyInternalKeys(config map[string]interface{}) map[string]interface{} {
+	return caddyPayload(config)
 }
 
 // RouteIDBelongsToRule 判断运行配置中的路由 @id 是否归属某规则：主路由
@@ -5080,8 +5092,9 @@ func (s *CaddyService) ApplyConfigFromTx(tx *sql.Tx, rulesWrittenInTx bool) ([]b
 // 始终发射收敛（2026-10-15 用户裁定）：空名单也投影空文件并恒发射 @ipListFast
 // （空集=匹配器永不命中，与无规则语义等价）——收敛范围=发射面 flag 为真实
 // opt-in 的名单（deny·绕过 ACL、stage0 保留检测），空↔非空与中段同为纯
-// 内容变化全走热路径。信任名单（ip_whitelist_enabled 表默认值=1）、allow 模式
-// （否定算子）、遗留黑名单维持内容门控。存量运行配置升级后首次渲染因发射面
+// 内容变化全走热路径。信任名单（ip_whitelist_enabled 表默认值=1）与遗留
+// 黑名单维持内容门控；allow 模式（否定算子）不设内容门：空集=否定算子
+// 恒拒，无条件发射（fail-closed）。存量运行配置升级后首次渲染因发射面
 // 新增触发一次全量重载，自愈收敛。
 //
 // 已持 caddyOpMu（=CaddyOpLock）的调用方使用（handlers 名单写路径全程持锁）；

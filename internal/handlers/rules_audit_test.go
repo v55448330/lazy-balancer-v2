@@ -420,6 +420,7 @@ func TestUpdateRule_allows_edit_with_disabled_ACME_job(t *testing.T) {
 }
 
 func TestUpdateRule_reissues_when_default_CA_differs_from_latest_job_provider(t *testing.T) {
+	withIsolatedGlobal(t)
 	// Given
 	harness := newUpdateAuditRuleHandlers(t, "lb_default_ca_switch", 0, false)
 	seedAuditRule(t, "lb_default_ca_switch", "before", "switch.example.test", 8080, true, "acme_dns", true)

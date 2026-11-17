@@ -19,6 +19,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"lazy-balancer-v2/internal/config"
+	"lazy-balancer-v2/internal/services"
 )
 
 // newProcessControlTestHandlers 装配启停端点所需的测试缝：命令恒失败（证明
@@ -53,7 +54,11 @@ func newProcessControlTestHandlers(t *testing.T) (*Handlers, *int32, *int32) {
 		caddyPauseFile, caddySupervisorPidFile, caddySupervisorWaitTimeout = origPause, origPid, origWait
 		caddyRunCommand, caddyStopCommand = origRun, origStop
 	})
-	return &Handlers{cfg: &config.Config{CaddyAdminURL: adminStub.URL}}, &runs, &stops
+	// caddyService 必须初始化：startCaddy 直启路径存在 exited（桩 exit 7）与
+	// ticker（adminStub 恒就绪）的调度竞态——ticker 先到时 startCaddy 判成功，
+	// StartCaddy 续走 caddyApplyNoteLocked→GenerateAndApplyConfig，nil 服务
+	// 会 panic（shuffle 下暴露）。初始化后窗口外路径即使走到 apply 也安全。
+	return &Handlers{cfg: &config.Config{CaddyAdminURL: adminStub.URL}, caddyService: services.NewCaddyService(adminStub.URL)}, &runs, &stops
 }
 
 func TestCaddyProcessControlRejectsDuringImportWindow(t *testing.T) {

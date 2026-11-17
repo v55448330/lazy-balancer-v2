@@ -23,22 +23,12 @@ import (
 	"lazy-balancer-v2/internal/taskengine"
 )
 
+// backupJSONFixture 是 buildBackup 单源夹具的薄委托（[]byte 形态，签名兼容
+// 存量调用点）——不得在此平行构造 configBackup（历史残留：独立 meta/checksum
+// 装配与单源漂移）。
 func backupJSONFixture(t *testing.T, tables map[string][]map[string]any, config map[string]any, sections []string) []byte {
 	t.Helper()
-	backup := configBackup{
-		Sections: sections,
-		Meta: configBackupMeta{
-			App: "lazy-balancer-v2", Version: 2, ExportedAt: "2026-10-19T00:00:00Z",
-			Checksum: checksumBackupPayload(t, tables, config),
-		},
-		Config: config,
-		Tables: tables,
-	}
-	raw, err := json.Marshal(backup)
-	if err != nil {
-		t.Fatalf("marshal backup: %v", err)
-	}
-	return raw
+	return []byte(buildBackup(t, backupFixtureOptions{Tables: tables, Config: config, Sections: sections}))
 }
 
 func postImportBytes(t *testing.T, h *Handlers, body []byte) *httptest.ResponseRecorder {

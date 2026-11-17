@@ -178,7 +178,7 @@ const saveProfile = async () => {
       await authStore.fetchUser()
     }
   } catch (error: unknown) {
-    if (error instanceof ApiRequestError && isCurrentPasswordRejection('patch', '/users/me', error.status, error.message)) {
+    if (error instanceof ApiRequestError && isCurrentPasswordRejection('patch', '/users/me', error.status, error.message, error.messageKey)) {
       authStore.showToast('error', error.message)
     } else {
       console.error('Failed to save profile:', error)

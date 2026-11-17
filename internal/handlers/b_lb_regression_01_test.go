@@ -7,8 +7,8 @@ package handlers
 //   - 重试窗口上界——显式越界 400（交 validateRuleFeatures），仅存量越界自愈；
 //     interval 越界时同步归零 duration，避免 duration>0+interval=0 的渲染必填门
 //     矛盾（caddy.go）。
-//   - BatchRuleBlockPages 入口 trim+去重保序；bound 按 RowsAffected>0 计，同值
-//     命中计入 unchanged。
+//   - BatchRuleBlockPages 已停用（写侧零写入）：入口 trim+去重保序仍生效；
+//     bound 恒 0，unchanged=存在的 http 规则数（响应形状兼容旧自动化）。
 
 import (
 	"encoding/json"
@@ -211,9 +211,9 @@ func batchResultAll(t *testing.T, recorder *httptest.ResponseRecorder) (int, int
 	return payload.Data.Bound, payload.Data.Unchanged, payload.Data.Skipped
 }
 
-// TestBatchRuleBlockPages_dedupesAndCountsUnchanged：入口 trim+去重保序；
-// bound 按 RowsAffected>0 计，同值命中进 unchanged（bound 不再把零写入
-// 的规则算作「成功」）。不存在/TCP 跳过文案与顺序回归。
+// TestBatchRuleBlockPages_deprecatedCountsExisting：端点已停用（零写入）——
+// 入口 trim+去重保序；bound 恒 0，存在的 http 规则计入 unchanged，
+// 不存在/TCP 跳过文案与顺序回归（响应形状兼容契约）。
 func TestBatchRuleBlockPages_deprecatedCountsExisting(t *testing.T) {
 	handler, _ := newStageBatchTestHandlers(t)
 	seedStageBatchRules(t)

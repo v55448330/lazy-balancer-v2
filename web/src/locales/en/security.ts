@@ -467,6 +467,11 @@ export default {
      "stackTip": "Challenge outcomes (process total): passed / failed / pending",
      "resultTitle": "Cumulative results",
      "total": "{n} total",
+     "eventsLost": "Human-verification events lost: {total} (dropped {dropped} / delivery failed {failed} / shutdown {shutdown})",
+     "triggerTitle": "CC trigger breakdown (process total)",
+     "triggerRps": "RPS spike",
+     "trigger4xx": "4xx surge",
+     "triggerSession": "Session anomaly",
      "liveButton": "Live challenges",
      "liveTitle": "Live challenge monitor",
      "liveAuto": "Auto refresh",
@@ -681,10 +686,7 @@ export default {
      "perfWarn": "Some bound rules carry 3+ policies: processing chains stack up and may affect forwarding performance",
      "pickPlaceholder": "Select load-balancing rules to bind",
      "relatedCount": "{n} rule(s) bound",
-     "tcpWarn": "TCP rule blocking = connection reset (no block page); enable PROXY protocol for CDN origin pulls",
-     "deadPageHint": "The block page configured by policy \"{name}\" is deleted or empty; when it triggers, the fallback policy's page shows",
-     "mixedPagesHint": "These policies differ in block page/status code — each shows its own page when triggering; policies without one fall back to the first page-capable policy in the chain",
-     "tcpHint": "Blocking = connection reset, no block page; enable PROXY protocol for CDN origin pulls"
+     "tcpWarn": "TCP rule blocking = connection reset (no block page); enable PROXY protocol for CDN origin pulls"
     },
     "common": {
      "delete": "Delete",
@@ -890,9 +892,7 @@ export default {
      "labelAllow": "Allow IPs",
      "labelBypass": "No-inspection IPs",
      "labelDeny": "Deny IPs",
-     "listFallback": "IP list",
-     "allowShort": "whitelist",
-     "bypassShort": "no-inspection"
+     "listFallback": "IP list"
     },
     "geo": {
     provinces: {
@@ -1167,16 +1167,10 @@ export default {
     "conflict": {
      "contradicts": "Contradicts the rule-group selection (exclusion wins)",
      "redundant": "Redundant: exclusion wins",
-     "addrAclDeny": "Address {addr} is in \"{allow}\"'s access-control list and in \"{deny}\"'s blacklist — {detail}",
-     "addrTrustDeny": "Address {addr} is in \"{allow}\"'s trust list and in \"{deny}\"'s blacklist — {detail}",
      "allGroups": "all rule groups",
-     "bypassMiddle": "\"{name}\" is in {mode} mode and sits between blocking policies: no-inspection/whitelist only affect their own engine and do not let traffic pass neighboring policies — each engine decides independently and position does not change blocking; to allow a specific source wholesale, use a no-inspection list",
-     "crsOverlap": "\"{a}\" and \"{b}\" load the same CRS rule groups ({groups}); the same request will be inspected twice — keep only one",
-     "duplicateRule": "Custom rule \"{rule}\" is referenced by {owners} multiple times; the same request would be scored/processed repeatedly — keep only one",
      "fromRefLists": " (via referenced list(s) {names})",
      "ifCoBoundSuffix": " (if both policies bind the same rule)",
      "moreSuffix": "; {n} similar conflicts in total",
-     "passBlock": "The pass-type custom rules of \"{earlier}\" only skip matching within their own engine and do not block; the blocking rules of \"{later}\" still run independently. Note that once a leading blocking policy hits, it interrupts the whole chain and later policies only see traffic the earlier ones let pass",
      "selfAclAllow": "Address {addr} is in this policy's access-control list{src} and in \"{peer}\"'s allow list — {detail}{suffix}",
      "selfAclDeny": "Address {addr} is in this policy's access-control list and in \"{peer}\"'s blacklist — {detail}{suffix}",
      "selfAclTrust": "Address {addr} is in this policy's access-control list{src} and in \"{peer}\"'s trust list — {detail}{suffix}",

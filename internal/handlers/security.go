@@ -5306,7 +5306,7 @@ func attackFamilyClassOf(ruleTriggered, ruleMsg string) attackFamilyClass {
 	case customORBranch:
 		// OR 条件分支使用独立高段，展示与筛选仍归同一自定义规则族。
 		return attackFamilyCustomRule
-	case strings.HasPrefix(ruleTriggered, "1") && len(ruleTriggered) >= 7:
+	case strings.HasPrefix(ruleTriggered, "1") && len(ruleTriggered) >= 7 && ruleTriggeredAllDigits(ruleTriggered):
 		// 自定义规则触发 id 的第二种形状：自此无 id 规则的合成 id 1000000+n
 		// （7 位，1000000-1999999）。6 位自定义 ID 已由上方分支覆盖；本分支
 		// 仅判无 id 规则的合成 ID。本口径是「自定义规则」ID 形态的
@@ -5432,7 +5432,7 @@ func categorizeAttack(ruleTriggered, ruleMsg string) string {
 	// threatRollupClassifierVersion（见 security_threat_screen.go 代际注释）。
 	// 5 位 ID 恒为自定义规则——先于 3 位前缀判定,crID≥82000
 	// 发射 92000-99999 时不再被 9 前缀遮蔽误标。
-	if len(ruleTriggered) == 5 {
+	if len(ruleTriggered) == 5 && ruleTriggeredAllDigits(ruleTriggered) {
 		return "自定义规则"
 	}
 	if label := crsAttackLabel(ruleTriggered); label != "" {
@@ -6076,7 +6076,9 @@ func (h *Handlers) SetIP2RegionV6Enabled(c *gin.Context) {
 	}
 	enabled := *req.Enabled
 	if err := services.SetIP2RegionV6Enabled(enabled); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.Tf(c, "k_7ac35ccf", apimsg.ErrMsg(c, err))})
+		// 5xx 固定文案（business 组政策同口径，虽挂 admin 组）：DB 错误细节
+		// 由服务层 SetIP2RegionV6Enabled 的 error 日志留痕，响应不拼接。
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_6a9699ed"), MessageKey: "k_6a9699ed"})
 		return
 	}
 	// 开关变化改变 v4+v6 并集树（v6 段并入/移出选项树与校验 known 集）。

@@ -12,6 +12,7 @@ import (
 )
 
 func TestCaddyRestartWatcher_statFailureIsVisible(t *testing.T) {
+	withIsolatedGlobal(t)
 	resetCaddyRestartBackoffForTest()
 	oldStat := caddyRestartStat
 	t.Cleanup(func() {

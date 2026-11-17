@@ -15,9 +15,12 @@ import (
 )
 
 func (h *Handlers) SetClusterMode(c *gin.Context) {
-	// 导入事务全量替换 global_config，
-	// 窗口内切换角色会在远端留下无法本地回滚的注册（BecomeSlave 之后被导入
-	// 覆盖 → 远端孤儿注册 + 本地仍为主节点）。必须先于任何网络副作用 fast-fail。
+	// 导入窗口内切换角色必须先于任何网络副作用 fast-fail：角色翻转写列
+	// （is_master/master_url/cluster_token/registration_* 等）属保护键
+	// （configBackupProtectedConfigKeys），导入不会覆盖它们；但门检查与
+	// BecomeSlave 的远端注册之间无二次复核——取消/窗口竞态下远端注册
+	// 成功后本地写入仍可能撞导入写锁或角色被并发流程改回，留下远端孤儿
+	// 注册。409 fast-fail 收窄该并发窗口。
 	if rejectNodeWriteDuringImport(c) {
 		return
 	}
@@ -140,8 +143,9 @@ func requestProtocol(c *gin.Context) string {
 }
 
 func (h *Handlers) PromoteClusterNode(c *gin.Context) {
-	// 导入窗口写 global_config 会被全量替换覆盖——
-	// 与节点写端点同族 fast-fail（先于任何状态读取/生效）。
+	// 与节点写端点同族 fast-fail（先于任何状态读取/生效）：角色写列属
+	// 保护键（导入不覆盖），但门检查与 Promote 生效之间无二次复核——
+	// 窗口竞态下提升可能与导入收尾交错，409 收窄并发窗口。
 	if rejectNodeWriteDuringImport(c) {
 		return
 	}

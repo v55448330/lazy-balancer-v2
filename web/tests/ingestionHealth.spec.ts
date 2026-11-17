@@ -182,22 +182,42 @@ test('总览/大屏从各自响应消费 ingestion 字段（后端同名字段�
   assert.match(threat, /ingestionWarningMessage\(stats\.value\?\.ingestion\)/)
 })
 
-test('前后端字段契约：Go JSON tag 覆盖前端 IngestionHealth 读取面', () => {
+test('前后端字段契约：Go JSON tag 覆盖前端 IngestionHealth 全部 19 字段', () => {
   const go = repoCode('internal/services/securityevents.go')
   const statusBlock = section(go, 'type SecurityEventsIngestionStatus struct', '\n}')
-  for (const tag of [
+  // 名册 = 前端接口全量（ingestionHealth.ts IngestionHealth 19 字段，含
+  // omitempty 后缀精确形态）：任一 Go tag 改名/删字段，前端披露静默丢失。
+  const tags = [
     'json:"observed"',
     'json:"healthy"',
     'json:"consecutive_failures"',
     'json:"last_error,omitempty"',
+    'json:"last_error_at,omitempty"',
+    'json:"last_success_at,omitempty"',
     'json:"task_state"',
     'json:"task_running"',
     'json:"writer_dropped"',
     'json:"writer_io_errors"',
+    'json:"writer_format_errors"',
     'json:"writer_degraded"',
     'json:"writer_last_failure_at,omitempty"',
-  ]) {
-    assert.ok(statusBlock.includes(tag), `后端状态缺少 ${tag}（前端 ingestionHealth.ts 已消费）`)
+    'json:"writer_stats_unavailable,omitempty"',
+    'json:"messages_dropped"',
+    'json:"skipped_bytes"',
+    'json:"skipped_regions"',
+    'json:"last_skip_at,omitempty"',
+    'json:"data_loss"',
+  ]
+  for (const tag of tags) {
+    assert.ok(statusBlock.includes(tag), `后端状态缺少 ${tag}（前端 ingestionHealth.ts 已声明）`)
+  }
+  // 名册完整性自守卫：前端接口字段名逐一从 tag 反推在场（接口加字段而名册
+  // 漏填=本钉静默收窄，此处按接口声明面反查）。
+  const iface = section(code('src/utils/ingestionHealth.ts'), 'export interface IngestionHealth {', '\n}')
+  const fields = [...iface.matchAll(/^\s{2}([a-z_0-9]+)\??:/gm)].map((m) => m[1])
+  assert.equal(fields.length, tags.length, '接口字段数与名册数必须一致（漏填即红）')
+  for (const field of fields) {
+    assert.ok(tags.some((tag) => tag.startsWith(`json:"${field}"`) || tag.startsWith(`json:"${field},`)), `接口字段 ${field} 未入名册`)
   }
   // 插件侧车路径契约与根服务读取面必须同后缀（跨 Go module 无共享包）。
   const plugin = repoCode('caddygeoip/auditwriter.go')

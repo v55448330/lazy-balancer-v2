@@ -18,6 +18,7 @@ import (
 
 	"lazy-balancer-v2/internal/config"
 	"lazy-balancer-v2/internal/db"
+	"lazy-balancer-v2/internal/i18n"
 	"lazy-balancer-v2/internal/models"
 	"lazy-balancer-v2/internal/services"
 )
@@ -82,6 +83,12 @@ func postServiceControlWithOperator(router *gin.Engine, action, ticket, operator
 func newSlaveTestHandler(cfg *config.Config) (*Handlers, *gin.Engine) {
 	handler := &Handlers{cfg: cfg, clusterService: services.NewClusterService(db.DB, ""), caddyService: services.NewCaddyService(cfg.CaddyAdminURL)}
 	router := gin.New()
+	// 生产语言协商在 middleware.i18nMiddleware；测试路由用同一 Negotiate
+	// 实现把 Accept-Language 落到上下文（同口径，先于路由匹配生效）。
+	router.Use(func(c *gin.Context) {
+		c.Set(i18n.CtxLangKey, i18n.Negotiate(c.GetHeader("Accept-Language")))
+		c.Next()
+	})
 	router.POST("/service-control", handler.ClusterServiceControl)
 	return handler, router
 }
@@ -188,9 +195,45 @@ func TestClusterServiceControl_caddy_failure_returns_500(t *testing.T) {
 			t.Fatalf("status=%d body=%s, want %d", response.Code, response.Body.String(), tc.want)
 		}
 	}
+	// 执行失败 5xx 固定文案：底层错误（exec 退出码/admin 拨号地址）不得
+	// 直出——本端点凭票据可达（非 admin 会话），详情只进从节点审计+日志。
+	// 票据一次性：上方循环已消费，失败形态用新票据重放。
+	for _, tc := range []struct {
+		action string
+		lang   string
+		want   string
+	}{
+		{models.ClusterServiceActionStartCaddy, "zh-CN", "服务控制执行失败"},
+		{models.ClusterServiceActionRestartCaddy, "en", "Service control execution failed"},
+	} {
+		action := tc.action
+		if _, err := db.DB.Exec("UPDATE global_config SET is_master=1 WHERE id=1"); err != nil {
+			t.Fatal(err)
+		}
+		ticket := issueControlTicketOnTestDB(t, 21, clusterToken, action)
+		becomeSlave(t, 21, clusterToken)
+		payload, _ := json.Marshal(models.ClusterServiceControlRequest{Action: action, Ticket: ticket})
+		request := httptest.NewRequest(http.MethodPost, "/service-control", strings.NewReader(string(payload)))
+		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set("Accept-Language", tc.lang)
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, request)
+		if response.Code != http.StatusInternalServerError {
+			t.Fatalf("status=%d body=%s, want 500", response.Code, response.Body.String())
+		}
+		body := response.Body.String()
+		for _, leak := range []string{"exit status", "127.0.0.1", "dial", "exec:"} {
+			if strings.Contains(body, leak) {
+				t.Fatalf("500 body 泄露内部细节 %q: %s", leak, body)
+			}
+		}
+		if !strings.Contains(body, tc.want) {
+			t.Fatalf("500 body 缺少固定文案（lang=%s want %q）: %s", tc.lang, tc.want, body)
+		}
+	}
 	details := auditDetailsServiceControlRows(t)
-	if len(details) != 3 {
-		t.Fatalf("failure audit rows=%d, want 3", len(details))
+	if len(details) != 5 {
+		t.Fatalf("failure audit rows=%d, want 5（首轮 3 + 固定文案重放 2）", len(details))
 	}
 }
 

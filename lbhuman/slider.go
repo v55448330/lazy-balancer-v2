@@ -125,16 +125,24 @@ func pieceSVG() string {
 const humanSliderVerifyPath = "/__lb/human/slider-verify"
 
 // sliderVerify 校验：x 偏移容差 + 轨迹合理性（采样点数/时长/加速度方差）。
-func sliderVerify(p *sliderPuzzle, x int, track []int, durationMs int) bool {
+// keyboard=true（提交显式声明 input_method=keyboard）时豁免方差门：方向键
+// 步进是匀速轨迹（方差=0），键盘可达裁定（2026-11-13）要求键盘-only 用户可过；
+// 其余门（TTL/x 容差/点数下限/时长窗）全保留。取舍披露：input_method 由客户端
+// 声明，脚本伪造成本与伪造鼠标轨迹同级——反脚本门是启发式而非密码学边界。
+func sliderVerify(p *sliderPuzzle, x int, track []int, durationMs int, keyboard bool) bool {
 	if p == nil || timeNow().Sub(p.createdAt) > sliderPuzzleTTL {
 		return false
 	}
 	if int(math.Abs(float64(x-p.gapX))) > sliderTolerance {
 		return false
 	}
-	// 轨迹合理性：采样点数≥8、时长 300ms–10s、非匀速（加速度方差>0）
+	// 轨迹合理性：采样点数≥8、时长 300ms–10s；鼠标/触摸另要求非匀速
+	// （加速度方差>0.5），键盘声明豁免方差门（方向键步进恒匀速）。
 	if len(track) < 8 || durationMs < 300 || durationMs > 10000 {
 		return false
+	}
+	if keyboard {
+		return true
 	}
 	// 加速度方差（相邻位移差的方差）——匀速直线拖动方差=0（脚本特征）。
 	// 点数下限已由上方 len(track)<8 把守，无需二次判 len<3。
@@ -234,7 +242,10 @@ func (h *HumanHandler) serveSliderVerify(w http.ResponseWriter, r *http.Request,
 		}
 	}
 	p := consumeSliderPuzzle(puzzleID)
-	sliderOK := sliderVerify(p, x, track, duration)
+	// 键盘提交显式声明 input_method=keyboard（widget 方向键路径携带）：
+	// 仅豁免轨迹方差门，其余门不变；未声明/其他值按鼠标/触摸路径全校验。
+	keyboard := r.FormValue("input_method") == "keyboard"
+	sliderOK := sliderVerify(p, x, track, duration, keyboard)
 	// 通过时先签 cookie，再把**真实 exp** 登记进运行态会话（面板据此显示放行
 	// 剩余/到期）；失败路径不签 cookie，传零时刻。
 	var cookieValue string
@@ -296,10 +307,11 @@ func atoiSafe(s string) int {
 // sliderWidgetHTML 自定义挑战页的滑块组件（{{human_verify_widget}} 替换目标）。
 // 与内置页共用同一组件（消除两套视觉/交互）；内联样式隔离（类名前缀 lb-hv-）。
 // 交互（2026-11-13 用户裁定）：Pointer Events + setPointerCapture（鼠标/触摸统一，
-// 移出窗口仍跟踪）、pointercancel/blur 重置、键盘可达（方向键/Enter）、失败原地
-// 重试（服务端 retryable/attempts_left 权威）、接近缺口高亮（不泄露精确答案、不吸附）、
-// 窄宿主缩放（坐标除以 scale，提交逻辑 px 不变）。安全口径不变：TTL/3 次上限/
-// ±3px 容差/轨迹校验全在服务端。
+// 移出窗口仍跟踪）、pointercancel/blur 重置、键盘可达（方向键/Enter，提交携带
+// input_method=keyboard——服务端仅对键盘声明豁免轨迹方差门，其余门不变）、
+// 失败原地重试（服务端 retryable/attempts_left 权威）、接近缺口高亮（不泄露精确
+// 答案、不吸附）、窄宿主缩放（坐标除以 scale，提交逻辑 px 不变）。安全口径不变：
+// TTL/3 次上限/±3px 容差/轨迹校验全在服务端。
 const sliderWidgetHTML = `<div class="lb-hv-widget" style="width:240px;max-width:100%%;margin:18px auto 0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif">
 <style>
 .lb-hv-widget *{box-sizing:border-box}
@@ -339,13 +351,13 @@ function paint(){raf=0;h.style.left=(cx+2)+"px";pc.style.left=(cx+6)+"px";fl.sty
 function sched(){if(!raf)raf=requestAnimationFrame(paint)}
 function setX(v){cx=Math.max(0,Math.min(mx,v));sched()}
 function reset(){drag=false;cx=0;pos=[];root.classList.remove("lb-hv-near","lb-hv-fail");paint()}
-function down(e){if(busy)return;drag=true;sx=e.clientX;t0=Date.now();pos=[];cx=0;root.classList.remove("lb-hv-fail");if(h.setPointerCapture&&e.pointerId!==undefined){try{h.setPointerCapture(e.pointerId)}catch(_){}}e.preventDefault()}
+function down(e){if(busy)return;kbStart=0;drag=true;sx=e.clientX;t0=Date.now();pos=[];cx=0;root.classList.remove("lb-hv-fail");if(h.setPointerCapture&&e.pointerId!==undefined){try{h.setPointerCapture(e.pointerId)}catch(_){}}e.preventDefault()}
 function move(e){if(!drag||busy)return;var dx=(e.clientX-sx)/scale;setX(dx);pos.push(Math.round(cx));if(e.cancelable)e.preventDefault()}
 function springBack(){var from=cx,start=Date.now();function step(){var p=Math.min(1,(Date.now()-start)/150);setX(from*(1-p)*(1-p));if(p<1)requestAnimationFrame(step);else{cx=0;paint()}}requestAnimationFrame(step)}
 function submit(){if(busy)return;var dur=Date.now()-t0;
 if(cx<4||dur<300){springBack();return}
 busy=true;root.classList.add("lb-hv-busy");
-fetch("/__lb/human/slider-verify",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},credentials:"same-origin",body:"puzzle_id="+encodeURIComponent(pid)+"&x="+(cx+6)+"&track="+pos.join(",")+"&duration_ms="+dur}).then(function(res){return res.json().catch(function(){return{ok:res.ok}})}).then(function(d){busy=false;root.classList.remove("lb-hv-busy");
+fetch("/__lb/human/slider-verify",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},credentials:"same-origin",body:"puzzle_id="+encodeURIComponent(pid)+"&x="+(cx+6)+"&track="+pos.join(",")+"&duration_ms="+dur+"&input_method="+(kbStart?"keyboard":"")}).then(function(res){return res.json().catch(function(){return{ok:res.ok}})}).then(function(d){busy=false;root.classList.remove("lb-hv-busy");
 if(d.ok){root.classList.add("lb-hv-ok");st.textContent="Verified";st.className="lb-hv-status lb-hv-ok";setTimeout(function(){window.location.href=redirect},400);return}
 attempts++;
 if(d.retryable&&attempts<3&&Date.now()-issuedAt<110000){root.classList.add("lb-hv-fail");st.textContent="Verification failed — "+(d.attempts_left!=null?d.attempts_left:Math.max(0,3-attempts))+" tries left";st.className="lb-hv-status lb-hv-fail";springBack();return}

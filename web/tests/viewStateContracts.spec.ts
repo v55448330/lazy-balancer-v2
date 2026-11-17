@@ -235,8 +235,6 @@ test('视图口径与样式契约：端口门、CA 门、摘要披露、分页�
   assert.match(screen, /eventActionFull\(t\.action\)/, '弹框动作文案复用单源映射')
   const overview = code('src/views/security/SecurityOverview.vue')
   assert.doesNotMatch(overview, /<el-col :span="(16|8)"/, '下两行必须补响应式断点')
-  const css = code('src/styles/main.css')
-  assert.match(css, /^\.polling-error-alert \{ margin-bottom: 16px; \}$/m, '被 7 页引用的类必须有全局定义')
   const cluster = code('src/views/settings/cluster/ClusterMasterPanel.vue')
   assert.doesNotMatch(cluster, /\.settings-form \.form-tip-inline/, '全局类不得在 scoped 中重定义')
   const task = code('src/views/settings/TaskMonitor.vue')

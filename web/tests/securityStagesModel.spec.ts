@@ -397,15 +397,15 @@ test('地址冲突语义：阶段 0 信任跨策略优先，ACL 与存量信任�
   assert.doesNotMatch(passthrough + detection, /仍会被|信任不跨策略/)
 
   const page = code('src/views/security/SecurityPolicies.vue')
-  const conflicts = section(page, 'const computeBindingConflicts = ', 'const peerPolicyViews = computed')
   const realtime = section(page, 'const aclSectionAlert = computed', 'const whitelistSectionAlert = computed')
-  const trust = section(page, 'const whitelistSectionAlert = computed', 'const blockPageBroken = ')
-  for (const body of [conflicts, realtime, trust]) {
+  const trust = section(source('src/views/security/SecurityPolicies.vue'), 'const whitelistSectionAlert = computed', '// 本策略拦截页「按阶段实际生效」判定')
+  for (const body of [realtime, trust]) {
     assert.match(body, /addressAllowDenyConflictText\(/, '冲突告警必须按 ACL/信任及阶段类型选择真实语义')
   }
-  assert.match(conflicts, /ipAclAllowEntries/)
-  assert.match(conflicts, /ipTrustEntries/)
   assert.match(realtime, /peer\.trustSet/)
+  // 绑定步骤死提示簇已删除：冲突/失效页披露单源收敛在实时警告与归属汇总卡
+  assert.doesNotMatch(page, /computeBindingConflicts|buildConflictChain|ensureBindingDetails|ruleBoundPolicies|blockPageBroken/, '零渲染的绑定冲突计算/拉取链不得回流')
+  assert.doesNotMatch(page, /hints:|infoHints|mergedCount/, 'BoundRuleRow 死输出字段不得回流')
 })
 
 test('信任命中语义：非阶段 0 策略恒保留检测（与 trust_detection 无关）', () => {

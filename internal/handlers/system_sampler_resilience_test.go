@@ -237,6 +237,7 @@ func TestPreferredInterfaceIP_prefersIPv4ThenGlobalIPv6(t *testing.T) {
 // 用注入缝构造失败形态：无默认路由的容器才会自然发生，开发机/CI 恒有默认
 // 路由——不注入则该保护分支零自动化覆盖（旧用例在有路由的机器上直接 Skip）。
 func TestGetOutboundIP_emptyWhenProbeFails(t *testing.T) {
+	withIsolatedGlobal(t)
 	old := dialOutboundIPFn
 	t.Cleanup(func() { dialOutboundIPFn = old })
 

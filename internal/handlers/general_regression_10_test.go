@@ -13,29 +13,10 @@ import (
 
 // 公共夹具：构造带有效校验和的 configBackup 结构体（直测
 // 校验链（validateImportBackupChain），不走 HTTP 反序列化，布尔值可按任意
-// Go 类型注入）。
+// Go 类型注入）——buildBackupStruct 单源夹具的薄委托。
 func ruleTableBuildBackup(t *testing.T, tables map[string][]map[string]any, cfg map[string]any) configBackup {
 	t.Helper()
-	completeTables := make(map[string][]map[string]any, len(configBackupTables))
-	for _, table := range configBackupTables {
-		completeTables[table] = []map[string]any{}
-	}
-	if _, hasUsers := tables["users"]; !hasUsers {
-		completeTables["users"] = []map[string]any{{"id": 1, "username": "backup-admin", "password_hash": "hash", "role": "admin", "is_enabled": 1}}
-	}
-	for table, rows := range tables {
-		completeTables[table] = rows
-	}
-	if cfg == nil {
-		cfg = map[string]any{}
-	}
-	backup := configBackup{
-		Meta:   configBackupMeta{App: "lazy-balancer-v2", Version: 2, ExportedAt: "2026-08-21T00:00:00Z"},
-		Config: cfg,
-		Tables: completeTables,
-	}
-	backup.Meta.Checksum = checksumBackupPayload(t, completeTables, cfg)
-	return backup
+	return buildBackupStruct(t, backupFixtureOptions{Tables: tables, Config: cfg, FillAll: true, EmptyConfigIfNil: true})
 }
 
 // 布尔列类型门——备份中布尔列的 JSON 值只能是布尔或 0/1 数值。

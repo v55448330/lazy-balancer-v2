@@ -277,8 +277,8 @@
              disable-transitions 根治翻页时挂载动画引发的行内右飘（用户实测 bug）。 -->
         <el-table-column prop="method" :label="t('app.security.events.colMethod')" width="90" align="center">
           <template #default="{ row }">
-            <el-tag v-if="row.event_type === 'tcp'" size="small" effect="plain" disable-transitions class="proto-tcp-tag event-method-tag">TCP</el-tag>
-            <el-tag v-else size="small" effect="plain" type="primary" disable-transitions class="event-method-tag">{{ row.method || '—' }}</el-tag>
+            <el-tag v-if="row.event_type === 'tcp'" size="small" effect="plain" disable-transitions class="proto-tcp-tag">TCP</el-tag>
+            <el-tag v-else size="small" effect="plain" type="primary" disable-transitions>{{ row.method || '—' }}</el-tag>
           </template>
         </el-table-column>
         <el-table-column prop="uri" label="URI" min-width="140" show-overflow-tooltip />
@@ -1575,6 +1575,4 @@ const refreshPage = (): void => {
 .events-footer { margin-top: 16px; display: flex; align-items: center; gap: 16px; flex-wrap: nowrap; }
 .events-storage { flex: 1 1 auto; min-width: 0; }
 .events-pagination { flex: 0 0 auto; white-space: nowrap; }
-
-/* 方法列协议 chip（span 非法 el-tag——翻页零重排）：定宽居中，徽标观感。 */
 </style>

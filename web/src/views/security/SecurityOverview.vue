@@ -336,6 +336,18 @@
               <span class="cc-legend-item"><i class="is-pending" />{{ t('app.security.overview.cc.pending') }} {{ fmtStatNum(ccPendingCount) }}</span>
             </div>
           </div>
+          <!-- 丢失对账（lbhuman/events.go 三计数，进程累计）：合计 >0 才披露，
+               三分类逐项可对账；零丢失不打扰。 -->
+          <div v-if="humanEventsLost > 0" class="info-note-bar"><span class="info-note-desc">{{ t('app.security.overview.cc.eventsLost', { total: humanEventsLost, dropped: humanStats.events_dropped, failed: humanStats.events_deliver_failed, shutdown: humanStats.events_shutdown_lost }) }}</span></div>
+          <!-- CC 触发原因分布（cc_triggers，进程累计）：与自动封禁归因词同语义。 -->
+          <div class="cc-triggers">
+            <div class="cc-dist-head"><span>{{ t('app.security.overview.cc.triggerTitle') }}</span></div>
+            <div class="cc-legend">
+              <span class="cc-legend-item">{{ t('app.security.overview.cc.triggerRps') }} {{ fmtStatNum(humanStats.cc_triggers.rps_spike) }}</span>
+              <span class="cc-legend-item">{{ t('app.security.overview.cc.trigger4xx') }} {{ fmtStatNum(humanStats.cc_triggers['4xx_ratio']) }}</span>
+              <span class="cc-legend-item">{{ t('app.security.overview.cc.triggerSession') }} {{ fmtStatNum(humanStats.cc_triggers.session_anomaly) }}</span>
+            </div>
+          </div>
         </el-card>
       </el-col>
     </el-row>
@@ -611,8 +623,9 @@ const attackChartOption = computed(() => ({
   }],
 }))
 
-// 人机验证统计（lb_human admin 端点；端点缺失=旧二进制，全零不报错）
-const humanStats = ref({ challenges: 0, passes: 0, fails: 0 })
+// 人机验证统计（lb_human admin 端点；端点缺失=旧二进制，全零不报错）。
+// cc_triggers/三丢失计数为对账面（human_stats.go 透传）：旧响应缺省按零防御。
+const humanStats = ref({ challenges: 0, passes: 0, fails: 0, cc_triggers: { rps_spike: 0, '4xx_ratio': 0, session_anomaly: 0 }, events_dropped: 0, events_deliver_failed: 0, events_shutdown_lost: 0 })
 
 // 实时挑战运行态（CC 卡入口）：数据源为 lbhuman 内存会话注册表，
 // active=仍在 TTL 内等待验证；recent=最近通过/失败/过期。不是事件日志回放。
@@ -722,10 +735,13 @@ const ccPct = (n: number): number => {
   const total = ccTotalCount.value
   return total > 0 ? (n / total) * 100 : 0
 }
+// 人机事件丢失合计（队列满丢弃 + 投递失败 + 停机预算内未投递）：>0 时 CC 卡
+// 显性披露对账警示，分项计数随文案逐项展示。
+const humanEventsLost = computed(() => humanStats.value.events_dropped + humanStats.value.events_deliver_failed + humanStats.value.events_shutdown_lost)
 const fetchHumanStats = async (): Promise<void> => {
   try {
-    const res = await request.get<APIResponse<{ challenges: number; passes: number; fails: number }>>('/security/human/stats', { silent: true })
-    if (res.data) humanStats.value = res.data
+    const res = await request.get<APIResponse<{ challenges: number; passes: number; fails: number; cc_triggers: { rps_spike: number; '4xx_ratio': number; session_anomaly: number }; events_dropped: number; events_deliver_failed: number; events_shutdown_lost: number }>>('/security/human/stats', { silent: true })
+    if (res.data) humanStats.value = { ...humanStats.value, ...res.data, cc_triggers: { ...humanStats.value.cc_triggers, ...res.data.cc_triggers } }
   } catch { /* 静默：总览卡不阻塞 */ }
 }
 
@@ -1024,6 +1040,7 @@ onMounted(() => { void reloadAll() })
 .cc-meta-value.is-pass { color: #67c23a; }
 .cc-meta-value.is-fail { color: #f56c6c; }
 .cc-dist { margin-top: 8px; }
+.cc-triggers { margin-top: 8px; }
 .cc-dist-head { display: flex; align-items: baseline; justify-content: space-between; padding: 0 4px 6px; font-size: 12px; color: var(--text-secondary); }
 .cc-dist-head > span:first-child { font-weight: 600; color: #303133; }
 .cc-stack { display: flex; height: 10px; border-radius: 0; overflow: hidden; background: #eef2f7; margin: 0 4px 8px; }

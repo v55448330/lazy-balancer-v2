@@ -336,6 +336,7 @@ func TestGetLogStats_keyFilterNarrowsRows(t *testing.T) {
 // 聚合一次 ReadDir——200 文件的 certjobs 目录单次请求只枚举一次
 // （原逐文件 dirBytes 在其内部再 ReadDir，O(N²)）。
 func TestGetLogStats_aggregateDirReadsOnce(t *testing.T) {
+	withIsolatedGlobal(t)
 	h := newBackupTestHandlers(t)
 	base := t.TempDir()
 	oldLogDir := taskengine.LogDir()
@@ -548,6 +549,7 @@ func TestGetLogStats_singleRowRequestSkipsUnrelatedConfigReads(t *testing.T) {
 // （此前各枚举一次，重复 ReadDir/stat，且两次枚举间发生轮转时同一响应的两行
 // 会来自不同目录快照）。
 func TestGetLogStats_sharedLogsDirEnumeratedOnce(t *testing.T) {
+	withIsolatedGlobal(t)
 	h := newBackupTestHandlers(t)
 	h.cfg.LogFile = "/app/logs/lazy-balancer.log"
 
@@ -578,6 +580,7 @@ func TestGetLogStats_sharedLogsDirEnumeratedOnce(t *testing.T) {
 // 失败形态同样只尝试一次——此前每个任务都重读，故障窗口退化为 O(N) 次失败
 // syscall，且失败零留痕。
 func TestGetLogStats_taskDirEnumeratedOncePerRequest(t *testing.T) {
+	withIsolatedGlobal(t)
 	for _, tc := range []struct {
 		name    string
 		failDir bool

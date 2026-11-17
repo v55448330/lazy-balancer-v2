@@ -5,7 +5,7 @@ import { code, cssDeclarations, elementSlice, enclosingDecl, member, openTags, r
 
 test('当前密码错误在页面本地 toast，拦截器复用精确分类', () => {
   const profile = code('src/components/ProfileDialog.vue')
-  assert.match(profile, /isCurrentPasswordRejection\('patch', '\/users\/me', error\.status, error\.message\)/)
+  assert.match(profile, /isCurrentPasswordRejection\('patch', '\/users\/me', error\.status, error\.message, error\.messageKey\)/)
   assert.match(profile, /authStore\.showToast\('error', error\.message\)/)
   assert.match(code('src/utils/api.ts'), /classifyAuthFailure\(/)
   // 401 分类判据单源在 utils/apiFailure（拦截器只做处置分派）
@@ -844,10 +844,10 @@ test('TCP 绑定门谓词与文案单源（securityStages）', () => {
   // 结构负钉：选择器不得按协议排除 TCP（裸中文「选择器只列 HTTP」i18n 后空转）
   const pickerFiltered = member(policies, 'const pickerFilteredRules = computed')
   assert.doesNotMatch(pickerFiltered, /protocol !== 'tcp'/, '候选列表不得整体排除 TCP（筛选只收窄视野）')
-  // 向导关联规则步骤 TCP 行内标注
-  // i18n 后双钉:调用点钉键,zh 母本钉原文(security.ts 为 zh/en 合并词条,原文在 "zh" 行)
-  assert.match(policies, /infoHints\.push\(t\('app\.security\.policies\.bind\.tcpHint'\)\)/)
-  assert.ok(code('src/locales/zh/security.ts').includes('拦截=断连，无拦截页；CDN 回源需开启 PROXY protocol'), 'TCP 行内标注原文必须在 zh 母本词条中')
+  // 向导关联规则步骤 TCP 注记：步骤顶条件行（hasTcpBoundRule → bind.tcpWarn），
+  // 行内 infoHints 死输出簇已删除，注记单源收敛到步骤顶横幅。
+  assert.match(policies, /v-if="hasTcpBoundRule" class="info-note-bar"><span class="info-note-desc">\{\{ t\('app\.security\.policies\.bind\.tcpWarn'\) \}\}/)
+  assert.ok(code('src/locales/zh/security.ts').includes('TCP 规则拦截=断连（无拦截页）；CDN 回源需开启 PROXY protocol'), 'TCP 注记原文必须在 zh 母本词条中')
 })
 
 test('IPv6 地理库开关：退化 200 按 messageKey 判定（语言无关），不得吞成成功', () => {

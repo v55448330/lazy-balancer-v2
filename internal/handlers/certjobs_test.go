@@ -585,6 +585,7 @@ func TestDeleteCertJob_deleteFailureLeavesDisabledRuleJobFailed(t *testing.T) {
 	}
 }
 func TestDeleteCertJob_restores_downloaded_job_with_material_when_delete_fails(t *testing.T) {
+	withIsolatedGlobal(t)
 	// 删除持有证书材料的 downloaded 任务失败时，恢复
 	// 路径必须原地保持 'downloaded' 并把部署窗口推到 now（对齐 caqueue
 	// requeueCanceledJob 的口径）——转 'queued' 会丢弃已签发证书

@@ -12,6 +12,9 @@ import (
 
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/services"
+	"strings"
+
+	"lazy-balancer-v2/internal/i18n"
 )
 
 // 服务层 ErrNotMasterNode → 403 必须与 requireMaster 门同源携带
@@ -50,6 +53,49 @@ func TestClusterNodeAction_forbiddenCarriesMasterRequiredErrorCode(t *testing.T)
 	}
 	if got := response.Header().Get("X-LB-Error-Code"); got != "" {
 		t.Fatalf("404 response unexpectedly carries X-LB-Error-Code=%q", got)
+	}
+}
+
+// 动词插值消费接线钉：clusterNodeAction 成功路径的 Message 必须按请求语言
+// 全译（动词词条+模板词条），不得把 zh 动词直插 en 模板（「审批 node
+// succeeded」中英混杂）。桩 operation=nil 错误驱动成功分支；四个动作词全钉。
+func TestClusterNodeAction_successMessageFullyTranslated(t *testing.T) {
+	handler := newBackupTestHandlers(t)
+	gin.SetMode(gin.TestMode)
+	for _, tc := range []struct {
+		action string
+		zh     string
+		en     string
+	}{
+		{"审批", "审批节点成功", "Approve node succeeded"},
+		{"拒绝", "拒绝节点成功", "Reject node succeeded"},
+		{"删除", "删除节点成功", "Delete node succeeded"},
+		{"更新地址", "更新地址节点成功", "Update access URL of node succeeded"},
+	} {
+		for _, lang := range []struct {
+			header string
+			want   string
+		}{{"zh-CN", tc.zh}, {"en", tc.en}} {
+			router := gin.New()
+			router.Use(func(c *gin.Context) {
+				c.Set(i18n.CtxLangKey, i18n.Negotiate(c.GetHeader("Accept-Language")))
+				c.Next()
+			})
+			action := tc.action
+			router.POST("/cluster/nodes/:id/act", func(c *gin.Context) {
+				handler.clusterNodeAction(c, action, func(int) error { return nil })
+			})
+			response := httptest.NewRecorder()
+			request := httptest.NewRequest(http.MethodPost, "/cluster/nodes/2/act", nil)
+			request.Header.Set("Accept-Language", lang.header)
+			router.ServeHTTP(response, request)
+			if response.Code != http.StatusOK {
+				t.Fatalf("%s/%s status=%d body=%s, want 200", tc.action, lang.header, response.Code, response.Body.String())
+			}
+			if !strings.Contains(response.Body.String(), lang.want) {
+				t.Fatalf("%s/%s body=%s, want 全译消息 %q", tc.action, lang.header, response.Body.String(), lang.want)
+			}
+		}
 	}
 }
 

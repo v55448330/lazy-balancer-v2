@@ -1,7 +1,5 @@
 package handlers
 
-// （签发未入队不得伪装成功）。
-
 import (
 	"database/sql"
 	"encoding/json"
@@ -350,8 +348,8 @@ func TestUpdateCertificateConfig_emptyFieldWithMaskNotSwallowed(t *testing.T) {
 	}
 }
 
-// 签发未入队不得回 200「已创建 0 个任务」 ——
-
+// seedIssueRule/initIssueQueue 是下方签发契约用例（队列暂停/规则屏障/在途）
+// 的共用夹具：规则行 + 已启动的签发队列。
 func seedIssueRule(t *testing.T, caddyID, domain string) {
 	t.Helper()
 	if _, err := db.DB.Exec(`INSERT INTO lb_rules (caddy_id,name,protocol,domain,listen_port,enabled,enable_tls,tls_source)
@@ -786,6 +784,7 @@ func seedDownloadedJobWithMaterial(t *testing.T, ruleID, domain, status string) 
 // 记录 (jobID, ruleID) 且不真正执行部署，便于断言「只重排部署」。
 func stubDeploymentRegistrar(t *testing.T) *[]string {
 	t.Helper()
+	withIsolatedGlobal(t)
 	old := certJobDeploymentRetryRegistrar
 	registered := make([]string, 0, 2)
 	certJobDeploymentRetryRegistrar = func(jobID int, ruleID string) error {
@@ -882,6 +881,7 @@ func TestIssueCertificate_batchDownloadedJobsTriggerRedeploy(t *testing.T) {
 // 并记录 (jobID:ruleID)。
 func blockingDeploymentRegistrar(t *testing.T) (registrations *[]string, entered <-chan struct{}, release func()) {
 	t.Helper()
+	withIsolatedGlobal(t)
 	old := certJobDeploymentRetryRegistrar
 	recorded := make([]string, 0, 2)
 	enteredCh := make(chan struct{}, 1)

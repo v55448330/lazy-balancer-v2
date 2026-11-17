@@ -1307,6 +1307,7 @@ export default {
     'ccResultChallenge': 'Challenge issued (awaiting verification)',
     'ccResultPass': 'Challenge passed',
     'ccResultFail': 'Challenge failed',
+    'ccResultRateReject': 'Rate-limited rejection',
     'ccMode': 'Trigger mode',
     'ccModeAuto': 'Smart trigger (quota spike / 4xx burst / multi-UA)',
     'ccModeForce': 'Always verify',

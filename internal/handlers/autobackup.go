@@ -43,6 +43,11 @@ const autoBackupListLimit = 200
 // 运行——用于确定性地模拟「取消恰好发生在该读取窗口」。
 var autoBackupBeforeSectionsReadHook func()
 
+// autoBackupBeforeDirCreateHook 测试钩子（生产恒 nil）：在备份目录守卫/创建
+// 之前运行——用于确定性地模拟「取消恰好发生在目录创建窗口」（MkdirAll
+// 真失败+取消同窗的复合形态）。
+var autoBackupBeforeDirCreateHook func()
+
 // HH:MM 校验统一走 services.ValidScheduleHHMM（原本地正则与调度侧解析
 // 函数双实现，已收敛）。
 
@@ -411,7 +416,14 @@ func (h *Handlers) RunAutoBackupOnce(ctx context.Context, trigger, operator stri
 	// 进程 CWD（failed 行裁剪按 DB 行文件名 + dir 相对解析执行 os.Remove）。
 	// 生产配置由 config 载入（LoadCollectWarnings）保证绝对路径，此处防配置缺失/测试构造形态。
 	// 判据单源 autoBackupDir()——还原/下载/删除三端点共用同一守卫。
+	if autoBackupBeforeDirCreateHook != nil {
+		autoBackupBeforeDirCreateHook()
+	}
 	if _, dirErr := h.autoBackupDir(); dirErr != nil {
+		if cerr := ctx.Err(); cerr != nil {
+			// 取消不是「备份失败」：目录守卫窗口与创建/占名/写盘窗口同口径。
+			return autoBackupRowView{}, cerr
+		}
 		reason := dirErr
 		services.Logf("warn", "%s失败：%v", action, reason)
 		services.RecordAuditLog(operator, "备份失败", "配置备份", services.FormatAuditDetail(
@@ -426,6 +438,11 @@ func (h *Handlers) RunAutoBackupOnce(ctx context.Context, trigger, operator stri
 	// 目录先于文件名分配校验：父路径不可用时应落「创建备份目录失败」，
 	// 而不是被文件名 Stat 抢先变成无法归因的命名错误。
 	if err := os.MkdirAll(dir, autoBackupDirPerm); err != nil {
+		if cerr := ctx.Err(); cerr != nil {
+			// 取消落在目录创建窗口且 MkdirAll 失败：按取消归因，不落
+			// failed 行/「备份失败」审计（与占名/读范围/写盘窗口同口径）。
+			return autoBackupRowView{}, cerr
+		}
 		failureName := autoBackupFilenameBase(trigger, now) + ".lbbak.unavailable"
 		if _, ierr := insertAutoBackupRow(ctx, failureName, "failed", 0, "[]", trigger, "创建备份目录失败: "+err.Error(), h.cfg.Version); ierr != nil {
 			services.Logf("warn", "自动备份：failed 行落库失败: %v", ierr)

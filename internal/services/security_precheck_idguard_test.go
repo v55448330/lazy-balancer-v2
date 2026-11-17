@@ -187,3 +187,60 @@ func TestSecurityEventScoring_geoIPPolicy10000NotCrawler(t *testing.T) {
 		t.Fatal("850000 must not be classified as a crawler spoof id (no policy 0)")
 	}
 }
+
+// Given ACL deny / 遗留黑名单逐策略链编码器（段界 [1500000,1510000) /
+// [1510000,1520000)，policyID ∈ [1,9999]）。
+// When 边界 pid=9999/10000 与非法 pid≤0。
+// Then ACL 段上界=黑名单段基（1510000）：pid=9999 编码成功、pid=10000 拒绝
+// ——错用合并段右开界（1520000）会让 pid≥10000 的 ACL 链溢入黑名单段；
+// 黑名单段上界=合并段右开界不变（回归形状）。
+func TestPrecheckRuleID_aclBlacklistSegmentBounds(t *testing.T) {
+	if id, ok := encodeACLPrecheckRuleID(9999); !ok || id != aclPrecheckRuleBase+9999 {
+		t.Fatalf("ACL pid=9999 必须编码成功（段内最后一个策略）: id=%d ok=%v", id, ok)
+	}
+	if id, ok := encodeACLPrecheckRuleID(10000); ok {
+		t.Fatalf("ACL pid=10000 必须拒绝（溢入黑名单段 [%d,%d)）: id=%d", blacklistPrecheckRuleBase, aclPrecheckRuleLimit, id)
+	}
+	if _, ok := encodeACLPrecheckRuleID(0); ok {
+		t.Fatal("ACL pid=0 必须拒绝（无策略 0）")
+	}
+	if id, ok := encodeBlacklistPrecheckRuleID(9999); !ok || id != blacklistPrecheckRuleBase+9999 {
+		t.Fatalf("黑名单 pid=9999 必须编码成功: id=%d ok=%v", id, ok)
+	}
+	if _, ok := encodeBlacklistPrecheckRuleID(10000); ok {
+		t.Fatal("黑名单 pid=10000 必须拒绝（越出合并段右开界）")
+	}
+	// 解码归因同界：ACL 段最后一个 id 归 ACL 族属主 9999；黑名单段基归
+	// 黑名单族（pid=0 边界拒绝）。
+	if family, pid, _, ok := decodePrecheckRuleID(strconv.Itoa(aclPrecheckRuleBase + 9999)); !ok || family != precheckRuleFamilyACLDeny || pid != 9999 {
+		t.Fatalf("ACL 段末 id 解码=(%v,%d,%v), want ACLDeny/9999/true", family, pid, ok)
+	}
+	if family, pid, _, ok := decodePrecheckRuleID(strconv.Itoa(blacklistPrecheckRuleBase + 1)); !ok || family != precheckRuleFamilyBlacklist || pid != 1 {
+		t.Fatalf("黑名单段首 id 解码=(%v,%d,%v), want Blacklist/1/true", family, pid, ok)
+	}
+}
+
+// Given 策略 id=10000（ACL 段越界）：ACL deny 名单启用；另策略 id=9999
+// （黑名单段内合法）内联黑名单启用。
+// When 预检渲染。
+// Then ACL 链越界跳过（不得溢入黑名单段发射 id:1510000——归因错位，且与
+// pid=1 黑名单链同 id 时 claimRuleID 拒绝整份配置）；黑名单链照常发射且
+// 引擎接受。
+func TestEngineGate_aclChainOverflowSkipsInsteadOfColliding(t *testing.T) {
+	pACL := &models.SecurityPolicy{
+		ID: 10000, Mode: "off",
+		IPACLEnabled: true, IPACLMode: "deny", IPACLList: `["198.51.100.9"]`,
+	}
+	pBL := &models.SecurityPolicy{ID: 9999, Mode: "off", IPBlacklist: json.RawMessage(`["198.51.100.10"]`)}
+	directives := mustDirectives(buildIPPrecheckDirectives([]*models.SecurityPolicy{pACL, pBL}, "lb_test"))
+	if strings.Contains(directives, "id:1510000,") {
+		t.Fatalf("ACL 链不得溢入黑名单段发射 id:1510000（归因错位/同 id 碰撞）:\n%s", directives)
+	}
+	if !strings.Contains(directives, "id:1519999,phase:1,deny,status:403,log,msg:'IP 黑名单'") {
+		t.Fatalf("黑名单链（pid=9999 段内合法）必须照常发射:\n%s", directives)
+	}
+	if strings.Contains(directives, "IP 黑名单拒绝") {
+		t.Fatalf("越界 ACL 链必须跳过发射（不得以黑名单段 id 归因错位）:\n%s", directives)
+	}
+	compileForEngineGate(t, directives)
+}

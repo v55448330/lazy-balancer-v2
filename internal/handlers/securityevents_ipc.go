@@ -199,6 +199,9 @@ func (s *SecurityEventsIPCServer) handleIngestHuman(w http.ResponseWriter, r *ht
 			attributions[row.RuleID] = lookupHumanEventAttribution(row.RuleID)
 		}
 	}
+	// 批最旧插入分钟（rollup 回退通知用）：只统计真实落库行（pass/未知 kind
+	// 跳过），与 WAF 批 processPass 的 batchOldestMinute 同口径。
+	var oldestInsert time.Time
 	for _, row := range rows {
 		// 结果语义（2026-11-13 用户裁定）：挑战成功（pass）是放行结果，不是安全
 		// 事件——不落库（避免污染事件日志/统计）；发放/失败逐请求落库，action=
@@ -248,10 +251,19 @@ func (s *SecurityEventsIPCServer) handleIngestHuman(w http.ResponseWriter, r *ht
 			http.Error(w, "human event insert: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
+		if at := time.UnixMilli(row.Ts).UTC(); oldestInsert.IsZero() || at.Before(oldestInsert) {
+			oldestInsert = at
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		http.Error(w, "human event commit: "+err.Error(), http.StatusInternalServerError)
 		return
+	}
+	// 迟到插入回退通知（与 WAF 批同构）：积压超过修复窗的分钟若无此通知，
+	// rollup 水位已过、增量重固扫不到，大屏/总览对该分钟永久少计。纯插入批
+	// reclassify=nil（迟到行 id 单调更大，增量即可覆盖）；零落库批不通知。
+	if !oldestInsert.IsZero() {
+		services.NotifySecurityEventsRollupRewrite(oldestInsert.Truncate(time.Minute), nil)
 	}
 	// 挑战发放/失败计入自动封禁（按口径维度成员资格，2026-11-13 用户裁定）：
 	// 提交成功后按批喂入（配置每批只读一次，与 WAF 批路径同构），窗口/阈值

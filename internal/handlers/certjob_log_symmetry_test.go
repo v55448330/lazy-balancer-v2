@@ -107,6 +107,7 @@ func TestEnableRule_keepWritesCertJobLog(t *testing.T) {
 }
 
 func TestEnableRule_createWritesCertJobLog(t *testing.T) {
+	withIsolatedGlobal(t)
 	// Given：禁用规则且无任务行 → Create 分支（入队经测试缝返回成功）
 	handler, _, _ := newAuditRuleHandlers(t, 0)
 	useTempCertJobLogDir(t)
@@ -188,6 +189,7 @@ const (
 // 启用侧留痕对称性（续签分支）：过期后启用 → 续签排队必须写 certjob 日志
 // （对照禁用侧恒写 [WARN] cancelled）。
 func TestEnableRule_renewWritesCertJobLog(t *testing.T) {
+	withIsolatedGlobal(t)
 	// Given：禁用规则 + issued 任务 + 10 天后到期（续签窗口内）→ Renew 分支
 	handler, _, _ := newAuditRuleHandlers(t, 0)
 	t.Cleanup(services.SetCertDirForTest(t.TempDir()))
@@ -229,6 +231,7 @@ func TestEnableRule_renewWritesCertJobLog(t *testing.T) {
 
 // 启用侧留痕对称性（重试分支）：失败任务经启用重新排队必须写 certjob 日志。
 func TestEnableRule_retryWritesCertJobLog(t *testing.T) {
+	withIsolatedGlobal(t)
 	// Given：禁用规则 + failed 任务 → Retry 分支
 	handler, _, _ := newAuditRuleHandlers(t, 0)
 	t.Cleanup(services.SetCertDirForTest(t.TempDir()))

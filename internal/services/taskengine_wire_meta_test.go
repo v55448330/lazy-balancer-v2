@@ -7,6 +7,8 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -355,5 +357,34 @@ func TestTaskEngineWire_configLoadRejectsUnknownTrigger(t *testing.T) {
 	}
 	if !strings.Contains(runs[0].Message, "未知触发来源") {
 		t.Fatalf("失败行消息应说明未知触发来源, got %q", runs[0].Message)
+	}
+}
+
+// Given 接线文件的四个分节标题（循环/常驻/定时/触发）。
+// When 清点各节内 mustRegisterTask 注册实数。
+// Then 节标题计数=节内实数（四节同一惯例）；全局族口径（含
+// taskengine_wire_runtime.go 的运行期族）由文件头注册全集注释与标准文档
+// §2 承载，不得混入节标题——标题对齐总账会破坏「标题=节内实数」惯例。
+func TestTaskEngineWire_sectionHeadingCountsMatchSectionRegistrations(t *testing.T) {
+	src := guardReadRepoFile(t, filepath.Join("internal", "services", "taskengine_wire.go"))
+	headingRe := regexp.MustCompile(`// ============ (循环|常驻|定时|触发)（(\d+)）============`)
+	matches := headingRe.FindAllStringSubmatchIndex(src, -1)
+	if len(matches) != 4 {
+		t.Fatalf("分节标题数=%d, want 4（循环/常驻/定时/触发）", len(matches))
+	}
+	for i, m := range matches {
+		end := len(src)
+		if i+1 < len(matches) {
+			end = matches[i+1][0]
+		}
+		section := src[m[1]:end]
+		got := strings.Count(section, "mustRegisterTask(te,")
+		want, err := strconv.Atoi(src[m[4]:m[5]])
+		if err != nil {
+			t.Fatalf("节标题计数不可解析: %q", src[m[4]:m[5]])
+		}
+		if got != want {
+			t.Errorf("节「%s」标题计数=%d, 节内注册实数=%d——节标题必须等于节内实数（全局族口径归文件头注释/标准文档）", src[m[2]:m[3]], want, got)
+		}
 	}
 }

@@ -1,93 +1,115 @@
 package handlers
 
-// seam 完备登记门（AST 派生）：「凡测试可直接赋值的函数缝均入册」的声称
-// 必须机器成立——从生产源码 AST 提取全部可赋值包级 var（函数指针/客户端
-// 缝），与 captureHandlerGlobalSeams 登记表对账。漏登一个即对写侧隔离
-// 静态门不可见（历史形态：手工清单漂移，约 18 个 seam 逃逸）。
+// seam 完备登记门（类型派生）：「凡测试可直接赋值的函数缝均入册」的声称
+// 必须机器成立——用 go/packages 对本包生产源码做完整类型检查，从
+// types.Info 取每个包级 var 的**实际类型**（而非 AST 形态猜测），与
+// captureHandlerGlobalSeams 登记表对账。漏登一个即对写侧隔离静态门不可见
+// （历史形态一：手工清单漂移；历史形态二：AST 判据只看显式类型/函数字面量，
+// `var x = pkg.Func` 函数引用初始化整体逃逸，约 20 个在用缝不可见）。
+//
+// 判据（类型级，零形态盲区）：
+//   - 底层类型为 *types.Signature 的函数缝（含 sync.OnceValue 包装等一切
+//     可调用初始化形态）；
+//   - *http.Client / *http.Transport 可替换客户端缝。
+//
+// 非 seam 的可赋值包级 var（error 哨兵、路由表/词表/常量映射、regexp、
+// TTL 缓存指针、sync 原语等）由类型判据自然排除，不再需要人工豁免表——
+// 豁免表条目会随定义删除而死化（曾残留两条零定义豁免）。
 
 import (
 	"go/ast"
-	"go/parser"
 	"go/token"
+	"go/types"
 	"os"
 	"sort"
 	"strings"
 	"testing"
+
+	"golang.org/x/tools/go/packages"
 )
 
+// isSeamVarType 报告包级 var 的实际类型是否构成「测试可直接赋值的缝」。
+func isSeamVarType(typ types.Type) bool {
+	switch u := typ.Underlying().(type) {
+	case *types.Signature:
+		return true
+	case *types.Pointer:
+		if named, ok := u.Elem().(*types.Named); ok {
+			obj := named.Obj()
+			if obj.Pkg() != nil && obj.Pkg().Path() == "net/http" &&
+				(obj.Name() == "Client" || obj.Name() == "Transport") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func TestHandlerGlobalSeamRegistryCoversAllAssignableVars(t *testing.T) {
-	entries, err := os.ReadDir(".")
+	cwd, err := os.Getwd()
 	if err != nil {
-		t.Fatalf("read package dir: %v", err)
+		t.Fatalf("getwd: %v", err)
+	}
+	cfg := &packages.Config{
+		Mode: packages.NeedName | packages.NeedFiles | packages.NeedSyntax |
+			packages.NeedTypes | packages.NeedTypesInfo | packages.NeedImports | packages.NeedDeps,
+		Dir:   cwd,
+		Tests: false,
+	}
+	pkgs, err := packages.Load(cfg, ".")
+	if err != nil {
+		t.Fatalf("packages.Load: %v", err)
 	}
 	registered := make(map[string]bool)
 	for name := range captureHandlerGlobalSeams() {
 		registered[name] = true
 	}
-	// 豁免：非 seam 的可赋值包级 var（路由表/词表/常量映射等——测试改写
-	// 它们属夹具形态，由各自专项守卫管辖，不入写侧隔离门）。
-	exempt := map[string]string{
-		"caddyLogPaths":       "日志路径表夹具（caddy_logs_tail_test 专项守卫）",
-		"caddyLogTypesOrder":  "日志类型序派生表",
-		"handlerSuiteGlobals": "suite 级终态检查表（非用例级 seam）",
-	}
-	fset := token.NewFileSet()
 	var missing []string
-	for _, entry := range entries {
-		name := entry.Name()
-		if entry.IsDir() || strings.HasSuffix(name, "_test.go") || !strings.HasSuffix(name, ".go") {
-			continue
-		}
-		file, parseErr := parser.ParseFile(fset, name, nil, 0)
-		if parseErr != nil {
-			t.Fatalf("parse %s: %v", name, parseErr)
-		}
-		for _, decl := range file.Decls {
-			gen, ok := decl.(*ast.GenDecl)
-			if !ok || gen.Tok != token.VAR {
-				continue
+	scanned := 0
+	for _, pkg := range pkgs {
+		if len(pkg.Errors) > 0 {
+			// 类型检查失败会让判据静默失真——必须 fail-loud。
+			for _, e := range pkg.Errors {
+				t.Errorf("type check %s: %v", pkg.ID, e)
 			}
-			for _, spec := range gen.Specs {
-				vs, ok := spec.(*ast.ValueSpec)
-				if !ok {
+			t.FailNow()
+		}
+		for _, file := range pkg.Syntax {
+			for _, decl := range file.Decls {
+				gen, ok := decl.(*ast.GenDecl)
+				if !ok || gen.Tok != token.VAR {
 					continue
 				}
-				for i, ident := range vs.Names {
-					if ident.Name == "_" || registered[ident.Name] {
+				for _, spec := range gen.Specs {
+					vs, ok := spec.(*ast.ValueSpec)
+					if !ok {
 						continue
 					}
-					if _, ok := exempt[ident.Name]; ok {
-						continue
-					}
-					// 可赋值 seam 判据：函数类型（含客户端 *http.Client 等
-					// 指针接口缝）或显式初始化为函数字面量/可替换客户端。
-					isFunc := false
-					if vs.Type != nil {
-						switch vs.Type.(type) {
-						case *ast.FuncType:
-							isFunc = true
-						case *ast.StarExpr:
-							isFunc = true // *http.Client/*sql.DB 等客户端缝
-						case *ast.InterfaceType:
-							isFunc = true
+					for _, ident := range vs.Names {
+						if ident.Name == "_" {
+							continue
 						}
-					}
-					if !isFunc && i < len(vs.Values) {
-						switch vs.Values[i].(type) {
-						case *ast.FuncLit:
-							isFunc = true
+						obj := pkg.TypesInfo.Defs[ident]
+						if obj == nil {
+							continue
 						}
-					}
-					if isFunc {
-						missing = append(missing, name+":"+ident.Name)
+						scanned++
+						if registered[ident.Name] || !isSeamVarType(obj.Type()) {
+							continue
+						}
+						pos := pkg.Fset.Position(ident.Pos())
+						missing = append(missing, pos.Filename+":"+ident.Name)
 					}
 				}
 			}
 		}
+	}
+	if scanned == 0 {
+		t.Fatal("未扫描到任何包级 var——门禁扫描面为空（加载模式/目录漂移）")
 	}
 	sort.Strings(missing)
 	if len(missing) > 0 {
-		t.Fatalf("以下可赋值 seam 未入 captureHandlerGlobalSeams 登记（写侧隔离静态门对其不可见）——补登记或列入豁免（附理由）:\n  %s",
+		t.Fatalf("以下可赋值 seam 未入 captureHandlerGlobalSeams 登记（写侧隔离静态门对其不可见）——补登记:\n  %s",
 			strings.Join(missing, "\n  "))
 	}
 }

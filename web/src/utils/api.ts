@@ -342,7 +342,10 @@ service.interceptors.response.use(
     // 只有后端明确的「当前密码错误」才豁免会话失效；同端点的 token 过期/未登录
     // 401 仍必须进入下方重新登录流程（分类判据见 utils/apiFailure）。
     if (kind === 'credential-rejection') {
-      return Promise.reject(new ApiRequestError(message, status))
+      // 第三参与 session-expired stale 分支同形（完整响应体信封）：丢了 data
+      // 则 ApiRequestError.messageKey undefined，en 文案失配 zh 字面量兜底，
+      // 调用方（ProfileDialog 当前密码 toast）静默零反馈。
+      return Promise.reject(new ApiRequestError(message, status, error.response?.data))
     }
     if (kind === 'session-expired') {
       // 登出 A、登录 B 后，A 的在途请求才返回 401：它只属于 A，不得弹框或止损 B。

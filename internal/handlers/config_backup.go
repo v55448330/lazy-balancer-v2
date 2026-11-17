@@ -1002,10 +1002,15 @@ func countStalledNonTerminalCertJobs() (count int, unknown bool) {
 }
 
 // stalledWarning 是「证书任务因签发任务已停止而未重排」的披露文案单源
-// （响应 warnings 与操作审计同文；空串=无需披露）。
+// （响应 warnings 与操作审计同文；空串=无需披露）。recoveryErr 分支按
+// wasActive 分流：仅导入前在跑的队列才会被 Resume——用户停止态谎报
+// 「已恢复运行」会把运维引向错误终态（队列实际仍停）。
 func (recovery *importQueueRecovery) stalledWarning() string {
 	if recovery.recoveryErr != nil {
-		return "证书签发队列已恢复运行，但导入后的任务恢复未完成：" + recovery.recoveryErr.Error() + "——请检查证书任务列表，必要时手动重试"
+		if recovery.wasActive {
+			return "证书签发队列已恢复运行，但导入后的任务恢复未完成：" + recovery.recoveryErr.Error() + "——请检查证书任务列表，必要时手动重试"
+		}
+		return "证书签发任务保持停止，且导入后的任务恢复未完成：" + recovery.recoveryErr.Error() + "——请检查证书任务列表，恢复该任务后才会继续推进"
 	}
 	if recovery.stalledUnknown {
 		return "证书签发任务已停止：导入的非终态证书任务本窗口未重排（数量统计失败，请检查任务列表）——恢复该任务后才会继续推进"

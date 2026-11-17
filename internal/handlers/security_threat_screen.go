@@ -316,7 +316,10 @@ const (
 	// v3：固定 id:5 归信任名单（id→家族表统一：此前分桶误记 IP 访问控制）。
 	// v4：human_*/cc_rate_reject 归 CC 防护族（此前落「其他」，CC reject 站点
 	// 攻击族分布失真）——分类口径变更，已固化分钟须重固。
-	threatRollupClassifierVersion = "4"
+	// v5：全数字守卫收敛——非数字 5 位/≥7 位 1 开头带外形态不再仅凭长度/前缀
+	// 归自定义规则族（categorizeAttack 快速路径/合成支与 attackFamilyClassOf
+	// 同口径）——分类口径变更，已固化分钟须重固。
+	threatRollupClassifierVersion = "5"
 	// threatRollupPredicateVersionKey / threatRollupPredicateVersion 固化口径
 	// 代际：保留地址排除谓词与攻击口径（爬虫放行不计入攻击）都会让已固化
 	// 分钟的口径静默过时（水位机制只保护迟到事件，不保护语义变更）——口径

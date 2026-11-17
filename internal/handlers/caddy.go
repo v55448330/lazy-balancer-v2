@@ -1617,6 +1617,10 @@ func (h *Handlers) PutCaddyConfig(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_3bac74fb"), MessageKey: "k_3bac74fb"})
 		return
 	}
+	// 内部键净化：__lazy_balancer_ 前缀是渲染器私有通道，用户原始载荷携带
+	// 时必须在入口剥离——CLI 不可用放行形态下手造降级键会投毒降级判定/审计/
+	// 横幅（归因伪造），且事务内 persist 会撞 WAL 单写者。与 caddyPayload 同口径。
+	configData = services.StripCaddyInternalKeys(configData)
 	// admin 自锁护栏（CLI 校验/事务/apply 之前）：admin off 或监听地址改到
 	// 面板不可达的 host:port 会让本次 apply 成功后所有配置写与启停全部失联。
 	if h.cfg != nil {

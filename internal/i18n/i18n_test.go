@@ -2,7 +2,6 @@ package i18n
 
 import (
 	"os"
-	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -114,8 +113,7 @@ func TestErrTplPlaceholderParity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	re := regexp.MustCompile(`RegisterErrTpl\((".*?"), (".*?")\)`)
-	matches := re.FindAllStringSubmatch(string(source), -1)
+	matches := errTplEntryRe.FindAllStringSubmatch(string(source), -1)
 	if len(matches) == 0 {
 		t.Fatal("errtpl_gen.go 未扫到任何 RegisterErrTpl——守卫对象漂移")
 	}

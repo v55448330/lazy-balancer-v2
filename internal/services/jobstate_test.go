@@ -456,3 +456,38 @@ func TestMutatesCertJobStatus_normalizesFormattingVariants(t *testing.T) {
 		})
 	}
 }
+
+// Given issued 终态字段组装（失败预算清零单源 + 调用方附加字段）。
+// When 附加字段携带预算键（renewal_attempts/ca_available_after/last_error_code）。
+// Then 响亮 panic 拒绝——契约「附加键不得覆盖预算键」必须有守卫：静默覆盖
+// 会让失败计数跨证书世代携带，配置上限附近的行下一轮续期首次失败即触顶。
+// 回归形状：合法附加键（message/expires_at/部署簿记）照常合并且预算键保持清零。
+func TestIssuedFinalizeFields_rejectsBudgetKeyOverrides(t *testing.T) {
+	for _, key := range []string{"renewal_attempts", "ca_available_after", "last_error_code"} {
+		t.Run(key, func(t *testing.T) {
+			defer func() {
+				r := recover()
+				if r == nil {
+					t.Fatalf("附加键 %q 覆盖预算键必须 panic 拒绝（契约守卫缺失）", key)
+				}
+				if msg, ok := r.(string); !ok || !strings.Contains(msg, key) {
+					t.Fatalf("panic 消息必须点名冲突键 %q, got %v", key, r)
+				}
+			}()
+			issuedFinalizeFields(map[string]any{key: 9})
+		})
+	}
+
+	fields := issuedFinalizeFields(map[string]any{
+		"message":                    "签发成功",
+		"expires_at":                 "2027-01-01 00:00:00",
+		"deployment_attempts":        0,
+		"deployment_available_after": nil,
+	})
+	if fields["renewal_attempts"] != 0 || fields["ca_available_after"] != nil || fields["last_error_code"] != nil {
+		t.Fatalf("预算键必须保持清零单源: %+v", fields)
+	}
+	if fields["message"] != "签发成功" || fields["expires_at"] != "2027-01-01 00:00:00" {
+		t.Fatalf("合法附加键必须照常合并: %+v", fields)
+	}
+}

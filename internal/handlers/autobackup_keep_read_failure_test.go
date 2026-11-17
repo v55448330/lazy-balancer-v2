@@ -21,7 +21,7 @@ func seedAutoBackupSuccessFiles(t *testing.T, dir string, count int) {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte("payload"), 0o600); err != nil {
 			t.Fatalf("seed backup file: %v", err)
 		}
-		if _, err := db.DB.Exec(`INSERT INTO auto_backups (filename, created_at, status, size_bytes, trigger_type) VALUES (?, datetime('2026-09-0'+?+' 03:00:00'), 'success', 7, 'schedule')`, name, string(rune('0'+i))); err != nil {
+		if _, err := db.DB.Exec(`INSERT INTO auto_backups (filename, created_at, status, size_bytes, trigger_type) VALUES (?, ?, 'success', 7, 'schedule')`, name, fmt.Sprintf("2026-09-%02d 03:00:00", i)); err != nil {
 			t.Fatalf("seed backup row: %v", err)
 		}
 	}

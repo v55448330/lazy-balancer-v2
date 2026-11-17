@@ -395,6 +395,7 @@ func TestBeginConfigImport_certQueueDrainTimeoutAudits(t *testing.T) {
 // 建会话的两条 500 分支（读现有规则/开导入事务）同样必须留痕：事务内失败走
 // failImportAbort，事务外失败若静默，操作审计页对高危操作被拒零记录。
 func TestBeginConfigImport_ruleReadFailureAudits(t *testing.T) {
+	withIsolatedGlobal(t)
 	h := newBackupTestHandlers(t)
 	initTaskEngineForTest(t)
 	services.ResetCAQueueManagerForTest()

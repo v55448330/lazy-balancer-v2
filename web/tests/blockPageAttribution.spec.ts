@@ -184,7 +184,9 @@ test('接线：关联规则归属提示退役（常态信息由汇总行承载�
 
 test('接线：拦截页缺失判定消费单源谓词且受加载门约束', () => {
   const text = code('src/views/security/SecurityPolicies.vue')
-  assert.match(text, /blockPageMissing\(e\.blockPageId \?\? 0, blockPages\.value, blockPagesLoaded\.value\)/)
+  // 绑定链逐条空页预告（blockPageBroken）已随死提示簇退役；缺失判定单源
+  // 消费点 = 拦截页步骤汇总卡（pageInvalid）与生效判定（pageHasContent）。
+  assert.match(text, /blockPageMissing\(pageId, blockPages\.value, blockPagesLoaded\.value\)/)
   assert.match(text, /if \(bpRes\.status === 'fulfilled'\) \{ blockPages\.value = bpRes\.value\.data \|\| \[\]; blockPagesLoaded\.value = true \}/)
   // 归因侧同样不得在列表未落地时假设页面存在
   assert.match(text, /blockPagesLoaded\.value && id > 0 && !blockPageMissing\(/)

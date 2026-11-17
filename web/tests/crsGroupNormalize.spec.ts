@@ -12,15 +12,15 @@ import { CRS_INFRA_GROUP_CODES, isInfraRuleId, normalizeCrsGroups } from '../src
 import { code } from './_helpers.ts'
 
 // 纯函数绿 ≠ 视图还在调用它：本套件的行为用例全绿也不能排除「编辑器不再归一」。
-// 接线面 = ①策略行比对用的 `crsGroups:`（两处）②编辑器列表的 `crsRuleGroups.value`
-// 写入——三者都从后端字符串形态取值，去掉外层 normalizeCrsGroups 即红。
+// 接线面 = ①策略行比对用的 `crsGroups:`（peerPolicyViews 一处；绑定冲突死簇
+// 的第二取数点已退役）②编辑器列表的 `crsRuleGroups.value`
 // 展示面同理：列表摘要与只读详情的「N 组」若按库值原样计数，历史文件名前缀、
 // 重复值、系统基础组（01/49/59）都会把组数说大——同一策略在编辑器里显示 2 组、
 // 在详情里显示 5 组，用户无从判断哪份是生效配置。
 test('视图接线：策略行与编辑器列表的取数都经 normalizeCrsGroups 包裹', () => {
   const page = code('src/views/security/SecurityPolicies.vue')
   const policyRows = [...page.matchAll(/crsGroups: [^,\n]*crs_rule_groups[^,\n]*/g)].map((match) => match[0])
-  assert.equal(policyRows.length, 2, `策略行取数点应为 2 处（实际 ${policyRows.length}）——增删须同步本断言`)
+  assert.equal(policyRows.length, 1, `策略行取数点应为 1 处（实际 ${policyRows.length}）——增删须同步本断言`)
   for (const row of policyRows) {
     assert.match(row, /normalizeCrsGroups\(parseUnknownStrings\(p\.crs_rule_groups\)\)/, `策略行必须归一：${row}`)
   }

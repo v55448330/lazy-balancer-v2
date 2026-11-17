@@ -338,8 +338,9 @@ func buildCorazaDirectivesWithIndex(p *models.SecurityPolicy, store caddyConfigS
 	//（空名单恒发射空文件算子，永不命中=与无规则等价，空↔非空纯内容变化走
 	// 热路径）。信任名单不收敛：ip_whitelist_enabled 表默认值即 1（非刻意
 	// opt-in，flag 门控会使全部默认策略凭空获得引擎/信任规则——发射面膨胀，
-	// 门禁钉测实证），维持内容门控；allow ACL（否定算子）与遗留黑名单同理
-	// 维持内容门控（见下 ipListRuleOperand 调用点注释）。
+	// 门禁钉测实证），维持内容门控；遗留黑名单同理维持内容门控（见下
+	// ipListRuleOperand 调用点注释）。allow ACL（否定算子）不设内容门：
+	// 空集=否定算子恒拒，无条件发射（fail-closed）。
 	// 启用 allow 时即使合并后有效条目为空也必须发射
 	// 否定算子（空文件 = 全不匹配 = 恒拒），覆盖备份导入、带外改库和条目
 	// 自然到期三条路径；内容门只用于语义不等价的信任/黑名单/deny。
@@ -1684,7 +1685,7 @@ const (
 	// 族，误判会让 IP ACL 拦截开始计数封禁，行为回归）。
 	aclPrecheckRuleBase       = 1500000 // ACL deny 逐策略链 [1500000,1510000)（+policyID）
 	blacklistPrecheckRuleBase = 1510000 // 遗留黑名单逐策略链 [1510000,1520000)（+policyID）
-	aclPrecheckRuleLimit      = 1520000 // 本段右开界
+	aclPrecheckRuleLimit      = 1520000 // ACL+黑名单合并段右开界（黑名单段上界）
 )
 
 // precheckRuleFamily 预检规则 ID 家族（五族互斥）。
@@ -1741,7 +1742,10 @@ func encodeCrawlerSpoofRuleID(policyID int) (int, bool) {
 // 越界返回 false，调用方跳过该策略链并告警（归因/分桶错位防线，与 GeoIP
 // 链越界同口径）。
 func encodeACLPrecheckRuleID(policyID int) (int, bool) {
-	return encodePolicyOffsetRuleID(aclPrecheckRuleBase, aclPrecheckRuleLimit, policyID)
+	// ACL 段右开界=黑名单段基（1510000）：错用合并段右开界会让 pid≥10000
+	// 的 ACL 链溢入黑名单段——归因错位，且与同 pid 黑名单链同 id 碰撞时
+	// claimRuleID 拒绝整份配置。
+	return encodePolicyOffsetRuleID(aclPrecheckRuleBase, blacklistPrecheckRuleBase, policyID)
 }
 
 func encodeBlacklistPrecheckRuleID(policyID int) (int, bool) {
@@ -2108,8 +2112,8 @@ func buildIPPrecheckDirectives(policies []*models.SecurityPolicy, ruleCaddyID st
 	var allowLists [][]string
 	// 始终发射收敛（2026-10-15 用户裁定）：deny ACL 开启即计入发射面（逐策略
 	// 链可空名单=空文件算子永不命中，空↔非空纯内容变化走热路径）；allow 为
-	// 否定算子（空集=恒命中=全拒，语义不等价）维持内容门控；黑名单为内联
-	// 字段维持内容门控（逐策略链按名单非空发射）。
+	// 否定算子（空集=恒命中=全拒，语义不等价）不设内容门：空集=否定算子
+	// 恒拒，无条件发射；黑名单为内联字段维持内容门控（逐策略链按名单非空发射）。
 	hasDenyACL := false
 	hasBlacklist := false
 	blacklistByPolicy := make(map[int][]string, len(policies))

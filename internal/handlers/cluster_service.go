@@ -257,7 +257,12 @@ func (h *Handlers) ClusterServiceControl(c *gin.Context) {
 	message, err := h.executeClusterCaddyAction(req.Action)
 	if err != nil {
 		recordClusterServiceControlAuditBy(c, req.Action, "失败："+err.Error(), req.Operator)
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: http.StatusInternalServerError, Message: apimsg.ErrMsg(c, err)})
+		// 5xx 固定文案：本端点凭一次性票据可达（v1 组，非 admin 会话），
+		// 底层错误（admin 地址/exec 退出码/路径）不得直出——详情由上方
+		// 从节点审计留痕（经 RedactCaddyAdminEndpoint 脱敏）+运行日志承担，
+		// 与票据校验失败分支（固定文案+clusterError 日志）同口径。
+		services.Logf("error", "cluster service-control: action %s failed: %v", req.Action, err)
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: http.StatusInternalServerError, Message: apimsg.T(c, "k_37dad086"), MessageKey: "k_37dad086"})
 		return
 	}
 	// 成功消息一并落审计——从节点操作日志可见「配置已从数据库载入」等
@@ -326,8 +331,9 @@ func recordClusterServiceControlAudit(c *gin.Context, action, result string) {
 //
 // result 落盘前必须经 services.RedactCaddyAdminEndpoint：Caddy 应用失败的原文
 // 来自指向 admin 端点的 *url.Error（请求地址 + 拨号地址），而操作审计是全员
-// 可读面——把内部控制面地址与端口写给只读用户等于拓扑披露。返回给主节点
-// 管理员的响应仍保留原文（上方调用点直接回 err.Error()），排障契约不变。
+// 可读面——把内部控制面地址与端口写给只读用户等于拓扑披露。执行失败的 5xx
+// 响应为固定文案（本端点票据凭证可达，非 admin 会话），底层原文只进本审计
+// 与运行日志（见 ClusterServiceControl 失败分支）。
 func recordClusterServiceControlAuditBy(c *gin.Context, action, result, operator string) {
 	// action/operator 来自请求体，须先经 registerAuditField
 	// 清洗（去控制字符、截断 128B）再拼接，防伪造换行/超长注入审计详情。

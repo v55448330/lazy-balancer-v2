@@ -97,7 +97,7 @@ test('文档钉：信任侧冲突警告的门控位置与注释一致（computed
   const alert = section(page, 'const whitelistSectionAlert = computed<string>(', '  if (trust.length === 0)')
   assert.match(alert, /trustEnabledInEditor\.value \? mergeIpEntries/, '实现口径：信任关闭时条目零生效，阶段 0 恒启用')
   assert.match(page, /const trustEnabledInEditor = computed\(\(\) => trustEnabledForPolicyType\(editorPolicyType\.value, ipWhitelistEnabled\.value\)\)/, '告警/预览必须复用保存载荷同一谓词')
-  assert.match(page, /ipBlacklistSelf\.value, trustEnabledInEditor\.value\)\)/, 'Step 4 冲突检测的本策略允许侧同样走单源门')
+  assert.match(page, /ip_whitelist_enabled: trustEnabledInEditor\.value/, '保存载荷的信任启用态同样走单源门（Step 4 冲突死簇已退役）')
 })
 
 // 同一条不变量被两份 spec 逐字重复钉住时，改动要维护两处副本，而任何一侧的

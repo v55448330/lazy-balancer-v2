@@ -406,7 +406,9 @@ func InitTaskEngine(watchdogAdminURL, runtimeLogFile string) *taskengine.Engine 
 		normalizeUnregisteredThreatSourceSlots()
 	}
 
-	// ============ 循环（11）============
+	// ============ 循环（10）============
+	// 节标题=节内实数（四节同一惯例）；全局循环族 11=本节 10+runtime 的
+	// metrics-history-cleanup（文件头注册全集注释与标准文档 §2 同口径）。
 
 	// 看门狗：60s 一致性检查（漂移/恢复+小时级心跳——一致轮不逐轮记录）
 	watchdogAdminURLValue = watchdogAdminURL

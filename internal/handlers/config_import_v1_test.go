@@ -217,6 +217,7 @@ func TestImportV1Config_multiDomainServerNameJoinsWithoutEmptySegments(t *testin
 }
 
 func TestImportV1Config_cleansDisappearedRuleMetricsAndLogs(t *testing.T) {
+	withIsolatedGlobal(t)
 	// Given an old rule with metrics and log artifacts, plus unrelated global metrics.
 	h := newBackupTestHandlers(t)
 	gin.SetMode(gin.TestMode)

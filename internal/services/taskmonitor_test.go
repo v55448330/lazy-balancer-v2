@@ -137,3 +137,50 @@ func TestCollectEngineFamilies_logsWaitingCAQueryFailure(t *testing.T) {
 		t.Fatalf("恢复日志行数=%d, want 1:\n%s", got, buf.String())
 	}
 }
+
+// Given 配置上限=3；cert_jobs 三行未来退避窗口：超限 failed（attempts=3，
+// 窗口较近）/未超限 failed（attempts=1，窗口较远）/遗留 waiting_ca（NULL
+// attempts，窗口最远）。
+// When 聚合引擎任务族视图（cert-waiting-ca 的「下次 CA 可用时间」展示查询）。
+// Then 超限行不得进入展示（配置下调后该行不再被任何自动通道消费，仅手动
+// 重试可达——展示其重排时刻会误导运维等待）；未超限 failed 与遗留
+// waiting_ca 行照常展示，取未超限行中最早窗口（与 scanWaitingCACandidates/
+// certJobsActive 的 attempts 门同口径）。
+func TestCollectEngineFamilies_waitingCADisplaySkipsAttemptExhaustedRows(t *testing.T) {
+	te := newWireTestEngine(t)
+	te.SetRole(true)
+	if _, err := db.DB.Exec(`UPDATE global_config SET cert_renewal_attempts=3 WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
+	seedCertJobRowForTaskMonitor(t, "lb_wca_exhausted", "exhausted.example.test", "failed")
+	seedCertJobRowForTaskMonitor(t, "lb_wca_active", "active.example.test", "failed")
+	seedCertJobRowForTaskMonitor(t, "lb_wca_legacy", "legacy.example.test", "waiting_ca")
+	base := time.Now().UTC().Truncate(time.Second)
+	near := base.Add(1 * time.Hour).Format("2006-01-02 15:04:05")
+	mid := base.Add(2 * time.Hour).Format("2006-01-02 15:04:05")
+	far := base.Add(3 * time.Hour).Format("2006-01-02 15:04:05")
+	if _, err := db.DB.Exec(`UPDATE cert_jobs SET renewal_attempts=3, ca_available_after=? WHERE rule_id='lb_wca_exhausted'`, near); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB.Exec(`UPDATE cert_jobs SET renewal_attempts=1, ca_available_after=? WHERE rule_id='lb_wca_active'`, mid); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB.Exec(`UPDATE cert_jobs SET ca_available_after=? WHERE rule_id='lb_wca_legacy'`, far); err != nil {
+		t.Fatal(err)
+	}
+
+	info := findTaskInfo(t, collectEngineFamilies(te), "cert-waiting-ca")
+	want := base.Add(2 * time.Hour).In(CurrentLocation()).Format("2006-01-02 15:04:05")
+	if info.NextRunAt != want {
+		t.Fatalf("下次 CA 可用时间=%q, want %q（超限 failed 行的窗口不得展示；未超限 failed 与遗留 waiting_ca 照常）", info.NextRunAt, want)
+	}
+
+	// 边界形状：仅剩超限行时展示为空（「—」）——不得给出永不消费的自动重排时刻。
+	if _, err := db.DB.Exec(`DELETE FROM cert_jobs WHERE rule_id IN ('lb_wca_active','lb_wca_legacy')`); err != nil {
+		t.Fatal(err)
+	}
+	info = findTaskInfo(t, collectEngineFamilies(te), "cert-waiting-ca")
+	if info.NextRunAt != "" {
+		t.Fatalf("仅剩超限 failed 行时不得展示下次 CA 可用时间, got %q", info.NextRunAt)
+	}
+}

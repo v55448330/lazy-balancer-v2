@@ -83,6 +83,14 @@ func TestRuleEndpoint5xxBodiesHideInternalErrors(t *testing.T) {
 		{"securityiplists.go", "tryIPListHotPathApply", collect5xxErrorTextLeaks, "5xx"},
 		// IPv6 地理库开关 200 注记脱敏面（applyErr 不得直拼进成功响应）。
 		{"security.go", "SetIP2RegionV6Enabled", okFailureNoteLeaks, "oknote"},
+		// IPv6 地理库开关 5xx 写失败面（admin 组，未登记细节政策——固定文案）。
+		{"security.go", "SetIP2RegionV6Enabled", collect5xxErrorTextLeaks, "5xx"},
+		// 从节点服务控制（v1 票据凭证端点，集群对端可见）：执行失败 5xx 与
+		// 票据校验 5xx 同受扫描，不得直拼底层错误（admin 地址/exec 退出码）。
+		{"cluster_service.go", "ClusterServiceControl", collect5xxErrorTextLeaks, "5xx"},
+		// 管理面板 HTTPS 落库失败面（admin 组已登记细节政策，豁免同
+		// tryIPListHotPathApply；200 注记面不豁免）。
+		{"admintls.go", "UpdateAdminTLS", collect5xxErrorTextLeaks, "5xx"},
 	}
 	for _, target := range okNoteTargets {
 		parsedFile, err := parser.ParseFile(fset, target.file, nil, 0)
@@ -97,7 +105,7 @@ func TestRuleEndpoint5xxBodiesHideInternalErrors(t *testing.T) {
 			// admin 细节政策登记函数豁免 5xx 固定文案门（可判性门
 			// TestAdminBusiness5xxDetailPolicyIsExplicit 强制登记+路由组门）；
 			// 200 注记脱敏门（okFailureNoteLeaks）不豁免。
-			if target.kind == "5xx" && target.fname == "tryIPListHotPathApply" {
+			if target.kind == "5xx" {
 				if _, registered := adminBusiness5xxDetailFunctions[target.file+":"+target.fname]; registered {
 					continue
 				}
@@ -172,6 +180,10 @@ func f(c *gin.Context, err error, status int) {
 	// 非成功状态都不算「成功响应」。
 	c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 	c.JSON(http.StatusConflict, models.APIResponse{Code: 409, Message: "冲突：" + err.Error()})
+	// 504 与 500/502/503 同属 5xx 管辖（isInternalStatusExpr 含 504）——
+	// 状态集不对称会让 504 写点被本扫描双重管辖误报。
+	c.JSON(http.StatusGatewayTimeout, models.APIResponse{Code: 504, Message: "x: " + err.Error()})
+	c.JSON(504, models.APIResponse{Code: 504, Message: "x: " + err.Error()})
 }`
 	fset := token.NewFileSet()
 	parsed, err := parser.ParseFile(fset, "synthetic_ok.go", source, 0)
@@ -438,7 +450,7 @@ func isExplicitNonOKStatusExpr(expr ast.Expr) bool {
 		case "StatusBadRequest", "StatusUnauthorized", "StatusForbidden", "StatusNotFound",
 			"StatusConflict", "StatusGone", "StatusRequestEntityTooLarge", "StatusUnprocessableEntity",
 			"StatusTooManyRequests", "StatusInternalServerError", "StatusNotImplemented",
-			"StatusBadGateway", "StatusServiceUnavailable":
+			"StatusBadGateway", "StatusServiceUnavailable", "StatusGatewayTimeout":
 			return true
 		}
 		return false
@@ -447,7 +459,7 @@ func isExplicitNonOKStatusExpr(expr ast.Expr) bool {
 			return false
 		}
 		switch e.Value {
-		case "400", "401", "403", "404", "409", "410", "413", "422", "429", "500", "501", "502", "503":
+		case "400", "401", "403", "404", "409", "410", "413", "422", "429", "500", "501", "502", "503", "504":
 			return true
 		}
 		return false

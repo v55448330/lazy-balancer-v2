@@ -391,12 +391,6 @@ func parseGitHubTagFromLocation(location string) (string, error) {
 	return tag, nil
 }
 
-// fetchGitHubLatestTagFromAPI 直连 GitHub releases/latest API 解析 tag_name。
-// transport 报告失败是否值得经 GitHub 代理重试：Do() 错误、5xx、响应体读取
-// 中断，以及 403 未认证限流——代理查询的是 github.com 的 releases/latest 页面
-// 而非 api.github.com，可绕过 API 限流；其余 4xx 与 tag 解析失败不重试
-// 对 api.github.com 本身重试只会放大延迟）。
-
 // gitHubAPIToken 读取可选 GITHUB_TOKEN（global_config.github_token，
 // 2026-09-25 用户裁定）：未认证 GitHub API 限流 60/h/IP（共享出口 IP 常被打满
 // 致自动更新连日 403），令牌提升至 5000/h。仅用于
@@ -416,6 +410,12 @@ func gitHubAPIToken() string {
 	}
 	return token
 }
+
+// fetchGitHubLatestTagFromAPI 直连 GitHub releases/latest API 解析 tag_name。
+// transport 报告失败是否值得经 GitHub 代理重试：Do() 错误、5xx、响应体读取
+// 中断，以及 403 未认证限流与 401 令牌失效/作废——代理查询的是 github.com 的
+// releases/latest 页面而非 api.github.com，可绕过 API 限流与认证面失败；
+// 其余 4xx 与 tag 解析失败不重试（对 api.github.com 本身重试只会放大延迟）。
 func fetchGitHubLatestTagFromAPI(ctx context.Context, client *http.Client, apiURL string) (string, error, bool) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
 	if err != nil {

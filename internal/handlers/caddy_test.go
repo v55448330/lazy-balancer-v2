@@ -179,7 +179,7 @@ func TestGetCaddyStatus_reportsPidAndState(t *testing.T) {
 	response := httptest.NewRecorder()
 	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/status", nil))
 
-	// Then status=running 且 pid=首个存活进程（僵尸 10 被排除）
+	// Then status=running 且 pid=存活进程中的最小 pid（僵尸 10 被排除）
 	if response.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s, want 200", response.Code, response.Body.String())
 	}
@@ -193,7 +193,7 @@ func TestGetCaddyStatus_reportsPidAndState(t *testing.T) {
 		t.Fatalf("status=%q, want running", body.Data["status"])
 	}
 	if body.Data["pid"] != "686" {
-		t.Fatalf("pid=%q, want 686（首个非 Z 进程）", body.Data["pid"])
+		t.Fatalf("pid=%q, want 686（存活最小 pid，僵尸排除）", body.Data["pid"])
 	}
 }
 
@@ -905,6 +905,51 @@ func TestUpdateConfig_compoundFailureClassifiesByPreJoinSnapshot(t *testing.T) {
 	router := gin.New()
 	router.PUT("/config", h.UpdateConfig)
 	request := httptest.NewRequest(http.MethodPut, "/config", strings.NewReader(`{"source":"basic","proxy_dial_timeout":5}`))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d body=%s, want 500（复合故障按 join 前快照分类，回弹拒绝不得污染成 400）", response.Code, response.Body.String())
+	}
+}
+
+// 复合故障（apply 传输失败 + 回弹被 Caddy 拒绝）的 PutCaddyConfig 镜像钉：
+// 拒绝分类只查 join 前快照——restoreErr 携带的 ConfigRejectedError 不得污染
+// 分类，必须 500 系统失败而非 400 配置拒绝（与 UpdateConfig 同款逻辑同口径）。
+// 基线钉（既有正确行为）：变异自证见交付报告（join 后分类改坏→本用例红）。
+func TestPutCaddyConfig_compoundFailureClassifiesByPreJoinSnapshot(t *testing.T) {
+	h := newBackupTestHandlers(t)
+	if _, err := db.DB.Exec("UPDATE global_config SET caddy_config='old-config' WHERE id=1"); err != nil {
+		t.Fatalf("seed config: %v", err)
+	}
+	var loads atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/config/":
+			_, _ = w.Write([]byte(`{"old":true}`))
+		case r.Method == http.MethodPost && r.URL.Path == "/load":
+			if loads.Add(1) == 1 {
+				// 首次 apply：500 系统故障（非 ConfigRejected）。
+				w.WriteHeader(http.StatusInternalServerError)
+				_, _ = w.Write([]byte(`{"error":"transport boom"}`))
+				return
+			}
+			// 回弹：400 配置拒绝（restoreErr 携带 ConfigRejectedError）。
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"error":"restore rejected"}`))
+		default:
+			w.WriteHeader(http.StatusOK)
+		}
+	}))
+	defer srv.Close()
+	h.caddyService = services.NewCaddyService(srv.URL)
+	// admin 自锁护栏按 h.cfg.CaddyAdminURL 校验——指向同一桩服务器。
+	h.cfg.CaddyAdminURL = srv.URL
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.PUT("/caddy", h.PutCaddyConfig)
+	adminListen := strings.TrimPrefix(srv.URL, "http://")
+	request := httptest.NewRequest(http.MethodPut, "/caddy", strings.NewReader(`{"content":"{\"admin\":{\"listen\":\"`+adminListen+`\"},\"new\":true}"}`))
 	request.Header.Set("Content-Type", "application/json")
 	response := httptest.NewRecorder()
 	router.ServeHTTP(response, request)

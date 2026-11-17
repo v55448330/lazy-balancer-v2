@@ -62,8 +62,9 @@ var (
 	humanEventShutdownLost  atomic.Int64
 	// worker 可停止化（测试隔离）：sync.Once 常驻 goroutine 不可停，shuffle
 	// 顺序下前序排空测试启动的 worker 会与停机收尾钉测竞争消费队列。mutex+
-	// stop chan 支持测试停 worker 隔离 FlushHumanEvents；生产语义不变（首次
-	// 上报启动单 worker 串行投递，Cleanup 不停 worker——进程级单例）。
+	// stop chan 支持测试停 worker 隔离 FlushHumanEvents；生产侧首次上报启动
+	// 单 worker 串行投递（进程级单例），Cleanup/FlushHumanEvents 经
+	// stopHumanEventWorker 停 worker 后排空，后续上报自动重启。
 	humanEventWorkerMu   sync.Mutex
 	humanEventWorkerStop chan struct{}
 )
@@ -152,8 +153,8 @@ func reportHumanEvent(ruleID, ip, method, uri, kind string) {
 }
 
 // startHumanEventWorker 幂等启动单 worker（mutex 守护，stop chan 标记运行态）。
-// 每次启动重置退出信号（上一代 worker 的 exited 已被 stopHumanEventWorker
-// 等待并关闭）——停机收尾停 worker 后后续上报重启时信号必须新鲜。
+// 每次启动 make 新鲜退出信号并与 stop chan 一同在锁内登记、作为参数交给本代
+// worker——停机收尾停 worker 后后续上报重启时信号必须新鲜，且各代互不串用。
 func startHumanEventWorker() {
 	humanEventWorkerMu.Lock()
 	defer humanEventWorkerMu.Unlock()
@@ -161,18 +162,28 @@ func startHumanEventWorker() {
 		return // 已在运行
 	}
 	stop := make(chan struct{})
+	exited := make(chan struct{})
 	humanEventWorkerStop = stop
-	humanEventWorkerExited = make(chan struct{})
-	go humanEventWorkerLoop(stop)
+	humanEventWorkerExited = exited
+	go humanEventWorkerLoop(stop, exited)
 }
 
-// humanEventWorkerExited 由 worker goroutine 退出时关闭（defer）：停机收尾
-// 停 worker 后等它，确保「已取出未投递」的在途事件落定（deliver 的失败计数
-// 先于收尾排空完成），shutdown_lost 只计真正滞留队列的尾部——对账不重不漏。
+// humanEventWorkerExited 当前代 worker 的退出信号（start 锁内 make 登记，
+// worker goroutine 退出时 defer close 传入的同一 chan）。stopHumanEventWorker
+// 必须在锁内把它与 stop chan 一同捕获为局部引用再锁外等待——若锁外读包级 var，
+// 并发 start 会在「置 nil 释放锁」与「等待」之间替换它，stop 死等新代信号。
+// 等待退出确保「已取出未投递」的在途事件落定（deliver 的失败计数先于收尾排空
+// 完成），shutdown_lost 只计真正滞留队列的尾部——对账不重不漏。
 var humanEventWorkerExited = make(chan struct{})
 
-func humanEventWorkerLoop(stop chan struct{}) {
-	defer close(humanEventWorkerExited)
+// humanEventStopWaitHook 测试缝（生产恒 nil，不参与任何生产路径；与
+// timeNow/initClientWithURL 同款测试注入约定）：stop 释放锁后、close(stop)/
+// 等待退出信号前调用——正是并发 start 可插入替换退出信号的窗口。确定性交错
+// 钉测在此注入并发 start，复现「锁外等待被替换的退出信号」死等形态。
+var humanEventStopWaitHook func()
+
+func humanEventWorkerLoop(stop, exited chan struct{}) {
+	defer close(exited)
 	for {
 		select {
 		case <-stop:
@@ -187,22 +198,24 @@ func humanEventWorkerLoop(stop chan struct{}) {
 	}
 }
 
-// stopHumanEventWorker 停止常驻 worker 并等待其退出（幂等；无 worker=仅复位
-// 退出信号）。停机收尾与测试隔离共用：先停消费再排空，杜绝 worker 与收尾
-// 竞争消费队列导致 shutdown_lost 计数失真。
+// stopHumanEventWorker 停止常驻 worker 并等待其退出（幂等；无 worker=直接返回）。
+// 停机收尾与测试隔离共用：先停消费再排空，杜绝 worker 与收尾竞争消费队列导致
+// shutdown_lost 计数失真。stop+exited 在锁内一并捕获为局部引用，锁外 close(stop)
+// 后等待的是**本代** exited——并发 start 重启新 worker 不影响本次等待。退出信号
+// 由 start 每次 make 新鲜值，stop 不复位（复位冗余且是「等待被替换信号」竞态源）。
 func stopHumanEventWorker() {
 	humanEventWorkerMu.Lock()
 	stop := humanEventWorkerStop
+	exited := humanEventWorkerExited
 	humanEventWorkerStop = nil
 	humanEventWorkerMu.Unlock()
+	if humanEventStopWaitHook != nil {
+		humanEventStopWaitHook()
+	}
 	if stop != nil {
 		close(stop)
-		<-humanEventWorkerExited
+		<-exited
 	}
-	// 复位退出信号供下一次 worker 启动（无论本次是否有 worker 在跑）。
-	humanEventWorkerMu.Lock()
-	humanEventWorkerExited = make(chan struct{})
-	humanEventWorkerMu.Unlock()
 }
 
 // FlushHumanEvents 停机收尾：把队列内未投递的尾部事件计入 shutdown_lost

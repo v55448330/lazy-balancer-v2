@@ -106,6 +106,7 @@ func TestRetryCertJob_deployLifecycleWithoutMaterialFallsBackToIssuance(t *testi
 // 删除」时删除方持全局锁等该 per-job 锁，全局面（规则写/Caddy 启停/配置导入）
 // 最长排队 30s。登记必须与 IssueCertificate「锁内推进窗口、锁外登记」同构。
 func TestRetryCertJob_registersDeploymentOutsideOperationLock(t *testing.T) {
+	withIsolatedGlobal(t)
 	h := newBackupTestHandlers(t)
 	services.ResetCAQueueManagerForTest()
 	t.Cleanup(services.ResetCAQueueManagerForTest)

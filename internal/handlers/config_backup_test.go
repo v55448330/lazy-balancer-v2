@@ -705,22 +705,11 @@ func TestConfigBackup_exportsVersionTablesAndImportSkips(t *testing.T) {
 
 func TestImportConfigBackup_clamps_excessive_jwt_expiration(t *testing.T) {
 	h := newBackupTestHandlers(t)
-	completeTables := make(map[string][]map[string]any, len(configBackupTables))
-	for _, table := range configBackupTables {
-		completeTables[table] = []map[string]any{}
+	completeTables := map[string][]map[string]any{
+		"users": {{"id": 1, "username": "admin", "password_hash": "hash", "role": "admin", "is_enabled": 1}},
 	}
-	completeTables["users"] = []map[string]any{{"id": 1, "username": "admin", "password_hash": "hash", "role": "admin", "is_enabled": 1}}
 	importCfg := map[string]any{"jwt_expire_minutes": 999999}
-	backupPayload := configBackup{
-		Meta:   configBackupMeta{App: "lazy-balancer-v2", Version: 2, ExportedAt: "2026-08-19T00:00:00Z"},
-		Config: importCfg,
-		Tables: completeTables,
-	}
-	backupPayload.Meta.Checksum = checksumBackupPayload(t, completeTables, importCfg)
-	body, err := json.Marshal(backupPayload)
-	if err != nil {
-		t.Fatal(err)
-	}
+	body := []byte(buildBackup(t, backupFixtureOptions{Tables: completeTables, Config: importCfg, FillAll: true}))
 	router := gin.New()
 	router.POST("/config/import", h.ImportConfigBackup)
 	response := httptest.NewRecorder()
@@ -753,23 +742,12 @@ func TestImportConfigBackup_ignoresDeadMetricsRetentionDaysKey(t *testing.T) {
 			preserveApplicationLogLevel(t, "")
 			// Given
 			h := newBackupTestHandlers(t)
-			completeTables := make(map[string][]map[string]any, len(configBackupTables))
-			for _, table := range configBackupTables {
-				completeTables[table] = []map[string]any{}
+			completeTables := map[string][]map[string]any{
+				"users": {{"id": 1, "username": "admin", "password_hash": "hash", "role": "admin", "is_enabled": 1}},
 			}
-			completeTables["users"] = []map[string]any{{"id": 1, "username": "admin", "password_hash": "hash", "role": "admin", "is_enabled": 1}}
 			// 死键旁带一个真实键：导入被死键卡住时该键不会落库，断言才有判别力。
 			importCfg := map[string]any{"metrics_retention_days": item.value, "log_level": "warn"}
-			backupPayload := configBackup{
-				Meta:   configBackupMeta{App: "lazy-balancer-v2", Version: 2, ExportedAt: "2026-08-19T00:00:00Z"},
-				Config: importCfg,
-				Tables: completeTables,
-			}
-			backupPayload.Meta.Checksum = checksumBackupPayload(t, completeTables, importCfg)
-			body, err := json.Marshal(backupPayload)
-			if err != nil {
-				t.Fatal(err)
-			}
+			body := []byte(buildBackup(t, backupFixtureOptions{Tables: completeTables, Config: importCfg, FillAll: true}))
 			router := gin.New()
 			router.POST("/config/import", h.ImportConfigBackup)
 
@@ -801,22 +779,11 @@ func TestImportConfigBackupIgnoresRetiredGlobalDNSProvider(t *testing.T) {
 		t.Run(fmt.Sprintf("%T", value), func(t *testing.T) {
 			preserveApplicationLogLevel(t, "")
 			h := newBackupTestHandlers(t)
-			completeTables := make(map[string][]map[string]any, len(configBackupTables))
-			for _, table := range configBackupTables {
-				completeTables[table] = []map[string]any{}
+			completeTables := map[string][]map[string]any{
+				"users": {{"id": 1, "username": "admin", "password_hash": "hash", "role": "admin", "is_enabled": 1}},
 			}
-			completeTables["users"] = []map[string]any{{"id": 1, "username": "admin", "password_hash": "hash", "role": "admin", "is_enabled": 1}}
 			importCfg := map[string]any{"dns_provider": value, "log_level": "warn"}
-			backupPayload := configBackup{
-				Meta:   configBackupMeta{App: "lazy-balancer-v2", Version: 2, ExportedAt: "2026-08-19T00:00:00Z"},
-				Config: importCfg,
-				Tables: completeTables,
-			}
-			backupPayload.Meta.Checksum = checksumBackupPayload(t, completeTables, importCfg)
-			body, err := json.Marshal(backupPayload)
-			if err != nil {
-				t.Fatal(err)
-			}
+			body := []byte(buildBackup(t, backupFixtureOptions{Tables: completeTables, Config: importCfg, FillAll: true}))
 			router := gin.New()
 			router.POST("/config/import", h.ImportConfigBackup)
 			response := httptest.NewRecorder()
@@ -3341,13 +3308,26 @@ func TestImportAutoBackupResetNeeded(t *testing.T) {
 
 // ── v2 备份 JSON 夹具 ──
 //
-// 这是全包唯一的 v2 备份 JSON 构造实现。历史并存的 9 个各自命名 *BackupJSON
-// 构造器已全部收敛为本构造器的薄委托（legacyBackupJSON/configBackupJSON/
-// tableSetBackupJSON/completeBackupJSONOmit/noIPListsBackupJSON/
-// sectionsBackupJSON/portsBackupJSON——签名兼容存量调用点，实现单源）；
-// 新用例直接用 backupFixtureOptions，不得再建平行构造实现（事故：缺
-// exported_at/checksum 导致全部早退，断言只命中「非 true」的假绿——见
-// v2BackupBody 上方注释）。
+// 这是全包唯一的**有效 v2 备份**构造实现（JSON 形态 buildBackup + 结构体
+// 形态 buildBackupStruct，装配/checksum 同源）。历史并存的各自命名构造器
+// 已全部收敛为薄委托（legacyBackupJSON/configBackupJSON/tableSetBackupJSON/
+// completeBackupJSON/completeBackupJSONOmit/noIPListsBackupJSON/
+// sectionsBackupJSON/portsBackupJSON/backupJSONFixture/
+// autobanRuntimeImportBackup/ruleTableBuildBackup——签名兼容存量调用点，
+// 实现单源）；新用例直接用 backupFixtureOptions，不得再建平行构造实现
+//（事故：缺 exported_at/checksum 导致全部早退，断言只命中「非 true」的
+// 假绿——见 v2BackupBody 上方注释）。
+//
+// 豁免面（有意保留的 configBackup 直接构造，不属平行实现）：
+//   - v2BackupBody：故意畸形 meta（version 越界/缺席 checksum）契约用例；
+//   - legacyChecksummedBackup（caddy_regression_01）：legacy 仅表 checksum
+//     变体（参数化 version/exportedAt，新旧校验和口径对照）；
+//   - v1 历史形态（Version:1，无 exported_at/checksum 契约）：
+//     config_backup_test 两处 + config_backup_regression_02 一处；
+//   - 校验链直测结构体（无 meta，不走 JSON 序列化）：builtin_role_gate/
+//     bindings_revalidate/import_gates/import_normalization/trustedproxy_refs/
+//     import_rule_reference_recheck/import_window_regression_01/
+//     remediation_regression_04。
 //
 // 现在所有形态都由 backupFixtureOptions 显式表达：
 //   - 精确表集（真实分类导出/迟到表形态）：只给 Tables，FillAll=false；
@@ -3383,6 +3363,15 @@ type backupFixtureOptions struct {
 // buildBackup 序列化一份 V2 备份 JSON（checksum 与真实导出口径一致）。
 func buildBackup(t *testing.T, options backupFixtureOptions) string {
 	t.Helper()
+	return marshalJSONForTest(t, buildBackupStruct(t, options))
+}
+
+// buildBackupStruct 是 buildBackup 的结构体形态单源——直测校验链
+// （validateImportBackupChain 等不走 HTTP 反序列化的用例）需要 Go 类型
+// 可控的 configBackup 结构体（布尔列可注入字符串等畸形类型），JSON 往返
+// 会丢失类型形态，故保留结构体出口；装配/checksum 逻辑与 JSON 形态同源。
+func buildBackupStruct(t *testing.T, options backupFixtureOptions) configBackup {
+	t.Helper()
 	tables := make(map[string][]map[string]any, len(configBackupTables))
 	if options.FillAll {
 		for _, table := range configBackupTables {
@@ -3414,5 +3403,5 @@ func buildBackup(t *testing.T, options backupFixtureOptions) string {
 		Config: config,
 		Tables: tables,
 	}
-	return marshalJSONForTest(t, backup)
+	return backup
 }

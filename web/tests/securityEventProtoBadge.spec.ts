@@ -24,9 +24,11 @@ test('事件列表：规则列不再放 TCP 徽标', () => {
 test('事件列表：方法列两协议统一 el-tag 徽标（上一版样式，翻页飘移由 disable-transitions 根治）', () => {
   const methodColumn = section(events, `:label="t('app.security.events.colMethod')"`, 'label="URI"')
   assert.match(methodColumn, /row\.event_type === 'tcp'/)
-  assert.match(methodColumn, /class="proto-tcp-tag event-method-tag">TCP<\/el-tag>/)
+  assert.match(methodColumn, /class="proto-tcp-tag">TCP<\/el-tag>/)
   assert.match(methodColumn, /disable-transitions/, '翻页飘移（挂载动画）由 disable-transitions 根治')
   assert.doesNotMatch(methodColumn, />TCP<\/el-tag>—/, '无「—」占位符')
+  // 定宽语义死类已删除：全仓无 .event-method-tag 样式定义，不得回流
+  assert.doesNotMatch(events, /event-method-tag/)
 })
 
 test('触发详情弹框：命中概览显示协议徽标（TCP 青 / HTTP 蓝）', () => {

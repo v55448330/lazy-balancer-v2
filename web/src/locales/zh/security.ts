@@ -467,6 +467,11 @@ export default {
      "stackTip": "挑战结果分布（本进程累计）：通过 / 失败 / 未完成",
      "resultTitle": "累计结果",
      "total": "共 {n} 次",
+     "eventsLost": "人机事件丢失 {total}（丢弃 {dropped}/投递失败 {failed}/停机 {shutdown}）",
+     "triggerTitle": "CC 触发分布（本进程累计）",
+     "triggerRps": "突刺",
+     "trigger4xx": "4xx激增",
+     "triggerSession": "会话异常",
      "liveButton": "实时挑战",
      "liveTitle": "实时挑战监控",
      "liveAuto": "自动刷新",
@@ -681,10 +686,7 @@ export default {
      "perfWarn": "已关联规则存在绑定 3 条以上策略：处理链逐层叠加，可能影响转发性能",
      "pickPlaceholder": "选择要关联的负载均衡规则",
      "relatedCount": "已关联 {n} 条规则",
-     "tcpWarn": "TCP 规则拦截=断连（无拦截页）；CDN 回源需开启 PROXY protocol",
-     "deadPageHint": "策略「{name}」配置的拦截页面已删除或内容为空，该策略触发时将显示兜底策略的拦截页",
-     "mixedPagesHint": "这些策略的拦截页/状态码不同——各策略触发时显示各自的拦截页，未配置的策略触发时兜底显示绑定链首个有页策略的页",
-     "tcpHint": "拦截=断连，无拦截页；CDN 回源需开启 PROXY protocol"
+     "tcpWarn": "TCP 规则拦截=断连（无拦截页）；CDN 回源需开启 PROXY protocol"
     },
     "common": {
      "delete": "删除",
@@ -890,9 +892,7 @@ export default {
      "labelAllow": "允许 IP",
      "labelBypass": "免检测 IP",
      "labelDeny": "拒绝 IP",
-     "listFallback": "IP 列表",
-     "allowShort": "白名单",
-     "bypassShort": "免检测"
+     "listFallback": "IP 列表"
     },
     "geo": {
     provinces: {
@@ -1167,16 +1167,10 @@ export default {
     "conflict": {
      "contradicts": "与规则组选择矛盾（排除优先）",
      "redundant": "冗余：排除优先生效",
-     "addrAclDeny": "地址 {addr} 在「{allow}」的访问控制名单中、同时在「{deny}」的黑名单中——{detail}",
-     "addrTrustDeny": "地址 {addr} 在「{allow}」的信任名单中、同时在「{deny}」的黑名单中——{detail}",
      "allGroups": "全部规则组",
-     "bypassMiddle": "「{name}」为{mode}模式且夹在拦截策略中间：免检测/白名单仅作用于自身引擎，不会为前后策略放行流量，各策略引擎独立判定、位置不影响拦截效果；如需对特定来源整体放行，请使用免检测名单",
-     "crsOverlap": "「{a}」与「{b}」加载了相同的 CRS 规则组（{groups}），同一请求将被重复检测，建议只保留一个",
-     "duplicateRule": "自定义规则「{rule}」被 {owners} 重复引用，同一请求会被重复计分/处理，建议只保留一个",
      "fromRefLists": "（来自引用列表{names}）",
      "ifCoBoundSuffix": "（若两策略绑定同一规则）",
      "moreSuffix": "；共 {n} 条类似冲突",
-     "passBlock": "「{earlier}」的放行型自定义规则仅在本策略引擎内跳过匹配、不阻断请求，「{later}」的拦截型规则仍会独立执行；需注意前位拦截策略一旦命中将中断整条链，后位策略只处理前位放行的流量",
      "selfAclAllow": "地址 {addr} 在「本策略」的访问控制名单中{src}、同时在「{peer}」的访问控制允许名单中——{detail}{suffix}",
      "selfAclDeny": "地址 {addr} 在「本策略」的访问控制名单中、同时在「{peer}」的黑名单中——{detail}{suffix}",
      "selfAclTrust": "地址 {addr} 在「本策略」的访问控制名单中{src}、同时在「{peer}」的信任名单中——{detail}{suffix}",

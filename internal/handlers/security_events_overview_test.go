@@ -408,6 +408,34 @@ func TestCategorizeAttack_familyMapping(t *testing.T) {
 	}
 }
 
+// 全数字守卫同族收敛：非数字 5 位/≥7 位 1 开头形态不得仅凭长度/前缀归
+// 自定义规则族——categorizeAttack 的快速路径/合成支与 attackFamilyClassOf
+// （stageCategorizeAttack 消费）必须同口径，否则同一带外形态在事件列表与
+// 阶段总览两视图分叉。发射侧只产规范数字 id，本钉覆盖带外/导入脏数据。
+func TestCategorizeAttack_nonDigitFormsAgreeAcrossViews(t *testing.T) {
+	for _, tc := range []struct {
+		triggered string
+		msg       string
+		want      string
+		stageWant string
+	}{
+		{"abcde", "", "其他", "其他"},
+		{"12x45", "", "其他", "其他"},
+		{"1abcdef", "", "其他", "其他"},
+		{"100000x", "", "其他", "其他"},
+		// 规范数字形态回归：两视图口径不变。
+		{"10001", "", "自定义规则", "WAF"},
+		{"1000001", "", "自定义规则", "WAF"},
+	} {
+		if got := categorizeAttack(tc.triggered, tc.msg); got != tc.want {
+			t.Errorf("categorizeAttack(%q) = %q, want %q", tc.triggered, got, tc.want)
+		}
+		if got := stageCategorizeAttack(tc.triggered, tc.msg); got != tc.stageWant {
+			t.Errorf("stageCategorizeAttack(%q) = %q, want %q", tc.triggered, got, tc.stageWant)
+		}
+	}
+}
+
 func TestGetSecurityOverview_returnsStoredCRSVersionAndUpdateStatus(t *testing.T) {
 	// Given a stored CRS version row
 	setupSecurityPolicyTestDB(t)

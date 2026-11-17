@@ -324,11 +324,12 @@ func recidivismByIdentity(t *testing.T, records []AutobanRecidivismRecord, ident
 	return AutobanRecidivismRecord{}
 }
 
-// Given 名单三条目：限时（未到期）/永久（无到期）/已到期；累犯表对应三身份
-// （含 IPv6 /64 CIDR 条目值与裸身份键的归一匹配）。
+// Given 名单四条目：限时（未到期）/永久（无到期）/已到期/IPv6 /64 CIDR
+// 限时；累犯表五身份——四身份对应条目（含 IPv6 /64 CIDR 条目值与裸身份键
+// 的归一匹配），第五身份名单无条目。
 // When ListAutobanRecidivism。
 // Then ban_status 三态：timed+到期时刻透传 / permanent+空到期 / none（到期
-// 条目与生效面同口径不算封禁中）。
+// 条目与名单无条目均按未封禁呈现，与生效面同口径）。
 func TestListAutobanRecidivism_banStatusJoinsActiveEntries(t *testing.T) {
 	installAutobanFixture(t, "2026-11-15 10:00:00")
 	seedAutobanRecidivismRows(t,

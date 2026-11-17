@@ -18,8 +18,6 @@ func portsBackupJSON(t *testing.T, sections []string, tables map[string][]map[st
 	return buildBackup(t, backupFixtureOptions{Sections: sections, Tables: tables, Config: cfg})
 }
 
-// postValidateString 走预览端点并解码响应(导入/预览双路径同序钉板)。
-
 // badPortRuleRowShared 监听端口越界的坏规则行(validateV2BackupRules 必拒)。
 func badPortRuleRowShared() map[string]any {
 	return map[string]any{
