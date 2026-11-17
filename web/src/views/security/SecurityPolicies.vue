@@ -694,6 +694,7 @@
               <!-- 异常阈值：仅「仅异常流量」展开（always=force 恒挑战，阈值不参与）。 -->
               <template v-if="ccIntervention === 'anomaly'">
                 <el-divider>{{ t('app.security.policies.human.ccSection') }}</el-divider>
+                <div class="form-tip-inline" style="margin: -6px 0 10px">{{ t('app.security.policies.human.ccEvalTip') }}</div>
                 <el-form-item :label="t('app.security.policies.human.ccRpsLabel')">
                   <el-input-number v-model="form.cc_rps_limit" :min="1" :max="100000" controls-position="right" style="width: 120px" />
                   <span class="form-tip-inline">{{ t('app.security.policies.human.ccRpsPer') }}</span>

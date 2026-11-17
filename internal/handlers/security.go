@@ -2595,14 +2595,14 @@ func (h *Handlers) DeleteSecurityPolicy(c *gin.Context) {
 	})
 }
 
-// maxBindingsPerRule 单规则安全策略绑定上限（2026-09-21 用户裁定 5→8）：所有写
+// maxBindingsPerRule 单规则安全策略绑定上限（2026-11-18 用户裁定 8→10）：所有写
 // 路径同源此常量——BindRuleToPolicy additive、SetRuleSecurityPolicies 原子替换、
 // BatchBindSecurityPolicies 提交集与 merge 合并、SplitSecurityPolicy 重映射、
 // BulkUpdatePolicyBindings 的 bind 侧（补齐——此前 bulk 缺此门）。
 // 前端 web/src/utils/securityStages.ts 的 MAX_POLICIES_PER_RULE（SecurityBindingEditor/
 // SecurityPolicies 消费）与 mcpserver setRuleSecurityPoliciesSchema 的 maxItems
 // 为镜像口径，调整时须同步。
-const maxBindingsPerRule = 8
+const maxBindingsPerRule = 10
 
 // maxBatchBindRules 批量绑定端点（POST /security/policies/batch-bind）单次规则
 // 数上限：与 BulkUpdatePolicyBindings 的 100 同口径，

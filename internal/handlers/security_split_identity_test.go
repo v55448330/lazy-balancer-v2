@@ -22,9 +22,9 @@ func TestSplitSecurityPolicy_retryConflictsOnEditedStage2CCConfig(t *testing.T) 
 	setupSecurityPolicyTestDB(t)
 	router := splitRouter(t)
 	mixedID := seedSplitFixture(t)
-	// lb_s1 再绑 7 条其他策略（含原混合共 8 条）→ 首轮 7+3=10 超上限被跳过，
+	// lb_s1 再绑 9 条其他策略（含原混合共 10 条）→ 首轮 10+3=13 超上限被跳过，
 	// 原策略保留（可重试形态）。
-	for i := range 7 {
+	for i := range 9 {
 		res, err := db.DB.Exec(`INSERT INTO security_policies (name,mode,policy_type,enabled) VALUES (?, 'off', 'stage3', 1)`, "cc-retry-other-"+strconv.Itoa(i))
 		if err != nil {
 			t.Fatal(err)
@@ -81,7 +81,7 @@ func TestSplitSecurityPolicy_retryConflictsOnEditedStage2HumanConfig(t *testing.
 	setupSecurityPolicyTestDB(t)
 	router := splitRouter(t)
 	mixedID := seedSplitFixture(t)
-	for i := range 7 {
+	for i := range 9 {
 		res, err := db.DB.Exec(`INSERT INTO security_policies (name,mode,policy_type,enabled) VALUES (?, 'off', 'stage3', 1)`, "human-retry-other-"+strconv.Itoa(i))
 		if err != nil {
 			t.Fatal(err)

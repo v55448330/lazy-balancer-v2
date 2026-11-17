@@ -160,62 +160,62 @@ func seedBinding(t *testing.T, caddyID string, policyID int) {
 	}
 }
 
-// bind 侧 maxBindingsPerRule 门——规则现有绑定数（不含本策略）≥8 时
+// bind 侧 maxBindingsPerRule 门——规则现有绑定数（不含本策略）≥10 时
 // 再 bind 新策略 → 400，且不写入、零重载（与单条 bind / batch-bind 端点同源）。
 func TestBulkUpdatePolicyBindings_enforcesRuleBindingLimit(t *testing.T) {
 	setupSecurityPolicyTestDB(t)
 	router, loads := newBulkBindingsRouter(t)
 	seedHTTPRule(t, "lb_bulk_cap")
-	for id := 1; id <= 8; id++ {
+	for id := 1; id <= 10; id++ {
 		seedPolicyWithType(t, id, fmt.Sprintf("cap-%d", id), "stage3")
 		seedBinding(t, "lb_bulk_cap", id)
 	}
-	seedPolicyWithType(t, 9, "cap-target", "stage3")
+	seedPolicyWithType(t, 11, "cap-target", "stage3")
 	baseline := loads.Load()
 
-	recorder := postJSON(t, router, "/security/policies/9/bindings/bulk", map[string]any{
+	recorder := postJSON(t, router, "/security/policies/11/bindings/bulk", map[string]any{
 		"bind":   []string{"lb_bulk_cap"},
 		"unbind": []string{},
 	})
 	if recorder.Code != http.StatusBadRequest {
-		t.Fatalf("status=%d body=%s, want 400（已达 8 条上限）", recorder.Code, recorder.Body.String())
+		t.Fatalf("status=%d body=%s, want 400（已达 10 条上限）", recorder.Code, recorder.Body.String())
 	}
-	assertIDSlice(t, queryBoundPolicyIDs(t, "lb_bulk_cap"), []int{1, 2, 3, 4, 5, 6, 7, 8})
+	assertIDSlice(t, queryBoundPolicyIDs(t, "lb_bulk_cap"), []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10})
 	if n := loads.Load() - baseline; n != 0 {
 		t.Fatalf("rejected bulk must not reload caddy, got %d extra loads", n)
 	}
 }
 
 // 存量超限 + 已绑定本策略：bulk 重复提交本策略必须幂等 200（与单条 bind
-// 同口径）。旧实现按「不含本策略的兄弟绑定数≥8」直接 400，导致历史超限规则
+// 同口径）。旧实现按「不含本策略的兄弟绑定数≥10」直接 400，导致历史超限规则
 // 无法经 bulk 保存，且同批无关规则变更整体失败。
 func TestBulkUpdatePolicyBindings_idempotentWhenAlreadyBoundAndOverLimit(t *testing.T) {
 	setupSecurityPolicyTestDB(t)
 	router, loads := newBulkBindingsRouter(t)
 	seedHTTPRule(t, "lb_bulk_legacy")
-	for id := 1; id <= 8; id++ {
+	for id := 1; id <= 10; id++ {
 		seedPolicyWithType(t, id, fmt.Sprintf("legacy-%d", id), "stage3")
 		seedBinding(t, "lb_bulk_legacy", id)
 	}
-	seedPolicyWithType(t, 9, "legacy-target", "stage3")
-	seedBinding(t, "lb_bulk_legacy", 9) // 存量 9 条绑定（超 8 上限），本策略已绑定
+	seedPolicyWithType(t, 11, "legacy-target", "stage3")
+	seedBinding(t, "lb_bulk_legacy", 11) // 存量 11 条绑定（超 10 上限），本策略已绑定
 	baseline := loads.Load()
 
-	recorder := postJSON(t, router, "/security/policies/9/bindings/bulk", map[string]any{
+	recorder := postJSON(t, router, "/security/policies/11/bindings/bulk", map[string]any{
 		"bind":   []string{"lb_bulk_legacy"},
 		"unbind": []string{},
 	})
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s, want 200（已绑定本策略 = 幂等，上限门不适用）", recorder.Code, recorder.Body.String())
 	}
-	assertIDSlice(t, queryBoundPolicyIDs(t, "lb_bulk_legacy"), []int{1, 2, 3, 4, 5, 6, 7, 8, 9})
+	assertIDSlice(t, queryBoundPolicyIDs(t, "lb_bulk_legacy"), []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11})
 	if n := loads.Load() - baseline; n != 1 {
 		t.Fatalf("幂等 bulk 仍走单次渲染（无实变），loads delta=%d want 1", n)
 	}
 
 	// 对照：同一规则 bind 一个「未绑定」的新策略仍必须被上限拒绝。
-	seedPolicyWithType(t, 10, "legacy-new", "stage3")
-	recorder = postJSON(t, router, "/security/policies/10/bindings/bulk", map[string]any{
+	seedPolicyWithType(t, 12, "legacy-new", "stage3")
+	recorder = postJSON(t, router, "/security/policies/12/bindings/bulk", map[string]any{
 		"bind":   []string{"lb_bulk_legacy"},
 		"unbind": []string{},
 	})

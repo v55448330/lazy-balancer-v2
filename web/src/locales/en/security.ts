@@ -1009,6 +1009,7 @@ export default {
     },
     "human": {
       "ccSection": "Anomaly thresholds (spike / 4xx / multi-UA)",
+      "ccEvalTip": "Any one of the three conditions triggers the challenge (OR logic, not all); set a threshold to 0 or turn off session anomaly to disable that check",
       "ccNeedsHuman": "CC detection is effective only while human verification is on: it is currently off, so the spike/4xx/multi-UA thresholds will never issue a challenge (saving is unaffected; takes effect once human verification is enabled).",
       "challengePageTip": "The challenge page must contain the widget placeholder for the selected verification type; the built-in page already includes it. For a custom page, insert the matching widget in the block page editor.",
       "challengePageNeedsWidget": "The selected block page does not contain the widget placeholder for the selected verification type; insert the matching widget in the block page editor first.",

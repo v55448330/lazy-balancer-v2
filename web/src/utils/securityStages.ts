@@ -1419,7 +1419,7 @@ export const SECURITY_BULK_LIMITS = { policyBindings: 100 } as const
 // 单规则可绑定的策略条数上限（后端 maxBindingsPerRule=8 的前端单源镜像）：
 // SecurityBindingEditor（规则侧计数/选择器上限）与 SecurityPolicies（向导
 // 冲突检测注释/夹紧）共用，前两份本地常量各写一遍，后端调整时易漏改。
-export const MAX_POLICIES_PER_RULE = 8
+export const MAX_POLICIES_PER_RULE = 10
 
 // ── TCP（L4）绑定阶段门（阶段 0/1 放开） ──
 // TCP 规则仅可绑定阶段 0（信任名单）/阶段 1（IP 访问控制/地域拦截）单职策略；
