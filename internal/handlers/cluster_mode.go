@@ -35,7 +35,7 @@ func (h *Handlers) SetClusterMode(c *gin.Context) {
 		clusterError(c, http.StatusServiceUnavailable, "同步服务未初始化", nil)
 		return
 	}
-	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 16<<10)
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, clusterMachineBodyLimitBytes)
 	var req models.ClusterModeRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		recordAudit(c, "切换失败", "集群模式", services.FormatAuditDetail("目标：从节点", "集群模式参数无效", services.AuditResultPart("invalid_request")))
@@ -192,7 +192,7 @@ func (h *Handlers) UpdateClusterSettings(c *gin.Context) {
 		recordAudit(c, "更新失败", "集群设置", services.FormatAuditDetail("集群服务未初始化", services.AuditResultPart("service_unavailable")))
 		return
 	}
-	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 16<<10)
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, clusterMachineBodyLimitBytes)
 	var req models.ClusterSettingsRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		recordAudit(c, "更新失败", "集群设置", services.FormatAuditDetail("集群设置参数无效", services.AuditResultPart("invalid_request")))

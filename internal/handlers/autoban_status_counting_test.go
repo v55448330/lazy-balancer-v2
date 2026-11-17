@@ -46,6 +46,15 @@ func TestAutobanStatus_carriesEvidenceCountingFields(t *testing.T) {
 
 func TestAutobanStatus_classicDefaultsAndSuggestionScores(t *testing.T) {
 	router := newAutobanTestEnv(t)
+	// 夹具使建议非空：两条达阈值档位（治理常量 DefaultAutobanThreshold）的
+	// 建议行经既有测试缝直设（GetAutobanStatus 只做归属地富化、不投影双分数
+	// ——classic 投影 confirmed=count/suspicion=0 与引擎产出同形）。空集形态
+	// 会让下方逐行双分数断言零执行恒绿（假绿）。
+	services.AutobanSetSuggestionsForTest([]services.AutobanSuggestion{
+		{IP: "45.33.32.11", Count: db.DefaultAutobanThreshold, ConfirmedCount: db.DefaultAutobanThreshold},
+		{IP: "45.33.32.99", Count: db.DefaultAutobanThreshold, ConfirmedCount: db.DefaultAutobanThreshold},
+	})
+	t.Cleanup(services.ResetAutobanCounters)
 	rec := getRequest(t, router, "/security/autoban/status")
 	var resp struct {
 		Data struct {
@@ -62,6 +71,11 @@ func TestAutobanStatus_classicDefaultsAndSuggestionScores(t *testing.T) {
 		resp.Data.SuspicionMultiplier != db.DefaultAutobanSuspicionMultiplier ||
 		resp.Data.ConfirmFloorRatio != db.DefaultAutobanConfirmFloorRatio {
 		t.Fatalf("classic defaults=%+v", resp.Data)
+	}
+	// 存在性断言（双保险）：建议空集时下方逐行断言零执行恒绿——种子缺失/
+	// 缝语义漂移须先在此点名。
+	if len(resp.Data.Suggestions) < 1 {
+		t.Fatalf("suggestions=%d, want ≥1（空集让逐行双分数契约断言零执行假绿）", len(resp.Data.Suggestions))
 	}
 	// 建议行恒携带双分数键（classic 投影 confirmed=count/suspicion=0）。
 	for _, s := range resp.Data.Suggestions {

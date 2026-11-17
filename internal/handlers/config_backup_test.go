@@ -3323,11 +3323,23 @@ func TestImportAutoBackupResetNeeded(t *testing.T) {
 //   - legacyChecksummedBackup（caddy_regression_01）：legacy 仅表 checksum
 //     变体（参数化 version/exportedAt，新旧校验和口径对照）；
 //   - v1 历史形态（Version:1，无 exported_at/checksum 契约）：
-//     config_backup_test 两处 + config_backup_regression_02 一处；
+//     config_backup_test 两处（:931/:2011）+ config_backup_regression_02
+//     一处（:405）；
+//   - 校验链直测 v1 带 meta（Version:1，同 v1 历史契约）：
+//     config_backup_custom_rules_infra_test.go
+//     :104（TestImportChain_infraReadFailureResponds500FixedText）；
 //   - 校验链直测结构体（无 meta，不走 JSON 序列化）：builtin_role_gate/
 //     bindings_revalidate/import_gates/import_normalization/trustedproxy_refs/
 //     import_rule_reference_recheck/import_window_regression_01/
 //     remediation_regression_04。
+//
+// grep 对账锚（`grep -rn "Meta:\s*configBackupMeta{" internal/handlers`，
+// 直测位点在册）：8 位点 = 生产导出 config_backup.go:5810 +
+// 构造器本体 2 处（本文件 v2BackupBody:1331 / buildBackupStruct:3397）+
+// 测试夹具直构 5 处（caddy_regression_01_test.go:201 /
+// config_backup_custom_rules_infra_test.go:104 /
+// config_backup_regression_02_test.go:405 / 本文件 :931/:2011）——除生产
+// 导出与构造器本体外全部在册。
 //
 // 现在所有形态都由 backupFixtureOptions 显式表达：
 //   - 精确表集（真实分类导出/迟到表形态）：只给 Tables，FillAll=false；

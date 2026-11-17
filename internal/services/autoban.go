@@ -2795,7 +2795,12 @@ func DeleteAutobanRecidivismGuarded(ctx context.Context, identity string) (strin
 	if _, err := tx.ExecContext(ctx, deleteAutobanRecidivismSQL, identity); err != nil {
 		return identity, err
 	}
-	return identity, tx.Commit()
+	if err := tx.Commit(); err != nil {
+		// Commit 失败 Tx 已 done，defer Rollback 不触达 driver——池级补发。
+		db.RollbackLeakedTx(db.DB, db.MainPoolMaxOpen)
+		return identity, err
+	}
+	return identity, nil
 }
 
 // ResetAutobanRecidivism 清空全部累犯历史（重置计数——下次达阈值按首次档

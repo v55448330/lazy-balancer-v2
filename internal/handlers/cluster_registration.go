@@ -16,9 +16,13 @@ import (
 	"lazy-balancer-v2/internal/services"
 )
 
+// clusterMachineBodyLimitBytes 集群机器接口族（注册/上报/模式切换/服务控制）
+// 请求体防滥用上限单源；各端点语义常量派生自它。
+const clusterMachineBodyLimitBytes int64 = 16 << 10
+
 // registerRequestMaxBytes 限制注册请求体大小：注册端点为公开机器接口
 // （无 JWT/API Key 认证），超大体可撑爆审计库。
-const registerRequestMaxBytes = 16 << 10
+const registerRequestMaxBytes = clusterMachineBodyLimitBytes
 
 // registrationStatusRejectionRecorder 由 middleware 包注入（middleware 导入
 // handlers，反向会成环——与 apiKeyWhitelistCachePurge 同款倒置装配）：注册
@@ -331,7 +335,7 @@ func (h *Handlers) UpdateClusterNodeAccessURL(c *gin.Context) {
 	if !h.requireMaster(c) {
 		return
 	}
-	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 16<<10)
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, clusterMachineBodyLimitBytes)
 	var req models.ClusterNodeAccessURLRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		// 审计中间件对 explicit 路由无条件早退（含 4xx），绑定失败在此补记

@@ -76,7 +76,9 @@ func TestStageBlockPages_legacyColumnsHaveNoRenderEffect(t *testing.T) {
 		t.Fatalf("attribution route must render the policy's own page, got: %#v", handler["body"])
 	}
 
-	// 阶段页列值本身不参与渲染：清空列值后生成的规则路由/错误路由逐字节不变。
+	// 阶段页列值本身不参与渲染：清空列值后整配置必须与携带列值形态全量等值
+	// （JSON 归一比较，规则路由+错误路由全覆盖——旧断言仅比对错误路由条数，
+	// 对「同条数异形」的列值渗漏假绿，本断言按整配置等值收紧）。
 	if _, err := database.Exec(`UPDATE lb_rules SET block_page_stage1_id=0, block_page_stage1_status=0, block_page_stage3_id=0, block_page_stage3_status=0 WHERE caddy_id='lb_legacy'`); err != nil {
 		t.Fatal(err)
 	}
@@ -84,9 +86,12 @@ func TestStageBlockPages_legacyColumnsHaveNoRenderEffect(t *testing.T) {
 	if message, failed := generated2[caddyConfigGenerationErrorKey].(string); failed {
 		t.Fatalf("generation failed after clearing stage columns: %s", message)
 	}
-	routes2, _ := serverErrorRoutes(t, generated2, "http_8080")
-	if len(errorRoutes) != len(routes2) {
-		t.Fatalf("stage columns must not influence error route count: %d vs %d", len(errorRoutes), len(routes2))
+	generated2JSON, marshalErr := json.Marshal(generated2)
+	if marshalErr != nil {
+		t.Fatalf("marshal regenerated config: %v", marshalErr)
+	}
+	if string(generated2JSON) != string(generatedJSON) {
+		t.Fatalf("stage columns must not influence generated config (full-config equality):\nwith-columns:\n%s\ncleared:\n%s", generatedJSON, generated2JSON)
 	}
 }
 

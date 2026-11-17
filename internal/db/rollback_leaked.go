@@ -16,7 +16,7 @@ package db
 // 不可能有写事务，重复 ROLLBACK 不会误伤。
 //
 // 调用契约：仅在 Commit 返回错误后调用（错误恢复语境无请求 ctx 可言，
-// 自带 30s 预算）；ReadOnly 事务无需调用（无写锁）。poolSize 传该库
+// 自带 500ms 饱和探测预算）；ReadOnly 事务无需调用（无写锁）。poolSize 传该库
 // applySQLitePool 的 maxOpen（主库 10/metrics 5/audit 5）。
 
 import (
@@ -33,7 +33,10 @@ func RollbackLeakedTx(database *sql.DB, poolSize int) {
 	if database == nil || poolSize <= 0 {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	// 饱和探测预算：签出空闲连接零阻塞（不受 ctx 影响）；仅池满（在用连
+	// 接占满）时 Conn(ctx) 才等待——等待在用连接无意义（其上不可能有泄漏
+	// 事务），预算内拿不到即放弃（下方 break），不为调用方叠加长阻塞。
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 	var held []*sql.Conn
 	defer func() {
@@ -44,8 +47,9 @@ func RollbackLeakedTx(database *sql.DB, poolSize int) {
 	for range poolSize {
 		conn, err := database.Conn(ctx)
 		if err != nil {
-			// 池耗尽/超时：在用连接正被其它请求持有——持写锁的泄漏事务
-			// 不可能在用（其 Tx 已 done 归还），剩余空闲连接已遍历完。
+			// 池饱和（500ms 预算内拿不到空闲连接）：在用连接正被其它请求
+			// 持有——持写锁的泄漏事务不可能在用（其 Tx 已 done 归还），
+			// 剩余空闲连接已遍历完。
 			break
 		}
 		held = append(held, conn)

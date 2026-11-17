@@ -2379,6 +2379,8 @@ func validateBackupUniqueKeys(tables map[string][]map[string]any) error {
 
 // backupUniqueKeySpecs 读取表的键约束：主键列（PRAGMA table_info 的 pk 序号）
 // 与唯一索引（PRAGMA index_list unique=1；部分索引带 partial=1）。
+// 读失败归 importInfraReadError 族（导入 500 固定文案；与
+// backupPrimaryKeyColumns/backupIndexColumns 同族）。
 func backupUniqueKeySpecs(table string) ([]backupUniqueKeySpec, error) {
 	specs := make([]backupUniqueKeySpec, 0, 3)
 	primaryKey, err := backupPrimaryKeyColumns(table)
@@ -2393,7 +2395,7 @@ func backupUniqueKeySpecs(table string) ([]backupUniqueKeySpec, error) {
 	}
 	indexRows, err := db.DB.Query(`PRAGMA index_list('` + table + `')`)
 	if err != nil {
-		return nil, fmt.Errorf("读取表 %s 索引: %w", table, err)
+		return nil, importInfraReadFailure(fmt.Errorf("读取表 %s 索引: %w", table, err))
 	}
 	type indexEntry struct {
 		name    string
@@ -2408,7 +2410,7 @@ func backupUniqueKeySpecs(table string) ([]backupUniqueKeySpec, error) {
 			origin string
 		)
 		if err := indexRows.Scan(&seq, &entry.name, &entry.unique, &origin, &entry.partial); err != nil {
-			return nil, fmt.Errorf("读取表 %s 索引: %w", table, err)
+			return nil, importInfraReadFailure(fmt.Errorf("读取表 %s 索引: %w", table, err))
 		}
 		if entry.unique == 1 {
 			entries = append(entries, entry)
@@ -2416,11 +2418,11 @@ func backupUniqueKeySpecs(table string) ([]backupUniqueKeySpec, error) {
 	}
 	if err := indexRows.Err(); err != nil {
 		_ = indexRows.Close()
-		return nil, fmt.Errorf("读取表 %s 索引: %w", table, err)
+		return nil, importInfraReadFailure(fmt.Errorf("读取表 %s 索引: %w", table, err))
 	}
 	// 显式关闭后再发起 index_info 查询——单连接池下未关闭的 Rows 会占住连接。
 	if err := indexRows.Close(); err != nil {
-		return nil, fmt.Errorf("读取表 %s 索引: %w", table, err)
+		return nil, importInfraReadFailure(fmt.Errorf("读取表 %s 索引: %w", table, err))
 	}
 	for _, entry := range entries {
 		var predicate func(map[string]any) bool
@@ -2451,7 +2453,7 @@ func backupUniqueKeySpecs(table string) ([]backupUniqueKeySpec, error) {
 func backupPrimaryKeyColumns(table string) ([]string, error) {
 	rows, err := db.DB.Query(`PRAGMA table_info('` + table + `')`)
 	if err != nil {
-		return nil, fmt.Errorf("读取表 %s 结构: %w", table, err)
+		return nil, importInfraReadFailure(fmt.Errorf("读取表 %s 结构: %w", table, err))
 	}
 	defer rows.Close()
 	ordered := map[int]string{}
@@ -2466,7 +2468,7 @@ func backupPrimaryKeyColumns(table string) ([]string, error) {
 			pkOrdinal  int
 		)
 		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultVal, &pkOrdinal); err != nil {
-			return nil, fmt.Errorf("读取表 %s 结构: %w", table, err)
+			return nil, importInfraReadFailure(fmt.Errorf("读取表 %s 结构: %w", table, err))
 		}
 		if pkOrdinal > 0 {
 			ordered[pkOrdinal] = name
@@ -2476,7 +2478,7 @@ func backupPrimaryKeyColumns(table string) ([]string, error) {
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("读取表 %s 结构: %w", table, err)
+		return nil, importInfraReadFailure(fmt.Errorf("读取表 %s 结构: %w", table, err))
 	}
 	if maxOrdinal == 0 {
 		return nil, nil
@@ -2496,7 +2498,7 @@ func backupPrimaryKeyColumns(table string) ([]string, error) {
 func backupIndexColumns(indexName string) ([]string, error) {
 	rows, err := db.DB.Query(`PRAGMA index_info('` + indexName + `')`)
 	if err != nil {
-		return nil, fmt.Errorf("读取索引 %s 列: %w", indexName, err)
+		return nil, importInfraReadFailure(fmt.Errorf("读取索引 %s 列: %w", indexName, err))
 	}
 	defer rows.Close()
 	type columnEntry struct {
@@ -2509,7 +2511,7 @@ func backupIndexColumns(indexName string) ([]string, error) {
 		var seqno, cid int
 		var name sql.NullString
 		if err := rows.Scan(&seqno, &cid, &name); err != nil {
-			return nil, fmt.Errorf("读取索引 %s 列: %w", indexName, err)
+			return nil, importInfraReadFailure(fmt.Errorf("读取索引 %s 列: %w", indexName, err))
 		}
 		if !name.Valid {
 			return nil, nil // 表达式索引列无名字
@@ -2520,7 +2522,7 @@ func backupIndexColumns(indexName string) ([]string, error) {
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("读取索引 %s 列: %w", indexName, err)
+		return nil, importInfraReadFailure(fmt.Errorf("读取索引 %s 列: %w", indexName, err))
 	}
 	columns := make([]string, 0, maxSeqno+1)
 	for seqno := 0; seqno <= maxSeqno; seqno++ {

@@ -1744,6 +1744,9 @@ func (h *Handlers) CreateRule(c *gin.Context) {
 				// 本文件其余五处回滚守卫同格，裸 != 不穿透包装）。
 				if rollbackErr := cleanupTx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
 					services.Logf("error", "CreateRule compensation rollback failed for caddy_id=%s: %v", caddyID, rollbackErr)
+				} else if errors.Is(rollbackErr, sql.ErrTxDone) {
+					// Commit 失败 Tx 已 done，defer Rollback 不触达 driver——池级补发。
+					rollbackLeakedTx()
 				}
 			}
 		}()
@@ -3562,6 +3565,9 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 				}
 				if !migrationRolledBack {
 					if err := certTx.Commit(); err != nil {
+						// Commit 失败 Tx 已 done，Rollback 对 done Tx 不触达
+						// driver（本事务无 defer 兜底）——池级补发。
+						rollbackLeakedTx()
 						// commit 失败与开启/更新失败同后果——迁移未生效，
 						// 旧域任务持原域永驻（sweep 跳过终态），稍后 needJob 为新域
 						// 另建任务破坏「一规则一任务」。与分支同语义退役。

@@ -422,6 +422,8 @@ func InstallClusterVersionTriggers(database *sql.DB) error {
 		}
 	}
 	if err := tx.Commit(); err != nil {
+		// Commit 失败 Tx 已 done，defer Rollback 不触达 driver——池级补发。
+		db.RollbackLeakedTx(database, db.MainPoolMaxOpen)
 		return fmt.Errorf("install cluster version triggers: commit: %w", err)
 	}
 	committed = true

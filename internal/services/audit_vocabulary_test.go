@@ -122,6 +122,10 @@ func TestAuditVocabulary_wordLimits(t *testing.T) {
 	// 每个白名单条目都有真实动态调用点——条目失效（函数改名/调用点消失）即报错，
 	// 防止白名单只增不减地淤积放行面。
 	usedAllowlist := map[string]bool{}
+	// formatAuditActionAnchors 记录扫描中命中的 FormatAuditAction 定义数，
+	// 测试末尾做存在性反向自证（复用 usedAllowlist 的反向模式）：命中 0 =
+	// 锚点改名/搬家，返回词条字面量扫描已静默失效成假绿。
+	formatAuditActionAnchors := 0
 	check := func(file string, line int, kind, value string, limit int) {
 		if n := auditVocabWords(value); n > limit {
 			violations = append(violations, file+":"+strconv.Itoa(line)+" "+kind+" "+strconv.Quote(value)+" 超上限（"+strconv.Itoa(n)+" 词 > "+strconv.Itoa(limit)+"）")
@@ -188,6 +192,7 @@ func TestAuditVocabulary_wordLimits(t *testing.T) {
 			switch d := decl.(type) {
 			case *ast.FuncDecl:
 				if d.Name.Name == "FormatAuditAction" && d.Body != nil {
+					formatAuditActionAnchors++
 					ast.Inspect(d.Body, func(inner ast.Node) bool {
 						ret, ok := inner.(*ast.ReturnStmt)
 						if !ok || len(ret.Results) < 2 {
@@ -213,6 +218,12 @@ func TestAuditVocabulary_wordLimits(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("walk internal: %v", err)
+	}
+	// 锚点存在性反向自证：全 internal/ 扫描必须命中至少一个 FormatAuditAction
+	// 定义——命中 0 说明锚点（services/auditlog.go 的路由动作格式化单源）改名
+	// 或搬家，返回词条字面量校验会静默零执行成假绿。
+	if formatAuditActionAnchors == 0 {
+		t.Errorf("全 internal/ 未扫描到 FormatAuditAction 定义——审计词条格式化锚点漂移，返回词条字面量校验已静默失效")
 	}
 	for rel, byIndex := range auditVocabDynamicAllowlist {
 		for idx, funcs := range byIndex {

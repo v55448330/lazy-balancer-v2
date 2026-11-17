@@ -302,9 +302,12 @@ func (s *SyncService) applySnapshot(ctx context.Context, snapshot models.Cluster
 	}
 	if err := commitSnapshot(tx); err != nil {
 		// database/sql 的 Commit 错误不能证明事务未提交：实际已提交时恢复旧
-		// 文件会制造 DB/磁盘分叉。释放可能仍未结束的事务，保留本轮材料并
-		// 持久化补偿标记；下轮无论 304 与否都按主端快照重新收敛。
+		// 文件会制造 DB/磁盘分叉。Commit 失败 Tx 已 done——下方 Rollback 对
+		// done Tx 不触达 driver（仅回 ErrTxDone），泄漏事务的写锁回收靠池级
+		// 补发 RollbackLeakedTx。保留本轮材料并持久化补偿标记；下轮无论 304
+		// 与否都按主端快照重新收敛。
 		_ = tx.Rollback()
+		db.RollbackLeakedTx(s.db, db.MainPoolMaxOpen)
 		marker := fmt.Sprintf("%s: 提交结果不确定；证书与 DNS 文件保留本轮内容，下轮同步将全量重拉: %v", syncCommitUncertainMarkerPrefix, err)
 		s.persistSyncError(ctx, marker, models.SyncErrorCodeApplyFailed)
 		return fmt.Errorf("提交快照事务失败，提交结果不确定（已保留本轮证书与 DNS 文件，下轮同步将全量重拉）: %w", err)

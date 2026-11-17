@@ -130,3 +130,27 @@ func TestRollbackLeakedTx_noLeakIsBenign(t *testing.T) {
 	RollbackLeakedTx(database, 5)
 	assertWriteLockReleased(t, database)
 }
+
+// TestRollbackLeakedTx_givesUpQuicklyWhenPoolSaturated：池被在用连接占满时
+// 补发必须快速放弃——在用连接上不可能有泄漏事务（其 Tx 已 done 归还池），
+// 等待它们毫无意义。500ms 饱和探测预算内拿不到空闲连接即 break；旧实现
+// 30s 固定预算会在池饱和时阻塞调用方整整一个超时周期。
+func TestRollbackLeakedTx_givesUpQuicklyWhenPoolSaturated(t *testing.T) {
+	database, err := openSQLiteDB(filepath.Join(t.TempDir(), "saturated.db"), sqlitePoolConfig{maxOpen: 1, maxIdle: 1, connMaxLifetime: time.Minute})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	// 占满唯一连接：Conn 无空闲可签出，只能等在用连接释放。
+	conn, err := database.Conn(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	start := time.Now()
+	RollbackLeakedTx(database, 1)
+	elapsed := time.Since(start)
+	if elapsed >= 5*time.Second {
+		t.Fatalf("池饱和时补发耗时 %v：必须快速放弃（预算 <5s，旧实现阻塞 ~30s）", elapsed)
+	}
+}

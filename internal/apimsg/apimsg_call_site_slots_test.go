@@ -65,6 +65,19 @@ func TestTfCallSites_templateSlotsCoverArgs(t *testing.T) {
 			if err != nil {
 				return err
 			}
+			// import 块守卫：internal/apimsg 的别名/dot 导入会让 Tf 限定名
+			// 偏离 canonical 包名，槽数对账静默漏扫。当前全仓零别名，此钉
+			// 防回潮（下方的限定名守卫拦截调用点，本守卫拦截导入声明源）。
+			for _, imp := range file.Imports {
+				impPath, uerr := strconv.Unquote(imp.Path.Value)
+				if uerr != nil || (!strings.HasSuffix(impPath, "/internal/apimsg") && impPath != "internal/apimsg") {
+					continue
+				}
+				base := impPath[strings.LastIndex(impPath, "/")+1:]
+				if imp.Name != nil && imp.Name.Name != base && imp.Name.Name != "_" {
+					t.Errorf("%s: %q 以别名 %q 导入 internal/apimsg——别名限定名会让 apimsg.Tf 槽数对账静默漏扫，请用 canonical 包名", fset.Position(imp.Pos()), impPath, imp.Name.Name)
+				}
+			}
 			ast.Inspect(file, func(node ast.Node) bool {
 				call, ok := node.(*ast.CallExpr)
 				if !ok || call.Ellipsis != token.NoPos {
@@ -75,7 +88,15 @@ func TestTfCallSites_templateSlotsCoverArgs(t *testing.T) {
 					return true
 				}
 				pkg, ok := sel.X.(*ast.Ident)
-				if !ok || pkg.Name != "apimsg" || len(call.Args) < 3 {
+				if !ok {
+					t.Errorf("%s: apimsg.Tf 限定名不是包标识符（链式选择器/方法值形态无法对账槽数）", fset.Position(call.Pos()))
+					return true
+				}
+				if pkg.Name != "apimsg" {
+					t.Errorf("%s: apimsg.Tf 经非 canonical 限定名 %q 调用——别名导入会让槽数对账静默漏扫，请用 canonical 包名 apimsg", fset.Position(call.Pos()), pkg.Name)
+					return true
+				}
+				if len(call.Args) < 3 {
 					return true
 				}
 				keyLit, ok := call.Args[1].(*ast.BasicLit)

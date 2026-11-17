@@ -4,7 +4,7 @@ import assert from 'node:assert/strict'
 
 import { createLatestReadSession, runExclusive } from '../src/utils/viewAsyncState.ts'
 import { rollbackUserStatus } from '../src/utils/userStatus.ts'
-import { code, section } from './_helpers.ts'
+import { code, matchBrace, member, section } from './_helpers.ts'
 
 test('删除写通道从确认前占位，连点只执行一次并在成功后释放', async () => {
   let locked = false
@@ -132,14 +132,25 @@ test('OIDC 删除复用同一 saving 写通道并覆盖确认、删除与最终�
 
 test('用户状态 catch 先本地回滚再刷新，成功路径不回滚', () => {
   const page = code('src/views/Users.vue')
-  const toggle = section(page, 'const handleToggleStatus = async', 'type LbDialogSpec')
-  const catchAt = toggle.lastIndexOf('} catch')
-  const rollbackAt = toggle.indexOf('rollbackUserStatus(users.value, id, isEnabled)', catchAt)
-  const refreshAt = toggle.indexOf('fetchUsers()', catchAt)
-  assert.ok(catchAt >= 0 && rollbackAt > catchAt && refreshAt > rollbackAt)
+  // 函数体与 catch 块体都按命名锚 + 花括号配对整取。此前的窗口切片判据
+  // （以「} catch」末次字符串命中定位 + indexOf 推「回滚→刷新」次序）是盲区：
+  // 外层 catch 被删时定位指到内层「确认取消」catch，其后的成功路径 fetchUsers
+  // 仍满足次序；成功段窗口还会因边界倒置变空切片（doesNotMatch 空转假绿）。
+  const toggle = member(page, 'const handleToggleStatus')
+  const catches = [...toggle.matchAll(/\bcatch\s*[({]/g)]
+  assert.ok(catches.length >= 1, 'handleToggleStatus 缺 catch 分支')
+  const lastCatch = catches[catches.length - 1]
+  const lastCatchAt = lastCatch.index ?? -1
+  const catchOpen = toggle.indexOf('{', lastCatchAt)
+  const catchClose = matchBrace(toggle, catchOpen)
+  assert.ok(catchOpen >= 0 && catchClose > catchOpen, '最后一个 catch 块未闭合')
+  const catchBody = toggle.slice(catchOpen + 1, catchClose)
+  // 最后一个 catch（外层失败路径）块体内必须同时本地回滚并刷新。
+  assert.match(catchBody, /rollbackUserStatus\(users\.value, id, isEnabled\)/, '失败路径必须先本地回滚乐观状态')
+  assert.match(catchBody, /fetchUsers\(\)/, '失败路径必须刷新列表')
   const successAt = toggle.indexOf('mfaAwareSuccess')
   assert.ok(successAt > 0)
-  assert.doesNotMatch(toggle.slice(successAt, catchAt), /rollbackUserStatus/, '成功路径不得回滚乐观状态')
+  assert.doesNotMatch(toggle.slice(successAt, lastCatchAt), /rollbackUserStatus/, '成功路径不得回滚乐观状态')
 })
 
 test('自动备份非 quiet 读取使用可取消最新会话，关闭与卸载均作废', () => {

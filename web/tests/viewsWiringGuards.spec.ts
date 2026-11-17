@@ -6,7 +6,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { code, member, openTags, section, repoCode } from './_helpers.ts'
+import { code, matchBrace, member, openTags, section, repoCode } from './_helpers.ts'
 import { shouldToastQuietPollError } from '../src/utils/pollErrorToast.ts'
 import {
   CERT_QUEUE_VISIBLE_JOBS,
@@ -228,7 +228,14 @@ test('指标采集失败时规则表空态报「采集失败」', () => {
 test('区域树加载失败保留旧数据并显性提示+重试', () => {
   const text = code('src/views/security/SecurityPolicies.vue')
   const fetchRegions = section(text, 'const fetchRegions', 'onMounted')
-  assert.doesNotMatch(section(fetchRegions, '} catch {', '}'), /regionTree\.value\s*=/, '失败不得清空区域树')
+  // catch 块体按花括号配对取全：section(fetchRegions, '} catch {', '}') 在
+  // 块内首个嵌套 } 处提前收尾，其后新增的清空赋值逃出判据（假绿）。
+  const catchAt = fetchRegions.indexOf('} catch {')
+  assert.ok(catchAt > 0, '缺失败 catch 分支')
+  const catchOpen = catchAt + '} catch {'.length - 1
+  const catchClose = matchBrace(fetchRegions, catchOpen)
+  assert.ok(catchClose > catchOpen, 'catch 块未闭合')
+  assert.doesNotMatch(fetchRegions.slice(catchOpen + 1, catchClose), /regionTree\.value\s*=/, '失败不得清空区域树')
   const failed = section(text, '<div v-if="regionsError"', '</div>')
   assert.match(failed, /@click="fetchRegions"/, '失败提示必须保留重试入口')
 })
@@ -388,15 +395,22 @@ test('节点审批/拒绝/删除在确认弹框之前取得占位', () => {
   assert.ok(takePlaceholder >= 0 && confirm > takePlaceholder, '占位必须先于 confirmAction')
   assert.match(block, /pendingNodeId\.value !== null/, '第二请求必须被显式拒绝而非静默丢弃')
   const page = code('src/views/settings/ClusterSettings.vue')
-  // 箭头体必须直接委托 confirmAndRunNodeAction——不要求换行/缩进形态
-  // （纯格式化把调用提到 `=>` 同行时不得假红）；中间也不允许夹别的判断。
+  // 箭头体是表达式形态（无块括号，brace 配对不可用）：body 取「自箭头起、
+  // 至首个 confirmAndRunNodeAction( 调用止」的切片。此前 rest 全文件尾切片
+  // 是盲区——本函数体内删掉调用时，indexOf 命中后续兄弟函数的调用仍绿。
+  // 兄弟声明头（const … = (node: ClusterNode)）出现在 body 中即说明切片已
+  // 跨入兄弟函数（命中了别人的调用），必须红。
   for (const name of ['approveNode', 'removeNode']) {
     const at = page.indexOf(`const ${name} = (node: ClusterNode): Promise<void> =>`)
     assert.ok(at > 0, `${name} 的委托形态被改（本钉需同步）`)
     const rest = page.slice(at)
+    const arrowAt = rest.indexOf('=>')
+    assert.ok(arrowAt > 0, `${name} 的箭头形态被改（本钉需同步）`)
     const callAt = rest.indexOf('confirmAndRunNodeAction(')
     assert.ok(callAt > 0, `${name} 必须走确认+执行单源`)
-    assert.match(rest.slice(0, callAt), /=>\s*$/, `${name} 的箭头体必须直接委托，不得在中间插入判断`)
+    const body = rest.slice(arrowAt + 2, callAt)
+    assert.doesNotMatch(body, /const \w+ = \(node: ClusterNode\)/, `${name} 自身体内未走确认+执行单源（切片已跨入兄弟函数）`)
+    assert.match(body, /^\s*$/, `${name} 的箭头体必须直接委托，不得在中间插入判断`)
   }
 })
 

@@ -47,7 +47,7 @@ func (e *clusterServiceControlRejection) Error() string {
 // 签发一次性 HMAC 服务控制票据 → 转发从节点 /cluster/service-control →
 // 中继结果并记录主节点审计。
 func (h *Handlers) ControlClusterNodeService(c *gin.Context) {
-	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 16<<10)
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, clusterMachineBodyLimitBytes)
 	if !h.requireMaster(c) {
 		return
 	}
