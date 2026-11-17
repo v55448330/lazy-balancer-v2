@@ -3197,7 +3197,7 @@ func (h *Handlers) BulkUpdatePolicyBindings(c *gin.Context) {
 		args = append(args, policyID)
 		// 已绑定本策略的规则集合：bind 上限门只对「新增绑定」生效——与单条
 		// bind 端点同口径（已绑定即幂等 200）。存量超限规则（旧版本导入/历史
-		// 数据，绑定数≥9）在 bulk 里重复提交本策略时不得 400，否则同批无关
+		// 数据，绑定数≥11）在 bulk 里重复提交本策略时不得 400，否则同批无关
 		// 规则的变更也整体失败。
 		boundRows, err := tx.QueryContext(caddyWriteCtx(c), "SELECT rule_caddy_id FROM security_policy_bindings WHERE rule_caddy_id IN ("+strings.Join(placeholders, ",")+") AND policy_id = ?", args...)
 		if err != nil {

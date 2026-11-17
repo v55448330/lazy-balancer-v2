@@ -234,8 +234,8 @@ func TestBatchBindSecurityPolicies_dedupesRuleIDs(t *testing.T) {
 	}
 }
 
-// merge 上限边界（2026-09-21 上限 5→8）：lb_b1 现有 6 条 + merge 2 条 = 8 → bound；
-// 再 merge 1 条 = 9 → 该规则 skipped「合并后超过 8 条策略上限」且原绑定保留。
+// merge 上限边界（2026-11-18 上限 8→10）：lb_b1 现有 8 条 + merge 2 条 = 10 → bound；
+// 再 merge 1 条未绑定新策略 = 11 → 该规则 skipped「合并后超过 10 条策略上限」且原绑定保留。
 func TestBatchBindSecurityPolicies_mergeCapBoundary(t *testing.T) {
 	handler, _ := newStageBatchTestHandlers(t)
 	seedStageBatchRules(t)

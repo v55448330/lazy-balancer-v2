@@ -351,7 +351,7 @@ func TestSplitSecurityPolicy_capBoundaryAndStage2GateCoexist(t *testing.T) {
 		}
 	}
 	addOtherBindings("lb_s1", 9) // 现存 10（9+原混合）→ 10+3=13 超上限
-	addOtherBindings("lb_s2", 4) // 现存 5 其他+1 stage2 → 5+3=9 不超上限门、中限流门
+	addOtherBindings("lb_s2", 4) // 现存 4 其他+1 stage2+原混合=6 → 6+3=9 不超上限门、中限流门
 	if _, err := db.DB.Exec(`INSERT INTO security_policy_bindings (rule_caddy_id,policy_id) VALUES ('lb_s2',?)`, stage2ID); err != nil {
 		t.Fatal(err)
 	}
@@ -385,7 +385,7 @@ func TestSplitSecurityPolicy_capBoundaryAndStage2GateCoexist(t *testing.T) {
 	if !strings.Contains(reasons["lb_s2"], "CC 防护") {
 		t.Fatalf("lb_s2 reason=%q, want CC 防护 uniqueness message", reasons["lb_s2"])
 	}
-	// lb_s3 重映射后恰 8 条绑定（5 其他+3 子策略），原混合绑定消失
+	// lb_s3 重映射后恰 10 条绑定（7 其他+3 子策略），原混合绑定消失
 	var count int
 	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM security_policy_bindings WHERE rule_caddy_id='lb_s3'`).Scan(&count); err != nil || count != 10 {
 		t.Fatalf("lb_s3 binding count=%d (err=%v), want 10", count, err)

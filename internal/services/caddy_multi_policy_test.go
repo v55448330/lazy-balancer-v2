@@ -8,7 +8,7 @@ import (
 )
 
 // ..05（v2.2.0 多策略绑定 · Caddy 生成路径）：一条 LB 规则可绑定至多
-// maxBindingsPerRule=8 条安全策略，评估顺序 = 绑定 rank ASC（policy_id ASC 兜序；
+// maxBindingsPerRule=10 条安全策略，评估顺序 = 绑定 rank ASC（policy_id ASC 兜序；
 // mpGenBindPolicy 未写 rank，本组夹具走兜序）；每策略的 [lb_human?, waf?] 处理器组
 // 按序编入规则主路由（配额限流 rate_limit 已退役）。geoip pass 路由至多一条（任一启用策略带 geoip 即存在，
 // 为下游 coraza 的 GeoIP SecRule 设置 X-LB-GeoIP-* headers；地域拦截在各自策略的

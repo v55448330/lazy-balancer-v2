@@ -3383,8 +3383,8 @@ const handleSave = async () => {
   } catch { return }
   saving.value = true
   try {
-    // v2.2.0 上限守卫：POST bind 为 additive 且服务端不强制上限
-    //（上限由 PUT /security/rules/:caddy_id/policies 强制），本流程的绑定上限闸门在客户端。
+    // v2.2.0 上限守卫：POST bind 为 additive，与 PUT /security/rules/:caddy_id/policies
+    // 同受服务端 maxBindingsPerRule 上限门约束；本流程的绑定上限闸门在客户端先行。
     // 保存前刷新绑定快照，避免并发会话下用过期数据放行超限绑定。
     try {
       const bindRes = await request.get<APIResponse<Record<string, BindingInfo[]>>>('/security/bindings')

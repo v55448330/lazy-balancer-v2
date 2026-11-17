@@ -87,6 +87,7 @@ audit_path_rules=(
   $'**/*audit[0-9]*\t(^|/|[^A-Za-z0-9])audit[0-9][^/]*'
   $'**/*round[0-9]*\t(^|/|[^A-Za-z0-9])round[0-9][^/]*'
   $'**/*audit[_-][0-9]*\t(^|/|[^A-Za-z0-9])audit[_-][0-9][^/]*'
+  $'.release-authorized\t^\.release-authorized$'
   $'**/*round[_-][0-9]*\t(^|/|[^A-Za-z0-9])round[_-][0-9][^/]*'
   $'**/*audit[0-9]*/\t(^|/|[^A-Za-z0-9])audit[0-9][^/]*'
   $'**/*round[0-9]*/\t(^|/|[^A-Za-z0-9])round[0-9][^/]*'

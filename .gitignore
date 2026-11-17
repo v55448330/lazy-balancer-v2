@@ -93,6 +93,7 @@ story.md
 # 下方块与 scripts/check-no-audit-artifacts.sh 的模式表双向一致（脚本会逐行校验，
 # 多一行/少一行/改一行都使守卫失败）；改这里必须同步改脚本的模式表。
 # >>> audit-artifact patterns
+.release-authorized
 docs/audit/
 **/audit[0-9]*_test.go
 **/*_audit[0-9]*_test.go

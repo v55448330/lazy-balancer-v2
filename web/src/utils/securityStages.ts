@@ -1416,7 +1416,7 @@ export const eventDetailRefIds = (
 // 已随规则级阶段页覆盖退役移除——前端不再调用该端点。）
 export const SECURITY_BULK_LIMITS = { policyBindings: 100 } as const
 
-// 单规则可绑定的策略条数上限（后端 maxBindingsPerRule=8 的前端单源镜像）：
+// 单规则可绑定的策略条数上限（后端 maxBindingsPerRule 的前端单源镜像，跨栈对表钉 securityBulk D1）：
 // SecurityBindingEditor（规则侧计数/选择器上限）与 SecurityPolicies（向导
 // 冲突检测注释/夹紧）共用，前两份本地常量各写一遍，后端调整时易漏改。
 export const MAX_POLICIES_PER_RULE = 10
