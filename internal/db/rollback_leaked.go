@@ -33,10 +33,12 @@ func RollbackLeakedTx(database *sql.DB, poolSize int) {
 	if database == nil || poolSize <= 0 {
 		return
 	}
-	// 饱和探测预算：签出空闲连接零阻塞（不受 ctx 影响）；仅池满（在用连
-	// 接占满）时 Conn(ctx) 才等待——等待在用连接无意义（其上不可能有泄漏
-	// 事务），预算内拿不到即放弃（下方 break），不为调用方叠加长阻塞。
-	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	// 饱和探测预算：签出空闲连接零阻塞（不受 ctx 影响）；仅池满（空闲列表
+	// 空）时 Conn(ctx) 才等待——池满说明泄漏连接（提交失败刚归还空闲）已被
+	// 后续请求签出在用，等待其在用归还在高负载下无上界，预算内拿不到即放弃
+	// （下方 break + WARN），不为调用方叠加长阻塞。
+	const budget = 500 * time.Millisecond
+	ctx, cancel := context.WithTimeout(context.Background(), budget)
 	defer cancel()
 	var held []*sql.Conn
 	defer func() {
@@ -47,9 +49,12 @@ func RollbackLeakedTx(database *sql.DB, poolSize int) {
 	for range poolSize {
 		conn, err := database.Conn(ctx)
 		if err != nil {
-			// 池饱和（500ms 预算内拿不到空闲连接）：在用连接正被其它请求
-			// 持有——持写锁的泄漏事务不可能在用（其 Tx 已 done 归还），
-			// 剩余空闲连接已遍历完。
+			// 池饱和（500ms 预算内拿不到空闲连接）：空闲列表空，泄漏连接
+			// （提交失败刚归还空闲）已被后续请求签出在用——其上仍是那个泄漏
+			// 事务，等待复用者操作完成无上界，放弃。代价：泄漏写锁滞留至
+			// 下一轮 commit 失败补发（该连接归还后居空闲栈顶，LIFO 先命中）
+			// 或池 ConnMaxLifetime 换血；WARN 供运维锚定「已放弃」。
+			log.Printf("WARN: 提交失败后补发 ROLLBACK 放弃（池饱和，%v 内未获空闲连接），泄漏事务未回收", budget)
 			break
 		}
 		held = append(held, conn)

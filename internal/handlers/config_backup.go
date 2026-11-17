@@ -4379,20 +4379,20 @@ func revalidateImportLiveDependencies(ctx context.Context, tx *sql.Tx, backup *c
 		liveRuleIDs := make(map[string]struct{})
 		rows, err := tx.QueryContext(ctx, `SELECT caddy_id FROM lb_rules`)
 		if err != nil {
-			return fmt.Errorf("锁内读取规则引用视图失败: %v", err)
+			return importInfraReadFailure(fmt.Errorf("锁内读取规则引用视图失败: %w", err))
 		}
 		for rows.Next() {
 			var id string
 			if err := rows.Scan(&id); err != nil {
 				rows.Close()
-				return fmt.Errorf("锁内读取规则引用视图失败: %v", err)
+				return importInfraReadFailure(fmt.Errorf("锁内读取规则引用视图失败: %w", err))
 			}
 			liveRuleIDs[id] = struct{}{}
 		}
 		err = rows.Err()
 		rows.Close()
 		if err != nil {
-			return fmt.Errorf("锁内读取规则引用视图失败: %v", err)
+			return importInfraReadFailure(fmt.Errorf("锁内读取规则引用视图失败: %w", err))
 		}
 		for _, table := range []string{"upstreams", "path_rules"} {
 			for i, row := range backup.Tables[table] {
@@ -4419,20 +4419,20 @@ func revalidateImportLiveDependencies(ctx context.Context, tx *sql.Tx, backup *c
 		livePolicyIDs := make(map[int64]struct{})
 		rows, err := tx.QueryContext(ctx, `SELECT id FROM security_policies`)
 		if err != nil {
-			return fmt.Errorf("锁内读取安全策略引用视图失败: %v", err)
+			return importInfraReadFailure(fmt.Errorf("锁内读取安全策略引用视图失败: %w", err))
 		}
 		for rows.Next() {
 			var id int64
 			if err := rows.Scan(&id); err != nil {
 				rows.Close()
-				return fmt.Errorf("锁内读取安全策略引用视图失败: %v", err)
+				return importInfraReadFailure(fmt.Errorf("锁内读取安全策略引用视图失败: %w", err))
 			}
 			livePolicyIDs[id] = struct{}{}
 		}
 		err = rows.Err()
 		rows.Close()
 		if err != nil {
-			return fmt.Errorf("锁内读取安全策略引用视图失败: %v", err)
+			return importInfraReadFailure(fmt.Errorf("锁内读取安全策略引用视图失败: %w", err))
 		}
 		for i, row := range bindingRows {
 			policyID, ok := backupInteger(row["policy_id"])
@@ -4489,7 +4489,7 @@ func revalidateImportLiveDependencies(ctx context.Context, tx *sql.Tx, backup *c
 			var liveDay int
 			if err := tx.QueryRowContext(ctx, `SELECT COALESCE(auto_backup_frequency,?), COALESCE(auto_backup_day,?) FROM global_config WHERE id=1`,
 				db.DefaultAutoBackupFrequency, db.DefaultAutoBackupDay).Scan(&liveFreq, &liveDay); err != nil {
-				return fmt.Errorf("锁内读取自动备份排程失败: %v", err)
+				return importInfraReadFailure(fmt.Errorf("锁内读取自动备份排程失败: %w", err))
 			}
 			if !freqProvided {
 				freq = liveFreq
@@ -4508,7 +4508,7 @@ func revalidateImportLiveDependencies(ctx context.Context, tx *sql.Tx, backup *c
 			if id, ok := backupInteger(raw); ok && id > 0 {
 				var count int
 				if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM ca_providers WHERE id=? AND COALESCE(enabled,1)=1`, id).Scan(&count); err != nil {
-					return fmt.Errorf("锁内复核默认 CA 提供商失败: %v", err)
+					return importInfraReadFailure(fmt.Errorf("锁内复核默认 CA 提供商失败: %w", err))
 				}
 				if count == 0 {
 					return fmt.Errorf("导入期间默认 CA 提供商（ID %d）已被删除或禁用", id)
@@ -4565,20 +4565,20 @@ func revalidateImportTrustedProxyRefs(ctx context.Context, tx *sql.Tx, backup *c
 		for _, ch := range chunkIDs(unique, 500) {
 			rows, err := tx.QueryContext(ctx, `SELECT id FROM security_ip_lists WHERE id IN (`+ch.placeholders+`)`, ch.args...)
 			if err != nil {
-				return fmt.Errorf("锁内复核受信代理引用失败: %v", err)
+				return importInfraReadFailure(fmt.Errorf("锁内复核受信代理引用失败: %w", err))
 			}
 			for rows.Next() {
 				var id int64
 				if err := rows.Scan(&id); err != nil {
 					rows.Close()
-					return fmt.Errorf("锁内复核受信代理引用失败: %v", err)
+					return importInfraReadFailure(fmt.Errorf("锁内复核受信代理引用失败: %w", err))
 				}
 				found[id] = true
 			}
 			err = rows.Err()
 			rows.Close()
 			if err != nil {
-				return fmt.Errorf("锁内复核受信代理引用失败: %v", err)
+				return importInfraReadFailure(fmt.Errorf("锁内复核受信代理引用失败: %w", err))
 			}
 		}
 		for _, id := range unique {
@@ -4589,7 +4589,7 @@ func revalidateImportTrustedProxyRefs(ctx context.Context, tx *sql.Tx, backup *c
 	case listsCarried && !refsCarried:
 		var refsText string
 		if err := tx.QueryRowContext(ctx, `SELECT COALESCE(trusted_proxy_range_refs,'[]') FROM global_config WHERE id=1`).Scan(&refsText); err != nil {
-			return fmt.Errorf("锁内读取受信代理引用列表失败: %v", err)
+			return importInfraReadFailure(fmt.Errorf("锁内读取受信代理引用列表失败: %w", err))
 		}
 		if strings.TrimSpace(refsText) == "" {
 			return nil
@@ -4660,7 +4660,7 @@ func revalidateImportLivePolicyIPListRefs(ctx context.Context, tx *sql.Tx, backu
 	}
 	rows, err := tx.QueryContext(ctx, `SELECT id, COALESCE(name,''), COALESCE(ip_acl_mode,''), COALESCE(ip_acl_list_refs,'[]'), COALESCE(ip_whitelist_refs,'[]'), COALESCE(crs_excluded_rules,'[]') FROM security_policies`)
 	if err != nil {
-		return fmt.Errorf("锁内读取安全策略的名单引用失败: %v", err)
+		return importInfraReadFailure(fmt.Errorf("锁内读取安全策略的名单引用失败: %w", err))
 	}
 	defer rows.Close()
 	var firstPolicyID int64
@@ -4672,7 +4672,7 @@ func revalidateImportLivePolicyIPListRefs(ctx context.Context, tx *sql.Tx, backu
 		var policyID int64
 		var policyName, aclMode, aclRefs, whitelistRefs, crsExcluded string
 		if err := rows.Scan(&policyID, &policyName, &aclMode, &aclRefs, &whitelistRefs, &crsExcluded); err != nil {
-			return fmt.Errorf("锁内读取安全策略的名单引用失败: %v", err)
+			return importInfraReadFailure(fmt.Errorf("锁内读取安全策略的名单引用失败: %w", err))
 		}
 		check := func(listID int64) {
 			if found {
@@ -4705,7 +4705,7 @@ func revalidateImportLivePolicyIPListRefs(ctx context.Context, tx *sql.Tx, backu
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return fmt.Errorf("锁内读取安全策略的名单引用失败: %v", err)
+		return importInfraReadFailure(fmt.Errorf("锁内读取安全策略的名单引用失败: %w", err))
 	}
 	if found {
 		return fmt.Errorf("导入后安全策略 %q(#%d) 引用的地址列表 #%d 将不存在（策略表未随包携带，而名单表被替换为不含该 id 的集合）——请同时携带安全策略表或保留该名单", firstName, firstPolicyID, firstListID)
@@ -4731,14 +4731,14 @@ func revalidateImportLivePolicyCustomRuleRefs(ctx context.Context, tx *sql.Tx, b
 	}
 	rows, err := tx.QueryContext(ctx, `SELECT id, COALESCE(name,''), COALESCE(custom_rules,'[]') FROM security_policies`)
 	if err != nil {
-		return fmt.Errorf("锁内读取安全策略的自定义规则引用失败: %v", err)
+		return importInfraReadFailure(fmt.Errorf("锁内读取安全策略的自定义规则引用失败: %w", err))
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var policyID int64
 		var policyName, refs string
 		if err := rows.Scan(&policyID, &policyName, &refs); err != nil {
-			return fmt.Errorf("锁内读取安全策略的自定义规则引用失败: %v", err)
+			return importInfraReadFailure(fmt.Errorf("锁内读取安全策略的自定义规则引用失败: %w", err))
 		}
 		var ruleIDs []int
 		if err := json.Unmarshal([]byte(refs), &ruleIDs); err != nil {
@@ -4752,7 +4752,7 @@ func revalidateImportLivePolicyCustomRuleRefs(ctx context.Context, tx *sql.Tx, b
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return fmt.Errorf("锁内读取安全策略的自定义规则引用失败: %v", err)
+		return importInfraReadFailure(fmt.Errorf("锁内读取安全策略的自定义规则引用失败: %w", err))
 	}
 	return nil
 }
@@ -6115,6 +6115,21 @@ func failImportTx(c *gin.Context, session *configImportSession, action, detail s
 	return err
 }
 
+// failImportLockedStage 锁内复核失败的统一收尾：基础设施读失败（受信代理/
+// importInfraReadError 族——锁内 live 读位点已全部包裹）映射 500 + 固定文案
+// （与初检链 writeImportChainReadFailure 同口径——DB IO 失败不得伪装成
+// 「实时数据已变化」竞态 400 误导管理员反复更换备份文件，也不得回显驱动
+// 原文）；其余失败保持 400 竞态语义（文案断言「已变化」对真竞态成立）。
+// 两分支都经 failImportAbort 完成「回滚 → 失败审计」收尾。
+func failImportLockedStage(c *gin.Context, session *configImportSession, action, detail string, cause error, responsePrefix string) error {
+	err := failImportAbort(c, session, action, detail, cause)
+	if !writeImportChainReadFailure(c, cause) {
+		message := responsePrefix + "，已回滚: " + err.Error()
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: http.StatusBadRequest, Message: message})
+	}
+	return err
+}
+
 // rowsAffectedOrUnknown 读取执行结果的受影响行数：错误时留痕并按「未知」返回
 // known=false。调用方不得把未知当 0——归一计数会把已发生的语义变更（off→
 // custom_only 使自定义规则开始生效）静默成「0 条」，重播种计数会把「已插入」
@@ -6310,7 +6325,7 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 	_, tlsProvidersCarried := backup.Tables["ca_providers"]
 	if tlsRulesCarried && !tlsConfigsCarried && !tlsProvidersCarried && acmeDanglingImported == 0 {
 		if _, err := validateV2BackupTLSShapeSoft(backup.Tables, false); err != nil {
-			err = failImportTx(c, session, action, "导入锁内 ACME/TLS 复核失败", err, http.StatusBadRequest, "导入期间规则引用的 DNS/CA 配置已失效，已拒绝导入")
+			err = failImportLockedStage(c, session, action, "导入锁内 ACME/TLS 复核失败", err, "导入期间规则引用的 DNS/CA 配置已失效，已拒绝导入")
 			return
 		}
 	}
@@ -6381,7 +6396,7 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 	}
 	// 初检读取 live 的三项合并校验在锁内重跑（任何写之前）。
 	if err := revalidateImportLiveDependencies(ctx, tx, &backup, sectionTables); err != nil {
-		err = failImportTx(c, session, action, "导入锁内实时依赖复核失败", err, http.StatusBadRequest, "导入期间依赖的实时数据已变化，已拒绝导入")
+		err = failImportLockedStage(c, session, action, "导入锁内实时依赖复核失败", err, "导入期间依赖的实时数据已变化，已拒绝导入")
 		return
 	}
 	// 「规则→阶段拦截页」锁内复核已随功能停用删除（2026-11 用户裁定）。
@@ -6391,7 +6406,7 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 		// 策略引用的名单/自定义规则表缺席时，初检按 live 回退；该 live 视图
 		// 也必须在锁内事务重验，堵住初检到加锁之间删除引用对象的窗口。
 		if err := validateV2BackupSecurityPoliciesWithQuerier(ctx, backup.Tables, crsTreeReplaced, tx); err != nil {
-			err = failImportTx(c, session, action, "导入锁内安全策略引用复核失败", err, http.StatusBadRequest, "导入期间依赖的实时数据已变化，已拒绝导入")
+			err = failImportLockedStage(c, session, action, "导入锁内安全策略引用复核失败", err, "导入期间依赖的实时数据已变化，已拒绝导入")
 			return
 		}
 	}

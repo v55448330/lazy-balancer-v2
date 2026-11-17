@@ -273,7 +273,6 @@ func TestCRSUpdateRun_slaveAbortsBeforeFetch(t *testing.T) {
 	m.mu.Lock()
 	state := m.state
 	m.mu.Unlock()
-	// 语义，非故障）。
 	if state.status != CRSStatusSkipped {
 		t.Fatalf("in-memory status=%q, want skipped (aborted on slave)", state.status)
 	}
@@ -307,7 +306,6 @@ func TestIP2RegionUpdateRun_slaveAbortsBeforeFetch(t *testing.T) {
 	m.mu.Lock()
 	state := m.state
 	m.mu.Unlock()
-	// 跳过语义，非故障）。
 	if state.status != IP2RegionStatusSkipped {
 		t.Fatalf("in-memory status=%q, want skipped (aborted on slave)", state.status)
 	}

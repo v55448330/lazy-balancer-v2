@@ -5,9 +5,12 @@ package db
 // 断言补发后写锁释放。镜像 handlers/rollback_leaked_tx_pool_test 手法。
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"errors"
+	"log"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -80,7 +83,7 @@ func assertWriteLockReleased(t *testing.T, database *sql.DB) {
 	}
 }
 
-func openLeakTestDB(t *testing.T, name string, busyMs int) *sql.DB {
+func openLeakTestDB(t *testing.T, name string) *sql.DB {
 	t.Helper()
 	database, err := openSQLiteDB(filepath.Join(t.TempDir(), name), sqlitePoolConfig{maxOpen: 5, maxIdle: 5, connMaxLifetime: time.Minute})
 	if err != nil {
@@ -91,7 +94,7 @@ func openLeakTestDB(t *testing.T, name string, busyMs int) *sql.DB {
 }
 
 func TestRollbackLeakedTx_releasesNonTopLeakedConn(t *testing.T) {
-	database := openLeakTestDB(t, "leak.db", 500)
+	database := openLeakTestDB(t, "leak.db")
 	leakUncommittedTx(t, database)
 	// 签出两条新连接压到泄漏连接之上（空闲列表 LIFO：取栈顶还栈顶）——
 	// 泄漏连接沉底，栈顶两条均无活动事务（确定性非栈顶形态）。
@@ -123,7 +126,7 @@ func TestRollbackLeakedTx_nilAndZeroPoolNoop(t *testing.T) {
 }
 
 func TestRollbackLeakedTx_noLeakIsBenign(t *testing.T) {
-	database := openLeakTestDB(t, "clean.db", 500)
+	database := openLeakTestDB(t, "clean.db")
 	if _, err := database.Exec(`CREATE TABLE leak_parent (id INTEGER PRIMARY KEY)`); err != nil {
 		t.Fatal(err)
 	}
@@ -132,9 +135,10 @@ func TestRollbackLeakedTx_noLeakIsBenign(t *testing.T) {
 }
 
 // TestRollbackLeakedTx_givesUpQuicklyWhenPoolSaturated：池被在用连接占满时
-// 补发必须快速放弃——在用连接上不可能有泄漏事务（其 Tx 已 done 归还池），
-// 等待它们毫无意义。500ms 饱和探测预算内拿不到空闲连接即 break；旧实现
-// 30s 固定预算会在池饱和时阻塞调用方整整一个超时周期。
+// 补发必须快速放弃——池满说明泄漏连接（提交失败刚归还空闲）已被后续请求
+// 签出在用（其上仍是泄漏事务，等待复用者完成无上界）。500ms 饱和探测预算
+// 内拿不到空闲连接即 break + WARN 留痕；旧实现 30s 固定预算会在池饱和时
+// 阻塞调用方整整一个超时周期。
 func TestRollbackLeakedTx_givesUpQuicklyWhenPoolSaturated(t *testing.T) {
 	database, err := openSQLiteDB(filepath.Join(t.TempDir(), "saturated.db"), sqlitePoolConfig{maxOpen: 1, maxIdle: 1, connMaxLifetime: time.Minute})
 	if err != nil {
@@ -147,10 +151,17 @@ func TestRollbackLeakedTx_givesUpQuicklyWhenPoolSaturated(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer conn.Close()
+	// 放弃分支必须留痕（否则泄漏锁滞留期间运维只见连环 busy 失败，无锚点）。
+	var logBuf bytes.Buffer
+	log.SetOutput(&logBuf)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
 	start := time.Now()
 	RollbackLeakedTx(database, 1)
 	elapsed := time.Since(start)
 	if elapsed >= 5*time.Second {
 		t.Fatalf("池饱和时补发耗时 %v：必须快速放弃（预算 <5s，旧实现阻塞 ~30s）", elapsed)
+	}
+	if !strings.Contains(logBuf.String(), "泄漏事务未回收") {
+		t.Fatalf("放弃分支缺 WARN 留痕，日志=%q", logBuf.String())
 	}
 }
