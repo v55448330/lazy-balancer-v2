@@ -108,6 +108,12 @@ func TestCatalogQuotedEntriesRenderWithoutBackslashes(t *testing.T) {
 
 // 错误模板 zh/en 占位符数量必须一致:不一致时 matchTpl 恒不命中,
 // 英文用户永远回落中文。反斜杠示例必须保留字面量 \$(单反斜杠)。
+
+// errTplPlaceholderCount 按 matchTpl 的 splitTplPlaceholders 同口径计真
+// 占位数:%% 是转义百分号字面量,%%s 不得计入 %s 占位——裸 strings.Count
+// 会把 %%s 误计为占位,放行 zh 真占位/en %%s 的失配对照样(英文静默回落中文)。
+func errTplPlaceholderCount(tpl string) int { return len(splitTplPlaceholders(tpl)) - 1 }
+
 func TestErrTplPlaceholderParity(t *testing.T) {
 	source, err := os.ReadFile("errtpl_gen.go")
 	if err != nil {
@@ -123,9 +129,22 @@ func TestErrTplPlaceholderParity(t *testing.T) {
 		if err1 != nil || err2 != nil {
 			t.Fatalf("字面量解码失败: %v / %v", err1, err2)
 		}
-		if nz, ne := strings.Count(zh, "%s"), strings.Count(en, "%s"); nz != ne {
+		if nz, ne := errTplPlaceholderCount(zh), errTplPlaceholderCount(en); nz != ne {
 			t.Errorf("占位符数不一致 zh=%d en=%d: %q", nz, ne, zh)
 		}
+	}
+}
+
+// %% 转义口径钉:zh 真占位 %s 与 en 转义字面量 %%s 是真实失配——matchTpl
+// 恒不命中,英文静默回落中文;裸 strings.Count 把 %%s 误计为占位会放行该
+// 失配对照样。parity 判据必须按 splitTplPlaceholders 计,且 %%s 对照不得命中。
+func TestErrTplPlaceholderParity_percentEscapeMismatch(t *testing.T) {
+	zh, en := "占比 %s 过低", "ratio %%s too low"
+	if nz, ne := errTplPlaceholderCount(zh), errTplPlaceholderCount(en); nz == ne {
+		t.Fatalf("zh 占位=%d en 占位=%d, %%s 不得计为占位（parity 应判失配）", nz, ne)
+	}
+	if _, ok := matchTpl("占比 3/10 过低", zh, en); ok {
+		t.Fatal("真占位/转义失配模板不得命中 matchTpl（英文会静默回落中文）")
 	}
 }
 

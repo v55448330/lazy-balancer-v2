@@ -1,6 +1,6 @@
 package middleware
 
-// ①：PurgeAPIKeyWhitelistCache 必须按 keyID 前缀精确清扫——
+// PurgeAPIKeyWhitelistCache 必须按 keyID 前缀精确清扫——
 // "|" 分隔保证 keyID=3 不误伤 "30|…" 前缀；其他 Key 的条目不受影响。
 
 import (

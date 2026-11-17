@@ -260,6 +260,10 @@ func (p *humanEventPoster) deliver(ev humanEvent) {
 	if disabled {
 		return // env 显式关闭：不拨号不计失败（关闭≠投递故障）
 	}
+	// 防御性分支（当前不可达）：initClient 在 disabled 先判后必然建立客户端
+	// （未关闭时 client 非 nil），生产与测试注入（initClientWithURL）都不产生
+	// 「未关闭且 client==nil」形态。保留作兜底：未来 initClient 若新增提前
+	// 返回路径，事件仍计失败可对账，不得静默蒸发。
 	if client == nil {
 		humanEventDeliverFailed.Add(1)
 		return

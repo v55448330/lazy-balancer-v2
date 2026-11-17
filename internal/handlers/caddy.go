@@ -1096,7 +1096,9 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 		}
 	} else if err := commitTx(tx); err != nil {
 		// 非渲染变更没有 Caddy 交互：提交失败只回滚事务、不触碰运行配置与
-		// LKG（本次保存从未下发任何内容）。
+		// LKG（本次保存从未下发任何内容）。Commit 失败 Tx 已 done，defer
+		// Rollback 不触达 driver——池级补发回收泄漏写锁。
+		rollbackLeakedTx()
 		recordAudit(c, "更新失败", "全局配置", services.FormatAuditDetail("提交配置失败", err.Error(), services.AuditResultPart("failure")))
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.Tf(c, "k_43011181", apimsg.ErrMsg(c, err))})
 		return
@@ -1631,8 +1633,10 @@ func (h *Handlers) PutCaddyConfig(c *gin.Context) {
 		}
 	}
 
-	// 2026-09-06 裁定 ④' 边界补齐：逃生口同样过 Caddy CLI 校验层——校验输入
-	// 即将应用的原始 JSON。校验器不可用放行（下方 ApplyConfig 拒绝即回滚）。
+	// 2026-09-06 裁定 ④' 边界补齐：逃生口同样过 Caddy CLI 校验层——校验输入=
+	// 用户原始载荷（含内部键；CLI 可用形态拒未知字段，fail-closed 有意设计），
+	// 应用输入=剥离内部键后的视图（上方 StripCaddyInternalKeys）。校验器不可用
+	// 放行（下方 ApplyConfig 拒绝即回滚）。
 	if err := h.caddyService.ValidateJSONViaCLI([]byte(req.Content)); err != nil {
 		if !errors.Is(err, services.ErrCLIValidatorUnavailable) {
 			recordAudit(c, "更新失败", "Caddy配置", services.FormatAuditDetail("Caddy 配置校验未通过", err.Error(), services.AuditResultPart("failure")))

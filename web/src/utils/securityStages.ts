@@ -1632,9 +1632,17 @@ const CUSTOM_RULE_OR_CONDITION_ID_BASE = 3000000
 // OR 条件分支 emit id 的除数与写侧条件数上限同源（customRuleLimits 单源，
 // 跨栈对表 Go customRuleMaxConditions）——双份字面量后端变更漏一处会静默错解父 id。
 
+// 规范十进制解析单源（与后端 attackFamilyClassOf canonicalDecimal 同口径：
+// 全 ASCII 数字且无前导零，"0" 除外）：宽松 Number() 接受 '+3000001'/
+// '03000001' 符号/前导零带外形，而 SQL GLOB 首位判据拒收——带外行不得经
+// 数值段归族/回解父规则（视图/筛选分叉）。非规范形返回 NaN，仅 msg/前缀
+// 分支仍可归族（与后端收敛前同口径）。
+const parseCanonicalTriggerID = (t: string): number =>
+  /^(?:0|[1-9]\d*)$/.test(t) ? Number(t) : Number.NaN
+
 // 普通 emit id 与 OR 条件分支 emit id 都回解到同一 DB 父规则；旧内嵌合成 id 无父行。
 export const customRuleEventDbID = (ruleTriggered: string): number => {
-  const n = Number((ruleTriggered ?? '').trim())
+  const n = parseCanonicalTriggerID((ruleTriggered ?? '').trim())
   if (!Number.isInteger(n)) return Number.NaN
   if (n > 10000 && n < 800000) return n - 10000
   if (n >= CUSTOM_RULE_OR_CONDITION_ID_BASE) {
@@ -1652,7 +1660,7 @@ export const triggerStageFamily = (ruleTriggered: string): TriggerStageFamily =>
   // default 误归 ACL。与后端 attackFamilyClassOf human_/cc_ 分支同口径。
   if (t.startsWith('human_') || t.startsWith('cc_')) return 'human'
   if (t === '11') return 'body'
-  const n = Number(t)
+  const n = parseCanonicalTriggerID(t)
   if (!Number.isFinite(n)) return 'other'
   // ⓪ 阶段 1 预检逐策略链段（1500000+policyID ACL / 1510000+policyID 黑名单）
   //    落在「≥1000000 合成」形态区间内，必须先于自定义形态正则排除——镜像

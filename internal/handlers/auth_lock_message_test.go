@@ -1,6 +1,6 @@
 package handlers
 
-// ③：登录锁定的 429 文案必须按 login_locked_until 派生剩余
+// 登录锁定的 429 文案必须按 login_locked_until 派生剩余
 // 分钟——修复前硬编码「请 10 分钟后重试」：与 loginLockCooldown 漂移，且锁定
 // 中途重试时剩余时长早已不足 10 分钟。
 

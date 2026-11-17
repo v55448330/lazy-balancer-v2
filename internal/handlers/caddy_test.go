@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -91,6 +92,7 @@ func seedProcStat(t *testing.T, root, pid, comm string, state byte) {
 }
 
 func TestCaddyProcessRunning_excludesZombieProcesses(t *testing.T) {
+	withIsolatedGlobal(t)
 	// Given 伪 /proc 中只有僵尸 caddy（entrypoint 孵化、父进程未回收的子进程——
 	// comm 仍为 caddy 且进程存在，但已 dead 不能再服务）
 	root := t.TempDir()
@@ -106,6 +108,7 @@ func TestCaddyProcessRunning_excludesZombieProcesses(t *testing.T) {
 }
 
 func TestCaddyProcessRunning_detectsLiveProcess(t *testing.T) {
+	withIsolatedGlobal(t)
 	// Given 伪 /proc 中一个僵尸 + 一个存活 caddy
 	root := t.TempDir()
 	seedProcStat(t, root, "10", "caddy", 'Z')
@@ -124,6 +127,7 @@ func TestCaddyProcessRunning_detectsLiveProcess(t *testing.T) {
 // 时，取最小 pid（而非 ReadDir 返回序首个）——否则仪表盘 pid 会在两次轮询间
 // 跳动。
 func TestCaddyLivePID_picksLowestLivePid(t *testing.T) {
+	withIsolatedGlobal(t)
 	root := t.TempDir()
 	seedProcStat(t, root, "900", "caddy", 'S')
 	seedProcStat(t, root, "400", "caddy", 'S')
@@ -139,6 +143,7 @@ func TestCaddyLivePID_picksLowestLivePid(t *testing.T) {
 }
 
 func TestCaddyProcessRunning_ignoresNonCaddyAndEmpty(t *testing.T) {
+	withIsolatedGlobal(t)
 	// Given 伪 /proc 只有其他进程与无 caddy 的空目录两种情况
 	root := t.TempDir()
 	seedProcStat(t, root, "1", "lazy-balancer", 'S')
@@ -159,6 +164,7 @@ func TestCaddyProcessRunning_ignoresNonCaddyAndEmpty(t *testing.T) {
 }
 
 func TestGetCaddyStatus_reportsPidAndState(t *testing.T) {
+	withIsolatedGlobal(t)
 	// Given /config/ 可达（admin 200）且 /proc 中存在存活 caddy（pid 686）+ 僵尸（pid 10）
 	root := t.TempDir()
 	seedProcStat(t, root, "10", "caddy", 'Z')
@@ -198,6 +204,7 @@ func TestGetCaddyStatus_reportsPidAndState(t *testing.T) {
 }
 
 func TestGetCaddyStatus_fallsBackToProcWhenAdminUnreachable(t *testing.T) {
+	withIsolatedGlobal(t)
 	// Given /config/ 不可达且 /proc 中存活 caddy（pid 686）与仅僵尸（pid 10）两种视图
 	h := &Handlers{cfg: &config.Config{CaddyAdminURL: "http://127.0.0.1:1"}}
 	router := gin.New()
@@ -880,14 +887,27 @@ func TestUpdateConfig_compoundFailureClassifiesByPreJoinSnapshot(t *testing.T) {
 	if err := db.InitializeAuditDB(t.TempDir()); err != nil {
 		t.Fatal(err)
 	}
+	// 运行配置必须随首次 /load 演化（GET 桩返回最近一次下发的字节）：静态
+	// GET 桩会让回弹目标恒等于运行态——restoreErr 恒 nil（同字节短路），
+	// join 前/后分类变异均绿（空钉）。演化后回弹目标≠运行态，第二次 /load
+	// 真发并被 400 拒绝，restoreErr 携带 ConfigRejectedError 才真正入 join。
 	var loads atomic.Int32
+	var currentConfig atomic.Value
+	currentConfig.Store(`{"old":true}`)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/config/":
-			_, _ = w.Write([]byte(`{"old":true}`))
+			_, _ = w.Write([]byte(currentConfig.Load().(string)))
 		case r.Method == http.MethodPost && r.URL.Path == "/load":
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
 			if loads.Add(1) == 1 {
-				// 首次 apply：500 系统故障（非 ConfigRejected）。
+				// 首次 apply：运行配置先演化为候选，再回 500 系统故障
+				//（非 ConfigRejected）——回弹目标与运行态从此分叉。
+				currentConfig.Store(string(body))
 				w.WriteHeader(http.StatusInternalServerError)
 				_, _ = w.Write([]byte(`{"error":"transport boom"}`))
 				return
@@ -911,6 +931,9 @@ func TestUpdateConfig_compoundFailureClassifiesByPreJoinSnapshot(t *testing.T) {
 	if response.Code != http.StatusInternalServerError {
 		t.Fatalf("status=%d body=%s, want 500（复合故障按 join 前快照分类，回弹拒绝不得污染成 400）", response.Code, response.Body.String())
 	}
+	if loads.Load() != 2 {
+		t.Fatalf("/load 调用数=%d, want 2（回弹必须真发——restoreErr 非 nil 才构成复合故障）", loads.Load())
+	}
 }
 
 // 复合故障（apply 传输失败 + 回弹被 Caddy 拒绝）的 PutCaddyConfig 镜像钉：
@@ -922,14 +945,24 @@ func TestPutCaddyConfig_compoundFailureClassifiesByPreJoinSnapshot(t *testing.T)
 	if _, err := db.DB.Exec("UPDATE global_config SET caddy_config='old-config' WHERE id=1"); err != nil {
 		t.Fatalf("seed config: %v", err)
 	}
+	// 运行配置随首次 /load 演化（同 UpdateConfig 镜像钉）：静态 GET 桩使
+	// restoreErr 恒 nil，join 前/后分类变异均绿（空钉）。
 	var loads atomic.Int32
+	var currentConfig atomic.Value
+	currentConfig.Store(`{"old":true}`)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/config/":
-			_, _ = w.Write([]byte(`{"old":true}`))
+			_, _ = w.Write([]byte(currentConfig.Load().(string)))
 		case r.Method == http.MethodPost && r.URL.Path == "/load":
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
 			if loads.Add(1) == 1 {
-				// 首次 apply：500 系统故障（非 ConfigRejected）。
+				// 首次 apply：运行配置演化为候选后回 500 系统故障。
+				currentConfig.Store(string(body))
 				w.WriteHeader(http.StatusInternalServerError)
 				_, _ = w.Write([]byte(`{"error":"transport boom"}`))
 				return
@@ -955,6 +988,9 @@ func TestPutCaddyConfig_compoundFailureClassifiesByPreJoinSnapshot(t *testing.T)
 	router.ServeHTTP(response, request)
 	if response.Code != http.StatusInternalServerError {
 		t.Fatalf("status=%d body=%s, want 500（复合故障按 join 前快照分类，回弹拒绝不得污染成 400）", response.Code, response.Body.String())
+	}
+	if loads.Load() != 2 {
+		t.Fatalf("/load 调用数=%d, want 2（回弹必须真发——restoreErr 非 nil 才构成复合故障）", loads.Load())
 	}
 }
 
@@ -1132,6 +1168,7 @@ func TestStopCaddy_failureRemovesPauseFile(t *testing.T) {
 // 监督器委托成功路径同样要解除 pause：pause 残留会让监督器永不重启 Caddy
 // （admin 就绪=委托完成即返回，不能靠后续操作兜底清理）。
 func TestStartCaddy_supervisorDelegationClearsPause(t *testing.T) {
+	withIsolatedGlobal(t)
 	dir := t.TempDir()
 	pidFile := filepath.Join(dir, "supervisor.pid")
 	if err := os.WriteFile(pidFile, []byte("12345"), 0o644); err != nil {

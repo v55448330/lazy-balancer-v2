@@ -245,6 +245,7 @@ func TestConfigImportSessionClose_idempotent(t *testing.T) {
 // ctx-blind 在途任务超过排空预算后不得继续全量导入；
 // 必须恢复调度、释放会话锁并返回可重试 409，而非留下 last-writer-wins 窗口。
 func TestBeginConfigImport_taskDrainTimeoutAbortsBeforeTransaction(t *testing.T) {
+	withIsolatedGlobal(t)
 	h := newBackupTestHandlers(t)
 	initTaskEngineForTest(t)
 	oldTimeout := importInFlightDrainTimeout

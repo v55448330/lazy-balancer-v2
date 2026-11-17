@@ -342,6 +342,7 @@ func ThreatScreenAttackFlowSnapshot(since uint64, limit int) ([]ThreatScreenAtta
 	return out, next, gapSkipped
 }
 
+// testseam: 代际复位交错注入钩子（生产复位临界区判 nil 分支，宿主留驻产品文件）。
 // threatScreenAttackFlowGenerationResetHookForTest 在代际复位的临界区后
 // 提供确定性交错缝；生产恒 nil。
 var threatScreenAttackFlowGenerationResetHookForTest func()
@@ -363,6 +364,7 @@ func threatScreenAttackFlowResetRingForGeneration() {
 	}
 }
 
+// testseam: 光流环状态复位缝（handlers 测试跨包消费，宿主留驻产品文件）。
 // ResetThreatScreenAttackFlowForTest 测试缝：清空环形缓冲、租约表与采样状态。
 func ResetThreatScreenAttackFlowForTest() {
 	threatScreenAttackFlowMu.Lock()
@@ -376,6 +378,7 @@ func ResetThreatScreenAttackFlowForTest() {
 	threatScreenAttackFlowSampleN.Store(0)
 }
 
+// testseam: 光流环直追加缝（handlers 测试跨包消费，宿主留驻产品文件）。
 // ThreatScreenAttackFlowAppendForTest 测试缝：直接向环形缓冲追加一条光流
 // 事件并返回分配到的序号（过滤/空洞判定的跨包用例需要可控的入环序列；
 // 生产路径经 threatScreenAttackFlowRecordBatch 在 security_events 事务提交后

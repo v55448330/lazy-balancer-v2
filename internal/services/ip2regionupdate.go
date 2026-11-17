@@ -132,6 +132,7 @@ func GetIP2RegionUpdateManager() *IP2RegionUpdateManager {
 	return ip2RegionUpdateManager
 }
 
+// testseam: IP2Region 更新单例复位缝（handlers 测试跨包消费，宿主留驻产品文件）。
 func ResetIP2RegionUpdateManagerForTest() {
 	ip2RegionUpdateManager = nil
 	ip2RegionUpdateManagerOnce = sync.Once{}

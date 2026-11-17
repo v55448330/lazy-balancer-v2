@@ -319,7 +319,10 @@ const (
 	// v5：全数字守卫收敛——非数字 5 位/≥7 位 1 开头带外形态不再仅凭长度/前缀
 	// 归自定义规则族（categorizeAttack 快速路径/合成支与 attackFamilyClassOf
 	// 同口径）——分类口径变更，已固化分钟须重固。
-	threatRollupClassifierVersion = "5"
+	// v6：OR 段全数字守卫——+3000001/03000001 符号/前导零带外形态不再经宽松
+	// Atoi 归自定义规则族（与 SQL GLOB '[3-6][0-9]…'/前端 ^\d 正则同口径）——
+	// 分类口径变更，已固化分钟须重固。
+	threatRollupClassifierVersion = "6"
 	// threatRollupPredicateVersionKey / threatRollupPredicateVersion 固化口径
 	// 代际：保留地址排除谓词与攻击口径（爬虫放行不计入攻击）都会让已固化
 	// 分钟的口径静默过时（水位机制只保护迟到事件，不保护语义变更）——口径
@@ -597,6 +600,7 @@ func threatRollupRewindToInLock(minute time.Time, reclassifyMinutes []time.Time)
 		}
 	}
 	if err := tx.Commit(); err != nil {
+		db.RollbackLeakedTx(db.MetricsDB, db.MetricsPoolMaxOpen)
 		services.Logf("warn", "threat rollup rewind: commit failed: %v", err)
 		return false
 	}
@@ -871,6 +875,7 @@ func ensureThreatRollupWithYields(hours int) error {
 				return err
 			}
 			if err := tx.Commit(); err != nil {
+				db.RollbackLeakedTx(db.MetricsDB, db.MetricsPoolMaxOpen)
 				return err
 			}
 			if err := yield(); err != nil {
@@ -912,6 +917,7 @@ func ensureThreatRollupWithYields(hours int) error {
 				return err
 			}
 			if err := tx.Commit(); err != nil {
+				db.RollbackLeakedTx(db.MetricsDB, db.MetricsPoolMaxOpen)
 				return err
 			}
 			if err := yield(); err != nil {
@@ -974,6 +980,7 @@ func ensureThreatRollupWithYields(hours int) error {
 			}
 		}
 		if err := tx.Commit(); err != nil {
+			db.RollbackLeakedTx(db.MetricsDB, db.MetricsPoolMaxOpen)
 			return err
 		}
 	}

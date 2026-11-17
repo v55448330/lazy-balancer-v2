@@ -57,6 +57,7 @@ func TestListSecurityEvents_hugePageDoesNot500(t *testing.T) {
 // TestListCRSRules_hugePageDoesNot500 验证超大 page 参数被 clamp，
 // allRules[start:end] 不再越界 panic。
 func TestListCRSRules_hugePageDoesNot500(t *testing.T) {
+	withIsolatedGlobal(t)
 	oldDir := crsRulesDir
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "REQUEST-901-INITIALIZATION.conf"), []byte("# stub"), 0o644); err != nil {

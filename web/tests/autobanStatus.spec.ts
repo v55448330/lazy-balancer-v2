@@ -185,7 +185,7 @@ test('总览卡：四统计卡一行 + 单黄条 + IP 建议表 + 累犯下钻�
   assert.match(page, /v-if="autobanIneffective"/, '单黄条必须绑定判据')
   assert.match(page, /autobanStatus\?\.escalated_count/, '累犯升级数必须消费 escalated_count 键')
   assert.match(page, /autobanStatus\?\.banned_today/, '今日封禁必须消费 banned_today 键')
-  assert.match(page, /autobanEscalationShortKey\(autobanStatus\?\.escalation\)/, '累犯档列必须消费状态级 escalation')
+  assert.match(page, /autobanStatValue\(autobanError, t\(autobanEscalationShortKey\(autobanStatus\?\.escalation\)\)\)/, '累犯档列必须消费状态级 escalation 并过错误门（/status 失败显「—」而非初值「关闭」）')
   // 四统计卡一行（grid 4 列）+ 移动端堆叠
   assert.match(page, /\.autoban-stats \{[^}]*grid-template-columns: repeat\(4, minmax\(0, 1fr\)\)/, '四统计卡必须 grid 4 列一行')
   assert.match(cssRule(page, '@media (max-width: 768px)'), /\.autoban-body \{ flex-direction: column; \}/, '移动端必须堆叠')
@@ -308,7 +308,7 @@ test('事件页：单黄条 + IP 建议表 + 七项配置弹框接线', () => {
   // 配置预览行必须含累犯升级档位（状态级口径，短文案单源）
   const statsRow = section(page, '<div class="autoban-stats">', '</div>')
   assert.match(statsRow, /t\('app\.security\.events\.escalationLabel'\)/, '配置预览必须含累犯升级标签')
-  assert.match(statsRow, /autobanEscalationShortKey\(autobanStatus\.escalation\)/, '累犯升级档位必须消费状态级 escalation')
+  assert.match(statsRow, /autobanStatValue\(autobanStatusError, t\(autobanEscalationShortKey\(autobanStatus\.escalation\)\)\)/, '累犯升级档位必须消费状态级 escalation 并过错误门（/status 失败显「—」而非初值「关闭」）')
   // 配置弹框七项（六基础 + 累犯升级）；NAT 段整体退役
   assert.match(page, /v-model="autobanForm\.escalation"/, '累犯升级选择必须绑定')
   for (const gone of ['nat_detection', 'nat_fingerprint_threshold', 'natPrivacyNotice', 'autobanNatActive', 'autobanChannelSplit', 'autobanEnforcementLayer', 'autobanIdentityIp', 'session_bans', 'ban_effective_session']) {

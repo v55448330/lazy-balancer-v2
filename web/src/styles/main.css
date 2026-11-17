@@ -536,9 +536,9 @@ html[data-locale='en'] .el-table .cell .el-button.is-link { white-space: normal;
 html[data-locale='en'] .el-form-item__label { word-break: keep-all; overflow-wrap: break-word; }
 /* en 与 zh 同构:label 两行整词换行规整化(行距 1.4,不裁剪不断词) */
 html[data-locale='en'] .el-form-item__label { white-space: normal; line-height: 1.4; }
-/* en tip:行内样式为默认(放得下单行紧贴控件);tip-nowrap 解除(长文案自然折行对齐) */
-html[data-locale='en'] .form-tip-inline,
-html[data-locale='en'] .tip-nowrap { white-space: normal; line-height: 1.5; }
+/* en tip:行内样式为默认(放得下单行紧贴控件);长文案自然折行对齐
+   (旧 tip-nowrap 类已退役为组件内 tip-wrap,全 locale 生效,此处不再重复) */
+html[data-locale='en'] .form-tip-inline { white-space: normal; line-height: 1.5; }
 html[data-locale='en'] .form-tip-inline { margin: 4px 0 4px 8px; }
 
 /* descriptions 预览表 label 列不换行(整词单行,列宽自动让位) */

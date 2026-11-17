@@ -943,11 +943,18 @@ func (s *CertIssuer) deployIssuedCertificate(ctx context.Context, jobID int, mat
 		"deployment_attempts":        0,
 		"deployment_available_after": nil,
 	}))
+	committed := false
 	if err == nil {
 		err = tx.Commit()
+		committed = err == nil
 	}
 	if err != nil {
 		rollbackErr := tx.Rollback()
+		if !committed && errors.Is(rollbackErr, sql.ErrTxDone) {
+			// Commit 失败后 Tx 已 done，Rollback 不触达 driver——泄漏写事务
+			// 池级补发（transition 失败形态 Rollback 正常回滚，无需补发）。
+			db.RollbackLeakedTx(db.DB, db.MainPoolMaxOpen)
+		}
 		// 并发部署回调（在途回调 × 补扫重试）部署同 jobID 同一份
 		// 证书时，CAS 败者的部署前快照可能早于胜者写入——无条件恢复会把磁盘
 		// 回退到旧证书，与 DB('issued'+新 PEM)/Caddy 三方静默分叉，且

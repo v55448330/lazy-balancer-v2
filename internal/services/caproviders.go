@@ -423,6 +423,7 @@ func (s *CAProviderService) UpdateCAProvider(id int, req models.UpdateCAProvider
 	}
 
 	if err := tx.Commit(); err != nil {
+		db.RollbackLeakedTx(db.DB, db.MainPoolMaxOpen)
 		return models.CAProvider{}, err
 	}
 	// 配置提交后发布失效事件——队列 tick 见版本变化即按新值

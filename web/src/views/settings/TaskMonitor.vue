@@ -126,7 +126,7 @@
               <el-radio-button value="scheduled">{{ t('app.settings.taskMonitor.triggerFamily.scheduled') }}</el-radio-button>
               <el-radio-button value="daemon">{{ t('app.settings.taskMonitor.triggerFamily.daemon') }}</el-radio-button>
               <el-radio-button value="periodic">{{ t('app.settings.taskMonitor.triggerFamily.periodic') }}</el-radio-button>
-              <el-radio-button value="oneshot">{{ t('app.settings.taskMonitor.col.trigger') }}</el-radio-button>
+              <el-radio-button value="oneshot">{{ t('app.settings.taskMonitor.triggerFamily.oneshot') }}</el-radio-button>
             </el-radio-group>
           </div>
         </div>

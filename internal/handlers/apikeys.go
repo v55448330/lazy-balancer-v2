@@ -547,6 +547,8 @@ func updateAPIKeyStatus(c *gin.Context, currentUserOnly bool) {
 	}
 	// 提交先于审计：审计（独立 AuditDB 连接）不得记录可能随后回滚的变更。
 	if err := commitTx(tx); err != nil {
+		// Commit 失败 Tx 已 done，defer Rollback 不触达 driver——池级补发。
+		rollbackLeakedTx()
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_8b56878d"), MessageKey: "k_8b56878d"})
 		return
 	}
@@ -574,7 +576,7 @@ func updateAPIKeyStatus(c *gin.Context, currentUserOnly bool) {
 		auditDetail = services.FormatAuditDetail(auditDetail, "变更："+strings.Join(changes, "、"))
 	}
 	recordAudit(c, "更新", "API密钥", auditDetail)
-	// ①：禁用即清扫白名单解析缓存（条目随 Key 失活永不再命中）。
+	// 禁用即清扫白名单解析缓存（条目随 Key 失活永不再命中）。
 	// 在位编辑白名单也清扫——缓存键含白名单内容，旧键
 	// 成为孤儿永不再命中（曾仅禁用/删除清扫）。
 	if (req.IsEnabled != nil && !*req.IsEnabled) || req.MCPIPWhitelist != nil {

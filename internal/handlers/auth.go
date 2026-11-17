@@ -742,6 +742,8 @@ func (h *Handlers) UpdateCurrentUser(c *gin.Context) {
 		return
 	}
 	if err := tx.Commit(); err != nil {
+		// Commit 失败 Tx 已 done，defer Rollback 不触达 driver——池级补发。
+		rollbackLeakedTx()
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_34008a8c"), MessageKey: "k_34008a8c"})
 		return
 	}

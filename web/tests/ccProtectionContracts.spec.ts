@@ -216,6 +216,25 @@ test('自动封禁状态接口：不声明后端不返回的 cc_* 字段（Autob
   }
 })
 
+test('总览域口径标签死键清除：overview.autoban.scope* 四键 zh/en 成对退役（单源 events.scope*）', () => {
+  // 口径成员标签已单源 utils/autobanStatus.autobanScopeLabel → events.scope*；
+  // overview.autoban.scope* 四键双语零消费（overview.autoban.scope 标题键是活键，
+  // 精确键名判定，不得前缀误伤）。
+  // 精确键名判定需限定 overview.autoban 块——events.autoban 同名块在前，
+  // section 首个命中会切错块（封禁控制台域无 scope 键）。
+  const overviewBlockZh = section(zhSec, '"overview": {', '\n   "policies"')
+  const overviewBlockEn = section(enSec, '"overview": {', '\n   "policies"')
+  const autobanBlockZh = section(overviewBlockZh, '"autoban": {', '\n    },')
+  const autobanBlockEn = section(overviewBlockEn, '"autoban": {', '\n    },')
+  for (const key of ['scopeBlocked', 'scopeLogged', 'scopeChallengeIssued', 'scopeChallengeFailed']) {
+    assert.doesNotMatch(autobanBlockZh, new RegExp(`"${key}"`), `zh overview.autoban.${key} 死键必须删除`)
+    assert.doesNotMatch(autobanBlockEn, new RegExp(`"${key}"`), `en overview.autoban.${key} 死键必须删除`)
+  }
+  // 活键保留：标题键与 events 域单源标签键不得连带误删
+  assert.match(autobanBlockZh, /"scope": "统计口径"/, 'overview.autoban.scope 标题键是活键')
+  assert.match(events, /app\.security\.events\.scopeBlocked|autobanScopeLabel/, 'events 域单源消费在场')
+})
+
 // ── 9. 自动封禁配置弹框注释与实现同口径（挑战发放/失败按维度计数） ──
 test('自动封禁配置弹框注释：四维口径（WAF 两族 + 挑战发放/失败），不宣称「只吃阶段 3 命中」', () => {
   // section() 只在注释外匹配 marker，无法切注释体；注释口径钉直接对原始源切片。

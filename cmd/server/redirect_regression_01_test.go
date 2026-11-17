@@ -47,7 +47,7 @@ func TestRedirectHTTP_hostWithEmbeddedSpaceRejected(t *testing.T) {
 	assertMalformedHostRejected(t, "GET / HTTP/1.1\r\nHost: evil .example.com\r\n\r\n")
 }
 
-// Location，跳转不可用；现按 400 拒绝。
+// 缺 Host 头时无法构造回跳 Location，跳转不可用；现按 400 拒绝。
 func TestRedirectHTTP_missingHostRejected(t *testing.T) {
 	assertMalformedHostRejected(t, "GET / HTTP/1.0\r\n\r\n")
 }

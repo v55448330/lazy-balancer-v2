@@ -110,10 +110,11 @@ var auditRoutePolicies = map[string]AuditPolicy{
 	"POST /api/v1/system/restart":          AuditPolicyGeneric,
 	// 任务监控（v2.3.4）：toggle/cancel/control 三操作 handler 均显式留痕。
 	// 任务触发：升为 Explicit——Skip 前提「任务体 defer
-	// 单记」随 v2.0 可触发族扩容失效（时仅 3 自记族，现 24 族中 18 族任务体
-	// 零审计：log-cleanup/audit-retention/security-events-retention/
-	// cert-renewal-scan/cert-reconcile/cert-manual-poll/cert-waiting-ca 等，
-	// 全量分流清单见 audit_policy_test.go 的族对表钉测）。
+	// 单记」随 v2.0 可触发族扩容失效（时仅 3 自记族；现注册全集 27 族中
+	// 可手动触发 17 族=6 自记+11 非自记，非自记族任务体零审计：log-cleanup/
+	// audit-retention/security-events-retention/cert-renewal-scan/cert-reconcile/
+	// cert-manual-poll/cert-waiting-ca 等，全量分流清单见 audit_policy_test.go
+	// 的族对表钉测）。
 	// handler 按 TaskTriggerSelfRecordsAudit 分流：非自记族显式补记「触发」，
 	// 自记族跳过（保 任务体单记裁定，operator 经 RunContext 归人）。
 	"POST /api/v1/system/tasks/:id/trigger": AuditPolicyExplicit,
@@ -121,7 +122,7 @@ var auditRoutePolicies = map[string]AuditPolicy{
 	"POST /api/v1/system/tasks/:id/cancel":  AuditPolicyExplicit,
 	"POST /api/v1/system/tasks/:id/control": AuditPolicyExplicit,
 	"POST /api/v1/config/reload":            AuditPolicyGeneric,
-	// c：validate 经 /load 真实加载候选配置（handler 成功后回弹权威
+	// validate 经 /load 真实加载候选配置（handler 成功后回弹权威
 	// 配置）——不再豁免审计，handler 显式记录校验三态。
 	"POST /api/v1/config/validate":                        AuditPolicyExplicit,
 	"POST /api/v1/rules/cert-info":                        AuditPolicySkip,
@@ -244,12 +245,12 @@ func ClassifyAuditRoute(method, path string) AuditPolicy {
 //   - auto-backup：备份执行器（handlers/autobackup.go）按结果记「备份/备份失败」；
 //   - startup:config-load：runConfigLoad 载入审计（启动与手动同体）。
 //
-// 其余 18 个可手动触发族（config-watchdog/log-cleanup/audit-retention/
+// 其余 11 个可手动触发 Periodic 族（config-watchdog/log-cleanup/audit-retention/
 // security-events-retention/metrics-orphan-cleanup/cert-renewal-scan/
-// cert-reconcile/cert-manual-poll/cert-waiting-ca/autoban/metrics-history-cleanup/
-// metrics-collector/threat-rollup-warmer/caddy-restart-watcher/ratelimit-bucket-sweep/
-// apikey-usage-flusher/runtime-log-threshold/runtime-tz-refresh）任务体零
-// RecordAuditLog，由 trigger handler 显式补记。新增可触发族时必须评估本集合
+// cert-reconcile/cert-manual-poll/cert-waiting-ca/autoban/metrics-history-cleanup）
+// 任务体零 RecordAuditLog，由 trigger handler 显式补记。常驻（daemon）族恒不可
+// 手动触发（CanTrigger=Kind!=daemon，启停语义由调度开关承担），不在本分流面。
+// 新增可触发族时必须评估本集合
 // （任务体自记 → 加入；否则 handler 自动补记）；清单与
 // audit_policy_test.go 的可手动触发族断言同源，两处必须同步。
 var taskTriggerSelfAuditIDs = map[string]struct{}{

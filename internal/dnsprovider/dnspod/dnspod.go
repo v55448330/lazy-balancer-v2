@@ -479,7 +479,8 @@ func (p *Provider) listChallengeRecords(ctx context.Context, zone, subDomain str
 		for _, record := range result.Records {
 			// flexNumber 兼容历史两种形态（JSON 数字与带引号字符串），
 			// 与 Record.Create 侧 record.id 同为 flexNumber（空串走各自
-			// 的显式空检查，不再整页/整响应解码失败）。
+			// 的显式空检查；null 等非数字 token 在解码期即整响应失败，
+			// 不得读成字面串进 seen/collected）。
 			id := string(record.ID)
 			// 畸形空记录 ID 不参与去重折叠（整页空 ID 不得误判无进展，
 			// 与 aliyun/tencent/cloudflare 同口径）：整条跳过，不登记 seen、
@@ -629,10 +630,34 @@ func (p *Provider) sanitizeMessage(message string) string {
 }
 
 // flexNumber 接受 DNSPod 数字字段的历史两种形态（JSON 数字与带引号字符串）。
+// null/布尔/对象等非数字 token 必须整响应解码失败（fail-loud）：无校验时
+// "id":null 被读成字面串 "null" 登记 ownership，清理侧 Record.Remove code 8
+// 把假 ID 当「记录已不存在」按成功处理——TXT 永久残留且脱离追踪。带引号
+// 形态保持原样透传（空串走各消费点的显式空检查，非数字串由 Int64 归零
+// 「不参与判定」兜底），数字 token 按 JSON number 语法校验（拒绝 null 等）。
 type flexNumber string
 
 func (n *flexNumber) UnmarshalJSON(data []byte) error {
-	*n = flexNumber(strings.Trim(string(data), `"`))
+	token := string(data)
+	if len(token) >= 2 && token[0] == '"' && token[len(token)-1] == '"' {
+		var quoted string
+		if err := json.Unmarshal(data, &quoted); err != nil {
+			return fmt.Errorf("record id token: %w", err)
+		}
+		*n = flexNumber(quoted)
+		return nil
+	}
+	// 数字 token 按 JSON number 语法校验；null 必须显式拦——encoding/json
+	// 把 null 当「无操作」对任何目标类型放行（Unmarshal 返回 nil 不赋值），
+	// 不拦会读成字面串 "null"。true/对象等由 float64 解码自然拒绝。
+	if token == "null" {
+		return fmt.Errorf("record id token: expected number or quoted string, got %s", token)
+	}
+	var num float64
+	if err := json.Unmarshal(data, &num); err != nil {
+		return fmt.Errorf("record id token: expected number or quoted string, got %s", token)
+	}
+	*n = flexNumber(token)
 	return nil
 }
 
@@ -827,7 +852,8 @@ func (p *Provider) getDomainID(ctx context.Context, zone string) (string, error)
 		// 异常服务端忽略 offset 重复下发同页且 domain_total 失真偏大时，
 		// 整页无新域名 ID 即收手，不空转 domainListMaxPages。畸形空 ID 不参与
 		// seen 去重（整页空 ID 不得折叠成无进展）；flexNumber 兼容数字/字符串
-		// 两种历史形态（空串不再像 json.Number 那样整页解码失败）。
+		// 两种历史形态（空串不再像 json.Number 那样整页解码失败；null 等
+		// 非数字 token 在解码期即整响应失败，不得读成字面串进 seen/缓存）。
 		repeatedPage := true
 		hasValidID := false
 		for _, d := range result.Domains {

@@ -8,6 +8,7 @@ package services
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"sync/atomic"
 	"time"
@@ -93,9 +94,11 @@ type TaskRunInfo struct {
 // collectSystemTasksCalls 任务族聚合调用计数（测试观测单行轮询是否短路任务枚举）。
 var collectSystemTasksCalls atomic.Int64
 
+// testseam: 任务枚举计数复位缝（计数由生产聚合路径自增，handlers 测试跨包消费）。
 // ResetCollectSystemTasksCallsForTest 测试缝：复位任务枚举计数。
 func ResetCollectSystemTasksCallsForTest() { collectSystemTasksCalls.Store(0) }
 
+// testseam: 任务枚举计数读取缝（handlers 测试跨包消费，宿主留驻产品文件）。
 // CollectSystemTasksCallsForTest 返回任务枚举累计调用次数。
 func CollectSystemTasksCallsForTest() int64 { return collectSystemTasksCalls.Load() }
 
@@ -299,6 +302,10 @@ const taskMonitorCertJobsLogKey = "task-monitor-cert-jobs"
 // taskMonitorWaitingCALogKey cert-waiting-ca 下次可用时间查询失败态转换键
 // （同族节流口径：首报警告、恢复补一条）。
 const taskMonitorWaitingCALogKey = "task-monitor-waiting-ca"
+
+// taskMonitorDaemonBootLogKey 常驻族最近 boot 时刻查询失败态转换键
+// （同族节流口径：首报警告、恢复补一条；ErrNoRows=从未 boot 不算失败）。
+const taskMonitorDaemonBootLogKey = "task-monitor-daemon-boot"
 
 // taskIP2RegionStatusLogKey ip2region 任务 StatusFn 状态列读取失败态转换键：
 // 读失败会让状态列回落「执行实态」，与「确实空闲」不可区分，必须留痕
@@ -520,6 +527,9 @@ func humanInterval(sec int) string {
 // daemonLatestBootStartedAt 返回该常驻任务最近 boot（success）行的 started_at。
 // boot 行=引擎 startDaemon「启动即记 success」落库行；异常退出补记的 failed
 // 行 started_at=崩溃时刻，不得充当启动时刻。无 boot 行返回空串（UI '—'）。
+// 读失败同样返回空串但按失败态转换留痕（首报 WARN/恢复 INFO，同
+// taskMonitorWaitingCALogKey 范式）——静默返空会让「读取故障」与「从未 boot」
+// 不可区分；ErrNoRows 是合法空态，不告警。
 func daemonLatestBootStartedAt(taskID string) string {
 	database := db.DB
 	if database == nil {
@@ -527,7 +537,15 @@ func daemonLatestBootStartedAt(taskID string) string {
 	}
 	var at string
 	if err := database.QueryRow(`SELECT started_at FROM task_runs WHERE task_id=? AND status='success' ORDER BY id DESC LIMIT 1`, taskID).Scan(&at); err != nil {
+		if !errors.Is(err, sql.ErrNoRows) {
+			if lvl := logStateTransition(taskMonitorDaemonBootLogKey, true); lvl != "" {
+				Logf(lvl, "常驻任务启动时刻查询失败（%s）: %v", taskID, err)
+			}
+		}
 		return ""
+	}
+	if lvl := logStateTransition(taskMonitorDaemonBootLogKey, false); lvl != "" {
+		Logf(lvl, "常驻任务启动时刻查询恢复")
 	}
 	return at
 }

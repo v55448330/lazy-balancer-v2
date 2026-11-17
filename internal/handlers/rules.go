@@ -3647,7 +3647,7 @@ func (h *Handlers) UpdateRule(c *gin.Context) {
 				// 刻意无 ctx 豁免：②resume 记账（见上方标记注释）——任务推进为
 				// issued 是「规则已重新启用」的事实记账，中止已验证有效的恢复
 				// 会让续签链断裂且被 200 掩盖。
-				resumeResult, err := db.DB.Exec("UPDATE cert_jobs SET status='issued',message='证书有效，已恢复使用',renewal_attempts=0,ca_available_after=NULL,last_error_code=NULL,updated_at=datetime('now') WHERE id=?", jobID)
+				resumeResult, err := db.DB.Exec("UPDATE cert_jobs SET status='issued',message='证书有效，已恢复使用',"+services.IssuedFinalizeResetSQL()+",updated_at=datetime('now') WHERE id=?", jobID)
 				if err == nil {
 					resumed, raErr := resumeResult.RowsAffected()
 					if raErr != nil || resumed != 1 {
@@ -4420,6 +4420,9 @@ func (h *Handlers) DuplicateRule(c *gin.Context) {
 		// 提交结果不可判定：不得断言「未生效」（会诱导操作者重试并产生重复
 		// 副本），文案与审计统一走 commitUncertainLabel（与其余规则端点同源）。
 		services.Logf("error", "DuplicateRule transaction commit failed for caddy_id=%s (new=%s): %v", caddyID, newCaddyID, err)
+		// Commit 失败 Tx 已 done，defer Rollback 不触达 driver——池级补发
+		// （本端点无 Caddy 交互，不走 recoverCommittedView 全收口）。
+		rollbackLeakedTx()
 		fail(http.StatusInternalServerError, commitUncertainLabel)
 		return
 	}
@@ -5119,7 +5122,7 @@ func (h *Handlers) EnableRule(c *gin.Context) {
 			// 刻意无 ctx 豁免：②resume 记账（见 restoreEnabledState 上方标记
 			// 注释）——与 UpdateRule resume 同型，任务推进为 issued 是启用成功
 			// 的事实记账，中止已验证有效的恢复会让续签链断裂且无补偿。
-			resumeResult, err := db.DB.Exec("UPDATE cert_jobs SET status='issued', message='证书有效，已恢复使用', renewal_attempts=0, ca_available_after=NULL, last_error_code=NULL, updated_at=datetime('now') WHERE id=?", jobID)
+			resumeResult, err := db.DB.Exec("UPDATE cert_jobs SET status='issued', message='证书有效，已恢复使用', "+services.IssuedFinalizeResetSQL()+", updated_at=datetime('now') WHERE id=?", jobID)
 			if err != nil {
 				failEnable("恢复证书任务失败", err)
 				return

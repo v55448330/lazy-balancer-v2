@@ -148,7 +148,8 @@ func TestRollbackLeakedTx_noActiveTransactionIsBenign(t *testing.T) {
 }
 
 // 源码序钉：旧实现「5 次池级 Exec ROLLBACK」依赖 LIFO 命中栈顶，泄漏连接
-// 非栈顶时全部重试命中同一条无事务连接——实现必须显式遍历签出的专用连接。
+// 非栈顶时全部重试命中同一条无事务连接——实现必须委托 db.RollbackLeakedTx
+// 单源（遍历签出语义由该函数承载+其包级钉测）。
 func TestRollbackLeakedTx_traversesPoolConnections(t *testing.T) {
 	sourceBytes, err := os.ReadFile("handlers.go")
 	if err != nil {
@@ -164,8 +165,8 @@ func TestRollbackLeakedTx_traversesPoolConnections(t *testing.T) {
 		t.Fatal("rollbackLeakedTx 函数体边界缺失")
 	}
 	body := source[start : start+end]
-	if !strings.Contains(body, ".Conn(") {
-		t.Fatal("rollbackLeakedTx 未签出专用连接遍历池（LIFO 重试对非栈顶泄漏无效）")
+	if !strings.Contains(body, "db.RollbackLeakedTx(") {
+		t.Fatal("rollbackLeakedTx 必须委托 db.RollbackLeakedTx 单源（遍历签出池连接）")
 	}
 	if strings.Contains(body, `db.DB.Exec("ROLLBACK")`) {
 		t.Fatal("rollbackLeakedTx 仍用池级 Exec 重试（LIFO 只命中栈顶连接）")

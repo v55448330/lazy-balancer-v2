@@ -325,7 +325,11 @@ test('证书卡：ACME 证书卡接入 configLoaded 双重门控（与 Basic/Cad
   const save = section(card, 'const handleSave = async', 'if (isReadOnly.value) return')
   assert.match(save, /!props\.configLoaded/, 'configLoaded 门必须早于常规写守卫')
   const page = code('src/views/Settings.vue')
-  assert.match(page, /<FreeCertificates[\s\S]*?:config-loaded="configLoaded"/)
+  // 绑定必须落在 FreeCertificates 自己的开标签属性集内：无界 [\s\S]*? 会跨元素
+  // 命中前序 Basic/Caddy 的 :config-loaded（删掉本卡绑定仍绿）——与 Caddy 同款。
+  const certTags = openTags(page, 'FreeCertificates')
+  assert.equal(certTags.length, 1, 'Settings.vue 必须恰有一个 FreeCertificates 实例')
+  assert.ok(certTags[0].includes(':config-loaded="configLoaded"'), 'FreeCertificates 开标签必须绑定 config-loaded')
 })
 
 // ===== 设置/安全视图接线（证书队列、任务监控、集群、TLS、DNS 凭证、OIDC） =====

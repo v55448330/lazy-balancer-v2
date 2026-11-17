@@ -187,6 +187,7 @@ func TestStartSecurityEventsIPCServer_servesOverUnixSocketWith0600(t *testing.T)
 }
 
 func TestGetLogStats_securityEventsRow_reportsSpoolCache(t *testing.T) {
+	withIsolatedGlobal(t)
 	h := newBackupTestHandlers(t)
 	dataDir := t.TempDir()
 	h.cfg.DataDir = dataDir

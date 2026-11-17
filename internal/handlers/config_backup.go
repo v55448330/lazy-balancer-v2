@@ -1244,10 +1244,11 @@ func validateV2BackupMCPIPWhitelist(rows []map[string]any) error {
 }
 
 // restoreRowStatement 构造单行 INSERT 语句与参数。列序确定化：Go map 迭代序
-// 每轮随机，按迭代序拼 SQL 会让**每行生成不同文本**——database/sql 以 SQL 文本
-// 为键缓存连接级 prepared statement 且不淘汰，万行导入即上万条预编译语句
-// （内存 + SQLite 解析 CPU）并把后续真实查询挤出缓存。排序后同一表的所有行
-// 共用一条语句文本。ok=false 表示该行没有任何可落库列（跳过）。
+// 每轮随机，按迭代序拼 SQL 会让**每行生成不同文本**。排序的收益是确定性 SQL
+// 文本——可读、可复现、日志/排障中同一表恒同一语句形态（当前 glebarez/go-sqlite
+// 驱动每次 prepare+finalize，并无按 SQL 文本键的连接级 prepared 缓存；若换用
+// 带语句缓存的驱动，确定性文本同样是缓存命中的前提）。ok=false 表示该行没有
+// 任何可落库列（跳过）。
 func restoreRowStatement(table string, row map[string]any, valid map[string]bool) (string, []any, bool) {
 	columnNames := make([]string, 0, len(row))
 	for column := range row {
@@ -1477,23 +1478,23 @@ func validateBackupRuleReferences(tables map[string][]map[string]any) error {
 		// 「备份携带则备份行、缺席则 live 行」的导入后视图，而非空子集。
 		rows, err := db.DB.Query(`SELECT caddy_id, COALESCE(protocol,''), COALESCE(dynamic_dns,0), COALESCE(health_check_host,'') FROM lb_rules`)
 		if err != nil {
-			return fmt.Errorf("备份校验失败：读取现有规则引用视图: %w", err)
+			return importInfraReadFailure(fmt.Errorf("备份校验失败：读取现有规则引用视图: %w", err))
 		}
 		for rows.Next() {
 			var id, protocol, healthHost string
 			var dynamicDNS bool
 			if err := rows.Scan(&id, &protocol, &dynamicDNS, &healthHost); err != nil {
 				_ = rows.Close()
-				return fmt.Errorf("备份校验失败：读取现有规则引用视图: %w", err)
+				return importInfraReadFailure(fmt.Errorf("备份校验失败：读取现有规则引用视图: %w", err))
 			}
 			ruleRows = append(ruleRows, map[string]any{"caddy_id": id, "protocol": protocol, "dynamic_dns": dynamicDNS, "health_check_host": healthHost})
 		}
 		if err := rows.Err(); err != nil {
 			_ = rows.Close()
-			return fmt.Errorf("备份校验失败：读取现有规则引用视图: %w", err)
+			return importInfraReadFailure(fmt.Errorf("备份校验失败：读取现有规则引用视图: %w", err))
 		}
 		if err := rows.Close(); err != nil {
-			return fmt.Errorf("备份校验失败：关闭现有规则引用视图: %w", err)
+			return importInfraReadFailure(fmt.Errorf("备份校验失败：关闭现有规则引用视图: %w", err))
 		}
 	}
 	ruleIDs := make(map[string]struct{}, len(ruleRows))
@@ -1576,22 +1577,22 @@ func validateBackupRuleReferences(tables map[string][]map[string]any) error {
 	if !policiesCarried && db.DB != nil && len(tables["security_policy_bindings"]) > 0 {
 		rows, err := db.DB.Query(`SELECT id FROM security_policies`)
 		if err != nil {
-			return fmt.Errorf("备份校验失败：读取现有安全策略引用视图: %w", err)
+			return importInfraReadFailure(fmt.Errorf("备份校验失败：读取现有安全策略引用视图: %w", err))
 		}
 		for rows.Next() {
 			var id int
 			if err := rows.Scan(&id); err != nil {
 				_ = rows.Close()
-				return fmt.Errorf("备份校验失败：读取现有安全策略引用视图: %w", err)
+				return importInfraReadFailure(fmt.Errorf("备份校验失败：读取现有安全策略引用视图: %w", err))
 			}
 			policyRows = append(policyRows, map[string]any{"id": id})
 		}
 		if err := rows.Err(); err != nil {
 			_ = rows.Close()
-			return fmt.Errorf("备份校验失败：读取现有安全策略引用视图: %w", err)
+			return importInfraReadFailure(fmt.Errorf("备份校验失败：读取现有安全策略引用视图: %w", err))
 		}
 		if err := rows.Close(); err != nil {
-			return fmt.Errorf("备份校验失败：关闭现有安全策略引用视图: %w", err)
+			return importInfraReadFailure(fmt.Errorf("备份校验失败：关闭现有安全策略引用视图: %w", err))
 		}
 	}
 	policyIDs := make(map[int]struct{}, len(policyRows))
@@ -3424,19 +3425,21 @@ func validateV2BackupSecurityPoliciesWithQuerier(ctx context.Context, tables map
 	} else if querier != nil {
 		rows, qerr := querier.QueryContext(ctx, `SELECT id FROM security_custom_rules`)
 		if qerr != nil {
-			return fmt.Errorf("校验安全策略引用的自定义规则失败: %v", qerr)
+			// live 回退读失败属基础设施故障（锁/IO）：映射 500，不回 400
+			//（与上方 ip_lists 分支同族契约——裸错误会把驱动原文回显进响应/审计）。
+			return importInfraReadFailure(fmt.Errorf("校验安全策略引用的自定义规则失败: %w", qerr))
 		}
 		for rows.Next() {
 			var id int
 			if err := rows.Scan(&id); err != nil {
 				rows.Close()
-				return fmt.Errorf("校验安全策略引用的自定义规则失败: %v", err)
+				return importInfraReadFailure(fmt.Errorf("校验安全策略引用的自定义规则失败: %w", err))
 			}
 			customRuleIDs[id] = struct{}{}
 		}
 		if err := rows.Err(); err != nil {
 			rows.Close()
-			return fmt.Errorf("校验安全策略引用的自定义规则失败: %v", err)
+			return importInfraReadFailure(fmt.Errorf("校验安全策略引用的自定义规则失败: %w", err))
 		}
 		rows.Close()
 	}
@@ -4833,7 +4836,7 @@ func validateV2BackupAutoBackupConfig(config map[string]any) error {
 		var liveDay int
 		if err := db.DB.QueryRow(`SELECT COALESCE(auto_backup_frequency,?), COALESCE(auto_backup_day,?) FROM global_config WHERE id=1`,
 			db.DefaultAutoBackupFrequency, db.DefaultAutoBackupDay).Scan(&liveFreq, &liveDay); err != nil {
-			return fmt.Errorf("读取现有自动备份排程以校验导入后视图: %w", err)
+			return importInfraReadFailure(fmt.Errorf("读取现有自动备份排程以校验导入后视图: %w", err))
 		}
 		if !freqProvided {
 			freq = liveFreq
@@ -6751,9 +6754,9 @@ func (h *Handlers) importConfigBackupCore(c *gin.Context, data []byte, filename,
 		sets := []string{}
 		values := []any{}
 		// 列名排序后再拼 SET：map 迭代序每进程随机 → 同一备份在不同导入/进程
-		// 生成不同 SQL 文本，而 database/sql 以 SQL 文本为键缓存 prepared
-		// statement 且不淘汰（与 restoreRowStatement 同一策略，防每次导入新增
-		// 一条永不命中的 ~60 列语句缓存）。
+		// 生成不同 SQL 文本。排序保证确定性 SQL 文本（可读/可复现，与
+		// restoreRowStatement 同一策略；当前 glebarez 驱动每次 prepare+finalize，
+		// 无文本键语句缓存——确定性文本是换用带缓存驱动时的命中前提）。
 		configColumns := make([]string, 0, len(backup.Config))
 		for column := range backup.Config {
 			configColumns = append(configColumns, column)

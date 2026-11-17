@@ -335,6 +335,8 @@ func (h *Handlers) UpdateUser(c *gin.Context) {
 		return
 	}
 	if err := tx.Commit(); err != nil {
+		// Commit 失败 Tx 已 done，defer Rollback 不触达 driver——池级补发。
+		rollbackLeakedTx()
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_32d1d97d"), MessageKey: "k_32d1d97d"})
 		return
 	}
@@ -515,7 +517,7 @@ func (h *Handlers) DeleteUser(c *gin.Context) {
 			return
 		}
 	}
-	// ①：连带删除的 Key 同样按 keyID 前缀清扫白名单解析缓存——
+	// 连带删除的 Key 同样按 keyID 前缀清扫白名单解析缓存——
 	// 先取 id 集（删除后无从按键清扫），删除成功后逐键清扫。
 	var cascadeKeyIDs []int
 	keyRows, keyErr := tx.QueryContext(c.Request.Context(), "SELECT id FROM api_keys WHERE created_by = ?", id)
@@ -569,6 +571,8 @@ func (h *Handlers) DeleteUser(c *gin.Context) {
 		return
 	}
 	if err := tx.Commit(); err != nil {
+		// Commit 失败 Tx 已 done，defer Rollback 不触达 driver——池级补发。
+		rollbackLeakedTx()
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_6e6e79d5"), MessageKey: "k_6e6e79d5"})
 		return
 	}
@@ -713,6 +717,8 @@ func (h *Handlers) ToggleUserStatus(c *gin.Context) {
 		}
 	}
 	if err := tx.Commit(); err != nil {
+		// Commit 失败 Tx 已 done，defer Rollback 不触达 driver——池级补发。
+		rollbackLeakedTx()
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_c2d6391f"), MessageKey: "k_c2d6391f"})
 		return
 	}
@@ -821,6 +827,8 @@ func (h *Handlers) ResetUserPassword(c *gin.Context) {
 		return
 	}
 	if err := tx.Commit(); err != nil {
+		// Commit 失败 Tx 已 done，defer Rollback 不触达 driver——池级补发。
+		rollbackLeakedTx()
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_eb2fa589"), MessageKey: "k_eb2fa589"})
 		return
 	}

@@ -55,7 +55,7 @@
               <el-divider direction="vertical" />
               <span class="autoban-stat">{{ t(autobanStatusEscalationOn ? 'app.security.events.firstBanDuration' : 'app.security.events.statDuration') }} <b>{{ autobanStatValue(autobanStatusError, autobanDurationText) }}</b></span>
               <el-divider direction="vertical" />
-              <span class="autoban-stat">{{ t('app.security.events.escalationLabel') }} <b>{{ t(autobanEscalationShortKey(autobanStatus.escalation)) }}</b></span>
+              <span class="autoban-stat">{{ t('app.security.events.escalationLabel') }} <b>{{ autobanStatValue(autobanStatusError, t(autobanEscalationShortKey(autobanStatus.escalation))) }}</b></span>
               <el-divider direction="vertical" />
               <span class="autoban-stat">{{ t('app.security.events.statTodayBanned') }} <b class="autoban-danger">{{ autobanStatValue(autobanStatusError, autobanStatus.banned_today) }}</b></span>
               <el-divider direction="vertical" />

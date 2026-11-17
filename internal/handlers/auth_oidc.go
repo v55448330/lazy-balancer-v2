@@ -319,6 +319,8 @@ func saveOIDCConfigWithIssuerMigration(ctx context.Context, cfg OIDCConfig, migr
 		return mig, nil
 	}
 	if err := tx.Commit(); err != nil {
+		// Commit 失败 Tx 已 done，defer Rollback 不触达 driver——池级补发。
+		rollbackLeakedTx()
 		return mig, err
 	}
 	committed = true
@@ -542,26 +544,26 @@ func normalizeOIDCIssuer(raw string) string {
 		return issuer
 	}
 	hostName := u.Hostname()
-	if hostName != "" {
-		port := u.Port()
-		if (strings.EqualFold(u.Scheme, "https") && port == "443") || (strings.EqualFold(u.Scheme, "http") && port == "80") {
-			port = ""
-		}
-		normalizedHost := strings.ToLower(hostName)
-		if port != "" {
-			normalizedHost = net.JoinHostPort(normalizedHost, port)
-		} else if strings.Contains(normalizedHost, ":") && !strings.HasPrefix(normalizedHost, "[") {
-			// IPv6 字面量在 URL 中必须带方括号。
-			normalizedHost = "[" + normalizedHost + "]"
-		}
-		if normalizedHost != u.Host {
-			u.Host = normalizedHost
-			issuer = u.String()
-		}
-		if !entraIssuerHosts[strings.ToLower(hostName)] {
-			return issuer
-		}
-	} else if !entraIssuerHosts[strings.ToLower(u.Hostname())] {
+	if hostName == "" {
+		// 无主机形态（解析成功但 Hostname 为空）不适用 Entra 特例，原样返回。
+		return issuer
+	}
+	port := u.Port()
+	if (strings.EqualFold(u.Scheme, "https") && port == "443") || (strings.EqualFold(u.Scheme, "http") && port == "80") {
+		port = ""
+	}
+	normalizedHost := strings.ToLower(hostName)
+	if port != "" {
+		normalizedHost = net.JoinHostPort(normalizedHost, port)
+	} else if strings.Contains(normalizedHost, ":") && !strings.HasPrefix(normalizedHost, "[") {
+		// IPv6 字面量在 URL 中必须带方括号。
+		normalizedHost = "[" + normalizedHost + "]"
+	}
+	if normalizedHost != u.Host {
+		u.Host = normalizedHost
+		issuer = u.String()
+	}
+	if !entraIssuerHosts[strings.ToLower(hostName)] {
 		return issuer
 	}
 	if !strings.HasSuffix(issuer, "/v2.0") {

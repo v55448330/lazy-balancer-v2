@@ -221,6 +221,7 @@ func (s *ClusterService) ValidateLoginTicket(ctx context.Context, ticket string,
 		return claims, models.User{}, 0, errors.Join(ErrInvalidLoginTicket, ErrLoginTicketReplay)
 	}
 	if err := tx.Commit(); err != nil {
+		db.RollbackLeakedTx(s.db, db.MainPoolMaxOpen)
 		return claims, models.User{}, 0, fmt.Errorf("提交登录票据消费: %w", err)
 	}
 	return claims, user, meta.PasswordVersion, nil

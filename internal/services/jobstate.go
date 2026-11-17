@@ -202,6 +202,23 @@ func issuedFinalizeResetFields() map[string]any {
 	}
 }
 
+// IssuedFinalizeResetSQL 是 issued 终态失败预算清零的 SQL 片段单源（供
+// handlers 侧 resume 写点复用——issuedFinalizeFields 的 map 形态跨包不可达，
+// SQL 片段与 map 字段集同源派生，由 TestIssuedFinalizeResetSQL_matchesFields
+// 对账钉住）。形态：逗号前置键值串，拼入 UPDATE cert_jobs SET 子句。
+func IssuedFinalizeResetSQL() string {
+	parts := make([]string, 0, len(issuedFinalizeResetFields()))
+	for _, key := range []string{"renewal_attempts", "ca_available_after", "last_error_code"} {
+		v := issuedFinalizeResetFields()[key]
+		if v == nil {
+			parts = append(parts, key+"=NULL")
+		} else {
+			parts = append(parts, fmt.Sprintf("%s=%v", key, v))
+		}
+	}
+	return strings.Join(parts, ",")
+}
+
 // issuedFinalizeFields 组装 issued 终态写入字段：失败预算清零（单源）+
 // 调用方附加字段（message/expires_at/部署簿记等）。附加键不得覆盖预算键
 // （renewal_attempts/ca_available_after/last_error_code）——携带即 panic

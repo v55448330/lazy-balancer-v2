@@ -33,6 +33,7 @@ func TestLogRotatedBackups_matchServiceWriters(t *testing.T) {
 // (非 metrics.db 库文件);DBBytes=metrics.db 容量(同行展示);LimitRows=
 // 事件上限(进度条语义=条数/上限)。
 func TestGetLogStats_securityEventsRow(t *testing.T) {
+	withIsolatedGlobal(t)
 	h := newBackupTestHandlers(t)
 	dataDir := t.TempDir()
 	h.cfg.DataDir = dataDir
@@ -236,6 +237,7 @@ func TestGetLogStats_eachTaskUsesOwnRealFileSize(t *testing.T) {
 // 单源生成——显式 security_events_retention_days 生效（此前恒复用审计月数
 // 文案，显式设置被无视），且该行补 LimitBytes（审计写入侧 audit_log_size_mb）。
 func TestGetLogStats_securityEventsRetentionUsesExplicitSettings(t *testing.T) {
+	withIsolatedGlobal(t)
 	h := newBackupTestHandlers(t)
 	oldWafLog := wafAuditLogFile
 	wafAuditLogFile = filepath.Join(t.TempDir(), "audit.log")
@@ -290,6 +292,7 @@ func TestGetLogStats_securityEventsRetentionUsesExplicitSettings(t *testing.T) {
 
 // key/keys 收窄——任务监控弹框只取单行，缺省保持旧全量形状。
 func TestGetLogStats_keyFilterNarrowsRows(t *testing.T) {
+	withIsolatedGlobal(t)
 	h := newBackupTestHandlers(t)
 	oldWafLog := wafAuditLogFile
 	wafAuditLogFile = filepath.Join(t.TempDir(), "audit.log")
@@ -489,6 +492,7 @@ func TestGetLogStats_aggregateCountsRotationsAndGzAsArchive(t *testing.T) {
 // 而 handlers 包 init 早于 main 的派生调用——包级固化会指向陈旧的 /app 路径。
 // 解析必须运行期进行：注入值优先，否则取 services.AuditLogPath()。
 func TestResolvedWafAuditLogFile_tracksDerivedPath(t *testing.T) {
+	withIsolatedGlobal(t)
 	oldWafLog := wafAuditLogFile
 	t.Cleanup(func() { wafAuditLogFile = oldWafLog })
 

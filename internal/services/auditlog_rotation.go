@@ -65,6 +65,7 @@ func resetPendingDeltaCorruptStreak() {
 	pendingDeltaCorruptStreak.Unlock()
 }
 
+// testseam: 连续损坏 streak 复位缝（streak 由生产补采路径自增，宿主留驻产品文件）。
 // resetPendingDeltaCorruptStreakForTest 测试隔离连续损坏状态（仅测试）。
 func resetPendingDeltaCorruptStreakForTest() { resetPendingDeltaCorruptStreak() }
 

@@ -1,6 +1,6 @@
 package handlers
 
-// ①：删除/禁用 API Key 必须触发白名单 CIDR 解析缓存的
+// 删除/禁用 API Key 必须触发白名单 CIDR 解析缓存的
 // 按 keyID 前缀清扫——middleware 的 apiKeyWhitelistCache 键含白名单内容
 // （变更自动新键），但 Key 删除/禁用后历史条目永不再命中却永久驻留=无界累积。
 // 钩子由 middleware 经 SetAPIKeyWhitelistCachePurge 注入（反向 import 会成环）。

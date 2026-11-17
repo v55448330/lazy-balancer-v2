@@ -143,7 +143,7 @@ func TestTaskLogf_CertManualPoll_exceptionRoundsOnly(t *testing.T) {
 	}
 }
 
-// ③：PEM 损坏/解析失败行此前仅应用日志 warn 不计数，巡检摘要零
+// PEM 损坏/解析失败行此前仅应用日志 warn 不计数，巡检摘要零
 // 痕迹。摘要须补「另 N 行解析失败已跳过」（对照续期扫描 skippedNote 口径）；
 // 纯解析失败轮（过期/临期计数为零）同属异常轮，必须留一行而非静默。
 func TestTaskLogf_CertManualPoll_parseFailureCountedInSummary(t *testing.T) {

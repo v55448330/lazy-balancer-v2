@@ -47,7 +47,7 @@ func TestAutobanIdentityKey_counterMergeRecidivismShareNormalizedKey(t *testing.
 	setAutobanConfigRaw(t, true, 2, 5, "1h", "blocked", false)
 	cfg := AutobanConfig{Enabled: true, Threshold: 2, WindowMinutes: 5, Duration: "1h", Scope: "blocked", Escalation: "standard"}
 	for _, ip := range []string{"2606:4700:abcd:1234::1", "2606:4700:abcd:1234::2"} {
-		autobanObserveEventScopedAt(cfg, ip, "blocked", "942100", autobanNow())
+		autobanObserveEventScopedAt(cfg, AutobanScopeSet(cfg.Scope), ip, "blocked", "942100", autobanNow())
 	}
 
 	out, err := autobanMergeEntries(cfg, autobanCandidates(AutobanConfig{Threshold: 2}, 5*time.Minute))

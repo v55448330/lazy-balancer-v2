@@ -170,6 +170,7 @@ func GetCAQueueManager() *CAQueueManager {
 	return caQueueManager
 }
 
+// testseam: 队列单例复位缝（handlers 测试跨包消费，宿主留驻产品文件）。
 // ResetCAQueueManagerForTest 停止并清空单例，仅供测试隔离使用
 func ResetCAQueueManagerForTest() {
 	if caQueueManager != nil {
@@ -817,6 +818,7 @@ func (m *CAQueueManager) HasRunningJobForRule(ruleID string) bool {
 	return false
 }
 
+// testseam: 在途条目直设缝（handlers 测试跨包消费，宿主留驻产品文件）。
 // MarkJobRunningForTest 在队列表记一个「执行中」条目供 handler 层预检测试
 // 使用（生产代码禁止调用）。与 ResetCAQueueManagerForTest 同族的测试缝：
 // 自足登记 active+runningRules，模拟 execute() 的登记形态。
@@ -841,6 +843,7 @@ func (m *CAQueueManager) MarkJobRunningForTest(ruleID string, jobID int) {
 	}
 }
 
+// testseam: 退役队列掉队条目直设缝（handlers 测试跨包消费，宿主留驻产品文件）。
 // MarkRetiredJobRunningForTest registers a straggler in the same retired-queue
 // shape produced by PauseAndDrain timeout. Production code must not call it.
 func (m *CAQueueManager) MarkRetiredJobRunningForTest(ruleID string, jobID int) chan struct{} {
@@ -959,6 +962,7 @@ func (m *CAQueueManager) releaseZombieJob(jobID int, done <-chan struct{}) {
 	m.mu.Unlock()
 }
 
+// testseam: 无守卫入队夹具（handlers 测试跨包消费，宿主留驻产品文件）。
 // EnqueueForTest 是测试夹具（名字即「生产禁止调用」）：生产入队一律走
 // EnqueueIfActive（在途守卫 + 状态迁移）或内部 enqueueLocked。注意本夹具
 // **不做** isJobActiveLocked 在途守卫（测试需要重复入队同一 jobID 构造场景），
@@ -1964,6 +1968,7 @@ func recordJobFailure(jobID int, fromSet []string, message, errorCode string, re
 	}
 }
 
+// testseam: 派发驱动装配缝（handlers 测试跨包消费，宿主留驻产品文件）。
 // StartDispatchForTest 仅供测试装配：以引擎 RunTicker 同一实现驱动派发。
 // 生产唯一驱动方是 cert-issuance daemon 的 Run（标准 §6.5 #1）。
 func (m *CAQueueManager) StartDispatchForTest(ctx context.Context) {

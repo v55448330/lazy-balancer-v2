@@ -469,7 +469,6 @@ export default {
         "cluster": "Cluster",
         "system": "System",
       },
-      "allCategories": "All categories",
         "loadFailPrefix": "Failed to load task monitor: ",
         "retryNowBtn": "Retry now",
         "cadencePrefix": "Cadence: ",
@@ -685,19 +684,19 @@ export default {
           "locationMissing": "Location data missing — please reselect"
         },
         "map": {
-          "siteLocation": "Dashboard site location",
+          "siteLocation": "Threat screen site location",
           "siteLocationPlaceholder": "Choose a province or country",
           "chinaProvincesGroup": "China provinces",
           "overseasGroup": "Other countries",
-          "siteLocationHint": "Coordinates of this site's beacon on the dashboard map; picking a province or country fills lat/lng automatically. Empty means unset — the map's visual center is used.",
-          "visualMode": "Dashboard visual mode",
+          "siteLocationHint": "Coordinates of this site's beacon on the threat screen map; picking a province or country fills lat/lng automatically. Empty means unset — the map's visual center is used.",
+          "visualMode": "Threat screen visual mode",
           "visualMap": "360° map · radar sweep",
           "visualGlobe": "3D globe · vertical scan",
-          "visualModeHint": "How attack flows are rendered at the dashboard center; applies when entering the dashboard (reopen an open dashboard to switch)",
+          "visualModeHint": "How attack flows are rendered at the threat screen center; applies when entering the threat screen (reopen an open threat screen to switch)",
           "trafficSample": "Traffic sampling",
           "sampleAdaptive": "Adaptive (recommended)",
           "sampleOff": "Off (no per-request flows)",
-          "trafficSampleHint": "Sampling switch for per-request flows on the dashboard; adaptive starts at full rate and alternates between 1/4 and 1/8 by event volume. When off, only aggregated traffic stats remain — security event logs are unaffected."
+          "trafficSampleHint": "Sampling switch for per-request flows on the threat screen; adaptive starts at full rate and alternates between 1/4 and 1/8 by event volume. When off, only aggregated traffic stats remain — security event logs are unaffected."
         },
         "proxy": {
           "label": "Download proxy",

@@ -728,6 +728,7 @@ func TestRestoreImportRuntime_sameConfigIsSuccessNoop(t *testing.T) {
 // 413 文案必须从 maxConfigImportBytes 派生——测试把限额改小后仍称 128MB
 // 属「断言照过、文案失真」，巡检会按错误上限排障。
 func TestConfigImportLimitMessage_derivesFromConfiguredLimit(t *testing.T) {
+	withIsolatedGlobal(t)
 	old := maxConfigImportBytes
 	t.Cleanup(func() { maxConfigImportBytes = old })
 

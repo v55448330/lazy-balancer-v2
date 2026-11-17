@@ -5280,10 +5280,18 @@ func attackFamilyClassOf(ruleTriggered, ruleMsg string) attackFamilyClass {
 	precheckFamily := services.PrecheckRuleFamilyUnknown
 	legacyFamily := legacyRuleFamily{}
 	customORBranch := false
-	if n, perr := strconv.Atoi(ruleTriggered); perr == nil {
-		precheckFamily = services.PrecheckRuleFamilyOf(n)
-		legacyFamily = legacyRuleFamilyOf(n)
-		customORBranch = n >= services.CustomRuleORConditionIDBase
+	// 数值段解析仅对规范十进制形开放：宽松 Atoi 接受 +3000001/03000001
+	// 符号/前导零形，而 SQL GLOB '[3-6][0-9]…'（首位 3-6，拒前导零）与前端
+	// ^\d 正则拒收——带外行不得经数值段归族（视图/筛选分叉）。规范形=全
+	// ASCII 数字且无前导零（"0" 除外）；非规范形保持 Unknown/零值，仅
+	// msg/前缀分支仍可归族（与收敛前同口径）。
+	canonicalDecimal := ruleTriggeredAllDigits(ruleTriggered) && (ruleTriggered == "0" || ruleTriggered[0] != '0')
+	if canonicalDecimal {
+		if n, perr := strconv.Atoi(ruleTriggered); perr == nil {
+			precheckFamily = services.PrecheckRuleFamilyOf(n)
+			legacyFamily = legacyRuleFamilyOf(n)
+			customORBranch = n >= services.CustomRuleORConditionIDBase
+		}
 	}
 	switch {
 	case precheckFamily == services.PrecheckRuleFamilyACLDeny || precheckFamily == services.PrecheckRuleFamilyBlacklist:

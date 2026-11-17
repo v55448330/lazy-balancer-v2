@@ -27,7 +27,7 @@ func InitializeAuditDB(dataDir string) error {
 	// last-close 会触发 checkpoint + 删 -wal 风暴，见 openAndPingMetricsDB）；
 	// 审计库写更稀疏且库文件小得多，last-close 的单次 checkpoint 成本可忽略，
 	// 允许收缩到 2 条空闲连接把句柄还给系统。主库 10/5 的余量服务面板并发读。
-	auditDB, err := openSQLiteDB(path, sqlitePoolConfig{maxOpen: 5, maxIdle: 2, connMaxLifetime: 30 * time.Minute})
+	auditDB, err := openSQLiteDB(path, sqlitePoolConfig{maxOpen: AuditPoolMaxOpen, maxIdle: 2, connMaxLifetime: 30 * time.Minute})
 	if err != nil {
 		return fmt.Errorf("failed to open audit database: %w", err)
 	}

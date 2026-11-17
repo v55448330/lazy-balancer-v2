@@ -142,6 +142,7 @@ func TestStopCaddy_timeoutKeepsPauseAndRetrySucceeds(t *testing.T) {
 
 // pause 写失败必须显性报错：没有 pause 的 stop 会被监督器立刻反转，回 200 是假成功。
 func TestStopCaddy_pauseWriteFailureIsReported(t *testing.T) {
+	withIsolatedGlobal(t)
 	for _, live := range []bool{true, false} {
 		t.Run(map[bool]string{true: "live-caddy", false: "already-stopped"}[live], func(t *testing.T) {
 			env := newStopCaddyEnv(t, "exit 0")

@@ -8,6 +8,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
 import { code, cssDeclarations, section, source } from './_helpers.ts'
+import { i18n } from '../src/i18n/index.ts'
 import { buildStageModel, type SecurityStagePolicy, type SecurityStageBinding } from '../src/utils/securityStages.ts'
 import { autobanScopeLabel } from '../src/utils/autobanStatus.ts'
 import { tSafe } from '../src/i18n/tSafe.ts'
@@ -138,4 +139,72 @@ test('总览累犯下钻：状态未就绪禁用，写门提示区分加载中/�
   assert.match(reason, /autobanStatus\.value === null/, '写门提示必须有加载中分支')
   assert.match(reason, /t\('app\.security\.events\.blockedReasonLoading'\)/, '加载中文案与事件页同键')
   assert.match(reason, /autobanError\.value/, '加载失败分支不得被加载中分支吞掉')
+})
+
+// ── 触发详情 ACL 模式词：空/未知模式与阶段投影同口径（未配置模式） ──
+// formatAclModeDetail 裁定：空/未知 ip_acl_mode 名单存在但渲染侧零发射——
+// 显「未配置模式」而非「黑名单模式」。弹框摘要/hero 内联/命中位置三处同族。
+test('ACL 模式词：空/未知模式显「未配置模式」，deny/allow/绕过 回归不动（zh/en 成对）', () => {
+  const dialog = code(dialogFile)
+  // 摘要：deny 显式分支 + 空/未知兜底走 modeUnset（不得回落 modeDeny）
+  const acl = section(dialog, 'const aclSummary = computed', '\n})')
+  assert.match(acl, /p\.ip_acl_mode === 'deny'/, 'deny 必须显式分支')
+  assert.match(acl, /trigDetail\.modeUnset/, '空/未知模式兜底必须走 modeUnset 词条')
+  assert.doesNotMatch(acl, /: t\('common\.app\.views\.trigDetail\.modeDeny'\)/, '不得以黑名单模式兜底空/未知')
+  // hero 内联命中源与命中位置行：模式词单源 helper（三处不得各写一份三元）
+  assert.match(dialog, /const aclModeWord = /, '模式词必须单源 helper')
+  const hero = section(dialog, 'const heroHitSource = computed', '\n})')
+  assert.match(hero, /aclModeWord/, 'hero 内联命中源必须消费单源模式词')
+  assert.match(dialog, /inlineAclList', \{ mode: aclModeWord/, '命中位置行必须消费单源模式词')
+  // 词条双钉：zh 母本原文 + en 成对（与 stages.unsetMode 同语义）
+  assert.equal(tSafe('common.app.views.trigDetail.modeUnset'), '未配置模式')
+  assert.match(code('src/locales/en/views.ts'), /'modeUnset': 'Mode not configured'/)
+  assert.equal(tSafe('common.app.views.trigDetail.sideUnset'), '未配置模式')
+  assert.match(code('src/locales/en/views.ts'), /'sideUnset': 'unset-mode '/)
+})
+
+// ── 词条陈旧面：autoban 四维口径 / CC 突刺（配额已退役）/ 白名单占位换行 ──
+test('taskDesc.autoban 四维口径（拦截/检测/挑战发放/挑战失败），不再宣称「全部」', () => {
+  const zh = tSafe('common.app.taskDesc.autoban')
+  assert.match(zh, /拦截\/检测\/挑战发放\/挑战失败/, '口径必须四维（与 AUTOBAN_SCOPES 同集）')
+  assert.doesNotMatch(zh, /拦截\/检测\/全部/, '「全部」不是合法口径成员')
+  const en = code('src/locales/en/common.ts')
+  assert.match(en, /block\/detect\/challenge issued\/challenge failed/, 'en 四维口径成对')
+  assert.doesNotMatch(en, /block\/detect\/all/, 'en 不得残留「all」口径')
+})
+
+test('ccModeAuto 突刺口径（配额已退役）：zh/en 与策略表单 ccSection 同词', () => {
+  assert.equal(tSafe('common.app.views.trigDetail.ccModeAuto'), '智能触发（突刺 / 4xx 激增 / 多 UA）')
+  assert.match(code('src/locales/en/views.ts'), /'ccModeAuto': 'Smart trigger \(spike \/ 4xx burst \/ multi-UA\)'/)
+  assert.doesNotMatch(code('src/locales/zh/views.ts'), /配额突刺/, '配额已退役，不得残留')
+})
+
+test('keys.whitelistPlaceholder 真实换行（字面 \\n 不得渲染成可见文本，zh/en 双语）', () => {
+  for (const loc of ['zh-CN', 'en'] as const) {
+    i18n.global.locale.value = loc
+    const text = tSafe('common.app.views.keys.whitelistPlaceholder')
+    assert.ok(text.includes('\n'), `${loc}: 占位文案必须含真实换行`)
+    assert.doesNotMatch(text, /\\n/, `${loc}: 字面 backslash-n 会渲染成可见文本`)
+  }
+  i18n.global.locale.value = 'zh-CN'
+  // zh/en 源文件成对：真实转义 \n（单反斜杠），不得双反斜杠字面量
+  assert.doesNotMatch(code('src/locales/zh/views.ts'), /'whitelistPlaceholder':[^\\]*\\\\n/, 'zh 不得双反斜杠字面量')
+  assert.doesNotMatch(code('src/locales/en/views.ts'), /'whitelistPlaceholder':[^\\]*\\\\n/, 'en 不得双反斜杠字面量')
+})
+
+// ── en 术语单源：basic.map 大屏=threat screen；观察级=provisional ──
+test('en basic.map 术语与 overview.page.threatScreen 同词（不得 Dashboard 分叉）', () => {
+  const en = code('src/locales/en/settings.ts')
+  const mapBlock = section(en, '"map": {', '\n        },')
+  assert.doesNotMatch(mapBlock, /[Dd]ashboard/, 'basic.map 域 zh 母本=威胁大屏，en 不得译 Dashboard')
+  assert.match(mapBlock, /"siteLocation": "Threat screen site location"/)
+  assert.match(mapBlock, /"visualMode": "Threat screen visual mode"/)
+  // 与总览入口键同词根（threat screen）
+  assert.match(code('src/locales/en/security.ts'), /"threatScreen": "Threat screen"/)
+})
+
+test('en 观察级单源 provisional：crawlerVerifyNote 不得 observe-level 分叉', () => {
+  const enViews = code('src/locales/en/views.ts')
+  assert.match(enViews, /'crawlerVerifyNote': '[^']*provisional[^']*'/, '观察级 en 统一 provisional（与引擎标签/crawlerTip 同词）')
+  assert.doesNotMatch(enViews, /observe-level/, 'observe-level 双词分叉必须退役')
 })

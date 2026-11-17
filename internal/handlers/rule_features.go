@@ -1012,6 +1012,8 @@ func restoreRuleSnapshot(ctx context.Context, caddyID string, ruleRow map[string
 		return err
 	}
 	if err := tx.Commit(); err != nil {
+		// Commit 失败 Tx 已 done，defer Rollback 不触达 driver——池级补发。
+		rollbackLeakedTx()
 		return err
 	}
 	committed = true

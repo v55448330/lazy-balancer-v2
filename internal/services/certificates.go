@@ -333,6 +333,7 @@ func restoreCertJobsForRule(ctx context.Context, snapshot CertJobsSnapshot) erro
 		}
 	}
 	if err := tx.Commit(); err != nil {
+		db.RollbackLeakedTx(db.DB, db.MainPoolMaxOpen)
 		return fmt.Errorf("commit certificate job restore: %w", err)
 	}
 	return nil
@@ -2617,7 +2618,7 @@ func runManualCertExpiryCheck(gate *manualCertExpiryAlertGate) error {
 		}
 	}
 
-	// ③：解析失败行计数进摘要（对照续期扫描 skippedNote 口径）——
+	// 解析失败行计数进摘要（对照续期扫描 skippedNote 口径）——
 	// 此前仅应用日志 warn，任务日志零痕迹，损坏证书长期无人察觉。
 	skippedNote := ""
 	switch {

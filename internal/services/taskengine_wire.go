@@ -144,6 +144,7 @@ var rearmCertWaitingCAAfterFailure = func(hasWork bool) {
 // TaskEngine 返回全局引擎实例（未初始化返回 nil——测试环境）。
 func TaskEngine() *taskengine.Engine { return taskEnginePtr.Load() }
 
+// testseam: 全局引擎替换缝（handlers/cmd 测试跨包消费，宿主留驻产品文件）。
 // SetTaskEngineForTest 测试替换全局引擎；生产装配只能走 InitTaskEngine。
 // 用于需要独立描述符集合的 API 行为测试，禁止用于绕过 Register 校验。
 func SetTaskEngineForTest(te *taskengine.Engine) { taskEnginePtr.Store(te) }
@@ -407,8 +408,10 @@ func InitTaskEngine(watchdogAdminURL, runtimeLogFile string) *taskengine.Engine 
 	}
 
 	// ============ 循环（10）============
-	// 节标题=节内实数（四节同一惯例）；全局循环族 11=本节 10+runtime 的
-	// metrics-history-cleanup（文件头注册全集注释与标准文档 §2 同口径）。
+	// 节标题=节内注册实数（四节同一惯例）；Kind 族口径按类型而非分节：
+	// 全局循环（Periodic）族 11=本节循环族 9（crawlerbot-update 属 Scheduled，
+	// 计入定时族）+定时节的 autoban 1+runtime 的 metrics-history-cleanup 1
+	//（文件头注册全集注释与标准文档 §2 同口径）。
 
 	// 看门狗：60s 一致性检查（漂移/恢复+小时级心跳——一致轮不逐轮记录）
 	watchdogAdminURLValue = watchdogAdminURL

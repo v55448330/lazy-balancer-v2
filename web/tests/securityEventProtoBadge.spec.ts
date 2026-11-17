@@ -33,9 +33,11 @@ test('事件列表：方法列两协议统一 el-tag 徽标（上一版样式，
 
 test('触发详情弹框：命中概览显示协议徽标（TCP 青 / HTTP 蓝）', () => {
   assert.match(trigger, /row\?\.event_type === 'tcp'/)
-  assert.match(trigger, /class="proto-tcp-tag trg-proto-tag">TCP<\/el-tag>/)
+  assert.match(trigger, /class="proto-tcp-tag">TCP<\/el-tag>/)
   assert.match(trigger, /v-else-if="row\?\.event_type"/, '防御式：event_type 缺失时不显示徽标')
-  assert.match(trigger, /type="primary" effect="plain" class="trg-proto-tag">HTTP<\/el-tag>/)
+  assert.match(trigger, /type="primary" effect="plain">HTTP<\/el-tag>/)
+  // 死类负钉：trg-proto-tag 全仓零定义（间距类死消费），不得回流
+  assert.doesNotMatch(trigger, /trg-proto-tag/, 'trg-proto-tag 零定义死类必须删除')
 })
 
 test('请求详情弹框：触发规则行显示协议徽标（防御式）', () => {

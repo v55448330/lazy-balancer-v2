@@ -17,6 +17,7 @@ import (
 // 穿越门与尺寸门的回归钉：../ 与 / 形态的 filename 必须 400（此前只有
 // 测试缝用例覆盖 200 路径）；超 1MB 文件必须 413 而非静默截断。
 func TestGetCRSRuleContent_rejectsTraversalAndOversize(t *testing.T) {
+	withIsolatedGlobal(t)
 	dir := t.TempDir()
 	oldDir := crsRulesDir
 	crsRulesDir = dir
@@ -53,6 +54,7 @@ func TestGetCRSRuleContent_rejectsTraversalAndOversize(t *testing.T) {
 // 局部变量硬编码 "/app/waf/crs/rules" 且遮蔽 filepath 包名，与缝声明构成双真源，
 // 规则目录不可注入（测试因此只能钉 400/404 两分支）。
 func TestGetCRSRuleContent_resolvesViaCRSRulesDirSeam(t *testing.T) {
+	withIsolatedGlobal(t)
 	// Given：crsRulesDir 指向临时目录，内含一个规则文件
 	dir := t.TempDir()
 	const content = "SecRule REQUEST_URI \"@rx /w8-seam\" \"id:942100,phase:1,pass,nolog\"\n"
@@ -83,6 +85,7 @@ func TestGetCRSRuleContent_resolvesViaCRSRulesDirSeam(t *testing.T) {
 // CRS 配置查看端点的三态（200/404/413）此前无端点级测试，crsSetupConf 测试缝
 // 也从未被注入：尺寸上限必须显式 413 而非静默截断。
 func TestSecurityCRSSetupConfig_endpointBoundaries(t *testing.T) {
+	withIsolatedGlobal(t)
 	const route = "/security/crs/setup"
 	h := newBackupTestHandlers(t)
 	confPath := filepath.Join(t.TempDir(), "crs-setup.conf")

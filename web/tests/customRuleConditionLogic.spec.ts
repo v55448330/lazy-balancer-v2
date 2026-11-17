@@ -15,7 +15,8 @@ test('OR 分支触发 id 归自定义族并回解同一父规则', () => {
   assert.equal(customRuleEventDbID('3642688'), 42)
   assert.equal(customRuleEventDbID('3642689'), 42)
   assert.equal(customRuleEventDbID('3642816'), 44)
-  for (const id of ['10000', '800000', '1000001', '2000000', '3000000', 'abc']) {
+  // 符号/前导零带外形不得回解父规则（数值段仅规范十进制开放，三侧同口径）
+  for (const id of ['10000', '800000', '1000001', '2000000', '3000000', 'abc', '+3642688', '03642688', '+10042', '010042']) {
     assert.ok(Number.isNaN(customRuleEventDbID(id)), `id=${id} 不得回解父规则`)
   }
 })

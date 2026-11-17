@@ -311,6 +311,7 @@ func TestOIDCCallback_refreshesDisplayNameFromIdP(t *testing.T) {
 
 // state 封顶是检查+预留原子操作——并发未认证登录不得越过上限。
 func TestOIDCLogin_stateReservationAtomicUnderConcurrency(t *testing.T) {
+	withIsolatedGlobal(t)
 	idp := newMockIdP(t)
 	router, _ := setupOIDCTest(t, idp)
 	putOIDCConfig(t, router, `{"issuer":"`+idp.issuer+`","client_id":"test-client","client_secret":"s","enabled":true}`)

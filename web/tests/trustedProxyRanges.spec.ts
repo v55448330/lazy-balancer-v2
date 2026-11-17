@@ -21,6 +21,8 @@ import {
   trustedProxyTotalWarning,
 } from '../src/utils/trustedProxyRanges.ts'
 import { repoCode, section, code } from './_helpers.ts'
+import { tSafe } from '../src/i18n/tSafe.ts'
+import { i18n } from '../src/i18n/index.ts'
 
 // 单条校验（range/header）与并集键已收敛为模块私有：经整列对外入口间接断言。
 // 汇总文案形如 `受信网段不可用：<原文>（<原因>）`——原因自身可含全角括号
@@ -310,4 +312,31 @@ test('组件接线：请求头与总量行内提示 + 保存门', () => {
   assert.ok(savingIdx > warnIdx, '终点标记（saving 置位）必须存在且在提示之后（缺失时负断言会空转）')
   const between = save.slice(warnIdx, savingIdx)
   assert.doesNotMatch(between, /\breturn\b/, '估算越限不得拦保存（判定权在后端）')
+})
+
+// —— 存为列表：默认名/备注消费键必须真实存在（裸键落库回归钉） ——
+// 三消费点（弹框初值/重开重置/条目 remark）曾消费 basic.map 域不存在的键，
+// vue-i18n missingWarn:false 返回键路径本身——不改名创建则列表名与 remark
+// 以裸键文本落库。此钉消费键存在性 + 返回文案 + 三消费点同键。
+test('存为列表默认名：消费键存在且返回文案，三消费点同键（zh/en 双语）', () => {
+  const key = 'app.settings.caddy.trust.saveAsListDefaultName'
+  const card = code('src/views/settings/CaddyGlobalSettings.vue')
+  const hits = card.match(/t\('app\.settings\.caddy\.trust\.saveAsListDefaultName'\)/g) ?? []
+  assert.equal(hits.length, 3, '三消费点（初值/重开/remark）必须同走 caddy.trust 真实键')
+  assert.doesNotMatch(card, /basic\.map\.saveAsListDefaultName/, 'basic.map 域无此键，消费即裸键落库')
+  const messages = i18n.global.messages.value as Record<string, Record<string, unknown>>
+  const texts: Record<string, string> = { 'zh-CN': '受信代理网段', en: 'Trusted proxy ranges' }
+  for (const loc of ['zh-CN', 'en'] as const) {
+    i18n.global.locale.value = loc
+    const got = tSafe(key)
+    assert.notEqual(got, key, `${loc}: 消费键必须存在（不得裸键回显）`)
+    assert.equal(got, texts[loc], `${loc}: 默认名文案与母本逐字一致`)
+  }
+  i18n.global.locale.value = 'zh-CN'
+  // 合并树键存在性守卫（运行期挂载树，非第二份合并实现）
+  for (const loc of ['zh-CN', 'en'] as const) {
+    const tree = messages[loc].app as Record<string, unknown>
+    const node = key.slice(4).split('.').reduce<unknown>((acc, seg) => (acc as Record<string, unknown> | undefined)?.[seg], tree)
+    assert.equal(typeof node, 'string', `${loc}: 合并树必须含 ${key}`)
+  }
 })

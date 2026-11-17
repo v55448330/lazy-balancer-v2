@@ -361,6 +361,7 @@ func (s *ClusterService) GenerateRegisterToken(ctx context.Context, createdBy in
 		return "", time.Time{}, fmt.Errorf("保存注册令牌: 影响 %d 行", inserted)
 	}
 	if err := tx.Commit(); err != nil {
+		db.RollbackLeakedTx(s.db, db.MainPoolMaxOpen)
 		return "", time.Time{}, fmt.Errorf("提交注册令牌事务: %w", err)
 	}
 	return token, expiresAt, nil
@@ -495,6 +496,7 @@ func (s *ClusterService) RegisterNode(ctx context.Context, req models.ClusterReg
 		return models.ClusterRegistration{}, err
 	}
 	if err := tx.Commit(); err != nil {
+		db.RollbackLeakedTx(s.db, db.MainPoolMaxOpen)
 		return models.ClusterRegistration{}, fmt.Errorf("提交节点注册: %w", err)
 	}
 	// 同 IP:port 行被覆盖后旧分区哈希不再属于本次注册。
@@ -536,6 +538,7 @@ func (s *ClusterService) UpdateNodeSiteCoordinates(ctx context.Context, nodeID i
 		return err
 	}
 	if err := tx.Commit(); err != nil {
+		db.RollbackLeakedTx(s.db, db.MainPoolMaxOpen)
 		return fmt.Errorf("提交节点站点坐标: %w", err)
 	}
 	return nil
@@ -643,12 +646,14 @@ func (s *ClusterService) RegistrationStatus(ctx context.Context, nodeID int, sec
 				return models.ClusterRegistrationStatus{}, s.nodeWriteMissError(ctx)
 			}
 			if err := tx.Commit(); err != nil {
+				db.RollbackLeakedTx(s.db, db.MainPoolMaxOpen)
 				return models.ClusterRegistrationStatus{}, fmt.Errorf("提交状态查询: %w", err)
 			}
 			return models.ClusterRegistrationStatus{Status: "approved", ClusterToken: clusterToken}, nil
 		}
 		if status == "pending" {
 			if err := tx.Commit(); err != nil {
+				db.RollbackLeakedTx(s.db, db.MainPoolMaxOpen)
 				return models.ClusterRegistrationStatus{}, fmt.Errorf("提交状态查询: %w", err)
 			}
 			return models.ClusterRegistrationStatus{Status: "pending"}, nil
@@ -684,6 +689,7 @@ func (s *ClusterService) RegistrationStatus(ctx context.Context, nodeID int, sec
 		response.Status = "rejected"
 	}
 	if err := tx.Commit(); err != nil {
+		db.RollbackLeakedTx(s.db, db.MainPoolMaxOpen)
 		return models.ClusterRegistrationStatus{}, fmt.Errorf("提交状态查询: %w", err)
 	}
 	return response, nil
@@ -932,6 +938,7 @@ func (s *ClusterService) Promote(ctx context.Context) error {
 		return err
 	}
 	if err := tx.Commit(); err != nil {
+		db.RollbackLeakedTx(s.db, db.MainPoolMaxOpen)
 		return fmt.Errorf("提交提升事务: %w", err)
 	}
 	promoted = true

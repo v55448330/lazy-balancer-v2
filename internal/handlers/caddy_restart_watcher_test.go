@@ -32,7 +32,7 @@ func countCaddyRestartRuns(t *testing.T) int {
 
 // Given 配置重载未接线（RunSync 必失败）。
 // When watcher 单轮处理新触发文件。
-// Then 触发文件必须保留（下轮重试）且真实执行了一次（现实现先删后跑——RED）。
+// Then 触发文件必须保留（下轮重试）且真实执行了一次（失败终态留 task_runs）。
 func TestCaddyRestartWatcher_failureKeepsTriggerFile(t *testing.T) {
 	initTaskEngineForTest(t)
 	newBackupTestHandlers(t)

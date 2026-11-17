@@ -493,6 +493,7 @@ func noteIPListRenderRef(path string) {
 	ipListRenderRefs.Unlock()
 }
 
+// testseam: 渲染引用集剔除缝（引用集由生产渲染路径持有，宿主留驻产品文件）。
 // forgetIPListRenderRefForTest 从引用集中剔除路径（测试模拟「本轮渲染不再
 // 引用」）。
 func forgetIPListRenderRefForTest(path string) {
@@ -501,6 +502,7 @@ func forgetIPListRenderRefForTest(path string) {
 	ipListRenderRefs.Unlock()
 }
 
+// testseam: 投影状态复位缝（handlers 测试跨包消费，宿主留驻产品文件）。
 // ResetIPListProjectionStateForTest 清空进程级投影状态（投影备忘 + 渲染引用
 // 集），等价于进程重启后的首轮渲染起点：生产重启天然是空表，同进程用例必须
 // 显式清空，否则备忘快路可能掩盖「文件与库不一致 → 必须重写」的重写路径。

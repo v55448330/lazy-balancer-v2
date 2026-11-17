@@ -129,6 +129,7 @@ func recordUndeterminedRoundLocked() {
 // InitTaskEngine 装配时注入下方包级变量。
 var watchdogAdminURLValue string
 
+// testseam: 单轮比对注入钩子（生产比对路径判 nil 分支，宿主留驻产品文件）。
 // configDriftCheckForTest 是单轮比对实现的测试缝（生产恒 nil）。panic 兜底
 // 分支（运行日志 + 任务日志「检查异常（panic 已拦）」+ 错误包装）只有在比对
 // 路径可注入 panic 时才可能被钉住——引擎 runGuarded 另有一层兜底，会掩盖本层

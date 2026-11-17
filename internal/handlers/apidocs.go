@@ -572,7 +572,7 @@ func inspectAdminTLSRequestVariants() []apiDocContentExample {
 
 func configImportRequestVariants() []apiDocContentExample {
 	return []apiDocContentExample{
-		{"application/json", `{"meta":{"app":"lazy-balancer","version":"2"},"config":{},"tables":{}}`},
+		{"application/json", `{"meta":{"app":"lazy-balancer-v2","version":1},"config":{},"tables":{}}`},
 		{"application/octet-stream", "lbbak 二进制备份（tar.gz）原始字节"},
 	}
 }

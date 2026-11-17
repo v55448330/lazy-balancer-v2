@@ -882,6 +882,9 @@ func (h *Handlers) UpdateAutoBackupSettings(c *gin.Context) {
 		return
 	}
 	if err := commitTx(tx); err != nil {
+		// Commit 失败后 Tx 已 done，defer tx.Rollback 只回 ErrTxDone 不触达
+		// driver——泄漏事务持写锁必须池级补发（与 DeleteAutoBackup 同收口）。
+		rollbackLeakedTx()
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.Tf(c, "k_4c68d678", apimsg.ErrMsg(c, err))})
 		return
 	}

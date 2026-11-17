@@ -27,6 +27,24 @@ func TestSelectCertificate_prefersLaterExpiry_overRecentIssuance(t *testing.T) {
 	}
 }
 
+// Leaf==nil（调用方未预解析）的候选必须经 ParseCertificateLeaf 单源回退解析
+// 后照常参与择优；不可解析候选（坏 PEM）跳过不得中断选择。
+func TestSelectCertificate_unparsedLeafFallsBackToSingleSourceParse(t *testing.T) {
+	now := time.Now().UTC()
+	certPEM, keyPEM := certificatePairForDomains(t, now.Add(-time.Hour), now.Add(90*24*time.Hour), "example.com")
+	candidates := []CertificateCandidate{
+		{ID: 1, Domain: "example.com", Status: "issued", CertPEM: "not-a-pem", KeyPEM: "broken"},
+		{ID: 2, Domain: "example.com", Status: "issued", CertPEM: certPEM, KeyPEM: keyPEM},
+	}
+	selected, ok := selectCertificate(candidates, "example.com", now)
+	if !ok || selected.Candidate.ID != 2 {
+		t.Fatalf("selected=%+v ok=%v, want 未预解析候选经单源回退解析后选中 ID=2", selected, ok)
+	}
+	if selected.Certificate == nil || selected.Certificate.NotAfter.IsZero() {
+		t.Fatal("回退解析必须产出 Leaf（后续有效期/域名判定依赖）")
+	}
+}
+
 func TestCertificateSelection_surfacesUseSameCertificate(t *testing.T) {
 	tests := []struct {
 		name        string

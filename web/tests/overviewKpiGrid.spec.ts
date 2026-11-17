@@ -23,8 +23,8 @@ test('三 KPI 等分栅格：拦截/检测/正常请求 同构三列，挑战移
     '必须恰好三个 guard-item 列（挑战统计移至 CC 卡片）',
   )
   assert.equal(guard.split('<div class="strip-divider"></div>').length - 1, 2, '列间必须两条竖分隔线')
-  // 结构负钉：活跃策略 KPI 已退役——防护区零消费（接口字段保留属契约面，不在
-  // 本钉范围；裸中文「活跃策略」负钉 i18n 后空转）。
+  // 结构负钉：活跃策略 KPI 已退役——防护区零消费（接口字段亦已退役，见下方
+  // 「Overview 接口零消费字段退役」钉；裸中文「活跃策略」负钉 i18n 后空转）。
   assert.doesNotMatch(guard, /activePolicies|active_policies|kpiActive/, '活跃策略指标必须退役（防护区零消费）')
   // 等分与分隔形态（flex 等宽栅格，不引新组件）
   const item = cssDeclarations(page, '.guard-item')
@@ -146,6 +146,19 @@ test('防御式消费：契约字段缺失（旧后端）对应行隐藏', () =>
   // 检测列两行均带 v-if（昨日门 + 拆分门）
   const [, detected] = guardCols()
   assert.equal([...detected.matchAll(/<div v-if[^>]*class="strip-sub">/g)].length, 2, '检测列昨日行+拆分行各带 v-if')
+})
+
+test('Overview 接口零消费字段退役：active_policies/raw_coverage_from/backfill_incomplete/today_human_fail 不声明', () => {
+  // 与事件页 AutobanStatus 先例同口径：后端返回但本视图零消费的字段不声明
+  // （活跃策略 KPI 已退役；覆盖/回填披露由威胁大屏 stats 消费；今日挑战失败
+  // 由 CC 卡 human/stats 承载）。today_challenged 是 CC 卡活字段，不得误删。
+  const page = code('src/views/security/SecurityOverview.vue')
+  const iface = section(page, 'interface Overview', '\n}')
+  for (const field of ['active_policies', 'raw_coverage_from', 'backfill_incomplete', 'today_human_fail']) {
+    assert.doesNotMatch(iface, new RegExp(`\\b${field}\\b`), `Overview.${field} 零消费字段必须退役`)
+    assert.doesNotMatch(page, new RegExp(`overview\\.value\\.${field}\\b|overview\\.${field}\\b`), `${field} 不得有消费点残留`)
+  }
+  assert.match(iface, /today_challenged\?: number/, 'today_challenged 是 CC 卡活字段，保留')
 })
 
 test('同行等高：趋势与攻击类型分布拉伸同高，「按阶段展示」不撑高卡头', () => {

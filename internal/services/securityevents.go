@@ -718,9 +718,11 @@ var securityEventsMappingsCache = struct {
 	entry securityEventsMappingsCacheEntry
 }{}
 
+// testseam: 映射全量装载计数缝（生产装载路径原子自增，宿主留驻产品文件）。
 // securityEventsMappingLoadsForTest 统计实际全量装载次数（缓存命中不计）。
 var securityEventsMappingLoadsForTest atomic.Int64
 
+// testseam: 映射缓存复位缝（缓存由生产读路径持有，宿主留驻产品文件）。
 func resetSecurityEventsMappingsCacheForTest() {
 	securityEventsMappingsCache.Lock()
 	securityEventsMappingsCache.entry = securityEventsMappingsCacheEntry{}
@@ -2382,19 +2384,11 @@ func (t *securityEventsTailer) securityEventsTickContext(ctx context.Context) er
 // database/sql 已把 Tx 标记 done 且不再调用 driver.Rollback：SQLite 的
 // deferred 约束/IO 类失败会让底层事务保持活动，连接归还池后仍持写事务
 // （写锁滞留，后续 Begin/INSERT 持续 "database is locked"，摄取永久停摆）。
-// 语义与 handlers 侧的 rollbackLeakedTx 同源（连接池 LIFO：泄漏连接优先被
-// 取到；命中无事务连接时报 "no transaction is active"，重试至命中或用尽）。
+// 实现单源 db.RollbackLeakedTx（遍历签出池连接——池级 Exec 的 LIFO 重试
+// 在泄漏连接非栈顶时全部命中同一条无事务连接，写锁持续滞留；并发面板读
+// 归还连接即可掩埋泄漏连接，与写者数无关）。
 func securityEventsRollbackLeakedTx(database *sql.DB) {
-	if database == nil {
-		return
-	}
-	for attempt := range 5 {
-		if _, err := database.Exec("ROLLBACK"); err == nil {
-			return
-		} else if !strings.Contains(err.Error(), "no transaction is active") {
-			Logf("warn", "security events ingestion: 提交失败后补发 ROLLBACK 失败（第 %d 次）: %v", attempt+1, err)
-		}
-	}
+	db.RollbackLeakedTx(database, db.MetricsPoolMaxOpen)
 }
 
 // 单 pass 处理上限（活文件摄取；var 供测试收窄）。长积压（停摆恢复/容器长时间
@@ -3220,7 +3214,9 @@ type SecurityEventsIngestionStatus struct {
 	// RotationDeferred 表示最近一轮审计日志轮转因「活文件尾部尚未摄取」顺延：
 	// 归档已就位而活文件未截断，磁盘空间暂未回收。它不是采集失败——本轮
 	// 采集与入库都成功、事件零丢失，故不计入 ConsecutiveFailures 也不降级
-	// Healthy；三面据此把「容量延迟」与「采集异常」分开呈现。
+	// Healthy。轮转延迟目前仅由采集任务日志承载（runIngestionLoop 的
+	// rotate 摘要），事件列表/总览/大屏三面健康位不呈现本字段——三面据此
+	// 保持健康、不误报采集异常；「容量延迟」的三面横幅呈现属未接入的展示面。
 	RotationDeferred       bool   `json:"rotation_deferred"`
 	RotationLastDeferredAt string `json:"rotation_last_deferred_at,omitempty"`
 	// Spool* 是 B 形态（IPC 主路径 + fallback spool）的待补采状态：
@@ -3260,7 +3256,7 @@ func securityEventsRecordPollResult(err error) {
 		// 轮转顺延不是采集失败：本轮采集/入库已成功，只有「活文件截断」被推到
 		// 下一轮（空间暂未回收）。计入连续失败会在持续写入期把三面健康位误报
 		// 成采集异常，并让真实失败被容量噪音掩盖——按成功 tick 记账，另记延迟
-		// 状态供三面显示「轮转延迟」。
+		// 状态（唯一呈现面=任务日志的轮转延迟摘要；三面健康位不消费该标记）。
 		status.ConsecutiveFailures = 0
 		status.Healthy = true
 		status.LastSuccessAt = now.Format(time.RFC3339)
@@ -3720,6 +3716,7 @@ func securityEventsOverlayIngestionHealth(status SecurityEventsIngestionStatus) 
 	return status
 }
 
+// testseam: 健康快照直设缝（handlers 契约测试跨包消费，宿主留驻产品文件）。
 // SecurityEventsSetIngestionHealthForTest 直设健康快照（handlers 契约测试用；
 // 生产路径只经 securityEventsRecordPollResult 更新）。
 func SecurityEventsSetIngestionHealthForTest(status SecurityEventsIngestionStatus) {

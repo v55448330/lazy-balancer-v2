@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"lazy-balancer-v2/internal/testsupport"
 )
@@ -269,6 +270,39 @@ func captureHandlerGlobalSeams() map[string]any {
 		"threatRollupRewindApplyInLock":   handlerGlobalPointer(threatRollupRewindApplyInLock),
 		"deltaUint64":                     handlerGlobalPointer(deltaUint64),
 		"importCleanupBudget":             importCleanupBudget,
+		// 标量旋钮缝（类型派生完备门扩 string/bool/数值后捕获的漏登旋钮，
+		// 判据=有测试写点；漏复位会让后续用例按注入值跑——路径/超时/ TTL
+		// 漂移，失败用例看起来与被测逻辑无关）。按域分组。
+		// 审计/日志路径与 TTL 旋钮。
+		"auditLogCountCacheTTL": auditLogCountCacheTTL,
+		"defaultRuntimeLogPath": defaultRuntimeLogPath,
+		"wafAuditLogFile":       wafAuditLogFile,
+		// OIDC 会话/状态旋钮。
+		"oidcStateBindingEnabled": oidcStateBindingEnabled,
+		"oidcStateMaxEntries":     oidcStateMaxEntries,
+		// 品牌镜像同步观测旋钮。
+		"brandingSyncDataDir":     brandingSyncDataDir,
+		"brandingSyncFingerprint": brandingSyncFingerprint,
+		// Caddy 进程/监督器路径与超时旋钮。
+		"caddyPauseFile":               caddyPauseFile,
+		"caddyProcRoot":                caddyProcRoot,
+		"caddyStartupReplayMarkerFile": caddyStartupReplayMarkerFile,
+		"caddySupervisorPidFile":       caddySupervisorPidFile,
+		"caddySupervisorWaitTimeout":   caddySupervisorWaitTimeout,
+		"startupReplayWaitTimeout":     startupReplayWaitTimeout,
+		// 集群/导入/规则窗口旋钮。
+		"clusterServiceExitDelay":    clusterServiceExitDelay,
+		"importInFlightDrainTimeout": importInFlightDrainTimeout,
+		"maxConfigImportBytes":       maxConfigImportBytes,
+		"cancelRuleJobsTimeout":      cancelRuleJobsTimeout,
+		// CRS 路径旋钮。
+		"crsRulesDir":  crsRulesDir,
+		"crsSetupConf": crsSetupConf,
+		// 安全缓存/回退重试旋钮。
+		"securityPolicy24hCountsCacheTTL": securityPolicy24hCountsCacheTTL,
+		"threatRollupRewindApplyAttempts": threatRollupRewindApplyAttempts,
+		"threatRollupRewindApplyBackoff":  threatRollupRewindApplyBackoff,
+		"threatActiveSourcesCacheTTL":     threatActiveSourcesCacheTTL,
 	}
 }
 
@@ -490,6 +524,31 @@ func TestGlobalStateGuard_detectsFuncRefSeamLeaks(t *testing.T) {
 		old := oidcOutboundClient
 		t.Cleanup(func() { oidcOutboundClient = old })
 		assertHandlerGlobalStateLeak(t, "oidcOutboundClient", func() { oidcOutboundClient = nil })
+	})
+}
+
+// 标量旋钮缝（string/bool/数值）的泄漏可见性自证：类型门扩标量后补登的
+// 旋钮，故意泄漏必须当场命中（与函数/客户端缝自证同形）。
+func TestGlobalStateGuard_detectsScalarKnobLeaks(t *testing.T) {
+	t.Run("caddyPauseFile", func(t *testing.T) {
+		old := caddyPauseFile
+		t.Cleanup(func() { caddyPauseFile = old })
+		assertHandlerGlobalStateLeak(t, "caddyPauseFile", func() { caddyPauseFile = old + ".leak" })
+	})
+	t.Run("oidcStateMaxEntries", func(t *testing.T) {
+		old := oidcStateMaxEntries
+		t.Cleanup(func() { oidcStateMaxEntries = old })
+		assertHandlerGlobalStateLeak(t, "oidcStateMaxEntries", func() { oidcStateMaxEntries++ })
+	})
+	t.Run("oidcStateBindingEnabled", func(t *testing.T) {
+		old := oidcStateBindingEnabled
+		t.Cleanup(func() { oidcStateBindingEnabled = old })
+		assertHandlerGlobalStateLeak(t, "oidcStateBindingEnabled", func() { oidcStateBindingEnabled = !old })
+	})
+	t.Run("threatRollupRewindApplyBackoff", func(t *testing.T) {
+		old := threatRollupRewindApplyBackoff
+		t.Cleanup(func() { threatRollupRewindApplyBackoff = old })
+		assertHandlerGlobalStateLeak(t, "threatRollupRewindApplyBackoff", func() { threatRollupRewindApplyBackoff += time.Millisecond })
 	})
 }
 

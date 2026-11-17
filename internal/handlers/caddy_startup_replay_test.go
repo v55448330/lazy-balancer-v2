@@ -19,6 +19,7 @@ import (
 // seedProcStat 种入固定 pid 12345，存活、状态非 Z）冒充监督器——不读真
 // /proc，也不占用本测试进程 pid。
 func setupStartupReplayFixture(t *testing.T, supervisorUp bool) string {
+	withIsolatedGlobal(t)
 	t.Helper()
 	oldPid, oldMarker, oldTimeout, oldProc := caddySupervisorPidFile, caddyStartupReplayMarkerFile, startupReplayWaitTimeout, caddyProcRoot
 	dir := t.TempDir()

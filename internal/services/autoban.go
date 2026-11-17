@@ -980,12 +980,15 @@ func ObserveHumanEvents(items []HumanObserveItem) {
 	if err != nil || !cfg.Enabled {
 		return
 	}
+	// 口径集合批级一次解析（批内 cfg.Scope 恒定）：成员表下传单事件路径，
+	// 不再逐事件重复切分同一 scope 字符串。
+	scopeSet := AutobanScopeSet(cfg.Scope)
 	for _, it := range items {
 		// CC reject 动作（429 限流拒绝）按「被拦截」口径喂 blocked 维度——
 		// 429 确属拦截，与 WAF blocked 同组（evidence 模式计确证）。走人机
 		// 事件传输通道但 action=blocked，rule token 用 cc_rate_reject 归因。
 		if it.Kind == "rate_reject" {
-			autobanObserveEventScopedAt(cfg, it.IP, "blocked", "cc_rate_reject", it.At)
+			autobanObserveEventScopedAt(cfg, scopeSet, it.IP, "blocked", "cc_rate_reject", it.At)
 			continue
 		}
 		ruleTriggered := "human_challenge"
@@ -1000,7 +1003,7 @@ func ObserveHumanEvents(items []HumanObserveItem) {
 		if it.Kind == "challenge" && it.Reason != "" {
 			ruleTriggered = "cc_" + it.Reason
 		}
-		autobanObserveEventScopedAt(cfg, it.IP, "challenged", ruleTriggered, it.At)
+		autobanObserveEventScopedAt(cfg, scopeSet, it.IP, "challenged", ruleTriggered, it.At)
 	}
 }
 
@@ -1056,11 +1059,12 @@ func autobanObserveBatch(items []autobanFeedItem) {
 	if err != nil || !cfg.Enabled {
 		return
 	}
+	scopeSet := AutobanScopeSet(cfg.Scope)
 	for _, it := range items {
 		if it.TrustExempt {
 			continue
 		}
-		autobanObserveEventScopedAt(cfg, it.IP, it.Action, it.RuleTriggered, it.At)
+		autobanObserveEventScopedAt(cfg, scopeSet, it.IP, it.Action, it.RuleTriggered, it.At)
 	}
 }
 
@@ -1084,7 +1088,7 @@ func autobanSourceEligible(ruleTriggered string) bool {
 	return !securityEventsIsCrawlerExemptRule(ruleTriggered)
 }
 
-func autobanObserveEventScopedAt(cfg AutobanConfig, ip, action, ruleTriggered string, at time.Time) {
+func autobanObserveEventScopedAt(cfg AutobanConfig, scopeSet map[string]bool, ip, action, ruleTriggered string, at time.Time) {
 	// 廉价门控前置：身份/窗口不合法的事件直接丢弃，不做口径解析与族判定。
 	if ip == "" || ruleTriggered == "" {
 		return
@@ -1105,9 +1109,8 @@ func autobanObserveEventScopedAt(cfg AutobanConfig, ip, action, ruleTriggered st
 	if window <= 0 {
 		return
 	}
-	// 口径集合每事件只解析一次：WAF 事件与人机维度共用同一成员表
-	//（此前 autobanActionMatches 二次解析同一 scope，热路径双倍字符串切分）。
-	scopeSet := AutobanScopeSet(cfg.Scope)
+	// 口径成员表由调用方批级一次解析下传（ObserveHumanEvents/autobanObserveBatch
+	// 两路径共用）：批内 cfg.Scope 恒定，逐事件重解析是热路径可避免分配。
 	// dim 是事件的口径维度（WAF=action；人机=发放/失败映射）——evidence
 	// 模式按 dim 分组累加确证/嫌疑。
 	dim := action
@@ -1441,12 +1444,14 @@ func AutobanForgetIPs(ips []string) {
 	}
 }
 
+// testseam: 建议暂存直设缝（handlers 测试跨包消费，宿主留驻产品文件）。
 // AutobanSetSuggestionsForTest 直设建议暂存（handlers 层富化钉测用；nil=清空，
 // 与 SetAutobanReloader 同款测试缝约定）。
 func AutobanSetSuggestionsForTest(s []AutobanSuggestion) {
 	autobanSetSuggestions(s)
 }
 
+// testseam: 计数桶直填缝（handlers 测试跨包消费，宿主留驻产品文件）。
 // AutobanSeedCounterForTest 直填计数桶（handlers 层接线钉测用——绕过喂入门
 // 主节点/启用/口径三重门，桶形态与 Feed 路径产出一致）。
 func AutobanSeedCounterForTest(ip string, count, threshold int) {
@@ -1785,6 +1790,7 @@ func autobanMergeEntries(cfg AutobanConfig, candidates []AutobanSuggestion) (aut
 		}
 	}
 	if err := tx.Commit(); err != nil {
+		db.RollbackLeakedTx(db.DB, db.MainPoolMaxOpen)
 		return out, err
 	}
 	return out, nil

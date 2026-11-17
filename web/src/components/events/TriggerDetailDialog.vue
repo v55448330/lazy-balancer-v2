@@ -18,8 +18,8 @@
         <div class="trg-hero-row">
           <!-- 规则协议徽标（数据源=event_type；字段缺失不显示——防御式）：
                TCP 青 = 全局 proto-tcp-tag 单源，HTTP 蓝 = el-tag primary -->
-          <el-tag v-if="row?.event_type === 'tcp'" size="small" effect="plain" class="proto-tcp-tag trg-proto-tag">TCP</el-tag>
-          <el-tag v-else-if="row?.event_type" size="small" type="primary" effect="plain" class="trg-proto-tag">HTTP</el-tag>
+          <el-tag v-if="row?.event_type === 'tcp'" size="small" effect="plain" class="proto-tcp-tag">TCP</el-tag>
+          <el-tag v-else-if="row?.event_type" size="small" type="primary" effect="plain">HTTP</el-tag>
           <el-tag size="small" :type="sourceTagType" effect="dark">{{ categoryLabel }}</el-tag>
           <span class="trg-hero-stage">{{ heroStage }}</span>
 
@@ -70,7 +70,7 @@
             <span class="k">{{ t('common.app.views.trigDetail.hitLists') }}</span>
             <span>{{ m.name }}<el-tag v-if="m.system" size="small" effect="plain" style="margin-left: 6px">{{ t('common.app.views.trigDetail.builtinReadonly') }}</el-tag></span>
           </div>
-          <div v-if="inlineAclHit" class="trg-kv"><span class="k">{{ t('common.app.views.trigDetail.hitPosition') }}</span><span>{{ t('common.app.views.trigDetail.inlineAclList', { mode: policy?.ip_acl_mode === 'allow' ? t('common.app.views.trigDetail.sideWhite') : t('common.app.views.trigDetail.sideBlack') }) }}</span></div>
+          <div v-if="inlineAclHit" class="trg-kv"><span class="k">{{ t('common.app.views.trigDetail.hitPosition') }}</span><span>{{ t('common.app.views.trigDetail.inlineAclList', { mode: aclModeWord }) }}</span></div>
           <div v-if="trustHitNote" class="trg-kv"><span class="k">{{ t('common.app.views.trigDetail.trustExemption') }}</span><span>{{ trustHitNote }}</span></div>
           <div v-if="memberSystemTip" class="info-note-bar"><span class="info-note-desc">{{ memberSystemTip }}</span></div>
           <div v-if="allHitLists.length === 0 && !inlineAclHit && kind === 'acl' && !isAllowOutside && !loadError && !entriesError" class="info-note-bar"><span class="info-note-desc">{{ t('common.app.views.trigDetail.noHitListFound') }}</span></div>
@@ -350,6 +350,16 @@ const relevantSummary = computed(() => {
   }
 })
 
+// ACL 模式词单源（摘要/hero 内联命中源/命中位置行三处共用）：空/未知模式
+// 与 securityStages.formatAclModeDetail 同口径——名单存在但渲染侧零发射，
+// 显「未配置模式」而非「黑名单模式」（后端空串 ip_acl_mode 合法）。
+const aclModeWord = computed(() => {
+  const m = policy.value?.ip_acl_mode
+  if (m === 'allow') return t('common.app.views.trigDetail.sideWhite')
+  if (m === 'deny') return t('common.app.views.trigDetail.sideBlack')
+  return t('common.app.views.trigDetail.sideUnset')
+})
+
 // 命中源：具体到规则或地址列表（用户裁定：一眼看出触发了哪条规则/哪个列表）
 const heroHitSource = computed(() => {
   const ev = props.row
@@ -362,7 +372,7 @@ const heroHitSource = computed(() => {
     case 'acl': {
       if (isAllowOutside.value) return t('common.app.views.trigDetail.allowOutsideNote')
       if (inlineAclHit.value) {
-        const mode = policy.value?.ip_acl_mode === 'allow' ? t('common.app.views.trigDetail.sideWhite') : t('common.app.views.trigDetail.sideBlack')
+        const mode = aclModeWord.value
         return t('common.app.views.trigDetail.heroInlineAcl', { mode, id: ev.rule_triggered })
       }
       if (allHitLists.value.length > 0) {
@@ -643,7 +653,11 @@ const aclSummary = computed(() => {
   if (!p.ip_acl_enabled) return t('common.app.views.trigDetail.notEnabled')
   const mode = p.ip_acl_mode === 'allow'
     ? t('common.app.views.trigDetail.modeAllow')
-    : p.ip_acl_mode === '绕过' ? t('common.app.views.trigDetail.modeBypass') : t('common.app.views.trigDetail.modeDeny')
+    : p.ip_acl_mode === '绕过'
+      ? t('common.app.views.trigDetail.modeBypass')
+      : p.ip_acl_mode === 'deny'
+        ? t('common.app.views.trigDetail.modeDeny')
+        : t('common.app.views.trigDetail.modeUnset')
   return `${mode} · ${listSummary(p.ip_acl_list, p.ip_acl_list_refs)}`
 })
 const trustSummary = computed(() => {

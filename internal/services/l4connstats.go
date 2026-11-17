@@ -216,5 +216,10 @@ func storeL4ConnHistory(rows []l4ConnRow) error {
 			return fmt.Errorf("store l4 conn history for %q: %w", row.ruleID, err)
 		}
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		// Commit 失败 Tx 已 done，defer Rollback 不触达 driver——池级补发。
+		db.RollbackLeakedTx(db.MetricsDB, db.MetricsPoolMaxOpen)
+		return err
+	}
+	return nil
 }

@@ -211,6 +211,7 @@ func simulateIdPIssuesCode(t *testing.T, authURL string) string {
 }
 
 func setupOIDCTest(t *testing.T, idp *mockIdP) (*gin.Engine, *Handlers) {
+	withIsolatedGlobal(t)
 	t.Helper()
 	oldDB, oldMetricsDB, oldAuditDB := db.DB, db.MetricsDB, db.AuditDB
 	dir := t.TempDir()
@@ -670,6 +671,7 @@ func TestOIDC_normalize_issuer(t *testing.T) {
 // 节点两道 MFA 门豁免。rejectOIDCUserMFAOperation 是每个入口的首道门，逐个
 // 入口钉住才能防止某一条被删（注释曾声称「全 403」而函数体只覆盖两个入口）。
 func TestOIDCUser_mfa_decoupled(t *testing.T) {
+	withIsolatedGlobal(t)
 	// 初始化临时库必须完整快照并在 cleanup 恢复
 	// 三个全局句柄（同 setupOIDCTest）——否则后续用例踩已关闭的临时库。
 	oldDB, oldMetricsDB, oldAuditDB := db.DB, db.MetricsDB, db.AuditDB
@@ -926,6 +928,7 @@ func TestIsUniqueConstraintError_coversDriverDialects(t *testing.T) {
 // 无 cookie / 另一 jar 的 cookie 交叉提交 code+state 都必须失败（302 error=，
 // 不含 token）；同 jar 正常流程成功。
 func TestOIDCCallback_stateBoundToBrowser(t *testing.T) {
+	withIsolatedGlobal(t)
 	idp := newMockIdP(t)
 	router, _ := setupOIDCTest(t, idp)
 	oidcStateBindingEnabled = true // setupOIDCTest 默认关闭，本测试显式开启

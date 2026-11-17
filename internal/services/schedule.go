@@ -169,6 +169,7 @@ func setVersionTableAutoUpdate(table, label, seed, taskID string, enabled bool) 
 		return fmt.Errorf("更新 %s 自动更新开关: %w", label, err)
 	}
 	if err := tx.Commit(); err != nil {
+		db.RollbackLeakedTx(db.DB, db.MainPoolMaxOpen)
 		return fmt.Errorf("提交 %s 自动更新事务: %w", label, err)
 	}
 	// 调度应用走与业务驱动整轮对齐共用的互斥（避免「库新/loop 旧」交错）；
@@ -518,6 +519,7 @@ func logScheduleReadRecovered(key string) {
 func LogConfigReadFailure(key string, err error) { logScheduleReadFailure(key, err) }
 func LogConfigReadRecovered(key string)          { logScheduleReadRecovered(key) }
 
+// testseam: 状态转换记忆复位缝（记忆由生产留痕路径持有，handlers 测试跨包消费）。
 // ResetLogStateTransitionForTest 清空某 key 的状态转换记忆（同一 key 的状态
 // 跨用例共享，不复位会让「首次失败留痕」断言读到前一用例的残留态）。
 func ResetLogStateTransitionForTest(key string) {
@@ -876,6 +878,7 @@ func setVersionTableSchedule(table, seedVersion string, days []int, hhmm string)
 		return fmt.Errorf("保存定时更新设置: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
+		db.RollbackLeakedTx(db.DB, db.MainPoolMaxOpen)
 		return fmt.Errorf("提交排程事务: %w", err)
 	}
 	return nil
@@ -923,6 +926,7 @@ func setGlobalTaskSchedule(prefix, sourceTable string, names []string, days []in
 		return fmt.Errorf("重排规则库源更新计划: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
+		db.RollbackLeakedTx(db.DB, db.MainPoolMaxOpen)
 		return fmt.Errorf("提交排程事务: %w", err)
 	}
 	return nil

@@ -120,6 +120,7 @@ func (m *MetricsService) accumulateDailyAggAt(byRule map[string]*ruleLabelAggreg
 		}
 	}
 	if err := tx.Commit(); err != nil {
+		db.RollbackLeakedTx(db.MetricsDB, db.MetricsPoolMaxOpen)
 		return fmt.Errorf("commit daily agg batch: %w", err)
 	}
 	return nil

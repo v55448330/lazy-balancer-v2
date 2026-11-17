@@ -545,7 +545,9 @@ func TestAttackFamilyClassOf_nonDigitShapesNotCustomRule(t *testing.T) {
 	if _, err := db.DB.Exec(`CREATE TABLE rule_triggered_digit_probe (rule_triggered TEXT)`); err != nil {
 		t.Fatal(err)
 	}
-	probes := []string{"12a45", "1x3456", "7x3456", "12345", "123456"}
+	// OR 段符号/前导零形（+3000001/03000001）同族：宽松 Atoi 曾把它们归
+	// 自定义族，而 GLOB '[3-6][0-9]…' 与前端 ^\d 正则拒收——带外行视图/筛选分叉。
+	probes := []string{"12a45", "1x3456", "7x3456", "12345", "123456", "+3000001", "03000001", "3000001"}
 	for _, id := range probes {
 		if _, err := db.DB.Exec(`INSERT INTO rule_triggered_digit_probe (rule_triggered) VALUES (?)`, id); err != nil {
 			t.Fatal(err)

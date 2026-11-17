@@ -29,7 +29,7 @@ func chainRunCycle(t *testing.T) {
 
 // chainFeed 经生产喂入门计一条 blocked 事件。
 func chainFeed(cfg AutobanConfig, ip string) {
-	autobanObserveEventScopedAt(cfg, ip, "blocked", "942100", autobanNow())
+	autobanObserveEventScopedAt(cfg, AutobanScopeSet(cfg.Scope), ip, "blocked", "942100", autobanNow())
 }
 
 // Given standard 升级启用；同 /64 隐私扩展轮换地址喂入攻击事件，另有一裸

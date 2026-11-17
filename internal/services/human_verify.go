@@ -147,11 +147,13 @@ func humanPolicyMerged(policies []*models.SecurityPolicy) (mode, typ string, ttl
 	}
 	typ = top.HumanVerifyType
 	if typ == "" {
-		typ = "slider"
+		// 类型②省略型（空=未配置）：DB DEFAULT 单源，回退绑定治理常量，
+		// 私抄字面量会在默认值调整后与创建侧静默分叉（与 loadCCConfig 同族）。
+		typ = db.DefaultHumanVerifyType
 	}
 	ttl = top.HumanVerifyTTL
 	if ttl <= 0 {
-		ttl = 30
+		ttl = db.DefaultHumanVerifyTTL
 	}
 	// 豁免面只保留路径前缀：IP 级放行唯一入口=阶段 0 信任名单（命中跳过整条
 	// 安全链），单列一种"只跳挑战"的 IP 豁免面会与信任名单形成两套口径

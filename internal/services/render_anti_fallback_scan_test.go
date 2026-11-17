@@ -121,10 +121,11 @@ var antiFallbackAllowlist = map[string]map[string]string{
 		`return ""`: "cookie 签名密钥缺失（DB 不可达/生成失败）→ 空串，buildHumanHandler 据此跳过 lb_human 渲染（fail-visible，见 services 日志）——Ruling 2026-11-12",
 	},
 	// 人机验证默认值（2026-11-12 用户裁定）：类型②省略型——human_verify_type/
-	// ttl 空值=未配置，DB DEFAULT（slider/30）为单源，渲染层承担省略替换。
+	// ttl 空值=未配置，DB DEFAULT 为单源，渲染层承担省略替换；回退右值必须
+	// 绑定 db.DefaultHumanVerify* 治理常量（字面量私抄由 db 包消费侧钉测拦截）。
 	"humanPolicyMerged": {
-		`typ = "slider"`: "human_verify_type 空=未配置→slider：类型②省略型（DB DEFAULT 单源）——Ruling 2026-11-12",
-		"ttl = 30":       "human_verify_ttl<=0→30 分钟：类型②省略型（DB DEFAULT 单源）——Ruling 2026-11-12",
+		"typ = db.DefaultHumanVerifyType": "human_verify_type 空=未配置→治理常量（类型②省略型，DB DEFAULT 单源绑定）——Ruling 2026-11-12",
+		"ttl = db.DefaultHumanVerifyTTL":  "human_verify_ttl<=0→治理常量（类型②省略型，DB DEFAULT 单源绑定）——Ruling 2026-11-12",
 	},
 	// TCP 拦截提示品牌回退（2026-11-06 用户裁定）：该功能无 DB 字段——
 	// 文案 = "Connection blocked by " + branding app_name；app_name 空/未

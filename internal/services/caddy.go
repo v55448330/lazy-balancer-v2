@@ -664,6 +664,7 @@ func (s *CaddyService) EnableCLIValidation() {
 	s.cliValidate = execCaddyValidate
 }
 
+// testseam: CLI 校验桩注入缝（生产校验路径判 nil 分支，宿主留驻产品文件）。
 // SetCLIValidatorForTest 注入 CLI 校验桩（测试专用）。
 func (s *CaddyService) SetCLIValidatorForTest(fn func(rendered []byte) error) {
 	s.mu.Lock()

@@ -16,6 +16,7 @@ import (
 
 var certDir = "/app/certs"
 
+// testseam: 证书物化目录注入缝（生产物化路径读该目录，handlers 测试跨包消费）。
 // SetCertDirForTest 重定向证书物化目录，仅供测试隔离使用（返回还原函数）。
 func SetCertDirForTest(dir string) func() {
 	old := certDir

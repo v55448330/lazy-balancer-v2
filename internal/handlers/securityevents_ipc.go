@@ -256,6 +256,7 @@ func (s *SecurityEventsIPCServer) handleIngestHuman(w http.ResponseWriter, r *ht
 		}
 	}
 	if err := tx.Commit(); err != nil {
+		db.RollbackLeakedTx(db.MetricsDB, db.MetricsPoolMaxOpen)
 		http.Error(w, "human event commit: "+err.Error(), http.StatusInternalServerError)
 		return
 	}

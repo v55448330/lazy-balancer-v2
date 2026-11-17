@@ -64,6 +64,7 @@ func RuntimeAdminTLSChanged(cfg AdminTLSConfig) bool {
 	return *v != fingerprintAdminTLS(cfg)
 }
 
+// testseam: 进程级运行态快照复位缝（状态由生产读取路径持有，宿主留驻产品文件）。
 // ResetRuntimeAdminTLSForTest 清空运行态快照（测试缝，生产不调用）：进程级
 // 快照会在用例间继承，若写入者不复位，-shuffle 下后续 admin-tls 用例会读到
 // 前一用例的快照而产生顺序依赖。与 ResetLogStateTransitionForTest 同族。

@@ -38,7 +38,7 @@ func TestAutobanObserveEventScopedAt_gateEquivalence(t *testing.T) {
 			resetAutobanStateForTest()
 			c := cfg
 			c.WindowMinutes = tc.windowMinutes
-			autobanObserveEventScopedAt(c, tc.ip, tc.action, tc.ruleTriggered, time.Time{})
+			autobanObserveEventScopedAt(c, AutobanScopeSet(c.Scope), tc.ip, tc.action, tc.ruleTriggered, time.Time{})
 			autobanMu.Lock()
 			_, fed := autobanWindows[tc.ip]
 			autobanMu.Unlock()
@@ -57,11 +57,11 @@ func TestAutobanObserveEventScopedAt_scopeSetSharedAcrossDimensions(t *testing.T
 	installAutobanFixture(t, "2026-11-13 10:00:00")
 	cfg := AutobanConfig{Enabled: true, Threshold: 100, WindowMinutes: 5, Duration: "1h",
 		Scope: " blocked , logged ,challenge_issued, challenge_failed ,blocked"}
-	autobanObserveEventScopedAt(cfg, "45.33.32.10", "blocked", "942100", time.Time{})
-	autobanObserveEventScopedAt(cfg, "45.33.32.11", "logged", "942100", time.Time{})
-	autobanObserveEventScopedAt(cfg, "45.33.32.12", "challenged", "human_challenge", time.Time{})
-	autobanObserveEventScopedAt(cfg, "45.33.32.13", "challenged", "human_failed", time.Time{})
-	autobanObserveEventScopedAt(cfg, "45.33.32.14", "challenged", "human_pass", time.Time{})
+	autobanObserveEventScopedAt(cfg, AutobanScopeSet(cfg.Scope), "45.33.32.10", "blocked", "942100", time.Time{})
+	autobanObserveEventScopedAt(cfg, AutobanScopeSet(cfg.Scope), "45.33.32.11", "logged", "942100", time.Time{})
+	autobanObserveEventScopedAt(cfg, AutobanScopeSet(cfg.Scope), "45.33.32.12", "challenged", "human_challenge", time.Time{})
+	autobanObserveEventScopedAt(cfg, AutobanScopeSet(cfg.Scope), "45.33.32.13", "challenged", "human_failed", time.Time{})
+	autobanObserveEventScopedAt(cfg, AutobanScopeSet(cfg.Scope), "45.33.32.14", "challenged", "human_pass", time.Time{})
 	autobanMu.Lock()
 	defer autobanMu.Unlock()
 	for _, ip := range []string{"45.33.32.10", "45.33.32.11", "45.33.32.12", "45.33.32.13"} {

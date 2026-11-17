@@ -67,6 +67,15 @@ const cases: ReadonlyArray<readonly [string, TriggerStageFamily]> = [
   // 其他（429 限流在列表层单独处理，非阶段族）
   ['429', 'other'],
   ['abc', 'other'],
+  // OR 条件分支高段（≥3000000）：规范形归自定义；符号/前导零带外形三侧
+  // 同拒（后端数值段仅对规范十进制开放、SQL GLOB '[3-6][0-9]…' 首位 3-6、
+  // 前端 ^\d 正则）——宽松 Number()/Atoi 曾让 Go 视图单独归族。
+  ['3000001', 'wafCustom'],
+  ['+3000001', 'other'],
+  ['03000001', 'other'],
+  // 前导零形在 ipAcl 预检链段同样三侧同拒（数值段仅规范十进制开放）
+  ['01500002', 'other'],
+  ['+1500002', 'other'],
 ]
 
 test('triggerStageFamily 与后端权威分类逐项一致', () => {

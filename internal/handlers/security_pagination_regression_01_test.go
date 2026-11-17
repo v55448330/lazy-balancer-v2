@@ -81,6 +81,7 @@ func TestListSecurityEvents_pageClampsToCap(t *testing.T) {
 }
 
 func TestListCRSRules_pageSizeClampsToCap(t *testing.T) {
+	withIsolatedGlobal(t)
 	// Given:经 crsRulesDir 测试缝挂一条 stub 规则
 	oldDir := crsRulesDir
 	dir := t.TempDir()
@@ -126,6 +127,7 @@ func TestListCRSRules_pageSizeClampsToCap(t *testing.T) {
 // 错误静默回落第 1 页/50 条——调用方拼写错误完全无信号，而同面板事件列表
 // 对同样输入返回 400。
 func TestListCRSRules_invalidPaginationRejected(t *testing.T) {
+	withIsolatedGlobal(t)
 	oldDir := crsRulesDir
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "REQUEST-901-INITIALIZATION.conf"), []byte("# stub"), 0o644); err != nil {

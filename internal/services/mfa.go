@@ -226,6 +226,7 @@ func MFAClearVerifyAttempts(userID int) {
 	mfaVerifyAttempts.Unlock()
 }
 
+// testseam: 验证限流状态复位缝（handlers 测试跨包消费，宿主留驻产品文件）。
 // MFAResetVerifyAttemptsForTest 清空全部限流状态（仅测试：内存态跨用例残留
 // 会让同 user id 的后序用例误中 429）。
 func MFAResetVerifyAttemptsForTest() {

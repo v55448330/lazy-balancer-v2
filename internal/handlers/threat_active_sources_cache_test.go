@@ -11,6 +11,7 @@ import (
 )
 
 func TestThreatActiveSourcesCount_cachedWithinWindow(t *testing.T) {
+	withIsolatedGlobal(t)
 	newBackupTestHandlers(t)
 	resetThreatActiveSourcesCacheForTest()
 	oldTTL := threatActiveSourcesCacheTTL

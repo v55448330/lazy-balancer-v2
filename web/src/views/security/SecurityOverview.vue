@@ -267,8 +267,8 @@
             </el-table-column>
             <el-table-column :label="t('app.security.overview.events.colProtocol')" width="80">
               <template #default="{ row }">
-                <el-tag v-if="row.event_type === 'tcp'" size="small" effect="light" class="proto-tcp-tag event-proto-tag">TCP</el-tag>
-                <el-tag v-else size="small" effect="light" type="primary" class="event-proto-tag">HTTP</el-tag>
+                <el-tag v-if="row.event_type === 'tcp'" size="small" effect="light" class="proto-tcp-tag">TCP</el-tag>
+                <el-tag v-else size="small" effect="light" type="primary">HTTP</el-tag>
               </template>
             </el-table-column>
             <el-table-column :label="t('app.security.overview.events.colRule')" min-width="150" show-overflow-tooltip>
@@ -423,7 +423,7 @@
               <template #default>
                 <!-- 状态级累犯档（配置口径）：/status 建议行不携带逐身份
                      offense_count，逐行档位不得虚构 -->
-                <span class="autoban-escalation-tier">{{ t(autobanEscalationShortKey(autobanStatus?.escalation)) }}</span>
+                <span class="autoban-escalation-tier">{{ autobanStatValue(autobanError, t(autobanEscalationShortKey(autobanStatus?.escalation))) }}</span>
               </template>
             </el-table-column>
           </el-table>
@@ -512,16 +512,18 @@ interface TopIP { ip: string; ip_location: string; blocked: number; detected: nu
 }
 interface AttackType { name: string; value: number }
 interface Overview {
-  today_blocked: number; today_detected: number; active_policies: number; crs_version: string
+  today_blocked: number; today_detected: number; crs_version: string
   crs_available?: boolean; ip2region_available?: boolean; update_status?: string
   trend: TrendPoint[]; top_ips: TopIP[]; attack_types: AttackType[]; attack_types_stage: AttackType[]
-  raw_coverage_from?: string; backfill_incomplete?: boolean
+  // 后端另有 active_policies/raw_coverage_from/backfill_incomplete/today_human_fail
+  // （API 契约保留）——本视图零消费，不再声明（活跃策略 KPI 已退役；覆盖/回填
+  // 披露由威胁大屏 stats 消费；今日挑战失败由 CC 卡 human/stats 承载）。
   // 三 KPI 栏契约字段（昨日对比 + 正常请求，防御式消费：旧后端缺字段 → 对应行隐藏）
   yesterday_blocked?: number; yesterday_blocked_tcp?: number
   yesterday_detected?: number; yesterday_detected_tcp?: number
   normal_today?: number; normal_today_http?: number; normal_today_tcp?: number
   normal_yesterday?: number; normal_yesterday_http?: number; normal_yesterday_tcp?: number
-  today_challenged?: number; today_human_fail?: number
+  today_challenged?: number
   // 今日拦截的 TCP（L4 断连）份额：旧后端缺失 → 协议拆分行整行隐藏（防御式）。
   // 原始表直算（不走 rollup——rollup 无 event_type 维度），极端量级下行帽裁剪可能少计。
   today_blocked_tcp?: number
@@ -548,7 +550,7 @@ const topIpAttackLabel = (row: TopIP): string => {
   if (!attackByStage.value) return row.attack_type || '—'
   return row.attack_type_stage || '—'
 }
-const overview = ref<Overview>({ today_blocked: 0, today_detected: 0, active_policies: 0, crs_version: '', trend: [], top_ips: [], attack_types: [], attack_types_stage: [], raw_coverage_from: '', backfill_incomplete: false })
+const overview = ref<Overview>({ today_blocked: 0, today_detected: 0, crs_version: '', trend: [], top_ips: [], attack_types: [], attack_types_stage: [] })
 
 // 分布图展示模式：勾选=按阶段五桶（默认，与触发阶段口径一致）；取消=具体分类
 // 总览加载失败（如 metrics 库故障导致后端 500）时置位：避免把全零面板

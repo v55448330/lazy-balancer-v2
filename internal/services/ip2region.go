@@ -791,6 +791,7 @@ func GetIP2RegionV6EntryCount() int {
 // 在位），生产代码不设置。nil 时走真实 searcher 路径。
 var ip2RegionLiveProvincesOverride []string
 
+// testseam: live 省份列表注入缝（生产读路径消费，handlers 测试跨包调用）。
 // SetIP2RegionLiveProvincesForTest 注入/清除测试用 live 省份列表。
 // 注入的切片按引用保存（不清洗/不拷贝）——调用方注入后不得再改其内容或
 // 依赖 GetIP2RegionProvinces 的返回值可写；清除传 nil。

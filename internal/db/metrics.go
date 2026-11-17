@@ -372,7 +372,7 @@ func openAndPingMetricsDB(dbPath string) (*sql.DB, error) {
 	// 池收缩到 0 触发「最后一个连接关闭 → checkpoint + 删除 -wal」突发，
 	// 下一个 tick 再重建 WAL——该 checkpoint 风暴是页回写暴露于宿主丢写
 	// 窗口的放大器。生命周期过期逐连接轮换，5 条常驻下永不触达 last-close。
-	db, err := openSQLiteDB(dbPath, sqlitePoolConfig{maxOpen: 5, maxIdle: 5, connMaxLifetime: 30 * time.Minute})
+	db, err := openSQLiteDB(dbPath, sqlitePoolConfig{maxOpen: MetricsPoolMaxOpen, maxIdle: MetricsPoolMaxOpen, connMaxLifetime: 30 * time.Minute})
 	if err != nil {
 		return nil, fmt.Errorf("failed to open metrics database: %w", err)
 	}

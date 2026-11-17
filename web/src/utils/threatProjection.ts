@@ -149,7 +149,7 @@ interface BoundsBox {
  * （消除「lon 范围≈全宽」的伪 bbox）。引擎取景与确定性单测共用此实现。
  */
 export function principalBounds(polys: number[][][]): BoundsBox {
-  let best: (BoundsBox & { area: number }) | null = null
+  let best: (BoundsBox & { area: number; ring: number[] }) | null = null
   for (const poly of polys) {
     for (const ring of poly) {
       let minLon = 180
@@ -165,21 +165,20 @@ export function principalBounds(polys: number[][][]): BoundsBox {
         if (lat > maxLat) maxLat = lat
       }
       const area = (maxLon - minLon) * (maxLat - minLat)
-      if (!best || area > best.area) best = { minLon, maxLon, minLat, maxLat, area }
+      if (!best || area > best.area) best = { minLon, maxLon, minLat, maxLat, area, ring }
     }
   }
   if (!best) return { minLon: 0, maxLon: 0, minLat: 0, maxLat: 0 }
   if (best.maxLon - best.minLon > 180) {
+    // 第二遍只遍历选中的最大环（契约「只用最大环」）：海外领地环不得并入
+    // unwrap 窗——主环跨界+领地环时并入会把取景 bbox 拉偏到对侧。
     let minLon = 720
     let maxLon = -720
-    for (const poly of polys) {
-      for (const ring of poly) {
-        for (let i = 0; i + 1 < ring.length; i += 2) {
-          const lon = ring[i] < 0 ? ring[i] + 360 : ring[i]
-          if (lon < minLon) minLon = lon
-          if (lon > maxLon) maxLon = lon
-        }
-      }
+    const ring = best.ring
+    for (let i = 0; i + 1 < ring.length; i += 2) {
+      const lon = ring[i] < 0 ? ring[i] + 360 : ring[i]
+      if (lon < minLon) minLon = lon
+      if (lon > maxLon) maxLon = lon
     }
     if (maxLon - minLon < best.maxLon - best.minLon) {
       return { minLon, maxLon, minLat: best.minLat, maxLat: best.maxLat }

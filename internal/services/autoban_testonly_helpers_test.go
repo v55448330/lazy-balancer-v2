@@ -20,5 +20,5 @@ func autobanObserveEvent(ip, action, ruleTriggered string) {
 }
 
 func autobanObserveEventScoped(cfg AutobanConfig, ip, action, ruleTriggered string) {
-	autobanObserveEventScopedAt(cfg, ip, action, ruleTriggered, time.Time{})
+	autobanObserveEventScopedAt(cfg, AutobanScopeSet(cfg.Scope), ip, action, ruleTriggered, time.Time{})
 }

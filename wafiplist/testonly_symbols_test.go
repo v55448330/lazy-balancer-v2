@@ -14,9 +14,10 @@ import (
 // 计数器与 os.Stat 的计数包装无法迁到 *_test.go（宿主即生产读写路径），
 // 就地以 //testseam: 文档标记登记。名单与标记双向校验：
 //   - 名单内名字出现在产品文件但文档无 //testseam: → 违规（登记被摘）；
-//   - 产品文件新增带 ForTest 字样的声明而不在名单 → 违规（未登记的新缝）；
-//   - 标记出现在名单外且名字不含 ForTest 的声明上 → 标记误用违规（防标记
-//     腐化成任意豁免通道）。
+//   - 产品文件新增带 ForTest 字样的声明而不在名单 → 违规（未登记的新缝，
+//     不论是否带标记——打标不入名单会让可移动 helper 打标即留驻绕登记）；
+//   - 标记出现在名字不含 ForTest 的声明上 → 标记误用违规（防标记腐化成
+//     任意豁免通道）。
 //
 // 与 internal/services / caddygeoip 的同型守卫对齐（本包此前无守卫，
 // 测试计数缝驻留生产解析/热路径无机器登记）。名单内符号的既有测试语义
@@ -59,7 +60,7 @@ func productTestSeamViolations(filename string, src []byte, allowlist map[string
 			violations = append(violations, fmt.Sprintf(
 				"%s:%s %q 带 //testseam: 标记但既不在名单、名字也不含 ForTest——标记误用（防任意豁免通道）",
 				filename, kind, name))
-		case strings.Contains(name, "ForTest") && !inList && !marked:
+		case strings.Contains(name, "ForTest") && !inList:
 			violations = append(violations, fmt.Sprintf(
 				"%s:%s %q 产品文件声明 test-only 符号未登记——迁到 *_test.go，或（生产路径自增的观测缝）就地加 //testseam: 并入名单",
 				filename, kind, name))
@@ -134,6 +135,8 @@ func TestProductTestSeamViolations_shapes(t *testing.T) {
 		{"未登记 ForTest var 被拦", "package wafiplist\n\nvar newCounterForTest int\n", 1},
 		{"未登记 ForTest func 被拦", "package wafiplist\n\nfunc helperForTest() {}\n", 1},
 		{"名单外无标记放行", "package wafiplist\n\nvar plain int\n\nfunc plainFn() {}\n", 0},
+		{"打标但未入名单被拦", "package wafiplist\n\n// testseam: 打标即留驻绕登记。\nvar markedOnlyForTest int\n", 1},
+		{"打标未入名单 func 被拦", "package wafiplist\n\n// testseam: 可移动 helper 打标留驻。\nfunc markedHelperForTest() {}\n", 1},
 	}
 	for _, tc := range cases {
 		got := productTestSeamViolations("craft.go", []byte(tc.src), list)

@@ -23,10 +23,10 @@ func evidenceCfg(threshold, mult int, floor string) AutobanConfig {
 func TestAutobanEvidence_groupedCounting(t *testing.T) {
 	installAutobanFixture(t, "2026-10-14 10:00:00")
 	cfg := evidenceCfg(100, 4, "0.4")
-	autobanObserveEventScopedAt(cfg, "45.33.32.1", "blocked", "942100", time.Time{})
-	autobanObserveEventScopedAt(cfg, "45.33.32.1", "logged", "942100", time.Time{})
-	autobanObserveEventScopedAt(cfg, "45.33.32.1", "challenged", "human_challenge", time.Time{})
-	autobanObserveEventScopedAt(cfg, "45.33.32.1", "challenged", "human_failed", time.Time{})
+	autobanObserveEventScopedAt(cfg, AutobanScopeSet(cfg.Scope), "45.33.32.1", "blocked", "942100", time.Time{})
+	autobanObserveEventScopedAt(cfg, AutobanScopeSet(cfg.Scope), "45.33.32.1", "logged", "942100", time.Time{})
+	autobanObserveEventScopedAt(cfg, AutobanScopeSet(cfg.Scope), "45.33.32.1", "challenged", "human_challenge", time.Time{})
+	autobanObserveEventScopedAt(cfg, AutobanScopeSet(cfg.Scope), "45.33.32.1", "challenged", "human_failed", time.Time{})
 	autobanMu.Lock()
 	w := autobanWindows["45.33.32.1"]
 	autobanMu.Unlock()
@@ -45,7 +45,7 @@ func TestAutobanEvidence_scopeGateStillApplies(t *testing.T) {
 	installAutobanFixture(t, "2026-10-14 10:00:00")
 	cfg := evidenceCfg(100, 4, "0.4")
 	cfg.Scope = "blocked,challenge_failed"
-	autobanObserveEventScopedAt(cfg, "45.33.32.2", "logged", "942100", time.Time{})
+	autobanObserveEventScopedAt(cfg, AutobanScopeSet(cfg.Scope), "45.33.32.2", "logged", "942100", time.Time{})
 	autobanMu.Lock()
 	n := len(autobanWindows)
 	autobanMu.Unlock()
@@ -100,10 +100,10 @@ func TestAutobanEvidence_floorCeil(t *testing.T) {
 func TestAutobanEvidence_windowRollClearsBoth(t *testing.T) {
 	clock := installAutobanFixture(t, "2026-10-14 10:00:00")
 	cfg := evidenceCfg(100, 4, "0.4")
-	autobanObserveEventScopedAt(cfg, "45.33.32.3", "blocked", "942100", time.Time{})
-	autobanObserveEventScopedAt(cfg, "45.33.32.3", "logged", "942100", time.Time{})
+	autobanObserveEventScopedAt(cfg, AutobanScopeSet(cfg.Scope), "45.33.32.3", "blocked", "942100", time.Time{})
+	autobanObserveEventScopedAt(cfg, AutobanScopeSet(cfg.Scope), "45.33.32.3", "logged", "942100", time.Time{})
 	clock.Advance(6 * time.Minute)
-	autobanObserveEventScopedAt(cfg, "45.33.32.3", "blocked", "942100", time.Time{})
+	autobanObserveEventScopedAt(cfg, AutobanScopeSet(cfg.Scope), "45.33.32.3", "blocked", "942100", time.Time{})
 	autobanMu.Lock()
 	w := autobanWindows["45.33.32.3"]
 	autobanMu.Unlock()
@@ -121,7 +121,7 @@ func TestAutobanClassic_equalWeightUnchanged(t *testing.T) {
 		{"blocked", "942100"}, {"logged", "942100"},
 		{"challenged", "human_challenge"}, {"challenged", "human_failed"},
 	} {
-		autobanObserveEventScopedAt(cfg, "45.33.32.4", ev.action, ev.rule, time.Time{})
+		autobanObserveEventScopedAt(cfg, AutobanScopeSet(cfg.Scope), "45.33.32.4", ev.action, ev.rule, time.Time{})
 	}
 	autobanMu.Lock()
 	w := autobanWindows["45.33.32.4"]

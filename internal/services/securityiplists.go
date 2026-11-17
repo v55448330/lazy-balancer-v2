@@ -314,6 +314,7 @@ func parseIPListEntriesStrict(raw string) ([]models.IPListEntry, error) {
 	return list, nil
 }
 
+// testseam: 文本名单解析计数缝（生产解析路径原子自增，宿主留驻产品文件）。
 // threatTextScanRunsForTest 统计文本名单条目被解析的总次数（生产零消费，仅
 // 原子自增）：钉住「一次读取内只解析一遍」——旧实现在同一份文本上先算可解析
 // 率、再剔除坏行（各自全量遍历），同一批条目被解析 2–3 遍。

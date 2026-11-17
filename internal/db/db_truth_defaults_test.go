@@ -1003,6 +1003,13 @@ func TestGovernedDefaultLiteralsBoundInConsumers(t *testing.T) {
 			required: []string{"db.DefaultBlockStatusCode"},
 		},
 		{
+			// 人机验证 merged 渲染的方式/有效期缺省回退（带外空/零值行的
+			// 类型②省略替换）与 DDL DEFAULT 同源：私抄 slider/30 字面量会在
+			// 治理常量调整后与创建侧静默分叉（loadCCConfig 同族收敛）。
+			file:     "../services/human_verify.go",
+			required: []string{"db.DefaultHumanVerifyType", "db.DefaultHumanVerifyTTL"},
+		},
+		{
 			// CA 提供商并发/间隔的读侧 COALESCE 与写侧归一同一对常量：
 			// 默认间隔曾在归一实现里写死 1000（DDL/读侧 2000），按来源不同
 			// 节流差一倍。

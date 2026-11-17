@@ -212,6 +212,7 @@ func (s *ClusterService) ValidateServiceControlTicket(ctx context.Context, ticke
 		return errors.Join(ErrInvalidServiceControlTicket, ErrServiceControlReplay)
 	}
 	if err := tx.Commit(); err != nil {
+		db.RollbackLeakedTx(s.db, db.MainPoolMaxOpen)
 		return fmt.Errorf("提交服务控制票据消费: %w", err)
 	}
 	return nil

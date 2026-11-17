@@ -260,6 +260,9 @@ test('脚本存在性断言文件禁止裸 source()/repoSource() 回流', () => 
     'panelUiWiring.spec.ts',
     // 注释文案钉（断言对象是过时注释本身，剥注释后无法判定）。
     'viewStateContracts.spec.ts',
+    // 退役类守卫含注释残留负钉（「只加 nowrap」旧注释宣称本身是断言对象，
+    // 剥注释后恒真）；代码存在性断言全走 code()。
+    'retiredCssClasses.spec.ts',
     // 注释文案钉（负钉排查改 raw）：断言对象是过时注释承诺本身
     //（「MFA 自身端点整体豁免」/「等待下次轮询同步」），剥注释后恒真。
     'mfaErrors.spec.ts',

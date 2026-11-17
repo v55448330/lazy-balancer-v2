@@ -469,7 +469,6 @@ export default {
         "cluster": "集群",
         "system": "系统",
       },
-      "allCategories": "全部分类",
         "loadFailPrefix": "任务监控加载失败：",
         "retryNowBtn": "立即重试",
         "cadencePrefix": "节奏：",

@@ -133,7 +133,10 @@ func TestThreatRollupRewind_insertSourceKeepsLateInsertsOnTrimmedMinute(t *testi
 // 丢弃，且新落的高水位让后续增量也再扫不到（永久丢失）。
 func TestThreatRollupRewind_reclassifySourceKeepsLateInsertsOnTrimmedMinute(t *testing.T) {
 	setupSecurityPolicyTestDB(t)
-	m := time.Date(2026, 10, 18, 12, 0, 0, 0, time.UTC)
+	// 夹具相对当前时刻（兄弟用例同形）：固定历史日期会滑出 7d 回退窗口被
+	// threatRollupRewindMinute 钳到展示下界——coverage 回退目标不再是本分钟，
+	// 断言恰由不钳制的 reclassify 路径满足（夹具语义漂移/纯 coverage 路径假绿）。
+	m := time.Now().UTC().Truncate(time.Minute).Add(-2 * time.Hour)
 	minute := m.Format(threatRewindMinuteLayout)
 	eventTime := m.Add(5 * time.Second).Format("2006-01-02 15:04:05")
 
@@ -196,7 +199,8 @@ func TestThreatRollupRewind_legacyPredicateRowsKeepLateInserts(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			setupSecurityPolicyTestDB(t)
-			m := time.Date(2026, 10, 19, 11, 59, 0, 0, time.UTC)
+			// 夹具相对当前时刻（同上：固定历史日期经 7d 钳制后 coverage 目标漂移）。
+			m := time.Now().UTC().Truncate(time.Minute).Add(-2 * time.Hour)
 			minute := m.Format(threatRewindMinuteLayout)
 
 			// Given 先烧两条事件 id（已计入的历史行，原始行已裁剪）。

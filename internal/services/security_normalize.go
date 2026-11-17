@@ -286,6 +286,7 @@ func NormalizeLegacySecurityPolicyEnums(ctx context.Context) {
 		}
 	}
 	if err := tx.Commit(); err != nil {
+		db.RollbackLeakedTx(db.DB, db.MainPoolMaxOpen)
 		Logf("error", "security enum normalize: failed to commit: %v", err)
 		return
 	}

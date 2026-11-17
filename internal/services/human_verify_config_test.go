@@ -105,3 +105,57 @@ func TestLoadCCConfig_defaultsBindGovernedConstants(t *testing.T) {
 		}
 	}
 }
+
+// Given 策略启用人机验证但方式/有效期为空/零值（带外直写或旧备份形态）。
+// When humanPolicyMerged 合并策略配置。
+// Then 缺省回退必须绑定 db.DefaultHumanVerify* 治理常量（与 DDL DEFAULT/
+// 启动回填单源）——私抄字面量会在治理常量调整后与创建侧静默分叉；源码形态
+// 与 loadCCConfig 同款 AST 钉（选择器表达式，注释提及不算）。
+func TestHumanPolicyMerged_defaultsBindGovernedConstants(t *testing.T) {
+	p := &models.SecurityPolicy{HumanVerifyMode: "force"}
+	_, typ, ttl, _ := humanPolicyMerged([]*models.SecurityPolicy{p})
+	if typ != db.DefaultHumanVerifyType || ttl != db.DefaultHumanVerifyTTL {
+		t.Fatalf("缺省回退=%s/%d, want db.Default*=%s/%d", typ, ttl,
+			db.DefaultHumanVerifyType, db.DefaultHumanVerifyTTL)
+	}
+
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "human_verify.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parse human_verify.go: %v", err)
+	}
+	bindings := map[string]string{}
+	ast.Inspect(file, func(n ast.Node) bool {
+		fn, ok := n.(*ast.FuncDecl)
+		if !ok || fn.Name.Name != "humanPolicyMerged" {
+			return true
+		}
+		ast.Inspect(fn.Body, func(inner ast.Node) bool {
+			assign, ok := inner.(*ast.AssignStmt)
+			if !ok || assign.Tok != token.ASSIGN || len(assign.Lhs) != 1 || len(assign.Rhs) != 1 {
+				return true
+			}
+			lhs, ok := assign.Lhs[0].(*ast.Ident)
+			if !ok {
+				return true
+			}
+			if sel, ok := assign.Rhs[0].(*ast.SelectorExpr); ok {
+				if pkg, ok := sel.X.(*ast.Ident); ok && pkg.Name == "db" {
+					bindings[lhs.Name] = sel.Sel.Name
+				}
+			}
+			return true
+		})
+		return false
+	})
+	want := map[string]string{
+		"typ": "DefaultHumanVerifyType",
+		"ttl": "DefaultHumanVerifyTTL",
+	}
+	for name, constant := range want {
+		if bindings[name] != constant {
+			t.Fatalf("humanPolicyMerged 的 %s 缺省回退必须绑定 db.%s（选择器表达式），实际=%q（字面量即私抄）",
+				name, constant, bindings[name])
+		}
+	}
+}

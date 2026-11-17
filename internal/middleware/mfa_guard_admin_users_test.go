@@ -17,7 +17,7 @@ import (
 // 重置任意用户（含本人）密码属重置操作、不验当前密码；唯一要求是 MFA 写保护
 // （mfa_write_guard）开启且操作者已启用 MFA 时须 MFA 验证码。两端点均为写方法、
 // 不在 readOnlyWriteRoutes/守卫豁免清单内，由 admin 组级 mfaStepUpGuard 覆盖
-// 自 v1 级下沉）——本测试以真实 JWT 穿完整认证链钉住该契约：无 mfa_ts → 428；验码后的新 JWT → 200。
+// （守卫自 v1 级下沉）——本测试以真实 JWT 穿完整认证链钉住该契约：无 mfa_ts → 428；验码后的新 JWT → 200。
 func TestMFAStepUpGuard_protectsAdminUserPasswordEndpoints(t *testing.T) {
 	router := newMiddlewareTestRouter(t)
 	const jwtSecret = "test-secret"

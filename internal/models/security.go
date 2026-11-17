@@ -452,7 +452,8 @@ type SecurityOverview struct {
 	TodayDetected int `json:"today_detected"`
 	// TodayChallenged 今日人机挑战发放数（action='challenged' 且
 	// rule_triggered='human_challenge'）：挑战是独立结果，不计拦截/检测；
-	// 原始表直算（人机事件按 IP 每分钟至多 1 条，量级可控）。
+	// 原始表直算（人机事件逐请求落库——2026-11-13 裁定取消每分钟限流上报；
+	// 今日窗口走 action+event_time 索引范围，量级由保留期/行帽约束）。
 	TodayChallenged int `json:"today_challenged"`
 	// TodayHumanFail 今日挑战失败数（action='challenged'，rule_triggered='human_failed'）。
 	// 挑战成功（human_pass）自 2026-11-13 用户裁定起不计入安全事件，故本响应不再

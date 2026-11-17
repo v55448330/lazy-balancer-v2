@@ -850,6 +850,7 @@ func (m *MetricsService) storePerRuleMetrics(byRule map[string]*ruleLabelAggrega
 		}
 	}
 	if err := tx.Commit(); err != nil {
+		db.RollbackLeakedTx(db.MetricsDB, db.MetricsPoolMaxOpen)
 		return fmt.Errorf("commit per-rule metrics batch: %w", err)
 	}
 	return nil

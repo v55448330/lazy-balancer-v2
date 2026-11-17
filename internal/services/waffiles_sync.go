@@ -1621,6 +1621,7 @@ func invalidateWafFileRefCache() {
 	wafFileRefCache.mu.Unlock()
 }
 
+// testseam: WAF 活动文件路径注入缝（生产同步路径消费，handlers 测试跨包调用）。
 // OverrideWafLivePathsForTest 重定向 CRS/IP2Region 活动文件路径,仅测试使用
 // (生产路径为容器内 /app/waf/crs 与 ip2regionLivePath;handlers 层打包/回放
 // 测试无法访问包内 var,经此注入临时目录)。

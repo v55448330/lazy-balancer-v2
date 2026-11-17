@@ -28,6 +28,7 @@ var wafDir = "/app/waf"
 // ConfigureWafDirs 随 data_dir 派生。
 var wafDistDir = "/app/waf.dist"
 
+// testseam: waf 目录注入缝（生产更新路径读该目录，handlers 测试跨包消费）。
 // OverrideThreatWafDirForTest 测试注入临时 waf 目录（macOS 无 /app）。
 func OverrideThreatWafDirForTest(dir string) (restore func()) {
 	old := wafDir
@@ -81,6 +82,7 @@ type ThreatUpdateManager struct {
 // 调度器（首轮即下载）带进无关测试。
 var threatUpdateManager *ThreatUpdateManager
 
+// testseam: panic 注入钩子（生产 runWithContext 判 nil 分支，宿主留驻产品文件）。
 // threatRunPanicHookForTest 在 runWithContext 入口（内层 recover 注册之后）
 // 提供确定性 panic 注入缝，用于钉住 StartUpdate 外层兜底 recover 的 failed
 // 终态；生产恒 nil。
@@ -95,6 +97,7 @@ func GetThreatUpdateManager() *ThreatUpdateManager {
 	return threatUpdateManager
 }
 
+// testseam: 威胁更新单例复位缝（handlers 测试跨包消费，宿主留驻产品文件）。
 // ResetThreatUpdateManagerForTest 换成全新实例（含停调度器）——测试二进制
 // 中初始化入口（main 不运行），同时切断跨测试的 running/调度器残留。
 func ResetThreatUpdateManagerForTest() {
@@ -117,6 +120,7 @@ func SetThreatAutoUpdate(enabled bool) error {
 // ThreatAutoUpdateEnabled 读威胁库总闸。
 func ThreatAutoUpdateEnabled() bool { return globalTaskAutoUpdateEnabled("threat") }
 
+// testseam: 威胁更新单例清空缝（引擎接线测试消费，宿主留驻产品文件）。
 // ClearThreatUpdateManagerForTest 清空单例（用于要求 manager 未初始化的
 // 引擎接线测试；与 Reset 返回新实例的更新行为测试区分）。
 func ClearThreatUpdateManagerForTest() { threatUpdateManager = nil }

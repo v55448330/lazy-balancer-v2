@@ -182,15 +182,10 @@ func selectCertificate(candidates []CertificateCandidate, ruleDomains string, no
 		}
 		certificate := candidate.Leaf
 		if certificate == nil {
-			pair, err := tls.X509KeyPair([]byte(candidate.CertPEM), []byte(candidate.KeyPEM))
-			if err != nil || len(pair.Certificate) == 0 {
-				continue
-			}
-			certificate = pair.Leaf
+			// 未预解析候选走同一解析单源（生产装载路径已全量预解析，本回退
+			// 只覆盖直接构造候选的调用方）；解析失败=不可解析候选，跳过。
+			certificate = ParseCertificateLeaf(candidate.CertPEM, candidate.KeyPEM)
 			if certificate == nil {
-				certificate, err = x509.ParseCertificate(pair.Certificate[0])
-			}
-			if err != nil {
 				continue
 			}
 		}

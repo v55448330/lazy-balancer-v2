@@ -71,10 +71,10 @@ func TestAutobanCandidates_carriesDominantReason(t *testing.T) {
 	cfg := AutobanConfig{Enabled: true, Threshold: 5, WindowMinutes: 5, Duration: "1h", Scope: "blocked,logged,challenge_issued,challenge_failed"}
 	ip := "45.33.32.201"
 	for range 2 {
-		autobanObserveEventScopedAt(cfg, ip, "blocked", "942100", autobanNow())
+		autobanObserveEventScopedAt(cfg, AutobanScopeSet(cfg.Scope), ip, "blocked", "942100", autobanNow())
 	}
 	for range 3 {
-		autobanObserveEventScopedAt(cfg, ip, "challenged", "human_failed", autobanNow())
+		autobanObserveEventScopedAt(cfg, AutobanScopeSet(cfg.Scope), ip, "challenged", "human_failed", autobanNow())
 	}
 	candidates := autobanCandidates(AutobanConfig{Threshold: 5}, 5*time.Minute)
 	if len(candidates) != 1 {
@@ -93,10 +93,10 @@ func TestAutobanCandidates_reasonTieBreakFixedOrder(t *testing.T) {
 	cfg := AutobanConfig{Enabled: true, Threshold: 4, WindowMinutes: 5, Duration: "1h", Scope: "blocked"}
 	ip := "45.33.32.202"
 	for range 2 {
-		autobanObserveEventScopedAt(cfg, ip, "blocked", "10001", autobanNow())
+		autobanObserveEventScopedAt(cfg, AutobanScopeSet(cfg.Scope), ip, "blocked", "10001", autobanNow())
 	}
 	for range 2 {
-		autobanObserveEventScopedAt(cfg, ip, "blocked", "942100", autobanNow())
+		autobanObserveEventScopedAt(cfg, AutobanScopeSet(cfg.Scope), ip, "blocked", "942100", autobanNow())
 	}
 	candidates := autobanCandidates(AutobanConfig{Threshold: 4}, 5*time.Minute)
 	if len(candidates) != 1 || candidates[0].Reason != "CRS拦截" {
@@ -112,7 +112,7 @@ func TestAutobanCandidates_expiredReachedCarriesReason(t *testing.T) {
 	cfg := AutobanConfig{Enabled: true, Threshold: 2, WindowMinutes: 5, Duration: "1h", Scope: "blocked"}
 	ip := "45.33.32.203"
 	for range 2 {
-		autobanObserveEventScopedAt(cfg, ip, "blocked", "942100", autobanNow())
+		autobanObserveEventScopedAt(cfg, AutobanScopeSet(cfg.Scope), ip, "blocked", "942100", autobanNow())
 	}
 	clock.Advance(6 * time.Minute)
 	candidates := autobanCandidates(AutobanConfig{Threshold: 2}, 5*time.Minute)
@@ -129,7 +129,7 @@ func TestAutobanMerge_firstBanRemarkIsReason(t *testing.T) {
 	cfg := AutobanConfig{Enabled: true, Threshold: 2, WindowMinutes: 5, Duration: "1h", Scope: "blocked", Escalation: "standard"}
 	ip := "45.33.32.204"
 	for range 2 {
-		autobanObserveEventScopedAt(cfg, ip, "blocked", "942100", autobanNow())
+		autobanObserveEventScopedAt(cfg, AutobanScopeSet(cfg.Scope), ip, "blocked", "942100", autobanNow())
 	}
 	if _, err := autobanMergeEntries(cfg, autobanCandidates(AutobanConfig{Threshold: 2}, 5*time.Minute)); err != nil {
 		t.Fatalf("merge: %v", err)
@@ -149,7 +149,7 @@ func TestAutobanMerge_escalatedBanRemarkHasRecidPrefix(t *testing.T) {
 	cfg := AutobanConfig{Enabled: true, Threshold: 2, WindowMinutes: 5, Duration: "1h", Scope: "challenge_failed", Escalation: "standard"}
 	ip := "45.33.32.205"
 	for range 2 {
-		autobanObserveEventScopedAt(cfg, ip, "challenged", "human_failed", autobanNow())
+		autobanObserveEventScopedAt(cfg, AutobanScopeSet(cfg.Scope), ip, "challenged", "human_failed", autobanNow())
 	}
 	if _, err := autobanMergeEntries(cfg, autobanCandidates(AutobanConfig{Threshold: 2}, 5*time.Minute)); err != nil {
 		t.Fatalf("merge: %v", err)
@@ -169,7 +169,7 @@ func TestAutobanMerge_escalationOffRemarkNoPrefix(t *testing.T) {
 	cfg := AutobanConfig{Enabled: true, Threshold: 2, WindowMinutes: 5, Duration: "1h", Scope: "logged", Escalation: "off"}
 	ip := "45.33.32.206"
 	for range 2 {
-		autobanObserveEventScopedAt(cfg, ip, "logged", "10001", autobanNow())
+		autobanObserveEventScopedAt(cfg, AutobanScopeSet(cfg.Scope), ip, "logged", "10001", autobanNow())
 	}
 	if _, err := autobanMergeEntries(cfg, autobanCandidates(AutobanConfig{Threshold: 2}, 5*time.Minute)); err != nil {
 		t.Fatalf("merge: %v", err)

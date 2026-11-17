@@ -769,6 +769,7 @@ func TestDeleteAPIKeyError_usesChineseMessage(t *testing.T) {
 }
 
 func suppressBrandingSyncSideEffects(t *testing.T, dataDir string) {
+	withIsolatedGlobal(t)
 	t.Helper()
 	brandingSyncMu.Lock()
 	brandingSyncDataDir = dataDir
@@ -3534,5 +3535,45 @@ func TestAPIDocs_rulesListExampleKeysAreSubsetOfImplementation(t *testing.T) {
 	// 节选标注在场（防示例被误读为完整字段集）。
 	if desc := routesEntry(t, "GET /rules").Description; !strings.Contains(desc, "示例为节选投影") {
 		t.Fatal("GET /rules 描述缺「示例为节选投影」标注")
+	}
+}
+
+// /config/import 与 /config/import/validate 的 JSON 变体示例必须能通过
+// verifyBackupIntegrity 的 meta 门（app 恒 lazy-balancer-v2、version 为受支持
+// 整数）——变体 example 优先于 route.Request 发射，示例 meta 漂移会让
+// Swagger Try it out/codegen 按示例构造的请求恒 400。
+func TestAPIDocImportVariantExamples_metaPassesIntegrityGate(t *testing.T) {
+	for _, variant := range configImportRequestVariants() {
+		if variant.contentType != "application/json" {
+			continue
+		}
+		var backup configBackup
+		if err := json.Unmarshal([]byte(variant.example), &backup); err != nil {
+			t.Fatalf("import JSON 变体示例不是合法 JSON: %v", err)
+		}
+		if backup.Meta.App != "lazy-balancer-v2" || backup.Meta.Version < 1 || backup.Meta.Version > 3 {
+			t.Fatalf("import 变体示例 meta=(%q,%d) 必须与完整性门同源（app=lazy-balancer-v2、version∈[1,3]）", backup.Meta.App, backup.Meta.Version)
+		}
+		// 示例是最小形态：完整性门须推进到内容门（缺已知表/缺管理员），
+		// 不得在 meta/版本/校验和形态门被拒。
+		_, err := verifyBackupIntegrity(backup)
+		if err == nil {
+			continue
+		}
+		for _, gate := range []string{"不是有效的 Lazy Balancer 备份文件", "不支持的备份版本", "校验和格式不兼容", "备份缺少完整性校验和"} {
+			if strings.Contains(err.Error(), gate) {
+				t.Fatalf("import 变体示例被 meta/形态门拒绝（按示例构造请求必 400）: %v", err)
+			}
+		}
+	}
+	// route.Request 回退示例（变体未覆盖的 content type 用它发射）同门核对。
+	for _, key := range []string{"POST /config/import", "POST /config/import/validate"} {
+		var backup configBackup
+		if err := json.Unmarshal([]byte(routesEntry(t, key).Request), &backup); err != nil {
+			t.Fatalf("%s route.Request 不是合法 JSON: %v", key, err)
+		}
+		if backup.Meta.App != "lazy-balancer-v2" {
+			t.Fatalf("%s route.Request meta.app=%q, want lazy-balancer-v2", key, backup.Meta.App)
+		}
 	}
 }

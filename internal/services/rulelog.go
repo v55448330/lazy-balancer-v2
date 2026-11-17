@@ -25,6 +25,7 @@ const defaultRuleLogDir = "/app/logs/rules"
 // 测试注入缝（handlers.wafAuditLogFile 同模式）；生产路径不得改写。
 var ruleLogDir = defaultRuleLogDir
 
+// testseam: 规则日志目录注入缝（生产写路径读该目录，handlers 测试跨包消费）。
 // SetRuleLogDirForTest 覆盖规则日志目录并返回恢复函数（handlers 侧端点测试
 // 需要真实文件系统形态：目录/权限故障必须映射 500 而不是空日志）。
 func SetRuleLogDirForTest(dir string) func() {
@@ -579,6 +580,7 @@ func (r RuleLogHousekeepingResult) purgedErr() error {
 	return errors.Join(errs...)
 }
 
+// testseam: 孤儿清理删除前注入钩子（生产清理路径判 nil 分支，宿主留驻产品文件）。
 // ruleLogOrphanPurgeBeforeRemoveForTest 仅测试注入（nil=生产直通）：在算出
 // 孤儿清单、开始删除之前触发，用于确定性钉住任务取消时的提前退出语义
 // （删除不可逆，取消后不得继续）。

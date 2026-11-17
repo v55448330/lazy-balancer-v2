@@ -809,7 +809,10 @@ test('安全总览 TCP：今日拦截协议双胶囊 + 最近事件独立协议�
   // i18n 后双钉:调用点钉键,zh 母本钉原文(任一漂移必红)
   assert.match(overview, /:label="t\('app\.security\.overview\.events\.colProtocol'\)"/)
   assert.ok(code('src/locales/zh/security.ts').includes('协议'), '协议列名原文必须在 zh 母本词条中')
-  assert.match(overview, /proto-tcp-tag event-proto-tag">TCP<\/el-tag>/)
+  assert.match(overview, /proto-tcp-tag">TCP<\/el-tag>/)
+  // 死类负钉：event-proto-tag 定义仅在 SecurityEvents scoped（data-v 不匹配
+  // 总览实例），总览消费即死类——删除后不得回流。
+  assert.doesNotMatch(overview, /event-proto-tag/, 'event-proto-tag 跨组件 scoped 死类必须删除')
   const ruleColumn = section(overview, ':label="t(\'app.security.overview.events.colRule\')"', ':label="t(\'app.security.overview.events.colPolicy\')"')
   assert.doesNotMatch(ruleColumn, /proto-tcp-tag/, '规则列只剩规则名')
 })

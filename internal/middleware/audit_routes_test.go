@@ -26,7 +26,7 @@ func TestSetupRouter_writeRoutesHaveExplicitAuditClassification(t *testing.T) {
 		"POST /api/v1/cluster/service-control": {},
 		"POST /api/v1/config/import/validate":  {},
 		"POST /api/v1/config/preview":          {},
-		// c：/config/validate 已升为 Explicit（handler 记录校验三态）。
+		// /config/validate 已升为 Explicit（handler 记录校验三态），不在跳过清单。
 		"POST /api/v1/mcp":             {},
 		"POST /api/v1/rules/cert-info": {},
 		// v2.1.8 MFA：verify-step 为内部动作（不产生审计；handler 对失败已按
@@ -44,7 +44,7 @@ func TestSetupRouter_writeRoutesHaveExplicitAuditClassification(t *testing.T) {
 		// 大屏流量采集租约：UI 生命周期内部动作，显式 skip。
 		"POST /api/v1/security/overview/threat-screen/collector":   {},
 		"DELETE /api/v1/security/overview/threat-screen/collector": {},
-		// 任务触发：已升 Explicit——24 个可触发族中 18 族
+		// 任务触发：已升 Explicit——17 个可手动触发族中 11 族
 		// 任务体零审计，handler 对非自记族显式补记「触发/任务监控」（自记族
 		// 跳过，保 单记裁定），不再属有意跳过。
 	}

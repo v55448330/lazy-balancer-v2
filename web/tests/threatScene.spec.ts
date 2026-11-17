@@ -458,6 +458,27 @@ test('⑤b 合成跨日界线环：principalBounds 的 ±180 unwrap 分支真正
   // 取景中心落在 unwrap 窗内（180±10），不得被甩到 0 附近的对侧
   assert.equal((b.minLon + b.maxLon) / 2, 180)
 })
+
+test('⑤c 合成双环：主环跨日界线 + 海外领地环——unwrap 只遍历最大环（取景不被领地拉偏）', () => {
+  // 主环（面积最大）跨 ±180：170..190（span 20）；领地环在 0..10（小面积）。
+  // 契约「只用最大环」：第二遍 unwrap 不得把领地环经度并入——否则 bbox 被拉成
+  // 0..190，取景中心从 180 漂到 95（主环跨界+领地环时取景偏到对侧）。
+  const main = [170, 60, -170, 60, -170, 65, 170, 65]
+  const territory = [0, 10, 10, 10, 10, 12, 0, 12]
+  const b = principalBounds([[main], [territory]])
+  assert.equal(b.minLon, 170, '西界只由主环决定（领地环 0° 不得并入）')
+  assert.equal(b.maxLon, 190, '东界只由主环决定')
+  assert.equal(b.maxLon - b.minLon, 20, 'span 收敛到主环真实宽度')
+  assert.equal(b.minLat, 60, '纬度边界取主环（领地 10..12 不参与）')
+  assert.equal(b.maxLat, 65)
+  assert.equal((b.minLon + b.maxLon) / 2, 180, '取景中心留在主环 unwrap 窗内')
+  // 回归形状：领地环大于主环时按面积选领地（最大环判据不变）
+  const big = [0, 0, 60, 0, 60, 60, 0, 60]
+  const b2 = principalBounds([[main], [big]])
+  assert.equal(b2.minLon, 0)
+  assert.equal(b2.maxLon, 60)
+})
+
 test('2D 引擎 dispose 后不再排帧（tick/startLoop 双守卫）', () => {
   const src = code('src/utils/threatScene.ts')
   // tick 首行必须先查 disposed 再 requestAnimationFrame：dispose 后仍可能有一帧

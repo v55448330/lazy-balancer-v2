@@ -172,8 +172,13 @@ func f(c *gin.Context, err error, status int) {
 	c.JSON(200, models.APIResponse{Code: 0, Message: fmt.Sprintf("已保存；但应用失败：%v", err)})
 	message := err.Error()
 	c.JSON(status, models.APIResponse{Code: 0, Message: "已保存；但应用失败：" + message})
-	// 合法形态：脱敏出口。
+	// i18n 译文形态（apimsg.ErrMsg/Tf 注入）与 .Error() 直拼披露语义等价——
+	// 与 5xx 扫描同政策，未脱敏即泄漏。
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.ErrMsg(c, err)})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.Tf(c, "k_x", apimsg.ErrMsg(c, err))})
+	// 合法形态：脱敏出口（含译文形态经脱敏包裹）。
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: "已保存；但 Caddy 配置应用失败：" + services.RedactCaddyAdminEndpoint(err.Error())})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.Tf(c, "k_x", services.RedactCaddyAdminEndpoint(apimsg.ErrMsg(c, err)))})
 	// 5xx 写点归 collect5xxErrorTextLeaks 管辖，本扫描不重复计。
 	c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: "x: " + err.Error()})
 	// 4xx 配置拒绝类不受约束（同 5xx 扫描的反形状）：400/409 字面量与动态
@@ -191,8 +196,8 @@ func f(c *gin.Context, err error, status int) {
 		t.Fatalf("parse synthetic source: %v", err)
 	}
 	leaks := okFailureNoteLeaks(fset, parsed)
-	if len(leaks) != 3 {
-		t.Fatalf("OK 注记扫描器应捕获 3 处未脱敏成功响应，实际 %d: %v", len(leaks), leaks)
+	if len(leaks) != 5 {
+		t.Fatalf("OK 注记扫描器应捕获 5 处未脱敏成功响应（含 ErrMsg/Tf 译文形态），实际 %d: %v", len(leaks), leaks)
 	}
 }
 
@@ -281,27 +286,9 @@ func collect5xxErrorTextLeaksInScope(fset *token.FileSet, scope ast.Node, params
 		return ok && dynamicStatusNames[ident.Name]
 	}
 	hasErrorText := func(expr ast.Expr) bool {
-		// i18n 后错误明细经 apimsg.ErrMsg 注入(译文形态)——披露语义等价,同政策
-		insp := func(n ast.Node) bool {
-			if sel, ok := n.(*ast.SelectorExpr); ok && sel.Sel.Name == "ErrMsg" {
-				if id, ok := sel.X.(*ast.Ident); ok && id.Name == "apimsg" {
-					return true
-				}
-			}
-			return false
-		}
-		errDetail := false
-		ast.Inspect(expr, func(n ast.Node) bool {
-			if insp(n) {
-				errDetail = true
-				return false
-			}
-			return true
-		})
-		if errDetail {
-			return true
-		}
-		if mentionsErrorText(fset, expr) {
+		// i18n 译文形态（apimsg.ErrMsg）与 .Error() 直拼同政策——识别谓词
+		// 与 oknote 扫描单源共用（mentionsAPIMsgErrMsg）。
+		if mentionsAPIMsgErrMsg(expr) || mentionsErrorText(fset, expr) {
 			return true
 		}
 		found := false
@@ -440,6 +427,28 @@ func containsErrorVerb(quotedFormat string) bool {
 	return false
 }
 
+// mentionsAPIMsgErrMsg 报告节点是否含 apimsg.ErrMsg 选择器——i18n 后错误明细
+// 经译文形态注入，披露语义与 .Error() 直拼等价。5xx 扫描与 oknote 扫描共用
+// 本谓词（单源）：两侧识别能力分叉会让译文形态从其中一侧逃逸。
+func mentionsAPIMsgErrMsg(node ast.Node) bool {
+	found := false
+	ast.Inspect(node, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		sel, ok := n.(*ast.SelectorExpr)
+		if !ok || sel.Sel.Name != "ErrMsg" {
+			return true
+		}
+		if id, ok := sel.X.(*ast.Ident); ok && id.Name == "apimsg" {
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
+}
+
 // isExplicitNonOKStatusExpr 报告状态实参是否为字面 4xx/5xx（选择器或整数
 // 字面量）——这些写点分属 5xx 扫描与 4xx 允许面，「成功响应 + 失败注记」
 // 扫描只辖 2xx/动态 status 形态。
@@ -494,7 +503,7 @@ func okFailureNoteLeaks(fset *token.FileSet, node ast.Node) []string {
 		return true
 	})
 	containsErrorText := func(expr ast.Expr) bool {
-		if mentionsErrorText(fset, expr) {
+		if mentionsAPIMsgErrMsg(expr) || mentionsErrorText(fset, expr) {
 			return true
 		}
 		found := false
@@ -555,7 +564,7 @@ func wrapsRedactCaddyAdminEndpoint(fset *token.FileSet, node ast.Node) bool {
 			return true
 		}
 		for _, arg := range call.Args {
-			if mentionsErrorText(fset, arg) {
+			if mentionsAPIMsgErrMsg(arg) || mentionsErrorText(fset, arg) {
 				found = true
 				return false
 			}

@@ -8,7 +8,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { code } from './_helpers.ts'
+import { code, source } from './_helpers.ts'
 
 test('SecurityRules 退役类零残留（ip-match-result 族、ip2region-source-* 子行族）', () => {
   const page = code('src/views/security/SecurityRules.vue')
@@ -42,4 +42,16 @@ test('main.css 圆角重置组无 tm-detail-desc 退役片段（tm-log-container
   assert.doesNotMatch(css, /tm-detail-desc/)
   // 同组成员正向钉：删退役片段不得破坏 :is() 选择器组。
   assert.match(css, /\.tm-log-container/)
+})
+
+test('CaddyGlobalSettings tip-nowrap 退役：类名/注释与实现相反，统一 tip-wrap（注释如实）', () => {
+  const card = code('src/views/settings/CaddyGlobalSettings.vue')
+  // 旧类名 tip-nowrap 语义相反（实现=允许换行）：模板与样式双侧退役。
+  assert.doesNotMatch(card, /tip-nowrap/, 'tip-nowrap 反语义类名必须退役（含样式定义）')
+  // 新类名正向钉：三处行内提示消费 + scoped 定义在场，注释如实描述换行语义。
+  const hits = card.match(/class="form-tip-inline tip-wrap"/g) ?? []
+  assert.equal(hits.length, 3, '三处行内提示必须挂 tip-wrap')
+  assert.match(card, /\.tip-wrap \{ white-space: normal; overflow-wrap: anywhere; \}/)
+  const raw = source('src/views/settings/CaddyGlobalSettings.vue')
+  assert.doesNotMatch(raw, /只加 nowrap/, '旧注释「只加 nowrap」与实现相反，必须如实化')
 })

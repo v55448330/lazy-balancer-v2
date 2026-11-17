@@ -44,7 +44,7 @@ export default {
     autoban: 'Auto-ban',
   },
   taskDesc: {
-    autoban: 'Counts WAF security events per window (mode configurable: block/detect/all); when one IP reaches the threshold it is written to the auto-ban list and unblocked on expiry. Observation mode only logs suggestions. Source: security event collection (master node only)',
+    autoban: 'Counts WAF security events per window (scope configurable: block/detect/challenge issued/challenge failed); when one IP reaches the threshold it is written to the auto-ban list and unblocked on expiry. Observation mode only logs suggestions. Source: security event collection (master node only)',
     crawlerUpdate: 'Periodically fetches the crawler address list and updates the local list for bot identification',
     crsUpdate: 'Pulls the latest CRS ruleset and hot-reloads it with integrity validation',
     ip2regionUpdate: 'Updates the offline IP2Region geo database (IP geolocation source)',

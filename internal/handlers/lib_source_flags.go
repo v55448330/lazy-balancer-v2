@@ -130,6 +130,8 @@ func updateLibSourceFlags(c *gin.Context, spec libSourceFlagsSpec) {
 		}
 	}
 	if err := tx.Commit(); err != nil {
+		// Commit 失败 Tx 已 done，defer Rollback 不触达 driver——池级补发。
+		rollbackLeakedTx()
 		c.JSON(http.StatusInternalServerError, spec.InternalError(spec.UpdateErrMsg, err))
 		return
 	}

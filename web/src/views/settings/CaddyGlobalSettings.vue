@@ -22,7 +22,7 @@
       </el-form-item>
       <el-form-item :label="t('app.settings.caddy.log.size')">
         <el-input-number v-model="settings.caddy_log_size_mb" :disabled="formFrozen" :min="100" :max="10240" controls-position="right" class="number-input" />
-        <span class="form-tip-inline tip-nowrap">{{ t('app.settings.caddy.log.sizeHint') }}</span>
+        <span class="form-tip-inline tip-wrap">{{ t('app.settings.caddy.log.sizeHint') }}</span>
       </el-form-item>
       <el-form-item :label="t('app.settings.caddy.log.title')" for="caddy-log-view-static">
         <input type="text" id="caddy-log-view-static" aria-hidden="true" tabindex="-1" autocomplete="off" style="display:none">
@@ -33,11 +33,11 @@
       <el-divider content-position="left">{{ t('app.settings.caddy.timeout.title') }}</el-divider>
       <el-form-item :label="t('app.settings.caddy.timeout.bodySize')">
         <el-input-number v-model="settings.request_body_max_size_mb" :disabled="formFrozen" :min="1" :max="1024" controls-position="right" class="number-input" />
-        <span class="form-tip-inline tip-nowrap">{{ t('app.settings.caddy.timeout.bodySizeHint') }}</span>
+        <span class="form-tip-inline tip-wrap">{{ t('app.settings.caddy.timeout.bodySizeHint') }}</span>
       </el-form-item>
       <el-form-item :label="t('app.settings.caddy.timeout.read')">
         <el-input-number v-model="settings.http_read_timeout" :disabled="formFrozen" :min="1" controls-position="right" class="number-input" />
-        <span class="form-tip-inline tip-nowrap">{{ t('app.settings.caddy.timeout.readHint') }}</span>
+        <span class="form-tip-inline tip-wrap">{{ t('app.settings.caddy.timeout.readHint') }}</span>
       </el-form-item>
       <el-form-item :label="t('app.settings.caddy.timeout.write')">
         <el-input-number v-model="settings.http_write_timeout" :disabled="formFrozen" :min="1" controls-position="right" class="number-input" />
@@ -554,7 +554,7 @@ const trustedProxyDisabledStaleError = computed(() =>
 const saveListDialogVisible = ref(false)
 // category 默认取库值 zh 码(IP_LIST_CATEGORIES[1])——存储契约
   // =zh 分类码,en 下 t() 译文入库会破坏策略侧分类匹配;name 为自由文本保持 t()。
-  const saveListForm = ref({ name: t('app.settings.basic.map.saveAsListDefaultName'), category: IP_LIST_CATEGORIES[1] })
+  const saveListForm = ref({ name: t('app.settings.caddy.trust.saveAsListDefaultName'), category: IP_LIST_CATEGORIES[1] })
 // 分类 en 本地化:单源 utils/ipListCategoryLabel(三份同构收敛)
 const ipListCategoryLocalized = (c: string): string => {
   if (locale.value !== 'en') return c
@@ -562,7 +562,7 @@ const ipListCategoryLocalized = (c: string): string => {
 }
 const savingList = ref(false)
 const openSaveListDialog = (): void => {
-  saveListForm.value = { name: t('app.settings.basic.map.saveAsListDefaultName'), category: IP_LIST_CATEGORIES[1] }
+  saveListForm.value = { name: t('app.settings.caddy.trust.saveAsListDefaultName'), category: IP_LIST_CATEGORIES[1] }
   saveListDialogVisible.value = true
 }
 const confirmSaveAsList = async (): Promise<void> => {
@@ -581,7 +581,7 @@ const confirmSaveAsList = async (): Promise<void> => {
       description: '',
       category: saveListForm.value.category.trim(),
       // entries 与其余名单字段同口径：JSON 数组文本（后端 Entries 为 string）
-      entries: JSON.stringify(sourceEntries.map((value) => ({ value, remark: t('app.settings.basic.map.saveAsListDefaultName') }))),
+      entries: JSON.stringify(sourceEntries.map((value) => ({ value, remark: t('app.settings.caddy.trust.saveAsListDefaultName') }))),
     })
     const newId = res.data?.id
     if (!newId) throw new Error(t('app.settings.caddy.list.createMissingId'))
@@ -784,8 +784,10 @@ onUnmounted(() => logTail.stop())
 /* 行内校验提示：复用全局 form-tip-line 排版，仅追加危险色（不重定义全局类） */
 .trusted-ranges-error { color: var(--el-color-danger, #f56c6c); }
 .trusted-toggle { display: flex; flex-direction: column; align-items: flex-start; }
-/* 单行描述(2026-09-19 图片报障):只加 nowrap,不做溢出裁切(窄屏容忍伸出) */
-.tip-nowrap { white-space: normal; overflow-wrap: anywhere; }
+/* 行内长提示允许折行(2026-09-19 图片报障):white-space:normal 解除单行 +
+   overflow-wrap:anywhere 长词可断,不做溢出裁切(窄屏容忍伸出)。
+   类名如实为 tip-wrap(旧名 tip-nowrap 与实现相反,已退役)。 */
+.tip-wrap { white-space: normal; overflow-wrap: anywhere; }
 .format-field { width: 100%; min-width: 0; }
 /* tip-inline/tip-block 旧式 el-text 已全量归一全局 form-tip-inline/
    form-tip-line（main.css 唯一事实源，scoped 重复定义删除）；format-tip 仅保留

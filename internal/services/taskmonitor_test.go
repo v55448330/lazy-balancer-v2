@@ -138,6 +138,53 @@ func TestCollectEngineFamilies_logsWaitingCAQueryFailure(t *testing.T) {
 	}
 }
 
+// Given task_runs 不可读（DROP 形态：迁移窗口/库损坏）。
+// When 连续两轮查询常驻族最近 boot 时刻。
+// Then 读失败按状态转换留痕（首报一条、持续静默），表恢复后补一条恢复日志；
+// 「从未 boot」（ErrNoRows）不属读失败，不得告警——此前错误分支静默返空串，
+// 页面「—」与「从未运行」不可区分，读取故障无处排障。
+func TestDaemonLatestBootStartedAt_logsReadFailureTransitions(t *testing.T) {
+	initServicesDB(t)
+	buf := captureServiceLog(t)
+	resetLogStateTransitionForTest(taskMonitorDaemonBootLogKey)
+	t.Cleanup(func() { resetLogStateTransitionForTest(taskMonitorDaemonBootLogKey) })
+
+	// 无 boot 行（ErrNoRows）：静默空串，不留失败痕。
+	if got := daemonLatestBootStartedAt("no-such-daemon"); got != "" {
+		t.Fatalf("无 boot 行应返回空串, got %q", got)
+	}
+	if got := countLogLines(buf, "常驻任务启动时刻查询失败"); got != 0 {
+		t.Fatalf("ErrNoRows 不得告警, 日志:\n%s", buf.String())
+	}
+
+	if _, err := db.DB.Exec(`DROP TABLE task_runs`); err != nil {
+		t.Fatalf("drop task_runs: %v", err)
+	}
+	if got := daemonLatestBootStartedAt("metrics-collector"); got != "" {
+		t.Fatalf("读失败应返回空串, got %q", got)
+	}
+	daemonLatestBootStartedAt("metrics-collector")
+	if got := countLogLines(buf, "常驻任务启动时刻查询失败"); got != 1 {
+		t.Fatalf("失败日志行数=%d, want 1（状态未翻转不得重复告警）:\n%s", got, buf.String())
+	}
+
+	if _, err := db.DB.Exec(`CREATE TABLE task_runs (
+		id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT NOT NULL DEFAULT '',
+		family TEXT NOT NULL DEFAULT '', trigger TEXT NOT NULL DEFAULT '',
+		status TEXT NOT NULL DEFAULT '', started_at TEXT NOT NULL DEFAULT '')`); err != nil {
+		t.Fatalf("recreate task_runs: %v", err)
+	}
+	if _, err := db.DB.Exec(`INSERT INTO task_runs (task_id, family, trigger, status, started_at)
+		VALUES ('metrics-collector', 'system', 'startup', 'success', '2026-01-01 00:00:00')`); err != nil {
+		t.Fatalf("seed boot row: %v", err)
+	}
+	buf.Reset()
+	daemonLatestBootStartedAt("metrics-collector")
+	if got := countLogLines(buf, "常驻任务启动时刻查询恢复"); got != 1 {
+		t.Fatalf("恢复日志行数=%d, want 1:\n%s", got, buf.String())
+	}
+}
+
 // Given 配置上限=3；cert_jobs 三行未来退避窗口：超限 failed（attempts=3，
 // 窗口较近）/未超限 failed（attempts=1，窗口较远）/遗留 waiting_ca（NULL
 // attempts，窗口最远）。

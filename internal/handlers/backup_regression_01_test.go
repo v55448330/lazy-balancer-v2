@@ -614,6 +614,7 @@ func TestImportAcceptsBackupAboveFormer48MBLimit(t *testing.T) {
 }
 
 func TestLbbakExportRejectsPayloadBeyondImportLimit(t *testing.T) {
+	withIsolatedGlobal(t)
 	previous := maxConfigImportBytes
 	maxConfigImportBytes = 1024
 	t.Cleanup(func() { maxConfigImportBytes = previous })

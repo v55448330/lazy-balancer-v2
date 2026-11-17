@@ -23,8 +23,8 @@ func resetHumanEventPosterForTest(t *testing.T, rawURL string) {
 	humanEventDropped.Store(0)
 	humanEventDeliverFailed.Store(0)
 	t.Cleanup(func() {
-		// 先排空再还原配置：在途投递若落在还原之后会拿 nil client 计失败，
-		// 污染后续测试的绝对值断言。
+		// 先排空再还原配置：在途投递若落在还原之后会重建 UDS 客户端走
+		// 拨号失败计失败，污染后续测试的绝对值断言。
 		if !drainHumanEventsForTest(10 * time.Second) {
 			t.Error("event queue must drain before poster restore")
 		}

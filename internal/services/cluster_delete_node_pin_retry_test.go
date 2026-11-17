@@ -2,7 +2,7 @@ package services
 
 // DeleteNode 伴随的 pin 清理失败必须进入 pendingPins 重试链（与 Promote 的
 // cleanupClusterPin 同构）：裸 os.Remove 失败只留一行日志，pin 文件从此既无
-// 周期重试也无节流审计，只能人工删盘。真实失败机制=非空目录（os.Remove
+// 周期重试也无节流审计，只能人工删盘。真实失败机制=非空目录占据 pin 路径
 import (
 	"context"
 	"errors"

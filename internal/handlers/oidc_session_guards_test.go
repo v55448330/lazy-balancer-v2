@@ -164,6 +164,7 @@ func TestOIDCUserStatusToggle_bumpsSessionVersionAcrossReenable(t *testing.T) {
 }
 
 func TestOIDCLogin_state_entries_capped(t *testing.T) {
+	withIsolatedGlobal(t)
 	idp := newMockIdP(t)
 	router, _ := setupOIDCTest(t, idp)
 	putOIDCConfig(t, router, `{"issuer":"`+idp.issuer+`","client_id":"test-client","client_secret":"s","enabled":true}`)
@@ -354,6 +355,7 @@ func TestOIDCProvider_invalidate_clears_failure(t *testing.T) {
 // state 封顶/discovery 失败/随机源失败)一律 302 回前端登录页错误位
 // (oidc_error 经 URL fragment 携带),与回调同型,不渲染裸 JSON。
 func TestOIDCLogin_failure_redirects_to_login_page(t *testing.T) {
+	withIsolatedGlobal(t)
 	assertLoginErrorRedirect := func(rec *httptest.ResponseRecorder) {
 		t.Helper()
 		if rec.Code != http.StatusFound {

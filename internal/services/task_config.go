@@ -40,6 +40,7 @@ func setGlobalTaskAutoUpdate(prefix string, enabled bool) error {
 		return fmt.Errorf("更新规则库自动更新开关: 未写入任何行")
 	}
 	if err := tx.Commit(); err != nil {
+		db.RollbackLeakedTx(db.DB, db.MainPoolMaxOpen)
 		return fmt.Errorf("提交规则库自动更新开关: %w", err)
 	}
 	id, known := businessTaskIDForAutoUpdatePrefix(prefix)

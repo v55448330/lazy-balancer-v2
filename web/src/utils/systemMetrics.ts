@@ -27,7 +27,7 @@ export const degradedMetricParts = (degraded: readonly string[] | undefined): Se
   return parts
 }
 
-/** 降级提示文案用的分项名（保持稳定顺序 cpu→memory→disk）。 */
+/** 降级提示文案用的分项名（保持稳定顺序 cpu→memory→disk→pids）。 */
 export const degradedMetricLabels = (degraded: readonly string[] | undefined): string[] => {
   const parts = degradedMetricParts(degraded)
   return SYSTEM_METRIC_PARTS.filter((part) => parts.has(part)).map((part) => t(SYSTEM_METRIC_LABEL_KEYS[part]))

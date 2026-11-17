@@ -1,6 +1,6 @@
 package handlers
 
-// ②：requireAutoBackupMaster 的「角色查询失败」必须与
+// requireAutoBackupMaster 的「角色查询失败」必须与
 // 「确认是从节点」分状态——修复前 err!=nil 与 !isMaster 同走 403「仅主节点
 // 支持管理自动备份」，把 DB 故障误报为角色语义（且断言了并不掌握的角色信息）。
 

@@ -112,6 +112,7 @@ func (s *ClusterService) BecomeSlave(ctx context.Context, masterURL string, regi
 		return err
 	}
 	if err := tx.Commit(); err != nil {
+		db.RollbackLeakedTx(s.db, db.MainPoolMaxOpen)
 		return fmt.Errorf("提交从节点拓扑事务: %w", err)
 	}
 	// 拓扑已提交：先恢复拉取准入，再让新 daemon 起步——若等到函数尾部才重开，
@@ -236,6 +237,7 @@ func (s *ClusterService) UpdateSettings(ctx context.Context, req models.ClusterS
 		}
 	}
 	if err := tx.Commit(); err != nil {
+		db.RollbackLeakedTx(s.db, db.MainPoolMaxOpen)
 		return fmt.Errorf("提交集群设置: %w", err)
 	}
 	return nil
@@ -364,6 +366,7 @@ var (
 	clusterSectionHashBuilds atomic.Int64
 )
 
+// testseam: 节哈希版本缓存复位缝（缓存由生产读路径持有，宿主留驻产品文件）。
 // resetClusterSectionHashCacheForTest 测试缝：清空版本缓存（生产不调用）。
 func resetClusterSectionHashCacheForTest() {
 	clusterSectionHashCacheMu.Lock()
@@ -671,6 +674,7 @@ func (s *ClusterService) DeleteNode(ctx context.Context, nodeID int) error {
 		return err
 	}
 	if err := tx.Commit(); err != nil {
+		db.RollbackLeakedTx(s.db, db.MainPoolMaxOpen)
 		return fmt.Errorf("提交删除节点: %w", err)
 	}
 	s.clearSectionReport(nodeID)

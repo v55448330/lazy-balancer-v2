@@ -661,6 +661,8 @@ func (h *Handlers) UpdateCertificateConfig(c *gin.Context) {
 		return
 	}
 	if err := tx.Commit(); err != nil {
+		// Commit 失败 Tx 已 done，defer Rollback 不触达 driver——池级补发。
+		rollbackLeakedTx()
 		writeInternalError(c, http.StatusInternalServerError, "提交证书配置变更失败", err)
 		return
 	}

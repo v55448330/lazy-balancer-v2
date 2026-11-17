@@ -88,6 +88,7 @@ func getAuditLogsTotal(t *testing.T, router http.Handler) auditLogsPayload {
 }
 
 func TestGetAuditLogs_totalServedFromShortCacheWithDisclosure(t *testing.T) {
+	withIsolatedGlobal(t)
 	router, _ := newAuditLogRouter(t)
 	resetAuditLogCountCacheForTest()
 	oldTTL := auditLogCountCacheTTL

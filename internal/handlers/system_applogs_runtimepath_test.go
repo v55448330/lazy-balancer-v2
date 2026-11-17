@@ -20,6 +20,7 @@ import (
 )
 
 func TestGetAppLogs_emptyLogFileFallsBackToDefaultRuntimePath(t *testing.T) {
+	withIsolatedGlobal(t)
 	// Given：默认运行日志存在内容，配置显式 log_file 为空串
 	logPath := filepath.Join(t.TempDir(), "lazy-balancer.log")
 	if err := os.WriteFile(logPath, []byte("runtime-line-1\nruntime-line-2\n"), 0o644); err != nil {

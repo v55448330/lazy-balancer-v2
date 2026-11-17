@@ -387,7 +387,7 @@ func Initialize(dataDir string) (err error) {
 	// 连接最长存活 30 分钟：Begin/Commit 歧义（客户端超时取消）可能在池中留下
 	// SQLite 层事务未关闭的「中毒连接」（表现为 cannot start a transaction within
 	// a transaction / 持锁不放）；定期换血把最坏影响面限制在半个生命周期内。
-	applySQLitePool(database, sqlitePoolConfig{maxOpen: 10, maxIdle: 5, connMaxLifetime: 30 * time.Minute})
+	applySQLitePool(database, sqlitePoolConfig{maxOpen: MainPoolMaxOpen, maxIdle: 5, connMaxLifetime: 30 * time.Minute})
 
 	if err := database.Ping(); err != nil {
 		return fmt.Errorf("failed to ping database: %w", err)

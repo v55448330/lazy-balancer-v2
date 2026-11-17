@@ -4,8 +4,9 @@ package lbhuman
 // 必须先停 worker 再独占排空计 shutdown_lost——worker 活着时并发消费会让
 // 尾部事件绕过对账计数（计数失真）。
 //
-// 确定性形态：poster 注入 nil client（deliver 立即计失败返回，不阻塞），
-// worker 全速消费队列。启动 worker 后入队一批尾部事件，然后 Flush。
+// 确定性形态：poster 注入已关闭的 httptest 端点（连接拒绝立即计失败返回，
+// 不阻塞——与投递失败钉测同款真实失败机制），worker 全速消费队列。启动
+// worker 后入队一批尾部事件，然后 Flush。
 // 核心断言：Flush 后 worker 必须已停（humanEventWorkerStop==nil）——这是
 // 「先停 worker 再排空」契约的直接可观测面。若 Flush 不停 worker，worker
 // 存活（humanEventWorkerStop!=nil），后续事件会被竞争消费绕进 deliver_failed
@@ -17,29 +18,27 @@ package lbhuman
 
 import (
 	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 )
 
-// Given 常驻 worker 存活（nil client → deliver 立即返回，全速消费）。
+// Given 常驻 worker 存活（已关闭端点 → deliver 连接拒绝立即计失败，全速消费）。
 // When 入队尾部事件后执行停机收尾 FlushHumanEvents。
 // Then Flush 后 worker 已停（humanEventWorkerStop==nil），队列排空，
 // 滞留尾部计入 shutdown_lost（worker 不得在 Flush 后继续竞争消费）。
 func TestFlushHumanEvents_stopsWorkerBeforeCountingTail(t *testing.T) {
 	stopHumanEventWorkerForTest()
 	t.Cleanup(stopHumanEventWorkerForTest)
-	// nil client：deliver 立即计失败返回（不阻塞），worker 全速消费。
-	poster.mu.Lock()
-	poster.client = nil
-	poster.url = ""
-	poster.disabled = false
-	poster.mu.Unlock()
-	t.Cleanup(func() {
-		poster.mu.Lock()
-		poster.client = nil
-		poster.url = ""
-		poster.mu.Unlock()
-	})
+	// 真实失败注入：已关闭 httptest 端点（端口不再监听 → 连接拒绝立即
+	// 返回，worker 全速消费）。不得用 nil client——initClient 会重建 UDS
+	// 客户端走拨号失败路径（慢且依赖宿主 socket 缺失），并非立即返回。
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	failedURL := srv.URL
+	srv.Close()
+	resetHumanEventPosterForTest(t, failedURL)
 
 	// 启动 worker（reportHumanEvent 会启动）。
 	reportHumanEvent("lb-flush-race", "203.0.113.100", http.MethodGet, "/", "challenge")

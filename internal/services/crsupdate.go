@@ -214,6 +214,7 @@ func GetCRSUpdateManager() *CRSUpdateManager {
 	return crsUpdateManager
 }
 
+// testseam: CRS 更新单例复位缝（handlers 测试跨包消费，宿主留驻产品文件）。
 func ResetCRSUpdateManagerForTest() {
 	crsUpdateManager = nil
 	crsUpdateManagerOnce = sync.Once{}

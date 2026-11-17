@@ -48,6 +48,7 @@ func listPolicies24hCounts(t *testing.T, h *Handlers) (blocked, trigger map[int]
 }
 
 func TestListSecurityPolicies_24hCountsCachedWithinWindow(t *testing.T) {
+	withIsolatedGlobal(t)
 	h := newBackupTestHandlers(t)
 	resetSecurityPolicy24hCountsCacheForTest()
 	oldTTL := securityPolicy24hCountsCacheTTL
@@ -104,6 +105,7 @@ func TestListSecurityPolicies_24hCountsCachedWithinWindow(t *testing.T) {
 
 // 退避形状（失败不缓存）：缓存仍应保持空表——错误不落缓存，下一请求重试。
 func TestLoadSecurityPolicy24hCounts_failureNotCached(t *testing.T) {
+	withIsolatedGlobal(t)
 	newBackupTestHandlers(t)
 	resetSecurityPolicy24hCountsCacheForTest()
 	t.Cleanup(resetSecurityPolicy24hCountsCacheForTest)
@@ -130,6 +132,7 @@ func TestLoadSecurityPolicy24hCounts_failureNotCached(t *testing.T) {
 // 命中路径必须返回缓存条目的副本：调用方改写返回 map 不得穿透缓存——
 // 共享底层 map 时，任一调用方的写都会改写后续所有命中方的视图。
 func TestLoadSecurityPolicy24hCounts_hitReturnsClone(t *testing.T) {
+	withIsolatedGlobal(t)
 	h := newBackupTestHandlers(t)
 	_ = h
 	resetSecurityPolicy24hCountsCacheForTest()

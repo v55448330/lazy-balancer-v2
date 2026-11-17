@@ -2,6 +2,7 @@ package services
 
 import "fmt"
 
+// testseam: 全局 searcher 复位缝（生产校验路径持有，handlers 测试跨包消费）。
 // ResetIP2RegionSearcherForTest 清空全局 ip2region searcher（仅测试使用）。
 // 导入落盘实测会经 Reload 装载真实 xdb——测试结束后必须复位，
 // 否则「未装载 GeoIP」形态的用例（GeoIP 空结果/保留地址口径）会串扰。
