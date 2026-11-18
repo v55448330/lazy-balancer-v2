@@ -29,17 +29,35 @@ func registerNotificationTasks(te *taskengine.Engine) {
 		ID:          "notification-daily-report",
 		Family:      "notification",
 		Name:        "通知日报",
-		Description: "每日 09:00 渲染昨日摘要（请求/拦截/攻击 TOP/证书/集群/封禁）并按用户订阅通道投递",
+		Description: "按各用户配置时间渲染昨日摘要（请求/拦截/攻击 TOP/证书/集群/封禁）并按用户订阅通道投递",
 		Category:    "通知",
 		Kind:        taskengine.KindScheduled,
 		NextSlotFn: func() time.Time {
-			// 每日 09:00 本地时间；错过（停机跨点）由下一 tick 立即补发一次。
+			// per-user 发送时间集（AllDailySendTimes 单源）：取全部启用用户
+			// send_time 中「下一个会到来」的时刻；无配置回退 09:00。错过
+			// （停机跨点）由下一 tick 立即补发一次。
 			n := time.Now().Add(time.Minute)
-			next := time.Date(n.Year(), n.Month(), n.Day(), 9, 0, 0, 0, n.Location())
-			if !next.After(n) {
-				next = next.AddDate(0, 0, 1)
+			best := time.Date(n.Year(), n.Month(), n.Day(), 9, 0, 0, 0, n.Location())
+			if !best.After(n) {
+				best = best.AddDate(0, 0, 1)
 			}
-			return next
+			times, err := notify.AllDailySendTimes()
+			if err == nil {
+				for _, ts := range times {
+					t, err := time.ParseInLocation("15:04", ts, n.Location())
+					if err != nil {
+						continue
+					}
+					cand := time.Date(n.Year(), n.Month(), n.Day(), t.Hour(), t.Minute(), 0, 0, n.Location())
+					if !cand.After(n) {
+						cand = cand.AddDate(0, 0, 1)
+					}
+					if cand.Before(best) {
+						best = cand
+					}
+				}
+			}
+			return best
 		},
 		Run: func(rc taskengine.RunContext) error {
 			return notify.DailyReportRun(rc)

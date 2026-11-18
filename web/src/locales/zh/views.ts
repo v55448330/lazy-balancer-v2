@@ -585,7 +585,7 @@ export default {
     'scopeNotifyChannelCrud': '通知通道增删改/测试',
     'scopeNotifyQQBind': 'QQ 通道扫码绑定码生成',
     'scopeNotifyDeliveryResend': '投递记录失败重发',
-    'scopeNotifySettings': '通知系统设置（SMTP/QQ/微信凭据与 MCP 全局开关）',
+    'scopeNotifySettings': '通知系统设置（SMTP/QQ/微信凭据/微信扫码登录与 MCP 全局开关）',
     'scopeNotifySubs': '通知订阅与每日日报设置（含手动触发）',
     'scopeOidcConfig': 'OIDC 配置修改/删除',
     'scopeProfileUpdate': '个人资料修改',

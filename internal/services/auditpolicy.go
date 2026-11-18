@@ -67,6 +67,14 @@ var auditRoutePolicies = map[string]AuditPolicy{
 	"POST /api/v1/notification/deliveries/:id/resend": AuditPolicyExplicit,
 	"PUT /api/v1/notification/settings":               AuditPolicyExplicit,
 	"POST /api/v1/notification/daily-report/trigger":  AuditPolicyExplicit,
+	// 日报配置/预览/触发：配置保存与触发 handler 记审计；预览是只读渲染
+	// 不落库（显式 skip 防「默认分类」告警）。扫码绑定/扫码登录产码端点 skip：
+	// 绑定完成时 handler 记一次「绑定」审计（一次绑定一条，产码不复记）。
+	"PUT /api/v1/notification/daily":          AuditPolicyExplicit,
+	"POST /api/v1/notification/daily/preview": AuditPolicySkip,
+	"POST /api/v1/notification/daily/trigger": AuditPolicyExplicit,
+	"POST /api/v1/notification/qq/bind-code":  AuditPolicySkip,
+	"POST /api/v1/notification/wx/qr/start":   AuditPolicySkip,
 	// 通知通道 CRUD/测试：创建与测试由中间件通用留痕；更新与删除 handler
 	// 显式留痕（显式分类防双记；删除对属主与跨属主均记录）。
 	"POST /api/v1/notification/channels":          AuditPolicyGeneric,

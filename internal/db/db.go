@@ -585,6 +585,12 @@ func createTables() error {
 		value TEXT NOT NULL DEFAULT ''
 	);
 
+	CREATE TABLE IF NOT EXISTS notification_daily (
+		user_id INTEGER PRIMARY KEY,
+		config TEXT NOT NULL DEFAULT '{}',
+		updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+	);
+
 	CREATE TABLE IF NOT EXISTS qq_bind_codes (
 		code TEXT PRIMARY KEY,
 		user_id INTEGER NOT NULL,

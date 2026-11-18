@@ -585,7 +585,7 @@ export default {
     'scopeNotifyChannelCrud': 'Notification channel create/edit/delete/test',
     'scopeNotifyQQBind': 'QQ channel QR binding code generation',
     'scopeNotifyDeliveryResend': 'Delivery failure resend',
-    'scopeNotifySettings': 'Notification system settings (SMTP/QQ/WeChat credentials & MCP global switch)',
+    'scopeNotifySettings': 'Notification system settings (SMTP/QQ/WeChat credentials/WeChat scan login & MCP global switch)',
     'scopeNotifySubs': 'Notification subscriptions & daily report settings (incl. manual trigger)',
     'scopeOidcConfig': 'OIDC config change/delete',
     'scopeProfileUpdate': 'Profile update',

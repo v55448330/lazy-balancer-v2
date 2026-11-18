@@ -1,19 +1,43 @@
 package handlers
 
-// QQ 绑定码闭环钉测：生成 → 模拟 QQ 侧「绑定 <code>」指令消费（与
-// botlink.bindBotChannel 同落库：通道 target 写 openid+码消费）→ 轮询
-// bound=true；同用户旧码作废。身份注入对齐中间件（c.Set user_id/role）。
+// QQ 扫码绑定协议钉测（对齐 @tencent-connect/qqbot-connector 1.2.0 行为）。
+// mock q.qq.com 两端点 + 固定 AES 密钥向量，覆盖全形状：
+//   ①生成二维码（connect.html URL 含 task_id）
+//   ②poll completed：AES-GCM 解密 → 凭据落 notify_settings + openid 绑定通道
+//   ③EXPIRED：重生成提示形态
 
 import (
+	"context"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/rand"
+	"encoding/base64"
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"sync"
 	"testing"
 
 	"github.com/gin-gonic/gin"
 
 	"lazy-balancer-v2/internal/db"
+	"lazy-balancer-v2/internal/notify"
 )
 
+// encryptForTest AES-256-GCM 加密（IV12B‖ct‖tag16B 的 base64）——与官方
+// connector decryptSecret 互逆的测试向量构造器。
+func encryptForTest(key []byte, plain string) string {
+	block, _ := aes.NewCipher(key)
+	gcm, _ := cipher.NewGCM(block)
+	iv := make([]byte, gcm.NonceSize())
+	_, _ = rand.Read(iv)
+	ct := gcm.Seal(nil, iv, []byte(plain), nil)
+	return base64.StdEncoding.EncodeToString(append(iv, ct...))
+}
+
+// newQQBindRouter 带「登录用户」身份注入的测试路由（user_id/role 对齐中间件注入）。
 func newQQBindRouter(t *testing.T, userID int64) *gin.Engine {
 	t.Helper()
 	h := newFakeCaddyHandlers(t)
@@ -28,73 +52,148 @@ func newQQBindRouter(t *testing.T, userID int64) *gin.Engine {
 	return router
 }
 
-func doGet(rec *httptest.ResponseRecorder) *httptest.ResponseRecorder { return rec }
+// qqBindMockEnv mock q.qq.com 环境（端点覆写自动还原）。
+type qqBindMockEnv struct {
+	mu      sync.Mutex
+	lastKey []byte
+	server  *httptest.Server
+}
 
-func TestQQBindCode_generateConsumePoll(t *testing.T) {
+func (e *qqBindMockEnv) handler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/lite/create_bind_task":
+			var body struct {
+				Key string `json:"key"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			if raw, err := base64.StdEncoding.DecodeString(body.Key); err == nil && len(raw) == 32 {
+				e.mu.Lock()
+				e.lastKey = raw
+				e.mu.Unlock()
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"retcode":0,"data":{"task_id":"TASK_MOCK"}}`))
+		case "/lite/poll_bind_result":
+			e.mu.Lock()
+			key := e.lastKey
+			e.mu.Unlock()
+			w.Header().Set("Content-Type", "application/json")
+			if len(key) != 32 {
+				_, _ = w.Write([]byte(`{"retcode":0,"data":{"status":1}}`))
+				return
+			}
+			_, _ = w.Write([]byte(fmt.Sprintf(
+				`{"retcode":0,"data":{"status":2,"bot_appid":"APP_MOCK","bot_encrypt_secret":%q,"user_openid":"OPENID_MOCK"}}`,
+				encryptForTest(key, "SECRET_MOCK"))))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}
+}
+
+// setupQQBindMock 起 mock q.qq.com 并把包级端点指向它；返回还原函数。
+func setupQQBindMock(t *testing.T) *qqBindMockEnv {
+	t.Helper()
+	env := &qqBindMockEnv{}
+	env.server = httptest.NewServer(env.handler())
+	oldTask, oldPoll := notify.BindTaskURL, notify.BindPollURL
+	notify.BindTaskURL = env.server.URL + "/lite/create_bind_task"
+	notify.BindPollURL = env.server.URL + "/lite/poll_bind_result"
+	t.Cleanup(func() {
+		notify.BindTaskURL, notify.BindPollURL = oldTask, oldPoll
+		env.server.Close()
+	})
+	return env
+}
+
+// TestQQBindScan_e2e 主形状：生成二维码 → mock poll completed（AES 向量）→
+// GET 轮询 bound=true + 凭据落 notify_settings + openid 绑定通道。
+func TestQQBindScan_e2e(t *testing.T) {
+	env := setupQQBindMock(t)
 	setupSecurityPolicyTestDB(t)
-	const uid = int64(7)
+	const uid = int64(42)
 	router := newQQBindRouter(t, uid)
 
+	// ① 生成二维码（connect.html URL 含 task_id）
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/notification/qq/bind-code", nil))
 	if w.Code != http.StatusOK {
-		t.Fatalf("generate status=%d body=%s", w.Code, w.Body.String())
+		t.Fatalf("qr status=%d body=%s", w.Code, w.Body.String())
 	}
-	var code string
-	if err := db.DB.QueryRow(`SELECT code FROM qq_bind_codes WHERE user_id=?`, uid).Scan(&code); err != nil || len(code) != 6 {
-		t.Fatalf("bind code=%q (err=%v), want 6 位数字", code, err)
+	var qr struct {
+		Data struct {
+			QrContent string `json:"qr_content"`
+		} `json:"data"`
 	}
-
-	// 模拟 QQ 侧「绑定 <code>」指令消费（与 botlink.bindBotChannel 同落库）
-	if _, err := db.DB.Exec(`INSERT INTO notification_channels (user_id, type, name, target, enabled, created_at, updated_at)
-		VALUES (?, 'qq', 'QQ 机器人', ?, 1, datetime('now'), datetime('now'))`,
-		uid, `{"openid":"OPENID_A"}`); err != nil {
+	if err := json.Unmarshal(w.Body.Bytes(), &qr); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.DB.Exec(`DELETE FROM qq_bind_codes WHERE code=?`, code); err != nil {
-		t.Fatal(err)
+	if !strings.Contains(qr.Data.QrContent, "task_id=TASK_MOCK") {
+		t.Fatalf("qr_content=%q, want connect.html URL", qr.Data.QrContent)
+	}
+	env.mu.Lock()
+	keySeen := len(env.lastKey) == 32
+	env.mu.Unlock()
+	if !keySeen {
+		t.Fatal("mock create_bind_task 未收到 32B 密钥（协议形状漂移）")
 	}
 
+	// ② 轮询（mock poll completed + AES 向量）
 	w2 := httptest.NewRecorder()
 	router.ServeHTTP(w2, httptest.NewRequest(http.MethodGet, "/notification/qq/bind-code", nil))
 	if w2.Code != http.StatusOK {
 		t.Fatalf("poll status=%d", w2.Code)
 	}
-	if !contains2(w2.Body.String(), `"bound":true`) || !contains2(w2.Body.String(), `"openid":"OPENID_A"`) {
-		t.Fatalf("poll body=%s, want bound=true+openid", w2.Body.String())
+	var poll struct {
+		Data struct {
+			Bound  bool   `json:"bound"`
+			AppID  string `json:"appid"`
+			OpenID string `json:"openid"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(w2.Body.Bytes(), &poll); err != nil {
+		t.Fatal(err)
+	}
+	if !poll.Data.Bound || poll.Data.AppID != "APP_MOCK" || poll.Data.OpenID != "OPENID_MOCK" {
+		t.Fatalf("poll=%+v, want bound+APP_MOCK+OPENID_MOCK", poll.Data)
+	}
+
+	// ③ 凭据落 notify_settings（连接 Daemon 鉴权单源）
+	var appID, appSecret string
+	if err := db.DB.QueryRow(`SELECT value FROM notify_settings WHERE key='notify.qq_appid'`).Scan(&appID); err != nil || appID != "APP_MOCK" {
+		t.Fatalf("notify.qq_appid=%q (err=%v), want APP_MOCK", appID, err)
+	}
+	if err := db.DB.QueryRow(`SELECT value FROM notify_settings WHERE key='notify.qq_secret'`).Scan(&appSecret); err != nil || appSecret != "SECRET_MOCK" {
+		t.Fatalf("notify.qq_secret=%q (err=%v), want SECRET_MOCK", appSecret, err)
+	}
+
+	// ④ openid 绑定通知通道（投递目标）
+	var target string
+	if err := db.DB.QueryRow(`SELECT target FROM notification_channels WHERE user_id=? AND type='qq'`, uid).Scan(&target); err != nil || target != `{"openid":"OPENID_MOCK"}` {
+		t.Fatalf("channel target=%q (err=%v), want openid 回填", target, err)
 	}
 }
 
-func contains2(hay, needle string) bool {
-	return len(hay) >= len(needle) && (needle == "" || indexOf2(hay, needle) >= 0)
-}
+// TestQQBindScan_expired EXPIRED 形态：poll status=3 → 重生成提示数据形态。
+func TestQQBindScan_expired(t *testing.T) {
+	env := setupQQBindMock(t)
+	_ = env
+	oldTask, oldPoll := notify.BindTaskURL, notify.BindPollURL
+	defer func() { notify.BindTaskURL, notify.BindPollURL = oldTask, oldPoll }()
+	mock := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"retcode":0,"data":{"status":3}}`))
+	}))
+	defer mock.Close()
+	notify.BindTaskURL, notify.BindPollURL = mock.URL+"/lite/create_bind_task", mock.URL+"/lite/poll_bind_result"
 
-func indexOf2(hay, needle string) int {
-	for i := 0; i+len(needle) <= len(hay); i++ {
-		if hay[i:i+len(needle)] == needle {
-			return i
-		}
+	task := &notify.BindTask{Key: make([]byte, 32), TaskID: "TASK_MOCK"}
+	result, err := notify.PollBindResult(context.Background(), task)
+	if err != nil {
+		t.Fatal(err)
 	}
-	return -1
-}
-
-func TestQQBindCode_oldCodeInvalidated(t *testing.T) {
-	setupSecurityPolicyTestDB(t)
-	const uid = int64(9)
-	router := newQQBindRouter(t, uid)
-
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/notification/qq/bind-code", nil))
-	if w.Code != http.StatusOK {
-		t.Fatalf("first generate status=%d", w.Code)
-	}
-	w = httptest.NewRecorder()
-	router.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/notification/qq/bind-code", nil))
-	if w.Code != http.StatusOK {
-		t.Fatalf("second generate status=%d", w.Code)
-	}
-	var n int
-	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM qq_bind_codes WHERE user_id=?`, uid).Scan(&n); err != nil || n != 1 {
-		t.Fatalf("bind codes=%d, want 1（旧码作废）", n)
+	if result.Status != notify.BindExpired {
+		t.Fatalf("status=%d, want expired(3)", result.Status)
 	}
 }

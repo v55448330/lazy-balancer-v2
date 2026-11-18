@@ -17,6 +17,9 @@
       <el-tab-pane :label="t('app.notification.tabs.subs')" name="subs">
         <SubscriptionMatrix />
       </el-tab-pane>
+      <el-tab-pane :label="t('app.notification.tabs.daily')" name="daily">
+        <DailyReport />
+      </el-tab-pane>
       <el-tab-pane :label="t('app.notification.tabs.deliveries')" name="deliveries">
         <DeliveryLog />
       </el-tab-pane>
@@ -34,6 +37,7 @@ import { Bell } from '@element-plus/icons-vue'
 import { useAuthStore } from '@/stores/auth'
 import ChannelCards from './ChannelCards.vue'
 import SubscriptionMatrix from './SubscriptionMatrix.vue'
+import DailyReport from './DailyReport.vue'
 import DeliveryLog from './DeliveryLog.vue'
 import SystemCredentials from './SystemCredentials.vue'
 

@@ -43,6 +43,7 @@ export const AUDIT_ACTION_KEYS: Record<string, string> = {
   // 通知中心 / MCP 会话写点（notification_*.go / mcp_sessions.go）
   '修改': 'modified',
   '断开': 'disconnected',
+  '绑定': 'bound',
   '重发': 'resent',
   '复制': 'duplicate',
   '复制失败': 'duplicateFailed',
@@ -211,6 +212,7 @@ export const AUDIT_RESOURCE_KEYS: Record<string, string> = {
   '集群节点': 'clusterNode',
   // 通知中心 / MCP 会话资源（notification_*.go / mcp_sessions.go）
   '通知通道': 'notificationChannel',
+  'QQ 机器人': 'qqBot',
   '通知投递': 'notificationDelivery',
   '通知订阅': 'notificationSubscription',
   '通知设置': 'notificationSettings',

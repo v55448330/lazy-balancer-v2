@@ -108,7 +108,11 @@ test('系统凭据消费 settings 契约：GET 嵌套形状+secret 留空不提�
   // 空 secret 必须以条件展开省略键（不能提交空串覆盖既有凭据）
   assert.match(saveBlock, /\.\.\.\(form\.value\.smtpPass \? \{ pass: form\.value\.smtpPass \} : \{\}\)/)
   assert.match(saveBlock, /\.\.\.\(form\.value\.qqSecret \? \{ secret: form\.value\.qqSecret \} : \{\}\)/)
-  assert.match(saveBlock, /\.\.\.\(form\.value\.wxCred \? \{ wx: \{ cred: form\.value\.wxCred \} \} : \{\}\)/)
+  // 微信凭据走 iLink 扫码登录卡（REST start/status；confirmed 即服务端已落
+  // 凭据）——手工粘贴 wx.cred 形态已删除，禁止回潮
+  assert.match(text, /request\.post<\{ code: number; data\?: \{ qr_content: string \} \}>\('\/notification\/wx\/qr\/start', \{\}\)/)
+  assert.match(text, /request\.get<\{ code: number; data\?: \{ status: string; confirmed: boolean \} \}>\('\/notification\/wx\/qr\/status'\)/)
+  assert.doesNotMatch(text, /wx:\s*\{\s*cred:/)
 })
 
 test('zh/en 通知词条同位：叶子键集一致且 app.notification 前缀', async () => {

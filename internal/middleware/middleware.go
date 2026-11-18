@@ -1157,9 +1157,16 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 				// lists (all authenticated users)
 				business.GET("/mcp/tools", h.GetMCPTools)
 				business.GET("/mcp/ops-playbook", h.GetMCPOpsPlaybook)
-		// QQ 扫码绑定闭环：生成绑定码/轮询绑定状态（登录用户自助）
-		business.POST("/notification/qq/bind-code", h.PostQQBindCode)
-		business.GET("/notification/qq/bind-code", h.GetQQBindCode)
+				// QQ 扫码绑定闭环：生成绑定码/轮询绑定状态（登录用户自助）
+				// 微信 iLink 扫码登录（管理员凭据页）
+				admin.POST("/notification/wx/qr/start", h.StartWxQRLogin)
+				admin.GET("/notification/wx/qr/status", h.GetWxQRStatus)
+				business.POST("/notification/qq/bind-code", h.PostQQBindCode)
+				business.GET("/notification/qq/bind-code", h.GetQQBindCode)
+				business.GET("/notification/daily", h.GetNotificationDaily)
+				business.PUT("/notification/daily", h.PutNotificationDaily)
+				business.POST("/notification/daily/preview", h.PreviewNotificationDaily)
+				admin.POST("/notification/daily/trigger", h.TriggerNotificationDaily)
 				business.GET("/users", h.ListUsers)
 				business.GET("/api-keys", noStoreResponse(), h.ListAPIKeys)
 				business.GET("/cluster/nodes", h.ListClusterNodes)

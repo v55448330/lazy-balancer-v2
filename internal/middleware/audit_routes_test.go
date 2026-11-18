@@ -44,6 +44,11 @@ func TestSetupRouter_writeRoutesHaveExplicitAuditClassification(t *testing.T) {
 		// 大屏流量采集租约：UI 生命周期内部动作，显式 skip。
 		"POST /api/v1/security/overview/threat-screen/collector":   {},
 		"DELETE /api/v1/security/overview/threat-screen/collector": {},
+		// 日报预览：只读渲染昨日数据不落库（配置保存/触发才记审计）。
+		"POST /api/v1/notification/daily/preview": {},
+		// 扫码产码端点：绑定完成时 handler 记一次「绑定」审计，产码不复记。
+		"POST /api/v1/notification/qq/bind-code": {},
+		"POST /api/v1/notification/wx/qr/start":  {},
 		// 任务触发：已升 Explicit——17 个可手动触发族中 11 族
 		// 任务体零审计，handler 对非自记族显式补记「触发/任务监控」（自记族
 		// 跳过，保 单记裁定），不再属有意跳过。

@@ -66,10 +66,21 @@
 
       <el-divider content-position="left" class="creds-divider">{{ t('app.notification.creds.wxSection') }}</el-divider>
       <el-form-item :label="t('app.notification.creds.wxCred')">
-        <el-input v-model="form.wxCred" type="password" show-password :placeholder="t('app.notification.creds.secretPlaceholder')" class="creds-input" autocomplete="new-password" />
-        <el-tag :type="wxCredConfigured ? 'success' : 'info'" size="small" effect="plain" class="cred-state-tag">
-          {{ wxCredConfigured ? t('app.notification.creds.configured') : t('app.notification.creds.notConfigured') }}
-        </el-tag>
+        <div class="wx-login-card">
+          <div class="wx-login-state-row">
+            <el-tag :type="wxCredConfigured ? 'success' : 'info'" size="small" effect="plain">
+              {{ wxCredConfigured ? t('app.notification.creds.configured') : t('app.notification.creds.notConfigured') }}
+            </el-tag>
+            <el-button size="small" type="primary" :loading="wxQr.loading" @click="startWxQRLogin">
+              {{ wxCredConfigured ? t('app.notification.creds.wxRelogin') : t('app.notification.creds.wxScanLogin') }}
+            </el-button>
+          </div>
+          <div v-if="wxQr.qrImg" class="wx-login-qr-panel">
+            <img class="wx-login-qr" :src="wxQr.qrImg" :alt="t('app.notification.creds.wxQrAlt')" />
+            <div class="wx-login-hint">{{ wxQrStatusText }}</div>
+            <el-button v-if="wxQr.expired" size="small" @click="startWxQRLogin">{{ t('app.notification.creds.wxQrRefresh') }}</el-button>
+          </div>
+        </div>
       </el-form-item>
 
       <el-divider content-position="left" class="creds-divider">{{ t('app.notification.creds.mcpSection') }}</el-divider>
@@ -84,6 +95,7 @@
 <script setup lang="ts">
 import { computed, ref, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
+import QRCode from 'qrcode'
 import { request, mfaAwareSuccess } from '@/utils/api'
 import type {
   NotificationSettingsPayload,
@@ -105,7 +117,6 @@ const form = ref({
   smtpPass: '',
   qqAppId: '',
   qqSecret: '',
-  wxCred: '',
   mcpEnabled: false,
 })
 // 服务端已配置布尔（GET 只回布尔不回明文），保存成功后重查刷新
@@ -113,6 +124,74 @@ const smtpPassConfigured = ref(false)
 const qqSecretConfigured = ref(false)
 const wxCredConfigured = ref(false)
 let settingsRequestSeq = 0
+
+// 微信 iLink 扫码登录卡：start 拿二维码 URL（本地 QRCode 渲染）→
+// status 长轮询（服务端挂起至状态变化）；confirmed 即凭据已落库、收发启用。
+const wxQr = ref<{ qrImg: string; loading: boolean; status: string; expired: boolean; timer: number | null }>({
+  qrImg: '', loading: false, status: '', expired: false, timer: null,
+})
+
+const wxQrStatusText = computed(() => {
+  if (wxQr.value.expired) return t('app.notification.creds.wxQrExpired')
+  switch (wxQr.value.status) {
+    case 'scaned': return t('app.notification.creds.wxQrScaned')
+    case 'confirmed': return t('app.notification.creds.wxQrConfirmed')
+    default: return t('app.notification.creds.wxQrWaiting')
+  }
+})
+
+const startWxQRLogin = async (): Promise<void> => {
+  if (wxQr.value.loading) return
+  wxQr.value.loading = true
+  wxQr.value.expired = false
+  wxQr.value.status = ''
+  try {
+    const res = await request.post<{ code: number; data?: { qr_content: string } }>('/notification/wx/qr/start', {})
+    const qrUrl = res.data?.qr_content ?? ''
+    wxQr.value.qrImg = qrUrl ? await QRCode.toDataURL(qrUrl, { width: 180, margin: 1 }) : ''
+    startWxQRPolling()
+  } catch (error: unknown) {
+    console.error('Failed to start wx QR login:', error)
+  } finally {
+    wxQr.value.loading = false
+  }
+}
+
+const startWxQRPolling = (): void => {
+  if (wxQr.value.timer !== null) window.clearInterval(wxQr.value.timer)
+  const timer = window.setInterval(async () => {
+    try {
+      const res = await request.get<{ code: number; data?: { status: string; confirmed: boolean } }>('/notification/wx/qr/status')
+      const data = res.data
+      wxQr.value.status = data?.status ?? ''
+      if (data?.confirmed) {
+        wxQr.value.qrImg = ''
+        if (wxQr.value.timer !== null) {
+          window.clearInterval(wxQr.value.timer)
+          wxQr.value.timer = null
+        }
+        mfaAwareSuccess(t('app.notification.creds.wxQrConfirmed'))
+        await fetchSettings()
+      } else if (data?.status === 'expired') {
+        wxQr.value.expired = true
+        if (wxQr.value.timer !== null) {
+          window.clearInterval(wxQr.value.timer)
+          wxQr.value.timer = null
+        }
+      }
+    } catch {
+      // 轮询失败保持等待
+    }
+  }, 3000)
+  wxQr.value.timer = timer
+  window.setTimeout(() => {
+    if (wxQr.value.timer === timer && wxQr.value.status !== 'confirmed') {
+      wxQr.value.expired = true
+      window.clearInterval(timer)
+      wxQr.value.timer = null
+    }
+  }, 5 * 60 * 1000)
+}
 
 const portValid = computed(() => {
   const port = form.value.smtpPort
@@ -137,7 +216,6 @@ const fetchSettings = async (): Promise<void> => {
       smtpPass: '',
       qqAppId: data?.qq?.appid ?? '',
       qqSecret: '',
-      wxCred: '',
       mcpEnabled: data?.mcp_enabled === true,
     }
     smtpPassConfigured.value = data?.smtp?.pass_configured === true
@@ -175,12 +253,11 @@ const saveSettings = async (): Promise<void> => {
         appid: form.value.qqAppId,
         ...(form.value.qqSecret ? { secret: form.value.qqSecret } : {}),
       },
-      ...(form.value.wxCred ? { wx: { cred: form.value.wxCred } } : {}),
       mcp_enabled: form.value.mcpEnabled,
     }
     await request.put('/notification/settings', payload)
     mfaAwareSuccess(t('app.notification.creds.saved'))
-    form.value = { ...form.value, smtpPass: '', qqSecret: '', wxCred: '' }
+    form.value = { ...form.value, smtpPass: '', qqSecret: '' }
     await fetchSettings()
   } catch (error: unknown) {
     console.error('Failed to save notification settings:', error)
@@ -198,6 +275,12 @@ defineExpose({ fetchSettings })
 
 <style scoped>
 .card-header-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+/* 微信扫码登录卡 */
+.wx-login-card { display: flex; flex-direction: column; gap: 12px; }
+.wx-login-state-row { display: flex; align-items: center; gap: 10px; }
+.wx-login-qr-panel { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+.wx-login-qr { width: 180px; height: 180px; border-radius: 8px; border: 1px solid var(--el-border-color); }
+.wx-login-hint { color: var(--text-secondary, #6b7280); font-size: 13px; }
 .creds-divider { margin-top: 8px; }
 .creds-input { max-width: 420px; }
 .creds-port { max-width: 160px; }

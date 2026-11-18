@@ -73,6 +73,8 @@ const ACTION_TONE_EXCEPTIONS: Record<string, AuditActionTone> = {
   '修改': 'warning',
   '测试': 'warning',
   '重发': 'warning',
+  // 通知通道扫码绑定：建立关联（success 语义，无关键词可派生）。
+  '绑定': 'success',
   // MCP 会话强制断开：终止在线 Agent 会话（破坏性动作，与「删除」同族 danger）。
   '断开': 'danger',
   '写入': 'warning',

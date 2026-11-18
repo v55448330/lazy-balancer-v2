@@ -1,80 +1,109 @@
 package handlers
 
-// QQ 扫码绑定闭环：①生成一次性绑定码（10 分钟有效，同用户旧码作废）
-// ②轮询绑定状态（绑定码被 QQ 侧「绑定 XXX」指令消费 → 通道 target 已写入
-// openid = bound）。前端向导展示码+引导扫码发指令，轮询到 bound 即自动
-// 进入下一步（openid 由绑定流程写入，无需手填）。
+// QQ 扫码绑定 REST（官方插件协议：create_bind_task → connect.html 二维码 →
+// poll_bind_result → 凭据下发）。协议实现见 internal/notify/qqbind.go。
+// 状态机：POST 生成二维码（per-user task，内存态；重启作废重新生成）→
+// 前端轮询 GET → completed 时凭据落 notify_settings + openid 绑定通知通道。
 
 import (
-	"crypto/rand"
-	"encoding/json"
-	"math/big"
+	"context"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
 
+	"lazy-balancer-v2/internal/apimsg"
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
+	"lazy-balancer-v2/internal/notify"
 )
 
-// PostQQBindCode 生成绑定码（登录用户；旧码立即作废防堆积）。
+var (
+	qqTaskMu     sync.Mutex
+	qqTaskByUser = map[int64]*notify.BindTask{}
+)
+
+// PostQQBindCode 生成扫码绑定二维码（旧任务作废）。
 func (h *Handlers) PostQQBindCode(c *gin.Context) {
 	uid := contextUserID(c)
-	code := make([]byte, 0, 6)
-	for range 6 {
-		n, err := rand.Int(rand.Reader, big.NewInt(10))
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("生成绑定码失败", err)})
-			return
-		}
-		code = append(code, byte('0'+n.Int64()))
-	}
-	_, _ = db.DB.Exec(`DELETE FROM qq_bind_codes WHERE user_id=?`, uid)
-	expires := time.Now().UTC().Add(10 * time.Minute)
-	if _, err := db.DB.Exec(`INSERT INTO qq_bind_codes (code, user_id, expires_at) VALUES (?,?,?)`,
-		string(code), uid, expires.UTC().Format("2006-01-02 15:04:05")); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("生成绑定码失败", err)})
+	qrContent, task, err := notify.CreateBindTask()
+	if err != nil {
+		c.JSON(http.StatusBadGateway, models.APIResponse{Code: 502, Message: apimsg.Tf(c, "k_413b63ec", err.Error()), MessageKey: msgQQTaskCreateFailed})
 		return
 	}
+	qqTaskMu.Lock()
+	qqTaskByUser[uid] = task
+	qqTaskMu.Unlock()
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{
-		"code":       string(code),
-		"expires_at": expires.UTC().Format(time.RFC3339),
+		"qr_content": qrContent,
+		"expires_in": 600,
 	}})
 }
 
-// GetQQBindCode 轮询绑定状态：该用户 qq 通道存在（绑定指令已消费落 openid）
-// 即 bound=true；否则回最新有效码供继续展示（消费后码已删——bound 不可依赖
-// 码行存在，直接以通道行为准）。
+// GetQQBindCode 轮询绑定状态：completed 时凭据落 notify_settings + openid 绑
+// 定通知通道（投递目标），返回 bound=true。
 func (h *Handlers) GetQQBindCode(c *gin.Context) {
 	uid := contextUserID(c)
-	var openid string
-	var boundErr error
-	if boundErr = db.DB.QueryRow(`SELECT target FROM notification_channels WHERE user_id=? AND type='qq' ORDER BY updated_at DESC LIMIT 1`, uid).Scan(&openid); boundErr == nil {
-		var target struct {
-			OpenID string `json:"openid"`
-		}
-		if json.Unmarshal([]byte(openid), &target) == nil && target.OpenID != "" {
-			c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{
-				"bound":  true,
-				"openid": target.OpenID,
-			}})
+	qqTaskMu.Lock()
+	task := qqTaskByUser[uid]
+	qqTaskMu.Unlock()
+	if task == nil {
+		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"bound": false, "has_task": false}})
+		return
+	}
+	if time.Since(task.CreatedAt) > 10*time.Minute {
+		qqTaskMu.Lock()
+		delete(qqTaskByUser, uid)
+		qqTaskMu.Unlock()
+		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"bound": false, "has_task": false, "expired": true}})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
+	defer cancel()
+	result, err := notify.PollBindResult(ctx, task)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, models.APIResponse{Code: 502, Message: apimsg.Tf(c, "k_27469cbd", err.Error()), MessageKey: msgQQPollFailed})
+		return
+	}
+	if result.Status != notify.BindCompleted {
+		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{
+			"bound": false, "has_task": true, "status": int(result.Status),
+		}})
+		return
+	}
+
+	// completed：凭据落 notify_settings（连接 Daemon 鉴权单源）
+	if err := notify.SaveQQBotCredentials(result.AppID, result.AppSecret); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("凭据落库失败", err)})
+		return
+	}
+	// openid 绑定通知通道（投递目标：QQ 单聊）——先 UPDATE（重绑场景），
+	// 0 行命中再 INSERT（首绑；ON CONFLICT 依赖唯一索引匹配，target JSON
+	// 常量表达式的冲突目标不可靠，故显式两步）。
+	res, err := db.DB.Exec(`UPDATE notification_channels SET target=?, updated_at=datetime('now')
+		WHERE user_id=? AND type='qq'`, `{"openid":"`+result.UserOpenID+`"}`, uid)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("绑定通道回填失败", err)})
+		return
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		if _, err := db.DB.Exec(`INSERT INTO notification_channels (user_id, type, name, target, enabled, created_at, updated_at)
+			VALUES (?, 'qq', 'QQ 机器人', ?, 1, datetime('now'), datetime('now'))`,
+			uid, `{"openid":"`+result.UserOpenID+`"}`); err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("绑定通道创建失败", err)})
 			return
 		}
 	}
-	var code string
-	var generatedAt time.Time
-	err := db.DB.QueryRow(`SELECT code, expires_at FROM qq_bind_codes WHERE user_id=? ORDER BY expires_at DESC LIMIT 1`, uid).
-		Scan(&code, &generatedAt)
-	if err != nil {
-		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"bound": false, "has_code": false}})
-		return
-	}
+	qqTaskMu.Lock()
+	delete(qqTaskByUser, uid)
+	qqTaskMu.Unlock()
+
+	recordAudit(c, "绑定", "QQ 机器人", "扫码绑定成功（AppID "+result.AppID+"，openid "+result.UserOpenID+"）")
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{
-		"has_code":     true,
-		"code":         code,
-		"expires_at":   generatedAt.UTC().Format(time.RFC3339),
-		"bound":        false,
-		"openid":       "",
+		"bound":  true,
+		"appid":  result.AppID,
+		"openid": result.UserOpenID,
 	}})
 }

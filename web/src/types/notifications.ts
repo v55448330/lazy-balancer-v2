@@ -110,9 +110,6 @@ export interface NotificationSettingsPayload {
     appid?: string
     secret?: string
   }
-  wx?: {
-    cred?: string
-  }
   mcp_enabled?: boolean
 }
 

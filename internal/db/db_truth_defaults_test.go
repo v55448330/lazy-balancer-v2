@@ -803,6 +803,7 @@ var freshOriginalColumns = map[string][]string{
 	"nodes":                      {"id", "name", "mode", "ip_address", "port", "is_approved", "sync_interval", "status", "last_seen", "created_at"},
 	"notification_channels":      {"id", "user_id", "type", "name", "target", "enabled", "last_test_at", "last_test_ok", "created_at", "updated_at"},
 	"notification_deliveries":    {"id", "user_id", "event_type", "level", "title", "body", "status", "attempts", "error", "created_at", "sent_at"},
+	"notification_daily":         {"user_id", "config", "updated_at"},
 	"notification_subscriptions": {"user_id", "event_type", "min_level"},
 	"notify_settings":            {"key", "value"},
 	"path_rules":                 {"id", "rule_id", "sort_order", "match_type", "path", "upstreams_json", "created_at", "updated_at"},

@@ -143,19 +143,20 @@
             :placeholder="t('app.notification.channels.targetWxPlaceholder')"
           />
         </el-form-item>
-        <!-- QQ 扫码绑定闭环：生成绑定码 → 扫码加好友 → 发「绑定 码」→ 轮询回填 openid -->
+        <!-- QQ 扫码绑定闭环（官方插件协议）：生成二维码 → 手机 QQ 扫码授权 →
+             轮询凭据自动落（openid 绑定通道，appid/secret 落 notify_settings） -->
         <template v-if="wizardForm.type === 'qq'">
           <div class="info-note-bar"><span class="info-note-desc">{{ targetHint('qq') }}</span></div>
-          <div v-if="!qqBind.code && !qqBind.bound" class="qq-bind-actions">
+          <div v-if="!qqBind.qrUrl && !qqBind.bound" class="qq-bind-actions">
             <el-button type="primary" :loading="qqBind.loading" @click="generateQQBindCode">
               {{ t('app.notification.channels.qqBindGenerate') }}
             </el-button>
           </div>
-          <div v-else-if="qqBind.code && !qqBind.bound" class="qq-bind-panel">
-            <div class="qq-bind-code"><code>{{ qqBind.code }}</code></div>
+          <div v-else-if="qqBind.qrUrl && !qqBind.bound" class="qq-bind-panel">
+            <img v-if="qqBind.qrImg" class="qq-bind-qr" :src="qqBind.qrImg" :alt="t('app.notification.channels.qqBindQrAlt')" />
             <div class="qq-bind-steps">
               <div>1. {{ t('app.notification.channels.qqBindStepScan') }}</div>
-              <div>2. {{ t('app.notification.channels.qqBindStepSend', { code: qqBind.code }) }}</div>
+              <div>2. {{ t('app.notification.channels.qqBindStepConfirm') }}</div>
               <div>3. {{ t('app.notification.channels.qqBindStepWait') }}</div>
             </div>
             <el-button size="small" @click="generateQQBindCode">{{ t('app.notification.channels.qqBindRegenerate') }}</el-button>
@@ -230,6 +231,7 @@ import { useI18n } from 'vue-i18n'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ChatDotRound, ChatLineRound, Link, Message, Plus, Setting } from '@element-plus/icons-vue'
 import DialogHeader from '@/components/DialogHeader.vue'
+import QRCode from 'qrcode'
 import { request, mfaAwareSuccess } from '@/utils/api'
 import { useAuthStore } from '@/stores/auth'
 import type {
@@ -367,22 +369,27 @@ const resetWizard = (): void => {
     window.clearInterval(qqBind.value.timer)
     qqBind.value.timer = null
   }
-  qqBind.value = { code: '', openid: '', bound: false, loading: false, timer: null }
+  qqBind.value = { qrUrl: '', qrImg: '', openid: '', bound: false, loading: false, timer: null }
 }
 
 const closeWizard = (): void => { wizardVisible.value = false }
 
-// QQ 扫码绑定状态（向导内闭环：生成码→扫码发指令→轮询回填 openid）
-const qqBind = ref<{ code: string; openid: string; bound: boolean; loading: boolean; timer: number | null }>({
-  code: '', openid: '', bound: false, loading: false, timer: null,
+// QQ 扫码绑定状态（官方插件协议：POST 生成 connect.html 二维码 →
+// 手机 QQ 扫码授权 → GET 轮询 bound + 凭据自动落库回填 openid）
+const qqBind = ref<{ qrUrl: string; qrImg: string; openid: string; bound: boolean; loading: boolean; timer: number | null }>({
+  qrUrl: '', qrImg: '', openid: '', bound: false, loading: false, timer: null,
 })
 
 const generateQQBindCode = async (): Promise<void> => {
   if (qqBind.value.loading) return
   qqBind.value.loading = true
   try {
-    const res = await request.post<NotificationCreateChannelResponse & { data: { code: string } }>('/notification/qq/bind-code', {})
-    qqBind.value.code = res.data?.code ?? ''
+    const res = await request.post<NotificationCreateChannelResponse & { data: { qr_content: string } }>('/notification/qq/bind-code', {})
+    const qrUrl = res.data?.qr_content ?? ''
+    qqBind.value.qrUrl = qrUrl
+    qqBind.value.qrImg = qrUrl
+      ? await QRCode.toDataURL(qrUrl, { width: 200, margin: 1 })
+      : ''
     startQQBindPolling()
   } finally {
     qqBind.value.loading = false
@@ -393,7 +400,7 @@ const startQQBindPolling = (): void => {
   if (qqBind.value.timer !== null) return
   const timer = window.setInterval(async () => {
     try {
-      const res = await request.get<NotificationCreateChannelResponse & { data: { bound: boolean; openid: string; has_code: boolean } }>('/notification/qq/bind-code')
+      const res = await request.get<NotificationCreateChannelResponse & { data: { bound: boolean; openid: string; appid: string } }>('/notification/qq/bind-code')
       const data = res.data
       if (data?.bound) {
         qqBind.value.bound = true
@@ -405,7 +412,7 @@ const startQQBindPolling = (): void => {
         }
       }
     } catch {
-      // 轮询失败保持等待；超时（10 分钟）由 expires_at 提示重新生成
+      // 轮询失败保持等待；过期（服务端 bindExpired）时用户点「重新生成」
     }
   }, 3000)
   qqBind.value.timer = timer
@@ -538,6 +545,11 @@ defineExpose({ fetchChannels })
 
 <style scoped>
 .card-header-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+/* QQ 扫码绑定面板 */
+.qq-bind-panel { display: flex; flex-direction: column; align-items: center; gap: 10px; }
+.qq-bind-qr { width: 200px; height: 200px; border-radius: 8px; border: 1px solid var(--el-border-color); }
+.qq-bind-steps { color: var(--text-secondary, #6b7280); font-size: 13px; line-height: 1.9; text-align: left; }
+.qq-bind-openid { word-break: break-all; }
 .channel-col { margin-bottom: 16px; }
 .channel-disabled { opacity: 0.72; }
 .channel-title-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }

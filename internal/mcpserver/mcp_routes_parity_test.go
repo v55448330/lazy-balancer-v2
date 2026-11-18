@@ -174,6 +174,14 @@ var mcpUncoveredRoutes = map[string]string{
 	"POST /api/v1/notification/channels/:id/test":     "通道测试发送：属主/管理员自助验证动作（真实外发一条测试消息，Agent 不管理通道）",
 	"GET /api/v1/notification/settings":               "管理员凭据/开关/阈值读取（secret 只回「已配置」布尔，Web 控制台低频管理操作）",
 	"PUT /api/v1/notification/settings":               "管理员凭据/开关/阈值写入（部分更新，Web 控制台低频管理操作）",
+	"GET /api/v1/notification/daily":                  "JWT 会话专属：当前用户日报配置读取（自助 UI，MCP 不承载）",
+	"PUT /api/v1/notification/daily":                  "JWT 会话专属：当前用户日报配置保存（自助 UI，MCP 不承载）",
+	"POST /api/v1/notification/daily/preview":         "日报预览：按请求配置渲染昨日真实数据不落库（Web 控制台预览语义）",
+	"POST /api/v1/notification/daily/trigger":         "手动触发全员日报：管理员即时投递动作（与 Scheduled 任务体同源，Web 控制台低频操作）",
+	"POST /api/v1/notification/qq/bind-code":          "QQ 扫码绑定产码：手机 QQ 扫码授权闭环的浏览器侧行为（Agent 无扫码场景）",
+	"GET /api/v1/notification/qq/bind-code":           "QQ 扫码绑定轮询：绑定完成时凭据落库+openid 通道绑定（浏览器侧轮询）",
+	"POST /api/v1/notification/wx/qr/start":           "微信 iLink 扫码登录产码：手机微信扫码确认闭环（Agent 无扫码场景）",
+	"GET /api/v1/notification/wx/qr/status":           "微信扫码登录状态轮询：confirmed 即凭据落库启用收发（浏览器侧轮询）",
 	"POST /api/v1/notification/daily-report/trigger":  "管理员手动触发每日日报（每日 09:00 定时任务已承载常规触发；Agent 无消费场景）",
 }
 
