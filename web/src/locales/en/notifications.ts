@@ -70,6 +70,7 @@ export default {
       needChannelFirst: "Create a channel first",
       addChannel: "Add Channel",
       manageChannels: "Manage Channels",
+      smtpSettings: "Email service settings",
       recentDeliveries: "Recent Deliveries",
       prev: "Previous",
       next: "Next",

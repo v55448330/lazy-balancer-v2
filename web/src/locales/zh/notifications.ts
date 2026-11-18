@@ -72,6 +72,7 @@ export default {
       needChannelFirst: "请先创建通知通道",
       addChannel: "添加通道",
       manageChannels: "管理通道",
+      smtpSettings: "邮件服务设置",
       recentDeliveries: "最近投递",
       prev: "上一步",
       next: "下一步",

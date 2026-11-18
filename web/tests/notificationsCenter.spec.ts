@@ -46,7 +46,7 @@ test('通知页规则模式投影：规则列表+向导+最近投递', () => {
   const text = code('src/views/notifications/NotificationCenter.vue')
   // 规则 API 消费
   assert.match(text, /request\.get<[^>]*>\('\/notification\/rules'\)/, '必须消费规则聚合端点')
-  assert.match(text, /request\.put\(`\/notification\/rules\/\$\{[^}]*\}`/, '必须支持规则更新')
+  assert.match(text, /request\.post\(`\/notification\/rules\/\$\{[^}]*\}`/, '必须支持规则更新')
   // 规则卡片（非 tabs/table）
   assert.match(text, /class="rule-card"/, '规则卡片形态必须在位')
   assert.doesNotMatch(text, /<el-tabs|el-tab-pane/, '通知中心不得回潮 tabs')
