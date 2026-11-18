@@ -34,17 +34,8 @@
             </el-checkbox-group>
           </el-form-item>
           <el-form-item :label="t('app.notification.daily.format')">
-            <div class="daily-format-rows">
-              <div v-for="ch in formatRows" :key="ch.key" class="daily-format-row">
-                <span class="daily-format-channel">{{ ch.label }}</span>
-                <el-select v-model="form.formats[ch.key]" class="daily-format" clearable
-                  placeholder="Auto" @clear="delete form.formats[ch.key]">
-                  <el-option v-for="f in FORMAT_OPTIONS" :key="f.value" :value="f.value" :label="f.label" />
-                </el-select>
-              </div>
-            </div>
-            <div class="daily-format-note">{{ t('app.notification.daily.formatChannelMap') }}</div>
-          </el-form-item>
+        <span class="switch-hint">{{ t('app.notification.daily.formatNowInChannel') }}</span>
+      </el-form-item>
           <el-form-item>
             <el-button type="primary" :loading="saving" :disabled="!canSave" @click="saveDaily">
               {{ t('app.notification.daily.save') }}
@@ -139,13 +130,6 @@ const form = ref<{ enabled: boolean; sendTime: string; items: string[]; formats:
   formats: {},
 })
 
-// 每通道格式行（键与后端 DailyFormatChannels 白名单一致）
-const formatRows = [
-  { key: 'webhook', label: 'Webhook' },
-  { key: 'email', label: t('app.notification.daily.channel_email') },
-  { key: 'qq', label: 'QQ' },
-  { key: 'wx_clawbot', label: t('app.notification.daily.channel_wx_clawbot') },
-]
 
 const canSave = computed(() => /^([01]\d|2[0-3]):[0-5]\d$/.test(form.value.sendTime) && form.value.items.length > 0)
 

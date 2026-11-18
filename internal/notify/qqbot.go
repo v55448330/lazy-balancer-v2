@@ -49,13 +49,15 @@ type qqSender struct{}
 
 func (qqSender) Send(ctx context.Context, targetJSON string, msg Message) error {
 	var styled struct {
-		MsgType string `json:"msg_type"`
+		MsgType         string `json:"msg_type"`
+		ContentTemplate string `json:"content_template"`
 	}
 	_ = json.Unmarshal([]byte(targetJSON), &styled) // 样式键缺失/坏 JSON=文本默认
+	text := formatBotTextWithTemplate(styled.ContentTemplate, msg, time.Now())
 	if styled.MsgType == "markdown" {
-		return SendQQC2CMarkdown(ctx, targetJSON, formatBotText(msg))
+		return SendQQC2CMarkdown(ctx, targetJSON, text)
 	}
-	return SendQQC2C(ctx, targetJSON, formatBotText(msg))
+	return SendQQC2C(ctx, targetJSON, text)
 }
 
 // Test 连接离线时返回明确错误（面板「测试」按钮的语义：连接不在位即不可发）。

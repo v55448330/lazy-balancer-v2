@@ -41,7 +41,7 @@
       <el-table-column v-if="isAdmin && allScope" :label="t('app.notification.deliveries.colUser')" width="90" align="center">
         <template #default="scope">#{{ scope.row.user_id }}</template>
       </el-table-column>
-      <el-table-column prop="event_type" label="Event" min-width="170" show-overflow-tooltip />
+      <el-table-column prop="event_type" :label="t('app.notification.deliveries.colEventType')" min-width="170" show-overflow-tooltip />
       <el-table-column :label="t('app.notification.deliveries.colEvent')" min-width="200" show-overflow-tooltip>
         <template #default="scope">{{ scope.row.title || scope.row.event_type }}</template>
       </el-table-column>
@@ -57,7 +57,7 @@
           <el-tag :type="statusTagType(scope.row.status)" size="small">{{ statusLabel(scope.row.status) }}</el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="#" width="70" align="center">
+      <el-table-column :label="t('app.notification.deliveries.colAttempts')" width="70" align="center">
         <template #default="scope">{{ scope.row.attempts }}</template>
       </el-table-column>
       <el-table-column :label="t('app.notification.deliveries.colError')" min-width="200" show-overflow-tooltip>

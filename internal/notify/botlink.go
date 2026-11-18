@@ -99,3 +99,23 @@ func formatBotText(msg Message) string {
 	}
 	return msg.Title + "\n" + msg.Body
 }
+
+// formatBotTextWithTemplate 通道内容模板渲染（style_config.content_template；
+// 占位符 {{title}}/{{body}}/{{level}}/{{event}}/{{time}}，缺省回退 formatBotText）。
+func formatBotTextWithTemplate(tpl string, msg Message, ts time.Time) string {
+	if strings.TrimSpace(tpl) == "" {
+		return formatBotText(msg)
+	}
+	event := msg.EventType
+	if event == "" {
+		event = "notification"
+	}
+	r := strings.NewReplacer(
+		"{{title}}", msg.Title,
+		"{{body}}", msg.Body,
+		"{{level}}", msg.Level,
+		"{{event}}", event,
+		"{{time}}", ts.Format("2006-01-02 15:04"),
+	)
+	return r.Replace(tpl)
+}

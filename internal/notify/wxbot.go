@@ -162,7 +162,11 @@ func applyWxHeaders(req *http.Request, token string) {
 type wxSender struct{}
 
 func (wxSender) Send(ctx context.Context, targetJSON string, msg Message) error {
-	return SendWxText(ctx, targetJSON, formatBotText(msg))
+	var styled struct {
+		ContentTemplate string `json:"content_template"`
+	}
+	_ = json.Unmarshal([]byte(targetJSON), &styled)
+	return SendWxText(ctx, targetJSON, formatBotTextWithTemplate(styled.ContentTemplate, msg, time.Now()))
 }
 
 // Test 连接离线时返回明确错误；在线则发测试文本。

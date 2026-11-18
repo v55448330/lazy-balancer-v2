@@ -333,7 +333,8 @@ func (h *Handlers) TestNotificationChannel(c *gin.Context) {
 
 // validateChannelStyle 通道消息样式校验+归一（返回规范化 JSON）：
 //
-//	键白名单 payload_template/subject_template/msg_type/daily_format/body_format
+//	键白名单 payload_template/subject_template/body_template/content_template/
+//	msg_type/daily_format/body_format
 //	webhook.payload_template：{{占位符}}替换后必须可解析 JSON
 //	qq.msg_type ∈ text/markdown；*.daily_format ∈ 格式白名单；email 键值白名单
 func validateChannelStyle(typ string, raw json.RawMessage) (string, error) {
@@ -373,6 +374,14 @@ func validateChannelStyle(typ string, raw json.RawMessage) (string, error) {
 			}
 			if len(sv) > 4000 {
 				return "", errors.New("body_template 过长（≤4000）")
+			}
+			out[k] = sv
+		case "content_template":
+			if typ != "qq" && typ != "wx_clawbot" {
+				return "", errors.New("content_template 仅 QQ/微信通道支持")
+			}
+			if len(sv) > 2000 {
+				return "", errors.New("content_template 过长（≤2000）")
 			}
 			out[k] = sv
 		case "body_format":

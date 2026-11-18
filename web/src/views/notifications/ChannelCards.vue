@@ -1,13 +1,6 @@
 <template>
   <div class="page">
     <div class="page-header">
-      <div class="header-left">
-        <h2 class="page-title">
-          <el-icon class="title-icon"><Bell /></el-icon>
-          {{ t('app.notification.tabs.channels') }}
-        </h2>
-        <p class="page-desc">{{ t('app.notification.channels.listDesc') }}</p>
-      </div>
       <div class="header-actions">
         <el-tooltip :disabled="!writeBlocked" :content="writeBlockedReason" placement="top">
           <div>
@@ -175,7 +168,12 @@
                 <img class="bind-qr" :src="wxLogin.qrImg" :alt="t('app.notification.creds.wxQrAlt')" />
                 <span class="bind-stage-sub">{{ t('app.notification.channels.wxBindConfirm') }}</span>
                 <el-button v-if="wxLogin.expired" size="small" @click="startWxLoginInWizard">{{ t('app.notification.creds.wxQrRefresh') }}</el-button>
-              </template>
+                <el-form-item :label="t('app.notification.channels.styleContentTpl')" class="wx-tpl-item">
+                <el-input v-model="drawerForm.style.content_template" type="textarea" :rows="4" class="mono-input"
+                  :placeholder="t('app.notification.channels.styleContentPlaceholder')" @focus="activeStyleField = 'content_template'" />
+                <div class="info-note-bar"><span class="info-note-desc">{{ t('app.notification.channels.styleContentHint') }}</span></div>
+              </el-form-item>
+            </template>
             </template>
           </div>
         </template>
@@ -224,6 +222,11 @@
               </el-radio-group>
               <div class="info-note-bar"><span class="info-note-desc">{{ t('app.notification.channels.styleMsgMdHint') }}</span></div>
             </el-form-item>
+            <el-form-item :label="t('app.notification.channels.styleContentTpl')">
+              <el-input v-model="drawerForm.style.content_template" type="textarea" :rows="4" class="mono-input"
+                :placeholder="t('app.notification.channels.styleContentPlaceholder')" @focus="activeStyleField = 'content_template'" />
+              <div class="info-note-bar"><span class="info-note-desc">{{ t('app.notification.channels.styleContentHint') }}</span></div>
+            </el-form-item>
           </template>
           <el-form-item :label="t('app.notification.channels.styleDailyFormat')">
             <el-select v-model="drawerForm.style.daily_format" class="style-select" clearable placeholder="Auto">
@@ -255,7 +258,7 @@
 import { computed, ref, watch, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Bell, ChatDotRound, ChatLineRound, Link, Message } from '@element-plus/icons-vue'
+import { ChatDotRound, ChatLineRound, Link, Message } from '@element-plus/icons-vue'
 import QRCode from 'qrcode'
 import { request, mfaAwareSuccess } from '@/utils/api'
 import { useAuthStore } from '@/stores/auth'
@@ -391,13 +394,13 @@ const drawerVisible = ref(false)
 const drawerMode = ref<'create' | 'edit'>('create')
 const drawerTarget = ref<NotificationChannel | null>(null)
 const submitting = ref(false)
-const emptyStyle = (): Record<string, string> => ({ payload_template: '', subject_template: '', body_template: '', body_format: 'text', msg_type: 'text', daily_format: '' })
+const emptyStyle = (): Record<string, string> => ({ payload_template: '', subject_template: '', body_template: '', content_template: '', body_format: 'text', msg_type: 'text', daily_format: '' })
 const drawerForm = ref<{ mode: string; id: number | null; type: NotificationChannelType; name: string; targetValue: string; enabled: boolean; style: Record<string, string> }>({
   mode: 'create', id: null, type: 'webhook', name: '', targetValue: '', enabled: true, style: emptyStyle(),
 })
-const activeStyleField = ref<'payload_template' | 'subject_template' | 'body_template'>('payload_template')
+const activeStyleField = ref<'payload_template' | 'subject_template' | 'body_template' | 'content_template'>('payload_template')
 
-const insertPlaceholder = (field: 'payload_template' | 'subject_template' | 'body_template', ph: string): void => {
+const insertPlaceholder = (field: 'payload_template' | 'subject_template' | 'body_template' | 'content_template', ph: string): void => {
   const cur = drawerForm.value.style[field] ?? ''
   drawerForm.value.style[field] = cur.endsWith(' ') || cur === '' ? cur + ph : `${cur} ${ph}`
 }
