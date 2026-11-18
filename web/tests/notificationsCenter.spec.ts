@@ -42,20 +42,17 @@ test('侧栏接线：通知中心菜单项紧跟 API 密钥之后（铃铛图标
   assert.match(navItems, /navNotifications/, '侧栏文案必须走 navNotifications 词条')
 })
 
-test('通知页规则模式投影：规则列表+向导+最近投递', () => {
+test('通知页配置面板投影：触发条件+通道+SMTP+投递', () => {
   const text = code('src/views/notifications/NotificationCenter.vue')
-  // 规则 API 消费
-  assert.match(text, /request\.get<[^>]*>\('\/notification\/rules'\)/, '必须消费规则聚合端点')
-  assert.match(text, /request\.post\(`\/notification\/rules\/\$\{[^}]*\}`/, '必须支持规则更新')
-  // 规则卡片（非 tabs/table）
-  assert.match(text, /rule-el-card/, '规则卡片形态必须在位')
-  assert.doesNotMatch(text, /<el-tabs|el-tab-pane/, '通知中心不得回潮 tabs')
-  // 向导（三步）
-  assert.match(text, /wizardStep/, '添加规则向导必须在位')
-  assert.match(text, /el-steps/, '向导步骤条必须在位')
-  // 最近投递
-  assert.match(text, /DeliveryLog/, '最近投遗摘要必须在位')
+  assert.match(text, /request\.get<[^>]*>\('\/notification\/rules'\)/, '必须消费规则端点')
+  assert.match(text, /trigger-grid/, '触发条件网格必须在位')
+  assert.match(text, /channel-grid/, '通道网格必须在位')
+  assert.match(text, /DialogHeader/, '模板编辑弹窗必须用 DialogHeader')
+  assert.match(text, /DeliveryLog/, '投递记录必须在位')
+  assert.match(text, /SystemCredentials/, 'SMTP 设置必须在位')
+  assert.match(text, /ChannelCards/, '通道管理必须在位')
 })
+
 
 
 test('通道卡 REST 契约：卡片网格+测试/启停/删除', () => {

@@ -29,6 +29,9 @@
       </template>
     </el-alert>
 
+    <AccessStatsCards :api-key-stats="apiKeyStats" :mcp-stats="mcpStats" :rest-stats="restOverview" class="keys-mcp-block" />
+
+    <el-divider content-position="left" class="section-divider">{{ t('common.app.views.keys.pageTitle') }}</el-divider>
     <el-table
       v-loading="loading"
       :data="tableKeys"
@@ -110,7 +113,6 @@
       <el-empty :description="t('common.app.views.keys.emptyText')" :image-size="80" />
     </el-card>
     <!-- 分区②：接入统计（健康度总览：REST/MCP 双列同构指标） -->
-    <AccessStatsCards :api-key-stats="apiKeyStats" :mcp-stats="mcpStats" :rest-stats="restOverview" class="keys-mcp-block" />
 
     <el-divider content-position="left" class="section-divider">{{ t('app.notification.keysAccess.accessMethodTitle') }}</el-divider>
     <el-row :gutter="16" class="keys-mcp-block">
