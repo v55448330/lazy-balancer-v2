@@ -1,24 +1,34 @@
 <template>
   <div>
-    <!-- 工具栏 -->
-    <div class="ch-toolbar">
-      <el-select v-if="isAdminUser" v-model="filterUserId" size="small" clearable :placeholder="t('app.notification.channels.allUsers')" style="width:140px" @change="fetchChannels">
-        <el-option v-for="u in userList" :key="u.id" :value="u.id" :label="u.username" />
-      </el-select>
-      <el-radio-group v-model="filterType" size="small">
-        <el-radio-button value="">{{ t('app.notification.channels.filterAll') }}</el-radio-button>
-        <el-radio-button v-for="typ in CHANNEL_TYPES" :key="typ" :value="typ">{{ typeLabel(typ) }}</el-radio-button>
-      </el-radio-group>
-      <span class="toolbar-spacer" />
-      <el-tooltip :disabled="!writeBlocked" :content="writeBlockedReason">
-        <div>
-          <el-button type="primary" :disabled="writeBlocked || drawerVisible" @click="openCreate">
-            <el-icon><Plus /></el-icon>
-            {{ t('app.notification.channels.add') }}
-          </el-button>
+    <!-- 通道管理：工具栏入卡头（全站 list-card 规范），类型筛选置卡体首行 -->
+    <el-card class="list-card">
+      <template #header>
+        <div class="card-header">
+          <div class="card-title">
+            <el-icon class="title-icon"><ChatDotRound /></el-icon>
+            <span>{{ t('app.notification.rules.channelsTab') }}</span>
+          </div>
+          <div class="card-header-actions">
+            <el-select v-if="isAdminUser" v-model="filterUserId" size="small" clearable :placeholder="t('app.notification.channels.allUsers')" style="width:140px" @change="fetchChannels">
+              <el-option v-for="u in userList" :key="u.id" :value="u.id" :label="u.username" />
+            </el-select>
+            <el-tooltip :disabled="!writeBlocked" :content="writeBlockedReason">
+              <div>
+                <el-button type="primary" :disabled="writeBlocked || drawerVisible" @click="openCreate">
+                  <el-icon><Plus /></el-icon>
+                  {{ t('app.notification.channels.add') }}
+                </el-button>
+              </div>
+            </el-tooltip>
+          </div>
         </div>
-      </el-tooltip>
-    </div>
+      </template>
+      <div class="ch-filter-row">
+        <el-radio-group v-model="filterType" size="small">
+          <el-radio-button value="">{{ t('app.notification.channels.filterAll') }}</el-radio-button>
+          <el-radio-button v-for="typ in CHANNEL_TYPES" :key="typ" :value="typ">{{ typeLabel(typ) }}</el-radio-button>
+        </el-radio-group>
+      </div>
 
     <!-- 通道卡片网格（Dashboard 同构：彩色图标+状态+内联操作） -->
     <el-row v-loading="loading" :gutter="16">
@@ -68,6 +78,7 @@
     </el-alert>
     <el-empty v-if="!loading && filteredChannels.length === 0 && !loadError"
       :description="t('app.notification.channels.emptyText')" :image-size="80" />
+    </el-card>
 
     <!-- 编辑弹窗（DialogHeader 规范 + 消息样式编辑） -->
     <el-dialog v-model="drawerVisible" class="dialog-body-inset" width="min(600px, 94vw)" top="6vh"
@@ -106,8 +117,8 @@
       <!-- 传输配置（编辑既有通道时）：请求方式/请求头/消息类型/日报格式。
            消息正文模板已归通知规则（每通道模板），此处不再编辑模板。 -->
       <template v-if="editTarget">
-        <el-divider />
-        <div class="style-section-title">{{ t('app.notification.channels.transportSection') }}</div>
+        <el-collapse v-model="transportExpanded" class="transport-collapse">
+          <el-collapse-item :title="t('app.notification.channels.transportSection')" name="transport">
         <el-form :label-width="$flw('110px')" :disabled="saving">
           <template v-if="drawerForm.type === 'webhook'">
             <el-form-item :label="t('app.notification.channels.styleMethod')">
@@ -160,6 +171,8 @@
           </el-form-item>
           <div class="info-note-bar"><span class="info-note-desc">{{ t('app.notification.channels.tplMovedHint') }}</span></div>
         </el-form>
+          </el-collapse-item>
+        </el-collapse>
       </template>
       <template #footer>
         <el-button @click="drawerVisible = false">{{ t('app.notification.channels.cancel') }}</el-button>
@@ -194,6 +207,7 @@ const isAdminUser = computed(() => authStore.user?.role === 'admin')
 const testingId = ref<number | null>(null)
 const deletingIds = ref(new Set<number>())
 const drawerVisible = ref(false)
+const transportExpanded = ref<string[]>([]) // 传输配置高级区默认折叠
 const editTarget = ref<NotificationChannel | null>(null)
 let fetchSeq = 0
 
@@ -337,8 +351,18 @@ const saveDrawer = async (): Promise<void> => {
       })
       mfaAwareSuccess(t('app.notification.channels.updateSuccess'))
     } else {
-      const res = await request.post<{ data?: { reused?: boolean } }>('/notification/channels', { type: drawerForm.value.type, name: drawerForm.value.name.trim(), target })
+      const res = await request.post<{ data?: { id?: number; reused?: boolean } }>('/notification/channels', { type: drawerForm.value.type, name: drawerForm.value.name.trim(), target })
       mfaAwareSuccess(res.data?.reused ? t('app.notification.channels.reusedHint') : t('app.notification.channels.createSuccess'))
+      const newId = res.data?.id
+      const reused = res.data?.reused === true
+      drawerVisible.value = false
+      await fetchChannels()
+      // 新建保存即自动测试：立即验证可达性并刷新测试态（复用既有通道不重复测试）
+      if (newId && !reused) {
+        const created = channels.value.find(c => c.id === newId)
+        if (created) await testChannel(created)
+      }
+      return
     }
     drawerVisible.value = false
     await fetchChannels()
@@ -469,8 +493,13 @@ defineExpose({ fetchChannels })
 
 <style scoped>
 .el-card { --el-card-border-color: #ebeef5; }
-.ch-toolbar { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
-.toolbar-spacer { flex: 1; }
+.card-header { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; row-gap: 8px; }
+.card-header-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.card-title { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; color: #111827; }
+.title-icon { font-size: 16px; color: #3b82f6; }
+.ch-filter-row { margin-bottom: 16px; }
+.transport-collapse { margin-top: 8px; border-top: none; }
+.transport-collapse :deep(.el-collapse-item__header) { font-size: 13px; font-weight: 600; color: #374151; }
 .ch-col { margin-bottom: 16px; }
 
 /* 通道卡片（Dashboard 同构视觉） */

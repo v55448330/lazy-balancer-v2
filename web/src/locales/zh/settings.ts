@@ -671,6 +671,8 @@ export default {
           "daysUnit": "天",
           "rowCap": "行数上限",
           "secEventCleanupHint": "安全事件日志每日清理：超出保留天数或行数上限时按最旧优先删除（行数上限在两次清理之间可能短暂超出）。默认 90 天 / 1,000,000 行；高攻击流量部署可按需上调。",
+          "notifyRetention": "通知投递保留",
+          "notifyRetentionHint": "通知投递记录每日清理：超出保留天数时按最旧优先删除。默认 30 天；可按需上调（上限 3650 天）。",
           "loginExpiry": "登录过期",
           "loginExpiryHint": "分钟，登录令牌有效期"
         },

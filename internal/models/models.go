@@ -338,6 +338,9 @@ type GlobalConfig struct {
 	// 属 legacy 形态，由启动迁移一次性归一。渲染/查询直读库值。
 	SecurityEventsRetentionDays int `json:"security_events_retention_days"`
 	SecurityEventsRowCap        int `json:"security_events_row_cap"`
+	// NotificationDeliveryRetentionDays 通知投递记录保留天数（基础设置可配，
+	// 默认 30，上限 3650）：notification-delivery-retention 任务按此滚动清理。
+	NotificationDeliveryRetentionDays int `json:"notification_delivery_retention_days"`
 	// v2.1.8 MFA 全局开关（响应面）
 	MFAWriteGuard     bool `json:"mfa_write_guard"`
 	MFALockoutEnabled bool `json:"mfa_lockout_enabled"`
@@ -741,6 +744,8 @@ type UpdateConfigRequest struct {
 	// 1-1 亿（0=自动的旧语义已废除，0/NULL 仅作 legacy 库值由启动迁移归一）。
 	SecurityEventsRetentionDays *int `json:"security_events_retention_days"`
 	SecurityEventsRowCap        *int `json:"security_events_row_cap"`
+	// NotificationDeliveryRetentionDays 通知投递保留天数：nil=保持现值；1-3650。
+	NotificationDeliveryRetentionDays *int `json:"notification_delivery_retention_days"`
 	// v2.1.8 MFA 全局开关（基础设置卡片，决策6）：默认均关。
 	MFAWriteGuard     *bool `json:"mfa_write_guard"`
 	MFALockoutEnabled *bool `json:"mfa_lockout_enabled"`

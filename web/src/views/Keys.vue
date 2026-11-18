@@ -138,9 +138,9 @@
       class="keys-table"
       :empty-text="t('common.app.views.keys.emptyText')"
     >
-      <el-table-column :label="t('common.app.views.keys.name')" min-width="140">
+      <el-table-column :label="t('common.app.views.keys.name')" min-width="160">
         <template #default="scope">
-          <span class="key-name-cell">{{ scope.row.name }}</span>
+          <el-button link type="primary" class="key-name-cell" @click="openKeyDetail(asKey(scope.row))">{{ scope.row.name }}</el-button>
           <el-tag v-if="isAdmin && !keysMineOnly && scope.row.created_by !== authStore.user?.id" size="small" effect="plain" class="ml4">{{ scope.row.username }}</el-tag>
         </template>
       </el-table-column>
@@ -151,9 +151,6 @@
             {{ scope.row.is_enabled ? t('common.app.views.keys.enabledTag') : t('common.app.views.keys.disabledTag') }}
           </el-tag>
         </template>
-      </el-table-column>
-      <el-table-column :label="t('common.app.views.keys.keyPrefix')" min-width="170">
-        <template #default="scope"><code>{{ scope.row.key_prefix || '-' }}</code></template>
       </el-table-column>
       <el-table-column :label="t('common.app.views.keys.features')" min-width="200">
         <template #default="scope">
@@ -176,19 +173,19 @@
           </div>
         </template>
       </el-table-column>
-      <el-table-column :label="t('common.app.views.keys.createdAt')" width="110">
-        <template #default="scope">{{ formatDateShort(scope.row.created_at) || '-' }}</template>
+      <el-table-column :label="t('common.app.views.keys.createdAt')" width="170">
+        <template #default="scope">{{ formatDate(scope.row.created_at) || '-' }}</template>
       </el-table-column>
-      <el-table-column :label="t('common.app.views.keys.updatedAt')" width="150">
+      <el-table-column :label="t('common.app.views.keys.updatedAt')" width="170">
         <template #default="scope">
-          {{ formatDateShort(scope.row.updated_at) || '-' }}
+          {{ formatDate(scope.row.updated_at) || '-' }}
           <span v-if="scope.row.updated_by_username" class="ev-more">· {{ scope.row.updated_by_username }}</span>
         </template>
       </el-table-column>
-      <el-table-column :label="t('common.app.views.keys.lastUsed')" width="140">
+      <el-table-column :label="t('common.app.views.keys.lastUsed')" width="170">
         <template #default="scope">{{ formatDate(scope.row.last_used) || t('common.app.views.keys.neverUsed') }}</template>
       </el-table-column>
-      <el-table-column :label="t('common.app.views.keys.expiresAt')" width="110">
+      <el-table-column :label="t('common.app.views.keys.expiresAt')" width="170">
         <template #default="scope">{{ formatDate(scope.row.expires_at) || t('common.app.views.keys.neverExpires') }}</template>
       </el-table-column>
       <el-table-column :label="t('app.notification.deliveries.colAction')" width="170" align="right" fixed="right">
@@ -482,6 +479,39 @@
       </template>
     </el-dialog>
 
+    <!-- 密钥详情弹窗：名称点击触发，只读全量信息（前缀/属主/权限/时间） -->
+    <el-dialog v-model="keyDetailVisible" class="dialog-body-inset" width="min(620px, 92vw)" top="6vh">
+      <template #header>
+        <DialogHeader :icon="Key" :title="t('common.app.views.keys.detailTitle')" :subtitle="keyDetailTarget?.name || ''" />
+      </template>
+      <el-descriptions v-if="keyDetailTarget" :column="1" border size="small">
+        <el-descriptions-item :label="t('common.app.views.keys.name')">{{ keyDetailTarget.name }}</el-descriptions-item>
+        <el-descriptions-item :label="t('common.app.views.keys.keyPrefix')"><code>{{ keyDetailTarget.key_prefix || '-' }}</code></el-descriptions-item>
+        <el-descriptions-item :label="t('common.app.views.keys.status')">
+          <el-tag v-if="keyExpired(keyDetailTarget)" type="danger" size="small">{{ t('common.app.views.keys.expiredTag') }}</el-tag>
+          <el-tag v-else :type="keyDetailTarget.is_enabled ? 'success' : 'info'" size="small">{{ keyDetailTarget.is_enabled ? t('common.app.views.keys.enabledTag') : t('common.app.views.keys.disabledTag') }}</el-tag>
+        </el-descriptions-item>
+        <el-descriptions-item :label="t('common.app.views.keys.owner')">{{ keyDetailTarget.username || ('#' + keyDetailTarget.created_by) }}</el-descriptions-item>
+        <el-descriptions-item :label="t('common.app.views.keys.features')">
+          <div class="feature-tags">
+            <el-tag :type="keyDetailTarget.api_enabled ? 'primary' : 'info'" size="small" effect="plain">API {{ keyDetailTarget.api_enabled ? t('common.app.views.keys.on') : t('common.app.views.keys.off') }}</el-tag>
+            <el-tag :type="keyDetailTarget.mcp_enabled ? 'primary' : 'info'" size="small" effect="plain">MCP {{ keyDetailTarget.mcp_enabled ? t('common.app.views.keys.on') : t('common.app.views.keys.off') }}</el-tag>
+            <el-tag :type="keyDetailTarget.api_read_only ? 'warning' : 'success'" size="small" effect="plain">API {{ keyDetailTarget.api_read_only ? t('common.app.views.keys.readOnly') : t('common.app.views.keys.readWrite') }}</el-tag>
+            <el-tag :type="keyDetailTarget.mcp_read_only ? 'warning' : 'success'" size="small" effect="plain">MCP {{ keyDetailTarget.mcp_read_only ? t('common.app.views.keys.readOnly') : t('common.app.views.keys.readWrite') }}</el-tag>
+          </div>
+        </el-descriptions-item>
+        <el-descriptions-item v-if="whitelistEntries(keyDetailTarget.mcp_ip_whitelist).length" :label="t('common.app.views.keys.ipWhitelist')">{{ whitelistSummary(keyDetailTarget.mcp_ip_whitelist) }}</el-descriptions-item>
+        <el-descriptions-item :label="t('common.app.views.keys.createdAt')">{{ formatDate(keyDetailTarget.created_at) || '-' }}</el-descriptions-item>
+        <el-descriptions-item :label="t('common.app.views.keys.updatedAt')">{{ formatDate(keyDetailTarget.updated_at) || '-' }}<span v-if="keyDetailTarget.updated_by_username" class="ev-more"> · {{ keyDetailTarget.updated_by_username }}</span></el-descriptions-item>
+        <el-descriptions-item :label="t('common.app.views.keys.lastUsed')">{{ formatDate(keyDetailTarget.last_used) || t('common.app.views.keys.neverUsed') }}</el-descriptions-item>
+        <el-descriptions-item :label="t('common.app.views.keys.expiresAt')">{{ formatDate(keyDetailTarget.expires_at) || t('common.app.views.keys.neverExpires') }}</el-descriptions-item>
+      </el-descriptions>
+      <template #footer>
+        <el-button @click="keyDetailVisible = false">{{ t('common.app.views.keys.close') }}</el-button>
+        <el-button type="primary" :disabled="nodeWriteBlocked" @click="keyDetailVisible = false; openFeatureDialog(keyDetailTarget!)">{{ t('common.app.views.keys.featureConfig') }}</el-button>
+      </template>
+    </el-dialog>
+
     <el-dialog
       v-model="createdKeyVisible"
       class="dialog-body-inset"
@@ -512,7 +542,7 @@
 import { computed, ref, onMounted } from 'vue'
 import { request, mfaAwareSuccess } from '@/utils/api'
 import { useAuthStore } from '@/stores/auth'
-import { formatDate, formatDateShort } from '@/utils/date'
+import { formatDate } from '@/utils/date'
 import { parseWhitelist, serializeWhitelist } from '@/utils/apiKeyWhitelist'
 import { copyText } from '@/utils/copy'
 import { createOneTimeSecretCloseGuard } from '@/utils/oneTimeSecretGuard'
@@ -595,6 +625,9 @@ const createForm = ref({ name: '', mcp_enabled: false, api_enabled: true, api_re
 const featureDialogVisible = ref(false)
 const featureSaving = ref(false)
 const featureTarget = ref<APIKey | null>(null)
+const keyDetailVisible = ref(false)
+const keyDetailTarget = ref<APIKey | null>(null)
+const openKeyDetail = (key: APIKey): void => { keyDetailTarget.value = key; keyDetailVisible.value = true }
 const featureWhitelistError = ref('')
 const featureForm = ref({ mcp_enabled: false, api_enabled: true, api_read_only: false, mcp_read_only: false, whitelistText: '' })
 const keysMineOnly = ref(true) // 管理员默认看自己；关闭=全平台（可操作他人 key，明文不可见）
@@ -970,9 +1003,10 @@ onMounted(() => {
 .card-title { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; color: #111827; }
 .title-icon { font-size: 16px; color: #3b82f6; }
 .keys-table { width: 100%; margin-bottom: 4px; }
-.key-name-cell { font-weight: 600; }
+.key-name-cell { font-weight: 600; padding: 0; height: auto; }
 .ml4 { margin-left: 4px; }
-.row-actions { display: inline-flex; gap: 6px; }
+.row-actions { display: inline-flex; gap: 8px; white-space: nowrap; flex-wrap: nowrap; }
+.row-actions .el-button { padding: 0; }
 /* API/MCP 接入卡（双协议同构：端点/鉴权/用途三行） */
 .access-card :deep(.el-card__body) { padding: 14px 16px; }
 .access-proto { display: inline-flex; align-items: center; gap: 8px; font-weight: 600; }

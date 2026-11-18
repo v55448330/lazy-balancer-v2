@@ -671,6 +671,8 @@ export default {
           "daysUnit": "days",
           "rowCap": "row cap",
           "secEventCleanupHint": "Security event logs are cleaned daily: beyond the retention days or row cap, oldest-first deletion applies (the row cap may be briefly exceeded between cleanups). Defaults: 90 days / 1,000,000 rows; raise them for high-traffic deployments.",
+          "notifyRetention": "Notification delivery retention",
+          "notifyRetentionHint": "Notification delivery logs are cleaned daily: beyond the retention days, oldest-first deletion applies. Default: 30 days; raise as needed (up to 3650 days).",
           "loginExpiry": "Login expiry",
           "loginExpiryHint": "minutes; validity of login tokens"
         },

@@ -54,12 +54,13 @@ func maskDeliveryBody(body string) string {
 
 // ListNotificationDeliveries GET /notification/deliveries——投递流水恒全量
 // （投递记录不区分用户视角；用户/通道维度经行内 username+channels 呈现）。
-// 跨属主正文截断脱敏；?limit= 默认 50 上限 200；?status= ∈ pending/sent/failed/dead。
+// 跨属主正文截断脱敏；?status= ∈ pending/sent/failed/dead；分页 ?page/&page_size
+// （默认 50 上限 200）+ total（底部统计，审计页同口径）。
 func (h *Handlers) ListNotificationDeliveries(c *gin.Context) {
 	uid := contextUserID(c)
 
-	limit := 50
-	if raw := c.Query("limit"); raw != "" {
+	pageSize := 50
+	if raw := c.Query("page_size"); raw != "" {
 		n, err := strconv.Atoi(raw)
 		if err != nil || n < 1 {
 			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_76de02a0"), MessageKey: "k_76de02a0"})
@@ -68,7 +69,13 @@ func (h *Handlers) ListNotificationDeliveries(c *gin.Context) {
 		if n > 200 {
 			n = 200
 		}
-		limit = n
+		pageSize = n
+	}
+	page := 1
+	if raw := c.Query("page"); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
+			page = n
+		}
 	}
 	status := c.Query("status")
 	if status != "" {
@@ -81,15 +88,22 @@ func (h *Handlers) ListNotificationDeliveries(c *gin.Context) {
 		}
 	}
 
-	query := `SELECT d.id, d.user_id, COALESCE(u.username,''), d.event_type, d.level, d.title, d.body, d.status, d.attempts, COALESCE(d.error,''), d.created_at, COALESCE(d.sent_at,'')
-		FROM notification_deliveries d LEFT JOIN users u ON u.id = d.user_id WHERE 1=1`
+	where := " WHERE 1=1"
 	args := []any{}
 	if status != "" {
-		query += ` AND d.status=?`
+		where += ` AND d.status=?`
 		args = append(args, status)
 	}
-	query += ` ORDER BY d.id DESC LIMIT ?`
-	args = append(args, limit)
+	// total（底部统计）：与列表同过滤口径
+	var total int
+	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM notification_deliveries d`+where, args...).Scan(&total); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("读取通知投递失败", err)})
+		return
+	}
+	// 用户列：显示名优先（无显示名回退用户名）
+	query := `SELECT d.id, d.user_id, COALESCE(NULLIF(u.display_name,''), u.username, ''), d.event_type, d.level, d.title, d.body, d.status, d.attempts, COALESCE(d.error,''), d.created_at, COALESCE(d.sent_at,'')
+		FROM notification_deliveries d LEFT JOIN users u ON u.id = d.user_id` + where + ` ORDER BY d.id DESC LIMIT ? OFFSET ?`
+	args = append(args, pageSize, (page-1)*pageSize)
 
 	rows, err := db.DB.Query(query, args...)
 	if err != nil {
@@ -97,13 +111,14 @@ func (h *Handlers) ListNotificationDeliveries(c *gin.Context) {
 		return
 	}
 	defer rows.Close()
-	// 事件可读标题（目录单源；日报等目录外事件回退事件键）
+	// 事件可读标题（目录单源；日报等目录外事件显式映射，不回退裸键）
 	titles := map[string]string{}
 	for _, e := range notify.CatalogExport() {
 		titles[e.ID] = e.Title
 	}
-	out := make([]notificationDeliveryDTO, 0, limit)
-	ids := make([]int64, 0, limit)
+	titles[notify.EvtDailyReport] = "每日日报"
+	out := make([]notificationDeliveryDTO, 0, pageSize)
+	ids := make([]int64, 0, pageSize)
 	for rows.Next() {
 		var d notificationDeliveryDTO
 		var attempts int
@@ -122,7 +137,8 @@ func (h *Handlers) ListNotificationDeliveries(c *gin.Context) {
 		out = append(out, d)
 		ids = append(ids, d.ID)
 	}
-	// 每通道结果批量 JOIN（一次查询，按 delivery_id 归组）
+	// 每通道结果批量 JOIN（一次查询，按 delivery_id 归组）。通道名优先现表名，
+	// 通道已删回退结果行快照名，再回退「通道 #id」。
 	if len(ids) > 0 {
 		placeholders := make([]byte, 0, len(ids)*2)
 		chArgs := make([]any, 0, len(ids))
@@ -133,7 +149,7 @@ func (h *Handlers) ListNotificationDeliveries(c *gin.Context) {
 			placeholders = append(placeholders, '?')
 			chArgs = append(chArgs, id)
 		}
-		chRows, err := db.DB.Query(`SELECT nc.delivery_id, nc.channel_id, COALESCE(c.name,''), nc.channel_type, nc.status, COALESCE(nc.error,'')
+		chRows, err := db.DB.Query(`SELECT nc.delivery_id, nc.channel_id, COALESCE(NULLIF(c.name,''), NULLIF(nc.channel_name,''), ''), nc.channel_type, nc.status, COALESCE(nc.error,'')
 			FROM notification_delivery_channels nc LEFT JOIN notification_channels c ON c.id = nc.channel_id
 			WHERE nc.delivery_id IN (`+string(placeholders)+`) ORDER BY nc.id`, chArgs...)
 		if err == nil {
@@ -156,7 +172,7 @@ func (h *Handlers) ListNotificationDeliveries(c *gin.Context) {
 			chRows.Close()
 		}
 	}
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"deliveries": out}})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"deliveries": out, "total": total}})
 }
 
 // ResendNotificationDelivery POST /notification/deliveries/:id/resend——

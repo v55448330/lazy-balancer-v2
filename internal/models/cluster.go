@@ -374,9 +374,10 @@ type ClusterBasicSettings struct {
 	// 保留策略与大屏采样口径与主节点一致）；指针+omitempty 用于旧主端
 	// 快照缺席时保留从端本地值。ThreatTrafficSampleN：-1=自适应 / 0=关闭；
 	// 全量与固定 2..64 已废除，旧快照/库值由读侧/迁移归 -1。
-	SecurityEventsRetentionDays *int `json:"security_events_retention_days,omitempty"`
-	SecurityEventsRowCap        *int `json:"security_events_row_cap,omitempty"`
-	ThreatTrafficSampleN        *int `json:"threat_traffic_sample_n,omitempty"`
+	SecurityEventsRetentionDays       *int `json:"security_events_retention_days,omitempty"`
+	SecurityEventsRowCap              *int `json:"security_events_row_cap,omitempty"`
+	NotificationDeliveryRetentionDays *int `json:"notification_delivery_retention_days,omitempty"`
+	ThreatTrafficSampleN              *int `json:"threat_traffic_sample_n,omitempty"`
 	// ThreatScreenMode 大屏中央视觉模式（map/globe）：与同组大屏口径列一并
 	// 随 users 节同步——从节点只读（写入口在从节点被只读门拒绝），配置
 	// 必须由主节点经快照下发，否则从端永远停留在默认视觉。指针+omitempty

@@ -43,7 +43,7 @@
         <template #default="scope">{{ scope.row.username || ('#' + scope.row.user_id) }}</template>
       </el-table-column>
       <el-table-column :label="t('app.notification.deliveries.colEvent')" min-width="160" show-overflow-tooltip>
-        <template #default="scope">{{ scope.row.event_title || scope.row.title || scope.row.event_type }}</template>
+        <template #default="scope">{{ deliveryEventTitle(scope.row) }}</template>
       </el-table-column>
       <el-table-column :label="t('app.notification.deliveries.colChannels')" min-width="180">
         <template #default="scope">
@@ -88,6 +88,19 @@
         </template>
       </el-table-column>
     </el-table>
+
+    <div class="deliveries-footer">
+      <el-pagination
+        class="deliveries-pagination"
+        v-model:current-page="page"
+        v-model:page-size="pageSize"
+        :total="total"
+        :page-sizes="[20, 50, 100]"
+        layout="total, sizes, prev, pager, next"
+        @size-change="handleSizeChange"
+        @current-change="fetchDeliveries"
+      />
+    </div>
   </el-card>
 </template>
 
@@ -97,26 +110,39 @@ import { useI18n } from 'vue-i18n'
 import { List } from '@element-plus/icons-vue'
 import { request, mfaAwareSuccess } from '@/utils/api'
 import { formatDate } from '@/utils/date'
+import { hasOwn } from '@/utils/hasOwn'
 import type {
   DeliveryStatus,
   NotificationDeliveriesResponse,
   NotificationDelivery,
 } from '@/types/notifications.ts'
 
-const { t } = useI18n()
+const { t, tm } = useI18n()
 
-// 契约：limit 默认 50 上限 200；?status= 过滤；恒全量（投递记录不区分用户视角）。
-const DELIVERY_LIMIT = 50
+// 契约：page_size 默认 50 上限 200；?status= 过滤；恒全量（投递记录不区分用户视角）。
+const DELIVERY_PAGE_SIZE = 50
 const STATUSES: readonly DeliveryStatus[] = ['pending', 'sent', 'failed', 'dead']
 /** 失败态（failed / dead）提供重发入口；pending 由投递任务接管、sent 无需重发。 */
 const RESENDABLE: readonly DeliveryStatus[] = ['failed', 'dead']
 
 const deliveries = ref<NotificationDelivery[]>([])
+const total = ref(0)
+const page = ref(1)
+const pageSize = ref(DELIVERY_PAGE_SIZE)
 const loading = ref(false)
 const loadError = ref(false)
 const statusFilter = ref<DeliveryStatus | ''>('')
 const resendingId = ref<number | null>(null)
 let deliveriesRequestSeq = 0
+
+// 事件可读标题多语言（tm 原始对象索引，键含点号不走 t 路径解析）；
+// 回退后端 event_title（catalog 中文单源），再回退事件键。日报标题同此渲染。
+const deliveryEventTitle = (raw: unknown): string => {
+  const row = raw as NotificationDelivery
+  const m = (tm('app.notification.eventTitles') || {}) as Record<string, string>
+  if (hasOwn(m, row.event_type)) return m[row.event_type]
+  return row.event_title || row.title || row.event_type
+}
 
 const statusLabel = (status: DeliveryStatus): string => {
   switch (status) {
@@ -151,11 +177,13 @@ const fetchDeliveries = async (): Promise<void> => {
   loading.value = true
   try {
     const params = new URLSearchParams()
-    params.set('limit', String(DELIVERY_LIMIT))
+    params.set('page', String(page.value))
+    params.set('page_size', String(pageSize.value))
     if (statusFilter.value) params.set('status', statusFilter.value)
     const res = await request.get<NotificationDeliveriesResponse>(`/notification/deliveries?${params.toString()}`)
     if (seq === deliveriesRequestSeq) {
       deliveries.value = res.data?.deliveries ?? []
+      total.value = res.data?.total ?? 0
       loadError.value = false
     }
   } catch (error: unknown) {
@@ -180,10 +208,17 @@ const resend = async (row: NotificationDelivery): Promise<void> => {
   }
 }
 
-// 过滤条件变化立即重查（状态过滤是廉价 GET）
+// 过滤条件变化立即重查并回到首页（状态过滤是廉价 GET）
 watch(statusFilter, () => {
+  page.value = 1
   void fetchDeliveries()
 })
+
+// 页容量变化回到首页（避免越界空页）
+const handleSizeChange = (): void => {
+  page.value = 1
+  void fetchDeliveries()
+}
 
 onMounted(() => {
   void fetchDeliveries()
@@ -201,4 +236,6 @@ defineExpose({ fetchDeliveries })
 .delivery-filters { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .status-select { width: 130px; }
 .scope-hint { font-size: 12px; color: var(--text-secondary, #6b7280); }
+.deliveries-footer { margin-top: 16px; display: flex; align-items: center; justify-content: flex-end; gap: 16px; flex-wrap: nowrap; }
+.deliveries-pagination { flex: 0 0 auto; white-space: nowrap; }
 </style>

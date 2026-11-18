@@ -167,6 +167,7 @@
                 <span>{{ t('app.notification.rules.dailyTitle') }}</span>
               </div>
               <div class="card-header-actions">
+                <el-button size="small" link type="primary" :loading="testingDaily" @click="testDaily">{{ t('app.notification.daily.testSend') }}</el-button>
                 <el-button size="small" link type="primary" @click="previewDaily">{{ t('app.notification.rules.preview') }}</el-button>
                 <el-switch v-model="dailyRule.enabled" size="small" @change="toggleRule(dailyRule)" />
               </div>
@@ -179,11 +180,23 @@
               <span class="form-hint">{{ t('app.notification.rules.dailyTimeHint') }}</span>
             </div>
             <div class="daily-field">
-              <span class="daily-label">{{ t('app.notification.rules.sendTo') }}</span>
-              <div class="daily-channels">
-                <el-tag v-for="ch in (dailyRule.channels || [])" :key="ch.id" size="small" effect="plain">{{ ch.name }}</el-tag>
+              <span class="daily-label">{{ t('app.notification.daily.itemsLabel') }}</span>
+              <el-checkbox-group v-model="dailyRule.items" size="small" @change="saveDailyItems(dailyRule)">
+                <el-checkbox v-for="opt in dailyItemOptions" :key="opt.id" :value="opt.id">{{ dailyItemLabel(opt.id) }}</el-checkbox>
+              </el-checkbox-group>
+            </div>
+            <div class="daily-field">
+              <span class="daily-label">{{ t('app.notification.daily.formatLabel') }}</span>
+              <div class="daily-formats">
+                <div v-for="ch in (dailyRule.channels || [])" :key="ch.id" class="daily-format-row">
+                  <el-tag size="small" effect="plain">{{ ch.name }}</el-tag>
+                  <el-select :model-value="dailyFormatOf(dailyRule, ch.type)" size="small" style="width:170px" @change="(v: string) => saveDailyFormat(dailyRule, ch.type, v)">
+                    <el-option v-for="f in dailyFormatOptions" :key="f.value" :value="f.value" :label="f.label" />
+                  </el-select>
+                </div>
                 <span v-if="!(dailyRule.channels || []).length" class="ev-more">{{ t('app.notification.rules.noChannelsHint') }}</span>
               </div>
+              <span class="form-hint">{{ t('app.notification.daily.formatHint') }}</span>
             </div>
           </div>
         </el-card>
@@ -204,19 +217,19 @@
             </div>
           </template>
           <el-table :data="eventRules" v-loading="loading" stripe :header-cell-style="{ background: '#f9fafb' }">
-            <el-table-column :label="t('app.notification.rules.trigger')" min-width="110">
+            <el-table-column :label="t('app.notification.rules.trigger')" width="90">
               <template #default="{ row }">
                 <div class="rule-name-cell">
                   <el-icon :size="16" color="#3b82f6"><Bell /></el-icon>
-                  <span class="rule-name-text">{{ row.title }}</span>
+                  <span class="rule-name-text">{{ eventGroup(row.title) }}</span>
                 </div>
               </template>
             </el-table-column>
-            <el-table-column :label="t('app.notification.rules.events')" min-width="200">
+            <el-table-column :label="t('app.notification.rules.events')" min-width="280">
               <template #default="{ row }">
-                <el-tag v-for="ev in (row.events || []).slice(0, 3)" :key="ev" size="small" effect="plain" class="mr4">{{ eventTitle(asRule(row), ev) }}</el-tag>
-                <el-tooltip v-if="(row.events?.length || 0) > 3" :content="remainingEventTitles(asRule(row))" placement="top">
-                  <span class="ev-more">+{{ row.events!.length - 3 }}</span>
+                <el-tag v-for="ev in (row.events || []).slice(0, 6)" :key="ev" size="small" effect="plain" class="mr4">{{ eventTitle(asRule(row), ev) }}</el-tag>
+                <el-tooltip v-if="(row.events?.length || 0) > 6" :content="remainingEventTitles(asRule(row))" placement="top">
+                  <span class="ev-more">+{{ row.events!.length - 6 }}</span>
                 </el-tooltip>
               </template>
             </el-table-column>
@@ -344,6 +357,7 @@ import VChart from 'vue-echarts'
 import '@/utils/echarts' // 统一注册（副作用，全站单点）
 import { axisChartBase, barSeries, lineSeries, pieChartBase, chartColors } from '@/utils/chartBase'
 import { request, mfaAwareSuccess } from '@/utils/api'
+import { hasOwn } from '@/utils/hasOwn'
 import { useAuthStore } from '@/stores/auth'
 import DialogHeader from '@/components/DialogHeader.vue'
 import CodeEditor from '@/components/CodeEditor.vue'
@@ -351,7 +365,7 @@ import DeliveryLog from './DeliveryLog.vue'
 import ChannelCards from './ChannelCards.vue'
 import SystemCredentials from './SystemCredentials.vue'
 
-const { t } = useI18n()
+const { t, tm } = useI18n()
 const authStore = useAuthStore()
 const isAdmin = computed(() => authStore.user?.role === 'admin')
 const activeTab = ref('overview')
@@ -362,12 +376,23 @@ interface Rule {
   event_titles?: Record<string, string>; min_level?: string; send_time?: string
   channels: RuleChannel[]; channel_ids?: number[]; channel_templates?: Record<string, string>
   body_template: string; enabled: boolean
+  items?: string[]; formats?: Record<string, string>
 }
 
-// 事件可读标题（catalog title 单源；禁止裸事件键展示）
-const eventTitle = (row: Rule, ev: string): string => row.event_titles?.[ev] || ev
+// 事件可读标题多语言：优先当前语言 eventTitles 映射（tm 原始对象索引，键含点号
+// 不走 t 路径解析），回退后端 catalog title，再回退事件键。禁止裸键展示。
+const eventTitle = (row: Rule, ev: string): string => {
+  const m = (tm('app.notification.eventTitles') || {}) as Record<string, string>
+  if (hasOwn(m, ev)) return m[ev]
+  const titles = row.event_titles
+  return (titles && hasOwn(titles, ev) ? titles[ev] : '') || ev
+}
+const eventGroup = (group: string): string => {
+  const m = (tm('app.notification.eventGroups') || {}) as Record<string, string>
+  return hasOwn(m, group) ? m[group] : group
+}
 const remainingEventTitles = (row: Rule): string =>
-  (row.events || []).slice(3).map(ev => eventTitle(row, ev)).join('、')
+  (row.events || []).slice(6).map(ev => eventTitle(row, ev)).join('、')
 
 const overviewStats = ref({ channels: 0, rules: 0, deliveries: 0, successRate: 0 })
 const rulesUserId = ref<number>(0) // 管理员视角用户（0=未初始化，adminUsers 到达后默认本人）；非管理员恒本人
@@ -475,6 +500,18 @@ const rules = ref<Rule[]>([])
 const eventRules = computed(() => rules.value.filter(r => r.trigger === 'event'))
 const dailyRule = computed(() => rules.value.find(r => r.trigger === 'daily') ?? null)
 const testingRuleId = ref<string | null>(null)
+const dailyItemOptions = ref<{ id: string; label: string }[]>([])
+const testingDaily = ref(false)
+// 日报项目/格式多语言标签（tm 原始对象索引）
+const dailyItemLabel = (id: string): string => {
+  const m = (tm('app.notification.dailyItems') || {}) as Record<string, string>
+  return hasOwn(m, id) ? m[id] : id
+}
+const dailyFormatLabel = (v: string): string => {
+  const m = (tm('app.notification.dailyFormats') || {}) as Record<string, string>
+  return hasOwn(m, v) ? m[v] : v
+}
+const dailyFormatOptions = computed(() => ['auto', 'markdown', 'text', 'html'].map(v => ({ value: v, label: dailyFormatLabel(v) })))
 
 // ===== 规则编辑弹窗（通道选择 + 每通道模板） =====
 const tplDialogVisible = ref(false)
@@ -554,9 +591,10 @@ const fetchRules = async (): Promise<void> => {
   try {
     // 默认当前用户；管理员可选其他用户（规则/通道按用户区分，概览才全平台）
     const rulesUrl = isAdmin.value && rulesUserId.value > 0 ? `/notification/rules?user_id=${rulesUserId.value}` : '/notification/rules'
-    const res = await request.get<{ code: number; data?: { rules: Rule[]; channels?: RuleChannel[] } }>(rulesUrl)
+    const res = await request.get<{ code: number; data?: { rules: Rule[]; channels?: RuleChannel[]; daily_items?: { id: string; label: string }[] } }>(rulesUrl)
     rules.value = res.data?.rules ?? []
     userChannels.value = res.data?.channels ?? []
+    dailyItemOptions.value = res.data?.daily_items ?? []
     if (!isAdmin.value) {
       const chs = userChannels.value
       overviewStats.value = { channels: chs.length, rules: rules.value.filter(r => r.enabled).length, deliveries: overviewStats.value.deliveries, successRate: overviewStats.value.successRate }
@@ -582,6 +620,32 @@ const saveRuleField = async (rule: Rule): Promise<void> => {
   // 部分更新：只提交变更字段（后端缺省键不动既有值）
   const body = rule.trigger === 'daily' ? { send_time: rule.send_time } : { min_level: rule.min_level }
   try { await request.post(ruleWriteUrl(rule.id), body) } catch { /* */ }
+}
+
+// 日报包含项目保存（部分更新：仅提交 items）
+const saveDailyItems = async (rule: Rule | null): Promise<void> => {
+  if (!rule) return
+  if (!rule.items || rule.items.length === 0) { ElMessage.warning(t('app.notification.daily.itemsRequired')); return }
+  try { await request.post(ruleWriteUrl(rule.id), { items: rule.items }) } catch { /* */ }
+}
+// 日报 per-channel 格式保存：formats 键=通道族；auto=删除该键（回退自动映射）
+const saveDailyFormat = async (rule: Rule | null, channelType: string, format: string): Promise<void> => {
+  if (!rule) return
+  const formats: Record<string, string> = { ...(rule.formats || {}) }
+  if (format === 'auto') delete formats[channelType]
+  else formats[channelType] = format
+  rule.formats = formats
+  try { await request.post(ruleWriteUrl(rule.id), { formats }) } catch { /* */ }
+}
+const dailyFormatOf = (rule: Rule | null, channelType: string): string => rule?.formats?.[channelType] || 'auto'
+// 日报测试发送：与定时日报同管线，落投递行（结果见投递记录）
+const testDaily = async (): Promise<void> => {
+  if (testingDaily.value) return
+  testingDaily.value = true
+  try {
+    await request.post('/notification/daily/test', {})
+    ElMessage.success(t('app.notification.daily.testSent'))
+  } catch (e) { console.error(e) } finally { testingDaily.value = false }
 }
 
 const editTemplate = (rule: Rule): void => {
@@ -705,7 +769,9 @@ onMounted(() => {
 .daily-card { margin-bottom: 16px; }
 .daily-icon { color: #8b5cf6; }
 .daily-body { display: flex; flex-direction: column; gap: 12px; }
-.daily-field { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-.daily-label { font-size: 13px; color: #4b5563; flex: none; width: 70px; }
+.daily-field { display: flex; align-items: flex-start; gap: 12px; flex-wrap: wrap; }
+.daily-label { font-size: 13px; color: #4b5563; flex: none; width: 70px; padding-top: 5px; }
 .daily-channels { display: flex; gap: 6px; flex-wrap: wrap; }
+.daily-formats { display: flex; flex-direction: column; gap: 8px; }
+.daily-format-row { display: flex; align-items: center; gap: 8px; }
 </style>

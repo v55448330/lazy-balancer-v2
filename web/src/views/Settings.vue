@@ -127,6 +127,7 @@ const settings = ref<SettingsConfig>({
   trusted_proxy_headers: '[]',
   trusted_proxy_strict: true,
   audit_retention_months: 3,
+  notification_delivery_retention_days: 30,
   jwt_expire_minutes: 20,
   timezone: 'Asia/Shanghai',
   mfa_write_guard: false,
@@ -161,6 +162,7 @@ const applyBasicKeys = (data: ConfigPayload) => {
   settings.value.audit_log_size_mb = data.audit_log_size_mb ?? 10
   settings.value.runtime_log_size_mb = data.runtime_log_size_mb ?? 100
   settings.value.audit_retention_months = data.audit_retention_months ?? 3
+  settings.value.notification_delivery_retention_days = data.notification_delivery_retention_days ?? 30
   settings.value.jwt_expire_minutes = data.jwt_expire_minutes ?? 20
   settings.value.timezone = data.timezone || 'Asia/Shanghai'
   settings.value.mfa_write_guard = data.mfa_write_guard ?? false

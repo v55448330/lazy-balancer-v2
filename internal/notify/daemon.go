@@ -137,45 +137,85 @@ func sendToChannels(ctx context.Context, deliveryID, userID int64, channels []de
 	return errs, sentAny
 }
 
-// TestRuleDelivery 规则测试发送（导出：handlers 通知规则「测试」按钮）：
-// 按订阅选定通道+每通道模板渲染真实事件形态消息并发送；不落投递行。
-// 返回逐通道错误（空=全部成功）。无选定通道/无启用通道返回明确错误。
-func TestRuleDelivery(ctx context.Context, userID int64, eventType string) ([]string, error) {
-	channels, err := channelsForUser(userID)
-	if err != nil {
-		return nil, err
+// EnqueueTestDelivery 规则测试发送（导出：handlers 通知规则「测试」按钮）：
+// 以目录模板+样例参数渲染真实事件形态消息，落 pending 投递行（标题带
+// 【测试】标记）并唤醒投递循环——与真实投递同管线：订阅通道选择、每通道
+// 模板渲染、每通道结果落行、投递记录可见（用户裁定：测试消息必须留痕）。
+func EnqueueTestDelivery(userID int64, eventType string) error {
+	entry, ok := catalogByID(eventType)
+	if !ok {
+		return errors.New("事件不在目录: " + eventType)
 	}
 	sel := subscriptionChannelSelectionFor(userID, eventType)
 	if sel.explicitEmpty {
-		return nil, errors.New("规则未选择接收通道")
+		return errors.New("规则未选择接收通道")
+	}
+	channels, err := channelsForUser(userID)
+	if err != nil {
+		return err
 	}
 	if len(sel.ids) > 0 {
-		filtered := channels[:0]
+		n := 0
 		for _, ch := range channels {
 			if sel.ids[ch.ChannelID] {
-				filtered = append(filtered, ch)
+				n++
 			}
 		}
-		channels = filtered
+		if n == 0 {
+			return errors.New("选定的接收通道均未启用")
+		}
+	} else if len(channels) == 0 {
+		return errors.New("无启用的通知通道")
 	}
-	if len(channels) == 0 {
-		return nil, errors.New("无启用的通知通道")
+	// 样例参数：目录模板参数序契约的通用占位（真实形态可读）
+	sample := Event{Type: eventType, Level: entry.Level, Fields: map[string]string{
+		"1": "example.com", "2": "示例详情", "3": "样例来源", "4": "3", "5": "样例", "6": "样例",
+	}}
+	title := "【测试】" + renderTitle(entry, sample)
+	body := renderBody(entry, sample)
+	_, err = db.DB.Exec(`INSERT INTO notification_deliveries
+		(user_id, event_type, level, title, body, status, attempts, created_at)
+		VALUES (?,?,?,?,?, 'pending', 0, ?)`,
+		userID, eventType, string(entry.Level), title, body,
+		time.Now().UTC().Format("2006-01-02 15:04:05"))
+	if err != nil {
+		return err
 	}
-	msg := testNotificationMessage()
-	msg.EventType = eventType
-	errs, sentAny := sendToChannels(ctx, 0, userID, channels, sel.templates, msg)
-	if !sentAny {
-		return errs, errors.New("全部通道发送失败")
+	select {
+	case deliveryWakeCh <- struct{}{}:
+	default:
 	}
-	return errs, nil
+	return nil
+}
+
+// DeliverDailyForUser 单用户日报测试发送（导出：每日摘要卡「测试发送」）：
+// 与定时日报同管线（数据载荷落 pending → 派发侧按通道格式渲染）。
+func DeliverDailyForUser(userID int64, now time.Time) error {
+	cfg, err := GetDailyConfig(userID)
+	if err != nil {
+		return err
+	}
+	data, err := CollectDailyData(context.Background(), now)
+	if err != nil {
+		return err
+	}
+	if err := deliverDaily(userID, cfg, data, now); err != nil {
+		return err
+	}
+	select {
+	case deliveryWakeCh <- struct{}{}:
+	default:
+	}
+	return nil
 }
 
 // recordChannelResult 每通道投递结果落行（统计事实源；落库失败仅告警不阻断投递）。
+// channel_name 快照落行——通道删除后投递记录仍显示通道名（不回退「通道 #id」）。
 func recordChannelResult(deliveryID, userID int64, ch deliveryTarget, eventType, status, errMsg string) {
 	_, err := db.DB.Exec(`INSERT INTO notification_delivery_channels
-		(delivery_id, user_id, channel_id, channel_type, event_type, status, error, created_at)
-		VALUES (?,?,?,?,?,?,?,?)`,
-		deliveryID, userID, ch.ChannelID, ch.Type, eventType, status, errMsg,
+		(delivery_id, user_id, channel_id, channel_name, channel_type, event_type, status, error, created_at)
+		VALUES (?,?,?,?,?,?,?,?,?)`,
+		deliveryID, userID, ch.ChannelID, ch.Name, ch.Type, eventType, status, errMsg,
 		time.Now().UTC().Format("2006-01-02 15:04:05"))
 	if err != nil {
 		log.Printf("WARN: notify 通道结果落库失败（delivery=%d channel=%d）: %v", deliveryID, ch.ChannelID, err)

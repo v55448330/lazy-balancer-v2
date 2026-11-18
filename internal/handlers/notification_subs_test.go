@@ -300,24 +300,27 @@ func TestNotificationDeliveries_scopeFilterResendAndMasking(t *testing.T) {
 		}
 	}
 
-	// 状态过滤与 limit。
+	// 状态过滤与分页（page_size 契约：默认 50 上限 200，<1 → 400）。
 	status, out = doNotifyRequest(t, userRouter, http.MethodGet, "/notification/deliveries?status=failed", "")
 	deliveries, _ = out["data"].(map[string]any)["deliveries"].([]any)
 	if len(deliveries) != 2 {
 		t.Fatalf("status=failed 行数=%d, want 2（全量含他人 failed）", len(deliveries))
 	}
-	status, out = doNotifyRequest(t, userRouter, http.MethodGet, "/notification/deliveries?limit=1", "")
+	status, out = doNotifyRequest(t, userRouter, http.MethodGet, "/notification/deliveries?page_size=1", "")
 	deliveries, _ = out["data"].(map[string]any)["deliveries"].([]any)
 	if len(deliveries) != 1 {
-		t.Fatalf("limit=1 行数=%d, want 1", len(deliveries))
+		t.Fatalf("page_size=1 行数=%d, want 1", len(deliveries))
+	}
+	if total, _ := out["data"].(map[string]any)["total"].(float64); total != 3 {
+		t.Fatalf("page_size=1 total=%v, want 3（total 不受分页影响）", out["data"].(map[string]any)["total"])
 	}
 	status, out = doNotifyRequest(t, userRouter, http.MethodGet, "/notification/deliveries?status=bogus", "")
 	if status != http.StatusBadRequest || out["message_key"] != "k_0d569dd0" {
 		t.Fatalf("非法 status 过滤 status=%d body=%v", status, out)
 	}
-	status, _ = doNotifyRequest(t, userRouter, http.MethodGet, "/notification/deliveries?limit=0", "")
+	status, _ = doNotifyRequest(t, userRouter, http.MethodGet, "/notification/deliveries?page_size=0", "")
 	if status != http.StatusBadRequest {
-		t.Fatalf("limit=0 status=%d, want 400", status)
+		t.Fatalf("page_size=0 status=%d, want 400", status)
 	}
 
 	// 管理员 ?all=1 全平台：他人行正文截断脱敏，user_id 保留。

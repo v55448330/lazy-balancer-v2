@@ -15,6 +15,7 @@ import (
 	"lazy-balancer-v2/internal/apimsg"
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
+	"lazy-balancer-v2/internal/notify"
 	"lazy-balancer-v2/internal/services"
 )
 
@@ -94,6 +95,8 @@ func (h *Handlers) CreateUser(c *gin.Context) {
 
 	id, _ := result.LastInsertId()
 	recordAudit(c, "创建", "用户", services.FormatAuditDetail(services.AuditUserPart(int(id), req.Username), fmt.Sprintf("角色：%s", req.Role)))
+	notify.Publish(notify.Event{Type: notify.EvtUserCreated,
+		Fields: map[string]string{"1": c.GetString("username"), "2": req.Username, "3": req.Role}})
 	c.JSON(http.StatusCreated, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_0a66000b"), MessageKey: "k_0a66000b", Data: gin.H{"id": id}})
 }
 
@@ -581,6 +584,8 @@ func (h *Handlers) DeleteUser(c *gin.Context) {
 	services.MFAClearVerifyAttempts(id)
 
 	recordAudit(c, "删除", "用户", services.AuditUserPart(id, targetUsername))
+	notify.Publish(notify.Event{Type: notify.EvtUserDeleted,
+		Fields: map[string]string{"1": c.GetString("username"), "2": targetUsername}})
 	message := "用户删除成功"
 	if targetProvider == "oidc" {
 		message = "OIDC 用户已删除；同一身份下次 SSO 登录会重新开户（默认普通用户，原角色与禁用状态不继承）。如需撤销访问并保留原身份，请改用禁用。"
@@ -728,6 +733,12 @@ func (h *Handlers) ToggleUserStatus(c *gin.Context) {
 		status = "enabled"
 	}
 	recordAudit(c, "修改状态", "用户", services.FormatAuditDetail(services.AuditUserPart(id, statusUsername), services.AuditResultPart(status)))
+	statusAction := "禁用"
+	if enable {
+		statusAction = "启用"
+	}
+	notify.Publish(notify.Event{Type: notify.EvtUserStatusChanged,
+		Fields: map[string]string{"1": c.GetString("username"), "2": statusUsername, "3": statusAction}})
 	message := "用户状态更新成功"
 	if statusProvider == "oidc" && !enable {
 		message = "OIDC 用户已禁用，SSO 登录将被拒绝；重新启用可恢复原身份、角色与绑定，无需删除后重新开户。"
@@ -835,5 +846,7 @@ func (h *Handlers) ResetUserPassword(c *gin.Context) {
 	committed = true
 
 	recordAudit(c, "重置密码", "用户", services.FormatAuditDetail(services.AuditUserPart(id, resetUsername), services.AuditResultPart("success")))
+	notify.Publish(notify.Event{Type: notify.EvtPasswordReset,
+		Fields: map[string]string{"1": c.GetString("username"), "2": resetUsername}})
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_235840c0"), MessageKey: "k_235840c0"})
 }

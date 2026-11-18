@@ -426,6 +426,7 @@ func (h *Handlers) GetConfig(c *gin.Context) {
 	       COALESCE(threat_traffic_sample_n,?) as threat_traffic_sample_n,
 	       COALESCE(security_events_retention_days,?) as security_events_retention_days,
 	       COALESCE(security_events_row_cap,?) as security_events_row_cap,
+	       COALESCE(notification_delivery_retention_days,?) as notification_delivery_retention_days,
 	       COALESCE(is_master,1) as is_master, COALESCE(master_url, '') as master_url, sync_interval,
 	       last_sync, updated_at
 		FROM global_config WHERE id = 1
@@ -440,6 +441,7 @@ func (h *Handlers) GetConfig(c *gin.Context) {
 		db.DefaultAuditRetentionMonths, db.DefaultJWTExpireMinutes, db.DefaultTimezone,
 		db.DefaultThreatScreenMode, db.DefaultThreatTrafficSampleN,
 		db.DefaultSecurityEventsRetentionDays, db.DefaultSecurityEventsRowCap,
+		db.DefaultNotificationDeliveryRetentionDays,
 	).Scan(
 		&cfg.ID, &cfg.CaddyConfig,
 		&cfg.ACMEEmail, &cfg.CertExpiryDays, &cfg.CertRenewalDays, &cfg.CertRenewalAttempts, &cfg.DefaultCAProviderID,
@@ -451,6 +453,7 @@ func (h *Handlers) GetConfig(c *gin.Context) {
 		&cfg.TrustedProxyEnabled, &cfg.TrustedProxyRanges, &cfg.TrustedProxyRangeRefs, &cfg.TrustedProxyHeaders, &cfg.TrustedProxyStrict,
 		&cfg.ServerMapLat, &cfg.ServerMapLon, &cfg.ThreatScreenMode, &cfg.ThreatTrafficSampleN,
 		&cfg.SecurityEventsRetentionDays, &cfg.SecurityEventsRowCap,
+		&cfg.NotificationDeliveryRetentionDays,
 		&cfg.IsMaster, &cfg.MasterURL, &cfg.SyncInterval, &cfg.LastSync, &cfg.UpdatedAt)
 
 	if err != nil {
@@ -687,6 +690,9 @@ func validateUpdateConfigRequest(req *models.UpdateConfigRequest) error {
 	}
 	if req.SecurityEventsRowCap != nil && (*req.SecurityEventsRowCap < 1 || *req.SecurityEventsRowCap > db.MaxSecurityEventsRowCap) {
 		return fmt.Errorf("安全事件行数上限必须在 1 到 %d 之间", db.MaxSecurityEventsRowCap)
+	}
+	if req.NotificationDeliveryRetentionDays != nil && (*req.NotificationDeliveryRetentionDays < 1 || *req.NotificationDeliveryRetentionDays > db.MaxNotificationDeliveryRetentionDays) {
+		return fmt.Errorf("通知投递保留天数必须在 1 到 %d 之间", db.MaxNotificationDeliveryRetentionDays)
 	}
 	if req.Timezone != nil {
 		// 空串必须显式拒绝（time.LoadLocation("") 是合法特殊值=UTC）：否则
@@ -989,6 +995,7 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 				threat_traffic_sample_n = COALESCE(?, threat_traffic_sample_n),
 				security_events_retention_days = COALESCE(?, security_events_retention_days),
 				security_events_row_cap = COALESCE(?, security_events_row_cap),
+				notification_delivery_retention_days = COALESCE(?, notification_delivery_retention_days),
 				updated_at = datetime('now')
 			WHERE id = 1
 		`, req.ACMEEmail, req.ACMEEmail, req.CertExpiryDays, req.CertRenewalDays, req.CertRenewalAttempts, req.DefaultCAProviderID, req.DefaultCAProviderID, req.LogLevel,
@@ -997,7 +1004,7 @@ func (h *Handlers) UpdateConfig(c *gin.Context) {
 		req.UpstreamKeepaliveTimeout, req.ProxyDialTimeout, req.ProxyResponseHeaderTimeout, req.ProxyReadTimeout, req.ProxyWriteTimeout, req.ProxyStreamTimeout, req.ProxyFlushInterval, req.ProxyStreamCloseDelay,
 		req.ServerTokensHidden, req.TaskLogSizeMB, req.AuditLogSizeMB, req.RuntimeLogSizeMB, req.AccessLogJSON, req.AccessLogFormat, req.AccessLogFormat, req.AuditRetentionMonths, req.JWTExpireMinutes, req.Timezone, req.GitHubProxyURL, req.GitHubToken, req.GitHubToken, req.MFAWriteGuard, req.MFALockoutEnabled,
 		req.TrustedProxyEnabled, req.TrustedProxyRanges, req.TrustedProxyRangeRefs, req.TrustedProxyHeaders, req.TrustedProxyStrict,
-		req.ServerMapLat, req.ServerMapLon, req.ThreatScreenMode, req.ThreatTrafficSampleN, req.SecurityEventsRetentionDays, req.SecurityEventsRowCap)
+		req.ServerMapLat, req.ServerMapLon, req.ThreatScreenMode, req.ThreatTrafficSampleN, req.SecurityEventsRetentionDays, req.SecurityEventsRowCap, req.NotificationDeliveryRetentionDays)
 	if err != nil {
 		recordAudit(c, "更新失败", "全局配置", services.FormatAuditDetail("配置写入数据库失败", err.Error(), services.AuditResultPart("failure")))
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_f3ce5352"), MessageKey: "k_f3ce5352"})

@@ -179,8 +179,9 @@ var expectedTaskKinds = map[string]taskengine.Kind{
 	"crawlerbot-update": taskengine.KindScheduled,
 	"config-watchdog":   taskengine.KindPeriodic, "log-cleanup": taskengine.KindPeriodic,
 	"audit-retention": taskengine.KindPeriodic, "security-events-retention": taskengine.KindPeriodic,
-	"metrics-orphan-cleanup": taskengine.KindPeriodic,
-	"cert-renewal-scan":      taskengine.KindPeriodic, "cert-reconcile": taskengine.KindPeriodic,
+	"metrics-orphan-cleanup":          taskengine.KindPeriodic,
+	"notification-delivery-retention": taskengine.KindPeriodic,
+	"cert-renewal-scan":               taskengine.KindPeriodic, "cert-reconcile": taskengine.KindPeriodic,
 	"cert-manual-poll": taskengine.KindPeriodic, "cert-waiting-ca": taskengine.KindPeriodic,
 	"autoban": taskengine.KindPeriodic,
 	// 运行期常驻族归口（引擎外调度器 → 注册任务）

@@ -105,7 +105,9 @@ test('规则编辑契约：通道选择+每通道模板部分更新，不改启�
 
 test('投递记录消费 deliveries 契约：恒全量+用户/通道维度+失败重发', () => {
   const text = code('src/views/notifications/DeliveryLog.vue')
-  assert.match(text, /params\.set\('limit', String\(DELIVERY_LIMIT\)\)/)
+  assert.match(text, /params\.set\('page_size', String\(pageSize\.value\)\)/, '分页契约：page_size（默认 50 上限 200）')
+  assert.match(text, /params\.set\('page', String\(page\.value\)\)/, '分页契约：page')
+  assert.match(text, /total\.value = res\.data\?\.total/, '底部统计 total 必须消费')
   assert.match(text, /params\.set\('status', statusFilter\.value\)/)
   assert.doesNotMatch(text, /allScope/, '全平台开关已删（投递记录恒全量，用户裁定）')
   assert.match(text, /request\.get<NotificationDeliveriesResponse>\(`\/notification\/deliveries\?/)

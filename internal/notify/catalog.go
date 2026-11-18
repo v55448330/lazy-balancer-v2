@@ -20,6 +20,11 @@ const (
 	EvtLoginFailed        = "auth.login_failed"
 	EvtPasswordChanged    = "auth.password_changed"
 	EvtMFAChanged         = "auth.mfa_changed"
+	EvtMFAVerifyFailed    = "auth.mfa_verify_failed" // MFA 验证码校验失败（安全可观测）
+	EvtUserCreated        = "auth.user_created"
+	EvtUserDeleted        = "auth.user_deleted"
+	EvtUserStatusChanged  = "auth.user_status_changed" // 启用/禁用
+	EvtPasswordReset      = "auth.password_reset"      // 管理员重置密码
 	EvtAPIKeyCreated      = "auth.apikey_created"
 	EvtAPIKeyDeleted      = "auth.apikey_deleted"
 	EvtRuleCreated        = "cfg.rule_created"
@@ -68,6 +73,11 @@ var catalog = []catalogEntry{
 	{EvtLoginFailed, LevelWarn, true, "登录失败", "用户 %s 登录失败（%s），来源 %s"},
 	{EvtPasswordChanged, LevelWarn, true, "密码已修改", "用户 %s 修改了登录密码"},
 	{EvtMFAChanged, LevelWarn, true, "MFA 配置变更", "用户 %s 变更了 MFA 配置（%s）"},
+	{EvtMFAVerifyFailed, LevelWarn, true, "MFA 验证失败", "用户 %s 的 MFA 验证码校验失败（%s）"},
+	{EvtUserCreated, LevelWarn, true, "用户已创建", "管理员 %s 创建了用户「%s」（角色：%s）"},
+	{EvtUserDeleted, LevelWarn, true, "用户已删除", "管理员 %s 删除了用户「%s」"},
+	{EvtUserStatusChanged, LevelWarn, true, "用户状态变更", "管理员 %s 将用户「%s」%s"},
+	{EvtPasswordReset, LevelWarn, true, "密码已重置", "管理员 %s 重置了用户「%s」的密码"},
 	{EvtAPIKeyCreated, LevelInfo, false, "API 密钥已创建", "用户 %s 创建了 API 密钥「%s」"},
 	{EvtAPIKeyDeleted, LevelWarn, true, "API 密钥已删除", "用户 %s 删除了 API 密钥「%s」"},
 	{EvtRuleCreated, LevelInfo, false, "负载均衡规则已创建", "%s 创建了规则 %s"},

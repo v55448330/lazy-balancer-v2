@@ -100,6 +100,7 @@ CREATE TABLE notification_delivery_channels (
 	delivery_id INTEGER NOT NULL,
 	user_id INTEGER NOT NULL,
 	channel_id INTEGER NOT NULL,
+	channel_name TEXT NOT NULL DEFAULT '',
 	channel_type TEXT NOT NULL,
 	event_type TEXT NOT NULL,
 	status TEXT NOT NULL DEFAULT 'sent',

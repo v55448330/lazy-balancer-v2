@@ -70,10 +70,11 @@ var ConfigFieldSections = map[string]string{
 	// 漏同步 section 映射——字段级审计归因曾落「全局配置」（实际在基础设置卡片）。
 	// 覆盖清点钉已改为源码扫描（handlers/config_field_sections_test.go 提取
 	// planConfigChanges 的 add() 首参，与下表双向比对）。
-	"threat_screen_mode":             "基础设置",
-	"security_events_retention_days": "基础设置",
-	"security_events_row_cap":        "基础设置",
-	"threat_traffic_sample_n":        "基础设置",
+	"threat_screen_mode":                   "基础设置",
+	"security_events_retention_days":       "基础设置",
+	"security_events_row_cap":              "基础设置",
+	"notification_delivery_retention_days": "基础设置",
+	"threat_traffic_sample_n":              "基础设置",
 }
 
 func GetConfigSection(field string) string {
@@ -371,6 +372,8 @@ func FormatAuditAction(path string) (action, resource, detail string) {
 		return "修改", "通知规则", path
 	case "/api/v1/notification/rules/:id/test":
 		return "测试", "通知规则", path
+	case "/api/v1/notification/daily/test":
+		return "测试", "通知日报", path
 	case "/api/v1/notification/channels/:id/test":
 		return "测试", "通知通道", path
 	case "/api/v1/notification/settings/smtp-test":

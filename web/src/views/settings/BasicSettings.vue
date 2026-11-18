@@ -44,6 +44,11 @@
             <span class="form-tip-inline">{{ t('app.settings.basic.log.rowCap') }}</span>
             <div class="form-tip-line">{{ t('app.settings.basic.log.secEventCleanupHint') }}</div>
           </el-form-item>
+          <el-form-item :label="t('app.settings.basic.log.notifyRetention')">
+            <el-input-number v-model="settings.notification_delivery_retention_days" :disabled="formFrozen" :min="1" :max="3650" :step="30" controls-position="right" style="width: 120px;" />
+            <span class="form-tip-inline">{{ t('app.settings.basic.log.daysUnit') }}</span>
+            <div class="form-tip-line">{{ t('app.settings.basic.log.notifyRetentionHint') }}</div>
+          </el-form-item>
           <el-form-item :label="t('app.settings.basic.log.loginExpiry')">
             <el-input-number v-model="settings.jwt_expire_minutes" :disabled="formFrozen" :min="1" :max="1440" controls-position="right" style="width: 120px;" />
             <span class="form-tip-inline">{{ t('app.settings.basic.log.loginExpiryHint') }}</span>
@@ -1399,6 +1404,7 @@ interface BasicSettingsConfig {
   audit_log_size_mb: number
   runtime_log_size_mb: number
   audit_retention_months: number
+  notification_delivery_retention_days: number
   // 威胁大屏本站坐标（v3；父级未下发时为 undefined，由下方 computed 归一为 0）
   server_map_lat?: number
   threat_screen_mode?: string
@@ -1909,6 +1915,7 @@ const handleSave = async () => {
       audit_log_size_mb: settings.value.audit_log_size_mb,
       runtime_log_size_mb: settings.value.runtime_log_size_mb,
       audit_retention_months: settings.value.audit_retention_months,
+      notification_delivery_retention_days: settings.value.notification_delivery_retention_days,
       jwt_expire_minutes: settings.value.jwt_expire_minutes,
       timezone: settings.value.timezone,
       server_map_lat: settings.value.server_map_lat ?? 0,

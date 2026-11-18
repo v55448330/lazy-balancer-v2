@@ -1177,6 +1177,7 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 				business.GET("/notification/daily", h.GetNotificationDaily)
 				business.PUT("/notification/daily", h.PutNotificationDaily)
 				business.POST("/notification/daily/preview", noStoreResponse(), h.PreviewNotificationDaily)
+				business.POST("/notification/daily/test", noStoreResponse(), h.TestNotificationDaily)
 				admin.POST("/notification/daily/trigger", noStoreResponse(), h.TriggerNotificationDaily)
 				business.GET("/users", h.ListUsers)
 				business.GET("/api-keys", noStoreResponse(), h.ListAPIKeys)

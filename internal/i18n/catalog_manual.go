@@ -21,6 +21,8 @@ func init() {
 	Register("k_e18b003b", "仅可重发自己的通知投递", "You can only resend your own notification deliveries")
 	Register("k_c16c1667", "该投递已处于待发队列", "This delivery is already queued for sending")
 	Register("k_07b47533", "重发已受理，等待投递", "Resend accepted, waiting for delivery")
+	Register("k_75aeb7a0", "测试消息已加入投递队列，结果见投递记录", "Test message queued for delivery; see delivery log for the result")
+	Register("k_165a4c01", "日报测试已加入投递队列，结果见投递记录", "Daily report test queued for delivery; see delivery log for the result")
 	Register("k_d37587be", "SMTP 端口必须为 1-65535 的数字", "SMTP port must be a number between 1 and 65535")
 	Register("k_04f0eea4", "拦截告警阈值需满足 0 < warn < critical", "Alert thresholds must satisfy 0 < warn < critical")
 	Register("k_ce6e6687", "通知设置已保存", "Notification settings saved")

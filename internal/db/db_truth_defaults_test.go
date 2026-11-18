@@ -114,6 +114,7 @@ func TestRunMigrationsColumnDefaults_MatchGovernedConstants(t *testing.T) {
 	}{
 		{"security_events_retention_days", fmt.Sprint(DefaultSecurityEventsRetentionDays), 1},
 		{"security_events_row_cap", fmt.Sprint(DefaultSecurityEventsRowCap), 1},
+		{"notification_delivery_retention_days", fmt.Sprint(DefaultNotificationDeliveryRetentionDays), 1},
 		{"threat_traffic_sample_n", fmt.Sprint(DefaultThreatTrafficSampleN), 1},
 		{"threat_screen_mode", "'" + DefaultThreatScreenMode + "'", 1},
 		// 威胁/爬虫任务级排程（newColumns 补列）：DDL DEFAULT 与 services 兜底同源。
@@ -1351,6 +1352,7 @@ func TestGovernedDefaultLiteralsBoundInConsumers(t *testing.T) {
 				"db.DefaultThreatScreenMode", "db.DefaultThreatTrafficSampleN",
 				"db.DefaultSecurityEventsRetentionDays", "db.DefaultSecurityEventsRowCap",
 				"db.MaxSecurityEventsRetentionDays", "db.MaxSecurityEventsRowCap",
+				"db.DefaultNotificationDeliveryRetentionDays", "db.MaxNotificationDeliveryRetentionDays",
 			},
 		},
 		{
@@ -1366,6 +1368,7 @@ func TestGovernedDefaultLiteralsBoundInConsumers(t *testing.T) {
 			required: []string{
 				"db.DefaultThreatScreenMode", "db.DefaultThreatTrafficSampleN",
 				"db.DefaultSecurityEventsRetentionDays", "db.DefaultSecurityEventsRowCap",
+				"db.DefaultNotificationDeliveryRetentionDays",
 			},
 		},
 		{
@@ -1395,6 +1398,7 @@ func TestGovernedDefaultLiteralsBoundInConsumers(t *testing.T) {
 				"db.DefaultRequestBodyMaxSizeMB",
 				"db.DefaultSecurityEventsRetentionDays", "db.DefaultSecurityEventsRowCap",
 				"db.MaxSecurityEventsRetentionDays", "db.MaxSecurityEventsRowCap",
+				"db.DefaultNotificationDeliveryRetentionDays", "db.MaxNotificationDeliveryRetentionDays",
 				"db.DefaultThreatTrafficSampleN", "db.DefaultThreatScreenMode",
 			},
 		},

@@ -138,8 +138,13 @@ const (
 	// 四处引用，调整边界只改这里。
 	MaxSecurityEventsRetentionDays = 3650
 	MaxSecurityEventsRowCap        = 100000000
-	DefaultThreatTrafficSampleN    = -1 // -1=自适应/0=关闭（全量与固定档已废除）
-	DefaultThreatScreenMode        = "map"
+	// 通知投递记录保留（用户裁定：滚动清理，基础设置可配）：默认 30 天，
+	// 上限同安全事件 3650 天；0/负=非法（写侧钳制），清理任务按此裁剪
+	// notification_deliveries + notification_delivery_channels。
+	DefaultNotificationDeliveryRetentionDays = 30
+	MaxNotificationDeliveryRetentionDays     = 3650
+	DefaultThreatTrafficSampleN              = -1 // -1=自适应/0=关闭（全量与固定档已废除）
+	DefaultThreatScreenMode                  = "map"
 	// DefaultJWTExpireMinutes 是 jwt_expire_minutes 的治理默认：schema
 	// DEFAULT/迁移回填/从端 apply 归一（cluster_apply.go）共用此常量。
 	DefaultJWTExpireMinutes = 20
@@ -591,6 +596,7 @@ func createTables() error {
 		delivery_id INTEGER NOT NULL,
 		user_id INTEGER NOT NULL,
 		channel_id INTEGER NOT NULL,
+		channel_name TEXT NOT NULL DEFAULT '',
 		channel_type TEXT NOT NULL,
 		event_type TEXT NOT NULL,
 		status TEXT NOT NULL DEFAULT 'sent',
@@ -1303,6 +1309,7 @@ var newColumnsRegistry = map[string]string{
 	"notification_subscriptions.body_template":     "TEXT NOT NULL DEFAULT ''",
 	"notification_subscriptions.channel_ids":       "TEXT NOT NULL DEFAULT ''",
 	"notification_subscriptions.channel_templates": "TEXT NOT NULL DEFAULT ''",
+	"notification_delivery_channels.channel_name":  "TEXT NOT NULL DEFAULT ''",
 	"users.display_name":                           "VARCHAR(100)",
 	"users.is_enabled":                             "BOOLEAN NOT NULL DEFAULT 1",
 	"users.is_setup_admin":                         "INTEGER NOT NULL DEFAULT 0",
@@ -1535,9 +1542,10 @@ var newColumnsRegistry = map[string]string{
 	"global_config.threat_traffic_sample_unified_migrated": "INTEGER NOT NULL DEFAULT 0",
 	// 安全事件保留显式化：默认 90 天 / 100 万行由配置本身承载，
 	// 不再用 0 隐式映射服务层写死默认值。默认值单源=Default* 常量。
-	"global_config.security_events_retention_days":     fmt.Sprintf("INTEGER NOT NULL DEFAULT %d", DefaultSecurityEventsRetentionDays),
-	"global_config.security_events_row_cap":            fmt.Sprintf("INTEGER NOT NULL DEFAULT %d", DefaultSecurityEventsRowCap),
-	"global_config.security_events_retention_migrated": "INTEGER NOT NULL DEFAULT 0",
+	"global_config.security_events_retention_days":       fmt.Sprintf("INTEGER NOT NULL DEFAULT %d", DefaultSecurityEventsRetentionDays),
+	"global_config.security_events_row_cap":              fmt.Sprintf("INTEGER NOT NULL DEFAULT %d", DefaultSecurityEventsRowCap),
+	"global_config.security_events_retention_migrated":   "INTEGER NOT NULL DEFAULT 0",
+	"global_config.notification_delivery_retention_days": fmt.Sprintf("INTEGER NOT NULL DEFAULT %d", DefaultNotificationDeliveryRetentionDays),
 	// CA 提供商播种一次性 marker。此前「表空即
 	// 播种」每次启动评估——导入/集群快照把 ca_providers 清空后重启会复活
 	// ZeroSSL/LE 并覆盖 default_ca_provider_id，与「删除即不存在」相悖。
@@ -1760,6 +1768,8 @@ func runMigrations() error {
 		// 更新审计列回填：存量行以创建时间/创建者为更新基线。
 		"api_keys.updated_at": "UPDATE api_keys SET updated_at=created_at",
 		"api_keys.updated_by": "UPDATE api_keys SET updated_by=created_by",
+		// 存量每通道结果行回填通道名快照（通道已删则留空，读侧回退「通道 #id」）。
+		"notification_delivery_channels.channel_name": "UPDATE notification_delivery_channels SET channel_name=COALESCE((SELECT name FROM notification_channels WHERE notification_channels.id=notification_delivery_channels.channel_id),'')",
 	}
 	if err := ensureNewColumns(newColumns, newColumnBackfills); err != nil {
 		return err

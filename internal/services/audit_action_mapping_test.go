@@ -551,6 +551,7 @@ var genericRouteRegistry = []struct {
 	{"/api/v1/notification/channels", "CreateNotificationChannel", false},
 	{"/api/v1/notification/rules/:id", "UpdateNotificationRule", false},
 	{"/api/v1/notification/rules/:id/test", "TestNotificationRule", false},
+	{"/api/v1/notification/daily/test", "TestNotificationDaily", false},
 	{"/api/v1/notification/channels/:id/test", "TestNotificationChannel", false},
 	// SMTP 连通性测试：中间件经映射记录（handler 不自记）。
 	{"/api/v1/notification/settings/smtp-test", "TestSMTPSettings", false},
@@ -644,7 +645,7 @@ func TestAuditPolicyListsEqual(t *testing.T) {
 		// 渲染不落库）+QQ/微信扫码产码（绑定完成时 handler 记一次「绑定」，
 		// 产码不复记）3 条 skip。新增见 auditpolicy.go 各自登记处注释。
 		wantExplicit = 114
-		wantGeneric  = 10 // +1：POST /notification/rules/:id/test（规则测试发送，Generic）
+		wantGeneric  = 11 // +1：POST /notification/rules/:id/test（规则测试发送）；+1：POST /notification/daily/test（日报测试发送），均 Generic
 		wantSkip     = 19
 	)
 	explicitCount, genericCount, skipCount := 0, 0, 0

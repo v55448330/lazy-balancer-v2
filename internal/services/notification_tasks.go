@@ -106,4 +106,23 @@ func registerNotificationTasks(te *taskengine.Engine) {
 			return notify.RunWxBotConnection(rc.Ctx)
 		},
 	})
+
+	mustRegisterTask(te, taskengine.Descriptor{
+		ID:          "notification-delivery-retention",
+		Family:      "notification",
+		Name:        "通知投递保留清理",
+		Description: "按保留期配置（基础设置→通知投递保留天数）滚动删除过期投递记录与每通道结果",
+		Category:    "通知",
+		Kind:        taskengine.KindPeriodic,
+		IntervalFn:  func() time.Duration { return 24 * time.Hour },
+		Run: func(rc taskengine.RunContext) error {
+			result, err := NotificationDeliveryRetentionCleanup(rc.Ctx)
+			if err != nil {
+				TaskLogfWarnContext(rc.Ctx, "notification-delivery-retention", "cleanup", "投递保留清理失败：本轮已删投递 %d 条 · 通道结果 %d 行后中止：%v", result.Deliveries, result.Channels, err)
+				return err
+			}
+			TaskLogfContext(rc.Ctx, "notification-delivery-retention", "cleanup", "投递保留清理完成：删除投递 %d 条 · 通道结果 %d 行（无过期为 0）", result.Deliveries, result.Channels)
+			return nil
+		},
+	})
 }

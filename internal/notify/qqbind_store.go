@@ -9,9 +9,18 @@ import (
 )
 
 // SaveQQBotCredentials 绑定完成后的凭据落库（供 qq-bot-connection Daemon 鉴权）。
+// 落库即作废 token 缓存并唤醒连接循环——换绑场景旧 token/旧会话态立即
+// 失效重鉴权，不等退避周期（实测：换绑后 Invalid Session 死循环根因修复）。
 func SaveQQBotCredentials(appID, appSecret string) error {
 	_, err := db.DB.Exec(`INSERT INTO notify_settings (key, value) VALUES ('notify.qq_appid', ?), ('notify.qq_secret', ?)
 		ON CONFLICT(key) DO UPDATE SET value=excluded.value`, appID, appSecret)
+	if err == nil {
+		qqTokens.invalidate()
+		select {
+		case qqWakeCh <- struct{}{}:
+		default:
+		}
+	}
 	return err
 }
 

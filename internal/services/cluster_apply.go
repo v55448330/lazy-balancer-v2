@@ -2288,6 +2288,10 @@ func updateSnapshotSettings(ctx context.Context, tx *sql.Tx, snapshot models.Clu
 		settingClauses = append(settingClauses, "security_events_row_cap=?")
 		settingArgs = append(settingArgs, *settings.SecurityEventsRowCap)
 	}
+	if settings.NotificationDeliveryRetentionDays != nil {
+		settingClauses = append(settingClauses, "notification_delivery_retention_days=?")
+		settingArgs = append(settingArgs, *settings.NotificationDeliveryRetentionDays)
+	}
 	if settings.ThreatTrafficSampleN != nil {
 		settingClauses = append(settingClauses, "threat_traffic_sample_n=?")
 		settingArgs = append(settingArgs, *settings.ThreatTrafficSampleN)

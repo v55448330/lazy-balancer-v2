@@ -69,6 +69,7 @@ func TestAuthenticationResponsesAreNotStored(t *testing.T) {
 		{name: "notification settings update", method: http.MethodPut, path: "/api/v1/notification/settings", body: `{}`, withToken: true},
 		{name: "notification daily trigger", method: http.MethodPost, path: "/api/v1/notification/daily/trigger", withToken: true},
 		{name: "notification daily preview", method: http.MethodPost, path: "/api/v1/notification/daily/preview", withToken: true},
+		{name: "notification daily test", method: http.MethodPost, path: "/api/v1/notification/daily/test", withToken: true},
 		{name: "wx qr start", method: http.MethodPost, path: "/api/v1/notification/wx/qr/start", withToken: true},
 		{name: "smtp test", method: http.MethodPost, path: "/api/v1/notification/settings/smtp-test", withToken: true},
 		{name: "api-keys access overview", method: http.MethodGet, path: "/api/v1/api-keys/access-overview", withToken: true},

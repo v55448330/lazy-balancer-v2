@@ -647,6 +647,13 @@ func normalizeSnapshotSecurityRetentionSettings(settings *models.ClusterBasicSet
 		normalized := normalizeSnapshotThreatTrafficSampleN(*settings.ThreatTrafficSampleN)
 		settings.ThreatTrafficSampleN = &normalized
 	}
+	if settings.NotificationDeliveryRetentionDays != nil {
+		v := *settings.NotificationDeliveryRetentionDays
+		if v < 1 || v > db.MaxNotificationDeliveryRetentionDays {
+			v = db.DefaultNotificationDeliveryRetentionDays
+		}
+		settings.NotificationDeliveryRetentionDays = &v
+	}
 }
 
 // loadSnapshotGlobalSettings 装载快照的全局配置区(BasicSettings+
@@ -771,18 +778,19 @@ func (s *ClusterService) loadSnapshotGlobalSettings(ctx context.Context, store s
 	snapshot.BasicSettings.CrawlerScheduleDays = &crawlerDays
 	snapshot.BasicSettings.CrawlerScheduleTime = &crawlerTime
 	// v2.3.8：安全事件保留与大屏采样随 users 节同步（从节点/升主后口径一致）。
-	var seDays, seCap, trafficSample int
+	var seDays, seCap, trafficSample, ndDays int
 	var screenMode string
 	if err := store.QueryRowContext(ctx, `SELECT COALESCE(security_events_retention_days,?),
 		COALESCE(security_events_row_cap,?), COALESCE(threat_traffic_sample_n,?),
-		COALESCE(threat_screen_mode,?)
+		COALESCE(threat_screen_mode,?), COALESCE(notification_delivery_retention_days,?)
 		FROM global_config WHERE id=1`,
-		db.DefaultSecurityEventsRetentionDays, db.DefaultSecurityEventsRowCap, db.DefaultThreatTrafficSampleN, db.DefaultThreatScreenMode).Scan(&seDays, &seCap, &trafficSample, &screenMode); err != nil {
+		db.DefaultSecurityEventsRetentionDays, db.DefaultSecurityEventsRowCap, db.DefaultThreatTrafficSampleN, db.DefaultThreatScreenMode, db.DefaultNotificationDeliveryRetentionDays).Scan(&seDays, &seCap, &trafficSample, &screenMode, &ndDays); err != nil {
 		return fmt.Errorf("读取安全事件保留/流量采样设置: %w", err)
 	}
 	snapshot.BasicSettings.SecurityEventsRetentionDays = &seDays
 	snapshot.BasicSettings.SecurityEventsRowCap = &seCap
 	snapshot.BasicSettings.ThreatTrafficSampleN = &trafficSample
+	snapshot.BasicSettings.NotificationDeliveryRetentionDays = &ndDays
 	// 三列与 apply 侧同口径归一（库值唯一真相：0/越界值读侧本按默认消费，
 	// 哈希输入必须同源）。写侧只接受合法域，脏值仅带外直写可达——若按脏值
 	// 参与 users 节哈希，从端 apply 落默认后主从哈希恒不等，每同步周期强制

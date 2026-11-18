@@ -102,10 +102,15 @@ func SendQQC2CMarkdown(ctx context.Context, targetJSON, md string) error {
 	return sendQQRESTMarkdown(ctx, cfg.OpenID, md)
 }
 
+// qqWakeCh 凭据变更唤醒信号（SaveQQBotCredentials 落库后投递；非阻塞，
+// 循环未运行时弃置——下轮启动自然读新凭据）。
+var qqWakeCh = make(chan struct{}, 1)
+
 // RunQQBotConnection 连接主循环：鉴权→ws→收发→断线退避重连（ctx 取消退出）。
 // Resume 断线续传：会话态（sessionID/seq）跨重连持有，服务端请求重连
 // （op:7）或闪断时优先 Resume 补拉遗漏事件；会话失效（op:9）回退重新
 // Identify。长时间在线后重连退避计数归零（长期运行不受历史断连拖累）。
+// 凭据变更（qqWakeCh）立即重置会话态重连，不等退避。
 func RunQQBotConnection(ctx context.Context) error { //scope-exempt: daemon-run-body-loop
 	// 出站长连：ws 事件网关（qqBotSession 内心跳/Resume），断线退避重连。
 	if !QQBotConfigured() {
@@ -131,6 +136,10 @@ func RunQQBotConnection(ctx context.Context) error { //scope-exempt: daemon-run-
 		select {
 		case <-ctx.Done():
 			return nil
+		case <-qqWakeCh:
+			// 凭据已轮换：旧会话态作废，立即以新凭据重新 Identify。
+			resume.reset()
+			attempt = 0
 		case <-time.After(botBackoff(attempt)):
 		}
 	}

@@ -176,6 +176,8 @@ var globalConfigSyncedColumns = []string{
 	// 大屏视觉模式同组：从节点写入口被只读门拒绝，配置只能由主节点经快照
 	// 下发——漏列时主端改它不 bump 版本，从端经 304 门永久滞留旧视觉。
 	"threat_screen_mode",
+	// 通知投递保留天数同组：基础设置可配，漏列时主端改它不 bump 版本，从端滞留旧值。
+	"notification_delivery_retention_days",
 }
 
 // clusterSyncedTable 集群快照同步表与其触发列清单（触发器安装与「列清单↔

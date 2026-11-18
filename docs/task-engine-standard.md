@@ -158,7 +158,7 @@ type Descriptor struct {
 
 已删除：`SilentProbes`/`RecordFailuresOnly`/`SignalledWork`/`AsKind`/`Cadence`/`Singleton`——Kind 单独决定全部行为；`ToggleFn`/`ToggleName`（2026-10-11）——v2.0 调度开关统一（StartLoop/StopLoop）后声明族零消费退役，TaskMeta/TaskInfo 的 `toggleable`/`toggle_name` 序列化字段一并删除；`ManualRun`（勘误）——手动触发能力由 Kind 派生（DescribeAll `CanTrigger`），声明字段无消费；`TaskMeta.Enabled`（任务监控只认 `loop_on`，`Lookup/DescribeAll` 不再求值 `EnabledFn`）——`Descriptor.EnabledFn` 仍保留为 Scheduled/Periodic 调度门。
 
-## 2. 任务清单（31 注册任务；实时全集以 `DescribeAll` 为准）
+## 2. 任务清单（32 注册任务；实时全集以 `DescribeAll` 为准）
 
 ### 定时（6）——排程槽驱动，Run 纯业务
 
@@ -221,7 +221,7 @@ failed 行（真实时长与错误）；取消/正常停止不增行。
 且状态列呈现 `failed`（修复前恒 `idle`「空闲」，采集/签发静默停摆无信号）；
 显式停止调度后回 `idle`。
 
-### 循环（11）——固定间隔，每轮独立执行+记录
+### 循环（12）——固定间隔，每轮独立执行+记录
 
 | 任务 | 间隔 |
 |---|---|
@@ -233,6 +233,7 @@ failed 行（真实时长与错误）；取消/正常停止不增行。
 | log-cleanup | 24h |
 | audit-retention | 24h |
 | security-events-retention | 24h |
+| notification-delivery-retention | 24h（按保留期删除过期通知投递记录与每通道结果，500 行/批让锁推进；失败进任务失败终态） |
 | metrics-orphan-cleanup | 24h（已删除规则的残留历史指标收敛清理，单轮限量分批） |
 | metrics-history-cleanup | 24h（>7 天指标历史清理，5000 行/批让锁推进；失败进任务失败终态） |
 | autoban | 60s（调度唯一前提=业务启用：PUT 保存联动启停+启动按库实态对齐，Descriptor 无 EnabledFn；观察模式默认开） |

@@ -29,7 +29,7 @@ export interface NotificationChannel {
 export type NotificationChannelsResponse = APIResponse<{ channels: NotificationChannel[] }>
 
 
-/** GET /notification/deliveries 行（limit 默认 50 上限 200；?status= 过滤；恒全量）。 */
+/** GET /notification/deliveries 行（page_size 默认 50 上限 200；?status= 过滤；恒全量）。 */
 export interface NotificationDelivery {
   id: number
   user_id: number
@@ -47,7 +47,7 @@ export interface NotificationDelivery {
   channels: { channel_id: number; channel_name: string; channel_type: string; status: string; error: string }[]
 }
 
-export type NotificationDeliveriesResponse = APIResponse<{ deliveries: NotificationDelivery[] }>
+export type NotificationDeliveriesResponse = APIResponse<{ deliveries: NotificationDelivery[]; total: number }>
 
 /** GET /notification/settings（管理员）：secret 只回配置布尔，不回明文。 */
 interface NotificationSettings {

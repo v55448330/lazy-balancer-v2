@@ -1033,7 +1033,7 @@ func InitTaskEngine(watchdogAdminURL, runtimeLogFile string) *taskengine.Engine 
 	BeginConfigImportHold()
 	for _, id := range []string{
 		"config-watchdog", "log-cleanup", "audit-retention", "security-events-retention",
-		"metrics-orphan-cleanup",
+		"notification-delivery-retention", "metrics-orphan-cleanup",
 		"cert-renewal-scan", "cert-reconcile", "cert-manual-poll",
 		"security-events-ingestion", "cert-issuance", "cluster-sync",
 		"threat", "crs", "ip2region", "auto-backup",

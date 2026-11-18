@@ -71,6 +71,7 @@ var auditRoutePolicies = map[string]AuditPolicy{
 	// 绑定完成时 handler 记一次「绑定」审计（一次绑定一条，产码不复记）。
 	"PUT /api/v1/notification/daily":          AuditPolicyExplicit,
 	"POST /api/v1/notification/daily/preview": AuditPolicySkip,
+	"POST /api/v1/notification/daily/test":    AuditPolicyGeneric,
 	"POST /api/v1/notification/daily/trigger": AuditPolicyExplicit,
 	"POST /api/v1/notification/qq/bind-code":  AuditPolicySkip,
 	"POST /api/v1/notification/wx/qr/start":   AuditPolicySkip,

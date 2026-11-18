@@ -38,26 +38,36 @@ const (
 )
 
 // qqTokenManager access_token 持有与刷新（包级单例 qqTokens：ws 会话与
-// REST 发送共用一把 token，避免每调用重新鉴权）。刷新时重读全局凭据，
-// 凭据轮换在下一轮刷新即生效。
+// REST 发送共用一把 token，避免每调用重新鉴权）。token 按 appid 持有：
+// 重新绑定（新 bot 凭据）后旧 token 立即作废——此前缓存不认 appid，
+// 换绑后旧 token 持续 Identify → op:9 Invalid Session 死循环（实测根因）。
 type qqTokenManager struct {
 	mu        sync.Mutex
 	token     string
+	appid     string // token 所属 appid（凭据轮换判据）
 	expiresAt time.Time
 }
 
 // qqTokens 包级单例（连接会话与通道发送共用）。
 var qqTokens qqTokenManager
 
+// invalidate 作废缓存 token（op:9 会话失效/凭据变更时调用，下轮强制重鉴权）。
+func (m *qqTokenManager) invalidate() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.token = ""
+	m.appid = ""
+}
+
 func (m *qqTokenManager) ensure(ctx context.Context) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.token != "" && time.Now().Before(m.expiresAt.Add(-2*time.Minute)) {
-		return m.token, nil
-	}
 	appid, secret, ok := qqBotCredentials()
 	if !ok {
 		return "", errors.New("QQ 机器人凭据未配置（全局设置→通知凭据）")
+	}
+	if m.token != "" && m.appid == appid && time.Now().Before(m.expiresAt.Add(-2*time.Minute)) {
+		return m.token, nil
 	}
 	body, err := json.Marshal(map[string]string{"appId": appid, "clientSecret": secret})
 	if err != nil {
@@ -93,6 +103,7 @@ func (m *qqTokenManager) ensure(ctx context.Context) (string, error) {
 		secs = 2 * time.Hour
 	}
 	m.token = tr.Token
+	m.appid = appid
 	m.expiresAt = time.Now().Add(secs)
 	return m.token, nil
 }
@@ -218,8 +229,9 @@ func qqBotSession(ctx context.Context, rs *qqResumeState) error {
 			}
 		case 7: // 服务端请求重连：保留会话态，外层立即重连走 Resume
 			return errors.New("服务端请求重连")
-		case 9: // 会话失效：重置会话态，外层重新 Identify
+		case 9: // 会话失效：重置会话态+作废 token（旧凭据 token 也会 op:9），外层重新鉴权 Identify
 			rs.reset()
+			qqTokens.invalidate()
 			return errors.New("会话失效（Invalid Session）")
 		case 0: // dispatch
 			switch frame.T {

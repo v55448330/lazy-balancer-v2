@@ -14,7 +14,6 @@ import (
 	"net/http"
 	"sort"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -164,9 +163,10 @@ func (h *Handlers) GetNotificationRules(c *gin.Context) {
 		rules = append(rules, rule)
 	}
 
-	// 3. 日报规则
+	// 3. 日报规则（恒呈现：停用态也显示卡片，允许重新启用与配置；
+	// GetDailyConfig 无行返回默认启用配置，err 仅 DB 故障时非 nil）
 	dailyCfg, err := notify.GetDailyConfig(uid)
-	if err == nil && dailyCfg.Enabled {
+	if err == nil {
 		rules = append(rules, NotificationRule{
 			ID:       "daily",
 			Trigger:  "daily",
@@ -331,7 +331,8 @@ func (h *Handlers) UpdateNotificationRule(c *gin.Context) {
 }
 
 // TestNotificationRule POST /notification/rules/:id/test——按规则选定通道+
-// 每通道模板渲染测试消息并发送（不落投递行）。管理员 ?user_id 代管视角同写侧。
+// 每通道模板渲染测试消息，落投递行（【测试】标记）走真实投递管线。
+// 管理员 ?user_id 代管视角同写侧。结果见投递记录（用户裁定：测试必须留痕）。
 func (h *Handlers) TestNotificationRule(c *gin.Context) {
 	uid := contextUserID(c)
 	if isAdminRequest(c) {
@@ -359,16 +360,22 @@ func (h *Handlers) TestNotificationRule(c *gin.Context) {
 		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: apimsg.Tf(c, "k_1d8f5b94", group), MessageKey: "k_1d8f5b94"})
 		return
 	}
-	errs, err := notify.TestRuleDelivery(c.Request.Context(), uid, eventType)
-	if err != nil {
+	if err := notify.EnqueueTestDelivery(uid, eventType); err != nil {
 		c.JSON(http.StatusBadGateway, models.APIResponse{Code: 502, Message: err.Error()})
 		return
 	}
-	msg := "测试消息已发送"
-	if len(errs) > 0 {
-		msg = "部分通道失败: " + strings.Join(errs, "; ")
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_75aeb7a0"), MessageKey: "k_75aeb7a0"})
+}
+
+// TestNotificationDaily POST /notification/daily/test——当前用户日报测试发送
+// （每日摘要卡「测试发送」；与定时日报同管线，结果见投递记录）。
+func (h *Handlers) TestNotificationDaily(c *gin.Context) {
+	uid := contextUserID(c)
+	if err := notify.DeliverDailyForUser(uid, time.Now()); err != nil {
+		c.JSON(http.StatusBadGateway, models.APIResponse{Code: 502, Message: err.Error()})
+		return
 	}
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: msg})
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_165a4c01"), MessageKey: "k_165a4c01"})
 }
 
 // dailyItemsForWizard 日报可选项（向导选择包含项目）。
