@@ -74,11 +74,11 @@
       </el-col>
     </el-row>
 
-    <!-- 明细并排：REST 最近调用 | MCP 趋势+TOP 工具 -->
-    <el-row v-if="hasDetail" :gutter="24" class="detail-row">
-      <el-col v-if="restStats && restStats.recent_calls.length" :xs="24" :md="12">
+    <!-- 明细并排（常显：空态走 el-empty 框架）：REST 最近调用 | MCP 趋势+TOP 工具 -->
+    <el-row :gutter="24" class="detail-row">
+      <el-col :xs="24" :md="12">
         <div class="usage-block-title">{{ t('app.notification.keysAccess.recentCallsTitle') }}</div>
-        <el-table :data="restStats.recent_calls" size="small" max-height="220" class="recent-table">
+        <el-table v-if="restStats && restStats.recent_calls.length" :data="restStats.recent_calls" size="small" max-height="220" class="recent-table">
           <el-table-column prop="time" :label="t('app.notification.deliveries.colTime')" width="110" />
           <el-table-column prop="key_name" :label="t('app.notification.keysSessions.colKey')" min-width="110" show-overflow-tooltip />
           <el-table-column prop="method" label="Method" width="70" />
@@ -89,9 +89,10 @@
             </template>
           </el-table-column>
         </el-table>
+        <el-empty v-else :description="t('app.notification.keysAccess.recentCallsEmpty')" :image-size="48" />
       </el-col>
-      <el-col v-if="mcpStats" :xs="24" :md="restStats && restStats.recent_calls.length ? 12 : 24">
-        <template v-if="trendRows.length">
+      <el-col :xs="24" :md="restStats && restStats.recent_calls.length ? 12 : 24">
+        <template v-if="mcpStats && trendRows.length">
           <div class="usage-block-title">{{ t('app.notification.keysUsage.trendTitle') }}</div>
           <div class="trend-list">
             <div v-for="point in trendRows" :key="point.date" class="trend-row">
@@ -103,7 +104,7 @@
             </div>
           </div>
         </template>
-        <template v-if="mcpStats.top_tools.length">
+        <template v-if="mcpStats && mcpStats.top_tools.length">
           <div class="usage-block-title">{{ t('app.notification.keysUsage.topToolsTitle') }}</div>
           <el-table :data="mcpStats.top_tools" size="small" max-height="200">
             <el-table-column type="index" width="46" align="center" />
@@ -134,10 +135,6 @@ const props = defineProps<{
 const { t } = useI18n()
 
 const trendRows = computed(() => props.mcpStats?.trend ?? [])
-const hasDetail = computed(() =>
-  (props.mcpStats && (props.mcpStats.top_tools.length > 0 || trendRows.value.length > 0)) ||
-  !!(props.restStats && props.restStats.recent_calls.length > 0)
-)
 
 const trendMax = computed(() => Math.max(1, ...trendRows.value.map((p) => p.calls)))
 

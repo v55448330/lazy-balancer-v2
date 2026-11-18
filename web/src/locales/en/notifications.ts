@@ -17,6 +17,7 @@ export default {
         enabledHint: 'Delivers yesterday’s operational summary to channels bound to your account',
         sendTime: 'Delivery time',
         sendTimeHint: 'Pushed daily in the panel server timezone',
+        formatNowInChannel: "Per-channel message format and daily-report format are configured in channel edit (Message style)",
         items: 'Included items',
         format: 'Delivery format',
         formatHint: 'Per-channel delivery format; leave empty for the automatic mapping',
@@ -221,6 +222,8 @@ export default {
         statTotal: 'Total keys',
         statEnabled: 'Enabled',
         statActive7d: 'Active in 7 days',
+        recentCallsTitle: "Recent calls",
+        recentCallsEmpty: "No calls yet — appears here after REST API calls with a key",
       },
       keysSessions: {
         title: 'MCP sessions',

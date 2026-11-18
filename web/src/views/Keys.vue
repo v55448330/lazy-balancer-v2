@@ -112,11 +112,7 @@
     <!-- 分区②：接入统计（健康度总览：REST/MCP 双列同构指标） -->
     <AccessStatsCards :api-key-stats="apiKeyStats" :mcp-stats="mcpStats" :rest-stats="restOverview" class="keys-mcp-block" />
 
-    <!-- 分区③：接入方式（双协议同构卡：端点/鉴权/文档） -->
-    <div class="section-head">
-      <el-icon class="section-head-icon"><Connection /></el-icon>
-      <span class="section-head-title">{{ t('app.notification.keysAccess.accessMethodTitle') }}</span>
-    </div>
+    <el-divider content-position="left" class="section-divider">{{ t('app.notification.keysAccess.accessMethodTitle') }}</el-divider>
     <el-row :gutter="16" class="keys-mcp-block">
       <el-col :xs="24" :md="12">
         <el-card shadow="never" class="access-card">
@@ -851,12 +847,6 @@ onMounted(() => {
 </script>
 
 <style scoped>
-/* 分区标题（icon+标题+副标题，全站统一形态） */
-.section-head { display: flex; align-items: center; gap: 8px; margin: 18px 0 12px; }
-.section-head:first-of-type { margin-top: 4px; }
-.section-head-icon { color: var(--el-color-primary); font-size: 16px; align-self: center; }
-.section-head-title { font-weight: 600; font-size: 14px; }
-.section-head-desc { font-size: 12px; color: var(--text-secondary, #6b7280); }
 .keys-table { width: 100%; margin-bottom: 4px; }
 .key-name-cell { font-weight: 600; }
 .ml4 { margin-left: 4px; }

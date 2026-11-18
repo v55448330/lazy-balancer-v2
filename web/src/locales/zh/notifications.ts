@@ -19,6 +19,7 @@ export default {
         enabledHint: '按下方时间向本账号绑定的通道投递昨日运营摘要',
         sendTime: '投递时间',
         sendTimeHint: '按面板服务器时区每日推送',
+        formatNowInChannel: "各通道的消息格式与日报格式在通道编辑中配置（编辑 → 消息样式）",
         items: '包含项目',
         format: '投递格式',
         formatHint: '各通道投递格式；留空使用自动映射',
@@ -223,6 +224,8 @@ export default {
         statTotal: '密钥总数',
         statEnabled: '启用中',
         statActive7d: '近 7 天活跃',
+        recentCallsTitle: "最近调用",
+        recentCallsEmpty: "暂无调用记录——使用密钥调用 REST API 后在此出现",
       },
       keysSessions: {
         title: 'MCP 会话',

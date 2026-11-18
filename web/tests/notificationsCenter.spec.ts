@@ -57,7 +57,7 @@ test('通知页四页签投影：channels/subs/deliveries 恒在，credentials �
 test('通道抽屉消费通道 REST 契约：CRUD+test+按类型目标 JSON+样式提交', () => {
   const text = code('src/views/notifications/ChannelCards.vue')
   assert.match(text, /request\.get<NotificationChannelsResponse>\('\/notification\/channels'\)/)
-  assert.match(text, /request\.post<NotificationCreateChannelResponse & \{ data\?: \{ id: number; reused\?: boolean \} \}>\('\/notification\/channels'/)
+  assert.match(text, /request\.post<NotificationCreateChannelResponse & \{ data\?: \{ reused\?: boolean \} \}>\('\/notification\/channels'/)
   assert.match(text, /request\.put\(`\/notification\/channels\/\$\{drawerTarget\.value\.id\}`/)
   assert.match(text, /request\.delete\(`\/notification\/channels\/\$\{ch\.id\}`\)/)
   assert.match(text, /request\.post\(`\/notification\/channels\/\$\{ch\.id\}\/test`\)/)
@@ -66,7 +66,7 @@ test('通道抽屉消费通道 REST 契约：CRUD+test+按类型目标 JSON+样�
   assert.match(targetField, /case 'webhook': return 'url'/)
   assert.match(targetField, /case 'email': return 'email'/)
   assert.match(targetField, /case 'qq': return 'openid'/)
-  assert.match(targetField, /case 'wx_clawbot': return 'receiver'/)
+  assert.match(targetField, /default: return 'receiver'/)
   // Drawer 一步式（三步向导已废弃）：类型 radio + 消息样式段 + 保存/测试动作
   const templateSrc = code('src/views/notifications/ChannelCards.vue')
   const template = templateSrc.slice(0, templateSrc.indexOf('<script'))
