@@ -167,6 +167,11 @@ export default {
       keysAccess: {
         title: 'API & MCP access',
         apiStatsTitle: 'API key stats',
+        rowEndpoint: 'Endpoint',
+        rowAuth: 'Auth',
+        rowFor: 'For',
+        authRest: 'Bearer: JWT or lb_sk_ API key',
+        authMcp: 'lb_sk_ API key (X-API-Key or Bearer)',
         apiCardTitle: 'REST API access',
         apiCardDesc: 'REST endpoints share the /api/v1 prefix; management APIs use the Authorization: Bearer header with a JWT or lb_sk_ API key.',
         mcpCardTitle: 'MCP access',

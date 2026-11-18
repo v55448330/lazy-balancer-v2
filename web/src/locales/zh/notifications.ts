@@ -169,6 +169,11 @@ export default {
       keysAccess: {
         title: 'API 与 MCP 接入',
         apiStatsTitle: 'API 密钥统计',
+        rowEndpoint: '端点',
+        rowAuth: '鉴权',
+        rowFor: '用途',
+        authRest: 'Bearer：JWT 或 lb_sk_ API Key',
+        authMcp: 'lb_sk_ API Key（X-API-Key 或 Bearer）',
         apiCardTitle: 'REST API 接入',
         apiCardDesc: 'REST 端点统一前缀 /api/v1；管理接口使用 Authorization: Bearer 头携带 JWT 或 lb_sk_ API Key。',
         mcpCardTitle: 'MCP 接入',

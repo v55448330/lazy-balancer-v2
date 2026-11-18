@@ -9,14 +9,6 @@
         <p class="page-desc">{{ t('common.app.views.keys.pageDesc') }}</p>
       </div>
       <div class="header-actions">
-        <el-button tag="a" href="/api/v1/docs" target="_blank" rel="noopener noreferrer">
-          <el-icon><Document /></el-icon>
-          {{ t('common.app.views.keys.apiDocs') }}
-        </el-button>
-        <el-button @click="mcpDocsVisible = true">
-          <el-icon><Connection /></el-icon>
-          {{ t('common.app.views.keys.mcpDocs') }}
-        </el-button>
         <el-tooltip :disabled="!nodeWriteBlocked" :content="nodeWriteBlockedReason">
           <div>
             <el-button type="primary" :disabled="nodeWriteBlocked || creating" @click="openCreateDialog">
@@ -122,45 +114,83 @@
       <el-empty :description="t('common.app.views.keys.emptyText')" :image-size="80" />
     </el-card>
 
-    <el-divider content-position="left" class="section-divider">{{ t('app.notification.keysAccess.title') }}</el-divider>
+    <!-- ① 接入统计（健康度总览：REST/MCP 双列同构指标） -->
+    <AccessStatsCards :api-key-stats="apiKeyStats" :mcp-stats="mcpStats" class="keys-mcp-block" />
 
-    <!-- API/MCP 双接入卡（统一操作逻辑：各一张接入卡承载「文档」动作，
-         统计卡并列，会话/密钥列表各归其位） -->
+    <!-- ② 接入方式（双协议完全同构卡：端点/鉴权/文档三行，操作逻辑一致） -->
+    <el-divider content-position="left" class="section-divider">{{ t('app.notification.keysAccess.title') }}</el-divider>
     <el-row :gutter="16" class="keys-mcp-block">
-      <el-col :span="12">
+      <el-col :xs="24" :md="12">
         <el-card shadow="never" class="access-card">
           <template #header>
             <div class="card-header-row">
-              <span>{{ t('app.notification.keysAccess.apiCardTitle') }}</span>
+              <div class="access-proto">
+                <el-icon class="access-proto-icon"><Key /></el-icon>
+                <span>{{ t('app.notification.keysAccess.apiCardTitle') }}</span>
+              </div>
               <el-button size="small" tag="a" href="/api/v1/docs" target="_blank" rel="noopener noreferrer">
                 {{ t('common.app.views.keys.apiDocs') }}
               </el-button>
             </div>
           </template>
-          <div class="access-card-body">
-            <div class="info-note-bar"><span class="info-note-desc">{{ t('app.notification.keysAccess.apiCardDesc') }}</span></div>
-            <code class="access-endpoint">Authorization: Bearer &lt;JWT | lb_sk_…&gt;</code>
+          <div class="access-rows">
+            <div class="access-row">
+              <span class="access-row-label">{{ t('app.notification.keysAccess.rowEndpoint') }}</span>
+              <code class="access-row-value">/api/v1/…</code>
+              <el-tooltip :content="t('common.app.views.keys.copy')" placement="top">
+                <el-button size="small" link :aria-label="t('common.app.views.keys.copy')" @click="copyRestBase">
+                  <el-icon><CopyDocument /></el-icon>
+                </el-button>
+              </el-tooltip>
+            </div>
+            <div class="access-row">
+              <span class="access-row-label">{{ t('app.notification.keysAccess.rowAuth') }}</span>
+              <span class="access-row-value">{{ t('app.notification.keysAccess.authRest') }}</span>
+            </div>
+            <div class="access-row access-row-desc">
+              <span class="access-row-label">{{ t('app.notification.keysAccess.rowFor') }}</span>
+              <span class="access-row-value">{{ t('app.notification.keysAccess.apiCardDesc') }}</span>
+            </div>
           </div>
         </el-card>
       </el-col>
-      <el-col :span="12">
+      <el-col :xs="24" :md="12">
         <el-card shadow="never" class="access-card">
           <template #header>
             <div class="card-header-row">
-              <span>{{ t('app.notification.keysAccess.mcpCardTitle') }}</span>
+              <div class="access-proto">
+                <el-icon class="access-proto-icon"><Connection /></el-icon>
+                <span>{{ t('app.notification.keysAccess.mcpCardTitle') }}</span>
+              </div>
               <el-button size="small" @click="mcpDocsVisible = true">
                 {{ t('common.app.views.keys.mcpDocs') }}
               </el-button>
             </div>
           </template>
-          <div class="access-card-body">
-            <div class="info-note-bar"><span class="info-note-desc">{{ t('app.notification.keysAccess.mcpCardDesc') }}</span></div>
-            <code class="access-endpoint">{{ mcpServiceURL }}</code>
+          <div class="access-rows">
+            <div class="access-row">
+              <span class="access-row-label">{{ t('app.notification.keysAccess.rowEndpoint') }}</span>
+              <code class="access-row-value">{{ mcpServiceURL }}</code>
+              <el-tooltip :content="t('common.app.views.keys.copyMcpUrlAria')" placement="top">
+                <el-button size="small" link :aria-label="t('common.app.views.keys.copyMcpUrlAria')" @click="copyMCPServiceURL">
+                  <el-icon><CopyDocument /></el-icon>
+                </el-button>
+              </el-tooltip>
+            </div>
+            <div class="access-row">
+              <span class="access-row-label">{{ t('app.notification.keysAccess.rowAuth') }}</span>
+              <span class="access-row-value">{{ t('app.notification.keysAccess.authMcp') }}</span>
+            </div>
+            <div class="access-row access-row-desc">
+              <span class="access-row-label">{{ t('app.notification.keysAccess.rowFor') }}</span>
+              <span class="access-row-value">{{ t('app.notification.keysAccess.mcpCardDesc') }}</span>
+            </div>
           </div>
         </el-card>
       </el-col>
     </el-row>
-    <AccessStatsCards :api-key-stats="apiKeyStats" :mcp-stats="mcpStats" class="keys-mcp-block" />
+
+    <!-- ③ API 密钥（两种协议共享的资产区） + ④ MCP 会话（管理员） -->
     <McpSessionsCard class="keys-mcp-block" />
 
     <el-dialog
@@ -435,7 +465,7 @@ import { copyText } from '@/utils/copy'
 import { createOneTimeSecretCloseGuard } from '@/utils/oneTimeSecretGuard'
 import { saveBlob } from '@/utils/download'
 import { ElMessageBox, ElMessage } from 'element-plus'
-import { CircleCheckFilled, Connection, CopyDocument, Delete, Document, Key, Plus, Setting, SetUp, SwitchButton, VideoPlay } from '@element-plus/icons-vue'
+import { CircleCheckFilled, Connection, CopyDocument, Delete, Key, Plus, Setting, SetUp, SwitchButton, VideoPlay } from '@element-plus/icons-vue'
 import type { APIKey, APIResponse, CreateAPIKeyInput, MCPToolSpec, UpdateAPIKeyInput } from '@/types'
 import type { McpStats, McpStatsResponse } from '@/types/notifications.ts'
 import { useI18n } from 'vue-i18n'
@@ -790,6 +820,14 @@ const fetchMCPTools = async (): Promise<void> => {
   }
 }
 
+const copyRestBase = async (): Promise<void> => {
+  if (await copyText(new URL('/api/v1', window.location.origin).toString())) {
+    ElMessage.success(t('common.app.views.keys.mcpUrlCopied'))
+    return
+  }
+  ElMessage.error(t('common.app.views.keys.copyUrlFailed'))
+}
+
 const copyMCPServiceURL = async (): Promise<void> => {
   if (await copyText(mcpServiceURL)) {
     ElMessage.success(t('common.app.views.keys.mcpUrlCopied'))
@@ -805,17 +843,16 @@ onMounted(() => {
 </script>
 
 <style scoped>
-/* API/MCP 接入卡（统一形态） */
+/* API/MCP 接入卡（双协议同构：端点/鉴权/用途三行） */
 .access-card :deep(.el-card__body) { padding: 14px 16px; }
-.access-card-body { display: flex; flex-direction: column; gap: 10px; }
-.access-endpoint {
-  display: block;
-  padding: 8px 10px;
-  font-size: 12px;
-  word-break: break-all;
-  background: var(--el-fill-color-light);
-  border-radius: 6px;
-}
+.access-proto { display: inline-flex; align-items: center; gap: 8px; font-weight: 600; }
+.access-proto-icon { color: var(--el-color-primary); font-size: 16px; }
+.access-rows { display: flex; flex-direction: column; gap: 10px; }
+.access-row { display: flex; align-items: baseline; gap: 10px; }
+.access-row-label { flex: none; width: 64px; font-size: 12px; color: var(--text-secondary, #6b7280); }
+.access-row-value { font-size: 13px; word-break: break-all; }
+code.access-row-value { padding: 3px 8px; background: var(--el-fill-color-light); border-radius: 4px; }
+.access-row-desc .access-row-value { color: var(--text-secondary, #6b7280); font-size: 12px; line-height: 1.6; }
 .card-header-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .section-divider { margin: 24px 0 20px; }
 .section-divider :deep(.el-divider__text) { font-size: 14px; color: var(--text-secondary, #6b7280); font-weight: 600; }

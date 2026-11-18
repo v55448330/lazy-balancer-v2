@@ -46,14 +46,18 @@ test('Keys.vue 区块接线：统计并列卡+会话卡（原 MCP 文档对话�
   assert.match(text, /import AccessStatsCards from '\.\/settings\/AccessStatsCards\.vue'/)
   assert.match(text, /import McpSessionsCard from '\.\/settings\/McpSessionsCard\.vue'/)
   assert.doesNotMatch(text, /McpAccessCard|McpUsageCard/, '接入卡已按裁定删除，不得残留引用')
-  const blocksStart = text.indexOf("<el-divider content-position=\"left\" class=\"section-divider\">{{ t('app.notification.keysAccess.title') }}")
-  assert.ok(blocksStart > 0, 'MCP 区块分隔标题缺失')
-  const blocks = text.slice(blocksStart, text.indexOf('<el-dialog', blocksStart))
-  // 结构：统计并列卡（API+MCP）→ 会话卡；playbook/认证示例只在原对话框内
-  assert.match(blocks, /<AccessStatsCards :api-key-stats="apiKeyStats" :mcp-stats="mcpStats"/)
+  // 新信息架构：①接入统计（健康度总览）→②接入方式（双协议同构连接卡）→③会话卡；
+  // 统计卡上移到分隔线之前（首屏总览），连接卡承载端点/鉴权/文档动作
+  const statsAt = text.indexOf('<AccessStatsCards :api-key-stats="apiKeyStats" :mcp-stats="mcpStats"')
+  const dividerAt = text.indexOf("<el-divider content-position=\"left\" class=\"section-divider\">{{ t('app.notification.keysAccess.title') }}")
+  assert.ok(statsAt > 0 && dividerAt > statsAt, '接入统计必须先于接入方式区（健康度总览置顶）')
+  const blocks = text.slice(dividerAt, text.indexOf('<el-dialog', dividerAt))
+  // 双协议同构连接卡：同一组行标签（端点/鉴权/用途）出现两次（REST 与 MCP 各一）
+  const rowLabelHits = (blocks.match(/rowEndpoint/g) || []).length
+  assert.ok(rowLabelHits >= 2, `接入卡必须同构（rowEndpoint 出现 ${rowLabelHits} 次, want ≥2）`)
   assert.match(blocks, /<McpSessionsCard/)
   assert.doesNotMatch(blocks, /ops-playbook|X-API-Key/, '端点/认证示例/playbook 不得在页面区块重复（原对话框已承载）')
-  // 原有 MCP 文档入口保持：页头按钮 + 对话框内 playbook 下载
+  // MCP 文档入口保持：接入卡按钮 + 对话框内 playbook 下载
   assert.match(text, /@click="mcpDocsVisible = true"/)
   assert.match(text, /request\.get<Blob>\('\/mcp\/ops-playbook', \{ responseType: 'blob' \}\)/)
   // 统计单次拉取：管理员门 + 端点
