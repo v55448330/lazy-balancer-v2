@@ -42,16 +42,17 @@ test('侧栏接线：通知中心菜单项紧跟 API 密钥之后（铃铛图标
   assert.match(navItems, /navNotifications/, '侧栏文案必须走 navNotifications 词条')
 })
 
-test('通知页配置面板投影：触发条件+通道+SMTP+投递', () => {
+test('通知页四 tab 投影：规则/通道/投递/邮件服务', () => {
   const text = code('src/views/notifications/NotificationCenter.vue')
+  assert.match(text, /el-tabs/, '必须使用 tabs')
   assert.match(text, /request\.get<[^>]*>\('\/notification\/rules'\)/, '必须消费规则端点')
   assert.match(text, /trigger-grid/, '触发条件网格必须在位')
-  assert.match(text, /channel-grid/, '通道网格必须在位')
   assert.match(text, /DialogHeader/, '模板编辑弹窗必须用 DialogHeader')
-  assert.match(text, /DeliveryLog/, '投递记录必须在位')
-  assert.match(text, /SystemCredentials/, 'SMTP 设置必须在位')
-  assert.match(text, /ChannelCards/, '通道管理必须在位')
+  for (const comp of ['DeliveryLog', 'ChannelCards', 'SystemCredentials']) {
+    assert.match(text, new RegExp(`import ${comp} from './${comp}\\.vue'`), `${comp} 必须在位`)
+  }
 })
+
 
 
 

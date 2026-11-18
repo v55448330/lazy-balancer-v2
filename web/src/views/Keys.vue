@@ -29,8 +29,12 @@
       </template>
     </el-alert>
 
+    <el-tabs v-model="apiActiveTab">
+      <el-tab-pane :label="t('app.notification.keysAccess.overviewTab')" name="overview">
     <AccessStatsCards :api-key-stats="apiKeyStats" :mcp-stats="mcpStats" :rest-stats="restOverview" class="keys-mcp-block" />
 
+      </el-tab-pane>
+      <el-tab-pane :label="t('app.notification.keysAccess.keysTab')" name="keys">
     <el-divider content-position="left" class="section-divider">{{ t('common.app.views.keys.pageTitle') }}</el-divider>
     <el-table
       v-loading="loading"
@@ -186,7 +190,12 @@
       </el-col>
     </el-row>
 
+      </el-tab-pane>
+      <el-tab-pane :label="t('app.notification.keysAccess.mcpTab')" name="mcp">
     <McpSessionsCard class="keys-mcp-block" />
+
+      </el-tab-pane>
+    </el-tabs>
 
     <el-dialog
       v-model="mcpDocsVisible"
@@ -555,6 +564,7 @@ const mcpTools = ref<MCPToolSpec[]>([])
 const mcpToolsLoading = ref(false)
 const mcpToolsLoaded = ref(false)
 const mcpToolsError = ref('')
+const apiActiveTab = ref('overview')
 const mcpServiceURL = new URL('/api/v1/mcp', window.location.origin).toString()
 const mcpConfigJSON = computed(() => JSON.stringify({
   mcpServers: {

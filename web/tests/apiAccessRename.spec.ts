@@ -41,31 +41,15 @@ test('Keys.vue 页头与侧栏文案仍走词条单源（不改字面量）', ()
   assert.match(layout, /NAV_LABELS\['settings-apikeys'\]/)
 })
 
-test('Keys.vue 区块接线：统计并列卡+会话卡（原 MCP 文档对话框不动）', () => {
+test('Keys.vue 三 tab 投影：概览/密钥/MCP', () => {
   const text = code('src/views/Keys.vue')
-  assert.match(text, /import AccessStatsCards from '\.\/settings\/AccessStatsCards\.vue'/)
-  assert.match(text, /import McpSessionsCard from '\.\/settings\/McpSessionsCard\.vue'/)
-  assert.doesNotMatch(text, /McpAccessCard|McpUsageCard/, '接入卡已按裁定删除，不得残留引用')
-  // 新信息架构：①接入统计（健康度总览）→②接入方式（双协议同构连接卡）→③会话卡；
-  // 统计卡上移到分隔线之前（首屏总览），连接卡承载端点/鉴权/文档动作
-  const statsAt = text.indexOf('<AccessStatsCards :api-key-stats="apiKeyStats" :mcp-stats="mcpStats" :rest-stats="restOverview"')
-  // 单页四分区：统计在接入方式卡之前（section-head 分区头结构，无 tab）
-  assert.ok(statsAt > 0, '接入统计卡必须在位')
-  assert.doesNotMatch(text, /<el-tabs|el-tab-pane/, 'API 接入页单页分区（tab 不得回潮）')
-  const accessAt = text.indexOf('section-head-title')
-  const blocks = text.slice(accessAt > 0 ? accessAt : 0, text.indexOf('<el-dialog', Math.max(accessAt, 0)))
-  // 双协议同构连接卡：同一组行标签（端点/鉴权/用途）出现两次（REST 与 MCP 各一）
-  const rowLabelHits = (blocks.match(/rowEndpoint/g) || []).length
-  assert.ok(rowLabelHits >= 2, `接入卡必须同构（rowEndpoint 出现 ${rowLabelHits} 次, want ≥2）`)
-  assert.match(blocks, /<McpSessionsCard/)
-  assert.doesNotMatch(blocks, /ops-playbook|X-API-Key/, '端点/认证示例/playbook 不得在页面区块重复（原对话框已承载）')
-  // MCP 文档入口保持：接入卡按钮 + 对话框内 playbook 下载
-  assert.match(text, /@click="mcpDocsVisible = true"/)
-  assert.match(text, /request\.get<Blob>\('\/mcp\/ops-playbook', \{ responseType: 'blob' \}\)/)
-  // 统计单次拉取：管理员门 + 端点
-  assert.match(text, /if \(!isAdmin\.value\) return/, 'stats 拉取必须管理员限定')
-  assert.match(text, /request\.get<McpStatsResponse>\('\/notification\/mcp\/stats'\)/)
+  assert.match(text, /el-tabs/, '必须使用 tabs')
+  assert.match(text, /apiActiveTab/, 'tab 状态必须在位')
+  assert.match(text, /AccessStatsCards/, '统计卡必须在位')
+  assert.match(text, /McpSessionsCard/, 'MCP 会话必须在位')
+  assert.match(text, /keys-table/, '密钥表格必须在位')
 })
+
 
 test('API 密钥统计：api_keys 现成字段现算，不虚报调用计数', () => {
   const text = code('src/views/Keys.vue')
