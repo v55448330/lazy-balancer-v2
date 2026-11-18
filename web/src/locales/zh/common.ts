@@ -216,6 +216,7 @@ export default {
     notificationChannel: '通知通道',
     qqBot: 'QQ 机器人',
     notificationDelivery: '通知投递',
+    notificationRule: '通知规则',
     notificationSubscription: '通知订阅',
     notificationSettings: '通知设置',
     notificationDailyReport: '通知日报',

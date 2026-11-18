@@ -216,6 +216,7 @@ export default {
     notificationChannel: 'Notification channel',
     qqBot: 'QQ bot',
     notificationDelivery: 'Notification delivery',
+    notificationRule: 'Notification rule',
     notificationSubscription: 'Notification subscription',
     notificationSettings: 'Notification settings',
     notificationDailyReport: 'Notification daily report',

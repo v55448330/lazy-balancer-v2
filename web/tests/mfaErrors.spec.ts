@@ -212,6 +212,7 @@ test('MFA 清单反查：middleware 全部写路由族均有清单锚点', () =>
     ['/api/v1/certificates/jobs', '证书任务'],
     ['/api/v1/notification/settings', '通知系统设置（SMTP/QQ/微信凭据/微信扫码登录与 MCP 全局开关）'],
     ['/api/v1/notification/daily', '通知订阅与每日日报设置（含手动触发）'],
+    ['/api/v1/notification/rules', '通知规则管理（触发/通道/模板聚合视图）'],
     ['/api/v1/notification/subscriptions', '通知订阅与每日日报设置（含手动触发）'],
     ['/api/v1/notification/deliveries/', '投递记录失败重发'],
     ['/api/v1/notification/qq/', 'QQ 通道扫码绑定码生成'],
@@ -312,6 +313,7 @@ const MFA_SCOPE_I18N_TABLE: Record<string, string> = {
   "scopeNotifyDeliveryResend": "投递记录失败重发",
   "scopeNotifySettings": "通知系统设置（SMTP/QQ/微信凭据/微信扫码登录与 MCP 全局开关）",
   "scopeNotifySubs": "通知订阅与每日日报设置（含手动触发）",
+  "scopeNotifyRules": "通知规则管理（触发/通道/模板聚合视图）",
   "scopeOidcConfig": "OIDC 配置修改/删除",
   "scopeProfileUpdate": "个人资料修改",
   "scopeRawCaddyOverwrite": "原始 Caddy 配置覆写（JSON 逃生口）",
@@ -334,5 +336,5 @@ const MFA_SCOPE_KEY_LAYOUT: ReadonlyArray<readonly [string, readonly string[]]> 
   ['scopeGroupUsersKeys', ['scopeUserCrud', 'scopeProfileUpdate', 'scopeApiKeyMgmt', 'scopeMfaReset', 'scopeRecoveryCodes']],
   ['scopeGroupSystem', ['scopeSettingsSave', 'scopeConfigReloadValidate', 'scopeConfigImport', 'scopeConfigExportBackup', 'scopeAdminTls', 'scopeOidcConfig', 'scopeCaddyService', 'scopeRawCaddyOverwrite', 'scopeTaskMonitor', 'scopeSystemRestart']],
   ['scopeGroupCluster', ['scopeNodeApproval', 'scopeAccessUrl', 'scopeNodeSite', 'scopeNodeService', 'scopeForgetPin', 'scopeRegisterToken', 'scopeModeSwitch', 'scopeManualSync', 'scopeClusterSync', 'scopeReplicaLogin']],
-  ['scopeGroupNotify', ['scopeNotifyChannelCrud', 'scopeNotifyQQBind', 'scopeNotifySubs', 'scopeNotifyDeliveryResend', 'scopeNotifySettings', 'scopeMcpSessionDisconnect']],
+  ['scopeGroupNotify', ['scopeNotifyChannelCrud', 'scopeNotifyQQBind', 'scopeNotifySubs', 'scopeNotifyRules', 'scopeNotifyDeliveryResend', 'scopeNotifySettings', 'scopeMcpSessionDisconnect']],
 ]

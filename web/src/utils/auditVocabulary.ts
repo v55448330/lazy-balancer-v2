@@ -214,6 +214,7 @@ export const AUDIT_RESOURCE_KEYS: Record<string, string> = {
   '通知通道': 'notificationChannel',
   'QQ 机器人': 'qqBot',
   '通知投递': 'notificationDelivery',
+  '通知规则': 'notificationRule',
   '通知订阅': 'notificationSubscription',
   '通知设置': 'notificationSettings',
   '通知日报': 'notificationDailyReport',

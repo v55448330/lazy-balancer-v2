@@ -76,7 +76,9 @@ var auditRoutePolicies = map[string]AuditPolicy{
 	"POST /api/v1/notification/wx/qr/start":   AuditPolicySkip,
 	// 通知通道 CRUD/测试：创建与测试由中间件通用留痕；更新与删除 handler
 	// 显式留痕（显式分类防双记；删除对属主与跨属主均记录）。
-	"POST /api/v1/notification/channels":          AuditPolicyGeneric,
+	"POST /api/v1/notification/channels": AuditPolicyGeneric,
+	// 通知规则更新：中间件经映射记录（Generic）。
+	"POST /api/v1/notification/rules/:id":         AuditPolicyGeneric,
 	"POST /api/v1/notification/channels/:id/test": AuditPolicyGeneric,
 	// SMTP 连通性测试（诊断动作，中间件通用留痕）。
 	"POST /api/v1/notification/settings/smtp-test": AuditPolicyGeneric,

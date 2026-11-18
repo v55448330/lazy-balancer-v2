@@ -41,4 +41,6 @@ func init() {
 	Register("k_435eb4ab", "仅可测试自己的通知通道", "You can only test your own notification channels")
 	Register("k_8e353bc9", "测试消息发送失败: %s", "Failed to send the test message: %s")
 	Register("k_4bde3724", "测试消息已发送", "Test message sent")
+	Register("k_1d8f5b94", "未知事件组: %s", "Unknown event group: %s")
+	Register("k_53f42807", "无效规则 ID: %s", "Invalid rule ID: %s")
 }

@@ -27,7 +27,6 @@ export interface NotificationChannel {
 }
 
 export type NotificationChannelsResponse = APIResponse<{ channels: NotificationChannel[] }>
-export type NotificationCreateChannelResponse = APIResponse<{ id: number }>
 
 /** GET /notification/catalog 行。group 为服务端下发的分组显示串（认证/安全/…）。 */
 export interface CatalogEvent {

@@ -588,6 +588,7 @@ export default {
     'scopeNotifyDeliveryResend': 'Delivery failure resend',
     'scopeNotifySettings': 'Notification system settings (SMTP/QQ/WeChat credentials/WeChat scan login & MCP global switch)',
     'scopeNotifySubs': 'Notification subscriptions & daily report settings (incl. manual trigger)',
+    'scopeNotifyRules': 'Notification rules management (trigger/channel/template)',
     'scopeOidcConfig': 'OIDC config change/delete',
     'scopeProfileUpdate': 'Profile update',
     'scopeRawCaddyOverwrite': 'Raw Caddy config overwrite (JSON escape hatch)',

@@ -588,6 +588,7 @@ export default {
     'scopeNotifyDeliveryResend': '投递记录失败重发',
     'scopeNotifySettings': '通知系统设置（SMTP/QQ/微信凭据/微信扫码登录与 MCP 全局开关）',
     'scopeNotifySubs': '通知订阅与每日日报设置（含手动触发）',
+    'scopeNotifyRules': '通知规则管理（触发/通道/模板聚合视图）',
     'scopeOidcConfig': 'OIDC 配置修改/删除',
     'scopeProfileUpdate': '个人资料修改',
     'scopeRawCaddyOverwrite': '原始 Caddy 配置覆写（JSON 逃生口）',

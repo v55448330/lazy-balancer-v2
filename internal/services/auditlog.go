@@ -367,6 +367,8 @@ func FormatAuditAction(path string) (action, resource, detail string) {
 	switch path {
 	case "/api/v1/notification/channels":
 		return "创建", "通知通道", path
+	case "/api/v1/notification/rules/:id":
+		return "修改", "通知规则", path
 	case "/api/v1/notification/channels/:id/test":
 		return "测试", "通知通道", path
 	case "/api/v1/notification/settings/smtp-test":

@@ -42,37 +42,33 @@ test('侧栏接线：通知中心菜单项紧跟 API 密钥之后（铃铛图标
   assert.match(navItems, /navNotifications/, '侧栏文案必须走 navNotifications 词条')
 })
 
-test('通知页单页分区投影：锚点导航+五区全渲染（credentials 仅管理员）', () => {
+test('通知页规则模式投影：规则列表+向导+最近投递', () => {
   const text = code('src/views/notifications/NotificationCenter.vue')
-  assert.match(text, /class="anchor-nav"/, '锚点导航必须在位')
-  assert.doesNotMatch(text, /<el-tabs|el-tab-pane/, '通知中心不得回潮 tabs 形态')
-  for (const comp of ['ChannelCards', 'SubscriptionMatrix', 'DailyReport', 'DeliveryLog', 'SystemCredentials']) {
-    assert.match(text, new RegExp(`import ${comp} from './${comp}\\.vue'`), `${comp} 必须落位 notifications 域内`)
-  }
-  assert.match(text, /v-if="isAdmin"[^>]*id="sec-smtp"/, '邮件服务区必须管理员限定')
+  // 规则 API 消费
+  assert.match(text, /request\.get<[^>]*>\('\/notification\/rules'\)/, '必须消费规则聚合端点')
+  assert.match(text, /request\.put\(`\/notification\/rules\/\$\{[^}]*\}`/, '必须支持规则更新')
+  // 规则卡片（非 tabs/table）
+  assert.match(text, /class="rule-card"/, '规则卡片形态必须在位')
+  assert.doesNotMatch(text, /<el-tabs|el-tab-pane/, '通知中心不得回潮 tabs')
+  // 向导（三步）
+  assert.match(text, /wizardStep/, '添加规则向导必须在位')
+  assert.match(text, /el-steps/, '向导步骤条必须在位')
+  // 最近投递
+  assert.match(text, /DeliveryLog/, '最近投遗摘要必须在位')
 })
 
-test('通道抽屉消费通道 REST 契约：CRUD+test+按类型目标 JSON+样式提交', () => {
+
+test('通道卡 REST 契约：卡片网格+测试/启停/删除', () => {
   const text = code('src/views/notifications/ChannelCards.vue')
   assert.match(text, /request\.get<NotificationChannelsResponse>\('\/notification\/channels'\)/)
-  assert.match(text, /request\.post<NotificationCreateChannelResponse & \{ data\?: \{ reused\?: boolean \} \}>\('\/notification\/channels'/)
-  assert.match(text, /request\.put\(`\/notification\/channels\/\$\{drawerTarget\.value\.id\}`/)
-  assert.match(text, /request\.delete\(`\/notification\/channels\/\$\{ch\.id\}`\)/)
   assert.match(text, /request\.post\(`\/notification\/channels\/\$\{ch\.id\}\/test`\)/)
-  // 目标 JSON 按后端 validateChannelTarget 的键约束（url/email/openid/receiver）
-  const targetField = text.slice(text.indexOf('const targetField'), text.indexOf('const parseTargetValue'))
-  assert.match(targetField, /case 'webhook': return 'url'/)
-  assert.match(targetField, /case 'email': return 'email'/)
-  assert.match(targetField, /case 'qq': return 'openid'/)
-  assert.match(targetField, /default: return 'receiver'/)
-  // Drawer 一步式（三步向导已废弃）：类型 radio + 消息样式段 + 保存/测试动作
-  const templateSrc = code('src/views/notifications/ChannelCards.vue')
-  const template = templateSrc.slice(0, templateSrc.indexOf('<script'))
-  assert.match(template, /<el-drawer/, '创建/编辑必须走右侧抽屉（三步向导已废弃）')
-  assert.doesNotMatch(template, /<el-steps/, '三步向导不得回潮')
-  assert.match(template, /stylePayloadTpl|styleSubjectTpl/, '消息样式段必须在位')
-  assert.match(template, /class="status-dot"/, '通道列表必须有启停状态点')
+  assert.match(text, /request\.put\(`\/notification\/channels\/\$\{ch\.id\}`/, '启停/编辑')
+  assert.match(text, /request\.delete\(`\/notification\/channels\/\$\{ch\.id\}`\)/)
+  // 卡片网格形态（非表格）
+  assert.match(text, /class="ch-card"/, '通道必须为卡片网格形态')
+  assert.match(text, /class="ch-icon/, '卡片必须有类型彩色图标')
 })
+
 
 test('订阅矩阵消费 catalog+subscriptions 契约，保存走 items 语义', () => {
   const text = code('src/views/notifications/SubscriptionMatrix.vue')
