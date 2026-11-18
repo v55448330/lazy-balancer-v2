@@ -4,7 +4,7 @@
   <el-card shadow="never" class="access-stats-card">
     <template #header>
       <div class="stats-header">
-        <span>{{ t('app.notification.keysAccess.title') }}</span>
+        <span>{{ t('app.notification.keysAccess.statsCardTitle') }}</span>
         <span class="stats-asof">{{ t('app.notification.keysAccess.statsAsof') }}</span>
       </div>
     </template>
@@ -37,7 +37,7 @@
             </div>
           </el-col>
         </el-row>
-        <div class="proto-foot">{{ t('app.notification.keysAccess.protoRestFoot2') }}</div>
+        <div class="proto-foot">{{ t('app.notification.keysAccess.protoRestFoot') }}</div>
       </el-col>
 
       <!-- MCP 列：调用/会话/健康 -->

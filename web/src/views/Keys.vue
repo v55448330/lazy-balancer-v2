@@ -29,12 +29,6 @@
       </template>
     </el-alert>
 
-    <!-- 分区①：API 密钥（表格式资产列表） -->
-    <div class="section-head">
-      <el-icon class="section-head-icon"><Key /></el-icon>
-      <span class="section-head-title">{{ t('common.app.views.keys.pageTitle') }}</span>
-      <span class="section-head-desc">{{ t('common.app.views.keys.pageDesc') }}</span>
-    </div>
     <el-table
       v-loading="loading"
       :data="tableKeys"
@@ -78,7 +72,7 @@
       <el-table-column :label="t('common.app.views.keys.expiresAt')" width="110">
         <template #default="scope">{{ formatDate(scope.row.expires_at) || t('common.app.views.keys.neverExpires') }}</template>
       </el-table-column>
-      <el-table-column :label="t('app.notification.deliveries.colAction')" width="240" align="right">
+      <el-table-column :label="t('app.notification.deliveries.colAction')" width="270" align="right" fixed="right">
         <template #default="scope">
           <el-tooltip :disabled="!nodeWriteBlocked" :content="nodeWriteBlockedReason">
             <div class="row-actions">
@@ -121,7 +115,7 @@
     <!-- 分区③：接入方式（双协议同构卡：端点/鉴权/文档） -->
     <div class="section-head">
       <el-icon class="section-head-icon"><Connection /></el-icon>
-      <span class="section-head-title">{{ t('app.notification.keysAccess.title') }}</span>
+      <span class="section-head-title">{{ t('app.notification.keysAccess.accessMethodTitle') }}</span>
     </div>
     <el-row :gutter="16" class="keys-mcp-block">
       <el-col :xs="24" :md="12">
@@ -194,12 +188,6 @@
       </el-col>
     </el-row>
 
-    <!-- ③ MCP 会话（管理员） -->
-    <!-- 分区④：MCP 会话（管理员） -->
-    <div class="section-head">
-      <el-icon class="section-head-icon"><Setting /></el-icon>
-      <span class="section-head-title">{{ t('app.notification.keysSessions.title') }}</span>
-    </div>
     <McpSessionsCard class="keys-mcp-block" />
 
     <el-dialog

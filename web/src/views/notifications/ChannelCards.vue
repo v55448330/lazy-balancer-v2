@@ -44,7 +44,7 @@
           <span class="channel-type-label">{{ typeLabel(scope.row.type) }}</span>
         </template>
       </el-table-column>
-      <el-table-column label="Target" min-width="200">
+      <el-table-column :label="t('app.notification.channels.colTarget')" min-width="200">
         <template #default="scope">
           <code class="channel-target">{{ displayTarget(asCh(scope.row)) }}</code>
           <div v-if="!isMine(asCh(scope.row))" class="channel-masked-note">

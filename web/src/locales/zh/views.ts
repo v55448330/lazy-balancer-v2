@@ -362,6 +362,7 @@ export default {
     'ipWhitelist': 'IP 白名单',
     'keyCopied': '密钥已复制',
     'keyName': '密钥名称',
+    'name': '名称',
     'keyPrefix': '密钥前缀',
     'lastUsed': '最后使用',
     'loadErrorBanner': 'API 密钥加载失败：密钥列表为空不代表没有密钥',

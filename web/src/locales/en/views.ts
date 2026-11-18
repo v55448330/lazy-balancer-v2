@@ -362,6 +362,7 @@ export default {
     'ipWhitelist': 'IP whitelist',
     'keyCopied': 'Key copied',
     'keyName': 'Key name',
+    'name': 'Name',
     'keyPrefix': 'Key prefix',
     'lastUsed': 'Last used',
     'loadErrorBanner': 'Failed to load the API keys: an empty list doesn\'t mean there are no keys',
