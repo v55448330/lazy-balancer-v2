@@ -83,8 +83,15 @@ test('规则编辑契约：通道选择+每通道模板部分更新，不改启�
   assert.doesNotMatch(tplBlock, /body_template:/, '每通道模板取代单一 body_template 直写')
   const fieldBlock = text.slice(text.indexOf('const saveRuleField'), text.indexOf('const editTemplate'))
   assert.match(fieldBlock, /rule\.trigger === 'daily' \? \{ send_time: rule\.send_time \} : \{ min_level: rule\.min_level \}/, '字段保存只提交变更键')
-  // 级别列=下拉选择（radio-button 三按钮在 150px 列内竖排堆叠的缺陷形态禁止回潮）
-  assert.match(text, /el-select v-if="row\.trigger === 'event'" v-model="row\.min_level"/, '级别列必须为紧凑下拉')
+  // 级别列=下拉选择（radio-button 三按钮在窄列竖排堆叠的缺陷形态禁止回潮）；
+  // 选项文案走 subs.levels 多语言词条（信息/警告/严重）
+  assert.match(text, /el-select v-model="row\.min_level"/, '级别列必须为紧凑下拉')
+  assert.match(text, /t\('app\.notification\.subs\.levels\.info'\)/, '级别选项必须多语言')
+  // 每日摘要独立卡片（不混事件规则表格）
+  assert.match(text, /daily-card/, '每日摘要必须独立卡片')
+  assert.match(text, /eventRules/, '事件规则独立表格数据源')
+  // 规则测试走 /test 端点（按选定通道+模板渲染）
+  assert.match(text, /\/test/, '规则测试必须走规则级 test 端点')
   // 事件展示=可读标题（event_titles 单源），禁止裸事件键
   assert.match(text, /eventTitle\(asRule\(row\), ev\)/, '事件列必须经可读标题映射')
   // 邮件 HTML 预览=sandbox iframe；webhook/邮件编辑=CodeEditor 高亮
@@ -96,13 +103,17 @@ test('规则编辑契约：通道选择+每通道模板部分更新，不改启�
   assert.match(text, /distByEventTitle/, '事件分布图必须在位')
 })
 
-test('投递记录消费 deliveries 契约：过滤/全平台/失败重发', () => {
+test('投递记录消费 deliveries 契约：恒全量+用户/通道维度+失败重发', () => {
   const text = code('src/views/notifications/DeliveryLog.vue')
   assert.match(text, /params\.set\('limit', String\(DELIVERY_LIMIT\)\)/)
   assert.match(text, /params\.set\('status', statusFilter\.value\)/)
-  assert.match(text, /params\.set\('all', '1'\)/, '管理员全平台参数 all=1')
+  assert.doesNotMatch(text, /allScope/, '全平台开关已删（投递记录恒全量，用户裁定）')
   assert.match(text, /request\.get<NotificationDeliveriesResponse>\(`\/notification\/deliveries\?/)
   assert.match(text, /request\.post\(`\/notification\/deliveries\/\$\{row\.id\}\/resend`\)/)
+  // 用户/通道维度列在位；裸事件键列禁止回潮
+  assert.match(text, /colChannels/, '投递通道列必须在位')
+  assert.match(text, /scope\.row\.username/, '用户列必须显示用户名')
+  assert.doesNotMatch(text, /colEventType/, '裸事件键列禁止回潮（可读标题单源）')
   const resendable = text.slice(text.indexOf('const RESENDABLE'), text.indexOf('const deliveries ='))
   assert.match(resendable, /\['failed', 'dead'\]/, '重发入口仅失败态（failed/dead）')
 })

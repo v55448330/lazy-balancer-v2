@@ -7,6 +7,7 @@ package notify
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log"
 	"strconv"
 	"strings"
@@ -66,8 +67,14 @@ func deliverOne(ctx context.Context, id, userID int64, msg Message) {
 		log.Printf("WARN: notify 通道查询失败（delivery=%d）: %v", id, err)
 		return
 	}
-	// 订阅通道选择：channel_ids 非空=仅发选定通道（空=全部启用通道，向后兼容）
+	// 订阅通道选择三态：无订阅行/缺省=全部启用通道（默认订阅语义）；
+	// '[]' 显式空选=不投递任何通道（用户裁定：全不选=不订阅）；
+	// 非空数组=仅发选定通道。
 	sel := subscriptionChannelSelectionFor(userID, msg.EventType)
+	if sel.explicitEmpty {
+		markDelivery(id, "dead", true, "规则未选择接收通道（不投递）")
+		return
+	}
 	if len(sel.ids) > 0 {
 		filtered := channels[:0]
 		for _, ch := range channels {
@@ -81,38 +88,7 @@ func deliverOne(ctx context.Context, id, userID int64, msg Message) {
 		markDelivery(id, "dead", true, "无启用的通知通道")
 		return
 	}
-	var errs []string
-	sentAny := false
-	for _, ch := range channels {
-		chMsg := msg
-		chMsg.Title = msg.Title + "（" + ch.Type + "）"
-		// 模板优先级链：事件×通道模板（channel_templates[channelID]）>
-		// 事件级模板（body_template）> 通道级模板（style_config）> 系统默认。
-		eventTpl := sel.templates[ch.ChannelID]
-		if eventTpl == "" {
-			eventTpl = subscriptionTemplateFor(userID, msg.EventType)
-		}
-		if eventTpl != "" {
-			chMsg.Body = renderStyleTemplate(eventTpl, msg, time.Now())
-		}
-		// 日报按通道格式渲染（优先级：日报页 per-channel 配置 > 通道
-		// style_config.daily_format > 自动映射；其余事件原样透传）。
-		chMsg.Body = renderDailyForChannel(msg, ch.Type, ParseChannelStyle(ch.StyleConfig).DailyFormat)
-		// 通道消息样式合并进 target（sender 按 target 内可选键消费）
-		styledTarget := MergeStyleIntoTarget(ch.Target, ch.StyleConfig)
-		sendErr := sendToChannel(ctx, ch.Type, styledTarget, chMsg)
-		if sendErr != nil {
-			// 单通道重试 1 次（原实现整行重试两遍=成功通道重复收到消息，已修）
-			sendErr = sendToChannel(ctx, ch.Type, styledTarget, chMsg)
-		}
-		if sendErr != nil {
-			errs = append(errs, ch.Type+": "+sendErr.Error())
-			recordChannelResult(id, userID, ch, msg.EventType, "failed", sendErr.Error())
-			continue
-		}
-		sentAny = true
-		recordChannelResult(id, userID, ch, msg.EventType, "sent", "")
-	}
+	errs, sentAny := sendToChannels(ctx, id, userID, channels, sel.templates, msg)
 	if sentAny {
 		reason := ""
 		if len(errs) > 0 {
@@ -122,6 +98,76 @@ func deliverOne(ctx context.Context, id, userID int64, msg Message) {
 		return
 	}
 	markDelivery(id, "failed", true, strings.Join(errs, "; "))
+}
+
+// sendToChannels 逐通道渲染+发送（失败重试 1 次）+结果落行。deliverOne 与
+// 规则测试共用：模板优先级链=事件×通道模板 > 事件级模板 > 通道样式 > 默认。
+// deliveryID=0 时不落结果行（测试发送不污染投递统计）。
+func sendToChannels(ctx context.Context, deliveryID, userID int64, channels []deliveryTarget, channelTpls map[int64]string, msg Message) ([]string, bool) {
+	var errs []string
+	sentAny := false
+	for _, ch := range channels {
+		chMsg := msg
+		chMsg.Title = msg.Title + "（" + ch.Type + "）"
+		eventTpl := channelTpls[ch.ChannelID]
+		if eventTpl == "" {
+			eventTpl = subscriptionTemplateFor(userID, msg.EventType)
+		}
+		if eventTpl != "" {
+			chMsg.Body = renderStyleTemplate(eventTpl, msg, time.Now())
+		}
+		chMsg.Body = renderDailyForChannel(msg, ch.Type, ParseChannelStyle(ch.StyleConfig).DailyFormat)
+		styledTarget := MergeStyleIntoTarget(ch.Target, ch.StyleConfig)
+		sendErr := sendToChannel(ctx, ch.Type, styledTarget, chMsg)
+		if sendErr != nil {
+			sendErr = sendToChannel(ctx, ch.Type, styledTarget, chMsg)
+		}
+		if sendErr != nil {
+			errs = append(errs, ch.Type+": "+sendErr.Error())
+			if deliveryID > 0 {
+				recordChannelResult(deliveryID, userID, ch, msg.EventType, "failed", sendErr.Error())
+			}
+			continue
+		}
+		sentAny = true
+		if deliveryID > 0 {
+			recordChannelResult(deliveryID, userID, ch, msg.EventType, "sent", "")
+		}
+	}
+	return errs, sentAny
+}
+
+// TestRuleDelivery 规则测试发送（导出：handlers 通知规则「测试」按钮）：
+// 按订阅选定通道+每通道模板渲染真实事件形态消息并发送；不落投递行。
+// 返回逐通道错误（空=全部成功）。无选定通道/无启用通道返回明确错误。
+func TestRuleDelivery(ctx context.Context, userID int64, eventType string) ([]string, error) {
+	channels, err := channelsForUser(userID)
+	if err != nil {
+		return nil, err
+	}
+	sel := subscriptionChannelSelectionFor(userID, eventType)
+	if sel.explicitEmpty {
+		return nil, errors.New("规则未选择接收通道")
+	}
+	if len(sel.ids) > 0 {
+		filtered := channels[:0]
+		for _, ch := range channels {
+			if sel.ids[ch.ChannelID] {
+				filtered = append(filtered, ch)
+			}
+		}
+		channels = filtered
+	}
+	if len(channels) == 0 {
+		return nil, errors.New("无启用的通知通道")
+	}
+	msg := testNotificationMessage()
+	msg.EventType = eventType
+	errs, sentAny := sendToChannels(ctx, 0, userID, channels, sel.templates, msg)
+	if !sentAny {
+		return errs, errors.New("全部通道发送失败")
+	}
+	return errs, nil
 }
 
 // recordChannelResult 每通道投递结果落行（统计事实源；落库失败仅告警不阻断投递）。
@@ -153,10 +199,12 @@ func subscriptionTemplateFor(userID int64, eventType string) string {
 	return tpl
 }
 
-// channelSelection 订阅的通道选择（ids 空=全部启用通道；templates 键=通道 ID 字符串）。
+// channelSelection 订阅的通道选择三态：explicitEmpty=显式 '[]'（不投递）；
+// ids 非空=仅选定通道；两者皆否=全部启用通道（默认订阅语义）。
 type channelSelection struct {
-	ids       map[int64]bool
-	templates map[int64]string
+	ids           map[int64]bool
+	templates     map[int64]string
+	explicitEmpty bool
 }
 
 // subscriptionChannelSelectionFor 读订阅通道选择+每通道模板（坏 JSON=零值兜底，
@@ -169,6 +217,9 @@ func subscriptionChannelSelectionFor(userID int64, eventType string) channelSele
 	if idsRaw != "" {
 		var ids []int64
 		if json.Unmarshal([]byte(idsRaw), &ids) == nil {
+			if len(ids) == 0 {
+				out.explicitEmpty = true // 显式空数组=不投递（区别于缺省空串=全部）
+			}
 			for _, id := range ids {
 				out.ids[id] = true
 			}

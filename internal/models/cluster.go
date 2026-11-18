@@ -528,9 +528,14 @@ type ClusterAPIKey struct {
 	ExpiresAt      string       `json:"expires_at"`
 	IsEnabled      bool         `json:"is_enabled"`
 	MCPEnabled     bool         `json:"mcp_enabled"`
+	APIEnabled     *bool        `json:"api_enabled,omitempty"` // 指针：旧主端快照缺字段=nil→从端按启用（升级零漂移）
 	ReadOnly       bool         `json:"read_only"`
+	APIReadOnly    bool         `json:"api_read_only"`
+	MCPReadOnly    bool         `json:"mcp_read_only"`
 	MCPIPWhitelist []string     `json:"mcp_ip_whitelist"`
 	CreatedAt      time.Time    `json:"created_at"`
+	UpdatedAt      time.Time    `json:"updated_at"`
+	UpdatedBy      int          `json:"updated_by"`
 }
 
 type ClusterCertificate struct {

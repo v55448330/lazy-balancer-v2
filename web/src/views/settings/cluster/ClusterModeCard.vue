@@ -27,7 +27,7 @@
           <!-- 单位后缀归一全局 form-tip-inline（原自管.interval-unit
                与全局类仅色差/字号差）；行内 gap 已提供间距，左侧外边距置零 -->
           <span class="form-tip-inline" style="margin-left: 0">{{ t('common.app.views.cluster.unitSeconds') }}</span>
-          <el-button v-if="!isSlave" :loading="intervalSaving" :disabled="intervalDisabled || !syncIntervalValid || syncInterval === status?.sync_interval" @click="saveSyncInterval">{{ t('common.app.views.cluster.save') }}</el-button>
+          <el-button v-if="!isSlave" size="small" :loading="intervalSaving" :disabled="intervalDisabled || !syncIntervalValid || syncInterval === status?.sync_interval" @click="saveSyncInterval">{{ t('common.app.views.cluster.save') }}</el-button>
         </div>
         <div class="form-tip-line">
           <span v-if="!syncIntervalValid">{{ t('common.app.views.cluster.intervalInvalid') }}</span>

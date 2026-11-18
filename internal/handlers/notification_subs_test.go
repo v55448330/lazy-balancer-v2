@@ -280,27 +280,31 @@ func TestNotificationDeliveries_scopeFilterResendAndMasking(t *testing.T) {
 	userRouter := newNotificationTestRouter(h, 7, "user")
 	adminRouter := newNotificationTestRouter(h, 1, "admin")
 
-	// 默认只看自己。
+	// 恒全量（用户裁定：投递记录不区分用户视角）：普通用户也见全部行，
+	// 跨属主正文截断脱敏；用户维度经 username 呈现。
 	status, out := doNotifyRequest(t, userRouter, http.MethodGet, "/notification/deliveries", "")
 	if status != http.StatusOK {
 		t.Fatalf("GET status=%d", status)
 	}
 	deliveries, _ := out["data"].(map[string]any)["deliveries"].([]any)
-	if len(deliveries) != 2 {
-		t.Fatalf("本人视图行数=%d, want 2", len(deliveries))
+	if len(deliveries) != 3 {
+		t.Fatalf("全量行数=%d, want 3", len(deliveries))
 	}
 	for _, raw := range deliveries {
 		row, _ := raw.(map[string]any)
-		if row["user_id"].(float64) != 7 {
-			t.Fatalf("本人视图混入他人行: %v", row)
+		if row["user_id"].(float64) == 8 {
+			// 短正文原样（≤200 rune 不截断）；长正文截断脱敏由下方 admin 段钉住
+			if b := row["body"].(string); len([]rune(b)) > 210 {
+				t.Fatalf("跨属主行未截断: %q", b)
+			}
 		}
 	}
 
 	// 状态过滤与 limit。
 	status, out = doNotifyRequest(t, userRouter, http.MethodGet, "/notification/deliveries?status=failed", "")
 	deliveries, _ = out["data"].(map[string]any)["deliveries"].([]any)
-	if len(deliveries) != 1 {
-		t.Fatalf("status=failed 行数=%d, want 1", len(deliveries))
+	if len(deliveries) != 2 {
+		t.Fatalf("status=failed 行数=%d, want 2（全量含他人 failed）", len(deliveries))
 	}
 	status, out = doNotifyRequest(t, userRouter, http.MethodGet, "/notification/deliveries?limit=1", "")
 	deliveries, _ = out["data"].(map[string]any)["deliveries"].([]any)
@@ -334,11 +338,11 @@ func TestNotificationDeliveries_scopeFilterResendAndMasking(t *testing.T) {
 		}
 	}
 
-	// 管理员默认视图（无 all=1）仍只看自己。
+	// 管理员默认视图同样恒全量（投递记录不区分用户视角）。
 	status, out = doNotifyRequest(t, adminRouter, http.MethodGet, "/notification/deliveries", "")
 	deliveries, _ = out["data"].(map[string]any)["deliveries"].([]any)
-	if len(deliveries) != 0 {
-		t.Fatalf("管理员默认视图行数=%d, want 0（无本人行）", len(deliveries))
+	if len(deliveries) != 3 {
+		t.Fatalf("管理员默认视图行数=%d, want 3（恒全量）", len(deliveries))
 	}
 
 	// 重发：failed → pending；重复重发 409。

@@ -27,7 +27,9 @@ func TestAPIKeyAuthBindsOwningUser(t *testing.T) {
 	CREATE TABLE api_keys (
 		id INTEGER PRIMARY KEY, name VARCHAR(100), key_hash VARCHAR(255), key_prefix VARCHAR(20),
 		created_by INTEGER, last_used DATETIME, expires_at DATETIME, is_enabled BOOLEAN DEFAULT TRUE,
-		mcp_enabled INTEGER DEFAULT 0, read_only INTEGER DEFAULT 0, mcp_ip_whitelist TEXT DEFAULT '', created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		mcp_enabled INTEGER DEFAULT 0, api_enabled INTEGER DEFAULT 1, read_only INTEGER DEFAULT 0,
+		api_read_only INTEGER DEFAULT 0, mcp_read_only INTEGER DEFAULT 0,
+		mcp_ip_whitelist TEXT DEFAULT '', created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 	);
 	INSERT INTO users VALUES (7, 'alice', 'user', 1);`)
 	if err != nil {
@@ -37,7 +39,7 @@ func TestAPIKeyAuthBindsOwningUser(t *testing.T) {
 	hash := sha256.Sum256([]byte(plain))
 	// mcp_enabled=1、read_only=1：绑定链的每个字段都必须有断言（全 0 夹具
 	// 会让「值没绑上」与「默认 false」不可区分）。
-	_, err = database.Exec("INSERT INTO api_keys VALUES (9, 'ci', ?, 'lb_sk_test-s', 7, NULL, NULL, 1, 1, 1, '', CURRENT_TIMESTAMP)", hex.EncodeToString(hash[:]))
+	_, err = database.Exec("INSERT INTO api_keys VALUES (9, 'ci', ?, 'lb_sk_test-s', 7, NULL, NULL, 1, 1, 1, 1, 1, 1, '', CURRENT_TIMESTAMP)", hex.EncodeToString(hash[:]))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -215,13 +217,13 @@ func TestAuthenticationSecurityAuditRateLimitsSameReasonPathAndIP(t *testing.T) 
 func TestAPIKeyAuthAppliesIPWhitelistToRESTRequests(t *testing.T) {
 	database := newIsolatedTestDB(t)
 	if _, err := database.Exec(`CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT, role TEXT, is_enabled BOOLEAN);
-		CREATE TABLE api_keys (id INTEGER PRIMARY KEY, name TEXT, key_hash TEXT, key_prefix TEXT, created_by INTEGER, last_used DATETIME, expires_at DATETIME, is_enabled BOOLEAN, mcp_enabled BOOLEAN, read_only BOOLEAN, mcp_ip_whitelist TEXT);
+		CREATE TABLE api_keys (id INTEGER PRIMARY KEY, name TEXT, key_hash TEXT, key_prefix TEXT, created_by INTEGER, last_used DATETIME, expires_at DATETIME, is_enabled BOOLEAN, mcp_enabled BOOLEAN, api_enabled INTEGER DEFAULT 1, read_only BOOLEAN, api_read_only INTEGER DEFAULT 0, mcp_read_only INTEGER DEFAULT 0, mcp_ip_whitelist TEXT);
 		INSERT INTO users VALUES (1,'rest-user','user',1);`); err != nil {
 		t.Fatal(err)
 	}
 	plain := "lb_sk_rest-whitelist-secret"
 	hash := sha256.Sum256([]byte(plain))
-	if _, err := database.Exec(`INSERT INTO api_keys VALUES (1,'rest',?,?,1,NULL,NULL,1,0,0,'["192.0.2.0/24"]')`, hex.EncodeToString(hash[:]), plain[:12]); err != nil {
+	if _, err := database.Exec(`INSERT INTO api_keys VALUES (1,'rest',?,?,1,NULL,NULL,1,0,1,0,0,0,'["192.0.2.0/24"]')`, hex.EncodeToString(hash[:]), plain[:12]); err != nil {
 		t.Fatal(err)
 	}
 	router := gin.New()
@@ -253,7 +255,8 @@ func TestJWTAuthAllowsValidJWTWithInvalidAPIKeyHeader(t *testing.T) {
 	CREATE TABLE api_keys (
 		id INTEGER PRIMARY KEY, name VARCHAR(100), key_hash VARCHAR(255), key_prefix VARCHAR(20),
 		created_by INTEGER, last_used DATETIME, expires_at DATETIME, is_enabled BOOLEAN DEFAULT TRUE,
-		mcp_enabled INTEGER DEFAULT 0, read_only INTEGER DEFAULT 0, mcp_ip_whitelist TEXT DEFAULT ''
+		mcp_enabled INTEGER DEFAULT 0, api_enabled INTEGER DEFAULT 1, read_only INTEGER DEFAULT 0,
+		api_read_only INTEGER DEFAULT 0, mcp_read_only INTEGER DEFAULT 0, mcp_ip_whitelist TEXT DEFAULT ''
 	);
 	CREATE TABLE revoked_jti (jti_hash TEXT PRIMARY KEY, expires_at DATETIME NOT NULL);
 	INSERT INTO users VALUES (7, 'alice', 'user', 1, 0);`); err != nil {
@@ -286,14 +289,14 @@ func TestJWTAuthAllowsValidJWTWithInvalidAPIKeyHeader(t *testing.T) {
 func TestAPIKeyAuthRejectsDisabledKey(t *testing.T) {
 	database := newIsolatedTestDB(t)
 	_, err := database.Exec(`CREATE TABLE users (id INTEGER PRIMARY KEY, username VARCHAR(50), role VARCHAR(20), is_enabled BOOLEAN DEFAULT TRUE);
-	CREATE TABLE api_keys (id INTEGER PRIMARY KEY, name VARCHAR(100), key_hash VARCHAR(255), key_prefix VARCHAR(20), created_by INTEGER, last_used DATETIME, expires_at DATETIME, is_enabled BOOLEAN DEFAULT TRUE, mcp_enabled INTEGER DEFAULT 0, read_only INTEGER DEFAULT 0, mcp_ip_whitelist TEXT DEFAULT '', created_at DATETIME DEFAULT CURRENT_TIMESTAMP);
+	CREATE TABLE api_keys (id INTEGER PRIMARY KEY, name VARCHAR(100), key_hash VARCHAR(255), key_prefix VARCHAR(20), created_by INTEGER, last_used DATETIME, expires_at DATETIME, is_enabled BOOLEAN DEFAULT TRUE, mcp_enabled INTEGER DEFAULT 0, api_enabled INTEGER DEFAULT 1, read_only INTEGER DEFAULT 0, api_read_only INTEGER DEFAULT 0, mcp_read_only INTEGER DEFAULT 0, mcp_ip_whitelist TEXT DEFAULT '', created_at DATETIME DEFAULT CURRENT_TIMESTAMP);
 	INSERT INTO users VALUES (7, 'alice', 'user', 1);`)
 	if err != nil {
 		t.Fatal(err)
 	}
 	plain := "lb_sk_disabled-secret"
 	hash := sha256.Sum256([]byte(plain))
-	_, err = database.Exec("INSERT INTO api_keys VALUES (10, 'disabled', ?, 'lb_sk_disabl', 7, NULL, NULL, 0, 0, 0, '', CURRENT_TIMESTAMP)", hex.EncodeToString(hash[:]))
+	_, err = database.Exec("INSERT INTO api_keys VALUES (10, 'disabled', ?, 'lb_sk_disabl', 7, NULL, NULL, 0, 0, 1, 0, 0, 0, '', CURRENT_TIMESTAMP)", hex.EncodeToString(hash[:]))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -112,6 +112,14 @@ test('接入全局开关对称：API/MCP 最小 PUT + 停用提示（Keys.vue �
   assert.match(apiBlock, /request\.put\('\/notification\/settings', \{ api_enabled: on \}\)/, 'API 开关写入必须最小 PUT')
   const mcpBlock = text.slice(text.indexOf('const toggleMcp'), text.indexOf('const mcpConfigJSON'))
   assert.match(mcpBlock, /request\.put\('\/notification\/settings', \{ mcp_enabled: on \}\)/, 'MCP 开关写入必须最小 PUT')
-  assert.match(text, /v-if="isAdmin && !apiEnabled" class="access-disabled-note"/, 'API 全局停用必须带提示语')
-  assert.match(text, /v-if="isAdmin && !mcpEnabled" class="access-disabled-note"/, 'MCP 全局停用必须带提示语')
+  assert.match(text, /v-if="isAdmin && !apiEnabled" class="info-note-bar"/, 'API 全局停用必须 info-note-bar 提示')
+  assert.match(text, /v-if="isAdmin && !mcpEnabled" class="info-note-bar"/, 'MCP 全局停用必须 info-note-bar 提示')
+  // 提示占位槽常驻等高（提示出现/消失不改变卡片高度）
+  assert.match(text, /access-note-slot/, '停用提示必须有等高占位槽')
+  // Key 级双协议开关+只读（创建/功能配置弹窗）
+  assert.match(text, /v-model="createForm\.api_enabled"/, '创建弹窗必须有 Key 级 API 开关')
+  assert.match(text, /v-model="featureForm\.api_read_only"/, '功能配置必须有 API 只读开关')
+  assert.match(text, /v-model="featureForm\.mcp_read_only"/, '功能配置必须有 MCP 只读开关')
+  // 密钥表操作列=文字按钮（DESIGN_SPEC §6）
+  assert.match(text, /size="small" link type="primary"[^>]*@click="openFeatureDialog/, '操作列必须文字按钮')
 })

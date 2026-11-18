@@ -87,7 +87,7 @@ func addRouteTestAPIKeyWithReadOnly(t *testing.T, userID int, username, role, pl
 		t.Fatalf("insert %s user: %v", role, err)
 	}
 	hash := sha256.Sum256([]byte(plain))
-	if _, err := db.DB.Exec("INSERT INTO api_keys (name, key_hash, key_prefix, created_by, is_enabled, read_only) VALUES (?, ?, ?, ?, 1, ?)", username+"-key", hex.EncodeToString(hash[:]), plain[:12], userID, readOnlyFlag); err != nil {
+	if _, err := db.DB.Exec("INSERT INTO api_keys (name, key_hash, key_prefix, created_by, is_enabled, read_only, api_read_only, mcp_read_only) VALUES (?, ?, ?, ?, 1, ?, ?, ?)", username+"-key", hex.EncodeToString(hash[:]), plain[:12], userID, readOnlyFlag, readOnlyFlag, readOnlyFlag); err != nil {
 		t.Fatalf("insert %s API key: %v", role, err)
 	}
 }

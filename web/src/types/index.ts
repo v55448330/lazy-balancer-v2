@@ -41,17 +41,26 @@ export interface APIKey {
   readonly username: string
   readonly is_enabled: boolean
   readonly mcp_enabled: boolean
+  readonly api_enabled: boolean
   readonly read_only: boolean
+  readonly api_read_only: boolean
+  readonly mcp_read_only: boolean
   readonly mcp_ip_whitelist: string[]
   readonly last_used?: string | null
   readonly expires_at?: string | null
   readonly created_at: string
+  readonly updated_at: string
+  readonly updated_by: number
+  readonly updated_by_username: string
 }
 
 export interface CreateAPIKeyInput {
   readonly name: string
   readonly mcp_enabled: boolean
-  readonly read_only: boolean
+  readonly api_enabled?: boolean
+  readonly read_only?: boolean
+  readonly api_read_only?: boolean
+  readonly mcp_read_only?: boolean
   readonly mcp_ip_whitelist: string[]
   readonly expires_at?: string
 }
@@ -59,7 +68,10 @@ export interface CreateAPIKeyInput {
 export interface UpdateAPIKeyInput {
   readonly is_enabled?: boolean
   readonly mcp_enabled?: boolean
+  readonly api_enabled?: boolean
   readonly read_only?: boolean
+  readonly api_read_only?: boolean
+  readonly mcp_read_only?: boolean
   readonly mcp_ip_whitelist?: string[]
 }
 

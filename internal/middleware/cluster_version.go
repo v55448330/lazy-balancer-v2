@@ -285,7 +285,7 @@ var clusterSyncedTables = []clusterSyncedTable{
 	// 锁状态经顶层 locked_users 下发（见 models.ClusterLockedUser 注释）——
 	// 移除该列会让主端锁定永不传播到从节点，且无测试会红。
 	{name: "users", snapshotColumns: "id,username,password_hash,role,display_name,is_enabled,password_version,password_changed_at,mfa_enabled,mfa_secret,mfa_recovery_codes,login_locked_until,auth_provider,oidc_subject,oidc_issuer"},
-	{name: "api_keys", snapshotColumns: "id,name,key_hash,key_prefix,created_by,expires_at,is_enabled,mcp_enabled,read_only,mcp_ip_whitelist"},
+	{name: "api_keys", snapshotColumns: "id,name,key_hash,key_prefix,created_by,expires_at,is_enabled,mcp_enabled,api_enabled,read_only,api_read_only,mcp_read_only,mcp_ip_whitelist,updated_at,updated_by"},
 	{name: "ca_providers", snapshotColumns: "id,name,provider,directory_url,credentials,max_concurrent,min_interval_ms,enabled,created_at,updated_at"},
 	{name: "certificate_configs", snapshotColumns: "id,name,dns_provider,dns_credentials,enabled,created_at,updated_at"},
 	{name: "cert_jobs", snapshotColumns: "rule_id,domain,status,cert_pem,key_pem,expires_at,ca_provider_id,renewal_attempts,ca_available_after,last_error_code,created_at,updated_at"},

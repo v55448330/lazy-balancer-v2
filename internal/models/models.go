@@ -84,9 +84,14 @@ type APIKey struct {
 	ExpiresAt      sql.NullTime `json:"expires_at"`
 	IsEnabled      bool         `json:"is_enabled"`
 	MCPEnabled     bool         `json:"mcp_enabled"`
+	APIEnabled     bool         `json:"api_enabled"`
 	ReadOnly       bool         `json:"read_only"`
+	APIReadOnly    bool         `json:"api_read_only"`
+	MCPReadOnly    bool         `json:"mcp_read_only"`
 	MCPIPWhitelist []string     `json:"mcp_ip_whitelist"`
 	CreatedAt      time.Time    `json:"created_at"`
+	UpdatedAt      time.Time    `json:"updated_at"`
+	UpdatedBy      int          `json:"updated_by"`
 }
 
 type APIKeyResponse struct {
@@ -98,14 +103,20 @@ type APIKeyResponse struct {
 	ExpiresAt      *time.Time `json:"expires_at"`
 	IsEnabled      bool       `json:"is_enabled"`
 	MCPEnabled     bool       `json:"mcp_enabled"`
+	APIEnabled     bool       `json:"api_enabled"`
 	ReadOnly       bool       `json:"read_only"`
+	APIReadOnly    bool       `json:"api_read_only"`
+	MCPReadOnly    bool       `json:"mcp_read_only"`
 	MCPIPWhitelist []string   `json:"mcp_ip_whitelist"`
 	CreatedAt      time.Time  `json:"created_at"`
+	UpdatedAt      time.Time  `json:"updated_at"`
+	UpdatedBy      int        `json:"updated_by"`
 }
 
 type APIKeyWithUserResponse struct {
 	APIKeyResponse
-	Username string `json:"username"`
+	Username          string `json:"username"`
+	UpdatedByUsername string `json:"updated_by_username"`
 }
 
 func NewAPIKeyResponse(key APIKey) APIKeyResponse {
@@ -116,9 +127,14 @@ func NewAPIKeyResponse(key APIKey) APIKeyResponse {
 		CreatedBy:      key.CreatedBy,
 		IsEnabled:      key.IsEnabled,
 		MCPEnabled:     key.MCPEnabled,
+		APIEnabled:     key.APIEnabled,
 		ReadOnly:       key.ReadOnly,
+		APIReadOnly:    key.APIReadOnly,
+		MCPReadOnly:    key.MCPReadOnly,
 		MCPIPWhitelist: key.MCPIPWhitelist,
 		CreatedAt:      key.CreatedAt,
+		UpdatedAt:      key.UpdatedAt,
+		UpdatedBy:      key.UpdatedBy,
 	}
 	if key.LastUsed.Valid {
 		response.LastUsed = &key.LastUsed.Time
@@ -495,14 +511,20 @@ type CreateAPIKeyRequest struct {
 	Name           string     `json:"name" binding:"required"`
 	ExpiresAt      *time.Time `json:"expires_at"`
 	MCPEnabled     bool       `json:"mcp_enabled"`
-	ReadOnly       bool       `json:"read_only"`
+	APIEnabled     *bool      `json:"api_enabled"` // 缺省 true（与存量语义一致）
+	ReadOnly       bool       `json:"read_only"`   // legacy：同时设置两协议只读
+	APIReadOnly    *bool      `json:"api_read_only"`
+	MCPReadOnly    *bool      `json:"mcp_read_only"`
 	MCPIPWhitelist []string   `json:"mcp_ip_whitelist"`
 }
 
 type UpdateAPIKeyRequest struct {
 	IsEnabled      *bool     `json:"is_enabled"`
 	MCPEnabled     *bool     `json:"mcp_enabled"`
-	ReadOnly       *bool     `json:"read_only"`
+	APIEnabled     *bool     `json:"api_enabled"`
+	ReadOnly       *bool     `json:"read_only"` // legacy：同时设置两协议只读
+	APIReadOnly    *bool     `json:"api_read_only"`
+	MCPReadOnly    *bool     `json:"mcp_read_only"`
 	MCPIPWhitelist *[]string `json:"mcp_ip_whitelist"`
 }
 

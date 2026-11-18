@@ -189,6 +189,7 @@ var mcpUncoveredRoutes = map[string]string{
 	"GET /api/v1/notification/admin/overview":         "管理员通知概览：全平台统计+用户列表（Agent 无消费场景）",
 	"GET /api/v1/notification/rules":                  "通知规则聚合视图：per-user 配置管理（Agent 无消费场景）",
 	"POST /api/v1/notification/rules/:id":             "通知规则更新：per-user 配置管理（Agent 无消费场景）",
+	"POST /api/v1/notification/rules/:id/test":        "通知规则测试发送：per-user 诊断动作（Agent 无消费场景）",
 	"GET /api/v1/notification/daily/targets":          "日报投递目标查询：per-user 透明化（Agent 无消费场景）",
 	"GET /api/v1/notification/wx/bind-state":          "JWT 会话专属：通道向导微信绑定状态（bot 登录态+入站接收者领取，浏览器侧轮询）",
 }

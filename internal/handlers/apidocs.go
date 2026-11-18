@@ -37,7 +37,7 @@ const userResponseExample = `{"id":1,"username":"admin","role":"admin","display_
 // 单源：管理列表与自助列表的实际投影都是同一结构（含属主 username 与
 // created_by/key_prefix 等生命周期字段），两处各自手写只会各自缺不同字段。
 // 键集由 TestAPIDocs_apiKeyExamplesMatchImplementation 双向对账。
-const apiKeyWithUserResponseExample = `{"id":1,"name":"ci","key_prefix":"lb_sk_abcd","created_by":1,"last_used":null,"expires_at":null,"is_enabled":true,"mcp_enabled":true,"read_only":false,"mcp_ip_whitelist":["10.0.0.0/8"],"created_at":"2026-01-01T00:00:00Z","username":"admin"}`
+const apiKeyWithUserResponseExample = `{"id":1,"name":"ci","key_prefix":"lb_sk_abcd","created_by":1,"last_used":null,"expires_at":null,"is_enabled":true,"mcp_enabled":true,"api_enabled":true,"read_only":false,"api_read_only":false,"mcp_read_only":false,"mcp_ip_whitelist":["10.0.0.0/8"],"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z","updated_by":1,"username":"admin","updated_by_username":"admin"}`
 
 // certJobListItemExample 是 certJobListItem 的文档示例单源：证书任务列表的
 // data.list[] 与详情 data 是同一投影（字段同源），两处各自手写会让新增字段
@@ -303,7 +303,8 @@ var apiDocRoutes = []apiDocRoute{
 	{"GET", "/notification/admin/overview", "通知", "管理员通知概览", "", `{"code":0,"data":{"stats":{"channels":2,"rules":5,"deliveries":100,"success_rate":0.95},"channel_by_type":[{"type":"qq","count":1}],"users":[{"id":1,"username":"admin"}]}}`, []string{"403 admin_required"}, "通知统计+通道类型分布+用户列表；?user_id 收窄到指定用户（管理员视角）。"},
 	{"GET", "/notification/delivery-trend", "通知", "投递趋势（7天）", "", `{"code":0,"data":{"trend":[{"date":"2026-11-18","total":5,"sent":4,"rate":0.8}]}}`, []string{"401 unauthenticated"}, "按日投递计数+成功率；管理员可 ?user_id 查看指定用户。"},
 	{"GET", "/notification/delivery-stats", "通知", "投递分布统计（7天）", "", `{"code":0,"data":{"by_channel":[{"channel_id":1,"name":"QQ机器人","type":"qq","total":10,"sent":9,"rate":0.9}],"by_type":[{"type":"qq","total":10,"sent":9,"rate":0.9}],"by_event":[{"event_type":"cert.failed","title":"证书签发失败","total":3}]}}`, []string{"401 unauthenticated"}, "每通道结果行口径：通道/类型/事件三维分布+成功率；管理员=全平台，普通用户=本人。"},
-	{"POST", "/notification/rules/:id", "通知", "更新通知规则（部分更新）", `{"enabled":true,"min_level":"warn","body_template":"{{title}}\n{{body}}","channel_ids":[1],"channel_templates":{"1":"{{title}}\n{{body}}"}}`, `{"code":0}`, []string{"400 无效规则 ID", "403 read_only_key_or_slave（只读 Key/从节点恒 403）", "401 unauthenticated", "428 mfa_step_up_required"}, "按规则 ID 拆解写回底层表（subscriptions/notification_daily）；缺省键不动既有值；channel_ids 空数组=全部启用通道；channel_templates 键=通道 ID。"},
+	{"POST", "/notification/rules/:id", "通知", "更新通知规则（部分更新）", `{"enabled":true,"min_level":"warn","body_template":"{{title}}\n{{body}}","channel_ids":[1],"channel_templates":{"1":"{{title}}\n{{body}}"}}`, `{"code":0}`, []string{"400 无效规则 ID", "403 read_only_key_or_slave（只读 Key/从节点恒 403）", "401 unauthenticated", "428 mfa_step_up_required"}, "按规则 ID 拆解写回底层表（subscriptions/notification_daily）；缺省键不动既有值；channel_ids []=不投递任何通道、缺省=全部启用通道；channel_templates 键=通道 ID；管理员 ?user_id 代管写回。"},
+	{"POST", "/notification/rules/:id/test", "通知", "规则测试发送", "", `{"code":0,"message":"测试消息已发送"}`, []string{"400 无效规则 ID", "403 read_only_key_or_slave（只读 Key/从节点恒 403）", "404 规则组不存在", "502 全部通道发送失败/无启用通道", "428 mfa_step_up_required"}, "按规则选定通道+每通道模板渲染测试消息并发送（不落投递行）；管理员 ?user_id 代管视角。"},
 	{"PUT", "/notification/daily", "通知", "日报配置保存（当前用户）", `{"enabled":true,"send_time":"09:00","items":["requests","blocked"],"formats":{"qq":"markdown"}}`, `{"code":0}`, []string{"400 invalid_request", "403 read_only_key_or_slave（只读 Key/从节点恒 403）", "400 send_time 需为 HH:MM（如 09:00）", "400 未知日报项目", "428 mfa_step_up_required"}, "items 白名单校验；send_time 按面板服务器时区；formats 键=通道族值=渲染格式。审计留痕。"},
 	{"POST", "/notification/daily/preview", "通知", "日报预览", `{"items":["requests"],"format":"markdown"}`, `{"code":0,"data":{"format":"markdown","content":"# 日报","date":"2026-11-17"}}`, []string{"400 invalid_request", "403 read_only_key_or_slave（只读 Key/从节点恒 403）", "500 采集日报数据失败", "428 mfa_step_up_required"}, "按请求配置渲染昨日真实数据，不落库。"},
 	{"POST", "/notification/daily/trigger", "通知", "手动触发全员日报（管理员）", "", `{"code":0,"data":{"rendered":3}}`, []string{"403 仅管理员可手动触发全员日报", "428 mfa_step_up_required"}, "按各用户已保存配置立即生成并投递一轮日报；审计留痕。"},
@@ -852,6 +853,7 @@ var createLikeWriteDocRoutes = map[string]struct{}{
 	"POST /notification/wx/qr/start":        {},
 	"POST /notification/settings/smtp-test": {},
 	"POST /notification/rules/:id":          {},
+	"POST /notification/rules/:id/test":     {},
 	"POST /auto-backup/:id/restore":         {},
 	"POST /config/reload":                   {},
 	"POST /rules":                           {},

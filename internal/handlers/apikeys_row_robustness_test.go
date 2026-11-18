@@ -22,6 +22,8 @@ func TestListAPIKeys_survivesNullBooleanColumns(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
 	ctx.Request = httptest.NewRequest(http.MethodGet, "/api/v1/api-keys", nil)
+	ctx.Set("role", "admin")
+	ctx.Set("user_id", int64(1))
 
 	(&Handlers{}).ListAPIKeys(ctx)
 

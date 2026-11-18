@@ -712,7 +712,12 @@ func TestRunMigrationsBackfillsEmptyTimezone(t *testing.T) {
 // 白名单（键 → 理由），供 shape 相等门登记例外。当前为空（无已知有意分叉：
 // ALTER 不支持的非常量 DEFAULT 列本就不在交集内）；登记即生效，无需改判定
 // 逻辑——删掉分支留待「真正出现分叉」再写会让门失去现成的登记点。
-var allowedNewColumnDivergence = map[string]string{}
+var allowedNewColumnDivergence = map[string]string{
+	// SQLite ALTER ADD COLUMN 禁非常量默认：fresh DDL 带 DEFAULT CURRENT_TIMESTAMP，
+	// 补列通道只能无默认（存量行由 newColumnBackfills 回填 created_at，读侧
+	// COALESCE/NullTime 兜底）——有意分叉，语义等价。
+	"api_keys.updated_at": "ALTER 禁 CURRENT_TIMESTAMP 非常量默认；存量回填 created_at",
+}
 
 func TestNewColumnsDualRegistered_matchFreshColumnShape(t *testing.T) {
 	database := openMigrationTestDB(t)

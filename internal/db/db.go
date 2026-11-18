@@ -529,9 +529,14 @@ func createTables() error {
 		expires_at DATETIME,
 		is_enabled BOOLEAN DEFAULT TRUE,
 		mcp_enabled INTEGER DEFAULT 0,
+		api_enabled INTEGER DEFAULT 1,
 		read_only INTEGER DEFAULT 0,
+		api_read_only INTEGER DEFAULT 0,
+		mcp_read_only INTEGER DEFAULT 0,
 		mcp_ip_whitelist TEXT DEFAULT '',
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+		updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+		updated_by INTEGER DEFAULT 0,
 		FOREIGN KEY (created_by) REFERENCES users(id)
 	);
 	CREATE INDEX IF NOT EXISTS idx_api_keys_prefix_hash ON api_keys(key_prefix, key_hash);
@@ -1305,27 +1310,34 @@ var newColumnsRegistry = map[string]string{
 	"api_keys.mcp_enabled":                         "INTEGER DEFAULT 0",
 	"api_keys.read_only":                           "INTEGER DEFAULT 0",
 	"api_keys.mcp_ip_whitelist":                    "TEXT DEFAULT ''",
-	"lb_rules.domain":                              "VARCHAR(255)",
-	"lb_rules.tls_cert":                            "TEXT",
-	"lb_rules.tls_key":                             "TEXT",
-	"lb_rules.tls_http_redirect":                   "BOOLEAN DEFAULT FALSE",
-	"lb_rules.dynamic_dns":                         "BOOLEAN DEFAULT FALSE",
-	"lb_rules.enable_active_health_check":          "BOOLEAN DEFAULT FALSE",
-	"lb_rules.tls_source":                          "VARCHAR(20) DEFAULT 'manual'",
-	"lb_rules.acme_config_id":                      "INTEGER DEFAULT 0",
-	"lb_rules.ca_provider_id":                      "INTEGER DEFAULT 0",
-	"lb_rules.caddy_id":                            "VARCHAR(20)",
-	"lb_rules.dns_family":                          "VARCHAR(20) DEFAULT 'ipv4'",
-	"lb_rules.updated_by":                          "INTEGER",
-	"lb_rules.tcp_health_check_port":               "INTEGER DEFAULT 0",
-	"lb_rules.tcp_proxy_protocol":                  "BOOLEAN DEFAULT 0",
-	"lb_rules.tcp_try_duration":                    "INTEGER DEFAULT 0",
-	"lb_rules.tcp_try_interval":                    "INTEGER NOT NULL DEFAULT 250",
-	"lb_rules.request_body_max_size_mb":            "INTEGER DEFAULT 0",
-	"lb_rules.upstream_keepalive_timeout":          "INTEGER DEFAULT 0",
-	"lb_rules.server_tokens_hidden":                "INTEGER DEFAULT 0",
-	"lb_rules.ntlm_compatible":                     "INTEGER NOT NULL DEFAULT 0",
-	"lb_rules.upstream_force_http1":                "INTEGER NOT NULL DEFAULT 0",
+	"api_keys.api_enabled":                         "INTEGER DEFAULT 1",
+	"api_keys.api_read_only":                       "INTEGER DEFAULT 0",
+	"api_keys.mcp_read_only":                       "INTEGER DEFAULT 0",
+	// ALTER ADD COLUMN 禁非常量默认（SQLite 限制）：updated_at 补列无默认，
+	// 存量行由 newColumnBackfills 回填 created_at；fresh DDL 仍有 DEFAULT。
+	"api_keys.updated_at":                 "DATETIME",
+	"api_keys.updated_by":                 "INTEGER DEFAULT 0",
+	"lb_rules.domain":                     "VARCHAR(255)",
+	"lb_rules.tls_cert":                   "TEXT",
+	"lb_rules.tls_key":                    "TEXT",
+	"lb_rules.tls_http_redirect":          "BOOLEAN DEFAULT FALSE",
+	"lb_rules.dynamic_dns":                "BOOLEAN DEFAULT FALSE",
+	"lb_rules.enable_active_health_check": "BOOLEAN DEFAULT FALSE",
+	"lb_rules.tls_source":                 "VARCHAR(20) DEFAULT 'manual'",
+	"lb_rules.acme_config_id":             "INTEGER DEFAULT 0",
+	"lb_rules.ca_provider_id":             "INTEGER DEFAULT 0",
+	"lb_rules.caddy_id":                   "VARCHAR(20)",
+	"lb_rules.dns_family":                 "VARCHAR(20) DEFAULT 'ipv4'",
+	"lb_rules.updated_by":                 "INTEGER",
+	"lb_rules.tcp_health_check_port":      "INTEGER DEFAULT 0",
+	"lb_rules.tcp_proxy_protocol":         "BOOLEAN DEFAULT 0",
+	"lb_rules.tcp_try_duration":           "INTEGER DEFAULT 0",
+	"lb_rules.tcp_try_interval":           "INTEGER NOT NULL DEFAULT 250",
+	"lb_rules.request_body_max_size_mb":   "INTEGER DEFAULT 0",
+	"lb_rules.upstream_keepalive_timeout": "INTEGER DEFAULT 0",
+	"lb_rules.server_tokens_hidden":       "INTEGER DEFAULT 0",
+	"lb_rules.ntlm_compatible":            "INTEGER NOT NULL DEFAULT 0",
+	"lb_rules.upstream_force_http1":       "INTEGER NOT NULL DEFAULT 0",
 	// 认证网关四件套（存量库幂等补列 ensureNewColumns；uri/copy_headers 由
 	// 启动回填确定默认）。
 	"lb_rules.forward_auth_enabled":      "INTEGER NOT NULL DEFAULT 0",
@@ -1735,6 +1747,19 @@ func runMigrations() error {
 		// 回填是相关性计数（非窗口函数，SQLite 全版本可用）；rank=0 的遗留行
 		// 仍由全部读路径的 (rank ASC, policy_id ASC) 次序键兜底为旧语义。
 		"security_policy_bindings.rank": "UPDATE security_policy_bindings SET rank = (SELECT COUNT(*) FROM security_policy_bindings b2 WHERE b2.rule_caddy_id = security_policy_bindings.rule_caddy_id AND b2.policy_id <= security_policy_bindings.policy_id)",
+		// 双协议只读拆分（2026-11-19）：存量 read_only 语义=两协议均只读，
+		// 新增 api/mcp_read_only 当刻继承 read_only 现值——升级零行为漂移。
+		// 同表列依赖：read_only 可能同趟补列（字母序 api_read_only 先于
+		// read_only）——回填引用同表他列时以「列存在」为前置，缺列则跳过
+		//（该列补上后值即 DEFAULT 0，与 read_only 缺列时的 COALESCE 语义一致）。
+		"api_keys.api_read_only": "UPDATE api_keys SET api_read_only=COALESCE(read_only,0) WHERE EXISTS (SELECT 1 FROM pragma_table_info('api_keys') WHERE name='read_only')",
+		"api_keys.mcp_read_only": "UPDATE api_keys SET mcp_read_only=COALESCE(read_only,0) WHERE EXISTS (SELECT 1 FROM pragma_table_info('api_keys') WHERE name='read_only')",
+		// 存量 key 的 API 接入默认启用（与 is_enabled 同语义；此前无 Key 级
+		// API 开关，全部 key 均可 REST 调用）。
+		"api_keys.api_enabled": "UPDATE api_keys SET api_enabled=1",
+		// 更新审计列回填：存量行以创建时间/创建者为更新基线。
+		"api_keys.updated_at": "UPDATE api_keys SET updated_at=created_at",
+		"api_keys.updated_by": "UPDATE api_keys SET updated_by=created_by",
 	}
 	if err := ensureNewColumns(newColumns, newColumnBackfills); err != nil {
 		return err
@@ -4304,6 +4329,8 @@ func ensureNewColumns(columns, backfills map[string]string) error {
 		tableColumns[table] = set
 		return set, nil
 	}
+	// 两趟：先补齐全部列，再执行回填——回填可能引用同表他列（如
+	// api_read_only 继承 read_only），字母序单趟会让回填先于被引用列补列。
 	for _, col := range keys {
 		dtype := columns[col]
 		parts := strings.Split(col, ".")
@@ -4320,12 +4347,47 @@ func ensureNewColumns(columns, backfills map[string]string) error {
 		// 启动的跳过判据，回填永久丢失（mfa_challenges.password_version 令存量
 		// 挑战按 0 校验；upstream_keepalive_timeout 残留旧默认 60）。SQLite DDL
 		// 可事务化：失败整体回滚→列不存在→下次启动重试 ALTER+回填。
-		if err := addColumnWithBackfill(table, name, dtype, backfills[col]); err != nil {
+		// 回填引用同表他列时延后到第二趟（全部列补齐后）。
+		backfill := backfills[col]
+		if backfill != "" && referencesSameTableColumn(backfill, table, name, columns) {
+			backfill = "" // 本趟只补列；回填在下方第二趟执行
+		}
+		if err := addColumnWithBackfill(table, name, dtype, backfill); err != nil {
 			return err
 		}
 		existing[name] = struct{}{}
 	}
+	// 第二趟：被延后的同表依赖回填（此时全部登记列已补齐）。
+	for _, col := range keys {
+		backfill := backfills[col]
+		if backfill == "" {
+			continue
+		}
+		parts := strings.Split(col, ".")
+		table, name := parts[0], parts[1]
+		if !referencesSameTableColumn(backfill, table, name, columns) {
+			continue
+		}
+		if _, err := DB.Exec(backfill); err != nil {
+			return fmt.Errorf("failed to backfill column %s: %w", col, err)
+		}
+	}
 	return nil
+}
+
+// referencesSameTableColumn 回填 SQL 是否引用同表其它登记列（粗判：含
+// 「=列名」/「(列名」形态且该列在登记集内）。引用则回填延后到全部列补齐后。
+func referencesSameTableColumn(backfill, table, self string, columns map[string]string) bool {
+	for col := range columns {
+		parts := strings.Split(col, ".")
+		if parts[0] != table || parts[1] == self {
+			continue
+		}
+		if strings.Contains(backfill, "="+parts[1]) || strings.Contains(backfill, "("+parts[1]) || strings.Contains(backfill, " "+parts[1]+",") {
+			return true
+		}
+	}
+	return false
 }
 
 // addColumnWithBackfill 在同一事务内完成 ADD COLUMN 与（可选）一次性回填，

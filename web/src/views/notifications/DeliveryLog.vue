@@ -7,16 +7,10 @@
           <span>{{ t('app.notification.rules.deliveriesTab') }}</span>
         </div>
         <div class="card-header-actions">
-          <div class="delivery-filters">
-            <el-select v-model="statusFilter" size="small" class="status-select" :placeholder="t('app.notification.deliveries.statusLabel')">
-              <el-option value="" :label="t('app.notification.deliveries.statusAll')" />
-              <el-option v-for="st in STATUSES" :key="st" :value="st" :label="statusLabel(st)" />
-            </el-select>
-            <template v-if="isAdmin">
-              <el-switch v-model="allScope" :active-text="t('app.notification.deliveries.allScope')" />
-              <span class="scope-hint">{{ t('app.notification.deliveries.allScopeHint') }}</span>
-            </template>
-          </div>
+          <el-select v-model="statusFilter" size="small" class="status-select" :placeholder="t('app.notification.deliveries.statusLabel')">
+            <el-option value="" :label="t('app.notification.deliveries.statusAll')" />
+            <el-option v-for="st in STATUSES" :key="st" :value="st" :label="statusLabel(st)" />
+          </el-select>
           <el-button size="small" :loading="loading" @click="fetchDeliveries">
             {{ t('app.notification.deliveries.refresh') }}
           </el-button>
@@ -45,12 +39,21 @@
           {{ formatDate(scope.row.created_at) || '-' }}
         </template>
       </el-table-column>
-      <el-table-column v-if="isAdmin && allScope" :label="t('app.notification.deliveries.colUser')" width="90" align="center">
-        <template #default="scope">#{{ scope.row.user_id }}</template>
+      <el-table-column :label="t('app.notification.deliveries.colUser')" width="130" show-overflow-tooltip>
+        <template #default="scope">{{ scope.row.username || ('#' + scope.row.user_id) }}</template>
       </el-table-column>
-      <el-table-column prop="event_type" :label="t('app.notification.deliveries.colEventType')" min-width="170" show-overflow-tooltip />
-      <el-table-column :label="t('app.notification.deliveries.colEvent')" min-width="200" show-overflow-tooltip>
-        <template #default="scope">{{ scope.row.title || scope.row.event_type }}</template>
+      <el-table-column :label="t('app.notification.deliveries.colEvent')" min-width="160" show-overflow-tooltip>
+        <template #default="scope">{{ scope.row.event_title || scope.row.title || scope.row.event_type }}</template>
+      </el-table-column>
+      <el-table-column :label="t('app.notification.deliveries.colChannels')" min-width="180">
+        <template #default="scope">
+          <template v-if="scope.row.channels?.length">
+            <el-tooltip v-for="ch in scope.row.channels" :key="ch.channel_id" :content="ch.status === 'sent' ? t('app.notification.deliveries.chSent') : (ch.error || t('app.notification.deliveries.chFailed'))" placement="top">
+              <el-tag :type="ch.status === 'sent' ? 'success' : 'danger'" size="small" effect="plain" class="mr4">{{ ch.channel_name }}</el-tag>
+            </el-tooltip>
+          </template>
+          <span v-else class="ev-more">—</span>
+        </template>
       </el-table-column>
       <el-table-column :label="t('app.notification.deliveries.colLevel')" width="100" align="center">
         <template #default="scope">
@@ -89,11 +92,10 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch, onMounted } from 'vue'
+import { ref, watch, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { List } from '@element-plus/icons-vue'
 import { request, mfaAwareSuccess } from '@/utils/api'
-import { useAuthStore } from '@/stores/auth'
 import { formatDate } from '@/utils/date'
 import type {
   DeliveryStatus,
@@ -102,10 +104,8 @@ import type {
 } from '@/types/notifications.ts'
 
 const { t } = useI18n()
-const authStore = useAuthStore()
 
-const isAdmin = computed(() => authStore.user?.role === 'admin')
-// 契约：limit 默认 50 上限 200；?status= 过滤；管理员 ?all=1 全平台。
+// 契约：limit 默认 50 上限 200；?status= 过滤；恒全量（投递记录不区分用户视角）。
 const DELIVERY_LIMIT = 50
 const STATUSES: readonly DeliveryStatus[] = ['pending', 'sent', 'failed', 'dead']
 /** 失败态（failed / dead）提供重发入口；pending 由投递任务接管、sent 无需重发。 */
@@ -115,7 +115,6 @@ const deliveries = ref<NotificationDelivery[]>([])
 const loading = ref(false)
 const loadError = ref(false)
 const statusFilter = ref<DeliveryStatus | ''>('')
-const allScope = ref(false)
 const resendingId = ref<number | null>(null)
 let deliveriesRequestSeq = 0
 
@@ -154,7 +153,6 @@ const fetchDeliveries = async (): Promise<void> => {
     const params = new URLSearchParams()
     params.set('limit', String(DELIVERY_LIMIT))
     if (statusFilter.value) params.set('status', statusFilter.value)
-    if (isAdmin.value && allScope.value) params.set('all', '1')
     const res = await request.get<NotificationDeliveriesResponse>(`/notification/deliveries?${params.toString()}`)
     if (seq === deliveriesRequestSeq) {
       deliveries.value = res.data?.deliveries ?? []
@@ -182,8 +180,8 @@ const resend = async (row: NotificationDelivery): Promise<void> => {
   }
 }
 
-// 过滤条件变化立即重查（状态过滤/全平台开关都是廉价 GET）
-watch([statusFilter, allScope], () => {
+// 过滤条件变化立即重查（状态过滤是廉价 GET）
+watch(statusFilter, () => {
   void fetchDeliveries()
 })
 

@@ -200,10 +200,11 @@ func TestUpdateAPIKeyStatus_enablingPrivilegedKeyRequiresStepUp(t *testing.T) {
 		t.Fatalf("seed user: %v", err)
 	}
 	// 两条禁用态 Key：可写（启用=授予）与只读（启用不构成特权变更）。
-	if _, err := db.DB.Exec("INSERT INTO api_keys (id,name,key_hash,key_prefix,created_by,is_enabled,read_only,mcp_enabled) VALUES (11,'w','h11','p',1,0,0,0)"); err != nil {
+	// per-protocol 只读列与 legacy read_only 同值（生产写侧同步口径）。
+	if _, err := db.DB.Exec("INSERT INTO api_keys (id,name,key_hash,key_prefix,created_by,is_enabled,read_only,api_read_only,mcp_read_only,mcp_enabled) VALUES (11,'w','h11','p',1,0,0,0,0,0)"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.DB.Exec("INSERT INTO api_keys (id,name,key_hash,key_prefix,created_by,is_enabled,read_only,mcp_enabled) VALUES (12,'r','h12','p',1,0,1,0)"); err != nil {
+	if _, err := db.DB.Exec("INSERT INTO api_keys (id,name,key_hash,key_prefix,created_by,is_enabled,read_only,api_read_only,mcp_read_only,mcp_enabled) VALUES (12,'r','h12','p',1,0,1,1,1,0)"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.DB.Exec("UPDATE users SET mfa_enabled=1, mfa_secret='JBSWY3DPEHPK3PXP' WHERE id=1"); err != nil {

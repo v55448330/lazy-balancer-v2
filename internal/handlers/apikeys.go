@@ -101,14 +101,17 @@ func purgeAllAPIKeyWhitelistCache() {
 // 「启用」与鉴权结果不一致是已知的有意取舍——不得把鉴权侧改成 COALESCE
 // 放行 NULL 行，排障时以「列表显示启用但调用恒 401」记录该形态。
 const apiKeyListColumns = `k.id, k.name, k.key_prefix, k.created_by, k.last_used, k.expires_at,
-	COALESCE(k.is_enabled,1), COALESCE(k.mcp_enabled,0), COALESCE(k.read_only,0),
-	COALESCE(k.mcp_ip_whitelist,''), k.created_at, u.username`
+	COALESCE(k.is_enabled,1), COALESCE(k.mcp_enabled,0), COALESCE(k.api_enabled,1), COALESCE(k.read_only,0),
+	COALESCE(k.api_read_only,0), COALESCE(k.mcp_read_only,0),
+	COALESCE(k.mcp_ip_whitelist,''), k.created_at, k.updated_at, COALESCE(k.updated_by,0),
+	u.username, COALESCE(uu.username,'')`
 
 // queryAPIKeys 按可选 WHERE 片段查询 API Key 列表（扫描仍走 scanAPIKeys）。
 func queryAPIKeys(where string, args ...any) (*sql.Rows, error) {
 	return db.DB.Query(`SELECT `+apiKeyListColumns+`
 		FROM api_keys k
-		JOIN users u ON k.created_by = u.id `+where+`
+		JOIN users u ON k.created_by = u.id
+		LEFT JOIN users uu ON k.updated_by = uu.id `+where+`
 		ORDER BY k.id`, args...)
 }
 
@@ -210,9 +213,17 @@ func scanAPIKeys(rows *sql.Rows) ([]models.APIKeyWithUserResponse, error) {
 	for rows.Next() {
 		var key models.APIKey
 		var username string
+		var updatedByUsername string
 		var whitelistJSON string
-		if err := rows.Scan(&key.ID, &key.Name, &key.KeyPrefix, &key.CreatedBy, &key.LastUsed, &key.ExpiresAt, &key.IsEnabled, &key.MCPEnabled, &key.ReadOnly, &whitelistJSON, &key.CreatedAt, &username); err != nil {
+		var updatedAt sql.NullTime // 带外 NULL 防御：回退 created_at（迁移回填同口径）
+		if err := rows.Scan(&key.ID, &key.Name, &key.KeyPrefix, &key.CreatedBy, &key.LastUsed, &key.ExpiresAt,
+			&key.IsEnabled, &key.MCPEnabled, &key.APIEnabled, &key.ReadOnly, &key.APIReadOnly, &key.MCPReadOnly,
+			&whitelistJSON, &key.CreatedAt, &updatedAt, &key.UpdatedBy, &username, &updatedByUsername); err != nil {
 			return nil, fmt.Errorf("scan API key: %w", err)
+		}
+		key.UpdatedAt = key.CreatedAt
+		if updatedAt.Valid {
+			key.UpdatedAt = updatedAt.Time
 		}
 		if whitelistJSON != "" {
 			// 单行白名单损坏只降级该行（空数组=不限制来源），不再让整张
@@ -225,7 +236,9 @@ func scanAPIKeys(rows *sql.Rows) ([]models.APIKeyWithUserResponse, error) {
 		if key.MCPIPWhitelist == nil {
 			key.MCPIPWhitelist = []string{}
 		}
-		keys = append(keys, models.NewAPIKeyWithUserResponse(key, username))
+		resp := models.NewAPIKeyWithUserResponse(key, username)
+		resp.UpdatedByUsername = updatedByUsername
+		keys = append(keys, resp)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate API keys: %w", err)
@@ -274,6 +287,25 @@ func createAPIKeyForUser(c *gin.Context, userID int) {
 	if c.GetString("role") != "admin" {
 		req.ReadOnly = true
 	}
+	// 双协议只读归一：legacy read_only=true → 两协议均只读；显式 per-protocol
+	// 键优先（管理员可分别设置）。非管理员强制全只读（上方 req.ReadOnly=true）。
+	apiRO := req.ReadOnly
+	mcpRO := req.ReadOnly
+	if req.APIReadOnly != nil {
+		apiRO = *req.APIReadOnly
+	}
+	if req.MCPReadOnly != nil {
+		mcpRO = *req.MCPReadOnly
+	}
+	if c.GetString("role") != "admin" {
+		apiRO, mcpRO = true, true
+	}
+	// legacy 合并列同步（MCP 可见性合并口径消费）：两协议均只读才算只读
+	req.ReadOnly = apiRO && mcpRO
+	apiEnabled := true
+	if req.APIEnabled != nil {
+		apiEnabled = *req.APIEnabled
+	}
 	if req.ExpiresAt != nil && req.ExpiresAt.Before(time.Now()) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_34629623"), MessageKey: "k_34629623"})
 		return
@@ -320,10 +352,10 @@ func createAPIKeyForUser(c *gin.Context, userID int) {
 	// 条件插入：计数子查询与写入同语句，SQLite 语句级原子，无判定窗口；
 	// WHERE 不满足时 0 行插入，按超限 400 拒绝。
 	result, err := db.DB.ExecContext(c.Request.Context(), `
-		INSERT INTO api_keys (name, key_hash, key_prefix, created_by, expires_at, mcp_enabled, read_only, mcp_ip_whitelist)
-		SELECT ?, ?, ?, ?, ?, ?, ?, ?
+		INSERT INTO api_keys (name, key_hash, key_prefix, created_by, expires_at, mcp_enabled, api_enabled, read_only, api_read_only, mcp_read_only, mcp_ip_whitelist, updated_by)
+		SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
 		WHERE (SELECT COUNT(*) FROM api_keys WHERE created_by = ?) < ?
-	`, req.Name, keyHash, keyPrefix, userID, req.ExpiresAt, req.MCPEnabled, req.ReadOnly, whitelistJSON, userID, apiKeyMaxPerUser)
+	`, req.Name, keyHash, keyPrefix, userID, req.ExpiresAt, req.MCPEnabled, apiEnabled, req.ReadOnly, apiRO, mcpRO, whitelistJSON, userID, userID, apiKeyMaxPerUser)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_7a4f4b1c"), MessageKey: "k_7a4f4b1c"})
 		return
@@ -353,7 +385,9 @@ func createAPIKeyForUser(c *gin.Context, userID int) {
 		fmt.Sprintf("密钥 %d", id),
 		req.Name,
 		fmt.Sprintf("过期：%s", expiry),
-		"权限："+map[bool]string{true: "只读", false: "可写"}[req.ReadOnly],
+		"API 权限："+map[bool]string{true: "只读", false: "可写"}[apiRO],
+		"MCP 权限："+map[bool]string{true: "只读", false: "可写"}[mcpRO],
+		"API："+boolOnOff(apiEnabled),
 		"MCP："+boolOnOff(req.MCPEnabled),
 		fmt.Sprintf("IP 白名单（约束全部 REST 与 MCP）：%d 条", len(whitelist)),
 	))
@@ -367,7 +401,21 @@ func createAPIKeyForUser(c *gin.Context, userID int) {
 }
 
 func (h *Handlers) ListAPIKeys(c *gin.Context) {
-	rows, err := queryAPIKeys("")
+	// 管理员默认全平台；?mine=1 收窄本人（与 MCP 会话表同口径）。
+	// 非管理员恒本人（?mine 无效）。Key 明文永不回显（仅 prefix）。
+	where := ""
+	args := []any{}
+	uid := contextUserID(c)
+	if !isAdminRequest(c) || c.Query("mine") == "1" {
+		if uid <= 0 {
+			// 认证上下文缺失：与自助入口同形 401（不得退化为 created_by=0 孤儿查询）
+			c.JSON(http.StatusUnauthorized, models.APIResponse{Code: 401, Message: apimsg.T(c, "k_b3459518"), MessageKey: "k_b3459518"})
+			return
+		}
+		where = "WHERE k.created_by = ?"
+		args = append(args, uid)
+	}
+	rows, err := queryAPIKeys(where, args...)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: apimsg.T(c, "k_c9682421"), MessageKey: "k_c9682421"})
 		return
@@ -415,17 +463,34 @@ func updateAPIKeyStatus(c *gin.Context, currentUserOnly bool) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_76de02a0"), MessageKey: "k_76de02a0"})
 		return
 	}
-	if req.IsEnabled == nil && req.MCPEnabled == nil && req.ReadOnly == nil && req.MCPIPWhitelist == nil {
+	if req.IsEnabled == nil && req.MCPEnabled == nil && req.APIEnabled == nil && req.ReadOnly == nil &&
+		req.APIReadOnly == nil && req.MCPReadOnly == nil && req.MCPIPWhitelist == nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_2e768bc2"), MessageKey: "k_2e768bc2"})
 		return
 	}
-	if currentUserOnly && c.GetString("role") != "admin" && req.ReadOnly != nil && !*req.ReadOnly {
-		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_d3abbbed"), MessageKey: "k_d3abbbed"})
-		return
-	}
+	// 非管理员：任何「授予写」形态拒绝（legacy read_only=false 或 per-protocol false）
 	if currentUserOnly && c.GetString("role") != "admin" {
+		grantWrite := (req.ReadOnly != nil && !*req.ReadOnly) ||
+			(req.APIReadOnly != nil && !*req.APIReadOnly) ||
+			(req.MCPReadOnly != nil && !*req.MCPReadOnly)
+		if grantWrite {
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_d3abbbed"), MessageKey: "k_d3abbbed"})
+			return
+		}
 		readOnly := true
 		req.ReadOnly = &readOnly
+		req.APIReadOnly = &readOnly
+		req.MCPReadOnly = &readOnly
+	}
+	// legacy read_only 显式提交 → 同步两协议（per-protocol 键随后覆盖）
+	if req.ReadOnly != nil {
+		v := *req.ReadOnly
+		if req.APIReadOnly == nil {
+			req.APIReadOnly = &v
+		}
+		if req.MCPReadOnly == nil {
+			req.MCPReadOnly = &v
+		}
 	}
 	var whitelistJSON *string
 	// 归一化后的白名单条目数（审计 delta 的「变更后条数」必须与库内落值
@@ -471,7 +536,7 @@ func updateAPIKeyStatus(c *gin.Context, currentUserOnly bool) {
 	// delta 必须同口径，否则带外 NULL 行被 NULL→1 真正激活时既不判
 	// enablePrivileged 也不记变更（列表 COALESCE 显示「启用」为有意设计，
 	// 属展示面，不参与本判定）。
-	query := "SELECT name, is_enabled, COALESCE(mcp_enabled,0), COALESCE(read_only,0), COALESCE(mcp_ip_whitelist,'') FROM api_keys WHERE id = ?"
+	query := "SELECT name, is_enabled, COALESCE(mcp_enabled,0), COALESCE(api_enabled,1), COALESCE(read_only,0), COALESCE(api_read_only,0), COALESCE(mcp_read_only,0), COALESCE(mcp_ip_whitelist,'') FROM api_keys WHERE id = ?"
 	args := []any{id}
 	if currentUserOnly {
 		query += " AND created_by = ?"
@@ -479,9 +544,9 @@ func updateAPIKeyStatus(c *gin.Context, currentUserOnly bool) {
 	}
 	var name string
 	var beforeEnabledRaw sql.NullInt64
-	var beforeMCPEnabled, beforeReadOnly int
+	var beforeMCPEnabled, beforeAPIEnabled, beforeReadOnly, beforeAPIReadOnly, beforeMCPReadOnly int
 	var beforeWhitelist string
-	if err := tx.QueryRowContext(c.Request.Context(), query, args...).Scan(&name, &beforeEnabledRaw, &beforeMCPEnabled, &beforeReadOnly, &beforeWhitelist); dbQueryNotFound(c, err, "API 密钥不存在", "updateAPIKeyStatus query key") {
+	if err := tx.QueryRowContext(c.Request.Context(), query, args...).Scan(&name, &beforeEnabledRaw, &beforeMCPEnabled, &beforeAPIEnabled, &beforeReadOnly, &beforeAPIReadOnly, &beforeMCPReadOnly, &beforeWhitelist); dbQueryNotFound(c, err, "API 密钥不存在", "updateAPIKeyStatus query key") {
 		return
 	}
 	beforeEnabled := 0
@@ -501,22 +566,32 @@ func updateAPIKeyStatus(c *gin.Context, currentUserOnly bool) {
 	// 对称：启用=恢复可写/MCP 可达性，属授予动作。只读 Key 的启用不构成
 	// 特权变更（仍不可写）。
 	enablePrivileged := req.IsEnabled != nil && *req.IsEnabled && beforeEnabled != 1 &&
-		(beforeReadOnly == 0 || afterMCPEnabled)
+		(beforeAPIReadOnly == 0 || beforeMCPReadOnly == 0 || afterMCPEnabled)
 	privilegeEscalation := enablePrivileged ||
 		(req.ReadOnly != nil && !*req.ReadOnly && beforeReadOnly == 1) ||
+		(req.APIReadOnly != nil && !*req.APIReadOnly && beforeAPIReadOnly == 1) ||
+		(req.MCPReadOnly != nil && !*req.MCPReadOnly && beforeMCPReadOnly == 1) ||
 		(req.MCPEnabled != nil && *req.MCPEnabled && beforeMCPEnabled != 1) ||
+		(req.APIEnabled != nil && *req.APIEnabled && beforeAPIEnabled != 1) ||
 		whitelistChanged
 	if privilegeEscalation {
 		if requireAPIKeyStepUp(c) {
 			return
 		}
 	}
-	setClauses := make([]string, 0, 4)
-	updateArgs := make([]any, 0, 6)
+	// legacy read_only 同步：两协议只读均提交时合并列=AND（MCP 可见性口径）
+	if req.APIReadOnly != nil && req.MCPReadOnly != nil {
+		merged := *req.APIReadOnly && *req.MCPReadOnly
+		req.ReadOnly = &merged
+	}
+	setClauses := make([]string, 0, 8)
+	updateArgs := make([]any, 0, 10)
 	for _, field := range []struct {
 		name  string
 		value any
-	}{{"is_enabled", req.IsEnabled}, {"mcp_enabled", req.MCPEnabled}, {"read_only", req.ReadOnly}, {"mcp_ip_whitelist", whitelistJSON}} {
+	}{{"is_enabled", req.IsEnabled}, {"mcp_enabled", req.MCPEnabled}, {"api_enabled", req.APIEnabled},
+		{"read_only", req.ReadOnly}, {"api_read_only", req.APIReadOnly}, {"mcp_read_only", req.MCPReadOnly},
+		{"mcp_ip_whitelist", whitelistJSON}} {
 		switch value := field.value.(type) {
 		case *bool:
 			if value != nil {
@@ -530,6 +605,9 @@ func updateAPIKeyStatus(c *gin.Context, currentUserOnly bool) {
 			}
 		}
 	}
+	// 更新审计：时间+操作人（每次写更新必落）
+	setClauses = append(setClauses, "updated_at = CURRENT_TIMESTAMP", "updated_by = ?")
+	updateArgs = append(updateArgs, userID)
 	update := "UPDATE api_keys SET " + strings.Join(setClauses, ", ") + " WHERE id = ?"
 	updateArgs = append(updateArgs, id)
 	if currentUserOnly {
@@ -568,6 +646,17 @@ func updateAPIKeyStatus(c *gin.Context, currentUserOnly bool) {
 	if req.MCPEnabled != nil && *req.MCPEnabled != (beforeMCPEnabled == 1) {
 		changes = append(changes, "MCP："+boolOnOff(beforeMCPEnabled == 1)+"→"+boolOnOff(*req.MCPEnabled))
 	}
+	if req.APIEnabled != nil && *req.APIEnabled != (beforeAPIEnabled == 1) {
+		changes = append(changes, "API："+boolOnOff(beforeAPIEnabled == 1)+"→"+boolOnOff(*req.APIEnabled))
+	}
+	if req.APIReadOnly != nil && *req.APIReadOnly != (beforeAPIReadOnly == 1) {
+		changes = append(changes, "API 只读："+boolOnOff(beforeAPIReadOnly == 1)+"→"+boolOnOff(*req.APIReadOnly))
+	}
+	if req.MCPReadOnly != nil && *req.MCPReadOnly != (beforeMCPReadOnly == 1) {
+		changes = append(changes, "MCP 只读："+boolOnOff(beforeMCPReadOnly == 1)+"→"+boolOnOff(*req.MCPReadOnly))
+	}
+	// legacy 合并列变化（两协议同值变更时 per-protocol 已留痕，此处仅补
+	// 合并口径 delta——测试钉「只读：开→关」文案）
 	if req.ReadOnly != nil && *req.ReadOnly != (beforeReadOnly == 1) {
 		changes = append(changes, "只读："+boolOnOff(beforeReadOnly == 1)+"→"+boolOnOff(*req.ReadOnly))
 	}

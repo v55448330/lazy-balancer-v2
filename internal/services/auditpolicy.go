@@ -79,6 +79,7 @@ var auditRoutePolicies = map[string]AuditPolicy{
 	"POST /api/v1/notification/channels": AuditPolicyGeneric,
 	// 通知规则更新：中间件经映射记录（Generic）。
 	"POST /api/v1/notification/rules/:id":         AuditPolicyGeneric,
+	"POST /api/v1/notification/rules/:id/test":    AuditPolicyGeneric,
 	"POST /api/v1/notification/channels/:id/test": AuditPolicyGeneric,
 	// SMTP 连通性测试（诊断动作，中间件通用留痕）。
 	"POST /api/v1/notification/settings/smtp-test": AuditPolicyGeneric,

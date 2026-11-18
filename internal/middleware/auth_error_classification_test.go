@@ -76,8 +76,8 @@ func TestAPIKeyAuth_mapsInfrastructureFailureTo500(t *testing.T) {
 	database := newIsolatedTestDB(t)
 	if _, err := database.Exec(`CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT, role TEXT, is_enabled BOOLEAN);
 	CREATE TABLE api_keys (id INTEGER PRIMARY KEY, name TEXT, key_hash TEXT, key_prefix TEXT, created_by INTEGER,
-		last_used DATETIME, expires_at DATETIME, is_enabled BOOLEAN, mcp_enabled INTEGER, read_only INTEGER,
-		mcp_ip_whitelist TEXT, created_at DATETIME)`); err != nil {
+		last_used DATETIME, expires_at DATETIME, is_enabled BOOLEAN, mcp_enabled INTEGER, api_enabled INTEGER DEFAULT 1, read_only INTEGER,
+		api_read_only INTEGER DEFAULT 0, mcp_read_only INTEGER DEFAULT 0, mcp_ip_whitelist TEXT, created_at DATETIME)`); err != nil {
 		t.Fatal(err)
 	}
 	if err := database.Close(); err != nil {

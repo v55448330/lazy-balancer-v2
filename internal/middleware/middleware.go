@@ -1172,6 +1172,7 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 				business.GET("/notification/delivery-stats", noStoreResponse(), h.GetDeliveryStats)
 				business.GET("/notification/rules", h.GetNotificationRules)
 				business.POST("/notification/rules/:id", noStoreResponse(), h.UpdateNotificationRule)
+				business.POST("/notification/rules/:id/test", noStoreResponse(), h.TestNotificationRule)
 				business.GET("/notification/daily/targets", h.GetDailyTargets)
 				business.GET("/notification/daily", h.GetNotificationDaily)
 				business.PUT("/notification/daily", h.PutNotificationDaily)
@@ -1651,14 +1652,30 @@ func apiKeyAuth(database *sql.DB) gin.HandlerFunc {
 		c.Set("api_key_id", keyID)
 		c.Set("api_key_name", keyName)
 		c.Set("api_key_mcp_enabled", mcpEnabled)
+		c.Set("api_key_api_enabled", identity.APIEnabled)
 		c.Set("api_key_read_only", readOnly)
+		// 双协议只读：REST 路径看 api_read_only，/mcp 路径看 mcp_read_only
+		//（legacy read_only 保留供 MCP 可见性合并口径）。
+		if strings.HasPrefix(c.FullPath(), "/api/v1/mcp") {
+			c.Set("api_key_read_only", identity.MCPReadOnly)
+		} else {
+			c.Set("api_key_read_only", identity.APIReadOnly)
+		}
 
 		// REST API 全局开关（与 MCP 全局开关对称）：停用时 API Key 认证的
 		// REST 请求 503；/mcp 路径不受影响（其开关=mcpGlobalSwitchGuard），
 		// JWT 面板会话不经本分支。内部回环（MCP 工具转发）豁免。
-		if !strings.HasPrefix(c.FullPath(), "/api/v1/mcp") && !trustedInternalMCP && !notify.APIEnabled() {
-			c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{"code": http.StatusServiceUnavailable, "message": "REST API 接入已全局停用"})
-			return
+		if !strings.HasPrefix(c.FullPath(), "/api/v1/mcp") && !trustedInternalMCP {
+			if !notify.APIEnabled() {
+				c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{"code": http.StatusServiceUnavailable, "message": "REST API 接入已全局停用"})
+				return
+			}
+			// Key 级 API 开关（与 mcp_enabled 对称）：停用时该 Key 的 REST 请求 403
+			if !identity.APIEnabled {
+				recordAuthenticationRejection(c, "api_key_api_disabled")
+				c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"code": 403, "message": "该密钥的 REST API 接入未开启"})
+				return
+			}
 		}
 
 		// REST 调用采集（API 接入页接入统计 REST 列数据源；MCP 路径

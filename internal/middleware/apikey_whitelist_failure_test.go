@@ -20,13 +20,13 @@ func newAPIKeyWhitelistFixture(t *testing.T) func(apiKey string) *httptest.Respo
 	t.Helper()
 	database := newIsolatedTestDB(t)
 	if _, err := database.Exec(`CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT, role TEXT, is_enabled BOOLEAN);
-		CREATE TABLE api_keys (id INTEGER PRIMARY KEY, name TEXT, key_hash TEXT, key_prefix TEXT, created_by INTEGER, last_used DATETIME, expires_at DATETIME, is_enabled BOOLEAN, mcp_enabled BOOLEAN, read_only BOOLEAN, mcp_ip_whitelist TEXT);
+		CREATE TABLE api_keys (id INTEGER PRIMARY KEY, name TEXT, key_hash TEXT, key_prefix TEXT, created_by INTEGER, last_used DATETIME, expires_at DATETIME, is_enabled BOOLEAN, mcp_enabled BOOLEAN, api_enabled INTEGER DEFAULT 1, read_only BOOLEAN, api_read_only INTEGER DEFAULT 0, mcp_read_only INTEGER DEFAULT 0, mcp_ip_whitelist TEXT);
 		INSERT INTO users VALUES (1,'whitelist-user','user',1);`); err != nil {
 		t.Fatal(err)
 	}
 	seed := func(id int, name, plain, whitelist string) {
 		hash := sha256.Sum256([]byte(plain))
-		if _, err := database.Exec(`INSERT INTO api_keys VALUES (?,?,?,?,1,NULL,NULL,1,0,0,?)`,
+		if _, err := database.Exec(`INSERT INTO api_keys VALUES (?,?,?,?,1,NULL,NULL,1,0,1,0,0,0,?)`,
 			id, name, hex.EncodeToString(hash[:]), plain[:12], whitelist); err != nil {
 			t.Fatal(err)
 		}

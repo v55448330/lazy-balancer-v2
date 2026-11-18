@@ -22,7 +22,10 @@ type APIKeyIdentity struct {
 	Username       string
 	Role           string
 	MCPEnabled     bool
-	ReadOnly       bool
+	APIEnabled     bool
+	ReadOnly       bool //  legacy 合并值（api_read_only AND mcp_read_only 的写侧同步列）
+	APIReadOnly    bool
+	MCPReadOnly    bool
 	MCPIPWhitelist string
 }
 
@@ -39,7 +42,8 @@ func ResolveAPIKeyIdentity(database *sql.DB, plaintext string) (APIKeyIdentity, 
 	hash := sha256.Sum256([]byte(plaintext))
 	err := database.QueryRow(`
 		SELECT k.id, k.name, u.id, u.username, u.role,
-		       COALESCE(k.mcp_enabled,0), COALESCE(k.read_only,0), COALESCE(k.mcp_ip_whitelist,'')
+		       COALESCE(k.mcp_enabled,0), COALESCE(k.api_enabled,1), COALESCE(k.read_only,0),
+		       COALESCE(k.api_read_only,0), COALESCE(k.mcp_read_only,0), COALESCE(k.mcp_ip_whitelist,'')
 		FROM api_keys k
 		JOIN users u ON u.id = k.created_by
 		WHERE k.key_prefix = ? AND k.key_hash = ?
@@ -52,7 +56,8 @@ func ResolveAPIKeyIdentity(database *sql.DB, plaintext string) (APIKeyIdentity, 
 		  AND (k.expires_at IS NULL OR datetime(k.expires_at) > datetime('now'))
 	`, plaintext[:12], hex.EncodeToString(hash[:])).Scan(
 		&identity.ID, &identity.Name, &identity.UserID, &identity.Username, &identity.Role,
-		&identity.MCPEnabled, &identity.ReadOnly, &identity.MCPIPWhitelist)
+		&identity.MCPEnabled, &identity.APIEnabled, &identity.ReadOnly,
+		&identity.APIReadOnly, &identity.MCPReadOnly, &identity.MCPIPWhitelist)
 	if errors.Is(err, sql.ErrNoRows) {
 		return APIKeyIdentity{}, ErrAPIKeyNotFound
 	}

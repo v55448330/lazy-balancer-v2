@@ -58,7 +58,9 @@
                   <span class="access-row-label">{{ t('app.notification.keysAccess.rowFor') }}</span>
                   <span class="access-row-value">{{ t('app.notification.keysAccess.apiCardDesc') }}</span>
                 </div>
-                <div v-if="isAdmin && !apiEnabled" class="access-disabled-note">{{ t('app.notification.keysAccess.apiDisabledNote') }}</div>
+                <div class="access-note-slot">
+                  <div v-if="isAdmin && !apiEnabled" class="info-note-bar"><span class="info-note-desc">{{ t('app.notification.keysAccess.apiDisabledNote') }}</span></div>
+                </div>
               </div>
             </el-card>
           </el-col>
@@ -96,7 +98,9 @@
                   <span class="access-row-label">{{ t('app.notification.keysAccess.rowFor') }}</span>
                   <span class="access-row-value">{{ t('app.notification.keysAccess.mcpCardDesc') }}</span>
                 </div>
-                <div v-if="isAdmin && !mcpEnabled" class="access-disabled-note">{{ t('app.notification.keysSessions.mcpDisabledNote') }}</div>
+                <div class="access-note-slot">
+                  <div v-if="isAdmin && !mcpEnabled" class="info-note-bar"><span class="info-note-desc">{{ t('app.notification.keysSessions.mcpDisabledNote') }}</span></div>
+                </div>
               </div>
             </el-card>
           </el-col>
@@ -114,6 +118,7 @@
                 <span>{{ t('app.notification.keysAccess.keysTab') }}</span>
               </div>
               <div class="card-header-actions">
+                <el-switch v-if="isAdmin" v-model="keysMineOnly" size="small" :active-text="t('app.notification.keysAccess.mineOnly')" @change="fetchKeys" />
                 <el-tooltip :disabled="!nodeWriteBlocked" :content="nodeWriteBlockedReason">
                   <div>
                     <el-button type="primary" size="small" :disabled="nodeWriteBlocked || creating" @click="openCreateDialog">
@@ -136,8 +141,13 @@
       <el-table-column :label="t('common.app.views.keys.name')" min-width="140">
         <template #default="scope">
           <span class="key-name-cell">{{ scope.row.name }}</span>
-          <el-tag v-if="keyExpired(asKey(scope.row))" type="danger" size="small" class="ml4">{{ t('common.app.views.keys.expiredTag') }}</el-tag>
-          <el-tag v-else :type="scope.row.is_enabled ? 'success' : 'info'" size="small" class="ml4">
+          <el-tag v-if="isAdmin && !keysMineOnly && scope.row.created_by !== authStore.user?.id" size="small" effect="plain" class="ml4">{{ scope.row.username }}</el-tag>
+        </template>
+      </el-table-column>
+      <el-table-column :label="t('common.app.views.keys.status')" width="90" align="center">
+        <template #default="scope">
+          <el-tag v-if="keyExpired(asKey(scope.row))" type="danger" size="small">{{ t('common.app.views.keys.expiredTag') }}</el-tag>
+          <el-tag v-else :type="scope.row.is_enabled ? 'success' : 'info'" size="small">
             {{ scope.row.is_enabled ? t('common.app.views.keys.enabledTag') : t('common.app.views.keys.disabledTag') }}
           </el-tag>
         </template>
@@ -145,14 +155,20 @@
       <el-table-column :label="t('common.app.views.keys.keyPrefix')" min-width="170">
         <template #default="scope"><code>{{ scope.row.key_prefix || '-' }}</code></template>
       </el-table-column>
-      <el-table-column :label="t('common.app.views.keys.features')" min-width="170">
+      <el-table-column :label="t('common.app.views.keys.features')" min-width="200">
         <template #default="scope">
           <div class="feature-tags">
+            <el-tag :type="scope.row.api_enabled ? 'primary' : 'info'" size="small" effect="plain">
+              API {{ scope.row.api_enabled ? t('common.app.views.keys.on') : t('common.app.views.keys.off') }}
+            </el-tag>
             <el-tag :type="scope.row.mcp_enabled ? 'primary' : 'info'" size="small" effect="plain">
               MCP {{ scope.row.mcp_enabled ? t('common.app.views.keys.on') : t('common.app.views.keys.off') }}
             </el-tag>
-            <el-tag :type="scope.row.read_only ? 'warning' : 'success'" size="small" effect="plain">
-              {{ scope.row.read_only ? t('common.app.views.keys.readOnly') : t('common.app.views.keys.readWrite') }}
+            <el-tag :type="scope.row.api_read_only ? 'warning' : 'success'" size="small" effect="plain">
+              API {{ scope.row.api_read_only ? t('common.app.views.keys.readOnly') : t('common.app.views.keys.readWrite') }}
+            </el-tag>
+            <el-tag :type="scope.row.mcp_read_only ? 'warning' : 'success'" size="small" effect="plain">
+              MCP {{ scope.row.mcp_read_only ? t('common.app.views.keys.readOnly') : t('common.app.views.keys.readWrite') }}
             </el-tag>
             <el-tooltip v-if="whitelistEntries(asKey(scope.row).mcp_ip_whitelist).length" :content="whitelistSummary(asKey(scope.row).mcp_ip_whitelist)" placement="top">
               <el-tag type="warning" size="small" effect="plain">{{ t('common.app.views.keys.ipWhitelist') }}</el-tag>
@@ -163,38 +179,29 @@
       <el-table-column :label="t('common.app.views.keys.createdAt')" width="110">
         <template #default="scope">{{ formatDateShort(scope.row.created_at) || '-' }}</template>
       </el-table-column>
+      <el-table-column :label="t('common.app.views.keys.updatedAt')" width="150">
+        <template #default="scope">
+          {{ formatDateShort(scope.row.updated_at) || '-' }}
+          <span v-if="scope.row.updated_by_username" class="ev-more">· {{ scope.row.updated_by_username }}</span>
+        </template>
+      </el-table-column>
       <el-table-column :label="t('common.app.views.keys.lastUsed')" width="140">
         <template #default="scope">{{ formatDate(scope.row.last_used) || t('common.app.views.keys.neverUsed') }}</template>
       </el-table-column>
       <el-table-column :label="t('common.app.views.keys.expiresAt')" width="110">
         <template #default="scope">{{ formatDate(scope.row.expires_at) || t('common.app.views.keys.neverExpires') }}</template>
       </el-table-column>
-      <el-table-column :label="t('app.notification.deliveries.colAction')" width="270" align="right" fixed="right">
+      <el-table-column :label="t('app.notification.deliveries.colAction')" width="170" align="right" fixed="right">
         <template #default="scope">
           <el-tooltip :disabled="!nodeWriteBlocked" :content="nodeWriteBlockedReason">
             <div class="row-actions">
-              <el-button
-                size="small"
-                type="primary"
-                plain
-                :disabled="nodeWriteBlocked || togglePendingId === scope.row.id || deletingIds.has(scope.row.id)"
-                @click="openFeatureDialog(asKey(scope.row))"
-              >
-                <el-icon><Setting /></el-icon>
+              <el-button size="small" link type="primary" :disabled="nodeWriteBlocked || togglePendingId === scope.row.id || deletingIds.has(scope.row.id)" @click="openFeatureDialog(asKey(scope.row))">
                 {{ t('common.app.views.keys.featureConfig') }}
               </el-button>
-              <el-button
-                size="small"
-                :type="scope.row.is_enabled ? 'warning' : 'success'"
-                :loading="togglePendingId === scope.row.id"
-                :disabled="nodeWriteBlocked || (togglePendingId !== null && togglePendingId !== scope.row.id) || deletingIds.has(scope.row.id)"
-                @click="toggleKey(asKey(scope.row))"
-              >
-                <el-icon><SwitchButton v-if="scope.row.is_enabled" /><VideoPlay v-else /></el-icon>
+              <el-button size="small" link :type="scope.row.is_enabled ? 'warning' : 'success'" :loading="togglePendingId === scope.row.id" :disabled="nodeWriteBlocked || (togglePendingId !== null && togglePendingId !== scope.row.id) || deletingIds.has(scope.row.id)" @click="toggleKey(asKey(scope.row))">
                 {{ scope.row.is_enabled ? t('common.app.views.keys.disable') : t('common.app.views.keys.enable') }}
               </el-button>
-              <el-button size="small" type="danger" :loading="deletingIds.has(scope.row.id)" :disabled="nodeWriteBlocked || togglePendingId === scope.row.id || deletingIds.has(scope.row.id)" @click="deleteKey(scope.row.id)">
-                <el-icon><Delete /></el-icon>
+              <el-button size="small" link type="danger" :loading="deletingIds.has(scope.row.id)" :disabled="nodeWriteBlocked || togglePendingId === scope.row.id || deletingIds.has(scope.row.id)" @click="deleteKey(scope.row.id)">
                 {{ t('common.app.views.keys.delete') }}
               </el-button>
             </div>
@@ -357,17 +364,33 @@
           <el-input v-model="createForm.name" maxlength="100" show-word-limit :placeholder="t('common.app.views.keys.enterKeyName')" @input="createNameError = ''" />
         </el-form-item>
         <el-divider content-position="left" class="section-divider">{{ t('common.app.views.keys.permSection') }}</el-divider>
-        <el-form-item :label="t('common.app.views.keys.mcpFeature')">
-          <el-switch v-model="createForm.mcp_enabled" />
-          <span class="switch-hint">{{ t('common.app.views.keys.mcpFeatureHint') }}</span>
-        </el-form-item>
-        <el-form-item :label="t('common.app.views.keys.readOnlyMode')">
-          <el-tooltip :disabled="isAdmin" :content="t('common.app.views.keys.readOnlyOnlyTip')" placement="top">
-            <el-switch v-model="createForm.read_only" :disabled="!isAdmin" />
-          </el-tooltip>
-          <span class="switch-hint">{{ t('common.app.views.keys.readOnlyHint') }}</span>
-        </el-form-item>
-        <div v-if="createForm.read_only" class="info-note-bar readonly-alert"><span class="info-note-desc">{{ isAdmin ? t('common.app.views.keys.readOnlyNote') : t('common.app.views.keys.readOnlyOnlyTip') }}</span></div>
+        <!-- 双协议对称：接入开关 + 各自只读（管理员可分别设置；非管理员恒只读） -->
+        <div class="perm-grid">
+          <div class="perm-col">
+            <div class="perm-col-title">REST API</div>
+            <el-form-item :label="t('common.app.views.keys.apiFeature')">
+              <el-switch v-model="createForm.api_enabled" />
+            </el-form-item>
+            <el-form-item :label="t('common.app.views.keys.readOnlyMode')">
+              <el-tooltip :disabled="isAdmin" :content="t('common.app.views.keys.readOnlyOnlyTip')" placement="top">
+                <el-switch v-model="createForm.api_read_only" :disabled="!isAdmin" />
+              </el-tooltip>
+            </el-form-item>
+          </div>
+          <div class="perm-col">
+            <div class="perm-col-title">MCP</div>
+            <el-form-item :label="t('common.app.views.keys.mcpFeature')">
+              <el-switch v-model="createForm.mcp_enabled" />
+            </el-form-item>
+            <el-form-item :label="t('common.app.views.keys.readOnlyMode')">
+              <el-tooltip :disabled="isAdmin" :content="t('common.app.views.keys.readOnlyOnlyTip')" placement="top">
+                <el-switch v-model="createForm.mcp_read_only" :disabled="!isAdmin" />
+              </el-tooltip>
+            </el-form-item>
+          </div>
+        </div>
+        <div class="info-note-bar"><span class="info-note-desc">{{ t('common.app.views.keys.permHint') }}</span></div>
+        <div v-if="!isAdmin" class="info-note-bar readonly-alert"><span class="info-note-desc">{{ t('common.app.views.keys.readOnlyOnlyTip') }}</span></div>
         <el-divider content-position="left" class="section-divider">{{ t('common.app.views.keys.expirySourceSection') }}</el-divider>
         <el-form-item :label="t('common.app.views.keys.expiresAt')" :error="createExpiresError">
           <el-date-picker
@@ -414,17 +437,32 @@
       </template>
       <el-form :label-width="$flw('110px')" :disabled="featureSaving">
         <el-divider content-position="left" class="section-divider">{{ t('common.app.views.keys.permSection') }}</el-divider>
-        <el-form-item :label="t('common.app.views.keys.mcpFeature')">
-          <el-switch v-model="featureForm.mcp_enabled" />
-          <span class="switch-hint">{{ t('common.app.views.keys.mcpFeatureHint') }}</span>
-        </el-form-item>
-        <el-form-item :label="t('common.app.views.keys.readOnlyMode')">
-          <el-tooltip :disabled="isAdmin" :content="t('common.app.views.keys.readOnlyOnlyTip')" placement="top">
-            <el-switch v-model="featureForm.read_only" :disabled="!isAdmin" />
-          </el-tooltip>
-          <span class="switch-hint">{{ t('common.app.views.keys.readOnlyHint') }}</span>
-        </el-form-item>
-        <div v-if="featureForm.read_only" class="info-note-bar readonly-alert"><span class="info-note-desc">{{ isAdmin ? t('common.app.views.keys.readOnlyNote') : t('common.app.views.keys.readOnlyOnlyTip') }}</span></div>
+        <div class="perm-grid">
+          <div class="perm-col">
+            <div class="perm-col-title">REST API</div>
+            <el-form-item :label="t('common.app.views.keys.apiFeature')">
+              <el-switch v-model="featureForm.api_enabled" />
+            </el-form-item>
+            <el-form-item :label="t('common.app.views.keys.readOnlyMode')">
+              <el-tooltip :disabled="isAdmin" :content="t('common.app.views.keys.readOnlyOnlyTip')" placement="top">
+                <el-switch v-model="featureForm.api_read_only" :disabled="!isAdmin" />
+              </el-tooltip>
+            </el-form-item>
+          </div>
+          <div class="perm-col">
+            <div class="perm-col-title">MCP</div>
+            <el-form-item :label="t('common.app.views.keys.mcpFeature')">
+              <el-switch v-model="featureForm.mcp_enabled" />
+            </el-form-item>
+            <el-form-item :label="t('common.app.views.keys.readOnlyMode')">
+              <el-tooltip :disabled="isAdmin" :content="t('common.app.views.keys.readOnlyOnlyTip')" placement="top">
+                <el-switch v-model="featureForm.mcp_read_only" :disabled="!isAdmin" />
+              </el-tooltip>
+            </el-form-item>
+          </div>
+        </div>
+        <div class="info-note-bar"><span class="info-note-desc">{{ t('common.app.views.keys.permHint') }}</span></div>
+        <div v-if="!isAdmin" class="info-note-bar readonly-alert"><span class="info-note-desc">{{ t('common.app.views.keys.readOnlyOnlyTip') }}</span></div>
         <el-divider content-position="left" class="section-divider">{{ t('common.app.views.keys.sourceRestrictSection') }}</el-divider>
         <el-form-item :label="t('common.app.views.keys.ipWhitelist')" :error="featureWhitelistError">
           <el-input
@@ -480,7 +518,7 @@ import { copyText } from '@/utils/copy'
 import { createOneTimeSecretCloseGuard } from '@/utils/oneTimeSecretGuard'
 import { saveBlob } from '@/utils/download'
 import { ElMessageBox, ElMessage } from 'element-plus'
-import { CircleCheckFilled, Connection, CopyDocument, Delete, Key, Plus, Setting, SetUp, SwitchButton, VideoPlay } from '@element-plus/icons-vue'
+import { CircleCheckFilled, Connection, CopyDocument, Key, Plus, Setting, SetUp } from '@element-plus/icons-vue'
 import type { APIKey, APIResponse, CreateAPIKeyInput, MCPToolSpec, UpdateAPIKeyInput } from '@/types'
 import type { McpStats, McpStatsResponse } from '@/types/notifications.ts'
 import { useI18n } from 'vue-i18n'
@@ -553,12 +591,13 @@ const createDialogVisible = ref(false)
 const createNameError = ref('')
 const createWhitelistError = ref('')
 const createExpiresError = ref('')
-const createForm = ref({ name: '', mcp_enabled: false, read_only: true, whitelistText: '', expiresAt: null as Date | null })
+const createForm = ref({ name: '', mcp_enabled: false, api_enabled: true, api_read_only: true, mcp_read_only: true, whitelistText: '', expiresAt: null as Date | null })
 const featureDialogVisible = ref(false)
 const featureSaving = ref(false)
 const featureTarget = ref<APIKey | null>(null)
 const featureWhitelistError = ref('')
-const featureForm = ref({ mcp_enabled: false, read_only: false, whitelistText: '' })
+const featureForm = ref({ mcp_enabled: false, api_enabled: true, api_read_only: false, mcp_read_only: false, whitelistText: '' })
+const keysMineOnly = ref(true) // 管理员默认看自己；关闭=全平台（可操作他人 key，明文不可见）
 const togglePendingId = ref<number | null>(null)
 const deletingIds = ref(new Set<number>())
 const createdKey = ref('')
@@ -648,14 +687,14 @@ const fetchKeys = async () => {
   const requestSeq = ++keysRequestSeq
   loading.value = true
   try {
-    const res = await request.get<APIResponse<readonly APIKey[]>>('/users/me/api-keys')
+    // 管理员默认本人（mine=1）；关闭开关=全平台。非管理员恒本人端点。
+    const url = isAdmin.value && !keysMineOnly.value ? '/api-keys' : '/users/me/api-keys'
+    const res = await request.get<APIResponse<readonly APIKey[]>>(url)
     if (requestSeq === keysRequestSeq) {
       keys.value = res.data || []
       loadError.value = false
     }
   } catch (error: unknown) {
-    // Error toast is already shown by the global axios interceptor; swallow here
-    // so fire-and-forget refresh calls don't surface as unhandled rejections.
     console.error('Failed to fetch keys:', error)
     if (requestSeq === keysRequestSeq) loadError.value = true
   } finally {
@@ -680,7 +719,7 @@ const openCreateDialog = (): void => {
 }
 
 const resetCreateForm = (): void => {
-  createForm.value = { name: '', mcp_enabled: false, read_only: !isAdmin.value, whitelistText: '', expiresAt: null }
+  createForm.value = { name: '', mcp_enabled: false, api_enabled: true, api_read_only: true, mcp_read_only: true, whitelistText: '', expiresAt: null }
   createNameError.value = ''
   createWhitelistError.value = ''
   createExpiresError.value = ''
@@ -727,7 +766,9 @@ async function createKey() {
     const payload: CreateAPIKeyInput = {
       name,
       mcp_enabled: createForm.value.mcp_enabled,
-      read_only: isAdmin.value ? createForm.value.read_only : true,
+      api_enabled: createForm.value.api_enabled,
+      api_read_only: isAdmin.value ? createForm.value.api_read_only : true,
+      mcp_read_only: isAdmin.value ? createForm.value.mcp_read_only : true,
       mcp_ip_whitelist: whitelist.value,
       expires_at: createForm.value.expiresAt ? createForm.value.expiresAt.toISOString() : undefined,
     }
@@ -758,7 +799,9 @@ const openFeatureDialog = (key: APIKey): void => {
   featureTarget.value = key
   featureForm.value = {
     mcp_enabled: key.mcp_enabled,
-    read_only: isAdmin.value ? key.read_only : true,
+    api_enabled: key.api_enabled,
+    api_read_only: isAdmin.value ? key.api_read_only : true,
+    mcp_read_only: isAdmin.value ? key.mcp_read_only : true,
     whitelistText: parseWhitelist(key.mcp_ip_whitelist),
   }
   featureWhitelistError.value = ''
@@ -767,9 +810,14 @@ const openFeatureDialog = (key: APIKey): void => {
 
 const resetFeatureForm = (): void => {
   featureTarget.value = null
-  featureForm.value = { mcp_enabled: false, read_only: false, whitelistText: '' }
+  featureForm.value = { mcp_enabled: false, api_enabled: true, api_read_only: false, mcp_read_only: false, whitelistText: '' }
   featureWhitelistError.value = ''
 }
+
+// 管理端点选择：管理员全平台视角下操作他人 key 走 /api-keys/:id（PATCH/DELETE）；
+// 本人 key 或非管理员恒自助端点。
+const keyAdminEndpoint = (key: APIKey): boolean =>
+  isAdmin.value && !keysMineOnly.value && key.created_by !== authStore.user?.id
 
 const saveFeatures = async (): Promise<void> => {
   if (nodeWriteBlocked.value || featureSaving.value || !featureTarget.value) return
@@ -787,10 +835,15 @@ const saveFeatures = async (): Promise<void> => {
     } catch { return }
     const payload: UpdateAPIKeyInput = {
       mcp_enabled: featureForm.value.mcp_enabled,
-      read_only: isAdmin.value ? featureForm.value.read_only : true,
+      api_enabled: featureForm.value.api_enabled,
+      api_read_only: isAdmin.value ? featureForm.value.api_read_only : true,
+      mcp_read_only: isAdmin.value ? featureForm.value.mcp_read_only : true,
       mcp_ip_whitelist: whitelist.value,
     }
-    await request.patch(`/users/me/api-keys/${featureTarget.value.id}`, payload)
+    const url = keyAdminEndpoint(featureTarget.value)
+      ? `/api-keys/${featureTarget.value.id}/status`
+      : `/users/me/api-keys/${featureTarget.value.id}`
+    await request.patch(url, payload)
     mfaAwareSuccess(t('common.app.views.keys.featureSaveSuccess'))
     featureDialogVisible.value = false
     await fetchKeys()
@@ -807,7 +860,8 @@ const deleteKey = async (id: number) => {
   deletingIds.value.add(id)
   try {
     await ElMessageBox.confirm(t('common.app.views.keys.deleteConfirmMsg'), t('common.app.views.keys.deleteTitle'), { type: 'warning', confirmButtonText: t('common.app.views.keys.confirmDelete'), cancelButtonText: t('common.app.views.keys.cancel') })
-    await request.delete(`/users/me/api-keys/${id}`)
+    const target = keys.value.find(k => k.id === id)
+    await request.delete(target && keyAdminEndpoint(target) ? `/api-keys/${id}` : `/users/me/api-keys/${id}`)
     mfaAwareSuccess(t('common.app.views.keys.deleteSuccess'))
     await fetchKeys()
   } catch (error: unknown) {
@@ -838,7 +892,7 @@ const toggleKey = async (key: APIKey) => {
       }
     }
     const payload: UpdateAPIKeyInput = { is_enabled: isEnabled }
-    await request.patch(`/users/me/api-keys/${key.id}`, payload)
+    await request.patch(keyAdminEndpoint(key) ? `/api-keys/${key.id}/status` : `/users/me/api-keys/${key.id}`, payload)
     mfaAwareSuccess(isEnabled ? t('common.app.views.keys.enableSuccess') : t('common.app.views.keys.disableSuccess'))
     await fetchKeys()
   } catch (error: unknown) {
@@ -905,7 +959,10 @@ onMounted(() => {
 </script>
 
 <style scoped>
-/* 卡片规范（DESIGN_SPEC.md §2）：边框 #ebeef5 与安全总览一致 */
+/* 卡片规范（DESIGN_SPEC.md §2）：边框 #ebeef5 与安全总览一致。
+ * tab 内容区 overflow:hidden 裁剪卡片四周阴影——padding 留出阴影空间。 */
+:deep(.el-tabs__content) { overflow: visible; }
+.el-tab-pane { padding: 6px; margin: -6px; }
 .el-card { --el-card-border-color: #ebeef5; }
 .card-header { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; row-gap: 8px; }
 .card-header-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
@@ -926,7 +983,13 @@ onMounted(() => {
 .access-row-value { font-size: 13px; word-break: break-all; }
 code.access-row-value { padding: 3px 8px; background: var(--el-fill-color-light); border-radius: 4px; }
 .access-row-desc .access-row-value { color: var(--text-secondary, #6b7280); font-size: 12px; line-height: 1.6; }
-.access-disabled-note { font-size: 12px; color: var(--el-color-danger); }
+/* 停用提示占位槽：两卡常驻等高（提示出现/消失不改变卡片高度） */
+.access-note-slot { min-height: 46px; }
+.access-note-slot .info-note-bar { margin: 8px 0 0; }
+.ev-more { font-size: 11px; color: #6b7280; }
+.perm-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.perm-col { border: 1px solid #f3f4f6; padding: 12px 14px 4px; }
+.perm-col-title { font-size: 13px; font-weight: 600; color: #374151; margin-bottom: 10px; }
 .card-header-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .section-divider { margin: 24px 0 20px; }
 .section-divider :deep(.el-divider__text) { font-size: 14px; color: var(--text-secondary, #6b7280); font-weight: 600; }

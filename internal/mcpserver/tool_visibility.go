@@ -226,7 +226,7 @@ func resolveAPIKeyVisibility(apiKey string) (apiKeyVisibility, error) {
 	if err != nil {
 		return apiKeyVisibility{}, err
 	}
-	return apiKeyVisibility{readOnly: identity.ReadOnly, admin: identity.IsAdmin()}, nil
+	return apiKeyVisibility{readOnly: identity.MCPReadOnly, admin: identity.IsAdmin()}, nil
 }
 
 // resolveVisibility 优先复用网关 apiKeyAuth 已解析的 Key 属主属性（context 注入，

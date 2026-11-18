@@ -296,7 +296,7 @@ func TestResolveAPIKeyReadOnly_returnsPersistedPermission(t *testing.T) {
 	if _, err := db.DB.Exec(`INSERT INTO users (id,username,password_hash,role,is_enabled) VALUES (91,'mcp-read-only','x','admin',1)`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.DB.Exec(`INSERT INTO api_keys (name,key_hash,key_prefix,created_by,is_enabled,mcp_enabled,read_only) VALUES ('mcp-read-only',?,?,91,1,1,1)`, fmt.Sprintf("%x", hash[:]), apiKey[:12]); err != nil {
+	if _, err := db.DB.Exec(`INSERT INTO api_keys (name,key_hash,key_prefix,created_by,is_enabled,mcp_enabled,read_only,mcp_read_only) VALUES ('mcp-read-only',?,?,91,1,1,1,1)`, fmt.Sprintf("%x", hash[:]), apiKey[:12]); err != nil {
 		t.Fatal(err)
 	}
 
@@ -317,7 +317,7 @@ func TestResolveAPIKeyReadOnly_requiresMatchingIndexedPrefix(t *testing.T) {
 	if _, err := db.DB.Exec(`INSERT INTO users (id,username,password_hash,role,is_enabled) VALUES (94,'mcp-indexed','x','admin',1)`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.DB.Exec(`INSERT INTO api_keys (name,key_hash,key_prefix,created_by,is_enabled,mcp_enabled,read_only) VALUES ('mcp-indexed',?,?,94,1,1,1)`, fmt.Sprintf("%x", hash[:]), "lb_sk_wrong!"); err != nil {
+	if _, err := db.DB.Exec(`INSERT INTO api_keys (name,key_hash,key_prefix,created_by,is_enabled,mcp_enabled,read_only,mcp_read_only) VALUES ('mcp-indexed',?,?,94,1,1,1,1)`, fmt.Sprintf("%x", hash[:]), "lb_sk_wrong!"); err != nil {
 		t.Fatal(err)
 	}
 

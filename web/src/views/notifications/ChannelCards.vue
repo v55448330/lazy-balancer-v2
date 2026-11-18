@@ -103,10 +103,11 @@
         </el-form-item>
       </el-form>
 
-      <!-- 消息样式（编辑既有通道时；键白名单与后端 validateChannelStyle 一致） -->
+      <!-- 传输配置（编辑既有通道时）：请求方式/请求头/消息类型/日报格式。
+           消息正文模板已归通知规则（每通道模板），此处不再编辑模板。 -->
       <template v-if="editTarget">
         <el-divider />
-        <div class="style-section-title">{{ t('app.notification.channels.styleSection') }}</div>
+        <div class="style-section-title">{{ t('app.notification.channels.transportSection') }}</div>
         <el-form :label-width="$flw('110px')" :disabled="saving">
           <template v-if="drawerForm.type === 'webhook'">
             <el-form-item :label="t('app.notification.channels.styleMethod')">
@@ -115,9 +116,6 @@
                 <el-radio-button value="GET">GET</el-radio-button>
               </el-radio-group>
               <div class="form-hint">{{ t('app.notification.channels.styleMethodHint') }}</div>
-            </el-form-item>
-            <el-form-item :label="t('app.notification.channels.stylePayloadTpl')">
-              <el-input v-model="styleForm.payload_template" type="textarea" :rows="4" :placeholder="t('app.notification.channels.stylePayloadPlaceholder')" />
             </el-form-item>
             <el-form-item :label="t('app.notification.channels.styleHeaders')">
               <div class="header-rows">
@@ -135,9 +133,6 @@
             <el-form-item :label="t('app.notification.channels.styleSubjectTpl')">
               <el-input v-model="styleForm.subject_template" :placeholder="t('app.notification.channels.styleSubjectPlaceholder')" />
             </el-form-item>
-            <el-form-item :label="t('app.notification.channels.styleBodyTpl')">
-              <el-input v-model="styleForm.body_template" type="textarea" :rows="4" :placeholder="t('app.notification.channels.styleBodyPlaceholder')" />
-            </el-form-item>
             <el-form-item :label="t('app.notification.channels.styleBodyFormat')">
               <el-radio-group v-model="styleForm.body_format" size="small">
                 <el-radio-button value="text">{{ t('app.notification.channels.styleFormatText') }}</el-radio-button>
@@ -153,9 +148,6 @@
               </el-radio-group>
               <div v-if="styleForm.msg_type === 'markdown'" class="form-hint">{{ t('app.notification.channels.styleMsgMdHint') }}</div>
             </el-form-item>
-            <el-form-item :label="t('app.notification.channels.styleContentTpl')">
-              <el-input v-model="styleForm.content_template" type="textarea" :rows="4" :placeholder="t('app.notification.channels.styleContentPlaceholder')" />
-            </el-form-item>
           </template>
           <el-form-item :label="t('app.notification.channels.styleDailyFormat')">
             <el-select v-model="styleForm.daily_format" size="small" style="width:160px">
@@ -166,10 +158,7 @@
               <el-option value="json" :label="t('app.notification.channels.styleFormatJson')" />
             </el-select>
           </el-form-item>
-          <div class="ph-row">
-            <el-tag v-for="ph in STYLE_PH" :key="ph" size="small" effect="plain" class="ph-tag" @click="appendStylePh(ph)">{{ ph }}</el-tag>
-          </div>
-          <div class="form-hint">{{ t('app.notification.channels.styleTplHint') }}</div>
+          <div class="info-note-bar"><span class="info-note-desc">{{ t('app.notification.channels.tplMovedHint') }}</span></div>
         </el-form>
       </template>
       <template #footer>
@@ -290,20 +279,14 @@ const drawerForm = ref({ type: 'webhook' as NotificationChannelType, name: '', t
 const saving = ref(false)
 const canSave = computed(() => drawerForm.value.name.trim() !== '' && drawerForm.value.targetValue.trim() !== '')
 
-// 消息样式表单（键白名单=后端 validateChannelStyle；空串键提交时剔除）
-const STYLE_PH = ['{{title}}', '{{body}}', '{{level}}', '{{time}}', '{{event}}', '{{node}}']
+// 传输配置表单（键白名单=后端 validateChannelStyle；模板键保留回填不编辑——
+// 正文模板已归通知规则，保存时原样透传既有模板键避免覆盖丢失）
 interface HeaderRow { name: string; value: string }
 const emptyStyle = () => ({ payload_template: '', subject_template: '', body_template: '', content_template: '', msg_type: 'text', body_format: 'text', daily_format: '', method: 'POST' })
 const styleForm = ref(emptyStyle())
 const headerRows = ref<HeaderRow[]>([])
 const addHeaderRow = (): void => { if (headerRows.value.length < 8) headerRows.value.push({ name: '', value: '' }) }
 const removeHeaderRow = (i: number): void => { headerRows.value.splice(i, 1) }
-const appendStylePh = (ph: string): void => {
-  const typ = drawerForm.value.type
-  if (typ === 'webhook') styleForm.value.payload_template += ph
-  else if (typ === 'email') styleForm.value.body_template += ph
-  else styleForm.value.content_template += ph
-}
 const buildStyleConfig = (): Record<string, unknown> => {
   const s = styleForm.value
   const out: Record<string, unknown> = {}

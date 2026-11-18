@@ -57,9 +57,14 @@ func setupAPIKeyTestDB(t *testing.T) *sql.DB {
 		expires_at DATETIME,
 		is_enabled BOOLEAN DEFAULT TRUE,
 		mcp_enabled INTEGER DEFAULT 0,
+		api_enabled INTEGER DEFAULT 1,
 		read_only INTEGER DEFAULT 0,
+		api_read_only INTEGER DEFAULT 0,
+		mcp_read_only INTEGER DEFAULT 0,
 		mcp_ip_whitelist TEXT DEFAULT '',
-		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+		updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+		updated_by INTEGER DEFAULT 0
 	);
 	INSERT INTO users (id, username, password_hash, role) VALUES (1, 'alice', 'x', 'user'), (2, 'bob', 'x', 'user');
 	INSERT INTO api_keys (id, name, key_hash, key_prefix, created_by, is_enabled) VALUES (10, 'alice-key', 'h1', 'prefix1', 1, 1), (20, 'bob-key', 'h2', 'prefix2', 2, 1);`)
@@ -107,6 +112,9 @@ func TestListAPIKeysIncludesUsernameOwnership(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
 	ctx.Request = httptest.NewRequest(http.MethodGet, "/api/v1/api-keys", nil)
+	// 管理员视角=全平台（含他人 key 的属主 username）
+	ctx.Set("role", "admin")
+	ctx.Set("user_id", int64(1))
 
 	(&Handlers{}).ListAPIKeys(ctx)
 
@@ -163,6 +171,8 @@ func TestListAPIKeys_serializes_nullable_times_as_strings_or_null(t *testing.T) 
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
 	ctx.Request = httptest.NewRequest(http.MethodGet, "/api/v1/api-keys", nil)
+	ctx.Set("role", "admin")
+	ctx.Set("user_id", int64(1))
 
 	// When
 	(&Handlers{}).ListAPIKeys(ctx)

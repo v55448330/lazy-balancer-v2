@@ -73,6 +73,7 @@ func TestAuthenticationResponsesAreNotStored(t *testing.T) {
 		{name: "smtp test", method: http.MethodPost, path: "/api/v1/notification/settings/smtp-test", withToken: true},
 		{name: "api-keys access overview", method: http.MethodGet, path: "/api/v1/api-keys/access-overview", withToken: true},
 		{name: "notification rules update", method: http.MethodPost, path: "/api/v1/notification/rules/:id", withToken: true},
+		{name: "notification rules test", method: http.MethodPost, path: "/api/v1/notification/rules/group:x/test", registration: "/api/v1/notification/rules/:id/test", withToken: true},
 		// 通知中心 MCP 会话/统计面（N3 域路由的 no-store 对账，此处一并钉住）。
 		{name: "mcp sessions list", method: http.MethodGet, path: "/api/v1/security/mcp-sessions", withToken: true},
 		{name: "mcp session disconnect", method: http.MethodPost, path: "/api/v1/security/mcp-sessions/999999/disconnect", registration: "/api/v1/security/mcp-sessions/:id/disconnect", withToken: true},

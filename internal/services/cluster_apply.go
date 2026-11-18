@@ -964,6 +964,8 @@ func insertSnapshotUsersAndKeys(ctx context.Context, tx *sql.Tx, snapshot models
 		return fmt.Errorf("归一 setup 管理员标记: %w", err)
 	}
 	for _, key := range snapshot.APIKeys {
+		// 旧主端快照无 api_enabled 字段（nil）→按启用（升级零行为漂移）
+		apiEnabled := key.APIEnabled == nil || *key.APIEnabled
 		// 空白名单落 ''(与主端 encodeMCPIPWhitelist
 		// 同语义)——json.Marshal(nil) 产字面量 "null",中间件白名单守卫把
 		// 非空串当配置(Unmarshal null 成功但 0 CIDR)→ 无白名单 Key 在
@@ -987,7 +989,7 @@ func insertSnapshotUsersAndKeys(ctx context.Context, tx *sql.Tx, snapshot models
 				Logf("warn", "同步密钥 %d：MCP IP 白名单全部条目无法解析，落显式 deny-all（该 Key 在从节点拒绝所有来源）", key.ID)
 			}
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO api_keys (id,name,key_hash,key_prefix,created_by,expires_at,is_enabled,mcp_enabled,read_only,mcp_ip_whitelist,last_used,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`, key.ID, key.Name, key.KeyHash, key.KeyPrefix, key.CreatedBy, nullableString(key.ExpiresAt), key.IsEnabled, key.MCPEnabled, key.ReadOnly, string(whitelistJSON), nullableTimeFlat(key.LastUsed.NullTime), key.CreatedAt.UTC().Format(crsTimeLayout)); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO api_keys (id,name,key_hash,key_prefix,created_by,expires_at,is_enabled,mcp_enabled,api_enabled,read_only,api_read_only,mcp_read_only,mcp_ip_whitelist,last_used,created_at,updated_at,updated_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, key.ID, key.Name, key.KeyHash, key.KeyPrefix, key.CreatedBy, nullableString(key.ExpiresAt), key.IsEnabled, key.MCPEnabled, apiEnabled, key.ReadOnly, key.APIReadOnly, key.MCPReadOnly, string(whitelistJSON), nullableTimeFlat(key.LastUsed.NullTime), key.CreatedAt.UTC().Format(crsTimeLayout), key.UpdatedAt.UTC().Format(crsTimeLayout), key.UpdatedBy); err != nil {
 			return fmt.Errorf("写入快照密钥 %d: %w", key.ID, err)
 		}
 	}

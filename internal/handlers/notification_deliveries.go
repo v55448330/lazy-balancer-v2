@@ -18,17 +18,29 @@ import (
 )
 
 type notificationDeliveryDTO struct {
-	ID        int64  `json:"id"`
-	UserID    int64  `json:"user_id"`
-	EventType string `json:"event_type"`
-	Level     string `json:"level"`
-	Title     string `json:"title"`
-	Body      string `json:"body"`
-	Status    string `json:"status"`
-	Attempts  int    `json:"attempts"`
-	Error     string `json:"error"`
-	CreatedAt string `json:"created_at"`
-	SentAt    string `json:"sent_at"`
+	ID         int64                `json:"id"`
+	UserID     int64                `json:"user_id"`
+	Username   string               `json:"username"`
+	EventType  string               `json:"event_type"`
+	EventTitle string               `json:"event_title"`
+	Level      string               `json:"level"`
+	Title      string               `json:"title"`
+	Body       string               `json:"body"`
+	Status     string               `json:"status"`
+	Attempts   int                  `json:"attempts"`
+	Error      string               `json:"error"`
+	CreatedAt  string               `json:"created_at"`
+	SentAt     string               `json:"sent_at"`
+	Channels   []deliveryChannelDTO `json:"channels"`
+}
+
+// deliveryChannelDTO 每通道投递结果（notification_delivery_channels JOIN）。
+type deliveryChannelDTO struct {
+	ChannelID   int64  `json:"channel_id"`
+	ChannelName string `json:"channel_name"`
+	ChannelType string `json:"channel_type"`
+	Status      string `json:"status"`
+	Error       string `json:"error"`
 }
 
 // maskDeliveryBody 跨属主正文脱敏：rune 截断到 200 字符（保留边界完整字符）。
@@ -40,13 +52,11 @@ func maskDeliveryBody(body string) string {
 	return string(runes[:200]) + "…（截断）"
 }
 
-// ListNotificationDeliveries GET /notification/deliveries——默认只看自己；
-// 管理员 ?all=1 全平台（含 user_id，跨属主行正文截断脱敏）。
-// ?limit= 默认 50 上限 200；?status= ∈ pending/sent/failed/dead。
+// ListNotificationDeliveries GET /notification/deliveries——投递流水恒全量
+// （投递记录不区分用户视角；用户/通道维度经行内 username+channels 呈现）。
+// 跨属主正文截断脱敏；?limit= 默认 50 上限 200；?status= ∈ pending/sent/failed/dead。
 func (h *Handlers) ListNotificationDeliveries(c *gin.Context) {
 	uid := contextUserID(c)
-	admin := isAdminRequest(c)
-	all := admin && c.Query("all") == "1"
 
 	limit := 50
 	if raw := c.Query("limit"); raw != "" {
@@ -71,18 +81,14 @@ func (h *Handlers) ListNotificationDeliveries(c *gin.Context) {
 		}
 	}
 
-	query := `SELECT id, user_id, event_type, level, title, body, status, attempts, COALESCE(error,''), created_at, COALESCE(sent_at,'')
-		FROM notification_deliveries WHERE 1=1`
+	query := `SELECT d.id, d.user_id, COALESCE(u.username,''), d.event_type, d.level, d.title, d.body, d.status, d.attempts, COALESCE(d.error,''), d.created_at, COALESCE(d.sent_at,'')
+		FROM notification_deliveries d LEFT JOIN users u ON u.id = d.user_id WHERE 1=1`
 	args := []any{}
-	if !all {
-		query += ` AND user_id=?`
-		args = append(args, uid)
-	}
 	if status != "" {
-		query += ` AND status=?`
+		query += ` AND d.status=?`
 		args = append(args, status)
 	}
-	query += ` ORDER BY id DESC LIMIT ?`
+	query += ` ORDER BY d.id DESC LIMIT ?`
 	args = append(args, limit)
 
 	rows, err := db.DB.Query(query, args...)
@@ -91,18 +97,64 @@ func (h *Handlers) ListNotificationDeliveries(c *gin.Context) {
 		return
 	}
 	defer rows.Close()
+	// 事件可读标题（目录单源；日报等目录外事件回退事件键）
+	titles := map[string]string{}
+	for _, e := range notify.CatalogExport() {
+		titles[e.ID] = e.Title
+	}
 	out := make([]notificationDeliveryDTO, 0, limit)
+	ids := make([]int64, 0, limit)
 	for rows.Next() {
 		var d notificationDeliveryDTO
 		var attempts int
-		if err := rows.Scan(&d.ID, &d.UserID, &d.EventType, &d.Level, &d.Title, &d.Body, &d.Status, &attempts, &d.Error, &d.CreatedAt, &d.SentAt); err != nil {
+		if err := rows.Scan(&d.ID, &d.UserID, &d.Username, &d.EventType, &d.Level, &d.Title, &d.Body, &d.Status, &attempts, &d.Error, &d.CreatedAt, &d.SentAt); err != nil {
 			continue
 		}
 		d.Attempts = attempts
+		d.EventTitle = d.EventType
+		if t, ok := titles[d.EventType]; ok {
+			d.EventTitle = t
+		}
 		if d.UserID != uid {
 			d.Body = maskDeliveryBody(d.Body)
 		}
+		d.Channels = []deliveryChannelDTO{}
 		out = append(out, d)
+		ids = append(ids, d.ID)
+	}
+	// 每通道结果批量 JOIN（一次查询，按 delivery_id 归组）
+	if len(ids) > 0 {
+		placeholders := make([]byte, 0, len(ids)*2)
+		chArgs := make([]any, 0, len(ids))
+		for i, id := range ids {
+			if i > 0 {
+				placeholders = append(placeholders, ',')
+			}
+			placeholders = append(placeholders, '?')
+			chArgs = append(chArgs, id)
+		}
+		chRows, err := db.DB.Query(`SELECT nc.delivery_id, nc.channel_id, COALESCE(c.name,''), nc.channel_type, nc.status, COALESCE(nc.error,'')
+			FROM notification_delivery_channels nc LEFT JOIN notification_channels c ON c.id = nc.channel_id
+			WHERE nc.delivery_id IN (`+string(placeholders)+`) ORDER BY nc.id`, chArgs...)
+		if err == nil {
+			byDelivery := map[int64]int{}
+			for i, id := range ids {
+				byDelivery[id] = i
+			}
+			for chRows.Next() {
+				var deliveryID int64
+				var ch deliveryChannelDTO
+				if chRows.Scan(&deliveryID, &ch.ChannelID, &ch.ChannelName, &ch.ChannelType, &ch.Status, &ch.Error) == nil {
+					if ch.ChannelName == "" {
+						ch.ChannelName = "通道 #" + strconv.FormatInt(ch.ChannelID, 10)
+					}
+					if idx, ok := byDelivery[deliveryID]; ok {
+						out[idx].Channels = append(out[idx].Channels, ch)
+					}
+				}
+			}
+			chRows.Close()
+		}
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"deliveries": out}})
 }

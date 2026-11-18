@@ -1458,7 +1458,7 @@ func (s *ClusterService) snapshotLockedUsers(ctx context.Context, store snapshot
 }
 
 func (s *ClusterService) snapshotAPIKeys(ctx context.Context, store snapshotStore) ([]models.ClusterAPIKey, error) {
-	rows, err := store.QueryContext(ctx, `SELECT id, name, key_hash, key_prefix, created_by, COALESCE(expires_at,''), COALESCE(is_enabled,1), COALESCE(mcp_enabled,0), COALESCE(read_only,0), COALESCE(mcp_ip_whitelist,''), last_used, created_at FROM api_keys ORDER BY id`)
+	rows, err := store.QueryContext(ctx, `SELECT id, name, key_hash, key_prefix, created_by, COALESCE(expires_at,''), COALESCE(is_enabled,1), COALESCE(mcp_enabled,0), COALESCE(api_enabled,1), COALESCE(read_only,0), COALESCE(api_read_only,0), COALESCE(mcp_read_only,0), COALESCE(mcp_ip_whitelist,''), last_used, created_at, updated_at, COALESCE(updated_by,0) FROM api_keys ORDER BY id`)
 	if err != nil {
 		return nil, fmt.Errorf("读取快照密钥: %w", err)
 	}
@@ -1467,10 +1467,17 @@ func (s *ClusterService) snapshotAPIKeys(ctx context.Context, store snapshotStor
 	for rows.Next() {
 		var key models.ClusterAPIKey
 		var whitelistJSON string
-		if err := rows.Scan(&key.ID, &key.Name, &key.KeyHash, &key.KeyPrefix, &key.CreatedBy, &key.ExpiresAt, &key.IsEnabled, &key.MCPEnabled, &key.ReadOnly, &whitelistJSON, &key.LastUsed, &key.CreatedAt); err != nil {
+		var updatedAt sql.NullTime
+		var apiEnabled bool
+		if err := rows.Scan(&key.ID, &key.Name, &key.KeyHash, &key.KeyPrefix, &key.CreatedBy, &key.ExpiresAt, &key.IsEnabled, &key.MCPEnabled, &apiEnabled, &key.ReadOnly, &key.APIReadOnly, &key.MCPReadOnly, &whitelistJSON, &key.LastUsed, &key.CreatedAt, &updatedAt, &key.UpdatedBy); err != nil {
 			return nil, fmt.Errorf("扫描快照密钥: %w", err)
 		}
+		key.APIEnabled = &apiEnabled
 		key.CreatedAt = snapshotTime(key.CreatedAt)
+		key.UpdatedAt = key.CreatedAt
+		if updatedAt.Valid {
+			key.UpdatedAt = snapshotTime(updatedAt.Time)
+		}
 		if whitelistJSON != "" {
 			if err := json.Unmarshal([]byte(whitelistJSON), &key.MCPIPWhitelist); err != nil {
 				// 同族：白名单畸形不能降级为空名单（会放宽 MCP 访问面），

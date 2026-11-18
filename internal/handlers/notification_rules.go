@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -121,10 +122,14 @@ func (h *Handlers) GetNotificationRules(c *gin.Context) {
 				if sub.tpl != "" {
 					rule.BodyTemplate = sub.tpl
 				}
-				// 通道选择/每通道模板：组内取首个非空配置（组级 UI 单一口径）
-				if len(rule.ChannelIDs) == 0 && sub.ids != "" {
+				// 通道选择/每通道模板：组内取首个非空配置（组级 UI 单一口径）。
+				// '[]' 显式空选须保留（不投递语义）——用 nil 判定而非 len。
+				if rule.ChannelIDs == nil && sub.ids != "" {
 					var ids []int64
 					if json.Unmarshal([]byte(sub.ids), &ids) == nil {
+						if ids == nil {
+							ids = []int64{}
+						}
 						rule.ChannelIDs = ids
 					}
 				}
@@ -136,8 +141,9 @@ func (h *Handlers) GetNotificationRules(c *gin.Context) {
 				}
 			}
 		}
-		// 接收通道=选定通道（空选择=全部启用通道）
-		if len(rule.ChannelIDs) > 0 {
+		// 接收通道三态：nil=全部启用通道（缺省）；[]=不投递（显式空选）；
+		// 非空=仅选定通道。
+		if rule.ChannelIDs != nil {
 			idSet := map[int64]bool{}
 			for _, id := range rule.ChannelIDs {
 				idSet[id] = true
@@ -286,11 +292,10 @@ func (h *Handlers) UpdateNotificationRule(c *gin.Context) {
 				curTpl = *req.BodyTemplate
 			}
 			if req.ChannelIDs != nil {
+				// 显式空数组='[]'=不投递任何通道（用户裁定）；非空=仅选定通道。
+				// 缺省键（nil）才沿用现值；'' 缺省态=全部启用通道（默认订阅）。
 				b, _ := json.Marshal(*req.ChannelIDs)
 				curIDs = string(b)
-				if len(*req.ChannelIDs) == 0 {
-					curIDs = "" // 空选择=全部启用通道（存储归一）
-				}
 			}
 			if req.ChannelTemplates != nil {
 				// 剔除空值键后整体覆盖（所见即所存）
@@ -323,6 +328,47 @@ func (h *Handlers) UpdateNotificationRule(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0})
+}
+
+// TestNotificationRule POST /notification/rules/:id/test——按规则选定通道+
+// 每通道模板渲染测试消息并发送（不落投递行）。管理员 ?user_id 代管视角同写侧。
+func (h *Handlers) TestNotificationRule(c *gin.Context) {
+	uid := contextUserID(c)
+	if isAdminRequest(c) {
+		if q := c.Query("user_id"); q != "" {
+			if v, err := strconv.ParseInt(q, 10, 64); err == nil && v > 0 {
+				uid = v
+			}
+		}
+	}
+	ruleID := c.Param("id")
+	if len(ruleID) < 7 || ruleID[:6] != "group:" {
+		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.Tf(c, "k_53f42807", ruleID), MessageKey: "k_53f42807"})
+		return
+	}
+	group := ruleID[6:]
+	// 取组内首个事件作为测试消息事件形态（模板占位符 {{event}} 渲染源）
+	eventType := ""
+	for _, e := range notify.CatalogExport() {
+		if e.Group == group {
+			eventType = e.ID
+			break
+		}
+	}
+	if eventType == "" {
+		c.JSON(http.StatusNotFound, models.APIResponse{Code: 404, Message: apimsg.Tf(c, "k_1d8f5b94", group), MessageKey: "k_1d8f5b94"})
+		return
+	}
+	errs, err := notify.TestRuleDelivery(c.Request.Context(), uid, eventType)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, models.APIResponse{Code: 502, Message: err.Error()})
+		return
+	}
+	msg := "测试消息已发送"
+	if len(errs) > 0 {
+		msg = "部分通道失败: " + strings.Join(errs, "; ")
+	}
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: msg})
 }
 
 // dailyItemsForWizard 日报可选项（向导选择包含项目）。
