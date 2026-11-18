@@ -20,7 +20,7 @@
     <!-- 通道卡片网格（Dashboard 同构：彩色图标+状态+内联操作） -->
     <el-row v-loading="loading" :gutter="16">
       <el-col v-for="ch in filteredChannels" :key="ch.id" :xs="24" :sm="12" :lg="8" class="ch-col">
-        <div class="ch-card" :class="[`ch-${ch.type}`, { 'ch-disabled': !ch.enabled }]">
+        <el-card class="ch-card" :class="[`ch-${ch.type}`, { 'ch-disabled': !ch.enabled }]">
           <div class="ch-card-head">
             <div class="ch-icon" :class="`ch-icon-${ch.type}`">
               <el-icon :size="20"><component :is="typeIcon(ch.type)" /></el-icon>
@@ -52,7 +52,7 @@
               {{ t('app.notification.channels.delete') }}
             </el-button>
           </div>
-        </div>
+        </el-card>
       </el-col>
     </el-row>
     <el-empty v-if="!loading && filteredChannels.length === 0 && !loadError"
@@ -275,14 +275,8 @@ defineExpose({ fetchChannels })
 .ch-col { margin-bottom: 16px; }
 
 /* 通道卡片（Dashboard 同构视觉） */
-.ch-card {
-  border: 1px solid var(--el-border-color-lighter);
-  border-radius: 10px;
-  padding: 16px;
-  background: var(--el-bg-color);
-  transition: box-shadow 0.2s ease, border-color 0.2s ease;
-}
-.ch-card:hover { box-shadow: 0 2px 12px rgba(0,0,0,0.06); border-color: var(--el-border-color); }
+.ch-card { margin-bottom: 0; }
+.ch-card :deep(.el-card__body) { padding: 16px; }
 .ch-disabled { opacity: 0.6; }
 
 .ch-card-head { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }

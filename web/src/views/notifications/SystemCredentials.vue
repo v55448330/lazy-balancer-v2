@@ -1,5 +1,5 @@
 <template>
-  <el-card shadow="never" v-loading="loading">
+  <el-card  v-loading="loading">
     <template #header>
       <div class="card-header">
         <div class="card-title">
@@ -51,7 +51,7 @@
       <el-form-item :label="t('app.notification.creds.smtpTestTo')">
         <div class="smtp-test-row">
           <el-input v-model="form.smtpTestTo" class="creds-input" :placeholder="t('app.notification.creds.smtpTestToHint')" />
-          <el-button :loading="smtpTesting" :disabled="!form.smtpHost" @click="testSMTP">
+          <el-button size="small" :loading="smtpTesting" :disabled="!form.smtpHost" @click="testSMTP">
             {{ t('app.notification.creds.smtpTest') }}
           </el-button>
         </div>

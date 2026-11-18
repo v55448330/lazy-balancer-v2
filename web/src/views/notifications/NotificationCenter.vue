@@ -4,13 +4,25 @@
       <div class="header-left">
         <h2 class="page-title">
           <el-icon class="title-icon"><Bell /></el-icon>
-          {{ t('app.notification.rules.pageTitle') }}
+          {{ t('app.notification.pageTitle') }}
         </h2>
-        <p class="page-desc">{{ t('app.notification.rules.pageDesc') }}</p>
+        <p class="page-desc">{{ t('app.notification.pageDesc') }}</p>
       </div>
     </div>
 
     <el-tabs v-model="activeTab">
+      <!-- Tab 0: 概览 -->
+      <el-tab-pane :label="t('app.notification.rules.overviewTab')" name="overview">
+        <el-row :gutter="16">
+          <el-col :span="6"><div class="stat-item"><div class="stat-icon stat-blue"><el-icon><ChatDotRound /></el-icon></div><div class="stat-content"><div class="stat-value">{{ overviewStats.channels }}</div><div class="stat-label">{{ t('app.notification.rules.statChannels') }}</div></div></div></el-col>
+          <el-col :span="6"><div class="stat-item"><div class="stat-icon stat-purple"><el-icon><Bell /></el-icon></div><div class="stat-content"><div class="stat-value">{{ overviewStats.rules }}</div><div class="stat-label">{{ t('app.notification.rules.statRules') }}</div></div></div></el-col>
+          <el-col :span="6"><div class="stat-item"><div class="stat-icon stat-green"><el-icon><CircleCheckFilled /></el-icon></div><div class="stat-content"><div class="stat-value">{{ overviewStats.deliveries }}</div><div class="stat-label">{{ t('app.notification.rules.statDeliveries') }}</div></div></div></el-col>
+          <el-col :span="6"><div class="stat-item"><div class="stat-icon" :class="overviewStats.successRate > 0.9 ? 'stat-green' : 'stat-orange'"><el-icon><DataAnalysis /></el-icon></div><div class="stat-content"><div class="stat-value">{{ (overviewStats.successRate * 100).toFixed(1) }}%</div><div class="stat-label">{{ t('app.notification.rules.statSuccessRate') }}</div></div></div></el-col>
+        </el-row>
+        <el-divider content-position="left">{{ t('app.notification.rules.recentDeliveries') }}</el-divider>
+        <DeliveryLog />
+      </el-tab-pane>
+
       <!-- Tab 1: 通道管理 -->
       <el-tab-pane :label="t('app.notification.rules.channelsTab')" name="channels">
         <ChannelCards />
@@ -19,7 +31,7 @@
       <!-- Tab 2: 通知规则 -->
       <el-tab-pane :label="t('app.notification.rules.rulesTab')" name="rules">
         <div v-loading="loading" class="trigger-grid">
-          <div v-for="rule in rules" :key="rule.id" class="trigger-item" :class="{ active: rule.enabled }">
+          <el-card v-for="rule in rules" :key="rule.id" class="trigger-item" :class="{ active: rule.enabled }">
             <div class="trigger-head">
               <el-switch v-model="rule.enabled" size="small" @change="toggleRule(rule)" />
               <span class="trigger-name">{{ rule.title }}</span>
@@ -45,7 +57,7 @@
                 <el-button size="small" text type="primary" @click="testRule(rule)">{{ t('app.notification.rules.test') }}</el-button>
               </template>
             </div>
-          </div>
+          </el-card>
         </div>
         <el-empty v-if="!loading && rules.length === 0" :description="t('app.notification.rules.emptyText')" :image-size="80" />
       </el-tab-pane>
@@ -97,7 +109,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Bell } from '@element-plus/icons-vue'
+import { Bell, ChatDotRound, CircleCheckFilled, DataAnalysis } from '@element-plus/icons-vue'
 import { request, mfaAwareSuccess } from '@/utils/api'
 import { useAuthStore } from '@/stores/auth'
 import DialogHeader from '@/components/DialogHeader.vue'
@@ -108,11 +120,12 @@ import SystemCredentials from './SystemCredentials.vue'
 const { t } = useI18n()
 const authStore = useAuthStore()
 const isAdmin = computed(() => authStore.user?.role === 'admin')
-const activeTab = ref('channels')
+const activeTab = ref('overview')
 
 interface RuleChannel { id: number; type: string; name: string }
 interface Rule { id: string; trigger: string; title: string; events?: string[]; min_level?: string; send_time?: string; channels: RuleChannel[]; body_template: string; enabled: boolean }
 
+const overviewStats = ref({ channels: 0, rules: 0, deliveries: 0, successRate: 0 })
 const loading = ref(false)
 const rules = ref<Rule[]>([])
 const tplDialogVisible = ref(false)
@@ -125,8 +138,9 @@ const previewText = computed(() => tplText.value.replace(/\{\{title\}\}/g, '证�
 const fetchRules = async (): Promise<void> => {
   loading.value = true
   try {
-    const res = await request.get<{ code: number; data?: { rules: Rule[] } }>('/notification/rules')
+    const res = await request.get<{ code: number; data?: { rules: Rule[]; channels?: { id: number }[] } }>('/notification/rules')
     rules.value = res.data?.rules ?? []
+    overviewStats.value = { channels: res.data?.channels?.length ?? 0, rules: rules.value.filter(r => r.enabled).length, deliveries: 0, successRate: 0 }
   } catch (e) { console.error(e) } finally { loading.value = false }
 }
 
@@ -166,8 +180,9 @@ onMounted(() => { void fetchRules() })
 
 <style scoped>
 .trigger-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; }
-.trigger-item { padding: 14px; border: 1px solid var(--el-border-color-lighter); }
+.trigger-item { margin-bottom: 0; }
 .trigger-item.active { border-left: 3px solid var(--el-color-primary); }
+.trigger-item :deep(.el-card__body) { padding: 14px; }
 .trigger-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
 .trigger-name { font-size: 14px; font-weight: 600; color: #111827; flex: 1; }
 .trigger-tpl-btn { margin-left: auto; }
@@ -183,4 +198,13 @@ onMounted(() => { void fetchRules() })
 .ev-more { font-size: 11px; color: #6b7280; }
 .fmt-hints { display: flex; flex-direction: column; gap: 6px; }
 .fmt-hint { display: flex; align-items: center; gap: 8px; font-size: 12px; color: #6b7280; }
+/* Dashboard stat-item 同构 */
+.stat-item { display: flex; align-items: center; gap: 14px; padding: 16px; background: #f9fafb; border-radius: 8px; }
+.stat-icon { width: 40px; height: 40px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 18px; }
+.stat-blue { background: #eff6ff; color: #3b82f6; }
+.stat-purple { background: #f5f3ff; color: #8b5cf6; }
+.stat-green { background: #ecfdf5; color: #10b981; }
+.stat-orange { background: #fff7ed; color: #f59e0b; }
+.stat-value { font-size: 20px; font-weight: 600; color: #111827; line-height: 1.2; }
+.stat-label { font-size: 12px; color: #6b7280; margin-top: 2px; }
 </style>
