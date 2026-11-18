@@ -47,21 +47,17 @@
       </el-form-item>
 
       <el-divider content-position="left" class="creds-divider">{{ t('app.notification.creds.qqSection') }}</el-divider>
-      <el-form-item :label="t('app.notification.creds.qqAppId')">
-        <el-input v-model="form.qqAppId" class="creds-input" />
-      </el-form-item>
-      <el-form-item :label="t('app.notification.creds.qqSecret')">
-        <el-input
-          v-model="form.qqSecret"
-          type="password"
-          show-password
-          :placeholder="t('app.notification.creds.secretPlaceholder')"
-          class="creds-input"
-          autocomplete="new-password"
-        />
-        <el-tag :type="qqSecretConfigured ? 'success' : 'info'" size="small" effect="plain" class="cred-state-tag">
-          {{ qqSecretConfigured ? t('app.notification.creds.configured') : t('app.notification.creds.notConfigured') }}
-        </el-tag>
+      <!-- QQ 凭据单源=扫码绑定自动落库（通道向导）；无手工输入入口 -->
+      <el-form-item :label="t('app.notification.creds.qqCred')">
+        <div class="wx-login-card">
+          <div class="wx-login-state-row">
+            <el-tag :type="qqCredConfigured ? 'success' : 'info'" size="small" effect="plain">
+              {{ qqCredConfigured ? t('app.notification.creds.configured') : t('app.notification.creds.notConfigured') }}
+            </el-tag>
+            <code v-if="form.qqAppId" class="channel-target">{{ form.qqAppId }}</code>
+          </div>
+          <div class="wx-login-hint">{{ t('app.notification.creds.qqCredHint') }}</div>
+        </div>
       </el-form-item>
 
       <el-divider content-position="left" class="creds-divider">{{ t('app.notification.creds.wxSection') }}</el-divider>
@@ -116,12 +112,11 @@ const form = ref({
   smtpFrom: '',
   smtpPass: '',
   qqAppId: '',
-  qqSecret: '',
   mcpEnabled: false,
 })
 // 服务端已配置布尔（GET 只回布尔不回明文），保存成功后重查刷新
 const smtpPassConfigured = ref(false)
-const qqSecretConfigured = ref(false)
+const qqCredConfigured = ref(false)
 const wxCredConfigured = ref(false)
 let settingsRequestSeq = 0
 
@@ -215,11 +210,10 @@ const fetchSettings = async (): Promise<void> => {
       smtpFrom: data?.smtp?.from ?? '',
       smtpPass: '',
       qqAppId: data?.qq?.appid ?? '',
-      qqSecret: '',
       mcpEnabled: data?.mcp_enabled === true,
     }
     smtpPassConfigured.value = data?.smtp?.pass_configured === true
-    qqSecretConfigured.value = data?.qq?.secret_configured === true
+    qqCredConfigured.value = data?.qq?.secret_configured === true
     wxCredConfigured.value = data?.wx_bot_cred_configured === true
     loadError.value = false
   } catch (error: unknown) {
@@ -249,15 +243,11 @@ const saveSettings = async (): Promise<void> => {
         from: form.value.smtpFrom,
         ...(form.value.smtpPass ? { pass: form.value.smtpPass } : {}),
       },
-      qq: {
-        appid: form.value.qqAppId,
-        ...(form.value.qqSecret ? { secret: form.value.qqSecret } : {}),
-      },
       mcp_enabled: form.value.mcpEnabled,
     }
     await request.put('/notification/settings', payload)
     mfaAwareSuccess(t('app.notification.creds.saved'))
-    form.value = { ...form.value, smtpPass: '', qqSecret: '' }
+    form.value = { ...form.value, smtpPass: '' }
     await fetchSettings()
   } catch (error: unknown) {
     console.error('Failed to save notification settings:', error)

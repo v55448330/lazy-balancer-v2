@@ -1,27 +1,6 @@
 <template>
   <div>
-    <!-- 每日日报：独立开关行（事件 sys.daily_report 的订阅态）+ 管理员手动触发 -->
-    <el-card shadow="never" class="daily-card">
-      <template #header>
-        <div class="card-header-row">
-          <span>{{ t('app.notification.subs.dailyTitle') }}</span>
-          <el-tooltip v-if="isAdmin" :disabled="writeBlocked" :content="writeBlockedReason">
-            <div>
-              <el-button size="small" :disabled="writeBlocked || triggering" :loading="triggering" @click="triggerDaily">
-                {{ t('app.notification.subs.trigger') }}
-              </el-button>
-            </div>
-          </el-tooltip>
-        </div>
-      </template>
-      <div class="daily-row">
-        <div class="daily-desc">{{ t('app.notification.subs.dailyDesc') }}</div>
-        <div class="daily-switch">
-          <span class="daily-switch-label">{{ t('app.notification.subs.dailySwitchLabel') }}</span>
-          <el-switch :model-value="matrix[DAILY_EVENT]?.subscribed === true" :disabled="subsSaving" @update:model-value="(val: string | number | boolean) => toggleEvent(DAILY_EVENT, val === true)" />
-        </div>
-      </div>
-    </el-card>
+    <!-- 每日日报已拆独立页签（通知日报）：订阅矩阵只承载事件订阅面 -->
 
     <el-card shadow="never">
       <template #header>
@@ -107,7 +86,6 @@ import { computed, ref, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Folder } from '@element-plus/icons-vue'
 import { request, mfaAwareSuccess } from '@/utils/api'
-import { useAuthStore } from '@/stores/auth'
 import type {
   CatalogEvent,
   NotificationCatalogResponse,
@@ -117,20 +95,8 @@ import type {
 } from '@/types/notifications.ts'
 
 const { t } = useI18n()
-const authStore = useAuthStore()
-
-const isAdmin = computed(() => authStore.user?.role === 'admin')
-// 日报手动触发是管理员写路径；订阅保存是本人资源——从节点/角色未知统一
-// fail-closed，与通道/密钥同口径。
-const writeBlocked = computed(() => authStore.isSlaveNode || authStore.readOnlyReason === 'unknown')
-const writeBlockedReason = computed(() =>
-  authStore.isSlaveNode
-    ? t('common.app.views.keys.slaveReadOnly')
-    : t('common.app.views.keys.nodeUnknownReadOnly'),
-)
 
 const LEVELS: readonly NotificationLevel[] = ['info', 'warn', 'critical']
-const DAILY_EVENT = 'sys.daily_report'
 
 interface MatrixState {
   subscribed: boolean
@@ -147,7 +113,6 @@ const events = ref<CatalogEvent[]>([])
 const catalogLoading = ref(false)
 const catalogError = ref(false)
 const subsSaving = ref(false)
-const triggering = ref(false)
 /** event_type → 订阅态（含未订阅事件的显式 off；保存时全量提交）。 */
 const matrix = ref<Record<string, MatrixState>>({})
 let matrixRequestSeq = 0
@@ -252,19 +217,6 @@ const saveSubs = async (): Promise<void> => {
   }
 }
 
-const triggerDaily = async (): Promise<void> => {
-  if (triggering.value || writeBlocked.value) return
-  triggering.value = true
-  try {
-    await request.post('/notification/daily-report/trigger')
-    mfaAwareSuccess(t('app.notification.subs.triggerSuccess'))
-  } catch (error: unknown) {
-    console.error('Failed to trigger daily report:', error)
-  } finally {
-    triggering.value = false
-  }
-}
-
 onMounted(() => {
   void fetchMatrix()
 })
@@ -274,11 +226,6 @@ defineExpose({ fetchMatrix })
 
 <style scoped>
 .card-header-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.daily-card { margin-bottom: 16px; }
-.daily-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
-.daily-desc { color: var(--text-secondary, #6b7280); font-size: 13px; line-height: 1.6; flex: 1 1 320px; }
-.daily-switch { display: inline-flex; align-items: center; gap: 10px; flex: none; }
-.daily-switch-label { font-size: 13px; font-weight: 600; }
 .subs-hint { margin-bottom: 8px; }
 .group-row-title { font-weight: 600; display: inline-flex; align-items: center; gap: 6px; }
 .group-row-icon { flex: none; }

@@ -634,11 +634,12 @@ func TestAuditPolicyListsEqual(t *testing.T) {
 	// 冻结的独立期望（按类计数）：只遍历策略表再断言自身派生结果属自指——
 	// 路由被降级/新增时计数两侧同步变化，测试仍绿。策略表变更必须同步本清单。
 	const (
-		// 115=113 基线+日报配置保存/手动触发 2 条显式留痕动作；7=5 基线+通知
-		// 通道创建/测试 Generic 两族；19=16 基线+日报预览（只读渲染不落库）
-		// +QQ/微信扫码产码（绑定完成时 handler 记一次「绑定」，产码不复记）
-		// 3 条 skip。两类新增见 auditpolicy.go 各自登记处注释。
-		wantExplicit = 115
+		// 114=113 基线+日报配置保存/手动触发合并为 daily/trigger 1 条显式留痕
+		// 动作（旧 daily-report/trigger 端点已删，统一 daily/trigger）；
+		// 7=5 基线+通知通道创建/测试 Generic 两族；19=16 基线+日报预览（只读
+		// 渲染不落库）+QQ/微信扫码产码（绑定完成时 handler 记一次「绑定」，
+		// 产码不复记）3 条 skip。新增见 auditpolicy.go 各自登记处注释。
+		wantExplicit = 114
 		wantGeneric  = 7
 		wantSkip     = 19
 	)

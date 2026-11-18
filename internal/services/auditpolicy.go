@@ -66,7 +66,6 @@ var auditRoutePolicies = map[string]AuditPolicy{
 	"PUT /api/v1/notification/subscriptions":          AuditPolicyExplicit,
 	"POST /api/v1/notification/deliveries/:id/resend": AuditPolicyExplicit,
 	"PUT /api/v1/notification/settings":               AuditPolicyExplicit,
-	"POST /api/v1/notification/daily-report/trigger":  AuditPolicyExplicit,
 	// 日报配置/预览/触发：配置保存与触发 handler 记审计；预览是只读渲染
 	// 不落库（显式 skip 防「默认分类」告警）。扫码绑定/扫码登录产码端点 skip：
 	// 绑定完成时 handler 记一次「绑定」审计（一次绑定一条，产码不复记）。

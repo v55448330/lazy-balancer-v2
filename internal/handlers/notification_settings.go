@@ -5,11 +5,9 @@ package handlers
 // 布尔）；PUT 部分更新（只更新提供的键）。
 
 import (
-	"context"
 	"net/http"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -17,7 +15,6 @@ import (
 	"lazy-balancer-v2/internal/models"
 	"lazy-balancer-v2/internal/notify"
 	"lazy-balancer-v2/internal/services"
-	"lazy-balancer-v2/internal/taskengine"
 )
 
 // GetNotificationSettings GET /notification/settings——聚合 notify_settings
@@ -67,10 +64,8 @@ func (h *Handlers) UpdateNotificationSettings(c *gin.Context) {
 			Pass *string `json:"pass"`
 			From *string `json:"from"`
 		} `json:"smtp"`
-		QQ *struct {
-			AppID  *string `json:"appid"`
-			Secret *string `json:"secret"`
-		} `json:"qq"`
+		// QQ 凭据不走本端点：扫码绑定完成时自动落库（凭据单源，手工覆盖
+		// 入口已删——避免与扫码态互相踩踏）。
 		MCPEnabled       *bool `json:"mcp_enabled"`
 		AttackWarnAt     *int  `json:"attack_warn_at"`
 		AttackCriticalAt *int  `json:"attack_critical_at"`
@@ -100,10 +95,6 @@ func (h *Handlers) UpdateNotificationSettings(c *gin.Context) {
 		put(notify.KeySMTPUser, req.SMTP.User)
 		put(notify.KeySMTPPass, req.SMTP.Pass)
 		put(notify.KeySMTPFrom, req.SMTP.From)
-	}
-	if req.QQ != nil {
-		put(notify.KeyQQAppID, req.QQ.AppID)
-		put(notify.KeyQQSecret, req.QQ.Secret)
 	}
 	if req.MCPEnabled != nil {
 		v := "0"
@@ -144,22 +135,4 @@ func (h *Handlers) UpdateNotificationSettings(c *gin.Context) {
 	}
 	recordAudit(c, "修改", "通知设置", services.FormatAuditDetail("变更键: "+strings.Join(changed, ","), "", services.AuditResultPart("success")))
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_ce6e6687"), MessageKey: "k_ce6e6687"})
-}
-
-// TriggerDailyReport POST /notification/daily-report/trigger——管理员手动
-// 触发一次日报渲染与投递（发送走投递 Daemon 常规通道）。
-func (h *Handlers) TriggerDailyReport(c *gin.Context) {
-	if !isAdminRequest(c) {
-		c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: apimsg.T(c, "k_20b2245c"), MessageKey: "k_20b2245c"})
-		return
-	}
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
-	defer cancel()
-	if err := notify.DailyReportRun(taskengine.RunContext{Ctx: ctx, Trigger: "manual", Operator: auditOperator(c)}); err != nil {
-		msg := apimsg.Tf(c, "k_43ce31bf", err.Error())
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: msg, MessageKey: "k_43ce31bf"})
-		return
-	}
-	recordAudit(c, "触发", "通知日报", services.FormatAuditDetail("手动触发日报生成", "", services.AuditResultPart("success")))
-	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_e0d0be34"), MessageKey: "k_e0d0be34"})
 }

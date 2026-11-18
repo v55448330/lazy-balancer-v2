@@ -398,7 +398,12 @@ const generateQQBindCode = async (): Promise<void> => {
 
 const startQQBindPolling = (): void => {
   if (qqBind.value.timer !== null) return
-  const timer = window.setInterval(async () => {
+  // 防重入：后端 poll 是长挂起（最长 15s），3s 间隔下前一个请求未返回时
+  // 跳过本轮——请求堆叠会拖慢确认态回传并压垮腾讯端点。
+  let busy = false
+  const pollOnce = async (): Promise<void> => {
+    if (busy) return
+    busy = true
     try {
       const res = await request.get<NotificationCreateChannelResponse & { data: { bound: boolean; openid: string; appid: string } }>('/notification/qq/bind-code')
       const data = res.data
@@ -413,8 +418,12 @@ const startQQBindPolling = (): void => {
       }
     } catch {
       // 轮询失败保持等待；过期（服务端 bindExpired）时用户点「重新生成」
+    } finally {
+      busy = false
     }
-  }, 3000)
+  }
+  void pollOnce() // 产码后立即首查，不等首个间隔
+  const timer = window.setInterval(pollOnce, 3000)
   qqBind.value.timer = timer
   window.setTimeout(() => {
     if (qqBind.value.timer === timer && !qqBind.value.bound) {
@@ -441,12 +450,18 @@ const submitWizard = async (): Promise<void> => {
   if (writeBlocked.value || submitting.value || !canAdvance.value) return
   submitting.value = true
   try {
-    await request.post<NotificationCreateChannelResponse>('/notification/channels', {
+    const res = await request.post<NotificationCreateChannelResponse & { data?: { id: number; reused?: boolean } }>('/notification/channels', {
       type: wizardForm.value.type,
       name: wizardForm.value.name.trim(),
       target: buildTarget(wizardForm.value.type, wizardForm.value.targetValue),
     })
-    mfaAwareSuccess(t('app.notification.channels.createSuccess'))
+    // 同 user+type+target 通道已存在：后端幂等复用（reused=true）——不是错误，
+    // 提示用户通道已在列（QQ 扫码绑定后重复保存的正常路径）。
+    if (res.data?.reused) {
+      ElMessage.info(t('app.notification.channels.reusedHint'))
+    } else {
+      mfaAwareSuccess(t('app.notification.channels.createSuccess'))
+    }
     wizardVisible.value = false
     await fetchChannels()
   } catch (error: unknown) {

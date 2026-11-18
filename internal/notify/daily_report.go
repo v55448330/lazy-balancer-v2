@@ -18,11 +18,24 @@ import (
 
 // DailyConfig 单用户日报配置。
 type DailyConfig struct {
-	UserID   int64             `json:"user_id"`
-	Enabled  bool              `json:"enabled"`
-	SendTime string            `json:"send_time"` // "09:00"
-	Items    []string          `json:"items"`     // 勾选项目（见 DailyItemIDs）
-	Formats  map[string]string `json:"formats"`   // 通道类型→格式(html/json/markdown)
+	UserID   int64    `json:"user_id"`
+	Enabled  bool     `json:"enabled"`
+	SendTime string   `json:"send_time"` // "09:00"
+	Items    []string `json:"items"`     // 勾选项目（见 DailyItemIDs）
+	Format   string   `json:"format"`    // 投递渲染格式（text/markdown/html/json）
+}
+
+// DailyFormats 投递格式白名单（渲染分支一一对应；text=纯文本行）。
+var DailyFormats = []string{"text", "markdown", "html", "json"}
+
+// dailyFormatValid 格式白名单校验；空值回退 markdown。
+func dailyFormatValid(f string) bool {
+	for _, ok := range DailyFormats {
+		if f == ok {
+			return true
+		}
+	}
+	return false
 }
 
 // DailyItemIDs 日报可定制项目（勾选清单契约）。
@@ -40,10 +53,10 @@ var DailyItemLabels = map[string]string{
 	"cluster_status": "集群状态",
 }
 
-// GetDailyConfig 读单用户配置（无行=默认：启用+全项目+09:00+webhook json）。
+// GetDailyConfig 读单用户配置（无行=默认：启用+全项目+09:00+markdown）。
 func GetDailyConfig(userID int64) (DailyConfig, error) {
 	cfg := DailyConfig{UserID: userID, Enabled: true, SendTime: "09:00",
-		Items: append([]string{}, DailyItemIDs...), Formats: map[string]string{}}
+		Items: append([]string{}, DailyItemIDs...), Format: "markdown"}
 	var raw string
 	err := db.DB.QueryRow(`SELECT COALESCE(config,'') FROM notification_daily WHERE user_id=?`, userID).Scan(&raw)
 	if err != nil {
@@ -56,14 +69,20 @@ func GetDailyConfig(userID int64) (DailyConfig, error) {
 	if cfg.Items == nil {
 		cfg.Items = append([]string{}, DailyItemIDs...)
 	}
+	if !dailyFormatValid(cfg.Format) {
+		cfg.Format = "markdown"
+	}
 	return cfg, nil
 }
 
-// SaveDailyConfig 落库单用户配置。
+// SaveDailyConfig 落库单用户配置（format 白名单校验，非法回退 markdown）。
 func SaveDailyConfig(cfg DailyConfig) error {
+	if !dailyFormatValid(cfg.Format) {
+		cfg.Format = "markdown"
+	}
 	raw, err := json.Marshal(map[string]any{
 		"enabled": cfg.Enabled, "send_time": cfg.SendTime,
-		"items": cfg.Items, "formats": cfg.Formats,
+		"items": cfg.Items, "format": cfg.Format,
 	})
 	if err != nil {
 		return err
@@ -71,6 +90,52 @@ func SaveDailyConfig(cfg DailyConfig) error {
 	_, err = db.DB.Exec(`INSERT INTO notification_daily (user_id, config, updated_at) VALUES (?,?,datetime('now'))
 		ON CONFLICT(user_id) DO UPDATE SET config=excluded.config, updated_at=excluded.updated_at`,
 		cfg.UserID, string(raw))
+	return err
+}
+
+// DeliverDailyForAll 遍历全部启用日报的用户：按各自配置渲染昨日摘要并直接
+// 落 pending 投递（不经事件订阅面——日报是独立区块，不走订阅矩阵过滤）。
+// 返回渲染成功的用户数。Scheduled 任务体与管理员手动触发共用本函数（单源）。
+func DeliverDailyForAll(now time.Time) (int, error) {
+	rows, err := db.DB.Query(`SELECT user_id FROM notification_daily WHERE COALESCE(json_extract(config,'$.enabled'),1)=1`)
+	if err != nil {
+		return 0, err
+	}
+	var users []int64
+	for rows.Next() {
+		var u int64
+		if rows.Scan(&u) == nil {
+			users = append(users, u)
+		}
+	}
+	rows.Close()
+	rendered := 0
+	for _, u := range users {
+		cfg, err := GetDailyConfig(u)
+		if err != nil || !cfg.Enabled {
+			continue
+		}
+		data, err := CollectDailyData(context.Background(), now)
+		if err != nil {
+			continue
+		}
+		content := RenderDaily(data, cfg.Items, cfg.Format)
+		if err := deliverDaily(u, content, now); err != nil {
+			continue
+		}
+		rendered++
+	}
+	return rendered, nil
+}
+
+// deliverDaily 日报直接落 pending 投递（content 为渲染后正文；事件键
+// sys.daily_report 仅作投递记录展示——不在事件目录）。
+func deliverDaily(userID int64, content string, now time.Time) error {
+	_, err := db.DB.Exec(`INSERT INTO notification_deliveries
+		(user_id, event_type, level, title, body, status, attempts, created_at)
+		VALUES (?,?,?,?,?, 'pending', 0, ?)`,
+		userID, EvtDailyReport, LevelInfo, "每日日报", content,
+		now.UTC().Format("2006-01-02 15:04:05"))
 	return err
 }
 
@@ -128,7 +193,7 @@ func CollectDailyData(ctx context.Context, now time.Time) (DailyData, error) {
 	return d, nil
 }
 
-// RenderDaily 按格式渲染日报（items 裁剪；html 转义；markdown/json 纯文本）。
+// RenderDaily 按格式渲染日报（items 裁剪；html 转义；text/markdown/json 纯文本）。
 func RenderDaily(data DailyData, items []string, format string) string {
 	enabled := map[string]bool{}
 	for _, it := range items {
@@ -167,6 +232,17 @@ func RenderDaily(data DailyData, items []string, format string) string {
 		}
 		raw, _ := json.MarshalIndent(obj, "", "  ")
 		return string(raw)
+	case "html":
+		var b strings.Builder
+		fmt.Fprintf(&b, "<h3>Lazy Balancer 日报（%s）</h3><ul>", html.EscapeString(data.Date))
+		for _, it := range DailyItemIDs {
+			if !enabled[it] {
+				continue
+			}
+			fmt.Fprintf(&b, "<li><b>%s</b>：%s</li>", html.EscapeString(label(it)), html.EscapeString(val(it)))
+		}
+		b.WriteString("</ul>")
+		return b.String()
 	case "markdown":
 		var b strings.Builder
 		fmt.Fprintf(&b, "## Lazy Balancer 日报（%s）\n\n", data.Date)
@@ -177,16 +253,15 @@ func RenderDaily(data DailyData, items []string, format string) string {
 			fmt.Fprintf(&b, "- **%s**：%s\n", label(it), val(it))
 		}
 		return b.String()
-	default: // html
+	default: // text（白名单兜底；纯文本行）
 		var b strings.Builder
-		fmt.Fprintf(&b, "<h3>Lazy Balancer 日报（%s）</h3><ul>", html.EscapeString(data.Date))
+		fmt.Fprintf(&b, "Lazy Balancer 日报（%s）\n", data.Date)
 		for _, it := range DailyItemIDs {
 			if !enabled[it] {
 				continue
 			}
-			fmt.Fprintf(&b, "<li><b>%s</b>：%s</li>", html.EscapeString(label(it)), html.EscapeString(val(it)))
+			fmt.Fprintf(&b, "%s：%s\n", label(it), val(it))
 		}
-		b.WriteString("</ul>")
 		return b.String()
 	}
 }

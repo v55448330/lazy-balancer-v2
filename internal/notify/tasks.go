@@ -15,8 +15,9 @@ import (
 	"lazy-balancer-v2/internal/taskengine"
 )
 
-// DailyReportRun 日报 Scheduled：渲染昨日摘要 → Publish(daily_report)。
-// 发送全走投递 Daemon（生产者/消费者分离，见方案 §任务表）。
+// DailyReportRun 日报 Scheduled：遍历启用用户按各自配置渲染+直接落投递
+// （不经事件订阅面——日报独立区块语义，与手动触发单源 DeliverDailyForAll）。
 func DailyReportRun(rc taskengine.RunContext) error {
-	return RenderAndPublishDailyReport(rc.Ctx, time.Now())
+	_, err := DeliverDailyForAll(time.Now())
+	return err
 }

@@ -197,3 +197,61 @@ func TestQQBindScan_expired(t *testing.T) {
 		t.Fatalf("status=%d, want expired(3)", result.Status)
 	}
 }
+
+// TestChannelCreate_idempotentReuse 同 user+type+target 唯一约束的幂等复用：
+// 首建 200 新建；同 target 二次提交（QQ 扫码绑定后重复保存的正常路径）200
+// reused=true 复用既有行，不再 500 撞约束。
+func TestChannelCreate_idempotentReuse(t *testing.T) {
+	setupSecurityPolicyTestDB(t)
+	const uid = int64(42)
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		c.Set("user_id", float64(uid))
+		c.Set("role", "admin")
+		c.Next()
+	})
+	h := &Handlers{}
+	router.POST("/notification/channels", h.CreateNotificationChannel)
+
+	body := `{"type":"qq","name":"QQ 机器人","target":"{\"openid\":\"OPENID_MOCK\"}"}`
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/notification/channels", strings.NewReader(body)))
+	if w.Code != http.StatusOK {
+		t.Fatalf("首建 status=%d body=%s", w.Code, w.Body.String())
+	}
+	var first struct {
+		Data struct {
+			ID     int64 `json:"id"`
+			Reused bool  `json:"reused"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &first); err != nil {
+		t.Fatal(err)
+	}
+	if first.Data.Reused {
+		t.Fatal("首建 reused=true，want false")
+	}
+
+	// 同 target 二次提交：幂等复用（200 reused=true，行数不增）
+	w2 := httptest.NewRecorder()
+	router.ServeHTTP(w2, httptest.NewRequest(http.MethodPost, "/notification/channels", strings.NewReader(body)))
+	if w2.Code != http.StatusOK {
+		t.Fatalf("复用 status=%d body=%s", w2.Code, w2.Body.String())
+	}
+	var second struct {
+		Data struct {
+			ID     int64 `json:"id"`
+			Reused bool  `json:"reused"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(w2.Body.Bytes(), &second); err != nil {
+		t.Fatal(err)
+	}
+	if !second.Data.Reused || second.Data.ID != first.Data.ID {
+		t.Fatalf("复用 reused=%v id=%d, want true/%d", second.Data.Reused, second.Data.ID, first.Data.ID)
+	}
+	var rows int
+	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM notification_channels WHERE user_id=? AND type='qq'`, uid).Scan(&rows); err != nil || rows != 1 {
+		t.Fatalf("行数=%d err=%v, want 1（无重复行）", rows, err)
+	}
+}

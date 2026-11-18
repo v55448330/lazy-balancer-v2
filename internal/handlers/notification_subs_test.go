@@ -36,7 +36,7 @@ func newNotificationTestRouter(h *Handlers, uid int64, role string) *gin.Engine 
 	r.POST("/notification/deliveries/:id/resend", h.ResendNotificationDelivery)
 	r.GET("/notification/settings", h.GetNotificationSettings)
 	r.PUT("/notification/settings", h.UpdateNotificationSettings)
-	r.POST("/notification/daily-report/trigger", h.TriggerDailyReport)
+	r.POST("/notification/daily/trigger", h.TriggerNotificationDaily)
 	return r
 }
 
@@ -134,7 +134,7 @@ func TestNotificationSubscriptions_upsertReadbackAndDefaults(t *testing.T) {
 	}
 
 	// PUT：UPSERT 两行 + 空级别（删行语义，本就无行=无操作）。
-	body := `{"items":[{"event_type":"cert.failed","min_level":"warn"},{"event_type":"sys.daily_report","min_level":"info"},{"event_type":"auth.login_success","min_level":""}]}`
+	body := `{"items":[{"event_type":"cert.failed","min_level":"warn"},{"event_type":"notify.channel_down","min_level":"info"},{"event_type":"auth.login_success","min_level":""}]}`
 	if status, out = doNotifyRequest(t, r, http.MethodPut, "/notification/subscriptions", body); status != http.StatusOK || out["code"].(float64) != 0 {
 		t.Fatalf("PUT status=%d body=%v", status, out)
 	}
@@ -142,8 +142,8 @@ func TestNotificationSubscriptions_upsertReadbackAndDefaults(t *testing.T) {
 	if err := db.DB.QueryRow(`SELECT min_level FROM notification_subscriptions WHERE user_id=7 AND event_type='cert.failed'`).Scan(&minLevel); err != nil || minLevel != "warn" {
 		t.Fatalf("cert.failed 落库 min_level=%q err=%v, want warn", minLevel, err)
 	}
-	if err := db.DB.QueryRow(`SELECT min_level FROM notification_subscriptions WHERE user_id=7 AND event_type='sys.daily_report'`).Scan(&minLevel); err != nil || minLevel != "info" {
-		t.Fatalf("sys.daily_report 落库 min_level=%q err=%v, want info", minLevel, err)
+	if err := db.DB.QueryRow(`SELECT min_level FROM notification_subscriptions WHERE user_id=7 AND event_type='notify.channel_down'`).Scan(&minLevel); err != nil || minLevel != "info" {
+		t.Fatalf("notify.channel_down 落库 min_level=%q err=%v, want info", minLevel, err)
 	}
 	var count int
 	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM notification_subscriptions WHERE user_id=7 AND event_type='auth.login_success'`).Scan(&count); err != nil || count != 0 {
@@ -189,28 +189,24 @@ func TestNotificationSettings_roleGateAndSecretNonEcho(t *testing.T) {
 
 	// 非管理员：GET/PUT/触发全部 403（handler 级角色门，与 adminOnly 中间件双保险）。
 	userRouter := newNotificationTestRouter(h, 2, "user")
-	for _, tc := range []struct{ method, path, body string }{
-		{http.MethodGet, "/notification/settings", ""},
-		{http.MethodPut, "/notification/settings", `{"mcp_enabled":true}`},
-		{http.MethodPost, "/notification/daily-report/trigger", ""},
+	for _, tc := range []struct{ method, path, body, wantKey string }{
+		{http.MethodGet, "/notification/settings", "", "k_20b2245c"},
+		{http.MethodPut, "/notification/settings", `{"mcp_enabled":true}`, "k_20b2245c"},
+		// 日报触发端点独立文案键（TriggerNotificationDaily）。
+		{http.MethodPost, "/notification/daily/trigger", "", "k_4b8e3591"},
 	} {
 		status, out := doNotifyRequest(t, userRouter, tc.method, tc.path, tc.body)
-		if status != http.StatusForbidden || out["message_key"] != "k_20b2245c" {
-			t.Fatalf("%s %s 非管理员 status=%d body=%v, want 403 k_20b2245c", tc.method, tc.path, status, out)
+		if status != http.StatusForbidden || out["message_key"] != tc.wantKey {
+			t.Fatalf("%s %s 非管理员 status=%d body=%v, want 403 %s", tc.method, tc.path, status, out, tc.wantKey)
 		}
 	}
 
 	adminRouter := newNotificationTestRouter(h, 1, "admin")
-	body := `{"smtp":{"port":"465"},"qq":{"appid":"123456","secret":"s3cret"},"mcp_enabled":true,"attack_warn_at":80}`
+	body := `{"smtp":{"port":"465"},"mcp_enabled":true,"attack_warn_at":80}`
 	status, out := doNotifyRequest(t, adminRouter, http.MethodPut, "/notification/settings", body)
 	if status != http.StatusOK || out["code"].(float64) != 0 {
 		t.Fatalf("admin PUT status=%d body=%v", status, out)
 	}
-	var stored string
-	if err := db.DB.QueryRow(`SELECT value FROM notify_settings WHERE key='notify.qq_secret'`).Scan(&stored); err != nil || stored != "s3cret" {
-		t.Fatalf("notify.qq_secret 落库=%q err=%v", stored, err)
-	}
-
 	status, out = doNotifyRequest(t, adminRouter, http.MethodGet, "/notification/settings", "")
 	if status != http.StatusOK {
 		t.Fatalf("admin GET status=%d", status)
@@ -225,8 +221,8 @@ func TestNotificationSettings_roleGateAndSecretNonEcho(t *testing.T) {
 	if smtp["port"] != "465" || smtp["pass_configured"] != false {
 		t.Fatalf("smtp 形状=%v", smtp)
 	}
-	if qq["appid"] != "123456" || qq["secret_configured"] != true {
-		t.Fatalf("qq 形状=%v", qq)
+	if qq["appid"] != "" || qq["secret_configured"] != false {
+		t.Fatalf("qq 形状=%v（QQ 凭据单源=扫码绑定，settings PUT 无 qq 写路径）", qq)
 	}
 	if data["mcp_enabled"] != true || data["attack_warn_at"].(float64) != 80 || data["attack_critical_at"].(float64) != 200 {
 		t.Fatalf("开关/阈值形状=%v", data)
@@ -245,7 +241,12 @@ func TestNotificationSettings_roleGateAndSecretNonEcho(t *testing.T) {
 	if smtp["host"] != "smtp.example.com" || smtp["port"] != "465" {
 		t.Fatalf("partial PUT 后 smtp=%v", smtp)
 	}
-	if data["qq"].(map[string]any)["secret_configured"] != true {
+	// partial PUT 不携带 qq 段（写路径已删）：预置的扫码凭据布尔不受影响。
+	if _, err := db.DB.Exec(`INSERT INTO notify_settings (key, value) VALUES ('notify.qq_secret','scanned')
+		ON CONFLICT(key) DO UPDATE SET value=excluded.value`); err != nil {
+		t.Fatal(err)
+	}
+	if _, out = doNotifyRequest(t, adminRouter, http.MethodGet, "/notification/settings", ""); out["data"].(map[string]any)["qq"].(map[string]any)["secret_configured"] != true {
 		t.Fatalf("partial PUT 后 qq secret 保持已配置")
 	}
 	if data["mcp_enabled"] != true {
@@ -369,8 +370,8 @@ func TestNotificationDailyReportTrigger_adminOnlyAndAudit(t *testing.T) {
 	userRouter := newNotificationTestRouter(h, 2, "user")
 	adminRouter := newNotificationTestRouter(h, 1, "admin")
 
-	status, out := doNotifyRequest(t, adminRouter, http.MethodPost, "/notification/daily-report/trigger", "")
-	if status != http.StatusOK || out["message_key"] != "k_e0d0be34" {
+	status, out := doNotifyRequest(t, adminRouter, http.MethodPost, "/notification/daily/trigger", "")
+	if status != http.StatusOK {
 		t.Fatalf("admin 触发 status=%d body=%v", status, out)
 	}
 	var count int
@@ -378,8 +379,8 @@ func TestNotificationDailyReportTrigger_adminOnlyAndAudit(t *testing.T) {
 		t.Fatalf("日报触发审计留痕 count=%d err=%v", count, err)
 	}
 
-	status, out = doNotifyRequest(t, userRouter, http.MethodPost, "/notification/daily-report/trigger", "")
-	if status != http.StatusForbidden {
-		t.Fatalf("非管理员触发 status=%d, want 403", status)
+	status, out = doNotifyRequest(t, userRouter, http.MethodPost, "/notification/daily/trigger", "")
+	if status != http.StatusForbidden || out["message_key"] != "k_4b8e3591" {
+		t.Fatalf("非管理员触发 status=%d body=%v, want 403 k_4b8e3591", status, out)
 	}
 }

@@ -155,14 +155,37 @@ func (h *Handlers) CreateNotificationChannel(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 		return
 	}
+	// 同 user+type+target 唯一约束：先查既有行幂等复用（扫码绑定后重复保存
+	// 是正常路径——openid 不变，二次提交不是错误），并发窗口 INSERT 仍撞
+	// 约束时同口径处理。
+	var existingID int64
+	err := db.DB.QueryRow(`SELECT id FROM notification_channels
+		WHERE user_id=? AND type=? AND target=?`, uid, req.Type, req.Target).Scan(&existingID)
+	if err == nil {
+		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"id": existingID, "reused": true}})
+		return
+	}
 	res, err := db.DB.Exec(`INSERT INTO notification_channels (user_id, type, name, target, enabled, created_at, updated_at)
 		VALUES (?,?,?,?,1,datetime('now'),datetime('now'))`, uid, req.Type, req.Name, req.Target)
 	if err != nil {
+		if isUniqueConstraintErr(err) {
+			var id int64
+			if e := db.DB.QueryRow(`SELECT id FROM notification_channels
+				WHERE user_id=? AND type=? AND target=?`, uid, req.Type, req.Target).Scan(&id); e == nil {
+				c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"id": id, "reused": true}})
+				return
+			}
+		}
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("创建通知通道失败", err)})
 		return
 	}
 	id, _ := res.LastInsertId()
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"id": id}})
+}
+
+// isUniqueConstraintErr SQLite 唯一约束冲突（CONSTRAINT 2067）。
+func isUniqueConstraintErr(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "UNIQUE constraint failed")
 }
 
 // UpdateNotificationChannel PUT /notification/channels/:id——属主或管理员。

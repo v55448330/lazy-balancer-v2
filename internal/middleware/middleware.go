@@ -1047,11 +1047,11 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 				admin.DELETE("/settings/oidc", h.OIDCSettingsDelete)
 
 				// Notification center admin: credentials/switches/thresholds
-				// and manual daily-report trigger (secret values are never
-				// echoed back; handler re-checks the admin role).
+				// (secret values are never echoed back; handler re-checks
+				// the admin role). Manual daily-report trigger lives at
+				// /notification/daily/trigger.
 				admin.GET("/notification/settings", noStoreResponse(), h.GetNotificationSettings)
 				admin.PUT("/notification/settings", noStoreResponse(), h.UpdateNotificationSettings)
-				admin.POST("/notification/daily-report/trigger", noStoreResponse(), h.TriggerDailyReport)
 
 				// Security (admin write)
 				admin.POST("/security/policies", h.CreateSecurityPolicy)
@@ -1159,14 +1159,14 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 				business.GET("/mcp/ops-playbook", h.GetMCPOpsPlaybook)
 				// QQ 扫码绑定闭环：生成绑定码/轮询绑定状态（登录用户自助）
 				// 微信 iLink 扫码登录（管理员凭据页）
-				admin.POST("/notification/wx/qr/start", h.StartWxQRLogin)
+				admin.POST("/notification/wx/qr/start", noStoreResponse(), h.StartWxQRLogin)
 				admin.GET("/notification/wx/qr/status", h.GetWxQRStatus)
 				business.POST("/notification/qq/bind-code", h.PostQQBindCode)
 				business.GET("/notification/qq/bind-code", h.GetQQBindCode)
 				business.GET("/notification/daily", h.GetNotificationDaily)
 				business.PUT("/notification/daily", h.PutNotificationDaily)
-				business.POST("/notification/daily/preview", h.PreviewNotificationDaily)
-				admin.POST("/notification/daily/trigger", h.TriggerNotificationDaily)
+				business.POST("/notification/daily/preview", noStoreResponse(), h.PreviewNotificationDaily)
+				admin.POST("/notification/daily/trigger", noStoreResponse(), h.TriggerNotificationDaily)
 				business.GET("/users", h.ListUsers)
 				business.GET("/api-keys", noStoreResponse(), h.ListAPIKeys)
 				business.GET("/cluster/nodes", h.ListClusterNodes)

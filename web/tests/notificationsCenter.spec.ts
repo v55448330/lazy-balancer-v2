@@ -57,7 +57,7 @@ test('通知页四页签投影：channels/subs/deliveries 恒在，credentials �
 test('通道卡消费通道 REST 契约：CRUD+test+按类型目标 JSON', () => {
   const text = code('src/views/notifications/ChannelCards.vue')
   assert.match(text, /request\.get<NotificationChannelsResponse>\('\/notification\/channels'\)/)
-  assert.match(text, /request\.post<NotificationCreateChannelResponse>\('\/notification\/channels'/)
+  assert.match(text, /request\.post<NotificationCreateChannelResponse & \{ data\?: \{ id: number; reused\?: boolean \} \}>\('\/notification\/channels'/)
   assert.match(text, /request\.put\(`\/notification\/channels\/\$\{editTarget\.value\.id\}`/)
   assert.match(text, /request\.delete\(`\/notification\/channels\/\$\{ch\.id\}`\)/)
   assert.match(text, /request\.post\(`\/notification\/channels\/\$\{ch\.id\}\/test`\)/)
@@ -78,11 +78,12 @@ test('订阅矩阵消费 catalog+subscriptions 契约，保存走 items 语义',
   const text = code('src/views/notifications/SubscriptionMatrix.vue')
   assert.match(text, /request\.get<NotificationCatalogResponse>\('\/notification\/catalog'\)/)
   assert.match(text, /request\.get<NotificationSubsResponse>\('\/notification\/subscriptions'\)/)
-  const saveBlock = text.slice(text.indexOf('const saveSubs'), text.indexOf('const triggerDaily'))
+  const saveBlock = text.slice(text.indexOf('const saveSubs'), text.indexOf('onMounted(()'))
   assert.match(saveBlock, /items: events\.value\.map/, '保存必须按 PUT {items:[…]} 契约提交')
   assert.match(saveBlock, /min_level: state\?\.subscribed \? \(state\.min_level \|\| evt\.level\) : ''/, '未订阅事件必须以空 min_level 显式删行（契约语义）')
-  assert.match(text, /request\.post\('\/notification\/daily-report\/trigger'\)/, '管理员日报手动触发端点')
-  assert.match(text, /const DAILY_EVENT = 'sys\.daily_report'/)
+  // 日报已拆独立页签：订阅矩阵禁止残留日报卡片/手动触发/事件行注入
+  assert.doesNotMatch(text, /daily-report\/trigger/, '旧日报触发端点引用禁止回潮（统一 /notification/daily/trigger）')
+  assert.doesNotMatch(text, /DAILY_EVENT|dailyTitle|triggerDaily/, '订阅矩阵日报卡片已删（独立页签承载），禁止回潮')
 })
 
 test('投递记录消费 deliveries 契约：过滤/全平台/失败重发', () => {
@@ -107,7 +108,8 @@ test('系统凭据消费 settings 契约：GET 嵌套形状+secret 留空不提�
   const saveBlock = text.slice(text.indexOf('const payload: NotificationSettingsPayload'), text.indexOf('await request.put'))
   // 空 secret 必须以条件展开省略键（不能提交空串覆盖既有凭据）
   assert.match(saveBlock, /\.\.\.\(form\.value\.smtpPass \? \{ pass: form\.value\.smtpPass \} : \{\}\)/)
-  assert.match(saveBlock, /\.\.\.\(form\.value\.qqSecret \? \{ secret: form\.value\.qqSecret \} : \{\}\)/)
+  // QQ 凭据不走 settings PUT（单源=扫码绑定自动落库），手工形态禁止回潮
+  assert.doesNotMatch(text, /qqSecret/)
   // 微信凭据走 iLink 扫码登录卡（REST start/status；confirmed 即服务端已落
   // 凭据）——手工粘贴 wx.cred 形态已删除，禁止回潮
   assert.match(text, /request\.post<\{ code: number; data\?: \{ qr_content: string \} \}>\('\/notification\/wx\/qr\/start', \{\}\)/)

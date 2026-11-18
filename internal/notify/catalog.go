@@ -97,7 +97,8 @@ var catalog = []catalogEntry{
 	{EvtClusterSyncDrift, LevelWarn, true, "集群同步漂移", "节点 %s 检测到配置漂移"},
 	{EvtStartupCompleted, LevelInfo, false, "系统启动完成", "面板启动完成（%s）"},
 	{EvtStartupAbnormal, LevelCritical, true, "系统启动异常", "启动异常：%s"},
-	{EvtDailyReport, LevelInfo, false, "每日日报", "昨日摘要：%s"},
+	// sys.daily_report 不进目录：日报已拆独立区块（per-user 配置+直接落投递，
+	// 不走订阅矩阵事件订阅面）；事件键保留供投递记录展示。
 	{EvtNotifyChannelDown, LevelWarn, true, "通知通道离线", "通知通道「%s」已离线（%s）——事件将暂存重投"},
 }
 

@@ -182,7 +182,6 @@ var mcpUncoveredRoutes = map[string]string{
 	"GET /api/v1/notification/qq/bind-code":           "QQ 扫码绑定轮询：绑定完成时凭据落库+openid 通道绑定（浏览器侧轮询）",
 	"POST /api/v1/notification/wx/qr/start":           "微信 iLink 扫码登录产码：手机微信扫码确认闭环（Agent 无扫码场景）",
 	"GET /api/v1/notification/wx/qr/status":           "微信扫码登录状态轮询：confirmed 即凭据落库启用收发（浏览器侧轮询）",
-	"POST /api/v1/notification/daily-report/trigger":  "管理员手动触发每日日报（每日 09:00 定时任务已承载常规触发；Agent 无消费场景）",
 }
 
 func TestMCPUncoveredRoutes_areExplicitlyExempted(t *testing.T) {

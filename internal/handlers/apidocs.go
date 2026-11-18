@@ -295,7 +295,6 @@ var apiDocRoutes = []apiDocRoute{
 	{"POST", "/notification/channels/:id/test", "通知", "测试通知通道", "", `{"code":0,"message":"测试消息已发送"}`, []string{"404 not_found", "403 仅可测试自己的通知通道", "502 测试消息发送失败", "428 mfa_step_up_required"}, "发送一条测试消息并回写 last_test_at/last_test_ok。"},
 	{"GET", "/notification/settings", "通知", "通知设置（管理员）", "", `{"code":0,"data":{"smtp":{"host":"","port":"","user":"","from":"","pass_configured":false},"qq":{"appid":"","secret_configured":false},"wx_bot_cred_configured":false,"mcp_enabled":false,"attack_warn_at":50,"attack_critical_at":200}}`, []string{"403 仅管理员可管理通知设置"}, "secret 类永不回显（只回「已配置」布尔）；阈值未配置时返回生效默认（50/200）。"},
 	{"PUT", "/notification/settings", "通知", "更新通知设置（管理员）", `{"smtp":{"host":"smtp.example.com","port":"465","pass":"***"},"qq":{"appid":"123","secret":"***"},"mcp_enabled":true,"attack_warn_at":80,"attack_critical_at":300}`, `{"code":0,"message":"通知设置已保存"}`, []string{"400 invalid_request", "400 SMTP 端口必须为 1-65535 的数字", "400 拦截告警阈值需满足 0 < warn < critical", "403 仅管理员可管理通知设置", "428 mfa_step_up_required"}, "部分更新（仅提供的键生效）；secret 传空串=清除；微信 iLink 凭据经扫码端点落库（本端点只回 wx_bot_cred_configured 布尔，不直写）；thresholds 以生效值合并请求值后整体校验。变更键审计留痕。"},
-	{"POST", "/notification/daily-report/trigger", "通知", "手动触发每日日报（管理员）", "", `{"code":0,"message":"每日日报已触发"}`, []string{"403 仅管理员可管理通知设置", "500 日报生成失败", "428 mfa_step_up_required"}, "立即渲染昨日摘要并按订阅矩阵走投递通道；审计留痕。每日 09:00 定时触发见任务监控 notification-daily-report。"},
 	{"GET", "/notification/daily", "通知", "日报配置读取（当前用户）", "", `{"code":0,"data":{"config":{"enabled":true,"send_time":"09:00","items":["requests"],"formats":{"qq":"markdown"}},"items":["requests","blocked","attack_top"],"labels":{"requests":"请求数"}}}`, []string{"401 unauthenticated"}, "无配置行返回全项目默认（enabled=true 09:00 全 items）。"},
 	{"PUT", "/notification/daily", "通知", "日报配置保存（当前用户）", `{"enabled":true,"send_time":"09:00","items":["requests","blocked"],"formats":{"qq":"markdown"}}`, `{"code":0}`, []string{"400 invalid_request", "403 read_only_key_or_slave（只读 Key/从节点恒 403）", "400 send_time 需为 HH:MM（如 09:00）", "400 未知日报项目", "428 mfa_step_up_required"}, "items 白名单校验；send_time 按面板服务器时区；formats 键=通道族值=渲染格式。审计留痕。"},
 	{"POST", "/notification/daily/preview", "通知", "日报预览", `{"items":["requests"],"format":"markdown"}`, `{"code":0,"data":{"format":"markdown","content":"# 日报","date":"2026-11-17"}}`, []string{"400 invalid_request", "403 read_only_key_or_slave（只读 Key/从节点恒 403）", "500 采集日报数据失败", "428 mfa_step_up_required"}, "按请求配置渲染昨日真实数据，不落库。"},
@@ -849,7 +848,6 @@ var createLikeWriteDocRoutes = map[string]struct{}{
 	// 通知中心：创建类/动作类 POST（重复调用产生新行或再次触发）。
 	"POST /notification/channels":                     {},
 	"POST /notification/channels/:id/test":            {},
-	"POST /notification/daily-report/trigger":         {},
 	"POST /certificates/jobs/current":                 {},
 	"POST /cluster/nodes/:id/approve":                 {},
 	"POST /cluster/nodes/:id/reject":                  {},

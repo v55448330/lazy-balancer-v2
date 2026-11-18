@@ -36,10 +36,11 @@
           </el-checkbox>
         </el-checkbox-group>
       </el-form-item>
-      <el-form-item v-for="ch in channelFormatRows" :key="ch.key" :label="ch.label">
-        <el-select v-model="form.formats[ch.key]" class="daily-format">
+      <el-form-item :label="t('app.notification.daily.format')">
+        <el-select v-model="form.format" class="daily-format">
           <el-option v-for="f in FORMAT_OPTIONS" :key="f.value" :value="f.value" :label="f.label" />
         </el-select>
+        <span class="switch-hint">{{ t('app.notification.daily.formatHint') }}</span>
       </el-form-item>
       <el-form-item :label="t('app.notification.daily.preview')">
         <div class="daily-preview-bar">
@@ -60,7 +61,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, onMounted } from 'vue'
+import { computed, ref, watch, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { request, mfaAwareSuccess } from '@/utils/api'
 import { useAuthStore } from '@/stores/auth'
@@ -73,7 +74,7 @@ interface DailyConfigResponse {
   enabled: boolean
   send_time: string
   items: string[]
-  formats: Record<string, string>
+  format: string
 }
 
 interface DailyGetResponse {
@@ -91,11 +92,12 @@ const saving = ref(false)
 const triggering = ref(false)
 const previewing = ref(false)
 const previewFormat = ref('markdown')
+// 预览格式默认跟随投递格式（用户仍可临时切换其它格式对比渲染效果）
+watch(() => form.value.format, (v) => { previewFormat.value = v })
 const previewContent = ref('')
 const itemOptions = ref<{ id: string; label: string }[]>([])
 
-// 按通道格式（键=通道族，值=渲染格式；后端 formats 白名单校验）
-const CHANNEL_KEYS = ['webhook', 'email', 'qq', 'wx_clawbot'] as const
+// 按用户配置的投递格式渲染（text/markdown/html/json 白名单与后端一一对应）
 const FORMAT_OPTIONS = [
   { value: 'text', label: 'Text' },
   { value: 'markdown', label: 'Markdown' },
@@ -103,16 +105,12 @@ const FORMAT_OPTIONS = [
   { value: 'json', label: 'JSON' },
 ] as const
 
-const form = ref<{ enabled: boolean; sendTime: string; items: string[]; formats: Record<string, string> }>({
+const form = ref<{ enabled: boolean; sendTime: string; items: string[]; format: string }>({
   enabled: false,
   sendTime: '09:00',
   items: [],
-  formats: {},
+  format: 'markdown',
 })
-
-const channelFormatRows = computed(() =>
-  CHANNEL_KEYS.map((key) => ({ key, label: t('app.notification.daily.channel_' + key) }))
-)
 
 const canSave = computed(() => /^([01]\d|2[0-3]):[0-5]\d$/.test(form.value.sendTime) && form.value.items.length > 0)
 
@@ -126,7 +124,7 @@ const fetchDaily = async (): Promise<void> => {
       enabled: cfg?.enabled ?? false,
       sendTime: cfg?.send_time ?? '09:00',
       items: cfg?.items ?? data?.items ?? [],
-      formats: { ...(cfg?.formats ?? {}) },
+      format: cfg?.format ?? 'markdown',
     }
     itemOptions.value = (data?.items ?? []).map((id) => ({ id, label: data?.labels?.[id] ?? id }))
     loadError.value = false
@@ -146,7 +144,7 @@ const saveDaily = async (): Promise<void> => {
       enabled: form.value.enabled,
       send_time: form.value.sendTime,
       items: form.value.items,
-      formats: form.value.formats,
+      format: form.value.format,
     })
     mfaAwareSuccess(t('app.notification.daily.saved'))
   } catch (error: unknown) {
