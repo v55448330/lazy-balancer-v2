@@ -211,7 +211,6 @@ export default {
         protoRestTag: '密钥资产',
         accessMethodTitle: '接入方式',
         statsCardTitle: '接入统计',
-        protoRestFoot2: '密钥资产与活跃维度；逐日调用计数暂未采集，不作展示。',
         protoRestFoot: '资产与活跃维度统计；逐日调用计数暂未采集，不作展示。',
         protoMcp: 'MCP',
         protoMcpTag: '调用行为',

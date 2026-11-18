@@ -209,7 +209,6 @@ export default {
         protoRestTag: 'Key assets',
         accessMethodTitle: 'Access methods',
         statsCardTitle: 'Access statistics',
-        protoRestFoot2: 'Key assets & activity; per-day call counts are not collected yet.',
         protoRestFoot: 'Asset & activity dimensions; per-day call counts are not collected yet and are not shown.',
         protoMcp: 'MCP',
         protoMcpTag: 'Call behavior',
