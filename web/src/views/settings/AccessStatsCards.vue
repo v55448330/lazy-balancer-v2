@@ -78,7 +78,7 @@
     <el-row :gutter="24" class="detail-row">
       <el-col :xs="24" :md="12">
         <div class="usage-block-title">{{ t('app.notification.keysAccess.recentCallsTitle') }}</div>
-        <el-table v-if="restStats && restStats.recent_calls.length" :data="restStats.recent_calls" size="small" max-height="220" class="recent-table">
+        <el-table v-if="restStats && restStats?.recent_calls?.length" :data="restStats.recent_calls" size="small" max-height="220" class="recent-table">
           <el-table-column prop="time" :label="t('app.notification.deliveries.colTime')" width="110" />
           <el-table-column prop="key_name" :label="t('app.notification.keysSessions.colKey')" min-width="110" show-overflow-tooltip />
           <el-table-column prop="method" label="Method" width="70" />
@@ -91,7 +91,7 @@
         </el-table>
         <el-empty v-else :description="t('app.notification.keysAccess.recentCallsEmpty')" :image-size="48" />
       </el-col>
-      <el-col :xs="24" :md="restStats && restStats.recent_calls.length ? 12 : 24">
+      <el-col :xs="24" :md="restStats && restStats?.recent_calls?.length ? 12 : 24">
         <template v-if="mcpStats && trendRows.length">
           <div class="usage-block-title">{{ t('app.notification.keysUsage.trendTitle') }}</div>
           <div class="trend-list">

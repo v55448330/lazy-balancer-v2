@@ -86,7 +86,7 @@ func GetRESTCallOverview() RESTCallOverview {
 	now := time.Now()
 	today := now.Format("2006-01-02")
 	c := apiCallDay[today]
-	out := RESTCallOverview{TodayCalls: c[0]}
+	out := RESTCallOverview{TodayCalls: c[0], RecentCalls: []RecentAPICall{}}
 	if c[0] > 0 {
 		out.ErrorRate = float64(c[1]) / float64(c[0])
 	}
@@ -95,6 +95,7 @@ func GetRESTCallOverview() RESTCallOverview {
 	for _, r := range apiCallRing {
 		perDay[r.At.Format("2006-01-02")]++
 	}
+	out.Trend = []RESTCallTrendPoint{}
 	for i := 6; i >= 0; i-- {
 		d := now.AddDate(0, 0, -i).Format("2006-01-02")
 		out.Trend = append(out.Trend, RESTCallTrendPoint{Date: d, Calls: perDay[d]})
