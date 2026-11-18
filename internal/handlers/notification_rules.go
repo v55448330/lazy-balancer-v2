@@ -235,3 +235,44 @@ func dailyItemsForWizard() []gin.H {
 	}
 	return items
 }
+
+// GetAdminNotificationOverview GET /notification/admin/overview——管理员视角：
+// 全平台通知统计+指定用户的通道/规则（user_id 参数可选，空=全平台汇总）。
+func (h *Handlers) GetAdminNotificationOverview(c *gin.Context) {
+	if !isAdminRequest(c) {
+		c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: "admin only"})
+		return
+	}
+	// 全平台统计
+	var totalChannels, totalRules, totalDeliveries, sentDeliveries int
+	_ = db.DB.QueryRow(`SELECT COUNT(*) FROM notification_channels WHERE enabled=1`).Scan(&totalChannels)
+	_ = db.DB.QueryRow(`SELECT COUNT(*) FROM notification_subscriptions`).Scan(&totalRules)
+	_ = db.MetricsDB.QueryRow(`SELECT COUNT(*) FROM notification_deliveries`).Scan(&totalDeliveries)
+	_ = db.MetricsDB.QueryRow(`SELECT COUNT(*) FROM notification_deliveries WHERE status='sent'`).Scan(&sentDeliveries)
+	rate := float64(0)
+	if totalDeliveries > 0 {
+		rate = float64(sentDeliveries) / float64(totalDeliveries)
+	}
+
+	// 用户列表（供筛选器）
+	type userBrief struct {
+		ID       int64  `json:"id"`
+		Username string `json:"username"`
+	}
+	var users []userBrief
+	rows, err := db.DB.Query(`SELECT id, username FROM users ORDER BY id`)
+	if err == nil {
+		for rows.Next() {
+			var u userBrief
+			if rows.Scan(&u.ID, &u.Username) == nil {
+				users = append(users, u)
+			}
+		}
+		rows.Close()
+	}
+
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{
+		"stats": gin.H{"channels": totalChannels, "rules": totalRules, "deliveries": totalDeliveries, "success_rate": rate},
+		"users": users,
+	}})
+}

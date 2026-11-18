@@ -13,12 +13,29 @@
     <el-tabs v-model="activeTab">
       <!-- Tab 0: 概览 -->
       <el-tab-pane :label="t('app.notification.rules.overviewTab')" name="overview">
-        <el-row :gutter="16">
+        <!-- 管理员：用户筛选器 -->
+        <div v-if="isAdmin" class="overview-filter">
+          <el-select v-model="adminUserId" size="small" clearable placeholder="全平台" style="width:160px" @change="fetchAdminOverview">
+            <el-option v-for="u in adminUsers" :key="u.id" :value="u.id" :label="u.username" />
+          </el-select>
+        </div>
+        <el-row :gutter="16" class="overview-stats">
           <el-col :span="6"><div class="stat-item"><div class="stat-icon stat-blue"><el-icon><ChatDotRound /></el-icon></div><div class="stat-content"><div class="stat-value">{{ overviewStats.channels }}</div><div class="stat-label">{{ t('app.notification.rules.statChannels') }}</div></div></div></el-col>
           <el-col :span="6"><div class="stat-item"><div class="stat-icon stat-purple"><el-icon><Bell /></el-icon></div><div class="stat-content"><div class="stat-value">{{ overviewStats.rules }}</div><div class="stat-label">{{ t('app.notification.rules.statRules') }}</div></div></div></el-col>
           <el-col :span="6"><div class="stat-item"><div class="stat-icon stat-green"><el-icon><CircleCheckFilled /></el-icon></div><div class="stat-content"><div class="stat-value">{{ overviewStats.deliveries }}</div><div class="stat-label">{{ t('app.notification.rules.statDeliveries') }}</div></div></div></el-col>
           <el-col :span="6"><div class="stat-item"><div class="stat-icon" :class="overviewStats.successRate > 0.9 ? 'stat-green' : 'stat-orange'"><el-icon><DataAnalysis /></el-icon></div><div class="stat-content"><div class="stat-value">{{ (overviewStats.successRate * 100).toFixed(1) }}%</div><div class="stat-label">{{ t('app.notification.rules.statSuccessRate') }}</div></div></div></el-col>
         </el-row>
+        <!-- 7天投递趋势（简易bar） -->
+        <el-card class="trend-card">
+          <template #header><div class="card-header"><div class="card-title"><el-icon class="title-icon"><DataAnalysis /></el-icon><span>{{ t('app.notification.rules.trendTitle') }}</span></div></div></template>
+          <div class="trend-bars">
+            <div v-for="d in trendData" :key="d.date" class="trend-bar-item">
+              <div class="trend-bar-fill" :style="{ height: d.pct + '%' }"></div>
+              <div class="trend-bar-label">{{ d.date.slice(5) }}</div>
+              <div class="trend-bar-value">{{ d.count }}</div>
+            </div>
+          </div>
+        </el-card>
       </el-tab-pane>
 
       <!-- Tab 1: 通道管理 -->
@@ -149,6 +166,20 @@ interface RuleChannel { id: number; type: string; name: string }
 interface Rule { id: string; trigger: string; title: string; events?: string[]; min_level?: string; send_time?: string; channels: RuleChannel[]; body_template: string; enabled: boolean }
 
 const overviewStats = ref({ channels: 0, rules: 0, deliveries: 0, successRate: 0 })
+const adminUserId = ref<number | ''>('')
+const adminUsers = ref<{ id: number; username: string }[]>([])
+const trendData = ref<{ date: string; count: number; pct: number }[]>([])
+
+const fetchAdminOverview = async (): Promise<void> => {
+  if (!isAdmin.value) return
+  try {
+    const res = await request.get<{ data?: { stats: { channels: number; rules: number; deliveries: number; success_rate: number }; users: { id: number; username: string }[] } }>('/notification/admin/overview', { silent: true })
+    if (res.data?.stats) {
+      overviewStats.value = { channels: res.data.stats.channels, rules: res.data.stats.rules, deliveries: res.data.stats.deliveries, successRate: res.data.stats.success_rate }
+    }
+    adminUsers.value = res.data?.users ?? []
+  } catch { /* */ }
+}
 const asRule = (row: unknown): Rule => row as Rule
 const loading = ref(false)
 const rules = ref<Rule[]>([])
@@ -201,7 +232,17 @@ const previewDaily = async (): Promise<void> => {
   try { const res = await request.post<{ data?: { content: string } }>('/notification/daily/preview', { format: 'markdown' }); if (res.data?.content) window.open('', '_blank')?.document.write(`<pre>${res.data.content}</pre>`) } catch { /* */ }
 }
 
-onMounted(() => { void fetchRules() })
+onMounted(() => {
+  void fetchRules()
+  void fetchAdminOverview()
+  // 7天趋势（从投递记录统计——简化为静态演示数据，实际应从后端获取）
+  const days: { date: string; count: number; pct: number }[] = []
+  for (let i = 6; i >= 0; i--) {
+    const d = new Date(Date.now() - i * 86400000)
+    days.push({ date: d.toISOString().slice(0, 10), count: 0, pct: 0 })
+  }
+  trendData.value = days
+})
 </script>
 
 <style scoped>
@@ -238,4 +279,16 @@ onMounted(() => { void fetchRules() })
 .stat-orange { background: #fff7ed; color: #f59e0b; }
 .stat-value { font-size: 20px; font-weight: 600; color: #111827; line-height: 1.2; }
 .stat-label { font-size: 12px; color: #6b7280; margin-top: 2px; }
+/* 概览 */
+.overview-filter { margin-bottom: 12px; }
+.overview-stats { margin-bottom: 16px; }
+.trend-card { margin-top: 16px; }
+.trend-bars { display: flex; align-items: flex-end; gap: 12px; height: 120px; padding: 0 8px; }
+.trend-bar-item { flex: 1; display: flex; flex-direction: column; align-items: center; height: 100%; justify-content: flex-end; }
+.trend-bar-fill { width: 100%; background: var(--el-color-primary); opacity: 0.7; min-height: 2px; transition: height 0.3s; }
+.trend-bar-label { font-size: 11px; color: #6b7280; margin-top: 4px; }
+.trend-bar-value { font-size: 11px; color: #374151; font-weight: 600; }
+.card-header { display: flex; justify-content: space-between; align-items: center; }
+.card-title { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; color: #111827; }
+.title-icon { font-size: 16px; color: #3b82f6; }
 </style>

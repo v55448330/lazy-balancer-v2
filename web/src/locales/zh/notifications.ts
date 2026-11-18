@@ -47,6 +47,7 @@ export default {
       pageDesc: "管理通知触发条件、接收通道与消息模板",
       addRule: "添加通知规则",
       statSuccessRate: "成功率",
+      trendTitle: "投递趋势（7天）",
       statDeliveries: "投递量",
       statRules: "活跃规则",
       statChannels: "通道数",

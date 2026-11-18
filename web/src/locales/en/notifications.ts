@@ -45,6 +45,7 @@ export default {
       pageDesc: "Manage triggers, channels and message templates",
       addRule: "Add Rule",
       statSuccessRate: "Success Rate",
+      trendTitle: "Delivery Trend (7 days)",
       statDeliveries: "Deliveries",
       statRules: "Active Rules",
       statChannels: "Channels",
