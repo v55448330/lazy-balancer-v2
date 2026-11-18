@@ -54,7 +54,6 @@
             <el-button :loading="smtpTesting" :disabled="!form.smtpHost" @click="testSMTP">{{ t('app.notification.creds.smtpTest') }}</el-button>
           </template>
         </el-input>
-        <div class="form-hint">{{ t('app.notification.creds.smtpTestHint') }}</div>
       </el-form-item>
       <el-form-item>
         <el-button type="primary" :loading="saving" :disabled="!canSave" @click="saveSettings">

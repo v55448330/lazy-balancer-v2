@@ -45,6 +45,7 @@
 
       <!-- Tab 2: 通知规则 -->
       <el-tab-pane :label="t('app.notification.rules.rulesTab')" name="rules">
+        <el-card class="list-card">
         <el-table :data="rules" v-loading="loading" stripe :header-cell-style="{ background: '#f9fafb' }">
           <el-table-column :label="t('app.notification.rules.trigger')" min-width="130">
             <template #default="{ row }">
@@ -96,11 +97,12 @@
           </el-table-column>
         </el-table>
         <el-empty v-if="!loading && rules.length === 0" :description="t('app.notification.rules.emptyText')" :image-size="80" />
+        </el-card>
       </el-tab-pane>
 
       <!-- Tab 3: 投递记录 -->
       <el-tab-pane :label="t('app.notification.rules.deliveriesTab')" name="deliveries">
-        <DeliveryLog />
+        <el-card class="list-card"><DeliveryLog /></el-card>
       </el-tab-pane>
 
       <!-- Tab 4: 邮件服务（管理员） -->
@@ -114,27 +116,26 @@
       <template #header>
         <DialogHeader :icon="Bell" :title="tplEditingRule?.title || ''" :subtitle="t('app.notification.rules.bodyTemplate')" tone="primary" />
       </template>
-      <el-tabs v-model="tplChannelTab">
-        <el-tab-pane label="QQ" name="qq">
-          <el-input v-model="tplText" type="textarea" :rows="5" :placeholder="t('app.notification.rules.templatePlaceholder')" />
-          <div class="ph-row"><el-tag v-for="ph in tplPh" :key="ph" size="small" effect="plain" class="ph-tag" @click="tplText += ph">{{ ph }}</el-tag></div>
-        </el-tab-pane>
-        <el-tab-pane label="微信" name="wx">
-          <el-input v-model="tplText" type="textarea" :rows="5" :placeholder="t('app.notification.rules.templatePlaceholder')" />
-          <div class="ph-row"><el-tag v-for="ph in tplPh" :key="ph" size="small" effect="plain" class="ph-tag" @click="tplText += ph">{{ ph }}</el-tag></div>
-        </el-tab-pane>
-        <el-tab-pane label="Webhook" name="webhook">
-          <el-input v-model="tplText" type="textarea" :rows="6" placeholder='{"title":"{{title}}","body":"{{body}}","level":"{{level}}"}' />
-          <div class="ph-row"><el-tag v-for="ph in tplPh" :key="ph" size="small" effect="plain" class="ph-tag" @click="tplText += ph">{{ ph }}</el-tag></div>
-        </el-tab-pane>
-        <el-tab-pane label="邮件" name="email">
-          <div class="tpl-section-label">标题模板</div>
-          <el-input v-model="tplSubject" placeholder="{{title}}" style="margin-bottom:8px" />
-          <div class="tpl-section-label">正文模板</div>
-          <el-input v-model="tplText" type="textarea" :rows="4" :placeholder="t('app.notification.rules.templatePlaceholder')" />
-          <div class="ph-row"><el-tag v-for="ph in tplPh" :key="ph" size="small" effect="plain" class="ph-tag" @click="tplText += ph">{{ ph }}</el-tag></div>
-        </el-tab-pane>
-      </el-tabs>
+      <el-radio-group v-model="tplChannelTab" size="small" class="tpl-channel-switch">
+        <el-radio-button value="qq">QQ</el-radio-button>
+        <el-radio-button value="wx">微信</el-radio-button>
+        <el-radio-button value="webhook">Webhook</el-radio-button>
+        <el-radio-button value="email">邮件</el-radio-button>
+      </el-radio-group>
+
+      <div v-if="tplChannelTab === 'email'" class="tpl-field">
+        <div class="tpl-section-label">标题模板</div>
+        <el-input v-model="tplSubject" placeholder="{{title}}" />
+      </div>
+
+      <div class="tpl-field">
+        <div class="tpl-section-label">{{ tplChannelTab === 'webhook' ? 'JSON 模板' : tplChannelTab === 'email' ? '正文模板' : '文本模板' }}</div>
+        <el-input v-model="tplText" type="textarea" :rows="6" :placeholder="defaultTplFor(tplChannelTab)" />
+        <div class="ph-row">
+          <el-tag v-for="ph in tplPh" :key="ph" size="small" effect="plain" class="ph-tag" @click="tplText += ph">{{ ph }}</el-tag>
+        </div>
+      </div>
+
       <el-divider />
       <div class="tpl-section-label">{{ t('app.notification.rules.preview') }}</div>
       <pre class="tpl-preview">{{ previewText }}</pre>
@@ -187,6 +188,11 @@ const tplDialogVisible = ref(false)
 const tplEditingRule = ref<Rule | null>(null)
 const tplText = ref('')
 const tplChannelTab = ref('qq')
+const defaultTplFor = (ch: string): string => {
+  if (ch === 'webhook') return '{"title":"{{title}}","body":"{{body}}","level":"{{level}}","time":"{{time}}"}'
+  if (ch === 'email') return '{{title}}\n\n{{body}}\n\n级别：{{level}}\n时间：{{time}}'
+  return '{{title}}\n{{body}}\n—— {{level}} · {{time}}'
+}
 const tplSubject = ref('')
 const savingTpl = ref(false)
 const tplPh = ['{{title}}', '{{body}}', '{{level}}', '{{time}}']
@@ -210,7 +216,12 @@ const saveRuleField = async (rule: Rule): Promise<void> => {
   try { await request.post(`/notification/rules/${rule.id}`, { enabled: rule.enabled, min_level: rule.min_level, body_template: rule.body_template, send_time: rule.send_time }) } catch { /* */ }
 }
 
-const editTemplate = (rule: Rule): void => { tplEditingRule.value = rule; tplText.value = rule.body_template; tplDialogVisible.value = true }
+const editTemplate = (rule: Rule): void => {
+  tplEditingRule.value = rule
+  tplText.value = rule.body_template || defaultTplFor(tplChannelTab.value)
+  tplSubject.value = '{{title}}'
+  tplDialogVisible.value = true
+}
 
 const saveTemplate = async (): Promise<void> => {
   if (!tplEditingRule.value || savingTpl.value) return
@@ -262,6 +273,8 @@ onMounted(() => {
 .rule-name-cell { display: flex; align-items: center; gap: 8px; }
 .rule-name-text { font-weight: 600; }
 .mr4 { margin-right: 4px; }
+.tpl-channel-switch { margin-bottom: 16px; }
+.tpl-field { margin-bottom: 12px; }
 .tpl-section-label { font-size: 13px; font-weight: 600; color: #374151; margin-bottom: 8px; }
 .tpl-textarea { margin-bottom: 8px; }
 .tpl-preview { background: #f9fafb; padding: 10px; font-size: 12px; font-family: ui-monospace, monospace; white-space: pre-wrap; margin: 0; }
