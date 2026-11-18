@@ -36,11 +36,11 @@
     <el-divider content-position="left" class="section-divider">{{ t('app.notification.keysAccess.accessMethodTitle') }}</el-divider>
     <el-row :gutter="16" class="keys-mcp-block">
       <el-col :xs="24" :md="12">
-        <el-card shadow="never" class="access-card">
+        <el-card class="access-card">
           <template #header>
-            <div class="card-header-row">
-              <div class="access-proto">
-                <el-icon class="access-proto-icon"><Key /></el-icon>
+            <div class="card-header">
+              <div class="card-title">
+                <el-icon class="title-icon"><Key /></el-icon>
                 <span>{{ t('app.notification.keysAccess.apiCardTitle') }}</span>
               </div>
               <el-button size="small" tag="a" href="/api/v1/docs" target="_blank" rel="noopener noreferrer">
@@ -70,11 +70,11 @@
         </el-card>
       </el-col>
       <el-col :xs="24" :md="12">
-        <el-card shadow="never" class="access-card">
+        <el-card class="access-card">
           <template #header>
-            <div class="card-header-row">
-              <div class="access-proto">
-                <el-icon class="access-proto-icon"><Connection /></el-icon>
+            <div class="card-header">
+              <div class="card-title">
+                <el-icon class="title-icon"><Connection /></el-icon>
                 <span>{{ t('app.notification.keysAccess.mcpCardTitle') }}</span>
               </div>
               <el-button size="small" @click="mcpDocsVisible = true">
@@ -107,11 +107,12 @@
 
       </el-tab-pane>
       <el-tab-pane :label="t('app.notification.keysAccess.keysTab')" name="keys">
-    <el-divider content-position="left" class="section-divider">{{ t('common.app.views.keys.pageTitle') }}</el-divider>
+    <el-card class="list-card">
     <el-table
       v-loading="loading"
       :data="tableKeys"
       stripe
+      :header-cell-style="{ background: '#f9fafb' }"
       class="keys-table"
       :empty-text="t('common.app.views.keys.emptyText')"
     >
@@ -188,9 +189,7 @@
     <el-card v-if="!loading && keys.length === 0 && !loadError" class="empty-card">
       <el-empty :description="t('common.app.views.keys.emptyText')" :image-size="80" />
     </el-card>
-    <!-- 分区②：接入统计（健康度总览：REST/MCP 双列同构指标） -->
-
-
+    </el-card>
       </el-tab-pane>
       <el-tab-pane :label="t('app.notification.keysAccess.mcpTab')" name="mcp">
     <McpSessionsCard class="keys-mcp-block" />
@@ -860,6 +859,9 @@ onMounted(() => {
 </script>
 
 <style scoped>
+.card-header { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; row-gap: 8px; }
+.card-title { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; color: #111827; }
+.title-icon { font-size: 16px; color: #3b82f6; }
 .keys-table { width: 100%; margin-bottom: 4px; }
 .key-name-cell { font-weight: 600; }
 .ml4 { margin-left: 4px; }
