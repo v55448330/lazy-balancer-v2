@@ -41,6 +41,9 @@
           <el-option v-for="f in FORMAT_OPTIONS" :key="f.value" :value="f.value" :label="f.label" />
         </el-select>
         <span class="switch-hint">{{ t('app.notification.daily.formatHint') }}</span>
+        <div class="info-note-bar daily-format-map">
+          <span class="info-note-desc">{{ t('app.notification.daily.formatChannelMap') }}</span>
+        </div>
       </el-form-item>
       <el-form-item :label="t('app.notification.daily.preview')">
         <div class="daily-preview-bar">
@@ -209,5 +212,6 @@ onMounted(() => {
   white-space: pre-wrap;
   word-break: break-word;
 }
+.daily-format-map { margin-top: 6px; }
 .switch-hint { margin-left: 10px; font-size: 12px; color: var(--text-secondary, #6b7280); }
 </style>

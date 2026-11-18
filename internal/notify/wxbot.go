@@ -93,7 +93,44 @@ var (
 	wxContextTokens = map[string]string{}
 	wxUpdatesBuf    string
 	wxPendingQR     string // 进行中的扫码登录二维码令牌
+	// wxPendingInbound 最近一条入站私聊（通道向导「发送任意消息捕获
+	// receiver」闭环的领取槽）：单 bot 场景全局单槽，领取即清；时间窗外
+	// 视为过期不交付。
+	wxPendingInbound wxInboundCapture
 )
+
+type wxInboundCapture struct {
+	Receiver string
+	At       time.Time
+}
+
+// noteWxInboundCapture 记录最近入站（向导轮询领取用；任意文本均捕获——
+// 「绑定 XXX」指令路径同时保留，两形态并存）。
+func noteWxInboundCapture(receiver string) {
+	wxCtxMu.Lock()
+	wxPendingInbound = wxInboundCapture{Receiver: receiver, At: time.Now()}
+	wxCtxMu.Unlock()
+}
+
+// WxTakePendingReceiver 领取最近入站接收者（maxAge 内有效；领取即清，
+// 防重复回填）。无有效捕获返回空串。
+func WxTakePendingReceiver(maxAge time.Duration) string {
+	wxCtxMu.Lock()
+	defer wxCtxMu.Unlock()
+	if wxPendingInbound.Receiver == "" || time.Since(wxPendingInbound.At) > maxAge {
+		return ""
+	}
+	r := wxPendingInbound.Receiver
+	wxPendingInbound = wxInboundCapture{}
+	return r
+}
+
+// WxBotLoggedIn 机器人登录态（通道向导分支判据：未登录时管理员需先在
+// 凭据页/向导内完成扫码登录）。
+func WxBotLoggedIn() bool {
+	raw := GetSetting(KeyWxBotCred)
+	return raw != ""
+}
 
 func cacheWxContextToken(from, token string) {
 	wxCtxMu.Lock()
@@ -390,6 +427,9 @@ func handleWxInbound(ctx context.Context, cred wxBotCred, m wxInMsg) {
 	if m.ContextToken != "" {
 		cacheWxContextToken(m.FromUserID, m.ContextToken)
 	}
+	// 任意私聊均登记捕获槽（通道向导「发送任意消息自动回填 receiver」；
+	// 领取即清——「绑定 XXX」指令形态并存不受影响）。
+	noteWxInboundCapture(m.FromUserID)
 	var text strings.Builder
 	for _, it := range m.ItemList {
 		if it.Type == 1 {

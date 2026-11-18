@@ -124,6 +124,42 @@
 
     <el-divider content-position="left" class="section-divider">{{ t('app.notification.keysAccess.title') }}</el-divider>
 
+    <!-- API/MCP 双接入卡（统一操作逻辑：各一张接入卡承载「文档」动作，
+         统计卡并列，会话/密钥列表各归其位） -->
+    <el-row :gutter="16" class="keys-mcp-block">
+      <el-col :span="12">
+        <el-card shadow="never" class="access-card">
+          <template #header>
+            <div class="card-header-row">
+              <span>{{ t('app.notification.keysAccess.apiCardTitle') }}</span>
+              <el-button size="small" tag="a" href="/api/v1/docs" target="_blank" rel="noopener noreferrer">
+                {{ t('common.app.views.keys.apiDocs') }}
+              </el-button>
+            </div>
+          </template>
+          <div class="access-card-body">
+            <div class="info-note-bar"><span class="info-note-desc">{{ t('app.notification.keysAccess.apiCardDesc') }}</span></div>
+            <code class="access-endpoint">Authorization: Bearer &lt;JWT | lb_sk_…&gt;</code>
+          </div>
+        </el-card>
+      </el-col>
+      <el-col :span="12">
+        <el-card shadow="never" class="access-card">
+          <template #header>
+            <div class="card-header-row">
+              <span>{{ t('app.notification.keysAccess.mcpCardTitle') }}</span>
+              <el-button size="small" @click="mcpDocsVisible = true">
+                {{ t('common.app.views.keys.mcpDocs') }}
+              </el-button>
+            </div>
+          </template>
+          <div class="access-card-body">
+            <div class="info-note-bar"><span class="info-note-desc">{{ t('app.notification.keysAccess.mcpCardDesc') }}</span></div>
+            <code class="access-endpoint">{{ mcpServiceURL }}</code>
+          </div>
+        </el-card>
+      </el-col>
+    </el-row>
     <AccessStatsCards :api-key-stats="apiKeyStats" :mcp-stats="mcpStats" class="keys-mcp-block" />
     <McpSessionsCard class="keys-mcp-block" />
 
@@ -769,6 +805,18 @@ onMounted(() => {
 </script>
 
 <style scoped>
+/* API/MCP 接入卡（统一形态） */
+.access-card :deep(.el-card__body) { padding: 14px 16px; }
+.access-card-body { display: flex; flex-direction: column; gap: 10px; }
+.access-endpoint {
+  display: block;
+  padding: 8px 10px;
+  font-size: 12px;
+  word-break: break-all;
+  background: var(--el-fill-color-light);
+  border-radius: 6px;
+}
+.card-header-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .section-divider { margin: 24px 0 20px; }
 .section-divider :deep(.el-divider__text) { font-size: 14px; color: var(--text-secondary, #6b7280); font-weight: 600; }
 .switch-hint { margin-left: 10px; font-size: 12px; color: var(--text-secondary, #6b7280); }

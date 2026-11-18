@@ -1161,6 +1161,7 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 				// 微信 iLink 扫码登录（管理员凭据页）
 				admin.POST("/notification/wx/qr/start", noStoreResponse(), h.StartWxQRLogin)
 				admin.GET("/notification/wx/qr/status", h.GetWxQRStatus)
+				business.GET("/notification/wx/bind-state", h.GetWxBindState)
 				business.POST("/notification/qq/bind-code", h.PostQQBindCode)
 				business.GET("/notification/qq/bind-code", h.GetQQBindCode)
 				business.GET("/notification/daily", h.GetNotificationDaily)

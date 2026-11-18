@@ -126,7 +126,7 @@
         <el-form-item :label="t('app.notification.channels.name')">
           <el-input v-model="wizardForm.name" maxlength="100" :placeholder="t('app.notification.channels.namePlaceholder')" />
         </el-form-item>
-        <el-form-item :label="targetLabel(wizardForm.type)">
+        <el-form-item v-if="wizardForm.type === 'webhook' || wizardForm.type === 'email'" :label="targetLabel(wizardForm.type)">
           <el-input
             v-if="wizardForm.type === 'webhook'"
             v-model="wizardForm.targetValue"
@@ -137,12 +137,44 @@
             v-model="wizardForm.targetValue"
             :placeholder="t('app.notification.channels.targetEmailPlaceholder')"
           />
-          <el-input
-            v-else-if="wizardForm.type === 'wx_clawbot'"
-            v-model="wizardForm.targetValue"
-            :placeholder="t('app.notification.channels.targetWxPlaceholder')"
-          />
         </el-form-item>
+        <!-- 微信绑定闭环：①bot 未登录→（管理员）内嵌扫码登录二维码；②登录后
+             用户向机器人发送任意消息→后端捕获 sender 自动回填 receiver；
+             手工填 wxid 保留为兜底（高级） -->
+        <template v-if="wizardForm.type === 'wx_clawbot'">
+          <div class="info-note-bar"><span class="info-note-desc">{{ wxBindHint }}</span></div>
+          <div v-if="!wxBind.botReady" class="qq-bind-panel">
+            <template v-if="isAdminUser">
+              <img v-if="wxLogin.qrImg" class="qq-bind-qr" :src="wxLogin.qrImg" :alt="t('app.notification.creds.wxQrAlt')" />
+              <div class="qq-bind-steps">
+                <div>1. {{ t('app.notification.channels.wxBindScanLogin') }}</div>
+                <div>2. {{ t('app.notification.channels.wxBindConfirm') }}</div>
+              </div>
+              <el-button v-if="wxLogin.expired" size="small" @click="startWxLoginInWizard">{{ t('app.notification.creds.wxQrRefresh') }}</el-button>
+              <el-button v-else size="small" :loading="wxLogin.loading" @click="startWxLoginInWizard">
+                {{ t('app.notification.creds.wxScanLogin') }}
+              </el-button>
+            </template>
+            <div v-else class="qq-bind-steps">{{ t('app.notification.channels.wxBindNeedAdmin') }}</div>
+          </div>
+          <template v-else>
+            <div class="wx-capture-panel">
+              <el-tag v-if="!wizardForm.targetValue" type="warning" size="small" effect="plain">
+                {{ t('app.notification.channels.wxBindSendMessage') }}
+              </el-tag>
+              <el-tag v-else type="success" size="small" effect="plain">
+                {{ t('app.notification.channels.wxBindCaptured', { receiver: wizardForm.targetValue }) }}
+              </el-tag>
+            </div>
+            <el-form-item :label="t('app.notification.channels.targetWx')">
+              <el-input
+                v-model="wizardForm.targetValue"
+                :placeholder="t('app.notification.channels.targetWxPlaceholder')"
+              />
+            </el-form-item>
+            <div class="info-note-bar"><span class="info-note-desc">{{ t('app.notification.channels.wxBindManualHint') }}</span></div>
+          </template>
+        </template>
         <!-- QQ 扫码绑定闭环（官方插件协议）：生成二维码 → 手机 QQ 扫码授权 →
              轮询凭据自动落（openid 绑定通道，appid/secret 落 notify_settings） -->
         <template v-if="wizardForm.type === 'qq'">
@@ -226,7 +258,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, onMounted } from 'vue'
+import { computed, ref, watch, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ChatDotRound, ChatLineRound, Link, Message, Plus, Setting } from '@element-plus/icons-vue'
@@ -443,6 +475,109 @@ const canAdvance = computed(() => {
   return wizardForm.value.name.trim() !== '' && wizardForm.value.targetValue.trim() !== ''
 })
 
+// --- 微信绑定闭环（向导内） ---
+// bot 登录态+入站捕获轮询：bot_ready=false 时管理员可内嵌扫码登录；登录后
+// 用户向机器人发任意消息，bind-state 领取 receiver 自动回填（领取即清）。
+const isAdminUser = computed(() => authStore.user?.role === 'admin')
+
+const wxBind = ref<{ botReady: boolean; timer: number | null }>({ botReady: false, timer: null })
+const wxLogin = ref<{ qrImg: string; loading: boolean; expired: boolean; timer: number | null }>({
+  qrImg: '', loading: false, expired: false, timer: null,
+})
+
+const wxBindHint = computed(() =>
+  wxBind.value.botReady
+    ? t('app.notification.channels.wxBindHintReady')
+    : t('app.notification.channels.wxBindHintLogin')
+)
+
+// 向导打开/类型切换到 wx 时拉一次状态（轻端点，business 权限）
+const refreshWxBindState = async (): Promise<void> => {
+  try {
+    const res = await request.get<NotificationCreateChannelResponse & { data: { bot_ready: boolean; receiver: string } }>('/notification/wx/bind-state')
+    wxBind.value.botReady = res.data?.bot_ready === true
+    if (res.data?.receiver && !wizardForm.value.targetValue) {
+      wizardForm.value.targetValue = res.data.receiver
+    }
+  } catch {
+    wxBind.value.botReady = false
+  }
+}
+
+const startWxPolling = (): void => {
+  if (wxBind.value.timer !== null) return
+  const timer = window.setInterval(async () => {
+    await refreshWxBindState()
+    if (wizardForm.value.targetValue && wxBind.value.timer !== null) {
+      window.clearInterval(wxBind.value.timer)
+      wxBind.value.timer = null
+    }
+  }, 3000)
+  wxBind.value.timer = timer
+}
+
+const stopWxTimers = (): void => {
+  if (wxBind.value.timer !== null) {
+    window.clearInterval(wxBind.value.timer)
+    wxBind.value.timer = null
+  }
+  if (wxLogin.value.timer !== null) {
+    window.clearInterval(wxLogin.value.timer)
+    wxLogin.value.timer = null
+  }
+}
+
+// 管理员内嵌扫码登录（与凭据页同一对 admin 端点；二维码本地渲染）
+const startWxLoginInWizard = async (): Promise<void> => {
+  if (wxLogin.value.loading) return
+  wxLogin.value.loading = true
+  wxLogin.value.expired = false
+  try {
+    const res = await request.post<{ code: number; data?: { qr_content: string } }>('/notification/wx/qr/start', {})
+    const qrUrl = res.data?.qr_content ?? ''
+    wxLogin.value.qrImg = qrUrl ? await QRCode.toDataURL(qrUrl, { width: 180, margin: 1 }) : ''
+    if (wxLogin.value.timer !== null) window.clearInterval(wxLogin.value.timer)
+    const timer = window.setInterval(async () => {
+      try {
+        const st = await request.get<{ code: number; data?: { status: string; confirmed: boolean } }>('/notification/wx/qr/status')
+        if (st.data?.confirmed) {
+          wxLogin.value.qrImg = ''
+          wxLogin.value.expired = false
+          window.clearInterval(timer)
+          wxLogin.value.timer = null
+          wxBind.value.botReady = true
+          startWxPolling()
+        } else if (st.data?.status === 'expired') {
+          wxLogin.value.expired = true
+          window.clearInterval(timer)
+          wxLogin.value.timer = null
+        }
+      } catch {
+        // 轮询失败保持等待
+      }
+    }, 3000)
+    wxLogin.value.timer = timer
+  } catch (error: unknown) {
+    console.error('Failed to start wx login in wizard:', error)
+  } finally {
+    wxLogin.value.loading = false
+  }
+}
+
+// 向导开关/类型切换驱动 wx 状态拉取与定时器清理
+watch(
+  () => [wizardVisible.value, wizardStep.value, wizardForm.value.type] as const,
+  ([visible, step, typ]) => {
+    if (visible && step === 1 && typ === 'wx_clawbot') {
+      void refreshWxBindState().then(() => {
+        if (wxBind.value.botReady) startWxPolling()
+      })
+    } else if (!visible) {
+      stopWxTimers()
+    }
+  }
+)
+
 const buildTarget = (typ: NotificationChannelType, value: string): string =>
   JSON.stringify({ [targetField(typ)]: value.trim() })
 
@@ -565,6 +700,7 @@ defineExpose({ fetchChannels })
 .qq-bind-qr { width: 200px; height: 200px; border-radius: 8px; border: 1px solid var(--el-border-color); }
 .qq-bind-steps { color: var(--text-secondary, #6b7280); font-size: 13px; line-height: 1.9; text-align: left; }
 .qq-bind-openid { word-break: break-all; }
+.wx-capture-panel { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
 .channel-col { margin-bottom: 16px; }
 .channel-disabled { opacity: 0.72; }
 .channel-title-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }

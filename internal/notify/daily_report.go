@@ -119,8 +119,7 @@ func DeliverDailyForAll(now time.Time) (int, error) {
 		if err != nil {
 			continue
 		}
-		content := RenderDaily(data, cfg.Items, cfg.Format)
-		if err := deliverDaily(u, content, now); err != nil {
+		if err := deliverDaily(u, cfg, data, now); err != nil {
 			continue
 		}
 		rendered++
@@ -128,15 +127,36 @@ func DeliverDailyForAll(now time.Time) (int, error) {
 	return rendered, nil
 }
 
-// deliverDaily 日报直接落 pending 投递（content 为渲染后正文；事件键
-// sys.daily_report 仅作投递记录展示——不在事件目录）。
-func deliverDaily(userID int64, content string, now time.Time) error {
-	_, err := db.DB.Exec(`INSERT INTO notification_deliveries
+// deliverDaily 日报落 pending 投递：body 存**数据载荷 JSON**（非成品正文）
+// ——投递 Daemon 派发时按通道格式渲染（用户裁定「不同通道用不同样式」；
+// renderDailyForChannel 单源）。事件键 sys.daily_report 仅作投递记录展示
+// （不在事件目录）。
+func deliverDaily(userID int64, cfg DailyConfig, data DailyData, now time.Time) error {
+	values := dailyValues(data)
+	payload, err := json.Marshal(map[string]any{
+		"date": data.Date, "items": cfg.Items, "values": values,
+	})
+	if err != nil {
+		return err
+	}
+	_, err = db.DB.Exec(`INSERT INTO notification_deliveries
 		(user_id, event_type, level, title, body, status, attempts, created_at)
 		VALUES (?,?,?,?,?, 'pending', 0, ?)`,
-		userID, EvtDailyReport, LevelInfo, "每日日报", content,
+		userID, EvtDailyReport, LevelInfo, "每日日报", string(payload),
 		now.UTC().Format("2006-01-02 15:04:05"))
 	return err
+}
+
+// dailyValues 数据→值映射（渲染共用底座）。
+func dailyValues(data DailyData) map[string]string {
+	return map[string]string{
+		"requests":       fmt.Sprintf("%d", data.Requests),
+		"blocked":        fmt.Sprintf("%d", data.Blocked),
+		"attack_top":     data.TopRule,
+		"autoban":        fmt.Sprintf("%d", data.Autobans),
+		"cert_status":    fmt.Sprintf("活跃 %d / 失败 %d", data.CertsActive, data.CertsFailed),
+		"cluster_status": data.ClusterNote,
+	}
 }
 
 // AllDailySendTimes 全部启用日报的用户发送时间集（去重升序）——Scheduled
@@ -195,6 +215,38 @@ func CollectDailyData(ctx context.Context, now time.Time) (DailyData, error) {
 
 // RenderDaily 按格式渲染日报（items 裁剪；html 转义；text/markdown/json 纯文本）。
 func RenderDaily(data DailyData, items []string, format string) string {
+	return renderDailyFromValues(data.Date, dailyValues(data), items, format)
+}
+
+// renderDailyForChannel 投递派发时的按通道格式渲染（deliverOne 挂钩）：
+// body 为日报数据载荷 JSON→按通道映射格式渲染（webhook=JSON、email=HTML、
+// QQ/微信=markdown、未知=text）；非日报事件原样透传。
+func renderDailyForChannel(msg Message, channelType string) string {
+	if msg.EventType != EvtDailyReport {
+		return msg.Body
+	}
+	var payload struct {
+		Date   string            `json:"date"`
+		Items  []string          `json:"items"`
+		Values map[string]string `json:"values"`
+	}
+	if err := json.Unmarshal([]byte(msg.Body), &payload); err != nil || payload.Date == "" {
+		return msg.Body // 载荷解析失败回退原文（fail-visible，不静默吞）
+	}
+	format := "text"
+	switch channelType {
+	case "webhook":
+		format = "json"
+	case "email":
+		format = "html"
+	case "qq", "wx_clawbot":
+		format = "markdown"
+	}
+	return renderDailyFromValues(payload.Date, payload.Values, payload.Items, format)
+}
+
+// renderDailyFromValues 渲染底座（值映射→格式化文本；html 转义）。
+func renderDailyFromValues(date string, values map[string]string, items []string, format string) string {
 	enabled := map[string]bool{}
 	for _, it := range items {
 		enabled[it] = true
@@ -205,26 +257,10 @@ func RenderDaily(data DailyData, items []string, format string) string {
 		}
 		return id
 	}
-	val := func(id string) string {
-		switch id {
-		case "requests":
-			return fmt.Sprintf("%d", data.Requests)
-		case "blocked":
-			return fmt.Sprintf("%d", data.Blocked)
-		case "attack_top":
-			return data.TopRule
-		case "autoban":
-			return fmt.Sprintf("%d", data.Autobans)
-		case "cert_status":
-			return fmt.Sprintf("活跃 %d / 失败 %d", data.CertsActive, data.CertsFailed)
-		case "cluster_status":
-			return data.ClusterNote
-		}
-		return ""
-	}
+	val := func(id string) string { return values[id] }
 	switch format {
 	case "json":
-		obj := map[string]any{"date": data.Date}
+		obj := map[string]any{"date": date}
 		for _, it := range DailyItemIDs {
 			if enabled[it] {
 				obj[it] = val(it)
@@ -234,7 +270,7 @@ func RenderDaily(data DailyData, items []string, format string) string {
 		return string(raw)
 	case "html":
 		var b strings.Builder
-		fmt.Fprintf(&b, "<h3>Lazy Balancer 日报（%s）</h3><ul>", html.EscapeString(data.Date))
+		fmt.Fprintf(&b, "<h3>Lazy Balancer 日报（%s）</h3><ul>", html.EscapeString(date))
 		for _, it := range DailyItemIDs {
 			if !enabled[it] {
 				continue
@@ -245,7 +281,7 @@ func RenderDaily(data DailyData, items []string, format string) string {
 		return b.String()
 	case "markdown":
 		var b strings.Builder
-		fmt.Fprintf(&b, "## Lazy Balancer 日报（%s）\n\n", data.Date)
+		fmt.Fprintf(&b, "## Lazy Balancer 日报（%s）\n\n", date)
 		for _, it := range DailyItemIDs {
 			if !enabled[it] {
 				continue
@@ -255,7 +291,7 @@ func RenderDaily(data DailyData, items []string, format string) string {
 		return b.String()
 	default: // text（白名单兜底；纯文本行）
 		var b strings.Builder
-		fmt.Fprintf(&b, "Lazy Balancer 日报（%s）\n", data.Date)
+		fmt.Fprintf(&b, "Lazy Balancer 日报（%s）\n", date)
 		for _, it := range DailyItemIDs {
 			if !enabled[it] {
 				continue

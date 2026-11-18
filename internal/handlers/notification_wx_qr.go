@@ -45,3 +45,14 @@ func (h *Handlers) GetWxQRStatus(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"status": status, "confirmed": confirmed}})
 }
+
+// GetWxBindState GET /notification/wx/bind-state——通道向导微信分支判据：
+// bot 登录态 + 领取最近入站接收者（向导内「发送任意消息自动回填」闭环；
+// 领取即清，3 分钟内有效）。
+func (h *Handlers) GetWxBindState(c *gin.Context) {
+	const captureWindow = 3 * time.Minute
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{
+		"bot_ready": notify.WxBotLoggedIn(),
+		"receiver":  notify.WxTakePendingReceiver(captureWindow),
+	}})
+}
