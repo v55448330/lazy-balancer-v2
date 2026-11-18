@@ -558,6 +558,8 @@ func createTables() error {
 		event_type TEXT NOT NULL,
 		min_level TEXT NOT NULL DEFAULT 'info',
 		body_template TEXT NOT NULL DEFAULT '',
+		channel_ids TEXT NOT NULL DEFAULT '',
+		channel_templates TEXT NOT NULL DEFAULT '',
 		PRIMARY KEY (user_id, event_type)
 	);
 
@@ -576,6 +578,22 @@ func createTables() error {
 	);
 	CREATE INDEX IF NOT EXISTS idx_notification_deliveries_status ON notification_deliveries(status, id);
 	CREATE INDEX IF NOT EXISTS idx_notification_deliveries_user ON notification_deliveries(user_id, id);
+
+	-- 每通道投递结果（概览分布统计事实源）：deliverOne 逐通道发送后落行；
+	-- 主表 notification_deliveries 仍为每用户每事件一行（状态=任一通道成功）。
+	CREATE TABLE IF NOT EXISTS notification_delivery_channels (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		delivery_id INTEGER NOT NULL,
+		user_id INTEGER NOT NULL,
+		channel_id INTEGER NOT NULL,
+		channel_type TEXT NOT NULL,
+		event_type TEXT NOT NULL,
+		status TEXT NOT NULL DEFAULT 'sent',
+		error TEXT DEFAULT '',
+		created_at TEXT NOT NULL
+	);
+	CREATE INDEX IF NOT EXISTS idx_ndc_delivery ON notification_delivery_channels(delivery_id);
+	CREATE INDEX IF NOT EXISTS idx_ndc_user_created ON notification_delivery_channels(user_id, created_at);
 
 	-- 通知中心管理设置（KV）：notify.smtp_*（SMTP 发信）、notify.qq_appid/
 	-- notify.qq_secret、notify.mcp_enabled（'1'/'0'）、notify.attack_warn_at/
@@ -1278,6 +1296,8 @@ var newColumnsRegistry = map[string]string{
 	// apiKeyColumns/newLbColumns 局部 map 循环——DDL 与默认值逐字沿用原登记。
 	"notification_channels.style_config":       "TEXT NOT NULL DEFAULT " + "'" + "{}" + "'",
 	"notification_subscriptions.body_template": "TEXT NOT NULL DEFAULT ''",
+	"notification_subscriptions.channel_ids":       "TEXT NOT NULL DEFAULT ''",
+	"notification_subscriptions.channel_templates": "TEXT NOT NULL DEFAULT ''",
 	"users.display_name":                       "VARCHAR(100)",
 	"users.is_enabled":                         "BOOLEAN NOT NULL DEFAULT 1",
 	"users.is_setup_admin":                     "INTEGER NOT NULL DEFAULT 0",

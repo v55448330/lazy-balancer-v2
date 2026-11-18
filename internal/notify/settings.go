@@ -22,6 +22,7 @@ const (
 	KeyQQAppID          = "notify.qq_appid"
 	KeyQQSecret         = "notify.qq_secret"
 	KeyMCPEnabled       = "notify.mcp_enabled"
+	KeyAPIEnabled       = "notify.api_enabled" // REST API 密钥接入全局开关（与 MCP 对称；缺省启用）
 	KeyAttackWarnAt     = "notify.attack_warn_at"
 	KeyAttackCriticalAt = "notify.attack_critical_at"
 	KeyWxBotCred        = "notify.wx_bot_cred" // 微信扫码登录态（连接器域写入）
@@ -100,6 +101,14 @@ func toArgs(keys []string) []any {
 
 // MCPEnabled MCP 推送通道全局开关（notify.mcp_enabled，'1'=开）。
 func MCPEnabled() bool { return GetSetting(KeyMCPEnabled) == "1" }
+
+// APIEnabled REST API 密钥接入全局开关（notify.api_enabled，'1'=开；
+// 缺行/读失败按启用——与 MCPEnabled 同语义，停用只影响 API Key 认证的
+// REST 请求，JWT 面板会话不受影响）。
+func APIEnabled() bool {
+	v := GetSetting(KeyAPIEnabled)
+	return v == "" || v == "1"
+}
 
 // BlockedThresholds 拦截聚合升级阈值（滚动窗口累计 ≥warn→warn、
 // ≥critical→critical）。设置缺省/非法（非正数或 critical≤warn）回落内置

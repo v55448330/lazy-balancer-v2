@@ -147,3 +147,37 @@ func TestAdminNotificationOverview_userScopeAndTypeDist(t *testing.T) {
 		t.Fatalf("非管理员 overview status=%d, want 403", status)
 	}
 }
+
+func TestUpdateNotificationRule_adminWriteOwnership(t *testing.T) {
+	h := newBackupTestHandlers(t)
+	gid := certGroupID(t)
+	// 管理员（uid=1）在 user 7 视角保存：必须写 user 7，不得写管理员自己
+	rAdmin := newRulesTestRouter(h, 1, "admin")
+	status, out := doNotifyRequest(t, rAdmin, http.MethodPost, "/notification/rules/"+gid+"?user_id=7", `{"enabled":true,"channel_ids":[42]}`)
+	if status != http.StatusOK || out["code"].(float64) != 0 {
+		t.Fatalf("代管保存 status=%d body=%v", status, out)
+	}
+	var ids string
+	if err := db.DB.QueryRow(`SELECT channel_ids FROM notification_subscriptions WHERE user_id=7 AND event_type='cert.failed'`).Scan(&ids); err != nil {
+		t.Fatalf("user 7 订阅未落库: %v", err)
+	}
+	if ids != "[42]" {
+		t.Fatalf("user 7 channel_ids=%q, want [42]", ids)
+	}
+	var adminRows int
+	_ = db.DB.QueryRow(`SELECT COUNT(*) FROM notification_subscriptions WHERE user_id=1`).Scan(&adminRows)
+	if adminRows != 0 {
+		t.Fatalf("管理员名下订阅行数=%d, want 0（代管不得写自己）", adminRows)
+	}
+	// 非管理员带 user_id 参数：忽略，恒写本人
+	rUser := newRulesTestRouter(h, 9, "user")
+	status, out = doNotifyRequest(t, rUser, http.MethodPost, "/notification/rules/"+gid+"?user_id=7", `{"enabled":true}`)
+	if status != http.StatusOK || out["code"].(float64) != 0 {
+		t.Fatalf("非管理员保存 status=%d body=%v", status, out)
+	}
+	var ownRows int
+	_ = db.DB.QueryRow(`SELECT COUNT(*) FROM notification_subscriptions WHERE user_id=9 AND event_type='cert.failed'`).Scan(&ownRows)
+	if ownRows != 1 {
+		t.Fatalf("非管理员本人订阅行数=%d, want 1（user_id 参数不得越权）", ownRows)
+	}
+}

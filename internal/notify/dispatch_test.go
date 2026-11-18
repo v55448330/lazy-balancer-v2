@@ -69,6 +69,7 @@ CREATE TABLE notification_channels (
 	type TEXT NOT NULL,
 	name TEXT NOT NULL DEFAULT '',
 	target TEXT NOT NULL DEFAULT '',
+	style_config TEXT NOT NULL DEFAULT '{}',
 	enabled INTEGER NOT NULL DEFAULT 1,
 	UNIQUE(user_id, type, target)
 );
@@ -76,6 +77,9 @@ CREATE TABLE notification_subscriptions (
 	user_id INTEGER NOT NULL,
 	event_type TEXT NOT NULL,
 	min_level TEXT NOT NULL DEFAULT 'info',
+	body_template TEXT NOT NULL DEFAULT '',
+	channel_ids TEXT NOT NULL DEFAULT '',
+	channel_templates TEXT NOT NULL DEFAULT '',
 	PRIMARY KEY (user_id, event_type)
 );
 CREATE TABLE notification_deliveries (
@@ -90,6 +94,17 @@ CREATE TABLE notification_deliveries (
 	error TEXT DEFAULT '',
 	created_at TEXT NOT NULL,
 	sent_at DATETIME
+);
+CREATE TABLE notification_delivery_channels (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	delivery_id INTEGER NOT NULL,
+	user_id INTEGER NOT NULL,
+	channel_id INTEGER NOT NULL,
+	channel_type TEXT NOT NULL,
+	event_type TEXT NOT NULL,
+	status TEXT NOT NULL DEFAULT 'sent',
+	error TEXT DEFAULT '',
+	created_at TEXT NOT NULL
 );`)
 	if err != nil {
 		t.Fatal(err)

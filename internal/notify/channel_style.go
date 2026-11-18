@@ -47,7 +47,7 @@ func MergeStyleIntoTarget(targetJSON, styleJSON string) string {
 	if err := json.Unmarshal([]byte(styleJSON), &style); err != nil || style == nil {
 		return targetJSON
 	}
-	for _, k := range []string{"payload_template", "subject_template", "body_template", "msg_type", "daily_format"} {
+	for _, k := range []string{"payload_template", "subject_template", "body_template", "body_format", "content_template", "msg_type", "daily_format", "method", "headers"} {
 		if v, ok := style[k]; ok {
 			if _, exists := target[k]; !exists {
 				target[k] = v

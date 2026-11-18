@@ -28,6 +28,7 @@ import (
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/handlers"
 	"lazy-balancer-v2/internal/mcpserver"
+	"lazy-balancer-v2/internal/notify"
 	"lazy-balancer-v2/internal/services"
 
 	"github.com/gin-gonic/gin"
@@ -1168,6 +1169,7 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 				business.GET("/notification/qq/bind-code", h.GetQQBindCode)
 				admin.GET("/notification/admin/overview", h.GetAdminNotificationOverview)
 				business.GET("/notification/delivery-trend", h.GetDeliveryTrend)
+				business.GET("/notification/delivery-stats", noStoreResponse(), h.GetDeliveryStats)
 				business.GET("/notification/rules", h.GetNotificationRules)
 				business.POST("/notification/rules/:id", noStoreResponse(), h.UpdateNotificationRule)
 				business.GET("/notification/daily/targets", h.GetDailyTargets)
@@ -1650,6 +1652,14 @@ func apiKeyAuth(database *sql.DB) gin.HandlerFunc {
 		c.Set("api_key_name", keyName)
 		c.Set("api_key_mcp_enabled", mcpEnabled)
 		c.Set("api_key_read_only", readOnly)
+
+		// REST API 全局开关（与 MCP 全局开关对称）：停用时 API Key 认证的
+		// REST 请求 503；/mcp 路径不受影响（其开关=mcpGlobalSwitchGuard），
+		// JWT 面板会话不经本分支。内部回环（MCP 工具转发）豁免。
+		if !strings.HasPrefix(c.FullPath(), "/api/v1/mcp") && !trustedInternalMCP && !notify.APIEnabled() {
+			c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{"code": http.StatusServiceUnavailable, "message": "REST API 接入已全局停用"})
+			return
+		}
 
 		// REST 调用采集（API 接入页接入统计 REST 列数据源；MCP 路径
 		// 排除——已有专属统计；JWT-only 请求不计入，与「密钥资产」口径一致）。

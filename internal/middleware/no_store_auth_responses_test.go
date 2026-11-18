@@ -58,6 +58,7 @@ func TestAuthenticationResponsesAreNotStored(t *testing.T) {
 		{name: "notification subscriptions", method: http.MethodGet, path: "/api/v1/notification/subscriptions", withToken: true, wantStatus: []int{http.StatusOK}},
 		{name: "notification subscriptions update", method: http.MethodPut, path: "/api/v1/notification/subscriptions", body: `{"items":[]}`, withToken: true},
 		{name: "notification deliveries", method: http.MethodGet, path: "/api/v1/notification/deliveries", withToken: true, wantStatus: []int{http.StatusOK}},
+		{name: "notification delivery stats", method: http.MethodGet, path: "/api/v1/notification/delivery-stats", withToken: true, wantStatus: []int{http.StatusOK}},
 		{name: "notification deliveries resend", method: http.MethodPost, path: "/api/v1/notification/deliveries/999999/resend", registration: "/api/v1/notification/deliveries/:id/resend", withToken: true},
 		{name: "notification channels", method: http.MethodGet, path: "/api/v1/notification/channels", withToken: true, wantStatus: []int{http.StatusOK}},
 		{name: "notification channels create", method: http.MethodPost, path: "/api/v1/notification/channels", body: `{}`, withToken: true},

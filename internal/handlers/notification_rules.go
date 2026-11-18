@@ -10,6 +10,7 @@ package handlers
 // 底层存储不变——聚合视图在读取时 JOIN，写入时拆解回原表。
 
 import (
+	"encoding/json"
 	"net/http"
 	"sort"
 	"strconv"
@@ -25,18 +26,21 @@ import (
 
 // NotificationRule 聚合规则视图（前端消费的唯一形态）。
 type NotificationRule struct {
-	ID           string            `json:"id"`            // 规则标识（event:<type> 或 daily）
-	Trigger      string            `json:"trigger"`       // event | daily
-	Title        string            `json:"title"`         // 显示名
-	Events       []string          `json:"events"`        // 事件类型列表（event 规则）
-	MinLevel     string            `json:"min_level"`     // 最低级别
-	SendTime     string            `json:"send_time"`     // 日报投递时间
-	Items        []string          `json:"items"`         // 日报包含项目
-	Formats      map[string]string `json:"formats"`       // 日报 per-channel 格式
-	Channels     []RuleChannel     `json:"channels"`      // 接收通道
-	BodyTemplate string            `json:"body_template"` // 事件级消息模板
-	Enabled      bool              `json:"enabled"`
-	Subscribed   bool              `json:"subscribed"` // 事件是否已订阅
+	ID               string            `json:"id"`                // 规则标识（group:<组> 或 daily）
+	Trigger          string            `json:"trigger"`           // event | daily
+	Title            string            `json:"title"`             // 显示名
+	Events           []string          `json:"events"`            // 事件类型列表（event 规则）
+	EventTitles      map[string]string `json:"event_titles"`      // 事件 ID → 用户可读标题（禁止裸键展示）
+	MinLevel         string            `json:"min_level"`         // 最低级别
+	SendTime         string            `json:"send_time"`         // 日报投递时间
+	Items            []string          `json:"items"`             // 日报包含项目
+	Formats          map[string]string `json:"formats"`           // 日报 per-channel 格式
+	Channels         []RuleChannel     `json:"channels"`          // 接收通道（订阅选定；空选择=全部启用通道）
+	ChannelIDs       []int64           `json:"channel_ids"`       // 显式选定的通道 ID（空=全部）
+	ChannelTemplates map[string]string `json:"channel_templates"` // 通道 ID → 事件×通道模板
+	BodyTemplate     string            `json:"body_template"`     // 事件级消息模板
+	Enabled          bool              `json:"enabled"`
+	Subscribed       bool              `json:"subscribed"` // 事件是否已订阅
 }
 
 // RuleChannel 规则关联的通道摘要。
@@ -78,14 +82,17 @@ func (h *Handlers) GetNotificationRules(c *gin.Context) {
 
 	// 2. 事件目录 → 事件规则
 	catalog := notify.CatalogExport()
-	subRows, err := db.DB.Query(`SELECT event_type, COALESCE(min_level,''), COALESCE(body_template,'')
+	subRows, err := db.DB.Query(`SELECT event_type, COALESCE(min_level,''), COALESCE(body_template,''),
+		COALESCE(channel_ids,''), COALESCE(channel_templates,'')
 		FROM notification_subscriptions WHERE user_id=?`, uid)
-	subsByEvent := map[string][2]string{} // event → {min_level, body_template}
+	type subState struct{ level, tpl, ids, tpls string }
+	subsByEvent := map[string]subState{}
 	if err == nil {
 		for subRows.Next() {
-			var ev, ml, bt string
-			if subRows.Scan(&ev, &ml, &bt) == nil {
-				subsByEvent[ev] = [2]string{ml, bt}
+			var ev string
+			var s subState
+			if subRows.Scan(&ev, &s.level, &s.tpl, &s.ids, &s.tpls) == nil {
+				subsByEvent[ev] = s
 			}
 		}
 		subRows.Close()
@@ -98,22 +105,50 @@ func (h *Handlers) GetNotificationRules(c *gin.Context) {
 	}
 	for group, entries := range groupMap {
 		rule := NotificationRule{
-			ID:       "group:" + group,
-			Trigger:  "event",
-			Title:    group,
-			Channels: allChannels, // 当前模型：订阅后发到全部启用通道
-			Enabled:  true,
+			ID:          "group:" + group,
+			Trigger:     "event",
+			Title:       group,
+			EventTitles: map[string]string{},
+			Enabled:     true,
 		}
 		hasSub := false
 		for _, e := range entries {
 			rule.Events = append(rule.Events, e.ID)
+			rule.EventTitles[e.ID] = e.Title
 			if sub, ok := subsByEvent[e.ID]; ok {
 				hasSub = true
-				rule.MinLevel = sub[0]
-				if sub[1] != "" {
-					rule.BodyTemplate = sub[1]
+				rule.MinLevel = sub.level
+				if sub.tpl != "" {
+					rule.BodyTemplate = sub.tpl
+				}
+				// 通道选择/每通道模板：组内取首个非空配置（组级 UI 单一口径）
+				if len(rule.ChannelIDs) == 0 && sub.ids != "" {
+					var ids []int64
+					if json.Unmarshal([]byte(sub.ids), &ids) == nil {
+						rule.ChannelIDs = ids
+					}
+				}
+				if len(rule.ChannelTemplates) == 0 && sub.tpls != "" {
+					var m map[string]string
+					if json.Unmarshal([]byte(sub.tpls), &m) == nil {
+						rule.ChannelTemplates = m
+					}
 				}
 			}
+		}
+		// 接收通道=选定通道（空选择=全部启用通道）
+		if len(rule.ChannelIDs) > 0 {
+			idSet := map[int64]bool{}
+			for _, id := range rule.ChannelIDs {
+				idSet[id] = true
+			}
+			for _, ch := range allChannels {
+				if idSet[ch.ID] {
+					rule.Channels = append(rule.Channels, ch)
+				}
+			}
+		} else {
+			rule.Channels = allChannels
 		}
 		rule.Subscribed = hasSub
 		if !hasSub {
@@ -159,15 +194,27 @@ func (h *Handlers) GetNotificationRules(c *gin.Context) {
 // 模板保存不得误启用已停用规则、级别调整不得清空模板。
 func (h *Handlers) UpdateNotificationRule(c *gin.Context) {
 	uid := contextUserID(c)
+	// 管理员代管他人配置：?user_id=X 时写回该用户（与 GET 视角同口径；
+	// 非管理员忽略该参数恒本人）。此前写侧恒 contextUserID——管理员在
+	// 他人视角保存会静默写到自己名下（浏览器实测抓出的归属缺陷）。
+	if isAdminRequest(c) {
+		if q := c.Query("user_id"); q != "" {
+			if v, err := strconv.ParseInt(q, 10, 64); err == nil && v > 0 {
+				uid = v
+			}
+		}
+	}
 	ruleID := c.Param("id")
 
 	var req struct {
-		Enabled      *bool             `json:"enabled"`
-		MinLevel     *string           `json:"min_level"`
-		BodyTemplate *string           `json:"body_template"`
-		SendTime     string            `json:"send_time"`
-		Items        []string          `json:"items"`
-		Formats      map[string]string `json:"formats"`
+		Enabled          *bool             `json:"enabled"`
+		MinLevel         *string           `json:"min_level"`
+		BodyTemplate     *string           `json:"body_template"`
+		ChannelIDs       *[]int64          `json:"channel_ids"`       // 显式通道选择（空数组=全部启用通道）
+		ChannelTemplates map[string]string `json:"channel_templates"` // 通道 ID → 事件×通道模板
+		SendTime         string            `json:"send_time"`
+		Items            []string          `json:"items"`
+		Formats          map[string]string `json:"formats"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
@@ -223,13 +270,14 @@ func (h *Handlers) UpdateNotificationRule(c *gin.Context) {
 				continue
 			}
 			// 部分更新：先读既有行，缺省键沿用现值；无行且未显式启用=不动。
-			var curLevel, curTpl string
-			err := db.DB.QueryRow(`SELECT COALESCE(min_level,''), COALESCE(body_template,'') FROM notification_subscriptions WHERE user_id=? AND event_type=?`, uid, ev).Scan(&curLevel, &curTpl)
+			var curLevel, curTpl, curIDs, curTpls string
+			err := db.DB.QueryRow(`SELECT COALESCE(min_level,''), COALESCE(body_template,''),
+				COALESCE(channel_ids,''), COALESCE(channel_templates,'') FROM notification_subscriptions WHERE user_id=? AND event_type=?`, uid, ev).Scan(&curLevel, &curTpl, &curIDs, &curTpls)
 			if err != nil {
 				if req.Enabled == nil || !*req.Enabled {
 					continue // 未订阅且未要求启用：不建行
 				}
-				curLevel, curTpl = "info", ""
+				curLevel, curTpl, curIDs, curTpls = "info", "", "", ""
 			}
 			if req.MinLevel != nil {
 				curLevel = *req.MinLevel
@@ -237,10 +285,33 @@ func (h *Handlers) UpdateNotificationRule(c *gin.Context) {
 			if req.BodyTemplate != nil {
 				curTpl = *req.BodyTemplate
 			}
-			if _, err := db.DB.Exec(`INSERT INTO notification_subscriptions (user_id, event_type, min_level, body_template)
-				VALUES (?,?,?,?)
-				ON CONFLICT(user_id, event_type) DO UPDATE SET min_level=excluded.min_level, body_template=excluded.body_template`,
-				uid, ev, curLevel, curTpl); err != nil {
+			if req.ChannelIDs != nil {
+				b, _ := json.Marshal(*req.ChannelIDs)
+				curIDs = string(b)
+				if len(*req.ChannelIDs) == 0 {
+					curIDs = "" // 空选择=全部启用通道（存储归一）
+				}
+			}
+			if req.ChannelTemplates != nil {
+				// 剔除空值键后整体覆盖（所见即所存）
+				clean := map[string]string{}
+				for k, v := range req.ChannelTemplates {
+					if v != "" {
+						clean[k] = v
+					}
+				}
+				if len(clean) > 0 {
+					b, _ := json.Marshal(clean)
+					curTpls = string(b)
+				} else {
+					curTpls = ""
+				}
+			}
+			if _, err := db.DB.Exec(`INSERT INTO notification_subscriptions (user_id, event_type, min_level, body_template, channel_ids, channel_templates)
+				VALUES (?,?,?,?,?,?)
+				ON CONFLICT(user_id, event_type) DO UPDATE SET min_level=excluded.min_level, body_template=excluded.body_template,
+				channel_ids=excluded.channel_ids, channel_templates=excluded.channel_templates`,
+				uid, ev, curLevel, curTpl, curIDs, curTpls); err != nil {
 				c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("保存订阅失败", err)})
 				return
 			}
@@ -374,4 +445,106 @@ func (h *Handlers) GetDeliveryTrend(c *gin.Context) {
 		out = append(out, dayStat{Date: day, Total: total, Sent: sent, Rate: rate})
 	}
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"trend": out}})
+}
+
+// GetDeliveryStats GET /notification/delivery-stats——投递分布统计（概览图表数据源）。
+// 口径：notification_delivery_channels 每通道结果行（7 天窗口）。管理员=全平台
+// （概览不区分用户），普通用户=本人。返回：
+//   - by_channel：每通道投递量+成功率（通道名 JOIN，已删通道以「通道 #id」兜底）
+//   - by_type：每通道类型投递量+成功率
+//   - by_event：每事件类型投递量（TOP 10，标题经目录映射）
+func (h *Handlers) GetDeliveryStats(c *gin.Context) {
+	scope, args := "", []any{}
+	if !isAdminRequest(c) {
+		scope = " WHERE user_id=?"
+		args = append(args, contextUserID(c))
+	}
+	window := "created_at >= datetime('now', '-7 days')"
+	where := window
+	if scope != "" {
+		where = window + " AND user_id=?"
+	}
+
+	type chanStat struct {
+		ChannelID int64   `json:"channel_id"`
+		Name      string  `json:"name"`
+		Type      string  `json:"type"`
+		Total     int     `json:"total"`
+		Sent      int     `json:"sent"`
+		Rate      float64 `json:"rate"`
+	}
+	byChannel := make([]chanStat, 0)
+	q := `SELECT channel_id, channel_type, COUNT(*), SUM(CASE WHEN status='sent' THEN 1 ELSE 0 END)
+		FROM notification_delivery_channels WHERE ` + where + ` GROUP BY channel_id, channel_type ORDER BY COUNT(*) DESC`
+	if rows, err := db.DB.Query(q, args...); err == nil {
+		for rows.Next() {
+			var s chanStat
+			if rows.Scan(&s.ChannelID, &s.Type, &s.Total, &s.Sent) == nil {
+				if s.Total > 0 {
+					s.Rate = float64(s.Sent) / float64(s.Total)
+				}
+				s.Name = "通道 #" + strconv.FormatInt(s.ChannelID, 10)
+				var name string
+				if db.DB.QueryRow(`SELECT name FROM notification_channels WHERE id=?`, s.ChannelID).Scan(&name) == nil {
+					s.Name = name
+				}
+				byChannel = append(byChannel, s)
+			}
+		}
+		rows.Close()
+	}
+
+	type typeStat struct {
+		Type  string  `json:"type"`
+		Total int     `json:"total"`
+		Sent  int     `json:"sent"`
+		Rate  float64 `json:"rate"`
+	}
+	byType := make([]typeStat, 0, 4)
+	q = `SELECT channel_type, COUNT(*), SUM(CASE WHEN status='sent' THEN 1 ELSE 0 END)
+		FROM notification_delivery_channels WHERE ` + where + ` GROUP BY channel_type ORDER BY COUNT(*) DESC`
+	if rows, err := db.DB.Query(q, args...); err == nil {
+		for rows.Next() {
+			var s typeStat
+			if rows.Scan(&s.Type, &s.Total, &s.Sent) == nil {
+				if s.Total > 0 {
+					s.Rate = float64(s.Sent) / float64(s.Total)
+				}
+				byType = append(byType, s)
+			}
+		}
+		rows.Close()
+	}
+
+	type eventStat struct {
+		EventType string `json:"event_type"`
+		Title     string `json:"title"`
+		Total     int    `json:"total"`
+	}
+	byEvent := make([]eventStat, 0, 10)
+	titles := map[string]string{}
+	for _, e := range notify.CatalogExport() {
+		titles[e.ID] = e.Title
+	}
+	q = `SELECT event_type, COUNT(*) FROM notification_delivery_channels WHERE ` + where +
+		` GROUP BY event_type ORDER BY COUNT(*) DESC LIMIT 10`
+	if rows, err := db.DB.Query(q, args...); err == nil {
+		for rows.Next() {
+			var s eventStat
+			if rows.Scan(&s.EventType, &s.Total) == nil {
+				s.Title = s.EventType
+				if t, ok := titles[s.EventType]; ok {
+					s.Title = t
+				}
+				byEvent = append(byEvent, s)
+			}
+		}
+		rows.Close()
+	}
+
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{
+		"by_channel": byChannel,
+		"by_type":    byType,
+		"by_event":   byEvent,
+	}})
 }

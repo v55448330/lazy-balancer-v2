@@ -44,6 +44,7 @@ func (h *Handlers) GetNotificationSettings(c *gin.Context) {
 		// QQ/微信凭据不回显（单源=扫码绑定自动落库；bot 登录态经
 		// /notification/wx/bind-state 供通道向导查询）
 		"mcp_enabled":        notify.MCPEnabled(),
+		"api_enabled":        notify.APIEnabled(),
 		"attack_warn_at":     warnAt,
 		"attack_critical_at": criticalAt,
 	}})
@@ -67,6 +68,7 @@ func (h *Handlers) UpdateNotificationSettings(c *gin.Context) {
 		// QQ 凭据不走本端点：扫码绑定完成时自动落库（凭据单源，手工覆盖
 		// 入口已删——避免与扫码态互相踩踏）。
 		MCPEnabled       *bool `json:"mcp_enabled"`
+		APIEnabled       *bool `json:"api_enabled"`
 		AttackWarnAt     *int  `json:"attack_warn_at"`
 		AttackCriticalAt *int  `json:"attack_critical_at"`
 	}
@@ -103,6 +105,14 @@ func (h *Handlers) UpdateNotificationSettings(c *gin.Context) {
 		}
 		updates[notify.KeyMCPEnabled] = v
 		changed = append(changed, notify.KeyMCPEnabled)
+	}
+	if req.APIEnabled != nil {
+		v := "0"
+		if *req.APIEnabled {
+			v = "1"
+		}
+		updates[notify.KeyAPIEnabled] = v
+		changed = append(changed, notify.KeyAPIEnabled)
 	}
 	// 阈值：以生效值合并请求值后整体校验（0<warn<critical）。
 	warnAt, criticalAt := notify.BlockedThresholds()

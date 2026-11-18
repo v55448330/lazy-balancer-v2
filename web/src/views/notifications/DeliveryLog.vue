@@ -195,6 +195,7 @@ defineExpose({ fetchDeliveries })
 </script>
 
 <style scoped>
+.el-card { --el-card-border-color: #ebeef5; }
 .card-header { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; row-gap: 8px; }
 .card-header-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .card-title { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; color: #111827; }

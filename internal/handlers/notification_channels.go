@@ -19,6 +19,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"lazy-balancer-v2/internal/accesslog"
 	"lazy-balancer-v2/internal/apimsg"
 	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
@@ -339,8 +340,9 @@ func (h *Handlers) TestNotificationChannel(c *gin.Context) {
 // validateChannelStyle 通道消息样式校验+归一（返回规范化 JSON）：
 //
 //	键白名单 payload_template/subject_template/body_template/content_template/
-//	msg_type/daily_format/body_format
+//	msg_type/daily_format/body_format/method/headers
 //	webhook.payload_template：{{占位符}}替换后必须可解析 JSON
+//	webhook.method ∈ GET/POST；headers 键白名单（认证/内容类型类，禁 Host/Cookie 等）
 //	qq.msg_type ∈ text/markdown；*.daily_format ∈ 格式白名单；email 键值白名单
 func validateChannelStyle(typ string, raw json.RawMessage) (string, error) {
 	var m map[string]any
@@ -410,6 +412,46 @@ func validateChannelStyle(typ string, raw json.RawMessage) (string, error) {
 				return "", errors.New("daily_format 仅支持 text/markdown/html/json")
 			}
 			out[k] = sv
+		case "method":
+			if typ != "webhook" {
+				return "", errors.New("method 仅 webhook 通道支持")
+			}
+			if sv != "" && sv != "GET" && sv != "POST" {
+				return "", errors.New("method 仅支持 GET/POST")
+			}
+			if sv != "" {
+				out[k] = sv
+			}
+		case "headers":
+			if typ != "webhook" {
+				return "", errors.New("headers 仅 webhook 通道支持")
+			}
+			hm, ok := v.(map[string]any)
+			if !ok {
+				return "", errors.New("headers 必须是键值对象")
+			}
+			if len(hm) > 8 {
+				return "", errors.New("headers 最多 8 个")
+			}
+			clean := map[string]string{}
+			for hk, hv := range hm {
+				if !webhookHeaderAllowed(hk) {
+					return "", fmt.Errorf("header 不在允许列表: %s（支持 Authorization/%s/Content-Type/Accept/User-Agent/X-* 自定义）", hk, accesslog.APIKeyHeaderName)
+				}
+				hvStr, _ := hv.(string)
+				if len(hvStr) > 500 {
+					return "", fmt.Errorf("header %s 值过长（≤500）", hk)
+				}
+				if strings.ContainsAny(hvStr, "\r\n") {
+					return "", fmt.Errorf("header %s 值含非法换行", hk)
+				}
+				if hvStr != "" {
+					clean[hk] = hvStr
+				}
+			}
+			if len(clean) > 0 {
+				out[k] = clean
+			}
 		default:
 			return "", fmt.Errorf("未知消息样式键: %s", k)
 		}
@@ -419,4 +461,15 @@ func validateChannelStyle(typ string, raw json.RawMessage) (string, error) {
 		return "", err
 	}
 	return string(b), nil
+}
+
+// webhookHeaderAllowed 自定义头白名单：认证/内容协商类 + X- 前缀自定义。
+// 禁 Host/Cookie/Set-Cookie/Transfer-Encoding 等可致请求走私或会话泄漏的头。
+func webhookHeaderAllowed(name string) bool {
+	lower := strings.ToLower(name)
+	switch lower {
+	case "authorization", "x-api-key", "content-type", "accept", "user-agent", "cache-control":
+		return true
+	}
+	return strings.HasPrefix(lower, "x-") && len(name) <= 64
 }

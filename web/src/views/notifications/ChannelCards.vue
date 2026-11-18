@@ -109,8 +109,26 @@
         <div class="style-section-title">{{ t('app.notification.channels.styleSection') }}</div>
         <el-form :label-width="$flw('110px')" :disabled="saving">
           <template v-if="drawerForm.type === 'webhook'">
+            <el-form-item :label="t('app.notification.channels.styleMethod')">
+              <el-radio-group v-model="styleForm.method" size="small">
+                <el-radio-button value="POST">POST</el-radio-button>
+                <el-radio-button value="GET">GET</el-radio-button>
+              </el-radio-group>
+              <div class="form-hint">{{ t('app.notification.channels.styleMethodHint') }}</div>
+            </el-form-item>
             <el-form-item :label="t('app.notification.channels.stylePayloadTpl')">
               <el-input v-model="styleForm.payload_template" type="textarea" :rows="4" :placeholder="t('app.notification.channels.stylePayloadPlaceholder')" />
+            </el-form-item>
+            <el-form-item :label="t('app.notification.channels.styleHeaders')">
+              <div class="header-rows">
+                <div v-for="(row, i) in headerRows" :key="i" class="header-row">
+                  <el-input v-model="row.name" size="small" :placeholder="t('app.notification.channels.styleHeaderName')" class="header-name" />
+                  <el-input v-model="row.value" size="small" :placeholder="t('app.notification.channels.styleHeaderValue')" class="header-value" />
+                  <el-button size="small" link type="danger" @click="removeHeaderRow(i)">{{ t('app.notification.channels.delete') }}</el-button>
+                </div>
+                <el-button size="small" link type="primary" :disabled="headerRows.length >= 8" @click="addHeaderRow">+ {{ t('app.notification.channels.styleHeaderAdd') }}</el-button>
+                <div class="form-hint">{{ t('app.notification.channels.styleHeadersHint') }}</div>
+              </div>
             </el-form-item>
           </template>
           <template v-else-if="drawerForm.type === 'email'">
@@ -273,20 +291,32 @@ const saving = ref(false)
 const canSave = computed(() => drawerForm.value.name.trim() !== '' && drawerForm.value.targetValue.trim() !== '')
 
 // 消息样式表单（键白名单=后端 validateChannelStyle；空串键提交时剔除）
-const STYLE_PH = ['{{title}}', '{{body}}', '{{level}}', '{{time}}']
-const emptyStyle = () => ({ payload_template: '', subject_template: '', body_template: '', content_template: '', msg_type: 'text', body_format: 'text', daily_format: '' })
+const STYLE_PH = ['{{title}}', '{{body}}', '{{level}}', '{{time}}', '{{event}}', '{{node}}']
+interface HeaderRow { name: string; value: string }
+const emptyStyle = () => ({ payload_template: '', subject_template: '', body_template: '', content_template: '', msg_type: 'text', body_format: 'text', daily_format: '', method: 'POST' })
 const styleForm = ref(emptyStyle())
+const headerRows = ref<HeaderRow[]>([])
+const addHeaderRow = (): void => { if (headerRows.value.length < 8) headerRows.value.push({ name: '', value: '' }) }
+const removeHeaderRow = (i: number): void => { headerRows.value.splice(i, 1) }
 const appendStylePh = (ph: string): void => {
   const typ = drawerForm.value.type
   if (typ === 'webhook') styleForm.value.payload_template += ph
   else if (typ === 'email') styleForm.value.body_template += ph
   else styleForm.value.content_template += ph
 }
-const buildStyleConfig = (): Record<string, string> => {
+const buildStyleConfig = (): Record<string, unknown> => {
   const s = styleForm.value
-  const out: Record<string, string> = {}
+  const out: Record<string, unknown> = {}
   const typ = drawerForm.value.type
-  if (typ === 'webhook' && s.payload_template.trim()) out.payload_template = s.payload_template
+  if (typ === 'webhook') {
+    if (s.payload_template.trim()) out.payload_template = s.payload_template
+    if (s.method === 'GET') out.method = 'GET'
+    const headers: Record<string, string> = {}
+    for (const row of headerRows.value) {
+      if (row.name.trim() && row.value.trim()) headers[row.name.trim()] = row.value.trim()
+    }
+    if (Object.keys(headers).length) out.headers = headers
+  }
   if (typ === 'email') {
     if (s.subject_template.trim()) out.subject_template = s.subject_template
     if (s.body_template.trim()) out.body_template = s.body_template
@@ -373,6 +403,7 @@ const resetDrawer = (): void => {
   bindQrImg.value = ''
   drawerForm.value = { type: 'webhook', name: '', targetValue: '' }
   styleForm.value = emptyStyle()
+  headerRows.value = []
   editTarget.value = null
 }
 
@@ -386,13 +417,20 @@ const openEdit = (ch: NotificationChannel): void => {
   drawerForm.value = { type: ch.type, name: ch.name, targetValue: parseTargetValue(ch) }
   // 回填既有样式（style_config JSON → 表单；缺省键=默认形态）
   const s = emptyStyle()
+  const rows: HeaderRow[] = []
   try {
-    const parsed = JSON.parse(ch.style_config || '{}') as Record<string, string>
+    const parsed = JSON.parse(ch.style_config || '{}') as Record<string, unknown>
     for (const k of Object.keys(s) as (keyof typeof s)[]) {
-      if (typeof parsed[k] === 'string') s[k] = parsed[k]
+      if (typeof parsed[k] === 'string') s[k] = parsed[k] as string
+    }
+    if (parsed.headers && typeof parsed.headers === 'object') {
+      for (const [hk, hv] of Object.entries(parsed.headers as Record<string, unknown>)) {
+        if (typeof hv === 'string') rows.push({ name: hk, value: hv })
+      }
     }
   } catch { /* 坏 JSON 按默认形态 */ }
   styleForm.value = s
+  headerRows.value = rows
   drawerVisible.value = true
 }
 
@@ -447,6 +485,7 @@ defineExpose({ fetchChannels })
 </script>
 
 <style scoped>
+.el-card { --el-card-border-color: #ebeef5; }
 .ch-toolbar { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
 .toolbar-spacer { flex: 1; }
 .ch-col { margin-bottom: 16px; }
@@ -499,4 +538,8 @@ defineExpose({ fetchChannels })
 .ph-row { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 6px; }
 .ph-tag { cursor: pointer; user-select: none; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .form-hint { font-size: 12px; color: #6b7280; margin-top: 4px; line-height: 1.5; }
+.header-rows { width: 100%; display: flex; flex-direction: column; gap: 6px; }
+.header-row { display: flex; gap: 8px; align-items: center; }
+.header-name { width: 200px; flex: none; }
+.header-value { flex: 1; }
 </style>

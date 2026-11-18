@@ -74,15 +74,26 @@ test('通道卡 REST 契约：卡片网格+测试/启停/删除+样式编辑', (
 })
 
 
-test('规则表格部分更新契约：模板保存不改启用态，级别/时间只写变更键', () => {
+test('规则编辑契约：通道选择+每通道模板部分更新，不改启用态；事件可读标题', () => {
   const text = code('src/views/notifications/NotificationCenter.vue')
   const tplBlock = text.slice(text.indexOf('const saveTemplate'), text.indexOf('const testRule'))
-  assert.match(tplBlock, /\{ body_template: tplText\.value \}/, '模板保存只提交 body_template（部分更新）')
+  assert.match(tplBlock, /channel_ids: tplSelectedChannels\.value/, '保存必须提交通道选择')
+  assert.match(tplBlock, /channel_templates: tpls/, '保存必须提交每通道模板')
   assert.doesNotMatch(tplBlock, /enabled: true/, '模板保存不得强制启用规则')
+  assert.doesNotMatch(tplBlock, /body_template:/, '每通道模板取代单一 body_template 直写')
   const fieldBlock = text.slice(text.indexOf('const saveRuleField'), text.indexOf('const editTemplate'))
   assert.match(fieldBlock, /rule\.trigger === 'daily' \? \{ send_time: rule\.send_time \} : \{ min_level: rule\.min_level \}/, '字段保存只提交变更键')
   // 级别列=下拉选择（radio-button 三按钮在 150px 列内竖排堆叠的缺陷形态禁止回潮）
   assert.match(text, /el-select v-if="row\.trigger === 'event'" v-model="row\.min_level"/, '级别列必须为紧凑下拉')
+  // 事件展示=可读标题（event_titles 单源），禁止裸事件键
+  assert.match(text, /eventTitle\(asRule\(row\), ev\)/, '事件列必须经可读标题映射')
+  // 邮件 HTML 预览=sandbox iframe；webhook/邮件编辑=CodeEditor 高亮
+  assert.match(text, /sandbox="" :srcdoc="previewText"/, '邮件渲染预览必须 sandbox iframe')
+  assert.match(text, /CodeEditor v-if="tplEditorLang !== 'text'"/, 'JSON/HTML 必须高亮编辑')
+  // 概览=全平台（无用户筛选）；三维分布图在位
+  assert.match(text, /delivery-stats/, '分布统计端点必须消费')
+  assert.match(text, /distByChannelTitle/, '通道投递分布图必须在位')
+  assert.match(text, /distByEventTitle/, '事件分布图必须在位')
 })
 
 test('投递记录消费 deliveries 契约：过滤/全平台/失败重发', () => {

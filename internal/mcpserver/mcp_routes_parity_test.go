@@ -185,6 +185,7 @@ var mcpUncoveredRoutes = map[string]string{
 	"POST /api/v1/notification/wx/qr/start":           "微信 iLink 扫码登录产码：手机微信扫码确认闭环（Agent 无扫码场景）",
 	"GET /api/v1/notification/wx/qr/status":           "微信扫码登录状态轮询：confirmed 即凭据落库启用收发（浏览器侧轮询）",
 	"GET /api/v1/notification/delivery-trend":         "投递趋势：per-user 7天统计（Agent 无消费场景）",
+	"GET /api/v1/notification/delivery-stats":         "投递分布统计：7天三维分布（Agent 无消费场景）",
 	"GET /api/v1/notification/admin/overview":         "管理员通知概览：全平台统计+用户列表（Agent 无消费场景）",
 	"GET /api/v1/notification/rules":                  "通知规则聚合视图：per-user 配置管理（Agent 无消费场景）",
 	"POST /api/v1/notification/rules/:id":             "通知规则更新：per-user 配置管理（Agent 无消费场景）",

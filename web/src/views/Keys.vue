@@ -8,16 +8,6 @@
         </h2>
         <p class="page-desc">{{ t('common.app.views.keys.pageDesc') }}</p>
       </div>
-      <div class="header-actions">
-        <el-tooltip :disabled="!nodeWriteBlocked" :content="nodeWriteBlockedReason">
-          <div>
-            <el-button type="primary" :disabled="nodeWriteBlocked || creating" @click="openCreateDialog">
-              <el-icon><Plus /></el-icon>
-              {{ t('common.app.views.keys.createKey') }}
-            </el-button>
-          </div>
-        </el-tooltip>
-      </div>
     </div>
 
     <el-alert v-if="loadError" type="error" :closable="false" show-icon class="polling-error-alert error-banner">
@@ -34,75 +24,85 @@
         <AccessStatsCards :api-key-stats="apiKeyStats" :mcp-stats="mcpStats" :rest-stats="restOverview" />
         <div class="section-label">{{ t('app.notification.keysAccess.accessMethodTitle') }}</div>
         <el-row :gutter="16" class="keys-mcp-block">
-      <el-col :xs="24" :md="12">
-        <el-card class="access-card">
-          <template #header>
-            <div class="card-header">
-              <div class="card-title">
-                <el-icon class="title-icon"><Key /></el-icon>
-                <span>{{ t('app.notification.keysAccess.apiCardTitle') }}</span>
+          <el-col :xs="24" :md="12">
+            <el-card class="access-card">
+              <template #header>
+                <div class="card-header">
+                  <div class="card-title">
+                    <el-icon class="title-icon"><Key /></el-icon>
+                    <span>{{ t('app.notification.keysAccess.apiCardTitle') }}</span>
+                  </div>
+                  <div class="card-header-actions">
+                    <el-switch v-if="isAdmin" v-model="apiEnabled" size="small" :disabled="switchSaving" :active-text="t('app.notification.keysAccess.apiEnabled')" @update:model-value="(val: string | number | boolean) => toggleApi(val === true)" />
+                    <el-button size="small" tag="a" href="/api/v1/docs" target="_blank" rel="noopener noreferrer">
+                      {{ t('common.app.views.keys.apiDocs') }}
+                    </el-button>
+                  </div>
+                </div>
+              </template>
+              <div class="access-rows">
+                <div class="access-row">
+                  <span class="access-row-label">{{ t('app.notification.keysAccess.rowEndpoint') }}</span>
+                  <code class="access-row-value">{{ restBaseURL }}</code>
+                  <el-tooltip :content="t('common.app.views.keys.copy')" placement="top">
+                    <el-button size="small" link :aria-label="t('common.app.views.keys.copy')" @click="copyRestBase">
+                      <el-icon><CopyDocument /></el-icon>
+                    </el-button>
+                  </el-tooltip>
+                </div>
+                <div class="access-row">
+                  <span class="access-row-label">{{ t('app.notification.keysAccess.rowAuth') }}</span>
+                  <span class="access-row-value">{{ t('app.notification.keysAccess.authRest') }}</span>
+                </div>
+                <div class="access-row access-row-desc">
+                  <span class="access-row-label">{{ t('app.notification.keysAccess.rowFor') }}</span>
+                  <span class="access-row-value">{{ t('app.notification.keysAccess.apiCardDesc') }}</span>
+                </div>
+                <div v-if="isAdmin && !apiEnabled" class="access-disabled-note">{{ t('app.notification.keysAccess.apiDisabledNote') }}</div>
               </div>
-              <el-button size="small" tag="a" href="/api/v1/docs" target="_blank" rel="noopener noreferrer">
-                {{ t('common.app.views.keys.apiDocs') }}
-              </el-button>
-            </div>
-          </template>
-          <div class="access-rows">
-            <div class="access-row">
-              <span class="access-row-label">{{ t('app.notification.keysAccess.rowEndpoint') }}</span>
-              <code class="access-row-value">/api/v1/…</code>
-              <el-tooltip :content="t('common.app.views.keys.copy')" placement="top">
-                <el-button size="small" link :aria-label="t('common.app.views.keys.copy')" @click="copyRestBase">
-                  <el-icon><CopyDocument /></el-icon>
-                </el-button>
-              </el-tooltip>
-            </div>
-            <div class="access-row">
-              <span class="access-row-label">{{ t('app.notification.keysAccess.rowAuth') }}</span>
-              <span class="access-row-value">{{ t('app.notification.keysAccess.authRest') }}</span>
-            </div>
-            <div class="access-row access-row-desc">
-              <span class="access-row-label">{{ t('app.notification.keysAccess.rowFor') }}</span>
-              <span class="access-row-value">{{ t('app.notification.keysAccess.apiCardDesc') }}</span>
-            </div>
-          </div>
-        </el-card>
-      </el-col>
-      <el-col :xs="24" :md="12">
-        <el-card class="access-card">
-          <template #header>
-            <div class="card-header">
-              <div class="card-title">
-                <el-icon class="title-icon"><Connection /></el-icon>
-                <span>{{ t('app.notification.keysAccess.mcpCardTitle') }}</span>
+            </el-card>
+          </el-col>
+          <el-col :xs="24" :md="12">
+            <el-card class="access-card">
+              <template #header>
+                <div class="card-header">
+                  <div class="card-title">
+                    <el-icon class="title-icon"><Connection /></el-icon>
+                    <span>{{ t('app.notification.keysAccess.mcpCardTitle') }}</span>
+                  </div>
+                  <div class="card-header-actions">
+                    <el-switch v-if="isAdmin" v-model="mcpEnabled" size="small" :disabled="switchSaving" :active-text="t('app.notification.creds.mcpEnabled')" @update:model-value="(val: string | number | boolean) => toggleMcp(val === true)" />
+                    <el-button size="small" @click="mcpDocsVisible = true">
+                      {{ t('common.app.views.keys.mcpDocs') }}
+                    </el-button>
+                  </div>
+                </div>
+              </template>
+              <div class="access-rows">
+                <div class="access-row">
+                  <span class="access-row-label">{{ t('app.notification.keysAccess.rowEndpoint') }}</span>
+                  <code class="access-row-value">{{ mcpServiceURL }}</code>
+                  <el-tooltip :content="t('common.app.views.keys.copyMcpUrlAria')" placement="top">
+                    <el-button size="small" link :aria-label="t('common.app.views.keys.copyMcpUrlAria')" @click="copyMCPServiceURL">
+                      <el-icon><CopyDocument /></el-icon>
+                    </el-button>
+                  </el-tooltip>
+                </div>
+                <div class="access-row">
+                  <span class="access-row-label">{{ t('app.notification.keysAccess.rowAuth') }}</span>
+                  <span class="access-row-value">{{ t('app.notification.keysAccess.authMcp') }}</span>
+                </div>
+                <div class="access-row access-row-desc">
+                  <span class="access-row-label">{{ t('app.notification.keysAccess.rowFor') }}</span>
+                  <span class="access-row-value">{{ t('app.notification.keysAccess.mcpCardDesc') }}</span>
+                </div>
+                <div v-if="isAdmin && !mcpEnabled" class="access-disabled-note">{{ t('app.notification.keysSessions.mcpDisabledNote') }}</div>
               </div>
-              <el-button size="small" @click="mcpDocsVisible = true">
-                {{ t('common.app.views.keys.mcpDocs') }}
-              </el-button>
-            </div>
-          </template>
-          <div class="access-rows">
-            <div class="access-row">
-              <span class="access-row-label">{{ t('app.notification.keysAccess.rowEndpoint') }}</span>
-              <code class="access-row-value">{{ mcpServiceURL }}</code>
-              <el-tooltip :content="t('common.app.views.keys.copyMcpUrlAria')" placement="top">
-                <el-button size="small" link :aria-label="t('common.app.views.keys.copyMcpUrlAria')" @click="copyMCPServiceURL">
-                  <el-icon><CopyDocument /></el-icon>
-                </el-button>
-              </el-tooltip>
-            </div>
-            <div class="access-row">
-              <span class="access-row-label">{{ t('app.notification.keysAccess.rowAuth') }}</span>
-              <span class="access-row-value">{{ t('app.notification.keysAccess.authMcp') }}</span>
-            </div>
-            <div class="access-row access-row-desc">
-              <span class="access-row-label">{{ t('app.notification.keysAccess.rowFor') }}</span>
-              <span class="access-row-value">{{ t('app.notification.keysAccess.mcpCardDesc') }}</span>
-            </div>
-          </div>
-        </el-card>
-      </el-col>
-    </el-row>
+            </el-card>
+          </el-col>
+        </el-row>
+        <!-- MCP 会话（与 API 最近调用对称：会话=有状态连接的在线视图） -->
+        <McpSessionsCard />
 
       </el-tab-pane>
       <el-tab-pane :label="t('app.notification.keysAccess.keysTab')" name="keys">
@@ -112,6 +112,16 @@
               <div class="card-title">
                 <el-icon class="title-icon"><Key /></el-icon>
                 <span>{{ t('app.notification.keysAccess.keysTab') }}</span>
+              </div>
+              <div class="card-header-actions">
+                <el-tooltip :disabled="!nodeWriteBlocked" :content="nodeWriteBlockedReason">
+                  <div>
+                    <el-button type="primary" size="small" :disabled="nodeWriteBlocked || creating" @click="openCreateDialog">
+                      <el-icon><Plus /></el-icon>
+                      {{ t('common.app.views.keys.createKey') }}
+                    </el-button>
+                  </div>
+                </el-tooltip>
               </div>
             </div>
           </template>
@@ -195,10 +205,6 @@
 
     <el-empty v-if="!loading && keys.length === 0 && !loadError" :description="t('common.app.views.keys.emptyText')" :image-size="80" />
     </el-card>
-      </el-tab-pane>
-      <el-tab-pane :label="t('app.notification.keysAccess.mcpTab')" name="mcp">
-    <McpSessionsCard class="keys-mcp-block" />
-
       </el-tab-pane>
     </el-tabs>
 
@@ -571,6 +577,40 @@ const mcpToolsLoaded = ref(false)
 const mcpToolsError = ref('')
 const apiActiveTab = ref('overview')
 const mcpServiceURL = new URL('/api/v1/mcp', window.location.origin).toString()
+const restBaseURL = new URL('/api/v1', window.location.origin).toString()
+
+// 对外接入全局开关（API/MCP 对称；管理员可切换，普通用户只读不显示）
+const apiEnabled = ref(true)
+const mcpEnabled = ref(true)
+const switchSaving = ref(false)
+const fetchAccessSwitches = async (): Promise<void> => {
+  if (!isAdmin.value) return
+  try {
+    const res = await request.get<{ data?: { api_enabled?: boolean; mcp_enabled?: boolean } }>('/notification/settings', { silent: true })
+    apiEnabled.value = res.data?.api_enabled !== false
+    mcpEnabled.value = res.data?.mcp_enabled !== false
+  } catch { /* 缺省启用 */ }
+}
+const toggleApi = async (on: boolean): Promise<void> => {
+  if (switchSaving.value) return
+  switchSaving.value = true
+  try {
+    await request.put('/notification/settings', { api_enabled: on })
+    mfaAwareSuccess(on ? t('app.notification.keysAccess.apiEnabledToast') : t('app.notification.keysAccess.apiDisabledToast'))
+  } catch {
+    apiEnabled.value = !on
+  } finally { switchSaving.value = false }
+}
+const toggleMcp = async (on: boolean): Promise<void> => {
+  if (switchSaving.value) return
+  switchSaving.value = true
+  try {
+    await request.put('/notification/settings', { mcp_enabled: on })
+    mfaAwareSuccess(on ? t('app.notification.keysSessions.mcpEnabledToast') : t('app.notification.keysSessions.mcpDisabledToast'))
+  } catch {
+    mcpEnabled.value = !on
+  } finally { switchSaving.value = false }
+}
 const mcpConfigJSON = computed(() => JSON.stringify({
   mcpServers: {
     'lazy-balancer': {
@@ -842,7 +882,7 @@ const fetchMCPTools = async (): Promise<void> => {
 }
 
 const copyRestBase = async (): Promise<void> => {
-  if (await copyText(new URL('/api/v1', window.location.origin).toString())) {
+  if (await copyText(restBaseURL)) {
     ElMessage.success(t('common.app.views.keys.mcpUrlCopied'))
     return
   }
@@ -860,11 +900,16 @@ const copyMCPServiceURL = async (): Promise<void> => {
 onMounted(() => {
   fetchKeys()
   void fetchMcpStats()
+  void fetchAccessSwitches()
 })
 </script>
 
 <style scoped>
+/* 卡片规范（DESIGN_SPEC.md §2）：边框 #ebeef5 与安全总览一致 */
+.el-card { --el-card-border-color: #ebeef5; }
 .card-header { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; row-gap: 8px; }
+.card-header-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.card-header-actions :deep(a.el-button) { text-decoration: none; }
 .card-title { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; color: #111827; }
 .title-icon { font-size: 16px; color: #3b82f6; }
 .keys-table { width: 100%; margin-bottom: 4px; }
@@ -881,6 +926,7 @@ onMounted(() => {
 .access-row-value { font-size: 13px; word-break: break-all; }
 code.access-row-value { padding: 3px 8px; background: var(--el-fill-color-light); border-radius: 4px; }
 .access-row-desc .access-row-value { color: var(--text-secondary, #6b7280); font-size: 12px; line-height: 1.6; }
+.access-disabled-note { font-size: 12px; color: var(--el-color-danger); }
 .card-header-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .section-divider { margin: 24px 0 20px; }
 .section-divider :deep(.el-divider__text) { font-size: 14px; color: var(--text-secondary, #6b7280); font-weight: 600; }

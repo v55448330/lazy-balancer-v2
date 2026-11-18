@@ -6,7 +6,9 @@ package notify
 
 import (
 	"context"
+	"encoding/json"
 	"log"
+	"strconv"
 	"strings"
 	"time"
 
@@ -56,12 +58,24 @@ func processPendingBatch(ctx context.Context) {
 	}
 }
 
-// deliverOne 单行投递：展开通道→逐通道发送→状态收口。
+// deliverOne 单行投递：展开订阅选定通道→逐通道发送（失败重试 1 次）→
+// 每通道结果落 notification_delivery_channels（概览分布统计事实源）→主表状态收口。
 func deliverOne(ctx context.Context, id, userID int64, msg Message) {
 	channels, err := channelsForUser(userID)
 	if err != nil {
 		log.Printf("WARN: notify 通道查询失败（delivery=%d）: %v", id, err)
 		return
+	}
+	// 订阅通道选择：channel_ids 非空=仅发选定通道（空=全部启用通道，向后兼容）
+	sel := subscriptionChannelSelectionFor(userID, msg.EventType)
+	if len(sel.ids) > 0 {
+		filtered := channels[:0]
+		for _, ch := range channels {
+			if sel.ids[ch.ChannelID] {
+				filtered = append(filtered, ch)
+			}
+		}
+		channels = filtered
 	}
 	if len(channels) == 0 {
 		markDelivery(id, "dead", true, "无启用的通知通道")
@@ -72,10 +86,13 @@ func deliverOne(ctx context.Context, id, userID int64, msg Message) {
 	for _, ch := range channels {
 		chMsg := msg
 		chMsg.Title = msg.Title + "（" + ch.Type + "）"
-		// 投递优先级链：事件级模板（subscription.body_template）> 通道级
-		// 模板（style_config.content_template）> 系统默认——事件模板在
-		// subscribersFor 层获取（见 subscriptionsFor 改造）。
-		if eventTpl := subscriptionTemplateFor(userID, msg.EventType); eventTpl != "" {
+		// 模板优先级链：事件×通道模板（channel_templates[channelID]）>
+		// 事件级模板（body_template）> 通道级模板（style_config）> 系统默认。
+		eventTpl := sel.templates[ch.ChannelID]
+		if eventTpl == "" {
+			eventTpl = subscriptionTemplateFor(userID, msg.EventType)
+		}
+		if eventTpl != "" {
 			chMsg.Body = renderStyleTemplate(eventTpl, msg, time.Now())
 		}
 		// 日报按通道格式渲染（优先级：日报页 per-channel 配置 > 通道
@@ -83,39 +100,40 @@ func deliverOne(ctx context.Context, id, userID int64, msg Message) {
 		chMsg.Body = renderDailyForChannel(msg, ch.Type, ParseChannelStyle(ch.StyleConfig).DailyFormat)
 		// 通道消息样式合并进 target（sender 按 target 内可选键消费）
 		styledTarget := MergeStyleIntoTarget(ch.Target, ch.StyleConfig)
-		if err := sendToChannel(ctx, ch.Type, styledTarget, chMsg); err != nil {
-			errs = append(errs, ch.Type+": "+err.Error())
+		sendErr := sendToChannel(ctx, ch.Type, styledTarget, chMsg)
+		if sendErr != nil {
+			// 单通道重试 1 次（原实现整行重试两遍=成功通道重复收到消息，已修）
+			sendErr = sendToChannel(ctx, ch.Type, styledTarget, chMsg)
+		}
+		if sendErr != nil {
+			errs = append(errs, ch.Type+": "+sendErr.Error())
+			recordChannelResult(id, userID, ch, msg.EventType, "failed", sendErr.Error())
 			continue
 		}
 		sentAny = true
+		recordChannelResult(id, userID, ch, msg.EventType, "sent", "")
 	}
-	switch {
-	case sentAny:
+	if sentAny {
 		reason := ""
 		if len(errs) > 0 {
 			reason = "部分通道失败: " + strings.Join(errs, "; ")
 		}
 		markDelivery(id, "sent", true, reason)
-	default:
-		// 全部失败：重试 1 次（同 tick 内立即重试）后 failed。
-		for _, ch := range channels {
-			_ = sendToChannel(ctx, ch.Type, ch.Target, msg)
-		}
-		var errs2 []string
-		sentRetry := false
-		for _, ch := range channels {
-			if err := sendToChannel(ctx, ch.Type, ch.Target, msg); err == nil {
-				sentRetry = true
-			}
-		}
-		_ = errs2
-		if sentRetry {
-			markDelivery(id, "sent", true, strings.Join(errs, "; "))
-			return
-		}
-		markDelivery(id, "failed", true, strings.Join(errs, "; "))
+		return
 	}
-	_ = db.DB
+	markDelivery(id, "failed", true, strings.Join(errs, "; "))
+}
+
+// recordChannelResult 每通道投递结果落行（统计事实源；落库失败仅告警不阻断投递）。
+func recordChannelResult(deliveryID, userID int64, ch deliveryTarget, eventType, status, errMsg string) {
+	_, err := db.DB.Exec(`INSERT INTO notification_delivery_channels
+		(delivery_id, user_id, channel_id, channel_type, event_type, status, error, created_at)
+		VALUES (?,?,?,?,?,?,?,?)`,
+		deliveryID, userID, ch.ChannelID, ch.Type, eventType, status, errMsg,
+		time.Now().UTC().Format("2006-01-02 15:04:05"))
+	if err != nil {
+		log.Printf("WARN: notify 通道结果落库失败（delivery=%d channel=%d）: %v", deliveryID, ch.ChannelID, err)
+	}
 }
 
 // cleanupExpiredMCPSessions 30 分钟无活动的 MCP 会话标记离线（删除行——
@@ -133,4 +151,38 @@ func subscriptionTemplateFor(userID int64, eventType string) string {
 	_ = db.DB.QueryRow(`SELECT COALESCE(body_template,'') FROM notification_subscriptions
 		WHERE user_id=? AND event_type=?`, userID, eventType).Scan(&tpl)
 	return tpl
+}
+
+// channelSelection 订阅的通道选择（ids 空=全部启用通道；templates 键=通道 ID 字符串）。
+type channelSelection struct {
+	ids       map[int64]bool
+	templates map[int64]string
+}
+
+// subscriptionChannelSelectionFor 读订阅通道选择+每通道模板（坏 JSON=零值兜底，
+// 派发路径不可因配置损坏中断投递）。
+func subscriptionChannelSelectionFor(userID int64, eventType string) channelSelection {
+	out := channelSelection{ids: map[int64]bool{}, templates: map[int64]string{}}
+	var idsRaw, tplRaw string
+	_ = db.DB.QueryRow(`SELECT COALESCE(channel_ids,''), COALESCE(channel_templates,'') FROM notification_subscriptions
+		WHERE user_id=? AND event_type=?`, userID, eventType).Scan(&idsRaw, &tplRaw)
+	if idsRaw != "" {
+		var ids []int64
+		if json.Unmarshal([]byte(idsRaw), &ids) == nil {
+			for _, id := range ids {
+				out.ids[id] = true
+			}
+		}
+	}
+	if tplRaw != "" {
+		var m map[string]string
+		if json.Unmarshal([]byte(tplRaw), &m) == nil {
+			for k, v := range m {
+				if id, err := strconv.ParseInt(k, 10, 64); err == nil && v != "" {
+					out.templates[id] = v
+				}
+			}
+		}
+	}
+	return out
 }

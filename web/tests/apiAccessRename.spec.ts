@@ -41,13 +41,21 @@ test('Keys.vue 页头与侧栏文案仍走词条单源（不改字面量）', ()
   assert.match(layout, /NAV_LABELS\['settings-apikeys'\]/)
 })
 
-test('Keys.vue 三 tab 投影：概览/密钥/MCP', () => {
+test('Keys.vue 双 tab 投影：概览（含 MCP 会话）/密钥管理', () => {
   const text = code('src/views/Keys.vue')
   assert.match(text, /el-tabs/, '必须使用 tabs')
   assert.match(text, /apiActiveTab/, 'tab 状态必须在位')
   assert.match(text, /AccessStatsCards/, '统计卡必须在位')
-  assert.match(text, /McpSessionsCard/, 'MCP 会话必须在位')
+  assert.match(text, /McpSessionsCard/, 'MCP 会话必须在位（概览内，与 API 最近调用对称）')
   assert.match(text, /keys-table/, '密钥表格必须在位')
+  // MCP 独立 tab 已合并入概览（用户裁定：单会话表不成 tab）
+  assert.doesNotMatch(text, /name="mcp"/, 'MCP 独立 tab 禁止回潮')
+  // 创建密钥归属密钥管理 tab 卡头，不在全局页头
+  const headerBlock = text.slice(0, text.indexOf('<el-tabs'))
+  assert.doesNotMatch(headerBlock, /openCreateDialog/, '创建密钥不得在全局页头')
+  // API/MCP 全局开关对称（接入卡卡头）
+  assert.match(text, /v-model="apiEnabled"/, 'API 全局开关必须在位')
+  assert.match(text, /v-model="mcpEnabled"/, 'MCP 全局开关必须在位')
 })
 
 
@@ -85,7 +93,7 @@ test('接入仪表盘：REST/MCP 指标对称（今日调用/活跃维度/错误
   assert.doesNotMatch(text, /trend-bar-track/, '旧 div 横条形态禁止回潮')
 })
 
-test('MCP 会话表消费会话契约：mine=1 / 管理员全平台 / 强制断开 / 全局开关', () => {
+test('MCP 会话表消费会话契约：mine=1 / 管理员全平台 / 强制断开', () => {
   const text = code('src/views/settings/McpSessionsCard.vue')
   assert.match(text, /request\.get<McpSessionsResponse>\(`\/security\/mcp-sessions\$\{query\}`\)/)
   assert.match(text, /isAdmin\.value \? '' : '\?mine=1'/, '管理员无参数=全平台；非管理员 mine=1')
@@ -94,10 +102,16 @@ test('MCP 会话表消费会话契约：mine=1 / 管理员全平台 / 强制断�
   assert.match(text, /v-if="isAdmin" :label="t\('app\.notification\.deliveries\.colAction'\)"/)
   const dialogBlock = text.slice(text.indexOf('const disconnect ='), text.indexOf('defineExpose'))
   assert.match(dialogBlock, /ElMessageBox\.confirm/, '强制断开必须先确认')
-  // 全局开关（原接入卡唯一新有价值项）：管理员限定 + 最小 PUT + 停用提示
-  assert.match(text, /v-model="mcpEnabled"/)
-  const toggleBlock = text.slice(text.indexOf('const toggleMcp'), text.indexOf('const disconnect ='))
-  assert.match(toggleBlock, /request\.put\('\/notification\/settings', \{ mcp_enabled: on \}\)/, '开关写入必须最小 PUT')
-  assert.match(text, /v-if="!mcpEnabled"[^>]*class="mcp-disabled-note"/, '全局停用必须带提示语')
-  assert.match(text, /t\('app\.notification\.keysSessions\.mcpDisabledNote'\)/)
+  // 全局开关已归接入卡（Keys.vue）：会话表不得残留第二开关入口
+  assert.doesNotMatch(text, /v-model="mcpEnabled"/, '开关单源=接入卡，会话表禁止回潮')
+})
+
+test('接入全局开关对称：API/MCP 最小 PUT + 停用提示（Keys.vue 单源）', () => {
+  const text = code('src/views/Keys.vue')
+  const apiBlock = text.slice(text.indexOf('const toggleApi'), text.indexOf('const toggleMcp'))
+  assert.match(apiBlock, /request\.put\('\/notification\/settings', \{ api_enabled: on \}\)/, 'API 开关写入必须最小 PUT')
+  const mcpBlock = text.slice(text.indexOf('const toggleMcp'), text.indexOf('const mcpConfigJSON'))
+  assert.match(mcpBlock, /request\.put\('\/notification\/settings', \{ mcp_enabled: on \}\)/, 'MCP 开关写入必须最小 PUT')
+  assert.match(text, /v-if="isAdmin && !apiEnabled" class="access-disabled-note"/, 'API 全局停用必须带提示语')
+  assert.match(text, /v-if="isAdmin && !mcpEnabled" class="access-disabled-note"/, 'MCP 全局停用必须带提示语')
 })

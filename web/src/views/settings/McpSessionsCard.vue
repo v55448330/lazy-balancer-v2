@@ -7,17 +7,6 @@
           <span>{{ t('app.notification.keysSessions.title') }}</span>
         </div>
         <div class="header-side">
-          <!-- MCP 全局开关（管理员）：原接入卡唯一新有价值项，随会话表同卡呈现；
-               关闭时立即提示全局停用语义 -->
-          <template v-if="isAdmin">
-            <el-switch
-              v-model="mcpEnabled"
-              :disabled="writeBlocked || toggleSaving"
-              :active-text="t('app.notification.creds.mcpEnabled')"
-              @update:model-value="(val: string | number | boolean) => toggleMcp(val === true)"
-            />
-            <span v-if="!mcpEnabled" class="mcp-disabled-note">{{ t('app.notification.keysSessions.mcpDisabledNote') }}</span>
-          </template>
           <el-button size="small" :loading="loading" @click="fetchSessions">
             {{ t('app.notification.deliveries.refresh') }}
           </el-button>
@@ -74,21 +63,19 @@ import { Connection } from '@element-plus/icons-vue'
 import { request, mfaAwareSuccess } from '@/utils/api'
 import { useAuthStore } from '@/stores/auth'
 import { formatDate } from '@/utils/date'
-import type { McpSession, McpSessionsResponse, NotificationSettingsResponse } from '@/types/notifications.ts'
+import type { McpSession, McpSessionsResponse } from '@/types/notifications.ts'
 
 const { t } = useI18n()
 const authStore = useAuthStore()
 
 const isAdmin = computed(() => authStore.user?.role === 'admin')
-// 会话强制断开与全局开关都是管理员写路径；非管理员固定 ?mine=1 只看自己的会话
+// 会话强制断开是管理员写路径；非管理员固定 ?mine=1 只看自己的会话
 const writeBlocked = computed(() => authStore.isSlaveNode || authStore.readOnlyReason === 'unknown')
 
 const sessions = ref<McpSession[]>([])
 const loading = ref(false)
 const loadError = ref(false)
 const disconnectingId = ref<string | null>(null)
-const mcpEnabled = ref(false)
-const toggleSaving = ref(false)
 let sessionsRequestSeq = 0
 
 const fetchSessions = async (): Promise<void> => {
@@ -111,31 +98,6 @@ const fetchSessions = async (): Promise<void> => {
   }
 }
 
-const fetchMcpEnabled = async (): Promise<void> => {
-  if (!isAdmin.value) return
-  try {
-    const res = await request.get<NotificationSettingsResponse>('/notification/settings')
-    mcpEnabled.value = res.data?.mcp_enabled === true
-  } catch (error: unknown) {
-    // 开关态读取失败不阻断会话表（静默，与面板其余 silent 拉取同口径）
-    console.error('Failed to fetch MCP global switch:', error)
-  }
-}
-
-const toggleMcp = async (on: boolean): Promise<void> => {
-  if (toggleSaving.value || writeBlocked.value) return
-  toggleSaving.value = true
-  try {
-    // 最小 PUT：仅全局开关（凭据其余字段不动）
-    await request.put('/notification/settings', { mcp_enabled: on })
-    mfaAwareSuccess(on ? t('app.notification.keysSessions.mcpEnabledToast') : t('app.notification.keysSessions.mcpDisabledToast'))
-  } catch (error: unknown) {
-    mcpEnabled.value = !on
-    console.error('Failed to toggle MCP global switch:', error)
-  } finally {
-    toggleSaving.value = false
-  }
-}
 
 const disconnect = async (row: McpSession): Promise<void> => {
   if (disconnectingId.value !== null || !isAdmin.value || writeBlocked.value) return
@@ -165,16 +127,15 @@ const disconnect = async (row: McpSession): Promise<void> => {
 
 onMounted(() => {
   void fetchSessions()
-  void fetchMcpEnabled()
 })
 
 defineExpose({ fetchSessions })
 </script>
 
 <style scoped>
+.el-card { --el-card-border-color: #ebeef5; }
 .card-header { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; row-gap: 8px; }
 .card-title { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; color: #111827; }
 .title-icon { font-size: 16px; color: #3b82f6; }
 .header-side { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-.mcp-disabled-note { font-size: 12px; color: var(--el-color-danger); }
 </style>

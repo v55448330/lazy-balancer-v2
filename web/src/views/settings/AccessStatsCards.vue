@@ -146,7 +146,7 @@
             <el-table-column prop="tool" :label="t('app.notification.keysUsage.colTool')" min-width="160" show-overflow-tooltip />
             <el-table-column prop="calls" :label="t('app.notification.keysUsage.colCalls')" width="80" align="right" />
           </el-table>
-          <el-empty v-else :description="t('app.notification.keysUsage.emptyText')" :image-size="60" />
+          <el-empty v-else :description="t('app.notification.keysAccess.topToolsEmpty')" :image-size="60" />
         </el-card>
       </el-col>
     </el-row>
@@ -186,7 +186,8 @@ const mcpTrendOption = computed<EChartsOption>(() => trendOption(mcpTrend.value,
 </script>
 
 <style scoped>
-/* Dashboard 卡片规范同构 */
+/* Dashboard 卡片规范同构（DESIGN_SPEC.md §2：边框 #ebeef5） */
+.el-card { --el-card-border-color: #ebeef5; }
 .access-dashboard { display: flex; flex-direction: column; gap: 16px; }
 .card-header { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; row-gap: 8px; }
 .card-title { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; color: #111827; }
