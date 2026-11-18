@@ -54,11 +54,11 @@ test('通知页四页签投影：channels/subs/deliveries 恒在，credentials �
   }
 })
 
-test('通道卡消费通道 REST 契约：CRUD+test+按类型目标 JSON', () => {
+test('通道抽屉消费通道 REST 契约：CRUD+test+按类型目标 JSON+样式提交', () => {
   const text = code('src/views/notifications/ChannelCards.vue')
   assert.match(text, /request\.get<NotificationChannelsResponse>\('\/notification\/channels'\)/)
   assert.match(text, /request\.post<NotificationCreateChannelResponse & \{ data\?: \{ id: number; reused\?: boolean \} \}>\('\/notification\/channels'/)
-  assert.match(text, /request\.put\(`\/notification\/channels\/\$\{editTarget\.value\.id\}`/)
+  assert.match(text, /request\.put\(`\/notification\/channels\/\$\{drawerTarget\.value\.id\}`/)
   assert.match(text, /request\.delete\(`\/notification\/channels\/\$\{ch\.id\}`\)/)
   assert.match(text, /request\.post\(`\/notification\/channels\/\$\{ch\.id\}\/test`\)/)
   // 目标 JSON 按后端 validateChannelTarget 的键约束（url/email/openid/receiver）
@@ -67,11 +67,13 @@ test('通道卡消费通道 REST 契约：CRUD+test+按类型目标 JSON', () =>
   assert.match(targetField, /case 'email': return 'email'/)
   assert.match(targetField, /case 'qq': return 'openid'/)
   assert.match(targetField, /case 'wx_clawbot': return 'receiver'/)
-  // 向导三步（类型→目标→确认）与状态点/测试-编辑-删除动作在模板投影
+  // Drawer 一步式（三步向导已废弃）：类型 radio + 消息样式段 + 保存/测试动作
   const templateSrc = code('src/views/notifications/ChannelCards.vue')
   const template = templateSrc.slice(0, templateSrc.indexOf('<script'))
-  assert.match(template, /<el-steps/, '添加向导必须分步')
-  assert.match(template, /class="status-dot"/, '通道卡必须有启停状态点')
+  assert.match(template, /<el-drawer/, '创建/编辑必须走右侧抽屉（三步向导已废弃）')
+  assert.doesNotMatch(template, /<el-steps/, '三步向导不得回潮')
+  assert.match(template, /stylePayloadTpl|styleSubjectTpl/, '消息样式段必须在位')
+  assert.match(template, /class="status-dot"/, '通道列表必须有启停状态点')
 })
 
 test('订阅矩阵消费 catalog+subscriptions 契约，保存走 items 语义', () => {

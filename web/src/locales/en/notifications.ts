@@ -24,6 +24,8 @@ export default {
         trigger: 'Deliver to all now',
         triggerHint: 'Generate and deliver one round of daily reports for all users with their saved configuration (admin)',
         triggered: 'Daily report delivery triggered',
+        configTitle: 'Daily report configuration',
+        previewEmpty: 'Click “Generate preview” to render the report with the current configuration',
         formatChannelMap: 'Formats are chosen per channel automatically: Webhook=JSON, Email=HTML, QQ/WeChat=Markdown text',
         preview: 'Preview',
         previewRun: 'Generate preview',
@@ -37,6 +39,7 @@ export default {
       },
       channels: {
         add: 'Add channel',
+        filterAll: 'All',
         edit: 'Edit',
         test: 'Test',
         delete: 'Delete',

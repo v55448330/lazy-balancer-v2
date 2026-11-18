@@ -24,6 +24,8 @@ export default {
         formatHint: '各通道投递格式；留空使用自动映射',
         formatAuto: '自动（Webhook=JSON/邮件=HTML/QQ·微信=Markdown）',
         trigger: '立即投递全员',
+        configTitle: '日报配置',
+        previewEmpty: '点击「生成预览」查看按当前配置渲染的日报',
         formatChannelMap: '各通道自动选择样式：Webhook=JSON、邮件=HTML、QQ/微信=Markdown 文本',
         preview: '预览',
         previewRun: '生成预览',
@@ -39,6 +41,7 @@ export default {
       },
       channels: {
         add: '添加通道',
+        filterAll: '全部',
         edit: '编辑',
         test: '测试',
         delete: '删除',

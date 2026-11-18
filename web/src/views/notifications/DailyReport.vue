@@ -14,60 +14,60 @@
     </template>
 
     <el-empty v-if="loadError" :description="t('app.notification.daily.loadFailed')" :image-size="80" />
-    <el-form v-else :label-width="$flw('130px')" :disabled="saving">
-      <el-form-item :label="t('app.notification.daily.enabled')">
-        <el-switch v-model="form.enabled" />
-        <span class="switch-hint">{{ t('app.notification.daily.enabledHint') }}</span>
-      </el-form-item>
-      <el-form-item :label="t('app.notification.daily.sendTime')">
-        <el-time-select
-          v-model="form.sendTime"
-          :start="'00:00'"
-          :step="'00:30'"
-          :end="'23:30'"
-          class="daily-time"
-        />
-        <span class="switch-hint">{{ t('app.notification.daily.sendTimeHint') }}</span>
-      </el-form-item>
-      <el-form-item :label="t('app.notification.daily.items')">
-        <el-checkbox-group v-model="form.items" class="daily-items">
-          <el-checkbox v-for="it in itemOptions" :key="it.id" :value="it.id" :label="it.id">
-            {{ it.label }}
-          </el-checkbox>
-        </el-checkbox-group>
-      </el-form-item>
-      <el-form-item :label="t('app.notification.daily.format')">
-        <div class="daily-format-rows">
-          <div v-for="ch in formatRows" :key="ch.key" class="daily-format-row">
-            <span class="daily-format-channel">{{ ch.label }}</span>
-            <el-select v-model="form.formats[ch.key]" class="daily-format" clearable
-              placeholder="Auto" @clear="delete form.formats[ch.key]">
-              <el-option v-for="f in FORMAT_OPTIONS" :key="f.value" :value="f.value" :label="f.label" />
-            </el-select>
-          </div>
-        </div>
-        <div class="daily-format-note">{{ t('app.notification.daily.formatChannelMap') }}</div>
-      </el-form-item>
-      <el-form-item :label="t('app.notification.daily.preview')">
+    <el-row v-else :gutter="20">
+      <el-col :xs="24" :lg="12">
+        <div class="section-head">{{ t('app.notification.daily.configTitle') }}</div>
+        <el-form :label-width="$flw('120px')" :disabled="saving">
+          <el-form-item :label="t('app.notification.daily.enabled')">
+            <el-switch v-model="form.enabled" />
+            <span class="switch-hint">{{ t('app.notification.daily.enabledHint') }}</span>
+          </el-form-item>
+          <el-form-item :label="t('app.notification.daily.sendTime')">
+            <el-time-select v-model="form.sendTime" start="00:00" step="00:30" end="23:30" class="daily-time" />
+            <span class="switch-hint">{{ t('app.notification.daily.sendTimeHint') }}</span>
+          </el-form-item>
+          <el-form-item :label="t('app.notification.daily.items')">
+            <el-checkbox-group v-model="form.items" class="daily-items">
+              <el-checkbox v-for="it in itemOptions" :key="it.id" :value="it.id" :label="it.id">
+                {{ it.label }}
+              </el-checkbox>
+            </el-checkbox-group>
+          </el-form-item>
+          <el-form-item :label="t('app.notification.daily.format')">
+            <div class="daily-format-rows">
+              <div v-for="ch in formatRows" :key="ch.key" class="daily-format-row">
+                <span class="daily-format-channel">{{ ch.label }}</span>
+                <el-select v-model="form.formats[ch.key]" class="daily-format" clearable
+                  placeholder="Auto" @clear="delete form.formats[ch.key]">
+                  <el-option v-for="f in FORMAT_OPTIONS" :key="f.value" :value="f.value" :label="f.label" />
+                </el-select>
+              </div>
+            </div>
+            <div class="daily-format-note">{{ t('app.notification.daily.formatChannelMap') }}</div>
+          </el-form-item>
+          <el-form-item>
+            <el-button type="primary" :loading="saving" :disabled="!canSave" @click="saveDaily">
+              {{ t('app.notification.daily.save') }}
+            </el-button>
+          </el-form-item>
+        </el-form>
+      </el-col>
+      <el-col :xs="24" :lg="12">
+        <div class="section-head">{{ t('app.notification.daily.preview') }}</div>
         <div class="daily-preview-bar">
           <el-select v-model="previewFormat" class="daily-format">
             <el-option v-for="f in FORMAT_OPTIONS" :key="f.value" :value="f.value" :label="f.label" />
           </el-select>
-          <el-button :loading="previewing" @click="previewDaily">{{ t('app.notification.daily.previewRun') }}</el-button>
+          <el-button size="small" :loading="previewing" @click="previewDaily">{{ t('app.notification.daily.previewRun') }}</el-button>
         </div>
         <pre v-if="previewContent" class="daily-preview">{{ previewContent }}</pre>
-      </el-form-item>
-      <el-form-item>
-        <el-button type="primary" :loading="saving" :disabled="!canSave" @click="saveDaily">
-          {{ t('app.notification.daily.save') }}
-        </el-button>
-      </el-form-item>
-    </el-form>
-  </el-card>
+        <el-empty v-else-if="!previewing" :description="t('app.notification.daily.previewEmpty')" :image-size="60" />
+      </el-col>
+    </el-row></el-card>
 </template>
 
 <script setup lang="ts">
-import { computed, ref, onMounted } from 'vue'
+import { computed, ref, watch, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { request, mfaAwareSuccess } from '@/utils/api'
 import { useAuthStore } from '@/stores/auth'
@@ -98,6 +98,28 @@ const saving = ref(false)
 const triggering = ref(false)
 const previewing = ref(false)
 const previewFormat = ref('markdown')
+const previewLoadedOnce = ref(false)
+const previewDaily = async (): Promise<void> => {
+  if (previewing.value) return
+  previewing.value = true
+  try {
+    const res = await request.post<{ code: number; data?: { content: string } }>('/notification/daily/preview', {
+      items: form.value.items,
+      format: previewFormat.value,
+    })
+    previewContent.value = res.data?.content ?? ''
+    previewLoadedOnce.value = true
+  } catch (error: unknown) {
+    console.error('Failed to preview daily:', error)
+  } finally {
+    previewing.value = false
+  }
+}
+// 配置变化即自动刷新预览（常驻右侧，不再按按钮生成）
+watch([() => form.value.items, () => form.value.formats, previewFormat], () => {
+  if (!previewLoadedOnce.value || previewing.value) return
+  void previewDaily()
+}, { deep: true })
 // 预览格式默认跟随投递格式（用户仍可临时切换其它格式对比渲染效果）
 const previewContent = ref('')
 const itemOptions = ref<{ id: string; label: string }[]>([])
@@ -167,21 +189,6 @@ const saveDaily = async (): Promise<void> => {
   }
 }
 
-const previewDaily = async (): Promise<void> => {
-  if (previewing.value) return
-  previewing.value = true
-  try {
-    const res = await request.post<{ code: number; data?: { content: string } }>('/notification/daily/preview', {
-      items: form.value.items,
-      format: previewFormat.value,
-    })
-    previewContent.value = res.data?.content ?? ''
-  } catch (error: unknown) {
-    console.error('Failed to preview daily:', error)
-  } finally {
-    previewing.value = false
-  }
-}
 
 const triggerDaily = async (): Promise<void> => {
   if (triggering.value) return

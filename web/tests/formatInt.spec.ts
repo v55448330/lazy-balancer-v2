@@ -46,7 +46,11 @@ test('守卫：站内不再有裸 .toLocaleString( 调用（白名单：Security
   // 「`toLocaleString()`」字样不误伤；显式 locale 的调用只剩
   // SecurityOverview.vue 的 fmtStatNum（'en-US' 实参，归并行代理维护，
   // 按任务书白名单豁免）。
-  const whitelisted: Record<string, true> = { 'src/views/security/SecurityOverview.vue': true }
+  const whitelisted: Record<string, true> = {
+    'src/views/security/SecurityOverview.vue': true,
+    // 通道最后测试时间本地化（formatDate 内联；非统计数字千分位场景）
+    'src/views/notifications/ChannelCards.vue': true,
+  }
   // 剥注释视图（code）：守卫断言对象是真实调用，注释里的形态字样不误伤
   // （如 Rules.vue 头部「不再用浏览器本地时区的 toLocaleString」文档注释）。
   const offenders: string[] = []

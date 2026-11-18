@@ -29,8 +29,12 @@
       </template>
     </el-alert>
 
-    <el-tabs v-model="activeTab" class="keys-tabs">
-      <el-tab-pane :label="t('common.app.views.keys.pageTitle')" name="keys">
+    <!-- 分区①：API 密钥（表格式资产列表） -->
+    <div class="section-head">
+      <el-icon class="section-head-icon"><Key /></el-icon>
+      <span class="section-head-title">{{ t('common.app.views.keys.pageTitle') }}</span>
+      <span class="section-head-desc">{{ t('common.app.views.keys.pageDesc') }}</span>
+    </div>
     <el-table
       v-loading="loading"
       :data="tableKeys"
@@ -111,12 +115,14 @@
     <el-card v-if="!loading && keys.length === 0 && !loadError" class="empty-card">
       <el-empty :description="t('common.app.views.keys.emptyText')" :image-size="80" />
     </el-card>
-      </el-tab-pane>
-      <el-tab-pane :label="t('app.notification.keysAccess.accessTab')" name="access">
-    <!-- ① 接入统计（健康度总览：REST/MCP 双列同构指标） -->
+    <!-- 分区②：接入统计（健康度总览：REST/MCP 双列同构指标） -->
     <AccessStatsCards :api-key-stats="apiKeyStats" :mcp-stats="mcpStats" :rest-stats="restOverview" class="keys-mcp-block" />
 
-    <!-- ② 接入方式（双协议完全同构卡：端点/鉴权/文档三行，操作逻辑一致） -->
+    <!-- 分区③：接入方式（双协议同构卡：端点/鉴权/文档） -->
+    <div class="section-head">
+      <el-icon class="section-head-icon"><Connection /></el-icon>
+      <span class="section-head-title">{{ t('app.notification.keysAccess.title') }}</span>
+    </div>
     <el-row :gutter="16" class="keys-mcp-block">
       <el-col :xs="24" :md="12">
         <el-card shadow="never" class="access-card">
@@ -189,9 +195,12 @@
     </el-row>
 
     <!-- ③ MCP 会话（管理员） -->
+    <!-- 分区④：MCP 会话（管理员） -->
+    <div class="section-head">
+      <el-icon class="section-head-icon"><Setting /></el-icon>
+      <span class="section-head-title">{{ t('app.notification.keysSessions.title') }}</span>
+    </div>
     <McpSessionsCard class="keys-mcp-block" />
-      </el-tab-pane>
-    </el-tabs>
 
     <el-dialog
       v-model="mcpDocsVisible"
@@ -560,7 +569,6 @@ const mcpTools = ref<MCPToolSpec[]>([])
 const mcpToolsLoading = ref(false)
 const mcpToolsLoaded = ref(false)
 const mcpToolsError = ref('')
-const activeTab = ref('keys')
 const mcpServiceURL = new URL('/api/v1/mcp', window.location.origin).toString()
 const mcpConfigJSON = computed(() => JSON.stringify({
   mcpServers: {
@@ -855,6 +863,12 @@ onMounted(() => {
 </script>
 
 <style scoped>
+/* 分区标题（icon+标题+副标题，全站统一形态） */
+.section-head { display: flex; align-items: baseline; gap: 8px; margin: 22px 0 12px; }
+.section-head:first-of-type { margin-top: 4px; }
+.section-head-icon { color: var(--el-color-primary); font-size: 16px; align-self: center; }
+.section-head-title { font-weight: 600; font-size: 15px; }
+.section-head-desc { font-size: 12px; color: var(--text-secondary, #6b7280); }
 .keys-table { width: 100%; }
 .key-name-cell { font-weight: 600; }
 .ml4 { margin-left: 4px; }

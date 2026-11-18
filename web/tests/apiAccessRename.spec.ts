@@ -49,9 +49,11 @@ test('Keys.vue 区块接线：统计并列卡+会话卡（原 MCP 文档对话�
   // 新信息架构：①接入统计（健康度总览）→②接入方式（双协议同构连接卡）→③会话卡；
   // 统计卡上移到分隔线之前（首屏总览），连接卡承载端点/鉴权/文档动作
   const statsAt = text.indexOf('<AccessStatsCards :api-key-stats="apiKeyStats" :mcp-stats="mcpStats" :rest-stats="restOverview"')
-  const accessAt = text.indexOf('name="access"')
-  assert.ok(statsAt > 0 && accessAt > 0 && accessAt < statsAt, '接入统计必须在「接入概览」pane 内（REST overview 端点喂数据）')
-  const blocks = text.slice(accessAt, text.indexOf('<el-dialog', accessAt))
+  // 单页四分区：统计在接入方式卡之前（section-head 分区头结构，无 tab）
+  assert.ok(statsAt > 0, '接入统计卡必须在位')
+  assert.doesNotMatch(text, /<el-tabs|el-tab-pane/, 'API 接入页单页分区（tab 不得回潮）')
+  const accessAt = text.indexOf('section-head-title')
+  const blocks = text.slice(accessAt > 0 ? accessAt : 0, text.indexOf('<el-dialog', Math.max(accessAt, 0)))
   // 双协议同构连接卡：同一组行标签（端点/鉴权/用途）出现两次（REST 与 MCP 各一）
   const rowLabelHits = (blocks.match(/rowEndpoint/g) || []).length
   assert.ok(rowLabelHits >= 2, `接入卡必须同构（rowEndpoint 出现 ${rowLabelHits} 次, want ≥2）`)
