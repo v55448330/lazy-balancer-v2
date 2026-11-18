@@ -48,6 +48,13 @@ func QQLinkStatus() (bool, string, time.Time) {
 type qqSender struct{}
 
 func (qqSender) Send(ctx context.Context, targetJSON string, msg Message) error {
+	var styled struct {
+		MsgType string `json:"msg_type"`
+	}
+	_ = json.Unmarshal([]byte(targetJSON), &styled) // 样式键缺失/坏 JSON=文本默认
+	if styled.MsgType == "markdown" {
+		return SendQQC2CMarkdown(ctx, targetJSON, formatBotText(msg))
+	}
 	return SendQQC2C(ctx, targetJSON, formatBotText(msg))
 }
 
@@ -76,6 +83,21 @@ func SendQQC2C(ctx context.Context, targetJSON, text string) error {
 		return errors.New("QQ 通道目标缺少 openid（请先在 QQ 内发送绑定指令完成绑定）")
 	}
 	return sendQQRESTMessage(ctx, cfg.OpenID, text)
+}
+
+// SendQQC2CMarkdown 发 QQ 单聊 markdown 富文本（msg_type=2；机器人需具备
+// markdown 权限，失败留痕）。
+func SendQQC2CMarkdown(ctx context.Context, targetJSON, md string) error {
+	var cfg struct {
+		OpenID string `json:"openid"`
+	}
+	if err := json.Unmarshal([]byte(targetJSON), &cfg); err != nil {
+		return fmt.Errorf("QQ 通道目标解析失败: %w", err)
+	}
+	if cfg.OpenID == "" {
+		return errors.New("QQ 通道目标缺少 openid（请先在 QQ 内发送绑定指令完成绑定）")
+	}
+	return sendQQRESTMarkdown(ctx, cfg.OpenID, md)
 }
 
 // RunQQBotConnection 连接主循环：鉴权→ws→收发→断线退避重连（ctx 取消退出）。

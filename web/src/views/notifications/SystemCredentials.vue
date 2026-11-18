@@ -40,6 +40,15 @@
           {{ smtpPassConfigured ? t('app.notification.creds.configured') : t('app.notification.creds.notConfigured') }}
         </el-tag>
       </el-form-item>
+      <el-form-item :label="t('app.notification.creds.smtpTestTo')">
+        <div class="smtp-test-row">
+          <el-input v-model="form.smtpTestTo" class="creds-input" :placeholder="t('app.notification.creds.smtpTestToHint')" />
+          <el-button :loading="smtpTesting" :disabled="!form.smtpHost" @click="testSMTP">
+            {{ t('app.notification.creds.smtpTest') }}
+          </el-button>
+        </div>
+        <span class="switch-hint">{{ t('app.notification.creds.smtpTestHint') }}</span>
+      </el-form-item>
       <el-form-item>
         <el-button type="primary" :loading="saving" :disabled="!canSave" @click="saveSettings">
           {{ t('app.notification.creds.save') }}
@@ -55,6 +64,7 @@
 // MCP 会话卡（API 接入页）。
 import { computed, ref, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { ElMessage } from 'element-plus'
 import { request, mfaAwareSuccess } from '@/utils/api'
 import type {
   NotificationSettingsPayload,
@@ -74,10 +84,32 @@ const form = ref({
   smtpUser: '',
   smtpFrom: '',
   smtpPass: '',
+  smtpTestTo: '',
 })
 // 服务端已配置布尔（GET 只回布尔不回明文），保存成功后重查刷新
 const smtpPassConfigured = ref(false)
+const smtpTesting = ref(false)
 let settingsRequestSeq = 0
+
+// SMTP 连通性测试：test_to 非空=发标记邮件；空=仅握手+AUTH（保存后测试
+// 用已落库配置；未保存的草稿 host 不参与——按钮 disabled 条件已拦）
+const testSMTP = async (): Promise<void> => {
+  if (smtpTesting.value) return
+  smtpTesting.value = true
+  try {
+    const res = await request.post<{ code: number; message?: string }>('/notification/settings/smtp-test',
+      { test_to: form.value.smtpTestTo.trim() }, { silent: true })
+    if (res.code === 0 || res.code === 200) {
+      mfaAwareSuccess(t('app.notification.creds.smtpTestOk'))
+    } else {
+      ElMessage.error(res.message || t('app.notification.creds.smtpTestFailed'))
+    }
+  } catch (error: unknown) {
+    ElMessage.error(error instanceof Error ? error.message : t('app.notification.creds.smtpTestFailed'))
+  } finally {
+    smtpTesting.value = false
+  }
+}
 
 const portValid = computed(() => {
   const port = form.value.smtpPort
@@ -100,6 +132,7 @@ const fetchSettings = async (): Promise<void> => {
       smtpUser: data?.smtp?.user ?? '',
       smtpFrom: data?.smtp?.from ?? '',
       smtpPass: '',
+      smtpTestTo: form.value.smtpTestTo,
     }
     smtpPassConfigured.value = data?.smtp?.pass_configured === true
     loadError.value = false
@@ -131,7 +164,7 @@ const saveSettings = async (): Promise<void> => {
     }
     await request.put('/notification/settings', payload)
     mfaAwareSuccess(t('app.notification.creds.saved'))
-    form.value = { ...form.value, smtpPass: '' }
+    form.value = { ...form.value, smtpPass: '', smtpTestTo: form.value.smtpTestTo }
     await fetchSettings()
   } catch (error: unknown) {
     console.error('Failed to save notification settings:', error)
@@ -152,5 +185,6 @@ defineExpose({ fetchSettings })
 .creds-input { max-width: 420px; }
 .creds-port { max-width: 160px; }
 .cred-state-tag { margin-left: 10px; }
+.smtp-test-row { display: flex; gap: 8px; width: 100%; }
 .switch-hint { margin-left: 10px; font-size: 12px; color: var(--text-secondary, #6b7280); }
 </style>

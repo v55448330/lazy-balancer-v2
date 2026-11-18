@@ -110,10 +110,13 @@
       </el-col>
     </el-row>
 
+    <el-tabs v-model="activeTab" class="keys-tabs">
+      <el-tab-pane :label="t('common.app.views.keys.pageTitle')" name="keys">
     <el-card v-if="!loading && keys.length === 0 && !loadError" class="empty-card">
       <el-empty :description="t('common.app.views.keys.emptyText')" :image-size="80" />
     </el-card>
-
+      </el-tab-pane>
+      <el-tab-pane :label="t('app.notification.keysAccess.accessTab')" name="access">
     <!-- ① 接入统计（健康度总览：REST/MCP 双列同构指标） -->
     <AccessStatsCards :api-key-stats="apiKeyStats" :mcp-stats="mcpStats" class="keys-mcp-block" />
 
@@ -190,8 +193,10 @@
       </el-col>
     </el-row>
 
-    <!-- ③ API 密钥（两种协议共享的资产区） + ④ MCP 会话（管理员） -->
+    <!-- ③ MCP 会话（管理员） -->
     <McpSessionsCard class="keys-mcp-block" />
+      </el-tab-pane>
+    </el-tabs>
 
     <el-dialog
       v-model="mcpDocsVisible"
@@ -549,6 +554,7 @@ const mcpTools = ref<MCPToolSpec[]>([])
 const mcpToolsLoading = ref(false)
 const mcpToolsLoaded = ref(false)
 const mcpToolsError = ref('')
+const activeTab = ref('keys')
 const mcpServiceURL = new URL('/api/v1/mcp', window.location.origin).toString()
 const mcpConfigJSON = computed(() => JSON.stringify({
   mcpServers: {

@@ -23,6 +23,7 @@ export interface NotificationChannel {
   enabled: boolean
   last_test_at: string
   last_test_ok: boolean
+  style_config?: string
 }
 
 export type NotificationChannelsResponse = APIResponse<{ channels: NotificationChannel[] }>

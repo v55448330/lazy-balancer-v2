@@ -5,6 +5,7 @@ package handlers
 // 布尔）；PUT 部分更新（只更新提供的键）。
 
 import (
+	"context"
 	"net/http"
 	"strconv"
 	"strings"
@@ -13,6 +14,8 @@ import (
 
 	"lazy-balancer-v2/internal/apimsg"
 	"lazy-balancer-v2/internal/models"
+	"time"
+
 	"lazy-balancer-v2/internal/notify"
 	"lazy-balancer-v2/internal/services"
 )
@@ -40,9 +43,9 @@ func (h *Handlers) GetNotificationSettings(c *gin.Context) {
 		},
 		// QQ/微信凭据不回显（单源=扫码绑定自动落库；bot 登录态经
 		// /notification/wx/bind-state 供通道向导查询）
-		"mcp_enabled": notify.MCPEnabled(),
-		"attack_warn_at":         warnAt,
-		"attack_critical_at":     criticalAt,
+		"mcp_enabled":        notify.MCPEnabled(),
+		"attack_warn_at":     warnAt,
+		"attack_critical_at": criticalAt,
 	}})
 }
 
@@ -132,4 +135,24 @@ func (h *Handlers) UpdateNotificationSettings(c *gin.Context) {
 	}
 	recordAudit(c, "修改", "通知设置", services.FormatAuditDetail("变更键: "+strings.Join(changed, ","), "", services.AuditResultPart("success")))
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_ce6e6687"), MessageKey: "k_ce6e6687"})
+}
+
+// TestSMTPSettings POST /notification/settings/smtp-test——SMTP 连通性测试
+// （管理员）：test_to 非空时发标记邮件到指定收件人，空=仅握手+AUTH。
+func (h *Handlers) TestSMTPSettings(c *gin.Context) {
+	if !isAdminRequest(c) {
+		c.JSON(http.StatusForbidden, models.APIResponse{Code: 403, Message: apimsg.T(c, "k_20b2245c"), MessageKey: "k_20b2245c"})
+		return
+	}
+	var req struct {
+		TestTo string `json:"test_to"`
+	}
+	_ = c.ShouldBindJSON(&req)
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
+	defer cancel()
+	if err := notify.SmtpConnectivityTest(ctx, req.TestTo); err != nil {
+		c.JSON(http.StatusBadGateway, models.APIResponse{Code: 502, Message: apimsg.Tf(c, "k_8e353bc9", err.Error()), MessageKey: "k_8e353bc9"})
+		return
+	}
+	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_4bde3724"), MessageKey: "k_4bde3724"})
 }

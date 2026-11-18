@@ -546,6 +546,7 @@ func createTables() error {
 		enabled INTEGER NOT NULL DEFAULT 1,
 		last_test_at DATETIME,
 		last_test_ok INTEGER,
+		style_config TEXT NOT NULL DEFAULT '{}',
 		created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 		updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 		UNIQUE(user_id, type, target)
@@ -1274,6 +1275,7 @@ func builtinBlockPageCount() (int, error) {
 var newColumnsRegistry = map[string]string{
 	// 迁入登记：原 runMigrations 头部的逐列硬编码检查与
 	// apiKeyColumns/newLbColumns 局部 map 循环——DDL 与默认值逐字沿用原登记。
+	"notification_channels.style_config":  "TEXT NOT NULL DEFAULT " + "'" + "{}" + "'",
 	"users.display_name":                  "VARCHAR(100)",
 	"users.is_enabled":                    "BOOLEAN NOT NULL DEFAULT 1",
 	"users.is_setup_admin":                "INTEGER NOT NULL DEFAULT 0",

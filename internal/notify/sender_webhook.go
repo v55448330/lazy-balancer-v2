@@ -19,7 +19,8 @@ type webhookSender struct{}
 
 func (webhookSender) Send(ctx context.Context, targetJSON string, msg Message) error {
 	var cfg struct {
-		URL string `json:"url"`
+		URL             string `json:"url"`
+		PayloadTemplate string `json:"payload_template"`
 	}
 	if err := json.Unmarshal([]byte(targetJSON), &cfg); err != nil {
 		return fmt.Errorf("webhook 通道目标解析失败: %w", err)
@@ -35,16 +36,24 @@ func (webhookSender) Send(ctx context.Context, targetJSON string, msg Message) e
 	if fields == nil {
 		fields = map[string]string{}
 	}
-	payload, err := json.Marshal(map[string]any{
-		"level":  msg.Level,
-		"time":   ts.Format(time.RFC3339),
-		"node":   msg.Node,
-		"title":  msg.Title,
-		"body":   msg.Body,
-		"fields": fields,
-	})
-	if err != nil {
-		return fmt.Errorf("webhook 载荷编码失败: %w", err)
+	var payload []byte
+	if cfg.PayloadTemplate != "" {
+		// 用户 JSON 模板（占位符 {{title}}/{{body}}/{{level}}/{{event}}/
+		// {{time}}/{{node}}；保存时已校验占位符替换后可解析）
+		payload = []byte(renderStyleTemplate(cfg.PayloadTemplate, msg, ts))
+	} else {
+		var err error
+		payload, err = json.Marshal(map[string]any{
+			"level":  msg.Level,
+			"time":   ts.Format(time.RFC3339),
+			"node":   msg.Node,
+			"title":  msg.Title,
+			"body":   msg.Body,
+			"fields": fields,
+		})
+		if err != nil {
+			return fmt.Errorf("webhook 载荷编码失败: %w", err)
+		}
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, cfg.URL, bytes.NewReader(payload))
 	if err != nil {

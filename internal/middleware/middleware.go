@@ -1052,6 +1052,7 @@ func SetupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 				// /notification/daily/trigger.
 				admin.GET("/notification/settings", noStoreResponse(), h.GetNotificationSettings)
 				admin.PUT("/notification/settings", noStoreResponse(), h.UpdateNotificationSettings)
+				admin.POST("/notification/settings/smtp-test", noStoreResponse(), h.TestSMTPSettings)
 
 				// Security (admin write)
 				admin.POST("/security/policies", h.CreateSecurityPolicy)

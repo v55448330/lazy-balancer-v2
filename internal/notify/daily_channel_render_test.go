@@ -17,14 +17,14 @@ func dailyPayloadBody(items []string) string {
 
 func TestRenderDailyForChannel_nonDailyPassThrough(t *testing.T) {
 	msg := Message{EventType: "auth.login_success", Body: "原文正文"}
-	if got := renderDailyForChannel(msg, "webhook"); got != "原文正文" {
+	if got := renderDailyForChannel(msg, "webhook", ""); got != "原文正文" {
 		t.Fatalf("非日报事件被改写: %q", got)
 	}
 }
 
 func TestRenderDailyForChannel_corruptPayloadFallsBack(t *testing.T) {
 	msg := Message{EventType: EvtDailyReport, Body: "not-json{{"}
-	if got := renderDailyForChannel(msg, "webhook"); got != "not-json{{" {
+	if got := renderDailyForChannel(msg, "webhook", ""); got != "not-json{{" {
 		t.Fatalf("坏载荷未回退原文: %q", got)
 	}
 }
@@ -32,28 +32,45 @@ func TestRenderDailyForChannel_corruptPayloadFallsBack(t *testing.T) {
 func TestRenderDailyForChannel_channelFormats(t *testing.T) {
 	msg := Message{EventType: EvtDailyReport, Body: dailyPayloadBody(nil), Title: "每日日报"}
 
-	webhook := renderDailyForChannel(msg, "webhook")
+	webhook := renderDailyForChannel(msg, "webhook", "")
 	if !strings.Contains(webhook, `"requests": "1200"`) || strings.Contains(webhook, "attack_top") {
 		t.Fatalf("webhook 渲染非 JSON 或未按 items 裁剪: %s", webhook)
 	}
 
-	email := renderDailyForChannel(msg, "email")
+	email := renderDailyForChannel(msg, "email", "")
 	if !strings.Contains(email, "<h3>") || !strings.Contains(email, "1200") || strings.Contains(email, "攻击") {
 		t.Fatalf("email 渲染非 HTML 或未裁剪: %s", email)
 	}
 
-	qq := renderDailyForChannel(msg, "qq")
+	qq := renderDailyForChannel(msg, "qq", "")
 	if !strings.Contains(qq, "- **请求数**：1200") || strings.Contains(qq, "攻击") {
 		t.Fatalf("qq 渲染非 markdown 或未裁剪: %s", qq)
 	}
 
-	wx := renderDailyForChannel(msg, "wx_clawbot")
+	wx := renderDailyForChannel(msg, "wx_clawbot", "")
 	if !strings.Contains(wx, "- **拦截次数**：34") {
 		t.Fatalf("wx 渲染异常: %s", wx)
 	}
 
-	text := renderDailyForChannel(msg, "mcp_push")
+	text := renderDailyForChannel(msg, "mcp_push", "")
 	if !strings.Contains(text, "请求数：1200") || strings.Contains(text, "<") {
 		t.Fatalf("未知通道兜底非纯文本: %s", text)
+	}
+}
+
+// TestRenderDailyForChannel_styleOverride 通道卡 daily_format 覆盖自动映射：
+// qq 配 text 后投递走纯文本（payload.formats 缺该键=用户未在日报页覆盖）。
+func TestRenderDailyForChannel_styleOverride(t *testing.T) {
+	msg := Message{EventType: EvtDailyReport, Body: dailyPayloadBody(nil), Title: "每日日报"}
+	got := renderDailyForChannel(msg, "qq", "text")
+	if strings.Contains(got, "**") || got != "Lazy Balancer 日报（2026-11-17）\n请求数：1200\n拦截次数：34\n" {
+		t.Fatalf("qq style 覆盖未生效: %q", got)
+	}
+	// 日报页 per-channel 配置仍优先于通道样式：payload.formats.qq=html → html 胜出
+	msg.Body = strings.Replace(dailyPayloadBody(nil),
+		`"values":`, `"formats":{"qq":"html"},"values":`, 1)
+	got = renderDailyForChannel(msg, "qq", "text")
+	if !strings.Contains(got, "<h3>") {
+		t.Fatalf("日报页配置未优先于通道样式: %q", got)
 	}
 }

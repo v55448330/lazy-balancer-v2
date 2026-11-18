@@ -10,7 +10,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -32,14 +34,15 @@ const (
 )
 
 type notificationChannelDTO struct {
-	ID         int64  `json:"id"`
-	UserID     int64  `json:"user_id"`
-	Type       string `json:"type"`
-	Name       string `json:"name"`
-	Target     string `json:"target"`
-	Enabled    bool   `json:"enabled"`
-	LastTestAt string `json:"last_test_at"`
-	LastTestOK bool   `json:"last_test_ok"`
+	ID          int64  `json:"id"`
+	UserID      int64  `json:"user_id"`
+	Type        string `json:"type"`
+	Name        string `json:"name"`
+	Target      string `json:"target"`
+	Enabled     bool   `json:"enabled"`
+	LastTestAt  string `json:"last_test_at"`
+	LastTestOK  bool   `json:"last_test_ok"`
+	StyleConfig string `json:"style_config"`
 }
 
 // isAdminRequest 角色门（与 API Key 管理同口径：apiKeyAuth 注入 role）。
@@ -49,7 +52,7 @@ func scanNotificationChannel(scan func(...any) error) (notificationChannelDTO, s
 	var r notificationChannelDTO
 	var enabled, testOK int
 	var lastTest string
-	err := scan(&r.ID, &r.UserID, &r.Type, &r.Name, &r.Target, &enabled, &lastTest, &testOK)
+	err := scan(&r.ID, &r.UserID, &r.Type, &r.Name, &r.Target, &r.StyleConfig, &enabled, &lastTest, &testOK)
 	r.Enabled = enabled != 0
 	r.LastTestAt = lastTest
 	r.LastTestOK = testOK != 0
@@ -61,7 +64,7 @@ func scanNotificationChannel(scan func(...any) error) (notificationChannelDTO, s
 func (h *Handlers) ListNotificationChannels(c *gin.Context) {
 	admin := isAdminRequest(c)
 	uid := contextUserID(c)
-	query := `SELECT id, user_id, type, name, target, enabled, COALESCE(last_test_at,''), COALESCE(last_test_ok,0)
+	query := `SELECT id, user_id, type, name, target, COALESCE(style_config,'{}'), enabled, COALESCE(last_test_at,''), COALESCE(last_test_ok,0)
 		FROM notification_channels`
 	args := []any{}
 	if !admin {
@@ -137,9 +140,10 @@ func validateChannelTarget(typ, raw string) error {
 func (h *Handlers) CreateNotificationChannel(c *gin.Context) {
 	uid := contextUserID(c)
 	var req struct {
-		Type   string `json:"type"`
-		Name   string `json:"name"`
-		Target string `json:"target"`
+		Type        string          `json:"type"`
+		Name        string          `json:"name"`
+		Target      string          `json:"target"`
+		StyleConfig json.RawMessage `json:"style_config"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: apimsg.T(c, "k_76de02a0")})
@@ -155,6 +159,15 @@ func (h *Handlers) CreateNotificationChannel(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 		return
 	}
+	styleConfig := "{}"
+	if len(req.StyleConfig) > 0 {
+		normalized, err := validateChannelStyle(req.Type, req.StyleConfig)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+			return
+		}
+		styleConfig = normalized
+	}
 	// 同 user+type+target 唯一约束：先查既有行幂等复用（扫码绑定后重复保存
 	// 是正常路径——openid 不变，二次提交不是错误），并发窗口 INSERT 仍撞
 	// 约束时同口径处理。
@@ -165,8 +178,8 @@ func (h *Handlers) CreateNotificationChannel(c *gin.Context) {
 		c.JSON(http.StatusOK, models.APIResponse{Code: 0, Data: gin.H{"id": existingID, "reused": true}})
 		return
 	}
-	res, err := db.DB.Exec(`INSERT INTO notification_channels (user_id, type, name, target, enabled, created_at, updated_at)
-		VALUES (?,?,?,?,1,datetime('now'),datetime('now'))`, uid, req.Type, req.Name, req.Target)
+	res, err := db.DB.Exec(`INSERT INTO notification_channels (user_id, type, name, target, style_config, enabled, created_at, updated_at)
+		VALUES (?,?,?,?,?,1,datetime('now'),datetime('now'))`, uid, req.Type, req.Name, req.Target, styleConfig)
 	if err != nil {
 		if isUniqueConstraintErr(err) {
 			var id int64
@@ -204,13 +217,25 @@ func (h *Handlers) UpdateNotificationChannel(c *gin.Context) {
 		return
 	}
 	var req struct {
-		Name    string `json:"name"`
-		Target  string `json:"target"`
-		Enabled *bool  `json:"enabled"`
+		Name        string          `json:"name"`
+		Target      string          `json:"target"`
+		Enabled     *bool           `json:"enabled"`
+		StyleConfig json.RawMessage `json:"style_config"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
 		return
+	}
+	if len(req.StyleConfig) > 0 {
+		normalized, err := validateChannelStyle(typ, req.StyleConfig)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
+			return
+		}
+		if _, err := db.DB.Exec(`UPDATE notification_channels SET style_config=?, updated_at=datetime('now') WHERE id=?`, normalized, id); err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("更新通知通道失败", err)})
+			return
+		}
 	}
 	if req.Target != "" {
 		if err := validateChannelTarget(typ, req.Target); err != nil {
@@ -304,4 +329,72 @@ func (h *Handlers) TestNotificationChannel(c *gin.Context) {
 	}
 	_ = msg
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0, Message: apimsg.T(c, "k_4bde3724"), MessageKey: "k_4bde3724"})
+}
+
+// validateChannelStyle 通道消息样式校验+归一（返回规范化 JSON）：
+//
+//	键白名单 payload_template/subject_template/msg_type/daily_format/body_format
+//	webhook.payload_template：{{占位符}}替换后必须可解析 JSON
+//	qq.msg_type ∈ text/markdown；*.daily_format ∈ 格式白名单；email 键值白名单
+func validateChannelStyle(typ string, raw json.RawMessage) (string, error) {
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return "", fmt.Errorf("消息样式解析失败: %w", err)
+	}
+	out := map[string]any{}
+	validFormats := map[string]bool{"text": true, "markdown": true, "html": true, "json": true}
+	for k, v := range m {
+		sv, _ := v.(string)
+		switch k {
+		case "payload_template":
+			if typ != "webhook" {
+				return "", errors.New("payload_template 仅 webhook 通道支持")
+			}
+			if sv == "" {
+				continue
+			}
+			// 占位符替换后必须可解析（保存即拦截，投递期才不踩坏模板）
+			probe := regexp.MustCompile(`\{\{[^}]*}}`).ReplaceAllString(sv, `"probe"`)
+			if !json.Valid([]byte(probe)) {
+				return "", errors.New("payload_template 不是合法 JSON 模板（占位符替换后仍需可解析）")
+			}
+			out[k] = sv
+		case "subject_template":
+			if typ != "email" {
+				return "", errors.New("subject_template 仅邮件通道支持")
+			}
+			if len(sv) > 300 {
+				return "", errors.New("subject_template 过长（≤300）")
+			}
+			out[k] = sv
+		case "body_format":
+			if typ != "email" {
+				return "", errors.New("body_format 仅邮件通道支持")
+			}
+			if sv != "html" && sv != "text" {
+				return "", errors.New("body_format 仅支持 html/text")
+			}
+			out[k] = sv
+		case "msg_type":
+			if typ != "qq" {
+				return "", errors.New("msg_type 仅 QQ 通道支持")
+			}
+			if sv != "text" && sv != "markdown" {
+				return "", errors.New("msg_type 仅支持 text/markdown")
+			}
+			out[k] = sv
+		case "daily_format":
+			if !validFormats[sv] {
+				return "", errors.New("daily_format 仅支持 text/markdown/html/json")
+			}
+			out[k] = sv
+		default:
+			return "", fmt.Errorf("未知消息样式键: %s", k)
+		}
+	}
+	b, err := json.Marshal(out)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
 }

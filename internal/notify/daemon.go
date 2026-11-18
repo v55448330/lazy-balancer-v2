@@ -72,10 +72,12 @@ func deliverOne(ctx context.Context, id, userID int64, msg Message) {
 	for _, ch := range channels {
 		chMsg := msg
 		chMsg.Title = msg.Title + "（" + ch.Type + "）"
-		// 日报按通道格式渲染（用户裁定：不同通道用不同样式——webhook=JSON、
-		// 邮件=HTML、QQ/微信=文本短行；其余事件原样透传）。
-		chMsg.Body = renderDailyForChannel(msg, ch.Type)
-		if err := sendToChannel(ctx, ch.Type, ch.Target, chMsg); err != nil {
+		// 日报按通道格式渲染（优先级：日报页 per-channel 配置 > 通道
+		// style_config.daily_format > 自动映射；其余事件原样透传）。
+		chMsg.Body = renderDailyForChannel(msg, ch.Type, ParseChannelStyle(ch.StyleConfig).DailyFormat)
+		// 通道消息样式合并进 target（sender 按 target 内可选键消费）
+		styledTarget := MergeStyleIntoTarget(ch.Target, ch.StyleConfig)
+		if err := sendToChannel(ctx, ch.Type, styledTarget, chMsg); err != nil {
 			errs = append(errs, ch.Type+": "+err.Error())
 			continue
 		}

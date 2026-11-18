@@ -268,14 +268,24 @@ func sendQQRESTMessage(ctx context.Context, openid, text string) error {
 	return qqSendText(ctx, openid, text, "")
 }
 
-// qqSendText REST 发送：msgID 非空=被动回复（免主动消息额度）。
+// sendQQRESTMarkdown 主动发 QQ 单聊 markdown 富文本（msg_type=2；需机器人
+// 具备 markdown 权限——失败原样留痕，通道「测试」可预检）。
+func sendQQRESTMarkdown(ctx context.Context, openid, md string) error {
+	return qqSendRaw(ctx, openid, map[string]any{"content": md, "msg_type": 2}, "")
+}
+
+// qqSendText REST 发送文本：msgID 非空=被动回复（免主动消息额度）。
 // 非 2xx 与业务错误码均原样返回（含响应体片段，投递留痕可读）。
 func qqSendText(ctx context.Context, openid, text, msgID string) error {
+	return qqSendRaw(ctx, openid, map[string]any{"content": text, "msg_type": 0}, msgID)
+}
+
+// qqSendRaw REST 发送（payload 由调用方组装：msg_type 0=文本 2=markdown）。
+func qqSendRaw(ctx context.Context, openid string, payload map[string]any, msgID string) error {
 	token, err := qqTokens.ensure(ctx)
 	if err != nil {
 		return err
 	}
-	payload := map[string]any{"content": text, "msg_type": 0}
 	if msgID != "" {
 		payload["msg_id"] = msgID
 	}

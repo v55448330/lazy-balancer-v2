@@ -115,7 +115,7 @@ func TestSendSMTPMailRoundTrip(t *testing.T) {
 	srv := newFakeSMTPServer(t)
 	host, port, _ := net.SplitHostPort(srv.addr())
 	err := sendSMTPMail(context.Background(), host, port, "", "",
-		"lb@example.com", "ops@example.com", "证书续签失败", "第一行正文\n第二行正文")
+		"lb@example.com", "ops@example.com", "证书续签失败", "第一行正文\n第二行正文", false)
 	if err != nil {
 		t.Fatalf("sendSMTPMail 返回错误: %v", err)
 	}

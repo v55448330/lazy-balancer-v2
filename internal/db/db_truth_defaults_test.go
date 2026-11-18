@@ -801,7 +801,7 @@ var freshOriginalColumns = map[string][]string{
 	"mcp_tool_stats":             {"date", "tool", "key_id", "calls", "errors"},
 	"mfa_challenges":             {"token", "user_id", "expires_at", "consumed", "created_at"},
 	"nodes":                      {"id", "name", "mode", "ip_address", "port", "is_approved", "sync_interval", "status", "last_seen", "created_at"},
-	"notification_channels":      {"id", "user_id", "type", "name", "target", "enabled", "last_test_at", "last_test_ok", "created_at", "updated_at"},
+	"notification_channels":      {"id", "user_id", "type", "name", "target", "style_config", "enabled", "last_test_at", "last_test_ok", "created_at", "updated_at"},
 	"notification_deliveries":    {"id", "user_id", "event_type", "level", "title", "body", "status", "attempts", "error", "created_at", "sent_at"},
 	"notification_daily":         {"user_id", "config", "updated_at"},
 	"notification_subscriptions": {"user_id", "event_type", "min_level"},

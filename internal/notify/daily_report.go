@@ -243,7 +243,7 @@ func RenderDaily(data DailyData, items []string, format string) string {
 // body 为日报数据载荷 JSON→用户 per-channel 配置优先，缺省自动映射
 // （webhook=JSON、email=HTML、QQ/微信=markdown、未知=text）；
 // 非日报事件原样透传。
-func renderDailyForChannel(msg Message, channelType string) string {
+func renderDailyForChannel(msg Message, channelType, styleFormat string) string {
 	if msg.EventType != EvtDailyReport {
 		return msg.Body
 	}
@@ -257,6 +257,9 @@ func renderDailyForChannel(msg Message, channelType string) string {
 		return msg.Body // 载荷解析失败回退原文（fail-visible，不静默吞）
 	}
 	format := payload.Formats[channelType]
+	if format == "" {
+		format = styleFormat // 通道卡「消息样式」里的日报格式覆盖
+	}
 	if format == "" {
 		format = DefaultFormatForChannel(channelType)
 	}

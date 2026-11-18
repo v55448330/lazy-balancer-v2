@@ -550,6 +550,8 @@ var genericRouteRegistry = []struct {
 	// 删除为 Explicit（handler 对属主与跨属主删除均显式留痕）。
 	{"/api/v1/notification/channels", "CreateNotificationChannel", false},
 	{"/api/v1/notification/channels/:id/test", "TestNotificationChannel", false},
+	// SMTP 连通性测试：中间件经映射记录（handler 不自记）。
+	{"/api/v1/notification/settings/smtp-test", "TestSMTPSettings", false},
 }
 
 // TestAuditGenericRoutesExactlyOnce Generic 路由 exactly-once 绊线
@@ -640,7 +642,7 @@ func TestAuditPolicyListsEqual(t *testing.T) {
 		// 渲染不落库）+QQ/微信扫码产码（绑定完成时 handler 记一次「绑定」，
 		// 产码不复记）3 条 skip。新增见 auditpolicy.go 各自登记处注释。
 		wantExplicit = 114
-		wantGeneric  = 7
+		wantGeneric  = 8
 		wantSkip     = 19
 	)
 	explicitCount, genericCount, skipCount := 0, 0, 0

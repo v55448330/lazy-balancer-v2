@@ -12,9 +12,10 @@ import (
 
 // deliveryTarget 单通道投递目标。
 type deliveryTarget struct {
-	ChannelID int64
-	Type      string
-	Target    string // JSON 配置（webhook URL / email / qq openid / clawbot endpoint…）
+	ChannelID   int64
+	Type        string
+	Target      string // JSON 配置（webhook URL / email / qq openid / clawbot endpoint…）
+	StyleConfig string // 消息样式 JSON（payload_template/subject_template/msg_type/daily_format）
 }
 
 // pendingDeliveries 取一批 pending 投递行（FIFO，单批上限防长时间占锁）。
@@ -59,7 +60,7 @@ func pendingDeliveries(limit int) ([]struct {
 
 // channelsForUser 取用户全部启用通道（类型+目标）。
 func channelsForUser(userID int64) ([]deliveryTarget, error) {
-	rows, err := db.DB.Query(`SELECT id, type, target FROM notification_channels WHERE user_id=? AND enabled=1 ORDER BY id`, userID)
+	rows, err := db.DB.Query(`SELECT id, type, target, COALESCE(style_config,'{}') FROM notification_channels WHERE user_id=? AND enabled=1 ORDER BY id`, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -67,7 +68,7 @@ func channelsForUser(userID int64) ([]deliveryTarget, error) {
 	var out []deliveryTarget
 	for rows.Next() {
 		var t deliveryTarget
-		if err := rows.Scan(&t.ChannelID, &t.Type, &t.Target); err != nil {
+		if err := rows.Scan(&t.ChannelID, &t.Type, &t.Target, &t.StyleConfig); err != nil {
 			return nil, err
 		}
 		out = append(out, t)

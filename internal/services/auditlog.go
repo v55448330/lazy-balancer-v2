@@ -369,6 +369,8 @@ func FormatAuditAction(path string) (action, resource, detail string) {
 		return "创建", "通知通道", path
 	case "/api/v1/notification/channels/:id/test":
 		return "测试", "通知通道", path
+	case "/api/v1/notification/settings/smtp-test":
+		return "测试", "通知设置", path
 	}
 	switch {
 	// /api/v1/config 为 Explicit（handler 记录，HasExplicitAuditEvent

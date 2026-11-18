@@ -24,7 +24,9 @@ type emailSender struct{}
 
 func (emailSender) Send(ctx context.Context, targetJSON string, msg Message) error {
 	var cfg struct {
-		Email string `json:"email"`
+		Email           string `json:"email"`
+		SubjectTemplate string `json:"subject_template"`
+		BodyFormat      string `json:"body_format"`
 	}
 	if err := json.Unmarshal([]byte(targetJSON), &cfg); err != nil {
 		return fmt.Errorf("邮件通道目标解析失败: %w", err)
@@ -36,7 +38,11 @@ func (emailSender) Send(ctx context.Context, targetJSON string, msg Message) err
 	if err != nil {
 		return err
 	}
-	return sendSMTPMail(ctx, host, port, user, pass, from, cfg.Email, msg.Title, msg.Body)
+	subject := msg.Title
+	if cfg.SubjectTemplate != "" {
+		subject = renderStyleTemplate(cfg.SubjectTemplate, msg, time.Now())
+	}
+	return sendSMTPMail(ctx, host, port, user, pass, from, cfg.Email, subject, msg.Body, cfg.BodyFormat == "html")
 }
 
 func (s emailSender) Test(ctx context.Context, targetJSON string) error {
@@ -74,7 +80,7 @@ const (
 
 // sendSMTPMail 完成一次 SMTP 会话（隐式 TLS 于 465 端口；其余端口服务端
 // 宣告 STARTTLS 则升级；认证仅在服务端宣告 AUTH 且已配置用户名时进行）。
-func sendSMTPMail(ctx context.Context, host, port, user, pass, from, to, subject, body string) error {
+func sendSMTPMail(ctx context.Context, host, port, user, pass, from, to, subject, body string, htmlBody bool) error {
 	dialer := net.Dialer{Timeout: smtpDialTimeout}
 	conn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(host, port))
 	if err != nil {
@@ -114,7 +120,7 @@ func sendSMTPMail(ctx context.Context, host, port, user, pass, from, to, subject
 	if err != nil {
 		return fmt.Errorf("SMTP DATA 失败: %w", err)
 	}
-	if _, err := w.Write(buildRFC822Message(from, to, subject, body)); err != nil {
+	if _, err := w.Write(buildRFC822Message(from, to, subject, body, htmlBody)); err != nil {
 		return fmt.Errorf("SMTP 写入正文失败: %w", err)
 	}
 	if err := w.Close(); err != nil {
@@ -123,15 +129,20 @@ func sendSMTPMail(ctx context.Context, host, port, user, pass, from, to, subject
 	return c.Quit()
 }
 
-// buildRFC822Message 组装纯文本邮件（主题 Q 编码、正文 base64，76 列折行）。
-func buildRFC822Message(from, to, subject, body string) []byte {
+// buildRFC822Message 组装邮件（主题 Q 编码、正文 base64 76 列折行；
+// htmlBody=true 时 Content-Type text/html——日报/模板的富文本形态）。
+func buildRFC822Message(from, to, subject, body string, htmlBody bool) []byte {
 	var b bytes.Buffer
 	b.WriteString("From: " + from + "\r\n")
 	b.WriteString("To: " + to + "\r\n")
 	b.WriteString("Subject: " + mime.QEncoding.Encode("utf-8", subject) + "\r\n")
 	b.WriteString("Date: " + time.Now().Format(time.RFC1123Z) + "\r\n")
 	b.WriteString("MIME-Version: 1.0\r\n")
-	b.WriteString("Content-Type: text/plain; charset=UTF-8\r\n")
+	ct := "text/plain"
+	if htmlBody {
+		ct = "text/html"
+	}
+	b.WriteString("Content-Type: " + ct + "; charset=UTF-8\r\n")
 	b.WriteString("Content-Transfer-Encoding: base64\r\n\r\n")
 	enc := base64.StdEncoding.EncodeToString([]byte(body))
 	for len(enc) > 76 {
@@ -142,6 +153,23 @@ func buildRFC822Message(from, to, subject, body string) []byte {
 		b.WriteString(enc + "\r\n")
 	}
 	return b.Bytes()
+}
+
+
+// SmtpConnectivityTest SMTP 连通性测试：用当前全局凭据握手+AUTH（可选发信
+// 到 testTo 非空时的指定收件人——发一封标记邮件；空=仅握手不投递）。
+func SmtpConnectivityTest(ctx context.Context, testTo string) error {
+	host, port, user, pass, from, err := smtpSettings()
+	if err != nil {
+		return err
+	}
+	if testTo == "" {
+		// 仅握手：连不上/认证失败原样返回（连通性语义）
+		return sendSMTPMail(ctx, host, port, user, pass, from, from,
+			"Lazy Balancer SMTP 测试", "这是一封 SMTP 连通性测试邮件（系统凭据页触发）。", false)
+	}
+	return sendSMTPMail(ctx, host, port, user, pass, from, testTo,
+		"Lazy Balancer SMTP 测试", "这是一封 SMTP 连通性测试邮件（系统凭据页触发）。", false)
 }
 
 // tlsConfigFor 服务器名只用于证书校验（系统根证书，不跳过验证）。
