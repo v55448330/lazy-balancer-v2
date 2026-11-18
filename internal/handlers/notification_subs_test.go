@@ -217,18 +217,19 @@ func TestNotificationSettings_roleGateAndSecretNonEcho(t *testing.T) {
 	}
 	data := out["data"].(map[string]any)
 	smtp := data["smtp"].(map[string]any)
-	qq := data["qq"].(map[string]any)
 	if smtp["port"] != "465" || smtp["pass_configured"] != false {
 		t.Fatalf("smtp 形状=%v", smtp)
 	}
-	if qq["appid"] != "" || qq["secret_configured"] != false {
-		t.Fatalf("qq 形状=%v（QQ 凭据单源=扫码绑定，settings PUT 无 qq 写路径）", qq)
+	// QQ/微信凭据不回显（单源=扫码绑定；bot 登录态经 bind-state 查询），
+	// GET 契约只剩 smtp/mcp_enabled/阈值。
+	if _, hasQQ := data["qq"]; hasQQ {
+		t.Fatalf("GET 响应不应含 qq 段（凭据不回显）: %v", data)
+	}
+	if _, hasWx := data["wx_bot_cred_configured"]; hasWx {
+		t.Fatalf("GET 响应不应含 wx_bot_cred_configured: %v", data)
 	}
 	if data["mcp_enabled"] != true || data["attack_warn_at"].(float64) != 80 || data["attack_critical_at"].(float64) != 200 {
 		t.Fatalf("开关/阈值形状=%v", data)
-	}
-	if data["wx_bot_cred_configured"] != false {
-		t.Fatalf("wx_bot_cred_configured=%v, want false", data["wx_bot_cred_configured"])
 	}
 
 	// 部分更新：只动 host，其余键保持。
@@ -241,13 +242,14 @@ func TestNotificationSettings_roleGateAndSecretNonEcho(t *testing.T) {
 	if smtp["host"] != "smtp.example.com" || smtp["port"] != "465" {
 		t.Fatalf("partial PUT 后 smtp=%v", smtp)
 	}
-	// partial PUT 不携带 qq 段（写路径已删）：预置的扫码凭据布尔不受影响。
+	// partial PUT 不携带 qq/wx 段（凭据不回显）：notify_settings 里的扫码
+	// 凭据键不受影响（GET 也不外泄）。
 	if _, err := db.DB.Exec(`INSERT INTO notify_settings (key, value) VALUES ('notify.qq_secret','scanned')
 		ON CONFLICT(key) DO UPDATE SET value=excluded.value`); err != nil {
 		t.Fatal(err)
 	}
-	if _, out = doNotifyRequest(t, adminRouter, http.MethodGet, "/notification/settings", ""); out["data"].(map[string]any)["qq"].(map[string]any)["secret_configured"] != true {
-		t.Fatalf("partial PUT 后 qq secret 保持已配置")
+	if _, out = doNotifyRequest(t, adminRouter, http.MethodGet, "/notification/settings", ""); strings.Contains(func() string { b, _ := json.Marshal(out); return string(b) }(), "scanned") {
+		t.Fatalf("partial PUT 后 GET 泄漏扫码凭据值")
 	}
 	if data["mcp_enabled"] != true {
 		t.Fatalf("partial PUT 后 mcp_enabled 保持 true")

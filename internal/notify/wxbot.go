@@ -483,7 +483,9 @@ func WxQRLoginPoll(ctx context.Context) (status string, confirmed bool, err erro
 	qr := wxPendingQR
 	wxCtxMu.Unlock()
 	if qr == "" {
-		return "", false, errors.New("请先发起扫码登录")
+		// 无进行中的扫码（confirmed 后会话态已重置，前端在途轮询会打到
+		// 此分支）——返回 idle 而非错误，避免轮询期报错刷屏。
+		return "idle", false, nil
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
 		wxAPIBaseDefault+"/ilink/bot/get_qrcode_status?qrcode="+qr, nil)

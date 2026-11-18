@@ -14,7 +14,6 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"lazy-balancer-v2/internal/apimsg"
-	"lazy-balancer-v2/internal/db"
 	"lazy-balancer-v2/internal/models"
 	"lazy-balancer-v2/internal/notify"
 )
@@ -74,27 +73,12 @@ func (h *Handlers) GetQQBindCode(c *gin.Context) {
 		return
 	}
 
-	// completed：凭据落 notify_settings（连接 Daemon 鉴权单源）
+	// completed：凭据落 notify_settings（连接 Daemon 鉴权单源）。通道创建
+	// 不在此处——「保存」动作是建通道的唯一入口（此前绑定完成即 upsert
+	// 通道，导致「删除通道→重新绑定→保存」被误判已存在）。
 	if err := notify.SaveQQBotCredentials(result.AppID, result.AppSecret); err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("凭据落库失败", err)})
 		return
-	}
-	// openid 绑定通知通道（投递目标：QQ 单聊）——先 UPDATE（重绑场景），
-	// 0 行命中再 INSERT（首绑；ON CONFLICT 依赖唯一索引匹配，target JSON
-	// 常量表达式的冲突目标不可靠，故显式两步）。
-	res, err := db.DB.Exec(`UPDATE notification_channels SET target=?, updated_at=datetime('now')
-		WHERE user_id=? AND type='qq'`, `{"openid":"`+result.UserOpenID+`"}`, uid)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("绑定通道回填失败", err)})
-		return
-	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		if _, err := db.DB.Exec(`INSERT INTO notification_channels (user_id, type, name, target, enabled, created_at, updated_at)
-			VALUES (?, 'qq', 'QQ 机器人', ?, 1, datetime('now'), datetime('now'))`,
-			uid, `{"openid":"`+result.UserOpenID+`"}`); err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("绑定通道创建失败", err)})
-			return
-		}
 	}
 	qqTaskMu.Lock()
 	delete(qqTaskByUser, uid)

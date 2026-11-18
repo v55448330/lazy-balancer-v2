@@ -38,10 +38,10 @@ func (h *Handlers) GetNotificationDaily(c *gin.Context) {
 func (h *Handlers) PutNotificationDaily(c *gin.Context) {
 	uid := contextUserID(c)
 	var req struct {
-		Enabled  bool     `json:"enabled"`
-		SendTime string   `json:"send_time"`
-		Items    []string `json:"items"`
-		Format   string   `json:"format"`
+		Enabled  bool              `json:"enabled"`
+		SendTime string            `json:"send_time"`
+		Items    []string          `json:"items"`
+		Formats  map[string]string `json:"formats"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIResponse{Code: 400, Message: err.Error()})
@@ -62,13 +62,13 @@ func (h *Handlers) PutNotificationDaily(c *gin.Context) {
 		}
 	}
 	cfg := notify.DailyConfig{UserID: uid, Enabled: req.Enabled, SendTime: req.SendTime,
-		Items: req.Items, Format: req.Format}
+		Items: req.Items, Formats: req.Formats}
 	if err := notify.SaveDailyConfig(cfg); err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse{Code: 500, Message: serverErrMsg("保存日报配置失败", err)})
 		return
 	}
 	recordAudit(c, "修改", "通知日报", services.FormatAuditDetail(
-		fmt.Sprintf("启用=%v 时间=%s 项目数=%d 格式=%s", req.Enabled, req.SendTime, len(req.Items), cfg.Format), "", services.AuditResultPart("success")))
+		fmt.Sprintf("启用=%v 时间=%s 项目数=%d", req.Enabled, req.SendTime, len(req.Items)), "", services.AuditResultPart("success")))
 	c.JSON(http.StatusOK, models.APIResponse{Code: 0})
 }
 

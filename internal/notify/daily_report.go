@@ -18,17 +18,20 @@ import (
 
 // DailyConfig 单用户日报配置。
 type DailyConfig struct {
-	UserID   int64    `json:"user_id"`
-	Enabled  bool     `json:"enabled"`
-	SendTime string   `json:"send_time"` // "09:00"
-	Items    []string `json:"items"`     // 勾选项目（见 DailyItemIDs）
-	Format   string   `json:"format"`    // 投递渲染格式（text/markdown/html/json）
+	UserID   int64             `json:"user_id"`
+	Enabled  bool              `json:"enabled"`
+	SendTime string            `json:"send_time"` // "09:00"
+	Items    []string          `json:"items"`     // 勾选项目（见 DailyItemIDs）
+	Formats  map[string]string `json:"formats"`   // 通道类型→渲染格式（缺省=自动映射：webhook=json/email=html/qq·wx=markdown）
 }
 
-// DailyFormats 投递格式白名单（渲染分支一一对应；text=纯文本行）。
+// DailyFormats 渲染格式白名单。
 var DailyFormats = []string{"text", "markdown", "html", "json"}
 
-// dailyFormatValid 格式白名单校验；空值回退 markdown。
+// DailyFormatChannels 格式可配通道白名单（与通知通道类型一致）。
+var DailyFormatChannels = []string{"webhook", "email", "qq", "wx_clawbot"}
+
+// dailyFormatValid 格式白名单校验；空值=用自动映射默认。
 func dailyFormatValid(f string) bool {
 	for _, ok := range DailyFormats {
 		if f == ok {
@@ -36,6 +39,19 @@ func dailyFormatValid(f string) bool {
 		}
 	}
 	return false
+}
+
+// DefaultFormatForChannel 通道缺省格式（自动映射单源；派发与预览共用）。
+func DefaultFormatForChannel(channelType string) string {
+	switch channelType {
+	case "webhook":
+		return "json"
+	case "email":
+		return "html"
+	case "qq", "wx_clawbot":
+		return "markdown"
+	}
+	return "text"
 }
 
 // DailyItemIDs 日报可定制项目（勾选清单契约）。
@@ -56,7 +72,7 @@ var DailyItemLabels = map[string]string{
 // GetDailyConfig 读单用户配置（无行=默认：启用+全项目+09:00+markdown）。
 func GetDailyConfig(userID int64) (DailyConfig, error) {
 	cfg := DailyConfig{UserID: userID, Enabled: true, SendTime: "09:00",
-		Items: append([]string{}, DailyItemIDs...), Format: "markdown"}
+		Items: append([]string{}, DailyItemIDs...), Formats: map[string]string{}}
 	var raw string
 	err := db.DB.QueryRow(`SELECT COALESCE(config,'') FROM notification_daily WHERE user_id=?`, userID).Scan(&raw)
 	if err != nil {
@@ -69,20 +85,25 @@ func GetDailyConfig(userID int64) (DailyConfig, error) {
 	if cfg.Items == nil {
 		cfg.Items = append([]string{}, DailyItemIDs...)
 	}
-	if !dailyFormatValid(cfg.Format) {
-		cfg.Format = "markdown"
-	}
 	return cfg, nil
 }
 
-// SaveDailyConfig 落库单用户配置（format 白名单校验，非法回退 markdown）。
+// SaveDailyConfig 落库单用户配置（formats 键=通道白名单、值=格式白名单，
+// 非法键值丢弃）。
 func SaveDailyConfig(cfg DailyConfig) error {
-	if !dailyFormatValid(cfg.Format) {
-		cfg.Format = "markdown"
+	validChannels := map[string]bool{}
+	for _, ch := range DailyFormatChannels {
+		validChannels[ch] = true
+	}
+	formats := map[string]string{}
+	for ch, f := range cfg.Formats {
+		if validChannels[ch] && dailyFormatValid(f) {
+			formats[ch] = f
+		}
 	}
 	raw, err := json.Marshal(map[string]any{
 		"enabled": cfg.Enabled, "send_time": cfg.SendTime,
-		"items": cfg.Items, "format": cfg.Format,
+		"items": cfg.Items, "formats": formats,
 	})
 	if err != nil {
 		return err
@@ -134,7 +155,7 @@ func DeliverDailyForAll(now time.Time) (int, error) {
 func deliverDaily(userID int64, cfg DailyConfig, data DailyData, now time.Time) error {
 	values := dailyValues(data)
 	payload, err := json.Marshal(map[string]any{
-		"date": data.Date, "items": cfg.Items, "values": values,
+		"date": data.Date, "items": cfg.Items, "values": values, "formats": cfg.Formats,
 	})
 	if err != nil {
 		return err
@@ -219,28 +240,25 @@ func RenderDaily(data DailyData, items []string, format string) string {
 }
 
 // renderDailyForChannel 投递派发时的按通道格式渲染（deliverOne 挂钩）：
-// body 为日报数据载荷 JSON→按通道映射格式渲染（webhook=JSON、email=HTML、
-// QQ/微信=markdown、未知=text）；非日报事件原样透传。
+// body 为日报数据载荷 JSON→用户 per-channel 配置优先，缺省自动映射
+// （webhook=JSON、email=HTML、QQ/微信=markdown、未知=text）；
+// 非日报事件原样透传。
 func renderDailyForChannel(msg Message, channelType string) string {
 	if msg.EventType != EvtDailyReport {
 		return msg.Body
 	}
 	var payload struct {
-		Date   string            `json:"date"`
-		Items  []string          `json:"items"`
-		Values map[string]string `json:"values"`
+		Date    string            `json:"date"`
+		Items   []string          `json:"items"`
+		Values  map[string]string `json:"values"`
+		Formats map[string]string `json:"formats"`
 	}
 	if err := json.Unmarshal([]byte(msg.Body), &payload); err != nil || payload.Date == "" {
 		return msg.Body // 载荷解析失败回退原文（fail-visible，不静默吞）
 	}
-	format := "text"
-	switch channelType {
-	case "webhook":
-		format = "json"
-	case "email":
-		format = "html"
-	case "qq", "wx_clawbot":
-		format = "markdown"
+	format := payload.Formats[channelType]
+	if format == "" {
+		format = DefaultFormatForChannel(channelType)
 	}
 	return renderDailyFromValues(payload.Date, payload.Values, payload.Items, format)
 }

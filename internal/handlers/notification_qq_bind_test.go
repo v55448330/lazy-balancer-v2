@@ -168,10 +168,11 @@ func TestQQBindScan_e2e(t *testing.T) {
 		t.Fatalf("notify.qq_secret=%q (err=%v), want SECRET_MOCK", appSecret, err)
 	}
 
-	// ④ openid 绑定通知通道（投递目标）
-	var target string
-	if err := db.DB.QueryRow(`SELECT target FROM notification_channels WHERE user_id=? AND type='qq'`, uid).Scan(&target); err != nil || target != `{"openid":"OPENID_MOCK"}` {
-		t.Fatalf("channel target=%q (err=%v), want openid 回填", target, err)
+	// ④ 绑定动作不再自动建通道（「保存」是唯一创建入口；删除通道后重新
+	// 绑定→保存=新建，不再误判已存在）
+	var rows int
+	if err := db.DB.QueryRow(`SELECT COUNT(*) FROM notification_channels WHERE user_id=? AND type='qq'`, uid).Scan(&rows); err != nil || rows != 0 {
+		t.Fatalf("绑定后通道行数=%d err=%v, want 0（通道由保存动作创建）", rows, err)
 	}
 }
 

@@ -102,19 +102,13 @@ test('系统凭据消费 settings 契约：GET 嵌套形状+secret 留空不提�
   assert.match(text, /request\.get<NotificationSettingsResponse>\('\/notification\/settings'\)/)
   assert.match(text, /request\.put\('\/notification\/settings', payload\)/)
   assert.match(text, /data\?\.smtp\?\.pass_configured === true/)
-  assert.match(text, /data\?\.qq\?\.secret_configured === true/)
-  assert.match(text, /data\?\.wx_bot_cred_configured === true/)
-  assert.match(text, /mcp_enabled: form\.value\.mcpEnabled/)
   const saveBlock = text.slice(text.indexOf('const payload: NotificationSettingsPayload'), text.indexOf('await request.put'))
   // 空 secret 必须以条件展开省略键（不能提交空串覆盖既有凭据）
   assert.match(saveBlock, /\.\.\.\(form\.value\.smtpPass \? \{ pass: form\.value\.smtpPass \} : \{\}\)/)
-  // QQ 凭据不走 settings PUT（单源=扫码绑定自动落库），手工形态禁止回潮
-  assert.doesNotMatch(text, /qqSecret/)
-  // 微信凭据走 iLink 扫码登录卡（REST start/status；confirmed 即服务端已落
-  // 凭据）——手工粘贴 wx.cred 形态已删除，禁止回潮
-  assert.match(text, /request\.post<\{ code: number; data\?: \{ qr_content: string \} \}>\('\/notification\/wx\/qr\/start', \{\}\)/)
-  assert.match(text, /request\.get<\{ code: number; data\?: \{ status: string; confirmed: boolean \} \}>\('\/notification\/wx\/qr\/status'\)/)
-  assert.doesNotMatch(text, /wx:\s*\{\s*cred:/)
+  // 页面收敛裁定：系统凭据页只剩 SMTP——QQ/微信凭据单源=扫码绑定自动落库
+  // （通道向导承载展示与编辑），MCP 全局开关归 MCP 会话卡；手工形态禁止回潮
+  assert.doesNotMatch(text, /qqSecret|qqAppId|wxCred|mcpEnabled|WxQRLogin|bind-state/, 'QQ/微信凭据与 MCP 开关不得在系统凭据页回潮')
+  assert.match(text, /creds\.smtpSection/, '页面收敛为邮件凭据单一卡')
 })
 
 test('zh/en 通知词条同位：叶子键集一致且 app.notification 前缀', async () => {
@@ -135,6 +129,6 @@ test('zh/en 通知词条同位：叶子键集一致且 app.notification 前缀',
   // 关键文案双语言抽查（漂移即红）
   const zhApp = app(zh) as Record<string, Record<string, string>>
   const enApp = app(en) as Record<string, Record<string, string>>
-  assert.equal(zhApp.tabs.credentials, '系统凭据')
-  assert.equal(enApp.tabs.credentials, 'System credentials')
+  assert.equal(zhApp.tabs.credentials, '邮件凭据')
+  assert.equal(enApp.tabs.credentials, 'Email credentials')
 })

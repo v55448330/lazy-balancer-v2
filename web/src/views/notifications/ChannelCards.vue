@@ -437,7 +437,7 @@ const startQQBindPolling = (): void => {
     if (busy) return
     busy = true
     try {
-      const res = await request.get<NotificationCreateChannelResponse & { data: { bound: boolean; openid: string; appid: string } }>('/notification/qq/bind-code')
+      const res = await request.get<NotificationCreateChannelResponse & { data: { bound: boolean; openid: string; appid: string } }>('/notification/qq/bind-code', { silent: true })
       const data = res.data
       if (data?.bound) {
         qqBind.value.bound = true
@@ -494,7 +494,7 @@ const wxBindHint = computed(() =>
 // 向导打开/类型切换到 wx 时拉一次状态（轻端点，business 权限）
 const refreshWxBindState = async (): Promise<void> => {
   try {
-    const res = await request.get<NotificationCreateChannelResponse & { data: { bot_ready: boolean; receiver: string } }>('/notification/wx/bind-state')
+    const res = await request.get<NotificationCreateChannelResponse & { data: { bot_ready: boolean; receiver: string } }>('/notification/wx/bind-state', { silent: true })
     wxBind.value.botReady = res.data?.bot_ready === true
     if (res.data?.receiver && !wizardForm.value.targetValue) {
       wizardForm.value.targetValue = res.data.receiver
@@ -539,7 +539,7 @@ const startWxLoginInWizard = async (): Promise<void> => {
     if (wxLogin.value.timer !== null) window.clearInterval(wxLogin.value.timer)
     const timer = window.setInterval(async () => {
       try {
-        const st = await request.get<{ code: number; data?: { status: string; confirmed: boolean } }>('/notification/wx/qr/status')
+        const st = await request.get<{ code: number; data?: { status: string; confirmed: boolean } }>('/notification/wx/qr/status', { silent: true })
         if (st.data?.confirmed) {
           wxLogin.value.qrImg = ''
           wxLogin.value.expired = false

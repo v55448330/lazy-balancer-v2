@@ -38,12 +38,9 @@ func (h *Handlers) GetNotificationSettings(c *gin.Context) {
 			"from":            m[notify.KeySMTPFrom],
 			"pass_configured": m[notify.KeySMTPPass] != "",
 		},
-		"qq": gin.H{
-			"appid":             m[notify.KeyQQAppID],
-			"secret_configured": m[notify.KeyQQSecret] != "",
-		},
-		"wx_bot_cred_configured": m[notify.KeyWxBotCred] != "",
-		"mcp_enabled":            notify.MCPEnabled(),
+		// QQ/微信凭据不回显（单源=扫码绑定自动落库；bot 登录态经
+		// /notification/wx/bind-state 供通道向导查询）
+		"mcp_enabled": notify.MCPEnabled(),
 		"attack_warn_at":         warnAt,
 		"attack_critical_at":     criticalAt,
 	}})
